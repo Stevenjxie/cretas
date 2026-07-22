@@ -5,6 +5,8 @@ import com.cretas.aims.entity.Customer;
 import com.cretas.aims.entity.Factory;
 import com.cretas.aims.entity.User;
 import com.cretas.aims.entity.enums.SalesOrderStatus;
+import com.cretas.aims.entity.enums.SalesProcessingMode;
+import com.cretas.aims.entity.enums.MaterialSupplyMode;
 import com.cretas.aims.dto.sales.ExtraFeeItem;
 import com.cretas.aims.security.PriceSensitive;
 import com.fasterxml.jackson.annotation.JsonIgnore;
@@ -35,7 +37,7 @@ import java.util.UUID;
  */
 @Data
 @EqualsAndHashCode(callSuper = true)
-@ToString(exclude = {"factory", "customer", "createdByUser", "items", "deliveryRecords"})
+@ToString(exclude = {"factory", "customer", "createdByUser", "items", "suppliedMaterials", "deliveryRecords"})
 @AllArgsConstructor
 @NoArgsConstructor
 @Entity
@@ -277,6 +279,18 @@ public class SalesOrder extends BaseEntity {
     @Column(name = "external_order_title", length = 100)
     private String externalOrderTitle;
 
+    /**
+     * Processing and material-supply defaults for this order.
+     * Nullable only for pre-migration history; every new or edited order is validated by the service.
+     */
+    @Enumerated(EnumType.STRING)
+    @Column(name = "processing_mode", length = 32)
+    private SalesProcessingMode processingMode;
+
+    @Enumerated(EnumType.STRING)
+    @Column(name = "material_supply_mode", length = 32)
+    private MaterialSupplyMode materialSupplyMode;
+
     // ==================== 关联 ====================
 
     @JsonIgnore
@@ -296,6 +310,14 @@ public class SalesOrder extends BaseEntity {
 
     @OneToMany(mappedBy = "salesOrder", cascade = CascadeType.ALL, orphanRemoval = true, fetch = FetchType.LAZY)
     private List<SalesOrderItem> items = new ArrayList<>();
+
+    /**
+     * Customer-supplied raw-material requirements. Each child row is also the warehouse task
+     * identity; this relation never creates a parallel receiving-task record.
+     */
+    @OneToMany(mappedBy = "salesOrder", fetch = FetchType.LAZY)
+    @OrderBy("expectedArrivalAt ASC, id ASC")
+    private List<SalesOrderSuppliedMaterialRequirement> suppliedMaterials = new ArrayList<>();
 
     @JsonIgnore
     @OneToMany(mappedBy = "salesOrder", cascade = CascadeType.PERSIST, fetch = FetchType.LAZY)

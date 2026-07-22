@@ -1,6 +1,7 @@
 package com.cretas.aims.entity;
 
 import com.cretas.aims.entity.enums.InboundType;
+import com.cretas.aims.entity.enums.InventoryOwnership;
 import com.cretas.aims.entity.enums.MaterialBatchStatus;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.security.PriceSensitive;
@@ -162,6 +163,34 @@ public class MaterialBatch extends BaseEntity {
     /** 发起单ID (P0-17) */
     @Column(name = "source_doc_id", length = 64)
     private String sourceDocId;
+
+    /** Idempotency identity of one inbound event; multiple partial receipts use distinct keys. */
+    @Column(name = "source_event_key", length = 64)
+    private String sourceEventKey;
+
+    /**
+     * Legal ownership snapshot for this inventory batch.
+     *
+     * <p>New batches are company-owned unless an authoritative upstream
+     * document explicitly supplies customer ownership. Persisted legacy rows
+     * remain nullable and are not inferred.</p>
+     */
+    @Enumerated(EnumType.STRING)
+    @Column(name = "ownership", length = 32)
+    private InventoryOwnership ownership = InventoryOwnership.COMPANY_OWNED;
+
+    /** Customer that legally owns the batch when {@link #ownership} is customer-owned. */
+    @Column(name = "owner_customer_id", length = 191)
+    private String ownerCustomerId;
+
+    /** Sales-order lineage snapshot; opaque across factories, so intentionally no FK. */
+    @Column(name = "source_sales_order_id", length = 191)
+    private String sourceSalesOrderId;
+
+    /** Sales-order-line lineage snapshot; opaque across factories, so intentionally no FK. */
+    @Column(name = "source_sales_order_item_id", length = 191)
+    private String sourceSalesOrderItemId;
+
     @Column(name = "created_by", nullable = false)
     private Long createdBy;
     @Column(name = "last_used_at")

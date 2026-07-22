@@ -10,11 +10,13 @@ public interface ProductionStockAllocationService {
 
     List<PlannedAllocation> plan(
             String factoryId,
+            String planId,
             List<ProcessSheetRowRequest.MaterialInputTotal> materialInputTotals);
 
     /** Lock and reserve legacy caller-selected production-stock batches. */
     List<PlannedAllocation> planExplicit(
             String factoryId,
+            String planId,
             List<ProcessSheetRowRequest.RawInput> rawMaterialInputs);
 
     void persist(

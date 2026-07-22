@@ -11,8 +11,6 @@ import com.cretas.aims.dto.inventory.FinanceCostBreakdown;
 import com.cretas.aims.dto.inventory.FinanceReviewRequest;
 import com.cretas.aims.dto.inventory.RepairSalesOrderItemSourceWarehouseRequest;
 import com.cretas.aims.dto.inventory.UpdateSalesOrderRequest;
-import com.cretas.aims.dto.material.CreateMaterialBatchRequest;
-import com.cretas.aims.dto.material.MaterialBatchDTO;
 import com.cretas.aims.dto.sales.AdjustPriceRequest;
 import com.cretas.aims.dto.sales.AdjustPriceResponse;
 import com.cretas.aims.dto.sales.SalesPriceAdjustmentRecordDTO;
@@ -31,7 +29,6 @@ import com.cretas.aims.repository.UserRepository;
 import com.cretas.aims.repository.inventory.FinishedGoodsBatchRepository;
 import com.cretas.aims.repository.inventory.SalesOrderRepository;
 import com.cretas.aims.service.MobileService;
-import com.cretas.aims.service.MaterialBatchService;
 import com.cretas.aims.service.PermissionService;
 import com.cretas.aims.service.inventory.SalesService;
 import com.cretas.aims.service.product.ProductPackagingSpecService;
@@ -81,13 +78,10 @@ public class SalesController {
     private final EstimatePriceCheckService estimatePriceCheckService;
     // 改价留痕 + 审批
     private final SalesPriceAdjustmentService priceAdjustmentService;
-    private final MaterialBatchService materialBatchService;
     private final ProductPackagingSpecService productPackagingSpecService;
 
     /** Sprint 5 Track C-2 — owner_type / target_type literal pinned to SalesOrder. */
     private static final String SO_ENTITY_TYPE = "SALES_ORDER";
-    private static final String CUSTOMER_MATERIAL_RECEIPT_SOURCE_DOC_TYPE = "CUSTOMER_MATERIAL_RECEIPT";
-    private static final String CUSTOMER_SUPPLIER_ID = "CUSTOMER";
 
     // ==================== 销售订单 ====================
 
@@ -117,17 +111,16 @@ public class SalesController {
     }
 
     @PostMapping("/orders/{orderId}/customer-material-receipts")
-    @Operation(summary = "销售订单客供料入库")
+    @Operation(summary = "已停用：请从仓储统一待入库任务收货")
     @RequirePermission({"warehouse:read_write", "inventory:read_write"})
-    public ApiResponse<MaterialBatchDTO> createCustomerMaterialReceipt(
+    public ApiResponse<Void> createCustomerMaterialReceipt(
             @PathVariable @NotBlank String factoryId,
             @PathVariable @NotBlank String orderId,
             @RequestHeader("Authorization") String authorization,
             @Valid @RequestBody CustomerMaterialReceiptRequest request) {
-        Long userId = extractUserId(authorization);
-        CreateMaterialBatchRequest batchRequest = toCustomerMaterialBatchRequest(request, orderId);
-        MaterialBatchDTO batch = materialBatchService.createMaterialBatch(factoryId, batchRequest, userId);
-        return ApiResponse.success("客供料入库成功", batch);
+        throw new BusinessException(410, "销售订单侧客供料入库入口已停用")
+                .withCode("CUSTOMER_SUPPLIED_RECEIPT_WAREHOUSE_ONLY")
+                .withHint("请前往仓储统一待入库任务，从 SALES_ORDER_CUSTOMER_SUPPLIED 来源任务收货");
     }
 
     @PostMapping("/finished-goods/opening")
@@ -878,24 +871,6 @@ public class SalesController {
     private Long extractUserId(String authorization) {
         String token = TokenUtils.extractToken(authorization);
         return mobileService.getUserFromToken(token).getId();
-    }
-
-    public static CreateMaterialBatchRequest toCustomerMaterialBatchRequest(
-            CustomerMaterialReceiptRequest request,
-            String orderId) {
-        CreateMaterialBatchRequest mapped = new CreateMaterialBatchRequest();
-        mapped.setMaterialTypeId(request.materialTypeId());
-        mapped.setSupplierId(CUSTOMER_SUPPLIER_ID);
-        mapped.setReceiptDate(request.receiptDate());
-        mapped.setReceiptQuantity(request.receiptQuantity());
-        mapped.setQuantityUnit(request.quantityUnit());
-        mapped.setTotalWeight(request.totalWeight());
-        mapped.setTotalValue(request.totalValue());
-        mapped.setWarehouseId(request.warehouseId());
-        mapped.setNotes(request.notes());
-        mapped.setSourceDocType(CUSTOMER_MATERIAL_RECEIPT_SOURCE_DOC_TYPE);
-        mapped.setSourceDocId(orderId);
-        return mapped;
     }
 
     public record CustomerMaterialReceiptRequest(

@@ -3,9 +3,13 @@ package com.cretas.aims.service.production;
 import com.cretas.aims.dto.production.CreateProductionPlanRequest;
 import com.cretas.aims.dto.production.ProductionPlanDTO;
 import com.cretas.aims.entity.ProductionPlan;
+import com.cretas.aims.entity.ProductType;
+import com.cretas.aims.entity.enums.InventoryOwnership;
+import com.cretas.aims.entity.enums.MaterialSupplyMode;
 import com.cretas.aims.entity.enums.PlanSourceType;
 import com.cretas.aims.entity.enums.ProductionPlanStatus;
 import com.cretas.aims.entity.enums.SalesOrderStatus;
+import com.cretas.aims.entity.enums.SalesProcessingMode;
 import com.cretas.aims.entity.inventory.SalesOrder;
 import com.cretas.aims.entity.inventory.SalesOrderItem;
 import com.cretas.aims.exception.BusinessException;
@@ -104,6 +108,14 @@ class ProductionPlanMultiSoMergeTest {
                 salesOrderRepository, salesOrderItemRepository);
 
         when(productTypeRepository.existsById(PRODUCT_TYPE_ID)).thenReturn(true);
+        ProductType productType = new ProductType();
+        productType.setId(PRODUCT_TYPE_ID);
+        productType.setFactoryId(FACTORY_ID);
+        productType.setUnit("kg");
+        lenient().when(productTypeRepository.findById(PRODUCT_TYPE_ID))
+                .thenReturn(Optional.of(productType));
+        lenient().when(productTypeRepository.findByIdAndFactoryId(PRODUCT_TYPE_ID, FACTORY_ID))
+                .thenReturn(Optional.of(productType));
 
         // mapper: copy key fields so service normalization can read them back
         lenient().when(productionPlanMapper.toEntity(any(CreateProductionPlanRequest.class), any(), any()))
@@ -117,6 +129,11 @@ class ProductionPlanMultiSoMergeTest {
                     plan.setPlannedQuantity(req.getPlannedQuantity());
                     plan.setSourceType(req.getSourceType());
                     plan.setSourceOrderId(req.getSourceOrderId());
+                    plan.setSourceOrderItemId(req.getSourceOrderItemId());
+                    plan.setCustomerId(req.getCustomerId());
+                    plan.setProcessingMode(req.getProcessingMode());
+                    plan.setMaterialSupplyMode(req.getMaterialSupplyMode());
+                    plan.setOutputOwnership(req.getOutputOwnership());
                     plan.setProcessName(req.getProcessName());
                     // copy sourceOrderIds from request into entity (mapper behaviour)
                     if (req.getSourceOrderIds() != null) {
@@ -141,10 +158,22 @@ class ProductionPlanMultiSoMergeTest {
 
     /** Helper: stub salesOrderRepository.findById for a given SO. */
     private void stubSo(String soId, String factoryId, SalesOrderStatus status) {
+        stubSo(soId, factoryId, status, null, null, null);
+    }
+
+    private void stubSo(String soId,
+                        String factoryId,
+                        SalesOrderStatus status,
+                        String customerId,
+                        SalesProcessingMode processingMode,
+                        MaterialSupplyMode materialSupplyMode) {
         SalesOrder so = new SalesOrder();
         so.setId(soId);
         so.setFactoryId(factoryId);
+        so.setCustomerId(customerId);
         so.setCustomerName("SP5 测试客户");
+        so.setProcessingMode(processingMode);
+        so.setMaterialSupplyMode(materialSupplyMode);
         so.setStatus(status);
         when(salesOrderRepository.findById(soId)).thenReturn(Optional.of(so));
     }
@@ -327,6 +356,58 @@ class ProductionPlanMultiSoMergeTest {
             assertNotNull(ids, "空列表传入时 sourceOrderIds 仍应补填主SO");
             assertEquals(1, ids.size());
             assertEquals(SO_PRIMARY_ID, ids.get(0));
+        }
+    }
+
+    @Test
+    @DisplayName("多SO客户或供料合同不一致 → 409拒绝混合库存归属")
+    void multiSo_ownershipContractMismatch_rejected409() {
+        stubSo(SO_PRIMARY_ID, FACTORY_ID, SalesOrderStatus.FINANCE_APPROVED,
+                "CUSTOMER-A", SalesProcessingMode.TOLL_PROCESSING,
+                MaterialSupplyMode.CUSTOMER_SUPPLIED);
+        stubSo(SO_EXTRA_ID, FACTORY_ID, SalesOrderStatus.FINANCE_APPROVED,
+                "CUSTOMER-B", SalesProcessingMode.TOLL_PROCESSING,
+                MaterialSupplyMode.CUSTOMER_SUPPLIED);
+
+        CreateProductionPlanRequest req = baseRequest();
+        req.setSourceOrderIds(Arrays.asList(SO_PRIMARY_ID, SO_EXTRA_ID));
+
+        BusinessException ex = assertThrows(BusinessException.class,
+                () -> service.createProductionPlan(FACTORY_ID, req, 1L));
+
+        assertEquals(409, ex.getCode().intValue());
+        assertEquals("MERGED_SALES_OWNERSHIP_CONTRACT_MISMATCH", ex.getErrorCode());
+        assertTrue(ex.getMessage().contains(SO_EXTRA_ID));
+    }
+
+    @Test
+    @DisplayName("多SO同客户同供料合同 → 保留客户所有权快照")
+    void multiSo_sameOwnershipContract_preservesSnapshot() {
+        try (MockedStatic<TransactionSynchronizationManager> txSync = mockTxSync()) {
+            stubSo(SO_PRIMARY_ID, FACTORY_ID, SalesOrderStatus.FINANCE_APPROVED,
+                    "CUSTOMER-A", SalesProcessingMode.TOLL_PROCESSING,
+                    MaterialSupplyMode.CUSTOMER_SUPPLIED);
+            stubSo(SO_EXTRA_ID, FACTORY_ID, SalesOrderStatus.FINANCE_APPROVED,
+                    "CUSTOMER-A", SalesProcessingMode.TOLL_PROCESSING,
+                    MaterialSupplyMode.CUSTOMER_SUPPLIED);
+
+            CreateProductionPlanRequest req = baseRequest();
+            req.setSourceOrderIds(Arrays.asList(SO_PRIMARY_ID, SO_EXTRA_ID));
+
+            ProductionPlan[] captured = new ProductionPlan[1];
+            when(productionPlanRepository.save(any(ProductionPlan.class)))
+                    .thenAnswer(inv -> {
+                        captured[0] = inv.getArgument(0);
+                        return captured[0];
+                    });
+
+            service.createProductionPlan(FACTORY_ID, req, 1L);
+
+            assertEquals("CUSTOMER-A", captured[0].getCustomerId());
+            assertEquals(SalesProcessingMode.TOLL_PROCESSING, captured[0].getProcessingMode());
+            assertEquals(MaterialSupplyMode.CUSTOMER_SUPPLIED, captured[0].getMaterialSupplyMode());
+            assertEquals(InventoryOwnership.CUSTOMER_OWNED, captured[0].getOutputOwnership());
+            assertEquals(List.of(SO_PRIMARY_ID, SO_EXTRA_ID), captured[0].getSourceOrderIds());
         }
     }
 }

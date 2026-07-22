@@ -109,6 +109,9 @@ export interface FinishedGoodsBatch {
 
 export interface CreateSalesOrderRequest {
   customerId: string;
+  /** RN 快速建单当前只开放普通销售；客供代加工由 Web Admin 的结构化来料表单创建。 */
+  processingMode: 'STANDARD_SALE' | 'TOLL_PROCESSING';
+  materialSupplyMode: 'FACTORY_SUPPLIED' | 'CUSTOMER_SUPPLIED';
   orderDate?: string;
   requiredDeliveryDate?: string;
   expectedDeliveryDate?: string;

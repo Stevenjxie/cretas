@@ -273,7 +273,8 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
                         .withHint("请联系管理员检查生产库分摊服务配置")
                         .withSeverity("BLOCKING");
             }
-            allocations = productionStockAllocationService.plan(factoryId, req.getMaterialInputTotals());
+            allocations = productionStockAllocationService.plan(
+                    factoryId, planId, req.getMaterialInputTotals());
             req.setRawMaterialInputs(productionStockAllocationService.toRawInputs(allocations));
             if (req.getInputQuantity() == null) {
                 // PlannedAllocation 永远是 kg；不能直接把 1000g + 2kg 相加成 1002。
@@ -289,7 +290,7 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
                         .withSeverity("BLOCKING");
             }
             allocations = productionStockAllocationService.planExplicit(
-                    factoryId, req.getRawMaterialInputs());
+                    factoryId, planId, req.getRawMaterialInputs());
             req.setRawMaterialInputs(productionStockAllocationService.toRawInputs(allocations));
             if (req.getInputQuantity() == null) {
                 req.setInputQuantity(allocations.stream()

@@ -7,6 +7,7 @@ import lombok.NoArgsConstructor;
 
 import java.math.BigDecimal;
 import java.time.LocalDate;
+import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -24,11 +25,21 @@ public class PurchaseReceivingTaskResponse {
 
     private String taskId;
     private String sourceType;
+    private String sourceId;
+    private String sourceNumber;
+    private String counterpartyType;
+    private String counterpartyId;
+    private String counterpartyName;
     private String purchaseOrderId;
     private String orderNumber;
     private String supplierId;
     private String supplierName;
+    private String salesOrderId;
+    private String salesOrderNo;
+    private String customerId;
+    private String customerName;
     private LocalDate expectedDeliveryDate;
+    private LocalDateTime expectedArrivalAt;
     private String status;
     private String statusLabel;
     private String warehouseId;
@@ -48,6 +59,7 @@ public class PurchaseReceivingTaskResponse {
     @AllArgsConstructor
     public static class Item {
         private Long purchaseOrderItemId;
+        private Long salesOrderItemId;
         private String materialTypeId;
         private String materialName;
         private BigDecimal orderedQuantity;

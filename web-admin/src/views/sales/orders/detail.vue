@@ -6,10 +6,6 @@ import { usePermissionStore } from '@/store/modules/permission';
 import { useBusinessMode } from '@/composables/useBusinessMode';
 import { get, post, put } from '@/api/request';
 import OrderItemsEditor, { type OrderItemRow } from './components/OrderItemsEditor.vue';
-import {
-  buildCustomerMaterialReceiptPayload,
-  type CustomerMaterialReceiptForm,
-} from './customerMaterialReceipt';
 import UpstreamMissingHint from '@/components/common/UpstreamMissingHint.vue';
 import { useCreateAndReturn } from '@/composables/useCreateAndReturn';
 import { ElMessage, ElMessageBox } from 'element-plus';
@@ -35,6 +31,13 @@ import {
 // — see utils/warehouse.ts for the LIUSHANMEN "同仓库多名字" incident.
 import { warehouseNameByCode, type WarehouseCodeNameLike } from '@/utils/warehouse';
 import type { TableRow } from '@/types/api';
+import {
+  customerMaterialReceivingStatusLabel,
+  materialSupplyModeLabel,
+  processingModeLabel,
+  warehouseReceivingRoute,
+  type CustomerSuppliedMaterialRequirement,
+} from './salesOrderSupplyContract';
 
 const route = useRoute();
 const router = useRouter();
@@ -64,22 +67,30 @@ const payments = ref<TableRow[]>([]);
 const purchaseOrders = ref<TableRow[]>([]);
 const activeTab = ref('detail');
 
-type CustomerMaterialOption = { id: string; name?: string; code?: string; unit?: string };
-type WarehouseOption = { id: string; name?: string; code?: string; type?: string; isActive?: boolean };
-const customerMaterialReceiptVisible = ref(false);
-const customerMaterialReceiptSaving = ref(false);
-const customerMaterialOptions = ref<CustomerMaterialOption[]>([]);
-const customerMaterialWarehouseOptions = ref<WarehouseOption[]>([]);
-const customerMaterialReceiptForm = ref<CustomerMaterialReceiptForm>({
-  materialTypeId: '',
-  receiptDate: new Date().toISOString().slice(0, 10),
-  receiptQuantity: 0,
-  quantityUnit: 'kg',
-  totalWeight: 0,
-  totalValue: 0,
-  warehouseId: '',
-  notes: '',
-});
+const customerSuppliedRequirements = computed<CustomerSuppliedMaterialRequirement[]>(() =>
+  Array.isArray(order.value?.suppliedMaterials)
+    ? order.value.suppliedMaterials as CustomerSuppliedMaterialRequirement[]
+    : [],
+);
+const isCustomerSuppliedOrder = computed(() =>
+  order.value?.processingMode === 'TOLL_PROCESSING'
+    && order.value?.materialSupplyMode === 'CUSTOMER_SUPPLIED',
+);
+
+function customerMaterialProgress(row: CustomerSuppliedMaterialRequirement): string {
+  const expected = Number(row.expectedQuantity || 0);
+  const received = Number(row.receivedQuantity || 0);
+  const remaining = row.remainingQuantity == null
+    ? Math.max(0, expected - received)
+    : Number(row.remainingQuantity);
+  const unit = displayUnit(row.unit) || '未配置';
+  return `应收 ${expected}${unit} / 已收 ${received}${unit} / 待收 ${remaining}${unit}`;
+}
+
+function goWarehouseReceiving() {
+  if (!order.value) return;
+  router.push(warehouseReceivingRoute(order.value));
+}
 
 const deliveryDialogVisible = ref(false);
 const deliveryIdempotencyKey = ref('');
@@ -573,75 +584,6 @@ async function loadPurchaseOrders() {
       purchaseOrders.value = list.filter((po: TableRow) => po.salesOrderId === orderId.value);
     }
   } catch { /* ignore — 后端可能尚未实现按销售订单查询采购单 */ }
-}
-
-function defaultRawWarehouseId(warehouses: WarehouseOption[]): string {
-  const raw = warehouses.find((w) => w.isActive !== false && (w.code === 'WH-LOG' || w.type === 'RAW' || w.type === 'LOGISTICS'));
-  return raw?.id || '';
-}
-
-function customerMaterialLabel(item: CustomerMaterialOption): string {
-  return [item.code, item.name].filter(Boolean).join(' / ') || item.id;
-}
-
-async function loadCustomerMaterialReceiptOptions() {
-  if (!factoryId.value) return;
-  const [materialsRes, warehousesRes] = await Promise.all([
-    get(`/${factoryId.value}/raw-material-types/active`, { _silent: true } as never),
-    get(`/${factoryId.value}/factory/warehouses`, { _silent: true } as never),
-  ]);
-  customerMaterialOptions.value = Array.isArray(materialsRes.data)
-    ? materialsRes.data as CustomerMaterialOption[]
-    : (materialsRes.data?.content || []) as CustomerMaterialOption[];
-  customerMaterialWarehouseOptions.value = Array.isArray(warehousesRes.data)
-    ? (warehousesRes.data as WarehouseOption[]).filter((w) => w.isActive !== false)
-    : [];
-}
-
-async function openCustomerMaterialReceiptDialog() {
-  customerMaterialReceiptForm.value = {
-    materialTypeId: '',
-    receiptDate: new Date().toISOString().slice(0, 10),
-    receiptQuantity: 0,
-    quantityUnit: 'kg',
-    totalWeight: 0,
-    totalValue: 0,
-    warehouseId: '',
-    notes: '',
-  };
-  await loadCustomerMaterialReceiptOptions();
-  customerMaterialReceiptForm.value.warehouseId = defaultRawWarehouseId(customerMaterialWarehouseOptions.value);
-  customerMaterialReceiptVisible.value = true;
-}
-
-function handleCustomerMaterialChange(materialTypeId: string) {
-  const material = customerMaterialOptions.value.find((item) => item.id === materialTypeId);
-  if (material?.unit) customerMaterialReceiptForm.value.quantityUnit = material.unit;
-}
-
-async function handleCustomerMaterialReceiptSubmit() {
-  const form = customerMaterialReceiptForm.value;
-  if (!form.materialTypeId) return ElMessage.warning('请选择入库原料');
-  if (!form.receiptDate) return ElMessage.warning('请选择入库日期');
-  if (!form.receiptQuantity || form.receiptQuantity <= 0) return ElMessage.warning('入库数量必须大于 0');
-  if (!form.totalWeight || form.totalWeight <= 0) return ElMessage.warning('入库重量必须大于 0');
-  if (form.totalValue == null || form.totalValue < 0) return ElMessage.warning('金额不能小于 0');
-
-  customerMaterialReceiptSaving.value = true;
-  try {
-    const payload = buildCustomerMaterialReceiptPayload(form, orderId.value);
-    const res = await post(`/${factoryId.value}/sales/orders/${orderId.value}/customer-material-receipts`, payload);
-    if (res.success) {
-      ElMessage.success('客供料已入库');
-      customerMaterialReceiptVisible.value = false;
-    } else {
-      ElMessage.error(res.message || '客供料入库失败');
-    }
-  } catch (error) {
-    handleCatchError(error, '客供料入库失败');
-  } finally {
-    customerMaterialReceiptSaving.value = false;
-  }
 }
 
 async function handleAction(action: string) {
@@ -1631,7 +1573,7 @@ async function handleQuickPayFull() {
                 >{{ deliveryAction.label }}</el-button>
               </span>
             </el-tooltip>
-            <el-button v-if="canWarehouseConfirm" type="success" plain :loading="customerMaterialReceiptSaving" @click="openCustomerMaterialReceiptDialog">客供料入库</el-button>
+            <el-button v-if="isCustomerSuppliedOrder" type="warning" plain @click="goWarehouseReceiving">前往仓储收货任务</el-button>
             <!-- T-RTA (issue #531): F006 客户反馈 第四次会议 956-1037 — 申请退货 入口.
                  Opens dialog that builds CreateReturnOrderRequest with returnType=SALES_RETURN. -->
             <el-button v-if="['PARTIAL_DELIVERED','DELIVERED','COMPLETED'].includes(order.status)"
@@ -1646,8 +1588,8 @@ async function handleQuickPayFull() {
               @click="router.push(`/sales/orders/${orderId}/profit`)"
             >产品级利润分析</el-button>
           </div>
-          <div class="header-right" v-else-if="order && canWarehouseConfirm">
-            <el-button type="success" plain :loading="customerMaterialReceiptSaving" @click="openCustomerMaterialReceiptDialog">客供料入库</el-button>
+          <div class="header-right" v-else-if="order && isCustomerSuppliedOrder">
+            <el-button type="warning" plain @click="goWarehouseReceiving">前往仓储收货任务</el-button>
           </div>
         </div>
       </template>
@@ -1668,6 +1610,12 @@ async function handleQuickPayFull() {
           <el-descriptions-item :label="label('customer')">{{ order.customerName || order.customer?.name || order.customerId }}</el-descriptions-item>
           <el-descriptions-item label="下单日期">{{ order.orderDate }}</el-descriptions-item>
           <el-descriptions-item label="业务员">{{ order.salesperson || '-' }}</el-descriptions-item>
+          <el-descriptions-item label="加工方式">{{ processingModeLabel(order.processingMode) }}</el-descriptions-item>
+          <el-descriptions-item label="物料供应方式">
+            <el-tag size="small" :type="order.materialSupplyMode === 'CUSTOMER_SUPPLIED' ? 'warning' : 'info'">
+              {{ materialSupplyModeLabel(order.materialSupplyMode) }}
+            </el-tag>
+          </el-descriptions-item>
           <el-descriptions-item v-if="canViewPrice" label="未税总额">{{ formatAmount(order.totalAmount) }}</el-descriptions-item>
           <el-descriptions-item v-if="canViewPrice" label="已发货金额">{{ order.actualShippedAmount ? formatAmount(order.actualShippedAmount) : '0.00' }}</el-descriptions-item>
           <el-descriptions-item v-if="canViewPrice" label="已开票">{{ order.invoicedAmount ? formatAmount(order.invoicedAmount) : '0.00' }}</el-descriptions-item>
@@ -1689,6 +1637,40 @@ async function handleQuickPayFull() {
               <el-descriptions-item label="交货地址" :span="3">{{ order.deliveryAddress || '-' }}</el-descriptions-item>
               <el-descriptions-item label="备注" :span="3">{{ order.remark || '-' }}</el-descriptions-item>
             </el-descriptions>
+
+            <section v-if="isCustomerSuppliedOrder" class="customer-supplied-progress" aria-label="客户自带原料收货进度">
+              <div class="section-heading">
+                <div>
+                  <h3>客户自带原料需求</h3>
+                  <p>销售侧仅查看预计来料和收货进度；实收、批次及库存只能由仓储任务处理。</p>
+                </div>
+                <el-button type="warning" plain @click="goWarehouseReceiving">前往仓储收货任务</el-button>
+              </div>
+              <el-alert
+                v-if="customerSuppliedRequirements.length === 0"
+                type="warning"
+                :closable="false"
+                show-icon
+                title="该代加工订单尚未返回结构化客供料需求，请在订单草稿中补齐后再提交。"
+              />
+              <el-table v-else :data="customerSuppliedRequirements" border>
+                <el-table-column label="原料" min-width="220" show-overflow-tooltip>
+                  <template #default="{ row }">{{ row.materialName || row.materialTypeId }}</template>
+                </el-table-column>
+                <el-table-column label="预计到货" width="125">
+                  <template #default="{ row }">{{ row.expectedArrivalAt || '未维护' }}</template>
+                </el-table-column>
+                <el-table-column label="目标仓库" min-width="160" show-overflow-tooltip>
+                  <template #default="{ row }">{{ row.targetWarehouseName || row.targetWarehouseId || '未维护' }}</template>
+                </el-table-column>
+                <el-table-column label="收货进度" min-width="260">
+                  <template #default="{ row }">{{ customerMaterialProgress(row) }}</template>
+                </el-table-column>
+                <el-table-column label="状态" width="110">
+                  <template #default="{ row }"><el-tag type="warning">{{ customerMaterialReceivingStatusLabel(row.status) }}</el-tag></template>
+                </el-table-column>
+              </el-table>
+            </section>
 
             <h3 style="margin: 20px 0 12px">{{ label('product') }}明细</h3>
             <!-- Task 4: DRAFT 草稿可编辑产品行 -->
@@ -2070,92 +2052,6 @@ async function handleQuickPayFull() {
         </el-tabs>
       </template>
     </el-card>
-
-    <!-- ─── 创建发货单对话框 ─── -->
-    <el-dialog v-model="customerMaterialReceiptVisible" title="客供料入库" width="620px" destroy-on-close>
-      <el-alert
-        type="info"
-        show-icon
-        :closable="false"
-        style="margin-bottom: 12px"
-        title="此入口只登记客户/订单带来的原料库存，不生成采购单或供应商应付。"
-      />
-      <el-form label-width="96px">
-        <el-form-item label="原料" required>
-          <el-select
-            v-model="customerMaterialReceiptForm.materialTypeId"
-            filterable
-            placeholder="选择入库原料"
-            style="width: 100%"
-            @change="handleCustomerMaterialChange"
-          >
-            <el-option
-              v-for="item in customerMaterialOptions"
-              :key="item.id"
-              :label="customerMaterialLabel(item)"
-              :value="item.id"
-            />
-          </el-select>
-        </el-form-item>
-        <el-row :gutter="12">
-          <el-col :span="12">
-            <el-form-item label="入库日期" required>
-              <el-date-picker v-model="customerMaterialReceiptForm.receiptDate" type="date" value-format="YYYY-MM-DD" style="width: 100%" />
-            </el-form-item>
-          </el-col>
-          <el-col :span="12">
-            <el-form-item label="仓库">
-              <el-select v-model="customerMaterialReceiptForm.warehouseId" clearable filterable placeholder="默认原料仓" style="width: 100%">
-                <el-option
-                  v-for="w in customerMaterialWarehouseOptions"
-                  :key="w.id"
-                  :label="[w.name, w.code].filter(Boolean).join(' / ') || w.id"
-                  :value="w.id"
-                />
-              </el-select>
-            </el-form-item>
-          </el-col>
-        </el-row>
-        <el-row :gutter="12">
-          <el-col :span="12">
-            <el-form-item label="数量" required>
-              <el-input-number v-model="customerMaterialReceiptForm.receiptQuantity" :min="0" :precision="3" style="width: 100%" />
-            </el-form-item>
-          </el-col>
-          <el-col :span="12">
-            <el-form-item label="单位" required>
-              <el-input v-model="customerMaterialReceiptForm.quantityUnit" />
-            </el-form-item>
-          </el-col>
-        </el-row>
-        <el-row :gutter="12">
-          <el-col :span="12">
-            <el-form-item label="总重量" required>
-              <el-input-number v-model="customerMaterialReceiptForm.totalWeight" :min="0" :precision="3" style="width: 100%" />
-            </el-form-item>
-          </el-col>
-          <el-col :span="12">
-            <el-form-item label="金额">
-              <el-input-number v-model="customerMaterialReceiptForm.totalValue" :min="0" :precision="2" style="width: 100%" />
-            </el-form-item>
-          </el-col>
-        </el-row>
-        <el-form-item label="备注">
-          <el-input
-            v-model="customerMaterialReceiptForm.notes"
-            type="textarea"
-            :rows="2"
-            maxlength="500"
-            show-word-limit
-            placeholder="例如：客户自带原料 / 随销售订单来料"
-          />
-        </el-form-item>
-      </el-form>
-      <template #footer>
-        <el-button @click="customerMaterialReceiptVisible = false">取消</el-button>
-        <el-button type="primary" :loading="customerMaterialReceiptSaving" @click="handleCustomerMaterialReceiptSubmit">确认入库</el-button>
-      </template>
-    </el-dialog>
 
     <el-dialog v-model="deliveryDialogVisible" :title="`创建${label('delivery')}单`" width="980px" destroy-on-close>
       <el-alert
@@ -2640,6 +2536,16 @@ async function handleQuickPayFull() {
   .header-right { display: flex; gap: 8px; }
 }
 .business-tabs { margin-top: 20px; }
+.customer-supplied-progress { margin-top: 18px; }
+.section-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 10px;
+  h3 { margin: 0 0 4px; font-size: 15px; }
+  p { margin: 0; color: #606266; font-size: 13px; }
+}
 .tab-toolbar {
   display: flex; align-items: center; gap: 16px; padding: 4px 0 12px;
   .tab-hint { color: #909399; font-size: 12px; }

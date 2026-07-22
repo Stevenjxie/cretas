@@ -4,16 +4,19 @@ import com.cretas.aims.dto.sales.BatchAllocationDTO;
 import com.cretas.aims.entity.ProductType;
 import com.cretas.aims.entity.inventory.FinishedGoodsBatch;
 import com.cretas.aims.entity.inventory.SalesDeliveryItem;
+import com.cretas.aims.entity.inventory.SalesOrder;
 import com.cretas.aims.entity.factory.WarehouseCodes;
 import com.cretas.aims.entity.sales.SalesDeliveryItemBatchAllocation;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.repository.ProductTypeRepository;
 import com.cretas.aims.repository.inventory.FinishedGoodsBatchRepository;
 import com.cretas.aims.repository.inventory.SalesDeliveryItemRepository;
+import com.cretas.aims.repository.inventory.SalesOrderRepository;
 import com.cretas.aims.repository.sales.SalesDeliveryItemBatchAllocationRepository;
 import com.cretas.aims.service.factory.WarehouseResolver;
 import com.cretas.aims.service.inventory.FgQuantityUnitConverter;
 import com.cretas.aims.service.sales.SalesDeliveryBatchAllocationService;
+import com.cretas.aims.service.sales.SalesFinishedGoodsOwnershipGuard;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -37,6 +40,7 @@ public class SalesDeliveryBatchAllocationServiceImpl implements SalesDeliveryBat
     private final FinishedGoodsBatchRepository finishedGoodsBatchRepository;
     private final WarehouseResolver warehouseResolver;
     private final ProductTypeRepository productTypeRepository;
+    private final SalesOrderRepository salesOrderRepository;
 
     @Override
     @Transactional
@@ -92,6 +96,7 @@ public class SalesDeliveryBatchAllocationServiceImpl implements SalesDeliveryBat
                         .withCode("BATCH_ALLOCATION_FROZEN");
             }
         }
+        SalesOrder salesOrder = resolveSalesOrder(factoryId, item);
 
         List<SalesDeliveryItemBatchAllocation> current = allocationRepository
                 .findByFactoryIdAndDeliveryItemId(factoryId, deliveryItemId);
@@ -153,6 +158,8 @@ public class SalesDeliveryBatchAllocationServiceImpl implements SalesDeliveryBat
                 throw new BusinessException(403, "成品批次不属于当前工厂: " + dto.getFinishedGoodsBatchId())
                         .withHint("跨工厂调用被拒绝, 请选择本工厂的成品批次").withHintTarget("finishedGoodsBatchId");
             }
+            SalesFinishedGoodsOwnershipGuard.assertBatchAllowed(
+                    salesOrder, batch, "finishedGoodsBatchId");
             // T4-D5 (#572) + 🔴 G1: warehouse guard.
             if (hasExplicitSource) {
                 // EXPLICIT source → batch must be in that exact warehouse (409 guard preserved).
@@ -229,6 +236,7 @@ public class SalesDeliveryBatchAllocationServiceImpl implements SalesDeliveryBat
     }
 
     @Override
+    @Transactional(readOnly = true)
     public List<Map<String, Object>> recommendFifo(
             String factoryId, String deliveryItemId, String productTypeId, BigDecimal requiredQty,
             String unit, String sourceWarehouseCode) {
@@ -268,6 +276,7 @@ public class SalesDeliveryBatchAllocationServiceImpl implements SalesDeliveryBat
                         .withCode("DELIVERY_ITEM_PRODUCT_MISMATCH");
             }
         }
+        SalesOrder salesOrder = resolveSalesOrder(factoryId, deliveryItem);
 
         // T4-D5 (#572) + 🔴 G1 (2026-07-03): warehouse discovery.
         //   - EXPLICIT sourceWarehouseCode → FIFO within that warehouse (respect explicit choice).
@@ -278,11 +287,19 @@ public class SalesDeliveryBatchAllocationServiceImpl implements SalesDeliveryBat
         List<FinishedGoodsBatch> batches;
         if (hasExplicitSource) {
             String warehouseId = warehouseResolver.resolveId(factoryId, sourceWarehouseCode);
-            batches = finishedGoodsBatchRepository
-                    .findAvailableBatchesFifoByWarehouse(factoryId, productTypeId, warehouseId);
+            batches = SalesFinishedGoodsOwnershipGuard.requiresCustomerOwnedStock(salesOrder)
+                    ? finishedGoodsBatchRepository.findAvailableCustomerOwnedBatchesByWarehouse(
+                            factoryId, productTypeId, warehouseId,
+                            salesOrder.getCustomerId(), salesOrder.getId())
+                    : finishedGoodsBatchRepository.findAvailableBatchesFifoByWarehouse(
+                            factoryId, productTypeId, warehouseId);
         } else {
-            batches = finishedGoodsBatchRepository
-                    .findAvailableBatchesFefoAllWarehousesExcluding(factoryId, productTypeId, WarehouseCodes.WH_RD);
+            batches = SalesFinishedGoodsOwnershipGuard.requiresCustomerOwnedStock(salesOrder)
+                    ? finishedGoodsBatchRepository.findAvailableCustomerOwnedBatchesFefoAllWarehousesExcluding(
+                            factoryId, productTypeId, WarehouseCodes.WH_RD,
+                            salesOrder.getCustomerId(), salesOrder.getId())
+                    : finishedGoodsBatchRepository.findAvailableBatchesFefoAllWarehousesExcluding(
+                            factoryId, productTypeId, WarehouseCodes.WH_RD);
         }
 
         List<Map<String, Object>> result = new ArrayList<>();
@@ -332,6 +349,21 @@ public class SalesDeliveryBatchAllocationServiceImpl implements SalesDeliveryBat
                 remaining.compareTo(BigDecimal.ZERO) <= 0);
 
         return result;
+    }
+
+    private SalesOrder resolveSalesOrder(String factoryId, SalesDeliveryItem item) {
+        if (item == null || item.getDeliveryRecord() == null
+                || item.getDeliveryRecord().getSalesOrderId() == null) {
+            return null; // legacy/unlinked delivery remains company-stock only
+        }
+        SalesOrder order = salesOrderRepository.findById(item.getDeliveryRecord().getSalesOrderId())
+                .orElseThrow(() -> new BusinessException(409, "发货单关联的销售订单不存在")
+                        .withCode("DELIVERY_SALES_ORDER_NOT_FOUND"));
+        if (!factoryId.equals(order.getFactoryId())) {
+            throw new BusinessException(403, "发货单关联的销售订单不属于当前工厂")
+                    .withCode("DELIVERY_SALES_ORDER_CROSS_FACTORY");
+        }
+        return order;
     }
 
     /**

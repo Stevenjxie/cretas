@@ -29,19 +29,20 @@ describe('统一仓储待收货入口', () => {
     expect(materials).toContain('<PendingPurchaseReceivingPanel');
     expect(materials).toContain('原料 / 物料入库与批次');
     expect(materials).toContain(':data="tableData"');
-    expect(panel).toContain('采购待收货 / 待入库任务');
+    expect(panel).toContain('待收货 / 待入库任务');
     expect(panel).toContain('pending-receive-row');
     expect(panel).toContain('type="danger" effect="dark"');
-    expect(panel).toContain('采购数量');
+    expect(panel).toContain('计划数量');
     expect(panel).toContain('已收数量');
     expect(panel).toContain('待收数量');
-    expect(panel).not.toContain('CUSTOMER_SUPPLIED');
+    expect(panel).toContain('SALES_ORDER_CUSTOMER_SUPPLIED');
     expect(panel).not.toContain('PRODUCTION_PLAN');
     expect(panel).not.toContain('warehouse/transit-ledgers');
   });
 
-  it('只能从来源任务创建受约束收货单，并可续办已有草稿', () => {
+  it('采购续办既有草稿，客供料按任务一次确认且不伪造第二套草稿', () => {
     expect(panel).toContain('getPendingPurchaseReceivingTasks');
+    expect(panel).toContain('getPendingWarehouseReceivingTasks');
     expect(panel).toContain("row.activeReceiptId ? '继续收货' : '收货'");
     expect(panel).toContain('purchaseOrderId: task.purchaseOrderId');
     expect(panel).toContain('supplierId: task.supplierId');
@@ -49,6 +50,20 @@ describe('统一仓储待收货入口', () => {
     expect(dropZone).toContain('松开即可上传');
     expect(panel).toContain('打印收货单');
     expect(panel).toContain('确认收货入库');
+    expect(panel).toContain('来源、客户、物料、单位和目标仓库均由销售订单锁定');
+    expect(panel).toContain(':max="Number(selectedCustomerLine.remainingReceivableQuantity)"');
+    expect(panel).toContain('entity-type="CUSTOMER_SUPPLIED_RECEIPT"');
+    expect(panel).toContain(':entity-id="selectedCustomerTask.taskId"');
+    expect(panel).toContain('确认客户来料入库');
+    expect(receiveApi).toContain('salesOrderNo: filters?.salesOrderNo');
+    expect(receiveApi).toContain('/warehouse/receiving/tasks/${taskId}/receipts');
+    expect(panel).not.toContain('createCustomerReceiptDraft');
+    expect(panel).not.toContain('loadExistingCustomerReceipt');
+    const customerConfirm = panel.slice(
+      panel.indexOf('async function confirmCustomerReceipt'),
+      panel.indexOf('function sourceLabel'),
+    );
+    expect(customerConfirm).not.toContain('/warehouse/receiving/receipts/');
     expect(materials).not.toContain('>入库登记</el-button>');
   });
 

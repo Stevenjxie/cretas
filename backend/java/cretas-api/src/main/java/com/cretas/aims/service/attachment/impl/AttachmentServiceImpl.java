@@ -14,6 +14,7 @@ import com.cretas.aims.repository.AttachmentRepository;
 import com.cretas.aims.repository.ProductionReportRepository;
 import com.cretas.aims.repository.inventory.PurchaseOrderRepository;
 import com.cretas.aims.repository.inventory.PurchaseReceiveRecordRepository;
+import com.cretas.aims.repository.inventory.SalesOrderSuppliedMaterialRequirementRepository;
 import com.cretas.aims.service.OssService;
 import com.cretas.aims.service.attachment.AttachmentService;
 import com.cretas.aims.service.attachment.dto.RegisterAttachmentRequest;
@@ -76,6 +77,9 @@ public class AttachmentServiceImpl implements AttachmentService {
 
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private PurchaseReceiveRecordRepository purchaseReceiveRecordRepository;
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private SalesOrderSuppliedMaterialRequirementRepository suppliedMaterialRequirementRepository;
 
     /** OSS 直接客户端 — pre-signed PUT 用; {@code aliyun.oss.enabled=false} 时为 null. */
     @Autowired(required = false)
@@ -148,6 +152,18 @@ public class AttachmentServiceImpl implements AttachmentService {
     }
 
     private void validateEntityBinding(String factoryId, RegisterAttachmentRequest req) {
+        if (EntityType.CUSTOMER_SUPPLIED_RECEIPT == req.getEntityType()) {
+            if (suppliedMaterialRequirementRepository == null) {
+                throw new BusinessException(503, "客供料任务归属校验服务暂不可用，附件未绑定");
+            }
+            var requirement = suppliedMaterialRequirementRepository.findById(req.getEntityId())
+                    .orElseThrow(() -> new BusinessException(404,
+                            "客供料待收货任务不存在，附件不能绑定到临时或伪造ID"));
+            if (!factoryId.equals(requirement.getFactoryId())) {
+                throw new BusinessException(403, "客供料收货凭证跨工厂绑定被拒绝");
+            }
+            return;
+        }
         if (EntityType.PURCHASE_RECEIPT == req.getEntityType()) {
             if (purchaseReceiveRecordRepository == null) {
                 throw new BusinessException(503, "收货单归属校验服务暂不可用，附件未绑定");

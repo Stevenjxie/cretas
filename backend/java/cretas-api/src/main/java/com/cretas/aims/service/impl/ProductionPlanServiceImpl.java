@@ -24,10 +24,13 @@ import com.cretas.aims.entity.bom.BomYieldSuggestion;
 import com.cretas.aims.entity.inventory.FinishedGoodsBatch;
 import com.cretas.aims.entity.processentry.ProcessSheetRow;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.cretas.aims.entity.enums.InventoryOwnership;
 import com.cretas.aims.entity.enums.MaterialBatchStatus;
+import com.cretas.aims.entity.enums.MaterialSupplyMode;
 import com.cretas.aims.entity.enums.PlanSourceType;
 import com.cretas.aims.entity.enums.ProductionBatchStatus;
 import com.cretas.aims.entity.enums.ProductionPlanStatus;
+import com.cretas.aims.entity.enums.SalesProcessingMode;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.exception.ResourceNotFoundException;
 import com.cretas.aims.mapper.ProductionPlanMapper;
@@ -48,6 +51,7 @@ import com.cretas.aims.service.ProductionPlanService;
 import com.cretas.aims.service.SchedulingService;
 import com.cretas.aims.service.alerts.InventoryLowStockEventPublisher;
 import com.cretas.aims.service.factory.WarehouseResolver;
+import com.cretas.aims.service.processentry.ProductionInventoryOwnershipGuard;
 import com.cretas.aims.utils.ExcelUtil;
 import lombok.RequiredArgsConstructor;
 import org.slf4j.Logger;
@@ -532,14 +536,13 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
             BigDecimal totalRequiredBom = perUnitRequired.multiply(plannedQty);
 
             // 库存量 (称重批次单位, e.g. kg)
-            BigDecimal available = materialBatchRepository.sumAvailableRawStockQuantityByMaterialType(
-                    factoryId, item.getMaterialTypeId());
+            BigDecimal available = resolveAvailableRawStock(factoryId, plan, item.getMaterialTypeId());
             if (available == null) {
                 available = BigDecimal.ZERO;
             }
 
             // T144: 把 BOM 需求量 (g) 换算到称重批次单位 (kg) 再比较. g↔kg 走 converter → CONVERTED.
-            String stockUnit = resolveMaterialStockUnit(factoryId, item.getMaterialTypeId());
+            String stockUnit = resolveMaterialStockUnit(factoryId, plan, item.getMaterialTypeId());
             String bomUnit = item.getUnit();
             BigDecimal totalRequired = totalRequiredBom;  // 默认: 单位一致或无换算器, 沿用原值
 
@@ -612,13 +615,12 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
             BigDecimal perUnitRequired = calculateRuntimeRequiredQuantity(item, effectiveProductYieldRate);
             BigDecimal totalRequiredBom = perUnitRequired.multiply(plannedQty);
 
-            BigDecimal available = materialBatchRepository.sumAvailableRawStockQuantityByMaterialType(
-                    factoryId, item.getMaterialTypeId());
+            BigDecimal available = resolveAvailableRawStock(factoryId, plan, item.getMaterialTypeId());
             if (available == null) {
                 available = BigDecimal.ZERO;
             }
 
-            String stockUnit = resolveMaterialStockUnit(factoryId, item.getMaterialTypeId());
+            String stockUnit = resolveMaterialStockUnit(factoryId, plan, item.getMaterialTypeId());
             String bomUnit = item.getUnit();
             String unit = stockUnit != null ? stockUnit : (bomUnit != null ? bomUnit : "");
             BigDecimal totalRequired = totalRequiredBom;
@@ -761,13 +763,34 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
         return "原料 " + (materialTypeId != null ? materialTypeId : "?");
     }
 
-    private String resolveMaterialStockUnit(String factoryId, String materialTypeId) {
+    private BigDecimal resolveAvailableRawStock(String factoryId,
+                                                ProductionPlan plan,
+                                                String materialTypeId) {
+        if (plan != null && plan.getMaterialSupplyMode() == MaterialSupplyMode.CUSTOMER_SUPPLIED) {
+            requireCustomerSuppliedPlanLineage(plan, "原料库存");
+            return materialBatchRepository.sumAvailableCustomerSuppliedRawStock(
+                    factoryId, materialTypeId, plan.getCustomerId(), plan.getSourceOrderId());
+        }
+        // Repository contract excludes customer-owned inventory while retaining
+        // null ownership only for read-compatible legacy company stock.
+        return materialBatchRepository.sumAvailableRawStockQuantityByMaterialType(factoryId, materialTypeId);
+    }
+
+    private String resolveMaterialStockUnit(String factoryId,
+                                            ProductionPlan plan,
+                                            String materialTypeId) {
         if (materialTypeId == null) {
             return null;
         }
         try {
-            java.util.List<String> units = materialBatchRepository
-                    .findRawStockUnitsByMaterialType(factoryId, materialTypeId);
+            java.util.List<String> units;
+            if (plan != null && plan.getMaterialSupplyMode() == MaterialSupplyMode.CUSTOMER_SUPPLIED) {
+                requireCustomerSuppliedPlanLineage(plan, "原料库存单位");
+                units = materialBatchRepository.findCustomerSuppliedRawStockUnits(
+                        factoryId, materialTypeId, plan.getCustomerId(), plan.getSourceOrderId());
+            } else {
+                units = materialBatchRepository.findRawStockUnitsByMaterialType(factoryId, materialTypeId);
+            }
             if (units != null && !units.isEmpty()) {
                 if (units.size() > 1) {
                     log.warn("物料 {} 可用批次单位混用 {}, 取最常见 {}",
@@ -797,6 +820,12 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
      */
     private void validateAndEnrichSalesOrderSource(String factoryId, CreateProductionPlanRequest request) {
         if (request.getSourceType() != PlanSourceType.CUSTOMER_ORDER) {
+            // Request snapshot fields are never authoritative. New non-sales plans
+            // always produce ordinary company-owned inventory.
+            request.setCustomerId(null);
+            request.setProcessingMode(null);
+            request.setMaterialSupplyMode(null);
+            request.setOutputOwnership(InventoryOwnership.COMPANY_OWNED);
             return;
         }
         // 优先使用 sourceOrderItemId (新粒度); 兼容老 sourceOrderId 调用方
@@ -813,6 +842,8 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
                 }
                 // 财审闸门: 客户订单必须先通过财务审核才能流转车间排产
                 assertSalesOrderFinanceApproved(so, "sourceOrderId");
+                snapshotSalesOwnershipContract(request, so,
+                        so.getProcessingMode(), so.getMaterialSupplyMode(), "sourceOrderId");
                 if ((request.getSourceCustomerName() == null || request.getSourceCustomerName().isBlank())
                         && so.getCustomerName() != null) {
                     request.setSourceCustomerName(so.getCustomerName());
@@ -843,6 +874,15 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
         // 财审闸门: 客户订单必须先通过财务审核才能流转车间排产
         assertSalesOrderFinanceApproved(so, "sourceOrderItemId");
 
+        // A line-level override is the finest-grained sales truth. Legacy lines
+        // without a snapshot inherit the authoritative order-header contract.
+        SalesProcessingMode processingMode = item.getProcessingMode() != null
+                ? item.getProcessingMode() : so.getProcessingMode();
+        MaterialSupplyMode materialSupplyMode = item.getMaterialSupplyMode() != null
+                ? item.getMaterialSupplyMode() : so.getMaterialSupplyMode();
+        snapshotSalesOwnershipContract(request, so, processingMode, materialSupplyMode,
+                "sourceOrderItemId");
+
         // 自动回填: 订单ID/客户名/产品类型
         request.setSourceOrderId(so.getId());
         if (request.getSourceCustomerName() == null || request.getSourceCustomerName().isBlank()) {
@@ -852,6 +892,43 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
                 && item.getProductTypeId() != null) {
             request.setProductTypeId(item.getProductTypeId());
         }
+    }
+
+    /**
+     * Freeze the sales contract that determines legal ownership of future output.
+     * Both modes null is supported only for a legacy sales order and remains null.
+     */
+    private void snapshotSalesOwnershipContract(CreateProductionPlanRequest request,
+                                                SalesOrder salesOrder,
+                                                SalesProcessingMode processingMode,
+                                                MaterialSupplyMode materialSupplyMode,
+                                                String hintTarget) {
+        request.setCustomerId(salesOrder.getCustomerId());
+        if (processingMode == null && materialSupplyMode == null) {
+            request.setProcessingMode(null);
+            request.setMaterialSupplyMode(null);
+            request.setOutputOwnership(null);
+            return;
+        }
+        if (processingMode == null || materialSupplyMode == null) {
+            throw new BusinessException(409, "销售订单的加工/供料合同不完整，不能生成库存归属快照")
+                    .withCode("SALES_SUPPLY_CONTRACT_INCOMPLETE")
+                    .withHint("请先在销售订单补全加工模式和供料模式")
+                    .withHintTarget(hintTarget);
+        }
+        if (processingMode == SalesProcessingMode.STANDARD_SALE
+                && materialSupplyMode == MaterialSupplyMode.CUSTOMER_SUPPLIED) {
+            throw new BusinessException(409, "普通销售不能使用客户供料，不能生成库存归属快照")
+                    .withCode("SALES_SUPPLY_CONTRACT_INVALID")
+                    .withHint("请修正销售订单的加工模式或供料模式")
+                    .withHintTarget(hintTarget);
+        }
+
+        request.setProcessingMode(processingMode);
+        request.setMaterialSupplyMode(materialSupplyMode);
+        request.setOutputOwnership(processingMode == SalesProcessingMode.TOLL_PROCESSING
+                ? InventoryOwnership.CUSTOMER_OWNED
+                : InventoryOwnership.COMPANY_OWNED);
     }
 
     /**
@@ -941,11 +1018,33 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
                             .withHintTarget("sourceOrderIds");
                 }
                 assertSalesOrderFinanceApproved(so, "sourceOrderIds");
+                assertCompatibleOwnershipContract(plan, so, extraSoId);
             }
         }
 
         plan.setSourceOrderIds(deduped);
         log.debug("SP5 normalizeSourceOrderIds: planId={}, sourceOrderIds={}", plan.getId(), deduped);
+    }
+
+    private void assertCompatibleOwnershipContract(ProductionPlan plan,
+                                                   SalesOrder salesOrder,
+                                                   String salesOrderId) {
+        InventoryOwnership extraOutputOwnership = salesOrder.getProcessingMode() == null
+                ? null
+                : salesOrder.getProcessingMode() == SalesProcessingMode.TOLL_PROCESSING
+                        ? InventoryOwnership.CUSTOMER_OWNED
+                        : InventoryOwnership.COMPANY_OWNED;
+        boolean compatible = Objects.equals(plan.getCustomerId(), salesOrder.getCustomerId())
+                && plan.getProcessingMode() == salesOrder.getProcessingMode()
+                && plan.getMaterialSupplyMode() == salesOrder.getMaterialSupplyMode()
+                && plan.getOutputOwnership() == extraOutputOwnership;
+        if (!compatible) {
+            throw new BusinessException(409,
+                    "合并生产计划中的销售订单客户或加工/供料合同不一致: " + salesOrderId)
+                    .withCode("MERGED_SALES_OWNERSHIP_CONTRACT_MISMATCH")
+                    .withHint("同一生产计划只能合并客户和库存归属合同完全一致的销售订单")
+                    .withHintTarget("sourceOrderIds");
+        }
     }
 
     @Override
@@ -1513,7 +1612,13 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
         newPlan.setAssignedSupervisorId(source.getAssignedSupervisorId());
         newPlan.setSourceType(source.getSourceType());
         newPlan.setSourceOrderId(source.getSourceOrderId());
+        newPlan.setSourceOrderIds(source.getSourceOrderIds() == null ? null
+                : new ArrayList<>(source.getSourceOrderIds()));
         newPlan.setSourceOrderItemId(source.getSourceOrderItemId());
+        newPlan.setCustomerId(source.getCustomerId());
+        newPlan.setProcessingMode(source.getProcessingMode());
+        newPlan.setMaterialSupplyMode(source.getMaterialSupplyMode());
+        newPlan.setOutputOwnership(source.getOutputOwnership());
         newPlan.setSourceCustomerName(source.getSourceCustomerName());
         newPlan.setProcessName(source.getProcessName());
         newPlan.setBatchDate(source.getBatchDate());
@@ -1874,7 +1979,7 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
         for (ProductionSettlementConsumption line : consumptionLines) {
             line.setSettlementId(settlement.getId());
         }
-        postConsumptionToInventory(factoryId, consumptionLines);
+        postConsumptionToInventory(factoryId, plan, consumptionLines);
         // 🔴🔒 R2 (2026-07-04): 结单族 process-row 的 SFI/FG 投料<b>严格扣减</b> (防 phantom 库存腐蚀)。
         //   逐道录入把常驻半成品(SFI)/成品(FG)作投料记在 process_sheet_rows.upstreamSources, 但结单预填
         //   把 semiFinishedConsumptions 留空 (让文员"手工再加"), 且 FG 投料结单请求无对应字段 → 这些投料
@@ -3292,6 +3397,9 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
                                                          String productTypeIdOverride,
                                                          MaterialBatch batch,
                                                          String hintTarget) {
+        if (plan != null) {
+            assertMaterialBatchOwnershipMatchesPlan(plan, batch, hintTarget);
+        }
         if (warehouseResolver == null) {
             throw new BusinessException(500, "仓库解析服务未初始化，不能核对生产领料")
                     .withHintTarget(hintTarget);
@@ -3345,6 +3453,16 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
                     .withHint("请按产品 BOM 选择原料批次，避免结单扣错料")
                     .withHintTarget(hintTarget);
         }
+    }
+
+    static void assertMaterialBatchOwnershipMatchesPlan(ProductionPlan plan,
+                                                        MaterialBatch batch,
+                                                        String hintTarget) {
+        ProductionInventoryOwnershipGuard.assertMaterialBatchAllowed(plan, batch, hintTarget);
+    }
+
+    private static void requireCustomerSuppliedPlanLineage(ProductionPlan plan, String hintTarget) {
+        ProductionInventoryOwnershipGuard.requireCustomerSuppliedPlanLineage(plan, hintTarget);
     }
 
     /**
@@ -3435,7 +3553,9 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
         }
     }
 
-    private void postConsumptionToInventory(String factoryId, List<ProductionSettlementConsumption> lines) {
+    private void postConsumptionToInventory(String factoryId,
+                                            ProductionPlan plan,
+                                            List<ProductionSettlementConsumption> lines) {
         if (isEmpty(lines)) {
             return;
         }
@@ -3443,17 +3563,23 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
             if ("SEMI_FINISHED".equals(line.getSourceType())) {
                 postSemiFinishedConsumption(factoryId, line);
             } else {
-                postMaterialBatchConsumption(factoryId, line);
+                postMaterialBatchConsumption(factoryId, plan, line);
             }
         }
     }
 
-    private void postMaterialBatchConsumption(String factoryId, ProductionSettlementConsumption line) {
+    private void postMaterialBatchConsumption(String factoryId,
+                                               ProductionPlan plan,
+                                               ProductionSettlementConsumption line) {
         MaterialBatch batch = materialBatchRepository
                 .findByIdAndFactoryIdForUpdate(line.getMaterialBatchId(), factoryId)
                 .orElseThrow(() -> new BusinessException(404, "原料批次不存在: " + line.getMaterialBatchId())
                         .withHintTarget("实际领用"));
-        ensureMaterialBatchAllowedForSettlement(factoryId, null, null, batch, "实际领用");
+        // BOM identity was already validated while the request line still carried
+        // its mixed-SKU productTypeId. Re-running BOM resolution here would lose
+        // that line-level identity and could incorrectly fall back to the plan's
+        // primary product. The ownership guard remains mandatory after the lock.
+        assertMaterialBatchOwnershipMatchesPlan(plan, batch, "实际领用");
         BigDecimal available = zeroIfNull(batch.getCurrentQuantity());
         ensureQuantityWithinAvailable("原料批次 " + batch.getBatchNumber(), line.getQuantity(), available, "实际领用");
 
@@ -3950,6 +4076,11 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
         batch.setExpireDate(LocalDate.now().plusDays(shelfLifeDays));
         batch.setStorageLocation("仓库确认入库");
         batch.setProductionPlanId(plan.getId());
+        batch.setOwnership(plan.getOutputOwnership());
+        batch.setOwnerCustomerId(plan.getOutputOwnership() == InventoryOwnership.CUSTOMER_OWNED
+                ? plan.getCustomerId() : null);
+        batch.setSourceSalesOrderId(plan.getSourceOrderId());
+        batch.setSourceSalesOrderItemId(plan.getSourceOrderItemId());
         batch.setWarehouseId(warehouseResolver.resolveFinishedGoodsId(settlement.getFactoryId()));
         batch.setStatus(FinishedGoodsBatch.Status.AVAILABLE);
         batch.setCreatedBy(receivedBy != null ? receivedBy : 0L);
@@ -4077,7 +4208,7 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
         return "F006".equalsIgnoreCase(factoryId);
     }
 
-    private boolean isBlank(String value) {
+    private static boolean isBlank(String value) {
         return value == null || value.trim().isEmpty();
     }
 
@@ -4614,8 +4745,10 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
                     .withHint("当前生产计划不属于该工厂, 无法操作");
         }
 
-        MaterialBatch batch = materialBatchRepository.findById(batchId)
+        MaterialBatch batch = materialBatchRepository.findByIdAndFactoryIdForUpdate(batchId, factoryId)
                 .orElseThrow(() -> new ResourceNotFoundException("原材料批次", "id", batchId));
+
+        assertMaterialBatchOwnershipMatchesPlan(plan, batch, "原料领用");
 
         // 检查库存是否足够
         if (batch.getCurrentQuantity().compareTo(quantity) < 0) {
@@ -4814,8 +4947,10 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
      */
     private void assignMaterialBatchesToPlan(ProductionPlan plan, List<String> batchIds) {
         for (String batchId : batchIds) {
-            MaterialBatch batch = materialBatchRepository.findById(batchId)
+            MaterialBatch batch = materialBatchRepository.findByIdAndFactoryId(batchId, plan.getFactoryId())
                     .orElseThrow(() -> new ResourceNotFoundException("原材料批次", "id", batchId));
+
+            assertMaterialBatchOwnershipMatchesPlan(plan, batch, "原料批次");
 
             // 检查批次状态
             if (batch.getStatus() != MaterialBatchStatus.AVAILABLE) {

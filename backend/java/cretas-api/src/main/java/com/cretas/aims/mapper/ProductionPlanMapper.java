@@ -112,6 +112,10 @@ public class ProductionPlanMapper {
         // raw-centric 多成品: null=非多成品计划, 原样透传 (前端据 null/空判断是否显示成品 chips)
         dto.setTargetFinishedGoodIds(plan.getTargetFinishedGoodIds());
         dto.setSourceOrderItemId(plan.getSourceOrderItemId());
+        dto.setCustomerId(plan.getCustomerId());
+        dto.setProcessingMode(plan.getProcessingMode());
+        dto.setMaterialSupplyMode(plan.getMaterialSupplyMode());
+        dto.setOutputOwnership(plan.getOutputOwnership());
         dto.setSourceCustomerName(plan.getSourceCustomerName());
         dto.setProcessName(plan.getProcessName());
         dto.setBatchDate(plan.getBatchDate());
@@ -214,6 +218,12 @@ public class ProductionPlanMapper {
                 ? new java.util.ArrayList<>(request.getTargetFinishedGoodIds())
                 : null);
         plan.setSourceOrderItemId(request.getSourceOrderItemId());
+        plan.setCustomerId(request.getCustomerId());
+        plan.setProcessingMode(request.getProcessingMode());
+        plan.setMaterialSupplyMode(request.getMaterialSupplyMode());
+        // Explicitly preserve null for legacy sales contracts instead of inheriting
+        // the new-object company-owned default from the entity.
+        plan.setOutputOwnership(request.getOutputOwnership());
         plan.setSourceCustomerName(request.getSourceCustomerName());
         plan.setProcessName(request.getProcessName());
         plan.setBatchDate(request.getBatchDate());

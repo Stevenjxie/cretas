@@ -6,7 +6,7 @@
 //
 // axios baseURL = '/api/mobile' so caller-side URLs start at "/{factoryId}/...".
 // 同 orderCopy.ts 模式 (不带 /mobile/ 前缀).
-import { get } from './request';
+import { get, post } from './request';
 import type { FactoryWarehouse } from './factoryWarehouse';
 
 /** 累计已收 — 单行明细 (后端 PurchaseServiceImpl.getCumulativeReceived lines). */
@@ -48,7 +48,8 @@ export interface ReceiveSequenceEntry {
 }
 
 export interface PurchaseReceivingTaskItem {
-  purchaseOrderItemId: number;
+  purchaseOrderItemId?: number | null;
+  salesOrderItemId?: number | null;
   materialTypeId: string;
   materialName: string;
   orderedQuantity: number;
@@ -79,6 +80,55 @@ export interface PurchaseReceivingTask {
   items: PurchaseReceivingTaskItem[];
 }
 
+export interface CustomerSuppliedReceivingTask {
+  taskId: string;
+  sourceType: 'SALES_ORDER_CUSTOMER_SUPPLIED';
+  salesOrderId: string;
+  salesOrderNo: string;
+  customerId: string;
+  customerName: string;
+  expectedArrivalAt?: string | null;
+  status: 'WAITING_RECEIVE' | 'RECEIVING';
+  statusLabel: string;
+  warehouseId?: string | null;
+  warehouseName?: string | null;
+  responsibleName?: string | null;
+  activeReceiptId?: string | null;
+  activeReceiptNumber?: string | null;
+  activeReceiptCount: number;
+  receiptConflict: boolean;
+  items: PurchaseReceivingTaskItem[];
+}
+
+export type WarehouseReceivingTask = PurchaseReceivingTask | CustomerSuppliedReceivingTask;
+
+export interface WarehouseReceivingTaskFilters {
+  purchaseOrderId?: string;
+  orderNumber?: string;
+  salesOrderId?: string;
+  salesOrderNo?: string;
+  sourceType?: 'PURCHASE' | 'SALES_ORDER_CUSTOMER_SUPPLIED';
+}
+
+export interface CreateCustomerSuppliedReceiptRequest {
+  receivedQuantity: number;
+  unit?: string;
+  externalBatchNumber?: string;
+  productionDate?: string;
+  expireDate?: string;
+  originPlace?: string;
+  notes?: string;
+  idempotencyKey: string;
+}
+
+export interface CustomerSuppliedReceiptResult {
+  id: string;
+  batchNumber?: string | null;
+  quantity?: number | null;
+  currentQuantity?: number | null;
+  unit?: string | null;
+}
+
 /**
  * 生产结单后等待仓库确认的既有 settlement 投影。
  * 来源是真实 ProductionSettlement，不是另一套入库任务。
@@ -93,6 +143,32 @@ export function getPendingPurchaseReceivingTasks(
       orderNumber: filters?.orderNumber || undefined,
     },
   });
+}
+
+export function getPendingWarehouseReceivingTasks(
+  factoryId: string,
+  filters?: WarehouseReceivingTaskFilters,
+) {
+  return get<WarehouseReceivingTask[]>(`/${factoryId}/warehouse/receiving/tasks`, {
+    params: {
+      purchaseOrderId: filters?.purchaseOrderId || undefined,
+      orderNumber: filters?.orderNumber || undefined,
+      salesOrderId: filters?.salesOrderId || undefined,
+      salesOrderNo: filters?.salesOrderNo || undefined,
+      sourceType: filters?.sourceType || undefined,
+    },
+  });
+}
+
+export function createCustomerSuppliedReceipt(
+  factoryId: string,
+  taskId: string,
+  request: CreateCustomerSuppliedReceiptRequest,
+) {
+  return post<CustomerSuppliedReceiptResult>(
+    `/${factoryId}/warehouse/receiving/tasks/${taskId}/receipts`,
+    request,
+  );
 }
 
 /**

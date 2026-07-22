@@ -14,6 +14,7 @@ import org.springframework.stereotype.Repository;
 import jakarta.persistence.LockModeType;
 import java.math.BigDecimal;
 import java.time.LocalDate;
+import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Optional;
 
@@ -91,6 +92,9 @@ import java.util.Optional;
  */
 @Repository
 public interface MaterialBatchRepository extends JpaRepository<MaterialBatch, String> {
+
+    Optional<MaterialBatch> findByFactoryIdAndSourceDocTypeAndSourceEventKey(
+            String factoryId, String sourceDocType, String sourceEventKey);
 
     /**
      * 根据批次号查找
@@ -188,6 +192,7 @@ public interface MaterialBatchRepository extends JpaRepository<MaterialBatch, St
            "AND m.status = 'AVAILABLE' " +
            "AND (m.receiptQuantity - m.usedQuantity - m.reservedQuantity) > 0 " +
            "AND (m.sourceDocType IS NULL OR m.sourceDocType <> 'PRODUCTION_BATCH') " +
+           "AND (m.ownership IS NULL OR m.ownership = com.cretas.aims.entity.enums.InventoryOwnership.COMPANY_OWNED) " +
            "ORDER BY m.receiptDate ASC, m.id ASC")
     List<MaterialBatch> findAvailableBatchesFIFO(@Param("factoryId") String factoryId,
                                                   @Param("materialTypeId") String materialTypeId);
@@ -201,6 +206,7 @@ public interface MaterialBatchRepository extends JpaRepository<MaterialBatch, St
            "AND m.warehouseId = :warehouseId " +
            "AND m.status = 'AVAILABLE' " +
            "AND (m.receiptQuantity - m.usedQuantity - m.reservedQuantity) > 0 " +
+           "AND (m.ownership IS NULL OR m.ownership = com.cretas.aims.entity.enums.InventoryOwnership.COMPANY_OWNED) " +
            "ORDER BY m.receiptDate ASC, m.id ASC")
     List<MaterialBatch> findAvailableBatchesFIFOByWarehouse(@Param("factoryId") String factoryId,
                                                             @Param("materialTypeId") String materialTypeId,
@@ -215,6 +221,7 @@ public interface MaterialBatchRepository extends JpaRepository<MaterialBatch, St
            "AND m.status = 'AVAILABLE' " +
            "AND (m.receiptQuantity - m.usedQuantity - m.reservedQuantity) > 0 " +
            "AND (m.sourceDocType IS NULL OR m.sourceDocType <> 'PRODUCTION_BATCH') " +
+           "AND (m.ownership IS NULL OR m.ownership = com.cretas.aims.entity.enums.InventoryOwnership.COMPANY_OWNED) " +
            "ORDER BY m.expireDate ASC NULLS LAST, m.receiptDate ASC, m.id ASC")
     List<MaterialBatch> findAvailableBatchesFEFO(@Param("factoryId") String factoryId,
                                                   @Param("materialTypeId") String materialTypeId);
@@ -236,10 +243,48 @@ public interface MaterialBatchRepository extends JpaRepository<MaterialBatch, St
            "AND m.status = 'AVAILABLE' " +
            "AND (m.receiptQuantity - m.usedQuantity - m.reservedQuantity) > 0 " +
            "AND (m.sourceDocType IS NULL OR m.sourceDocType <> 'PRODUCTION_BATCH') " +
+           "AND (m.ownership IS NULL OR m.ownership = com.cretas.aims.entity.enums.InventoryOwnership.COMPANY_OWNED) " +
            "ORDER BY m.expireDate ASC NULLS LAST, m.receiptDate ASC, m.id ASC")
     List<MaterialBatch> findAvailableBatchesFEFOByWarehouse(@Param("factoryId") String factoryId,
-                                                            @Param("materialTypeId") String materialTypeId,
-                                                            @Param("warehouseId") String warehouseId);
+                                                             @Param("materialTypeId") String materialTypeId,
+                                                             @Param("warehouseId") String warehouseId);
+
+    /** Customer-owned FEFO candidates are isolated to the same customer and sales order. */
+    @Query("SELECT m FROM MaterialBatch m WHERE m.factoryId = :factoryId " +
+           "AND m.materialTypeId = :materialTypeId " +
+           "AND m.warehouseId = :warehouseId " +
+           "AND m.status = 'AVAILABLE' " +
+           "AND m.ownership = com.cretas.aims.entity.enums.InventoryOwnership.CUSTOMER_OWNED " +
+           "AND m.ownerCustomerId = :customerId " +
+           "AND m.sourceSalesOrderId = :salesOrderId " +
+           "AND (m.receiptQuantity - m.usedQuantity - m.reservedQuantity) > 0 " +
+           "AND (m.sourceDocType IS NULL OR m.sourceDocType <> 'PRODUCTION_BATCH') " +
+           "ORDER BY m.expireDate ASC NULLS LAST, m.receiptDate ASC, m.id ASC")
+    List<MaterialBatch> findAvailableCustomerSuppliedBatchesFEFOByWarehouse(
+            @Param("factoryId") String factoryId,
+            @Param("materialTypeId") String materialTypeId,
+            @Param("warehouseId") String warehouseId,
+            @Param("customerId") String customerId,
+            @Param("salesOrderId") String salesOrderId);
+
+    /** Locked customer-owned candidates for formal production allocation. */
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("SELECT m FROM MaterialBatch m WHERE m.factoryId = :factoryId " +
+           "AND m.materialTypeId = :materialTypeId " +
+           "AND m.warehouseId = :warehouseId " +
+           "AND m.status = 'AVAILABLE' " +
+           "AND m.ownership = com.cretas.aims.entity.enums.InventoryOwnership.CUSTOMER_OWNED " +
+           "AND m.ownerCustomerId = :customerId " +
+           "AND m.sourceSalesOrderId = :salesOrderId " +
+           "AND (m.receiptQuantity - m.usedQuantity - m.reservedQuantity) > 0 " +
+           "AND (m.sourceDocType IS NULL OR m.sourceDocType <> 'PRODUCTION_BATCH') " +
+           "ORDER BY m.expireDate ASC NULLS LAST, m.receiptDate ASC, m.id ASC")
+    List<MaterialBatch> findAvailableCustomerSuppliedBatchesFEFOByWarehouseForUpdate(
+            @Param("factoryId") String factoryId,
+            @Param("materialTypeId") String materialTypeId,
+            @Param("warehouseId") String warehouseId,
+            @Param("customerId") String customerId,
+            @Param("salesOrderId") String salesOrderId);
 
     /**
      * 正式报工自动分摊专用：锁定生产库候选批次，串行化并发分配。
@@ -252,6 +297,7 @@ public interface MaterialBatchRepository extends JpaRepository<MaterialBatch, St
            "AND m.status = 'AVAILABLE' " +
            "AND (m.receiptQuantity - m.usedQuantity - m.reservedQuantity) > 0 " +
            "AND (m.sourceDocType IS NULL OR m.sourceDocType <> 'PRODUCTION_BATCH') " +
+           "AND (m.ownership IS NULL OR m.ownership = com.cretas.aims.entity.enums.InventoryOwnership.COMPANY_OWNED) " +
            "ORDER BY m.createdAt ASC, m.id ASC")
     List<MaterialBatch> findAvailableBatchesFEFOByWarehouseForUpdate(
             @Param("factoryId") String factoryId,
@@ -273,6 +319,7 @@ public interface MaterialBatchRepository extends JpaRepository<MaterialBatch, St
            "AND m.status = 'AVAILABLE' " +
            "AND (m.receiptQuantity - m.usedQuantity - m.reservedQuantity) > 0 " +
            "AND (m.sourceDocType IS NULL OR m.sourceDocType <> 'PRODUCTION_BATCH') " +
+           "AND (m.ownership IS NULL OR m.ownership = com.cretas.aims.entity.enums.InventoryOwnership.COMPANY_OWNED) " +
            "ORDER BY m.materialTypeId ASC, m.expireDate ASC NULLS LAST, m.receiptDate ASC")
     List<MaterialBatch> findAllAvailableInWarehouse(@Param("factoryId") String factoryId,
                                                      @Param("warehouseId") String warehouseId);
@@ -305,7 +352,8 @@ public interface MaterialBatchRepository extends JpaRepository<MaterialBatch, St
      */
     @Query("SELECT SUM((m.receiptQuantity - m.usedQuantity - m.reservedQuantity) * m.unitPrice) FROM MaterialBatch m " +
            "WHERE m.factoryId = :factoryId AND m.status = 'AVAILABLE' " +
-           "AND (m.sourceDocType IS NULL OR m.sourceDocType <> 'PRODUCTION_BATCH')")
+           "AND (m.sourceDocType IS NULL OR m.sourceDocType <> 'PRODUCTION_BATCH') " +
+           "AND (m.ownership IS NULL OR m.ownership = com.cretas.aims.entity.enums.InventoryOwnership.COMPANY_OWNED)")
     BigDecimal calculateInventoryValue(@Param("factoryId") String factoryId);
 
     /**
@@ -313,6 +361,7 @@ public interface MaterialBatchRepository extends JpaRepository<MaterialBatch, St
      */
     @Query("SELECT m.materialTypeId, SUM(m.receiptQuantity - m.usedQuantity - m.reservedQuantity) FROM MaterialBatch m " +
            "WHERE m.factoryId = :factoryId AND m.status = 'AVAILABLE' " +
+           "AND (m.ownership IS NULL OR m.ownership = com.cretas.aims.entity.enums.InventoryOwnership.COMPANY_OWNED) " +
            "GROUP BY m.materialTypeId")
     List<Object[]> sumQuantityByMaterialType(@Param("factoryId") String factoryId);
 
@@ -359,6 +408,7 @@ public interface MaterialBatchRepository extends JpaRepository<MaterialBatch, St
            "com.cretas.aims.entity.enums.MaterialBatchStatus.EXPIRED, " +
            "com.cretas.aims.entity.enums.MaterialBatchStatus.SCRAPPED, " +
            "com.cretas.aims.entity.enums.MaterialBatchStatus.DEFECTIVE) " +
+           "AND (m.ownership IS NULL OR m.ownership = com.cretas.aims.entity.enums.InventoryOwnership.COMPANY_OWNED) " +
            "AND (m.receiptQuantity - m.usedQuantity - m.reservedQuantity) > 0 " +
            "GROUP BY m.materialTypeId, mt.name, mt.code, mt.category, m.quantityUnit " +
            "ORDER BY mt.name ASC, m.quantityUnit ASC")
@@ -374,6 +424,7 @@ public interface MaterialBatchRepository extends JpaRepository<MaterialBatch, St
     @Query("SELECT COALESCE(SUM(m.receiptQuantity - m.usedQuantity - m.reservedQuantity), 0) " +
            "FROM MaterialBatch m WHERE m.factoryId = :factoryId " +
            "AND m.materialTypeId = :materialTypeId AND m.status = 'AVAILABLE' " +
+           "AND (m.ownership IS NULL OR m.ownership = com.cretas.aims.entity.enums.InventoryOwnership.COMPANY_OWNED) " +
            "AND (m.receiptQuantity - m.usedQuantity - m.reservedQuantity) > 0")
     BigDecimal sumAvailableQuantityByMaterialType(
             @Param("factoryId") String factoryId,
@@ -389,10 +440,30 @@ public interface MaterialBatchRepository extends JpaRepository<MaterialBatch, St
            "FROM MaterialBatch m WHERE m.factoryId = :factoryId " +
            "AND m.materialTypeId = :materialTypeId AND m.status = 'AVAILABLE' " +
            "AND (m.sourceDocType IS NULL OR m.sourceDocType <> 'PRODUCTION_BATCH') " +
+           "AND (m.ownership IS NULL OR m.ownership = com.cretas.aims.entity.enums.InventoryOwnership.COMPANY_OWNED) " +
            "AND (m.receiptQuantity - m.usedQuantity - m.reservedQuantity) > 0")
     BigDecimal sumAvailableRawStockQuantityByMaterialType(
             @Param("factoryId") String factoryId,
             @Param("materialTypeId") String materialTypeId);
+
+    /**
+     * Customer-supplied stock is usable only by the production plan sourced
+     * from the same customer and sales order. It never contributes to the
+     * factory-owned availability used for procurement shortfall calculation.
+     */
+    @Query("SELECT COALESCE(SUM(m.receiptQuantity - m.usedQuantity - m.reservedQuantity), 0) " +
+           "FROM MaterialBatch m WHERE m.factoryId = :factoryId " +
+           "AND m.materialTypeId = :materialTypeId AND m.status = 'AVAILABLE' " +
+           "AND m.ownership = com.cretas.aims.entity.enums.InventoryOwnership.CUSTOMER_OWNED " +
+           "AND m.ownerCustomerId = :customerId " +
+           "AND m.sourceSalesOrderId = :salesOrderId " +
+           "AND (m.sourceDocType IS NULL OR m.sourceDocType <> 'PRODUCTION_BATCH') " +
+           "AND (m.receiptQuantity - m.usedQuantity - m.reservedQuantity) > 0")
+    BigDecimal sumAvailableCustomerSuppliedRawStock(
+            @Param("factoryId") String factoryId,
+            @Param("materialTypeId") String materialTypeId,
+            @Param("customerId") String customerId,
+            @Param("salesOrderId") String salesOrderId);
 
     /**
      * T144: 读取指定原料类型的可用批次实际库存单位 (MaterialBatch.quantityUnit, e.g. "kg")。
@@ -408,6 +479,7 @@ public interface MaterialBatchRepository extends JpaRepository<MaterialBatch, St
     @Query("SELECT m.quantityUnit FROM MaterialBatch m " +
            "WHERE m.factoryId = :factoryId " +
            "AND m.materialTypeId = :materialTypeId AND m.status = 'AVAILABLE' " +
+           "AND (m.ownership IS NULL OR m.ownership = com.cretas.aims.entity.enums.InventoryOwnership.COMPANY_OWNED) " +
            "AND (m.receiptQuantity - m.usedQuantity - m.reservedQuantity) > 0 " +
            "GROUP BY m.quantityUnit " +
            "ORDER BY COUNT(m) DESC")
@@ -422,12 +494,29 @@ public interface MaterialBatchRepository extends JpaRepository<MaterialBatch, St
            "WHERE m.factoryId = :factoryId " +
            "AND m.materialTypeId = :materialTypeId AND m.status = 'AVAILABLE' " +
            "AND (m.sourceDocType IS NULL OR m.sourceDocType <> 'PRODUCTION_BATCH') " +
+           "AND (m.ownership IS NULL OR m.ownership = com.cretas.aims.entity.enums.InventoryOwnership.COMPANY_OWNED) " +
            "AND (m.receiptQuantity - m.usedQuantity - m.reservedQuantity) > 0 " +
            "GROUP BY m.quantityUnit " +
            "ORDER BY COUNT(m) DESC")
     List<String> findRawStockUnitsByMaterialType(
             @Param("factoryId") String factoryId,
             @Param("materialTypeId") String materialTypeId);
+
+    @Query("SELECT m.quantityUnit FROM MaterialBatch m " +
+           "WHERE m.factoryId = :factoryId " +
+           "AND m.materialTypeId = :materialTypeId AND m.status = 'AVAILABLE' " +
+           "AND m.ownership = com.cretas.aims.entity.enums.InventoryOwnership.CUSTOMER_OWNED " +
+           "AND m.ownerCustomerId = :customerId " +
+           "AND m.sourceSalesOrderId = :salesOrderId " +
+           "AND (m.sourceDocType IS NULL OR m.sourceDocType <> 'PRODUCTION_BATCH') " +
+           "AND (m.receiptQuantity - m.usedQuantity - m.reservedQuantity) > 0 " +
+           "GROUP BY m.quantityUnit " +
+           "ORDER BY COUNT(m) DESC")
+    List<String> findCustomerSuppliedRawStockUnits(
+            @Param("factoryId") String factoryId,
+            @Param("materialTypeId") String materialTypeId,
+            @Param("customerId") String customerId,
+            @Param("salesOrderId") String salesOrderId);
 
     /**
      * 汇总指定原料类型在指定 warehouse 的可用库存总量。D1 双仓流转 (PR #309 A1=A, 2026-05-10 spec)。
@@ -438,6 +527,7 @@ public interface MaterialBatchRepository extends JpaRepository<MaterialBatch, St
            "AND m.materialTypeId = :materialTypeId " +
            "AND m.warehouseId = :warehouseId " +
            "AND m.status = 'AVAILABLE' " +
+           "AND (m.ownership IS NULL OR m.ownership = com.cretas.aims.entity.enums.InventoryOwnership.COMPANY_OWNED) " +
            "AND (m.receiptQuantity - m.usedQuantity - m.reservedQuantity) > 0")
     BigDecimal sumAvailableQuantityByMaterialTypeAndWarehouse(
             @Param("factoryId") String factoryId,
@@ -449,6 +539,7 @@ public interface MaterialBatchRepository extends JpaRepository<MaterialBatch, St
      */
     @Query("SELECT m.materialTypeId FROM MaterialBatch m " +
            "WHERE m.factoryId = :factoryId " +
+           "AND (m.ownership IS NULL OR m.ownership = com.cretas.aims.entity.enums.InventoryOwnership.COMPANY_OWNED) " +
            "GROUP BY m.materialTypeId " +
            "HAVING SUM(m.receiptQuantity - m.usedQuantity - m.reservedQuantity) < " +
            "(SELECT mt.minStock FROM RawMaterialType mt WHERE mt.id = m.materialTypeId)")
@@ -524,6 +615,7 @@ public interface MaterialBatchRepository extends JpaRepository<MaterialBatch, St
     @Query("SELECT m FROM MaterialBatch m WHERE m.factoryId = :factoryId " +
            "AND m.materialTypeId = :materialTypeId " +
            "AND m.status = :status " +
+           "AND (m.ownership IS NULL OR m.ownership = com.cretas.aims.entity.enums.InventoryOwnership.COMPANY_OWNED) " +
            "ORDER BY m.receiptDate ASC, m.id ASC")
     List<MaterialBatch> findAvailableBatchesFIFOByStatus(@Param("factoryId") String factoryId,
                                                           @Param("materialTypeId") String materialTypeId,
@@ -564,6 +656,7 @@ public interface MaterialBatchRepository extends JpaRepository<MaterialBatch, St
      */
     @Query(value = "SELECT COUNT(*) FROM (SELECT m.material_type_id FROM material_batches m " +
            "WHERE m.factory_id = :factoryId " +
+           "AND (m.ownership IS NULL OR m.ownership = 'COMPANY_OWNED') " +
            "GROUP BY m.material_type_id " +
            "HAVING SUM(m.receipt_quantity - m.used_quantity - m.reserved_quantity) < " +
            "(SELECT mt.min_stock FROM raw_material_types mt WHERE mt.id = m.material_type_id)) sub",
@@ -608,8 +701,9 @@ public interface MaterialBatchRepository extends JpaRepository<MaterialBatch, St
      */
     @Query("SELECT COALESCE(SUM(m.usedQuantity * m.unitPrice), 0) FROM MaterialBatch m " +
            "WHERE m.factoryId = :factoryId " +
-           "AND m.updatedAt BETWEEN :startDate AND :endDate")
+           "AND (m.ownership IS NULL OR m.ownership = com.cretas.aims.entity.enums.InventoryOwnership.COMPANY_OWNED) " +
+           "AND m.updatedAt >= :startDateTime AND m.updatedAt < :endDateTime")
     BigDecimal calculateConsumedValue(@Param("factoryId") String factoryId,
-                                       @Param("startDate") LocalDate startDate,
-                                       @Param("endDate") LocalDate endDate);
+                                       @Param("startDateTime") LocalDateTime startDateTime,
+                                       @Param("endDateTime") LocalDateTime endDateTime);
 }

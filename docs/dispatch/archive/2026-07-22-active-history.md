@@ -9,6 +9,15 @@
 - Deferred: customer-supplied material, sales shortage procurement, production receipt and ownership expansion until this original path passes user UI regression.
 - Scope lock released by the final squash merge; production business writes during implementation: 0.
 
+## FEATURE-F006-R3-CUSTOMER-SUPPLIED-RECEIVING-001
+
+- Status: `merged; NOT_DEPLOYED`; Owner: `/root`; Base SHA: `66e251a1ea836774104c496834df8e45a173ef04`.
+- Scope: sales processing/material-supply contract -> structured customer-supplied requirement -> unified warehouse receipt -> customer-owned raw batch -> exact customer/order production allocation -> customer-owned finished goods and constrained delivery.
+- Reuse boundary: the requirement row is the receiving task identity; no parallel receiving-task table, second receipt system, procurement/AP path, or historical backfill was introduced. The old sales-side direct receipt mutation is frozen with HTTP 410 and zero writes.
+- Verification: Java immutable release lifecycle 17 classes / 131 tests, including 3 real JPA Context query gates; Web Vitest 3 files / 14 tests, `vue-tsc --noEmit`, and immutable Web release build all passed. The JPA gate caught and closed two real query-contract defects before merge.
+- Acceptance handoff: Playwright was explicitly deferred to the user. Production business writes during implementation: 0; `PO-20260721-0001` and all F006/LIUSHANMEN production data remained unchanged.
+- Scope locks released: `FEATURE-F006-R3-CUSTOMER-SUPPLIED-RECEIVING-001`, `CSPR-BE-SALES-RECEIPT`, `CSPR-WEB-SALES-WAREHOUSE`, `CSPR-BE-PRODUCTION-ISOLATION`.
+
 ## RTAI-S3 — 餐饮 AI 严格语义与多轮上下文收口
 
 - 状态：`merged+deployed+verified`；Owner：`/root`。

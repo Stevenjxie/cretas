@@ -6,6 +6,8 @@ package com.cretas.aims.entity.enums;
 public enum InboundType {
     /** Purchase receiving inbound. */
     PURCHASE_ORDER,
+    /** Customer-owned material received against an approved sales-order requirement. */
+    CUSTOMER_SUPPLIED,
     /** Inventory count gain inbound. */
     INVENTORY_COUNT,
     /** Supplier return inbound. */

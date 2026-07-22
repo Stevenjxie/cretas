@@ -20,7 +20,8 @@ class WarehouseReceivingControllerTest {
         assertThat(mapping.value()).containsExactly("/api/mobile/{factoryId}/warehouse/receiving");
 
         for (String name : List.of(
-                "getTasks", "getDefaultWarehouse", "createReceipt",
+                "getTasks", "receiveCustomerSuppliedMaterial",
+                "getDefaultWarehouse", "createReceipt",
                 "getReceipt", "getReceiptsByOrder", "confirmReceipt")) {
             Method method = List.of(WarehouseReceivingController.class.getDeclaredMethods()).stream()
                     .filter(candidate -> candidate.getName().equals(name))
@@ -35,7 +36,7 @@ class WarehouseReceivingControllerTest {
     @Test
     void creatingReceiptWithoutApprovedPurchaseSourceFailsBeforeAnyWrite() {
         WarehouseReceivingController controller = new WarehouseReceivingController(
-                null, null, null, null);
+                null, null, null, null, null);
         CreateReceiveRecordRequest request = new CreateReceiveRecordRequest();
 
         BusinessException error = assertThrows(BusinessException.class,
