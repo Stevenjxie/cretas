@@ -716,3 +716,15 @@
 - **Commit/PR/main 状态**：PR [#1614](https://github.com/Stevenjxie/cretas/pull/1614) 已合入；exact deployed implementation main `a0982983c0c88b63d1dff246ef7be61eaef1fd13`。
 - **部署状态**：`DEPLOYED_PROD_SERVICE_VERIFIED`；Java `v20260722_201341`，green/10020，5/5 健康；Web 四方 SHA-256 一致，Flyway `20261029.01`/`20261029.02` 成功，F006 有且仅有一条 published+enabled 销售 OA 定义。
 - **回归状态**：`AWAITING_USER_UI_ACCEPTANCE`；现有 `SO-20260722-0001` 保留为现场，不重建、不桥接、不修改；须用新销售单分别验证自动通过与财务待办；未触碰 LIUSHANMEN，发布业务 mutation=0。
+
+### BUG-F006-SALES-DETAIL-PURCHASE-PERMISSION-001
+
+- **发现阶段/时间/页面/步骤**：F006 销售统一 OA 生产 headed 验收，2026-07-22；销售主管通过 UI 创建 `SO-20260722-0002` 后进入销售订单详情，页面在提交 OA 前加载关联采购数据。
+- **期望/实际/业务影响**：销售主管应可在自身权限内查看并提交销售订单；只有具备采购读取权限的角色才加载和看到“关联采购”。实际详情页无条件请求 `/api/mobile/F006/purchase/orders`，销售主管收到 403，全局错误通知遮挡“确认并提交 OA 审批”，流程被阻塞。
+- **证据路径**：`C:/tmp/cretas-f006-sales-oa-20260722/web-admin/.playwright-mcp/f006-sales-oa-write-20260722124816/11-low-detail-draft.png`、`99-failure-stop.png`、`trace.zip`、`result.json`；订单保持 `DRAFT`，只读核验 OA instance 数量为 0。
+- **根因**：`web-admin/src/views/sales/orders/detail.vue` 的 `loadPurchaseOrders()` 与“关联采购”页签没有使用共享 `permissionStore.canAccess('procurement')` 门禁；局部 catch 无法阻止 Axios 全局 403 通知。
+- **修复/修改文件**：新增 `canViewLinkedPurchases` 权限投影；无采购读取权限时请求在发送前返回且隐藏关联采购页签，有权限角色保持原查询与查看能力。修改 `detail.vue`、`salesOrderOaContract.source.spec.ts`。
+- **测试**：销售订单目标 Vitest `6 files / 34 tests` PASS，覆盖权限投影、请求发送前门禁及页签显隐；唯一 Web release build `4457 modules` PASS，web tree `5ef7f95db8d45ef15e192d276a4d8b7bbc68b9e4`，archive SHA-256 `f02dd2e3dd12fcd5807fd21caf525de98a6ff7fe086b7c343e4d7578eab3be21`。部署后复用同一 `SO-20260722-0002` 从 OA 提交点继续 headed 验收，不创建第二张订单。
+- **Commit/PR/main 状态**：实现 commit `8e2cb88b2852a8558c4fffeb17f624356713063d`；`PR_PENDING`。
+- **部署状态**：`NOT_DEPLOYED`。
+- **回归状态**：`TARGET_TESTS_AND_RELEASE_BUILD_PASSED_AWAITING_RELEASE`；修复期间生产业务写入 0，未触碰 LIUSHANMEN。
