@@ -3067,7 +3067,32 @@ public class IntentExecutionOrchestrator {
         }
     }
 
+    /** 客户可见文本内部泄漏消毒 (Sheet 7/22 V7): LLM 意图分类/rerank 的推理
+     * 文本 ("在提供的可用意图列表中, 只有 PRODUCT_XXX…") 偶发被当回答返回。
+     * 同时含意图元讨论词与 CODE 形状 token 的消息不可能是合法业务答案。 */
+    private static final java.util.regex.Pattern INTERNAL_CODE_TOKEN =
+            java.util.regex.Pattern.compile("[A-Z]{2,}_[A-Z0-9_]{2,}");
+
+    private void sanitizeInternalReasoningLeak(IntentExecuteResponse response) {
+        String msg = response.getMessage();
+        if (msg == null) {
+            return;
+        }
+        boolean metaTalk = msg.contains("意图列表") || msg.contains("可用意图")
+                || msg.contains("候选意图") || msg.contains("intent_code")
+                || msg.contains("该意图覆盖");
+        if (metaTalk && INTERNAL_CODE_TOKEN.matcher(msg).find()) {
+            log.warn("[sanitize] internal intent reasoning leaked to customer text, replaced. head={}",
+                    msg.substring(0, Math.min(80, msg.length())));
+            String safe = "这个问题我还没有把握直接回答。请换一种问法，"
+                    + "或说明想看的指标（如营收/销量/毛利）和时间范围，我再帮您查。";
+            response.setMessage(safe);
+            response.setFormattedText(safe);
+        }
+    }
+
     private void applyFormattedTextFallback(IntentExecuteResponse response) {
+        sanitizeInternalReasoningLeak(response);
         String currentFT = response.getFormattedText();
         String msg = response.getMessage();
         boolean ftMissing = currentFT == null;
