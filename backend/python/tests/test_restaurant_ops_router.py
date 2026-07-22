@@ -1599,3 +1599,43 @@ def test_dish_scoped_answer_prepends_sales_header():
     assert "销量 100 份" in result.answer_text
     assert "营收 ¥500.00" in result.answer_text
     assert result.meta.get("targetDish") == "米饭(单人份)"
+
+
+# --- R12: 周环比 / 今年·去年窗 (变体探针 V4/V5) ---
+
+
+def test_named_year_windows():
+    rng, label = _resolve_sales_date_range("今年总营业额", today=date(2026, 7, 22))
+    assert (rng, label) == (((date(2026, 1, 1), date(2026, 7, 22))), "今年")
+    rng2, label2 = _resolve_sales_date_range("去年营业额多少", today=date(2026, 7, 22))
+    assert (rng2, label2) == (((date(2025, 1, 1), date(2025, 12, 31))), "去年")
+
+
+def test_week_over_week_comparison_spec():
+    spec = _resolve_sales_query_spec("上周和上上周营业额相比怎么样", today=date(2026, 7, 22))
+    assert spec.window_label == "上周"
+    assert spec.date_range == (date(2026, 7, 13), date(2026, 7, 19))
+    assert spec.comparison_label == "上上周"
+    assert spec.comparison_range == (date(2026, 7, 6), date(2026, 7, 12))
+
+
+def test_year_over_year_comparison_spec():
+    spec = _resolve_sales_query_spec("今年和去年营收对比", today=date(2026, 7, 22))
+    assert spec.window_label == "今年"
+    assert spec.comparison_label == "去年"
+    assert spec.comparison_range == (date(2025, 1, 1), date(2025, 12, 31))
+
+
+def test_week_pair_routes_to_sales_summary():
+    assert match_restaurant_ops("上周和上上周营业额相比怎么样") == "RESTAURANT_OPS_SALES_SUMMARY"
+
+
+def test_store_plus_dish_extracts_dish_after_store_strip():
+    assert _r.extract_dish_candidate("鲜行者打浦桥日月光店的米饭卖得怎么样") == "米饭"
+    assert _r.extract_dish_candidate("鲜行者打浦桥日月光店的毛利率是多少") is None
+
+
+def test_comparative_two_dishes_extracted():
+    assert _r.extract_dish_candidates("米饭和招牌藤椒味哪个毛利高") == ["米饭", "招牌藤椒味"]
+    assert _r.extract_dish_candidates("米饭的毛利率是多少") == ["米饭"]
+    assert _r.extract_dish_candidates("整体毛利率是多少") == []
