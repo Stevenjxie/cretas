@@ -22,11 +22,11 @@
       "url": "",
       "menuPending": true,
       "dishes": [
-        { "name": "招牌照烧鸡腿饭", "price": "¥32" },
-        { "name": "日式炸猪排饭", "price": "¥38" },
-        { "name": "鳗鱼饭", "price": "¥58" },
-        { "name": "亲子丼", "price": "¥30" },
-        { "name": "和风牛肉饭", "price": "¥36" }
+        { "name": "招牌照烧鸡腿饭", "price": "¥32", "img": "assets/dish/dongchi-ai-1.jpg" },
+        { "name": "日式炸猪排饭", "price": "¥38", "img": "assets/dish/dongchi-ai-2.jpg" },
+        { "name": "鳗鱼饭", "price": "¥58", "img": "assets/dish/dongchi-ai-3.jpg" },
+        { "name": "亲子丼", "price": "¥30", "img": "assets/dish/dongchi-ai-4.jpg" },
+        { "name": "和风牛肉饭", "price": "¥36", "img": "assets/dish/dongchi-ai-5.jpg" }
       ]
     },
     {
@@ -38,11 +38,11 @@
       "url": "",
       "menuPending": true,
       "dishes": [
-        { "name": "蟹粉小笼", "price": "¥38" },
-        { "name": "鲜肉小笼", "price": "¥22" },
-        { "name": "灌汤包", "price": "¥26" },
-        { "name": "三鲜馄饨", "price": "¥18" },
-        { "name": "蟹壳黄", "price": "¥12" }
+        { "name": "蟹粉小笼", "price": "¥38", "img": "assets/dish/laochengxiang-ai-1.jpg" },
+        { "name": "鲜肉小笼", "price": "¥22", "img": "assets/dish/laochengxiang-ai-2.jpg" },
+        { "name": "灌汤包", "price": "¥26", "img": "assets/dish/laochengxiang-ai-3.jpg" },
+        { "name": "三鲜馄饨", "price": "¥18", "img": "assets/dish/laochengxiang-ai-4.jpg" },
+        { "name": "蟹壳黄", "price": "¥12", "img": "assets/dish/laochengxiang-ai-5.jpg" }
       ]
     },
     {
@@ -54,12 +54,12 @@
       "url": "",
       "menuPending": true,
       "dishes": [
-        { "name": "水煮牛肉", "price": "¥58" },
-        { "name": "麻婆豆腐", "price": "¥28" },
-        { "name": "宫保鸡丁", "price": "¥42" },
-        { "name": "夫妻肺片", "price": "¥38" },
-        { "name": "回锅肉", "price": "¥46" },
-        { "name": "辣子鸡", "price": "¥48" }
+        { "name": "水煮牛肉", "price": "¥58", "img": "assets/dish/leizi-ai-1.jpg" },
+        { "name": "麻婆豆腐", "price": "¥28", "img": "assets/dish/leizi-ai-2.jpg" },
+        { "name": "宫保鸡丁", "price": "¥42", "img": "assets/dish/leizi-ai-3.jpg" },
+        { "name": "夫妻肺片", "price": "¥38", "img": "assets/dish/leizi-ai-4.jpg" },
+        { "name": "回锅肉", "price": "¥46", "img": "assets/dish/leizi-ai-5.jpg" },
+        { "name": "辣子鸡", "price": "¥48", "img": "assets/dish/leizi-ai-6.jpg" }
       ]
     },
     {
@@ -72,10 +72,10 @@
       "url": "",
       "menuPending": true,
       "dishes": [
-        { "name": "玛格丽特披萨", "price": "¥58" },
-        { "name": "帕尔玛火腿披萨", "price": "¥88" },
-        { "name": "四芝士披萨", "price": "¥78" },
-        { "name": "辣香肠披萨", "price": "¥68" }
+        { "name": "玛格丽特披萨", "price": "¥58", "img": "assets/dish/deibagni-ai-1.jpg" },
+        { "name": "帕尔玛火腿披萨", "price": "¥88", "img": "assets/dish/deibagni-ai-2.jpg" },
+        { "name": "四芝士披萨", "price": "¥78", "img": "assets/dish/deibagni-ai-3.jpg" },
+        { "name": "辣香肠披萨", "price": "¥68", "img": "assets/dish/deibagni-ai-4.jpg" }
       ]
     },
     {
@@ -125,7 +125,7 @@
         { "name": "泰式青柠蒸海鲈鱼", "price": "¥78", "img": "assets/dish/cintablues-4.jpg" },
         { "name": "泰式咖喱蛋香虾", "price": "¥58", "img": "assets/dish/cintablues-5.jpg" },
         { "name": "越式肉末生菜包", "price": "¥42", "img": "assets/dish/cintablues-6.jpg" },
-        { "name": "椰汁咖喱鸡", "price": "¥52" }
+        { "name": "椰汁咖喱鸡", "price": "¥52", "img": "assets/dish/cintablues-7.jpg" }
       ]
     },
     {
@@ -156,8 +156,8 @@
         { "name": "青岛小棕金", "price": "¥8", "img": "assets/dish/tsingtao-2.jpg" },
         { "name": "青岛白啤瓶装", "price": "¥10", "img": "assets/dish/tsingtao-3.jpg" },
         { "name": "逸品纯生", "price": "¥15", "img": "assets/dish/tsingtao-5.jpg" },
-        { "name": "奥古特 A3", "price": "¥15", "img": "assets/dish/tsingtao-6.jpg" },
-        { "name": "青岛纯生瓶装", "price": "¥12" }
+        { "name": "青岛纯生瓶装", "price": "¥12", "img": "assets/dish/tsingtao-4.jpg" },
+        { "name": "奥古特 A3", "price": "¥15", "img": "assets/dish/tsingtao-6.jpg" }
       ]
     },
     {

@@ -182,12 +182,101 @@ button{font:inherit;color:inherit;background:none;border:none;cursor:pointer}
   display:flex;align-items:center;justify-content:center;opacity:.7
 }
 .dish-ph svg{width:52px;opacity:.3}
-.dish-body{padding:13px 14px 15px;display:flex;align-items:flex-start;gap:12px}
+.dish-body{padding:13px 14px 15px;display:flex;align-items:flex-end;gap:12px}
 .dish-info{flex:1;min-width:0}
 .dish-name{font-size:15px;font-weight:600;letter-spacing:.02em;line-height:1.45;margin-bottom:5px}
-.dish-desc{font-size:12px;color:var(--cream-45);line-height:1.65}
-.dish-price{flex:none;font-size:20px;font-weight:700;color:var(--cream);letter-spacing:.01em}
+.dish-desc{font-size:12px;color:var(--cream-45);line-height:1.65;margin-bottom:7px}
+.dish-price{font-size:20px;font-weight:700;color:var(--cream);letter-spacing:.01em;white-space:nowrap}
 .dish-price em{font-style:normal;font-size:11px;color:var(--cream-45);margin-left:2px;font-weight:400}
+
+/* ---- 加减数量 ---- */
+.stepper{display:flex;align-items:center;gap:11px}
+.step-btn{
+  width:30px;height:30px;border-radius:50%;flex:none;
+  display:flex;align-items:center;justify-content:center;
+  transition:transform .15s,background .2s
+}
+.step-btn:active{transform:scale(.88)}
+.step-add{background:var(--red)}
+.step-sub{border:1px solid var(--cream-28);background:transparent}
+.step-n{
+  font-size:16px;font-weight:700;min-width:16px;text-align:center;
+  font-variant-numeric:tabular-nums
+}
+.stepper .step-sub,.stepper .step-n{
+  animation:stepIn .22s cubic-bezier(.2,.7,.3,1) both
+}
+@keyframes stepIn{from{opacity:0;transform:translateX(10px)}to{opacity:1;transform:none}}
+
+/* ---- 购物车条 ---- */
+.cartbar{
+  position:fixed;left:0;right:0;bottom:0;z-index:40;
+  padding:26px var(--pad) calc(env(safe-area-inset-bottom) + 16px);
+  background:linear-gradient(180deg,rgba(11,11,12,0),rgba(11,11,12,.95) 26%);
+  pointer-events:none
+}
+.cartbar-inner{
+  max-width:520px;margin:0 auto;background:var(--ink-2);border:1px solid var(--line);
+  border-radius:var(--r);padding:11px 12px 11px 15px;display:flex;align-items:center;gap:12px;
+  pointer-events:auto;box-shadow:0 8px 30px rgba(0,0,0,.5)
+}
+.cart-icon{position:relative;flex:none;width:38px;height:38px;
+  display:flex;align-items:center;justify-content:center}
+.cart-badge{
+  position:absolute;top:-3px;right:-4px;background:var(--red);color:#fff;
+  min-width:18px;height:18px;border-radius:100px;font-size:11px;font-weight:700;
+  display:flex;align-items:center;justify-content:center;padding:0 5px;
+  animation:stepIn .22s cubic-bezier(.2,.7,.3,1) both
+}
+.cart-sum{flex:1;min-width:0;line-height:1.45}
+.cart-total{font-size:19px;font-weight:700;letter-spacing:.01em}
+.cart-hint{font-size:11px;color:var(--cream-45);letter-spacing:.04em}
+.cart-go{
+  flex:none;background:var(--red);color:#fff;font-size:14px;font-weight:600;
+  letter-spacing:.08em;padding:11px 20px;border-radius:100px;transition:transform .15s
+}
+.cart-go:active{transform:scale(.95)}
+.cart-go[disabled]{background:var(--ink-3);color:var(--cream-28)}
+
+/* ---- 结算确认层 ---- */
+.sheet{
+  position:fixed;inset:0;z-index:55;background:rgba(6,6,7,.75);
+  display:none;align-items:flex-end
+}
+.sheet.on{display:flex;animation:fadeIn .2s ease both}
+.sheet-card{
+  width:100%;max-width:520px;margin:0 auto;background:var(--ink-2);
+  border-top-left-radius:20px;border-top-right-radius:20px;
+  border-top:1px solid var(--line);
+  padding:22px var(--pad) calc(env(safe-area-inset-bottom) + 22px);
+  max-height:82vh;overflow-y:auto;
+  animation:sheetIn .32s cubic-bezier(.2,.7,.3,1) both
+}
+@keyframes sheetIn{from{transform:translateY(100%)}to{transform:none}}
+.sheet-head{display:flex;align-items:baseline;justify-content:space-between;margin-bottom:4px}
+.sheet-head b{font-family:var(--serif);font-size:18px;letter-spacing:.08em}
+.sheet-sub{font-size:12px;color:var(--cream-45);margin-bottom:18px;line-height:1.7}
+.sheet-line{
+  display:flex;align-items:center;gap:12px;padding:11px 0;border-top:1px solid var(--line);
+  font-size:14px
+}
+.sheet-line .n{color:var(--cream-45);font-size:12px;flex:none}
+.sheet-line .t{flex:1;min-width:0}
+.sheet-line .p{flex:none;font-weight:600;font-variant-numeric:tabular-nums}
+.sheet-total{
+  display:flex;align-items:baseline;justify-content:space-between;
+  padding:15px 0 4px;border-top:1px solid var(--cream-28);margin-top:6px
+}
+.sheet-total b{font-size:24px;font-weight:700}
+.sheet-jump{
+  margin-top:18px;padding:14px 15px;border-radius:12px;background:var(--ink-3);
+  font-size:12.5px;line-height:1.85;color:var(--cream-70)
+}
+.sheet-jump b{color:var(--cream)}
+.sheet-btns{display:flex;gap:10px;margin-top:16px}
+.sheet-btns button{flex:1;padding:14px;border-radius:100px;font-size:14px;font-weight:600;letter-spacing:.06em}
+.btn-ghost{border:1px solid var(--cream-28);color:var(--cream-70)}
+.btn-red{background:var(--red);color:#fff}
 .zoom-hint{
   position:absolute;right:10px;bottom:10px;background:rgba(11,11,12,.62);
   border-radius:100px;padding:4px 9px;font-size:10px;letter-spacing:.08em;color:var(--cream-70);
@@ -294,7 +383,7 @@ button{font:inherit;color:inherit;background:none;border:none;cursor:pointer}
   </div>
   <div id="sPending"></div>
   <div class="dishes" id="dishes"></div>
-  <div class="jumpbar">
+  <div class="jumpbar" id="jumpBar">
     <div class="jumpbar-inner">
       <div class="jumpbar-txt" id="jumpTxt"></div>
       <div class="jumpbar-arrow">
@@ -302,16 +391,36 @@ button{font:inherit;color:inherit;background:none;border:none;cursor:pointer}
       </div>
     </div>
   </div>
+
+  <div class="cartbar" id="cartBar" hidden>
+    <div class="cartbar-inner">
+      <div class="cart-icon">
+        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#F2EDE4" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M3 4h2.2l2.3 11.2a1.6 1.6 0 001.6 1.3h8.4a1.6 1.6 0 001.6-1.2L21 8H6"/>
+          <circle cx="10" cy="20" r="1.3"/><circle cx="18" cy="20" r="1.3"/>
+        </svg>
+        <span class="cart-badge" id="cartN">0</span>
+      </div>
+      <div class="cart-sum">
+        <div class="cart-total" id="cartTotal">¥0</div>
+        <div class="cart-hint" id="cartHint">本单由该档口独立收款</div>
+      </div>
+      <button class="cart-go" id="btnCheckout">去结算</button>
+    </div>
+  </div>
 </section>
 
 </div>
 
 <div class="lb" id="lb"><img id="lbImg" alt=""><div class="lb-cap" id="lbCap"></div></div>
+<div class="sheet" id="sheet"><div class="sheet-card" id="sheetCard"></div></div>
 
 <script>
 (function(){
   'use strict';
   var CFG = null, TABLE = '', EXPLICIT = false;
+  var STALL = null;      // 当前档口
+  var CART = {};         // 菜品下标 -> 份数（切换档口即清空：一家档口一笔单）
   var $ = function(id){ return document.getElementById(id); };
   var esc = function(s){ return String(s == null ? '' : s).replace(/[&<>"']/g, function(c){
     return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]; }); };
@@ -356,15 +465,96 @@ button{font:inherit;color:inherit;background:none;border:none;cursor:pointer}
     }).join('');
   }
 
+  /* ---------- 购物车 ---------- */
+  function priceOf(d){ var n = parseFloat(String(d.price).replace(/[^\d.]/g, '')); return isNaN(n) ? 0 : n; }
+  function cartCount(){ var n = 0; for (var k in CART) n += CART[k]; return n; }
+  function cartTotal(){
+    var t = 0;
+    for (var k in CART) t += priceOf(STALL.dishes[k]) * CART[k];
+    return t;
+  }
+  function money(n){ return '¥' + (Math.round(n * 100) / 100).toString(); }
+
+  function stepperHTML(i){
+    var q = CART[i] || 0;
+    var sub = '<button class="step-btn step-sub" data-act="sub" data-i="' + i + '" aria-label="减少">' +
+      '<svg width="13" height="13" viewBox="0 0 16 16" stroke="#F2EDE4" stroke-width="2" stroke-linecap="round"><path d="M3.5 8h9"/></svg></button>' +
+      '<span class="step-n">' + q + '</span>';
+    var add = '<button class="step-btn step-add" data-act="add" data-i="' + i + '" aria-label="添加">' +
+      '<svg width="14" height="14" viewBox="0 0 16 16" stroke="#fff" stroke-width="2.1" stroke-linecap="round"><path d="M8 3.5v9M3.5 8h9"/></svg></button>';
+    return (q > 0 ? sub : '') + add;
+  }
+
+  function syncCartUI(){
+    var n = cartCount();
+    $('cartBar').hidden = n === 0;
+    $('jumpBar').hidden = n > 0;
+    if (!n) return;
+    $('cartN').textContent = n;
+    $('cartTotal').textContent = money(cartTotal());
+    $('cartHint').textContent = '共 ' + n + ' 份 · ' + STALL.name + ' 独立收款';
+  }
+
+  function bump(i, delta){
+    var q = (CART[i] || 0) + delta;
+    if (q <= 0) delete CART[i]; else CART[i] = q;
+    var box = $('dishes').querySelector('.stepper[data-i="' + i + '"]');
+    if (box) box.innerHTML = stepperHTML(i);
+    syncCartUI();
+  }
+
+  function openSheet(){
+    var lines = Object.keys(CART).map(function(k){
+      var d = STALL.dishes[k];
+      return '<div class="sheet-line"><span class="n">×' + CART[k] + '</span>' +
+        '<span class="t">' + esc(d.name) + '</span>' +
+        '<span class="p">' + money(priceOf(d) * CART[k]) + '</span></div>';
+    }).join('');
+
+    $('sheetCard').innerHTML =
+      '<div class="sheet-head"><b>确认订单</b><span class="sheet-sub" style="margin:0">' +
+        esc(TABLE) + ' 桌</span></div>' +
+      '<div class="sheet-sub">' + esc(STALL.name) + ' · 送至 ' + esc(TABLE) + ' 桌</div>' +
+      lines +
+      '<div class="sheet-total"><span>合计</span><b>' + money(cartTotal()) + '</b></div>' +
+      '<div class="sheet-jump">正式使用时，这一单会带着桌号 <b>' + esc(TABLE) + '</b> 跳转到 ' +
+        '<b>' + esc(STALL.name) + '</b> 的点餐小程序完成支付。<br>' +
+        '货款直接进该档口自己的账户，无需总部代收再分账。</div>' +
+      '<div class="sheet-btns">' +
+        '<button class="btn-ghost" data-act="close">再看看</button>' +
+        '<button class="btn-red" data-act="confirm">确认下单</button>' +
+      '</div>';
+    $('sheet').classList.add('on');
+  }
+
+  function sheetDone(){
+    $('sheetCard').innerHTML =
+      '<div class="sheet-head"><b>演示到此</b></div>' +
+      '<div class="sheet-sub">真实环境下，接下来会发生这些事：</div>' +
+      '<div class="sheet-line"><span class="n">1</span><span class="t">跳转 ' + esc(STALL.name) +
+        ' 点餐小程序，桌号 ' + esc(TABLE) + ' 已带入</span></div>' +
+      '<div class="sheet-line"><span class="n">2</span><span class="t">顾客在该档口页面完成支付</span></div>' +
+      '<div class="sheet-line"><span class="n">3</span><span class="t">货款直接进 ' + esc(STALL.name) +
+        ' 的账户，不经总部</span></div>' +
+      '<div class="sheet-line"><span class="n">4</span><span class="t">该档口出餐，按桌号 ' + esc(TABLE) +
+        ' 送达</span></div>' +
+      '<div class="sheet-line"><span class="n">5</span><span class="t">总部次日按约定比例抽成，只对抽成部分计税</span></div>' +
+      '<div class="sheet-jump">想吃别家？返回首页换一个档口即可，' +
+        '<b>各档口各自一笔单</b>，互不影响。</div>' +
+      '<div class="sheet-btns"><button class="btn-red" data-act="close">知道了</button></div>';
+  }
+
   function renderStall(id){
     var st = (CFG.stalls || []).filter(function(s){ return s.id === id; })[0];
     if (!st) return;
+    STALL = st; CART = {};
     $('sName').textContent = st.name;
     $('sTag').textContent = st.tag || '';
     $('sTable').textContent = TABLE;
 
     $('sPending').innerHTML = st.menuPending
-      ? '<div class="pending-note">该档口菜品图片尚未同步，以下为菜单示意。正式上线后由商家点餐系统实时同步。</div>'
+      ? '<div class="pending-note">该档口菜单尚未从商家同步，图片与价格为示意。' +
+        '正式上线后由该档口点餐系统实时同步。</div>'
       : '';
 
     $('dishes').innerHTML = (st.dishes || []).map(function(d, i){
@@ -382,9 +572,12 @@ button{font:inherit;color:inherit;background:none;border:none;cursor:pointer}
         '<div class="dish-body"><div class="dish-info">' +
         '<div class="dish-name">' + esc(d.name) + '</div>' +
         (d.desc ? '<div class="dish-desc">' + esc(d.desc) + '</div>' : '') +
-        '</div><div class="dish-price">' + esc(d.price) +
-        (d.suffix ? '<em>' + esc(d.suffix) + '</em>' : '') + '</div></div></article>';
+        '<div class="dish-price">' + esc(d.price) +
+        (d.suffix ? '<em>' + esc(d.suffix) + '</em>' : '') + '</div>' +
+        '</div><div class="stepper" data-i="' + i + '">' + stepperHTML(i) + '</div>' +
+        '</div></article>';
     }).join('');
+    syncCartUI();
 
     var url = resolveUrl(st, TABLE);
     $('jumpTxt').innerHTML = url
@@ -415,6 +608,8 @@ button{font:inherit;color:inherit;background:none;border:none;cursor:pointer}
     if (history.length > 1) history.back(); else location.hash = '';
   });
   $('dishes').addEventListener('click', function(e){
+    var btn = e.target.closest('.step-btn');
+    if (btn) { bump(btn.dataset.i, btn.dataset.act === 'add' ? 1 : -1); return; }
     var img = e.target.closest('.dish-img');
     if (!img) return;
     $('lbImg').src = img.dataset.full;
@@ -422,9 +617,17 @@ button{font:inherit;color:inherit;background:none;border:none;cursor:pointer}
     $('lbCap').innerHTML = '<b>' + esc(img.dataset.name) + '</b>' + esc(img.dataset.price);
     $('lb').classList.add('on');
   });
+  $('btnCheckout').addEventListener('click', openSheet);
+  $('sheet').addEventListener('click', function(e){
+    var act = (e.target.closest('[data-act]') || {}).dataset;
+    if (act && act.act === 'confirm') { sheetDone(); return; }
+    if ((act && act.act === 'close') || e.target === $('sheet')) $('sheet').classList.remove('on');
+  });
   $('lb').addEventListener('click', function(){ $('lb').classList.remove('on'); });
   document.addEventListener('keydown', function(e){
-    if (e.key === 'Escape') $('lb').classList.remove('on');
+    if (e.key !== 'Escape') return;
+    if ($('lb').classList.contains('on')) $('lb').classList.remove('on');
+    else $('sheet').classList.remove('on');
   });
   window.addEventListener('hashchange', route);
 
