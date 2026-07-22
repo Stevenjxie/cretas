@@ -451,6 +451,8 @@ _DISH_LEADING_TIME_RE = re.compile(
 
 
 def _extract_dish_candidate_single(text: str) -> "Optional[str]":
+    # build_resolver_query 会在句尾追加「（窗口标签）」— 剥掉再做锚定匹配。
+    text = re.sub(r"[（(][^（）()]{0,24}[）)]\s*$", "", text).strip()
     match = _DISH_QUERY_RE.match(text)
     if not match:
         return None
@@ -515,6 +517,7 @@ def extract_dish_candidates(query: "Optional[str]") -> list:
     if not query:
         return []
     text = query.strip()
+    text = re.sub(r"[（(][^（）()]{0,24}[）)]\s*$", "", text).strip()
     match = _DISH_COMPARE_RE.match(text)
     if match:
         out = []
