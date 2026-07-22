@@ -42,7 +42,11 @@ public final class CustomerTextSanitizer {
         boolean metaTalk = text.contains("意图列表") || text.contains("可用意图")
                 || text.contains("候选意图") || text.contains("intent_code")
                 || text.contains("该意图覆盖");
-        if (metaTalk && INTERNAL_CODE_TOKEN.matcher(text).find()) {
+        // Step-型推理直出 ("Step1-实体识别: … Step2-意图分析: …") 无 CODE token,
+        // 用步骤结构词对判定 (A3 变体, 2026-07-22 实测)。
+        boolean stepLeak = (text.contains("Step1") || text.contains("实体识别"))
+                && text.contains("意图分析");
+        if (stepLeak || (metaTalk && INTERNAL_CODE_TOKEN.matcher(text).find())) {
             log.warn("[sanitize] internal intent reasoning leaked, replaced. head={}",
                     text.substring(0, Math.min(80, text.length())));
             setter.accept(SAFE_REPLY);
