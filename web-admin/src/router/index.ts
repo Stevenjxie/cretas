@@ -547,12 +547,12 @@ const businessRoutes: RouteRecordRaw[] = [
             meta: { requiresAuth: true, title: '价格表管理', module: 'procurement' }
           },
           // 六扇门 V1 #9 — 采购入库管理 (audit fix 2026-04-26)
-          {
-            path: 'receives',
-            name: 'ProcurementReceives',
-            component: () => import('@/views/procurement/receives/list.vue'),
-            meta: { requiresAuth: true, title: '采购入库', module: 'procurement' }
-          },
+            {
+              path: 'receives',
+              name: 'ProcurementReceives',
+              redirect: (to) => ({ path: '/warehouse/materials', query: { ...to.query, view: 'receiving' } }),
+              meta: { requiresAuth: true, title: '仓储待收货与批次', module: 'warehouse', hidden: true }
+            },
           // Sprint2-J P-FIN-1 follow-up (Chat 6 Vue): 财务审核 PC 入口
           // 后端 approveOrder 触发条件 (priceAlert OR totalAmount > 阈值) 满足时
           // 自动进 PENDING_FINANCE_REVIEW, 财务在此审核. RBAC 由 detail.vue v-if + 后端

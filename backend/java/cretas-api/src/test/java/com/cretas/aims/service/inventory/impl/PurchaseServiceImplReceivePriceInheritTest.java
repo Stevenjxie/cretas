@@ -6,6 +6,7 @@ import com.cretas.aims.entity.enums.PurchaseOrderStatus;
 import com.cretas.aims.entity.inventory.PurchaseOrder;
 import com.cretas.aims.entity.inventory.PurchaseOrderItem;
 import com.cretas.aims.entity.inventory.PurchaseReceiveRecord;
+import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.repository.MaterialBatchRepository;
 import com.cretas.aims.repository.RawMaterialTypeRepository;
 import com.cretas.aims.repository.SupplierRepository;
@@ -32,6 +33,7 @@ import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.verify;
@@ -96,8 +98,11 @@ class PurchaseServiceImplReceivePriceInheritTest {
         PurchaseOrder po = new PurchaseOrder();
         po.setId(PO_ID);
         po.setFactoryId(FACTORY);
-        po.setStatus(PurchaseOrderStatus.APPROVED);
-        lenient().when(purchaseOrderRepository.findById(PO_ID)).thenReturn(Optional.of(po));
+        po.setSupplierId("SUP-1");
+        po.setStatus(PurchaseOrderStatus.FINANCE_APPROVED);
+        lenient().when(purchaseOrderRepository.findByIdAndFactoryIdForUpdate(PO_ID, FACTORY)).thenReturn(Optional.of(po));
+        lenient().when(receiveRecordRepository.findByFactoryIdAndPurchaseOrderIdOrderByCreatedAtAsc(FACTORY, PO_ID))
+                .thenReturn(List.of());
 
         // PO 行: A=32.00 (合同价), B=无价. validateOverReceiveCap + 价继承都读这个 repository.
         lenient().when(purchaseOrderItemRepository.findByPurchaseOrderId(PO_ID))
@@ -120,15 +125,14 @@ class PurchaseServiceImplReceivePriceInheritTest {
     }
 
     @Test
-    @DisplayName("收货行已填价 → 用收货价不被 PO 覆盖")
-    void receiveItemExplicitPrice_winsOverPo() {
+    @DisplayName("仓储请求伪造价格 → 仍严格继承已审批 PO 行价")
+    void receiveItemExplicitPrice_cannotOverridePo() {
         CreateReceiveRecordRequest req = receiveReq(MAT_A, new BigDecimal("10"), new BigDecimal("30.00"));
 
         PurchaseReceiveRecord rec = service.createReceiveRecord(FACTORY, req, USER_ID);
 
-        // 收货价 30.00 优先 (手填覆盖合同价), 总额 = 10 × 30 = 300
-        assertEquals(new BigDecimal("30.00"), rec.getItems().get(0).getUnitPrice());
-        assertEquals(0, new BigDecimal("300.00").compareTo(rec.getTotalAmount()));
+        assertEquals(new BigDecimal("32.00"), rec.getItems().get(0).getUnitPrice());
+        assertEquals(0, new BigDecimal("320.00").compareTo(rec.getTotalAmount()));
     }
 
     @Test
@@ -165,10 +169,43 @@ class PurchaseServiceImplReceivePriceInheritTest {
         verify(warehouseInventoryGuardService).assertCanReceive("WH-RAW", FACTORY, "RAW");
     }
 
+    @Test
+    @DisplayName("收货单位与 PO 行不一致 → 保存草稿前 fail-closed")
+    void receiveUnitMismatch_isRejectedBeforeDraftPersist() {
+        CreateReceiveRecordRequest req = receiveReq(MAT_A, new BigDecimal("10"), null);
+        req.getItems().get(0).setUnit("case");
+
+        BusinessException error = assertThrows(BusinessException.class,
+                () -> service.createReceiveRecord(FACTORY, req, USER_ID));
+
+        assertEquals("PURCHASE_RECEIPT_UNIT_MISMATCH", error.getErrorCode());
+    }
+
+    @Test
+    @DisplayName("仅业务审批、尚未完成财审 → 不得创建仓储收货单")
+    void businessApprovedWithoutFinance_isRejected() {
+        PurchaseOrder po = new PurchaseOrder();
+        po.setId(PO_ID);
+        po.setFactoryId(FACTORY);
+        po.setStatus(PurchaseOrderStatus.APPROVED);
+        when(purchaseOrderRepository.findByIdAndFactoryIdForUpdate(PO_ID, FACTORY))
+                .thenReturn(Optional.of(po));
+
+        BusinessException error = assertThrows(BusinessException.class,
+                () -> service.createReceiveRecord(
+                        FACTORY, receiveReq(MAT_A, BigDecimal.ONE, null), USER_ID));
+
+        assertEquals("PURCHASE_RECEIPT_FINANCE_APPROVAL_REQUIRED", error.getErrorCode());
+    }
+
     private PurchaseOrderItem poItem(String materialTypeId, BigDecimal unitPrice) {
         PurchaseOrderItem it = new PurchaseOrderItem();
+        it.setId(MAT_A.equals(materialTypeId) ? 1L : 2L);
+        it.setPurchaseOrderId(PO_ID);
         it.setMaterialTypeId(materialTypeId);
         it.setUnitPrice(unitPrice);
+        it.setUnit("kg");
+        it.setPriceUnit("kg");
         it.setQuantity(new BigDecimal("100"));
         it.setReceivedQuantity(BigDecimal.ZERO);
         return it;

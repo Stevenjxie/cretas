@@ -135,6 +135,28 @@ class AttachmentPermissionResolverTest {
         verify(permissionService).hasAnyPermission(eq(salesMgr), eq(new String[]{"sales:read_write"}));
     }
 
+    @Test
+    @DisplayName("✅ 采购收货附件写入按仓储职责授权")
+    void purchaseReceipt_write_usesWarehousePermissions() {
+        User warehouseWorker = userWithRole(104L, FactoryUserRole.warehouse_worker);
+        String[] expected = {"warehouse:read_write", "inventory:write"};
+        when(permissionService.hasAnyPermission(eq(warehouseWorker), eq(expected))).thenReturn(true);
+
+        assertDoesNotThrow(() -> resolver.requireWrite(warehouseWorker, EntityType.PURCHASE_RECEIPT));
+        verify(permissionService).hasAnyPermission(eq(warehouseWorker), eq(expected));
+    }
+
+    @Test
+    @DisplayName("✅ 采购人员只能只读查看采购收货凭证")
+    void purchaseReceipt_read_preservesProcurementTraceability() {
+        User procurementManager = userWithRole(105L, FactoryUserRole.procurement_manager);
+        String[] expected = {"warehouse:read", "warehouse:read_write", "procurement:read", "procurement:read_write"};
+        when(permissionService.hasAnyPermission(eq(procurementManager), eq(expected))).thenReturn(true);
+
+        assertDoesNotThrow(() -> resolver.requireRead(procurementManager, EntityType.PURCHASE_RECEIPT));
+        verify(permissionService).hasAnyPermission(eq(procurementManager), eq(expected));
+    }
+
     // ==================== Upload guardrails ====================
 
     @Test

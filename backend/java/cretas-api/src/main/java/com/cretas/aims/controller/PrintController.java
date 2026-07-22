@@ -9,12 +9,15 @@ import com.cretas.aims.entity.factory.FactoryMaterialRequisition;
 import com.cretas.aims.entity.factory.FactoryMaterialRequisitionItem;
 import com.cretas.aims.entity.inventory.InternalTransfer;
 import com.cretas.aims.entity.inventory.InternalTransferItem;
+import com.cretas.aims.entity.inventory.PurchaseReceiveItem;
+import com.cretas.aims.entity.inventory.PurchaseReceiveRecord;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.repository.ProductionBatchRepository;
 import com.cretas.aims.security.PriceMaskResolver;
 import com.cretas.aims.service.ProductionPlanService;
 import com.cretas.aims.service.factory.FactoryMaterialRequisitionService;
 import com.cretas.aims.service.inventory.TransferService;
+import com.cretas.aims.service.inventory.PurchaseService;
 import com.cretas.aims.service.workprocess.WorkProcessTaskService;
 import com.cretas.aims.utils.JwtUtil;
 import com.cretas.aims.utils.TokenUtils;
@@ -131,6 +134,10 @@ public class PrintController {
     @Autowired(required = false)
     private TransferService transferService;
 
+    /** Warehouse-owned purchase receipt source for printable receiving documents. */
+    @Autowired(required = false)
+    private PurchaseService purchaseService;
+
     /** Optional: 产品类型 repository (配料单 — 取 单锅产能 算锅数). */
     @Autowired(required = false)
     private com.cretas.aims.repository.ProductTypeRepository productTypeRepository;
@@ -233,6 +240,17 @@ public class PrintController {
             @RequestHeader(value = "Authorization", required = false) String authorization) {
         Map<String, Object> payload = buildStockMovementPayload(factoryId, id, overrides);
         return proxyToPython("stock-movement", payload, "stock-movement-" + id, authorization);
+    }
+
+    @GetMapping("/purchase-receipt/{id}")
+    @RequirePermission({"warehouse:read", "warehouse:read_write", "inventory:read_write"})
+    public ResponseEntity<byte[]> printPurchaseReceipt(
+            @PathVariable String factoryId,
+            @PathVariable String id,
+            @RequestParam(required = false) Map<String, String> overrides,
+            @RequestHeader(value = "Authorization", required = false) String authorization) {
+        Map<String, Object> payload = buildPurchaseReceiptPayload(factoryId, id, overrides);
+        return proxyToPython("stock-movement", payload, "purchase-receipt-" + id, authorization);
     }
 
     /**
@@ -931,6 +949,43 @@ public class PrintController {
         p.put("totalQty", or(overrides, "totalQty", "0"));
         p.put("remark", or(overrides, "remark", null));
         p.put("items", java.util.List.of());
+        return p;
+    }
+
+    private Map<String, Object> buildPurchaseReceiptPayload(
+            String factoryId, String id, Map<String, String> overrides) {
+        if (purchaseService == null) {
+            throw new BusinessException(503, "采购收货服务不可用，无法生成收货单");
+        }
+        PurchaseReceiveRecord receipt = purchaseService.getReceiveRecordById(factoryId, id);
+        Map<String, Object> p = new LinkedHashMap<>();
+        p.put("factoryName", or(overrides, "factoryName", "白垩纪食品 — " + factoryId));
+        p.put("movementNumber", receipt.getReceiveNumber());
+        p.put("movementType", "IN");
+        p.put("movementDate", receipt.getReceiveDate() == null ? "-" : receipt.getReceiveDate().toString());
+        p.put("warehouseName", receipt.getWarehouseId() == null ? "待指定仓库" : receipt.getWarehouseId());
+        p.put("sourceRef", receipt.getPurchaseOrderNumber() == null
+                ? receipt.getPurchaseOrderId() : receipt.getPurchaseOrderNumber());
+        p.put("supplierName", receipt.getSupplierName());
+        p.put("operator", receipt.getReceivedBy());
+        p.put("status", receipt.getStatus() == null ? "-" : receipt.getStatus().name());
+        p.put("remark", receipt.getRemark());
+
+        List<Map<String, Object>> items = new ArrayList<>();
+        if (receipt.getItems() != null) {
+            for (PurchaseReceiveItem item : receipt.getItems()) {
+                Map<String, Object> row = new LinkedHashMap<>();
+                row.put("materialName", item.getMaterialName());
+                row.put("quantity", item.getReceivedQuantity());
+                row.put("unit", item.getUnit());
+                row.put("batchNumber", item.getMaterialBatchId());
+                row.put("location", receipt.getWarehouseId());
+                row.put("qcResult", item.getQcResult());
+                items.add(row);
+            }
+        }
+        p.put("totalQty", items.size() + "项");
+        p.put("items", items);
         return p;
     }
 

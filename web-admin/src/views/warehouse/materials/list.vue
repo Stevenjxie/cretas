@@ -14,6 +14,7 @@ import { formatDateTimeCell, fmtQty, formatAmount } from '@/utils/tableFormatter
 import type { FormInstance } from 'element-plus';
 import type { TableRow } from '@/types/api';
 import { useCreateAndReturn } from '@/composables/useCreateAndReturn';
+import PendingPurchaseReceivingPanel from './PendingPurchaseReceivingPanel.vue';
 
 const router = useRouter();
 const authStore = useAuthStore();
@@ -194,6 +195,11 @@ function handleRefresh() {
   } else {
     loadData();
   }
+}
+
+function handleReceivingRefresh() {
+  loadData();
+  if (viewMode.value === 'summary') loadSummaryData();
 }
 
 function handlePageChange(page: number) {
@@ -462,7 +468,7 @@ async function handleGenerateLabel(row: TableRow) {
       <template #header>
         <div class="card-header">
           <div class="header-left">
-            <span class="page-title">原料 / 物料批次</span>
+            <span class="page-title">原料 / 物料入库与批次</span>
             <span class="data-count">共 {{ pagination.total }} 条记录</span>
           </div>
           <div class="header-right">
@@ -490,6 +496,13 @@ async function handleGenerateLabel(row: TableRow) {
         show-icon
         class="source-only-hint"
         title="批次数量仅由仓储待收货、退货、调拨、盘点或受控调整任务写入；本页用于查询、追溯与标签管理。"
+      />
+
+      <PendingPurchaseReceivingPanel
+        v-if="factoryId"
+        :factory-id="factoryId"
+        :can-write="canWrite"
+        @refreshed="handleReceivingRefresh"
       />
 
       <div class="search-bar">

@@ -656,3 +656,18 @@
 - **Commit/PR/main 状态**：实现与门禁 commit `7da960aa5bc2680bea71b9e9c881357a87b8ad05`；PR [#1567](https://github.com/Stevenjxie/cretas/pull/1567) 已合入；部署源码 main `c93e31a63d860db8e98996c705c5ee25dfa93108`。
 - **部署状态**：`DEPLOYED`；Java `v20260721_233852`，active `green/10020`，5/5 切流后健康通过；`verify-release` 的 systemd、直连健康及 `approval-recovery` JAR marker 均通过。
 - **回归状态**：`RECOVERED_AND_VERIFIED`；部署后先 query-only 证明 `PO-20260721-0001` 为 `SUBMITTED`、无实例，取得用户单独明确授权后使用固定幂等键严格执行1次恢复 POST。创建唯一实例 `6949ac9a-fd33-40e2-a45e-26db666035d2`，流程 `awf-f006-po-default` 自动完成为 `APPROVED`，订单投影为 `FINANCE_APPROVED`；刷新后匹配实例严格1个、审批历史1条、待办0，金额 `1440.00`、税额 `187.20`、9行及供应商 identity 不变。除该次授权恢复外业务 mutation=0，未取消、重提、重建订单，未触碰 LIUSHANMEN。
+
+## F006 R3 采购审批后仓储收货断链（2026-07-22）
+
+### BUG-F006-R3-PURCHASE-RECEIVING-ROUTE-001
+
+- **发现阶段/时间/页面/步骤**：F006 R3 采购 OA 完成后的仓储续跑，2026-07-22；`PO-20260721-0001` 财务已审核，从采购详情点击“前往仓储收货任务”却进入仅有历史批次的原料页面，无法定位采购待收任务。
+- **期望/实际/业务影响**：审批完成采购单应以只读投影出现在统一仓储页面，仓储人员从来源任务创建/续办唯一活动收货单并确认入库；实际路由指向旧采购入库/批次视图且没有待办投影，原始采购到库存链阻塞。
+- **证据路径**：`D:/Temp/codex-clipboard-a9975166-798c-403b-9714-633d4e441983.png`、`D:/Temp/codex-clipboard-20d8d21b-ae86-4841-a454-44551959e430.png`。
+- **根因**：采购详情仍指向采购模块旧收货页面；现有采购收货 Entity/Service/批次物化能力没有面向仓储工作台的待收货读模型；活动草稿占用只按物料聚合，无法安全区分同订单同物料多行；收货附件权限仍按采购模块判断。
+- **修复**：复用既有 `PurchaseReceiveRecord`、确认入库和库存批次写路径，仅新增 `FINANCE_APPROVED/PARTIAL_RECEIVED` 采购单的仓储待收货投影；新页面/API 统一收敛到 `/api/mobile/{factoryId}/warehouse/receiving/**`，旧采购收货页面删除、旧路由只做零写重定向，Web 源码不再调用 `/purchase/receives/**`；采购详情零写跳转到 `/warehouse/materials` 并携带订单 ID/单号；统一仓储页置顶浅红待收行，支持目标仓库、分批数量、拖拽供货凭证、打印和确认；同订单活动草稿 fail-closed，收货行固定 `purchaseOrderItemId`，创建与确认均锁定并校验剩余量/单位；仓储请求不能覆盖已审批 PO 行价格，附件服务不可用时确认 fail-closed，历史同物料多行歧义只读标冲突而不猜测分摊；仓储拥有唯一写权限，采购只读追溯。客供料、销售缺料、生产入库和 ownership 扩展明确不在本批。
+- **修改文件**：`PurchaseController/PurchaseService/PurchaseServiceImpl`、采购收货 DTO/Entity/Repository/Flyway、附件权限与打印；Web `procurement/orders/detail.vue`、`warehouse/materials/*`、采购收货 API、router/menu 及目标测试。
+- **测试**：Java 最终单生命周期 `clean package` 通过，10 个目标测试类共 `73/73`，含真实 Hibernate/JPA Repository Context 启动门禁；JAR SHA-256 `f9bbfdd51031726680296695591a240f971792c912b98ddec11fbd40caae48ea`。Web `vue-tsc --noEmit` 通过，3 个目标测试文件 `70/70`，release Web manifest 成功，archive SHA-256 `bc8c40a19f942ae6f7211582a7210ede9927eb2b4bda413e92879896bfc941ef`；全仓 Web 源码和闭环脚本无旧 `/purchase/receives/**` 消费者。
+- **Commit/PR/main 状态**：分支最终构建提交 `dd2df6393d33f74c4dcc098756177171e1434e04`，以本条所在最终 squash PR 合入 `main`。
+- **部署状态**：`NOT_DEPLOYED`。
+- **回归状态**：`TARGET_TESTS_PASSED_AWAITING_DEPLOY`；按用户决定不由 Codex 运行 Playwright，部署后由用户从同一 `PO-20260721-0001` 做页面续测；修复过程生产业务 mutation=0，未取消、重建、重提或桥接采购单，未触碰 LIUSHANMEN。

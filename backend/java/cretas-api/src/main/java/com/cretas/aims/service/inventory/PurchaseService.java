@@ -5,6 +5,7 @@ import com.cretas.aims.dto.inventory.CreatePurchaseOrderRequest;
 import com.cretas.aims.dto.inventory.CreateReceiveRecordRequest;
 import com.cretas.aims.dto.inventory.UpdatePurchaseOrderRequest;
 import com.cretas.aims.dto.inventory.PurchaseApprovalRecoveryResponse;
+import com.cretas.aims.dto.inventory.PurchaseReceivingTaskResponse;
 import com.cretas.aims.entity.inventory.PurchaseOrder;
 import com.cretas.aims.entity.inventory.PurchaseReceiveRecord;
 import com.cretas.aims.entity.enums.PurchaseOrderStatus;
@@ -110,13 +111,19 @@ public interface PurchaseService {
 
     PurchaseReceiveRecord createReceiveRecord(String factoryId, CreateReceiveRecordRequest request, Long userId);
 
+    /**
+     * 仓储统一入库页待收货任务。只读派生，不创建任务记录、不修改采购单或库存。
+     */
+    List<PurchaseReceivingTaskResponse> getPendingReceivingTasks(
+            String factoryId, String purchaseOrderId, String orderNumber);
+
     PurchaseReceiveRecord confirmReceive(String factoryId, String receiveId, Long userId);
 
     PurchaseReceiveRecord getReceiveRecordById(String factoryId, String receiveId);
 
     PageResponse<PurchaseReceiveRecord> getReceiveRecords(String factoryId, int page, int size);
 
-    List<PurchaseReceiveRecord> getReceiveRecordsByOrder(String purchaseOrderId);
+    List<PurchaseReceiveRecord> getReceiveRecordsByOrder(String factoryId, String purchaseOrderId);
 
     /**
      * Issue #787 follow-up to PR #782 / #775: 后端按行汇总入库累计数量.

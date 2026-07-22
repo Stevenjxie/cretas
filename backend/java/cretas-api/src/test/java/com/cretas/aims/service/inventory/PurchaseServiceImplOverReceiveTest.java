@@ -10,6 +10,7 @@ import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.repository.SupplierRepository;
 import com.cretas.aims.repository.inventory.PurchaseOrderItemRepository;
 import com.cretas.aims.repository.inventory.PurchaseOrderRepository;
+import com.cretas.aims.repository.inventory.PurchaseReceiveRecordRepository;
 import com.cretas.aims.service.inventory.impl.PurchaseServiceImpl;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -52,6 +53,7 @@ class PurchaseServiceImplOverReceiveTest {
 
     @Mock private PurchaseOrderRepository purchaseOrderRepository;
     @Mock private PurchaseOrderItemRepository purchaseOrderItemRepository;
+    @Mock private PurchaseReceiveRecordRepository receiveRecordRepository;
     @Mock private SupplierRepository supplierRepository;
 
     private PurchaseServiceImpl service;
@@ -71,7 +73,7 @@ class PurchaseServiceImplOverReceiveTest {
         service = new PurchaseServiceImpl(
                 purchaseOrderRepository,
                 purchaseOrderItemRepository,
-                /* receiveRecordRepository */ null,
+                receiveRecordRepository,
                 supplierRepository,
                 /* materialTypeRepository */ null,
                 /* materialBatchRepository */ null,
@@ -109,13 +111,18 @@ class PurchaseServiceImplOverReceiveTest {
         PurchaseOrder order = new PurchaseOrder();
         order.setId(PO_ID);
         order.setFactoryId(FACTORY_ID);
-        order.setStatus(PurchaseOrderStatus.APPROVED);
-        when(purchaseOrderRepository.findById(PO_ID)).thenReturn(Optional.of(order));
+        order.setSupplierId(SUPPLIER_ID);
+        order.setStatus(PurchaseOrderStatus.FINANCE_APPROVED);
+        when(purchaseOrderRepository.findByIdAndFactoryIdForUpdate(PO_ID, FACTORY_ID)).thenReturn(Optional.of(order));
+        when(receiveRecordRepository.findByFactoryIdAndPurchaseOrderIdOrderByCreatedAtAsc(FACTORY_ID, PO_ID))
+                .thenReturn(List.of());
 
         PurchaseOrderItem orderItem = new PurchaseOrderItem();
         orderItem.setPurchaseOrderId(PO_ID);
         orderItem.setMaterialTypeId(MAT_ID);
         orderItem.setMaterialName(MAT_NAME);
+        orderItem.setUnit("kg");
+        orderItem.setPriceUnit("kg");
         orderItem.setQuantity(orderedQty);
         orderItem.setReceivedQuantity(alreadyReceived);
         when(purchaseOrderItemRepository.findByPurchaseOrderId(PO_ID))
@@ -205,7 +212,7 @@ class PurchaseServiceImplOverReceiveTest {
         assertFalse(thrown instanceof BusinessException && ((BusinessException) thrown).getCode() == 409,
                 "no-order receive should bypass cap, but got 409: " + thrown.getMessage());
         // purchaseOrderRepository / purchaseOrderItemRepository should NOT be queried
-        verify(purchaseOrderRepository, never()).findById(anyString());
+        verify(purchaseOrderRepository, never()).findByIdAndFactoryIdForUpdate(anyString(), anyString());
         verify(purchaseOrderItemRepository, never()).findByPurchaseOrderId(anyString());
     }
 
@@ -221,13 +228,12 @@ class PurchaseServiceImplOverReceiveTest {
         order.setId(PO_ID);
         order.setFactoryId(FACTORY_ID);
         order.setStatus(PurchaseOrderStatus.DRAFT);  // not in PO_OPS_RECEIVABLE
-        when(purchaseOrderRepository.findById(PO_ID)).thenReturn(Optional.of(order));
+        when(purchaseOrderRepository.findByIdAndFactoryIdForUpdate(PO_ID, FACTORY_ID)).thenReturn(Optional.of(order));
 
         BusinessException ex = assertThrows(BusinessException.class,
                 () -> service.createReceiveRecord(FACTORY_ID, buildRequest(new BigDecimal("50")), 1L));
         assertEquals(409, ex.getCode());
-        assertTrue(ex.getMessage().contains("已审批"),
-                "expected status guard message, got: " + ex.getMessage());
+        assertEquals("PURCHASE_RECEIPT_FINANCE_APPROVAL_REQUIRED", ex.getErrorCode());
         // confirm cap-check did NOT run (whitelist check is upstream)
         assertFalse(OrderUsageWhitelists.PO_OPS_RECEIVABLE.contains(PurchaseOrderStatus.DRAFT));
     }

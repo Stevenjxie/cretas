@@ -47,6 +47,54 @@ export interface ReceiveSequenceEntry {
   items: ReceiveSequenceItem[];
 }
 
+export interface PurchaseReceivingTaskItem {
+  purchaseOrderItemId: number;
+  materialTypeId: string;
+  materialName: string;
+  orderedQuantity: number;
+  receivedQuantity: number;
+  activeDraftAllocatedQuantity: number;
+  remainingReceivableQuantity: number;
+  unit: string;
+  specification?: string | null;
+}
+
+export interface PurchaseReceivingTask {
+  taskId: string;
+  sourceType: 'PURCHASE';
+  purchaseOrderId: string;
+  orderNumber: string;
+  supplierId: string;
+  supplierName?: string | null;
+  expectedDeliveryDate?: string | null;
+  status: 'WAITING_RECEIVE' | 'RECEIVING';
+  statusLabel: string;
+  warehouseId?: string | null;
+  warehouseName?: string | null;
+  responsibleName?: string | null;
+  activeReceiptId?: string | null;
+  activeReceiptNumber?: string | null;
+  activeReceiptCount: number;
+  receiptConflict: boolean;
+  items: PurchaseReceivingTaskItem[];
+}
+
+/**
+ * 生产结单后等待仓库确认的既有 settlement 投影。
+ * 来源是真实 ProductionSettlement，不是另一套入库任务。
+ */
+export function getPendingPurchaseReceivingTasks(
+  factoryId: string,
+  filters?: { purchaseOrderId?: string; orderNumber?: string },
+) {
+  return get<PurchaseReceivingTask[]>(`/${factoryId}/warehouse/receiving/tasks`, {
+    params: {
+      purchaseOrderId: filters?.purchaseOrderId || undefined,
+      orderNumber: filters?.orderNumber || undefined,
+    },
+  });
+}
+
 /**
  * 采购订单累计已收汇总 (跨页权威值, 替代 list.vue 的 page-local cumulativeForRow).
  * 异常走 axios interceptor (sticky toast).
@@ -74,6 +122,6 @@ export function getOrderReceiveSequence(factoryId: string, orderId: string) {
  */
 export function getPurchaseInboundDefaultWarehouse(factoryId: string) {
   return get<FactoryWarehouse | null>(
-    `/${factoryId}/purchase/receives/default-warehouse`
+    `/${factoryId}/warehouse/receiving/default-warehouse`
   );
 }

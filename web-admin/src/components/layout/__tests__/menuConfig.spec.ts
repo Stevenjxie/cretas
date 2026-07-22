@@ -218,11 +218,14 @@ describe('menuConfig - Liushanmen department workflow entries', () => {
     ]);
     expect(childPaths('/procurement')).toEqual([
       '/procurement/orders',
-      '/procurement/receives',
       '/procurement/finance-review',
       '/procurement/suppliers',
       '/procurement/price-lists',
     ]);
+  });
+
+  it('does not expose purchase receiving as a procurement write entry', () => {
+    expect(childPaths('/procurement')).not.toContain('/procurement/receives');
   });
 
   it('groups sales into business, approval, and configuration sections', () => {

@@ -1,5 +1,14 @@
 # Dispatch 完成归档 — 2026-07-22
 
+## BUG-F006-R3-PURCHASE-RECEIVING-ROUTE-001
+
+- Status: `review`; Owner: `/root`; Base SHA: `53b3f02c6261da8136ce73bc9618e8618bd61bce`.
+- Scope: approved purchase order -> unified warehouse pending receipt -> constrained receipt -> existing inventory batch materialization only.
+- Canonical write/read API: `/api/mobile/{factoryId}/warehouse/receiving/**`; new UI has no `/purchase/receives/**` consumer. The legacy procurement route only redirects to the unified warehouse view.
+- Verification: Java release lifecycle 73/73 including real JPA Context; Web target tests 70/70 plus typecheck and immutable Web manifest.
+- Deferred: customer-supplied material, sales shortage procurement, production receipt and ownership expansion until this original path passes user UI regression.
+- Scope lock released by the final squash merge; production business writes during implementation: 0.
+
 ## RTAI-S3 — 餐饮 AI 严格语义与多轮上下文收口
 
 - 状态：`merged+deployed+verified`；Owner：`/root`。
