@@ -266,9 +266,23 @@ async def tiered_answer(
                 or "RESTAURANT_OPS_GROSS_MARGIN" in plan)
             else None
         )
+        from smartbi.gold.restaurant_ops_router import extract_dish_candidate
+        dish_mention = (
+            extract_dish_candidate(resolver_query) or extract_dish_candidate(query)
+        )
         planned_results: List[Tuple[str, Any]] = []
         for code in plan:
             effective_code = code
+            if (
+                dish_mention
+                and code == "RESTAURANT_OPS_SALES_SUMMARY"
+                and not store_mention
+            ):
+                # planner 把「X的销量」按 sales_volume 归入 SALES_SUMMARY, 但
+                # 点名单菜的销量/营收数据在 gross-margin resolver 的 POS 行里
+                # (Sheet 7/22 菜品链)。dish 限域接管, 全店概览不受影响
+                # (无菜名 → dish_mention None)。
+                effective_code = "RESTAURANT_OPS_GROSS_MARGIN"
             if (
                 store_mention
                 and code == "RESTAURANT_OPS_GROSS_MARGIN"

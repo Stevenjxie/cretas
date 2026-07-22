@@ -855,3 +855,24 @@ async def test_tiered_answer_gross_margin_with_store_mention_reroutes_to_store_m
     assert captured["factory_id"] == "RES_3101_009"
     assert captured["kwargs"]["store_mention"] == "鲜行者打浦桥日月光店"
     assert result["kind"] == "answer"
+
+
+@pytest.mark.asyncio
+async def test_tiered_sales_summary_with_dish_mention_reroutes_to_gross_margin(monkeypatch):
+    spec = _spec(intent="RESTAURANT_OPS_SALES_SUMMARY")
+    captured = {}
+
+    async def _fake_parse(*a, **kw):
+        return spec
+
+    async def _fake_resolve(code, pool, factory_id, **kwargs):
+        captured["code"] = code
+        return OpsAnswer(code=code, title="t",
+                         answer_text="「米饭(单人份)」销量 23,296 份、营收 ¥284,492.40。",
+                         charts=[], kpis=[], meta={})
+
+    monkeypatch.setattr(svc, "parse_restaurant_query", _fake_parse)
+    monkeypatch.setattr(svc, "_resolve_tiered", _fake_resolve)
+    result = await tiered_answer("米饭的销量是多少", object(), "DEMO_REST", "restaurant_manager")
+    assert captured["code"] == "RESTAURANT_OPS_GROSS_MARGIN"
+    assert result["kind"] == "answer"
