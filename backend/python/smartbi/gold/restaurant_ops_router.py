@@ -290,7 +290,7 @@ def _is_explicit_sales_period_comparison(query: str) -> bool:
 
 _NEGATIVE_MARGIN_EXISTENCE_RE = re.compile(
     r"(?:有没有|有无|是否有|存不存在|哪些|哪道|哪个)[^。？?]{0,10}?"
-    r"(?:毛利(?:率)?[^。？?]{0,4}?(?:负|亏)|负毛利|亏钱|亏本|赔钱)"
+    r"(?:毛利(?:率)?[^。？?]{0,4}?(?:负|亏)|负毛利|亏钱|亏损|亏本|赔钱)"
     r"|负毛利|毛利(?:率)?(?:是|为)负"
 )
 # POS 流水里的非菜品行 (打包盒/餐具/配送费) — 销量排行里是噪音, 过滤掉。
@@ -340,6 +340,28 @@ RESTAURANT_CAPABILITIES_TEXT = (
 )
 
 
+_STORE_DISH_SPLIT_RE = re.compile(
+    r"(?:哪家店|哪个店|哪家门店|各门店|各店|每家店|每个店)的?(.{1,14}?)(?:卖得|销量|销售|营收|毛利)"
+)
+_STORE_DISH_METRIC_TOKENS = (
+    "营收", "营业额", "销量", "销售", "毛利", "订单", "业绩", "生意", "利润", "客单",
+)
+
+
+def store_dish_split_dish(query: "Optional[str]") -> "Optional[str]":
+    """「哪家店的米饭卖得最好」→ 米饭 (店×菜拆分, 暂不支持需诚实拒答);
+    纯门店问 (「哪家店营收最高」) → None。"""
+    if not query:
+        return None
+    m = _STORE_DISH_SPLIT_RE.search(query.strip())
+    if not m:
+        return None
+    cand = m.group(1).strip("的， ,")
+    if len(cand) < 2 or any(tok in cand for tok in _STORE_DISH_METRIC_TOKENS):
+        return None
+    return cand[:60]
+
+
 def is_capability_question(query: "Optional[str]") -> bool:
     return bool(query) and bool(_CAPABILITY_RE.search(query.strip()))
 
@@ -375,6 +397,39 @@ def match_restaurant_ops(query: str) -> Optional[str]:
     # 菜品销量排名 ("哪道菜卖得最差") — POS 行直接排, 不再依赖上传报表 (R14)。
     if dish_ranking_direction(q):
         return "RESTAURANT_OPS_GROSS_MARGIN"
+    # 店×菜拆分问 ("哪家店的米饭卖得最好") — 暂不支持, tiered 层诚实拒答并
+    # 给两条可用替代 (R15)。返回 GROSS_MARGIN 仅为通过委托预筛。
+    if store_dish_split_dish(q):
+        return "RESTAURANT_OPS_GROSS_MARGIN"
+    # 单日营收问 ("昨天卖了多少钱") — Java DAILY_REVENUE 工具默认锚今天,
+    # 把单日问偷换成 今天vs昨天 比较 (R15/G7)。
+    if (
+        any(tok in q for tok in ("今天", "今日", "昨天", "昨日", "前天"))
+        and any(tok in q for tok in ("卖了多少", "多少钱", "营业额", "营收", "销售额", "流水", "生意"))
+        and not any(tok in q for tok in ("趋势", "走势", "哪家店", "哪个店"))
+    ):
+        return "RESTAURANT_OPS_SALES_SUMMARY"
+    # 同比增长问 ("今年比去年增长多少") — 此前落 Java 指标查询 slot-filling,
+    # 还把 UPPER_SNAKE 指标码直接问用户 (R15)。
+    if (
+        re.search(r"(?:今年|本年)[^。]{0,6}(?:比|较|相比|对比)[^。]{0,6}去年|(?:比|较)去年", q)
+        and any(tok in q for tok in ("增长", "下降", "涨", "跌", "多少", "如何", "怎么样", "好"))
+    ):
+        return "RESTAURANT_OPS_SALES_SUMMARY"
+    # 订单量/客流问 ("订单量最近如何") — 无营收词, T1 此前不接, 落 LLM 工厂
+    # 报表框架回答 (R15/G4)。
+    if (
+        any(tok in q for tok in ("订单量", "订单数", "单量", "客流量", "客流"))
+        and any(tok in q for tok in ("最近", "如何", "怎么样", "多少", "情况"))
+        and not any(tok in q for tok in ("门店", "分店", "哪家店", "哪个店"))
+    ):
+        return "RESTAURANT_OPS_SALES_SUMMARY"
+    # 亏损门店存在性问 ("有没有店在亏损") → 门店毛利存在性直答 (R15/G5)。
+    if (
+        re.search(r"(?:有没有|有无|是否有|哪些|哪家)[^。]{0,4}(?:门店|店)", q)
+        and any(tok in q for tok in ("亏损", "亏钱", "赔钱", "不赚钱", "毛利为负", "负毛利"))
+    ):
+        return "RESTAURANT_OPS_STORE_MARGIN"
     # Named-dish sales questions ("招牌藤椒味卖得怎么样") previously fell to
     # the LLM fallback which answered from a factory-report frame. The POS
     # dish data lives in the gross-margin resolver; dish scoping above
@@ -671,7 +726,8 @@ _STORE_MENTION_STOPWORDS = frozenset({
 })
 _STORE_MENTION_RE = re.compile(r"[一-龥A-Za-z0-9·]{2,24}(?:门店|店)")
 _STORE_MENTION_PREFIX_TRIM = re.compile(
-    r"^(?:请|帮我|帮忙|查一下|查查|查询|查|看看|看一下|看|分析一下|分析"
+    r"^(?:有没有|有无|是否有|是否|存不存在|是不是|会不会"
+    r"|请|帮我|帮忙|查一下|查查|查询|查|看看|看一下|看|分析一下|分析"
     r"|对比|比较|了解|统计|计算|那|这|把|给|在|的|和|与|跟|是|说说|讲讲)+"
 )
 
@@ -1216,6 +1272,7 @@ def _uses_relative_sales_window(query: Optional[str]) -> bool:
             "今天", "今日", "本周", "这周", "本星期", "这星期", "本月", "这个月",
             "昨天", "昨日", "前天", "前日", "前一天", "前一日", "上周", "上星期", "上个星期",
             "上个月", "上月", "上上个月", "上上月", "半年", "对比", "比较", "相比", "环比",
+            "最近", "今年", "去年", "上半年", "下半年",
         ))
     )
 
@@ -2635,6 +2692,49 @@ async def resolve_store_margin(
     invalid_cost_count = sum(s["invalid_cost_dishes"] for s in store_list)
 
     query_text = (query or "").strip()
+
+    # R15/G5: 「有没有店在亏损」是存在性问题 — 过滤毛利为负的门店直答,
+    # 覆盖率如实披露, 不甩全店榜。
+    if not (store_id or store_name) and _NEGATIVE_MARGIN_EXISTENCE_RE.search(query_text):
+        negative_stores = sorted(
+            (st for st in store_list
+             if st.get("margin_rate") is not None and st["margin_rate"] < 0),
+            key=lambda st: st["margin_rate"],
+        )
+        rated_count = len([st for st in store_list if st.get("margin_rate") is not None])
+        cov_pct = f"{coverage_ratio * 100:.1f}%"
+        if negative_stores:
+            neg_lines = [
+                f"{window_label}有 {len(negative_stores)} 家门店按已覆盖成本口径在亏钱（毛利为负）："
+            ]
+            for st in negative_stores[:5]:
+                neg_lines.append(
+                    f"• {st['name']} — 毛利率 {st['margin_rate'] * 100:.1f}%、"
+                    f"营收 ¥{st['revenue']:,.2f}"
+                )
+            if len(negative_stores) > 5:
+                neg_lines.append(f"（仅列前 5，共 {len(negative_stores)} 家）")
+            neg_lines.append(
+                f"成本覆盖率 {cov_pct}；未覆盖成本的部分无法判断盈亏，不在结论内。"
+            )
+            neg_answer = "\n".join(neg_lines)
+        else:
+            neg_answer = (
+                f"{window_label}可计算毛利的 {rated_count} 家门店中，"
+                f"没有毛利为负的门店，按已覆盖成本口径没有门店在亏钱。"
+                f"成本覆盖率 {cov_pct}；未覆盖成本的部分无法判断盈亏，不在结论内。"
+            )
+        return OpsAnswer(
+            code="RESTAURANT_OPS_STORE_MARGIN",
+            title=f"亏损门店排查（{window_label}）",
+            answer_text=neg_answer,
+            charts=[], kpis=[],
+            meta={"negative_margin_check": True,
+                  "negative_count": len(negative_stores),
+                  "marginInvariantPass": True,
+                  "scope_matches_request": scope_matches_request,
+                  "marginFormula": "毛利=可计算毛利的营收-对应菜品成本"},
+        )
     structured_store = next(
         (
             store

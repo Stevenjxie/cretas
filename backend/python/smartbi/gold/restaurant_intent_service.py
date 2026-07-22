@@ -277,10 +277,35 @@ async def tiered_answer(
                 or "RESTAURANT_OPS_GROSS_MARGIN" in plan)
             else None
         )
-        from smartbi.gold.restaurant_ops_router import extract_dish_candidate
+        from smartbi.gold.restaurant_ops_router import (
+            extract_dish_candidate,
+            store_dish_split_dish,
+        )
         dish_mention = (
             extract_dish_candidate(resolver_query) or extract_dish_candidate(query)
         )
+        # R15: 店×菜下钻暂不支持 — 诚实拒答并给两条可用替代, 不答错域。
+        split_dish = store_dish_split_dish(query) or store_dish_split_dish(resolver_query)
+        if split_dish:
+            return {
+                "kind": "clarification",
+                "answer_text": (
+                    f"「{split_dish}」按门店逐店拆分的销量/毛利暂不支持。"
+                    f"可以分开看：问「{split_dish}的销量」查全部门店合计，"
+                    "或问「哪家店业绩最好」看门店整体排名。"
+                ),
+                "spec": spec,
+            }
+        if dish_mention and store_mention:
+            return {
+                "kind": "clarification",
+                "answer_text": (
+                    f"「{store_mention}」的「{dish_mention}」单店单菜拆分暂不支持。"
+                    f"可以分开看：问「{dish_mention}的销量」查全部门店合计，"
+                    f"或问「{store_mention}的毛利率」看该店整体表现。"
+                ),
+                "spec": spec,
+            }
         planned_results: List[Tuple[str, Any]] = []
         for code in plan:
             effective_code = code
@@ -440,6 +465,9 @@ def should_delegate(
         if extract_dish_candidates(query):
             return True
         if dish_ranking_direction(query) or is_capability_question(query):
+            return True
+        from smartbi.gold.restaurant_ops_router import store_dish_split_dish
+        if store_dish_split_dish(query):
             return True
     if spec is None:
         return False

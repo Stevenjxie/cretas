@@ -191,6 +191,8 @@ def _detect_comparison(text: str) -> Optional[str]:
         return "previous_month"
     if "同比" in text:
         return "yoy"
+    if "今年" in text and "去年" in text:
+        return "yoy"
     if "环比" in text:
         return "mom"
     if any(tok in text for tok in ("比上周", "周比", "跟上周比")):
