@@ -270,6 +270,8 @@ def _has_explicit_sales_period_pair(query: str) -> bool:
         (("本周", "这周", "本星期", "这星期"), ("上周", "上星期", "上个星期")),
         (("本月", "这个月", "当月"), ("上个月", "上月")),
         (("上个月", "上月"), ("上上个月", "上上月")),
+        (("上周", "上星期", "上个星期"), ("上上周", "上上星期", "上上个星期")),
+        (("今年",), ("去年",)),
     )
     return any(
         any(token in query for token in primary)
@@ -478,8 +480,15 @@ def extract_dish_candidate(query: "Optional[str]") -> "Optional[str]":
     if not query:
         return None
     text = query.strip()
-    if any(tok in text for tok in ("门店", "分店", "店铺", "哪家店", "哪个店")):
+    if any(tok in text for tok in ("哪家店", "哪个店", "哪家门店")):
         return None
+    # 店+菜混合 ("鲜行者店的米饭卖得怎么样"): 先剥离门店名再取菜名;
+    # 纯门店问法剥离后剩余过短, 自然返回 None 走门店路线。
+    store_in_text = extract_store_mention(text)
+    if store_in_text:
+        text = text.replace(store_in_text, "").lstrip("的， ,").strip()
+        if len(text) < 4:
+            return None
     segments = [text]
     if "继续追问" in text:
         segments = [
@@ -493,6 +502,31 @@ def extract_dish_candidate(query: "Optional[str]") -> "Optional[str]":
         if candidate:
             return candidate
     return None
+
+
+_DISH_COMPARE_RE = re.compile(
+    r"^(.{1,24}?)[和与、](.{1,24}?)哪(?:个|道)?"
+    r"(?:毛利率|毛利|销量|销售额|成本)(?:更)?(?:高|低|多|少|好)?[?？。]?$"
+)
+
+
+def extract_dish_candidates(query: "Optional[str]") -> list:
+    """All named dishes in the question (comparatives first, else single)."""
+    if not query:
+        return []
+    text = query.strip()
+    match = _DISH_COMPARE_RE.match(text)
+    if match:
+        out = []
+        for raw in (match.group(1), match.group(2)):
+            cand = _DISH_LEADING_TIME_RE.sub("", raw.strip())
+            cand = _DISH_LEADING_PRONOUN_RE.sub("", cand).strip("的， ,")
+            if len(cand) >= 2 and cand not in _DISH_GENERIC_TOKENS:
+                out.append(cand[:60])
+        if len(out) == 2:
+            return out
+    single = extract_dish_candidate(query)
+    return [single] if single else []
 
 
 def _match_dish_rows(candidate: str, rows) -> list:
@@ -962,6 +996,11 @@ def _resolve_sales_date_range(
         last_of_prev = anchor.replace(day=1) - timedelta(days=1)
         return (last_of_prev.replace(day=1), last_of_prev), "上个月"
 
+    if "今年" in text:
+        return (date(anchor.year, 1, 1), anchor), "今年"
+    if "去年" in text:
+        return (date(anchor.year - 1, 1, 1), date(anchor.year - 1, 12, 31)), "去年"
+
     if any(token in text for token in ("今天", "今日")):
         return (anchor, anchor), "今天"
 
@@ -1018,6 +1057,19 @@ def _resolve_sales_comparison(
     ):
         target = anchor - timedelta(days=1)
         return (target, target), "昨天", "previous_day"
+
+    if any(token in text for token in ("上上周", "上上星期", "上上个星期")):
+        this_monday = anchor - timedelta(days=anchor.weekday())
+        start = this_monday - timedelta(days=14)
+        end = this_monday - timedelta(days=8)
+        return (start, end), "上上周", "previous_week"
+
+    if compare_signal and "今年" in text and "去年" in text:
+        return (
+            (date(anchor.year - 1, 1, 1), date(anchor.year - 1, 12, 31)),
+            "去年",
+            "previous_year",
+        )
 
     if "上上个月" in text or "上上月" in text:
         start, end = _previous_calendar_month(anchor, 2)
@@ -1521,8 +1573,22 @@ async def resolve_gross_margin(
         # Sheet 7/22 实体检测: 点名单菜的问题 ("米饭的毛利率") 此前返回全菜品
         # 榜 — 菜品版的全店榜退化。候选名必须命中本租户菜品行才限域; 命不中
         # 定向拒答, 多命中请求澄清。泛指问法 (整体/哪道/排行) 不受影响。
-        dish_candidate = extract_dish_candidate(query)
+        dish_candidates = extract_dish_candidates(query)
+        dish_candidate = dish_candidates[0] if len(dish_candidates) == 1 else None
         dish_scope_row = None
+        if len(dish_candidates) >= 2 and pos_rows:
+            compare_rows = []
+            for cand in dish_candidates:
+                hits = _match_dish_rows(cand, pos_rows)
+                if len(hits) == 1:
+                    compare_rows.append(hits[0])
+            if len(compare_rows) >= 2:
+                seen_pid = set()
+                pos_rows = [
+                    r for r in compare_rows
+                    if r["product_id"] not in seen_pid
+                    and not seen_pid.add(r["product_id"])
+                ]
         if dish_candidate and pos_rows:
             matched_rows = _match_dish_rows(dish_candidate, pos_rows)
             if not matched_rows:
