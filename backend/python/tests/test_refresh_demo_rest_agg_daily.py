@@ -34,3 +34,25 @@ def test_scope_is_demo_tenant_only():
 def test_seed_marker_is_reserved_and_distinct_from_qhj_seed():
     assert mod.SEED_VERSION != qhj.SEED_VERSION
     assert mod.SEED_VERSION >= 9_000_000
+
+
+# ── refresh_demo_rest_dish_facts (R17) guard rails ──
+from smartbi.scripts import refresh_demo_rest_dish_facts as dish_mod
+
+
+def test_dish_facts_yesterday_is_latest_allowed_end():
+    dish_mod.validate_target_end(date.today() - timedelta(days=1))
+    with pytest.raises(ValueError):
+        dish_mod.validate_target_end(date.today())
+
+
+def test_dish_facts_state_change_requires_confirmation():
+    args = argparse.Namespace(apply=True, rollback=False, confirm="", end="")
+    with pytest.raises(RuntimeError, match="--confirm DEMO_REST"):
+        asyncio.run(dish_mod.run(args))
+
+
+def test_dish_facts_scope_and_marker():
+    assert dish_mod.FACTORY_ID == "DEMO_REST"
+    assert dish_mod.MARKER.startswith("DEMO_ROLL_")
+    assert dish_mod.MARKER != str(mod.SEED_VERSION)
