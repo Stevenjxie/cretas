@@ -293,6 +293,10 @@ _NEGATIVE_MARGIN_EXISTENCE_RE = re.compile(
     r"(?:毛利(?:率)?[^。？?]{0,4}?(?:负|亏)|负毛利|亏钱|亏本|赔钱)"
     r"|负毛利|毛利(?:率)?(?:是|为)负"
 )
+# POS 流水里的非菜品行 (打包盒/餐具/配送费) — 销量排行里是噪音, 过滤掉。
+_NON_DISH_POS_ITEM_RE = re.compile(
+    r"打包盒|打包袋|餐具|配送费|外送费|包装|纸巾|湿巾|一次性|购物袋"
+)
 _DISH_RANK_WORST_RE = re.compile(
     r"卖得最差|卖得不好|最难卖|卖不动|销量最低|销量垫底|最不受欢迎|最滞销"
 )
@@ -1787,8 +1791,12 @@ async def resolve_gross_margin(
         if not dish_scope_row and len(dish_candidates) < 2 else None
     )
     if ranking_direction:
+        rankable_rows = [
+            r for r in pos_rows
+            if not _NON_DISH_POS_ITEM_RE.search(r["dish_name"] or "")
+        ] or list(pos_rows)
         ranked = sorted(
-            pos_rows, key=lambda r: float(r["total_qty"] or 0),
+            rankable_rows, key=lambda r: float(r["total_qty"] or 0),
             reverse=(ranking_direction == "best"),
         )
         rank_label = "卖得最好" if ranking_direction == "best" else "卖得最差"
@@ -1798,8 +1806,10 @@ async def resolve_gross_margin(
                 f"{idx}. {r['dish_name']} — 销量 {float(r['total_qty'] or 0):,.0f} 份、"
                 f"营收 ¥{float(r['total_revenue'] or 0):,.2f}"
             )
+        excluded = len(pos_rows) - len(rankable_rows)
+        note = f"，已剔除 {excluded} 个非菜品项（打包盒/餐具等）" if excluded > 0 else ""
         lines.append(
-            f"仅统计窗口内有销售记录的 {len(pos_rows)} 道菜品；未售出的菜品不在榜内。"
+            f"仅统计窗口内有销售记录的 {len(rankable_rows)} 道菜品{note}；未售出的菜品不在榜内。"
         )
         return OpsAnswer(
             code="RESTAURANT_OPS_GROSS_MARGIN",
