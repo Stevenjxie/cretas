@@ -132,6 +132,21 @@ class RestaurantOpsGoldAnalysisToolTest {
     }
 
     @Test
+    @DisplayName("dish optimization outage names available and missing dimensions without substitution")
+    void dishOptimizationOutageIsTruthful() throws Exception {
+        String question = "分析哪些菜品可以从菜单中被优化。优化不只指慢销，请综合销量、销售额、毛利、退菜、差评、制作时长和损耗；缺少哪些数据也要逐项说明。";
+        Map<String, Object> result = executeWithTransportFailure(question, "RESTAURANT_OPS_GROSS_MARGIN");
+
+        assertThat(result).containsEntry("dataAvailable", false);
+        assertThat(result.get("answer").toString())
+                .contains("不能给出", "菜品名单")
+                .contains("销量", "销售额", "毛利", "食材损耗")
+                .contains("退菜", "评分", "评价", "制作过程起止时间")
+                .contains("不会用", "不会把部分维度包装成完整")
+                .doesNotContain("Python", "Gold", "restaurant_ops", "IOException");
+    }
+
+    @Test
     @DisplayName("store margin followup outage preserves store coreference")
     void storeMarginFollowupOutagePreservesCoreference() throws Exception {
         String question = "该店的毛利率呢？";

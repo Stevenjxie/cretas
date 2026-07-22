@@ -50,6 +50,27 @@ class ConversationMemoryServiceImplStoreReferenceTest {
     }
 
     @Test
+    @DisplayName("STORE last intent wins ambiguous pronoun when both STORE and stale DISH slots exist")
+    void storeLastIntent_resolvesAmbiguousPronounToStore() {
+        ConversationMemoryRepository repo = mock(ConversationMemoryRepository.class);
+        ConversationMemory memory = memoryWithSlots(Map.of(
+                "STORE", slot("STORE", "101", "人民广场店", "门店 人民广场店"),
+                "DISH", slot("DISH", "201", "招牌酸菜鱼", "菜品 招牌酸菜鱼")
+        ));
+        memory.setLastIntentCode("RESTAURANT_STORE_REVENUE_RANK");
+        when(repo.findBySessionId("sid-store-both")).thenReturn(Optional.of(memory));
+        ConversationMemoryServiceImpl service = new ConversationMemoryServiceImpl(repo, null);
+
+        String resolved = service.resolveReference(
+                "sid-store-both",
+                "那它的毛利率也是第一吗？");
+
+        assertThat(resolved)
+                .isEqualTo("门店 人民广场店的毛利率也是第一吗？")
+                .doesNotContain("招牌酸菜鱼");
+    }
+
+    @Test
     @DisplayName("no STORE slot: 那家 still resolves as supplier, preserving factory CRM behavior")
     void noStoreSlot_supplierReferenceStillWorks() {
         ConversationMemoryRepository repo = mock(ConversationMemoryRepository.class);

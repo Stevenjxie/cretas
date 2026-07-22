@@ -306,7 +306,12 @@ public class AIIntentServiceImpl implements AIIntentService {
                 businessType = "";
             }
 
-            // 1) Cache check — short-circuits both Python and legacy
+            boolean requiresSessionContext = requiresContextAwareRestaurantRecognition(
+                    userInput, businessType, sessionId);
+            // Context-dependent restaurant turns must use the legacy pipeline because it owns
+            // conversation-memory coreference. Python carries neither sessionId nor entity slots.
+            if (!requiresSessionContext) {
+                // 1) Cache check — short-circuits both Python and legacy
             try {
                 IntentMatchResult cached =
                         intentResultCache.get(userInput, factoryId, role, businessType);
@@ -355,6 +360,10 @@ public class AIIntentServiceImpl implements AIIntentService {
                 log.warn("Python matcher exception for query='{}' — falling back to legacy pipeline: {}",
                         userInput, e.getMessage());
             }
+            } else {
+                log.debug("Restaurant contextual reference bypasses Python matcher/cache: query='{}', sessionId={}",
+                        userInput, sessionId);
+            }
         }
         // ===== END Python branch =====
 
@@ -371,6 +380,28 @@ public class AIIntentServiceImpl implements AIIntentService {
             recordStageHit("NONE");
         }
         return legacyResult;
+    }
+
+    static boolean requiresContextAwareRestaurantRecognition(
+            String userInput, String businessType, String sessionId) {
+        if (!"RESTAURANT".equalsIgnoreCase(businessType)
+                || sessionId == null || sessionId.isBlank()
+                || userInput == null || userInput.isBlank()) {
+            return false;
+        }
+        return containsAny(userInput,
+                "它", "那家店", "这家店", "该店", "那个店", "这个店", "该门店",
+                "那道菜", "这道菜", "该菜品", "这个菜", "那个菜", "这款菜", "那款菜",
+                "沿用刚才的门店", "沿用刚才的菜品");
+    }
+
+    private static boolean containsAny(String text, String... candidates) {
+        for (String candidate : candidates) {
+            if (text.contains(candidate)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     // ==================== Multi-Intent Recognition ====================

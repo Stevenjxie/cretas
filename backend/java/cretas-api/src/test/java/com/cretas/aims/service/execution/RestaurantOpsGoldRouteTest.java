@@ -332,6 +332,12 @@ class RestaurantOpsGoldRouteTest {
                 .contains("RESTAURANT_OPS_STORE_MARGIN");
         assertThat(orchestrator.matchRestaurantOpsIntent("总营收和客单价表现怎么样", "RESTAURANT"))
                 .contains("RESTAURANT_OPS_SALES_SUMMARY");
+        assertThat(orchestrator.matchRestaurantOpsIntent(
+                "分析哪些菜品可以从菜单中被优化。优化不只指慢销，请综合销量、销售额、毛利、退菜、差评、制作时长和损耗；缺少哪些数据也要逐项说明。",
+                "RESTAURANT"))
+                .contains("RESTAURANT_OPS_GROSS_MARGIN");
+        assertThat(orchestrator.matchRestaurantOpsIntent("分析本周菜品销售额", "RESTAURANT"))
+                .contains("RESTAURANT_OPS_SALES_SUMMARY");
         assertThat(orchestrator.matchRestaurantOpsIntent("查询本周营收", "RESTAURANT"))
                 .contains("RESTAURANT_OPS_SALES_SUMMARY");
         assertThat(orchestrator.matchRestaurantOpsIntent("昨天的营业额是高于前天还是低于前天？", "RESTAURANT"))

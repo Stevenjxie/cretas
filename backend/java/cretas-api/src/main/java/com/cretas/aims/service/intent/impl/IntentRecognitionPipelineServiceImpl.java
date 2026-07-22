@@ -108,7 +108,7 @@ public class IntentRecognitionPipelineServiceImpl implements IntentRecognitionPi
      * Must match ConversationMemoryServiceImpl.DISH_REFERENCE_PATTERN exactly.
      */
     private static final Pattern DISH_REFERENCE_PATTERN = Pattern.compile(
-            "那道菜|这道菜|该菜品|这个菜|那个菜|这款菜|那款菜|它");
+            "那道菜|这道菜|该菜品|这个菜|那个菜|这款菜|那款菜");
 
     // ==================== Constructor-injected dependencies ====================
 
@@ -835,7 +835,7 @@ public class IntentRecognitionPipelineServiceImpl implements IntentRecognitionPi
         }
         boolean explicitStoreReference = STORE_REFERENCE_PATTERN.matcher(originalInput).find();
         boolean storePronounFallback = AMBIGUOUS_ENTITY_REFERENCE_PATTERN.matcher(originalInput).find()
-                && context.getSlot(EntitySlot.SlotType.DISH) == null;
+                && shouldResolveAmbiguousReferenceAs(originalInput, context, EntitySlot.SlotType.STORE);
         if (!explicitStoreReference && !storePronounFallback) {
             return preprocessedQuery;
         }
@@ -890,7 +890,13 @@ public class IntentRecognitionPipelineServiceImpl implements IntentRecognitionPi
      */
     static PreprocessedQuery ensureDishReferenceResolved(String originalInput, String processedInput,
             ConversationContext context, PreprocessedQuery preprocessedQuery) {
-        if (originalInput == null || context == null || !DISH_REFERENCE_PATTERN.matcher(originalInput).find()) {
+        if (originalInput == null || context == null) {
+            return preprocessedQuery;
+        }
+        boolean explicitDishReference = DISH_REFERENCE_PATTERN.matcher(originalInput).find();
+        boolean dishPronounFallback = AMBIGUOUS_ENTITY_REFERENCE_PATTERN.matcher(originalInput).find()
+                && shouldResolveAmbiguousReferenceAs(originalInput, context, EntitySlot.SlotType.DISH);
+        if (!explicitDishReference && !dishPronounFallback) {
             return preprocessedQuery;
         }
         EntitySlot slot = context.getSlot(EntitySlot.SlotType.DISH);
@@ -913,13 +919,59 @@ public class IntentRecognitionPipelineServiceImpl implements IntentRecognitionPi
             return pq;
         }
         Matcher matcher = DISH_REFERENCE_PATTERN.matcher(originalInput);
-        String reference = matcher.find() ? matcher.group() : originalInput;
+        String reference;
+        if (matcher.find()) {
+            reference = matcher.group();
+        } else {
+            Matcher ambiguousMatcher = AMBIGUOUS_ENTITY_REFERENCE_PATTERN.matcher(originalInput);
+            reference = ambiguousMatcher.find() ? ambiguousMatcher.group() : originalInput;
+        }
         pq.addResolvedReference(reference, "DISH", slot.getId(), slot.getName());
         if (pq.getUnresolvedReferences() != null) {
             pq.getUnresolvedReferences().remove(reference);
         }
         log.debug("[T108/D2] Dish coref resolved: '{}' → id={}, name={}", reference, slot.getId(), slot.getName());
         return pq;
+    }
+
+    private static boolean shouldResolveAmbiguousReferenceAs(
+            String input, ConversationContext context, EntitySlot.SlotType target) {
+        EntitySlot store = context.getSlot(EntitySlot.SlotType.STORE);
+        EntitySlot dish = context.getSlot(EntitySlot.SlotType.DISH);
+        if (store != null && dish == null) {
+            return target == EntitySlot.SlotType.STORE;
+        }
+        if (dish != null && store == null) {
+            return target == EntitySlot.SlotType.DISH;
+        }
+        if (store == null) {
+            return false;
+        }
+        if (containsAny(input, "销量", "售价", "配方", "份数", "菜品")) {
+            return target == EntitySlot.SlotType.DISH;
+        }
+        if (containsAny(input, "客单价", "门店", "店铺")) {
+            return target == EntitySlot.SlotType.STORE;
+        }
+        String intent = context.getLastIntentCode() == null
+                ? ""
+                : context.getLastIntentCode().toUpperCase(Locale.ROOT);
+        if (intent.contains("STORE")) {
+            return target == EntitySlot.SlotType.STORE;
+        }
+        if (intent.contains("DISH") || intent.contains("RECIPE")
+                || intent.contains("BESTSELLER") || intent.contains("SLOW")) {
+            return target == EntitySlot.SlotType.DISH;
+        }
+        return false;
+    }
+
+    private static boolean containsAny(String text, String... candidates) {
+        if (text == null) return false;
+        for (String candidate : candidates) {
+            if (text.contains(candidate)) return true;
+        }
+        return false;
     }
 
     @Override

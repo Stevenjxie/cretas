@@ -209,6 +209,36 @@ class AIIntentServiceImplPythonIntegrationTest {
     }
 
     @Test
+    void restaurantContextualReference_bypassesSessionBlindCacheAndPython() {
+        when(configService.resolveBusinessDomain("RES_3101_009")).thenReturn("RESTAURANT");
+        IntentMatchResult legacy = buildRealMatch(
+                "RESTAURANT_OPS_STORE_MARGIN", "那它的毛利率也是第一吗？");
+        when(pipelineService.recognizeIntentWithConfidence(
+                eq("那它的毛利率也是第一吗？"), eq("RES_3101_009"), eq(3),
+                eq(22L), eq("restaurant_owner"), eq("sid-store-followup")))
+                .thenReturn(legacy);
+
+        IntentMatchResult result = service.recognizeIntentWithConfidence(
+                "那它的毛利率也是第一吗？", "RES_3101_009", 3,
+                22L, "restaurant_owner", "sid-store-followup");
+
+        assertSame(legacy, result);
+        verifyNoInteractions(pythonClient);
+        verifyNoInteractions(cache);
+        verify(pipelineService).recognizeIntentWithConfidence(
+                "那它的毛利率也是第一吗？", "RES_3101_009", 3,
+                22L, "restaurant_owner", "sid-store-followup");
+        assertTrue(AIIntentServiceImpl.requiresContextAwareRestaurantRecognition(
+                "那它的毛利率也是第一吗？", "RESTAURANT", "sid"));
+        assertTrue(!AIIntentServiceImpl.requiresContextAwareRestaurantRecognition(
+                "那它的毛利率也是第一吗？", "FACTORY", "sid"));
+        assertTrue(!AIIntentServiceImpl.requiresContextAwareRestaurantRecognition(
+                "那它的毛利率也是第一吗？", "RESTAURANT", null));
+        assertTrue(!AIIntentServiceImpl.requiresContextAwareRestaurantRecognition(
+                "查询本周营收", "RESTAURANT", "sid"));
+    }
+
+    @Test
     void nullCache_skipsBranch_evenWhenFlagOn() throws Exception {
         setField(service, "intentResultCache", null);
 
