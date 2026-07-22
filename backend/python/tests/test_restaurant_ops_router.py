@@ -1733,3 +1733,11 @@ def test_r14_negative_margin_existence_regex():
     assert _r._NEGATIVE_MARGIN_EXISTENCE_RE.search("有没有毛利率是负的菜")
     assert _r._NEGATIVE_MARGIN_EXISTENCE_RE.search("哪些菜亏钱")
     assert not _r._NEGATIVE_MARGIN_EXISTENCE_RE.search("整体毛利率是多少")
+
+
+def test_r14d_non_dish_pos_items_filtered_from_ranking():
+    assert _r._NON_DISH_POS_ITEM_RE.search("打包盒")
+    assert _r._NON_DISH_POS_ITEM_RE.search("需要餐具")
+    assert _r._NON_DISH_POS_ITEM_RE.search("无需餐具")
+    assert not _r._NON_DISH_POS_ITEM_RE.search("招牌藤椒味(单人份)")
+    assert not _r._NON_DISH_POS_ITEM_RE.search("米饭")
