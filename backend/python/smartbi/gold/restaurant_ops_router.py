@@ -1878,31 +1878,36 @@ async def resolve_store_margin(
         store_dish_rows = await conn.fetch(
             """
             WITH anchor AS (
-                SELECT COALESCE($4::date, MAX(t2.date)) AS end_date
-                  FROM fact_pos_item i2
-                  JOIN fact_pos_transaction t2 ON t2.id = i2.transaction_id
-                  JOIN dim_product p2
-                    ON p2.product_id = i2.product_id
-                   AND p2.factory_id = i2.factory_id
-                  JOIN (
-                    SELECT DISTINCT store_id
-                      FROM agg_daily
-                     WHERE factory_id = $1
-                    UNION
-                    SELECT DISTINCT store_id
-                      FROM fact_pos_transaction
-                     WHERE factory_id = $1
-                       AND NOT EXISTS (
-                         SELECT 1 FROM agg_daily WHERE factory_id = $1
-                       )
-                  ) scope ON scope.store_id = t2.store_id
-                  JOIN dim_store s2
-                    ON s2.store_id = t2.store_id
-                   AND s2.factory_id = t2.factory_id
-                 WHERE i2.factory_id = $1
-                   AND t2.factory_id = $1
-                   AND ($5::text IS NULL OR s2.store_id::text = $5::text)
-                   AND ($6::text IS NULL OR s2.name = $6::text)
+                -- Scalar-subquery form so COALESCE short-circuits: when the
+                -- caller pins an exact end date the expensive MAX scan over
+                -- the full fact join is never executed.
+                SELECT COALESCE($4::date, (
+                    SELECT MAX(t2.date)
+                      FROM fact_pos_item i2
+                      JOIN fact_pos_transaction t2 ON t2.id = i2.transaction_id
+                      JOIN dim_product p2
+                        ON p2.product_id = i2.product_id
+                       AND p2.factory_id = i2.factory_id
+                      JOIN (
+                        SELECT DISTINCT store_id
+                          FROM agg_daily
+                         WHERE factory_id = $1
+                        UNION
+                        SELECT DISTINCT store_id
+                          FROM fact_pos_transaction
+                         WHERE factory_id = $1
+                           AND NOT EXISTS (
+                             SELECT 1 FROM agg_daily WHERE factory_id = $1
+                           )
+                      ) scope ON scope.store_id = t2.store_id
+                      JOIN dim_store s2
+                        ON s2.store_id = t2.store_id
+                       AND s2.factory_id = t2.factory_id
+                     WHERE i2.factory_id = $1
+                       AND t2.factory_id = $1
+                       AND ($5::text IS NULL OR s2.store_id::text = $5::text)
+                       AND ($6::text IS NULL OR s2.name = $6::text)
+                )) AS end_date
             )
             SELECT s.store_id, s.name AS store_name,
                    p.name AS dish_name, p.normalized_name,
@@ -1945,19 +1950,23 @@ async def resolve_store_margin(
         store_bill_rows = await conn.fetch(
             """
             WITH anchor AS (
-                SELECT COALESCE($4::date, MAX(t2.date)) AS end_date
-                  FROM fact_pos_item i2
-                  JOIN fact_pos_transaction t2 ON t2.id = i2.transaction_id
-                  JOIN dim_product p2
-                    ON p2.product_id = i2.product_id
-                   AND p2.factory_id = i2.factory_id
-                  JOIN dim_store s2
-                    ON s2.store_id = t2.store_id
-                   AND s2.factory_id = t2.factory_id
-                 WHERE i2.factory_id = $1
-                   AND t2.factory_id = $1
-                   AND ($5::text IS NULL OR s2.store_id::text = $5::text)
-                   AND ($6::text IS NULL OR s2.name = $6::text)
+                -- Scalar-subquery form: the MAX scan only runs when no exact
+                -- end date was supplied (see the dish query above).
+                SELECT COALESCE($4::date, (
+                    SELECT MAX(t2.date)
+                      FROM fact_pos_item i2
+                      JOIN fact_pos_transaction t2 ON t2.id = i2.transaction_id
+                      JOIN dim_product p2
+                        ON p2.product_id = i2.product_id
+                       AND p2.factory_id = i2.factory_id
+                      JOIN dim_store s2
+                        ON s2.store_id = t2.store_id
+                       AND s2.factory_id = t2.factory_id
+                     WHERE i2.factory_id = $1
+                       AND t2.factory_id = $1
+                       AND ($5::text IS NULL OR s2.store_id::text = $5::text)
+                       AND ($6::text IS NULL OR s2.name = $6::text)
+                )) AS end_date
             ), scope AS (
                 SELECT DISTINCT store_id FROM agg_daily WHERE factory_id = $1
                 UNION
