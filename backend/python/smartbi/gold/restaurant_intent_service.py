@@ -309,7 +309,8 @@ async def tiered_answer(
         guard_meta = getattr(tiered_result, "meta", None) or {}
         if any(
             key in guard_meta
-            for key in ("missing_reference", "store_not_found", "store_mention_ambiguous")
+            for key in ("missing_reference", "store_not_found", "store_mention_ambiguous",
+                    "dish_not_found", "dish_mention_ambiguous")
         ):
             return {
                 "kind": "clarification",

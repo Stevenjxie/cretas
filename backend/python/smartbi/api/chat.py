@@ -1443,7 +1443,8 @@ async def general_analysis(request: GeneralAnalysisRequest, http_request: Reques
                         guard_clarification = any(
                             key in (ops_answer.meta or {})
                             for key in ("missing_reference", "store_not_found",
-                                        "store_mention_ambiguous")
+                                        "store_mention_ambiguous",
+                                        "dish_not_found", "dish_mention_ambiguous")
                         )
                         displayable_result = (
                             guard_clarification
@@ -1545,7 +1546,8 @@ async def general_analysis(request: GeneralAnalysisRequest, http_request: Reques
                         displayable_result = any(
                             key in (ops_answer.meta or {})
                             for key in ("missing_reference", "store_not_found",
-                                        "store_mention_ambiguous")
+                                        "store_mention_ambiguous",
+                                        "dish_not_found", "dish_mention_ambiguous")
                         ) or has_displayable_business_result(customer_answer)
                         response = GeneralAnalysisResponse(
                             success=displayable_result,
@@ -2433,7 +2435,8 @@ async def general_analysis_stream(request: GeneralAnalysisRequest, http_request:
                                 fallback_guard = any(
                                     key in (ops_answer.meta or {})
                                     for key in ("missing_reference", "store_not_found",
-                                                "store_mention_ambiguous")
+                                                "store_mention_ambiguous",
+                                                "dish_not_found", "dish_mention_ambiguous")
                                 )
                                 fallback_contract_pass = (
                                     fallback_guard
