@@ -22,6 +22,11 @@ const MOBILE_ONLY_ROLES = [
 const ROLE_PATH_WHITELIST: Record<string, string[]> = {
   finance_manager: [
     '/dashboard',
+    // Personal OA is the only write surface for finance approval actions.
+    // Keep it inside the finance-manager path allowlist; task visibility and
+    // action authority are still enforced by the workflow API per factory,
+    // current node, role and explicit assignee.
+    '/workflow',
     '/finance',
     '/procurement/finance-review',
     '/smart-bi/dashboard',

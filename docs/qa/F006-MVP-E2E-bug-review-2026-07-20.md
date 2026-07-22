@@ -725,6 +725,18 @@
 - **根因**：`web-admin/src/views/sales/orders/detail.vue` 的 `loadPurchaseOrders()` 与“关联采购”页签没有使用共享 `permissionStore.canAccess('procurement')` 门禁；局部 catch 无法阻止 Axios 全局 403 通知。
 - **修复/修改文件**：新增 `canViewLinkedPurchases` 权限投影；无采购读取权限时请求在发送前返回且隐藏关联采购页签，有权限角色保持原查询与查看能力。修改 `detail.vue`、`salesOrderOaContract.source.spec.ts`。
 - **测试**：销售订单目标 Vitest `6 files / 34 tests` PASS，覆盖权限投影、请求发送前门禁及页签显隐；唯一 Web release build `4457 modules` PASS，web tree `5ef7f95db8d45ef15e192d276a4d8b7bbc68b9e4`，archive SHA-256 `f02dd2e3dd12fcd5807fd21caf525de98a6ff7fe086b7c343e4d7578eab3be21`。部署后复用同一 `SO-20260722-0002` 从 OA 提交点继续 headed 验收，不创建第二张订单。
-- **Commit/PR/main 状态**：实现 commit `8e2cb88b2852a8558c4fffeb17f624356713063d`；`PR_PENDING`。
+- **Commit/PR/main 状态**：实现 commit `8e2cb88b2852a8558c4fffeb17f624356713063d`；PR [#1625](https://github.com/Stevenjxie/cretas/pull/1625) 已合入；exact main `1149da969d44073ccc2783125c081355f238bc73`。
+- **部署状态**：`DEPLOYED`；Web 四方 index SHA-256 `7324154303b28cdf024857085fd5e6a0bb2b2977599497020967de2f959f9b47` 一致。
+- **回归状态**：`PASS`；复用同一 `SO-20260722-0002`，销售主管页面采购 API 请求 0、采购 Tab 0，唯一 OA 提交 POST=200，订单 `FINANCE_APPROVED`，个人 OA“我发起的”读回已完成；未新建第二订单，未触碰 LIUSHANMEN。
+
+### BUG-F006-R3-OA-FINANCE-ROUTE-001
+
+- **发现阶段/时间/页面/步骤**：F006 销售统一 OA 从头生产 headed 验收，2026-07-22；销售主管通过页面创建高金额 `SO-20260722-0003` 并提交 OA 后，详情正确显示当前节点“财务审批”和明确处理人 `f006_finance_mgr`，但财务经理访问“个人 OA → 待我审批”直接进入 403。
+- **期望/实际/业务影响**：财务经理应从个人 OA 处理分配给自己的本工厂任务；任务可见性和动作权限仍由后端工厂、节点角色、明确人员与领域 adapter 强制校验。实际侧边栏向财务经理展示个人 OA，但前端 `ROLE_PATH_WHITELIST.finance_manager` 未包含 `/workflow`，路由守卫在请求待办 API 前即拒绝页面，销售审批链阻塞。
+- **证据路径**：`C:/tmp/cretas-f006-sales-oa-20260722/web-admin/.playwright-mcp/f006-sales-oa-write-20260722132525/result.json`、`13-high-detail-after-confirm.png`；续跑失败证据 `C:/tmp/cretas-f006-sales-oa-20260722/web-admin/.playwright-mcp/f006-sales-oa-write-20260722132734/99-failure-stop.png`、`trace.zip`。订单保留在 `PENDING_FINANCE_REVIEW`，未重复创建或审批。
+- **根因**：个人 OA 菜单和 `/workflow/**` 路由已迁移到共享 `dashboard` 模块，但历史 finance-manager 路径白名单只允许 `/dashboard`、`/finance` 和旧财审页面，遗漏新的统一 `/workflow` 前缀；菜单、模块权限和路径白名单三层契约不一致。
+- **修复/修改文件**：仅在 `web-admin/src/router/guards.ts` 的 finance-manager 白名单加入 `/workflow`；后端 OA 鉴权、任务过滤和订单状态机不变，不扩大其他业务模块权限。新增 `personalOaAccess.spec.ts`，同时复用财审路由与菜单契约测试。
+- **测试**：Web 目标 Vitest `3 files / 63 tests` PASS，覆盖 finance-manager 个人 OA 路径、四个共享队列、财审角色与菜单一致性。
+- **Commit/PR/main 状态**：等待本条最终 commit/PR/main 回填。
 - **部署状态**：`NOT_DEPLOYED`。
-- **回归状态**：`TARGET_TESTS_AND_RELEASE_BUILD_PASSED_AWAITING_RELEASE`；修复期间生产业务写入 0，未触碰 LIUSHANMEN。
+- **回归状态**：`TARGET_TEST_PASS_AWAITING_RELEASE`；从同一 `SO-20260722-0003` 财务节点续测，禁止创建第二订单；未触碰 LIUSHANMEN。
