@@ -52,6 +52,7 @@ const { label } = useBusinessMode();
 const factoryId = computed(() => authStore.factoryId);
 const canWrite = computed(() => permissionStore.canWrite('sales'));
 const canViewPrice = computed(() => permissionStore.canViewPrice);
+const canViewLinkedPurchases = computed(() => permissionStore.canAccess('procurement'));
 // Issue #740 (六扇门 May10): 仓库角色才能 confirm 发货 (扣库存). 销售只看不动.
 const canWarehouseConfirm = computed(() => permissionStore.canWrite('warehouse'));
 const orderId = computed(() => route.params.id as string);
@@ -595,7 +596,7 @@ async function loadPayments() {
 }
 
 async function loadPurchaseOrders() {
-  if (!factoryId.value || !orderId.value) return;
+  if (!canViewLinkedPurchases.value || !factoryId.value || !orderId.value) return;
   try {
     // 关联采购订单 — 通过销售订单号查询
     const res = await get(`/${factoryId.value}/purchase/orders`, {
@@ -2011,7 +2012,7 @@ async function handleQuickPayFull() {
           </el-tab-pane>
 
           <!-- ─── Tab 5: 关联采购订单 ─── -->
-          <el-tab-pane name="purchase">
+          <el-tab-pane v-if="canViewLinkedPurchases" name="purchase">
             <template #label>
               关联采购
               <el-badge v-if="purchaseOrders.length" :value="purchaseOrders.length" :max="99" class="tab-badge" />

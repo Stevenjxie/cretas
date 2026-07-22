@@ -39,6 +39,12 @@ describe('sales order OA web contract', () => {
     expect(list).toContain('按 OA 规则自动通过');
   });
 
+  it('does not query or render linked purchase orders without procurement read access', () => {
+    expect(detail).toContain("const canViewLinkedPurchases = computed(() => permissionStore.canAccess('procurement'))");
+    expect(detail).toContain('if (!canViewLinkedPurchases.value || !factoryId.value || !orderId.value) return;');
+    expect(detail).toContain('<el-tab-pane v-if="canViewLinkedPurchases" name="purchase">');
+  });
+
   it('keeps batch submission truthful instead of aggregating guessed outcomes', () => {
     expect(list).not.toContain('pendingReviewCount');
     expect(list).not.toContain('exemptCount');
