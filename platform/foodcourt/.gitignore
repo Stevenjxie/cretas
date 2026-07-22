@@ -1,0 +1,6 @@
+# 本 demo 的图片是交付物的一部分（档口 logo、菜品图、桌牌二维码、需求素材截图），
+# 必须入库才能复现部署。覆盖仓库根 .gitignore 的 *.png / *.jpg / *.jpeg / *.webp 规则。
+!*.png
+!*.jpg
+!*.jpeg
+!*.webp
