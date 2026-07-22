@@ -37,7 +37,8 @@ class ProductWorkflowProcessPathTest {
         UnitContractService units = mock(UnitContractService.class);
         ProductWorkflowResolutionService service = new ProductWorkflowResolutionServiceImpl(
                 activations, workflows, products, mock(RawMaterialTypeRepository.class),
-                new ObjectMapper(), units);
+                new ObjectMapper(), units,
+                mock(com.cretas.aims.service.validation.ProductProcessWorkflowUnitValidator.class));
 
         ProductType target = new ProductType();
         target.setId("FG-A");
@@ -108,7 +109,8 @@ class ProductWorkflowProcessPathTest {
         UnitContractService units = mock(UnitContractService.class);
         ProductWorkflowResolutionService service = new ProductWorkflowResolutionServiceImpl(
                 activations, workflows, products, mock(RawMaterialTypeRepository.class),
-                new ObjectMapper(), units);
+                new ObjectMapper(), units,
+                mock(com.cretas.aims.service.validation.ProductProcessWorkflowUnitValidator.class));
 
         ProductType target = product("FG-A", "成品 A");
         ProductType byproduct = product("FG-B", "副产品 B");

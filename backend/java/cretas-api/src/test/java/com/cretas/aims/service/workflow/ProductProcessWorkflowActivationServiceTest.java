@@ -48,6 +48,7 @@ class ProductProcessWorkflowActivationServiceTest {
     @Test
     void activateRequiresExactPublishedOwnedWorkflowAndIsIdempotent() {
         ProductProcessWorkflow workflow = publishedWorkflow(44L, "F006", "PT-PIG", 3);
+        workflow.setUnitReviewRequired(true); // broad marker; live validation below remains authoritative
         ProductProcessWorkflowActivation saved = activation(91L, workflow, true, 0L);
         when(workflowRepository.findByIdAndFactoryId(44L, "F006"))
                 .thenReturn(Optional.of(workflow));
@@ -108,17 +109,23 @@ class ProductProcessWorkflowActivationServiceTest {
     }
 
     @Test
-    void activateRejectsPublishedWorkflowThatRequiresUnitReview() {
+    void activateRejectsMarkedWorkflowOnlyWhenLiveUnitContractIsInvalid() {
         ProductProcessWorkflow workflow = publishedWorkflow(44L, "F006", "PT-PIG", 3);
         workflow.setUnitReviewRequired(true);
         when(workflowRepository.findByIdAndFactoryId(44L, "F006"))
                 .thenReturn(Optional.of(workflow));
+        doThrow(new BusinessException(400, "unit mismatch")
+                .withCode("WORKFLOW_PORT_UNIT_STALE"))
+                .when(unitValidator).validateForPublish(eq("F006"), any());
 
         BusinessException error = assertThrows(BusinessException.class,
                 () -> service.activate("F006", 44L, 7001L));
 
-        assertEquals("WORKFLOW_UNIT_REVIEW_REQUIRED", error.getErrorCode());
-        verifyNoInteractions(validator, catalogValidator, unitValidator, compiler, activationRepository);
+        assertEquals("WORKFLOW_PORT_UNIT_STALE", error.getErrorCode());
+        verify(validator).validateForPublish(any());
+        verify(catalogValidator).validateForPublish(eq("F006"), eq("PT-PIG"), any());
+        verify(activationRepository, never()).saveAndFlush(any());
+        verifyNoInteractions(compiler);
     }
 
     @Test

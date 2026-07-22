@@ -147,19 +147,7 @@ describe('ProductProcessWorkflowEditor activation controls', () => {
     expect(wrapper.get('[data-testid="activation-status"]').text()).not.toContain('v3');
   });
 
-  it('forks a published workflow into a review draft when the backend marks SKU units stale', async () => {
-    apiMocks.get.mockImplementation((url: string) => Promise.resolve({
-      success: true,
-      data: url.includes('/bom/recipes/by-product/')
-        ? { id: 'R-1', items: [{ id: 1, materialTypeId: 'RAW', materialName: 'Raw', unit: 'kg' }] }
-        : url.endsWith('/product-types/PT-A')
-          ? productOption('PT-A', '盒')
-        : url.includes('/product-types')
-        ? { content: [productOption('PT-A', '盒'), productOption('PT-B')] }
-        : url.includes('/raw-material-types')
-          ? [{ id: 'RAW', name: 'Raw', unit: 'kg', category: '原料' }]
-          : [],
-    }));
+  it('keeps published workflow read-only when a broad unit-review marker is stale', async () => {
     const stale = definition('PT-A', 'PUBLISHED', 4, 44);
     stale.unitReviewRequired = true;
     apiMocks.getProductProcessWorkflow.mockResolvedValue({ success: true, data: stale });
@@ -167,8 +155,16 @@ describe('ProductProcessWorkflowEditor activation controls', () => {
     const wrapper = mountEditor();
     await flushPromises();
 
-    expect(wrapper.get('.unit-review-alert').attributes('title')).toContain('SKU 单位已变化');
-    expect(wrapper.text()).toContain('草稿 v5');
+    const vm = wrapper.vm as unknown as {
+      definition: ProductProcessWorkflowDefinition;
+      dirty: boolean;
+    };
+    expect(vm.definition.status).toBe('PUBLISHED');
+    expect(vm.definition.version).toBe(4);
+    expect(vm.dirty).toBe(false);
+    expect(wrapper.find('.unit-review-alert').exists()).toBe(false);
+    expect(wrapper.find('[aria-label="Workflow AI 助手"]').exists()).toBe(false);
+    expect(apiMocks.saveProductProcessWorkflowDraft).not.toHaveBeenCalled();
   });
 
   // (移除) 旧「启用版本」独立按钮的 loading/generation 测试 —— #12a 已把启用并入发布,

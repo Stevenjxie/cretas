@@ -117,11 +117,6 @@ public class ProductProcessWorkflowRuntimeServiceImpl
                 .orElseThrow(() -> conflict(
                         "WORKFLOW_BATCH_SELECTION_TARGET_INVALID",
                         "The batch no longer references the exact published Workflow version"));
-        if (Boolean.TRUE.equals(workflow.getUnitReviewRequired())) {
-            throw conflict(
-                    "WORKFLOW_UNIT_REVIEW_REQUIRED",
-                    "The selected Workflow unit contract changed and must be reviewed before new materialization");
-        }
         // 2B.2: 多产出已放开 — 编译产出的全部 OUTPUT 端口都会被持久化 (下方 portsFor 循环),
         // clerk 报工侧按端口分解为 N 个单产出物料化 (原 B1 single-output guard 移除)。
         ProductProcessWorkflowDTO runtimeDefinition = toDefinition(workflow);

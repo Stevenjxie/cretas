@@ -44,6 +44,7 @@ import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.verify;
@@ -117,6 +118,23 @@ class ProductProcessWorkflowRuntimeServiceTest {
                 .map(WorkProcessTaskDTO::getWorkflowNodeId).toList());
         assertTrue(result.orElseThrow().stream()
                 .allMatch(task -> task.getWorkflowInstanceId().equals(501L)));
+    }
+
+    @Test
+    void staleReviewMarkerDoesNotBlockMaterializationWhenLiveUnitContractIsValid() {
+        givenValidOwnedBatch();
+        ProductProcessWorkflow workflow = workflow();
+        workflow.setUnitReviewRequired(true);
+        givenActivationTarget(workflow);
+        givenFreshRuntimePersistence(true);
+        when(compiler.compile(any())).thenReturn(compiledWorkflow());
+
+        Optional<List<WorkProcessTaskDTO>> result =
+                service.materializeIfActive("F006", 901L, "PT-PIG");
+
+        assertTrue(result.isPresent());
+        verify(unitValidator).validateForPublish(eq("F006"), any());
+        assertEquals(1, savedInstances.size());
     }
 
     @Test
@@ -303,17 +321,20 @@ class ProductProcessWorkflowRuntimeServiceTest {
     }
 
     @Test
-    void unitReviewRequiredIsRejectedAfterTakingWorkflowAdmissionLock() {
+    void markedWorkflowIsRejectedOnlyWhenLiveUnitContractIsInvalid() {
         givenValidOwnedBatch();
         ProductProcessWorkflow workflow = workflow();
         workflow.setUnitReviewRequired(true);
         givenActivationTarget(workflow);
+        doThrow(new com.cretas.aims.exception.BusinessException(400, "unit mismatch")
+                .withCode("WORKFLOW_PORT_UNIT_STALE"))
+                .when(unitValidator).validateForPublish(eq("F006"), any());
 
         com.cretas.aims.exception.BusinessException error = assertThrows(
                 com.cretas.aims.exception.BusinessException.class,
                 () -> service.materializeIfActive("F006", 901L, "PT-PIG"));
 
-        assertEquals("WORKFLOW_UNIT_REVIEW_REQUIRED", error.getErrorCode());
+        assertEquals("WORKFLOW_PORT_UNIT_STALE", error.getErrorCode());
         verify(workflowRepository).lockByIdAndFactoryId(44L, "F006");
         verifyNoInteractions(compiler, taskRepository, portRepository);
     }

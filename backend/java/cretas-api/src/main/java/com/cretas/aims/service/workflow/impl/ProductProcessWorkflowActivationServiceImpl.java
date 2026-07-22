@@ -55,10 +55,6 @@ public class ProductProcessWorkflowActivationServiceImpl
         if (workflow.getStatus() != ProductProcessWorkflow.Status.PUBLISHED) {
             throw notPublished();
         }
-        if (Boolean.TRUE.equals(workflow.getUnitReviewRequired())) {
-            throw unitReviewRequired();
-        }
-
         ProductProcessWorkflowDTO definition = toDefinition(workflow);
         validator.validateForPublish(definition);
         catalogValidator.validateForPublish(factoryId, workflow.getProductTypeId(), definition);
@@ -155,11 +151,18 @@ public class ProductProcessWorkflowActivationServiceImpl
                     .orElse(null);
             if (competing == null
                     || competing.getStatus() != ProductProcessWorkflow.Status.PUBLISHED
-                    || Boolean.TRUE.equals(competing.getUnitReviewRequired())
                     || !Objects.equals(active.getActiveDefinitionVersion(), competing.getDefinitionVersion())) {
                 continue;
             }
-            WorkflowTopology competingTopology = WorkflowTopologyClassifier.classify(toDefinition(competing));
+            ProductProcessWorkflowDTO competingDefinition = toDefinition(competing);
+            if (Boolean.TRUE.equals(competing.getUnitReviewRequired())) {
+                try {
+                    unitValidator.validateForPublish(factoryId, competingDefinition);
+                } catch (BusinessException invalidUnitContract) {
+                    continue;
+                }
+            }
+            WorkflowTopology competingTopology = WorkflowTopologyClassifier.classify(competingDefinition);
             if (competingTopology.isSingleOutput()
                     && competingTopology.terminalOutputSkuIds().contains(terminalSku)) {
                 throw new BusinessException(409,
@@ -236,13 +239,6 @@ public class ProductProcessWorkflowActivationServiceImpl
         return new BusinessException(400, "Workflow activation does not belong to this factory and product")
                 .withCode("WORKFLOW_ACTIVATION_PRODUCT_MISMATCH")
                 .withHint("Reload workflows for the current factory and product, then retry")
-                .withSeverity("warning");
-    }
-
-    private BusinessException unitReviewRequired() {
-        return new BusinessException(409, "Workflow unit contract requires review")
-                .withCode("WORKFLOW_UNIT_REVIEW_REQUIRED")
-                .withHint("Open this Workflow, reconcile its units and conversions, then publish a new version")
                 .withSeverity("warning");
     }
 

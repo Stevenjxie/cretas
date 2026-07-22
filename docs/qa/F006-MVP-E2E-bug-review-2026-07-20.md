@@ -686,3 +686,18 @@
 - **Commit/PR/main 状态**：实施 PR [#1588](https://github.com/Stevenjxie/cretas/pull/1588) 已通过门禁并 squash 合入；实施 exact main `5d9b6d2f23b391b5766c2c57130b69fd8eb83c1b`。
 - **部署状态**：`NOT_DEPLOYED`。
 - **回归状态**：`TARGET_TESTS_PASSED_AWAITING_USER_PLAYWRIGHT`；按用户决定不由 Codex 运行 Playwright；生产业务 mutation=0，未做历史桥接，未触碰 LIUSHANMEN。
+
+## F006 R3 生产计划误报 Workflow 未绑定（2026-07-22）
+
+### BUG-F006-R3-PRODPLAN-WORKFLOW-BINDING-001
+
+- **发现阶段/时间/页面/步骤**：F006 生产计划真实 headed 复测，2026-07-22；生产管理 → 生产计划 → 新建计划 → 存货生产，选择 `CPF0060016 / E2E-MVP-R2-20260720-01-黄油鸡-成品800g` 后，页面误报“未找到覆盖该产品的工序 Workflow”。
+- **期望/实际/业务影响**：该 SKU 已启用 Workflow `108/v1`，发布图终端成品 identity 与 SKU 完全一致，生产计划应解析并固定该版本；实际 `resolve-by-outputs` 返回 `resolutionMode=NONE`，导致存货生产无法继续。打开 Workflow 页面还会在无用户编辑时尝试保存复核草稿，且右侧 Workflow AI 面板回归并挤压画布。
+- **证据路径**：`C:/Users/Steve/my-prototype-logistics/tmp/e2e-f006-prodplan-workflow-binding-20260722/01-selected-product-workflow-result.png`、`02-workflow-config-and-ai-sidebar.png`、`report.json`。Headed 只读真值：activation `activeWorkflowId=108/activeDefinitionVersion=1/enabled=true`；Workflow `PUBLISHED/v1`、终端 `skuId=1652bd01-eb3f-43f1-9a5b-5e42ba9cb689`、`unitWarnings=[]`，但遗留 `unitReviewRequired=true`；`pageErrors=0`、`actualBusinessWrites=0`。
+- **根因**：工厂单位主数据变化会批量把已发布 Workflow 标为 `unitReviewRequired=true`；解析、激活和运行时把这个宽泛失效标记直接当作当前单位契约不合法的最终结论，未使用已有权威实时校验器复核，因此有效 Workflow 被静默排除。前端加载发布版时又把该标记直接转换成 DRAFT、设为 dirty 并触发自动保存；Workflow AI 侧栏被再次固定渲染。
+- **修复**：`unitReviewRequired` 改为“触发实时复核”的提示标记：未标记继续走快速路径；已标记时用当前工厂 SKU/端口单位契约校验，校验通过的发布版可被生产计划解析、激活和运行时物化，真实不兼容仍 fail-closed。发布版页面加载严格只读，不再因标记自动 fork/保存草稿；只有当前契约确有差异时显示复核提示。移除 Workflow 编辑器固定右侧 AI 面板并恢复全宽画布。
+- **修改文件**：`ProductWorkflowResolutionServiceImpl`、`ProductProcessWorkflowActivationServiceImpl`、`ProductProcessWorkflowRuntimeServiceImpl` 及其目标测试；Web `ProductProcessWorkflowEditor.vue` 与 activation 目标测试。
+- **测试**：Java 6 个目标测试类共 `55/55` 通过，覆盖陈旧标记+实时有效、实时无效继续拒绝、解析/固定版本/激活/运行时；Web Vitest `3/3` 通过，覆盖发布版保持只读、不保存草稿、右侧 AI 不渲染。
+- **Commit/PR/main 状态**：本条随最终提交更新 exact commit/main。
+- **部署状态**：`NOT_DEPLOYED`。
+- **回归状态**：`TARGET_TESTS_PASSED_AWAITING_MERGE`；修复和验证期间生产业务 mutation=0，未创建生产计划、未修改 Workflow/SKU，未触碰 LIUSHANMEN。
