@@ -15,6 +15,7 @@ mechanism.
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 from datetime import date, datetime
 from typing import Any, Dict, Optional
@@ -1155,6 +1156,7 @@ async def post_restaurant_tiered_answer(
     from smartbi.gold.restaurant_intent import (
         capability_clarification_question,
         contextualize_restaurant_followup,
+        log_intent_miss,
         parse_restaurant_query,
     )
     from smartbi.gold.restaurant_intent_service import should_delegate, tiered_answer
@@ -1212,6 +1214,12 @@ async def post_restaurant_tiered_answer(
         ):
             from smartbi.gold.restaurant_ops_router import extract_dish_candidates
             if not extract_dish_candidates(query):
+                # 飞轮盲区修补 (2026-07-23): miss 也留痕。fire-and-forget,
+                # pool 此处尚未获取, log_intent_miss 自取。
+                asyncio.create_task(log_intent_miss(
+                    None, factory_id=fid, query=query,
+                    reason="prefilter", java_tool_name=body.java_tool_name,
+                ))
                 return {"delegate": False}
 
         pool = await get_pg_pool()
@@ -1241,6 +1249,11 @@ async def post_restaurant_tiered_answer(
             session_key=clarification_session_key,
         )
         if not inherited_context and not should_delegate(spec, body.java_tool_name, query=effective_query):
+            asyncio.create_task(log_intent_miss(
+                pool, factory_id=fid, query=effective_query,
+                reason="should_delegate", spec=spec,
+                java_tool_name=body.java_tool_name,
+            ))
             return {"delegate": False}
 
         # 2026-07-08 clarification-loop v1: `parse_restaurant_query` above

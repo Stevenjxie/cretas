@@ -44,6 +44,7 @@ sys.path.insert(0, str(_BACKEND_PY / "smartbi"))
 
 from smartbi.gold.restaurant_intent_promotion import (  # noqa: E402
     aggregate_candidates,
+    aggregate_misses,
     apply_promotions,
 )
 
@@ -99,6 +100,39 @@ async def _list_candidates(min_confidence: float, min_count: int, limit: int,
     )
 
 
+async def _list_misses(limit: int, factory_id: str) -> None:
+    from smartbi.config import get_pg_pool
+
+    try:
+        pool = await get_pg_pool()
+    except Exception as exc:
+        print(f"ERROR: 连不上 smartbi DB ({exc})。prod 库需先开 SSH 隧道 -- 见本文件顶部说明。")
+        return
+    if pool is None:
+        print("ERROR: 连不上 smartbi DB (postgres 未配置/密码错/网络不通)。")
+        return
+
+    misses = await aggregate_misses(pool, limit=limit, factory_id=factory_id)
+    if not misses:
+        print("无 miss 记录 (delegate:false 捕获自 2026-07-23 起才有数据)")
+        return
+
+    print(f"{'query':<42}{'次数':<6}{'原因':<24}{'spec解析到':<28}family")
+    print("-" * 110)
+    for m in misses:
+        q_display = m["query"] if len(m["query"]) <= 40 else m["query"][:39] + "…"
+        print(
+            f"{q_display:<42}{m['occurrence_count']:<6}"
+            f"{','.join(m['reasons']):<24}{','.join(m['spec_intents']) or '-':<28}{m['family']}"
+        )
+    print("-" * 110)
+    print(
+        f"共 {len(misses)} 组 miss。复盘指南: spec解析到有值 = 解析对但路由拒"
+        " (resolver 缺口/例外规则); prefilter+query 族 = 前置滤过严或缺 T1 规则;"
+        " write 族 = 本该 Java 工具接, 属正常。"
+    )
+
+
 def _apply(json_path: str) -> None:
     path = Path(json_path)
     if not path.exists():
@@ -136,6 +170,8 @@ if __name__ == "__main__":
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     ap.add_argument("--list", action="store_true", help="连库列出晋升候选 (dry-run, 不写任何东西)")
+    ap.add_argument("--misses", action="store_true",
+                    help="连库列出 delegate:false miss 复盘 (tiered 没接住的问法)")
     ap.add_argument(
         "--apply", metavar="JSON_FILE", default=None,
         help="人审后的 [{query, code}] JSON 文件路径 -> 写入账本 (不连库)",
@@ -154,5 +190,7 @@ if __name__ == "__main__":
     elif args.list:
         asyncio.run(_list_candidates(
             args.min_confidence, args.min_count, args.limit, args.factory_id))
+    elif args.misses:
+        asyncio.run(_list_misses(args.limit, args.factory_id))
     else:
         ap.print_help()

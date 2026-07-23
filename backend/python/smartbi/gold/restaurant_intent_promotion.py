@@ -258,6 +258,56 @@ async def aggregate_candidates(
     return candidates
 
 
+async def aggregate_misses(
+    pool,
+    *,
+    limit: int = 200,
+    factory_id: str = "DEMO_REST",
+) -> List[Dict[str, Any]]:
+    """Aggregate delegate:false misses (哨兵 template_code='RESTAURANT_OPS_MISS',
+    log_intent_miss 写入) -- 飞轮的另一半原料: tiered 没接住的问法。
+
+    分组按 query 文本, 带 miss_reason 分布 (prefilter / should_delegate) 和
+    spec_intent (should_delegate miss 时 T1-T3 实际解析出的意图, 有值说明
+    "解析对了但路由拒了" -- 通常是 resolver 缺口或 A-3 类例外)。
+
+    只读, fail-open []。RLS 同 aggregate_candidates: 查询前设 GUC。"""
+    sql = """
+        SELECT trim(query)                                          AS norm_query,
+               COUNT(*)                                             AS occurrence_count,
+               array_agg(DISTINCT agg_meta->>'miss_reason')         AS reasons,
+               array_agg(DISTINCT agg_meta->>'spec_intent')
+                   FILTER (WHERE agg_meta->>'spec_intent' IS NOT NULL) AS spec_intents,
+               MAX(created_at)                                      AS last_seen
+          FROM smart_bi_llm_fallback_log
+         WHERE template_code = 'RESTAURANT_OPS_MISS'
+         GROUP BY trim(query)
+         ORDER BY COUNT(*) DESC, MAX(created_at) DESC
+         LIMIT $1
+    """
+    try:
+        async with pool.acquire() as conn:
+            await conn.execute(
+                "SELECT set_config('app.factory_id', $1, false)", factory_id
+            )
+            rows = await conn.fetch(sql, limit)
+    except Exception as exc:
+        logger.warning(f"[restaurant-intent-promotion] aggregate_misses query failed (fail-open): {exc}")
+        return []
+    return [
+        {
+            "query": (r["norm_query"] or "").strip(),
+            "occurrence_count": int(r["occurrence_count"] or 0),
+            "reasons": sorted(x for x in (r["reasons"] or []) if x),
+            "spec_intents": sorted(x for x in (r["spec_intents"] or []) if x),
+            "last_seen": r["last_seen"],
+            "family": classify_question_family((r["norm_query"] or "").strip()),
+        }
+        for r in rows
+        if (r["norm_query"] or "").strip()
+    ]
+
+
 # ─── Human-reviewed apply (the ONLY write path) ───────────────────────────
 
 def apply_promotions(entries: List[Dict[str, str]]) -> Dict[str, Any]:
