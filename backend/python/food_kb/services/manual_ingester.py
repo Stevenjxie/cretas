@@ -69,6 +69,13 @@ MANUAL_SOURCES = [
         "type": "markdown",
         "subcategory": "factory",
     },
+    {
+        "path": "docs/manual/restaurant-full-chain-sop.html",
+        "title_prefix": "餐饮全链路SOP",
+        "source": "restaurant-full-chain-sop.html",
+        "type": "html",
+        "subcategory": "restaurant",
+    },
 ]
 
 
