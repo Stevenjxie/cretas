@@ -47,7 +47,13 @@ public class IntentPermissionGate {
                 // fail-closed: 无法定位调用者身份即拒绝
                 return PermissionCheck.denied(code);
             }
-            boolean ok = rbacGuard.hasAnyPermission(Map.of("userId", userId), code);
+            // P1-M (2026-07-24): 逗号分隔 = 任一即可 (any-of), 与 ToolRbacEnforcer 的
+            // Set 语义完全对齐 — 多码工具 (如 customer_delete: sales|finance) 的意图层
+            // 回填不收紧权限。单码时行为不变。
+            String[] codes = java.util.Arrays.stream(code.split(","))
+                    .map(String::trim).filter(s -> !s.isEmpty()).toArray(String[]::new);
+            boolean ok = codes.length > 0
+                    && rbacGuard.hasAnyPermission(Map.of("userId", userId), codes);
             if (!ok) {
                 log.warn("意图权限门拒绝: intentCode={}, requiredPermission={}, userId={}, role={}",
                         intent.getIntentCode(), code, userId, userRole);
