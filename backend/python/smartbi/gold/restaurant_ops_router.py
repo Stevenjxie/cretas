@@ -299,6 +299,7 @@ _NON_DISH_POS_ITEM_RE = re.compile(
 )
 _DISH_RANK_WORST_RE = re.compile(
     r"卖得最差|卖得不好|最难卖|卖不动|销量最低|销量垫底|最不受欢迎|最滞销"
+    r"|没人点|无人点|没有人点|点得最少|没什么人点"
 )
 _DISH_RANK_BEST_RE = re.compile(
     r"卖得最好|最好卖|最畅销|销量最高|最受欢迎|卖得好"
@@ -647,8 +648,9 @@ _DISH_PROFIT_RE = re.compile(
 )
 _DISH_LEADING_PRONOUN_RE = re.compile(r"^(?:这个|这道|那个|那道|它|该菜|这|那)+")
 _DISH_LEADING_TIME_RE = re.compile(
-    r"^(?:今天|今日|昨天|昨日|前天|本周|这周|上周|本月|这个月|上个月|上月"
-    r"|今年|去年|现在|如今|目前|最近\S{0,4}|近\S{0,4}|过去\S{0,4}"
+    r"^(?:今天|今日|昨天|昨日|前天|本周|这周|上上周|上周|本月|这个月|上上个月|上上月|上个月|上月"
+    r"|今年|去年|前年|现在|如今|目前|最近\S{0,4}|近\S{0,4}|过去\S{0,4}"
+    r"|20\d{2}年(?:全年|度)?|全年"
     r"|(?:20\d{2}年)?(?:1[0-2]|0?[1-9]|十一|十二|[一二三四五六七八九十])月份?)+"
 )
 
@@ -755,6 +757,27 @@ def extract_dish_candidates(query: "Optional[str]") -> list:
                 out.append(cand[:60])
         if len(out) == 2:
             return out
+    # R26: 多实体并列 ("米饭和娃娃菜和招牌藤椒味(单人份)的销量") —
+    # 拆分后各自经 _match_dish_rows 验证, 命中≥2 走既有对比路径。
+    list_form = re.match(
+        r"^(.{4,80}?)(?:的)?"
+        r"(?:销量|营收|销售额|毛利率|毛利|成本)"
+        r"(?:分别是多少|是多少|多少|如何|怎么样)?[?？。!！]?$",
+        text,
+    )
+    if list_form and re.search(r"[和、,，]", list_form.group(1)):
+        parts = re.split(r"[和、,，]", list_form.group(1))
+        multi = []
+        for cand in parts:
+            cand = _DISH_LEADING_TIME_RE.sub("", cand.strip()).strip("「」\"' 的")
+            if (
+                len(cand) >= 2
+                and cand not in _DISH_GENERIC_TOKENS
+                and not any(t in cand for t in ("排行", "整体", "全部"))
+            ):
+                multi.append(cand[:60])
+        if len(multi) >= 2:
+            return multi
     single = extract_dish_candidate(query)
     return [single] if single else []
 
@@ -1246,6 +1269,19 @@ def _resolve_sales_date_range(
     # 纯 "今天营业额" (无周/月 token) 仍落到最后的 今天 分支不受影响。
     # 上周/上个月 AFTER 本周/本月: "这周营收比上周差在哪里" keeps 本周 as the
     # primary window (the comparison target is the resolver's business).
+    # R26: 上上周/上上个月 单独点名 → 该周期为主窗; 同时点名两个周期
+    # ("上个月和上上个月对比") 仍走比较分支 (主窗=近端周期)。
+    if any(token in text for token in ("上上周", "上上星期", "上上个星期")):
+        stripped = text.replace("上上周", "").replace("上上星期", "").replace("上上个星期", "")
+        if not any(t in stripped for t in ("上周", "上星期", "上个星期", "本周", "这周")):
+            this_monday = anchor - timedelta(days=anchor.weekday())
+            return (this_monday - timedelta(days=14), this_monday - timedelta(days=8)), "上上周"
+    if any(token in text for token in ("上上个月", "上上月")):
+        stripped = text.replace("上上个月", "").replace("上上月", "")
+        if not any(t in stripped for t in ("上个月", "上月", "本月", "这个月")):
+            start, end = _previous_calendar_month(anchor, 2)
+            return (start, end), "上上个月"
+
     if any(token in text for token in ("本周", "这周", "本星期", "这星期")):
         return (anchor - timedelta(days=anchor.weekday()), anchor), "本周"
 
@@ -1260,6 +1296,16 @@ def _resolve_sales_date_range(
         last_of_prev = anchor.replace(day=1) - timedelta(days=1)
         return (last_of_prev.replace(day=1), last_of_prev), "上个月"
 
+    # R26: 显式日历年 ("2025年全年营收") — 此前落全部历史,
+    # "2025年全年" 还被菜名抽取当候选。带月的形态由前面的绝对月规则接走。
+    year_only = re.search(r"(20\d{2})\s*年(?:全年|度)?", text)
+    if year_only:
+        y = int(year_only.group(1))
+        if y <= anchor.year:
+            y_end = anchor if y == anchor.year else date(y, 12, 31)
+            return (date(y, 1, 1), y_end), f"{y}年"
+    if "前年" in text:
+        return (date(anchor.year - 2, 1, 1), date(anchor.year - 2, 12, 31)), "前年"
     if "今年" in text:
         return (date(anchor.year, 1, 1), anchor), "今年"
     if "去年" in text:
