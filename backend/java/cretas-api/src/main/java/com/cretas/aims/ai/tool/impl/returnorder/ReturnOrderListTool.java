@@ -83,9 +83,16 @@ public class ReturnOrderListTool extends AbstractBusinessTool {
 
         PageResponse<ReturnOrder> result = returnOrderService.getReturnOrders(factoryId, returnType, status, page - 1, size);
 
+        long total = result.getTotalElements() != null ? result.getTotalElements() : 0L;
+        if (total == 0) {
+            // 诚实空态 (2026-07-24 工厂读电池): 无 message 会被兜底成
+            // "本次查询没有获得可展示的结果" 通用文案, 用户不知道是没数据还是查坏了。
+            return buildSimpleResult("当前没有退货单记录。如需创建退货, 可以说「创建退货单」。",
+                    Map.of("content", Collections.emptyList(), "totalElements", 0));
+        }
         return buildPageResult(
                 result.getContent() != null ? result.getContent() : Collections.emptyList(),
-                result.getTotalElements() != null ? result.getTotalElements() : 0L,
+                total,
                 result.getTotalPages() != null ? result.getTotalPages() : 0,
                 page
         );
