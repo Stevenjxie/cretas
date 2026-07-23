@@ -209,8 +209,15 @@ public class ToolDispatchService {
                         .build();
             }
 
-            // 1. 权限检查
-            if (tool.requiresPermission() && !tool.hasPermission(userRole)) {
+            // 1. 权限检查 (legacy 角色串判定)。
+            // 2026-07-24 修: 声明了 getRequiredPermissions() 的工具跳过本检查, 交给
+            // 下方 W9 enforcer 按权限矩阵判定 — 此前 8 个工具的 hasPermission()
+            // 无条件 false (本意是"逼调用方走权限码"), 但本检查先于 enforcer 执行,
+            // 导致 3 个原料只读查询对所有角色全拒 (超管也拒), 4 个写工具的
+            // confirm 终点被拦死。仅保留给只有 legacy 角色逻辑的旧工具。
+            if (tool.requiresPermission()
+                    && tool.getRequiredPermissions().isEmpty()
+                    && !tool.hasPermission(userRole)) {
                 log.warn("Tool 权限不足: tool={}, userRole={}", tool.getToolName(), userRole);
                 // Sprint 12: 4-element error UX (≥80-char) for permission-denied case.
                 String permDeniedMsg = String.format(
