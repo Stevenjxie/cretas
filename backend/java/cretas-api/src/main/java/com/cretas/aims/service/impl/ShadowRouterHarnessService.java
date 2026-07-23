@@ -18,13 +18,14 @@ import java.util.concurrent.ThreadLocalRandom;
  *
  * Runs {@link SemanticRouterService#route(String, String, int)} as a CHALLENGER on a background
  * thread and logs champion-vs-challenger agreement to the {@code intent_match_records} shadow
- * columns. Mirrors the (dead) {@link ShadowClassifyService} BERT pattern.
+ * columns. Mirrors the original BERT shadow-classify pattern (that service was removed as
+ * dead code).
  *
  * <p><strong>Never affects the live result.</strong> Any exception from the challenger router is
  * caught and logged at WARN level — the caller always completes normally.
  *
- * <p>Uses the same {@code aiAnalysisExecutor} thread pool as {@link ShadowClassifyService} so
- * shadow work shares existing concurrency budget without introducing a new executor bean.
+ * <p>Uses the shared {@code aiAnalysisExecutor} thread pool so shadow work shares existing
+ * concurrency budget without introducing a new executor bean.
  *
  * @author Cretas Team
  * @since 2026-06-03

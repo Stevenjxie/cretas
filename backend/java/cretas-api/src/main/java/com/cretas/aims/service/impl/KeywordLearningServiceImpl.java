@@ -269,62 +269,6 @@ public class KeywordLearningServiceImpl implements KeywordLearningService {
         }
     }
 
-    @Override
-    @Transactional
-    public int learnFromUserFeedback(String factoryId, String selectedIntentCode, List<String> matchedKeywords) {
-        if (factoryId == null || selectedIntentCode == null ||
-            matchedKeywords == null || matchedKeywords.isEmpty()) {
-            return 0;
-        }
-
-        // 检查工厂是否启用自动学习
-        if (!factoryConfigService.isAutoLearnEnabled(factoryId)) {
-            log.debug("工厂 {} 未启用自动学习，跳过", factoryId);
-            return 0;
-        }
-
-        try {
-            Optional<AIIntentConfig> intentOpt = intentRepository
-                    .findByIntentCodeAndIsActiveTrueAndDeletedAtIsNull(selectedIntentCode);
-            if (intentOpt.isEmpty()) {
-                return 0;
-            }
-
-            AIIntentConfig intent = intentOpt.get();
-            int maxKeywords = factoryConfigService.getMaxKeywordsPerIntent(factoryId);
-
-            // 检查现有关键词数量
-            Set<String> existingKeywords = getExistingKeywords(intent);
-            if (existingKeywords.size() >= maxKeywords) {
-                log.debug("意图 {} 关键词已达上限 {}", selectedIntentCode, maxKeywords);
-                return 0;
-            }
-
-            // 筛选不存在的新关键词
-            List<String> newKeywords = matchedKeywords.stream()
-                    .filter(k -> !existingKeywords.contains(k.toLowerCase()))
-                    .filter(k -> !shouldFilterKeyword(k))
-                    .limit(MAX_NEW_KEYWORDS_PER_INPUT)
-                    .collect(Collectors.toList());
-
-            if (!newKeywords.isEmpty()) {
-                int added = addKeywordsToIntent(factoryId, selectedIntentCode,
-                        newKeywords, LearnSource.FEEDBACK_LEARNED);
-                if (added > 0) {
-                    log.info("从用户反馈学习 {} 个关键词到意图 {}: {}",
-                            added, selectedIntentCode, newKeywords);
-                }
-                return added;
-            }
-
-            return 0;
-
-        } catch (Exception e) {
-            log.warn("从用户反馈学习关键词失败: {}", e.getMessage());
-            return 0;
-        }
-    }
-
     // ==================== 私有方法 ====================
 
     /**

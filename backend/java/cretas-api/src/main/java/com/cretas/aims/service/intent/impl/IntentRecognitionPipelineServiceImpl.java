@@ -45,7 +45,6 @@ import com.cretas.aims.service.intent.IntentRecognitionPipelineService;
 import com.cretas.aims.ai.tool.WriteGuardService;
 import com.cretas.aims.ai.tool.NegationTwinPolicy;
 import com.cretas.aims.ai.tool.BusinessTypeScope;
-import com.cretas.aims.dto.ClassifierResult;
 import com.cretas.aims.dto.SemanticMatchResult;
 import com.cretas.aims.dto.intent.RouteDecision;
 import com.cretas.aims.dto.intent.MultiIntentResult;
@@ -297,24 +296,7 @@ public class IntentRecognitionPipelineServiceImpl implements IntentRecognitionPi
     @Value("${cretas.ai.semantic-similarity.enabled:true}")
     private boolean semanticSimilarityEnabled;
 
-    @Value("${python-classifier.enabled:false}")
-    private boolean classifierEnabled;
-
-    @Value("${python-classifier.high-confidence-threshold:0.85}")
-    private double classifierHighConfidenceThreshold;
-
-    @Value("${python-classifier.ood.entropy-threshold:2.0}")
-    private double oodEntropyThreshold;
-
-    @Value("${python-classifier.ood.margin-threshold:0.15}")
-    private double oodMarginThreshold;
-
-    @Value("${python-classifier.ood.max-logit-threshold:3.0}")
-    private double oodMaxLogitThreshold;
-
     // ==================== Thread-local and static state ====================
-
-    private static final ThreadLocal<ClassifierResult> onnxFallbackResultHolder = new ThreadLocal<>();
 
     private static final Pattern FILLER_WORDS_PREFIX_PATTERN = Pattern.compile(
             "^(?:嗯+|呃+|额+|哦+|哎+|喂+|啊+|呀+|那个+|这个+|就是+|所以+|然后+" +
@@ -2730,32 +2712,6 @@ public class IntentRecognitionPipelineServiceImpl implements IntentRecognitionPi
             if (llmResult.hasMatch()) {
                 log.info("LLM fallback succeeded: intent={} confidence={}",
                         llmResult.getBestMatch().getIntentCode(), llmResult.getConfidence());
-
-                // D5: Emit structured training data for ONNX expansion
-                try {
-                    ClassifierResult onnxResult = onnxFallbackResultHolder.get();
-                    if (onnxResult != null) {
-                        String onnxIntent = onnxResult.getIntentCode();
-                        double onnxConf = onnxResult.getConfidence();
-                        String llmIntent = llmResult.getBestMatch().getIntentCode();
-                        double llmConf = llmResult.getConfidence();
-
-                        log.info("[ONNX-TrainingData] query=\"{}\" llmIntent=\"{}\" llmConfidence={} onnxIntent=\"{}\" onnxConfidence={} match={}",
-                                userInput, llmIntent, String.format("%.4f", llmConf),
-                                onnxIntent, String.format("%.4f", onnxConf),
-                                llmIntent.equals(onnxIntent) ? "AGREE" : "DISAGREE");
-
-                        // ONNX was correct but rejected due to low confidence
-                        if (llmIntent.equals(onnxIntent)) {
-                            log.warn("[ONNX-Threshold] ONNX was correct but rejected: query=\"{}\" intent=\"{}\" onnxConf={} threshold={}",
-                                    userInput, llmIntent, String.format("%.4f", onnxConf), classifierHighConfidenceThreshold);
-                        }
-                    }
-                } catch (Exception e) {
-                    log.debug("D5 training data log failed: {}", e.getMessage());
-                } finally {
-                    onnxFallbackResultHolder.remove();
-                }
 
                 double confidence = llmResult.getConfidence();
                 String intentCode = llmResult.getBestMatch().getIntentCode();
@@ -5188,57 +5144,6 @@ public class IntentRecognitionPipelineServiceImpl implements IntentRecognitionPi
             }
         }
         return null;
-    }
-
-    /**
-     * v35.0: OOD (Out-of-Distribution) 检测
-     *
-     * Softmax 概率总和恒为 1.0，任何输入都会被高置信度分配到某个意图。
-     * 此方法通过 3 个指标 + 关键词交叉验证判断输入是否超出分类器训练分布。
-     * 判定规则: 4 项中 ≥2 项触发 → OOD → 降级到 LLM 层。
-     */
-    private boolean isLikelyOOD(ClassifierResult result, String userInput) {
-        int oodVotes = 0;
-
-        // 1. Entropy 高 → 概率分散在多个类上 → 模型不确定
-        if (result.getEntropy() != null && result.getEntropy() > oodEntropyThreshold) {
-            oodVotes++;
-        }
-        // 2. Margin 低 → top1 vs top2 差距小 → 模型犹豫
-        if (result.getMargin() != null && result.getMargin() < oodMarginThreshold) {
-            oodVotes++;
-        }
-        // 3. Max logit 低 → 无强神经元激活 → 输入不匹配任何训练模式
-        if (result.getMaxLogit() != null && result.getMaxLogit() < oodMaxLogitThreshold) {
-            oodVotes++;
-        }
-        // 4. 关键词交叉验证: 分类结果所属领域的关键词必须在输入中至少出现 1 个
-        IntentKnowledgeBase.Domain domain = knowledgeBase.getDomainFromIntentCode(result.getIntentCode());
-        if (domain != null && domain != IntentKnowledgeBase.Domain.GENERAL) {
-            Set<String> keywords = knowledgeBase.getDomainKeywords(domain);
-            boolean hasKeyword = keywords.stream().anyMatch(kw -> userInput.contains(kw));
-            if (!hasKeyword) {
-                oodVotes++;
-            }
-        } else if (domain == IntentKnowledgeBase.Domain.GENERAL) {
-            // Wave-11: GENERAL域不跳过关键词验证，改为检查是否包含任何已知领域的关键词
-            // 如果输入不含任何领域关键词且被分类为GENERAL，更可能是OOD
-            boolean matchesAnyDomain = false;
-            for (IntentKnowledgeBase.Domain d : IntentKnowledgeBase.Domain.values()) {
-                if (d == IntentKnowledgeBase.Domain.GENERAL) continue;
-                Set<String> kws = knowledgeBase.getDomainKeywords(d);
-                if (kws != null && kws.stream().anyMatch(kw -> userInput.contains(kw))) {
-                    matchesAnyDomain = true;
-                    break;
-                }
-            }
-            // GENERAL分类 + 不含任何领域关键词 → 更可能是OOD或闲聊
-            if (!matchesAnyDomain && userInput.length() <= 8) {
-                oodVotes++;
-            }
-        }
-
-        return oodVotes >= 2;
     }
 
     private IntentMatchResult tryDisambiguateConflict(String originalInput, String matchedIntent,
