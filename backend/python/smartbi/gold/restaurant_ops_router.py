@@ -3536,6 +3536,8 @@ async def resolve_sales_summary(
 
 async def resolve_trend_analysis(
     smartbi_pool, factory_id: str, *, role: Optional[str] = None,
+    date_range: Optional[Tuple[Optional[date], Optional[date]]] = None,
+    query: Optional[str] = None,
 ) -> OpsAnswer:
     """Revenue trend / YoY / MoM analysis served from Gold trend_bundle.
 
@@ -3564,7 +3566,13 @@ async def resolve_trend_analysis(
 
     can_see_money = bool(role) and role in PRICE_VIEW_ROLES
 
-    bundle = await trend_bundle(smartbi_pool, factory_id, (None, None))
+    # R24: trend_bundle 本就支持时间窗, resolver 此前写死全历史 —
+    # 「最近三个月营收趋势」答 19 个月属于窗口替代。带窗时如实标注。
+    window = date_range if date_range and (date_range[0] or date_range[1]) else (None, None)
+    window_text = (
+        _range_text(window[0], window[1]) if window[0] and window[1] else "全部历史"
+    )
+    bundle = await trend_bundle(smartbi_pool, factory_id, window)
     monthly: List[Dict[str, Any]] = sorted(
         bundle.get("monthlyTrend") or [], key=lambda item: str(item.get("month") or "")
     )
@@ -3730,7 +3738,7 @@ async def resolve_trend_analysis(
         )
 
     answer = (
-        f"营收趋势分析 (全部历史, 共 {n_months} 个月):\n"
+        f"营收趋势分析 ({window_text}, 共 {n_months} 个月):\n"
         f"- 累计营收 {_money(total_rev)}\n"
         f"- 营收最高月: {peak['month']} ({_money(peak['revenue'])})\n"
         f"- 营收最低月: {trough['month']} ({_money(trough['revenue'])})\n"
@@ -3744,7 +3752,7 @@ async def resolve_trend_analysis(
 
     charts = [{
         "chartType": "line",
-        "title": "月度营收趋势 (全部历史)",
+        "title": f"月度营收趋势 ({window_text})",
         "xAxis": {"data": [
             (
                 f"{m['month']}（截至{latest_data_date.day}日）"
@@ -3773,7 +3781,7 @@ async def resolve_trend_analysis(
 
     return OpsAnswer(
         code="RESTAURANT_OPS_TREND_ANALYSIS",
-        title="营收趋势分析 (全部历史)",
+        title=f"营收趋势分析 ({window_text})",
         answer_text=answer,
         charts=charts,
         kpis=kpis,
