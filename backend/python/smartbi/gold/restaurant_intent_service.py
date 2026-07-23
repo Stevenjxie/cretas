@@ -332,6 +332,9 @@ async def tiered_answer(
                 # every store, which is the forbidden all-store fallback.
                 effective_code = "RESTAURANT_OPS_STORE_MARGIN"
             code_kwargs = execution_kwargs
+            if effective_code == "RESTAURANT_OPS_GROSS_MARGIN" and dish_mention:
+                code_kwargs = dict(execution_kwargs)
+                code_kwargs["dish_mention"] = dish_mention
             if effective_code == "RESTAURANT_OPS_STORE_MARGIN" and (store_mention or store_dish):
                 code_kwargs = dict(execution_kwargs)
                 if store_mention:

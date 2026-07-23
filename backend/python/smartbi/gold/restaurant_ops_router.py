@@ -429,6 +429,16 @@ def match_restaurant_ops(query: str) -> Optional[str]:
         and not any(tok in q for tok in ("趋势", "走势", "哪家店", "哪个店"))
     ):
         return "RESTAURANT_OPS_SALES_SUMMARY"
+    # 具名窗生意问 ("这个月生意怎么样") — 此前无 T1 规则, 全靠 T3 分类,
+    # LLM 抖动一次就落工厂仪表盘 (R22b 评测电池实测)。
+    if (
+        any(tok in q for tok in ("今天", "本周", "这周", "本月", "这个月",
+                                 "上周", "上个月", "上月", "昨天"))
+        and any(tok in q for tok in ("生意", "营业额", "营收", "销售额", "流水"))
+        and any(tok in q for tok in ("怎么样", "如何", "好不好", "多少", "咋样"))
+        and not any(tok in q for tok in ("哪家店", "哪个店", "门店", "趋势", "走势"))
+    ):
+        return "RESTAURANT_OPS_SALES_SUMMARY"
     # 同比增长问 ("今年比去年增长多少") — 此前落 Java 指标查询 slot-filling,
     # 还把 UPPER_SNAKE 指标码直接问用户 (R15)。
     if (
@@ -1693,6 +1703,7 @@ async def resolve_gross_margin(
     smartbi_pool, factory_id: str, days: int = 30, top_n: int = 10,
     *, role: Optional[str] = None, query: Optional[str] = None,
     date_range: Optional[Tuple[Optional[date], Optional[date]]] = None,
+    dish_mention: Optional[str] = None,
 ) -> OpsAnswer:
     """Cross-module gross margin analysis: POS sold_price × recipe food_cost.
 
@@ -1787,6 +1798,10 @@ async def resolve_gross_margin(
         # 榜 — 菜品版的全店榜退化。候选名必须命中本租户菜品行才限域; 命不中
         # 定向拒答, 多命中请求澄清。泛指问法 (整体/哪道/排行) 不受影响。
         dish_candidates = extract_dish_candidates(query)
+        if not dish_candidates and dish_mention:
+            # R22b: 正则抽取器 miss 时用 T3 实体槽位兜底 — 槽位只是提名,
+            # 下方 _match_dish_rows 对本租户菜品行验证, 命不中照样定向拒答。
+            dish_candidates = [dish_mention]
         dish_candidate = dish_candidates[0] if len(dish_candidates) == 1 else None
         dish_scope_row = None
         if len(dish_candidates) >= 2 and pos_rows:
