@@ -92,4 +92,25 @@ class IntentPermissionGateTest {
         assertThat(gate.check(null, 22L, "admin").isAllowed()).isTrue();
         verifyNoInteractions(rbacGuard);
     }
+
+    @Test
+    @DisplayName("P1-M: 逗号分隔权限码 = 任一即可, 与 ToolRbacEnforcer Set 语义对齐")
+    void commaSeparatedCodesAreAnyOf() {
+        when(rbacGuard.hasAnyPermission(any(), eq("sales:read_write"), eq("finance:read_write")))
+                .thenReturn(true);
+        IntentPermissionGate.PermissionCheck check = gate.check(
+                intentWithPermission("sales:read_write, finance:read_write"), 22L, "finance_manager");
+        assertThat(check.isAllowed()).isTrue();
+    }
+
+    @Test
+    @DisplayName("P1-M: 逗号码集判定拒绝时回带完整码串 (前端字典逐段渲染)")
+    void commaSeparatedDenialCarriesFullCodeString() {
+        when(rbacGuard.hasAnyPermission(any(), eq("sales:read_write"), eq("finance:read_write")))
+                .thenReturn(false);
+        IntentPermissionGate.PermissionCheck check = gate.check(
+                intentWithPermission("sales:read_write, finance:read_write"), 22L, "viewer");
+        assertThat(check.isDenied()).isTrue();
+        assertThat(check.requiredPermission()).isEqualTo("sales:read_write, finance:read_write");
+    }
 }
