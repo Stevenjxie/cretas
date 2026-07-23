@@ -113,4 +113,10 @@ public class IntentExecuteRequest {
      */
     @Builder.Default
     private Boolean skipSlotFilling = false;
+
+    /**
+     * AI 问答入口模式: READ=咨询tab(强制只读) | OPERATE=操作tab(全能力)。
+     * null 视为 OPERATE (向后兼容, 老客户端零破坏)。
+     */
+    private String mode;
 }

@@ -200,6 +200,11 @@ public class IntentExecutionOrchestrator {
     @Lazy
     private com.cretas.aims.service.intent.IntentConfigManagementService configService;
 
+    // P1 读写分块: 意图级权限门。required_permission 非空 → module:action 矩阵 (与 HTTP 层同源,
+    // fail-closed); 空 → 回落 requiredRoles 旧逻辑 (兼容期)。见 checkIntentPermission()。
+    @Autowired
+    private IntentPermissionGate intentPermissionGate;
+
     // ===== Route counters =====
     private final AtomicLong branchToolDirect = new AtomicLong();
     private final AtomicLong branchSkill = new AtomicLong();
@@ -208,6 +213,12 @@ public class IntentExecutionOrchestrator {
 
     @Value("${cretas.ai.validation.enabled:true}")
     private boolean validationEnabled;
+
+    // P1 读写分块 §4.5 demo 写闸: 与 DemoReadOnlyInterceptor 同一配置源 (cretas.demo.factory-ids,
+    // 默认 DEMO_REST,DEMO_FACTORY)。AI 确认执行阶段拦截 demo 租户真实写入 — 封住 HTTP 层
+    // 放行 /ai-intents/ POST 留下的缺口。名单内租户恒拦 (不随 cretas.demo.enabled 关闭, fail-closed)。
+    @Value("${cretas.demo.factory-ids:DEMO_REST,DEMO_FACTORY2}")
+    private String demoFactoryIdsCsv;
 
     /** 通用短回复集合 */
     private static final Set<String> GENERIC_SHORT_REPLIES = Set.of(
@@ -378,6 +389,8 @@ public class IntentExecutionOrchestrator {
                         .enableThinking(request.getEnableThinking())
                         .thinkingBudget(request.getThinkingBudget())
                         .context(request.getContext())
+                        // P1 读写分块: mode 随短语短路透传, READ 模式在显式意图路径继续生效
+                        .mode(request.getMode())
                         .build();
                 return executeWithExplicitIntent(factoryId, phraseRequest, userId, userRole);
             }
@@ -461,6 +474,8 @@ public class IntentExecutionOrchestrator {
                         .enableThinking(request.getEnableThinking())
                         .thinkingBudget(request.getThinkingBudget())
                         .context(request.getContext())
+                        // P1 读写分块: mode 随短语短路透传, READ 模式在显式意图路径继续生效
+                        .mode(request.getMode())
                         .build();
                 return executeWithExplicitIntent(
                         factoryId, phraseRequest, userId, userRole, factoryPackRoute);
@@ -492,6 +507,8 @@ public class IntentExecutionOrchestrator {
                         .enableThinking(request.getEnableThinking())
                         .thinkingBudget(request.getThinkingBudget())
                         .context(request.getContext())
+                        // P1 读写分块: mode 随短语短路透传, READ 模式在显式意图路径继续生效
+                        .mode(request.getMode())
                         .build();
                 return executeWithExplicitIntent(
                         factoryId, phraseRequest, userId, userRole, factoryPackRoute);
@@ -610,8 +627,9 @@ public class IntentExecutionOrchestrator {
                 matchResult.getMatchMethod(), matchResult.getConfidence());
 
         if (factoryPackConstrained) {
-            if (!aiIntentService.hasPermission(intent.getIntentCode(), userRole)) {
-                return buildNoPermissionResponse(intent);
+            IntentExecuteResponse permissionDenied = checkIntentPermission(intent, userId, userRole);
+            if (permissionDenied != null) {
+                return permissionDenied;
             }
             IntentExecuteResponse factoryPackDecision = applyFactoryPackDecision(
                     factoryPackRoute, intent);
@@ -633,10 +651,18 @@ public class IntentExecutionOrchestrator {
             return buildDishReferenceClarificationResponse(request);
         }
 
-        // 权限检查
-        if (!factoryPackConstrained
-                && !aiIntentService.hasPermission(intent.getIntentCode(), userRole)) {
-            return buildNoPermissionResponse(intent);
+        // 权限检查 (P1: required_permission 权限码优先, 空回落 requiredRoles 旧逻辑)
+        if (!factoryPackConstrained) {
+            IntentExecuteResponse permissionDenied = checkIntentPermission(intent, userId, userRole);
+            if (permissionDenied != null) {
+                return permissionDenied;
+            }
+        }
+
+        // P1 读写分块 §4.4: 咨询 tab (mode=READ) 强制只读 — 写意图不进审批/slot-filling/执行,
+        // 返回跳转提示卡 (防呆 Rule 5: dead-end 改导航)。
+        if ("READ".equalsIgnoreCase(request.getMode()) && writeGuardService.isWriteIntent(intent)) {
+            return buildReadModeWriteBlockedResponse(intent);
         }
 
         // 审批检查
@@ -782,6 +808,9 @@ public class IntentExecutionOrchestrator {
         // 6.9. formattedText 兜底
         applyFormattedTextFallback(response);
 
+        // 6.95. P1 读写分块: 终点统一补 aiMode (前端据此选卡片形态)
+        applyAiModeStamp(response, intent, toolName);
+
         // 7. 缓存
         processResponseCaching(factoryId, request, matchResult, response);
 
@@ -844,14 +873,21 @@ public class IntentExecutionOrchestrator {
 
         AIIntentConfig intent = intentOpt.get();
 
-        if (!aiIntentService.hasPermission(intent.getIntentCode(), userRole)) {
-            return buildNoPermissionResponse(intent);
+        IntentExecuteResponse permissionDenied = checkIntentPermission(intent, userId, userRole);
+        if (permissionDenied != null) {
+            return permissionDenied;
         }
 
         IntentExecuteResponse factoryPackDecision = applyFactoryPackDecision(
                 factoryPackRoute, intent);
         if (factoryPackDecision != null) {
             return factoryPackDecision;
+        }
+
+        // P1 读写分块 §4.4: 咨询 tab (mode=READ) 兜底 — 显式意图/短语短路路径命中写意图同样拦截,
+        // 先于 W0 写确认门 (READ 模式下不该出现确认卡, 只给跳转提示)。
+        if ("READ".equalsIgnoreCase(request.getMode()) && writeGuardService.isWriteIntent(intent)) {
+            return buildReadModeWriteBlockedResponse(intent);
         }
 
         // W0 write-guard (intent-w0) — SITE A: the convergence point all explicit-code / forced /
@@ -874,6 +910,8 @@ public class IntentExecutionOrchestrator {
                     .status("WRITE_CONFIRM_REQUIRED")
                     .message("「" + intent.getIntentName() + "」是写入/修改操作，执行前需要确认。")
                     .requiresApproval(true)
+                    // P1 读写分块: 确认卡属写路径, 显式标记 (早退路径不经 6.95 统一 stamp)
+                    .aiMode("WRITE")
                     .executedAt(java.time.LocalDateTime.now())
                     .build();
         }
@@ -941,6 +979,9 @@ public class IntentExecutionOrchestrator {
         applyResultFormatting(response);
         applyFormattedTextFallback(response);
 
+        // P1 读写分块: 显式意图路径同样终点补 aiMode
+        applyAiModeStamp(response, intent, toolName);
+
         // X1 Part B 修复:短路 / 显式意图路径也持久化对话记忆,供下一轮续接继承。
         persistConversationMemoryForExplicitIntent(factoryId, request, response, intent, userId);
 
@@ -991,6 +1032,23 @@ public class IntentExecutionOrchestrator {
         String intentCode = token.getIntentCode();
 
         try {
+            // P1 读写分块 §4.5 demo 写闸: 演示租户预览照常 (演示价值), 确认执行阶段拦截真实写入。
+            // confirm() 是唯一的 withServerConfirmation 注入点, 此处即全部 AI 写执行的收口。
+            if (isDemoFactory(factoryId)) {
+                previewTokenService.resolveClaim(confirmToken, claimId, false,
+                        "演示环境拦截: 不执行真实写入");
+                String demoMsg = "演示环境不执行真实写入。操作预览已展示——在正式环境中，点击确认后将实际执行该操作。";
+                return IntentExecuteResponse.builder()
+                        .intentRecognized(true)
+                        .intentCode(intentCode)
+                        .status("DEMO_WRITE_BLOCKED")
+                        .message(demoMsg)
+                        .formattedText(demoMsg)
+                        .aiMode("WRITE")
+                        .executedAt(LocalDateTime.now())
+                        .build();
+            }
+
             Optional<AIIntentConfig> intentConfigOpt = aiIntentService.getIntentByCode(factoryId, intentCode);
             if (intentConfigOpt.isEmpty()) {
                 previewTokenService.resolveClaim(
@@ -1879,6 +1937,89 @@ public class IntentExecutionOrchestrator {
                 .metadata(Map.copyOf(metadata))
                 .executedAt(LocalDateTime.now())
                 .build();
+    }
+
+    /**
+     * 意图级权限检查 (P1 读写分块): required_permission 非空 → IntentPermissionGate
+     * (module:action 矩阵, fail-closed, 拒绝时回带缺失权限码); 空 → 保留
+     * aiIntentService.hasPermission 的 requiredRoles 旧逻辑 (兼容期)。
+     *
+     * @return null=放行; 非 null=拒绝响应
+     */
+    private IntentExecuteResponse checkIntentPermission(AIIntentConfig intent, Long userId, String userRole) {
+        String requiredPermission = intent.getRequiredPermission();
+        // intentPermissionGate 为 Spring 常驻 @Component; null 仅出现在裸构造的单测, 回落旧逻辑
+        if (requiredPermission != null && !requiredPermission.isBlank() && intentPermissionGate != null) {
+            IntentPermissionGate.PermissionCheck check =
+                    intentPermissionGate.check(intent, userId, userRole);
+            if (check.isDenied()) {
+                IntentExecuteResponse denied = buildNoPermissionResponse(intent);
+                denied.setRequiredPermission(check.requiredPermission());
+                denied.setAiMode(writeGuardService.isWriteIntent(intent) ? "WRITE" : "READ");
+                // 权限码路径的拒绝文案按码提示 (旧文案基于 requiredRoles, 此路径下可能为 null)
+                String deniedMsg = "您没有权限执行此操作。需要权限: " + check.requiredPermission()
+                        + "，请联系工厂管理员开通。";
+                denied.setMessage(deniedMsg);
+                denied.setFormattedText(deniedMsg);
+                return denied;
+            }
+            return null;
+        }
+        if (!aiIntentService.hasPermission(intent.getIntentCode(), userRole)) {
+            return buildNoPermissionResponse(intent);
+        }
+        return null;
+    }
+
+    /**
+     * P1 读写分块 §4.5: factoryId 是否 demo 租户 (cretas.demo.factory-ids 名单, 逗号分隔)。
+     */
+    private boolean isDemoFactory(String factoryId) {
+        if (factoryId == null || demoFactoryIdsCsv == null || demoFactoryIdsCsv.isBlank()) {
+            return false;
+        }
+        for (String demoId : demoFactoryIdsCsv.split(",")) {
+            if (factoryId.equals(demoId.trim())) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * P1 读写分块: 终点统一补 aiMode (READ|WRITE)。已显式设置的响应 (拦截卡/确认卡/权限卡)
+     * 保持不变; 其余按 WriteGuardService 意图判定, 意图未判写时以已匹配工具兜底。
+     */
+    private void applyAiModeStamp(IntentExecuteResponse response, AIIntentConfig intent, String matchedToolName) {
+        if (response == null || response.getAiMode() != null) {
+            return;
+        }
+        boolean write = intent != null && writeGuardService.isWriteIntent(intent);
+        if (!write && matchedToolName != null && !matchedToolName.isEmpty()) {
+            try {
+                write = toolRegistry.getExecutor(matchedToolName)
+                        .map(writeGuardService::isWriteTool)
+                        .orElse(false);
+            } catch (Exception e) {
+                // aiMode 是展示元数据, 判定失败不阻断响应
+            }
+        }
+        response.setAiMode(write ? "WRITE" : "READ");
+    }
+
+    /**
+     * P1 读写分块 §4.4: 咨询 tab (mode=READ) 命中写意图/写工具时的拦截响应。
+     * aiMode=WRITE 供前端渲染「前往操作页」跳转卡。
+     */
+    private IntentExecuteResponse buildReadModeWriteBlockedResponse(AIIntentConfig intent) {
+        String msg = "这是操作类请求，请切换到【操作】页处理。";
+        return IntentExecuteResponse.builder()
+                .intentRecognized(true).intentCode(intent.getIntentCode())
+                .intentName(intent.getIntentName()).intentCategory(intent.getIntentCategory())
+                .sensitivityLevel(intent.getSensitivityLevel())
+                .status("READ_MODE_WRITE_BLOCKED").message(msg).formattedText(msg)
+                .aiMode("WRITE")
+                .executedAt(LocalDateTime.now()).build();
     }
 
     private IntentExecuteResponse buildNoPermissionResponse(AIIntentConfig intent) {

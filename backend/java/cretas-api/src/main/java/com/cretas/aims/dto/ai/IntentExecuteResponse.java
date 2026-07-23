@@ -176,6 +176,18 @@ public class IntentExecuteResponse {
      */
     private ConfirmableAction confirmableAction;
 
+    // ==================== 读写分块 (P1) ====================
+
+    /**
+     * READ|WRITE — 由 WriteGuardService 判定本次意图/工具是否写操作, 前端据此选卡片形态
+     */
+    private String aiMode;
+
+    /**
+     * PERMISSION_DENIED 时告知缺失的权限码 (module:action), 前端渲染「需要 X 权限」提示
+     */
+    private String requiredPermission;
+
     // ==================== 额外元数据 ====================
 
     /**
