@@ -46,6 +46,9 @@ class InventoryOwnershipRepositoryQueryValidationTest {
         assertThat(material.getAttribute("sourceSalesOrderId")).isNotNull();
         assertThat(material.getAttribute("sourceSalesOrderItemId")).isNotNull();
         assertThat(material.getAttribute("sourceEventKey")).isNotNull();
+        assertThat(material.getAttribute("materialTypeId")).isNotNull();
+        assertThat(material.getAttribute("productTypeId")).isNotNull();
+        assertThat(material.getAttribute("productType")).isNotNull();
 
         var finished = entityManager.getMetamodel().entity(FinishedGoodsBatch.class);
         assertThat(finished.getAttribute("ownership")).isNotNull();
