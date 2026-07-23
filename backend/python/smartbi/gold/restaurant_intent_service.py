@@ -250,8 +250,17 @@ async def tiered_answer(
             return None
         from smartbi.gold.restaurant_ops_router import (
             RESTAURANT_CAPABILITIES_TEXT,
+            RESTAURANT_OOD_TEXT,
             is_capability_question,
+            is_out_of_domain_smalltalk,
         )
+        if is_out_of_domain_smalltalk(query):
+            # 域外闲聊 — 诚实拒答, 绝不编造外部事实 (R20)。
+            return {
+                "kind": "clarification",
+                "answer_text": RESTAURANT_OOD_TEXT,
+                "spec": None,
+            }
         if is_capability_question(query):
             # 零 DB 静态能力自述 — 原文直出, 不走 Answer Contract (R14/G4)。
             return {

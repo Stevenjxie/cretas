@@ -105,7 +105,6 @@ NO_MATCH_QUERIES = [
     # Pure POS wording without a concrete metric should still fall through.
     "今天查一下",
     "畅销品 Top 5",
-    "今天天气怎么样",
     "",
 ]
 
@@ -1780,3 +1779,23 @@ def test_r17c_appended_window_hint_does_not_break_entity_switch():
     assert _r.extract_dish_candidate(combined) == "招牌藤椒味(单人份)"
     assert _r.extract_dish_candidate("那招牌藤椒味呢 毛利") == "招牌藤椒味"
     assert _r.extract_dish_candidate("米饭的销量是多少 最近30天") == "米饭"
+
+
+def test_r20_colloquial_dish_forms():
+    assert _r.extract_dish_candidate("这周米饭卖了多少") == "米饭"
+    assert _r.extract_dish_candidate("米饭赚钱吗") == "米饭"
+    assert _r.extract_dish_candidate("最近亏钱了吗") is None
+    assert _r.match_restaurant_ops("米饭赚钱吗") == "RESTAURANT_OPS_GROSS_MARGIN"
+
+
+def test_r20_store_mention_question_word_guard():
+    assert _r.extract_store_mention("上个月哪家店亏钱了") is None
+    assert _r._NEGATIVE_MARGIN_EXISTENCE_RE.search("上个月哪家店亏钱了")
+    assert _r.match_restaurant_ops("上个月哪家店亏钱了") == "RESTAURANT_OPS_STORE_MARGIN"
+
+
+def test_r20_daypart_and_ood_routes():
+    assert _r.match_restaurant_ops("晚上生意怎么样") == "RESTAURANT_OPS_STAFFING_ADVICE"
+    assert _r.is_out_of_domain_smalltalk("今天天气怎么样")
+    assert not _r.is_out_of_domain_smalltalk("下雨对生意有什么影响")
+    assert _r.match_restaurant_ops("今天天气怎么样") == "RESTAURANT_OPS_CAPABILITIES"

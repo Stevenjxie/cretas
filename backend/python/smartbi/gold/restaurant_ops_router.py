@@ -289,7 +289,7 @@ def _is_explicit_sales_period_comparison(query: str) -> bool:
 
 
 _NEGATIVE_MARGIN_EXISTENCE_RE = re.compile(
-    r"(?:有没有|有无|是否有|存不存在|哪些|哪道|哪个)[^。？?]{0,10}?"
+    r"(?:有没有|有无|是否有|存不存在|哪些|哪道|哪个|哪家)[^。？?]{0,10}?"
     r"(?:毛利(?:率)?[^。？?]{0,4}?(?:负|亏)|负毛利|亏钱|亏损|亏本|赔钱)"
     r"|负毛利|毛利(?:率)?(?:是|为)负"
 )
@@ -366,6 +366,24 @@ def is_capability_question(query: "Optional[str]") -> bool:
     return bool(query) and bool(_CAPABILITY_RE.search(query.strip()))
 
 
+_OOD_SMALLTALK_RE = re.compile(r"天气|下雨|气温|新闻|股票|彩票|星座")
+_OOD_BUSINESS_TOKEN_RE = re.compile(r"生意|营收|营业额|客流|影响|备货|经营|销量|门店")
+
+RESTAURANT_OOD_TEXT = (
+    "天气、新闻这类外部信息不在我的数据范围内，我不会编造答案。\n"
+    "我可以帮您分析门店经营数据，例如：「最近30天营业额」「哪家店业绩最好」"
+    "「米饭的销量」「有没有店在亏损」。"
+)
+
+
+def is_out_of_domain_smalltalk(query: "Optional[str]") -> bool:
+    """纯外部信息闲聊 (天气/新闻) — 带经营关联词的不算 (R20)。"""
+    if not query:
+        return False
+    q = query.strip()
+    return bool(_OOD_SMALLTALK_RE.search(q)) and not bool(_OOD_BUSINESS_TOKEN_RE.search(q))
+
+
 async def resolve_capabilities(smartbi_pool, factory_id: str, **kwargs) -> "OpsAnswer":
     """零 DB 静态能力自述 (餐饮语境) — 修掉 SYSTEM_HELP 死胡同 (R14/G4)。"""
     return OpsAnswer(
@@ -393,6 +411,9 @@ def match_restaurant_ops(query: str) -> Optional[str]:
         return PLAYBOOK_CODE
     # 能力自述 ("你们能做什么") — 此前落 SYSTEM_HELP 无执行器死胡同 (R14/G4)。
     if is_capability_question(q):
+        return "RESTAURANT_OPS_CAPABILITIES"
+    # 域外闲聊 ("今天天气怎么样") — 诚实拒答 + 能力指引, 不编造 (R20)。
+    if is_out_of_domain_smalltalk(q):
         return "RESTAURANT_OPS_CAPABILITIES"
     # 菜品销量排名 ("哪道菜卖得最差") — POS 行直接排, 不再依赖上传报表 (R14)。
     if dish_ranking_direction(q):
@@ -423,6 +444,16 @@ def match_restaurant_ops(query: str) -> Optional[str]:
         and not any(tok in q for tok in ("门店", "分店", "哪家店", "哪个店"))
     ):
         return "RESTAURANT_OPS_SALES_SUMMARY"
+    # 时段生意问 ("晚上生意怎么样") — 此前落工厂仪表盘不适用提示;
+    # 按时段人效诊断是现有最贴近的真实能力 (R20)。
+    if (
+        any(tok in q for tok in ("早上", "上午", "中午", "午市", "下午",
+                                 "晚上", "晚市", "夜宵", "下午茶"))
+        and any(tok in q for tok in ("生意", "营收", "客流", "人效", "情况"))
+        and any(tok in q for tok in ("怎么样", "如何", "好不好", "多少"))
+        and not any(tok in q for tok in ("哪家店", "哪个店", "门店"))
+    ):
+        return "RESTAURANT_OPS_STAFFING_ADVICE"
     # 亏损门店存在性问 ("有没有店在亏损") → 门店毛利存在性直答 (R15/G5)。
     if (
         re.search(r"(?:有没有|有无|是否有|哪些|哪家)[^。]{0,4}(?:门店|店)", q)
@@ -442,7 +473,8 @@ def match_restaurant_ops(query: str) -> Optional[str]:
     # dish data + dish scoping live in the gross-margin resolver. Generic
     # phrasings never produce a candidate, so this cannot steal 排行/整体.
     if (
-        any(tok in q for tok in ("销量", "销售额", "成本", "毛利"))
+        any(tok in q for tok in ("销量", "销售额", "成本", "毛利",
+                                 "卖了", "卖出", "赚钱", "挣钱", "亏钱", "亏本", "赔钱"))
         and extract_dish_candidate(q)
     ):
         return "RESTAURANT_OPS_GROSS_MARGIN"
@@ -578,13 +610,18 @@ _DISH_MULTI_METRIC_RE = re.compile(
 )
 _DISH_QUERY_RE = re.compile(
     r"^[「\"']?(.{1,30}?)[」\"']?(?:的)?"
-    r"(?:毛利率|毛利|销量|销售额|营收|成本率|成本|卖得)"
-    r"(?:是多少|有多少|怎么样|如何|好不好|多少)?[?？。!！]?$"
+    r"(?:毛利率|毛利|销量|销售额|营收|成本率|成本|卖得|卖了|卖出)"
+    r"(?:是多少|有多少|怎么样|如何|好不好|多少|几份)?[?？。!！]?$"
+)
+# 「米饭赚钱吗」— 盈亏动词形态, 实体点名 + 盈亏由毛利判定 (R20)。
+_DISH_PROFIT_RE = re.compile(
+    r"^[「\"']?(.{2,30}?)[」\"']?(?:的)?"
+    r"(?:赚钱|挣钱|亏钱|亏本|赔钱|盈利)(?:吗|了吗|不)?[?？。!！]?$"
 )
 _DISH_LEADING_PRONOUN_RE = re.compile(r"^(?:这个|这道|那个|那道|它|该菜|这|那)+")
 _DISH_LEADING_TIME_RE = re.compile(
     r"^(?:今天|今日|昨天|昨日|前天|本周|这周|上周|本月|这个月|上个月|上月"
-    r"|今年|去年|最近\S{0,4}|近\S{0,4}|过去\S{0,4})+"
+    r"|今年|去年|现在|如今|目前|最近\S{0,4}|近\S{0,4}|过去\S{0,4})+"
 )
 
 
@@ -606,6 +643,8 @@ def _extract_dish_candidate_single(text: str) -> "Optional[str]":
     match = _DISH_MULTI_METRIC_RE.match(text)
     if not match:
         match = _DISH_QUERY_RE.match(text)
+    if not match:
+        match = _DISH_PROFIT_RE.match(text)
     if not match:
         # 省略句实体切换: 「那招牌藤椒味呢」— 无指标词, 实体显式点名,
         # 指标由上文继承 (垃圾候选被下方 generic/reject 表拦截)。
@@ -737,6 +776,7 @@ _STORE_MENTION_STOPWORDS = frozenset({
 _STORE_MENTION_RE = re.compile(r"[一-龥A-Za-z0-9·]{2,24}(?:门店|店)")
 _STORE_MENTION_PREFIX_TRIM = re.compile(
     r"^(?:有没有|有无|是否有|是否|存不存在|是不是|会不会"
+    r"|上个月|上月|本月|这个月|上周|本周|这周|今天|昨天|今年|去年|最近"
     r"|请|帮我|帮忙|查一下|查查|查询|查|看看|看一下|看|分析一下|分析"
     r"|对比|比较|了解|统计|计算|那|这|把|给|在|的|和|与|跟|是|说说|讲讲)+"
 )
@@ -779,6 +819,9 @@ def extract_store_mention(query: Optional[str]) -> Optional[str]:
     for match in _STORE_MENTION_RE.finditer(query):
         candidate = _STORE_MENTION_PREFIX_TRIM.sub("", match.group(0))
         if len(candidate) < 3 or candidate in _STORE_MENTION_STOPWORDS:
+            continue
+        # 疑问词残留 ("上个月哪家店"→"哪家店") 不是店名 (R20)。
+        if any(tok in candidate for tok in ("哪家", "哪个", "哪些", "有没有")):
             continue
         return candidate[:160]
     return None
@@ -2215,6 +2258,21 @@ async def resolve_gross_margin(
             f"营收 ¥{float(dish_scope_row['total_revenue'] or 0):,.2f}、"
             f"覆盖订单 {int(dish_scope_row['bills'] or 0)} 单。\n" + answer
         )
+        # 「米饭赚钱吗」— 盈亏问必须给判定句, 不让用户自己从毛利率倒推 (R20)。
+        if _profit_intent(query_text)[1]:
+            scoped_entry = enriched[0] if enriched else None
+            if scoped_entry and scoped_entry.get("margin_rate") is not None:
+                rate = float(scoped_entry["margin_rate"])
+                verdict = "在赚钱" if rate > 0 else ("基本打平" if rate == 0 else "在亏钱")
+                answer = (
+                    f"结论：按已覆盖成本口径，「{dish_scope_row['dish_name']}」"
+                    f"{window_label}{verdict}（毛利率 {rate * 100:.1f}%）。\n" + answer
+                )
+            else:
+                answer = (
+                    f"结论：「{dish_scope_row['dish_name']}」成本未覆盖，"
+                    "无法判断是否赚钱；请先补齐配方和最近进价。\n" + answer
+                )
     return OpsAnswer(
         code="RESTAURANT_OPS_GROSS_MARGIN",
         title=f"菜品毛利分析 ({window_label})",
