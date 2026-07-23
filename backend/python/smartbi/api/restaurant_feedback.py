@@ -51,7 +51,9 @@ async def post_restaurant_feedback(request: Request, body: RestaurantFeedbackReq
         raise HTTPException(status_code=503, detail="database not available")
 
     query_text = body.query.strip()
-    feedback = "up" if body.value == 1 else "down"
+    # user_feedback 列是 integer (AIQuery 的 logFeedback 同款 1/-1 语义),
+    # 不是文本 — 首版误写 'up'/'down' 被 asyncpg 类型检查当场拒 (2026-07-23)。
+    feedback = body.value
     try:
         async with pool.acquire() as conn:
             await conn.execute(

@@ -73,7 +73,7 @@ async def test_update_hits_latest_capture_row(monkeypatch):
     assert conn.guc_calls and conn.guc_calls[0][1] == ("DEMO_REST",)
     sql, args = conn.fetchval_calls[0]
     assert "UPDATE smart_bi_llm_fallback_log" in sql
-    assert args == ("DEMO_REST", "最近损耗怎么样", "up", None)
+    assert args == ("DEMO_REST", "最近损耗怎么样", 1, None)
 
 
 @pytest.mark.asyncio
@@ -86,7 +86,7 @@ async def test_orphan_insert_when_no_capture_row(monkeypatch):
     sql, args = conn.fetchval_calls[1]
     assert "INSERT INTO smart_bi_llm_fallback_log" in sql
     assert "RESTAURANT_FEEDBACK" in sql
-    assert args == ("今天的招牌菜好吃吗", "DEMO_REST", "down", "答非所问")
+    assert args == ("今天的招牌菜好吃吗", "DEMO_REST", -1, "答非所问")
 
 
 @pytest.mark.asyncio
