@@ -802,6 +802,9 @@ public class IntentExecutionOrchestrator {
         // 6.9. formattedText 兜底
         applyFormattedTextFallback(response);
 
+        // 6.95. P1 读写分块: 终点统一补 aiMode (前端据此选卡片形态)
+        applyAiModeStamp(response, intent, toolName);
+
         // 7. 缓存
         processResponseCaching(factoryId, request, matchResult, response);
 
@@ -901,6 +904,8 @@ public class IntentExecutionOrchestrator {
                     .status("WRITE_CONFIRM_REQUIRED")
                     .message("「" + intent.getIntentName() + "」是写入/修改操作，执行前需要确认。")
                     .requiresApproval(true)
+                    // P1 读写分块: 确认卡属写路径, 显式标记 (早退路径不经 6.95 统一 stamp)
+                    .aiMode("WRITE")
                     .executedAt(java.time.LocalDateTime.now())
                     .build();
         }
@@ -967,6 +972,9 @@ public class IntentExecutionOrchestrator {
 
         applyResultFormatting(response);
         applyFormattedTextFallback(response);
+
+        // P1 读写分块: 显式意图路径同样终点补 aiMode
+        applyAiModeStamp(response, intent, toolName);
 
         // X1 Part B 修复:短路 / 显式意图路径也持久化对话记忆,供下一轮续接继承。
         persistConversationMemoryForExplicitIntent(factoryId, request, response, intent, userId);
@@ -1933,6 +1941,27 @@ public class IntentExecutionOrchestrator {
             return buildNoPermissionResponse(intent);
         }
         return null;
+    }
+
+    /**
+     * P1 读写分块: 终点统一补 aiMode (READ|WRITE)。已显式设置的响应 (拦截卡/确认卡/权限卡)
+     * 保持不变; 其余按 WriteGuardService 意图判定, 意图未判写时以已匹配工具兜底。
+     */
+    private void applyAiModeStamp(IntentExecuteResponse response, AIIntentConfig intent, String matchedToolName) {
+        if (response == null || response.getAiMode() != null) {
+            return;
+        }
+        boolean write = intent != null && writeGuardService.isWriteIntent(intent);
+        if (!write && matchedToolName != null && !matchedToolName.isEmpty()) {
+            try {
+                write = toolRegistry.getExecutor(matchedToolName)
+                        .map(writeGuardService::isWriteTool)
+                        .orElse(false);
+            } catch (Exception e) {
+                // aiMode 是展示元数据, 判定失败不阻断响应
+            }
+        }
+        response.setAiMode(write ? "WRITE" : "READ");
     }
 
     /**

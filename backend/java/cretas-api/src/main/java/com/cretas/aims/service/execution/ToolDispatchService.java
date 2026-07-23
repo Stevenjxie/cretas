@@ -203,6 +203,8 @@ public class ToolDispatchService {
                         .status("WRITE_CONFIRM_REQUIRED")
                         .message("该操作会写入/修改数据，执行前需要确认。")
                         .requiresApproval(true)
+                        // P1 读写分块: 确认卡属写路径, 显式标记 aiMode
+                        .aiMode("WRITE")
                         .executedAt(java.time.LocalDateTime.now())
                         .build();
             }
