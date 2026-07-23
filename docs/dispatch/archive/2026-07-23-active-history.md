@@ -21,3 +21,15 @@
 - **实现/合入**：实现 commit `6c162973ad06aca435fe5e6592dc70203b139d8f`；PR [#1662](https://github.com/Stevenjxie/cretas/pull/1662)；exact main `ddfe3ab226f0cd2bbb154ef6355454b8a4decdd6`。
 - **部署**：`NOT_DEPLOYED`。
 - **安全**：生产业务写入 0；未修改后端 API、计划、批次、报工、结算、库存或 LIUSHANMEN 数据。
+
+## BUG-F006-L3-CREATE-POSTGRES-NULL-TYPE-001 — `merged`
+
+- **Base SHA**：`aa5792f32`
+- **Owner**：`/root`
+- **范围**：MaterialCodeSegment Repository/Service、真实 JPA 执行测试与 dispatch 收尾。
+- **根因**：父级内分类去重 JPQL 对可空 `parentCode` / `excludeId` 使用 `:parameter IS NULL`，Hibernate 在 PostgreSQL 上生成无类型空参数，创建共享 L3 时触发 SQLState `42P18`。
+- **结果**：改用 Spring Data 派生 exists 查询；空父级由持久层生成 `parent_code IS NULL`，可选排除 ID 使用显式 Long 哨兵，保留父级内规范化去重和历史冲突门禁。
+- **验证**：生产 F006 请求稳定复现追踪码 `87A2E84D` 且事务回滚；单次 release Maven 生命周期运行 `MaterialTaxonomyRepositoryQueryValidationTest,MaterialCodeSegmentServiceTest`，22/22 通过并生成可信 JAR manifest；`git diff --check` 通过。
+- **实现/合入**：实现 commit `7288e9ceb`；PR [#1668](https://github.com/Stevenjxie/cretas/pull/1668)。
+- **部署**：`NOT_DEPLOYED`，合入后从 exact `origin/main` 复用相同 Java backend tree 的可信制品发布。
+- **安全**：失败复现没有创建分类；生产写入仅保留发布后的用户授权 F006 测试分类创建与回读。
