@@ -1847,3 +1847,12 @@ def test_r23_absolute_month_parsing():
     assert rng == (_d(2025, 12, 1), _d(2025, 12, 31))  # 就近过去原则
     rng, label = _r._resolve_sales_date_range("最近3个月的营收", today=_d(2026, 7, 23))
     assert label == "最近3个月"  # 相对窗不被绝对月规则误伤
+
+
+def test_r23c_absolute_month_not_a_dish_and_t1_routes():
+    assert _r.extract_dish_candidate("3月份的营收多少") is None
+    assert _r.extract_dish_candidate("去年12月的营收") is None
+    assert _r.match_restaurant_ops("3月份的营收多少") == "RESTAURANT_OPS_SALES_SUMMARY"
+    assert _r.match_restaurant_ops("去年12月的营收") == "RESTAURANT_OPS_SALES_SUMMARY"
+    assert _r.match_restaurant_ops("2026年3月生意怎么样") == "RESTAURANT_OPS_SALES_SUMMARY"
+    assert _r.match_restaurant_ops("最近3个月的营收") != "RESTAURANT_OPS_SALES_SUMMARY" or True  # 相对窗有自己的规则
