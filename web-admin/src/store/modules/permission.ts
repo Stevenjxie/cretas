@@ -504,6 +504,15 @@ export const usePermissionStore = defineStore('permission', () => {
   }
 
   /**
+   * AI 读写分离 (2026-07-23): 是否对任意模块拥有写权限 ('w' 或 'rw')。
+   * AIQuery 双 tab 用它决定「操作」tab 是否渲染 — 纯只读账号只见「咨询」。
+   */
+  function hasAnyWriteAccess(): boolean {
+    return Object.values(currentPermissions.value)
+      .some((level) => level === 'rw' || level === 'w');
+  }
+
+  /**
    * Whether current role may see price fields (mirrors backend
    * `procurement:price:view` permission). Used by list views to hide entire
    * price columns for non-whitelisted roles (warehouse_manager etc).
@@ -542,6 +551,7 @@ export const usePermissionStore = defineStore('permission', () => {
     getAccessibleModules,
     canAccessSmartBI,
     canWriteSmartBI,
+    hasAnyWriteAccess,
     canViewPrice,
     addLoadedRoute,
     clearLoadedRoutes
