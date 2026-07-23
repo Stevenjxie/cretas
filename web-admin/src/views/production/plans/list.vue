@@ -259,6 +259,10 @@ function handleTraceAndCostCommand(command: TraceAndCostCommand, row: TableRow) 
     void handleOpenSummary(row);
     return;
   }
+  if (String(row.status || '').toUpperCase() !== 'COMPLETED') {
+    ElMessage.info('计划结单并形成完工批次后才能进行成品出厂核算；当前可先查看「生产计划汇总」');
+    return;
+  }
   const orderNumberOrId = sourceOrderBusinessNumber(row) || String(row.sourceOrderId || '').trim();
   if (!orderNumberOrId) {
     ElMessage.warning('该计划未关联销售订单，无法按订单打开成品出厂核算');
@@ -268,6 +272,57 @@ function handleTraceAndCostCommand(command: TraceAndCostCommand, row: TableRow) 
     path: '/production-analytics/yield-cost',
     query: { orderId: orderNumberOrId },
   });
+}
+
+type ProductionActionCommand =
+  | 'complete'
+  | 'interim-settle'
+  | 'process-entry'
+  | 'app-reporting'
+  | 'generate-transfer'
+  | 'reverse-interim-settle'
+  | 'stop-production'
+  | 'cancel';
+
+function canShowProductionActions(row: TableRow): boolean {
+  return canWrite.value && isUnfinishedStatus(String(row.status || ''));
+}
+
+function handleProductionActionCommand(command: ProductionActionCommand, row: TableRow) {
+  switch (command) {
+    case 'complete':
+      void handleComplete(row);
+      break;
+    case 'interim-settle':
+      void handleInterimSettle(row);
+      break;
+    case 'process-entry':
+      void openProcessEntry(row);
+      break;
+    case 'app-reporting':
+      void handleCreateBatch(row);
+      break;
+    case 'generate-transfer':
+      void handleGenerateTransfer(row);
+      break;
+    case 'reverse-interim-settle':
+      void handleReverseInterimSettle(row);
+      break;
+    case 'stop-production':
+      void handleStopProduction(row);
+      break;
+    case 'cancel':
+      void handleCancel(row);
+      break;
+    default:
+      ElMessage.error('无法识别的生产计划操作，已停止执行');
+  }
+}
+
+function yieldCostActionLabel(row: TableRow): string {
+  return String(row.status || '').toUpperCase() === 'COMPLETED'
+    ? '成品出厂核算'
+    : '成品出厂核算（结单后）';
 }
 
 function openSourceOrder(row: TableRow) {
@@ -3422,9 +3477,59 @@ function guardProductionPlanAi(params: Record<string, unknown>) {
           </template>
         </el-table-column>
         <el-table-column prop="createdAt" label="创建时间" width="180" :formatter="formatDateTimeCell" />
-        <el-table-column label="操作" width="300" fixed="right" align="center">
+        <el-table-column label="操作" width="380" fixed="right" align="center">
           <template #default="{ row }">
             <el-button type="primary" link size="small" @click="handleViewPlan(row)">查看详情</el-button>
+            <el-dropdown
+              v-if="canShowProductionActions(row)"
+              trigger="click"
+              @command="(command: ProductionActionCommand) => handleProductionActionCommand(command, row)"
+            >
+              <el-button type="success" link size="small">
+                生产操作<el-icon class="el-icon--right"><ArrowDown /></el-icon>
+              </el-button>
+              <template #dropdown>
+                <el-dropdown-menu>
+                  <el-dropdown-item
+                    v-if="row.sourceType !== 'SAFETY_STOCK'"
+                    command="complete"
+                    :disabled="actionLoading"
+                  >核对结单</el-dropdown-item>
+                  <el-dropdown-item
+                    v-else
+                    command="interim-settle"
+                    :disabled="interimSettleLoadingId === String(row.id)"
+                  >生产小结</el-dropdown-item>
+                  <el-dropdown-item command="process-entry">逐道录入</el-dropdown-item>
+                  <el-dropdown-item
+                    v-if="isStartable(row.status)"
+                    command="app-reporting"
+                    :disabled="actionLoading"
+                  >下发 APP 报工</el-dropdown-item>
+                  <el-dropdown-item
+                    v-if="isStartable(row.status) && row.sourceType !== 'SAFETY_STOCK'"
+                    command="generate-transfer"
+                    :disabled="actionLoading"
+                  >生成调拨单</el-dropdown-item>
+                  <el-dropdown-item
+                    v-if="row.sourceType === 'SAFETY_STOCK'"
+                    command="reverse-interim-settle"
+                    divided
+                    :disabled="reverseInterimSettleLoadingId === String(row.id)"
+                  >申请撤销小结</el-dropdown-item>
+                  <el-dropdown-item
+                    v-if="row.sourceType === 'SAFETY_STOCK'"
+                    command="stop-production"
+                    :disabled="stopProductionLoadingId === String(row.id)"
+                  >停产</el-dropdown-item>
+                  <el-dropdown-item
+                    command="cancel"
+                    divided
+                    :disabled="actionLoading"
+                  >取消计划</el-dropdown-item>
+                </el-dropdown-menu>
+              </template>
+            </el-dropdown>
             <el-dropdown
               trigger="click"
               @command="(command: ProductionDocumentCommand) => handleProductionDocumentCommand(command, row)"
@@ -3461,9 +3566,11 @@ function guardProductionPlanAi(params: Record<string, unknown>) {
                   <el-dropdown-item command="trace">单据追溯</el-dropdown-item>
                   <el-dropdown-item
                     command="yield-cost"
-                    :disabled="String(row.status || '').toUpperCase() !== 'COMPLETED'"
-                  >成品出厂核算</el-dropdown-item>
-                  <el-dropdown-item command="summary">生产计划汇总</el-dropdown-item>
+                    :title="String(row.status || '').toUpperCase() === 'COMPLETED'
+                      ? '查看该批次的出成率与成本核算'
+                      : '计划结单并形成完工批次后开放；当前可查看生产计划汇总'"
+                  >{{ yieldCostActionLabel(row) }}</el-dropdown-item>
+                  <el-dropdown-item command="summary">生产计划汇总（随时查看）</el-dropdown-item>
                 </el-dropdown-menu>
               </template>
             </el-dropdown>

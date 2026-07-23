@@ -764,3 +764,22 @@
 - **Commit/PR/main 状态**：实现 commit `0837a475c134094e60604d82afbb9f4c3a21aa91`；PR [#1637](https://github.com/Stevenjxie/cretas/pull/1637)；exact merged/deployed main `da476ecdc7a946b1d6e144d8ed0f2e2566de25c2`。
 - **部署状态**：`DEPLOYED`；生产版本 `v20260722_232844`，JAR MD5 `36a24eab818a2cc0ae0ffa2b900e030d`，active `blue/10010`；5/5 切流观察、systemd/端口、直连与网关健康通过。
 - **回归状态**：`READY_FOR_SAME_RECORD_RESUME`；部署后 query-only 再确认计划仍为 0 行、订单仍为 `FINANCE_APPROVED`。测试 Chat 仅从同一 `SO-20260722-0002` / item 728 继续，不得重建订单。
+
+### BUG-F006-PROD-PLAN-ACTION-REGRESSION-001 — 7 月 20 日操作区重构误删生产动作
+
+- **发现阶段/时间/页面/步骤**：F006 生产计划列表人工回归，2026-07-23；操作列只剩“查看详情 / 生产单据 / 追溯与核算”，未完成计划找不到核对结单、存货生产小结、逐道录入等动作，成品出厂核算又被无解释置灰。
+- **证据路径**：`D:/Temp/codex-clipboard-ef2d80fd-f73f-4ecb-94a3-5e37ac13ced2.png`、`D:/Temp/codex-clipboard-50a60499-8599-447f-9d94-cc7b265b845d.png`、`D:/Temp/codex-clipboard-8b75a4ec-867c-4292-b1cc-5169695f13d8.png`。
+- **期望/实际/业务影响**：信息架构收拢的正确目标是减少平铺按钮，并让“已完成/已入库计划”只显示只读动作；它不等于删除未完成计划的状态驱动生产动作。实际重构把完成态规则套到整张表，普通计划无法从列表核对结单，存货生产无法小结，逐道录入/APP 报工/调拨/停产/取消也全部失去入口；核心生产闭环被 UI 阻断。
+- **根因**：`bb1753001722b67e09a053a869efddf3bf473e55` 将旧操作列整体替换成三个“只读组”，但没有先建立 `plan status × source type × permission × responsibility` 动作矩阵。旧 handler、loading state、确认框和后端契约仍保留，模板入口却被全部删除。更严重的是 `productionPlanInformationArchitecture.spec.ts` 明确断言“只能有三个只读组”且断言不得出现“核对结单/小结/确认入库/取消”，把错误实现固化成测试真值；复盘中“只收拢入口，不删除功能”的结论因此与真实代码不符。
+- **修复**：保留“查看详情 / 生产单据 / 追溯与核算”语义分组；仅对有写权限且状态为 `PENDING/IN_PROGRESS` 的行增加“生产操作”分组。普通计划恢复核对结单，存货生产恢复生产小结，并恢复逐道录入、可启动时 APP 报工/调拨、存货生产撤销小结/停产和取消计划。完成态不显示生产写动作；仓储确认入库与清账不恢复到生产列表，继续遵守仓储职责边界。成品出厂核算在未结单时显示“结单后”并给出可理解提示，生产计划汇总明确标注“随时查看”。
+- **同因扫描结论**：
+  - `生产单据` 的工单/领料单/配料单/单文件 PDF 入口仍完整，属于正确收拢；
+  - `追溯与核算` 的单据追溯和计划汇总 handler 完整，问题是核算禁用缺少解释；
+  - 顶部导入导出与选中后批量打印按既定 IA 工作，没有同类业务入口丢失；
+  - `handleWarehouseReceipt/handleTransitClearing` 目前仅剩无入口的前端残留，但按后续职责模型不应恢复到生产列表，列为独立 P2 清理候选，不在本次扩大删除范围；
+  - 存货生产已形成阶段完工批次但计划仍 `IN_PROGRESS` 时的“计划级精确跳转到对应批次核算”缺少 plan→finished-batch 查询契约，当前仍先通过计划汇总查看，后续如要开放需补后端精确 identity，不能用“全厂最近批次”猜测。
+- **修改文件**：`web-admin/src/views/production/plans/list.vue`、`productionPlanInformationArchitecture.spec.ts`、本复盘与 dispatch 台账。
+- **测试**：目标 Vitest `productionPlanInformationArchitecture.spec.ts` 6/6 PASS；Web `build:check` PASS（`vue-tsc -b` + Vite production build，4457 modules）。测试覆盖普通计划、存货生产、完成态只读、仓储动作不回流、核算门禁说明与随时可看的计划汇总。
+- **Commit/PR/main 状态**：实现 commit `88733170c51eb42f95f6e758e14c83122bccff05`，分支 `codex/prodplan-action-regression-20260723`；PR/main 待本条收尾回填。
+- **部署状态**：`NOT_DEPLOYED`。
+- **回归状态**：`CODE_FIXED_TARGET_TEST_PASS`；生产业务 mutation=0，未修改任何计划、报工、库存或 LIUSHANMEN 数据。
