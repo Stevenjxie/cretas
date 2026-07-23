@@ -2558,7 +2558,9 @@ async def _fetch_live_gold_overrides(factory_id: str) -> dict | None:
         margin_pct = (covered_rev - covered_cost) / covered_rev * 100.0
         food_cost_pct = covered_cost / covered_rev * 100.0
         return {
-            "foodCostRatio": round(food_cost_pct, 1),
+            # foodCostRatio 语义是 0-1 比率 (_owner_pct 会 ×100), 塞百分数
+            # 曾显示成 2080% (R29b 实测)。grossMarginPct 是百分数直显。
+            "foodCostRatio": round(food_cost_pct / 100.0, 4),
             "grossMarginPct": round(margin_pct, 1),
             "costCoveragePct": round(float(coverage) * 100.0, 1) if coverage is not None else None,
         }
