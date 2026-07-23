@@ -98,6 +98,7 @@ import {
   plannedQuantityForPayload,
   plannedQuantityRequired,
 } from './productionPlanQuantity';
+import { finishedGoodPlanOptions } from './productionPlanProductOptions';
 
 const router = useRouter();
 const route = useRoute();
@@ -553,16 +554,9 @@ const planForm = ref({
   resolutionMode: '' as '' | PlanWorkflowResolutionMode,
 });
 const productTypes = ref<TableRow[]>([]);
-// raw-centric 多SKU: 「生产成品」多选下拉只列成品/半成品, 过滤掉原料/包材/调味品。
-// null/空 category 视为遗留产品, 保留可选 (不因缺 category 而被误伤隐藏)。
-const RAW_WORKFLOW_EXCLUDED_CATEGORIES = new Set(['RAW_MATERIAL', 'PACKAGING', 'SEASONING']);
-const finishedGoodProductTypes = computed(() =>
-  productTypes.value.filter((p: TableRow) => {
-    const cat = p.productCategory;
-    if (cat === null || cat === undefined || cat === '') return true;
-    return !RAW_WORKFLOW_EXCLUDED_CATEGORIES.has(String(cat));
-  })
-);
+// 生产计划只能以明确标记为 FINISHED_PRODUCT 的 SKU 为目标。半成品和分类缺失
+// 的历史记录都不能靠名称或单位猜测后进入候选，避免误建生产计划。
+const finishedGoodProductTypes = computed(() => finishedGoodPlanOptions(productTypes.value));
 const bomProcesses = ref<string[]>([]);
 // A3: full work-process objects for read-only display (ordered by processOrder)
 const productWorkProcessList = ref<TableRow[]>([]);
