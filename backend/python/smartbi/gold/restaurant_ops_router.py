@@ -439,6 +439,15 @@ def match_restaurant_ops(query: str) -> Optional[str]:
         and not any(tok in q for tok in ("哪家店", "哪个店", "门店", "趋势", "走势"))
     ):
         return "RESTAURANT_OPS_SALES_SUMMARY"
+    # 绝对月份营收问 ("3月份的营收"/"去年12月生意怎么样") — 解析器已支持
+    # 日历月 (R23), T1 确定性直连, 不再依赖 T3 或落趋势 resolver 吞窗 (R23c)。
+    if (
+        re.search(r"(?:20\d{2}年|去年|今年)?(?:1[0-2]|0?[1-9]|十一|十二|[一二三四五六七八九十])月份?", q)
+        and "个月" not in q
+        and any(tok in q for tok in ("营收", "营业额", "销售额", "流水", "生意", "卖了多少", "多少钱"))
+        and not any(tok in q for tok in ("趋势", "走势", "对比", "相比", "环比", "同比", "哪家店", "哪个店"))
+    ):
+        return "RESTAURANT_OPS_SALES_SUMMARY"
     # 同比增长问 ("今年比去年增长多少") — 此前落 Java 指标查询 slot-filling,
     # 还把 UPPER_SNAKE 指标码直接问用户 (R15)。
     if (
@@ -631,7 +640,8 @@ _DISH_PROFIT_RE = re.compile(
 _DISH_LEADING_PRONOUN_RE = re.compile(r"^(?:这个|这道|那个|那道|它|该菜|这|那)+")
 _DISH_LEADING_TIME_RE = re.compile(
     r"^(?:今天|今日|昨天|昨日|前天|本周|这周|上周|本月|这个月|上个月|上月"
-    r"|今年|去年|现在|如今|目前|最近\S{0,4}|近\S{0,4}|过去\S{0,4})+"
+    r"|今年|去年|现在|如今|目前|最近\S{0,4}|近\S{0,4}|过去\S{0,4}"
+    r"|(?:20\d{2}年)?(?:1[0-2]|0?[1-9]|十一|十二|[一二三四五六七八九十])月份?)+"
 )
 
 
