@@ -200,6 +200,11 @@ public class IntentExecutionOrchestrator {
     @Lazy
     private com.cretas.aims.service.intent.IntentConfigManagementService configService;
 
+    // P1 读写分块: 意图级权限门。required_permission 非空 → module:action 矩阵 (与 HTTP 层同源,
+    // fail-closed); 空 → 回落 requiredRoles 旧逻辑 (兼容期)。见 checkIntentPermission()。
+    @Autowired
+    private IntentPermissionGate intentPermissionGate;
+
     // ===== Route counters =====
     private final AtomicLong branchToolDirect = new AtomicLong();
     private final AtomicLong branchSkill = new AtomicLong();
@@ -610,8 +615,9 @@ public class IntentExecutionOrchestrator {
                 matchResult.getMatchMethod(), matchResult.getConfidence());
 
         if (factoryPackConstrained) {
-            if (!aiIntentService.hasPermission(intent.getIntentCode(), userRole)) {
-                return buildNoPermissionResponse(intent);
+            IntentExecuteResponse permissionDenied = checkIntentPermission(intent, userId, userRole);
+            if (permissionDenied != null) {
+                return permissionDenied;
             }
             IntentExecuteResponse factoryPackDecision = applyFactoryPackDecision(
                     factoryPackRoute, intent);
@@ -633,10 +639,12 @@ public class IntentExecutionOrchestrator {
             return buildDishReferenceClarificationResponse(request);
         }
 
-        // 权限检查
-        if (!factoryPackConstrained
-                && !aiIntentService.hasPermission(intent.getIntentCode(), userRole)) {
-            return buildNoPermissionResponse(intent);
+        // 权限检查 (P1: required_permission 权限码优先, 空回落 requiredRoles 旧逻辑)
+        if (!factoryPackConstrained) {
+            IntentExecuteResponse permissionDenied = checkIntentPermission(intent, userId, userRole);
+            if (permissionDenied != null) {
+                return permissionDenied;
+            }
         }
 
         // 审批检查
@@ -844,8 +852,9 @@ public class IntentExecutionOrchestrator {
 
         AIIntentConfig intent = intentOpt.get();
 
-        if (!aiIntentService.hasPermission(intent.getIntentCode(), userRole)) {
-            return buildNoPermissionResponse(intent);
+        IntentExecuteResponse permissionDenied = checkIntentPermission(intent, userId, userRole);
+        if (permissionDenied != null) {
+            return permissionDenied;
         }
 
         IntentExecuteResponse factoryPackDecision = applyFactoryPackDecision(
@@ -1879,6 +1888,33 @@ public class IntentExecutionOrchestrator {
                 .metadata(Map.copyOf(metadata))
                 .executedAt(LocalDateTime.now())
                 .build();
+    }
+
+    /**
+     * 意图级权限检查 (P1 读写分块): required_permission 非空 → IntentPermissionGate
+     * (module:action 矩阵, fail-closed, 拒绝时回带缺失权限码); 空 → 保留
+     * aiIntentService.hasPermission 的 requiredRoles 旧逻辑 (兼容期)。
+     *
+     * @return null=放行; 非 null=拒绝响应
+     */
+    private IntentExecuteResponse checkIntentPermission(AIIntentConfig intent, Long userId, String userRole) {
+        String requiredPermission = intent.getRequiredPermission();
+        // intentPermissionGate 为 Spring 常驻 @Component; null 仅出现在裸构造的单测, 回落旧逻辑
+        if (requiredPermission != null && !requiredPermission.isBlank() && intentPermissionGate != null) {
+            IntentPermissionGate.PermissionCheck check =
+                    intentPermissionGate.check(intent, userId, userRole);
+            if (check.isDenied()) {
+                IntentExecuteResponse denied = buildNoPermissionResponse(intent);
+                denied.setRequiredPermission(check.requiredPermission());
+                denied.setAiMode(writeGuardService.isWriteIntent(intent) ? "WRITE" : "READ");
+                return denied;
+            }
+            return null;
+        }
+        if (!aiIntentService.hasPermission(intent.getIntentCode(), userRole)) {
+            return buildNoPermissionResponse(intent);
+        }
+        return null;
     }
 
     private IntentExecuteResponse buildNoPermissionResponse(AIIntentConfig intent) {
