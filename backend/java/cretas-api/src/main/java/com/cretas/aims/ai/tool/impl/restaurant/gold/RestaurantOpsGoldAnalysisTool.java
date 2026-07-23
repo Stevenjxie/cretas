@@ -2,6 +2,7 @@ package com.cretas.aims.ai.tool.impl.restaurant.gold;
 
 import com.cretas.aims.ai.dto.ToolCall;
 import com.cretas.aims.ai.tool.AbstractBusinessTool;
+import com.cretas.aims.ai.tool.impl.restaurant.TieredIntentDelegate;
 import com.cretas.aims.client.GoldFinanceClient;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
@@ -97,11 +98,24 @@ public class RestaurantOpsGoldAnalysisTool extends AbstractBusinessTool {
         return objectMapper.writeValueAsString(unavailableEnvelope);
     }
 
+    // R21: 最后一个未装 tiered gate 的旧餐饮工具 — phrase shortcut 路径绕过
+    // 反转入口直达此处, general-analysis 在部署熔断窗内会吞答案。装门后与
+    // 其余三个旧工具一致, ATTEMPTED 去重保证不双调。
+    @Autowired(required = false)
+    private TieredIntentDelegate tieredDelegate;
+
     @Override
     protected Map<String, Object> doExecute(
             String factoryId,
             Map<String, Object> params,
             Map<String, Object> context) throws Exception {
+        if (tieredDelegate != null) {
+            Map<String, Object> delegated =
+                    tieredDelegate.tryDelegate(factoryId, params, context, getToolName());
+            if (delegated != null) {
+                return delegated;
+            }
+        }
         String question = firstNonBlank(
                 asString(params.get("userInput")),
                 asString(params.get("query")),
