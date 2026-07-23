@@ -878,8 +878,10 @@ def extract_store_mention(query: Optional[str]) -> Optional[str]:
         candidate = _STORE_MENTION_PREFIX_TRIM.sub("", match.group(0))
         if len(candidate) < 3 or candidate in _STORE_MENTION_STOPWORDS:
             continue
-        # 疑问词残留 ("上个月哪家店"→"哪家店") 不是店名 (R20)。
-        if any(tok in candidate for tok in ("哪家", "哪个", "哪些", "有没有")):
+        # 疑问词/排名词残留 ("上个月哪家店"/"客单价最高的店") 不是店名 (R20/R27)。
+        if any(tok in candidate for tok in ("哪家", "哪个", "哪些", "有没有",
+                                            "最高", "最低", "最好", "最差",
+                                            "排名", "排行", "客单价", "营收")):
             continue
         return candidate[:160]
     return None
