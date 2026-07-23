@@ -74,7 +74,10 @@ def build_prompt(
                 examples = []
         except Exception:
             examples = []
-        example_str = " / ".join(str(e) for e in examples[:5]) if examples else ""
+        # R30 token 裁剪: 5 例句是候选目录的最大 token 头 (几百条 × 每条
+        # ~180 字符), 2 条足以体现问法形态 — 实测 Stage 8 prompt 11.5k tokens
+        # 的主要来源。
+        example_str = " / ".join(str(e) for e in examples[:2]) if examples else ""
         line = f"{idx}. {code} ({name}): {desc}"
         if example_str:
             line += f" [例: {example_str}]"

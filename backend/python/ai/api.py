@@ -110,6 +110,15 @@ async def _do_match(
         factoryId=body.factoryId,
         businessType=body.businessType,
     )
+    if (body.businessType or "").upper() == "RESTAURANT":
+        # R30: RESTAURANT_OPS_* 分析家族已由 tiered-first 反转接管 —
+        # LLM 候选里保留它们只会制造误匹配面 (审计 S 类: 该家族描述互相
+        # 0.4-0.7 相似)。剔除后候选更小更准; delegate:false 的兜底路由
+        # 走 phrase shortcut / EXACT / 关键词层, 不依赖 LLM 候选。
+        visible_rows = [
+            r for r in visible_rows
+            if not str(r.get("intent_code") or "").startswith("RESTAURANT_OPS_")
+        ]
 
     # options has defaults via Field(default_factory) — always non-None.
     # minConfidence default comes from the request envelope (0.70) which
