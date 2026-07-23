@@ -95,10 +95,25 @@ export function mergeSystemUnitSources(
 }
 
 const COMMON_DISPLAY_ALIASES: SystemUnit[] = [
-  { unitCode: 'pcs:只', unitName: '只', unitSymbol: '只', aliasesJson: ['件', '个', 'pcs'], category: 'COUNT', isActive: true, isSystem: true },
-  { unitCode: 'kg:公斤', unitName: '公斤', unitSymbol: 'kg', aliasesJson: ['千克', 'kg'], category: 'WEIGHT', isActive: true, isSystem: true },
-  { unitCode: 'g:克', unitName: '克', unitSymbol: 'g', aliasesJson: ['g'], category: 'WEIGHT', isActive: true, isSystem: true },
+  { unitCode: 'pcs', unitName: '只', unitSymbol: '只', aliasesJson: ['件', '个', 'pcs'], category: 'COUNT', isActive: true, isSystem: true },
+  { unitCode: 'kg', unitName: '公斤', unitSymbol: 'kg', aliasesJson: ['千克', 'kg'], category: 'WEIGHT', isActive: true, isSystem: true },
+  { unitCode: 'g', unitName: '克', unitSymbol: 'g', aliasesJson: ['g'], category: 'WEIGHT', isActive: true, isSystem: true },
 ];
+
+const LEGACY_COMPOSITE_UNIT_CODES: Record<string, string> = {
+  'pcs:只': 'pcs',
+  'kg:公斤': 'kg',
+  'g:克': 'g',
+};
+
+/**
+ * 2026-07 以前的前端 fallback 曾把「canonical:中文名」误当成 unitCode。
+ * 读取时收敛为真正 canonical，避免编辑旧 SKU 时再次提交 pcs:只。
+ */
+export function canonicalSystemUnitCode(value?: string | null): string {
+  const raw = (value || '').normalize('NFKC').trim();
+  return LEGACY_COMPOSITE_UNIT_CODES[raw.toLocaleLowerCase()] || raw;
+}
 
 export interface CreateSystemUnitPayload {
   unitCode: string;
@@ -141,7 +156,7 @@ export function createSystemUnit(factoryId: string, payload: CreateSystemUnitPay
 }
 
 export function normalizeUnitIdentity(value?: string | null): string {
-  return (value || '').normalize('NFKC').trim().toLocaleLowerCase().replace(/\s+/g, '');
+  return canonicalSystemUnitCode(value).toLocaleLowerCase().replace(/\s+/g, '');
 }
 
 export function unitAliases(unit: SystemUnit): string[] {

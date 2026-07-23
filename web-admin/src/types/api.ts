@@ -109,6 +109,8 @@ export interface ProductType {
   unitPrice?: number;
   description?: string;
   isActive: boolean;
+  createdAt?: string;
+  updatedAt?: string;
 }
 
 export interface MaterialType {

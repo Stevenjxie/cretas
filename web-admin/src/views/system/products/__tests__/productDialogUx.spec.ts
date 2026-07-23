@@ -14,11 +14,21 @@ describe('SKU editor dialog UX', () => {
     expect(source).toContain('aria-label="上移工序"');
     expect(source).toContain('aria-label="下移工序"');
     expect(source).toContain('aria-label="移除工序"');
-    expect(source).toContain('label="销售单位 / 净含量"');
+    expect(source).toContain('label="基础规格"');
     expect(source).toContain('class="sku-measure-row"');
+    expect(source).toContain('class="sku-measure-field"');
+    expect(source).toContain('class="net-content-expression"');
+    expect(source).toContain("每 1 {{ displayUnit(formData.unit) || '销售单位' }}");
+    expect(source).toContain(':show-symbol="false"');
     expect(source).toContain('v-model="netContentUnit"');
     expect(source).toContain('g/kg/ml/L');
     expect(source).not.toContain('标准单位换算（1${formData.unit');
+  });
+
+  it('shows the authoritative creation timestamp returned by the SKU list API', () => {
+    expect(source).toContain("import { formatDateTime } from '@/utils/dateFormat';");
+    expect(source).toContain('prop="createdAt" label="创建时间"');
+    expect(source).toContain('{{ formatDateTime(row.createdAt) }}');
   });
 
   it('keeps semi-finished base units editable and exposes a real preview-first import flow', () => {

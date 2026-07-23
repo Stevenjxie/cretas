@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  canonicalSystemUnitCode,
   defaultUnitCode,
   findDuplicateUnit,
   mergeSystemUnitSources,
@@ -22,6 +23,14 @@ describe('system unit identity', () => {
   it('normalizes full-width text and creates a valid compact default code', () => {
     expect(normalizeUnitIdentity(' ＫＧ ')).toBe('kg');
     expect(defaultUnitCode(' 托 盘 ')).toBe('托_盘');
+  });
+
+  it('repairs historic composite display codes without changing valid custom codes', () => {
+    expect(canonicalSystemUnitCode('pcs:只')).toBe('pcs');
+    expect(canonicalSystemUnitCode('kg:公斤')).toBe('kg');
+    expect(canonicalSystemUnitCode('g:克')).toBe('g');
+    expect(canonicalSystemUnitCode('CUSTOM:TRAY')).toBe('CUSTOM:TRAY');
+    expect(normalizeUnitIdentity('pcs:只')).toBe('pcs');
   });
 
   it('keeps box=盒 and case=箱 distinct when a historic global row mislabeled box as 箱', () => {
