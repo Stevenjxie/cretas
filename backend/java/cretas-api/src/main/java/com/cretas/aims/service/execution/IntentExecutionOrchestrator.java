@@ -383,6 +383,8 @@ public class IntentExecutionOrchestrator {
                         .enableThinking(request.getEnableThinking())
                         .thinkingBudget(request.getThinkingBudget())
                         .context(request.getContext())
+                        // P1 读写分块: mode 随短语短路透传, READ 模式在显式意图路径继续生效
+                        .mode(request.getMode())
                         .build();
                 return executeWithExplicitIntent(factoryId, phraseRequest, userId, userRole);
             }
@@ -466,6 +468,8 @@ public class IntentExecutionOrchestrator {
                         .enableThinking(request.getEnableThinking())
                         .thinkingBudget(request.getThinkingBudget())
                         .context(request.getContext())
+                        // P1 读写分块: mode 随短语短路透传, READ 模式在显式意图路径继续生效
+                        .mode(request.getMode())
                         .build();
                 return executeWithExplicitIntent(
                         factoryId, phraseRequest, userId, userRole, factoryPackRoute);
@@ -497,6 +501,8 @@ public class IntentExecutionOrchestrator {
                         .enableThinking(request.getEnableThinking())
                         .thinkingBudget(request.getThinkingBudget())
                         .context(request.getContext())
+                        // P1 读写分块: mode 随短语短路透传, READ 模式在显式意图路径继续生效
+                        .mode(request.getMode())
                         .build();
                 return executeWithExplicitIntent(
                         factoryId, phraseRequest, userId, userRole, factoryPackRoute);
@@ -645,6 +651,12 @@ public class IntentExecutionOrchestrator {
             if (permissionDenied != null) {
                 return permissionDenied;
             }
+        }
+
+        // P1 读写分块 §4.4: 咨询 tab (mode=READ) 强制只读 — 写意图不进审批/slot-filling/执行,
+        // 返回跳转提示卡 (防呆 Rule 5: dead-end 改导航)。
+        if ("READ".equalsIgnoreCase(request.getMode()) && writeGuardService.isWriteIntent(intent)) {
+            return buildReadModeWriteBlockedResponse(intent);
         }
 
         // 审批检查
@@ -861,6 +873,12 @@ public class IntentExecutionOrchestrator {
                 factoryPackRoute, intent);
         if (factoryPackDecision != null) {
             return factoryPackDecision;
+        }
+
+        // P1 读写分块 §4.4: 咨询 tab (mode=READ) 兜底 — 显式意图/短语短路路径命中写意图同样拦截,
+        // 先于 W0 写确认门 (READ 模式下不该出现确认卡, 只给跳转提示)。
+        if ("READ".equalsIgnoreCase(request.getMode()) && writeGuardService.isWriteIntent(intent)) {
+            return buildReadModeWriteBlockedResponse(intent);
         }
 
         // W0 write-guard (intent-w0) — SITE A: the convergence point all explicit-code / forced /
@@ -1915,6 +1933,21 @@ public class IntentExecutionOrchestrator {
             return buildNoPermissionResponse(intent);
         }
         return null;
+    }
+
+    /**
+     * P1 读写分块 §4.4: 咨询 tab (mode=READ) 命中写意图/写工具时的拦截响应。
+     * aiMode=WRITE 供前端渲染「前往操作页」跳转卡。
+     */
+    private IntentExecuteResponse buildReadModeWriteBlockedResponse(AIIntentConfig intent) {
+        String msg = "这是操作类请求，请切换到【操作】页处理。";
+        return IntentExecuteResponse.builder()
+                .intentRecognized(true).intentCode(intent.getIntentCode())
+                .intentName(intent.getIntentName()).intentCategory(intent.getIntentCategory())
+                .sensitivityLevel(intent.getSensitivityLevel())
+                .status("READ_MODE_WRITE_BLOCKED").message(msg).formattedText(msg)
+                .aiMode("WRITE")
+                .executedAt(LocalDateTime.now()).build();
     }
 
     private IntentExecuteResponse buildNoPermissionResponse(AIIntentConfig intent) {

@@ -163,6 +163,26 @@ public class ToolDispatchService {
                         .build();
             }
 
+            // P1 读写分块 §4.4 (SITE B 兜底): 咨询 tab (mode=READ) 路由到写工具/写意图 → 不执行,
+            // 返回跳转提示卡。confirm() 二阶段构造的内部请求不带 mode, 不受影响。
+            if ("READ".equalsIgnoreCase(request.getMode())
+                    && (writeGuardService.isWriteTool(tool)
+                        || (intent != null && writeGuardService.isWriteIntent(intent)))) {
+                log.info("READ 模式拦截写工具 (tool-dispatch): tool={}", tool.getToolName());
+                String readBlockedMsg = "这是操作类请求，请切换到【操作】页处理。";
+                return IntentExecuteResponse.builder()
+                        .intentRecognized(true)
+                        .intentCode(intent != null ? intent.getIntentCode() : null)
+                        .intentName(intent != null ? intent.getIntentName() : null)
+                        .intentCategory(intent != null ? intent.getIntentCategory() : null)
+                        .status("READ_MODE_WRITE_BLOCKED")
+                        .message(readBlockedMsg)
+                        .formattedText(readBlockedMsg)
+                        .aiMode("WRITE")
+                        .executedAt(LocalDateTime.now())
+                        .build();
+            }
+
             // W0 write-guard (intent-w0) — SITE B: block a write tool unless safely previewed or confirmed.
             // Runs BEFORE the role-permission check so a misroute to a destructive operation cannot
             // silently execute. NOT conditioned on forceExecute (the multi-intent bypass flag).
