@@ -2557,6 +2557,12 @@ public class IntentExecutionOrchestrator {
         }
     }
 
+    // R20: 域外闲聊词 (天气/新闻/股票/彩票) 与经营关联词。
+    private static final java.util.regex.Pattern RESTAURANT_OOD_SMALLTALK_PATTERN =
+            java.util.regex.Pattern.compile("天气|下雨|气温|新闻|股票|彩票|星座");
+    private static final java.util.regex.Pattern RESTAURANT_OOD_BUSINESS_TOKEN_PATTERN =
+            java.util.regex.Pattern.compile("生意|营收|营业额|客流|影响|备货|经营|销量|门店");
+
     boolean shouldRouteRestaurantOwnerAction(String factoryId, String userInput, Map<String, Object> context) {
         if (userInput == null || userInput.isBlank()) {
             return false;
@@ -2569,6 +2575,13 @@ public class IntentExecutionOrchestrator {
         if (isPureRestaurantReviewRemedyQuestion(normalizedInput)
                 || isPlainRestaurantReadQuestion(normalizedInput)
                 || isRestaurantAnalyticalReadQuestion(normalizedInput)) {
+            return false;
+        }
+        // R20: 纯外部信息闲聊 ("今天天气怎么样") 不进 owner-action — 该路径
+        // 曾编造"暴雨转多云"等天气事实 (违反零编造)。带经营词的天气问
+        // ("下雨对生意有什么影响") 仍放行。放行后由 tiered 反转给域外拒答。
+        if (RESTAURANT_OOD_SMALLTALK_PATTERN.matcher(userInput).find()
+                && !RESTAURANT_OOD_BUSINESS_TOKEN_PATTERN.matcher(userInput).find()) {
             return false;
         }
         if (hasOwnerActionContinuationContext(context)) {
