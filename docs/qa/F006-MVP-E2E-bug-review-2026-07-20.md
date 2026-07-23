@@ -846,3 +846,16 @@
 - **修复**：用可聚焦 tooltip 容器包裹禁用按钮；未预览时提示“请先预览比对，确认导入前需核对本次数据”，处理中和无可导入数据分别说明原因。所有影响预览的输入变化都会清空旧 `bulkPreview`，避免用户修改数据后沿用过期对比结果。
 - **测试**：`openingInventoryPreviewHint.source.spec.ts` 覆盖 hover/focus 提示、完成预览后解除禁用、输入变化使预览失效，共 `3 tests` PASS；不执行任何库存 mutation。
 - **部署状态**：`DEPLOY_AUTHORIZED_AWAITING_RELEASE`。
+
+### BUG-F006-R4-TRANSFER-OA-APPROVAL-001 — 调拨审批未接入统一 OA
+
+- **现场/影响**：调拨列表的草稿行只有“详情”，缺少明确提交动作；调拨详情在 `REQUESTED` 状态直接暴露“审批通过/驳回”，形成调拨模块自己的第二套审批入口。审批人无法在个人 OA 待办中统一处理，业务详情页也可能绕过 OA 节点权限、职责分离和幂等门禁。
+- **根因**：`TransferServiceImpl.requestTransfer` 仅执行 `DRAFT → REQUESTED`，没有创建 `INVENTORY_TRANSFER` 审批实例；`TransferController` 和 AI 调拨工具仍直接调用本地 `approveTransfer/rejectTransfer`；统一 OA action adapter、待办可操作模块和“我发起的”跳转均未接入调拨领域。
+- **修复**：
+  - 调拨草稿提交时事务内启动唯一 `INVENTORY_TRANSFER` OA 实例，校验已发布启用的流程、当前审批节点、审批角色及同厂独立有效审批人；缺少任一条件时 fail-closed，调拨单保持草稿。
+  - 重复提交在已有 `REQUESTED + RUNNING` 实例时幂等返回；已申请但缺实例时明确 `409`，禁止继续形成空审批。
+  - 统一 OA action endpoint 增加调拨领域 adapter，审批结果事务性投影为 `REQUESTED / APPROVED / REJECTED`；发起人自批拒绝，驳回原因必填，终态重放不产生第二次状态迁移。
+  - 删除调拨 REST 详情页与 AI 工具的直接审批/驳回入口；列表和详情增加“提交 OA 审批”，详情仅显示审批进度并跳转个人 OA。OA“待我审批/我发起的”支持库存调拨筛选和业务详情回跳。
+- **保留边界**：本批只收口“提交 → OA 审批 → 领域状态回写”。审批后的仓储执行状态机未重构；同厂仓库调拨是否简化发运/签收属于后续独立业务决策。本批生产调拨、库存及其他租户业务 mutation 均为 `0`。
+- **测试**：Java `TransferOaApprovalIntegrationTest,WorkflowInstanceControllerTest` 共 `13 tests` PASS；Web `transferOaApproval.source.spec.ts,oaProcurementContract.source.spec.ts` 共 `5 tests` PASS。覆盖首次提交、缺流程回滚、重复提交幂等、自批拒绝、OA 回写、统一 action adapter、前端无本地审批入口及 OA 导航。
+- **部署状态**：`NOT_DEPLOYED`。

@@ -8,7 +8,12 @@ import com.cretas.aims.entity.enums.MaterialBatchStatus;
 import com.cretas.aims.entity.enums.TransferItemType;
 import com.cretas.aims.entity.enums.TransferStatus;
 import com.cretas.aims.entity.enums.TransferType;
+import com.cretas.aims.entity.config.ApprovalWorkflow;
+import com.cretas.aims.entity.config.ApprovalWorkflowNode;
 import com.cretas.aims.entity.inventory.*;
+import com.cretas.aims.entity.workflow.ApprovalHistory.HistoryAction;
+import com.cretas.aims.entity.workflow.ApprovalWorkflowInstance;
+import com.cretas.aims.entity.workflow.ApprovalWorkflowInstance.InstanceStatus;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.exception.ResourceNotFoundException;
 import com.cretas.aims.repository.MaterialBatchRepository;
@@ -17,11 +22,13 @@ import com.cretas.aims.repository.RawMaterialTypeRepository;
 import com.cretas.aims.repository.UserRepository;
 import com.cretas.aims.repository.inventory.*;
 import com.cretas.aims.service.MaterialBatchService;
+import com.cretas.aims.service.ApprovalWorkflowService;
 import com.cretas.aims.service.alerts.InventoryLowStockEventPublisher;
 import com.cretas.aims.service.factory.WarehouseResolver;
 import com.cretas.aims.service.inventory.TransferDiffService;
 import com.cretas.aims.service.inventory.TransferService;
 import com.cretas.aims.service.unit.UnitContractService;
+import com.cretas.aims.service.workflow.WorkflowEngineService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -86,6 +93,13 @@ public class TransferServiceImpl implements TransferService {
      */
     @Autowired(required = false)
     private UserRepository userRepository;
+
+    /** 调拨提交及审批只使用统一 OA 实例，不在调拨详情维护第二套审批状态机。 */
+    @Autowired(required = false)
+    private WorkflowEngineService workflowEngine;
+
+    @Autowired(required = false)
+    private ApprovalWorkflowService approvalWorkflowService;
 
     /** 调拨 payload 单位只保存 canonical code；中文仅属于 Web displayUnit。 */
     @Autowired(required = false)
@@ -488,11 +502,42 @@ public class TransferServiceImpl implements TransferService {
         InternalTransfer transfer = loadForStateChange(factoryId, transferId);
         // Source-side action: 只有调出方可以提交申请
         assertSourceFactory(factoryId, transfer, "提交申请");
-        assertStatus(transfer, TransferStatus.DRAFT, "提交申请");
-        transfer.setStatus(TransferStatus.REQUESTED);
+        Optional<ApprovalWorkflowInstance> existing = workflowEngine == null
+                ? Optional.empty()
+                : workflowEngine.getLatestInstance(
+                        factoryId, "INVENTORY_TRANSFER", transferId);
+        if (transfer.getStatus() == TransferStatus.REQUESTED
+                && existing.filter(instance -> instance.getStatus() == InstanceStatus.RUNNING).isPresent()) {
+            return transfer;
+        }
+        if (transfer.getStatus() != TransferStatus.DRAFT) {
+            if (transfer.getStatus() == TransferStatus.REQUESTED && existing.isEmpty()) {
+                throw new BusinessException(409, "调拨单已提交但缺少 OA 审批实例")
+                        .withCode("TRANSFER_APPROVAL_INSTANCE_MISSING")
+                        .withHint("禁止在调拨详情重复审批，请联系管理员核对统一 OA 实例");
+            }
+            throw new BusinessException(409, "只有草稿状态的调拨单可以提交审批")
+                    .withCode("TRANSFER_SUBMIT_STATUS_INVALID");
+        }
+        if (workflowEngine == null
+                || !workflowEngine.hasActiveWorkflow(factoryId, "INVENTORY_TRANSFER")) {
+            throw new BusinessException(422, "当前工厂未配置可用的库存调拨 OA 审批流程")
+                    .withCode("TRANSFER_APPROVAL_ROUTE_REQUIRED")
+                    .withHint("请管理员先发布并启用 INVENTORY_TRANSFER 审批流程；调拨单仍保持草稿");
+        }
+
+        ApprovalWorkflowInstance instance = workflowEngine.startWorkflow(
+                factoryId,
+                "INVENTORY_TRANSFER",
+                transferId,
+                buildTransferWorkflowContext(transfer),
+                userId);
+        validateRunnableApprovalRoute(factoryId, instance, userId);
         transfer.setRequestedBy(userId);
         transfer.setRequestedAt(LocalDateTime.now());
-        log.info("提交调拨申请: transferId={}", transferId);
+        projectWorkflowState(transfer, instance, userId, null);
+        log.info("提交调拨申请并启动 OA: transferId={}, transferNumber={}, instanceId={}, workflowStatus={}",
+                transferId, transfer.getTransferNumber(), instance.getId(), instance.getStatus());
         return transferRepository.save(transfer);
     }
 
@@ -521,6 +566,139 @@ public class TransferServiceImpl implements TransferService {
         transfer.setRejectReason(reason);
         log.info("驳回调拨: transferId={}, reason={}", transferId, reason);
         return transferRepository.save(transfer);
+    }
+
+    @Override
+    @Transactional
+    public InternalTransfer applyWorkflowAction(String factoryId,
+                                                String transferId,
+                                                String instanceId,
+                                                Long actorId,
+                                                String actorRole,
+                                                HistoryAction action,
+                                                String notes) {
+        InternalTransfer transfer = loadForStateChange(factoryId, transferId);
+        assertSourceFactory(factoryId, transfer, "OA 审批");
+        if (workflowEngine == null) {
+            throw new BusinessException(503, "OA 审批服务不可用")
+                    .withCode("TRANSFER_APPROVAL_SERVICE_UNAVAILABLE");
+        }
+        ApprovalWorkflowInstance instance = workflowEngine.getInstance(factoryId, instanceId)
+                .orElseThrow(() -> new ResourceNotFoundException("OA 审批实例不存在: " + instanceId));
+        if (!"INVENTORY_TRANSFER".equals(instance.getModuleCode())
+                || !transferId.equals(instance.getBusinessEntityId())) {
+            throw new BusinessException(400, "审批实例与调拨单不匹配")
+                    .withCode("TRANSFER_APPROVAL_IDENTITY_MISMATCH");
+        }
+        if (instance.getStatus() != InstanceStatus.RUNNING) {
+            return transfer;
+        }
+        if (actorId != null && actorId.equals(instance.getInitiatedBy())) {
+            throw new BusinessException(403, "发起人不能审批自己的调拨单")
+                    .withCode("TRANSFER_SELF_APPROVAL_FORBIDDEN")
+                    .withHint("请由当前 OA 节点授权的其他审批人处理");
+        }
+        if (action == HistoryAction.REJECT && (notes == null || notes.isBlank())) {
+            throw new BusinessException(422, "驳回调拨单必须填写原因")
+                    .withCode("TRANSFER_REJECT_REASON_REQUIRED")
+                    .withHintTarget("notes");
+        }
+        ApprovalWorkflowInstance updated = workflowEngine.transitionNode(
+                instanceId, actorId, actorRole, action, notes);
+        projectWorkflowState(transfer, updated, actorId, notes);
+        return transferRepository.save(transfer);
+    }
+
+    private Map<String, Object> buildTransferWorkflowContext(InternalTransfer transfer) {
+        Map<String, Object> context = new LinkedHashMap<>();
+        context.put("transferId", transfer.getId());
+        context.put("transferNumber", transfer.getTransferNumber());
+        context.put("transferType", transfer.getTransferType() == null
+                ? null : transfer.getTransferType().name());
+        context.put("sourceFactoryId", transfer.getSourceFactoryId());
+        context.put("targetFactoryId", transfer.getTargetFactoryId());
+        context.put("sourceWarehouseId", transfer.getSourceWarehouseId());
+        context.put("targetWarehouseId", transfer.getTargetWarehouseId());
+        context.put("amount", transfer.getTotalAmount() == null
+                ? BigDecimal.ZERO : transfer.getTotalAmount());
+        context.put("totalAmount", transfer.getTotalAmount() == null
+                ? BigDecimal.ZERO : transfer.getTotalAmount());
+        context.put("itemCount", transfer.getItems() == null ? 0 : transfer.getItems().size());
+        return context;
+    }
+
+    private void validateRunnableApprovalRoute(String factoryId,
+                                               ApprovalWorkflowInstance instance,
+                                               Long initiatorUserId) {
+        if (instance.getStatus() != InstanceStatus.RUNNING) return;
+        if (instance.getCurrentNodeIds() == null || instance.getCurrentNodeIds().isEmpty()) {
+            throw new BusinessException(422, "库存调拨 OA 流程没有可处理的当前节点")
+                    .withCode("TRANSFER_APPROVAL_NODE_REQUIRED");
+        }
+        if (approvalWorkflowService == null || userRepository == null) {
+            throw new BusinessException(503, "库存调拨 OA 路由解析服务不可用")
+                    .withCode("TRANSFER_APPROVAL_ROUTE_SERVICE_UNAVAILABLE");
+        }
+        ApprovalWorkflow workflow = approvalWorkflowService
+                .getById(factoryId, instance.getWorkflowId())
+                .orElseThrow(() -> new BusinessException(422, "库存调拨 OA 流程定义不存在")
+                        .withCode("TRANSFER_APPROVAL_DEFINITION_MISSING"));
+        Map<String, ApprovalWorkflowNode> nodes = approvalWorkflowService
+                .deserializeNodes(workflow.getNodesJson()).stream()
+                .collect(Collectors.toMap(ApprovalWorkflowNode::getId, node -> node));
+        for (String nodeId : instance.getCurrentNodeIds()) {
+            ApprovalWorkflowNode node = nodes.get(nodeId);
+            if (node == null || !"approval".equalsIgnoreCase(node.getType())) {
+                throw new BusinessException(422, "库存调拨 OA 当前节点不可审批: " + nodeId)
+                        .withCode("TRANSFER_APPROVAL_NODE_INVALID");
+            }
+            Object configuredRoles = node.getConfig() == null
+                    ? null : node.getConfig().get("approverRoles");
+            List<String> roles = new ArrayList<>();
+            if (configuredRoles instanceof Iterable<?> iterable) {
+                iterable.forEach(value -> {
+                    if (value != null && !String.valueOf(value).isBlank()) {
+                        roles.add(String.valueOf(value));
+                    }
+                });
+            }
+            if (roles.isEmpty()) {
+                throw new BusinessException(422, "库存调拨 OA 节点未配置审批角色: "
+                        + (node.getLabel() == null ? nodeId : node.getLabel()))
+                        .withCode("TRANSFER_APPROVER_ROLE_REQUIRED");
+            }
+            boolean hasIndependentAssignee = roles.stream()
+                    .flatMap(role -> userRepository.findByFactoryIdAndRoleCode(factoryId, role).stream())
+                    .anyMatch(user -> Boolean.TRUE.equals(user.getIsActive())
+                            && !Objects.equals(user.getId(), initiatorUserId));
+            if (!hasIndependentAssignee) {
+                throw new BusinessException(422, "库存调拨 OA 节点没有独立的可用审批人: "
+                        + (node.getLabel() == null ? nodeId : node.getLabel()))
+                        .withCode("TRANSFER_APPROVER_ASSIGNEE_REQUIRED")
+                        .withHint("请为当前工厂配置匹配审批角色的其他有效账号；调拨单仍保持草稿");
+            }
+        }
+    }
+
+    private void projectWorkflowState(InternalTransfer transfer,
+                                      ApprovalWorkflowInstance instance,
+                                      Long actorId,
+                                      String notes) {
+        switch (instance.getStatus()) {
+            case RUNNING -> transfer.setStatus(TransferStatus.REQUESTED);
+            case APPROVED -> {
+                transfer.setStatus(TransferStatus.APPROVED);
+                transfer.setApprovedBy(actorId);
+                transfer.setApprovedAt(LocalDateTime.now());
+                transfer.setRejectReason(null);
+            }
+            case REJECTED, CANCELLED, TIMEOUT -> {
+                transfer.setStatus(TransferStatus.REJECTED);
+                transfer.setApprovedBy(actorId);
+                transfer.setApprovedAt(LocalDateTime.now());
+                transfer.setRejectReason(notes);
+            }
+        }
     }
 
     @Override

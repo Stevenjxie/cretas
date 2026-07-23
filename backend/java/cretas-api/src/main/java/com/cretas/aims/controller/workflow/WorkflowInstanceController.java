@@ -20,6 +20,7 @@ import com.cretas.aims.service.workflow.WorkflowEngineService;
 import com.cretas.aims.service.workflow.OaActionIdempotencyService;
 import com.cretas.aims.service.inventory.PurchaseService;
 import com.cretas.aims.service.inventory.SalesService;
+import com.cretas.aims.service.inventory.TransferService;
 import com.cretas.aims.entity.workflow.ApprovalHistory.HistoryAction;
 import com.cretas.aims.utils.TokenUtils;
 import io.swagger.v3.oas.annotations.Operation;
@@ -82,6 +83,7 @@ public class WorkflowInstanceController {
     private final MobileService mobileService;
     private final PurchaseService purchaseService;
     private final SalesService salesService;
+    private final TransferService transferService;
 
     /** Optional — 用于 hydrate PURCHASE_ORDER businessSummary. */
     @Autowired(required = false)
@@ -335,6 +337,18 @@ public class WorkflowInstanceController {
                     notes);
             businessEntityId = order.getId();
             businessStatus = order.getStatus().name();
+        } else if ("INVENTORY_TRANSFER".equals(instance.getModuleCode())) {
+            com.cretas.aims.entity.inventory.InternalTransfer transfer =
+                    transferService.applyWorkflowAction(
+                            factoryId,
+                            instance.getBusinessEntityId(),
+                            instanceId,
+                            user.getId(),
+                            user.getRoleCode(),
+                            action,
+                            notes);
+            businessEntityId = transfer.getId();
+            businessStatus = transfer.getStatus().name();
         } else {
             throw new BusinessException(422, "该业务域尚未迁移到统一 OA 动作适配器")
                     .withCode("OA_DOMAIN_ADAPTER_REQUIRED");
@@ -661,6 +675,22 @@ public class WorkflowInstanceController {
                 return sb.toString();
             }
             return "销售订单 " + bizId;
+        }
+        if ("INVENTORY_TRANSFER".equals(moduleCode)) {
+            Map<String, Object> context = inst.getContextJson();
+            Object number = context == null ? null : context.get("transferNumber");
+            Object sourceWarehouse = context == null ? null : context.get("sourceWarehouseId");
+            Object targetWarehouse = context == null ? null : context.get("targetWarehouseId");
+            StringBuilder sb = new StringBuilder(
+                    number == null ? "调拨单 " + bizId : String.valueOf(number));
+            if (sourceWarehouse != null || targetWarehouse != null) {
+                sb.append(" (")
+                        .append(sourceWarehouse == null ? "-" : sourceWarehouse)
+                        .append(" → ")
+                        .append(targetWarehouse == null ? "-" : targetWarehouse)
+                        .append(")");
+            }
+            return sb.toString();
         }
         // generic fallback
         return (moduleCode == null ? "业务单据" : moduleCode) + " " + bizId;

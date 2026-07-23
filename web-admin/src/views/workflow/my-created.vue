@@ -94,6 +94,8 @@ function goToDetail(row: WorkflowInstanceRow): void {
     router.push(`/procurement/orders/${row.businessEntityId}`);
   } else if (row.moduleCode === 'SALES_ORDER' && row.businessEntityId) {
     router.push(`/sales/orders/${row.businessEntityId}`);
+  } else if (row.moduleCode === 'INVENTORY_TRANSFER' && row.businessEntityId) {
+    router.push(`/transfer/${row.businessEntityId}`);
   } else {
     ElMessage.info(`暂不支持跳转模块: ${row.moduleCode}`);
   }
@@ -116,6 +118,7 @@ function moduleLabel(moduleCode: string): string {
     SALES_ORDER: '销售订单',
     DISPOSAL: '废弃处置',
     TRANSFER: '调拨单',
+    INVENTORY_TRANSFER: '库存调拨',
     VOUCHER: '凭证',
     ECN: '工程变更',
   };

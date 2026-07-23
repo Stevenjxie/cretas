@@ -10,9 +10,9 @@ import org.springframework.stereotype.Component;
 import java.util.*;
 
 /**
- * 调拨单审批/状态推进工具
+ * 调拨单提交/仓储执行状态推进工具
  *
- * 支持调拨单全生命周期操作：提交→审批→发货→签收→确认/取消/拒绝
+ * 审批通过/驳回只允许在统一 OA 审批中心执行；本工具不提供绕过 OA 的审批动作。
  * Intent Code: TRANSFER_APPROVE
  */
 @Slf4j
@@ -29,9 +29,9 @@ public class TransferApproveTool extends AbstractBusinessTool {
 
     @Override
     public String getDescription() {
-        return "调拨单审批和状态推进。支持操作：提交(request)、审批(approve)、拒绝(reject)、" +
+        return "调拨单提交和仓储执行状态推进。支持操作：提交审批(request)、" +
                 "发货(ship)、签收(receive)、确认(confirm)、取消(cancel)。" +
-                "适用场景：审批调拨、确认发货、签收到货、取消调拨。";
+                "审批通过/驳回必须前往统一 OA 审批中心。";
     }
 
     @Override
@@ -49,12 +49,12 @@ public class TransferApproveTool extends AbstractBusinessTool {
         Map<String, Object> action = new HashMap<>();
         action.put("type", "string");
         action.put("description", "操作类型");
-        action.put("enum", Arrays.asList("request", "approve", "reject", "ship", "receive", "confirm", "cancel"));
+        action.put("enum", Arrays.asList("request", "ship", "receive", "confirm", "cancel"));
         properties.put("action", action);
 
         Map<String, Object> reason = new HashMap<>();
         reason.put("type", "string");
-        reason.put("description", "拒绝/取消原因（拒绝或取消时需要）");
+        reason.put("description", "取消原因（取消时需要）");
         properties.put("reason", reason);
 
         schema.put("properties", properties);
@@ -71,7 +71,7 @@ public class TransferApproveTool extends AbstractBusinessTool {
     protected String getParameterQuestion(String paramName) {
         return switch (paramName) {
             case "transferId" -> "请提供调拨单ID或编号。";
-            case "action" -> "请选择操作：提交(request)、审批(approve)、拒绝(reject)、发货(ship)、签收(receive)、确认(confirm)、取消(cancel)。";
+            case "action" -> "请选择操作：提交审批(request)、发货(ship)、签收(receive)、确认(confirm)、取消(cancel)。审批请前往统一 OA。";
             default -> super.getParameterQuestion(paramName);
         };
     }
@@ -87,8 +87,6 @@ public class TransferApproveTool extends AbstractBusinessTool {
 
         InternalTransfer result = switch (action.toLowerCase()) {
             case "request" -> transferService.requestTransfer(factoryId, transferId, userId);
-            case "approve" -> transferService.approveTransfer(factoryId, transferId, userId);
-            case "reject" -> transferService.rejectTransfer(factoryId, transferId, userId, reason != null ? reason : "审批拒绝");
             case "ship" -> transferService.shipTransfer(factoryId, transferId, userId);
             case "receive" -> transferService.receiveTransfer(factoryId, transferId, userId);
             case "confirm" -> transferService.confirmTransfer(factoryId, transferId, userId);
@@ -98,8 +96,6 @@ public class TransferApproveTool extends AbstractBusinessTool {
 
         String actionName = switch (action.toLowerCase()) {
             case "request" -> "已提交";
-            case "approve" -> "已审批通过";
-            case "reject" -> "已拒绝";
             case "ship" -> "已发货";
             case "receive" -> "已签收";
             case "confirm" -> "已确认完成";

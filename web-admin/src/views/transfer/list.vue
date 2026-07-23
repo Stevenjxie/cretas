@@ -5,7 +5,7 @@ import { useAuthStore } from '@/store/modules/auth';
 import { usePermissionStore } from '@/store/modules/permission';
 import { useBusinessMode } from '@/composables/useBusinessMode';
 import { get, post } from '@/api/request';
-import { ElMessage } from 'element-plus';
+import { ElMessage, ElMessageBox } from 'element-plus';
 import { Plus, Refresh } from '@element-plus/icons-vue';
 import { formatAmount } from '@/utils/tableFormatters';
 import ConceptDisambiguationAlert from '@/components/common/ConceptDisambiguationAlert.vue';
@@ -78,6 +78,7 @@ interface FactoryNetworkEntry { factoryId: string; factoryName: string }
 
 const createVisible = ref(false);
 const submitting = ref(false);
+const submittingTransferId = ref('');
 const formRef = ref();
 const today = () => new Date().toISOString().slice(0, 10);
 const form = ref({
@@ -355,6 +356,31 @@ async function submitCreate() {
 }
 
 function goDetail(id: string) { router.push(`/transfer/${id}`); }
+
+async function submitForApproval(row: TableRow) {
+  if (submittingTransferId.value || row.status !== 'DRAFT') return;
+  try {
+    await ElMessageBox.confirm(
+      `提交调拨单「${row.transferNumber || row.id}」到统一 OA 审批？提交后请在个人 OA 查看进度。`,
+      '提交 OA 审批',
+      { confirmButtonText: '确认提交', cancelButtonText: '取消', type: 'warning' },
+    );
+  } catch {
+    return;
+  }
+  submittingTransferId.value = String(row.id);
+  try {
+    const res = await post(`/${factoryId.value}/transfers/${row.id}/request`);
+    if (!res.success) throw new Error(res.message || '提交 OA 审批失败');
+    ElMessage.success('已提交统一 OA 审批');
+    await loadData();
+  } catch (error) {
+    const message = error instanceof Error ? error.message : '提交 OA 审批失败';
+    ElMessage.error(message);
+  } finally {
+    submittingTransferId.value = '';
+  }
+}
 function handlePageChange(page: number) { pagination.value.page = page; loadData(); }
 function handleSizeChange(size: number) { pagination.value.size = size; pagination.value.page = 1; loadData(); }
 
@@ -417,9 +443,17 @@ function isOutbound(row: TableRow) { return row.sourceFactoryId === factoryId.va
             </el-tag>
           </template>
         </el-table-column>
-        <el-table-column label="操作" width="100" fixed="right" align="center">
+        <el-table-column label="操作" width="180" fixed="right" align="center">
           <template #default="{ row }">
             <el-button type="primary" link size="small" @click="goDetail(row.id)">详情</el-button>
+            <el-button
+              v-if="canWrite && row.status === 'DRAFT'"
+              type="warning"
+              link
+              size="small"
+              :loading="submittingTransferId === String(row.id)"
+              @click="submitForApproval(row)"
+            >提交审批</el-button>
           </template>
         </el-table-column>
       </el-table>
@@ -451,7 +485,7 @@ function isOutbound(row: TableRow) { return row.sourceFactoryId === factoryId.va
         type="info" show-icon :closable="false"
         style="margin-bottom:12px"
         title="使用场景"
-        description="无生产计划时手动创建（领用 / 研发 / 互调 / 分部退总仓 等）。创建后为 DRAFT 状态,需走 申请→审批→发货→签收 流程。"
+        description="无生产计划时手动创建（领用 / 研发 / 互调 / 分部退总仓 等）。创建后为草稿，提交后进入统一 OA 审批，再由仓储执行后续调拨。"
       />
       <el-form ref="formRef" :model="form" :rules="formRules" label-width="110px">
         <el-row :gutter="16">

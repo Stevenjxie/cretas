@@ -30,7 +30,7 @@ const transfer = ref<TableRow | null>(null);
 const notFound = ref(false);
 const notFoundMessage = ref('');
 
-// Rule 3: reject / cancel 原因 dropdown
+// 取消原因；审批通过/驳回只允许在统一 OA 审批中心处理。
 const TRANSFER_REJECT_REASONS = [
   { value: '库存不足', label: '库存不足' },
   { value: '计划取消', label: '计划取消' },
@@ -39,7 +39,7 @@ const TRANSFER_REJECT_REASONS = [
   { value: '_other', label: '其他原因' },
 ];
 const reasonDialogVisible = ref(false);
-const reasonDialogAction = ref(''); // 'reject' | 'cancel'
+const reasonDialogAction = ref('cancel');
 const reasonSelect = ref('');
 const reasonOtherText = ref('');
 
@@ -168,8 +168,7 @@ function buildTransferItemsSummaryHtml(): string {
 
 async function handleAction(action: string) {
   if (submitting.value) return;
-  // Rule 3: reject / cancel 需先收集原因，走独立 dialog
-  if (action === 'reject' || action === 'cancel') {
+  if (action === 'cancel') {
     reasonDialogAction.value = action;
     reasonSelect.value = '';
     reasonOtherText.value = '';
@@ -177,8 +176,7 @@ async function handleAction(action: string) {
     return;
   }
   const map: Record<string, { label: string; url: string }> = {
-    request: { label: '提交申请', url: `/${factoryId.value}/transfers/${transferId.value}/request` },
-    approve: { label: '审批通过', url: `/${factoryId.value}/transfers/${transferId.value}/approve` },
+    request: { label: '提交 OA 审批', url: `/${factoryId.value}/transfers/${transferId.value}/request` },
     ship: { label: '确认发运', url: `/${factoryId.value}/transfers/${transferId.value}/ship` },
     receive: { label: '确认签收', url: `/${factoryId.value}/transfers/${transferId.value}/receive` },
     confirm: { label: '确认入库', url: `/${factoryId.value}/transfers/${transferId.value}/confirm` },
@@ -211,7 +209,7 @@ async function handleAction(action: string) {
   finally { submitting.value = false; }
 }
 
-// Rule 3: 提交带原因的 reject / cancel
+// 取消调拨需记录原因；审批拒绝在 OA 审批中心完成。
 async function submitReasonAction() {
   if (!reasonSelect.value) {
     ElMessage.warning('请选择原因');
@@ -223,10 +221,9 @@ async function submitReasonAction() {
   }
   const reason =
     reasonSelect.value === '_other' ? reasonOtherText.value.trim() : reasonSelect.value;
-  const action = reasonDialogAction.value;
-  const labelMap: Record<string, string> = { reject: '驳回', cancel: '取消' };
-  const actionLabel = labelMap[action] ?? action;
-  // 后端 reject/cancel 用 @RequestParam reason (query 参数), 非 body → 拼进 URL
+  const action = 'cancel';
+  const actionLabel = '取消';
+  // 后端 cancel 用 @RequestParam reason (query 参数), 非 body → 拼进 URL
   const url = `/${factoryId.value}/transfers/${transferId.value}/${action}?reason=${encodeURIComponent(reason)}`;
   reasonDialogVisible.value = false;
   submitting.value = true;
@@ -236,6 +233,10 @@ async function submitReasonAction() {
     else { ElMessage({ message: res.message || `${actionLabel}失败，请重试`, type: 'error', duration: 0, showClose: true }); }
   } catch (e) { handleCatchError(e, `${actionLabel}失败，请检查网络`); }
   finally { submitting.value = false; }
+}
+
+function goToOaProgress() {
+  router.push({ path: '/workflow/my-created', query: { moduleCode: 'INVENTORY_TRANSFER' } });
 }
 
 // PR #289 §B4 — display source-warehouse current stock per transfer item.
@@ -438,9 +439,8 @@ async function submitDecide() {
             </el-tag>
           </div>
           <div class="header-right" v-if="transfer && canWrite">
-            <el-button v-if="transfer.status === 'DRAFT'" type="warning" :loading="submitting" @click="handleAction('request')">提交申请</el-button>
-            <el-button v-if="transfer.status === 'REQUESTED'" type="success" :loading="submitting" @click="handleAction('approve')">审批通过</el-button>
-            <el-button v-if="transfer.status === 'REQUESTED'" type="danger" :loading="submitting" @click="handleAction('reject')">驳回</el-button>
+            <el-button v-if="transfer.status === 'DRAFT'" type="warning" :loading="submitting" @click="handleAction('request')">提交 OA 审批</el-button>
+            <el-button v-if="transfer.status === 'REQUESTED'" type="primary" plain @click="goToOaProgress">查看审批进度</el-button>
             <el-tooltip
               v-if="transfer.status === 'APPROVED' && isOutbound && hasStockShortage"
               :content="shipBlockedReason" placement="top">
@@ -471,6 +471,14 @@ async function submitDecide() {
           <el-step title="已确认" />
         </el-steps>
         <el-alert v-else :title="`该调拨单已${statusMap[transfer.status]?.text}`" :type="transfer.status === 'REJECTED' ? 'error' : 'info'" show-icon :closable="false" style="margin-bottom: 24px" />
+        <el-alert
+          v-if="transfer.status === 'REQUESTED'"
+          type="warning"
+          show-icon
+          :closable="false"
+          style="margin-bottom: 16px"
+          title="该调拨单正在统一 OA 审批"
+          description="业务详情页仅展示审批进度；通过、驳回等审批动作请由有权人员在个人 OA 中处理。" />
 
         <!-- Issue #744: 库存不足时主动告警 (调出方视角) -->
         <el-alert
@@ -673,10 +681,10 @@ async function submitDecide() {
     </template>
   </el-dialog>
 
-  <!-- Rule 3: 驳回/取消 原因 dialog -->
+  <!-- 取消原因 dialog；审批拒绝由统一 OA 提交 -->
   <el-dialog
     v-model="reasonDialogVisible"
-    :title="reasonDialogAction === 'reject' ? '驳回调拨单' : '取消调拨单'"
+    title="取消调拨单"
     width="420px"
     destroy-on-close
   >
@@ -685,7 +693,7 @@ async function submitDecide() {
       <el-descriptions-item label="状态">{{ statusMap[transfer.status as string]?.text || transfer.status }}</el-descriptions-item>
     </el-descriptions>
     <el-form label-width="80px">
-      <el-form-item :label="reasonDialogAction === 'reject' ? '驳回原因' : '取消原因'" required>
+      <el-form-item label="取消原因" required>
         <el-select
           v-model="reasonSelect"
           placeholder="请选择原因"
@@ -713,12 +721,12 @@ async function submitDecide() {
     <template #footer>
       <el-button @click="reasonDialogVisible = false">关闭</el-button>
       <el-button
-        :type="reasonDialogAction === 'reject' ? 'danger' : 'warning'"
+      type="warning"
         :loading="submitting"
         :disabled="!reasonSelect || (reasonSelect === '_other' && !reasonOtherText.trim())"
         @click="submitReasonAction"
       >
-        {{ reasonDialogAction === 'reject' ? '确认驳回' : '确认取消' }}
+      确认取消
       </el-button>
     </template>
   </el-dialog>

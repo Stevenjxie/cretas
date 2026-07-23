@@ -82,33 +82,6 @@ public class TransferController {
     }
 
     @RequireModule("warehouse")
-    @PostMapping("/{transferId}/approve")
-    @Operation(summary = "审批通过")
-    @RequirePermission("inventory:write")
-    public ApiResponse<InternalTransfer> approveTransfer(
-            @PathVariable @NotBlank String factoryId,
-            @PathVariable @NotBlank String transferId,
-            @RequestHeader("Authorization") String authorization) {
-        Long userId = extractUserId(authorization);
-        InternalTransfer transfer = transferService.approveTransfer(factoryId, transferId, userId);
-        return ApiResponse.success("调拨已审批通过", transfer);
-    }
-
-    @RequireModule("warehouse")
-    @PostMapping("/{transferId}/reject")
-    @Operation(summary = "驳回调拨")
-    @RequirePermission("inventory:write")
-    public ApiResponse<InternalTransfer> rejectTransfer(
-            @PathVariable @NotBlank String factoryId,
-            @PathVariable @NotBlank String transferId,
-            @RequestHeader("Authorization") String authorization,
-            @RequestParam(required = false) String reason) {
-        Long userId = extractUserId(authorization);
-        InternalTransfer transfer = transferService.rejectTransfer(factoryId, transferId, userId, reason);
-        return ApiResponse.success("调拨已驳回", transfer);
-    }
-
-    @RequireModule("warehouse")
     @PostMapping("/{transferId}/ship")
     @Operation(summary = "调拨发货（扣减调出方库存）")
     @RequirePermission("inventory:write")
