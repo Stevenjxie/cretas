@@ -28,7 +28,7 @@ describe('procurement unified OA contract', () => {
     expect(pending).toContain('expectedNodeId: row.currentNodeId');
     expect(pending).toContain('idempotencyKey: `oa-${action.toLowerCase()}-${row.instanceId}-${row.currentNodeId}`');
     expect(pending).toContain("operatingId.value = row.instanceId");
-    expect(pending).toContain("new Set(['PURCHASE_ORDER', 'SALES_ORDER'])");
+    expect(pending).toContain("new Set(['PURCHASE_ORDER', 'SALES_ORDER', 'INVENTORY_TRANSFER'])");
     expect(pending).toContain('value="SALES_ORDER"');
   });
 });

@@ -9,6 +9,8 @@ import com.cretas.aims.entity.config.ApprovalWorkflow;
 import com.cretas.aims.entity.config.ApprovalWorkflowNode;
 import com.cretas.aims.entity.inventory.PurchaseOrder;
 import com.cretas.aims.entity.inventory.SalesOrder;
+import com.cretas.aims.entity.inventory.InternalTransfer;
+import com.cretas.aims.entity.enums.TransferStatus;
 import com.cretas.aims.entity.enums.SalesOrderStatus;
 import com.cretas.aims.entity.workflow.ApprovalHistory.HistoryAction;
 import com.cretas.aims.entity.workflow.ApprovalWorkflowInstance;
@@ -22,6 +24,7 @@ import com.cretas.aims.service.workflow.WorkflowEngineService;
 import com.cretas.aims.service.workflow.OaActionIdempotencyService;
 import com.cretas.aims.service.inventory.PurchaseService;
 import com.cretas.aims.service.inventory.SalesService;
+import com.cretas.aims.service.inventory.TransferService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -95,6 +98,7 @@ class WorkflowInstanceControllerTest {
     @Mock private OaActionIdempotencyService oaActionIdempotencyService;
     @Mock private PurchaseService purchaseService;
     @Mock private SalesService salesService;
+    @Mock private TransferService transferService;
 
     @InjectMocks private WorkflowInstanceController controller;
 
@@ -451,5 +455,45 @@ class WorkflowInstanceControllerTest {
         assertEquals("APPROVED", response.getData().get("workflowStatus"));
         verify(salesService, never()).applyWorkflowAction(
                 anyString(), anyString(), anyString(), any(), anyString(), any(), any());
+    }
+
+    @Test
+    @DisplayName("inventory transfer OA action delegates to transfer adapter")
+    void inventory_transfer_action_delegates_to_transfer_adapter() {
+        mockAuth(109L, "f006_warehouse_manager", "warehouse_manager");
+        ApprovalWorkflowInstance running = buildInstance(
+                "inst-transfer", "wf-transfer", "INVENTORY_TRANSFER", "trf-1",
+                List.of("approval_warehouse"), 200L);
+        when(workflowEngine.getInstance(FACTORY_ID, "inst-transfer"))
+                .thenReturn(Optional.of(running));
+        when(workflowEngine.canTransition(eq(running), any(User.class))).thenReturn(true);
+
+        InternalTransfer transfer = new InternalTransfer();
+        transfer.setId("trf-1");
+        transfer.setStatus(TransferStatus.APPROVED);
+        when(transferService.applyWorkflowAction(
+                eq(FACTORY_ID), eq("trf-1"), eq("inst-transfer"), eq(109L),
+                eq("warehouse_manager"), eq(HistoryAction.APPROVE), eq("同意")))
+                .thenReturn(transfer);
+        ApprovalWorkflowInstance approved = buildInstance(
+                "inst-transfer", "wf-transfer", "INVENTORY_TRANSFER", "trf-1",
+                List.of(), 200L);
+        approved.setStatus(InstanceStatus.APPROVED);
+        when(workflowEngine.getLatestInstance(
+                FACTORY_ID, "INVENTORY_TRANSFER", "trf-1"))
+                .thenReturn(Optional.of(approved));
+
+        ApiResponse<Map<String, Object>> response = controller.executeAction(
+                FACTORY_ID,
+                "inst-transfer",
+                AUTH_HEADER,
+                new WorkflowInstanceController.WorkflowActionRequest(
+                        "APPROVE", "同意", "idem-transfer-1", "approval_warehouse"));
+
+        assertEquals("APPROVED", response.getData().get("workflowStatus"));
+        assertEquals("APPROVED", response.getData().get("businessStatus"));
+        verify(transferService).applyWorkflowAction(
+                FACTORY_ID, "trf-1", "inst-transfer", 109L,
+                "warehouse_manager", HistoryAction.APPROVE, "同意");
     }
 }

@@ -29,7 +29,7 @@ const rows = ref<PendingApproval[]>([]);
 const total = ref(0);
 const page = ref(1);
 const size = ref(20);
-const ACTIONABLE_MODULE_CODES = new Set(['PURCHASE_ORDER', 'SALES_ORDER']);
+const ACTIONABLE_MODULE_CODES = new Set(['PURCHASE_ORDER', 'SALES_ORDER', 'INVENTORY_TRANSFER']);
 const moduleCode = ref('');
 const focusedInstanceId = ref('');
 let mounted = false;
@@ -146,6 +146,7 @@ onMounted(async () => {
           <el-select v-model="moduleCode" clearable placeholder="全部业务类型" style="width: 190px" @change="page = 1; loadPending()">
             <el-option label="采购订单" value="PURCHASE_ORDER" />
             <el-option label="销售订单" value="SALES_ORDER" />
+            <el-option label="库存调拨" value="INVENTORY_TRANSFER" />
           </el-select>
         </div>
       </template>

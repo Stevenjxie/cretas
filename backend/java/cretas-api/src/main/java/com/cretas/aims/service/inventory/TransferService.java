@@ -4,6 +4,7 @@ import com.cretas.aims.dto.common.PageResponse;
 import com.cretas.aims.dto.inventory.CreateTransferRequest;
 import com.cretas.aims.entity.inventory.InternalTransfer;
 import com.cretas.aims.entity.inventory.InternalTransferItem;
+import com.cretas.aims.entity.workflow.ApprovalHistory.HistoryAction;
 
 import java.math.BigDecimal;
 import java.util.List;
@@ -28,6 +29,18 @@ public interface TransferService {
     InternalTransfer approveTransfer(String factoryId, String transferId, Long userId);
 
     InternalTransfer rejectTransfer(String factoryId, String transferId, Long userId, String reason);
+
+    /**
+     * 统一 OA 审批中心的调拨领域动作适配器。
+     * 业务详情页及 AI 工具不得直接调用 approveTransfer/rejectTransfer。
+     */
+    InternalTransfer applyWorkflowAction(String factoryId,
+                                         String transferId,
+                                         String instanceId,
+                                         Long actorId,
+                                         String actorRole,
+                                         HistoryAction action,
+                                         String notes);
 
     InternalTransfer shipTransfer(String factoryId, String transferId, Long userId);
 

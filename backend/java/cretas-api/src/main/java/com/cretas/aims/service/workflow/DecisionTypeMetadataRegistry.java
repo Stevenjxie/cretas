@@ -386,7 +386,7 @@ public class DecisionTypeMetadataRegistry {
                 .category(Category.WAREHOUSE_TRANSFER)
                 .defaultApproverRoles(List.of("warehouse_manager", "department_admin"))
                 .moduleCode("INVENTORY_TRANSFER")
-                .wired(false)
+                .wired(true)
                 .build());
 
         register(DecisionTypeMetadata.builder()
