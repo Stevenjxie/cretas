@@ -1856,3 +1856,8 @@ def test_r23c_absolute_month_not_a_dish_and_t1_routes():
     assert _r.match_restaurant_ops("去年12月的营收") == "RESTAURANT_OPS_SALES_SUMMARY"
     assert _r.match_restaurant_ops("2026年3月生意怎么样") == "RESTAURANT_OPS_SALES_SUMMARY"
     assert _r.match_restaurant_ops("最近3个月的营收") != "RESTAURANT_OPS_SALES_SUMMARY" or True  # 相对窗有自己的规则
+
+
+def test_r24b_period_pair_with_generic_noun_routes_summary():
+    assert _r.match_restaurant_ops("上个月的数据和上上个月的数据对比") == "RESTAURANT_OPS_SALES_SUMMARY"
+    assert _r.match_restaurant_ops("本周和上周的情况对比") == "RESTAURANT_OPS_SALES_SUMMARY"
