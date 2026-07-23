@@ -391,6 +391,9 @@ public class IntentExecutionOrchestrator {
                         .context(request.getContext())
                         // P1 读写分块: mode 随短语短路透传, READ 模式在显式意图路径继续生效
                         .mode(request.getMode())
+                        // P1.5b: previewOnly 是请求级硬契约, 内部重建必须携带 —
+                        // 否则预览请求被 SITE A 误判为执行而拦成确认卡 (实测发现)
+                        .previewOnly(request.getPreviewOnly())
                         .build();
                 return executeWithExplicitIntent(factoryId, phraseRequest, userId, userRole);
             }
@@ -476,6 +479,9 @@ public class IntentExecutionOrchestrator {
                         .context(request.getContext())
                         // P1 读写分块: mode 随短语短路透传, READ 模式在显式意图路径继续生效
                         .mode(request.getMode())
+                        // P1.5b: previewOnly 是请求级硬契约, 内部重建必须携带 —
+                        // 否则预览请求被 SITE A 误判为执行而拦成确认卡 (实测发现)
+                        .previewOnly(request.getPreviewOnly())
                         .build();
                 return executeWithExplicitIntent(
                         factoryId, phraseRequest, userId, userRole, factoryPackRoute);
@@ -509,6 +515,9 @@ public class IntentExecutionOrchestrator {
                         .context(request.getContext())
                         // P1 读写分块: mode 随短语短路透传, READ 模式在显式意图路径继续生效
                         .mode(request.getMode())
+                        // P1.5b: previewOnly 是请求级硬契约, 内部重建必须携带 —
+                        // 否则预览请求被 SITE A 误判为执行而拦成确认卡 (实测发现)
+                        .previewOnly(request.getPreviewOnly())
                         .build();
                 return executeWithExplicitIntent(
                         factoryId, phraseRequest, userId, userRole, factoryPackRoute);
@@ -1258,6 +1267,8 @@ public class IntentExecutionOrchestrator {
                 IntentExecuteRequest foodRequest = IntentExecuteRequest.builder()
                         .userInput(userInput)
                         .intentCode("FOOD_KNOWLEDGE_QUERY")
+                        .mode(request.getMode())
+                        .previewOnly(request.getPreviewOnly())
                         .build();
                 return execute(factoryId, foodRequest, userId, userRole);
             }
@@ -1265,6 +1276,8 @@ public class IntentExecutionOrchestrator {
                 IntentExecuteRequest foodRequest = IntentExecuteRequest.builder()
                         .userInput(userInput)
                         .intentCode("FOOD_KNOWLEDGE_QUERY")
+                        .mode(request.getMode())
+                        .previewOnly(request.getPreviewOnly())
                         .build();
                 return execute(factoryId, foodRequest, userId, userRole);
             }
@@ -1297,6 +1310,8 @@ public class IntentExecutionOrchestrator {
                                 .userInput(userInput)
                                 .intentCode(ragRouteResult.getSuggestedIntent())
                                 .context(traceabilityContext)
+                                .mode(request.getMode())
+                                .previewOnly(request.getPreviewOnly())
                                 .build();
                         return execute(factoryId, traceabilityRequest, userId, userRole);
                     }
@@ -1322,6 +1337,9 @@ public class IntentExecutionOrchestrator {
                         .userInput(userInput)
                         .intentCode(matchedIntent)
                         .sessionId(request.getSessionId())
+                        // P1.5b: 写意图可经此转发 — mode(READ 拦截)与 previewOnly(预览契约)必须随行
+                        .mode(request.getMode())
+                        .previewOnly(request.getPreviewOnly())
                         .build();
                 return execute(factoryId, interceptRequest, userId, userRole);
             }
