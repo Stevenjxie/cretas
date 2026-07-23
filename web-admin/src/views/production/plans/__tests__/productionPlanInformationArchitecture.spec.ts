@@ -8,32 +8,49 @@ const operationEnd = source.indexOf('</el-table>', operationStart);
 const operations = source.slice(operationStart, operationEnd);
 
 describe('production plan list information architecture', () => {
-  it('keeps the three read-only groups and restores state-driven production operations', () => {
+  it('keeps high-frequency execution actions visible and moves low-frequency actions into more', () => {
     expect(operationStart).toBeGreaterThan(0);
-    expect(operations).toContain('>查看详情</el-button>');
+    expect(source).toContain('class="plan-number-link"');
+    expect(source).toContain('@click="handleViewPlan(row)"');
     expect(operations).toContain('v-if="canShowProductionActions(row)"');
-    expect(operations).toContain('生产操作<el-icon');
-    expect(operations).toContain('command="complete"');
-    expect(operations).toContain('>核对结单</el-dropdown-item>');
-    expect(operations).toContain('command="interim-settle"');
-    expect(operations).toContain('>生产小结</el-dropdown-item>');
-    expect(operations).toContain('command="process-entry"');
-    expect(operations).toContain('>逐道录入</el-dropdown-item>');
+    expect(operations).toContain('{{ processEntryActionLabel(row) }}');
+    expect(operations).toContain('@click="openProcessEntry(row)"');
+    expect(operations).toContain('{{ settlementActionLabel(row) }}');
+    expect(operations).toContain('@click="handlePrimarySettlementAction(row)"');
+    expect(operations).toContain('>档案与核算</el-button>');
+    expect(operations).toContain('更多<el-icon');
     expect(operations).toContain('command="stop-production"');
     expect(operations).toContain('command="cancel"');
-    expect(operations).toContain('生产单据<el-icon');
-    expect(operations).toContain('追溯与核算<el-icon');
+    expect(operations).not.toContain('生产操作<el-icon');
+    expect(operations).not.toContain('生产单据<el-icon');
+    expect(operations).not.toContain('追溯与核算<el-icon');
+    expect(operations).not.toContain('>查看详情</el-button>');
     expect(operations).not.toContain('RowActionMenu');
     expect(operations).not.toContain('>确认入库</el-button>');
     expect(source).toContain("return canWrite.value && isUnfinishedStatus(String(row.status || ''))");
   });
 
+  it('consolidates documents, trace and accounting into one archive center', () => {
+    expect(source).toContain('v-model="archiveCenterVisible"');
+    expect(source).toContain('档案与核算 —');
+    expect(source).toContain('<el-tab-pane label="生产单据" name="documents">');
+    expect(source).toContain('<el-tab-pane label="计划档案" name="trace">');
+    expect(source).toContain('<el-tab-pane label="汇总与核算" name="accounting">');
+    expect(source).toContain("openArchiveDocument('work-order')");
+    expect(source).toContain("openArchiveDocument('material-requisition')");
+    expect(source).toContain("openArchiveDocument('batching-sheet')");
+    expect(source).toContain("openArchiveDocument('document-pack')");
+    expect(source).toContain('@click="openArchiveTrace"');
+    expect(source).toContain('@click="openArchiveSummary"');
+    expect(source).toContain('@click="openArchiveYieldCost"');
+  });
+
   it('keeps summaries available and explains the finished-batch gate for cost accounting', () => {
-    expect(operations).toContain('{{ yieldCostActionLabel(row) }}');
-    expect(operations).toContain('生产计划汇总（随时查看）');
+    expect(source).toContain('{{ yieldCostActionLabel(archiveCenterPlan) }}');
+    expect(source).toContain('生产计划汇总');
     expect(source).toContain('成品出厂核算（结单后）');
     expect(source).toContain('当前可先查看「生产计划汇总」');
-    expect(operations).not.toContain(':disabled="String(row.status || \'\').toUpperCase() !== \'COMPLETED\'"');
+    expect(source).toContain('实际耗用、出成率、成本、质检和证据属于完工批次事实');
   });
 
   it('consolidates import/export and selection-scoped batch actions', () => {
@@ -44,7 +61,8 @@ describe('production plan list information architecture', () => {
   });
 
   it('offers one selectable production document pack request without three print windows', () => {
-    expect(source).toContain('下载单文件生产单据包');
+    expect(source).toContain('生产单据包 PDF');
+    expect(source).toContain('一次下载工单、领料单和配料单');
     expect(source).toContain('v-for="chapter in PRODUCTION_DOCUMENT_CHAPTERS"');
     expect(source).toContain('不会打开三个打印窗口');
     expect(source).not.toContain('window.open(');
