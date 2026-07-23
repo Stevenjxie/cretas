@@ -55,6 +55,7 @@ from smartbi.gold import (
     zone_efficiency,
 )
 from smartbi.gold.gold_read_cache import GoldReadCache, compute_cache_key
+from smartbi.gold.restaurant_agent import is_compound_question as _agent_is_compound
 from smartbi.tenant_ctx import INTERNAL_SENTINEL, get_factory_id, set_factory_id
 from smartbi_compat._rbac_strip import PRICE_VIEW_ROLES, strip_price_for_role
 
@@ -1207,6 +1208,7 @@ async def post_restaurant_tiered_answer(
             and not has_trusted_session
             and "优化" not in query
             and capability_clarification_question(query) is None
+            and not _agent_is_compound(query)
         ):
             from smartbi.gold.restaurant_ops_router import extract_dish_candidates
             if not extract_dish_candidates(query):

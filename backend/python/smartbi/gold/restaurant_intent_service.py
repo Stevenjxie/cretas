@@ -188,6 +188,7 @@ async def tiered_answer(
     java_tool_name: Optional[str] = None,
     session_key: Optional[str] = None,
     precomputed_spec: Optional[RestaurantQuerySpec] = None,
+    allow_decompose: bool = True,
 ) -> Optional[Dict[str, Any]]:
     """T2 (vector) / T3 (LLM) restaurant intent routing (2026-07-07 Phase 1
     design). ONLY call this after the existing T1 keyword fast path
@@ -268,6 +269,34 @@ async def tiered_answer(
                 "answer_text": RESTAURANT_CAPABILITIES_TEXT,
                 "spec": None,
             }
+        # R28 复合问题 agent: LLM 只拆解, 子问题各自走本函数完整管道
+        # (递归一层, allow_decompose=False 防套娃), 答案确定性拼装 —
+        # LLM 不写正文不碰数字。拆解失败 fail-open 回单主题路径
+        # (R26b 诚实尾注在那里兜底)。
+        if allow_decompose:
+            from smartbi.gold.restaurant_agent import (
+                assemble_compound_answer,
+                decompose_compound_question,
+                is_compound_question,
+            )
+            if is_compound_question(query):
+                parts = await decompose_compound_question(query)
+                if parts:
+                    import asyncio as _aio
+                    raw_results = await _aio.gather(*[
+                        tiered_answer(
+                            part, pool, factory_id, role,
+                            java_tool_name=java_tool_name,
+                            allow_decompose=False,
+                        )
+                        for part in parts
+                    ], return_exceptions=True)
+                    results = [
+                        r if isinstance(r, dict) else None for r in raw_results
+                    ]
+                    combined = assemble_compound_answer(parts, results)
+                    if combined:
+                        return combined
         spec = precomputed_spec if precomputed_spec is not None else await parse_restaurant_query(
             query, pool, factory_id=factory_id, session_key=session_key,
         )
@@ -521,6 +550,10 @@ def should_delegate(
         if extract_dish_candidates(query):
             return True
         if dish_ranking_direction(query) or is_capability_question(query):
+            return True
+        # 复合问题 → python 侧 agent 拆解回答 (R28)。
+        from smartbi.gold.restaurant_agent import is_compound_question
+        if is_compound_question(query):
             return True
         # 域外闲聊 (天气/新闻) — 必须由 tiered 给诚实拒答, 落回 Java 会拿到
         # 工厂措辞的通用助手回复 (R20b)。
