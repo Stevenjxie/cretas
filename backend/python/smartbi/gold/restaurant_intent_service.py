@@ -486,6 +486,11 @@ def should_delegate(
             return True
         if dish_ranking_direction(query) or is_capability_question(query):
             return True
+        # 域外闲聊 (天气/新闻) — 必须由 tiered 给诚实拒答, 落回 Java 会拿到
+        # 工厂措辞的通用助手回复 (R20b)。
+        from smartbi.gold.restaurant_ops_router import is_out_of_domain_smalltalk
+        if is_out_of_domain_smalltalk(query):
+            return True
         from smartbi.gold.restaurant_ops_router import store_dish_split_dish
         if store_dish_split_dish(query):
             return True
@@ -513,5 +518,9 @@ def should_delegate(
     ):
         return True
     if spec.intent == "RESTAURANT_OPS_SALES_SUMMARY" and spec.relative_window:
+        return True
+    # 时段人效 (「晚上生意怎么样」) — Java 无对应能力, 落回会拿到工厂
+    # 仪表盘不适用提示; resolver 存在即委托 (R20b)。
+    if spec.intent == "RESTAURANT_OPS_STAFFING_ADVICE":
         return True
     return False
