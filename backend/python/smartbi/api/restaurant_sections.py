@@ -890,7 +890,14 @@ def _owner_plain_reason(owner_page: dict[str, Any], scenario: str, fallback: str
         parts = []
         if food_cost is not None:
             if gross is not None:
-                parts.append(f"食材成本率大约 {food_cost}%，毛利率约 {gross}%，比健康状态更紧。")
+                coverage_pct = params.get("goldCostCoveragePct")
+                coverage_note = (
+                    f"（已覆盖成本口径，成本覆盖率 {coverage_pct}%）"
+                    if coverage_pct is not None else ""
+                )
+                parts.append(
+                    f"食材成本率大约 {food_cost}%，毛利率约 {gross}%{coverage_note}。"
+                )
             else:
                 parts.append(
                     f"食材成本率大约 {food_cost}%；毛利率因成本或营收口径不完整暂不可计算，"
@@ -2498,7 +2505,9 @@ async def owner_action_chat_http(body: OwnerActionChatRequest, request: Request)
         raise HTTPException(status_code=403, detail="Authenticated tenant does not match request tenant")
 
     started_at = time.time()
-    response = _owner_action_chat_impl(body, request=request)
+    live_overrides = await _fetch_live_gold_overrides(body.factory_id)
+    response = _owner_action_chat_impl(
+        body, request=request, live_overrides=live_overrides)
     data = response.get("data") if isinstance(response, dict) else {}
     if isinstance(data, dict):
         charts = data.get("charts") if isinstance(data.get("charts"), list) else []
@@ -2519,7 +2528,50 @@ async def owner_action_chat_http(body: OwnerActionChatRequest, request: Request)
     return response
 
 
-def _owner_action_chat_impl(body: OwnerActionChatRequest, request: Request | None = None) -> dict:
+async def _fetch_live_gold_overrides(factory_id: str) -> dict | None:
+    """R29 双数据空间统一: owner-action 剧本的成本/毛利数字 (49%/51%) 与
+    金数据真实毛利分析 (~79%) 冲突。demo 租户实时取金数据覆写这两个数字,
+    并携带成本覆盖率供措辞如实披露。任何失败 fail-open 返 None (剧本原样,
+    演示不崩); LLM 不参与, 数字全部来自 resolver。"""
+    try:
+        normalized = (factory_id or "").strip().upper()
+        if normalized != "DEMO_REST" and not normalized.startswith("RES_"):
+            return None
+        from smartbi.config import get_pg_pool
+        from smartbi.gold.restaurant_ops_router import (
+            demo_data_factory_for_code,
+            resolve_gross_margin,
+        )
+        pool = await get_pg_pool()
+        if pool is None:
+            return None
+        gm_factory = demo_data_factory_for_code(
+            "RESTAURANT_OPS_GROSS_MARGIN", factory_id, store_scoped=False)
+        answer = await resolve_gross_margin(
+            pool, gm_factory, role="factory_super_admin", query="整体毛利率是多少")
+        meta = getattr(answer, "meta", None) or {}
+        covered_rev = float(meta.get("cost_covered_revenue") or 0.0)
+        covered_cost = float(meta.get("covered_cost") or 0.0)
+        coverage = meta.get("cost_coverage_ratio")
+        if covered_rev <= 0 or meta.get("marginInvariantPass") is False:
+            return None
+        margin_pct = (covered_rev - covered_cost) / covered_rev * 100.0
+        food_cost_pct = covered_cost / covered_rev * 100.0
+        return {
+            "foodCostRatio": round(food_cost_pct, 1),
+            "grossMarginPct": round(margin_pct, 1),
+            "costCoveragePct": round(float(coverage) * 100.0, 1) if coverage is not None else None,
+        }
+    except Exception as exc:
+        logger.warning(f"[owner-action] live gold overrides failed (fail-open): {exc}")
+        return None
+
+
+def _owner_action_chat_impl(
+    body: OwnerActionChatRequest,
+    request: Request | None = None,
+    live_overrides: dict | None = None,
+) -> dict:
     """Demo chat wrapper for boss-facing restaurant action analysis.
 
     This endpoint intentionally uses deterministic demo scenarios. It gives the
@@ -2556,6 +2608,14 @@ def _owner_action_chat_impl(body: OwnerActionChatRequest, request: Request | Non
         "store_name": store_name,
         "ownerQuestion": body.message,
     })
+    if live_overrides:
+        # R29: 成本/毛利数字以金数据为准, 剧本其余叙事保留。
+        financial = params.setdefault("financial_summary", {})
+        if isinstance(financial, dict):
+            financial["foodCostRatio"] = live_overrides["foodCostRatio"]
+            financial["grossMarginPct"] = live_overrides["grossMarginPct"]
+        if live_overrides.get("costCoveragePct") is not None:
+            params["goldCostCoveragePct"] = live_overrides["costCoveragePct"]
 
     req = SectionRequest(
         factory_id=factory_id,
