@@ -212,7 +212,11 @@ public class IntentExecutionOrchestrator {
     /** 通用短回复集合 */
     private static final Set<String> GENERIC_SHORT_REPLIES = Set.of(
             "查询完成，暂无数据", "操作完成", "查询完成", "查询成功", "执行成功",
-            "查询完成,暂无数据", "处理完成", "请求成功"
+            "查询完成,暂无数据", "处理完成", "请求成功",
+            // 2026-07-23 工厂 AI 复盘: ToolDispatchService 对无 message 的工具
+            // 结果默认填 "操作已完成。" — 该占位符掩盖 formattedText 里的真答案
+            // (前端显示 message || formattedText, 占位符非空则真答案永不露出)。
+            "操作已完成", "操作已完成。"
     );
 
     @Autowired
@@ -3210,6 +3214,19 @@ public class IntentExecutionOrchestrator {
         // Ultimate fallback
         if (response.getFormattedText() == null && response.getMessage() != null && !response.getMessage().isEmpty()) {
             response.setFormattedText(response.getMessage());
+        }
+
+        // 反向兜底 (2026-07-23 工厂 AI 复盘): message 是占位符/空 而 formattedText
+        // 有实质答案时, 用 formattedText 覆盖 message。此前只有 formattedText←message
+        // 单向, 导致 PROCESSING_BATCH_LIST 等查询 message="操作已完成。" 掩盖了
+        // formattedText 里 "查询到 487 个生产批次…" 的真答案 (Sheet 行15 工厂版)。
+        String finalMsg = response.getMessage();
+        String finalFT = response.getFormattedText();
+        boolean msgMissing = finalMsg == null || finalMsg.isBlank();
+        boolean msgGeneric = finalMsg != null && GENERIC_SHORT_REPLIES.contains(finalMsg.trim());
+        if ((msgMissing || msgGeneric) && finalFT != null && finalFT.length() >= 20
+                && !GENERIC_SHORT_REPLIES.contains(finalFT.trim())) {
+            response.setMessage(finalFT);
         }
 
         // Sprint 9 P0.2 (2026-05-22) — Terminal LLM-summarize gate for Workdesk / Skill orchestration
