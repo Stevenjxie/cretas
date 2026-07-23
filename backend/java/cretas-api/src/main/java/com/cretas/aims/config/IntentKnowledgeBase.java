@@ -5650,6 +5650,9 @@ public class IntentKnowledgeBase {
         phraseToIntentMapping.put("查完订单", "ORDER_LIST");
         phraseToIntentMapping.put("采购订单和销售", "ORDER_LIST");
         phraseToIntentMapping.put("销售订单", "ORDER_LIST");
+        // 2026-07-24: 「销售订单情况怎么样」被语义层抢到仪表盘总览 — 补确定性短语
+        phraseToIntentMapping.put("销售订单情况", "ORDER_LIST");
+        phraseToIntentMapping.put("销售订单情况怎么样", "ORDER_LIST");
 
         // --- Wave-7c: 拼写错误/谐音修复 ---
         phraseToIntentMapping.put("发或记录", "SHIPMENT_QUERY");
@@ -6268,7 +6271,9 @@ public class IntentKnowledgeBase {
         phraseToIntentMapping.put("瞅瞅订单", "ORDER_LIST");
         phraseToIntentMapping.put("要查订单", "ORDER_LIST");
         phraseToIntentMapping.put("订单情况", "ORDER_LIST");
-        phraseToIntentMapping.put("退货情况", "ORDER_LIST");
+        // 2026-07-24 工厂读验收修: 退货情况 曾错映射到 ORDER_LIST (销售订单列表),
+        // 导致「最近的退货情况」答成 107 个销售订单。指向退货单查询意图。
+        phraseToIntentMapping.put("退货情况", "RETURN_ORDER_LIST");
         // ORDER_STATUS (8)
         phraseToIntentMapping.put("order status", "ORDER_STATUS");
         phraseToIntentMapping.put("交付状态", "ORDER_STATUS");
