@@ -116,6 +116,12 @@ def run_eval(base: str) -> int:
         problems.append("缺 confirmToken")
     if not ca.get("commandDigest"):
         problems.append("缺 commandDigest")
+    # 写操作影响契约 (2026-07-24): 预览必须带影响说明与风险档 —
+    # 前端对比表/二次确认弹窗的数据源, 缺失即契约破坏
+    if not ca.get("impactSummary"):
+        problems.append("缺 impactSummary (影响说明)")
+    if not ca.get("actionType"):
+        problems.append("缺 actionType")
     check("TCC 预览铸 token", problems, str(d.get("message") or "")[:100])
 
     if ca.get("confirmToken"):
