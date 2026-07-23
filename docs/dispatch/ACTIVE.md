@@ -5,7 +5,7 @@
 
 ## 在飞任务
 
-- `BUG-F006-PROD-PLAN-ACTION-REGRESSION-001` — `review` — Owner: `/root` — Base SHA: `9ef4cde8a3e5e6859f3530c2bef5bd43b3f106af` — 实现提交 `ecf37f96469376854961ce9918989510965fd3ae` 已恢复生产计划列表的状态驱动生产操作，并补齐核算门禁说明；目标 Vitest 6/6、Web `build:check` 通过，等待 PR 合入后归档并释放 scope；生产业务写入为 0，`NOT_DEPLOYED`。
+- `BUG-F006-PROD-PLAN-ACTION-REGRESSION-001` — `review` — Owner: `/root` — Base SHA: `9ef4cde8a3e5e6859f3530c2bef5bd43b3f106af` — 实现提交 `88733170c51eb42f95f6e758e14c83122bccff05` 已恢复生产计划列表的状态驱动生产操作，并补齐核算门禁说明；目标 Vitest 6/6、Web `build:check` 通过，等待 PR 合入后归档并释放 scope；生产业务写入为 0，`NOT_DEPLOYED`。
 - `SEC-CREDENTIAL-ROTATION-20260719` — `blocked` — Owner: Codex coordinator — Base SHA: `1ba9a241a77144a80851051efbac584abf4db69d` — tracked tree、47/139 非受控副本、数据库/JWT/internal/BaoTa 轮换和生产验收已完成；仍需各供应商控制台吊销无法由当前 API 权限完成的旧长期凭证，详情见 [凭证轮换收尾记录](../security/credential-rotation-closeout-2026-07-20.md)。
 - `ENH-F006-SUPPLIER-IMPORT-001`（含 `REQ-F006-SUPPLIER-REQUIRED-CONTACT-001`、`ENH-F006-SUPPLIER-DETAIL-STATUS-001`）— `in-progress` — Owner: `/root` — Base SHA: `3ddf6751603476205457fcf8aa0ee9f1adbea792` — 复用现有供应链 Excel 共享能力，统一供应商必填资料、导入预览/幂等确认、状态生命周期、采购门禁与详情信息架构；只合入 `main`，严格 `NOT_DEPLOYED`，生产业务写入为 0。
 - `BUG-F006-MATERIAL-CATEGORY-CASCADE-001`（含 `BUG-F006-MATERIAL-AUTOFILL-UNIT-001`）— `in-progress` — Owner: `/root` — Base SHA: `3ddf6751603476205457fcf8aa0ee9f1adbea792` — 修复原料类型字典 category/L1/L2/L3 单一真值、异步级联与单位建议来源/手动覆盖语义，后端 fail-closed 校验；只合入 `main`，严格 `NOT_DEPLOYED`，生产业务写入为 0。

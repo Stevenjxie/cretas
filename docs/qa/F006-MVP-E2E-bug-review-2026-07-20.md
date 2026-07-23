@@ -780,6 +780,6 @@
   - 存货生产已形成阶段完工批次但计划仍 `IN_PROGRESS` 时的“计划级精确跳转到对应批次核算”缺少 plan→finished-batch 查询契约，当前仍先通过计划汇总查看，后续如要开放需补后端精确 identity，不能用“全厂最近批次”猜测。
 - **修改文件**：`web-admin/src/views/production/plans/list.vue`、`productionPlanInformationArchitecture.spec.ts`、本复盘与 dispatch 台账。
 - **测试**：目标 Vitest `productionPlanInformationArchitecture.spec.ts` 6/6 PASS；Web `build:check` PASS（`vue-tsc -b` + Vite production build，4457 modules）。测试覆盖普通计划、存货生产、完成态只读、仓储动作不回流、核算门禁说明与随时可看的计划汇总。
-- **Commit/PR/main 状态**：实现 commit `ecf37f96469376854961ce9918989510965fd3ae`，分支 `codex/prodplan-action-regression-20260723`；PR/main 待本条收尾回填。
+- **Commit/PR/main 状态**：实现 commit `88733170c51eb42f95f6e758e14c83122bccff05`，分支 `codex/prodplan-action-regression-20260723`；PR/main 待本条收尾回填。
 - **部署状态**：`NOT_DEPLOYED`。
 - **回归状态**：`CODE_FIXED_TARGET_TEST_PASS`；生产业务 mutation=0，未修改任何计划、报工、库存或 LIUSHANMEN 数据。
