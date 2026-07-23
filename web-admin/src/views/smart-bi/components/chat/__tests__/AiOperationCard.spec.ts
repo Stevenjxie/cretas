@@ -11,6 +11,17 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { mount, flushPromises } from '@vue/test-utils';
 
 const confirmIntentActionMock = vi.fn();
+// 双重确认 (2026-07-24 写操作契约): ElMessageBox.confirm 默认放行;
+// 单测里可改 mockRejectedValueOnce 模拟用户在二次确认处取消。
+const messageBoxConfirmMock = vi.fn(async () => 'confirm');
+vi.mock('element-plus', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('element-plus')>();
+  return {
+    ...actual,
+    ElMessageBox: { ...actual.ElMessageBox, confirm: (...args: unknown[]) => messageBoxConfirmMock(...args) },
+  };
+});
+
 vi.mock('@/api/smartbi/intent-chat', () => ({
   confirmIntentAction: (...args: unknown[]) => confirmIntentActionMock(...args),
   executeIntent: vi.fn(),
@@ -29,6 +40,10 @@ const globalStubs = {
   },
   'el-icon': { template: '<i><slot /></i>' },
   'el-tag': { template: '<span class="el-tag"><slot /></span>' },
+  'el-alert': {
+    props: ['title', 'type'],
+    template: '<div class="el-alert">{{ title }}<slot /></div>',
+  },
 };
 
 function mountCard(response: Record<string, unknown>) {
@@ -209,5 +224,54 @@ describe('permissionNames dictionary', () => {
     expect(permissionDisplayName('hr:write')).toBe('人事·写');
     expect(permissionDisplayName('unknown:code')).toBe('unknown:code');
     expect(permissionDisplayName(null)).toBe('');
+  });
+});
+
+describe('AiOperationCard — 写操作影响契约 (2026-07-24)', () => {
+  const previewWithImpact = {
+    status: 'PREVIEW',
+    intentCode: 'MATERIAL_BATCH_UPDATE',
+    intentName: '修改批次数量',
+    message: '{}',
+    formattedText: '',
+    confirmableAction: {
+      confirmToken: 'tok-1', commandDigest: 'd'.repeat(64),
+      expiresAt: new Date(Date.now() + 300000).toISOString(), expiresInSeconds: 300,
+      currentValues: { 数量: '320kg' },
+      newValues: { 数量: '520kg' },
+      impactSummary: '此操作将修改「修改批次数量」相关的现有数据，确认后立即生效。 本次共 1 项字段变更，详见上方对比。',
+      actionType: 'UPDATE', riskLevel: 'MEDIUM',
+    },
+  } as never;
+
+  it('renders impact summary alert and before/after diff table', () => {
+    const wrapper = mountCard(previewWithImpact);
+    expect(wrapper.text()).toContain('此操作将修改');
+    expect(wrapper.text()).toContain('1 项字段变更');
+    expect(wrapper.text()).toContain('当前');
+    expect(wrapper.text()).toContain('修改后');
+    expect(wrapper.text()).toContain('320kg');
+    expect(wrapper.text()).toContain('520kg');
+  });
+
+  it('double-confirm: cancelling the second confirmation does NOT execute', async () => {
+    messageBoxConfirmMock.mockRejectedValueOnce(new Error('cancel'));
+    const wrapper = mountCard(previewWithImpact);
+    await wrapper.find('button.el-button').trigger('click');
+    await new Promise((r) => setTimeout(r, 0));
+    expect(confirmIntentActionMock).not.toHaveBeenCalled();
+    // 卡片保持可再次确认 (不进入 pending/done)
+    expect(wrapper.text()).toContain('确认执行');
+  });
+
+  it('double-confirm: second confirmation shows impact text before executing', async () => {
+    confirmIntentActionMock.mockResolvedValueOnce({ status: 'SUCCESS', message: '已执行' });
+    const wrapper = mountCard(previewWithImpact);
+    await wrapper.find('button.el-button').trigger('click');
+    await new Promise((r) => setTimeout(r, 0));
+    expect(messageBoxConfirmMock).toHaveBeenCalled();
+    const [msg] = messageBoxConfirmMock.mock.calls[messageBoxConfirmMock.mock.calls.length - 1];
+    expect(String(msg)).toContain('此操作将修改');
+    expect(confirmIntentActionMock).toHaveBeenCalled();
   });
 });
