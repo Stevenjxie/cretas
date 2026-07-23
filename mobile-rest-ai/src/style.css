@@ -533,6 +533,16 @@ svg {
   stroke-width: 1.8;
 }
 
+/* 👍/👎 已选态 (飞轮断点2, 2026-07-23) */
+.answer-footer button.feedback-active {
+  color: #2d6a4f;
+  font-weight: 600;
+}
+
+.answer-footer button:disabled {
+  opacity: 0.6;
+}
+
 .answer-footer .source-toggle {
   min-height: 28px;
   margin-left: auto;

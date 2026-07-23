@@ -105,23 +105,35 @@
 
               <div class="answer-footer">
                 <span>数据更新于：2025-06-02 09:30</span>
-                <button type="button" aria-label="有帮助">
+                <button
+                  type="button"
+                  aria-label="有帮助"
+                  :class="{ 'feedback-active': message.feedbackValue === 1 }"
+                  :disabled="message.feedbackPending || message.isStreaming"
+                  @click="sendFeedback(message, 1)"
+                >
                   <svg viewBox="0 0 24 24" aria-hidden="true">
                     <path d="M7 10v11" />
                     <path d="M15 6.5 14 10h5.2a2 2 0 0 1 2 2.3l-1 6.5A2.6 2.6 0 0 1 17.6 21H7" />
                     <path d="M7 10H4a1 1 0 0 0-1 1v9a1 1 0 0 0 1 1h3" />
                     <path d="M14 10V4.7a2 2 0 0 0-2-2L8 10" />
                   </svg>
-                  有帮助
+                  {{ message.feedbackValue === 1 ? '已反馈' : '有帮助' }}
                 </button>
-                <button type="button" aria-label="没帮助">
+                <button
+                  type="button"
+                  aria-label="没帮助"
+                  :class="{ 'feedback-active': message.feedbackValue === -1 }"
+                  :disabled="message.feedbackPending || message.isStreaming"
+                  @click="sendFeedback(message, -1)"
+                >
                   <svg viewBox="0 0 24 24" aria-hidden="true">
                     <path d="M17 14V3" />
                     <path d="m9 17.5 1-3.5H4.8a2 2 0 0 1-2-2.3l1-6.5A2.6 2.6 0 0 1 6.4 3H17" />
                     <path d="M17 14h3a1 1 0 0 0 1-1V4a1 1 0 0 0-1-1h-3" />
                     <path d="M10 14v5.3a2 2 0 0 0 2 2l4-7.3" />
                   </svg>
-                  没帮助
+                  {{ message.feedbackValue === -1 ? '已记录' : '没帮助' }}
                 </button>
                 <button class="source-toggle" type="button" @click="showDebug = !showDebug">
                   {{ showDebug ? '隐藏 source' : 'source' }}
@@ -208,7 +220,7 @@
 import DOMPurify from 'dompurify'
 import { marked } from 'marked'
 import { computed, defineComponent, h, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
-import { RequestTimeoutError, askSynthesis, askSynthesisStream, clearToken, demoLogin } from './api'
+import { RequestTimeoutError, askSynthesis, askSynthesisStream, clearToken, demoLogin, sendAnswerFeedback } from './api'
 import ChartBlock from './components/ChartBlock.vue'
 import type { ChartPayload, ChatMessage, SynthesisResponse } from './types'
 
@@ -268,6 +280,21 @@ function createMessage(role: ChatMessage['role'], content: string): ChatMessage 
     content,
     createdAt: Date.now(),
   }
+}
+
+// 👍/👎 反馈 (飞轮断点2, 2026-07-23): 乐观翻转, 失败回滚。此前两个按钮是
+// 纯装饰 (无 handler) — 现在真写飞轮捕获表, 给晋升评审加证据。
+async function sendFeedback(message: ChatMessage, value: 1 | -1): Promise<void> {
+  if (!message.sourceQuery || message.feedbackPending || message.isStreaming) return
+  if (message.feedbackValue === value) return
+  const prevValue = message.feedbackValue
+  message.feedbackPending = true
+  message.feedbackValue = value
+  const ok = await sendAnswerFeedback(message.sourceQuery, value)
+  if (!ok) {
+    message.feedbackValue = prevValue
+  }
+  message.feedbackPending = false
 }
 
 function renderMarkdown(markdown: string): string {
@@ -449,6 +476,7 @@ async function sendQuestion(question: string): Promise<void> {
   threadError.value = ''
   messages.value.push(createMessage('user', normalized))
   const assistantMessage = createMessage('assistant', '')
+  assistantMessage.sourceQuery = normalized
   assistantMessage.isStreaming = true
   assistantMessage.status = '正在连接…'
   messages.value.push(assistantMessage)

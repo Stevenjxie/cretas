@@ -402,3 +402,30 @@ export async function askSynthesisStream(
     reader.releaseLock()
   }
 }
+
+/**
+ * 👍/👎 feedback on an answer (飞轮断点2, 2026-07-23). Backend correlates by
+ * (tenant-from-JWT, trim(query)) against the flywheel capture table. Returns
+ * false on any failure — callers revert their optimistic UI state.
+ */
+export async function sendAnswerFeedback(
+  query: string,
+  value: 1 | -1,
+): Promise<boolean> {
+  const token = getToken()
+  if (!token) return false
+  try {
+    const response = await fetch('/api/smartbi/restaurant/feedback', {
+      method: 'POST',
+      credentials: 'include',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify({ query, value }),
+    })
+    return response.ok
+  } catch {
+    return false
+  }
+}

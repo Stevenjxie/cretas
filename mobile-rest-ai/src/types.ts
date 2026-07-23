@@ -33,4 +33,9 @@ export interface ChatMessage {
   status?: string
   isStreaming?: boolean
   createdAt: number
+  // 👍/👎 反馈 (飞轮断点2, 2026-07-23) — assistant 消息回答的原问题;
+  // 后端按 (租户, 问法) 关联飞轮捕获行。
+  sourceQuery?: string
+  feedbackValue?: 1 | -1
+  feedbackPending?: boolean
 }

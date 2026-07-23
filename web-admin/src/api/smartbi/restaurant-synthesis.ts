@@ -162,3 +162,28 @@ export async function askRestaurantSynthesis(
     };
   }
 }
+
+/**
+ * 👍/👎 feedback on a restaurant AI answer (飞轮断点2, 2026-07-23).
+ *
+ * Backend correlates by (tenant-from-JWT, trim(query)) → updates the latest
+ * flywheel capture row's user_feedback, or inserts a standalone feedback row
+ * when the answer came from a path with no capture (synthesis-direct). Fire
+ * from button handlers optimistically; returns false on any failure so the
+ * caller can revert its UI state.
+ */
+export async function sendRestaurantAnswerFeedback(
+  query: string,
+  value: 1 | -1,
+  comment?: string,
+): Promise<boolean> {
+  try {
+    await pythonFetch('/api/smartbi/restaurant/feedback', {
+      method: 'POST',
+      body: JSON.stringify({ query, value, comment: comment || null }),
+    });
+    return true;
+  } catch {
+    return false;
+  }
+}
