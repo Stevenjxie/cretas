@@ -45,6 +45,8 @@ public class BomSeasoningWorkspaceResponse {
         /** Standard denominator inherited from the pinned Workflow process node. */
         private BigDecimal standardBasisQuantity;
         private String standardBasisUnit;
+        /** SEMI_FINISHED / FINISHED_GOOD, inherited from the pinned output port or material node. */
+        private String standardBasisMaterialKind;
         /** False when the legacy g-per-kg seasoning model cannot represent this node safely. */
         private boolean standardUsageSupported;
         private List<BomSeasoningItem> bindings;

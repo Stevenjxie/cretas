@@ -103,6 +103,7 @@ public class BomSeasoningWorkspaceServiceImpl implements BomSeasoningWorkspaceSe
                     configured.processOrder(),
                     configured.standardBasisQuantity(),
                     configured.standardBasisUnit(),
+                    configured.standardBasisMaterialKind(),
                     configured.standardUsageSupported(),
                     processBindings));
         }
@@ -139,7 +140,7 @@ public class BomSeasoningWorkspaceServiceImpl implements BomSeasoningWorkspaceSe
                     material != null ? material.getName() : first.getName(),
                     material != null ? material.getCategory() : null,
                     material != null ? material.getUnit() : null,
-                    first.getPriceSource1(),
+                    effectivePrice(first),
                     processUsages));
         });
         return response;
@@ -219,13 +220,20 @@ public class BomSeasoningWorkspaceServiceImpl implements BomSeasoningWorkspaceSe
 
     private void apply(BomSeasoningItem binding, RawMaterialType material, BigDecimal dosage,
                        BigDecimal ratio, Boolean countInSeasoning, String remark) {
+        PriceSnapshot price = resolvePrice(material);
         binding.setName(material.getName());
         binding.setDosagePerKgG(dosage);
         binding.setSubsequentPotRatio(ratio);
-        binding.setPriceSource1(material.getMovingAvgPrice());
-        binding.setPriceSource2(null);
+        binding.setPriceSource1(price.movingAveragePrice());
+        binding.setPriceSource2(price.purchaseReferencePrice());
         binding.setCountInSeasoning(countInSeasoning != null ? countInSeasoning : Boolean.TRUE);
         binding.setRemark(remark);
+    }
+
+    private BigDecimal effectivePrice(BomSeasoningItem binding) {
+        return positive(binding.getPriceSource1())
+                ? binding.getPriceSource1()
+                : positive(binding.getPriceSource2()) ? binding.getPriceSource2() : null;
     }
 
     private BomRecipe loadRecipe(String factoryId, String recipeId) {
@@ -297,7 +305,7 @@ public class BomSeasoningWorkspaceServiceImpl implements BomSeasoningWorkspaceSe
             return activePath.get().processes().stream()
                     .map(step -> new ResolvedProcess(
                             step.processNodeId(), step.workProcessId(), step.order(),
-                            null, null, false))
+                            null, null, null, false))
                     .toList();
         }
         return productWorkProcessRepository
@@ -305,7 +313,7 @@ public class BomSeasoningWorkspaceServiceImpl implements BomSeasoningWorkspaceSe
                 .stream()
                 .map(process -> new ResolvedProcess(
                         "legacy:" + process.getId(), process.getWorkProcessId(), process.getProcessOrder(),
-                        null, null, false))
+                        null, null, null, false))
             .toList();
     }
 
@@ -314,7 +322,7 @@ public class BomSeasoningWorkspaceServiceImpl implements BomSeasoningWorkspaceSe
         StandardBasis basis = standardBasis(graph, step.processNodeId());
         return new ResolvedProcess(
                 step.processNodeId(), step.workProcessId(), step.order(),
-                basis.quantity(), basis.unit(), basis.supported());
+                basis.quantity(), basis.unit(), basis.materialKind(), basis.supported());
     }
 
     private StandardBasis standardBasis(PinnedWorkflowGraph graph, String processNodeId) {
@@ -324,6 +332,10 @@ public class BomSeasoningWorkspaceServiceImpl implements BomSeasoningWorkspaceSe
         if (node == null || node.getData() == null) return StandardBasis.unsupported();
 
         Set<String> outputUnits = new java.util.LinkedHashSet<>();
+        Set<String> outputKinds = new java.util.LinkedHashSet<>();
+        Map<String, ProductProcessWorkflowDTO.Node> nodesById = graph.nodes().stream()
+                .collect(Collectors.toMap(ProductProcessWorkflowDTO.Node::getId, Function.identity(),
+                        (left, right) -> left));
         Object rawPorts = node.getData().get("ports");
         if (rawPorts instanceof List<?> ports) {
             for (Object rawPort : ports) {
@@ -331,19 +343,56 @@ public class BomSeasoningWorkspaceServiceImpl implements BomSeasoningWorkspaceSe
                         || !"OUTPUT".equalsIgnoreCase(Objects.toString(port.get("direction"), ""))) {
                     continue;
                 }
-                String unit = canonicalWorkflowUnit(Objects.toString(port.get("unit"), null));
-                if (unit != null) outputUnits.add(unit);
+                addCanonicalUnit(outputUnits, port.get("unit"));
+                addCanonicalKind(outputKinds, port.get("materialKind"));
+                collectMaterialNodeContract(
+                        nodesById.get(Objects.toString(port.get("materialNodeId"), null)),
+                        outputUnits, outputKinds);
             }
         }
-        if (outputUnits.isEmpty()) {
-            String unit = canonicalWorkflowUnit(Objects.toString(node.getData().get("outputUnit"), null));
-            if (unit != null) outputUnits.add(unit);
+        addCanonicalUnit(outputUnits, node.getData().get("outputUnit"));
+        addCanonicalKind(outputKinds, node.getData().get("outputMaterialKind"));
+        for (ProductProcessWorkflowDTO.Edge edge : graph.edges()) {
+            if (Objects.equals(processNodeId, edge.getSource())) {
+                collectMaterialNodeContract(nodesById.get(edge.getTarget()), outputUnits, outputKinds);
+            }
         }
         if (outputUnits.size() != 1) return StandardBasis.unsupported();
         String unit = outputUnits.iterator().next();
-        if ("kg".equals(unit)) return new StandardBasis(BigDecimal.ONE, "kg", true);
-        if ("g".equals(unit)) return new StandardBasis(new BigDecimal("1000"), "g", true);
-        return new StandardBasis(BigDecimal.ONE, unit, false);
+        String materialKind = outputKinds.size() == 1 ? outputKinds.iterator().next() : null;
+        if (outputKinds.size() > 1) return StandardBasis.unsupported();
+        if ("kg".equals(unit)) return new StandardBasis(BigDecimal.ONE, "kg", materialKind, true);
+        if ("g".equals(unit)) return new StandardBasis(new BigDecimal("1000"), "g", materialKind, true);
+        return new StandardBasis(BigDecimal.ONE, unit, materialKind, false);
+    }
+
+    private void collectMaterialNodeContract(ProductProcessWorkflowDTO.Node materialNode,
+                                             Set<String> outputUnits,
+                                             Set<String> outputKinds) {
+        if (materialNode == null || materialNode.getData() == null) return;
+        addCanonicalUnit(outputUnits, materialNode.getData().get("baseUnit"));
+        addCanonicalKind(outputKinds, materialNode.getData().get("materialKind"));
+        addCanonicalKind(outputKinds, materialNode.getKind());
+    }
+
+    private void addCanonicalUnit(Set<String> units, Object rawUnit) {
+        String unit = canonicalWorkflowUnit(Objects.toString(rawUnit, null));
+        if (unit != null) units.add(unit);
+    }
+
+    private void addCanonicalKind(Set<String> kinds, Object rawKind) {
+        String kind = canonicalMaterialKind(Objects.toString(rawKind, null));
+        if (kind != null) kinds.add(kind);
+    }
+
+    private String canonicalMaterialKind(String rawKind) {
+        if (rawKind == null || rawKind.isBlank()) return null;
+        return switch (rawKind.trim().toUpperCase(Locale.ROOT)) {
+            case "SEMI_FINISHED", "SEMI_FINISHED_PRODUCT" -> "SEMI_FINISHED";
+            case "FINISHED", "FINISHED_GOOD", "FINISHED_PRODUCT", "PRODUCT" -> "FINISHED_GOOD";
+            case "MATERIAL", "CELL", "RAW_MATERIAL", "PROCESS" -> null;
+            default -> rawKind.trim().toUpperCase(Locale.ROOT);
+        };
     }
 
     private String canonicalWorkflowUnit(String rawUnit) {
@@ -397,11 +446,12 @@ public class BomSeasoningWorkspaceServiceImpl implements BomSeasoningWorkspaceSe
             Integer processOrder,
             BigDecimal standardBasisQuantity,
             String standardBasisUnit,
+            String standardBasisMaterialKind,
             boolean standardUsageSupported) { }
 
-    private record StandardBasis(BigDecimal quantity, String unit, boolean supported) {
+    private record StandardBasis(BigDecimal quantity, String unit, String materialKind, boolean supported) {
         private static StandardBasis unsupported() {
-            return new StandardBasis(null, null, false);
+            return new StandardBasis(null, null, null, false);
         }
     }
 
@@ -421,12 +471,27 @@ public class BomSeasoningWorkspaceServiceImpl implements BomSeasoningWorkspaceSe
         if (!auxiliary) {
             throw new BusinessException(400, "只能选择辅料或调料物料: " + material.getName());
         }
-        if (material.getMovingAvgPrice() == null) {
-            throw new BusinessException(400, "调料物料缺少移动平均价: " + material.getName())
-                    .withHint("请先维护采购价格");
-        }
+        resolvePrice(material);
         return material;
     }
+
+    private PriceSnapshot resolvePrice(RawMaterialType material) {
+        if (positive(material.getMovingAvgPrice())) {
+            return new PriceSnapshot(material.getMovingAvgPrice(), null);
+        }
+        if (positive(material.getTaxIncludedUnitPrice())) {
+            return new PriceSnapshot(null, material.getTaxIncludedUnitPrice());
+        }
+        throw new BusinessException(400, "调料物料缺少有效成本价格: " + material.getName())
+                .withCode("SEASONING_PRICE_REQUIRED")
+                .withHint("请维护正数移动平均价或含税采购参考价");
+    }
+
+    private boolean positive(BigDecimal value) {
+        return value != null && value.signum() > 0;
+    }
+
+    private record PriceSnapshot(BigDecimal movingAveragePrice, BigDecimal purchaseReferencePrice) { }
 
     private void validateValues(BigDecimal dosage, BigDecimal ratio) {
         if (dosage == null || dosage.signum() <= 0) {
@@ -478,9 +543,10 @@ public class BomSeasoningWorkspaceServiceImpl implements BomSeasoningWorkspaceSe
         if (material == null || !Boolean.TRUE.equals(material.getIsActive())) {
             response.getAnomalies().add(new BomSeasoningWorkspaceResponse.Anomaly(
                     "INVALID_MATERIAL", "调料物料不存在或已停用", binding.getId()));
-        } else if (material.getMovingAvgPrice() == null) {
+        } else if (!positive(material.getMovingAvgPrice())
+                && !positive(material.getTaxIncludedUnitPrice())) {
             response.getAnomalies().add(new BomSeasoningWorkspaceResponse.Anomaly(
-                    "MISSING_PRICE", "调料物料缺少移动平均价", binding.getId()));
+                    "MISSING_PRICE", "调料物料缺少有效移动平均价或采购参考价", binding.getId()));
         }
     }
 }

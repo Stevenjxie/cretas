@@ -28,11 +28,17 @@ describe('work process output kind', () => {
     expect(source).toContain('placeholder="默认留空；需要固定识别码时再配置"');
   });
 
-  it('suggests history and blocks exact duplicate process names', () => {
+  it('supports controlled category creation, search filters, and created-time display', () => {
     expect(source).toContain(':fetch-suggestions="queryProcessNames"');
-    // 类别来自统一 taxonomy，下拉可搜索但不允许自由文本制造新类别。
     expect(source).toContain('v-for="category in processCategoryOptions"');
+    expect(source).toContain('label="＋ 创建新类别"');
+    expect(source).toContain('function confirmNewCategory()');
+    expect(source).toContain('类别“${duplicate}”已存在');
+    expect(source).toContain('createCategory: isNewCategory.value');
     expect(source).toContain('placeholder="选择工序类别"');
+    expect(source).toContain('placeholder="搜索工序名称、编码或类别"');
+    expect(source).toContain('v-model="filterStatus"');
+    expect(source).toContain('prop="createdAt" label="创建时间"');
     expect(source).toContain('const exactNameDuplicate = computed');
     expect(source).toContain('已存在同名工序');
     expect(source).toContain('if (exactNameDuplicate.value)');

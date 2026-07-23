@@ -251,6 +251,38 @@
           </el-empty>
         </div>
       </div>
+
+      <section class="workflow-ai-footer" aria-label="Workflow AI 助手">
+        <div class="workflow-ai-footer__header">
+          <div>
+            <strong>Workflow AI</strong>
+            <span>{{ aiContextLabel }}</span>
+          </div>
+          <el-button
+            text
+            size="small"
+            :aria-expanded="!aiCollapsed"
+            aria-controls="workflow-ai-composer"
+            @click="aiCollapsed = !aiCollapsed"
+          >{{ aiCollapsed ? '展开' : '收起' }}</el-button>
+        </div>
+        <div id="workflow-ai-composer" v-show="!aiCollapsed" class="workflow-ai-footer__composer">
+          <WorkProcessAIChatPanel
+            v-if="factoryId"
+            :key="`${factoryId}:${productTypeId}`"
+            :factory-id="factoryId"
+            :product-type-id="productTypeId"
+            :endpoint="`/${factoryId}/config/v2/ai/chat`"
+            module-code="product_process_workflow_config"
+            title="Workflow AI 助手"
+            :disabled="!canEdit"
+            :context="selectedNodeContext"
+            :context-label="aiContextLabel"
+            :quick-prompts="aiQuickPrompts"
+            @apply-draft="applyWorkflowAIDraft"
+          />
+        </div>
+      </section>
     </div>
 
     <el-dialog v-model="processDialogVisible" title="增加后续工序" width="480px" destroy-on-close>
@@ -504,6 +536,7 @@ import {
   type WorkProcessOutputMaterialKind,
 } from '@/api/processProduction';
 import UnitSelect from '@/components/common/UnitSelect.vue';
+import WorkProcessAIChatPanel from '@/views/system/components/WorkProcessAIChatPanel.vue';
 import WorkflowMaterialNode from './WorkflowMaterialNode.vue';
 import WorkflowProcessNode from './WorkflowProcessNode.vue';
 import {
@@ -3193,6 +3226,44 @@ function identitiesMatch(left: WorkflowIdentity, right: WorkflowIdentity): boole
 .canvas-shell {
   position: relative; flex: 1; min-height: 0; height: 0; overflow: hidden;
   border: 1px solid #dce8f3; border-top: none; border-radius: 0 0 10px 10px; background: #fbfdff;
+}
+.workflow-ai-footer {
+  flex: none;
+  min-width: 0;
+  border: 1px solid #dce8f3;
+  border-top: 0;
+  border-radius: 0 0 10px 10px;
+  background: #fff;
+  box-shadow: 0 -2px 10px rgb(27 101 168 / 6%);
+}
+.workflow-ai-footer__header {
+  min-height: 38px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 4px 10px;
+}
+.workflow-ai-footer__header > div {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+.workflow-ai-footer__header span {
+  color: var(--el-text-color-secondary);
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.workflow-ai-footer__composer {
+  max-height: 210px;
+  overflow: auto;
+  padding: 0 10px 10px;
+}
+.workflow-ai-footer :deep(.work-process-ai-chat-panel) {
+  width: 100%;
 }
 .workflow-canvas { width: 100%; height: 100%; min-height: 0; }
 .workflow-canvas.is-batch-selecting :deep(.vue-flow__pane) { cursor: crosshair; }

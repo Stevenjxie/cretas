@@ -510,6 +510,52 @@ class WorkProcessServiceImplTest {
             assertNull(existing.getSemiFinishedOutputCode());
             verify(workProcessRepository).save(existing);
         }
+
+        @Test
+        @DisplayName("新类别必须显式确认，已有类别按规范化名称复用")
+        void testCategoryCreationIsExplicitAndDeduplicated() {
+            WorkProcessDTO rejected = buildDefaultCreateDTO();
+            rejected.setProcessCategory("包装");
+            when(workProcessRepository.findDistinctProcessCategories(FACTORY_ID))
+                    .thenReturn(List.of("加工"));
+
+            BusinessException ex = assertThrows(BusinessException.class,
+                    () -> service.create(FACTORY_ID, rejected));
+            assertTrue(ex.getMessage().contains("工序类别字典中不存在"));
+            verify(workProcessRepository, never()).save(any());
+
+            reset(workProcessRepository);
+            WorkProcessDTO created = buildDefaultCreateDTO();
+            created.setProcessCategory("  包装  ");
+            created.setCreateCategory(true);
+            when(workProcessRepository.findDistinctProcessCategories(FACTORY_ID))
+                    .thenReturn(List.of("加工"));
+            when(workProcessRepository.existsByFactoryIdAndProcessName(FACTORY_ID, "炸制"))
+                    .thenReturn(false);
+            when(workProcessRepository.save(any(WorkProcess.class))).thenAnswer(inv -> inv.getArgument(0));
+
+            service.create(FACTORY_ID, created);
+            verify(workProcessRepository).save(workProcessCaptor.capture());
+            assertEquals("包装", workProcessCaptor.getValue().getProcessCategory());
+        }
+
+        @Test
+        @DisplayName("类别名称大小写和全角形式重复时复用已有类别")
+        void testCategoryDuplicateUsesExistingCanonicalLabel() {
+            WorkProcessDTO dto = buildDefaultCreateDTO();
+            dto.setProcessCategory(" ｐａｃｋａｇｉｎｇ ");
+            dto.setCreateCategory(true);
+            when(workProcessRepository.findDistinctProcessCategories(FACTORY_ID))
+                    .thenReturn(List.of("PACKAGING"));
+            when(workProcessRepository.existsByFactoryIdAndProcessName(FACTORY_ID, "炸制"))
+                    .thenReturn(false);
+            when(workProcessRepository.save(any(WorkProcess.class))).thenAnswer(inv -> inv.getArgument(0));
+
+            service.create(FACTORY_ID, dto);
+
+            verify(workProcessRepository).save(workProcessCaptor.capture());
+            assertEquals("PACKAGING", workProcessCaptor.getValue().getProcessCategory());
+        }
     }
 
     // ==================== 删除工序测试 ====================

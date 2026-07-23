@@ -33,7 +33,7 @@ export function buildMaterialSummaries(
         materialName: binding.materialName || binding.name,
         materialCode: binding.materialCode ?? null,
         unit: binding.unit ?? 'g',
-        priceSnapshot: binding.priceSnapshot ?? binding.priceSource1 ?? null,
+        priceSnapshot: binding.priceSnapshot ?? binding.priceSource1 ?? binding.priceSource2 ?? null,
         usages: [],
       };
       existing.usages.push({
@@ -42,8 +42,8 @@ export function buildMaterialSummaries(
         workProcessId: process.workProcessId,
         processOrder: process.processOrder,
         processName: process.processName,
-        basisQuantity: process.basisQuantity ?? null,
-        basisUnit: process.basisUnit ?? null,
+        basisQuantity: process.standardBasisQuantity ?? process.basisQuantity ?? null,
+        basisUnit: process.standardBasisUnit ?? process.basisUnit ?? null,
         dosagePerKgG: binding.dosagePerKgG,
         subsequentPotRatio: binding.subsequentPotRatio,
         countInSeasoning: binding.countInSeasoning,

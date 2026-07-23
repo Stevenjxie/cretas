@@ -813,3 +813,20 @@
 - **Commit/PR/main 状态**：修复已完成并通过目标验证，随本批分支合入 main；exact commit/main 以最终交付回执为准。
 - **部署状态**：`NOT_DEPLOYED`。
 - **回归状态**：`CODE_FIXED_TARGET_TESTS_AND_BUILD_PASSED_AWAITING_MERGE`；修复期间生产业务 mutation=0，未创建或修改 SKU，未触碰 LIUSHANMEN。
+
+### BUG-F006-R4-BOM-PROCESS-AUXILIARY-PRICE-BASIS-001 — 工序辅料价格回退与投入基准未解析
+
+- **发现阶段/时间/页面/步骤**：F006 `CPF0060018 / BOM-20260723-001 v1 DRAFT` 工序辅料人工续测，2026-07-23；物料 `MHV7YA000001` 已维护含税采购参考价 20 元/kg，返回“添加工序调料”后仍提示缺少移动平均价；点击“重新读取价格”无效，投入句子同时显示“每生产 未解析 本工序产出”。
+- **期望/实际/业务影响**：库存移动平均价存在时优先；新物料尚无库存成本时允许把正数含税采购参考价作为 BOM 草稿成本回退并明确标注来源。固定 Workflow 修订的“原料处理”产出为 kg 半成品时，应显示“1 kg 本工序半成品”，保存 `12 g/kg`。实际前后端只认移动平均价，采购参考价无法解除门禁；前端字段名又与后端 DTO 不一致，导致合法基准被渲染为未解析，BOM 草稿无法继续。
+- **证据路径**：`D:/Temp/codex-clipboard-fc81d2b0-1e66-44cc-9817-b7ed7858dd63.png`、`D:/Temp/codex-clipboard-246f3ddf-b2a1-4609-a9a8-87104731ec96.png`、`D:/Temp/codex-clipboard-cefd833d-efad-4e31-a053-3b52b27b685b.png`。
+- **根因**：
+  - `SeasoningBindingDialog` 的物料契约与刷新状态只包含 `movingAvgPrice`，忽略 `/raw-material-types/active` 已返回的 `taxIncludedUnitPrice`；
+  - 后端 `validateMaterial/apply/collectAnomalies` 同样只检查/快照移动平均价；
+  - 后端 Workspace 返回 `standardBasisQuantity/standardBasisUnit`，Web 却读取 `basisQuantity/basisUnit`；
+  - 固定修订解析器只看工序节点自身的 output unit，没有沿 OUTPUT port 的 `materialNodeId` 或出边读取产出半成品节点 `baseUnit/materialKind`。
+- **修复**：建立单一价格选择器：正数移动平均价写入 `priceSource1` 并优先；否则正数含税采购参考价写入 `priceSource2`，仅作为草稿成本回退且 UI 标注“采购参考价”，不伪装或回写移动平均价；两者均缺失/零/负数时前后端 fail-closed。“重新读取价格”重新请求当前 F006 active 物料 DTO，同时刷新两种价格并保留表单。统一消费后端 `standardBasis*` 契约，并从固定 Workflow 修订的 OUTPUT port、`materialNodeId` 和出边目标节点解析 canonical unit/material kind；kg/公斤统一为 `1 kg`，多产出单位冲突或缺失继续阻止保存。投入区域改为“生产基准 → 需要投入”比例卡片，并显示最终 `g/kg` 保存口径。
+- **修改文件**：Java `BomSeasoningWorkspaceResponse`、`BomSeasoningWorkspaceServiceImpl` 与目标测试；Web `api/bom.ts`、`SeasoningBindingDialog.vue`、`ProcessSeasoningCard.vue`、`BomAuxiliaryWorkspace.vue`、`seasoningModel.ts` 及组件测试；不涉及 Entity、Repository、迁移或历史数据桥接。
+- **测试**：覆盖移动平均价优先、采购参考价回退、权威刷新后解除阻塞、null/0/负数门禁、kg/公斤解析、沿产出半成品节点解析、单位缺失/冲突 fail-closed、价格来源回读与 `12 g/kg` payload；最终 Java/Web 结果与不可变发布 manifest 在合入前回填。
+- **Commit/PR/main 状态**：等待最终实现 commit、PR 与 exact main 回填。
+- **部署状态**：`DEPLOY_AUTHORIZED_AWAITING_RELEASE`。
+- **线上验收计划**：仅登录并证明 `factoryUser.factoryId=F006` 后，对 `BOM-20260723-001` 选择 `MHV7YA000001`，确认价格来源与 `1 kg` 基准，保存一次 `12 g/kg / 首锅100% / 后续50% / 计入成本` 并刷新回读；同一工序/物料不得重复绑定，其他租户业务 mutation=0。

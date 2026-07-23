@@ -5,6 +5,7 @@ import SeasoningBindingDialog from '../SeasoningBindingDialog.vue';
 
 const createBinding = vi.fn();
 const convertUnit = vi.fn();
+const getRawMaterialTypes = vi.fn();
 const resolveRoute = vi.fn(() => ({ href: '/warehouse/material-types?keyword=辣椒粉' }));
 
 vi.mock('@/api/bom', async (importOriginal) => {
@@ -24,10 +25,17 @@ vi.mock('vue-router', () => ({
 vi.mock('@/api/unitContract', () => ({
   convertUnit: (...args: unknown[]) => convertUnit(...args),
 }));
+vi.mock('@/api/request', () => ({
+  get: (...args: unknown[]) => getRawMaterialTypes(...args),
+}));
 
 const process = {
   workflowProcessNodeId: 'node-roll', workProcessId: 'ROLL', processOrder: 1, processName: '滚揉',
-  basisQuantity: 1, basisUnit: 'kg', standardUsageSupported: true, bindings: [],
+  standardBasisQuantity: 1,
+  standardBasisUnit: 'kg',
+  standardBasisMaterialKind: 'SEMI_FINISHED',
+  standardUsageSupported: true,
+  bindings: [],
 };
 
 function mountDialog(price: number | null, materials = [{ id: 'M1', name: '辣椒粉', unit: 'g', movingAvgPrice: price }]) {
@@ -69,6 +77,7 @@ describe('SeasoningBindingDialog', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     convertUnit.mockResolvedValue({ success: true, data: { quantity: 500 } });
+    getRawMaterialTypes.mockResolvedValue({ success: true, data: [] });
   });
 
   it('defaults a new binding to the pinned 1千克 basis and offers localized material units', async () => {
@@ -102,7 +111,7 @@ describe('SeasoningBindingDialog', () => {
       quantity: 1, fromUnit: '斤', toUnit: 'g',
     }));
     expect(wrapper.findComponent({ name: 'ElInputNumber' }).props('modelValue')).toBe(1);
-    expect(wrapper.text()).toContain('每生产 1千克 本工序产出');
+    expect(wrapper.text()).toContain('每生产 1 kg 本工序半成品');
     const unitSelect = wrapper.get('[data-testid="seasoning-dosage-unit"]')
       .findComponent({ name: 'ElSelect' });
     unitSelect.vm.$emit('update:modelValue', '斤');
@@ -121,7 +130,7 @@ describe('SeasoningBindingDialog', () => {
     await fillRequiredFields(wrapper, 1.5, 'kg');
 
     expect(wrapper.get('[data-testid="seasoning-dosage-sentence"]').text())
-      .toContain('每生产 1千克 本工序产出，需要投入');
+      .toContain('每生产 1 kg 本工序半成品需要投入');
     await wrapper.findAll('button').find((button) => button.text().includes('保存到本工序'))?.trigger('click');
     await flushPromises();
 
@@ -132,15 +141,16 @@ describe('SeasoningBindingDialog', () => {
   });
 
   it.each([
-    ['box', '盒'],
-    ['L', '升'],
-  ])('fails closed for an unsupported %s process basis', async (basisUnit, label) => {
+    ['box'],
+    ['L'],
+  ])('fails closed for an unsupported %s process basis', async (basisUnit) => {
     const wrapper = mountDialog(18);
     await wrapper.setProps({
-      process: { ...process, basisUnit, basisQuantity: 1, standardUsageSupported: false },
+      process: { ...process, standardBasisUnit: basisUnit, standardBasisQuantity: 1, standardUsageSupported: false },
     });
     await fillRequiredFields(wrapper, 5, 'g');
-    expect(wrapper.text()).toContain(`每生产 1${label}`);
+    expect(wrapper.text()).toContain(`1 ${basisUnit}`);
+    expect(wrapper.text()).toContain('无法解析本工序产出单位');
     await wrapper.findAll('button').find((button) => button.text().includes('保存到本工序'))?.trigger('click');
     await flushPromises();
     expect(createBinding).not.toHaveBeenCalled();
@@ -184,9 +194,83 @@ describe('SeasoningBindingDialog', () => {
     }));
   });
 
-  it('keeps the form open and offers a price shortcut when moving average price is missing', async () => {
+  it('prefers moving average price and labels its source', async () => {
+    const wrapper = mountDialog(18, [{
+      id: 'M1',
+      name: '辣椒粉',
+      unit: 'kg',
+      movingAvgPrice: 18,
+      taxIncludedUnitPrice: 20,
+    }]);
+    await fillRequiredFields(wrapper, 5, 'g');
+
+    expect(wrapper.get('[data-testid="seasoning-automatic-price"]')
+      .findComponent({ name: 'ElInput' }).props('modelValue')).toBe('¥18.0000 / 千克');
+    expect(wrapper.get('[data-testid="seasoning-automatic-price"]').text()).toContain('移动平均价');
+  });
+
+  it('uses purchase reference price as a clearly labelled draft-cost fallback', async () => {
+    createBinding.mockResolvedValue({ success: true, data: {} });
+    const wrapper = mountDialog(null, [{
+      id: 'M1',
+      name: '辣椒粉',
+      unit: 'kg',
+      movingAvgPrice: null,
+      taxIncludedUnitPrice: 20,
+    }]);
+    await fillRequiredFields(wrapper, 12, 'g');
+
+    expect(wrapper.get('[data-testid="seasoning-automatic-price"]')
+      .findComponent({ name: 'ElInput' }).props('modelValue')).toBe('¥20.0000 / 千克');
+    expect(wrapper.get('[data-testid="seasoning-automatic-price"]').text()).toContain('采购参考价');
+    expect(wrapper.find('[data-testid="configure-seasoning-price"]').exists()).toBe(false);
+    await wrapper.findAll('button').find((button) => button.text().includes('保存到本工序'))?.trigger('click');
+    await flushPromises();
+    expect(createBinding).toHaveBeenCalled();
+  });
+
+  it('reloads authoritative prices and unblocks the preserved form without reopening it', async () => {
+    createBinding.mockResolvedValue({ success: true, data: {} });
+    getRawMaterialTypes.mockResolvedValue({
+      success: true,
+      data: [{
+        id: 'M1',
+        name: '辣椒粉',
+        unit: 'kg',
+        movingAvgPrice: null,
+        taxIncludedUnitPrice: 20,
+      }],
+    });
+    const wrapper = mountDialog(null, [{
+      id: 'M1',
+      name: '辣椒粉',
+      unit: 'kg',
+      movingAvgPrice: null,
+      taxIncludedUnitPrice: null,
+    }]);
+    await fillRequiredFields(wrapper, 12, 'g');
+    expect(wrapper.get('[data-testid="configure-seasoning-price"]').exists()).toBe(true);
+
+    await wrapper.get('[data-testid="refresh-seasoning-price"]').trigger('click');
+    await flushPromises();
+
+    expect(getRawMaterialTypes).toHaveBeenCalledWith('/F006/raw-material-types/active');
+    expect(wrapper.find('[data-testid="configure-seasoning-price"]').exists()).toBe(false);
+    expect(wrapper.get('[data-testid="seasoning-automatic-price"]').text()).toContain('采购参考价');
+    await wrapper.findAll('button').find((button) => button.text().includes('保存到本工序'))?.trigger('click');
+    await flushPromises();
+    expect(createBinding).toHaveBeenCalled();
+  });
+
+  it('keeps the form open and offers a price shortcut when both prices are missing', async () => {
     const open = vi.spyOn(window, 'open').mockImplementation(() => null);
-    const wrapper = mountDialog(null);
+    const wrapper = mountDialog(null, [{
+      id: 'M1',
+      name: '辣椒粉',
+      unit: 'g',
+      movingAvgPrice: null,
+      taxIncludedUnitPrice: null,
+    }]);
     await fillRequiredFields(wrapper, 5, 'g');
 
     expect(wrapper.get('[data-testid="configure-seasoning-price"]').exists()).toBe(true);
@@ -197,5 +281,34 @@ describe('SeasoningBindingDialog', () => {
     await wrapper.get('[data-testid="configure-seasoning-price"]').trigger('click');
     expect(open).toHaveBeenCalledWith('/warehouse/material-types?keyword=辣椒粉', '_blank', 'noopener');
     open.mockRestore();
+  });
+
+  it.each([0, -1])('rejects a non-positive price value of %s', async (invalidPrice) => {
+    const wrapper = mountDialog(invalidPrice, [{
+      id: 'M1',
+      name: '辣椒粉',
+      unit: 'kg',
+      movingAvgPrice: invalidPrice,
+      taxIncludedUnitPrice: invalidPrice,
+    }]);
+    await fillRequiredFields(wrapper, 12, 'g');
+    expect(wrapper.get('[data-testid="configure-seasoning-price"]').exists()).toBe(true);
+    await wrapper.findAll('button').find((button) => button.text().includes('保存到本工序'))?.trigger('click');
+    await flushPromises();
+    expect(createBinding).not.toHaveBeenCalled();
+  });
+
+  it('normalizes 公斤 from the pinned Workflow contract to the 1 kg display basis', async () => {
+    const wrapper = mountDialog(18);
+    await wrapper.setProps({
+      process: {
+        ...process,
+        standardBasisQuantity: 1,
+        standardBasisUnit: '公斤',
+        standardBasisMaterialKind: 'SEMI_FINISHED',
+      },
+    });
+    expect(wrapper.get('[data-testid="seasoning-dosage-sentence"]').text())
+      .toContain('每生产 1 kg 本工序半成品');
   });
 });

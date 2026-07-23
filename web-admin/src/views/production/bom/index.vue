@@ -428,6 +428,7 @@ const packagingLayerOptions = computed<PackagingLayerOption[]>(() => {
 
 // Phase 1: 添加原辅料「高级选项」折叠状态（默认收起）
 const showAdvancedBomFields = ref<string[]>([]);
+const packagingLayerAutoMatched = ref(false);
 
 // BOM Items (原辅料)
 interface BomItemRow {
@@ -764,6 +765,7 @@ const bomItemCategoryLabel = computed(() => {
 });
 
 function onPackagingLayerChange() {
+  packagingLayerAutoMatched.value = false;
   const layer = selectedPackagingLayer.value;
   if (!layer) return;
   if (layer.key !== '__BASE__' && bomForm.value.packagingRole === 'PRIMARY_CONTAINER') {
@@ -771,10 +773,48 @@ function onPackagingLayerChange() {
   }
 }
 
+function matchPackagingLayerForMaterial(): void {
+  if (bomForm.value.materialCategory !== 'PACKAGING') return;
+  const materialUnit = canonicalUnitCode(bomForm.value.quantityUnit || bomForm.value.unit);
+  const matchingLayer = packagingLayerOptions.value.find(
+    layer => layer.key !== '__BASE__' && canonicalUnitCode(layer.packageUnit) === materialUnit,
+  );
+  if (matchingLayer) {
+    bomForm.value.packagingLayerKey = matchingLayer.key;
+    bomForm.value.packagingRole = 'OUTER_CASE';
+    packagingLayerAutoMatched.value = true;
+    return;
+  }
+  bomForm.value.packagingLayerKey = '__BASE__';
+  packagingLayerAutoMatched.value = true;
+  if (bomForm.value.packagingRole === 'OUTER_CASE') {
+    bomForm.value.packagingRole = 'PRIMARY_CONTAINER';
+  }
+}
+
+function onPackagingRoleChange(role: string): void {
+  packagingLayerAutoMatched.value = false;
+  if (role === 'OUTER_CASE') {
+    const outerLayer = packagingLayerOptions.value
+      .filter(layer => layer.key !== '__BASE__')
+      .sort((left, right) => right.conversionFactor - left.conversionFactor)[0];
+    if (outerLayer) bomForm.value.packagingLayerKey = outerLayer.key;
+    return;
+  }
+  if (role === 'PRIMARY_CONTAINER' || role === 'SEAL' || role === 'LABEL') {
+    bomForm.value.packagingLayerKey = '__BASE__';
+  }
+}
+
 function packagingLayerSummary(row: BomItemRow): string {
   if (row.packagingSpecId) {
-    return row.packagingSpecNameSnapshot
-      || `${displayUnit(row.packagingPackageUnitSnapshot)}装规格`;
+    const packageUnit = displayUnit(row.packagingPackageUnitSnapshot);
+    const baseUnit = displayUnit(row.packagingBaseUnitSnapshot || skuBaseUnit.value);
+    const factor = Number(row.packagingConversionFactorSnapshot);
+    const conversion = Number.isFinite(factor) && factor > 0
+      ? `（1${packageUnit}=${formatFriendlyNumber(factor)}${baseUnit}）`
+      : '';
+    return `${row.packagingSpecNameSnapshot || `${packageUnit}装规格`}${conversion}`;
   }
   return `基本规格（${displayUnit(row.packagingBaseUnitSnapshot || skuBaseUnit.value)}）`;
 }
@@ -782,11 +822,12 @@ function packagingLayerSummary(row: BomItemRow): string {
 function packagingNaturalUsage(row: BomItemRow): string {
   const quantity = row.naturalQuantity ?? row.standardQuantity;
   const denominator = row.packagingPackageUnitSnapshot || skuBaseUnit.value;
-  return `${formatFriendlyNumber(quantity)} ${displayUnit(row.naturalUnit || row.unit)}/${displayUnit(denominator)}`;
+  return `每1${displayUnit(denominator)}成品使用 ${formatFriendlyNumber(quantity)}${displayUnit(row.naturalUnit || row.unit)}`;
 }
 
 function packagingBaseUsage(row: BomItemRow): string {
-  return `${formatFriendlyNumber(row.standardQuantity)} ${displayUnit(row.unit)}/${displayUnit(row.packagingBaseUnitSnapshot || skuBaseUnit.value)}`;
+  const baseUnit = displayUnit(row.packagingBaseUnitSnapshot || skuBaseUnit.value);
+  return `每1${baseUnit}折算 ${formatFriendlyNumber(row.standardQuantity)}${displayUnit(row.unit)}`;
 }
 
 function substituteSummary(row: BomItemRow): string {
@@ -1115,6 +1156,7 @@ function onMaterialLink(materialTypeId: string) {
     const quantityUnit = recipeUnitForMaterial(material, bomForm.value.materialCategory);
     bomForm.value.unit = quantityUnit;
     bomForm.value.quantityUnit = quantityUnit;
+    matchPackagingLayerForMaterial();
     const autoPrice = Number(material.movingAvgPrice ?? material.unitPrice ?? 0);
     bomForm.value.unitPrice = Number.isFinite(autoPrice) ? autoPrice : 0;
     bomForm.value.priceUnit = canonicalUnitCode(material.priceUnit || material.unit);
@@ -1192,6 +1234,7 @@ async function handleAddBomItem() {
     semiFinishedRefCode: '',
     subProductTypeId: '',
   };
+  packagingLayerAutoMatched.value = false;
   bomDialogVisible.value = true;
 }
 
@@ -1235,6 +1278,7 @@ async function handleEditBomItem(row: TableRow) {
     semiFinishedRefCode: String(row.semiFinishedRefCode || ''),
     subProductTypeId: String(row.subProductTypeId || ''),
   };
+  packagingLayerAutoMatched.value = false;
   bomDialogVisible.value = true;
 }
 
@@ -2512,12 +2556,12 @@ watch(adjustDialogVisible, (visible) => {
               {{ packagingLayerSummary(row) }}
             </template>
           </el-table-column>
-          <el-table-column v-if="activeCategoryTab === 'PACKAGING'" label="自然用量" min-width="130" align="right">
+          <el-table-column v-if="activeCategoryTab === 'PACKAGING'" label="业务用量" min-width="210">
             <template #default="{ row }">
               {{ packagingNaturalUsage(row) }}
             </template>
           </el-table-column>
-          <el-table-column v-if="activeCategoryTab === 'PACKAGING'" label="折算基础用量" min-width="140" align="right">
+          <el-table-column v-if="activeCategoryTab === 'PACKAGING'" label="基础单位折算（成本）" min-width="190">
             <template #default="{ row }">
               {{ packagingBaseUsage(row) }}
             </template>
@@ -2703,10 +2747,23 @@ watch(adjustDialogVisible, (visible) => {
             <strong>{{ selectedPackagingLayer.name }}</strong>
             <span>{{ selectedPackagingLayer.summary }}</span>
           </div>
+          <el-alert
+            v-if="packagingLayerAutoMatched && selectedPackagingLayer"
+            type="success"
+            :closable="false"
+            show-icon
+            :title="`已根据包材单位“${bomFormUnitLabel}”自动匹配：${selectedPackagingLayer.summary}`"
+            class="packaging-auto-match-alert"
+          />
           <div class="form-tip">包材只配置当前层级新增的材料；外层规格不会重复计算内包装。</div>
         </el-form-item>
         <el-form-item v-if="bomForm.materialCategory === 'PACKAGING'" label="包材角色" required>
-          <el-select v-model="bomForm.packagingRole" style="width: 100%" placeholder="请选择包材在该规格中的作用">
+          <el-select
+            v-model="bomForm.packagingRole"
+            style="width: 100%"
+            placeholder="请选择包材在该规格中的作用"
+            @change="onPackagingRoleChange"
+          >
             <el-option v-for="role in packagingRoleOptions" :key="role.value" :value="role.value" :label="role.label" />
           </el-select>
         </el-form-item>

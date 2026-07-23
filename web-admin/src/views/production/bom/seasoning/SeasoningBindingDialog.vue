@@ -15,6 +15,7 @@ export interface SeasoningMaterialOption {
   code?: string | null;
   unit?: string | null;
   movingAvgPrice?: number | null;
+  taxIncludedUnitPrice?: number | null;
 }
 
 const props = withDefaults(defineProps<{
@@ -54,16 +55,32 @@ const dosageUnitFactorsToG = ref<Record<string, number>>({ g: 1, kg: 1000 });
 const materialUnitLoading = ref(false);
 const selectedMaterial = computed(() => props.materials.find((item) => item.id === form.materialTypeId));
 const selectedMaterialUnit = computed(() => selectedMaterial.value?.unit?.trim() || '');
+const positivePrice = (value?: number | null): value is number => (
+  value != null && Number.isFinite(Number(value)) && Number(value) > 0
+);
 const businessUnitLabel = (unit: string): string => {
   const code = canonicalUnitCode(unit);
   return ({ kg: '千克', g: '克', L: '升', mL: '毫升' } as Record<string, string>)[code]
     || displayUnit(code);
 };
+const standardBasisQuantity = computed(() => (
+  props.process?.standardBasisQuantity ?? props.process?.basisQuantity ?? null
+));
+const standardBasisUnit = computed(() => (
+  props.process?.standardBasisUnit ?? props.process?.basisUnit ?? null
+));
 const basisLabel = computed(() => {
-  if (props.process?.basisQuantity == null || !props.process.basisUnit) return '未解析';
-  const quantity = Number(props.process.basisQuantity).toFixed(4).replace(/\.?0+$/, '');
-  return `${quantity}${businessUnitLabel(props.process.basisUnit)}`;
+  if (standardBasisQuantity.value == null || !standardBasisUnit.value) return '未解析';
+  const quantity = Number(standardBasisQuantity.value).toFixed(4).replace(/\.?0+$/, '');
+  return `${quantity} ${canonicalUnitCode(standardBasisUnit.value)}`;
 });
+const basisObjectLabel = computed(() => (
+  props.process?.standardBasisMaterialKind === 'SEMI_FINISHED'
+    ? '本工序半成品'
+    : props.process?.standardBasisMaterialKind === 'FINISHED_GOOD'
+      ? '本工序成品'
+      : '本工序产出'
+));
 const dosageUnitOptions = computed(() => {
   const options = ['kg', 'g'];
   const materialUnit = selectedMaterialUnit.value;
@@ -72,16 +89,28 @@ const dosageUnitOptions = computed(() => {
   }
   return options;
 });
-const refreshedMovingAvgPrice = ref<number | null | undefined>(undefined);
-const effectiveMovingAvgPrice = computed(() => (
-  refreshedMovingAvgPrice.value === undefined
+const refreshedPrices = ref<Pick<SeasoningMaterialOption, 'movingAvgPrice' | 'taxIncludedUnitPrice'> | undefined>();
+const effectivePrice = computed(() => {
+  const movingAvgPrice = refreshedPrices.value === undefined
     ? selectedMaterial.value?.movingAvgPrice
-    : refreshedMovingAvgPrice.value
-));
-const missingMovingAvgPrice = computed(() => (
-  selectedMaterial.value != null
-  && (effectiveMovingAvgPrice.value == null || Number(effectiveMovingAvgPrice.value) <= 0)
-));
+    : refreshedPrices.value.movingAvgPrice;
+  if (positivePrice(movingAvgPrice)) {
+    return { value: Number(movingAvgPrice), source: '移动平均价' as const };
+  }
+  const purchaseReferencePrice = refreshedPrices.value === undefined
+    ? selectedMaterial.value?.taxIncludedUnitPrice
+    : refreshedPrices.value.taxIncludedUnitPrice;
+  if (positivePrice(purchaseReferencePrice)) {
+    return { value: Number(purchaseReferencePrice), source: '采购参考价' as const };
+  }
+  return null;
+});
+const missingEffectivePrice = computed(() => selectedMaterial.value != null && effectivePrice.value == null);
+const automaticPriceLabel = computed(() => {
+  if (!effectivePrice.value) return '保存前需先配置有效价格';
+  const unit = selectedMaterialUnit.value ? businessUnitLabel(selectedMaterialUnit.value) : '单位';
+  return `¥${effectivePrice.value.value.toFixed(4)} / ${unit}`;
+});
 const dosageDisplayValue = computed<number | null>({
   get: () => form.dosagePerKgG == null
     ? null
@@ -109,7 +138,7 @@ watch(() => [props.modelValue, props.binding] as const, () => {
   ]));
 }, { immediate: true });
 watch(() => form.materialTypeId, () => {
-  refreshedMovingAvgPrice.value = undefined;
+  refreshedPrices.value = undefined;
   void loadSelectedMaterialUnit();
 });
 
@@ -157,10 +186,10 @@ async function submit() {
   }
   const duplicate = findDuplicateBinding(props.process, form.materialTypeId, props.binding?.id);
   if (duplicate) return ElMessage.warning('该调料已在本工序配置');
-  if (missingMovingAvgPrice.value) {
+  if (missingEffectivePrice.value) {
     showSingletonNotification({
-      title: '该调料尚无移动平均价',
-      message: '表单内容已保留。请点击下方“去配置价格”在新标签页补充价格，完成后回到本页即可继续保存。',
+      title: '该调料尚无有效成本价格',
+      message: '表单内容已保留。请维护移动平均价或含税采购参考价，完成后回到本页重新读取即可继续保存。',
       type: 'warning', duration: 0, showClose: true,
     });
     return;
@@ -226,8 +255,13 @@ async function refreshSelectedMaterialPrice() {
     const material = response.success && Array.isArray(response.data)
       ? response.data.find((item) => item.id === form.materialTypeId)
       : undefined;
-    refreshedMovingAvgPrice.value = material?.movingAvgPrice ?? null;
-    if (!missingMovingAvgPrice.value) ElMessage.success('移动平均价已更新，可继续保存');
+    refreshedPrices.value = {
+      movingAvgPrice: material?.movingAvgPrice ?? null,
+      taxIncludedUnitPrice: material?.taxIncludedUnitPrice ?? null,
+    };
+    if (!missingEffectivePrice.value && effectivePrice.value) {
+      ElMessage.success(`已读取${effectivePrice.value.source}，可继续保存`);
+    }
   } catch {
     ElMessage.warning('价格读取失败，请稍后点击“重新读取价格”');
   }
@@ -280,19 +314,36 @@ async function refreshSelectedMaterialPrice() {
         </div>
       </el-form-item>
       <el-form-item label="投入数量" required>
-        <div class="dosage-sentence" data-testid="seasoning-dosage-sentence">
-          <span>每生产 {{ basisLabel }} 本工序产出，需要投入</span>
-          <el-input-number v-model="dosageDisplayValue" :min="0" :precision="4" :controls="false" />
-          <el-select
-            v-model="dosageUnit"
-            :loading="materialUnitLoading"
-            style="width: 96px"
-            data-testid="seasoning-dosage-unit"
-          >
-            <el-option v-for="unit in dosageUnitOptions" :key="unit" :label="businessUnitLabel(unit)" :value="unit" />
-          </el-select>
+        <div class="dosage-contract" data-testid="seasoning-dosage-sentence">
+          <div class="dosage-contract__basis">
+            <span class="dosage-contract__eyebrow">生产基准</span>
+            <strong>每生产 {{ basisLabel }} {{ basisObjectLabel }}</strong>
+          </div>
+          <span class="dosage-contract__arrow">需要投入</span>
+          <div class="dosage-contract__input">
+            <el-input-number v-model="dosageDisplayValue" :min="0" :precision="4" :controls="false" />
+            <el-select
+              v-model="dosageUnit"
+              :loading="materialUnitLoading"
+              style="width: 96px"
+              data-testid="seasoning-dosage-unit"
+            >
+              <el-option v-for="unit in dosageUnitOptions" :key="unit" :label="businessUnitLabel(unit)" :value="unit" />
+            </el-select>
+          </div>
         </div>
-        <div class="form-tip">分母来自已固定 Workflow 工序节点；物料单位可切换显示，保存时按同一重量口径换算。</div>
+        <div v-if="process?.standardUsageSupported === true" class="dosage-preview">
+          保存口径：{{ Number(form.dosagePerKgG || 0).toFixed(4).replace(/\.?0+$/, '') }} g/kg；
+          生产基准来自已固定 Workflow 修订的产出端口。
+        </div>
+        <el-alert
+          v-else
+          type="warning"
+          :closable="false"
+          show-icon
+          title="无法解析本工序产出单位，当前不能保存"
+          description="请回到 Workflow，为该工序绑定带合法重量单位的半成品或成品产出后重新保存修订。"
+        />
       </el-form-item>
       <el-form-item label="按锅序计算"><el-switch v-model="form.potEnabled" /></el-form-item>
       <template v-if="form.potEnabled">
@@ -302,14 +353,19 @@ async function refreshSelectedMaterialPrice() {
         </el-form-item>
       </template>
       <el-form-item label="自动单价">
-        <el-input :model-value="missingMovingAvgPrice ? '保存前需先配置移动平均价' : `¥${effectiveMovingAvgPrice}`" disabled />
+        <div class="automatic-price" data-testid="seasoning-automatic-price">
+          <el-input :model-value="automaticPriceLabel" disabled />
+          <el-tag v-if="effectivePrice" :type="effectivePrice.source === '移动平均价' ? 'success' : 'warning'">
+            {{ effectivePrice.source }}
+          </el-tag>
+        </div>
       </el-form-item>
       <el-alert
-        v-if="missingMovingAvgPrice"
+        v-if="missingEffectivePrice"
         type="warning"
         :closable="false"
         show-icon
-        title="该调料缺少移动平均价，暂不能保存"
+        title="该调料缺少有效移动平均价或采购参考价，暂不能保存"
       >
         <template #default>
           <span>当前表单会保留。</span>
@@ -330,10 +386,21 @@ async function refreshSelectedMaterialPrice() {
 <style scoped>
 .form-tip { margin-top: 4px; color: var(--el-text-color-secondary); font-size: 12px; line-height: 1.4; }
 .suffix { margin-left: 6px; }
-.dosage-sentence { display: flex; align-items: center; gap: 8px; width: 100%; flex-wrap: wrap; }
-.dosage-sentence :deep(.el-input-number) { width: 130px; }
+.dosage-contract { display: grid; grid-template-columns: minmax(180px, 1fr) auto minmax(190px, 1fr); align-items: center; gap: 10px; width: 100%; padding: 12px; border: 1px solid var(--el-border-color-lighter); border-radius: 8px; background: var(--el-fill-color-light); }
+.dosage-contract__basis { display: grid; gap: 3px; }
+.dosage-contract__eyebrow { color: var(--el-text-color-secondary); font-size: 12px; }
+.dosage-contract__arrow { color: var(--el-text-color-secondary); font-size: 12px; white-space: nowrap; }
+.dosage-contract__input { display: flex; gap: 8px; }
+.dosage-contract__input :deep(.el-input-number) { width: 130px; }
+.dosage-preview { width: 100%; margin-top: 6px; color: var(--el-text-color-secondary); font-size: 12px; }
+.automatic-price { display: flex; align-items: center; gap: 8px; width: 100%; }
+.automatic-price :deep(.el-input) { flex: 1; }
 .substitute-factors { display: grid; gap: 6px; width: 100%; margin-top: 8px; }
 .substitute-factor-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
 .substitute-factor-row span { overflow: hidden; color: var(--el-text-color-regular); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
 .substitute-factor-row :deep(.el-input-number) { width: 150px; }
+@media (max-width: 680px) {
+  .dosage-contract { grid-template-columns: 1fr; }
+  .dosage-contract__arrow { justify-self: start; }
+}
 </style>

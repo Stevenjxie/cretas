@@ -36,6 +36,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 import java.util.stream.Collectors;
@@ -59,7 +60,8 @@ public class WorkProcessServiceImpl implements WorkProcessService {
     @Transactional
     public WorkProcessDTO create(String factoryId, WorkProcessDTO dto) {
         log.info("Creating work process '{}' for factory: {}", dto.getProcessName(), factoryId);
-        String category = validateCategory(factoryId, dto.getProcessCategory());
+        String category = validateCategory(
+                factoryId, dto.getProcessCategory(), Boolean.TRUE.equals(dto.getCreateCategory()));
 
         // C5 Step 1a: exact name block (existing behaviour)
         if (workProcessRepository.existsByFactoryIdAndProcessName(factoryId, dto.getProcessName())) {
@@ -152,7 +154,8 @@ public class WorkProcessServiceImpl implements WorkProcessService {
                 .orElseThrow(() -> new ResourceNotFoundException("WorkProcess", "id", id));
         String category = validateCategory(
                 factoryId,
-                dto.getProcessCategory() != null ? dto.getProcessCategory() : entity.getProcessCategory());
+                dto.getProcessCategory() != null ? dto.getProcessCategory() : entity.getProcessCategory(),
+                Boolean.TRUE.equals(dto.getCreateCategory()));
 
         // audit Finding 4 修复: 改名时防重名 —— 调料配方按工序靠工序名跨模式(legacy/workflow)定位,
         // 两个同名工序会让报工成本读错工序的调料/锅序参数。create() 已有唯一性校验, update() 之前缺。
@@ -282,19 +285,31 @@ public class WorkProcessServiceImpl implements WorkProcessService {
         return result;
     }
 
-    private String validateCategory(String factoryId, String rawCategory) {
-        String category = rawCategory == null ? "" : rawCategory.trim();
+    private String validateCategory(String factoryId, String rawCategory, boolean createCategory) {
+        String category = rawCategory == null
+                ? ""
+                : java.text.Normalizer.normalize(rawCategory, java.text.Normalizer.Form.NFKC)
+                        .trim()
+                        .replaceAll("\\s+", " ");
         if (category.isEmpty()) {
             throw new BusinessException(400, "请选择工序类别")
                     .withHint("工序类别必须从工序类别字典中选择")
                     .withHintTarget("processCategory");
         }
         List<String> categories = workProcessRepository.findDistinctProcessCategories(factoryId);
-        // Existing factories already have a category taxonomy derived from their process catalog.
-        // An empty catalog is the only bootstrap case; once a taxonomy exists, fail closed.
-        if (!categories.isEmpty() && categories.stream().noneMatch(category::equals)) {
+        String normalizedCategory = normalize(category);
+        Optional<String> existing = categories.stream()
+                .filter(Objects::nonNull)
+                .filter(candidate -> normalize(candidate).equals(normalizedCategory))
+                .findFirst();
+        if (existing.isPresent()) {
+            return existing.get();
+        }
+        // Existing categories can only be extended through the explicit "create category" UI.
+        // Normal writes remain fail-closed, so a caller cannot silently introduce free text.
+        if (!categories.isEmpty() && !createCategory) {
             throw new BusinessException(400, "工序类别字典中不存在或不属于当前工厂: " + category)
-                    .withHint("请从工序类别下拉中选择有效类别")
+                    .withHint("请从下拉中选择有效类别，或使用“创建新类别”")
                     .withHintTarget("processCategory");
         }
         return category;
