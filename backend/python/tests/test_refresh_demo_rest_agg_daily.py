@@ -47,12 +47,22 @@ def test_dish_facts_yesterday_is_latest_allowed_end():
 
 
 def test_dish_facts_state_change_requires_confirmation():
-    args = argparse.Namespace(apply=True, rollback=False, confirm="", end="")
+    args = argparse.Namespace(
+        factory="DEMO_REST", apply=True, rollback=False, confirm="", end="")
     with pytest.raises(RuntimeError, match="--confirm DEMO_REST"):
         asyncio.run(dish_mod.run(args))
+
+
+def test_dish_facts_factory_is_demo_allowlisted():
+    args = argparse.Namespace(
+        factory="F006", apply=True, rollback=False, confirm="F006", end="")
+    with pytest.raises(RuntimeError, match="--factory must be one of"):
+        asyncio.run(dish_mod.run(args))
+    assert dish_mod.ALLOWED_FACTORIES == ("DEMO_REST", "RES_3101_009")
 
 
 def test_dish_facts_scope_and_marker():
     assert dish_mod.FACTORY_ID == "DEMO_REST"
     assert dish_mod.MARKER.startswith("DEMO_ROLL_")
+    assert dish_mod.TX_MARKER == "DEMO_ROLL_TX"
     assert dish_mod.MARKER != str(mod.SEED_VERSION)
