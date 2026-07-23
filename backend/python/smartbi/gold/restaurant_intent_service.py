@@ -336,6 +336,24 @@ async def tiered_answer(
                 code_factory,
                 **code_kwargs,
             )
+            if (
+                resolved is not None
+                and code_factory != factory_id
+                and "dish_not_found" in (getattr(resolved, "meta", None) or {})
+            ):
+                # R18b 跨空间菜单回落: 店×菜路由到 RES9 (16 店叙事), 但 RES9
+                # 菜单没有 DEMO 自有菜 (如招牌藤椒味) — 换回本租户明细重试,
+                # 两边都查不到才维持定向拒答。
+                retry = await _resolve_tiered(
+                    effective_code,
+                    pool,
+                    factory_id,
+                    **code_kwargs,
+                )
+                if retry is not None and "dish_not_found" not in (
+                    getattr(retry, "meta", None) or {}
+                ):
+                    resolved = retry
             if resolved is not None:
                 planned_results.append((effective_code, resolved))
         tiered_result = (
