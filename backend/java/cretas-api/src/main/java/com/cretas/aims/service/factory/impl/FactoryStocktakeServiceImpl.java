@@ -7,6 +7,7 @@ import com.cretas.aims.dto.factory.StocktakeItemUpdateDTO;
 import com.cretas.aims.dto.finance.VoucherEntrySpec;
 import com.cretas.aims.entity.MaterialBatch;
 import com.cretas.aims.entity.MaterialBatchAdjustment;
+import com.cretas.aims.entity.ProductType;
 import com.cretas.aims.entity.RawMaterialType;
 import com.cretas.aims.entity.User;
 import com.cretas.aims.entity.enums.MaterialBatchStatus;
@@ -19,6 +20,7 @@ import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.repository.MaterialBatchAdjustmentRepository;
 import com.cretas.aims.repository.MaterialBatchRepository;
 import com.cretas.aims.repository.MaterialConsumptionRepository;
+import com.cretas.aims.repository.ProductTypeRepository;
 import com.cretas.aims.repository.RawMaterialTypeRepository;
 import com.cretas.aims.repository.UserRepository;
 import com.cretas.aims.repository.factory.FactoryStocktakeItemRepository;
@@ -73,6 +75,7 @@ public class FactoryStocktakeServiceImpl implements FactoryStocktakeService {
     private final MaterialBatchAdjustmentRepository adjustmentRepo;
     /** 🔴 Fix (previewDiff materialName 空白, 2026-07): 按 batch.materialTypeId 反查物料名, 镜像 StocktakeBulkImportServiceImpl.loadMaterialNames。 */
     private final RawMaterialTypeRepository rawMaterialTypeRepo;
+    private final ProductTypeRepository productTypeRepo;
     /**
      * 🔴🔒🔒 生产仓「延迟扣减」盘点盲区修复 (2026-07-04): 快照/漂移比对须从货架实物量扣掉
      * 未小结的报工消耗 (报工写未结 MaterialConsumption 但不扣 usedQuantity, 小结才扣)。
@@ -196,7 +199,10 @@ public class FactoryStocktakeServiceImpl implements FactoryStocktakeService {
             FactoryStocktakeItem item = new FactoryStocktakeItem();
             item.setStocktake(stocktake);
             item.setMaterialBatchId(batch.getId());
-            item.setRawMaterialTypeId(batch.getMaterialTypeId());
+            // This legacy snapshot column stores the inventory identity used by the
+            // batch. Raw batches use materialTypeId; WIP/product batches use
+            // productTypeId. The public DTO splits the two identities again.
+            item.setRawMaterialTypeId(inventoryTypeId(batch));
             // 🔴 Fix (🔒🔒 phantom-variance): 快照「货架实物量」= receiptQuantity − usedQuantity − 未小结报工消耗,
             // 既不是 gross receiptQuantity, 也不是可用量 getCurrentQuantity()(= receipt − used − reserved)。
             // 仓管盘点数的是货架上肉眼可见的实物: 已领用(used)的货已物理离开货架 → 扣减;
@@ -473,7 +479,7 @@ public class FactoryStocktakeServiceImpl implements FactoryStocktakeService {
                             "盘点批次不存在或不属于当前工厂: " + item.getMaterialBatchId())
                             .withCode("STOCKTAKE_BATCH_IDENTITY_MISMATCH"));
             if (!Objects.equals(stocktake.getWarehouseId(), identityBatch.getWarehouseId())
-                    || !Objects.equals(item.getRawMaterialTypeId(), identityBatch.getMaterialTypeId())) {
+                    || !Objects.equals(item.getRawMaterialTypeId(), inventoryTypeId(identityBatch))) {
                 throw new BusinessException(409,
                         "盘点批次的仓库或物料身份已不一致: " + identityBatch.getBatchNumber())
                         .withCode("STOCKTAKE_BATCH_IDENTITY_MISMATCH");
@@ -750,6 +756,14 @@ public class FactoryStocktakeServiceImpl implements FactoryStocktakeService {
         Map<String, String> nameByTypeId = rawMaterialTypeRepo.findAllById(typeIds).stream()
                 .filter(material -> factoryId.equals(material.getFactoryId()))
                 .collect(Collectors.toMap(RawMaterialType::getId, RawMaterialType::getName, (a, b) -> a));
+        List<String> productTypeIds = batchById.values().stream()
+                .map(MaterialBatch::getProductTypeId)
+                .filter(id -> id != null && !id.isBlank())
+                .distinct()
+                .collect(Collectors.toList());
+        Map<String, String> productNameByTypeId = productTypeRepo.findAllById(productTypeIds).stream()
+                .filter(product -> factoryId.equals(product.getFactoryId()))
+                .collect(Collectors.toMap(ProductType::getId, ProductType::getName, (a, b) -> a));
 
         List<StocktakeDiffPreviewDTO.DiffLine> lines = new ArrayList<>();
         int surplus = 0, shortage = 0, match = 0;
@@ -772,9 +786,9 @@ public class FactoryStocktakeServiceImpl implements FactoryStocktakeService {
             if (batch != null) {
                 line.setBatchNumber(batch.getBatchNumber());
                 line.setQuantityUnit(batch.getQuantityUnit());
-                String materialTypeId = batch.getMaterialTypeId();
-                String materialName = nameByTypeId.getOrDefault(materialTypeId, materialTypeId);
-                line.setMaterialName(materialName);
+                line.setMaterialName(batch.getMaterialTypeId() != null
+                        ? nameByTypeId.get(batch.getMaterialTypeId())
+                        : productNameByTypeId.get(batch.getProductTypeId()));
             }
 
             // This endpoint is the approval/application impact preview: zero-difference
@@ -926,6 +940,14 @@ public class FactoryStocktakeServiceImpl implements FactoryStocktakeService {
         Map<String, RawMaterialType> materialById = rawMaterialTypeRepo.findAllById(materialTypeIds).stream()
                 .filter(material -> factoryId.equals(material.getFactoryId()))
                 .collect(Collectors.toMap(RawMaterialType::getId, material -> material, (left, right) -> left));
+        List<String> productTypeIds = batchById.values().stream()
+                .map(MaterialBatch::getProductTypeId)
+                .filter(Objects::nonNull)
+                .distinct()
+                .toList();
+        Map<String, ProductType> productById = productTypeRepo.findAllById(productTypeIds).stream()
+                .filter(product -> factoryId.equals(product.getFactoryId()))
+                .collect(Collectors.toMap(ProductType::getId, product -> product, (left, right) -> left));
         dto.getItems().forEach(item -> {
             MaterialBatch batch = batchById.get(item.getMaterialBatchId());
             if (batch == null) {
@@ -935,10 +957,27 @@ public class FactoryStocktakeServiceImpl implements FactoryStocktakeService {
             item.setQuantityUnit(batch.getQuantityUnit());
             RawMaterialType material = materialById.get(batch.getMaterialTypeId());
             if (material != null) {
+                item.setRawMaterialTypeId(material.getId());
+                item.setProductTypeId(null);
                 item.setMaterialCode(material.getCode());
                 item.setMaterialName(material.getName());
+                return;
+            }
+            ProductType product = productById.get(batch.getProductTypeId());
+            if (product != null) {
+                item.setRawMaterialTypeId(null);
+                item.setProductTypeId(product.getId());
+                item.setMaterialCode(product.getCode());
+                item.setMaterialName(product.getName());
             }
         });
+    }
+
+    private String inventoryTypeId(MaterialBatch batch) {
+        if (batch.getMaterialTypeId() != null && !batch.getMaterialTypeId().isBlank()) {
+            return batch.getMaterialTypeId();
+        }
+        return batch.getProductTypeId();
     }
 
     private StocktakeDTO toDetailedDTO(FactoryStocktake stocktake, String factoryId) {

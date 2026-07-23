@@ -63,3 +63,47 @@
 - **验证**：目标 Vitest 3/3；并入 Web 联合 8 files / 44 tests、`vue-tsc -b` 与可信 Web build。
 - **实现/合入/部署**：commit `bb30c5db6`；PR [#1675](https://github.com/Stevenjxie/cretas/pull/1675)；exact main `4d2d3b5e8317b2585048bc01a6e3844ec211f1b4`；2026-07-23 已部署生产。
 - **安全**：未执行预览、导入或任何库存 mutation。
+
+## F006-R4-PRODUCTION-CLOSEOUT-RELEASE-001 — `review`
+
+- **Base SHA**：`9a7c91c4c713a516a51a7ebc7b05ea2ab8344e5e`
+- **Owner**：`/root`
+- **结果**：生产计划仅允许选择成品；存货生产计划量改为选填；生产工单、汇总领料单和配料单在未物化执行单据时从 pinned Workflow/BOM 输出可审计参考内容；逐工序报工重排为投入、执行、产出结构；WIP 半成品批次使用 `product_type_id` 合法持久化并可供下一工序消费。
+- **验证**：生产计划与打印目标测试、报工 UI 15 项、Clerk 28 项、真实 JPA Context 均已通过；最终 exact-main release gate 待本批统一执行。
+- **实现**：集成 commits `dfd4cdd61`、`eaca1473d`、`0b3bcd8fb`。
+- **部署**：`DEPLOY_AUTHORIZED_AWAITING_RELEASE`。
+- **安全**：未创建生产计划、未重复扣料、未写入 F006 或其他租户业务数据。
+
+## F006-R4-STOCKTAKE-OA-001 — `review`
+
+- **Base SHA**：`233a92876264765c1484e9c979370fa439506232`
+- **Owner**：`/root/opening_preview_hint`
+- **结果**：盘点提交原子创建 `INVENTORY_ADJUSTMENT` OA；业务页移除直接审批/驳回；OA 审批回写领域状态并保留 `APPROVED → APPLIED` 应用步骤；审批预览只列真实差异，零差异明确库存影响为 0。
+- **验证**：Java 编译、2 类目标测试、Web 6 项及构建通过。
+- **实现**：集成 commit `69ae885ab`。
+- **部署**：`DEPLOY_AUTHORIZED_AWAITING_RELEASE`。
+
+## F006-R4-TRANSFER-LIFECYCLE-001 — `review`
+
+- **Base SHA**：`233a92876264765c1484e9c979370fa439506232`
+- **Owner**：`/root/workflow_publish_gate`
+- **结果**：同厂仓间调拨收敛为“申请 → OA 批准 → 确认调拨”；旧发运/签收接口对同厂明确拒绝；库存生产计划复用唯一未完成调拨并允许调整草稿数量，计划正式完成时关闭关联未完成调拨及运行中 OA。
+- **验证**：6 类 Java 目标测试共 23 项通过，含真实 Repository JPA Context 门禁；最终 Web 联合构建待本批执行。
+- **实现**：集成 commit `a5ebe048d`。
+- **部署**：`DEPLOY_AUTHORIZED_AWAITING_RELEASE`。
+
+## F006-WIP-STOCKTAKE-DUAL-IDENTITY-20260723 — `merged`
+
+- **Base SHA**：`a5ebe048dfa76aa4466582ea0fa1ca481db1e78c`
+- **Owner**：`/root/wip_stocktake_identity`
+- **结果**：盘点快照、详情、差异预览与应用校验同时支持原料 `materialTypeId` 和半成品/成品 `productTypeId`；WIP 返回真实产品名称、编码与批次单位，原料路径保持不变。
+- **验证**：`FactoryStocktakeServiceImplTest`、`FactoryStocktakeM12ContractTest`、`StocktakeWorkflowIntegrationTest` 在联合目标测试中通过；最终真实 JPA Context 由 exact-main release gate 执行。
+- **部署**：`DEPLOY_AUTHORIZED_AWAITING_RELEASE`。
+
+## F006-OPTIONAL-PLAN-ROLLING-TRANSFER-20260723 — `merged`
+
+- **Base SHA**：`a5ebe048dfa76aa4466582ea0fa1ca481db1e78c`
+- **Owner**：`/root/optional_plan_transfer`
+- **结果**：存货生产计划未填写计划产量时，按 1 个成品的 BOM 基准创建并复用唯一滚动调拨草稿；草稿明确要求 OA 提交前调整实际量；显式 0/负数继续 fail-closed。
+- **验证**：`ProductionWorkflowOrchestratorGuardTest` 通过；结单关闭关联调拨的既有契约保持。
+- **部署**：`DEPLOY_AUTHORIZED_AWAITING_RELEASE`。

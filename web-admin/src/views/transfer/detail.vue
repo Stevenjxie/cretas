@@ -559,7 +559,7 @@ async function submitDecide() {
                 :precision="4"
                 controls-position="right"
                 size="small"
-                @change="quantity => updateItemQuantity(row.id, quantity)" />
+                @change="(quantity: number | undefined) => updateItemQuantity(row.id, quantity)" />
               <span v-else>{{ row.quantity }}</span>
             </template>
           </el-table-column>

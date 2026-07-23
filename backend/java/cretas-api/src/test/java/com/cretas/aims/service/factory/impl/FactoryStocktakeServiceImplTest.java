@@ -6,6 +6,7 @@ import com.cretas.aims.dto.factory.StocktakeItemUpdateDTO;
 import com.cretas.aims.dto.finance.VoucherEntrySpec;
 import com.cretas.aims.entity.MaterialBatch;
 import com.cretas.aims.entity.MaterialBatchAdjustment;
+import com.cretas.aims.entity.ProductType;
 import com.cretas.aims.entity.enums.VoucherType;
 import com.cretas.aims.entity.factory.FactoryStocktake;
 import com.cretas.aims.entity.factory.FactoryStocktakeItem;
@@ -13,6 +14,7 @@ import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.repository.MaterialBatchAdjustmentRepository;
 import com.cretas.aims.repository.MaterialBatchRepository;
 import com.cretas.aims.repository.MaterialConsumptionRepository;
+import com.cretas.aims.repository.ProductTypeRepository;
 import com.cretas.aims.repository.RawMaterialTypeRepository;
 import com.cretas.aims.repository.factory.FactoryStocktakeItemRepository;
 import com.cretas.aims.repository.factory.FactoryStocktakeRepository;
@@ -74,6 +76,7 @@ class FactoryStocktakeServiceImplTest {
     @Mock private MaterialBatchAdjustmentRepository adjustmentRepo;
     @Mock private MaterialConsumptionRepository materialConsumptionRepo;
     @Mock private RawMaterialTypeRepository rawMaterialTypeRepo;
+    @Mock private ProductTypeRepository productTypeRepo;
     @Mock private InventoryLowStockEventPublisher inventoryLowStockEventPublisher;
     @Mock private VoucherService voucherService;
 
@@ -1212,6 +1215,84 @@ class FactoryStocktakeServiceImplTest {
         ReflectionTestUtils.setField(service, "monthEndThreshold", 29);
         service.getInitiateConstraint();
         verifyNoInteractions(stocktakeRepo, stocktakeItemRepo, materialBatchRepo, adjustmentRepo);
+    }
+
+    @Test
+    @DisplayName("WIP batch initiate snapshots product identity and exposes product name/unit")
+    void initiate_wipBatch_usesProductIdentityAndDisplayFields() {
+        ReflectionTestUtils.setField(service, "monthEndThreshold", 1);
+        CreateStocktakeRequest req = new CreateStocktakeRequest();
+        req.setWarehouseId(WAREHOUSE_ID);
+
+        MaterialBatch batch = new MaterialBatch();
+        batch.setId("WIP-BATCH-1");
+        batch.setFactoryId(FACTORY_ID);
+        batch.setWarehouseId(WAREHOUSE_ID);
+        batch.setBatchNumber("WIP-20260723-001");
+        batch.setProductTypeId("WIP-SKU-1");
+        batch.setQuantityUnit("kg");
+        batch.setReceiptQuantity(new BigDecimal("8"));
+        batch.setUsedQuantity(BigDecimal.ZERO);
+        batch.setReservedQuantity(BigDecimal.ZERO);
+
+        ProductType product = new ProductType();
+        product.setId("WIP-SKU-1");
+        product.setFactoryId(FACTORY_ID);
+        product.setCode("PTF006-WIP-1");
+        product.setName("处理后半成品");
+
+        when(stocktakeRepo.countActiveStocktakeForWarehouseAndMonth(any(), any(), any())).thenReturn(0L);
+        when(materialBatchRepo.findByFactoryIdAndWarehouseId(FACTORY_ID, WAREHOUSE_ID))
+                .thenReturn(List.of(batch));
+        when(materialBatchRepo.findAllById(List.of("WIP-BATCH-1"))).thenReturn(List.of(batch));
+        when(productTypeRepo.findAllById(List.of("WIP-SKU-1"))).thenReturn(List.of(product));
+        when(stocktakeRepo.save(any())).thenAnswer(invocation -> invocation.getArgument(0));
+
+        StocktakeDTO result = service.initiate(FACTORY_ID, req, USER_ID);
+
+        assertThat(result.getItems()).singleElement().satisfies(item -> {
+            assertThat(item.getRawMaterialTypeId()).isNull();
+            assertThat(item.getProductTypeId()).isEqualTo("WIP-SKU-1");
+            assertThat(item.getBatchNumber()).isEqualTo("WIP-20260723-001");
+            assertThat(item.getMaterialCode()).isEqualTo("PTF006-WIP-1");
+            assertThat(item.getMaterialName()).isEqualTo("处理后半成品");
+            assertThat(item.getQuantityUnit()).isEqualTo("kg");
+            assertThat(item.getSystemQty()).isEqualByComparingTo("8.0000");
+        });
+        ArgumentCaptor<FactoryStocktake> saved = ArgumentCaptor.forClass(FactoryStocktake.class);
+        verify(stocktakeRepo).save(saved.capture());
+        assertThat(saved.getValue().getItems()).singleElement()
+                .extracting(FactoryStocktakeItem::getRawMaterialTypeId)
+                .isEqualTo("WIP-SKU-1");
+    }
+
+    @Test
+    @DisplayName("WIP batch apply validates product identity instead of raw-material identity")
+    void apply_wipBatch_validatesProductIdentity() {
+        FactoryStocktake stocktake = buildStocktake(FactoryStocktake.Status.APPROVED);
+        FactoryStocktakeItem item = buildItem(stocktake, new BigDecimal("8"));
+        item.setMaterialBatchId("WIP-BATCH-APPLY");
+        item.setRawMaterialTypeId("WIP-SKU-1");
+        stocktake.setItems(new ArrayList<>(List.of(item)));
+
+        MaterialBatch batch = new MaterialBatch();
+        batch.setId("WIP-BATCH-APPLY");
+        batch.setFactoryId(FACTORY_ID);
+        batch.setWarehouseId(WAREHOUSE_ID);
+        batch.setProductTypeId("WIP-SKU-1");
+        batch.setReceiptQuantity(new BigDecimal("8"));
+        batch.setUsedQuantity(BigDecimal.ZERO);
+        batch.setReservedQuantity(BigDecimal.ZERO);
+
+        when(stocktakeRepo.findById(stocktake.getId())).thenReturn(Optional.of(stocktake));
+        when(materialBatchRepo.findById("WIP-BATCH-APPLY")).thenReturn(Optional.of(batch));
+        when(stocktakeRepo.save(any())).thenAnswer(invocation -> invocation.getArgument(0));
+
+        service.apply(stocktake.getId(), FACTORY_ID, USER_ID);
+
+        assertThat(stocktake.getStatus()).isEqualTo(FactoryStocktake.Status.APPLIED);
+        verify(adjustmentRepo, never()).save(any());
+        verify(materialBatchRepo, never()).save(any());
     }
 
     // -------------------------------------------------------

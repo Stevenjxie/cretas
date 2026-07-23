@@ -6,6 +6,7 @@ import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.repository.MaterialBatchAdjustmentRepository;
 import com.cretas.aims.repository.MaterialBatchRepository;
 import com.cretas.aims.repository.MaterialConsumptionRepository;
+import com.cretas.aims.repository.ProductTypeRepository;
 import com.cretas.aims.repository.RawMaterialTypeRepository;
 import com.cretas.aims.repository.factory.FactoryStocktakeItemRepository;
 import com.cretas.aims.repository.factory.FactoryStocktakeRepository;
@@ -52,6 +53,7 @@ class StocktakeWorkflowIntegrationTest {
     @Mock private MaterialBatchRepository materialBatchRepo;
     @Mock private MaterialBatchAdjustmentRepository adjustmentRepo;
     @Mock private RawMaterialTypeRepository rawMaterialTypeRepo;
+    @Mock private ProductTypeRepository productTypeRepo;
     @Mock private MaterialConsumptionRepository materialConsumptionRepo;
     @Mock private WorkflowEngineService workflowEngine;
 
@@ -71,6 +73,7 @@ class StocktakeWorkflowIntegrationTest {
                 materialBatchRepo,
                 adjustmentRepo,
                 rawMaterialTypeRepo,
+                productTypeRepo,
                 materialConsumptionRepo);
         // Inject optional workflowEngine via ReflectionTestUtils
         ReflectionTestUtils.setField(service, "workflowEngine", workflowEngine);

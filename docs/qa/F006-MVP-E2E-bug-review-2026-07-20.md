@@ -886,3 +886,39 @@
   - 汇总领料单明确标注“参考，不代表已拣料/已发料”；配料单缺少单锅产能时保留工序比例和总需求参考，不再整份拒绝生成。
 - **测试**：Java payload 目标测试覆盖两道中文工序、无固定数量原料、`0.125 箱/盒 × 10 盒 = 1.25 箱` 与固定数据来源标识；Python PDF renderer 目标测试覆盖三类单据及单文件生产单据包。发布前补充最终命令与结果。
 - **部署状态**：`NOT_DEPLOYED`。
+
+### BUG-F006-R4-WIP-PRODUCT-IDENTITY-001 — 正式报工无法生成半成品批次
+
+- **根因**：WIP 输出把半成品 `ProductType` UUID 写入仅外键到 `raw_material_types` 的 `material_batches.material_type_id`，导致首个持久化错误；随后审计变更仍在失败的 Hibernate Session 中 flush，二次 `AssertionFailure` 覆盖了首错。
+- **修复**：`material_batches` 增加可空 `product_type_id` 并与原料身份互斥；原料批次继续使用 `material_type_id`，半成品批次使用同厂 `product_type_id`。WIP 输出在写变更日志前 `saveAndFlush`，首错直接触发事务回滚；下游消费统一按原料或产品 identity 匹配。
+- **测试**：覆盖四种原料各扣 2kg、生成 8kg WIP、生产仓/单位/来源一致、下一工序消费，以及失败时无部分扣料、无残留批次、无残缺日志；目标 Service 28 项和真实 JPA Context 门禁通过。
+- **数据边界**：未重放现场报工、未重复调拨或扣减库存；生产业务写入为 0。
+- **部署状态**：`DEPLOY_AUTHORIZED_AWAITING_RELEASE`。
+
+### BUG-F006-R4-PRODUCTION-PLAN-REPORTING-UI-001 — 成品选择与报工布局
+
+- **修复**：新建生产计划候选严格限定 canonical 成品；半成品不再混入。报工页按“投入 → 执行 → 产出 → 副产/分摊”组织，数量与单位合并成一组，避免单位框掉到下一行并提升窄屏可读性。
+- **测试**：4 个 Web 目标文件、15 项通过，覆盖成品过滤、canonical 单位、主要布局语义与数量单位成组。
+- **部署状态**：`DEPLOY_AUTHORIZED_AWAITING_RELEASE`。
+
+### BUG-F006-R4-STOCKTAKE-OA-001 — 盘点审批收口统一 OA
+
+- **修复**：盘点提交在同一事务内创建 `INVENTORY_ADJUSTMENT` OA；缺流程时 fail-closed，历史待审批单无实例时不静默桥接。盘点业务页不再直接审批/驳回，统一在 OA 处理；批准后仍保留用户确认的 `APPROVED → APPLIED` 应用步骤。
+- **审批证据**：差异预览只显示 `difference != 0` 的批次，零差异明确“库存影响为 0”，不再把旧批次数量误当本次盘盈盘亏。
+- **测试**：2 类 Java 目标测试及 6 项 Web 测试通过。
+- **部署状态**：`DEPLOY_AUTHORIZED_AWAITING_RELEASE`。
+
+### BUG-F006-R4-TRANSFER-LIFECYCLE-001 — 同厂调拨与库存生产滚动调拨
+
+- **业务契约**：同厂仓间调拨为 `DRAFT → REQUESTED(OA) → APPROVED → CONFIRMED`；旧“发运/签收”接口对同厂明确 `409`，UI 仅显示“确认调拨入库”。
+- **库存生产**：同一生产计划复用唯一 `DRAFT/REQUESTED/APPROVED` 调拨；未填写计划产量时按 1 个成品 BOM 基准初始化滚动草稿，草稿允许调整数量后提交 OA；计划正式完成时关闭未完成调拨并取消运行中 OA，已确认记录保留审计。
+- **审批边界**：生产完成监听器仅创建同厂反向调拨草稿，不再使用系统账号自动申请、批准和确认；所有实际库存移动仍需统一 OA 批准后由授权岗位确认。
+- **测试**：6 类 Java 目标测试共 23 项通过，包含同厂状态机、唯一滚动调拨、结单关闭、反向链路及真实 Repository JPA Context。
+- **部署状态**：`DEPLOY_AUTHORIZED_AWAITING_RELEASE`。
+
+### BUG-F006-R4-WIP-STOCKTAKE-DUAL-IDENTITY-001 — 半成品盘点身份
+
+- **修复**：盘点快照和应用校验使用批次的权威库存身份：原料走 `materialTypeId`，半成品/成品走 `productTypeId`；详情与差异预览按工厂隔离返回真实产品名称、编码及 canonical 批次单位。
+- **兼容**：未迁移历史盘点或库存数据；原料盘点契约保持不变。
+- **测试**：覆盖 8kg WIP 快照、详情回读、零差异应用和旧 OA 集成构造路径。
+- **部署状态**：`DEPLOY_AUTHORIZED_AWAITING_RELEASE`。
