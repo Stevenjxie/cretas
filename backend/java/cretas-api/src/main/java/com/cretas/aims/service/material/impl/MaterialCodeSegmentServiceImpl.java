@@ -278,8 +278,9 @@ public class MaterialCodeSegmentServiceImpl implements MaterialCodeSegmentServic
 
     private void rejectDuplicateLabel(
             String factoryId, short level, String parentCode, String normalizedLabel, Long excludeId) {
-        if (repo.existsNormalizedLabelWithinParent(
-                factoryId, level, parentCode, normalizedLabel, excludeId)) {
+        if (repo.existsByFactoryIdAndLevelAndParentCodeAndNormalizedLabelAndIdNot(
+                factoryId, level, parentCode, normalizedLabel,
+                excludeId != null ? excludeId : -1L)) {
             throw duplicateLabel(normalizedLabel);
         }
 

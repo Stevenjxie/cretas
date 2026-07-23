@@ -35,9 +35,9 @@ class MaterialTaxonomyRepositoryQueryValidationTest {
                 .build();
         segment = repository.saveAndFlush(segment);
 
-        assertTrue(repository.existsNormalizedLabelWithinParent(
-                "F-TAXONOMY-JPA", (short) 1, null, "测试分类", null));
-        assertFalse(repository.existsNormalizedLabelWithinParent(
+        assertTrue(repository.existsByFactoryIdAndLevelAndParentCodeAndNormalizedLabelAndIdNot(
+                "F-TAXONOMY-JPA", (short) 1, null, "测试分类", -1L));
+        assertFalse(repository.existsByFactoryIdAndLevelAndParentCodeAndNormalizedLabelAndIdNot(
                 "F-TAXONOMY-JPA", (short) 1, null, "测试分类", segment.getId()));
     }
 }
