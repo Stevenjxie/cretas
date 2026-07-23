@@ -214,6 +214,12 @@ public class IntentExecutionOrchestrator {
     @Value("${cretas.ai.validation.enabled:true}")
     private boolean validationEnabled;
 
+    // P1 读写分块 §4.5 demo 写闸: 与 DemoReadOnlyInterceptor 同一配置源 (cretas.demo.factory-ids,
+    // 默认 DEMO_REST,DEMO_FACTORY)。AI 确认执行阶段拦截 demo 租户真实写入 — 封住 HTTP 层
+    // 放行 /ai-intents/ POST 留下的缺口。名单内租户恒拦 (不随 cretas.demo.enabled 关闭, fail-closed)。
+    @Value("${cretas.demo.factory-ids:DEMO_REST,DEMO_FACTORY}")
+    private String demoFactoryIdsCsv;
+
     /** 通用短回复集合 */
     private static final Set<String> GENERIC_SHORT_REPLIES = Set.of(
             "查询完成，暂无数据", "操作完成", "查询完成", "查询成功", "执行成功",
@@ -1026,6 +1032,23 @@ public class IntentExecutionOrchestrator {
         String intentCode = token.getIntentCode();
 
         try {
+            // P1 读写分块 §4.5 demo 写闸: 演示租户预览照常 (演示价值), 确认执行阶段拦截真实写入。
+            // confirm() 是唯一的 withServerConfirmation 注入点, 此处即全部 AI 写执行的收口。
+            if (isDemoFactory(factoryId)) {
+                previewTokenService.resolveClaim(confirmToken, claimId, false,
+                        "演示环境拦截: 不执行真实写入");
+                String demoMsg = "演示环境不执行真实写入。操作预览已展示——在正式环境中，点击确认后将实际执行该操作。";
+                return IntentExecuteResponse.builder()
+                        .intentRecognized(true)
+                        .intentCode(intentCode)
+                        .status("DEMO_WRITE_BLOCKED")
+                        .message(demoMsg)
+                        .formattedText(demoMsg)
+                        .aiMode("WRITE")
+                        .executedAt(LocalDateTime.now())
+                        .build();
+            }
+
             Optional<AIIntentConfig> intentConfigOpt = aiIntentService.getIntentByCode(factoryId, intentCode);
             if (intentConfigOpt.isEmpty()) {
                 previewTokenService.resolveClaim(
@@ -1941,6 +1964,21 @@ public class IntentExecutionOrchestrator {
             return buildNoPermissionResponse(intent);
         }
         return null;
+    }
+
+    /**
+     * P1 读写分块 §4.5: factoryId 是否 demo 租户 (cretas.demo.factory-ids 名单, 逗号分隔)。
+     */
+    private boolean isDemoFactory(String factoryId) {
+        if (factoryId == null || demoFactoryIdsCsv == null || demoFactoryIdsCsv.isBlank()) {
+            return false;
+        }
+        for (String demoId : demoFactoryIdsCsv.split(",")) {
+            if (factoryId.equals(demoId.trim())) {
+                return true;
+            }
+        }
+        return false;
     }
 
     /**
