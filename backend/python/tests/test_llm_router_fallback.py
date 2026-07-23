@@ -94,7 +94,9 @@ def test_vl_chain_is_vision_only():
 # _refuse_reason — the single shared billing gate
 # ════════════════════════════════════════════════════════════════════════
 
-_TODAY = datetime.date(2026, 7, 1)  # registry audit date → not stale
+_TODAY = datetime.date(2026, 7, 23)  # registry audit date → not stale
+# (与 llm_router._REGISTRY_AUDIT_DATE 同步更新; call_chain 类测试用
+# monkeypatch llm_router._today 冻结, 不再随真实日期漂移碎裂)
 
 
 def test_refuse_allows_current_registered_model():
@@ -126,7 +128,8 @@ def test_refuse_denylist_veto():
 def test_staleness_failsafe_narrows_to_minimal_set():
     stale = _TODAY + datetime.timedelta(days=llm_router._REGISTRY_MAX_AGE_DAYS + 1)
     # a normal registered model NOT in the minimal set is refused when stale…
-    assert llm_router._refuse_reason("aliyun_b", "glm-5", stale) == "registry_stale"
+    # (模型须在 stale 日期时未过期, 否则 'expired' 先命中 — 选 09/01 的 plus)
+    assert llm_router._refuse_reason("aliyun_c", "qwen3.7-plus", stale) == "registry_stale"
     # …but a minimal-set survivor still allowed (if not itself expired).
     assert llm_router._refuse_reason("aliyun_c", "glm-5.2", stale) is None
 
@@ -263,6 +266,9 @@ def _patch_keys(monkeypatch):
 @pytest.mark.asyncio
 async def test_call_chain_falls_through_403_to_next_and_only_calls_safe_models(monkeypatch):
     _patch_keys(monkeypatch)
+    # 冻结在 07-10: 脚本前提是 a 头(qwen3.6-flash, 到期07-17)与 b 层(07-16批)
+    # 都活着; _TODAY(=审计日 07-23)时它们已过期, 不能用。
+    monkeypatch.setattr(llm_router, "_today", lambda: datetime.date(2026, 7, 10))
     ok = {"choices": [{"message": {"content": "今日入库3批，均合格。"}}]}
     client = _ScriptedClient({
         "aliyun_a": _fake_response(403, "AllocationQuota.FreeTierOnly"),
@@ -279,6 +285,9 @@ async def test_call_chain_falls_through_403_to_next_and_only_calls_safe_models(m
 @pytest.mark.asyncio
 async def test_call_chain_rejects_empty_body_and_falls_back(monkeypatch):
     _patch_keys(monkeypatch)
+    # 冻结在 07-10: 脚本前提是 a 头(qwen3.6-flash, 到期07-17)与 b 层(07-16批)
+    # 都活着; _TODAY(=审计日 07-23)时它们已过期, 不能用。
+    monkeypatch.setattr(llm_router, "_today", lambda: datetime.date(2026, 7, 10))
     empty = {"choices": [{"message": {"content": ""}}]}
     good = {"choices": [{"message": {"content": "今日入库3批，均合格。"}}]}
     client = _ScriptedClient({
