@@ -788,7 +788,7 @@ public class ToolDispatchService {
 
             String resultJson = tool.preview(toolCall, context);
 
-            return IntentExecuteResponse.builder()
+            IntentExecuteResponse previewResponse = IntentExecuteResponse.builder()
                     .intentRecognized(true)
                     .intentCode(intent.getIntentCode())
                     .intentName(intent.getIntentName())
@@ -797,6 +797,49 @@ public class ToolDispatchService {
                     .message(resultJson)
                     .executedAt(LocalDateTime.now())
                     .build();
+
+            // P1.5 (2026-07-23 读写分块 spec §5.2): 预览成功即铸绑定 token 并回
+            // confirmableAction — 补齐通用工具 TCC 的最后一环 (此前 token 只在
+            // 餐饮 agent 工作流铸, 通用预览无 token → confirm() 无从驱动,
+            // 确认卡在前端无米下锅)。只对写工具铸 (读工具预览无确认语义)。
+            if (writeGuardService.isWriteTool(tool) || writeGuardService.isWriteIntent(intent)) {
+                try {
+                    com.cretas.aims.entity.intent.IntentPreviewToken boundToken =
+                            previewTokenService.createBoundToken(
+                                    new PreviewTokenService.BoundTokenRequest(
+                                            factoryId, userId, null,
+                                            intent.getIntentCode(), intent.getIntentName(),
+                                            tool.getToolName(), tool.getVersion(),
+                                            ToolExecutionMode.EXECUTE,
+                                            null, null, null,
+                                            params, java.util.Map.of(), java.util.Map.of(),
+                                            300));
+                    Map<String, Object> previewData = null;
+                    try {
+                        previewData = objectMapper.readValue(resultJson, Map.class);
+                    } catch (Exception ignore) {
+                        // 预览体非 JSON 对象时 previewData 留空, 前端渲染 message 原文
+                    }
+                    previewResponse.setAiMode("WRITE");
+                    previewResponse.setConfirmableAction(
+                            IntentExecuteResponse.ConfirmableAction.builder()
+                                    .confirmToken(boundToken.getToken())
+                                    .commandDigest(boundToken.getCommandDigest())
+                                    .expiresAt(boundToken.getExpiresAt()
+                                            .atZone(java.time.ZoneId.systemDefault()).toInstant())
+                                    .expiresInSeconds(300)
+                                    .description("确认后将实际执行「" + intent.getIntentName() + "」")
+                                    .previewData(previewData)
+                                    .build());
+                } catch (Exception e) {
+                    // fail-safe: 铸 token 失败不破坏预览本身 (无 confirmableAction →
+                    // 前端按"暂不支持一键确认"降级提示), 但要留痕排查
+                    log.warn("预览 token 铸造失败 (预览照常返回): tool={}, error={}",
+                            tool.getToolName(), e.getMessage());
+                }
+            }
+
+            return previewResponse;
 
         } catch (Exception e) {
             log.error("Tool preview 失败: tool={}, error={}", tool.getToolName(), e.getMessage(), e);
