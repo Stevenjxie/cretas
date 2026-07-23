@@ -1829,3 +1829,9 @@ def test_r22_llm_tier_resolver_backed_delegates():
         "RESTAURANT_OPS_WASTAGE_TOP", "浪费情况帮我瞅瞅",
         confidence=0.8, tier="llm")
     assert should_delegate(spec, None, query="浪费情况帮我瞅瞅")
+
+
+def test_r22b_named_window_business_t1():
+    assert _r.match_restaurant_ops("这个月生意怎么样") == "RESTAURANT_OPS_SALES_SUMMARY"
+    assert _r.match_restaurant_ops("本月营业额多少") == "RESTAURANT_OPS_SALES_SUMMARY"
+    assert _r.match_restaurant_ops("上个月生意咋样") == "RESTAURANT_OPS_SALES_SUMMARY"
