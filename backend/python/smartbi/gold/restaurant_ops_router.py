@@ -757,6 +757,11 @@ def extract_dish_candidates(query: "Optional[str]") -> list:
                 out.append(cand[:60])
         if len(out) == 2:
             return out
+    # 单实体优先 (含单实体多指标 "米饭的销量、毛利率和成本" — R26b 回归修:
+    # 列表规则曾把指标顿号当成多实体, 抢在 multi-metric 之前把限域打掉)。
+    single = extract_dish_candidate(query)
+    if single and not re.search(r"[和、,，]", single):
+        return [single]
     # R26: 多实体并列 ("米饭和娃娃菜和招牌藤椒味(单人份)的销量") —
     # 拆分后各自经 _match_dish_rows 验证, 命中≥2 走既有对比路径。
     list_form = re.match(
@@ -773,13 +778,15 @@ def extract_dish_candidates(query: "Optional[str]") -> list:
             if (
                 len(cand) >= 2
                 and cand not in _DISH_GENERIC_TOKENS
-                and not any(t in cand for t in ("排行", "整体", "全部"))
+                and not any(t in cand for t in (
+                    "排行", "整体", "全部",
+                    "销量", "营收", "销售额", "毛利", "成本", "客单",
+                ))
             ):
                 multi.append(cand[:60])
         if len(multi) >= 2:
             return multi
-    single = extract_dish_candidate(query)
-    return [single] if single else []
+    return []
 
 
 def _match_dish_rows(candidate: str, rows) -> list:

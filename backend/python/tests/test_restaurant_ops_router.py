@@ -1875,3 +1875,9 @@ def test_r26_sweep_fixes():
     assert _r.extract_dish_candidates("米饭和娃娃菜和招牌藤椒味(单人份)的销量") == [
         "米饭", "娃娃菜", "招牌藤椒味(单人份)"]
     assert _r.dish_ranking_direction("哪些菜没人点") == "worst"
+
+
+def test_r26b_metric_list_is_not_multi_entity():
+    assert _r.extract_dish_candidates("米饭的销量、毛利率和成本分别是多少") == ["米饭"]
+    assert _r.extract_dish_candidates("米饭和娃娃菜和招牌藤椒味(单人份)的销量") == [
+        "米饭", "娃娃菜", "招牌藤椒味(单人份)"]

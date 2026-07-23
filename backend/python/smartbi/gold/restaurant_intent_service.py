@@ -422,6 +422,20 @@ async def tiered_answer(
                 f"\n\n本次结果没有可靠覆盖{_contract.describe_missing(contract.missing)}，"
                 "因此不把它当作完整结论，也没有用其他时间或指标替代。请补充具体范围后重试。"
             )
+        # R26b: 多主题复合句 ("这个月生意怎么样，另外米饭卖得好不好") 目前
+        # 只执行一个主题 — 其余部分静默丢弃违反"部分完成不说成全部"。
+        # 检测到复合分隔且计划只有单主题时, 尾注明示未覆盖部分。
+        compound_tail = None
+        for sep in ("，另外", "，再告诉我", "，然后", "；", "，顺便", "，以及"):
+            if sep in query:
+                compound_tail = sep
+                break
+        if compound_tail and len(plan) == 1 and "继续追问" not in query:
+            answer_text += (
+                "\n\n提示：您的问题包含多个部分，本次先回答了其中一个；"
+                "其余部分（如「" + query.split(compound_tail)[-1].strip()[:24]
+                + "」）请单独提问，我会逐个给出数据。"
+            )
         answer_text = sanitize_customer_ai_text(answer_text)
         contract_pass = contract.passed and has_displayable_business_result(answer_text)
 
