@@ -5,6 +5,7 @@
 
 ## 在飞任务
 
+- `F006-CONSOLIDATED-20260723` — `in-progress` — Owner: `/root` — Base SHA: `233a92876264765c1484e9c979370fa439506232` — 收口当前用户明确列出的 F006 工序/Workflow/BOM、生产计划/单据/报工、调拨/盘点 OA、半成品批次与滚动调拨缺陷；复用现有分支成果，完成目标门禁后合入 `main` 并部署生产。
 - `BUG-F006-R4-WORKPROCESS-WORKFLOW-BOM-UX-001` — `in-progress` — Owner: `/root` — Base SHA: `e79d3f7dc3319605d103fe27167ce54d72bbcbff` — 收口工序类别/检索、Workflow 画布与 AI Chat、BOM 包装/修订 UX，并修复工序辅料价格回退、权威刷新、固定 Workflow 产出基准解析和 Workflow 已启用后发布动作门禁；用户已授权合入 `main`、部署生产并仅对 F006 指定 BOM 做一次受控保存/回读，其他租户业务写入为 0。
 - `BUG-F006-R4-OPENING-INVENTORY-PREVIEW-HINT-001` — `in-progress` — Owner: `/root/opening_preview_hint` — Base SHA: `e79d3f7dc3319605d103fe27167ce54d72bbcbff` — 期初建账确认导入在预览比对前提供可访问 tooltip，解释禁用原因；仅 Web 组件与目标测试，随本批合入和部署，不执行期初库存业务写入。
 - `SEC-CREDENTIAL-ROTATION-20260719` — `blocked` — Owner: Codex coordinator — Base SHA: `1ba9a241a77144a80851051efbac584abf4db69d` — tracked tree、47/139 非受控副本、数据库/JWT/internal/BaoTa 轮换和生产验收已完成；仍需各供应商控制台吊销无法由当前 API 权限完成的旧长期凭证，详情见 [凭证轮换收尾记录](../security/credential-rotation-closeout-2026-07-20.md)。
