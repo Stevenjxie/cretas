@@ -290,28 +290,12 @@ async def tiered_answer(
         dish_mention = (
             extract_dish_candidate(resolver_query) or extract_dish_candidate(query)
         )
-        # R15: 店×菜下钻暂不支持 — 诚实拒答并给两条可用替代, 不答错域。
+        # R18: 店×菜下钻 — store_dish_rows 本就是店×菜粒度, 路由 STORE_MARGIN
+        # 带 dish_mention 直答 (匿名「哪家店的X」排名 / 具名店+菜单店直答)。
         split_dish = store_dish_split_dish(query) or store_dish_split_dish(resolver_query)
-        if split_dish:
-            return {
-                "kind": "clarification",
-                "answer_text": (
-                    f"「{split_dish}」按门店逐店拆分的销量/毛利暂不支持。"
-                    f"可以分开看：问「{split_dish}的销量」查全部门店合计，"
-                    "或问「哪家店业绩最好」看门店整体排名。"
-                ),
-                "spec": spec,
-            }
-        if dish_mention and store_mention:
-            return {
-                "kind": "clarification",
-                "answer_text": (
-                    f"「{store_mention}」的「{dish_mention}」单店单菜拆分暂不支持。"
-                    f"可以分开看：问「{dish_mention}的销量」查全部门店合计，"
-                    f"或问「{store_mention}的毛利率」看该店整体表现。"
-                ),
-                "spec": spec,
-            }
+        store_dish = split_dish or (dish_mention if store_mention else None)
+        if store_dish:
+            plan = ("RESTAURANT_OPS_STORE_MARGIN",)
         planned_results: List[Tuple[str, Any]] = []
         for code in plan:
             effective_code = code
@@ -335,13 +319,16 @@ async def tiered_answer(
                 # every store, which is the forbidden all-store fallback.
                 effective_code = "RESTAURANT_OPS_STORE_MARGIN"
             code_kwargs = execution_kwargs
-            if effective_code == "RESTAURANT_OPS_STORE_MARGIN" and store_mention:
+            if effective_code == "RESTAURANT_OPS_STORE_MARGIN" and (store_mention or store_dish):
                 code_kwargs = dict(execution_kwargs)
-                code_kwargs["store_mention"] = store_mention
+                if store_mention:
+                    code_kwargs["store_mention"] = store_mention
+                if store_dish:
+                    code_kwargs["dish_mention"] = store_dish
             code_factory = demo_data_factory_for_code(
                 effective_code,
                 factory_id,
-                store_scoped=bool(store_mention),
+                store_scoped=bool(store_mention) or bool(store_dish),
             )
             resolved = await _resolve_tiered(
                 effective_code,
