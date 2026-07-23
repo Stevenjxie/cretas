@@ -38,17 +38,12 @@ public interface MaterialCodeSegmentRepository extends JpaRepository<MaterialCod
     /** 检查是否存在 (含软删除). */
     boolean existsByFactoryIdAndSegmentCode(String factoryId, String segmentCode);
 
-    @Query("SELECT CASE WHEN COUNT(s) > 0 THEN true ELSE false END FROM MaterialCodeSegment s " +
-           "WHERE s.factoryId = :factoryId AND s.level = :level " +
-           "AND ((:parentCode IS NULL AND s.parentCode IS NULL) OR s.parentCode = :parentCode) " +
-           "AND s.normalizedLabel = :normalizedLabel " +
-           "AND (:excludeId IS NULL OR s.id <> :excludeId)")
-    boolean existsNormalizedLabelWithinParent(
-            @Param("factoryId") String factoryId,
-            @Param("level") Short level,
-            @Param("parentCode") String parentCode,
-            @Param("normalizedLabel") String normalizedLabel,
-            @Param("excludeId") Long excludeId);
+    boolean existsByFactoryIdAndLevelAndParentCodeAndNormalizedLabelAndIdNot(
+            String factoryId,
+            Short level,
+            String parentCode,
+            String normalizedLabel,
+            Long excludeId);
 
     /** 按工厂+父编码查询子节点. */
     List<MaterialCodeSegment> findByFactoryIdAndParentCodeOrderBySortOrderAscSegmentCodeAsc(

@@ -278,8 +278,8 @@ class MaterialCodeSegmentServiceTest {
                     "001001", "水产原料", "001");
             when(repo.findByFactoryIdAndSegmentCode(FACTORY_ID, "001001"))
                     .thenReturn(Optional.of(parent));
-            when(repo.existsNormalizedLabelWithinParent(
-                    FACTORY_ID, (short) 3, "001001", "鱼类原料", null))
+            when(repo.existsByFactoryIdAndLevelAndParentCodeAndNormalizedLabelAndIdNot(
+                    FACTORY_ID, (short) 3, "001001", "鱼类原料", -1L))
                     .thenReturn(true);
             CreateMaterialCodeSegmentRequest req = CreateMaterialCodeSegmentRequest.builder()
                     .level((short) 3)
@@ -307,8 +307,8 @@ class MaterialCodeSegmentServiceTest {
 
             when(repo.findByFactoryIdAndSegmentCode(FACTORY_ID, "001001"))
                     .thenReturn(Optional.of(parent));
-            when(repo.existsNormalizedLabelWithinParent(
-                    FACTORY_ID, (short) 3, "001001", "fish原料", null))
+            when(repo.existsByFactoryIdAndLevelAndParentCodeAndNormalizedLabelAndIdNot(
+                    FACTORY_ID, (short) 3, "001001", "fish原料", -1L))
                     .thenReturn(false);
             when(repo.findByFactoryIdAndParentCodeOrderBySortOrderAscSegmentCodeAsc(
                     FACTORY_ID, "001001"))
