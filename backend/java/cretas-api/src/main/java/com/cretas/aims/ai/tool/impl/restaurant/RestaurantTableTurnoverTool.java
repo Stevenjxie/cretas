@@ -100,6 +100,24 @@ public class RestaurantTableTurnoverTool extends AbstractBusinessTool {
         double avgTurnover = validDays > 0 ? totalTurnover / validDays : 0;
 
         Map<String, Object> result = new LinkedHashMap<>();
+        // R27: 数据源为工厂 ERP 销售单 — POS 餐饮租户此表为空, 曾返回无 message
+        // 的空壳被兜底成"操作已完成。"。全零窗口诚实拒答并给可用替代;
+        // 有数据时 message 直给结论, 不再依赖调用方拼装。
+        if (validDays == 0) {
+            String noData = String.format(
+                "近%d天（%s 至 %s）没有可用于计算翻台率的订单数据，无法给出翻台率，"
+                + "也不会用其他指标替代。可以先问「晚上生意怎么样」看时段人效，"
+                + "或「昨天卖了几单」看订单量。",
+                days, startDate, endDate);
+            result.put("message", noData);
+            result.put("dataAvailable", false);
+            return result;
+        }
+        result.put("message", String.format(
+                "近%d天（%s 至 %s）按 %d 座估算，平均翻台率 %.2f 次/天"
+                + "（有销售的营业日 %d 天）。行业参考：快餐 4-6、正餐 2-3、火锅 2-4 次/天。"
+                + "翻台率 = 当日订单数 / 座位数；如座位数不准确请提供实际座位数。",
+                days, startDate, endDate, seatCount, avgTurnover, validDays));
         result.put("统计周期", String.format("近%d天（%s 至 %s）", days, startDate, endDate));
         result.put("座位数", seatCount);
         result.put("平均翻台率", String.format("%.2f 次/天", avgTurnover));
