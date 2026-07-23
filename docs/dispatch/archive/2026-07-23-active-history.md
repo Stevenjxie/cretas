@@ -44,3 +44,22 @@
 - **实现/合入**：实现 commit `c1c2248dec8d160db6ceaf90c320036d6ce0b53f`；PR [#1681](https://github.com/Stevenjxie/cretas/pull/1681)。
 - **部署**：`NOT_DEPLOYED`。
 - **安全**：生产调拨、库存及其他租户业务写入均为 0；本批不改变审批后的仓储发运/签收/确认状态机。
+
+## BUG-F006-R4-WORKPROCESS-WORKFLOW-BOM-UX-001 — `merged`
+
+- **Base SHA**：`e79d3f7dc3319605d103fe27167ce54d72bbcbff`
+- **Owner**：`/root`
+- **结果**：工序辅料支持移动平均价优先、采购参考价回退与权威刷新；固定 Workflow 产出基准从 OUTPUT/半成品节点解析；单位缺失/冲突前后端 fail-closed；Workflow 当前版本已发布启用且无待发布变更时禁止重复发布。
+- **验证**：Java 49 tests；Web 8 files / 44 tests；`vue-tsc -b`；可信 Java/Web release manifests。
+- **实现/合入**：commits `add8f20f1`、`455fed9c7`、`bb30c5db6`；PR [#1675](https://github.com/Stevenjxie/cretas/pull/1675)；exact main `4d2d3b5e8317b2585048bc01a6e3844ec211f1b4`。
+- **部署**：2026-07-23 已部署生产；backend blue/10010、health pass；Web 四方 SHA-256 `6f668350b5534dab81627785992247f5dec65da0eb5b4d7a20ff84fff56d9150` 一致。
+- **安全**：用户接手 UI 业务验收前 Codex 未保存辅料绑定；F006 业务写入 0，其他租户写入 0。
+
+## BUG-F006-R4-OPENING-INVENTORY-PREVIEW-HINT-001 — `merged`
+
+- **Base SHA**：`e79d3f7dc3319605d103fe27167ce54d72bbcbff`
+- **Owner**：`/root/opening_preview_hint`
+- **结果**：未完成“预览比对”时，期初导入确认按钮通过 hover/focus 明确提示禁用原因；影响预览的输入变化会使旧预览失效。
+- **验证**：目标 Vitest 3/3；并入 Web 联合 8 files / 44 tests、`vue-tsc -b` 与可信 Web build。
+- **实现/合入/部署**：commit `bb30c5db6`；PR [#1675](https://github.com/Stevenjxie/cretas/pull/1675)；exact main `4d2d3b5e8317b2585048bc01a6e3844ec211f1b4`；2026-07-23 已部署生产。
+- **安全**：未执行预览、导入或任何库存 mutation。

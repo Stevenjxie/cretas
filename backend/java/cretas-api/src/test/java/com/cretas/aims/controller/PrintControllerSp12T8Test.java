@@ -4,14 +4,23 @@ import com.cretas.aims.security.PriceMaskResolver;
 import com.cretas.aims.dto.WorkProcessTaskDTO;
 import com.cretas.aims.dto.production.ProductionPlanDTO;
 import com.cretas.aims.entity.ProductionBatch;
+import com.cretas.aims.entity.WorkProcess;
+import com.cretas.aims.entity.bom.BomRecipe;
+import com.cretas.aims.entity.bom.BomRecipeItem;
 import com.cretas.aims.entity.enums.ProductionPlanStatus;
 import com.cretas.aims.entity.factory.FactoryMaterialRequisition;
 import com.cretas.aims.entity.factory.FactoryMaterialRequisitionItem;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.repository.ProductionBatchRepository;
+import com.cretas.aims.repository.WorkProcessRepository;
+import com.cretas.aims.repository.bom.BomRecipeItemRepository;
+import com.cretas.aims.repository.bom.BomRecipeRepository;
+import com.cretas.aims.repository.bom.BomSeasoningItemRepository;
 import com.cretas.aims.service.ProductionPlanService;
 import com.cretas.aims.service.factory.FactoryMaterialRequisitionService;
 import com.cretas.aims.service.workprocess.WorkProcessTaskService;
+import com.cretas.aims.service.bom.BomWorkflowRevisionService;
+import com.cretas.aims.service.workflow.PinnedWorkflowGraph;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -26,6 +35,7 @@ import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -54,6 +64,11 @@ class PrintControllerSp12T8Test {
     private FactoryMaterialRequisitionService factoryMaterialRequisitionService;
     private WorkProcessTaskService workProcessTaskService;
     private ProductionBatchRepository productionBatchRepository;
+    private BomRecipeRepository bomRecipeRepository;
+    private BomRecipeItemRepository bomRecipeItemRepository;
+    private BomSeasoningItemRepository bomSeasoningItemRepository;
+    private BomWorkflowRevisionService bomWorkflowRevisionService;
+    private WorkProcessRepository workProcessRepository;
 
     @BeforeEach
     void setUp() {
@@ -61,6 +76,11 @@ class PrintControllerSp12T8Test {
         factoryMaterialRequisitionService = mock(FactoryMaterialRequisitionService.class);
         workProcessTaskService = mock(WorkProcessTaskService.class);
         productionBatchRepository = mock(ProductionBatchRepository.class);
+        bomRecipeRepository = mock(BomRecipeRepository.class);
+        bomRecipeItemRepository = mock(BomRecipeItemRepository.class);
+        bomSeasoningItemRepository = mock(BomSeasoningItemRepository.class);
+        bomWorkflowRevisionService = mock(BomWorkflowRevisionService.class);
+        workProcessRepository = mock(WorkProcessRepository.class);
 
         // PrintController requires 3 constructor args — inject mocks.
         controller = new PrintController(
@@ -72,6 +92,11 @@ class PrintControllerSp12T8Test {
                 factoryMaterialRequisitionService);
         ReflectionTestUtils.setField(controller, "workProcessTaskService", workProcessTaskService);
         ReflectionTestUtils.setField(controller, "productionBatchRepository", productionBatchRepository);
+        ReflectionTestUtils.setField(controller, "bomRecipeRepository", bomRecipeRepository);
+        ReflectionTestUtils.setField(controller, "bomRecipeItemRepository", bomRecipeItemRepository);
+        ReflectionTestUtils.setField(controller, "bomSeasoningItemRepository", bomSeasoningItemRepository);
+        ReflectionTestUtils.setField(controller, "bomWorkflowRevisionService", bomWorkflowRevisionService);
+        ReflectionTestUtils.setField(controller, "workProcessRepository", workProcessRepository);
     }
 
     // ==================== buildProductionWorkOrderPayload ====================
@@ -267,6 +292,96 @@ class PrintControllerSp12T8Test {
         @SuppressWarnings("unchecked")
         List<Map<String, Object>> processes = (List<Map<String, Object>>) payload.get("processes");
         assertThat(processes).isEmpty();
+    }
+
+    @Test
+    @DisplayName("新建计划尚无任务/领料单时使用固定 Workflow 与 BOM 生成诚实参考内容")
+    void buildProductionWorkOrderPayload_beforeMaterialization_usesPinnedSnapshots() throws Exception {
+        ProductionPlanDTO plan = new ProductionPlanDTO();
+        plan.setPlanNumber("PLAN-F006-REF");
+        plan.setProductTypeId("PRODUCT-F006");
+        plan.setProductName("SOP-20260723-01-黄油鸡-成品800g");
+        plan.setProductUnit("box");
+        plan.setPlannedQuantity(new BigDecimal("10"));
+        plan.setSelectedBomRecipeId("BOM-F006");
+        plan.setStatus(ProductionPlanStatus.PENDING);
+        plan.setPlannedDate(LocalDate.of(2026, 7, 24));
+        when(productionPlanService.getProductionPlanById("F006", "plan-f006")).thenReturn(plan);
+        when(productionBatchRepository.findByFactoryIdAndProductionPlanId("F006", "plan-f006"))
+                .thenReturn(List.of());
+        when(factoryMaterialRequisitionService.listByPlan("F006", "plan-f006"))
+                .thenReturn(List.of());
+
+        BomRecipe recipe = new BomRecipe();
+        recipe.setId("BOM-F006");
+        recipe.setFactoryId("F006");
+        recipe.setProductTypeId("PRODUCT-F006");
+        when(bomRecipeRepository.findById("BOM-F006")).thenReturn(Optional.of(recipe));
+        when(bomWorkflowRevisionService.resolvePinnedGraph("F006", recipe)).thenReturn(
+                new PinnedWorkflowGraph(
+                        25L, 112L, 1, "hash", "PRODUCT-F006", "finished",
+                        List.of("RAW-A"),
+                        List.of(
+                                new PinnedWorkflowGraph.ProcessStep("process-1", "WP-RAW", 1),
+                                new PinnedWorkflowGraph.ProcessStep("process-2", "WP-PACK", 2)),
+                        List.of(), List.of()));
+
+        WorkProcess rawProcess = new WorkProcess();
+        rawProcess.setId("WP-RAW");
+        rawProcess.setFactoryId("F006");
+        rawProcess.setProcessName("SOP-20260723-01-黄油鸡-原料处理");
+        rawProcess.setEstimatedMinutes(60);
+        WorkProcess packProcess = new WorkProcess();
+        packProcess.setId("WP-PACK");
+        packProcess.setFactoryId("F006");
+        packProcess.setProcessName("SOP-20260723-01-黄油鸡-定量包装");
+        when(workProcessRepository.findByFactoryIdAndIdIn(
+                "F006", List.of("WP-RAW", "WP-PACK")))
+                .thenReturn(List.of(rawProcess, packProcess));
+
+        BomRecipeItem raw = new BomRecipeItem();
+        raw.setRecipeId("BOM-F006");
+        raw.setFactoryId("F006");
+        raw.setMaterialTypeId("RAW-A");
+        raw.setMaterialName("黄油鸡原料A");
+        raw.setMaterialCategory("RAW");
+        raw.setUnit("kg");
+
+        BomRecipeItem carton = new BomRecipeItem();
+        carton.setRecipeId("BOM-F006");
+        carton.setFactoryId("F006");
+        carton.setMaterialTypeId("PK-CARTON");
+        carton.setMaterialName("黄油鸡外箱");
+        carton.setMaterialCategory("PACKAGING");
+        carton.setUnit("case");
+        carton.setStandardQuantity(new BigDecimal("0.125"));
+        when(bomRecipeItemRepository.findByRecipeIdOrderBySortOrderAsc("BOM-F006"))
+                .thenReturn(List.of(raw, carton));
+        when(bomSeasoningItemRepository.findByRecipeIdOrderBySeqAsc("BOM-F006"))
+                .thenReturn(List.of());
+
+        Map<String, Object> payload =
+                invokeBuildProductionWorkOrderPayload("F006", "plan-f006", null);
+
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> processes =
+                (List<Map<String, Object>>) payload.get("processes");
+        assertThat(processes).extracting(row -> row.get("name")).containsExactly(
+                "SOP-20260723-01-黄油鸡-原料处理",
+                "SOP-20260723-01-黄油鸡-定量包装");
+        assertThat(payload.get("processDataStatus").toString()).contains("固定 Workflow");
+
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> materials =
+                (List<Map<String, Object>>) payload.get("materialItems");
+        assertThat(materials).hasSize(2);
+        assertThat(materials.get(0))
+                .containsEntry("category", "原料")
+                .containsEntry("plannedRawQty", "计划投料待填写");
+        assertThat(materials.get(1))
+                .containsEntry("category", "包材")
+                .containsEntry("totalQty", "1.25");
+        assertThat(payload.get("materialDataStatus").toString()).contains("固定 BOM");
     }
 
     @Test

@@ -5,6 +5,10 @@ import com.cretas.aims.dto.WorkProcessTaskDTO;
 import com.cretas.aims.dto.production.ProductionPlanDTO;
 import com.cretas.aims.dto.template.PrintPreviewTemplateRequest;
 import com.cretas.aims.entity.ProductionBatch;
+import com.cretas.aims.entity.WorkProcess;
+import com.cretas.aims.entity.bom.BomRecipe;
+import com.cretas.aims.entity.bom.BomRecipeItem;
+import com.cretas.aims.entity.bom.BomSeasoningItem;
 import com.cretas.aims.entity.factory.FactoryMaterialRequisition;
 import com.cretas.aims.entity.factory.FactoryMaterialRequisitionItem;
 import com.cretas.aims.entity.inventory.InternalTransfer;
@@ -13,12 +17,18 @@ import com.cretas.aims.entity.inventory.PurchaseReceiveItem;
 import com.cretas.aims.entity.inventory.PurchaseReceiveRecord;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.repository.ProductionBatchRepository;
+import com.cretas.aims.repository.WorkProcessRepository;
+import com.cretas.aims.repository.bom.BomRecipeItemRepository;
+import com.cretas.aims.repository.bom.BomRecipeRepository;
+import com.cretas.aims.repository.bom.BomSeasoningItemRepository;
 import com.cretas.aims.security.PriceMaskResolver;
 import com.cretas.aims.service.ProductionPlanService;
 import com.cretas.aims.service.factory.FactoryMaterialRequisitionService;
 import com.cretas.aims.service.inventory.TransferService;
 import com.cretas.aims.service.inventory.PurchaseService;
 import com.cretas.aims.service.workprocess.WorkProcessTaskService;
+import com.cretas.aims.service.bom.BomWorkflowRevisionService;
+import com.cretas.aims.service.workflow.PinnedWorkflowGraph;
 import com.cretas.aims.utils.JwtUtil;
 import com.cretas.aims.utils.TokenUtils;
 import jakarta.validation.Valid;
@@ -42,7 +52,10 @@ import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
+import java.util.function.Function;
+import java.util.stream.Collectors;
 
 /**
  * C-PRT-1 — 单据打印 PDF Java 入口.
@@ -141,6 +154,22 @@ public class PrintController {
     /** Optional: 产品类型 repository (配料单 — 取 单锅产能 算锅数). */
     @Autowired(required = false)
     private com.cretas.aims.repository.ProductTypeRepository productTypeRepository;
+
+    /** Pinned BOM/Workflow fallback used before operational tasks and requisitions exist. */
+    @Autowired(required = false)
+    private BomRecipeRepository bomRecipeRepository;
+
+    @Autowired(required = false)
+    private BomRecipeItemRepository bomRecipeItemRepository;
+
+    @Autowired(required = false)
+    private BomSeasoningItemRepository bomSeasoningItemRepository;
+
+    @Autowired(required = false)
+    private BomWorkflowRevisionService bomWorkflowRevisionService;
+
+    @Autowired(required = false)
+    private WorkProcessRepository workProcessRepository;
 
     /** Optional: JWT helper used only for printed-by audit metadata. */
     @Autowired(required = false)
@@ -502,10 +531,6 @@ public class PrintController {
             Map<String, Object> batching = buildBatchingSheetPayload(factoryId, planId, overrides);
             applyPinnedPlanSnapshot(batching, plan);
             requireDocumentRows(batching, "items", "配料单缺少物料需求数据");
-            if (batching.get("potCount") == null) {
-                throw new BusinessException(409, "配料单缺少单锅产能，不能生成完整生产单据包")
-                        .withHint("请先在产品配置中维护单锅产能");
-            }
             payload.put("batchingSheet", batching);
         }
         return payload;
@@ -518,7 +543,8 @@ public class PrintController {
         section.put("productUnit", firstNonBlank(
                 plan.getPlannedUnit(), plan.getWorkflowOutputUnit(), plan.getProductUnit(), "kg"));
         section.put("plannedQuantity", plan.getPlannedQuantity() != null
-                ? formatQty(plan.getPlannedQuantity()) : "0");
+                && plan.getPlannedQuantity().compareTo(BigDecimal.ZERO) > 0
+                ? formatQty(plan.getPlannedQuantity()) : "按实际报工确定");
         section.put("batchDate", plan.getBatchDate() != null ? plan.getBatchDate().toString() : "-");
         section.put("bomRecipeId", plan.getSelectedBomRecipeId());
         section.put("bomVersion", plan.getSelectedBomVersion());
@@ -619,6 +645,14 @@ public class PrintController {
             } catch (Exception e) {
                 log.warn("printBatchingSheet: failed to load requisitions for plan {}: {}", planId, e.getMessage());
             }
+        }
+        if (items.isEmpty()) {
+            items.addAll(buildBomReferenceRows(factoryId, planId, false));
+            p.put("dataStatus", items.isEmpty()
+                    ? "尚未生成配料需求，且计划缺少可读取的固定 BOM"
+                    : "尚未生成配料实绩；以下为固定 BOM 的原辅料关系与工序比例");
+        } else {
+            p.put("dataStatus", "已生成领料需求/实绩");
         }
         p.put("items", items);
         p.put("remark", or(overrides, "remark", null));
@@ -1058,9 +1092,11 @@ public class PrintController {
             p.put("productName", plan.getProductName() != null ? plan.getProductName() : "-");
             p.put("productUnit", plan.getProductUnit() != null ? plan.getProductUnit() : "kg");
             p.put("plannedQuantity", plan.getPlannedQuantity() != null
-                    ? plan.getPlannedQuantity().toPlainString() : "0");
+                    && plan.getPlannedQuantity().compareTo(BigDecimal.ZERO) > 0
+                    ? plan.getPlannedQuantity().toPlainString() : "按实际报工确定");
             p.put("expectedOutput", plan.getPlannedQuantity() != null
-                    ? plan.getPlannedQuantity().toPlainString() : "0");
+                    && plan.getPlannedQuantity().compareTo(BigDecimal.ZERO) > 0
+                    ? plan.getPlannedQuantity().toPlainString() : "按实际报工确定");
             p.put("status", plan.getStatus() != null ? plan.getStatus().name() : "-");
             p.put("plannedDate", plan.getPlannedDate() != null
                     ? plan.getPlannedDate().toString()
@@ -1088,10 +1124,31 @@ public class PrintController {
         }
 
         // 工序列表: 从该计划下所有批次的 WorkProcessTask 取 (去重, 按 processOrder 升序)
-        p.put("processes", buildProcessList(factoryId, planId));
-        p.put("materialItems", buildMaterialRequirementRows(factoryId, planId));
+        List<Map<String, Object>> processes = buildProcessList(factoryId, planId);
+        List<Map<String, Object>> materialItems = buildMaterialRequirementRows(factoryId, planId);
+        p.put("processes", processes);
+        p.put("materialItems", materialItems);
+        p.put("processDataStatus", processes.isEmpty()
+                ? "尚未生成工序任务，且计划缺少可读取的固定 Workflow"
+                : rowsUseReference(processes)
+                        ? "工序任务尚未生成；以下路线来自计划固定 Workflow"
+                        : "已生成工序任务");
+        p.put("materialDataStatus", materialItems.isEmpty()
+                ? "尚未生成领料需求，且计划缺少可读取的固定 BOM"
+                : rowsUseReference(materialItems)
+                        ? "领料单尚未生成；以下为计划固定 BOM 参考，未知投入量待计划/报工确认"
+                        : "已生成领料需求/实绩");
         p.put("remark", or(overrides, "remark", null));
         return p;
+    }
+
+    private boolean rowsUseReference(List<Map<String, Object>> rows) {
+        return rows != null && !rows.isEmpty()
+                && rows.stream()
+                        .map(row -> row.get("dataSource"))
+                        .filter(java.util.Objects::nonNull)
+                        .map(Object::toString)
+                        .anyMatch(source -> source.contains("固定") || source.contains("参考"));
     }
 
     /**
@@ -1107,15 +1164,15 @@ public class PrintController {
     private List<Map<String, Object>> buildProcessList(String factoryId, String planId) {
         if (workProcessTaskService == null || productionBatchRepository == null) {
             log.warn("buildProcessList: workProcessTaskService or productionBatchRepository not injected, "
-                    + "returning empty processes for plan {}", planId);
-            return List.of();
+                    + "using pinned Workflow for plan {}", planId);
+            return buildPinnedProcessRows(factoryId, planId);
         }
         try {
             List<ProductionBatch> batches =
                     productionBatchRepository.findByFactoryIdAndProductionPlanId(factoryId, planId);
             if (batches == null || batches.isEmpty()) {
                 log.debug("buildProcessList: no batches found for plan {} factory {}", planId, factoryId);
-                return List.of();
+                return buildPinnedProcessRows(factoryId, planId);
             }
             // Use the first batch with tasks; fall through if none have tasks yet
             for (ProductionBatch batch : batches) {
@@ -1143,29 +1200,220 @@ public class PrintController {
                 return processes;
             }
             log.debug("buildProcessList: batches found but none have tasks spawned yet for plan {}", planId);
-            return List.of();
+            return buildPinnedProcessRows(factoryId, planId);
         } catch (Exception e) {
             log.warn("buildProcessList: failed to load work process tasks for plan {} factory {}: {}",
                     planId, factoryId, e.getMessage());
-            return List.of();
+            return buildPinnedProcessRows(factoryId, planId);
         }
     }
 
     private List<Map<String, Object>> buildMaterialRequirementRows(String factoryId, String planId) {
         if (factoryMaterialRequisitionService == null) {
             log.warn("buildMaterialRequirementRows: factoryMaterialRequisitionService not injected, "
-                    + "returning empty materials for plan {}", planId);
-            return List.of();
+                    + "using pinned BOM for plan {}", planId);
+            return buildBomReferenceRows(factoryId, planId, true);
         }
         try {
             List<FactoryMaterialRequisition> requisitions =
                     factoryMaterialRequisitionService.listByPlan(factoryId, planId);
-            return aggregateMaterialRequirementRows(requisitions);
+            List<Map<String, Object>> rows = aggregateMaterialRequirementRows(requisitions);
+            return rows.isEmpty() ? buildBomReferenceRows(factoryId, planId, true) : rows;
         } catch (Exception e) {
             log.warn("buildMaterialRequirementRows: failed to load requisitions for plan {} factory {}: {}",
                     planId, factoryId, e.getMessage());
+            return buildBomReferenceRows(factoryId, planId, true);
+        }
+    }
+
+    private List<Map<String, Object>> buildPinnedProcessRows(String factoryId, String planId) {
+        if (productionPlanService == null
+                || bomWorkflowRevisionService == null
+                || workProcessRepository == null) {
             return List.of();
         }
+        try {
+            ProductionPlanDTO plan = productionPlanService.getProductionPlanById(factoryId, planId);
+            Optional<BomRecipe> recipe = resolvePinnedRecipe(factoryId, plan);
+            if (recipe.isEmpty()) {
+                return List.of();
+            }
+            PinnedWorkflowGraph graph =
+                    bomWorkflowRevisionService.resolvePinnedGraph(factoryId, recipe.get());
+            List<String> processIds = graph.processes().stream()
+                    .map(PinnedWorkflowGraph.ProcessStep::workProcessId)
+                    .distinct()
+                    .toList();
+            Map<String, WorkProcess> processById = workProcessRepository
+                    .findByFactoryIdAndIdIn(factoryId, processIds)
+                    .stream()
+                    .collect(Collectors.toMap(WorkProcess::getId, Function.identity()));
+            List<Map<String, Object>> rows = new ArrayList<>();
+            for (PinnedWorkflowGraph.ProcessStep step : graph.processes()) {
+                WorkProcess process = processById.get(step.workProcessId());
+                Map<String, Object> row = new LinkedHashMap<>();
+                row.put("seq", step.order());
+                row.put("name", process != null && process.getProcessName() != null
+                        ? process.getProcessName() : step.workProcessId());
+                row.put("standardHours", process != null ? hours(process.getEstimatedMinutes()) : null);
+                row.put("operator", null);
+                row.put("dataSource", "计划固定 Workflow");
+                rows.add(row);
+            }
+            return rows;
+        } catch (Exception e) {
+            log.warn("buildPinnedProcessRows: unable to resolve pinned Workflow for plan {} factory {}: {}",
+                    planId, factoryId, e.getMessage());
+            return List.of();
+        }
+    }
+
+    private String hours(Integer estimatedMinutes) {
+        if (estimatedMinutes == null || estimatedMinutes <= 0) {
+            return null;
+        }
+        return BigDecimal.valueOf(estimatedMinutes)
+                .divide(BigDecimal.valueOf(60), 1, RoundingMode.HALF_UP)
+                .toPlainString();
+    }
+
+    private Optional<BomRecipe> resolvePinnedRecipe(String factoryId, ProductionPlanDTO plan) {
+        if (bomRecipeRepository == null || plan == null) {
+            return Optional.empty();
+        }
+        if (plan.getSelectedBomRecipeId() != null && !plan.getSelectedBomRecipeId().isBlank()) {
+            return bomRecipeRepository.findById(plan.getSelectedBomRecipeId())
+                    .filter(recipe -> factoryId.equals(recipe.getFactoryId()))
+                    .filter(recipe -> plan.getProductTypeId() == null
+                            || plan.getProductTypeId().equals(recipe.getProductTypeId()));
+        }
+        // A printout must not silently drift to a later ACTIVE BOM when this plan has
+        // no pinned recipe identity. In that case the document stays explicit about
+        // missing plan truth instead of borrowing today's master data.
+        return Optional.empty();
+    }
+
+    private List<Map<String, Object>> buildBomReferenceRows(
+            String factoryId, String planId, boolean includePackaging) {
+        if (productionPlanService == null
+                || bomRecipeItemRepository == null
+                || bomRecipeRepository == null) {
+            return List.of();
+        }
+        try {
+            ProductionPlanDTO plan = productionPlanService.getProductionPlanById(factoryId, planId);
+            Optional<BomRecipe> recipeOptional = resolvePinnedRecipe(factoryId, plan);
+            if (recipeOptional.isEmpty()) {
+                return List.of();
+            }
+            BomRecipe recipe = recipeOptional.get();
+            List<Map<String, Object>> rows = new ArrayList<>();
+            for (BomRecipeItem item :
+                    bomRecipeItemRepository.findByRecipeIdOrderBySortOrderAsc(recipe.getId())) {
+                String category = item.getMaterialCategory() != null
+                        ? item.getMaterialCategory().toUpperCase() : "RAW";
+                if (!includePackaging && "PACKAGING".equals(category)) {
+                    continue;
+                }
+                rows.add(bomReferenceRow(item, category, plan.getPlannedQuantity()));
+            }
+            rows.addAll(buildSeasoningReferenceRows(factoryId, recipe));
+            return rows;
+        } catch (Exception e) {
+            log.warn("buildBomReferenceRows: unable to resolve pinned BOM for plan {} factory {}: {}",
+                    planId, factoryId, e.getMessage());
+            return List.of();
+        }
+    }
+
+    private Map<String, Object> bomReferenceRow(
+            BomRecipeItem item, String category, BigDecimal plannedQuantity) {
+        Map<String, Object> row = new LinkedHashMap<>();
+        String quantityDisplay = referenceQuantityDisplay(item, category, plannedQuantity);
+        row.put("materialName", item.getMaterialName() != null
+                ? item.getMaterialName() : item.getMaterialTypeId());
+        row.put("category", materialCategoryLabel(category));
+        row.put("unit", item.getUnit());
+        row.put("plannedRawQty", "RAW".equals(category) ? quantityDisplay : "");
+        row.put("plannedAuxiliaryQty", "AUXILIARY".equals(category) ? quantityDisplay : "");
+        row.put("plannedSemiFinishedQty", "");
+        row.put("totalQty", quantityDisplay);
+        row.put("transactedQty", quantityDisplay);
+        row.put("plannedIssueQty", "待生成领料单");
+        row.put("deliveredQty", "未发料");
+        row.put("actualUsedQty", "待报工");
+        row.put("batchRefs", null);
+        row.put("unitCost", null);
+        row.put("dataSource", "计划固定 BOM 参考");
+        return row;
+    }
+
+    private String referenceQuantityDisplay(
+            BomRecipeItem item, String category, BigDecimal plannedQuantity) {
+        BigDecimal quantity = item.getStandardQuantity();
+        if (quantity == null || quantity.compareTo(BigDecimal.ZERO) <= 0) {
+            quantity = item.getNaturalQuantity();
+        }
+        if ("PACKAGING".equals(category) && quantity != null
+                && plannedQuantity != null && plannedQuantity.compareTo(BigDecimal.ZERO) > 0) {
+            return formatQty(quantity.multiply(plannedQuantity));
+        }
+        if (quantity != null && quantity.compareTo(BigDecimal.ZERO) > 0) {
+            return "参考 " + formatQty(quantity) + " / 单位成品";
+        }
+        return "计划投料待填写";
+    }
+
+    private List<Map<String, Object>> buildSeasoningReferenceRows(
+            String factoryId, BomRecipe recipe) {
+        if (bomSeasoningItemRepository == null) {
+            return List.of();
+        }
+        List<BomSeasoningItem> items =
+                bomSeasoningItemRepository.findByRecipeIdOrderBySeqAsc(recipe.getId());
+        if (items.isEmpty()) {
+            return List.of();
+        }
+        List<String> processIds = items.stream()
+                .map(BomSeasoningItem::getWorkProcessId)
+                .filter(java.util.Objects::nonNull)
+                .distinct()
+                .toList();
+        Map<String, WorkProcess> processById =
+                workProcessRepository == null || processIds.isEmpty()
+                        ? Map.of()
+                        : workProcessRepository.findByFactoryIdAndIdIn(factoryId, processIds)
+                                .stream()
+                                .collect(Collectors.toMap(WorkProcess::getId, Function.identity()));
+        List<Map<String, Object>> rows = new ArrayList<>();
+        for (BomSeasoningItem item : items) {
+            WorkProcess process = processById.get(item.getWorkProcessId());
+            String processName = process != null ? process.getProcessName() : "对应工序";
+            String ratio = formatQty(item.getDosagePerKgG()) + " g/kg";
+            if (item.getSubsequentPotRatio() != null) {
+                ratio += "；后续锅 "
+                        + item.getSubsequentPotRatio().multiply(new BigDecimal("100"))
+                                .stripTrailingZeros().toPlainString()
+                        + "%";
+            }
+            Map<String, Object> row = new LinkedHashMap<>();
+            row.put("materialName", item.getName() + "（" + processName + "）");
+            row.put("category", "工序辅料");
+            row.put("unit", "g/kg");
+            row.put("plannedRawQty", "");
+            row.put("plannedAuxiliaryQty", ratio);
+            row.put("plannedSemiFinishedQty", "");
+            row.put("totalQty", ratio);
+            row.put("transactedQty", ratio);
+            row.put("plannedIssueQty", "待生成领料单");
+            row.put("deliveredQty", "未发料");
+            row.put("actualUsedQty", "待报工");
+            row.put("batchRefs", null);
+            row.put("perPotQty", ratio);
+            row.put("dataSource", "BOM 工序辅料比例");
+            rows.add(row);
+        }
+        return rows;
     }
 
     private List<Map<String, Object>> aggregateMaterialRequirementRows(
@@ -1297,6 +1545,7 @@ public class PrintController {
         return switch (bucket) {
             case "RAW" -> "原料";
             case "SEMI_FINISHED" -> "半成品";
+            case "PACKAGING" -> "包材";
             default -> "辅料";
         };
     }
@@ -1368,6 +1617,14 @@ public class PrintController {
             p.put("requisitionCount", 0);
         }
 
+        if (items.isEmpty()) {
+            items.addAll(buildBomReferenceRows(factoryId, planId, true));
+            p.put("dataStatus", items.isEmpty()
+                    ? "尚未生成领料需求，且计划缺少可读取的固定 BOM"
+                    : "尚未生成领料单；以下为计划固定 BOM 参考，不代表已拣料或已发料");
+        } else {
+            p.put("dataStatus", "已生成领料需求/实绩");
+        }
         p.put("items", items);
         p.put("remark", or(overrides, "remark", null));
         return p;

@@ -2,6 +2,7 @@ package com.cretas.aims.service.production;
 
 import com.cretas.aims.dto.production.CreateProductionPlanRequest;
 import com.cretas.aims.dto.production.ProductionPlanDTO;
+import com.cretas.aims.entity.ProductType;
 import com.cretas.aims.entity.ProductionPlan;
 import com.cretas.aims.entity.enums.PlanSourceType;
 import com.cretas.aims.entity.enums.ProductionPlanStatus;
@@ -39,6 +40,7 @@ import org.springframework.transaction.support.TransactionSynchronizationManager
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.util.Collections;
+import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
@@ -101,6 +103,11 @@ class ProductionPlanSafetyStockSourceTest {
 
         // Product type must exist
         when(productTypeRepository.existsById(PRODUCT_TYPE_ID)).thenReturn(true);
+        ProductType productType = new ProductType();
+        productType.setId(PRODUCT_TYPE_ID);
+        productType.setFactoryId(FACTORY_ID);
+        productType.setUnit("box");
+        when(productTypeRepository.findById(PRODUCT_TYPE_ID)).thenReturn(Optional.of(productType));
 
         // Mapper stub: return a minimal plan entity mirroring sourceOrderId from request
         lenient().when(productionPlanMapper.toEntity(any(CreateProductionPlanRequest.class), any(), any()))

@@ -94,6 +94,10 @@ import {
   downloadProductionDocumentPack,
   type ProductionDocumentChapter,
 } from './productionDocumentPack';
+import {
+  plannedQuantityForPayload,
+  plannedQuantityRequired,
+} from './productionPlanQuantity';
 
 const router = useRouter();
 const route = useRoute();
@@ -522,7 +526,7 @@ const dialogVisible = ref(false);
 const dialogLoading = ref(false);
 const planForm = ref({
   productTypeId: '',
-  plannedQuantity: 0,
+  plannedQuantity: undefined as number | undefined,
   aiRequestedUnit: '',
   plannedDate: '',
   notes: '',
@@ -879,10 +883,6 @@ async function loadBomProcesses(productTypeId: string) {
   // 否则 0 legacy 工序 → 强制两点 (skip=true); 有 legacy 工序 → 保留当前选择。
   if (hasActiveWorkflow.value) {
     planForm.value.skipProcessReporting = false;
-    // 存货生产 + workflow: 数量字段刚显现, 给个正默认值 (el-input-number min=1), 供转批次。
-    if (!planForm.value.plannedQuantity || planForm.value.plannedQuantity < 1) {
-      planForm.value.plannedQuantity = 1;
-    }
   } else if (productWorkProcessList.value.length === 0) {
     planForm.value.skipProcessReporting = true;
   }
@@ -1113,7 +1113,7 @@ function handleCreate() {
   const today = todayStr();
   planForm.value = {
     productTypeId: '',
-    plannedQuantity: 0,
+    plannedQuantity: undefined,
     aiRequestedUnit: '',
     // T135 ITEM #3: 计划生产日默认 = 今天 + 1 天
     plannedDate: tomorrowStr(),
@@ -1249,13 +1249,13 @@ async function submitPlan() {
     ElMessage.warning('请选择生产计划使用的 Workflow');
     return;
   }
-  // raw-centric 多SKU: 存货生产常规无需数量, 但 workflow 驱动产品必须 (转批次 create-batch 要求 >0)。
-  const needQty = planForm.value.sourceType !== 'SAFETY_STOCK'
-    || (planForm.value.sourceType === 'SAFETY_STOCK' && hasActiveWorkflow.value);
-  if (!planForm.value.plannedQuantity && needQty) {
-    ElMessage.warning(hasActiveWorkflow.value && planForm.value.sourceType === 'SAFETY_STOCK'
-      ? '本产品由 Workflow 驱动，请输入计划投料数量'
-      : '请输入计划数量');
+  // 存货生产按实际报工/小结确认产量，计划数量仅作可选参考；其他来源继续严格要求正数。
+  const needQty = plannedQuantityRequired(planForm.value.sourceType);
+  if (needQty && (
+    !Number.isFinite(planForm.value.plannedQuantity)
+    || Number(planForm.value.plannedQuantity) <= 0
+  )) {
+    ElMessage.warning('请输入计划数量');
     return;
   }
   dialogLoading.value = true;
@@ -1269,6 +1269,10 @@ async function submitPlan() {
       ...rest
     } = planForm.value;
     const payload: Record<string, unknown> = { ...rest };
+    payload.plannedQuantity = plannedQuantityForPayload(
+      planForm.value.sourceType,
+      planForm.value.plannedQuantity,
+    );
     if (resolutionMode === 'SINGLE_OUTPUT' || resolutionMode === 'SHARED_MULTI_OUTPUT') {
       payload.targetFinishedGoodIds = targetFinishedGoodIds;
       payload.selectedWorkflowId = resolvedWorkflowCandidate.value?.workflowId;
@@ -4269,21 +4273,24 @@ function guardProductionPlanAi(params: Record<string, unknown>) {
             </template>
           </div>
         </el-form-item>
-        <!-- raw-centric 多SKU (2026-07-13): 存货生产 + 产品由 Workflow 驱动 (自有图或所选成品命中
-             raw-owned 候选) → 需设投料数量, 供转批次 (create-batch 要求 >0, 否则 400 数量必须大于0)。
-             非 workflow 的存货生产仍按实际小结累计不填数量 (不回归)。 -->
+        <!-- 存货生产的产量由逐道报工/生产小结形成；此处只接受可选的排产参考数量。 -->
         <el-form-item
           v-if="planForm.sourceType === 'SAFETY_STOCK' && (hasActiveWorkflow || hasResolvedWorkflowCandidate)"
-          :label="`${planForm.resolutionMode === 'SHARED_MULTI_OUTPUT' ? 'Workflow 计划基准数量' : '计划成品数量'}（${resolvedWorkflowCandidate?.plannedUnit || '单位未配置'}）`"
-          required
+          :label="`${planForm.resolutionMode === 'SHARED_MULTI_OUTPUT' ? 'Workflow 计划基准数量' : '计划成品数量'}（选填，${resolvedWorkflowCandidate?.plannedUnit || '单位未配置'}）`"
         >
-          <el-input-number v-model="planForm.plannedQuantity" :min="1" style="width: 100%" />
+          <el-input-number
+            v-model="planForm.plannedQuantity"
+            :min="1"
+            clearable
+            placeholder="留空则按实际生产报工确定"
+            style="width: 100%"
+          />
           <div style="font-size: 12px; color: var(--text-color-secondary, #909399); margin-top: 2px;">
             <template v-if="planForm.resolutionMode === 'SHARED_MULTI_OUTPUT'">
-              该计划使用共同的多产出 Workflow；逐道报工时按完整工序图记录全部分支。
+              可填写计划参考基准；留空时按完整 Workflow 逐道报工，并以实际产出结算。
             </template>
             <template v-else>
-              填 Workflow 终端成品输出端口的计划数量；逐道报工仍使用各工序端口单位。
+              计划数量仅作排产参考；留空不影响建单，实际产量由逐道报工或生产小结确认。
             </template>
           </div>
         </el-form-item>
