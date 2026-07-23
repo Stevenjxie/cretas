@@ -397,10 +397,9 @@ def match_restaurant_ops(query: str) -> Optional[str]:
     # 菜品销量排名 ("哪道菜卖得最差") — POS 行直接排, 不再依赖上传报表 (R14)。
     if dish_ranking_direction(q):
         return "RESTAURANT_OPS_GROSS_MARGIN"
-    # 店×菜拆分问 ("哪家店的米饭卖得最好") — 暂不支持, tiered 层诚实拒答并
-    # 给两条可用替代 (R15)。返回 GROSS_MARGIN 仅为通过委托预筛。
+    # 店×菜拆分问 ("哪家店的米饭卖得最好") — 店×菜粒度直答 (R18)。
     if store_dish_split_dish(q):
-        return "RESTAURANT_OPS_GROSS_MARGIN"
+        return "RESTAURANT_OPS_STORE_MARGIN"
     # 单日营收问 ("昨天卖了多少钱") — Java DAILY_REVENUE 工具默认锚今天,
     # 把单日问偷换成 今天vs昨天 比较 (R15/G7)。
     if (
@@ -2256,6 +2255,7 @@ async def resolve_store_margin(
     store_id: Optional[str] = None,
     store_name: Optional[str] = None,
     store_mention: Optional[str] = None,
+    dish_mention: Optional[str] = None,
 ) -> OpsAnswer:
     """Per-store gross margin: fact_pos_item × fact_pos_transaction.store_id
     × dim_store.name × recipe food_cost. Connects POS bill → store → dish → cost
@@ -2640,6 +2640,76 @@ async def resolve_store_margin(
                 factory_id, list(name_to_pk.values()),
             )
             cost_by_pk = {r["product_source_pk"]: r["c"] for r in cr}
+
+    # R18 店×菜下钻: 「哪家店的米饭卖得最好」/「X店的米饭卖得怎么样」—
+    # store_dish_rows 本就是 店×菜 粒度, 点名菜时限域直答, 不再诚实拒答。
+    if dish_mention:
+        matched = [
+            r for r in store_dish_rows
+            if dish_mention in (r["dish_name"] or "")
+            or dish_mention in (r["normalized_name"] or "")
+            or ((r["normalized_name"] or "") and r["normalized_name"] in dish_mention)
+        ]
+        if not matched:
+            return OpsAnswer(
+                code="RESTAURANT_OPS_STORE_MARGIN",
+                title=f"{dish_mention} — 门店销量查询",
+                answer_text=(
+                    f"{window_label}没有找到「{dish_mention}」的门店销售记录，"
+                    "不能给出该菜的门店拆分，也不会用其他菜品或榜单替代。"
+                    "请核对菜名；可以先问「哪个菜卖得最好」查看在售菜品。"
+                ),
+                charts=[], kpis=[],
+                meta={"dish_not_found": dish_mention},
+            )
+        spec_names = sorted({r["dish_name"] for r in matched})
+        spec_note = (
+            f"（含 {len(spec_names)} 个规格：{'、'.join(spec_names[:4])}）"
+            if len(spec_names) > 1 else ""
+        )
+        per_store: Dict[Any, Dict[str, Any]] = {}
+        for r in matched:
+            entry = per_store.setdefault(r["store_id"], {
+                "name": r["store_name"], "qty": 0.0, "revenue": 0.0,
+            })
+            entry["qty"] += float(r["qty"] or 0)
+            entry["revenue"] += float(r["revenue"] or 0)
+        if store_id or store_name:
+            target = next(iter(per_store.values()))
+            target_label = store_name or target["name"]
+            return OpsAnswer(
+                code="RESTAURANT_OPS_STORE_MARGIN",
+                title=f"{target_label} — {dish_mention}",
+                answer_text=(
+                    f"「{target_label}」的「{dish_mention}」{spec_note}"
+                    f"在{window_label}销量 {target['qty']:,.0f} 份、"
+                    f"营收 ¥{target['revenue']:,.2f}。"
+                    f"如需该菜全部门店合计或毛利口径，可问「{dish_mention}的销量」。"
+                ),
+                charts=[], kpis=[],
+                meta={"store_dish": dish_mention, "targetStoreName": target_label,
+                      "scope_matches_request": True},
+            )
+        ranked_dish_stores = sorted(
+            per_store.values(), key=lambda e: e["qty"], reverse=True,
+        )
+        rank_lines = [f"「{dish_mention}」{spec_note}各门店销量排行（{window_label}）："]
+        for idx, e in enumerate(ranked_dish_stores[:5], 1):
+            rank_lines.append(
+                f"{idx}. {e['name']} — 销量 {e['qty']:,.0f} 份、营收 ¥{e['revenue']:,.2f}"
+            )
+        rank_lines.append(
+            f"仅统计窗口内有该菜销售记录的 {len(ranked_dish_stores)} 家门店。"
+        )
+        return OpsAnswer(
+            code="RESTAURANT_OPS_STORE_MARGIN",
+            title=f"{dish_mention} — 门店销量排行",
+            answer_text="\n".join(rank_lines),
+            charts=[], kpis=[],
+            meta={"store_dish": dish_mention,
+                  "store_count": len(ranked_dish_stores),
+                  "scope_matches_request": True},
+        )
 
     bill_count_by_store = {row["store_id"]: row["bills"] for row in store_bill_rows}
     store_list = _aggregate_store_margin_entries(
