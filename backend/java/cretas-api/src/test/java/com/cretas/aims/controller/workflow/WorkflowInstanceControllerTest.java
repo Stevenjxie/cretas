@@ -25,6 +25,7 @@ import com.cretas.aims.service.workflow.OaActionIdempotencyService;
 import com.cretas.aims.service.inventory.PurchaseService;
 import com.cretas.aims.service.inventory.SalesService;
 import com.cretas.aims.service.inventory.TransferService;
+import com.cretas.aims.service.factory.FactoryStocktakeService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -99,6 +100,7 @@ class WorkflowInstanceControllerTest {
     @Mock private PurchaseService purchaseService;
     @Mock private SalesService salesService;
     @Mock private TransferService transferService;
+    @Mock private FactoryStocktakeService stocktakeService;
 
     @InjectMocks private WorkflowInstanceController controller;
 

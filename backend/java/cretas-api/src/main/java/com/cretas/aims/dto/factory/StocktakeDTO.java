@@ -73,6 +73,8 @@ public class StocktakeDTO {
         private String stocktakeId;
         private String materialBatchId;
         private String rawMaterialTypeId;
+        /** Product/SKU identity for WIP and finished-product inventory batches. */
+        private String productTypeId;
         /** Business-facing batch identity. materialBatchId remains the internal UUID. */
         private String batchNumber;
         private String materialCode;

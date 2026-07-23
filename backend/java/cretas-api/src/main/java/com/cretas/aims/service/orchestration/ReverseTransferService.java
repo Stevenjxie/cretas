@@ -137,14 +137,15 @@ public class ReverseTransferService {
             return;  // 无 items, 已跳过 (INFO 日志在 createReverseTransferDraft 内打)
         }
 
-        // R6 #5 防呆自动衔接: 同厂车间→总仓内部移库, 自动推进到 CONFIRMED, 让成品立即在 WH-LOG 可售。
-        // 跨厂 (sourceFactoryId != targetFactoryId) 保留手动多步, 留第二方审批责任。
+        // 同厂车间→总仓只创建来源明确的草稿；后续必须由操作人提交统一 OA。
+        // 跨厂同样保留草稿，不在生产完成监听器里执行审批或库存移动。
         if (factoryId.equals(draft.targetFactoryId)) {
             try {
                 // 独立 REQUIRES_NEW 事务, 失败只回滚推进自身, 不 doom 草稿 (草稿已 commit)。
                 // 注: 推进方法内 catch 后, 若 tx 已被 mark rollback-only, 代理 commit 时会抛
                 // UnexpectedRollbackException → 这里二次兜底 (推进事务正常回滚, 草稿不受影响)。
-                proxy().autoAdvanceIntraFactory(factoryId, draft.transferId, draft.transferNumber);
+                log.info("D1 同厂反向调拨草稿已创建，等待操作人提交 OA: transferId={}, transferNumber={}",
+                        draft.transferId, draft.transferNumber);
             } catch (Exception e) {
                 log.error("D1 反向调拨自动推进事务回滚 (草稿仍在, 可手动补完): transferId={}, err={}",
                         draft.transferId, e.getMessage(), e);
@@ -249,27 +250,16 @@ public class ReverseTransferService {
     }
 
     /**
-     * 同厂反向调拨自动推进: DRAFT → request → approve → ship → receive → confirm = CONFIRMED。
+     * 兼容入口：同厂反向调拨不再自动推进，保留 DRAFT 等待操作人提交 OA。
      *
-     * <p>独立 {@code REQUIRES_NEW} 事务: 任一步抛异常 → 只回滚本推进事务 (库存扣减 / 状态变更全撤),
-     * 草稿 (上一独立事务已 commit) 留存, 用户可手动补完。catch 吞异常防止 doom 上层。
      *
-     * <p>复用 {@link TransferService} 现有状态机方法 (各自已含库存扣减 / 批次创建 / 工厂校验逻辑),
-     * 不重写库存逻辑。每步以 {@link #SYSTEM_USER_ID} 执行 (同厂无第二方)。
-     *
-     * <p><b>库存副作用</b>: ship 阶段从 WH-WKS 扣减成品/余料 (deductSourceInventory),
-     * confirm 阶段在 WH-LOG 创建对应目标批次 (createTargetInventory) → 净效果 = 把批次从车间仓
-     * "搬"到总仓。同厂 createTargetInventory 会对原料 recalc 均价 (同工厂安全)。
+     * <p>保留该方法仅兼容旧内部调用；方法不改变调拨状态、不写库存，也不创建第二条 OA 实例。
      */
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void autoAdvanceIntraFactory(String factoryId, String transferId, String transferNumber) {
         try {
-            transferService.requestTransfer(factoryId, transferId, SYSTEM_USER_ID);   // DRAFT → REQUESTED
-            transferService.approveTransfer(factoryId, transferId, SYSTEM_USER_ID);   // REQUESTED → APPROVED
-            transferService.shipTransfer(factoryId, transferId, SYSTEM_USER_ID);      // APPROVED → SHIPPED (扣 WH-WKS)
-            transferService.receiveTransfer(factoryId, transferId, SYSTEM_USER_ID);   // SHIPPED → RECEIVED
-            transferService.confirmTransfer(factoryId, transferId, SYSTEM_USER_ID);   // RECEIVED → CONFIRMED (建 WH-LOG 批次)
-            log.info("D1 反向调拨同厂自动推进完成 (成品已入总仓 WH-LOG 可售): transferId={}, transferNumber={}",
+            // 已停用系统账号自动推进。调拨必须由操作人提交 OA，审批完成后才能确认。
+            log.info("D1 反向调拨自动推进已停用，保留草稿等待 OA: transferId={}, transferNumber={}",
                     transferId, transferNumber);
         } catch (Exception e) {
             // 异常隔离: 自动推进失败不影响生产完成, 草稿停在当前状态, 用户可在调拨列表手动补完剩余步骤。

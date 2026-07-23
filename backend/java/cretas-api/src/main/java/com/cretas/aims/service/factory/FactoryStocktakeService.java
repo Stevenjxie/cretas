@@ -5,6 +5,7 @@ import com.cretas.aims.dto.factory.StocktakeDiffPreviewDTO;
 import com.cretas.aims.dto.factory.StocktakeDTO;
 import com.cretas.aims.dto.factory.StocktakeItemUpdateDTO;
 import com.cretas.aims.entity.factory.FactoryStocktake;
+import com.cretas.aims.entity.workflow.ApprovalHistory.HistoryAction;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 
@@ -147,6 +148,9 @@ public interface FactoryStocktakeService {
      * @return workflowInstanceId (供前端跳转审批中心)
      */
     String submitForApproval(String stocktakeId, String factoryId, Long userId);
+
+    FactoryStocktake applyWorkflowAction(String factoryId, String stocktakeId, String instanceId,
+            Long actorId, String actorRole, HistoryAction action, String notes);
 
     /**
      * SP12 §5.2: 仅供 workflow callback 调用 — 审批通过后执行盘点调账 (APPROVED → APPLIED)。

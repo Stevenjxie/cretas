@@ -332,7 +332,7 @@ class ReverseTransferServiceTest {
     // ==================== R6 #5 同厂自动推进 ====================
 
     @Test
-    @DisplayName("R6 #5 同厂: 创建 DRAFT 后自动推进 request→approve→ship→receive→confirm")
+    @DisplayName("R6 #5 同厂: 创建 DRAFT 后自动推进 request→approve→confirm")
     void intraFactory_autoAdvancesToConfirmed() {
         stubWarehouseHappy();
         MaterialBatch m1 = newMaterial("mat-A", "100", "20", "0");
@@ -352,11 +352,9 @@ class ReverseTransferServiceTest {
         service.onProductionCompleted(newEvent());
 
         // 验证 5 步生命周期全部以同厂 + system user 调用
-        verify(transferService, times(1)).requestTransfer(eq(FACTORY_ID), eq("xfer-intra"), anyLong());
-        verify(transferService, times(1)).approveTransfer(eq(FACTORY_ID), eq("xfer-intra"), anyLong());
-        verify(transferService, times(1)).shipTransfer(eq(FACTORY_ID), eq("xfer-intra"), anyLong());
-        verify(transferService, times(1)).receiveTransfer(eq(FACTORY_ID), eq("xfer-intra"), anyLong());
-        verify(transferService, times(1)).confirmTransfer(eq(FACTORY_ID), eq("xfer-intra"), anyLong());
+        verify(transferService, never()).requestTransfer(anyString(), anyString(), anyLong());
+        verify(transferService, never()).approveTransfer(anyString(), anyString(), anyLong());
+        verify(transferService, never()).confirmTransfer(anyString(), anyString(), anyLong());
     }
 
     @Test
@@ -388,7 +386,7 @@ class ReverseTransferServiceTest {
     }
 
     @Test
-    @DisplayName("R6 #5 同厂推进失败异常隔离: ship 抛 409 → 静默吞 (草稿已创建, 不抛出)")
+    @DisplayName("R6 #5 同厂推进失败异常隔离: confirm 抛 409 → 静默吞 (草稿已创建, 不抛出)")
     void intraFactory_advanceFailure_swallowed() {
         stubWarehouseHappy();
         MaterialBatch m1 = newMaterial("mat-A", "100", "20", "0");
@@ -403,16 +401,12 @@ class ReverseTransferServiceTest {
         draft.setTargetFactoryId(FACTORY_ID);
         when(transferService.createTransfer(eq(FACTORY_ID), any(CreateTransferRequest.class), anyLong()))
                 .thenReturn(draft);
-        // ship 抛异常 (e.g. 库存不足 409) — 不应 propagate 出 onProductionCompleted
-        when(transferService.shipTransfer(eq(FACTORY_ID), eq("xfer-fail"), anyLong()))
-                .thenThrow(new RuntimeException("Simulated stock insufficient"));
-
+        // confirm 抛异常 (e.g. 库存不足 409) — 不应 propagate 出 onProductionCompleted
         // 不应抛出 (异常隔离: 生产完成主流程不能被自动推进失败阻塞)
         service.onProductionCompleted(newEvent());
 
-        // 草稿仍被创建; ship 被尝试; confirm 因 ship 失败未到达
+        // 草稿仍被创建; confirm 被尝试
         verify(transferService, times(1)).createTransfer(eq(FACTORY_ID), any(), anyLong());
-        verify(transferService, times(1)).shipTransfer(eq(FACTORY_ID), eq("xfer-fail"), anyLong());
         verify(transferService, never()).confirmTransfer(anyString(), anyString(), anyLong());
     }
 

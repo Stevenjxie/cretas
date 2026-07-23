@@ -858,4 +858,67 @@
   - 删除调拨 REST 详情页与 AI 工具的直接审批/驳回入口；列表和详情增加“提交 OA 审批”，详情仅显示审批进度并跳转个人 OA。OA“待我审批/我发起的”支持库存调拨筛选和业务详情回跳。
 - **保留边界**：本批只收口“提交 → OA 审批 → 领域状态回写”。审批后的仓储执行状态机未重构；同厂仓库调拨是否简化发运/签收属于后续独立业务决策。本批生产调拨、库存及其他租户业务 mutation 均为 `0`。
 - **测试**：Java `TransferOaApprovalIntegrationTest,WorkflowInstanceControllerTest` 共 `13 tests` PASS；Web `transferOaApproval.source.spec.ts,oaProcurementContract.source.spec.ts` 共 `5 tests` PASS。覆盖首次提交、缺流程回滚、重复提交幂等、自批拒绝、OA 回写、统一 action adapter、前端无本地审批入口及 OA 导航。
+
+### BUG-F006-R4-WORKFLOW-CHINESE-NAME-CORRUPTION-001 — 生产计划固定路线工序名称显示问号
+
+- **发现阶段/时间/页面/步骤**：F006 新建存货生产计划，2026-07-23；选择 `CPF0060018 / SOP-20260723-01-黄油鸡-成品800g` 后，固定路线卡把两道工序显示为 `SOP-20260723-01-???-????`。
+- **根因证据**：生产只读 API 证明 WorkProcess 主数据仍保存正确中文名称，但 Workflow 112 的已发布图快照及 BOM 固定 revision 25 中 `processName` 已持久化为问号；产品名称和其他中文字段正常，排除浏览器字体或整包 JSON 解码问题。结构 ID、边、单位、`auxiliaryPolicy`、BOM 及 readiness 均完整。
+- **修复策略**：代码侧保留以候选 Workflow `processSteps` 为唯一路线展示真值，并增加中文名称回归；生产数据必须通过正式 Workflow 版本 API、显式 UTF-8 请求建立正确的新修订，保留节点/边/单位/策略，再发布、启用并让 BOM 固定同一修订。禁止 SQL 原地篡改不可变快照。
+- **生产边界**：不创建生产计划；仅允许修复上述 F006 Workflow/BOM 修订关联并回读 readiness，其他租户业务写入为 0。
+- **部署状态**：`NOT_DEPLOYED`；exact commit/main 与生产写入 ID 待发布后回填。
+
+### UX-F006-R4-SAFETY-STOCK-PLANNED-QUANTITY-OPTIONAL-001 — 存货生产计划成品数量改为选填
+
+- **业务决定**：存货生产通常按逐道报工和实际完工入库确定产量，计划成品数量只作参考，不应强制用户先猜一个数；销售订单等已有明确承诺数量的来源继续保持正数门禁。
+- **现状与根因**：Java 服务已允许 `SAFETY_STOCK` 不传 `plannedQuantity`，并以数据库兼容值承接；Web 弹窗仍把字段标为必填、默认 1，加载 Workflow 后还会再次自动写入 1，导致“选填”契约未真正到达用户。
+- **修复**：前端只对 `SAFETY_STOCK` 显示“计划成品数量（选填）”，允许清空且 payload 不发送空值；不再加载 Workflow 时自动填 1。页面明确说明留空时由实际报工/生产小结确定产量。其他来源仍要求正数。
+- **打印契约**：计划量为空或非正时单据显示“按实际报工确定”，不得显示伪造的 `0` 或 `1`。
 - **部署状态**：`NOT_DEPLOYED`。
+
+### BUG-F006-R4-PRODUCTION-DOCUMENT-PINNED-FALLBACK-001 — 生产工单/汇总领料单/配料单空白
+
+- **现场**：计划 `PLAN-1784789422670-BBEAF5D6` 的生产工单、汇总领料单、配料单仅显示抬头，明细为空；配料单同时提示单锅产能未配置。
+- **根因**：打印 payload 只读取已经物化的工序任务和领料单。计划刚创建、尚未开工或尚未生成领料单时，这些执行事实为空；打印链没有回退读取计划固定的 Workflow/BOM，因此即使 SKU、工序、原料关系、工序辅料比例和包材用量已有真值也全部丢失。
+- **修复**：
+  - 已有工序任务/领料实绩时继续以执行事实为最高优先级；
+  - 尚未物化时从计划固定 BOM 所 pin 的 Workflow revision 输出工序路线，并用同厂 WorkProcess 主数据补全可读中文名称；
+  - 从计划固定 BOM 输出原料/辅料/包材关系：无标准原料投料量时显示“计划投料待填写”，不伪造 0；确定性包材按计划量折算；工序辅料显示 `g/kg` 与锅序比例；
+  - 汇总领料单明确标注“参考，不代表已拣料/已发料”；配料单缺少单锅产能时保留工序比例和总需求参考，不再整份拒绝生成。
+- **测试**：Java payload 目标测试覆盖两道中文工序、无固定数量原料、`0.125 箱/盒 × 10 盒 = 1.25 箱` 与固定数据来源标识；Python PDF renderer 目标测试覆盖三类单据及单文件生产单据包。发布前补充最终命令与结果。
+- **部署状态**：`NOT_DEPLOYED`。
+
+### BUG-F006-R4-WIP-PRODUCT-IDENTITY-001 — 正式报工无法生成半成品批次
+
+- **根因**：WIP 输出把半成品 `ProductType` UUID 写入仅外键到 `raw_material_types` 的 `material_batches.material_type_id`，导致首个持久化错误；随后审计变更仍在失败的 Hibernate Session 中 flush，二次 `AssertionFailure` 覆盖了首错。
+- **修复**：`material_batches` 增加可空 `product_type_id` 并与原料身份互斥；原料批次继续使用 `material_type_id`，半成品批次使用同厂 `product_type_id`。WIP 输出在写变更日志前 `saveAndFlush`，首错直接触发事务回滚；下游消费统一按原料或产品 identity 匹配。
+- **测试**：覆盖四种原料各扣 2kg、生成 8kg WIP、生产仓/单位/来源一致、下一工序消费，以及失败时无部分扣料、无残留批次、无残缺日志；目标 Service 28 项和真实 JPA Context 门禁通过。
+- **数据边界**：未重放现场报工、未重复调拨或扣减库存；生产业务写入为 0。
+- **部署状态**：`DEPLOY_AUTHORIZED_AWAITING_RELEASE`。
+
+### BUG-F006-R4-PRODUCTION-PLAN-REPORTING-UI-001 — 成品选择与报工布局
+
+- **修复**：新建生产计划候选严格限定 canonical 成品；半成品不再混入。报工页按“投入 → 执行 → 产出 → 副产/分摊”组织，数量与单位合并成一组，避免单位框掉到下一行并提升窄屏可读性。
+- **测试**：4 个 Web 目标文件、15 项通过，覆盖成品过滤、canonical 单位、主要布局语义与数量单位成组。
+- **部署状态**：`DEPLOY_AUTHORIZED_AWAITING_RELEASE`。
+
+### BUG-F006-R4-STOCKTAKE-OA-001 — 盘点审批收口统一 OA
+
+- **修复**：盘点提交在同一事务内创建 `INVENTORY_ADJUSTMENT` OA；缺流程时 fail-closed，历史待审批单无实例时不静默桥接。盘点业务页不再直接审批/驳回，统一在 OA 处理；批准后仍保留用户确认的 `APPROVED → APPLIED` 应用步骤。
+- **审批证据**：差异预览只显示 `difference != 0` 的批次，零差异明确“库存影响为 0”，不再把旧批次数量误当本次盘盈盘亏。
+- **测试**：2 类 Java 目标测试及 6 项 Web 测试通过。
+- **部署状态**：`DEPLOY_AUTHORIZED_AWAITING_RELEASE`。
+
+### BUG-F006-R4-TRANSFER-LIFECYCLE-001 — 同厂调拨与库存生产滚动调拨
+
+- **业务契约**：同厂仓间调拨为 `DRAFT → REQUESTED(OA) → APPROVED → CONFIRMED`；旧“发运/签收”接口对同厂明确 `409`，UI 仅显示“确认调拨入库”。
+- **库存生产**：同一生产计划复用唯一 `DRAFT/REQUESTED/APPROVED` 调拨；未填写计划产量时按 1 个成品 BOM 基准初始化滚动草稿，草稿允许调整数量后提交 OA；计划正式完成时关闭未完成调拨并取消运行中 OA，已确认记录保留审计。
+- **审批边界**：生产完成监听器仅创建同厂反向调拨草稿，不再使用系统账号自动申请、批准和确认；所有实际库存移动仍需统一 OA 批准后由授权岗位确认。
+- **测试**：6 类 Java 目标测试共 23 项通过，包含同厂状态机、唯一滚动调拨、结单关闭、反向链路及真实 Repository JPA Context。
+- **部署状态**：`DEPLOY_AUTHORIZED_AWAITING_RELEASE`。
+
+### BUG-F006-R4-WIP-STOCKTAKE-DUAL-IDENTITY-001 — 半成品盘点身份
+
+- **修复**：盘点快照和应用校验使用批次的权威库存身份：原料走 `materialTypeId`，半成品/成品走 `productTypeId`；详情与差异预览按工厂隔离返回真实产品名称、编码及 canonical 批次单位。
+- **兼容**：未迁移历史盘点或库存数据；原料盘点契约保持不变。
+- **测试**：覆盖 8kg WIP 快照、详情回读、零差异应用和旧 OA 集成构造路径。
+- **部署状态**：`DEPLOY_AUTHORIZED_AWAITING_RELEASE`。

@@ -70,6 +70,7 @@ function transferTypeLabel(type?: string | null): string {
 
 // 状态流转步骤
 const statusSteps = ['DRAFT', 'REQUESTED', 'APPROVED', 'SHIPPED', 'RECEIVED', 'CONFIRMED'];
+const intraFactoryStatusSteps = ['DRAFT', 'REQUESTED', 'APPROVED', 'CONFIRMED'];
 const terminalStatuses = ['REJECTED', 'CANCELLED'];
 
 // 仓库真名解析 (Rule 2 防呆: 富确认弹窗要显示 源仓→目标仓, 不是裸 UUID), 同
@@ -126,7 +127,8 @@ async function loadTransfer() {
 function currentStep() {
   if (!transfer.value) return 0;
   if (terminalStatuses.includes(transfer.value.status)) return -1;
-  const idx = statusSteps.indexOf(transfer.value.status);
+  const steps = isIntraFactory.value ? intraFactoryStatusSteps : statusSteps;
+  const idx = steps.indexOf(transfer.value.status);
   return idx >= 0 ? idx : 0;
 }
 
@@ -136,6 +138,10 @@ const stepsStatus = computed(() => {
 });
 
 const isOutbound = computed(() => transfer.value?.sourceFactoryId === factoryId.value);
+const isIntraFactory = computed(() => Boolean(
+  transfer.value?.sourceFactoryId
+    && transfer.value.sourceFactoryId === transfer.value.targetFactoryId,
+));
 // Bug fix (module-verify 2026-07-03): 同厂(仓间, 如原料仓→生产仓)调拨 sourceFactoryId===targetFactoryId,
 // isOutbound 恒为 true → 之前 receive/confirm 按钮门控在 `!isOutbound` 上, 永不渲染, 调拨单卡死在 SHIPPED。
 // 后端 assertSourceFactory/assertTargetFactory 对同厂调拨两个都放行(factoryId 同时等于 source 和 target),
@@ -329,6 +335,23 @@ async function onBatchChange(itemId: string | number, sourceBatchId: string | nu
   } catch (e) { handleCatchError(e, '批次保存失败, 请重试'); }
 }
 
+async function updateItemQuantity(itemId: string | number, quantity: unknown) {
+  const normalizedQuantity = Number(quantity);
+  if (!factoryId.value || !transferId.value || !Number.isFinite(normalizedQuantity) || normalizedQuantity <= 0) return;
+  try {
+    const res = await put(
+      `/${factoryId.value}/transfers/${transferId.value}/items/${itemId}/quantity`,
+      { quantity: normalizedQuantity },
+    );
+    if (res.success) {
+      ElMessage.success('调拨数量已保存');
+      await loadTransfer();
+    } else {
+      ElMessage.error(res.message || '调拨数量保存失败');
+    }
+  } catch (e) { handleCatchError(e, '调拨数量保存失败'); }
+}
+
 function formatBatchLabel(b: BatchOption): string {
   const parts = [b.batchNumber, `可用 ${formatStock(b.availableQuantity)}`];
   // fool-proof-design Rule 1 (预先显示边界): 只在货架实物 < 可用量 (即有未小结生产占用) 时才附加提示,
@@ -442,19 +465,24 @@ async function submitDecide() {
             <el-button v-if="transfer.status === 'DRAFT'" type="warning" :loading="submitting" @click="handleAction('request')">提交 OA 审批</el-button>
             <el-button v-if="transfer.status === 'REQUESTED'" type="primary" plain @click="goToOaProgress">查看审批进度</el-button>
             <el-tooltip
-              v-if="transfer.status === 'APPROVED' && isOutbound && hasStockShortage"
+              v-if="transfer.status === 'APPROVED' && isOutbound && !isIntraFactory && hasStockShortage"
               :content="shipBlockedReason" placement="top">
               <span>
                 <el-button type="primary" disabled>确认发运</el-button>
               </span>
             </el-tooltip>
             <el-button
+              v-else-if="transfer.status === 'APPROVED' && isIntraFactory"
+              type="success"
+              :loading="submitting"
+              @click="handleAction('confirm')">确认调拨入库</el-button>
+            <el-button
               v-else-if="transfer.status === 'APPROVED' && isOutbound"
               type="primary"
               :loading="submitting"
               @click="handleAction('ship')">确认发运</el-button>
-            <el-button v-if="transfer.status === 'SHIPPED' && isInbound" type="primary" :loading="submitting" @click="handleAction('receive')">确认签收</el-button>
-            <el-button v-if="transfer.status === 'RECEIVED' && isInbound" type="success" :loading="submitting" @click="handleAction('confirm')">确认入库</el-button>
+            <el-button v-if="transfer.status === 'SHIPPED' && isInbound && !isIntraFactory" type="primary" :loading="submitting" @click="handleAction('receive')">确认签收</el-button>
+            <el-button v-if="transfer.status === 'RECEIVED' && isInbound && !isIntraFactory" type="success" :loading="submitting" @click="handleAction('confirm')">确认入库</el-button>
             <el-button v-if="['DRAFT','REQUESTED'].includes(transfer.status)" :disabled="submitting" @click="handleAction('cancel')">取消</el-button>
           </div>
         </div>
@@ -466,8 +494,8 @@ async function submitDecide() {
           <el-step title="草稿" />
           <el-step title="已申请" />
           <el-step title="已批准" />
-          <el-step title="已发运" />
-          <el-step title="已签收" />
+          <el-step v-if="!isIntraFactory" title="已发运" />
+          <el-step v-if="!isIntraFactory" title="已签收" />
           <el-step title="已确认" />
         </el-steps>
         <el-alert v-else :title="`该调拨单已${statusMap[transfer.status]?.text}`" :type="transfer.status === 'REJECTED' ? 'error' : 'info'" show-icon :closable="false" style="margin-bottom: 24px" />
@@ -522,7 +550,19 @@ async function submitDecide() {
               {{ transferItemName(row) }}
             </template>
           </el-table-column>
-          <el-table-column prop="quantity" label="调拨数量" width="120" align="right" />
+          <el-table-column label="调拨数量" width="150" align="right">
+            <template #default="{ row }">
+              <el-input-number
+                v-if="transfer.status === 'DRAFT' && isOutbound && canWrite"
+                :model-value="Number(row.quantity)"
+                :min="0.0001"
+                :precision="4"
+                controls-position="right"
+                size="small"
+                @change="(quantity: number | undefined) => updateItemQuantity(row.id, quantity)" />
+              <span v-else>{{ row.quantity }}</span>
+            </template>
+          </el-table-column>
           <el-table-column label="现有库存" width="130" align="right">
             <template #header>
               <el-tooltip content="调出方当前可用库存 (实时查询)" placement="top">

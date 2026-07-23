@@ -661,6 +661,8 @@ def render_production_work_order(data: dict) -> bytes:
         ], s["font"]),
         Spacer(1, 0.5 * cm),
         Paragraph("投料 / 领用明细", s["h2"]),
+        *([Paragraph(str(data["materialDataStatus"]), s["small"])]
+          if data.get("materialDataStatus") else []),
         _render_items_table(
             data.get("materialItems") or [],
             [("物料名称", "materialName", "LEFT"),
@@ -683,6 +685,8 @@ def render_production_work_order(data: dict) -> bytes:
         story.extend([
             Spacer(1, 0.5 * cm),
             Paragraph("工序列表", s["h2"]),
+            *([Paragraph(str(data["processDataStatus"]), s["small"])]
+              if data.get("processDataStatus") else []),
             _render_items_table(
                 data.get("processes"),
                 [("序号", "seq", "CENTER"), ("工序名称", "name", "LEFT"),
@@ -750,6 +754,8 @@ def render_consolidated_material_requisition(data: dict) -> bytes:
         ], s["font"]),
         Spacer(1, 0.5 * cm),
         Paragraph("汇总领料明细", s["h2"]),
+        *([Paragraph(str(data["dataStatus"]), s["small"])]
+          if data.get("dataStatus") else []),
         _render_items_table(
             data.get("items") or [],
             # 转录行2902-2904 [86:53-55]: 预领量公单含 成交/打算/送到 三列。
@@ -821,7 +827,7 @@ def render_batching_sheet(data: dict) -> bytes:
             "materialName": it.get("materialName", "-"),
             "unit": it.get("unit", "-"),
             "totalQty": it.get("totalQty", "-"),
-            "perPotQty": _per_pot(it.get("totalQty")),
+            "perPotQty": it.get("perPotQty") or _per_pot(it.get("totalQty")),
         }
         for it in (data.get("items") or [])
     ]
@@ -842,6 +848,8 @@ def render_batching_sheet(data: dict) -> bytes:
         ], s["font"]),
         Spacer(1, 0.5 * cm),
         Paragraph("每锅配料明细", s["h2"]),
+        *([Paragraph(str(data["dataStatus"]), s["small"])]
+          if data.get("dataStatus") else []),
         _render_items_table(
             rendered_items,
             [("物料名称", "materialName", "LEFT"), ("单位", "unit", "CENTER"),
@@ -1103,6 +1111,8 @@ def render_production_document_package(data: dict) -> bytes:
             ], font),
             Spacer(1, 0.4 * cm),
             Paragraph("工序", s["h2"]),
+            *([Paragraph(str(work["processDataStatus"]), s["small"])]
+              if work.get("processDataStatus") else []),
             _render_items_table(
                 work.get("processes") or [],
                 [("序号", "seq", "CENTER"), ("工序名称", "name", "LEFT"),
@@ -1126,6 +1136,8 @@ def render_production_document_package(data: dict) -> bytes:
                 ("责任部门", "仓库 / 生产车间"),
             ], font),
             Spacer(1, 0.4 * cm),
+            *([Paragraph(str(requisition["dataStatus"]), s["small"])]
+              if requisition.get("dataStatus") else []),
             _render_items_table(
                 requisition.get("items") or [],
                 [("物料名称", "materialName", "LEFT"), ("分类", "category", "CENTER"),
@@ -1150,7 +1162,7 @@ def render_production_document_package(data: dict) -> bytes:
                 return "—"
 
         batching_rows = [
-            {**item, "perPotQty": per_pot(item.get("totalQty"))}
+            {**item, "perPotQty": item.get("perPotQty") or per_pot(item.get("totalQty"))}
             for item in (batching.get("items") or [])
         ]
         story.extend([
@@ -1165,6 +1177,8 @@ def render_production_document_package(data: dict) -> bytes:
                 ("责任部门", "生产车间 / 配料岗位"),
             ], font),
             Spacer(1, 0.4 * cm),
+            *([Paragraph(str(batching["dataStatus"]), s["small"])]
+              if batching.get("dataStatus") else []),
             _render_items_table(
                 batching_rows,
                 [("物料名称", "materialName", "LEFT"), ("单位", "unit", "CENTER"),

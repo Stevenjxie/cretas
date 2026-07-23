@@ -161,6 +161,31 @@ public class TransferController {
     }
 
     @RequireModule("warehouse")
+    @PutMapping("/{transferId}/items/{itemId}/quantity")
+    @Operation(summary = "修改草稿调拨数量")
+    @RequirePermission("inventory:write")
+    public ApiResponse<InternalTransferItem> updateItemQuantity(
+            @PathVariable @NotBlank String factoryId,
+            @PathVariable @NotBlank String transferId,
+            @PathVariable Long itemId,
+            @RequestBody Map<String, Object> body) {
+        Object rawQuantity = body != null ? body.get("quantity") : null;
+        if (rawQuantity == null) {
+            throw new com.cretas.aims.exception.BusinessException(400, "调拨数量不能为空")
+                    .withHintTarget("quantity");
+        }
+        BigDecimal quantity;
+        try {
+            quantity = new BigDecimal(rawQuantity.toString());
+        } catch (NumberFormatException ex) {
+            throw new com.cretas.aims.exception.BusinessException(400, "调拨数量格式不正确")
+                    .withHint("请输入大于 0 的数字").withHintTarget("quantity");
+        }
+        InternalTransferItem item = transferService.updateItemQuantity(factoryId, transferId, itemId, quantity);
+        return ApiResponse.success("调拨数量已更新", item);
+    }
+
+    @RequireModule("warehouse")
     @PostMapping("/{transferId}/cancel")
     @Operation(summary = "取消调拨")
     @RequirePermission("inventory:write")

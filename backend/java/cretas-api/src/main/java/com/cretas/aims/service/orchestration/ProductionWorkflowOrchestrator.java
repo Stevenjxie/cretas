@@ -6,6 +6,7 @@ import com.cretas.aims.dto.orchestration.MaterialRequirement;
 import com.cretas.aims.dto.production.ProductionPlanDTO;
 import com.cretas.aims.entity.RawMaterialType;
 import com.cretas.aims.entity.enums.TransferItemType;
+import com.cretas.aims.entity.enums.TransferStatus;
 import com.cretas.aims.entity.inventory.InternalTransfer;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.repository.RawMaterialTypeRepository;
@@ -92,26 +93,35 @@ public class ProductionWorkflowOrchestrator {
             throw new BusinessException(404, "生产计划不存在: " + planId)
                     .withHint("请刷新生产计划列表后重新选择").withHintTarget("planId");
         }
+
+        // One production plan owns one open rolling transfer. Re-opening the action
+        // must return the same draft/approval task instead of creating duplicate
+        // quantities for the same production preparation.
+        List<InternalTransfer> existing = transferRepository
+                .findBySourceFactoryIdAndProductionPlanIdAndStatusInOrderByCreatedAtDesc(
+                        factoryId, planId,
+                        List.of(TransferStatus.DRAFT, TransferStatus.REQUESTED, TransferStatus.APPROVED));
+        if (!existing.isEmpty()) {
+            return existing.get(0);
+        }
         log.info("开始为生产计划生成调拨单: planId={}, product={}, qty={}",
                 planId, plan.getProductTypeId(), plan.getPlannedQuantity());
 
-        // 🔒 防呆 Rule 1: 计划量为 0/null 时拒绝生成 (loud-fail), 绝不落地 0 数量的死调拨单.
-        // 背景: SAFETY_STOCK(存货生产) 计划按设计 plannedQuantity=0 —— 产量在「逐道录入/小结」时才确定,
-        // 没有预排的目标数量. BOM 展开 (qty × perUnit) 会得到全 0 的需求, 若继续会持久化一个
-        // sourceWarehouse=null / 全 0 数量 / status=REQUESTED 的幽灵调拨单, 前端却提示"生成成功"
-        // (静默失败 artifact). 此处提前拦截, 前端亦对 SAFETY_STOCK 隐藏「生成调拨单」按钮.
+        // SAFETY_STOCK 可不预设计划产量。null 以 1 个成品的 BOM 用量初始化滚动草稿，
+        // 仓库在提交 OA 前调整为实际调拨量；显式 0/负数仍 fail-closed，避免零数量死单。
         BigDecimal plannedQty = plan.getPlannedQuantity();
-        if (plannedQty == null || plannedQty.compareTo(BigDecimal.ZERO) <= 0) {
+        if (plannedQty != null && plannedQty.compareTo(BigDecimal.ZERO) <= 0) {
             throw new BusinessException(400, "该计划的计划量为 0，无法生成调拨单")
                     .withHint("存货生产(按库存生产)的产量在「逐道录入/小结」时才确定，不需要预先生成调拨单；"
                             + "若确需备料请直接使用逐道录入，或将本计划改为有明确数量的销售订单计划。")
                     .withHintTarget("plannedQuantity")
                     .withSeverity("BLOCKING");
         }
+        BigDecimal transferBasisQuantity = plannedQty != null ? plannedQty : BigDecimal.ONE;
 
         // Step 2: BOM展开 — FUTURE TOOL: bom_expansion_calculate
         List<MaterialRequirement> requirements = bomExpansionService.expandBOM(
-                factoryId, plan.getProductTypeId(), plan.getPlannedQuantity());
+                factoryId, plan.getProductTypeId(), transferBasisQuantity);
 
         if (requirements.isEmpty()) {
             throw new BusinessException(409, "该产品未配置转换率，无法生成调拨单")
@@ -141,15 +151,14 @@ public class ProductionWorkflowOrchestrator {
 
         // Step 4: 构建调拨单 — FUTURE TOOL: transfer_create
         String target = targetFactoryId != null ? targetFactoryId : factoryId;
-        CreateTransferRequest request = buildTransferRequest(factoryId, target, plan, requirements);
+        CreateTransferRequest request = buildTransferRequest(
+                factoryId, target, plan, requirements, plannedQty == null);
         InternalTransfer transfer = transferService.createTransfer(factoryId, request, userId);
 
-        // Step 4.5: 设置 production_plan_id 关联 — 必须先持久化再调 requestTransfer
+        // Step 4.5: Persist the plan link. The task stays DRAFT so warehouse staff
+        // can continuously adjust the calculated rolling quantity before it enters OA.
         transfer.setProductionPlanId(planId);
         transferRepository.save(transfer);
-
-        // Step 5: 自动提交申请 — FUTURE TOOL: transfer_approve (action=request)
-        transfer = transferService.requestTransfer(factoryId, transfer.getId(), userId);
 
         log.info("调拨单生成成功: transferId={}, planId={}, items={}",
                 transfer.getId(), planId, requirements.size());
@@ -158,15 +167,20 @@ public class ProductionWorkflowOrchestrator {
 
     private CreateTransferRequest buildTransferRequest(
             String sourceFactoryId, String targetFactoryId,
-            ProductionPlanDTO plan, List<MaterialRequirement> requirements) {
+            ProductionPlanDTO plan, List<MaterialRequirement> requirements,
+            boolean rollingBaseline) {
 
         CreateTransferRequest request = new CreateTransferRequest();
         request.setTransferType("HQ_TO_BRANCH");
         request.setTargetFactoryId(targetFactoryId);
         request.setTransferDate(LocalDate.now().plusDays(1)); // 默认次日调拨
         request.setExpectedArrivalDate(LocalDate.now().plusDays(1));
-        request.setRemark(String.format("生产计划自动生成 | 计划号: %s | 产品: %s | 计划量: %s",
-                plan.getPlanNumber(), plan.getProductTypeId(), plan.getPlannedQuantity()));
+        String remark = String.format("生产计划自动生成 | 计划号: %s | 产品: %s | 计划量: %s",
+                plan.getPlanNumber(), plan.getProductTypeId(), plan.getPlannedQuantity());
+        if (rollingBaseline) {
+            remark += " | 滚动备料基准：按 1 个成品的 BOM 用量初始化，提交审批前请调整为本次实际调拨量";
+        }
+        request.setRemark(remark);
 
         List<CreateTransferRequest.TransferItemDTO> items = new ArrayList<>();
         for (MaterialRequirement req : requirements) {
