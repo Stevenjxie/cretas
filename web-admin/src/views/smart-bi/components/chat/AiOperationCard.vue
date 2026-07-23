@@ -13,7 +13,7 @@
  * - PENDING_APPROVAL → 已提交审批卡
  */
 import { ref, computed, watch, onBeforeUnmount } from 'vue';
-import { ElMessage } from 'element-plus';
+import { ElMessage, ElMessageBox } from 'element-plus';
 import { Loading, WarningFilled, InfoFilled, Lock, Clock, CircleCheckFilled } from '@element-plus/icons-vue';
 import { confirmIntentAction, type IntentExecuteResponse } from '@/api/smartbi/intent-chat';
 import { permissionDisplayName } from './permissionNames';
@@ -52,6 +52,40 @@ function formatValue(v: unknown): string {
   }
   return String(v);
 }
+
+// ── 写操作影响契约 (2026-07-24): 改前/改后对比 + 影响说明 + 双重确认 ──────
+/** 改前/改后对比行: [字段, 当前值, 修改后值, 是否变化]。CREATE 类无当前值。 */
+const diffEntries = computed<Array<[string, string, string, boolean]>>(() => {
+  const cur = confirmable.value?.currentValues;
+  const next = confirmable.value?.newValues;
+  if (!next || typeof next !== 'object' || Object.keys(next).length === 0) return [];
+  const keys = new Set([...Object.keys(cur || {}), ...Object.keys(next)]);
+  const rows: Array<[string, string, string, boolean]> = [];
+  for (const k of keys) {
+    if (SKIP_KEYS.has(k)) continue;
+    const a = formatValue((cur as Record<string, unknown> | null | undefined)?.[k]);
+    const b = formatValue((next as Record<string, unknown>)[k]);
+    rows.push([k, a, b, a !== b]);
+  }
+  return rows;
+});
+
+/** 影响说明: 后端 impactSummary 优先; 缺失时按 actionType 给确定性兜底文案。 */
+const impactText = computed(() => {
+  const backend = confirmable.value?.impactSummary;
+  if (backend) return backend;
+  const at = String(confirmable.value?.actionType || '').toUpperCase();
+  if (at === 'DELETE') return `此操作将删除「${intentName.value}」相关数据，确认后立即生效且不可自动恢复。`;
+  if (at === 'UPDATE') return '此操作将修改现有数据，确认后立即生效。';
+  return '此操作将写入数据，确认后立即生效。';
+});
+
+/** 高危操作 (删除/HIGH/CRITICAL) 用更强确认措辞。 */
+const isDestructive = computed(() => {
+  const at = String(confirmable.value?.actionType || '').toUpperCase();
+  const rl = String(confirmable.value?.riskLevel || '').toUpperCase();
+  return at === 'DELETE' || rl === 'HIGH' || rl === 'CRITICAL';
+});
 
 // ── 确认/取消 状态机 ────────────────────────────────────────────────────
 type Phase = 'idle' | 'pending' | 'done' | 'cancelled';
@@ -108,6 +142,21 @@ onBeforeUnmount(stopCountdown);
 async function handleConfirm() {
   const action = confirmable.value;
   if (!action || phase.value === 'pending' || isExpired.value) return;
+  // 双重确认 (2026-07-24 写操作契约): 预览卡按钮是第一道, 这里弹含影响
+  // 摘要的二次确认是第二道 — 用户在看过对比和影响后再点一次才执行。
+  try {
+    await ElMessageBox.confirm(
+      impactText.value,
+      isDestructive.value ? `再次确认: ${intentName.value} (高风险操作)` : `再次确认: ${intentName.value}`,
+      {
+        confirmButtonText: isDestructive.value ? '我已了解影响，确认执行' : '确认执行',
+        cancelButtonText: '取消',
+        type: isDestructive.value ? 'error' : 'warning',
+      },
+    );
+  } catch {
+    return; // 用户在二次确认处取消 — 卡片保持可再次确认
+  }
   phase.value = 'pending';
   try {
     const result = await confirmIntentAction(props.factoryId, action.confirmToken, {
@@ -170,7 +219,25 @@ const permissionLabel = computed(() => permissionDisplayName(props.response.requ
     <template v-else>
       <div class="op-card-body">
         <div v-if="confirmable.description" class="op-card-description">{{ confirmable.description }}</div>
-        <div v-if="previewEntries.length" class="op-preview-grid">
+        <!-- 影响说明 (写操作契约: 修改后的影响解释) -->
+        <el-alert
+          :title="impactText"
+          :type="isDestructive ? 'error' : 'warning'"
+          :closable="false"
+          class="op-impact-alert"
+        />
+        <!-- 改前/改后对比表 (写操作契约: 对比) -->
+        <div v-if="diffEntries.length" class="op-diff-table">
+          <div class="op-diff-head">字段</div>
+          <div class="op-diff-head">当前</div>
+          <div class="op-diff-head">修改后</div>
+          <template v-for="[key, cur, next, changed] in diffEntries" :key="key">
+            <div class="op-diff-key">{{ key }}</div>
+            <div class="op-diff-cur">{{ cur }}</div>
+            <div class="op-diff-next" :class="{ 'op-diff-changed': changed }">{{ next }}</div>
+          </template>
+        </div>
+        <div v-else-if="previewEntries.length" class="op-preview-grid">
           <template v-for="[key, value] in previewEntries" :key="key">
             <div class="op-preview-key">{{ key }}</div>
             <div class="op-preview-value">{{ value }}</div>
@@ -377,5 +444,36 @@ const permissionLabel = computed(() => permissionDisplayName(props.response.requ
 .op-card-cancelled {
   font-size: 13px;
   color: var(--el-text-color-secondary);
+}
+
+/* ── 写操作影响契约 (2026-07-24) ── */
+.op-impact-alert {
+  margin-bottom: 10px;
+}
+.op-diff-table {
+  display: grid;
+  grid-template-columns: minmax(80px, auto) 1fr 1fr;
+  gap: 4px 12px;
+  font-size: 13px;
+  margin-bottom: 8px;
+}
+.op-diff-head {
+  font-weight: 600;
+  color: var(--el-text-color-secondary);
+  border-bottom: 1px solid var(--el-border-color-lighter);
+  padding-bottom: 4px;
+}
+.op-diff-key {
+  color: var(--el-text-color-secondary);
+}
+.op-diff-cur {
+  color: var(--el-text-color-regular);
+}
+.op-diff-next {
+  color: var(--el-text-color-regular);
+}
+.op-diff-changed {
+  color: var(--el-color-danger);
+  font-weight: 600;
 }
 </style>

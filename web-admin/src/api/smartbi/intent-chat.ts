@@ -33,6 +33,12 @@ export interface IntentExecuteResponse {
     expiresInSeconds?: number;
     description?: string;
     previewData?: Record<string, unknown> | null;
+    // 写操作影响契约 (2026-07-24): 改前/改后对比 + 影响说明 + 风险档
+    currentValues?: Record<string, unknown> | null;
+    newValues?: Record<string, unknown> | null;
+    impactSummary?: string | null;
+    actionType?: string | null;   // WRITE | UPDATE | DELETE | ...
+    riskLevel?: string | null;    // LOW | MEDIUM | HIGH | CRITICAL
   } | null;
   /**
    * FRESH path: Tool's `buildSimpleResult(msg, data)` data lands here as
