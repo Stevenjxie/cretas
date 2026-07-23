@@ -1346,6 +1346,57 @@ async def log_intent_capture(
         return None
 
 
+async def log_intent_miss(
+    pool,
+    *,
+    factory_id: str,
+    query: str,
+    reason: str,
+    spec: Optional[RestaurantQuerySpec] = None,
+    java_tool_name: Optional[str] = None,
+) -> Optional[int]:
+    """Fire-and-forget capture of a delegate:false outcome (flywheel 盲区修补
+    2026-07-23): 此前只记录答成功的查询, tiered 接不住退回 Java 的 miss 一条
+    不留 -- 而飞轮最该学的恰恰是没接住的问法。
+
+    写同一张 smart_bi_llm_fallback_log, template_code 用哨兵
+    'RESTAURANT_OPS_MISS' + agg_meta.served=false, 晋升聚合器的
+    tier='llm' AND contract_pass='true' AND served='true' 过滤天然不会
+    把 miss 吞进晋升候选; miss 复盘走 aggregate_misses / CLI --misses。
+
+    reason: "prefilter" (前置滤直接拒, 无 spec) | "should_delegate"
+    (spec 已解析但规格路由判 False)。pool 可传 None -- 自取 (prefilter
+    出口在 pool 获取之前)。
+    """
+    try:
+        if pool is None:
+            from smartbi.config import get_pg_pool
+            pool = await get_pg_pool()
+        if pool is None:
+            return None
+        from smartbi.services.llm_fallback_logger import log_template_hit
+        agg_meta: Dict[str, Any] = {
+            "served": False,
+            "miss_reason": reason,
+            "source": "delegate_gate",
+        }
+        if spec is not None:
+            agg_meta["tier"] = spec.source_tier
+            agg_meta["confidence"] = spec.confidence
+            agg_meta["spec_intent"] = spec.intent
+            agg_meta["clarification_needed"] = spec.clarification_needed
+        if java_tool_name:
+            agg_meta["java_tool_name"] = java_tool_name
+        return await log_template_hit(
+            pool, query, factory_id, None,
+            "RESTAURANT_OPS_MISS",
+            "", 0, agg_meta=agg_meta,
+        )
+    except Exception as exc:
+        logger.warning(f"[restaurant-intent] miss logging failed (non-fatal): {exc}")
+        return None
+
+
 async def list_promotion_candidates(
     pool, *, min_confidence: float = 0.6, limit: int = 50,
 ) -> List[Dict[str, Any]]:

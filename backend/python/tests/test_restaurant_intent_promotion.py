@@ -414,3 +414,77 @@ class TestQuestionFamily:
         ]
         b = family_breakdown(cands)
         assert b == {"attribution": 2, "write": 1, "query": 2}
+
+
+# ─── Miss capture (flywheel 盲区修补 2026-07-23) ───────────────────────────
+
+class TestAggregateMisses:
+    def _miss_row(self, query, n, reasons, spec_intents, last_seen="2026-07-23"):
+        return {
+            "norm_query": query, "occurrence_count": n,
+            "reasons": reasons, "spec_intents": spec_intents,
+            "last_seen": last_seen,
+        }
+
+    @pytest.mark.asyncio
+    async def test_sets_rls_guc_before_fetch(self):
+        conn = _FakeConn(rows=[])
+        await promo.aggregate_misses(_FakePool(conn), factory_id="RES_3101_009")
+        assert conn.guc_calls, "must set app.factory_id GUC (FORCE RLS)"
+        assert conn.guc_calls[0][1] == ("RES_3101_009",)
+
+    @pytest.mark.asyncio
+    async def test_maps_rows_and_family(self):
+        conn = _FakeConn(rows=[
+            self._miss_row("帮我建个领料单", 3, ["prefilter"], None),
+            self._miss_row("外卖利润率咋算", 2, ["should_delegate"],
+                           ["RESTAURANT_OPS_SALES_SUMMARY"]),
+            self._miss_row("  ", 1, ["prefilter"], None),  # blank dropped
+        ])
+        out = await promo.aggregate_misses(_FakePool(conn))
+        assert len(out) == 2
+        assert out[0]["family"] == "write"
+        assert out[1]["spec_intents"] == ["RESTAURANT_OPS_SALES_SUMMARY"]
+
+    @pytest.mark.asyncio
+    async def test_fail_open_on_db_error(self):
+        conn = _FakeConn(exc=RuntimeError("boom"))
+        assert await promo.aggregate_misses(_FakePool(conn)) == []
+
+
+class TestLogIntentMiss:
+    @pytest.mark.asyncio
+    async def test_writes_sentinel_code_and_served_false(self, monkeypatch):
+        from smartbi.gold import restaurant_intent as ri
+        calls = []
+
+        async def _fake_hit(pool, query, factory_id, upload_id, template_code,
+                            answer, wall_ms, agg_meta=None):
+            calls.append((template_code, agg_meta))
+            return 1
+
+        import smartbi.services.llm_fallback_logger as fl
+        monkeypatch.setattr(fl, "log_template_hit", _fake_hit)
+        out = await ri.log_intent_miss(
+            object(), factory_id="DEMO_REST", query="帮我导出报表",
+            reason="prefilter", java_tool_name="restaurant_ops_gold_analysis",
+        )
+        assert out == 1
+        code, meta = calls[0]
+        assert code == "RESTAURANT_OPS_MISS"
+        assert meta["served"] is False
+        assert meta["miss_reason"] == "prefilter"
+        assert meta["java_tool_name"] == "restaurant_ops_gold_analysis"
+
+    @pytest.mark.asyncio
+    async def test_never_raises(self, monkeypatch):
+        from smartbi.gold import restaurant_intent as ri
+        import smartbi.services.llm_fallback_logger as fl
+
+        async def _boom(*a, **k):
+            raise RuntimeError("db down")
+
+        monkeypatch.setattr(fl, "log_template_hit", _boom)
+        assert await ri.log_intent_miss(
+            object(), factory_id="F", query="q", reason="should_delegate",
+        ) is None
