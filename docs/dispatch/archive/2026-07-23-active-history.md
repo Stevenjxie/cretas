@@ -33,3 +33,14 @@
 - **实现/合入**：实现 commit `7288e9ceb`；PR [#1668](https://github.com/Stevenjxie/cretas/pull/1668)。
 - **部署**：`NOT_DEPLOYED`，合入后从 exact `origin/main` 复用相同 Java backend tree 的可信制品发布。
 - **安全**：失败复现没有创建分类；生产写入仅保留发布后的用户授权 F006 测试分类创建与回读。
+
+## BUG-F006-R4-TRANSFER-OA-APPROVAL-001 — `merged`
+
+- **Base SHA**：`6fb05d26634f015b965213421280fe7e11fc9e9b`
+- **Owner**：`/root`
+- **范围**：调拨提交/OA 领域适配、调拨列表与详情、个人 OA 待办/我发起的、目标测试与 F006 复盘。
+- **结果**：草稿调拨显式提交后事务内启动唯一 `INVENTORY_TRANSFER` OA 实例；缺流程、节点、角色或独立审批人时保持草稿并明确失败；业务详情和 AI 工具不再提供本地审批/驳回，审批仅在个人 OA 执行并幂等回写调拨状态。
+- **验证**：Java 13/13；Web 5/5；Web 正式构建 736 assets；`git diff --check`。
+- **实现/合入**：实现 commit `c1c2248dec8d160db6ceaf90c320036d6ce0b53f`；PR [#1681](https://github.com/Stevenjxie/cretas/pull/1681)。
+- **部署**：`NOT_DEPLOYED`。
+- **安全**：生产调拨、库存及其他租户业务写入均为 0；本批不改变审批后的仓储发运/签收/确认状态机。
