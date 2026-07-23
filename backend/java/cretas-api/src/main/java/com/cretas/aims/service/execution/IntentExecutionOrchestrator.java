@@ -217,7 +217,7 @@ public class IntentExecutionOrchestrator {
     // P1 读写分块 §4.5 demo 写闸: 与 DemoReadOnlyInterceptor 同一配置源 (cretas.demo.factory-ids,
     // 默认 DEMO_REST,DEMO_FACTORY)。AI 确认执行阶段拦截 demo 租户真实写入 — 封住 HTTP 层
     // 放行 /ai-intents/ POST 留下的缺口。名单内租户恒拦 (不随 cretas.demo.enabled 关闭, fail-closed)。
-    @Value("${cretas.demo.factory-ids:DEMO_REST,DEMO_FACTORY}")
+    @Value("${cretas.demo.factory-ids:DEMO_REST,DEMO_FACTORY2}")
     private String demoFactoryIdsCsv;
 
     /** 通用短回复集合 */
@@ -1956,6 +1956,11 @@ public class IntentExecutionOrchestrator {
                 IntentExecuteResponse denied = buildNoPermissionResponse(intent);
                 denied.setRequiredPermission(check.requiredPermission());
                 denied.setAiMode(writeGuardService.isWriteIntent(intent) ? "WRITE" : "READ");
+                // 权限码路径的拒绝文案按码提示 (旧文案基于 requiredRoles, 此路径下可能为 null)
+                String deniedMsg = "您没有权限执行此操作。需要权限: " + check.requiredPermission()
+                        + "，请联系工厂管理员开通。";
+                denied.setMessage(deniedMsg);
+                denied.setFormattedText(deniedMsg);
                 return denied;
             }
             return null;
