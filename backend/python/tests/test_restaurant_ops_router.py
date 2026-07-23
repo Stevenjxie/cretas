@@ -1881,3 +1881,9 @@ def test_r26b_metric_list_is_not_multi_entity():
     assert _r.extract_dish_candidates("米饭的销量、毛利率和成本分别是多少") == ["米饭"]
     assert _r.extract_dish_candidates("米饭和娃娃菜和招牌藤椒味(单人份)的销量") == [
         "米饭", "娃娃菜", "招牌藤椒味(单人份)"]
+
+
+def test_r27_ranking_words_not_store_names():
+    assert _r.extract_store_mention("客单价最高的店是哪家") is None
+    assert _r.extract_store_mention("营收最差的店是哪家") is None
+    assert _r.extract_store_mention("鲜行者打浦桥日月光店的毛利率") == "鲜行者打浦桥日月光店"
