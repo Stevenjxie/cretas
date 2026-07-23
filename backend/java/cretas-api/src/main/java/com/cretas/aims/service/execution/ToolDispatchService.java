@@ -811,6 +811,18 @@ public class ToolDispatchService {
             // 确认卡在前端无米下锅)。只对写工具铸 (读工具预览无确认语义)。
             if (writeGuardService.isWriteTool(tool) || writeGuardService.isWriteIntent(intent)) {
                 try {
+                    Map<String, Object> previewData = null;
+                    try {
+                        previewData = objectMapper.readValue(resultJson, Map.class);
+                    } catch (Exception ignore) {
+                        // 预览体非 JSON 对象时 previewData 留空, 前端渲染 message 原文
+                    }
+                    // 先提取改前/改后再铸 token — 让 token 侧也持久化对比数据
+                    // (审计追溯: intent_preview_tokens.current_values/new_values)。
+                    Map<String, Object> tokenCurrentValues = extractPreviewSection(
+                            previewData, "currentValues", "currentValue", "current");
+                    Map<String, Object> tokenNewValues = extractPreviewSection(
+                            previewData, "newValues", "newValue", "proposed");
                     com.cretas.aims.entity.intent.IntentPreviewToken boundToken =
                             previewTokenService.createBoundToken(
                                     new PreviewTokenService.BoundTokenRequest(
@@ -819,14 +831,16 @@ public class ToolDispatchService {
                                             tool.getToolName(), tool.getVersion(),
                                             ToolExecutionMode.EXECUTE,
                                             null, null, null,
-                                            params, java.util.Map.of(), java.util.Map.of(),
+                                            params,
+                                            tokenCurrentValues != null ? tokenCurrentValues : java.util.Map.of(),
+                                            tokenNewValues != null ? tokenNewValues : java.util.Map.of(),
                                             300));
-                    Map<String, Object> previewData = null;
-                    try {
-                        previewData = objectMapper.readValue(resultJson, Map.class);
-                    } catch (Exception ignore) {
-                        // 预览体非 JSON 对象时 previewData 留空, 前端渲染 message 原文
-                    }
+                    // 写操作影响契约 (2026-07-24): 改前/改后 + 确定性影响说明 —
+                    // 前端对比表 + 二次确认弹窗的数据源。
+                    String actionType = String.valueOf(tool.getActionType());
+                    String riskLevel = String.valueOf(tool.getRiskLevel());
+                    String impactSummary = buildImpactSummary(
+                            actionType, intent.getIntentName(), tokenCurrentValues, tokenNewValues);
                     previewResponse.setAiMode("WRITE");
                     previewResponse.setConfirmableAction(
                             IntentExecuteResponse.ConfirmableAction.builder()
@@ -837,6 +851,11 @@ public class ToolDispatchService {
                                     .expiresInSeconds(300)
                                     .description("确认后将实际执行「" + intent.getIntentName() + "」")
                                     .previewData(previewData)
+                                    .currentValues(tokenCurrentValues)
+                                    .newValues(tokenNewValues)
+                                    .impactSummary(impactSummary)
+                                    .actionType(actionType)
+                                    .riskLevel(riskLevel)
                                     .build());
                 } catch (Exception e) {
                     // fail-safe: 铸 token 失败不破坏预览本身 (无 confirmableAction →
@@ -861,6 +880,74 @@ public class ToolDispatchService {
                     .executedAt(LocalDateTime.now())
                     .build();
         }
+    }
+
+    /**
+     * 写操作影响契约 (2026-07-24): 从 doPreview 结果里按既有约定字段提取
+     * 改前/改后小节。兼容三种形态: 顶层 map / data 嵌套 / 标量值 (包成
+     * {"值": v})。任一 key 命中即返回; 全miss 返回 null (前端回落参数网格)。
+     */
+    @SuppressWarnings("unchecked")
+    private Map<String, Object> extractPreviewSection(Map<String, Object> previewData, String... keys) {
+        if (previewData == null) {
+            return null;
+        }
+        Map<String, Object> data = previewData;
+        Object nested = previewData.get("data");
+        if (nested instanceof Map) {
+            data = (Map<String, Object>) nested;
+        }
+        for (String key : keys) {
+            Object v = data.get(key);
+            if (v == null) {
+                v = previewData.get(key);
+            }
+            if (v instanceof Map) {
+                return (Map<String, Object>) v;
+            }
+            if (v != null) {
+                Map<String, Object> wrapped = new HashMap<>();
+                wrapped.put("值", v);
+                return wrapped;
+            }
+        }
+        return null;
+    }
+
+    /**
+     * 确定性影响说明 (无 LLM): 按 ActionType 说清"确认后会发生什么", 有对比
+     * 数据时附字段变更数。前端二次确认弹窗原文展示。
+     */
+    private String buildImpactSummary(String actionType, String intentName,
+                                      Map<String, Object> currentValues,
+                                      Map<String, Object> newValues) {
+        String base;
+        switch (actionType == null ? "" : actionType) {
+            case "DELETE":
+                base = "此操作将删除「" + intentName + "」相关数据，确认后立即生效且不可自动恢复。";
+                break;
+            case "UPDATE":
+                base = "此操作将修改「" + intentName + "」相关的现有数据，确认后立即生效。";
+                break;
+            case "WRITE":
+                base = "此操作将写入「" + intentName + "」相关数据，确认后立即生效。";
+                break;
+            default:
+                base = "此操作确认后将立即执行「" + intentName + "」。";
+        }
+        if (newValues != null && !newValues.isEmpty()) {
+            int changed = 0;
+            for (Map.Entry<String, Object> e : newValues.entrySet()) {
+                Object cur = currentValues != null ? currentValues.get(e.getKey()) : null;
+                if (cur == null || !String.valueOf(cur).equals(String.valueOf(e.getValue()))) {
+                    changed++;
+                }
+            }
+            if (changed > 0) {
+                base += " 本次共 " + changed + " 项字段变更，详见上方对比。";
+            }
+        }
+        return base;
     }
 
     /**
