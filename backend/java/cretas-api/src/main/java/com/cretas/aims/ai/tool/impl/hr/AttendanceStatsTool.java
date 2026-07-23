@@ -131,7 +131,9 @@ public class AttendanceStatsTool extends AbstractBusinessTool {
                 stats = timeClockService.getAllEmployeesAttendanceStatistics(factoryId, startDate, endDate);
             }
             log.info("查询考勤统计: factoryId={}, period={}, userId={}", factoryId, period, userId);
-            return buildSimpleResult("查询成功", stats);
+            // 2026-07-24 修: "查询成功"是通用占位, 前端只见四个字无内容 (工厂 AI
+            // 验收标定发现)。汇总关键数字进 message, 数据仍完整挂 data。
+            return buildSimpleResult(buildAttendanceSummary(stats, startDate, endDate), stats);
         } catch (Exception e) {
             log.error("查询考勤统计失败: factoryId={}, period={}", factoryId, period, e);
             throw e;
@@ -167,6 +169,43 @@ public class AttendanceStatsTool extends AbstractBusinessTool {
         }
 
         return new DateRange(start, end);
+    }
+
+    /**
+     * 汇总考勤关键数字为可读 message (占位符"查询成功"修复, 2026-07-24)。
+     * 字段缺失时逐项跳过 — 单人/全员两种 stats 形状都兼容。
+     */
+    private String buildAttendanceSummary(Map<String, Object> stats,
+                                          java.time.LocalDate startDate,
+                                          java.time.LocalDate endDate) {
+        if (stats == null || stats.isEmpty()) {
+            return "该时段没有考勤记录。";
+        }
+        StringBuilder sb = new StringBuilder();
+        sb.append("考勤统计 (").append(startDate).append(" 至 ").append(endDate).append("): ");
+        Object totalEmployees = stats.get("totalEmployees");
+        if (totalEmployees != null) {
+            sb.append("在册 ").append(totalEmployees).append(" 人, ");
+        }
+        Object totalRecords = stats.get("totalRecords");
+        if (totalRecords != null) {
+            sb.append("打卡 ").append(totalRecords).append(" 次");
+        }
+        Object normal = stats.get("normalCount");
+        Object late = stats.get("lateCount");
+        Object early = stats.get("earlyLeaveCount");
+        Object absent = stats.get("absentCount");
+        if (normal != null || late != null) {
+            sb.append(" (正常 ").append(normal != null ? normal : 0)
+              .append(", 迟到 ").append(late != null ? late : 0)
+              .append(", 早退 ").append(early != null ? early : 0)
+              .append(", 缺勤 ").append(absent != null ? absent : 0).append(")");
+        }
+        Object rate = stats.get("attendanceRate");
+        if (rate instanceof Number) {
+            sb.append(", 出勤率 ").append(String.format("%.1f%%", ((Number) rate).doubleValue()));
+        }
+        return sb.toString();
     }
 
     private static class DateRange {
