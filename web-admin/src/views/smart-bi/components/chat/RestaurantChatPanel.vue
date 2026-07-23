@@ -17,11 +17,11 @@
  * via auth_middleware) — `props.factoryId` is not sent explicitly.
  */
 import { ref, nextTick } from 'vue';
-import { ElInput, ElButton, ElMessage } from 'element-plus';
+import { ElInput, ElButton, ElMessage, ElMessageBox } from 'element-plus';
 import ChatBubble from './ChatBubble.vue';
 import ChatTypingIndicator from './ChatTypingIndicator.vue';
 import GrossMarginDeclineRun from './GrossMarginDeclineRun.vue';
-import { askRestaurantSynthesis } from '@/api/smartbi/restaurant-synthesis';
+import { askRestaurantSynthesis, sendRestaurantAnswerFeedback } from '@/api/smartbi/restaurant-synthesis';
 import type { ChatTurn } from '@/types/restaurant-chat';
 
 // This panel answers over the store's whole real 经营 dataset (backend derives
@@ -86,6 +86,7 @@ async function sendMessage(text?: string) {
         charts: response.charts,
         alerts: response.alerts,
         source: response.source,
+        sourceQuery: query,
       });
     }
   } catch (error: unknown) {
@@ -117,6 +118,38 @@ async function clearConversation() {
   sessionId.value = crypto.randomUUID();
   turns.value = [];
   ElMessage.success('对话已清空');
+}
+
+// 👍/👎 反馈 (飞轮断点2, 2026-07-23): 乐观翻转, 失败回滚; 👎 附可选说明。
+// 后端按 (租户, 问法原文) 关联最近一条飞轮捕获行, 反馈直接进晋升评审证据链。
+async function sendFeedback(turn: ChatTurn, value: 1 | -1) {
+  if (!turn.sourceQuery || turn.feedbackPending) return;
+  if (turn.feedbackValue === value) return;
+  const prevValue = turn.feedbackValue;
+  turn.feedbackPending = true;
+  turn.feedbackValue = value;
+  let comment: string | undefined;
+  if (value === -1) {
+    const result = await ElMessageBox.prompt('说一下哪里不准确? (可选)', '反馈', {
+      confirmButtonText: '提交',
+      cancelButtonText: '取消',
+      inputValidator: () => true,
+    }).catch((): null => null);
+    if (result === null) {
+      turn.feedbackValue = prevValue;
+      turn.feedbackPending = false;
+      return;
+    }
+    comment = (result as { value?: string }).value || undefined;
+  }
+  const ok = await sendRestaurantAnswerFeedback(turn.sourceQuery, value, comment);
+  if (!ok) {
+    turn.feedbackValue = prevValue;
+    ElMessage.warning('反馈提交失败, 请稍后重试');
+  } else {
+    ElMessage.success(value === 1 ? '感谢反馈' : '已记录, 我们会改进');
+  }
+  turn.feedbackPending = false;
 }
 
 defineExpose({
@@ -154,7 +187,28 @@ defineExpose({
         </div>
       </div>
 
-      <ChatBubble v-for="turn in turns" :key="turn.id" :turn="turn" />
+      <template v-for="turn in turns" :key="turn.id">
+        <ChatBubble :turn="turn" />
+        <div
+          v-if="turn.role === 'ai' && !turn.error && turn.sourceQuery"
+          class="chat-feedback-row"
+        >
+          <button
+            class="chat-feedback-btn"
+            :class="{ active: turn.feedbackValue === 1 }"
+            :disabled="turn.feedbackPending"
+            title="答得准"
+            @click="sendFeedback(turn, 1)"
+          >&#128077;</button>
+          <button
+            class="chat-feedback-btn"
+            :class="{ active: turn.feedbackValue === -1 }"
+            :disabled="turn.feedbackPending"
+            title="不准确"
+            @click="sendFeedback(turn, -1)"
+          >&#128078;</button>
+        </div>
+      </template>
 
       <ChatTypingIndicator v-if="isTyping" />
     </div>
@@ -252,5 +306,31 @@ defineExpose({
   border-top: 1px solid #d4cdb8;
   display: flex;
   gap: 10px;
+}
+.chat-feedback-row {
+  display: flex;
+  gap: 6px;
+  margin: -6px 0 12px 4px;
+}
+.chat-feedback-btn {
+  border: 1px solid #d4cdb8;
+  background: #fdfbf5;
+  border-radius: 12px;
+  padding: 2px 10px;
+  font-size: 13px;
+  cursor: pointer;
+  opacity: 0.55;
+  transition: opacity 0.15s, border-color 0.15s;
+}
+.chat-feedback-btn:hover:not(:disabled) {
+  opacity: 1;
+}
+.chat-feedback-btn.active {
+  opacity: 1;
+  border-color: #c9a66b;
+  background: #f2ece0;
+}
+.chat-feedback-btn:disabled {
+  cursor: default;
 }
 </style>

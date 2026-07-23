@@ -36,6 +36,11 @@ export interface ChatTurn {
   charts?: SynthesisChart[];
   alerts?: SynthesisAlert[];
   source?: string;
+  // 👍/👎 feedback (飞轮断点2, 2026-07-23) — ai turns only. sourceQuery is the
+  // user question this answer replied to (backend correlates feedback by it).
+  sourceQuery?: string;
+  feedbackValue?: 1 | -1;
+  feedbackPending?: boolean;
 }
 
 /** Request to the unified Java intent endpoint. */
