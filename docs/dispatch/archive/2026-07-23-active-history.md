@@ -123,3 +123,11 @@
 - **结果**：Workflow AI 从画布外独立页脚移入 `canvas-shell`，固定在画布底部中央并限制为 820px 最大宽度；折叠后保留轻量入口，小屏自动收窄，原上下文、快捷问题、对话历史与草稿应用能力不变。
 - **验证**：Workflow 编辑器与 AI 输入组件目标 Vitest 2 files / 10 tests 通过；`npm run build:check` 通过，Vite 生产构建转换 4462 个模块。
 - **部署**：`NOT_DEPLOYED`。
+
+## BUG-F006-R3-TABLE-GRID-COLUMN-UX-001 — `merged`
+
+- **Base SHA**：`4f9a8917047a59807841c70b3aaa4e4ba822f3c0`
+- **Owner**：`/root`
+- **结果**：销售订单、采购订单和生产计划列表统一固定网格契约与固定操作列边界；销售/生产复选框仅在显式批量模式出现，采购移除无业务消费者的行首选择控件；补充有数量上限、权限感知和本地持久化的可见列配置。
+- **验证**：共享列契约 Vitest 7/7、`vue-tsc -b` 通过；最终 Web release manifest 构建作为合并门禁执行。
+- **部署**：`NOT_DEPLOYED`。

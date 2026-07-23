@@ -7,7 +7,6 @@ import { useBusinessMode } from '@/composables/useBusinessMode';
 import UpstreamMissingHint from '@/components/common/UpstreamMissingHint.vue';
 import { useCreateAndReturn } from '@/composables/useCreateAndReturn';
 import request, { get, post, put } from '@/api/request';
-// request.patch is used by U-MARKER-1 below; default export already imported.
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { Plus, Search, Refresh, ChatDotRound, Download, QuestionFilled } from '@element-plus/icons-vue';
 import AiEntryDrawer from '@/components/ai-entry/AiEntryDrawer.vue';
@@ -21,7 +20,17 @@ import CanvasDynamicFields from '@/components/canvas/CanvasDynamicFields.vue';
 import CanvasAwareWrapper from '@/components/canvas/CanvasAwareWrapper.vue';
 import ConceptDisambiguationAlert from '@/components/common/ConceptDisambiguationAlert.vue';
 import type { TableRow } from '@/types/api';
-import { RowActionMenu, TableFooter, ViewModeSwitcher, GridView, KanbanView, TimelinePlaceholder, CalendarPlaceholder, RowMarkerCell } from '@/components/list';
+import {
+  RowActionMenu,
+  TableFooter,
+  ViewModeSwitcher,
+  GridView,
+  KanbanView,
+  TimelinePlaceholder,
+  CalendarPlaceholder,
+  ListColumnSelector,
+  useBusinessTableColumns,
+} from '@/components/list';
 // Sprint 6 W3-A — inline 3-chip link counter (文件 / 图片 / 合同).
 import LinkChipCell from '@/components/list/LinkChipCell.vue';
 import { useLinkChipCounts } from '@/composables/useLinkChipCounts';
@@ -31,7 +40,6 @@ import { resolveReferenceByName } from '@/utils/referenceResolver';
 // PR #878 (#860 follow-up) — 转发 / 分享链接 dialog.
 import ForwardShareDialog from '@/components/dialog/ForwardShareDialog.vue';
 import type { ViewMode } from '@/types/viewMode';
-import type { RowMarkerColor } from '@/types/rowMarker';
 import { computeRowActions } from '@/composables/useRowActions';
 import { useListSummary } from '@/composables/useListSummary';
 import { formatSummaryForAI } from '@/utils/aiSummaryContext';
@@ -56,30 +64,29 @@ const canWrite = computed(() => permissionStore.canWrite('procurement'));
 const { goCreate } = useCreateAndReturn();
 
 const canViewPrice = computed(() => permissionStore.canViewPrice);
+const PROCUREMENT_DEFAULT_COLUMNS = ['purchaseType', 'orderDate', 'totalAmount', 'attachments'];
+const {
+  columns: procurementColumnOptions,
+  visibleKeys: procurementVisibleColumns,
+  isVisible: procurementColumnVisible,
+  reset: resetProcurementColumns,
+} = useBusinessTableColumns({
+  storageKey: 'cretas:purchase-orders:visible-columns:v1',
+  columns: () => [
+    { key: 'purchaseType', label: '类型' },
+    { key: 'orderDate', label: '下单日期' },
+    ...(canViewPrice.value ? [{ key: 'totalAmount', label: '总金额' }] : []),
+    { key: 'attachments', label: '附件' },
+  ],
+  defaults: PROCUREMENT_DEFAULT_COLUMNS,
+  max: 4,
+});
 
 // U-VIEW-1 (Sprint 4 Wave 2 Chat L) — view-mode switcher (5 modes).
 const viewMode = ref<ViewMode>('table');
 
 const factoryToday = () =>
   new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Shanghai' }).format(new Date());
-// U-MARKER-1 (Sprint 4 Wave 2 Chat L) — PATCH marker color to backend.
-async function handleMarkerSelect(row: TableRow, color: RowMarkerColor | null): Promise<void> {
-  try {
-    const res = await request.patch(`/${factoryId.value}/markers/purchase-order/${row.id}`, {
-      color,
-    });
-    if (res?.data?.success) {
-      (row as TableRow & { markerColor?: string | null }).markerColor = color;
-      ElMessage.success(color ? `已标记为 ${color}` : '已清除标记');
-    } else {
-      throw new Error(res?.data?.message || '标记失败');
-    }
-  } catch (e: unknown) {
-    const msg = e instanceof Error ? e.message : '标记请求失败';
-    ElMessage.error(msg);
-  }
-}
-
 function rowActionsFor(row: TableRow) {
   return computeRowActions(
     'purchaseOrder',
@@ -145,9 +152,6 @@ function handleRowActionClick(actionId: string, row: TableRow) {
       forwardEntityId.value = String(row.id || '');
       forwardEntityLabel.value = String(row.orderNumber || row.id || '');
       forwardDialogVisible.value = true;
-      break;
-    case 'mark':
-      ElMessage.info(`请点击采购单 ${row.orderNumber || row.id} 行首色点设置标记`);
       break;
     case 'undo-approval':
       ElMessage({
@@ -924,6 +928,13 @@ function handleAiFill(params: TableRow) {
         </el-select>
         <el-button type="primary" @click="handleSearch">搜索</el-button>
         <el-button :icon="Refresh" @click="handleRefresh">重置</el-button>
+        <ListColumnSelector
+          v-model="procurementVisibleColumns"
+          :columns="procurementColumnOptions"
+          :max="4"
+          fixed-summary="订单编号、供应商、状态和操作固定显示"
+          @reset="resetProcurementColumns"
+        />
         <!-- U-VIEW-1 view-mode switcher (Sprint 4 Wave 2 Chat L) -->
         <div style="margin-left: auto">
           <ViewModeSwitcher v-model="viewMode" />
@@ -949,29 +960,30 @@ function handleAiFill(params: TableRow) {
       />
       <TimelinePlaceholder v-else-if="viewMode === 'timeline'" />
       <CalendarPlaceholder v-else-if="viewMode === 'calendar'" />
-      <el-table v-else :data="tableData" v-loading="loading" empty-text="暂无数据" stripe border style="width: 100%" :scrollbar-always-on="true" class="wide-table">
-        <!-- U-MARKER-1 row marker column (Sprint 4 Wave 2 Chat L) -->
-        <el-table-column label="" width="36" align="center">
-          <template #default="{ row }">
-            <RowMarkerCell
-              :value="row.markerColor"
-              :readonly="!canWrite"
-              @select="(c) => handleMarkerSelect(row, c)"
-            />
-          </template>
-        </el-table-column>
+      <el-table
+        v-else
+        :data="tableData"
+        v-loading="loading"
+        empty-text="暂无数据"
+        stripe
+        border
+        table-layout="fixed"
+        style="width: 100%"
+        :scrollbar-always-on="true"
+        class="wide-table business-list-table"
+      >
         <el-table-column prop="orderNumber" label="订单编号" width="170" />
         <el-table-column label="供应商" min-width="150" show-overflow-tooltip>
           <template #default="{ row }">{{ row.supplierName || row.supplier?.name || row.supplierId || '-' }}</template>
         </el-table-column>
-        <el-table-column prop="purchaseType" label="类型" width="100" align="center">
+        <el-table-column v-if="procurementColumnVisible('purchaseType')" prop="purchaseType" label="类型" width="100" align="center">
           <template #default="{ row }">
             <el-tag size="small" :type="row.purchaseType === 'URGENT' ? 'danger' : ''">
               {{ row.purchaseType === 'DIRECT' ? '直接' : row.purchaseType === 'URGENT' ? '紧急' : '统一' }}
             </el-tag>
           </template>
         </el-table-column>
-        <el-table-column prop="orderDate" label="下单日期" width="120" />
+        <el-table-column v-if="procurementColumnVisible('orderDate')" prop="orderDate" label="下单日期" width="120" />
         <!--
           RBAC defense-in-depth (PR #415 Option B 2026-05-12 + P3 column-hide fix):
           backend PriceFieldResponseAdvice strips totalAmount → null for roles
@@ -982,7 +994,7 @@ function handleAiFill(params: TableRow) {
           flagged 总金额 header visible despite null cells (misleading UX).
         -->
         <el-table-column
-          v-if="canViewPrice"
+          v-if="canViewPrice && procurementColumnVisible('totalAmount')"
           prop="totalAmount"
           label="总金额"
           width="130"
@@ -1005,7 +1017,7 @@ function handleAiFill(params: TableRow) {
           数据源: POST /attachments/batch-3chip-counts (batch, 避免 N+1).
           EntityType=PURCHASE_ORDER 由 useLinkChipCounts composable 锁定.
         -->
-        <el-table-column label="附件" width="200" align="center">
+        <el-table-column v-if="procurementColumnVisible('attachments')" label="附件" width="200" align="center">
           <template #header>
             <span style="display: inline-flex; align-items: center; gap: 4px;">
               附件
@@ -1026,20 +1038,28 @@ function handleAiFill(params: TableRow) {
             <LinkChipCell :counts="linkCountsFor(row.id)" />
           </template>
         </el-table-column>
-        <el-table-column label="操作" width="260" fixed="right" align="center">
+        <el-table-column
+          label="操作"
+          width="260"
+          fixed="right"
+          align="center"
+          class-name="business-list-table__actions"
+        >
           <template #default="{ row }">
-            <el-button type="primary" link size="small" @click="goDetail(row.id)">详情</el-button>
-            <!-- P0 (六扇门 May 7 transcript): 下载 PDF 供货单 (含 Code128 + QR 条码) -->
-            <el-button type="info" link size="small" :icon="Download"
-              :loading="pdfDownloadingIds.has(String(row.id))"
-              @click="handleDownloadPdf(row)">对外供货单</el-button>
-            <el-button v-if="canSubmitPurchaseOrder(row.status, canWrite)" type="warning" link size="small" @click="handleAction(row.id, 'submit')">提交</el-button>
-            <RowActionMenu
-              :actions="moreRowActionsFor(row)"
-              button-label="更多"
-              @action-click="(id: string) => handleRowActionClick(id, row)"
-              @ai-trigger="() => openAiForRow(row)"
-            />
+            <div class="business-action-row">
+              <el-button type="primary" link size="small" @click="goDetail(row.id)">详情</el-button>
+              <!-- P0 (六扇门 May 7 transcript): 下载 PDF 供货单 (含 Code128 + QR 条码) -->
+              <el-button type="info" link size="small" :icon="Download"
+                :loading="pdfDownloadingIds.has(String(row.id))"
+                @click="handleDownloadPdf(row)">对外供货单</el-button>
+              <el-button v-if="canSubmitPurchaseOrder(row.status, canWrite)" type="warning" link size="small" @click="handleAction(row.id, 'submit')">提交</el-button>
+              <RowActionMenu
+                :actions="moreRowActionsFor(row)"
+                button-label="更多"
+                @action-click="(id: string) => handleRowActionClick(id, row)"
+                @ai-trigger="() => openAiForRow(row)"
+              />
+            </div>
           </template>
         </el-table-column>
       </el-table>

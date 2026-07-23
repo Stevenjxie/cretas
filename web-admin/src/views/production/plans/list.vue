@@ -51,7 +51,11 @@ import { WorkflowBar } from '@/components/workflow';
 import { useWorkflowStats } from '@/composables/useWorkflowStats';
 import { getBucketPrimaryStatus, getBucketLabel } from '@/types/workflow';
 import type { TableRow } from '@/types/api';
-import { TableFooter } from '@/components/list';
+import {
+  ListColumnSelector,
+  TableFooter,
+  useBusinessTableColumns,
+} from '@/components/list';
 import { useListSummary } from '@/composables/useListSummary';
 import { formatSummaryForAI } from '@/utils/aiSummaryContext';
 import type { ListSummaryRequest } from '@/types/listSummary';
@@ -113,6 +117,33 @@ const canConfirmReceiptWrite = computed(() =>
   || permissionStore.canWrite('scheduling')
 );
 const canViewPrice = computed(() => permissionStore.canViewPrice);
+const productionColumnMax = 6;
+const {
+  columns: productionColumnOptions,
+  visibleKeys: productionVisibleColumnKeys,
+  isVisible: isProductionColumnVisible,
+  reset: resetProductionColumns,
+} = useBusinessTableColumns({
+  storageKey: 'cretas:production-plans:visible-columns:v1',
+  columns: () => [
+    { key: 'customer', label: '客户' },
+    { key: 'process', label: '工序' },
+    { key: 'batchDate', label: '批次日期' },
+    { key: 'plannedQuantity', label: '计划成品' },
+    { key: 'actualQuantity', label: '实际数量' },
+    { key: 'plannedDate', label: '计划日期' },
+    { key: 'inventoryStatus', label: '入库状态' },
+    { key: 'materialReference', label: '原料参考' },
+    { key: 'nextStep', label: '下一步' },
+    { key: 'workers', label: '预计工人' },
+    { key: 'supervisor', label: '指派主管' },
+    { key: 'source', label: '来源' },
+    { key: 'reportMode', label: '报工模式' },
+    { key: 'createdAt', label: '创建时间' },
+  ],
+  defaults: ['batchDate', 'plannedQuantity', 'actualQuantity', 'plannedDate', 'materialReference', 'nextStep'],
+  max: productionColumnMax,
+});
 
 // U-NAV-1 业务流程图导航 (Sprint 2 Track G + FU Chat 3 bucket-filter)
 const { stats: workflowStats, loading: workflowLoading } = useWorkflowStats(factoryId, 'production');
@@ -132,6 +163,13 @@ const materialAdvisoryMap = ref<Record<string, ProductionPlanMaterialAdvisory>>(
 const settlementStatusMap = ref<Record<string, ProductionSettlementStatus>>({});
 // #726 SP12: 批量合并打印工单 — 多选状态
 const selectedPlans = ref<TableRow[]>([]);
+const productionBatchMode = ref(false);
+function toggleProductionBatchMode() {
+  productionBatchMode.value = !productionBatchMode.value;
+  if (!productionBatchMode.value) {
+    selectedPlans.value = [];
+  }
+}
 const importInputRef = ref<HTMLInputElement | null>(null);
 const documentPackVisible = ref(false);
 const documentPackLoading = ref(false);
@@ -3333,7 +3371,7 @@ function guardProductionPlanAi(params: Record<string, unknown>) {
               </template>
             </el-dropdown>
             <el-dropdown
-              v-if="selectedPlans.length > 0"
+              v-if="productionBatchMode && selectedPlans.length > 0"
               trigger="click"
               style="margin-left: 8px;"
               @command="handleBatchCommand"
@@ -3390,22 +3428,38 @@ function guardProductionPlanAi(params: Record<string, unknown>) {
         </el-select>
         <el-button type="primary" :icon="Search" @click="handleSearch">搜索</el-button>
         <el-button :icon="Refresh" @click="handleRefresh">重置</el-button>
+        <el-button
+          :type="productionBatchMode ? 'primary' : 'default'"
+          plain
+          :icon="Printer"
+          @click="toggleProductionBatchMode"
+        >
+          {{ productionBatchMode ? '退出批量打印' : '批量打印' }}
+        </el-button>
+        <ListColumnSelector
+          v-model="productionVisibleColumnKeys"
+          :columns="productionColumnOptions"
+          :max="productionColumnMax"
+          @reset="resetProductionColumns"
+        />
       </div>
 
       <!-- #726 SP12: @selection-change 驱动合并打印 -->
       <el-table
+        :key="productionBatchMode ? 'production-batch' : 'production-standard'"
         :data="tableData"
         v-loading="loading"
         :empty-text="emptyText"
         stripe
         border
+        table-layout="fixed"
         :scrollbar-always-on="true"
-        class="wide-table"
+        class="wide-table business-list-table"
         style="width: 100%"
         :row-class-name="planRowClassName"
         @selection-change="handleSelectionChange"
       >
-        <el-table-column type="selection" width="45" />
+        <el-table-column v-if="productionBatchMode" type="selection" width="45" />
         <el-table-column prop="planNumber" label="计划编号" width="160">
           <template #default="{ row }">
             <el-button
@@ -3432,16 +3486,16 @@ function guardProductionPlanAi(params: Record<string, unknown>) {
             </template>
           </template>
         </el-table-column>
-        <el-table-column prop="sourceCustomerName" label="客户" min-width="120" show-overflow-tooltip />
-        <el-table-column prop="processName" label="工序" width="120" show-overflow-tooltip />
-        <el-table-column prop="batchDate" label="批次日期" width="120" />
-        <el-table-column label="计划成品" width="110" align="right">
+        <el-table-column v-if="isProductionColumnVisible('customer')" prop="sourceCustomerName" label="客户" min-width="120" show-overflow-tooltip />
+        <el-table-column v-if="isProductionColumnVisible('process')" prop="processName" label="工序" width="120" show-overflow-tooltip />
+        <el-table-column v-if="isProductionColumnVisible('batchDate')" prop="batchDate" label="批次日期" width="120" />
+        <el-table-column v-if="isProductionColumnVisible('plannedQuantity')" label="计划成品" width="110" align="right">
           <template #default="{ row }">{{ formatPlanDisplayQuantity(row) }}</template>
         </el-table-column>
-        <el-table-column label="实际数量" width="120" align="right">
+        <el-table-column v-if="isProductionColumnVisible('actualQuantity')" label="实际数量" width="120" align="right">
           <template #default="{ row }">{{ formatPlanActualQuantity(row) }}</template>
         </el-table-column>
-        <el-table-column prop="plannedDate" label="计划日期" width="120" />
+        <el-table-column v-if="isProductionColumnVisible('plannedDate')" prop="plannedDate" label="计划日期" width="120" />
         <el-table-column prop="status" label="状态" width="100" align="center">
           <template #default="{ row }">
             <el-tag
@@ -3455,7 +3509,7 @@ function guardProductionPlanAi(params: Record<string, unknown>) {
             </el-tag>
           </template>
         </el-table-column>
-        <el-table-column label="入库状态" width="125" align="center">
+        <el-table-column v-if="isProductionColumnVisible('inventoryStatus')" label="入库状态" width="125" align="center">
           <template #default="{ row }">
             <el-tag
               v-if="getSettlementStatus(row)"
@@ -3471,7 +3525,7 @@ function guardProductionPlanAi(params: Record<string, unknown>) {
             <span v-else>-</span>
           </template>
         </el-table-column>
-        <el-table-column label="原料参考" width="130" align="center">
+        <el-table-column v-if="isProductionColumnVisible('materialReference')" label="原料参考" width="130" align="center">
           <template #default="{ row }">
             <el-tooltip
               v-if="getPlanAdvisory(row)?.hasWarning"
@@ -3491,7 +3545,7 @@ function guardProductionPlanAi(params: Record<string, unknown>) {
             <span v-else>-</span>
           </template>
         </el-table-column>
-        <el-table-column label="下一步" min-width="170">
+        <el-table-column v-if="isProductionColumnVisible('nextStep')" label="下一步" min-width="170">
           <template #default="{ row }">
             <div class="next-step-cell">
               <el-tag :type="nextStepTagType(row)" size="small" effect="plain">
@@ -3506,9 +3560,9 @@ function guardProductionPlanAi(params: Record<string, unknown>) {
             </div>
           </template>
         </el-table-column>
-        <el-table-column prop="estimatedWorkers" label="预计工人" width="90" align="center" />
-        <el-table-column prop="assignedSupervisorName" label="指派主管" width="100" show-overflow-tooltip />
-        <el-table-column prop="sourceType" label="来源" min-width="170" align="center">
+        <el-table-column v-if="isProductionColumnVisible('workers')" prop="estimatedWorkers" label="预计工人" width="90" align="center" />
+        <el-table-column v-if="isProductionColumnVisible('supervisor')" prop="assignedSupervisorName" label="指派主管" width="100" show-overflow-tooltip />
+        <el-table-column v-if="isProductionColumnVisible('source')" prop="sourceType" label="来源" min-width="170" align="center">
           <template #default="{ row }">
             <!-- SP2: planNumber 前缀 SEC- 标识独立再加工/返工 (planSourceType 字段未暴露在 DTO) -->
             <el-tag v-if="String(row.planNumber || '').startsWith('SEC-')" type="warning" size="small">独立再加工</el-tag>
@@ -3530,7 +3584,7 @@ function guardProductionPlanAi(params: Record<string, unknown>) {
           </template>
         </el-table-column>
         <!-- Wave2: 报工模式 badge -->
-        <el-table-column label="报工模式" width="100" align="center">
+        <el-table-column v-if="isProductionColumnVisible('reportMode')" label="报工模式" width="100" align="center">
           <template #default="{ row }">
             <el-tag
               v-if="row.skipProcessReporting === false"
@@ -3546,10 +3600,16 @@ function guardProductionPlanAi(params: Record<string, unknown>) {
             >免工序</el-tag>
           </template>
         </el-table-column>
-        <el-table-column prop="createdAt" label="创建时间" width="180" :formatter="formatDateTimeCell" />
-        <el-table-column label="操作" width="360" fixed="right" align="center">
+        <el-table-column v-if="isProductionColumnVisible('createdAt')" prop="createdAt" label="创建时间" width="180" :formatter="formatDateTimeCell" />
+        <el-table-column
+          label="操作"
+          width="360"
+          fixed="right"
+          align="center"
+          class-name="business-list-table__actions"
+        >
           <template #default="{ row }">
-            <div class="plan-action-cell">
+            <div class="plan-action-cell business-action-row">
               <el-button
                 v-if="canShowProductionActions(row)"
                 type="warning"

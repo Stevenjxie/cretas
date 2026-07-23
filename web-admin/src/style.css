@@ -671,3 +671,49 @@ textarea:focus-visible {
   min-width: max-content;
   max-width: 32rem;
 }
+
+/* Core business lists use a fixed grid so header/body/fixed-operation columns
+ * share the same width contract. Other detail tables retain the semantic
+ * content-driven sizing above. */
+.business-list-table .el-table__header,
+.business-list-table .el-table__body,
+.business-list-table .el-table__footer {
+  table-layout: fixed !important;
+}
+
+.business-list-table th.el-table__cell,
+.business-list-table td.el-table__cell {
+  box-sizing: border-box;
+  border-right-color: var(--el-table-border-color);
+}
+
+.business-list-table .el-table__body tr td.el-table-fixed-column--right {
+  background: var(--el-bg-color);
+}
+
+.business-list-table .el-table__body tr.el-table__row--striped td.el-table-fixed-column--right {
+  background: var(--el-fill-color-lighter);
+}
+
+.business-list-table .el-table__body tr:hover > td.el-table-fixed-column--right {
+  background: var(--el-table-row-hover-bg-color);
+}
+
+.business-list-table td.business-list-table__actions,
+.business-list-table th.business-list-table__actions {
+  border-left: 1px solid var(--el-table-border-color);
+  box-shadow: -8px 0 14px rgb(31 45 61 / 7%);
+}
+
+.business-action-row {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: 2px 6px;
+}
+
+.business-action-row .el-button + .el-button {
+  margin-left: 0;
+}
