@@ -105,6 +105,13 @@ public class AIIntentConfig extends BaseEntity {
     private String requiredRoles;
 
     /**
+     * 权限码 (module:action, 如 inventory:write) — 与 ToolRbacEnforcer/HTTP @RequirePermission
+     * 同一权限矩阵。非空时优先于 requiredRoles 判定; 空则回落 requiredRoles 旧逻辑 (兼容期)。
+     */
+    @Column(name = "required_permission", length = 64)
+    private String requiredPermission;
+
+    /**
      * 配额消耗值
      * 每次调用消耗的配额单位
      */
