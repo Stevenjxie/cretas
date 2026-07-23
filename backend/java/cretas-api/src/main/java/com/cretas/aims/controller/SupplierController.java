@@ -102,7 +102,11 @@ public class SupplierController {
     }
 
     /**
-     * 删除供应商
+     * 删除尚无任何业务历史的误建供应商。
+     *
+     * <p>Web 已以状态生命周期替代常规删除，但 RN 供应商管理和 SupplierDeleteTool 仍消费该接口。
+     * Service 会拒绝删除已有物料批次或采购历史的供应商，因此暂时保留的是受控纠错能力，不是
+     * 可随 Web 删除按钮一起移除的冗余写路径。</p>
      */
     @RequirePermission({"procurement:read_write", "finance:read_write"})
     @DeleteMapping("/{supplierId}")
