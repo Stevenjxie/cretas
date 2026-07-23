@@ -797,6 +797,6 @@
   - 抽屉明确提示：计划负责安排与结单，实际耗用、出成率、成本、质检和证据属于完工批次；未结单时核算继续 fail-closed 并解释原因。
 - **修改文件**：`web-admin/src/views/production/plans/list.vue`、`web-admin/src/views/production/plans/__tests__/productionPlanInformationArchitecture.spec.ts`、本复盘与 dispatch 台账；不修改后端 API、Entity、库存、报工或结算模型。
 - **测试**：目标 Vitest `productionPlanInformationArchitecture.spec.ts` 7/7 PASS；`vue-tsc -b --pretty false` 明确退出 0；Web production build 产出 `dist/index.html`（入口 `assets/index-CsY6I3Hh.js`）与页面 chunk `assets/list-HhM0R-vi.js`，目标中文动作/职责文案均从不可变产物读回；`git diff --check` PASS。
-- **Commit/PR/main 状态**：实现分支 `codex/prodplan-action-ia-20260723`，等待最终审查、commit 与 main 合入回填。
+- **Commit/PR/main 状态**：实现 commit `6c162973ad06aca435fe5e6592dc70203b139d8f`；PR [#1662](https://github.com/Stevenjxie/cretas/pull/1662) 已合入；exact main `ddfe3ab226f0cd2bbb154ef6355454b8a4decdd6`。
 - **部署状态**：`NOT_DEPLOYED`。
-- **回归状态**：`TARGET_TEST_PASS_AWAITING_MAIN`；生产业务 mutation=0，未修改任何生产计划、批次、报工、结算、库存或 LIUSHANMEN 数据。
+- **回归状态**：`MERGED_AWAITING_DEPLOYMENT`；生产业务 mutation=0，未修改任何生产计划、批次、报工、结算、库存或 LIUSHANMEN 数据。
