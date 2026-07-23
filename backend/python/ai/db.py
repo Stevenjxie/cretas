@@ -165,15 +165,22 @@ _WRITE_SENSITIVITY = frozenset({"HIGH", "CRITICAL"})
 _WRITE_PERMISSION_ACTIONS = frozenset({"write", "read_write"})
 
 
+def _perm_codes(r: Dict[str, Any]) -> List[str]:
+    """required_permission 逗号分隔 = any-of (P1-M, 与 Java 门/ToolRbacEnforcer
+    对齐)。返回去空格的码列表; 空/None → []。"""
+    raw = str(r.get("required_permission") or "")
+    return [c.strip() for c in raw.split(",") if c.strip()]
+
+
 def _is_write_row(r: Dict[str, Any]) -> bool:
     """写意图判定 (镜像 Java WriteGuardService.isWriteIntent 的意图侧口径):
-    sensitivity HIGH/CRITICAL, 或 required_permission 的 action 段为
+    sensitivity HIGH/CRITICAL, 或任一 required_permission 码的 action 段为
     write/read_write。判定仅用于目录过滤 (UX 层); 执行期强制在 Java。"""
     if str(r.get("sensitivity_level") or "").upper() in _WRITE_SENSITIVITY:
         return True
-    perm = str(r.get("required_permission") or "")
-    if ":" in perm and perm.split(":", 1)[1] in _WRITE_PERMISSION_ACTIONS:
-        return True
+    for perm in _perm_codes(r):
+        if ":" in perm and perm.split(":", 1)[1] in _WRITE_PERMISSION_ACTIONS:
+            return True
     return False
 
 
@@ -201,8 +208,9 @@ def filter_rows_by_rw_mode(
             out = []
             for r in rows:
                 if _is_write_row(r):
-                    perm = str(r.get("required_permission") or "")
-                    if perm and perm not in allowed:
+                    codes = _perm_codes(r)
+                    # any-of: 用户命中任一码即可 (P1-M 逗号语义)
+                    if codes and not any(c in allowed for c in codes):
                         continue
                 out.append(r)
             return out

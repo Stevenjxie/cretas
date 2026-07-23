@@ -79,3 +79,23 @@ class TestFilterByMode:
         garbage = [None, 42, {"intent_code": "ok"}]
         out = filter_rows_by_rw_mode(garbage, "READ", None)  # type: ignore[arg-type]
         assert out == garbage  # 异常 → fail-open 原样返回
+
+
+class TestCommaAnyOfSemantics:
+    """P1-M: required_permission 逗号分隔 = any-of (与 Java 门对齐)。"""
+
+    def test_comma_list_any_segment_write_marks_write(self):
+        assert _is_write_row(_row("x", perm="sales:read_write, finance:read_write"))
+        assert not _is_write_row(_row("x", perm="sales:read, finance:read"))
+
+    def test_operate_any_of_match_keeps_row(self):
+        rows = [_row("CUST_DEL", sensitivity="HIGH",
+                     perm="sales:read_write, finance:read_write")]
+        out = filter_rows_by_rw_mode(rows, "OPERATE", ["finance:read_write"])
+        assert [r["intent_code"] for r in out] == ["CUST_DEL"]
+
+    def test_operate_no_match_drops_row(self):
+        rows = [_row("CUST_DEL", sensitivity="HIGH",
+                     perm="sales:read_write, finance:read_write")]
+        out = filter_rows_by_rw_mode(rows, "OPERATE", ["inventory:write"])
+        assert out == []

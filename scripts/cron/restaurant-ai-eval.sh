@@ -28,6 +28,28 @@ ALERTS=/www/wwwroot/cretas/logs/restaurant-ai-eval-alerts.log
     echo "RESTAURANT AI EVAL FAILED rc=$rc $(date '+%F %T') — 见 $LOG" >> "$ALERTS"
   fi
 
+  # ── 工厂读电池 (2026-07-24 验收轮建立) ──
+  echo "=== $(date '+%F %T') factory READ eval ==="
+  PYTHONIOENCODING=utf-8 python -X utf8 -m smartbi.scripts.factory_ai_eval \
+    --base https://admin.cretaceousfuture.com
+  frc=$?
+  echo "=== factory read done (rc=$frc) ==="
+  if [ "$frc" -ne 0 ]; then
+    echo "FACTORY READ EVAL FAILED rc=$frc $(date '+%F %T') — 见 $LOG" >> "$ALERTS"
+    rc=$((rc || frc))
+  fi
+
+  # ── 工厂写路径电池 (读写分块契约: 意图命中/READ拦截/TCC/demo闸) ──
+  echo "=== $(date '+%F %T') factory WRITE eval ==="
+  PYTHONIOENCODING=utf-8 python -X utf8 -m smartbi.scripts.factory_write_eval \
+    --base https://admin.cretaceousfuture.com
+  wrc=$?
+  echo "=== factory write done (rc=$wrc) ==="
+  if [ "$wrc" -ne 0 ]; then
+    echo "FACTORY WRITE EVAL FAILED rc=$wrc $(date '+%F %T') — 见 $LOG" >> "$ALERTS"
+    rc=$((rc || wrc))
+  fi
+
   # ── 飞轮日报 (best-effort, 不影响 rc) ──
   if [ -f "$CODEDIR/scripts/restaurant-intent-promote.py" ]; then
     set -a
