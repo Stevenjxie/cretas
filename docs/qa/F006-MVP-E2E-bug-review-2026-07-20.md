@@ -783,3 +783,20 @@
 - **Commit/PR/main 状态**：实现 commit `88733170c51eb42f95f6e758e14c83122bccff05`；PR [#1654](https://github.com/Stevenjxie/cretas/pull/1654) 已 squash 合入；exact main `91040bc57b01bccd12ed9183d72bc55b720acef5`。
 - **部署状态**：`NOT_DEPLOYED`。
 - **回归状态**：`CODE_FIXED_TARGET_TEST_PASS`；生产业务 mutation=0，未修改任何计划、报工、库存或 LIUSHANMEN 数据。
+
+### UX-F006-PROD-PLAN-ACTION-IA-002 — 生产计划高频动作与档案核算收口
+
+- **发现阶段/时间/页面/步骤**：`BUG-F006-PROD-PLAN-ACTION-REGRESSION-001` 恢复入口后的信息架构复盘，2026-07-23；生产计划行同时暴露“查看详情 / 生产操作 / 生产单据 / 追溯与核算”四组入口，用户需要频繁展开菜单才能逐道录入或核对结单，且计划安排、生产档案和完工批次事实的职责边界仍不够清楚。
+- **用户最终决定**：逐道录入与核对结单属于当前未完成计划的高频执行动作，直接放在行内；生产工单、领料单、配料单、单据包、上下游追溯、计划汇总和完工核算统一收进“档案与核算”；实际耗用、出成率、成本、质检、证据和时间线属于生产批次事实，不在生产计划列表伪造第二套数据。
+- **设计与根因**：依据项目 `design` Skill 的 Vue Web Admin 业务页信息架构规范，采用“业务标识承担详情入口 + 高频动作直接可见 + 同对象只读资料收进单一抽屉 + 异常/低频写操作进入更多”的层级。原实现虽恢复了功能，但把高频与低频动作继续混在同一个“生产操作”菜单，并把同一计划的单据和核算拆成两个相邻菜单，仍造成寻找成本和行操作噪声。
+- **修复**：
+  - 计划编号改为可点击详情入口，操作列不再重复显示“查看详情”；
+  - `PENDING/IN_PROGRESS` 且有写权限时直接显示“逐道录入/继续录入”和“核对结单/生产小结”，沿用既有 handler、确认框、loading 与后端状态门禁；
+  - 新增统一“档案与核算”抽屉，按“生产单据 / 计划档案 / 汇总与核算”三个页签复用现有工单、领料单、配料单、单文件 PDF、单据追溯、生产计划汇总和成品出厂核算能力；
+  - APP 报工、生成调拨单、撤销小结、停产和取消计划留在“更多”，完成态/取消态不显示生产写动作；
+  - 抽屉明确提示：计划负责安排与结单，实际耗用、出成率、成本、质检和证据属于完工批次；未结单时核算继续 fail-closed 并解释原因。
+- **修改文件**：`web-admin/src/views/production/plans/list.vue`、`web-admin/src/views/production/plans/__tests__/productionPlanInformationArchitecture.spec.ts`、本复盘与 dispatch 台账；不修改后端 API、Entity、库存、报工或结算模型。
+- **测试**：目标 Vitest `productionPlanInformationArchitecture.spec.ts` 7/7 PASS；`vue-tsc -b --pretty false` 明确退出 0；Web production build 产出 `dist/index.html`（入口 `assets/index-CsY6I3Hh.js`）与页面 chunk `assets/list-HhM0R-vi.js`，目标中文动作/职责文案均从不可变产物读回；`git diff --check` PASS。
+- **Commit/PR/main 状态**：实现分支 `codex/prodplan-action-ia-20260723`，等待最终审查、commit 与 main 合入回填。
+- **部署状态**：`NOT_DEPLOYED`。
+- **回归状态**：`TARGET_TEST_PASS_AWAITING_MAIN`；生产业务 mutation=0，未修改任何生产计划、批次、报工、结算、库存或 LIUSHANMEN 数据。

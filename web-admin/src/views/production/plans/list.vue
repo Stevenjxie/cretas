@@ -137,6 +137,16 @@ const selectedDocumentChapters = ref<ProductionDocumentChapter[]>([
 const documentTraceVisible = ref(false);
 const documentTraceLoading = ref(false);
 const documentTrace = ref<ProductionDocumentTrace | null>(null);
+type ArchiveCenterTab = 'documents' | 'trace' | 'accounting';
+const archiveCenterVisible = ref(false);
+const archiveCenterPlan = ref<TableRow | null>(null);
+const archiveCenterTab = ref<ArchiveCenterTab>('documents');
+
+function openArchiveCenter(row: TableRow) {
+  archiveCenterPlan.value = row;
+  archiveCenterTab.value = 'documents';
+  archiveCenterVisible.value = true;
+}
 
 async function openDocumentTrace(row: TableRow) {
   if (!factoryId.value) return;
@@ -274,6 +284,38 @@ function handleTraceAndCostCommand(command: TraceAndCostCommand, row: TableRow) 
   });
 }
 
+function openArchiveDocument(command: ProductionDocumentCommand) {
+  const row = archiveCenterPlan.value;
+  if (!row) return;
+  if (command === 'document-pack') {
+    archiveCenterVisible.value = false;
+  }
+  handleProductionDocumentCommand(command, row);
+}
+
+function openArchiveTrace() {
+  const row = archiveCenterPlan.value;
+  if (!row) return;
+  archiveCenterVisible.value = false;
+  void openDocumentTrace(row);
+}
+
+function openArchiveSummary() {
+  const row = archiveCenterPlan.value;
+  if (!row) return;
+  archiveCenterVisible.value = false;
+  void handleOpenSummary(row);
+}
+
+function openArchiveYieldCost() {
+  const row = archiveCenterPlan.value;
+  if (!row) return;
+  if (String(row.status || '').toUpperCase() === 'COMPLETED') {
+    archiveCenterVisible.value = false;
+  }
+  handleTraceAndCostCommand('yield-cost', row);
+}
+
 type ProductionActionCommand =
   | 'complete'
   | 'interim-settle'
@@ -286,6 +328,22 @@ type ProductionActionCommand =
 
 function canShowProductionActions(row: TableRow): boolean {
   return canWrite.value && isUnfinishedStatus(String(row.status || ''));
+}
+
+function processEntryActionLabel(row: TableRow): string {
+  return String(row.status || '').toUpperCase() === 'IN_PROGRESS' ? '继续录入' : '逐道录入';
+}
+
+function settlementActionLabel(row: TableRow): string {
+  return row.sourceType === 'SAFETY_STOCK' ? '生产小结' : '核对结单';
+}
+
+function handlePrimarySettlementAction(row: TableRow) {
+  if (row.sourceType === 'SAFETY_STOCK') {
+    void handleInterimSettle(row);
+    return;
+  }
+  void handleComplete(row);
 }
 
 function handleProductionActionCommand(command: ProductionActionCommand, row: TableRow) {
@@ -3347,7 +3405,18 @@ function guardProductionPlanAi(params: Record<string, unknown>) {
         @selection-change="handleSelectionChange"
       >
         <el-table-column type="selection" width="45" />
-        <el-table-column prop="planNumber" label="计划编号" width="160" />
+        <el-table-column prop="planNumber" label="计划编号" width="160">
+          <template #default="{ row }">
+            <el-button
+              type="primary"
+              link
+              size="small"
+              class="plan-number-link"
+              title="查看生产计划详情"
+              @click="handleViewPlan(row)"
+            >{{ row.planNumber || row.id }}</el-button>
+          </template>
+        </el-table-column>
         <el-table-column label="产品类型" min-width="200" show-overflow-tooltip>
           <template #default="{ row }">
             <span>{{ row.productTypeName || row.productName || row.productTypeId || '-' }}</span>
@@ -3477,30 +3546,42 @@ function guardProductionPlanAi(params: Record<string, unknown>) {
           </template>
         </el-table-column>
         <el-table-column prop="createdAt" label="创建时间" width="180" :formatter="formatDateTimeCell" />
-        <el-table-column label="操作" width="380" fixed="right" align="center">
+        <el-table-column label="操作" width="360" fixed="right" align="center">
           <template #default="{ row }">
-            <el-button type="primary" link size="small" @click="handleViewPlan(row)">查看详情</el-button>
+            <div class="plan-action-cell">
+              <el-button
+                v-if="canShowProductionActions(row)"
+                type="warning"
+                link
+                size="small"
+                @click="openProcessEntry(row)"
+              >{{ processEntryActionLabel(row) }}</el-button>
+              <el-button
+                v-if="canShowProductionActions(row)"
+                type="success"
+                link
+                size="small"
+                :loading="row.sourceType === 'SAFETY_STOCK'
+                  ? interimSettleLoadingId === String(row.id)
+                  : actionLoading"
+                @click="handlePrimarySettlementAction(row)"
+              >{{ settlementActionLabel(row) }}</el-button>
+              <el-button
+                type="primary"
+                link
+                size="small"
+                @click="openArchiveCenter(row)"
+              >档案与核算</el-button>
             <el-dropdown
               v-if="canShowProductionActions(row)"
               trigger="click"
               @command="(command: ProductionActionCommand) => handleProductionActionCommand(command, row)"
             >
-              <el-button type="success" link size="small">
-                生产操作<el-icon class="el-icon--right"><ArrowDown /></el-icon>
+              <el-button type="info" link size="small">
+                更多<el-icon class="el-icon--right"><ArrowDown /></el-icon>
               </el-button>
               <template #dropdown>
                 <el-dropdown-menu>
-                  <el-dropdown-item
-                    v-if="row.sourceType !== 'SAFETY_STOCK'"
-                    command="complete"
-                    :disabled="actionLoading"
-                  >核对结单</el-dropdown-item>
-                  <el-dropdown-item
-                    v-else
-                    command="interim-settle"
-                    :disabled="interimSettleLoadingId === String(row.id)"
-                  >生产小结</el-dropdown-item>
-                  <el-dropdown-item command="process-entry">逐道录入</el-dropdown-item>
                   <el-dropdown-item
                     v-if="isStartable(row.status)"
                     command="app-reporting"
@@ -3530,50 +3611,7 @@ function guardProductionPlanAi(params: Record<string, unknown>) {
                 </el-dropdown-menu>
               </template>
             </el-dropdown>
-            <el-dropdown
-              trigger="click"
-              @command="(command: ProductionDocumentCommand) => handleProductionDocumentCommand(command, row)"
-            >
-              <el-button type="info" link size="small">
-                生产单据<el-icon class="el-icon--right"><ArrowDown /></el-icon>
-              </el-button>
-              <template #dropdown>
-                <el-dropdown-menu>
-                  <el-dropdown-item command="work-order" :disabled="!canPrintPlanDocuments(row.status)">
-                    查看/下载生产工单
-                  </el-dropdown-item>
-                  <el-dropdown-item command="material-requisition" :disabled="!canPrintPlanDocuments(row.status)">
-                    查看/下载领料单
-                  </el-dropdown-item>
-                  <el-dropdown-item command="batching-sheet" :disabled="!canPrintPlanDocuments(row.status)">
-                    查看/下载配料单
-                  </el-dropdown-item>
-                  <el-dropdown-item command="document-pack" divided :disabled="!canPrintPlanDocuments(row.status)">
-                    下载单文件生产单据包
-                  </el-dropdown-item>
-                </el-dropdown-menu>
-              </template>
-            </el-dropdown>
-            <el-dropdown
-              trigger="click"
-              @command="(command: TraceAndCostCommand) => handleTraceAndCostCommand(command, row)"
-            >
-              <el-button type="primary" link size="small">
-                追溯与核算<el-icon class="el-icon--right"><ArrowDown /></el-icon>
-              </el-button>
-              <template #dropdown>
-                <el-dropdown-menu>
-                  <el-dropdown-item command="trace">单据追溯</el-dropdown-item>
-                  <el-dropdown-item
-                    command="yield-cost"
-                    :title="String(row.status || '').toUpperCase() === 'COMPLETED'
-                      ? '查看该批次的出成率与成本核算'
-                      : '计划结单并形成完工批次后开放；当前可查看生产计划汇总'"
-                  >{{ yieldCostActionLabel(row) }}</el-dropdown-item>
-                  <el-dropdown-item command="summary">生产计划汇总（随时查看）</el-dropdown-item>
-                </el-dropdown-menu>
-              </template>
-            </el-dropdown>
+            </div>
           </template>
         </el-table-column>
       </el-table>
@@ -3597,6 +3635,112 @@ function guardProductionPlanAi(params: Record<string, unknown>) {
         />
       </div>
     </el-card>
+
+    <el-drawer
+      v-model="archiveCenterVisible"
+      :title="`档案与核算 — ${archiveCenterPlan?.planNumber || archiveCenterPlan?.id || ''}`"
+      size="680px"
+      destroy-on-close
+    >
+      <template v-if="archiveCenterPlan">
+        <el-descriptions :column="2" border size="small" class="archive-center-summary">
+          <el-descriptions-item label="产品">
+            {{ archiveCenterPlan.productTypeName || archiveCenterPlan.productName || archiveCenterPlan.productTypeId || '-' }}
+          </el-descriptions-item>
+          <el-descriptions-item label="状态">
+            <el-tag :type="getStatusType(archiveCenterPlan.status as string)" size="small">
+              {{ getStatusText(archiveCenterPlan.status as string) }}
+            </el-tag>
+          </el-descriptions-item>
+          <el-descriptions-item label="来源订单">
+            {{ sourceOrderDisplay(archiveCenterPlan) }}
+          </el-descriptions-item>
+          <el-descriptions-item label="报工模式">
+            {{ archiveCenterPlan.skipProcessReporting === false ? '逐道报工' : '免工序报工' }}
+          </el-descriptions-item>
+        </el-descriptions>
+
+        <el-tabs v-model="archiveCenterTab" class="archive-center-tabs">
+          <el-tab-pane label="生产单据" name="documents">
+            <div class="archive-center-grid">
+              <button
+                type="button"
+                class="archive-center-card"
+                :disabled="!canPrintPlanDocuments(archiveCenterPlan.status)"
+                @click="openArchiveDocument('work-order')"
+              >
+                <strong>生产工单</strong>
+                <span>查看或下载工序与生产指令</span>
+              </button>
+              <button
+                type="button"
+                class="archive-center-card"
+                :disabled="!canPrintPlanDocuments(archiveCenterPlan.status)"
+                @click="openArchiveDocument('material-requisition')"
+              >
+                <strong>领料单</strong>
+                <span>查看仓库发料依据与物料需求</span>
+              </button>
+              <button
+                type="button"
+                class="archive-center-card"
+                :disabled="!canPrintPlanDocuments(archiveCenterPlan.status)"
+                @click="openArchiveDocument('batching-sheet')"
+              >
+                <strong>配料单</strong>
+                <span>查看车间称量与投料指导</span>
+              </button>
+              <button
+                type="button"
+                class="archive-center-card archive-center-card--primary"
+                :disabled="!canPrintPlanDocuments(archiveCenterPlan.status)"
+                @click="openArchiveDocument('document-pack')"
+              >
+                <strong>生产单据包 PDF</strong>
+                <span>一次下载工单、领料单和配料单</span>
+              </button>
+            </div>
+          </el-tab-pane>
+          <el-tab-pane label="计划档案" name="trace">
+            <el-alert
+              title="这里汇总计划上下游业务单据；计划编号本身可直接打开计划详情。"
+              type="info"
+              :closable="false"
+              show-icon
+            />
+            <div class="archive-center-actions">
+              <el-button type="primary" @click="openArchiveTrace">查看单据追溯</el-button>
+              <el-button
+                v-if="archiveCenterPlan.sourceType === 'CUSTOMER_ORDER' && archiveCenterPlan.sourceOrderId"
+                @click="openSourceOrder(archiveCenterPlan)"
+              >打开销售订单</el-button>
+            </div>
+          </el-tab-pane>
+          <el-tab-pane label="汇总与核算" name="accounting">
+            <el-alert
+              title="计划负责安排与结单；实际耗用、出成率、成本、质检和证据属于完工批次事实。"
+              type="warning"
+              :closable="false"
+              show-icon
+            />
+            <div class="archive-center-grid archive-center-grid--accounting">
+              <button type="button" class="archive-center-card" @click="openArchiveSummary">
+                <strong>生产计划汇总</strong>
+                <span>随时查看计划、工序、报工和物料汇总</span>
+              </button>
+              <button type="button" class="archive-center-card" @click="openArchiveYieldCost">
+                <strong>{{ yieldCostActionLabel(archiveCenterPlan) }}</strong>
+                <span>
+                  {{ String(archiveCenterPlan.status || '').toUpperCase() === 'COMPLETED'
+                    ? '查看完工批次出成率与成本核算'
+                    : '结单形成完工批次后开放；不会提前显示假核算' }}
+                </span>
+              </button>
+            </div>
+          </el-tab-pane>
+        </el-tabs>
+      </template>
+    </el-drawer>
 
     <el-dialog
       v-model="documentPackVisible"
@@ -5351,6 +5495,110 @@ function guardProductionPlanAi(params: Record<string, unknown>) {
   padding-top: 16px;
   border-top: 1px solid var(--border-color-lighter, #ebeef5);
   margin-top: 16px;
+}
+
+.plan-number-link {
+  display: inline-flex;
+  max-width: 100%;
+  overflow: hidden;
+
+  :deep(span) {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+}
+
+.plan-action-cell {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: 2px 8px;
+  min-height: 30px;
+
+  :deep(.el-button + .el-button) {
+    margin-left: 0;
+  }
+}
+
+.archive-center-summary {
+  margin-bottom: 16px;
+}
+
+.archive-center-tabs {
+  :deep(.el-tabs__header) {
+    margin-bottom: 16px;
+  }
+}
+
+.archive-center-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.archive-center-grid--accounting {
+  margin-top: 16px;
+}
+
+.archive-center-card {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  min-height: 104px;
+  padding: 16px;
+  border: 1px solid var(--border-color-lighter, #ebeef5);
+  border-radius: 10px;
+  background: var(--fill-color-lighter, #fafafa);
+  color: var(--text-color-primary, #303133);
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 0.15s ease, background-color 0.15s ease;
+
+  strong {
+    margin-bottom: 8px;
+    font-size: 15px;
+  }
+
+  span {
+    color: var(--text-color-secondary, #909399);
+    font-size: 13px;
+    line-height: 1.5;
+  }
+
+  &:hover:not(:disabled),
+  &:focus-visible {
+    border-color: var(--el-color-primary, #409eff);
+    background: var(--el-color-primary-light-9, #ecf5ff);
+    outline: none;
+  }
+
+  &:disabled {
+    cursor: not-allowed;
+    opacity: 0.55;
+  }
+}
+
+.archive-center-card--primary {
+  border-color: var(--el-color-primary-light-5, #a0cfff);
+}
+
+.archive-center-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-top: 16px;
+
+  :deep(.el-button + .el-button) {
+    margin-left: 0;
+  }
+}
+
+@media (max-width: 768px) {
+  .archive-center-grid {
+    grid-template-columns: 1fr;
+  }
 }
 
 // ==================== Plan Detail Dialog ====================
