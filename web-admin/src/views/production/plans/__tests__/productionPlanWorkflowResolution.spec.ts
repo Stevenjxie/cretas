@@ -113,6 +113,19 @@ describe('production plan Workflow resolution', () => {
     expect(workflowCandidateExtraOutputs(item, ['FG-A', 'FG-B'])).toEqual(['FG-C']);
   });
 
+  it('preserves the exact Chinese process names returned by the fixed Workflow revision', () => {
+    const item = candidate(15, ['5855d1de-07e3-46d0-ae17-89e00413978d']);
+    item.processSteps = [
+      'SOP-20260723-01-黄油鸡-原料处理',
+      'SOP-20260723-01-黄油鸡-定量包装',
+    ];
+
+    expect(workflowCandidateProcessSummary(item)).toBe(
+      'SOP-20260723-01-黄油鸡-原料处理 → SOP-20260723-01-黄油鸡-定量包装',
+    );
+    expect(workflowCandidateProcessSummary(item)).not.toContain('???');
+  });
+
   it('labels the four production topologies from logical inputs and terminal outputs', () => {
     const oneToOne = candidate(10, ['FG-A']);
     oneToOne.workflowType = 'SINGLE_OUTPUT_PRODUCT';
