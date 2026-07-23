@@ -122,14 +122,4 @@ public interface KeywordLearningService {
      * @return 学到的关键词数量
      */
     int learnFromMatchedIntent(String userInput, AIIntentConfig matchedIntent, String factoryId);
-
-    /**
-     * 从用户反馈中学习关键词（用户选择了正确意图后）
-     *
-     * @param factoryId 工厂ID
-     * @param selectedIntentCode 用户选择的正确意图代码
-     * @param matchedKeywords 原始匹配到的关键词列表
-     * @return 学到的关键词数量
-     */
-    int learnFromUserFeedback(String factoryId, String selectedIntentCode, List<String> matchedKeywords);
 }
