@@ -91,7 +91,12 @@ _PAID_MODEL_DENYLIST: frozenset = frozenset({
 # exhausted-ON models that showed no date; None for tencent/zhipu which have no
 # DashScope expiry — they are billing-safe via their own 用完即停/pool cap).
 # ═══════════════════════════════════════════════════════════════════════════
-_REGISTRY_AUDIT_DATE = datetime.date(2026, 7, 1)
+_REGISTRY_AUDIT_DATE = datetime.date(2026, 7, 23)  # 三控制台实测核对
+# (2026-07-23 Playwright 走查, #1598): 三账号免费额度页逐条比对, 计费模式/
+# 用完即停开关全部未变, 注册表日期与控制台一致。实测新知: aliyun_c 的
+# qwen3.5-flash 额度已耗尽(非日期过期), qwen3.6-flash-2026-04-16 剩 44.7万;
+# a/b 各有 qwen3.5-ocr + kimi-k2.7-code 新额度未收录(留待下轮扩充)。
+# 下次保鲜到期 08-13 恰逢 aliyun_c 批量额度日 — 届时需真正重核而不只续期。
 _REGISTRY_MAX_AGE_DAYS = 21  # staleness fail-safe: WARN + fall to minimal set beyond this
 _FAR_FUTURE = datetime.date(2099, 1, 1)  # tencent/zhipu + missing dates sort last among safe
 
@@ -213,7 +218,8 @@ _THINKING_ONLY: frozenset = frozenset({
 _MINIMAL_SAFE_SET: frozenset = frozenset({
     ("aliyun_c", "qwen3.7-max-2026-06-08"),   # 09/08 max
     ("aliyun_c", "glm-5.2"),                  # 09/15 quality
-    ("aliyun_c", "qwen-plus-latest"), ("aliyun_c", "qwen3.5-flash"),
+    ("aliyun_c", "qwen-plus-latest"),
+    ("aliyun_c", "qwen3.6-flash-2026-04-16"),  # 07-23 实测: 替换额度耗尽的 qwen3.5-flash
     ("aliyun_c", "deepseek-v3.1"), ("aliyun_c", "qwen3-vl-plus-2025-12-19"),
     ("tencent", "qwen3.5-flash"), ("zhipu", "glm-4.5-air"),  # text floor
     ("zhipu", "glm-4.6v"),                    # VL floor (never expires)
@@ -227,10 +233,16 @@ def _expiry_of(account: str, model: str) -> datetime.date:
     return exp if exp is not None else _FAR_FUTURE
 
 
+def _today() -> datetime.date:
+    """可注入时钟缝: 生产 = 真实今天; 测试 monkeypatch 此函数冻结日期,
+    避免 call_chain 类测试随真实日期漂移碎裂 (2026-07-23 修)。"""
+    return datetime.date.today()
+
+
 def _registry_stale(today: Optional[datetime.date] = None) -> bool:
     """Staleness fail-safe: registry older than _REGISTRY_MAX_AGE_DAYS → caller WARNs
     and narrows to _MINIMAL_SAFE_SET (fail safe). Toggle states drift in console."""
-    today = today or datetime.date.today()
+    today = today or _today()
     return (today - _REGISTRY_AUDIT_DATE).days > _REGISTRY_MAX_AGE_DAYS
 
 
@@ -244,7 +256,7 @@ def _refuse_reason(account: str, model: str,
     call-time expiry hard-drop. The expiry drop MUST happen here, not just via sort:
     an ascending-expiry sort puts the most-expired model at the HEAD (tried first) —
     refusing at call time is the actual billing guard (billing-audit CRITICAL 1)."""
-    today = today or datetime.date.today()
+    today = today or _today()
     if _registry_stale(today) and (account, model) not in _MINIMAL_SAFE_SET:
         return "registry_stale"          # fail SAFE: only minimal set until re-audit
     if (account, model) not in _SAFE_MODELS:
@@ -622,7 +634,11 @@ SLOT_MODELS: Dict[SLOT, List[Tuple[str, str]]] = {
         ("aliyun_b", "qwen3-coder-flash"), ("tencent", "qwen3.5-flash"),
     ] + _TEXT_TAIL),
     # MAPPER — 字段映射 JSON (thinking off + json_object) → fast flash/coder.
+    # 2026-07-23 控制台实测: 头部换 c/qwen3.6-flash-2026-04-16 (剩44.7万,
+    # 08-13) — 原头 a/qwen3.6-flash、b/qwen-flash 已过期, c/qwen3.5-flash
+    # 额度耗尽 (留链尾靠 403 直落, 万一月度重置还能自愈)。
     SLOT.MAPPER: _dedup_chain([
+        ("aliyun_c", "qwen3.6-flash-2026-04-16"),
         ("aliyun_a", "qwen3.6-flash"), ("aliyun_b", "qwen-flash"),
         ("aliyun_c", "qwen3.5-flash"), ("aliyun_c", "qwen3-coder-flash"),
         ("tencent", "qwen3.5-flash"),
