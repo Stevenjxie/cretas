@@ -474,6 +474,14 @@ def match_restaurant_ops(query: str) -> Optional[str]:
         and not any(tok in q for tok in ("哪家店", "哪个店", "门店"))
     ):
         return "RESTAURANT_OPS_STAFFING_ADVICE"
+    # 渠道占比问 ("外卖占了几成") — Java 工具面吸收第一枪 (R31),
+    # 此前两次误路由事故 (描述窃取/LLM 抖动)。
+    if (
+        any(tok in q for tok in ("外卖", "堂食"))
+        and any(tok in q for tok in ("占比", "几成", "比例", "对比", "占了", "占多少", "多少"))
+        and not any(tok in q for tok in ("报表", "导出", "下载", "文件"))
+    ):
+        return "RESTAURANT_OPS_CHANNEL_MIX"
     # 亏损门店存在性问 ("有没有店在亏损") → 门店毛利存在性直答 (R15/G5)。
     if (
         re.search(r"(?:有没有|有无|是否有|哪些|哪家)[^。]{0,4}(?:门店|店)", q)
@@ -4129,9 +4137,115 @@ async def resolve_staffing_advice(smartbi_pool, factory_id: str) -> OpsAnswer:
 
 from smartbi.gold.restaurant_playbook import resolve_playbook as _resolve_playbook
 
+async def resolve_channel_mix(
+    smartbi_pool, factory_id: str, days: int = 30, *,
+    role: Optional[str] = None, query: Optional[str] = None,
+    date_range: Optional[Tuple[Optional[date], Optional[date]]] = None,
+) -> OpsAnswer:
+    """堂食 vs 外卖 渠道拆分 (R31 — Java 工具面吸收第一枪)。
+
+    此前「外卖占了几成」依赖 Java restaurant_order_type_mix_gold, 误路由
+    事故两次 (描述窃取/LLM 抖动)。fact_pos_transaction.order_type 在
+    DEMO_REST 全史覆盖, python 直算; 未标注渠道的单量如实披露不摊派。
+    金额是价格权限数据 — 非价格角色只出单数与占比。
+    """
+    from smartbi_compat._rbac_strip import PRICE_VIEW_ROLES
+    can_see_money = bool(role) and role in PRICE_VIEW_ROLES
+
+    exact_start = date_range[0] if date_range else None
+    exact_end = date_range[1] if date_range else None
+    async with smartbi_pool.acquire() as conn:
+        await conn.execute("SELECT set_config('app.factory_id', $1, false)", factory_id)
+        rows = await conn.fetch(
+            """
+            WITH anchor AS (
+                SELECT COALESCE($4::date, (
+                    SELECT MAX(date) FROM fact_pos_transaction
+                     WHERE factory_id = $1 AND order_type IS NOT NULL
+                )) AS end_date
+            )
+            SELECT t.order_type,
+                   COUNT(*)::int AS bills,
+                   SUM(COALESCE(t.net_amount, 0))::float AS revenue,
+                   MIN(t.date) AS window_start,
+                   MAX(t.date) AS window_end
+              FROM fact_pos_transaction t
+              CROSS JOIN anchor
+             WHERE t.factory_id = $1
+               AND anchor.end_date IS NOT NULL
+               AND t.date >= COALESCE($3::date, anchor.end_date - ($2::int))
+               AND t.date <= COALESCE($4::date, anchor.end_date)
+             GROUP BY t.order_type
+            """,
+            factory_id, days, exact_start, exact_end,
+        )
+    typed = {r["order_type"]: r for r in rows if r["order_type"]}
+    untyped_bills = sum(int(r["bills"]) for r in rows if not r["order_type"])
+    if not typed:
+        requested = (
+            _range_text(exact_start, exact_end)
+            if exact_start and exact_end else f"近 {days} 天"
+        )
+        return OpsAnswer(
+            code="RESTAURANT_OPS_CHANNEL_MIX",
+            title=f"堂食外卖拆分（{requested}）",
+            answer_text=(
+                f"{requested}没有标注了渠道（堂食/外卖）的订单数据，"
+                "不能计算占比，也不会用总单量摊派替代。请先确认收银渠道字段已同步。"
+            ),
+            charts=[], kpis=[],
+            meta={"no_data": True},
+        )
+    window_start = min(r["window_start"] for r in typed.values())
+    window_end = max(r["window_end"] for r in typed.values())
+    window_label = (
+        _range_text(exact_start, exact_end)
+        if exact_start and exact_end
+        else _actual_window_text(window_start, window_end, days)
+    )
+    total_bills = sum(int(r["bills"]) for r in typed.values())
+    total_rev = sum(float(r["revenue"]) for r in typed.values())
+    lines = [f"堂食 vs 外卖（{window_label}）："]
+    kpis = []
+    for name in ("堂食", "外卖"):
+        r = typed.get(name)
+        if r is None:
+            continue
+        bills = int(r["bills"])
+        rev = float(r["revenue"])
+        bill_pct = bills / total_bills * 100 if total_bills else 0.0
+        rev_pct = rev / total_rev * 100 if total_rev else 0.0
+        if can_see_money:
+            lines.append(
+                f"{name}：¥{rev:,.0f}（营收占 {rev_pct:.1f}%），"
+                f"{bills:,} 单（单量占 {bill_pct:.1f}%）"
+            )
+        else:
+            lines.append(f"{name}：{bills:,} 单（单量占 {bill_pct:.1f}%）")
+        kpis.append({"title": f"{name}单量", "value": f"{bills:,}", "rawValue": bills})
+    for name, r in typed.items():
+        if name not in ("堂食", "外卖"):
+            lines.append(f"{name}：{int(r['bills']):,} 单")
+    if untyped_bills:
+        lines.append(f"另有 {untyped_bills:,} 单未标注渠道，不在以上拆分内。")
+    lines.append(
+        "建议：分别看堂食和外卖的客单价与毛利；外卖占比高时先查包装、"
+        "出餐时长和平台抽佣，堂食占比高时优化翻台与套餐引导。"
+    )
+    return OpsAnswer(
+        code="RESTAURANT_OPS_CHANNEL_MIX",
+        title=f"堂食外卖拆分（{window_label}）",
+        answer_text="\n".join(lines),
+        charts=[], kpis=kpis,
+        meta={"window_label": window_label, "untyped_bills": untyped_bills,
+              "scope_matches_request": True},
+    )
+
+
 _RESOLVERS = {
     "RESTAURANT_OPS_PLAYBOOK": _resolve_playbook,
     "RESTAURANT_OPS_CAPABILITIES": resolve_capabilities,
+    "RESTAURANT_OPS_CHANNEL_MIX": resolve_channel_mix,
     "RESTAURANT_OPS_WASTAGE_TOP": resolve_wastage_top,
     "RESTAURANT_OPS_STOCK_SHORTAGE": resolve_stock_shortage,
     "RESTAURANT_OPS_RECIPE_COST": resolve_recipe_cost,

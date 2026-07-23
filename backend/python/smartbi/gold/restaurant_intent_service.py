@@ -536,11 +536,6 @@ def should_delegate(
     # Java Gold tools have no per-dish answer path, while the Python
     # gross-margin resolver scopes to the named dish (Sheet 7/22 菜品链).
     if query:
-        import re as _re
-        if _re.search(r"外卖|堂食", query) and _re.search(r"占比|几成|比例|占了|占多少", query):
-            # 渠道占比拆分是 Java 工具能力, python 无渠道 resolver —
-            # 委托会答成全店概览 (答非所问), 显式放回 Java (R26)。
-            return False
         from smartbi.gold.restaurant_ops_router import (
             dish_ranking_direction,
             extract_dish_candidates,
