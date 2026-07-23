@@ -107,3 +107,11 @@
 - **结果**：存货生产计划未填写计划产量时，按 1 个成品的 BOM 基准创建并复用唯一滚动调拨草稿；草稿明确要求 OA 提交前调整实际量；显式 0/负数继续 fail-closed。
 - **验证**：`ProductionWorkflowOrchestratorGuardTest` 通过；结单关闭关联调拨的既有契约保持。
 - **部署**：`DEPLOY_AUTHORIZED_AWAITING_RELEASE`。
+
+## BUG-F006-WORKFLOW-REPUBLISH-VISUAL-GUARD-20260723 — `merged`
+
+- **Base SHA**：`9e678185567121d1f5a84cf97b4b2cb42fa98ef6`
+- **Owner**：`/root`
+- **结果**：当前 Workflow 版本已发布并启用且没有待发布改动时，发布按钮显示“已发布并启用”、使用弱化完成态并保持禁用；存在新草稿时恢复“发布并启用”且可操作。
+- **验证**：`ProductProcessWorkflowEditor.activation.spec.ts` 6/6 通过；`npm --prefix web-admin run build:check` 通过，Vite 生产构建转换 4462 个模块。
+- **部署**：`NOT_DEPLOYED`。

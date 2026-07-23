@@ -41,10 +41,11 @@
               <el-button
                 data-testid="publish-workflow"
                 type="success"
+                :plain="publishActionCompleted"
                 :disabled="!!publishDisabledReason"
                 :loading="publishing"
                 @click="publishWorkflow"
-              >发布并启用</el-button>
+              >{{ publishActionLabel }}</el-button>
             </span>
           </el-tooltip>
           <!-- #12b: 版本浏览 (查看之前发布过的版本) -->
@@ -855,6 +856,10 @@ const currentDefinitionIsEnabled = computed(() => (
   definition.value?.status === 'PUBLISHED'
   && activation.value?.enabled === true
   && activation.value.activeDefinitionVersion === definition.value.version
+));
+const publishActionCompleted = computed(() => currentDefinitionIsEnabled.value && !dirty.value);
+const publishActionLabel = computed(() => (
+  publishActionCompleted.value ? '已发布并启用' : '发布并启用'
 ));
 const publishDisabledReason = computed(() => {
   if (publishConfirming.value || publishing.value) return '正在发布 Workflow，请勿重复提交';
