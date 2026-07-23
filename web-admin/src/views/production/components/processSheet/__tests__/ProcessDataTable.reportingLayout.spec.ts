@@ -23,8 +23,17 @@ describe('process reporting information architecture', () => {
 
   it('keeps report context separate from the task workspace and stacks safely on narrow screens', () => {
     expect(sheetSource).toContain('报工上下文');
+    expect(sheetSource).toContain('class="process-flow-strip"');
+    expect(sheetSource).toContain('物料 / 上游半成品');
+    expect(sheetSource).toContain('填写实际产出并生成批次');
     expect(sheetSource).toContain('process-entry-workspace');
     expect(sheetSource).toContain('grid-template-columns: minmax(0, 1.7fr) minmax(300px, 0.8fr)');
     expect(sheetSource).toContain('@media (max-width: 1200px)');
+  });
+
+  it('uses table as the default business view while preserving the explicit card alternative', () => {
+    expect(sheetSource).toContain("{ label: '表格', value: 'grid' }");
+    expect(sheetSource).toContain("{ label: '卡片', value: 'card' }");
+    expect(sheetSource).toContain('initialProcessSheetViewMode(savedView)');
   });
 });

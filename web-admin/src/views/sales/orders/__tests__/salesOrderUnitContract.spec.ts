@@ -52,6 +52,23 @@ describe('sales order unit and packaging contract', () => {
     });
   });
 
+  it('preserves the explicitly selected source warehouse in the canonical line payload', () => {
+    const payload = canonicalSalesOrderItemPayload({
+      productTypeId: 'SKU-BOX',
+      unit: 'box',
+      sourceWarehouseCode: 'WH-FG',
+    } as Parameters<typeof canonicalSalesOrderItemPayload>[0] & {
+      productTypeId: string;
+      sourceWarehouseCode: string;
+    });
+
+    expect(payload).toMatchObject({
+      productTypeId: 'SKU-BOX',
+      unit: 'box',
+      sourceWarehouseCode: 'WH-FG',
+    });
+  });
+
   it('blocks a stale package spec before a base-unit request can be sent', () => {
     const line = {
       unit: '盒',

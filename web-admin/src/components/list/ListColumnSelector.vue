@@ -7,8 +7,10 @@ const props = withDefaults(defineProps<{
   modelValue: string[];
   columns: BusinessTableColumn[];
   max: number;
+  min?: number;
   fixedSummary?: string;
 }>(), {
+  min: 1,
   fixedSummary: '主字段、状态和操作固定显示',
 });
 
@@ -19,10 +21,15 @@ const emit = defineEmits<{
 
 const selection = computed<string[]>({
   get: () => props.modelValue,
-  set: (value) => emit('update:modelValue', value.slice(0, props.max)),
+  set: (value) => {
+    const next = value.slice(0, props.max);
+    if (next.length < Math.min(props.min, props.columns.length)) return;
+    emit('update:modelValue', next);
+  },
 });
 
 function optionDisabled(key: string): boolean {
+  if (selection.value.includes(key) && selection.value.length <= props.min) return true;
   return !selection.value.includes(key) && selection.value.length >= props.max;
 }
 </script>
@@ -54,6 +61,9 @@ function optionDisabled(key: string): boolean {
       </el-checkbox-group>
       <div v-if="modelValue.length >= max" class="column-selector__limit">
         已达到 {{ max }} 项上限；请先取消一项再选择。
+      </div>
+      <div v-else-if="modelValue.length <= min" class="column-selector__limit">
+        至少保留 {{ min }} 项补充列；订单主字段、状态和操作始终显示。
       </div>
     </div>
   </el-popover>
