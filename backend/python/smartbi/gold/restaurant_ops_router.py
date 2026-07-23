@@ -3208,7 +3208,11 @@ async def resolve_store_margin(
             "totalProfit": total_profit, "avgRate": avg_rate,
             "coveredCost": covered_cost,
             "marginFormula": "毛利=可计算毛利的营收-对应菜品成本",
-            "targetDish": dish_scope_row["dish_name"] if dish_scope_row is not None else None,
+            # R32b: dish_scope_row 是 resolve_gross_margin 的局部变量, 此处
+            # 从未定义 — 祖传越界引用, 路径被走到时 NameError 被 fail-open
+            # 吞成 delegate:false (「挣着钱没有啊最近」实测)。店维度 meta
+            # 的菜品目标固定为 None (店×菜路径有自己的 meta)。
+            "targetDish": None,
             "marginInvariantPass": margin_invariant_pass,
             "costCoverageRatio": coverage_ratio,
             "invalidCostCount": invalid_cost_count,
