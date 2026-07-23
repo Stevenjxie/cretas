@@ -39,7 +39,9 @@ import { useChartResize } from '@/composables/useChartResize';
 import { useRoute } from 'vue-router';
 import { useAuthStore } from '@/store/modules/auth';
 import { chatAnalysis, chatAnalysisStream, getUploadHistory, deduplicateUploads, nl2sql, logFeedback, type AnalysisResult, type AIInsightData, type ChartConfig, type UploadHistoryItem, type NL2SQLResponse } from '@/api/smartbi';
-import { executeIntent, fetchCachedXlsx, submitIntentFeedback } from '@/api/smartbi/intent-chat';
+import { executeIntent, fetchCachedXlsx, submitIntentFeedback, type IntentExecuteResponse } from '@/api/smartbi/intent-chat';
+import { usePermissionStore } from '@/store/modules/permission';
+import AiOperationCard from './components/chat/AiOperationCard.vue';
 import { listFactoryTemplates, type FactoryTemplate } from '@/api/smartbi/materialized';
 import { getTemplateTitle } from './composables/useTemplateMap';
 import { pickDefaultDataSource } from './composables/useDataSourceSelect';
@@ -170,6 +172,10 @@ interface ChatMessage {
   chartGuide?: string;
   // UI local state for the expandable 字段说明/怎么看图 block.
   depthExpanded?: boolean;
+  // AI 读写分离 (2026-07-23): 操作类状态 (READ_MODE_WRITE_BLOCKED / WRITE_CONFIRM_REQUIRED /
+  // PREVIEW / DEMO_WRITE_BLOCKED / PENDING_APPROVAL / NO_PERMISSION / PERMISSION_DENIED)
+  // 的完整响应挂到消息上, 模板据此渲染 AiOperationCard / 咨询 tab 拦截卡, 取代默认气泡.
+  operationResponse?: IntentExecuteResponse;
 }
 
 // ==================== ChartInsightProvider: runtime type→meta mapping ====================
@@ -1177,6 +1183,76 @@ onBeforeUnmount(() => { isComponentAlive = false; });
 // through only when Java can't help AND the user has uploaded data.
 const javaIntentSessionId = ref<string | undefined>(undefined);
 
+// ── AI 读写分离 (2026-07-23) ──────────────────────────────────────────
+// 「咨询」tab → mode=READ (写意图被后端拦截); 「操作」tab → mode=OPERATE.
+// 「操作」tab 仅对任意模块有写权限 ('w'/'rw') 的账号渲染; 纯只读账号维持
+// 现有单栏外观 (无 tabs UI)。两个 tab 各自独立 sessionId, 避免咨询会话
+// 上下文污染操作 slot-filling。
+const permissionStore = usePermissionStore();
+const activeAiTab = ref<'consult' | 'operate'>('consult');
+const hasAnyWrite = computed(() => permissionStore.hasAnyWriteAccess());
+const operateSessionId = ref('');
+
+// 操作卡状态集合 (除 READ_MODE_WRITE_BLOCKED, 它渲染咨询 tab 拦截卡)
+const OPERATION_CARD_STATUSES = new Set([
+  'WRITE_CONFIRM_REQUIRED', 'PREVIEW', 'DEMO_WRITE_BLOCKED',
+  'PENDING_APPROVAL', 'NO_PERMISSION', 'PERMISSION_DENIED',
+]);
+
+function isReadBlockedMessage(message: ChatMessage): boolean {
+  return String(message.operationResponse?.status || '').toUpperCase() === 'READ_MODE_WRITE_BLOCKED';
+}
+
+/** 咨询 tab 拦截卡按钮: 切到操作 tab 并自动重发原句。 */
+function handleJumpToOperate(message: ChatMessage) {
+  if (!hasAnyWrite.value) return;
+  activeAiTab.value = 'operate';
+  const q = message.origQuery || '';
+  if (q) {
+    inputQuery.value = q;
+    handleSendMessage();
+  }
+}
+
+/**
+ * WRITE_CONFIRM_REQUIRED (操作 tab) → 立即用 previewOnly=true 重发同一请求,
+ * 拿到 PREVIEW + confirmableAction 后替换卡片内容 (TCC 预览段)。
+ */
+async function requestOperationPreview(
+  query: string,
+  assistantId: string,
+  sessionId: string,
+): Promise<void> {
+  const factoryId = authStore.factoryId;
+  if (!factoryId) return;
+  const idx = () => chatHistory.value.findIndex((m) => m.id === assistantId);
+  try {
+    const res = await executeIntent(factoryId, query, {
+      sessionId,
+      mode: 'OPERATE',
+      previewOnly: true,
+    });
+    const i = idx();
+    if (i === -1) return;
+    const msg = chatHistory.value[i];
+    const st = String(res.status || '').toUpperCase();
+    if (st === 'PREVIEW' || OPERATION_CARD_STATUSES.has(st)) {
+      msg.operationResponse = res;
+    } else {
+      msg.operationResponse = undefined;
+      msg.content = customerSafeAnswer(res.message || res.formattedText || '操作预览生成失败，请重试。');
+    }
+  } catch {
+    const i = idx();
+    if (i === -1) return;
+    const msg = chatHistory.value[i];
+    msg.operationResponse = undefined;
+    msg.content = '操作预览生成失败，请稍后重试。';
+  } finally {
+    scrollToBottom();
+  }
+}
+
 /** User clicks the blue "下载 Excel" button on a bot bubble. */
 async function handleAttachmentDownload(message: ChatMessage) {
   const att = message.downloadAttachment;
@@ -1227,9 +1303,14 @@ async function tryJavaIntentChat(
     const ownerActionSessionForRequest = (
       pendingScenario || isOwnerActionFollowupText(query)
     ) ? (ownerActionSessionId.value || undefined) : undefined;
-    const intentSessionForRequest = javaIntentSessionId.value || getOrCreateChatSessionId();
+    // AI 读写分离: 操作 tab 用独立 session (咨询会话不得污染操作 slot-filling)。
+    const isOperateTab = activeAiTab.value === 'operate' && hasAnyWrite.value;
+    const intentSessionForRequest = isOperateTab
+      ? (operateSessionId.value || (operateSessionId.value = createChatSessionId()))
+      : (javaIntentSessionId.value || getOrCreateChatSessionId());
     const res = await executeIntent(factoryId, query, {
       sessionId: intentSessionForRequest,
+      mode: isOperateTab ? 'OPERATE' : 'READ',
       context: ownerActionQuery ? {
         ownerActionSessionId: ownerActionSessionForRequest,
         ownerActionScenario,
@@ -1243,6 +1324,34 @@ async function tryJavaIntentChat(
     if (i === -1) return 'handled';
     const msg = chatHistory.value[i];
     const responseStatus = String(res.status || '').toUpperCase();
+
+    // ── AI 读写分离 (2026-07-23): 操作类状态优先处理 ────────────────────
+    // 咨询 tab 撞写意图 → 拦截卡 (前往操作页 / 只读账号提示)。
+    if (responseStatus === 'READ_MODE_WRITE_BLOCKED') {
+      msg.operationResponse = res;
+      msg.origQuery = query;
+      msg.content = '';
+      msg.loading = false;
+      return 'handled';
+    }
+    // 操作 tab 写确认 → 渲染过渡卡并自动 previewOnly 重发 (TCC 预览段)。
+    if (responseStatus === 'WRITE_CONFIRM_REQUIRED' && isOperateTab) {
+      operateSessionId.value = res.sessionId ?? intentSessionForRequest;
+      msg.operationResponse = res;
+      msg.content = '';
+      msg.loading = false;
+      void requestOperationPreview(query, assistantId, operateSessionId.value);
+      return 'handled';
+    }
+    // 其余操作状态 → AiOperationCard (预览确认/权限不足/演示拦截/审批中)。
+    // 注: 非操作 tab 的 WRITE_CONFIRM_REQUIRED (理论不出现) 保持旧的纯文本渲染。
+    if (OPERATION_CARD_STATUSES.has(responseStatus) && responseStatus !== 'WRITE_CONFIRM_REQUIRED') {
+      if (isOperateTab) operateSessionId.value = res.sessionId ?? intentSessionForRequest;
+      msg.operationResponse = res;
+      msg.content = '';
+      msg.loading = false;
+      return 'handled';
+    }
 
     if (responseStatus === 'SUCCESS' || responseStatus === 'COMPLETED') {
       // Two response shapes:
@@ -1274,6 +1383,9 @@ async function tryJavaIntentChat(
         msg.source = 'restaurant_owner_action';
         msg.templateCode = `owner_action_${resultDataAny.scenario || 'general'}`;
         msg.logId = resultDataAny.log_id ?? resultDataAny.logId ?? null;
+      } else if (isOperateTab) {
+        // AI 读写分离: 操作 tab 会话独立维护, 不碰咨询 session。
+        operateSessionId.value = res.sessionId ?? intentSessionForRequest;
       } else {
         // Tool responses often omit the top-level session even though Python
         // persisted the turn under the request session. Do not erase it.
@@ -1984,7 +2096,7 @@ function formatDataSourceLabel(ds: UploadHistoryItem): string {
 
 // 暴露给父组件调用。inputQuery / handleSendMessage / chatHistory 额外暴露供
 // 单元测试驱动消息管线 (P1 AIQuery.depth.spec.ts)，生产代码不依赖。
-defineExpose({ setAnalysisContext, inputQuery, handleSendMessage, chatHistory });
+defineExpose({ setAnalysisContext, inputQuery, handleSendMessage, chatHistory, activeAiTab });
 
 // 渲染图表 (从 ChartConfig)
 // Defensive chart-layout normalizer (Jun 2026): some Python templates emit
@@ -2317,6 +2429,7 @@ function handleClearHistory() {
   // 上下文开始(否则上轮 parent_answer_summary 还会注入到下一个 LLM prompt).
   resetChatSession();
   javaIntentSessionId.value = undefined;
+  operateSessionId.value = '';  // 操作 tab session 同步重开 (下次发送再生成)
 
   chatHistory.value = [{
     id: 'welcome',
@@ -2332,6 +2445,7 @@ function handleClearHistory() {
 function handleNewTopic() {
   resetChatSession();
   javaIntentSessionId.value = undefined;
+  operateSessionId.value = '';
   // 加一条系统消息说明 (用 assistant 风格但内容是状态提示).
   chatHistory.value.push({
     id: `topic-reset-${Date.now()}`,
@@ -2401,6 +2515,18 @@ function handleKeydown(event: KeyboardEvent) {
       </div>
     </div>
 
+    <!-- AI 读写分离 (2026-07-23): 咨询/操作 双 tab。仅有写权限账号可见;
+         纯只读账号不渲染 tabs UI, 保持原单栏外观 (mode=READ)。 -->
+    <div v-if="hasAnyWrite" class="ai-mode-tabs">
+      <el-segmented
+        v-model="activeAiTab"
+        :options="[{ label: '咨询', value: 'consult' }, { label: '操作', value: 'operate' }]"
+      />
+      <span class="ai-mode-hint">
+        {{ activeAiTab === 'consult' ? '咨询模式：只查数据，不做修改' : '操作模式：可执行写操作，执行前需预览确认' }}
+      </span>
+    </div>
+
     <div class="chat-container">
       <!-- 物化分析面板：仅在选择了数据源时展示，位于对话历史区上方 -->
       <MaterializedAnalysisPanel
@@ -2439,7 +2565,31 @@ function handleKeydown(event: KeyboardEvent) {
                 <el-button type="primary" size="small" :icon="Refresh" @click="handleSseRetry">重新提问</el-button>
               </div>
               <template v-else>
-                <div v-if="message.role === 'assistant' && message.streaming" class="message-text streaming-text">{{ customerSafeAnswer(message.content) }}</div>
+                <!-- AI 读写分离: 咨询 tab 撞写意图 → 拦截卡 (前往操作页 / 只读提示) -->
+                <div
+                  v-if="message.role === 'assistant' && isReadBlockedMessage(message)"
+                  class="read-blocked-card"
+                >
+                  <div class="read-blocked-message">
+                    <el-icon><Warning /></el-icon>
+                    {{ message.operationResponse?.message || '这是操作类请求，请切换到【操作】页处理。' }}
+                  </div>
+                  <el-button
+                    v-if="hasAnyWrite"
+                    type="primary"
+                    size="small"
+                    class="read-blocked-jump"
+                    @click="handleJumpToOperate(message)"
+                  >前往操作页</el-button>
+                  <div v-else class="read-blocked-readonly">您当前是只读账号，无法执行操作类请求</div>
+                </div>
+                <!-- AI 读写分离: 操作类状态 → 操作确认卡 (取代默认气泡) -->
+                <AiOperationCard
+                  v-else-if="message.role === 'assistant' && message.operationResponse"
+                  :response="message.operationResponse"
+                  :factory-id="factoryId ?? ''"
+                />
+                <div v-else-if="message.role === 'assistant' && message.streaming" class="message-text streaming-text">{{ customerSafeAnswer(message.content) }}</div>
                 <div v-else-if="message.role === 'assistant'" class="message-text markdown-body" v-html="renderMarkdown(message.content)"></div>
                 <div v-else class="message-text">{{ message.content }}</div>
 
@@ -3562,6 +3712,44 @@ function handleKeydown(event: KeyboardEvent) {
   .template-grid {
     grid-template-columns: 1fr;
   }
+}
+
+// ── AI 读写分离 (2026-07-23) ──────────────────────────────────────────
+.ai-mode-tabs {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.ai-mode-hint {
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
+}
+
+.read-blocked-card {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 12px;
+  max-width: 560px;
+  border: 1px solid var(--el-color-warning-light-5);
+  border-radius: 8px;
+  background: var(--el-color-warning-light-9);
+}
+
+.read-blocked-message {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  color: var(--el-color-warning-dark-2);
+}
+
+.read-blocked-readonly {
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
 }
 </style>
 
