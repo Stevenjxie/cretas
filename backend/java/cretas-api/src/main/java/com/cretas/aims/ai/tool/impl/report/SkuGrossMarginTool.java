@@ -111,7 +111,26 @@ public class SkuGrossMarginTool extends AbstractBusinessTool {
             margins.add(item);
         }
 
-        return buildSimpleResult("查询成功", Map.of(
+        // 2026-07-24 修: "查询成功"占位符无内容 (工厂读电池钉出)。汇总关键
+        // 数字进 message; 无数据时诚实空态 — 不用零值冒充毛利率。
+        if (margins.isEmpty()) {
+            return buildSimpleResult(
+                    "当前没有可计算成本的生产批次数据，无法给出 SKU 成本/毛利分析，也不会用零值替代。",
+                    Map.of("skuMargins", margins, "totalProducts", 0));
+        }
+        StringBuilder sb = new StringBuilder();
+        sb.append("SKU 成本分析: 覆盖 ").append(margins.size()).append(" 个产品。");
+        int shown = 0;
+        for (Map<String, Object> m : margins) {
+            if (shown++ >= 3) {
+                sb.append(" 等");
+                break;
+            }
+            sb.append(" ").append(m.get("productName"))
+              .append(" 单位成本 ¥").append(m.get("unitCost")).append(";");
+        }
+        sb.append(" 注: 销售价待接入后可自动计算毛利率, 当前仅展示成本侧。");
+        return buildSimpleResult(sb.toString(), Map.of(
                 "skuMargins", margins,
                 "totalProducts", margins.size()
         ));
