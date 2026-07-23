@@ -707,6 +707,7 @@ public class TransferServiceImpl implements TransferService {
         InternalTransfer transfer = loadForStateChange(factoryId, transferId);
         // 只有调出方可以发货 (因为要扣减调出方库存)
         assertSourceFactory(factoryId, transfer, "发货");
+        assertCrossFactoryShipment(transfer, "发运");
         assertStatus(transfer, TransferStatus.APPROVED, "发货");
 
         // D1: warehouse strategy per PR #310 §5 — 调拨发货扣减按 source warehouse 过滤.
@@ -738,6 +739,7 @@ public class TransferServiceImpl implements TransferService {
         InternalTransfer transfer = loadForStateChange(factoryId, transferId);
         // 只有调入方可以签收
         assertTargetFactory(factoryId, transfer, "签收");
+        assertCrossFactoryShipment(transfer, "签收");
         assertStatus(transfer, TransferStatus.SHIPPED, "签收");
 
         // 🔒 库存完整性修复 (2026-07-06): 在任何 DB mutation 之前, 逐行校验实收量不超过
@@ -792,7 +794,24 @@ public class TransferServiceImpl implements TransferService {
         InternalTransfer transfer = loadForStateChange(factoryId, transferId);
         // 只有调入方可以确认 (因为要增加调入方库存)
         assertTargetFactory(factoryId, transfer, "确认");
-        assertStatus(transfer, TransferStatus.RECEIVED, "确认");
+        boolean intraFactory = isIntraFactory(transfer);
+        assertStatus(transfer, intraFactory ? TransferStatus.APPROVED : TransferStatus.RECEIVED, "确认");
+
+        LocalDateTime now = LocalDateTime.now();
+        if (intraFactory) {
+            // Same-factory warehouse moves have one responsible warehouse role.  Do
+            // not manufacture a sales-like ship/receive lifecycle: confirmation
+            // atomically moves the source quantity and creates the target batch.
+            for (InternalTransferItem item : transfer.getItems()) {
+                deductSourceInventory(transfer.getSourceFactoryId(), transfer.getSourceWarehouseId(), item, true);
+                item.setReceivedQuantity(item.getQuantity());
+            }
+            if (!transfer.getItems().isEmpty()) {
+                transferItemRepository.saveAll(transfer.getItems());
+            }
+            transfer.setShippedAt(now);
+            transfer.setReceivedAt(now);
+        }
 
         // D1: warehouse strategy per PR #310 §5 — 调拨确认在 target warehouse 创建批次.
         String targetWarehouseId = transfer.getTargetWarehouseId();
@@ -801,9 +820,62 @@ public class TransferServiceImpl implements TransferService {
         }
 
         transfer.setStatus(TransferStatus.CONFIRMED);
-        transfer.setConfirmedAt(LocalDateTime.now());
+        transfer.setConfirmedAt(now);
         log.info("调拨确认: transferId={}, 库存已更新", transferId);
         return transferRepository.save(transfer);
+    }
+
+    @Override
+    @Transactional
+    public InternalTransferItem updateItemQuantity(String factoryId, String transferId,
+                                                    Long itemId, BigDecimal quantity) {
+        if (quantity == null || quantity.compareTo(BigDecimal.ZERO) <= 0) {
+            throw new BusinessException(400, "调拨数量必须大于 0")
+                    .withHint("请填写大于 0 的可调数量").withHintTarget("quantity");
+        }
+        InternalTransfer transfer = loadForStateChange(factoryId, transferId);
+        assertSourceFactory(factoryId, transfer, "修改调拨数量");
+        assertStatus(transfer, TransferStatus.DRAFT, "修改调拨数量");
+        InternalTransferItem item = transfer.getItems().stream()
+                .filter(candidate -> Objects.equals(candidate.getId(), itemId))
+                .findFirst()
+                .orElseThrow(() -> new BusinessException(404, "调拨明细不存在或不属于该调拨单"));
+        item.setQuantity(quantity);
+        item.setReceivedQuantity(null);
+        InternalTransferItem saved = transferItemRepository.save(item);
+        transfer.setTotalAmount(transfer.getItems().stream()
+                .map(candidate -> candidate.getQuantity() != null && candidate.getUnitPrice() != null
+                        ? candidate.getQuantity().multiply(candidate.getUnitPrice()) : BigDecimal.ZERO)
+                .reduce(BigDecimal.ZERO, BigDecimal::add));
+        transferRepository.save(transfer);
+        return saved;
+    }
+
+    @Override
+    @Transactional
+    public int closeOpenTransfersForProductionPlan(String factoryId, String productionPlanId,
+                                                    Long userId, String reason) {
+        if (factoryId == null || factoryId.isBlank() || productionPlanId == null || productionPlanId.isBlank()) {
+            return 0;
+        }
+        List<InternalTransfer> transfers = transferRepository
+                .findBySourceFactoryIdAndProductionPlanIdAndStatusInOrderByCreatedAtDesc(
+                        factoryId, productionPlanId,
+                        List.of(TransferStatus.DRAFT, TransferStatus.REQUESTED, TransferStatus.APPROVED));
+        int closed = 0;
+        for (InternalTransfer transfer : transfers) {
+            if (transfer.getStatus() == TransferStatus.REQUESTED && workflowEngine != null) {
+                workflowEngine.getLatestInstance(factoryId, "INVENTORY_TRANSFER", transfer.getId())
+                        .filter(instance -> instance.getStatus()
+                                == com.cretas.aims.entity.workflow.ApprovalWorkflowInstance.InstanceStatus.RUNNING)
+                        .ifPresent(instance -> workflowEngine.cancel(instance.getId(), userId, reason));
+            }
+            transfer.setStatus(TransferStatus.CANCELLED);
+            transfer.setRejectReason(reason);
+            transferRepository.save(transfer);
+            closed++;
+        }
+        return closed;
     }
 
     @Override
@@ -840,6 +912,18 @@ public class TransferServiceImpl implements TransferService {
             throw new BusinessException(403, action + "操作只允许调入方执行 (当前: " + factoryId
                     + ", 调入方: " + transfer.getTargetFactoryId() + ")")
                     .withHint("请使用调入方账号登录");
+        }
+    }
+
+    private boolean isIntraFactory(InternalTransfer transfer) {
+        return Objects.equals(transfer.getSourceFactoryId(), transfer.getTargetFactoryId());
+    }
+
+    private void assertCrossFactoryShipment(InternalTransfer transfer, String action) {
+        if (isIntraFactory(transfer)) {
+            throw new BusinessException(409, "同厂仓间调拨不需要" + action + "，请在审批通过后直接确认调拨")
+                    .withCode("TRANSFER_INTRA_FACTORY_CONFIRM_REQUIRED")
+                    .withHint("同厂调拨流程为：申请 → OA 批准 → 确认调拨");
         }
     }
 

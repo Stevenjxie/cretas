@@ -55,6 +55,20 @@ public interface TransferService {
 
     InternalTransfer confirmTransfer(String factoryId, String transferId, Long userId);
 
+    /**
+     * Changes one rolling production-transfer line while it is still a draft.
+     * Approval and stock movements always use the resulting persisted quantity.
+     */
+    InternalTransferItem updateItemQuantity(String factoryId, String transferId,
+                                            Long itemId, BigDecimal quantity);
+
+    /**
+     * Closes uncompleted rolling transfers when the linked production plan has
+     * formally completed. Confirmed transfers remain immutable audit facts.
+     */
+    int closeOpenTransfersForProductionPlan(String factoryId, String productionPlanId,
+                                            Long userId, String reason);
+
     InternalTransfer cancelTransfer(String factoryId, String transferId, Long userId, String reason);
 
     Map<String, Object> getTransferStatistics(String factoryId);

@@ -6,6 +6,7 @@ import com.cretas.aims.dto.orchestration.MaterialRequirement;
 import com.cretas.aims.dto.production.ProductionPlanDTO;
 import com.cretas.aims.entity.RawMaterialType;
 import com.cretas.aims.entity.enums.TransferItemType;
+import com.cretas.aims.entity.enums.TransferStatus;
 import com.cretas.aims.entity.inventory.InternalTransfer;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.repository.RawMaterialTypeRepository;
@@ -92,6 +93,21 @@ public class ProductionWorkflowOrchestrator {
             throw new BusinessException(404, "生产计划不存在: " + planId)
                     .withHint("请刷新生产计划列表后重新选择").withHintTarget("planId");
         }
+
+        // One production plan owns one open rolling transfer. Re-opening the action
+        // must return the same draft/approval task instead of creating duplicate
+        // quantities for the same production preparation.
+        List<InternalTransfer> existing = List.of();
+        if (plan.getPlannedQuantity() != null
+                && plan.getPlannedQuantity().compareTo(BigDecimal.ZERO) > 0) {
+            existing = transferRepository
+                    .findBySourceFactoryIdAndProductionPlanIdAndStatusInOrderByCreatedAtDesc(
+                            factoryId, planId,
+                            List.of(TransferStatus.DRAFT, TransferStatus.REQUESTED, TransferStatus.APPROVED));
+        }
+        if (!existing.isEmpty()) {
+            return existing.get(0);
+        }
         log.info("开始为生产计划生成调拨单: planId={}, product={}, qty={}",
                 planId, plan.getProductTypeId(), plan.getPlannedQuantity());
 
@@ -144,12 +160,10 @@ public class ProductionWorkflowOrchestrator {
         CreateTransferRequest request = buildTransferRequest(factoryId, target, plan, requirements);
         InternalTransfer transfer = transferService.createTransfer(factoryId, request, userId);
 
-        // Step 4.5: 设置 production_plan_id 关联 — 必须先持久化再调 requestTransfer
+        // Step 4.5: Persist the plan link. The task stays DRAFT so warehouse staff
+        // can continuously adjust the calculated rolling quantity before it enters OA.
         transfer.setProductionPlanId(planId);
         transferRepository.save(transfer);
-
-        // Step 5: 自动提交申请 — FUTURE TOOL: transfer_approve (action=request)
-        transfer = transferService.requestTransfer(factoryId, transfer.getId(), userId);
 
         log.info("调拨单生成成功: transferId={}, planId={}, items={}",
                 transfer.getId(), planId, requirements.size());
