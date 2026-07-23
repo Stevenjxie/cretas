@@ -526,13 +526,8 @@ def should_delegate(
         return True
     if spec.intent == "RESTAURANT_OPS_SALES_SUMMARY" and spec.relative_window:
         return True
-    # 时段人效 (「晚上生意怎么样」) — Java 无对应能力, 落回会拿到工厂
-    # 仪表盘不适用提示; resolver 存在即委托 (R20b)。
-    if spec.intent == "RESTAURANT_OPS_STAFFING_ADVICE":
-        return True
-    # R22 T3 结构化规格: LLM 层解析出 resolver 支持的意图 (置信过门 + 无澄清)
-    # 就委托 — 这是枚举放行规则表的替代物: T3 规格即路由决定。实体槽位由
-    # resolver 对 DB 验证, 失败模式是定向拒答/澄清, 不是错答。
+    # (R24 清理: R20b staffing / R22 llm-tier 显式规则已被下方规格即路由
+    #  通则覆盖, 删除; 实体槽位规则保留 — T2 向量层也可能带槽位。)
     if getattr(spec, "dish_slot", None) or getattr(spec, "store_slot", None):
         return True
     # R23 规格即路由全量化: 确定性 T1 或置信过门的 T3 解析出 resolver
@@ -540,7 +535,12 @@ def should_delegate(
     # (1) T2 向量层置信弱, 仍须经上面的显式规则 (选错意图会答错域);
     # (2) 2026-07-08 审计 A-3: 盈亏问落在不懂盈亏的 resolver 上会挂永久
     #     免责声明, 比 Java 原答案更差 — 该组合仍不直通。
-    if spec.source_tier in ("keyword", "llm") and not spec.clarification_needed:
+    tier_trusted = spec.source_tier in ("keyword", "llm") or (
+        # R24: T2 向量层高置信 (≥0.85 相似度) 也走规格即路由; 低于阈值仍走
+        # 上面的显式规则 — 向量选错意图会答错域, 只给高分直通。
+        spec.source_tier == "vector" and spec.confidence >= 0.85
+    )
+    if tier_trusted and not spec.clarification_needed:
         profit_ask = spec.asks_profitability or spec.wants_margin
         if not (profit_ask and spec.intent not in _MARGIN_CAPABLE_INTENTS):
             from smartbi.gold.restaurant_ops_router import is_supported_restaurant_ops_code
