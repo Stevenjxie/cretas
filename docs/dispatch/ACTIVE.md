@@ -1,11 +1,10 @@
 # Dispatch 台账 — ACTIVE
-**最后更新**：2026-07-22
+**最后更新**：2026-07-23
 
-**当前真值**：`origin/main` 为代码与合并真值；本文件为当前任务状态真值。完成记录见 [2026-07-22-active-history.md](archive/2026-07-22-active-history.md)，此前历史见 [2026-07-21-active-history.md](archive/2026-07-21-active-history.md)。
+**当前真值**：`origin/main` 为代码与合并真值；本文件为当前任务状态真值。完成记录见 [2026-07-23-active-history.md](archive/2026-07-23-active-history.md)，此前历史见 [2026-07-22-active-history.md](archive/2026-07-22-active-history.md)。
 
 ## 在飞任务
 
-- `BUG-F006-PROD-PLAN-ACTION-REGRESSION-001` — `review` — Owner: `/root` — Base SHA: `9ef4cde8a3e5e6859f3530c2bef5bd43b3f106af` — 实现提交 `88733170c51eb42f95f6e758e14c83122bccff05` 已恢复生产计划列表的状态驱动生产操作，并补齐核算门禁说明；目标 Vitest 6/6、Web `build:check` 通过，等待 PR 合入后归档并释放 scope；生产业务写入为 0，`NOT_DEPLOYED`。
 - `SEC-CREDENTIAL-ROTATION-20260719` — `blocked` — Owner: Codex coordinator — Base SHA: `1ba9a241a77144a80851051efbac584abf4db69d` — tracked tree、47/139 非受控副本、数据库/JWT/internal/BaoTa 轮换和生产验收已完成；仍需各供应商控制台吊销无法由当前 API 权限完成的旧长期凭证，详情见 [凭证轮换收尾记录](../security/credential-rotation-closeout-2026-07-20.md)。
 - `ENH-F006-SUPPLIER-IMPORT-001`（含 `REQ-F006-SUPPLIER-REQUIRED-CONTACT-001`、`ENH-F006-SUPPLIER-DETAIL-STATUS-001`）— `in-progress` — Owner: `/root` — Base SHA: `3ddf6751603476205457fcf8aa0ee9f1adbea792` — 复用现有供应链 Excel 共享能力，统一供应商必填资料、导入预览/幂等确认、状态生命周期、采购门禁与详情信息架构；只合入 `main`，严格 `NOT_DEPLOYED`，生产业务写入为 0。
 - `BUG-F006-MATERIAL-CATEGORY-CASCADE-001`（含 `BUG-F006-MATERIAL-AUTOFILL-UNIT-001`）— `in-progress` — Owner: `/root` — Base SHA: `3ddf6751603476205457fcf8aa0ee9f1adbea792` — 修复原料类型字典 category/L1/L2/L3 单一真值、异步级联与单位建议来源/手动覆盖语义，后端 fail-closed 校验；只合入 `main`，严格 `NOT_DEPLOYED`，生产业务写入为 0。
@@ -38,7 +37,6 @@
 - `BUG-F006-R2-WORKFLOW-INPUT-MODE-DERIVATION` — `in-progress` — Owner: `/root` — Base SHA: `457b3b5e9` — BOM 未完整前 Workflow 投入方式只显示“待 BOM 配置”，不得猜测 AT_LEAST_ONE；BOM 完整后由必需主项、替代集合与可选项结构化派生每组 ALL_REQUIRED/EXACTLY_ONE/OPTIONAL 只读规则，发布与报工共用同一 pinned 快照，严格 `NOT_DEPLOYED`。
 
 ## Scope 锁地图
-- `BUG-F006-PROD-PLAN-ACTION-REGRESSION-001`：仅 `web-admin/src/views/production/plans/list.vue`、对应 production plan IA 目标测试、`docs/qa/F006-MVP-E2E-bug-review-2026-07-20.md`、`docs/dispatch/ACTIVE.md` 与当日归档。验收：未完成普通计划可发现“核对结单/逐道录入”，未完成存货生产可发现“小结/撤销小结/停产”，完成计划保持只读；核算入口清楚区分可用与缺少完工数据，不再无解释置灰；不恢复仓储入库写动作，生产业务写入 0，`NOT_DEPLOYED`。
 - `SEC-CREDENTIAL-ROTATION-20260719`：`scripts/systemd/` 中遗留明文启动脚本、现有/新增 secret 扫描配置与测试、`.gitignore` / 凭证模板、`docs/dispatch/ACTIVE.md`、`docs/dispatch/archive/2026-07-19-active-history.md`；外部状态仅限已授权的 Cretas 47/139 服务器配置、PostgreSQL 角色密码、相关阿里云/API 凭证与必要服务重启。验收：tracked tree 与完整 Git 历史脱敏盘点、scanner gate、exact-main 发布门禁、Java/Python/网关健康、登录与 Restaurant Agent 只读 smoke、核心 ERP 零写入。
 - `ENH-F006-SUPPLIER-IMPORT-001`：供应商 Java Entity/DTO/Controller/Service/Repository、采购下单与供应关系门禁、共享 Excel 导入基础设施及目标测试；Web Admin 供应商列表/统一详情/新增编辑/导入与 API/types/tests；`docs/qa/F006-MVP-E2E-bug-review-2026-07-20.md`、`docs/dispatch/ACTIVE.md` 与当日归档。验收：真实 JPA Context（如触及 Entity/Repository）、Java API/Service、Web 组件/payload/build、预览零业务写、幂等与跨工厂隔离、历史只读兼容、`NOT_DEPLOYED`。
 - `BUG-F006-MATERIAL-CATEGORY-CASCADE-001`：Web Admin 原料类型字典创建/编辑级联与单位建议组件/helper/tests；Java 原料类型 DTO/Service/Controller 层级和单位兼容校验及目标测试；共享文档仅限复盘、ACTIVE 与当日归档。验收：L1/L2/L3 异步防 stale、单一 category 真值、manual/auto 来源、后端错配 4xx、kg/g 与 box/case/slice 合法生产形态、`NOT_DEPLOYED`。
