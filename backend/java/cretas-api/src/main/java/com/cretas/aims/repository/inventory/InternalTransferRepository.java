@@ -54,6 +54,13 @@ public interface InternalTransferRepository extends JpaRepository<InternalTransf
 
     Optional<InternalTransfer> findBySourceFactoryIdAndTransferNumber(String sourceFactoryId, String transferNumber);
 
+    /**
+     * Production-plan rolling transfer lookup.  The plan link is factory-scoped so a
+     * caller can never reuse another factory's transfer merely by knowing a plan id.
+     */
+    List<InternalTransfer> findBySourceFactoryIdAndProductionPlanIdAndStatusInOrderByCreatedAtDesc(
+            String sourceFactoryId, String productionPlanId, List<TransferStatus> statuses);
+
     @Query("SELECT COUNT(t) FROM InternalTransfer t WHERE t.sourceFactoryId = :factoryId AND FUNCTION('DATE', t.createdAt) = CURRENT_DATE")
     long countTodayBySourceFactory(@Param("factoryId") String factoryId);
 

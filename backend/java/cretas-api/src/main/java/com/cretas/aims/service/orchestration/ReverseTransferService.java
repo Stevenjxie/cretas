@@ -266,9 +266,7 @@ public class ReverseTransferService {
         try {
             transferService.requestTransfer(factoryId, transferId, SYSTEM_USER_ID);   // DRAFT → REQUESTED
             transferService.approveTransfer(factoryId, transferId, SYSTEM_USER_ID);   // REQUESTED → APPROVED
-            transferService.shipTransfer(factoryId, transferId, SYSTEM_USER_ID);      // APPROVED → SHIPPED (扣 WH-WKS)
-            transferService.receiveTransfer(factoryId, transferId, SYSTEM_USER_ID);   // SHIPPED → RECEIVED
-            transferService.confirmTransfer(factoryId, transferId, SYSTEM_USER_ID);   // RECEIVED → CONFIRMED (建 WH-LOG 批次)
+            transferService.confirmTransfer(factoryId, transferId, SYSTEM_USER_ID);   // APPROVED → CONFIRMED (同厂原子移库)
             log.info("D1 反向调拨同厂自动推进完成 (成品已入总仓 WH-LOG 可售): transferId={}, transferNumber={}",
                     transferId, transferNumber);
         } catch (Exception e) {

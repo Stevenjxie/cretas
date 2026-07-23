@@ -5,6 +5,9 @@ import com.cretas.aims.dto.production.ProductionPlanDTO;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.service.ProductionPlanService;
 import com.cretas.aims.service.inventory.TransferService;
+import com.cretas.aims.entity.enums.TransferStatus;
+import com.cretas.aims.entity.inventory.InternalTransfer;
+import com.cretas.aims.repository.inventory.InternalTransferRepository;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -39,11 +42,12 @@ class ProductionWorkflowOrchestratorGuardTest {
     @Mock private BomExpansionService bomExpansionService;
     @Mock private TransferService transferService;
     @Mock private ProductionPlanService productionPlanService;
+    @Mock private InternalTransferRepository transferRepository;
 
     private ProductionWorkflowOrchestrator newOrchestrator() {
         // 只用到前 3 个依赖; 其余传 null (守卫在触碰它们之前就抛异常).
         return new ProductionWorkflowOrchestrator(
-                bomExpansionService, transferService, productionPlanService, null, null,
+                bomExpansionService, transferService, productionPlanService, null, transferRepository,
                 com.cretas.aims.service.unit.TestUnitContractFactory.legacyFacade());
     }
 
@@ -97,5 +101,24 @@ class ProductionWorkflowOrchestratorGuardTest {
         assertThrows(BusinessException.class,
                 () -> orch.generateTransferFromPlan("F006", "plan-1", null, 1L));
         verify(transferService, never()).createTransfer(anyString(), any(), anyLong());
+    }
+
+    @Test
+    @DisplayName("已有当前计划的活跃调拨任务时幂等返回原单，不重复创建")
+    void openTransferForPlan_isReturnedWithoutCreatingAnother() {
+        when(productionPlanService.getProductionPlanById(anyString(), anyString()))
+                .thenReturn(plan(new BigDecimal("5")));
+        InternalTransfer existing = new InternalTransfer();
+        existing.setId("transfer-existing");
+        existing.setStatus(TransferStatus.DRAFT);
+        when(transferRepository.findBySourceFactoryIdAndProductionPlanIdAndStatusInOrderByCreatedAtDesc(
+                "F006", "plan-1", List.of(TransferStatus.DRAFT, TransferStatus.REQUESTED, TransferStatus.APPROVED)))
+                .thenReturn(List.of(existing));
+
+        InternalTransfer result = newOrchestrator().generateTransferFromPlan("F006", "plan-1", null, 1L);
+
+        assertEquals("transfer-existing", result.getId());
+        verify(transferService, never()).createTransfer(anyString(), any(), anyLong());
+        verify(bomExpansionService, never()).expandBOM(anyString(), anyString(), any());
     }
 }

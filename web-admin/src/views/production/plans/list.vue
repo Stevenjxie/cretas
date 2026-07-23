@@ -2902,7 +2902,7 @@ async function handleGenerateTransfer(row: TableRow) {
   if (actionLoading.value) return;
   try {
     await ElMessageBox.confirm(
-      `确定为计划 "${row.planNumber}" 生成调拨单？\n\n将根据 BOM 配方自动计算所需原辅料及包材，生成调拨申请发送给仓库。`,
+      `确定为计划 "${row.planNumber}" 创建备料调拨草稿？\n\n系统会根据 BOM 配方计算所需原辅料及包材；创建后可在调拨详情调整数量，再提交统一 OA 审批。`,
       '生成调拨单',
       { type: 'info', confirmButtonText: '生成', cancelButtonText: '取消' }
     );
@@ -2910,7 +2910,10 @@ async function handleGenerateTransfer(row: TableRow) {
     const response = await post(`/${factoryId.value}/production-plans/${row.id}/generate-transfer`);
     if (response.success) {
       const count = response.data?.items?.length || 0;
-      ElMessage.success(`调拨单已生成，共 ${count} 项物料，等待仓库审批`);
+      ElMessage.success(`备料调拨草稿已就绪，共 ${count} 项物料；请在调拨详情核对数量后提交 OA 审批`);
+      if (response.data?.id) {
+        router.push(`/transfer/detail/${response.data.id}`);
+      }
       loadData();
     } else {
       const msg = response.message || '生成失败';
