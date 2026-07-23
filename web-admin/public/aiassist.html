@@ -772,6 +772,251 @@
       to { opacity: 1; transform: translate(50%, 0); }
     }
 
+    /* --- 工厂 / 餐饮 tab --- */
+    .tab-switch {
+      display: inline-flex;
+      flex: 0 0 auto;
+      gap: 2px;
+      padding: 3px;
+      background: var(--soft);
+      border: 1px solid var(--line);
+      border-radius: 10px;
+    }
+
+    .tab-switch button {
+      padding: 5px 14px;
+      color: var(--muted);
+      font-size: 13px;
+      font-weight: 640;
+      background: transparent;
+      border: 0;
+      border-radius: 8px;
+      transition: background-color 180ms ease, color 180ms ease;
+    }
+
+    .tab-switch button[aria-pressed="true"] {
+      color: var(--ink);
+      background: var(--surface);
+      box-shadow: 0 1px 4px rgb(23 32 29 / 10%);
+    }
+
+    /* 餐饮 tab: 全局 accent 切为暖调, 其余组件自动跟随 */
+    .app.tab-restaurant {
+      --accent: #9a5423;
+      --accent-strong: #7c431b;
+      --accent-soft: #f4ebdf;
+    }
+
+    @keyframes tab-in {
+      from { opacity: 0; transform: translateY(6px); }
+      to { opacity: 1; transform: none; }
+    }
+
+    .tab-anim { animation: tab-in 220ms cubic-bezier(.16, 1, .3, 1); }
+
+    /* --- 学习模式 (纯静态, 零 token) --- */
+    .learn-launch {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      width: 100%;
+      margin-top: 14px;
+      padding: 14px 16px;
+      text-align: left;
+      color: var(--ink);
+      background: var(--accent-soft);
+      border: 1px solid transparent;
+      border-radius: 12px;
+      transition: border-color 160ms ease, transform 160ms ease;
+    }
+
+    .learn-launch:hover { border-color: var(--accent); }
+    .learn-launch:active { transform: scale(.99); }
+
+    .learn-launch svg {
+      flex: 0 0 auto;
+      width: 22px;
+      height: 22px;
+      color: var(--accent-strong);
+      fill: none;
+      stroke: currentcolor;
+      stroke-width: 1.8;
+      stroke-linecap: round;
+      stroke-linejoin: round;
+    }
+
+    .learn-launch strong {
+      display: block;
+      font-size: 14px;
+      font-weight: 700;
+    }
+
+    .learn-launch em {
+      display: block;
+      margin-top: 2px;
+      color: var(--muted);
+      font-size: 12px;
+      font-style: normal;
+    }
+
+    .learn {
+      display: flex;
+      justify-content: center;
+      padding: 22px 20px 30px;
+    }
+
+    .learn-card { width: min(100%, 640px); }
+
+    .learn-top {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      margin-bottom: 12px;
+    }
+
+    .learn-kicker {
+      color: var(--accent-strong);
+      font-size: 12px;
+      font-weight: 700;
+    }
+
+    .learn-dots {
+      display: flex;
+      flex: 1;
+      gap: 6px;
+      justify-content: center;
+    }
+
+    .learn-dots i {
+      width: 6px;
+      height: 6px;
+      background: var(--line);
+      border-radius: 50%;
+      transition: background-color 200ms ease, transform 200ms ease;
+    }
+
+    .learn-dots i.on {
+      background: var(--accent);
+      transform: scale(1.3);
+    }
+
+    .learn-exit {
+      padding: 4px 8px;
+      color: var(--muted);
+      font-size: 12px;
+      background: transparent;
+      border: 0;
+      border-radius: 8px;
+    }
+
+    .learn-exit:hover { color: var(--ink); background: var(--soft); }
+
+    .lesson {
+      padding: 22px 22px 20px;
+      background: var(--surface);
+      border: 1px solid var(--line);
+      border-radius: 14px;
+    }
+
+    .lesson h3 {
+      margin: 0 0 12px;
+      font-size: 19px;
+      font-weight: 740;
+      letter-spacing: -.01em;
+      text-wrap: balance;
+    }
+
+    .lesson-body { font-size: 14px; line-height: 1.7; }
+    .lesson-body p { margin: 0 0 10px; }
+    .lesson-body ul { margin: 0 0 10px; padding-left: 19px; }
+    .lesson-body li { margin-bottom: 5px; }
+    .lesson-body strong { font-weight: 700; }
+
+    .lesson-note {
+      margin-top: 12px;
+      padding: 10px 14px;
+      color: var(--accent-strong);
+      font-size: 13px;
+      line-height: 1.6;
+      background: var(--accent-soft);
+      border-radius: 10px;
+    }
+
+    .learn-asks {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-top: 16px;
+    }
+
+    .learn-asks-label {
+      width: 100%;
+      color: var(--subtle);
+      font-size: 12px;
+    }
+
+    .learn-asks button {
+      padding: 7px 14px;
+      color: var(--accent-strong);
+      font-size: 13px;
+      background: var(--surface);
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      transition: background-color 150ms ease, border-color 150ms ease;
+    }
+
+    .learn-asks button:hover {
+      background: var(--accent-soft);
+      border-color: var(--accent);
+    }
+
+    .learn-nav {
+      display: flex;
+      gap: 10px;
+      justify-content: space-between;
+      margin-top: 16px;
+    }
+
+    .learn-nav button {
+      min-width: 96px;
+      padding: 9px 18px;
+      color: var(--ink);
+      font-size: 14px;
+      font-weight: 640;
+      background: var(--surface);
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      transition: background-color 150ms ease, opacity 150ms ease;
+    }
+
+    .learn-nav button.primary {
+      color: #fff;
+      background: var(--accent);
+      border-color: var(--accent);
+    }
+
+    .learn-nav button.primary:hover { background: var(--accent-strong); }
+    .learn-nav button:not(.primary):hover { background: var(--soft); }
+
+    .learn-nav button:disabled {
+      cursor: default;
+      opacity: .38;
+    }
+
+    @keyframes lesson-next {
+      from { opacity: 0; transform: translateX(14px); }
+      to { opacity: 1; transform: none; }
+    }
+
+    @keyframes lesson-prev {
+      from { opacity: 0; transform: translateX(-14px); }
+      to { opacity: 1; transform: none; }
+    }
+
+    .lesson-enter-next { animation: lesson-next 200ms cubic-bezier(.16, 1, .3, 1); }
+    .lesson-enter-prev { animation: lesson-prev 200ms cubic-bezier(.16, 1, .3, 1); }
+
     @media (max-width: 560px) {
       .app { border: 0; }
       .topbar { min-height: 60px; padding-inline: 12px; }
@@ -780,6 +1025,10 @@
       .brand-copy p { font-size: 11px; }
       .manual-link span { display: none; }
       .top-actions { gap: 0; }
+      .tab-switch button { padding: 5px 10px; font-size: 12px; }
+      .learn { padding: 16px 14px 24px; }
+      .lesson { padding: 18px 16px 16px; }
+      .learn-nav button { min-width: 84px; }
       .feed-inner { padding: 18px 16px 22px; }
       .welcome { padding-block: 10px 22px; }
       .welcome-lead { margin-bottom: 18px; }
@@ -812,11 +1061,15 @@
     <header class="topbar">
       <div class="brand-mark" aria-hidden="true">白</div>
       <div class="brand-copy">
-        <h1>工厂操作助手</h1>
-        <p><span class="status-dot" aria-hidden="true"></span>解释 SOP 与系统逻辑，不执行业务操作</p>
+        <h1 id="assistant-title">工厂操作助手</h1>
+        <p><span class="status-dot" aria-hidden="true"></span><span id="assistant-subtitle">解释 SOP 与系统逻辑，不执行业务操作</span></p>
+      </div>
+      <div class="tab-switch" id="tab-switch" role="tablist" aria-label="助手类型">
+        <button type="button" data-tab="factory" role="tab" aria-pressed="true">工厂</button>
+        <button type="button" data-tab="restaurant" role="tab" aria-pressed="false">餐饮</button>
       </div>
       <nav class="top-actions" aria-label="对话操作">
-        <a class="manual-link" href="/lsmsop/" target="_blank" rel="noopener" aria-label="打开生产全链路 SOP">
+        <a class="manual-link" id="manual-link" href="/lsmsop/" target="_blank" rel="noopener" aria-label="打开生产全链路 SOP">
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 4.5A2.5 2.5 0 0 1 6.5 2H20v18H6.5A2.5 2.5 0 0 0 4 22.5z"/><path d="M4 4.5v18M8 6h8M8 10h8"/></svg>
           <span>完整 SOP</span>
         </a>
@@ -829,37 +1082,76 @@
     <section class="feed" id="feed" aria-label="对话内容">
       <div class="feed-inner">
         <section class="welcome" id="welcome" aria-labelledby="welcome-title">
-          <div class="welcome-card">
-            <div class="welcome-eyebrow"><span class="status-dot" aria-hidden="true"></span>最新 F006 生产全链路口径</div>
-            <h2 id="welcome-title">今天要处理哪一步？</h2>
-            <p class="welcome-lead">告诉我你卡住的页面、字段或业务状态。我会按当前 SOP 给出操作路径、填写内容、验收结果和阻塞条件。</p>
+          <div class="welcome-card" id="welcome-card">
+            <div id="welcome-factory">
+              <div class="welcome-eyebrow"><span class="status-dot" aria-hidden="true"></span>最新 F006 生产全链路口径</div>
+              <h2 id="welcome-title">今天要处理哪一步？</h2>
+              <p class="welcome-lead">告诉我你卡住的页面、字段或业务状态。我会按当前 SOP 给出操作路径、填写内容、验收结果和阻塞条件。</p>
 
-            <div class="scope-panel" aria-label="回答范围">
-              <div class="scope-row">
-                <span class="scope-label">测试深度</span>
-                <div class="segment" id="depth-segment" role="group" aria-label="测试深度">
-                  <button type="button" data-value="mvp" aria-pressed="true">MVP</button>
-                  <button type="button" data-value="medium" aria-pressed="false">中度</button>
-                  <button type="button" data-value="full" aria-pressed="false">全量</button>
+              <div class="scope-panel" aria-label="回答范围">
+                <div class="scope-row">
+                  <span class="scope-label">测试深度</span>
+                  <div class="segment" id="depth-segment" role="group" aria-label="测试深度">
+                    <button type="button" data-value="mvp" aria-pressed="true">MVP</button>
+                    <button type="button" data-value="medium" aria-pressed="false">中度</button>
+                    <button type="button" data-value="full" aria-pressed="false">全量</button>
+                  </div>
+                </div>
+                <div class="scope-row">
+                  <span class="scope-label">业务线</span>
+                  <div class="segment" id="line-segment" role="group" aria-label="业务线">
+                    <button type="button" data-value="general" aria-pressed="true">通用</button>
+                    <button type="button" data-value="stock" aria-pressed="false">存货生产</button>
+                    <button type="button" data-value="sales" aria-pressed="false">销售订单</button>
+                  </div>
                 </div>
               </div>
-              <div class="scope-row">
-                <span class="scope-label">业务线</span>
-                <div class="segment" id="line-segment" role="group" aria-label="业务线">
-                  <button type="button" data-value="general" aria-pressed="true">通用</button>
-                  <button type="button" data-value="stock" aria-pressed="false">存货生产</button>
-                  <button type="button" data-value="sales" aria-pressed="false">销售订单</button>
-                </div>
+
+              <div class="suggestions" aria-label="推荐问题">
+                <button class="suggestion" type="button" data-question="从零开始创建黄油鸡，MVP 最小闭环先做哪些步骤？"><span class="suggestion-index">01</span><span>从零开始创建黄油鸡，MVP 先做什么？</span></button>
+                <button class="suggestion" type="button" data-question="成品 1盒=800克，为什么 Workflow 里不再填写 1kg 产多少盒？"><span class="suggestion-index">02</span><span>SKU、BOM 与 Workflow 的单位怎么分工？</span></button>
+                <button class="suggestion" type="button" data-question="生产计划选择成品时出现多个 Workflow，系统应该怎么匹配？"><span class="suggestion-index">03</span><span>选成品时多个 Workflow 冲突怎么处理？</span></button>
+                <button class="suggestion" type="button" data-question="报工完成后成品为什么还没进主仓？请按节点帮我排查。"><span class="suggestion-index">04</span><span>报工后成品还没进主仓，先查哪里？</span></button>
               </div>
+              <p class="welcome-note">也可以上传当前页面截图。助手会读取截图文字后结合操作手册回答，不会替你提交或修改业务数据。</p>
             </div>
 
-            <div class="suggestions" aria-label="推荐问题">
-              <button class="suggestion" type="button" data-question="从零开始创建黄油鸡，MVP 最小闭环先做哪些步骤？"><span class="suggestion-index">01</span><span>从零开始创建黄油鸡，MVP 先做什么？</span></button>
-              <button class="suggestion" type="button" data-question="成品 1盒=800克，为什么 Workflow 里不再填写 1kg 产多少盒？"><span class="suggestion-index">02</span><span>SKU、BOM 与 Workflow 的单位怎么分工？</span></button>
-              <button class="suggestion" type="button" data-question="生产计划选择成品时出现多个 Workflow，系统应该怎么匹配？"><span class="suggestion-index">03</span><span>选成品时多个 Workflow 冲突怎么处理？</span></button>
-              <button class="suggestion" type="button" data-question="报工完成后成品为什么还没进主仓？请按节点帮我排查。"><span class="suggestion-index">04</span><span>报工后成品还没进主仓，先查哪里？</span></button>
+            <div id="welcome-restaurant" class="hidden">
+              <div class="welcome-eyebrow"><span class="status-dot" aria-hidden="true"></span>餐饮全链路导览</div>
+              <h2>想了解哪一块？</h2>
+              <p class="welcome-lead">问我板块去哪找、图表什么意思、系统支持哪些维度分析、餐饮老板在意什么。我只做导览和解释——具体数据分析请去 SmartBI 餐饮 AI。</p>
+
+              <div class="suggestions" aria-label="推荐问题">
+                <button class="suggestion" type="button" data-question="我们的系统支持哪些维度的餐饮分析？想看某一类内容应该去哪个板块？"><span class="suggestion-index">01</span><span>我们支持哪些维度分析？</span></button>
+                <button class="suggestion" type="button" data-question="餐饮老板最看重哪些指标？为什么这些指标重要？"><span class="suggestion-index">02</span><span>餐饮老板最看重什么指标？</span></button>
+                <button class="suggestion" type="button" data-question="大众点评的数据我们是怎么用的？点评分析能得出什么结论？"><span class="suggestion-index">03</span><span>大众点评的数据我们怎么用？</span></button>
+                <button class="suggestion" type="button" data-question="菜品四象限图怎么读？四个象限分别代表什么，应该采取什么动作？"><span class="suggestion-index">04</span><span>菜品 4 象限图怎么读？</span></button>
+              </div>
+
+              <button class="learn-launch" id="learn-launch" type="button">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg>
+                <span>
+                  <strong>学习：餐饮分析入门</strong>
+                  <em>6 节小课 · 约 10 分钟 · 从「老板在意什么」讲到「方案怎么给」</em>
+                </span>
+              </button>
+              <p class="welcome-note">学习模式为预编排内容，可离线浏览；每课末尾可选择深入提问。</p>
             </div>
-            <p class="welcome-note">也可以上传当前页面截图。助手会读取截图文字后结合操作手册回答，不会替你提交或修改业务数据。</p>
+          </div>
+        </section>
+
+        <section class="learn hidden" id="learn" aria-label="餐饮分析入门课程">
+          <div class="learn-card">
+            <div class="learn-top">
+              <span class="learn-kicker" id="learn-kicker">第 1 课 / 6</span>
+              <div class="learn-dots" id="learn-dots" aria-hidden="true"></div>
+              <button class="learn-exit" id="learn-exit" type="button">退出学习</button>
+            </div>
+            <div id="lesson-view"></div>
+            <div class="learn-nav">
+              <button type="button" id="learn-prev">上一课</button>
+              <button type="button" id="learn-next" class="primary">下一课</button>
+            </div>
           </div>
         </section>
         <div class="message-list hidden" id="message-list" aria-live="polite" aria-relevant="additions"></div>
@@ -897,7 +1189,25 @@
       var CHAT_ENDPOINT = '/api/food-kb/manual-chat';
       var RELATED_ENDPOINT = '/api/food-kb/manual-chat/related';
       var MAX_HISTORY_MESSAGES = 10;
-      var STORAGE_KEY = 'cretas_factory_ai_session_v2';
+      var TAB_KEY = 'cretas_aiassist_tab';
+      var TABS = {
+        factory: {
+          title: '工厂操作助手',
+          subtitle: '解释 SOP 与系统逻辑，不执行业务操作',
+          manualHref: '/lsmsop/',
+          manualAria: '打开生产全链路 SOP',
+          placeholder: '描述页面、字段或当前状态…',
+          storageKey: 'cretas_factory_ai_session_v2'
+        },
+        restaurant: {
+          title: '餐饮导览助手',
+          subtitle: '解释板块、图表与分析方法，不做计算',
+          manualHref: '/cysop/',
+          manualAria: '打开餐饮全链路 SOP',
+          placeholder: '问板块、图表或分析方法…',
+          storageKey: 'cretas_restaurant_ai_session_v1'
+        }
+      };
 
       var $ = function (id) { return document.getElementById(id); };
       var feed = $('feed');
@@ -913,6 +1223,7 @@
       var toast = $('toast');
 
       var state = {
+        tab: 'factory',
         depth: 'mvp',
         businessLine: 'general',
         messages: [],
@@ -921,8 +1232,98 @@
         sending: false,
         composing: false,
         stickToBottom: true,
-        controller: null
+        controller: null,
+        learnActive: false,
+        learnIndex: 0
       };
+
+      /* 学习模式课程 — 预编排静态内容, 除「深入问一问」外零网络请求 */
+      var LESSONS = [
+        {
+          title: '为什么要有餐饮分析模块？',
+          body: '<p>先记住一个背景：<strong>AI 在餐饮的渗透是所有行业里最慢的一批</strong>。餐饮本身不够规范，一家店往往同时用四五套系统（收银 POS、财务、进销存、预定、内控），数据靠人工录入、口径互相打架。</p>' +
+            '<ul><li>老板的真实处境：营业额和毛利看着很高，但房租、人工、损耗、折旧层层吃掉，净利很难看；</li>' +
+            '<li>人工占比逼近 40% 是普遍危机，决策还停留在「月底开会复盘」，等发现问题已经过了一个月；</li>' +
+            '<li>所以我们的定位不是「给老板看报表」，而是：<strong>把数据做准 → 让问题次日可见 → 给出可执行的下一步</strong>。</li></ul>' +
+            '<p>AI 在这里的角色是「代理人」：暴露问题、定位责任，而不是炫技的全自动。</p>',
+          note: '内容人员要记住：客户买的不是图表，是「今天的损耗，明天就能看到」这句承诺。',
+          asks: [
+            { label: '系统里有哪些餐饮板块？', question: '我们的餐饮系统有哪些板块？每个板块给用户看什么？' },
+            { label: '数据从哪来？', question: '餐饮分析的数据是怎么进系统的？POS、财务、评价数据怎么上传？' }
+          ]
+        },
+        {
+          title: '老板视角的核心指标',
+          body: '<p>跟餐饮老板对话，围绕四条线展开：</p>' +
+            '<ul><li><strong>收入线</strong>：营业额、客单价、翻台率/上座率、宴席频率——正餐老板最先看的是「包厢满不满、翻台快不快」；</li>' +
+            '<li><strong>成本线</strong>：食材成本率（实财占比）、人力成本率（40% 是危机线）、隐性损耗（餐具、纸巾、打包盒这类「一号品」黑洞）；</li>' +
+            '<li><strong>利润线</strong>：毛利率 → 净利率。正餐净利做到 4 个点就值得对赌——不要用互联网行业的利润率去想餐饮；</li>' +
+            '<li><strong>现金流线</strong>：充卡/储值依赖度——储值是预收不是收入，依赖过高是隐性风险。</li></ul>',
+          note: '话术技巧：跟老板谈「同样 1 万营业额，昨天成本为什么涨了」，比谈「数据中台」有效一百倍。',
+          asks: [
+            { label: '翻台率去哪看？', question: '翻台率是什么？在系统哪个板块能看到相关分析？' },
+            { label: '什么是成本刚性？', question: '成本刚性（成本弹性指数）是什么意思？为什么说它是救命指标？' },
+            { label: '一号品是什么？', question: '餐饮里说的一号品损耗指什么？系统怎么管损耗？' }
+          ]
+        },
+        {
+          title: '我们支持的维度分析地图',
+          body: '<p>系统的餐饮分析能力按维度记，共六大类：</p>' +
+            '<ul><li><strong>财务维</strong>：毛利主轴（营收→成本→毛利→净利）、费用拆解、门店/部门损益一页纸、瀑布分解；</li>' +
+            '<li><strong>菜品维</strong>：四象限菜单工程、菜品毛利排名、配方成本卡、长尾滞销识别、套餐拆分；</li>' +
+            '<li><strong>门店维</strong>：多门店对比排名、跨连锁基准、坪效/上座率、时段热力（星期×小时）；</li>' +
+            '<li><strong>供应链维</strong>：供应商价格异常预警、领料/损耗/盘点差异、智能补货与采购预测；</li>' +
+            '<li><strong>客群维</strong>：会员 RFM 分层、客流画像、评价情感与竞对对比；</li>' +
+            '<li><strong>诊断维</strong>：16 项健康指标自动体检（食材率、人力率、折扣率、撤单率、翻台、成本刚性、外卖依赖度等），超标自动触发解决方案剧本。</li></ul>' +
+            '<p>每一类都支持同比/环比和按子行业（火锅、快餐、奶茶、正餐…）对标基准。</p>',
+          note: '内容人员判断「这个问题去哪看」的口诀：先分清客户问的是钱（财务）、菜（菜品）、店（门店）、货（供应链）、人（客群），再对应板块。',
+          asks: [
+            { label: '16 项诊断都有什么？', question: '系统的餐饮诊断引擎都检查哪些指标？超标了会怎样？' },
+            { label: '同比环比怎么看？', question: '餐饮营收的同比环比分析在哪里看？能得出什么结论？' }
+          ]
+        },
+        {
+          title: '图表怎么读：每张图能得出什么结论',
+          body: '<ul><li><strong>菜品四象限（Kasavana-Smith）</strong>：横轴销量、纵轴毛利率，中位数分割。明星（高销高利）＝招牌保住；金牛（高销低利）＝走量引流；潜力（低销高利）＝推一把；瘦狗（低销低利）＝考虑下架；</li>' +
+            '<li><strong>瀑布图</strong>：营收一步步减到净利，看「利润被哪一层吃掉了」；</li>' +
+            '<li><strong>桑基图</strong>：资金/成本流向，适合讲「钱从哪来到哪去」；</li>' +
+            '<li><strong>RFM 散点</strong>：会员按最近消费/频次/金额分层——冠军客户维护、流失风险客户召回；</li>' +
+            '<li><strong>时段热力图</strong>：星期×小时的营收分布，找「中午淡季」这类改造空间；</li>' +
+            '<li><strong>雷达图</strong>：本店 vs 大众点评竞对的多维差距；</li>' +
+            '<li><strong>双轴图</strong>：量+率一起看（如评价量+平均星级），单看任何一条都会误判。</li></ul>',
+          note: '给客户讲图表的模板：这张图是什么 → 你的店落在哪 → 和基准差多少 → 建议做什么。永远讲到「建议做什么」才算讲完。',
+          asks: [
+            { label: '四象限的动作建议', question: '菜品四象限每个象限对应什么经营动作？' },
+            { label: '热力图能发现什么？', question: '时段营业热力图能发现什么经营机会？' }
+          ]
+        },
+        {
+          title: '解决方案怎么给：套路与三个「知道」',
+          body: '<p>标准链路永远是四步：<strong>分析现状 → 给市场同类对标 → 出具体方案 → 跟进落地</strong>。只给诊断不给处方，等于没说。</p>' +
+            '<p>关键认知：动作分两类——</p>' +
+            '<ul><li><strong>一次性动作</strong>：改头图、调套餐结构、改宣传语，做完一两次就稳定；</li>' +
+            '<li><strong>持续性动作</strong>：评价维护、点评互动、新菜单上线后的培训→验收→回馈，需要不同部门的人不断参与。方案里必须写清「谁、什么时候做、什么时候看结果」。</li></ul>' +
+            '<p>衡量方案好坏的三个「知道」：老板<strong>知道要干啥</strong>；每个执行的人<strong>知道自己要干啥</strong>；所有人<strong>知道结果</strong>。三个都满足才是闭环，我们不做一锤子买卖。</p>',
+          note: '业态口径：中餐、快餐、茶饮、咖啡的消费逻辑完全不同，方案和对标都要先切业态（如中餐人均 80-120 一档），不可混比。',
+          asks: [
+            { label: '目标拆分怎么做？', question: '经营目标怎么从年拆到月周日？没完成怎么预警？' },
+            { label: '诊断报告长什么样？', question: 'AI 经营体检报告包含什么内容？在哪里生成？' }
+          ]
+        },
+        {
+          title: '大众点评与外部数据的口径',
+          body: '<p>为什么从点评切入：它是餐饮对外展现的<strong>核心界面</strong>，认知度最高。上海 21 万家饭店，绝大多数把点评页面做得很糟糕——但优化恰恰<strong>有规律可循</strong>。</p>' +
+            '<ul><li>能优化什么：头图、套餐组合、图片展示、宣传语、评价互动节奏；</li>' +
+            '<li>我们的做法：分析你的页面 → 给市场同类对标 → 出方案 → 确认后执行并展示进展；</li>' +
+            '<li>口径迁移：点评的逻辑跑通了，小红书、抖音是同一套打法的复制；</li>' +
+            '<li>无形的东西也能量化：比如把服务员收盘时的对话转成文字分析服务质量——「抓不出来的东西，帮你明确化」。</li></ul>',
+          note: '红线口径：我们做的是分析、对标、出方案，不是刷评、不是买流量。对外表述永远站在「帮商家把真实体验呈现好」这一边。',
+          asks: [
+            { label: '平台分析板块在哪？', question: '平台评价分析在系统哪个板块？能看到什么图表？' },
+            { label: '竞对差距怎么看？', question: '和大众点评竞对的差距分析怎么看？雷达图各维度是什么？' }
+          ]
+        }
+      ];
 
       var toastTimer;
 
@@ -1094,6 +1495,7 @@
       }
 
       function setConversationVisible() {
+        closeLearn(true);
         welcome.classList.add('hidden');
         messageList.classList.remove('hidden');
       }
@@ -1108,7 +1510,7 @@
 
       function persistSession() {
         try {
-          sessionStorage.setItem(STORAGE_KEY, JSON.stringify({
+          sessionStorage.setItem(TABS[state.tab].storageKey, JSON.stringify({
             depth: state.depth,
             businessLine: state.businessLine,
             messages: state.messages.slice(-20)
@@ -1299,7 +1701,12 @@
           method: 'POST',
           signal: controller.signal,
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
+          body: JSON.stringify(state.tab === 'restaurant' ? {
+            question: question,
+            category: 'restaurant',
+            history: priorHistory,
+            image_base64: imageData
+          } : {
             question: question,
             category: 'factory',
             depth: state.depth,
@@ -1399,11 +1806,12 @@
         state.sending = false;
         messageList.innerHTML = '';
         messageList.classList.add('hidden');
+        closeLearn(true);
         welcome.classList.remove('hidden');
         clearAttachment();
         questionInput.value = '';
         updateComposer();
-        try { sessionStorage.removeItem(STORAGE_KEY); } catch (_) { /* optional */ }
+        try { sessionStorage.removeItem(TABS[state.tab].storageKey); } catch (_) { /* optional */ }
         feed.scrollTop = 0;
         questionInput.focus();
         showToast('已开始新对话');
@@ -1411,12 +1819,14 @@
 
       function restoreSession() {
         try {
-          var saved = JSON.parse(sessionStorage.getItem(STORAGE_KEY) || 'null');
+          var saved = JSON.parse(sessionStorage.getItem(TABS[state.tab].storageKey) || 'null');
           if (!saved || !Array.isArray(saved.messages)) return;
-          if (['mvp', 'medium', 'full'].indexOf(saved.depth) >= 0) state.depth = saved.depth;
-          if (['general', 'stock', 'sales'].indexOf(saved.businessLine) >= 0) state.businessLine = saved.businessLine;
-          setSegment($('depth-segment'), state.depth);
-          setSegment($('line-segment'), state.businessLine);
+          if (state.tab === 'factory') {
+            if (['mvp', 'medium', 'full'].indexOf(saved.depth) >= 0) state.depth = saved.depth;
+            if (['general', 'stock', 'sales'].indexOf(saved.businessLine) >= 0) state.businessLine = saved.businessLine;
+            setSegment($('depth-segment'), state.depth);
+            setSegment($('line-segment'), state.businessLine);
+          }
           saved.messages.slice(-20).forEach(function (message) {
             if (!message || typeof message.content !== 'string') return;
             if (message.role === 'user') {
@@ -1429,7 +1839,106 @@
           });
           if (state.messages.length) scrollToBottom(true);
         } catch (_) {
-          try { sessionStorage.removeItem(STORAGE_KEY); } catch (_) { /* optional */ }
+          try { sessionStorage.removeItem(TABS[state.tab].storageKey); } catch (_) { /* optional */ }
+        }
+      }
+
+      /* ---------- 工厂 / 餐饮 tab ---------- */
+
+      function applyTabChrome(animate) {
+        var config = TABS[state.tab];
+        document.querySelector('.app').classList.toggle('tab-restaurant', state.tab === 'restaurant');
+        $('assistant-title').textContent = config.title;
+        $('assistant-subtitle').textContent = config.subtitle;
+        var manualLink = $('manual-link');
+        manualLink.href = config.manualHref;
+        manualLink.setAttribute('aria-label', config.manualAria);
+        questionInput.placeholder = config.placeholder;
+        $('welcome-factory').classList.toggle('hidden', state.tab !== 'factory');
+        $('welcome-restaurant').classList.toggle('hidden', state.tab !== 'restaurant');
+        Array.prototype.forEach.call($('tab-switch').querySelectorAll('button'), function (button) {
+          button.setAttribute('aria-pressed', button.dataset.tab === state.tab ? 'true' : 'false');
+        });
+        if (animate) {
+          var card = $('welcome-card');
+          card.classList.remove('tab-anim');
+          void card.offsetWidth;
+          card.classList.add('tab-anim');
+        }
+      }
+
+      function switchTab(tab) {
+        if (!TABS[tab] || tab === state.tab) return;
+        if (state.controller) state.controller.abort();
+        state.controller = null;
+        state.sending = false;
+        persistSession();
+        state.tab = tab;
+        try { sessionStorage.setItem(TAB_KEY, tab); } catch (_) { /* optional */ }
+        closeLearn(true);
+        state.messages = [];
+        messageList.innerHTML = '';
+        messageList.classList.add('hidden');
+        welcome.classList.remove('hidden');
+        clearAttachment();
+        questionInput.value = '';
+        applyTabChrome(true);
+        restoreSession();
+        if (!state.messages.length) feed.scrollTop = 0;
+        updateComposer();
+      }
+
+      /* ---------- 学习模式 (纯静态) ---------- */
+
+      function renderLesson(direction) {
+        var lesson = LESSONS[state.learnIndex];
+        $('learn-kicker').textContent = '第 ' + (state.learnIndex + 1) + ' 课 / ' + LESSONS.length;
+        var dots = $('learn-dots');
+        dots.innerHTML = '';
+        LESSONS.forEach(function (_, i) {
+          var dot = document.createElement('i');
+          if (i === state.learnIndex) dot.className = 'on';
+          dots.appendChild(dot);
+        });
+        var view = $('lesson-view');
+        var asksHtml = '';
+        if (lesson.asks && lesson.asks.length) {
+          asksHtml = '<div class="learn-asks"><span class="learn-asks-label">深入问一问（将调用问答助手）</span>' +
+            lesson.asks.map(function (ask) {
+              return '<button type="button" data-question="' + escapeHtml(ask.question) + '">' + escapeHtml(ask.label) + '</button>';
+            }).join('') + '</div>';
+        }
+        view.innerHTML = '<div class="lesson' +
+          (direction === 'next' ? ' lesson-enter-next' : direction === 'prev' ? ' lesson-enter-prev' : '') +
+          '"><h3>' + escapeHtml(lesson.title) + '</h3>' +
+          '<div class="lesson-body">' + lesson.body + '</div>' +
+          (lesson.note ? '<div class="lesson-note">' + escapeHtml(lesson.note) + '</div>' : '') +
+          asksHtml + '</div>';
+        $('learn-prev').disabled = state.learnIndex === 0;
+        $('learn-next').textContent = state.learnIndex === LESSONS.length - 1 ? '完成学习' : '下一课';
+        feed.scrollTop = 0;
+      }
+
+      function openLearn() {
+        state.learnActive = true;
+        state.learnIndex = 0;
+        welcome.classList.add('hidden');
+        messageList.classList.add('hidden');
+        $('learn').classList.remove('hidden');
+        renderLesson(null);
+      }
+
+      function closeLearn(silent) {
+        if (!state.learnActive) return;
+        state.learnActive = false;
+        $('learn').classList.add('hidden');
+        if (!silent) {
+          if (state.messages.length) {
+            messageList.classList.remove('hidden');
+          } else {
+            welcome.classList.remove('hidden');
+          }
+          feed.scrollTop = 0;
         }
       }
 
@@ -1476,6 +1985,47 @@
       $('remove-attachment').addEventListener('click', clearAttachment);
       $('new-chat').addEventListener('click', startNewConversation);
 
+      $('tab-switch').addEventListener('click', function (event) {
+        var button = event.target.closest('button[data-tab]');
+        if (!button) return;
+        switchTab(button.dataset.tab);
+      });
+
+      $('learn-launch').addEventListener('click', openLearn);
+      $('learn-exit').addEventListener('click', function () { closeLearn(false); });
+      $('learn-prev').addEventListener('click', function () {
+        if (state.learnIndex === 0) return;
+        state.learnIndex -= 1;
+        renderLesson('prev');
+      });
+      $('learn-next').addEventListener('click', function () {
+        if (state.learnIndex >= LESSONS.length - 1) {
+          closeLearn(false);
+          showToast('已完成餐饮分析入门课程');
+          return;
+        }
+        state.learnIndex += 1;
+        renderLesson('next');
+      });
+      $('lesson-view').addEventListener('click', function (event) {
+        var button = event.target.closest('button[data-question]');
+        if (!button) return;
+        closeLearn(true);
+        welcome.classList.remove('hidden');
+        sendQuestion(button.dataset.question);
+      });
+      document.addEventListener('keydown', function (event) {
+        if (!state.learnActive) return;
+        if (event.key === 'ArrowRight') $('learn-next').click();
+        else if (event.key === 'ArrowLeft') $('learn-prev').click();
+        else if (event.key === 'Escape') closeLearn(false);
+      });
+
+      try {
+        var storedTab = sessionStorage.getItem(TAB_KEY);
+        if (storedTab && TABS[storedTab]) state.tab = storedTab;
+      } catch (_) { /* optional */ }
+      applyTabChrome(false);
       restoreSession();
       updateComposer();
     }());
