@@ -139,6 +139,42 @@ async def _call_llm(prompt: str, *, timeout_s: int, tier=None) -> str:
         return ""
 
 
+_TWO_STAGE_THRESHOLD = 80  # 候选条数超过此值启用两段式
+_SHORTLIST_SIZE = 8
+
+
+def build_coarse_prompt(query: str, visible_intents: List[Dict[str, Any]]) -> str:
+    """R30b 粗选段: 只列 code(name), 无描述无例句 — 每条 ~15 tokens。
+    全目录单段 prompt 实测 11.3k tokens, 大头是几百条描述本身;
+    两段式 (粗选 top-N → 精选带全描述) 总量降 ~60%。"""
+    lines = ["从下面的意图代码列表里选出最可能匹配用户输入的候选, 最多"
+             f" {_SHORTLIST_SIZE} 个, 按可能性排序。只输出 JSON:"
+             ' {"candidates": ["CODE1", "CODE2", ...]}。没有任何可能的匹配时输出'
+             ' {"candidates": []}。\n\n意图代码列表:']
+    for it in visible_intents:
+        code = it.get("intent_code", "?")
+        name = it.get("intent_name", "")
+        lines.append(f"- {code} ({name})")
+    lines.append(f"\n用户输入: {query}")
+    lines.append("JSON:")
+    return "\n".join(lines)
+
+
+def parse_coarse_shortlist(raw: str, visible_intents: List[Dict[str, Any]]) -> Optional[List[Dict[str, Any]]]:
+    """Validate coarse output strictly against the real catalogue.
+    None = anything odd → caller falls back to single-stage full prompt."""
+    try:
+        parsed = json.loads(raw)
+    except Exception:
+        return None
+    codes = parsed.get("candidates") if isinstance(parsed, dict) else None
+    if not isinstance(codes, list) or not codes:
+        return None
+    by_code = {str(it.get("intent_code")): it for it in visible_intents}
+    picked = [by_code[str(c)] for c in codes[:_SHORTLIST_SIZE] if str(c) in by_code]
+    return picked or None
+
+
 class LlmMatcher:
     """Stage 8 LLM fallback wrap.
 
@@ -178,7 +214,27 @@ class LlmMatcher:
             ]
             rag_block = "参考历史:\n" + "\n".join(rag_lines) + "\n\n"
 
-        prompt = rag_block + build_prompt(query, visible_intents, history or [])
+        # R30b 两段式: 大目录先粗选 (code+name, ~3k tokens) 再精选
+        # (top-N 全描述, ~1k)。粗选失败/超时 fail-open 回单段全目录 —
+        # 行为最多退化为旧版, 不会更差。
+        fine_intents = visible_intents
+        if len(visible_intents) > _TWO_STAGE_THRESHOLD:
+            try:
+                coarse_raw = await _call_llm(
+                    build_coarse_prompt(query, visible_intents),
+                    timeout_s=self.timeout_s, tier=tier,
+                )
+                shortlist = parse_coarse_shortlist(coarse_raw or "", visible_intents)
+                if shortlist:
+                    fine_intents = shortlist
+                    logger.info(
+                        "Stage 8 two-stage: %d candidates -> %d shortlist",
+                        len(visible_intents), len(shortlist),
+                    )
+            except Exception:
+                logger.warning("Stage 8 coarse pass failed, falling back to full catalogue")
+
+        prompt = rag_block + build_prompt(query, fine_intents, history or [])
 
         if tier is not None:
             logger.debug("Stage 8 LLM with tier hint: %s", tier)
