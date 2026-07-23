@@ -279,6 +279,11 @@ public class BomSeasoningWorkspaceServiceImpl implements BomSeasoningWorkspaceSe
             throw new BusinessException(400, "所选工序不是该 SKU 的有效工序")
                     .withHint("请从当前 SKU 的 workflow 中选择工序");
         }
+        if (!matched.standardUsageSupported()) {
+            throw new BusinessException(400, "当前 Workflow 工序的产出单位缺失、冲突或不支持，无法保存工序辅料")
+                    .withCode("SEASONING_STANDARD_BASIS_UNSUPPORTED")
+                    .withHint("请回到 Workflow 检查该工序的产出端口及半成品单位，保存修订后再配置辅料");
+        }
         return matched;
     }
 

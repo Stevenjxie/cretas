@@ -4,6 +4,7 @@ import com.cretas.aims.dto.ProductProcessWorkflowDTO;
 import com.cretas.aims.dto.bom.BomSeasoningWorkspaceResponse;
 import com.cretas.aims.dto.bom.BomSubstituteInput;
 import com.cretas.aims.dto.bom.SeasoningBindingCreateRequest;
+import com.cretas.aims.dto.bom.SeasoningBindingUpdateRequest;
 import com.cretas.aims.dto.workflow.WorkflowRevisionCandidateDTO;
 import com.cretas.aims.entity.ProductWorkProcess;
 import com.cretas.aims.entity.RawMaterialType;
@@ -266,6 +267,43 @@ class BomSeasoningWorkspaceServiceTest {
 
         assertFalse(response.getProcesses().get(0).isStandardUsageSupported());
         assertNull(response.getProcesses().get(0).getStandardBasisUnit());
+    }
+
+    @Test
+    void createRejectsUnsupportedPinnedOutputBasisBeforeClaimingRevision() {
+        BomRecipe recipe = recipe(BomRecipe.Status.DRAFT, 3L);
+        when(recipeRepository.findById(RECIPE)).thenReturn(Optional.of(recipe));
+        pinWithConflictingOutputs(recipe, "p1");
+
+        BusinessException exception = assertThrows(BusinessException.class,
+                () -> service.createBinding(FACTORY, RECIPE, "p1", createRequest(3L, "node-p1")));
+
+        assertEquals(400, exception.getCode());
+        assertEquals("SEASONING_STANDARD_BASIS_UNSUPPORTED", exception.getErrorCode());
+        verify(recipeRepository, never()).claimSeasoningRevision(anyString(), anyString(), anyLong());
+        verify(seasoningItemRepository, never()).save(any());
+    }
+
+    @Test
+    void updateRejectsUnsupportedPinnedOutputBasisBeforeClaimingRevision() {
+        BomRecipe recipe = recipe(BomRecipe.Status.DRAFT, 3L);
+        BomSeasoningItem existing = binding(11L, "node-p1", "p1", "salt", "5");
+        when(recipeRepository.findById(RECIPE)).thenReturn(Optional.of(recipe));
+        when(seasoningItemRepository.findByIdAndRecipeId(11L, RECIPE)).thenReturn(Optional.of(existing));
+        pinWithConflictingOutputs(recipe, "p1");
+        SeasoningBindingUpdateRequest request = new SeasoningBindingUpdateRequest();
+        request.setExpectedRevision(3L);
+        request.setMaterialTypeId("salt");
+        request.setDosagePerKgG(new BigDecimal("12"));
+        request.setSubsequentPotRatio(new BigDecimal("0.5"));
+
+        BusinessException exception = assertThrows(BusinessException.class,
+                () -> service.updateBinding(FACTORY, RECIPE, 11L, request));
+
+        assertEquals(400, exception.getCode());
+        assertEquals("SEASONING_STANDARD_BASIS_UNSUPPORTED", exception.getErrorCode());
+        verify(recipeRepository, never()).claimSeasoningRevision(anyString(), anyString(), anyLong());
+        verify(seasoningItemRepository, never()).save(any());
     }
 
     @Test
