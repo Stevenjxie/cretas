@@ -1,0 +1,1121 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <link rel="icon" href="data:," />
+  <title>F006 生产全链路手工测试 SOP</title>
+  <style>
+    :root {
+      --paper: #f3efe6;
+      --sheet: #fffdf8;
+      --ink: #1d2521;
+      --muted: #68706b;
+      --line: #d7d0c3;
+      --green: #205f49;
+      --green-soft: #e8f1ec;
+      --orange: #d56b2d;
+      --orange-soft: #faeee4;
+      --blue: #2d5f86;
+      --blue-soft: #e8f0f6;
+      --red: #a44232;
+      --red-soft: #faece8;
+      --shadow: 0 18px 55px rgba(41, 48, 43, .10);
+      --radius: 16px;
+    }
+
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+    body {
+      margin: 0;
+      background:
+        linear-gradient(rgba(29,37,33,.025) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(29,37,33,.025) 1px, transparent 1px),
+        var(--paper);
+      background-size: 24px 24px;
+      color: var(--ink);
+      font-family: "Microsoft YaHei", "PingFang SC", system-ui, sans-serif;
+      line-height: 1.65;
+    }
+
+    button, input { font: inherit; }
+    a { color: inherit; }
+    .shell { max-width: 1440px; margin: 0 auto; padding: 28px; display: grid; grid-template-columns: 260px minmax(0, 1fr); gap: 24px; }
+    .sidebar { position: sticky; top: 20px; height: calc(100vh - 40px); padding: 22px 18px; background: #17241e; color: #f8f4e9; border-radius: 20px; overflow: auto; box-shadow: var(--shadow); }
+    .brand { padding: 5px 8px 20px; border-bottom: 1px solid rgba(255,255,255,.14); }
+    .brand-mark { font: 700 13px/1.2 ui-monospace, SFMono-Regular, Consolas, monospace; letter-spacing: .14em; color: #e5a36f; }
+    .brand h1 { margin: 8px 0 2px; font-family: "STSong", "SimSun", serif; font-size: 24px; line-height: 1.25; }
+    .brand p { margin: 0; color: #b9c2bd; font-size: 12px; }
+    .progress-box { margin: 18px 8px; }
+    .progress-label { display: flex; justify-content: space-between; color: #d7ddd9; font-size: 12px; }
+    .progress-track { height: 7px; margin-top: 7px; border-radius: 9px; background: rgba(255,255,255,.13); overflow: hidden; }
+    .progress-bar { height: 100%; width: 0; background: #e7a16f; transition: width .25s ease; }
+    nav a { display: block; padding: 9px 10px; margin: 2px 0; border-radius: 8px; color: #ccd3cf; font-size: 13px; text-decoration: none; }
+    nav a:hover { background: rgba(255,255,255,.09); color: white; }
+    nav .branch-a { border-left: 3px solid #de8a51; }
+    nav .branch-b { border-left: 3px solid #6e9bbb; }
+    .side-actions { display: grid; gap: 8px; margin: 20px 8px 0; }
+    .side-actions button { border: 1px solid rgba(255,255,255,.2); background: transparent; color: #f5f1e8; padding: 9px 12px; border-radius: 8px; cursor: pointer; }
+    .side-actions button:hover { background: rgba(255,255,255,.08); }
+
+    main { min-width: 0; }
+    .hero { position: relative; overflow: hidden; background: var(--sheet); border: 1px solid var(--line); border-radius: 24px; padding: 40px; box-shadow: var(--shadow); }
+    .hero::after { content: "F006"; position: absolute; right: -22px; bottom: -62px; font: 900 150px/1 ui-monospace, Consolas, monospace; color: rgba(32,95,73,.055); }
+    .eyebrow { font: 700 12px/1.2 ui-monospace, SFMono-Regular, Consolas, monospace; letter-spacing: .14em; color: var(--orange); }
+    .hero h2 { max-width: 900px; margin: 12px 0 12px; font-family: "STSong", "SimSun", serif; font-size: clamp(34px, 5vw, 62px); line-height: 1.06; letter-spacing: -.025em; }
+    .hero p { max-width: 850px; color: var(--muted); font-size: 16px; }
+    .meta-row { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 24px; }
+    .stamp { padding: 7px 11px; border: 1px solid var(--line); border-radius: 999px; background: #faf7f0; font-size: 12px; }
+    .stamp.ok { border-color: #a9cbbb; background: var(--green-soft); color: var(--green); }
+    .stamp.code { font-family: ui-monospace, Consolas, monospace; }
+
+    .filter-panel { display: flex; flex-wrap: wrap; gap: 14px; align-items: flex-end; margin-top: 22px; }
+    .filter-group { display: grid; gap: 5px; }
+    .filter-label { color: var(--muted); font: 800 10px/1 ui-monospace, Consolas, monospace; letter-spacing: .1em; text-transform: uppercase; }
+    .route-switch, .depth-switch { display: flex; gap: 8px; margin: 0; padding: 7px; width: fit-content; border: 1px solid var(--line); border-radius: 12px; background: #ece7dc; }
+    .route-switch button, .depth-switch button { border: 0; padding: 9px 15px; border-radius: 8px; background: transparent; color: var(--muted); cursor: pointer; }
+    .route-switch button.active, .depth-switch button.active { background: var(--ink); color: white; box-shadow: 0 5px 15px rgba(0,0,0,.15); }
+    body[data-route="stock"] .sales-only { display: none !important; }
+    body[data-route="sales"] .stock-only { display: none !important; }
+    body[data-depth="mvp"] [data-min-depth="medium"],
+    body[data-depth="mvp"] [data-min-depth="full"],
+    body[data-depth="medium"] [data-min-depth="full"] { display: none !important; }
+
+    .depth-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin: 18px 0 2px; }
+    .depth-card { position: relative; padding: 16px; border: 1px solid var(--line); border-radius: 13px; background: #faf8f2; overflow: hidden; }
+    .depth-card::before { content: ""; position: absolute; inset: 0 auto 0 0; width: 4px; background: var(--green); }
+    .depth-card.medium::before { background: var(--orange); }
+    .depth-card.full::before { background: var(--red); }
+    .depth-card h4 { margin: 0 0 5px; font-size: 15px; }
+    .depth-card p { margin: 0; color: var(--muted); font-size: 12px; }
+    .depth-card .depth-time { display: inline-block; margin-top: 9px; color: var(--ink); font: 800 11px/1 ui-monospace, Consolas, monospace; }
+    .depth-badge { display: inline-flex; align-items: center; margin-left: 7px; padding: 2px 7px; border-radius: 999px; vertical-align: 2px; font: 800 10px/1.45 ui-monospace, Consolas, monospace; letter-spacing: .04em; }
+    .depth-badge.mvp { color: var(--green); background: var(--green-soft); }
+    .depth-badge.medium { color: #8b451d; background: var(--orange-soft); }
+    .depth-badge.full { color: var(--red); background: var(--red-soft); }
+    .depth-legend { margin-top: 10px; color: var(--muted); font-size: 12px; }
+    .depth-legend strong { color: var(--ink); }
+
+    section { scroll-margin-top: 20px; margin-top: 24px; background: var(--sheet); border: 1px solid var(--line); border-radius: var(--radius); padding: 28px; box-shadow: 0 8px 25px rgba(41,48,43,.055); }
+    .section-head { display: flex; gap: 14px; justify-content: space-between; align-items: flex-start; margin-bottom: 18px; }
+    .section-no { flex: 0 0 auto; display: grid; place-items: center; width: 38px; height: 38px; border-radius: 50%; background: var(--ink); color: #fff; font: 700 14px/1 ui-monospace, Consolas, monospace; }
+    .section-title { flex: 1; }
+    .section-title h3 { margin: 0; font-family: "STSong", "SimSun", serif; font-size: 27px; line-height: 1.25; }
+    .section-title p { margin: 3px 0 0; color: var(--muted); font-size: 13px; }
+    .path { display: inline-flex; flex-wrap: wrap; gap: 5px; align-items: center; margin: 8px 0 16px; padding: 7px 10px; background: #f0ece3; border-radius: 8px; color: #37423c; font: 600 12px/1.45 ui-monospace, Consolas, monospace; }
+    .path b { color: var(--orange); }
+
+    .flow-map { display: grid; grid-template-columns: repeat(7, minmax(110px, 1fr)); gap: 9px; margin-top: 22px; }
+    .flow-node { position: relative; min-height: 90px; padding: 14px; border: 1px solid var(--line); border-radius: 12px; background: #faf8f2; }
+    .flow-node:not(:last-child)::after { content: "→"; position: absolute; right: -14px; top: 31px; z-index: 2; color: var(--orange); font-weight: 900; }
+    .flow-node small { display: block; color: var(--muted); font-size: 10px; letter-spacing: .08em; text-transform: uppercase; }
+    .flow-node strong { display: block; margin-top: 5px; line-height: 1.35; }
+    .flow-node.split-a { border-top: 4px solid var(--orange); }
+    .flow-node.split-b { border-top: 4px solid var(--blue); }
+
+    .callout { margin: 14px 0; padding: 14px 16px; border-left: 4px solid var(--green); background: var(--green-soft); border-radius: 0 10px 10px 0; }
+    .callout.warning { border-color: var(--orange); background: var(--orange-soft); }
+    .callout.danger { border-color: var(--red); background: var(--red-soft); }
+    .callout.blue { border-color: var(--blue); background: var(--blue-soft); }
+    .callout strong { display: block; margin-bottom: 3px; }
+
+    .steps { display: grid; gap: 12px; }
+    .step { display: grid; grid-template-columns: 34px minmax(0, 1fr); gap: 12px; padding: 15px; border: 1px solid #e2ddd3; border-radius: 12px; background: #fffefa; transition: .2s ease; }
+    .step:has(input:checked) { background: #f0f6f2; border-color: #b9d2c5; }
+    .check { position: relative; width: 24px; height: 24px; margin-top: 2px; }
+    .check input { position: absolute; inset: 0; width: 24px; height: 24px; margin: 0; opacity: 0; cursor: pointer; z-index: 2; }
+    .check span { display: grid; place-items: center; width: 24px; height: 24px; border: 2px solid #8a918d; border-radius: 6px; cursor: pointer; }
+    .check input:checked + span { background: var(--green); border-color: var(--green); color: white; }
+    .check input:checked + span::after { content: "✓"; font-weight: 900; }
+    .step h4 { margin: 0 0 4px; font-size: 15px; }
+    .step p { margin: 0; color: #4f5853; font-size: 13px; }
+    .step ul, .step ol { margin: 7px 0 0; padding-left: 20px; color: #4f5853; font-size: 13px; }
+    .step li + li { margin-top: 4px; }
+    .expect { display: block; margin-top: 8px; padding: 8px 10px; border-radius: 7px; background: #f3f0e9; color: #2d3732; font-size: 12px; }
+    .expect::before { content: "验收 ｜ "; color: var(--green); font-weight: 800; }
+    code { padding: 2px 5px; border-radius: 5px; background: #efebe2; color: #7f3f21; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: .92em; }
+
+    table { width: 100%; border-collapse: collapse; font-size: 13px; }
+    th, td { padding: 11px 10px; border-bottom: 1px solid #ddd7cb; text-align: left; vertical-align: top; }
+    th { background: #f0ece3; color: #3e4742; font-size: 12px; }
+    tr:last-child td { border-bottom: 0; }
+    .table-wrap { overflow-x: auto; border: 1px solid #ddd7cb; border-radius: 12px; }
+    .badge { display: inline-block; padding: 2px 7px; border-radius: 999px; font-size: 11px; font-weight: 700; white-space: nowrap; }
+    .badge.ui { background: var(--green-soft); color: var(--green); }
+    .badge.code { background: var(--blue-soft); color: var(--blue); }
+    .badge.manual { background: var(--orange-soft); color: #8b451d; }
+
+    .record-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+    .record-field { display: grid; grid-template-columns: 145px 1fr; border-bottom: 1px dashed #bcb4a7; padding: 9px 0; font-size: 13px; }
+    .record-field span:first-child { color: var(--muted); }
+    .blank { min-height: 22px; }
+    .copy-toolbar { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin: 14px 0 18px; padding: 13px; border: 1px solid var(--line); border-radius: 12px; background: #f0ece3; }
+    .copy-prefix { display: flex; align-items: center; gap: 8px; flex: 1 1 330px; font-size: 13px; font-weight: 700; }
+    .copy-prefix input { min-width: 0; flex: 1; padding: 9px 11px; border: 1px solid #c8c0b3; border-radius: 8px; background: #fffdf8; color: var(--ink); outline: none; }
+    .copy-prefix input:focus { border-color: var(--green); box-shadow: 0 0 0 3px rgba(32,95,73,.1); }
+    .copy-all, .copy-button { border: 0; border-radius: 8px; background: var(--ink); color: white; cursor: pointer; font-weight: 700; transition: transform .15s ease, background .15s ease; }
+    .copy-all { padding: 9px 14px; }
+    .copy-button { flex: 0 0 66px; padding: 7px 10px; font-size: 12px; }
+    .copy-all:hover, .copy-button:hover { background: var(--green); transform: translateY(-1px); }
+    .copy-button.copied { background: var(--green); }
+    .copy-status { min-height: 20px; color: var(--green); font-size: 12px; font-weight: 700; }
+    .copy-group { margin-top: 12px; border: 1px solid #ddd7cb; border-radius: 12px; overflow: hidden; background: #fffefa; }
+    .copy-group summary { cursor: pointer; padding: 12px 14px; background: #ebe6db; font-weight: 800; font-size: 14px; }
+    .copy-list { display: grid; }
+    .copy-row { display: grid; grid-template-columns: 94px minmax(0, 1fr) 66px; gap: 9px; align-items: center; min-height: 48px; padding: 7px 10px; border-top: 1px solid #e6e0d5; }
+    .copy-row:first-child { border-top: 0; }
+    .copy-kind { color: var(--muted); font: 700 11px/1.35 ui-monospace, Consolas, monospace; letter-spacing: .03em; }
+    .copy-content { display: block; min-width: 0; padding: 7px 9px; overflow: hidden; border: 1px solid #e3ded3; border-radius: 7px; background: #f7f4ed; color: #334039; text-overflow: ellipsis; white-space: nowrap; }
+    .copy-compact { max-width: 760px; margin-top: 12px; padding: 9px 11px; }
+    .copy-compact .copy-prefix { flex-basis: 290px; }
+    .inline-copy { grid-template-columns: minmax(0, 1fr) 66px; min-height: 0; margin-top: 10px; padding: 0; border: 0; background: transparent; }
+    .inline-copy .copy-content { font-size: 12px; background: #f1eee7; }
+    .field-copy-list { display: grid; gap: 6px; margin-top: 10px; padding-top: 10px; border-top: 1px dashed #d6cfc2; }
+    .field-copy-row { grid-template-columns: 128px minmax(0, 1fr) 66px; min-height: 0; padding: 0; border: 0; background: transparent; }
+    .field-copy-label { color: #59635d; font-size: 12px; font-weight: 800; }
+    .field-copy-row .copy-content { font-size: 12px; background: #f1eee7; }
+    .footer-note { text-align: center; color: var(--muted); font-size: 12px; padding: 24px; }
+
+    @media (max-width: 1050px) {
+      .shell { grid-template-columns: 1fr; }
+      .sidebar { position: static; height: auto; }
+      nav { display: grid; grid-template-columns: repeat(2, 1fr); }
+      .flow-map { grid-template-columns: repeat(2, 1fr); }
+      .flow-node::after { display: none; }
+    }
+    @media (max-width: 680px) {
+      .shell { padding: 12px; }
+      .hero, section { padding: 20px; border-radius: 14px; }
+      .record-grid { grid-template-columns: 1fr; }
+      .flow-map { grid-template-columns: 1fr; }
+      nav { grid-template-columns: 1fr; }
+      .copy-row { grid-template-columns: 70px minmax(0, 1fr) 58px; gap: 6px; }
+      .copy-button { flex-basis: 58px; padding-inline: 6px; }
+      .field-copy-row { grid-template-columns: 92px minmax(0, 1fr) 58px; }
+      .depth-grid { grid-template-columns: 1fr; }
+      .filter-group { width: 100%; min-width: 0; }
+      .route-switch, .depth-switch { width: 100%; gap: 4px; padding: 5px; overflow: visible; }
+      .route-switch button, .depth-switch button { flex: 1 1 0; min-width: 0; padding: 9px 4px; font-size: 13px; white-space: nowrap; }
+    }
+    @media print {
+      @page { size: A4; margin: 13mm; }
+      body { background: white; font-size: 10pt; }
+      .shell { display: block; max-width: none; padding: 0; }
+      .sidebar, .route-switch, .depth-switch, .screen-only { display: none !important; }
+      .copy-button, .copy-all { display: none !important; }
+      .copy-row { grid-template-columns: 90px 1fr; }
+      .copy-content { white-space: normal; }
+      .hero, section { box-shadow: none; border-color: #aaa; break-inside: avoid; margin-top: 12px; padding: 16px; }
+      .hero h2 { font-size: 28pt; }
+      .flow-map { grid-template-columns: repeat(7, 1fr); }
+      .flow-node { min-height: 68px; padding: 8px; }
+      .step { break-inside: avoid; padding: 10px; }
+      body[data-route] .sales-only, body[data-route] .stock-only { display: block !important; }
+      body[data-depth="mvp"] [data-min-depth="medium"],
+      body[data-depth="mvp"] [data-min-depth="full"],
+      body[data-depth="medium"] [data-min-depth="full"] { display: none !important; }
+    }
+  </style>
+</head>
+<body data-route="all" data-depth="mvp">
+  <div class="shell">
+    <aside class="sidebar">
+      <div class="brand">
+        <div class="brand-mark">CRETAS · OPERATIONS BOOK</div>
+        <h1>生产全链路 SOP</h1>
+        <p>F006 手工回归 / 存货生产 + 销售订单</p>
+      </div>
+      <div class="progress-box">
+        <div class="progress-label"><span>本机勾选进度</span><strong id="progressText">0 / 0</strong></div>
+        <div class="progress-track"><div class="progress-bar" id="progressBar"></div></div>
+      </div>
+      <nav>
+        <a href="#scope">00 · 使用说明</a>
+        <a href="#map">01 · 全链路地图</a>
+        <a href="#raw">02 · 原料建档</a>
+        <a href="#sku">03 · SKU 建档</a>
+        <a href="#process">04 · 工序建档</a>
+        <a href="#bom">05 · BOM / 配方</a>
+        <a href="#workflow">06 · Workflow</a>
+        <a href="#opening">07 · 期初库存</a>
+        <a href="#oa-approval">07O · 统一 OA 审批</a>
+        <a class="branch-a" href="#stock">A · 存货生产</a>
+        <a class="branch-b" href="#sales">B · 销售订单</a>
+        <a href="#topology">P · 选品冲突矩阵</a>
+        <a class="branch-b" href="#procurement">B1 · 缺料采购</a>
+        <a href="#warehouse-feed">W1 · 生产前领料</a>
+        <a href="#report">08 · 逐道报工</a>
+        <a href="#report-approval" data-min-depth="medium">08A · 报工审批</a>
+        <a href="#quality" data-min-depth="full">Q · 质量闭环</a>
+        <a href="#settle">09 · 入库与结单</a>
+        <a href="#reversal" data-min-depth="full">R · 撤回与冲销</a>
+        <a href="#warehouse-output">W2 · 完工入仓</a>
+        <a href="#warehouse-exceptions" data-min-depth="full">W3 · 仓储异常</a>
+        <a href="#cost">09A · 成本核算</a>
+        <a class="branch-b" href="#sales-close">B2 · 销售闭环</a>
+        <a href="#stocktake">10 · 盘点闭环</a>
+        <a href="#acceptance">11 · 验收清单</a>
+      </nav>
+      <div class="side-actions screen-only">
+        <button onclick="window.print()">打印 / 存为 PDF</button>
+        <button onclick="resetChecks()">清空本机勾选</button>
+      </div>
+    </aside>
+
+    <main>
+      <header class="hero" id="scope">
+        <div class="eyebrow">CURRENT MAIN · MANUAL REGRESSION · 2026-07-19</div>
+        <h2>从建档，到入库、生产、报工与盘点</h2>
+        <p>这是一份可直接照着点击的 F006 手工测试手册。先选生产来源，再选测试深度：MVP 用最少步骤证明链路能跑通；中度闭环增加关键审批和业务异常；全量闭环覆盖治理、质量、冲销与全数据核对。</p>
+        <div class="meta-row">
+          <span class="stamp ok">生产 Workflow / 逐道报工：已做 F006 视觉验证</span>
+          <span class="stamp">SKU / BOM / 销售 / 盘点：按最新 main UI 校准</span>
+          <span class="stamp code">origin/main ebbc989332</span>
+          <span class="stamp">单文件 · 离线可用 · 可打印</span>
+        </div>
+        <div class="filter-panel screen-only">
+          <div class="filter-group">
+            <span class="filter-label">生产来源</span>
+            <div class="route-switch" aria-label="生产来源筛选">
+              <button data-route-btn="all" class="active">两条线</button>
+              <button data-route-btn="stock">存货生产</button>
+              <button data-route-btn="sales">销售订单</button>
+            </div>
+          </div>
+          <div class="filter-group">
+            <span class="filter-label">测试深度（逐层包含）</span>
+            <div class="depth-switch" aria-label="测试深度筛选">
+              <button data-depth-btn="mvp" class="active">MVP 最小闭环</button>
+              <button data-depth-btn="medium">中度闭环</button>
+              <button data-depth-btn="full">全量闭环</button>
+            </div>
+          </div>
+        </div>
+        <div class="copy-toolbar copy-compact screen-only">
+          <label class="copy-prefix">复制内容统一前缀 <input id="copyPrefixTop" value="SOP-20260719-01" maxlength="40" aria-label="复制内容统一前缀" /></label>
+          <span class="copy-status" id="copyStatusTop" aria-live="polite">仅手工输入字段显示复制按钮</span>
+        </div>
+      </header>
+
+      <section>
+        <div class="section-head">
+          <span class="section-no">00</span>
+          <div class="section-title"><h3>先读这三条</h3><p>测试边界与证据口径</p></div>
+        </div>
+        <div class="callout danger"><strong>只在 F006 做写入</strong>登录后先确认当前工厂/账号属于 F006。发现租户不符、共享全局数据或其它工厂数据时立即停止。</div>
+        <div class="callout warning"><strong>“保存草稿”不等于报工，“审批通过”不等于库存已应用</strong>生产用“正式报工”形成正式记录；盘点只有点击“应用差异”后才调整库存。</div>
+        <div class="callout blue"><strong>本 SOP 的验证等级</strong><span class="badge ui">视觉实测</span> 表示曾在生产 F006 通过页面触发；<span class="badge code">当前 UI 校准</span> 表示已用最新 main 页面与业务逻辑核对；<span class="badge manual">本轮手测</span> 是你这次需要记录的实际结果。</div>
+        <div class="depth-grid">
+          <div class="depth-card"><h4>MVP · 非阻塞最小闭环</h4><p>只走正常数据：建档 → 一条可用 Workflow → 期初库存 → 一条生产路线 → 正式报工 → 必要审批 → 仓库确认入库 → 成本与盘点。</p><span class="depth-time">目标：先证明能闭环，不故意造异常</span></div>
+          <div class="depth-card medium"><h4>中度 · 关键业务闭环</h4><p>包含全部 MVP，再加入四类基础拓扑、缺料采购、报工审批、完整调拨、部分发货、开票收款和关键成本分摊。</p><span class="depth-time">目标：覆盖日常运营最常见分支</span></div>
+          <div class="depth-card full"><h4>全量 · 全数据闭环</h4><p>包含全部中度，再加入冲突矩阵、采购异常、质检、不良、退料报损、撤回冲销、ECN、跨单合并和分析核对。</p><span class="depth-time">目标：验证异常、治理和审计证据</span></div>
+        </div>
+        <p class="depth-legend"><strong>继承规则：</strong>中度自动包含 MVP；全量自动包含 MVP + 中度。步骤标题右侧的徽标表示它最早从哪一层开始出现。</p>
+        <div class="table-wrap"><table><thead><tr><th>链路段</th><th>MVP 最小闭环</th><th>中度新增</th><th>全量新增</th></tr></thead><tbody>
+          <tr><td>建档与工程</td><td>原料、SKU、基础工序、基础 BOM、成品归属 Workflow</td><td>工序辅料/锅序、单位防错、原料归属与四类拓扑</td><td>BOM ECN、版本影响分析、候选冲突矩阵</td></tr>
+          <tr><td>计划与供应</td><td>存货计划或已备料销售订单计划</td><td>缺料采购、审批/收货、多拓扑选品</td><td>采购异常/退货/付款、跨销售订单合并</td></tr>
+          <tr><td>生产与仓储</td><td>领料、逐道报工、结算、仓库确认入库、成品调拨</td><td>报工审批、库存不足、联产分摊、调拨差异</td><td>质检、不良、退料损耗、在途、撤回冲销</td></tr>
+          <tr><td>销售、成本与盘点</td><td>正式发货、基础成本、库存复核与盘点应用</td><td>部分发货、开票收款、成本分摊汇总</td><td>退货退款、BOM 达成率、工序转化率、三价与预警</td></tr>
+        </tbody></table></div>
+        <div class="record-grid">
+          <div class="record-field"><span>测试日期 / 操作人</span><span class="blank"></span></div>
+          <div class="record-field"><span>账号 / 工厂</span><span>F006</span></div>
+          <div class="record-field"><span>测试前缀</span><span>SOP-日期-姓名缩写</span></div>
+          <div class="record-field"><span>生产仓 / 成品仓</span><span class="blank"></span></div>
+        </div>
+        <div class="steps" style="margin-top:16px">
+          <label class="step"><span class="check"><input type="checkbox" data-key="preflight-1"><span></span></span><span><h4>确认最小闭环前置条件</h4><p>确认当前账号工厂为 F006；至少有一个可用生产仓和一个主仓/外仓；生产操作员、仓管可以进入各自页面；原料期初库存可用于本轮测试。</p><span class="expect">任一前置条件缺失就先补配置，不把权限、仓库或库存问题误判为 Workflow/报工故障。</span></span></label>
+          <label class="step" data-min-depth="medium"><span class="check"><input type="checkbox" data-key="preflight-2"><span></span></span><span><h4>确认关键角色与审批链</h4><p>准备生产主管、仓管、采购、销售和财务角色；核对采购、报工、调拨、盘点、开票/付款审批规则及全局工时单价。</p><span class="expect">每条审批有人可处理且不能由无权限角色越权；全局时薪来源明确，不在工序主档重复填写。</span></span></label>
+          <label class="step" data-min-depth="full"><span class="check"><input type="checkbox" data-key="preflight-3"><span></span></span><span><h4>确认全量治理角色与规则</h4><p>准备质检、BOM/ECN 审批、损耗、退货和冲销所需角色；记录物料价格权限、可见仓库和需要上传凭证的规则。</p><span class="expect">全量分支均有真实入口和责任人；如果当前版本没有某个入口，记录“当前不支持”，不得用后台直改伪造通过。</span></span></label>
+        </div>
+      </section>
+
+      <section id="map">
+        <div class="section-head">
+          <span class="section-no">01</span>
+          <div class="section-title"><h3>全链路地图</h3><p>建档后分为存货生产与销售订单两条线；采购、仓储交接、报工、成本和销售交付各自闭环</p></div>
+        </div>
+        <div class="flow-map">
+          <div class="flow-node"><small>master</small><strong>原料类型<br>成品 / 半成品 SKU</strong></div>
+          <div class="flow-node"><small>engineering</small><strong>工序<br>BOM / Workflow</strong></div>
+          <div class="flow-node"><small>opening</small><strong>期初原料库存<br>审批并应用</strong></div>
+          <div class="flow-node split-a stock-only"><small>route a</small><strong>存货生产计划</strong></div>
+          <div class="flow-node split-b sales-only"><small>route b</small><strong>销售订单 → 生产计划</strong></div>
+          <div class="flow-node"><small>warehouse in</small><strong><span class="sales-only" data-min-depth="medium">缺料采购 → </span>主/外仓领料<br>生产仓签收</strong></div>
+          <div class="flow-node"><small>execution</small><strong>逐道录入<br>正式报工<span data-min-depth="medium"> / 审批</span></strong></div>
+          <div class="flow-node"><small>settlement</small><strong><span class="stock-only">小结 / 停产</span><span class="sales-only">核对结单</span><br>仓库确认入库</strong></div>
+          <div class="flow-node"><small>warehouse out</small><strong>生产仓成品<br>调入主/外仓</strong></div>
+          <div class="flow-node"><small>cost</small><strong>逐工序成本<br>出厂核算 / 汇总</strong></div>
+          <div class="flow-node split-b sales-only"><small>sales close</small><strong>仓库发货<br>开票 / 收款 / 退货</strong></div>
+          <div class="flow-node"><small>inventory</small><strong>库存复核<br>盘点应用</strong></div>
+        </div>
+      </section>
+
+      <section id="copykit" hidden>
+        <div class="section-head">
+          <span class="section-no">CP</span>
+          <div class="section-title"><h3>需要创建的对象：单行快速复制</h3><p>先改统一前缀，再逐行复制；内容只提供建档口径，不替你虚构未知配方量或分类</p></div>
+        </div>
+        <div class="copy-toolbar screen-only">
+          <label class="copy-prefix">本轮测试前缀 <input id="copyPrefix" value="SOP-20260719-01" maxlength="40" aria-label="本轮测试前缀" /></label>
+          <button class="copy-all" id="copyAllButton" type="button">复制当前路线全部清单</button>
+          <span class="copy-status" id="copyStatus" aria-live="polite"></span>
+        </div>
+        <div class="callout warning"><strong>复制后仍需按页面字段分别填写</strong><code>｜</code> 是字段分隔符。L1/L2/L3、仓库、保质期和实际 BOM 计划基准量必须按 F006 真实配置选择；清单不会替你猜数。</div>
+
+        <details class="copy-group" open>
+          <summary>主生产链建档（黄油鸡 800g）</summary>
+          <div class="copy-list">
+            <div class="copy-row" data-copy-template="{P}-黄油鸡-原料A｜类别：按F006真实分类｜入库计量单位：kg｜储存类型/保质期：按实物填写"><span class="copy-kind">原料 A</span><code class="copy-content"></code><button class="copy-button" type="button">复制</button></div>
+            <div class="copy-row" data-copy-template="{P}-黄油鸡-原料B｜类别：按F006真实分类｜入库计量单位：kg｜储存类型/保质期：按实物填写"><span class="copy-kind">原料 B</span><code class="copy-content"></code><button class="copy-button" type="button">复制</button></div>
+            <div class="copy-row" data-copy-template="{P}-黄油鸡-原料C｜类别：按F006真实分类｜入库计量单位：kg｜储存类型/保质期：按实物填写"><span class="copy-kind">原料 C</span><code class="copy-content"></code><button class="copy-button" type="button">复制</button></div>
+            <div class="copy-row" data-copy-template="{P}-黄油鸡-原料D｜类别：按F006真实分类｜入库计量单位：kg｜储存类型/保质期：按实物填写"><span class="copy-kind">原料 D</span><code class="copy-content"></code><button class="copy-button" type="button">复制</button></div>
+            <div class="copy-row" data-copy-template="{P}-黄油鸡-处理后半成品｜产品大类：半成品｜基本单位：kg｜不填写固定出成率"><span class="copy-kind">半成品 SKU</span><code class="copy-content"></code><button class="copy-button" type="button">复制</button></div>
+            <div class="copy-row" data-copy-template="{P}-黄油鸡-成品800g｜产品大类：成品｜基本单位：盒｜标准单位换算：1盒=800克｜包装换算：1箱=8盒"><span class="copy-kind">成品 SKU</span><code class="copy-content"></code><button class="copy-button" type="button">复制</button></div>
+            <div class="copy-row" data-copy-template="{P}-黄油鸡-原料处理｜工序类别：原料处理｜默认产出类型：半成品｜单位由Workflow端口决定"><span class="copy-kind">工序 P1</span><code class="copy-content"></code><button class="copy-button" type="button">复制</button></div>
+            <div class="copy-row" data-copy-template="{P}-黄油鸡-定量包装｜工序类别：包装｜默认产出类型：成品｜单位由Workflow端口决定"><span class="copy-kind">工序 P2</span><code class="copy-content"></code><button class="copy-button" type="button">复制</button></div>
+            <div class="copy-row" data-copy-template="{P}-黄油鸡-成品800g BOM｜产出继承SKU：1盒=800克｜原料A/B/C/D及辅料包材：按真实配方量填写｜原料出成率：待评估｜保存后激活"><span class="copy-kind">BOM</span><code class="copy-content"></code><button class="copy-button" type="button">复制</button></div>
+            <div class="copy-row" data-copy-template="{P}-黄油鸡-主链Workflow｜原料A/B/C/D→原料处理→处理后半成品→定量包装→成品800g｜投入方式：批次自由选择(至少1个)｜单位：kg→kg→盒｜发布并启用"><span class="copy-kind">Workflow</span><code class="copy-content"></code><button class="copy-button" type="button">复制</button></div>
+          </div>
+        </details>
+
+        <details class="copy-group">
+          <summary>拓扑矩阵专用 SKU / 原料 / 工序</summary>
+          <div class="copy-list">
+            <div class="copy-row" data-copy-template="{P}-拓扑原料R1｜入库计量单位：kg｜L1/L2/L3：按F006测试分类"><span class="copy-kind">原料 R1</span><code class="copy-content"></code><button class="copy-button" type="button">复制</button></div>
+            <div class="copy-row" data-copy-template="{P}-拓扑原料R2｜入库计量单位：kg｜L1/L2/L3：按F006测试分类"><span class="copy-kind">原料 R2</span><code class="copy-content"></code><button class="copy-button" type="button">复制</button></div>
+            <div class="copy-row" data-copy-template="{P}-拓扑原料R3｜入库计量单位：kg｜L1/L2/L3：按F006测试分类"><span class="copy-kind">原料 R3</span><code class="copy-content"></code><button class="copy-button" type="button">复制</button></div>
+            <div class="copy-row" data-copy-template="{P}-拓扑原料R4｜入库计量单位：kg｜L1/L2/L3：按F006测试分类"><span class="copy-kind">原料 R4</span><code class="copy-content"></code><button class="copy-button" type="button">复制</button></div>
+            <div class="copy-row" data-copy-template="{P}-拓扑原料R5｜入库计量单位：kg｜L1/L2/L3：按F006测试分类"><span class="copy-kind">原料 R5</span><code class="copy-content"></code><button class="copy-button" type="button">复制</button></div>
+            <div class="copy-row" data-copy-template="{P}-拓扑原料R6｜入库计量单位：kg｜L1/L2/L3：按F006测试分类"><span class="copy-kind">原料 R6</span><code class="copy-content"></code><button class="copy-button" type="button">复制</button></div>
+            <div class="copy-row" data-copy-template="{P}-拓扑成品A｜产品大类：成品｜基本单位：盒｜标准单位换算：1盒=100克"><span class="copy-kind">成品 A</span><code class="copy-content"></code><button class="copy-button" type="button">复制</button></div>
+            <div class="copy-row" data-copy-template="{P}-拓扑成品B｜产品大类：成品｜基本单位：盒｜标准单位换算：1盒=100克"><span class="copy-kind">成品 B</span><code class="copy-content"></code><button class="copy-button" type="button">复制</button></div>
+            <div class="copy-row" data-copy-template="{P}-拓扑成品C｜产品大类：成品｜基本单位：盒｜标准单位换算：1盒=100克"><span class="copy-kind">成品 C</span><code class="copy-content"></code><button class="copy-button" type="button">复制</button></div>
+            <div class="copy-row" data-copy-template="{P}-拓扑成品D｜产品大类：成品｜基本单位：盒｜标准单位换算：1盒=100克"><span class="copy-kind">成品 D</span><code class="copy-content"></code><button class="copy-button" type="button">复制</button></div>
+            <div class="copy-row" data-copy-template="{P}-拓扑成品E｜产品大类：成品｜基本单位：盒｜标准单位换算：1盒=100克"><span class="copy-kind">成品 E</span><code class="copy-content"></code><button class="copy-button" type="button">复制</button></div>
+            <div class="copy-row" data-copy-template="{P}-拓扑成品F｜产品大类：成品｜基本单位：盒｜标准单位换算：1盒=100克"><span class="copy-kind">成品 F</span><code class="copy-content"></code><button class="copy-button" type="button">复制</button></div>
+            <div class="copy-row" data-copy-template="{P}-拓扑工序P11｜默认产出类型：成品｜用于1→1"><span class="copy-kind">工序 P11</span><code class="copy-content"></code><button class="copy-button" type="button">复制</button></div>
+            <div class="copy-row" data-copy-template="{P}-拓扑工序PM1｜默认产出类型：成品｜用于多→1"><span class="copy-kind">工序 PM1</span><code class="copy-content"></code><button class="copy-button" type="button">复制</button></div>
+            <div class="copy-row" data-copy-template="{P}-拓扑工序P1M｜默认产出类型：成品｜用于1→多"><span class="copy-kind">工序 P1M</span><code class="copy-content"></code><button class="copy-button" type="button">复制</button></div>
+            <div class="copy-row" data-copy-template="{P}-拓扑工序PMM｜默认产出类型：成品｜用于多→多"><span class="copy-kind">工序 PMM</span><code class="copy-content"></code><button class="copy-button" type="button">复制</button></div>
+            <div class="copy-row" data-copy-template="{P}-拓扑成品A-F BOM｜每个成品分别创建并激活BOM｜产出规格继承各SKU｜原料计划基准量按测试值填写｜原料出成率保持待评估"><span class="copy-kind">BOM A-F</span><code class="copy-content"></code><button class="copy-button" type="button">复制</button></div>
+          </div>
+        </details>
+
+        <details class="copy-group">
+          <summary>拓扑与覆盖冲突 Workflow</summary>
+          <div class="copy-list">
+            <div class="copy-row" data-copy-template="{P}-W11｜R1→P11→成品A｜拓扑：1→1｜阶段一启用"><span class="copy-kind">W11</span><code class="copy-content"></code><button class="copy-button" type="button">复制</button></div>
+            <div class="copy-row" data-copy-template="{P}-WM1｜R2+R3→PM1→成品B｜拓扑：多→1｜阶段一启用"><span class="copy-kind">WM1</span><code class="copy-content"></code><button class="copy-button" type="button">复制</button></div>
+            <div class="copy-row" data-copy-template="{P}-W1M｜R4→P1M→成品C+成品D｜拓扑：1→多｜阶段一启用"><span class="copy-kind">W1M</span><code class="copy-content"></code><button class="copy-button" type="button">复制</button></div>
+            <div class="copy-row" data-copy-template="{P}-WMM｜R5+R6→PMM→成品E+成品F｜拓扑：多→多｜阶段一启用"><span class="copy-kind">WMM</span><code class="copy-content"></code><button class="copy-button" type="button">复制</button></div>
+            <div class="copy-row" data-copy-template="{P}-W-A-11｜R1→P-A1→成品A｜终端产出：{A}｜用于完全匹配冲突"><span class="copy-kind">W-A-11</span><code class="copy-content"></code><button class="copy-button" type="button">复制</button></div>
+            <div class="copy-row" data-copy-template="{P}-W-A-M1｜R2+R3→P-AM→成品A｜终端产出：{A}｜用于1→1与多→1冲突"><span class="copy-kind">W-A-M1</span><code class="copy-content"></code><button class="copy-button" type="button">复制</button></div>
+            <div class="copy-row" data-copy-template="{P}-W-AB｜测试原料→测试工序→成品A+成品B｜终端产出：{A,B}｜最小超集候选一"><span class="copy-kind">W-AB</span><code class="copy-content"></code><button class="copy-button" type="button">复制</button></div>
+            <div class="copy-row" data-copy-template="{P}-W-AC｜测试原料→测试工序→成品A+成品C｜终端产出：{A,C}｜最小超集候选二"><span class="copy-kind">W-AC</span><code class="copy-content"></code><button class="copy-button" type="button">复制</button></div>
+            <div class="copy-row" data-copy-template="{P}-W-ABC｜测试原料→测试工序→成品A+成品B+成品C｜终端产出：{A,B,C}｜更大覆盖超集"><span class="copy-kind">W-ABC</span><code class="copy-content"></code><button class="copy-button" type="button">复制</button></div>
+          </div>
+        </details>
+
+        <details class="copy-group">
+          <summary>期初库存、生产计划与盘点</summary>
+          <div class="copy-list">
+            <div class="copy-row" data-copy-template="{P}-期初库存｜目标仓库：按F006真实生产仓｜原料A/B/C/D：各10kg｜单价：按测试口径｜创建后提交审批并应用差异"><span class="copy-kind">期初库存</span><code class="copy-content"></code><button class="copy-button" type="button">复制</button></div>
+            <div class="copy-row stock-only" data-copy-template="{P}-存货生产计划｜来源：存货生产｜成品：黄油鸡成品800g｜计划基准量：10盒｜报工模式：逐道报工｜完成方式：多次小结后停产"><span class="copy-kind">存货计划</span><code class="copy-content"></code><button class="copy-button" type="button">复制</button></div>
+            <div class="copy-row sales-only" data-copy-template="{P}-测试客户｜用于销售订单生产全链路｜交货地址/业务员：按F006测试信息"><span class="copy-kind">客户</span><code class="copy-content"></code><button class="copy-button" type="button">复制</button></div>
+            <div class="copy-row sales-only" data-copy-template="{P}-销售订单｜客户：{P}-测试客户｜产品：黄油鸡成品800g｜数量：10盒｜包装规格：1箱=8盒｜来源仓库：按F006真实成品仓｜创建后提交审批判定"><span class="copy-kind">销售订单</span><code class="copy-content"></code><button class="copy-button" type="button">复制</button></div>
+            <div class="copy-row sales-only" data-copy-template="{P}-销售订单生产计划｜来源：销售订单｜选择已审批订单及产品行｜产品/数量从订单行带出｜报工模式：逐道报工｜完成方式：核对结单"><span class="copy-kind">订单计划</span><code class="copy-content"></code><button class="copy-button" type="button">复制</button></div>
+            <div class="copy-row" data-copy-template="{P}-生产后专项盘点｜仓库：按实际库存所在仓｜备注：核对正式报工及小结/结单后的原料扣减和成品入库｜录入→提交审批→审批→应用差异"><span class="copy-kind">盘点任务</span><code class="copy-content"></code><button class="copy-button" type="button">复制</button></div>
+          </div>
+        </details>
+      </section>
+
+      <section id="raw">
+        <div class="section-head"><span class="section-no">02</span><div class="section-title"><h3>创建投入物料档案</h3><p>原料、辅料、包材都在“原料类型字典”，不在 SKU 管理里创建</p></div></div>
+        <div class="path">仓储管理 <b>›</b> 原料类型字典 <b>›</b> 新增</div>
+        <div class="steps">
+          <label class="step"><span class="check"><input type="checkbox" data-key="raw-1"><span></span></span><span><h4>建立本轮测试投入物料</h4><p>创建 4 个可供批次选择的原料 A/B/C/D；另建“黄油调味料、香辛料”作为按工序辅料，以及“成品盒、封膜、外箱”作为包材。名称都加同一测试前缀，避免选错历史数据。</p><span class="expect">各名称在对应类别列表只出现一条；编码由系统自动生成；辅料和包材之后能在 BOM 的对应页签被筛选到。</span></span></label>
+          <label class="step"><span class="check"><input type="checkbox" data-key="raw-2"><span></span></span><span><h4>填写主档字段</h4><ul><li>原料名称、类别。</li><li>入库计量单位：本例 A/B/C/D 选 <code>kg</code>。</li><li>储存类型、保质期、备注。</li><li>按页面要求选择 L1 大类 → L2 中类 → L3 小类；没有 L3 时可“＋ 快捷创建新品类”。</li></ul><span class="expect">单位显示为 kg，L1/L2/L3 均已选，保存后可搜索到。</span></span></label>
+        </div>
+      </section>
+
+      <section id="sku">
+        <div class="section-head"><span class="section-no">03</span><div class="section-title"><h3>创建半成品与成品 SKU</h3><p>基本单位决定库存/销售口径；成品标准克重只在 SKU 定义一次</p></div></div>
+        <div class="path">生产管理 <b>›</b> 生产配置 <b>›</b> SKU 管理（成品 / 半成品）</div>
+        <div class="table-wrap"><table><thead><tr><th>对象</th><th>产品大类</th><th>基本单位</th><th>标准单位换算</th><th>包装换算</th></tr></thead><tbody>
+          <tr><td>处理后半成品</td><td>半成品</td><td><code>kg</code></td><td>不填写固定出成率</td><td>无</td></tr>
+          <tr><td>黄油鸡成品 800g</td><td>成品</td><td><code>盒</code></td><td><code>1盒 = 800克</code></td><td>示例：<code>1箱 = 8盒</code></td></tr>
+        </tbody></table></div>
+        <div class="steps" style="margin-top:12px">
+          <label class="step"><span class="check"><input type="checkbox" data-key="sku-1"><span></span></span><span><h4>创建半成品 SKU</h4><p>点“新增产品”，先选“半成品”，再填产品名称、基本单位 kg；产品编号可用系统生成值。半成品不预设“投入多少必然产出多少”的数量关系。</p><span class="expect">保存后出现在“半成品”页签，基本单位 kg。</span></span></label>
+          <label class="step"><span class="check"><input type="checkbox" data-key="sku-2"><span></span></span><span><h4>创建成品 SKU</h4><p>选“成品”，基本单位填“盒”，标准单位换算填 800 克；需要外箱时添加 <code>1箱=8盒</code>。规格文本由系统自动生成，不手写另一套口径。</p><span class="expect">页面明确显示“1盒=800克”；箱规右侧仍为“盒”，不是 1kg=1盒。</span></span></label>
+          <label class="step"><span class="check"><input type="checkbox" data-key="sku-3"><span></span></span><span><h4>做一次单位防错复核</h4><p>半成品 kg、成品盒、成品 800g/盒、外箱 8盒/箱四个概念必须各归各位。</p><span class="expect">SKU 单位改变后，Workflow 会提示重新核对并发布；已有生产计划不被回写。</span></span></label>
+        </div>
+      </section>
+
+      <section id="process">
+        <div class="section-head"><span class="section-no">04</span><div class="section-title"><h3>创建工序主数据</h3><p>工序主数据不维护投入/产出单位，单位由 SKU 和 Workflow 端口决定</p></div></div>
+        <div class="path">生产管理 <b>›</b> 生产配置 <b>›</b> 工序管理 <b>›</b> 新增工序</div>
+        <div class="callout blue"><strong>人工成本采用全局时薪</strong>本轮不在工序高级设置填写预估工时或标准时薪。管理员先到“系统管理 → 系统设置 → 成本设置”填写工时单价；未配置时系统按默认 ¥26/工时并提示。真实工时统一在每一道工序报工时录入。</div>
+        <div class="steps">
+          <label class="step"><span class="check"><input type="checkbox" data-key="labor-rate-1"><span></span></span><span><h4>先核对全局工时单价</h4><p>打开“系统管理 → 系统设置 → 成本设置”，查看或填写“工时单价（¥/工时）”。没有系统管理写权限时，由工厂管理员配置。</p><span class="expect">保存后回读数值一致；未配置时页面明确显示按默认 ¥26/工时，不把默认值伪装成已配置。</span></span></label>
+          <label class="step"><span class="check"><input type="checkbox" data-key="process-1"><span></span></span><span><h4>创建“原料处理”工序</h4><p>只填写工序名称、工序类别，默认产出类型选“半成品”。预估工时、标准时薪和出成率上下限暂时都留在高级设置，不作为本轮建档必填。</p><span class="expect">同名工序会被阻止；保存后状态为启用；工序主档没有本轮人工成本数值。</span></span></label>
+          <label class="step"><span class="check"><input type="checkbox" data-key="process-2"><span></span></span><span><h4>创建“定量包装”工序</h4><p>默认产出类型选“成品”。这里不要填写 kg、盒或 1:1 换算。</p><span class="expect">Workflow 加入工序后，系统据默认产出类型生成正确的半成品/成品 Cell。</span></span></label>
+        </div>
+      </section>
+
+      <section id="bom">
+        <div class="section-head"><span class="section-no">05</span><div class="section-title"><h3>创建、按工序配置并激活 BOM / 配方</h3><p>原料、包材、工序辅料和锅序各有不同录入口径；产出规格从 SKU 只读带入</p></div></div>
+        <div class="path">生产管理 <b>›</b> 生产配置 <b>›</b> BOM/配方维护</div>
+        <div class="callout warning"><strong>BOM 与 Workflow 需要两次往返</strong>先建立原料/包材和配方草稿；若“辅料 → 工序编排”尚无工序，先到 Workflow 保存工序链草稿，再返回本页把辅料、锅序绑定到具体工序，激活 BOM，最后回 Workflow 发布并启用。</div>
+        <div class="table-wrap"><table><thead><tr><th>区域</th><th>配置对象</th><th>手工输入</th><th>系统继承/计算</th></tr></thead><tbody>
+          <tr><td>配方头</td><td>当前成品 SKU 的版本</td><td>版本备注</td><td>产品、产出单位、标准克重来自 SKU；出成率来自正式报工历史</td></tr>
+          <tr><td>原料 RAW</td><td>主要投入物料</td><td>选择原料；必要时备注/高级可选规则</td><td>单位与参考价来自物料主档；当前页面不强迫填写固定出成数量</td></tr>
+          <tr><td>包材 PACKAGING</td><td>盒、袋、膜、外箱等</td><td>每成品用量/每产品用量、备注</td><td>单位来自物料主档；按成品基本单位推算需求</td></tr>
+          <tr><td>辅料 AUXILIARY</td><td>绑定到具体工序的调料/添加剂</td><td>每 1kg 本工序半成品的投入量、锅序比例、是否计成本</td><td>投入工序锁定；自动单价取移动平均价</td></tr>
+          <tr><td>版本</td><td>DRAFT / ACTIVE / 历史版本</td><td>克隆后的修改内容</td><td>同一 SKU 仅一个生效版本；新版本不回写旧计划</td></tr>
+        </tbody></table></div>
+        <div class="steps">
+          <label class="step"><span class="check"><input type="checkbox" data-key="bom-1"><span></span></span><span><h4>B01 · 选择 SKU 并核对配方头前置</h4><p>选择“黄油鸡成品 800g”。先核对页面带出的基本单位“盒”和标准克重 800g；若 SKU 缺标准克重，按引导返回 SKU 补录。</p><span class="expect">BOM 不能另写 1盒=多少克；SKU 缺克重时不能创建配方头。</span></span></label>
+          <label class="step"><span class="check"><input type="checkbox" data-key="bom-2"><span></span></span><span><h4>B02 · 添加原料 RAW</h4><p>打开“原料”页签逐行添加黄油鸡原料。选择物料后核对计量单位由主档带入；本轮普通原料不填写固定出成率，按需填写备注。高级选项只有真实业务需要时才使用。</p><span class="expect">原料筛选只出现原料类；同量纲单位可明确选择，单位不兼容时提示回主档核对。</span></span></label>
+          <label class="step"><span class="check"><input type="checkbox" data-key="bom-3"><span></span></span><span><h4>B03 · 添加包材 PACKAGING</h4><p>切换“包材”页签，添加成品盒/袋、封膜和外箱。填写每 1 个成品基本单位所需包材量；例如 1盒用 1 个盒，8盒共用 1 箱时每产品用量填 0.125。</p><span class="expect">包材单位来自主档；数量按成品基本单位推算，不把 800g 标准克重当包材数量。</span></span></label>
+          <label class="step"><span class="check"><input type="checkbox" data-key="bom-4"><span></span></span><span><h4>B04 · 创建配方头草稿</h4><p>至少已有 1 行原料/包材后点“创建配方”，选择空白创建或复制同源规则；填写版本备注并创建草稿。</p><span class="expect">配方头显示产品、盒、800克/盒均只读；状态 DRAFT；若达到 10 个版本，先清理无用草稿/历史版本。</span></span></label>
+          <label class="step"><span class="check"><input type="checkbox" data-key="bom-5"><span></span></span><span><h4>B05 · 按具体工序绑定辅料</h4><p>切换“辅料 → 工序编排”，选草稿版本，展开“原料处理/熟制/包装”等工序，点“添加工序调料”。选择辅料，填写“每生产 1kg 本工序半成品需要投入”的数量和计量单位，选择是否计入成本。</p><span class="expect">工序由入口锁定不可改；同一辅料可用于多道工序但各自独立；自动单价缺失时先去物料档案配置移动平均价。</span></span></label>
+          <label class="step"><span class="check"><input type="checkbox" data-key="bom-6"><span></span></span><span><h4>B06 · 配置锅序规则（仅需要的辅料）</h4><p>对需要首锅/续锅差异的辅料打开“按锅序计算”：第一锅固定 100%，填写“后续锅占第一锅”的百分比。没有锅序差异的辅料保持关闭。</p><span class="expect">辅料汇总显示“首锅100% · 后续X%”；报工页面只有 BOM 对本道显式开启锅序时才出现锅数，系统按投入量等分每锅 kg。</span></span></label>
+          <label class="step"><span class="check"><input type="checkbox" data-key="bom-7"><span></span></span><span><h4>B07 · 核对辅料汇总、成本与异常</h4><p>切换“辅料汇总”，逐项核对同一辅料在哪些工序使用、g/kg、锅序、自动单价和是否计成本；返回原料/包材页核对成本预览。</p><span class="expect">无重复计成本；历史普通辅料若提示“待绑定工序/可能重复计成本”，保留并记录，不能自动迁移或删除。</span></span></label>
+          <label class="step"><span class="check"><input type="checkbox" data-key="bom-8"><span></span></span><span><h4>B08 · 激活版本并做版本防错</h4><p>确认草稿明细和工序辅料后点“激活”。修改已生效版本时先“复制编辑”，在新草稿中改动再激活。</p><span class="expect">同一 SKU 只有一个 ACTIVE；激活只影响之后新建计划，旧生产计划继续使用原 BOM/Workflow 快照。</span></span></label>
+          <label class="step" data-min-depth="full"><span class="check"><input type="checkbox" data-key="bom-9"><span></span></span><span><h4>B09 · 克隆生效版本并模拟配方变更</h4><p>从当前 ACTIVE 版本克隆新草稿，分别测试数量调整、物料替换和删除物料；不得直接编辑生效版本。记录变更前后物料、单位、数量和预计成本差。</p><span class="expect">原版本保持只读；新草稿拥有独立版本号；旧生产计划不被回写。</span></span></label>
+          <label class="step" data-min-depth="full"><span class="check"><input type="checkbox" data-key="bom-10"><span></span></span><span><h4>B10 · 走 ECN、影响分析与版本审批</h4><p>进入“BOM 版本管理 / 工程变更通知”，创建 ECN，填写原因、标题、说明和计划生效日；查看受影响物料、成品 SKU、未结采购单与成本差，再提交审批。</p><span class="expect">审批通过后新版本生效、旧版失效；被拒绝时保留原因；已建计划仍引用原快照。</span></span></label>
+        </div>
+        <h4 data-min-depth="medium" style="margin:22px 0 10px;font-size:17px">BOM 必测报错矩阵</h4>
+        <div class="table-wrap" data-min-depth="medium"><table><thead><tr><th>触发</th><th>预期</th></tr></thead><tbody>
+          <tr><td>未选 SKU / SKU 缺标准克重</td><td>阻止创建配方头并给出返回 SKU 的明确入口</td></tr>
+          <tr><td>没有任何原料/包材行就创建配方头</td><td>提示至少添加 1 行</td></tr>
+          <tr><td>物料未关联、包材用量≤0、单位不兼容</td><td>指出具体行；不能创建或激活</td></tr>
+          <tr><td>辅料没有移动平均价</td><td>表单保留，阻止保存并提供“去配置价格/重新读取价格”</td></tr>
+          <tr><td>生效版本直接编辑</td><td>只读；必须克隆为新版本</td></tr>
+          <tr><td>两人同时修改同一辅料版本</td><td>409 冲突后重新加载，不能覆盖他人更改</td></tr>
+          <tr><td>锅数不是大于等于 1 的整数</td><td>报工阶段阻止；BOM 未开启锅序时不显示锅数字段</td></tr>
+        </tbody></table></div>
+      </section>
+
+      <section id="workflow">
+        <div class="section-head"><span class="section-no">06</span><div class="section-title"><h3>绘制、校验并发布 Workflow</h3><p>以 Cell 连接表达真实工艺；生产计划按成品集合自动匹配路线</p></div></div>
+        <div class="path">生产管理 <b>›</b> 生产配置 <b>›</b> 产品-工序配置 <b>›</b> 选择归属对象（成品或原料）</div>
+        <div class="callout warning"><strong>单位原则</strong>原料处理显示 kg 投入 → kg 产出；包装工序显示 kg 投入 → 盒产出。它只说明报工单位，不预设“1kg 必然产出 1盒”。成品的 <code>1盒=800g</code> 由 SKU 固定并自动继承。</div>
+        <div class="table-wrap"><table><thead><tr><th>原料投入场景</th><th>系统自动理解</th><th>本轮手测预期</th></tr></thead><tbody>
+          <tr><td>只有 1 个来源原料</td><td>至少选择 1 个，因此该原料为本批次必要投入</td><td>直接使用唯一来源，不需要配置投入关系</td></tr>
+          <tr><td>存在多个来源原料</td><td>自动显示“批次自由选择（至少1个）”</td><td>用户可选择 1 个、多个或全部</td></tr>
+          <tr><td>一个原料都未选择</td><td>不满足最低投入条件</td><td>正式报工必须被阻止并提示至少选择 1 个</td></tr>
+          <tr><td>已选择至少 1 个原料</td><td>其余原料是否投入完全由用户决定</td><td>系统不强制全投，也不自动判断互相替代</td></tr>
+        </tbody></table></div>
+        <div class="steps" style="margin-top:12px">
+          <label class="step"><span class="check"><input type="checkbox" data-key="wf-owner-product"><span></span></span><span><h4>选择“成品归属”建立本产品主路线</h4><p>顶部归属对象选择“黄油鸡成品800g”。成品归属模式用于该成品自己的主工艺；最终成品 Cell 必须与顶部归属一致。</p><span class="expect">顶部显示成品名称；最终产出 SKU 被锁定或在不一致时明确阻止发布。</span></span></label>
+          <label class="step" data-min-depth="medium"><span class="check"><input type="checkbox" data-key="wf-owner-raw"><span></span></span><span><h4>另建“原料归属”分流/联产路线</h4><p>顶部归属对象改选真实原料，例如拓扑原料 R4；从该原料 Cell 出发连接工序与多个成品 Cell。原料归属不是伪造一个产品 SKU，也不会把其中一个终端成品当作唯一归属。</p><span class="expect">归属标签为原料；终端可包含多个成品；生产计划仍按真实终端产出集合匹配，而不是按顶部归属抢优先级。</span></span></label>
+          <label class="step"><span class="check"><input type="checkbox" data-key="wf-1"><span></span></span><span><h4>建立 Cell 链路</h4><p>添加 4 个原料 Cell A/B/C/D → 原料处理工序 → 处理后半成品 Cell → 定量包装工序 → 成品 Cell。每个原料只能在一张 Workflow 中选择一次；重复项应从选择器中消失。</p><span class="expect">无重复原料、无悬空线、每个 Cell 的 SKU 已绑定。</span></span></label>
+          <label class="step"><span class="check"><input type="checkbox" data-key="wf-2"><span></span></span><span><h4>核对原料投入自动理解</h4><p>只需把 A/B/C/D 的来源 Cell 连接到“原料处理”工序，不再配置替代组或投入关系。系统自动研判为“批次自由选择（至少1个）”。</p><span class="expect">报工时至少选 1 个原料；之后可由用户选择 1 个、多个或全部，不显示主投入/追加投入。</span></span></label>
+          <label class="step"><span class="check"><input type="checkbox" data-key="wf-3"><span></span></span><span><h4>核对单位与产出归属</h4><p>原料和处理后半成品均为 kg，最终成品单位为盒。成品归属 Workflow 的终端产出必须与顶部成品一致；原料归属 Workflow 则以画布上的全部终端成品为真实产出集合。</p><span class="expect">不出现 1袋=1盒 或 1kg=1盒；生产计划匹配看终端集合，不被 Workflow 名称或归属类型误导。</span></span></label>
+          <label class="step"><span class="check"><input type="checkbox" data-key="wf-4"><span></span></span><span><h4>保存草稿、完成 BOM 工序辅料后再发布</h4><p>先点“自动布局”并保存 Workflow 草稿；若 BOM 辅料页之前没有工序，返回 BOM 把辅料/锅序绑定到这些工序并激活 BOM，再回本页“发布并启用”。</p><span class="expect">顶部同时显示“已发布 vX”和“已启用 vX”；无未绑定 SKU、缺生效 BOM 或单位复核警告。</span></span></label>
+        </div>
+      </section>
+
+      <section id="topology" data-min-depth="medium">
+        <div class="section-head"><span class="section-no">P</span><div class="section-title"><h3>生产计划选品：Workflow 匹配与覆盖冲突矩阵</h3><p>先在存货生产或销售订单支线选定目标成品，再验证候选解析；Workflow 建档本身不会弹出这类冲突</p></div></div>
+        <div class="callout blue"><strong>“四种拓扑”不等于“只有 16 种冲突”</strong>拓扑分类同时看根投入数量和终端产出数量；生产计划候选排序只看所选成品集合 <code>S</code> 与 Workflow 终端产出集合 <code>O</code>。实际 Workflow 组合数量没有固定上限，本章按算法结果的<strong>等价类</strong>覆盖，而不是宣称穷举了 16 个具体组合。</div>
+
+        <div class="table-wrap"><table><thead><tr><th>拓扑</th><th>建议测试图</th><th>生产计划选择</th><th>基础预期</th></tr></thead><tbody>
+          <tr><td><strong>1→1</strong></td><td><code>原料 R1 → 工序 P11 → 成品 A</code></td><td>选择 A</td><td>唯一候选时自动固定 W11，标签“1→1 · 单投入单产出”</td></tr>
+          <tr><td><strong>多→1</strong></td><td><code>R2 + R3 → 工序 PM1 → 成品 B</code></td><td>选择 B</td><td>唯一候选时自动固定 WM1，标签“多→1 · 多投入单产出”</td></tr>
+          <tr><td><strong>1→多</strong></td><td><code>R4 → 工序 P1M → 成品 C + D</code></td><td>选择 C+D</td><td>完整选择时为完全匹配，标签“1→多 · 单投入多成品”</td></tr>
+          <tr><td><strong>多→多</strong></td><td><code>R5 + R6 → 工序 PMM → 成品 E + F</code></td><td>选择 E+F</td><td>完整选择时为完全匹配，标签“多→多 · 多投入联产”</td></tr>
+        </tbody></table></div>
+
+        <div class="callout warning"><strong>推荐分两阶段造数</strong>阶段一只启用上表四条互不重叠的 Workflow，验证四种拓扑基础行为；阶段二再启用下面的覆盖冲突 Workflow。否则一开始就重叠，无法判断是基础绑定错误还是冲突选择错误。</div>
+
+        <h4 style="margin:20px 0 8px;font-size:17px">匹配层级必须满足</h4>
+        <div class="table-wrap"><table><thead><tr><th>层级</th><th>算法</th><th>页面行为</th></tr></thead><tbody>
+          <tr><td>第 0 层：完全匹配</td><td>所选成品集合 <code>S</code> 与终端产出集合 <code>O</code> 完全相等</td><td>唯一候选自动固定；多个候选必须人工选择</td></tr>
+          <tr><td>第 1 层：最小覆盖超集</td><td>没有完全匹配时，保留满足 <code>S ⊆ O</code> 且终端产出数量最少的候选</td><td>唯一候选也要确认额外联产品；同样大小的多个候选必须人工选择</td></tr>
+          <tr><td>无覆盖</td><td>没有任何单一 Workflow 覆盖全部所选成品</td><td>阻止提交；提示“未找到共享的工序 Workflow，请分开创建生产计划”</td></tr>
+        </tbody></table></div>
+
+        <div class="callout danger"><strong>不是短暂 Toast 里选路线</strong>当前正确交互是页面内持续显示警告，再点“选择生产工序路线”打开候选弹窗；鼠标悬停“悬浮查看 Cell 图”查看原料、半成品、中间工序和成品连接。若系统静默选中其中一条，直接判失败。</div>
+
+        <h4 style="margin:22px 0 10px;font-size:17px">准备组 B：四种拓扑基础回归（不是冲突用例）</h4>
+        <div class="steps">
+          <label class="step"><span class="check"><input type="checkbox" data-key="topo-basic-11"><span></span></span><span><h4>B01 · 1→1 唯一路线</h4><p>只启用 W11，生产成品选择 A。</p><span class="expect">自动固定 W11；终端产出只有 A；预览图为 R1→P11→A。</span></span></label>
+          <label class="step"><span class="check"><input type="checkbox" data-key="topo-basic-m1"><span></span></span><span><h4>B02 · 多→1 唯一路线</h4><p>只启用 WM1，生产成品选择 B。</p><span class="expect">自动固定 WM1；预览图同时显示 R2、R3 汇入 PM1；报工时至少选择 1 个来源，可由用户选择 R2、R3 或两者全部。</span></span></label>
+          <label class="step"><span class="check"><input type="checkbox" data-key="topo-basic-1m"><span></span></span><span><h4>B03 · 1→多 完整选择</h4><p>只启用 W1M，生产成品同时选择 C、D。</p><span class="expect">W1M 为完全匹配并自动固定；终端产出显示 C、D，不要求拆成两张计划。</span></span></label>
+          <label class="step"><span class="check"><input type="checkbox" data-key="topo-basic-1m-subset"><span></span></span><span><h4>B04 · 1→多 只选择部分联产品</h4><p>只启用 W1M，生产成品只选择 C。</p><span class="expect">W1M 是唯一最小超集；页面警告会同时产出 D，必须显式确认完整产出集合后才能创建。</span></span></label>
+          <label class="step"><span class="check"><input type="checkbox" data-key="topo-basic-mm"><span></span></span><span><h4>B05 · 多→多 完整选择</h4><p>只启用 WMM，生产成品同时选择 E、F。</p><span class="expect">WMM 为完全匹配并自动固定；预览图显示 R5、R6 与 E、F 的完整联产链。</span></span></label>
+          <label class="step"><span class="check"><input type="checkbox" data-key="topo-basic-mm-subset"><span></span></span><span><h4>B06 · 多→多 只选择部分联产品</h4><p>只启用 WMM，生产成品只选择 E。</p><span class="expect">必须提示还会产出 F；创建后计划固定 WMM，报工时允许按 Workflow 配置选择多个投入和多个产出。</span></span></label>
+        </div>
+
+        <h4 data-min-depth="full" style="margin:22px 0 10px;font-size:17px">冲突组 C：候选判定等价类</h4>
+        <div class="table-wrap" data-min-depth="full"><table><thead><tr><th>冲突测试数据</th><th>终端产出</th><th>区别</th></tr></thead><tbody>
+          <tr><td>W-A-11</td><td>{A}</td><td>1→1，工序链 P-A1</td></tr>
+          <tr><td>W-A-M1</td><td>{A}</td><td>多→1，工序链 P-AM</td></tr>
+          <tr><td>W-AB</td><td>{A,B}</td><td>最小联产候选一</td></tr>
+          <tr><td>W-AC</td><td>{A,C}</td><td>最小联产候选二</td></tr>
+          <tr><td>W-ABC</td><td>{A,B,C}</td><td>更大的覆盖超集</td></tr>
+        </tbody></table></div>
+        <div class="steps" data-min-depth="full" style="margin-top:12px">
+          <label class="step"><span class="check"><input type="checkbox" data-key="topo-conflict-exact-vs-super"><span></span></span><span><h4>C01 · 唯一完全匹配压过所有超集</h4><p>同时启用 W-A-11、W-AB、W-AC、W-ABC，生产成品选择 A。</p><span class="expect">只有 W-A-11 进入最高层并自动固定；不能因为 W-AB/AC/ABC 也包含 A 就弹出无关候选。</span></span></label>
+          <label class="step"><span class="check"><input type="checkbox" data-key="topo-conflict-11-m1"><span></span></span><span><h4>C02 · 多个完全匹配</h4><p>同时启用 W-A-11 和 W-A-M1，二者终端产出都只有 A；选择 A。</p><span class="expect">两个都是完全匹配，必须出现路线选择；输入数量、归属 SKU 和 Workflow 名字都不能替系统决定优先级。</span></span></label>
+          <label class="step"><span class="check"><input type="checkbox" data-key="topo-conflict-same-output"><span></span></span><span><h4>C03 · 相同输入输出、不同中间工序</h4><p>再建立一条同样 {A} 产出的 Workflow，但中间工序链不同；选择 A。</p><span class="expect">候选弹窗同时保留两条路线；名称不作为判断依据，悬浮 Cell 图能清楚区分中间工序。</span></span></label>
+          <label class="step"><span class="check"><input type="checkbox" data-key="topo-conflict-equal-super"><span></span></span><span><h4>C04 · 多个同大小最小超集</h4><p>停用所有 {A} 完全匹配，只启用 W-AB、W-AC、W-ABC；选择 A。</p><span class="expect">W-AB 与 W-AC 都是 2 个终端产出的最小层，必须人工二选一；W-ABC 不应进入该层。</span></span></label>
+          <label class="step"><span class="check"><input type="checkbox" data-key="topo-conflict-smallest"><span></span></span><span><h4>C05 · 唯一最小超集压过更大超集</h4><p>只启用 W-AB 和 W-ABC，选择 A。</p><span class="expect">只保留 W-AB；明确提示额外产出 B，不能错误选择 W-ABC。</span></span></label>
+          <label class="step"><span class="check"><input type="checkbox" data-key="topo-conflict-exact-multi"><span></span></span><span><h4>C06 · 多选成品存在完全匹配</h4><p>启用 W-AB、W-ABC，生产成品选择 A+B。</p><span class="expect">W-AB 完全匹配并自动固定；W-ABC 虽覆盖 A+B，但不能压过完全匹配。</span></span></label>
+          <label class="step"><span class="check"><input type="checkbox" data-key="topo-conflict-none"><span></span></span><span><h4>C07 · 所选成品无共同 Workflow</h4><p>只启用 W-AB 和 W-AC，生产成品选择 B+C。</p><span class="expect">没有单一 Workflow 同时覆盖 B+C，阻止创建并提示分开创建生产计划。</span></span></label>
+          <label class="step"><span class="check"><input type="checkbox" data-key="topo-conflict-version"><span></span></span><span><h4>C08 · 候选选择后版本失效</h4><p>在计划已选定候选但尚未提交时，另处发布新版本或停用当前版本，再返回提交。</p><span class="expect">提交被阻止并提示重新解析；不能继续使用过期候选。</span></span></label>
+          <label class="step"><span class="check"><input type="checkbox" data-key="topo-conflict-normalize"><span></span></span><span><h4>C09 · 选择顺序与重复值归一</h4><p>分别按 A→B、B→A 选择同一成品集合；尝试重复加入 A。</p><span class="expect">两次得到相同候选层；同一成品不可重复加入，顺序不影响集合判定。</span></span></label>
+          <label class="step"><span class="check"><input type="checkbox" data-key="topo-conflict-preview"><span></span></span><span><h4>C10 · 旧候选缺拓扑或预览数据</h4><p>选择一条历史候选，其逻辑投入数或 Cell 预览数据缺失。</p><span class="expect">显示“投入关系待确认”或“暂无可预览的 Cell 数据”，仍由用户辨认；不能静默伪造成 1→1。</span></span></label>
+        </div>
+
+        <h4 style="margin:22px 0 10px;font-size:17px">两条生产来源的不同分支</h4>
+        <div class="steps">
+          <label class="step stock-only"><span class="check"><input type="checkbox" data-key="topo-branch-stock"><span></span></span><span><h4>S01 · 存货生产的多成品集合</h4><p>“生产成品”下拉是真正的多选集合，所选集合整体参与上面的完全匹配/最小超集算法。</p><span class="expect">A+B 可固定共同 W-AB；B+C 无共同 Workflow 时被阻止；相同层候选必须由弹窗选择。</span></span></label>
+          <label class="step sales-only"><span class="check"><input type="checkbox" data-key="topo-branch-sales"><span></span></span><span><h4>S02 · 销售订单多产品行</h4><p>销售订单来源虽然可以多选产品行，但当前行为是<strong>每个保留行各生成一张生产计划</strong>，不是把所有行合并成一个多成品集合。</p><span class="expect">选择 N 个订单产品行后提示“已生成 N 张生产计划”；逐张核对目标成品、订单数量和固定 Workflow。若存在同层歧义却被静默绑定，判失败并记录。</span></span></label>
+        </div>
+
+        <div class="callout"><strong>这一章的最终通过条件</strong>四种基础拓扑都能被正确标识；完全匹配、最小超集、同层冲突和无覆盖四种匹配结果都按预期出现；每个被人工选择的候选都能通过 Cell 图分辨，并在计划创建后锁定正确 Workflow ID 与版本。</div>
+      </section>
+
+      <section id="opening">
+        <div class="section-head"><span class="section-no">07</span><div class="section-title"><h3>录入期初原料库存</h3><p>给生产准备真实可领用批次；新测试优先用页面逐条录入</p></div></div>
+        <div class="path">仓储管理 <b>›</b> 盘点与期初库存 <b>›</b> 期初建账/期初入库</div>
+        <div class="steps">
+          <label class="step"><span class="check"><input type="checkbox" data-key="opening-1"><span></span></span><span><h4>打开期初建账并选择逐条录入</h4><p>选择目标仓库、月份，再选择原料 A/B/C/D；分别填期初数量（例如各 10kg）和可选单价。无需自己编造批次号。</p><span class="expect">物料单位从主档继承为 kg；页面可“预览比对”。</span></span></label>
+          <label class="step"><span class="check"><input type="checkbox" data-key="opening-2"><span></span></span><span><h4>确认导入并完成审批应用</h4><p>点“确认导入（创建盘点）”。在任务列表依次完成：录入/复核 → 提交审批 → 审批 → 应用差异。</p><span class="expect">状态最终为“已应用”；只到“已审批”不算入库完成。</span></span></label>
+          <label class="step"><span class="check"><input type="checkbox" data-key="opening-3"><span></span></span><span><h4>在库存查询中确认批次</h4><p>到“分仓库存查询”或“库存批次查询”，按测试前缀搜索每个原料。</p><span class="expect">A/B/C/D 均能看到目标仓库、批次和期初数量；合计与录入相等。</span></span></label>
+        </div>
+      </section>
+
+      <section id="oa-approval">
+        <div class="section-head"><span class="section-no">07O</span><div class="section-title"><h3>统一 OA 审批链与模块回读</h3><p>业务模块只提交一次；审批人在工作流处理，业务详情只展示进度和最终结果</p></div></div>
+        <div class="path">业务详情 <b>›</b> 提交审批　→　工作台 / 个人 OA <b>›</b> 我的待办 / 我发起的　→　原业务详情回读状态</div>
+        <div class="callout blue"><strong>统一原则</strong>采购、销售、报工、调拨、盘点、开票、付款等需要审批的业务，都应创建同一套 OA 实例。业务详情不应要求反复“提交下一阶段审批”，也不应向无审批权限角色直接暴露“审批通过”。</div>
+        <div class="table-wrap"><table><thead><tr><th>业务动作</th><th>发起后去哪里看</th><th>谁处理</th><th>业务页应如何表现</th></tr></thead><tbody>
+          <tr><td>提交采购单 / 销售单</td><td>个人 OA → 我发起的</td><td>我的待办中的采购/销售主管、财务</td><td>只读显示当前节点、待处理角色/人员和“前往 OA”</td></tr>
+          <tr><td>报工、调拨、盘点提交审批</td><td>个人 OA → 我发起的</td><td>生产主管、仓管或规则指定审批人</td><td>审批前不得提前生效；审批后回读同一实例结果</td></tr>
+          <tr><td>开票、付款审批</td><td>个人 OA → 我的待办 / 我发起的</td><td>财务角色</td><td>销售/采购页只显示财务状态，不代替财务执行</td></tr>
+        </tbody></table></div>
+        <div class="steps" style="margin-top:12px">
+          <label class="step"><span class="check"><input type="checkbox" data-key="oa-1"><span></span></span><span><h4>业务模块只提交一次</h4><p>在当前业务详情点击一次“提交审批”，记录业务编号、提交时间和页面状态；提交后刷新，不再重复点击。</p><span class="expect">同一业务只生成一个 OA 实例；按钮变为禁用、进度入口或只读状态，不允许重复建单。</span></span></label>
+          <label class="step"><span class="check"><input type="checkbox" data-key="oa-2"><span></span></span><span><h4>在正确的 OA 列表定位实例</h4><p>发起人先看“个人 OA → 我发起的”；审批人切换到“我的待办”。按业务编号搜索，并核对模块、发起人、当前节点和发起时间。</p><span class="expect">发起人不一定拥有审批按钮；审批人不一定出现在“我发起的”。两侧都必须指向同一业务编号和 OA 实例。</span></span></label>
+          <label class="step"><span class="check"><input type="checkbox" data-key="oa-3"><span></span></span><span><h4>审批完成后回到原模块核对</h4><p>审批人只在 OA 详情执行同意或驳回。完成后回原业务详情刷新，核对 OA 状态、当前节点、审批人及后续业务入口。</p><span class="expect">OA 与业务状态一致；审批完成才解锁排产、仓储收货、正式生效等下一步，不需要业务方再次提交。</span></span></label>
+          <label class="step"><span class="check"><input type="checkbox" data-key="oa-4"><span></span></span><span><h4>空列表或状态延迟的排查顺序</h4><p>先等待 5–10 秒并刷新；再确认看的是“我发起的”还是“我的待办”；随后检查登录角色是否为本节点处理人。若业务已显示“已提交”但两侧均无实例，停止后续写入并记录为数据联通缺陷。</p><span class="expect">区分异步延迟、角色视图错误、权限/UI 问题和 OA 实例未创建；禁止用业务详情的临时审批按钮绕过缺失实例。</span></span></label>
+        </div>
+      </section>
+
+      <section id="stock" class="stock-only">
+        <div class="section-head"><span class="section-no">A</span><div class="section-title"><h3>路线 A：存货生产</h3><p>不依赖销售订单，可多次小结，最后手动停产</p></div></div>
+        <div class="path">生产管理 <b>›</b> 生产计划 <b>›</b> 新建生产计划</div>
+        <div class="steps">
+          <label class="step"><span class="check"><input type="checkbox" data-key="stock-1"><span></span></span><span><h4>来源类型选“存货生产”</h4><p>“生产成品”可多选。选择一个成品时应匹配其 Workflow；选择多个时，系统优先完全匹配，没有完全匹配才选最小联产超集。</p><span class="expect">页面显示“本计划已固定工序路线”、拓扑类型、版本和终端产出。</span></span></label>
+          <label class="step"><span class="check"><input type="checkbox" data-key="stock-2"><span></span></span><span><h4>处理路线歧义</h4><p>同一匹配层存在多个 Workflow，或所选产品会带出额外联产品时，点“选择生产工序路线”；鼠标悬停“悬浮查看 Cell 图”确认中间工序和连接方式。</p><span class="expect">不能仅靠 Workflow 名字判断；必须确认工序 Cell 图和完整产出集合。</span></span></label>
+          <label class="step"><span class="check"><input type="checkbox" data-key="stock-3"><span></span></span><span><h4>填写计划信息并创建</h4><p>Workflow 驱动的存货生产需要填写大于 0 的计划基准量；报工模式应锁定为“逐道报工”。填写计划日期、预计完成日、人员/主管和备注。</p><span class="expect">计划创建成功，来源标签为“存货生产”，可见“逐道录入 / 小结 / 停产”，不显示“生成调拨单”。</span></span></label>
+        </div>
+      </section>
+
+      <section id="sales" class="sales-only">
+        <div class="section-head"><span class="section-no">B</span><div class="section-title"><h3>路线 B：销售订单生产</h3><p>订单行决定成品与数量，审批通过后再排产</p></div></div>
+        <div class="path">销售管理 <b>›</b> 销售订单 <b>›</b> 新建销售订单</div>
+        <div class="steps">
+          <label class="step"><span class="check"><input type="checkbox" data-key="sales-0"><span></span></span><span><h4>创建并复核客户档案</h4><p>进入“销售管理 → 客户管理”，建立测试客户，填写名称、联系人、电话、收货地址、信用信息及负责销售；在客户详情确认地址和价格记忆等页签可打开。</p><span class="expect">销售订单选择客户后自动带出正确地址和客户信息；同名客户不会误选历史档案。</span></span></label>
+          <label class="step"><span class="check"><input type="checkbox" data-key="sales-1"><span></span></span><span><h4>创建销售订单</h4><p>使用“普通新建”：选客户、交货日期/地址、业务员；在产品明细选择成品、下单数量、单位、包装规格、未税单价、税率和来源仓库。</p><span class="expect">成品单位与 SKU 一致；配置多个箱规时必须选正确箱规，箱数只读自动计算。</span></span></label>
+          <label class="step"><span class="check"><input type="checkbox" data-key="sales-2"><span></span></span><span><h4>提交审批判定</h4><p>订单创建后点“提交审批判定”。系统按配置自动分流：可能自动通过，也可能进入财务审核。以页面最终状态为准。</p><span class="expect">订单不再是草稿；达到可排产/已财务审核状态。若待财审，先完成财务审核。</span></span></label>
+          <label class="step"><span class="check"><input type="checkbox" data-key="sales-3"><span></span></span><span><h4>从订单创建生产计划</h4><p>若系统已自动创建计划，直接打开；否则点订单行的“创建生产计划”，或进入生产计划新建页，来源选“销售订单”并选择该订单。</p><span class="expect">订单客户和产品行自动带出，不能手填另一套产品。</span></span></label>
+          <label class="step"><span class="check"><input type="checkbox" data-key="sales-4"><span></span></span><span><h4>选择订单产品行并确认路线</h4><p>产品行默认全选，可取消不生产的行；每保留一行各建一张生产计划，产品/数量来自订单行。多订单合并时，追加订单必须已财务审核。</p><span class="expect">计划数量等于订单行数量；Workflow 路线、版本与目标成品一致。歧义时必须显式选择并预览 Cell 图。</span></span></label>
+          <label class="step"><span class="check"><input type="checkbox" data-key="sales-5"><span></span></span><span><h4>创建计划并检查操作入口</h4><p>Workflow 驱动时逐道报工应被锁定。订单生产有明确计划量，可按 BOM 生成调拨单；缺料是预警，不应静默换成其它料。</p><span class="expect">计划来源标签为“销售订单”，能追溯到订单号；可见“逐道录入 / 核对结单”。</span></span></label>
+          <label class="step" data-min-depth="full"><span class="check"><input type="checkbox" data-key="sales-6"><span></span></span><span><h4>验证多销售订单合并生产</h4><p>再创建一张已审批销售订单，包含相同成品和不同成品。新建生产计划时追加第二张订单：相同 SKU 需求可归并到对应计划，不同 SKU 仍按产品行分别形成计划。</p><span class="expect">计划详情保留全部来源订单号；相同 SKU 不漏量、不重复建；不同 SKU 不被强行塞进不覆盖它的 Workflow。</span></span></label>
+        </div>
+      </section>
+
+      <div id="topologyPlacement"></div>
+
+      <section id="procurement" class="sales-only" data-min-depth="medium">
+        <div class="section-head"><span class="section-no">B1</span><div class="section-title"><h3>销售订单缺料：采购补货支线</h3><p>缺料只预警，不得静默替料；当前页面需要手动建立关联采购单</p></div></div>
+        <div class="path">销售订单详情 <b>›</b> 查看缺料 <b>›</b> 采购管理 <b>›</b> 采购订单 / 财务待审采购单 / 采购入库</div>
+        <div class="callout warning"><strong>当前真实边界</strong>销售订单中的“转采购”不会自动生成采购单；系统会引导到订单详情。采购员须在“采购订单”手动新建，并选择“关联销售订单”。如果页面静默生成了无供应商、无单价或无销售单关联的采购数据，判失败。</div>
+        <div class="steps">
+          <label class="step"><span class="check"><input type="checkbox" data-key="purchase-1"><span></span></span><span><h4>确认供应商与价格前置</h4><p>在“供应商管理 / 价格表管理”确认本轮原料、辅料、包材存在可用供应商和计价单位；价格未知时不得伪造 0 元为真实采购价。</p><span class="expect">采购订单的供应商、物料和计价单位下拉有真实选项；无权限看价时显示脱敏，不显示假 0。</span></span></label>
+          <label class="step"><span class="check"><input type="checkbox" data-key="purchase-2"><span></span></span><span><h4>手动创建并关联销售订单</h4><p>新建采购订单，选择供应商、预计到货日和关联销售订单；逐行添加缺口原料/辅料/包材，填写采购数量、数量单位、单价、计价单位和税率。</p><span class="expect">采购单详情和销售订单“关联采购订单”页签都能互相追溯；每行数量大于 0，税率在 0–100。</span></span></label>
+          <label class="step"><span class="check"><input type="checkbox" data-key="purchase-3"><span></span></span><span><h4>提交采购审批</h4><p>提交采购单；需要财审时由“财务管理 → 待审采购单”或“采购管理 → 财务待审采购单”审核，采购员不能替财务完成审批。</p><span class="expect">驳回时保留原因并回到可修正状态；通过后状态可继续收货，审批人与时间可追溯。</span></span></label>
+          <label class="step"><span class="check"><input type="checkbox" data-key="purchase-4"><span></span></span><span><h4>创建并确认采购入库</h4><p>到“采购入库”新建，选择采购单后系统带入待收物料，默认实收=待收；仓管核对实际数量、目标仓、厂号/产地和质检结果，上传收货照片/附件，先创建 DRAFT，再点“确认入库”。</p><span class="expect">确认后才生成原料批次并增加目标仓库存；部分到货保留待收量；单次到货超过允许上限时被阻止；照片可在详情回看。</span></span></label>
+          <label class="step"><span class="check"><input type="checkbox" data-key="purchase-5"><span></span></span><span><h4>回读缺口并返回生产</h4><p>在库存批次查询核对新批次，再回到物料需求单/生产计划刷新缺料信息。</p><span class="expect">缺口按实际入库减少；单位与批次正确；未确认的采购入库草稿不能被生产仓当作可用库存。</span></span></label>
+          <label class="step" data-min-depth="full"><span class="check"><input type="checkbox" data-key="purchase-6"><span></span></span><span><h4>触发并处理采购入库异常</h4><p>分别模拟超收、短收、品质异常，在“入库异常”核对物料和异常数量；依次验证“接收超量、按实收、要求补货、退回供应商”四种处理决定。</p><span class="expect">决定改变后续待收量或生成退货单；责任人和备注留痕；异常未处理前不静默当作正常足额入库。</span></span></label>
+          <label class="step" data-min-depth="full"><span class="check"><input type="checkbox" data-key="purchase-7"><span></span></span><span><h4>完成采购退货审批与出库</h4><p>对“退回供应商”生成的采购退货单，依次执行提交 → 业务审批 → 财务审批 → 仓管完成出货；验证财务驳回和业务驳回。</p><span class="expect">财务审批前不能完成退货出库；完成后库存、供应商往来和退货金额一致，重复操作不重复扣库存。</span></span></label>
+          <label class="step" data-min-depth="full"><span class="check"><input type="checkbox" data-key="purchase-8"><span></span></span><span><h4>核对采购发票与付款申请</h4><p>为已确认采购单登记采购发票，核对税率与金额；创建付款申请并走财务复核，记录已付、未付和供应商往来余额。</p><span class="expect">发票、采购单、入库单和付款记录互相可追溯；付款不得超过可付余额；驳回不改变已付金额。</span></span></label>
+        </div>
+      </section>
+
+      <section id="warehouse-feed">
+        <div class="section-head"><span class="section-no">W1</span><div class="section-title"><h3>生产前仓储交接：主仓/外仓 → 生产仓</h3><p>原料、辅料、包材统一走可追溯领料或仓间调拨；报工只消耗生产仓可用批次</p></div></div>
+        <div class="path">生产管理 <b>›</b> 物料需求单 <b>›</b> 按计划生成　或　仓储管理 <b>›</b> 调拨单 <b>›</b> 仓库间调拨</div>
+        <div class="table-wrap"><table><thead><tr><th>场景</th><th>推荐单据</th><th>必须核对</th><th>最终状态</th></tr></thead><tbody>
+          <tr><td>按生产计划领原/辅/包材</td><td>物料需求单（按 BOM 展开）</td><td>计划号、源仓→生产仓、需求/实拣、批次、单位</td><td>已签收 / 生产中</td></tr>
+          <tr><td>无计划临时领料、仓库互调</td><td>WAREHOUSE_TO_WAREHOUSE 调拨单</td><td>调出仓、调入仓、物料、现有库存、数量、批次</td><td>已确认</td></tr>
+          <tr><td>生产后余料退回</td><td>物料需求单关单退料 / 退料记录</td><td>发出−实用−损耗=退回；原批次/成本延续</td><td>已关单</td></tr>
+        </tbody></table></div>
+        <div class="steps" style="margin-top:12px">
+          <label class="step"><span class="check"><input type="checkbox" data-key="warehouse-feed-1"><span></span></span><span><h4>按计划生成物料需求单</h4><p>选择生产计划生成需求单，核对 BOM 展开的原料、辅料、包材和需求单位。生产仓若缺配置，立即停止，不得默认到任意仓。</p><span class="expect">需求单显示真实仓库路由和全部物料类别；无 BOM 时明确报错。</span></span></label>
+          <label class="step"><span class="check"><input type="checkbox" data-key="warehouse-feed-2"><span></span></span><span><h4>仓管备料并确认实际拣货</h4><p>状态从“待备料”进入“备料中”；仓管逐行核对需求量和实际拣货量，批次默认按 FEFO，也可在允许时指定批次。</p><span class="expect">库存不足直接提示缺口，不能领成负数；实际拣货量与后续调拨发出量一致。</span></span></label>
+          <label class="step"><span class="check"><input type="checkbox" data-key="warehouse-feed-3"><span></span></span><span><h4>调拨并由生产仓签收</h4><p>调出仓确认发运，生产仓按实物逐行确认签收；核对单号、源仓→目标仓、批次、数量和单位。发出与实收不一致时建立差异记录。</p><span class="expect">状态到“已签收”；调出仓减少、生产仓增加，工厂总库存不因同厂调拨凭空变化。</span></span></label>
+          <label class="step"><span class="check"><input type="checkbox" data-key="warehouse-feed-4"><span></span></span><span><h4>独立调拨走完整审批状态机</h4><p>手动仓间调拨依次完成 DRAFT → 提交申请 → 审批通过 → 确认发运 → 确认签收 → 确认入库。申请人、审批人、发运人、签收人按权限分工。</p><span class="expect">任一步不能越级；源仓库存不足时“确认发运”禁用；驳回/取消必须选择原因。</span></span></label>
+          <label class="step"><span class="check"><input type="checkbox" data-key="warehouse-feed-5"><span></span></span><span><h4>报工前做生产仓双边复核</h4><p>仓管在分仓库存查询记录生产仓批次；生产人员在逐道录入下拉中核对同一批次和可用量。</p><span class="expect">仓库账、需求/调拨单、报工选择器三处的物料、批次、单位和可用量一致。</span></span></label>
+        </div>
+      </section>
+
+      <section id="report">
+        <div class="section-head"><span class="section-no">08</span><div class="section-title"><h3>逐道录入、正式报工与异常矩阵</h3><p>两条路线共用；每道工序都要验证输入、产出、人员工时、库存和幂等门禁</p></div></div>
+        <div class="path">生产管理 <b>›</b> 生产计划 <b>›</b> 目标计划行 <b>›</b> 逐道录入</div>
+        <div class="table-wrap"><table><thead><tr><th>每道工序录入组</th><th>手工输入</th><th>系统固定/自动</th><th>提交前核对</th></tr></thead><tbody>
+          <tr><td>报工组</td><td>生产日期</td><td>计划、Workflow 版本、工序顺序</td><td>日期存在，路线未失效</td></tr>
+          <tr><td>投入</td><td>选择实际来源批次、每项投入量</td><td>可选物料、SKU、单位和生产仓可用量</td><td>至少选 1 项；批次身份完整；不能超可用量</td></tr>
+          <tr><td>产出</td><td>每项产出数量</td><td>产出 SKU/单位来自 Workflow；成品净重来自 SKU</td><td>选中项数量大于 0；可选项可不选</td></tr>
+          <tr><td>人工</td><td>开始时间、结束时间、人数，或多段工时</td><td>总工时自动计算；时薪来自全局成本设置（未配置时按系统默认 ¥26/工时）</td><td>开始/结束成对；人数大于 0</td></tr>
+          <tr><td>副产/分摊</td><td>副产数量、回收单价；必要时成本分摊比例</td><td>副产单位随产出行；可统一计量时自动分摊</td><td>混合计量维度时每项比例大于 0，合计 100%</td></tr>
+        </tbody></table></div>
+        <div class="steps">
+          <label class="step"><span class="check"><input type="checkbox" data-key="report-1"><span></span></span><span><h4>R01 · 第一工序正常报工</h4><p>新增报工行，填写生产日期；从生产仓来源中选择本批实际投入的一种、多种或全部原料，逐项选批次并填投入量；填写产出量、开始/结束时间和人数。</p><span class="expect">至少选 1 个投入；正式提交前弹窗逐项列出“库存扣减 / 产出入库”；成功后状态为“已正式报工”。</span></span></label>
+          <label class="step"><span class="check"><input type="checkbox" data-key="report-2"><span></span></span><span><h4>R02 · 库存不足与占用冲突</h4><p>先把某原料投入量填成大于生产仓可用量，再尝试保存草稿和正式报工；另开一行占用同批次后重复验证。</p><span class="expect">页面明确指出批次及缺口；正式报工不能扣成负数。若草稿允许保存，也不得形成正式库存扣减或成本。</span></span></label>
+          <label class="step"><span class="check"><input type="checkbox" data-key="report-3"><span></span></span><span><h4>R03 · 后续工序与单位继承</h4><p>上游正式报工后，下游选择该计划已产出的半成品批次。包装工序投入按 kg、产出按盒；填写生产日期、产出盒数和工时。</p><span class="expect">上游未正式报工时下游不能正式提交；成品 800g/盒来自 SKU，不出现 1kg=1盒。</span></span></label>
+          <label class="step"><span class="check"><input type="checkbox" data-key="report-4"><span></span></span><span><h4>R04 · 多产出、联产与副产</h4><p>对 1→多或多→多工序，逐项核对正式产出 SKU 和单位不可改，分别填写各产出数量、时间和人数。若本次实际产生肥油等副产，再在报工行的“副产数量、回收单价”字段填写；副产不预建工序、不画 Workflow Cell。</p><span class="expect">正式联产品各自生成可入库批次；报工副产只形成成本回收明细，不生成 SKU 批次，也不冒充正式成品。</span></span></label>
+          <label class="step"><span class="check"><input type="checkbox" data-key="report-5"><span></span></span><span><h4>R05 · 多产出成本分摊</h4><p>先用同单位或可换算质量单位的多个产出，确认系统自动按数量/质量形成分摊；再用无法统一折算的单位组合，手填各产出成本分摊比例。</p><span class="expect">仅在无法可靠统一计量时出现手工比例；任一比例≤0或合计不等于 100% 均阻止正式报工。</span></span></label>
+          <label class="step"><span class="check"><input type="checkbox" data-key="report-6"><span></span></span><span><h4>R06 · Workflow 版本与端口身份锁定</h4><p>记录计划固定的 Workflow ID/版本/端口；另处发布新版本后返回旧计划继续录入。</p><span class="expect">旧计划继续使用创建时快照；若端口身份失效或原料已删除，应阻止并提示重新建计划，不能映射到同名物料。</span></span></label>
+          <label class="step" data-min-depth="medium"><span class="check"><input type="checkbox" data-key="report-7"><span></span></span><span><h4>R07 · 填齐条件字段、损耗、留样和报工证据</h4><p>按页面实际出现的字段录入损耗量、留样量、异常原因、备注及多段人员工时；需要凭证时上传现场照片或附件。未出现的条件字段不伪造，也不为了测试把高级设置硬塞进工序主档。</p><span class="expect">总工时按报工记录汇总；留样不超过实际产量；损耗、备注和附件随本条报工可回看，且不会被重复计入库存或成本。</span></span></label>
+          <label class="step" data-min-depth="full"><span class="check"><input type="checkbox" data-key="report-8"><span></span></span><span><h4>R08 · 触发需要审批的正式报工</h4><p>用满足审批规则的数量、金额或异常条件正式提交，记录提交人、提交时间和审批实例；分别做一次通过、一次驳回后修正重提。</p><span class="expect">待审批记录不能提前成为最终库存、工资或成本事实；驳回保留原因，修正重提形成新审批轨迹；通过只落账一次。</span></span></label>
+        </div>
+        <h4 data-min-depth="full" style="margin:22px 0 10px;font-size:17px">报错与冲突等价类（逐项故意触发）</h4>
+        <div class="table-wrap" data-min-depth="full"><table><thead><tr><th>编号</th><th>触发方式</th><th>必须出现的结果</th></tr></thead><tbody>
+          <tr><td>E01</td><td>生产日期为空</td><td>提示“请选择生产日期”；正式报工被阻止</td></tr>
+          <tr><td>E02</td><td>一个投入都不选</td><td>提示至少选择 1 个投入</td></tr>
+          <tr><td>E03</td><td>选中投入但未选批次/未填正数数量</td><td>指出具体物料或来源批次，不能提交</td></tr>
+          <tr><td>E04</td><td>投入量超过批次/半成品剩余量</td><td>显示剩余量和超出量；不形成负库存</td></tr>
+          <tr><td>E05</td><td>上游尚未正式报工就提交下游</td><td>只允许草稿或直接阻止；提示先完成上游</td></tr>
+          <tr><td>E06</td><td>产出端口为空，或选中产出数量≤0</td><td>指出具体产出项；不能生成空批次</td></tr>
+          <tr><td>E07</td><td>只填开始或结束时间</td><td>提示补全该产出的开始和结束时间</td></tr>
+          <tr><td>E08</td><td>混合计量多产出未填比例或合计≠100%</td><td>提示成本分摊错误；不持久化正式报工</td></tr>
+          <tr><td>E09</td><td>Workflow 原料/端口已失效</td><td>提示重新绑定并重新创建生产计划</td></tr>
+          <tr><td>E10</td><td>已正式报工行再次编辑或双击提交</td><td>行只读且幂等；库存、批次、成本各只发生一次</td></tr>
+          <tr><td>E11</td><td>留样数量大于实际产量</td><td>明确阻止，不能用负可售数量兜底</td></tr>
+          <tr><td>E12</td><td>并发报工同时抢占同一库存批次</td><td>至少一个请求失败并刷新可用量；总扣减不超过库存</td></tr>
+        </tbody></table></div>
+      </section>
+
+      <section id="report-approval" data-min-depth="medium">
+        <div class="section-head"><span class="section-no">08A</span><div class="section-title"><h3>报工审批与生效边界</h3><p>不是所有报工都必审；只有命中当前审批规则时进入待审，未命中时明确直通</p></div></div>
+        <div class="path">生产管理 <b>›</b> 报工记录 / 待审批任务 <b>›</b> 审批详情</div>
+        <div class="steps">
+          <label class="step"><span class="check"><input type="checkbox" data-key="approval-1"><span></span></span><span><h4>确认本次报工是直通还是待审批</h4><p>提交正式报工后先查看返回状态、审批实例号和页面提示；记录本次命中了哪条规则。没有审批规则时应明确直接生效，而不是显示一个永远没人处理的待审状态。</p><span class="expect">直通与待审批只能出现一种；状态、审批实例和库存生效时点一致。</span></span></label>
+          <label class="step"><span class="check"><input type="checkbox" data-key="approval-2"><span></span></span><span><h4>主管复核报工完整内容</h4><p>审批人逐项核对工厂、计划、Workflow 版本、工序、投入批次与数量、产出、人员、工时、生产日期、损耗、留样及附件。</p><span class="expect">审批页不是只有汇总数字；审批人无权修改原始报工事实，跨 F006 对象不可见。</span></span></label>
+          <label class="step"><span class="check"><input type="checkbox" data-key="approval-3"><span></span></span><span><h4>分别验证通过、驳回和修正重提</h4><p>先输入审批意见并驳回一条，确认生产人员可见原因、修正后重提；再由有权限人员通过。回读库存、工资和成本生效时间。</p><span class="expect">驳回不落最终库存/工资/成本；通过后只落一次；原审批、驳回原因和重提版本都可追溯。</span></span></label>
+        </div>
+      </section>
+
+      <section id="quality" data-min-depth="full">
+        <div class="section-head"><span class="section-no">08B</span><div class="section-title"><h3>生产质检、复检与不合格品处置</h3><p>质检是报工产出后的独立质量状态，不用副产字段替代</p></div></div>
+        <div class="path">质量管理 <b>›</b> 批次质检 / 待复检 / 不合格品处置</div>
+        <div class="steps">
+          <label class="step"><span class="check"><input type="checkbox" data-key="quality-1"><span></span></span><span><h4>对正式产出批次发起质检</h4><p>选择本轮生产批次，录入抽样数、合格数、不合格数、检验结果和检验备注，并上传需要的凭证。</p><span class="expect">抽样数=合格数+不合格数且不超过批次数量；待检批次不能被当作可销售合格品。</span></span></label>
+          <label class="step"><span class="check"><input type="checkbox" data-key="quality-2"><span></span></span><span><h4>验证待定与复检</h4><p>第一次选择“待定/需复检”，再由另一位质检角色补充复检结果。</p><span class="expect">复检前质量状态不自动变为合格；两次结果、人员、时间和附件均保留。</span></span></label>
+          <label class="step"><span class="check"><input type="checkbox" data-key="quality-3"><span></span></span><span><h4>登记不合格原因与处置方案</h4><p>选择缺陷类型，填写原因、责任工序和处置措施；分别验证返工、降级使用或报废分支中页面当前支持的路径。</p><span class="expect">不合格数量不进入正常可售库存；处置决定与责任工序可回溯，库存变化有对应单据。</span></span></label>
+          <label class="step"><span class="check"><input type="checkbox" data-key="quality-4"><span></span></span><span><h4>完成处置闭环</h4><p>返工则回到允许的生产任务并重新质检；报废则走损耗/报废审批；降级使用则绑定新的用途或物料身份。</p><span class="expect">原不合格批次不会同时出现在合格、返工和报废三条库存中；处置完成后状态唯一。</span></span></label>
+        </div>
+      </section>
+
+      <section id="settle">
+        <div class="section-head"><span class="section-no">09</span><div class="section-title"><h3>完成库存结算</h3><p>报工记录完成后，还要执行对应路线的库存结算动作</p></div></div>
+        <div class="steps stock-only">
+          <label class="step"><span class="check"><input type="checkbox" data-key="settle-stock-1"><span></span></span><span><h4>执行第一次“小结”</h4><p>确认弹窗中的计划号和当前已录入数量。小结会按本轮正式报工增量扣减投入原料，并把半成品/成品入库；计划保持开放。</p><span class="expect">提示“已小结，计划继续挂起”；库存变化只发生一次。</span></span></label>
+          <label class="step"><span class="check"><input type="checkbox" data-key="settle-stock-2"><span></span></span><span><h4>验证第二轮增量小结</h4><p>再报一轮并再次小结，核对只增加第二轮产出、只扣第二轮投入，第一轮不得重复扣减。</p><span class="expect">两次小结的增量可分别解释，总库存等于期初 ± 两轮变动。</span></span></label>
+          <label class="step"><span class="check"><input type="checkbox" data-key="settle-stock-3"><span></span></span><span><h4>生产完成后“停产”</h4><p>确认所有轮次都已小结后点“停产”。停产后计划关闭，不能继续小结。</p><span class="expect">计划不再处于开放生产状态；历史报工和小结仍可查看。</span></span></label>
+        </div>
+        <div class="steps sales-only">
+          <label class="step"><span class="check"><input type="checkbox" data-key="settle-sales-1"><span></span></span><span><h4>打开“核对结单”</h4><p>逐项核对实际产量、原料/半成品领用、工时和系统预填值。原料批次下拉应按当前生效 BOM 预过滤。</p><span class="expect">不能选择 BOM 外原料；缺 BOM 时明确提示先去配置，不伪造领用。</span></span></label>
+          <label class="step"><span class="check"><input type="checkbox" data-key="settle-sales-2"><span></span></span><span><h4>提交生产结单</h4><p>提交前再次核对成品单位、数量和订单关联。提交后读取真实状态和提示，不把“生产结单已提交”误判为仓库已经收货。</p><span class="expect">计划进入等待仓库确认入库的状态；此时成品尚不能作为主仓/外仓可用库存，且可回溯销售订单号。</span></span></label>
+        </div>
+        <div class="steps" style="margin-top:12px">
+          <label class="step"><span class="check"><input type="checkbox" data-key="settle-warehouse-receipt"><span></span></span><span><h4>仓库确认完工入库</h4><p>由仓管从生产计划列表或对应待办进入“确认入库”，核对计划号、成品 SKU、批次、生产日期、应收/实收数量、单位、目标生产仓和差异原因后确认。</p><span class="expect">只有仓库确认成功后，正式成品批次和生产仓可用库存才生效；重复确认不重复入库，少收/拒收必须留差异。</span></span></label>
+        </div>
+        <div class="callout danger"><strong>不要只看 material batch 的某一个旧字段</strong>以“库存查询页的前后数量 + 正式报工记录 + 小结/结单结果”组成证据。仅保存报工行、仅看到接口 200，均不能证明库存闭环。</div>
+      </section>
+
+      <section id="reversal" data-min-depth="full">
+        <div class="section-head"><span class="section-no">09R</span><div class="section-title"><h3>报工、结单与库存冲销</h3><p>用正式反向业务单据恢复状态；禁止直接改库存或删除历史</p></div></div>
+        <div class="path">生产管理 <b>›</b> 报工记录 / 生产计划详情 <b>›</b> 撤回、冲销或反结单</div>
+        <div class="steps">
+          <label class="step"><span class="check"><input type="checkbox" data-key="reversal-1"><span></span></span><span><h4>取消尚未正式生效的草稿/待审报工</h4><p>对未正式落账记录执行取消，填写原因并回读库存占用。</p><span class="expect">草稿或被驳回记录可取消；没有正式库存和成本反向流水，也不残留占用。</span></span></label>
+          <label class="step"><span class="check"><input type="checkbox" data-key="reversal-2"><span></span></span><span><h4>申请整批正式报工撤回</h4><p>对已正式报工批次发起撤回/冲销，填写原因、责任人和影响范围，交由有权限人员审批。</p><span class="expect">不能只删页面记录；申请、审批、原报工与冲销单互相可追溯。</span></span></label>
+          <label class="step"><span class="check"><input type="checkbox" data-key="reversal-3"><span></span></span><span><h4>核对冲销后的库存和成本重算</h4><p>审批通过后，核对原料补回、半成品/成品产出失效、移动平均成本与人工成本重算，再查看生产计划可继续处理的状态。</p><span class="expect">反向数量与原正式落账逐项对应；历史不物理删除；重复审批或刷新不重复冲销。</span></span></label>
+          <label class="step"><span class="check"><input type="checkbox" data-key="reversal-4"><span></span></span><span><h4>验证存在下游使用时阻止冲销</h4><p>先让半成品被下游报工消耗，或让成品已调拨/发货，再尝试撤回上游。</p><span class="expect">系统指出具体下游占用、批次或单据并阻止；不得形成负库存或断裂谱系。</span></span></label>
+          <label class="step stock-only"><span class="check"><input type="checkbox" data-key="reversal-5"><span></span></span><span><h4>验证存货生产最近一次小结反向</h4><p>在页面允许的时限内对最近一次小结发起撤回，填写原因并核对只有该轮增量被反向。</p><span class="expect">不影响更早轮次；超过时限或已有下游使用时阻止；停产后的限制清晰。</span></span></label>
+        </div>
+      </section>
+
+      <section id="warehouse-output">
+        <div class="section-head"><span class="section-no">W2</span><div class="section-title"><h3>生产后仓储交接：生产仓 → 主仓/外仓</h3><p>完工入账和跨仓移动是两件事；必须先有真实成品批次，再做仓间调拨</p></div></div>
+        <div class="path">生产小结/结单 <b>›</b> 生产仓成品批次 <b>›</b> 仓储管理 → 调拨单 <b>›</b> 目标主仓/外仓确认入库</div>
+        <div class="steps">
+          <label class="step"><span class="check"><input type="checkbox" data-key="warehouse-output-1"><span></span></span><span><h4>确认仓库收货后产出进入正确生产仓</h4><p>完成生产结算及仓库确认入库后，在分仓库存查询按成品 SKU、生产批次和生产日期检索，记录生产仓数量、单位和质量状态。</p><span class="expect">仓库确认的正式产出与生产仓新增批次一一对应；未确认、草稿、副产物和未选联产品不会误入可用成品库存。</span></span></label>
+          <label class="step"><span class="check"><input type="checkbox" data-key="warehouse-output-2"><span></span></span><span><h4>创建生产仓到主仓/外仓调拨</h4><p>新建仓库间调拨，源仓选生产仓，目标仓选实际存货或发货仓；添加成品 SKU、数量、单位，并指定或接受 FEFO 批次。</p><span class="expect">调拨数量不能超过生产仓可用量；源/目标仓不能相同；成品盒数和批次身份不被换算成 kg。</span></span></label>
+          <label class="step"><span class="check"><input type="checkbox" data-key="warehouse-output-3"><span></span></span><span><h4>走完审批、发运、签收和入库</h4><p>依次提交申请、主管审批、生产仓确认发运、目标仓确认签收、确认入库。每一步对照纸面/实物清点数量。</p><span class="expect">CONFIRMED 后源仓减少、目标仓增加、同厂总库存不变；审批人及各操作时间可追溯。</span></span></label>
+          <label class="step"><span class="check"><input type="checkbox" data-key="warehouse-output-4"><span></span></span><span><h4>处理调拨差异</h4><p>故意做一次少收测试，签收数量与发运数量不同；打开“调拨差异找单”记录原因并按页面流程处理。</p><span class="expect">差异可见且未处理前不静默平账；不能把少收数量同时计入两个仓库。</span></span></label>
+          <label class="step"><span class="check"><input type="checkbox" data-key="warehouse-output-5"><span></span></span><span><h4>完成生产与仓库双方交接签字式复核</h4><p>生产方确认产出批次/数量，仓管确认实收批次/数量；记录生产计划号、报工号、调拨号、源仓、目标仓和差异单号。</p><span class="expect">生产、仓库和库存查询三处可用同一批次链串起来，不依赖口头交接。</span></span></label>
+        </div>
+      </section>
+
+      <section id="warehouse-exceptions" data-min-depth="full">
+        <div class="section-head"><span class="section-no">W3</span><div class="section-title"><h3>仓储异常、退料、损耗与在途对账</h3><p>把生产仓与主仓/外仓之间所有非正常数量变化变成可审批、可追溯的单据</p></div></div>
+        <div class="path">仓储管理 <b>›</b> 退料 / 损耗 / 调拨差异 / 在途库存 / 半成品库存</div>
+        <div class="steps">
+          <label class="step"><span class="check"><input type="checkbox" data-key="warehouse-ex-1"><span></span></span><span><h4>生产余料退回原仓</h4><p>按“已领料−实际消耗−确认损耗”计算可退量，选择原领料批次、退回仓库、数量和原因，完成仓库复核。</p><span class="expect">退料沿用原批次和成本；生产仓减少、目标仓增加，同厂总量不凭空变化。</span></span></label>
+          <label class="step"><span class="check"><input type="checkbox" data-key="warehouse-ex-2"><span></span></span><span><h4>登记生产/仓储损耗并审批</h4><p>选择物料批次和责任环节，填写损耗数量、原因及照片；由主管或财务按当前规则审批。</p><span class="expect">审批前不减少可用库存；审批后只扣一次并进入损耗成本，不与副产回收或盘点差异重复。</span></span></label>
+          <label class="step"><span class="check"><input type="checkbox" data-key="warehouse-ex-3"><span></span></span><span><h4>闭环处理调拨差异</h4><p>对少收差异依次验证“找到并补收、确认在途、确认损耗/核销”中页面支持的处置，并记录审批意见。</p><span class="expect">差异只能落到一个最终去向；发出量=实收量+仍在途量+已审批损耗量。</span></span></label>
+          <label class="step"><span class="check"><input type="checkbox" data-key="warehouse-ex-4"><span></span></span><span><h4>核对在途库存台账</h4><p>在发运后、签收前分别查询源仓、目标仓和在途台账，再完成签收。</p><span class="expect">货物不会同时计入源仓和目标仓可用量；签收后在途归零，整条调拨流水守恒。</span></span></label>
+          <label class="step"><span class="check"><input type="checkbox" data-key="warehouse-ex-5"><span></span></span><span><h4>盘点在制品与半成品</h4><p>分别选择生产仓中的在制/半成品批次，录入实盘数、差异原因并走审批应用。</p><span class="expect">在制/半成品不被漏进成品盘点；单位、工序来源、批次谱系和差异流水均保留。</span></span></label>
+        </div>
+      </section>
+
+      <section id="cost">
+        <div class="section-head"><span class="section-no">09A</span><div class="section-title"><h3>成本归集、工序人工分摊与成品出厂核算</h3><p>成本汇总独立于盘点；只有正式报工、小结/结单和价格/工时完整后才形成可信结果</p></div></div>
+        <div class="path">生产管理 <b>›</b> 生产批次详情 / 人效双口径对比 / 成品出厂核算 / 成本汇总</div>
+        <div class="table-wrap"><table><thead><tr><th>成本桶</th><th>来源</th><th>逐工序/产出分配</th><th>缺失时</th></tr></thead><tbody>
+          <tr><td>原料材料</td><td>实际投入批次 × 批次成本</td><td>沿投入谱系归入对应工序；多产出再按系统或比例分摊</td><td>显示 — / 未归集，不得当 0</td></tr>
+          <tr><td>辅料/包材</td><td>BOM 与实际工序领用</td><td>归入使用它们的工序和产出</td><td>提示缺 BOM/领用</td></tr>
+          <tr><td>人工</td><td>全局工时单价 × 每道工序实际人工工时</td><td>先按工序归集；多产出按产出分摊基础分开</td><td>未配置时明确采用系统默认 ¥26/工时</td></tr>
+          <tr><td>设备/其他</td><td>报工或成本配置</td><td>若当前版本仅支持批次汇总，页面必须明确“未按本道分摊”</td><td>不可伪装成逐道成本</td></tr>
+          <tr><td>副产回收</td><td>副产数量 × 回收单价</td><td>冲减其所属产出的主产品成本</td><td>无单价按 0 回收，但保留数量明细</td></tr>
+        </tbody></table></div>
+        <div class="steps" style="margin-top:12px">
+          <label class="step"><span class="check"><input type="checkbox" data-key="cost-1"><span></span></span><span><h4>核对逐工序实际成本</h4><p>打开生产批次详情，逐道核对投入、产出、人数、工时、人工成本、材料成本和小计；再与逐道报工原始行对照。</p><span class="expect">人工成本按全局工时单价乘本道实际工时形成；材料价格缺失显示“—”，不是 ¥0；全局工时单价未配置时明确标识使用默认 ¥26/工时。</span></span></label>
+          <label class="step"><span class="check"><input type="checkbox" data-key="cost-2"><span></span></span><span><h4>验证多产出成本分摊落账</h4><p>打开 R05 的联产报工，核对每个产出保存的成本分摊比例、分摊基础和物化成本；相加后与本道总投入成本一致。</p><span class="expect">各产出分摊合计=本道应分成本，允许舍入差但不能重复或漏分；正式成品和半成品分别可追溯。</span></span></label>
+          <label class="step"><span class="check"><input type="checkbox" data-key="cost-3"><span></span></span><span><h4>核对副产回收冲减</h4><p>在“成品出厂核算”查看副产明细、回收金额、总成本、净成本和单盒净成本。</p><span class="expect">副产回收=Σ(数量×单价)，净成本=总成本−副产回收；副产无单价时数量仍显示且回收额为 0。</span></span></label>
+          <label class="step"><span class="check"><input type="checkbox" data-key="cost-4"><span></span></span><span><h4>核对成品出厂核算六桶</h4><p>按销售订单/生产批次选择本轮数据，核对 traced 原料、工序辅料、包材、人工、设备、其他和最终盒数。</p><span class="expect">闭环总成本可由各桶相加解释；单盒成本=净总成本÷真实入库盒数。若页面提示某成本未按本道分摊，记录为当前口径而非强行拆分。</span></span></label>
+          <label class="step"><span class="check"><input type="checkbox" data-key="cost-5"><span></span></span><span><h4>核对成本汇总与权限</h4><p>进入“成本汇总”，按订单日期范围查询；把本销售订单的产量、出成率、材料/人工/设备/其他、总成本和单盒成本与明细页对齐。</p><span class="expect">一张订单一行，明细与汇总一致；无价格查看权限的角色显示脱敏“—”，不会泄露或显示假 0。</span></span></label>
+          <label class="step" data-min-depth="full"><span class="check"><input type="checkbox" data-key="cost-6"><span></span></span><span><h4>核对 BOM 达成率</h4><p>按计划、批次和工序比较 BOM 理论投入与正式报工实际投入，查看数量差异、比例和原因。</p><span class="expect">理论口径来自计划固定的 BOM 版本；替代原料按替代组归类但保留真实 SKU，不把差异静默归零。</span></span></label>
+          <label class="step" data-min-depth="full"><span class="check"><input type="checkbox" data-key="cost-7"><span></span></span><span><h4>核对工序投入产出与损耗率</h4><p>逐道查看投入、合格产出、留样、损耗、副产和下一工序接收量，计算转化率与差异。</p><span class="expect">各工序数量能沿批次谱系衔接；跨单位仅按已有科学换算，不用假 1:1 补齐。</span></span></label>
+          <label class="step" data-min-depth="full"><span class="check"><input type="checkbox" data-key="cost-8"><span></span></span><span><h4>核对三价、交期预警与补货队列</h4><p>对同一成品回看标准/计划/实际成本口径，并检查订单交期预警、缺料补货队列和实时生产报表。</p><span class="expect">三种价格有明确来源和时间点；预警与实际计划、采购和库存状态同步，不用历史快照伪装实时。</span></span></label>
+        </div>
+      </section>
+
+      <section id="sales-close" class="sales-only">
+        <div class="section-head"><span class="section-no">B2</span><div class="section-title"><h3>销售管理完工后的交付与财务闭环</h3><p>销售创建任务，仓库确认扣库存；发货、开票、收款、退货分别留痕</p></div></div>
+        <div class="path">销售管理 <b>›</b> 销售订单详情 <b>›</b> 创建发货单　＋　仓库角色 <b>›</b> 待确认发货</div>
+        <div class="steps">
+          <label class="step"><span class="check"><input type="checkbox" data-key="sales-close-1"><span></span></span><span><h4>销售创建发货单</h4><p>在销售订单选择已入主仓/外仓的成品，填写计划发货日期、地址和各行计划数量，创建发货单。</p><span class="expect">只生成待仓库确认的任务单，不立即扣库存；产品、客户和订单号自动关联。</span></span></label>
+          <label class="step"><span class="check"><input type="checkbox" data-key="sales-close-2"><span></span></span><span><h4>仓库角色分配批次并确认发货</h4><p>从销售订单详情创建的待确认发货任务进入仓库确认页，核对实际数量、来源仓和 FEFO 批次；每行批次分配合计必须等于实发量，再确认发货。</p><span class="expect">确认后才扣成品库存并生成送货单；库存不足、仓库不符或分配合计不等时阻止。“仓储管理 → 出货记录”只用于历史查询，不是正式写入口。</span></span></label>
+          <label class="step"><span class="check"><input type="checkbox" data-key="sales-close-3"><span></span></span><span><h4>核对部分发货和订单状态</h4><p>先只发部分数量，再发剩余数量；每次回看销售订单详情、发货记录和库存。</p><span class="expect">状态依次为部分发货/已发货；累计实发不超过订单量，每个发货单只扣一次。</span></span></label>
+          <label class="step"><span class="check"><input type="checkbox" data-key="sales-close-4"><span></span></span><span><h4>开票与收款/应收核对</h4><p>按权限从销售订单发起开票申请，由财务审核；在收款管理登记回款，再到应收应付和客户详情的发票/付款页签核对。</p><span class="expect">订单金额、已开票、已收款和应收余额可计算闭合；销售人员不能越权完成财务审核。</span></span></label>
+          <label class="step"><span class="check"><input type="checkbox" data-key="sales-close-5"><span></span></span><span><h4>销售退货与退款分支</h4><p>对已发货行发起销售退货，数量不得超过累计已发货量；提交审批后分别核对退货入库、退款/销售付款申请和应收变化。</p><span class="expect">DRAFT 退货不直接改库存或资金；审批后动作可追溯，重复审批不重复入库/退款。</span></span></label>
+          <label class="step"><span class="check"><input type="checkbox" data-key="sales-close-6"><span></span></span><span><h4>核对销售管理全部入口的职责边界</h4><p>逐一打开客户管理、销售订单、出货记录、销售退货、销售付款申请、财务待审销售单和车辆字典。注意“出货记录”是旧只读台账，真实库存扣减走仓储出货确认。</p><span class="expect">每个菜单有明确用途；旧出货台账不能写入或被当作发货完成证据。</span></span></label>
+        </div>
+      </section>
+
+      <section id="stocktake">
+        <div class="section-head"><span class="section-no">10</span><div class="section-title"><h3>库存查询与盘点闭环</h3><p>先记录系统账，再实盘、审批并应用差异</p></div></div>
+        <div class="path">仓储管理 <b>›</b> 分仓库存查询 / 库存批次查询 <b>›</b> 盘点与期初库存</div>
+        <div class="steps">
+          <label class="step"><span class="check"><input type="checkbox" data-key="count-1"><span></span></span><span><h4>记录生产后的系统库存</h4><p>搜索 A/B/C/D、处理后半成品、成品 800g，记录仓库、批次、系统数量和单位。半成品若启用独立盘点模块，按“半成品盘点”处理。</p><span class="expect">原料扣减、成品增加与实际报工和小结/结单可计算吻合。</span></span></label>
+          <label class="step"><span class="check"><input type="checkbox" data-key="count-2"><span></span></span><span><h4>发起盘点任务</h4><p>选择仓库、盘点月份和备注。非月末测试按页面允许的临时/专项盘点方式发起，不要为了测试伪造月末日期。</p><span class="expect">状态为“已发起”，列表出现“录入”和“提交审批”。</span></span></label>
+          <label class="step"><span class="check"><input type="checkbox" data-key="count-3"><span></span></span><span><h4>录入实盘数量并保存暂存</h4><p>只录入实际盘过的行；无差异时填系统数量，有差异时填真实数量并写备注。点“保存暂存”。</p><span class="expect">提示“盘点数量已保存（暂存，批准后生效）”；库存此时不变。</span></span></label>
+          <label class="step"><span class="check"><input type="checkbox" data-key="count-4"><span></span></span><span><h4>提交审批并完成审批</h4><p>列表点“提交审批”，审批人查看系统库存、实盘数量、差异和备注，再点“确认审批通过”。</p><span class="expect">状态为“已审批”，出现“应用差异”；库存仍未调整。</span></span></label>
+          <label class="step"><span class="check"><input type="checkbox" data-key="count-5"><span></span></span><span><h4>应用盘点差异</h4><p>点击“应用差异”，确认不可撤销提示。完成后回到库存查询重新搜索。</p><span class="expect">状态为“已应用”；库存等于实盘数量，差异只应用一次。</span></span></label>
+        </div>
+      </section>
+
+      <section id="acceptance">
+        <div class="section-head"><span class="section-no">11</span><div class="section-title"><h3>最终验收清单</h3><p>任何一项不满足，都记录截图、对象 ID、时间和当前状态</p></div></div>
+        <div class="table-wrap"><table><thead><tr><th>检查项</th><th>通过标准</th><th>证据</th></tr></thead><tbody>
+          <tr><td>所选深度</td><td>MVP 完成正常链；中度额外完成关键审批/常见分支；全量额外完成异常、治理和分析，且高层自动包含低层</td><td>深度按钮 + 当前可见步骤进度</td></tr>
+          <tr><td>租户隔离</td><td>所有创建、查询、审批对象均为 F006</td><td>页面工厂标识 / 对象详情</td></tr>
+          <tr><td>SKU 单位</td><td>半成品 kg；成品盒；1盒=800g；1箱=8盒</td><td>SKU 编辑页截图</td></tr>
+          <tr><td>BOM / 配方</td><td>原料、每成品包材用量、按具体工序辅料、可选锅序和 ACTIVE 版本均完整；SKU 单位与克重只读继承</td><td>BOM 配方头 + 三类明细 + 辅料汇总 + 版本状态</td></tr>
+          <tr><td>人工计价口径</td><td>工序主档不填预估工时/标准时薪；全局工时单价已核对；实际工时只在逐道报工填写</td><td>成本设置 + 工序主档 + 报工行</td></tr>
+          <tr><td>Workflow 单位</td><td>kg→kg、kg→盒，仅表达单位流向，不预设出成数量</td><td>Workflow Cell 图</td></tr>
+          <tr><td>原料投入选择</td><td>系统自动要求至少选 1 个；用户可选择 1 个、多个或全部；重复原料不可再次加入</td><td>Workflow Cell 图 + 逐道录入截图</td></tr>
+          <tr data-min-depth="medium"><td>路线匹配</td><td>精确匹配优先；最小联产超集其次；同层歧义必须人工选</td><td>计划新建页 + Cell 预览</td></tr>
+          <tr data-min-depth="full"><td>计划选品冲突</td><td>B01–B06 基础拓扑正确；C01–C10 候选等价类与 S01/S02 来源分支全部通过，不宣称只有固定 16 种组合</td><td>每个选择集合的候选层级、弹窗与计划版本</td></tr>
+          <tr><td>生产前仓储交接</td><td>原/辅/包材由主仓/外仓经需求单或调拨进入生产仓；发出、签收和生产仓批次一致</td><td>需求单/调拨单 + 两仓库存前后值</td></tr>
+          <tr class="sales-only" data-min-depth="medium"><td>缺料采购</td><td>采购单关联销售订单；审批、收货草稿、确认入库和缺口回读可追溯</td><td>销售单 + 采购单 + 入库批次</td></tr>
+          <tr><td>正式报工</td><td>MVP 正常报工可生效；中度覆盖审批、证据、联产和分摊；全量覆盖 E01–E12、版本锁与并发幂等</td><td>报工确认摘要 + 审批轨迹 + 错误截图</td></tr>
+          <tr data-min-depth="full"><td>质检与冲销</td><td>待检/复检/不合格处置唯一；撤回保留历史且反向库存成本，下游占用时阻止</td><td>质检单 + 处置单 + 冲销单 + 库存前后值</td></tr>
+          <tr class="stock-only"><td>存货生产</td><td>多次小结仅结算增量；停产后不可再小结</td><td>小结前后库存 + 计划状态</td></tr>
+          <tr class="sales-only"><td>销售订单生产</td><td>订单行带出产品/数量；结单后可回溯订单</td><td>订单、计划、结单详情</td></tr>
+          <tr><td>生产结算与仓库入库</td><td>结单提交不等于入库；仓库确认后才增加生产仓可用成品，重复确认不重复入库</td><td>结单状态 + 仓库确认单 + 成品批次</td></tr>
+          <tr><td>生产后仓储交接</td><td>成品从生产仓经完整调拨状态机进入主仓/外仓；同厂总库存不变，差异不静默平账</td><td>成品批次 + 调拨单 + 差异单</td></tr>
+          <tr data-min-depth="full"><td>仓储异常守恒</td><td>退料、损耗、在途、调拨差异和在制盘点均有唯一去向、审批与数量守恒</td><td>退料/损耗/差异单 + 在途与库存前后值</td></tr>
+          <tr><td>成本核算</td><td>材料、辅料、包材、人工、设备、其他和副产回收可解释；多产出分摊合计正确，汇总与明细一致</td><td>批次详情 + 成品出厂核算 + 成本汇总</td></tr>
+          <tr class="sales-only"><td>销售交付闭环</td><td>销售订单详情创建发货任务、仓库角色 FEFO 分配并确认扣货；历史出货记录不作为写入口</td><td>订单 + 发货任务 + 批次分配 + 库存</td></tr>
+          <tr class="sales-only" data-min-depth="medium"><td>销售财务闭环</td><td>部分发货、开票、收款和应收分别留痕且权限正确</td><td>发货 + 发票 + 收款 + 应收</td></tr>
+          <tr class="sales-only" data-min-depth="full"><td>销售退货与跨单</td><td>退货/退款不重复落账，多销售订单合并需求仍保留每张来源订单</td><td>退货单 + 退款/付款申请 + 计划来源</td></tr>
+          <tr><td>盘点</td><td>审批不改库存；应用差异后才与实盘一致</td><td>审批前后库存截图</td></tr>
+        </tbody></table></div>
+        <div class="record-grid" style="margin-top:18px">
+          <div class="record-field"><span>原料类型 ID</span><span class="blank"></span></div>
+          <div class="record-field"><span>半成品 / 成品 SKU ID</span><span class="blank"></span></div>
+          <div class="record-field"><span>BOM ID / 版本</span><span class="blank"></span></div>
+          <div class="record-field"><span>Workflow ID / 版本</span><span class="blank"></span></div>
+          <div class="record-field"><span>销售订单号</span><span class="blank"></span></div>
+          <div class="record-field"><span>生产计划号</span><span class="blank"></span></div>
+          <div class="record-field"><span>生产批次号</span><span class="blank"></span></div>
+          <div class="record-field"><span>物料需求单 / 采购单号</span><span class="blank"></span></div>
+          <div class="record-field"><span>领料 / 成品调拨单号</span><span class="blank"></span></div>
+          <div class="record-field"><span>发货单 / 开票 / 收款号</span><span class="blank"></span></div>
+          <div class="record-field"><span>盘点单号</span><span class="blank"></span></div>
+          <div class="record-field"><span>最终结论</span><span>□ 通过　□ 阻塞　□ 失败</span></div>
+          <div class="record-field"><span>问题记录 / 截图路径</span><span class="blank"></span></div>
+        </div>
+      </section>
+
+      <div class="footer-note">F006 生产全链路手工测试 SOP · 来源与深度可独立切换 · 中度包含 MVP，全量包含中度 · 勾选只保存在当前浏览器</div>
+    </main>
+  </div>
+
+  <script>
+    const topologyPlacement = document.getElementById('topologyPlacement');
+    const topologySection = document.getElementById('topology');
+    if (topologyPlacement && topologySection) topologyPlacement.replaceWith(topologySection);
+    const STORAGE_KEY = 'cretas-f006-production-sop-v20260719';
+    const DEPTH_KEY = 'cretas-f006-production-sop-depth-v20260719';
+    const MEDIUM_STEP_KEYS = new Set([
+      'sku-3', 'bom-5', 'bom-6', 'bom-7',
+      'warehouse-feed-4', 'report-2', 'report-4', 'report-5',
+      'warehouse-output-4', 'warehouse-output-5',
+      'cost-2', 'cost-3', 'cost-5',
+      'sales-close-3', 'sales-close-4', 'sales-close-6'
+    ]);
+    const FULL_STEP_KEYS = new Set(['report-6', 'sales-close-5']);
+    const DEPTH_LABELS = { mvp: 'MVP', medium: '中度', full: '全量' };
+    function applyStepDepths() {
+      document.querySelectorAll('.step').forEach(step => {
+        const key = step.querySelector('input[data-key]')?.dataset.key || '';
+        const inherited = step.closest('[data-min-depth]')?.dataset.minDepth;
+        const depth = inherited || (FULL_STEP_KEYS.has(key) ? 'full' : MEDIUM_STEP_KEYS.has(key) ? 'medium' : 'mvp');
+        step.dataset.minDepth = depth;
+        const heading = step.querySelector('h4');
+        if (heading && !heading.querySelector('.depth-badge')) {
+          const badge = document.createElement('span');
+          badge.className = `depth-badge ${depth}`;
+          badge.textContent = DEPTH_LABELS[depth];
+          heading.appendChild(badge);
+        }
+      });
+    }
+    applyStepDepths();
+    const checks = [...document.querySelectorAll('input[type="checkbox"][data-key]')];
+    function loadChecks() {
+      let saved = {};
+      try { saved = JSON.parse(localStorage.getItem(STORAGE_KEY) || '{}'); } catch (_) {}
+      checks.forEach(box => { box.checked = Boolean(saved[box.dataset.key]); });
+      updateProgress();
+    }
+    function saveChecks() {
+      const saved = {};
+      checks.forEach(box => { saved[box.dataset.key] = box.checked; });
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(saved));
+      updateProgress();
+    }
+    function updateProgress() {
+      const visible = checks.filter(box => box.closest('.step')?.offsetParent !== null);
+      const done = visible.filter(box => box.checked).length;
+      document.getElementById('progressText').textContent = `${done} / ${visible.length}`;
+      document.getElementById('progressBar').style.width = `${visible.length ? done / visible.length * 100 : 0}%`;
+    }
+    function resetChecks() {
+      if (!confirm('确认清空这份 SOP 在当前浏览器中的全部勾选？')) return;
+      localStorage.removeItem(STORAGE_KEY);
+      checks.forEach(box => { box.checked = false; });
+      updateProgress();
+    }
+    checks.forEach(box => box.addEventListener('change', saveChecks));
+    document.querySelectorAll('[data-route-btn]').forEach(button => {
+      button.addEventListener('click', () => {
+        document.body.dataset.route = button.dataset.routeBtn;
+        document.querySelectorAll('[data-route-btn]').forEach(item => item.classList.toggle('active', item === button));
+        requestAnimationFrame(updateProgress);
+      });
+    });
+    function setDepth(depth) {
+      const safeDepth = ['mvp', 'medium', 'full'].includes(depth) ? depth : 'mvp';
+      document.body.dataset.depth = safeDepth;
+      localStorage.setItem(DEPTH_KEY, safeDepth);
+      document.querySelectorAll('[data-depth-btn]').forEach(item => item.classList.toggle('active', item.dataset.depthBtn === safeDepth));
+      requestAnimationFrame(updateProgress);
+    }
+    document.querySelectorAll('[data-depth-btn]').forEach(button => {
+      button.addEventListener('click', () => setDepth(button.dataset.depthBtn));
+    });
+    setDepth(localStorage.getItem(DEPTH_KEY) || 'mvp');
+    const copyPrefix = document.getElementById('copyPrefixTop');
+    const copyStatus = document.getElementById('copyStatusTop');
+    const PREFIX_KEY = 'cretas-f006-sop-copy-prefix';
+    const STEP_FIELD_COPIES = {
+      'raw-1': [
+        ['原料名称 A', '{P}-黄油鸡-原料A'], ['原料名称 B', '{P}-黄油鸡-原料B'],
+        ['原料名称 C', '{P}-黄油鸡-原料C'], ['原料名称 D', '{P}-黄油鸡-原料D'],
+        ['辅料名称 1', '{P}-黄油鸡-黄油调味料'], ['辅料名称 2', '{P}-黄油鸡-香辛料'],
+        ['包材名称 1', '{P}-黄油鸡-成品盒'], ['包材名称 2', '{P}-黄油鸡-封膜'],
+        ['包材名称 3', '{P}-黄油鸡-外箱']
+      ],
+      'raw-2': [['保质期（天）', '7'], ['主档备注', '{P}-F006黄油鸡测试物料']],
+      'sku-1': [['产品名称', '{P}-黄油鸡-处理后半成品']],
+      'sku-2': [
+        ['产品名称', '{P}-黄油鸡-成品800g'],
+        ['标准克重数值', '800'],
+        ['装箱换算数值', '8']
+      ],
+      'labor-rate-1': [['全局工时单价', '26']],
+      'process-1': [['工序名称', '{P}-黄油鸡-原料处理']],
+      'process-2': [['工序名称', '{P}-黄油鸡-定量包装']],
+      'bom-2': [['原料备注', '{P}-黄油鸡配方原料']],
+      'bom-3': [
+        ['成品盒每成品用量', '1'], ['封膜每成品用量', '1'], ['外箱每成品用量', '0.125']
+      ],
+      'bom-4': [['版本备注', '{P}-黄油鸡首版配方']],
+      'bom-5': [['每1kg工序半成品辅料用量', '12'], ['工序辅料备注', '{P}-原料处理工序辅料']],
+      'bom-6': [['后续锅占第一锅百分比', '50']],
+      'bom-9': [['调整后的每成品用量', '1.05'], ['新版本备注', '{P}-BOM用量优化']],
+      'bom-10': [['ECN 标题', '{P}-黄油鸡BOM变更'], ['变更说明', '{P}-替代原料与工序辅料调整']],
+      'opening-1': [
+        ['原料 A 期初数量', '10'], ['原料 B 期初数量', '10'],
+        ['原料 C 期初数量', '10'], ['原料 D 期初数量', '10']
+      ],
+      'stock-3': [['计划基准量', '10'], ['计划备注', '{P}-存货生产最小闭环']],
+      'sales-0': [['客户名称', '{P}-测试客户'], ['联系人', '{P}-联系人'], ['联系电话', '13800000000'], ['收货地址', '{P}-测试收货地址']],
+      'sales-1': [['下单数量', '10'], ['未税单价', '50'], ['税率', '13']],
+      'sales-6': [['第二张销售订单数量', '5']],
+      'purchase-1': [['供应商名称', '{P}-测试供应商']],
+      'purchase-2': [['采购数量', '20'], ['采购单价', '10'], ['税率', '13'], ['采购备注', '{P}-销售订单缺料补货']],
+      'purchase-4': [['实际收货数量', '20'], ['厂号', '{P}-F006-厂号'], ['产地', '{P}-测试产地']],
+      'purchase-6': [['异常数量', '2'], ['异常处理备注', '{P}-采购入库差异处理']],
+      'purchase-7': [['采购退货数量', '1'], ['退货原因', '{P}-质量不符采购退货']],
+      'purchase-8': [['发票号码', '{P}-PUR-INV-001'], ['付款申请金额', '10']],
+      'warehouse-feed-2': [['实际拣货数量', '5']],
+      'warehouse-output-2': [['成品调拨数量', '5']],
+      'warehouse-output-4': [['目标仓实收数量', '4'], ['调拨差异原因', '{P}-少收1盒待核查']],
+      'report-1': [['投入数量', '5'], ['产出数量', '4.5'], ['开始时间', '08:00'], ['结束时间', '09:00'], ['人数', '2']],
+      'report-3': [['半成品投入数量', '4.5'], ['成品产出盒数', '5'], ['开始时间', '09:10'], ['结束时间', '10:00'], ['人数', '2']],
+      'report-4': [['联产品 A 产出数量', '3'], ['联产品 B 产出数量', '2'], ['副产数量', '0.5'], ['副产回收单价', '3.2']],
+      'report-5': [['产出 A 成本分摊比例', '70'], ['产出 B 成本分摊比例', '30']],
+      'report-7': [['损耗数量', '0.1'], ['留样数量', '0.1'], ['报工备注', '{P}-现场报工证据']],
+      'approval-3': [['驳回原因', '{P}-投入批次证据不完整'], ['通过意见', '{P}-复核无误同意报工']],
+      'quality-1': [['抽样数量', '5'], ['合格数量', '4'], ['不合格数量', '1'], ['检验备注', '{P}-成品批次抽样质检']],
+      'quality-3': [['不合格原因', '{P}-包装密封异常'], ['处置说明', '{P}-隔离并提交返工评审']],
+      'settle-warehouse-receipt': [['实际入库数量', '5'], ['入库差异原因', '{P}-数量一致无差异']],
+      'reversal-1': [['取消原因', '{P}-草稿测试取消']],
+      'reversal-2': [['正式撤回原因', '{P}-投入批次选择错误']],
+      'reversal-5': [['小结撤回原因', '{P}-最近一轮数量录入错误']],
+      'warehouse-ex-1': [['退料数量', '0.5'], ['退料原因', '{P}-生产余料退回']],
+      'warehouse-ex-2': [['损耗数量', '0.2'], ['损耗原因', '{P}-生产过程合理损耗']],
+      'warehouse-ex-3': [['差异处置意见', '{P}-确认在途后补收']],
+      'warehouse-ex-5': [['半成品实盘数量', '4.4'], ['盘点差异原因', '{P}-在制称重复核差异']],
+      'sales-close-1': [['发货数量', '5'], ['发货地址', '{P}-测试收货地址']],
+      'sales-close-2': [['实际发货数量', '5']],
+      'count-2': [['盘点备注', '{P}-核对正式报工及小结/结单后的库存变化']],
+      'topo-basic-11': [
+        ['原料名称', '{P}-拓扑原料R1'], ['工序名称', '{P}-拓扑工序P11'],
+        ['产品名称', '{P}-拓扑成品A'], ['标准克重数值', '100']
+      ],
+      'topo-basic-m1': [
+        ['原料名称 R2', '{P}-拓扑原料R2'], ['原料名称 R3', '{P}-拓扑原料R3'],
+        ['工序名称', '{P}-拓扑工序PM1'], ['产品名称', '{P}-拓扑成品B'], ['标准克重数值', '100']
+      ],
+      'topo-basic-1m': [
+        ['原料名称', '{P}-拓扑原料R4'], ['工序名称', '{P}-拓扑工序P1M'],
+        ['产品名称 C', '{P}-拓扑成品C'], ['产品 C 标准克重', '100'],
+        ['产品名称 D', '{P}-拓扑成品D'], ['产品 D 标准克重', '100']
+      ],
+      'topo-basic-mm': [
+        ['原料名称 R5', '{P}-拓扑原料R5'], ['原料名称 R6', '{P}-拓扑原料R6'],
+        ['工序名称', '{P}-拓扑工序PMM'],
+        ['产品名称 E', '{P}-拓扑成品E'], ['产品 E 标准克重', '100'],
+        ['产品名称 F', '{P}-拓扑成品F'], ['产品 F 标准克重', '100']
+      ],
+      'topo-conflict-exact-vs-super': [['中间工序名称', '{P}-拓扑工序P-A1']],
+      'topo-conflict-11-m1': [['中间工序名称', '{P}-拓扑工序P-AM']],
+      'topo-conflict-same-output': [['第二条中间工序名称', '{P}-拓扑工序P-A2']]
+    };
+    function defaultPrefix() {
+      const now = new Date();
+      const date = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}${String(now.getDate()).padStart(2, '0')}`;
+      return `SOP-${date}-01`;
+    }
+    function currentPrefix() { return (copyPrefix?.value || defaultPrefix()).trim() || defaultPrefix(); }
+    function copyTextFor(row) { return row.dataset.copyTemplate.replaceAll('{P}', currentPrefix()); }
+    function installFieldCopyRows() {
+      document.querySelectorAll('.step').forEach(step => {
+        const key = step.querySelector('input[data-key]')?.dataset.key || '';
+        const fields = STEP_FIELD_COPIES[key];
+        if (!fields?.length) return;
+        const list = document.createElement('div');
+        list.className = 'field-copy-list screen-only';
+        fields.forEach(([label, value]) => {
+          const row = document.createElement('div');
+          row.className = 'copy-row field-copy-row';
+          row.dataset.copyTemplate = value;
+          const name = document.createElement('span');
+          name.className = 'field-copy-label';
+          name.textContent = label;
+          const content = document.createElement('code');
+          content.className = 'copy-content';
+          const button = document.createElement('button');
+          button.className = 'copy-button';
+          button.type = 'button';
+          button.textContent = '复制';
+          row.append(name, content, button);
+          list.appendChild(row);
+        });
+        step.querySelector(':scope > span:last-child')?.appendChild(list);
+      });
+    }
+    installFieldCopyRows();
+    const copyRows = [...document.querySelectorAll('.field-copy-row[data-copy-template]')];
+    function renderCopyRows() {
+      copyRows.forEach(row => {
+        const content = row.querySelector('.copy-content');
+        const value = copyTextFor(row);
+        content.textContent = value;
+        content.title = value;
+      });
+    }
+    async function writeClipboard(text) {
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(text);
+        return;
+      }
+      const area = document.createElement('textarea');
+      area.value = text;
+      area.style.position = 'fixed';
+      area.style.opacity = '0';
+      document.body.appendChild(area);
+      area.select();
+      document.execCommand('copy');
+      area.remove();
+    }
+    copyPrefix.value = localStorage.getItem(PREFIX_KEY) || defaultPrefix();
+    copyPrefix.addEventListener('input', () => {
+      localStorage.setItem(PREFIX_KEY, currentPrefix());
+      renderCopyRows();
+    });
+    copyRows.forEach(row => {
+      row.querySelector('.copy-button').addEventListener('click', async event => {
+        const button = event.currentTarget;
+        try {
+          await writeClipboard(copyTextFor(row));
+          button.textContent = '已复制';
+          button.classList.add('copied');
+          const label = row.querySelector('.field-copy-label')?.textContent || '当前字段';
+          copyStatus.textContent = `已复制：${label}`;
+          setTimeout(() => { button.textContent = '复制'; button.classList.remove('copied'); }, 1200);
+        } catch (_) {
+          copyStatus.textContent = '复制失败，请选中单行内容后手动复制';
+        }
+      });
+    });
+    renderCopyRows();
+    loadChecks();
+  </script>
+</body>
+</html>
