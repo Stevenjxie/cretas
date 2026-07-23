@@ -44,7 +44,7 @@ public class MaterialConsumption extends BaseEntity {
     private Long productionBatchId;
     @Column(name = "batch_id", nullable = false)
     private String batchId;
-    @Column(name = "quantity", nullable = false, precision = 10, scale = 2)
+    @Column(name = "quantity", nullable = false, precision = 18, scale = 6)
     private BigDecimal quantity;
     @PriceSensitive
     @Column(name = "unit_price", nullable = false, precision = 10, scale = 2)
@@ -61,7 +61,7 @@ public class MaterialConsumption extends BaseEntity {
     @Column(name = "notes", columnDefinition = "TEXT")
     private String notes;
 
-    @Column(name = "planned_quantity", precision = 10, scale = 2)
+    @Column(name = "planned_quantity", precision = 18, scale = 6)
     private BigDecimal plannedQuantity;
 
     @Column(name = "material_type_id", length = 191)

@@ -87,6 +87,7 @@ import { productionPlanAiGuard, findUniqueProductByName } from '@/utils/aiEntryG
 import { canonicalUnitCode, displayUnit } from '@/utils/unitPricing';
 import { enumLabel } from '@/utils/enumDisplay';
 import {
+  cancellationAudit,
   formatPlanActualQuantity,
   sourceOrderBusinessNumber,
   sourceOrderDisplay,
@@ -161,6 +162,7 @@ const actionLoading = ref(false);
 const tableData = ref<TableRow[]>([]);
 const materialAdvisoryMap = ref<Record<string, ProductionPlanMaterialAdvisory>>({});
 const settlementStatusMap = ref<Record<string, ProductionSettlementStatus>>({});
+const settlementStatusErrorMap = ref<Record<string, string>>({});
 // #726 SP12: 批量合并打印工单 — 多选状态
 const selectedPlans = ref<TableRow[]>([]);
 const productionBatchMode = ref(false);
@@ -686,6 +688,27 @@ const planForm = ref({
   selectedCandidateWorkflowId: null as number | null,
   resolutionMode: '' as '' | PlanWorkflowResolutionMode,
 });
+const planCreateRequestId = ref('');
+const planCreateFingerprint = ref('');
+
+function newPlanCreateRequestId(): string {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+    return crypto.randomUUID();
+  }
+  return `plan-${Date.now()}-${Math.random().toString(36).slice(2, 12)}`;
+}
+
+function bindPlanCreateRequestId<T extends Record<string, unknown>>(
+  payload: T,
+): T & { clientRequestId: string } {
+  const fingerprint = JSON.stringify(payload);
+  if (!planCreateRequestId.value
+    || (planCreateFingerprint.value && planCreateFingerprint.value !== fingerprint)) {
+    planCreateRequestId.value = newPlanCreateRequestId();
+  }
+  planCreateFingerprint.value = fingerprint;
+  return { ...payload, clientRequestId: planCreateRequestId.value };
+}
 const productTypes = ref<TableRow[]>([]);
 // 生产计划只能以明确标记为 FINISHED_PRODUCT 的 SKU 为目标。半成品和分类缺失
 // 的历史记录都不能靠名称或单位猜测后进入候选，避免误建生产计划。
@@ -909,6 +932,7 @@ async function loadSettlementStatuses(rows: TableRow[]) {
   );
   if (settledRows.length === 0) {
     settlementStatusMap.value = {};
+    settlementStatusErrorMap.value = {};
     return;
   }
   const entries = await Promise.allSettled(
@@ -922,18 +946,19 @@ async function loadSettlementStatuses(rows: TableRow[]) {
     })
   );
   const next: Record<string, ProductionSettlementStatus> = {};
-  let failed = false;
-  entries.forEach((entry) => {
+  const errors: Record<string, string> = {};
+  entries.forEach((entry, index) => {
+    const planId = String(settledRows[index].id);
     if (entry.status === 'fulfilled') {
       next[entry.value[0]] = entry.value[1];
     } else {
-      failed = true;
+      errors[planId] = entry.reason instanceof Error
+        ? entry.reason.message
+        : '入库状态加载失败，请刷新后重试';
     }
   });
   settlementStatusMap.value = next;
-  if (failed) {
-    ElMessage({ message: '部分已结单计划入库状态加载失败，请刷新后重试', type: 'error', duration: 0, showClose: true });
-  }
+  settlementStatusErrorMap.value = errors;
 }
 
 async function loadProductTypes() {
@@ -1273,6 +1298,8 @@ function handleCreate() {
   pendingCandidateWorkflowId.value = null;
   preferredWorkflowSelection = null;
   workflowResolveGeneration += 1;
+  planCreateRequestId.value = newPlanCreateRequestId();
+  planCreateFingerprint.value = '';
   // T135 ITEM #1: 默认 CUSTOMER_ORDER — 预加载可选销售订单列表
   if (selectableSalesOrders.value.length === 0) loadSelectableSalesOrders();
   dialogVisible.value = true;
@@ -1330,16 +1357,56 @@ async function submitPlan() {
     dialogLoading.value = true;
     try {
       const payload = {
-        sourceOrderId: planForm.value.sourceOrderId,
-        itemIds: planForm.value.sourceOrderItemIds,
-        plannedDate: planForm.value.plannedDate,
-        batchDate: planForm.value.batchDate,
-        estimatedWorkers: planForm.value.estimatedWorkers,
-        assignedSupervisorId: planForm.value.assignedSupervisorId || undefined,
-        notes: planForm.value.notes || undefined,
-        skipProcessReporting: planForm.value.skipProcessReporting,
+        ...bindPlanCreateRequestId({
+          sourceOrderId: planForm.value.sourceOrderId,
+          itemIds: planForm.value.sourceOrderItemIds,
+          plannedDate: planForm.value.plannedDate,
+          batchDate: planForm.value.batchDate,
+          estimatedWorkers: planForm.value.estimatedWorkers,
+          assignedSupervisorId: planForm.value.assignedSupervisorId || undefined,
+          notes: planForm.value.notes || undefined,
+          skipProcessReporting: planForm.value.skipProcessReporting,
+        }),
+        confirmPotentialDuplicate: false,
       };
-      const response = await post(`/${factoryId.value}/production-plans/batch-from-so`, payload);
+      const createBatchOnce = () => post(
+        `/${factoryId.value}/production-plans/batch-from-so`,
+        payload,
+        {
+          headers: { 'Idempotency-Key': planCreateRequestId.value },
+          _handledErrorCodes: ['POTENTIAL_DUPLICATE_PRODUCTION_PLAN'],
+        },
+      );
+      let response: Awaited<ReturnType<typeof createBatchOnce>>;
+      try {
+        response = await createBatchOnce();
+      } catch (error: unknown) {
+        const duplicate = error as {
+          status?: number;
+          code?: string;
+          response?: { status?: number; data?: { code?: string; message?: string } };
+          message?: string;
+        };
+        const status = duplicate.status ?? duplicate.response?.status;
+        const code = duplicate.code ?? duplicate.response?.data?.code;
+        if (status !== 409 || code !== 'POTENTIAL_DUPLICATE_PRODUCTION_PLAN') {
+          throw error;
+        }
+        await ElMessageBox.confirm(
+          duplicate.response?.data?.message || duplicate.message || '近期存在内容相同的生产计划，仍要继续创建吗？',
+          '发现可能重复的计划',
+          {
+            type: 'warning',
+            confirmButtonText: '确认仍要创建',
+            cancelButtonText: '返回检查',
+            distinguishCancelAndClose: true,
+          },
+        );
+        planCreateRequestId.value = newPlanCreateRequestId();
+        payload.clientRequestId = planCreateRequestId.value;
+        payload.confirmPotentialDuplicate = true;
+        response = await createBatchOnce();
+      }
       if (response.success) {
         const n = Array.isArray(response.data) ? response.data.length : planForm.value.sourceOrderItemIds.length;
         ElMessage.success(`已生成 ${n} 张生产计划`);
@@ -1394,7 +1461,7 @@ async function submitPlan() {
       aiRequestedUnit: _aiRequestedUnit,
       ...rest
     } = planForm.value;
-    const payload: Record<string, unknown> = { ...rest };
+    let payload: Record<string, unknown> = { ...rest };
     payload.plannedQuantity = plannedQuantityForPayload(
       planForm.value.sourceType,
       planForm.value.plannedQuantity,
@@ -1404,9 +1471,49 @@ async function submitPlan() {
       payload.selectedWorkflowId = resolvedWorkflowCandidate.value?.workflowId;
       payload.selectedWorkflowVersion = resolvedWorkflowCandidate.value?.definitionVersion;
     }
-    const response = await post(`/${factoryId.value}/production-plans`, payload);
+    payload = bindPlanCreateRequestId(payload);
+    const createOnce = (confirmPotentialDuplicate: boolean) => post(
+      `/${factoryId.value}/production-plans`,
+      { ...payload, confirmPotentialDuplicate },
+      {
+        headers: { 'Idempotency-Key': planCreateRequestId.value },
+        _handledErrorCodes: ['POTENTIAL_DUPLICATE_PRODUCTION_PLAN'],
+      },
+    );
+    let response: Awaited<ReturnType<typeof createOnce>>;
+    try {
+      response = await createOnce(false);
+    } catch (error: unknown) {
+      const duplicate = error as {
+        status?: number;
+        code?: string;
+        response?: { status?: number; data?: { code?: string; message?: string } };
+        message?: string;
+      };
+      const status = duplicate.status ?? duplicate.response?.status;
+      const code = duplicate.code ?? duplicate.response?.data?.code;
+      if (status !== 409 || code !== 'POTENTIAL_DUPLICATE_PRODUCTION_PLAN') {
+        throw error;
+      }
+      await ElMessageBox.confirm(
+        duplicate.response?.data?.message || duplicate.message || '近期存在内容相同的生产计划，仍要继续创建吗？',
+        '发现可能重复的计划',
+        {
+          type: 'warning',
+          confirmButtonText: '确认仍要创建',
+          cancelButtonText: '返回检查',
+          distinguishCancelAndClose: true,
+        },
+      );
+      // A duplicate warning is not a successful insert. Explicit confirmation starts a
+      // new creation intent and therefore must use a fresh idempotency key.
+      planCreateRequestId.value = newPlanCreateRequestId();
+      payload.clientRequestId = planCreateRequestId.value;
+      response = await createOnce(true);
+    }
     if (response.success) {
-      ElMessage.success('创建成功');
+      const createdPlanNumber = (response.data as { planNumber?: string } | undefined)?.planNumber;
+      ElMessage.success(createdPlanNumber ? `创建成功：${createdPlanNumber}` : '创建成功');
       dialogVisible.value = false;
       loadData();
     } else {
@@ -2297,6 +2404,10 @@ function getSettlementStatus(row: TableRow): ProductionSettlementStatus | null {
   return settlementStatusMap.value[String(row.id)] ?? null;
 }
 
+function getSettlementStatusError(row: TableRow): string {
+  return settlementStatusErrorMap.value[String(row.id)] || '';
+}
+
 function postingStatusText(status?: string | null): string {
   const map: Record<string, string> = {
     PENDING_WAREHOUSE_RECEIPT: '待仓库确认',
@@ -2331,6 +2442,14 @@ function canClearTransit(row: TableRow): boolean {
   return canConfirmReceiptWrite.value
     && String(row.status || '').toUpperCase() === 'COMPLETED'
     && settlement?.postingStatus === 'PENDING_CLEARING';
+}
+
+function canStopPlan(row: TableRow): boolean {
+  return row.canStop === true;
+}
+
+function canCancelPlan(row: TableRow): boolean {
+  return row.canCancel === true;
 }
 
 const receiptProductName = computed(() => {
@@ -3124,6 +3243,7 @@ function canPrintPlanDocuments(status: string) {
 function nextStepText(row: TableRow) {
   const status = String(row.status || '').toUpperCase();
   if (status === 'COMPLETED') {
+    if (getSettlementStatusError(row)) return '入库状态加载失败';
     const settlement = getSettlementStatus(row);
     if (!settlement) return '加载入库状态';
     if (settlement.postingStatus === 'PENDING_WAREHOUSE_RECEIPT') return '仓库确认入库';
@@ -3132,6 +3252,7 @@ function nextStepText(row: TableRow) {
     if (settlement.postingStatus === 'POSTED') return '成品库存已入库';
     return postingStatusText(settlement.postingStatus);
   }
+  if (row.nextAction) return String(row.nextAction);
   if (status === 'IN_PROGRESS') {
     return row.sourceType === 'SAFETY_STOCK'
       ? '继续逐道录入或生产小结'
@@ -3155,6 +3276,10 @@ function nextStepTagType(row: TableRow) {
   if (status === 'PENDING') return row.skipProcessReporting === false ? 'primary' : 'info';
   if (status === 'CANCELLED') return 'danger';
   return 'info';
+}
+
+function cancellationAuditFor(row: TableRow) {
+  return cancellationAudit(row);
 }
 
 function planRowClassName({ row }: { row: TableRow }): string {
@@ -3664,6 +3789,13 @@ function guardProductionPlanAi(params: Record<string, unknown>) {
             >
               {{ postingStatusText(getSettlementStatus(row)?.postingStatus) }}
             </el-tag>
+            <el-tooltip
+              v-else-if="getSettlementStatusError(row)"
+              :content="getSettlementStatusError(row)"
+              placement="top"
+            >
+              <el-tag type="danger" size="small" effect="plain">加载失败</el-tag>
+            </el-tooltip>
             <el-tag v-else-if="String(row.status || '').toUpperCase() === 'COMPLETED'" type="info" size="small">
               结单加载中
             </el-tag>
@@ -3690,7 +3822,7 @@ function guardProductionPlanAi(params: Record<string, unknown>) {
             <span v-else>-</span>
           </template>
         </el-table-column>
-        <el-table-column v-if="isProductionColumnVisible('nextStep')" label="下一步" min-width="170">
+        <el-table-column v-if="isProductionColumnVisible('nextStep')" label="下一步" min-width="220">
           <template #default="{ row }">
             <div class="next-step-cell">
               <el-tag :type="nextStepTagType(row)" size="small" effect="plain">
@@ -3701,6 +3833,16 @@ function guardProductionPlanAi(params: Record<string, unknown>) {
               </div>
               <div v-else-if="isUnfinishedStatus(row.status)" class="next-step-hint">
                 文员核对实际领用后结单
+              </div>
+              <div
+                v-else-if="cancellationAuditFor(row)"
+                class="cancellation-audit"
+                :title="`取消原因：${cancellationAuditFor(row)?.reason}`"
+              >
+                <div class="cancellation-audit__reason">
+                  原因：{{ cancellationAuditFor(row)?.reason }}
+                </div>
+                <div>{{ cancellationAuditFor(row)?.actor }} · {{ cancellationAuditFor(row)?.time }}</div>
               </div>
             </div>
           </template>
@@ -3813,15 +3955,20 @@ function guardProductionPlanAi(params: Record<string, unknown>) {
                     :disabled="reverseInterimSettleLoadingId === String(row.id)"
                   >申请撤销小结</el-dropdown-item>
                   <el-dropdown-item
-                    v-if="row.sourceType === 'SAFETY_STOCK'"
+                    v-if="row.sourceType === 'SAFETY_STOCK' && canStopPlan(row)"
                     command="stop-production"
                     :disabled="stopProductionLoadingId === String(row.id)"
                   >停产</el-dropdown-item>
                   <el-dropdown-item
+                    v-if="canCancelPlan(row)"
                     command="cancel"
                     divided
                     :disabled="actionLoading"
                   >取消计划</el-dropdown-item>
+                  <el-dropdown-item
+                    v-if="row.sourceType === 'SAFETY_STOCK' && !canStopPlan(row) && row.stopBlockedReason"
+                    disabled
+                  >停产：{{ row.stopBlockedReason }}</el-dropdown-item>
                 </el-dropdown-menu>
               </template>
             </el-dropdown>
@@ -5938,6 +6085,19 @@ function guardProductionPlanAi(params: Record<string, unknown>) {
   font-size: 12px;
   color: var(--text-color-secondary, #909399);
   line-height: 1.3;
+}
+
+.cancellation-audit {
+  max-width: 100%;
+  font-size: 12px;
+  color: var(--text-color-secondary, #909399);
+  line-height: 1.35;
+}
+
+.cancellation-audit__reason {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .settlement-form {

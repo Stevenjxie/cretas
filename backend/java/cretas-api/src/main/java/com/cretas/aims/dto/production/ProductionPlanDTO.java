@@ -148,6 +148,18 @@ public class ProductionPlanDTO {
     @Schema(description = "备注")
     private String notes;
 
+    @Schema(description = "取消原因")
+    private String cancelReason;
+
+    @Schema(description = "取消操作人ID")
+    private Long cancelledBy;
+
+    @Schema(description = "取消操作人姓名")
+    private String cancelledByName;
+
+    @Schema(description = "取消时间")
+    private LocalDateTime cancelledAt;
+
     @Schema(description = "创建人ID")
     private Long createdBy;
 
@@ -317,5 +329,23 @@ public class ProductionPlanDTO {
 
     @Schema(description = "锁定原因")
     private String lockReason;
+
+    @Schema(description = "是否已有正式报工、小结或真实产出")
+    private Boolean hasProductionActivity;
+
+    @Schema(description = "是否仍存在未小结的消耗、投料或产出")
+    private Boolean hasUnsettledProduction;
+
+    @Schema(description = "当前是否允许取消计划")
+    private Boolean canCancel;
+
+    @Schema(description = "当前是否允许停产")
+    private Boolean canStop;
+
+    @Schema(description = "停产被阻断的原因")
+    private String stopBlockedReason;
+
+    @Schema(description = "建议执行的下一步")
+    private String nextAction;
 
 }

@@ -102,6 +102,8 @@ class ProductionPlanStopProductionTest {
         ReflectionTestUtils.setField(service, "productionSettlementRepository", productionSettlementRepository);
         ReflectionTestUtils.setField(service, "finishedGoodsBatchRepository", finishedGoodsBatchRepository);
         lenient().when(conversionRepository.findAll()).thenReturn(Collections.emptyList());
+        lenient().when(productionPlanRepository.findByIdForUpdate(anyString()))
+                .thenAnswer(inv -> productionPlanRepository.findByIdAndFactoryId(inv.getArgument(0), FACTORY_ID));
     }
 
     // ─── helpers ─────────────────────────────────────────────────────────────
@@ -119,6 +121,18 @@ class ProductionPlanStopProductionTest {
         return p;
     }
 
+    private void stubSettledSubmittedActivity() {
+        ProcessSheetRow row = new ProcessSheetRow();
+        row.setBatchId(777L);
+        row.setSubmissionStatus(ProcessSheetRow.SUBMISSION_SUBMITTED);
+        row.setInterimSettledAt(LocalDateTime.now().minusMinutes(1));
+        when(processSheetRowRepository.findByFactoryIdAndPlanId(FACTORY_ID, PLAN_ID))
+                .thenReturn(List.of(row));
+        when(materialConsumptionRepository
+                .findByFactoryIdAndProductionBatchIdInAndInterimSettledAtIsNull(eq(FACTORY_ID), anyList()))
+                .thenReturn(Collections.emptyList());
+    }
+
     // ─── tests ───────────────────────────────────────────────────────────────
 
     @Test
@@ -130,6 +144,7 @@ class ProductionPlanStopProductionTest {
         when(productionPlanRepository.findByIdAndFactoryId(PLAN_ID, FACTORY_ID))
                 .thenReturn(Optional.of(plan));
         when(productionPlanRepository.save(any(ProductionPlan.class))).thenAnswer(inv -> inv.getArgument(0));
+        stubSettledSubmittedActivity();
 
         service.stopProduction(FACTORY_ID, PLAN_ID);
 
@@ -147,6 +162,7 @@ class ProductionPlanStopProductionTest {
         when(productionPlanRepository.findByIdAndFactoryId(PLAN_ID, FACTORY_ID))
                 .thenReturn(Optional.of(plan));
         when(productionPlanRepository.save(any(ProductionPlan.class))).thenAnswer(inv -> inv.getArgument(0));
+        stubSettledSubmittedActivity();
 
         service.stopProduction(FACTORY_ID, PLAN_ID);
 
@@ -157,18 +173,19 @@ class ProductionPlanStopProductionTest {
     }
 
     @Test
-    @DisplayName("startTime 为 null 时停产自动补填 startTime")
-    void stopProduction_noStartTime_backfillsStartTime() {
+    @DisplayName("startTime 为 null 时停产不伪造开工时间")
+    void stopProduction_noStartTime_keepsStartTimeNull() {
         ProductionPlan plan = byStockPlan();
         plan.setStartTime(null);
 
         when(productionPlanRepository.findByIdAndFactoryId(PLAN_ID, FACTORY_ID))
                 .thenReturn(Optional.of(plan));
         when(productionPlanRepository.save(any(ProductionPlan.class))).thenAnswer(inv -> inv.getArgument(0));
+        stubSettledSubmittedActivity();
 
         service.stopProduction(FACTORY_ID, PLAN_ID);
 
-        assertNotNull(plan.getStartTime(), "startTime 未设时应补填");
+        assertNull(plan.getStartTime(), "停产不能伪造实际开工时间");
         assertEquals(ProductionPlanStatus.COMPLETED, plan.getStatus());
     }
 
@@ -198,6 +215,7 @@ class ProductionPlanStopProductionTest {
 
         ProcessSheetRow row = new ProcessSheetRow();
         row.setBatchId(555L);   // 已物化的 per-道 ProductionBatch id → 纳入 unsettled 检测
+        row.setSubmissionStatus(ProcessSheetRow.SUBMISSION_SUBMITTED);
 
         when(productionPlanRepository.findByIdAndFactoryId(PLAN_ID, FACTORY_ID))
                 .thenReturn(Optional.of(plan));
@@ -231,6 +249,7 @@ class ProductionPlanStopProductionTest {
         sfiRow.setBatchId(null);
         sfiRow.setBatchNumber("SFI-MIDSTART-1");
         sfiRow.setRowStatus(ProcessSheetRow.STATUS_SAVED_SFI);
+        sfiRow.setSubmissionStatus(ProcessSheetRow.SUBMISSION_SUBMITTED);
         sfiRow.setInterimSettledAt(null);
 
         when(productionPlanRepository.findByIdAndFactoryId(PLAN_ID, FACTORY_ID))
@@ -256,6 +275,8 @@ class ProductionPlanStopProductionTest {
 
         ProcessSheetRow row = new ProcessSheetRow();
         row.setBatchId(777L);
+        row.setSubmissionStatus(ProcessSheetRow.SUBMISSION_SUBMITTED);
+        row.setInterimSettledAt(LocalDateTime.now().minusMinutes(1));
 
         when(productionPlanRepository.findByIdAndFactoryId(PLAN_ID, FACTORY_ID))
                 .thenReturn(Optional.of(plan));
@@ -323,7 +344,7 @@ class ProductionPlanStopProductionTest {
 
         assertEquals(ProductionPlanStatus.COMPLETED, plan.getStatus());
         verify(productionSettlementRepository).save(argThat(settlement ->
-                "PENDING_WAREHOUSE_RECEIPT".equals(settlement.getPostingStatus())
+                "POSTED".equals(settlement.getPostingStatus())
                         && "fg-1".equals(settlement.getFinishedGoodsBatchId())
                         && new BigDecimal("5").compareTo(settlement.getActualFinishedQuantity()) == 0));
         verify(finishedGoodsBatchRepository, never()).save(any());

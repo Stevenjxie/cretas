@@ -180,10 +180,15 @@ public interface ProductionPlanService {
     ProductionWarehouseReceiptResponse clearProductionTransitLedger(String factoryId, String planId,
                                                                     ProductionTransitClearingRequest request,
                                                                     Long clearedBy);
-     /**
+    /**
      * 取消生产计划
-      */
+     */
     void cancelProductionPlan(String factoryId, String planId, String reason);
+
+    /**
+     * 取消生产计划并记录当前操作人。
+     */
+    void cancelProductionPlan(String factoryId, String planId, String reason, Long operatorId);
 
     /**
      * @deprecated 计划级 PRODUCTION_REVERSAL 审批流已废弃（结构性死路：workflow 引擎从不回调

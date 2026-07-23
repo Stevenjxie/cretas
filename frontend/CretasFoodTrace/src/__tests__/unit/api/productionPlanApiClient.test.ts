@@ -105,6 +105,33 @@ describe('productionPlanApiClient', () => {
       const result = await productionPlanApiClient.createProductionPlan(data);
       expect(result.success).toBe(true);
       expect(result.data.id).toBe('pp4');
+      const request = mock.history.post[0];
+      const body = JSON.parse(request.data);
+      expect(body.clientRequestId).toMatch(/^rn-plan-/);
+      expect(request.headers?.['Idempotency-Key']).toBe(body.clientRequestId);
+    });
+
+    it('reuses a caller-provided idempotency key for retries', async () => {
+      const data = {
+        productTypeId: 'pt1',
+        plannedQuantity: 10,
+        clientRequestId: 'rn-plan-stable-retry',
+      };
+      mock.onPost(BASE).reply(200, {
+        success: true,
+        data: { id: 'pp5', status: 'PLANNED' },
+        message: 'Created',
+      });
+
+      await productionPlanApiClient.createProductionPlan(data);
+      await productionPlanApiClient.createProductionPlan(data);
+
+      const first = mock.history.post[0];
+      const second = mock.history.post[1];
+      expect(first.headers?.['Idempotency-Key']).toBe('rn-plan-stable-retry');
+      expect(second.headers?.['Idempotency-Key']).toBe('rn-plan-stable-retry');
+      expect(JSON.parse(first.data).clientRequestId).toBe('rn-plan-stable-retry');
+      expect(JSON.parse(second.data).clientRequestId).toBe('rn-plan-stable-retry');
     });
   });
 

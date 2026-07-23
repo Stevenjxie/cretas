@@ -131,6 +131,49 @@ describe('ProcessDataTable production-store automatic allocation', () => {
     expect(wrapper.text()).toContain('保存草稿');
   });
 
+  it('shows the actual packaging batch, native quantity, unit price and cost after formal reporting', async () => {
+    submitRow.mockResolvedValue({
+      success: true,
+      data: {
+        submissionStatus: 'SUBMITTED',
+        materialized: true,
+        batchNumber: 'WIP-1',
+        inputAllocations: [{
+          materialTypeId: 'PACK-BOX',
+          materialName: '800g 包装盒',
+          materialBatchId: 'PACK-BATCH-ID-1',
+          batchNumber: 'PACK-20260724-01',
+          quantity: 10,
+          unit: 'box',
+          sourceType: 'PACKAGING',
+          unitPrice: 0.65,
+          totalCost: 6.5,
+          automatic: true,
+          allocationOrder: 1,
+        }],
+      },
+    });
+    const wrapper = mountTable();
+    await flushPromises();
+    await addRow(wrapper);
+    wrapper.find('[data-testid="material-input-total"]').findComponent({ name: 'ElInputNumber' }).vm.$emit('update:model-value', 10);
+    wrapper.find('[data-testid="output-quantity"]')
+      .findComponent({ name: 'ElInputNumber' })
+      .vm.$emit('update:model-value', 8);
+    await flushPromises();
+
+    await wrapper.findAll('button').find((item) => item.text().includes('正式报工'))!.trigger('click');
+    await flushPromises();
+
+    const result = wrapper.get('[data-testid="automatic-input-allocations"]');
+    expect(result.text()).toContain('包材');
+    expect(result.text()).toContain('800g 包装盒');
+    expect(result.text()).toContain('PACK-20260724-01');
+    expect(result.text()).toContain('10 盒');
+    expect(result.text()).toContain('¥0.6500/盒');
+    expect(result.text()).toContain('成本 ¥6.50');
+  });
+
   it('keeps materialized LEGACY rows read-only while every new row uses workflow material totals', async () => {
     const wrapper = mountTable([{
       clientRowId: 'legacy-row-1', batchNumber: 'WIP-LEGACY-1', batchId: 1,

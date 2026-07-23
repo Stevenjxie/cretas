@@ -161,6 +161,12 @@ public class ProcessSheetRowRequest {
         private String materialNodeId;
         /** 该端口物料 SKU (原料 RawMaterialType id)。 */
         private String skuId;
+        /** 本条投料数量单位；为空时兼容沿用工序投入单位。 */
+        private String unit;
+        /** RAW_MATERIAL / PACKAGING / SEASONING。 */
+        private String sourceType;
+        /** true 表示由计划固定 BOM 自动计算，不接受客户端手改。 */
+        private Boolean automatic;
     }
 
     /** 操作员录入的原料投料总量；数量单位当前只接受 kg。 */

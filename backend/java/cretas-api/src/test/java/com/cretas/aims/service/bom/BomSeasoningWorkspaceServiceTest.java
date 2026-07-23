@@ -225,12 +225,13 @@ class BomSeasoningWorkspaceServiceTest {
     }
 
     @Test
-    void createFallsBackToTaxIncludedPurchaseReferenceWithoutPretendingItIsMovingAverage() {
+    void createFallsBackToUntaxedPurchaseReferenceWithoutPretendingItIsMovingAverage() {
         BomRecipe recipe = recipe(BomRecipe.Status.DRAFT, 4L);
         when(recipeRepository.findById(RECIPE)).thenReturn(Optional.of(recipe));
         pin(recipe, "p1");
         RawMaterialType material = material("salt");
         material.setMovingAvgPrice(null);
+        material.setUnitPrice(new BigDecimal("17.7000"));
         material.setTaxIncludedUnitPrice(new BigDecimal("20.0000"));
         when(materialTypeRepository.findById("salt")).thenReturn(Optional.of(material));
         when(seasoningItemRepository.findByRecipeIdAndWorkflowProcessNodeIdAndMaterialTypeId(
@@ -249,7 +250,7 @@ class BomSeasoningWorkspaceServiceTest {
         ArgumentCaptor<BomSeasoningItem> captor = ArgumentCaptor.forClass(BomSeasoningItem.class);
         verify(seasoningItemRepository).save(captor.capture());
         assertNull(captor.getValue().getPriceSource1());
-        assertEquals(new BigDecimal("20.0000"), captor.getValue().getPriceSource2());
+        assertEquals(new BigDecimal("17.7000"), captor.getValue().getPriceSource2());
     }
 
     @Test
@@ -258,6 +259,7 @@ class BomSeasoningWorkspaceServiceTest {
         when(recipeRepository.findById(RECIPE)).thenReturn(Optional.of(recipe));
         pin(recipe, "p1");
         RawMaterialType material = material("salt");
+        material.setUnitPrice(new BigDecimal("17.7000"));
         material.setTaxIncludedUnitPrice(new BigDecimal("20.0000"));
         when(materialTypeRepository.findById("salt")).thenReturn(Optional.of(material));
         when(seasoningItemRepository.findByRecipeIdAndWorkflowProcessNodeIdAndMaterialTypeId(
@@ -285,6 +287,7 @@ class BomSeasoningWorkspaceServiceTest {
             pin(recipe, "p1");
             RawMaterialType material = material("salt");
             material.setMovingAvgPrice(movingAverage);
+            material.setUnitPrice(BigDecimal.ZERO);
             material.setTaxIncludedUnitPrice(BigDecimal.ZERO);
             when(materialTypeRepository.findById("salt")).thenReturn(Optional.of(material));
 
@@ -313,6 +316,23 @@ class BomSeasoningWorkspaceServiceTest {
         assertEquals(BigDecimal.ONE, process.getStandardBasisQuantity());
         assertEquals("kg", process.getStandardBasisUnit());
         assertEquals("SEMI_FINISHED", process.getStandardBasisMaterialKind());
+        assertTrue(process.isStandardUsageSupported());
+    }
+
+    @Test
+    void workflowOutputPortUnitOverridesStaleProcessAndAdjacentMaterialUnits() {
+        BomRecipe recipe = recipe(BomRecipe.Status.DRAFT, 3L);
+        when(recipeRepository.findById(RECIPE)).thenReturn(Optional.of(recipe));
+        pinWithAuthoritativeOutputPort(recipe, "p1");
+        when(workProcessRepository.findByFactoryIdAndIdIn(eq(FACTORY), anyList())).thenReturn(List.of(
+                workProcess("p1", "定量包装")));
+        when(seasoningItemRepository.findByRecipeIdOrderBySeqAsc(RECIPE)).thenReturn(List.of());
+        when(materialTypeRepository.findAllById(any())).thenReturn(List.of());
+
+        BomSeasoningWorkspaceResponse response = service.getWorkspace(FACTORY, RECIPE);
+
+        var process = response.getProcesses().get(0);
+        assertEquals("box", process.getStandardBasisUnit());
         assertTrue(process.isStandardUsageSupported());
     }
 
@@ -583,5 +603,37 @@ class BomSeasoningWorkspaceServiceTest {
                         List.of(new PinnedWorkflowGraph.ProcessStep("node-" + processId, processId, 1)),
                         nodes, List.of()));
         lenient().when(bomWorkflowRevisionService.listCompatible(FACTORY, RECIPE)).thenReturn(List.of());
+    }
+
+    private void pinWithAuthoritativeOutputPort(BomRecipe recipe, String processId) {
+        Map<String, Object> processData = new LinkedHashMap<>();
+        processData.put("workProcessId", processId);
+        processData.put("outputUnit", "kg");
+        processData.put("ports", List.of(Map.of(
+                "direction", "OUTPUT",
+                "unit", "box",
+                "materialNodeId", "finished-1")));
+        Map<String, Object> materialData = Map.of(
+                "baseUnit", "kg",
+                "materialKind", "FINISHED_PRODUCT");
+        List<ProductProcessWorkflowDTO.Node> nodes = List.of(
+                new ProductProcessWorkflowDTO.Node("node-" + processId, "PROCESS",
+                        new ProductProcessWorkflowDTO.Position(0D, 0D), processData),
+                new ProductProcessWorkflowDTO.Node("finished-1", "FINISHED_PRODUCT",
+                        new ProductProcessWorkflowDTO.Position(1D, 0D), materialData));
+        when(bomWorkflowRevisionService.resolvePinnedGraph(FACTORY, recipe)).thenReturn(
+                new PinnedWorkflowGraph(101L, 41L, 1, "hash-101", "product-1", "finished",
+                        List.of("raw-1"),
+                        List.of(new PinnedWorkflowGraph.ProcessStep(
+                                "node-" + processId, processId, 1)),
+                        nodes,
+                        List.of(new ProductProcessWorkflowDTO.Edge(
+                                "edge-port-authority",
+                                "node-" + processId,
+                                "output",
+                                "finished-1",
+                                "input"))));
+        lenient().when(bomWorkflowRevisionService.listCompatible(FACTORY, RECIPE))
+                .thenReturn(List.of());
     }
 }

@@ -23,6 +23,9 @@ import com.cretas.aims.event.WorkflowTaskProgressRequestedEvent;
 import com.cretas.aims.entity.ProductionReport;
 import com.cretas.aims.entity.SemiFinishedInventory;
 import com.cretas.aims.entity.WorkProcess;
+import com.cretas.aims.entity.bom.BomRecipe;
+import com.cretas.aims.entity.bom.BomRecipeItem;
+import com.cretas.aims.entity.bom.BomSeasoningItem;
 import com.cretas.aims.entity.workprocess.WorkProcessTask;
 import com.cretas.aims.repository.MaterialBatchRepository;
 import com.cretas.aims.repository.MaterialConsumptionRepository;
@@ -36,6 +39,9 @@ import com.cretas.aims.repository.ProductWorkProcessRepository;
 import com.cretas.aims.repository.ProductionReportRepository;
 import com.cretas.aims.repository.SemiFinishedInventoryRepository;
 import com.cretas.aims.repository.WorkProcessRepository;
+import com.cretas.aims.repository.bom.BomRecipeItemRepository;
+import com.cretas.aims.repository.bom.BomRecipeRepository;
+import com.cretas.aims.repository.bom.BomSeasoningItemRepository;
 import com.cretas.aims.repository.inventory.FinishedGoodsBatchRepository;
 import com.cretas.aims.repository.workprocess.WorkProcessTaskRepository;
 import com.cretas.aims.entity.factory.FactoryMaterialRequisition;
@@ -156,6 +162,15 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
     @Autowired(required = false)
     private ProductionStockAllocationService productionStockAllocationService;
 
+    @Autowired(required = false)
+    private BomRecipeRepository bomRecipeRepository;
+
+    @Autowired(required = false)
+    private BomRecipeItemRepository bomRecipeItemRepository;
+
+    @Autowired(required = false)
+    private BomSeasoningItemRepository bomSeasoningItemRepository;
+
     @Override
     @Transactional
     public ProcessSheetRowResult saveDraft(String factoryId, String planId,
@@ -265,7 +280,7 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
             }
         }
 
-        List<ProductionStockAllocationService.PlannedAllocation> allocations = List.of();
+        List<ProductionStockAllocationService.PlannedAllocation> allocations = new ArrayList<>();
         if (req.getMaterialInputTotals() != null && !req.getMaterialInputTotals().isEmpty()) {
             if (productionStockAllocationService == null) {
                 throw new BusinessException(500, "生产库自动分摊服务未启用，不能正式提交")
@@ -273,8 +288,8 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
                         .withHint("请联系管理员检查生产库分摊服务配置")
                         .withSeverity("BLOCKING");
             }
-            allocations = productionStockAllocationService.plan(
-                    factoryId, planId, req.getMaterialInputTotals());
+            allocations.addAll(productionStockAllocationService.plan(
+                    factoryId, planId, req.getMaterialInputTotals()));
             req.setRawMaterialInputs(productionStockAllocationService.toRawInputs(allocations));
             if (req.getInputQuantity() == null) {
                 // PlannedAllocation 永远是 kg；不能直接把 1000g + 2kg 相加成 1002。
@@ -289,8 +304,8 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
                         .withCode("PRODUCTION_STOCK_ALLOCATION_UNAVAILABLE")
                         .withSeverity("BLOCKING");
             }
-            allocations = productionStockAllocationService.planExplicit(
-                    factoryId, planId, req.getRawMaterialInputs());
+            allocations.addAll(productionStockAllocationService.planExplicit(
+                    factoryId, planId, req.getRawMaterialInputs()));
             req.setRawMaterialInputs(productionStockAllocationService.toRawInputs(allocations));
             if (req.getInputQuantity() == null) {
                 req.setInputQuantity(allocations.stream()
@@ -303,6 +318,24 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
         boolean producesFinishedGoods = req.isFinished()
                 || (req.getOutputs() != null && req.getOutputs().stream()
                         .anyMatch(ProcessSheetRowRequest.OutputLine::isFinished));
+        List<ProductionStockAllocationService.AutomaticRequirement> automaticRequirements =
+                buildAutomaticBomRequirements(factoryId, planId, req, producesFinishedGoods);
+        if (!automaticRequirements.isEmpty() && productionStockAllocationService == null) {
+            throw new BusinessException(500, "生产库自动分摊服务未启用，不能扣减包材/调料")
+                    .withCode("PRODUCTION_STOCK_ALLOCATION_UNAVAILABLE")
+                    .withHint("请联系管理员检查生产库分摊服务配置")
+                    .withSeverity("BLOCKING");
+        }
+        if (!automaticRequirements.isEmpty()) {
+            List<ProductionStockAllocationService.PlannedAllocation> automaticAllocations =
+                    productionStockAllocationService.planNative(
+                            factoryId, planId, automaticRequirements);
+            allocations.addAll(automaticAllocations);
+            List<ProcessSheetRowRequest.RawInput> allRawInputs =
+                    new ArrayList<>(Optional.ofNullable(req.getRawMaterialInputs()).orElseGet(List::of));
+            allRawInputs.addAll(productionStockAllocationService.toRawInputs(automaticAllocations));
+            req.setRawMaterialInputs(allRawInputs);
+        }
         if (producesFinishedGoods
                 && (req.getInputQuantity() == null || req.getInputQuantity().signum() <= 0)) {
             throw new BusinessException(409, "成品报工缺少可追溯的实际投入量，不能正式提交")
@@ -331,6 +364,198 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
                 ? List.of()
                 : productionStockAllocationService.toResult(allocations));
         return result;
+    }
+
+    private List<ProductionStockAllocationService.AutomaticRequirement> buildAutomaticBomRequirements(
+            String factoryId,
+            String planId,
+            ProcessSheetRowRequest req,
+            boolean producesFinishedGoods) {
+        if (bomRecipeRepository == null || bomRecipeItemRepository == null) {
+            return List.of();
+        }
+        ProductionPlan plan = productionPlanRepository.findByIdAndFactoryId(planId, factoryId)
+                .orElseThrow(() -> new BusinessException(403, "无权访问该计划"));
+        if (plan.getSelectedBomRecipeId() == null || plan.getSelectedBomRecipeId().isBlank()) {
+            return List.of(); // 历史未固定 BOM 的计划不猜测当前版本。
+        }
+        String pinnedRecipeId = plan.getSelectedBomRecipeId();
+        BomRecipe recipe = bomRecipeRepository.findById(pinnedRecipeId)
+                .filter(candidate -> factoryId.equals(candidate.getFactoryId()))
+                .orElseThrow(() -> new BusinessException(409, "计划固定的 BOM 版本不存在")
+                        .withCode("PINNED_BOM_NOT_FOUND")
+                        .withSeverity("BLOCKING"));
+
+        List<ProductionStockAllocationService.AutomaticRequirement> requirements = new ArrayList<>();
+        if (producesFinishedGoods) {
+            BigDecimal finishedOutput = finishedOutputQuantity(req);
+            if (finishedOutput.signum() > 0) {
+                String reportedUnit = canonicalBomUnit(firstNonBlank(req.getOutputUnit(), req.getUnit()));
+                String bomOutputUnit = canonicalBomUnit(recipe.getOutputUnit());
+                if (!Objects.equals(reportedUnit, bomOutputUnit)) {
+                    throw new BusinessException(409, "成品报工单位与计划固定 BOM 的产出单位不一致")
+                            .withCode("BOM_OUTPUT_UNIT_MISMATCH")
+                            .withHint("报工单位: " + reportedUnit + "，BOM 单位: " + bomOutputUnit)
+                            .withSeverity("BLOCKING");
+                }
+                if (recipe.getOutputQuantityPerUnit() == null
+                        || recipe.getOutputQuantityPerUnit().signum() <= 0) {
+                    throw new BusinessException(409, "计划固定 BOM 缺少有效的基准产出数量")
+                            .withCode("BOM_OUTPUT_BASIS_INVALID")
+                            .withSeverity("BLOCKING");
+                }
+                BigDecimal scale = finishedOutput.divide(
+                        recipe.getOutputQuantityPerUnit(), 12, RoundingMode.HALF_UP);
+                for (BomRecipeItem item : bomRecipeItemRepository
+                        .findByRecipeIdOrderBySortOrderAsc(pinnedRecipeId)) {
+                    if (!"PACKAGING".equalsIgnoreCase(item.getMaterialCategory())
+                            || Boolean.TRUE.equals(item.getIsOptional())) {
+                        continue;
+                    }
+                    BigDecimal perBasis = item.calculateActualQuantity();
+                    if (perBasis == null || perBasis.signum() <= 0) {
+                        throw new BusinessException(409, "包装材料缺少有效用量: " + item.getMaterialName())
+                                .withCode("PACKAGING_REQUIREMENT_INVALID")
+                                .withSeverity("BLOCKING");
+                    }
+                    requirements.add(new ProductionStockAllocationService.AutomaticRequirement(
+                            item.getMaterialTypeId(),
+                            item.getMaterialName(),
+                            normalizeQuantity(perBasis.multiply(scale)),
+                            item.getUnit(),
+                            "PACKAGING"));
+                }
+            }
+        }
+
+        if (bomSeasoningItemRepository == null) {
+            return requirements;
+        }
+        List<BomSeasoningItem> seasoningItems =
+                resolveProcessSeasoningItems(
+                        factoryId,
+                        planId,
+                        pinnedRecipeId,
+                        plan.getSelectedWorkflowId() != null,
+                        req);
+        if (!seasoningItems.isEmpty()) {
+            BigDecimal inputKg = reportingMassToKg(req.getInputQuantity(), requestInputUnit(req));
+            List<BigDecimal> potRawKgs = req.getPotRawKgs() == null || req.getPotRawKgs().isEmpty()
+                    ? (inputKg.signum() > 0 ? List.of(inputKg) : List.of())
+                    : req.getPotRawKgs();
+            BigDecimal totalPotKg = potRawKgs.stream().filter(Objects::nonNull)
+                    .reduce(BigDecimal.ZERO, BigDecimal::add);
+            int potCount = potRawKgs.size();
+            BigDecimal equalPotKg = potCount == 0 ? BigDecimal.ZERO
+                    : totalPotKg.divide(BigDecimal.valueOf(potCount), 12, RoundingMode.HALF_UP);
+            for (BomSeasoningItem item : seasoningItems) {
+                if (item.getMaterialTypeId() == null || item.getDosagePerKgG() == null
+                        || item.getDosagePerKgG().signum() <= 0) {
+                    throw new BusinessException(409, "调料配置缺少物料或用量: " + item.getName())
+                            .withCode("SEASONING_REQUIREMENT_INVALID")
+                            .withSeverity("BLOCKING");
+                }
+                if (BomSeasoningItem.SECTION_COOKING.equals(item.getSection())
+                        && !Boolean.TRUE.equals(item.getCountInSeasoning())) {
+                    continue;
+                }
+                BigDecimal effectiveRawKg = BomSeasoningItem.SECTION_INJECTION.equals(item.getSection())
+                        ? inputKg : totalPotKg;
+                if (BomSeasoningItem.SECTION_COOKING.equals(item.getSection())
+                        && item.getSubsequentPotRatio() != null && potCount > 0) {
+                    BigDecimal factor = BigDecimal.ONE.add(
+                            BigDecimal.valueOf(potCount - 1L).multiply(item.getSubsequentPotRatio()));
+                    effectiveRawKg = equalPotKg.multiply(factor);
+                }
+                BigDecimal quantityKg = effectiveRawKg
+                        .multiply(item.getDosagePerKgG())
+                        .divide(new BigDecimal("1000"), 12, RoundingMode.HALF_UP);
+                if (quantityKg.signum() > 0) {
+                    requirements.add(new ProductionStockAllocationService.AutomaticRequirement(
+                            item.getMaterialTypeId(),
+                            item.getName(),
+                            normalizeQuantity(quantityKg),
+                            "kg",
+                            "SEASONING"));
+                }
+            }
+        }
+        return requirements;
+    }
+
+    private BigDecimal normalizeQuantity(BigDecimal quantity) {
+        BigDecimal normalized = quantity.stripTrailingZeros();
+        return normalized.scale() < 0 ? normalized.setScale(0) : normalized;
+    }
+
+    private List<BomSeasoningItem> resolveProcessSeasoningItems(
+            String factoryId,
+            String planId,
+            String recipeId,
+            boolean pinnedWorkflow,
+            ProcessSheetRowRequest req) {
+        if (pinnedWorkflow && workflowClerkSheetService != null && req.getProcessOrder() != null) {
+            WorkflowClerkSheetConfigDTO config =
+                    workflowClerkSheetService.getWorkflowSheetConfig(factoryId, planId);
+            WorkflowClerkSheetConfigDTO.ProcessDescriptor descriptor =
+                    config == null || config.getProcesses() == null ? null
+                            : config.getProcesses().stream()
+                            .filter(process -> Objects.equals(
+                                    process.getProcessOrder(), req.getProcessOrder()))
+                            .findFirst().orElse(null);
+            String nodeId = descriptor != null ? descriptor.getWorkflowNodeId() : null;
+            if (nodeId == null || nodeId.isBlank()) {
+                throw new BusinessException(409, "计划固定的 Workflow 无法解析当前工序调料")
+                        .withCode("SEASONING_PROCESS_NODE_UNRESOLVED")
+                        .withHint("请刷新报工页；若工序版本已变化，请重新创建生产计划")
+                        .withSeverity("BLOCKING");
+            }
+            return bomSeasoningItemRepository
+                    .findByRecipeIdAndWorkflowProcessNodeIdOrderBySeqAsc(recipeId, nodeId);
+        }
+        WorkProcess process = resolveWorkProcess(
+                factoryId, req.getProductTypeId(), req.getProcessOrder());
+        if (process != null && process.getId() != null) {
+            return bomSeasoningItemRepository
+                    .findByRecipeIdAndWorkProcessIdOrderBySeqAsc(recipeId, process.getId());
+        }
+        return List.of();
+    }
+
+    private BigDecimal finishedOutputQuantity(ProcessSheetRowRequest req) {
+        if (req.getOutputs() != null && !req.getOutputs().isEmpty()) {
+            return req.getOutputs().stream()
+                    .filter(Objects::nonNull)
+                    .filter(ProcessSheetRowRequest.OutputLine::isFinished)
+                    .map(ProcessSheetRowRequest.OutputLine::getQuantity)
+                    .filter(Objects::nonNull)
+                    .reduce(BigDecimal.ZERO, BigDecimal::add);
+        }
+        return req.isFinished() && req.getOutputQuantity() != null
+                ? req.getOutputQuantity() : BigDecimal.ZERO;
+    }
+
+    private BigDecimal reportingMassToKg(BigDecimal quantity, String unit) {
+        if (quantity == null || quantity.signum() <= 0) return BigDecimal.ZERO;
+        String canonical = canonicalBomUnit(unit);
+        if (canonical == null) return BigDecimal.ZERO;
+        return switch (canonical) {
+            case "kg" -> quantity;
+            case "g" -> quantity.movePointLeft(3);
+            default -> BigDecimal.ZERO;
+        };
+    }
+
+    private String canonicalBomUnit(String unit) {
+        if (unit == null || unit.isBlank()) return null;
+        return switch (unit.trim().toLowerCase(java.util.Locale.ROOT)) {
+            case "公斤", "千克", "kg" -> "kg";
+            case "克", "g" -> "g";
+            case "盒", "box" -> "box";
+            case "箱", "case" -> "case";
+            case "片", "slice", "piece", "pcs", "个" -> "slice";
+            default -> unit.trim().toLowerCase(java.util.Locale.ROOT);
+        };
     }
 
     private void assertAuthenticatedPlan(String factoryId, String planId, Long userId) {
@@ -2916,9 +3141,15 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
                         .orElseThrow(() -> new BusinessException(404,
                                 "原料批次不存在: " + ri.getMaterialBatchId()));
                 BigDecimal storageQuantity = convertReportingQuantityToStorage(
-                        nz(ri.getQuantity()), requestInputUnit(req), rawMb.getQuantityUnit(), "原料批次");
+                        nz(ri.getQuantity()),
+                        firstNonBlank(ri.getUnit(), requestInputUnit(req)),
+                        rawMb.getQuantityUnit(),
+                        "原料批次");
                 ensureRawMaterialWarehouse(factoryId, planId, rawMb);
-                edges.add(new ResolvedEdge(rawMb, storageQuantity, "RAW_MATERIAL"));
+                edges.add(new ResolvedEdge(
+                        rawMb,
+                        storageQuantity,
+                        firstNonBlank(ri.getSourceType(), "RAW_MATERIAL")));
             }
         }
 
@@ -3499,7 +3730,7 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
         return new BusinessException(409, sourceLabel + "存储单位为“" + storageUnit + "”，不能按报工单位“"
                 + reportingUnit + "”扣减")
                 .withCode("PROCESS_SHEET_SOURCE_UNIT_MISMATCH")
-                .withHint("当前仅支持 g 与 kg 的显式质量换算；其他单位请先配置确定的单位换算")
+                .withHint("当前支持 g/kg 质量换算，以及盒/箱/片等同口径计数单位；其他单位请先配置确定的单位换算")
                 .withSeverity("BLOCKING")
                 .withHintTarget("inputUnit");
     }
@@ -3511,6 +3742,17 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
         }
         if ("g".equals(normalized) || "克".equals(normalized)) {
             return "g";
+        }
+        if ("box".equals(normalized) || "盒".equals(normalized)) {
+            return "box";
+        }
+        if ("case".equals(normalized) || "箱".equals(normalized)) {
+            return "case";
+        }
+        if ("slice".equals(normalized) || "piece".equals(normalized)
+                || "pcs".equals(normalized) || "片".equals(normalized)
+                || "个".equals(normalized)) {
+            return "slice";
         }
         return normalized;
     }

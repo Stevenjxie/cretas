@@ -52,6 +52,11 @@ public class ProcessSheetRowResult {
         private BigDecimal quantity;
         private String unit;
         private Integer allocationOrder;
+        private String materialName;
+        private String sourceType;
+        private BigDecimal unitPrice;
+        private BigDecimal totalCost;
+        private Boolean automatic;
     }
 
     /**

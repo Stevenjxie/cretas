@@ -24,9 +24,20 @@ public class ProductionStockShortageDTO {
     @AllArgsConstructor
     public static class Item {
         private String materialTypeId;
+        private String materialName;
+        private String sourceType;
         private BigDecimal required;
         private BigDecimal available;
         private BigDecimal shortage;
         private String unit;
+
+        public Item(
+                String materialTypeId,
+                BigDecimal required,
+                BigDecimal available,
+                BigDecimal shortage,
+                String unit) {
+            this(materialTypeId, null, null, required, available, shortage, unit);
+        }
     }
 }

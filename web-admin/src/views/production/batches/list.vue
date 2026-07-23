@@ -181,6 +181,68 @@ const displayTableData = computed<BatchTableRow[]>(() => {
   return result;
 });
 
+type TableSortRow = Record<string, unknown>;
+
+function compareNullableNumber(left: TableSortRow, right: TableSortRow, prop: string) {
+  const leftValue = Number(left[prop]);
+  const rightValue = Number(right[prop]);
+  const leftValid = Number.isFinite(leftValue);
+  const rightValid = Number.isFinite(rightValue);
+  if (!leftValid && !rightValid) return 0;
+  if (!leftValid) return 1;
+  if (!rightValid) return -1;
+  return leftValue - rightValue;
+}
+
+function compareNullableDate(left: TableSortRow, right: TableSortRow, prop: string) {
+  const leftValue = Date.parse(String(left[prop] || ''));
+  const rightValue = Date.parse(String(right[prop] || ''));
+  const leftValid = Number.isFinite(leftValue);
+  const rightValid = Number.isFinite(rightValue);
+  if (!leftValid && !rightValid) return 0;
+  if (!leftValid) return 1;
+  if (!rightValid) return -1;
+  return leftValue - rightValue;
+}
+
+function productNameOf(row: BatchTableRow) {
+  return String(row.productTypeName || row.productName || row.productTypeId || '-');
+}
+
+function sourceProcessOf(row: BatchTableRow) {
+  if (row.isSyntheticPlanGroup) return '生产计划';
+  if (row.batchType === 'CLERK_WIP' && row.sourceProcessOrder) {
+    return `第${row.sourceProcessOrder}道${row.sourceProcessCode ? ` / ${row.sourceProcessCode}` : ''}`;
+  }
+  return '-';
+}
+
+const productFilters = computed(() => Array.from(new Set(tableData.value.map(productNameOf)))
+  .filter((value) => value !== '-')
+  .sort((a, b) => a.localeCompare(b, 'zh-CN'))
+  .map((value) => ({ text: value, value })));
+
+const sourceProcessFilters = computed(() => Array.from(new Set(displayTableData.value.flatMap((row) => [
+  sourceProcessOf(row),
+  ...(row.children || []).map(sourceProcessOf)
+])))
+  .sort((a, b) => a.localeCompare(b, 'zh-CN'))
+  .map((value) => ({ text: value, value })));
+
+const supervisorFilters = computed(() => Array.from(new Set(tableData.value
+  .map((row) => String(row.supervisorName || '-'))))
+  .sort((a, b) => a.localeCompare(b, 'zh-CN'))
+  .map((value) => ({ text: value, value })));
+
+const statusFilters = [
+  { text: '待生产', value: 'PLANNED' },
+  { text: '生产中', value: 'IN_PROGRESS' },
+  { text: '已暂停', value: 'PAUSED' },
+  { text: '已完成', value: 'COMPLETED' },
+  { text: '已取消', value: 'CANCELLED' },
+  { text: '计划归组', value: 'SOURCE_PLAN_GROUP' }
+];
+
 function openSourcePlan(row: BatchTableRow) {
   if (row.sourcePlanId) {
     router.push({ path: '/production/plans', query: { openProcessEntryPlan: String(row.sourcePlanId) } });
@@ -419,9 +481,11 @@ function getStatusText(status: string) {
         empty-text="暂无数据"
         stripe
         border
+        table-layout="fixed"
+        class="batch-data-table"
         style="width: 100%"
       >
-        <el-table-column prop="batchNumber" label="计划/批次号" width="260">
+        <el-table-column prop="batchNumber" label="计划/批次号" min-width="280" sortable show-overflow-tooltip>
           <template #default="{ row }">
             <div v-if="row.isSyntheticPlanGroup" class="plan-group-cell">
               <span class="plan-group-title">生产计划 {{ row.sourcePlanNumber || row.sourcePlanId || '-' }}</span>
@@ -430,15 +494,42 @@ function getStatusText(status: string) {
             <span v-else>{{ row.batchNumber || '-' }}</span>
           </template>
         </el-table-column>
-        <el-table-column label="产品类型" min-width="150" show-overflow-tooltip>
+        <el-table-column
+          prop="productTypeName"
+          label="产品类型"
+          min-width="260"
+          show-overflow-tooltip
+          :filters="productFilters"
+          :filter-method="(value: string, row: BatchTableRow) => productNameOf(row) === value"
+        >
           <template #default="{ row }">
             <span v-if="row.isSyntheticPlanGroup">{{ row.children?.length || 0 }} 条已小结批次</span>
             <span v-else>{{ row.productTypeName || row.productName || row.productTypeId || '-' }}</span>
           </template>
         </el-table-column>
-        <el-table-column prop="plannedQuantity" label="计划数量" width="100" align="right" />
-        <el-table-column prop="actualQuantity" label="实际数量" width="100" align="right" />
-        <el-table-column label="来源工序" width="130" align="center">
+        <el-table-column
+          prop="plannedQuantity"
+          label="计划数量"
+          width="120"
+          align="right"
+          sortable
+          :sort-method="(a: TableSortRow, b: TableSortRow) => compareNullableNumber(a, b, 'plannedQuantity')"
+        />
+        <el-table-column
+          prop="actualQuantity"
+          label="实际数量"
+          width="120"
+          align="right"
+          sortable
+          :sort-method="(a: TableSortRow, b: TableSortRow) => compareNullableNumber(a, b, 'actualQuantity')"
+        />
+        <el-table-column
+          label="来源工序"
+          width="160"
+          align="center"
+          :filters="sourceProcessFilters"
+          :filter-method="(value: string, row: BatchTableRow) => sourceProcessOf(row) === value"
+        >
           <template #default="{ row }">
             <span v-if="row.isSyntheticPlanGroup">生产计划</span>
             <span v-else-if="row.batchType === 'CLERK_WIP' && row.sourceProcessOrder">
@@ -447,7 +538,14 @@ function getStatusText(status: string) {
             <span v-else>-</span>
           </template>
         </el-table-column>
-        <el-table-column prop="status" label="状态" width="100" align="center">
+        <el-table-column
+          prop="status"
+          label="状态"
+          width="120"
+          align="center"
+          :filters="statusFilters"
+          :filter-method="(value: string, row: BatchTableRow) => String(row.status || '').toUpperCase() === value"
+        >
           <template #default="{ row }">
             <el-tag v-if="row.isSyntheticPlanGroup" type="info" size="small">
               计划归组
@@ -457,10 +555,23 @@ function getStatusText(status: string) {
             </el-tag>
           </template>
         </el-table-column>
-        <el-table-column prop="supervisorName" label="负责人" width="100">
+        <el-table-column
+          prop="supervisorName"
+          label="负责人"
+          width="120"
+          :filters="supervisorFilters"
+          :filter-method="(value: string, row: BatchTableRow) => String(row.supervisorName || '-') === value"
+        >
           <template #default="{ row }">{{ row.isSyntheticPlanGroup ? '-' : (row.supervisorName || '-') }}</template>
         </el-table-column>
-        <el-table-column prop="createdAt" label="创建时间" width="180" :formatter="formatDateTimeCell" />
+        <el-table-column
+          prop="createdAt"
+          label="创建时间"
+          width="190"
+          sortable
+          :sort-method="(a: TableSortRow, b: TableSortRow) => compareNullableDate(a, b, 'createdAt')"
+          :formatter="formatDateTimeCell"
+        />
         <el-table-column label="操作" width="220" fixed="right" align="center">
           <template #default="{ row }">
             <template v-if="row.isSyntheticPlanGroup">
@@ -619,6 +730,36 @@ function getStatusText(status: string) {
 
 .el-table {
   flex: 1;
+}
+
+.batch-data-table {
+  --el-table-border-color: #dce3ec;
+  --el-table-header-bg-color: #f3f6fa;
+  --el-table-header-text-color: #303846;
+  --el-table-row-hover-bg-color: #f6faff;
+
+  :deep(.el-table__header th.el-table__cell) {
+    height: 46px;
+    padding: 0;
+    font-weight: 650;
+    border-right-color: #d4dce7;
+  }
+
+  :deep(.el-table__body td.el-table__cell) {
+    height: 54px;
+    padding: 0;
+    border-right-color: #e0e6ee;
+  }
+
+  :deep(.el-table__cell .cell) {
+    padding: 0 12px;
+    line-height: 20px;
+  }
+
+  :deep(.el-table__column-filter-trigger) {
+    margin-left: 6px;
+    color: #697586;
+  }
 }
 
 .plan-group-cell {

@@ -21,6 +21,13 @@ import java.util.List;
 @Schema(description = "以销定产批量建计划请求 — 选 SO 多产品行各建一张计划")
 public class BatchPlanFromSalesOrderRequest {
 
+    @jakarta.validation.constraints.Size(max = 128, message = "创建请求幂等键不能超过128个字符")
+    @Schema(description = "本次批量创建的客户端幂等键")
+    private String clientRequestId;
+
+    @Schema(description = "确认短时间内创建内容相同但业务上独立的新计划集合")
+    private Boolean confirmPotentialDuplicate = false;
+
     @NotBlank(message = "销售订单ID不能为空")
     @Schema(description = "来源销售订单ID")
     private String sourceOrderId;

@@ -15,7 +15,8 @@ export interface SeasoningMaterialOption {
   code?: string | null;
   unit?: string | null;
   movingAvgPrice?: number | null;
-  taxIncludedUnitPrice?: number | null;
+  /** 未税采购参考价；物料档案保存含税价时由后端按税率同步换算。 */
+  unitPrice?: number | null;
 }
 
 const props = withDefaults(defineProps<{
@@ -89,19 +90,19 @@ const dosageUnitOptions = computed(() => {
   }
   return options;
 });
-const refreshedPrices = ref<Pick<SeasoningMaterialOption, 'movingAvgPrice' | 'taxIncludedUnitPrice'> | undefined>();
+const refreshedPrices = ref<Pick<SeasoningMaterialOption, 'movingAvgPrice' | 'unitPrice'> | undefined>();
 const effectivePrice = computed(() => {
   const movingAvgPrice = refreshedPrices.value === undefined
     ? selectedMaterial.value?.movingAvgPrice
     : refreshedPrices.value.movingAvgPrice;
   if (positivePrice(movingAvgPrice)) {
-    return { value: Number(movingAvgPrice), source: '移动平均价' as const };
+    return { value: Number(movingAvgPrice), source: '移动平均库存成本' as const };
   }
   const purchaseReferencePrice = refreshedPrices.value === undefined
-    ? selectedMaterial.value?.taxIncludedUnitPrice
-    : refreshedPrices.value.taxIncludedUnitPrice;
+    ? selectedMaterial.value?.unitPrice
+    : refreshedPrices.value.unitPrice;
   if (positivePrice(purchaseReferencePrice)) {
-    return { value: Number(purchaseReferencePrice), source: '采购参考价' as const };
+    return { value: Number(purchaseReferencePrice), source: '未税采购参考价' as const };
   }
   return null;
 });
@@ -189,7 +190,7 @@ async function submit() {
   if (missingEffectivePrice.value) {
     showSingletonNotification({
       title: '该调料尚无有效成本价格',
-      message: '表单内容已保留。请维护移动平均价或含税采购参考价，完成后回到本页重新读取即可继续保存。',
+      message: '表单内容已保留。请维护移动平均库存成本或未税采购参考价，完成后回到本页重新读取即可继续保存。',
       type: 'warning', duration: 0, showClose: true,
     });
     return;
@@ -257,7 +258,7 @@ async function refreshSelectedMaterialPrice() {
       : undefined;
     refreshedPrices.value = {
       movingAvgPrice: material?.movingAvgPrice ?? null,
-      taxIncludedUnitPrice: material?.taxIncludedUnitPrice ?? null,
+      unitPrice: material?.unitPrice ?? null,
     };
     if (!missingEffectivePrice.value && effectivePrice.value) {
       ElMessage.success(`已读取${effectivePrice.value.source}，可继续保存`);
@@ -355,7 +356,7 @@ async function refreshSelectedMaterialPrice() {
       <el-form-item label="自动单价">
         <div class="automatic-price" data-testid="seasoning-automatic-price">
           <el-input :model-value="automaticPriceLabel" disabled />
-          <el-tag v-if="effectivePrice" :type="effectivePrice.source === '移动平均价' ? 'success' : 'warning'">
+          <el-tag v-if="effectivePrice" :type="effectivePrice.source === '移动平均库存成本' ? 'success' : 'warning'">
             {{ effectivePrice.source }}
           </el-tag>
         </div>
@@ -365,7 +366,7 @@ async function refreshSelectedMaterialPrice() {
         type="warning"
         :closable="false"
         show-icon
-        title="该调料缺少有效移动平均价或采购参考价，暂不能保存"
+        title="该调料缺少有效移动平均库存成本或未税采购参考价，暂不能保存"
       >
         <template #default>
           <span>当前表单会保留。</span>

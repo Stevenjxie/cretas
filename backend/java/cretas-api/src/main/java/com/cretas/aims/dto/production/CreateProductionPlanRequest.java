@@ -42,6 +42,13 @@ public class CreateProductionPlanRequest {
      */
     public interface OnCreate extends jakarta.validation.groups.Default {}
 
+    @Schema(description = "创建请求幂等键；同一用户在同一工厂重试时必须复用", example = "plan-create-7d7d6d3e-...")
+    @Size(max = 128, message = "创建请求幂等键不能超过128个字符")
+    private String clientRequestId;
+
+    @Schema(description = "确认短时间内创建内容相同但业务上独立的新计划")
+    private Boolean confirmPotentialDuplicate = false;
+
     @Schema(description = "产品类型ID", required = true)
     @NotNull(message = "产品类型不能为空")
     private String productTypeId;

@@ -21,11 +21,14 @@ import org.springframework.stereotype.Service;
 import java.math.BigDecimal;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.LinkedHashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
 import java.util.TreeSet;
+import java.util.stream.Collectors;
 
 @Service
 @RequiredArgsConstructor
@@ -109,6 +112,8 @@ public class ProductionStockAllocationServiceImpl implements ProductionStockAllo
             if (remaining.signum() > 0) {
                 shortageItems.add(new ProductionStockShortageDTO.Item(
                         materialTypeId,
+                        null,
+                        "RAW_MATERIAL",
                         required,
                         availableForInput,
                         remaining,
@@ -212,7 +217,9 @@ public class ProductionStockAllocationServiceImpl implements ProductionStockAllo
             if (batch.getStatus() != com.cretas.aims.entity.enums.MaterialBatchStatus.AVAILABLE
                     || available.compareTo(required) < 0) {
                 shortageItems.add(new ProductionStockShortageDTO.Item(
-                        batch.getMaterialTypeId(), required, available,
+                        batch.getMaterialTypeId(), null,
+                        metadata.getSourceType() == null ? "RAW_MATERIAL" : metadata.getSourceType(),
+                        required, available,
                         required.subtract(available).max(BigDecimal.ZERO), KG));
                 continue;
             }
@@ -230,6 +237,139 @@ public class ProductionStockAllocationServiceImpl implements ProductionStockAllo
                     .reduce(BigDecimal.ZERO, BigDecimal::add);
             throw new ProductionStockShortageException(new ProductionStockShortageDTO(
                     required, available, shortage, KG, List.copyOf(shortageItems)));
+        }
+        return List.copyOf(allocations);
+    }
+
+    @Override
+    public List<PlannedAllocation> planNative(
+            String factoryId,
+            String planId,
+            List<AutomaticRequirement> requirements) {
+        if (requirements == null || requirements.isEmpty()) {
+            return List.of();
+        }
+        ProductionPlan plan = requirePlan(factoryId, planId);
+        String workshopId = warehouseResolver.resolveWorkshopId(factoryId);
+        if (workshopId == null || workshopId.isBlank()) {
+            throw new BusinessException(500, "未配置生产库，不能自动分摊包材/调料批次")
+                    .withCode("WORKSHOP_WAREHOUSE_NOT_CONFIGURED")
+                    .withSeverity("BLOCKING");
+        }
+
+        Map<String, BigDecimal> availableByBatch = new HashMap<>();
+        List<PlannedAllocation> allocations = new ArrayList<>();
+        List<ProductionStockShortageDTO.Item> shortages = new ArrayList<>();
+        int allocationOrder = 10_000;
+        for (AutomaticRequirement requirement : requirements) {
+            if (requirement == null || requirement.materialTypeId() == null
+                    || requirement.materialTypeId().isBlank()
+                    || requirement.quantity() == null || requirement.quantity().signum() <= 0) {
+                throw new BusinessException(409, "BOM 自动投料需求不完整")
+                        .withCode("AUTOMATIC_MATERIAL_REQUIREMENT_INVALID")
+                        .withSeverity("BLOCKING");
+            }
+            String requiredUnit = canonicalNativeUnit(requirement.unit());
+            if (requiredUnit == null) {
+                throw new BusinessException(409, "BOM 自动投料缺少计量单位: " + requirement.materialName())
+                        .withCode("AUTOMATIC_MATERIAL_UNIT_REQUIRED")
+                        .withSeverity("BLOCKING");
+            }
+            boolean massRequirement = isCanonicalMassUnit(requiredUnit);
+            String allocationUnit = massRequirement ? KG : requiredUnit;
+            BigDecimal requiredQuantity = massRequirement
+                    ? toKg(requirement.quantity(), requiredUnit)
+                    : requirement.quantity();
+            BigDecimal remaining = requiredQuantity;
+            BigDecimal availableForItem = BigDecimal.ZERO;
+            List<MaterialBatch> batches = findEligibleBatchesForUpdate(
+                    factoryId, plan, requirement.materialTypeId(), workshopId);
+            for (MaterialBatch batch : batches) {
+                ProductionInventoryOwnershipGuard.assertMaterialBatchAllowed(plan, batch, "生产报工自动投料");
+                String batchUnit = canonicalNativeUnit(batch.getQuantityUnit());
+                if (massRequirement ? !isCanonicalMassUnit(batchUnit)
+                        : !Objects.equals(requiredUnit, batchUnit)) {
+                    continue;
+                }
+                BigDecimal available = availableByBatch.computeIfAbsent(batch.getId(), ignored -> {
+                    BigDecimal pending = nz(allocationRepository
+                            .sumPendingQuantityByMaterialBatchId(factoryId, batch.getId()));
+                    BigDecimal stock = massRequirement
+                            ? storageQuantityToKg(
+                                    nz(batch.getCurrentQuantity()), batch.getQuantityUnit(), batch.getBatchNumber())
+                            : nz(batch.getCurrentQuantity());
+                    return stock.subtract(pending).max(BigDecimal.ZERO);
+                });
+                if (available.signum() <= 0) {
+                    continue;
+                }
+                BigDecimal take = available.min(remaining);
+                if (take.signum() > 0) {
+                    BigDecimal costQuantity = massRequirement
+                            ? kgToStorageQuantity(take, batchUnit)
+                            : take;
+                    BigDecimal totalCost = batch.getUnitPrice() == null
+                            ? null : batch.getUnitPrice().multiply(costQuantity);
+                    BigDecimal allocationUnitPrice = batch.getUnitPrice() == null
+                            ? null : (massRequirement
+                                    ? batch.getUnitPrice().multiply(
+                                            "g".equals(batchUnit) ? new BigDecimal("1000") : BigDecimal.ONE)
+                                    : batch.getUnitPrice());
+                    allocations.add(new PlannedAllocation(
+                            requirement.materialTypeId(),
+                            batch.getId(),
+                            batch.getBatchNumber(),
+                            workshopId,
+                            take,
+                            allocationUnit,
+                            allocationOrder++,
+                            null,
+                            null,
+                            requirement.materialName(),
+                            requirement.sourceType(),
+                            allocationUnitPrice,
+                            totalCost,
+                            true));
+                    availableByBatch.put(batch.getId(), available.subtract(take));
+                    availableForItem = availableForItem.add(take);
+                    remaining = remaining.subtract(take);
+                }
+                if (remaining.signum() == 0) {
+                    break;
+                }
+            }
+            if (remaining.signum() > 0) {
+                shortages.add(new ProductionStockShortageDTO.Item(
+                        requirement.materialTypeId(),
+                        requirement.materialName(),
+                        requirement.sourceType(),
+                        requiredQuantity,
+                        availableForItem,
+                        remaining,
+                        allocationUnit));
+            }
+        }
+        if (!shortages.isEmpty()) {
+            Set<String> shortageUnits = shortages.stream()
+                    .map(ProductionStockShortageDTO.Item::getUnit)
+                    .collect(Collectors.toCollection(LinkedHashSet::new));
+            if (shortageUnits.size() == 1) {
+                BigDecimal required = shortages.stream()
+                        .map(ProductionStockShortageDTO.Item::getRequired)
+                        .reduce(BigDecimal.ZERO, BigDecimal::add);
+                BigDecimal available = shortages.stream()
+                        .map(ProductionStockShortageDTO.Item::getAvailable)
+                        .reduce(BigDecimal.ZERO, BigDecimal::add);
+                BigDecimal shortage = shortages.stream()
+                        .map(ProductionStockShortageDTO.Item::getShortage)
+                        .reduce(BigDecimal.ZERO, BigDecimal::add);
+                throw new ProductionStockShortageException(new ProductionStockShortageDTO(
+                        required, available, shortage,
+                        shortageUnits.iterator().next(), List.copyOf(shortages)));
+            }
+            throw new ProductionStockShortageException(new ProductionStockShortageDTO(
+                    BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO,
+                    "mixed", List.copyOf(shortages)));
         }
         return List.copyOf(allocations);
     }
@@ -256,7 +396,13 @@ public class ProductionStockAllocationServiceImpl implements ProductionStockAllo
                             left.unit(),
                             Math.min(left.allocationOrder(), right.allocationOrder()),
                             left.workflowPortId(),
-                            left.materialNodeId()));
+                            left.materialNodeId(),
+                            left.materialName(),
+                            left.sourceType(),
+                            left.unitPrice(),
+                            left.totalCost() == null || right.totalCost() == null
+                                    ? null : left.totalCost().add(right.totalCost()),
+                            left.automatic() || right.automatic()));
         }
         List<ProductionInputAllocation> entities = mergedByBatch.values().stream()
                 .map(allocation -> toEntity(
@@ -277,6 +423,9 @@ public class ProductionStockAllocationServiceImpl implements ProductionStockAllo
             input.setSkuId(allocation.materialTypeId());
             input.setWorkflowPortId(allocation.workflowPortId());
             input.setMaterialNodeId(allocation.materialNodeId());
+            input.setUnit(allocation.unit());
+            input.setSourceType(allocation.sourceType());
+            input.setAutomatic(allocation.automatic());
             return input;
         }).toList();
     }
@@ -294,6 +443,11 @@ public class ProductionStockAllocationServiceImpl implements ProductionStockAllo
             result.setQuantity(allocation.quantity());
             result.setUnit(allocation.unit());
             result.setAllocationOrder(allocation.allocationOrder());
+            result.setMaterialName(allocation.materialName());
+            result.setSourceType(allocation.sourceType());
+            result.setUnitPrice(allocation.unitPrice());
+            result.setTotalCost(allocation.totalCost());
+            result.setAutomatic(allocation.automatic());
             return result;
         }).toList();
     }
@@ -382,6 +536,30 @@ public class ProductionStockAllocationServiceImpl implements ProductionStockAllo
 
     private String normalizeUnit(String unit) {
         return unit == null || unit.isBlank() ? KG : unit.trim();
+    }
+
+    private String canonicalNativeUnit(String unit) {
+        if (unit == null || unit.isBlank()) return null;
+        return switch (unit.trim().toLowerCase(java.util.Locale.ROOT)) {
+            case "公斤", "千克", "kg" -> "kg";
+            case "克", "g" -> "g";
+            case "盒", "box" -> "box";
+            case "箱", "case" -> "case";
+            case "片", "slice", "piece", "pcs", "个" -> "slice";
+            default -> unit.trim().toLowerCase(java.util.Locale.ROOT);
+        };
+    }
+
+    private boolean isCanonicalMassUnit(String unit) {
+        return "kg".equals(unit) || "g".equals(unit);
+    }
+
+    private BigDecimal toKg(BigDecimal quantity, String canonicalUnit) {
+        return "g".equals(canonicalUnit) ? quantity.movePointLeft(3) : quantity;
+    }
+
+    private BigDecimal kgToStorageQuantity(BigDecimal quantityKg, String canonicalStorageUnit) {
+        return "g".equals(canonicalStorageUnit) ? quantityKg.movePointRight(3) : quantityKg;
     }
 
     private BigDecimal reportingQuantityToKg(BigDecimal quantity, String reportingUnit) {

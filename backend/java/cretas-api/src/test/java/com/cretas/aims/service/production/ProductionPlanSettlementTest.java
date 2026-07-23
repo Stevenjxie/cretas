@@ -868,7 +868,7 @@ class ProductionPlanSettlementTest {
     }
 
     @Test
-    @DisplayName("BY_STOCK 已小结停产计划显式补建唯一待仓库确认元数据，刷新读取不重复创建")
+    @DisplayName("BY_STOCK 已小结停产计划补建唯一已过账元数据，刷新读取不重复创建")
     void bridgeByStockSettlement_thenReadIsIdempotent() {
         ProductionPlan plan = completedSafetyStockPlan();
         ProcessSheetRow row = submittedInterimRow();
@@ -897,7 +897,7 @@ class ProductionPlanSettlementTest {
 
         assertEquals(first.getSettlementId(), refreshed.getSettlementId());
         assertEquals(first.getSettlementId(), replay.getSettlementId());
-        assertEquals("PENDING_WAREHOUSE_RECEIPT", first.getPostingStatus());
+        assertEquals("POSTED", first.getPostingStatus());
         assertEquals(new BigDecimal("5.0000"), first.getActualFinishedQuantity());
         assertEquals("box", first.getQuantityUnit());
         assertEquals("fg-interim-1", first.getFinishedGoodsBatchId());
@@ -961,12 +961,12 @@ class ProductionPlanSettlementTest {
         assertEquals("POSTED", first.getPostingStatus());
         assertEquals("fg-interim-1", first.getFinishedGoodsBatchId());
         assertEquals("fg-interim-1", replay.getFinishedGoodsBatchId());
-        assertEquals(new BigDecimal("5"), first.getWarehouseReceivedQuantity());
+        assertEquals(0, new BigDecimal("5").compareTo(first.getWarehouseReceivedQuantity()));
         assertEquals("box", first.getQuantityUnit());
         verify(finishedGoodsBatchRepository, never()).save(any());
         verify(materialBatchRepository, never()).save(any());
         verify(materialConsumptionRepository, never()).save(any());
-        verify(productionSettlementRepository, times(2)).save(any(ProductionSettlement.class));
+        verify(productionSettlementRepository, times(1)).save(any(ProductionSettlement.class));
     }
 
     @Test

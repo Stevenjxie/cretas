@@ -102,8 +102,10 @@ public class ProductionPlanController {
             @PathVariable @NotBlank String factoryId,
             @Parameter(description = "访问令牌", required = true, example = "Bearer eyJhbGciOiJIUzI1NiJ9...")
             @RequestHeader("Authorization") String authorization,
+            @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey,
             @Validated(CreateProductionPlanRequest.OnCreate.class) @RequestBody CreateProductionPlanRequest request) {
 
+        request.setClientRequestId(resolveCreateIdempotencyKey(request.getClientRequestId(), idempotencyKey));
         // 获取当前用户ID
         String token = TokenUtils.extractToken(authorization);
         Long userId = mobileService.getUserFromToken(token).getId();
@@ -128,8 +130,10 @@ public class ProductionPlanController {
             @PathVariable @NotBlank String factoryId,
             @Parameter(description = "访问令牌", required = true)
             @RequestHeader("Authorization") String authorization,
+            @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey,
             @Valid @RequestBody com.cretas.aims.dto.production.BatchPlanFromSalesOrderRequest request) {
 
+        request.setClientRequestId(resolveCreateIdempotencyKey(request.getClientRequestId(), idempotencyKey));
         String token = TokenUtils.extractToken(authorization);
         Long userId = mobileService.getUserFromToken(token).getId();
 
@@ -186,7 +190,10 @@ public class ProductionPlanController {
             @PathVariable @NotBlank String factoryId,
             @Parameter(description = "访问令牌", required = true)
             @RequestHeader("Authorization") String authorization,
+            @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey,
             @Validated(CreateProductionPlanRequest.OnCreate.class) @RequestBody CreateProductionPlanRequest request) {
+
+        request.setClientRequestId(resolveCreateIdempotencyKey(request.getClientRequestId(), idempotencyKey));
 
         String token = TokenUtils.extractToken(authorization);
         Long userId = mobileService.getUserFromToken(token).getId();
@@ -194,6 +201,24 @@ public class ProductionPlanController {
         log.info("创建草稿生产计划: factoryId={}, productTypeId={}", factoryId, request.getProductTypeId());
         ProductionPlanDTO plan = productionPlanService.createDraftProductionPlan(factoryId, request, userId);
         return ApiResponse.success("草稿生产计划创建成功", plan);
+    }
+
+    private String resolveCreateIdempotencyKey(String bodyValue, String headerValue) {
+        String bodyKey = bodyValue != null ? bodyValue.trim() : null;
+        String headerKey = headerValue != null ? headerValue.trim() : null;
+        if (bodyKey != null && !bodyKey.isEmpty() && headerKey != null && !headerKey.isEmpty()
+                && !bodyKey.equals(headerKey)) {
+            throw new com.cretas.aims.exception.BusinessException(400, "请求头与请求体的创建幂等键不一致")
+                    .withCode("IDEMPOTENCY_KEY_MISMATCH")
+                    .withHint("请刷新创建窗口后重试");
+        }
+        String resolved = headerKey != null && !headerKey.isEmpty() ? headerKey : bodyKey;
+        if (resolved == null || resolved.isBlank()) {
+            throw new com.cretas.aims.exception.BusinessException(400, "缺少创建请求幂等键")
+                    .withCode("IDEMPOTENCY_KEY_REQUIRED")
+                    .withHint("请刷新创建窗口后重试，系统会自动生成新的提交键");
+        }
+        return resolved;
     }
 
     /**
@@ -734,11 +759,14 @@ public class ProductionPlanController {
             @PathVariable @NotBlank String factoryId,
             @Parameter(description = "计划ID", required = true, example = "PP-2025-001")
             @PathVariable @NotNull String planId,
+            @RequestHeader("Authorization") String authorization,
             @Parameter(description = "取消原因", required = true, example = "订单取消")
             @RequestParam @NotBlank String reason) {
 
-        log.info("取消生产计划: factoryId={}, planId={}, reason={}", factoryId, planId, reason);
-        productionPlanService.cancelProductionPlan(factoryId, planId, reason);
+        Long userId = extractUserId(authorization);
+        log.info("取消生产计划: factoryId={}, planId={}, userId={}, reason={}",
+                factoryId, planId, userId, reason);
+        productionPlanService.cancelProductionPlan(factoryId, planId, reason, userId);
         return ApiResponse.success("生产计划已取消", null);
     }
 

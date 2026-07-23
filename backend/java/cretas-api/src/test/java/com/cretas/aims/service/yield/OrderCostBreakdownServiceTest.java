@@ -677,6 +677,41 @@ class OrderCostBreakdownServiceTest {
     }
 
     @Test
+    void actualPackagingAndSeasoningConsumptionsOverridePinnedBomAndKeepCostBucketsHonest() {
+        stubPinnedF006Audit(pinnedBomSnapshot(true));
+        MaterialConsumption packaging = cons("PKG-BATCH-1", "10", "1.891", "18.91");
+        packaging.setMaterialTypeId("PKG-BOX");
+        packaging.setSourceType("PACKAGING");
+        MaterialConsumption seasoning = cons("SEASONING-BATCH-1", "0.25", "20", "5.00");
+        seasoning.setMaterialTypeId("SEASONING-A");
+        seasoning.setSourceType("SEASONING");
+        when(consumptionRepository.findByProductionBatchIdAndFactoryId(9001L, F))
+                .thenReturn(List.of(packaging, seasoning));
+
+        MaterialBatch packagingBatch = mb("PKG-BATCH-1", "包材批次-001", null, null);
+        packagingBatch.setQuantityUnit("box");
+        packagingBatch.setUnitPrice(new BigDecimal("1.891"));
+        MaterialBatch seasoningBatch = mb("SEASONING-BATCH-1", "调料批次-001", null, null);
+        seasoningBatch.setUnitPrice(new BigDecimal("20"));
+        when(materialBatchRepository.findByIdAndFactoryId("PKG-BATCH-1", F))
+                .thenReturn(Optional.of(packagingBatch));
+        when(materialBatchRepository.findByIdAndFactoryId("SEASONING-BATCH-1", F))
+                .thenReturn(Optional.of(seasoningBatch));
+
+        OrderCostBreakdownDTO dto = service.compute(F, ORDER, false);
+
+        assertThat(dto.getRawMaterialCost()).isEqualByComparingTo("0");
+        assertThat(dto.getPackagingCost()).isEqualByComparingTo("18.91");
+        assertThat(dto.getSeasoningCost()).isEqualByComparingTo("5.00");
+        assertThat(dto.getTotalCost()).isEqualByComparingTo("243.91");
+        assertThat(dto.getPackagingDetails()).singleElement().satisfies(detail -> {
+            assertThat(detail.getMaterialCode()).isEqualTo("PKG-BOX");
+            assertThat(detail.getPriceSource()).isEqualTo("ACTUAL_MATERIAL_BATCH");
+            assertThat(detail.getAmount()).isEqualByComparingTo("18.91");
+        });
+    }
+
+    @Test
     void pinnedBomMissingPackagingPrice_marksPartialAndDoesNotPretendZeroOrComplete() {
         stubPinnedF006Audit(pinnedBomSnapshot(false));
 

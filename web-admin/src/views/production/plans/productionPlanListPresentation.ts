@@ -10,6 +10,10 @@ export type ProductionPlanListRow = {
   plannedQuantity?: unknown;
   plannedUnit?: unknown;
   actualQuantity?: unknown;
+  cancelReason?: unknown;
+  cancelledBy?: unknown;
+  cancelledByName?: unknown;
+  cancelledAt?: unknown;
 };
 
 function finiteNumber(value: unknown): number | null {
@@ -51,4 +55,17 @@ export function sourceOrderTarget(row: ProductionPlanListRow | null | undefined)
   const sourceOrderId = String(row?.sourceOrderId ?? '').trim();
   if (!sourceOrderId) return null;
   return { path: `/sales/orders/${encodeURIComponent(sourceOrderId)}` };
+}
+
+export function cancellationAudit(
+  row: ProductionPlanListRow | null | undefined,
+): { reason: string; actor: string; time: string } | null {
+  if (String(row?.status ?? '').toUpperCase() !== 'CANCELLED') return null;
+  const reason = String(row?.cancelReason ?? '').trim() || '未记录原因';
+  const actorName = String(row?.cancelledByName ?? '').trim();
+  const actorId = String(row?.cancelledBy ?? '').trim();
+  const actor = actorName || (actorId ? `用户 ${actorId}` : '历史记录未标记操作人');
+  const rawTime = String(row?.cancelledAt ?? '').trim();
+  const time = rawTime ? rawTime.replace('T', ' ').slice(0, 19) : '历史记录未标记时间';
+  return { reason, actor, time };
 }

@@ -7,6 +7,7 @@ import com.cretas.aims.dto.processentry.ProcessSheetRowRequest.UpstreamRef;
 import com.cretas.aims.dto.processentry.ProcessSheetRowResult;
 import com.cretas.aims.entity.MaterialBatch;
 import com.cretas.aims.entity.ProductionPlan;
+import com.cretas.aims.entity.ProductType;
 import com.cretas.aims.entity.User;
 import com.cretas.aims.entity.factory.FactoryWarehouse;
 import com.cretas.aims.entity.factory.FactoryWarehouse.WarehouseType;
@@ -16,6 +17,7 @@ import com.cretas.aims.repository.MaterialBatchRepository;
 import com.cretas.aims.repository.MaterialConsumptionRepository;
 import com.cretas.aims.repository.ProcessSheetRowRepository;
 import com.cretas.aims.repository.ProductionPlanRepository;
+import com.cretas.aims.repository.ProductTypeRepository;
 import com.cretas.aims.repository.UserRepository;
 import com.cretas.aims.repository.factory.FactoryWarehouseRepository;
 import org.junit.jupiter.api.BeforeEach;
@@ -80,6 +82,9 @@ class ProcessSheetInventoryTest {
     @Autowired
     private FactoryWarehouseRepository warehouseRepo;
 
+    @Autowired
+    private ProductTypeRepository productTypeRepo;
+
     private static final String FACTORY_ID   = "INV-FACTORY";
     private static final String PRODUCT_TYPE = "INV-PTYPE-001";
     private static final String RAW_MAT_TYPE = "INV-MATTYPE-PORK";
@@ -101,6 +106,18 @@ class ProcessSheetInventoryTest {
         user.setIsActive(true);
         user = userRepo.saveAndFlush(user);
         operatorId = user.getId();
+
+        ProductType product = new ProductType();
+        product.setId(PRODUCT_TYPE);
+        product.setFactoryId(FACTORY_ID);
+        product.setCode(PRODUCT_TYPE);
+        product.setName(PRODUCT_TYPE);
+        product.setUnit("kg");
+        product.setCategory("SEMI_FINISHED");
+        product.setProductCategory("SEMI_FINISHED");
+        product.setIsActive(true);
+        product.setCreatedBy(operatorId);
+        productTypeRepo.saveAndFlush(product);
 
         FactoryWarehouse rawWarehouse = new FactoryWarehouse();
         rawWarehouse.setId("WH-INV-001");

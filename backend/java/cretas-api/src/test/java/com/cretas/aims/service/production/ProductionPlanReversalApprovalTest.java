@@ -105,6 +105,8 @@ class ProductionPlanReversalApprovalTest {
         ReflectionTestUtils.setField(service, "workProcessTaskRepository", workProcessTaskRepository);
         ReflectionTestUtils.setField(service, "productionReportRepository", productionReportRepository);
         ReflectionTestUtils.setField(service, "reportReversalService", reportReversalService);
+        lenient().when(productionPlanRepository.findByIdForUpdate(anyString()))
+                .thenAnswer(inv -> productionPlanRepository.findById(inv.getArgument(0)));
     }
 
     // -----------------------------------------------------------------------

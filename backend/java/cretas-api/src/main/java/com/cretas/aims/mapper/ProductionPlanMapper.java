@@ -74,6 +74,9 @@ public class ProductionPlanMapper {
                 .estimatedOtherCost(plan.getEstimatedOtherCost())
                 .actualOtherCost(plan.getActualOtherCost())
                 .notes(plan.getNotes())
+                .cancelReason(plan.getCancelReason())
+                .cancelledBy(plan.getCancelledBy())
+                .cancelledAt(plan.getCancelledAt())
                 .createdBy(plan.getCreatedBy())
                 .createdAt(plan.getCreatedAt())
                 .updatedAt(plan.getUpdatedAt())
@@ -175,6 +178,7 @@ public class ProductionPlanMapper {
         plan.setId(UUID.randomUUID().toString());
         plan.setFactoryId(factoryId);
         plan.setPlanNumber(generatePlanNumber());
+        plan.setClientRequestId(request.getClientRequestId());
         plan.setProductTypeId(request.getProductTypeId());
         plan.setPlannedQuantity(request.getPlannedQuantity());
         plan.setPlannedUnit(request.getPlannedUnit());
