@@ -27,7 +27,7 @@ import java.util.Map;
  */
 @Data
 @EqualsAndHashCode(callSuper = true)
-@ToString(exclude = {"factory", "materialType", "supplier", "createdBy", "consumptions", "adjustments", "planBatchUsages"})
+@ToString(exclude = {"factory", "materialType", "productType", "supplier", "createdBy", "consumptions", "adjustments", "planBatchUsages"})
 @AllArgsConstructor
 @NoArgsConstructor
 @Entity
@@ -37,6 +37,7 @@ import java.util.Map;
            @Index(name = "idx_batch_status", columnList = "status"),
            @Index(name = "idx_batch_expire", columnList = "expire_date"),
            @Index(name = "idx_batch_material", columnList = "material_type_id"),
+           @Index(name = "idx_batch_product", columnList = "product_type_id"),
            @Index(name = "idx_material_batch_warehouse", columnList = "factory_id, warehouse_id")
        }
 )
@@ -49,8 +50,15 @@ public class MaterialBatch extends BaseEntity {
     private String factoryId;
     @Column(name = "batch_number", nullable = false, unique = true, length = 64)
     private String batchNumber;
-    @Column(name = "material_type_id", nullable = false)
+    @Column(name = "material_type_id")
     private String materialTypeId;  // 修改为String类型以匹配MaterialType的UUID
+
+    /**
+     * 半成品/成品库存身份。原料批次继续使用 materialTypeId，生产形成的 WIP 使用本字段；
+     * 两者不可再把 ProductType ID 塞进 raw_material_types 外键列。
+     */
+    @Column(name = "product_type_id", length = 191)
+    private String productTypeId;
     @Column(name = "supplier_id")
     private String supplierId;  // 修改为String类型以匹配Supplier的UUID
     @Column(name = "inbound_date", nullable = false)
@@ -205,6 +213,11 @@ public class MaterialBatch extends BaseEntity {
     @JoinColumn(name = "material_type_id", referencedColumnName = "id", insertable = false, updatable = false)
     @org.hibernate.annotations.BatchSize(size = 20)
     private RawMaterialType materialType;
+
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "product_type_id", referencedColumnName = "id", insertable = false, updatable = false)
+    @org.hibernate.annotations.BatchSize(size = 20)
+    private ProductType productType;
 
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "supplier_id", referencedColumnName = "id", insertable = false, updatable = false)

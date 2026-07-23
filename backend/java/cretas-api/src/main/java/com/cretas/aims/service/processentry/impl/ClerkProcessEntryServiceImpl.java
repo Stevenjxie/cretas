@@ -287,7 +287,7 @@ public class ClerkProcessEntryServiceImpl implements ClerkProcessEntryService {
             BigDecimal qty = nz(e.getFeedQuantityKg());
             BigDecimal edgeCost = unitPrice.multiply(qty).setScale(2, RoundingMode.HALF_UP);
             writeConsumption(ctx.getFactoryId(), ctx.getPlanId(), batch.getId(),
-                    src.getId(), src.getMaterialTypeId(),
+                    src.getId(), inventoryIdentity(src),
                     qty, unitPrice, edgeCost, e.getSourceType(), ctx.getUserId());
             batchMaterialCost = batchMaterialCost.add(edgeCost);
             batchTotalCost = batchTotalCost.add(edgeCost);
@@ -410,7 +410,7 @@ public class ClerkProcessEntryServiceImpl implements ClerkProcessEntryService {
             BigDecimal qty = nz(e.getFeedQuantityKg());
             BigDecimal edgeCost = unitPrice.multiply(qty).setScale(2, RoundingMode.HALF_UP);
             writeConsumption(ctx.getFactoryId(), ctx.getPlanId(), existingBatchId,
-                    src.getId(), src.getMaterialTypeId(),
+                    src.getId(), inventoryIdentity(src),
                     qty, unitPrice, edgeCost, e.getSourceType(), ctx.getUserId());
             batchMaterialCost = batchMaterialCost.add(edgeCost);
             batchTotalCost = batchTotalCost.add(edgeCost);
@@ -472,15 +472,17 @@ public class ClerkProcessEntryServiceImpl implements ClerkProcessEntryService {
                     .orElseThrow(() -> new BusinessException(404,
                             "WIP 批次不存在或无权访问: " + existingWipMbId));
             wip.setReceiptQuantity(lastOutputQty);
-            wip.setMaterialTypeId(requireOutputMaterialIdentity(
-                    ctx.getRawMaterialTypeId(), wip.getBatchNumber()));
+            wip.setMaterialTypeId(null);
+            wip.setProductTypeId(requireOwnedOutputProduct(
+                    ctx.getFactoryId(), ctx.getRawMaterialTypeId(), wip.getBatchNumber()));
             // 🔒 honest-null: 镜像 materializeBatch — 未计价源存在 → WIP 单价诚实 null。
             BigDecimal wipUnitPrice = anyUncosted ? null
                     : ((batchTotalCost.signum() > 0 && lastOutputQty.signum() > 0)
                     ? batchTotalCost.divide(lastOutputQty, 4, RoundingMode.HALF_UP)
                     : BigDecimal.ZERO);
             wip.setUnitPrice(wipUnitPrice);
-            materialBatchRepo.save(wip);
+            // 立即 flush，确保身份/FK 错误在写审计日志前暴露，避免污染 Hibernate Session。
+            materialBatchRepo.saveAndFlush(wip);
         }
 
         // 4. 更新 ProductionBatch.quantity (保 id) —— factory-scoped (🔒).
@@ -718,9 +720,10 @@ public class ClerkProcessEntryServiceImpl implements ClerkProcessEntryService {
         mb.setId(mbId);
         mb.setFactoryId(factoryId);
         mb.setBatchNumber(mbNumber);
-        // WIP identity belongs to this output product. All RAW/SEMI inputs remain in
-        // MaterialConsumption as provenance and cannot influence this value by list order.
-        mb.setMaterialTypeId(requireOutputMaterialIdentity(outputMaterialIdentity, mbNumber));
+        // WIP identity belongs to ProductType. Raw inputs remain in MaterialConsumption
+        // provenance and must never be written into the raw_material_types FK column.
+        mb.setMaterialTypeId(null);
+        mb.setProductTypeId(requireOwnedOutputProduct(factoryId, outputMaterialIdentity, mbNumber));
         mb.setWarehouseId(warehouseId);
         mb.setReceiptQuantity(outputQty);
         mb.setQuantityUnit(outputUnit);
@@ -733,8 +736,29 @@ public class ClerkProcessEntryServiceImpl implements ClerkProcessEntryService {
         mb.setCreatedBy(operatorId);
         mb.setReceiptDate(LocalDate.now());
 
-        materialBatchRepo.save(mb);
+        // Flush before the caller writes the audit log. A persistence failure must surface as
+        // the primary exception instead of poisoning the Session and being masked by logChange.
+        materialBatchRepo.saveAndFlush(mb);
         return mbId;
+    }
+
+    private String inventoryIdentity(MaterialBatch batch) {
+        if (batch.getMaterialTypeId() != null && !batch.getMaterialTypeId().isBlank()) {
+            return batch.getMaterialTypeId();
+        }
+        if (batch.getProductTypeId() != null && !batch.getProductTypeId().isBlank()) {
+            return batch.getProductTypeId();
+        }
+        throw new BusinessException(422,
+                "库存批次缺少物料或产品身份，无法记录消耗: " + batch.getBatchNumber());
+    }
+
+    private String requireOwnedOutputProduct(String factoryId, String outputProductId, String batchNumber) {
+        String productId = requireOutputMaterialIdentity(outputProductId, batchNumber);
+        productTypeRepository.findByIdAndFactoryId(productId, factoryId)
+                .orElseThrow(() -> new BusinessException(422,
+                        "半成品产出不属于当前工厂或产品不存在: " + productId));
+        return productId;
     }
 
     // ─────────────────────────────────────────────────────────────

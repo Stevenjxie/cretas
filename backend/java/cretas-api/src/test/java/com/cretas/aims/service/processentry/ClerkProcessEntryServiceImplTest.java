@@ -11,6 +11,7 @@ import com.cretas.aims.entity.MaterialBatch;
 import com.cretas.aims.entity.MaterialConsumption;
 import com.cretas.aims.entity.ProcessEntryIdempotency;
 import com.cretas.aims.entity.ProductionBatch;
+import com.cretas.aims.entity.ProductType;
 import com.cretas.aims.entity.enums.MaterialBatchStatus;
 import com.cretas.aims.entity.factory.FactoryWarehouse;
 import com.cretas.aims.exception.BusinessException;
@@ -138,7 +139,7 @@ class ClerkProcessEntryServiceImplTest {
 
     private void stubMbSave() {
         // Track saved WIP batches so findByIdAndFactoryId can return them
-        when(materialBatchRepo.save(any(MaterialBatch.class))).thenAnswer(inv -> {
+        when(materialBatchRepo.saveAndFlush(any(MaterialBatch.class))).thenAnswer(inv -> {
             MaterialBatch mb = inv.getArgument(0);
             // Stub subsequent findByIdAndFactoryId(mb.id, FACTORY) to return this saved batch
             if (mb.getId() != null) {
@@ -161,6 +162,13 @@ class ClerkProcessEntryServiceImplTest {
     private void stubNoRecipe() {
         when(bomRecipeRepo.findByFactoryIdAndProductTypeIdAndIsCurrentTrue(any(), any()))
                 .thenReturn(Optional.empty());
+        when(productTypeRepository.findByIdAndFactoryId(anyString(), eq(FACTORY)))
+                .thenAnswer(invocation -> {
+                    ProductType product = new ProductType();
+                    product.setId(invocation.getArgument(0));
+                    product.setFactoryId(FACTORY);
+                    return Optional.of(product);
+                });
     }
 
     // ─────────────────────────────────────────────────────────────
@@ -285,8 +293,77 @@ class ClerkProcessEntryServiceImplTest {
         assertThat(batchCaptor.getAllValues()).anySatisfy(batch -> assertThat(batch.getUnit()).isEqualTo("袋"));
 
         ArgumentCaptor<MaterialBatch> wipCaptor = ArgumentCaptor.forClass(MaterialBatch.class);
-        verify(materialBatchRepo, atLeastOnce()).save(wipCaptor.capture());
+        verify(materialBatchRepo, atLeastOnce()).saveAndFlush(wipCaptor.capture());
         assertThat(wipCaptor.getAllValues()).anySatisfy(wip -> assertThat(wip.getQuantityUnit()).isEqualTo("袋"));
+    }
+
+    @Test
+    @DisplayName("正式报工: 四种原料各2kg生成8kg半成品产品批次，下一工序可消费")
+    void formalReporting_createsProductTypedWipAndFeedsNextProcess() {
+        stubNoIdempotency("F006-WIP-PRODUCT-IDENTITY");
+        stubPlan();
+        stubWarehouse();
+        stubBatchSave();
+        stubMbSave();
+        stubConsumptionSave();
+        stubIdempotencySave();
+        stubNoRecipe();
+
+        List<String> rawIds = List.of("RAW-A", "RAW-B", "RAW-C", "RAW-D");
+        for (String rawId : rawIds) {
+            MaterialBatch raw = rawMb(rawId, FACTORY, new BigDecimal("10"));
+            raw.setMaterialTypeId("MT-" + rawId);
+            when(materialBatchRepo.findByIdAndFactoryId(rawId, FACTORY))
+                    .thenReturn(Optional.of(raw));
+        }
+
+        StepEntry firstProcess = rawStep(1, "8", "8", rawIds.stream()
+                .map(rawId -> rawInput(rawId, "2"))
+                .toList());
+        firstProcess.setInputUnit("kg");
+        firstProcess.setOutputUnit("kg");
+        firstProcess.setUnit("kg");
+
+        BatchEntry wip = wipBatch("WIP-8KG", "753c6c7c-6704-47f0-8e8d-5693f5fe621f",
+                List.of(firstProcess));
+        BatchEntry packaging = finishedBatch("PACK-TO-BOX", "5855d1de-07e3-46d0-ae17-89e00413978d",
+                List.of(blendStep(2, "8", "10",
+                        List.of(upstreamSource("WIP-8KG", "8")))));
+
+        ProcessChainEntryResult result = service.recordChain(
+                FACTORY, PLAN_ID,
+                req("F006-WIP-PRODUCT-IDENTITY", List.of(wip, packaging)),
+                OPERATOR_ID);
+
+        assertThat(result.getWipBatchesMaterialized()).isEqualTo(1);
+        assertThat(result.getConsumptionsWritten()).isEqualTo(5);
+
+        ArgumentCaptor<MaterialBatch> wipCaptor = ArgumentCaptor.forClass(MaterialBatch.class);
+        verify(materialBatchRepo).saveAndFlush(wipCaptor.capture());
+        MaterialBatch persistedWip = wipCaptor.getValue();
+        assertThat(persistedWip.getMaterialTypeId()).isNull();
+        assertThat(persistedWip.getProductTypeId())
+                .isEqualTo("753c6c7c-6704-47f0-8e8d-5693f5fe621f");
+        assertThat(persistedWip.getReceiptQuantity()).isEqualByComparingTo("8");
+        assertThat(persistedWip.getQuantityUnit()).isEqualTo("kg");
+        assertThat(persistedWip.getWarehouseId()).isEqualTo("WH-WKS-1");
+        assertThat(persistedWip.getSourceDocType()).isEqualTo("PRODUCTION_BATCH");
+        assertThat(persistedWip.getSourceDocId()).isNotBlank();
+
+        ArgumentCaptor<MaterialConsumption> consumptionCaptor =
+                ArgumentCaptor.forClass(MaterialConsumption.class);
+        verify(consumptionRepo, times(5)).save(consumptionCaptor.capture());
+        List<MaterialConsumption> consumptions = consumptionCaptor.getAllValues();
+        assertThat(consumptions.stream().filter(edge -> "RAW_MATERIAL".equals(edge.getSourceType())))
+                .hasSize(4)
+                .allSatisfy(edge -> assertThat(edge.getQuantity()).isEqualByComparingTo("2"));
+        assertThat(consumptions.stream().filter(edge -> "SEMI_FINISHED".equals(edge.getSourceType())))
+                .singleElement()
+                .satisfies(edge -> {
+                    assertThat(edge.getBatchId()).isEqualTo(persistedWip.getId());
+                    assertThat(edge.getMaterialTypeId()).isEqualTo(persistedWip.getProductTypeId());
+                    assertThat(edge.getQuantity()).isEqualByComparingTo("8");
+                });
     }
 
     // ─────────────────────────────────────────────────────────────
@@ -483,15 +560,16 @@ class ClerkProcessEntryServiceImplTest {
                 OPERATOR_ID);
 
         ArgumentCaptor<MaterialBatch> wipCaptor = ArgumentCaptor.forClass(MaterialBatch.class);
-        verify(materialBatchRepo, times(4)).save(wipCaptor.capture());
+        verify(materialBatchRepo, times(4)).saveAndFlush(wipCaptor.capture());
         List<MaterialBatch> savedWips = wipCaptor.getAllValues();
         MaterialBatch wipA = savedWips.stream()
-                .filter(batch -> "PT-A".equals(batch.getMaterialTypeId()))
+                .filter(batch -> "PT-A".equals(batch.getProductTypeId()))
                 .findFirst().orElseThrow();
         MaterialBatch wipC = savedWips.stream()
-                .filter(batch -> "PT-C".equals(batch.getMaterialTypeId()))
+                .filter(batch -> "PT-C".equals(batch.getProductTypeId()))
                 .findFirst().orElseThrow();
-        assertThat(savedWips).extracting(MaterialBatch::getMaterialTypeId)
+        assertThat(savedWips).allSatisfy(batch -> assertThat(batch.getMaterialTypeId()).isNull());
+        assertThat(savedWips).extracting(MaterialBatch::getProductTypeId)
                 .as("A/C are inputs; B/D identities still come from their own output objects")
                 .containsExactly("PT-A", "PT-C", "PT-B", "PT-D")
                 .doesNotContain("RAW-SKU-A", "RAW-SKU-C");
@@ -534,7 +612,7 @@ class ClerkProcessEntryServiceImplTest {
                     assertThat(business.getErrorCode()).isEqualTo("WIP_OUTPUT_MATERIAL_IDENTITY_REQUIRED");
                 });
         verify(batchRepo, never()).save(any());
-        verify(materialBatchRepo, never()).save(any());
+        verify(materialBatchRepo, never()).saveAndFlush(any());
         verify(consumptionRepo, never()).save(any());
     }
 
@@ -1430,7 +1508,7 @@ class ClerkProcessEntryServiceImplTest {
 
         // WIP-U 的产出 MaterialBatch 单价诚实 null (供下游复用时再次触发 anyUncosted)
         ArgumentCaptor<MaterialBatch> mbCap = ArgumentCaptor.forClass(MaterialBatch.class);
-        verify(materialBatchRepo, atLeastOnce()).save(mbCap.capture());
+        verify(materialBatchRepo, atLeastOnce()).saveAndFlush(mbCap.capture());
         boolean anyWipUnitPriceNull = mbCap.getAllValues().stream()
                 .anyMatch(mb -> mb.getUnitPrice() == null);
         assertThat(anyWipUnitPriceNull)
