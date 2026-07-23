@@ -1919,7 +1919,7 @@ def _owner_chat_follow_ups(scenario: str, message: str = "") -> list[str]:
         "store_compare": "复制哪家店的哪一个动作",
     }
     first = scenario_specific.get(scenario, "这件事今天第一步做什么？")
-    return [first, "老板今天先看哪三个数？", "哪些事情今天先不要做？"]
+    return [first, "老板今天先看哪三个数？", "为了守住今天的营收和毛利，哪些事情先不要做？"]
 
 
 def _owner_metric_follow_up_answer(owner_page: dict[str, Any], scenario: str, message: str) -> str:
@@ -2032,7 +2032,6 @@ def _owner_action_follow_up_answer(owner_page: dict[str, Any], scenario: str, me
     asks_for_direct_answer = any(keyword in text for keyword in ("不要泛泛", "不要讲理论", "不要只", "不要光", "不要套餐", "不要米饭"))
     if asks_for_do_not_do and not asks_for_direct_answer:
         return "\n\n".join([
-            "这个追问我只说今天先别做什么，不重复前面的诊断。",
             f"今天先别做：{do_not_do}",
             "原因很简单：老板动作要先打最窄的点。还没看完今天的数据前，同时改价格、菜单、排班和投流，会分不清到底是哪一个动作起作用。",
             "明天复盘时，如果核心数据没变好，再决定要不要扩大到第二个动作。",
@@ -2105,9 +2104,8 @@ def _owner_action_follow_up_answer(owner_page: dict[str, Any], scenario: str, me
         return ""
 
     return "\n\n".join([
-        "这个追问我只拆执行细节，不重复前面的结论。",
         "今天照这三步做：\n" + "\n".join(f"{index}. {step}" for index, step in enumerate(steps[:3], start=1)),
-        f"看图时只抓一个重点：{chart_guide}",
+        f"图表重点：{chart_guide}",
         f"今天先别做：{do_not_do}",
     ])
 
@@ -2456,7 +2454,7 @@ def _owner_chat_answer(owner_page: dict[str, Any], scenario: str, message: str, 
 
     parts = [
         f"一句话结论：{problem or headline or '今天先抓一个最影响营收的问题。'}",
-        f"我按“{direction_label}”来判断，不是先让你打折或凭感觉改。",
+        f"以下分析围绕{direction_label}。",
     ]
     if premise_check:
         parts.insert(0, premise_check)
@@ -2467,19 +2465,20 @@ def _owner_chat_answer(owner_page: dict[str, Any], scenario: str, message: str, 
     if specific_guidance:
         parts.append(f"这次问题的重点：{specific_guidance}")
     if plain_reason:
-        parts.append(f"为什么这么说：{plain_reason}")
+        parts.append(f"原因：{plain_reason}")
     if scenario == "single_item_push":
         parts.append("主推排序口径：米饭、餐具、纸巾这类低价值配套项先排除；真正看招牌菜销量、连带加购率和毛利额，三项同时变好才算主推有效。")
     if plain_actions:
         action_lines = "\n".join(f"{index}. {action}" for index, action in enumerate(plain_actions[:3], start=1))
-        parts.append(f"今天就做这几件事：\n{action_lines}")
+        parts.append(f"今天建议做：\n{action_lines}")
     if do_not_do:
         parts.append(f"今天先别做：{do_not_do}")
     if watch_numbers:
-        parts.append(f"明天怎么判断有没有用：{watch_numbers}")
+        parts.append(f"明天怎么验证：{watch_numbers}")
     if evidence_text:
-        parts.append(f"背后的数据我看过了：{evidence_text}")
-    parts.append("你继续追问时，我会围绕同一个问题往下拆，不会换题。")
+        parts.append(f"本次调用数据：{evidence_text}")
+    # (Sheet 行24 采纳: 删掉"你继续追问时…不会换题"这类对自身行为的元陈述 —
+    #  多轮上下文由会话机制保证, 不靠自我表白。)
     return "\n\n".join(part for part in parts if part)
 
 
