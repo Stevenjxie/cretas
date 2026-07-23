@@ -115,3 +115,11 @@
 - **结果**：当前 Workflow 版本已发布并启用且没有待发布改动时，发布按钮显示“已发布并启用”、使用弱化完成态并保持禁用；存在新草稿时恢复“发布并启用”且可操作。
 - **验证**：`ProductProcessWorkflowEditor.activation.spec.ts` 6/6 通过；`npm --prefix web-admin run build:check` 通过，Vite 生产构建转换 4462 个模块。
 - **部署**：`NOT_DEPLOYED`。
+
+## UX-F006-WORKFLOW-AI-COMPOSER-20260723 — `merged`
+
+- **Base SHA**：`511298beac70bb4714e5ea3d0b9160046e6df73a`
+- **Owner**：`/root`
+- **结果**：Workflow AI 从画布外独立页脚移入 `canvas-shell`，固定在画布底部中央并限制为 820px 最大宽度；折叠后保留轻量入口，小屏自动收窄，原上下文、快捷问题、对话历史与草稿应用能力不变。
+- **验证**：Workflow 编辑器与 AI 输入组件目标 Vitest 2 files / 10 tests 通过；`npm run build:check` 通过，Vite 生产构建转换 4462 个模块。
+- **部署**：`NOT_DEPLOYED`。
