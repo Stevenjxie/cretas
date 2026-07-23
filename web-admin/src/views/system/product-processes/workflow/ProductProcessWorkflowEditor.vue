@@ -251,39 +251,45 @@
             <el-button v-if="canEdit" type="primary" @click="addStandaloneRaw">添加第一个原料 Cell</el-button>
           </el-empty>
         </div>
-      </div>
 
-      <section class="workflow-ai-footer" aria-label="Workflow AI 助手">
-        <div class="workflow-ai-footer__header">
-          <div>
-            <strong>Workflow AI</strong>
-            <span>{{ aiContextLabel }}</span>
+        <section
+          class="workflow-ai-dock"
+          :class="{ 'is-collapsed': aiCollapsed }"
+          aria-label="Workflow AI 助手"
+          data-testid="workflow-ai-canvas-composer"
+        >
+          <div class="workflow-ai-dock__header">
+            <div class="workflow-ai-dock__identity">
+              <span class="workflow-ai-dock__spark" aria-hidden="true">✦</span>
+              <strong>Workflow AI</strong>
+              <span>{{ aiContextLabel }}</span>
+            </div>
+            <el-button
+              text
+              size="small"
+              :aria-expanded="!aiCollapsed"
+              aria-controls="workflow-ai-composer"
+              @click="aiCollapsed = !aiCollapsed"
+            >{{ aiCollapsed ? '展开' : '收起' }}</el-button>
           </div>
-          <el-button
-            text
-            size="small"
-            :aria-expanded="!aiCollapsed"
-            aria-controls="workflow-ai-composer"
-            @click="aiCollapsed = !aiCollapsed"
-          >{{ aiCollapsed ? '展开' : '收起' }}</el-button>
-        </div>
-        <div id="workflow-ai-composer" v-show="!aiCollapsed" class="workflow-ai-footer__composer">
-          <WorkProcessAIChatPanel
-            v-if="factoryId"
-            :key="`${factoryId}:${productTypeId}`"
-            :factory-id="factoryId"
-            :product-type-id="productTypeId"
-            :endpoint="`/${factoryId}/config/v2/ai/chat`"
-            module-code="product_process_workflow_config"
-            title="Workflow AI 助手"
-            :disabled="!canEdit"
-            :context="selectedNodeContext"
-            :context-label="aiContextLabel"
-            :quick-prompts="aiQuickPrompts"
-            @apply-draft="applyWorkflowAIDraft"
-          />
-        </div>
-      </section>
+          <div id="workflow-ai-composer" v-show="!aiCollapsed" class="workflow-ai-dock__composer">
+            <WorkProcessAIChatPanel
+              v-if="factoryId"
+              :key="`${factoryId}:${productTypeId}`"
+              :factory-id="factoryId"
+              :product-type-id="productTypeId"
+              :endpoint="`/${factoryId}/config/v2/ai/chat`"
+              module-code="product_process_workflow_config"
+              title="Workflow AI 助手"
+              :disabled="!canEdit"
+              :context="selectedNodeContext"
+              :context-label="aiContextLabel"
+              :quick-prompts="aiQuickPrompts"
+              @apply-draft="applyWorkflowAIDraft"
+            />
+          </div>
+        </section>
+      </div>
     </div>
 
     <el-dialog v-model="processDialogVisible" title="增加后续工序" width="480px" destroy-on-close>
@@ -3266,43 +3272,68 @@ function identitiesMatch(left: WorkflowIdentity, right: WorkflowIdentity): boole
   position: relative; flex: 1; min-height: 0; height: 0; overflow: hidden;
   border: 1px solid #dce8f3; border-top: none; border-radius: 0 0 10px 10px; background: #fbfdff;
 }
-.workflow-ai-footer {
-  flex: none;
+.workflow-ai-dock {
+  position: absolute;
+  z-index: 26;
+  left: 50%;
+  bottom: 18px;
+  width: min(820px, calc(100% - 96px));
   min-width: 0;
-  border: 1px solid #dce8f3;
-  border-top: 0;
-  border-radius: 0 0 10px 10px;
-  background: #fff;
-  box-shadow: 0 -2px 10px rgb(27 101 168 / 6%);
+  transform: translateX(-50%);
+  filter: drop-shadow(0 16px 32px rgb(31 62 92 / 16%));
 }
-.workflow-ai-footer__header {
-  min-height: 38px;
+.workflow-ai-dock.is-collapsed {
+  width: max-content;
+  max-width: calc(100% - 32px);
+}
+.workflow-ai-dock__header {
+  width: max-content;
+  max-width: calc(100% - 24px);
+  min-height: 34px;
+  margin: 0 auto 8px;
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 12px;
-  padding: 4px 10px;
+  gap: 14px;
+  padding: 3px 7px 3px 12px;
+  border: 1px solid rgb(210 222 234 / 92%);
+  border-radius: 999px;
+  background: rgb(255 255 255 / 94%);
+  box-shadow: 0 4px 14px rgb(31 62 92 / 10%);
+  backdrop-filter: blur(12px);
 }
-.workflow-ai-footer__header > div {
+.workflow-ai-dock__identity {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 7px;
   min-width: 0;
 }
-.workflow-ai-footer__header span {
+.workflow-ai-dock__spark {
+  flex: 0 0 auto;
+  color: var(--el-color-primary);
+  font-size: 15px;
+  line-height: 1;
+}
+.workflow-ai-dock__identity strong {
+  flex: 0 0 auto;
+  font-size: 12px;
+}
+.workflow-ai-dock__identity > span:last-child {
   color: var(--el-text-color-secondary);
   font-size: 12px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.workflow-ai-footer__composer {
+.workflow-ai-dock__composer {
   max-height: 210px;
   overflow: auto;
-  padding: 0 10px 10px;
+  border-radius: 18px;
 }
-.workflow-ai-footer :deep(.work-process-ai-chat-panel) {
+.workflow-ai-dock :deep(.work-process-ai-chat-panel) {
   width: 100%;
+  border-color: rgb(196 211 226 / 92%);
+  box-shadow: 0 10px 30px rgb(31 62 92 / 18%);
 }
 .workflow-canvas { width: 100%; height: 100%; min-height: 0; }
 .workflow-canvas.is-batch-selecting :deep(.vue-flow__pane) { cursor: crosshair; }
@@ -3356,6 +3387,13 @@ function identitiesMatch(left: WorkflowIdentity, right: WorkflowIdentity): boole
 @media (max-width: 900px) {
   .workflow-editor { height: auto; max-height: none; overflow: visible; }
   .workflow-main { min-height: 480px; }
+  .workflow-ai-dock {
+    bottom: 12px;
+    width: calc(100% - 28px);
+  }
+  .workflow-ai-dock.is-collapsed { width: max-content; }
+  .workflow-ai-dock__header { max-width: 100%; }
+  .canvas-shell :deep(.vue-flow__controls) { bottom: 126px; }
 }
 :deep(.vue-flow__edge-path) { stroke-linecap: round; }
 :deep(.vue-flow__node) { border: 0; background: transparent; }

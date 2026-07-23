@@ -244,6 +244,19 @@ describe('ProductProcessWorkflowEditor activation controls', () => {
     expect(apiMocks.saveProductProcessWorkflowDraft).not.toHaveBeenCalled();
   });
 
+  it('embeds the Workflow AI composer inside the canvas instead of adding a page footer', async () => {
+    const wrapper = mountEditor();
+    await flushPromises();
+
+    const canvas = wrapper.get('.canvas-shell');
+    const composer = canvas.get('[data-testid="workflow-ai-canvas-composer"]');
+
+    expect(composer.element.parentElement).toBe(canvas.element);
+    expect(composer.classes()).toContain('workflow-ai-dock');
+    expect(wrapper.find('.workflow-ai-footer').exists()).toBe(false);
+    expect(composer.find('#workflow-ai-composer').exists()).toBe(true);
+  });
+
   // (移除) 旧「启用版本」独立按钮的 loading/generation 测试 —— #12a 已把启用并入发布,
   // 不再有独立启用按钮, 该 UI 路径不存在。发布→启用的一步行为由上面第一个测试覆盖。
 });
