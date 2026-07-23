@@ -648,6 +648,8 @@ const loadedCatalogFactoryId = ref<string | null>(null);
 const saving = ref(false);
 const snapshotting = ref(false);
 const publishing = ref(false);
+// 发布确认框显示期间也要锁住动作，避免连续点击叠加多个确认框/发布请求。
+const publishConfirming = ref(false);
 const activationChanging = ref(false);
 const dirty = ref(false);
 const selectedNodeId = ref('');
@@ -849,8 +851,25 @@ const canEdit = computed(() => (
   && loadedDefinitionIdentity.value?.factoryId === props.factoryId
   && loadedDefinitionIdentity.value?.productTypeId === props.productTypeId
 ));
+const currentDefinitionIsEnabled = computed(() => (
+  definition.value?.status === 'PUBLISHED'
+  && activation.value?.enabled === true
+  && activation.value.activeDefinitionVersion === definition.value.version
+));
 const publishDisabledReason = computed(() => {
+  if (publishConfirming.value || publishing.value) return '正在发布 Workflow，请勿重复提交';
   if (!canEdit.value) return '当前正在加载、预览历史版本或没有编辑权限，暂不能发布';
+  // 只在“当前显示的版本”已经发布并启用、且没有新的本地草稿改动时禁用。
+  // 已启用 v1 但当前定义是 v2 草稿时必须仍可发布 v2。
+  if (currentDefinitionIsEnabled.value && !dirty.value) {
+    return `Workflow v${definition.value?.version} 已发布并启用，当前没有待发布变更`;
+  }
+  if (definition.value?.status === 'PUBLISHED' && !dirty.value) {
+    return `Workflow v${definition.value.version} 已发布；请先修改并保存为新草稿后再发布`;
+  }
+  if (definition.value && definition.value.status !== 'DRAFT' && !dirty.value) {
+    return '当前不是可发布的 Workflow 草稿；请先另存或修改后保存草稿';
+  }
   if (flowNodes.value.length === 0) return '请先在画布中配置 Workflow Cell';
   if (bomMissingProducts.value.length > 0) {
     return `${bomMissingProducts.value.map((item) => item.name).join('、')} 尚未配置原辅料 BOM`;
@@ -2605,7 +2624,19 @@ async function snapshotWorkflow(): Promise<void> {
 
 async function publishWorkflow(): Promise<void> {
   let identity = currentLoadedIdentity();
-  if (!identity || !canEdit.value) return;
+  if (!identity || !canEdit.value || publishConfirming.value || publishing.value) return;
+  if (currentDefinitionIsEnabled.value && !dirty.value) {
+    ElMessage.info(`Workflow v${definition.value?.version} 已发布并启用，当前没有待发布变更`);
+    return;
+  }
+  if (definition.value?.status === 'PUBLISHED' && !dirty.value) {
+    ElMessage.info(`Workflow v${definition.value.version} 已发布；请先修改并保存为新草稿后再发布`);
+    return;
+  }
+  if (definition.value && definition.value.status !== 'DRAFT' && !dirty.value) {
+    ElMessage.info('当前不是可发布的 Workflow 草稿；请先另存或修改后保存草稿');
+    return;
+  }
   if (bomMissingProducts.value.length > 0) {
     ElMessage.warning('请先为所有成品产出配置原辅料 BOM，再发布并启用 Workflow');
     return;
@@ -2627,6 +2658,7 @@ async function publishWorkflow(): Promise<void> {
     return;
   }
   clearPublishBindingErrors();
+  publishConfirming.value = true;
   try {
     await ElMessageBox.confirm(
       '发布后会生成可审计的 Workflow 图版本。当前阶段不会自动改写生产任务或报工链，确认发布？',
@@ -2635,6 +2667,8 @@ async function publishWorkflow(): Promise<void> {
     );
   } catch {
     return;
+  } finally {
+    publishConfirming.value = false;
   }
   if (!isLoadedIdentityCurrent(identity) || !canEdit.value) return;
   const generation = ++publishGeneration;

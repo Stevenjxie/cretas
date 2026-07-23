@@ -826,7 +826,23 @@
   - 固定修订解析器只看工序节点自身的 output unit，没有沿 OUTPUT port 的 `materialNodeId` 或出边读取产出半成品节点 `baseUnit/materialKind`。
 - **修复**：建立单一价格选择器：正数移动平均价写入 `priceSource1` 并优先；否则正数含税采购参考价写入 `priceSource2`，仅作为草稿成本回退且 UI 标注“采购参考价”，不伪装或回写移动平均价；两者均缺失/零/负数时前后端 fail-closed。“重新读取价格”重新请求当前 F006 active 物料 DTO，同时刷新两种价格并保留表单。统一消费后端 `standardBasis*` 契约，并从固定 Workflow 修订的 OUTPUT port、`materialNodeId` 和出边目标节点解析 canonical unit/material kind；kg/公斤统一为 `1 kg`，多产出单位冲突或缺失继续阻止保存。投入区域改为“生产基准 → 需要投入”比例卡片，并显示最终 `g/kg` 保存口径。
 - **修改文件**：Java `BomSeasoningWorkspaceResponse`、`BomSeasoningWorkspaceServiceImpl` 与目标测试；Web `api/bom.ts`、`SeasoningBindingDialog.vue`、`ProcessSeasoningCard.vue`、`BomAuxiliaryWorkspace.vue`、`seasoningModel.ts` 及组件测试；不涉及 Entity、Repository、迁移或历史数据桥接。
-- **测试**：覆盖移动平均价优先、采购参考价回退、权威刷新后解除阻塞、null/0/负数门禁、kg/公斤解析、沿产出半成品节点解析、单位缺失/冲突 fail-closed、价格来源回读与 `12 g/kg` payload；最终 Java/Web 结果与不可变发布 manifest 在合入前回填。
-- **Commit/PR/main 状态**：等待最终实现 commit、PR 与 exact main 回填。
+- **测试**：Java `WorkProcessServiceImplTest,BomSeasoningWorkspaceServiceTest` 共 `49 tests` PASS；Web BOM/Workflow/期初提示联合目标测试 `8 files / 44 tests` PASS；`vue-tsc -b --pretty false` PASS。覆盖移动平均价优先、采购参考价回退、权威刷新后解除阻塞、null/0/负数门禁、kg/公斤解析、沿产出半成品节点解析、单位缺失/冲突 fail-closed、价格来源回读与 `12 g/kg` payload。
+- **Commit/PR/main 状态**：实现 commits `add8f20f1`、`455fed9c7`；PR、merge commit 与 exact main 在发布回执中回填。
 - **部署状态**：`DEPLOY_AUTHORIZED_AWAITING_RELEASE`。
 - **线上验收计划**：仅登录并证明 `factoryUser.factoryId=F006` 后，对 `BOM-20260723-001` 选择 `MHV7YA000001`，确认价格来源与 `1 kg` 基准，保存一次 `12 g/kg / 首锅100% / 后续50% / 计入成本` 并刷新回读；同一工序/物料不得重复绑定，其他租户业务 mutation=0。
+
+### BUG-F006-R4-WORKFLOW-REPUBLISH-ACTION-001 — 已启用版本仍可重复发布
+
+- **现场/影响**：Workflow 顶部同时显示“已启用 vN”和可点击“发布并启用”，在当前显示版本已经发布、启用且没有待发布修改时仍诱导用户重复请求。
+- **根因**：按钮只按页面保存状态控制，没有把“当前 definition 状态、启用版本号、未发布变更”合并为同一动作门禁；确认弹窗也缺少重入保护。
+- **修复**：仅当当前显示的 `PUBLISHED` definition 与 active version 相同且页面无未保存变更时，禁用发布动作并提示“Workflow vN 已发布并启用，当前没有待发布变更”；`已启用 v1 + 草稿 v2` 仍允许发布 v2。发布确认中加入 pending 防双击，并在方法边界重复校验，不能绕过 UI 直接触发。
+- **测试**：`ProductProcessWorkflowEditor.activation.spec.ts` 覆盖当前版本已启用、已启用旧版但存在新草稿、发布确认重入、状态刷新，共 `6 tests` PASS；已计入本批 Web 联合 `8 files / 44 tests`。
+- **部署状态**：`DEPLOY_AUTHORIZED_AWAITING_RELEASE`。
+
+### BUG-F006-R4-OPENING-INVENTORY-PREVIEW-HINT-001 — 未预览时确认导入缺少禁用原因
+
+- **现场/影响**：期初建账弹窗要求先执行“预览比对”，但“确认导入（创建盘点）”只呈禁用态；鼠标或键盘聚焦时均没有说明，用户无法判断下一步。
+- **根因**：按钮 disabled 条件没有对应的人类可读原因；仓库、期间、建账模式、录入模式或逐条数据变化后，旧预览状态也没有统一失效。
+- **修复**：用可聚焦 tooltip 容器包裹禁用按钮；未预览时提示“请先预览比对，确认导入前需核对本次数据”，处理中和无可导入数据分别说明原因。所有影响预览的输入变化都会清空旧 `bulkPreview`，避免用户修改数据后沿用过期对比结果。
+- **测试**：`openingInventoryPreviewHint.source.spec.ts` 覆盖 hover/focus 提示、完成预览后解除禁用、输入变化使预览失效，共 `3 tests` PASS；不执行任何库存 mutation。
+- **部署状态**：`DEPLOY_AUTHORIZED_AWAITING_RELEASE`。
