@@ -1887,3 +1887,10 @@ def test_r27_ranking_words_not_store_names():
     assert _r.extract_store_mention("客单价最高的店是哪家") is None
     assert _r.extract_store_mention("营收最差的店是哪家") is None
     assert _r.extract_store_mention("鲜行者打浦桥日月光店的毛利率") == "鲜行者打浦桥日月光店"
+
+
+def test_r31_channel_mix_routing():
+    assert _r.match_restaurant_ops("外卖占了几成") == "RESTAURANT_OPS_CHANNEL_MIX"
+    assert _r.match_restaurant_ops("堂食外卖比例是多少") == "RESTAURANT_OPS_CHANNEL_MIX"
+    assert _r.match_restaurant_ops("帮我把外卖占比导出成报表") != "RESTAURANT_OPS_CHANNEL_MIX"
+    assert _r.is_supported_restaurant_ops_code("RESTAURANT_OPS_CHANNEL_MIX")
