@@ -9,6 +9,7 @@ import { bomSeasoningApi } from '@/api/bom';
 import { isNotFoundError } from '@/api/notFound';
 import { PROCESS_SHEET_CONFIG } from './PROCESS_SHEET_CONFIG';
 import ProcessDataTable from './ProcessDataTable.vue';
+import { initialProcessSheetViewMode } from './processSheetViewMode';
 import InventoryTable from './InventoryTable.vue';
 import YieldCardTable from './YieldCardTable.vue';
 import { formatWorkflowPlannedOutput, resolveProcessSheetUnits, resolveWorkflowProcessSheetUnits } from '@/utils/processSheetUnits';
@@ -23,7 +24,7 @@ import { formatWorkflowPlannedOutput, resolveProcessSheetUnits, resolveWorkflowP
 // -------------------------------------------------------------------------
 const VIEW_MODE_KEY = 'sp-f-process-sheet-view';
 const savedView = localStorage.getItem(VIEW_MODE_KEY);
-const viewMode = ref<'grid' | 'card'>(savedView === 'grid' ? 'grid' : 'card');
+const viewMode = ref<'grid' | 'card'>(initialProcessSheetViewMode(savedView));
 
 function onViewModeChange(val: string | number | boolean) {
   const mode = val as 'grid' | 'card';
@@ -546,7 +547,7 @@ defineExpose({ hasUnsavedRows });
     <div style="padding:0 4px 12px;flex-shrink:0;display:flex;align-items:flex-start;justify-content:space-between;gap:12px">
       <div>
         <div style="font-size:15px;font-weight:600;color:#303133">
-          逐工序电子表格
+          逐工序报工
           <span v-if="productName" style="font-weight:400;color:#606266;margin-left:8px">{{ productName }}</span>
           <span v-if="plannedQuantity" style="font-size:12px;color:#909399;margin-left:8px">
             {{ formatWorkflowPlannedOutput(plannedQuantity, plannedUnit, terminalWorkflowOutput) }}
@@ -562,7 +563,7 @@ defineExpose({ hasUnsavedRows });
       <!-- View-mode toggle: applies to all process tabs simultaneously -->
       <el-segmented
         :model-value="viewMode"
-        :options="[{ label: '电子表格', value: 'grid' }, { label: '卡片', value: 'card' }]"
+        :options="[{ label: '表格', value: 'grid' }, { label: '卡片', value: 'card' }]"
         size="small"
         style="flex-shrink:0;align-self:center"
         @change="onViewModeChange"
@@ -619,6 +620,25 @@ defineExpose({ hasUnsavedRows });
             <div>
               <span>投入单位：{{ proc.inputUnit }}</span>
               <span>产出单位：{{ proc.outputUnit || proc.inputUnit }}</span>
+            </div>
+          </section>
+          <section class="process-flow-strip" :aria-label="`${proc.label} 投入到产出流程`">
+            <div class="process-flow-node process-flow-node--input">
+              <span class="process-flow-kicker">投入</span>
+              <strong>物料 / 上游半成品</strong>
+              <small>按实际批次与数量登记</small>
+            </div>
+            <span class="process-flow-arrow" aria-hidden="true">→</span>
+            <div class="process-flow-node process-flow-node--process">
+              <span class="process-flow-kicker">本工序</span>
+              <strong>{{ proc.label }}</strong>
+              <small>记录日期、工时与人员</small>
+            </div>
+            <span class="process-flow-arrow" aria-hidden="true">→</span>
+            <div class="process-flow-node process-flow-node--output">
+              <span class="process-flow-kicker">产出</span>
+              <strong>半成品 / 成品</strong>
+              <small>填写实际产出并生成批次</small>
             </div>
           </section>
           <div class="process-entry-workspace">
@@ -711,6 +731,44 @@ defineExpose({ hasUnsavedRows });
   gap: 8px;
 }
 .process-entry-context strong { color: #303133; }
+.process-flow-strip {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 24px minmax(0, 1fr) 24px minmax(0, 1fr);
+  align-items: stretch;
+  gap: 8px;
+}
+.process-flow-node {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 3px;
+  padding: 10px 12px;
+  border: 1px solid #dfe7f1;
+  border-radius: 10px;
+  background: #fff;
+}
+.process-flow-node--input { border-left: 4px solid #409eff; }
+.process-flow-node--process { border-left: 4px solid #e6a23c; }
+.process-flow-node--output { border-left: 4px solid #67c23a; }
+.process-flow-node strong {
+  overflow: hidden;
+  color: #303133;
+  font-size: 13px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.process-flow-node small { color: #909399; font-size: 11px; }
+.process-flow-kicker {
+  color: #606266;
+  font-size: 11px;
+  font-weight: 600;
+}
+.process-flow-arrow {
+  align-self: center;
+  color: #909399;
+  font-size: 18px;
+  text-align: center;
+}
 .process-entry-workspace {
   display: grid;
   grid-template-columns: minmax(0, 1.7fr) minmax(300px, 0.8fr);
@@ -730,5 +788,7 @@ defineExpose({ hasUnsavedRows });
 }
 @media (max-width: 720px) {
   .process-entry-context { align-items: flex-start; flex-direction: column; gap: 8px; }
+  .process-flow-strip { grid-template-columns: minmax(0, 1fr); }
+  .process-flow-arrow { transform: rotate(90deg); }
 }
 </style>

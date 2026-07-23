@@ -435,6 +435,21 @@ const statusMap: Record<string, { text: string; type: string }> = {
   CANCELLED: { text: '已取消', type: 'danger' },
   CLOSED: { text: '已关闭', type: 'info' },
 };
+const purchaseTypeColumnFilters = [
+  { text: '直接采购', value: 'DIRECT' },
+  { text: '统一采购', value: 'UNIFIED' },
+  { text: '紧急采购', value: 'URGENT' },
+];
+const purchaseStatusColumnFilters = Object.entries(statusMap).map(([value, item]) => ({
+  text: item.text,
+  value,
+}));
+function filterPurchaseType(value: string, row: TableRow): boolean {
+  return String(row.purchaseType || '') === value;
+}
+function filterPurchaseStatus(value: string, row: TableRow): boolean {
+  return String(row.status || '') === value;
+}
 
 // D13: Dirty form guard — warn user before leaving with unsaved changes
 const isDirty = ref(false);
@@ -972,18 +987,33 @@ function handleAiFill(params: TableRow) {
         :scrollbar-always-on="true"
         class="wide-table business-list-table"
       >
-        <el-table-column prop="orderNumber" label="订单编号" width="170" />
-        <el-table-column label="供应商" min-width="150" show-overflow-tooltip>
+        <el-table-column prop="orderNumber" label="订单编号" width="170" sortable />
+        <el-table-column prop="supplierName" label="供应商" min-width="150" show-overflow-tooltip sortable>
           <template #default="{ row }">{{ row.supplierName || row.supplier?.name || row.supplierId || '-' }}</template>
         </el-table-column>
-        <el-table-column v-if="procurementColumnVisible('purchaseType')" prop="purchaseType" label="类型" width="100" align="center">
+        <el-table-column
+          v-if="procurementColumnVisible('purchaseType')"
+          prop="purchaseType"
+          label="类型"
+          width="120"
+          align="center"
+          :filters="purchaseTypeColumnFilters"
+          :filter-method="filterPurchaseType"
+          :filter-multiple="false"
+        >
           <template #default="{ row }">
             <el-tag size="small" :type="row.purchaseType === 'URGENT' ? 'danger' : ''">
               {{ row.purchaseType === 'DIRECT' ? '直接' : row.purchaseType === 'URGENT' ? '紧急' : '统一' }}
             </el-tag>
           </template>
         </el-table-column>
-        <el-table-column v-if="procurementColumnVisible('orderDate')" prop="orderDate" label="下单日期" width="120" />
+        <el-table-column
+          v-if="procurementColumnVisible('orderDate')"
+          prop="orderDate"
+          label="下单日期"
+          width="120"
+          sortable
+        />
         <!--
           RBAC defense-in-depth (PR #415 Option B 2026-05-12 + P3 column-hide fix):
           backend PriceFieldResponseAdvice strips totalAmount → null for roles
@@ -999,13 +1029,22 @@ function handleAiFill(params: TableRow) {
           label="总金额"
           width="130"
           align="right"
+          sortable
         >
           <template #default="{ row }">
             <span v-if="row.totalAmount != null">{{ formatAmount(row.totalAmount) }}</span>
             <span v-else class="price-masked">—</span>
           </template>
         </el-table-column>
-        <el-table-column prop="status" label="状态" width="110" align="center">
+        <el-table-column
+          prop="status"
+          label="状态"
+          width="120"
+          align="center"
+          :filters="purchaseStatusColumnFilters"
+          :filter-method="filterPurchaseStatus"
+          :filter-multiple="false"
+        >
           <template #default="{ row }">
             <el-tag :type="(statusMap[row.status]?.type) || 'info'" size="small">
               {{ statusMap[row.status]?.text || enumLabel(row.status) }}

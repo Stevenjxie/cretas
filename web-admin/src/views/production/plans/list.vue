@@ -164,6 +164,39 @@ const settlementStatusMap = ref<Record<string, ProductionSettlementStatus>>({});
 // #726 SP12: 批量合并打印工单 — 多选状态
 const selectedPlans = ref<TableRow[]>([]);
 const productionBatchMode = ref(false);
+const productionStatusFilters = [
+  { text: '待生产', value: 'PENDING' },
+  { text: '进行中', value: 'IN_PROGRESS' },
+  { text: '已完成', value: 'COMPLETED' },
+  { text: '已取消', value: 'CANCELLED' },
+];
+const productionSourceFilters = [
+  { text: '存货生产', value: 'SAFETY_STOCK' },
+  { text: '销售订单', value: 'CUSTOMER_ORDER' },
+  { text: '历史导入', value: 'EXCEL_IMPORT' },
+  { text: '历史 AI 创建', value: 'AI_CHAT' },
+  { text: '历史 AI 预测', value: 'AI_FORECAST' },
+  { text: '历史手动', value: 'MANUAL' },
+];
+
+function compareNullableNumber(left: unknown, right: unknown): number {
+  const a = Number(left);
+  const b = Number(right);
+  if (!Number.isFinite(a) && !Number.isFinite(b)) return 0;
+  if (!Number.isFinite(a)) return 1;
+  if (!Number.isFinite(b)) return -1;
+  return a - b;
+}
+
+function filterProductionStatus(value: string, row: TableRow): boolean {
+  return String(row.status || '').toUpperCase() === value;
+}
+
+function filterProductionSource(value: string, row: TableRow): boolean {
+  const source = String(row.sourceType || 'MANUAL').toUpperCase();
+  return source === value;
+}
+
 function toggleProductionBatchMode() {
   productionBatchMode.value = !productionBatchMode.value;
   if (!productionBatchMode.value) {
@@ -381,6 +414,68 @@ function settlementActionLabel(row: TableRow): string {
   return row.sourceType === 'SAFETY_STOCK' ? '生产小结' : '核对结单';
 }
 
+interface RowWorkflowPreviewState {
+  loading: boolean;
+  candidate?: WorkflowResolutionCandidate;
+  error?: string;
+}
+
+const rowWorkflowPreviews = ref<Record<string, RowWorkflowPreviewState>>({});
+
+function planFinishedProductNames(row: TableRow): string[] {
+  const targetIds = Array.isArray(row.targetFinishedGoodIds)
+    ? row.targetFinishedGoodIds.map(String)
+    : [];
+  const names = targetFinishedGoodNames(targetIds).filter(Boolean);
+  if (names.length > 0) return names;
+  return [String(row.productTypeName || row.productName || row.productTypeId || '-')];
+}
+
+function planFinishedGoodIds(row: TableRow): string[] {
+  if (Array.isArray(row.targetFinishedGoodIds) && row.targetFinishedGoodIds.length > 0) {
+    return row.targetFinishedGoodIds.map(String).filter(Boolean);
+  }
+  return row.productTypeId ? [String(row.productTypeId)] : [];
+}
+
+async function ensureRowWorkflowPreview(row: TableRow): Promise<void> {
+  const key = String(row.id || '');
+  if (!key || rowWorkflowPreviews.value[key]?.candidate || rowWorkflowPreviews.value[key]?.loading) return;
+  const outputIds = planFinishedGoodIds(row);
+  if (!factoryId.value || outputIds.length === 0) {
+    rowWorkflowPreviews.value[key] = { loading: false, error: '该计划未记录可解析的成品标识' };
+    return;
+  }
+  rowWorkflowPreviews.value[key] = { loading: true };
+  try {
+    const response = await resolveWorkflowByOutputs(factoryId.value, outputIds);
+    const resolvedCandidates = response.success && response.data
+      ? resolvePlanWorkflowCandidates(outputIds, response.data.candidates || []).candidates
+      : [];
+    const selectedWorkflowId = Number(row.selectedWorkflowId);
+    const selectedWorkflowVersion = Number(row.selectedWorkflowVersion);
+    const hasPinnedWorkflow = Number.isFinite(selectedWorkflowId) && Number.isFinite(selectedWorkflowVersion);
+    const candidate = hasPinnedWorkflow
+      ? resolvedCandidates.find((item) =>
+          item.workflowId === selectedWorkflowId
+          && item.definitionVersion === selectedWorkflowVersion)
+      : resolvedCandidates[0];
+    rowWorkflowPreviews.value[key] = candidate
+      ? { loading: false, candidate }
+      : {
+          loading: false,
+          error: hasPinnedWorkflow
+            ? `未读取到计划固定的工序路线 v${selectedWorkflowVersion}`
+            : response.message || '未找到已启用的工序路线',
+        };
+  } catch (error) {
+    rowWorkflowPreviews.value[key] = {
+      loading: false,
+      error: error instanceof Error ? error.message : '工序路线加载失败',
+    };
+  }
+}
+
 function handlePrimarySettlementAction(row: TableRow) {
   if (row.sourceType === 'SAFETY_STOCK') {
     void handleInterimSettle(row);
@@ -574,8 +669,8 @@ const planForm = ref({
   sourceCustomerName: '',
   processName: '',
   batchDate: '',
-  // T135 ITEM #1: 默认「销售订单」(CUSTOMER_ORDER); handleCreate() 重置时也遵循此默认
-  sourceType: 'CUSTOMER_ORDER' as 'MANUAL' | 'CUSTOMER_ORDER' | 'AI_FORECAST' | 'SAFETY_STOCK',
+  // 新建入口只保留存货生产与销售订单；默认进入日常存货生产。
+  sourceType: 'SAFETY_STOCK' as 'CUSTOMER_ORDER' | 'SAFETY_STOCK',
   sourceOrderId: '' as string | undefined,
   sourceOrderItemId: '' as string | undefined,
   // 以销定产多产品 (2026-06-24): 选 SO 默认带出全部产品行, 多选可取消; 每行各建一张计划。
@@ -1155,8 +1250,7 @@ function handleCreate() {
     sourceCustomerName: '',
     processName: '',
     batchDate: today,
-    // T135 ITEM #1: 来源类型默认「销售订单」
-    sourceType: 'CUSTOMER_ORDER',
+    sourceType: 'SAFETY_STOCK',
     sourceOrderId: '',
     sourceOrderItemId: '',
     sourceOrderItemIds: [],
@@ -3038,9 +3132,16 @@ function nextStepText(row: TableRow) {
     if (settlement.postingStatus === 'POSTED') return '成品库存已入库';
     return postingStatusText(settlement.postingStatus);
   }
-  if (status === 'IN_PROGRESS') return '继续 APP 报工或核对结单';
+  if (status === 'IN_PROGRESS') {
+    return row.sourceType === 'SAFETY_STOCK'
+      ? '继续逐道录入或生产小结'
+      : '继续逐道录入并核对结单';
+  }
   if (status === 'PENDING') {
-    return row.skipProcessReporting === false ? '核对结单；需要逐道报工时下发 APP' : '核对结单；缺料只做预警';
+    if (row.sourceType === 'SAFETY_STOCK') {
+      return row.skipProcessReporting === false ? '逐道录入后生产小结' : '按实际产出执行生产小结';
+    }
+    return row.skipProcessReporting === false ? '逐道录入后核对销售订单数量' : '核对销售订单数量后结单';
   }
   if (status === 'PLANNED' || status === 'PREPARED') return '确认后进入未完成';
   if (status === 'CANCELLED') return '已取消';
@@ -3276,7 +3377,7 @@ function handleAiFill(params: TableRow) {
     sourceCustomerName: String(params.sourceCustomerName || ''),
     processName: String(params.processName || ''),
     batchDate: String(params.batchDate || today),
-    sourceType: 'MANUAL' as 'MANUAL' | 'CUSTOMER_ORDER' | 'AI_FORECAST' | 'SAFETY_STOCK',
+    sourceType: 'SAFETY_STOCK' as 'CUSTOMER_ORDER' | 'SAFETY_STOCK',
     sourceOrderId: '',
     sourceOrderItemId: '',
     sourceOrderItemIds: [] as string[],
@@ -3460,7 +3561,7 @@ function guardProductionPlanAi(params: Record<string, unknown>) {
         @selection-change="handleSelectionChange"
       >
         <el-table-column v-if="productionBatchMode" type="selection" width="45" />
-        <el-table-column prop="planNumber" label="计划编号" width="160">
+        <el-table-column prop="planNumber" label="计划编号" width="160" sortable>
           <template #default="{ row }">
             <el-button
               type="primary"
@@ -3472,31 +3573,75 @@ function guardProductionPlanAi(params: Record<string, unknown>) {
             >{{ row.planNumber || row.id }}</el-button>
           </template>
         </el-table-column>
-        <el-table-column label="产品类型" min-width="200" show-overflow-tooltip>
+        <el-table-column prop="productTypeName" label="生产成品" min-width="240" sortable>
           <template #default="{ row }">
-            <span>{{ row.productTypeName || row.productName || row.productTypeId || '-' }}</span>
-            <!-- raw-centric 多SKU: 多选成品建的计划, 后缀显示各终端成品 chips -->
-            <template v-if="Array.isArray(row.targetFinishedGoodIds) && row.targetFinishedGoodIds.length > 0">
-              <el-tag
-                v-for="(name, idx) in targetFinishedGoodNames(row.targetFinishedGoodIds)"
-                :key="idx"
-                size="small"
-                style="margin-left: 4px;"
-              >→ {{ name }}</el-tag>
-            </template>
+            <div class="plan-product-cell">
+              <span class="plan-product-name">{{ planFinishedProductNames(row).join('、') }}</span>
+              <el-popover
+                placement="right-start"
+                trigger="hover"
+                :width="780"
+                @show="ensureRowWorkflowPreview(row)"
+              >
+                <template #reference>
+                  <el-button
+                    class="workflow-preview-trigger"
+                    type="primary"
+                    link
+                    size="small"
+                    aria-label="预览工序路线"
+                  >工序图</el-button>
+                </template>
+                <div v-loading="rowWorkflowPreviews[String(row.id || '')]?.loading" class="plan-workflow-preview">
+                  <WorkflowRoutePreview
+                    v-if="rowWorkflowPreviews[String(row.id || '')]?.candidate"
+                    :nodes="rowWorkflowPreviews[String(row.id || '')]?.candidate?.previewNodes"
+                    :edges="rowWorkflowPreviews[String(row.id || '')]?.candidate?.previewEdges"
+                  />
+                  <el-empty
+                    v-else-if="!rowWorkflowPreviews[String(row.id || '')]?.loading"
+                    :description="rowWorkflowPreviews[String(row.id || '')]?.error || '悬停后加载工序路线'"
+                    :image-size="48"
+                  />
+                </div>
+              </el-popover>
+            </div>
           </template>
         </el-table-column>
-        <el-table-column v-if="isProductionColumnVisible('customer')" prop="sourceCustomerName" label="客户" min-width="120" show-overflow-tooltip />
-        <el-table-column v-if="isProductionColumnVisible('process')" prop="processName" label="工序" width="120" show-overflow-tooltip />
-        <el-table-column v-if="isProductionColumnVisible('batchDate')" prop="batchDate" label="批次日期" width="120" />
-        <el-table-column v-if="isProductionColumnVisible('plannedQuantity')" label="计划成品" width="110" align="right">
+        <el-table-column v-if="isProductionColumnVisible('customer')" prop="sourceCustomerName" label="客户" min-width="120" show-overflow-tooltip sortable />
+        <el-table-column v-if="isProductionColumnVisible('process')" prop="processName" label="工序" width="120" show-overflow-tooltip sortable />
+        <el-table-column v-if="isProductionColumnVisible('batchDate')" prop="batchDate" label="批次日期" width="120" sortable />
+        <el-table-column
+          v-if="isProductionColumnVisible('plannedQuantity')"
+          prop="plannedQuantity"
+          label="计划成品"
+          width="110"
+          align="right"
+          sortable
+          :sort-method="(a: TableRow, b: TableRow) => compareNullableNumber(a.plannedQuantity, b.plannedQuantity)"
+        >
           <template #default="{ row }">{{ formatPlanDisplayQuantity(row) }}</template>
         </el-table-column>
-        <el-table-column v-if="isProductionColumnVisible('actualQuantity')" label="实际数量" width="120" align="right">
+        <el-table-column
+          v-if="isProductionColumnVisible('actualQuantity')"
+          prop="actualQuantity"
+          label="实际数量"
+          width="120"
+          align="right"
+          sortable
+          :sort-method="(a: TableRow, b: TableRow) => compareNullableNumber(a.actualQuantity, b.actualQuantity)"
+        >
           <template #default="{ row }">{{ formatPlanActualQuantity(row) }}</template>
         </el-table-column>
-        <el-table-column v-if="isProductionColumnVisible('plannedDate')" prop="plannedDate" label="计划日期" width="120" />
-        <el-table-column prop="status" label="状态" width="100" align="center">
+        <el-table-column v-if="isProductionColumnVisible('plannedDate')" prop="plannedDate" label="计划日期" width="120" sortable />
+        <el-table-column
+          prop="status"
+          label="状态"
+          width="100"
+          align="center"
+          :filters="productionStatusFilters"
+          :filter-method="filterProductionStatus"
+        >
           <template #default="{ row }">
             <el-tag
               :type="getStatusType(row.status)"
@@ -3560,9 +3705,17 @@ function guardProductionPlanAi(params: Record<string, unknown>) {
             </div>
           </template>
         </el-table-column>
-        <el-table-column v-if="isProductionColumnVisible('workers')" prop="estimatedWorkers" label="预计工人" width="90" align="center" />
-        <el-table-column v-if="isProductionColumnVisible('supervisor')" prop="assignedSupervisorName" label="指派主管" width="100" show-overflow-tooltip />
-        <el-table-column v-if="isProductionColumnVisible('source')" prop="sourceType" label="来源" min-width="170" align="center">
+        <el-table-column v-if="isProductionColumnVisible('workers')" prop="estimatedWorkers" label="预计工人" width="90" align="center" sortable />
+        <el-table-column v-if="isProductionColumnVisible('supervisor')" prop="assignedSupervisorName" label="指派主管" width="100" show-overflow-tooltip sortable />
+        <el-table-column
+          v-if="isProductionColumnVisible('source')"
+          prop="sourceType"
+          label="来源"
+          min-width="170"
+          align="center"
+          :filters="productionSourceFilters"
+          :filter-method="filterProductionSource"
+        >
           <template #default="{ row }">
             <!-- SP2: planNumber 前缀 SEC- 标识独立再加工/返工 (planSourceType 字段未暴露在 DTO) -->
             <el-tag v-if="String(row.planNumber || '').startsWith('SEC-')" type="warning" size="small">独立再加工</el-tag>
@@ -3600,7 +3753,7 @@ function guardProductionPlanAi(params: Record<string, unknown>) {
             >免工序</el-tag>
           </template>
         </el-table-column>
-        <el-table-column v-if="isProductionColumnVisible('createdAt')" prop="createdAt" label="创建时间" width="180" :formatter="formatDateTimeCell" />
+        <el-table-column v-if="isProductionColumnVisible('createdAt')" prop="createdAt" label="创建时间" width="180" :formatter="formatDateTimeCell" sortable />
         <el-table-column
           label="操作"
           width="360"
@@ -4011,16 +4164,14 @@ function guardProductionPlanAi(params: Record<string, unknown>) {
       <el-form :model="planForm" label-width="100px">
         <el-form-item label="来源类型" required>
           <el-radio-group v-model="planForm.sourceType" @change="handleSourceTypeChange">
-            <el-radio label="MANUAL">手动</el-radio>
             <el-radio label="SAFETY_STOCK">存货生产</el-radio>
             <el-radio label="CUSTOMER_ORDER">销售订单</el-radio>
-            <el-radio label="AI_FORECAST">AI预测</el-radio>
           </el-radio-group>
           <div
             v-if="planForm.sourceType === 'SAFETY_STOCK'"
             style="font-size: 12px; color: var(--text-color-secondary, #909399); margin-top: 4px;"
           >
-            存货生产可多次小结（增量入库半成品/成品+实时扣料），计划保持开放，做完手动停产关闭；无需关联销售订单
+            存货生产按实际报工推进，可多次执行“生产小结”；计划完成后从“更多”中停产关闭。
           </div>
         </el-form-item>
         <el-form-item
@@ -4122,6 +4273,22 @@ function guardProductionPlanAi(params: Record<string, unknown>) {
             contact-text="请联系销售或管理员为该订单补充产品行后再排产"
             @action="goAddOrderItems(planForm.sourceOrderId || '')"
           />
+        </el-form-item>
+        <el-form-item
+          v-if="planForm.sourceType === 'CUSTOMER_ORDER' && planForm.sourceOrderItemIds.length > 0"
+          label="计划成品数量"
+        >
+          <div class="sales-order-quantity-readonly">
+            <div
+              v-for="item in selectedOrderItems.filter((candidate) => planForm.sourceOrderItemIds.includes(String(candidate.id)))"
+              :key="String(item.id)"
+              class="sales-order-quantity-row"
+            >
+              <span>{{ item.productName || item.productCode || '销售订单产品' }}</span>
+              <strong>{{ item.quantity || 0 }} {{ displayUnit(item.unit || item.quantityUnit || '') }}</strong>
+            </div>
+            <small>数量来自销售订单产品行，创建生产计划时不可修改。</small>
+          </div>
         </el-form-item>
         <!-- 以销定产 (2026-06-24): 来源=销售订单时, 产品/数量按所选产品行各自取, 不再手选单产品 → 隐藏 -->
         <!-- 完全匹配优先；无完全匹配时接受覆盖所选成品的最小联产超集。 -->
@@ -5935,6 +6102,64 @@ function guardProductionPlanAi(params: Record<string, unknown>) {
   color: var(--text-color-secondary, #909399);
   font-size: 13px;
   line-height: 1.5;
+}
+
+.plan-product-cell {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.plan-product-name {
+  overflow: hidden;
+  min-width: 0;
+  color: var(--text-color-primary, #303133);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.workflow-preview-trigger {
+  flex: 0 0 auto;
+  padding-inline: 2px;
+  opacity: 0.72;
+}
+
+.plan-product-cell:hover .workflow-preview-trigger,
+.workflow-preview-trigger:focus-visible {
+  opacity: 1;
+}
+
+.plan-workflow-preview {
+  min-height: 88px;
+}
+
+.sales-order-quantity-readonly {
+  width: 100%;
+  overflow: hidden;
+  border: 1px solid var(--border-color-lighter, #ebeef5);
+  border-radius: 8px;
+  background: var(--fill-color-light, #f5f7fa);
+}
+
+.sales-order-quantity-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border-color-lighter, #ebeef5);
+}
+
+.sales-order-quantity-row strong {
+  flex: 0 0 auto;
+  color: var(--text-color-primary, #303133);
+}
+
+.sales-order-quantity-readonly small {
+  display: block;
+  padding: 7px 12px;
+  color: var(--text-color-secondary, #909399);
 }
 
 .settlement-consumption-row {

@@ -58,8 +58,17 @@ describe('sales, procurement and production list integration', () => {
   it('removes unexplained row markers and only shows sales/production selection in batch mode', () => {
     expect(salesSource).not.toContain('<RowMarkerCell');
     expect(procurementSource).not.toContain('<RowMarkerCell');
+    expect(procurementSource).not.toContain('type="selection"');
     expect(salesSource).toContain('v-if="salesBatchMode" type="selection"');
     expect(productionSource).toContain('v-if="productionBatchMode" type="selection"');
+  });
+
+  it('keeps the procurement fixed columns sortable/filterable without adding bulk controls', () => {
+    expect(procurementSource).toContain('prop="orderNumber" label="订单编号" width="170" sortable');
+    expect(procurementSource).toContain(':filters="purchaseTypeColumnFilters"');
+    expect(procurementSource).toContain('prop="orderDate"');
+    expect(procurementSource).toContain('label="总金额"');
+    expect(procurementSource).toContain(':filters="purchaseStatusColumnFilters"');
   });
 });
 

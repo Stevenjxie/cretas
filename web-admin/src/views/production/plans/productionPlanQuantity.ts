@@ -1,7 +1,5 @@
 export type ProductionPlanSourceType =
-  | 'MANUAL'
   | 'CUSTOMER_ORDER'
-  | 'AI_FORECAST'
   | 'SAFETY_STOCK';
 
 export function plannedQuantityRequired(sourceType: ProductionPlanSourceType): boolean {

@@ -16,7 +16,6 @@ import { useWorkflowStats } from '@/composables/useWorkflowStats';
 import { getBucketPrimaryStatus, getBucketLabel } from '@/types/workflow';
 import { formatAmount } from '@/utils/tableFormatters';
 import { warehouseDisplayName } from '@/utils/warehouse';
-import { buildBomSalesOrderPayload } from '@/utils/orderPayloadBuilders';
 import { resolveReferenceByName } from '@/utils/referenceResolver';
 import {
   RowActionMenu,
@@ -31,7 +30,7 @@ import {
 // Sprint 6 W3-A — inline 3-chip link counter (文件 / 图片 / 合同).
 import LinkChipCell from '@/components/list/LinkChipCell.vue';
 import { useLinkChipCounts } from '@/composables/useLinkChipCounts';
-import { CreateModeSelector, BatchCreateDialog, QuickCreateDialog, BomExpansionDialog, MergePurchaseDialog } from '@/components/dialog';
+import { MergePurchaseDialog } from '@/components/dialog';
 // PR #872 (#860 follow-up) — 转发 / 分享链接 dialog.
 import ForwardShareDialog from '@/components/dialog/ForwardShareDialog.vue';
 // #1290 follow-up — 退货 dead-button fix: wire list-row "退货" action to the
@@ -40,7 +39,6 @@ import ForwardShareDialog from '@/components/dialog/ForwardShareDialog.vue';
 import CreateReturnOrderDialog from '@/components/dialog/CreateReturnOrderDialog.vue';
 import request from '@/api/request';
 import type { ViewMode } from '@/types/viewMode';
-import type { CreateMode } from '@/types/createMode';
 import { computeRowActions } from '@/composables/useRowActions';
 import { safePrint } from '@/api/printApi';
 import TaxGroupInvoiceDialog from './components/TaxGroupInvoiceDialog.vue';
@@ -177,115 +175,6 @@ const viewMode = ref<ViewMode>('table');
 const kanbanColumns = computed(() =>
   Object.entries(statusMap).map(([status, v]: [string, { text: string }]) => ({ status, label: v.text }))
 );
-
-// U-NEW-1 — create-mode selector. Pre-dialog presenting normal/quick/batch/bom modes.
-// Sprint 4 W2 Chat L shipped: normal + batch. P1 #58 (this session): quick + bom finished.
-const createModeSelectorVisible = ref(false);
-const batchCreateVisible = ref(false);
-const quickCreateVisible = ref(false);
-const bomCreateVisible = ref(false);
-function openCreateModeSelector(): void {
-  createModeSelectorVisible.value = true;
-}
-async function handleCreateModeSelected(mode: CreateMode): Promise<void> {
-  if (mode === 'normal') {
-    await openCreateDialog();
-  } else if (mode === 'batch') {
-    // Ensure dropdowns are warm before showing batch dialog.
-    await Promise.all([loadCustomers(), loadProducts(), loadSalesEmployees()]);
-    batchCreateVisible.value = true;
-  } else if (mode === 'quick') {
-    // P1 #58: minimal-field consecutive entry (customer + delivery date only)
-    await loadCustomers();
-    quickCreateVisible.value = true;
-  } else if (mode === 'bom') {
-    // P1 #58: parent SO + nested child lines expanded from a product template.
-    await Promise.all([loadCustomers(), loadProducts()]);
-    bomCreateVisible.value = true;
-  }
-}
-
-// P1 #58 — Quick create (一维): single-row minimal-fields with consecutive entry.
-interface QuickSalesOrderRow {
-  customerId: string;
-  requiredDeliveryDate: string;
-  remark: string;
-}
-function quickSalesOrderFactory(): QuickSalesOrderRow {
-  return { customerId: '', requiredDeliveryDate: '', remark: '' };
-}
-async function submitQuickSalesOrder(_row: QuickSalesOrderRow): Promise<void> {
-  // P0 hotfix 2026-05-22: 销售订单后端要求至少 1 项明细 (SalesOrderService.createOrder
-  // 校验 items.isEmpty → 400 "订单行项目不能为空"). Quick 模式 (P1 #58) 设计为 header-only
-  // 录入, 跟 SO 强制 items 契约冲突 → 用户提交即报错. 改 fool-proof Rule 1 预先告知 +
-  // 引导切到 BOM/标准模式 (它们有 items 编辑 UI).
-  // Per fool-proof-design.md Rule 5 — 不让用户卡死, 给 next action.
-  throw new Error('销售订单需要至少 1 项明细 — 快速模式不支持 header-only 创建。请改用 "BOM 展开" 或 "标准新建" 模式来填写明细行。');
-}
-
-// P1 #58 — BOM expansion (BOM 展开): parent SO + child items from selected product template.
-interface BomSalesOrderParent {
-  customerId: string;
-  requiredDeliveryDate: string;
-  remark: string;
-}
-interface BomSalesOrderChild {
-  productId: string;
-  productName: string;
-  quantity: number | string;
-  unit: string;
-  unitPrice: number | string;
-}
-function bomSalesOrderParentFactory(): BomSalesOrderParent {
-  return { customerId: '', requiredDeliveryDate: '', remark: '' };
-}
-// Each "BOM template" for sales = a product configuration with default qty/unit/price.
-const bomSalesTemplates = computed(() =>
-  (products.value || []).map((p) => ({
-    id: String(p.id || ''),
-    name: String(p.name || p.code || ''),
-    description: (p.code ? `编码 ${p.code}` : ''),
-  }))
-);
-async function expandBomSalesTemplate(productId: string): Promise<BomSalesOrderChild[]> {
-  const tpl = products.value.find((p) => String(p.id) === productId);
-  if (!tpl) return [];
-  // Sales SO BOM = single product line by default. Caller can manually
-  // add more rows via the dialog's "手动添加行" button.
-  return [
-    {
-      productId: String(tpl.id || ''),
-      productName: String(tpl.name || ''),
-      quantity: 1,
-      unit: String((tpl as Record<string, unknown>).unit || 'kg'),
-      unitPrice: Number((tpl as Record<string, unknown>).price ?? 0) || 0,
-    },
-  ];
-}
-async function submitBomSalesOrder(parent: BomSalesOrderParent, children: BomSalesOrderChild[]): Promise<void> {
-  if (!parent.customerId) {
-    throw new Error('请选择客户');
-  }
-  if (!children.length) {
-    throw new Error('请至少添加 1 项明细');
-  }
-  const payload = {
-    ...buildBomSalesOrderPayload(parent, children),
-    ...newSalesOrderSupplyContract(),
-  };
-  const res = await post(`/${factoryId.value}/sales/orders`, payload);
-  if (!res?.success) {
-    throw new Error(res?.message || '提交失败');
-  }
-  await loadData();
-}
-function batchOrderFactory(): { customerId: string; salesperson: string; requiredDeliveryDate: string; remark: string } {
-  return { customerId: '', salesperson: '', requiredDeliveryDate: '', remark: '' };
-}
-async function submitBatchOrders(orders: Array<{ customerId: string; salesperson: string; requiredDeliveryDate: string; remark: string }>): Promise<void> {
-  void orders;
-  throw new Error('批量销售订单必须逐单填写商品明细；当前二维模式已停用，请使用“普通新建”或“BOM 展开”。');
-}
 
 /** UX-A2: secondary-action dropdown ("操作 ▾") shown last in row toolbar. */
 function rowActionsFor(row: TableRow) {
@@ -844,6 +733,35 @@ const statusMap: Record<string, { text: string; type: string }> = {
   COMPLETED: { text: '已完成', type: 'success' },
   CANCELLED: { text: '已取消', type: 'danger' },
 };
+
+const processingModeFilters = SALES_PROCESSING_MODE_OPTIONS.map(({ value, label }) => ({ value, text: label }));
+const materialSupplyModeFilters = MATERIAL_SUPPLY_MODE_OPTIONS.map(({ value, label }) => ({ value, text: label }));
+const invoiceStatusFilters = [
+  { value: 'NOT_INVOICED', text: '未开票' },
+  { value: 'PARTIAL_INVOICED', text: '部分开票' },
+  { value: 'FULLY_INVOICED', text: '已开票' },
+];
+const salesStatusFilters = Object.entries(statusMap).map(([value, config]) => ({
+  value,
+  text: config.text,
+}));
+
+function filterSalesColumn(value: unknown, row: TableRow, column: { property?: string }): boolean {
+  const property = column.property;
+  if (!property) return false;
+  return String(row[property as keyof TableRow] ?? '') === String(value);
+}
+
+function compareText(left: unknown, right: unknown): number {
+  return String(left ?? '').localeCompare(String(right ?? ''), 'zh-CN', { numeric: true });
+}
+
+function compareCustomer(left: TableRow, right: TableRow): number {
+  return compareText(
+    left.customerName || left.customer?.name || left.customerId,
+    right.customerName || right.customer?.name || right.customerId,
+  );
+}
 
 // D13: Dirty form guard — warn user before leaving with unsaved changes
 const isDirty = ref(false);
@@ -1718,6 +1636,7 @@ async function handleBatchDelete(): Promise<void> {
 }
 
 const editingOrderId = ref<string | null>(null);
+const createOptionsLoading = ref(false);
 
 async function handleEdit(row: TableRow) {
   const orderId = String(row.id || '');
@@ -1881,8 +1800,17 @@ async function openCreateDialog() {
   };
   // 张权 Apr 28 反馈: 新建对话框 dropdown 显示 onMounted 时的旧 cache.
   // 强制刷新让用户刚建的客户/产品立即可选.
-  await Promise.all([loadCustomers(), loadProducts(), loadSalesEmployees(), loadWarehouses(), loadSuppliedMaterialOptions()]);
   dialogVisible.value = true;
+  createOptionsLoading.value = true;
+  void Promise.allSettled([
+    loadCustomers(),
+    loadProducts(),
+    loadSalesEmployees(),
+    loadWarehouses(),
+    loadSuppliedMaterialOptions(),
+  ]).finally(() => {
+    createOptionsLoading.value = false;
+  });
 }
 
 function addExtraFee() {
@@ -2145,7 +2073,7 @@ function handleMergePurchase() {
             <el-button v-if="canWrite" type="success" :icon="ChatDotRound" @click="aiEntryVisible = true">
               AI录入
             </el-button>
-            <el-button v-if="canWrite" type="primary" :icon="Plus" @click="openCreateModeSelector">新建{{ label('salesOrder') }}</el-button>
+            <el-button v-if="canWrite" type="primary" :icon="Plus" @click="openCreateDialog">新建{{ label('salesOrder') }}</el-button>
           </div>
         </div>
       </template>
@@ -2266,22 +2194,40 @@ function handleMergePurchase() {
       >
         <!-- T131 Part 3 — 多选列 (Element Plus 在 COLUMN 上用 :selectable, 非 table 的 rowSelectable). -->
         <el-table-column v-if="salesBatchMode" type="selection" width="48" :selectable="canSelectRow" />
-        <el-table-column prop="orderNumber" label="订单编号" width="170" />
-        <el-table-column label="客户" min-width="150" show-overflow-tooltip>
+        <el-table-column prop="orderNumber" label="订单编号" width="170" sortable />
+        <el-table-column label="客户" min-width="150" show-overflow-tooltip sortable :sort-method="compareCustomer">
           <template #default="{ row }">{{ row.customerName || row.customer?.name || row.customerId || '-' }}</template>
         </el-table-column>
-        <el-table-column v-if="salesColumnVisible('processingMode')" label="加工方式" width="100" align="center">
+        <el-table-column
+          v-if="salesColumnVisible('processingMode')"
+          prop="processingMode"
+          label="加工方式"
+          width="110"
+          align="center"
+          sortable
+          :filters="processingModeFilters"
+          :filter-method="filterSalesColumn"
+        >
           <template #default="{ row }">{{ processingModeLabel(row.processingMode) }}</template>
         </el-table-column>
-        <el-table-column v-if="salesColumnVisible('materialSupply')" label="物料供应" width="130" align="center">
+        <el-table-column
+          v-if="salesColumnVisible('materialSupply')"
+          prop="materialSupplyMode"
+          label="物料供应"
+          width="140"
+          align="center"
+          sortable
+          :filters="materialSupplyModeFilters"
+          :filter-method="filterSalesColumn"
+        >
           <template #default="{ row }">
             <el-tag size="small" :type="row.materialSupplyMode === 'CUSTOMER_SUPPLIED' ? 'warning' : 'info'">
               {{ materialSupplyModeLabel(row.materialSupplyMode) }}
             </el-tag>
           </template>
         </el-table-column>
-        <el-table-column v-if="salesColumnVisible('salesperson')" prop="salesperson" label="业务员" width="100" show-overflow-tooltip />
-        <el-table-column v-if="salesColumnVisible('orderDate')" prop="orderDate" label="下单日期" width="120" />
+        <el-table-column v-if="salesColumnVisible('salesperson')" prop="salesperson" label="业务员" width="110" show-overflow-tooltip sortable />
+        <el-table-column v-if="salesColumnVisible('orderDate')" prop="orderDate" label="下单日期" width="130" sortable />
         <!--
           RBAC defense-in-depth (PR #415 Option B 2026-05-12 + P3 column-hide fix):
           backend PriceFieldResponseAdvice strips totalAmount / discountAmount /
@@ -2297,6 +2243,7 @@ function handleMergePurchase() {
           label="总金额"
           width="130"
           align="right"
+          sortable
         >
           <template #default="{ row }">
             <span v-if="row.totalAmount != null">{{ formatAmount(row.totalAmount) }}</span>
@@ -2309,6 +2256,7 @@ function handleMergePurchase() {
           label="运费"
           width="100"
           align="right"
+          sortable
         >
           <template #default="{ row }">{{ row.shippingFee ? formatAmount(row.shippingFee) : '-' }}</template>
         </el-table-column>
@@ -2318,6 +2266,7 @@ function handleMergePurchase() {
           label="折扣"
           width="100"
           align="right"
+          sortable
         >
           <template #default="{ row }">
             <span v-if="row.discountAmount != null && row.discountAmount">{{ formatAmount(row.discountAmount) }}</span>
@@ -2325,7 +2274,16 @@ function handleMergePurchase() {
           </template>
         </el-table-column>
         <!-- U-SP5: 开票状态列 (NOT @PriceSensitive — 所有角色可见) -->
-        <el-table-column v-if="salesColumnVisible('invoiceStatus')" prop="invoiceStatus" label="开票状态" width="110" align="center">
+        <el-table-column
+          v-if="salesColumnVisible('invoiceStatus')"
+          prop="invoiceStatus"
+          label="开票状态"
+          width="120"
+          align="center"
+          sortable
+          :filters="invoiceStatusFilters"
+          :filter-method="filterSalesColumn"
+        >
           <template #default="{ row }">
             <el-tag
               v-if="row.invoiceStatus"
@@ -2344,6 +2302,7 @@ function handleMergePurchase() {
           label="提成(预估)"
           width="110"
           align="right"
+          sortable
         >
           <template #default="{ row }">
             <span v-if="row.commissionPreview != null">{{ formatAmount(row.commissionPreview) }}</span>
@@ -2356,6 +2315,7 @@ function handleMergePurchase() {
           label="提成率"
           width="90"
           align="right"
+          sortable
         >
           <template #default="{ row }">
             <span v-if="row.commissionRatePct != null">{{ Number(row.commissionRatePct).toFixed(2) }}%</span>
@@ -2402,7 +2362,15 @@ function handleMergePurchase() {
             </div>
           </template>
         </el-table-column>
-        <el-table-column prop="status" label="状态" width="110" align="center">
+        <el-table-column
+          prop="status"
+          label="状态"
+          width="120"
+          align="center"
+          sortable
+          :filters="salesStatusFilters"
+          :filter-method="filterSalesColumn"
+        >
           <template #default="{ row }">
             <el-tag :type="(statusMap[row.status]?.type) || 'info'" size="small">
               {{ statusMap[row.status]?.text || row.status }}
@@ -2595,6 +2563,14 @@ function handleMergePurchase() {
     </el-dialog>
 
     <el-dialog v-model="dialogVisible" :title="editingOrderId ? `编辑${label('salesOrder')}` : `新建${label('salesOrder')}`" width="80%" destroy-on-close>
+      <el-alert
+        v-if="createOptionsLoading && !editingOrderId"
+        class="create-options-loading"
+        type="info"
+        :closable="false"
+        show-icon
+        title="表单已打开，正在加载客户、产品和仓库选项…"
+      />
       <el-form :model="form" label-width="100px">
         <el-form-item :label="label('customer')" required>
           <!-- T130 Feature B — 选客户后智能预填业务员 (归属业务员 → 当前用户). -->
@@ -2900,101 +2876,6 @@ function handleMergePurchase() {
       :default-invoice-type="taxGroupInvoiceOrder.defaultInvoiceType"
       @success="loadData"
     />
-
-    <!-- U-NEW-1 — create-mode selector + 4 mode dialogs (普通/一维/二维/BOM).
-         普通 = openCreateDialog (existing). 二维 = BatchCreateDialog (existing).
-         一维 + BOM finished in P1 #58. -->
-    <CreateModeSelector
-      v-model="createModeSelectorVisible"
-      :entity-label="label('salesOrder')"
-      :disabled-modes="['quick', 'batch']"
-      @mode-selected="handleCreateModeSelected"
-    />
-    <BatchCreateDialog
-      v-model="batchCreateVisible"
-      :title="`批量新建 ${label('salesOrder')}`"
-      :columns="[
-        { prop: 'customerId', label: '客户 ID', required: true, slotName: 'customer' },
-        { prop: 'salesperson', label: '业务员', width: 140 },
-        { prop: 'requiredDeliveryDate', label: '期望交货日', width: 160, slotName: 'date' },
-        { prop: 'remark', label: '备注' },
-      ]"
-      :row-factory="batchOrderFactory"
-      :submit="submitBatchOrders"
-    >
-      <template #customer="{ row }">
-        <el-select v-model="row.customerId" filterable size="small" placeholder="选择客户" style="width: 100%">
-          <el-option v-for="c in customers" :key="c.id" :label="c.name" :value="c.id" />
-        </el-select>
-      </template>
-      <template #date="{ row }">
-        <el-date-picker v-model="row.requiredDeliveryDate" type="date" size="small" value-format="YYYY-MM-DD" style="width: 100%" />
-      </template>
-    </BatchCreateDialog>
-
-    <!-- P1 #58 — Quick (一维) single-row consecutive entry -->
-    <QuickCreateDialog
-      v-model="quickCreateVisible"
-      :title="`快速新建 ${label('salesOrder')}`"
-      :context-hint="`客户范围: ${customers.length} 个可选 — 回车连续录入`"
-      :fields="[
-        { prop: 'customerId', label: '客户', required: true, slotName: 'customer' },
-        { prop: 'requiredDeliveryDate', label: '期望交货日', slotName: 'date' },
-        { prop: 'remark', label: '备注', placeholder: '可选, 简短备注' },
-      ]"
-      :row-factory="quickSalesOrderFactory"
-      :submit="submitQuickSalesOrder"
-      :session-max="20"
-    >
-      <template #customer="{ row }">
-        <el-select v-model="row.customerId" filterable placeholder="选择客户" style="width: 100%">
-          <el-option v-for="c in customers" :key="c.id" :label="c.name" :value="c.id" />
-        </el-select>
-      </template>
-      <template #date="{ row }">
-        <el-date-picker v-model="row.requiredDeliveryDate" type="date" value-format="YYYY-MM-DD" style="width: 100%" />
-      </template>
-    </QuickCreateDialog>
-
-    <!-- P1 #58 — BOM 展开: parent SO + child items from product template -->
-    <BomExpansionDialog
-      v-model="bomCreateVisible"
-      :title="`BOM 展开新建 ${label('salesOrder')}`"
-      :entity-label="label('salesOrder')"
-      :templates="bomSalesTemplates"
-      :parent-factory="bomSalesOrderParentFactory"
-      :expand-template="expandBomSalesTemplate"
-      :submit="submitBomSalesOrder"
-      :child-columns="[
-        { prop: 'productName', label: '商品名称', width: 200 },
-        { prop: 'quantity', label: '数量', width: 120, slotName: 'quantity' },
-        { prop: 'unit', label: '单位', width: 100 },
-        { prop: 'unitPrice', label: '未税销售单价（元/所选单位）', width: 210, slotName: 'price' },
-      ]"
-      :max-children="50"
-    >
-      <template #parent-fields="{ parent }">
-        <el-form label-position="top">
-          <el-form-item label="客户" required>
-            <el-select v-model="parent.customerId" filterable placeholder="选择客户" style="width: 100%">
-              <el-option v-for="c in customers" :key="c.id" :label="c.name" :value="c.id" />
-            </el-select>
-          </el-form-item>
-          <el-form-item label="期望交货日">
-            <el-date-picker v-model="parent.requiredDeliveryDate" type="date" value-format="YYYY-MM-DD" style="width: 100%" />
-          </el-form-item>
-          <el-form-item label="备注">
-            <el-input v-model="parent.remark" type="textarea" :rows="2" placeholder="可选" />
-          </el-form-item>
-        </el-form>
-      </template>
-      <template #quantity="{ row }">
-        <el-input-number v-model="row.quantity" :min="0" :step="0.5" size="small" style="width: 100%" />
-      </template>
-      <template #price="{ row }">
-        <el-input-number v-model="row.unitPrice" :min="0" :step="0.01" :precision="2" size="small" style="width: 100%" />
-      </template>
-    </BomExpansionDialog>
 
     <!-- 合并采购弹窗 — 多张 SO 合并成一张采购单 (转录行3650 "加号逐个追加合并") -->
     <MergePurchaseDialog

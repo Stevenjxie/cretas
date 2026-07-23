@@ -15,10 +15,19 @@ describe('order creation contracts', () => {
 
   it('never posts header-only purchase or sales orders', () => {
     expect(purchase).toContain('请至少添加一行原料明细');
-    expect(sales).toContain(':disabled-modes="[\'quick\', \'batch\']"');
     expect(purchase).not.toContain('items: [] as unknown[]');
     expect(sales).not.toContain('items: [] as unknown[]');
-    expect(sales).toContain('批量销售订单必须逐单填写商品明细');
+    expect(sales).toContain('items: [emptyOrderItem()] as OrderItem[]');
+  });
+
+  it('opens the only supported normal sales form directly and keeps AI entry', () => {
+    expect(sales).toContain('@click="openCreateDialog"');
+    expect(sales).toContain('@click="aiEntryVisible = true"');
+    expect(sales).not.toContain('CreateModeSelector');
+    expect(sales).not.toContain('BatchCreateDialog');
+    expect(sales).not.toContain('QuickCreateDialog');
+    expect(sales).not.toContain('BomExpansionDialog');
+    expect(sales).not.toContain('选择录入方式');
   });
 
   it('opens the only supported normal purchase form directly and keeps AI entry', () => {

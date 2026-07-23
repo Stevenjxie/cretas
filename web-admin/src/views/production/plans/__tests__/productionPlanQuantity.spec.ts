@@ -15,9 +15,7 @@ describe('production plan quantity contract', () => {
     expect(plannedQuantityForPayload('SAFETY_STOCK', 10)).toBe(10);
   });
 
-  it('does not weaken quantity requirements for other plan sources', () => {
-    expect(plannedQuantityRequired('MANUAL')).toBe(true);
+  it('keeps the sales-order quantity contract mandatory and derived from order lines', () => {
     expect(plannedQuantityRequired('CUSTOMER_ORDER')).toBe(true);
-    expect(plannedQuantityRequired('AI_FORECAST')).toBe(true);
   });
 });

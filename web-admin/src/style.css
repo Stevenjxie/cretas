@@ -679,12 +679,35 @@ textarea:focus-visible {
 .business-list-table .el-table__body,
 .business-list-table .el-table__footer {
   table-layout: fixed !important;
+  width: 100% !important;
 }
 
 .business-list-table th.el-table__cell,
 .business-list-table td.el-table__cell {
   box-sizing: border-box;
   border-right-color: var(--el-table-border-color);
+  padding-block: 9px;
+}
+
+.business-list-table th.el-table__cell > .cell,
+.business-list-table td.el-table__cell > .cell {
+  box-sizing: border-box;
+  width: 100%;
+  padding-inline: 12px;
+}
+
+.business-list-table th.el-table__cell > .cell {
+  overflow: hidden !important;
+  text-overflow: ellipsis !important;
+  white-space: nowrap !important;
+}
+
+.business-list-table .el-table__fixed-right {
+  z-index: 4;
+}
+
+.business-list-table .el-table__fixed-right-patch {
+  background: var(--el-bg-color);
 }
 
 .business-list-table .el-table__body tr td.el-table-fixed-column--right {
@@ -703,6 +726,11 @@ textarea:focus-visible {
 .business-list-table th.business-list-table__actions {
   border-left: 1px solid var(--el-table-border-color);
   box-shadow: -8px 0 14px rgb(31 45 61 / 7%);
+}
+
+.business-list-table td.business-list-table__actions > .cell {
+  overflow: visible !important;
+  white-space: normal !important;
 }
 
 .business-action-row {

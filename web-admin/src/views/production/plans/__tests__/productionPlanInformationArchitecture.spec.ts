@@ -3,7 +3,9 @@ import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 const source = readFileSync(resolve(__dirname, '../list.vue'), 'utf8');
-const operationStart = source.indexOf('<el-table-column label="操作"');
+const mainTableStart = source.indexOf('class="wide-table business-list-table"');
+const operationLabel = source.indexOf('label="操作"', mainTableStart);
+const operationStart = source.lastIndexOf('<el-table-column', operationLabel);
 const operationEnd = source.indexOf('</el-table>', operationStart);
 const operations = source.slice(operationStart, operationEnd);
 
@@ -56,7 +58,8 @@ describe('production plan list information architecture', () => {
   it('consolidates import/export and selection-scoped batch actions', () => {
     expect(source).toContain('@command="handleDataCommand"');
     expect(source).toContain('导入/导出<el-icon');
-    expect(source).toContain('v-if="selectedPlans.length > 0"');
+    expect(source).toContain('v-if="productionBatchMode && selectedPlans.length > 0"');
+    expect(source).toContain('{{ productionBatchMode ? \'退出批量打印\' : \'批量打印\' }}');
     expect(source).toContain('批量操作 ({{ selectedPlans.length }})');
   });
 
@@ -80,5 +83,34 @@ describe('production plan list information architecture', () => {
     expect(source).toContain("...(searchForm.value.keyword.trim() ? { keyword: searchForm.value.keyword.trim() } : {})");
     expect(source).toContain("useListSummary('productionPlan', summaryRequest)");
     expect(source).toContain(':stats="footerSummary?.stats ?? []"');
+  });
+
+  it('shows finished products as the primary identity and keeps the workflow route behind a compact preview', () => {
+    expect(source).toContain('label="生产成品"');
+    expect(source).toContain('{{ planFinishedProductNames(row).join(\'、\') }}');
+    expect(source).toContain('aria-label="预览工序路线"');
+    expect(source).toContain('>工序图</el-button>');
+    expect(source).toContain('<WorkflowRoutePreview');
+    expect(source).toContain('item.workflowId === selectedWorkflowId');
+    expect(source).toContain('item.definitionVersion === selectedWorkflowVersion');
+    expect(source).toContain('未读取到计划固定的工序路线');
+  });
+
+  it('separates inventory-production summaries from sales-order final settlement', () => {
+    expect(source).toContain("return row.sourceType === 'SAFETY_STOCK' ? '生产小结' : '核对结单'");
+    expect(source).toContain('command="stop-production"');
+    expect(source).toContain('v-if="row.sourceType === \'SAFETY_STOCK\'"');
+    expect(source).toContain('label="计划成品数量"');
+    expect(source).toContain('数量来自销售订单产品行，创建生产计划时不可修改');
+  });
+
+  it('offers only inventory production and sales-order production for new plans', () => {
+    const sourceTypeStart = source.indexOf('<el-radio-group v-model="planForm.sourceType"');
+    const sourceTypeEnd = source.indexOf('</el-radio-group>', sourceTypeStart);
+    const sourceTypeControls = source.slice(sourceTypeStart, sourceTypeEnd);
+    expect(sourceTypeControls).toContain('label="SAFETY_STOCK"');
+    expect(sourceTypeControls).toContain('label="CUSTOMER_ORDER"');
+    expect(sourceTypeControls).not.toContain('label="MANUAL"');
+    expect(sourceTypeControls).not.toContain('label="AI_FORECAST"');
   });
 });
