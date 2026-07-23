@@ -251,6 +251,38 @@
           </el-empty>
         </div>
       </div>
+
+      <section class="workflow-ai-footer" aria-label="Workflow AI 助手">
+        <div class="workflow-ai-footer__header">
+          <div>
+            <strong>Workflow AI</strong>
+            <span>{{ aiContextLabel }}</span>
+          </div>
+          <el-button
+            text
+            size="small"
+            :aria-expanded="!aiCollapsed"
+            aria-controls="workflow-ai-composer"
+            @click="aiCollapsed = !aiCollapsed"
+          >{{ aiCollapsed ? '展开' : '收起' }}</el-button>
+        </div>
+        <div id="workflow-ai-composer" v-show="!aiCollapsed" class="workflow-ai-footer__composer">
+          <WorkProcessAIChatPanel
+            v-if="factoryId"
+            :key="`${factoryId}:${productTypeId}`"
+            :factory-id="factoryId"
+            :product-type-id="productTypeId"
+            :endpoint="`/${factoryId}/config/v2/ai/chat`"
+            module-code="product_process_workflow_config"
+            title="Workflow AI 助手"
+            :disabled="!canEdit"
+            :context="selectedNodeContext"
+            :context-label="aiContextLabel"
+            :quick-prompts="aiQuickPrompts"
+            @apply-draft="applyWorkflowAIDraft"
+          />
+        </div>
+      </section>
     </div>
 
     <el-dialog v-model="processDialogVisible" title="增加后续工序" width="480px" destroy-on-close>
@@ -504,6 +536,7 @@ import {
   type WorkProcessOutputMaterialKind,
 } from '@/api/processProduction';
 import UnitSelect from '@/components/common/UnitSelect.vue';
+import WorkProcessAIChatPanel from '@/views/system/components/WorkProcessAIChatPanel.vue';
 import WorkflowMaterialNode from './WorkflowMaterialNode.vue';
 import WorkflowProcessNode from './WorkflowProcessNode.vue';
 import {
@@ -615,6 +648,8 @@ const loadedCatalogFactoryId = ref<string | null>(null);
 const saving = ref(false);
 const snapshotting = ref(false);
 const publishing = ref(false);
+// 发布确认框显示期间也要锁住动作，避免连续点击叠加多个确认框/发布请求。
+const publishConfirming = ref(false);
 const activationChanging = ref(false);
 const dirty = ref(false);
 const selectedNodeId = ref('');
@@ -816,8 +851,25 @@ const canEdit = computed(() => (
   && loadedDefinitionIdentity.value?.factoryId === props.factoryId
   && loadedDefinitionIdentity.value?.productTypeId === props.productTypeId
 ));
+const currentDefinitionIsEnabled = computed(() => (
+  definition.value?.status === 'PUBLISHED'
+  && activation.value?.enabled === true
+  && activation.value.activeDefinitionVersion === definition.value.version
+));
 const publishDisabledReason = computed(() => {
+  if (publishConfirming.value || publishing.value) return '正在发布 Workflow，请勿重复提交';
   if (!canEdit.value) return '当前正在加载、预览历史版本或没有编辑权限，暂不能发布';
+  // 只在“当前显示的版本”已经发布并启用、且没有新的本地草稿改动时禁用。
+  // 已启用 v1 但当前定义是 v2 草稿时必须仍可发布 v2。
+  if (currentDefinitionIsEnabled.value && !dirty.value) {
+    return `Workflow v${definition.value?.version} 已发布并启用，当前没有待发布变更`;
+  }
+  if (definition.value?.status === 'PUBLISHED' && !dirty.value) {
+    return `Workflow v${definition.value.version} 已发布；请先修改并保存为新草稿后再发布`;
+  }
+  if (definition.value && definition.value.status !== 'DRAFT' && !dirty.value) {
+    return '当前不是可发布的 Workflow 草稿；请先另存或修改后保存草稿';
+  }
   if (flowNodes.value.length === 0) return '请先在画布中配置 Workflow Cell';
   if (bomMissingProducts.value.length > 0) {
     return `${bomMissingProducts.value.map((item) => item.name).join('、')} 尚未配置原辅料 BOM`;
@@ -2572,7 +2624,19 @@ async function snapshotWorkflow(): Promise<void> {
 
 async function publishWorkflow(): Promise<void> {
   let identity = currentLoadedIdentity();
-  if (!identity || !canEdit.value) return;
+  if (!identity || !canEdit.value || publishConfirming.value || publishing.value) return;
+  if (currentDefinitionIsEnabled.value && !dirty.value) {
+    ElMessage.info(`Workflow v${definition.value?.version} 已发布并启用，当前没有待发布变更`);
+    return;
+  }
+  if (definition.value?.status === 'PUBLISHED' && !dirty.value) {
+    ElMessage.info(`Workflow v${definition.value.version} 已发布；请先修改并保存为新草稿后再发布`);
+    return;
+  }
+  if (definition.value && definition.value.status !== 'DRAFT' && !dirty.value) {
+    ElMessage.info('当前不是可发布的 Workflow 草稿；请先另存或修改后保存草稿');
+    return;
+  }
   if (bomMissingProducts.value.length > 0) {
     ElMessage.warning('请先为所有成品产出配置原辅料 BOM，再发布并启用 Workflow');
     return;
@@ -2594,6 +2658,7 @@ async function publishWorkflow(): Promise<void> {
     return;
   }
   clearPublishBindingErrors();
+  publishConfirming.value = true;
   try {
     await ElMessageBox.confirm(
       '发布后会生成可审计的 Workflow 图版本。当前阶段不会自动改写生产任务或报工链，确认发布？',
@@ -2602,6 +2667,8 @@ async function publishWorkflow(): Promise<void> {
     );
   } catch {
     return;
+  } finally {
+    publishConfirming.value = false;
   }
   if (!isLoadedIdentityCurrent(identity) || !canEdit.value) return;
   const generation = ++publishGeneration;
@@ -3193,6 +3260,44 @@ function identitiesMatch(left: WorkflowIdentity, right: WorkflowIdentity): boole
 .canvas-shell {
   position: relative; flex: 1; min-height: 0; height: 0; overflow: hidden;
   border: 1px solid #dce8f3; border-top: none; border-radius: 0 0 10px 10px; background: #fbfdff;
+}
+.workflow-ai-footer {
+  flex: none;
+  min-width: 0;
+  border: 1px solid #dce8f3;
+  border-top: 0;
+  border-radius: 0 0 10px 10px;
+  background: #fff;
+  box-shadow: 0 -2px 10px rgb(27 101 168 / 6%);
+}
+.workflow-ai-footer__header {
+  min-height: 38px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 4px 10px;
+}
+.workflow-ai-footer__header > div {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+.workflow-ai-footer__header span {
+  color: var(--el-text-color-secondary);
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.workflow-ai-footer__composer {
+  max-height: 210px;
+  overflow: auto;
+  padding: 0 10px 10px;
+}
+.workflow-ai-footer :deep(.work-process-ai-chat-panel) {
+  width: 100%;
 }
 .workflow-canvas { width: 100%; height: 100%; min-height: 0; }
 .workflow-canvas.is-batch-selecting :deep(.vue-flow__pane) { cursor: crosshair; }

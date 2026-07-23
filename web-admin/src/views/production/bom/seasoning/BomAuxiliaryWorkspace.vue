@@ -64,6 +64,33 @@ const editable = computed(() => Boolean(
 const selectedWorkflowRevision = computed(() => workflowRevisions.value.find(
   (candidate) => revisionKey(candidate) === selectedWorkflowRevisionKey.value,
 ) || null);
+const visibleWorkflowRevisions = computed(() => {
+  const byBusinessVersion = new Map<string, WorkflowRevisionCandidate>();
+  for (const candidate of workflowRevisions.value.filter(item => item.compatible)) {
+    const key = `${candidate.workflowId}:${candidate.definitionVersion ?? 'draft'}`;
+    const current = byBusinessVersion.get(key);
+    const candidatePinned = candidate.revisionId != null
+      && candidate.revisionId === workspace.value?.workflowRevisionId;
+    const currentPinned = current?.revisionId != null
+      && current.revisionId === workspace.value?.workflowRevisionId;
+    if (!current
+      || candidatePinned
+      || (!currentPinned && candidate.recommended && !current.recommended)
+      || (!currentPinned && candidate.savedAt && (!current.savedAt || candidate.savedAt > current.savedAt))) {
+      byBusinessVersion.set(key, candidate);
+    }
+  }
+  return Array.from(byBusinessVersion.values())
+    .sort((left, right) => (right.definitionVersion ?? 0) - (left.definitionVersion ?? 0));
+});
+const workflowRevisionChanged = computed(() => {
+  const selected = selectedWorkflowRevision.value;
+  if (!selected) return false;
+  if (selected.revisionId != null && workspace.value?.workflowRevisionId != null) {
+    return selected.revisionId !== workspace.value.workflowRevisionId;
+  }
+  return selected.revisionHash !== workspace.value?.workflowRevisionHash;
+});
 
 function revisionKey(candidate: WorkflowRevisionCandidate): string {
   return candidate.revisionId != null
@@ -104,9 +131,9 @@ async function loadWorkflowRevisions() {
   }
 }
 
-async function pinWorkflowRevision() {
+async function saveWorkflowRevision() {
   const selected = selectedWorkflowRevision.value;
-  if (!selected || !selected.compatible) return;
+  if (!selected || !selected.compatible || !workflowRevisionChanged.value) return;
   pinningRevision.value = true;
   try {
     await bomRecipeApi.pinWorkflowRevision(props.factoryId, props.recipeId, {
@@ -114,11 +141,11 @@ async function pinWorkflowRevision() {
       workflowId: selected.revisionId == null ? selected.workflowId : undefined,
       revisionHash: selected.revisionHash,
     });
-    ElMessage.success('已固定所选 Workflow 修订，可按工序配置辅料');
+    ElMessage.success('Workflow 版本已保存，辅料编排已同步');
     await loadWorkspace();
     emit('changed');
   } catch (error: unknown) {
-    ElMessage.error((error as { message?: string }).message || '固定 Workflow 修订失败');
+    ElMessage.error((error as { message?: string }).message || '保存 Workflow 版本失败');
   } finally {
     pinningRevision.value = false;
   }
@@ -290,9 +317,14 @@ watch(() => props.recipeId, async () => {
 
 onMounted(() => Promise.all([loadWorkspace(), loadMaterials(), loadWorkflowRevisions(), loadSubstitutes()]));
 
-function basisLabel(process: Pick<SeasoningProcessView, 'basisQuantity' | 'basisUnit'>): string {
-  if (process.basisQuantity == null || !process.basisUnit) return '未解析';
-  return `${Number(process.basisQuantity).toFixed(4).replace(/\.?0+$/, '')}${businessUnitLabel(process.basisUnit)}`;
+function basisLabel(process: Pick<
+  SeasoningProcessView,
+  'standardBasisQuantity' | 'standardBasisUnit' | 'basisQuantity' | 'basisUnit'
+>): string {
+  const quantity = process.standardBasisQuantity ?? process.basisQuantity;
+  const unit = process.standardBasisUnit ?? process.basisUnit;
+  if (quantity == null || !unit) return '未解析';
+  return `${Number(quantity).toFixed(4).replace(/\.?0+$/, '')}${businessUnitLabel(unit)}`;
 }
 
 function businessUnitLabel(unit: string): string {
@@ -311,13 +343,13 @@ function usageLabel(usage: { dosagePerKgG: number; basisQuantity?: number | null
   <section data-testid="bom-auxiliary-workspace" class="auxiliary-workspace">
     <div v-if="recipeStatus === 'DRAFT'" class="revision-card" data-testid="bom-workflow-revision-card">
       <div class="revision-card__copy">
-        <strong>辅料配置所用 Workflow 修订</strong>
+        <strong>辅料配置所用 Workflow</strong>
         <p v-if="workspace?.workflowRevisionHash">
-          已固定 v{{ workspace.workflowDefinitionVersion }} ·
+          当前使用 v{{ workspace.workflowDefinitionVersion }} ·
           {{ workspace.workflowRootCount ?? 0 }}个入口 / {{ workspace.workflowProcessCount ?? processes.length }}道工序 /
           {{ workspace.workflowTargetCount ?? 1 }}个目标产出 · 保存于 {{ formatSavedAt(workspace.workflowRevisionSavedAt) }}
         </p>
-        <p v-else>请选择已保存且结构完整的 Workflow 修订；选择后配置不会随草稿继续编辑而漂移。</p>
+        <p v-else>系统已匹配当前 SKU 保存的 Workflow；如需切换版本，请选择后保存。</p>
       </div>
       <div class="revision-card__actions">
         <el-select
@@ -329,7 +361,7 @@ function usageLabel(usage: { dosagePerKgG: number; basisQuantity?: number | null
           data-testid="workflow-revision-select"
         >
           <el-option
-            v-for="candidate in workflowRevisions"
+            v-for="candidate in visibleWorkflowRevisions"
             :key="revisionKey(candidate)"
             :label="revisionLabel(candidate)"
             :value="revisionKey(candidate)"
@@ -344,10 +376,10 @@ function usageLabel(usage: { dosagePerKgG: number; basisQuantity?: number | null
         <el-button
           type="primary"
           :loading="pinningRevision"
-          :disabled="!selectedWorkflowRevision?.compatible"
+          :disabled="!selectedWorkflowRevision?.compatible || !workflowRevisionChanged"
           data-testid="pin-workflow-revision"
-          @click="pinWorkflowRevision"
-        >固定此修订</el-button>
+          @click="saveWorkflowRevision"
+        >保存</el-button>
         <small
           v-if="workflowRevisions.length && !workflowRevisions.some((candidate) => candidate.compatible)"
           class="revision-card__incompatible"

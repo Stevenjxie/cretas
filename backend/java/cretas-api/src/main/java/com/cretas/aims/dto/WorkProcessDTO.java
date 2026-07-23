@@ -34,6 +34,14 @@ public class WorkProcessDTO {
     @Size(max = 50, message = "工序类别不能超过50个字符")
     private String processCategory;
 
+    /**
+     * Request-only acknowledgement that this write intentionally introduces a new category.
+     * Categories remain derived from the factory's work-process catalog; this flag prevents
+     * arbitrary free-text values from bypassing the controlled selector.
+     */
+    @JsonProperty(access = JsonProperty.Access.WRITE_ONLY)
+    private Boolean createCategory;
+
     @Size(max = 500, message = "描述不能超过500个字符")
     private String description;
 

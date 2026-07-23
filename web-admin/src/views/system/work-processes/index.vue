@@ -5,6 +5,7 @@ import { usePermissionStore } from '@/store/modules/permission';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { Plus, Refresh, Warning } from '@element-plus/icons-vue';
 import { handleCatchError } from '@/utils/errorToast';
+import { formatDateTime } from '@/utils/dateFormat';
 import WorkProcessAIChatPanel from './WorkProcessAIChatPanel.vue';
 import {
   getWorkProcesses, createWorkProcess, updateWorkProcess,
@@ -32,6 +33,7 @@ const searchKeyword = ref('');
 // 筛选（实时按当前数据里的类别/默认产出类型生成选项，非固定枚举）
 const filterCategory = ref('');
 const filterOutputKind = ref<'' | 'SEMI' | 'FINISHED'>('');
+const filterStatus = ref<'' | 'ACTIVE' | 'INACTIVE'>('');
 
 const categoryOptions = computed(() => {
   const set = new Set(allData.value.map(r => r.processCategory).filter((v): v is string => !!v));
@@ -48,12 +50,20 @@ const outputKindOptions = computed(() => {
 });
 
 const filteredData = computed(() => allData.value.filter(row => {
+  const keyword = searchKeyword.value.trim().toLocaleLowerCase();
+  if (keyword && ![
+    row.processName,
+    row.processCategory,
+    row.id,
+  ].some(value => String(value || '').toLocaleLowerCase().includes(keyword))) return false;
   if (filterCategory.value && row.processCategory !== filterCategory.value) return false;
   if (filterOutputKind.value) {
     const isSemi = usesSemiFinishedCode(normalizeOutputMaterialKind(row.defaultOutputMaterialKind));
     if (filterOutputKind.value === 'SEMI' && !isSemi) return false;
     if (filterOutputKind.value === 'FINISHED' && isSemi) return false;
   }
+  if (filterStatus.value === 'ACTIVE' && !row.isActive) return false;
+  if (filterStatus.value === 'INACTIVE' && row.isActive) return false;
   return true;
 }));
 
@@ -69,6 +79,8 @@ function handleFilterChange() {
 function handleFilterReset() {
   filterCategory.value = '';
   filterOutputKind.value = '';
+  filterStatus.value = '';
+  searchKeyword.value = '';
   pagination.value.page = 1;
 }
 
@@ -80,6 +92,10 @@ const formRef = ref();
 const submitting = ref(false);
 
 const processCategoryOptions = ref<string[]>([]);
+const categoryDialogVisible = ref(false);
+const newCategoryName = ref('');
+const categoryCreateError = ref('');
+const isNewCategory = ref(false);
 
 type WorkProcessForm = Partial<WorkProcessItem>;
 
@@ -119,6 +135,45 @@ function queryProcessNames(query: string, callback: (items: Array<{ value: strin
   callback(Array.from(names)
     .filter((name) => !normalizedQuery || name.toLocaleLowerCase().includes(normalizedQuery))
     .map((value) => ({ value })));
+}
+
+function normalizeCategory(value: string): string {
+  return value.normalize('NFKC').trim().replace(/\s+/g, ' ');
+}
+
+function openCategoryDialog(): void {
+  newCategoryName.value = '';
+  categoryCreateError.value = '';
+  categoryDialogVisible.value = true;
+}
+
+function confirmNewCategory(): void {
+  const normalized = normalizeCategory(newCategoryName.value);
+  if (!normalized) {
+    categoryCreateError.value = '请输入类别名称';
+    return;
+  }
+  const duplicate = processCategoryOptions.value.find(
+    category => normalizeCategory(category).toLocaleLowerCase() === normalized.toLocaleLowerCase(),
+  );
+  if (duplicate) {
+    formData.processCategory = duplicate;
+    isNewCategory.value = false;
+    categoryCreateError.value = `类别“${duplicate}”已存在，已为你选中`;
+    return;
+  }
+  formData.processCategory = normalized;
+  isNewCategory.value = true;
+  categoryDialogVisible.value = false;
+}
+
+function handleCategoryChange(value: string): void {
+  if (value === '__CREATE_CATEGORY__') {
+    formData.processCategory = '';
+    openCategoryDialog();
+    return;
+  }
+  isNewCategory.value = false;
 }
 
 // P0-3: 百分比 ↔ 小数转换 (表单按百分比录入, payload 存小数 0.0001..99.9999)
@@ -294,6 +349,7 @@ function handleAdd() {
     semiFinishedOutputCode: null,
     standardHourlyRate: null
   });
+  isNewCategory.value = false;
   advancedSettings.value = [];
   dialogVisible.value = true;
 }
@@ -307,6 +363,7 @@ function handleEdit(row: WorkProcessItem) {
     defaultOutputMaterialKind: outputKind,
     semiFinishedOutputCode: usesSemiFinishedCode(outputKind) ? semiOutputCodeOf(row) : null,
   });
+  isNewCategory.value = false;
   advancedSettings.value = [];
   dialogVisible.value = true;
 }
@@ -327,6 +384,7 @@ async function handleSubmit() {
       : null;
     const payload = {
       ...formData,
+      createCategory: isNewCategory.value,
       defaultOutputMaterialKind: outputKind,
       semiFinishedOutputCode: semiCode,
     };
@@ -497,6 +555,13 @@ function normalizeSemiOutputCode(value?: string | null): string | null {
     <el-card style="margin-top: 16px">
           <!-- 筛选：按当前数据里的类别/默认产出类型生成选项，非固定枚举 -->
       <div class="filter-bar">
+        <el-input
+          v-model="searchKeyword"
+          clearable
+          placeholder="搜索工序名称、编码或类别"
+          style="width: 260px"
+          @input="handleFilterChange"
+        />
         <el-select
           v-model="filterCategory"
           placeholder="全部类别"
@@ -514,6 +579,16 @@ function normalizeSemiOutputCode(value?: string | null): string | null {
           @change="handleFilterChange"
         >
           <el-option v-for="opt in outputKindOptions" :key="opt.value" :label="opt.label" :value="opt.value" />
+        </el-select>
+        <el-select
+          v-model="filterStatus"
+          placeholder="全部状态"
+          clearable
+          style="width: 120px"
+          @change="handleFilterChange"
+        >
+          <el-option label="启用" value="ACTIVE" />
+          <el-option label="禁用" value="INACTIVE" />
         </el-select>
         <el-button :icon="Refresh" @click="handleFilterReset">重置</el-button>
       </div>
@@ -544,6 +619,9 @@ function normalizeSemiOutputCode(value?: string | null): string | null {
           <template #default="{ row }">
             {{ row.estimatedMinutes ?? '-' }}
           </template>
+        </el-table-column>
+        <el-table-column prop="createdAt" label="创建时间" width="170">
+          <template #default="{ row }">{{ formatDateTime(row.createdAt) }}</template>
         </el-table-column>
         <el-table-column prop="isActive" label="状态" width="80">
           <template #default="{ row }">
@@ -608,7 +686,13 @@ function normalizeSemiOutputCode(value?: string | null): string | null {
             placeholder="选择工序类别"
             clearable
             style="width: 100%"
+            @change="handleCategoryChange"
           >
+            <el-option
+              class="create-category-option"
+              label="＋ 创建新类别"
+              value="__CREATE_CATEGORY__"
+            />
             <el-option
               v-for="category in processCategoryOptions"
               :key="category"
@@ -616,6 +700,7 @@ function normalizeSemiOutputCode(value?: string | null): string | null {
               :value="category"
             />
           </el-select>
+          <span class="form-hint">没有合适类别时可从第一行创建；系统会先检查同厂重复类别。</span>
         </el-form-item>
         <el-form-item label="默认产出类型" prop="defaultOutputMaterialKind">
           <el-radio-group
@@ -670,6 +755,38 @@ function normalizeSemiOutputCode(value?: string | null): string | null {
       <template #footer>
         <el-button @click="dialogVisible = false">取消</el-button>
         <el-button type="primary" :loading="submitting" @click="handleSubmit">确定</el-button>
+      </template>
+    </el-dialog>
+
+    <el-dialog
+      v-model="categoryDialogVisible"
+      title="创建工序类别"
+      width="440px"
+      append-to-body
+      :close-on-click-modal="false"
+    >
+      <el-form label-position="top" @submit.prevent="confirmNewCategory">
+        <el-form-item label="类别名称" required :error="categoryCreateError">
+          <el-input
+            v-model="newCategoryName"
+            maxlength="50"
+            show-word-limit
+            autofocus
+            placeholder="如：包装、前处理、加工"
+            @input="categoryCreateError = ''"
+            @keyup.enter="confirmNewCategory"
+          />
+        </el-form-item>
+        <el-alert
+          title="新类别会随当前工序一并保存，不会单独生成空类别。"
+          type="info"
+          :closable="false"
+          show-icon
+        />
+      </el-form>
+      <template #footer>
+        <el-button @click="categoryDialogVisible = false">取消</el-button>
+        <el-button type="primary" @click="confirmNewCategory">创建并选中</el-button>
       </template>
     </el-dialog>
   </div>

@@ -1163,25 +1163,6 @@ async function saveCustomFieldConfig() {
           <span class="workflow-mode-hint">无需选择模式，发布时由画布自动识别</span>
         </div>
         <div class="toolbar-right">
-          <!-- C4 status indicator + save button -->
-          <template v-if="selectedProductId && canWrite && !selectedOwnerIsRaw">
-            <span v-if="dirty" class="dirty-indicator">● 有未保存改动</span>
-            <span v-else class="clean-indicator">✓ 已保存</span>
-            <el-button
-              type="primary"
-              :disabled="!dirty || saving"
-              :loading="saving"
-              @click="handleSave"
-              style="margin-left: 8px"
-            >
-              保存兼容列表
-            </el-button>
-          </template>
-          <el-button
-            v-if="selectedProductId && canWrite && !selectedOwnerIsRaw"
-            :disabled="copyChainLoading"
-            @click="openCopyChainDialog"
-          >从产品复制工序链</el-button>
           <el-button :icon="Refresh" @click="handleRefresh" />
         </div>
       </div>
@@ -1198,7 +1179,7 @@ async function saveCustomFieldConfig() {
       />
 
     <el-collapse
-      v-if="!selectedOwnerIsRaw"
+      v-if="false"
       v-model="legacyCompatibilityExpanded"
       class="legacy-compatibility"
       data-testid="workflow-legacy-compatibility"

@@ -22,21 +22,19 @@ describe('workflow deep link and workspace layout', () => {
     expect(editorSource).toContain('flex: 1; min-height: 0; height: 0; overflow: hidden;');
   });
 
-  it('keeps mode controls and the AI compose input in independently scrollable workspace regions', () => {
+  it('keeps mode controls and restores the bottom AI compose row', () => {
     expect(editorSource).toContain('data-testid="canvas-floating-tools"');
     expect(editorSource).toContain('id="workflow-ai-composer"');
+    expect(editorSource).toContain('class="workflow-ai-footer"');
+    expect(editorSource).toContain('<WorkProcessAIChatPanel');
     expect(editorSource).toContain('const aiCollapsed = ref(false)');
     expect(editorSource).toContain(':aria-expanded="!aiCollapsed"');
     expect(editorSource).toContain('aria-controls="workflow-ai-composer"');
-    expect(editorSource).toContain('grid-template-columns: minmax(0, 1fr) clamp(320px, 23vw, 380px);');
-    expect(editorSource).toContain('overflow-y: auto;');
+    expect(editorSource).toContain('max-height: 210px;');
   });
 
-  it('keeps the legacy compatibility chain collapsed by default and closes it with Escape', () => {
-    expect(pageSource).toContain('const legacyCompatibilityExpanded = ref<string[]>([])');
-    expect(pageSource).toContain('v-model="legacyCompatibilityExpanded"');
-    expect(pageSource).toContain("event.key !== 'Escape'");
-    expect(pageSource).toContain('legacyCompatibilityExpanded.value = []');
-    expect(pageSource).toContain('position: absolute; left: 12px; bottom: 12px; z-index: 48;');
+  it('removes the legacy compatibility list from the visible workflow workspace', () => {
+    expect(pageSource).not.toContain('保存兼容列表');
+    expect(pageSource).toContain('<el-collapse\n      v-if="false"');
   });
 });

@@ -199,6 +199,8 @@ export interface WorkProcessItem {
   id: string;
   processName: string;
   processCategory: string;
+  /** Request-only: explicitly authorizes creating a new category together with this process. */
+  createCategory?: boolean;
   /** @deprecated Work-process master no longer returns this; units live on Workflow nodes. */
   unit?: string;
   estimatedMinutes: number | null;

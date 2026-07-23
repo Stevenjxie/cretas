@@ -639,6 +639,8 @@ export interface SeasoningBindingView {
   countInSeasoning: boolean;
   priceSnapshot?: number | null;
   priceSource1?: number | null;
+  /** Purchase-reference fallback. It is not an inventory moving-average price. */
+  priceSource2?: number | null;
   remark?: string | null;
 }
 
@@ -649,7 +651,12 @@ export interface SeasoningProcessView {
   processName: string;
   processCategory?: string | null;
   /** Pinned Workflow node output basis. Unsupported or ambiguous dimensions are read-only. */
+  standardBasisQuantity?: number | null;
+  standardBasisUnit?: string | null;
+  standardBasisMaterialKind?: 'SEMI_FINISHED' | 'FINISHED_GOOD' | string | null;
+  /** @deprecated compatibility with older aggregate responses. */
   basisQuantity?: number | null;
+  /** @deprecated compatibility with older aggregate responses. */
   basisUnit?: string | null;
   standardUsageSupported?: boolean;
   bindings: SeasoningBindingView[];

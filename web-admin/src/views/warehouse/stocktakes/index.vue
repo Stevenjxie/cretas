@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, reactive, computed, nextTick, onMounted } from 'vue';
+import { ref, reactive, computed, nextTick, onMounted, watch } from 'vue';
 import { useRoute } from 'vue-router';
 import { useAuthStore } from '@/store/modules/auth';
 import { usePermissionStore } from '@/store/modules/permission';
@@ -515,6 +515,27 @@ async function doOpeningRowsConfirm() {
 // 弹窗底部「预览比对」/「确认导入」按钮统一入口 — 期初建账+逐条录入 时走行数据打包,
 // 其余情况(常规批量导入 / 期初建账+Excel tab) 走既有的 Excel 上传路径。
 const isOpeningRowsMode = computed(() => bulkForm.openingMode && openingEntryMode.value === 'ROWS');
+
+// A preview is a snapshot of the selected warehouse, period and source rows.
+// Any input change requires the operator to review the new snapshot before import.
+watch(
+  [
+    () => bulkForm.warehouseId,
+    () => bulkForm.periodMonth,
+    () => bulkForm.openingMode,
+    openingEntryMode,
+    openingRows,
+  ],
+  () => { bulkPreview.value = null; },
+  { deep: true },
+);
+
+const bulkConfirmDisabledReason = computed(() => {
+  if (bulkLoading.value) return '正在处理，请稍候';
+  if (!bulkPreview.value) return '请先预览比对，确认导入前需核对本次数据';
+  if (bulkPreview.value.matchedCount === 0) return '预览中没有可导入的匹配数据，请修正后重新预览比对';
+  return '';
+});
 
 async function runBulkPreview() {
   if (isOpeningRowsMode.value) await doOpeningRowsPreview();
@@ -1434,14 +1455,22 @@ onMounted(async () => {
       <template #footer>
         <el-button @click="bulkDialogVisible = false">取消</el-button>
         <el-button :loading="bulkLoading" @click="runBulkPreview">预览比对</el-button>
-        <el-button
-          type="primary"
-          :loading="bulkLoading"
-          :disabled="!bulkPreview || bulkPreview.matchedCount === 0"
-          @click="runBulkConfirm"
-        >
-          确认导入（创建盘点）
-        </el-button>
+        <el-tooltip :content="bulkConfirmDisabledReason" :disabled="!bulkConfirmDisabledReason">
+          <span
+            class="bulk-confirm-trigger"
+            :tabindex="bulkConfirmDisabledReason ? 0 : -1"
+            :aria-label="bulkConfirmDisabledReason || undefined"
+          >
+            <el-button
+              type="primary"
+              :loading="bulkLoading"
+              :disabled="!!bulkConfirmDisabledReason"
+              @click="runBulkConfirm"
+            >
+              确认导入（创建盘点）
+            </el-button>
+          </span>
+        </el-tooltip>
       </template>
     </el-dialog>
 
@@ -1750,5 +1779,14 @@ onMounted(async () => {
 .unit-suffix {
   color: var(--el-text-color-regular);
   min-width: 24px;
+}
+.bulk-confirm-trigger {
+  display: inline-flex;
+  border-radius: 4px;
+  outline: none;
+}
+.bulk-confirm-trigger:focus-visible {
+  outline: 2px solid var(--el-color-primary);
+  outline-offset: 2px;
 }
 </style>

@@ -121,6 +121,76 @@ describe('ProductProcessWorkflowEditor activation controls', () => {
     expect(wrapper.find('[data-testid="browse-versions"]').exists()).toBe(true);
   });
 
+  it('disables republishing when the currently displayed version is already enabled and clean', async () => {
+    apiMocks.getProductProcessWorkflow.mockResolvedValue({
+      success: true,
+      data: definition('PT-A', 'PUBLISHED', 2, 44),
+    });
+    apiMocks.getProductProcessWorkflowActivation.mockResolvedValue({
+      success: true,
+      data: activation('PT-A', 44, 2),
+    });
+
+    const wrapper = mountEditor();
+    await flushPromises();
+    const vm = wrapper.vm as unknown as {
+      publishDisabledReason: string;
+      publishWorkflow: () => Promise<void>;
+    };
+
+    expect(vm.publishDisabledReason).toContain('v2 已发布并启用');
+    expect(wrapper.get('[data-testid="publish-workflow"]').attributes('disabled')).toBeDefined();
+
+    await vm.publishWorkflow();
+    expect(apiMocks.publishProductProcessWorkflow).not.toHaveBeenCalled();
+  });
+
+  it('keeps publish available for a saved v2 draft while v1 is enabled', async () => {
+    apiMocks.getProductProcessWorkflow.mockResolvedValue({
+      success: true,
+      data: definition('PT-A', 'DRAFT', 2, 45),
+    });
+    apiMocks.getProductProcessWorkflowActivation.mockResolvedValue({
+      success: true,
+      data: activation('PT-A', 44, 1),
+    });
+
+    const wrapper = mountEditor();
+    await flushPromises();
+    const vm = wrapper.vm as unknown as {
+      publishDisabledReason: string;
+      publishWorkflow: () => Promise<void>;
+    };
+
+    expect(vm.publishDisabledReason).toBe('');
+    await vm.publishWorkflow();
+    await flushPromises();
+    expect(apiMocks.publishProductProcessWorkflow).toHaveBeenCalledTimes(1);
+  });
+
+  it('prevents a second publish while the confirmation dialog is pending', async () => {
+    const confirmation = deferred<'confirm'>();
+    vi.spyOn(ElMessageBox, 'confirm').mockReturnValueOnce(confirmation.promise as never);
+    const wrapper = mountEditor();
+    await flushPromises();
+    const vm = wrapper.vm as unknown as {
+      publishDisabledReason: string;
+      publishWorkflow: () => Promise<void>;
+    };
+
+    const firstPublish = vm.publishWorkflow();
+    await flushPromises();
+    expect(vm.publishDisabledReason).toContain('正在发布 Workflow');
+    await vm.publishWorkflow();
+    expect(ElMessageBox.confirm).toHaveBeenCalledTimes(1);
+    expect(apiMocks.publishProductProcessWorkflow).not.toHaveBeenCalled();
+
+    confirmation.resolve('confirm');
+    await firstPublish;
+    await flushPromises();
+    expect(apiMocks.publishProductProcessWorkflow).toHaveBeenCalledTimes(1);
+  });
+
   it('treats no activation as normal and ignores a stale activation response after product switch', async () => {
     const staleA = deferred<{ success: true; data: ProductProcessWorkflowActivation | null }>();
     apiMocks.getProductProcessWorkflow.mockImplementation(
@@ -163,7 +233,8 @@ describe('ProductProcessWorkflowEditor activation controls', () => {
     expect(vm.definition.version).toBe(4);
     expect(vm.dirty).toBe(false);
     expect(wrapper.find('.unit-review-alert').exists()).toBe(false);
-    expect(wrapper.find('[aria-label="Workflow AI 助手"]').exists()).toBe(false);
+    // 已发布版本仍保留只读的 Workflow AI 辅助入口；它不允许改写画布。
+    expect(wrapper.find('[aria-label="Workflow AI 助手"]').exists()).toBe(true);
     expect(apiMocks.saveProductProcessWorkflowDraft).not.toHaveBeenCalled();
   });
 

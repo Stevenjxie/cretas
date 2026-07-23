@@ -19,7 +19,7 @@ const emit = defineEmits<{
 }>();
 
 function priceOf(binding: SeasoningBindingView): number | null {
-  return binding.priceSnapshot ?? binding.priceSource1 ?? null;
+  return binding.priceSnapshot ?? binding.priceSource1 ?? binding.priceSource2 ?? null;
 }
 
 function bindingName(binding: SeasoningBindingView): string {
@@ -27,9 +27,11 @@ function bindingName(binding: SeasoningBindingView): string {
 }
 
 function basisLabel(): string {
-  if (props.process.basisQuantity == null || !props.process.basisUnit) return '未解析';
-  const quantity = Number(props.process.basisQuantity).toFixed(4).replace(/\.?0+$/, '');
-  const code = canonicalUnitCode(props.process.basisUnit);
+  const quantityValue = props.process.standardBasisQuantity ?? props.process.basisQuantity;
+  const unitValue = props.process.standardBasisUnit ?? props.process.basisUnit;
+  if (quantityValue == null || !unitValue) return '未解析';
+  const quantity = Number(quantityValue).toFixed(4).replace(/\.?0+$/, '');
+  const code = canonicalUnitCode(unitValue);
   const label = ({ kg: '千克', g: '克', L: '升', mL: '毫升' } as Record<string, string>)[code]
     || displayUnit(code);
   return `${quantity}${label}`;
@@ -87,7 +89,11 @@ function dosageLabel(binding: SeasoningBindingView): string {
           </template>
         </el-table-column>
         <el-table-column label="自动单价" width="120" align="right">
-          <template #default="{ row }">{{ priceOf(row) == null ? '保存时自动带入' : `¥${Number(priceOf(row)).toFixed(4)}` }}</template>
+          <template #default="{ row }">
+            <div>{{ priceOf(row) == null ? '保存时自动带入' : `¥${Number(priceOf(row)).toFixed(4)}` }}</div>
+            <small v-if="row.priceSource1 != null">移动平均价</small>
+            <small v-else-if="row.priceSource2 != null">采购参考价</small>
+          </template>
         </el-table-column>
         <el-table-column label="计入成本" width="90" align="center">
           <template #default="{ row }">{{ row.countInSeasoning ? '计入' : '不计入' }}</template>
@@ -113,4 +119,5 @@ function dosageLabel(binding: SeasoningBindingView): string {
 .unsupported-basis { color: var(--el-color-warning); }
 .process-card__actions { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
 .reuse-hint { margin-top: 2px; }
+.process-card small { color: var(--el-text-color-secondary); }
 </style>

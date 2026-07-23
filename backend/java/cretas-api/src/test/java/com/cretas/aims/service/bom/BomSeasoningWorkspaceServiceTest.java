@@ -4,6 +4,7 @@ import com.cretas.aims.dto.ProductProcessWorkflowDTO;
 import com.cretas.aims.dto.bom.BomSeasoningWorkspaceResponse;
 import com.cretas.aims.dto.bom.BomSubstituteInput;
 import com.cretas.aims.dto.bom.SeasoningBindingCreateRequest;
+import com.cretas.aims.dto.bom.SeasoningBindingUpdateRequest;
 import com.cretas.aims.dto.workflow.WorkflowRevisionCandidateDTO;
 import com.cretas.aims.entity.ProductWorkProcess;
 import com.cretas.aims.entity.RawMaterialType;
@@ -161,6 +162,151 @@ class BomSeasoningWorkspaceServiceTest {
     }
 
     @Test
+    void createFallsBackToTaxIncludedPurchaseReferenceWithoutPretendingItIsMovingAverage() {
+        BomRecipe recipe = recipe(BomRecipe.Status.DRAFT, 4L);
+        when(recipeRepository.findById(RECIPE)).thenReturn(Optional.of(recipe));
+        pin(recipe, "p1");
+        RawMaterialType material = material("salt");
+        material.setMovingAvgPrice(null);
+        material.setTaxIncludedUnitPrice(new BigDecimal("20.0000"));
+        when(materialTypeRepository.findById("salt")).thenReturn(Optional.of(material));
+        when(seasoningItemRepository.findByRecipeIdAndWorkflowProcessNodeIdAndMaterialTypeId(
+                RECIPE, "node-p1", "salt")).thenReturn(Optional.empty());
+        when(seasoningItemRepository.findByRecipeIdAndWorkflowProcessNodeIdOrderBySeqAsc(RECIPE, "node-p1"))
+                .thenReturn(List.of());
+        when(recipeRepository.claimSeasoningRevision(RECIPE, FACTORY, 4L)).thenReturn(1);
+        when(seasoningItemRepository.save(any())).thenAnswer(invocation -> {
+            BomSeasoningItem saved = invocation.getArgument(0);
+            saved.setId(24L);
+            return saved;
+        });
+
+        service.createBinding(FACTORY, RECIPE, "p1", createRequest(4L, "node-p1"));
+
+        ArgumentCaptor<BomSeasoningItem> captor = ArgumentCaptor.forClass(BomSeasoningItem.class);
+        verify(seasoningItemRepository).save(captor.capture());
+        assertNull(captor.getValue().getPriceSource1());
+        assertEquals(new BigDecimal("20.0000"), captor.getValue().getPriceSource2());
+    }
+
+    @Test
+    void createPrefersPositiveMovingAverageWhenBothPricesExist() {
+        BomRecipe recipe = recipe(BomRecipe.Status.DRAFT, 4L);
+        when(recipeRepository.findById(RECIPE)).thenReturn(Optional.of(recipe));
+        pin(recipe, "p1");
+        RawMaterialType material = material("salt");
+        material.setTaxIncludedUnitPrice(new BigDecimal("20.0000"));
+        when(materialTypeRepository.findById("salt")).thenReturn(Optional.of(material));
+        when(seasoningItemRepository.findByRecipeIdAndWorkflowProcessNodeIdAndMaterialTypeId(
+                RECIPE, "node-p1", "salt")).thenReturn(Optional.empty());
+        when(seasoningItemRepository.findByRecipeIdAndWorkflowProcessNodeIdOrderBySeqAsc(RECIPE, "node-p1"))
+                .thenReturn(List.of());
+        when(recipeRepository.claimSeasoningRevision(RECIPE, FACTORY, 4L)).thenReturn(1);
+        when(seasoningItemRepository.save(any())).thenAnswer(invocation -> invocation.getArgument(0));
+
+        service.createBinding(FACTORY, RECIPE, "p1", createRequest(4L, "node-p1"));
+
+        ArgumentCaptor<BomSeasoningItem> captor = ArgumentCaptor.forClass(BomSeasoningItem.class);
+        verify(seasoningItemRepository).save(captor.capture());
+        assertEquals(new BigDecimal("2.3000"), captor.getValue().getPriceSource1());
+        assertNull(captor.getValue().getPriceSource2());
+    }
+
+    @Test
+    void createRejectsNullZeroOrNegativePricesBeforeClaimingRevision() {
+        for (BigDecimal movingAverage : List.of(BigDecimal.ZERO, new BigDecimal("-1"))) {
+            reset(materialTypeRepository, seasoningItemRepository, recipeRepository,
+                    bomWorkflowRevisionService, substituteService);
+            BomRecipe recipe = recipe(BomRecipe.Status.DRAFT, 4L);
+            when(recipeRepository.findById(RECIPE)).thenReturn(Optional.of(recipe));
+            pin(recipe, "p1");
+            RawMaterialType material = material("salt");
+            material.setMovingAvgPrice(movingAverage);
+            material.setTaxIncludedUnitPrice(BigDecimal.ZERO);
+            when(materialTypeRepository.findById("salt")).thenReturn(Optional.of(material));
+
+            BusinessException exception = assertThrows(BusinessException.class,
+                    () -> service.createBinding(FACTORY, RECIPE, "p1", createRequest(4L, "node-p1")));
+
+            assertEquals("SEASONING_PRICE_REQUIRED", exception.getErrorCode());
+            verify(recipeRepository, never()).claimSeasoningRevision(anyString(), anyString(), anyLong());
+            verify(seasoningItemRepository, never()).save(any());
+        }
+    }
+
+    @Test
+    void workspaceResolvesChineseKgFromPinnedOutgoingSemiFinishedMaterialNode() {
+        BomRecipe recipe = recipe(BomRecipe.Status.DRAFT, 3L);
+        when(recipeRepository.findById(RECIPE)).thenReturn(Optional.of(recipe));
+        pinWithLinkedOutput(recipe, "p1", "公斤", "SEMI_FINISHED");
+        when(workProcessRepository.findByFactoryIdAndIdIn(eq(FACTORY), anyList())).thenReturn(List.of(
+                workProcess("p1", "原料处理")));
+        when(seasoningItemRepository.findByRecipeIdOrderBySeqAsc(RECIPE)).thenReturn(List.of());
+        when(materialTypeRepository.findAllById(any())).thenReturn(List.of());
+
+        BomSeasoningWorkspaceResponse response = service.getWorkspace(FACTORY, RECIPE);
+
+        var process = response.getProcesses().get(0);
+        assertEquals(BigDecimal.ONE, process.getStandardBasisQuantity());
+        assertEquals("kg", process.getStandardBasisUnit());
+        assertEquals("SEMI_FINISHED", process.getStandardBasisMaterialKind());
+        assertTrue(process.isStandardUsageSupported());
+    }
+
+    @Test
+    void workspaceFailsClosedWhenPinnedOutputUnitsConflict() {
+        BomRecipe recipe = recipe(BomRecipe.Status.DRAFT, 3L);
+        when(recipeRepository.findById(RECIPE)).thenReturn(Optional.of(recipe));
+        pinWithConflictingOutputs(recipe, "p1");
+        when(workProcessRepository.findByFactoryIdAndIdIn(eq(FACTORY), anyList())).thenReturn(List.of(
+                workProcess("p1", "原料处理")));
+        when(seasoningItemRepository.findByRecipeIdOrderBySeqAsc(RECIPE)).thenReturn(List.of());
+        when(materialTypeRepository.findAllById(any())).thenReturn(List.of());
+
+        BomSeasoningWorkspaceResponse response = service.getWorkspace(FACTORY, RECIPE);
+
+        assertFalse(response.getProcesses().get(0).isStandardUsageSupported());
+        assertNull(response.getProcesses().get(0).getStandardBasisUnit());
+    }
+
+    @Test
+    void createRejectsUnsupportedPinnedOutputBasisBeforeClaimingRevision() {
+        BomRecipe recipe = recipe(BomRecipe.Status.DRAFT, 3L);
+        when(recipeRepository.findById(RECIPE)).thenReturn(Optional.of(recipe));
+        pinWithConflictingOutputs(recipe, "p1");
+
+        BusinessException exception = assertThrows(BusinessException.class,
+                () -> service.createBinding(FACTORY, RECIPE, "p1", createRequest(3L, "node-p1")));
+
+        assertEquals(400, exception.getCode());
+        assertEquals("SEASONING_STANDARD_BASIS_UNSUPPORTED", exception.getErrorCode());
+        verify(recipeRepository, never()).claimSeasoningRevision(anyString(), anyString(), anyLong());
+        verify(seasoningItemRepository, never()).save(any());
+    }
+
+    @Test
+    void updateRejectsUnsupportedPinnedOutputBasisBeforeClaimingRevision() {
+        BomRecipe recipe = recipe(BomRecipe.Status.DRAFT, 3L);
+        BomSeasoningItem existing = binding(11L, "node-p1", "p1", "salt", "5");
+        when(recipeRepository.findById(RECIPE)).thenReturn(Optional.of(recipe));
+        when(seasoningItemRepository.findByIdAndRecipeId(11L, RECIPE)).thenReturn(Optional.of(existing));
+        pinWithConflictingOutputs(recipe, "p1");
+        SeasoningBindingUpdateRequest request = new SeasoningBindingUpdateRequest();
+        request.setExpectedRevision(3L);
+        request.setMaterialTypeId("salt");
+        request.setDosagePerKgG(new BigDecimal("12"));
+        request.setSubsequentPotRatio(new BigDecimal("0.5"));
+
+        BusinessException exception = assertThrows(BusinessException.class,
+                () -> service.updateBinding(FACTORY, RECIPE, 11L, request));
+
+        assertEquals(400, exception.getCode());
+        assertEquals("SEASONING_STANDARD_BASIS_UNSUPPORTED", exception.getErrorCode());
+        verify(recipeRepository, never()).claimSeasoningRevision(anyString(), anyString(), anyLong());
+        verify(seasoningItemRepository, never()).save(any());
+    }
+
+    @Test
     void createPersistsSeasoningAndItsNodeScopedSubstitutesAsOneServiceOperation() {
         BomRecipe recipe = recipe(BomRecipe.Status.DRAFT, 4L);
         when(recipeRepository.findById(RECIPE)).thenReturn(Optional.of(recipe));
@@ -311,5 +457,54 @@ class BomSeasoningWorkspaceServiceTest {
                         .processCount(processIds.length)
                         .compatible(true)
                         .build()));
+    }
+
+    private void pinWithLinkedOutput(BomRecipe recipe, String processId, String baseUnit, String materialKind) {
+        Map<String, Object> processData = new LinkedHashMap<>();
+        processData.put("workProcessId", processId);
+        processData.put("ports", List.of(Map.of(
+                "direction", "OUTPUT",
+                "materialNodeId", "semi-1",
+                "materialKind", materialKind)));
+        Map<String, Object> materialData = new LinkedHashMap<>();
+        materialData.put("baseUnit", baseUnit);
+        materialData.put("materialKind", materialKind);
+        List<ProductProcessWorkflowDTO.Node> nodes = List.of(
+                new ProductProcessWorkflowDTO.Node("node-" + processId, "PROCESS",
+                        new ProductProcessWorkflowDTO.Position(0D, 0D), processData),
+                new ProductProcessWorkflowDTO.Node("semi-1", materialKind,
+                        new ProductProcessWorkflowDTO.Position(1D, 0D), materialData));
+        List<ProductProcessWorkflowDTO.Edge> edges = List.of(
+                new ProductProcessWorkflowDTO.Edge(
+                        "edge-1", "node-" + processId, "output", "semi-1", "input"));
+        when(bomWorkflowRevisionService.resolvePinnedGraph(FACTORY, recipe)).thenReturn(
+                new PinnedWorkflowGraph(101L, 41L, 1, "hash-101", "product-1", "finished",
+                        List.of("raw-1"),
+                        List.of(new PinnedWorkflowGraph.ProcessStep("node-" + processId, processId, 1)),
+                        nodes, edges));
+        lenient().when(bomWorkflowRevisionService.listCompatible(FACTORY, RECIPE)).thenReturn(List.of());
+    }
+
+    private void pinWithConflictingOutputs(BomRecipe recipe, String processId) {
+        Map<String, Object> processData = new LinkedHashMap<>();
+        processData.put("workProcessId", processId);
+        processData.put("ports", List.of(
+                Map.of("direction", "OUTPUT", "materialNodeId", "semi-kg"),
+                Map.of("direction", "OUTPUT", "materialNodeId", "semi-g")));
+        Map<String, Object> kgData = Map.of("baseUnit", "kg", "materialKind", "SEMI_FINISHED");
+        Map<String, Object> gData = Map.of("baseUnit", "g", "materialKind", "SEMI_FINISHED");
+        List<ProductProcessWorkflowDTO.Node> nodes = List.of(
+                new ProductProcessWorkflowDTO.Node("node-" + processId, "PROCESS",
+                        new ProductProcessWorkflowDTO.Position(0D, 0D), processData),
+                new ProductProcessWorkflowDTO.Node("semi-kg", "SEMI_FINISHED",
+                        new ProductProcessWorkflowDTO.Position(1D, 0D), kgData),
+                new ProductProcessWorkflowDTO.Node("semi-g", "SEMI_FINISHED",
+                        new ProductProcessWorkflowDTO.Position(1D, 1D), gData));
+        when(bomWorkflowRevisionService.resolvePinnedGraph(FACTORY, recipe)).thenReturn(
+                new PinnedWorkflowGraph(101L, 41L, 1, "hash-101", "product-1", "finished",
+                        List.of("raw-1"),
+                        List.of(new PinnedWorkflowGraph.ProcessStep("node-" + processId, processId, 1)),
+                        nodes, List.of()));
+        lenient().when(bomWorkflowRevisionService.listCompatible(FACTORY, RECIPE)).thenReturn(List.of());
     }
 }
