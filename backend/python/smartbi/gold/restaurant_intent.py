@@ -883,12 +883,14 @@ def _build_t3_prompt(query: str, hint: Optional[Tuple[str, float]], history: Opt
         '"confidence": 0.2, "clarification_needed": true, '
         '"clarification_question": "您想了解营收、毛利、损耗还是库存盘点的情况？"}\n'
     )
+    # 段落顺序是 DashScope 隐式前缀缓存的契约 (2026-07-23 重排): 指令+意图
+    # 目录+严格规则+few-shot 全部是静态块, 必须排在最前 — 每次 T3 调用共享
+    # ~1.2k token 前缀, 缓存命中部分按 2 折计费。hint/history/query 随请求
+    # 变化, 只能出现在静态块之后。不要往静态块之间插任何 per-query 内容。
     return (
         "你是餐饮老板问答系统的意图解析器。将用户问题解析为一个 JSON 对象，不要输出任何其他文字。\n"
         "可选 intent 取值（必须从下面列表中选择一个，或者在无法判断时输出 null）：\n"
         f"{intent_lines}\n"
-        f"{hint_line}\n"
-        f"{history_line}"
         "严格规则:\n"
         "1. 你绝对不能计算或输出具体日期！time_range 只能是结构化描述，例如: "
         '{"type": "relative", "unit": "month", "count": 2} (最近2个月), '
@@ -902,7 +904,9 @@ def _build_t3_prompt(query: str, hint: Optional[Tuple[str, float]], history: Opt
         "3. 如果问题太模糊无法判断 intent，输出 intent:null 且 clarification_needed:true，"
         "并给出一个具体的澄清问题(clarification_question)。\n"
         "4. 只输出 JSON，不要 markdown 代码块，不要解释。\n\n"
-        f"{few_shot}\n"
+        f"{few_shot}"
+        f"{hint_line}"
+        f"{history_line}\n"
         f'用户问题: "{query}"\n'
         "JSON:"
     )

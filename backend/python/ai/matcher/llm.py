@@ -45,11 +45,17 @@ def build_prompt(
     query: str,
     visible_intents: List[Dict[str, Any]],
     history: Optional[List[Dict[str, Any]]] = None,
+    rag_block: str = "",
 ) -> str:
     """Build user-side prompt content listing visible intents + example queries.
 
     Returned string is fed as the `user` message content to the LLM. The
     system instruction (return JSON only) is attached separately by `_call_llm`.
+
+    段落顺序是 DashScope 隐式前缀缓存的契约: 静态目录块必须在最前,
+    所有随请求变化的内容 (history / rag_block / query) 必须在其后 —
+    相同前缀 ≥256 tokens 时缓存命中部分按 2 折计费。不要在目录块
+    之前插入任何 per-query 内容。
 
     Args:
         query: User's raw input text.
@@ -60,6 +66,8 @@ def build_prompt(
         history: Recent conversation turns (currently unused — placeholder
             for future multi-turn matching). Each entry: {"role": "user"|
             "assistant", "content": "..."}.
+        rag_block: Optional "参考历史" exemplar block — appended AFTER the
+            catalogue (per-query content), never prepended.
     """
     lines: List[str] = []
     lines.append("可选意图列表:")
@@ -90,6 +98,10 @@ def build_prompt(
             role = turn.get("role", "?")
             content = turn.get("content", "")
             lines.append(f"  {role}: {content}")
+
+    if rag_block:
+        lines.append("")
+        lines.append(rag_block.rstrip())
 
     lines.append("")
     lines.append(f"用户输入: {query}")
@@ -146,7 +158,11 @@ _SHORTLIST_SIZE = 8
 def build_coarse_prompt(query: str, visible_intents: List[Dict[str, Any]]) -> str:
     """R30b 粗选段: 只列 code(name), 无描述无例句 — 每条 ~15 tokens。
     全目录单段 prompt 实测 11.3k tokens, 大头是几百条描述本身;
-    两段式 (粗选 top-N → 精选带全描述) 总量降 ~60%。"""
+    两段式 (粗选 top-N → 精选带全描述) 总量降 ~60%。
+
+    前缀缓存契约: 指令+目录在前 (静态, 目录顺序由 SELECT_SQL 的
+    ORDER BY 保证确定性), 用户输入在最后 — 同 businessType 的请求
+    共享 ~3k token 静态前缀, DashScope 隐式缓存按 2 折计费。"""
     lines = ["从下面的意图代码列表里选出最可能匹配用户输入的候选, 最多"
              f" {_SHORTLIST_SIZE} 个, 按可能性排序。只输出 JSON:"
              ' {"candidates": ["CODE1", "CODE2", ...]}。没有任何可能的匹配时输出'
@@ -205,14 +221,16 @@ class LlmMatcher:
         if not visible_intents:
             return []
 
-        # β C5: prepend RAG context if cases were retrieved + judged HIGH/MEDIUM
+        # β C5: RAG context if cases were retrieved + judged HIGH/MEDIUM。
+        # 前缀缓存改造: rag_block 是 per-query 内容, 从"整体前缀"改为经
+        # build_prompt 插到目录块之后、用户输入之前 — 保住静态前缀命中。
         rag_block = ""
         if rag_cases:
             rag_lines = [
                 f"- 历史案例: {c.query} → {c.intent_code} (相似度 {c.similarity:.2f})"
                 for c in rag_cases[:3]
             ]
-            rag_block = "参考历史:\n" + "\n".join(rag_lines) + "\n\n"
+            rag_block = "参考历史:\n" + "\n".join(rag_lines)
 
         # R30b 两段式: 大目录先粗选 (code+name, ~3k tokens) 再精选
         # (top-N 全描述, ~1k)。粗选失败/超时 fail-open 回单段全目录 —
@@ -234,7 +252,7 @@ class LlmMatcher:
             except Exception:
                 logger.warning("Stage 8 coarse pass failed, falling back to full catalogue")
 
-        prompt = rag_block + build_prompt(query, fine_intents, history or [])
+        prompt = build_prompt(query, fine_intents, history or [], rag_block=rag_block)
 
         if tier is not None:
             logger.debug("Stage 8 LLM with tier hint: %s", tier)
