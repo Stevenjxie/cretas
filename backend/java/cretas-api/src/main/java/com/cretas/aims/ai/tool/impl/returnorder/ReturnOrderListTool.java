@@ -83,7 +83,9 @@ public class ReturnOrderListTool extends AbstractBusinessTool {
         ReturnType returnType = returnTypeStr != null ? ReturnType.valueOf(returnTypeStr) : null;
         ReturnOrderStatus status = statusStr != null ? ReturnOrderStatus.valueOf(statusStr) : null;
 
-        PageResponse<ReturnOrder> result = returnOrderService.getReturnOrders(factoryId, returnType, status, page - 1, size);
+        // 2026-07-24 真根因: service 侧 getReturnOrders 自己做 page-1 (期望 1 基),
+        // 工具再减一次 = 双重递减 → PageRequest.of(-1) 恒炸。直接传 1 基页码。
+        PageResponse<ReturnOrder> result = returnOrderService.getReturnOrders(factoryId, returnType, status, page, size);
 
         long total = result.getTotalElements() != null ? result.getTotalElements() : 0L;
         if (total == 0) {
