@@ -110,6 +110,10 @@ async def _do_match(
         factoryId=body.factoryId,
         businessType=body.businessType,
     )
+    # P1 读写分块 (2026-07-23 spec §4.3): 咨询 tab 剔除写意图 / 操作 tab
+    # 剔除无权限写意图。mode 为 None (老客户端) 时零行为变化。
+    from ai.db import filter_rows_by_rw_mode
+    visible_rows = filter_rows_by_rw_mode(visible_rows, body.mode, body.userPermissions)
     if (body.businessType or "").upper() == "RESTAURANT":
         # R30: RESTAURANT_OPS_* 分析家族已由 tiered-first 反转接管 —
         # LLM 候选里保留它们只会制造误匹配面 (审计 S 类: 该家族描述互相

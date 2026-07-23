@@ -53,7 +53,8 @@ _snapshot_lock = asyncio.Lock()
 SELECT_SQL = """
 SELECT
     id, factory_id, business_type, intent_code, intent_name,
-    intent_category, sensitivity_level, required_roles, quota_cost,
+    intent_category, sensitivity_level, required_roles, required_permission,
+    quota_cost,
     cache_ttl_minutes, requires_approval, approval_chain_id,
     keywords, negative_keywords, negative_keyword_penalty,
     regex_pattern, description, example_queries, negative_examples,
@@ -79,7 +80,23 @@ async def load_snapshot(pool) -> IntentSnapshot:
     global _current_snapshot
 
     async with pool.acquire() as conn:
-        rows_raw = await conn.fetch(SELECT_SQL)
+        try:
+            rows_raw = await conn.fetch(SELECT_SQL)
+        except Exception as exc:
+            # P1 读写分块部署顺序防御 (2026-07-23): required_permission 列由
+            # Java Flyway 迁移添加; Python 先于 Java 部署时列不存在 →
+            # UndefinedColumnError。回落旧列集, snapshot 照常可用 (行内无
+            # required_permission 键 → 读写过滤按无权限码处理), 迁移跑完后
+            # 下个刷新周期自动用上新列。
+            if "required_permission" not in str(exc):
+                raise
+            logger.warning(
+                "[ai.db] required_permission 列不存在 (Java 迁移未跑?), 回落旧列集: %s", exc
+            )
+            rows_raw = await conn.fetch(
+                SELECT_SQL.replace(" required_roles, required_permission,",
+                                   " required_roles,")
+            )
 
     rows = [dict(r) for r in rows_raw]
     snap = IntentSnapshot(
@@ -142,6 +159,57 @@ def filter_intents_for_request(
             continue
         visible.append(r)
     return visible
+
+
+_WRITE_SENSITIVITY = frozenset({"HIGH", "CRITICAL"})
+_WRITE_PERMISSION_ACTIONS = frozenset({"write", "read_write"})
+
+
+def _is_write_row(r: Dict[str, Any]) -> bool:
+    """写意图判定 (镜像 Java WriteGuardService.isWriteIntent 的意图侧口径):
+    sensitivity HIGH/CRITICAL, 或 required_permission 的 action 段为
+    write/read_write。判定仅用于目录过滤 (UX 层); 执行期强制在 Java。"""
+    if str(r.get("sensitivity_level") or "").upper() in _WRITE_SENSITIVITY:
+        return True
+    perm = str(r.get("required_permission") or "")
+    if ":" in perm and perm.split(":", 1)[1] in _WRITE_PERMISSION_ACTIONS:
+        return True
+    return False
+
+
+def filter_rows_by_rw_mode(
+    rows: List[Dict[str, Any]],
+    mode: Any,
+    user_permissions: Any,
+) -> List[Dict[str, Any]]:
+    """P1 读写分块 (2026-07-23 spec §4.3): 识别层目录过滤。
+
+    - mode == "READ" (咨询tab): 剔除全部写意图 — 咨询区永远匹配不到写。
+    - mode == "OPERATE" 且 user_permissions 非 None: 剔除用户无权限码的
+      写意图 (精确匹配; Java hasAnyPermission 的通配等高级语义不在此镜像,
+      执行期 Java 仍是权威 — 这里只是让无权限用户不被错误引导)。
+    - mode 为 None/其他 (老客户端): 不过滤, 行为与 P1 之前逐字节一致。
+
+    Fail-open: 任何异常返回原 rows (过滤是 UX 优化, 不是安全边界)。
+    """
+    try:
+        m = str(mode).upper() if mode else ""
+        if m == "READ":
+            return [r for r in rows if not _is_write_row(r)]
+        if m == "OPERATE" and user_permissions is not None:
+            allowed = {str(p) for p in user_permissions}
+            out = []
+            for r in rows:
+                if _is_write_row(r):
+                    perm = str(r.get("required_permission") or "")
+                    if perm and perm not in allowed:
+                        continue
+                out.append(r)
+            return out
+        return rows
+    except Exception:
+        logger.warning("[ai.db] rw-mode 过滤异常, fail-open 返回未过滤目录", exc_info=True)
+        return rows
 
 
 def max_config_version(rows: List[Dict[str, Any]]) -> int:
