@@ -37,6 +37,18 @@ public class PythonIntentMatchRequest {
     private List<Map<String, String>> history;
     private Options options;
 
+    /**
+     * P1 读写分块: Python matcher 目录过滤参数 (P1-P 消费); null=不过滤。
+     * READ=剔除写意图候选 | OPERATE=按 userPermissions 剔除无权限写意图。
+     */
+    private String mode;
+
+    /**
+     * P1 读写分块: Python matcher 目录过滤参数 (P1-P 消费); null=不过滤。
+     * 调用者权限码集合 (module:action)。
+     */
+    private java.util.List<String> userPermissions;
+
     @Data
     @Builder
     @NoArgsConstructor
