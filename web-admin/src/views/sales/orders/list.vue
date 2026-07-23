@@ -18,7 +18,16 @@ import { formatAmount } from '@/utils/tableFormatters';
 import { warehouseDisplayName } from '@/utils/warehouse';
 import { buildBomSalesOrderPayload } from '@/utils/orderPayloadBuilders';
 import { resolveReferenceByName } from '@/utils/referenceResolver';
-import { RowActionMenu, ViewModeSwitcher, GridView, KanbanView, TimelinePlaceholder, CalendarPlaceholder, InlineRowIcons, RowMarkerCell } from '@/components/list';
+import {
+  RowActionMenu,
+  ViewModeSwitcher,
+  GridView,
+  KanbanView,
+  TimelinePlaceholder,
+  CalendarPlaceholder,
+  ListColumnSelector,
+  useBusinessTableColumns,
+} from '@/components/list';
 // Sprint 6 W3-A — inline 3-chip link counter (文件 / 图片 / 合同).
 import LinkChipCell from '@/components/list/LinkChipCell.vue';
 import { useLinkChipCounts } from '@/composables/useLinkChipCounts';
@@ -32,8 +41,6 @@ import CreateReturnOrderDialog from '@/components/dialog/CreateReturnOrderDialog
 import request from '@/api/request';
 import type { ViewMode } from '@/types/viewMode';
 import type { CreateMode } from '@/types/createMode';
-import type { InlineIconId } from '@/types/inlineIcons';
-import type { RowMarkerColor } from '@/types/rowMarker';
 import { computeRowActions } from '@/composables/useRowActions';
 import { safePrint } from '@/api/printApi';
 import TaxGroupInvoiceDialog from './components/TaxGroupInvoiceDialog.vue';
@@ -114,6 +121,42 @@ const isRestaurantTenant = computed(() => authStore.factoryType === 'RESTAURANT'
 const canWrite = computed(() => permissionStore.canWrite('sales'));
 
 const canViewPrice = computed(() => permissionStore.canViewPrice);
+const SALES_DEFAULT_COLUMNS = [
+  'processingMode',
+  'materialSupply',
+  'salesperson',
+  'orderDate',
+  'totalAmount',
+  'inventory',
+];
+const {
+  columns: salesColumnOptions,
+  visibleKeys: salesVisibleColumns,
+  isVisible: salesColumnVisible,
+  reset: resetSalesColumns,
+} = useBusinessTableColumns({
+  storageKey: 'cretas:sales-orders:visible-columns:v1',
+  columns: () => [
+    { key: 'processingMode', label: '加工方式' },
+    { key: 'materialSupply', label: '物料供应' },
+    { key: 'salesperson', label: '业务员' },
+    { key: 'orderDate', label: '下单日期' },
+    ...(canViewPrice.value
+      ? [
+          { key: 'totalAmount', label: '总金额' },
+          { key: 'shippingFee', label: '运费' },
+          { key: 'discountAmount', label: '折扣' },
+          { key: 'commissionPreview', label: '提成（预估）' },
+          { key: 'commissionRate', label: '提成率' },
+        ]
+      : []),
+    { key: 'invoiceStatus', label: '开票状态' },
+    { key: 'inventory', label: '锁/备/缺' },
+    { key: 'attachments', label: '附件' },
+  ],
+  defaults: SALES_DEFAULT_COLUMNS,
+  max: 6,
+});
 
 // T136 — 产品字典跳转权限门控: system 模块有访问权限才显示「去配置」按钮
 // (fool-proof Rule 5: dead-end → next-action navigation, gated on permission)
@@ -236,60 +279,6 @@ async function submitBomSalesOrder(parent: BomSalesOrderParent, children: BomSal
   }
   await loadData();
 }
-// U-ICON-1 (Sprint 4 Wave 2 Chat L) — inline 7-icon hover toolbar handler.
-async function handleInlineIconClick(id: InlineIconId, row: TableRow): Promise<void> {
-  switch (id) {
-    case 'copy':
-      handleRowActionClick('copy', row);
-      break;
-    case 'mark':
-      // U-MARKER-1 (Sprint 4 Wave 2 Chat L) — open the standalone marker cell.
-      // The marker dot in the "标记" column is the primary entry; the icon here
-      // is a fallback bringing visual parity with the 7-icon palette per brief.
-      ElMessage.info(`点击行末色点选择标记 (订单 ${row.orderNumber})`);
-      break;
-    case 'lock':
-      handleRowActionClick('lock', row);
-      break;
-    case 'forward':
-      // PR #872 (#860 follow-up): generate share link + clipboard URL.
-      forwardEntityId.value = String(row.id || '');
-      forwardEntityLabel.value = String(row.orderNumber || row.id || '');
-      forwardDialogVisible.value = true;
-      break;
-    case 'delete':
-      // T129: single confirm lives inside handleDeleteOrder — no double-confirm here
-      await handleDeleteOrder(row);
-      break;
-    case 'audit':
-      // PR #861: open AuditLogDrawer scoped to this row. Backend
-      // OperationLogController filters by entityType + entityId.
-      auditEntityId.value = String(row.id || '');
-      auditEntityLabel.value = String(row.orderNumber || row.id || '');
-      auditDrawerVisible.value = true;
-      break;
-  }
-}
-
-// U-MARKER-1 (Sprint 4 Wave 2 Chat L) — PATCH marker color to backend.
-async function handleMarkerSelect(row: TableRow, color: RowMarkerColor | null): Promise<void> {
-  try {
-    const res = await request.patch(`/${factoryId.value}/markers/sales-order/${row.id}`, {
-      color,
-    });
-    if (res?.data?.success) {
-      // Optimistic local update so the dot reflects new state without refetch.
-      (row as TableRow & { markerColor?: string | null }).markerColor = color;
-      ElMessage.success(color ? `已标记为 ${color}` : '已清除标记');
-    } else {
-      throw new Error(res?.data?.message || '标记失败');
-    }
-  } catch (e: unknown) {
-    const msg = e instanceof Error ? e.message : '标记请求失败';
-    ElMessage.error(msg);
-  }
-}
-
 function batchOrderFactory(): { customerId: string; salesperson: string; requiredDeliveryDate: string; remark: string } {
   return { customerId: '', salesperson: '', requiredDeliveryDate: '', remark: '' };
 }
@@ -471,6 +460,11 @@ const submittingIds = ref<Set<string>>(new Set());
 
 // T131 Part 3 — 多选批量操作 (table view only).
 const selectedRows = ref<TableRow[]>([]);
+const salesBatchMode = ref(false);
+function toggleSalesBatchMode(): void {
+  salesBatchMode.value = !salesBatchMode.value;
+  if (!salesBatchMode.value) selectedRows.value = [];
+}
 const batchLoading = ref(false);
 // 批量提审/确认/取消/删除各自的资格状态集合 (用于 bulk-bar 按钮可见/可用).
 const BATCH_SUBMIT_STATUSES = ['DRAFT', 'CONFIRMED', 'FINANCE_REJECTED'];
@@ -2171,6 +2165,22 @@ function handleMergePurchase() {
         </el-select>
         <el-button type="primary" :icon="Search" @click="loadData">搜索</el-button>
         <el-button :icon="Refresh" @click="handleRefresh">重置</el-button>
+        <el-button
+          v-if="viewMode === 'table' && canWrite"
+          :type="salesBatchMode ? 'primary' : 'default'"
+          :plain="salesBatchMode"
+          @click="toggleSalesBatchMode"
+        >
+          {{ salesBatchMode ? '退出批量' : '批量操作' }}
+        </el-button>
+        <ListColumnSelector
+          v-if="viewMode === 'table'"
+          v-model="salesVisibleColumns"
+          :columns="salesColumnOptions"
+          :max="6"
+          fixed-summary="订单编号、客户、状态和操作固定显示"
+          @reset="resetSalesColumns"
+        />
         <!-- U-VIEW-1 view-mode switcher (Sprint 4 Wave 2 Chat L) -->
         <div style="margin-left: auto">
           <ViewModeSwitcher v-model="viewMode" />
@@ -2182,8 +2192,13 @@ function handleMergePurchase() {
         多选只在 table 模式生效). 每按钮按选中行资格 disable; batchLoading 期间全 disable.
         批量执行走前端 Promise.allSettled 循环. TODO(v2): 大批量 (>10) 改后端批量端点.
       -->
-      <div v-if="viewMode === 'table' && selectedRows.length > 0" class="bulk-bar">
-        <span class="bulk-bar-count">已选 <strong>{{ selectedRows.length }}</strong> 条</span>
+      <div v-if="viewMode === 'table' && salesBatchMode" class="bulk-bar">
+        <span class="bulk-bar-count">
+          <template v-if="selectedRows.length > 0">
+            已选 <strong>{{ selectedRows.length }}</strong> 条
+          </template>
+          <template v-else>请勾选要批量处理的订单</template>
+        </span>
         <el-button
           type="primary" size="small"
           :disabled="!hasBatchSubmittable || batchLoading"
@@ -2236,43 +2251,37 @@ function handleMergePurchase() {
       <TimelinePlaceholder v-else-if="viewMode === 'timeline'" />
       <CalendarPlaceholder v-else-if="viewMode === 'calendar'" />
       <el-table
+        :key="salesBatchMode ? 'sales-batch-table' : 'sales-default-table'"
         v-else
         :data="filteredTableData"
         v-loading="loading"
         empty-text="暂无数据"
         stripe
         border
+        table-layout="fixed"
+        :scrollbar-always-on="true"
+        class="wide-table business-list-table"
         style="width: 100%"
         @selection-change="handleSelectionChange"
       >
         <!-- T131 Part 3 — 多选列 (Element Plus 在 COLUMN 上用 :selectable, 非 table 的 rowSelectable). -->
-        <el-table-column type="selection" width="48" :selectable="canSelectRow" />
-        <!-- U-MARKER-1 row marker column (Sprint 4 Wave 2 Chat L) -->
-        <el-table-column label="" width="36" align="center">
-          <template #default="{ row }">
-            <RowMarkerCell
-              :value="row.markerColor"
-              :readonly="!canWrite"
-              @select="(c) => handleMarkerSelect(row, c)"
-            />
-          </template>
-        </el-table-column>
+        <el-table-column v-if="salesBatchMode" type="selection" width="48" :selectable="canSelectRow" />
         <el-table-column prop="orderNumber" label="订单编号" width="170" />
         <el-table-column label="客户" min-width="150" show-overflow-tooltip>
           <template #default="{ row }">{{ row.customerName || row.customer?.name || row.customerId || '-' }}</template>
         </el-table-column>
-        <el-table-column label="加工方式" width="100" align="center">
+        <el-table-column v-if="salesColumnVisible('processingMode')" label="加工方式" width="100" align="center">
           <template #default="{ row }">{{ processingModeLabel(row.processingMode) }}</template>
         </el-table-column>
-        <el-table-column label="物料供应" width="130" align="center">
+        <el-table-column v-if="salesColumnVisible('materialSupply')" label="物料供应" width="130" align="center">
           <template #default="{ row }">
             <el-tag size="small" :type="row.materialSupplyMode === 'CUSTOMER_SUPPLIED' ? 'warning' : 'info'">
               {{ materialSupplyModeLabel(row.materialSupplyMode) }}
             </el-tag>
           </template>
         </el-table-column>
-        <el-table-column prop="salesperson" label="业务员" width="100" show-overflow-tooltip />
-        <el-table-column prop="orderDate" label="下单日期" width="120" />
+        <el-table-column v-if="salesColumnVisible('salesperson')" prop="salesperson" label="业务员" width="100" show-overflow-tooltip />
+        <el-table-column v-if="salesColumnVisible('orderDate')" prop="orderDate" label="下单日期" width="120" />
         <!--
           RBAC defense-in-depth (PR #415 Option B 2026-05-12 + P3 column-hide fix):
           backend PriceFieldResponseAdvice strips totalAmount / discountAmount /
@@ -2283,7 +2292,7 @@ function handleMergePurchase() {
           headers even when all cells are null/blank — E2E flagged misleading UX.
         -->
         <el-table-column
-          v-if="canViewPrice"
+          v-if="canViewPrice && salesColumnVisible('totalAmount')"
           prop="totalAmount"
           label="总金额"
           width="130"
@@ -2295,7 +2304,7 @@ function handleMergePurchase() {
           </template>
         </el-table-column>
         <el-table-column
-          v-if="canViewPrice"
+          v-if="canViewPrice && salesColumnVisible('shippingFee')"
           prop="shippingFee"
           label="运费"
           width="100"
@@ -2304,7 +2313,7 @@ function handleMergePurchase() {
           <template #default="{ row }">{{ row.shippingFee ? formatAmount(row.shippingFee) : '-' }}</template>
         </el-table-column>
         <el-table-column
-          v-if="canViewPrice"
+          v-if="canViewPrice && salesColumnVisible('discountAmount')"
           prop="discountAmount"
           label="折扣"
           width="100"
@@ -2316,7 +2325,7 @@ function handleMergePurchase() {
           </template>
         </el-table-column>
         <!-- U-SP5: 开票状态列 (NOT @PriceSensitive — 所有角色可见) -->
-        <el-table-column prop="invoiceStatus" label="开票状态" width="110" align="center">
+        <el-table-column v-if="salesColumnVisible('invoiceStatus')" prop="invoiceStatus" label="开票状态" width="110" align="center">
           <template #default="{ row }">
             <el-tag
               v-if="row.invoiceStatus"
@@ -2330,7 +2339,7 @@ function handleMergePurchase() {
         </el-table-column>
         <!-- U-SP5: 提成预览 (@PriceSensitive — null→"—" when canViewPrice=false) -->
         <el-table-column
-          v-if="canViewPrice"
+          v-if="canViewPrice && salesColumnVisible('commissionPreview')"
           prop="commissionPreview"
           label="提成(预估)"
           width="110"
@@ -2342,7 +2351,7 @@ function handleMergePurchase() {
           </template>
         </el-table-column>
         <el-table-column
-          v-if="canViewPrice"
+          v-if="canViewPrice && salesColumnVisible('commissionRate')"
           prop="commissionRatePct"
           label="提成率"
           width="90"
@@ -2361,7 +2370,7 @@ function handleMergePurchase() {
           chip 垂直堆叠: 缺料 > 0 红色高亮, 一眼识别要不要催生产.
  Issue #746: header 加 tooltip 解释含义 (客户手测 img 34 反馈 chip 含义不清).
         -->
-        <el-table-column label="锁/备/缺" width="130" align="center">
+        <el-table-column v-if="salesColumnVisible('inventory')" label="锁/备/缺" width="130" align="center">
           <template #header>
             <span style="display: inline-flex; align-items: center; gap: 4px;">
               锁/备/缺
@@ -2406,7 +2415,7 @@ function handleMergePurchase() {
           替代 Sprint 5 PR #58 unified `链:N` chip per HJ baseline (Round 12 §B.6 X2).
           EntityType=SALES_ORDER 由 useLinkChipCounts composable 锁定.
         -->
-        <el-table-column label="附件" width="200" align="center">
+        <el-table-column v-if="salesColumnVisible('attachments')" label="附件" width="200" align="center">
           <template #header>
             <span style="display: inline-flex; align-items: center; gap: 4px;">
               附件
@@ -2427,8 +2436,9 @@ function handleMergePurchase() {
             <LinkChipCell :counts="linkCountsFor(row.id)" />
           </template>
         </el-table-column>
-        <el-table-column label="操作" width="480" fixed="right" align="center">
+        <el-table-column label="操作" width="380" fixed="right" align="center" class-name="business-list-table__actions">
           <template #default="{ row }">
+            <div class="business-action-row">
             <el-button type="primary" link size="small" @click="goDetail(row.id)">详情</el-button>
             <el-button v-if="row.status === 'DRAFT' && canWrite" type="warning" link size="small" @click="handleEdit(row)">编辑</el-button>
             <!-- T131/N9 — 提交后按已发布 OA 规则自动路由。DRAFT 链式（先确认再路由）；CONFIRMED 单次。 -->
@@ -2478,19 +2488,13 @@ function handleMergePurchase() {
               size="small"
               @click="handleQuickPayment(row)"
             >收款</el-button>
-            <!-- U-ICON-1 (Sprint 4 Wave 2 Chat L) inline 7-icon hover toolbar -->
-            <InlineRowIcons
-              :row-actions="rowActionsFor(row)"
-              entity-type="salesOrder"
-              class="row-inline-icons"
-              @icon-click="(id: InlineIconId) => handleInlineIconClick(id, row)"
-            />
             <RowActionMenu
               :actions="rowActionsFor(row)"
               button-label="更多"
               @action-click="(id: string) => handleRowActionClick(id, row)"
               @ai-trigger="() => openAiForRow(row)"
             />
+            </div>
           </template>
         </el-table-column>
       </el-table>

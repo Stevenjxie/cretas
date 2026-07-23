@@ -13,6 +13,9 @@ export { default as CalendarPlaceholder } from './CalendarPlaceholder.vue';
 export { default as InlineRowIcons } from './InlineRowIcons.vue';
 // U-MARKER-1 Sprint 4 Wave 2 Chat L — 5-color row marker cell + popover.
 export { default as RowMarkerCell } from './RowMarkerCell.vue';
+export { default as ListColumnSelector } from './ListColumnSelector.vue';
+export { useBusinessTableColumns } from './businessTableColumns';
+export type { BusinessTableColumn } from './businessTableColumns';
 
 // Sprint 4 W1 U-CHIP-MULTI-1 — 行内多 chip 状态垂直堆 (e.g. 库存/质检/采购/发货 状态).
 export { default as MultiChipStack } from './MultiChipStack.vue';
