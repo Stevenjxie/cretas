@@ -2,6 +2,7 @@
 import { computed, onMounted, reactive, ref, watch } from 'vue';
 import { ElMessage } from 'element-plus';
 import {
+  canonicalSystemUnitCode,
   createSystemUnit,
   defaultUnitCode,
   findDuplicateUnit,
@@ -61,7 +62,7 @@ const exactMatch = computed(() => findDuplicateUnit(activeUnits.value, [query.va
 const canCreate = computed(() => !props.usageScope && Boolean(query.value.trim()) && !exactMatch.value);
 const selectedModelValue = computed(() => {
   const current = findDuplicateUnit(activeUnits.value, [props.modelValue]);
-  return current?.unitCode || props.modelValue || '';
+  return canonicalSystemUnitCode(current?.unitCode || props.modelValue);
 });
 
 const categoryOptions: Array<{ value: SystemUnitCategory; label: string }> = [
@@ -99,7 +100,7 @@ function selectValue(value: string): void {
     openCreateDialog(query.value);
     return;
   }
-  const canonical = findDuplicateUnit(activeUnits.value, [value])?.unitCode || value || '';
+  const canonical = canonicalSystemUnitCode(findDuplicateUnit(activeUnits.value, [value])?.unitCode || value);
   emit('update:modelValue', canonical);
   emit('change', canonical);
   query.value = '';
@@ -115,7 +116,7 @@ function openCreateDialog(name: string): void {
 }
 
 function selectExisting(unit: SystemUnit): void {
-  const value = unit.unitCode.trim();
+  const value = canonicalSystemUnitCode(unit.unitCode);
   emit('update:modelValue', value);
   emit('change', value);
 }

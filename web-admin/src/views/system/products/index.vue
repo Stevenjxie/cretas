@@ -21,6 +21,7 @@ import {
   type NetContentUnit,
 } from '@/utils/productSpecification';
 import { displayUnit } from '@/utils/unitPricing';
+import { formatDateTime } from '@/utils/dateFormat';
 import UnitSelect from '@/components/common/UnitSelect.vue';
 import { showSingletonNotification } from '@/utils/singletonNotification';
 import { isCurrentCategorySuggestion, reconcilePackagingSpecs } from './productDialogState';
@@ -1926,6 +1927,9 @@ watch(aiProductDialogVisible, (visible) => {
             <span v-else class="no-image">-</span>
           </template>
         </el-table-column>
+        <el-table-column prop="createdAt" label="创建时间" width="168" align="center">
+          <template #default="{ row }">{{ formatDateTime(row.createdAt) }}</template>
+        </el-table-column>
         <el-table-column prop="notes" label="备注" min-width="150" show-overflow-tooltip>
           <template #default="{ row }">
             {{ row.notes || '-' }}
@@ -2026,35 +2030,43 @@ watch(aiProductDialogVisible, (visible) => {
           show-icon
           title="这里定义库存/销售规格；保存后系统会自动生成明确的单位换算，Workflow 可直接绑定。工序报工单位仍以 Workflow 端口为准。"
         />
-        <el-form-item label="销售单位 / 净含量" prop="unit" class="sku-measure-form-item">
+        <el-form-item label="基础规格" prop="unit" class="sku-measure-form-item">
           <div class="sku-measure-row">
-            <UnitSelect
-              v-model="formData.unit"
-              :factory-id="factoryId"
-              placeholder="选择销售单位"
-              class="sales-unit-select"
-              @change="markUnitEdited"
-            />
-            <template v-if="!isSemiFinishedSku">
-              <span class="measure-separator">每 {{ displayUnit(formData.unit) || '销售单位' }}</span>
-              <el-input-number
-                v-model="netContentAmount"
-                :min="0.001"
-                :precision="3"
-                :controls="false"
-                placeholder="净含量"
-                class="net-content-input"
-                @change="handleNetContentAmountChange"
+            <div class="sku-measure-field">
+              <span class="sku-measure-label">销售单位</span>
+              <UnitSelect
+                v-model="formData.unit"
+                :factory-id="factoryId"
+                :show-symbol="false"
+                placeholder="选择销售单位"
+                class="sales-unit-select"
+                @change="markUnitEdited"
               />
-              <el-select
-                v-model="netContentUnit"
-                aria-label="净含量单位"
-                class="net-content-unit-select"
-                @change="handleNetContentUnitChange"
-              >
-                <el-option v-for="option in NET_CONTENT_UNIT_OPTIONS" :key="option.value" :label="option.label" :value="option.value" />
-              </el-select>
-            </template>
+            </div>
+            <div v-if="!isSemiFinishedSku" class="sku-measure-field sku-net-content-field">
+              <span class="sku-measure-label">净含量</span>
+              <div class="net-content-expression">
+                <span class="measure-separator">每 1 {{ displayUnit(formData.unit) || '销售单位' }}</span>
+                <el-input-number
+                  v-model="netContentAmount"
+                  :min="0.001"
+                  :precision="3"
+                  :controls="false"
+                  placeholder="数量"
+                  aria-label="净含量"
+                  class="net-content-input"
+                  @change="handleNetContentAmountChange"
+                />
+                <el-select
+                  v-model="netContentUnit"
+                  aria-label="净含量单位"
+                  class="net-content-unit-select"
+                  @change="handleNetContentUnitChange"
+                >
+                  <el-option v-for="option in NET_CONTENT_UNIT_OPTIONS" :key="option.value" :label="option.label" :value="option.value" />
+                </el-select>
+              </div>
+            </div>
           </div>
           <div class="form-tip" v-if="isSemiFinishedSku">半成品只维护销售单位；重量型报工单位在 Workflow 中统一约束</div>
           <div class="form-tip" v-else>销售单位用于库存和销售；净含量仅支持 g/kg/ml/L，同维度自动等值换算，重量与容量不互转</div>
@@ -2791,10 +2803,33 @@ watch(aiProductDialogVisible, (visible) => {
 
 .sku-measure-row {
   display: grid;
-  grid-template-columns: minmax(150px, 1.25fr) auto minmax(110px, .75fr) 84px;
+  grid-template-columns: minmax(132px, .85fr) minmax(250px, 1.65fr);
+  align-items: stretch;
+  gap: 10px;
+  width: 100%;
+}
+
+.sku-measure-field {
+  min-width: 0;
+  padding: 10px 12px;
+  background: var(--el-fill-color-extra-light, #fafafa);
+  border: 1px solid var(--el-border-color-lighter, #ebeef5);
+  border-radius: 8px;
+}
+
+.sku-measure-label {
+  display: block;
+  margin-bottom: 6px;
+  color: var(--el-text-color-secondary, #7a8599);
+  font-size: 12px;
+  line-height: 1;
+}
+
+.net-content-expression {
+  display: grid;
+  grid-template-columns: auto minmax(88px, 1fr) 72px;
   align-items: center;
   gap: 8px;
-  width: 100%;
 }
 
 .sales-unit-select,
@@ -3022,7 +3057,12 @@ watch(aiProductDialogVisible, (visible) => {
   .process-catalog-filters {
     grid-template-columns: 1fr;
   }
-  .measure-separator { display: none; }
+  .net-content-expression {
+    grid-template-columns: 1fr 72px;
+  }
+  .measure-separator {
+    grid-column: 1 / -1;
+  }
 }
 
 /* AI 智能建产品 dialog 内部标题 */

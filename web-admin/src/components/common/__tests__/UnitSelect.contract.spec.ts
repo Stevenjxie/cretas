@@ -28,10 +28,19 @@ describe('shared UnitSelect contract', () => {
 
   it('is shared by SKU while work-process master data no longer owns port units', () => {
     expect(productSource).toContain('<UnitSelect');
-    expect(productSource).toContain('label="销售单位 / 净含量"');
+    expect(productSource).toContain('label="基础规格"');
     expect(productSource).toContain('placeholder="选择销售单位"');
+    expect(productSource).toContain(':show-symbol="false"');
+    expect(productSource).toContain("每 1 {{ displayUnit(formData.unit) || '销售单位' }}");
     expect(processSource).not.toContain('<UnitSelect');
     expect(processSource).not.toContain('label="投入单位"');
     expect(processSource).not.toContain('label="产出单位"');
+  });
+
+  it('never emits the historic display label as part of the canonical unit code', () => {
+    expect(apiSource).toContain("{ unitCode: 'pcs', unitName: '只'");
+    expect(apiSource).not.toContain("unitCode: 'pcs:只'");
+    expect(source).toContain('canonicalSystemUnitCode(current?.unitCode || props.modelValue)');
+    expect(source).toContain('canonicalSystemUnitCode(findDuplicateUnit(activeUnits.value, [value])?.unitCode || value)');
   });
 });

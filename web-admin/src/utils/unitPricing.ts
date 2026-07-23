@@ -21,12 +21,14 @@ const UNIT_ALIASES: Record<string, string> = {
 };
 
 const UNIT_LABELS: Record<string, string> = {
-  kg: 'kg', g: 'g', box: '盒', case: '箱', slice: '片', bag: '袋', pcs: '件', portion: '份', L: 'L', mL: 'mL',
+  kg: 'kg', g: 'g', box: '盒', case: '箱', slice: '片', bag: '袋', pcs: '只', portion: '份', L: 'L', mL: 'mL',
 };
 
 export function canonicalUnitCode(value: unknown): string {
   const raw = String(value ?? '').trim();
   if (!raw) return '';
+  const legacyComposite = raw.match(/^(pcs|kg|g):(只|公斤|克)$/i);
+  if (legacyComposite) return UNIT_ALIASES[legacyComposite[1].toLowerCase()] || legacyComposite[1];
   return UNIT_ALIASES[raw.toLowerCase()] || UNIT_ALIASES[raw] || raw;
 }
 

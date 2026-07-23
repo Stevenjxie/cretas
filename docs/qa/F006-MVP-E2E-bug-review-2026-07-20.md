@@ -800,3 +800,16 @@
 - **Commit/PR/main 状态**：实现 commit `6c162973ad06aca435fe5e6592dc70203b139d8f`；PR [#1662](https://github.com/Stevenjxie/cretas/pull/1662) 已合入；exact main `ddfe3ab226f0cd2bbb154ef6355454b8a4decdd6`。
 - **部署状态**：`NOT_DEPLOYED`。
 - **回归状态**：`MERGED_AWAITING_DEPLOYMENT`；生产业务 mutation=0，未修改任何生产计划、批次、报工、结算、库存或 LIUSHANMEN 数据。
+
+### BUG-F006-R4-SKU-METADATA-UNIT-UX-001 — SKU 创建时间缺失与销售单位 canonical 泄漏
+
+- **发现阶段/时间/页面/步骤**：F006 SKU 管理人工回归，2026-07-23；列表没有创建时间，新建/编辑 SKU 的基础规格行布局拥挤，选择计数单位“只”后规格句式显示内部值 `pcs:只`。
+- **期望/实际/业务影响**：列表应显示服务端权威 `createdAt`；基础规格应清楚表达“销售单位”和“每 1 销售单位的净含量”；API/DB 只保存 canonical `pcs`，用户界面只显示中文“只”。实际 Web 共享 fallback 把 `pcs:只`、`kg:公斤`、`g:克` 错写成 unitCode，选择组件与 `displayUnit` 又使用不同显示词，存在把展示标签污染到新 SKU payload 的风险。
+- **证据路径**：`D:/Temp/codex-clipboard-2c2b3319-efa6-45a6-80da-1fcee688c793.png`、`D:/Temp/codex-clipboard-1300ea04-7fba-4be3-adc5-3be63ab84cdb.png`、`D:/Temp/codex-clipboard-abc69df6-0dcd-444e-ac2c-a2a0bd5337b1.png`。
+- **根因**：`ProductTypeDTO` 与 `ProductTypeServiceImpl.convertToDTO()` 已完整返回 `createdAt`，只是 Web 列表未渲染；`COMMON_DISPLAY_ALIASES` 错把“canonical:中文名”作为 unitCode，`UnitSelect` 直接 emit 该错误 code，`unitPricing` 则把 canonical `pcs` 固定显示为另一个词“件”。
+- **修复**：列表复用统一 `formatDateTime` 显示创建时间；基础规格重排为“销售单位”和“净含量”两个紧凑分组，净含量按“每 1 只”表达；共享单位 fallback 恢复 canonical `pcs/kg/g`，选择器仅显示中文且只 emit canonical；对历史 `pcs:只`、`kg:公斤`、`g:克` 做只读兼容归一，不修改历史数据；前端共享 `ProductType` 类型补齐可选时间字段。
+- **修改文件**：`web-admin/src/views/system/products/index.vue`、共享 `UnitSelect`、`systemUnits.ts`、`unitPricing.ts`、`types/api.ts` 及目标测试；后端、Entity、Repository 和数据库均无需修改。
+- **测试**：共享单位与 SKU 表单目标 Vitest `4 files / 20 tests` PASS；`vue-tsc -b --pretty false` 退出 0；唯一 Vite 生产构建完成（4457 modules），构建产物中唯一 SKU chunk `index-B5LhqOS5.js` 同时读回“创建时间 / 基础规格 / 选择销售单位”，SHA-256 `D97C978CBBEC3C245EE519A9968279A905C26F2B77F831A545774A58D68C6F2E`。
+- **Commit/PR/main 状态**：修复已完成并通过目标验证，随本批分支合入 main；exact commit/main 以最终交付回执为准。
+- **部署状态**：`NOT_DEPLOYED`。
+- **回归状态**：`CODE_FIXED_TARGET_TESTS_AND_BUILD_PASSED_AWAITING_MERGE`；修复期间生产业务 mutation=0，未创建或修改 SKU，未触碰 LIUSHANMEN。

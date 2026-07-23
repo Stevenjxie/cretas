@@ -22,6 +22,9 @@ describe('unitPricing', () => {
     expect(canonicalUnitCode('kg')).toBe('kg');
     expect(displayUnit('g')).toBe('g');
     expect(displayUnit('kg')).toBe('kg');
+    expect(canonicalUnitCode('pcs:只')).toBe('pcs');
+    expect(displayUnit('pcs:只')).toBe('只');
+    expect(displayUnit('pcs')).toBe('只');
     expect(formatPriceUnit('box')).toBe('元/盒');
     expect(formatPriceUnit('case')).toBe('元/箱');
     expect(formatPriceUnit('slice')).toBe('元/片');
