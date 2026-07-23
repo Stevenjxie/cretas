@@ -469,6 +469,14 @@ public class IntentExecutionOrchestrator {
                     factoryPackConstrained ? "FACTORY" : null);
             if (earlyPhraseMatch != null && earlyPhraseMatch.hasMatch()) {
                 AIIntentConfig phraseIntent = earlyPhraseMatch.getBestMatch();
+                // R20c: 餐饮租户的 OUT_OF_DOMAIN 短语 ("今天天气怎么样") 不在此
+                // 短路 — 放行到 tiered 反转, Python 给餐饮语境的域外诚实拒答;
+                // 此处执行会落到工厂措辞的通用助手回复。
+                if (isRestaurantTenant(factoryId)
+                        && "OUT_OF_DOMAIN".equals(phraseIntent.getIntentCode())) {
+                    log.info("[Sprint12-CacheFix-EarlyPhrase] restaurant OUT_OF_DOMAIN 放行反转: input='{}'",
+                            userInput);
+                } else {
                 log.info("[Sprint12-CacheFix-EarlyPhrase] Pre-continuation phrase shortcut: input='{}', intentCode={}",
                         userInput, phraseIntent.getIntentCode());
                 IntentExecuteRequest phraseRequest = IntentExecuteRequest.builder()
@@ -481,6 +489,7 @@ public class IntentExecutionOrchestrator {
                         .build();
                 return executeWithExplicitIntent(
                         factoryId, phraseRequest, userId, userRole, factoryPackRoute);
+                }
             }
         }
 
