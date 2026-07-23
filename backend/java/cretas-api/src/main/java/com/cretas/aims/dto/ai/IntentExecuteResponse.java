@@ -296,6 +296,13 @@ public class IntentExecuteResponse {
         private String description;
         private Integer expiresInSeconds;
         private Map<String, Object> previewData;
+        // 写操作影响契约 (2026-07-24): 改前/改后对比 + 影响说明 + 风险档 —
+        // 前端确认卡渲染对比表与二次确认弹窗的数据源。
+        private Map<String, Object> currentValues;
+        private Map<String, Object> newValues;
+        private String impactSummary;
+        private String actionType;   // READ/WRITE/UPDATE/DELETE/...
+        private String riskLevel;    // LOW/MEDIUM/HIGH/CRITICAL
     }
 
     /**
