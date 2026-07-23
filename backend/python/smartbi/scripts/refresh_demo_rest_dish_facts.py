@@ -134,7 +134,7 @@ async def _synthesize_transactions(conn: Any, factory_id: str, target_end: date)
           factory_id, source_type, source_bill_no, store_id, date, time,
           gross_amount, net_amount, actual_receive, customer_count, item_count
         )
-        SELECT $1, $3,
+        SELECT $1::varchar, $3::varchar,
                'DR-' || a.store_id || '-' || a.date || '-' || gs.n,
                a.store_id, a.date,
                a.date::timestamp + interval '10 hours'
