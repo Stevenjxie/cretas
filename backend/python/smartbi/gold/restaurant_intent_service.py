@@ -291,7 +291,8 @@ async def tiered_answer(
             or extract_store_mention(query)
             or getattr(spec, "store_slot", None)
             if ("RESTAURANT_OPS_STORE_MARGIN" in plan
-                or "RESTAURANT_OPS_GROSS_MARGIN" in plan)
+                or "RESTAURANT_OPS_GROSS_MARGIN" in plan
+                or "RESTAURANT_OPS_SALES_SUMMARY" in plan)
             else None
         )
         from smartbi.gold.restaurant_ops_router import (
@@ -322,6 +323,15 @@ async def tiered_answer(
                 # (Sheet 7/22 菜品链)。dish 限域接管, 全店概览不受影响
                 # (无菜名 → dish_mention None)。
                 effective_code = "RESTAURANT_OPS_GROSS_MARGIN"
+            if (
+                store_mention
+                and code == "RESTAURANT_OPS_SALES_SUMMARY"
+                and "RESTAURANT_OPS_STORE_MARGIN" not in plan
+                and not store_dish
+            ):
+                # R26: 点名门店的营收问 ("日月光店的营收") 此前被全店概览
+                # 无视 — 改走单店毛利/营收; 简称多命中由 canonicalize 澄清。
+                effective_code = "RESTAURANT_OPS_STORE_MARGIN"
             if (
                 store_mention
                 and code == "RESTAURANT_OPS_GROSS_MARGIN"
@@ -483,6 +493,11 @@ def should_delegate(
     # Java Gold tools have no per-dish answer path, while the Python
     # gross-margin resolver scopes to the named dish (Sheet 7/22 菜品链).
     if query:
+        import re as _re
+        if _re.search(r"外卖|堂食", query) and _re.search(r"占比|几成|比例|占了|占多少", query):
+            # 渠道占比拆分是 Java 工具能力, python 无渠道 resolver —
+            # 委托会答成全店概览 (答非所问), 显式放回 Java (R26)。
+            return False
         from smartbi.gold.restaurant_ops_router import (
             dish_ranking_direction,
             extract_dish_candidates,

@@ -1861,3 +1861,17 @@ def test_r23c_absolute_month_not_a_dish_and_t1_routes():
 def test_r24b_period_pair_with_generic_noun_routes_summary():
     assert _r.match_restaurant_ops("上个月的数据和上上个月的数据对比") == "RESTAURANT_OPS_SALES_SUMMARY"
     assert _r.match_restaurant_ops("本周和上周的情况对比") == "RESTAURANT_OPS_SALES_SUMMARY"
+
+
+def test_r26_sweep_fixes():
+    from datetime import date as _d
+    rng, label = _r._resolve_sales_date_range("上上个月营收多少", today=_d(2026, 7, 23))
+    assert label == "上上个月" and rng == (_d(2026, 5, 1), _d(2026, 5, 31))
+    rng, label = _r._resolve_sales_date_range("上个月的数据和上上个月的数据对比", today=_d(2026, 7, 23))
+    assert label == "上个月"  # 双周期点名 → 近端为主窗, 远端归比较分支
+    rng, label = _r._resolve_sales_date_range("2025年全年营收多少", today=_d(2026, 7, 23))
+    assert rng == (_d(2025, 1, 1), _d(2025, 12, 31))
+    assert _r.extract_dish_candidate("2025年全年营收多少") is None
+    assert _r.extract_dish_candidates("米饭和娃娃菜和招牌藤椒味(单人份)的销量") == [
+        "米饭", "娃娃菜", "招牌藤椒味(单人份)"]
+    assert _r.dish_ranking_direction("哪些菜没人点") == "worst"
