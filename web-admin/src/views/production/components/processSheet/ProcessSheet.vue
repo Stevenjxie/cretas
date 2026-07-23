@@ -610,7 +610,19 @@ defineExpose({ hasUnsavedRows });
           </span>
         </template>
         <!-- Vertical stack: data-entry table (full width) → 半成品库存 (full width below) -->
-        <div style="display:flex;flex-direction:column;gap:16px">
+        <div class="process-entry-layout">
+          <section class="process-entry-context" :aria-label="`${proc.label} 报工上下文`">
+            <div>
+              <strong>报工上下文</strong>
+              <span>{{ proc.label }} · 第 {{ proc.order }} 道</span>
+            </div>
+            <div>
+              <span>投入单位：{{ proc.inputUnit }}</span>
+              <span>产出单位：{{ proc.outputUnit || proc.inputUnit }}</span>
+            </div>
+          </section>
+          <div class="process-entry-workspace">
+            <section class="process-entry-stage" :aria-label="`${proc.label} 投入、执行与产出`">
           <!-- Data entry table — full width -->
           <ProcessDataTable
             :ref="(el: any) => dataTableRefs[procKey(proc)] = el"
@@ -641,8 +653,9 @@ defineExpose({ hasUnsavedRows });
             @row-saved="onRowSaved(proc)"
           />
 
+            </section>
           <!-- 半成品库存 — full width below the grid -->
-          <div>
+          <aside class="process-entry-inventory" :aria-label="`${proc.label} 半成品库存`">
             <div style="font-size:12px;font-weight:600;color:#606266;margin-bottom:6px">
               {{ proc.label }} 半成品库存
             </div>
@@ -653,6 +666,7 @@ defineExpose({ hasUnsavedRows });
               :process-code="proc.code"
               :process-order="proc.order"
             />
+          </aside>
           </div>
         </div>
       </el-tab-pane>
@@ -672,5 +686,49 @@ defineExpose({ hasUnsavedRows });
   height: 18px;
   padding: 0 5px;
   font-size: 10px;
+}
+.process-entry-layout {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.process-entry-context {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 12px;
+  border: 1px solid #dcdfe6;
+  border-radius: 8px;
+  background: #f8fbff;
+  color: #606266;
+  font-size: 12px;
+}
+.process-entry-context > div {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.process-entry-context strong { color: #303133; }
+.process-entry-workspace {
+  display: grid;
+  grid-template-columns: minmax(0, 1.7fr) minmax(300px, 0.8fr);
+  gap: 16px;
+  align-items: start;
+}
+.process-entry-stage,
+.process-entry-inventory { min-width: 0; }
+.process-entry-inventory {
+  padding: 12px;
+  border: 1px solid #ebeef5;
+  border-radius: 8px;
+  background: #fff;
+}
+@media (max-width: 1200px) {
+  .process-entry-workspace { grid-template-columns: minmax(0, 1fr); }
+}
+@media (max-width: 720px) {
+  .process-entry-context { align-items: flex-start; flex-direction: column; gap: 8px; }
 }
 </style>

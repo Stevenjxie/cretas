@@ -2747,11 +2747,14 @@ defineExpose({ hasUnsavedRows, refreshSharedInventories });
             </div>
             <div class="sp-card-field">
               <label class="sp-card-label">{{ firstProcessInputLabel }}</label>
-              <el-input-number
-                v-model="row.rawBatchQty"
-                :min="0" :precision="2"
-                controls-position="right"
-                style="width:160px" size="small" />
+              <span class="sp-inline-input" role="group" :aria-label="`${firstProcessInputLabel}与单位`">
+                <el-input-number
+                  v-model="row.rawBatchQty"
+                  :min="0" :precision="2"
+                  controls-position="right"
+                  size="small" />
+                <span data-testid="input-unit-readonly" class="sp-fixed-unit">{{ displayProcessUnit(processUnits.inputUnit) }}</span>
+              </span>
             </div>
             </template>
           </template>
@@ -2924,6 +2927,10 @@ defineExpose({ hasUnsavedRows, refreshSharedInventories });
             <span style="font-size:12px;color:#606266">{{ potSplitHint(row) }}</span>
           </div>
 
+          <div class="sp-card-field sp-card-field-full sp-stage-heading">
+            <span>工序执行</span>
+            <small>填写本工序的作业参数；数量始终与单位成组显示。</small>
+          </div>
           <!-- Generic columns from config (skip special-cased keys) -->
           <template v-for="col in cols" :key="col.key">
             <div
@@ -3009,7 +3016,7 @@ defineExpose({ hasUnsavedRows, refreshSharedInventories });
                产品/端口由 workflow 图固定 (fool-proof Rule 2/3 — 不给操作员自由选产品), 始终展开
                (核心必填录入, 不折叠隐藏)。仅 isMultiOutput (产出端口>1) 时渲染, 单产出工序不受影响。
                ============================================================ -->
-          <div v-if="isPortOutputMode" class="sp-card-field sp-card-field-full sp-card-expand-section">
+          <section v-if="isPortOutputMode" class="sp-card-field sp-card-field-full sp-card-expand-section" aria-label="产出与副产记录">
             <div class="sp-output-section-title">
               <span>产出明细 — {{ row.multiOutputs.length }} 项</span>
               <span>SKU 与单位由 Workflow 固定，不可选择</span>
@@ -3034,22 +3041,27 @@ defineExpose({ hasUnsavedRows, refreshSharedInventories });
                 </el-tag>
                 <span v-if="o.batchNumber" class="sp-readonly sp-batch-num">{{ o.batchNumber }}</span>
               </div>
-              <div class="sp-output-fields">
+              <div class="sp-output-fields sp-output-primary-fields">
                 <label data-testid="output-start-time">开始时间<el-time-picker v-model="o.startTime" value-format="HH:mm" format="HH:mm" placeholder="开始" size="small" /></label>
                 <label data-testid="output-end-time">结束时间<el-time-picker v-model="o.endTime" value-format="HH:mm" format="HH:mm" placeholder="结束" size="small" /></label>
                 <label data-testid="output-worker-count">人数<el-input-number v-model="o.workerCount" :min="1" :precision="0" controls-position="right" size="small" /></label>
-                <label data-testid="output-quantity">产出数量<span class="sp-inline-input"><el-input-number v-model="o.quantity" :min="0" :precision="outputLinePrecision(o)" controls-position="right" size="small" /><span data-testid="output-unit-readonly" class="sp-fixed-unit">{{ displayProcessUnit(o.unit) }}</span></span></label>
+                <label data-testid="output-quantity">产出数量<span class="sp-inline-input" role="group" aria-label="产出数量与单位"><el-input-number v-model="o.quantity" :min="0" :precision="outputLinePrecision(o)" controls-position="right" size="small" /><span data-testid="output-unit-readonly" class="sp-fixed-unit">{{ displayProcessUnit(o.unit) }}</span></span></label>
                 <label>出成率<span class="sp-readonly">{{ outputLineYield(row, o) == null ? '—' : `${outputLineYield(row, o)!.toFixed(2)}%` }}</span></label>
-                <label data-testid="byproduct-quantity">副产数量<span class="sp-inline-input"><el-input-number v-model="o.byproductQuantity" :min="0" :precision="6" controls-position="right" size="small" /><span data-testid="byproduct-unit-readonly" class="sp-fixed-unit">{{ displayProcessUnit(o.byproductUnit) }}</span></span></label>
-                <label data-testid="byproduct-unit-price">副产回收单价<el-input-number v-model="o.byproductUnitPrice" :min="0" :precision="4" controls-position="right" size="small" /></label>
-                <label v-if="requiresManualCostAllocation(row)" data-testid="cost-allocation-ratio">成本分摊比例(%)<el-input-number v-model="o.costAllocationRatio" :min="0" :max="100" :precision="4" controls-position="right" size="small" /></label>
                 <label>总工时<span class="sp-readonly">{{ outputLineTotalHours(o).toFixed(2) }} h</span></label>
+              </div>
+              <div class="sp-output-optional">
+                <div class="sp-output-optional-title">按需填写：副产与成本分摊</div>
+                <div class="sp-output-fields sp-output-optional-fields">
+                  <label data-testid="byproduct-quantity">副产数量<span class="sp-inline-input" role="group" aria-label="副产数量与单位"><el-input-number v-model="o.byproductQuantity" :min="0" :precision="6" controls-position="right" size="small" /><span data-testid="byproduct-unit-readonly" class="sp-fixed-unit">{{ displayProcessUnit(o.byproductUnit) }}</span></span></label>
+                  <label data-testid="byproduct-unit-price">副产回收单价<el-input-number v-model="o.byproductUnitPrice" :min="0" :precision="4" controls-position="right" size="small" /></label>
+                  <label v-if="requiresManualCostAllocation(row)" data-testid="cost-allocation-ratio">成本分摊比例(%)<el-input-number v-model="o.costAllocationRatio" :min="0" :max="100" :precision="4" controls-position="right" size="small" /></label>
+                </div>
               </div>
               <div v-if="o.finished" class="sp-output-weight-hint">
                 {{ outputLineWeightKg(o) == null ? '未配置单位净重，无法计算成品重量' : `成品重量 ${formattedWeight(outputLineWeightKg(o))}` }}
               </div>
             </div>
-          </div>
+          </section>
 
           <!-- Labor expander -->
           <div v-if="!isPortOutputMode" class="sp-card-field sp-card-field-full">
@@ -4085,10 +4097,10 @@ defineExpose({ hasUnsavedRows, refreshSharedInventories });
 }
 
 .sp-card-body {
-  padding: 10px 12px;
+  padding: 12px;
   display: flex;
   flex-wrap: wrap;
-  gap: 10px 16px;
+  gap: 12px 16px;
 }
 
 .sp-card-field {
@@ -4138,7 +4150,7 @@ defineExpose({ hasUnsavedRows, refreshSharedInventories });
 .sp-port-section-note {
   flex-direction: row;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
   color: #606266;
   font-size: 12px;
 }
@@ -4155,6 +4167,21 @@ defineExpose({ hasUnsavedRows, refreshSharedInventories });
   color: #909399;
   font-size: 12px;
   white-space: nowrap;
+}
+.sp-stage-heading {
+  flex-direction: row;
+  align-items: baseline;
+  gap: 8px;
+  padding-top: 4px;
+  border-top: 1px solid #ebeef5;
+  color: #303133;
+  font-size: 12px;
+  font-weight: 600;
+}
+.sp-stage-heading small {
+  color: #909399;
+  font-size: 11px;
+  font-weight: 400;
 }
 .sp-output-section-title {
   display: flex;
@@ -4188,7 +4215,7 @@ defineExpose({ hasUnsavedRows, refreshSharedInventories });
 }
 .sp-output-fields {
   display: grid;
-  grid-template-columns: repeat(4, minmax(150px, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 8px 12px;
 }
 .sp-output-fields > label {
@@ -4206,11 +4233,27 @@ defineExpose({ hasUnsavedRows, refreshSharedInventories });
 .sp-inline-input {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 4px;
+  min-width: 0;
+  white-space: nowrap;
 }
 .sp-inline-input :deep(.el-input-number) {
   flex: 1;
-  min-width: 90px;
+  min-width: 0;
+}
+.sp-output-optional {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px dashed #dcdfe6;
+}
+.sp-output-optional-title {
+  margin-bottom: 8px;
+  color: #606266;
+  font-size: 11px;
+  font-weight: 600;
+}
+.sp-output-optional-fields {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
 }
 .sp-output-weight-hint {
   margin-top: 6px;
@@ -4218,9 +4261,27 @@ defineExpose({ hasUnsavedRows, refreshSharedInventories });
   font-size: 11px;
 }
 
-@media (max-width: 1200px) {
+@media (max-width: 1366px) {
   .sp-output-fields {
-    grid-template-columns: repeat(2, minmax(150px, 1fr));
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+@media (max-width: 720px) {
+  .sp-card-header,
+  .sp-port-section-note,
+  .sp-stage-heading,
+  .sp-output-section-title {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+  .sp-card-field,
+  .sp-card-field-auto {
+    flex: 1 1 100%;
+    min-width: 100%;
+  }
+  .sp-output-fields,
+  .sp-output-optional-fields {
+    grid-template-columns: minmax(0, 1fr);
   }
 }
 </style>
