@@ -75,6 +75,7 @@ def _isolated_ledger(tmp_path, monkeypatch):
     accidental "already known" collisions; tests that need a query to be
     "already known" write it into this same tmp_path ledger file explicitly."""
     monkeypatch.setattr(promo, "LEDGER_FILE", tmp_path / "ledger.json")
+    monkeypatch.setattr(promo, "REJECTED_FILE", tmp_path / "rejected.json")
     yield
 
 
@@ -488,3 +489,24 @@ class TestLogIntentMiss:
         assert await ri.log_intent_miss(
             object(), factory_id="F", query="q", reason="should_delegate",
         ) is None
+
+
+# ─── Rejected ledger (2026-07-23): 人审否决不再重复上榜 ─────────────────────
+
+async def test_rejected_query_excluded_from_candidates(tmp_path):
+    (tmp_path / "rejected.json").write_text(
+        json.dumps([{"query": "帮我录入今天的报损", "reason": "写操作错接"}]),
+        encoding="utf-8",
+    )
+    conn = _FakeConn(rows=[
+        _row("帮我录入今天的报损", ["RESTAURANT_OPS_WASTAGE_TOP"], 3, 0.95),
+        _row("这个月生意怎么样", ["RESTAURANT_OPS_SALES_SUMMARY"] * 3, 3, 0.9),
+    ])
+    candidates = await promo.aggregate_candidates(_FakePool(conn))
+    assert [c["query"] for c in candidates] == ["这个月生意怎么样"]
+
+
+def test_rejected_file_missing_or_corrupt_fails_open(tmp_path):
+    assert promo.load_rejected_queries() == frozenset()
+    (tmp_path / "rejected.json").write_text("{not json", encoding="utf-8")
+    assert promo.load_rejected_queries() == frozenset()

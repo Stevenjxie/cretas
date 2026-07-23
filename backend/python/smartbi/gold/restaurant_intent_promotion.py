@@ -48,6 +48,11 @@ logger = logging.getLogger(__name__)
 
 _DATA = Path(__file__).parent.parent / "data"
 LEDGER_FILE = _DATA / "promoted_restaurant_intent_samples.json"
+# 否决账本 (2026-07-23): 人审否决过的问法 (写操作错接/上下文省略句等),
+# 不再作为候选重复出现 — 否则每日 cron 日报会对同一批已否决条目反复告警。
+# 格式: {"query": "...", "reason": "..."} 的 JSON list, 仅 CLI --apply 之外
+# 人工编辑 (否决和通过一样是人的判断, 不自动写)。
+REJECTED_FILE = _DATA / "rejected_restaurant_intent_samples.json"
 
 # Two-level objective gate thresholds (spec section 5). Row-level filter (a)
 # is always applied (tier=llm, contract_pass=true, served=true -- see the SQL
@@ -102,8 +107,25 @@ def merge_samples(base: Optional[Dict[str, List[str]]] = None) -> Dict[str, List
     return merged
 
 
+def load_rejected_queries() -> frozenset:
+    """人审否决过的问法集合。fail-open: 文件缺失/损坏 → 空集。"""
+    try:
+        if REJECTED_FILE.exists():
+            with open(REJECTED_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            if isinstance(data, list):
+                return frozenset(
+                    str(e.get("query")).strip()
+                    for e in data
+                    if isinstance(e, dict) and str(e.get("query") or "").strip()
+                )
+    except Exception as exc:
+        logger.warning(f"[restaurant-intent-promotion] load rejected failed (ignored): {exc}")
+    return frozenset()
+
+
 def _known_query_set(merged: Dict[str, List[str]]) -> frozenset:
-    return frozenset(q for queries in merged.values() for q in queries)
+    return frozenset(q for queries in merged.values() for q in queries) | load_rejected_queries()
 
 
 # ─── Question-family classification (evidence-based backlog) ──────────────
