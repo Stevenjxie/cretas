@@ -35,6 +35,10 @@ class _FakeConn:
         self.rows = rows or []
         self.exc = exc
         self.calls = []
+        self.guc_calls = []  # set_config 调用 (RLS GUC — 2026-07-23 修)
+
+    async def execute(self, sql, *args):
+        self.guc_calls.append((sql, args))
 
     async def fetch(self, sql, *args):
         self.calls.append((sql, args))

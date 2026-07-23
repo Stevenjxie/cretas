@@ -161,6 +161,7 @@ async def aggregate_candidates(
     min_confidence: float = 0.75,
     min_count: int = 1,
     limit: int = 200,
+    factory_id: str = "DEMO_REST",
 ) -> List[Dict[str, Any]]:
     """Aggregate `smart_bi_llm_fallback_log` rows into promotion candidates.
 
@@ -208,6 +209,13 @@ async def aggregate_candidates(
     """
     try:
         async with pool.acquire() as conn:
+            # smart_bi_llm_fallback_log 带 FORCE RLS (tenant_select 策略):
+            # 不设 app.factory_id GUC 会假性 0 行 → CLI 误报"无候选"
+            # (2026-07-23 首次真跑晋升 CLI 踩中, 同 feedback_smartbi_rls
+            # 记忆里的裸 psql 坑)。显式事务级 set_config 后再查。
+            await conn.execute(
+                "SELECT set_config('app.factory_id', $1, false)", factory_id
+            )
             rows = await conn.fetch(sql, min_confidence, min_count, limit)
     except Exception as exc:
         logger.warning(f"[restaurant-intent-promotion] aggregate_candidates query failed (fail-open): {exc}")
