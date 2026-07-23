@@ -859,7 +859,7 @@ def test_owner_action_chat_follow_up_chips_return_distinct_next_step_answers() -
     execution_data = execution_follow_up["data"]
     assert execution_data["sessionId"] == first_data["sessionId"]
     assert execution_data["scenario"] == "traffic_conversion"
-    assert "这个追问我只拆执行细节，不重复前面的结论" in execution_data["answer"]
+    assert "今天照这三步做" in execution_data["answer"]
     assert "一句话结论" not in execution_data["answer"]
     assert "门口" in execution_data["answer"]
     assert "平台" in execution_data["answer"]
@@ -907,7 +907,7 @@ def test_owner_action_chat_common_follow_up_chips_do_not_repeat_first_answer() -
 
         assert follow_up["scenario"] == expected_scenario
         assert follow_up["answer"] != first["answer"]
-        assert "这个追问我只拆执行细节，不重复前面的结论" in follow_up["answer"]
+        assert "今天照这三步做" in follow_up["answer"]
         assert "一句话结论" not in follow_up["answer"]
 
 
@@ -945,13 +945,13 @@ def test_owner_action_follow_up_chips_survive_missing_worker_memory() -> None:
             "F_CROSS_WORKER_OPS",
             "前台员工今天应该重点提醒什么？",
             "operations_dispatch",
-            "这个追问我只拆执行细节",
+            "今天照这三步做",
         ),
         (
             "F_CROSS_WORKER_KITCHEN",
             "厨房出餐慢应该怎么处理？",
             "kitchen_quality",
-            "这个追问我只拆执行细节",
+            "今天照这三步做",
         ),
     ]
 

@@ -2279,6 +2279,8 @@ async def resolve_gross_margin(
         f"菜品毛利分析（{window_label}）\n"
         f"- 全部销售营收 ¥{total_rev:,.2f}；其中可计算毛利的营收 ¥{total_rev_with_cost:,.2f}，营收覆盖率 {coverage_ratio * 100:.1f}%\n"
         f"- 已覆盖部分毛利 ¥{total_profit:,.2f}，加权毛利率 {margin_text}\n"
+        f"- 计算过程：毛利 ¥{total_profit:,.2f} = 可计算毛利营收 ¥{total_rev_with_cost:,.2f}"
+        f" − 对应菜品成本 ¥{total_rev_with_cost - total_profit:,.2f}\n"
         f"- 计算口径：毛利 = 可计算毛利的营收 - 对应菜品成本；期间与菜品范围完全一致。\n"
         f"- {len(with_cost)}/{len(enriched)} 个销售菜品有完整成本数据。{reference_note}{trend_note}{trend_basis_note}\n\n"
         f"毛利前 {len(top_slice)} 名菜品（按绝对毛利）:\n{top_text}{dragger_text}\n\n"
