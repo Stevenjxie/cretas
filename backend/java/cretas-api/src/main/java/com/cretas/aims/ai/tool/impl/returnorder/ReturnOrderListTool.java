@@ -73,8 +73,10 @@ public class ReturnOrderListTool extends AbstractBusinessTool {
 
     @Override
     protected Map<String, Object> doExecute(String factoryId, Map<String, Object> params, Map<String, Object> context) throws Exception {
-        Integer page = getInteger(params, "page", 1);
-        Integer size = getInteger(params, "size", 10);
+        // LLM 抽参可能给 0 基页码 (2026-07-24 电池钉出: page=0 → page-1=-1
+        // 炸 "Page index must not be less than zero") — 钳制下限。
+        int page = Math.max(1, getInteger(params, "page", 1));
+        int size = Math.max(1, Math.min(50, getInteger(params, "size", 10)));
         String returnTypeStr = getString(params, "returnType");
         String statusStr = getString(params, "status");
 
