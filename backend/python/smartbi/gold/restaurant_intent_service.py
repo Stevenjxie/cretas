@@ -535,8 +535,15 @@ def should_delegate(
     # resolver 对 DB 验证, 失败模式是定向拒答/澄清, 不是错答。
     if getattr(spec, "dish_slot", None) or getattr(spec, "store_slot", None):
         return True
-    if spec.source_tier == "llm":
-        from smartbi.gold.restaurant_ops_router import is_supported_restaurant_ops_code
-        if is_supported_restaurant_ops_code(spec.intent):
-            return True
+    # R23 规格即路由全量化: 确定性 T1 或置信过门的 T3 解析出 resolver
+    # 支持的意图即委托 — 存量枚举放行规则自此退化为文档。两个保留例外:
+    # (1) T2 向量层置信弱, 仍须经上面的显式规则 (选错意图会答错域);
+    # (2) 2026-07-08 审计 A-3: 盈亏问落在不懂盈亏的 resolver 上会挂永久
+    #     免责声明, 比 Java 原答案更差 — 该组合仍不直通。
+    if spec.source_tier in ("keyword", "llm") and not spec.clarification_needed:
+        profit_ask = spec.asks_profitability or spec.wants_margin
+        if not (profit_ask and spec.intent not in _MARGIN_CAPABLE_INTENTS):
+            from smartbi.gold.restaurant_ops_router import is_supported_restaurant_ops_code
+            if is_supported_restaurant_ops_code(spec.intent):
+                return True
     return False

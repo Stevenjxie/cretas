@@ -1167,6 +1167,35 @@ def _resolve_sales_date_range(
         target = anchor - timedelta(days=2)
         return (target, target), "前天"
 
+    # 绝对日历月 ("3月份"/"2026年3月"/"去年12月") — 此前落全部历史,
+    # "去年12月" 还被 去年 规则吞成去年全年 (R23 实测)。年份推断: 显式年 >
+    # 去年/今年前缀 > 就近过去原则 (月份大于当前月 → 去年)。
+    abs_month = re.search(
+        r"(?:(?P<year>20\d{2})\s*年|(?P<rel>去年|今年))?\s*"
+        r"(?P<month>1[0-2]|0?[1-9]|[一二三四五六七八九十]|十一|十二)\s*月",
+        text,
+    )
+    if abs_month and "个月" not in abs_month.group(0):
+        _cn_month = {"一": 1, "二": 2, "三": 3, "四": 4, "五": 5, "六": 6,
+                     "七": 7, "八": 8, "九": 9, "十": 10, "十一": 11, "十二": 12}
+        raw_month = abs_month.group("month")
+        month_num = _cn_month.get(raw_month) or int(raw_month)
+        if abs_month.group("year"):
+            year_num = int(abs_month.group("year"))
+        elif abs_month.group("rel") == "去年":
+            year_num = anchor.year - 1
+        elif abs_month.group("rel") == "今年":
+            year_num = anchor.year
+        else:
+            year_num = anchor.year if month_num <= anchor.month else anchor.year - 1
+        month_start = date(year_num, month_num, 1)
+        month_end = (
+            date(year_num + 1, 1, 1) - timedelta(days=1)
+            if month_num == 12 else date(year_num, month_num + 1, 1) - timedelta(days=1)
+        )
+        if month_start <= anchor:
+            return (month_start, min(month_end, anchor)), f"{year_num}年{month_num}月"
+
     relative_match = _relative_period_match(text)
     if relative_match:
         count, unit = relative_match

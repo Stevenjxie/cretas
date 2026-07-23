@@ -132,58 +132,53 @@ def test_should_delegate_multi_resolver_plan_true():
     assert should_delegate(spec) is True
 
 
-def test_should_delegate_sales_summary_absolute_window_false():
-    """Rule 4 requires relative_window=True -- an absolute-month
-    SALES_SUMMARY query with no margin/profit ask falls to rule 5 -> False."""
+def test_should_delegate_sales_summary_absolute_window_now_true():
+    """R23 规格即路由: 绝对月份窗现在由 python 日期解析器支持
+    (「3月份」→日历月), 确定性层的 SALES_SUMMARY 规格直接委托。"""
     spec = _spec(
         intent="RESTAURANT_OPS_SALES_SUMMARY",
         relative_window=False,
         window_label="2025年12月",
     )
-    assert should_delegate(spec) is False
+    assert should_delegate(spec) is True
 
 
-def test_should_delegate_pure_trend_query_false():
-    """Rule 5: pure trend query (no margin/profit ask, not a relative-window
-    SALES_SUMMARY) -> False, Java's existing answer stays byte-for-byte
-    unchanged."""
+def test_should_delegate_pure_trend_query_now_true():
+    """R23 规格即路由: 趋势 resolver 存在即委托 (旧规则 5 保守性退役)。"""
     spec = _spec(intent="RESTAURANT_OPS_TREND_ANALYSIS", relative_window=False)
-    assert should_delegate(spec) is False
+    assert should_delegate(spec) is True
 
 
-def test_should_delegate_ranking_query_false():
-    """Rule 5: a plain ranking query (STORE_MARGIN intent but no explicit
-    margin/profit ask flagged, non-relative) -> False."""
+def test_should_delegate_ranking_query_now_true():
+    """R23 规格即路由: STORE_MARGIN resolver 存在即委托。"""
     spec = _spec(
         intent="RESTAURANT_OPS_STORE_MARGIN",
         wants_margin=False,
         asks_profitability=False,
         relative_window=False,
     )
-    assert should_delegate(spec) is False
+    assert should_delegate(spec) is True
 
 
-def test_should_delegate_relative_window_wrong_intent_false():
-    """Rule 4 is intent-scoped: relative_window=True on a NON-SALES_SUMMARY
-    intent does not trigger rule 4, and (absent margin/profit) falls to
-    rule 5 -> False."""
+def test_should_delegate_relative_window_any_resolver_intent_true():
+    """R23 规格即路由: 相对窗+任意 resolver 支持的意图均委托。"""
     spec = _spec(
         intent="RESTAURANT_OPS_TREND_ANALYSIS",
         relative_window=True,
         window_label="最近3个月",
     )
-    assert should_delegate(spec) is False
+    assert should_delegate(spec) is True
 
 
-def test_should_delegate_absolute_month_recipe_cost_false():
-    """Rule 5: absolute-month dish-cost ranking -> False (Java answers this
-    class of query well today)."""
+def test_should_delegate_absolute_month_recipe_cost_now_true():
+    """R23 规格即路由: RECIPE_COST resolver 存在即委托 (无盈亏问 →
+    A-3 例外不触发)。"""
     spec = _spec(
         intent="RESTAURANT_OPS_RECIPE_COST",
         window_label="2025年12月",
         relative_window=False,
     )
-    assert should_delegate(spec) is False
+    assert should_delegate(spec) is True
 
 
 def test_should_delegate_multiple_true_rules_still_true():
@@ -201,7 +196,9 @@ def test_should_delegate_java_tool_name_does_not_change_decision(java_tool_name)
     spec = _spec(intent="RESTAURANT_OPS_SALES_SUMMARY", asks_profitability=True)
     assert should_delegate(spec, java_tool_name) is True
 
-    spec2 = _spec(intent="RESTAURANT_OPS_TREND_ANALYSIS", relative_window=False)
+    # R23 后确定性层普遍委托; 用 A-3 例外组合 (盈亏问+不懂盈亏的 resolver)
+    # 保住「决策与 java_tool_name 无关」这条不变量的 False 侧。
+    spec2 = _spec(intent="RESTAURANT_OPS_WASTAGE_TOP", asks_profitability=True)
     assert should_delegate(spec2, java_tool_name) is False
 
 
