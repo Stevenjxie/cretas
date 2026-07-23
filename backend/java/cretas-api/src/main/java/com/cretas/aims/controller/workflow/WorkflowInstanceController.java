@@ -21,6 +21,7 @@ import com.cretas.aims.service.workflow.OaActionIdempotencyService;
 import com.cretas.aims.service.inventory.PurchaseService;
 import com.cretas.aims.service.inventory.SalesService;
 import com.cretas.aims.service.inventory.TransferService;
+import com.cretas.aims.service.factory.FactoryStocktakeService;
 import com.cretas.aims.entity.workflow.ApprovalHistory.HistoryAction;
 import com.cretas.aims.utils.TokenUtils;
 import io.swagger.v3.oas.annotations.Operation;
@@ -84,6 +85,7 @@ public class WorkflowInstanceController {
     private final PurchaseService purchaseService;
     private final SalesService salesService;
     private final TransferService transferService;
+    private final FactoryStocktakeService stocktakeService;
 
     /** Optional — 用于 hydrate PURCHASE_ORDER businessSummary. */
     @Autowired(required = false)
@@ -349,6 +351,11 @@ public class WorkflowInstanceController {
                             notes);
             businessEntityId = transfer.getId();
             businessStatus = transfer.getStatus().name();
+        } else if ("INVENTORY_ADJUSTMENT".equals(instance.getModuleCode())) {
+            com.cretas.aims.entity.factory.FactoryStocktake stocktake = stocktakeService.applyWorkflowAction(
+                    factoryId, instance.getBusinessEntityId(), instanceId, user.getId(), user.getRoleCode(), action, notes);
+            businessEntityId = stocktake.getId();
+            businessStatus = stocktake.getStatus().name();
         } else {
             throw new BusinessException(422, "该业务域尚未迁移到统一 OA 动作适配器")
                     .withCode("OA_DOMAIN_ADAPTER_REQUIRED");

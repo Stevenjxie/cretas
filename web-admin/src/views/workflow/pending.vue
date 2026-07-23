@@ -29,7 +29,7 @@ const rows = ref<PendingApproval[]>([]);
 const total = ref(0);
 const page = ref(1);
 const size = ref(20);
-const ACTIONABLE_MODULE_CODES = new Set(['PURCHASE_ORDER', 'SALES_ORDER', 'INVENTORY_TRANSFER']);
+const ACTIONABLE_MODULE_CODES = new Set(['PURCHASE_ORDER', 'SALES_ORDER', 'INVENTORY_TRANSFER', 'INVENTORY_ADJUSTMENT']);
 const moduleCode = ref('');
 const focusedInstanceId = ref('');
 let mounted = false;
@@ -147,6 +147,7 @@ onMounted(async () => {
             <el-option label="采购订单" value="PURCHASE_ORDER" />
             <el-option label="销售订单" value="SALES_ORDER" />
             <el-option label="库存调拨" value="INVENTORY_TRANSFER" />
+            <el-option label="库存盘点" value="INVENTORY_ADJUSTMENT" />
           </el-select>
         </div>
       </template>

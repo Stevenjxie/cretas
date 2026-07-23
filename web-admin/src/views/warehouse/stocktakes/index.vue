@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, reactive, computed, nextTick, onMounted, watch } from 'vue';
-import { useRoute } from 'vue-router';
+import { useRoute, useRouter } from 'vue-router';
 import { useAuthStore } from '@/store/modules/auth';
 import { usePermissionStore } from '@/store/modules/permission';
 import request, { get, post, put } from '@/api/request';
@@ -36,6 +36,7 @@ function wBadgeTextColor(type: unknown): string | undefined {
 // Auth / permissions
 // ────────────────────────────────────────────────────────────────────────────
 const route = useRoute();
+const router = useRouter();
 const authStore = useAuthStore();
 const permissionStore = usePermissionStore();
 const factoryId = computed(() => authStore.factoryId);
@@ -847,8 +848,12 @@ async function submitForApproval(row: TableRow) {
   try {
     const res = await post(`/${factoryId.value}/stocktakes/${row.id}/submit`, {});
     if (res.success) {
-      ElMessage({ message: '已提交审批', type: 'success', duration: 3000 });
-      loadData();
+      ElMessage({ message: '已提交 OA 审批', type: 'success', duration: 3000 });
+      const workflowInstanceId = String(res.data?.workflowInstanceId || '');
+      await loadData();
+      if (workflowInstanceId) {
+        await router.push({ path: '/workflow/pending', query: { moduleCode: 'INVENTORY_ADJUSTMENT', instanceId: workflowInstanceId } });
+      }
     } else {
       ElMessage({ message: res.message || '提交失败', type: 'error', duration: 0, showClose: true });
     }
@@ -859,6 +864,14 @@ async function submitForApproval(row: TableRow) {
   } finally {
     submitLoading.value = false;
   }
+}
+
+function goToApprovalCenter(row: TableRow) {
+  const instanceId = String(row.workflowInstanceId || '');
+  void router.push({
+    path: '/workflow/pending',
+    query: { moduleCode: 'INVENTORY_ADJUSTMENT', ...(instanceId ? { instanceId } : {}) },
+  });
 }
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -1109,21 +1122,12 @@ onMounted(async () => {
               :loading="submitLoading"
               @click="submitForApproval(row)"
             >提交审批</el-button>
-            <!-- 审批: PENDING_APPROVAL -->
             <el-button
-              v-if="canWrite && row.status === 'PENDING_APPROVAL'"
+              v-if="row.status === 'PENDING_APPROVAL'"
               size="small"
-              type="success"
-              :icon="Check"
-              @click="openApproveDialog(row)"
-            >审批</el-button>
-            <el-button
-              v-if="canWrite && row.status === 'PENDING_APPROVAL'"
-              size="small"
-              type="danger"
-              :icon="Close"
-              @click="openRejectDialog(row)"
-            >驳回</el-button>
+              type="primary"
+              @click="goToApprovalCenter(row)"
+            >前往 OA 审批中心</el-button>
             <!-- 应用差异: APPROVED -->
             <el-button
               v-if="canWrite && row.status === 'APPROVED'"
@@ -1544,6 +1548,11 @@ onMounted(async () => {
               </template>
             </el-table-column>
           </el-table>
+          <el-empty
+            v-if="!diffLoading && diffPreview.length === 0"
+            description="无实际差异，无库存影响"
+            :image-size="56"
+          />
         </div>
       </template>
       <template #footer>
