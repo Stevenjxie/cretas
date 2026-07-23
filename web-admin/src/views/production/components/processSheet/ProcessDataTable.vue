@@ -2672,7 +2672,7 @@ defineExpose({ hasUnsavedRows, refreshSharedInventories });
           </div>
           <div v-if="isPortOutputMode" class="sp-card-field sp-card-field-full sp-port-section-note">
             <strong>系统自动处理</strong>
-            <span>每条投入只扣减一次；固定 BOM 中的包材与工序调料会在正式报工时按生产库批次自动分配并计入成本。</span>
+            <span>每条投入在本报工组中只扣减一次；固定 BOM 中的包材与工序调料会在正式报工时按生产库批次自动分配并计入成本。</span>
           </div>
 
           <!-- 修油: raw-material batch dropdown + out-weight -->

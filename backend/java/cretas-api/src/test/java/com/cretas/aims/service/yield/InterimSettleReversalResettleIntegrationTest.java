@@ -104,6 +104,15 @@ class InterimSettleReversalResettleIntegrationTest {
         wks.setIsActive(true);
         factoryWarehouseRepo.saveAndFlush(wks);
 
+        FactoryWarehouse finished = new FactoryWarehouse();
+        finished.setId("WH-" + UUID.randomUUID().toString().substring(0, 8));
+        finished.setFactoryId(FACTORY_ID);
+        finished.setCode("WH-FG");
+        finished.setName("IT finished goods warehouse");
+        finished.setType(FactoryWarehouse.WarehouseType.FINISHED);
+        finished.setIsActive(true);
+        factoryWarehouseRepo.saveAndFlush(finished);
+
         ProductType pt = new ProductType();
         pt.setId(PRODUCT_TYPE_ID);
         pt.setFactoryId(FACTORY_ID);
@@ -123,6 +132,7 @@ class InterimSettleReversalResettleIntegrationTest {
         plan.setPlanNumber(planNumber);
         plan.setProductTypeId(PRODUCT_TYPE_ID);
         plan.setPlannedQuantity(new BigDecimal("1000"));
+        plan.setPlannedUnit("盒");
         plan.setStatus(ProductionPlanStatus.PENDING);
         plan.setSourceType(PlanSourceType.SAFETY_STOCK);
         plan.setCreatedBy(operatorId);

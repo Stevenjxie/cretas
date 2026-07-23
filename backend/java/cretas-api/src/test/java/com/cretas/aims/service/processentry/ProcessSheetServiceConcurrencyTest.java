@@ -2,14 +2,19 @@ package com.cretas.aims.service.processentry;
 
 import com.cretas.aims.dto.processentry.ProcessSheetRowRequest;
 import com.cretas.aims.entity.MaterialBatch;
+import com.cretas.aims.entity.ProductType;
 import com.cretas.aims.entity.ProductionPlan;
 import com.cretas.aims.entity.User;
+import com.cretas.aims.entity.factory.FactoryWarehouse;
+import com.cretas.aims.entity.factory.FactoryWarehouse.WarehouseType;
 import com.cretas.aims.entity.enums.MaterialBatchStatus;
 import com.cretas.aims.entity.enums.ProductionPlanStatus;
 import com.cretas.aims.repository.MaterialBatchRepository;
+import com.cretas.aims.repository.ProductTypeRepository;
 import com.cretas.aims.repository.ProductionBatchRepository;
 import com.cretas.aims.repository.ProductionPlanRepository;
 import com.cretas.aims.repository.UserRepository;
+import com.cretas.aims.repository.factory.FactoryWarehouseRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -93,6 +98,12 @@ class ProcessSheetServiceConcurrencyTest {
     private ProductionPlanRepository planRepo;
 
     @Autowired
+    private ProductTypeRepository productTypeRepo;
+
+    @Autowired
+    private FactoryWarehouseRepository warehouseRepo;
+
+    @Autowired
     private UserRepository userRepo;
 
     @Autowired
@@ -142,12 +153,34 @@ class ProcessSheetServiceConcurrencyTest {
             user = userRepo.saveAndFlush(user);
             operatorId = user.getId();
 
+            ProductType productType = new ProductType();
+            productType.setId("CONC-PT-" + uid);
+            productType.setFactoryId(factoryId);
+            productType.setCode("CONC-PT-" + uid);
+            productType.setName("Concurrency Test Product");
+            productType.setCategory("SEMI_FINISHED");
+            productType.setProductCategory("SEMI_FINISHED");
+            productType.setUnit("kg");
+            productType.setIsActive(true);
+            productType.setCreatedBy(operatorId);
+            productTypeRepo.saveAndFlush(productType);
+
+            FactoryWarehouse warehouse = new FactoryWarehouse();
+            warehouse.setId("WH-CONC-" + uid);
+            warehouse.setFactoryId(factoryId);
+            warehouse.setCode("WH-LOG");
+            warehouse.setName("Concurrency Raw Warehouse");
+            warehouse.setType(WarehouseType.RAW);
+            warehouse.setIsActive(true);
+            warehouseRepo.saveAndFlush(warehouse);
+
             ProductionPlan plan = new ProductionPlan();
             plan.setId(planId);
             plan.setFactoryId(factoryId);
             plan.setPlanNumber("CONC-PN-" + uid);
             plan.setProductTypeId("CONC-PT-" + uid);
             plan.setPlannedQuantity(new BigDecimal("200"));
+            plan.setPlannedUnit("kg");
             plan.setStatus(ProductionPlanStatus.PENDING);
             plan.setCreatedBy(operatorId);
             plan.setIsLocked(false);
@@ -165,7 +198,7 @@ class ProcessSheetServiceConcurrencyTest {
             raw.setFactoryId(factoryId);
             raw.setBatchNumber("CONC-RAW-" + uid);
             raw.setMaterialTypeId("CONC-MT-" + uid);
-            raw.setWarehouseId("WH-CONC-001");
+            raw.setWarehouseId("WH-CONC-" + uid);
             raw.setReceiptQuantity(new BigDecimal("500.00"));
             raw.setQuantityUnit("kg");
             raw.setUsedQuantity(BigDecimal.ZERO);
@@ -205,8 +238,8 @@ class ProcessSheetServiceConcurrencyTest {
         final String insertSql =
                 "INSERT INTO process_sheet_rows " +
                 "(factory_id, plan_id, process_code, client_row_id, row_payload, row_status, " +
-                " created_at, updated_at) " +
-                "VALUES (?, ?, ?, ?, ?, 'SAVED', NOW(), NOW())";
+                " submission_status, created_at, updated_at) " +
+                "VALUES (?, ?, ?, ?, ?, 'SAVED', 'LEGACY', NOW(), NOW())";
 
         // First insert inside a committed transaction — must succeed
         txTemplate.execute(status ->
@@ -312,8 +345,8 @@ class ProcessSheetServiceConcurrencyTest {
         final String insertSql =
                 "INSERT INTO process_sheet_rows " +
                 "(factory_id, plan_id, process_code, client_row_id, row_payload, row_status, " +
-                " created_at, updated_at) " +
-                "VALUES (?, ?, ?, ?, ?, 'SAVED', NOW(), NOW())";
+                " submission_status, created_at, updated_at) " +
+                "VALUES (?, ?, ?, ?, ?, 'SAVED', 'LEGACY', NOW(), NOW())";
         final String payload = "{\"clientRowId\":\"" + clientRowId + "\"}";
 
         final CountDownLatch startGate = new CountDownLatch(1);

@@ -98,6 +98,7 @@ class ProductionProgressDashboardServiceTest {
         p.setPlanNumber("PLAN-B2-" + id);
         p.setProductTypeId("PT-B2");
         p.setPlannedQuantity(plannedQty);
+        p.setPlannedUnit("kg");
         p.setStatus(status);
         p.setBatchDate(batchDate);
         p.setCreatedBy(UID);

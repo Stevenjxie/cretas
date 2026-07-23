@@ -5,6 +5,7 @@ import com.cretas.aims.dto.processentry.ProcessSheetRowResult;
 import com.cretas.aims.entity.factory.FactoryWarehouse;
 import com.cretas.aims.entity.MaterialBatch;
 import com.cretas.aims.entity.MaterialConsumption;
+import com.cretas.aims.entity.ProductType;
 import com.cretas.aims.entity.ProductionPlan;
 import com.cretas.aims.entity.User;
 import com.cretas.aims.entity.enums.MaterialBatchStatus;
@@ -13,6 +14,7 @@ import com.cretas.aims.entity.enums.ProductionPlanStatus;
 import com.cretas.aims.repository.factory.FactoryWarehouseRepository;
 import com.cretas.aims.repository.MaterialBatchRepository;
 import com.cretas.aims.repository.MaterialConsumptionRepository;
+import com.cretas.aims.repository.ProductTypeRepository;
 import com.cretas.aims.repository.ProductionPlanRepository;
 import com.cretas.aims.repository.UserRepository;
 import com.cretas.aims.service.processentry.ProcessSheetService;
@@ -80,6 +82,9 @@ class InterimSettleRawDeductionIntegrationTest {
     private ProductionPlanRepository planRepo;
 
     @Autowired
+    private ProductTypeRepository productTypeRepo;
+
+    @Autowired
     private UserRepository userRepo;
 
     @Autowired
@@ -108,6 +113,18 @@ class InterimSettleRawDeductionIntegrationTest {
         user = userRepo.saveAndFlush(user);
         operatorId = user.getId();
 
+        ProductType productType = new ProductType();
+        productType.setId(PRODUCT_TYPE_ID);
+        productType.setFactoryId(FACTORY_ID);
+        productType.setCode("IT-SETTLE-PTYPE");
+        productType.setName("IT Settle WIP");
+        productType.setCategory("SEMI_FINISHED");
+        productType.setProductCategory("SEMI_FINISHED");
+        productType.setUnit("kg");
+        productType.setIsActive(true);
+        productType.setCreatedBy(operatorId);
+        productTypeRepo.saveAndFlush(productType);
+
         // 原料仓 (WH-LOG): ProcessSheetService.ensureRawMaterialWarehouse 要求原料批次落原料/物流仓。
         rawWarehouseId = "WH-" + UUID.randomUUID().toString().substring(0, 8);
         FactoryWarehouse wh = new FactoryWarehouse();
@@ -127,6 +144,7 @@ class InterimSettleRawDeductionIntegrationTest {
         plan.setPlanNumber("IT-SPP-" + System.currentTimeMillis() % 100000);
         plan.setProductTypeId(PRODUCT_TYPE_ID);
         plan.setPlannedQuantity(new BigDecimal("1000"));
+        plan.setPlannedUnit("kg");
         plan.setStatus(ProductionPlanStatus.PENDING);
         plan.setSourceType(PlanSourceType.SAFETY_STOCK);
         plan.setCreatedBy(operatorId);

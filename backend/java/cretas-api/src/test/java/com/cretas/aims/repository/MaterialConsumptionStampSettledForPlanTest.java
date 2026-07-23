@@ -177,6 +177,7 @@ class MaterialConsumptionStampSettledForPlanTest {
         plan.setPlanNumber("IT-STAMP-" + UUID.randomUUID().toString().substring(0, 8));
         plan.setProductTypeId("IT-STAMP-PT");
         plan.setPlannedQuantity(new BigDecimal("1000"));
+        plan.setPlannedUnit("kg");
         plan.setStatus(ProductionPlanStatus.PENDING);
         plan.setSourceType(sourceType);
         plan.setCreatedBy(1L);
