@@ -508,6 +508,14 @@ def match_restaurant_ops(query: str) -> Optional[str]:
     # pattern so "上个月和上上个月营收相比" keeps both requested periods.
     if _is_explicit_sales_period_comparison(q):
         return "RESTAURANT_OPS_SALES_SUMMARY"
+    # 「上个月的数据和上上个月的数据对比」— 只有泛指"数据/情况"没有营收词,
+    # 曾落趋势路径且残月被当完整月比较 (Sheet 行16 复测, R24b)。
+    if (
+        _has_explicit_sales_period_pair(q)
+        and any(tok in q for tok in _COMPARISON_DIRECTION_TOKENS)
+        and any(tok in q for tok in ("数据", "情况", "表现", "生意"))
+    ):
+        return "RESTAURANT_OPS_SALES_SUMMARY"
     # Rolling-window revenue asks ("过去一个月营业额") are windowed sales
     # summaries, not trend reports. T1 previously missed them entirely, so
     # T2/T3 classification drifted and Java's all-history trend tool answered
@@ -3623,6 +3631,14 @@ async def resolve_trend_analysis(
     # A partial latest month cannot fairly compete with completed months for
     # the peak/trough or the overall first-to-last direction.
     comparable_monthly = monthly[:-1] if latest_month_partial and len(monthly) > 1 else monthly
+    # R24b: 窗口起点截断的首月同样是残月 (R24 加窗后暴露: 5/25 起的窗把
+    # 5 月剩 7 天标成"营收最低月") — 从完整月比较中剔除。
+    if (
+        window[0] is not None and window[0].day != 1
+        and len(comparable_monthly) > 1
+        and str(comparable_monthly[0].get("month") or "") == window[0].strftime("%Y-%m")
+    ):
+        comparable_monthly = comparable_monthly[1:]
     peak = max(comparable_monthly, key=lambda m: m["revenue"])
     trough = min(comparable_monthly, key=lambda m: m["revenue"])
     total_rev = sum(m["revenue"] for m in monthly)
