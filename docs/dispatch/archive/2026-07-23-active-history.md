@@ -141,3 +141,12 @@
 - **验证**：目标 Vitest `8 files / 45 tests`、`vue-tsc --noEmit`、`git diff --check` 通过；最终 Web release manifest 构建随本批合并门禁执行。
 - **部署**：`NOT_DEPLOYED`。
 - **安全**：生产业务写入 0；未触碰 F006/LIUSHANMEN 业务数据。
+
+## F006-R5-REMAINING-CONSOLIDATION-20260723 — `merged`
+
+- **Base SHA**：`512c0939855ebe8647f5aedc32f8e92eb467e5b5`
+- **Owner**：`/root`
+- **代码结论**：半成品批次双身份、生产计划/报工与打印单据、同厂调拨生命周期、调拨/盘点统一 OA 已由 PR #1692 合入；Workflow 发布门禁、画布 AI、核心列表网格和销售/生产入口随后合入。未从旧 worktree 重放或重复合并实现。
+- **生产真值**：Backend 已运行 `origin/main` 对应 backend tree；Web 当前 `origin/main:web-admin` tree 为 `921fbf0db674bbf43c8ff0ab8bf5911f6f84e53c`，与线上制品一致。F006 当前启用 Workflow 为 id `113`、v2、revision `31`，两道工序中文名称、`kg → kg → box` 单位及 `NOT_REQUIRED` 辅料策略只读回读正确。
+- **安全**：本次收口未重放正式报工、未修改 Workflow/BOM/库存/调拨/盘点；F006 业务 mutation `0`，其他租户业务 mutation `0`，未触碰 LIUSHANMEN。
+- **部署**：使用 exact-main 可信 manifest 执行发布/无变化验证；最终 active slot、健康与 Web 四方哈希见部署回执。

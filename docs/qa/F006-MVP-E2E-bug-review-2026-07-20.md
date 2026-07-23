@@ -811,8 +811,8 @@
 - **修改文件**：`web-admin/src/views/system/products/index.vue`、共享 `UnitSelect`、`systemUnits.ts`、`unitPricing.ts`、`types/api.ts` 及目标测试；后端、Entity、Repository 和数据库均无需修改。
 - **测试**：共享单位与 SKU 表单目标 Vitest `4 files / 20 tests` PASS；`vue-tsc -b --pretty false` 退出 0；唯一 Vite 生产构建完成（4457 modules），构建产物中唯一 SKU chunk `index-B5LhqOS5.js` 同时读回“创建时间 / 基础规格 / 选择销售单位”，SHA-256 `D97C978CBBEC3C245EE519A9968279A905C26F2B77F831A545774A58D68C6F2E`。
 - **Commit/PR/main 状态**：修复已完成并通过目标验证，随本批分支合入 main；exact commit/main 以最终交付回执为准。
-- **部署状态**：`NOT_DEPLOYED`。
-- **回归状态**：`CODE_FIXED_TARGET_TESTS_AND_BUILD_PASSED_AWAITING_MERGE`；修复期间生产业务 mutation=0，未创建或修改 SKU，未触碰 LIUSHANMEN。
+- **部署状态**：`PROD_DEPLOYED`；线上 Web tree 与当前 `origin/main:web-admin` tree 一致。
+- **回归状态**：`CODE_FIXED_TARGET_TESTS_BUILD_AND_RELEASE_PASSED`；修复期间生产业务 mutation=0，未创建或修改 SKU，未触碰 LIUSHANMEN。
 
 ### BUG-F006-R4-BOM-PROCESS-AUXILIARY-PRICE-BASIS-001 — 工序辅料价格回退与投入基准未解析
 
@@ -827,8 +827,8 @@
 - **修复**：建立单一价格选择器：正数移动平均价写入 `priceSource1` 并优先；否则正数含税采购参考价写入 `priceSource2`，仅作为草稿成本回退且 UI 标注“采购参考价”，不伪装或回写移动平均价；两者均缺失/零/负数时前后端 fail-closed。“重新读取价格”重新请求当前 F006 active 物料 DTO，同时刷新两种价格并保留表单。统一消费后端 `standardBasis*` 契约，并从固定 Workflow 修订的 OUTPUT port、`materialNodeId` 和出边目标节点解析 canonical unit/material kind；kg/公斤统一为 `1 kg`，多产出单位冲突或缺失继续阻止保存。投入区域改为“生产基准 → 需要投入”比例卡片，并显示最终 `g/kg` 保存口径。
 - **修改文件**：Java `BomSeasoningWorkspaceResponse`、`BomSeasoningWorkspaceServiceImpl` 与目标测试；Web `api/bom.ts`、`SeasoningBindingDialog.vue`、`ProcessSeasoningCard.vue`、`BomAuxiliaryWorkspace.vue`、`seasoningModel.ts` 及组件测试；不涉及 Entity、Repository、迁移或历史数据桥接。
 - **测试**：Java `WorkProcessServiceImplTest,BomSeasoningWorkspaceServiceTest` 共 `49 tests` PASS；Web BOM/Workflow/期初提示联合目标测试 `8 files / 44 tests` PASS；`vue-tsc -b --pretty false` PASS。覆盖移动平均价优先、采购参考价回退、权威刷新后解除阻塞、null/0/负数门禁、kg/公斤解析、沿产出半成品节点解析、单位缺失/冲突 fail-closed、价格来源回读与 `12 g/kg` payload。
-- **Commit/PR/main 状态**：实现 commits `add8f20f1`、`455fed9c7`；PR、merge commit 与 exact main 在发布回执中回填。
-- **部署状态**：`DEPLOY_AUTHORIZED_AWAITING_RELEASE`。
+- **Commit/PR/main 状态**：实现 commits `add8f20f1`、`455fed9c7` 已进入 main；当前生产 Backend/Web 制品树均包含该实现。
+- **部署状态**：`PROD_DEPLOYED`。
 - **线上验收计划**：仅登录并证明 `factoryUser.factoryId=F006` 后，对 `BOM-20260723-001` 选择 `MHV7YA000001`，确认价格来源与 `1 kg` 基准，保存一次 `12 g/kg / 首锅100% / 后续50% / 计入成本` 并刷新回读；同一工序/物料不得重复绑定，其他租户业务 mutation=0。
 
 ### BUG-F006-R4-WORKFLOW-REPUBLISH-ACTION-001 — 已启用版本仍可重复发布
@@ -837,7 +837,7 @@
 - **根因**：按钮只按页面保存状态控制，没有把“当前 definition 状态、启用版本号、未发布变更”合并为同一动作门禁；确认弹窗也缺少重入保护。
 - **修复**：仅当当前显示的 `PUBLISHED` definition 与 active version 相同且页面无未保存变更时，禁用发布动作并提示“Workflow vN 已发布并启用，当前没有待发布变更”；`已启用 v1 + 草稿 v2` 仍允许发布 v2。发布确认中加入 pending 防双击，并在方法边界重复校验，不能绕过 UI 直接触发。
 - **测试**：`ProductProcessWorkflowEditor.activation.spec.ts` 覆盖当前版本已启用、已启用旧版但存在新草稿、发布确认重入、状态刷新，共 `6 tests` PASS；已计入本批 Web 联合 `8 files / 44 tests`。
-- **部署状态**：`DEPLOY_AUTHORIZED_AWAITING_RELEASE`。
+- **部署状态**：`PROD_DEPLOYED`。
 
 ### BUG-F006-R4-OPENING-INVENTORY-PREVIEW-HINT-001 — 未预览时确认导入缺少禁用原因
 
@@ -845,7 +845,7 @@
 - **根因**：按钮 disabled 条件没有对应的人类可读原因；仓库、期间、建账模式、录入模式或逐条数据变化后，旧预览状态也没有统一失效。
 - **修复**：用可聚焦 tooltip 容器包裹禁用按钮；未预览时提示“请先预览比对，确认导入前需核对本次数据”，处理中和无可导入数据分别说明原因。所有影响预览的输入变化都会清空旧 `bulkPreview`，避免用户修改数据后沿用过期对比结果。
 - **测试**：`openingInventoryPreviewHint.source.spec.ts` 覆盖 hover/focus 提示、完成预览后解除禁用、输入变化使预览失效，共 `3 tests` PASS；不执行任何库存 mutation。
-- **部署状态**：`DEPLOY_AUTHORIZED_AWAITING_RELEASE`。
+- **部署状态**：`PROD_DEPLOYED`。
 
 ### BUG-F006-R4-TRANSFER-OA-APPROVAL-001 — 调拨审批未接入统一 OA
 
@@ -858,14 +858,15 @@
   - 删除调拨 REST 详情页与 AI 工具的直接审批/驳回入口；列表和详情增加“提交 OA 审批”，详情仅显示审批进度并跳转个人 OA。OA“待我审批/我发起的”支持库存调拨筛选和业务详情回跳。
 - **保留边界**：本批只收口“提交 → OA 审批 → 领域状态回写”。审批后的仓储执行状态机未重构；同厂仓库调拨是否简化发运/签收属于后续独立业务决策。本批生产调拨、库存及其他租户业务 mutation 均为 `0`。
 - **测试**：Java `TransferOaApprovalIntegrationTest,WorkflowInstanceControllerTest` 共 `13 tests` PASS；Web `transferOaApproval.source.spec.ts,oaProcurementContract.source.spec.ts` 共 `5 tests` PASS。覆盖首次提交、缺流程回滚、重复提交幂等、自批拒绝、OA 回写、统一 action adapter、前端无本地审批入口及 OA 导航。
+- **部署状态**：`PROD_DEPLOYED`。
 
 ### BUG-F006-R4-WORKFLOW-CHINESE-NAME-CORRUPTION-001 — 生产计划固定路线工序名称显示问号
 
 - **发现阶段/时间/页面/步骤**：F006 新建存货生产计划，2026-07-23；选择 `CPF0060018 / SOP-20260723-01-黄油鸡-成品800g` 后，固定路线卡把两道工序显示为 `SOP-20260723-01-???-????`。
-- **根因证据**：生产只读 API 证明 WorkProcess 主数据仍保存正确中文名称，但 Workflow 112 的已发布图快照及 BOM 固定 revision 25 中 `processName` 已持久化为问号；产品名称和其他中文字段正常，排除浏览器字体或整包 JSON 解码问题。结构 ID、边、单位、`auxiliaryPolicy`、BOM 及 readiness 均完整。
-- **修复策略**：代码侧保留以候选 Workflow `processSteps` 为唯一路线展示真值，并增加中文名称回归；生产数据必须通过正式 Workflow 版本 API、显式 UTF-8 请求建立正确的新修订，保留节点/边/单位/策略，再发布、启用并让 BOM 固定同一修订。禁止 SQL 原地篡改不可变快照。
-- **生产边界**：不创建生产计划；仅允许修复上述 F006 Workflow/BOM 修订关联并回读 readiness，其他租户业务写入为 0。
-- **部署状态**：`NOT_DEPLOYED`；exact commit/main 与生产写入 ID 待发布后回填。
+- **根因证据**：生产只读 API 证明 WorkProcess 主数据仍保存正确中文名称，但旧 Workflow 112 的已发布图快照及 BOM 固定 revision 25 中 `processName` 已持久化为问号；产品名称和其他中文字段正常，排除浏览器字体或整包 JSON 解码问题。旧快照保持不可变并退出启用状态。
+- **最终状态**：正式 Workflow 版本 API 已形成并启用 Workflow id `113` / v2 / revision `31`；Resolver 与 Workflow 查询均回读两道正确中文工序 `SOP-20260723-01-黄油鸡-原料处理`、`SOP-20260723-01-黄油鸡-定量包装`，单位为 `kg → kg → box`，两道工序 `auxiliaryPolicy=NOT_REQUIRED`。旧 v1 历史保持只读，未用 SQL 篡改快照。
+- **生产边界**：未创建生产计划，当前收口仅执行 query-only 回读；本次 F006 与其他租户业务写入均为 0。
+- **部署状态**：`PROD_DEPLOYED_AND_DATA_VERIFIED`。
 
 ### UX-F006-R4-SAFETY-STOCK-PLANNED-QUANTITY-OPTIONAL-001 — 存货生产计划成品数量改为选填
 
@@ -873,7 +874,7 @@
 - **现状与根因**：Java 服务已允许 `SAFETY_STOCK` 不传 `plannedQuantity`，并以数据库兼容值承接；Web 弹窗仍把字段标为必填、默认 1，加载 Workflow 后还会再次自动写入 1，导致“选填”契约未真正到达用户。
 - **修复**：前端只对 `SAFETY_STOCK` 显示“计划成品数量（选填）”，允许清空且 payload 不发送空值；不再加载 Workflow 时自动填 1。页面明确说明留空时由实际报工/生产小结确定产量。其他来源仍要求正数。
 - **打印契约**：计划量为空或非正时单据显示“按实际报工确定”，不得显示伪造的 `0` 或 `1`。
-- **部署状态**：`NOT_DEPLOYED`。
+- **部署状态**：`PROD_DEPLOYED`。
 
 ### BUG-F006-R4-PRODUCTION-DOCUMENT-PINNED-FALLBACK-001 — 生产工单/汇总领料单/配料单空白
 
@@ -885,7 +886,7 @@
   - 从计划固定 BOM 输出原料/辅料/包材关系：无标准原料投料量时显示“计划投料待填写”，不伪造 0；确定性包材按计划量折算；工序辅料显示 `g/kg` 与锅序比例；
   - 汇总领料单明确标注“参考，不代表已拣料/已发料”；配料单缺少单锅产能时保留工序比例和总需求参考，不再整份拒绝生成。
 - **测试**：Java payload 目标测试覆盖两道中文工序、无固定数量原料、`0.125 箱/盒 × 10 盒 = 1.25 箱` 与固定数据来源标识；Python PDF renderer 目标测试覆盖三类单据及单文件生产单据包。发布前补充最终命令与结果。
-- **部署状态**：`NOT_DEPLOYED`。
+- **部署状态**：`PROD_DEPLOYED`。
 
 ### BUG-F006-R4-WIP-PRODUCT-IDENTITY-001 — 正式报工无法生成半成品批次
 
@@ -893,20 +894,20 @@
 - **修复**：`material_batches` 增加可空 `product_type_id` 并与原料身份互斥；原料批次继续使用 `material_type_id`，半成品批次使用同厂 `product_type_id`。WIP 输出在写变更日志前 `saveAndFlush`，首错直接触发事务回滚；下游消费统一按原料或产品 identity 匹配。
 - **测试**：覆盖四种原料各扣 2kg、生成 8kg WIP、生产仓/单位/来源一致、下一工序消费，以及失败时无部分扣料、无残留批次、无残缺日志；目标 Service 28 项和真实 JPA Context 门禁通过。
 - **数据边界**：未重放现场报工、未重复调拨或扣减库存；生产业务写入为 0。
-- **部署状态**：`DEPLOY_AUTHORIZED_AWAITING_RELEASE`。
+- **部署状态**：`PROD_DEPLOYED`。
 
 ### BUG-F006-R4-PRODUCTION-PLAN-REPORTING-UI-001 — 成品选择与报工布局
 
 - **修复**：新建生产计划候选严格限定 canonical 成品；半成品不再混入。报工页按“投入 → 执行 → 产出 → 副产/分摊”组织，数量与单位合并成一组，避免单位框掉到下一行并提升窄屏可读性。
 - **测试**：4 个 Web 目标文件、15 项通过，覆盖成品过滤、canonical 单位、主要布局语义与数量单位成组。
-- **部署状态**：`DEPLOY_AUTHORIZED_AWAITING_RELEASE`。
+- **部署状态**：`PROD_DEPLOYED`。
 
 ### BUG-F006-R4-STOCKTAKE-OA-001 — 盘点审批收口统一 OA
 
 - **修复**：盘点提交在同一事务内创建 `INVENTORY_ADJUSTMENT` OA；缺流程时 fail-closed，历史待审批单无实例时不静默桥接。盘点业务页不再直接审批/驳回，统一在 OA 处理；批准后仍保留用户确认的 `APPROVED → APPLIED` 应用步骤。
 - **审批证据**：差异预览只显示 `difference != 0` 的批次，零差异明确“库存影响为 0”，不再把旧批次数量误当本次盘盈盘亏。
 - **测试**：2 类 Java 目标测试及 6 项 Web 测试通过。
-- **部署状态**：`DEPLOY_AUTHORIZED_AWAITING_RELEASE`。
+- **部署状态**：`PROD_DEPLOYED`。
 
 ### BUG-F006-R4-TRANSFER-LIFECYCLE-001 — 同厂调拨与库存生产滚动调拨
 
@@ -914,14 +915,14 @@
 - **库存生产**：同一生产计划复用唯一 `DRAFT/REQUESTED/APPROVED` 调拨；未填写计划产量时按 1 个成品 BOM 基准初始化滚动草稿，草稿允许调整数量后提交 OA；计划正式完成时关闭未完成调拨并取消运行中 OA，已确认记录保留审计。
 - **审批边界**：生产完成监听器仅创建同厂反向调拨草稿，不再使用系统账号自动申请、批准和确认；所有实际库存移动仍需统一 OA 批准后由授权岗位确认。
 - **测试**：6 类 Java 目标测试共 23 项通过，包含同厂状态机、唯一滚动调拨、结单关闭、反向链路及真实 Repository JPA Context。
-- **部署状态**：`DEPLOY_AUTHORIZED_AWAITING_RELEASE`。
+- **部署状态**：`PROD_DEPLOYED`。
 
 ### BUG-F006-R4-WIP-STOCKTAKE-DUAL-IDENTITY-001 — 半成品盘点身份
 
 - **修复**：盘点快照和应用校验使用批次的权威库存身份：原料走 `materialTypeId`，半成品/成品走 `productTypeId`；详情与差异预览按工厂隔离返回真实产品名称、编码及 canonical 批次单位。
 - **兼容**：未迁移历史盘点或库存数据；原料盘点契约保持不变。
 - **测试**：覆盖 8kg WIP 快照、详情回读、零差异应用和旧 OA 集成构造路径。
-- **部署状态**：`DEPLOY_AUTHORIZED_AWAITING_RELEASE`。
+- **部署状态**：`PROD_DEPLOYED`。
 
 ### BUG-F006-R3-TABLE-GRID-COLUMN-UX-001 — 核心业务列表网格与列配置
 
@@ -930,7 +931,7 @@
 - **选择控件**：采购列表移除没有批量消费者的行首标记圆点；销售和生产保留真实批量能力，但复选框仅在用户主动进入“批量操作/批量打印”模式后显示，退出时清空选择。
 - **列配置**：订单号/计划号、业务对象、状态和操作保持固定；其余列按页面最多选择 4 或 6 项，选择写入浏览器本地偏好。价格列仍受现有权限控制，权限变化时自动移除不可见列。
 - **验证**：共享列契约目标测试 7 项通过，`vue-tsc` 与 Web 生产构建作为合并门禁执行；生产业务写入为 0。
-- **部署状态**：`NOT_DEPLOYED`。
+- **部署状态**：`PROD_DEPLOYED`。
 
 ### BUG-F006-R3-SALES-PRODUCTION-FLOW-UX-001 — 销售建单与生产执行入口收敛
 
@@ -941,4 +942,4 @@
 - **逐工序报工**：默认使用表格视图，并按“投入 → 本工序 → 产出”建立视觉层级；数量与单位成组，卡片模式保留为用户主动选择。
 - **列表契约**：销售、采购、生产列表统一固定表格网格和操作列边界；真实批量模式外不显示选择框。订单号、业务对象、日期、金额等使用数据类型排序，加工方式、物料供应、开票状态、业务状态等使用表头筛选；列选择器限制最少/最多可见列并保留权限门禁。
 - **验证**：本批目标 Vitest `8 files / 45 tests` 通过，`vue-tsc --noEmit` 通过；最终 Web release manifest 构建在 exact-main 合并门禁执行。
-- **边界**：生产业务写入 `0`，未触碰 LIUSHANMEN，`NOT_DEPLOYED`。
+- **边界**：生产业务写入 `0`，未触碰 LIUSHANMEN；`PROD_DEPLOYED`。
