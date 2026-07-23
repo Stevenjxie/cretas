@@ -1835,3 +1835,15 @@ def test_r22b_named_window_business_t1():
     assert _r.match_restaurant_ops("这个月生意怎么样") == "RESTAURANT_OPS_SALES_SUMMARY"
     assert _r.match_restaurant_ops("本月营业额多少") == "RESTAURANT_OPS_SALES_SUMMARY"
     assert _r.match_restaurant_ops("上个月生意咋样") == "RESTAURANT_OPS_SALES_SUMMARY"
+
+
+def test_r23_absolute_month_parsing():
+    from datetime import date as _d
+    rng, label = _r._resolve_sales_date_range("3月份的营收", today=_d(2026, 7, 23))
+    assert rng == (_d(2026, 3, 1), _d(2026, 3, 31)) and label == "2026年3月"
+    rng, label = _r._resolve_sales_date_range("去年12月的营收", today=_d(2026, 7, 23))
+    assert rng == (_d(2025, 12, 1), _d(2025, 12, 31))
+    rng, label = _r._resolve_sales_date_range("12月的营收", today=_d(2026, 7, 23))
+    assert rng == (_d(2025, 12, 1), _d(2025, 12, 31))  # 就近过去原则
+    rng, label = _r._resolve_sales_date_range("最近3个月的营收", today=_d(2026, 7, 23))
+    assert label == "最近3个月"  # 相对窗不被绝对月规则误伤
