@@ -48,7 +48,8 @@ from smartbi.gold.restaurant_intent_promotion import (  # noqa: E402
 )
 
 
-async def _list_candidates(min_confidence: float, min_count: int, limit: int) -> None:
+async def _list_candidates(min_confidence: float, min_count: int, limit: int,
+                           factory_id: str) -> None:
     from smartbi.config import get_pg_pool
 
     try:
@@ -68,6 +69,7 @@ async def _list_candidates(min_confidence: float, min_count: int, limit: int) ->
 
     candidates = await aggregate_candidates(
         pool, min_confidence=min_confidence, min_count=min_count, limit=limit,
+        factory_id=factory_id,
     )
     if not candidates:
         print("无候选 (要么 log 里没有满足 tier=llm+contract_pass+served 的查询, 要么全部已在 SAMPLE_QUERIES/账本中)")
@@ -141,11 +143,16 @@ if __name__ == "__main__":
     ap.add_argument("--min-confidence", type=float, default=0.75, dest="min_confidence")
     ap.add_argument("--min-count", type=int, default=1, dest="min_count")
     ap.add_argument("--limit", type=int, default=200)
+    ap.add_argument(
+        "--factory", default="DEMO_REST", dest="factory_id",
+        help="租户 (RLS GUC app.factory_id): fallback log 带 FORCE RLS, 不设则假性 0 行",
+    )
     args = ap.parse_args()
 
     if args.apply:
         _apply(args.apply)
     elif args.list:
-        asyncio.run(_list_candidates(args.min_confidence, args.min_count, args.limit))
+        asyncio.run(_list_candidates(
+            args.min_confidence, args.min_count, args.limit, args.factory_id))
     else:
         ap.print_help()
