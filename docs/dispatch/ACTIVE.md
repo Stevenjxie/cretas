@@ -5,6 +5,7 @@
 
 ## 在飞任务
 
+- `BUG-F006-R4-WIP-BATCH-PERSISTENCE-001` — `in-progress` — Owner: `/root` — Base SHA: `6fb05d26634f015b965213421280fe7e11fc9e9b` — 修复逐工序正式报工把半成品 ProductType ID 错写到 `material_batches.material_type_id` 的外键冲突，建立原料/半成品批次双身份契约并保证下一工序可消费；同时保证首个持久化错误原样返回、事务完整回滚且不写残缺变更日志。用户授权合入 `main`、部署生产，并仅对 F006 指定计划做一次受控续测，其他租户业务写入为 0。
 - `BUG-F006-R4-WORKPROCESS-WORKFLOW-BOM-UX-001` — `in-progress` — Owner: `/root` — Base SHA: `e79d3f7dc3319605d103fe27167ce54d72bbcbff` — 收口工序类别/检索、Workflow 画布与 AI Chat、BOM 包装/修订 UX，并修复工序辅料价格回退、权威刷新、固定 Workflow 产出基准解析和 Workflow 已启用后发布动作门禁；用户已授权合入 `main`、部署生产并仅对 F006 指定 BOM 做一次受控保存/回读，其他租户业务写入为 0。
 - `BUG-F006-R4-OPENING-INVENTORY-PREVIEW-HINT-001` — `in-progress` — Owner: `/root/opening_preview_hint` — Base SHA: `e79d3f7dc3319605d103fe27167ce54d72bbcbff` — 期初建账确认导入在预览比对前提供可访问 tooltip，解释禁用原因；仅 Web 组件与目标测试，随本批合入和部署，不执行期初库存业务写入。
 - `SEC-CREDENTIAL-ROTATION-20260719` — `blocked` — Owner: Codex coordinator — Base SHA: `1ba9a241a77144a80851051efbac584abf4db69d` — tracked tree、47/139 非受控副本、数据库/JWT/internal/BaoTa 轮换和生产验收已完成；仍需各供应商控制台吊销无法由当前 API 权限完成的旧长期凭证，详情见 [凭证轮换收尾记录](../security/credential-rotation-closeout-2026-07-20.md)。
@@ -39,6 +40,7 @@
 - `BUG-F006-R2-WORKFLOW-INPUT-MODE-DERIVATION` — `in-progress` — Owner: `/root` — Base SHA: `457b3b5e9` — BOM 未完整前 Workflow 投入方式只显示“待 BOM 配置”，不得猜测 AT_LEAST_ONE；BOM 完整后由必需主项、替代集合与可选项结构化派生每组 ALL_REQUIRED/EXACTLY_ONE/OPTIONAL 只读规则，发布与报工共用同一 pinned 快照，严格 `NOT_DEPLOYED`。
 
 ## Scope 锁地图
+- `BUG-F006-R4-WIP-BATCH-PERSISTENCE-001`：仅占用 Java `MaterialBatch`/批次 DTO 与 mapper、逐工序正式报工物化服务、对应 Flyway 迁移和目标/JPA Context 测试，以及本任务复盘/归档。验收：四个原料投入各 2kg 原子扣减、生成 8kg 且 `product_type_id` 指向半成品 SKU 的生产仓 WIP 批次、下一工序可选择并消费；失败时零部分扣料/零输出批次/零残缺 change log，原始错误不被 Hibernate 次生异常覆盖；部署后仅允许续测 F006 指定计划，其他租户业务写入为 0。
 - `BUG-F006-R4-WORKPROCESS-WORKFLOW-BOM-UX-001`：占用 Web Admin 工序管理/类别选择器、Workflow 编辑器画布/AI Chat/发布动作、BOM 辅料与包材配置/版本选择，以及 BOM 工序辅料 Workspace/DTO/Service 和目标测试。验收：类别快捷创建/查重、工序搜索筛选与创建时间；兼容列表移除且 AI Chat 固定底部；包材自然包装层用量；SKU 专属 Workflow 自动匹配；已启用且无未发布草稿时不允许再次发布；辅料移动平均价优先、含税采购参考价回退并标注来源、重新读取立即生效；固定修订从产出端口/半成品节点解析 `1 kg`，缺失或冲突 fail-closed。上线后仅允许 F006 `BOM-20260723-001` 指定调味料绑定一次受控写入和回读，其他租户业务写入为 0。
 - `BUG-F006-R4-OPENING-INVENTORY-PREVIEW-HINT-001`：Web Admin 期初建账/期初入库弹窗及目标测试。验收：未完成预览比对时确认导入保持禁用，hover/focus 显示“请先预览比对”原因；预览成功后解除禁用；不执行任何库存 mutation。
 - `SEC-CREDENTIAL-ROTATION-20260719`：`scripts/systemd/` 中遗留明文启动脚本、现有/新增 secret 扫描配置与测试、`.gitignore` / 凭证模板、`docs/dispatch/ACTIVE.md`、`docs/dispatch/archive/2026-07-19-active-history.md`；外部状态仅限已授权的 Cretas 47/139 服务器配置、PostgreSQL 角色密码、相关阿里云/API 凭证与必要服务重启。验收：tracked tree 与完整 Git 历史脱敏盘点、scanner gate、exact-main 发布门禁、Java/Python/网关健康、登录与 Restaurant Agent 只读 smoke、核心 ERP 零写入。
