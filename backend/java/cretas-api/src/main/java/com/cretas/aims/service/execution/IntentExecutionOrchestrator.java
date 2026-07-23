@@ -360,7 +360,8 @@ public class IntentExecutionOrchestrator {
         if (!factoryPackConstrained
                 && userInput != null && !userInput.isEmpty()
                 && !hasExplicitReadVeto(userInput)
-                && !shouldBypassEarlyPhraseShortcutForStoreReference(userInput)) {
+                && !shouldBypassEarlyPhraseShortcutForStoreReference(userInput)
+                && !isRestaurantCompoundQuestion(factoryId, userInput)) {
             IntentMatchResult restaurantOpsMatch = tryRestaurantOpsPhraseShortcut(userInput, factoryId);
             if (restaurantOpsMatch != null && restaurantOpsMatch.hasMatch()) {
                 AIIntentConfig phraseIntent = restaurantOpsMatch.getBestMatch();
@@ -462,7 +463,8 @@ public class IntentExecutionOrchestrator {
             }
         }
         if (!negationVetoWrite && userInput != null && !userInput.isEmpty()
-                && !shouldBypassEarlyPhraseShortcutForStoreReference(userInput)) {
+                && !shouldBypassEarlyPhraseShortcutForStoreReference(userInput)
+                && !isRestaurantCompoundQuestion(factoryId, userInput)) {
             IntentMatchResult earlyPhraseMatch = tryOrchestratorPhraseShortcut(
                     userInput,
                     factoryId,
@@ -1647,6 +1649,19 @@ public class IntentExecutionOrchestrator {
     // R15: 写操作动词 — 命中则不做 slot-filling 前置委托, 保留参数收集流程。
     private static final java.util.regex.Pattern RESTAURANT_WRITE_VERB =
             java.util.regex.Pattern.compile("创建|新增|新建|添加|录入|登记|修改|更新|删除|作废|取消|审批|下单|入库|出库|盘点");
+
+    // R28: 餐饮复合句 ("先说说A，再说说B") — 早期 phrase shortcut 的 contains
+    // 匹配会把内嵌的预设短语抢走, 只答一半; 复合句放行到 tiered 反转由
+    // python agent 拆解回答。与 python restaurant_agent._COMPOUND_HINT_RE 同款。
+    private static final java.util.regex.Pattern RESTAURANT_COMPOUND_PATTERN =
+            java.util.regex.Pattern.compile("，另外|，再|，然后|；|，顺便|，以及|，还有|，同时|先.{2,24}?再");
+
+    private boolean isRestaurantCompoundQuestion(String factoryId, String userInput) {
+        return userInput != null && userInput.length() >= 12
+                && isRestaurantTenant(factoryId)
+                && !userInput.contains("继续追问")
+                && RESTAURANT_COMPOUND_PATTERN.matcher(userInput).find();
+    }
 
     private static boolean isRestaurantTenant(String factoryId) {
         if (factoryId == null) {
