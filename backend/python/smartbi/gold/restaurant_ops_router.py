@@ -508,7 +508,7 @@ def match_restaurant_ops(query: str) -> Optional[str]:
         return "RESTAURANT_OPS_GROSS_MARGIN"
     # 口语盈亏问 ("最近亏钱了吗") — 交给带盈亏判定的销售概览。
     if (
-        re.search(r"(亏钱|亏损|盈利|赚钱)(了吗|吗|没有|了没)", q)
+        re.search(r"(亏钱|亏损|盈利|赚钱|挣钱|挣着钱|赚着钱)(了吗|吗|没有|了没|没)", q)
         and not any(tok in q for tok in ("门店", "分店", "哪家店"))
     ):
         return "RESTAURANT_OPS_SALES_SUMMARY"

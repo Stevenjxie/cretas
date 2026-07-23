@@ -150,6 +150,7 @@ def run_eval(base: str, only: Optional[str] = None) -> int:
     chain_sessions: Dict[str, str] = {}
     passed, failed = 0, 0
     failures: List[str] = []
+    latencies: List[float] = []
     for idx, case in enumerate(CASES, 1):
         q = case["q"]
         if only and only not in q:
@@ -157,6 +158,7 @@ def run_eval(base: str, only: Optional[str] = None) -> int:
         chain = case.get("chain")
         sid = chain_sessions.setdefault(chain, _rand_sid(chain)) if chain else _rand_sid("solo")
         problems: List[str] = []
+        case_started = time.time()
         flat = ""
         # 蓝绿切换/熔断窗口会产生瞬态失败 — 失败自动重试一次再定论。
         for attempt in (1, 2):
@@ -181,15 +183,22 @@ def run_eval(base: str, only: Optional[str] = None) -> int:
                 break  # 链内不重试 (会污染会话)
             if attempt == 1:
                 time.sleep(30)  # 蓝绿/熔断窗冷却后再试
+        elapsed = time.time() - case_started
+        latencies.append(elapsed)
         if problems:
             failed += 1
             failures.append(f"[{idx:02d}] {q}\n     {'; '.join(problems)}\n     实际: {flat[:160]}")
-            print(f"✗ [{idx:02d}] {q} — {'; '.join(problems)}")
+            print(f"✗ [{idx:02d}] {elapsed:5.1f}s {q} — {'; '.join(problems)}")
         else:
             passed += 1
-            print(f"✓ [{idx:02d}] {q}")
+            print(f"✓ [{idx:02d}] {elapsed:5.1f}s {q}")
 
-    print(f"\n== {passed} passed, {failed} failed / {passed + failed} run ==")
+    if latencies:
+        ordered = sorted(latencies)
+        p95 = ordered[max(0, int(len(ordered) * 0.95) - 1)]
+        print(f"\n耗时: 平均 {sum(latencies)/len(latencies):.1f}s | 中位 "
+              f"{ordered[len(ordered)//2]:.1f}s | p95 {p95:.1f}s | 最慢 {ordered[-1]:.1f}s")
+    print(f"== {passed} passed, {failed} failed / {passed + failed} run ==")
     if failures:
         print("\n".join(["", "── 失败明细 ──", *failures]))
     return 1 if failed else 0
