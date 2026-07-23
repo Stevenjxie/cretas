@@ -1894,3 +1894,8 @@ def test_r31_channel_mix_routing():
     assert _r.match_restaurant_ops("堂食外卖比例是多少") == "RESTAURANT_OPS_CHANNEL_MIX"
     assert _r.match_restaurant_ops("帮我把外卖占比导出成报表") != "RESTAURANT_OPS_CHANNEL_MIX"
     assert _r.is_supported_restaurant_ops_code("RESTAURANT_OPS_CHANNEL_MIX")
+
+
+def test_r32_colloquial_earning_forms():
+    assert _r.match_restaurant_ops("挣着钱没有啊最近") == "RESTAURANT_OPS_SALES_SUMMARY"
+    assert _r.match_restaurant_ops("最近挣钱吗") == "RESTAURANT_OPS_SALES_SUMMARY"
