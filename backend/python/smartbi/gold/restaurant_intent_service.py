@@ -287,7 +287,9 @@ async def tiered_answer(
         execution_kwargs = _resolver_kwargs(spec, role, resolver_query)
         plan = spec.planned_intents or (spec.intent,)
         store_mention = (
-            extract_store_mention(resolver_query) or extract_store_mention(query)
+            extract_store_mention(resolver_query)
+            or extract_store_mention(query)
+            or getattr(spec, "store_slot", None)
             if ("RESTAURANT_OPS_STORE_MARGIN" in plan
                 or "RESTAURANT_OPS_GROSS_MARGIN" in plan)
             else None
@@ -297,7 +299,9 @@ async def tiered_answer(
             store_dish_split_dish,
         )
         dish_mention = (
-            extract_dish_candidate(resolver_query) or extract_dish_candidate(query)
+            extract_dish_candidate(resolver_query)
+            or extract_dish_candidate(query)
+            or getattr(spec, "dish_slot", None)
         )
         # R18: 店×菜下钻 — store_dish_rows 本就是店×菜粒度, 路由 STORE_MARGIN
         # 带 dish_mention 直答 (匿名「哪家店的X」排名 / 具名店+菜单店直答)。
@@ -523,4 +527,13 @@ def should_delegate(
     # 仪表盘不适用提示; resolver 存在即委托 (R20b)。
     if spec.intent == "RESTAURANT_OPS_STAFFING_ADVICE":
         return True
+    # R22 T3 结构化规格: LLM 层解析出 resolver 支持的意图 (置信过门 + 无澄清)
+    # 就委托 — 这是枚举放行规则表的替代物: T3 规格即路由决定。实体槽位由
+    # resolver 对 DB 验证, 失败模式是定向拒答/澄清, 不是错答。
+    if getattr(spec, "dish_slot", None) or getattr(spec, "store_slot", None):
+        return True
+    if spec.source_tier == "llm":
+        from smartbi.gold.restaurant_ops_router import is_supported_restaurant_ops_code
+        if is_supported_restaurant_ops_code(spec.intent):
+            return True
     return False

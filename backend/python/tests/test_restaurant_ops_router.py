@@ -1799,3 +1799,33 @@ def test_r20_daypart_and_ood_routes():
     assert _r.is_out_of_domain_smalltalk("今天天气怎么样")
     assert not _r.is_out_of_domain_smalltalk("下雨对生意有什么影响")
     assert _r.match_restaurant_ops("今天天气怎么样") == "RESTAURANT_OPS_CAPABILITIES"
+
+
+def test_r22_verbatim_entity_guard():
+    from smartbi.gold.restaurant_intent import _verbatim_entity
+    q = "帮我看看水煮鱼这道菜最近表现咋样"
+    assert _verbatim_entity("水煮鱼", q) == "水煮鱼"
+    assert _verbatim_entity("「水煮鱼」", q) == "水煮鱼"
+    assert _verbatim_entity("酸菜鱼", q) is None          # 不是原文子串 → 拒
+    assert _verbatim_entity("这道菜", q) is None          # 泛指词 → 拒
+    assert _verbatim_entity(None, q) is None
+    assert _verbatim_entity("鱼", q) is None              # 过短 → 拒
+
+
+def test_r22_t3_spec_slots_ride_build_spec():
+    from smartbi.gold.restaurant_intent import _build_spec
+    spec = _build_spec(
+        "RESTAURANT_OPS_GROSS_MARGIN", "帮我看看水煮鱼这道菜最近表现咋样",
+        confidence=0.85, tier="llm", llm_dish="水煮鱼")
+    assert spec.dish_slot == "水煮鱼" and spec.store_slot is None
+    from smartbi.gold.restaurant_intent_service import should_delegate
+    assert should_delegate(spec, None, query="帮我看看水煮鱼这道菜最近表现咋样")
+
+
+def test_r22_llm_tier_resolver_backed_delegates():
+    from smartbi.gold.restaurant_intent import _build_spec
+    from smartbi.gold.restaurant_intent_service import should_delegate
+    spec = _build_spec(
+        "RESTAURANT_OPS_WASTAGE_TOP", "浪费情况帮我瞅瞅",
+        confidence=0.8, tier="llm")
+    assert should_delegate(spec, None, query="浪费情况帮我瞅瞅")

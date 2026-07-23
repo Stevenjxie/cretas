@@ -131,6 +131,10 @@ class RestaurantQuerySpec:
     asks_priority: bool = False
     asks_prohibited_actions: bool = False
     asks_export: bool = False
+    # R22 T3 结构化规格: LLM 抽取的实体槽位 (必须是问句原文子串, 代码校验;
+    # 真伪由下游 resolver 对 dim_product/dim_store 验证 — LLM 只提名, 不裁决)。
+    dish_slot: Optional[str] = None
+    store_slot: Optional[str] = None
 
 
 # ─── Intent catalogue (used by the T3 prompt) ──────────────────────────────
@@ -456,6 +460,8 @@ def _build_spec(
     llm_wants_margin: bool = False,
     llm_asks_profitability: bool = False,
     is_continuation: bool = False,
+    llm_dish: Optional[str] = None,
+    llm_store: Optional[str] = None,
 ) -> RestaurantQuerySpec:
     """Compose the final QuerySpec: deterministic slots ALWAYS recomputed
     fresh against `query` + today's date, regardless of which tier picked
@@ -528,6 +534,8 @@ def _build_spec(
         asks_priority=asks_priority,
         asks_prohibited_actions=asks_prohibited_actions,
         asks_export=asks_export,
+        dish_slot=llm_dish,
+        store_slot=llm_store,
     )
 
 
@@ -860,7 +868,14 @@ def _build_t3_prompt(query: str, hint: Optional[Tuple[str, float]], history: Opt
         '示例1: "这两个月生意咋样，挣着钱没" -> '
         '{"intent": "RESTAURANT_OPS_SALES_SUMMARY", "time_range": {"type": "relative", '
         '"unit": "month", "count": 2}, "wants_margin": true, "asks_profitability": true, '
-        '"dimensions": [], "comparison": null, "confidence": 0.9, '
+        '"dimensions": [], "comparison": null, "dish": null, "store": null, '
+        '"confidence": 0.9, '
+        '"clarification_needed": false, "clarification_question": null}\n'
+        '示例3: "帮我看看水煮鱼这道菜最近表现咋样" -> '
+        '{"intent": "RESTAURANT_OPS_GROSS_MARGIN", "time_range": {"type": "relative", '
+        '"unit": "day", "count": 30}, "wants_margin": true, "asks_profitability": false, '
+        '"dimensions": ["dish"], "comparison": null, "dish": "水煮鱼", "store": null, '
+        '"confidence": 0.85, '
         '"clarification_needed": false, "clarification_question": null}\n'
         '示例2: "情况怎么样" (完全没有可判断的对象/指标) -> '
         '{"intent": null, "time_range": null, "wants_margin": false, '
@@ -881,6 +896,9 @@ def _build_t3_prompt(query: str, hint: Optional[Tuple[str, float]], history: Opt
         '{"type": "named", "value": "today"|"this_week"|"this_month"}, '
         '{"type": "all_history"}, 或 null (未提及时间)。真实日期由确定性代码计算，不是你的工作。\n'
         "2. confidence 是你对 intent 判断的把握程度 (0.0-1.0)。\n"
+        "2b. dish/store: 如果问题点名了具体菜品或门店，原样摘抄那个名字 "
+        "(必须是问题原文里连续出现的子串，绝不改写、翻译或补全)；没点名就输出 null。"
+        "泛指词 (这道菜/哪家店/门店) 不是名字，输出 null。\n"
         "3. 如果问题太模糊无法判断 intent，输出 intent:null 且 clarification_needed:true，"
         "并给出一个具体的澄清问题(clarification_question)。\n"
         "4. 只输出 JSON，不要 markdown 代码块，不要解释。\n\n"
@@ -915,6 +933,21 @@ def _parse_t3_time_range(time_range: Any) -> str:
     if kind == "all_history":
         return ""
     return ""
+
+
+def _verbatim_entity(value: Any, query: str) -> Optional[str]:
+    """Accept an LLM entity slot ONLY when it is a verbatim substring of the
+    user's question (anti-hallucination: the LLM nominates, it never invents).
+    Generic placeholders are rejected — they are not names."""
+    if not isinstance(value, str):
+        return None
+    cand = value.strip().strip("「」\"'")
+    if not (2 <= len(cand) <= 40) or cand not in query:
+        return None
+    if cand in ("这道菜", "那道菜", "这个菜", "哪家店", "哪个店", "门店",
+                "菜品", "这家店", "那家店", "本店"):
+        return None
+    return cand
 
 
 async def _t3_llm_parse(
@@ -1069,6 +1102,8 @@ async def parse_restaurant_query(
             time_phrase=cached.get("time_phrase", ""),
             llm_wants_margin=cached.get("llm_wants_margin", False),
             llm_asks_profitability=cached.get("llm_asks_profitability", False),
+            llm_dish=cached.get("llm_dish"),
+            llm_store=cached.get("llm_store"),
         )
         await _maybe_register_pending(pool, norm_query, cached_spec, factory_id, session_key)
         return cached_spec
@@ -1116,18 +1151,24 @@ async def parse_restaurant_query(
         time_phrase = _parse_t3_time_range(parsed.get("time_range"))
         llm_wants_margin = bool(parsed.get("wants_margin"))
         llm_asks_profitability = bool(parsed.get("asks_profitability"))
+        llm_dish = _verbatim_entity(parsed.get("dish"), norm_query)
+        llm_store = _verbatim_entity(parsed.get("store"), norm_query)
         _cache_put(factory_id, norm_query, {
             "code": t3_code, "confidence": t3_confidence, "tier": "llm",
             "clarification_needed": False, "clarification_question": None,
             "time_phrase": time_phrase,
             "llm_wants_margin": llm_wants_margin,
             "llm_asks_profitability": llm_asks_profitability,
+            "llm_dish": llm_dish,
+            "llm_store": llm_store,
         })
         return _build_spec(
             t3_code, norm_query, confidence=t3_confidence, tier="llm",
             time_phrase=time_phrase,
             llm_wants_margin=llm_wants_margin,
             llm_asks_profitability=llm_asks_profitability,
+            llm_dish=llm_dish,
+            llm_store=llm_store,
         )
 
     # Low confidence or explicit clarification request -> surface a
