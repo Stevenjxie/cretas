@@ -35,8 +35,8 @@ import static org.mockito.Mockito.*;
  * <p>覆盖:
  * <ul>
  *   <li>UT-ST-WF-01: submitForApproval → PENDING_APPROVAL + workflowInstanceId set</li>
- *   <li>UT-ST-WF-02: submitForApproval 重复提交 → 409</li>
- *   <li>UT-ST-WF-03: submitForApproval 无 workflowEngine → PENDING_APPROVAL (no instanceId)</li>
+ *   <li>UT-ST-WF-02: submitForApproval 重复提交 → 返回既有实例</li>
+ *   <li>UT-ST-WF-03: submitForApproval 无 workflowEngine → fail-closed</li>
  *   <li>UT-ST-WF-04: executeAdjustment 无 workflowInstanceId → 403 (红线 R1)</li>
  *   <li>UT-ST-WF-05: executeAdjustment 已 APPLIED → 409 幂等</li>
  *   <li>UT-ST-WF-06: executeAdjustment 状态非 APPROVED → 409</li>
@@ -107,38 +107,35 @@ class StocktakeWorkflowIntegrationTest {
     // UT-ST-WF-02: submitForApproval 重复提交 → 409
     // -------------------------------------------------------
     @Test
-    @DisplayName("UT-ST-WF-02: submitForApproval 重复提交 (已 PENDING_APPROVAL + workflowInstanceId) → 409")
-    void submitForApproval_duplicate_throws409() {
+    @DisplayName("UT-ST-WF-02: submitForApproval 重复提交返回既有 OA 实例")
+    void submitForApproval_duplicate_returnsExistingInstance() {
         FactoryStocktake stocktake = buildStocktake(FactoryStocktake.Status.PENDING_APPROVAL);
         stocktake.setWorkflowInstanceId(INSTANCE_ID);
         when(stocktakeRepo.findById(STOCKTAKE_ID)).thenReturn(Optional.of(stocktake));
 
-        assertThatThrownBy(() -> service.submitForApproval(STOCKTAKE_ID, FACTORY_ID, USER_ID))
-                .isInstanceOf(BusinessException.class)
-                .extracting(e -> ((BusinessException) e).getCode())
-                .isEqualTo(409);
+        assertThat(service.submitForApproval(STOCKTAKE_ID, FACTORY_ID, USER_ID)).isEqualTo(INSTANCE_ID);
 
         verify(stocktakeRepo, never()).save(any());
     }
 
     // -------------------------------------------------------
-    // UT-ST-WF-03: submitForApproval 无 workflowEngine → 仍 PENDING_APPROVAL (no instanceId)
+    // UT-ST-WF-03: submitForApproval 无 workflowEngine → fail-closed
     // -------------------------------------------------------
     @Test
-    @DisplayName("UT-ST-WF-03: submitForApproval 无 workflow engine → PENDING_APPROVAL, workflowInstanceId=null")
-    void submitForApproval_noWorkflowEngine_stillTransitions() {
+    @DisplayName("UT-ST-WF-03: submitForApproval 无 workflow engine → 422 且不改变盘点状态")
+    void submitForApproval_noWorkflowEngine_failsClosed() {
         // Override workflowEngine to null
         ReflectionTestUtils.setField(service, "workflowEngine", null);
 
         FactoryStocktake stocktake = buildStocktake(FactoryStocktake.Status.COUNTING);
         when(stocktakeRepo.findById(STOCKTAKE_ID)).thenReturn(Optional.of(stocktake));
-        when(stocktakeRepo.save(any())).thenAnswer(inv -> inv.getArgument(0));
-
-        String result = service.submitForApproval(STOCKTAKE_ID, FACTORY_ID, USER_ID);
-
-        assertThat(stocktake.getStatus()).isEqualTo(FactoryStocktake.Status.PENDING_APPROVAL);
+        assertThatThrownBy(() -> service.submitForApproval(STOCKTAKE_ID, FACTORY_ID, USER_ID))
+                .isInstanceOf(BusinessException.class)
+                .extracting(e -> ((BusinessException) e).getCode())
+                .isEqualTo(422);
+        assertThat(stocktake.getStatus()).isEqualTo(FactoryStocktake.Status.COUNTING);
         assertThat(stocktake.getWorkflowInstanceId()).isNull();
-        assertThat(result).isNull();
+        verify(stocktakeRepo, never()).save(any());
 
         // Restore for other tests
         ReflectionTestUtils.setField(service, "workflowEngine", workflowEngine);

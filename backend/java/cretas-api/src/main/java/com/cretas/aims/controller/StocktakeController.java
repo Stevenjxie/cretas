@@ -109,14 +109,14 @@ public class StocktakeController {
 
     @PostMapping("/{stocktakeId}/submit")
     @Operation(summary = "提交盘点任务审批", description = "COUNTING/INITIATED → PENDING_APPROVAL")
-    public ApiResponse<Void> submit(
+    public ApiResponse<Map<String, String>> submit(
             @PathVariable @Parameter(description = "工厂ID") String factoryId,
             @PathVariable @Parameter(description = "盘点任务ID") String stocktakeId,
             HttpServletRequest request) {
         Long userId = extractUserId(request);
         log.info("SP7: 提交盘点审批 stocktakeId={}", stocktakeId);
-        stocktakeService.submit(stocktakeId, factoryId, userId);
-        return ApiResponse.success("盘点任务已提交审批", null);
+        String workflowInstanceId = stocktakeService.submitForApproval(stocktakeId, factoryId, userId);
+        return ApiResponse.success("盘点任务已提交 OA 审批", Map.of("workflowInstanceId", workflowInstanceId));
     }
 
     @PostMapping("/{stocktakeId}/approve")
@@ -126,12 +126,8 @@ public class StocktakeController {
             @PathVariable @Parameter(description = "盘点任务ID") String stocktakeId,
             @RequestBody Map<String, Object> body,
             HttpServletRequest request) {
-        Long userId = extractUserId(request);
-        String role = extractRole(request);
-        log.info("SP7: 审批盘点通过 stocktakeId={} role={}", stocktakeId, role);
-        Long expectedVersion = extractExpectedVersion(body);
-        stocktakeService.approve(stocktakeId, factoryId, userId, role, expectedVersion);
-        return ApiResponse.success("盘点任务已审批通过", null);
+        throw new BusinessException(410, "盘点审批仅能在 OA 审批中心执行")
+                .withCode("STOCKTAKE_OA_ACTION_REQUIRED").withHintTarget("/workflow/pending");
     }
 
     @PostMapping("/{stocktakeId}/reject")
@@ -141,12 +137,8 @@ public class StocktakeController {
             @PathVariable @Parameter(description = "盘点任务ID") String stocktakeId,
             @RequestBody Map<String, String> body,
             HttpServletRequest request) {
-        Long userId = extractUserId(request);
-        String role = extractRole(request);
-        String reason = body.getOrDefault("reason", "");
-        log.info("SP7: 驳回盘点 stocktakeId={} role={}", stocktakeId, role);
-        stocktakeService.reject(stocktakeId, factoryId, reason, userId, role);
-        return ApiResponse.success("盘点任务已驳回", null);
+        throw new BusinessException(410, "盘点审批仅能在 OA 审批中心执行")
+                .withCode("STOCKTAKE_OA_ACTION_REQUIRED").withHintTarget("/workflow/pending");
     }
 
     @PostMapping("/{stocktakeId}/apply")

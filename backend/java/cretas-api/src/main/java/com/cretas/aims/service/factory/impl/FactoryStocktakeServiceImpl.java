@@ -14,6 +14,7 @@ import com.cretas.aims.entity.enums.VoucherType;
 import com.cretas.aims.entity.factory.FactoryStocktake;
 import com.cretas.aims.entity.factory.FactoryStocktakeItem;
 import com.cretas.aims.entity.workflow.ApprovalWorkflowInstance;
+import com.cretas.aims.entity.workflow.ApprovalHistory.HistoryAction;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.repository.MaterialBatchAdjustmentRepository;
 import com.cretas.aims.repository.MaterialBatchRepository;
@@ -365,20 +366,7 @@ public class FactoryStocktakeServiceImpl implements FactoryStocktakeService {
     @Override
     @Transactional
     public void submit(String stocktakeId, String factoryId, Long userId) {
-        FactoryStocktake stocktake = findAndValidateForUpdate(stocktakeId, factoryId);
-        if (stocktake.getStatus() != FactoryStocktake.Status.COUNTING &&
-            stocktake.getStatus() != FactoryStocktake.Status.INITIATED &&
-            stocktake.getStatus() != FactoryStocktake.Status.REJECTED) {
-            throw new BusinessException(409,
-                    "当前盘点任务状态 [" + stocktake.getStatus() + "] 不支持提交，需要 COUNTING 或 INITIATED 或 REJECTED（重提）")
-                .withHint("请先录入实盘数量后再提交");
-        }
-        assertAllItemsCounted(stocktake);
-        stocktake.setStatus(FactoryStocktake.Status.PENDING_APPROVAL);
-        stocktake.setSubmittedBy(userId);
-        stocktake.setSubmittedAt(LocalDateTime.now());
-        stocktakeRepo.save(stocktake);
-        log.info("SP7: 盘点任务已提交审批 stocktakeId={}", stocktakeId);
+        submitForApproval(stocktakeId, factoryId, userId);
     }
 
     @Override
@@ -789,7 +777,12 @@ public class FactoryStocktakeServiceImpl implements FactoryStocktakeService {
                 line.setMaterialName(materialName);
             }
 
-            lines.add(line);
+            // This endpoint is the approval/application impact preview: zero-difference
+            // rows remain visible in the stocktake detail, not in affected-batch output.
+            if (item.getDifferenceQty() != null
+                    && item.getDifferenceQty().compareTo(BigDecimal.ZERO) != 0) {
+                lines.add(line);
+            }
             if (FactoryStocktakeItem.DifferenceType.SURPLUS.name().equals(differenceType)) surplus++;
             else if (FactoryStocktakeItem.DifferenceType.SHORTAGE.name().equals(differenceType)) shortage++;
             else if (FactoryStocktakeItem.DifferenceType.MATCH.name().equals(differenceType)) match++;
@@ -817,6 +810,14 @@ public class FactoryStocktakeServiceImpl implements FactoryStocktakeService {
     @Transactional
     public String submitForApproval(String stocktakeId, String factoryId, Long userId) {
         FactoryStocktake stocktake = findAndValidateForUpdate(stocktakeId, factoryId);
+        if (stocktake.getStatus() == FactoryStocktake.Status.PENDING_APPROVAL) {
+            if (stocktake.getWorkflowInstanceId() != null && !stocktake.getWorkflowInstanceId().isBlank()) {
+                return stocktake.getWorkflowInstanceId();
+            }
+            throw new BusinessException(409, "历史待审批盘点未关联 OA 实例，不能静默补建")
+                    .withCode("STOCKTAKE_LEGACY_WORKFLOW_MISSING")
+                    .withHint("请按受控迁移流程处理历史记录");
+        }
         if (stocktake.getStatus() != FactoryStocktake.Status.COUNTING &&
             stocktake.getStatus() != FactoryStocktake.Status.INITIATED &&
             stocktake.getStatus() != FactoryStocktake.Status.REJECTED) {
@@ -827,36 +828,70 @@ public class FactoryStocktakeServiceImpl implements FactoryStocktakeService {
         }
         assertAllItemsCounted(stocktake);
 
-        // 幂等: 如果已有 workflowInstanceId 且状态 PENDING_APPROVAL → 不重复创建
-        if (stocktake.getWorkflowInstanceId() != null &&
-                stocktake.getStatus() == FactoryStocktake.Status.PENDING_APPROVAL) {
-            throw new BusinessException(409,
-                    "盘点审批已提交 (PENDING_APPROVAL)，请勿重复提交 — 请前往[审批中心]查看")
-                    .withCode("DUPLICATE_APPROVAL_REQUEST")
-                    .withHint("前往审批中心: /approval-center");
+        if (workflowEngine == null || !workflowEngine.hasActiveWorkflow(factoryId, "INVENTORY_ADJUSTMENT")) {
+            throw new BusinessException(422, "未配置可用的盘点 OA 审批流程，不能提交")
+                    .withCode("STOCKTAKE_WORKFLOW_REQUIRED")
+                    .withHint("请配置 INVENTORY_ADJUSTMENT 审批流程");
         }
-
         stocktake.setStatus(FactoryStocktake.Status.PENDING_APPROVAL);
         stocktake.setSubmittedBy(userId);
         stocktake.setSubmittedAt(LocalDateTime.now());
-
-        // 启动 INVENTORY_ADJUSTMENT workflow（若 workflowEngine 可用）
-        if (workflowEngine != null && workflowEngine.hasActiveWorkflow(factoryId, "INVENTORY_ADJUSTMENT")) {
-            ApprovalWorkflowInstance instance = workflowEngine.startWorkflow(
-                    factoryId,
-                    "INVENTORY_ADJUSTMENT",
-                    stocktakeId,
-                    Map.of("stocktakeNo", stocktake.getStocktakeNo(),
-                           "periodMonth", stocktake.getPeriodMonth(),
-                           "warehouseId", stocktake.getWarehouseId()),
-                    userId);
-            stocktake.setWorkflowInstanceId(instance.getId());
-        }
+        ApprovalWorkflowInstance instance = workflowEngine.startWorkflow(
+                factoryId, "INVENTORY_ADJUSTMENT", stocktakeId,
+                Map.of("stocktakeNo", stocktake.getStocktakeNo(),
+                       "periodMonth", stocktake.getPeriodMonth(),
+                       "warehouseId", stocktake.getWarehouseId()), userId);
+        stocktake.setWorkflowInstanceId(instance.getId());
 
         stocktakeRepo.save(stocktake);
         log.info("SP12: 盘点任务已提交审批 stocktakeId={} workflowInstanceId={}",
                 stocktakeId, stocktake.getWorkflowInstanceId());
         return stocktake.getWorkflowInstanceId();
+    }
+
+    @Override
+    @Transactional
+    public FactoryStocktake applyWorkflowAction(String factoryId, String stocktakeId, String instanceId,
+            Long actorId, String actorRole, HistoryAction action, String notes) {
+        FactoryStocktake stocktake = findAndValidateForUpdate(stocktakeId, factoryId);
+        if (workflowEngine == null) {
+            throw new BusinessException(503, "OA 审批服务不可用").withCode("STOCKTAKE_WORKFLOW_UNAVAILABLE");
+        }
+        ApprovalWorkflowInstance instance = workflowEngine.getInstance(factoryId, instanceId)
+                .orElseThrow(() -> new BusinessException(404, "OA 审批实例不存在")
+                        .withCode("STOCKTAKE_WORKFLOW_NOT_FOUND"));
+        if (!"INVENTORY_ADJUSTMENT".equals(instance.getModuleCode())
+                || !stocktakeId.equals(instance.getBusinessEntityId())
+                || !instanceId.equals(stocktake.getWorkflowInstanceId())) {
+            throw new BusinessException(400, "OA 审批实例与盘点任务不匹配")
+                    .withCode("STOCKTAKE_WORKFLOW_IDENTITY_MISMATCH");
+        }
+        if (instance.getStatus() != ApprovalWorkflowInstance.InstanceStatus.RUNNING) return stocktake;
+        if (action == HistoryAction.REJECT && (notes == null || notes.isBlank())) {
+            throw new BusinessException(422, "驳回盘点必须填写原因")
+                    .withCode("STOCKTAKE_REJECT_REASON_REQUIRED");
+        }
+        boolean hasDifference = normalizeAndValidateEvidence(stocktake);
+        boolean sameMaker = Objects.equals(stocktake.getInitiatedBy(), actorId)
+                || Objects.equals(stocktake.getCountedBy(), actorId)
+                || Objects.equals(stocktake.getSubmittedBy(), actorId);
+        if (action == HistoryAction.APPROVE && hasDifference && sameMaker) {
+            throw new BusinessException(409, "存在盘盈/盘亏时，发起人、录入人或提交人不能审批自己的盘点")
+                    .withCode("STOCKTAKE_SELF_APPROVAL_FORBIDDEN");
+        }
+        ApprovalWorkflowInstance updated = workflowEngine.transitionNode(instanceId, actorId, actorRole, action, notes);
+        if (updated.getStatus() == ApprovalWorkflowInstance.InstanceStatus.APPROVED) {
+            stocktake.setStatus(FactoryStocktake.Status.APPROVED);
+            stocktake.setApprovedBy(actorId);
+            stocktake.setApprovedAt(LocalDateTime.now());
+            stocktake.setSelfConfirmedZeroDifference(!hasDifference && sameMaker);
+        } else if (updated.getStatus() == ApprovalWorkflowInstance.InstanceStatus.REJECTED) {
+            stocktake.setStatus(FactoryStocktake.Status.REJECTED);
+            stocktake.setRejectReason(notes);
+            stocktake.setApprovedBy(actorId);
+            stocktake.setApprovedAt(LocalDateTime.now());
+        }
+        return stocktakeRepo.save(stocktake);
     }
 
     private void assertAllItemsCounted(FactoryStocktake stocktake) {
