@@ -130,6 +130,8 @@ DEMO_WRITE_ALLOW_PREFIXES = (
 DEMO_WRITE_ALLOW_SUFFIXES = (
     "/revenue-report/prepare",    # LLM-tool path: metadata + download_url
     "/revenue-report/generate",   # web-UI path: streams xlsx
+    "/feedback",                  # 👍/👎 反馈是每用户信号数据, demo 也要能提
+                                  # (对齐 Java Sprint 11 R2 同款豁免决策)
 )
 
 
