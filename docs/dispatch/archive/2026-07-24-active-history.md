@@ -90,3 +90,15 @@
 - 发布：`cretas-v1.0.2.apk` 与 `cretas-latest.apk` 已写入 `cretas-download` OSS；`https://download.cretaceousfuture.com/` 已切至 1.0.2，页面无 1.0.1 APK 链接残留，版本化直链与 latest 均 HTTP 200、`Content-Length=122175342`、ETag 一致。
 - 公网回验：从 `https://dl.cretaceousfuture.com/cretas-v1.0.2.apk` 完整回下载，字节数与 SHA-256 均与本地正式 APK 一致；公开 health 仍保持最低兼容版本 `appMinVersion=1.0.0`，未将“最新版本”误设为强制最低版本。
 - 边界：未重启 Java/Python/Web 服务，未执行任何生产业务数据写入。Scope 锁已释放。
+
+## `BUG-RESTAURANT-DISH-SALES-PLAN-002` — `merged`
+
+- Owner: `/root`
+- Base SHA: `6514af9ed352125e9b12ba6aec960f9d74f2b084`
+- 合入：PR #1747、#1748、#1749、#1752 已依次合并；最终主线 commit 为 `df13df7d14ada37570b56c24dc95f87a90611217`。
+- 排行契约：泛问“哪个菜卖得好/近30天畅销菜品”按主菜销量排行，排除米饭、餐巾纸、湿纸巾、餐具和包装等附属/基础项；点名查询这些项目时仍可正常查询，不做全局屏蔽。
+- 上下文契约：会话中的菜品、时间和显式指标由确定性 QueryPlan 约束；LLM 只能在没有显式指标时补充利润槽，不能用毛利覆盖已明确的销量目标；resolver 查询层再次拒绝与显式指标冲突的毛利注入，多 resolver 与不支持指标继续 fail-closed。
+- 验证：餐饮目标测试 `480 passed`，Python compileall 与 `git diff --check` 通过；额外会话测试在本地因测试库缺少既有 `smart_bi_chat_session` 迁移出现 6 个 setup error，生产库已确认该表存在且真实四轮会话完整持久化，不属于本次代码回归。
+- 发布：从 clean exact `origin/main` 运行 `scripts/deploy/deploy-smartbi-python.sh --env prod`；120 个 migration 均已应用，依赖缓存、import smoke、服务重启与 `localhost:8083/health` HTTP 200 全部通过。
+- Demo 验收：`https://admin.cretaceousfuture.com/demo` 的“咨询”模式保持选中，“操作”未进入；命名菜品按钮发送包含菜名、周期和指标的完整问题；“毛利率如何 → 销量呢 → 为什么 → 怎么优化”四轮持续保留菜品与本月范围，第四轮明确以销量为优化目标且未漂回毛利率。
+- 安全边界：查询传输虽使用 `POST /api/mobile/DEMO_REST/ai-intents/execute`，但全程仅执行咨询查询；未点击反馈按钮、未进入操作模式，生产业务写入为 0。Scope 锁已释放。
