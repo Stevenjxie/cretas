@@ -3,16 +3,20 @@
 RAG-powered chat endpoint for the operation manual assistant.
 
 POST /api/food-kb/manual-chat
+POST /api/food-kb/manual-chat/stream   (SSE streaming variant, same semantics)
 POST /api/food-kb/manual-chat/related  (async related questions)
 """
 
 import hashlib
+import json
 import logging
 import time
 from collections import OrderedDict
+from dataclasses import dataclass
 from typing import Dict, List, Literal, Optional, Tuple
 
 from fastapi import APIRouter
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from ..services.knowledge_retriever import get_knowledge_retriever
@@ -746,21 +750,38 @@ async def _rewrite_followup(question: str, history: List[ChatMessage]) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Main chat endpoint
+# Shared preparation helpers (used by BOTH /manual-chat and /manual-chat/stream)
 # ---------------------------------------------------------------------------
 
-@router.post("/manual-chat")
-async def manual_chat(request: ManualChatRequest) -> dict:
-    """
-    操作手册 RAG 聊天
+_NOT_READY_RESPONSE = {
+    "success": False,
+    "message": "知识库服务未初始化",
+    "answer": "抱歉，知识库服务暂不可用，请稍后重试。",
+    "sources": [],
+    "related_questions": [],
+}
 
-    Improvements over v1:
-    - LRU cache for repeat questions (skip retrieval + LLM)
-    - Query expansion for short queries
-    - Lower similarity threshold (0.40) + higher top_k (8)
-    - Structured system prompt with length control
-    - Adaptive max_tokens budget
-    - Related questions generated in background task
+_LLM_UNAVAILABLE_FALLBACK = "抱歉，暂时无法回答您的问题。请查看操作手册对应章节。"
+
+
+@dataclass
+class _PreparedGeneration:
+    """Everything the LLM answer step needs, produced by _prepare_generation."""
+    messages: List[dict]
+    max_tokens: int
+    sources: List[SourceRef]
+    context_parts: List[str]
+    guard_answer: Optional[str]  # deterministic reviewed answer (skip LLM) or None
+
+
+async def _prepare_question_and_cache(
+    request: ManualChatRequest,
+) -> Tuple[str, bool, Optional[dict]]:
+    """OCR (mutates request.question) + cache key + cache lookup.
+
+    Returns (cache_key, cacheable, cached_response_or_None). ``cacheable`` is
+    False when the request carries history or an image (same rules as the
+    original inline logic — see comments below).
     """
     # ------ Screenshot OCR (if image provided) — must run BEFORE cache key ------
     # Extracted text is prepended to question so RAG retrieval and LLM both see it.
@@ -786,21 +807,24 @@ async def manual_chat(request: ManualChatRequest) -> dict:
     # Image-bearing requests skip cache entirely: cache key cannot disambiguate
     # different images sharing the same question text + category, so caching would
     # cross-contaminate answers across distinct uploads.
-    if not has_history and not request.image_base64:
+    cacheable = not has_history and not request.image_base64
+    if cacheable:
         cached = _cache_get(c_key)
         if cached is not None:
             logger.info(f"Cache hit for question: {request.question[:40]}...")
-            return cached
+            return c_key, cacheable, cached
+    return c_key, cacheable, None
 
+
+async def _prepare_generation(request: ManualChatRequest) -> _PreparedGeneration:
+    """Rewrite + expand + domain routing + retrieval + prompt/messages assembly.
+
+    Caller must have verified get_knowledge_retriever().is_ready() already.
+    Behavior byte-identical to the original inline /manual-chat flow — including
+    the 权威口径 hard-injection for margin capability-boundary questions
+    (2026-07-24), which therefore applies to BOTH endpoints.
+    """
     retriever = get_knowledge_retriever()
-    if not retriever.is_ready():
-        return {
-            "success": False,
-            "message": "知识库服务未初始化",
-            "answer": "抱歉，知识库服务暂不可用，请稍后重试。",
-            "sources": [],
-            "related_questions": [],
-        }
 
     # ------ G3: rewrite follow-up queries for retrieval ------
     # When client asks "那它分子分母都是什么" with history, rewrite into
@@ -944,6 +968,7 @@ async def manual_chat(request: ManualChatRequest) -> dict:
     # ------ Improvement #5: adaptive max_tokens ------
     max_tokens = _estimate_max_tokens(request.question)
 
+    guard_answer: Optional[str] = None
     if (
         not is_restaurant_request
         and _needs_bom_workflow_sequence_guard(request.question)
@@ -951,31 +976,26 @@ async def manual_chat(request: ManualChatRequest) -> dict:
         # This publication gate is safety-critical and has one reviewed answer.
         # Keep retrieval for source evidence, but do not let model variance invert
         # or omit the mandatory Workflow → BOM → Workflow sequence.
-        answer = _BOM_WORKFLOW_SEQUENCE_ANSWER
-    else:
-        # Answer via call_chain(SLOT.CHAT): 免费 fallback 链 + 熔断。删 KB-chat 原
-        # DeepSeek 直连分支 (绕过免费链 + DeepSeek 余额硬失败风险); model 由 router 注入。
-        try:
-            from common.llm_router import call_chain, SLOT
-            from common.llm_metrics import llm_caller_context
+        guard_answer = _BOM_WORKFLOW_SEQUENCE_ANSWER
 
-            payload = {
-                "messages": messages,
-                "max_tokens": max_tokens,
-                "temperature": 0.3,
-                "enable_thinking": False,
-            }
-            with llm_caller_context("food_kb.manual_chat.answer"):
-                data = await call_chain(SLOT.CHAT, payload, timeout=30.0)
-            answer = data["choices"][0]["message"]["content"]
-        except Exception as e:
-            logger.error(f"LLM call failed: {e}")
-            if context_parts:
-                answer = f"AI 服务暂时不可用，以下是检索到的相关内容：\n\n{context_parts[0]}"
-            else:
-                answer = "抱歉，暂时无法回答您的问题。请查看操作手册对应章节。"
+    return _PreparedGeneration(
+        messages=messages,
+        max_tokens=max_tokens,
+        sources=sources,
+        context_parts=context_parts,
+        guard_answer=guard_answer,
+    )
 
-    response = {
+
+def _retrieval_unavailable_answer(context_parts: List[str]) -> str:
+    """Fallback answer when the LLM is unavailable (mirrors original except-branch)."""
+    if context_parts:
+        return f"AI 服务暂时不可用，以下是检索到的相关内容：\n\n{context_parts[0]}"
+    return _LLM_UNAVAILABLE_FALLBACK
+
+
+def _build_response(answer: str, sources: List[SourceRef]) -> dict:
+    return {
         "success": True,
         "answer": answer,
         "sources": [s.dict() for s in sources],
@@ -985,13 +1005,213 @@ async def manual_chat(request: ManualChatRequest) -> dict:
         "related_questions": [],
     }
 
+
+# ---------------------------------------------------------------------------
+# Main chat endpoint
+# ---------------------------------------------------------------------------
+
+@router.post("/manual-chat")
+async def manual_chat(request: ManualChatRequest) -> dict:
+    """
+    操作手册 RAG 聊天
+
+    Improvements over v1:
+    - LRU cache for repeat questions (skip retrieval + LLM)
+    - Query expansion for short queries
+    - Lower similarity threshold (0.40) + higher top_k (8)
+    - Structured system prompt with length control
+    - Adaptive max_tokens budget
+    - Related questions generated in background task
+    """
+    c_key, cacheable, cached = await _prepare_question_and_cache(request)
+    if cached is not None:
+        return cached
+
+    retriever = get_knowledge_retriever()
+    if not retriever.is_ready():
+        return dict(_NOT_READY_RESPONSE)
+
+    prep = await _prepare_generation(request)
+
+    if prep.guard_answer is not None:
+        answer = prep.guard_answer
+    else:
+        # Answer via call_chain(SLOT.CHAT): 免费 fallback 链 + 熔断。删 KB-chat 原
+        # DeepSeek 直连分支 (绕过免费链 + DeepSeek 余额硬失败风险); model 由 router 注入。
+        try:
+            from common.llm_router import call_chain, SLOT
+            from common.llm_metrics import llm_caller_context
+
+            payload = {
+                "messages": prep.messages,
+                "max_tokens": prep.max_tokens,
+                "temperature": 0.3,
+                "enable_thinking": False,
+            }
+            with llm_caller_context("food_kb.manual_chat.answer"):
+                data = await call_chain(SLOT.CHAT, payload, timeout=30.0)
+            answer = data["choices"][0]["message"]["content"]
+        except Exception as e:
+            logger.error(f"LLM call failed: {e}")
+            answer = _retrieval_unavailable_answer(prep.context_parts)
+
+    response = _build_response(answer, prep.sources)
+
     # ------ Improvement #2: populate cache (skip contextual + image requests) ------
     # See cache lookup gate above: image requests must not write cache to avoid
     # poisoning future text-only or different-image queries with the same question.
-    if not has_history and not request.image_base64:
+    if cacheable:
         _cache_put(c_key, response)
 
     return response
+
+
+# ---------------------------------------------------------------------------
+# SSE streaming chat endpoint (2026-07-24)
+# ---------------------------------------------------------------------------
+
+def _sse(event: str, data) -> str:
+    """SSE frame — same wire format as smartbi/api/synthesis.py comprehensive_stream."""
+    return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False, default=str)}\n\n"
+
+
+def _set_llm_caller_no_token(name: str) -> None:
+    """Set the metrics caller contextvar WITHOUT a reset token.
+
+    A `with llm_caller_context(...)` block cannot wrap an async-generator
+    iteration: the contextvars Token reset must happen in the task that called
+    set(), but streaming crosses task boundaries (httpx aiter_lines), so
+    __exit__ raises "Token created in different Context". Mirrors
+    smartbi.services.insights.llm_client._set_llm_caller. Request-scoped task
+    isolation makes the un-reset value harmless.
+    """
+    from common.llm_metrics import _llm_caller
+    _llm_caller.set(name)
+
+
+@router.post("/manual-chat/stream")
+async def manual_chat_stream(request: ManualChatRequest):
+    """SSE streaming variant of /manual-chat — same semantics, token-level deltas.
+
+    Events (same vocabulary as smartbi synthesis comprehensive_stream):
+      event: status — progress stage (识别截图/检索知识库/生成回答/命中缓存)
+      event: chunk  — answer text delta (many; cache hit = one full-answer chunk)
+      event: done   — final summary {success, answer, sources, related_questions,
+                      processingTimeMs} — same shape the non-stream response has
+      event: error  — short human message on failure (never a half-open hang)
+
+    Cache/OCR/retrieval/prompt logic is shared with the non-stream endpoint via
+    _prepare_question_and_cache / _prepare_generation, and the completed answer
+    is written into the SAME LRU cache under the same key rules.
+    """
+    return StreamingResponse(
+        _manual_chat_stream_gen(request),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+async def _manual_chat_stream_gen(request: ManualChatRequest):
+    t0 = time.time()
+    try:
+        if request.image_base64:
+            yield _sse("status", "识别截图内容…")
+
+        c_key, cacheable, cached = await _prepare_question_and_cache(request)
+
+        if cached is not None:
+            # Near-instant path: full cached answer as one chunk, then done.
+            yield _sse("status", "命中缓存")
+            answer = cached.get("answer") or ""
+            if answer:
+                yield _sse("chunk", answer)
+            yield _sse("done", {
+                "success": True,
+                "answer": answer,
+                "sources": cached.get("sources") or [],
+                "related_questions": [],
+                "cached": True,
+                "processingTimeMs": int((time.time() - t0) * 1000),
+            })
+            return
+
+        retriever = get_knowledge_retriever()
+        if not retriever.is_ready():
+            yield _sse("error", "知识库服务未初始化，请稍后重试")
+            return
+
+        yield _sse("status", "检索知识库…")
+        prep = await _prepare_generation(request)
+        sources_payload = [s.dict() for s in prep.sources]
+
+        yield _sse("status", "生成回答…")
+
+        if prep.guard_answer is not None:
+            # Deterministic reviewed answer — no LLM call, single chunk.
+            answer = prep.guard_answer
+            yield _sse("chunk", answer)
+        else:
+            # Same SLOT.CHAT chain the non-stream path uses (OCR already ran on
+            # SLOT.VL inside _prepare_question_and_cache when an image is present).
+            from common.llm_router import call_chain_stream, SLOT
+
+            payload = {
+                "messages": prep.messages,
+                "max_tokens": prep.max_tokens,
+                "temperature": 0.3,
+                "enable_thinking": False,
+            }
+            _set_llm_caller_no_token("food_kb.manual_chat.answer_stream")
+            parts: List[str] = []
+            try:
+                async for event in call_chain_stream(SLOT.CHAT, payload, timeout=45.0):
+                    if event.get("type") == "delta":
+                        text = event.get("text") or ""
+                        if text:
+                            parts.append(text)
+                            yield _sse("chunk", text)
+                    # "usage" events are metrics-only — recorded inside the router.
+            except Exception as e:
+                logger.error(f"LLM stream failed: {e}")
+                if parts:
+                    # Mid-stream failure AFTER partial content: close cleanly with
+                    # an error frame — never a half-open hang, never cache partial.
+                    yield _sse("error", "回答生成中断，请重试")
+                    return
+                # Pre-delta failure: same degraded answer as the non-stream path.
+                answer = _retrieval_unavailable_answer(prep.context_parts)
+                yield _sse("chunk", answer)
+                yield _sse("done", {
+                    "success": True,
+                    "answer": answer,
+                    "sources": sources_payload,
+                    "related_questions": [],
+                    "processingTimeMs": int((time.time() - t0) * 1000),
+                })
+                return
+            answer = "".join(parts)
+            if not answer.strip():
+                # Stream completed but produced nothing usable (non-stream path
+                # catches this via router output validation) — degrade identically,
+                # but do NOT cache a degraded answer for an hour.
+                answer = _retrieval_unavailable_answer(prep.context_parts)
+                cacheable = False
+                yield _sse("chunk", answer)
+
+        # ------ populate the SAME LRU cache as the non-stream path ------
+        if cacheable:
+            _cache_put(c_key, _build_response(answer, prep.sources))
+
+        yield _sse("done", {
+            "success": True,
+            "answer": answer,
+            "sources": sources_payload,
+            "related_questions": [],
+            "processingTimeMs": int((time.time() - t0) * 1000),
+        })
+    except Exception as e:
+        logger.exception(f"manual-chat stream failed: {e}")
+        yield _sse("error", "回答生成失败，请稍后重试")
 
 
 # ---------------------------------------------------------------------------
