@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { flushPromises, mount } from '@vue/test-utils';
-import ElementPlus from 'element-plus';
+import ElementPlus, { ElMessageBox } from 'element-plus';
 import type { SeasoningWorkspace } from '@/api/bom';
 
 const getWorkspace = vi.fn();
@@ -8,9 +8,9 @@ const createBinding = vi.fn();
 const updateBinding = vi.fn();
 const deleteBinding = vi.fn();
 const requestGet = vi.fn();
-const listWorkflowRevisions = vi.fn();
 const listSubstitutes = vi.fn();
-const pinWorkflowRevision = vi.fn();
+const upgradeWorkflowRevision = vi.fn();
+const routerPush = vi.fn();
 
 vi.mock('@/api/bom', async (importOriginal) => {
   const original = await importOriginal<typeof import('@/api/bom')>();
@@ -24,30 +24,28 @@ vi.mock('@/api/bom', async (importOriginal) => {
     },
     bomRecipeApi: {
       ...original.bomRecipeApi,
-      listWorkflowRevisions: (...args: unknown[]) => listWorkflowRevisions(...args),
       listSubstitutes: (...args: unknown[]) => listSubstitutes(...args),
-      pinWorkflowRevision: (...args: unknown[]) => pinWorkflowRevision(...args),
+      upgradeWorkflowRevision: (...args: unknown[]) => upgradeWorkflowRevision(...args),
     },
   };
 });
 vi.mock('@/api/request', () => ({ get: (...args: unknown[]) => requestGet(...args) }));
 vi.mock('vue-router', () => ({
-  useRouter: () => ({ resolve: () => ({ href: '/warehouse/material-types' }) }),
+  useRouter: () => ({
+    push: (...args: unknown[]) => routerPush(...args),
+    resolve: () => ({ href: '/warehouse/material-types' }),
+  }),
   useRoute: () => ({ fullPath: '/production/bom?productTypeId=P1' }),
 }));
 
 import BomAuxiliaryWorkspace from '../BomAuxiliaryWorkspace.vue';
-import { readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
-
-const workspaceSource = readFileSync(resolve(import.meta.dirname, '../BomAuxiliaryWorkspace.vue'), 'utf8');
 
 function workspace(status: 'DRAFT' | 'ACTIVE' = 'DRAFT'): SeasoningWorkspace {
   return {
     recipeId: 'R1', productTypeId: 'P1', productName: '猪蹄', status,
     editable: status === 'DRAFT', seasoningRevision: 4, anomalies: [], materialSummaries: [],
     workflowRevisionId: 101, workflowDefinitionVersion: 2, workflowRevisionHash: 'hash-101',
-    workflowRevisionSavedAt: '2026-07-20T12:30:00', workflowRootCount: 2,
+    workflowRevisionStatus: 'DRAFT', workflowRevisionSavedAt: '2026-07-20T12:30:00', workflowRootCount: 2,
     workflowProcessCount: 2, workflowTargetCount: 1,
     processes: [
       { workflowProcessNodeId: 'node-roll', workProcessId: 'ROLL', processOrder: 2, processName: '滚揉', standardBasisQuantity: 1, standardBasisUnit: 'kg', standardBasisMaterialKind: 'SEMI_FINISHED', standardUsageSupported: true, bindings: [{ id: 1, workflowProcessNodeId: 'node-roll', workProcessId: 'ROLL', materialTypeId: 'M1', name: '辣椒粉', unit: 'g', dosagePerKgG: 5, subsequentPotRatio: .5, countInSeasoning: true, priceSnapshot: 18 }] },
@@ -59,7 +57,6 @@ function workspace(status: 'DRAFT' | 'ACTIVE' = 'DRAFT'): SeasoningWorkspace {
 function mountWorkspace(status: 'DRAFT' | 'ACTIVE' = 'DRAFT', data = workspace(status)) {
   getWorkspace.mockResolvedValue({ success: true, data });
   requestGet.mockResolvedValue({ success: true, data: [{ id: 'M1', name: '辣椒粉', category: '调味料', unit: 'g', movingAvgPrice: 18 }] });
-  listWorkflowRevisions.mockResolvedValue({ success: true, data: [] });
   listSubstitutes.mockResolvedValue({ success: true, data: [] });
   return mount(BomAuxiliaryWorkspace, {
     props: { factoryId: 'F006', productTypeId: 'P1', recipeId: 'R1', recipeStatus: status, canWrite: true },
@@ -85,8 +82,8 @@ describe('BomAuxiliaryWorkspace', () => {
     await flushPromises();
 
     const layout = wrapper.get('[data-testid="seasoning-two-column-layout"]');
-    expect(wrapper.get('[data-testid="bom-workflow-revision-card"]').text())
-      .toContain('2个入口 / 2道工序 / 1个目标产出');
+    expect(wrapper.get('[data-testid="bom-workflow-source-card"]').text())
+      .toContain('2 个投入入口2 道工序1 个终端产出');
     expect(layout.get('[data-testid="seasoning-editor-column"]').exists()).toBe(true);
     const compactSummary = layout.get('[data-testid="seasoning-compact-summary"]');
     expect(compactSummary.text()).toContain('辣椒粉');
@@ -185,74 +182,71 @@ describe('BomAuxiliaryWorkspace', () => {
     expect(wrapper.emitted('request-clone')).toHaveLength(1);
   });
 
-  it('does not preselect an incompatible workflow revision', async () => {
-    listWorkflowRevisions.mockResolvedValueOnce({
-      success: true,
-      data: [{
-        revisionId: 19,
-        workflowId: 9,
-        definitionVersion: 2,
-        revisionHash: 'bad-hash',
-        status: 'DRAFT',
-        processCount: 2,
-        compatible: false,
-        incompatibilityReason: '目标成品不匹配',
-      }],
-    });
-    const wrapper = mountWorkspace('DRAFT');
+  it('keeps family-shared processes read-only on a co-product while allowing its exclusive process', async () => {
+    const data = workspace('DRAFT');
+    data.sharedRulesOwner = false;
+    data.processes[0].costScope = 'SHARED';
+    data.processes[0].editable = false;
+    data.processes[1].costScope = 'OUTPUT_EXCLUSIVE';
+    data.processes[1].editable = true;
+    const wrapper = mountWorkspace('DRAFT', data);
+    await flushPromises();
+    await wrapper.get('[data-testid="toggle-all-processes"]').trigger('click');
     await flushPromises();
 
-    expect(wrapper.get('[data-testid="no-compatible-workflow-revision"]').text())
-      .toContain('没有与本 SKU 兼容');
-    expect(wrapper.findComponent('[data-testid="workflow-revision-select"]').props('modelValue'))
-      .toBe('');
-    expect(wrapper.get('[data-testid="pin-workflow-revision"]').attributes('disabled')).toBeDefined();
+    expect(wrapper.findAll('[data-testid="add-seasoning-binding"]')).toHaveLength(1);
+    expect(wrapper.get('[data-testid="seasoning-process-node-roll"]').text()).toContain('家族共享');
+    expect(wrapper.get('[data-testid="seasoning-process-node-fry"]').text()).toContain('本产出专属');
   });
 
-  it('collapses internal saves into business versions and saves only a changed compatible version', async () => {
-    listWorkflowRevisions.mockResolvedValueOnce({
+  it('shows an automatic read-only process source and never exposes revision controls', async () => {
+    const data = workspace('DRAFT');
+    data.workflowOwnerProductTypeId = 'WORKFLOW-OWNER';
+    const wrapper = mountWorkspace('DRAFT', data);
+    await flushPromises();
+
+    const source = wrapper.get('[data-testid="bom-workflow-source-card"]');
+    expect(source.text()).toContain('工艺来源');
+    expect(source.text()).toContain('Workflow v2');
+    expect(source.text()).toContain('系统已根据当前 SKU 自动关联并固定该工艺版本');
+    expect(wrapper.find('[data-testid="workflow-revision-select"]').exists()).toBe(false);
+    expect(wrapper.find('[data-testid="pin-workflow-revision"]').exists()).toBe(false);
+
+    await wrapper.get('[data-testid="view-workflow"]').trigger('click');
+    expect(routerPush).toHaveBeenCalledWith({
+      name: 'ProductProcesses',
+      query: { productTypeId: 'WORKFLOW-OWNER' },
+    });
+  });
+
+  it('offers an explicit upgrade that creates a new draft while preserving history', async () => {
+    const data = workspace('ACTIVE');
+    data.workflowUpgradeAvailable = true;
+    data.workflowUpgradeDefinitionVersion = 3;
+    upgradeWorkflowRevision.mockResolvedValue({
       success: true,
-      data: [
-        {
-          revisionId: 101, workflowId: 9, definitionVersion: 2, revisionNumber: 9,
-          revisionHash: 'hash-101', status: 'DRAFT', processCount: 2, compatible: true,
-          savedAt: '2026-07-20T12:30:00',
-        },
-        {
-          revisionId: 102, workflowId: 9, definitionVersion: 2, revisionNumber: 10,
-          revisionHash: 'hash-102', status: 'DRAFT', processCount: 2, compatible: true,
-          savedAt: '2026-07-20T13:30:00',
-        },
-        {
-          revisionId: 201, workflowId: 9, definitionVersion: 3, revisionNumber: 1,
-          revisionHash: 'hash-201', status: 'DRAFT', processCount: 3, compatible: true,
-          savedAt: '2026-07-21T08:00:00',
-        },
-      ],
+      data: { id: 'R2' },
     });
-    pinWorkflowRevision.mockResolvedValue({ success: true, data: {} });
-    const wrapper = mountWorkspace('DRAFT');
+    vi.spyOn(ElMessageBox, 'confirm').mockResolvedValue('confirm');
+    const wrapper = mountWorkspace('ACTIVE', data);
     await flushPromises();
 
-    expect(workspaceSource).toContain('const byBusinessVersion = new Map');
-    expect(workspaceSource).toContain('v-for="candidate in visibleWorkflowRevisions"');
-    expect(wrapper.get('[data-testid="bom-workflow-revision-card"]').text()).not.toContain('固定此修订');
-    const save = wrapper.get('[data-testid="pin-workflow-revision"]');
-    expect(save.text()).toBe('保存');
-    expect(save.attributes('disabled')).toBeDefined();
+    expect(wrapper.get('[data-testid="workflow-update-notice"]').text())
+      .toContain('升级会创建新 BOM 草稿');
+    await wrapper.get('[data-testid="upgrade-workflow"]').trigger('click');
+    await flushPromises();
+    expect(upgradeWorkflowRevision).toHaveBeenCalledWith('F006', 'R1');
+    expect(wrapper.emitted('workflow-upgraded')).toEqual([['R2']]);
+  });
 
-    wrapper.getComponent('[data-testid="workflow-revision-select"]').vm.$emit(
-      'update:modelValue',
-      'revision:201',
-    );
+  it('fails closed with one actionable source error when no exact process version is pinned', async () => {
+    const data = workspace('DRAFT');
+    data.workflowRevisionHash = null;
+    const wrapper = mountWorkspace('DRAFT', data);
     await flushPromises();
-    expect(save.attributes('disabled')).toBeUndefined();
-    await save.trigger('click');
-    await flushPromises();
-    expect(pinWorkflowRevision).toHaveBeenCalledWith('F006', 'R1', {
-      revisionId: 201,
-      workflowId: undefined,
-      revisionHash: 'hash-201',
-    });
+
+    expect(wrapper.get('[data-testid="workflow-source-error"]').text())
+      .toContain('系统不会猜测或静默绑定版本');
+    expect(wrapper.find('[data-testid="workflow-revision-select"]').exists()).toBe(false);
   });
 });

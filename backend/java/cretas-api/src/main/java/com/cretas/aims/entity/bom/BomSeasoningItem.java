@@ -89,6 +89,11 @@ public class BomSeasoningItem extends BaseEntity {
     @Column(name = "subsequent_pot_ratio", precision = 8, scale = 4)
     private BigDecimal subsequentPotRatio;
 
+    /** SHARED before the terminal split; OUTPUT_EXCLUSIVE on a target-only branch. */
+    @Column(name = "cost_scope", length = 24)
+    @Builder.Default
+    private String costScope = "SHARED";
+
     /** Back-ref to parent recipe; insertable/updatable=false because recipeId column drives FK. */
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "recipe_id", insertable = false, updatable = false)

@@ -20,6 +20,7 @@ import com.cretas.aims.dto.processentry.ProcessSheetRowRequest;
 import com.cretas.aims.entity.*;
 import com.cretas.aims.entity.bom.BomRecipe;
 import com.cretas.aims.entity.bom.BomRecipeItem;
+import com.cretas.aims.entity.bom.BomItemSubstitute;
 import com.cretas.aims.entity.bom.BomYieldSuggestion;
 import com.cretas.aims.entity.inventory.FinishedGoodsBatch;
 import com.cretas.aims.entity.processentry.ProcessSheetRow;
@@ -39,6 +40,7 @@ import com.cretas.aims.entity.User;
 import com.cretas.aims.repository.*;
 import com.cretas.aims.repository.bom.BomRecipeItemRepository;
 import com.cretas.aims.repository.bom.BomRecipeRepository;
+import com.cretas.aims.repository.bom.BomItemSubstituteRepository;
 import com.cretas.aims.repository.bom.BomYieldSuggestionRepository;
 import com.cretas.aims.repository.inventory.FinishedGoodsBatchRepository;
 import com.cretas.aims.repository.inventory.SalesOrderRepository;
@@ -238,6 +240,12 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
 
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private BomRecipeItemRepository bomRecipeItemRepository;
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private BomItemSubstituteRepository bomItemSubstituteRepository;
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.cretas.aims.service.bom.BomWorkflowRevisionService bomWorkflowRevisionService;
 
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private BomYieldSuggestionRepository bomYieldSuggestionRepository;
@@ -3516,11 +3524,60 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
         if (recipe.isEmpty()) {
             return new BomSettlementEligibility(true, false, Set.of());
         }
-        Set<String> bomMaterialTypeIds = bomRecipeItemRepository.findByRecipeIdOrderBySortOrderAsc(recipe.get().getId())
-                .stream()
+        BomRecipe rulesRecipe = recipe.get().getSharedRecipeId() == null
+                || recipe.get().getSharedRecipeId().equals(recipe.get().getId())
+                ? recipe.get()
+                : bomRecipeRepository.findById(recipe.get().getSharedRecipeId())
+                        .filter(candidate -> factoryId.equals(candidate.getFactoryId()))
+                        .orElse(recipe.get());
+        List<BomRecipeItem> sharedRuleItems =
+                bomRecipeItemRepository.findByRecipeIdOrderBySortOrderAsc(rulesRecipe.getId());
+        List<BomRecipeItem> eligibleItems = new ArrayList<>(sharedRuleItems.stream()
+                .filter(item -> !"OUTPUT_EXCLUSIVE".equals(item.getCostScope())).toList());
+        if (!rulesRecipe.getId().equals(recipe.get().getId())) {
+            eligibleItems.addAll(bomRecipeItemRepository
+                    .findByRecipeIdOrderBySortOrderAsc(recipe.get().getId()).stream()
+                    .filter(item -> "OUTPUT_EXCLUSIVE".equals(item.getCostScope())).toList());
+        } else {
+            eligibleItems.addAll(sharedRuleItems.stream()
+                    .filter(item -> "OUTPUT_EXCLUSIVE".equals(item.getCostScope())).toList());
+        }
+        if (recipe.get().getWorkflowRevisionId() != null
+                && bomWorkflowRevisionService != null
+                && eligibleItems.stream().anyMatch(item -> item.getWorkflowMaterialNodeId() != null)) {
+            Set<String> exactInputSlots = com.cretas.aims.service.bom.BomWorkflowRevisionService
+                    .resolveInputSlots(bomWorkflowRevisionService.resolvePinnedGraph(factoryId, recipe.get()))
+                    .stream()
+                    .map(slot -> slot.materialNodeId() + "\u0000"
+                            + slot.inputPortId() + "\u0000" + slot.edgeId())
+                    .collect(Collectors.toSet());
+            eligibleItems = eligibleItems.stream()
+                    .filter(item -> item.getWorkflowMaterialNodeId() != null
+                            && item.getWorkflowInputPortId() != null
+                            && item.getWorkflowEdgeId() != null
+                            && exactInputSlots.contains(item.getWorkflowMaterialNodeId()
+                            + "\u0000" + item.getWorkflowInputPortId()
+                            + "\u0000" + item.getWorkflowEdgeId()))
+                    .toList();
+        }
+        Set<String> bomMaterialTypeIds = eligibleItems.stream()
                 .map(BomRecipeItem::getMaterialTypeId)
                 .filter(Objects::nonNull)
                 .collect(Collectors.toSet());
+        if (bomItemSubstituteRepository != null && !eligibleItems.isEmpty()) {
+            Set<Long> eligibleParentIds = eligibleItems.stream()
+                    .map(BomRecipeItem::getId).filter(Objects::nonNull).collect(Collectors.toSet());
+            Set<String> eligibleRecipeIds = eligibleItems.stream()
+                    .map(BomRecipeItem::getRecipeId).collect(Collectors.toSet());
+            eligibleRecipeIds.stream().flatMap(eligibleRecipeId ->
+                    bomItemSubstituteRepository.findByFactoryIdAndRecipeIdOrderByCreatedAtAsc(
+                            factoryId, eligibleRecipeId).stream())
+                    .filter(rule -> rule.getParentKind() == BomItemSubstitute.ParentKind.RECIPE_ITEM)
+                    .filter(rule -> eligibleParentIds.contains(rule.getParentRecipeItemId()))
+                    .map(BomItemSubstitute::getSubstituteMaterialTypeId)
+                    .filter(Objects::nonNull)
+                    .forEach(bomMaterialTypeIds::add);
+        }
         return new BomSettlementEligibility(true, true, bomMaterialTypeIds);
     }
 

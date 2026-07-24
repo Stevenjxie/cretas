@@ -1,6 +1,9 @@
 package com.cretas.aims.service.bom.impl;
 
+import com.cretas.aims.dto.ProductProcessWorkflowDTO;
+import com.cretas.aims.dto.bom.CreateBomRecipeRequest.BomRecipeItemDTO;
 import com.cretas.aims.entity.Factory;
+import com.cretas.aims.entity.ProductProcessWorkflowRevision;
 import com.cretas.aims.entity.ProductType;
 import com.cretas.aims.entity.RawMaterialType;
 import com.cretas.aims.entity.bom.BomRecipe;
@@ -12,6 +15,7 @@ import com.cretas.aims.repository.bom.BomRecipeItemRepository;
 import com.cretas.aims.repository.bom.BomRecipeRepository;
 import com.cretas.aims.service.bom.BomRecipeService;
 import com.cretas.aims.service.bom.BomItemSubstituteService;
+import com.cretas.aims.service.bom.BomWorkflowRevisionService;
 import com.cretas.aims.service.bom.NestedBomCostService;
 import com.cretas.aims.service.uom.MaterialUomConverter;
 import com.cretas.aims.service.unit.CanonicalUnit;
@@ -19,6 +23,7 @@ import com.cretas.aims.service.unit.UnitContractService;
 import com.cretas.aims.service.unit.UnitDimension;
 import com.cretas.aims.service.unit.UnitNormalizationResult;
 import com.cretas.aims.service.validation.ProductConfigurationReadinessService;
+import com.cretas.aims.service.workflow.PinnedWorkflowGraph;
 import com.cretas.aims.service.workflow.ProductWorkflowResolutionService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -38,7 +43,9 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
@@ -48,6 +55,9 @@ import java.util.concurrent.Future;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.clearInvocations;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 @DataJpaTest
@@ -100,6 +110,9 @@ class BomRecipeDraftLifecycleJpaTest {
     @MockBean
     private BomItemSubstituteService bomItemSubstituteService;
 
+    @MockBean
+    private BomWorkflowRevisionService bomWorkflowRevisionService;
+
     @BeforeEach
     void stubUnitContract() {
         when(unitContractService.normalize(anyString(), anyString())).thenAnswer(invocation -> {
@@ -129,10 +142,85 @@ class BomRecipeDraftLifecycleJpaTest {
                     String right = invocation.getArgument(2);
                     return canonicalUnit(left).equals(canonicalUnit(right));
                 });
+        when(materialUomConverter.isWriteUnitCompatible(anyString(), anyString())).thenReturn(true);
+        when(bomWorkflowRevisionService.autoBindUniqueDraft(anyString(), org.mockito.ArgumentMatchers.any(BomRecipe.class)))
+                .thenAnswer(invocation -> workflowBinding(invocation.getArgument(1)));
+        when(bomWorkflowRevisionService.resolvePinnedGraph(anyString(), org.mockito.ArgumentMatchers.any(BomRecipe.class)))
+                .thenAnswer(invocation -> workflowBinding(invocation.getArgument(1)).graph());
+        when(bomWorkflowRevisionService.resolvePinnedTerminalOutputs(
+                anyString(), org.mockito.ArgumentMatchers.any(BomRecipe.class)))
+                .thenAnswer(invocation -> workflowBinding(invocation.getArgument(1)).terminalOutputs());
+    }
+
+    private BomWorkflowRevisionService.WorkflowBinding workflowBinding(BomRecipe recipe) {
+        ProductProcessWorkflowRevision revision = new ProductProcessWorkflowRevision();
+        revision.setId(100L);
+        revision.setFactoryId(recipe.getFactoryId());
+        revision.setProductTypeId(recipe.getProductTypeId());
+        revision.setWorkflowId(10L);
+        revision.setDefinitionVersion(1);
+        revision.setSchemaVersion(1);
+        revision.setRevisionHash("test-revision");
+        revision.setNodesJson("[]");
+        revision.setEdgesJson("[]");
+        revision.setStatus(ProductProcessWorkflowRevision.Status.DRAFT);
+        revision.setStructurallyComplete(true);
+        recipe.setWorkflowRevisionId(revision.getId());
+        recipe.setWorkflowId(revision.getWorkflowId());
+        recipe.setWorkflowDefinitionVersion(revision.getDefinitionVersion());
+        recipe.setWorkflowRevisionHash(revision.getRevisionHash());
+        recipe.setWorkflowSchemaVersion(revision.getSchemaVersion());
+        recipe.setWorkflowNodesSnapshotJson(revision.getNodesJson());
+        recipe.setWorkflowEdgesSnapshotJson(revision.getEdgesJson());
+        recipe.setTargetTerminalNodeId("terminal");
+        recipe.setOutputRole(BomRecipe.OutputRole.MAIN);
+        recipe.setCostAllocationRatio(new BigDecimal("100"));
+
+        String materialTypeId = "RAW-WF-" + recipe.getProductTypeId();
+        Map<String, Object> rawData = new LinkedHashMap<>();
+        rawData.put("skuId", materialTypeId);
+        rawData.put("name", "Workflow input");
+        ProductProcessWorkflowDTO.Node raw = new ProductProcessWorkflowDTO.Node(
+                "raw-input", "RAW_MATERIAL", new ProductProcessWorkflowDTO.Position(0D, 0D), rawData);
+        Map<String, Object> processData = new LinkedHashMap<>();
+        processData.put("workProcessId", "WP-TEST");
+        processData.put("ports", List.of(
+                Map.of("id", "input", "direction", "INPUT", "materialNodeId", "raw-input",
+                        "materialKind", "RAW_MATERIAL", "unit", "kg", "ordinal", 0),
+                Map.of("id", "output", "direction", "OUTPUT", "materialNodeId", "terminal",
+                        "materialKind", "FINISHED_GOOD", "unit", recipe.getOutputUnit(),
+                        "ordinal", 0, "outputRole", "MAIN",
+                        "costAllocationRatio", new BigDecimal("100"))));
+        ProductProcessWorkflowDTO.Node process = new ProductProcessWorkflowDTO.Node(
+                "process", "PROCESS", new ProductProcessWorkflowDTO.Position(100D, 0D), processData);
+        Map<String, Object> terminalData = new LinkedHashMap<>();
+        terminalData.put("skuId", recipe.getProductTypeId());
+        terminalData.put("baseUnit", recipe.getOutputUnit());
+        ProductProcessWorkflowDTO.Node terminal = new ProductProcessWorkflowDTO.Node(
+                "terminal", "FINISHED_GOOD", new ProductProcessWorkflowDTO.Position(200D, 0D), terminalData);
+        List<ProductProcessWorkflowDTO.Node> nodes = List.of(raw, process, terminal);
+        List<ProductProcessWorkflowDTO.Edge> edges = List.of(
+                new ProductProcessWorkflowDTO.Edge("edge-input", "raw-input", "output", "process", "input"),
+                new ProductProcessWorkflowDTO.Edge("edge-output", "process", "output", "terminal", "input"));
+        ProductProcessWorkflowDTO definition = new ProductProcessWorkflowDTO();
+        definition.setNodes(nodes);
+        definition.setEdges(edges);
+        BomWorkflowRevisionService.TerminalOutput target =
+                new BomWorkflowRevisionService.TerminalOutput(
+                        "terminal", recipe.getProductTypeId(), "process", "output",
+                        BomRecipe.OutputRole.MAIN, new BigDecimal("100"), recipe.getOutputUnit());
+        PinnedWorkflowGraph graph = new PinnedWorkflowGraph(
+                revision.getId(), revision.getWorkflowId(), revision.getDefinitionVersion(),
+                revision.getRevisionHash(), recipe.getProductTypeId(), "terminal",
+                List.of(materialTypeId),
+                List.of(new PinnedWorkflowGraph.ProcessStep("process", "WP-TEST", 1)),
+                nodes, edges);
+        return new BomWorkflowRevisionService.WorkflowBinding(
+                revision, definition, graph, List.of(target), target);
     }
 
     @Test
-    @DisplayName("zero versions creates an empty v1 DRAFT from SKU metadata")
+    @DisplayName("zero versions creates a v1 DRAFT with an auto-generated Workflow input skeleton")
     void createsEmptyFirstDraft() {
         ProductType product = saveProduct("FIRST", "盒", new BigDecimal("500"));
 
@@ -146,7 +234,13 @@ class BomRecipeDraftLifecycleJpaTest {
         assertThat(draft.getOutputQuantityPerUnit()).isEqualByComparingTo("1");
         assertThat(draft.getNetContentQuantity()).isEqualByComparingTo("500");
         assertThat(draft.getNetContentUnit()).isEqualTo("g");
-        assertThat(draft.getItems()).isEmpty();
+        assertThat(draft.getItems()).singleElement()
+                .satisfies(item -> {
+                    assertThat(item.getWorkflowMaterialNodeId()).isEqualTo("raw-input");
+                    assertThat(item.getWorkflowInputPortId()).isEqualTo("input");
+                    assertThat(item.getWorkflowEdgeId()).isEqualTo("edge-input");
+                    assertThat(item.getCostScope()).isEqualTo("SHARED");
+                });
     }
 
     @Test
@@ -161,6 +255,70 @@ class BomRecipeDraftLifecycleJpaTest {
         assertThat(draft.getOutputUnit()).isEqualTo("bottle");
         assertThat(draft.getNetContentQuantity()).isEqualByComparingTo("500");
         assertThat(draft.getNetContentUnit()).isEqualTo("ml");
+    }
+
+    @Test
+    @DisplayName("editing a generated input changes its main material without losing the stable Workflow slot")
+    void editsSkeletonMainMaterialAndKeepsStableIdentity() {
+        ProductType product = saveProduct("EDIT-SLOT", "盒", new BigDecimal("500"));
+        BomRecipe draft = service.ensureDraft(product.getFactoryId(), product.getId());
+        BomRecipeItem skeleton =
+                itemRepository.findByRecipeIdOrderBySortOrderAsc(draft.getId()).getFirst();
+        RawMaterialType replacement = saveRawMaterial(
+                product.getFactoryId(), "RAW-REPLACEMENT-" + product.getId(), "替代主料");
+
+        BomRecipeItemDTO request = new BomRecipeItemDTO();
+        request.setMaterialTypeId(replacement.getId());
+        request.setMaterialCategory("RAW");
+        request.setUnit("kg");
+        request.setSortOrder(skeleton.getSortOrder());
+        request.setIsOptional(false);
+        request.setWorkflowMaterialNodeId(skeleton.getWorkflowMaterialNodeId());
+        request.setWorkflowInputPortId(skeleton.getWorkflowInputPortId());
+        request.setWorkflowEdgeId(skeleton.getWorkflowEdgeId());
+        request.setCostScope(skeleton.getCostScope());
+
+        BomRecipeItem updated =
+                service.updateItem(product.getFactoryId(), skeleton.getId(), request);
+
+        assertThat(updated.getMaterialTypeId()).isEqualTo(replacement.getId());
+        assertThat(updated.getMaterialName()).isEqualTo("替代主料");
+        assertThat(updated.getWorkflowMaterialNodeId()).isEqualTo("raw-input");
+        assertThat(updated.getWorkflowInputPortId()).isEqualTo("input");
+        assertThat(updated.getWorkflowEdgeId()).isEqualTo("edge-input");
+        assertThat(updated.getCostScope()).isEqualTo("SHARED");
+    }
+
+    @Test
+    @DisplayName("explicit Workflow upgrade keeps mapped rows and appends a skeleton for a new stable input")
+    void workflowUpgradeAppendsNewInputSkeleton() {
+        ProductType product = saveProduct("UPGRADE-SLOT", "盒", new BigDecimal("500"));
+        BomRecipe draft = service.ensureDraft(product.getFactoryId(), product.getId());
+        String newMaterialId = "RAW-NEW-" + product.getId();
+        saveRawMaterial(product.getFactoryId(), newMaterialId, "新增工艺投入");
+
+        when(bomWorkflowRevisionService.upgradeToLatestCompatibleDraft(
+                anyString(), org.mockito.ArgumentMatchers.any(BomRecipe.class)))
+                .thenAnswer(invocation -> {
+                    BomRecipe recipe = invocation.getArgument(1);
+                    BomWorkflowRevisionService.WorkflowBinding binding = workflowBinding(recipe);
+                    recipe.setWorkflowDefinitionVersion(2);
+                    return binding;
+                });
+        when(bomWorkflowRevisionService.resolvePinnedGraph(
+                anyString(), org.mockito.ArgumentMatchers.any(BomRecipe.class)))
+                .thenAnswer(invocation -> {
+                    BomRecipe recipe = invocation.getArgument(1);
+                    return Integer.valueOf(2).equals(recipe.getWorkflowDefinitionVersion())
+                            ? twoInputGraph(recipe, newMaterialId)
+                            : workflowBinding(recipe).graph();
+                });
+
+        service.upgradeWorkflowRevision(product.getFactoryId(), draft.getId());
+
+        assertThat(itemRepository.findByRecipeIdOrderBySortOrderAsc(draft.getId()))
+                .extracting(BomRecipeItem::getWorkflowEdgeId)
+                .containsExactly("edge-input", "edge-extra");
     }
 
     @Test
@@ -188,6 +346,33 @@ class BomRecipeDraftLifecycleJpaTest {
         assertThat(second.getId()).isEqualTo(first.getId());
         assertThat(recipeRepository.countByFactoryIdAndProductTypeId(
                 product.getFactoryId(), product.getId())).isEqualTo(1);
+    }
+
+    @Test
+    @DisplayName("BOM-only clone inherits the exact Workflow revision and immutable snapshot")
+    void bomOnlyCloneKeepsExactWorkflowSnapshotWithoutRequestingANewDraft() {
+        ProductType product = saveProduct("CLONE-PIN", "盒", new BigDecimal("500"));
+        BomRecipe original = service.ensureDraft(product.getFactoryId(), product.getId());
+        completeWorkflowSkeleton(original);
+        BomRecipe active = service.activateRecipe(product.getFactoryId(), original.getId(), 1309L);
+        clearInvocations(bomWorkflowRevisionService);
+
+        BomRecipe cloned = service.ensureDraft(product.getFactoryId(), product.getId());
+
+        assertThat(cloned.getId()).isNotEqualTo(active.getId());
+        assertThat(cloned.getStatus()).isEqualTo(BomRecipe.Status.DRAFT);
+        assertThat(cloned.getWorkflowRevisionId()).isEqualTo(active.getWorkflowRevisionId());
+        assertThat(cloned.getWorkflowId()).isEqualTo(active.getWorkflowId());
+        assertThat(cloned.getWorkflowDefinitionVersion()).isEqualTo(active.getWorkflowDefinitionVersion());
+        assertThat(cloned.getWorkflowRevisionHash()).isEqualTo(active.getWorkflowRevisionHash());
+        assertThat(cloned.getWorkflowNodesSnapshotJson()).isEqualTo(active.getWorkflowNodesSnapshotJson());
+        assertThat(cloned.getWorkflowEdgesSnapshotJson()).isEqualTo(active.getWorkflowEdgesSnapshotJson());
+        assertThat(cloned.getTargetTerminalNodeId()).isEqualTo(active.getTargetTerminalNodeId());
+        assertThat(cloned.getBomFamilyId()).isNotEqualTo(active.getBomFamilyId());
+        verify(bomWorkflowRevisionService, never())
+                .autoBindUniqueDraft(anyString(), org.mockito.ArgumentMatchers.any(BomRecipe.class));
+        assertThat(recipeRepository.findById(active.getId()))
+                .hasValueSatisfying(saved -> assertThat(saved.getStatus()).isEqualTo(BomRecipe.Status.ACTIVE));
     }
 
     @Test
@@ -239,31 +424,7 @@ class BomRecipeDraftLifecycleJpaTest {
         ProductType product = saveProduct("ACTIVATE", "袋", new BigDecimal("500"));
         BomRecipe draft = service.ensureDraft(product.getFactoryId(), product.getId());
 
-        RawMaterialType material = new RawMaterialType();
-        material.setId("RAW-BOM-ACTIVATE");
-        material.setFactoryId(product.getFactoryId());
-        material.setCode("RAW-ACTIVATE");
-        material.setName("激活测试原料");
-        material.setCategory("RAW");
-        material.setUnit("kg");
-        material.setIsActive(true);
-        material.setIsAbacaPackaging(false);
-        material.setCreatedBy(1L);
-        rawMaterialTypeRepository.saveAndFlush(material);
-
-        BomRecipeItem item = new BomRecipeItem();
-        item.setRecipeId(draft.getId());
-        item.setFactoryId(product.getFactoryId());
-        item.setMaterialTypeId(material.getId());
-        item.setMaterialName(material.getName());
-        item.setUnit("kg");
-        item.setMaterialCategory("RAW");
-        item.setYieldRate(new BigDecimal("100.00"));
-        item.setSortOrder(0);
-        item.setIsOptional(false);
-        item.setPerPortion(false);
-        item.setQuantityToPriceFactor(BigDecimal.ONE);
-        itemRepository.saveAndFlush(item);
+        BomRecipeItem item = completeWorkflowSkeleton(draft);
 
         BomRecipe activated = service.activateRecipe(product.getFactoryId(), draft.getId(), 1309L);
 
@@ -276,7 +437,7 @@ class BomRecipeDraftLifecycleJpaTest {
                 });
         assertThat(itemRepository.findByRecipeIdOrderBySortOrderAsc(draft.getId()))
                 .extracting(BomRecipeItem::getMaterialTypeId)
-                .containsExactly(material.getId());
+                .containsExactly(item.getMaterialTypeId());
     }
 
     @Test
@@ -296,6 +457,13 @@ class BomRecipeDraftLifecycleJpaTest {
         packaging.setIsAbacaPackaging(false);
         packaging.setCreatedBy(1L);
         rawMaterialTypeRepository.saveAndFlush(packaging);
+
+        BomRecipeItem workflowInput =
+                itemRepository.findByRecipeIdOrderBySortOrderAsc(draft.getId()).getFirst();
+        workflowInput.setStandardQuantity(BigDecimal.ONE);
+        workflowInput.setUnitPrice(new BigDecimal("10"));
+        workflowInput.setQuantityToPriceFactor(BigDecimal.ONE);
+        itemRepository.saveAndFlush(workflowInput);
 
         BomRecipeItem item = new BomRecipeItem();
         item.setRecipeId(draft.getId());
@@ -321,7 +489,9 @@ class BomRecipeDraftLifecycleJpaTest {
     private ProductType saveProduct(String suffix, String unit, BigDecimal gramsPerUnit) {
         ProductType product = newProduct(suffix, unit);
         product.setGramsPerUnit(gramsPerUnit);
-        return productTypeRepository.saveAndFlush(product);
+        ProductType saved = productTypeRepository.saveAndFlush(product);
+        saveWorkflowInputMaterial(saved);
+        return saved;
     }
 
     private ProductType saveStructuredProduct(
@@ -332,7 +502,76 @@ class BomRecipeDraftLifecycleJpaTest {
         ProductType product = newProduct(suffix, unit);
         product.setNetContentQuantity(netContentQuantity);
         product.setNetContentUnit(netContentUnit);
-        return productTypeRepository.saveAndFlush(product);
+        ProductType saved = productTypeRepository.saveAndFlush(product);
+        saveWorkflowInputMaterial(saved);
+        return saved;
+    }
+
+    private void saveWorkflowInputMaterial(ProductType product) {
+        saveRawMaterial(product.getFactoryId(), "RAW-WF-" + product.getId(), "Workflow 固定投入");
+    }
+
+    private RawMaterialType saveRawMaterial(String factoryId, String id, String name) {
+        RawMaterialType material = new RawMaterialType();
+        material.setId(id);
+        material.setFactoryId(factoryId);
+        material.setCode(id);
+        material.setName(name);
+        material.setCategory("RAW");
+        material.setUnit("kg");
+        material.setIsActive(true);
+        material.setIsAbacaPackaging(false);
+        material.setCreatedBy(1L);
+        return rawMaterialTypeRepository.saveAndFlush(material);
+    }
+
+    private PinnedWorkflowGraph twoInputGraph(BomRecipe recipe, String extraMaterialTypeId) {
+        BomWorkflowRevisionService.WorkflowBinding base = workflowBinding(recipe);
+        List<ProductProcessWorkflowDTO.Node> nodes = new ArrayList<>(base.graph().nodes());
+        Map<String, Object> extraData = new LinkedHashMap<>();
+        extraData.put("skuId", extraMaterialTypeId);
+        extraData.put("name", "新增工艺投入");
+        nodes.add(1, new ProductProcessWorkflowDTO.Node(
+                "raw-extra", "RAW_MATERIAL",
+                new ProductProcessWorkflowDTO.Position(0D, 80D), extraData));
+
+        ProductProcessWorkflowDTO.Node process = nodes.stream()
+                .filter(node -> "process".equals(node.getId()))
+                .findFirst()
+                .orElseThrow();
+        List<Map<String, Object>> ports = new ArrayList<>();
+        ports.add(new LinkedHashMap<>(Map.of(
+                "id", "input", "direction", "INPUT", "materialNodeId", "raw-input",
+                "materialKind", "RAW_MATERIAL", "unit", "kg", "ordinal", 0)));
+        ports.add(new LinkedHashMap<>(Map.of(
+                "id", "input-extra", "direction", "INPUT", "materialNodeId", "raw-extra",
+                "materialKind", "RAW_MATERIAL", "unit", "kg", "ordinal", 1)));
+        ports.add(new LinkedHashMap<>(Map.of(
+                "id", "output", "direction", "OUTPUT", "materialNodeId", "terminal",
+                "materialKind", "FINISHED_GOOD", "unit", recipe.getOutputUnit(),
+                "ordinal", 0, "outputRole", "MAIN",
+                "costAllocationRatio", new BigDecimal("100"))));
+        process.getData().put("ports", ports);
+
+        List<ProductProcessWorkflowDTO.Edge> edges = new ArrayList<>(base.graph().edges());
+        edges.add(1, new ProductProcessWorkflowDTO.Edge(
+                "edge-extra", "raw-extra", "output", "process", "input-extra"));
+        return new PinnedWorkflowGraph(
+                recipe.getWorkflowRevisionId(), recipe.getWorkflowId(),
+                recipe.getWorkflowDefinitionVersion(), recipe.getWorkflowRevisionHash(),
+                recipe.getProductTypeId(), "terminal",
+                List.of("RAW-WF-" + recipe.getProductTypeId(), extraMaterialTypeId),
+                List.of(new PinnedWorkflowGraph.ProcessStep("process", "WP-TEST", 1)),
+                nodes, edges);
+    }
+
+    private BomRecipeItem completeWorkflowSkeleton(BomRecipe draft) {
+        BomRecipeItem item = itemRepository.findByRecipeIdOrderBySortOrderAsc(draft.getId()).getFirst();
+        item.setStandardQuantity(BigDecimal.ONE);
+        item.setUnitPrice(new BigDecimal("10"));
+        item.setYieldRate(new BigDecimal("100.00"));
+        item.setQuantityToPriceFactor(BigDecimal.ONE);
+        return itemRepository.saveAndFlush(item);
     }
 
     private ProductType newProduct(String suffix, String unit) {

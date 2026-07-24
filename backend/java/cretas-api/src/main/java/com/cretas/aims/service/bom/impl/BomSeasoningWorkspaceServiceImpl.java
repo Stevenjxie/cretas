@@ -14,12 +14,14 @@ import com.cretas.aims.entity.bom.BomSeasoningItem;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.exception.EntityNotFoundException;
 import com.cretas.aims.repository.ProductWorkProcessRepository;
+import com.cretas.aims.repository.ProductProcessWorkflowRevisionRepository;
 import com.cretas.aims.repository.RawMaterialTypeRepository;
 import com.cretas.aims.repository.WorkProcessRepository;
 import com.cretas.aims.repository.bom.BomRecipeRepository;
 import com.cretas.aims.repository.bom.BomSeasoningItemRepository;
 import com.cretas.aims.service.bom.BomSeasoningWorkspaceService;
 import com.cretas.aims.service.bom.BomItemSubstituteService;
+import com.cretas.aims.service.bom.BomRecipeService;
 import com.cretas.aims.service.bom.BomWorkflowRevisionService;
 import com.cretas.aims.service.workflow.PinnedWorkflowGraph;
 import com.cretas.aims.service.workflow.ProductWorkflowResolutionService;
@@ -55,6 +57,8 @@ public class BomSeasoningWorkspaceServiceImpl implements BomSeasoningWorkspaceSe
     private final ProductWorkflowResolutionService workflowResolutionService;
     private final BomWorkflowRevisionService bomWorkflowRevisionService;
     private final BomItemSubstituteService substituteService;
+    private final ProductProcessWorkflowRevisionRepository workflowRevisionRepository;
+    private final BomRecipeService bomRecipeService;
 
     @Override
     @Transactional(readOnly = true)
@@ -64,7 +68,25 @@ public class BomSeasoningWorkspaceServiceImpl implements BomSeasoningWorkspaceSe
                 ? null
                 : bomWorkflowRevisionService.resolvePinnedGraph(factoryId, recipe);
         List<ResolvedProcess> workflow = resolveProcesses(factoryId, recipe, pinnedGraph);
-        List<BomSeasoningItem> bindings = seasoningItemRepository.findByRecipeIdOrderBySeqAsc(recipeId);
+        String bindingRecipeId = recipe.getSharedRecipeId() == null
+                ? recipeId : recipe.getSharedRecipeId();
+        List<BomSeasoningItem> sharedOwnerBindings =
+                seasoningItemRepository.findByRecipeIdOrderBySeqAsc(bindingRecipeId);
+        List<BomSeasoningItem> bindings = new ArrayList<>(sharedOwnerBindings.stream()
+                .filter(binding -> !"OUTPUT_EXCLUSIVE".equals(binding.getCostScope()))
+                .toList());
+        if (bindingRecipeId.equals(recipeId)) {
+            bindings.addAll(sharedOwnerBindings.stream()
+                    .filter(binding -> "OUTPUT_EXCLUSIVE".equals(binding.getCostScope()))
+                    .toList());
+        } else {
+            bindings.addAll(seasoningItemRepository.findByRecipeIdOrderBySeqAsc(recipeId).stream()
+                    .filter(binding -> "OUTPUT_EXCLUSIVE".equals(binding.getCostScope()))
+                    .toList());
+        }
+        Map<String, String> processCostScopes = pinnedGraph == null
+                ? Map.of()
+                : bomWorkflowRevisionService.resolveProcessCostScopes(factoryId, recipe);
 
         List<String> processIds = workflow.stream().map(ResolvedProcess::workProcessId).distinct().toList();
         Map<String, WorkProcess> workProcesses = workProcessRepository
@@ -86,7 +108,7 @@ public class BomSeasoningWorkspaceServiceImpl implements BomSeasoningWorkspaceSe
         response.setStatus(recipe.getStatus());
         response.setEditable(recipe.getStatus() == BomRecipe.Status.DRAFT);
         response.setSeasoningRevision(recipe.getSeasoningRevision());
-        populatePinnedRevisionSummary(response, factoryId, recipe, pinnedGraph);
+        populatePinnedRevisionSummary(response, factoryId, recipe, bindingRecipeId, pinnedGraph);
 
         for (ResolvedProcess configured : workflow) {
             WorkProcess master = workProcesses.get(configured.workProcessId());
@@ -105,6 +127,10 @@ public class BomSeasoningWorkspaceServiceImpl implements BomSeasoningWorkspaceSe
                     configured.standardBasisUnit(),
                     configured.standardBasisMaterialKind(),
                     configured.standardUsageSupported(),
+                    processCostScopes.getOrDefault(configured.processNodeId(), "SHARED"),
+                    recipe.getStatus() == BomRecipe.Status.DRAFT
+                            && (bindingRecipeId.equals(recipeId)
+                            || "OUTPUT_EXCLUSIVE".equals(processCostScopes.get(configured.processNodeId()))),
                     processBindings));
         }
 
@@ -154,29 +180,32 @@ public class BomSeasoningWorkspaceServiceImpl implements BomSeasoningWorkspaceSe
         BomRecipe recipe = editableRecipe(factoryId, recipeId);
         ResolvedProcess process = validateWorkflow(recipe, factoryId, workProcessId,
                 request.getWorkflowProcessNodeId());
+        BindingTarget target = resolveBindingTarget(factoryId, recipe, process.processNodeId());
         RawMaterialType material = validateMaterial(factoryId, request.getMaterialTypeId());
         validateValues(request.getDosagePerKgG(), request.getSubsequentPotRatio());
         seasoningItemRepository.findByRecipeIdAndWorkflowProcessNodeIdAndMaterialTypeId(
-                recipeId, process.processNodeId(), material.getId()).ifPresent(existing -> {
+                target.recipe().getId(), process.processNodeId(), material.getId()).ifPresent(existing -> {
             throw duplicate(existing);
         });
-        claimRevision(recipe, factoryId, request.getExpectedRevision());
+        claimRevision(target.recipe(), factoryId, request.getExpectedRevision());
 
         BomSeasoningItem binding = new BomSeasoningItem();
-        binding.setRecipeId(recipeId);
+        binding.setRecipeId(target.recipe().getId());
         binding.setFactoryId(factoryId);
         binding.setWorkProcessId(workProcessId);
         binding.setWorkflowProcessNodeId(process.processNodeId());
+        binding.setCostScope(target.costScope());
         binding.setMaterialTypeId(material.getId());
         binding.setSection("COOKING");
         binding.setSeq(seasoningItemRepository.findByRecipeIdAndWorkflowProcessNodeIdOrderBySeqAsc(
-                recipeId, process.processNodeId()).size());
+                target.recipe().getId(), process.processNodeId()).size());
         apply(binding, material, request.getDosagePerKgG(), request.getSubsequentPotRatio(),
                 request.getCountInSeasoning(), request.getRemark());
         BomSeasoningItem saved = seasoningItemRepository.save(binding);
         substituteService.replaceForSeasoningItem(
-                factoryId, recipeId, saved.getId(),
+                factoryId, target.recipe().getId(), saved.getId(),
                 request.getSubstitutes() == null ? List.of() : request.getSubstitutes());
+        bomRecipeService.calculateCost(factoryId, target.recipe().getId());
         return new SeasoningBindingMutationResponse(request.getExpectedRevision() + 1, saved);
     }
 
@@ -185,23 +214,28 @@ public class BomSeasoningWorkspaceServiceImpl implements BomSeasoningWorkspaceSe
     public SeasoningBindingMutationResponse updateBinding(String factoryId, String recipeId, Long bindingId,
                                                            SeasoningBindingUpdateRequest request) {
         BomRecipe recipe = editableRecipe(factoryId, recipeId);
-        BomSeasoningItem binding = loadBinding(recipeId, bindingId);
-        validateWorkflow(recipe, factoryId, binding.getWorkProcessId(), binding.getWorkflowProcessNodeId());
+        BomSeasoningItem binding = loadBindingForWorkspace(recipe, bindingId);
+        ResolvedProcess process = validateWorkflow(
+                recipe, factoryId, binding.getWorkProcessId(), binding.getWorkflowProcessNodeId());
+        BindingTarget target = resolveBindingTarget(factoryId, recipe, process.processNodeId());
+        assertBindingTarget(binding, target);
         RawMaterialType material = validateMaterial(factoryId, request.getMaterialTypeId());
         validateValues(request.getDosagePerKgG(), request.getSubsequentPotRatio());
         seasoningItemRepository.findByRecipeIdAndWorkflowProcessNodeIdAndMaterialTypeId(
-                        recipeId, binding.getWorkflowProcessNodeId(), material.getId())
+                        target.recipe().getId(), binding.getWorkflowProcessNodeId(), material.getId())
                 .filter(existing -> !existing.getId().equals(bindingId))
                 .ifPresent(existing -> { throw duplicate(existing); });
-        claimRevision(recipe, factoryId, request.getExpectedRevision());
+        claimRevision(target.recipe(), factoryId, request.getExpectedRevision());
         binding.setMaterialTypeId(material.getId());
+        binding.setCostScope(target.costScope());
         apply(binding, material, request.getDosagePerKgG(), request.getSubsequentPotRatio(),
                 request.getCountInSeasoning(), request.getRemark());
         BomSeasoningItem saved = seasoningItemRepository.save(binding);
         if (request.getSubstitutes() != null) {
             substituteService.replaceForSeasoningItem(
-                    factoryId, recipeId, saved.getId(), request.getSubstitutes());
+                    factoryId, target.recipe().getId(), saved.getId(), request.getSubstitutes());
         }
+        bomRecipeService.calculateCost(factoryId, target.recipe().getId());
         return new SeasoningBindingMutationResponse(request.getExpectedRevision() + 1, saved);
     }
 
@@ -210,11 +244,16 @@ public class BomSeasoningWorkspaceServiceImpl implements BomSeasoningWorkspaceSe
     public SeasoningBindingMutationResponse deleteBinding(String factoryId, String recipeId, Long bindingId,
                                                            Long expectedRevision) {
         BomRecipe recipe = editableRecipe(factoryId, recipeId);
-        BomSeasoningItem binding = loadBinding(recipeId, bindingId);
-        claimRevision(recipe, factoryId, expectedRevision);
-        substituteService.replaceForSeasoningItem(factoryId, recipeId, bindingId, List.of());
+        BomSeasoningItem binding = loadBindingForWorkspace(recipe, bindingId);
+        BindingTarget target = resolveBindingTarget(
+                factoryId, recipe, binding.getWorkflowProcessNodeId());
+        assertBindingTarget(binding, target);
+        claimRevision(target.recipe(), factoryId, expectedRevision);
+        substituteService.replaceForSeasoningItem(
+                factoryId, target.recipe().getId(), bindingId, List.of());
         binding.softDelete();
         seasoningItemRepository.save(binding);
+        bomRecipeService.calculateCost(factoryId, target.recipe().getId());
         return new SeasoningBindingMutationResponse(expectedRevision + 1, null);
     }
 
@@ -253,9 +292,9 @@ public class BomSeasoningWorkspaceServiceImpl implements BomSeasoningWorkspaceSe
                     .withHint("请先克隆为新的 DRAFT 版本");
         }
         if (recipe.getWorkflowRevisionHash() == null) {
-            throw new BusinessException(409, "请先为 BOM 草稿选择已保存的 Workflow 修订")
+            throw new BusinessException(409, "BOM 草稿尚未自动关联完整工艺")
                     .withCode("BOM_WORKFLOW_REVISION_REQUIRED")
-                    .withHint("保存结构完整的 Workflow 草稿后，在 BOM 中选择对应修订");
+                    .withHint("请先保存唯一且结构完整的 Workflow 草稿，再重新创建 BOM 草稿");
         }
         return recipe;
     }
@@ -263,6 +302,49 @@ public class BomSeasoningWorkspaceServiceImpl implements BomSeasoningWorkspaceSe
     private BomSeasoningItem loadBinding(String recipeId, Long bindingId) {
         return seasoningItemRepository.findByIdAndRecipeId(bindingId, recipeId)
                 .orElseThrow(() -> new EntityNotFoundException("调料绑定不存在: id=" + bindingId));
+    }
+
+    private BomSeasoningItem loadBindingForWorkspace(BomRecipe recipe, Long bindingId) {
+        String sharedRecipeId = recipe.getSharedRecipeId() == null
+                ? recipe.getId() : recipe.getSharedRecipeId();
+        return seasoningItemRepository.findByIdAndRecipeId(bindingId, recipe.getId())
+                .or(() -> recipe.getId().equals(sharedRecipeId)
+                        ? Optional.empty()
+                        : seasoningItemRepository.findByIdAndRecipeId(bindingId, sharedRecipeId))
+                .orElseThrow(() ->
+                        new EntityNotFoundException("调料绑定不属于当前 BOM 工作区: id=" + bindingId));
+    }
+
+    private BindingTarget resolveBindingTarget(
+            String factoryId, BomRecipe recipe, String workflowProcessNodeId) {
+        String scope = bomWorkflowRevisionService.resolveProcessCostScopes(factoryId, recipe)
+                .get(workflowProcessNodeId);
+        if (scope == null) {
+            throw new BusinessException(409, "工序不属于当前 BOM 固定的目标产出路径")
+                    .withCode("SEASONING_WORKFLOW_NODE_OUTSIDE_TARGET");
+        }
+        if (!"SHARED".equals(scope)) {
+            return new BindingTarget(recipe, "OUTPUT_EXCLUSIVE");
+        }
+        String sharedRecipeId = recipe.getSharedRecipeId() == null
+                ? recipe.getId() : recipe.getSharedRecipeId();
+        if (!recipe.getId().equals(sharedRecipeId)) {
+            throw new BusinessException(409, "该工序由多个产出共享，请在主产出 BOM 中修改")
+                    .withCode("SEASONING_SHARED_PROCESS_READ_ONLY")
+                    .withHint("切换到 BOM Family 的主产出，修改后会同步用于所有联产品");
+        }
+        return new BindingTarget(recipe, "SHARED");
+    }
+
+    private void assertBindingTarget(BomSeasoningItem binding, BindingTarget target) {
+        boolean legacySharedBinding = binding.getCostScope() == null
+                && "SHARED".equals(target.costScope());
+        if (!target.recipe().getId().equals(binding.getRecipeId())
+                || (!legacySharedBinding && !target.costScope().equals(binding.getCostScope()))) {
+            throw new BusinessException(409, "调料绑定与当前工序的共享范围不一致")
+                    .withCode("SEASONING_COST_SCOPE_CONFLICT")
+                    .withHint("请刷新 BOM 工作区后重试；历史绑定不会被静默移动");
+        }
     }
 
     private ResolvedProcess validateWorkflow(BomRecipe recipe, String factoryId, String workProcessId,
@@ -418,16 +500,31 @@ public class BomSeasoningWorkspaceServiceImpl implements BomSeasoningWorkspaceSe
             BomSeasoningWorkspaceResponse response,
             String factoryId,
             BomRecipe recipe,
+            String bindingRecipeId,
             PinnedWorkflowGraph graph) {
         if (graph == null) return;
         response.setWorkflowRevisionId(graph.workflowRevisionId());
         response.setWorkflowId(graph.workflowId());
+        workflowRevisionRepository.findByIdAndFactoryId(graph.workflowRevisionId(), factoryId)
+                .ifPresent(revision ->
+                        response.setWorkflowOwnerProductTypeId(revision.getProductTypeId()));
         response.setWorkflowDefinitionVersion(graph.definitionVersion());
         response.setWorkflowRevisionHash(graph.revisionHash());
         response.setWorkflowRootCount(graph.rootMaterialTypeIds().size());
         response.setWorkflowProcessCount(graph.processes().size());
-        response.setWorkflowTargetCount(1);
+        response.setWorkflowTargetCount(
+                bomWorkflowRevisionService.resolvePinnedTerminalOutputs(factoryId, recipe).size());
         response.setWorkflowTargetProductTypeId(graph.targetProductTypeId());
+        response.setBomFamilyId(recipe.getBomFamilyId());
+        response.setSharedRecipeId(bindingRecipeId);
+        response.setSharedRulesOwner(bindingRecipeId.equals(recipe.getId()));
+        response.setOutputRole(recipe.getOutputRole() == null ? null : recipe.getOutputRole().name());
+        response.setCostAllocationRatio(recipe.getCostAllocationRatio());
+        bomWorkflowRevisionService.findNewerCompatibleDraft(factoryId, recipe).ifPresent(revision -> {
+            response.setWorkflowUpgradeAvailable(true);
+            response.setWorkflowUpgradeRevisionId(revision.getId());
+            response.setWorkflowUpgradeDefinitionVersion(revision.getDefinitionVersion());
+        });
 
         bomWorkflowRevisionService.listCompatible(factoryId, recipe.getId()).stream()
                 .filter(candidate -> Objects.equals(candidate.getRevisionId(), graph.workflowRevisionId())
@@ -497,6 +594,8 @@ public class BomSeasoningWorkspaceServiceImpl implements BomSeasoningWorkspaceSe
     }
 
     private record PriceSnapshot(BigDecimal movingAveragePrice, BigDecimal purchaseReferencePrice) { }
+
+    private record BindingTarget(BomRecipe recipe, String costScope) { }
 
     private void validateValues(BigDecimal dosage, BigDecimal ratio) {
         if (dosage == null || dosage.signum() <= 0) {

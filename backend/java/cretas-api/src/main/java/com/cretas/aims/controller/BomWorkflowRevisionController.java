@@ -7,10 +7,12 @@ import com.cretas.aims.dto.common.ApiResponse;
 import com.cretas.aims.dto.workflow.WorkflowRevisionCandidateDTO;
 import com.cretas.aims.entity.bom.BomRecipe;
 import com.cretas.aims.service.bom.BomWorkflowRevisionService;
+import com.cretas.aims.service.bom.BomRecipeService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PutMapping;
+import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
@@ -24,6 +26,7 @@ import java.util.List;
 public class BomWorkflowRevisionController {
 
     private final BomWorkflowRevisionService service;
+    private final BomRecipeService recipeService;
 
     @GetMapping
     public ApiResponse<List<WorkflowRevisionCandidateDTO>> list(
@@ -38,5 +41,13 @@ public class BomWorkflowRevisionController {
             @PathVariable String recipeId,
             @RequestBody BomWorkflowRevisionPinRequest request) {
         return ApiResponse.success(service.pin(factoryId, recipeId, request));
+    }
+
+    @PostMapping("/upgrade-latest")
+    @RequirePermission({"production:read_write", "rd:read_write", "finance:read_write"})
+    public ApiResponse<BomRecipe> upgradeLatest(
+            @PathVariable String factoryId,
+            @PathVariable String recipeId) {
+        return ApiResponse.success(recipeService.upgradeWorkflowRevision(factoryId, recipeId));
     }
 }

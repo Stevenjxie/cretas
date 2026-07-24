@@ -13,6 +13,7 @@ import com.cretas.aims.entity.bom.BomRecipe;
 import com.cretas.aims.entity.bom.BomSeasoningItem;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.repository.ProductWorkProcessRepository;
+import com.cretas.aims.repository.ProductProcessWorkflowRevisionRepository;
 import com.cretas.aims.repository.RawMaterialTypeRepository;
 import com.cretas.aims.repository.WorkProcessRepository;
 import com.cretas.aims.repository.bom.BomRecipeRepository;
@@ -53,6 +54,8 @@ class BomSeasoningWorkspaceServiceTest {
     @Mock ProductWorkflowResolutionService workflowResolutionService;
     @Mock BomWorkflowRevisionService bomWorkflowRevisionService;
     @Mock BomItemSubstituteService substituteService;
+    @Mock ProductProcessWorkflowRevisionRepository workflowRevisionRepository;
+    @Mock BomRecipeService bomRecipeService;
     @InjectMocks BomSeasoningWorkspaceServiceImpl service;
 
     @Test
@@ -92,6 +95,43 @@ class BomSeasoningWorkspaceServiceTest {
                 response.getMaterialSummaries().get(0).getProcessUsages().get(0).getDosagePerKgG());
         assertEquals(new BigDecimal("1.5000"),
                 response.getMaterialSummaries().get(0).getProcessUsages().get(1).getDosagePerKgG());
+    }
+
+    @Test
+    void coProductWorkspaceCombinesSharedAndOwnExclusiveBindingsWithoutLeakingSiblingBranch() {
+        BomRecipe child = recipe(BomRecipe.Status.DRAFT, 2L);
+        child.setId("CHILD");
+        child.setSharedRecipeId("MAIN");
+        BomSeasoningItem shared = binding(1L, "node-p1", "p1", "salt", "5");
+        shared.setRecipeId("MAIN");
+        shared.setCostScope("SHARED");
+        BomSeasoningItem siblingExclusive = binding(2L, "node-p2", "p2", "salt", "9");
+        siblingExclusive.setRecipeId("MAIN");
+        siblingExclusive.setCostScope("OUTPUT_EXCLUSIVE");
+        BomSeasoningItem childExclusive = binding(3L, "node-p2", "p2", "pepper", "2");
+        childExclusive.setRecipeId("CHILD");
+        childExclusive.setCostScope("OUTPUT_EXCLUSIVE");
+        when(recipeRepository.findById("CHILD")).thenReturn(Optional.of(child));
+        pin(child, "p1", "p2");
+        when(bomWorkflowRevisionService.resolveProcessCostScopes(FACTORY, child))
+                .thenReturn(Map.of("node-p1", "SHARED", "node-p2", "OUTPUT_EXCLUSIVE"));
+        when(seasoningItemRepository.findByRecipeIdOrderBySeqAsc("MAIN"))
+                .thenReturn(List.of(shared, siblingExclusive));
+        when(seasoningItemRepository.findByRecipeIdOrderBySeqAsc("CHILD"))
+                .thenReturn(List.of(childExclusive));
+        when(workProcessRepository.findByFactoryIdAndIdIn(eq(FACTORY), anyList())).thenReturn(List.of(
+                workProcess("p1", "共享处理"), workProcess("p2", "联产品包装")));
+        when(materialTypeRepository.findAllById(any())).thenReturn(List.of(material("salt"), material("pepper")));
+
+        BomSeasoningWorkspaceResponse response = service.getWorkspace(FACTORY, "CHILD");
+
+        assertTrue(response.isEditable());
+        assertEquals(List.of(1L), response.getProcesses().get(0).getBindings().stream()
+                .map(BomSeasoningItem::getId).toList());
+        assertFalse(response.getProcesses().get(0).isEditable());
+        assertEquals(List.of(3L), response.getProcesses().get(1).getBindings().stream()
+                .map(BomSeasoningItem::getId).toList());
+        assertTrue(response.getProcesses().get(1).isEditable());
     }
 
     @Test
@@ -159,6 +199,7 @@ class BomSeasoningWorkspaceServiceTest {
         assertEquals("p2", captor.getValue().getWorkProcessId());
         assertEquals("node-p2", captor.getValue().getWorkflowProcessNodeId());
         verify(substituteService).replaceForSeasoningItem(FACTORY, RECIPE, 22L, List.of());
+        verify(bomRecipeService).calculateCost(FACTORY, RECIPE);
     }
 
     @Test
@@ -446,6 +487,19 @@ class BomSeasoningWorkspaceServiceTest {
         when(bomWorkflowRevisionService.resolvePinnedGraph(FACTORY, recipe)).thenReturn(
                 new PinnedWorkflowGraph(101L, 41L, 1, "hash-101", "product-1", "finished",
                         List.of("raw-1"), steps, nodes, List.of()));
+        lenient().when(bomWorkflowRevisionService.resolveProcessCostScopes(FACTORY, recipe))
+                .thenReturn(java.util.Arrays.stream(processIds).collect(java.util.stream.Collectors.toMap(
+                        processId -> "node-" + processId,
+                        processId -> "SHARED")));
+        lenient().when(bomWorkflowRevisionService.resolvePinnedTerminalOutputs(FACTORY, recipe)).thenReturn(List.of(
+                new BomWorkflowRevisionService.TerminalOutput(
+                        "finished",
+                        "product-1",
+                        "node-" + processIds[processIds.length - 1],
+                        "output",
+                        BomRecipe.OutputRole.MAIN,
+                        new BigDecimal("100"),
+                        "kg")));
         lenient().when(bomWorkflowRevisionService.listCompatible(FACTORY, RECIPE)).thenReturn(List.of(
                 WorkflowRevisionCandidateDTO.builder()
                         .revisionId(101L)

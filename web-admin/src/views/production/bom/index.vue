@@ -274,6 +274,15 @@ async function handleSeasoningWorkspaceChanged() {
   await Promise.all([loadBomRecipes(selectedRecipeId.value), loadCostSummary()]);
 }
 
+async function handleWorkflowUpgraded(recipeId: string) {
+  await loadBomRecipes(recipeId);
+  await Promise.all([
+    loadBomItems(),
+    loadCostSummary(),
+    loadConfigurationReadiness(recipeId),
+  ]);
+}
+
 async function handleActivateRecipe(recipe: BomRecipeSummary) {
   if (!factoryId.value) return;
   try {
@@ -504,6 +513,10 @@ const bomForm = ref({
   materialTypeId: '',
   materialName: '',
   materialCategory: 'RAW',
+  workflowMaterialNodeId: null as string | null,
+  workflowInputPortId: null as string | null,
+  workflowEdgeId: null as string | null,
+  costScope: null as 'SHARED' | 'OUTPUT_EXCLUSIVE' | null,
   standardQuantity: null as number | null,
   // Phase A side-effect: 默认 null, 保存时 null = 出成率待评估 (后端用 standardQuantity 原样)
   yieldRate: null as number | null,
@@ -1215,6 +1228,10 @@ async function handleAddBomItem() {
     materialTypeId: '',
     materialName: '',
     materialCategory: activeCategoryTab.value,
+    workflowMaterialNodeId: null,
+    workflowInputPortId: null,
+    workflowEdgeId: null,
+    costScope: activeCategoryTab.value === 'PACKAGING' ? 'OUTPUT_EXCLUSIVE' : null,
     standardQuantity: null,
     yieldRate: null,
     unit: '',
@@ -1251,6 +1268,12 @@ async function handleEditBomItem(row: TableRow) {
     materialTypeId: row.materialTypeId,
     materialName: row.materialName,
     materialCategory: (row.materialCategory as string) || 'RAW',
+    workflowMaterialNodeId: String(row.workflowMaterialNodeId || '') || null,
+    workflowInputPortId: String(row.workflowInputPortId || '') || null,
+    workflowEdgeId: String(row.workflowEdgeId || '') || null,
+    costScope: row.costScope === 'SHARED' || row.costScope === 'OUTPUT_EXCLUSIVE'
+      ? row.costScope
+      : null,
     standardQuantity: row.standardQuantity != null ? Number(row.standardQuantity) : null,
     // Phase A: 编辑时保留原值 (可为 null = 待评估)
     yieldRate: row.yieldRate != null ? (row.yieldRate as number) : null,
@@ -1288,6 +1311,10 @@ function buildRecipeItemPayload(): BomRecipeItemPayload {
   const isPackaging = bomForm.value.materialCategory === 'PACKAGING';
   return {
     materialTypeId: String(bomForm.value.materialTypeId || ''),
+    workflowMaterialNodeId: bomForm.value.workflowMaterialNodeId,
+    workflowInputPortId: bomForm.value.workflowInputPortId,
+    workflowEdgeId: bomForm.value.workflowEdgeId,
+    costScope: bomForm.value.costScope,
     standardQuantity: bomForm.value.standardQuantity == null
       ? null
       : Number(bomForm.value.standardQuantity),
@@ -2034,6 +2061,10 @@ async function submitImport() {
 function toRecipeItemPayload(item: BomRecipeItemView): BomRecipeItemPayload {
   return {
     materialTypeId: item.materialTypeId,
+    workflowMaterialNodeId: item.workflowMaterialNodeId ?? null,
+    workflowInputPortId: item.workflowInputPortId ?? null,
+    workflowEdgeId: item.workflowEdgeId ?? null,
+    costScope: item.costScope ?? null,
     standardQuantity: item.standardQuantity ?? null,
     yieldRate: item.yieldRate ?? null,
     unit: canonicalUnitCode(item.unit),
@@ -2528,6 +2559,7 @@ watch(adjustDialogVisible, (visible) => {
             :recipe-status="selectedRecipe.status"
             :can-write="canWrite"
             @request-clone="handleCloneSelectedRecipe"
+            @workflow-upgraded="handleWorkflowUpgraded"
             @changed="handleSeasoningWorkspaceChanged"
           />
           <el-empty

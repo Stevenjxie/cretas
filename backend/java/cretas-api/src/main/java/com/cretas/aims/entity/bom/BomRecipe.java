@@ -174,6 +174,26 @@ public class BomRecipe extends BaseEntity {
     @Column(name = "workflow_edges_snapshot_json", columnDefinition = "jsonb")
     private String workflowEdgesSnapshotJson;
 
+    /** One shared recipe plus all terminal Output Recipes for one immutable Workflow revision. */
+    @Column(name = "bom_family_id", length = 64)
+    private String bomFamilyId;
+
+    /** MAIN Output Recipe that owns family-shared raw material and process auxiliary rules. */
+    @Column(name = "shared_recipe_id", length = 191)
+    private String sharedRecipeId;
+
+    /** Stable FINISHED_GOOD Cell selected for this Output Recipe. */
+    @Column(name = "target_terminal_node_id", length = 128)
+    private String targetTerminalNodeId;
+
+    @Enumerated(EnumType.STRING)
+    @Column(name = "output_role", length = 24)
+    private OutputRole outputRole;
+
+    /** Percentage of pre-split shared cost allocated to this terminal output. */
+    @Column(name = "cost_allocation_ratio", precision = 7, scale = 4)
+    private BigDecimal costAllocationRatio;
+
     @OneToMany(mappedBy = "recipe", cascade = CascadeType.ALL, fetch = FetchType.LAZY, orphanRemoval = true)
     @OrderBy("sortOrder ASC")
     @Builder.Default
@@ -188,4 +208,6 @@ public class BomRecipe extends BaseEntity {
     public enum Status { DRAFT, ACTIVE, ARCHIVED }
 
     public enum SourceType { MANUAL, SAMPLE_AUTOGEN, AI_GENERATED, IMPORTED }
+
+    public enum OutputRole { MAIN, CO_PRODUCT, BY_PRODUCT }
 }

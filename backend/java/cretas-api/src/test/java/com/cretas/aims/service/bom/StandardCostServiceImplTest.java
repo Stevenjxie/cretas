@@ -218,6 +218,40 @@ class StandardCostServiceImplTest {
 
     // ── 修2-B: outputUnit = 件 → 同样可见 ───────────────────────────────────────
     @Test
+    void multiOutputRecipe_allocatesSharedLaborByOutputRatio() {
+        BomRecipe coProduct = recipe(new BigDecimal("8.00"), new BigDecimal("0.2"), "kg");
+        coProduct.setCostAllocationRatio(new BigDecimal("25"));
+        when(bomRecipeService.getCurrentRecipe(FACTORY, PT))
+                .thenReturn(Optional.of(coProduct));
+        when(quotationTaskRepository.findFirstByFactoryIdAndProductTypeIdOrderByCreatedAtDesc(FACTORY, PT))
+                .thenReturn(Optional.of(quote(new BigDecimal("10.00"))));
+
+        StandardCostService.StandardUnitCost std = service.resolveStandardUnitCost(FACTORY, PT);
+
+        assertThat(std.getLaborUnitCost()).isEqualByComparingTo("0.5000");
+        assertThat(std.getTotalUnitCost()).isEqualByComparingTo("8.5000");
+        assertThat(std.isLaborIncluded()).isTrue();
+    }
+
+    @Test
+    void packagedOutput_usesNetContentThenAppliesOutputAllocation() {
+        BomRecipe coProduct = recipe(new BigDecimal("8.00"), BigDecimal.ONE, "box");
+        coProduct.setNetContentQuantity(new BigDecimal("500"));
+        coProduct.setNetContentUnit("g");
+        coProduct.setCostAllocationRatio(new BigDecimal("25"));
+        when(bomRecipeService.getCurrentRecipe(FACTORY, PT))
+                .thenReturn(Optional.of(coProduct));
+        when(quotationTaskRepository.findFirstByFactoryIdAndProductTypeIdOrderByCreatedAtDesc(FACTORY, PT))
+                .thenReturn(Optional.of(quote(new BigDecimal("10.00"))));
+
+        StandardCostService.StandardUnitCost std = service.resolveStandardUnitCost(FACTORY, PT);
+
+        assertThat(std.getLaborUnitCost()).isEqualByComparingTo("1.2500");
+        assertThat(std.getTotalUnitCost()).isEqualByComparingTo("9.2500");
+        assertThat(std.isLaborIncluded()).isTrue();
+    }
+
+    @Test
     void outputUnitPiece_caliberHintMentionsUnsupportedUnit() {
         when(bomRecipeService.getCurrentRecipe(FACTORY, PT))
                 .thenReturn(Optional.of(recipe(new BigDecimal("8.00"), new BigDecimal("1"), "件")));

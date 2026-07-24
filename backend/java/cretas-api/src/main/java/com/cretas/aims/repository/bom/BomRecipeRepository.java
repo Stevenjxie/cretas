@@ -35,6 +35,15 @@ public interface BomRecipeRepository extends JpaRepository<BomRecipe, String> {
     Optional<BomRecipe> findFirstByFactoryIdAndProductTypeIdAndWorkflowRevisionIdAndStatusOrderByVersionDesc(
             String factoryId, String productTypeId, Long workflowRevisionId, Status status);
 
+    List<BomRecipe> findByFactoryIdAndWorkflowRevisionIdAndStatusOrderByProductTypeIdAsc(
+            String factoryId, Long workflowRevisionId, Status status);
+
+    List<BomRecipe> findByFactoryIdAndBomFamilyIdOrderByProductTypeIdAscVersionDesc(
+            String factoryId, String bomFamilyId);
+
+    List<BomRecipe> findByFactoryIdAndBomFamilyIdAndStatusOrderByProductTypeIdAsc(
+            String factoryId, String bomFamilyId, Status status);
+
     @Lock(LockModeType.PESSIMISTIC_WRITE)
     @Query("""
             select recipe

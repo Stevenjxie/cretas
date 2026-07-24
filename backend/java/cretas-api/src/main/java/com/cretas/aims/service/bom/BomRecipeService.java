@@ -38,6 +38,9 @@ public interface BomRecipeService {
     /** 克隆为新版本草稿: source ACTIVE/ARCHIVED → 新 DRAFT recipe, version+1. */
     BomRecipe cloneRecipe(String factoryId, String recipeId);
 
+    /** Explicitly migrate a complete draft family to the current compatible Workflow DRAFT. */
+    BomRecipe upgradeWorkflowRevision(String factoryId, String recipeId);
+
     /** 归档: DRAFT/ACTIVE → ARCHIVED, is_current=FALSE. */
     BomRecipe archiveRecipe(String factoryId, String recipeId);
 

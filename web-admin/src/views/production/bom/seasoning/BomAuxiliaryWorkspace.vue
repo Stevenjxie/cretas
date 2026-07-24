@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
+import { useRouter } from 'vue-router';
 import {
   bomRecipeApi,
   bomSeasoningApi,
@@ -9,7 +10,6 @@ import {
   type SeasoningBindingView,
   type SeasoningProcessView,
   type SeasoningWorkspace,
-  type WorkflowRevisionCandidate,
 } from '@/api/bom';
 import { get } from '@/api/request';
 import { bigCategoryOf } from '@/utils/materialCategory';
@@ -28,9 +28,11 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   'request-clone': [];
+  'workflow-upgraded': [recipeId: string];
   changed: [];
 }>();
 
+const router = useRouter();
 const workspace = ref<SeasoningWorkspace | null>(null);
 const materials = ref<SeasoningMaterialOption[]>([]);
 const loading = ref(false);
@@ -40,13 +42,10 @@ const expandedWorkProcessIds = ref<string[]>([]);
 const dialogVisible = ref(false);
 const dialogProcess = ref<SeasoningProcessView | null>(null);
 const dialogBinding = ref<SeasoningBindingView | null>(null);
-const workflowRevisions = ref<WorkflowRevisionCandidate[]>([]);
 const substituteRelations = ref<BomItemSubstituteView[]>([]);
 const substitutesLoaded = ref(false);
 const substituteLoadError = ref('');
-const selectedWorkflowRevisionKey = ref('');
-const revisionLoading = ref(false);
-const pinningRevision = ref(false);
+const upgradingWorkflow = ref(false);
 
 const processes = computed(() => uniqueProcessesByNode(workspace.value?.processes || []));
 const summaries = computed(() => buildMaterialSummaries(processes.value));
@@ -61,93 +60,74 @@ const editable = computed(() => Boolean(
   && workspace.value?.editable
   && substitutesLoaded.value,
 ));
-const selectedWorkflowRevision = computed(() => workflowRevisions.value.find(
-  (candidate) => revisionKey(candidate) === selectedWorkflowRevisionKey.value,
-) || null);
-const visibleWorkflowRevisions = computed(() => {
-  const byBusinessVersion = new Map<string, WorkflowRevisionCandidate>();
-  for (const candidate of workflowRevisions.value.filter(item => item.compatible)) {
-    const key = `${candidate.workflowId}:${candidate.definitionVersion ?? 'draft'}`;
-    const current = byBusinessVersion.get(key);
-    const candidatePinned = candidate.revisionId != null
-      && candidate.revisionId === workspace.value?.workflowRevisionId;
-    const currentPinned = current?.revisionId != null
-      && current.revisionId === workspace.value?.workflowRevisionId;
-    if (!current
-      || candidatePinned
-      || (!currentPinned && candidate.recommended && !current.recommended)
-      || (!currentPinned && candidate.savedAt && (!current.savedAt || candidate.savedAt > current.savedAt))) {
-      byBusinessVersion.set(key, candidate);
-    }
-  }
-  return Array.from(byBusinessVersion.values())
-    .sort((left, right) => (right.definitionVersion ?? 0) - (left.definitionVersion ?? 0));
+const workflowStatusLabel = computed(() => {
+  const status = workspace.value?.workflowRevisionStatus;
+  if (status === 'ENABLED') return '已启用';
+  if (status === 'PUBLISHED') return '已发布';
+  if (status === 'DRAFT') return '已保存草稿';
+  return status || '已固定';
 });
-const workflowRevisionChanged = computed(() => {
-  const selected = selectedWorkflowRevision.value;
-  if (!selected) return false;
-  if (selected.revisionId != null && workspace.value?.workflowRevisionId != null) {
-    return selected.revisionId !== workspace.value.workflowRevisionId;
-  }
-  return selected.revisionHash !== workspace.value?.workflowRevisionHash;
-});
-
-function revisionKey(candidate: WorkflowRevisionCandidate): string {
-  return candidate.revisionId != null
-    ? `revision:${candidate.revisionId}`
-    : `workflow:${candidate.workflowId}:${candidate.revisionHash}`;
-}
-
-function revisionLabel(candidate: WorkflowRevisionCandidate): string {
-  const version = candidate.definitionVersion == null ? '未编号' : `v${candidate.definitionVersion}`;
-  const revision = candidate.revisionNumber == null ? '' : ` / 修订${candidate.revisionNumber}`;
-  const status = candidate.enabled ? '已启用' : candidate.status === 'PUBLISHED' ? '已发布' : '草稿';
-  return `${version}${revision} · ${status} · ${candidate.processCount || 0}道工序`;
-}
+const outputRoleLabel = computed(() => ({
+  MAIN: '主产出',
+  CO_PRODUCT: '联产品',
+  BY_PRODUCT: '副产品',
+} as const)[workspace.value?.outputRole || 'MAIN']);
 
 function formatSavedAt(value?: string | null): string {
   if (!value) return '保存时间未知';
-  const matched = value.match(/^(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2})/);
-  return matched ? `${matched[1]}-${matched[2]}-${matched[3]} ${matched[4]}:${matched[5]}` : value;
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return new Intl.DateTimeFormat('zh-CN', {
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  }).format(date);
 }
 
-async function loadWorkflowRevisions() {
-  if (!props.factoryId || !props.recipeId || props.recipeStatus !== 'DRAFT') return;
-  revisionLoading.value = true;
+function openWorkflow() {
+  void router.push({
+    name: 'ProductProcesses',
+    query: {
+      productTypeId: workspace.value?.workflowOwnerProductTypeId || props.productTypeId,
+    },
+  });
+}
+
+async function upgradeWorkflow() {
+  if (!workspace.value?.workflowUpgradeAvailable || upgradingWorkflow.value) return;
   try {
-    const response = await bomRecipeApi.listWorkflowRevisions(props.factoryId, props.recipeId);
-    workflowRevisions.value = response.success && response.data ? response.data : [];
-    const pinned = workflowRevisions.value.find(
-      (candidate) => candidate.revisionId != null && candidate.revisionId === workspace.value?.workflowRevisionId,
+    await ElMessageBox.confirm(
+      `系统会保留当前 BOM 和工艺历史，并创建可编辑草稿升级到 Workflow v${workspace.value.workflowUpgradeDefinitionVersion ?? '最新'}。是否继续？`,
+      '升级到最新工艺',
+      {
+        confirmButtonText: '创建升级草稿',
+        cancelButtonText: '暂不升级',
+        type: 'warning',
+      },
     );
-    const fallback = workflowRevisions.value.find((candidate) => candidate.recommended && candidate.compatible)
-      || workflowRevisions.value.find((candidate) => candidate.compatible);
-    const selected = pinned || fallback;
-    selectedWorkflowRevisionKey.value = selected ? revisionKey(selected) : '';
-  } catch (error: unknown) {
-    ElMessage.error((error as { message?: string }).message || 'Workflow 修订列表加载失败');
-  } finally {
-    revisionLoading.value = false;
+  } catch {
+    return;
   }
-}
-
-async function saveWorkflowRevision() {
-  const selected = selectedWorkflowRevision.value;
-  if (!selected || !selected.compatible || !workflowRevisionChanged.value) return;
-  pinningRevision.value = true;
+  upgradingWorkflow.value = true;
   try {
-    await bomRecipeApi.pinWorkflowRevision(props.factoryId, props.recipeId, {
-      revisionId: selected.revisionId,
-      workflowId: selected.revisionId == null ? selected.workflowId : undefined,
-      revisionHash: selected.revisionHash,
-    });
-    ElMessage.success('Workflow 版本已保存，辅料编排已同步');
-    await loadWorkspace();
-    emit('changed');
+    const response = await bomRecipeApi.upgradeWorkflowRevision(props.factoryId, props.recipeId);
+    if (!response.success || !response.data) {
+      throw new Error(response.message || '工艺升级失败');
+    }
+    ElMessage.success('已创建升级草稿，原 BOM 与历史工艺保持不变');
+    emit('workflow-upgraded', response.data.id);
   } catch (error: unknown) {
-    ElMessage.error((error as { message?: string }).message || '保存 Workflow 版本失败');
+    ElMessage({
+      message: (error as { message?: string }).message || '工艺升级失败，请按提示返回工艺页面检查未映射项',
+      type: 'error',
+      duration: 0,
+      showClose: true,
+    });
   } finally {
-    pinningRevision.value = false;
+    upgradingWorkflow.value = false;
   }
 }
 
@@ -159,10 +139,6 @@ async function loadWorkspace() {
     const response = await bomSeasoningApi.getWorkspace(props.factoryId, props.recipeId);
     if (!response.success || !response.data) throw new Error(response.message || '工序调料响应为空');
     workspace.value = response.data;
-    const pinned = workflowRevisions.value.find(
-      (candidate) => candidate.revisionId != null && candidate.revisionId === response.data?.workflowRevisionId,
-    );
-    if (pinned) selectedWorkflowRevisionKey.value = revisionKey(pinned);
     const validIds = new Set(processes.value.map((process) => process.workflowProcessNodeId));
     const retained = expandedWorkProcessIds.value.filter((id) => validIds.has(id));
     expandedWorkProcessIds.value = retained.length
@@ -312,10 +288,10 @@ watch(() => props.recipeId, async () => {
   substitutesLoaded.value = false;
   substituteLoadError.value = '';
   activeView.value = 'process';
-  await Promise.all([loadWorkspace(), loadWorkflowRevisions(), loadSubstitutes()]);
+  await Promise.all([loadWorkspace(), loadSubstitutes()]);
 });
 
-onMounted(() => Promise.all([loadWorkspace(), loadMaterials(), loadWorkflowRevisions(), loadSubstitutes()]));
+onMounted(() => Promise.all([loadWorkspace(), loadMaterials(), loadSubstitutes()]));
 
 function basisLabel(process: Pick<
   SeasoningProcessView,
@@ -341,52 +317,62 @@ function usageLabel(usage: { dosagePerKgG: number; basisQuantity?: number | null
 
 <template>
   <section data-testid="bom-auxiliary-workspace" class="auxiliary-workspace">
-    <div v-if="recipeStatus === 'DRAFT'" class="revision-card" data-testid="bom-workflow-revision-card">
-      <div class="revision-card__copy">
-        <strong>辅料配置所用 Workflow</strong>
-        <p v-if="workspace?.workflowRevisionHash">
-          当前使用 v{{ workspace.workflowDefinitionVersion }} ·
-          {{ workspace.workflowRootCount ?? 0 }}个入口 / {{ workspace.workflowProcessCount ?? processes.length }}道工序 /
-          {{ workspace.workflowTargetCount ?? 1 }}个目标产出 · 保存于 {{ formatSavedAt(workspace.workflowRevisionSavedAt) }}
-        </p>
-        <p v-else>系统已匹配当前 SKU 保存的 Workflow；如需切换版本，请选择后保存。</p>
+    <div
+      v-if="workspace?.workflowRevisionHash"
+      class="workflow-source-card"
+      data-testid="bom-workflow-source-card"
+    >
+      <div class="workflow-source-card__identity">
+        <span class="workflow-source-card__eyebrow">工艺来源</span>
+        <div class="workflow-source-card__title">
+          <h3>{{ workspace.productName }} · 生产工艺</h3>
+          <el-tag size="small" type="info">Workflow v{{ workspace.workflowDefinitionVersion }}</el-tag>
+          <el-tag size="small" type="success">{{ workflowStatusLabel }}</el-tag>
+        </div>
+        <p>系统已根据当前 SKU 自动关联并固定该工艺版本，历史 BOM 不会随新版本自动变化。</p>
+        <div class="workflow-source-card__facts" aria-label="工艺摘要">
+          <span>{{ workspace.workflowRootCount ?? 0 }} 个投入入口</span>
+          <span>{{ workspace.workflowProcessCount ?? processes.length }} 道工序</span>
+          <span>{{ workspace.workflowTargetCount ?? 1 }} 个终端产出</span>
+          <span>保存于 {{ formatSavedAt(workspace.workflowRevisionSavedAt) }}</span>
+          <span v-if="(workspace.workflowTargetCount ?? 1) > 1">
+            {{ outputRoleLabel }} · 成本分摊 {{ workspace.costAllocationRatio ?? 0 }}%
+          </span>
+        </div>
       </div>
-      <div class="revision-card__actions">
-        <el-select
-          v-model="selectedWorkflowRevisionKey"
-          :loading="revisionLoading"
-          filterable
-          placeholder="选择 Workflow 修订"
-          class="revision-select"
-          data-testid="workflow-revision-select"
-        >
-          <el-option
-            v-for="candidate in visibleWorkflowRevisions"
-            :key="revisionKey(candidate)"
-            :label="revisionLabel(candidate)"
-            :value="revisionKey(candidate)"
-            :disabled="!candidate.compatible"
-          >
-            <div class="revision-option">
-              <span>{{ revisionLabel(candidate) }}</span>
-              <small>{{ candidate.compatible ? formatSavedAt(candidate.savedAt) : candidate.incompatibilityReason }}</small>
-            </div>
-          </el-option>
-        </el-select>
+      <div class="workflow-source-card__actions">
+        <el-button data-testid="view-workflow" @click="openWorkflow">查看工艺</el-button>
         <el-button
+          v-if="canWrite && workspace.workflowUpgradeAvailable"
           type="primary"
-          :loading="pinningRevision"
-          :disabled="!selectedWorkflowRevision?.compatible || !workflowRevisionChanged"
-          data-testid="pin-workflow-revision"
-          @click="saveWorkflowRevision"
-        >保存</el-button>
-        <small
-          v-if="workflowRevisions.length && !workflowRevisions.some((candidate) => candidate.compatible)"
-          class="revision-card__incompatible"
-          data-testid="no-compatible-workflow-revision"
-        >当前没有与本 SKU 兼容且结构完整的 Workflow 修订，请先返回 Workflow 完成并保存草稿。</small>
+          :loading="upgradingWorkflow"
+          data-testid="upgrade-workflow"
+          @click="upgradeWorkflow"
+        >
+          升级到最新工艺
+        </el-button>
+      </div>
+      <div
+        v-if="workspace.workflowUpgradeAvailable"
+        class="workflow-source-card__update"
+        role="status"
+        aria-live="polite"
+        data-testid="workflow-update-notice"
+      >
+        发现更新的工艺版本 v{{ workspace.workflowUpgradeDefinitionVersion }}。升级会创建新 BOM 草稿，并按稳定工艺节点迁移现有配置。
       </div>
     </div>
+
+    <el-alert
+      v-else-if="workspace && !loading"
+      type="error"
+      show-icon
+      :closable="false"
+      class="state-alert"
+      title="当前 BOM 尚未自动关联完整工艺"
+      description="请返回工艺页面保存唯一且结构完整的 Workflow 草稿，再重新创建 BOM 草稿。系统不会猜测或静默绑定版本。"
+      data-testid="workflow-source-error"
+    />
 
     <el-alert
       v-if="recipeStatus !== 'DRAFT'"
@@ -459,7 +445,7 @@ function usageLabel(usage: { dosagePerKgG: number; basisQuantity?: number | null
             :process="process"
             :processes="processes"
             :expanded="expandedWorkProcessIds.includes(process.workflowProcessNodeId)"
-            :editable="editable && process.standardUsageSupported === true"
+            :editable="editable && process.editable !== false && process.standardUsageSupported === true"
             @toggle="toggleProcess(process.workflowProcessNodeId)"
             @add="openAdd"
             @edit="openEdit"
@@ -550,14 +536,17 @@ function usageLabel(usage: { dosagePerKgG: number; basisQuantity?: number | null
 <style scoped>
 .auxiliary-workspace { min-height: 180px; }
 .state-alert { margin-bottom: 10px; }
-.revision-card { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 12px; padding: 12px 14px; border: 1px solid var(--el-color-primary-light-7); border-radius: 8px; background: var(--el-color-primary-light-9); }
-.revision-card__copy { min-width: 0; }
-.revision-card__copy p { margin: 4px 0 0; color: var(--el-text-color-secondary); font-size: 12px; line-height: 1.5; }
-.revision-card__actions { display: flex; align-items: center; gap: 8px; flex: none; flex-wrap: wrap; }
-.revision-card__incompatible { flex-basis: 100%; color: var(--el-color-warning-dark-2); line-height: 1.4; }
-.revision-select { width: 330px; }
-.revision-option { display: flex; flex-direction: column; line-height: 1.35; }
-.revision-option small { color: var(--el-text-color-secondary); }
+.workflow-source-card { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 12px 20px; margin-bottom: 12px; padding: 16px 18px; border: 1px solid var(--el-color-primary-light-7); border-left: 4px solid var(--el-color-primary); border-radius: 8px; background: linear-gradient(135deg, var(--el-color-primary-light-9), var(--el-bg-color) 72%); }
+.workflow-source-card__identity { min-width: 0; }
+.workflow-source-card__eyebrow { display: block; margin-bottom: 6px; color: var(--el-color-primary); font-size: 12px; font-weight: 700; letter-spacing: .08em; }
+.workflow-source-card__title { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+.workflow-source-card__title h3 { min-width: 0; margin: 0; font-size: 15px; overflow-wrap: anywhere; text-wrap: balance; }
+.workflow-source-card__identity p { margin: 7px 0 0; color: var(--el-text-color-secondary); font-size: 13px; line-height: 1.55; }
+.workflow-source-card__facts { display: flex; flex-wrap: wrap; gap: 6px 18px; margin-top: 10px; color: var(--el-text-color-regular); font-size: 12px; }
+.workflow-source-card__facts span { position: relative; }
+.workflow-source-card__facts span:not(:last-child)::after { position: absolute; right: -10px; color: var(--el-border-color); content: "·"; }
+.workflow-source-card__actions { display: flex; align-items: flex-start; gap: 8px; }
+.workflow-source-card__update { grid-column: 1 / -1; padding-top: 10px; border-top: 1px solid var(--el-color-primary-light-8); color: var(--el-color-warning-dark-2); font-size: 13px; line-height: 1.5; }
 .workspace-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 10px; }
 .workspace-toolbar__right { display: flex; align-items: center; gap: 10px; }
 .workspace-stats { color: var(--el-text-color-secondary); font-size: 12px; }
@@ -575,15 +564,16 @@ function usageLabel(usage: { dosagePerKgG: number; basisQuantity?: number | null
 .compact-summary__usages { display: grid; gap: 5px; }
 .compact-summary__usage { display: flex; align-items: center; justify-content: space-between; gap: 8px; width: 100%; padding: 7px 8px; border: 0; border-radius: 4px; background: var(--el-fill-color-light); color: var(--el-text-color-regular); cursor: pointer; text-align: left; }
 .compact-summary__usage:hover { background: var(--el-color-primary-light-9); color: var(--el-color-primary); }
+.compact-summary__usage:focus-visible { outline: 2px solid var(--el-color-primary); outline-offset: 2px; }
 .compact-summary__usage strong { flex: none; font-size: 12px; }
 .summary-detail { padding: 8px 48px; }
 .summary-usage { display: grid; grid-template-columns: minmax(120px, 1fr) 120px minmax(160px, 1fr) 80px; align-items: center; gap: 12px; padding: 7px 0; border-bottom: 1px solid var(--el-border-color-lighter); }
 .usage-tag { margin: 2px 4px 2px 0; }
 
 @media (max-width: 1180px) {
-  .revision-card { align-items: stretch; flex-direction: column; }
-  .revision-card__actions { width: 100%; }
-  .revision-select { flex: 1; width: auto; }
+  .workflow-source-card { grid-template-columns: 1fr; }
+  .workflow-source-card__actions { width: 100%; }
+  .workflow-source-card__update { grid-column: 1; }
   .process-layout { grid-template-columns: 1fr; }
   .compact-summary { position: static; }
   .compact-summary__list { max-height: none; }

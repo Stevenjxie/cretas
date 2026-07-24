@@ -182,19 +182,33 @@ public class StandardCostServiceImpl implements StandardCostService {
             return LaborResult.skip(null);
         }
         BigDecimal unitKg = toKilograms(outputQtyPerUnit, recipe.getOutputUnit());
+        if (unitKg == null
+                && recipe.getNetContentQuantity() != null
+                && recipe.getNetContentQuantity().compareTo(BigDecimal.ZERO) > 0) {
+            BigDecimal netContentKg = toKilograms(
+                    recipe.getNetContentQuantity(),
+                    recipe.getNetContentUnit());
+            if (netContentKg != null) {
+                unitKg = outputQtyPerUnit.multiply(netContentKg);
+            }
+        }
         if (unitKg == null) {
             // 修2: 单位无法折算 → warn 级别 (可见) + 明确说明"超支报警对本品禁用"
             String outputUnit = recipe.getOutputUnit();
             log.warn("[D1-StdCost] 产品 {} BOM outputUnit={} 无法折算到 kg → 标准人工缺失, 超支报警对本品禁用。" +
-                            "如需支持, 请在 BOM 配置 gramsPerUnit (净含量/克) 后联系开发团队启用 net-content 折算。",
+                            "请为包装单位配置可换算为重量的净含量。",
                     productTypeId, outputUnit);
             return LaborResult.skip(
                     "产品单位 \"" + outputUnit + "\" 无法折算到 kg, 标准人工缺失 → 超支报警对本品禁用" +
-                    " (待 Steve 决策: 配置 gramsPerUnit 可支持 net-content 折算)");
+                    "；请配置可换算为重量的净含量");
         }
 
         // 标准人工单位成本 = laborPerKg × unitKg
-        return LaborResult.of(laborPerKg.multiply(unitKg).setScale(COST_SCALE, RoundingMode.HALF_UP));
+        BigDecimal allocation = recipe.getCostAllocationRatio() == null
+                ? BigDecimal.ONE
+                : recipe.getCostAllocationRatio().divide(new BigDecimal("100"), 8, RoundingMode.HALF_UP);
+        return LaborResult.of(laborPerKg.multiply(unitKg).multiply(allocation)
+                .setScale(COST_SCALE, RoundingMode.HALF_UP));
     }
 
     /**

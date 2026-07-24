@@ -33,6 +33,8 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 @ExtendWith(MockitoExtension.class)
@@ -129,8 +131,76 @@ class BomWorkflowRevisionServiceTest {
     }
 
     @Test
+    void multiOutputProcessScopesAreDerivedFromStableNodePresenceAcrossTerminalSlices() throws Exception {
+        BomRecipe recipe = recipe(snapshot(twoToTwo()));
+
+        Map<String, String> scopes = service.resolveProcessCostScopes(FACTORY, recipe);
+
+        assertEquals("SHARED", scopes.get("blend"));
+        assertEquals("SHARED", scopes.get("split"));
+    }
+
+    @Test
+    void firstBomAutoBindsTheOnlyCompatibleFactoryDraftEvenWhenWorkflowOwnerDiffers() throws Exception {
+        BomRecipe draft = recipe(null);
+        ProductProcessWorkflowRevision revision = revision(oneToOne());
+        revision.setProductTypeId("UPSTREAM-WORKFLOW-OWNER");
+        revision.setRevisionHash(snapshotService.hash(revision));
+        when(revisionRepository.findCurrentFactoryDraftRevisions(FACTORY)).thenReturn(List.of(revision));
+        when(recipeRepository.saveAndFlush(draft)).thenReturn(draft);
+
+        BomWorkflowRevisionService.WorkflowBinding binding = service.autoBindUniqueDraft(FACTORY, draft);
+
+        assertEquals(revision.getId(), draft.getWorkflowRevisionId());
+        assertEquals(revision.getWorkflowId(), draft.getWorkflowId());
+        assertEquals(revision.getRevisionHash(), draft.getWorkflowRevisionHash());
+        assertEquals(revision.getNodesJson(), draft.getWorkflowNodesSnapshotJson());
+        assertEquals(revision.getEdgesJson(), draft.getWorkflowEdgesSnapshotJson());
+        assertEquals("finished", draft.getTargetTerminalNodeId());
+        assertEquals(BomRecipe.OutputRole.MAIN, draft.getOutputRole());
+        assertEquals(new BigDecimal("100"), draft.getCostAllocationRatio());
+        assertEquals(PRODUCT, binding.target().productTypeId());
+        verify(recipeRepository).saveAndFlush(draft);
+    }
+
+    @Test
+    void firstBomRejectsAmbiguousCompatibleDraftsBeforeWriting() throws Exception {
+        BomRecipe draft = recipe(null);
+        ProductProcessWorkflowRevision first = revision(oneToOne());
+        ProductProcessWorkflowRevision second = revision(oneToOne());
+        second.setId(72L);
+        second.setWorkflowId(42L);
+        when(revisionRepository.findCurrentFactoryDraftRevisions(FACTORY)).thenReturn(List.of(first, second));
+
+        BusinessException error = assertThrows(BusinessException.class,
+                () -> service.autoBindUniqueDraft(FACTORY, draft));
+
+        assertEquals("BOM_WORKFLOW_DRAFT_AMBIGUOUS", error.getErrorCode());
+        verify(recipeRepository, never()).saveAndFlush(draft);
+    }
+
+    @Test
+    void stableInputSlotsRetainEveryConvergingRootAndPortIdentity() throws Exception {
+        PinnedWorkflowGraph graph = service.resolvePinnedGraph(FACTORY, recipe(snapshot(twoToOne())));
+
+        List<BomWorkflowRevisionService.InputSlot> slots =
+                BomWorkflowRevisionService.resolveInputSlots(graph);
+
+        assertEquals(List.of("raw-a:blend:in-a", "raw-b:blend:in-b"), slots.stream()
+                .map(slot -> slot.materialNodeId() + ":" + slot.processNodeId() + ":" + slot.inputPortId())
+                .toList());
+        assertEquals(List.of("RM-A", "RM-B"), slots.stream()
+                .map(BomWorkflowRevisionService.InputSlot::materialTypeId)
+                .toList());
+        assertEquals(List.of("e1", "e2"), slots.stream()
+                .map(BomWorkflowRevisionService.InputSlot::edgeId)
+                .toList());
+    }
+
+    @Test
     void selectorShowsSavedPublishedAndEnabledStateAndRecommendsLatestDraft() throws Exception {
         BomRecipe recipe = recipe(null);
+        recipe.setWorkflowRevisionId(71L);
         ProductProcessWorkflowRevision draft = revision(oneToOne());
         draft.setId(72L);
         draft.setWorkflowId(42L);
@@ -148,8 +218,8 @@ class BomWorkflowRevisionServiceTest {
         activation.setActiveWorkflowId(41L);
         activation.setEnabled(true);
         when(recipeRepository.findById("BOM-1")).thenReturn(Optional.of(recipe));
-        when(revisionRepository.findByFactoryIdAndProductTypeIdOrderByCreatedAtDesc(FACTORY, PRODUCT))
-                .thenReturn(List.of(draft, published));
+        when(revisionRepository.findCurrentFactoryDraftRevisions(FACTORY)).thenReturn(List.of(draft));
+        when(revisionRepository.findByIdAndFactoryId(71L, FACTORY)).thenReturn(Optional.of(published));
         when(workflowRepository.findByFactoryIdAndProductTypeIdOrderByDefinitionVersionDesc(FACTORY, PRODUCT))
                 .thenReturn(List.of());
         when(activationRepository.findByFactoryIdAndProductTypeId(FACTORY, PRODUCT))
