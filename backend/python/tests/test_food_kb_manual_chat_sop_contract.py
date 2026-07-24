@@ -4,9 +4,11 @@ import pytest
 
 from food_kb.api import manual_chat as manual_chat_module
 from food_kb.api.manual_chat import (
+    _BOM_WORKFLOW_SEQUENCE_ANSWER,
     FACTORY_SYSTEM_PROMPT,
     ManualChatRequest,
     _build_scope_prompt,
+    _needs_bom_workflow_sequence_guard,
     _uses_current_production_sop,
 )
 from food_kb.services.knowledge_retriever import KnowledgeRetriever
@@ -46,6 +48,20 @@ def test_only_production_chain_questions_force_the_current_sop_source():
     assert _uses_current_production_sop("Workflow 的成品单位为什么是盒")
     assert not _uses_current_production_sop("登录页忘记密码怎么办")
     assert not _uses_current_production_sop("设备保养入口在哪里")
+
+
+def test_bom_workflow_publication_questions_use_the_deterministic_guard():
+    assert _needs_bom_workflow_sequence_guard(
+        "BOM 激活后 Workflow 为什么还不能发布？"
+    )
+    assert not _needs_bom_workflow_sequence_guard("BOM 怎么添加包材？")
+    assert "Workflow 完整草稿 → BOM 绑定工序辅料并激活" in (
+        _BOM_WORKFLOW_SEQUENCE_ANSWER
+    )
+    assert "Workflow 刷新、发布并启用" in _BOM_WORKFLOW_SEQUENCE_ANSWER
+    assert "两者无依赖" not in _BOM_WORKFLOW_SEQUENCE_ANSWER
+    assert "两者无从属关系" not in _BOM_WORKFLOW_SEQUENCE_ANSWER
+    assert "先发布 Workflow" not in _BOM_WORKFLOW_SEQUENCE_ANSWER
 
 
 def test_retriever_source_allow_list_is_bound_as_a_sql_parameter():
@@ -158,6 +174,43 @@ async def test_factory_chat_passes_scope_to_llm_and_does_not_delay_for_related(
         "f006-production-full-chain-sop.md"
     ]
     assert response["related_questions"] == []
+    assert response["sources"][0]["source"] == "f006-production-full-chain-sop.md"
+
+
+@pytest.mark.asyncio
+async def test_bom_workflow_publication_answer_never_calls_the_llm(monkeypatch):
+    class FakeDoc:
+        title = "F006 生产全链路测试 SOP - BOM 与 Workflow 的强制往返顺序"
+        content = "ACTIVE BOM 是 Workflow 发布启用的前置门禁。"
+        source = "f006-production-full-chain-sop.md"
+        similarity = 0.91
+
+    class FakeRetriever:
+        def is_ready(self):
+            return True
+
+        async def retrieve(self, **kwargs):
+            return [FakeDoc()]
+
+    async def unexpected_call_chain(*args, **kwargs):
+        raise AssertionError("deterministic BOM/Workflow answer must skip the LLM")
+
+    monkeypatch.setattr(
+        manual_chat_module,
+        "get_knowledge_retriever",
+        lambda: FakeRetriever(),
+    )
+    monkeypatch.setattr("common.llm_router.call_chain", unexpected_call_chain)
+    manual_chat_module._answer_cache.clear()
+
+    response = await manual_chat_module.manual_chat(
+        ManualChatRequest(
+            question="BOM 激活后 Workflow 为什么还不能发布？",
+            category="factory",
+        )
+    )
+
+    assert response["answer"] == _BOM_WORKFLOW_SEQUENCE_ANSWER
     assert response["sources"][0]["source"] == "f006-production-full-chain-sop.md"
 
 

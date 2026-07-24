@@ -140,6 +140,21 @@ _PRODUCTION_SOP_KEYWORDS = frozenset({
     "生产计划", "存货生产", "销售订单", "报工", "结单", "小结", "停产", "成本",
     "入库", "出库", "库存", "仓库", "调拨", "采购", "盘点", "审批", "冲销",
 })
+_BOM_WORKFLOW_SEQUENCE_TRIGGERS = frozenset({
+    "激活", "发布", "启用", "顺序", "前置", "依赖", "为什么还不能",
+})
+_BOM_WORKFLOW_SEQUENCE_ANSWER = """\
+完整强制顺序是：Workflow 完整草稿 → BOM 绑定工序辅料并激活 → Workflow 刷新、发布并启用。
+
+ACTIVE BOM 是 Workflow 发布启用的前置门禁，但 BOM 激活本身不会自动发布 Workflow。BOM 已激活仍不能发布，说明 Workflow 自身的发布门禁还未全部通过。
+
+**操作步骤：**
+1. 进入生产管理 → 生产配置 → 产品-工序配置，打开目标 SKU 的 Workflow 草稿。
+2. 确认草稿链路完整，所有 Cell 已绑定有效 SKU，终端成品与顶部归属一致，关联工序处于启用状态。
+3. 刷新并确认页面引用的是当前 ACTIVE BOM，且没有单位复核或旧草稿警告。
+4. 重新校验后执行发布并启用。
+
+**验收结果：** 页面同时显示“已发布 vX”和“已启用 vX”；若仍失败，按页面列出的具体缺失项逐项修正，不能绕过门禁。"""
 
 
 def _uses_current_production_sop(query: str) -> bool:
@@ -151,6 +166,16 @@ def _uses_current_production_sop(query: str) -> bool:
     """
     normalized = (query or "").lower()
     return any(keyword.lower() in normalized for keyword in _PRODUCTION_SOP_KEYWORDS)
+
+
+def _needs_bom_workflow_sequence_guard(query: str) -> bool:
+    """Use the reviewed deterministic answer for the critical publish gate."""
+    normalized = (query or "").lower()
+    return (
+        "bom" in normalized
+        and "workflow" in normalized
+        and any(trigger in normalized for trigger in _BOM_WORKFLOW_SEQUENCE_TRIGGERS)
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -807,27 +832,36 @@ async def manual_chat(request: ManualChatRequest) -> dict:
     # ------ Improvement #5: adaptive max_tokens ------
     max_tokens = _estimate_max_tokens(request.question)
 
-    # Answer via call_chain(SLOT.CHAT): 免费 fallback 链 + 熔断。删 KB-chat 原
-    # DeepSeek 直连分支 (绕过免费链 + DeepSeek 余额硬失败风险); model 由 router 注入。
-    try:
-        from common.llm_router import call_chain, SLOT
-        from common.llm_metrics import llm_caller_context
+    if (
+        not is_restaurant_request
+        and _needs_bom_workflow_sequence_guard(request.question)
+    ):
+        # This publication gate is safety-critical and has one reviewed answer.
+        # Keep retrieval for source evidence, but do not let model variance invert
+        # or omit the mandatory Workflow → BOM → Workflow sequence.
+        answer = _BOM_WORKFLOW_SEQUENCE_ANSWER
+    else:
+        # Answer via call_chain(SLOT.CHAT): 免费 fallback 链 + 熔断。删 KB-chat 原
+        # DeepSeek 直连分支 (绕过免费链 + DeepSeek 余额硬失败风险); model 由 router 注入。
+        try:
+            from common.llm_router import call_chain, SLOT
+            from common.llm_metrics import llm_caller_context
 
-        payload = {
-            "messages": messages,
-            "max_tokens": max_tokens,
-            "temperature": 0.3,
-            "enable_thinking": False,
-        }
-        with llm_caller_context("food_kb.manual_chat.answer"):
-            data = await call_chain(SLOT.CHAT, payload, timeout=30.0)
-        answer = data["choices"][0]["message"]["content"]
-    except Exception as e:
-        logger.error(f"LLM call failed: {e}")
-        if context_parts:
-            answer = f"AI 服务暂时不可用，以下是检索到的相关内容：\n\n{context_parts[0]}"
-        else:
-            answer = "抱歉，暂时无法回答您的问题。请查看操作手册对应章节。"
+            payload = {
+                "messages": messages,
+                "max_tokens": max_tokens,
+                "temperature": 0.3,
+                "enable_thinking": False,
+            }
+            with llm_caller_context("food_kb.manual_chat.answer"):
+                data = await call_chain(SLOT.CHAT, payload, timeout=30.0)
+            answer = data["choices"][0]["message"]["content"]
+        except Exception as e:
+            logger.error(f"LLM call failed: {e}")
+            if context_parts:
+                answer = f"AI 服务暂时不可用，以下是检索到的相关内容：\n\n{context_parts[0]}"
+            else:
+                answer = "抱歉，暂时无法回答您的问题。请查看操作手册对应章节。"
 
     response = {
         "success": True,
