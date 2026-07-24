@@ -555,7 +555,7 @@ const RESTAURANT_TIME_FOLLOWUPS: Array<{
     ],
   },
   {
-    patterns: ['哪个菜卖得最好', '畅销', '热销', '爆款'],
+    patterns: ['哪个菜卖得最好', '哪个菜卖得好', '畅销', '热销', '爆款'],
     followups: [
       { label: '上个月', question: '上个月哪个菜卖得最好' },
       { label: '本季度', question: '本季度哪个菜卖得最好' },

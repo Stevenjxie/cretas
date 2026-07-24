@@ -203,4 +203,19 @@ describe('AIQuery P1 conversational depth', () => {
     expect(String(last.content)).toContain('服务分');
     expect(String(last.content)).toContain('服务态度');
   });
+
+  it('offers same-topic time follow-ups for the sheet wording "哪个菜卖得好"', async () => {
+    executeIntentMock.mockResolvedValue({
+      status: 'SUCCESS',
+      sessionId: 'dish-session',
+      message: '近 30 天菜品销量排行',
+      resultData: { message: '近 30 天菜品销量排行' },
+    });
+
+    const { wrapper } = await mountAndAsk('哪个菜卖得好');
+
+    expect(wrapper.text()).toContain('换个时间');
+    expect(wrapper.text()).toContain('上个月');
+    expect(wrapper.text()).toContain('近30天');
+  });
 });

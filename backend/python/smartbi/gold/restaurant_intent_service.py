@@ -474,7 +474,10 @@ async def tiered_answer(
             "charts": result_charts,
             "kpis": result_kpis,
             "title": str(getattr(tiered_result, "title", "") or "经营分析"),
-            "code": spec.intent,
+            # Report the resolver that actually produced a single-topic answer.
+            # The selected intent and metric plan can differ; returning the
+            # selected code hid the 7/24 dish-ranking -> sales-summary mismatch.
+            "code": planned_results[0][0] if len(planned_results) == 1 else spec.intent,
             "contract_pass": contract_pass,
             "spec": spec,
         }

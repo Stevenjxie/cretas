@@ -772,6 +772,36 @@ def test_dish_sales_and_margin_share_one_deterministic_resolver():
     assert spec.clarification_needed is False
 
 
+def test_sheet_dish_sales_question_never_plans_store_sales_summary():
+    spec = _build_spec(
+        "RESTAURANT_OPS_GROSS_MARGIN",
+        "哪个菜卖得好",
+        confidence=1.0,
+        tier="test",
+    )
+
+    assert spec.dimensions == ("dish",)
+    assert spec.requested_metrics == ("sales_volume",)
+    assert spec.planned_intents == ("RESTAURANT_OPS_GROSS_MARGIN",)
+
+
+def test_dish_ranking_followup_resolves_first_place_pronoun_from_answer():
+    parent = {
+        "parent_query": "哪个菜卖得好",
+        "parent_template_code": "RESTAURANT_OPS_GROSS_MARGIN",
+        "parent_answer_summary": (
+            "**近 30 天菜品销量排行（卖得最好前 5）：**\n\n"
+            "1. **招牌藤椒味（单人份）** — 销量 120 份、营收 ¥3,600.00\n"
+            "2. 米饭 — 销量 100 份、营收 ¥200.00"
+        ),
+    }
+
+    effective, inherited = contextualize_restaurant_followup("它的成本如何", parent)
+
+    assert inherited is True
+    assert effective == "招牌藤椒味（单人份）的成本如何"
+
+
 @pytest.mark.asyncio
 async def test_generic_optimization_parses_as_clarification_without_llm():
     spec = await parse_restaurant_query(

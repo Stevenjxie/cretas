@@ -873,6 +873,7 @@ async def test_tiered_sales_summary_with_dish_mention_reroutes_to_gross_margin(m
     result = await tiered_answer("米饭的销量是多少", object(), "DEMO_REST", "restaurant_manager")
     assert captured["code"] == "RESTAURANT_OPS_GROSS_MARGIN"
     assert result["kind"] == "answer"
+    assert result["code"] == "RESTAURANT_OPS_GROSS_MARGIN"
 
 
 def test_r24_vector_tier_threshold_gate():
