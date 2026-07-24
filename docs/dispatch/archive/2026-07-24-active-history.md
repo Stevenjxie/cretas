@@ -1,5 +1,16 @@
 # 2026-07-24 调度归档
 
+## `FEATURE-LABEL-QC-COLD-START-001` / `BUG-LABEL-QC-OSS-DOWNLOAD-001` — `merged`
+
+- Owner: `/root`
+- Base SHA: `4c265eb920cf97e1d2d73ec2eb3581d4aa90bb72` / `4d32a232735b2f35e1d78b933e9ffacc12c0c0ed`
+- 合入：主功能 PR #1744 合并为 `4d32a232735b2f35e1d78b933e9ffacc12c0c0ed`；OSS 下载热修 PR #1745 合并为 `bf5753999823aab508d5e495dbc36822e4773d77`。
+- 发布：Java 最终从 clean exact `origin/main` 复用已测试 JAR `0b709ea4757e525f88134b339cab74035b322ccd2857499d5725802822b90903`，蓝绿切至 blue/10010，5/5 轮 nginx 200 与 systemd active；Web HTTP 200 且四方哈希 `4dda6733e0b7e8701b8a725479f3a072bd266006beee4d69549a6aa0aae4bf74`；Python 8083 本机 health/数据库连接通过；RN Android OTA `1.0.1/production/1784901301246` 已注册。
+- 故障闭环：生产首轮任务证明 Apache `RestTemplate` 在 Python 调用前下载 OSS 签名图片失败；改用带连接/请求超时、重定向与 10 MB 上限的 JDK 21 `HttpClient`，`LabelQcAnalysisClientTest` 1/1 通过，统一 release Java build 与 manifest 校验通过。
+- F006 写测：实时登录证明 `factoryId=F006` 后，仅对任务 `0d86db18-435a-49bf-aa2b-ba0a88fdf6f2` 执行任务/附件/照片、重试与人工审核写入；模型 `qwen3-vl-plus-2025-12-19`、Prompt `label-presence-high-recall-v1` 返回 8 个保守候选，人工逐一纠正并补充 1 个 `MISSING_WHITE_LABEL` 真值框 `[0.0,0.61,0.32,0.79]`，最终状态 `REVIEWED`、缺陷数 1、训练导出命中 1 张/9 条最终标注。
+- UI 验收：生产 headed 浏览器以 `f006_admin` 打开 `/quality/label-qc`，统计显示已审核 1，队列和详情显示目标批次 `CODEX-LABEL-QC-E2E-20260724-220214`、原图、8 个 AI 纠正项及 1 个人工缺白标项。
+- 边界：默认 E2E 映射曾返回 F001，已在任何业务写入前停止；本轮没有 F006 以外租户业务写入。Scope 锁已释放。
+
 ## `DOC-F006-SOP-CURRENT-FLOW-20260724` — `merged`
 
 - Owner: `/root`
