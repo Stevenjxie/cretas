@@ -63,8 +63,8 @@ describe('seasoning BOM integration source contract', () => {
     expect(bomSource).not.toContain('bomForm.value.standardQuantity = skuGramsPerUnit.value');
     expect(materialTypeSource).toContain('<el-form-item label="计税方式" required>');
     expect(materialTypeSource).toContain("v-if=\"form.taxTreatment === 'TAXABLE'\" label=\"采购税率\" required");
-    expect(materialTypeSource).toContain("'免税采购参考价 (元/库存主单位)' : '含税采购参考价 (元/库存主单位)'");
-    expect(materialTypeSource).toContain("ElMessage.warning('请填写大于 0 的含税单价')");
+    expect(materialTypeSource).toContain("form.taxTreatment === 'EXEMPT' ? `免税采购参考价（元/${displayUnit(form.unit) || '库存主单位'}）` : `含税采购参考价（元/${displayUnit(form.unit) || '库存主单位'}）`");
+    expect(materialTypeSource).toContain("ElMessage.warning('采购参考价如填写，必须大于 0；未知价格请留空')");
   });
 
   it('supports single-active version lifecycle with direct historical activation and a ten-version UX limit', () => {

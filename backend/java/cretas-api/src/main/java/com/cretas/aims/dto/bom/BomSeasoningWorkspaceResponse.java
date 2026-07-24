@@ -23,6 +23,8 @@ public class BomSeasoningWorkspaceResponse {
     /** Exact immutable Workflow revision pinned by this BOM version. */
     private Long workflowRevisionId;
     private Long workflowId;
+    /** Workflow owner used only for the read-only "view process" deep link. */
+    private String workflowOwnerProductTypeId;
     private Integer workflowDefinitionVersion;
     private String workflowRevisionHash;
     private String workflowRevisionStatus;
@@ -31,6 +33,14 @@ public class BomSeasoningWorkspaceResponse {
     private Integer workflowProcessCount;
     private Integer workflowTargetCount;
     private String workflowTargetProductTypeId;
+    private boolean workflowUpgradeAvailable;
+    private Long workflowUpgradeRevisionId;
+    private Integer workflowUpgradeDefinitionVersion;
+    private String bomFamilyId;
+    private String sharedRecipeId;
+    private boolean sharedRulesOwner;
+    private String outputRole;
+    private BigDecimal costAllocationRatio;
     private List<ProcessView> processes = new ArrayList<>();
     private List<MaterialSummary> materialSummaries = new ArrayList<>();
     private List<Anomaly> anomalies = new ArrayList<>();
@@ -49,6 +59,12 @@ public class BomSeasoningWorkspaceResponse {
         private String standardBasisMaterialKind;
         /** False when the legacy g-per-kg seasoning model cannot represent this node safely. */
         private boolean standardUsageSupported;
+        /** SHARED across all terminals, OUTPUT_GROUP for a strict subset, OUTPUT_EXCLUSIVE for one output. */
+        private String costScope;
+        /** Business output SKU IDs included in this process cost group; internal node IDs stay hidden. */
+        private List<String> costTargetProductTypeIds;
+        /** Shared processes are editable only from the MAIN recipe that owns shared rules. */
+        private boolean editable;
         private List<BomSeasoningItem> bindings;
     }
 

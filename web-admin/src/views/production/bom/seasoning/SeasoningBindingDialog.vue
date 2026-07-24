@@ -276,7 +276,7 @@ async function refreshSelectedMaterialPrice() {
         <div class="form-tip">工序由入口锁定，保存只影响本工序。</div>
       </el-form-item>
       <el-form-item label="调料" required>
-        <el-select v-model="form.materialTypeId" filterable placeholder="从辅料/调料档案选择" style="width: 100%">
+        <el-select v-model="form.materialTypeId" filterable placeholder="从辅料/调料档案选择…" style="width: 100%">
           <el-option v-for="material in materials" :key="material.id" :label="material.name" :value="material.id" />
         </el-select>
       </el-form-item>
@@ -287,7 +287,7 @@ async function refreshSelectedMaterialPrice() {
           filterable
           collapse-tags
           collapse-tags-tooltip
-          placeholder="选择可替代本辅料的物料"
+          placeholder="选择可替代本辅料的物料…"
           style="width: 100%"
           data-testid="seasoning-substitute-select"
         >

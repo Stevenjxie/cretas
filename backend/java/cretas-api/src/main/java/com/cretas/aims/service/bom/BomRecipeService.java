@@ -2,7 +2,9 @@ package com.cretas.aims.service.bom;
 
 import com.cretas.aims.dto.bom.BomSeasoningResponse;
 import com.cretas.aims.dto.bom.BomSeasoningSaveRequest;
+import com.cretas.aims.dto.bom.BomFamilyOutputCostingResponse;
 import com.cretas.aims.dto.bom.CreateBomRecipeRequest;
+import com.cretas.aims.dto.bom.UpdateBomFamilyOutputCostingRequest;
 import com.cretas.aims.dto.bom.UpdateBomRecipeRequest;
 import com.cretas.aims.entity.bom.BomRecipe;
 import com.cretas.aims.entity.bom.BomRecipeItem;
@@ -37,6 +39,18 @@ public interface BomRecipeService {
 
     /** 克隆为新版本草稿: source ACTIVE/ARCHIVED → 新 DRAFT recipe, version+1. */
     BomRecipe cloneRecipe(String factoryId, String recipeId);
+
+    /** Explicitly migrate a complete draft family to the current compatible Workflow DRAFT. */
+    BomRecipe upgradeWorkflowRevision(String factoryId, String recipeId);
+
+    /** Read the business-facing output allocation and by-product valuation for a BOM Family. */
+    BomFamilyOutputCostingResponse getFamilyOutputCosting(String factoryId, String recipeId);
+
+    /** Update by-product NRV on a complete DRAFT family; Workflow-owned roles/ratios remain immutable. */
+    BomFamilyOutputCostingResponse updateFamilyOutputCosting(
+            String factoryId,
+            String recipeId,
+            UpdateBomFamilyOutputCostingRequest request);
 
     /** 归档: DRAFT/ACTIVE → ARCHIVED, is_current=FALSE. */
     BomRecipe archiveRecipe(String factoryId, String recipeId);

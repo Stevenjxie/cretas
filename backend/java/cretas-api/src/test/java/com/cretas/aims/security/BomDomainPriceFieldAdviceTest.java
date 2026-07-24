@@ -4,12 +4,14 @@ import com.cretas.aims.dto.bom.BomCostSummaryDTO;
 import com.cretas.aims.dto.bom.BomCostSummaryDTO.LaborCostItem;
 import com.cretas.aims.dto.bom.BomCostSummaryDTO.MaterialCostItem;
 import com.cretas.aims.dto.bom.BomCostSummaryDTO.OverheadCostItem;
+import com.cretas.aims.dto.bom.BomFamilyOutputCostingResponse;
 import com.cretas.aims.dto.common.ApiResponse;
 import com.cretas.aims.entity.BatchWorkSession;
 import com.cretas.aims.entity.EmployeeWorkSession;
 import com.cretas.aims.entity.RawMaterialType;
 import com.cretas.aims.entity.User;
 import com.cretas.aims.entity.bom.BomRecipeItem;
+import com.cretas.aims.entity.bom.BomRecipe;
 import com.cretas.aims.entity.bom.LaborCostConfig;
 import com.cretas.aims.entity.bom.OverheadCostConfig;
 import com.cretas.aims.repository.UserRepository;
@@ -228,6 +230,26 @@ class BomDomainPriceFieldAdviceTest {
         assertEquals(new BigDecimal("18.5000"), summary.getMaterialCosts().get(0).getUnitPrice());
         assertEquals(new BigDecimal("12.00"),   summary.getLaborCosts().get(0).getUnitPrice());
         assertEquals(new BigDecimal("3.50"),    summary.getOverheadCosts().get(0).getUnitPrice());
+    }
+
+    @Test
+    @DisplayName("warehouse_manager → by-product NRV stripped while output contract remains visible")
+    void warehouse_byProductNrvStripped() {
+        asUser(143L, false);
+        BomFamilyOutputCostingResponse response = new BomFamilyOutputCostingResponse();
+        response.setOutputs(Collections.singletonList(
+                new BomFamilyOutputCostingResponse.OutputCosting(
+                        "RECIPE-BY", "FG-BY", "副产品",
+                        BomRecipe.OutputRole.BY_PRODUCT, BigDecimal.ZERO,
+                        BigDecimal.ONE, "kg", new BigDecimal("3.5000"))));
+
+        run(ApiResponse.success(response));
+
+        BomFamilyOutputCostingResponse.OutputCosting output = response.getOutputs().getFirst();
+        assertNull(output.getByproductNrvUnitPrice(), "by-product NRV must be stripped");
+        assertEquals(BomRecipe.OutputRole.BY_PRODUCT, output.getOutputRole());
+        assertEquals(BigDecimal.ZERO, output.getCostAllocationRatio());
+        assertEquals(BigDecimal.ONE, output.getOutputQuantity());
     }
 
     @Test

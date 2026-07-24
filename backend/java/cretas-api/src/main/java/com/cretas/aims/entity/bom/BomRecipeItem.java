@@ -145,6 +145,26 @@ public class BomRecipeItem extends BaseEntity {
     @Column(name = "packaging_conversion_factor_snapshot", precision = 20, scale = 8)
     private BigDecimal packagingConversionFactorSnapshot;
 
+    /** Stable material Cell represented by this logical Workflow input slot. */
+    @Column(name = "workflow_material_node_id", length = 128)
+    private String workflowMaterialNodeId;
+
+    /** Stable input port on the consuming PROCESS Cell. */
+    @Column(name = "workflow_input_port_id", length = 128)
+    private String workflowInputPortId;
+
+    /** Stable edge from the material Cell to the consuming PROCESS input port. */
+    @Column(name = "workflow_edge_id", length = 128)
+    private String workflowEdgeId;
+
+    /** SHARED for all terminals, OUTPUT_GROUP for a strict subset, OUTPUT_EXCLUSIVE for one terminal. */
+    @Column(name = "cost_scope", length = 24)
+    private String costScope;
+
+    /** Canonical terminal-node membership of this immutable Workflow cost rule. */
+    @Column(name = "cost_scope_key", length = 1024)
+    private String costScopeKey;
+
     @Column(name = "remark", length = 500)
     private String remark;
 

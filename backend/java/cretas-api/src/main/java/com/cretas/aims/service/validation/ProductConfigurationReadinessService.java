@@ -225,13 +225,31 @@ public class ProductConfigurationReadinessService {
             List<ProductConfigurationCompletenessReport.Issue> issues,
             List<ProductConfigurationCompletenessReport.ProcessAuxiliaryStatus> processStatuses,
             List<ProductConfigurationCompletenessReport.PackagingLevelStatus> packagingStatuses) {
-        List<BomRecipeItem> items = itemRepository.findByRecipeIdOrderBySortOrderAsc(recipe.getId());
+        BomRecipe sharedRecipe = recipe.getSharedRecipeId() == null
+                || recipe.getSharedRecipeId().equals(recipe.getId())
+                ? recipe
+                : recipeRepository.findById(recipe.getSharedRecipeId())
+                        .filter(candidate -> factoryId.equals(candidate.getFactoryId()))
+                        .orElse(recipe);
+        List<BomRecipeItem> items = new ArrayList<>();
+        if (sharedRecipe.getId().equals(recipe.getId())) {
+            items.addAll(itemRepository.findByRecipeIdOrderBySortOrderAsc(recipe.getId()));
+        } else {
+            items.addAll(itemRepository.findByRecipeIdOrderBySortOrderAsc(sharedRecipe.getId()).stream()
+                    .filter(item -> !"OUTPUT_EXCLUSIVE".equals(item.getCostScope())).toList());
+            items.addAll(itemRepository.findByRecipeIdOrderBySortOrderAsc(recipe.getId()).stream()
+                    .filter(item -> "OUTPUT_EXCLUSIVE".equals(item.getCostScope())).toList());
+        }
         long rawCount = items.stream().filter(item -> "RAW".equalsIgnoreCase(item.getMaterialCategory())).count();
         if (rawCount == 0) {
             issues.add(issue("BOM_RAW_REQUIRED", "尚未配置任何主原料关系", "rawMaterials"));
         }
 
-        List<BomSeasoningItem> seasonings = seasoningRepository.findByRecipeIdOrderBySeqAsc(recipe.getId());
+        List<BomSeasoningItem> seasonings = new ArrayList<>();
+        seasonings.addAll(seasoningRepository.findByRecipeIdOrderBySeqAsc(sharedRecipe.getId()).stream()
+                .filter(item -> !"OUTPUT_EXCLUSIVE".equals(item.getCostScope())).toList());
+        seasonings.addAll(seasoningRepository.findByRecipeIdOrderBySeqAsc(recipe.getId()).stream()
+                .filter(item -> "OUTPUT_EXCLUSIVE".equals(item.getCostScope())).toList());
         for (WorkflowProcessContext process : processContexts(workflow, pinnedGraph)) {
             ProductProcessWorkflowDTO.Node node = process.node();
             Map<String, Object> data = node.getData() == null ? Map.of() : node.getData();

@@ -34,10 +34,23 @@ class WorkflowBomRevisionRepositoryQueryValidationTest {
         assertThat(revisionRepository
                 .findByFactoryIdAndProductTypeIdOrderByCreatedAtDesc("F-JPA", "FG-NONE"))
                 .isEmpty();
+        assertThat(revisionRepository.findCurrentFactoryDraftRevisions("F-JPA")).isEmpty();
         assertThat(revisionRepository.findMaxRevisionNumber(-1L)).isZero();
         assertThat(recipeRepository
                 .findFirstByFactoryIdAndProductTypeIdAndWorkflowRevisionIdAndStatusOrderByVersionDesc(
                         "F-JPA", "FG-NONE", -1L, BomRecipe.Status.ACTIVE))
+                .isEmpty();
+        assertThat(recipeRepository
+                .findByFactoryIdAndWorkflowRevisionIdAndStatusOrderByProductTypeIdAsc(
+                        "F-JPA", -1L, BomRecipe.Status.DRAFT))
+                .isEmpty();
+        assertThat(recipeRepository
+                .findByFactoryIdAndBomFamilyIdOrderByProductTypeIdAscVersionDesc(
+                        "F-JPA", "FAMILY-NONE"))
+                .isEmpty();
+        assertThat(recipeRepository
+                .findByFactoryIdAndBomFamilyIdAndStatusOrderByProductTypeIdAsc(
+                        "F-JPA", "FAMILY-NONE", BomRecipe.Status.ACTIVE))
                 .isEmpty();
         assertThat(recipeRepository.lockByIdAndFactoryId("BOM-NONE", "F-JPA")).isEmpty();
         assertThat(seasoningRepository

@@ -107,6 +107,30 @@ class ProductConfigurationReadinessServiceTest {
     }
 
     @Test
+    void mainOutputReadinessIncludesItsOwnOutputExclusiveAuxiliary() {
+        BomRecipe recipe = pinnedRecipe(BomRecipe.Status.DRAFT, false);
+        recipe.setSharedRecipeId(recipe.getId());
+        BomSeasoningItem exclusive = binding("process-package-main", "WP-PACK-MAIN");
+        exclusive.setCostScope("OUTPUT_EXCLUSIVE");
+        ProductProcessWorkflowDTO.Node process =
+                processNode("process-package-main", "WP-PACK-MAIN", "REQUIRED");
+        PinnedWorkflowGraph graph = graph(
+                List.of("RAW-A"),
+                List.of(process),
+                List.of(new PinnedWorkflowGraph.ProcessStep(
+                        "process-package-main", "WP-PACK-MAIN", 1)));
+        stubCommon(recipe, List.of(exclusive));
+        when(bomWorkflowRevisionService.resolvePinnedGraph(FACTORY, recipe)).thenReturn(graph);
+
+        ProductConfigurationCompletenessReport report =
+                service.evaluate(FACTORY, PRODUCT, recipe.getId());
+
+        assertTrue(report.isBomComplete());
+        assertEquals(1, report.getProcessAuxiliaryStatuses().getFirst().getBindingCount());
+        assertTrue(report.getProcessAuxiliaryStatuses().getFirst().isComplete());
+    }
+
+    @Test
     void pinnedRepeatedMasterProcessNodesRequireTheirOwnNodeBindings() {
         BomRecipe recipe = pinnedRecipe(BomRecipe.Status.DRAFT, false);
         ProductProcessWorkflowDTO.Node first = processNode("process-first", "WP-SAME", "REQUIRED");

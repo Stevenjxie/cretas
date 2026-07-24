@@ -89,6 +89,15 @@ public class BomSeasoningItem extends BaseEntity {
     @Column(name = "subsequent_pot_ratio", precision = 8, scale = 4)
     private BigDecimal subsequentPotRatio;
 
+    /** SHARED for all terminals, OUTPUT_GROUP for a strict subset, OUTPUT_EXCLUSIVE for one terminal. */
+    @Column(name = "cost_scope", length = 24)
+    @Builder.Default
+    private String costScope = "SHARED";
+
+    /** Canonical terminal-node membership of this immutable Workflow process cost rule. */
+    @Column(name = "cost_scope_key", length = 1024)
+    private String costScopeKey;
+
     /** Back-ref to parent recipe; insertable/updatable=false because recipeId column drives FK. */
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "recipe_id", insertable = false, updatable = false)

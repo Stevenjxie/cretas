@@ -152,5 +152,24 @@ public class CreateBomRecipeRequest {
         @Schema(description = "SP8 legacy alias: 物料前三位主编码")
         @Size(max = 3, message = "主编码长度不超过3个字符")
         private String primaryCodeRef;
+
+        /** Stable identities returned by the BOM workspace; never inferred from process names. */
+        @Size(max = 128)
+        private String workflowMaterialNodeId;
+
+        @Size(max = 128)
+        private String workflowInputPortId;
+
+        @Size(max = 128)
+        private String workflowEdgeId;
+
+        /** SHARED, OUTPUT_GROUP or OUTPUT_EXCLUSIVE. Backend derives and verifies it from the pinned DAG. */
+        @Pattern(regexp = "^(SHARED|OUTPUT_GROUP|OUTPUT_EXCLUSIVE)$",
+                 message = "成本范围必须是 SHARED/OUTPUT_GROUP/OUTPUT_EXCLUSIVE 之一")
+        private String costScope;
+
+        /** Canonical terminal membership returned by the BOM workspace; clients may only round-trip it. */
+        @Size(max = 1024)
+        private String costScopeKey;
     }
 }

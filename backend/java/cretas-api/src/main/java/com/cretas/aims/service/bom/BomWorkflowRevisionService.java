@@ -65,10 +65,14 @@ public class BomWorkflowRevisionService {
 
         List<WorkflowRevisionCandidateDTO> result = new ArrayList<>();
         Set<String> represented = new HashSet<>();
-        for (ProductProcessWorkflowRevision revision : revisionRepository
-                .findByFactoryIdAndProductTypeIdOrderByCreatedAtDesc(factoryId, recipe.getProductTypeId())) {
+        for (ProductProcessWorkflowRevision revision : revisionRepository.findCurrentFactoryDraftRevisions(factoryId)) {
             represented.add(revision.getWorkflowId() + ":" + revision.getRevisionHash());
             result.add(toCandidate(revision, recipe.getProductTypeId(), activation));
+        }
+        if (recipe.getWorkflowRevisionId() != null) {
+            revisionRepository.findByIdAndFactoryId(recipe.getWorkflowRevisionId(), factoryId)
+                    .filter(revision -> represented.add(revision.getWorkflowId() + ":" + revision.getRevisionHash()))
+                    .ifPresent(revision -> result.add(toCandidate(revision, recipe.getProductTypeId(), activation)));
         }
 
         // Existing deployments have published/draft rows created before the revision table. Expose them
@@ -94,6 +98,87 @@ public class BomWorkflowRevisionService {
         return result;
     }
 
+    /**
+     * Resolve exactly one current, saved, structurally complete Workflow DRAFT for a new BOM.
+     * The factory-wide search is intentional: a Workflow owner can be an upstream material while
+     * the target BOM belongs to any terminal output SKU.
+     */
+    @Transactional
+    public WorkflowBinding autoBindUniqueDraft(String factoryId, BomRecipe recipe) {
+        if (!factoryId.equals(recipe.getFactoryId()) || recipe.getStatus() != BomRecipe.Status.DRAFT) {
+            throw invalid(409, "只有当前工厂的 BOM 草稿可以自动关联工艺", "BOM_WORKFLOW_AUTO_BIND_READ_ONLY");
+        }
+        List<WorkflowBinding> matches = new ArrayList<>();
+        for (ProductProcessWorkflowRevision revision : revisionRepository.findCurrentFactoryDraftRevisions(factoryId)) {
+            try {
+                matches.add(binding(revision, recipe.getProductTypeId()));
+            } catch (BusinessException ignored) {
+                // Incompatible revisions are not candidates; ambiguity is evaluated after the full scan.
+            }
+        }
+        if (matches.isEmpty()) {
+            throw invalid(409,
+                    "未找到唯一且结构完整、包含当前 SKU 终端产出的 Workflow 草稿",
+                    "BOM_WORKFLOW_DRAFT_NOT_FOUND");
+        }
+        if (matches.size() > 1) {
+            throw invalid(409,
+                    "找到多个可用于当前 SKU 的 Workflow 草稿，系统不能替您猜测",
+                    "BOM_WORKFLOW_DRAFT_AMBIGUOUS");
+        }
+        WorkflowBinding match = matches.getFirst();
+        applyBinding(recipe, match);
+        recipeRepository.saveAndFlush(recipe);
+        return match;
+    }
+
+    @Transactional
+    public WorkflowBinding bindExactRevision(String factoryId, BomRecipe recipe, Long revisionId) {
+        ProductProcessWorkflowRevision revision = revisionRepository.findByIdAndFactoryId(revisionId, factoryId)
+                .orElseThrow(() -> invalid(409, "固定的 Workflow 修订不存在于当前工厂",
+                        "BOM_WORKFLOW_REVISION_NOT_FOUND"));
+        WorkflowBinding match = binding(revision, recipe.getProductTypeId());
+        applyBinding(recipe, match);
+        recipeRepository.saveAndFlush(recipe);
+        return match;
+    }
+
+    @Transactional(readOnly = true)
+    public Optional<ProductProcessWorkflowRevision> findNewerCompatibleDraft(
+            String factoryId, BomRecipe recipe) {
+        if (recipe.getWorkflowId() == null || recipe.getWorkflowRevisionId() == null) return Optional.empty();
+        List<ProductProcessWorkflowRevision> candidates = revisionRepository.findCurrentFactoryDraftRevisions(factoryId)
+                .stream()
+                .filter(revision -> Objects.equals(recipe.getWorkflowId(), revision.getWorkflowId()))
+                .filter(revision -> !Objects.equals(recipe.getWorkflowRevisionId(), revision.getId()))
+                .filter(revision -> incompatibility(revision, recipe.getProductTypeId()) == null)
+                .toList();
+        if (candidates.size() > 1) {
+            throw invalid(409, "同一 Workflow 存在多个当前草稿修订，无法确定升级目标",
+                    "BOM_WORKFLOW_UPGRADE_AMBIGUOUS");
+        }
+        return candidates.stream().findFirst();
+    }
+
+    /**
+     * Explicit upgrade only succeeds when every persisted identity in the old target slice still
+     * exists with the same stable node/port/edge identity and unit contract.
+     */
+    @Transactional
+    public WorkflowBinding upgradeToLatestCompatibleDraft(String factoryId, BomRecipe recipe) {
+        ProductProcessWorkflowRevision target = findNewerCompatibleDraft(factoryId, recipe)
+                .orElseThrow(() -> invalid(409, "当前没有可升级的兼容工艺修订",
+                        "BOM_WORKFLOW_UPGRADE_NOT_AVAILABLE"));
+        ProductProcessWorkflowDTO oldDefinition = definitionFromRecipe(recipe);
+        PinnedWorkflowGraph oldGraph = resolveTargetGraph(
+                recipe.getWorkflowRevisionId(), oldDefinition, recipe.getProductTypeId());
+        WorkflowBinding targetBinding = binding(target, recipe.getProductTypeId());
+        validateStableUpgrade(oldDefinition, oldGraph, targetBinding.definition(), targetBinding.graph());
+        applyBinding(recipe, targetBinding);
+        recipeRepository.saveAndFlush(recipe);
+        return targetBinding;
+    }
+
     @Transactional
     public BomRecipe pin(String factoryId, String recipeId, BomWorkflowRevisionPinRequest request) {
         BomRecipe recipe = recipeRepository.lockByIdAndFactoryId(recipeId, factoryId)
@@ -102,19 +187,13 @@ public class BomWorkflowRevisionService {
             throw invalid(409, "只有 BOM 草稿可以选择 Workflow 修订", "BOM_WORKFLOW_PIN_READ_ONLY");
         }
         ProductProcessWorkflowRevision revision = resolveRequestedRevision(factoryId, recipe, request);
-        ProductProcessWorkflowDTO definition = requireCompatible(revision, recipe.getProductTypeId());
-        PinnedWorkflowGraph graph = resolveTargetGraph(revision.getId(), definition, recipe.getProductTypeId());
+        WorkflowBinding match = binding(revision, recipe.getProductTypeId());
+        PinnedWorkflowGraph graph = match.graph();
         if (graph.processes().isEmpty()) {
             throw invalid(409, "所选 Workflow 修订没有可配置的工序", "BOM_WORKFLOW_REVISION_HAS_NO_PROCESS");
         }
 
-        recipe.setWorkflowRevisionId(revision.getId());
-        recipe.setWorkflowId(revision.getWorkflowId());
-        recipe.setWorkflowDefinitionVersion(revision.getDefinitionVersion());
-        recipe.setWorkflowRevisionHash(revision.getRevisionHash());
-        recipe.setWorkflowSchemaVersion(revision.getSchemaVersion());
-        recipe.setWorkflowNodesSnapshotJson(revision.getNodesJson());
-        recipe.setWorkflowEdgesSnapshotJson(revision.getEdgesJson());
+        applyBinding(recipe, match);
         return recipeRepository.saveAndFlush(recipe);
     }
 
@@ -135,6 +214,64 @@ public class BomWorkflowRevisionService {
     }
 
     @Transactional(readOnly = true)
+    public List<TerminalOutput> resolvePinnedTerminalOutputs(String factoryId, BomRecipe recipe) {
+        resolvePinnedGraph(factoryId, recipe);
+        return resolveTerminalOutputs(definitionFromRecipe(recipe));
+    }
+
+    /**
+     * Resolve the exact terminal membership of every process from stable node identities.
+     * A process may belong to all outputs, one output, or a strict subset of three-plus outputs.
+     */
+    @Transactional(readOnly = true)
+    public Map<String, CostScopeProfile> resolveProcessCostProfiles(String factoryId, BomRecipe recipe) {
+        PinnedWorkflowGraph targetGraph = resolvePinnedGraph(factoryId, recipe);
+        ProductProcessWorkflowDTO definition = definitionFromRecipe(recipe);
+        List<TerminalOutput> outputs = resolveTerminalOutputs(definition);
+        Map<String, LinkedHashSet<TerminalOutput>> memberships = new HashMap<>();
+        for (TerminalOutput output : outputs) {
+            resolveTargetGraph(recipe.getWorkflowRevisionId(), definition, output.productTypeId())
+                    .processes().stream()
+                    .map(PinnedWorkflowGraph.ProcessStep::processNodeId)
+                    .distinct()
+                    .forEach(processNodeId -> memberships
+                            .computeIfAbsent(processNodeId, ignored -> new LinkedHashSet<>())
+                            .add(output));
+        }
+        LinkedHashMap<String, CostScopeProfile> profiles = new LinkedHashMap<>();
+        for (PinnedWorkflowGraph.ProcessStep process : targetGraph.processes()) {
+            List<TerminalOutput> members = memberships
+                    .getOrDefault(process.processNodeId(), new LinkedHashSet<>()).stream()
+                    .sorted(Comparator.comparing(TerminalOutput::terminalNodeId))
+                    .toList();
+            String scope = members.size() == outputs.size()
+                    ? "SHARED"
+                    : members.size() == 1 ? "OUTPUT_EXCLUSIVE" : "OUTPUT_GROUP";
+            profiles.put(process.processNodeId(), new CostScopeProfile(
+                    scope,
+                    members.stream().map(TerminalOutput::terminalNodeId).toList(),
+                    members.stream().map(TerminalOutput::productTypeId).toList()));
+        }
+        return Map.copyOf(profiles);
+    }
+
+    @Transactional(readOnly = true)
+    public Map<String, String> resolveProcessCostScopes(String factoryId, BomRecipe recipe) {
+        return resolveProcessCostProfiles(factoryId, recipe).entrySet().stream()
+                .collect(Collectors.toUnmodifiableMap(
+                        Map.Entry::getKey,
+                        entry -> entry.getValue().costScope()));
+    }
+
+    public static String canonicalCostScopeKey(List<String> terminalNodeIds) {
+        return terminalNodeIds.stream()
+                .filter(Objects::nonNull)
+                .distinct()
+                .sorted()
+                .collect(Collectors.joining(","));
+    }
+
+    @Transactional(readOnly = true)
     public ProductProcessWorkflowRevision requireExactPublishedRevisionForActiveBom(
             String factoryId, Long workflowId, String productTypeId) {
         ProductProcessWorkflow workflow = workflowRepository.findByIdAndFactoryId(workflowId, factoryId)
@@ -151,11 +288,7 @@ public class BomWorkflowRevisionService {
                 .filter(row -> productTypeId.equals(row.getProductTypeId()))
                 .filter(row -> workflow.getCurrentRevisionHash().equals(row.getRevisionHash()))
                 .orElseThrow(() -> invalid(409, "Workflow 当前修订身份不一致", "WORKFLOW_REVISION_IDENTITY_MISMATCH"));
-        recipeRepository.findFirstByFactoryIdAndProductTypeIdAndWorkflowRevisionIdAndStatusOrderByVersionDesc(
-                        factoryId, productTypeId, revisionId, BomRecipe.Status.ACTIVE)
-                .filter(recipe -> revision.getRevisionHash().equals(recipe.getWorkflowRevisionHash()))
-                .orElseThrow(() -> invalid(409, "没有 pin 当前 Workflow 修订的 ACTIVE BOM",
-                        "WORKFLOW_ACTIVE_BOM_REVISION_MISMATCH"));
+        requireCompleteActiveFamily(factoryId, revision);
         return revision;
     }
 
@@ -175,17 +308,49 @@ public class BomWorkflowRevisionService {
             throw invalid(409, "Workflow 修订不属于当前工厂或 SKU",
                     "WORKFLOW_REVISION_SCOPE_INVALID");
         }
-        BomRecipe active = recipeRepository
-                .findFirstByFactoryIdAndProductTypeIdAndWorkflowRevisionIdAndStatusOrderByVersionDesc(
-                        factoryId, productTypeId, revision.getId(), BomRecipe.Status.ACTIVE)
+        return requireCompleteActiveFamily(factoryId, revision);
+    }
+
+    private BomRecipe requireCompleteActiveFamily(
+            String factoryId, ProductProcessWorkflowRevision revision) {
+        ProductProcessWorkflowDTO definition = requireCompatible(
+                revision, resolveTerminalOutputs(revisionSnapshotService.definition(revision)).stream()
+                        .filter(output -> output.outputRole() == BomRecipe.OutputRole.MAIN)
+                        .map(TerminalOutput::productTypeId)
+                        .findFirst()
+                        .orElseThrow());
+        List<TerminalOutput> requiredOutputs = resolveTerminalOutputs(definition);
+        List<BomRecipe> activeRows = recipeRepository
+                .findByFactoryIdAndWorkflowRevisionIdAndStatusOrderByProductTypeIdAsc(
+                        factoryId, revision.getId(), BomRecipe.Status.ACTIVE)
+                .stream()
+                .filter(recipe -> Boolean.TRUE.equals(recipe.getIsCurrent()))
                 .filter(recipe -> Objects.equals(revision.getWorkflowId(), recipe.getWorkflowId()))
-                .filter(recipe -> Objects.equals(revision.getDefinitionVersion(), recipe.getWorkflowDefinitionVersion()))
                 .filter(recipe -> Objects.equals(revision.getRevisionHash(), recipe.getWorkflowRevisionHash()))
-                .orElseThrow(() -> invalid(409, "当前没有 pin 该 Workflow 保存修订的 ACTIVE BOM",
-                        "WORKFLOW_ACTIVE_BOM_REVISION_MISMATCH"));
-        // Re-validate the immutable snapshot rather than trusting mutable workflow data.
-        resolvePinnedGraph(factoryId, active);
-        return active;
+                .toList();
+        Map<String, BomRecipe> activeByProduct = activeRows.stream().collect(Collectors.toMap(
+                BomRecipe::getProductTypeId, Function.identity(), (left, right) -> left));
+        for (TerminalOutput output : requiredOutputs) {
+            BomRecipe active = activeByProduct.get(output.productTypeId());
+            if (active == null
+                    || !Objects.equals(output.terminalNodeId(), active.getTargetTerminalNodeId())
+                    || output.outputRole() != active.getOutputRole()
+                    || output.costAllocationRatio().compareTo(active.getCostAllocationRatio()) != 0) {
+                throw invalid(409, "终端 SKU " + output.productTypeId()
+                                + " 没有固定当前 Workflow 修订的完整 ACTIVE BOM",
+                        "WORKFLOW_ACTIVE_BOM_REVISION_MISMATCH");
+            }
+            resolvePinnedGraph(factoryId, active);
+        }
+        Set<String> familyIds = activeRows.stream().map(BomRecipe::getBomFamilyId)
+                .filter(Objects::nonNull).collect(Collectors.toSet());
+        if (requiredOutputs.size() > 1 && (familyIds.size() != 1 || activeRows.size() != requiredOutputs.size())) {
+            throw invalid(409, "多产出 Workflow 的 ACTIVE BOM 不属于同一个完整 BOM Family",
+                    "WORKFLOW_ACTIVE_BOM_FAMILY_INCOMPLETE");
+        }
+        return activeByProduct.get(requiredOutputs.stream()
+                .filter(output -> output.outputRole() == BomRecipe.OutputRole.MAIN)
+                .findFirst().orElseThrow().productTypeId());
     }
 
     private ProductProcessWorkflowRevision resolveRequestedRevision(
@@ -196,8 +361,7 @@ public class BomWorkflowRevisionService {
         if (request.getRevisionId() != null) {
             ProductProcessWorkflowRevision revision = revisionRepository
                     .findByIdAndFactoryId(request.getRevisionId(), factoryId)
-                    .filter(row -> recipe.getProductTypeId().equals(row.getProductTypeId()))
-                    .orElseThrow(() -> invalid(400, "Workflow 修订不属于当前工厂或 SKU",
+                    .orElseThrow(() -> invalid(400, "Workflow 修订不属于当前工厂",
                             "BOM_WORKFLOW_REVISION_SCOPE_INVALID"));
             if (request.getRevisionHash() != null
                     && !request.getRevisionHash().equals(revision.getRevisionHash())) {
@@ -209,8 +373,7 @@ public class BomWorkflowRevisionService {
             throw invalid(400, "请选择带稳定修订标识的 Workflow", "BOM_WORKFLOW_REVISION_REQUIRED");
         }
         ProductProcessWorkflow workflow = workflowRepository.findByIdAndFactoryId(request.getWorkflowId(), factoryId)
-                .filter(row -> recipe.getProductTypeId().equals(row.getProductTypeId()))
-                .orElseThrow(() -> invalid(400, "Workflow 不属于当前工厂或 SKU",
+                .orElseThrow(() -> invalid(400, "Workflow 不属于当前工厂",
                         "BOM_WORKFLOW_REVISION_SCOPE_INVALID"));
         if (!request.getRevisionHash().equals(revisionSnapshotService.hash(workflow))) {
             throw invalid(409, "Workflow 草稿已变化，请刷新后选择最新保存修订", "BOM_WORKFLOW_REVISION_STALE");
@@ -288,9 +451,6 @@ public class BomWorkflowRevisionService {
 
     private ProductProcessWorkflowDTO requireCompatible(
             ProductProcessWorkflowRevision revision, String targetProductTypeId) {
-        if (!targetProductTypeId.equals(revision.getProductTypeId())) {
-            throw invalid(400, "Workflow 修订与 BOM SKU 不一致", "BOM_WORKFLOW_REVISION_PRODUCT_MISMATCH");
-        }
         if (!Objects.equals(revision.getRevisionHash(), revisionSnapshotService.hash(revision))) {
             throw invalid(409, "Workflow 修订内容哈希不一致", "BOM_WORKFLOW_REVISION_HASH_INVALID");
         }
@@ -299,6 +459,33 @@ public class BomWorkflowRevisionService {
         catalogValidator.validateForBomConfiguration(revision.getFactoryId(), targetProductTypeId, definition);
         resolveTargetGraph(revision.getId(), definition, targetProductTypeId);
         return definition;
+    }
+
+    private WorkflowBinding binding(
+            ProductProcessWorkflowRevision revision, String targetProductTypeId) {
+        ProductProcessWorkflowDTO definition = requireCompatible(revision, targetProductTypeId);
+        PinnedWorkflowGraph graph = resolveTargetGraph(revision.getId(), definition, targetProductTypeId);
+        List<TerminalOutput> outputs = resolveTerminalOutputs(definition);
+        TerminalOutput target = outputs.stream()
+                .filter(output -> targetProductTypeId.equals(output.productTypeId()))
+                .findFirst()
+                .orElseThrow(() -> invalid(409, "Workflow 修订没有当前 SKU 的终端产出",
+                        "BOM_WORKFLOW_TARGET_TERMINAL_INVALID"));
+        return new WorkflowBinding(revision, definition, graph, outputs, target);
+    }
+
+    private void applyBinding(BomRecipe recipe, WorkflowBinding binding) {
+        ProductProcessWorkflowRevision revision = binding.revision();
+        recipe.setWorkflowRevisionId(revision.getId());
+        recipe.setWorkflowId(revision.getWorkflowId());
+        recipe.setWorkflowDefinitionVersion(revision.getDefinitionVersion());
+        recipe.setWorkflowRevisionHash(revision.getRevisionHash());
+        recipe.setWorkflowSchemaVersion(revision.getSchemaVersion());
+        recipe.setWorkflowNodesSnapshotJson(revision.getNodesJson());
+        recipe.setWorkflowEdgesSnapshotJson(revision.getEdgesJson());
+        recipe.setTargetTerminalNodeId(binding.target().terminalNodeId());
+        recipe.setOutputRole(binding.target().outputRole());
+        recipe.setCostAllocationRatio(binding.target().costAllocationRatio());
     }
 
     private ProductProcessWorkflowDTO definitionFromRecipe(BomRecipe recipe) {
@@ -434,7 +621,8 @@ public class BomWorkflowRevisionService {
             for (Map<?, ?> output : outputs) {
                 String role = value(output.get("outputRole"));
                 BigDecimal ratio = decimal(output.get("costAllocationRatio"));
-                if (role == null || !OUTPUT_ROLES.contains(role) || ratio == null || ratio.signum() <= 0) {
+                if (role == null || !OUTPUT_ROLES.contains(role) || ratio == null
+                        || ("BY_PRODUCT".equals(role) ? ratio.signum() != 0 : ratio.signum() <= 0)) {
                     throw invalid(409, "多产出工序必须为每个产出配置角色和成本分摊比例",
                             "BOM_WORKFLOW_MULTI_OUTPUT_CONTRACT_REQUIRED");
                 }
@@ -446,6 +634,192 @@ public class BomWorkflowRevisionService {
                         "BOM_WORKFLOW_MULTI_OUTPUT_CONTRACT_INVALID");
             }
         }
+    }
+
+    /** Exact terminal output contract of one immutable Workflow revision. */
+    public static List<TerminalOutput> resolveTerminalOutputs(ProductProcessWorkflowDTO definition) {
+        Map<String, ProductProcessWorkflowDTO.Node> nodesById = definition.getNodes().stream()
+                .collect(Collectors.toMap(ProductProcessWorkflowDTO.Node::getId, Function.identity(),
+                        (left, right) -> left, LinkedHashMap::new));
+        Map<String, List<ProductProcessWorkflowDTO.Edge>> outgoing = definition.getEdges().stream()
+                .collect(Collectors.groupingBy(ProductProcessWorkflowDTO.Edge::getSource));
+        Map<String, List<ProductProcessWorkflowDTO.Edge>> incoming = definition.getEdges().stream()
+                .collect(Collectors.groupingBy(ProductProcessWorkflowDTO.Edge::getTarget));
+        List<ProductProcessWorkflowDTO.Node> terminals = definition.getNodes().stream()
+                .filter(node -> "FINISHED_GOOD".equals(node.getKind()))
+                .filter(node -> outgoing.getOrDefault(node.getId(), List.of()).isEmpty())
+                .sorted(Comparator.comparing(ProductProcessWorkflowDTO.Node::getId))
+                .toList();
+        if (terminals.isEmpty()) {
+            throw invalid(409, "Workflow 没有终端成品产出", "BOM_WORKFLOW_TERMINAL_OUTPUT_REQUIRED");
+        }
+
+        List<TerminalOutput> outputs = new ArrayList<>();
+        for (ProductProcessWorkflowDTO.Node terminal : terminals) {
+            String productTypeId = string(terminal.getData(), "skuId");
+            List<ProductProcessWorkflowDTO.Edge> producerEdges = incoming.getOrDefault(terminal.getId(), List.of());
+            if (productTypeId == null || producerEdges.size() != 1) {
+                throw invalid(409, "每个终端成品必须绑定 SKU 且只有一个生产来源",
+                        "BOM_WORKFLOW_TERMINAL_OUTPUT_INVALID");
+            }
+            ProductProcessWorkflowDTO.Edge producerEdge = producerEdges.getFirst();
+            ProductProcessWorkflowDTO.Node process = nodesById.get(producerEdge.getSource());
+            Map<?, ?> outputPort = processPort(process, producerEdge.getSourceHandle(), "OUTPUT");
+            String roleValue = value(outputPort.get("outputRole"));
+            BigDecimal ratio = decimal(outputPort.get("costAllocationRatio"));
+            if (terminals.size() == 1) {
+                roleValue = roleValue == null ? "MAIN" : roleValue;
+                ratio = ratio == null ? new BigDecimal("100") : ratio;
+            }
+            if (roleValue == null || !OUTPUT_ROLES.contains(roleValue)
+                    || ratio == null
+                    || ("BY_PRODUCT".equals(roleValue) ? ratio.signum() != 0 : ratio.signum() <= 0)) {
+                throw invalid(409, "多产出 Workflow 必须为每个终端配置角色和成本分摊比例",
+                        "BOM_WORKFLOW_MULTI_OUTPUT_CONTRACT_REQUIRED");
+            }
+            String unit = value(outputPort.get("unit"));
+            if (unit == null) unit = string(terminal.getData(), "baseUnit");
+            if (unit == null) {
+                throw invalid(409, "终端产出缺少单位契约: " + productTypeId,
+                        "BOM_WORKFLOW_TERMINAL_UNIT_REQUIRED");
+            }
+            outputs.add(new TerminalOutput(
+                    terminal.getId(),
+                    productTypeId,
+                    producerEdge.getSource(),
+                    producerEdge.getSourceHandle(),
+                    BomRecipe.OutputRole.valueOf(roleValue),
+                    ratio,
+                    unit));
+        }
+        long mainCount = outputs.stream().filter(output -> output.outputRole() == BomRecipe.OutputRole.MAIN).count();
+        BigDecimal total = outputs.stream().map(TerminalOutput::costAllocationRatio)
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
+        if (mainCount != 1 || total.compareTo(new BigDecimal("100")) != 0) {
+            throw invalid(409, "多产出必须有且仅有一个主产出，成本分摊合计必须为100%",
+                    "BOM_WORKFLOW_MULTI_OUTPUT_CONTRACT_INVALID");
+        }
+        return List.copyOf(outputs);
+    }
+
+    /** Logical raw input slots generated from the exact target-SKU reverse slice. */
+    public static List<InputSlot> resolveInputSlots(PinnedWorkflowGraph graph) {
+        Map<String, ProductProcessWorkflowDTO.Node> nodesById = graph.nodes().stream()
+                .collect(Collectors.toMap(ProductProcessWorkflowDTO.Node::getId, Function.identity(),
+                        (left, right) -> left, LinkedHashMap::new));
+        List<InputSlot> slots = new ArrayList<>();
+        int order = 0;
+        for (ProductProcessWorkflowDTO.Edge edge : graph.edges()) {
+            ProductProcessWorkflowDTO.Node source = nodesById.get(edge.getSource());
+            ProductProcessWorkflowDTO.Node target = nodesById.get(edge.getTarget());
+            if (source == null || target == null
+                    || !"RAW_MATERIAL".equals(source.getKind())
+                    || !"PROCESS".equals(target.getKind())) {
+                continue;
+            }
+            Map<?, ?> port = processPort(target, edge.getTargetHandle(), "INPUT");
+            slots.add(new InputSlot(
+                    source.getId(),
+                    string(source.getData(), "skuId"),
+                    target.getId(),
+                    edge.getTargetHandle(),
+                    edge.getId(),
+                    value(port.get("unit")),
+                    ++order));
+        }
+        if (slots.isEmpty()) {
+            throw invalid(409, "目标 SKU 路径没有可配置的原料投入槽",
+                    "BOM_WORKFLOW_INPUT_SLOT_REQUIRED");
+        }
+        return List.copyOf(slots);
+    }
+
+    private void validateStableUpgrade(
+            ProductProcessWorkflowDTO oldDefinition,
+            PinnedWorkflowGraph oldGraph,
+            ProductProcessWorkflowDTO newDefinition,
+            PinnedWorkflowGraph newGraph) {
+        List<String> conflicts = new ArrayList<>();
+        Map<String, ProductProcessWorkflowDTO.Node> newNodes = newGraph.nodes().stream()
+                .collect(Collectors.toMap(ProductProcessWorkflowDTO.Node::getId, Function.identity()));
+        for (ProductProcessWorkflowDTO.Node oldNode : oldGraph.nodes()) {
+            ProductProcessWorkflowDTO.Node newNode = newNodes.get(oldNode.getId());
+            if (newNode == null || !Objects.equals(oldNode.getKind(), newNode.getKind())) {
+                conflicts.add("节点 " + oldNode.getId() + " 已删除或类型变化");
+                continue;
+            }
+            if ("PROCESS".equals(oldNode.getKind())) {
+                Map<String, Map<?, ?>> newPorts = processPorts(newNode);
+                for (Map.Entry<String, Map<?, ?>> oldPort : processPorts(oldNode).entrySet()) {
+                    Map<?, ?> newPort = newPorts.get(oldPort.getKey());
+                    if (newPort == null) {
+                        conflicts.add("端口 " + oldNode.getId() + "/" + oldPort.getKey() + " 已删除");
+                    } else if (!sameUnit(value(oldPort.getValue().get("unit")), value(newPort.get("unit")))) {
+                        conflicts.add("端口 " + oldNode.getId() + "/" + oldPort.getKey() + " 单位不兼容");
+                    }
+                }
+            }
+        }
+        Map<String, ProductProcessWorkflowDTO.Edge> newEdges = newGraph.edges().stream()
+                .collect(Collectors.toMap(ProductProcessWorkflowDTO.Edge::getId, Function.identity()));
+        for (ProductProcessWorkflowDTO.Edge oldEdge : oldGraph.edges()) {
+            ProductProcessWorkflowDTO.Edge newEdge = newEdges.get(oldEdge.getId());
+            if (newEdge == null
+                    || !Objects.equals(oldEdge.getSource(), newEdge.getSource())
+                    || !Objects.equals(oldEdge.getTarget(), newEdge.getTarget())
+                    || !Objects.equals(oldEdge.getSourceHandle(), newEdge.getSourceHandle())
+                    || !Objects.equals(oldEdge.getTargetHandle(), newEdge.getTargetHandle())) {
+                conflicts.add("连线 " + oldEdge.getId() + " 已删除或端点变化");
+            }
+        }
+        if (!Objects.equals(oldGraph.terminalNodeId(), newGraph.terminalNodeId())) {
+            conflicts.add("目标终端节点已变化");
+        }
+        if (!conflicts.isEmpty()) {
+            String detail = conflicts.stream().limit(6).collect(Collectors.joining("；"));
+            throw invalid(409, "无法自动升级工艺：" + detail, "BOM_WORKFLOW_UPGRADE_CONFLICT");
+        }
+    }
+
+    private static Map<String, Map<?, ?>> processPorts(ProductProcessWorkflowDTO.Node process) {
+        if (process == null || process.getData() == null
+                || !(process.getData().get("ports") instanceof List<?> ports)) {
+            return Map.of();
+        }
+        LinkedHashMap<String, Map<?, ?>> result = new LinkedHashMap<>();
+        for (Object raw : ports) {
+            if (raw instanceof Map<?, ?> port && value(port.get("id")) != null) {
+                result.put(value(port.get("id")), port);
+            }
+        }
+        return result;
+    }
+
+    private static Map<?, ?> processPort(
+            ProductProcessWorkflowDTO.Node process, String portId, String direction) {
+        Map<?, ?> port = processPorts(process).get(portId);
+        if (port == null || !direction.equals(value(port.get("direction")))) {
+            throw invalid(409, "Workflow 连线与稳定端口声明不一致: " + portId,
+                    "BOM_WORKFLOW_PORT_BINDING_INVALID");
+        }
+        return port;
+    }
+
+    private static boolean sameUnit(String left, String right) {
+        if (left == null || right == null) return false;
+        return canonicalUnit(left).equals(canonicalUnit(right));
+    }
+
+    private static String canonicalUnit(String value) {
+        return switch (value.trim().toLowerCase()) {
+            case "公斤", "千克", "kg" -> "kg";
+            case "克", "g" -> "g";
+            case "毫升", "ml" -> "ml";
+            case "升", "l" -> "l";
+            case "盒", "box" -> "box";
+            case "箱", "case" -> "case";
+            default -> value.trim().toLowerCase();
+        };
     }
 
     private static BigDecimal decimal(Object value) {
@@ -494,4 +868,38 @@ public class BomWorkflowRevisionService {
     private static BusinessException invalid(int status, String message, String code) {
         return new BusinessException(status, message).withCode(code).withSeverity("warning");
     }
+
+    public record TerminalOutput(
+            String terminalNodeId,
+            String productTypeId,
+            String producerProcessNodeId,
+            String outputPortId,
+            BomRecipe.OutputRole outputRole,
+            BigDecimal costAllocationRatio,
+            String outputUnit) { }
+
+    public record CostScopeProfile(
+            String costScope,
+            List<String> terminalNodeIds,
+            List<String> productTypeIds) {
+        public String costScopeKey() {
+            return canonicalCostScopeKey(terminalNodeIds);
+        }
+    }
+
+    public record InputSlot(
+            String materialNodeId,
+            String materialTypeId,
+            String processNodeId,
+            String inputPortId,
+            String edgeId,
+            String unit,
+            int order) { }
+
+    public record WorkflowBinding(
+            ProductProcessWorkflowRevision revision,
+            ProductProcessWorkflowDTO definition,
+            PinnedWorkflowGraph graph,
+            List<TerminalOutput> terminalOutputs,
+            TerminalOutput target) { }
 }

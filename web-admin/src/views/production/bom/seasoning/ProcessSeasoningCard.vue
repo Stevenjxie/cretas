@@ -40,6 +40,14 @@ function basisLabel(): string {
 function dosageLabel(binding: SeasoningBindingView): string {
   return `${Number(binding.dosagePerKgG).toFixed(4)} 克/${basisLabel()}`;
 }
+
+function costScopeLabel(): string {
+  if (props.process.costScope === 'OUTPUT_EXCLUSIVE') return '本产出专属';
+  if (props.process.costScope === 'OUTPUT_GROUP') {
+    return `部分产出共享（${props.process.costTargetProductTypeIds?.length ?? 0} 个产出）`;
+  }
+  return '家族共享';
+}
 </script>
 
 <template>
@@ -49,15 +57,28 @@ function dosageLabel(binding: SeasoningBindingView): string {
     class="process-card"
   >
     <template #header>
-      <button type="button" class="process-card__header" @click="emit('toggle')">
+      <button
+        type="button"
+        class="process-card__header"
+        :aria-expanded="expanded"
+        :aria-controls="`seasoning-process-body-${process.workflowProcessNodeId}`"
+        @click="emit('toggle')"
+      >
         <span class="process-card__order">{{ process.processOrder }}</span>
         <span class="process-card__title">{{ process.processName }}</span>
+        <el-tag size="small" :type="process.costScope === 'OUTPUT_EXCLUSIVE' ? 'warning' : 'info'">
+          {{ costScopeLabel() }}
+        </el-tag>
         <el-tag size="small" type="info">{{ process.bindings.length }} 种调料</el-tag>
         <span class="process-card__chevron">{{ expanded ? '收起' : '展开' }}</span>
       </button>
     </template>
 
-    <div v-show="expanded" class="process-card__body">
+    <div
+      v-show="expanded"
+      :id="`seasoning-process-body-${process.workflowProcessNodeId}`"
+      class="process-card__body"
+    >
       <div class="process-card__actions">
         <span v-if="process.standardUsageSupported === true">每 {{ basisLabel() }} 本工序产出投入量</span>
         <span v-else class="unsupported-basis">投入基准单位未解析，现有配置只读</span>
@@ -100,8 +121,20 @@ function dosageLabel(binding: SeasoningBindingView): string {
         </el-table-column>
         <el-table-column v-if="editable" label="操作" width="100" align="center">
           <template #default="{ row }">
-            <el-button link type="primary" :icon="Edit" @click="emit('edit', process, row)" />
-            <el-button link type="danger" :icon="Delete" @click="emit('delete', row)" />
+            <el-button
+              link
+              type="primary"
+              :icon="Edit"
+              :aria-label="`编辑${bindingName(row)}`"
+              @click="emit('edit', process, row)"
+            />
+            <el-button
+              link
+              type="danger"
+              :icon="Delete"
+              :aria-label="`删除${bindingName(row)}`"
+              @click="emit('delete', row)"
+            />
           </template>
         </el-table-column>
       </el-table>
@@ -113,6 +146,8 @@ function dosageLabel(binding: SeasoningBindingView): string {
 .process-card { margin-bottom: 10px; }
 .process-card :deep(.el-card__header) { padding: 0; }
 .process-card__header { width: 100%; min-height: 52px; padding: 9px 12px; border: 0; background: transparent; display: flex; align-items: center; gap: 9px; cursor: pointer; text-align: left; }
+.process-card__header:hover { background: var(--el-fill-color-light); }
+.process-card__header:focus-visible { outline: 2px solid var(--el-color-primary); outline-offset: -2px; }
 .process-card__order { width: 26px; height: 26px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; background: var(--el-color-primary-light-9); color: var(--el-color-primary); font-weight: 700; }
 .process-card__title { flex: 1; font-weight: 600; }
 .process-card__chevron, .process-card__actions, .reuse-hint { color: var(--el-text-color-secondary); font-size: 12px; }
