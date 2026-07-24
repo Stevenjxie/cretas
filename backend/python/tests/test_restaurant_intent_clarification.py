@@ -28,6 +28,7 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from smartbi.gold.restaurant_intent import (
+    TIME_CLARIFICATION_QUESTION,
     _build_t3_prompt,
     _cache_get,
     _cache_put,
@@ -204,6 +205,65 @@ async def test_continuation_resolves_via_t3_with_history_and_clears_pending():
     assert await _pending_pop(pool, "F_CLAR", "sess-1") is None
 
 
+@pytest.mark.asyncio
+async def test_time_guard_clarification_button_resumes_original_query():
+    pool = _restaurant_pool()
+    original_query = "哪个菜卖得好"
+    first_plan = {
+        "intent": "RESTAURANT_OPS_GROSS_MARGIN",
+        "time_range": None,
+        "wants_margin": False,
+        "asks_profitability": False,
+        "dimensions": ["dish"],
+        "comparison": None,
+        "confidence": 0.95,
+        "clarification_needed": False,
+        "clarification_question": None,
+    }
+    with patch(
+        "smartbi.services.template_embedding_index.cosine_topk",
+        new=AsyncMock(return_value=[]),
+    ), patch(
+        "common.llm_router.call_chain",
+        new=AsyncMock(return_value=_llm_result(first_plan)),
+    ):
+        first = await parse_restaurant_query(
+            original_query,
+            pool,
+            factory_id="F_TIME",
+            session_key="sess-time",
+        )
+
+    assert first is not None
+    assert first.clarification_question == TIME_CLARIFICATION_QUESTION
+    assert ("F_TIME", "sess-time") in pool.pending
+
+    resolved_plan = {
+        **first_plan,
+        "time_range": {"type": "named", "value": "this_month"},
+    }
+    with patch(
+        "smartbi.services.template_embedding_index.cosine_topk",
+        new=AsyncMock(return_value=[]),
+    ), patch(
+        "common.llm_router.call_chain",
+        new=AsyncMock(return_value=_llm_result(resolved_plan)),
+    ):
+        resolved = await parse_restaurant_query(
+            "本月",
+            pool,
+            factory_id="F_TIME",
+            session_key="sess-time",
+        )
+
+    assert resolved is not None
+    assert resolved.is_clarification_continuation is True
+    assert resolved.clarification_needed is False
+    assert resolved.window_label == "本月"
+    assert resolved.requested_metrics == ("sales_volume",)
+    assert pool.pending == {}
+
+
 # ─── 2. Still ambiguous after continuation -> no re-registration ─────────
 
 @pytest.mark.asyncio
@@ -316,7 +376,7 @@ async def test_ttl_expired_pending_is_not_continued():
         })),
     ):
         spec = await parse_restaurant_query(
-            "哪家店最赚钱", pool, factory_id=factory_id, session_key=session_key,
+            "本月哪家店最赚钱", pool, factory_id=factory_id, session_key=session_key,
         )
     assert spec is not None
     assert spec.intent == "RESTAURANT_OPS_STORE_MARGIN"
@@ -530,7 +590,7 @@ async def test_pending_not_registered_when_llm_confirms_keyword_candidate():
         })),
     ):
         spec = await parse_restaurant_query(
-            "哪家店最赚钱", pool, factory_id="F_NOREG_T1", session_key="sess-noreg-t1",
+            "本月哪家店最赚钱", pool, factory_id="F_NOREG_T1", session_key="sess-noreg-t1",
         )
     assert spec.clarification_needed is False
     assert pool.pending == {}

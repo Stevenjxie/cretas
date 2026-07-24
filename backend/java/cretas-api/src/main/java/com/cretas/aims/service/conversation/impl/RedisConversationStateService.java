@@ -64,11 +64,11 @@ public class RedisConversationStateService implements ConversationStateService {
             StringRedisTemplate template,
             ObjectMapper objectMapper,
             @Value("${cretas.conversation.ttl-minutes:30}") long ttlMinutes,
-            @Value("${cretas.conversation.max-turns:10}") int maxTurns) {
+            @Value("${cretas.conversation.max-turns:20}") int maxTurns) {
         this.template = template;
         this.objectMapper = objectMapper;
         this.ttl = Duration.ofMinutes(ttlMinutes);
-        this.maxTurns = maxTurns;
+        this.maxTurns = Math.max(20, maxTurns);
     }
 
     /** Test-friendly constructor with explicit Duration. */

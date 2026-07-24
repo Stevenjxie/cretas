@@ -75,7 +75,7 @@ class AIIntentServiceContextTest {
             // loadRecent must have been called before delegation.
         }
 
-        verify(contextService, atLeastOnce()).loadRecent(eq("F001"), eq("U1"), anyInt());
+        verify(contextService, atLeastOnce()).loadRecent(eq("F001"), eq("U1"), eq(20));
     }
 
     @Test

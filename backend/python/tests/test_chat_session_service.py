@@ -17,6 +17,7 @@ import pytest
 import pytest_asyncio
 
 from smartbi.services.chat_session_service import (
+    CHAT_SESSION_HISTORY_LIMIT,
     ChatSessionService,
     SUMMARY_CHAR_BUDGET,
     build_context_block,
@@ -195,6 +196,23 @@ def test_build_context_block_v3_handles_string_jsonb():
     assert "第 2 轮" in block
 
 
+def test_build_context_block_keeps_latest_twenty_turns():
+    history = [
+        {"q": f"q{i}", "a_summary": f"a{i}"}
+        for i in range(1, CHAT_SESSION_HISTORY_LIMIT + 2)
+    ]
+    block = build_context_block({
+        "parent_query": "q21",
+        "parent_answer_summary": "a21",
+        "turns_history": history,
+    })
+
+    assert f"以下 {CHAT_SESSION_HISTORY_LIMIT} 轮" in block
+    assert "q1\n" not in block
+    assert "q2" in block
+    assert "q21" in block
+
+
 def test_build_context_block_returns_empty_when_missing_fields():
     assert build_context_block({}) == ""
     assert build_context_block({"parent_query": "q only"}) == ""
@@ -265,17 +283,30 @@ class _IdentityContractConn:
             row = self.rows.get(key)
             if row is None:
                 return "UPDATE 0"
+            existing_turns = json.loads(row["turns_history"])
+            new_turns = json.loads(args[7])
             row.update({
                 "parent_query": args[3],
                 "parent_answer_summary": args[4],
                 "parent_template_code": args[5],
                 "parent_upload_id": args[6],
                 "turn_count": row["turn_count"] + 1,
-                "turns_history": args[7],
+                "turns_history": json.dumps(
+                    existing_turns + new_turns,
+                    ensure_ascii=False,
+                ),
             })
             return "UPDATE 1"
         if "jsonb_array_elements(turns_history)" in sql:
-            return "UPDATE 0"
+            factory_id, user_id, session_id, limit = args
+            row = self.rows.get((factory_id, user_id, session_id))
+            if row is None:
+                return "UPDATE 0"
+            turns = json.loads(row["turns_history"])
+            if len(turns) <= limit:
+                return "UPDATE 0"
+            row["turns_history"] = json.dumps(turns[-limit:], ensure_ascii=False)
+            return "UPDATE 1"
         return "UPDATE 0"
 
 
@@ -345,6 +376,27 @@ async def test_upsert_persists_whitelisted_structured_context_in_turn_history():
 
 
 @pytest.mark.asyncio
+async def test_upsert_retains_twenty_turns_and_prunes_twenty_first_oldest():
+    pool = _IdentityContractPool()
+    svc = ChatSessionService(pool)
+
+    for turn in range(1, CHAT_SESSION_HISTORY_LIMIT + 2):
+        await svc.upsert(
+            "sid-20",
+            "FACTORY_A",
+            f"q{turn}",
+            f"a{turn}",
+            user_id=77,
+        )
+
+    row = pool.conn.rows[("FACTORY_A", 77, "sid-20")]
+    turns = json.loads(row["turns_history"])
+    assert len(turns) == CHAT_SESSION_HISTORY_LIMIT
+    assert turns[0]["q"] == "q2"
+    assert turns[-1]["q"] == "q21"
+
+
+@pytest.mark.asyncio
 async def test_missing_or_invalid_user_never_executes_session_sql():
     pool = _IdentityContractPool()
     svc = ChatSessionService(pool)
@@ -376,7 +428,7 @@ async def test_session_sql_uses_exact_identity_conflict_and_prune_predicates():
     assert "ON CONFLICT (" not in normalize(insert_sql)
     assert insert_args[:3] == ("sid", "FACTORY_A", 77)
     assert "WHERE factory_id = $1 AND user_id = $2 AND session_id = $3" in normalize(prune_sql)
-    assert prune_args == ("FACTORY_A", 77, "sid")
+    assert prune_args == ("FACTORY_A", 77, "sid", CHAT_SESSION_HISTORY_LIMIT)
     assert "WHERE factory_id = $1 AND user_id = $2 AND session_id = $3" in normalize(lookup_sql)
     assert lookup_args == ("FACTORY_A", 77, "sid")
     assert "user_id IS NULL" not in lookup_sql

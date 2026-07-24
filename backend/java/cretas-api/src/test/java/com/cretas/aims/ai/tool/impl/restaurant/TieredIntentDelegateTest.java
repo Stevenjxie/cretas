@@ -46,7 +46,10 @@ class TieredIntentDelegateTest {
                         "executed_resolvers", List.of("RESTAURANT_OPS_GROSS_MARGIN"),
                         "suggested_followups", List.of(Map.of(
                                 "label", "看菜品成本",
-                                "question", "米饭(单人份)的成本如何？"))));
+                                "question", "米饭(单人份)的成本如何？")),
+                        "structured_context", Map.of(
+                                "window_label", "本月",
+                                "requested_metrics", List.of("sales_volume"))));
 
         Map<String, Object> params = new HashMap<>();
         params.put("userInput", "米饭的销量是多少");
@@ -62,7 +65,39 @@ class TieredIntentDelegateTest {
         assertThat(result.get("suggestedFollowups")).isEqualTo(List.of(Map.of(
                 "label", "看菜品成本",
                 "question", "米饭(单人份)的成本如何？")));
+        assertThat(result.get("conversationContext")).isEqualTo(Map.of(
+                "window_label", "本月",
+                "requested_metrics", List.of("sales_volume")));
         assertThat((String) result.get("message")).startsWith("「米饭(单人份)」");
+    }
+
+    @Test
+    @DisplayName("clarification keeps time buttons and conversation context")
+    void clarificationMapsTimeButtonsAndContext() throws Exception {
+        GoldFinanceClient gold = mock(GoldFinanceClient.class);
+        List<Map<String, Object>> followups = List.of(
+                Map.of("label", "本月", "question", "本月"),
+                Map.of("label", "上个月", "question", "上个月"));
+        Map<String, Object> structuredContext = Map.of(
+                "focus_entity", Map.of("type", "dish", "name", "招牌菜"),
+                "requested_metrics", List.of("sales_volume"));
+        when(gold.fetchTieredIntentAnswer(eq(FACTORY_ID), eq("招牌菜销量"), eq("restaurant_dish_sales_ranking")))
+                .thenReturn(Map.of(
+                        "delegate", true,
+                        "kind", "clarification",
+                        "answer_text", "你想看哪个时间范围？",
+                        "suggested_followups", followups,
+                        "structured_context", structuredContext));
+
+        Map<String, Object> result = newDelegate(gold).tryDelegate(
+                FACTORY_ID,
+                new HashMap<>(Map.of("userInput", "招牌菜销量")),
+                Map.of(),
+                "restaurant_dish_sales_ranking");
+
+        assertThat(result).containsEntry("message", "你想看哪个时间范围？");
+        assertThat(result).containsEntry("suggestedFollowups", followups);
+        assertThat(result).containsEntry("conversationContext", structuredContext);
     }
 
     @Test

@@ -85,6 +85,12 @@ public class TieredIntentDelegate {
             result.put("dataAvailable", true);
             result.put("message", answerText);
             result.put("tieredDelegate", true);
+            if (response.get("suggested_followups") != null) {
+                result.put("suggestedFollowups", response.get("suggested_followups"));
+            }
+            if (response.get("structured_context") != null) {
+                result.put("conversationContext", response.get("structured_context"));
+            }
             if (!"clarification".equals(response.get("kind"))) {
                 result.put("charts", response.getOrDefault("charts", Collections.emptyList()));
                 result.put("kpis", response.getOrDefault("kpis", Collections.emptyList()));
@@ -93,9 +99,6 @@ public class TieredIntentDelegate {
                 }
                 if (response.get("contract_pass") != null) {
                     result.put("contractPass", response.get("contract_pass"));
-                }
-                if (response.get("suggested_followups") != null) {
-                    result.put("suggestedFollowups", response.get("suggested_followups"));
                 }
                 if (response.get("query_plan_hash") != null) {
                     result.put("queryPlanHash", response.get("query_plan_hash"));

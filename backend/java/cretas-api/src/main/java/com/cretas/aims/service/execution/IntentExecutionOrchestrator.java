@@ -1716,6 +1716,9 @@ public class IntentExecutionOrchestrator {
         if (delegated.get("executedResolvers") != null) {
             delegatedData.put("executedResolvers", delegated.get("executedResolvers"));
         }
+        if (delegated.get("conversationContext") != null) {
+            delegatedData.put("conversationContext", delegated.get("conversationContext"));
+        }
         return IntentExecuteResponse.builder()
                 .intentRecognized(true)
                 .intentCode(delegated.get("code") != null ? delegated.get("code").toString() : null)
@@ -2737,6 +2740,15 @@ public class IntentExecutionOrchestrator {
         }
         String factoryDomain = resolveFactoryDomainSafe(factoryId);
         if (!isRestaurantOwnerActionFactory(factoryId, factoryDomain)) {
+            return false;
+        }
+        // A trusted client-side hint may only choose the read-only restaurant
+        // QueryPlan entry; Python session state remains authoritative for the
+        // actual entity/metric/window.  This prevents dependent phrases such
+        // as "销量怎么提升" / "下一步先做什么" from being stolen by the
+        // generic owner-action route.
+        if (context != null
+                && Boolean.TRUE.equals(context.get("restaurantAnalysisContinuation"))) {
             return false;
         }
         String normalizedInput = userInput.toLowerCase(Locale.ROOT);
