@@ -511,6 +511,12 @@ const businessRoutes: RouteRecordRaw[] = [
             name: 'QualityReturns',
             component: () => import('@/views/quality/returns/list.vue'),
             meta: { requiresAuth: true, title: '质检退回单', module: 'quality' }
+          },
+          {
+            path: 'label-qc',
+            name: 'QualityLabelQc',
+            component: () => import('@/views/quality/label-qc/index.vue'),
+            meta: { requiresAuth: true, title: '包装标签拍检', module: 'quality' }
           }
         ]
       },

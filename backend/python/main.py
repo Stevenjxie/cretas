@@ -166,6 +166,14 @@ except ImportError as e:
     import logging as _log
     _log.getLogger(__name__).warning(f"Foreign Object Detection not available: {e}")
 
+try:
+    from label_qc.api import router as label_qc_router
+    _label_qc_available = True
+except ImportError as e:
+    _label_qc_available = False
+    import logging as _log
+    _log.getLogger(__name__).warning(f"Label QC module not available: {e}")
+
 # Phase 2B-α (Apr 29 2026): AI intent matching layer.
 # Java AIIntentService.matchIntent() proxies stages 5-8 here after stages 1-4
 # + L1/L2 cache miss. See spec §5.2 + .claude/rules/ai-intent-tool-skill-architecture.md.
@@ -1365,6 +1373,11 @@ if _fod_available:
     app.include_router(fod_router, prefix="/api/fod", tags=["异物检测"])
 else:
     logger.warning("Foreign Object Detection routes not registered")
+
+if _label_qc_available:
+    app.include_router(label_qc_router, prefix="/api/label-qc", tags=["包装标签质检"])
+else:
+    logger.warning("Label QC routes not registered")
 
 # =====================================================
 # Client Requirement API Routes

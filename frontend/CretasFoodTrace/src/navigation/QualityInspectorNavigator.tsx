@@ -31,6 +31,8 @@ import QIFormScreen from '../screens/quality-inspector/QIFormScreen';
 import QIVoiceScreen from '../screens/quality-inspector/QIVoiceScreen';
 import VoiceInspectionResultScreen from '../screens/quality-inspector/VoiceInspectionResultScreen';
 import QICameraScreen from '../screens/quality-inspector/QICameraScreen';
+import QILabelQcCreateScreen from '../screens/quality-inspector/QILabelQcCreateScreen';
+import QILabelQcSubmittedScreen from '../screens/quality-inspector/QILabelQcSubmittedScreen';
 import QIResultScreen from '../screens/quality-inspector/QIResultScreen';
 import QIRecordsScreen from '../screens/quality-inspector/QIRecordsScreen';
 import QIRecordDetailScreen from '../screens/quality-inspector/QIRecordDetailScreen';
@@ -153,6 +155,16 @@ function InspectStack() {
         name="QICamera"
         component={QICameraScreen}
         options={{ title: '拍照质检' }}
+      />
+      <Stack.Screen
+        name="QILabelQcCreate"
+        component={QILabelQcCreateScreen}
+        options={{ title: '包装标签拍检' }}
+      />
+      <Stack.Screen
+        name="QILabelQcSubmitted"
+        component={QILabelQcSubmittedScreen}
+        options={{ title: '拍检状态', headerBackVisible: false }}
       />
       <Stack.Screen
         name="QIResult"

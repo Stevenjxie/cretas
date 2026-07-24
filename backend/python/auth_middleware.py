@@ -88,6 +88,7 @@ INTERNAL_ONLY_PATHS = frozenset({
 })
 INTERNAL_ONLY_PREFIXES = (
     "/api/internal/smartbi/agent/runs",
+    "/api/label-qc",
 )
 _INTERNAL_IDENTITY = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
 

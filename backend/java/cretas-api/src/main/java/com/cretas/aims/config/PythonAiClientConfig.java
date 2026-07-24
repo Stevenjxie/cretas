@@ -40,13 +40,28 @@ public class PythonAiClientConfig {
     @Bean(name = "pythonAiRestTemplate")
     @Qualifier("pythonAiRestTemplate")
     public RestTemplate pythonAiRestTemplate() {
+        return buildRestTemplate(35);
+    }
+
+    /**
+     * Label-QC analyzes several bounded high-resolution tiles. It runs off the
+     * request thread and therefore uses a longer, dedicated response timeout
+     * without weakening the latency budget of existing Python AI callers.
+     */
+    @Bean(name = "labelQcRestTemplate")
+    @Qualifier("labelQcRestTemplate")
+    public RestTemplate labelQcRestTemplate() {
+        return buildRestTemplate(210);
+    }
+
+    private RestTemplate buildRestTemplate(int responseTimeoutSeconds) {
         PoolingHttpClientConnectionManager pool = new PoolingHttpClientConnectionManager();
         pool.setMaxTotal(50);
         pool.setDefaultMaxPerRoute(20);
 
         RequestConfig requestConfig = RequestConfig.custom()
                 .setConnectTimeout(Timeout.ofSeconds(3))
-                .setResponseTimeout(Timeout.ofSeconds(35))
+                .setResponseTimeout(Timeout.ofSeconds(responseTimeoutSeconds))
                 .setConnectionRequestTimeout(Timeout.ofSeconds(2))
                 .build();
 
