@@ -574,6 +574,42 @@ def test_resolver_query_never_injects_margin_against_explicit_sales_contract():
     assert build_resolver_query(query, malformed_spec) == query
 
 
+def test_continuation_resolver_query_uses_sealed_entity_metric_action_seed():
+    combined_query = "本月招牌藤椒味(单人份)的销量怎么优化"
+    spec = _build_spec(
+        "RESTAURANT_OPS_GROSS_MARGIN",
+        combined_query,
+        confidence=0.95,
+        tier="llm",
+        is_continuation=True,
+        planner_authority="llm",
+    )
+
+    assert spec.resolver_query_seed == combined_query
+    assert spec.dish_slot == "招牌藤椒味(单人份)"
+    assert spec.requested_metrics == ("sales_volume",)
+    assert spec.analysis_action == "optimize"
+    assert build_resolver_query("本月", spec) == combined_query
+
+
+def test_query_plan_hash_seals_ranking_direction_wording():
+    best = _build_spec(
+        "RESTAURANT_OPS_GROSS_MARGIN",
+        "本月哪个菜卖得最好",
+        confidence=0.95,
+        tier="llm",
+    )
+    worst = _build_spec(
+        "RESTAURANT_OPS_GROSS_MARGIN",
+        "本月哪个菜卖得最差",
+        confidence=0.95,
+        tier="llm",
+    )
+
+    assert best.resolver_query_seed != worst.resolver_query_seed
+    assert best.plan_hash != worst.plan_hash
+
+
 # ─── 5. Comparison / dimension detectors ──────────────────────────────────
 
 @pytest.mark.parametrize("query,expected", [

@@ -34,6 +34,7 @@ from smartbi.gold.restaurant_intent import (
     _cache_put,
     _pending_pop,
     _pending_put,
+    build_resolver_query,
     clear_route_cache,
     clear_tenant_gate_cache,
     parse_restaurant_query,
@@ -236,6 +237,7 @@ async def test_time_guard_clarification_button_resumes_original_query():
 
     assert first is not None
     assert first.clarification_question == TIME_CLARIFICATION_QUESTION
+    assert first.resolver_query_seed == original_query
     assert ("F_TIME", "sess-time") in pool.pending
 
     resolved_plan = {
@@ -261,6 +263,11 @@ async def test_time_guard_clarification_button_resumes_original_query():
     assert resolved.clarification_needed is False
     assert resolved.window_label == "本月"
     assert resolved.requested_metrics == ("sales_volume",)
+    assert resolved.resolver_query_seed == f"{original_query} 本月"
+    # The resolver must receive the original ranking semantics together with
+    # the clicked time option. Passing only "本月" reproduces the production
+    # defect: the shared gross-margin resolver falls back to a margin report.
+    assert build_resolver_query("本月", resolved) == f"{original_query} 本月"
     assert pool.pending == {}
 
 

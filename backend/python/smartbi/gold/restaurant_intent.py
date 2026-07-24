@@ -23,12 +23,11 @@ import json
 import logging
 import re
 from collections import OrderedDict
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from smartbi.gold.restaurant_ops_router import (
-    SAMPLE_QUERIES,
     _profit_intent,
     _resolve_sales_date_range,
     _uses_relative_sales_window,
@@ -96,6 +95,11 @@ class RestaurantQuerySpec:
     plan_version: str = "legacy"
     planner_authority: str = "legacy"
     plan_hash: str = ""
+    # Exact deterministic seed used to compile resolver-facing semantics.
+    # A clarification continuation is built from ``original_query + answer``;
+    # keeping that combined text in the sealed plan prevents a button answer
+    # such as "本月" from reaching the resolver as an isolated new question.
+    resolver_query_seed: str = ""
 
 
 # ─── Intent catalogue (used by the T3 prompt) ──────────────────────────────
@@ -729,6 +733,7 @@ def _seal_query_plan(spec: RestaurantQuerySpec) -> RestaurantQuerySpec:
         "planned_intents": list(spec.planned_intents),
         "dish_slot": spec.dish_slot,
         "store_slot": spec.store_slot,
+        "resolver_query_seed": spec.resolver_query_seed,
     }
     digest = hashlib.sha256(
         json.dumps(
@@ -771,7 +776,13 @@ def _build_spec(
     deterministic detectors stay authoritative when they fire, and the
     supplements ride the routing cache so a cache hit rebuilds the exact
     same spec as the original T3 parse (dates still recomputed fresh)."""
-    effective_query = f"{query} {time_phrase}".strip() if time_phrase else query
+    # T3 time text only supplements wording the deterministic parser cannot
+    # already resolve.  Continuations such as "原问题 本月" already contain
+    # the clicked option; appending the same label again would make the sealed
+    # resolver seed drift from the actual two-turn conversation.
+    effective_query = query
+    if time_phrase and _resolve_sales_date_range(query)[1] == "全部历史":
+        effective_query = f"{query} {time_phrase}".strip()
     date_range, window_label = _resolve_sales_date_range(effective_query)
     requested_metrics = _detect_requested_metrics(effective_query)
     wants_margin, asks_profitability = _profit_intent(effective_query)
@@ -918,6 +929,7 @@ def _build_spec(
         store_slot=llm_store or deterministic_store,
         plan_version="restaurant-query-plan-v2",
         planner_authority=effective_planner_authority,
+        resolver_query_seed=effective_query,
     )
     return _seal_query_plan(spec)
 
@@ -1110,6 +1122,11 @@ def build_resolver_query(query: str, spec: RestaurantQuerySpec) -> str:
     so the resolver must see that same augmentation, or it will silently
     re-derive a wider/emptier window than the one already shown to the user.
 
+    The sealed ``resolver_query_seed`` is authoritative when present.  A
+    clarification continuation stores ``original_query + button_answer`` in
+    that field, so the resolver never receives a context-free token such as
+    just "本月".  Legacy specs without a seed retain the caller's raw query.
+
     Appending `spec.window_label` (itself always valid `_resolve_sales_date_range`
     vocabulary, e.g. "最近2个月"/"今天"/"本周"/"本月") to the original query is
     idempotent for T1/T2 (the window was already derivable from the original
@@ -1124,10 +1141,14 @@ def build_resolver_query(query: str, spec: RestaurantQuerySpec) -> str:
     margin/verdict section instead of relying on the Answer Contract
     disclaimer after the fact.
     """
-    parts = [query]
-    if spec.window_label != "全部历史" and spec.window_label not in query:
+    resolver_query_seed = spec.resolver_query_seed or query
+    parts = [resolver_query_seed]
+    if (
+        spec.window_label != "全部历史"
+        and spec.window_label not in resolver_query_seed
+    ):
         parts.append(spec.window_label)
-    raw_wants_margin, raw_asks_profit = _profit_intent(query)
+    raw_wants_margin, raw_asks_profit = _profit_intent(resolver_query_seed)
     margin_is_requested = (
         not spec.requested_metrics
         or "gross_margin" in spec.requested_metrics
