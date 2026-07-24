@@ -12,3 +12,14 @@
 - 验证：Python 餐饮链 506 项、会话链 23 项通过（本地 6 项真实 PostgreSQL fixture 按既定条件排除）；Java 目标测试通过；Web AIQuery 32 项与 `vue-tsc -b` 通过；`git diff --check` 通过。
 - 发布：当前会话继续从 clean exact `origin/main` 发布 Java/Python/Web，并在生产 Demo“咨询”模式执行只读验收；业务写入必须为 0。
 - Scope 锁已释放。
+
+## `BUG-RESTAURANT-TIME-BUTTON-CONTEXT-004` — `merged`
+
+- Owner: `/root`
+- Base SHA: `72ec252304706aab41b1be03b007eaa94a3037ec`
+- 合入：PR #1756 squash 合并为 `d88156c875136cd9794a0decf185f7a0ae6a8907`。
+- 生产复现：新版页面正确追问并显示“本月 / 上个月 / 最近7天 / 最近30天”，但点击“本月”后 resolver 只收到孤立时间词，原问“哪个菜卖得好”丢失，错误返回菜品毛利分析。
+- 修复：QueryPlan 新增并封装 `resolver_query_seed`；clarification continuation 将“原问题 + 按钮答案”作为 resolver 唯一语义种子，同时保留实体、指标、动作和时间，且时间补充不重复追加。
+- 回归：220 项餐饮 intent/clarification/service 目标测试通过；餐饮全量 796 项通过，另有 1 项与本任务无关的既有 owner-action mock 未接收 `live_overrides` 参数；Ruff、`compileall`、`git diff --check` 通过。
+- 发布：当前会话继续发布 Python，并在生产 Demo“咨询”模式验收“四按钮→本月菜品销量排行”及后续上下文；业务写入必须为 0。
+- Scope 锁已释放。
