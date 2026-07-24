@@ -19,6 +19,7 @@ from smartbi.gold.customer_text import (
 from smartbi.gold import answer_contract as _contract
 from smartbi.gold.restaurant_intent import (
     RestaurantQuerySpec,
+    TRUSTED_PLANNER_AUTHORITIES,
     build_resolver_query,
     log_intent_capture,
     parse_restaurant_query,
@@ -70,7 +71,7 @@ def _execution_mismatch(
     """Reject any execution-time reinterpretation of an immutable v2 plan."""
     if spec.plan_version != "restaurant-query-plan-v2":
         return None
-    if spec.planner_authority not in ("llm", "validated_plan_cache"):
+    if spec.planner_authority not in TRUSTED_PLANNER_AUTHORITIES:
         return "餐饮执行计划缺少可信语义来源"
     if not spec.plan_hash or tuple(spec.planned_intents) != plan:
         return "餐饮执行计划不完整"
@@ -738,7 +739,7 @@ def should_delegate(
             or (
                 spec.intent
                 and spec.plan_hash
-                and spec.planner_authority in ("llm", "validated_plan_cache")
+                and spec.planner_authority in TRUSTED_PLANNER_AUTHORITIES
             )
         )
     if spec.clarification_needed:
