@@ -32,7 +32,7 @@ import logging
 import json
 from datetime import date
 from decimal import ROUND_HALF_UP, Decimal
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import asyncpg
 
@@ -48,6 +48,43 @@ def _validate_range(start: Optional[date], end: Optional[date]) -> None:
     """
     if start is not None and end is not None and start > end:
         raise ValueError(f"start {start} > end {end}")
+
+
+_NON_PRIMARY_DISH_CATEGORY_SQL_RE = (
+    "非菜品|非餐品|包装耗材|餐具耗材|一次性用品|纸品|配送费|服务费|"
+    "附加费|用品|耗材"
+)
+_NON_PRIMARY_DISH_NAME_SQL_RE = (
+    "打包盒|打包袋|餐具|配送费|外送费|打包费|包装费|纸巾|餐巾纸|湿巾|"
+    "一次性|购物袋|塑料袋|筷子|勺子|牙签|吸管|手套|纸杯|杯盖|杯套"
+)
+_RICE_STAPLE_NAME_SQL_RE = (
+    "^(?:(?:五常香|东北|泰国香|香)?(?:白)?米饭)"
+    "(?:(?:\\([^)]{0,12}\\)|（[^）]{0,12}）|【[^】]{0,12}】|"
+    "\\[[^]]{0,12}\\])|(?:[一二两单双0-9]+人?份)|(?:[大小]碗)|(?:加量))?$"
+)
+
+
+def _primary_dish_sql_predicate(
+    name_sql: str,
+    category_sql: str,
+    sub_category_sql: str = "NULL",
+) -> str:
+    """Return the generic-ranking filter; named-dish lookups stay unfiltered."""
+    normalized_name = (
+        f"regexp_replace(COALESCE({name_sql}, ''), '\\s+', '', 'g')"
+    )
+    category_text = (
+        f"COALESCE({category_sql}, '') || ' ' || "
+        f"COALESCE({sub_category_sql}, '')"
+    )
+    return (
+        "NOT ("
+        f"({category_text}) ~ '{_NON_PRIMARY_DISH_CATEGORY_SQL_RE}' "
+        f"OR {normalized_name} ~ '{_NON_PRIMARY_DISH_NAME_SQL_RE}' "
+        f"OR {normalized_name} ~ '{_RICE_STAPLE_NAME_SQL_RE}'"
+        ")"
+    )
 
 
 # Wrapping bracket pairs we strip for display. Each tuple is (open, close);
@@ -263,6 +300,7 @@ async def top_products(
                   LEFT JOIN dim_canonical_dish cd
                          ON cd.canonical_dish_id = p.canonical_dish_id
                  WHERE {month_where}
+                   AND {_primary_dish_sql_predicate("p.name", "p.category", "p.sub_category")}
                  GROUP BY COALESCE('c' || p.canonical_dish_id::text,
                                    'p' || p.product_id::text),
                           COALESCE(cd.canonical_name, p.name)
@@ -1098,6 +1136,7 @@ async def finance_summary(
             SELECT
               COALESCE(SUM(a.net_amount), 0)::numeric(18,2)  AS total_revenue,
               COALESCE(SUM(a.bill_count), 0)                 AS bill_count,
+              COALESCE(SUM(a.customer_count), 0)             AS customer_count,
               COUNT(DISTINCT a.store_id)                     AS store_count,
               COUNT(DISTINCT a.date)                         AS day_count,
               MIN(a.date)                                    AS actual_start_date,
@@ -1130,9 +1169,18 @@ async def finance_summary(
 
     total_revenue = Decimal(totals["total_revenue"])
     bill_count = int(totals["bill_count"])
+    try:
+        customer_count = int(totals["customer_count"] or 0)
+    except KeyError:
+        # Backward-compatible with old mocked records and pre-column fixtures.
+        customer_count = 0
     avg_bill_value: Optional[Decimal] = (
         (total_revenue / bill_count).quantize(Decimal("0.01"))
         if bill_count > 0 else None
+    )
+    avg_per_capita: Optional[Decimal] = (
+        (total_revenue / customer_count).quantize(Decimal("0.01"))
+        if customer_count > 0 else None
     )
 
     result = {
@@ -1142,6 +1190,8 @@ async def finance_summary(
         "total_revenue": float(total_revenue),
         "bill_count": bill_count,
         "avg_bill_value": float(avg_bill_value) if avg_bill_value is not None else None,
+        "customer_count": customer_count,
+        "avg_per_capita": float(avg_per_capita) if avg_per_capita is not None else None,
         "store_count": int(totals["store_count"]),
         "day_count": int(totals["day_count"]),
         "actual_start_date": (
@@ -1382,7 +1432,7 @@ async def dish_margin(
     """
     async with pool.acquire() as conn:
         rows = await conn.fetch(
-            """
+            f"""
             SELECT sku_name,
                    category,
                    total_cogs_amount::numeric(18,2) AS unit_cost,
@@ -1394,6 +1444,7 @@ async def dish_margin(
                AND selling_price IS NOT NULL
                AND selling_price > 0
                AND total_cogs_amount IS NOT NULL
+               AND {_primary_dish_sql_predicate("sku_name", "category")}
              ORDER BY (selling_price - total_cogs_amount) DESC, sku_name
              LIMIT $2
             """,
@@ -1431,8 +1482,361 @@ async def dish_margin(
     return {
         "factory_id": factory_id,
         "dish_count": len(items),
+        # FactBook only accepts dish-margin facts carrying this marker from
+        # the deterministic Gold producer; arbitrary caller dictionaries stay
+        # untrusted even if their numeric shape looks plausible.
+        "cost_basis_complete": bool(items),
+        "cost_basis": "restaurant_sku_forms",
         "top_margin": top,
         "low_margin": low,
+    }
+
+
+async def supplier_price_coverage(
+    pool: asyncpg.Pool,
+    factory_id: str,
+    date_range: Tuple[Optional[date], Optional[date]],
+) -> Dict[str, Any]:
+    """Tell synthesis whether supplier-price data exists, even with no anomaly."""
+    start, end = date_range
+    _validate_range(start, end)
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            """
+            SELECT COUNT(*)::int AS observation_count,
+                   COUNT(DISTINCT normalized_name)::int AS ingredient_count,
+                   COUNT(DISTINCT COALESCE(supplier_id, supplier_name))::int
+                     AS supplier_count,
+                   MIN(delivery_date) AS first_date,
+                   MAX(delivery_date) AS last_date
+              FROM agg_supplier_price
+             WHERE factory_id = $1
+               AND ($2::date IS NULL OR delivery_date >= $2::date)
+               AND ($3::date IS NULL OR delivery_date <= $3::date)
+            """,
+            factory_id,
+            start,
+            end,
+        )
+    data = dict(row) if row else {}
+    return {
+        "observation_count": int(data.get("observation_count") or 0),
+        "ingredient_count": int(data.get("ingredient_count") or 0),
+        "supplier_count": int(data.get("supplier_count") or 0),
+        "first_date": (
+            data["first_date"].isoformat()
+            if hasattr(data.get("first_date"), "isoformat") else None
+        ),
+        "last_date": (
+            data["last_date"].isoformat()
+            if hasattr(data.get("last_date"), "isoformat") else None
+        ),
+    }
+
+
+_EXTERNAL_METRIC_DIMENSION = {
+    "mall_footfall": "physical_traffic",
+    "floor_footfall": "physical_traffic",
+    "storefront_passersby": "physical_traffic",
+    "store_visits": "physical_traffic",
+    "capture_rate_pct": "physical_traffic",
+    "holiday_index": "holiday",
+    "mall_activity_intensity": "mall_activity",
+    "nearby_event_attendance": "nearby_event",
+    "competitor_count": "competitor",
+    "competitor_price_index": "competitor",
+    "competitor_rating": "competitor",
+    "campaign_exposure": "promotion",
+    "campaign_redemption": "promotion",
+    "campaign_cost": "promotion",
+    "campaign_revenue": "promotion",
+}
+
+
+def _json_mapping(value: Any) -> Dict[str, Any]:
+    if isinstance(value, dict):
+        return value
+    if isinstance(value, str):
+        try:
+            parsed = json.loads(value)
+        except json.JSONDecodeError:
+            return {}
+        return parsed if isinstance(parsed, dict) else {}
+    return {}
+
+
+def _evidence_level(compliance_level: Any) -> str:
+    if str(compliance_level or "").lower() == "internal_seed":
+        return "SIMULATED"
+    return "REAL"
+
+
+async def restaurant_dimension_signals(
+    pool: asyncpg.Pool,
+    factory_id: str,
+    date_range: Tuple[Optional[date], Optional[date]],
+) -> Dict[str, Any]:
+    """Read optional external/traffic/campaign facts for comprehensive analysis.
+
+    The table is intentionally sparse: a missing row means the dimension is
+    unavailable, never zero.  Demo rows carry ``internal_seed`` compliance and
+    therefore surface as ``SIMULATED``; real tenants are never backfilled from
+    DEMO_REST.
+    """
+    start, end = date_range
+    _validate_range(start, end)
+    params: list[Any] = [factory_id]
+    conds = [
+        "o.factory_id = $1",
+        "o.benchmark_domain = 'restaurant'",
+        "o.metric_code = ANY($2::text[])",
+    ]
+    params.append(list(_EXTERNAL_METRIC_DIMENSION))
+    if start is not None:
+        params.append(start)
+        conds.append(f"o.period_end >= ${len(params)}")
+    if end is not None:
+        params.append(end)
+        conds.append(f"o.period_start <= ${len(params)}")
+
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            f"""
+            SELECT o.period_start,
+                   o.period_end,
+                   o.source_code,
+                   s.source_name,
+                   s.compliance_level,
+                   o.metric_code,
+                   o.metric_name,
+                   o.metric_value,
+                   o.metric_unit,
+                   o.dimension
+              FROM external_benchmark_observation o
+              JOIN external_benchmark_source s ON s.source_code = o.source_code
+             WHERE {" AND ".join(conds)}
+             ORDER BY o.period_start, o.metric_code, o.collected_at DESC
+             LIMIT 5000
+            """,
+            *params,
+        )
+
+    grouped: Dict[str, Dict[str, Any]] = {}
+    for row in rows:
+        metric_code = str(row["metric_code"])
+        dimension = _json_mapping(row["dimension"])
+        dimension_code = str(
+            dimension.get("dimension_code")
+            or _EXTERNAL_METRIC_DIMENSION.get(metric_code)
+            or ""
+        )
+        if not dimension_code:
+            continue
+        bucket = grouped.setdefault(
+            dimension_code,
+            {
+                "dimension_code": dimension_code,
+                "evidence_level": _evidence_level(row["compliance_level"]),
+                "sources": [],
+                "metrics": [],
+            },
+        )
+        if bucket["evidence_level"] != "REAL":
+            bucket["evidence_level"] = _evidence_level(row["compliance_level"])
+        source = {
+            "source_code": row["source_code"],
+            "source_name": row["source_name"],
+        }
+        if source not in bucket["sources"]:
+            bucket["sources"].append(source)
+        bucket["metrics"].append({
+            "date": (
+                row["period_start"].isoformat()
+                if hasattr(row["period_start"], "isoformat")
+                else str(row["period_start"])
+            ),
+            "metric_code": metric_code,
+            "metric_name": row["metric_name"],
+            "value": float(row["metric_value"]),
+            "unit": row["metric_unit"],
+            "context": dimension,
+        })
+
+    summaries: Dict[str, Dict[str, Any]] = {}
+    for dimension_code, bucket in grouped.items():
+        metrics_by_code: Dict[str, List[Dict[str, Any]]] = {}
+        for item in bucket["metrics"]:
+            metrics_by_code.setdefault(item["metric_code"], []).append(item)
+        metric_summaries = []
+        for metric_code, items in metrics_by_code.items():
+            values = [float(item["value"]) for item in items]
+            latest = max(items, key=lambda item: item["date"])
+            metric_summaries.append({
+                "metric_code": metric_code,
+                "metric_name": latest["metric_name"],
+                "unit": latest["unit"],
+                "days": len({item["date"] for item in items}),
+                "average": round(sum(values) / len(values), 2),
+                "minimum": round(min(values), 2),
+                "maximum": round(max(values), 2),
+                "sum": round(sum(values), 2),
+                "latest": round(float(latest["value"]), 2),
+                "latest_date": latest["date"],
+                "latest_context": latest["context"],
+            })
+        summaries[dimension_code] = {
+            "dimension_code": dimension_code,
+            "evidence_level": bucket["evidence_level"],
+            "sources": bucket["sources"],
+            "metrics": metric_summaries,
+            # Bounded raw series for deterministic cross-dimension calculations.
+            # It is not rendered directly and never goes to the LLM as raw rows.
+            "series": bucket["metrics"],
+        }
+    return {
+        "factory_id": factory_id,
+        "start_date": start.isoformat() if start is not None else None,
+        "end_date": end.isoformat() if end is not None else None,
+        "dimensions": summaries,
+    }
+
+
+async def restaurant_operations_summary(
+    pool: asyncpg.Pool,
+    factory_id: str,
+    date_range: Tuple[Optional[date], Optional[date]],
+) -> Dict[str, Any]:
+    """Deterministic waste, stocktaking, inventory and staffing availability."""
+    start, end = date_range
+    _validate_range(start, end)
+    async with pool.acquire() as conn:
+        totals = await conn.fetchrow(
+            """
+            SELECT COALESCE(SUM(wastage_count), 0)::int AS wastage_count,
+                   SUM(wastage_cost_total)::numeric(18,2) AS wastage_cost,
+                   COALESCE(SUM(stocktaking_count), 0)::int AS stocktaking_count,
+                   SUM(stocktaking_shortage_total)::numeric(18,4) AS shortage_qty,
+                   SUM(stocktaking_surplus_total)::numeric(18,4) AS surplus_qty
+              FROM agg_restaurant_daily_totals
+             WHERE factory_id = $1
+               AND ($2::date IS NULL OR date >= $2::date)
+               AND ($3::date IS NULL OR date <= $3::date)
+            """,
+            factory_id, start, end,
+        )
+        snapshot_date = await conn.fetchval(
+            """
+            SELECT MAX(snapshot_date)
+              FROM fact_inventory_snapshot
+             WHERE factory_id = $1
+               AND ($2::date IS NULL OR snapshot_date <= $2::date)
+            """,
+            factory_id, end,
+        )
+        inventory = []
+        if snapshot_date is not None:
+            inventory = await conn.fetch(
+                """
+                SELECT i.name,
+                       s.stock_qty::float AS stock_qty,
+                       COALESCE(t.safe_stock_qty, s.safe_stock_qty)::float AS safe_stock_qty,
+                       COALESCE(t.reorder_point, s.reorder_point)::float AS reorder_point,
+                       i.unit
+                  FROM fact_inventory_snapshot s
+                  JOIN dim_ingredient i
+                    ON i.ingredient_id = s.ingredient_id AND i.factory_id = s.factory_id
+                  LEFT JOIN dim_ingredient_threshold t
+                    ON t.factory_id = s.factory_id AND t.ingredient_id = s.ingredient_id
+                   AND t.store_id IS NOT DISTINCT FROM s.store_id
+                 WHERE s.factory_id = $1 AND s.snapshot_date = $2
+                 ORDER BY i.name
+                """,
+                factory_id, snapshot_date,
+            )
+        staffing = await conn.fetch(
+            """
+            SELECT daypart, weekday_type,
+                   avg_orders::float AS avg_orders,
+                   staff_on_duty,
+                   target_orders_per_staff::float AS target
+              FROM fact_staffing_daypart
+             WHERE factory_id = $1
+             ORDER BY weekday_type, daypart
+            """,
+            factory_id,
+        )
+
+    inventory_items = []
+    for row in inventory:
+        stock = float(row["stock_qty"] or 0)
+        reorder = row["reorder_point"]
+        safe = row["safe_stock_qty"]
+        risk = "OK"
+        if reorder is not None and stock < float(reorder):
+            risk = "HIGH"
+        elif safe is not None and stock < float(safe):
+            risk = "MEDIUM"
+        inventory_items.append({
+            "name": row["name"],
+            "stock_qty": stock,
+            "safe_stock_qty": float(safe) if safe is not None else None,
+            "reorder_point": float(reorder) if reorder is not None else None,
+            "unit": row["unit"],
+            "risk": risk,
+        })
+
+    staffing_items = []
+    for row in staffing:
+        staff = int(row["staff_on_duty"] or 0)
+        avg_orders = float(row["avg_orders"] or 0)
+        target = float(row["target"]) if row["target"] is not None else None
+        actual = round(avg_orders / staff, 2) if staff > 0 else None
+        staffing_items.append({
+            "daypart": row["daypart"],
+            "weekday_type": row["weekday_type"],
+            "avg_orders": avg_orders,
+            "staff_on_duty": staff,
+            "target_orders_per_staff": target,
+            "actual_orders_per_staff": actual,
+        })
+
+    wastage_count = int((totals or {}).get("wastage_count") or 0)
+    stocktaking_count = int((totals or {}).get("stocktaking_count") or 0)
+    return {
+        "waste": {
+            "available": wastage_count > 0,
+            "count": wastage_count,
+            "cost": (
+                float(totals["wastage_cost"])
+                if totals and totals.get("wastage_cost") is not None else None
+            ),
+        },
+        "stocktaking": {
+            "available": stocktaking_count > 0,
+            "count": stocktaking_count,
+            "shortage_qty": (
+                float(totals["shortage_qty"])
+                if totals and totals.get("shortage_qty") is not None else None
+            ),
+            "surplus_qty": (
+                float(totals["surplus_qty"])
+                if totals and totals.get("surplus_qty") is not None else None
+            ),
+        },
+        "inventory": {
+            "available": bool(inventory_items),
+            "snapshot_date": (
+                snapshot_date.isoformat()
+                if hasattr(snapshot_date, "isoformat") else None
+            ),
+            "high_count": sum(item["risk"] == "HIGH" for item in inventory_items),
+            "medium_count": sum(item["risk"] == "MEDIUM" for item in inventory_items),
+            "items": inventory_items[:20],
+        },
+        "staffing": {
+            "available": bool(staffing_items),
+            "items": staffing_items,
+        },
     }
 
 
@@ -1441,52 +1845,79 @@ async def weather_daily(
     factory_id: str,
     date_range: Tuple[Optional[date], Optional[date]],
 ) -> Dict[str, Any]:
-    """Daily internal-seed weather observations for restaurant synthesis."""
+    """Daily weather observations, preferring non-seed sources per date/metric."""
     start, end = date_range
     _validate_range(start, end)
 
     params: list = [factory_id]
     conds = [
-        "factory_id = $1",
-        "source_code = 'internal_seed_weather'",
-        "benchmark_domain = 'restaurant'",
-        "metric_code IN ('rain_mm', 'temp_c')",
+        "o.factory_id = $1",
+        "o.benchmark_domain = 'restaurant'",
+        "o.metric_code IN ('rain_mm', 'temp_c')",
+        "(s.source_type = 'weather' OR o.source_code = 'internal_seed_weather')",
     ]
     if start is not None:
         params.append(start)
-        conds.append(f"period_start >= ${len(params)}")
+        conds.append(f"o.period_start >= ${len(params)}")
     if end is not None:
         params.append(end)
-        conds.append(f"period_start <= ${len(params)}")
+        conds.append(f"o.period_start <= ${len(params)}")
     where = " AND ".join(conds)
 
     async with pool.acquire() as conn:
         rows = await conn.fetch(
             f"""
-            SELECT
-              period_start AS date,
-              MAX(metric_value) FILTER (WHERE metric_code = 'rain_mm')::numeric(18,4) AS rain_mm,
-              MAX(metric_value) FILTER (WHERE metric_code = 'temp_c')::numeric(18,4) AS temp_c
-            FROM external_benchmark_observation
-            WHERE {where}
-            GROUP BY period_start
-            ORDER BY period_start
+            WITH ranked AS (
+              SELECT o.period_start,
+                     o.metric_code,
+                     o.metric_value,
+                     o.source_code,
+                     s.source_name,
+                     s.compliance_level,
+                     ROW_NUMBER() OVER (
+                       PARTITION BY o.period_start, o.metric_code
+                       ORDER BY CASE WHEN s.compliance_level = 'internal_seed' THEN 1 ELSE 0 END,
+                                o.collected_at DESC
+                     ) AS rn
+                FROM external_benchmark_observation o
+                JOIN external_benchmark_source s ON s.source_code = o.source_code
+               WHERE {where}
+            )
+            SELECT period_start AS date,
+                   MAX(metric_value) FILTER (WHERE metric_code = 'rain_mm')::numeric(18,4) AS rain_mm,
+                   MAX(metric_value) FILTER (WHERE metric_code = 'temp_c')::numeric(18,4) AS temp_c,
+                   STRING_AGG(DISTINCT source_code, ',') AS source_code,
+                   STRING_AGG(DISTINCT source_name, '、') AS source_name,
+                   BOOL_OR(compliance_level = 'internal_seed') AS has_seed
+              FROM ranked
+             WHERE rn = 1
+             GROUP BY period_start
+             ORDER BY period_start
             """,
             *params,
         )
 
+    days = []
+    for r in rows:
+        item = {
+            "date": r["date"].isoformat() if hasattr(r["date"], "isoformat") else str(r["date"]),
+            "rain_mm": float(r["rain_mm"]) if r["rain_mm"] is not None else None,
+            "temp_c": float(r["temp_c"]) if r["temp_c"] is not None else None,
+        }
+        if r.get("source_code"):
+            item.update({
+                "source_code": r.get("source_code"),
+                "source_name": r.get("source_name"),
+                "evidence_level": (
+                    "SIMULATED" if r.get("has_seed") else "REAL"
+                ),
+            })
+        days.append(item)
     return {
         "factory_id": factory_id,
         "start_date": start.isoformat() if start is not None else None,
         "end_date": end.isoformat() if end is not None else None,
-        "days": [
-            {
-                "date": r["date"].isoformat() if hasattr(r["date"], "isoformat") else str(r["date"]),
-                "rain_mm": float(r["rain_mm"]) if r["rain_mm"] is not None else None,
-                "temp_c": float(r["temp_c"]) if r["temp_c"] is not None else None,
-            }
-            for r in rows
-        ],
+        "days": days,
     }
 
 

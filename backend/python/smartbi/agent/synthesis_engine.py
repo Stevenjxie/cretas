@@ -87,6 +87,15 @@ from common.llm_redactor import (
 )
 from common.llm_router import call_chain, SLOT
 from smartbi.agent.budget_tracker import AgentBudgetTracker
+from smartbi.agent.dimension_catalog import (
+    DIMENSIONS,
+    EVIDENCE_PROXY,
+    EVIDENCE_REAL,
+    EVIDENCE_SIMULATED,
+    dimension_status,
+    missing_status,
+    ordered_statuses,
+)
 from smartbi.agent.factbook import (
     FactBook,
     NOTE_COMPLAINT_DISPUTE,
@@ -131,7 +140,14 @@ from smartbi.gold import (
     top_products,
 )
 from smartbi.gold.price_anomaly import detect_price_anomalies
-from smartbi.gold.queries import period_comparison, weather_daily
+from smartbi.gold.queries import (
+    dish_margin,
+    period_comparison,
+    restaurant_dimension_signals,
+    restaurant_operations_summary,
+    supplier_price_coverage,
+    weather_daily,
+)
 from smartbi.gold.restaurant_intent_promotion import classify_question_family
 from smartbi.services.distillation_capture import persist_distillation_sample
 from smartbi.services.insight_dimensions import (
@@ -225,12 +241,22 @@ def compute_weather_attribution(
         for name in bucket_order
     }
     extreme_days: List[Dict[str, Any]] = []
+    sources: List[Dict[str, Any]] = []
+    evidence_levels: set[str] = set()
 
     for row in daily_rows:
         d = _as_date_key(row.get("date"))
         weather = weather_by_date.get(d)
         if not weather:
             continue
+        source = {
+            "source_code": weather.get("source_code"),
+            "source_name": weather.get("source_name"),
+        }
+        if source.get("source_code") and source not in sources:
+            sources.append(source)
+        if weather.get("evidence_level"):
+            evidence_levels.add(str(weather["evidence_level"]))
         rain = _as_decimal(weather.get("rain_mm"))
         if rain == 0:
             cond = "晴天"
@@ -285,6 +311,12 @@ def compute_weather_attribution(
         "rain_vs_sunny_delta": delta,
         "rain_vs_sunny_pct": pct,
         "extreme_days": extreme_days,
+        "sources": sources,
+        "evidence_level": (
+            "REAL" if "REAL" in evidence_levels
+            else "SIMULATED" if "SIMULATED" in evidence_levels
+            else "REAL"
+        ),
         "caveat": "天气对比为相关关系，不等于因果；小样本档需谨慎解读。",
     }
 
@@ -403,6 +435,8 @@ HONEST_LABEL_CLAUSE = (
     "5. 只陈述数据中的相关关系，相关≠因果；跨维度因果推断一律标注'推测'。"
 )
 
+SYNTHESIS_CONTRACT_VERSION = "restaurant-dimensions-v2"
+
 
 @dataclass
 class SynthesisResponse:
@@ -422,6 +456,7 @@ class SynthesisResponse:
     factbook_text: Optional[str] = None
     insight_summary: Optional[str] = None
     fact_check: Optional[Dict[str, Any]] = None
+    dimension_coverage: Optional[Dict[str, Any]] = None
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -437,6 +472,7 @@ class SynthesisResponse:
             "factbook_text": self.factbook_text,
             "insight_summary": self.insight_summary,
             "fact_check": self.fact_check,
+            "dimension_coverage": self.dimension_coverage,
         }
 
 
@@ -613,7 +649,9 @@ class ComprehensiveSynthesisEngine:
         # Exact cache entries must not cross page-focus contexts. Semantic cache
         # is skipped below for contextual requests because its vector/index key
         # represents the user's literal question, not the focused chart.
-        cache_material = question
+        cache_material = (
+            f"{question}\n\n[SYNTHESIS_CONTRACT]\n{SYNTHESIS_CONTRACT_VERSION}"
+        )
         if page_context:
             cache_material += "\n\n[PAGE_CONTEXT]\n" + page_context[:2000]
         normalized_hints = sorted(
@@ -637,11 +675,13 @@ class ComprehensiveSynthesisEngine:
                 # so a cached answer still carries the 反回扣 alerts that were
                 # true when it was computed.
                 alerts = hit_cfg.get("alerts") or []
+                dimension_coverage = hit_cfg.get("dimension_coverage")
                 return SynthesisResponse(
                     answer=hit["answer"], source=RESULT_SOURCE_CACHE, tokens=0,
                     tokens_used_today=budget.tokens_used, tokens_cap=budget.tokens_cap,
                     elapsed_ms=int((time.monotonic() - t0) * 1000),
                     charts=charts, alerts=alerts,
+                    dimension_coverage=dimension_coverage,
                 )
 
         # 2. Budget check.
@@ -679,7 +719,10 @@ class ComprehensiveSynthesisEngine:
         # cache key doesn't capture which parent turn it resolves against,
         # so neither reading nor writing the shared cache is safe for it.
         window_key = f"{start_iso}|{end_iso}"
-        plan_key = ",".join(sorted(k for k, v in plan.items() if v is True))
+        plan_key = (
+            ",".join(sorted(k for k, v in plan.items() if v is True))
+            + f"|contract={SYNTHESIS_CONTRACT_VERSION}"
+        )
         q_emb: Optional[List[float]] = None
         if not conversation_history and not page_context and not normalized_hints:
             q_emb = await _get_embedding(question)
@@ -689,11 +732,13 @@ class ComprehensiveSynthesisEngine:
                     sem_cfg = sem.get("chart_config") if isinstance(sem.get("chart_config"), dict) else {}
                     sem_charts = sem_cfg.get("charts") or []
                     sem_alerts = sem_cfg.get("alerts") or []
+                    sem_coverage = sem_cfg.get("dimension_coverage")
                     return SynthesisResponse(
                         answer=sem["answer"], source=RESULT_SOURCE_SEMANTIC_CACHE, tokens=0,
                         tokens_used_today=budget.tokens_used, tokens_cap=budget.tokens_cap,
                         elapsed_ms=int((time.monotonic() - t0) * 1000),
                         charts=sem_charts, alerts=sem_alerts, plan=plan,
+                        dimension_coverage=sem_coverage,
                     )
 
         # 4. Build FactBook (parallel deterministic pulls per plan).
@@ -719,8 +764,10 @@ class ComprehensiveSynthesisEngine:
                     thin_tokens = thin[1]
             if thin_answer is not None:
                 thin_answer, fc_meta = self._reconciler.reconcile(thin_answer, factbook)
+                thin_answer = self._append_dimension_guidance(thin_answer, factbook)
                 charts = self.collect_charts(factbook, plan)
                 alerts = self.collect_alerts(factbook)
+                dimension_coverage = factbook.dimension_coverage()
                 post_budget = await self._budget.consume(factory_id, thin_tokens)
                 await self._capture_distillation(
                     question, factbook, thin_answer, fc_meta, plan, factory_id)
@@ -730,6 +777,7 @@ class ComprehensiveSynthesisEngine:
                         cache_cfg["charts"] = charts
                     if alerts:
                         cache_cfg["alerts"] = alerts
+                    cache_cfg["dimension_coverage"] = dimension_coverage
                     await self._cache.put(
                         factory_id, q_hash, thin_answer,
                         chart_config=cache_cfg or None,
@@ -740,7 +788,8 @@ class ComprehensiveSynthesisEngine:
                     tokens_used_today=post_budget.tokens_used, tokens_cap=post_budget.tokens_cap,
                     elapsed_ms=int((time.monotonic() - t0) * 1000),
                     charts=charts, alerts=alerts, plan=plan, factbook_text=factbook.to_prompt_text(),
-                    insight_summary=insight_summary, fact_check=fc_meta)
+                    insight_summary=insight_summary, fact_check=fc_meta,
+                    dimension_coverage=dimension_coverage)
 
         # 6. LLM grounded narrative — inside RedactionScope (P0 数据主权).
         prompt = self._build_prompt(
@@ -762,15 +811,18 @@ class ComprehensiveSynthesisEngine:
                 tokens=0, tokens_used_today=budget.tokens_used, tokens_cap=budget.tokens_cap,
                 elapsed_ms=int((time.monotonic() - t0) * 1000),
                 plan=plan, factbook_text=factbook.to_prompt_text(),
+                dimension_coverage=factbook.dimension_coverage(),
             )
 
         # 7. Grounding hard-check (backfill真值 + flag fabricated names).
         answer, fc_meta = self._reconciler.reconcile(answer, factbook)
+        answer = self._append_dimension_guidance(answer, factbook)
 
         # 8. Charts + 🔒 反回扣 alerts (both gated by plan/factbook; alerts derive
         # solely from grounded FactBook signals — see collect_alerts).
         charts = self.collect_charts(factbook, plan)
         alerts = self.collect_alerts(factbook)
+        dimension_coverage = factbook.dimension_coverage()
 
         # 9. Bookkeeping. Cache write skipped for history-bearing turns — a
         # context-resolved answer must not be replayed as the generic cached
@@ -782,6 +834,7 @@ class ComprehensiveSynthesisEngine:
                 cache_cfg["charts"] = charts
             if alerts:
                 cache_cfg["alerts"] = alerts
+            cache_cfg["dimension_coverage"] = dimension_coverage
             await self._cache.put(
                 factory_id, q_hash, answer,
                 chart_config=cache_cfg or None,
@@ -806,6 +859,7 @@ class ComprehensiveSynthesisEngine:
             elapsed_ms=int((time.monotonic() - t0) * 1000),
             charts=charts, alerts=alerts, plan=plan, factbook_text=factbook.to_prompt_text(),
             insight_summary=insight_summary, fact_check=fc_meta,
+            dimension_coverage=dimension_coverage,
         )
 
     # =====================================================================
@@ -818,7 +872,7 @@ class ComprehensiveSynthesisEngine:
         has_history: bool = False,
         dimension_hints: Optional[List[str]] = None,
     ) -> Dict[str, Any]:
-        """Decide {review, finance, sales, attribution, weather, cross[]} from the question.
+        """Build a deterministic lookup/diagnose/decision dimension plan.
 
         Rule coverage is sufficient for synthesis questions (limited dimension
         vocabulary). No LLM here — if future queries escape the rules, add a
@@ -831,27 +885,27 @@ class ComprehensiveSynthesisEngine:
         """
         ql = (q or "").lower()
         plan = {"review": False, "finance": False, "sales": False,
-                "dish_margin_asked": False, "attribution": False, "weather": False,
+                "dish_margin": False, "dish_margin_asked": False,
+                "traffic": False, "operations": False, "staffing": False,
+                "external_signals": False, "holiday": False,
+                "attribution": False, "weather": False,
                 "channel": False, "meal_period": False, "discount": False,
                 "period_comparison": False, "supplier_anomaly": False,
-                "cross": []}
+                "analysis_mode": "lookup", "auto_expand": False, "cross": []}
         if any(k in ql for k in ("评价", "口碑", "星级", "好评", "差评", "vip", "投诉", "满意")):
             plan["review"] = True
         if any(k in ql for k in ("营收", "营业额", "经营", "财务", "客单价", "收入", "业绩", "毛利", "利润")):
             plan["finance"] = True
         if any(k in ql for k in ("菜品", "商品", "销量", "畅销", "渠道", "折扣", "套餐")):
             plan["sales"] = True
-        # 2026-07-10 (P1.1): 中餐单品毛利本身不可靠 (各菜用量难固定核算) — the
-        # dish-level dimension is REMOVED (see NOTE_DISH_MARGIN_ABSENT). A
-        # 毛利/单品成本 question is redirected to the finance dimension's
-        # 加权毛利率/总毛利率 (real cost, real since PR#1315); we still remember
-        # the trigger fired (`dish_margin_asked`) so _build_factbook can attach
-        # the honest degradation note instead of silently dropping the ask.
+        # 单品毛利只在完整成本分摊可确定计算时启用；否则保留请求标记，
+        # _build_factbook 会留空该维度并附上补数说明，不把聚合毛利冒充单品毛利。
         _wants_dish_margin = any(k in ql for k in (
             "毛利", "成本构成", "单份成本", "哪道菜", "菜品成本", "单品成本",
             "dish margin", "gross margin",
         )) and any(k in ql for k in ("菜", "菜品", "单品", "sku", "商品"))
         if _wants_dish_margin:
+            plan["dish_margin"] = True
             plan["dish_margin_asked"] = True
             plan["finance"] = True
             plan["sales"] = True
@@ -876,6 +930,20 @@ class ComprehensiveSynthesisEngine:
         _wants_discount = any(k in ql for k in ("折扣", "优惠", "满减", "打折"))
         if _wants_discount:
             plan["discount"] = True
+        if any(k in ql for k in ("就餐人数", "用餐人数", "到店人数", "真实客流", "桌均人数", "人均消费")):
+            plan["traffic"] = True
+            plan["finance"] = True
+        if any(k in ql for k in ("库存", "缺货", "积压", "盘点", "盘亏", "盘盈", "损耗", "报损")):
+            plan["operations"] = True
+        if any(k in ql for k in ("排班", "人效", "人手", "员工", "在岗")):
+            plan["staffing"] = True
+        if any(k in ql for k in (
+                "商圈", "周边", "竞品", "竞争", "商场活动", "周边活动", "演出",
+                "赛事", "物理客流", "门前客流", "经过人数", "进店率", "捕获率",
+                "活动效果", "活动roi", "营销活动")):
+            plan["external_signals"] = True
+        if any(k in ql for k in ("节假日", "假期", "调休", "补班")):
+            plan["holiday"] = True
         # 供应商价格异常 (反回扣: 采购端偷涨价威慑, 零理论依赖 — spec P2.1)
         if any(k in ql for k in (
                 "供应商", "进货", "采购", "进价", "涨价", "回扣", "偷偷", "猫腻", "吃差价")):
@@ -955,6 +1023,7 @@ class ComprehensiveSynthesisEngine:
         ))
         if _wants_weather and _has_revenue_context:
             plan["weather"] = True
+            plan["external_signals"] = True
         # Cross relations.
         if "vip" in ql and any(k in ql for k in ("菜品", "门店", "评价", "口味")):
             plan["cross"].append("vip_x_rating")
@@ -964,6 +1033,49 @@ class ComprehensiveSynthesisEngine:
         if any(k in ql for k in ("平台", "美团", "点评")) and \
                 any(k in ql for k in ("评分", "评价", "口碑")):
             plan["cross"].append("platform_x_rating")
+        decision_cues = (
+            "怎么改善", "怎么提升", "怎么优化", "怎么办", "如何改善", "如何提升",
+            "如何优化", "给建议", "给方案", "优化方案", "改进方案", "帮助决策",
+            "行动方案", "运营策略",
+        )
+        diagnose_cues = (
+            "为什么", "原因", "归因", "哪里有问题", "生意不好", "经营不佳",
+            "下滑原因", "下降原因", "异常原因",
+        )
+        comprehensive_cues = (
+            "综合分析", "全面分析", "多维分析", "运营分析", "经营分析",
+            "整体情况", "整体经营",
+        )
+        has_specific_dimension = any(
+            plan.get(key)
+            for key in (
+                "review", "finance", "sales", "dish_margin", "traffic",
+                "operations", "staffing", "external_signals", "holiday",
+                "attribution", "weather", "channel", "meal_period", "discount",
+                "period_comparison", "supplier_anomaly",
+            )
+        )
+        if any(k in ql for k in decision_cues):
+            plan["analysis_mode"] = "decision"
+            plan["auto_expand"] = True
+        elif any(k in ql for k in diagnose_cues):
+            plan["analysis_mode"] = "diagnose"
+            plan["auto_expand"] = True
+        elif (
+            any(k in ql for k in comprehensive_cues)
+            or ("分析一下" in ql and not has_specific_dimension)
+        ):
+            plan["analysis_mode"] = "diagnose"
+            plan["auto_expand"] = True
+
+        if plan["auto_expand"]:
+            for key in (
+                "review", "finance", "sales", "dish_margin", "traffic",
+                "operations", "staffing", "external_signals", "holiday",
+                "attribution", "weather", "channel", "meal_period", "discount",
+                "period_comparison", "supplier_anomaly",
+            ):
+                plan[key] = True
         # Fallback: holistic question with no explicit dimension → open all.
         # Attribution counts as an explicit dimension, so a pure "哪家店客流拖后腿"
         # does NOT trip the open-all fallback. channel/meal_period/discount are
@@ -972,7 +1084,9 @@ class ComprehensiveSynthesisEngine:
         if not (plan["review"] or plan["finance"] or plan["sales"]
                 or plan["attribution"] or plan["weather"]
                 or plan["channel"] or plan["meal_period"] or plan["discount"]
-                or plan["supplier_anomaly"] or plan["period_comparison"]):
+                or plan["supplier_anomaly"] or plan["period_comparison"]
+                or plan["traffic"] or plan["operations"] or plan["staffing"]
+                or plan["external_signals"] or plan["holiday"]):
             plan["review"] = plan["finance"] = plan["sales"] = True
         return plan
 
@@ -1088,7 +1202,11 @@ class ComprehensiveSynthesisEngine:
         answer beats dead-end). Review pulls take NO date range (reviews
         aggregate all); finance/sales take the (start,end) tuple.
         """
-        fb = FactBook(period=period)
+        requested_plan = dict(plan)
+        fb = FactBook(
+            period=period,
+            data_mode="DEMO" if factory_id == "DEMO_REST" else "PRODUCTION",
+        )
         notes: List[str] = []
 
         async def _safe(coro, label):
@@ -1127,6 +1245,10 @@ class ComprehensiveSynthesisEngine:
             tasks["supplier_anomaly"] = _safe(
                 detect_price_anomalies(self._pool, factory_id), "supplier_anomaly",
             )
+            tasks["supplier_price_coverage"] = _safe(
+                supplier_price_coverage(self._pool, factory_id, date_range),
+                "supplier_price_coverage",
+            )
         if plan.get("attribution"):
             # store_comparison returns ALL stores (no top-N) — needed for the
             # chain benchmark + laggard, which finance_summary's top-5 can't give.
@@ -1142,6 +1264,10 @@ class ComprehensiveSynthesisEngine:
             )
             tasks["discounts"] = _safe(
                 discount_breakdown(self._pool, factory_id, date_range), "discounts",
+            )
+        if plan.get("dish_margin"):
+            tasks["dish_margin"] = _safe(
+                dish_margin(self._pool, factory_id, top_n=5), "dish_margin",
             )
         if plan.get("channel"):
             tasks["channel_dim"] = _safe(
@@ -1162,6 +1288,21 @@ class ComprehensiveSynthesisEngine:
             tasks["weather_daily"] = _safe(
                 weather_daily(self._pool, factory_id, date_range), "weather_daily",
             )
+        if plan.get("operations") or plan.get("staffing"):
+            tasks["operations"] = _safe(
+                restaurant_operations_summary(self._pool, factory_id, date_range),
+                "operations",
+            )
+        if plan.get("external_signals") or plan.get("holiday"):
+            tasks["external_dimensions"] = _safe(
+                restaurant_dimension_signals(self._pool, factory_id, date_range),
+                "external_dimensions",
+            )
+            if "weather_sales" not in tasks:
+                tasks["external_sales"] = _safe(
+                    daily_trend(self._pool, factory_id, date_range),
+                    "external_sales",
+                )
 
         results: Dict[str, Any] = {}
         if tasks:
@@ -1207,10 +1348,20 @@ class ComprehensiveSynthesisEngine:
             else:
                 plan["finance"] = False
 
-        # ---- P1.1: 中餐单品毛利已停用; 用户问单品毛利 → 诚实降级 NOTE
-        # (plan_dimensions 已把该问法重定向到 finance 维度的 加权毛利率)
-        if plan.get("dish_margin_asked"):
-            notes.append(NOTE_DISH_MARGIN_ABSENT)
+        # ---- dish margin: only complete deterministic SKU/BOM cost rows ----
+        if plan.get("dish_margin"):
+            dm = results.get("dish_margin") or {}
+            if (
+                dm.get("cost_basis_complete") is True
+                and dm.get("dish_count")
+                and (dm.get("top_margin") or dm.get("low_margin"))
+            ):
+                fb.dish_margin = dm
+                notes.append("菜品毛利只包含售价、BOM成本和份量均完整的菜品；缺失菜品不参与排名。")
+            else:
+                plan["dish_margin"] = False
+                if plan.get("dish_margin_asked") or requested_plan.get("auto_expand"):
+                    notes.append(NOTE_DISH_MARGIN_ABSENT)
 
         # ---- assemble 同比环比 (营收+加权毛利率) ----
         if plan.get("period_comparison"):
@@ -1222,11 +1373,33 @@ class ComprehensiveSynthesisEngine:
 
         # ---- assemble 供应商价格异常 (威慑非处罚) ----
         if plan.get("supplier_anomaly"):
-            anomalies = results.get("supplier_anomaly")
-            if anomalies:  # non-empty list of anomalies
-                fb.supplier_anomaly = {"anomalies": anomalies}
+            anomalies = []
+            window_start, window_end = date_range
+            for anomaly in (results.get("supplier_anomaly") or []):
+                raw_date = anomaly.get("anomalyDeliveryDate")
+                try:
+                    anomaly_date = date.fromisoformat(str(raw_date)[:10])
+                except (TypeError, ValueError):
+                    continue
+                if window_start is not None and anomaly_date < window_start:
+                    continue
+                if window_end is not None and anomaly_date > window_end:
+                    continue
+                anomalies.append(anomaly)
+            price_coverage = results.get("supplier_price_coverage") or {}
+            if (price_coverage.get("observation_count") or 0) > 0:
+                fb.supplier_anomaly = {
+                    "anomalies": anomalies,
+                    "coverage": price_coverage,
+                }
+                if not anomalies:
+                    notes.append(
+                        "本期有供应商价格数据，未检出达到规则阈值的异常涨跌；"
+                        "这表示未触发规则，不表示价格风险为零。"
+                    )
             else:
-                # 诚实降级: 无采购价格数据 / 无异常 → NOTE, 不编造
+                # No observations in the selected window: leave the dimension
+                # missing rather than conflating "no data" with "no anomaly".
                 plan["supplier_anomaly"] = False
                 notes.append(NOTE_SUPPLIER_ANOMALY_ABSENT)
 
@@ -1297,9 +1470,235 @@ class ComprehensiveSynthesisEngine:
             else:
                 plan["weather"] = False
 
+        ops = results.get("operations")
+        if isinstance(ops, dict):
+            fb.operations = ops
+        ext = results.get("external_dimensions")
+        if isinstance(ext, dict):
+            fb.external_dimensions = ext
+
+        self._populate_dimension_coverage(
+            fb,
+            requested_plan=requested_plan,
+            plan=plan,
+            results=results,
+            factory_id=factory_id,
+        )
+
         fb.cross_hints = self._build_cross_hints(fb, plan, results)
         fb.notes = notes
         return fb
+
+    def _populate_dimension_coverage(
+        self,
+        fb: FactBook,
+        *,
+        requested_plan: Dict[str, Any],
+        plan: Dict[str, Any],
+        results: Dict[str, Any],
+        factory_id: str,
+    ) -> None:
+        """Build explicit available/missing dimension lists for this answer."""
+        if requested_plan.get("auto_expand"):
+            desired = {item.code for item in DIMENSIONS}
+        else:
+            desired: set[str] = set()
+            if requested_plan.get("finance"):
+                desired.add("revenue")
+            if requested_plan.get("period_comparison"):
+                desired.add("period_comparison")
+            if requested_plan.get("attribution"):
+                desired.add("store_comparison")
+            if requested_plan.get("traffic"):
+                desired.add("guest_traffic")
+            if requested_plan.get("sales"):
+                desired.add("dish_sales")
+            if requested_plan.get("dish_margin"):
+                desired.add("dish_margin")
+            if requested_plan.get("channel"):
+                desired.add("channel")
+            if requested_plan.get("meal_period"):
+                desired.add("meal_period")
+            if requested_plan.get("discount"):
+                desired.add("promotion")
+            if requested_plan.get("review"):
+                desired.add("review")
+            if requested_plan.get("supplier_anomaly"):
+                desired.add("supplier_cost")
+            if requested_plan.get("operations"):
+                desired.update({"inventory", "waste", "stocktaking"})
+            if requested_plan.get("staffing"):
+                desired.add("staffing")
+            if requested_plan.get("weather"):
+                desired.add("weather")
+            if requested_plan.get("holiday"):
+                desired.add("holiday")
+            if requested_plan.get("external_signals"):
+                desired.update({
+                    "physical_traffic", "mall_activity", "nearby_event",
+                    "competitor", "promotion",
+                })
+
+        internal_evidence = (
+            EVIDENCE_SIMULATED if factory_id == "DEMO_REST" else EVIDENCE_REAL
+        )
+        available: Dict[str, Dict[str, Any]] = {}
+        missing: Dict[str, Dict[str, Any]] = {}
+
+        def mark_available(
+            code: str,
+            source: str,
+            *,
+            evidence: str = internal_evidence,
+            status: str = "available",
+            coverage: Optional[Dict[str, Any]] = None,
+            reason: Optional[str] = None,
+        ) -> None:
+            if code not in desired:
+                return
+            available[code] = dimension_status(
+                code,
+                status=status,
+                evidence_level=evidence,
+                source=source,
+                reason=reason,
+                coverage=coverage,
+            )
+            missing.pop(code, None)
+
+        def mark_missing(code: str, reason: str, source: Optional[str] = None) -> None:
+            if code in desired and code not in available:
+                missing[code] = missing_status(code, reason=reason, source=source)
+
+        fin = fb.finance or {}
+        if fin:
+            mark_available(
+                "revenue", "POS/agg_daily",
+                coverage={
+                    "start_date": fin.get("actual_start_date"),
+                    "end_date": fin.get("actual_end_date"),
+                    "days": fin.get("day_count"),
+                },
+            )
+        comparison_revenue = (fb.period_comparison or {}).get("revenue") or {}
+        if (
+            comparison_revenue.get("yoy_available")
+            or comparison_revenue.get("mom_available")
+        ):
+            mark_available("period_comparison", "POS+agg_daily_cost")
+        stores = fin.get("top_stores") or []
+        if fb.attribution or len(stores) >= 2:
+            mark_available(
+                "store_comparison", "POS门店聚合",
+                coverage={"store_count": fin.get("store_count") or len(stores)},
+            )
+        if (fin.get("customer_count") or 0) > 0:
+            mark_available(
+                "guest_traffic", "POS就餐人数",
+                coverage={"customer_count": fin.get("customer_count")},
+            )
+        sales = fb.sales or {}
+        if sales.get("top_products"):
+            mark_available("dish_sales", "agg_product+dim_product")
+        if fb.dish_margin:
+            mark_available(
+                "dish_margin", "restaurant_sku_forms完整BOM成本",
+                coverage={"dish_count": fb.dish_margin.get("dish_count")},
+            )
+        if fb.channel:
+            mark_available("channel", "POS订单类型")
+        if fb.meal_period:
+            mark_available("meal_period", "POS餐段")
+        if fb.review:
+            mark_available("review", "聚合评价")
+        if fb.supplier_anomaly:
+            mark_available("supplier_cost", "采购价格序列")
+
+        operations = fb.operations or {}
+        for code in ("inventory", "waste", "stocktaking", "staffing"):
+            section = operations.get(code) or {}
+            if section.get("available"):
+                mark_available(code, {
+                    "inventory": "库存快照+补货阈值",
+                    "waste": "餐饮报损聚合",
+                    "stocktaking": "餐饮盘点聚合",
+                    "staffing": "分时段订单+在岗人数+目标人效",
+                }[code])
+
+        if fb.weather:
+            weather_sources = "、".join(
+                str(item.get("source_name") or item.get("source_code"))
+                for item in (fb.weather.get("sources") or [])
+                if item.get("source_name") or item.get("source_code")
+            ) or "逐日天气"
+            mark_available(
+                "weather",
+                weather_sources,
+                evidence=str(fb.weather.get("evidence_level") or internal_evidence),
+            )
+
+        ext_dimensions = (fb.external_dimensions or {}).get("dimensions") or {}
+        for code in ("physical_traffic", "mall_activity", "nearby_event", "competitor", "holiday"):
+            data = ext_dimensions.get(code) or {}
+            if data.get("metrics"):
+                source = "、".join(
+                    str(item.get("source_name") or item.get("source_code"))
+                    for item in (data.get("sources") or [])
+                    if item.get("source_name") or item.get("source_code")
+                ) or "外部信号"
+                mark_available(
+                    code,
+                    source,
+                    evidence=str(data.get("evidence_level") or EVIDENCE_REAL),
+                )
+
+        promotion = ext_dimensions.get("promotion") or {}
+        if promotion.get("metrics"):
+            mark_available(
+                "promotion",
+                "活动曝光/核销/成本信号",
+                evidence=str(promotion.get("evidence_level") or EVIDENCE_REAL),
+                status="partial",
+                reason="可描述曝光、核销、成本和活动订单收入；缺随机/对照基线时不宣称因果增量或ROI",
+            )
+        elif fb.discount:
+            # Discount data can describe spend/mix but cannot prove incremental ROI.
+            mark_available(
+                "promotion",
+                "POS优惠金额与构成",
+                evidence=EVIDENCE_PROXY if factory_id != "DEMO_REST" else EVIDENCE_SIMULATED,
+                status="partial",
+                reason="已有优惠结构，但缺活动曝光、对照基线或完整成本，不能计算因果ROI",
+            )
+
+        missing_reasons = {
+            "revenue": "所选时间范围没有可用POS经营数据",
+            "period_comparison": "缺少上一周期或去年同期的可比POS/成本覆盖",
+            "store_comparison": "有效门店不足两家，无法做多店比较",
+            "guest_traffic": "POS没有上传就餐人数，订单数不能替代人数",
+            "physical_traffic": "没有商场、楼层、门前经过及进店客流观测",
+            "dish_sales": "没有所选月份的菜品销量/销售额聚合",
+            "dish_margin": "没有同时具备售价、完整BOM、份量和成本的菜品",
+            "channel": "POS没有堂食/外卖/自提拆分",
+            "meal_period": "POS没有开单时间或餐段拆分",
+            "promotion": "没有完整的活动曝光、核销、成本和对照基线",
+            "review": "没有可用的聚合评价数据",
+            "supplier_cost": "没有可比较的物料-供应商历史采购价序列",
+            "inventory": "没有库存快照、安全库存和补货点",
+            "waste": "所选时间范围没有结构化报损记录",
+            "stocktaking": "所选时间范围没有结构化盘点记录",
+            "staffing": "没有各时段订单、在岗人数和目标人效配置",
+            "weather": "没有覆盖所选日期的逐日天气观测",
+            "holiday": "没有覆盖所选日期的节假日/调休日历标签",
+            "mall_activity": "没有商场活动日期与类型数据",
+            "nearby_event": "没有周边演出、赛事或展览数据",
+            "competitor": "没有周边竞品价格、评分、距离和变化数据",
+        }
+        for code in desired:
+            mark_missing(code, missing_reasons[code])
+
+        fb.available_dimensions = ordered_statuses(available.values())
+        fb.missing_dimensions = ordered_statuses(missing.values())
 
     def _build_cross_hints(
         self, fb: FactBook, plan: Dict[str, Any], results: Dict[str, Any]
@@ -1341,6 +1740,72 @@ class ComprehensiveSynthesisEngine:
                     ),
                     "values": {},
                 })
+        ext = (fb.external_dimensions or {}).get("dimensions") or {}
+        sales_points = (
+            (results.get("external_sales") or {}).get("points")
+            or (results.get("weather_sales") or {}).get("points")
+            or []
+        )
+        revenue_by_date = {
+            str(item.get("date")): float(item.get("revenue") or 0)
+            for item in sales_points
+            if item.get("date") is not None and item.get("revenue") is not None
+        }
+        for code, label in (
+            ("holiday", "节假日/周末"),
+            ("mall_activity", "商场活动"),
+            ("nearby_event", "周边活动"),
+        ):
+            signal = ext.get(code) or {}
+            active_dates = {
+                str(item.get("date"))
+                for item in (signal.get("series") or [])
+                if (
+                    code != "holiday"
+                    or float(item.get("value") or 0) > 0
+                )
+            }
+            active_revenue = [
+                value for day, value in revenue_by_date.items()
+                if day in active_dates
+            ]
+            baseline_revenue = [
+                value for day, value in revenue_by_date.items()
+                if day not in active_dates
+            ]
+            if active_revenue and baseline_revenue:
+                active_avg = sum(active_revenue) / len(active_revenue)
+                baseline_avg = sum(baseline_revenue) / len(baseline_revenue)
+                pct = (
+                    round((active_avg - baseline_avg) / baseline_avg * 100, 1)
+                    if baseline_avg else None
+                )
+                if pct is not None:
+                    hints.append({
+                        "description": (
+                            f"{label}观测日平均营收较其他日期"
+                            f"{'高' if pct >= 0 else '低'} {abs(pct)}%"
+                            f"（{len(active_revenue)} 个观测日 vs "
+                            f"{len(baseline_revenue)} 个基准日；相关≠因果）"
+                        ),
+                        "values": {f"{label}观测日营收变化率": pct},
+                    })
+
+        promotion = ext.get("promotion") or {}
+        promo_metrics = {
+            item.get("metric_code"): item
+            for item in (promotion.get("metrics") or [])
+        }
+        exposure = (promo_metrics.get("campaign_exposure") or {}).get("sum")
+        redemption = (promo_metrics.get("campaign_redemption") or {}).get("sum")
+        if exposure not in (None, 0) and redemption is not None:
+            rate = round(float(redemption) / float(exposure) * 100, 2)
+            hints.append({
+                "description": (
+                    f"活动核销/曝光为 {rate}%（描述性转化，未扣除自然购买，不能当作增量ROI）"
+                ),
+                "values": {"活动核销曝光比": rate},
+            })
         return hints
 
     # =====================================================================
@@ -1373,6 +1838,31 @@ class ComprehensiveSynthesisEngine:
         except Exception as e:
             logger.warning("[synthesis] dimension analysis failed (non-fatal): %s", e)
             return ""
+
+    @staticmethod
+    def _append_dimension_guidance(answer: str, factbook: FactBook) -> str:
+        """Append deterministic missing-data guidance after fact reconciliation."""
+        missing = factbook.missing_dimensions
+        is_demo = factbook.data_mode == "DEMO"
+        if not missing and not is_demo:
+            return answer
+        lines = [answer.rstrip()]
+        if is_demo:
+            lines.extend([
+                "",
+                "> 当前为 Demo 展示数据；标记为 SIMULATED 的维度仅用于演示，"
+                "不代表任何真实客户经营情况。",
+            ])
+        if missing:
+            lines.extend(["", "### 还可补充的分析维度"])
+            for item in missing:
+                lines.append(
+                    f"- **{item.get('label')}**：需要{item.get('required_data')}；"
+                    f"补充后可{item.get('enables')}。"
+                )
+            lines.append("")
+            lines.append("缺失维度当前保持为空，不按 0 处理，也不参与原因判断。")
+        return "\n".join(lines)
 
     # =====================================================================
     # Step 4: LLM grounded narrative
@@ -1407,7 +1897,7 @@ class ComprehensiveSynthesisEngine:
                 "",
             ])
         lines.extend([
-            "以下是该餐饮连锁的真实经营+评价数据摘要（所有数字均来自确定性聚合，"
+            "以下是该餐饮连锁的确定性汇总数据摘要（各维度证据等级已明确标注，"
             "你必须严格基于这些数字回答，不得编造门店名/菜名/数字）：",
             "",
         ])
@@ -1419,8 +1909,9 @@ class ComprehensiveSynthesisEngine:
         lines.append("")
         lines.append(
             "请综合以上多维数据回答用户问题：先给 1-2 句核心结论，再分维度("
-            "评价/经营/天气/交叉关系)简述，最后给 2-3 条 4 要素齐全的可执行建议。"
-            "严格遵守诚实标注规则。"
+            "评价/经营/菜品/客流/运营/外部环境/交叉关系)简述，最后给 2-3 条 "
+            "4 要素齐全的可执行建议。缺失维度由系统在回答末尾确定性追加，正文不得把缺失当作 0、"
+            "不得自行补造，也不用重复输出缺失清单。严格遵守诚实标注规则。"
         )
         return "\n".join(lines)
 

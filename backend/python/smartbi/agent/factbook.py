@@ -54,13 +54,15 @@ NOTE_COMPLAINT_DISPUTE = "投诉类型为商家申诉口径，样本小，不等
 NOTE_REVIEW_ABSENT_NEXTACTION = (
     "评价数据暂未接入，当前分析基于经营数据。上传大众点评/美团评价导出后可补充口碑维度。"
 )
-# 中餐单品毛利不可靠 (各菜用量难固定核算) → 单品维度停用, 问到时降级到聚合加权毛利率。
+# 单品毛利只在 BOM/领料/成本分摊完整时计算；缺数据时留空，不以聚合毛利替代。
 NOTE_DISH_MARGIN_ABSENT = (
-    "中餐各菜用量难固定核算，单品毛利算不准；已按总毛利率/加权毛利率（营收−食材成本，聚合口径）分析。"
+    "单品 BOM、领料或成本分摊数据不完整，单品毛利维度暂留空；"
+    "补齐单品成本后可分析高销量低毛利菜与菜单结构。"
 )
 # 供应商价格异常: 无数据或无异常时的诚实标注 (威慑非处罚)。
 NOTE_SUPPLIER_ANOMALY_ABSENT = (
-    "本期未发现供应商采购价格异常；如采购价格数据尚未接入（进货单/OCR），接入后可持续监控异常涨价（威慑非处罚）。"
+    "所选时间范围没有可比较的供应商采购价格数据；接入进货单/OCR后，"
+    "可持续监控异常涨跌并要求解释（威慑非处罚）。"
 )
 
 
@@ -95,6 +97,11 @@ def _pct1(v: Any) -> Optional[float]:
         return None
 
 
+def _has_reliable_dish_margin(dm: Any) -> bool:
+    """Only trust dish margin emitted by the deterministic Gold producer."""
+    return isinstance(dm, dict) and dm.get("cost_basis_complete") is True
+
+
 @dataclass
 class FactBook:
     """Deterministic metric汇总. LLM/analyzer read here, never self-compute."""
@@ -102,7 +109,9 @@ class FactBook:
     review: Optional[Dict[str, Any]] = None
     finance: Optional[Dict[str, Any]] = None
     sales: Optional[Dict[str, Any]] = None
-    dish_margin: Optional[Dict[str, Any]] = None  # 停用 (中餐单品毛利不可靠); 不再 populate/render/index
+    # Populated only when a complete deterministic per-dish cost basis exists.
+    # Missing BOM/cost coverage remains missing; the LLM never estimates it.
+    dish_margin: Optional[Dict[str, Any]] = None
     # 同比(去年同期)/环比(前一等长周期) for 营收+加权毛利率 — gold.period_comparison.
     period_comparison: Optional[Dict[str, Any]] = None
     # 供应商采购价格异常 (威慑非处罚) — gold.detect_price_anomalies, wrapped {"anomalies": [...]}.
@@ -117,6 +126,15 @@ class FactBook:
     channel: Optional[Dict[str, Any]] = None
     meal_period: Optional[Dict[str, Any]] = None
     discount: Optional[Dict[str, Any]] = None
+    # Waste / stocktaking / inventory / staffing deterministic summaries.
+    operations: Optional[Dict[str, Any]] = None
+    # Optional physical-traffic, campaign, mall/event and competitor signals.
+    external_dimensions: Optional[Dict[str, Any]] = None
+    # Machine-readable dimension coverage. Missing dimensions carry the exact
+    # data needed and what the added data would enable.
+    available_dimensions: List[Dict[str, Any]] = field(default_factory=list)
+    missing_dimensions: List[Dict[str, Any]] = field(default_factory=list)
+    data_mode: str = "PRODUCTION"
     cross_hints: List[Dict[str, Any]] = field(default_factory=list)
     notes: List[str] = field(default_factory=list)
     # Echoed window for the prompt header (set by the engine).
@@ -144,11 +162,15 @@ class FactBook:
         self._render_weather(lines)
         self._render_attribution(lines)
         self._render_sales(lines)
+        self._render_dish_margin(lines)
         self._render_channel(lines)
         self._render_meal_period(lines)
         self._render_discount(lines)
         self._render_supplier_anomaly(lines)
+        self._render_operations(lines)
+        self._render_external_dimensions(lines)
         self._render_cross(lines)
+        self._render_dimension_coverage(lines)
 
         if self.notes:
             lines.append("")
@@ -232,6 +254,7 @@ class FactBook:
         lines.append(f"## 经营（gold agg_daily，{fin.get('start_date')}~{fin.get('end_date')}）")
         revenue = fin.get("total_revenue")
         bills = fin.get("bill_count") or 0
+        customers = fin.get("customer_count") or 0
         avg_bill = fin.get("avg_bill_value")
         store_count = fin.get("store_count") or 0
         day_count = fin.get("day_count") or 0
@@ -253,6 +276,11 @@ class FactBook:
                 )
         if avg_bill is not None:
             lines.append(f"- 客单价 ¥{_money(avg_bill)}")
+        if customers:
+            lines.append(
+                f"- POS就餐人数 {int(customers):,} 人；人均消费 "
+                f"¥{_money(fin.get('avg_per_capita'))}。这是已上传的就餐人数，不是商场/门前物理客流。"
+            )
         stores = fin.get("top_stores") or []
         if stores:
             lines.append("- Top 门店（按营业额）：")
@@ -270,7 +298,15 @@ class FactBook:
         buckets = {b.get("cond"): b for b in (weather.get("buckets") or [])}
         sunny = buckets.get("晴天")
         rainy = buckets.get("雨天")
-        lines.append("## 天气×营收（演示用合成天气数据 internal_seed_weather，相关≠因果）")
+        evidence = weather.get("evidence_level") or "REAL"
+        source_names = "、".join(
+            str(item.get("source_name") or item.get("source_code"))
+            for item in (weather.get("sources") or [])
+            if item.get("source_name") or item.get("source_code")
+        )
+        source_text = f"，来源：{source_names}" if source_names else ""
+        evidence_text = "模拟数据" if evidence == "SIMULATED" else "已接入数据"
+        lines.append(f"## 天气×营收（{evidence_text}{source_text}；相关≠因果）")
         pct = weather.get("rain_vs_sunny_pct")
         if sunny and rainy and pct is not None:  # audit P3 F3: skip "%" line when pct is None
             direction = "低" if pct < 0 else "高"
@@ -361,7 +397,7 @@ class FactBook:
 
     def _render_dish_margin(self, lines: List[str]) -> None:
         dm = self.dish_margin
-        if not dm:
+        if not _has_reliable_dish_margin(dm):
             return
         top_items = dm.get("top_margin") or []
         low_items = dm.get("low_margin") or []
@@ -448,6 +484,17 @@ class FactBook:
             return
         anomalies = sa.get("anomalies") or []
         if not anomalies:
+            coverage = sa.get("coverage") or {}
+            if coverage.get("observation_count"):
+                lines.append("## 供应商价格监测")
+                lines.append(
+                    f"- 本期覆盖 {int(coverage.get('observation_count') or 0):,} 条价格，"
+                    f"{int(coverage.get('ingredient_count') or 0):,} 种物料，"
+                    f"{int(coverage.get('supplier_count') or 0):,} 家供应商；"
+                    "未检出达到规则阈值的异常涨跌。"
+                )
+                lines.append("- 未触发规则不等于价格风险为零；仍应结合采购量、品质和合同复核。")
+                lines.append("")
             return
         _DIR = {"UP": "涨", "DOWN": "降"}
         _RISK = {"HIGH": "高风险", "MEDIUM": "中风险"}
@@ -465,6 +512,124 @@ class FactBook:
             )
         lines.append("- 口径：连续同向多次异常为高风险；记录趋势要求解释，非处罚。")
         lines.append("")
+
+    def _render_operations(self, lines: List[str]) -> None:
+        ops = self.operations or {}
+        if not ops:
+            return
+        rendered = False
+        waste = ops.get("waste") or {}
+        if waste.get("available"):
+            if not rendered:
+                lines.append("## 库存、损耗与人效")
+                rendered = True
+            text = f"- 损耗记录 {int(waste.get('count') or 0):,} 次"
+            if waste.get("cost") is not None:
+                text += f"，损耗金额 ¥{_money(waste.get('cost'))}"
+            lines.append(text)
+        stocktaking = ops.get("stocktaking") or {}
+        if stocktaking.get("available"):
+            if not rendered:
+                lines.append("## 库存、损耗与人效")
+                rendered = True
+            lines.append(
+                f"- 盘点 {int(stocktaking.get('count') or 0):,} 次；"
+                "盘亏/盘盈数量需按物料和单位分别查看，不把不同单位直接相加。"
+            )
+        inventory = ops.get("inventory") or {}
+        if inventory.get("available"):
+            if not rendered:
+                lines.append("## 库存、损耗与人效")
+                rendered = True
+            lines.append(
+                f"- 库存快照 {inventory.get('snapshot_date')}：需立即补货 "
+                f"{int(inventory.get('high_count') or 0)} 项，关注 "
+                f"{int(inventory.get('medium_count') or 0)} 项"
+            )
+        staffing = ops.get("staffing") or {}
+        items = staffing.get("items") or []
+        if staffing.get("available") and items:
+            if not rendered:
+                lines.append("## 库存、损耗与人效")
+                rendered = True
+            lines.append("- 排班人效（订单/在岗人数，描述性配置）：")
+            for item in items[:8]:
+                wd = "工作日" if item.get("weekday_type") == "weekday" else "周末"
+                actual = item.get("actual_orders_per_staff")
+                target = item.get("target_orders_per_staff")
+                lines.append(
+                    f"  - {wd}{item.get('daypart')}：日均 {item.get('avg_orders')} 单，"
+                    f"{int(item.get('staff_on_duty') or 0)} 人，实际人效 "
+                    f"{actual if actual is not None else '缺失'}，目标 "
+                    f"{target if target is not None else '缺失'}"
+                )
+        if rendered:
+            lines.append("")
+
+    def _render_external_dimensions(self, lines: List[str]) -> None:
+        dimensions = (self.external_dimensions or {}).get("dimensions") or {}
+        if not dimensions:
+            return
+        labels = {
+            "physical_traffic": "商场及门前物理客流",
+            "mall_activity": "商场活动",
+            "nearby_event": "周边演出与赛事",
+            "competitor": "竞品与商圈",
+            "promotion": "营销活动",
+            "holiday": "节假日与调休",
+        }
+        for code in (
+            "physical_traffic", "holiday", "mall_activity",
+            "nearby_event", "competitor", "promotion",
+        ):
+            data = dimensions.get(code) or {}
+            metrics = data.get("metrics") or []
+            if not metrics:
+                continue
+            evidence = data.get("evidence_level") or "REAL"
+            sources = "、".join(
+                str(item.get("source_name") or item.get("source_code"))
+                for item in (data.get("sources") or [])
+                if item.get("source_name") or item.get("source_code")
+            )
+            lines.append(
+                f"## {labels.get(code, code)}（证据：{evidence}"
+                + (f"，来源：{sources}" if sources else "")
+                + "）"
+            )
+            for metric in metrics:
+                name = metric.get("metric_name") or metric.get("metric_code")
+                unit = metric.get("unit") or ""
+                lines.append(
+                    f"- {name}：{int(metric.get('days') or 0)} 个观测日，"
+                    f"平均 {metric.get('average')} {unit}，最新 "
+                    f"{metric.get('latest')} {unit}（{metric.get('latest_date')}）"
+                )
+            if code in {"mall_activity", "nearby_event", "competitor", "promotion"}:
+                lines.append("- 以上是相关信号；没有对照组时不得宣称活动或竞品造成了经营变化。")
+            lines.append("")
+
+    def _render_dimension_coverage(self, lines: List[str]) -> None:
+        if self.data_mode == "DEMO":
+            lines.append("## 数据模式")
+            lines.append("- 当前为 Demo 租户；标记 SIMULATED 的维度仅用于产品演示，不得外推到真实客户。")
+            lines.append("")
+        if self.available_dimensions:
+            lines.append("## 本轮已纳入维度")
+            for item in self.available_dimensions:
+                source = f"，来源：{item.get('source')}" if item.get("source") else ""
+                lines.append(
+                    f"- {item.get('label')}：{item.get('evidence_level')}{source}"
+                )
+            lines.append("")
+        if self.missing_dimensions:
+            lines.append("## 尚缺但可补充的维度")
+            for item in self.missing_dimensions:
+                lines.append(
+                    f"- {item.get('label')}：缺少{item.get('required_data')}；"
+                    f"补充后可{item.get('enables')}。"
+                )
+            lines.append("- 缺失不等于 0；回答中只能作为补数建议，不能据此推断原因。")
 
     def _render_service_mode(
         self, lines: List[str], data: Optional[Dict[str, Any]],
@@ -592,6 +757,7 @@ class FactBook:
 
         fin = self.finance or {}
         for label, key in (("总营业额", "total_revenue"), ("订单数", "bill_count"),
+                           ("POS就餐人数", "customer_count"), ("人均消费", "avg_per_capita"),
                            ("客单价", "avg_bill_value"), ("门店数", "store_count"),
                            ("总成本", "total_cost"), ("净利润", "net_profit"),
                            ("净利率", "net_margin_pct"), ("食材成本", "material_cost")):
@@ -610,6 +776,22 @@ class FactBook:
             _gm = _pct1(gp / rev_f * 100)
             if _gm is not None:
                 idx["加权毛利率"] = _gm
+
+        dm = self.dish_margin if _has_reliable_dish_margin(self.dish_margin) else {}
+        for bucket in ("top_margin", "low_margin"):
+            for item in (dm.get(bucket) or []):
+                name = item.get("dish_name")
+                if not name:
+                    continue
+                for label, key in (
+                    ("售价", "selling_price"),
+                    ("单份成本", "unit_cost"),
+                    ("单份毛利", "gross_profit"),
+                    ("毛利率", "gross_margin_pct"),
+                ):
+                    value = _num(item.get(key))
+                    if value is not None:
+                        idx[f"{name}{label}"] = value
 
         # 同比环比 (营收增长率% + 加权毛利率百分点差) — grounded so the reconciler
         # backstops the growth numbers the LLM restates.
@@ -733,7 +915,68 @@ class FactBook:
                 v = _num(d.get("share_pct"))
                 if v is not None:
                     idx[f"{name}占比"] = v
+
+        ops = self.operations or {}
+        for label, section, key in (
+            ("损耗次数", "waste", "count"),
+            ("损耗金额", "waste", "cost"),
+            ("盘点次数", "stocktaking", "count"),
+            ("需补货食材数", "inventory", "high_count"),
+            ("库存关注食材数", "inventory", "medium_count"),
+        ):
+            value = _num((ops.get(section) or {}).get(key))
+            if value is not None:
+                idx[label] = value
+        for item in ((ops.get("staffing") or {}).get("items") or []):
+            daypart = item.get("daypart")
+            wd = "工作日" if item.get("weekday_type") == "weekday" else "周末"
+            if not daypart:
+                continue
+            value = _num(item.get("actual_orders_per_staff"))
+            if value is not None:
+                idx[f"{wd}{daypart}实际人效"] = value
+            value = _num(item.get("target_orders_per_staff"))
+            if value is not None:
+                idx[f"{wd}{daypart}目标人效"] = value
+
+        dimensions = (self.external_dimensions or {}).get("dimensions") or {}
+        for data in dimensions.values():
+            for metric in (data.get("metrics") or []):
+                name = metric.get("metric_name") or metric.get("metric_code")
+                if not name:
+                    continue
+                for suffix, key in (
+                    ("平均", "average"),
+                    ("最新", "latest"),
+                    ("合计", "sum"),
+                    ("最低", "minimum"),
+                    ("最高", "maximum"),
+                ):
+                    value = _num(metric.get(key))
+                    if value is not None:
+                        idx[f"{name}{suffix}"] = value
+        for hint in self.cross_hints:
+            for label, value in (hint.get("values") or {}).items():
+                number = _num(value)
+                if number is not None:
+                    idx[str(label)] = number
+        supplier_coverage = (self.supplier_anomaly or {}).get("coverage") or {}
+        for label, key in (
+            ("供应商价格观测数", "observation_count"),
+            ("供应商价格物料数", "ingredient_count"),
+            ("供应商价格供应商数", "supplier_count"),
+        ):
+            value = _num(supplier_coverage.get(key))
+            if value is not None:
+                idx[label] = value
         return idx
+
+    def dimension_coverage(self) -> Dict[str, Any]:
+        return {
+            "data_mode": self.data_mode,
+            "available_dimensions": list(self.available_dimensions),
+            "missing_dimensions": list(self.missing_dimensions),
+        }
 
     # -----------------------------------------------------------------
     # Entity names (for FactReconciler fabricated-name detection + redaction)
@@ -803,7 +1046,7 @@ class FactBook:
             n = p.get("product_name") or p.get("name")
             if isinstance(n, str) and n.strip():
                 prods.append(n.strip())
-        dm = self.dish_margin or {}
+        dm = self.dish_margin if _has_reliable_dish_margin(self.dish_margin) else {}
         for bucket in ("top_margin", "low_margin"):
             for p in (dm.get(bucket) or []):
                 n = p.get("dish_name")

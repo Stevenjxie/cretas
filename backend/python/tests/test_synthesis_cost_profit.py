@@ -47,6 +47,8 @@ class _Conn:
 class _DishConn:
     async def fetch(self, sql: str, *params):
         assert "restaurant_sku_forms" in sql
+        assert "餐巾纸" in sql
+        assert "(?:白)?米饭" in sql
         assert params[0] == "DEMO_REST"
         return [
             {
