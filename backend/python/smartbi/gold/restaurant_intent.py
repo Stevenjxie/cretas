@@ -723,9 +723,22 @@ def _build_spec(
     same spec as the original T3 parse (dates still recomputed fresh)."""
     effective_query = f"{query} {time_phrase}".strip() if time_phrase else query
     date_range, window_label = _resolve_sales_date_range(effective_query)
+    requested_metrics = _detect_requested_metrics(effective_query)
     wants_margin, asks_profitability = _profit_intent(effective_query)
-    asks_profitability = asks_profitability or llm_asks_profitability
-    wants_margin = wants_margin or llm_wants_margin or asks_profitability
+    # T3 profit booleans are supplements only when deterministic metric parsing
+    # found no objective. Letting them survive an explicit sales/cost/etc.
+    # metric creates a contradictory sealed plan: requested_metrics says
+    # sales_volume while build_resolver_query appends "毛利", so the resolver
+    # formats a margin recommendation for a sales follow-up.
+    allow_llm_profit_supplement = not requested_metrics
+    asks_profitability = asks_profitability or (
+        allow_llm_profit_supplement and llm_asks_profitability
+    )
+    wants_margin = (
+        wants_margin
+        or asks_profitability
+        or (allow_llm_profit_supplement and llm_wants_margin)
+    )
     relative_window = _uses_relative_sales_window(effective_query)
     deterministic_dish = extract_dish_candidate(effective_query)
     deterministic_store = extract_store_mention(effective_query)
@@ -736,7 +749,6 @@ def _build_spec(
         dimension_list.append("dish")
     dimensions = tuple(dimension_list)
     comparison = _detect_comparison(effective_query)
-    requested_metrics = _detect_requested_metrics(effective_query)
     planned_intents = _plan_requested_intents(
         effective_query,
         code,
@@ -1055,9 +1067,13 @@ def build_resolver_query(query: str, spec: RestaurantQuerySpec) -> str:
     if spec.window_label != "全部历史" and spec.window_label not in query:
         parts.append(spec.window_label)
     raw_wants_margin, raw_asks_profit = _profit_intent(query)
-    if spec.asks_profitability and not raw_asks_profit:
+    margin_is_requested = (
+        not spec.requested_metrics
+        or "gross_margin" in spec.requested_metrics
+    )
+    if margin_is_requested and spec.asks_profitability and not raw_asks_profit:
         parts.append("赚钱了吗")
-    elif spec.wants_margin and not raw_wants_margin:
+    elif margin_is_requested and spec.wants_margin and not raw_wants_margin:
         parts.append("毛利")
     return " ".join(parts)
 
