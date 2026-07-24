@@ -506,6 +506,46 @@ def test_build_resolver_query_idempotent_when_label_already_present():
     assert build_resolver_query(query, spec) == query
 
 
+def test_explicit_sales_metric_rejects_conflicting_llm_margin_supplement():
+    query = "本月招牌藤椒味(单人份)的销量怎么优化"
+    spec = _build_spec(
+        "RESTAURANT_OPS_GROSS_MARGIN",
+        query,
+        confidence=0.95,
+        tier="llm",
+        llm_wants_margin=True,
+        llm_asks_profitability=True,
+        planner_authority="llm",
+    )
+
+    assert spec.requested_metrics == ("sales_volume",)
+    assert spec.wants_margin is False
+    assert spec.asks_profitability is False
+    assert build_resolver_query(query, spec) == query
+
+
+def test_resolver_query_never_injects_margin_against_explicit_sales_contract():
+    query = "本月米饭的销量怎么优化"
+    malformed_spec = RestaurantQuerySpec(
+        intent="RESTAURANT_OPS_GROSS_MARGIN",
+        domain="restaurant",
+        date_range=(date(2026, 7, 1), date(2026, 7, 24)),
+        window_label="本月",
+        relative_window=True,
+        metrics=("sales_volume", "gross_margin"),
+        wants_margin=True,
+        asks_profitability=True,
+        dimensions=("dish",),
+        comparison=None,
+        confidence=0.95,
+        source_tier="llm",
+        requested_metrics=("sales_volume",),
+        planned_intents=("RESTAURANT_OPS_GROSS_MARGIN",),
+    )
+
+    assert build_resolver_query(query, malformed_spec) == query
+
+
 # ─── 5. Comparison / dimension detectors ──────────────────────────────────
 
 @pytest.mark.parametrize("query,expected", [

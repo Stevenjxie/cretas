@@ -24,7 +24,7 @@ import pytest
 import smartbi.api.gold_reads as gold_reads_mod
 import smartbi.gold.restaurant_intent_service as svc
 from smartbi.api.gold_reads import TieredIntentAnswerRequest, post_restaurant_tiered_answer
-from smartbi.gold.restaurant_intent import RestaurantQuerySpec
+from smartbi.gold.restaurant_intent import RestaurantQuerySpec, _build_spec
 from smartbi.gold.restaurant_intent_service import should_delegate, tiered_answer
 from smartbi.gold.restaurant_ops_router import OpsAnswer
 
@@ -985,6 +985,61 @@ async def test_tiered_answer_returns_typed_focus_entity_and_followups(monkeypatc
         {"label": "看本月", "question": "本月哪个菜卖得最好？"},
         {"label": "看上个月", "question": "上个月哪个菜卖得最好？"},
     ]
+
+
+@pytest.mark.asyncio
+async def test_tiered_answer_keeps_sales_objective_when_llm_margin_slot_conflicts(
+    monkeypatch,
+):
+    query = "本月招牌藤椒味(单人份)的销量怎么优化"
+    spec = _build_spec(
+        "RESTAURANT_OPS_GROSS_MARGIN",
+        query,
+        confidence=0.95,
+        tier="llm",
+        llm_wants_margin=True,
+        llm_asks_profitability=True,
+        planner_authority="llm",
+    )
+    captured = {}
+
+    async def _resolve(code, pool, factory_id, **kwargs):
+        captured.update(kwargs)
+        return OpsAnswer(
+            code=code,
+            title="菜品销量优化建议",
+            answer_text="优化目标：提升菜品销量。验证指标：销量与订单数。",
+            charts=[],
+            kpis=[],
+            meta={
+                "focus_entity": {
+                    "type": "dish",
+                    "id": "dish-42",
+                    "name": "招牌藤椒味(单人份)",
+                },
+                "scope_matches_request": True,
+            },
+        )
+
+    monkeypatch.setattr(svc, "_resolve_tiered", _resolve)
+    monkeypatch.setattr(
+        svc._contract,
+        "validate",
+        lambda *args, **kwargs: SimpleNamespace(passed=True, missing=[]),
+    )
+    monkeypatch.setattr(svc, "log_intent_capture", AsyncMock(return_value=1))
+
+    result = await tiered_answer(
+        query,
+        object(),
+        "DEMO_REST",
+        "restaurant_manager",
+        precomputed_spec=spec,
+    )
+
+    assert result["kind"] == "answer"
+    assert captured["query"] == query
+    assert "毛利" not in captured["query"]
 
 
 def test_named_entity_followups_are_self_contained_and_do_not_repeat_metric():
