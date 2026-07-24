@@ -19,6 +19,7 @@ from smartbi.gold.customer_text import (
 from smartbi.gold import answer_contract as _contract
 from smartbi.gold.restaurant_intent import (
     RestaurantQuerySpec,
+    TIME_CLARIFICATION_QUESTION,
     TRUSTED_PLANNER_AUTHORITIES,
     build_resolver_query,
     log_intent_capture,
@@ -214,6 +215,16 @@ def _suggested_followups(context: Dict[str, Any]) -> List[Dict[str, str]]:
         for metric, label, question in candidates
         if metric not in current_metrics
     ][:2]
+
+
+def _clarification_followups(spec: RestaurantQuerySpec) -> List[Dict[str, str]]:
+    """Return deterministic choices only for a recognized time-slot gap."""
+    if spec.clarification_question != TIME_CLARIFICATION_QUESTION:
+        return []
+    return [
+        {"label": window, "question": window}
+        for window in ("本月", "上个月", "最近7天", "最近30天")
+    ]
 
 
 def _resolver_kwargs(
@@ -451,7 +462,7 @@ async def tiered_answer(
         if spec is None:
             return None
         if spec.clarification_needed or not spec.intent:
-            return {
+            clarification_result = {
                 "kind": "clarification",
                 "answer_text": (
                     spec.clarification_question
@@ -459,6 +470,10 @@ async def tiered_answer(
                 ),
                 "spec": spec,
             }
+            followups = _clarification_followups(spec)
+            if followups:
+                clarification_result["suggested_followups"] = followups
+            return clarification_result
 
         resolver_query = build_resolver_query(query, spec)
         execution_kwargs = _resolver_kwargs(spec, role, resolver_query)

@@ -36,6 +36,10 @@ logger = logging.getLogger(__name__)
 # Chinese as ~1 token per 1.5 chars. English averages ~4 chars/token, so 750 chars
 # of English is ~190 tokens. We pick the conservative bound for Chinese.
 SUMMARY_CHAR_BUDGET = 750
+# User-visible restaurant conversations retain the latest 20 complete turns.
+# This is deliberately bounded: long enough for real analysis follow-ups while
+# keeping prompt size, storage, and injection surface predictable.
+CHAT_SESSION_HISTORY_LIMIT = 20
 
 # Rolling TTL: each turn extends expires_at by this duration.
 TTL_SECONDS = 3600  # 1 hour
@@ -263,22 +267,22 @@ class ChatSessionService:
 
         On conflict (existing factory/user/session identity), refreshes
         expires_at, increments turn_count, and APPENDS turn to turns_history
-        (last 3 kept).
+        (last 20 kept).
 
-        Apr 27 2026 v3: turns_history JSONB array stores last 3 (q, a_summary)
-        pairs. Build_context_block uses the array to inject full multi-turn
-        context, not just last parent. Enables FU1 ↔ FU2 ↔ FU3 reference.
+        Jul 25 2026 v4: turns_history JSONB array stores the latest 20
+        (q, a_summary) pairs. Build_context_block uses the bounded array to
+        inject full multi-turn context, not just the last parent.
         """
         trusted_user_id = parse_trusted_user_id(user_id)
         if not session_id or not factory_id or trusted_user_id is None:
             return
         summary = truncate_summary(parent_answer_summary)
         # v3: build new turn entry. Truncate sub-fields conservatively to
-        # avoid bloating turns_history (3 turns × ~750 chars each = ~2.25K).
+        # keep each turn bounded so 20 retained turns remain predictable.
         from datetime import datetime
         new_turn = {
             "q": (parent_query or "")[:200],
-            "a_summary": summary[:500],  # tighter than 750 to fit 3-turn budget
+            "a_summary": summary[:500],
             "ts": datetime.utcnow().isoformat() + "Z",
         }
         safe_context = compact_structured_context(structured_context)
@@ -340,21 +344,22 @@ class ChatSessionService:
                             )
                             return
 
-                    # v3: prune turns_history to last 3 turns (chronological order).
+                    # v4: prune to the latest 20 turns (chronological order).
                     await conn.execute(
                         """
                         UPDATE smart_bi_chat_session
                         SET turns_history = COALESCE((
                             SELECT jsonb_agg(elem ORDER BY ord)
                             FROM jsonb_array_elements(turns_history) WITH ORDINALITY t(elem, ord)
-                            WHERE ord > jsonb_array_length(turns_history) - 3
+                            WHERE ord > jsonb_array_length(turns_history) - $4
                         ), '[]'::jsonb)
                         WHERE factory_id = $1
                           AND user_id = $2
                           AND session_id = $3
-                          AND jsonb_array_length(turns_history) > 3
+                          AND jsonb_array_length(turns_history) > $4
                         """,
                         factory_id, trusted_user_id, session_id,
+                        CHAT_SESSION_HISTORY_LIMIT,
                     )
         except Exception as e:
             logger.warning(f"[chat-session] upsert failed (non-fatal): {e}")
@@ -398,9 +403,9 @@ def build_context_block(parent: Dict[str, Any]) -> str:
             except Exception:
                 history = None
     if isinstance(history, list) and len(history) >= 1:
-        # Multi-turn block
+        # Multi-turn block: all retained turns, bounded at write and read.
         valid_turns = [
-            t for t in history[-3:]  # last 3
+            t for t in history[-CHAT_SESSION_HISTORY_LIMIT:]
             if isinstance(t, dict) and t.get("q") and t.get("a_summary")
         ]
         if len(valid_turns) >= 1:

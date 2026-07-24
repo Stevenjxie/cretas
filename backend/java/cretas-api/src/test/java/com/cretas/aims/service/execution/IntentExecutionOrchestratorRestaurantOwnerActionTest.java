@@ -164,6 +164,16 @@ class IntentExecutionOrchestratorRestaurantOwnerActionTest {
                 .isFalse();
         assertThat(orchestrator.shouldRouteRestaurantOwnerAction(
                 "DEMO_REST",
+                "\u9500\u91cf\u600e\u4e48\u63d0\u5347",
+                Map.of("restaurantAnalysisContinuation", true)))
+                .isFalse();
+        assertThat(orchestrator.shouldRouteRestaurantOwnerAction(
+                "DEMO_REST",
+                "\u4e0b\u4e00\u6b65\u5148\u505a\u4ec0\u4e48",
+                Map.of("restaurantAnalysisContinuation", true)))
+                .isFalse();
+        assertThat(orchestrator.shouldRouteRestaurantOwnerAction(
+                "DEMO_REST",
                 "\u4eca\u5929\u67e5\u8ba2\u5355",
                 Collections.emptyMap()))
                 .isFalse();

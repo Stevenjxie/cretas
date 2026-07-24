@@ -67,6 +67,17 @@ class RedisConversationStateServiceMockTest {
     }
 
     @Test
+    void productionConstructor_never_retains_fewer_than_twenty_turns() {
+        RedisConversationStateService productionService =
+                new RedisConversationStateService(template, mapper, 30L, 10);
+
+        productionService.appendTurn(
+                "F001", "U100", ConversationTurn.userOnly("keep twenty turns"));
+
+        verify(listOps).trim("conv:F001:U100:default", 0L, 19L);
+    }
+
+    @Test
     void loadRecent_returns_parsed_turns() throws Exception {
         ConversationTurn turn1 = new ConversationTurn(
                 "msg1", null, null, null, null, 100L);

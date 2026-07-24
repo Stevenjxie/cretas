@@ -61,6 +61,17 @@ def test_scoped_dish_sales_followup_does_not_repeat_margin_report():
     assert "建议动作" not in answer
 
 
+def test_scoped_dish_revenue_followup_does_not_repeat_margin_report():
+    answer = _scoped_dish_metric_answer(
+        _dish_metric_entry(),
+        window_label="本月",
+        query="本月米饭的营收呢",
+    )
+
+    assert answer == "「米饭」本月营收 **¥1,000.00**，对应销量 100 份、覆盖订单 80 单。"
+    assert "毛利分析" not in answer
+
+
 def test_scoped_dish_diagnosis_explains_math_without_claiming_causality():
     answer = _scoped_dish_metric_answer(
         _dish_metric_entry(),
@@ -1732,6 +1743,8 @@ def test_dish_scoped_answer_prepends_sales_header():
     [
         ("米饭的销量为什么是这样", "菜品销量原因拆解", "不能证明业务因果"),
         ("米饭的销量怎么优化", "菜品销量优化建议", "验证指标"),
+        ("米饭的销量怎么提升", "菜品销量优化建议", "验证指标"),
+        ("米饭的营收呢", "菜品营收", "营收"),
     ],
 )
 def test_dish_scoped_action_title_and_kpis_follow_current_metric(
@@ -1746,7 +1759,7 @@ def test_dish_scoped_action_title_and_kpis_follow_current_metric(
 
     assert title_fragment in result.title
     assert answer_fragment in result.answer_text
-    assert [item["title"] for item in result.kpis] == ["销量", "营收", "订单数"]
+    assert {item["title"] for item in result.kpis} == {"销量", "营收", "订单数"}
     assert "总毛利" not in {item["title"] for item in result.kpis}
 
 

@@ -117,6 +117,18 @@ _INTENT_DESCRIPTIONS: Dict[str, str] = {
 }
 
 _VALID_CODES = frozenset(_INTENT_DESCRIPTIONS)
+TIME_CLARIFICATION_QUESTION = (
+    "你想看哪个时间范围？请选择本月、上个月、最近7天或最近30天。"
+)
+_TIME_SCOPED_INTENTS = frozenset({
+    "RESTAURANT_OPS_WASTAGE_TOP",
+    "RESTAURANT_OPS_REQUISITION_TREND",
+    "RESTAURANT_OPS_GROSS_MARGIN",
+    "RESTAURANT_OPS_STORE_MARGIN",
+    "RESTAURANT_OPS_SALES_SUMMARY",
+    "RESTAURANT_OPS_TREND_ANALYSIS",
+    "RESTAURANT_OPS_STAFFING_ADVICE",
+})
 
 
 # ─── Deterministic slot detectors (shared across all 3 tiers) ─────────────
@@ -251,6 +263,7 @@ def _detect_analysis_action(text: str) -> str:
         return "diagnose"
     if any(token in current for token in (
         "怎么优化", "如何优化", "优化", "改善", "怎么办", "怎么做",
+        "怎么提升", "如何提升", "提升", "下一步", "先做什么",
     )):
         return "optimize"
     if _detect_comparison(current) or any(token in current for token in (
@@ -310,6 +323,11 @@ def _plan_requested_intents(
         elif metric in ("revenue", "orders"):
             if "store" in dimensions:
                 code = "RESTAURANT_OPS_STORE_MARGIN"
+            elif "dish" in dimensions:
+                # Named-dish revenue/orders live in the joined POS + recipe
+                # unit-economics resolver.  The all-store sales summary cannot
+                # truthfully answer a dish-scoped question.
+                code = "RESTAURANT_OPS_GROSS_MARGIN"
             elif selected_code == "RESTAURANT_OPS_TREND_ANALYSIS":
                 code = "RESTAURANT_OPS_TREND_ANALYSIS"
             else:
@@ -379,7 +397,8 @@ def capability_clarification_question(query: str) -> Optional[str]:
 
 _FOLLOWUP_PREFIXES = (
     "那", "这个", "那个", "它", "刚才", "继续", "再", "为什么", "怎么做", "怎么办", "怎么",
-    "哪些动作", "先别", "明天看", "和上", "与上", "跟上", "比上", "呢",
+    "如何", "下一步", "先做", "换成", "改成", "哪些动作", "先别", "明天看",
+    "和上", "与上", "跟上", "比上", "呢",
 )
 _NEW_TOPIC_TOKENS = ("换个话题", "换一个问题", "另一个问题", "另外问", "新话题")
 _CONTEXT_METRIC_LABELS = {
@@ -519,7 +538,13 @@ def contextualize_restaurant_followup(
         and (
             current.startswith(_FOLLOWUP_PREFIXES)
             or current.endswith(("呢", "吗", "怎么办", "为什么", "如何", "怎么样", "合理"))
-            or any(token in current for token in ("相比", "对比", "比呢", "高还是低", "是否"))
+            or any(
+                token in current
+                for token in (
+                    "相比", "对比", "比呢", "高还是低", "是否",
+                    "怎么提升", "如何提升", "下一步", "先做什么",
+                )
+            )
         )
     )
     if not has_followup_signal:
@@ -528,7 +553,9 @@ def contextualize_restaurant_followup(
     # A fully specified new metric + time phrase is self-contained.  Leading
     # pronouns such as "那毛利呢" remain dependent and intentionally inherit.
     standalone_code = match_restaurant_ops(current)
-    leading_dependent = current.startswith(("那", "这个", "那个", "它", "刚才", "继续", "再"))
+    leading_dependent = current.startswith((
+        "那", "这个", "那个", "它", "刚才", "继续", "再", "换成", "改成",
+    ))
     if standalone_code and _uses_relative_sales_window(current) and not leading_dependent:
         return current, False
 
@@ -545,17 +572,39 @@ def contextualize_restaurant_followup(
     if isinstance(focus_entity, dict):
         entity_name = focus_entity["name"]
         entity_type = focus_entity["type"]
+        entity_source = re.sub(r"^(?:换成|改成)", "", current).strip()
         explicit_entity = (
-            extract_dish_candidate(current)
+            extract_dish_candidate(entity_source)
             if entity_type == "dish"
-            else extract_store_mention(current)
+            else extract_store_mention(entity_source)
         )
-        # An explicitly named object starts a fresh entity scope.  The semantic
-        # planner must validate it instead of having the old entity prefixed.
+        # An explicitly named object replaces the entity slot while retaining
+        # the trusted metric/window slots when this utterance is dependent
+        # ("换成 X 呢", "X 的营收呢").  This must not re-prefix the old entity.
         if explicit_entity:
-            return current, False
+            explicit_window = _resolve_sales_date_range(current)[1]
+            resolved_metric = metric_label
+            if action == "diagnose":
+                resolved = (
+                    f"{explicit_entity}的{resolved_metric}为什么是这样"
+                    if resolved_metric else f"{explicit_entity}为什么会这样"
+                )
+            elif action == "optimize":
+                resolved = (
+                    f"{explicit_entity}的{resolved_metric}怎么优化"
+                    if resolved_metric else f"{explicit_entity}怎么优化"
+                )
+            else:
+                resolved = (
+                    f"{explicit_entity}的{resolved_metric}如何"
+                    if resolved_metric else f"{explicit_entity}表现如何"
+                )
+            if explicit_window != "全部历史" and explicit_window not in resolved:
+                resolved = f"{explicit_window}{resolved}"
+            entity_name = explicit_entity
+            entity_type = focus_entity["type"]
 
-        if action == "diagnose":
+        elif action == "diagnose":
             resolved = (
                 f"{entity_name}的{metric_label}为什么是这样"
                 if metric_label else f"{entity_name}为什么会这样"
@@ -708,6 +757,7 @@ def _build_spec(
     llm_dish: Optional[str] = None,
     llm_store: Optional[str] = None,
     planner_authority: Optional[str] = None,
+    require_explicit_time: bool = False,
 ) -> RestaurantQuerySpec:
     """Compose the final QuerySpec: deterministic slots ALWAYS recomputed
     fresh against `query` + today's date, regardless of which tier picked
@@ -824,6 +874,17 @@ def _build_spec(
             "我识别到的问题对象与准备执行的分析范围不一致。"
             "请明确要看菜品、门店还是全店汇总，我不会用相邻指标替代。"
         )
+    if (
+        require_explicit_time
+        and code in _TIME_SCOPED_INTENTS
+        and _resolve_sales_date_range(query)[1] == "全部历史"
+        and not clarification_needed
+    ):
+        # LLM time_range is an extraction supplement, never permission to
+        # invent a default window.  Only a time phrase in the user's effective
+        # query (including a trusted inherited window) authorizes execution.
+        clarification_needed = True
+        clarification_question = TIME_CLARIFICATION_QUESTION
     if planner_authority in {"tenant_gate_unavailable", "llm_unavailable"}:
         # An infrastructure failure is a sealed decision not to execute.
         # Keeping a resolver in the plan would make an outage look executable
@@ -1444,6 +1505,7 @@ async def parse_restaurant_query(
             llm_dish=cached.get("llm_dish"),
             llm_store=cached.get("llm_store"),
             planner_authority="validated_plan_cache",
+            require_explicit_time=True,
         )
         await _maybe_register_pending(pool, norm_query, cached_spec, factory_id, session_key)
         return cached_spec
@@ -1525,14 +1587,24 @@ async def parse_restaurant_query(
             "llm_dish": llm_dish,
             "llm_store": llm_store,
         })
-        return _build_spec(
+        successful_spec = _build_spec(
             t3_code, norm_query, confidence=t3_confidence, tier="llm",
             time_phrase=time_phrase,
             llm_wants_margin=llm_wants_margin,
             llm_asks_profitability=llm_asks_profitability,
             llm_dish=llm_dish,
             llm_store=llm_store,
+            require_explicit_time=True,
         )
+        # Deterministic contract guards may turn an otherwise successful T3
+        # plan into a clarification (notably: a time-scoped question with no
+        # user-supplied window). Register that pending turn before returning,
+        # so clicking "本月" or another offered option resumes the original
+        # question instead of being parsed as a new standalone utterance.
+        await _maybe_register_pending(
+            pool, norm_query, successful_spec, factory_id, session_key,
+        )
+        return successful_spec
 
     # Low confidence or explicit clarification request -> surface a
     # clarification instead of querying data with a guess.
@@ -1659,6 +1731,7 @@ async def _parse_continuation(
             llm_dish=llm_dish,
             llm_store=llm_store,
             is_continuation=True,
+            require_explicit_time=True,
         )
 
     # Still unresolved after combining both turns -- surface a (final)

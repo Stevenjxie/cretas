@@ -103,6 +103,7 @@ async function askOnSameThread(questions: string[]) {
     await vm.handleSendMessage();
     await flushPromises();
   }
+  return wrapper;
 }
 
 describe('AIQuery restaurant owner-action routing', () => {
@@ -179,6 +180,45 @@ describe('AIQuery restaurant owner-action routing', () => {
     expect(firstSession).toEqual(expect.any(String));
     expect(firstSession).not.toBe('');
     expect(secondSession).toBe(firstSession);
+  });
+
+  it('keeps dish analysis context visible and prevents continuation turns from entering owner-action routing', async () => {
+    executeIntentMock
+      .mockResolvedValueOnce({
+        status: 'SUCCESS',
+        intentCode: 'RESTAURANT_OPS_GROSS_MARGIN',
+        message: '本月招牌菜销量为 100 份。',
+        resultData: {
+          source: 'restaurant_ops_gold',
+          conversationContext: {
+            focus_entity: { type: 'dish', name: '招牌菜' },
+            window_label: '本月',
+            requested_metrics: ['sales_volume'],
+          },
+        },
+      })
+      .mockResolvedValueOnce({
+        status: 'SUCCESS',
+        intentCode: 'RESTAURANT_OPS_GROSS_MARGIN',
+        message: '可以从曝光、转化和搭配率提升。',
+        resultData: { source: 'restaurant_ops_gold' },
+      });
+
+    const wrapper = await askOnSameThread([
+      '本月招牌菜销量如何',
+      '销量怎么提升',
+    ]);
+
+    expect(wrapper.text()).toContain('当前上下文');
+    expect(wrapper.text()).toContain('招牌菜');
+    expect(wrapper.text()).toContain('本月');
+    expect(wrapper.text()).toContain('销量');
+    expect(wrapper.text()).toContain('最多保留最近 20 轮');
+    expect(executeIntentMock.mock.calls[1][2]).toMatchObject({
+      context: { restaurantAnalysisContinuation: true },
+    });
+    expect(executeIntentMock.mock.calls[1][2]?.context).not.toHaveProperty('ownerActionScenario');
+    expect(executeIntentMock.mock.calls[1][2]?.context).not.toHaveProperty('ownerActionSessionId');
   });
 
   it('sends package scenario only when the user asks for a calculated owner action', async () => {

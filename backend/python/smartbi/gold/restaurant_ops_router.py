@@ -675,9 +675,10 @@ _DISH_MULTI_METRIC_RE = re.compile(
 _DISH_QUERY_RE = re.compile(
     r"^[「\"']?(.{1,30}?)[」\"']?(?:的)?"
     r"(?:毛利率|毛利|销量|销售额|营收|成本率|成本|卖得|卖了|卖出)"
-    r"(?:是多少|有多少|怎么样|如何|好不好|多少|几份"
+    r"(?:是多少|有多少|怎么样|如何|好不好|多少|几份|呢"
     r"|为什么(?:是这样|这么高|这么低)?|为何(?:是这样)?|怎么回事"
-    r"|原因是什么|怎么优化|如何优化|怎么改善|如何改善)?[?？。!！]?$"
+    r"|原因是什么|怎么优化|如何优化|怎么改善|如何改善"
+    r"|怎么提升|如何提升)?[?？。!！]?$"
 )
 # 「米饭赚钱吗」— 盈亏动词形态, 实体点名 + 盈亏由毛利判定 (R20)。
 _DISH_PROFIT_RE = re.compile(
@@ -729,7 +730,7 @@ def _extract_dish_candidate_single(text: str) -> "Optional[str]":
         "排行", "排名", "趋势", "对比", "分析", "整体", "全部",
         "情况", "如何", "怎么", "多少", "？", "?", "营收", "营业额",
         "销售", "销量", "毛利", "成本", "盈利", "赚钱", "利润",
-        "过去", "最近", "个月", "一年", "继续追问",
+        "过去", "最近", "个月", "季度", "一年", "继续追问",
     )):
         return None
     return candidate[:60]
@@ -1092,6 +1093,7 @@ def _scoped_dish_metric_answer(
     ))
     asks_optimization = any(token in text for token in (
         "怎么优化", "如何优化", "优化", "改善", "怎么办", "怎么做",
+        "怎么提升", "如何提升", "提升", "下一步", "先做什么",
     ))
     asks_sales = any(token in text for token in (
         "菜品销量", "销量", "销售量", "卖了多少", "卖出",
@@ -1102,7 +1104,13 @@ def _scoped_dish_metric_answer(
     asks_margin = any(token in text for token in (
         "毛利率", "毛利", "利润", "盈利", "赚钱", "亏钱", "亏损",
     ))
-    if not any((asks_diagnosis, asks_optimization, asks_sales, asks_cost, asks_margin)):
+    asks_revenue = any(token in text for token in (
+        "营收", "营业额", "销售额", "销售收入", "营业收入", "流水",
+    ))
+    if not any((
+        asks_diagnosis, asks_optimization, asks_sales, asks_cost,
+        asks_margin, asks_revenue,
+    )):
         return None
 
     name = str(entry.get("name") or "该菜品")
@@ -1160,6 +1168,19 @@ def _scoped_dish_metric_answer(
                 "成本口径来自配方标准用量 × 最近有效食材单价。若要解释成本涨跌，"
                 "还需指定对比周期并核对采购价、配方用量、单位换算和损耗变化。"
             )
+        if asks_revenue and not asks_sales and not asks_cost and not asks_margin:
+            avg_price = revenue / qty if qty > 0 else None
+            price_text = (
+                f"、平均实收 ¥{avg_price:,.2f}/份"
+                if avg_price is not None else ""
+            )
+            return (
+                f"**原因拆解：「{name}」{window_label}营收为 ¥{revenue:,.2f}，"
+                f"销量 {qty:,.0f} 份、覆盖 {bills} 单{price_text}；"
+                "当前只能解释营收构成，不能证明业务因果。**\n\n"
+                "若要解释营收为什么上涨或下降，需要指定对比周期，并核对售价/折扣、"
+                "销量、缺货、门店与时段分布；这里不会用毛利率替代营收原因。"
+            )
         if not has_cost or unit_price is None or gross_profit is None or margin_rate is None:
             return (
                 f"**原因拆解：暂时只能确认「{name}」{window_label}销量 {qty:,.0f} 份、"
@@ -1182,7 +1203,8 @@ def _scoped_dish_metric_answer(
 
     if asks_optimization:
         target = (
-            "销量" if asks_sales and not asks_margin and not asks_cost
+            "营收" if asks_revenue and not asks_margin and not asks_cost
+            else "销量" if asks_sales and not asks_margin and not asks_cost
             else "成本" if asks_cost and not asks_margin
             else "毛利率"
         )
@@ -1210,6 +1232,11 @@ def _scoped_dish_metric_answer(
         return (
             f"「{name}」{window_label}销量 **{qty:,.0f} 份**、"
             f"营收 **¥{revenue:,.2f}**，覆盖订单 {bills} 单。"
+        )
+    if asks_revenue and not asks_cost and not asks_margin:
+        return (
+            f"「{name}」{window_label}营收 **¥{revenue:,.2f}**，"
+            f"对应销量 {qty:,.0f} 份、覆盖订单 {bills} 单。"
         )
     if asks_cost and not asks_margin:
         if unit_cost is None or total_cost is None:
@@ -2669,8 +2696,12 @@ async def resolve_gross_margin(
                 asks_margin = any(token in query_text for token in (
                     "毛利率", "毛利", "利润", "盈利", "赚钱", "亏钱", "亏损",
                 ))
+                asks_revenue = any(token in query_text for token in (
+                    "营收", "营业额", "销售额", "销售收入", "营业收入", "流水",
+                ))
                 metric_kind = (
-                    "销量" if asks_sales and not asks_cost and not asks_margin
+                    "营收" if asks_revenue and not asks_cost and not asks_margin
+                    else "销量" if asks_sales and not asks_cost and not asks_margin
                     else "成本" if asks_cost and not asks_margin
                     else "毛利"
                 )
@@ -2680,22 +2711,39 @@ async def resolve_gross_margin(
                     response_title = f"菜品{metric_kind}原因拆解 ({window_label})"
                 elif any(token in query_text for token in (
                     "怎么优化", "如何优化", "优化", "改善", "怎么办", "怎么做",
+                    "怎么提升", "如何提升", "提升", "下一步", "先做什么",
                 )):
                     response_title = f"菜品{metric_kind}优化建议 ({window_label})"
                 else:
                     response_title = f"菜品{metric_kind} ({window_label})"
 
-                if metric_kind == "销量":
+                if metric_kind in ("销量", "营收"):
                     response_kpis = [
                         {
-                            "title": "销量",
-                            "value": f"{float(scoped_entry.get('qty') or 0):,.0f} 份",
-                            "rawValue": scoped_entry.get("qty"),
+                            "title": "营收" if metric_kind == "营收" else "销量",
+                            "value": (
+                                f"¥{float(scoped_entry.get('revenue') or 0):,.2f}"
+                                if metric_kind == "营收"
+                                else f"{float(scoped_entry.get('qty') or 0):,.0f} 份"
+                            ),
+                            "rawValue": (
+                                scoped_entry.get("revenue")
+                                if metric_kind == "营收"
+                                else scoped_entry.get("qty")
+                            ),
                         },
                         {
-                            "title": "营收",
-                            "value": f"¥{float(scoped_entry.get('revenue') or 0):,.2f}",
-                            "rawValue": scoped_entry.get("revenue"),
+                            "title": "销量" if metric_kind == "营收" else "营收",
+                            "value": (
+                                f"{float(scoped_entry.get('qty') or 0):,.0f} 份"
+                                if metric_kind == "营收"
+                                else f"¥{float(scoped_entry.get('revenue') or 0):,.2f}"
+                            ),
+                            "rawValue": (
+                                scoped_entry.get("qty")
+                                if metric_kind == "营收"
+                                else scoped_entry.get("revenue")
+                            ),
                         },
                         {
                             "title": "订单数",

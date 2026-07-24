@@ -24,7 +24,11 @@ import pytest
 import smartbi.api.gold_reads as gold_reads_mod
 import smartbi.gold.restaurant_intent_service as svc
 from smartbi.api.gold_reads import TieredIntentAnswerRequest, post_restaurant_tiered_answer
-from smartbi.gold.restaurant_intent import RestaurantQuerySpec, _build_spec
+from smartbi.gold.restaurant_intent import (
+    RestaurantQuerySpec,
+    TIME_CLARIFICATION_QUESTION,
+    _build_spec,
+)
 from smartbi.gold.restaurant_intent_service import should_delegate, tiered_answer
 from smartbi.gold.restaurant_ops_router import OpsAnswer
 
@@ -254,6 +258,36 @@ async def test_tiered_answer_clarification_skips_resolver(monkeypatch):
 
     result = await tiered_answer("情况怎么样", object(), "QHJ01", None)
     assert result == {"kind": "clarification", "answer_text": "您想看哪方面？", "spec": spec}
+
+
+@pytest.mark.asyncio
+async def test_time_clarification_returns_four_continuation_buttons(monkeypatch):
+    spec = _spec(
+        intent="RESTAURANT_OPS_GROSS_MARGIN",
+        clarification_needed=True,
+        clarification_question=TIME_CLARIFICATION_QUESTION,
+    )
+    monkeypatch.setattr(
+        svc,
+        "parse_restaurant_query",
+        AsyncMock(return_value=spec),
+    )
+
+    result = await tiered_answer(
+        "招牌藤椒味(单人份)销量如何",
+        object(),
+        "QHJ01",
+        "restaurant_manager",
+    )
+
+    assert result["kind"] == "clarification"
+    assert result["answer_text"] == TIME_CLARIFICATION_QUESTION
+    assert result["suggested_followups"] == [
+        {"label": "本月", "question": "本月"},
+        {"label": "上个月", "question": "上个月"},
+        {"label": "最近7天", "question": "最近7天"},
+        {"label": "最近30天", "question": "最近30天"},
+    ]
 
 
 @pytest.mark.asyncio

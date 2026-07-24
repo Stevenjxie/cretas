@@ -178,6 +178,16 @@ interface ChatMessage {
   operationResponse?: IntentExecuteResponse;
 }
 
+interface RestaurantConversationContext {
+  focusEntity?: {
+    type: 'dish' | 'store';
+    name: string;
+  };
+  windowLabel?: string;
+  requestedMetrics: string[];
+  analysisAction?: 'lookup' | 'compare' | 'diagnose' | 'optimize';
+}
+
 // ==================== ChartInsightProvider: runtime type→meta mapping ====================
 
 const EXOTIC_CHART_TYPES_AIQUERY = new Set(['scatter', 'waterfall', 'radar', 'heatmap', 'gauge', 'funnel', 'sankey']);
@@ -753,8 +763,9 @@ const restaurantMoreQuestionGroups = computed<RestaurantQuickGroup[]>(() => {
 const restaurantMoreQuestionCount = computed(() => restaurantMoreQuestionGroups.value
   .reduce((total, group) => total + group.questions.length, 0));
 
-function shouldSendOwnerActionContext(query: string): boolean {
+function shouldSendOwnerActionContext(query: string, analysisContinuation = false): boolean {
   if (!isRestaurantTenant.value) return false;
+  if (analysisContinuation) return false;
   const text = query.trim();
   if (inferOwnerActionScenario(text)) return true;
   return Boolean((ownerActionSessionId.value || pendingOwnerActionScenario.value) && isOwnerActionFollowupText(text));
@@ -1192,6 +1203,72 @@ const permissionStore = usePermissionStore();
 const activeAiTab = ref<'consult' | 'operate'>('consult');
 const hasAnyWrite = computed(() => permissionStore.hasAnyWriteAccess());
 const operateSessionId = ref('');
+const restaurantConversationContext = ref<RestaurantConversationContext | null>(null);
+
+const RESTAURANT_CONTEXT_METRIC_LABELS: Record<string, string> = {
+  sales_volume: '销量',
+  recipe_cost: '成本',
+  gross_margin: '毛利率',
+  revenue: '营收',
+  orders: '订单',
+  wastage: '损耗',
+  staffing: '排班人效',
+};
+
+function normalizeRestaurantConversationContext(value: unknown): RestaurantConversationContext | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const raw = value as Record<string, unknown>;
+  const rawFocus = (raw.focus_entity ?? raw.focusEntity) as Record<string, unknown> | undefined;
+  const focusType = rawFocus?.type;
+  const focusName = rawFocus?.name;
+  const focusEntity: RestaurantConversationContext['focusEntity'] = (
+    (focusType === 'dish' || focusType === 'store')
+    && typeof focusName === 'string'
+    && focusName.trim()
+  ) ? { type: focusType, name: focusName.trim() } : undefined;
+  const rawWindow = raw.window_label ?? raw.windowLabel;
+  const windowLabel = typeof rawWindow === 'string' && rawWindow.trim()
+    ? rawWindow.trim()
+    : undefined;
+  const rawMetrics = raw.requested_metrics ?? raw.requestedMetrics;
+  const requestedMetrics = Array.isArray(rawMetrics)
+    ? rawMetrics.filter((item): item is string => (
+        typeof item === 'string' && Boolean(RESTAURANT_CONTEXT_METRIC_LABELS[item])
+      ))
+    : [];
+  const rawAction = raw.analysis_action ?? raw.analysisAction;
+  const analysisAction = (
+    rawAction === 'lookup'
+    || rawAction === 'compare'
+    || rawAction === 'diagnose'
+    || rawAction === 'optimize'
+  ) ? rawAction : undefined;
+  if (!focusEntity && !windowLabel && requestedMetrics.length === 0) return null;
+  return { focusEntity, windowLabel, requestedMetrics, analysisAction };
+}
+
+const restaurantContextSummary = computed(() => {
+  const context = restaurantConversationContext.value;
+  if (!context) return '';
+  const parts: string[] = [];
+  if (context.focusEntity?.name) parts.push(`对象：${context.focusEntity.name}`);
+  if (context.windowLabel && context.windowLabel !== '全部历史') {
+    parts.push(`时间：${context.windowLabel}`);
+  }
+  const metricLabels = context.requestedMetrics
+    .map((metric) => RESTAURANT_CONTEXT_METRIC_LABELS[metric])
+    .filter(Boolean);
+  if (metricLabels.length) parts.push(`指标：${metricLabels.join('、')}`);
+  return parts.join(' · ');
+});
+
+function isRestaurantAnalysisContinuation(query: string): boolean {
+  if (!isRestaurantTenant.value || !restaurantConversationContext.value) return false;
+  const text = query.trim();
+  if (!text || text.length > 48) return false;
+  return /^(那|这个|那个|它|刚才|继续|再|为什么|怎么|如何|下一步|先做|换成|改成|销量|营收|营业额|毛利|成本|最近|本月|上个月|近)/.test(text)
+    || /(呢|为什么|怎么优化|怎么提升|如何优化|如何提升|下一步先做什么)[？?]?$/.test(text);
+}
 
 // 操作卡状态集合 (除 READ_MODE_WRITE_BLOCKED, 它渲染咨询 tab 拦截卡)
 const OPERATION_CARD_STATUSES = new Set([
@@ -1295,29 +1372,37 @@ async function tryJavaIntentChat(
   const factoryId = authStore.factoryId;
   if (!factoryId) return 'fall-through';
   try {
-    const inferredOwnerActionScenario = inferOwnerActionScenario(query);
+    // AI 读写分离: 操作 tab 用独立 session (咨询会话不得污染操作 slot-filling)。
+    const isOperateTab = activeAiTab.value === 'operate' && hasAnyWrite.value;
+    const analysisContinuation = !isOperateTab && isRestaurantAnalysisContinuation(query);
+    const inferredOwnerActionScenario = analysisContinuation ? '' : inferOwnerActionScenario(query);
     const pendingScenario = pendingOwnerActionScenario.value;
-    const ownerActionQuery = shouldSendOwnerActionContext(query);
+    const ownerActionQuery = shouldSendOwnerActionContext(query, analysisContinuation);
     const followupScenario = isOwnerActionFollowupText(query) ? currentOwnerActionScenario.value : '';
     const ownerActionScenario = pendingScenario || inferredOwnerActionScenario || followupScenario || undefined;
     const ownerActionSessionForRequest = (
       pendingScenario || isOwnerActionFollowupText(query)
     ) ? (ownerActionSessionId.value || undefined) : undefined;
-    // AI 读写分离: 操作 tab 用独立 session (咨询会话不得污染操作 slot-filling)。
-    const isOperateTab = activeAiTab.value === 'operate' && hasAnyWrite.value;
     const intentSessionForRequest = isOperateTab
       ? (operateSessionId.value || (operateSessionId.value = createChatSessionId()))
       : (javaIntentSessionId.value || getOrCreateChatSessionId());
-    const res = await executeIntent(factoryId, query, {
-      sessionId: intentSessionForRequest,
-      mode: isOperateTab ? 'OPERATE' : 'READ',
-      context: ownerActionQuery ? {
+    const requestContext: Record<string, unknown> = {};
+    if (analysisContinuation) {
+      requestContext.restaurantAnalysisContinuation = true;
+    }
+    if (ownerActionQuery) {
+      Object.assign(requestContext, {
         ownerActionSessionId: ownerActionSessionForRequest,
         ownerActionScenario,
         storeName: '青花椒上海示范店',
         subSector: '中餐/川味酸菜鱼',
         period: 'this_week',
-      } : undefined,
+      });
+    }
+    const res = await executeIntent(factoryId, query, {
+      sessionId: intentSessionForRequest,
+      mode: isOperateTab ? 'OPERATE' : 'READ',
+      context: Object.keys(requestContext).length ? requestContext : undefined,
     });
 
     const i = idx();
@@ -1436,6 +1521,14 @@ async function tryJavaIntentChat(
       const _rd = res.resultData as any;
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const _td = toolData as any;
+      const _conversationContext = _rd?.conversationContext
+        ?? _td?.conversationContext
+        ?? _rd?.structuredContext
+        ?? _td?.structuredContext;
+      if (!isOwnerActionResponse && !isOperateTab) {
+        const normalizedContext = normalizeRestaurantConversationContext(_conversationContext);
+        if (normalizedContext) restaurantConversationContext.value = normalizedContext;
+      }
       const _followups = _rd?.suggestedFollowups ?? _td?.suggestedFollowups;
       if (Array.isArray(_followups) && _followups.length > 0) {
         msg.suggestedFollowups = _followups
@@ -1586,6 +1679,33 @@ async function tryJavaIntentChat(
       (responseStatus === 'NEED_CLARIFICATION' && res.intentRecognized !== false) ||
       responseStatus === 'CONVERSATION_CONTINUE'
     ) {
+      // Clarifications are first-class conversational responses too. In
+      // particular, the restaurant time-range question carries clickable
+      // options and may already have trusted entity/metric slots. Do not drop
+      // that metadata merely because the status is not SUCCESS yet.
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const clarificationData = res.resultData as any;
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const clarificationToolData = clarificationData?.data as any;
+      const clarificationContext = clarificationData?.conversationContext
+        ?? clarificationToolData?.conversationContext
+        ?? clarificationData?.structuredContext
+        ?? clarificationToolData?.structuredContext;
+      if (!isOperateTab) {
+        const normalizedContext = normalizeRestaurantConversationContext(clarificationContext);
+        if (normalizedContext) restaurantConversationContext.value = normalizedContext;
+      }
+      const clarificationFollowups = clarificationData?.suggestedFollowups
+        ?? clarificationToolData?.suggestedFollowups;
+      if (Array.isArray(clarificationFollowups) && clarificationFollowups.length > 0) {
+        msg.suggestedFollowups = clarificationFollowups
+          .filter((f: unknown) => f && typeof (f as { question?: unknown }).question === 'string')
+          .map((f: { label?: string; question: string; ownerActionScenario?: string }) => ({
+            label: String(f.label ?? f.question),
+            question: String(f.question),
+            ownerActionScenario: f.ownerActionScenario,
+          }));
+      }
       msg.content = customerSafeAnswer(res.message || res.formattedText || '请补充信息后继续。');
       msg.loading = false;
       return 'handled';
@@ -1751,13 +1871,13 @@ async function handleSendMessage() {
   }
   pendingOwnerActionScenario.value = '';
 
-  // Fix 2 (Apr 23 2026): pass last 3 Q+A pairs as conversation history so
+  // Pass the last 20 Q+A pairs as bounded conversation history so
   // backend LLM can resolve pronominal/temporal references ("这个月"/"它"/
   // "那家") from previous turns. Exclude the welcome message, loading
   // placeholder, and the current user message just pushed above.
   const historyForContext = chatHistory.value
     .filter((m) => m.id !== 'welcome' && m.id !== assistantId && !m.loading && m.content.trim())
-    .slice(-7, -1) // last 6 before current user msg (the 7th from end)
+    .slice(-41, -1) // last 40 messages (20 Q+A pairs) before current user msg
     .map((m) => ({
       role: m.role as 'user' | 'assistant',
       content: m.content,
@@ -2430,6 +2550,7 @@ function handleClearHistory() {
   resetChatSession();
   javaIntentSessionId.value = undefined;
   operateSessionId.value = '';  // 操作 tab session 同步重开 (下次发送再生成)
+  restaurantConversationContext.value = null;
 
   chatHistory.value = [{
     id: 'welcome',
@@ -2446,6 +2567,7 @@ function handleNewTopic() {
   resetChatSession();
   javaIntentSessionId.value = undefined;
   operateSessionId.value = '';
+  restaurantConversationContext.value = null;
   // 加一条系统消息说明 (用 assistant 风格但内容是状态提示).
   chatHistory.value.push({
     id: `topic-reset-${Date.now()}`,
@@ -2525,6 +2647,16 @@ function handleKeydown(event: KeyboardEvent) {
       <span class="ai-mode-hint">
         {{ activeAiTab === 'consult' ? '咨询模式：只查数据，不做修改' : '操作模式：可执行写操作，执行前需预览确认' }}
       </span>
+    </div>
+    <div
+      v-if="isRestaurantTenant && activeAiTab === 'consult' && restaurantConversationContext"
+      class="restaurant-context-bar"
+      data-testid="restaurant-context-bar"
+    >
+      <span class="restaurant-context-label">当前上下文</span>
+      <span>{{ restaurantContextSummary || '已建立餐饮分析上下文' }}</span>
+      <span class="restaurant-context-retention">最多保留最近 20 轮</span>
+      <el-button link type="primary" size="small" @click="handleNewTopic">清除上下文</el-button>
     </div>
 
     <div class="chat-container">
@@ -3724,6 +3856,29 @@ function handleKeydown(event: KeyboardEvent) {
 
 .ai-mode-hint {
   font-size: 12px;
+  color: var(--el-text-color-secondary);
+}
+
+.restaurant-context-bar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: -4px 0 12px;
+  padding: 8px 12px;
+  border: 1px solid var(--el-color-primary-light-7);
+  border-radius: 8px;
+  background: var(--el-color-primary-light-9);
+  color: var(--el-text-color-regular);
+  font-size: 12px;
+}
+
+.restaurant-context-label {
+  color: var(--el-color-primary);
+  font-weight: 600;
+}
+
+.restaurant-context-retention {
   color: var(--el-text-color-secondary);
 }
 

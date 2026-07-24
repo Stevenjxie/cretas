@@ -112,11 +112,18 @@ class GoldBackedRestaurantToolDelegateTest {
     @DisplayName("delegate:true clarification → message returned as-is, no owner-action framing bolted on")
     void delegateTrueClarificationReturnsMessageWithoutActionFraming() throws Exception {
         GoldFinanceClient gold = mock(GoldFinanceClient.class);
+        List<Map<String, Object>> timeFollowups = List.of(
+                Map.of("label", "本月", "question", "本月"),
+                Map.of("label", "上个月", "question", "上个月"));
+        Map<String, Object> structuredContext = Map.of(
+                "requested_metrics", List.of("revenue"));
         when(gold.fetchTieredIntentAnswer(eq(FACTORY_ID), anyString(), eq("restaurant_peak_month_gold")))
                 .thenReturn(Map.of(
                         "delegate", true,
                         "kind", "clarification",
-                        "answer_text", "能再具体说说想看哪方面的数据吗？比如营收、毛利、损耗还是库存盘点。"
+                        "answer_text", "能再具体说说想看哪方面的数据吗？比如营收、毛利、损耗还是库存盘点。",
+                        "suggested_followups", timeFollowups,
+                        "structured_context", structuredContext
                 ));
 
         RestaurantPeakMonthGoldTool tool = newTool(gold);
@@ -130,7 +137,8 @@ class GoldBackedRestaurantToolDelegateTest {
         // No owner-action framing on a clarifying question, and no
         // charts/kpis/code/contractPass keys the Python response didn't carry.
         assertThat(result).doesNotContainKey("decisionBridge");
-        assertThat(result).doesNotContainKey("suggestedFollowups");
+        assertThat(result).containsEntry("suggestedFollowups", timeFollowups);
+        assertThat(result).containsEntry("conversationContext", structuredContext);
         assertThat(result).doesNotContainKey("actionAdvice");
         assertThat(result).doesNotContainKey("charts");
         assertThat(result).doesNotContainKey("kpis");

@@ -175,7 +175,7 @@ public class AIIntentServiceImpl implements AIIntentService {
      * P4 Task 4.3: recognizeIntent with conversation context support.
      *
      * <p>When userId is non-null AND conversationStateService is available:
-     * - Loads recent 3 turns before matching (exposed for future context-aware layers)
+     * - Loads recent 20 turns before matching (bounded conversation context)
      * - Appends the recognized turn after successful dispatch
      *
      * <p>Fail-open: any ConversationStateService exception is swallowed and logged.
@@ -195,7 +195,7 @@ public class AIIntentServiceImpl implements AIIntentService {
         // Load recent context and feed into LLM prompt via ThreadLocal (best-effort)
         java.util.List<ConversationTurn> recent = java.util.Collections.emptyList();
         try {
-            recent = conversationStateService.loadRecent(factoryId, userId, 3);
+            recent = conversationStateService.loadRecent(factoryId, userId, 20);
             if (log.isDebugEnabled()) {
                 log.debug("Loaded {} conversation turns for {}/{}",
                         recent.size(), factoryId, userId);

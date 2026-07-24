@@ -18,6 +18,7 @@ import pytest
 from smartbi.gold import answer_contract as contract
 from smartbi.gold.restaurant_intent import (
     RestaurantQuerySpec,
+    TIME_CLARIFICATION_QUESTION,
     build_resolver_query,
     capability_clarification_question,
     clear_route_cache,
@@ -328,12 +329,39 @@ async def test_t3_adversarial_raw_date_in_time_range_is_ignored():
 
     assert spec is not None
     assert spec.intent == "RESTAURANT_OPS_SALES_SUMMARY"
-    # No usable time phrase was spliced in (malformed time_range ignored) and
-    # the raw query itself has no recognized time phrase -> falls back to the
-    # deterministic parser's default for the untouched raw query.
-    expected_range, expected_label = _resolve_sales_date_range(query)
-    assert spec.window_label == expected_label
-    assert spec.date_range == expected_range
+    # The malformed LLM date is ignored, and the system must ask the user
+    # instead of silently substituting an arbitrary default window.
+    assert spec.clarification_needed is True
+    assert spec.clarification_question == TIME_CLARIFICATION_QUESTION
+
+
+@pytest.mark.asyncio
+async def test_no_time_query_rejects_llm_invented_default_window():
+    query = "招牌藤椒味(单人份)销量如何"
+    pool = _restaurant_pool()
+    llm_json = json.dumps({
+        "intent": "RESTAURANT_OPS_GROSS_MARGIN",
+        "dish": "招牌藤椒味(单人份)",
+        # Even a structurally valid LLM supplement cannot invent user intent.
+        "time_range": {"type": "relative", "unit": "day", "count": 30},
+        "confidence": 0.95,
+        "clarification_needed": False,
+    })
+    fake_llm_result = {"choices": [{"message": {"content": llm_json}}]}
+
+    with patch(
+        "smartbi.services.template_embedding_index.cosine_topk",
+        new=AsyncMock(return_value=[]),
+    ), patch(
+        "common.llm_router.call_chain",
+        new=AsyncMock(return_value=fake_llm_result),
+    ):
+        spec = await parse_restaurant_query(query, pool, factory_id="QHJ01")
+
+    assert spec is not None
+    assert spec.intent == "RESTAURANT_OPS_GROSS_MARGIN"
+    assert spec.clarification_needed is True
+    assert spec.clarification_question == TIME_CLARIFICATION_QUESTION
 
 
 @pytest.mark.asyncio
@@ -852,7 +880,7 @@ def test_four_turn_chain_updates_metric_before_diagnosis_and_optimization():
     assert optimization_query == "本月米饭的销量怎么优化"
 
 
-def test_followup_with_explicit_new_entity_does_not_inherit_old_dish():
+def test_followup_with_explicit_new_entity_replaces_dish_but_inherits_time():
     parent = {
         "parent_query": "米饭的毛利率如何",
         "parent_template_code": "RESTAURANT_OPS_GROSS_MARGIN",
@@ -868,8 +896,48 @@ def test_followup_with_explicit_new_entity_does_not_inherit_old_dish():
         parent,
     )
 
-    assert inherited is False
-    assert effective == "招牌藤椒味的成本如何"
+    assert inherited is True
+    assert effective == "最近30天招牌藤椒味的成本如何"
+
+
+def test_followup_switch_entity_inherits_parent_metric_and_window():
+    parent = {
+        "parent_query": "本月招牌藤椒味(单人份)销量如何",
+        "parent_template_code": "RESTAURANT_OPS_GROSS_MARGIN",
+        "structured_context": {
+            "focus_entity": {"type": "dish", "name": "招牌藤椒味(单人份)"},
+            "window_label": "本月",
+            "requested_metrics": ["sales_volume"],
+        },
+    }
+
+    effective, inherited = contextualize_restaurant_followup(
+        "换成招牌藤椒鱼可乐单人套餐呢",
+        parent,
+    )
+
+    assert inherited is True
+    assert effective == "本月招牌藤椒鱼可乐单人套餐的销量如何"
+
+
+def test_sales_improvement_and_next_step_are_optimization_followups():
+    parent = {
+        "parent_query": "本月招牌藤椒味(单人份)销量如何",
+        "parent_template_code": "RESTAURANT_OPS_GROSS_MARGIN",
+        "structured_context": {
+            "focus_entity": {"type": "dish", "name": "招牌藤椒味(单人份)"},
+            "window_label": "本月",
+            "requested_metrics": ["sales_volume"],
+        },
+    }
+
+    improved, inherited = contextualize_restaurant_followup("销量怎么提升", parent)
+    assert inherited is True
+    assert improved == "本月招牌藤椒味(单人份)的销量怎么优化"
+
+    next_step, inherited = contextualize_restaurant_followup("下一步先做什么", parent)
+    assert inherited is True
+    assert next_step == "本月招牌藤椒味(单人份)的销量怎么优化"
 
 
 def test_named_dish_cost_uses_scoped_unit_economics_resolver():
@@ -1105,6 +1173,21 @@ def test_named_dish_sales_repairs_wrong_llm_intent_and_recovers_entity_slot():
     assert spec.intent == "RESTAURANT_OPS_GROSS_MARGIN"
     assert spec.clarification_needed is False
     assert spec.planner_authority == "llm_contract_repair"
+
+
+def test_named_dish_revenue_uses_scoped_unit_economics_resolver():
+    spec = _build_spec(
+        "RESTAURANT_OPS_SALES_SUMMARY",
+        "最近30天招牌藤椒味(单人份)营收是多少",
+        confidence=0.95,
+        tier="llm",
+        planner_authority="llm",
+    )
+
+    assert spec.requested_metrics == ("revenue",)
+    assert spec.dimensions == ("dish",)
+    assert spec.intent == "RESTAURANT_OPS_GROSS_MARGIN"
+    assert spec.planned_intents == ("RESTAURANT_OPS_GROSS_MARGIN",)
 
 
 def test_conflicting_llm_intent_stays_fail_closed_when_plan_has_multiple_resolvers():

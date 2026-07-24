@@ -1226,11 +1226,14 @@ async def post_restaurant_tiered_answer(
             return {"delegate": False}
 
         if result["kind"] == "clarification":
-            return {
+            clarification_response = {
                 "delegate": True,
                 "kind": "clarification",
                 "answer_text": result["answer_text"],
             }
+            if result.get("suggested_followups"):
+                clarification_response["suggested_followups"] = result["suggested_followups"]
+            return clarification_response
 
         if body.session_id and trusted_user_id is not None:
             await ChatSessionService(pool).upsert(
@@ -1244,7 +1247,7 @@ async def post_restaurant_tiered_answer(
                 structured_context=result.get("structured_context"),
             )
 
-        return {
+        answer_response = {
             "delegate": True,
             "answer_text": result["answer_text"],
             "charts": result.get("charts") or [],
@@ -1255,6 +1258,9 @@ async def post_restaurant_tiered_answer(
             "executed_resolvers": result.get("executed_resolvers") or [],
             "suggested_followups": result.get("suggested_followups") or [],
         }
+        if result.get("structured_context"):
+            answer_response["structured_context"] = result["structured_context"]
+        return answer_response
     except Exception as e:
         logger.warning(f"[gold-reads] restaurant QueryPlan endpoint failed: {e}")
         return {"delegate": False}

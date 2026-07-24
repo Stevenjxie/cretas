@@ -218,4 +218,48 @@ describe('AIQuery P1 conversational depth', () => {
     expect(wrapper.text()).toContain('上个月');
     expect(wrapper.text()).toContain('近30天');
   });
+
+  it('renders explicit time clarification buttons and continues with the selected period', async () => {
+    executeIntentMock
+      .mockResolvedValueOnce({
+        status: 'NEED_CLARIFICATION',
+        intentRecognized: true,
+        sessionId: 'dish-time-session',
+        message: '你想看哪个时间范围？请选择本月、上个月、最近7天或最近30天。',
+        resultData: {
+          suggestedFollowups: [
+            { label: '本月', question: '本月' },
+            { label: '上个月', question: '上个月' },
+            { label: '最近7天', question: '最近7天' },
+            { label: '最近30天', question: '最近30天' },
+          ],
+        },
+      })
+      .mockResolvedValueOnce({
+        status: 'SUCCESS',
+        sessionId: 'dish-time-session',
+        intentCode: 'RESTAURANT_OPS_GROSS_MARGIN',
+        message: '本月菜品销量已给出。',
+        resultData: { message: '本月菜品销量已给出。' },
+      });
+
+    const { wrapper } = await mountAndAsk('哪个菜卖得好');
+
+    expect(wrapper.text()).toContain('你想看哪个时间范围');
+    for (const label of ['本月', '上个月', '最近7天', '最近30天']) {
+      expect(wrapper.text()).toContain(label);
+    }
+
+    const thisMonth = wrapper
+      .findAll('button.el-button')
+      .find((button) => button.text().includes('本月'));
+    expect(thisMonth).toBeTruthy();
+    await thisMonth!.trigger('click');
+    await flushPromises();
+
+    expect(executeIntentMock).toHaveBeenCalledTimes(2);
+    expect(executeIntentMock.mock.calls[1][1]).toBe('本月');
+    expect(executeIntentMock.mock.calls[1][2]?.sessionId)
+      .toBe(executeIntentMock.mock.calls[0][2]?.sessionId);
+  });
 });
