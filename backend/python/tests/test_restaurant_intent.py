@@ -1319,6 +1319,31 @@ async def test_t3_slot_supplements_survive_route_cache():
 
 
 @pytest.mark.asyncio
+async def test_contract_repaired_plan_stays_trusted_through_route_cache():
+    query = "近30天畅销菜品"
+    llm = AsyncMock(return_value={
+        "intent": "RESTAURANT_OPS_REQUISITION_TREND",
+        "confidence": 0.95,
+        "clarification_needed": True,
+        "clarification_question": "请明确想查哪类数据。",
+    })
+    with patch("smartbi.gold.restaurant_intent._t3_llm_parse", new=llm):
+        spec1 = await parse_restaurant_query(
+            query, _restaurant_pool(), factory_id="DEMO_REST",
+        )
+        spec2 = await parse_restaurant_query(
+            query, _restaurant_pool(), factory_id="DEMO_REST",
+        )
+
+    assert llm.await_count == 1
+    assert spec1 is not None and spec2 is not None
+    assert spec1.intent == spec2.intent == "RESTAURANT_OPS_GROSS_MARGIN"
+    assert spec1.clarification_needed is spec2.clarification_needed is False
+    assert spec1.planner_authority == "llm_contract_repair"
+    assert spec2.planner_authority == "validated_plan_cache_contract_repair"
+
+
+@pytest.mark.asyncio
 async def test_build_resolver_query_splices_profit_phrase_for_llm_only_detection():
     query = "生意有起色没，划算不划算"
     llm_json = json.dumps({

@@ -39,6 +39,13 @@ from smartbi.gold.restaurant_ops_router import (
 
 logger = logging.getLogger(__name__)
 
+TRUSTED_PLANNER_AUTHORITIES = frozenset({
+    "llm",
+    "validated_plan_cache",
+    "llm_contract_repair",
+    "validated_plan_cache_contract_repair",
+})
+
 
 # ─── QuerySpec ────────────────────────────────────────────────────────────
 
