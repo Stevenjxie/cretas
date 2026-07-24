@@ -10,6 +10,8 @@ AGENTS_FILE="$ROOT_DIR/AGENTS.md"
 DEPLOY_SKILL="$ROOT_DIR/.agents/skills/deploy-backend/SKILL.md"
 L1_SMOKE="$ROOT_DIR/tests/v1-e2e/web/l1-smoke.spec.ts"
 RELEASE_PREFLIGHT="$ROOT_DIR/scripts/deploy/release-preflight.sh"
+RELEASE_ORCHESTRATOR="$ROOT_DIR/scripts/deploy/release-cretas.sh"
+WEB_MANIFEST="$ROOT_DIR/scripts/deploy/release-web-manifest.sh"
 
 assert_contains() {
     local file=$1
@@ -60,6 +62,13 @@ assert_contains "$DEPLOY_SKILL" 'git diff --quiet "$feature-head" <merge-commit>
 assert_contains "$DEPLOY_SKILL" 'git switch --detach origin/main'
 assert_contains "$DEPLOY_SKILL" './scripts/deploy/release-preflight.sh'
 assert_contains "$DEPLOY_SKILL" 'Never trigger or wait for an Artifact during a release.'
+assert_contains "$DEPLOY_SKILL" '--stage-backend YES-STAGE'
+assert_contains "$DEPLOY_SKILL" 'Candidate archives are also keyed by the exact `web-admin` Git tree.'
+assert_contains "$AGENTS_FILE" '--stage-backend YES-STAGE'
+assert_contains "$AGENTS_FILE" '按 `web-admin` Git tree 保留可恢复缓存'
+assert_contains "$RELEASE_ORCHESTRATOR" '--stage-backend YES-STAGE'
+assert_contains "$RELEASE_ORCHESTRATOR" 'ensure_exact_main_after_artifacts "artifact validation/fallback build"'
+assert_contains "$WEB_MANIFEST" 'web_release_validate_cached'
 assert_contains "$RELEASE_PREFLIGHT" 'Fast, read-only release gates.'
 assert_contains "$L1_SMOKE" '/\b401\b|Unauthorized|500 Internal|NoResourceFoundException/i'
 

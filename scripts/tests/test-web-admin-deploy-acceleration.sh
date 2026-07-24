@@ -204,7 +204,9 @@ grep -Fq "Dependency reuse stage:" "$HIT/output.log" || fail "missing dependency
 
 # A changed lock hash must invalidate the manifest even when Vite exists.
 printf 'stale\n' > "$HIT/web-admin/node_modules/.cretas-package-lock.sha256"
-rm -rf "$HIT/cache/current"
+# Remove both cache indexes so this case reaches dependency restoration rather
+# than correctly restoring the immutable dist from the exact-tree cache.
+rm -rf "$HIT/cache/current" "$HIT/cache/by-tree"
 : > "$HIT/npm.log"
 run_dry_build "$HIT" > "$HIT/stale-output.log"
 mapfile -t stale_calls < "$HIT/npm.log"

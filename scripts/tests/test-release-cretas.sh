@@ -24,6 +24,7 @@ assert_log_count() {
 
 setup_repo() {
     local name=$1
+    printf 'CASE: %s\n' "$name"
     CASE_ROOT="$TMP_ROOT/$name"
     CASE_REPO="$CASE_ROOT/repo"
     CASE_REMOTE="$CASE_ROOT/origin.git"
@@ -64,6 +65,9 @@ EOF
 #!/usr/bin/env bash
 if [ "${1:-}" = build ]; then
     printf 'WEB_BUILD %s\n' "$*" >>"$MOCK_CALL_LOG"
+    if [ "${MOCK_ADVANCE_MAIN_ON_WEB_BUILD:-0}" = "1" ]; then
+        git --git-dir="$MOCK_REMOTE_PATH" update-ref refs/heads/main "$MOCK_DRIFT_SHA"
+    fi
     exit "${MOCK_WEB_BUILD_RC:-0}"
 fi
 printf 'WEB_VALIDATE\n' >>"$MOCK_CALL_LOG"
@@ -72,6 +76,11 @@ count=0; [ ! -f "$counter" ] || count=$(cat "$counter")
 count=$((count + 1)); printf '%s\n' "$count" >"$counter"
 if [ "$count" -le "${MOCK_WEB_VALIDATE_FAILS:-0}" ]; then exit 1; fi
 exit 0
+EOF
+    cat >"$CASE_REPO/scripts/deploy/stage-backend-artifact.sh" <<'EOF'
+#!/usr/bin/env bash
+printf 'JAVA_STAGE %s\n' "$*" >>"$MOCK_CALL_LOG"
+exit "${MOCK_JAVA_STAGE_RC:-0}"
 EOF
 cat >"$CASE_REPO/scripts/deploy/deploy-backend.sh" <<'EOF'
 #!/usr/bin/env bash
@@ -144,8 +153,12 @@ run_release() {
         HOME="$CASE_HOME" \
         MOCK_CALL_LOG="$CASE_LOG" \
         MOCK_COUNTER_ROOT="$CASE_ROOT" \
+        MOCK_REMOTE_PATH="$CASE_REMOTE" \
+        MOCK_ADVANCE_MAIN_ON_WEB_BUILD="${MOCK_ADVANCE_MAIN_ON_WEB_BUILD:-0}" \
+        MOCK_DRIFT_SHA="${MOCK_DRIFT_SHA:-}" \
         MOCK_JAVA_OUTCOME="${MOCK_JAVA_OUTCOME:-deployed}" \
         MOCK_WEB_OUTCOME="${MOCK_WEB_OUTCOME:-deployed}" \
+        CRETAS_RELEASE_FALLBACK_MAIN_GUARD_SECONDS="${CRETAS_RELEASE_FALLBACK_MAIN_GUARD_SECONDS:-0}" \
         CRETAS_RELEASE_REPORT_PATH="$CASE_REPORT" \
         bash scripts/deploy/release-cretas.sh "$@"
     ) >"$CASE_OUTPUT" 2>&1
@@ -159,6 +172,21 @@ assert_contains "$CASE_OUTPUT" 'DETECTED_JAVA_CHANGED=true'
 assert_contains "$CASE_OUTPUT" 'RELEASE_BUILD_MODE=java-only'
 assert_log_count 1 'JAVA_BUILD build --tests StartupTest' "$CASE_LOG"
 assert_log_count 0 'WEB_BUILD' "$CASE_LOG"
+
+# A reviewed Java candidate can pre-stage the immutable JAR before merge. This
+# is not a deployment and must remain exclusive to the build phase.
+setup_repo java_stage
+commit_change backend/java/cretas-api/Service.java
+run_release --phase build --base-sha "$BASE_SHA" --tests StartupTest --stage-backend YES-STAGE
+assert_log_count 1 'JAVA_STAGE --confirm-stage YES-STAGE' "$CASE_LOG"
+assert_contains "$CASE_REPORT" '"staging": {"java": "success"'
+
+setup_repo java_stage_wrong_phase
+if run_release --phase deploy --base-sha "$BASE_SHA" --confirm-prod YES-PROD \
+    --stage-backend YES-STAGE; then
+    fail '--stage-backend was accepted outside the candidate build phase'
+fi
+assert_contains "$CASE_OUTPUT" '--stage-backend is only valid with --phase build'
 
 # Only Web changes: build only Web.
 setup_repo web_only
@@ -286,6 +314,24 @@ MOCK_JAVA_VALIDATE_FAILS=1 run_release --phase deploy --base-sha "$BASE_SHA" \
 assert_contains "$CASE_OUTPUT" 'Java manifest invalid; using the one permitted build fallback'
 assert_log_count 1 'JAVA_BUILD build --tests StartupTest' "$CASE_LOG"
 assert_log_count 2 'JAVA_VALIDATE' "$CASE_LOG"
+
+# If origin/main moves while a fallback artifact is being built, the unified
+# gate must stop before either child deployment.
+setup_repo fallback_main_drift
+commit_change web-admin/src/app.ts
+publish_head
+tree=$(git -C "$CASE_REPO" rev-parse HEAD^{tree})
+MOCK_DRIFT_SHA=$(printf 'fixture drift\n' | git -C "$CASE_REPO" commit-tree "$tree" -p HEAD)
+git -C "$CASE_REPO" push -q origin "$MOCK_DRIFT_SHA:refs/heads/drift-fixture"
+if MOCK_WEB_VALIDATE_FAILS=1 MOCK_ADVANCE_MAIN_ON_WEB_BUILD=1 \
+    MOCK_DRIFT_SHA="$MOCK_DRIFT_SHA" \
+    run_release --phase deploy --base-sha "$BASE_SHA" --confirm-prod YES-PROD; then
+    fail 'release accepted origin/main drift after fallback build'
+fi
+assert_contains "$CASE_OUTPUT" 'origin/main moved during artifact validation/fallback build'
+assert_log_count 0 'JAVA_DEPLOY' "$CASE_LOG"
+assert_log_count 0 'WEB_DEPLOY' "$CASE_LOG"
+assert_contains "$CASE_REPORT" '"main_guard": {"status": "failed"'
 
 # Dirty and stale release worktrees fail before any child deployment.
 setup_repo dirty

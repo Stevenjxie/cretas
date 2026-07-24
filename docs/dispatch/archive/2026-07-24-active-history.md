@@ -11,6 +11,17 @@
 - 边界：生产业务写入为 0。测试 Python 未重启，原因是服务器缺少 `/www/wwwroot/cretas/.env.test`；测试库已由标准 runner 应用 34 个历史待执行 migration，需另项治理测试环境配置漂移。
 - Scope 锁已释放。
 
+## `PERF-RELEASE-LATENCY-20260724` — `review`
+
+- Owner: `/root`
+- Base SHA: `f61e94599bc62df0ca826940a24e1ea1ba4287fd`
+- 结果：统一候选 build 支持显式 `--stage-backend YES-STAGE`，在合并前把已验证 Java JAR 上传到不可变 SHA-256 缓存，但不安装、不重启、不切流；Web release archive 按精确 `web-admin` Git tree 保留并可 A/B/A 恢复，避免并行候选覆盖 `current` 后重复 `npm ci/build`。
+- 稳定性：昂贵 fallback 前增加短 exact-main freshness guard，制品校验/回退后、任何 child deploy 前再次 fetch 并确认 `HEAD == origin/main` 与 clean worktree；主线漂移时 child deploy 调用数为 0。
+- 流程：AGENTS 与 deploy skill 要求预期合并后部署时前置唯一构建/Java 预热，生产发布窗口不再合入无关 PR；统一成功回执已含服务级验证时不重复 raw SSH，只补任务特有断言。JPA/Flyway、蓝绿 5×6 秒观察、Web 四方哈希与自动回滚门禁均保留。
+- 验证：`test-release-web-manifest.sh` 通过（A/B/A tree cache）；`test-release-cretas.sh` 26 个场景通过；`test-web-admin-deploy-acceleration.sh` 已按 tree cache 语义更新 fixture 并通过；`test-release-pipeline-acceleration.sh`、`test-release-preflight.sh`、`test-deploy-web-admin-preflight.sh`、全部修改脚本 `bash -n` 与 `git diff --check` 通过。
+- 边界：只创建 PR，`NOT_DEPLOYED`；没有执行生产制品 staging、服务重启、切流或业务数据写入。
+- Scope 锁已释放。
+
 ## `FEATURE-WORKFLOW-BOM-AUTO-BINDING-DAG-001` — `merged`
 
 - Owner: `/root`

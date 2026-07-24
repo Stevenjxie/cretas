@@ -26,11 +26,12 @@ artifact and deployment commands by hand. The Base SHA must be the value
 registered in `docs/dispatch/ACTIVE.md`:
 
 ```bash
-# Optional pre-merge candidate artifact build
+# Expected pre-merge preparation when the user asked to deploy after merge
 ./scripts/deploy/release-cretas.sh \
   --phase build \
   --base-sha '<registered Base SHA>' \
-  --tests '<MavenTestSelector>'
+  --tests '<MavenTestSelector>' \
+  --stage-backend YES-STAGE
 
 # Post-merge production release from clean exact origin/main
 ./scripts/deploy/release-cretas.sh \
@@ -69,7 +70,7 @@ merge when the backend tree remains identical. Build once for one backend Git
 tree:
 
 - In the clean reviewed source worktree, run `./scripts/deploy/release-jar-manifest.sh build --tests '<tests>'`. This executes one `mvn clean package -Dtest=<tests>` lifecycle, creates the final JAR, and writes its manifest. Do not run the target tests separately and then package again.
-- After that trusted build succeeds, `./scripts/deploy/stage-backend-artifact.sh --confirm-stage YES-STAGE` may upload the verified JAR to the immutable server-side SHA-256 cache before merge. Staging never installs the JAR, restarts a service, or changes upstream. The exact `origin/main` deployment still revalidates the manifest/tree and claims the cached bytes only after SHA-256, MD5 and JAR integrity checks.
+- When deployment is expected immediately after merge, use the unified candidate build with `--stage-backend YES-STAGE`; it uploads the verified JAR to the immutable server-side SHA-256 cache before merge. Staging never installs the JAR, restarts a service, or changes upstream. The exact `origin/main` deployment still revalidates the manifest/tree and claims the cached bytes only after SHA-256, MD5 and JAR integrity checks.
 - A successful release build must generate a trusted manifest recording at least the build commit, exact `backend/java/cretas-api` Git tree, JAR SHA-256, and the information needed to check JAR integrity. A recent mtime or filename is not provenance.
 - `SKIP_BUILD=1`, local cache reuse, or Artifact reuse is allowed only after validating all of the following: the manifest build commit resolves in Git; that commit's `backend/java/cretas-api` tree equals both the manifest tree and the current `origin/main` backend tree; SHA-256 matches; the JAR passes an integrity check; and the current exact `origin/main` worktree is clean. A squash merge may change the commit while preserving the backend tree; matching backend trees are reusable in that case.
 - Keep using the manifest-backed backend-tree cache, including cache/no-op behavior when Java did not change. If reuse is unavailable or any validation fails, fall back exactly once to the existing local clean-package path; do not retry with a second package invocation. Write a fallback manifest only after that build and all existing JAR checks succeed.
@@ -169,6 +170,10 @@ upload; otherwise retain the atomic swap and stale-chunk behavior. Both the
 no-op and deployed paths must write a child receipt and pass the production
 four-way index hash gate (trusted local index, server file, gateway localhost
 response, and public HTTPS response) before reporting success.
+Candidate archives are also keyed by the exact `web-admin` Git tree. If another
+candidate replaces the `current` pointer, restore the matching tree cache before
+using the one permitted fallback build; never rebuild merely because candidates
+completed in a different order.
 
 Use the atomic project script, not manual `rsync --delete`:
 
@@ -227,6 +232,10 @@ Never overwrite server `.env` files.
 
 ## Mandatory Verification
 
+- The unified release command already runs `verify-release.sh` and records its
+  evidence. When its structured receipt is complete and successful, do not
+  repeat the same SSH/upstream/systemd/health/Web-hash probes by hand; add only
+  task-specific assertions not represented in the receipt.
 - Re-read the upstream file and confirm its active port.
 - Confirm the new systemd unit is active and only the active production port listens.
 - Verify direct active-slot health and the nginx/public route appropriate to the service.
