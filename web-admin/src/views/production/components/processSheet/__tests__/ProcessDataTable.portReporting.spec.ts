@@ -76,6 +76,7 @@ describe('ProcessDataTable workflow port reporting rows', () => {
 
     expect(wrapper.findAll('[data-testid="material-input-total"]')).toHaveLength(2);
     expect(wrapper.findAll('[data-testid="workflow-output-line"]')).toHaveLength(2);
+    expect(wrapper.findAll('[data-testid="workflow-execution-line"]')).toHaveLength(2);
     expect(wrapper.find('[data-testid="production-date"]').exists()).toBe(true);
     expect(wrapper.findAll('[data-testid="input-unit-readonly"]').map((item) => item.text())).toEqual(['kg', 'kg']);
     expect(wrapper.findAll('[data-testid="output-unit-readonly"]').map((item) => item.text())).toEqual(['袋', '袋']);
@@ -85,7 +86,12 @@ describe('ProcessDataTable workflow port reporting rows', () => {
     for (const outputLine of wrapper.findAll('[data-testid="workflow-output-line"]')) {
       expect(outputLine.findComponent({ name: 'ElSelect' }).exists()).toBe(false);
       expect(outputLine.text()).toContain('副产回收单价');
-      expect(outputLine.text()).toContain('总工时');
+    }
+    for (const executionLine of wrapper.findAll('[data-testid="workflow-execution-line"]')) {
+      expect(executionLine.text()).toContain('开始时间');
+      expect(executionLine.text()).toContain('结束时间');
+      expect(executionLine.text()).toContain('人数');
+      expect(executionLine.text()).toContain('总工时');
     }
   });
 
@@ -101,14 +107,15 @@ describe('ProcessDataTable workflow port reporting rows', () => {
       .vm.$emit('update:model-value', '2026-07-17');
 
     const outputs = wrapper.findAll('[data-testid="workflow-output-line"]');
-    outputs[0].find('[data-testid="output-start-time"]').findComponent({ name: 'ElTimePicker' }).vm.$emit('update:model-value', '08:00');
-    outputs[0].find('[data-testid="output-end-time"]').findComponent({ name: 'ElTimePicker' }).vm.$emit('update:model-value', '09:30');
-    outputs[0].find('[data-testid="output-worker-count"]').findComponent({ name: 'ElInputNumber' }).vm.$emit('update:model-value', 2);
+    const executionLines = wrapper.findAll('[data-testid="workflow-execution-line"]');
+    executionLines[0].find('[data-testid="output-start-time"]').findComponent({ name: 'ElTimePicker' }).vm.$emit('update:model-value', '08:00');
+    executionLines[0].find('[data-testid="output-end-time"]').findComponent({ name: 'ElTimePicker' }).vm.$emit('update:model-value', '09:30');
+    executionLines[0].find('[data-testid="output-worker-count"]').findComponent({ name: 'ElInputNumber' }).vm.$emit('update:model-value', 2);
     outputs[0].find('[data-testid="output-quantity"]').findComponent({ name: 'ElInputNumber' }).vm.$emit('update:model-value', 30);
     outputs[0].find('[data-testid="byproduct-quantity"]').findComponent({ name: 'ElInputNumber' }).vm.$emit('update:model-value', 0.5);
     outputs[0].find('[data-testid="byproduct-unit-price"]').findComponent({ name: 'ElInputNumber' }).vm.$emit('update:model-value', 3.2);
-    outputs[1].find('[data-testid="output-start-time"]').findComponent({ name: 'ElTimePicker' }).vm.$emit('update:model-value', '09:30');
-    outputs[1].find('[data-testid="output-end-time"]').findComponent({ name: 'ElTimePicker' }).vm.$emit('update:model-value', '10:30');
+    executionLines[1].find('[data-testid="output-start-time"]').findComponent({ name: 'ElTimePicker' }).vm.$emit('update:model-value', '09:30');
+    executionLines[1].find('[data-testid="output-end-time"]').findComponent({ name: 'ElTimePicker' }).vm.$emit('update:model-value', '10:30');
     outputs[1].find('[data-testid="output-quantity"]').findComponent({ name: 'ElInputNumber' }).vm.$emit('update:model-value', 20);
     await flushPromises();
 
