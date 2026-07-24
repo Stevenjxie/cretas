@@ -192,6 +192,43 @@ async def test_t1_hit_becomes_hint_and_llm_remains_semantic_authority():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(("query", "wrong_intent", "expected_dish"), [
+    ("哪个菜卖得好", "RESTAURANT_OPS_SALES_SUMMARY", None),
+    ("本月哪个菜卖得最好？", "RESTAURANT_OPS_SALES_SUMMARY", None),
+    ("近30天畅销菜品", "RESTAURANT_OPS_REQUISITION_TREND", None),
+    ("本月米饭的销量是多少", "RESTAURANT_OPS_REQUISITION_TREND", "米饭"),
+])
+async def test_explicit_dish_sales_contract_repairs_live_llm_failure_shape(
+    query,
+    wrong_intent,
+    expected_dish,
+):
+    llm = AsyncMock(return_value={
+        "intent": wrong_intent,
+        "confidence": 0.95,
+        "clarification_needed": True,
+        "clarification_question": "请明确想查销量、营收还是毛利。",
+    })
+    with patch(
+        "smartbi.gold.restaurant_intent._t3_llm_parse",
+        new=llm,
+    ):
+        spec = await parse_restaurant_query(
+            query,
+            _restaurant_pool(),
+            factory_id="DEMO_REST",
+        )
+
+    assert spec is not None
+    assert spec.intent == "RESTAURANT_OPS_GROSS_MARGIN"
+    assert spec.planned_intents == ("RESTAURANT_OPS_GROSS_MARGIN",)
+    assert spec.clarification_needed is False
+    assert spec.clarification_question is None
+    assert spec.dish_slot == expected_dish
+    assert spec.planner_authority == "llm_contract_repair"
+
+
+@pytest.mark.asyncio
 async def test_t1_miss_t2_high_confidence_is_only_llm_hint():
     query = "生意最近怎么样啊能不能多赚点"
     assert match_restaurant_ops(query) is None  # confirm this really is a T1 miss
@@ -973,15 +1010,77 @@ def test_sheet_dish_sales_question_never_plans_store_sales_summary():
     assert spec.planned_intents == ("RESTAURANT_OPS_GROSS_MARGIN",)
 
 
-def test_sheet_dish_question_rejects_wrong_llm_summary_intent_before_execution():
+@pytest.mark.parametrize("query", [
+    "本月哪个菜卖得最好？",
+    "本月哪个菜最好卖？",
+    "本月销量最高的菜是什么？",
+    "本月最受欢迎的菜是什么？",
+])
+def test_dish_ranking_synonyms_compile_to_sales_volume_plan(query):
+    spec = _build_spec(
+        "RESTAURANT_OPS_SALES_SUMMARY",
+        query,
+        confidence=0.95,
+        tier="llm",
+    )
+
+    assert spec.requested_metrics == ("sales_volume",)
+    assert spec.dimensions == ("dish",)
+    assert spec.intent == "RESTAURANT_OPS_GROSS_MARGIN"
+    assert spec.planned_intents == ("RESTAURANT_OPS_GROSS_MARGIN",)
+    assert spec.clarification_needed is False
+
+
+def test_sheet_dish_question_repairs_wrong_llm_summary_intent_before_execution():
     spec = _build_spec(
         "RESTAURANT_OPS_SALES_SUMMARY",
         "哪个菜卖得好",
         confidence=0.95,
         tier="llm",
+        clarification_needed=True,
+        clarification_question="您是指销量最高、营收最高，还是毛利最高的菜品？",
     )
 
     assert spec.planned_intents == ("RESTAURANT_OPS_GROSS_MARGIN",)
+    assert spec.intent == "RESTAURANT_OPS_GROSS_MARGIN"
+    assert spec.clarification_needed is False
+    assert spec.planner_authority == "llm_contract_repair"
+
+
+def test_named_dish_sales_repairs_wrong_llm_intent_and_recovers_entity_slot():
+    spec = _build_spec(
+        "RESTAURANT_OPS_REQUISITION_TREND",
+        "本月米饭的销量是多少",
+        confidence=0.95,
+        tier="llm",
+        planner_authority="llm",
+        clarification_needed=True,
+        clarification_question="请明确想查哪类餐饮数据。",
+    )
+
+    assert spec.dimensions == ("dish",)
+    assert spec.dish_slot == "米饭"
+    assert spec.requested_metrics == ("sales_volume",)
+    assert spec.planned_intents == ("RESTAURANT_OPS_GROSS_MARGIN",)
+    assert spec.intent == "RESTAURANT_OPS_GROSS_MARGIN"
+    assert spec.clarification_needed is False
+    assert spec.planner_authority == "llm_contract_repair"
+
+
+def test_conflicting_llm_intent_stays_fail_closed_when_plan_has_multiple_resolvers():
+    spec = _build_spec(
+        "RESTAURANT_OPS_REQUISITION_TREND",
+        "请比较菜品销量和食材损耗",
+        confidence=0.95,
+        tier="llm",
+        planner_authority="llm",
+    )
+
+    assert spec.planned_intents == (
+        "RESTAURANT_OPS_WASTAGE_TOP",
+        "RESTAURANT_OPS_GROSS_MARGIN",
+    )
+    assert spec.intent == "RESTAURANT_OPS_REQUISITION_TREND"
     assert spec.clarification_needed is True
     assert "不会用相邻指标替代" in spec.clarification_question
 
@@ -1239,6 +1338,31 @@ async def test_t3_slot_supplements_survive_route_cache():
         assert spec.wants_margin is True
     assert spec1.window_label == spec2.window_label
     assert spec1.date_range == spec2.date_range
+
+
+@pytest.mark.asyncio
+async def test_contract_repaired_plan_stays_trusted_through_route_cache():
+    query = "近30天畅销菜品"
+    llm = AsyncMock(return_value={
+        "intent": "RESTAURANT_OPS_REQUISITION_TREND",
+        "confidence": 0.95,
+        "clarification_needed": True,
+        "clarification_question": "请明确想查哪类数据。",
+    })
+    with patch("smartbi.gold.restaurant_intent._t3_llm_parse", new=llm):
+        spec1 = await parse_restaurant_query(
+            query, _restaurant_pool(), factory_id="DEMO_REST",
+        )
+        spec2 = await parse_restaurant_query(
+            query, _restaurant_pool(), factory_id="DEMO_REST",
+        )
+
+    assert llm.await_count == 1
+    assert spec1 is not None and spec2 is not None
+    assert spec1.intent == spec2.intent == "RESTAURANT_OPS_GROSS_MARGIN"
+    assert spec1.clarification_needed is spec2.clarification_needed is False
+    assert spec1.planner_authority == "llm_contract_repair"
+    assert spec2.planner_authority == "validated_plan_cache_contract_repair"
 
 
 @pytest.mark.asyncio

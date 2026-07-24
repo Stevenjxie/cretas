@@ -75,6 +75,25 @@ def test_should_delegate_validated_plan_cache_without_java_reinterpretation():
     assert should_delegate(spec) is True
 
 
+@pytest.mark.parametrize("authority", [
+    "llm_contract_repair",
+    "validated_plan_cache_contract_repair",
+])
+def test_should_delegate_contract_repair_without_java_reinterpretation(authority):
+    spec = _spec(
+        intent="RESTAURANT_OPS_GROSS_MARGIN",
+        source_tier="llm",
+        dimensions=("dish",),
+        requested_metrics=("sales_volume",),
+        planned_intents=("RESTAURANT_OPS_GROSS_MARGIN",),
+        plan_version="restaurant-query-plan-v2",
+        planner_authority=authority,
+        plan_hash="repaired-plan",
+    )
+
+    assert should_delegate(spec) is True
+
+
 def test_should_delegate_clarification_needed_true():
     """Rule 2: clarification_needed -> True (Java can't ask a clarifying
     question itself)."""
@@ -919,7 +938,7 @@ async def test_tiered_answer_returns_typed_focus_entity_and_followups(monkeypatc
         window_label="最近30天",
         relative_window=True,
         plan_version="restaurant-query-plan-v2",
-        planner_authority="llm",
+        planner_authority="llm_contract_repair",
         plan_hash="dish-ranking-plan",
     )
     monkeypatch.setattr(svc, "parse_restaurant_query", AsyncMock(return_value=spec))

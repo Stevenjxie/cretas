@@ -10,7 +10,10 @@ from __future__ import annotations
 import math
 from typing import Any, Dict, List, Optional
 
-from smartbi.gold.restaurant_intent import RestaurantQuerySpec
+from smartbi.gold.restaurant_intent import (
+    RestaurantQuerySpec,
+    TRUSTED_PLANNER_AUTHORITIES,
+)
 
 # Boss-facing Chinese labels for contract element tokens. Anything that
 # builds user-visible text from ContractResult.missing MUST go through
@@ -244,7 +247,7 @@ def _execution_consistency_present(
         spec.plan_hash
         and payload.get("query_plan_version") == spec.plan_version
         and payload.get("query_plan_hash") == spec.plan_hash
-        and payload.get("planner_authority") in ("llm", "validated_plan_cache")
+        and payload.get("planner_authority") in TRUSTED_PLANNER_AUTHORITIES
         and isinstance(executed, list)
         and tuple(executed) == tuple(spec.planned_intents)
         and payload.get("execution_plan_match") is True
