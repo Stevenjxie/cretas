@@ -6,7 +6,7 @@ module.exports = ({ config }) => {
     ...config,
     name: '白垩纪AI Agent',
     slug: 'CretasFoodTrace',
-    version: '1.0.1',
+    version: '1.0.2',
     orientation: 'portrait',
     icon: './assets/icon.png',
     userInterfaceStyle: 'light',
