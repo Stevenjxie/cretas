@@ -293,16 +293,44 @@ _NEGATIVE_MARGIN_EXISTENCE_RE = re.compile(
     r"(?:毛利(?:率)?[^。？?]{0,4}?(?:负|亏)|负毛利|亏钱|亏损|亏本|赔钱)"
     r"|负毛利|毛利(?:率)?(?:是|为)负"
 )
-# POS 流水里的非菜品行 (打包盒/餐具/配送费) — 销量排行里是噪音, 过滤掉。
+# POS 流水里的附属行 (包装/餐具/纸品/配送费) — 泛菜品销量排行里的噪音。
+# 点名查询不走这个过滤器，因此「米饭本月销量」仍可按用户要求回答。
 _NON_DISH_POS_ITEM_RE = re.compile(
-    r"打包盒|打包袋|餐具|配送费|外送费|包装|纸巾|湿巾|一次性|购物袋"
+    r"打包盒|打包袋|餐具|配送费|外送费|打包费|包装费|纸巾|餐巾纸|湿巾|一次性"
+    r"|购物袋|塑料袋|筷子|勺子|牙签|吸管|手套|纸杯|杯盖|杯套"
 )
+_NON_PRIMARY_DISH_CATEGORY_RE = re.compile(
+    r"非菜品|非餐品|包装耗材|餐具耗材|一次性用品|纸品|配送费|服务费|附加费|用品|耗材"
+)
+# 只排除作为加购基础项的米饭名称。必须整名匹配，避免误伤蛋炒饭、盖饭等主菜。
+_RICE_STAPLE_ITEM_RE = re.compile(
+    r"^(?:(?:五常香|东北|泰国香|香)?(?:白)?米饭)"
+    r"(?:(?:[\[(（【][^\])）】]{0,12}[\])）】])|(?:[一二两单双\d]+人?份)|"
+    r"(?:[大小]碗)|(?:加量))?$"
+)
+
+
+def _primary_dish_ranking_exclusion_reason(row: Any) -> Optional[str]:
+    """Return why a POS row is not a primary dish, or None when rankable."""
+    category_text = " ".join(
+        str(row.get(key) or "").strip()
+        for key in ("category", "sub_category")
+    )
+    if category_text and _NON_PRIMARY_DISH_CATEGORY_RE.search(category_text):
+        return "category"
+
+    item_name = re.sub(r"\s+", "", str(row.get("dish_name") or ""))
+    if _NON_DISH_POS_ITEM_RE.search(item_name):
+        return "accessory"
+    if _RICE_STAPLE_ITEM_RE.fullmatch(item_name):
+        return "staple"
+    return None
 _DISH_RANK_WORST_RE = re.compile(
     r"卖得最差|卖得不好|最难卖|卖不动|销量最低|销量垫底|最不受欢迎|最滞销"
     r"|没人点|无人点|没有人点|点得最少|没什么人点"
 )
 _DISH_RANK_BEST_RE = re.compile(
-    r"卖得最好|最好卖|最畅销|销量最高|最受欢迎|卖得好"
+    r"卖得最好|最好卖|最畅销|畅销(?:菜品|菜|单品|产品)?|销量最高|最受欢迎|卖得好"
 )
 
 
@@ -2045,6 +2073,7 @@ async def resolve_gross_margin(
                    AND t2.factory_id = $1
             )
             SELECT p.product_id, p.name AS dish_name, p.normalized_name,
+                   p.category, p.sub_category,
                    SUM(i.qty)::float AS total_qty,
                    SUM(i.amount)::float AS total_revenue,
                    COUNT(DISTINCT i.transaction_id)::int AS bills,
@@ -2060,7 +2089,8 @@ async def resolve_gross_margin(
                AND anchor.end_date IS NOT NULL
                AND t.date >= COALESCE($3::date, anchor.end_date - ($2::int))
                AND t.date <= COALESCE($4::date, anchor.end_date)
-             GROUP BY p.product_id, p.name, p.normalized_name
+             GROUP BY p.product_id, p.name, p.normalized_name,
+                      p.category, p.sub_category
              ORDER BY total_revenue DESC NULLS LAST
             """,
             factory_id, analysis_days, exact_start, exact_end,
@@ -2189,10 +2219,37 @@ async def resolve_gross_margin(
         if not dish_scope_row and len(dish_candidates) < 2 else None
     )
     if ranking_direction:
-        rankable_rows = [
-            r for r in pos_rows
-            if not _NON_DISH_POS_ITEM_RE.search(r["dish_name"] or "")
-        ] or list(pos_rows)
+        rankable_rows = []
+        exclusion_reasons: Dict[str, int] = {}
+        for row in pos_rows:
+            reason = _primary_dish_ranking_exclusion_reason(row)
+            if reason:
+                exclusion_reasons[reason] = exclusion_reasons.get(reason, 0) + 1
+            else:
+                rankable_rows.append(row)
+
+        excluded = len(pos_rows) - len(rankable_rows)
+        if not rankable_rows:
+            return OpsAnswer(
+                code="RESTAURANT_OPS_GROSS_MARGIN",
+                title="菜品销量排行（暂无主菜数据）",
+                answer_text=(
+                    f"{window_label}的销售记录仅包含米饭、包装、餐具或纸品等"
+                    "附属/基础项，**没有可用于主菜销量排行的记录**。\n\n"
+                    "我没有把这些附属项重新放回榜单；请确认主菜 POS 明细已同步后再试。"
+                ),
+                charts=[], kpis=[],
+                meta={
+                    "dish_ranking": ranking_direction,
+                    "window_label": window_label,
+                    "no_primary_dish_data": True,
+                    "excluded_item_count": excluded,
+                    "excluded_item_reasons": exclusion_reasons,
+                    "ranked_entities": [],
+                    "focus_entity": None,
+                },
+            )
+
         ranked = sorted(
             rankable_rows, key=lambda r: float(r["total_qty"] or 0),
             reverse=(ranking_direction == "best"),
@@ -2205,8 +2262,10 @@ async def resolve_gross_margin(
                 f"{idx}. {dish_label} — 销量 {float(r['total_qty'] or 0):,.0f} 份、"
                 f"营收 ¥{float(r['total_revenue'] or 0):,.2f}"
             )
-        excluded = len(pos_rows) - len(rankable_rows)
-        note = f"，已剔除 {excluded} 个非菜品项（打包盒/餐具等）" if excluded > 0 else ""
+        note = (
+            f"，已剔除 {excluded} 个附属/基础项（米饭、包装、餐具、纸巾等）"
+            if excluded > 0 else ""
+        )
         lines.append("")
         lines.append(
             f"> 仅统计窗口内有销售记录的 {len(rankable_rows)} 道菜品{note}；未售出的菜品不在榜内。"
@@ -2228,6 +2287,8 @@ async def resolve_gross_margin(
             meta={
                 "dish_ranking": ranking_direction,
                 "window_label": window_label,
+                "excluded_item_count": excluded,
+                "excluded_item_reasons": exclusion_reasons,
                 "ranked_entities": ranked_entities,
                 "focus_entity": ranked_entities[0] if ranked_entities else None,
             },

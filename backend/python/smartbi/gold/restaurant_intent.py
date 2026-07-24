@@ -197,7 +197,7 @@ _REQUEST_METRIC_RULES: Tuple[Tuple[str, Tuple[str, ...]], ...] = (
     ("wastage", ("食材损耗", "损耗", "浪费", "报损", "腐坏", "过期")),
     ("sales_volume", (
         "菜品销量", "销量", "销售量", "卖得好", "卖得慢", "卖了多少", "卖出",
-        "慢销", "滞销",
+        "畅销", "慢销", "滞销",
     )),
     ("gross_margin", ("毛利率", "毛利", "利润", "盈利", "赚钱", "亏钱", "亏损", "亏本", "赔钱")),
     ("revenue", ("营业收入", "销售收入", "营业额", "销售额", "营收", "流水")),
@@ -634,6 +634,16 @@ _DEFAULT_METRICS_BY_CODE: Dict[str, Tuple[str, ...]] = {
     "RESTAURANT_OPS_STAFFING_ADVICE": ("staff_efficiency",),
 }
 
+_CONTRACT_REPAIRABLE_METRICS = frozenset({
+    "recipe_cost",
+    "wastage",
+    "sales_volume",
+    "gross_margin",
+    "revenue",
+    "orders",
+    "staffing",
+})
+
 
 def _default_metrics_for_code(code: str, wants_margin: bool) -> Tuple[str, ...]:
     metrics = list(_DEFAULT_METRICS_BY_CODE.get(code, ()))
@@ -709,14 +719,15 @@ def _build_spec(
     asks_profitability = asks_profitability or llm_asks_profitability
     wants_margin = wants_margin or llm_wants_margin or asks_profitability
     relative_window = _uses_relative_sales_window(effective_query)
+    deterministic_dish = extract_dish_candidate(effective_query)
+    deterministic_store = extract_store_mention(effective_query)
     dimension_list = list(_detect_dimensions(effective_query))
-    if llm_store and "store" not in dimension_list:
+    if (llm_store or deterministic_store) and "store" not in dimension_list:
         dimension_list.append("store")
-    if llm_dish and "dish" not in dimension_list:
+    if (llm_dish or deterministic_dish) and "dish" not in dimension_list:
         dimension_list.append("dish")
     dimensions = tuple(dimension_list)
     comparison = _detect_comparison(effective_query)
-    metrics = _default_metrics_for_code(code, wants_margin) if code else ()
     requested_metrics = _detect_requested_metrics(effective_query)
     planned_intents = _plan_requested_intents(
         effective_query,
@@ -729,6 +740,44 @@ def _build_spec(
         for requirement in requested_metrics
         if requirement in _UNSUPPORTED_REQUIREMENTS
     )
+    analysis_action = _detect_analysis_action(effective_query)
+    effective_planner_authority = (
+        planner_authority
+        or ("llm" if tier == "llm" else "deterministic_guard")
+    )
+    if (
+        code
+        and len(planned_intents) == 1
+        and code not in planned_intents
+        and requested_metrics
+        and not unsupported_requirements
+        and all(metric in _CONTRACT_REPAIRABLE_METRICS for metric in requested_metrics)
+    ):
+        # The LLM remains the semantic entry point, but its raw resolver label
+        # is not executable when it contradicts the metric/object slots in the
+        # user's own wording.  A single compatible resolver is a deterministic
+        # compilation result, not a neighbouring guess.  Multiple compatible
+        # resolvers remain fail-closed below.
+        repaired_code = planned_intents[0]
+        logger.warning(
+            "[restaurant-intent] contract-repair resolver %s -> %s "
+            "metrics=%s dimensions=%s",
+            code,
+            repaired_code,
+            requested_metrics,
+            dimensions,
+        )
+        code = repaired_code
+        # The same contradictory LLM response can also set a generic
+        # clarification flag. Once explicit metric/object slots compile to
+        # exactly one supported resolver, that clarification is no longer
+        # truthful and must not keep the valid plan from executing.
+        clarification_needed = False
+        clarification_question = None
+        effective_planner_authority = (
+            f"{effective_planner_authority}_contract_repair"
+        )
+    metrics = _default_metrics_for_code(code, wants_margin) if code else ()
     asks_priority = any(token in effective_query for token in (
         "优先级", "优先", "先查", "先做", "首先", "哪项先", "先看哪",
     ))
@@ -783,14 +832,11 @@ def _build_spec(
         asks_priority=asks_priority,
         asks_prohibited_actions=asks_prohibited_actions,
         asks_export=asks_export,
-        analysis_action=_detect_analysis_action(effective_query),
-        dish_slot=llm_dish,
-        store_slot=llm_store,
+        analysis_action=analysis_action,
+        dish_slot=llm_dish or deterministic_dish,
+        store_slot=llm_store or deterministic_store,
         plan_version="restaurant-query-plan-v2",
-        planner_authority=(
-            planner_authority
-            or ("llm" if tier == "llm" else "deterministic_guard")
-        ),
+        planner_authority=effective_planner_authority,
     )
     return _seal_query_plan(spec)
 

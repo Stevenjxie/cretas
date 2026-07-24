@@ -1600,21 +1600,56 @@ def _gross_margin_pool(rows):
     return _Pool()
 
 
-def test_dish_ranking_emits_typed_focus_entity():
+@pytest.mark.parametrize("ranking_query", [
+    "哪个菜卖得最好",
+    "近30天畅销菜品",
+])
+def test_dish_ranking_emits_typed_focus_entity(ranking_query):
     result = asyncio.run(_r.resolve_gross_margin(
         _gross_margin_pool(_dish_rows()),
+        "RES_TEST",
+        role="restaurant_manager",
+        query=ranking_query,
+    ))
+
+    assert result.meta["focus_entity"] == {
+        "type": "dish",
+        "id": 2,
+        "name": "招牌藤椒味(单人份)",
+        "rank": 1,
+    }
+    assert result.meta["ranked_entities"][1]["id"] == 3
+    assert result.meta["excluded_item_count"] == 1
+    assert "米饭(单人份)" not in result.answer_text
+
+
+def test_dish_ranking_does_not_restore_excluded_rows_when_all_are_noise():
+    rows = [
+        {
+            "product_id": 11, "dish_name": "米饭[碗]", "normalized_name": "米饭",
+            "category": None, "sub_category": None,
+            "total_qty": 999.0, "total_revenue": 999.0, "bills": 90,
+            "window_start": date(2026, 4, 1), "window_end": date(2026, 4, 30),
+        },
+        {
+            "product_id": 12, "dish_name": "餐巾纸", "normalized_name": "餐巾纸",
+            "category": "餐饮商品", "sub_category": "单品",
+            "total_qty": 888.0, "total_revenue": 88.0, "bills": 80,
+            "window_start": date(2026, 4, 1), "window_end": date(2026, 4, 30),
+        },
+    ]
+    result = asyncio.run(_r.resolve_gross_margin(
+        _gross_margin_pool(rows),
         "RES_TEST",
         role="restaurant_manager",
         query="哪个菜卖得最好",
     ))
 
-    assert result.meta["focus_entity"] == {
-        "type": "dish",
-        "id": 1,
-        "name": "米饭(单人份)",
-        "rank": 1,
-    }
-    assert result.meta["ranked_entities"][1]["id"] == 2
+    assert result.meta["no_primary_dish_data"] is True
+    assert result.meta["excluded_item_count"] == 2
+    assert result.meta["ranked_entities"] == []
+    assert "没有可用于主菜销量排行的记录" in result.answer_text
+    assert "1. " not in result.answer_text
 
 
 def test_named_unknown_dish_declines_without_ranking():
@@ -1844,6 +1879,7 @@ def test_r14_dish_compare_accepts_zhuanqian():
 def test_r14_dish_ranking_direction():
     assert _r.dish_ranking_direction("上周哪道菜卖得最差") == "worst"
     assert _r.dish_ranking_direction("哪个菜卖得最好") == "best"
+    assert _r.dish_ranking_direction("近30天畅销菜品") == "best"
     assert _r.dish_ranking_direction("哪家店业绩最好") is None
     assert _r.dish_ranking_direction("各门店销量最高的是哪家") is None
     assert _r.match_restaurant_ops("上周哪道菜卖得最差") == "RESTAURANT_OPS_GROSS_MARGIN"
@@ -1862,12 +1898,31 @@ def test_r14_negative_margin_existence_regex():
     assert not _r._NEGATIVE_MARGIN_EXISTENCE_RE.search("整体毛利率是多少")
 
 
-def test_r14d_non_dish_pos_items_filtered_from_ranking():
-    assert _r._NON_DISH_POS_ITEM_RE.search("打包盒")
-    assert _r._NON_DISH_POS_ITEM_RE.search("需要餐具")
-    assert _r._NON_DISH_POS_ITEM_RE.search("无需餐具")
-    assert not _r._NON_DISH_POS_ITEM_RE.search("招牌藤椒味(单人份)")
-    assert not _r._NON_DISH_POS_ITEM_RE.search("米饭")
+@pytest.mark.parametrize("item_name", [
+    "打包盒", "需要餐具", "无需餐具", "餐巾纸", "湿纸巾",
+    "米饭", "米饭(单人份)", "五常香米饭", "米饭[碗]",
+])
+def test_r14d_non_primary_pos_items_filtered_from_ranking(item_name):
+    assert _r._primary_dish_ranking_exclusion_reason({
+        "dish_name": item_name, "category": None, "sub_category": None,
+    })
+
+
+@pytest.mark.parametrize("item_name", [
+    "招牌藤椒味(单人份)", "蛋炒饭", "黄焖鸡盖饭", "娃娃菜",
+])
+def test_r14d_primary_dishes_are_not_filtered_from_ranking(item_name):
+    assert _r._primary_dish_ranking_exclusion_reason({
+        "dish_name": item_name, "category": "餐饮商品", "sub_category": "单品",
+    }) is None
+
+
+def test_r14d_category_filter_precedes_name_fallback():
+    assert _r._primary_dish_ranking_exclusion_reason({
+        "dish_name": "顾客自选项",
+        "category": "餐饮商品",
+        "sub_category": "包装耗材",
+    }) == "category"
 
 
 def test_r15_new_t1_rules():
