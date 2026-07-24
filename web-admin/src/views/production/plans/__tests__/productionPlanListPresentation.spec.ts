@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  cancellationAudit,
   formatPlanActualQuantity,
   sourceOrderDisplay,
   sourceOrderTarget,
@@ -23,6 +24,21 @@ describe('production plan list presentation', () => {
       path: '/sales/orders/ecd7f20b-21c2-4ea3-9103-2034d5d6547f',
     });
     expect(sourceOrderDisplay({ sourceOrderId: row.sourceOrderId })).toBe('业务订单号未同步');
+  });
+
+  it('renders the immutable cancellation reason, operator and time', () => {
+    expect(cancellationAudit({
+      status: 'CANCELLED',
+      cancelReason: '重复创建的空白测试计划，无正式报工、结算或库存',
+      cancelledBy: 42,
+      cancelledByName: '生产主管',
+      cancelledAt: '2026-07-24T03:30:12',
+    })).toEqual({
+      reason: '重复创建的空白测试计划，无正式报工、结算或库存',
+      actor: '生产主管',
+      time: '2026-07-24 03:30:12',
+    });
+    expect(cancellationAudit({ status: 'PENDING' })).toBeNull();
   });
 
 });

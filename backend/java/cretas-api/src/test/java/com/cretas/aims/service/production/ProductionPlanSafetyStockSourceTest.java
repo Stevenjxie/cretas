@@ -4,6 +4,7 @@ import com.cretas.aims.dto.production.CreateProductionPlanRequest;
 import com.cretas.aims.dto.production.ProductionPlanDTO;
 import com.cretas.aims.entity.ProductType;
 import com.cretas.aims.entity.ProductionPlan;
+import com.cretas.aims.entity.Factory;
 import com.cretas.aims.entity.enums.PlanSourceType;
 import com.cretas.aims.entity.enums.ProductionPlanStatus;
 import com.cretas.aims.exception.BusinessException;
@@ -36,13 +37,17 @@ import org.mockito.junit.jupiter.MockitoSettings;
 import org.mockito.quality.Strictness;
 import org.springframework.transaction.support.TransactionSynchronization;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
+import org.springframework.test.util.ReflectionTestUtils;
 
+import jakarta.persistence.EntityManager;
+import jakarta.persistence.LockModeType;
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.util.Collections;
 import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -89,6 +94,7 @@ class ProductionPlanSafetyStockSourceTest {
     @Mock private SalesOrderRepository salesOrderRepository;
     @Mock private SalesOrderItemRepository salesOrderItemRepository;
     @Mock private BomService bomService;
+    @Mock private EntityManager entityManager;
 
     private ProductionPlanServiceImpl service;
 
@@ -100,6 +106,7 @@ class ProductionPlanSafetyStockSourceTest {
                 productTypeRepository, productionPlanMapper, conversionRepository, schedulingService,
                 productionLineRepository, userRepository, excelUtil,
                 salesOrderRepository, salesOrderItemRepository);
+        ReflectionTestUtils.setField(service, "entityManager", entityManager);
 
         // Product type must exist
         when(productTypeRepository.existsById(PRODUCT_TYPE_ID)).thenReturn(true);
@@ -121,6 +128,7 @@ class ProductionPlanSafetyStockSourceTest {
                     plan.setPlannedQuantity(req.getPlannedQuantity());
                     plan.setSourceType(req.getSourceType());
                     plan.setSourceOrderId(req.getSourceOrderId());
+                    plan.setClientRequestId(req.getClientRequestId());
                     plan.setStatus(ProductionPlanStatus.PENDING);
                     return plan;
                 });
@@ -251,6 +259,104 @@ class ProductionPlanSafetyStockSourceTest {
     }
 
     // ── Helper ──
+
+    @Test
+    @DisplayName("相同 clientRequestId 重试直接返回原计划且不重复写入")
+    void sameClientRequestIdReturnsExistingPlanWithoutSaving() {
+        CreateProductionPlanRequest req = safetyStockRequest();
+        req.setClientRequestId("plan-create-idempotency-001");
+
+        ProductionPlan existing = new ProductionPlan();
+        existing.setId("PP-IDEMPOTENT-001");
+        existing.setFactoryId(FACTORY_ID);
+        existing.setPlanNumber("PLAN-IDEMPOTENT-001");
+        existing.setProductTypeId(PRODUCT_TYPE_ID);
+        existing.setPlannedQuantity(req.getPlannedQuantity());
+        existing.setPlannedUnit("box");
+        existing.setSourceType(PlanSourceType.SAFETY_STOCK);
+        existing.setStatus(ProductionPlanStatus.PENDING);
+        existing.setCreatedBy(1L);
+        existing.setClientRequestId(req.getClientRequestId());
+
+        ProductionPlanDTO existingDto = new ProductionPlanDTO();
+        existingDto.setId(existing.getId());
+        when(productionPlanRepository.findByFactoryIdAndCreatedByAndClientRequestId(
+                FACTORY_ID, 1L, req.getClientRequestId())).thenReturn(Optional.of(existing));
+        when(productionPlanRepository.findByIdAndFactoryId(existing.getId(), FACTORY_ID))
+                .thenReturn(Optional.of(existing));
+        when(productionPlanMapper.toDTO(existing)).thenReturn(existingDto);
+
+        ProductionPlanDTO result = service.createProductionPlan(FACTORY_ID, req, 1L);
+
+        assertEquals(existing.getId(), result.getId());
+        verify(entityManager).find(Factory.class, FACTORY_ID, LockModeType.PESSIMISTIC_WRITE);
+        verify(productionPlanRepository, never()).save(any());
+        verify(productTypeRepository, never()).existsById(any());
+    }
+
+    @Test
+    @DisplayName("近时段相同计划需显式确认后才允许再次创建")
+    void recentEquivalentPlanRequiresExplicitDuplicateConfirmation() {
+        CreateProductionPlanRequest req = safetyStockRequest();
+        req.setClientRequestId("plan-create-idempotency-002");
+        ProductionPlan recent = new ProductionPlan();
+        recent.setId("PP-RECENT-001");
+        recent.setPlanNumber("PLAN-RECENT-001");
+
+        when(productionPlanRepository
+                .findTopByFactoryIdAndProductTypeIdAndSourceTypeAndPlannedDateAndPlannedQuantityAndCreatedAtAfterOrderByCreatedAtDesc(
+                        any(), any(), any(), any(), any(), any()))
+                .thenReturn(Optional.of(recent));
+
+        BusinessException error = assertThrows(
+                BusinessException.class,
+                () -> service.createProductionPlan(FACTORY_ID, req, 1L));
+
+        assertEquals("POTENTIAL_DUPLICATE_PRODUCTION_PLAN", error.getErrorCode());
+        verify(productionPlanRepository, never()).save(any());
+    }
+
+    @Test
+    @DisplayName("未传来源类型时按 MANUAL 检测近时段重复计划")
+    void missingSourceTypeUsesManualForRecentDuplicateCheck() {
+        CreateProductionPlanRequest req = safetyStockRequest();
+        req.setSourceType(null);
+        ProductionPlan recent = new ProductionPlan();
+        recent.setPlanNumber("PLAN-RECENT-MANUAL-001");
+
+        when(productionPlanRepository
+                .findTopByFactoryIdAndProductTypeIdAndSourceTypeAndPlannedDateAndPlannedQuantityAndCreatedAtAfterOrderByCreatedAtDesc(
+                        any(), any(), org.mockito.ArgumentMatchers.eq(PlanSourceType.MANUAL),
+                        any(), any(), any()))
+                .thenReturn(Optional.of(recent));
+
+        BusinessException error = assertThrows(
+                BusinessException.class,
+                () -> service.createProductionPlan(FACTORY_ID, req, 1L));
+
+        assertEquals(PlanSourceType.MANUAL, req.getSourceType());
+        assertEquals("POTENTIAL_DUPLICATE_PRODUCTION_PLAN", error.getErrorCode());
+        verify(productionPlanRepository, never()).save(any());
+    }
+
+    @Test
+    @DisplayName("显式确认后以新的 clientRequestId 合法创建相同内容计划")
+    void confirmedEquivalentPlanWithNewClientRequestIdIsCreated() {
+        try (MockedStatic<TransactionSynchronizationManager> txSync = mockTxSync()) {
+            CreateProductionPlanRequest req = safetyStockRequest();
+            req.setClientRequestId("plan-create-idempotency-confirmed-003");
+            req.setConfirmPotentialDuplicate(true);
+
+            assertDoesNotThrow(() -> service.createProductionPlan(FACTORY_ID, req, 1L));
+
+            ArgumentCaptor<ProductionPlan> saved = ArgumentCaptor.forClass(ProductionPlan.class);
+            verify(productionPlanRepository).save(saved.capture());
+            assertEquals(req.getClientRequestId(), saved.getValue().getClientRequestId());
+            verify(productionPlanRepository, never())
+                    .findTopByFactoryIdAndProductTypeIdAndSourceTypeAndPlannedDateAndPlannedQuantityAndCreatedAtAfterOrderByCreatedAtDesc(
+                            any(), any(), any(), any(), any(), any());
+        }
+    }
 
     private CreateProductionPlanRequest safetyStockRequest() {
         CreateProductionPlanRequest req = new CreateProductionPlanRequest();

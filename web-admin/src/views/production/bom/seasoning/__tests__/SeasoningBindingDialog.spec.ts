@@ -200,13 +200,13 @@ describe('SeasoningBindingDialog', () => {
       name: '辣椒粉',
       unit: 'kg',
       movingAvgPrice: 18,
-      taxIncludedUnitPrice: 20,
+      unitPrice: 17.7,
     }]);
     await fillRequiredFields(wrapper, 5, 'g');
 
     expect(wrapper.get('[data-testid="seasoning-automatic-price"]')
       .findComponent({ name: 'ElInput' }).props('modelValue')).toBe('¥18.0000 / 千克');
-    expect(wrapper.get('[data-testid="seasoning-automatic-price"]').text()).toContain('移动平均价');
+    expect(wrapper.get('[data-testid="seasoning-automatic-price"]').text()).toContain('移动平均库存成本');
   });
 
   it('uses purchase reference price as a clearly labelled draft-cost fallback', async () => {
@@ -216,12 +216,12 @@ describe('SeasoningBindingDialog', () => {
       name: '辣椒粉',
       unit: 'kg',
       movingAvgPrice: null,
-      taxIncludedUnitPrice: 20,
+      unitPrice: 17.7,
     }]);
     await fillRequiredFields(wrapper, 12, 'g');
 
     expect(wrapper.get('[data-testid="seasoning-automatic-price"]')
-      .findComponent({ name: 'ElInput' }).props('modelValue')).toBe('¥20.0000 / 千克');
+      .findComponent({ name: 'ElInput' }).props('modelValue')).toBe('¥17.7000 / 千克');
     expect(wrapper.get('[data-testid="seasoning-automatic-price"]').text()).toContain('采购参考价');
     expect(wrapper.find('[data-testid="configure-seasoning-price"]').exists()).toBe(false);
     await wrapper.findAll('button').find((button) => button.text().includes('保存到本工序'))?.trigger('click');
@@ -238,7 +238,7 @@ describe('SeasoningBindingDialog', () => {
         name: '辣椒粉',
         unit: 'kg',
         movingAvgPrice: null,
-        taxIncludedUnitPrice: 20,
+        unitPrice: 17.7,
       }],
     });
     const wrapper = mountDialog(null, [{
@@ -246,7 +246,7 @@ describe('SeasoningBindingDialog', () => {
       name: '辣椒粉',
       unit: 'kg',
       movingAvgPrice: null,
-      taxIncludedUnitPrice: null,
+      unitPrice: null,
     }]);
     await fillRequiredFields(wrapper, 12, 'g');
     expect(wrapper.get('[data-testid="configure-seasoning-price"]').exists()).toBe(true);
@@ -269,7 +269,7 @@ describe('SeasoningBindingDialog', () => {
       name: '辣椒粉',
       unit: 'g',
       movingAvgPrice: null,
-      taxIncludedUnitPrice: null,
+      unitPrice: null,
     }]);
     await fillRequiredFields(wrapper, 5, 'g');
 
@@ -289,7 +289,7 @@ describe('SeasoningBindingDialog', () => {
       name: '辣椒粉',
       unit: 'kg',
       movingAvgPrice: invalidPrice,
-      taxIncludedUnitPrice: invalidPrice,
+      unitPrice: invalidPrice,
     }]);
     await fillRequiredFields(wrapper, 12, 'g');
     expect(wrapper.get('[data-testid="configure-seasoning-price"]').exists()).toBe(true);

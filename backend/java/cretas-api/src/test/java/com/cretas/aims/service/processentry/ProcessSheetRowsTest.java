@@ -5,6 +5,7 @@ import com.cretas.aims.dto.processentry.ProcessSheetRowRequest.RawInput;
 import com.cretas.aims.dto.processentry.ProcessSheetRowResult;
 import com.cretas.aims.dto.processentry.ProcessSheetRowView;
 import com.cretas.aims.entity.MaterialBatch;
+import com.cretas.aims.entity.ProductType;
 import com.cretas.aims.entity.ProductionPlan;
 import com.cretas.aims.entity.User;
 import com.cretas.aims.entity.factory.FactoryWarehouse;
@@ -12,6 +13,7 @@ import com.cretas.aims.entity.factory.FactoryWarehouse.WarehouseType;
 import com.cretas.aims.entity.enums.MaterialBatchStatus;
 import com.cretas.aims.entity.enums.ProductionPlanStatus;
 import com.cretas.aims.repository.MaterialBatchRepository;
+import com.cretas.aims.repository.ProductTypeRepository;
 import com.cretas.aims.repository.ProductionPlanRepository;
 import com.cretas.aims.repository.UserRepository;
 import com.cretas.aims.repository.factory.FactoryWarehouseRepository;
@@ -62,6 +64,9 @@ class ProcessSheetRowsTest {
     private ProductionPlanRepository planRepo;
 
     @Autowired
+    private ProductTypeRepository productTypeRepo;
+
+    @Autowired
     private UserRepository userRepo;
 
     @Autowired
@@ -89,6 +94,9 @@ class ProcessSheetRowsTest {
         user = userRepo.saveAndFlush(user);
         operatorId = user.getId();
 
+        productTypeRepo.saveAndFlush(ownedProductType(
+                PRODUCT_TYPE, FACTORY_ID, "ROWS-PTYPE", "Rows Test Product"));
+
         FactoryWarehouse rawWarehouse = new FactoryWarehouse();
         rawWarehouse.setId("WH-ROWS-001");
         rawWarehouse.setFactoryId(FACTORY_ID);
@@ -106,6 +114,7 @@ class ProcessSheetRowsTest {
         plan.setPlanNumber("ROWS-PN-" + System.currentTimeMillis() % 100000);
         plan.setProductTypeId(PRODUCT_TYPE);
         plan.setPlannedQuantity(new BigDecimal("200"));
+        plan.setPlannedUnit("kg");
         plan.setStatus(ProductionPlanStatus.PENDING);
         plan.setCreatedBy(operatorId);
         plan.setIsLocked(false);
@@ -155,6 +164,20 @@ class ProcessSheetRowsTest {
         req.setUnit("kg");
         req.setRawMaterialInputs(List.of(ri));
         return processSheetService.saveRow(FACTORY_ID, planId, req, operatorId);
+    }
+
+    private ProductType ownedProductType(String id, String factoryId, String code, String name) {
+        ProductType productType = new ProductType();
+        productType.setId(id);
+        productType.setFactoryId(factoryId);
+        productType.setCode(code);
+        productType.setName(name);
+        productType.setCategory("SEMI_FINISHED");
+        productType.setProductCategory("SEMI_FINISHED");
+        productType.setUnit("kg");
+        productType.setIsActive(true);
+        productType.setCreatedBy(operatorId);
+        return productType;
     }
 
     // ─────────────────────────────────────────────────────────────
@@ -230,6 +253,10 @@ class ProcessSheetRowsTest {
         // 另一个工厂 + 对应 plan
         String otherFactory = "ROWS-OTHER-FACTORY";
         String otherPlanId  = "ROWS-OTHER-PLAN-" + UUID.randomUUID().toString().substring(0, 8);
+        String otherProductType = "ROWS-OTHER-PTYPE-001";
+
+        productTypeRepo.saveAndFlush(ownedProductType(
+                otherProductType, otherFactory, "ROWS-OTHER-PTYPE", "Other Rows Test Product"));
 
         FactoryWarehouse otherRawWarehouse = new FactoryWarehouse();
         otherRawWarehouse.setId("WH-OTHER-001");
@@ -244,8 +271,9 @@ class ProcessSheetRowsTest {
         otherPlan.setId(otherPlanId);
         otherPlan.setFactoryId(otherFactory);
         otherPlan.setPlanNumber("ROWS-OPN-" + System.currentTimeMillis() % 100000);
-        otherPlan.setProductTypeId(PRODUCT_TYPE);
+        otherPlan.setProductTypeId(otherProductType);
         otherPlan.setPlannedQuantity(new BigDecimal("100"));
+        otherPlan.setPlannedUnit("kg");
         otherPlan.setStatus(ProductionPlanStatus.PENDING);
         otherPlan.setCreatedBy(operatorId);
         otherPlan.setIsLocked(false);
@@ -280,7 +308,7 @@ class ProcessSheetRowsTest {
         otherReq.setProcessCode("xiuyou");
         otherReq.setProcessOrder(1);
         otherReq.setProcessName("修油");
-        otherReq.setProductTypeId(PRODUCT_TYPE);
+        otherReq.setProductTypeId(otherProductType);
         otherReq.setFinished(false);
         otherReq.setOutputQuantity(new BigDecimal("55"));
         otherReq.setInputQuantity(new BigDecimal("80"));

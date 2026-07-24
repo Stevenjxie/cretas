@@ -3,7 +3,9 @@ package com.cretas.aims.service.impl;
 import com.cretas.aims.entity.ProductionPlan;
 import com.cretas.aims.entity.enums.PlanSourceType;
 import com.cretas.aims.entity.enums.ProductionPlanStatus;
+import com.cretas.aims.entity.processentry.ProcessSheetRow;
 import com.cretas.aims.exception.BusinessException;
+import com.cretas.aims.repository.ProcessSheetRowRepository;
 import com.cretas.aims.repository.ProductionPlanRepository;
 import com.cretas.aims.repository.ProductionInterimSettlementRepository;
 import org.junit.jupiter.api.DisplayName;
@@ -54,6 +56,14 @@ class ProductionPlanServiceImplStopProductionStatusGuardTest {
         ProductionPlanServiceImpl service = (ProductionPlanServiceImpl) ctor.newInstance(args);
         org.springframework.test.util.ReflectionTestUtils.setField(service,
                 "productionInterimSettlementRepository", mock(ProductionInterimSettlementRepository.class));
+        ProcessSheetRow settledRow = new ProcessSheetRow();
+        settledRow.setSubmissionStatus(ProcessSheetRow.SUBMISSION_SUBMITTED);
+        settledRow.setInterimSettledAt(LocalDateTime.now().minusMinutes(1));
+        ProcessSheetRowRepository rowRepository = mock(ProcessSheetRowRepository.class);
+        when(rowRepository.findByFactoryIdAndPlanId(FACTORY, PLAN_ID))
+                .thenReturn(java.util.List.of(settledRow));
+        org.springframework.test.util.ReflectionTestUtils.setField(service,
+                "processSheetRowRepository", rowRepository);
         return service;
     }
 
@@ -74,22 +84,20 @@ class ProductionPlanServiceImplStopProductionStatusGuardTest {
     }
 
     @Test
-    @DisplayName("COMPLETED 计划再停产 → 409 拒绝, 不覆盖已有的 endTime (原完工时间戳保持不变)")
-    void completedPlan_stopProduction_rejectedWithoutOverwritingEndTime() throws Throwable {
+    @DisplayName("COMPLETED 计划再停产 → 幂等成功, 不覆盖已有的 endTime")
+    void completedPlan_stopProduction_isIdempotentWithoutOverwritingEndTime() throws Throwable {
         ProductionPlan plan = planWithStatus(ProductionPlanStatus.COMPLETED);
         LocalDateTime originalEndTime = LocalDateTime.of(2026, 7, 6, 0, 27, 0);
         plan.setEndTime(originalEndTime);
 
         ProductionPlanRepository planRepo = mock(ProductionPlanRepository.class);
-        when(planRepo.findByIdAndFactoryId(PLAN_ID, FACTORY)).thenReturn(Optional.of(plan));
+        when(planRepo.findByIdForUpdate(PLAN_ID)).thenReturn(Optional.of(plan));
 
         ProductionPlanServiceImpl svc = newService(planRepo);
 
         Throwable t = catchThrowable(() -> svc.stopProduction(FACTORY, PLAN_ID));
 
-        assertThat(t).as("已完成计划重复停产必须 409 loud-fail").isInstanceOf(BusinessException.class);
-        assertThat(((BusinessException) t).getCode()).isEqualTo(409);
-        assertThat(t.getMessage()).contains("只能停产");
+        assertThat(t).as("已完成计划重复停产应幂等成功").isNull();
         assertThat(plan.getEndTime())
                 .as("守卫必须在 setEndTime(now()) 之前拦截, 原完工时间戳不能被覆盖")
                 .isEqualTo(originalEndTime);
@@ -102,7 +110,7 @@ class ProductionPlanServiceImplStopProductionStatusGuardTest {
         ProductionPlan plan = planWithStatus(ProductionPlanStatus.CANCELLED);
 
         ProductionPlanRepository planRepo = mock(ProductionPlanRepository.class);
-        when(planRepo.findByIdAndFactoryId(PLAN_ID, FACTORY)).thenReturn(Optional.of(plan));
+        when(planRepo.findByIdForUpdate(PLAN_ID)).thenReturn(Optional.of(plan));
 
         ProductionPlanServiceImpl svc = newService(planRepo);
 
@@ -118,7 +126,7 @@ class ProductionPlanServiceImplStopProductionStatusGuardTest {
         ProductionPlan plan = planWithStatus(ProductionPlanStatus.PAUSED);
 
         ProductionPlanRepository planRepo = mock(ProductionPlanRepository.class);
-        when(planRepo.findByIdAndFactoryId(PLAN_ID, FACTORY)).thenReturn(Optional.of(plan));
+        when(planRepo.findByIdForUpdate(PLAN_ID)).thenReturn(Optional.of(plan));
 
         ProductionPlanServiceImpl svc = newService(planRepo);
 
@@ -135,7 +143,7 @@ class ProductionPlanServiceImplStopProductionStatusGuardTest {
         plan.setStartTime(LocalDateTime.now().minusHours(2));
 
         ProductionPlanRepository planRepo = mock(ProductionPlanRepository.class);
-        when(planRepo.findByIdAndFactoryId(PLAN_ID, FACTORY)).thenReturn(Optional.of(plan));
+        when(planRepo.findByIdForUpdate(PLAN_ID)).thenReturn(Optional.of(plan));
         when(planRepo.save(org.mockito.ArgumentMatchers.any(ProductionPlan.class)))
                 .thenAnswer(inv -> inv.getArgument(0));
 
@@ -155,7 +163,7 @@ class ProductionPlanServiceImplStopProductionStatusGuardTest {
         ProductionPlan plan = planWithStatus(ProductionPlanStatus.PENDING);
 
         ProductionPlanRepository planRepo = mock(ProductionPlanRepository.class);
-        when(planRepo.findByIdAndFactoryId(PLAN_ID, FACTORY)).thenReturn(Optional.of(plan));
+        when(planRepo.findByIdForUpdate(PLAN_ID)).thenReturn(Optional.of(plan));
         when(planRepo.save(org.mockito.ArgumentMatchers.any(ProductionPlan.class)))
                 .thenAnswer(inv -> inv.getArgument(0));
 

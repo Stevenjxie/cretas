@@ -34,3 +34,14 @@
 - 发布：用户已明确授权合入后从 clean exact `origin/main` 统一部署 Java 与 Web；最终 release receipt 记录 exact main、真实 upstream、健康轮次及 Web 四方哈希。
 - 安全：部署前未写入生产业务数据；发布仅执行 schema migration、服务切流和 Web 原子替换，不执行 F006 或其他租户业务 mutation。
 - Scope 锁已释放。
+
+## `FIX-F006-PRODUCTION-INTEGRITY-20260724` — `review`
+
+- Owner: `/root`
+- Base SHA: `14fcf69a231948fd6345d8e40847c4ec8108ae16`
+- 结果：生产计划创建增加客户端幂等键与重复创建防线；取消/停产状态机收紧并记录审计字段；逐工序调料和成品包装包材按固定 BOM/Workflow 自动分配、扣减并进入实际成本；生产批次列表及逐工序报工 UI 重排。
+- 数据库：新增生产计划幂等键、取消审计字段，并将调料/包材库存及消耗数量精度无损扩展为 `NUMERIC(18,6)`；真实 `ProductionPlanRepositoryQueryValidationTest` JPA Context 门禁通过。
+- 验证：单次 `mvn clean package` 生命周期执行 19 个目标测试类、188 tests，0 failures / 0 errors / 0 skipped；Web 6 files / 40 tests、`vue-tsc -b`、RN 17 tests、Web release build、`git diff --check` 均通过。
+- 制品：候选 JAR SHA-256 `969246e3fe4d603190ef1d08764acd2244ec15935bd54c6b40ca3434f3727432` 已只读校验并暂存至不可变 release cache；暂存未安装、未重启、未切流。
+- 发布边界：等待 PR #1730 合并后，从 clean exact `origin/main` 统一部署 Java/Web；部署只执行 schema migration、蓝绿切流与 Web 原子替换，不执行 F006 或其他租户业务写入。
+- Scope 锁已释放。

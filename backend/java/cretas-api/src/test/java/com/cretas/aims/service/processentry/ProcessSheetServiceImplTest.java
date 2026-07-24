@@ -9,9 +9,11 @@ import com.cretas.aims.entity.MaterialConsumption;
 import com.cretas.aims.entity.ProductionBatch;
 import com.cretas.aims.entity.ProductionPlan;
 import com.cretas.aims.entity.ProductionReport;
+import com.cretas.aims.entity.ProductType;
 import com.cretas.aims.entity.SemiFinishedInventory;
 import com.cretas.aims.entity.User;
 import com.cretas.aims.entity.bom.BomRecipe;
+import com.cretas.aims.entity.bom.BomRecipeItem;
 import com.cretas.aims.entity.bom.BomSeasoningItem;
 import com.cretas.aims.entity.factory.FactoryWarehouse;
 import com.cretas.aims.entity.factory.FactoryWarehouse.WarehouseType;
@@ -24,13 +26,16 @@ import com.cretas.aims.repository.MaterialConsumptionRepository;
 import com.cretas.aims.repository.ProductionBatchRepository;
 import com.cretas.aims.repository.ProductionPlanRepository;
 import com.cretas.aims.repository.ProductionReportRepository;
+import com.cretas.aims.repository.ProductTypeRepository;
 import com.cretas.aims.repository.ProcessSheetRowChangeLogRepository;
 import com.cretas.aims.repository.ProcessSheetRowRepository;
 import com.cretas.aims.repository.SemiFinishedInventoryRepository;
 import com.cretas.aims.repository.UserRepository;
 import com.cretas.aims.repository.factory.FactoryWarehouseRepository;
+import com.cretas.aims.repository.bom.BomRecipeItemRepository;
 import com.cretas.aims.repository.bom.BomRecipeRepository;
 import com.cretas.aims.repository.bom.BomSeasoningItemRepository;
+import com.cretas.aims.service.processentry.impl.ProcessSheetServiceImpl;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -38,6 +43,8 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.ActiveProfiles;
+import org.springframework.test.util.AopTestUtils;
+import org.springframework.test.util.ReflectionTestUtils;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
@@ -48,6 +55,7 @@ import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.assertj.core.api.Assertions.tuple;
 
 /**
  * SP-F Task 1.5 — ProcessSheetService.saveRow 新建路径集成测试 (真 H2 写库)。
@@ -77,6 +85,9 @@ class ProcessSheetServiceImplTest {
     private ProcessSheetService processSheetService;
 
     @Autowired
+    private ProcessSheetServiceImpl processSheetServiceImpl;
+
+    @Autowired
     private MaterialBatchRepository materialBatchRepo;
 
     @Autowired
@@ -104,6 +115,9 @@ class ProcessSheetServiceImplTest {
     private BomRecipeRepository recipeRepo;
 
     @Autowired
+    private BomRecipeItemRepository recipeItemRepo;
+
+    @Autowired
     private BomSeasoningItemRepository ingredientRepo;
 
     @Autowired
@@ -111,6 +125,9 @@ class ProcessSheetServiceImplTest {
 
     @Autowired
     private SemiFinishedInventoryRepository sfiRepo;
+
+    @Autowired
+    private ProductTypeRepository productTypeRepo;
 
     private static final String FACTORY_ID = "PSF-FACTORY";
     private static final String OTHER_FACTORY_ID = "PSF-OTHER";
@@ -136,6 +153,10 @@ class ProcessSheetServiceImplTest {
         user.setIsActive(true);
         user = userRepo.saveAndFlush(user);
         operatorId = user.getId();
+
+        seedProductType(PRODUCT_TYPE_ID);
+        seedProductType("PT-UPSTREAM-A");
+        seedProductType("PT-UPSTREAM-C");
 
         FactoryWarehouse rawWarehouse = new FactoryWarehouse();
         rawWarehouseId = "PSF-WH-LOG-" + UUID.randomUUID().toString().substring(0, 8);
@@ -181,6 +202,20 @@ class ProcessSheetServiceImplTest {
         raw.setReceiptDate(LocalDate.now());
         raw.setCreatedBy(operatorId);
         materialBatchRepo.saveAndFlush(raw);
+    }
+
+    private void seedProductType(String id) {
+        ProductType product = new ProductType();
+        product.setId(id);
+        product.setFactoryId(FACTORY_ID);
+        product.setCode(id);
+        product.setName(id);
+        product.setUnit("kg");
+        product.setCategory("SEMI_FINISHED");
+        product.setProductCategory("SEMI_FINISHED");
+        product.setIsActive(true);
+        product.setCreatedBy(operatorId);
+        productTypeRepo.saveAndFlush(product);
     }
 
     // ─────────────────────────────────────────────────────────────
@@ -275,7 +310,7 @@ class ProcessSheetServiceImplTest {
         // WIP MaterialBatch via findByFactoryIdAndSourceDocTypeAndSourceDocId
         MaterialBatch wip = materialBatchRepo.findByFactoryIdAndSourceDocTypeAndSourceDocId(
                 FACTORY_ID, "PRODUCTION_BATCH", String.valueOf(result.getBatchId())).orElseThrow();
-        assertThat(wip.getMaterialTypeId())
+        assertThat(wip.getProductTypeId())
                 .as("WIP identity == row output product; raw only remains provenance")
                 .isEqualTo(PRODUCT_TYPE_ID);
         assertThat(wip.getReceiptQuantity()).isEqualByComparingTo("80");
@@ -298,8 +333,8 @@ class ProcessSheetServiceImplTest {
                 FACTORY_ID, "PRODUCTION_BATCH", String.valueOf(up1.getBatchId())).orElseThrow();
         MaterialBatch upstreamC = materialBatchRepo.findByFactoryIdAndSourceDocTypeAndSourceDocId(
                 FACTORY_ID, "PRODUCTION_BATCH", String.valueOf(up2.getBatchId())).orElseThrow();
-        assertThat(upstreamA.getMaterialTypeId()).isEqualTo("PT-UPSTREAM-A");
-        assertThat(upstreamC.getMaterialTypeId()).isEqualTo("PT-UPSTREAM-C");
+        assertThat(upstreamA.getProductTypeId()).isEqualTo("PT-UPSTREAM-A");
+        assertThat(upstreamC.getProductTypeId()).isEqualTo("PT-UPSTREAM-C");
 
         // Recipe so seasoning cost > 0 (ACTIVE for PRODUCT_TYPE_ID)
         seedSeasoningRecipe();
@@ -339,10 +374,10 @@ class ProcessSheetServiceImplTest {
                         && r.getMaterialCost() != null
                         && r.getMaterialCost().signum() > 0);
 
-        // materialTypeId belongs to the cooked output, never either upstream WIP.
+        // productTypeId belongs to the cooked output, never either upstream WIP.
         MaterialBatch cookedWip = materialBatchRepo.findByFactoryIdAndSourceDocTypeAndSourceDocId(
                 FACTORY_ID, "PRODUCTION_BATCH", String.valueOf(result.getBatchId())).orElseThrow();
-        assertThat(cookedWip.getMaterialTypeId())
+        assertThat(cookedWip.getProductTypeId())
                 .as("2→1 merge identity follows output product, not first input")
                 .isEqualTo(PRODUCT_TYPE_ID);
     }
@@ -504,10 +539,10 @@ class ProcessSheetServiceImplTest {
         assertThat(cons.get(0).getBatchId()).isEqualTo(rawBatchId);
         // 无任何 SEMI_FINISHED 消耗边 (SFI 不解析为 in-plan WIP)
         assertThat(cons).noneMatch(c -> "SEMI_FINISHED".equals(c.getSourceType()));
-        // WIP materialTypeId 来自产出产品 (RAW/SFI 都只保留为 provenance)
+        // WIP productTypeId 来自产出产品 (RAW/SFI 都只保留为 provenance)
         MaterialBatch wip = materialBatchRepo.findByFactoryIdAndSourceDocTypeAndSourceDocId(
                 FACTORY_ID, "PRODUCTION_BATCH", String.valueOf(result.getBatchId())).orElseThrow();
-        assertThat(wip.getMaterialTypeId()).isEqualTo(PRODUCT_TYPE_ID);
+        assertThat(wip.getProductTypeId()).isEqualTo(PRODUCT_TYPE_ID);
         // 行 payload 持久化 semiFinished 标记 (跨保存往返 → 小结时 consumeClerkSemi 可识别)
         var views = processSheetService.getRows(FACTORY_ID, planId, "shuzhi", 2);
         assertThat(views).hasSize(1);
@@ -1044,6 +1079,85 @@ class ProcessSheetServiceImplTest {
     // Seasoning recipe seed
     // ─────────────────────────────────────────────────────────────
 
+    @Test
+    @DisplayName("Pinned BOM packaging scales 10 boxes to 10 boxes, 10 slices and 1.25 cases")
+    void pinnedBomPackagingRequirementsScaleInNativeUnits() {
+        String recipeId = "PSF-PACK-" + UUID.randomUUID().toString().substring(0, 8);
+        BomRecipe recipe = new BomRecipe();
+        recipe.setId(recipeId);
+        recipe.setFactoryId(FACTORY_ID);
+        recipe.setRecipeCode("BOM-" + recipeId);
+        recipe.setProductTypeId(PRODUCT_TYPE_ID);
+        recipe.setProductName("PSF packaging contract");
+        recipe.setVersion(3);
+        recipe.setIsCurrent(true);
+        recipe.setOutputQuantityPerUnit(new BigDecimal("8"));
+        recipe.setOutputUnit("box");
+        recipe.setSeasoningRevision(0L);
+        recipe.setStatus(BomRecipe.Status.ACTIVE);
+        recipe.setSourceType(BomRecipe.SourceType.MANUAL);
+        List<BomRecipeItem> packagingItems = List.of(
+                packagingItem(recipeId, "PACK-BOX", "Box", "8", "box", 1),
+                packagingItem(recipeId, "PACK-SLICE", "Slice", "8", "slice", 2),
+                packagingItem(recipeId, "PACK-CASE", "Case", "1", "case", 3));
+        packagingItems.forEach(item -> item.setRecipe(recipe));
+        recipe.setItems(packagingItems);
+        recipeRepo.saveAndFlush(recipe);
+
+        ProductionPlan plan = planRepo.findById(planId).orElseThrow();
+        plan.setSelectedBomRecipeId(recipeId);
+        plan.setSelectedBomVersion(3);
+        planRepo.saveAndFlush(plan);
+        assertThat(planRepo.findByIdAndFactoryId(planId, FACTORY_ID))
+                .get()
+                .extracting(ProductionPlan::getSelectedBomRecipeId)
+                .isEqualTo(recipeId);
+        assertThat(recipeItemRepo.findByRecipeIdOrderBySortOrderAsc(recipeId))
+                .extracting(
+                        BomRecipeItem::getMaterialTypeId,
+                        BomRecipeItem::getMaterialCategory,
+                        BomRecipeItem::getIsOptional)
+                .containsExactly(
+                        tuple("PACK-BOX", "PACKAGING", false),
+                        tuple("PACK-SLICE", "PACKAGING", false),
+                        tuple("PACK-CASE", "PACKAGING", false));
+        ProcessSheetServiceImpl target = AopTestUtils.getUltimateTargetObject(processSheetServiceImpl);
+        assertThat(ReflectionTestUtils.getField(target, "bomRecipeRepository"))
+                .isSameAs(recipeRepo);
+        assertThat(ReflectionTestUtils.getField(target, "bomRecipeItemRepository"))
+                .isSameAs(recipeItemRepo);
+
+        ProcessSheetRowRequest request = new ProcessSheetRowRequest();
+        request.setFinished(true);
+        request.setProductTypeId(PRODUCT_TYPE_ID);
+        request.setOutputQuantity(new BigDecimal("10"));
+        request.setOutputUnit("box");
+        request.setUnit("box");
+        assertThat((BigDecimal) ReflectionTestUtils.invokeMethod(
+                target, "finishedOutputQuantity", request))
+                .isEqualByComparingTo("10");
+
+        List<ProductionStockAllocationService.AutomaticRequirement> requirements =
+                ReflectionTestUtils.invokeMethod(
+                        target,
+                        "buildAutomaticBomRequirements",
+                        FACTORY_ID,
+                        planId,
+                        request,
+                        true);
+
+        assertThat(requirements)
+                .extracting(
+                        ProductionStockAllocationService.AutomaticRequirement::materialTypeId,
+                        ProductionStockAllocationService.AutomaticRequirement::quantity,
+                        ProductionStockAllocationService.AutomaticRequirement::unit,
+                        ProductionStockAllocationService.AutomaticRequirement::sourceType)
+                .containsExactly(
+                        tuple("PACK-BOX", new BigDecimal("10"), "box", "PACKAGING"),
+                        tuple("PACK-SLICE", new BigDecimal("10"), "slice", "PACKAGING"),
+                        tuple("PACK-CASE", new BigDecimal("1.25"), "case", "PACKAGING"));
+    }
+
     private void seedSeasoningRecipe() {
         String recipeId = "PSF-RECIPE-" + UUID.randomUUID().toString().substring(0, 8);
         BomRecipe recipe = new BomRecipe();
@@ -1071,5 +1185,28 @@ class ProcessSheetServiceImplTest {
         cook.setPriceSource1(new BigDecimal("10.0"));
         cook.setCountInSeasoning(true);
         ingredientRepo.save(cook);
+    }
+
+    private BomRecipeItem packagingItem(
+            String recipeId,
+            String materialTypeId,
+            String materialName,
+            String quantity,
+            String unit,
+            int sortOrder) {
+        BomRecipeItem item = new BomRecipeItem();
+        item.setRecipeId(recipeId);
+        item.setFactoryId(FACTORY_ID);
+        item.setMaterialTypeId(materialTypeId);
+        item.setMaterialName(materialName);
+        item.setStandardQuantity(new BigDecimal(quantity));
+        item.setYieldRate(new BigDecimal("100"));
+        item.setUnit(unit);
+        item.setMaterialCategory("PACKAGING");
+        item.setSortOrder(sortOrder);
+        item.setIsOptional(false);
+        item.setQuantityToPriceFactor(BigDecimal.ONE);
+        item.setPerPortion(false);
+        return item;
     }
 }

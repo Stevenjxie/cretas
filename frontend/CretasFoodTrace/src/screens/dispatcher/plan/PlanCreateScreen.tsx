@@ -14,7 +14,7 @@
  * @version 1.0.0
  * @since 2025-12-29
  */
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   View,
   Text,
@@ -34,7 +34,11 @@ import { Icon } from 'react-native-paper';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { useTranslation } from 'react-i18next';
 import { DISPATCHER_THEME, PlanSourceType, DispatcherStackParamList } from '../../../types/dispatcher';
-import { productionPlanApiClient, PlanType } from '../../../services/api/productionPlanApiClient';
+import {
+  createProductionPlanClientRequestId,
+  productionPlanApiClient,
+  PlanType,
+} from '../../../services/api/productionPlanApiClient';
 import { productTypeApiClient, ProductType } from '../../../services/api/productTypeApiClient';
 
 type NavigationProp = NativeStackNavigationProp<DispatcherStackParamList, 'PlanCreate'>;
@@ -85,6 +89,7 @@ export function PlanCreateScreen() {
   });
   const [isMixedBatch, setIsMixedBatch] = useState(false);
   const [showSourceTypePicker, setShowSourceTypePicker] = useState(false);
+  const createIntentRef = useRef<{ fingerprint: string; clientRequestId: string } | null>(null);
 
   // 加载产品类型 + 客户列表
   useEffect(() => {
@@ -144,7 +149,7 @@ export function PlanCreateScreen() {
     try {
       setLoading(true);
 
-      const response = await productionPlanApiClient.createProductionPlan({
+      const payload = {
         productTypeId: selectedProductId,
         plannedQuantity: parseFloat(plannedQuantity),
         plannedDate,
@@ -156,10 +161,26 @@ export function PlanCreateScreen() {
         // priority,
         // deadline,
         // isMixedBatch,
+      };
+      const fingerprint = JSON.stringify(payload);
+      if (createIntentRef.current?.fingerprint !== fingerprint) {
+        createIntentRef.current = {
+          fingerprint,
+          clientRequestId: createProductionPlanClientRequestId(),
+        };
+      }
+      const response = await productionPlanApiClient.createProductionPlan({
+        ...payload,
+        clientRequestId: createIntentRef.current.clientRequestId,
       });
 
       if (response.success) {
-        Alert.alert(t('planCreate.submit.success'), t('planCreate.submit.successMessage'), [
+        createIntentRef.current = null;
+        const planNumber = response.data?.planNumber;
+        const successMessage = planNumber
+          ? `${t('planCreate.submit.successMessage')}\n${planNumber}`
+          : t('planCreate.submit.successMessage');
+        Alert.alert(t('planCreate.submit.success'), successMessage, [
           { text: t('common.confirm'), onPress: () => navigation.goBack() },
         ]);
       } else {

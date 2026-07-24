@@ -147,7 +147,7 @@ public class OrderCostBreakdownService {
         boolean anySemiFeed = false;
         boolean semiFeedUnknown = false;
         boolean auditEligible = false;
-        boolean anyPinnedPackaging = false;
+        boolean anyAuthoritativePackaging = false;
         boolean equipmentComplete = true;
         boolean otherComplete = true;
         List<String> missingCostItems = new ArrayList<>();
@@ -163,6 +163,12 @@ public class OrderCostBreakdownService {
 
         for (ProductionBatch b : batches) {
             auditBatches.add(b);
+            List<MaterialConsumption> batchConsumptions =
+                    consumptionRepository.findByProductionBatchIdAndFactoryId(b.getId(), factoryId);
+            boolean hasActualPackaging = batchConsumptions.stream()
+                    .anyMatch(c -> "PACKAGING".equalsIgnoreCase(c.getSourceType()));
+            boolean hasActualSeasoning = batchConsumptions.stream()
+                    .anyMatch(c -> "SEASONING".equalsIgnoreCase(c.getSourceType()));
             ProductionPlan plan = b.getProductionPlanId() == null ? null
                     : planRepository.findByIdAndFactoryId(b.getProductionPlanId(), factoryId).orElse(null);
             if (plan != null) {
@@ -194,8 +200,13 @@ public class OrderCostBreakdownService {
                     // CALC-003: 显式 costCategory 优先分类; null/未知 → 回退 step-index 启发式 (向后兼容)
                     String bucket = resolveCostBucket(steps.get(i).getCostCategory(), i, steps.size(), factoryId, label);
                     if ("PACKAGING".equals(bucket)) {
-                        packaging = packaging.add(m);
+                        if (!hasActualPackaging) {
+                            packaging = packaging.add(m);
+                        }
                     } else if ("SEASONING".equals(bucket)) {
+                        if (hasActualSeasoning) {
+                            continue;
+                        }
                         // AUDIT-004: 该道辅料若标了共享锅 → 按产出量分摊本批 share (替代报工 material_cost); 否则原样计
                         BigDecimal contribution = m;
                         StepYieldDTO step = steps.get(i);
@@ -236,8 +247,8 @@ public class OrderCostBreakdownService {
 
                 PinnedPackagingResult pinnedPackaging = resolvePinnedPackaging(
                         factoryId, plan, output, y.getLastStepOutputUnit());
-                if (pinnedPackaging.pinned()) {
-                    anyPinnedPackaging = true;
+                if (!hasActualPackaging && pinnedPackaging.pinned()) {
+                    anyAuthoritativePackaging = true;
                     BigDecimal reportedContribution = packaging.subtract(reportedPackagingBefore);
                     packaging = packaging.subtract(reportedContribution).add(pinnedPackaging.knownCost());
                     packagingDetails.addAll(pinnedPackaging.details());
@@ -259,15 +270,46 @@ public class OrderCostBreakdownService {
             if (b.getQuantity() != null) {
                 boxCount += b.getQuantity().intValue();
             }
-            for (MaterialConsumption c : consumptionRepository.findByProductionBatchIdAndFactoryId(b.getId(), factoryId)) {
+            for (MaterialConsumption c : batchConsumptions) {
                 java.util.Set<Long> visited = new java.util.HashSet<>();
                 visited.add(b.getId());   // 起点批次入环检测集
                 BigDecimal[] leaf = traceCost(factoryId, c, 1, visited);
                 BigDecimal cost = leaf[0];
                 int depth = leaf[1].intValue();
-                raw = raw.add(cost);
                 MaterialBatch mb = c.getBatchId() == null ? null
                         : materialBatchRepository.findByIdAndFactoryId(c.getBatchId(), factoryId).orElse(null);
+                String actualCategory = c.getSourceType() == null
+                        ? "RAW_MATERIAL" : c.getSourceType().trim().toUpperCase();
+                boolean actualPriceKnown = mb == null
+                        ? c.getUnitPrice() != null
+                        : mb.getUnitPrice() != null;
+                if ("PACKAGING".equals(actualCategory)) {
+                    anyAuthoritativePackaging = true;
+                    packaging = packaging.add(cost);
+                    if (!actualPriceKnown && auditEligible) {
+                        missingCostItems.add("PACKAGING_PRICE:" + c.getMaterialTypeId());
+                    }
+                    packagingDetails.add(PackagingDetail.builder()
+                            .materialCode(c.getMaterialTypeId())
+                            .materialName(mb != null ? mb.getBatchNumber() : c.getMaterialTypeId())
+                            .quantity(c.getQuantity())
+                            .unit(mb != null ? mb.getQuantityUnit() : null)
+                            .unitPrice(actualPriceKnown ? c.getUnitPrice() : null)
+                            .priceSource("ACTUAL_MATERIAL_BATCH")
+                            .amount(actualPriceKnown ? cost : null)
+                            .collectionStatus(actualPriceKnown ? "COLLECTED" : "MISSING_PRICE")
+                            .missingReason(actualPriceKnown ? null : "实际包材批次缺少可验证单价")
+                            .build());
+                    continue;
+                }
+                if ("SEASONING".equals(actualCategory)) {
+                    seasoning = seasoning.add(cost);
+                    if (!actualPriceKnown && auditEligible) {
+                        missingCostItems.add("SEASONING_PRICE:" + c.getMaterialTypeId());
+                    }
+                    continue;
+                }
+                raw = raw.add(cost);
                 sources.add(SourceCost.builder()
                         .batchId(c.getBatchId())
                         .batchName(mb != null ? mb.getBatchNumber() : c.getBatchId())
@@ -319,7 +361,7 @@ public class OrderCostBreakdownService {
         // 包装总额: 若无 PACKAGING materialCost 报工(packaging==0)但有包装明细 → 用明细总额。
         // 文员逐道录入(SP-F)的气调步只写 packaging_detail 明细不写 materialCost-PACKAGING;
         // M67 等有 materialCost-PACKAGING 的批 packaging>0 → 不重复加明细。严格测试 2026-06-24 抓到。
-        if (!anyPinnedPackaging && packaging.signum() == 0 && !packagingAcc.isEmpty()) {
+        if (!anyAuthoritativePackaging && packaging.signum() == 0 && !packagingAcc.isEmpty()) {
             packaging = packagingAcc.values().stream().reduce(BigDecimal.ZERO, BigDecimal::add);
         }
         // R4: total 含 SFI/FG 投料成本 (已知部分)。诚实 null: 有 SFI/FG 投料但任一成本未知 →
@@ -347,7 +389,7 @@ public class OrderCostBreakdownService {
 
         // AUDIT-002 包装明细 (按名称归集成本; null=未拆)
         List<PackagingItem> packagingDetail;
-        if (anyPinnedPackaging) {
+        if (anyAuthoritativePackaging) {
             packagingDetail = packagingDetails.stream()
                     .map(item -> PackagingItem.builder()
                             .name(item.getMaterialName())

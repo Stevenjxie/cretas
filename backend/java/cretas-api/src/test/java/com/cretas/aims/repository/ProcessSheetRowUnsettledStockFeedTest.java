@@ -94,6 +94,7 @@ class ProcessSheetRowUnsettledStockFeedTest {
         plan.setPlanNumber("IT-PSR-" + UUID.randomUUID().toString().substring(0, 8));
         plan.setProductTypeId("IT-PSR-PT");
         plan.setPlannedQuantity(new java.math.BigDecimal("1000"));
+        plan.setPlannedUnit("kg");
         plan.setStatus(ProductionPlanStatus.PENDING);
         plan.setSourceType(sourceType);
         plan.setCreatedBy(1L);

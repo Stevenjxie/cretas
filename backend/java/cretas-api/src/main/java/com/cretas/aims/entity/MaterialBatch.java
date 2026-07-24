@@ -103,7 +103,7 @@ public class MaterialBatch extends BaseEntity {
      */
     @NotNull(message = "入库数量不能为空")
     @PositiveOrZero(message = "入库数量不能为负数")
-    @Column(name = "receipt_quantity", nullable = false, precision = 10, scale = 2)
+    @Column(name = "receipt_quantity", nullable = false, precision = 18, scale = 6)
     private BigDecimal receiptQuantity;
 
     @NotBlank(message = "数量单位不能为空")
@@ -125,11 +125,11 @@ public class MaterialBatch extends BaseEntity {
     private BigDecimal weightPerUnit;
 
     @PositiveOrZero(message = "已用数量不能为负数")
-    @Column(name = "used_quantity", nullable = false, precision = 10, scale = 2)
+    @Column(name = "used_quantity", nullable = false, precision = 18, scale = 6)
     private BigDecimal usedQuantity = BigDecimal.ZERO;
 
     @PositiveOrZero(message = "预留数量不能为负数")
-    @Column(name = "reserved_quantity", nullable = false, precision = 10, scale = 2)
+    @Column(name = "reserved_quantity", nullable = false, precision = 18, scale = 6)
     private BigDecimal reservedQuantity = BigDecimal.ZERO;
 
     @PriceSensitive

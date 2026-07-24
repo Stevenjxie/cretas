@@ -115,6 +115,7 @@ class ProductionPlanCreateBatchValidationTest {
         plan.setProductTypeId(PRODUCT_TYPE_ID);
         plan.setPlanNumber("PP-2026-138");
         plan.setPlannedQuantity(plannedQuantity);
+        plan.setPlannedUnit("kg");
         plan.setStatus(ProductionPlanStatus.PENDING);
         return plan;
     }

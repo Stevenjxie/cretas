@@ -220,10 +220,15 @@ export interface ProcessSheetRowResult {
 
 export interface ProductionInputAllocation {
   materialTypeId: string;
+  materialName?: string | null;
   materialBatchId: string;
   batchNumber: string | null;
   quantity: number;
   unit: string;
+  sourceType?: string | null;
+  unitPrice?: number | null;
+  totalCost?: number | null;
+  automatic?: boolean;
   allocationOrder: number;
 }
 

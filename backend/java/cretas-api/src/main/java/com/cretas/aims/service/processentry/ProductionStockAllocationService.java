@@ -19,6 +19,12 @@ public interface ProductionStockAllocationService {
             String planId,
             List<ProcessSheetRowRequest.RawInput> rawMaterialInputs);
 
+    /** FEFO-lock and reserve BOM-derived packaging/seasoning requirements in their native stock units. */
+    List<PlannedAllocation> planNative(
+            String factoryId,
+            String planId,
+            List<AutomaticRequirement> requirements);
+
     void persist(
             String factoryId,
             String planId,
@@ -39,6 +45,34 @@ public interface ProductionStockAllocationService {
             String unit,
             Integer allocationOrder,
             String workflowPortId,
-            String materialNodeId) {
+            String materialNodeId,
+            String materialName,
+            String sourceType,
+            BigDecimal unitPrice,
+            BigDecimal totalCost,
+            boolean automatic) {
+
+        public PlannedAllocation(
+                String materialTypeId,
+                String materialBatchId,
+                String batchNumber,
+                String warehouseId,
+                BigDecimal quantity,
+                String unit,
+                Integer allocationOrder,
+                String workflowPortId,
+                String materialNodeId) {
+            this(materialTypeId, materialBatchId, batchNumber, warehouseId, quantity, unit,
+                    allocationOrder, workflowPortId, materialNodeId,
+                    materialTypeId, "RAW_MATERIAL", null, null, false);
+        }
+    }
+
+    record AutomaticRequirement(
+            String materialTypeId,
+            String materialName,
+            BigDecimal quantity,
+            String unit,
+            String sourceType) {
     }
 }

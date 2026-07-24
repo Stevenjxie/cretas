@@ -45,6 +45,17 @@ public interface ProductionPlanRepository extends JpaRepository<ProductionPlan, 
      */
     Optional<ProductionPlan> findByIdAndFactoryId(String id, String factoryId);
 
+    Optional<ProductionPlan> findByFactoryIdAndCreatedByAndClientRequestId(
+            String factoryId, Long createdBy, String clientRequestId);
+
+    Optional<ProductionPlan> findTopByFactoryIdAndProductTypeIdAndSourceTypeAndPlannedDateAndPlannedQuantityAndCreatedAtAfterOrderByCreatedAtDesc(
+            String factoryId,
+            String productTypeId,
+            PlanSourceType sourceType,
+            LocalDate plannedDate,
+            BigDecimal plannedQuantity,
+            LocalDateTime createdAtAfter);
+
     /**
      * R6 (2026-06-14): 悲观写锁取计划, 用于 createBatchFromPlan / startProduction 串行化状态推进.
      *

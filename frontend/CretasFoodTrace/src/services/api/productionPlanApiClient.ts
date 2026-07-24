@@ -37,12 +37,17 @@ export interface PagedResponse<T> {
  */
 export type PlanType = 'FUTURE' | 'FROM_INVENTORY';
 
+export function createProductionPlanClientRequestId(): string {
+  return `rn-plan-${Date.now()}-${Math.random().toString(36).slice(2, 12)}`;
+}
+
 /**
  * 生产计划
  */
 export interface ProductionPlan {
   id: string;
   planNumber: string;
+  clientRequestId?: string;
   factoryId: string;
   productTypeId: string;
   productTypeName?: string;
@@ -251,7 +256,12 @@ class ProductionPlanApiClient {
 
   // 2. 创建生产计划
   async createProductionPlan(data: Partial<ProductionPlan>, factoryId?: string): Promise<ApiResponse<ProductionPlan>> {
-    return await apiClient.post(this.getPath(factoryId), data);
+    const clientRequestId = data.clientRequestId || createProductionPlanClientRequestId();
+    return await apiClient.post(
+      this.getPath(factoryId),
+      { ...data, clientRequestId },
+      { headers: { 'Idempotency-Key': clientRequestId } },
+    );
   }
 
   // 3. 获取生产计划详情

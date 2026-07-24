@@ -8,6 +8,7 @@ import com.cretas.aims.dto.processentry.ProcessChainEntryRequest.UpstreamSource;
 import com.cretas.aims.dto.processentry.ProcessChainEntryResult;
 import com.cretas.aims.dto.yield.OrderCostBreakdownDTO;
 import com.cretas.aims.entity.MaterialBatch;
+import com.cretas.aims.entity.ProductType;
 import com.cretas.aims.entity.ProductionPlan;
 import com.cretas.aims.entity.User;
 import com.cretas.aims.entity.bom.BomRecipe;
@@ -15,6 +16,7 @@ import com.cretas.aims.entity.bom.BomSeasoningItem;
 import com.cretas.aims.entity.enums.MaterialBatchStatus;
 import com.cretas.aims.entity.enums.ProductionPlanStatus;
 import com.cretas.aims.repository.MaterialBatchRepository;
+import com.cretas.aims.repository.ProductTypeRepository;
 import com.cretas.aims.repository.ProductionPlanRepository;
 import com.cretas.aims.repository.UserRepository;
 import com.cretas.aims.repository.bom.BomRecipeRepository;
@@ -80,6 +82,9 @@ class ClerkProcessEntryIntegrationTest {
     private ProductionPlanRepository planRepo;
 
     @Autowired
+    private ProductTypeRepository productTypeRepo;
+
+    @Autowired
     private UserRepository userRepo;
 
     private static final String FACTORY_ID = "IT-FACTORY";
@@ -112,6 +117,11 @@ class ClerkProcessEntryIntegrationTest {
         user.setIsActive(true);
         user = userRepo.saveAndFlush(user);
         operatorId = user.getId();
+
+        productTypeRepo.saveAllAndFlush(List.of(
+                ownedProductType("IT-WIP-TYPE", "IT-WIP", "IT WIP"),
+                ownedProductType("IT-WIP-TYPE-A", "IT-WIP-A", "IT WIP A"),
+                ownedProductType("IT-WIP-TYPE-B", "IT-WIP-B", "IT WIP B")));
 
         // 1. 创建 ProductionPlan (供 OrderCostBreakdownService 通过 sourceOrderId 查找)
         orderId = "IT-ORDER-" + UUID.randomUUID().toString().substring(0, 8);
@@ -212,6 +222,20 @@ class ClerkProcessEntryIntegrationTest {
         mbB.setReceiptDate(LocalDate.now());
         mbB.setCreatedBy(operatorId);
         materialBatchRepo.save(mbB);
+    }
+
+    private ProductType ownedProductType(String id, String code, String name) {
+        ProductType productType = new ProductType();
+        productType.setId(id);
+        productType.setFactoryId(FACTORY_ID);
+        productType.setCode(code);
+        productType.setName(name);
+        productType.setCategory("SEMI_FINISHED");
+        productType.setProductCategory("SEMI_FINISHED");
+        productType.setUnit("kg");
+        productType.setIsActive(true);
+        productType.setCreatedBy(operatorId);
+        return productType;
     }
 
     /**

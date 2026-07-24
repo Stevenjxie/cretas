@@ -1,6 +1,7 @@
 package com.cretas.aims.service.processentry;
 
 import com.cretas.aims.dto.processentry.ProcessSheetRowRequest;
+import com.cretas.aims.dto.processentry.ProductionStockShortageDTO;
 import com.cretas.aims.entity.MaterialBatch;
 import com.cretas.aims.entity.ProductionPlan;
 import com.cretas.aims.entity.enums.InventoryOwnership;
@@ -25,6 +26,7 @@ import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.assertj.core.api.Assertions.tuple;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.when;
 
@@ -114,6 +116,145 @@ class ProductionStockAllocationServiceTest {
                 .satisfies(allocation -> {
                     assertThat(allocation.quantity()).isEqualByComparingTo("2");
                     assertThat(allocation.unit()).isEqualTo("kg");
+                });
+    }
+
+    @Test
+    void allocatesPackagingInNativeUnitsWithFefoCostAndLineageMetadata() {
+        MaterialBatch first = batch("BOX-1", "PKG-BOX", "WKS-1", "6", LocalDate.of(2026, 8, 1));
+        first.setQuantityUnit("盒");
+        first.setBatchNumber("PKG-BOX-B1");
+        first.setUnitPrice(new BigDecimal("0.40"));
+        MaterialBatch second = batch("BOX-2", "PKG-BOX", "WKS-1", "10", LocalDate.of(2026, 9, 1));
+        second.setQuantityUnit("box");
+        second.setBatchNumber("PKG-BOX-B2");
+        second.setUnitPrice(new BigDecimal("0.50"));
+
+        when(warehouseResolver.resolveWorkshopId("F006")).thenReturn("WKS-1");
+        when(materialBatchRepository.findAvailableBatchesFEFOByWarehouseForUpdate(
+                "F006", "PKG-BOX", "WKS-1"))
+                .thenReturn(List.of(first, second));
+        when(allocationRepository.sumPendingQuantityByMaterialBatchId("F006", "BOX-1"))
+                .thenReturn(BigDecimal.ONE);
+        when(allocationRepository.sumPendingQuantityByMaterialBatchId("F006", "BOX-2"))
+                .thenReturn(BigDecimal.ZERO);
+
+        List<ProductionStockAllocationService.PlannedAllocation> result = service.planNative(
+                "F006",
+                "PLAN-1",
+                List.of(new ProductionStockAllocationService.AutomaticRequirement(
+                        "PKG-BOX", "800g包装盒", new BigDecimal("10"), "盒", "PACKAGING")));
+
+        assertThat(result).hasSize(2);
+        assertThat(result).extracting(ProductionStockAllocationService.PlannedAllocation::materialBatchId)
+                .containsExactly("BOX-1", "BOX-2");
+        assertThat(result).extracting(ProductionStockAllocationService.PlannedAllocation::quantity)
+                .containsExactly(new BigDecimal("5"), new BigDecimal("5"));
+        assertThat(result).allSatisfy(allocation -> {
+            assertThat(allocation.unit()).isEqualTo("box");
+            assertThat(allocation.sourceType()).isEqualTo("PACKAGING");
+            assertThat(allocation.automatic()).isTrue();
+        });
+        assertThat(result).extracting(ProductionStockAllocationService.PlannedAllocation::totalCost)
+                .containsExactly(new BigDecimal("2.00"), new BigDecimal("2.50"));
+        assertThat(service.toRawInputs(result)).allSatisfy(input -> {
+            assertThat(input.getSourceType()).isEqualTo("PACKAGING");
+            assertThat(input.getUnit()).isEqualTo("box");
+            assertThat(input.getAutomatic()).isTrue();
+        });
+    }
+
+    @Test
+    void allocatesSeasoningFromLegacyGramBatchWithKgReservationAndExactCost() {
+        MaterialBatch seasoning = batch(
+                "SEASONING-G-1", "SEASONING-1", "WKS-1", "1500", LocalDate.of(2026, 8, 1));
+        seasoning.setQuantityUnit("g");
+        seasoning.setBatchNumber("SEASONING-20260724-G");
+        seasoning.setUnitPrice(new BigDecimal("0.02"));
+
+        when(warehouseResolver.resolveWorkshopId("F006")).thenReturn("WKS-1");
+        when(materialBatchRepository.findAvailableBatchesFEFOByWarehouseForUpdate(
+                "F006", "SEASONING-1", "WKS-1"))
+                .thenReturn(List.of(seasoning));
+        when(allocationRepository.sumPendingQuantityByMaterialBatchId("F006", "SEASONING-G-1"))
+                .thenReturn(BigDecimal.ZERO);
+
+        assertThat(service.planNative(
+                "F006",
+                "PLAN-1",
+                List.of(new ProductionStockAllocationService.AutomaticRequirement(
+                        "SEASONING-1", "复合调料", new BigDecimal("0.75"), "kg", "SEASONING"))))
+                .singleElement()
+                .satisfies(allocation -> {
+                    assertThat(allocation.quantity()).isEqualByComparingTo("0.75");
+                    assertThat(allocation.unit()).isEqualTo("kg");
+                    assertThat(allocation.unitPrice()).isEqualByComparingTo("20");
+                    assertThat(allocation.totalCost()).isEqualByComparingTo("15");
+                    assertThat(allocation.sourceType()).isEqualTo("SEASONING");
+                });
+    }
+
+    @Test
+    void nativePackagingShortageReportsTheRequestedUnitWithoutMassConversion() {
+        MaterialBatch only = batch("CASE-1", "PKG-CASE", "WKS-1", "1", LocalDate.of(2026, 8, 1));
+        only.setQuantityUnit("箱");
+
+        when(warehouseResolver.resolveWorkshopId("F006")).thenReturn("WKS-1");
+        when(materialBatchRepository.findAvailableBatchesFEFOByWarehouseForUpdate(
+                "F006", "PKG-CASE", "WKS-1"))
+                .thenReturn(List.of(only));
+        when(allocationRepository.sumPendingQuantityByMaterialBatchId("F006", "CASE-1"))
+                .thenReturn(BigDecimal.ZERO);
+
+        assertThatThrownBy(() -> service.planNative(
+                "F006",
+                "PLAN-1",
+                List.of(new ProductionStockAllocationService.AutomaticRequirement(
+                        "PKG-CASE", "外箱", new BigDecimal("1.25"), "箱", "PACKAGING"))))
+                .isInstanceOfSatisfying(ProductionStockShortageException.class, error -> {
+                    assertThat(error.getShortage().getItems()).singleElement().satisfies(item -> {
+                        assertThat(item.getMaterialName()).isEqualTo("外箱");
+                        assertThat(item.getSourceType()).isEqualTo("PACKAGING");
+                        assertThat(item.getRequired()).isEqualByComparingTo("1.25");
+                        assertThat(item.getAvailable()).isEqualByComparingTo("1");
+                        assertThat(item.getShortage()).isEqualByComparingTo("0.25");
+                    });
+                    assertThat(error.getMessage())
+                            .contains("1.25case", "短缺明细：外箱（包材）", "缺少 0.25case");
+                });
+    }
+
+    @Test
+    void mixedPackagingShortageListsEachMaterialWithoutFakeMixedTotals() {
+        when(warehouseResolver.resolveWorkshopId("F006")).thenReturn("WKS-1");
+        when(materialBatchRepository.findAvailableBatchesFEFOByWarehouseForUpdate(
+                "F006", "PKG-BOX", "WKS-1"))
+                .thenReturn(List.of());
+        when(materialBatchRepository.findAvailableBatchesFEFOByWarehouseForUpdate(
+                "F006", "PKG-CASE", "WKS-1"))
+                .thenReturn(List.of());
+
+        assertThatThrownBy(() -> service.planNative(
+                "F006",
+                "PLAN-1",
+                List.of(
+                        new ProductionStockAllocationService.AutomaticRequirement(
+                                "PKG-BOX", "800g包装盒", new BigDecimal("10"), "盒", "PACKAGING"),
+                        new ProductionStockAllocationService.AutomaticRequirement(
+                                "PKG-CASE", "外箱", new BigDecimal("1.25"), "箱", "PACKAGING"))))
+                .isInstanceOfSatisfying(ProductionStockShortageException.class, error -> {
+                    assertThat(error.getMessage())
+                            .doesNotContain("0mixed")
+                            .contains(
+                                    "800g包装盒（包材）：需要 10box，可用 0box，缺少 10box",
+                                    "外箱（包材）：需要 1.25case，可用 0case，缺少 1.25case");
+                    assertThat(error.getShortage().getItems())
+                            .extracting(
+                                    ProductionStockShortageDTO.Item::getMaterialName,
+                                    ProductionStockShortageDTO.Item::getSourceType)
+                            .containsExactly(
+                                    tuple("800g包装盒", "PACKAGING"),
+                                    tuple("外箱", "PACKAGING"));
                 });
     }
 

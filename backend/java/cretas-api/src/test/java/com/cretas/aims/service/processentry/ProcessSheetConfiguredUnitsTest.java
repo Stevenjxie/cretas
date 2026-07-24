@@ -9,6 +9,7 @@ import org.junit.jupiter.api.Test;
 
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
+import java.math.BigDecimal;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -85,6 +86,21 @@ class ProcessSheetConfiguredUnitsTest {
 
         BusinessException error = (BusinessException) thrown.getCause();
         assertEquals("PROCESS_SHEET_EXTERNAL_FEED_UNIT_UNSUPPORTED", error.getErrorCode());
+    }
+
+    @Test
+    void treatsCanonicalPackagingAliasesAsTheSameNativeStockUnit() throws Exception {
+        Method method = ProcessSheetServiceImpl.class.getDeclaredMethod(
+                "convertReportingQuantityToStorage",
+                BigDecimal.class, String.class, String.class, String.class);
+        method.setAccessible(true);
+
+        assertEquals(new BigDecimal("10"), method.invoke(
+                null, new BigDecimal("10"), "box", "盒", "成品盒"));
+        assertEquals(new BigDecimal("10"), method.invoke(
+                null, new BigDecimal("10"), "slice", "片", "封膜"));
+        assertEquals(new BigDecimal("1.25"), method.invoke(
+                null, new BigDecimal("1.25"), "case", "箱", "外箱"));
     }
 
     private static Method configuredUnitsMethod() throws Exception {

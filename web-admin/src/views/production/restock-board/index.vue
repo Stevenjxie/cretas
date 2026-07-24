@@ -106,13 +106,17 @@ async function createPlan(row: RestockHorizonProductRow) {
       '缺口转生产计划',
       { confirmButtonText: '生成草稿', cancelButtonText: '取消', type: 'warning' },
     )
+    const clientRequestId = typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+      ? crypto.randomUUID()
+      : `restock-plan-${Date.now()}-${Math.random().toString(36).slice(2, 12)}`
     const res = await post(`/${factoryId.value}/production-plans`, {
+      clientRequestId,
       sourceType: 'SAFETY_STOCK',
       productTypeId: row.productTypeId,
       plannedQuantity: row.endingShortfallQty,
       plannedDate: today,
       notes: `来自 ${startDate.value} 至 ${endDate.value} 备货看板缺口`,
-    })
+    }, { headers: { 'Idempotency-Key': clientRequestId } })
     if (res.success) {
       ElMessage.success('生产计划草稿已生成')
       await load()

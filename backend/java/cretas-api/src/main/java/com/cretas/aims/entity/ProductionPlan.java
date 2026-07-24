@@ -38,7 +38,11 @@ import org.hibernate.annotations.Where;
            @Index(name = "idx_plan_factory", columnList = "factory_id"),
            @Index(name = "idx_plan_status", columnList = "status"),
            @Index(name = "idx_plan_date", columnList = "planned_date")
-       }
+       },
+       uniqueConstraints = @UniqueConstraint(
+           name = "uk_production_plan_create_request",
+           columnNames = {"factory_id", "created_by", "client_request_id"}
+       )
 )
 @Where(clause = "deleted_at IS NULL")
 public class ProductionPlan extends BaseEntity {
@@ -123,6 +127,16 @@ public class ProductionPlan extends BaseEntity {
     @Column(name = "notes", columnDefinition = "TEXT")
     private String notes;
 
+    /** Immutable audit snapshot written by the authoritative cancel command. */
+    @Column(name = "cancel_reason", columnDefinition = "TEXT")
+    private String cancelReason;
+
+    @Column(name = "cancelled_by")
+    private Long cancelledBy;
+
+    @Column(name = "cancelled_at")
+    private LocalDateTime cancelledAt;
+
     // 未来计划自动匹配相关字段
     @Column(name = "allocated_quantity", precision = 10, scale = 2)
     private BigDecimal allocatedQuantity = BigDecimal.ZERO;  // 已分配的原料数量
@@ -157,6 +171,13 @@ public class ProductionPlan extends BaseEntity {
     private BigDecimal actualOtherCost;
     @Column(name = "created_by", nullable = false)
     private Long createdBy;
+
+    /**
+     * 客户端创建请求幂等键。唯一性由 factory_id + created_by + client_request_id 共同约束，
+     * 既隔离租户，也允许不同用户各自使用本地生成的 UUID。
+     */
+    @Column(name = "client_request_id", length = 128)
+    private String clientRequestId;
 
     // ==================== 工厂管理员扩展字段 ====================
 

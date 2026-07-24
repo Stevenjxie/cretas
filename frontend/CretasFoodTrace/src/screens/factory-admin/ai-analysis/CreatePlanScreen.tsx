@@ -2,7 +2,7 @@
  * 创建生产计划页面
  * 支持创建新的生产计划
  */
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
   View,
   Text,
@@ -21,7 +21,11 @@ import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { Icon } from 'react-native-paper';
 import { useTranslation } from 'react-i18next';
 import { FAAIStackParamList } from '../../../types/navigation';
-import { productionPlanApiClient, PlanType } from '../../../services/api/productionPlanApiClient';
+import {
+  createProductionPlanClientRequestId,
+  productionPlanApiClient,
+  PlanType,
+} from '../../../services/api/productionPlanApiClient';
 import { productTypeApiClient, ProductType } from '../../../services/api/productTypeApiClient';
 
 type NavigationProp = NativeStackNavigationProp<FAAIStackParamList, 'CreatePlan'>;
@@ -47,6 +51,7 @@ export function CreatePlanScreen() {
   const [customerOrderNumber, setCustomerOrderNumber] = useState('');
   const [notes, setNotes] = useState('');
   const [showProductPicker, setShowProductPicker] = useState(false);
+  const createIntentRef = useRef<{ fingerprint: string; clientRequestId: string } | null>(null);
 
   // 加载产品类型
   useEffect(() => {
@@ -90,17 +95,33 @@ export function CreatePlanScreen() {
     try {
       setLoading(true);
 
-      const response = await productionPlanApiClient.createProductionPlan({
+      const payload = {
         productTypeId: selectedProductId,
         plannedQuantity: parseFloat(plannedQuantity),
         plannedDate,
         planType,
         customerOrderNumber: customerOrderNumber || undefined,
         notes: notes || undefined,
+      };
+      const fingerprint = JSON.stringify(payload);
+      if (createIntentRef.current?.fingerprint !== fingerprint) {
+        createIntentRef.current = {
+          fingerprint,
+          clientRequestId: createProductionPlanClientRequestId(),
+        };
+      }
+      const response = await productionPlanApiClient.createProductionPlan({
+        ...payload,
+        clientRequestId: createIntentRef.current.clientRequestId,
       });
 
       if (response.success) {
-        Alert.alert(t('common.success'), t('createPlan.createSuccess'), [
+        createIntentRef.current = null;
+        const planNumber = response.data?.planNumber;
+        const successMessage = planNumber
+          ? `${t('createPlan.createSuccess')}\n${planNumber}`
+          : t('createPlan.createSuccess');
+        Alert.alert(t('common.success'), successMessage, [
           { text: t('common.confirm'), onPress: () => navigation.goBack() },
         ]);
       } else {

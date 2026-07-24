@@ -126,6 +126,7 @@ class ProductionPlanServiceSecondaryTest {
         pt.setId(PRODUCT_TYPE_ID);
         pt.setFactoryId(FACTORY_ID);
         pt.setName("猪蹄");
+        pt.setUnit("kg");
         return pt;
     }
 
@@ -254,7 +255,7 @@ class ProductionPlanServiceSecondaryTest {
         void secondaryNoYield_reversesWipAndCancels() throws Exception {
             ProductionPlanServiceImpl svc = buildService(wipInventoryService);
             ProductionPlan plan = buildSecondaryInProgressPlan();
-            when(productionPlanRepo.findById(PLAN_ID)).thenReturn(Optional.of(plan));
+            when(productionPlanRepo.findByIdForUpdate(PLAN_ID)).thenReturn(Optional.of(plan));
             // 本计划无活跃批次 (开工扣 WIP, 还没建报工批次), 也无 YIELD 报工
             when(productionBatchRepo.findByFactoryIdAndProductionPlanId(FACTORY_ID, PLAN_ID))
                     .thenReturn(List.of());
@@ -277,7 +278,7 @@ class ProductionPlanServiceSecondaryTest {
             // 注入 productionReportRepository 让 hasYieldReports 能查到报工
             injectField(svc, "productionReportRepository", productionReportRepo);
             ProductionPlan plan = buildSecondaryInProgressPlan();
-            when(productionPlanRepo.findById(PLAN_ID)).thenReturn(Optional.of(plan));
+            when(productionPlanRepo.findByIdForUpdate(PLAN_ID)).thenReturn(Optional.of(plan));
 
             com.cretas.aims.entity.ProductionBatch batch = new com.cretas.aims.entity.ProductionBatch();
             batch.setId(9001L);
@@ -309,7 +310,7 @@ class ProductionPlanServiceSecondaryTest {
             plan.setFactoryId(FACTORY_ID);
             plan.setStatus(com.cretas.aims.entity.enums.ProductionPlanStatus.IN_PROGRESS);
             plan.setPlanSourceType("NORMAL");
-            when(productionPlanRepo.findById("NORMAL-PLAN-001")).thenReturn(Optional.of(plan));
+            when(productionPlanRepo.findByIdForUpdate("NORMAL-PLAN-001")).thenReturn(Optional.of(plan));
             when(productionBatchRepo.findByFactoryIdAndProductionPlanId(FACTORY_ID, "NORMAL-PLAN-001"))
                     .thenReturn(List.of());
             when(productionPlanRepo.save(any())).thenAnswer(inv -> inv.getArgument(0));

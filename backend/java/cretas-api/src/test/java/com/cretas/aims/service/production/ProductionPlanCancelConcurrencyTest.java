@@ -1,6 +1,7 @@
 package com.cretas.aims.service.production;
 
 import com.cretas.aims.entity.ProductionBatch;
+import com.cretas.aims.entity.MaterialConsumption;
 import com.cretas.aims.entity.ProductionPlan;
 import com.cretas.aims.entity.ProductionReport;
 import com.cretas.aims.entity.enums.ProductionBatchStatus;
@@ -46,6 +47,7 @@ import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.atMostOnce;
 import static org.mockito.Mockito.lenient;
@@ -134,8 +136,14 @@ class ProductionPlanCancelConcurrencyTest {
         p.setProductTypeId(PRODUCT_TYPE_ID);
         p.setPlanNumber(id);
         p.setPlannedQuantity(new BigDecimal("100"));
+        p.setPlannedUnit("kg");
         p.setStatus(status);
         return p;
+    }
+
+    private void stubPlan(ProductionPlan plan) {
+        lenient().when(productionPlanRepository.findById(plan.getId())).thenReturn(Optional.of(plan));
+        lenient().when(productionPlanRepository.findByIdForUpdate(plan.getId())).thenReturn(Optional.of(plan));
     }
 
     private ProductionBatch batch(Long id, String planId, ProductionBatchStatus status) {
@@ -168,7 +176,7 @@ class ProductionPlanCancelConcurrencyTest {
         // 本计划 PENDING (无批次场景下用 PENDING 直接取消路径); 但为验证级联范围,
         // 给本计划一个已建批次 (batch 10), 另一计划同产品有活跃批次 (batch 20).
         ProductionPlan target = plan(PLAN_ID, ProductionPlanStatus.PENDING);
-        when(productionPlanRepository.findById(PLAN_ID)).thenReturn(Optional.of(target));
+        stubPlan(target);
 
         ProductionBatch myBatch = batch(10L, PLAN_ID, ProductionBatchStatus.IN_PROGRESS);
         when(productionBatchRepository.findByFactoryIdAndProductionPlanId(FACTORY_ID, PLAN_ID))
@@ -180,9 +188,13 @@ class ProductionPlanCancelConcurrencyTest {
                 .thenReturn(new ArrayList<>(List.of(myTask)));
         // 另一批次 (batch 20) 的任务绝不应被查询/关闭 — 不 stub, 用 verify never 保证.
 
-        service.cancelProductionPlan(FACTORY_ID, PLAN_ID, "订单取消");
+        service.cancelProductionPlan(FACTORY_ID, PLAN_ID, "订单取消", 42L);
 
         assertEquals(ProductionPlanStatus.CANCELLED, target.getStatus());
+        assertEquals("订单取消", target.getCancelReason());
+        assertEquals(42L, target.getCancelledBy());
+        assertNotNull(target.getCancelledAt());
+        var firstCancelledAt = target.getCancelledAt();
         // 本批次任务被关 (CANCELLED)
         assertEquals(WorkProcessTask.Status.CANCELLED, myTask.getStatus());
         verify(workProcessTaskRepository, times(1))
@@ -190,13 +202,20 @@ class ProductionPlanCancelConcurrencyTest {
         // ⚠️ 另一批次 (20) 的任务从未被查询 → 不会被误关
         verify(workProcessTaskRepository, never())
                 .findByFactoryIdAndProductionBatchIdOrderByProcessOrderAsc(FACTORY_ID, 20L);
+
+        // Command idempotency: a repeated click cannot rewrite the immutable audit snapshot.
+        service.cancelProductionPlan(FACTORY_ID, PLAN_ID, "第二次原因", 99L);
+        assertEquals("订单取消", target.getCancelReason());
+        assertEquals(42L, target.getCancelledBy());
+        assertSame(firstCancelledAt, target.getCancelledAt());
+        verify(productionPlanRepository, times(1)).save(target);
     }
 
     @Test
     @DisplayName("R1: 终态任务 (COMPLETED/SKIPPED/CANCELLED) 不被重置")
     void cancel_doesNotTouchTerminalTasks() {
         ProductionPlan target = plan(PLAN_ID, ProductionPlanStatus.PENDING);
-        when(productionPlanRepository.findById(PLAN_ID)).thenReturn(Optional.of(target));
+        stubPlan(target);
         when(productionBatchRepository.findByFactoryIdAndProductionPlanId(FACTORY_ID, PLAN_ID))
                 .thenReturn(List.of(batch(10L, PLAN_ID, ProductionBatchStatus.IN_PROGRESS)));
 
@@ -214,10 +233,33 @@ class ProductionPlanCancelConcurrencyTest {
     // ============================ R2 ============================
 
     @Test
+    @DisplayName("R2: PENDING 计划只要已有正式物料消耗也拒绝直接取消, 状态值不能绕过生产数据守卫")
+    void cancel_pendingWithDirectConsumption_rejected() {
+        ProductionPlan target = plan(PLAN_ID, ProductionPlanStatus.PENDING);
+        stubPlan(target);
+        when(productionBatchRepository.findByFactoryIdAndProductionPlanId(FACTORY_ID, PLAN_ID))
+                .thenReturn(Collections.emptyList());
+        MaterialConsumption consumption = new MaterialConsumption();
+        consumption.setFactoryId(FACTORY_ID);
+        consumption.setProductionPlanId(PLAN_ID);
+        consumption.setQuantity(new BigDecimal("0.25"));
+        when(materialConsumptionRepository.findByProductionPlanId(PLAN_ID))
+                .thenReturn(List.of(consumption));
+
+        BusinessException ex = assertThrows(BusinessException.class,
+                () -> service.cancelProductionPlan(FACTORY_ID, PLAN_ID, "订单取消", 42L));
+
+        assertEquals(409, ex.getCode());
+        assertEquals("PLAN_HAS_PRODUCTION_DATA", ex.getErrorCode());
+        assertEquals(ProductionPlanStatus.PENDING, target.getStatus());
+        verify(productionPlanRepository, never()).save(target);
+    }
+
+    @Test
     @DisplayName("R2: IN_PROGRESS 且有 YIELD 报工 → 拒绝直接取消, 导向撤回审批 (4 位一体 message)")
     void cancel_inProgressWithYield_rejectedToApproval() {
         ProductionPlan target = plan(PLAN_ID, ProductionPlanStatus.IN_PROGRESS);
-        when(productionPlanRepository.findById(PLAN_ID)).thenReturn(Optional.of(target));
+        stubPlan(target);
 
         ProductionBatch myBatch = batch(10L, PLAN_ID, ProductionBatchStatus.IN_PROGRESS);
         when(productionBatchRepository.findByFactoryIdAndProductionPlanId(FACTORY_ID, PLAN_ID))
@@ -248,7 +290,7 @@ class ProductionPlanCancelConcurrencyTest {
     @DisplayName("R2: IN_PROGRESS 但无报工无 WIP (空批次) → 安全直接取消, 批次置 CANCELLED + 复位任务")
     void cancel_inProgressEmptyBatch_safeDirectCancel() {
         ProductionPlan target = plan(PLAN_ID, ProductionPlanStatus.IN_PROGRESS);
-        when(productionPlanRepository.findById(PLAN_ID)).thenReturn(Optional.of(target));
+        stubPlan(target);
 
         ProductionBatch myBatch = batch(10L, PLAN_ID, ProductionBatchStatus.IN_PROGRESS);
         when(productionBatchRepository.findByFactoryIdAndProductionPlanId(FACTORY_ID, PLAN_ID))
@@ -279,7 +321,7 @@ class ProductionPlanCancelConcurrencyTest {
         ProductionPlan target = plan(PLAN_ID, ProductionPlanStatus.IN_PROGRESS); // plannedQuantity=100
         target.setPlanSourceType("SECONDARY");
         target.setSecondarySourceWipId(555L);
-        when(productionPlanRepository.findById(PLAN_ID)).thenReturn(Optional.of(target));
+        stubPlan(target);
         // 无批次 / 无 YIELD 报工 (只开工扣了 WIP)
         when(productionBatchRepository.findByFactoryIdAndProductionPlanId(FACTORY_ID, PLAN_ID))
                 .thenReturn(Collections.emptyList());
@@ -299,7 +341,7 @@ class ProductionPlanCancelConcurrencyTest {
         ProductionPlan target = plan(PLAN_ID, ProductionPlanStatus.IN_PROGRESS);
         target.setPlanSourceType("SECONDARY");
         target.setSecondarySourceWipId(555L);
-        when(productionPlanRepository.findById(PLAN_ID)).thenReturn(Optional.of(target));
+        stubPlan(target);
         when(productionBatchRepository.findByFactoryIdAndProductionPlanId(FACTORY_ID, PLAN_ID))
                 .thenReturn(List.of(batch(10L, PLAN_ID, ProductionBatchStatus.IN_PROGRESS)));
         ProductionReport yield = new ProductionReport();
@@ -323,7 +365,7 @@ class ProductionPlanCancelConcurrencyTest {
         // 一律抛 409 USE_BATCH_REVERSAL 引导改走批次级整单撤回 (ReportReversalService)。
         // IN_PROGRESS+数据的取消已由 cancelProductionPlan 导向报工撤回流。
         ProductionPlan target = plan(PLAN_ID, ProductionPlanStatus.IN_PROGRESS);
-        when(productionPlanRepository.findById(PLAN_ID)).thenReturn(Optional.of(target));
+        stubPlan(target);
 
         BusinessException ex = assertThrows(BusinessException.class,
                 () -> service.requestCancelWithApproval(FACTORY_ID, PLAN_ID, "撤回", 7L));
@@ -338,7 +380,7 @@ class ProductionPlanCancelConcurrencyTest {
     @DisplayName("R2: requestCancelWithApproval 对 IN_PROGRESS 无数据计划拒绝 (无东西可撤回)")
     void requestCancel_inProgressNoData_rejected() {
         ProductionPlan target = plan(PLAN_ID, ProductionPlanStatus.IN_PROGRESS);
-        when(productionPlanRepository.findById(PLAN_ID)).thenReturn(Optional.of(target));
+        stubPlan(target);
         when(productionBatchRepository.findByFactoryIdAndProductionPlanId(FACTORY_ID, PLAN_ID))
                 .thenReturn(Collections.emptyList());
 

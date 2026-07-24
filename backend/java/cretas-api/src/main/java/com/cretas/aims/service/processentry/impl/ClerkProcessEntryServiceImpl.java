@@ -274,6 +274,8 @@ public class ClerkProcessEntryServiceImpl implements ClerkProcessEntryService {
         // 🔒 honest-null: 任一消耗源 unitPrice==null (成本未知, 非 0) → 批次 ROLL-UP 成本不可知。
         //   区分 null(未知) vs 0(真免费): 仅 null 触发诚实置 null; genuinely-free 源 (unitPrice=0) 不触发。
         boolean anyUncosted = false;
+        boolean actualSeasoningCosted = edges.stream()
+                .anyMatch(edge -> "SEASONING".equals(edge.getSourceType()));
 
         // 2. 写每条已解析上游消耗边 (RAW + SEMI_FINISHED); 成本 = feedKg × 上游单价.
         //    ⛔ 不访问任何 in-memory map —— edges 是唯一上游输入.
@@ -306,7 +308,8 @@ public class ClerkProcessEntryServiceImpl implements ClerkProcessEntryService {
             // 虚拟占位符会误入 raw 成本桶导致分桶错乱。
             // 同道产出/投入只能由一条报工承载 (见 writeLaborReport): 调料报工已写 output 时, 人工报工不再写。
             boolean stepOutputWrittenBySeasoning = false;
-            if (isSeasoningStep(ctx.getFactoryId(), ctx.getProductTypeId(), st)) {
+            if (!actualSeasoningCosted
+                    && isSeasoningStep(ctx.getFactoryId(), ctx.getProductTypeId(), st)) {
                 BigDecimal seasoningCost = computeSeasoningCost(ctx.getFactoryId(), ctx.getProductTypeId(), st, warnings);
                 if (seasoningCost.signum() > 0) {
                     writeSeasoningReport(ctx.getFactoryId(), batch.getId(), st, seasoningCost, ctx.getUserId());
@@ -314,7 +317,8 @@ public class ClerkProcessEntryServiceImpl implements ClerkProcessEntryService {
                     batchMaterialCost = batchMaterialCost.add(seasoningCost);
                     batchTotalCost = batchTotalCost.add(seasoningCost);
                 }
-            } else if (st.getUpstreamSources() != null && !st.getUpstreamSources().isEmpty()) {
+            } else if (!actualSeasoningCosted
+                    && st.getUpstreamSources() != null && !st.getUpstreamSources().isEmpty()) {
                 // SP-D Fix 3: 混锅/熟制工序未被识别为调料步骤时给出警告
                 // 防止 processCategory=SEASONING 未配置或 potCount 缺失导致调料成本静默丢失 (计入¥0).
                 // 2026-06-29 修: 只对"看起来像熟制/调味"的工序(名含 熟/卤/煮/腌/注射/入味/调味)警告,
@@ -397,6 +401,8 @@ public class ClerkProcessEntryServiceImpl implements ClerkProcessEntryService {
         BigDecimal lastYieldOutputQty = BigDecimal.ZERO;
         // 🔒 honest-null: 镜像 materializeBatch — 任一消耗源 unitPrice==null → ROLL-UP 成本诚实 null。
         boolean anyUncosted = false;
+        boolean actualSeasoningCosted = edges.stream()
+                .anyMatch(edge -> "SEASONING".equals(edge.getSourceType()));
 
         // 1. 重写每条已解析上游消耗边 (RAW + SEMI_FINISHED); 成本 = feedKg × 上游单价.
         //    与 materializeBatch 同算式 (setScale(2,HALF_UP)), 写入 existingBatchId.
@@ -422,7 +428,8 @@ public class ClerkProcessEntryServiceImpl implements ClerkProcessEntryService {
         for (StepEntry st : steps) {
             // 同道产出/投入只能由一条报工承载 (镜像 materializeBatch): 调料报工已写 output 时人工报工不再写。
             boolean stepOutputWrittenBySeasoning = false;
-            if (isSeasoningStep(ctx.getFactoryId(), ctx.getProductTypeId(), st)) {
+            if (!actualSeasoningCosted
+                    && isSeasoningStep(ctx.getFactoryId(), ctx.getProductTypeId(), st)) {
                 BigDecimal seasoningCost = computeSeasoningCost(ctx.getFactoryId(), ctx.getProductTypeId(), st, warnings);
                 if (seasoningCost.signum() > 0) {
                     writeSeasoningReport(ctx.getFactoryId(), existingBatchId, st, seasoningCost, ctx.getUserId());
@@ -430,7 +437,8 @@ public class ClerkProcessEntryServiceImpl implements ClerkProcessEntryService {
                     batchMaterialCost = batchMaterialCost.add(seasoningCost);
                     batchTotalCost = batchTotalCost.add(seasoningCost);
                 }
-            } else if (st.getUpstreamSources() != null && !st.getUpstreamSources().isEmpty()) {
+            } else if (!actualSeasoningCosted
+                    && st.getUpstreamSources() != null && !st.getUpstreamSources().isEmpty()) {
                 // 2026-06-29 修(审计补): rematerializeInPlace 路径 — 首版 fix 漏改的孪生 (审计抓到)。
                 //   同 materializeBatch: 只对熟制/调味道警告, 否则 re-save 时每个有上游的中间道误报。
                 String processName = st.getProcessName() != null ? st.getProcessName() : ("工序" + st.getProcessOrder());

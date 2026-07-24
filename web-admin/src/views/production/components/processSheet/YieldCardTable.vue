@@ -31,6 +31,25 @@ const missingCostCount = computed(() =>
   rows.value.filter((row) => row.rowTotalCost == null || row.unitPrice == null).length,
 );
 
+const processFilters = computed(() => Array.from(new Set(rows.value
+  .map((row) => row.processName || '未命名工序')))
+  .sort((a, b) => a.localeCompare(b, 'zh-CN'))
+  .map((value) => ({ text: value, value })));
+
+const statusFilters = [
+  { text: '可用', value: 'ACTIVE' },
+  { text: '成品', value: 'COMPLETED' },
+  { text: '耗尽', value: 'DEPLETED' },
+];
+
+function filterProcess(value: string, row: ProcessSheetInventoryItem): boolean {
+  return (row.processName || '未命名工序') === value;
+}
+
+function filterStatus(value: string, row: ProcessSheetInventoryItem): boolean {
+  return row.status === value;
+}
+
 function fmtRate(v: number | null | undefined): string {
   if (v == null) return '—';
   return v.toFixed(2) + '%';
@@ -156,84 +175,102 @@ defineExpose({ refresh });
     v-loading="loading"
     size="small"
     border
+    stripe
+    table-layout="fixed"
+    class="yield-card-table"
     empty-text="暂无半成品库存记录"
     style="width: 100%"
     :row-class-name="() => ''"
   >
-    <el-table-column prop="processOrder" label="序" width="48" align="center" />
-    <el-table-column label="流程日期" width="100" align="center">
+    <el-table-column prop="processOrder" label="序" width="58" align="center" sortable />
+    <el-table-column prop="processDate" label="流程日期" width="118" align="center" sortable>
       <template #default="{ row }">
         {{ fmtDate(row.processDate) }}
       </template>
     </el-table-column>
-    <el-table-column prop="processName" label="工序" min-width="90" show-overflow-tooltip>
+    <el-table-column
+      prop="processName"
+      label="工序"
+      min-width="180"
+      show-overflow-tooltip
+      sortable
+      :filters="processFilters"
+      :filter-method="filterProcess"
+    >
       <template #default="{ row }">
         {{ row.processName || '—' }}
       </template>
     </el-table-column>
-    <el-table-column prop="batchNumber" label="批次号" min-width="150" show-overflow-tooltip />
-    <el-table-column label="来源批次" min-width="140" show-overflow-tooltip>
+    <el-table-column prop="batchNumber" label="批次号" min-width="230" show-overflow-tooltip sortable />
+    <el-table-column prop="sourceBatchNumber" label="来源批次" min-width="210" show-overflow-tooltip sortable>
       <template #default="{ row }">
         {{ row.sourceBatchNumber || '—' }}
       </template>
     </el-table-column>
-    <el-table-column label="领用(kg)" width="92" align="right">
+    <el-table-column prop="feedQuantity" label="领用(kg)" width="110" align="right" sortable>
       <template #default="{ row }">
         {{ fmtQty(row.feedQuantity) }}
       </template>
     </el-table-column>
-    <el-table-column label="领用占比" width="92" align="right">
+    <el-table-column prop="sourceConsumedRatio" label="领用占比" width="110" align="right" sortable>
       <template #default="{ row }">
         {{ fmtRate(row.sourceConsumedRatio) }}
       </template>
     </el-table-column>
-    <el-table-column label="继承原料(kg)" width="116" align="right">
+    <el-table-column prop="inheritedRawEquivalentQuantity" label="继承原料(kg)" width="132" align="right" sortable>
       <template #default="{ row }">
         {{ fmtQty(row.inheritedRawEquivalentQuantity, 2) }}
       </template>
     </el-table-column>
-    <el-table-column label="产出" width="80" align="right">
+    <el-table-column prop="produced" label="产出" width="100" align="right" sortable>
       <template #default="{ row }">
         {{ reportingQuantity(row, 'produced') }}
       </template>
     </el-table-column>
-    <el-table-column label="已用" width="80" align="right">
+    <el-table-column prop="used" label="已用" width="100" align="right" sortable>
       <template #default="{ row }">
         {{ reportingQuantity(row, 'used') }}
       </template>
     </el-table-column>
-    <el-table-column label="剩余" width="80" align="right">
+    <el-table-column prop="remaining" label="剩余" width="100" align="right" sortable>
       <template #default="{ row }">
         <span :style="{ color: (row.remaining ?? 0) <= 0 ? '#f56c6c' : '#67c23a' }">
           {{ reportingQuantity(row, 'remaining') }}
         </span>
       </template>
     </el-table-column>
-    <el-table-column label="分摊成本" width="100" align="right">
+    <el-table-column prop="rowTotalCost" label="分摊成本" width="116" align="right" sortable>
       <template #default="{ row }">
         {{ fmtMoney(row.rowTotalCost) }}
       </template>
     </el-table-column>
-    <el-table-column label="单价(¥)" width="86" align="right">
+    <el-table-column prop="unitPrice" label="单价(¥)" width="105" align="right" sortable>
       <template #default="{ row }">
         {{ fmtPrice(reportingUnitPrice(row)) }}
       </template>
     </el-table-column>
-    <el-table-column label="对上工序出成" width="110" align="right">
+    <el-table-column prop="stepYieldRate" label="对上工序出成" width="132" align="right" sortable>
       <template #default="{ row }">
         <span :style="{ color: rateColor(row.stepYieldRate), fontWeight: 'bold' }">
           {{ fmtRate(row.stepYieldRate) }}
         </span>
       </template>
     </el-table-column>
-    <el-table-column label="对原料累计" width="100" align="right">
+    <el-table-column prop="cumulativeYieldRate" label="对原料累计" width="122" align="right" sortable>
       <template #default="{ row }">
         <span :style="{ color: rateColor(row.cumulativeYieldRate) }">
           {{ fmtRate(row.cumulativeYieldRate) }}
         </span>
       </template>
     </el-table-column>
-    <el-table-column prop="status" label="状态" width="72" align="center">
+    <el-table-column
+      prop="status"
+      label="状态"
+      width="100"
+      align="center"
+      :filters="statusFilters"
+      :filter-method="filterStatus"
+    >
       <template #default="{ row }">
         <el-tag :type="row.status === 'ACTIVE' ? 'success' : (row.status === 'COMPLETED' ? 'primary' : 'info')" size="small">
           {{ row.status === 'ACTIVE' ? '可用' : (row.status === 'COMPLETED' ? '成品' : '耗尽') }}
@@ -259,6 +296,35 @@ defineExpose({ refresh });
   color: var(--el-text-color-secondary, #909399);
   font-size: 12px;
   text-align: right;
+}
+
+.yield-card-table {
+  --el-table-border-color: #dce3ec;
+  --el-table-header-bg-color: #f3f6fa;
+  --el-table-header-text-color: #303846;
+
+  :deep(.el-table__header th.el-table__cell) {
+    height: 42px;
+    padding: 0;
+    font-weight: 650;
+    border-right-color: #d4dce7;
+  }
+
+  :deep(.el-table__body td.el-table__cell) {
+    height: 44px;
+    padding: 0;
+    border-right-color: #e0e6ee;
+  }
+
+  :deep(.el-table__cell .cell) {
+    padding: 0 10px;
+    line-height: 18px;
+  }
+
+  :deep(.el-table__column-filter-trigger) {
+    margin-left: 5px;
+    color: #697586;
+  }
 }
 
 .yield-card-error {
