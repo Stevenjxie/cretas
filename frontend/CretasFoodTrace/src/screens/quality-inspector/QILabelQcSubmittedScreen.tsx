@@ -43,13 +43,18 @@ export default function QILabelQcSubmittedScreen() {
   };
 
   useEffect(() => {
-    void load();
+    const initialTimer = setTimeout(() => {
+      void load();
+    }, 0);
     const timer = setInterval(() => {
       if (!detail || ['QUEUED', 'ANALYZING'].includes(detail.task.status)) {
         void load();
       }
     }, 5000);
-    return () => clearInterval(timer);
+    return () => {
+      clearTimeout(initialTimer);
+      clearInterval(timer);
+    };
   }, [factoryId, route.params.taskId, detail?.task.status]);
 
   const status = detail?.task.status ?? 'QUEUED';
@@ -68,6 +73,7 @@ export default function QILabelQcSubmittedScreen() {
     <ScrollView
       style={styles.screen}
       contentContainerStyle={[styles.content, { paddingBottom: insets.bottom + 24 }]}
+      testID="qi-label-qc-submitted-screen"
     >
       <View style={[styles.statusIcon, { backgroundColor: `${copy.color}1A` }]}>
         {['QUEUED', 'ANALYZING'].includes(status) ? (
@@ -119,7 +125,13 @@ export default function QILabelQcSubmittedScreen() {
       {refreshError && (
         <View style={styles.errorCard}>
           <Text style={styles.errorText}>{refreshError}</Text>
-          <Button mode="text" onPress={load}>重新刷新</Button>
+          <Button
+            mode="text"
+            onPress={load}
+            testID="qi-label-qc-submitted-refresh-button"
+          >
+            重新刷新
+          </Button>
         </View>
       )}
 
@@ -129,6 +141,7 @@ export default function QILabelQcSubmittedScreen() {
         contentStyle={styles.buttonContent}
         labelStyle={styles.buttonLabel}
         onPress={() => navigation.replace('QILabelQcCreate')}
+        testID="qi-label-qc-submitted-new-task-button"
       >
         再拍一批
       </Button>
@@ -138,6 +151,7 @@ export default function QILabelQcSubmittedScreen() {
         contentStyle={styles.buttonContent}
         style={styles.secondaryButton}
         onPress={() => navigation.navigate('QIHomeTab')}
+        testID="qi-label-qc-submitted-home-button"
       >
         返回质检首页
       </Button>
@@ -147,7 +161,13 @@ export default function QILabelQcSubmittedScreen() {
 
 const styles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: QI_COLORS.background },
-  content: { padding: 20, alignItems: 'stretch' },
+  content: {
+    width: '100%',
+    maxWidth: 620,
+    alignSelf: 'center',
+    padding: 20,
+    alignItems: 'stretch',
+  },
   statusIcon: {
     width: 86,
     height: 86,

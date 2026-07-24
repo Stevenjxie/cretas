@@ -3,6 +3,7 @@ import {
   Alert,
   Image,
   Modal,
+  Platform,
   ScrollView,
   StyleSheet,
   Text,
@@ -35,6 +36,7 @@ import { QI_COLORS, QualityInspectorStackParamList } from '../../types/qualityIn
 
 type NavigationProp = NativeStackNavigationProp<QualityInspectorStackParamList>;
 type ProductWithCode = ProductType & { code?: string };
+type ScrollViewRef = React.ElementRef<typeof ScrollView>;
 
 const MAX_PHOTOS = 6;
 
@@ -75,9 +77,8 @@ export default function QILabelQcCreateScreen() {
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [draftTaskId, setDraftTaskId] = useState<string | null>(null);
 
-  const idempotencyKey = useRef(
-    `label-qc-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`,
-  );
+  const idempotencyKey = useRef<string | null>(null);
+  const scrollRef = useRef<ScrollViewRef>(null);
   const uploadedAttachmentIds = useRef<Record<number, string>>({});
 
   const loadProducts = async () => {
@@ -99,8 +100,19 @@ export default function QILabelQcCreateScreen() {
   };
 
   useEffect(() => {
-    void loadProducts();
+    const timer = setTimeout(() => {
+      void loadProducts();
+    }, 0);
+    return () => clearTimeout(timer);
   }, [factoryId]);
+
+  useEffect(() => {
+    if (!submitError) return undefined;
+    const timer = setTimeout(() => {
+      scrollRef.current?.scrollToEnd({ animated: true });
+    }, 100);
+    return () => clearTimeout(timer);
+  }, [submitError]);
 
   const filteredProducts = useMemo(() => {
     const keyword = productKeyword.trim().toLowerCase();
@@ -115,25 +127,47 @@ export default function QILabelQcCreateScreen() {
     ? ((selectedProduct as ProductWithCode).code ?? selectedProduct.productCode ?? '')
     : '';
   const formLocked = Boolean(draftTaskId);
+  const isReadyToSubmit = Boolean(
+    selectedProduct && batchNumber.trim() && photos.length > 0,
+  );
+  const readinessHint = !selectedProduct
+    ? '先选择 SKU'
+    : !batchNumber.trim()
+      ? '再填写批次号'
+      : photos.length === 0
+        ? `再${Platform.OS === 'web' ? '选择' : '拍摄'}至少 1 张照片`
+        : null;
 
   const takePhoto = async () => {
     if (photos.length >= MAX_PHOTOS) {
       Alert.alert('照片已满', `每个拍检任务最多 ${MAX_PHOTOS} 张照片`);
       return;
     }
-    const permission = await ImagePicker.requestCameraPermissionsAsync();
-    if (!permission.granted) {
-      Alert.alert('需要相机权限', '请在系统设置中允许相机权限后重试');
-      return;
+    if (Platform.OS !== 'web') {
+      const permission = await ImagePicker.requestCameraPermissionsAsync();
+      if (!permission.granted) {
+        Alert.alert('需要相机权限', '请在系统设置中允许相机权限后重试');
+        return;
+      }
     }
-    const result = await ImagePicker.launchCameraAsync({
-      mediaTypes: ImagePicker.MediaTypeOptions.Images,
-      quality: 0.85,
-      exif: false,
-    });
-    const captured = result.canceled ? undefined : result.assets[0];
-    if (captured) {
-      setPhotos((current) => [...current, captured]);
+    const result = Platform.OS === 'web'
+      ? await ImagePicker.launchImageLibraryAsync({
+          mediaTypes: ImagePicker.MediaTypeOptions.Images,
+          allowsMultipleSelection: true,
+          selectionLimit: MAX_PHOTOS - photos.length,
+          quality: 0.85,
+          exif: false,
+        })
+      : await ImagePicker.launchCameraAsync({
+          mediaTypes: ImagePicker.MediaTypeOptions.Images,
+          quality: 0.85,
+          exif: false,
+        });
+    const captured = result.canceled
+      ? []
+      : result.assets.slice(0, MAX_PHOTOS - photos.length);
+    if (captured.length > 0) {
+      setPhotos((current) => [...current, ...captured]);
       setSubmitError(null);
     }
   };
@@ -176,6 +210,10 @@ export default function QILabelQcCreateScreen() {
     try {
       let taskId = draftTaskId;
       if (!taskId) {
+        if (!idempotencyKey.current) {
+          idempotencyKey.current =
+            `label-qc-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+        }
         setProgressText('正在创建拍检任务…');
         const created = await labelQcApi.createTask(
           {
@@ -258,10 +296,15 @@ export default function QILabelQcCreateScreen() {
   };
 
   return (
-    <View style={styles.screen}>
+    <View style={styles.screen} testID="qi-label-qc-create-screen">
       <ScrollView
-        contentContainerStyle={[styles.content, { paddingBottom: insets.bottom + 108 }]}
+        ref={scrollRef}
+        contentContainerStyle={[
+          styles.content,
+          { paddingBottom: insets.bottom + (submitError ? 220 : 108) },
+        ]}
         keyboardShouldPersistTaps="handled"
+        testID="qi-label-qc-create-scroll"
       >
         <View style={styles.notice}>
           <Ionicons name="shield-checkmark-outline" size={22} color={QI_COLORS.secondary} />
@@ -280,6 +323,7 @@ export default function QILabelQcCreateScreen() {
           borderless={false}
           accessibilityRole="button"
           accessibilityLabel="选择 SKU"
+          testID="qi-label-qc-create-sku-selector"
         >
           <View style={styles.selectorContent}>
             <View style={styles.selectorText}>
@@ -292,6 +336,7 @@ export default function QILabelQcCreateScreen() {
         </TouchableRipple>
 
         <TextInput
+          testID="qi-label-qc-create-batch-input"
           mode="outlined"
           label="批次号 *"
           value={batchNumber}
@@ -315,6 +360,7 @@ export default function QILabelQcCreateScreen() {
           borderless={false}
           accessibilityRole="button"
           accessibilityLabel="选择生产日期"
+          testID="qi-label-qc-create-date-selector"
         >
           <View style={styles.selectorContent}>
             <Text style={styles.selectorValue}>{formatDate(productionDate)}</Text>
@@ -364,6 +410,7 @@ export default function QILabelQcCreateScreen() {
                 borderless
                 accessibilityRole="button"
                 accessibilityLabel={`删除第 ${index + 1} 张照片`}
+                testID={`qi-label-qc-create-photo-${index + 1}-remove-button`}
               >
                 <Ionicons name="close" size={20} color="#fff" />
               </TouchableRipple>
@@ -375,11 +422,18 @@ export default function QILabelQcCreateScreen() {
               onPress={takePhoto}
               borderless={false}
               accessibilityRole="button"
-              accessibilityLabel="拍摄照片"
+              accessibilityLabel={Platform.OS === 'web' ? '选择照片' : '拍摄照片'}
+              testID="qi-label-qc-create-add-photo-button"
             >
               <View style={styles.addPhotoContent}>
-                <Ionicons name="camera" size={30} color={QI_COLORS.primary} />
-                <Text style={styles.addPhotoText}>拍照</Text>
+                <Ionicons
+                  name={Platform.OS === 'web' ? 'images-outline' : 'camera'}
+                  size={30}
+                  color={QI_COLORS.primary}
+                />
+                <Text style={styles.addPhotoText}>
+                  {Platform.OS === 'web' ? '选择照片' : '拍照'}
+                </Text>
               </View>
             </TouchableRipple>
           )}
@@ -405,7 +459,7 @@ export default function QILabelQcCreateScreen() {
         )}
 
         {submitError && (
-          <View style={styles.errorCard}>
+          <View style={styles.errorCard} testID="qi-label-qc-create-error-card">
             <Ionicons name="alert-circle-outline" size={20} color={QI_COLORS.danger} />
             <View style={styles.errorTextContainer}>
               <Text style={styles.errorTitle}>尚未提交成功</Text>
@@ -417,12 +471,17 @@ export default function QILabelQcCreateScreen() {
       </ScrollView>
 
       <View style={[styles.bottomAction, { paddingBottom: insets.bottom + 12 }]}>
+        {readinessHint && !formLocked && !submitting && (
+          <Text style={styles.bottomHint}>{readinessHint}</Text>
+        )}
         <Button
+          testID="qi-label-qc-create-submit-button"
           mode="contained"
           onPress={submit}
           loading={submitting}
-          disabled={submitting}
+          disabled={submitting || (!formLocked && !isReadyToSubmit)}
           buttonColor={QI_COLORS.primary}
+          style={styles.primaryButton}
           contentStyle={styles.primaryButtonContent}
           labelStyle={styles.primaryButtonLabel}
           accessibilityLabel={draftTaskId ? '重试提交拍检' : '提交拍检'}
@@ -436,6 +495,7 @@ export default function QILabelQcCreateScreen() {
         animationType="slide"
         presentationStyle="pageSheet"
         onRequestClose={() => setProductModalVisible(false)}
+        testID="qi-label-qc-create-sku-modal"
       >
         <View style={[styles.modalScreen, { paddingTop: insets.top + 8 }]}>
           <View style={styles.modalHeader}>
@@ -446,6 +506,7 @@ export default function QILabelQcCreateScreen() {
               borderless
               accessibilityRole="button"
               accessibilityLabel="关闭 SKU 选择"
+              testID="qi-label-qc-create-sku-close-button"
             >
               <Ionicons name="close" size={24} color={QI_COLORS.text} />
             </TouchableRipple>
@@ -455,6 +516,7 @@ export default function QILabelQcCreateScreen() {
             value={productKeyword}
             onChangeText={setProductKeyword}
             style={styles.searchbar}
+            testID="qi-label-qc-create-sku-search-input"
           />
           {productsLoading ? (
             <View style={styles.modalState}>
@@ -465,7 +527,13 @@ export default function QILabelQcCreateScreen() {
             <View style={styles.modalState}>
               <Ionicons name="cloud-offline-outline" size={42} color={QI_COLORS.disabled} />
               <Text style={styles.modalStateText}>{productsError}</Text>
-              <Button mode="outlined" onPress={loadProducts}>重新加载</Button>
+              <Button
+                mode="outlined"
+                onPress={loadProducts}
+                testID="qi-label-qc-create-sku-retry-button"
+              >
+                重新加载
+              </Button>
             </View>
           ) : filteredProducts.length === 0 ? (
             <View style={styles.modalState}>
@@ -473,7 +541,10 @@ export default function QILabelQcCreateScreen() {
               <Text style={styles.modalStateText}>没有匹配的 SKU，请更换关键词</Text>
             </View>
           ) : (
-            <ScrollView keyboardShouldPersistTaps="handled">
+            <ScrollView
+              keyboardShouldPersistTaps="handled"
+              testID="qi-label-qc-create-sku-results-scroll"
+            >
               {filteredProducts.map((product) => {
                 const code = (product as ProductWithCode).code ?? product.productCode ?? '';
                 return (
@@ -487,6 +558,9 @@ export default function QILabelQcCreateScreen() {
                       setSubmitError(null);
                     }}
                     borderless={false}
+                    accessibilityRole="button"
+                    accessibilityLabel={`选择 ${code || 'SKU'} ${product.name}`}
+                    testID={`qi-label-qc-create-sku-${product.id}-row`}
                   >
                     <View style={styles.productRowContent}>
                       <View style={styles.productCodeBadge}>
@@ -515,7 +589,7 @@ export default function QILabelQcCreateScreen() {
 
 const styles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: QI_COLORS.background },
-  content: { padding: 16 },
+  content: { width: '100%', maxWidth: 620, alignSelf: 'center', padding: 16 },
   notice: {
     flexDirection: 'row',
     backgroundColor: '#EAF3FF',
@@ -659,7 +733,17 @@ const styles = StyleSheet.create({
     backgroundColor: QI_COLORS.card,
     borderTopWidth: StyleSheet.hairlineWidth,
     borderTopColor: QI_COLORS.border,
+    alignItems: 'center',
   },
+  bottomHint: {
+    width: '100%',
+    maxWidth: 620,
+    marginBottom: 7,
+    fontSize: 12,
+    color: QI_COLORS.textSecondary,
+    textAlign: 'center',
+  },
+  primaryButton: { width: '100%', maxWidth: 620 },
   primaryButtonContent: { minHeight: 50 },
   primaryButtonLabel: { fontSize: 16, fontWeight: '700' },
   modalScreen: { flex: 1, backgroundColor: QI_COLORS.background },

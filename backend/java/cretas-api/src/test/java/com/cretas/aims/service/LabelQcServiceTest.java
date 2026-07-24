@@ -1,9 +1,11 @@
 package com.cretas.aims.service;
 
 import com.cretas.aims.dto.labelqc.LabelQcDtos.AnnotationReviewRequest;
+import com.cretas.aims.dto.labelqc.LabelQcDtos.AddPhotoRequest;
 import com.cretas.aims.dto.labelqc.LabelQcDtos.BoundingBox;
 import com.cretas.aims.dto.labelqc.LabelQcDtos.PhotoReviewRequest;
 import com.cretas.aims.dto.labelqc.LabelQcDtos.ReviewTaskRequest;
+import com.cretas.aims.entity.Attachment;
 import com.cretas.aims.entity.LabelQcAnnotation;
 import com.cretas.aims.entity.LabelQcPhoto;
 import com.cretas.aims.entity.LabelQcTask;
@@ -17,6 +19,7 @@ import com.cretas.aims.repository.LabelQcPhotoRepository;
 import com.cretas.aims.repository.LabelQcTaskRepository;
 import com.cretas.aims.repository.ProductTypeRepository;
 import com.cretas.aims.service.attachment.AttachmentService;
+import com.cretas.aims.event.LabelQcAnalysisRequestedEvent;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -106,9 +109,9 @@ class LabelQcServiceTest {
 
         when(taskRepository.findByFactoryIdAndId(FACTORY_ID, TASK_ID))
                 .thenReturn(Optional.of(task));
-        when(photoRepository.findByFactoryIdAndTaskIdOrderByOrderIndexAsc(FACTORY_ID, TASK_ID))
+        lenient().when(photoRepository.findByFactoryIdAndTaskIdOrderByOrderIndexAsc(FACTORY_ID, TASK_ID))
                 .thenReturn(List.of(photo));
-        when(annotationRepository.findByFactoryIdAndTaskIdOrderByCreatedAtAsc(FACTORY_ID, TASK_ID))
+        lenient().when(annotationRepository.findByFactoryIdAndTaskIdOrderByCreatedAtAsc(FACTORY_ID, TASK_ID))
                 .thenReturn(List.of(aiCandidate));
         lenient().when(attachmentService.generateDownloadUrl(FACTORY_ID, "attachment-1"))
                 .thenReturn("https://example.invalid/signed");
@@ -169,5 +172,57 @@ class LabelQcServiceTest {
         assertEquals("LABEL_QC_ANNOTATION_DUPLICATE", error.getErrorCode());
         verify(annotationRepository, never()).saveAll(any());
         verify(photoRepository, never()).saveAll(any());
+    }
+
+    @Test
+    void submitQueuesTaskAndPhotosBeforePublishingAnalysisRequest() {
+        task.setStatus(LabelQcTaskStatus.UPLOADING);
+        photo.setStatus(LabelQcPhotoStatus.UPLOADED);
+
+        service.submit(FACTORY_ID, TASK_ID);
+
+        assertEquals(LabelQcTaskStatus.QUEUED, task.getStatus());
+        assertEquals(LabelQcPhotoStatus.QUEUED, photo.getStatus());
+        verify(photoRepository).saveAll(List.of(photo));
+        verify(taskRepository).save(task);
+
+        ArgumentCaptor<LabelQcAnalysisRequestedEvent> event =
+                ArgumentCaptor.forClass(LabelQcAnalysisRequestedEvent.class);
+        verify(eventPublisher).publishEvent(event.capture());
+        assertEquals(TASK_ID, event.getValue().taskId());
+    }
+
+    @Test
+    void addPhotoRejectsAttachmentBoundToAnotherTask() {
+        task.setStatus(LabelQcTaskStatus.DRAFT);
+        task.setPhotoCount(0);
+        Attachment attachment = Attachment.builder()
+                .id("attachment-2")
+                .factoryId(FACTORY_ID)
+                .entityType(Attachment.EntityType.QUALITY_CHECK)
+                .entityId("another-task")
+                .fileName("qc.jpg")
+                .fileUrl("oss://bucket/qc.jpg")
+                .fileSize(1024L)
+                .fileType("image/jpeg")
+                .uploadedBy(7L)
+                .build();
+        when(photoRepository.findByFactoryIdAndTaskIdAndAttachmentId(
+                FACTORY_ID, TASK_ID, attachment.getId())).thenReturn(Optional.empty());
+        when(photoRepository.existsByFactoryIdAndTaskIdAndOrderIndex(
+                FACTORY_ID, TASK_ID, 0)).thenReturn(false);
+        when(attachmentService.getById(FACTORY_ID, attachment.getId()))
+                .thenReturn(attachment);
+
+        BusinessException error = assertThrows(
+                BusinessException.class,
+                () -> service.addPhoto(
+                        FACTORY_ID,
+                        TASK_ID,
+                        new AddPhotoRequest(attachment.getId(), 0, 1200, 1800)));
+
+        assertEquals("LABEL_QC_ATTACHMENT_MISMATCH", error.getErrorCode());
+        verify(photoRepository, never()).save(any(LabelQcPhoto.class));
+        verify(taskRepository, never()).save(any(LabelQcTask.class));
     }
 }

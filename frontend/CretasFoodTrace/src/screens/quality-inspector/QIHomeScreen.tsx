@@ -255,6 +255,7 @@ export default function QIHomeScreen() {
             borderless
             accessibilityRole="button"
             accessibilityLabel="包装标签拍检"
+            testID="qi-home-label-qc-action"
           >
             <View style={styles.actionTouchableContent}>
               <View style={[styles.actionIcon, { backgroundColor: '#FFF1EE' }]}>
