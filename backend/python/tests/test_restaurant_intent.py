@@ -194,6 +194,7 @@ async def test_t1_hit_becomes_hint_and_llm_remains_semantic_authority():
 @pytest.mark.asyncio
 @pytest.mark.parametrize(("query", "wrong_intent", "expected_dish"), [
     ("哪个菜卖得好", "RESTAURANT_OPS_SALES_SUMMARY", None),
+    ("本月哪个菜卖得最好？", "RESTAURANT_OPS_SALES_SUMMARY", None),
     ("近30天畅销菜品", "RESTAURANT_OPS_REQUISITION_TREND", None),
     ("本月米饭的销量是多少", "RESTAURANT_OPS_REQUISITION_TREND", "米饭"),
 ])
@@ -1007,6 +1008,27 @@ def test_sheet_dish_sales_question_never_plans_store_sales_summary():
     assert spec.dimensions == ("dish",)
     assert spec.requested_metrics == ("sales_volume",)
     assert spec.planned_intents == ("RESTAURANT_OPS_GROSS_MARGIN",)
+
+
+@pytest.mark.parametrize("query", [
+    "本月哪个菜卖得最好？",
+    "本月哪个菜最好卖？",
+    "本月销量最高的菜是什么？",
+    "本月最受欢迎的菜是什么？",
+])
+def test_dish_ranking_synonyms_compile_to_sales_volume_plan(query):
+    spec = _build_spec(
+        "RESTAURANT_OPS_SALES_SUMMARY",
+        query,
+        confidence=0.95,
+        tier="llm",
+    )
+
+    assert spec.requested_metrics == ("sales_volume",)
+    assert spec.dimensions == ("dish",)
+    assert spec.intent == "RESTAURANT_OPS_GROSS_MARGIN"
+    assert spec.planned_intents == ("RESTAURANT_OPS_GROSS_MARGIN",)
+    assert spec.clarification_needed is False
 
 
 def test_sheet_dish_question_repairs_wrong_llm_summary_intent_before_execution():
