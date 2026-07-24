@@ -4,6 +4,7 @@ import com.cretas.aims.ai.client.DashScopeClient;
 import com.cretas.aims.ai.tool.ToolRegistry;
 import com.cretas.aims.ai.tool.ToolExecutor;
 import com.cretas.aims.ai.tool.WriteGuardService;
+import com.cretas.aims.ai.tool.impl.restaurant.TieredIntentDelegate;
 import com.cretas.aims.ai.tool.gateway.AuthenticatedToolPrincipalFactory;
 import com.cretas.aims.ai.tool.gateway.ExecutionPrincipal;
 import com.cretas.aims.ai.tool.gateway.PrincipalType;
@@ -16,7 +17,6 @@ import com.cretas.aims.ai.tool.gateway.ToolExecutionStatus;
 import com.cretas.aims.config.DashScopeConfig;
 import com.cretas.aims.config.IntentKnowledgeBase;
 import com.cretas.aims.dto.ai.IntentExecuteRequest;
-import com.cretas.aims.dto.ai.PreprocessedQuery;
 import com.cretas.aims.dto.ai.IntentExecuteResponse;
 import com.cretas.aims.dto.intent.IntentMatchResult;
 import com.cretas.aims.entity.config.AIIntentConfig;
@@ -54,6 +54,7 @@ import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.atLeastOnce;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -561,6 +562,81 @@ class RestaurantOpsGoldRouteTest {
     }
 
     @Test
+    @DisplayName("tiered-first restaurant phrase reaches semantic planner before deterministic shortcut")
+    void tieredFirstRestaurantPhraseUsesSemanticPlanner() {
+        TieredIntentDelegate delegate = mock(TieredIntentDelegate.class);
+        ReflectionTestUtils.setField(orchestrator, "tieredFirstEnabled", true);
+        ReflectionTestUtils.setField(orchestrator, "tieredIntentDelegate", delegate);
+        List<Map<String, Object>> followups = List.of(Map.of(
+                "label", "看菜品成本",
+                "question", "招牌菜的成本如何？"));
+        when(delegate.tryDelegate(
+                eq("DEMO_REST"),
+                any(),
+                any(),
+                eq("orchestrator_null_intent")))
+                .thenReturn(Map.of(
+                        "message", "招牌菜销量第一",
+                        "code", "RESTAURANT_OPS_GROSS_MARGIN",
+                        "charts", List.of(),
+                        "kpis", List.of(),
+                        "contractPass", true,
+                        "queryPlanHash", "plan-42",
+                        "executedResolvers", List.of("RESTAURANT_OPS_GROSS_MARGIN"),
+                        "suggestedFollowups", followups));
+
+        IntentExecuteResponse response = orchestrator.execute(
+                "DEMO_REST",
+                IntentExecuteRequest.builder().userInput("哪个菜卖得好").build(),
+                7L,
+                "admin");
+
+        assertThat(response.getMessage()).isEqualTo("招牌菜销量第一");
+        assertThat(response.getIntentCode()).isEqualTo("RESTAURANT_OPS_GROSS_MARGIN");
+        Map<?, ?> resultData = (Map<?, ?>) response.getResultData();
+        assertThat(resultData.get("queryPlanHash")).isEqualTo("plan-42");
+        assertThat(resultData.get("executedResolvers"))
+                .isEqualTo(List.of("RESTAURANT_OPS_GROSS_MARGIN"));
+        assertThat(resultData.get("suggestedFollowups")).isEqualTo(followups);
+        verify(toolDispatchService, never()).executeWithTool(
+                any(), anyString(), any(), any(), anyLong(), anyString(), any());
+    }
+
+    @Test
+    @DisplayName("restaurant business domain enables semantic planner without an ID prefix")
+    void restaurantDomainEnablesTieredFirstForLegacyFactoryId() {
+        IntentConfigManagementService configService = mock(IntentConfigManagementService.class);
+        TieredIntentDelegate delegate = mock(TieredIntentDelegate.class);
+        ReflectionTestUtils.setField(orchestrator, "configService", configService);
+        ReflectionTestUtils.setField(orchestrator, "tieredFirstEnabled", true);
+        ReflectionTestUtils.setField(orchestrator, "tieredIntentDelegate", delegate);
+        when(configService.resolveBusinessDomain("QHJ01")).thenReturn("RESTAURANT");
+        when(delegate.tryDelegate(
+                eq("QHJ01"),
+                any(),
+                any(),
+                eq("orchestrator_null_intent")))
+                .thenReturn(Map.of(
+                        "message", "招牌菜销量第一",
+                        "code", "RESTAURANT_OPS_GROSS_MARGIN",
+                        "charts", List.of(),
+                        "kpis", List.of(),
+                        "contractPass", true,
+                        "queryPlanHash", "plan-domain"));
+
+        IntentExecuteResponse response = orchestrator.execute(
+                "QHJ01",
+                IntentExecuteRequest.builder().userInput("哪个菜卖得好").build(),
+                7L,
+                "admin");
+
+        assertThat(response.getMessage()).isEqualTo("招牌菜销量第一");
+        assertThat(response.getIntentCode()).isEqualTo("RESTAURANT_OPS_GROSS_MARGIN");
+        verify(toolDispatchService, never()).executeWithTool(
+                any(), anyString(), any(), any(), anyLong(), anyString(), any());
+    }
+
+    @Test
     @DisplayName("natural restaurant revenue question routes through gold report intent")
     void naturalRestaurantRevenueQuestionRoutesThroughGoldReportIntent() {
         AIIntentConfig salesSummary = AIIntentConfig.builder()
@@ -792,43 +868,25 @@ class RestaurantOpsGoldRouteTest {
     }
 
     @Test
-    @DisplayName("resolved store pronoun remaps generic margin recognition to store margin")
-    void resolvedStoreFollowupUsesStoreMarginIntent() {
-        AIIntentConfig genericMargin = AIIntentConfig.builder()
-                .intentCode("RESTAURANT_OPS_GROSS_MARGIN")
-                .intentName("整体毛利")
-                .build();
-        AIIntentConfig storeMargin = AIIntentConfig.builder()
-                .intentCode("RESTAURANT_OPS_STORE_MARGIN")
-                .intentName("门店毛利")
-                .build();
-        when(aiIntentService.getIntentByCode(eq("DEMO_REST"), eq("RESTAURANT_OPS_STORE_MARGIN")))
-                .thenReturn(Optional.of(storeMargin));
+    @DisplayName("tiered-first planner miss fails closed before legacy context rerouting")
+    void tieredFirstPlannerMissFailsClosed() {
+        TieredIntentDelegate delegate = mock(TieredIntentDelegate.class);
+        ReflectionTestUtils.setField(orchestrator, "tieredFirstEnabled", true);
+        ReflectionTestUtils.setField(orchestrator, "tieredIntentDelegate", delegate);
 
-        PreprocessedQuery preprocessed = PreprocessedQuery.builder()
-                .originalInput("那它的毛利率也是第一吗？")
-                .finalQuery("鲜行者打浦桥日月光店的毛利率也是第一吗？")
-                .resolvedReferences(Map.of(
-                        "它",
-                        PreprocessedQuery.ResolvedReference.builder()
-                                .entityType("STORE")
-                                .entityId("store-001")
-                                .entityName("鲜行者打浦桥日月光店")
-                                .originalReference("它")
-                                .build()))
-                .build();
-        IntentMatchResult matchResult = IntentMatchResult.builder()
-                .bestMatch(genericMargin)
-                .requiresConfirmation(true)
-                .preprocessedQuery(preprocessed)
-                .build();
+        IntentExecuteResponse response = orchestrator.execute(
+                "DEMO_REST",
+                IntentExecuteRequest.builder()
+                        .userInput("那它的毛利率也是第一吗？")
+                        .sessionId("session-typed-context")
+                        .build(),
+                7L,
+                "admin");
 
-        AIIntentConfig remapped = orchestrator.remapRestaurantStoreMarginIntentIfNeeded(
-                "DEMO_REST", "那它的毛利率也是第一吗？", matchResult, genericMargin);
-
-        assertThat(remapped).isSameAs(storeMargin);
-        assertThat(matchResult.getBestMatch()).isSameAs(storeMargin);
-        assertThat(matchResult.getRequiresConfirmation()).isFalse();
+        assertThat(response.getStatus()).isEqualTo("NEED_CLARIFICATION");
+        assertThat(response.getMessage()).contains("没有执行任何分析");
+        verify(toolDispatchService, never()).executeWithTool(
+                any(), anyString(), any(), any(), anyLong(), anyString(), any());
     }
 
 

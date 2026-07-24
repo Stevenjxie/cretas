@@ -278,6 +278,10 @@ async def test_prefilter_allows_t1_hit_query_through(monkeypatch, query: str):
     monkeypatch.setattr(gold_reads_mod, "get_pg_pool", AsyncMock(return_value=object()))
     parse_mock = AsyncMock(return_value=None)
     monkeypatch.setattr("smartbi.gold.restaurant_intent.parse_restaurant_query", parse_mock)
+    monkeypatch.setattr(
+        "smartbi.gold.restaurant_intent_service.tiered_answer",
+        AsyncMock(return_value=None),
+    )
 
     body = TieredIntentAnswerRequest(factory_id="DEMO_REST", query=query)
     await post_restaurant_tiered_answer(_fake_request(), body)
@@ -313,19 +317,21 @@ async def test_prefilter_allows_regression_export_capability_clarification(monke
 
 
 @pytest.mark.asyncio
-async def test_prefilter_still_blocks_truly_signal_free_query(monkeypatch):
-    """Regression guard: a query with no profit token, no relative window,
-    AND no T1 keyword hit must still be blocked before parse_restaurant_query
-    (this is the ORIGINAL C-2 behavior -- must not regress when adding the
-    T1-hit passthrough)."""
+async def test_signal_free_query_still_reaches_semantic_planner(monkeypatch):
+    """Keyword absence must never bypass the restaurant semantic planner."""
     import smartbi.api.gold_reads as gold_reads_mod
     from smartbi.api.gold_reads import TieredIntentAnswerRequest, post_restaurant_tiered_answer
 
     monkeypatch.setattr(gold_reads_mod, "get_factory_id", lambda: "DEMO_REST")
-    parse_mock = AsyncMock(side_effect=AssertionError("parse must not run for signal-free query"))
+    monkeypatch.setattr(gold_reads_mod, "get_pg_pool", AsyncMock(return_value=object()))
+    parse_mock = AsyncMock(return_value=None)
     monkeypatch.setattr("smartbi.gold.restaurant_intent.parse_restaurant_query", parse_mock)
+    monkeypatch.setattr(
+        "smartbi.gold.restaurant_intent_service.tiered_answer",
+        AsyncMock(return_value=None),
+    )
 
     body = TieredIntentAnswerRequest(factory_id="DEMO_REST", query="哪个菜卖得好")
     result = await post_restaurant_tiered_answer(_fake_request(), body)
     assert result == {"delegate": False}
-    assert parse_mock.await_count == 0
+    assert parse_mock.await_count == 1

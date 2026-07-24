@@ -41,7 +41,12 @@ class TieredIntentDelegateTest {
                         "charts", List.of(),
                         "kpis", List.of(),
                         "code", "RESTAURANT_OPS_GROSS_MARGIN",
-                        "contract_pass", true));
+                        "contract_pass", true,
+                        "query_plan_hash", "plan-42",
+                        "executed_resolvers", List.of("RESTAURANT_OPS_GROSS_MARGIN"),
+                        "suggested_followups", List.of(Map.of(
+                                "label", "看菜品成本",
+                                "question", "米饭(单人份)的成本如何？"))));
 
         Map<String, Object> params = new HashMap<>();
         params.put("userInput", "米饭的销量是多少");
@@ -50,7 +55,13 @@ class TieredIntentDelegateTest {
 
         assertThat(result).isNotNull()
                 .containsEntry("tieredDelegate", true)
-                .containsEntry("code", "RESTAURANT_OPS_GROSS_MARGIN");
+                .containsEntry("code", "RESTAURANT_OPS_GROSS_MARGIN")
+                .containsEntry("queryPlanHash", "plan-42");
+        assertThat(result.get("executedResolvers"))
+                .isEqualTo(List.of("RESTAURANT_OPS_GROSS_MARGIN"));
+        assertThat(result.get("suggestedFollowups")).isEqualTo(List.of(Map.of(
+                "label", "看菜品成本",
+                "question", "米饭(单人份)的成本如何？")));
         assertThat((String) result.get("message")).startsWith("「米饭(单人份)」");
     }
 

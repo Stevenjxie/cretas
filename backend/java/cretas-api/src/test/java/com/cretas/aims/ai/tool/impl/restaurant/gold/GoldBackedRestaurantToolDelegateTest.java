@@ -62,6 +62,9 @@ class GoldBackedRestaurantToolDelegateTest {
         GoldFinanceClient gold = mock(GoldFinanceClient.class);
         List<Map<String, Object>> charts = List.of(Map.of("type", "line"));
         List<Map<String, Object>> kpis = List.of(Map.of("title", "毛利"));
+        List<Map<String, Object>> followups = List.of(Map.of(
+                "label", "看菜品成本",
+                "question", "招牌菜的成本如何？"));
         when(gold.fetchTieredIntentAnswer(eq(FACTORY_ID), anyString(), eq("restaurant_peak_month_gold")))
                 .thenReturn(Map.of(
                         "delegate", true,
@@ -69,7 +72,10 @@ class GoldBackedRestaurantToolDelegateTest {
                         "charts", charts,
                         "kpis", kpis,
                         "code", "RESTAURANT_OPS_SALES_SUMMARY",
-                        "contract_pass", true
+                        "contract_pass", true,
+                        "query_plan_hash", "plan-42",
+                        "suggested_followups", followups,
+                        "executed_resolvers", List.of("RESTAURANT_OPS_GROSS_MARGIN")
                 ));
 
         RestaurantPeakMonthGoldTool tool = newTool(gold);
@@ -88,6 +94,10 @@ class GoldBackedRestaurantToolDelegateTest {
         assertThat(result).containsEntry("kpis", kpis);
         assertThat(result).containsEntry("code", "RESTAURANT_OPS_SALES_SUMMARY");
         assertThat(result).containsEntry("contractPass", true);
+        assertThat(result).containsEntry("queryPlanHash", "plan-42");
+        assertThat(result).containsEntry(
+                "executedResolvers", List.of("RESTAURANT_OPS_GROSS_MARGIN"));
+        assertThat(result).containsEntry("suggestedFollowups", followups);
         // ensureActionableMessage ran (owner-action framing preserved).
         assertThat(result).containsKey("decisionBridge");
         assertThat(result).containsKey("suggestedFollowups");

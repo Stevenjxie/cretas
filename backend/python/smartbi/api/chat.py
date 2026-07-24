@@ -78,35 +78,12 @@ async def _try_tiered_restaurant_intent(
     query: str, pool, factory_id: str, role: Optional[str],
     *, session_key: Optional[str] = None,
 ) -> Optional[Dict[str, Any]]:
-    """T2 (vector) / T3 (LLM) restaurant intent routing (2026-07-07 Phase 1
-    design: docs/superpowers/specs/2026-07-07-restaurant-intent-tiered-routing-design.md).
+    """Run the shared immutable restaurant QueryPlan pipeline.
 
-    Thin wrapper (Phase 2, 2026-07-07:
-    docs/superpowers/specs/2026-07-07-restaurant-intent-phase2-java-entry-design.md
-    section 4) -- the implementation now lives in
-    `smartbi.gold.restaurant_intent_service.tiered_answer`, shared with the
-    `POST /api/smartbi/gold/restaurant/tiered-answer` endpoint the Java
-    GoldBackedRestaurantTool delegate gate calls. Signature/behavior here are
-    byte-for-byte unchanged from before the extraction (the 3 existing
-    chat.py call sites and all pre-existing tests are unaffected).
-
-    ONLY call this after the existing T1 keyword fast path
-    (`match_restaurant_ops`) has already missed at this call site -- this
-    function does not re-check keywords, it goes straight to
-    `parse_restaurant_query` (which itself re-tries T1 first, cheaply, before
-    T2/T3 -- so calling it unconditionally is safe, just slightly redundant).
-
-    Fail-open: returns None on any miss/exception/business-type-gate-closed,
-    so every call site's existing fallback chain is reached exactly as
-    before this feature existed (zero regression risk for non-restaurant
-    tenants or when anything below throws).
-
-    `session_key` (2026-07-08 clarification-loop v1, additive/optional):
-    forwarded to `tiered_answer` / `parse_restaurant_query` so a user's
-    answer to a clarification question from a PREVIOUS call at this same
-    call site is parsed in context instead of as a brand-new query. Chat
-    callers only pass the fixed-length trusted factory/user/session key
-    produced below; absent trusted users disable clarification persistence.
+    Keyword/vector retrieval happens inside the planner and is hint-only.
+    A planner or contract failure is returned as a clarification once a v2
+    plan exists. ``None`` therefore means empty/non-restaurant input or a
+    legacy call-site miss; explicit restaurant call sites must fail closed.
 
     Return shape:
       {"kind": "clarification", "answer_text": str, "spec": spec}
@@ -719,6 +696,9 @@ class GeneralAnalysisResponse(BaseModel):
     messageCount: Optional[int] = None
     insights: List[Dict[str, Any]] = []
     charts: List[Dict[str, Any]] = []
+    suggestedFollowups: List[Dict[str, str]] = []
+    queryPlanHash: Optional[str] = None
+    executedResolvers: List[str] = []
     processing_time_ms: int = 0
 
 class MultiDimensionRequest(BaseModel):
@@ -1373,49 +1353,39 @@ async def general_analysis(request: GeneralAnalysisRequest, http_request: Reques
                         query, parent,
                     )
 
-                structured_ops_code = reconcile_restaurant_ops_code(
-                    effective_ops_query,
-                    expected_ops_code,
-                )
-                structured_margin_scope = bool(
-                    restaurant_context
-                    and (
-                        restaurant_context.get("store_id")
-                        or restaurant_context.get("store_name")
-                        or restaurant_context.get("comparison_start_date")
-                    )
-                    and any(token in effective_ops_query for token in ("毛利", "毛利率", "利润"))
-                )
-                if structured_margin_scope:
-                    structured_ops_code = "RESTAURANT_OPS_STORE_MARGIN"
+                # This direct path is only for an explicit typed intent plus
+                # typed scope. Natural-language requests must use QueryPlan
+                # below; text reconciliation is not an execution authority.
+                structured_ops_code = expected_ops_code
 
-                if pool and restaurant_context and structured_ops_code:
+                if pool and structured_ops_code:
+                    scope_context = restaurant_context or {}
                     primary_range = (
                         (
-                            restaurant_context["start_date"],
-                            restaurant_context["end_date"],
+                            scope_context["start_date"],
+                            scope_context["end_date"],
                         )
-                        if restaurant_context.get("start_date")
+                        if scope_context.get("start_date")
                         else None
                     )
                     comparison_range = (
                         (
-                            restaurant_context["comparison_start_date"],
-                            restaurant_context["comparison_end_date"],
+                            scope_context["comparison_start_date"],
+                            scope_context["comparison_end_date"],
                         )
-                        if restaurant_context.get("comparison_start_date")
+                        if scope_context.get("comparison_start_date")
                         else None
                     )
                     store_mention = None
                     if (
                         structured_ops_code == "RESTAURANT_OPS_STORE_MARGIN"
-                        and not restaurant_context.get("store_id")
-                        and not restaurant_context.get("store_name")
+                        and not scope_context.get("store_id")
+                        and not scope_context.get("store_name")
                     ):
                         store_mention = extract_store_mention(effective_ops_query)
                     mapping_context = (
-                        {**restaurant_context, "store_name": store_mention}
-                        if store_mention else restaurant_context
+                        {**scope_context, "store_name": store_mention}
+                        if store_mention else scope_context
                     )
                     analysis_factory_id = demo_data_factory_for_code(
                         structured_ops_code,
@@ -1433,15 +1403,15 @@ async def general_analysis(request: GeneralAnalysisRequest, http_request: Reques
                         query=effective_ops_query,
                         date_range=primary_range,
                         comparison_date_range=comparison_range,
-                        store_id=restaurant_context.get("store_id"),
-                        store_name=restaurant_context.get("store_name"),
+                        store_id=scope_context.get("store_id"),
+                        store_name=scope_context.get("store_name"),
                         store_mention=store_mention,
-                        today=restaurant_context.get("time_anchor_date"),
+                        today=scope_context.get("time_anchor_date"),
                     )
                     if ops_answer:
                         customer_answer = sanitize_customer_ai_text(ops_answer.answer_text)
                         guard_clarification = any(
-                            key in (ops_answer.meta or {})
+                            key in (getattr(ops_answer, "meta", None) or {})
                             for key in ("missing_reference", "store_not_found",
                                         "store_mention_ambiguous",
                                         "dish_not_found", "dish_mention_ambiguous")
@@ -1476,7 +1446,7 @@ async def general_analysis(request: GeneralAnalysisRequest, http_request: Reques
                             _chat_cache_set(cache_key, response.dict())
                         return response
 
-                if pool:
+                if pool and request.table_type == "restaurant_ops":
                     # Every restaurant tier now goes through the same structured
                     # QuerySpec + Answer Contract.  The old keyword shortcut was
                     # fast but skipped comparison, context, and completeness checks.
@@ -1499,6 +1469,9 @@ async def general_analysis(request: GeneralAnalysisRequest, http_request: Reques
                             thinkingEnabled=request.enable_thinking,
                             insights=[],
                             charts=tiered.get("charts") or [],
+                            suggestedFollowups=tiered.get("suggested_followups") or [],
+                            queryPlanHash=tiered.get("query_plan_hash"),
+                            executedResolvers=tiered.get("executed_resolvers") or [],
                             processing_time_ms=int((time.time() - start_time) * 1000),
                         )
                         if (
@@ -1515,10 +1488,28 @@ async def general_analysis(request: GeneralAnalysisRequest, http_request: Reques
                                 parent_template_code=tiered.get("code"),
                                 parent_upload_id=None,
                                 user_id=trusted_session_user_id,
+                                structured_context=tiered.get("structured_context"),
                             )
                         if tiered["kind"] == "answer" and not session_sensitive_restaurant:
                             _chat_cache_set(cache_key, response.dict())
                         return response
+
+                    if request.table_type == "restaurant_ops":
+                        answer_text = (
+                            "餐饮语义规划暂时不可用，本次没有执行任何相邻分析。"
+                            "请稍后重试。"
+                        )
+                        return GeneralAnalysisResponse(
+                            success=False,
+                            error="餐饮语义规划不可用",
+                            answer=answer_text,
+                            aiAnalysis=answer_text,
+                            sessionId=request.session_id,
+                            thinkingEnabled=request.enable_thinking,
+                            insights=[],
+                            charts=[],
+                            processing_time_ms=int((time.time() - start_time) * 1000),
+                        )
 
                 # Fail-open compatibility for a parser/contract infrastructure
                 # outage.  Normal restaurant requests return above.
@@ -1544,7 +1535,7 @@ async def general_analysis(request: GeneralAnalysisRequest, http_request: Reques
                     if ops_answer:
                         customer_answer = sanitize_customer_ai_text(ops_answer.answer_text)
                         displayable_result = any(
-                            key in (ops_answer.meta or {})
+                            key in (getattr(ops_answer, "meta", None) or {})
                             for key in ("missing_reference", "store_not_found",
                                         "store_mention_ambiguous",
                                         "dish_not_found", "dish_mention_ambiguous")
@@ -2125,7 +2116,11 @@ async def general_analysis_stream(request: GeneralAnalysisRequest, http_request:
             try:
                 user_q = (request.effective_query or "").strip()
                 factory_id_hdr = trusted_factory_id
-                if user_q and factory_id_hdr:
+                if (
+                    user_q
+                    and factory_id_hdr
+                    and request.table_type != "restaurant_ops"
+                ):
                     from smartbi.gold.restaurant_ops_router import (
                         demo_data_factory_for_code as _demo_gold_factory_trend,
                         is_supported_restaurant_ops_code as _is_supported_ops_trend,
@@ -2400,13 +2395,31 @@ async def general_analysis_stream(request: GeneralAnalysisRequest, http_request:
                                 effective_user_q, pool, factory_id_hdr, trusted_role,
                                 session_key=trusted_restaurant_session_key,
                             )
-                            if ops_code is None or is_supported_restaurant_ops_code(ops_code)
+                            if request.table_type == "restaurant_ops"
                             else None
                         )
 
-                        # A resolver/parsing infrastructure outage still gets the
-                        # prior deterministic fallback; normal requests use the
-                        # contract-checked tiered result above.
+                        if tiered_ops is None and request.table_type == "restaurant_ops":
+                            answer_text_ops = (
+                                "餐饮语义规划暂时不可用，本次没有执行任何相邻分析。"
+                                "请稍后重试。"
+                            )
+                            yield _sse_event("done", {
+                                "success": False,
+                                "answer": answer_text_ops,
+                                "charts": [],
+                                "kpis": [],
+                                "source": "restaurant_query_plan",
+                                "template_code": None,
+                                "contractPass": False,
+                                "suggestedFollowups": [],
+                                "processingTimeMs": int((time.time() - start_time) * 1000),
+                                "log_id": None,
+                            })
+                            return
+
+                        # Generic SmartBI requests without an explicit
+                        # restaurant table type retain their legacy resolver.
                         if tiered_ops is None:
                             stream_fallback_mention = (
                                 _extract_store_mention_stream(effective_user_q)
@@ -2433,7 +2446,7 @@ async def general_analysis_stream(request: GeneralAnalysisRequest, http_request:
                             if ops_answer:
                                 fallback_answer = sanitize_customer_ai_text(ops_answer.answer_text)
                                 fallback_guard = any(
-                                    key in (ops_answer.meta or {})
+                                    key in (getattr(ops_answer, "meta", None) or {})
                                     for key in ("missing_reference", "store_not_found",
                                                 "store_mention_ambiguous",
                                                 "dish_not_found", "dish_mention_ambiguous")
@@ -2469,6 +2482,9 @@ async def general_analysis_stream(request: GeneralAnalysisRequest, http_request:
                                 "source": "restaurant_ops_gold",
                                 "template_code": tiered_ops.get("code"),
                                 "contractPass": contract_pass,
+                                "queryPlanHash": tiered_ops.get("query_plan_hash"),
+                                "executedResolvers": tiered_ops.get("executed_resolvers") or [],
+                                "suggestedFollowups": tiered_ops.get("suggested_followups") or [],
                                 "processingTimeMs": wall_ms,
                                 "log_id": None,
                             })
@@ -2484,6 +2500,7 @@ async def general_analysis_stream(request: GeneralAnalysisRequest, http_request:
                                         parent_template_code=tiered_ops.get("code") or "RESTAURANT_OPS_UNKNOWN",
                                         parent_upload_id=None,
                                         user_id=_session_user_id,
+                                        structured_context=tiered_ops.get("structured_context"),
                                     ))
                                 except Exception as _e:
                                     logger.warning(f"[chat-session] writeback (gold ops) failed: {_e}")

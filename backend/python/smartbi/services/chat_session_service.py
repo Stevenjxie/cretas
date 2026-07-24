@@ -150,6 +150,53 @@ def truncate_summary(text: str, budget: int = SUMMARY_CHAR_BUDGET) -> str:
     return f"{text[:head_chars].rstrip()}...[省略中段]...{text[-tail_chars:].lstrip()}"
 
 
+def compact_structured_context(value: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    """Whitelist compact resolver facts before writing them to JSONB."""
+    if not isinstance(value, dict):
+        return None
+    entity = value.get("focus_entity")
+    safe_entity = None
+    if isinstance(entity, dict):
+        entity_type = entity.get("type")
+        name = entity.get("name")
+        if entity_type in ("dish", "store") and isinstance(name, str) and name.strip():
+            safe_entity = {
+                "type": entity_type,
+                "id": str(entity.get("id"))[:80] if entity.get("id") is not None else None,
+                "name": sanitize_for_storage(name.strip())[:80],
+                "rank": entity.get("rank") if isinstance(entity.get("rank"), int) else None,
+            }
+    plan_hash = value.get("plan_hash")
+    plan_version = value.get("plan_version")
+    window_label = value.get("window_label")
+    allowed_metrics = {
+        "sales_volume", "recipe_cost", "gross_margin", "revenue", "orders",
+        "wastage", "staffing",
+    }
+    raw_metrics = value.get("requested_metrics")
+    requested_metrics = [
+        metric
+        for metric in (raw_metrics if isinstance(raw_metrics, list) else [])
+        if metric in allowed_metrics
+    ][:4]
+    analysis_action = value.get("analysis_action")
+    if analysis_action not in {"lookup", "compare", "diagnose", "optimize"}:
+        analysis_action = None
+    topic_kind = value.get("topic_kind")
+    if topic_kind not in {"dish_ranking", "store_ranking"}:
+        topic_kind = None
+    context = {
+        "focus_entity": safe_entity,
+        "plan_hash": str(plan_hash)[:64] if plan_hash else None,
+        "plan_version": str(plan_version)[:40] if plan_version else None,
+        "window_label": sanitize_for_storage(str(window_label))[:40] if window_label else None,
+        "requested_metrics": requested_metrics or None,
+        "analysis_action": analysis_action,
+        "topic_kind": topic_kind,
+    }
+    return context if any(item is not None for item in context.values()) else None
+
+
 class ChatSessionService:
     """Async service for smart_bi_chat_session table."""
 
@@ -210,6 +257,7 @@ class ChatSessionService:
         parent_template_code: Optional[str] = None,
         parent_upload_id: Optional[int] = None,
         user_id: Optional[int] = None,
+        structured_context: Optional[Dict[str, Any]] = None,
     ) -> None:
         """Write back the parent context after this turn finishes.
 
@@ -233,6 +281,9 @@ class ChatSessionService:
             "a_summary": summary[:500],  # tighter than 750 to fit 3-turn budget
             "ts": datetime.utcnow().isoformat() + "Z",
         }
+        safe_context = compact_structured_context(structured_context)
+        if safe_context:
+            new_turn["context"] = safe_context
         new_turn_json = _json.dumps([new_turn], ensure_ascii=False)
         try:
             async with self._pool.acquire() as conn:

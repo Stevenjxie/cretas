@@ -56,7 +56,6 @@ from smartbi.gold import (
     zone_efficiency,
 )
 from smartbi.gold.gold_read_cache import GoldReadCache, compute_cache_key
-from smartbi.gold.restaurant_agent import is_compound_question as _agent_is_compound
 from smartbi.tenant_ctx import INTERNAL_SENTINEL, get_factory_id, set_factory_id
 from smartbi_compat._rbac_strip import PRICE_VIEW_ROLES, strip_price_for_role
 
@@ -1133,19 +1132,12 @@ async def post_restaurant_tiered_answer(
     request: Request,
     body: TieredIntentAnswerRequest,
 ) -> dict:
-    """Phase 2 delegate-gate endpoint.
+    """Java-to-Python restaurant QueryPlan endpoint.
 
-    Never raises a 5xx for a business-logic miss -- mirrors the "never
-    raises" fail-open philosophy of ``parse_restaurant_query`` /
-    ``tiered_answer``: ANY internal exception (including tenant-mismatch —
-    deliberately, since Java calling with a stale/mismatched X-Factory-Id is
-    a caller bug that should fall through, not break the user's answer) is
-    caught and the endpoint returns ``{"delegate": False}`` so the Java
-    caller's ``catch Exception -> fall through to original flow`` gate is
-    exercised exactly as designed (design doc section 4: "catch Exception
-    必须 log.warn 后 fall through，绝不向上抛" on the Java side; mirrored here
-    so a Python-side failure never surfaces as anything other than
-    delegate:false).
+    A v2 planner/execution failure is an explicit delegated clarification.
+    Transport/setup exceptions still return ``delegate:false``; the
+    tiered-first Java orchestrator treats that as planner unavailability and
+    fails closed before any legacy matcher can run.
 
     Response shape:
       {"delegate": False}
@@ -1154,17 +1146,11 @@ async def post_restaurant_tiered_answer(
        "code": str, "contract_pass": bool}
     """
     from smartbi.gold.restaurant_intent import (
-        capability_clarification_question,
         contextualize_restaurant_followup,
         log_intent_miss,
         parse_restaurant_query,
     )
     from smartbi.gold.restaurant_intent_service import should_delegate, tiered_answer
-    from smartbi.gold.restaurant_ops_router import (
-        _profit_intent,
-        _uses_relative_sales_window,
-        match_restaurant_ops,
-    )
     from smartbi.services.chat_session_service import (
         ChatSessionService,
         build_trusted_restaurant_session_key,
@@ -1181,47 +1167,6 @@ async def post_restaurant_tiered_answer(
         trusted_user_id = parse_trusted_user_id(
             getattr(state, "user_id", None) if state is not None else None
         )
-        has_trusted_session = bool(body.session_id and trusted_user_id is not None)
-
-        # 2026-07-08 audit fix C-2 (延迟缓解): should_delegate 只可能经
-        # 规则 3 (利润信号 + 毛利可答 intent) 或规则 4 (SALES_SUMMARY +
-        # 相对时间窗) 成立, 两个信号的检测都是 <1ms 纯函数且对 T1/T2/T3
-        # 各层同源 (T3 只能在此之上追加, 不会无中生有出规则 2 之外的委托 —
-        # 规则 2 澄清仅在信号存在的模糊问句里才值得让 T3 判断)。两个信号
-        # 都不在 → 委托不可能成立, 直接返回, 不为注定 delegate:false 的判定
-        # 烧 T2 向量 + T3 LLM (最多 5s)。这是 Java 每个 Gold Tool 调用的
-        # 前置路径, 延迟直接进用户等待时间。
-        # 代价: 无信号模糊问题不再经 T3 产生澄清委托 (回到 Java 原样回答,
-        # 即 Phase 2 之前的行为), 可接受; 时间改述的覆盖损失由确定性时间
-        # 词汇加硬 (俩/仨/半年, 同批 commit) 收窄。
-        #
-        # 2026-07-08 follow-up (库存预警/排班建议新增): T1 关键词
-        # (match_restaurant_ops) 命中的查询 —— 例如"哪些食材快没了"/"库存够
-        # 不够" —— 既无利润词也无相对时间窗, 会被上面这条判断误挡, 永远走不
-        # 到 T2/T3, should_delegate 也就永远没有机会被调用。T1 命中是 <1ms
-        # 确定性判断 (跟 wants_margin_pre/asks_profit_pre 同一档成本), 不该
-        # 被这条"为省 T2/T3 延迟"的前置滤挡住 —— 加一个 T1 命中即放行的分支。
-        wants_margin_pre, asks_profit_pre = _profit_intent(query)
-        if (
-            not wants_margin_pre
-            and not asks_profit_pre
-            and not _uses_relative_sales_window(query)
-            and match_restaurant_ops(query) is None
-            and not has_trusted_session
-            and "优化" not in query
-            and capability_clarification_question(query) is None
-            and not _agent_is_compound(query)
-        ):
-            from smartbi.gold.restaurant_ops_router import extract_dish_candidates
-            if not extract_dish_candidates(query):
-                # 飞轮盲区修补 (2026-07-23): miss 也留痕。fire-and-forget,
-                # pool 此处尚未获取, log_intent_miss 自取。
-                asyncio.create_task(log_intent_miss(
-                    None, factory_id=fid, query=query,
-                    reason="prefilter", java_tool_name=body.java_tool_name,
-                ))
-                return {"delegate": False}
-
         pool = await get_pg_pool()
         if not pool:
             return {"delegate": False}
@@ -1296,6 +1241,7 @@ async def post_restaurant_tiered_answer(
                 parent_template_code=result.get("code"),
                 parent_upload_id=None,
                 user_id=trusted_user_id,
+                structured_context=result.get("structured_context"),
             )
 
         return {
@@ -1305,7 +1251,10 @@ async def post_restaurant_tiered_answer(
             "kpis": result.get("kpis") or [],
             "code": result.get("code"),
             "contract_pass": result.get("contract_pass"),
+            "query_plan_hash": result.get("query_plan_hash"),
+            "executed_resolvers": result.get("executed_resolvers") or [],
+            "suggested_followups": result.get("suggested_followups") or [],
         }
     except Exception as e:
-        logger.warning(f"[gold-reads] restaurant tiered-answer delegate gate failed (fail-open): {e}")
+        logger.warning(f"[gold-reads] restaurant QueryPlan endpoint failed: {e}")
         return {"delegate": False}

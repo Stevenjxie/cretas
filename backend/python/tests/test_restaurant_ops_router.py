@@ -26,11 +26,79 @@ from smartbi.gold.restaurant_ops_router import (
     SAMPLE_QUERIES,
     _resolve_sales_date_range,
     _resolve_sales_query_spec,
+    _scoped_dish_metric_answer,
     match_restaurant_ops,
     reconcile_restaurant_ops_code,
     resolve_by_code,
     resolve_sales_summary,
 )
+
+
+def _dish_metric_entry():
+    return {
+        "name": "米饭",
+        "qty": 100.0,
+        "revenue": 1000.0,
+        "bills": 80,
+        "food_cost_unit": 2.0,
+        "total_cost": 200.0,
+        "gross_profit": 800.0,
+        "margin_rate": 0.8,
+        "has_cost": True,
+        "invalid_cost": False,
+    }
+
+
+def test_scoped_dish_sales_followup_does_not_repeat_margin_report():
+    answer = _scoped_dish_metric_answer(
+        _dish_metric_entry(),
+        window_label="本月",
+        query="本月米饭的销量呢",
+    )
+
+    assert answer == "「米饭」本月销量 **100 份**、营收 **¥1,000.00**，覆盖订单 80 单。"
+    assert "毛利分析" not in answer
+    assert "建议动作" not in answer
+
+
+def test_scoped_dish_diagnosis_explains_math_without_claiming_causality():
+    answer = _scoped_dish_metric_answer(
+        _dish_metric_entry(),
+        window_label="本月",
+        query="本月米饭的毛利率为什么是这样",
+    )
+
+    assert "原因拆解" in answer
+    assert "计算构成" in answer
+    assert "不能证明业务因果" in answer
+    assert "80.0%" in answer
+
+
+def test_scoped_dish_sales_diagnosis_never_falls_back_to_margin_explanation():
+    answer = _scoped_dish_metric_answer(
+        _dish_metric_entry(),
+        window_label="本月",
+        query="本月米饭的销量为什么是这样",
+    )
+
+    assert "销量为 100 份" in answer
+    assert "平均每单 1.25 份" in answer
+    assert "不能证明业务因果" in answer
+    assert "毛利率替代销量原因" in answer
+    assert "80.0%" not in answer
+
+
+def test_scoped_dish_optimization_contains_actions_and_validation_metrics():
+    answer = _scoped_dish_metric_answer(
+        _dish_metric_entry(),
+        window_label="本月",
+        query="本月米饭的毛利率怎么优化",
+    )
+
+    assert "优化目标" in answer
+    assert "优化动作" in answer
+    assert "验证指标" in answer
+    assert "全店涨价" in answer
 
 
 # Queries that MUST route to a specific ops template
@@ -1532,6 +1600,23 @@ def _gross_margin_pool(rows):
     return _Pool()
 
 
+def test_dish_ranking_emits_typed_focus_entity():
+    result = asyncio.run(_r.resolve_gross_margin(
+        _gross_margin_pool(_dish_rows()),
+        "RES_TEST",
+        role="restaurant_manager",
+        query="哪个菜卖得最好",
+    ))
+
+    assert result.meta["focus_entity"] == {
+        "type": "dish",
+        "id": 1,
+        "name": "米饭(单人份)",
+        "rank": 1,
+    }
+    assert result.meta["ranked_entities"][1]["id"] == 2
+
+
 def test_named_unknown_dish_declines_without_ranking():
     result = asyncio.run(_r.resolve_gross_margin(
         _gross_margin_pool(_dish_rows()), "RES_TEST",
@@ -1601,7 +1686,46 @@ def test_dish_scoped_answer_prepends_sales_header():
     # markdown typography (2026-07-24): dish headline figures are bolded
     assert "销量 **100 份**" in result.answer_text
     assert "营收 **¥500.00**" in result.answer_text
+    assert result.title.startswith("菜品销量")
+    assert [item["title"] for item in result.kpis] == ["销量", "营收", "订单数"]
+    assert "总毛利" not in {item["title"] for item in result.kpis}
     assert result.meta.get("targetDish") == "米饭(单人份)"
+
+
+@pytest.mark.parametrize(
+    "query,title_fragment,answer_fragment",
+    [
+        ("米饭的销量为什么是这样", "菜品销量原因拆解", "不能证明业务因果"),
+        ("米饭的销量怎么优化", "菜品销量优化建议", "验证指标"),
+    ],
+)
+def test_dish_scoped_action_title_and_kpis_follow_current_metric(
+    query,
+    title_fragment,
+    answer_fragment,
+):
+    result = asyncio.run(_r.resolve_gross_margin(
+        _gross_margin_pool(_dish_rows()), "RES_TEST",
+        role="restaurant_manager", query=query,
+    ))
+
+    assert title_fragment in result.title
+    assert answer_fragment in result.answer_text
+    assert [item["title"] for item in result.kpis] == ["销量", "营收", "订单数"]
+    assert "总毛利" not in {item["title"] for item in result.kpis}
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        "本月米饭的销量为什么是这样",
+        "本月米饭的销量怎么优化",
+        "米饭的成本为什么这么高",
+        "米饭的毛利率如何改善",
+    ],
+)
+def test_named_dish_action_questions_keep_entity_scope(query):
+    assert _r.extract_dish_candidate(query) == "米饭"
 
 
 # --- R12: 周环比 / 今年·去年窗 (变体探针 V4/V5) ---

@@ -87,6 +87,8 @@ def _configure_cached_tiered_clarification(monkeypatch):
             "code": "",
             "confidence": 0.2,
             "tier": "llm",
+            "plan_version": "restaurant-query-plan-v2",
+            "planner_authority": "llm",
             "clarification_needed": True,
             "clarification_question": "trusted clarification only",
         },
@@ -254,7 +256,20 @@ async def test_untrusted_expected_intent_is_ignored(monkeypatch):
             title="整体毛利率",
         )
 
+    async def _restaurant_tenant(*_args, **_kwargs):
+        return True
+
+    async def _semantic_plan(*_args, **_kwargs):
+        return {
+            "intent": "RESTAURANT_OPS_GROSS_MARGIN",
+            "confidence": 0.96,
+            "clarification_needed": False,
+            "clarification_question": None,
+        }
+
     monkeypatch.setattr("smartbi.config.get_pg_pool", _pool)
+    monkeypatch.setattr(restaurant_intent, "_is_restaurant_tenant", _restaurant_tenant)
+    monkeypatch.setattr(restaurant_intent, "_t3_llm_parse", _semantic_plan)
     monkeypatch.setattr(
         "smartbi.gold.restaurant_ops_router.match_restaurant_ops",
         lambda _query: "RESTAURANT_OPS_SALES_SUMMARY",
@@ -355,7 +370,7 @@ async def test_general_response_cache_never_crosses_trusted_roles(
     async def _pool():
         return object()
 
-    async def _resolve(_code, _pool, _factory_id, *, role=None, query=None):
+    async def _resolve(_code, _pool, _factory_id, *, role=None, query=None, **_kwargs):
         resolver_roles.append(role)
         can_view = role == "factory_super_admin"
         answer = "revenue=100" if can_view else "revenue=REDACTED"
@@ -469,6 +484,7 @@ async def test_nonstream_invalid_trusted_user_disables_tiered_clarification_sess
         chat_mod.GeneralAnalysisRequest(
             query="tiered clarification without trusted user",
             session_id="shared-device-session",
+            table_type="restaurant_ops",
             allow_tenant_data_fallback=False,
         ),
         _Request("F001", user_id=user_id, role="operator"),

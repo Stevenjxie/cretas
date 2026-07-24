@@ -62,6 +62,19 @@ def test_should_delegate_none_spec_false():
     assert should_delegate(None) is False
 
 
+def test_should_delegate_validated_plan_cache_without_java_reinterpretation():
+    spec = _spec(
+        intent="RESTAURANT_OPS_TREND_ANALYSIS",
+        source_tier="plan_cache",
+        planned_intents=("RESTAURANT_OPS_TREND_ANALYSIS",),
+        plan_version="restaurant-query-plan-v2",
+        planner_authority="validated_plan_cache",
+        plan_hash="cached-plan",
+    )
+
+    assert should_delegate(spec) is True
+
+
 def test_should_delegate_clarification_needed_true():
     """Rule 2: clarification_needed -> True (Java can't ask a clarifying
     question itself)."""
@@ -145,7 +158,10 @@ def test_should_delegate_sales_summary_absolute_window_now_true():
 
 def test_should_delegate_pure_trend_query_now_true():
     """R23 规格即路由: 趋势 resolver 存在即委托 (旧规则 5 保守性退役)。"""
-    spec = _spec(intent="RESTAURANT_OPS_TREND_ANALYSIS", relative_window=False)
+    spec = _spec(
+        intent="RESTAURANT_OPS_TREND_ANALYSIS",
+        relative_window=False,
+    )
     assert should_delegate(spec) is True
 
 
@@ -261,7 +277,10 @@ async def test_tiered_answer_forwards_role_to_resolver(monkeypatch):
         captured.update(kwargs)
         return OpsAnswer(
             code=code, title="门店毛利", answer_text="哪家店最赚钱：A店 毛利率12%",
-            charts=[], kpis=[], meta={},
+            charts=[], kpis=[], meta={
+                "marginInvariantPass": True,
+                "scope_matches_request": True,
+            },
         )
 
     monkeypatch.setattr(svc, "parse_restaurant_query", _fake_parse)
@@ -362,8 +381,9 @@ async def test_tiered_answer_internal_only_text_is_not_a_success(monkeypatch):
     await asyncio.sleep(0)
 
     assert result is not None
+    assert result["kind"] == "clarification"
     assert result["contract_pass"] is False
-    assert result["answer_text"] == "没有获得可展示的业务结果，本次不生成结论。"
+    assert "没有向您展示可能答非所问的数据" in result["answer_text"]
     assert "已完成" not in result["answer_text"]
 
 
@@ -469,7 +489,12 @@ def test_combined_margin_integrity_is_false_when_any_sub_result_fails():
 async def test_endpoint_delegate_false_when_should_delegate_false(monkeypatch):
     monkeypatch.setattr(gold_reads_mod, "get_factory_id", lambda: "QHJ01")
     monkeypatch.setattr(gold_reads_mod, "get_pg_pool", AsyncMock(return_value=object()))
-    spec = _spec(intent="RESTAURANT_OPS_TREND_ANALYSIS", relative_window=False)
+    spec = _spec(
+        intent="RESTAURANT_OPS_TREND_ANALYSIS",
+        relative_window=False,
+        source_tier="vector",
+        confidence=0.70,
+    )
     monkeypatch.setattr(
         "smartbi.gold.restaurant_intent.parse_restaurant_query",
         AsyncMock(return_value=spec),
@@ -522,6 +547,9 @@ async def test_endpoint_delegate_true_answer_shape(monkeypatch):
         "kpis": tiered_result["kpis"],
         "code": spec.intent,
         "contract_pass": True,
+        "query_plan_hash": None,
+        "executed_resolvers": [],
+        "suggested_followups": [],
     }
 
 
@@ -537,6 +565,11 @@ async def test_endpoint_dependent_followup_uses_trusted_context_and_session_key(
         "parent_query": "上个月营收怎么样",
         "parent_answer_summary": "上个月营收已完成分析",
         "parent_template_code": "RESTAURANT_OPS_SALES_SUMMARY",
+        "structured_context": {
+            "window_label": "上个月",
+            "requested_metrics": ["revenue"],
+            "analysis_action": "lookup",
+        },
     }
     lookup = AsyncMock(return_value=parent)
     upsert = AsyncMock(return_value=None)
@@ -587,7 +620,8 @@ async def test_endpoint_dependent_followup_uses_trusted_context_and_session_key(
     )
 
     assert result["delegate"] is True
-    assert parse_calls[0][0] == "上个月营收怎么样；继续追问：那为什么呢"
+    assert parse_calls[0][0] == "上个月营收为什么是这样"
+    assert "继续追问" not in parse_calls[0][0]
     session_key = parse_calls[0][2]["session_key"]
     assert session_key.startswith("trusted-v1:")
     assert "shared-device-session" not in session_key
@@ -621,18 +655,21 @@ async def test_endpoint_clarification_shape(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_endpoint_prefilter_skips_parse_for_signal_free_query(monkeypatch):
-    """2026-07-08 audit fix C-2: no profit token + no relative/named window
-    -> delegate:false BEFORE parse_restaurant_query runs (no T2 embedding, no
-    T3 LLM spent on a decision that cannot come out True)."""
+async def test_endpoint_signal_free_query_reaches_semantic_planner(monkeypatch):
+    """Keyword absence must never bypass the restaurant semantic planner."""
     monkeypatch.setattr(gold_reads_mod, "get_factory_id", lambda: "QHJ01")
-    parse_mock = AsyncMock(side_effect=AssertionError("parse must not run for signal-free query"))
+    monkeypatch.setattr(gold_reads_mod, "get_pg_pool", AsyncMock(return_value=object()))
+    parse_mock = AsyncMock(return_value=None)
     monkeypatch.setattr("smartbi.gold.restaurant_intent.parse_restaurant_query", parse_mock)
+    monkeypatch.setattr(
+        "smartbi.gold.restaurant_intent_service.tiered_answer",
+        AsyncMock(return_value=None),
+    )
 
     body = TieredIntentAnswerRequest(factory_id="QHJ01", query="哪个菜卖得好")
     result = await post_restaurant_tiered_answer(_fake_request(), body)
     assert result == {"delegate": False}
-    assert parse_mock.await_count == 0
+    assert parse_mock.await_count == 1
 
 
 @pytest.mark.asyncio
@@ -824,56 +861,131 @@ async def test_tiered_answer_sales_summary_reads_demo_gold_ops_stays_trusted(mon
 
 
 @pytest.mark.asyncio
-async def test_tiered_answer_gross_margin_with_store_mention_reroutes_to_store_margin(monkeypatch):
-    spec = _spec(intent="RESTAURANT_OPS_GROSS_MARGIN")
-    captured = {}
+async def test_tiered_answer_store_scope_mismatch_fails_closed_without_reroute(monkeypatch):
+    spec = _spec(
+        intent="RESTAURANT_OPS_GROSS_MARGIN",
+        planned_intents=("RESTAURANT_OPS_GROSS_MARGIN",),
+        plan_version="restaurant-query-plan-v2",
+        planner_authority="llm",
+        plan_hash="plan-store-mismatch",
+    )
+    resolver = AsyncMock()
 
     async def _fake_parse(*a, **kw):
         return spec
 
-    async def _fake_resolve(code, pool, factory_id, **kwargs):
-        captured["code"] = code
-        captured["factory_id"] = factory_id
-        captured["kwargs"] = kwargs
-        return OpsAnswer(
-            code=code, title="鲜行者打浦桥日月光店毛利分析",
-            answer_text="指定的鲜行者打浦桥日月光店在近 30 天没有可用的销售与成本数据，"
-                        "不能计算该店毛利、毛利率或排名。",
-            charts=[], kpis=[], meta={"targetStoreName": "鲜行者打浦桥日月光店"},
-        )
-
     monkeypatch.setattr(svc, "parse_restaurant_query", _fake_parse)
-    monkeypatch.setattr(svc, "_resolve_tiered", _fake_resolve)
+    monkeypatch.setattr(svc, "_resolve_tiered", resolver)
 
     result = await tiered_answer(
         "鲜行者打浦桥日月光店的毛利率是多少？", object(), "DEMO_REST", "restaurant_manager",
     )
-    assert captured["code"] == "RESTAURANT_OPS_STORE_MARGIN"
-    assert captured["factory_id"] == "RES_3101_009"
-    assert captured["kwargs"]["store_mention"] == "鲜行者打浦桥日月光店"
-    assert result["kind"] == "answer"
+    assert result["kind"] == "clarification"
+    assert result["contract_pass"] is False
+    assert "门店范围" in result["answer_text"]
+    resolver.assert_not_awaited()
 
 
 @pytest.mark.asyncio
-async def test_tiered_sales_summary_with_dish_mention_reroutes_to_gross_margin(monkeypatch):
-    spec = _spec(intent="RESTAURANT_OPS_SALES_SUMMARY")
-    captured = {}
+async def test_tiered_dish_scope_mismatch_fails_closed_without_reroute(monkeypatch):
+    spec = _spec(
+        intent="RESTAURANT_OPS_SALES_SUMMARY",
+        planned_intents=("RESTAURANT_OPS_SALES_SUMMARY",),
+        plan_version="restaurant-query-plan-v2",
+        planner_authority="llm",
+        plan_hash="plan-dish-mismatch",
+    )
+    resolver = AsyncMock()
 
     async def _fake_parse(*a, **kw):
         return spec
 
-    async def _fake_resolve(code, pool, factory_id, **kwargs):
-        captured["code"] = code
-        return OpsAnswer(code=code, title="t",
-                         answer_text="「米饭(单人份)」销量 23,296 份、营收 ¥284,492.40。",
-                         charts=[], kpis=[], meta={})
-
     monkeypatch.setattr(svc, "parse_restaurant_query", _fake_parse)
-    monkeypatch.setattr(svc, "_resolve_tiered", _fake_resolve)
+    monkeypatch.setattr(svc, "_resolve_tiered", resolver)
     result = await tiered_answer("米饭的销量是多少", object(), "DEMO_REST", "restaurant_manager")
-    assert captured["code"] == "RESTAURANT_OPS_GROSS_MARGIN"
+    assert result["kind"] == "clarification"
+    assert result["contract_pass"] is False
+    assert "菜品范围" in result["answer_text"]
+    resolver.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_tiered_answer_returns_typed_focus_entity_and_followups(monkeypatch):
+    spec = _spec(
+        intent="RESTAURANT_OPS_GROSS_MARGIN",
+        dimensions=("dish",),
+        requested_metrics=("sales_volume",),
+        planned_intents=("RESTAURANT_OPS_GROSS_MARGIN",),
+        window_label="最近30天",
+        relative_window=True,
+        plan_version="restaurant-query-plan-v2",
+        planner_authority="llm",
+        plan_hash="dish-ranking-plan",
+    )
+    monkeypatch.setattr(svc, "parse_restaurant_query", AsyncMock(return_value=spec))
+    monkeypatch.setattr(
+        svc,
+        "_resolve_tiered",
+        AsyncMock(return_value=OpsAnswer(
+            code=spec.intent,
+            title="菜品销量排行",
+            answer_text="1. 招牌藤椒味（单人份）— 销量 120 份",
+            charts=[],
+            kpis=[],
+            meta={
+                "ranked_entities": [{
+                    "type": "dish",
+                    "id": "dish-42",
+                    "name": "招牌藤椒味（单人份）",
+                    "rank": 1,
+                }],
+                "focus_entity": {
+                    "type": "dish",
+                    "id": "dish-42",
+                    "name": "招牌藤椒味（单人份）",
+                    "rank": 1,
+                },
+                "dish_ranking": "best",
+            },
+        )),
+    )
+    monkeypatch.setattr(svc, "log_intent_capture", AsyncMock(return_value=1))
+
+    result = await tiered_answer(
+        "哪个菜卖得好",
+        object(),
+        "DEMO_REST",
+        "restaurant_manager",
+    )
+
     assert result["kind"] == "answer"
-    assert result["code"] == "RESTAURANT_OPS_GROSS_MARGIN"
+    assert result["executed_resolvers"] == ["RESTAURANT_OPS_GROSS_MARGIN"]
+    assert result["structured_context"]["focus_entity"]["id"] == "dish-42"
+    assert result["structured_context"]["topic_kind"] == "dish_ranking"
+    assert result["suggested_followups"] == [
+        {"label": "看本月", "question": "本月哪个菜卖得最好？"},
+        {"label": "看上个月", "question": "上个月哪个菜卖得最好？"},
+    ]
+
+
+def test_named_entity_followups_are_self_contained_and_do_not_repeat_metric():
+    followups = svc._suggested_followups({
+        "focus_entity": {"type": "dish", "name": "米饭"},
+        "window_label": "上个月",
+        "requested_metrics": ["gross_margin"],
+        "topic_kind": None,
+    })
+
+    assert followups == [
+        {
+            "label": "看菜品销量",
+            "question": "上个月「米饭」的销量是多少？",
+        },
+        {
+            "label": "看菜品成本",
+            "question": "上个月「米饭」的成本如何？",
+        },
+    ]
 
 
 def test_r24_vector_tier_threshold_gate():

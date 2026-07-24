@@ -75,6 +75,11 @@ class _FakePool:
         return _Ctx()
 
 
+class _FailingPool:
+    def acquire(self):
+        raise RuntimeError("tenant gate unavailable")
+
+
 def _restaurant_pool() -> _FakePool:
     """A pool double whose tenant-gate fetchrow() finds a row (this factory
     has data in agg_restaurant_daily_totals) -- satisfies `_is_restaurant_tenant`."""
@@ -83,6 +88,22 @@ def _restaurant_pool() -> _FakePool:
 
 def _non_restaurant_pool() -> _FakePool:
     return _FakePool(_FakeConn(None))
+
+
+@pytest.mark.asyncio
+async def test_tenant_gate_outage_fails_closed_without_routing_fallback():
+    spec = await parse_restaurant_query(
+        "哪个菜卖得好",
+        _FailingPool(),
+        factory_id="DEMO_REST",
+    )
+
+    assert spec is not None
+    assert spec.intent == ""
+    assert spec.clarification_needed is True
+    assert spec.planner_authority == "tenant_gate_unavailable"
+    assert spec.planned_intents == ()
+    assert spec.plan_hash
 
 
 # ─── 1. Time × metric × object matrix (≥30 variants, spec section 6) ──────
@@ -148,40 +169,52 @@ def test_matrix_object_dimensions_detected():
 # ─── 2. Tiered routing ─────────────────────────────────────────────────────
 
 @pytest.mark.asyncio
-async def test_t1_hit_short_circuits_t2_and_t3():
-    """A T1 keyword hit must never touch the vector or LLM tiers."""
+async def test_t1_hit_becomes_hint_and_llm_remains_semantic_authority():
     query = "哪家店最赚钱"
     assert match_restaurant_ops(query) == "RESTAURANT_OPS_STORE_MARGIN"
 
     pool = _restaurant_pool()
+    llm = AsyncMock(return_value={
+        "intent": "RESTAURANT_OPS_STORE_MARGIN",
+        "confidence": 0.93,
+        "clarification_needed": False,
+    })
     with patch("smartbi.gold.restaurant_intent._t2_vector_match", new=AsyncMock(side_effect=AssertionError("T2 must not run"))), \
-         patch("smartbi.gold.restaurant_intent._t3_llm_parse", new=AsyncMock(side_effect=AssertionError("T3 must not run"))):
+         patch("smartbi.gold.restaurant_intent._t3_llm_parse", new=llm):
         spec = await parse_restaurant_query(query, pool, factory_id="QHJ01")
 
     assert spec is not None
     assert spec.intent == "RESTAURANT_OPS_STORE_MARGIN"
-    assert spec.source_tier == "keyword"
-    assert spec.confidence == 0.95
-    # T1 is ungated -- tenant lookup must not even run.
-    assert pool.acquire_calls == 0
+    assert spec.source_tier == "llm"
+    assert spec.planner_authority == "llm"
+    assert spec.plan_hash
+    assert llm.await_args.kwargs["hint"] == ("RESTAURANT_OPS_STORE_MARGIN", 0.95)
 
 
 @pytest.mark.asyncio
-async def test_t1_miss_t2_high_confidence_routes_vector():
+async def test_t1_miss_t2_high_confidence_is_only_llm_hint():
     query = "生意最近怎么样啊能不能多赚点"
     assert match_restaurant_ops(query) is None  # confirm this really is a T1 miss
 
     pool = _restaurant_pool()
+    llm = AsyncMock(return_value={
+        "intent": "RESTAURANT_OPS_SALES_SUMMARY",
+        "confidence": 0.91,
+        "clarification_needed": False,
+    })
     with patch(
         "smartbi.services.template_embedding_index.cosine_topk",
         new=AsyncMock(return_value=[("RESTAURANT_OPS_SALES_SUMMARY", 0.86, "总体销售情况怎么样")]),
-    ) as mock_topk:
+    ) as mock_topk, patch(
+        "smartbi.gold.restaurant_intent._t3_llm_parse", new=llm,
+    ):
         spec = await parse_restaurant_query(query, pool, factory_id="QHJ01")
 
     assert spec is not None
     assert spec.intent == "RESTAURANT_OPS_SALES_SUMMARY"
-    assert spec.source_tier == "vector"
-    assert spec.confidence == pytest.approx(0.86)
+    assert spec.source_tier == "llm"
+    assert spec.confidence == pytest.approx(0.91)
+    assert llm.await_args.kwargs["hint"] == ("RESTAURANT_OPS_SALES_SUMMARY", 0.86)
     # T2 must scope the vector search to the restaurant namespace.
     _, kwargs = mock_topk.call_args
     assert kwargs.get("code_prefix") == "RESTAURANT_OPS_"
@@ -193,7 +226,6 @@ async def test_t2_low_confidence_falls_to_t3_llm_and_ignores_llm_dates():
     T3's JSON gives a structured (non-date) time_range; the REAL date_range
     must come from `_resolve_sales_date_range`, not anything LLM-shaped."""
     query = "这两个月生意咋样，挣着钱没"
-    assert match_restaurant_ops(query) is None
 
     pool = _restaurant_pool()
     llm_json = json.dumps({
@@ -210,6 +242,8 @@ async def test_t2_low_confidence_falls_to_t3_llm_and_ignores_llm_dates():
     fake_llm_result = {"choices": [{"message": {"content": llm_json}}]}
 
     with patch(
+        "smartbi.gold.restaurant_intent.match_restaurant_ops", return_value=None,
+    ), patch(
         "smartbi.services.template_embedding_index.cosine_topk",
         new=AsyncMock(return_value=[("RESTAURANT_OPS_SALES_SUMMARY", 0.73, "总体经营")]),
     ), patch("common.llm_router.call_chain", new=AsyncMock(return_value=fake_llm_result)) as mock_chain:
@@ -266,17 +300,20 @@ async def test_t3_adversarial_raw_date_in_time_range_is_ignored():
 
 
 @pytest.mark.asyncio
-async def test_full_miss_at_every_tier_returns_none():
-    query = "随便问问天气怎么样"
-    assert match_restaurant_ops(query) is None
+async def test_semantic_planner_outage_fails_closed():
+    query = "随便聊聊宇宙"
 
     pool = _restaurant_pool()
-    with patch(
-        "smartbi.services.template_embedding_index.cosine_topk", new=AsyncMock(return_value=[]),
-    ), patch("common.llm_router.call_chain", new=AsyncMock(side_effect=RuntimeError("all providers exhausted"))):
+    with patch("smartbi.gold.restaurant_intent.match_restaurant_ops", return_value=None), patch(
+        "smartbi.gold.restaurant_intent._t2_vector_match", new=AsyncMock(return_value=(None, 0.0, None)),
+    ), patch("smartbi.gold.restaurant_intent._t3_llm_parse", new=AsyncMock(return_value=None)):
         spec = await parse_restaurant_query(query, pool, factory_id="QHJ01")
 
-    assert spec is None
+    assert spec is not None
+    assert spec.intent == ""
+    assert spec.clarification_needed is True
+    assert spec.planner_authority == "llm_unavailable"
+    assert "没有执行任何相邻分析" in spec.clarification_question
 
 
 @pytest.mark.asyncio
@@ -612,15 +649,49 @@ def test_contract_rejects_empty_answer_even_for_bare_query():
     assert result.missing == ["non_empty_answer"]
 
 
+@pytest.mark.parametrize(
+    "action,plain_answer,covered_answer",
+    [
+        (
+            "diagnose",
+            "米饭毛利率为 80%。",
+            "原因拆解：当前只能解释计算构成，不能证明因果。",
+        ),
+        (
+            "optimize",
+            "米饭毛利率为 80%。",
+            "优化目标：提高毛利率。优化动作：先核对成本。验证指标：毛利率。",
+        ),
+    ],
+)
+def test_contract_requires_current_turn_analysis_action(
+    action,
+    plain_answer,
+    covered_answer,
+):
+    spec = _spec(analysis_action=action)
+
+    rejected = contract.validate(spec, plain_answer, kpis=[], meta={})
+    accepted = contract.validate(spec, covered_answer, kpis=[], meta={})
+
+    assert "analysis_action" in rejected.missing
+    assert accepted.passed
+
+
 def test_contextualize_only_dependent_restaurant_followups():
     parent = {
         "parent_query": "本月营收趋势怎么样",
         "parent_template_code": "RESTAURANT_OPS_SALES_SUMMARY",
+        "structured_context": {
+            "window_label": "本月",
+            "requested_metrics": ["revenue"],
+            "analysis_action": "lookup",
+        },
     }
     effective, inherited = contextualize_restaurant_followup("那和上个月比呢", parent)
     assert inherited is True
-    assert "本月营收趋势怎么样" in effective
-    assert "那和上个月比呢" in effective
+    assert effective == "本月营收和上个月比呢"
+    assert "本月营收趋势怎么样" not in effective
 
     standalone, inherited = contextualize_restaurant_followup("昨天营业额是多少", parent)
     assert inherited is False
@@ -636,6 +707,123 @@ def test_generic_optimization_requires_business_objective():
     assert question is not None
     assert "营收" in question and "毛利率" in question and "损耗" in question
     assert optimization_clarification_question("优化慢销菜品") is None
+
+
+def test_followup_replans_metric_and_action_without_parent_query_injection():
+    parent = {
+        "parent_query": "米饭的毛利率如何",
+        "parent_template_code": "RESTAURANT_OPS_GROSS_MARGIN",
+        "turns_history": [{
+            "q": "米饭的毛利率如何",
+            "a_summary": "米饭毛利率 87.2%",
+            "context": {
+                "focus_entity": {"type": "dish", "name": "米饭"},
+                "window_label": "本月",
+                "requested_metrics": ["gross_margin"],
+                "analysis_action": "lookup",
+            },
+        }],
+    }
+
+    cases = {
+        "销量呢": "本月米饭的销量呢",
+        "为什么": "本月米饭的毛利率为什么是这样",
+        "怎么优化": "本月米饭的毛利率怎么优化",
+        "这个菜卖了多少": "本月米饭卖了多少",
+    }
+    for query, expected in cases.items():
+        effective, inherited = contextualize_restaurant_followup(query, parent)
+        assert inherited is True
+        assert effective == expected
+        assert "米饭的毛利率如何；继续追问" not in effective
+
+
+def test_four_turn_chain_updates_metric_before_diagnosis_and_optimization():
+    def parent(query, metric, action="lookup"):
+        return {
+            "parent_query": query,
+            "parent_template_code": "RESTAURANT_OPS_GROSS_MARGIN",
+            "turns_history": [{
+                "context": {
+                    "focus_entity": {"type": "dish", "name": "米饭"},
+                    "requested_metrics": [metric],
+                    "window_label": "本月",
+                    "analysis_action": action,
+                },
+            }],
+        }
+
+    sales_query, inherited = contextualize_restaurant_followup(
+        "销量呢",
+        parent("本月米饭的毛利率如何", "gross_margin"),
+    )
+    assert inherited is True
+    assert sales_query == "本月米饭的销量呢"
+
+    diagnosis_query, inherited = contextualize_restaurant_followup(
+        "为什么",
+        parent(sales_query, "sales_volume"),
+    )
+    assert inherited is True
+    assert diagnosis_query == "本月米饭的销量为什么是这样"
+
+    optimization_query, inherited = contextualize_restaurant_followup(
+        "怎么优化",
+        parent(diagnosis_query, "sales_volume", "diagnose"),
+    )
+    assert inherited is True
+    assert optimization_query == "本月米饭的销量怎么优化"
+
+
+def test_followup_with_explicit_new_entity_does_not_inherit_old_dish():
+    parent = {
+        "parent_query": "米饭的毛利率如何",
+        "parent_template_code": "RESTAURANT_OPS_GROSS_MARGIN",
+        "structured_context": {
+            "focus_entity": {"type": "dish", "name": "米饭"},
+            "window_label": "最近30天",
+            "requested_metrics": ["gross_margin"],
+        },
+    }
+
+    effective, inherited = contextualize_restaurant_followup(
+        "招牌藤椒味的成本如何",
+        parent,
+    )
+
+    assert inherited is False
+    assert effective == "招牌藤椒味的成本如何"
+
+
+def test_named_dish_cost_uses_scoped_unit_economics_resolver():
+    spec = _build_spec(
+        "RESTAURANT_OPS_GROSS_MARGIN",
+        "米饭的成本如何",
+        confidence=1.0,
+        tier="test",
+    )
+
+    assert spec.requested_metrics == ("recipe_cost",)
+    assert spec.planned_intents == ("RESTAURANT_OPS_GROSS_MARGIN",)
+
+
+@pytest.mark.parametrize(
+    "query,expected",
+    [
+        ("米饭销量是多少", "lookup"),
+        ("米饭毛利率为什么是这样", "diagnose"),
+        ("米饭毛利率怎么优化", "optimize"),
+        ("本月米饭销量和上月比", "compare"),
+    ],
+)
+def test_query_plan_seals_current_turn_analysis_action(query, expected):
+    spec = _build_spec(
+        "RESTAURANT_OPS_GROSS_MARGIN",
+        query,
+        confidence=1.0,
+        tier="test",
+    )
+    assert spec.analysis_action == expected
 
 
 def test_ambiguous_cost_margin_priority_requires_scope_choice():
@@ -785,13 +973,102 @@ def test_sheet_dish_sales_question_never_plans_store_sales_summary():
     assert spec.planned_intents == ("RESTAURANT_OPS_GROSS_MARGIN",)
 
 
-def test_dish_ranking_followup_resolves_first_place_pronoun_from_answer():
+def test_sheet_dish_question_rejects_wrong_llm_summary_intent_before_execution():
+    spec = _build_spec(
+        "RESTAURANT_OPS_SALES_SUMMARY",
+        "哪个菜卖得好",
+        confidence=0.95,
+        tier="llm",
+    )
+
+    assert spec.planned_intents == ("RESTAURANT_OPS_GROSS_MARGIN",)
+    assert spec.clarification_needed is True
+    assert "不会用相邻指标替代" in spec.clarification_question
+
+
+def test_llm_entity_slots_fix_scope_before_execution_plan_is_sealed():
+    dish = _build_spec(
+        "RESTAURANT_OPS_GROSS_MARGIN",
+        "米饭的销量是多少",
+        confidence=0.93,
+        tier="llm",
+        llm_dish="米饭",
+    )
+    store = _build_spec(
+        "RESTAURANT_OPS_STORE_MARGIN",
+        "鲜行者打浦桥日月光店的营收是多少",
+        confidence=0.93,
+        tier="llm",
+        llm_store="鲜行者打浦桥日月光店",
+    )
+
+    assert dish.dimensions == ("dish",)
+    assert dish.planned_intents == ("RESTAURANT_OPS_GROSS_MARGIN",)
+    assert dish.clarification_needed is False
+    assert store.dimensions == ("store",)
+    assert store.planned_intents == ("RESTAURANT_OPS_STORE_MARGIN",)
+    assert store.clarification_needed is False
+
+
+def test_query_plan_contract_rejects_resolver_substitution():
+    spec = _build_spec(
+        "RESTAURANT_OPS_GROSS_MARGIN",
+        "哪个菜卖得好",
+        confidence=0.94,
+        tier="llm",
+        planner_authority="llm",
+    )
+    common_meta = {
+        "query_plan_hash": spec.plan_hash,
+        "query_plan_version": spec.plan_version,
+        "planner_authority": "llm",
+        "execution_plan_match": True,
+        "scope_matches_request": True,
+        "actual_dimensions": ["dish"],
+        "low_margin_dishes": [{"name": "招牌菜"}],
+    }
+    passed = contract.validate(
+        spec,
+        "招牌菜销量 120 份",
+        meta={
+            **common_meta,
+            "executed_resolvers": ["RESTAURANT_OPS_GROSS_MARGIN"],
+        },
+    )
+    substituted = contract.validate(
+        spec,
+        "招牌菜销量 120 份",
+        meta={
+            **common_meta,
+            "executed_resolvers": ["RESTAURANT_OPS_SALES_SUMMARY"],
+        },
+    )
+
+    assert passed.passed
+    assert "execution_consistency" in substituted.missing
+
+
+def test_dish_ranking_followup_uses_structured_entity_not_answer_markdown():
     parent = {
         "parent_query": "哪个菜卖得好",
         "parent_template_code": "RESTAURANT_OPS_GROSS_MARGIN",
+        "turns_history": [{
+            "q": "哪个菜卖得好",
+            "a_summary": "历史摘要",
+            "context": {
+                "focus_entity": {
+                    "type": "dish",
+                    "id": "dish-42",
+                    "name": "招牌藤椒味（单人份）",
+                    "rank": 1,
+                },
+                "window_label": "最近30天",
+                "requested_metrics": ["sales_volume"],
+            },
+        }],
         "parent_answer_summary": (
             "**近 30 天菜品销量排行（卖得最好前 5）：**\n\n"
-            "1. **招牌藤椒味（单人份）** — 销量 120 份、营收 ¥3,600.00\n"
+            "1. **错误的旧模板菜名** — 销量 120 份、营收 ¥3,600.00\n"
             "2. 米饭 — 销量 100 份、营收 ¥200.00"
         ),
     }
@@ -799,7 +1076,7 @@ def test_dish_ranking_followup_resolves_first_place_pronoun_from_answer():
     effective, inherited = contextualize_restaurant_followup("它的成本如何", parent)
 
     assert inherited is True
-    assert effective == "招牌藤椒味（单人份）的成本如何"
+    assert effective == "最近30天招牌藤椒味（单人份）的成本如何"
 
 
 @pytest.mark.asyncio

@@ -94,6 +94,15 @@ public class TieredIntentDelegate {
                 if (response.get("contract_pass") != null) {
                     result.put("contractPass", response.get("contract_pass"));
                 }
+                if (response.get("suggested_followups") != null) {
+                    result.put("suggestedFollowups", response.get("suggested_followups"));
+                }
+                if (response.get("query_plan_hash") != null) {
+                    result.put("queryPlanHash", response.get("query_plan_hash"));
+                }
+                if (response.get("executed_resolvers") != null) {
+                    result.put("executedResolvers", response.get("executed_resolvers"));
+                }
             }
             return result;
         } catch (Exception e) {

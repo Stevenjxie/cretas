@@ -254,9 +254,18 @@ async def test_no_session_key_never_attempts_continuation():
         original_query="情况怎么样", clarification_question="您想看哪方面？",
     )
 
-    spec = await parse_restaurant_query(
-        "哪家店最赚钱", pool, factory_id="F_NOKEY", session_key=None,
-    )
+    resolved_json = {
+        "intent": "RESTAURANT_OPS_STORE_MARGIN",
+        "confidence": 0.92,
+        "clarification_needed": False,
+    }
+    with patch(
+        "common.llm_router.call_chain",
+        new=AsyncMock(return_value=_llm_result(resolved_json)),
+    ):
+        spec = await parse_restaurant_query(
+            "哪家店最赚钱", pool, factory_id="F_NOKEY", session_key=None,
+        )
     assert spec is not None
     assert spec.intent == "RESTAURANT_OPS_STORE_MARGIN"
     assert spec.is_clarification_continuation is False
@@ -298,9 +307,17 @@ async def test_ttl_expired_pending_is_not_continued():
     # is judged Python-side on the created_at returned by DELETE..RETURNING).
     pool.pending[(factory_id, session_key)]["created_at"] -= timedelta(seconds=400)
 
-    spec = await parse_restaurant_query(
-        "哪家店最赚钱", pool, factory_id=factory_id, session_key=session_key,
-    )
+    with patch(
+        "common.llm_router.call_chain",
+        new=AsyncMock(return_value=_llm_result({
+            "intent": "RESTAURANT_OPS_STORE_MARGIN",
+            "confidence": 0.92,
+            "clarification_needed": False,
+        })),
+    ):
+        spec = await parse_restaurant_query(
+            "哪家店最赚钱", pool, factory_id=factory_id, session_key=session_key,
+        )
     assert spec is not None
     assert spec.intent == "RESTAURANT_OPS_STORE_MARGIN"
     assert spec.is_clarification_continuation is False  # fresh path, not continuation
@@ -398,7 +415,7 @@ async def test_continuation_bypasses_route_cache_read_and_write():
 # ─── 7. Deterministic fast path on continuation avoids an LLM call ────────
 
 @pytest.mark.asyncio
-async def test_concatenated_deterministic_fast_path_skips_llm_call_on_continuation():
+async def test_continuation_keyword_candidate_still_requires_llm_plan():
     pool = _restaurant_pool()
     factory_id = "F_FAST"
     original_query = "情况怎么样"
@@ -411,12 +428,17 @@ async def test_concatenated_deterministic_fast_path_skips_llm_call_on_continuati
         original_query=original_query, clarification_question="您想看哪方面？",
     )
 
+    llm = AsyncMock(return_value=_llm_result({
+        "intent": "RESTAURANT_OPS_STORE_MARGIN",
+        "confidence": 0.94,
+        "clarification_needed": False,
+    }))
     with patch(
         "smartbi.services.template_embedding_index.cosine_topk",
         new=AsyncMock(side_effect=AssertionError("T2 must not run -- T1 already resolved it")),
     ), patch(
         "common.llm_router.call_chain",
-        new=AsyncMock(side_effect=AssertionError("T3 must not run -- T1 already resolved it")),
+        new=llm,
     ):
         spec = await parse_restaurant_query(
             answer, pool, factory_id=factory_id, session_key="sess-fast",
@@ -424,12 +446,12 @@ async def test_concatenated_deterministic_fast_path_skips_llm_call_on_continuati
 
     assert spec is not None
     assert spec.intent == "RESTAURANT_OPS_STORE_MARGIN"
-    assert spec.source_tier == "keyword"
-    assert spec.confidence == 0.95
+    assert spec.source_tier == "llm"
+    assert spec.planner_authority == "llm"
+    assert spec.confidence == 0.94
     assert spec.is_clarification_continuation is True
-    # T1 hit short-circuits BEFORE the tenant gate -- only the pending pop
-    # touched the DB, never the agg_restaurant_daily_totals lookup.
-    assert pool.tenant_gate_calls == 0
+    assert llm.await_count == 1
+    assert pool.tenant_gate_calls == 1
 
 
 # ─── 8. Deterministic slots see the FULL concatenated (two-turn) text ─────
@@ -497,11 +519,19 @@ async def test_pending_registered_when_fresh_parse_clarifies_with_session_key():
 
 
 @pytest.mark.asyncio
-async def test_pending_not_registered_when_t1_resolves_with_session_key():
+async def test_pending_not_registered_when_llm_confirms_keyword_candidate():
     pool = _restaurant_pool()
-    spec = await parse_restaurant_query(
-        "哪家店最赚钱", pool, factory_id="F_NOREG_T1", session_key="sess-noreg-t1",
-    )
+    with patch(
+        "common.llm_router.call_chain",
+        new=AsyncMock(return_value=_llm_result({
+            "intent": "RESTAURANT_OPS_STORE_MARGIN",
+            "confidence": 0.92,
+            "clarification_needed": False,
+        })),
+    ):
+        spec = await parse_restaurant_query(
+            "哪家店最赚钱", pool, factory_id="F_NOREG_T1", session_key="sess-noreg-t1",
+        )
     assert spec.clarification_needed is False
     assert pool.pending == {}
     assert await _pending_pop(pool, "F_NOREG_T1", "sess-noreg-t1") is None
@@ -542,6 +572,8 @@ async def test_cached_clarification_replay_also_registers_pending():
 
     _cache_put(factory_id, query, {
         "code": "", "confidence": 0.2, "tier": "llm",
+        "plan_version": "restaurant-query-plan-v2",
+        "planner_authority": "llm",
         "clarification_needed": True, "clarification_question": "问哪方面？",
     })
 
@@ -586,9 +618,17 @@ async def test_pending_store_db_failure_fails_open_on_pop_and_put():
 
     # Pop path: T1-resolvable query with session_key -- pending pop raises,
     # parse must still resolve the query as a fresh single-turn one.
-    spec = await parse_restaurant_query(
-        "哪家店最赚钱", pool, factory_id="F_FAILOPEN", session_key="sess-fail",
-    )
+    with patch(
+        "common.llm_router.call_chain",
+        new=AsyncMock(return_value=_llm_result({
+            "intent": "RESTAURANT_OPS_STORE_MARGIN",
+            "confidence": 0.92,
+            "clarification_needed": False,
+        })),
+    ):
+        spec = await parse_restaurant_query(
+            "哪家店最赚钱", pool, factory_id="F_FAILOPEN", session_key="sess-fail",
+        )
     assert spec is not None
     assert spec.intent == "RESTAURANT_OPS_STORE_MARGIN"
     assert spec.is_clarification_continuation is False
