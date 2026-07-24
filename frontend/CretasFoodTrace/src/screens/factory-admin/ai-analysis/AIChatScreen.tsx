@@ -34,6 +34,7 @@ import { FeedbackWidget, FoodKBQueryMetadata } from '../../../components/ai/Feed
 import { RichContentRenderer, detectRichData, type RichData } from '../../../components/ai/RichContentRenderer';
 import { useAuthStore } from '../../../store/authStore';
 import { VoiceMicButton } from '../../../components/common/VoiceMicButton';
+import { MarkdownRenderer } from '../../../components/common/MarkdownRenderer';
 import { aiApiClient } from '../../../services/api/aiApiClient';
 import type { IntentSSECallbacks } from '../../../services/api/aiApiClient';
 import type { FAAIStackParamList } from '../../../types/navigation';
@@ -777,13 +778,19 @@ export default function AIChatScreen() {
             </View>
           )}
           <View style={styles.aiMessageBubble}>
-            <Text style={styles.aiMessageText}>
-              {message.content}
-              {/* 流式输出时显示闪烁光标 */}
-              {message.isLoading && message.content && (
-                <Text style={styles.streamingCursor}>|</Text>
-              )}
-            </Text>
+            {/* 2026-07-24: resolver 答案已 markdown 化 (加粗/列表/引用块) —
+                纯 Text 会露出裸 ** 星号, 完成态走 MarkdownRenderer;
+                流式中仍用 Text (逐字追加 + 光标, markdown 半截标记无意义) */}
+            {message.isLoading ? (
+              <Text style={styles.aiMessageText}>
+                {message.content}
+                {message.content ? (
+                  <Text style={styles.streamingCursor}>|</Text>
+                ) : null}
+              </Text>
+            ) : (
+              <MarkdownRenderer content={message.content} />
+            )}
             {/* 结构化数据富组件渲染（表格/卡片/统计） */}
             {!message.isLoading && message.richData && (
               <RichContentRenderer data={message.richData} />
