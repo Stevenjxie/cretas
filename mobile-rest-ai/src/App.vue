@@ -104,7 +104,7 @@
               </div>
 
               <div class="answer-footer">
-                <span>数据更新于：2025-06-02 09:30</span>
+                <span>回答生成于 {{ formatAnswerTime(message.createdAt) }}</span>
                 <button
                   type="button"
                   aria-label="有帮助"
@@ -271,6 +271,14 @@ const canSend = computed(() => {
 
 function createSessionId(): string {
   return crypto.randomUUID()
+}
+
+// 2026-07-24: 页脚原是硬编码假时间戳「数据更新于：2025-06-02 09:30」——
+// 违反不说假话原则。改为该条回答的真实生成时间。
+function formatAnswerTime(ts: number): string {
+  const d = new Date(ts)
+  const pad = (n: number) => String(n).padStart(2, '0')
+  return `${pad(d.getHours())}:${pad(d.getMinutes())}`
 }
 
 function createMessage(role: ChatMessage['role'], content: string): ChatMessage {
