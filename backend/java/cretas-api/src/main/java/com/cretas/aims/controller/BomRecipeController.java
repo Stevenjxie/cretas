@@ -3,6 +3,7 @@ package com.cretas.aims.controller;
 import com.cretas.aims.annotation.RequireModule;
 import com.cretas.aims.annotation.RequirePermission;
 import com.cretas.aims.dto.bom.BomCopyCandidateDTO;
+import com.cretas.aims.dto.bom.BomFamilyOutputCostingResponse;
 import com.cretas.aims.dto.bom.BomItemSubstituteDTO;
 import com.cretas.aims.dto.bom.BomCopyToDraftRequest;
 import com.cretas.aims.dto.bom.BomSeasoningResponse;
@@ -15,6 +16,7 @@ import com.cretas.aims.dto.bom.CreateBomRecipeRequest;
 import com.cretas.aims.dto.bom.EnsureBomDraftRequest;
 import com.cretas.aims.dto.bom.CreateBomRecipeRequest.BomRecipeItemDTO;
 import com.cretas.aims.dto.bom.UpdateBomRecipeRequest;
+import com.cretas.aims.dto.bom.UpdateBomFamilyOutputCostingRequest;
 import com.cretas.aims.dto.common.ApiResponse;
 import com.cretas.aims.entity.bom.BomRecipe;
 import com.cretas.aims.entity.bom.BomRecipeItem;
@@ -81,6 +83,25 @@ public class BomRecipeController {
             @PathVariable String factoryId,
             @PathVariable String recipeId) {
         return ApiResponse.success(recipeService.getRecipe(factoryId, recipeId));
+    }
+
+    @GetMapping("/{recipeId}/family-output-costing")
+    @Operation(summary = "读取 BOM Family 的产出分摊与副产品净值")
+    public ApiResponse<BomFamilyOutputCostingResponse> getFamilyOutputCosting(
+            @PathVariable String factoryId,
+            @PathVariable String recipeId) {
+        return ApiResponse.success(recipeService.getFamilyOutputCosting(factoryId, recipeId));
+    }
+
+    @RequirePermission({"production:read_write", "rd:read_write", "finance:read_write"})
+    @PutMapping("/{recipeId}/family-output-costing")
+    @Operation(summary = "保存草稿 BOM Family 的副产品可变现净值")
+    public ApiResponse<BomFamilyOutputCostingResponse> updateFamilyOutputCosting(
+            @PathVariable String factoryId,
+            @PathVariable String recipeId,
+            @Valid @RequestBody UpdateBomFamilyOutputCostingRequest request) {
+        return ApiResponse.success(
+                recipeService.updateFamilyOutputCosting(factoryId, recipeId, request));
     }
 
     @GetMapping("/{recipeId}/substitutes")

@@ -6,16 +6,19 @@ ALTER TABLE bom_recipes
     ADD COLUMN IF NOT EXISTS shared_recipe_id VARCHAR(191),
     ADD COLUMN IF NOT EXISTS target_terminal_node_id VARCHAR(128),
     ADD COLUMN IF NOT EXISTS output_role VARCHAR(24),
-    ADD COLUMN IF NOT EXISTS cost_allocation_ratio NUMERIC(7,4);
+    ADD COLUMN IF NOT EXISTS cost_allocation_ratio NUMERIC(7,4),
+    ADD COLUMN IF NOT EXISTS byproduct_nrv_unit_price NUMERIC(15,4);
 
 ALTER TABLE bom_recipe_items
     ADD COLUMN IF NOT EXISTS workflow_material_node_id VARCHAR(128),
     ADD COLUMN IF NOT EXISTS workflow_input_port_id VARCHAR(128),
     ADD COLUMN IF NOT EXISTS workflow_edge_id VARCHAR(128),
-    ADD COLUMN IF NOT EXISTS cost_scope VARCHAR(24);
+    ADD COLUMN IF NOT EXISTS cost_scope VARCHAR(24),
+    ADD COLUMN IF NOT EXISTS cost_scope_key VARCHAR(1024);
 
 ALTER TABLE bom_seasoning_items
-    ADD COLUMN IF NOT EXISTS cost_scope VARCHAR(24);
+    ADD COLUMN IF NOT EXISTS cost_scope VARCHAR(24),
+    ADD COLUMN IF NOT EXISTS cost_scope_key VARCHAR(1024);
 
 DO $$
 BEGIN
@@ -25,15 +28,27 @@ BEGIN
     END IF;
     IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'ck_br_cost_allocation_ratio') THEN
         ALTER TABLE bom_recipes ADD CONSTRAINT ck_br_cost_allocation_ratio
-            CHECK (cost_allocation_ratio IS NULL OR (cost_allocation_ratio > 0 AND cost_allocation_ratio <= 100));
+            CHECK (cost_allocation_ratio IS NULL OR (cost_allocation_ratio >= 0 AND cost_allocation_ratio <= 100));
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'ck_br_byproduct_nrv_unit_price') THEN
+        ALTER TABLE bom_recipes ADD CONSTRAINT ck_br_byproduct_nrv_unit_price
+            CHECK (byproduct_nrv_unit_price IS NULL OR byproduct_nrv_unit_price > 0);
     END IF;
     IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'ck_bri_cost_scope') THEN
         ALTER TABLE bom_recipe_items ADD CONSTRAINT ck_bri_cost_scope
-            CHECK (cost_scope IS NULL OR cost_scope IN ('SHARED', 'OUTPUT_EXCLUSIVE'));
+            CHECK (cost_scope IS NULL OR cost_scope IN ('SHARED', 'OUTPUT_GROUP', 'OUTPUT_EXCLUSIVE'));
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'ck_bri_cost_scope_key') THEN
+        ALTER TABLE bom_recipe_items ADD CONSTRAINT ck_bri_cost_scope_key
+            CHECK (cost_scope <> 'OUTPUT_GROUP' OR NULLIF(BTRIM(cost_scope_key), '') IS NOT NULL);
     END IF;
     IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'ck_bsi_cost_scope') THEN
         ALTER TABLE bom_seasoning_items ADD CONSTRAINT ck_bsi_cost_scope
-            CHECK (cost_scope IS NULL OR cost_scope IN ('SHARED', 'OUTPUT_EXCLUSIVE'));
+            CHECK (cost_scope IS NULL OR cost_scope IN ('SHARED', 'OUTPUT_GROUP', 'OUTPUT_EXCLUSIVE'));
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'ck_bsi_cost_scope_key') THEN
+        ALTER TABLE bom_seasoning_items ADD CONSTRAINT ck_bsi_cost_scope_key
+            CHECK (cost_scope <> 'OUTPUT_GROUP' OR NULLIF(BTRIM(cost_scope_key), '') IS NOT NULL);
     END IF;
 END $$;
 
@@ -55,7 +70,13 @@ COMMENT ON COLUMN bom_recipes.shared_recipe_id IS
     'MAIN Output Recipe that owns family-shared raw materials and process auxiliaries';
 COMMENT ON COLUMN bom_recipes.target_terminal_node_id IS
     'Stable FINISHED_GOOD Cell selected from the pinned Workflow revision';
+COMMENT ON COLUMN bom_recipes.byproduct_nrv_unit_price IS
+    'BOM-owned net realizable value per by-product output unit; required for BY_PRODUCT activation';
 COMMENT ON COLUMN bom_recipe_items.workflow_input_port_id IS
     'Stable Workflow input port represented by this BOM material rule';
 COMMENT ON COLUMN bom_recipe_items.workflow_edge_id IS
     'Stable Workflow edge from the material Cell to the consuming process input port';
+COMMENT ON COLUMN bom_recipe_items.cost_scope_key IS
+    'Canonical comma-separated terminal node IDs that consume this immutable cost rule';
+COMMENT ON COLUMN bom_seasoning_items.cost_scope_key IS
+    'Canonical comma-separated terminal node IDs that consume this immutable process auxiliary rule';

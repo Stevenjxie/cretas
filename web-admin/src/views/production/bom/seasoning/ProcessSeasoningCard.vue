@@ -40,6 +40,14 @@ function basisLabel(): string {
 function dosageLabel(binding: SeasoningBindingView): string {
   return `${Number(binding.dosagePerKgG).toFixed(4)} 克/${basisLabel()}`;
 }
+
+function costScopeLabel(): string {
+  if (props.process.costScope === 'OUTPUT_EXCLUSIVE') return '本产出专属';
+  if (props.process.costScope === 'OUTPUT_GROUP') {
+    return `部分产出共享（${props.process.costTargetProductTypeIds?.length ?? 0} 个产出）`;
+  }
+  return '家族共享';
+}
 </script>
 
 <template>
@@ -59,7 +67,7 @@ function dosageLabel(binding: SeasoningBindingView): string {
         <span class="process-card__order">{{ process.processOrder }}</span>
         <span class="process-card__title">{{ process.processName }}</span>
         <el-tag size="small" :type="process.costScope === 'OUTPUT_EXCLUSIVE' ? 'warning' : 'info'">
-          {{ process.costScope === 'OUTPUT_EXCLUSIVE' ? '本产出专属' : '家族共享' }}
+          {{ costScopeLabel() }}
         </el-tag>
         <el-tag size="small" type="info">{{ process.bindings.length }} 种调料</el-tag>
         <span class="process-card__chevron">{{ expanded ? '收起' : '展开' }}</span>

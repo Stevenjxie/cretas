@@ -2558,6 +2558,7 @@ watch(adjustDialogVisible, (visible) => {
             :recipe-id="selectedRecipe.id"
             :recipe-status="selectedRecipe.status"
             :can-write="canWrite"
+            :can-view-price="canViewPrice"
             @request-clone="handleCloneSelectedRecipe"
             @workflow-upgraded="handleWorkflowUpgraded"
             @changed="handleSeasoningWorkspaceChanged"

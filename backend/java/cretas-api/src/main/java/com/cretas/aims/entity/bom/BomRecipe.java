@@ -194,6 +194,14 @@ public class BomRecipe extends BaseEntity {
     @Column(name = "cost_allocation_ratio", precision = 7, scale = 4)
     private BigDecimal costAllocationRatio;
 
+    /**
+     * Net realizable value per output unit for BY_PRODUCT accounting.
+     * It is BOM-owned pricing evidence, never inferred from a product name or fabricated as zero.
+     */
+    @PriceSensitive
+    @Column(name = "byproduct_nrv_unit_price", precision = 15, scale = 4)
+    private BigDecimal byproductNrvUnitPrice;
+
     @OneToMany(mappedBy = "recipe", cascade = CascadeType.ALL, fetch = FetchType.LAZY, orphanRemoval = true)
     @OrderBy("sortOrder ASC")
     @Builder.Default

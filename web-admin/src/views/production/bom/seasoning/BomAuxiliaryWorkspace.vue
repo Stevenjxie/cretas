@@ -16,6 +16,7 @@ import { bigCategoryOf } from '@/utils/materialCategory';
 import { canonicalUnitCode, displayUnit } from '@/utils/unitPricing';
 import ProcessSeasoningCard from './ProcessSeasoningCard.vue';
 import SeasoningBindingDialog, { type SeasoningMaterialOption } from './SeasoningBindingDialog.vue';
+import BomFamilyOutputCostingDialog from './BomFamilyOutputCostingDialog.vue';
 import { buildMaterialSummaries, uniqueProcessesByNode } from './seasoningModel';
 
 const props = defineProps<{
@@ -24,6 +25,7 @@ const props = defineProps<{
   recipeId: string;
   recipeStatus: BomRecipeStatus;
   canWrite: boolean;
+  canViewPrice: boolean;
 }>();
 
 const emit = defineEmits<{
@@ -46,6 +48,7 @@ const substituteRelations = ref<BomItemSubstituteView[]>([]);
 const substitutesLoaded = ref(false);
 const substituteLoadError = ref('');
 const upgradingWorkflow = ref(false);
+const outputCostingVisible = ref(false);
 
 const processes = computed(() => uniqueProcessesByNode(workspace.value?.processes || []));
 const summaries = computed(() => buildMaterialSummaries(processes.value));
@@ -258,6 +261,11 @@ async function afterSaved() {
   emit('changed');
 }
 
+async function afterOutputCostingSaved() {
+  await loadWorkspace();
+  emit('changed');
+}
+
 async function handleConflict() {
   dialogVisible.value = false;
   await loadWorkspace();
@@ -343,6 +351,13 @@ function usageLabel(usage: { dosagePerKgG: number; basisQuantity?: number | null
       <div class="workflow-source-card__actions">
         <el-button data-testid="view-workflow" @click="openWorkflow">查看工艺</el-button>
         <el-button
+          v-if="canViewPrice && (workspace.workflowTargetCount ?? 1) > 1"
+          data-testid="open-family-output-costing"
+          @click="outputCostingVisible = true"
+        >
+          产出成本配置
+        </el-button>
+        <el-button
           v-if="canWrite && workspace.workflowUpgradeAvailable"
           type="primary"
           :loading="upgradingWorkflow"
@@ -363,8 +378,17 @@ function usageLabel(usage: { dosagePerKgG: number; basisQuantity?: number | null
       </div>
     </div>
 
+    <BomFamilyOutputCostingDialog
+      v-model="outputCostingVisible"
+      :factory-id="factoryId"
+      :recipe-id="recipeId"
+      :can-write="canWrite"
+      :can-view-price="canViewPrice"
+      @saved="afterOutputCostingSaved"
+    />
+
     <el-alert
-      v-else-if="workspace && !loading"
+      v-if="workspace && !loading && !workspace.workflowRevisionHash"
       type="error"
       show-icon
       :closable="false"

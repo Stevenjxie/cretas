@@ -102,6 +102,16 @@ class BomSeasoningWorkspaceServiceTest {
         BomRecipe child = recipe(BomRecipe.Status.DRAFT, 2L);
         child.setId("CHILD");
         child.setSharedRecipeId("MAIN");
+        child.setBomFamilyId("FAMILY-1");
+        child.setTargetTerminalNodeId("finished");
+        child.setOutputRole(BomRecipe.OutputRole.CO_PRODUCT);
+        BomRecipe main = recipe(BomRecipe.Status.DRAFT, 2L);
+        main.setId("MAIN");
+        main.setProductTypeId("product-main");
+        main.setSharedRecipeId("MAIN");
+        main.setBomFamilyId("FAMILY-1");
+        main.setTargetTerminalNodeId("term-main");
+        main.setOutputRole(BomRecipe.OutputRole.MAIN);
         BomSeasoningItem shared = binding(1L, "node-p1", "p1", "salt", "5");
         shared.setRecipeId("MAIN");
         shared.setCostScope("SHARED");
@@ -112,9 +122,19 @@ class BomSeasoningWorkspaceServiceTest {
         childExclusive.setRecipeId("CHILD");
         childExclusive.setCostScope("OUTPUT_EXCLUSIVE");
         when(recipeRepository.findById("CHILD")).thenReturn(Optional.of(child));
+        when(recipeRepository.findByFactoryIdAndBomFamilyIdAndStatusOrderByProductTypeIdAsc(
+                FACTORY, "FAMILY-1", BomRecipe.Status.DRAFT)).thenReturn(List.of(main, child));
         pin(child, "p1", "p2");
-        when(bomWorkflowRevisionService.resolveProcessCostScopes(FACTORY, child))
-                .thenReturn(Map.of("node-p1", "SHARED", "node-p2", "OUTPUT_EXCLUSIVE"));
+        when(bomWorkflowRevisionService.resolveProcessCostProfiles(FACTORY, child))
+                .thenReturn(Map.of(
+                        "node-p1", new BomWorkflowRevisionService.CostScopeProfile(
+                                "SHARED",
+                                List.of("term-main", "finished"),
+                                List.of("product-main", "product-1")),
+                        "node-p2", new BomWorkflowRevisionService.CostScopeProfile(
+                                "OUTPUT_EXCLUSIVE",
+                                List.of("finished"),
+                                List.of("product-1"))));
         when(seasoningItemRepository.findByRecipeIdOrderBySeqAsc("MAIN"))
                 .thenReturn(List.of(shared, siblingExclusive));
         when(seasoningItemRepository.findByRecipeIdOrderBySeqAsc("CHILD"))
@@ -128,7 +148,9 @@ class BomSeasoningWorkspaceServiceTest {
         assertTrue(response.isEditable());
         assertEquals(List.of(1L), response.getProcesses().get(0).getBindings().stream()
                 .map(BomSeasoningItem::getId).toList());
-        assertFalse(response.getProcesses().get(0).isEditable());
+        assertTrue(response.getProcesses().get(0).isEditable());
+        assertEquals(List.of("product-main", "product-1"),
+                response.getProcesses().get(0).getCostTargetProductTypeIds());
         assertEquals(List.of(3L), response.getProcesses().get(1).getBindings().stream()
                 .map(BomSeasoningItem::getId).toList());
         assertTrue(response.getProcesses().get(1).isEditable());
@@ -487,10 +509,11 @@ class BomSeasoningWorkspaceServiceTest {
         when(bomWorkflowRevisionService.resolvePinnedGraph(FACTORY, recipe)).thenReturn(
                 new PinnedWorkflowGraph(101L, 41L, 1, "hash-101", "product-1", "finished",
                         List.of("raw-1"), steps, nodes, List.of()));
-        lenient().when(bomWorkflowRevisionService.resolveProcessCostScopes(FACTORY, recipe))
+        lenient().when(bomWorkflowRevisionService.resolveProcessCostProfiles(FACTORY, recipe))
                 .thenReturn(java.util.Arrays.stream(processIds).collect(java.util.stream.Collectors.toMap(
                         processId -> "node-" + processId,
-                        processId -> "SHARED")));
+                        processId -> new BomWorkflowRevisionService.CostScopeProfile(
+                                "SHARED", List.of("finished"), List.of("product-1")))));
         lenient().when(bomWorkflowRevisionService.resolvePinnedTerminalOutputs(FACTORY, recipe)).thenReturn(List.of(
                 new BomWorkflowRevisionService.TerminalOutput(
                         "finished",

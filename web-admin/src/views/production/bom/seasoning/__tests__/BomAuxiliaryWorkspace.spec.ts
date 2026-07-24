@@ -10,6 +10,8 @@ const deleteBinding = vi.fn();
 const requestGet = vi.fn();
 const listSubstitutes = vi.fn();
 const upgradeWorkflowRevision = vi.fn();
+const getFamilyOutputCosting = vi.fn();
+const updateFamilyOutputCosting = vi.fn();
 const routerPush = vi.fn();
 
 vi.mock('@/api/bom', async (importOriginal) => {
@@ -26,6 +28,8 @@ vi.mock('@/api/bom', async (importOriginal) => {
       ...original.bomRecipeApi,
       listSubstitutes: (...args: unknown[]) => listSubstitutes(...args),
       upgradeWorkflowRevision: (...args: unknown[]) => upgradeWorkflowRevision(...args),
+      getFamilyOutputCosting: (...args: unknown[]) => getFamilyOutputCosting(...args),
+      updateFamilyOutputCosting: (...args: unknown[]) => updateFamilyOutputCosting(...args),
     },
   };
 });
@@ -59,7 +63,14 @@ function mountWorkspace(status: 'DRAFT' | 'ACTIVE' = 'DRAFT', data = workspace(s
   requestGet.mockResolvedValue({ success: true, data: [{ id: 'M1', name: '辣椒粉', category: '调味料', unit: 'g', movingAvgPrice: 18 }] });
   listSubstitutes.mockResolvedValue({ success: true, data: [] });
   return mount(BomAuxiliaryWorkspace, {
-    props: { factoryId: 'F006', productTypeId: 'P1', recipeId: 'R1', recipeStatus: status, canWrite: true },
+    props: {
+      factoryId: 'F006',
+      productTypeId: 'P1',
+      recipeId: 'R1',
+      recipeStatus: status,
+      canWrite: true,
+      canViewPrice: true,
+    },
     global: {
       plugins: [ElementPlus],
       stubs: {
@@ -182,21 +193,76 @@ describe('BomAuxiliaryWorkspace', () => {
     expect(wrapper.emitted('request-clone')).toHaveLength(1);
   });
 
-  it('keeps family-shared processes read-only on a co-product while allowing its exclusive process', async () => {
+  it('allows editing shared and partially shared processes from the current family output', async () => {
     const data = workspace('DRAFT');
     data.sharedRulesOwner = false;
     data.processes[0].costScope = 'SHARED';
-    data.processes[0].editable = false;
-    data.processes[1].costScope = 'OUTPUT_EXCLUSIVE';
+    data.processes[0].editable = true;
+    data.processes[1].costScope = 'OUTPUT_GROUP';
+    data.processes[1].costTargetProductTypeIds = ['P1', 'P2'];
     data.processes[1].editable = true;
     const wrapper = mountWorkspace('DRAFT', data);
     await flushPromises();
     await wrapper.get('[data-testid="toggle-all-processes"]').trigger('click');
     await flushPromises();
 
-    expect(wrapper.findAll('[data-testid="add-seasoning-binding"]')).toHaveLength(1);
+    expect(wrapper.findAll('[data-testid="add-seasoning-binding"]')).toHaveLength(2);
     expect(wrapper.get('[data-testid="seasoning-process-node-roll"]').text()).toContain('家族共享');
-    expect(wrapper.get('[data-testid="seasoning-process-node-fry"]').text()).toContain('本产出专属');
+    expect(wrapper.get('[data-testid="seasoning-process-node-fry"]').text())
+      .toContain('部分产出共享（2 个产出）');
+  });
+
+  it('opens business-facing by-product NRV configuration and saves the complete output set', async () => {
+    const data = workspace('DRAFT');
+    data.workflowTargetCount = 2;
+    data.outputRole = 'MAIN';
+    data.costAllocationRatio = 100;
+    const costing = {
+      bomFamilyId: 'FAMILY-1',
+      editable: true,
+      outputs: [
+        {
+          recipeId: 'R1', productTypeId: 'P1', productName: '猪蹄',
+          outputRole: 'MAIN' as const, costAllocationRatio: 100,
+          outputQuantity: 1, outputUnit: 'kg', byproductNrvUnitPrice: null,
+        },
+        {
+          recipeId: 'R2', productTypeId: 'P2', productName: '副产品',
+          outputRole: 'BY_PRODUCT' as const, costAllocationRatio: 0,
+          outputQuantity: 0.2, outputUnit: 'kg', byproductNrvUnitPrice: 3.5,
+        },
+      ],
+    };
+    getFamilyOutputCosting.mockResolvedValue({ success: true, data: costing });
+    updateFamilyOutputCosting.mockResolvedValue({ success: true, data: costing });
+    const wrapper = mountWorkspace('DRAFT', data);
+    await flushPromises();
+
+    await wrapper.get('[data-testid="open-family-output-costing"]').trigger('click');
+    await flushPromises();
+    expect(wrapper.get('[data-testid="family-output-costing-dialog"]').text())
+      .toContain('副产品按可变现净值计价');
+    await wrapper.get('[data-testid="save-family-output-costing"]').trigger('click');
+    await flushPromises();
+
+    expect(updateFamilyOutputCosting).toHaveBeenCalledWith('F006', 'R1', {
+      outputs: [
+        { recipeId: 'R1', byproductNrvUnitPrice: null },
+        { recipeId: 'R2', byproductNrvUnitPrice: 3.5 },
+      ],
+    });
+  });
+
+  it('does not expose by-product valuation to a user without price permission', async () => {
+    const data = workspace('DRAFT');
+    data.workflowTargetCount = 2;
+    const wrapper = mountWorkspace('DRAFT', data);
+    await flushPromises();
+
+    await wrapper.setProps({ canViewPrice: false });
+
+    expect(wrapper.find('[data-testid="open-family-output-costing"]').exists()).toBe(false);
+    expect(getFamilyOutputCosting).not.toHaveBeenCalled();
   });
 
   it('shows an automatic read-only process source and never exposes revision controls', async () => {

@@ -157,6 +157,15 @@ public class StandardCostServiceImpl implements StandardCostService {
      * 当前 gramsPerUnit 尚未普遍填写, 不擅自造, 只做可见化。
      */
     private LaborResult resolveStandardLaborUnitCost(String factoryId, String productTypeId, BomRecipe recipe) {
+        /*
+         * BY_PRODUCT inventory value is its configured NRV. Shared labor and overhead remain
+         * with MAIN/CO_PRODUCT outputs after the by-product credit; adding quotation labor
+         * again here would double count it. Zero is therefore an explicit accounting policy,
+         * not a fallback for missing data.
+         */
+        if (recipe != null && recipe.getOutputRole() == BomRecipe.OutputRole.BY_PRODUCT) {
+            return LaborResult.of(BigDecimal.ZERO.setScale(COST_SCALE, RoundingMode.HALF_UP));
+        }
         // 修1: 研发报价任务查询异常直接向上抛 (不 catch 吞成 null)
         Optional<QuotationTask> taskOpt = quotationTaskRepository
                 .findFirstByFactoryIdAndProductTypeIdOrderByCreatedAtDesc(factoryId, productTypeId);

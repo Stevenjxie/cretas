@@ -240,6 +240,7 @@ class BomRecipeDraftLifecycleJpaTest {
                     assertThat(item.getWorkflowInputPortId()).isEqualTo("input");
                     assertThat(item.getWorkflowEdgeId()).isEqualTo("edge-input");
                     assertThat(item.getCostScope()).isEqualTo("SHARED");
+                    assertThat(item.getCostScopeKey()).isEqualTo("terminal");
                 });
     }
 

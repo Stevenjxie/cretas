@@ -319,9 +319,9 @@ class BomWorkflowRevisionServiceTest {
         List<Map<String, Object>> ports = List.of(
                 port("in", "INPUT", "raw-a", "RAW_MATERIAL", 0, null, null),
                 port("out-main", "OUTPUT", "finished", "FINISHED_GOOD", 0,
-                        roles ? "MAIN" : null, roles ? "80" : null),
+                        roles ? "MAIN" : null, roles ? "100" : null),
                 port("out-by", "OUTPUT", "byproduct", "FINISHED_GOOD", 1,
-                        roles ? "BY_PRODUCT" : null, roles ? "20" : null));
+                        roles ? "BY_PRODUCT" : null, roles ? "0" : null));
         return definition(new ArrayList<>(List.of(
                 material("raw-a", "RAW_MATERIAL", "RM-A", 0),
                 process("split", "WP-SPLIT", ports, 100),

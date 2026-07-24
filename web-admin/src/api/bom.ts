@@ -53,6 +53,7 @@ export interface BomRecipeSummary {
   targetTerminalNodeId?: string | null;
   outputRole?: 'MAIN' | 'CO_PRODUCT' | 'BY_PRODUCT' | null;
   costAllocationRatio?: number | null;
+  byproductNrvUnitPrice?: number | null;
   items?: BomRecipeItemView[];
 }
 
@@ -83,7 +84,9 @@ export interface BomRecipeItemPayload {
   workflowMaterialNodeId?: string | null;
   workflowInputPortId?: string | null;
   workflowEdgeId?: string | null;
-  costScope?: 'SHARED' | 'OUTPUT_EXCLUSIVE' | null;
+  costScope?: 'SHARED' | 'OUTPUT_GROUP' | 'OUTPUT_EXCLUSIVE' | null;
+  /** Server-owned canonical output membership; clients only round-trip it. */
+  costScopeKey?: string | null;
   /** RAW/AUXILIARY 仅建立物料关系时可空；PACKAGING 必须提供固定用量。 */
   standardQuantity: number | null;
   yieldRate?: number | null;
@@ -311,6 +314,18 @@ export const bomRecipeApi = {
   /** Upgrade a BOM family to the newest provably compatible saved Workflow draft. */
   upgradeWorkflowRevision: (factoryId: string, recipeId: string) =>
     post<BomRecipeSummary>(`${recipeBase(factoryId)}/${recipeId}/workflow-revisions/upgrade-latest`, null),
+
+  getFamilyOutputCosting: (factoryId: string, recipeId: string) =>
+    get<BomFamilyOutputCosting>(`${recipeBase(factoryId)}/${recipeId}/family-output-costing`),
+
+  updateFamilyOutputCosting: (
+    factoryId: string,
+    recipeId: string,
+    payload: UpdateBomFamilyOutputCostingRequest,
+  ) => put<BomFamilyOutputCosting>(
+    `${recipeBase(factoryId)}/${recipeId}/family-output-costing`,
+    payload,
+  ),
 
   /** Idempotently reuse/create the one editable draft for a factory-scoped SKU. */
   ensureDraft: (factoryId: string, productTypeId: string) =>
@@ -674,9 +689,34 @@ export interface SeasoningProcessView {
   /** @deprecated compatibility with older aggregate responses. */
   basisUnit?: string | null;
   standardUsageSupported?: boolean;
-  costScope?: 'SHARED' | 'OUTPUT_EXCLUSIVE' | string | null;
+  costScope?: 'SHARED' | 'OUTPUT_GROUP' | 'OUTPUT_EXCLUSIVE' | string | null;
+  costTargetProductTypeIds?: string[];
   editable?: boolean;
   bindings: SeasoningBindingView[];
+}
+
+export interface BomFamilyOutputCostingItem {
+  recipeId: string;
+  productTypeId: string;
+  productName: string;
+  outputRole: 'MAIN' | 'CO_PRODUCT' | 'BY_PRODUCT';
+  costAllocationRatio: number;
+  outputQuantity: number | null;
+  outputUnit: string | null;
+  byproductNrvUnitPrice: number | null;
+}
+
+export interface BomFamilyOutputCosting {
+  bomFamilyId?: string | null;
+  editable: boolean;
+  outputs: BomFamilyOutputCostingItem[];
+}
+
+export interface UpdateBomFamilyOutputCostingRequest {
+  outputs: Array<{
+    recipeId: string;
+    byproductNrvUnitPrice: number | null;
+  }>;
 }
 
 export interface SeasoningMaterialUsage {

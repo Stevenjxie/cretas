@@ -157,9 +157,13 @@ public class BomRecipeItem extends BaseEntity {
     @Column(name = "workflow_edge_id", length = 128)
     private String workflowEdgeId;
 
-    /** SHARED before the terminal split; OUTPUT_EXCLUSIVE for target-only branch/packaging. */
+    /** SHARED for all terminals, OUTPUT_GROUP for a strict subset, OUTPUT_EXCLUSIVE for one terminal. */
     @Column(name = "cost_scope", length = 24)
     private String costScope;
+
+    /** Canonical terminal-node membership of this immutable Workflow cost rule. */
+    @Column(name = "cost_scope_key", length = 1024)
+    private String costScopeKey;
 
     @Column(name = "remark", length = 500)
     private String remark;

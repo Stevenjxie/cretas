@@ -59,8 +59,10 @@ public class BomSeasoningWorkspaceResponse {
         private String standardBasisMaterialKind;
         /** False when the legacy g-per-kg seasoning model cannot represent this node safely. */
         private boolean standardUsageSupported;
-        /** SHARED across every terminal slice, or OUTPUT_EXCLUSIVE for this Output Recipe. */
+        /** SHARED across all terminals, OUTPUT_GROUP for a strict subset, OUTPUT_EXCLUSIVE for one output. */
         private String costScope;
+        /** Business output SKU IDs included in this process cost group; internal node IDs stay hidden. */
+        private List<String> costTargetProductTypeIds;
         /** Shared processes are editable only from the MAIN recipe that owns shared rules. */
         private boolean editable;
         private List<BomSeasoningItem> bindings;

@@ -15,6 +15,7 @@ import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.lenient;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 /**
@@ -231,6 +232,24 @@ class StandardCostServiceImplTest {
         assertThat(std.getLaborUnitCost()).isEqualByComparingTo("0.5000");
         assertThat(std.getTotalUnitCost()).isEqualByComparingTo("8.5000");
         assertThat(std.isLaborIncluded()).isTrue();
+    }
+
+    @Test
+    void byProductUsesNrvValuationWithoutAddingSharedLaborAgain() {
+        BomRecipe byProduct = recipe(new BigDecimal("8.00"), BigDecimal.ONE, "kg");
+        byProduct.setOutputRole(BomRecipe.OutputRole.BY_PRODUCT);
+        byProduct.setCostAllocationRatio(BigDecimal.ZERO);
+        when(bomRecipeService.getCurrentRecipe(FACTORY, PT))
+                .thenReturn(Optional.of(byProduct));
+
+        StandardCostService.StandardUnitCost std =
+                service.resolveStandardUnitCost(FACTORY, PT);
+
+        assertThat(std.getMaterialUnitCost()).isEqualByComparingTo("8.00");
+        assertThat(std.getLaborUnitCost()).isEqualByComparingTo("0.0000");
+        assertThat(std.getTotalUnitCost()).isEqualByComparingTo("8.0000");
+        assertThat(std.isLaborIncluded()).isTrue();
+        verifyNoInteractions(quotationTaskRepository);
     }
 
     @Test

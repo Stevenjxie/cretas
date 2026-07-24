@@ -220,29 +220,55 @@ public class BomWorkflowRevisionService {
     }
 
     /**
-     * Classify every process in the target slice as family-shared or terminal-exclusive.
-     * The decision is derived only from stable node identities across every terminal slice.
+     * Resolve the exact terminal membership of every process from stable node identities.
+     * A process may belong to all outputs, one output, or a strict subset of three-plus outputs.
      */
     @Transactional(readOnly = true)
-    public Map<String, String> resolveProcessCostScopes(String factoryId, BomRecipe recipe) {
+    public Map<String, CostScopeProfile> resolveProcessCostProfiles(String factoryId, BomRecipe recipe) {
         PinnedWorkflowGraph targetGraph = resolvePinnedGraph(factoryId, recipe);
         ProductProcessWorkflowDTO definition = definitionFromRecipe(recipe);
         List<TerminalOutput> outputs = resolveTerminalOutputs(definition);
-        Map<String, Integer> occurrences = new HashMap<>();
+        Map<String, LinkedHashSet<TerminalOutput>> memberships = new HashMap<>();
         for (TerminalOutput output : outputs) {
             resolveTargetGraph(recipe.getWorkflowRevisionId(), definition, output.productTypeId())
                     .processes().stream()
                     .map(PinnedWorkflowGraph.ProcessStep::processNodeId)
                     .distinct()
-                    .forEach(processNodeId -> occurrences.merge(processNodeId, 1, Integer::sum));
+                    .forEach(processNodeId -> memberships
+                            .computeIfAbsent(processNodeId, ignored -> new LinkedHashSet<>())
+                            .add(output));
         }
-        LinkedHashMap<String, String> scopes = new LinkedHashMap<>();
+        LinkedHashMap<String, CostScopeProfile> profiles = new LinkedHashMap<>();
         for (PinnedWorkflowGraph.ProcessStep process : targetGraph.processes()) {
-            scopes.put(process.processNodeId(),
-                    occurrences.getOrDefault(process.processNodeId(), 0) == outputs.size()
-                            ? "SHARED" : "OUTPUT_EXCLUSIVE");
+            List<TerminalOutput> members = memberships
+                    .getOrDefault(process.processNodeId(), new LinkedHashSet<>()).stream()
+                    .sorted(Comparator.comparing(TerminalOutput::terminalNodeId))
+                    .toList();
+            String scope = members.size() == outputs.size()
+                    ? "SHARED"
+                    : members.size() == 1 ? "OUTPUT_EXCLUSIVE" : "OUTPUT_GROUP";
+            profiles.put(process.processNodeId(), new CostScopeProfile(
+                    scope,
+                    members.stream().map(TerminalOutput::terminalNodeId).toList(),
+                    members.stream().map(TerminalOutput::productTypeId).toList()));
         }
-        return Map.copyOf(scopes);
+        return Map.copyOf(profiles);
+    }
+
+    @Transactional(readOnly = true)
+    public Map<String, String> resolveProcessCostScopes(String factoryId, BomRecipe recipe) {
+        return resolveProcessCostProfiles(factoryId, recipe).entrySet().stream()
+                .collect(Collectors.toUnmodifiableMap(
+                        Map.Entry::getKey,
+                        entry -> entry.getValue().costScope()));
+    }
+
+    public static String canonicalCostScopeKey(List<String> terminalNodeIds) {
+        return terminalNodeIds.stream()
+                .filter(Objects::nonNull)
+                .distinct()
+                .sorted()
+                .collect(Collectors.joining(","));
     }
 
     @Transactional(readOnly = true)
@@ -595,7 +621,8 @@ public class BomWorkflowRevisionService {
             for (Map<?, ?> output : outputs) {
                 String role = value(output.get("outputRole"));
                 BigDecimal ratio = decimal(output.get("costAllocationRatio"));
-                if (role == null || !OUTPUT_ROLES.contains(role) || ratio == null || ratio.signum() <= 0) {
+                if (role == null || !OUTPUT_ROLES.contains(role) || ratio == null
+                        || ("BY_PRODUCT".equals(role) ? ratio.signum() != 0 : ratio.signum() <= 0)) {
                     throw invalid(409, "多产出工序必须为每个产出配置角色和成本分摊比例",
                             "BOM_WORKFLOW_MULTI_OUTPUT_CONTRACT_REQUIRED");
                 }
@@ -645,7 +672,8 @@ public class BomWorkflowRevisionService {
                 ratio = ratio == null ? new BigDecimal("100") : ratio;
             }
             if (roleValue == null || !OUTPUT_ROLES.contains(roleValue)
-                    || ratio == null || ratio.signum() <= 0) {
+                    || ratio == null
+                    || ("BY_PRODUCT".equals(roleValue) ? ratio.signum() != 0 : ratio.signum() <= 0)) {
                 throw invalid(409, "多产出 Workflow 必须为每个终端配置角色和成本分摊比例",
                         "BOM_WORKFLOW_MULTI_OUTPUT_CONTRACT_REQUIRED");
             }
@@ -849,6 +877,15 @@ public class BomWorkflowRevisionService {
             BomRecipe.OutputRole outputRole,
             BigDecimal costAllocationRatio,
             String outputUnit) { }
+
+    public record CostScopeProfile(
+            String costScope,
+            List<String> terminalNodeIds,
+            List<String> productTypeIds) {
+        public String costScopeKey() {
+            return canonicalCostScopeKey(terminalNodeIds);
+        }
+    }
 
     public record InputSlot(
             String materialNodeId,

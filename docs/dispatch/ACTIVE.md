@@ -1,11 +1,11 @@
 # Dispatch 台账 — ACTIVE
-**最后更新**：2026-07-23
+**最后更新**：2026-07-24
 
 **当前真值**：`origin/main` 为代码与合并真值；本文件为当前任务状态真值。完成记录见 [2026-07-23-active-history.md](archive/2026-07-23-active-history.md)，此前历史见 [2026-07-22-active-history.md](archive/2026-07-22-active-history.md)。
 
 ## 在飞任务
 
-- `FEATURE-WORKFLOW-BOM-AUTO-BINDING-DAG-001` — `review` — Owner: `/root` — Base SHA: `19bed09f8f78474c78ef84164bac44621535d458` — 实现与只读终审已完成，正在执行最终 release build/JPA/Web 门禁并创建 PR；统一交付 Workflow revision 自动精确固定、按目标终端 DAG 回溯、BOM Family/Output Recipe 多产出共享成本、稳定 node/port/edge 升级、报工候选三重交集，以及 BOM 工艺来源卡片与辅料工作区 UX；串行吸收 `PRODUCT_DEFECT-F006-R2-BOM-OUTPUT-001`、`FEATURE-F006-R2-BOM-SUBSTITUTE-001`、`FEATURE-F006-R2-BOM-SUBSTITUTE-001-CORE`、`F006-R2-WORKFLOW-FIRST-BOM-GATE`、`BUG-F006-R2-WORKFLOW-INPUT-MODE-DERIVATION` 的重叠剩余项，PR 合并前继续保留 scope 锁；严格 `NOT_DEPLOYED`、生产零写。
+- `FEATURE-WORKFLOW-BOM-AUTO-BINDING-DAG-001` — `review` — Owner: `/root` — Base SHA: `19bed09f8f78474c78ef84164bac44621535d458` — PR #1731 已关闭终审披露的两项风险：按固定 DAG 终端集合支持三产出以上的部分共享成本组，并以 BOM 单位净可变现价值实现副产品抵扣与成本守恒；真实 JPA、成本、Web、UI 与价格脱敏门禁已补齐，等待 PR 审查。继续保留原 scope 锁，严格 `NOT_DEPLOYED`、生产零写。
 - `SEC-CREDENTIAL-ROTATION-20260719` — `blocked` — Owner: Codex coordinator — Base SHA: `1ba9a241a77144a80851051efbac584abf4db69d` — tracked tree、47/139 非受控副本、数据库/JWT/internal/BaoTa 轮换和生产验收已完成；仍需各供应商控制台吊销无法由当前 API 权限完成的旧长期凭证，详情见 [凭证轮换收尾记录](../security/credential-rotation-closeout-2026-07-20.md)。
 - `ENH-F006-SUPPLIER-IMPORT-001`（含 `REQ-F006-SUPPLIER-REQUIRED-CONTACT-001`、`ENH-F006-SUPPLIER-DETAIL-STATUS-001`）— `in-progress` — Owner: `/root` — Base SHA: `3ddf6751603476205457fcf8aa0ee9f1adbea792` — 复用现有供应链 Excel 共享能力，统一供应商必填资料、导入预览/幂等确认、状态生命周期、采购门禁与详情信息架构；只合入 `main`，严格 `NOT_DEPLOYED`，生产业务写入为 0。
 - `BUG-F006-MATERIAL-CATEGORY-CASCADE-001`（含 `BUG-F006-MATERIAL-AUTOFILL-UNIT-001`）— `in-progress` — Owner: `/root` — Base SHA: `3ddf6751603476205457fcf8aa0ee9f1adbea792` — 修复原料类型字典 category/L1/L2/L3 单一真值、异步级联与单位建议来源/手动覆盖语义，后端 fail-closed 校验；只合入 `main`，严格 `NOT_DEPLOYED`，生产业务写入为 0。

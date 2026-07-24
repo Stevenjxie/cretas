@@ -2,10 +2,12 @@ package com.cretas.aims.service.bom.impl;
 
 import com.cretas.aims.dto.bom.BomSeasoningResponse;
 import com.cretas.aims.dto.bom.BomSeasoningSaveRequest;
+import com.cretas.aims.dto.bom.BomFamilyOutputCostingResponse;
 import com.cretas.aims.dto.bom.BomSeasoningSaveRequest.SeasoningItemDTO;
 import com.cretas.aims.dto.bom.CreateBomRecipeRequest;
 import com.cretas.aims.dto.bom.CreateBomRecipeRequest.BomRecipeItemDTO;
 import com.cretas.aims.dto.bom.UpdateBomRecipeRequest;
+import com.cretas.aims.dto.bom.UpdateBomFamilyOutputCostingRequest;
 import com.cretas.aims.entity.RawMaterialType;
 import com.cretas.aims.entity.ProductType;
 import com.cretas.aims.entity.bom.BomRecipe;
@@ -49,6 +51,7 @@ import java.util.Comparator;
 import java.util.HashSet;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -236,6 +239,13 @@ public class BomRecipeServiceImpl implements BomRecipeService {
 
         // PUT is full-replace for items: soft-delete existing, persist new list.
         if (req.getItems() != null) {
+            if (familyForStatus(recipe).size() > 1) {
+                throw bomError(409,
+                        "多产出 BOM 不能从单个产出执行整表覆盖",
+                        "BOM_FAMILY_FULL_REPLACE_FORBIDDEN",
+                        "请逐条编辑物料；批量导入需使用支持完整 BOM Family 的专用入口",
+                        "bomItems");
+            }
             List<BomRecipeItem> oldItems = itemRepo.findByRecipeIdOrderBySortOrderAsc(recipe.getId());
             for (BomRecipeItem old : oldItems) {
                 old.softDelete();
@@ -266,7 +276,8 @@ public class BomRecipeServiceImpl implements BomRecipeService {
 
         List<BomRecipe> family = activationFamily(factoryId, recipe);
         validateFamilyContracts(factoryId, family);
-        validateByProductActivationSupported(family);
+        validateByProductCreditRules(family);
+        recomputeFamilyCosts(recipe);
         for (BomRecipe member : family) {
             ProductType product = loadProductForUpdate(factoryId, member.getProductTypeId());
             validateProductOutputMetadata(product);
@@ -288,7 +299,6 @@ public class BomRecipeServiceImpl implements BomRecipeService {
 
         LocalDateTime activatedAt = LocalDateTime.now();
         for (BomRecipe member : family) {
-            recomputeMaterialCost(member);
             member.setStatus(BomRecipe.Status.ACTIVE);
             member.setIsCurrent(true);
             member.setActivatedAt(activatedAt);
@@ -298,13 +308,33 @@ public class BomRecipeServiceImpl implements BomRecipeService {
         return family.stream().filter(member -> member.getId().equals(recipeId)).findFirst().orElse(recipe);
     }
 
-    private void validateByProductActivationSupported(List<BomRecipe> family) {
-        if (family.stream().anyMatch(member -> member.getOutputRole() == BomRecipe.OutputRole.BY_PRODUCT)) {
-            throw bomError(409,
-                    "当前版本尚不支持副产品抵扣的无歧义成本核算，不能激活含副产品的 BOM Family",
-                    "BOM_BY_PRODUCT_CREDIT_UNSUPPORTED",
-                    "请将其建模为明确分摊成本的联产品，或等待副产品抵扣规则上线后再激活",
-                    "outputRole");
+    private void validateByProductCreditRules(List<BomRecipe> family) {
+        for (BomRecipe member : family) {
+            if (member.getOutputRole() != BomRecipe.OutputRole.BY_PRODUCT) continue;
+            if (member.getCostAllocationRatio() == null
+                    || member.getCostAllocationRatio().compareTo(BigDecimal.ZERO) != 0) {
+                throw bomError(409,
+                        "副产品不参与共享成本比例分摊，分摊比例必须为 0%",
+                        "BOM_BY_PRODUCT_ALLOCATION_MUST_BE_ZERO",
+                        "请在 Workflow 中把副产品分摊比例设为 0",
+                        "costAllocationRatio");
+            }
+            if (member.getByproductNrvUnitPrice() == null
+                    || member.getByproductNrvUnitPrice().compareTo(BigDecimal.ZERO) <= 0) {
+                throw bomError(409,
+                        "副产品缺少单位可变现净值，无法计算成本抵扣",
+                        "BOM_BY_PRODUCT_NRV_REQUIRED",
+                        "请填写副产品预计售价扣除后续加工、销售费用后的单位净值",
+                        "byproductNrvUnitPrice");
+            }
+            if (member.getOutputQuantityPerUnit() == null
+                    || member.getOutputQuantityPerUnit().compareTo(BigDecimal.ZERO) <= 0) {
+                throw bomError(409,
+                        "副产品缺少本批次基准产出数量，无法计算成本抵扣",
+                        "BOM_BY_PRODUCT_OUTPUT_QUANTITY_REQUIRED",
+                        "请先补齐副产品的产出数量与单位",
+                        "outputQuantityPerUnit");
+            }
         }
     }
 
@@ -344,7 +374,9 @@ public class BomRecipeServiceImpl implements BomRecipeService {
             }
             clonesBySourceId.put(member.getId(), clone);
         }
-        return clonesBySourceId.get(source.getId());
+        BomRecipe selected = clonesBySourceId.get(source.getId());
+        recomputeFamilyCosts(selected);
+        return selected;
     }
 
     @Override
@@ -366,11 +398,108 @@ public class BomRecipeServiceImpl implements BomRecipeService {
         return recipeRepo.findById(editable.getId()).orElse(editable);
     }
 
+    @Override
+    @Transactional(readOnly = true)
+    public BomFamilyOutputCostingResponse getFamilyOutputCosting(
+            String factoryId, String recipeId) {
+        BomRecipe reference = loadRecipe(factoryId, recipeId);
+        return buildFamilyOutputCostingResponse(familyForStatus(reference));
+    }
+
+    @Override
+    @Transactional
+    public BomFamilyOutputCostingResponse updateFamilyOutputCosting(
+            String factoryId,
+            String recipeId,
+            UpdateBomFamilyOutputCostingRequest request) {
+        BomRecipe reference = loadRecipe(factoryId, recipeId);
+        List<BomRecipe> family = familyForStatus(reference);
+        if (family.stream().anyMatch(member -> member.getStatus() != BomRecipe.Status.DRAFT)) {
+            throw bomError(409,
+                    "已生效或历史 BOM 的产出成本配置不可修改",
+                    "BOM_FAMILY_OUTPUT_COSTING_READ_ONLY",
+                    "请先克隆为新版本再修改",
+                    "bomVersions");
+        }
+        Map<String, UpdateBomFamilyOutputCostingRequest.OutputCostingInput> requested =
+                request.getOutputs().stream().collect(java.util.stream.Collectors.toMap(
+                        UpdateBomFamilyOutputCostingRequest.OutputCostingInput::getRecipeId,
+                        item -> item,
+                        (left, right) -> {
+                            throw bomError(400,
+                                    "同一产出不能重复提交",
+                                    "BOM_FAMILY_OUTPUT_DUPLICATE",
+                                    "请刷新产出成本配置后重试",
+                                    "outputs");
+                        }));
+        Set<String> familyIds = family.stream().map(BomRecipe::getId).collect(
+                java.util.stream.Collectors.toSet());
+        if (!familyIds.equals(requested.keySet())) {
+            throw bomError(409,
+                    "产出成本配置必须一次覆盖当前 BOM Family 的全部产出",
+                    "BOM_FAMILY_OUTPUT_SET_MISMATCH",
+                    "请刷新页面后重新填写，不能新增、遗漏或替换产出",
+                    "outputs");
+        }
+        for (BomRecipe member : family) {
+            BigDecimal nrv = requested.get(member.getId()).getByproductNrvUnitPrice();
+            if (member.getOutputRole() == BomRecipe.OutputRole.BY_PRODUCT) {
+                if (nrv == null || nrv.compareTo(BigDecimal.ZERO) <= 0) {
+                    throw bomError(400,
+                            "副产品单位可变现净值必须大于 0",
+                            "BOM_BY_PRODUCT_NRV_REQUIRED",
+                            "请填写预计售价扣除后续加工、销售费用后的单位净值",
+                            "byproductNrvUnitPrice");
+                }
+                member.setByproductNrvUnitPrice(nrv);
+            } else {
+                if (nrv != null) {
+                    throw bomError(400,
+                            "主产出和联产品不使用副产品净值抵扣",
+                            "BOM_NON_BY_PRODUCT_NRV_FORBIDDEN",
+                            "仅在副产品行填写单位可变现净值",
+                            "byproductNrvUnitPrice");
+                }
+                member.setByproductNrvUnitPrice(null);
+            }
+            recipeRepo.save(member);
+        }
+        recomputeFamilyCosts(reference);
+        return buildFamilyOutputCostingResponse(familyForStatus(reference));
+    }
+
+    private BomFamilyOutputCostingResponse buildFamilyOutputCostingResponse(
+            List<BomRecipe> family) {
+        BomFamilyOutputCostingResponse response = new BomFamilyOutputCostingResponse();
+        response.setBomFamilyId(family.isEmpty() ? null : family.get(0).getBomFamilyId());
+        response.setEditable(!family.isEmpty() && family.stream()
+                .allMatch(member -> member.getStatus() == BomRecipe.Status.DRAFT));
+        response.setOutputs(family.stream()
+                .sorted(Comparator.comparing((BomRecipe member) ->
+                                member.getOutputRole() != BomRecipe.OutputRole.MAIN)
+                        .thenComparing(
+                                BomRecipe::getProductName,
+                                Comparator.nullsLast(String::compareTo)))
+                .map(member -> new BomFamilyOutputCostingResponse.OutputCosting(
+                        member.getId(),
+                        member.getProductTypeId(),
+                        member.getProductName(),
+                        member.getOutputRole(),
+                        member.getCostAllocationRatio(),
+                        member.getOutputQuantityPerUnit(),
+                        member.getOutputUnit(),
+                        member.getByproductNrvUnitPrice()))
+                .toList());
+        return response;
+    }
+
     private BomRecipe cloneRecipeInternal(String factoryId, BomRecipe source) {
         String familyId = UUID.randomUUID().toString();
         BomRecipe clone = cloneRecipeInternal(factoryId, source, familyId, null);
         clone.setSharedRecipeId(clone.getId());
-        return recipeRepo.save(clone);
+        clone = recipeRepo.save(clone);
+        recomputeFamilyCosts(clone);
+        return clone;
     }
 
     private BomRecipe cloneRecipeInternal(
@@ -405,6 +534,7 @@ public class BomRecipeServiceImpl implements BomRecipeService {
         clone.setTargetTerminalNodeId(source.getTargetTerminalNodeId());
         clone.setOutputRole(source.getOutputRole());
         clone.setCostAllocationRatio(source.getCostAllocationRatio());
+        clone.setByproductNrvUnitPrice(source.getByproductNrvUnitPrice());
         clone = recipeRepo.save(clone);
 
         // Copy items.
@@ -449,6 +579,7 @@ public class BomRecipeServiceImpl implements BomRecipeService {
             item.setWorkflowInputPortId(src.getWorkflowInputPortId());
             item.setWorkflowEdgeId(src.getWorkflowEdgeId());
             item.setCostScope(src.getCostScope());
+            item.setCostScopeKey(src.getCostScopeKey());
             clonedItems.add(item);
         }
         itemRepo.saveAll(clonedItems);
@@ -479,6 +610,7 @@ public class BomRecipeServiceImpl implements BomRecipeService {
             cs.setWorkProcessId(s.getWorkProcessId()); // 调料配方按工序 (2026-07-13): 保工序分配
             cs.setWorkflowProcessNodeId(s.getWorkflowProcessNodeId());
             cs.setCostScope(s.getCostScope());
+            cs.setCostScopeKey(s.getCostScopeKey());
             cs.setSubsequentPotRatio(s.getSubsequentPotRatio());
             clonedSeasoning.add(cs);
         }
@@ -507,7 +639,6 @@ public class BomRecipeServiceImpl implements BomRecipeService {
         }
         processInjectionConfigRepo.saveAll(clonedConfigs);
 
-        recomputeMaterialCost(clone);
         return recipeRepo.save(clone);
     }
 
@@ -558,40 +689,35 @@ public class BomRecipeServiceImpl implements BomRecipeService {
         }
         recipeRepo.flush();
 
-        Map<String, List<BomWorkflowRevisionService.InputSlot>> slotsByProduct = new HashMap<>();
-        Map<String, Long> slotOccurrences = new HashMap<>();
-        Map<String, Long> processOccurrences = new HashMap<>();
+        Map<String, List<BomWorkflowRevisionService.InputSlot>> slotsByRecipe = new LinkedHashMap<>();
         bindingsByProduct.forEach((productTypeId, binding) -> {
             List<BomWorkflowRevisionService.InputSlot> slots =
                     BomWorkflowRevisionService.resolveInputSlots(binding.graph());
-            slotsByProduct.put(productTypeId, slots);
-            slots.stream().map(this::slotKey).distinct()
-                    .forEach(key -> slotOccurrences.merge(key, 1L, Long::sum));
-            binding.graph().processes().stream()
-                    .map(PinnedWorkflowGraph.ProcessStep::processNodeId)
-                    .distinct()
-                    .forEach(key -> processOccurrences.merge(key, 1L, Long::sum));
+            slotsByRecipe.put(membersByProduct.get(productTypeId).getId(), slots);
         });
 
-        int terminalCount = outputs.size();
-        assertNoPartiallySharedInputSlots(slotOccurrences, terminalCount);
-        assertNoPartiallySharedProcesses(processOccurrences, terminalCount);
-        for (Map.Entry<String, BomRecipe> entry : membersByProduct.entrySet()) {
-            BomRecipe member = entry.getValue();
-            if (!itemRepo.findByRecipeIdOrderBySortOrderAsc(member.getId()).isEmpty()) continue;
-            List<BomRecipeItem> skeletons = new ArrayList<>();
-            for (BomWorkflowRevisionService.InputSlot slot : slotsByProduct.get(entry.getKey())) {
-                boolean shared = slotOccurrences.getOrDefault(slotKey(slot), 0L) == terminalCount;
-                if (shared && !member.getId().equals(main.getId())) continue;
-                skeletons.add(createInputSkeleton(factoryId, member, slot,
-                        shared ? "SHARED" : "OUTPUT_EXCLUSIVE", skeletons.size()));
-            }
-            itemRepo.saveAll(skeletons);
+        Map<String, List<BomRecipeItem>> skeletonsByOwner = new LinkedHashMap<>();
+        for (InputCostProfile profile : resolveInputCostProfiles(
+                new ArrayList<>(membersByProduct.values()), slotsByRecipe, main)) {
+            List<BomRecipeItem> ownerItems = skeletonsByOwner.computeIfAbsent(
+                    profile.owner().getId(), ignored -> new ArrayList<>());
+            ownerItems.add(createInputSkeleton(
+                    factoryId,
+                    profile.owner(),
+                    profile.slot(),
+                    profile.costScope(),
+                    profile.costScopeKey(),
+                    ownerItems.size()));
+        }
+        for (BomRecipe member : membersByProduct.values()) {
+            List<BomRecipeItem> skeletons =
+                    skeletonsByOwner.getOrDefault(member.getId(), List.of());
+            if (!skeletons.isEmpty()) itemRepo.saveAll(skeletons);
             member.getItems().clear();
             member.getItems().addAll(skeletons);
-            recomputeMaterialCost(member);
             recipeRepo.save(member);
         }
+        recomputeFamilyCosts(requested);
         return recipeRepo.findById(requested.getId()).orElse(requested);
     }
 
@@ -616,22 +742,12 @@ public class BomRecipeServiceImpl implements BomRecipeService {
                         "请回到 Workflow 配置唯一主产出",
                         "workflow"));
         Map<String, List<BomWorkflowRevisionService.InputSlot>> slotsByRecipe = new LinkedHashMap<>();
-        Map<String, Long> occurrences = new HashMap<>();
-        Map<String, Long> processOccurrences = new HashMap<>();
         for (BomRecipe member : family) {
             PinnedWorkflowGraph graph = bomWorkflowRevisionService.resolvePinnedGraph(factoryId, member);
             List<BomWorkflowRevisionService.InputSlot> slots =
                     BomWorkflowRevisionService.resolveInputSlots(graph);
             slotsByRecipe.put(member.getId(), slots);
-            slots.stream().map(this::slotKey).distinct()
-                    .forEach(key -> occurrences.merge(key, 1L, Long::sum));
-            graph.processes().stream()
-                    .map(PinnedWorkflowGraph.ProcessStep::processNodeId)
-                    .distinct()
-                    .forEach(key -> processOccurrences.merge(key, 1L, Long::sum));
         }
-        assertNoPartiallySharedInputSlots(occurrences, family.size());
-        assertNoPartiallySharedProcesses(processOccurrences, family.size());
 
         Map<String, BomRecipeItem> existingBySlot = new HashMap<>();
         for (BomRecipe member : family) {
@@ -652,63 +768,67 @@ public class BomRecipeServiceImpl implements BomRecipeService {
             }
         }
 
+        Map<String, List<BomRecipeItem>> additionsByOwner = new LinkedHashMap<>();
+        for (InputCostProfile profile : resolveInputCostProfiles(family, slotsByRecipe, main)) {
+            BomRecipeItem existing = existingBySlot.get(slotKey(profile.slot()));
+            if (existing != null) {
+                existing.setCostScope(profile.costScope());
+                existing.setCostScopeKey(profile.costScopeKey());
+                itemRepo.save(existing);
+                continue;
+            }
+            List<BomRecipeItem> additions = additionsByOwner.computeIfAbsent(
+                    profile.owner().getId(), ignored -> new ArrayList<>());
+            BomRecipeItem skeleton = createInputSkeleton(
+                    factoryId,
+                    profile.owner(),
+                    profile.slot(),
+                    profile.costScope(),
+                    profile.costScopeKey(),
+                    itemRepo.findByRecipeIdOrderBySortOrderAsc(profile.owner().getId()).size()
+                            + additions.size());
+            additions.add(skeleton);
+            existingBySlot.put(slotKey(profile.slot()), skeleton);
+        }
         for (BomRecipe member : family) {
-            List<BomRecipeItem> additions = new ArrayList<>();
-            for (BomWorkflowRevisionService.InputSlot slot : slotsByRecipe.get(member.getId())) {
-                boolean shared = occurrences.getOrDefault(slotKey(slot), 0L) == family.size();
-                BomRecipe desiredOwner = shared ? main : member;
-                if (!desiredOwner.getId().equals(member.getId())) continue;
-                String expectedScope = shared ? "SHARED" : "OUTPUT_EXCLUSIVE";
-                BomRecipeItem existing = existingBySlot.get(slotKey(slot));
-                if (existing != null) {
-                    if (!desiredOwner.getId().equals(existing.getRecipeId())
-                            || !expectedScope.equals(existing.getCostScope())) {
-                        throw bomError(409,
-                                "升级后的工艺改变了既有投入槽的成本归属: " + slot.materialNodeId(),
-                                "BOM_WORKFLOW_UPGRADE_SCOPE_CONFLICT",
-                                "请拆分为新的 Workflow 变体，或先修复工艺分支后重试",
-                                "workflow");
-                    }
-                    continue;
-                }
-                BomRecipeItem skeleton = createInputSkeleton(
-                        factoryId, desiredOwner, slot, expectedScope,
-                        itemRepo.findByRecipeIdOrderBySortOrderAsc(desiredOwner.getId()).size()
-                                + additions.size());
-                additions.add(skeleton);
-                existingBySlot.put(slotKey(slot), skeleton);
-            }
-            if (!additions.isEmpty()) {
-                itemRepo.saveAll(additions);
-                member.getItems().addAll(additions);
-            }
+            List<BomRecipeItem> additions =
+                    additionsByOwner.getOrDefault(member.getId(), List.of());
+            if (!additions.isEmpty()) itemRepo.saveAll(additions);
+            refreshItemsInPlace(member);
         }
     }
 
-    private void assertNoPartiallySharedInputSlots(Map<String, Long> occurrences, int terminalCount) {
-        List<String> partial = occurrences.entrySet().stream()
-                .filter(entry -> entry.getValue() > 1 && entry.getValue() < terminalCount)
-                .map(Map.Entry::getKey)
-                .toList();
-        if (!partial.isEmpty()) {
-            throw bomError(409,
-                    "当前多产出工艺存在仅由部分终端共享的投入槽，无法无歧义分摊成本",
-                    "BOM_FAMILY_PARTIAL_SHARED_INPUT_UNSUPPORTED",
-                    "请把该共享段拆成明确的中间产出/独立 Workflow 变体后重试",
-                    "workflow");
+    private List<InputCostProfile> resolveInputCostProfiles(
+            List<BomRecipe> family,
+            Map<String, List<BomWorkflowRevisionService.InputSlot>> slotsByRecipe,
+            BomRecipe main) {
+        Map<String, BomWorkflowRevisionService.InputSlot> representativeSlots = new LinkedHashMap<>();
+        Map<String, LinkedHashSet<BomRecipe>> targetsBySlot = new LinkedHashMap<>();
+        for (BomRecipe member : family) {
+            for (BomWorkflowRevisionService.InputSlot slot :
+                    slotsByRecipe.getOrDefault(member.getId(), List.of())) {
+                String key = slotKey(slot);
+                representativeSlots.putIfAbsent(key, slot);
+                targetsBySlot.computeIfAbsent(key, ignored -> new LinkedHashSet<>()).add(member);
+            }
         }
-    }
-
-    private void assertNoPartiallySharedProcesses(Map<String, Long> occurrences, int terminalCount) {
-        boolean partial = occurrences.values().stream()
-                .anyMatch(count -> count > 1 && count < terminalCount);
-        if (partial) {
-            throw bomError(409,
-                    "当前多产出工艺存在仅由部分终端共享的工序，无法无歧义维护辅料和成本",
-                    "BOM_FAMILY_PARTIAL_SHARED_PROCESS_UNSUPPORTED",
-                    "请把该共享段拆成明确的中间产出/独立 Workflow 变体后重试",
-                    "workflow");
+        List<InputCostProfile> profiles = new ArrayList<>();
+        for (Map.Entry<String, BomWorkflowRevisionService.InputSlot> entry :
+                representativeSlots.entrySet()) {
+            List<BomRecipe> targets = targetsBySlot.get(entry.getKey()).stream()
+                    .sorted(Comparator.comparing(BomRecipe::getTargetTerminalNodeId))
+                    .toList();
+            String costScope = targets.size() == family.size()
+                    ? "SHARED"
+                    : targets.size() == 1 ? "OUTPUT_EXCLUSIVE" : "OUTPUT_GROUP";
+            BomRecipe owner = "SHARED".equals(costScope) ? main : targets.get(0);
+            String costScopeKey = BomWorkflowRevisionService.canonicalCostScopeKey(
+                    targets.stream().map(BomRecipe::getTargetTerminalNodeId).toList());
+            profiles.add(new InputCostProfile(
+                    entry.getValue(), targets, owner, costScope, costScopeKey));
         }
+        profiles.sort(Comparator.comparingInt(profile -> profile.slot().order()));
+        return profiles;
     }
 
     private String stableItemKey(BomRecipeItem item) {
@@ -739,6 +859,7 @@ public class BomRecipeServiceImpl implements BomRecipeService {
             BomRecipe recipe,
             BomWorkflowRevisionService.InputSlot slot,
             String costScope,
+            String costScopeKey,
             int sortOrder) {
         RawMaterialType material = materialTypeRepo.findById(slot.materialTypeId())
                 .filter(candidate -> factoryId.equals(candidate.getFactoryId()))
@@ -765,6 +886,7 @@ public class BomRecipeServiceImpl implements BomRecipeService {
         item.setWorkflowInputPortId(slot.inputPortId());
         item.setWorkflowEdgeId(slot.edgeId());
         item.setCostScope(costScope);
+        item.setCostScopeKey(costScopeKey);
         applyPrimaryCode(new BomRecipeItemDTO(), item, material);
         return item;
     }
@@ -858,20 +980,26 @@ public class BomRecipeServiceImpl implements BomRecipeService {
                         "BOM_FAMILY_SHARED_RECIPE_INVALID",
                         "请重新克隆完整 BOM Family", "sharedRecipe");
             }
-            validateInputSlotCoverage(factoryId, member, main);
+            validateInputSlotCoverage(factoryId, member);
         }
     }
 
-    private void validateInputSlotCoverage(String factoryId, BomRecipe member, BomRecipe main) {
+    private void validateInputSlotCoverage(String factoryId, BomRecipe member) {
         List<BomWorkflowRevisionService.InputSlot> slots = BomWorkflowRevisionService.resolveInputSlots(
                 bomWorkflowRevisionService.resolvePinnedGraph(factoryId, member));
-        List<BomRecipeItem> available = new ArrayList<>();
-        available.addAll(itemRepo.findByRecipeIdOrderBySortOrderAsc(main.getId()).stream()
-                .filter(item -> !"OUTPUT_EXCLUSIVE".equals(item.getCostScope())).toList());
-        if (!member.getId().equals(main.getId())) {
-            available.addAll(itemRepo.findByRecipeIdOrderBySortOrderAsc(member.getId()).stream()
-                    .filter(item -> "OUTPUT_EXCLUSIVE".equals(item.getCostScope())).toList());
-        }
+        List<BomRecipe> family = familyForStatus(member);
+        Map<String, BomRecipe> owners = family.stream().collect(java.util.stream.Collectors.toMap(
+                BomRecipe::getId, candidate -> candidate));
+        List<BomRecipeItem> available = family.stream()
+                .flatMap(candidate -> itemRepo.findByRecipeIdOrderBySortOrderAsc(candidate.getId()).stream())
+                .filter(item -> costRowAppliesTo(
+                        item.getCostScope(),
+                        item.getCostScopeKey(),
+                        owners.get(item.getRecipeId()),
+                        member,
+                        family,
+                        "PACKAGING".equalsIgnoreCase(item.getMaterialCategory())))
+                .toList();
         for (BomWorkflowRevisionService.InputSlot slot : slots) {
             long matches = available.stream()
                     .filter(item -> Objects.equals(slot.materialNodeId(), item.getWorkflowMaterialNodeId()))
@@ -1051,7 +1179,22 @@ public class BomRecipeServiceImpl implements BomRecipeService {
         // 必须用 setItems 替换字段引用 (而非 clear()+addAll) —— 后者会强制初始化
         // detached 懒代理 → LazyInitializationException (no Session).
         // orphanRemoval 异常只在 @Transactional 写方法 flush 时触发, 此处无 flush 无风险.
-        recipe.setItems(itemRepo.findByRecipeIdOrderBySortOrderAsc(recipe.getId()));
+        List<BomRecipe> family = familyForStatus(recipe);
+        Map<String, BomRecipe> owners = family.stream().collect(java.util.stream.Collectors.toMap(
+                BomRecipe::getId, candidate -> candidate));
+        List<BomRecipeItem> applicableItems = family.stream()
+                .flatMap(member -> itemRepo.findByRecipeIdOrderBySortOrderAsc(member.getId()).stream())
+                .filter(item -> costRowAppliesTo(
+                        item.getCostScope(),
+                        item.getCostScopeKey(),
+                        owners.get(item.getRecipeId()),
+                        recipe,
+                        family,
+                        "PACKAGING".equalsIgnoreCase(item.getMaterialCategory())))
+                .sorted(Comparator.comparing(BomRecipeItem::getSortOrder)
+                        .thenComparing(BomRecipeItem::getId))
+                .toList();
+        recipe.setItems(new ArrayList<>(applicableItems));
         return recipe;
     }
 
@@ -1613,6 +1756,9 @@ public class BomRecipeServiceImpl implements BomRecipeService {
             item.setCostScope("PACKAGING".equalsIgnoreCase(item.getMaterialCategory())
                     ? "OUTPUT_EXCLUSIVE" : "SHARED");
         }
+        if (dto.getCostScopeKey() != null) {
+            item.setCostScopeKey(dto.getCostScopeKey());
+        }
         item.setSortOrder(dto.getSortOrder() != null ? dto.getSortOrder() : 0);
         item.setIsOptional(dto.getIsOptional() != null ? dto.getIsOptional() : false);
         item.setSubstituteGroup(dto.getSubstituteGroup());
@@ -1659,6 +1805,8 @@ public class BomRecipeServiceImpl implements BomRecipeService {
             assertStableFieldUnchanged(
                     "edgeId", existing.getWorkflowEdgeId(), dto.getWorkflowEdgeId());
             assertStableFieldUnchanged("costScope", existing.getCostScope(), dto.getCostScope());
+            assertStableFieldUnchanged(
+                    "costScopeKey", existing.getCostScopeKey(), dto.getCostScopeKey());
             return;
         }
 
@@ -1688,17 +1836,26 @@ public class BomRecipeServiceImpl implements BomRecipeService {
                                     "BOM_WORKFLOW_INPUT_SLOT_MISMATCH",
                                     "请刷新 BOM；如工艺已有新修订，请使用“升级到最新工艺”",
                                     "workflow"));
-            String expectedScope = bomWorkflowRevisionService
-                    .resolveProcessCostScopes(factoryId, recipe)
-                    .getOrDefault(slot.processNodeId(), "OUTPUT_EXCLUSIVE");
-            if (dto.getCostScope() != null && !expectedScope.equals(dto.getCostScope())) {
+            InputCostProfile expectedProfile =
+                    resolveExpectedInputProfile(factoryId, recipe, slot);
+            if (dto.getCostScope() != null
+                    && !expectedProfile.costScope().equals(dto.getCostScope())) {
                 throw bomError(409,
                         "BOM 明细成本范围与固定工艺路径不一致",
                         "BOM_WORKFLOW_COST_SCOPE_MISMATCH",
                         "请刷新 BOM 工作区后重试",
                         "bomItems");
             }
-            dto.setCostScope(expectedScope);
+            if (dto.getCostScopeKey() != null
+                    && !expectedProfile.costScopeKey().equals(dto.getCostScopeKey())) {
+                throw bomError(409,
+                        "BOM 明细成本目标与固定工艺路径不一致",
+                        "BOM_WORKFLOW_COST_SCOPE_TARGET_MISMATCH",
+                        "请刷新 BOM 工作区后重试",
+                        "bomItems");
+            }
+            dto.setCostScope(expectedProfile.costScope());
+            dto.setCostScopeKey(expectedProfile.costScopeKey());
             return;
         }
 
@@ -1712,6 +1869,46 @@ public class BomRecipeServiceImpl implements BomRecipeService {
                     "bomItems");
         }
         dto.setCostScope(expectedManualScope);
+        String expectedManualScopeKey = "OUTPUT_EXCLUSIVE".equals(expectedManualScope)
+                ? recipe.getTargetTerminalNodeId()
+                : BomWorkflowRevisionService.canonicalCostScopeKey(
+                        familyForStatus(recipe).stream()
+                                .map(BomRecipe::getTargetTerminalNodeId)
+                                .toList());
+        if (dto.getCostScopeKey() != null
+                && !expectedManualScopeKey.equals(dto.getCostScopeKey())) {
+            throw bomError(409,
+                    "手工明细成本目标与当前固定产出集合不一致",
+                    "BOM_MANUAL_ITEM_COST_SCOPE_TARGET_MISMATCH",
+                    "请刷新 BOM 工作区后重试；成本归属由系统自动确定",
+                    "bomItems");
+        }
+        dto.setCostScopeKey(expectedManualScopeKey);
+    }
+
+    private InputCostProfile resolveExpectedInputProfile(
+            String factoryId,
+            BomRecipe recipe,
+            BomWorkflowRevisionService.InputSlot expectedSlot) {
+        List<BomRecipe> family = familyForStatus(recipe);
+        BomRecipe main = family.stream()
+                .filter(member -> member.getOutputRole() == BomRecipe.OutputRole.MAIN)
+                .findFirst()
+                .orElse(recipe);
+        Map<String, List<BomWorkflowRevisionService.InputSlot>> slotsByRecipe =
+                new LinkedHashMap<>();
+        for (BomRecipe member : family) {
+            slotsByRecipe.put(member.getId(), BomWorkflowRevisionService.resolveInputSlots(
+                    bomWorkflowRevisionService.resolvePinnedGraph(factoryId, member)));
+        }
+        return resolveInputCostProfiles(family, slotsByRecipe, main).stream()
+                .filter(profile -> slotKey(profile.slot()).equals(slotKey(expectedSlot)))
+                .findFirst()
+                .orElseThrow(() -> bomError(409,
+                        "当前 Workflow 投入槽不属于 BOM Family 的固定工艺路径",
+                        "BOM_WORKFLOW_INPUT_SLOT_SCOPE_MISSING",
+                        "请刷新 BOM；如工艺已有新修订，请使用“升级到最新工艺”",
+                        "workflow"));
     }
 
     private void assertStableFieldUnchanged(String field, String existing, String requested) {
@@ -1765,71 +1962,264 @@ public class BomRecipeServiceImpl implements BomRecipeService {
      * <p>诚实 null 传播: 任一行成本 null (未定价) → 整体 totalMaterialCost = null。
      */
     private void recomputeFamilyCosts(BomRecipe changed) {
-        List<BomRecipe> targets = changed.getBomFamilyId() == null
-                ? List.of(changed)
-                : recipeRepo.findByFactoryIdAndBomFamilyIdOrderByProductTypeIdAscVersionDesc(
-                        changed.getFactoryId(), changed.getBomFamilyId()).stream()
-                        .filter(recipe -> Objects.equals(
-                                changed.getWorkflowRevisionId(), recipe.getWorkflowRevisionId()))
-                        .filter(recipe -> recipe.getStatus() == changed.getStatus())
-                        .toList();
+        List<BomRecipe> targets = familyForStatus(changed);
+        Map<String, List<BomRecipe>> poolTargets = new LinkedHashMap<>();
+        Map<String, BigDecimal> poolCosts = new LinkedHashMap<>();
+
+        for (BomRecipe owner : targets) {
+            for (BomRecipeItem item :
+                    itemRepo.findByRecipeIdOrderBySortOrderAsc(owner.getId())) {
+                BigDecimal cost = nestedBomCostService.isNestedComponent(item)
+                        ? nestedBomCostService.resolveItemCost(owner.getFactoryId(), item)
+                        : item.computeItemCost();
+                if (cost == null) {
+                    markFamilyCostIncomplete(targets);
+                    return;
+                }
+                List<BomRecipe> costTargets = resolveCostTargets(
+                        item.getCostScope(),
+                        item.getCostScopeKey(),
+                        owner,
+                        targets,
+                        "PACKAGING".equalsIgnoreCase(item.getMaterialCategory()));
+                addToCostPool(poolTargets, poolCosts, costTargets, cost);
+            }
+            BigDecimal outputKg = outputKilograms(owner);
+            for (BomSeasoningItem item :
+                    seasoningItemRepo.findByRecipeIdOrderBySeqAsc(owner.getId())) {
+                CostValue cost = seasoningCost(List.of(item), outputKg);
+                if (!cost.complete()) {
+                    markFamilyCostIncomplete(targets);
+                    return;
+                }
+                List<BomRecipe> costTargets = resolveCostTargets(
+                        item.getCostScope(), item.getCostScopeKey(), owner, targets, false);
+                addToCostPool(poolTargets, poolCosts, costTargets, cost.value());
+            }
+        }
+
+        Map<String, BigDecimal> byproductDirectCosts = new HashMap<>();
+        for (Map.Entry<String, BigDecimal> pool : poolCosts.entrySet()) {
+            List<BomRecipe> members = poolTargets.get(pool.getKey());
+            List<BomRecipe> costingOutputs = members.stream()
+                    .filter(member -> member.getOutputRole() != BomRecipe.OutputRole.BY_PRODUCT)
+                    .toList();
+            if (!costingOutputs.isEmpty()) continue;
+            List<BomRecipe> byproducts = members.stream()
+                    .filter(member -> member.getOutputRole() == BomRecipe.OutputRole.BY_PRODUCT)
+                    .toList();
+            if (byproducts.isEmpty()) continue;
+            Map<String, BigDecimal> weights = new LinkedHashMap<>();
+            for (BomRecipe byproduct : byproducts) {
+                BigDecimal grossNrv = byproductGrossNrv(byproduct);
+                if (grossNrv == null) {
+                    markFamilyCostIncomplete(targets);
+                    return;
+                }
+                weights.put(byproduct.getId(), grossNrv);
+            }
+            BigDecimal totalWeight = weights.values().stream()
+                    .reduce(BigDecimal.ZERO, BigDecimal::add);
+            if (totalWeight.signum() <= 0) {
+                markFamilyCostIncomplete(targets);
+                return;
+            }
+            for (BomRecipe byproduct : byproducts) {
+                BigDecimal allocated = pool.getValue()
+                        .multiply(weights.get(byproduct.getId()))
+                        .divide(totalWeight, 8, RoundingMode.HALF_UP);
+                byproductDirectCosts.merge(byproduct.getId(), allocated, BigDecimal::add);
+            }
+        }
+
+        Map<String, BigDecimal> adjustedPoolCosts = new LinkedHashMap<>(poolCosts);
+        for (BomRecipe byproduct : targets.stream()
+                .filter(member -> member.getOutputRole() == BomRecipe.OutputRole.BY_PRODUCT)
+                .toList()) {
+            BigDecimal grossNrv = byproductGrossNrv(byproduct);
+            if (grossNrv == null) {
+                markFamilyCostIncomplete(targets);
+                return;
+            }
+            BigDecimal netCredit = grossNrv.subtract(
+                    byproductDirectCosts.getOrDefault(byproduct.getId(), BigDecimal.ZERO));
+            List<String> eligiblePools = poolTargets.entrySet().stream()
+                    .filter(entry -> entry.getValue().stream()
+                            .anyMatch(member -> member.getId().equals(byproduct.getId())))
+                    .filter(entry -> entry.getValue().stream()
+                            .anyMatch(member -> member.getOutputRole() != BomRecipe.OutputRole.BY_PRODUCT))
+                    .map(Map.Entry::getKey)
+                    .toList();
+            if (netCredit.signum() != 0 && eligiblePools.isEmpty()) {
+                throw bomError(409,
+                        "副产品没有可抵扣的共享成本路径",
+                        "BOM_BY_PRODUCT_CREDIT_PATH_MISSING",
+                        "请检查副产品是否与主产出共享上游投入或工序",
+                        "byproductNrvUnitPrice");
+            }
+            BigDecimal eligibleTotal = eligiblePools.stream()
+                    .map(poolCosts::get)
+                    .reduce(BigDecimal.ZERO, BigDecimal::add);
+            if (netCredit.signum() != 0 && eligibleTotal.signum() <= 0) {
+                throw bomError(409,
+                        "副产品对应的共享成本池为 0，无法应用净值抵扣",
+                        "BOM_BY_PRODUCT_CREDIT_POOL_EMPTY",
+                        "请检查共享投入的数量、价格和工序辅料",
+                        "byproductNrvUnitPrice");
+            }
+            for (String poolKey : eligiblePools) {
+                BigDecimal credit = netCredit.multiply(poolCosts.get(poolKey))
+                        .divide(eligibleTotal, 8, RoundingMode.HALF_UP);
+                BigDecimal adjusted = adjustedPoolCosts.get(poolKey).subtract(credit);
+                if (adjusted.signum() < 0) {
+                    throw bomError(409,
+                            "副产品净值抵扣超过其关联共享成本，不能形成负成本",
+                            "BOM_BY_PRODUCT_CREDIT_EXCEEDS_SHARED_COST",
+                            "请核对副产品单位净值、产出数量或共享投入成本",
+                            "byproductNrvUnitPrice");
+                }
+                adjustedPoolCosts.put(poolKey, adjusted);
+            }
+        }
+
+        Map<String, BigDecimal> materialCosts = targets.stream().collect(
+                java.util.stream.Collectors.toMap(
+                        BomRecipe::getId,
+                        ignored -> BigDecimal.ZERO,
+                        BigDecimal::add,
+                        LinkedHashMap::new));
+        for (Map.Entry<String, BigDecimal> pool : adjustedPoolCosts.entrySet()) {
+            List<BomRecipe> costingOutputs = poolTargets.get(pool.getKey()).stream()
+                    .filter(member -> member.getOutputRole() != BomRecipe.OutputRole.BY_PRODUCT)
+                    .toList();
+            if (costingOutputs.isEmpty()) continue;
+            BigDecimal ratioTotal = costingOutputs.stream()
+                    .map(this::costingRatio)
+                    .reduce(BigDecimal.ZERO, BigDecimal::add);
+            if (ratioTotal.signum() <= 0) {
+                throw bomError(409,
+                        "成本池覆盖的主产出/联产品没有有效分摊比例",
+                        "BOM_FAMILY_COST_POOL_RATIO_INVALID",
+                        "请在 Workflow 中补齐该路径对应产出的成本分摊比例",
+                        "costAllocationRatio");
+            }
+            for (BomRecipe output : costingOutputs) {
+                BigDecimal allocated = pool.getValue()
+                        .multiply(costingRatio(output))
+                        .divide(ratioTotal, 8, RoundingMode.HALF_UP);
+                materialCosts.merge(output.getId(), allocated, BigDecimal::add);
+            }
+        }
+        for (BomRecipe byproduct : targets.stream()
+                .filter(member -> member.getOutputRole() == BomRecipe.OutputRole.BY_PRODUCT)
+                .toList()) {
+            materialCosts.put(byproduct.getId(), byproductGrossNrv(byproduct));
+        }
+
         for (BomRecipe target : targets) {
-            recomputeMaterialCost(target);
+            BigDecimal materialCost = materialCosts.get(target.getId())
+                    .setScale(4, RoundingMode.HALF_UP);
+            target.setTotalMaterialCost(materialCost);
+            BigDecimal allocation = target.getOutputRole() == BomRecipe.OutputRole.BY_PRODUCT
+                    ? BigDecimal.ZERO
+                    : costingRatio(target).divide(new BigDecimal("100"), 8, RoundingMode.HALF_UP);
+            BigDecimal allocatedLabor = valueOrZero(target.getTotalLaborCost()).multiply(allocation);
+            BigDecimal allocatedOverhead = valueOrZero(target.getTotalOverheadCost()).multiply(allocation);
+            target.setTotalCost(materialCost.add(allocatedLabor).add(allocatedOverhead)
+                    .setScale(4, RoundingMode.HALF_UP));
             recipeRepo.save(target);
         }
     }
 
-    private void recomputeMaterialCost(BomRecipe recipe) {
-        BomRecipe sharedRecipe = recipe.getSharedRecipeId() == null
-                || recipe.getSharedRecipeId().equals(recipe.getId())
-                ? recipe
-                : recipeRepo.findById(recipe.getSharedRecipeId())
-                        .filter(candidate -> recipe.getFactoryId().equals(candidate.getFactoryId()))
-                        .orElse(recipe);
-        List<BomRecipeItem> sharedItems = itemRepo.findByRecipeIdOrderBySortOrderAsc(sharedRecipe.getId()).stream()
-                .filter(item -> !"OUTPUT_EXCLUSIVE".equals(item.getCostScope()))
-                .filter(item -> !"PACKAGING".equalsIgnoreCase(item.getMaterialCategory()))
+    private List<BomRecipe> familyForStatus(BomRecipe reference) {
+        if (reference.getBomFamilyId() == null) return List.of(reference);
+        return recipeRepo.findByFactoryIdAndBomFamilyIdOrderByProductTypeIdAscVersionDesc(
+                        reference.getFactoryId(), reference.getBomFamilyId()).stream()
+                .filter(recipe -> Objects.equals(
+                        reference.getWorkflowRevisionId(), recipe.getWorkflowRevisionId()))
+                .filter(recipe -> recipe.getStatus() == reference.getStatus())
                 .toList();
-        List<BomRecipeItem> exclusiveItems = itemRepo.findByRecipeIdOrderBySortOrderAsc(recipe.getId()).stream()
-                .filter(item -> "OUTPUT_EXCLUSIVE".equals(item.getCostScope())
-                        || "PACKAGING".equalsIgnoreCase(item.getMaterialCategory()))
-                .toList();
+    }
 
-        CostValue sharedItemCost = sumItemCosts(recipe.getFactoryId(), sharedItems);
-        CostValue exclusiveItemCost = sumItemCosts(recipe.getFactoryId(), exclusiveItems);
-        CostValue sharedSeasoningCost = seasoningCost(
-                seasoningItemRepo.findByRecipeIdOrderBySeqAsc(sharedRecipe.getId()).stream()
-                        .filter(item -> !"OUTPUT_EXCLUSIVE".equals(item.getCostScope())).toList(),
-                outputKilograms(sharedRecipe));
-        CostValue exclusiveSeasoningCost = seasoningCost(
-                seasoningItemRepo.findByRecipeIdOrderBySeqAsc(recipe.getId()).stream()
-                        .filter(item -> "OUTPUT_EXCLUSIVE".equals(item.getCostScope())).toList(),
-                outputKilograms(recipe));
+    private void addToCostPool(
+            Map<String, List<BomRecipe>> poolTargets,
+            Map<String, BigDecimal> poolCosts,
+            List<BomRecipe> targets,
+            BigDecimal cost) {
+        String key = BomWorkflowRevisionService.canonicalCostScopeKey(
+                targets.stream().map(BomRecipe::getTargetTerminalNodeId).toList());
+        poolTargets.putIfAbsent(key, targets);
+        poolCosts.merge(key, cost, BigDecimal::add);
+    }
 
-        if (!sharedItemCost.complete() || !exclusiveItemCost.complete()
-                || !sharedSeasoningCost.complete() || !exclusiveSeasoningCost.complete()) {
-            recipe.setTotalMaterialCost(null);
-            recipe.setTotalCost(null);
-            return;
+    private List<BomRecipe> resolveCostTargets(
+            String scope,
+            String scopeKey,
+            BomRecipe owner,
+            List<BomRecipe> family,
+            boolean packaging) {
+        if (hasText(scopeKey)) {
+            Set<String> terminalIds = new LinkedHashSet<>(
+                    List.of(scopeKey.split(",")));
+            List<BomRecipe> matched = family.stream()
+                    .filter(member -> terminalIds.contains(member.getTargetTerminalNodeId()))
+                    .sorted(Comparator.comparing(BomRecipe::getTargetTerminalNodeId))
+                    .toList();
+            if (matched.size() != terminalIds.size()) {
+                throw bomError(409,
+                        "BOM 成本目标包含不属于当前固定工艺的产出",
+                        "BOM_COST_SCOPE_TARGET_INVALID",
+                        "请刷新 BOM；如工艺已变化，请使用“升级到最新工艺”",
+                        "workflow");
+            }
+            return matched;
         }
-        BigDecimal ratio = recipe.getCostAllocationRatio() == null
-                ? new BigDecimal("100") : recipe.getCostAllocationRatio();
-        BigDecimal allocatedShared = sharedItemCost.value().add(sharedSeasoningCost.value())
-                .multiply(ratio)
-                .divide(new BigDecimal("100"), 8, RoundingMode.HALF_UP);
-        BigDecimal materialCost = allocatedShared
-                .add(exclusiveItemCost.value())
-                .add(exclusiveSeasoningCost.value())
-                .setScale(4, RoundingMode.HALF_UP);
-        recipe.setTotalMaterialCost(materialCost);
+        if (packaging || "OUTPUT_EXCLUSIVE".equals(scope)) return List.of(owner);
+        if ("OUTPUT_GROUP".equals(scope)) {
+            throw bomError(409,
+                    "部分产出共享成本缺少精确目标集合",
+                    "BOM_COST_SCOPE_KEY_REQUIRED",
+                    "请重新执行工艺升级，让系统按稳定 DAG 路径补齐成本目标",
+                    "workflow");
+        }
+        return family.stream()
+                .sorted(Comparator.comparing(BomRecipe::getTargetTerminalNodeId))
+                .toList();
+    }
 
-        BigDecimal allocation = ratio.divide(new BigDecimal("100"), 8, RoundingMode.HALF_UP);
-        BigDecimal allocatedLabor = (recipe.getTotalLaborCost() != null
-                ? recipe.getTotalLaborCost() : BigDecimal.ZERO).multiply(allocation);
-        BigDecimal allocatedOverhead = (recipe.getTotalOverheadCost() != null
-                ? recipe.getTotalOverheadCost() : BigDecimal.ZERO).multiply(allocation);
-        recipe.setTotalCost(materialCost.add(allocatedLabor).add(allocatedOverhead)
-                .setScale(4, RoundingMode.HALF_UP));
+    private boolean costRowAppliesTo(
+            String scope,
+            String scopeKey,
+            BomRecipe owner,
+            BomRecipe target,
+            List<BomRecipe> family,
+            boolean packaging) {
+        if (owner == null) return false;
+        return resolveCostTargets(scope, scopeKey, owner, family, packaging).stream()
+                .anyMatch(member -> member.getId().equals(target.getId()));
+    }
+
+    private BigDecimal byproductGrossNrv(BomRecipe recipe) {
+        if (recipe.getByproductNrvUnitPrice() == null
+                || recipe.getOutputQuantityPerUnit() == null) return null;
+        return recipe.getByproductNrvUnitPrice().multiply(recipe.getOutputQuantityPerUnit());
+    }
+
+    private BigDecimal costingRatio(BomRecipe recipe) {
+        if (recipe.getCostAllocationRatio() != null) return recipe.getCostAllocationRatio();
+        return BigDecimal.valueOf(100);
+    }
+
+    private BigDecimal valueOrZero(BigDecimal value) {
+        return value == null ? BigDecimal.ZERO : value;
+    }
+
+    private void markFamilyCostIncomplete(List<BomRecipe> family) {
+        for (BomRecipe member : family) {
+            member.setTotalMaterialCost(null);
+            member.setTotalCost(null);
+            recipeRepo.save(member);
+        }
     }
 
     private CostValue sumItemCosts(String factoryId, List<BomRecipeItem> items) {
@@ -1884,6 +2274,13 @@ public class BomRecipeServiceImpl implements BomRecipeService {
             return new CostValue(null, false);
         }
     }
+
+    private record InputCostProfile(
+            BomWorkflowRevisionService.InputSlot slot,
+            List<BomRecipe> targets,
+            BomRecipe owner,
+            String costScope,
+            String costScopeKey) { }
 
     /**
      * T159-B R3: 防呆 — 校验 BOM 单位与原料主数据规范单位的计量维度.

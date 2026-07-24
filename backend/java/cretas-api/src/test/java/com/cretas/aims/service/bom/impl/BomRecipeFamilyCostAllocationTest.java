@@ -55,8 +55,10 @@ class BomRecipeFamilyCostAllocationTest {
 
     @Test
     void sharedInputsAreAllocatedWhileTargetPackagingRemainsExclusive() {
-        BomRecipe sharedRecipe = recipe("RECIPE-SHARED", null, "100");
-        BomRecipe outputRecipe = recipe("RECIPE-OUTPUT-B", "RECIPE-SHARED", "25");
+        BomRecipe sharedRecipe = familyRecipe(
+                "RECIPE-SHARED", "FG-A", "TERM-A", BomRecipe.OutputRole.MAIN, "75");
+        BomRecipe outputRecipe = familyRecipe(
+                "RECIPE-OUTPUT-B", "FG-B", "TERM-B", BomRecipe.OutputRole.CO_PRODUCT, "25");
         outputRecipe.setTotalLaborCost(new BigDecimal("40"));
         outputRecipe.setTotalOverheadCost(new BigDecimal("20"));
         BomRecipeItem sharedInput = costedItem(
@@ -64,7 +66,7 @@ class BomRecipeFamilyCostAllocationTest {
         BomRecipeItem exclusivePackaging = costedItem(
                 "RECIPE-OUTPUT-B", "OUTPUT_EXCLUSIVE", "PACKAGING", "2", "10");
 
-        when(recipeRepo.findById("RECIPE-SHARED")).thenReturn(Optional.of(sharedRecipe));
+        mockFamily(List.of(sharedRecipe, outputRecipe));
         when(itemRepo.findByRecipeIdOrderBySortOrderAsc("RECIPE-SHARED"))
                 .thenReturn(List.of(sharedInput));
         when(itemRepo.findByRecipeIdOrderBySortOrderAsc("RECIPE-OUTPUT-B"))
@@ -72,29 +74,91 @@ class BomRecipeFamilyCostAllocationTest {
         when(seasoningItemRepo.findByRecipeIdOrderBySeqAsc(anyString())).thenReturn(List.of());
         when(nestedBomCostService.isNestedComponent(any(BomRecipeItem.class))).thenReturn(false);
 
-        ReflectionTestUtils.invokeMethod(service, "recomputeMaterialCost", outputRecipe);
+        ReflectionTestUtils.invokeMethod(service, "recomputeFamilyCosts", outputRecipe);
 
         assertThat(outputRecipe.getTotalMaterialCost()).isEqualByComparingTo("45.0000");
         assertThat(outputRecipe.getTotalCost()).isEqualByComparingTo("60.0000");
+        assertThat(sharedRecipe.getTotalMaterialCost()).isEqualByComparingTo("75.0000");
     }
 
     @Test
     void missingSharedPriceKeepsEveryAllocatedOutputCostIncomplete() {
-        BomRecipe outputRecipe = recipe("RECIPE-OUTPUT-A", null, "100");
+        BomRecipe outputRecipe = familyRecipe(
+                "RECIPE-OUTPUT-A", "FG-A", "TERM-A", BomRecipe.OutputRole.MAIN, "100");
         BomRecipeItem unpricedInput = costedItem(
                 "RECIPE-OUTPUT-A", "SHARED", "RAW_MATERIAL", "10", "10");
         unpricedInput.setUnitPrice(null);
 
         when(itemRepo.findByRecipeIdOrderBySortOrderAsc("RECIPE-OUTPUT-A"))
                 .thenReturn(List.of(unpricedInput));
-        when(seasoningItemRepo.findByRecipeIdOrderBySeqAsc("RECIPE-OUTPUT-A"))
-                .thenReturn(List.of());
         when(nestedBomCostService.isNestedComponent(unpricedInput)).thenReturn(false);
+        mockFamily(List.of(outputRecipe));
 
-        ReflectionTestUtils.invokeMethod(service, "recomputeMaterialCost", outputRecipe);
+        ReflectionTestUtils.invokeMethod(service, "recomputeFamilyCosts", outputRecipe);
 
         assertThat(outputRecipe.getTotalMaterialCost()).isNull();
         assertThat(outputRecipe.getTotalCost()).isNull();
+    }
+
+    @Test
+    void partiallySharedPoolIsAllocatedOnlyAcrossItsActualOutputs() {
+        BomRecipe first = familyRecipe(
+                "RECIPE-A", "FG-A", "TERM-A", BomRecipe.OutputRole.MAIN, "50");
+        BomRecipe second = familyRecipe(
+                "RECIPE-B", "FG-B", "TERM-B", BomRecipe.OutputRole.CO_PRODUCT, "30");
+        BomRecipe third = familyRecipe(
+                "RECIPE-C", "FG-C", "TERM-C", BomRecipe.OutputRole.CO_PRODUCT, "20");
+        BomRecipeItem groupInput = costedItem(
+                "RECIPE-A", "OUTPUT_GROUP", "RAW_MATERIAL", "8", "10");
+        groupInput.setCostScopeKey("TERM-A,TERM-B");
+        BomRecipeItem thirdExclusive = costedItem(
+                "RECIPE-C", "OUTPUT_EXCLUSIVE", "PACKAGING", "2", "10");
+        thirdExclusive.setCostScopeKey("TERM-C");
+
+        mockFamily(List.of(first, second, third));
+        when(itemRepo.findByRecipeIdOrderBySortOrderAsc("RECIPE-A"))
+                .thenReturn(List.of(groupInput));
+        when(itemRepo.findByRecipeIdOrderBySortOrderAsc("RECIPE-B")).thenReturn(List.of());
+        when(itemRepo.findByRecipeIdOrderBySortOrderAsc("RECIPE-C"))
+                .thenReturn(List.of(thirdExclusive));
+        when(seasoningItemRepo.findByRecipeIdOrderBySeqAsc(anyString())).thenReturn(List.of());
+        when(nestedBomCostService.isNestedComponent(any(BomRecipeItem.class))).thenReturn(false);
+
+        ReflectionTestUtils.invokeMethod(service, "recomputeFamilyCosts", first);
+
+        assertThat(first.getTotalMaterialCost()).isEqualByComparingTo("50.0000");
+        assertThat(second.getTotalMaterialCost()).isEqualByComparingTo("30.0000");
+        assertThat(third.getTotalMaterialCost()).isEqualByComparingTo("20.0000");
+    }
+
+    @Test
+    void byProductNrvCreditsOnlyItsSharedPathAndPreservesTotalInputCost() {
+        BomRecipe main = familyRecipe(
+                "RECIPE-A", "FG-MAIN", "TERM-MAIN", BomRecipe.OutputRole.MAIN, "100");
+        BomRecipe byProduct = familyRecipe(
+                "RECIPE-B", "FG-BY", "TERM-BY", BomRecipe.OutputRole.BY_PRODUCT, "0");
+        byProduct.setByproductNrvUnitPrice(new BigDecimal("10"));
+        byProduct.setOutputQuantityPerUnit(new BigDecimal("2"));
+        BomRecipeItem shared = costedItem(
+                "RECIPE-A", "SHARED", "RAW_MATERIAL", "10", "10");
+        shared.setCostScopeKey("TERM-BY,TERM-MAIN");
+        BomRecipeItem byProductDirect = costedItem(
+                "RECIPE-B", "OUTPUT_EXCLUSIVE", "PACKAGING", "1", "5");
+        byProductDirect.setCostScopeKey("TERM-BY");
+
+        mockFamily(List.of(main, byProduct));
+        when(itemRepo.findByRecipeIdOrderBySortOrderAsc("RECIPE-A")).thenReturn(List.of(shared));
+        when(itemRepo.findByRecipeIdOrderBySortOrderAsc("RECIPE-B"))
+                .thenReturn(List.of(byProductDirect));
+        when(seasoningItemRepo.findByRecipeIdOrderBySeqAsc(anyString())).thenReturn(List.of());
+        when(nestedBomCostService.isNestedComponent(any(BomRecipeItem.class))).thenReturn(false);
+
+        ReflectionTestUtils.invokeMethod(service, "recomputeFamilyCosts", main);
+
+        assertThat(main.getTotalMaterialCost()).isEqualByComparingTo("85.0000");
+        assertThat(byProduct.getTotalMaterialCost()).isEqualByComparingTo("20.0000");
+        assertThat(main.getTotalMaterialCost().add(byProduct.getTotalMaterialCost()))
+                .isEqualByComparingTo("105.0000");
     }
 
     @Test
@@ -146,17 +210,43 @@ class BomRecipeFamilyCostAllocationTest {
     }
 
     @Test
-    void activationRejectsByProductUntilCreditAccountingIsExplicitlySupported() {
+    void activationRejectsByProductWithoutNrv() {
         BomRecipe main = outputContract(
-                "RECIPE-A", "FG-MAIN", "TERM-MAIN", BomRecipe.OutputRole.MAIN, "70");
+                "RECIPE-A", "FG-MAIN", "TERM-MAIN", BomRecipe.OutputRole.MAIN, "100");
         BomRecipe byProduct = outputContract(
-                "RECIPE-B", "FG-BY", "TERM-BY", BomRecipe.OutputRole.BY_PRODUCT, "30");
+                "RECIPE-B", "FG-BY", "TERM-BY", BomRecipe.OutputRole.BY_PRODUCT, "0");
+        byProduct.setOutputQuantityPerUnit(BigDecimal.ONE);
 
         BusinessException error = assertThrows(BusinessException.class,
                 () -> ReflectionTestUtils.invokeMethod(
-                        service, "validateByProductActivationSupported", List.of(main, byProduct)));
+                        service, "validateByProductCreditRules", List.of(main, byProduct)));
 
-        assertThat(error.getErrorCode()).isEqualTo("BOM_BY_PRODUCT_CREDIT_UNSUPPORTED");
+        assertThat(error.getErrorCode()).isEqualTo("BOM_BY_PRODUCT_NRV_REQUIRED");
+    }
+
+    @Test
+    void excessiveByProductCreditCannotCreateNegativeSharedCost() {
+        BomRecipe main = familyRecipe(
+                "RECIPE-A", "FG-MAIN", "TERM-MAIN", BomRecipe.OutputRole.MAIN, "100");
+        BomRecipe byProduct = familyRecipe(
+                "RECIPE-B", "FG-BY", "TERM-BY", BomRecipe.OutputRole.BY_PRODUCT, "0");
+        byProduct.setByproductNrvUnitPrice(new BigDecimal("20"));
+        byProduct.setOutputQuantityPerUnit(BigDecimal.ONE);
+        BomRecipeItem shared = costedItem(
+                "RECIPE-A", "SHARED", "RAW_MATERIAL", "1", "10");
+        shared.setCostScopeKey("TERM-BY,TERM-MAIN");
+
+        mockFamily(List.of(main, byProduct));
+        when(itemRepo.findByRecipeIdOrderBySortOrderAsc("RECIPE-A")).thenReturn(List.of(shared));
+        when(itemRepo.findByRecipeIdOrderBySortOrderAsc("RECIPE-B")).thenReturn(List.of());
+        when(seasoningItemRepo.findByRecipeIdOrderBySeqAsc(anyString())).thenReturn(List.of());
+        when(nestedBomCostService.isNestedComponent(shared)).thenReturn(false);
+
+        BusinessException error = assertThrows(BusinessException.class,
+                () -> ReflectionTestUtils.invokeMethod(service, "recomputeFamilyCosts", main));
+
+        assertThat(error.getErrorCode())
+                .isEqualTo("BOM_BY_PRODUCT_CREDIT_EXCEEDS_SHARED_COST");
     }
 
     private BomRecipe recipe(String id, String sharedRecipeId, String allocationRatio) {
@@ -166,6 +256,27 @@ class BomRecipeFamilyCostAllocationTest {
         recipe.setSharedRecipeId(sharedRecipeId);
         recipe.setCostAllocationRatio(new BigDecimal(allocationRatio));
         return recipe;
+    }
+
+    private BomRecipe familyRecipe(
+            String id,
+            String productTypeId,
+            String terminalNodeId,
+            BomRecipe.OutputRole role,
+            String allocationRatio) {
+        BomRecipe recipe = outputContract(
+                id, productTypeId, terminalNodeId, role, allocationRatio);
+        recipe.setBomFamilyId("FAMILY-1");
+        recipe.setStatus(BomRecipe.Status.DRAFT);
+        recipe.setSharedRecipeId("RECIPE-A");
+        recipe.setOutputQuantityPerUnit(BigDecimal.ONE);
+        recipe.setOutputUnit("kg");
+        return recipe;
+    }
+
+    private void mockFamily(List<BomRecipe> family) {
+        when(recipeRepo.findByFactoryIdAndBomFamilyIdOrderByProductTypeIdAscVersionDesc(
+                "F006", "FAMILY-1")).thenReturn(family);
     }
 
     private BomRecipe outputContract(

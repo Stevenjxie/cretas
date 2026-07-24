@@ -163,9 +163,13 @@ public class CreateBomRecipeRequest {
         @Size(max = 128)
         private String workflowEdgeId;
 
-        /** SHARED or OUTPUT_EXCLUSIVE. Backend derives a safe default when omitted. */
-        @Pattern(regexp = "^(SHARED|OUTPUT_EXCLUSIVE)$",
-                 message = "成本范围必须是 SHARED/OUTPUT_EXCLUSIVE 之一")
+        /** SHARED, OUTPUT_GROUP or OUTPUT_EXCLUSIVE. Backend derives and verifies it from the pinned DAG. */
+        @Pattern(regexp = "^(SHARED|OUTPUT_GROUP|OUTPUT_EXCLUSIVE)$",
+                 message = "成本范围必须是 SHARED/OUTPUT_GROUP/OUTPUT_EXCLUSIVE 之一")
         private String costScope;
+
+        /** Canonical terminal membership returned by the BOM workspace; clients may only round-trip it. */
+        @Size(max = 1024)
+        private String costScopeKey;
     }
 }
