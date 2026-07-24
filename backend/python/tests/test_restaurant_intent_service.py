@@ -565,6 +565,11 @@ async def test_endpoint_dependent_followup_uses_trusted_context_and_session_key(
         "parent_query": "上个月营收怎么样",
         "parent_answer_summary": "上个月营收已完成分析",
         "parent_template_code": "RESTAURANT_OPS_SALES_SUMMARY",
+        "structured_context": {
+            "window_label": "上个月",
+            "requested_metrics": ["revenue"],
+            "analysis_action": "lookup",
+        },
     }
     lookup = AsyncMock(return_value=parent)
     upsert = AsyncMock(return_value=None)
@@ -615,7 +620,8 @@ async def test_endpoint_dependent_followup_uses_trusted_context_and_session_key(
     )
 
     assert result["delegate"] is True
-    assert parse_calls[0][0] == "上个月营收怎么样；继续追问：那为什么呢"
+    assert parse_calls[0][0] == "上个月营收为什么是这样"
+    assert "继续追问" not in parse_calls[0][0]
     session_key = parse_calls[0][2]["session_key"]
     assert session_key.startswith("trusted-v1:")
     assert "shared-device-session" not in session_key
@@ -910,6 +916,8 @@ async def test_tiered_answer_returns_typed_focus_entity_and_followups(monkeypatc
         dimensions=("dish",),
         requested_metrics=("sales_volume",),
         planned_intents=("RESTAURANT_OPS_GROSS_MARGIN",),
+        window_label="最近30天",
+        relative_window=True,
         plan_version="restaurant-query-plan-v2",
         planner_authority="llm",
         plan_hash="dish-ranking-plan",
@@ -937,6 +945,7 @@ async def test_tiered_answer_returns_typed_focus_entity_and_followups(monkeypatc
                     "name": "招牌藤椒味（单人份）",
                     "rank": 1,
                 },
+                "dish_ranking": "best",
             },
         )),
     )
@@ -952,7 +961,31 @@ async def test_tiered_answer_returns_typed_focus_entity_and_followups(monkeypatc
     assert result["kind"] == "answer"
     assert result["executed_resolvers"] == ["RESTAURANT_OPS_GROSS_MARGIN"]
     assert result["structured_context"]["focus_entity"]["id"] == "dish-42"
-    assert result["suggested_followups"][0]["question"] == "招牌藤椒味（单人份）的成本如何？"
+    assert result["structured_context"]["topic_kind"] == "dish_ranking"
+    assert result["suggested_followups"] == [
+        {"label": "看本月", "question": "本月哪个菜卖得最好？"},
+        {"label": "看上个月", "question": "上个月哪个菜卖得最好？"},
+    ]
+
+
+def test_named_entity_followups_are_self_contained_and_do_not_repeat_metric():
+    followups = svc._suggested_followups({
+        "focus_entity": {"type": "dish", "name": "米饭"},
+        "window_label": "上个月",
+        "requested_metrics": ["gross_margin"],
+        "topic_kind": None,
+    })
+
+    assert followups == [
+        {
+            "label": "看菜品销量",
+            "question": "上个月「米饭」的销量是多少？",
+        },
+        {
+            "label": "看菜品成本",
+            "question": "上个月「米饭」的成本如何？",
+        },
+    ]
 
 
 def test_r24_vector_tier_threshold_gate():

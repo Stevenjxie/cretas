@@ -649,15 +649,49 @@ def test_contract_rejects_empty_answer_even_for_bare_query():
     assert result.missing == ["non_empty_answer"]
 
 
+@pytest.mark.parametrize(
+    "action,plain_answer,covered_answer",
+    [
+        (
+            "diagnose",
+            "米饭毛利率为 80%。",
+            "原因拆解：当前只能解释计算构成，不能证明因果。",
+        ),
+        (
+            "optimize",
+            "米饭毛利率为 80%。",
+            "优化目标：提高毛利率。优化动作：先核对成本。验证指标：毛利率。",
+        ),
+    ],
+)
+def test_contract_requires_current_turn_analysis_action(
+    action,
+    plain_answer,
+    covered_answer,
+):
+    spec = _spec(analysis_action=action)
+
+    rejected = contract.validate(spec, plain_answer, kpis=[], meta={})
+    accepted = contract.validate(spec, covered_answer, kpis=[], meta={})
+
+    assert "analysis_action" in rejected.missing
+    assert accepted.passed
+
+
 def test_contextualize_only_dependent_restaurant_followups():
     parent = {
         "parent_query": "本月营收趋势怎么样",
         "parent_template_code": "RESTAURANT_OPS_SALES_SUMMARY",
+        "structured_context": {
+            "window_label": "本月",
+            "requested_metrics": ["revenue"],
+            "analysis_action": "lookup",
+        },
     }
     effective, inherited = contextualize_restaurant_followup("那和上个月比呢", parent)
     assert inherited is True
-    assert "本月营收趋势怎么样" in effective
-    assert "那和上个月比呢" in effective
+    assert effective == "本月营收和上个月比呢"
+    assert "本月营收趋势怎么样" not in effective
 
     standalone, inherited = contextualize_restaurant_followup("昨天营业额是多少", parent)
     assert inherited is False
@@ -673,6 +707,123 @@ def test_generic_optimization_requires_business_objective():
     assert question is not None
     assert "营收" in question and "毛利率" in question and "损耗" in question
     assert optimization_clarification_question("优化慢销菜品") is None
+
+
+def test_followup_replans_metric_and_action_without_parent_query_injection():
+    parent = {
+        "parent_query": "米饭的毛利率如何",
+        "parent_template_code": "RESTAURANT_OPS_GROSS_MARGIN",
+        "turns_history": [{
+            "q": "米饭的毛利率如何",
+            "a_summary": "米饭毛利率 87.2%",
+            "context": {
+                "focus_entity": {"type": "dish", "name": "米饭"},
+                "window_label": "本月",
+                "requested_metrics": ["gross_margin"],
+                "analysis_action": "lookup",
+            },
+        }],
+    }
+
+    cases = {
+        "销量呢": "本月米饭的销量呢",
+        "为什么": "本月米饭的毛利率为什么是这样",
+        "怎么优化": "本月米饭的毛利率怎么优化",
+        "这个菜卖了多少": "本月米饭卖了多少",
+    }
+    for query, expected in cases.items():
+        effective, inherited = contextualize_restaurant_followup(query, parent)
+        assert inherited is True
+        assert effective == expected
+        assert "米饭的毛利率如何；继续追问" not in effective
+
+
+def test_four_turn_chain_updates_metric_before_diagnosis_and_optimization():
+    def parent(query, metric, action="lookup"):
+        return {
+            "parent_query": query,
+            "parent_template_code": "RESTAURANT_OPS_GROSS_MARGIN",
+            "turns_history": [{
+                "context": {
+                    "focus_entity": {"type": "dish", "name": "米饭"},
+                    "requested_metrics": [metric],
+                    "window_label": "本月",
+                    "analysis_action": action,
+                },
+            }],
+        }
+
+    sales_query, inherited = contextualize_restaurant_followup(
+        "销量呢",
+        parent("本月米饭的毛利率如何", "gross_margin"),
+    )
+    assert inherited is True
+    assert sales_query == "本月米饭的销量呢"
+
+    diagnosis_query, inherited = contextualize_restaurant_followup(
+        "为什么",
+        parent(sales_query, "sales_volume"),
+    )
+    assert inherited is True
+    assert diagnosis_query == "本月米饭的销量为什么是这样"
+
+    optimization_query, inherited = contextualize_restaurant_followup(
+        "怎么优化",
+        parent(diagnosis_query, "sales_volume", "diagnose"),
+    )
+    assert inherited is True
+    assert optimization_query == "本月米饭的销量怎么优化"
+
+
+def test_followup_with_explicit_new_entity_does_not_inherit_old_dish():
+    parent = {
+        "parent_query": "米饭的毛利率如何",
+        "parent_template_code": "RESTAURANT_OPS_GROSS_MARGIN",
+        "structured_context": {
+            "focus_entity": {"type": "dish", "name": "米饭"},
+            "window_label": "最近30天",
+            "requested_metrics": ["gross_margin"],
+        },
+    }
+
+    effective, inherited = contextualize_restaurant_followup(
+        "招牌藤椒味的成本如何",
+        parent,
+    )
+
+    assert inherited is False
+    assert effective == "招牌藤椒味的成本如何"
+
+
+def test_named_dish_cost_uses_scoped_unit_economics_resolver():
+    spec = _build_spec(
+        "RESTAURANT_OPS_GROSS_MARGIN",
+        "米饭的成本如何",
+        confidence=1.0,
+        tier="test",
+    )
+
+    assert spec.requested_metrics == ("recipe_cost",)
+    assert spec.planned_intents == ("RESTAURANT_OPS_GROSS_MARGIN",)
+
+
+@pytest.mark.parametrize(
+    "query,expected",
+    [
+        ("米饭销量是多少", "lookup"),
+        ("米饭毛利率为什么是这样", "diagnose"),
+        ("米饭毛利率怎么优化", "optimize"),
+        ("本月米饭销量和上月比", "compare"),
+    ],
+)
+def test_query_plan_seals_current_turn_analysis_action(query, expected):
+    spec = _build_spec(
+        "RESTAURANT_OPS_GROSS_MARGIN",
+        query,
+        confidence=1.0,
+        tier="test",
+    )
+    assert spec.analysis_action == expected
 
 
 def test_ambiguous_cost_margin_priority_requires_scope_choice():
@@ -911,6 +1062,8 @@ def test_dish_ranking_followup_uses_structured_entity_not_answer_markdown():
                     "name": "招牌藤椒味（单人份）",
                     "rank": 1,
                 },
+                "window_label": "最近30天",
+                "requested_metrics": ["sales_volume"],
             },
         }],
         "parent_answer_summary": (
@@ -923,7 +1076,7 @@ def test_dish_ranking_followup_uses_structured_entity_not_answer_markdown():
     effective, inherited = contextualize_restaurant_followup("它的成本如何", parent)
 
     assert inherited is True
-    assert effective == "招牌藤椒味（单人份）的成本如何"
+    assert effective == "最近30天招牌藤椒味（单人份）的成本如何"
 
 
 @pytest.mark.asyncio

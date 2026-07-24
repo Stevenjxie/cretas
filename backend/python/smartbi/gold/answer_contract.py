@@ -27,6 +27,7 @@ _ELEMENT_LABELS_CN = {
     "margin_integrity": "毛利与营收的一致口径校验",
     "request_coverage": "问题中要求的全部指标和动作",
     "execution_consistency": "语义计划与实际执行范围",
+    "analysis_action": "本轮要求的原因分析或优化动作",
 }
 
 
@@ -251,6 +252,20 @@ def _execution_consistency_present(
     )
 
 
+def _analysis_action_present(spec: RestaurantQuerySpec, answer_text: str) -> bool:
+    if spec.analysis_action == "diagnose":
+        return _contains_any(
+            answer_text,
+            ("原因拆解", "计算构成", "驱动因素", "不能证明因果"),
+        )
+    if spec.analysis_action == "optimize":
+        return _contains_any(
+            answer_text,
+            ("优化目标", "优化建议", "优化动作", "验证指标"),
+        )
+    return True
+
+
 # 2026-07-08 audit fix A-3: resolver 能力表 —— 契约只要求 resolver 真正能满足
 # 的元素。8 码里只有 SALES_SUMMARY 的 resolver 接受 query 并按解析出的时间窗
 # 取数/回显; 只有下面三个能产出毛利金额与盈亏判断。对其余 resolver 提这些
@@ -302,6 +317,8 @@ def required_elements(spec: RestaurantQuerySpec) -> List[str]:
         or spec.asks_export
     ):
         elements.append("request_coverage")
+    if spec.analysis_action in ("diagnose", "optimize"):
+        elements.append("analysis_action")
     return elements
 
 
@@ -367,5 +384,8 @@ def validate(
                 missing.append(element)
         elif element == "execution_consistency":
             if not _execution_consistency_present(spec, meta):
+                missing.append(element)
+        elif element == "analysis_action":
+            if not _analysis_action_present(spec, text):
                 missing.append(element)
     return ContractResult(missing=missing)

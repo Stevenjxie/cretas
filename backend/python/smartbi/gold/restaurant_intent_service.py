@@ -151,28 +151,68 @@ def _structured_context(
                 "name": entity_name[:80],
                 "rank": focus.get("rank"),
             }
+    topic_kind = None
+    if result_meta.get("dish_ranking"):
+        topic_kind = "dish_ranking"
+    elif (
+        isinstance(focus, dict)
+        and focus.get("type") == "store"
+        and focus.get("rank") is not None
+    ):
+        topic_kind = "store_ranking"
     return {
         "plan_hash": spec.plan_hash,
         "plan_version": spec.plan_version,
         "focus_entity": focus,
         "window_label": spec.window_label,
+        "requested_metrics": list(spec.requested_metrics),
+        "analysis_action": spec.analysis_action,
+        "topic_kind": topic_kind,
     }
 
 
 def _suggested_followups(context: Dict[str, Any]) -> List[Dict[str, str]]:
+    topic_kind = context.get("topic_kind")
+    if topic_kind in ("dish_ranking", "store_ranking"):
+        noun = "哪个菜卖得最好" if topic_kind == "dish_ranking" else "哪家店业绩最好"
+        current_window = str(context.get("window_label") or "")
+        windows = ["本月", "上个月", "最近30天"]
+        alternatives = [window for window in windows if window != current_window][:2]
+        return [
+            {
+                "label": f"看{window}",
+                "question": f"{window}{noun}？",
+            }
+            for window in alternatives
+        ]
+
     focus = context.get("focus_entity")
     if not isinstance(focus, dict) or not focus.get("name"):
         return []
     name = str(focus["name"])
+    window_label = str(context.get("window_label") or "").strip()
+    time_prefix = (
+        ""
+        if not window_label or window_label == "全部历史"
+        else window_label
+    )
+    current_metrics = set(context.get("requested_metrics") or [])
     if focus.get("type") == "dish":
-        return [
-            {"label": "看菜品成本", "question": f"{name}的成本如何？"},
-            {"label": "看菜品毛利", "question": f"{name}的毛利如何？"},
+        candidates = [
+            ("sales_volume", "看菜品销量", f"{time_prefix}「{name}」的销量是多少？"),
+            ("recipe_cost", "看菜品成本", f"{time_prefix}「{name}」的成本如何？"),
+            ("gross_margin", "看菜品毛利", f"{time_prefix}「{name}」的毛利率如何？"),
+        ]
+    else:
+        candidates = [
+            ("revenue", "看门店营收", f"{time_prefix}「{name}」的营收如何？"),
+            ("gross_margin", "看门店毛利", f"{time_prefix}「{name}」的毛利率如何？"),
         ]
     return [
-        {"label": "看门店营收", "question": f"{name}的营收如何？"},
-        {"label": "看门店毛利", "question": f"{name}的毛利如何？"},
-    ]
+        {"label": label, "question": question}
+        for metric, label, question in candidates
+        if metric not in current_metrics
+    ][:2]
 
 
 def _resolver_kwargs(

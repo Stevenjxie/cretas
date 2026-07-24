@@ -45,6 +45,9 @@ def test_compact_structured_context_whitelists_focus_entity():
         "plan_hash": "a" * 64,
         "plan_version": "restaurant-query-plan-v2",
         "window_label": "近 30 天",
+        "requested_metrics": ["sales_volume", "drop-me"],
+        "analysis_action": "lookup",
+        "topic_kind": "dish_ranking",
         "extra": "drop-me",
     })
 
@@ -58,6 +61,9 @@ def test_compact_structured_context_whitelists_focus_entity():
         "plan_hash": "a" * 64,
         "plan_version": "restaurant-query-plan-v2",
         "window_label": "近 30 天",
+        "requested_metrics": ["sales_volume"],
+        "analysis_action": "lookup",
+        "topic_kind": "dish_ranking",
     }
 
 

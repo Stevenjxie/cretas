@@ -32,6 +32,8 @@ from smartbi.gold.restaurant_ops_router import (
     _profit_intent,
     _resolve_sales_date_range,
     _uses_relative_sales_window,
+    extract_dish_candidate,
+    extract_store_mention,
     match_restaurant_ops,
 )
 
@@ -72,6 +74,11 @@ class RestaurantQuerySpec:
     asks_priority: bool = False
     asks_prohibited_actions: bool = False
     asks_export: bool = False
+    # The requested conversational operation is separate from the metric and
+    # resolver.  A follow-up may keep the same dish while changing from a
+    # lookup to a diagnosis or an optimisation request; carrying the previous
+    # resolver across that boundary is the exact "记得对象但复读旧答案" failure.
+    analysis_action: str = "lookup"  # lookup | compare | diagnose | optimize
     # R22 T3 结构化规格: LLM 抽取的实体槽位 (必须是问句原文子串, 代码校验;
     # 真伪由下游 resolver 对 dim_product/dim_store 验证 — LLM 只提名, 不裁决)。
     dish_slot: Optional[str] = None
@@ -186,9 +193,12 @@ def optimization_clarification_question(query: str) -> Optional[str]:
 
 _REQUEST_METRIC_RULES: Tuple[Tuple[str, Tuple[str, ...]], ...] = (
     ("net_profit", ("净利润", "净利率", "净利润率", "经营利润", "实际利润", "净赚")),
-    ("recipe_cost", ("菜品成本", "食材成本", "配方成本", "单品成本")),
+    ("recipe_cost", ("菜品成本", "食材成本", "配方成本", "单品成本", "成本")),
     ("wastage", ("食材损耗", "损耗", "浪费", "报损", "腐坏", "过期")),
-    ("sales_volume", ("菜品销量", "销量", "销售量", "卖得好", "卖得慢", "慢销", "滞销")),
+    ("sales_volume", (
+        "菜品销量", "销量", "销售量", "卖得好", "卖得慢", "卖了多少", "卖出",
+        "慢销", "滞销",
+    )),
     ("gross_margin", ("毛利率", "毛利", "利润", "盈利", "赚钱", "亏钱", "亏损", "亏本", "赔钱")),
     ("revenue", ("营业收入", "销售收入", "营业额", "销售额", "营收", "流水")),
     ("orders", ("订单集中", "订单数", "订单", "单量", "客单价")),
@@ -222,6 +232,26 @@ def _detect_requested_metrics(text: str) -> Tuple[str, ...]:
     return detected
 
 
+def _detect_analysis_action(text: str) -> str:
+    """Classify what the current turn asks us to *do* with the metric.
+
+    This is a deterministic slot, like the date window.  It deliberately does
+    not inherit the previous turn's action or resolver.
+    """
+    current = (text or "").strip()
+    if any(token in current for token in ("为什么", "原因", "怎么回事", "为何")):
+        return "diagnose"
+    if any(token in current for token in (
+        "怎么优化", "如何优化", "优化", "改善", "怎么办", "怎么做",
+    )):
+        return "optimize"
+    if _detect_comparison(current) or any(token in current for token in (
+        "相比", "对比", "比较", "高还是低", "多还是少",
+    )):
+        return "compare"
+    return "lookup"
+
+
 def _plan_requested_intents(
     text: str,
     selected_code: str,
@@ -243,7 +273,14 @@ def _plan_requested_intents(
     for metric in requested_metrics:
         code: Optional[str] = None
         if metric == "recipe_cost":
-            code = "RESTAURANT_OPS_RECIPE_COST"
+            # The recipe-cost ranking resolver has no named-dish scope.  A
+            # question such as "米饭的成本" must use the scoped unit-economics
+            # resolver; otherwise it silently returns the all-dish cost榜.
+            code = (
+                "RESTAURANT_OPS_GROSS_MARGIN"
+                if extract_dish_candidate(text)
+                else "RESTAURANT_OPS_RECIPE_COST"
+            )
         elif metric == "wastage":
             code = "RESTAURANT_OPS_WASTAGE_TOP"
         elif metric == "sales_volume":
@@ -337,10 +374,20 @@ _FOLLOWUP_PREFIXES = (
     "哪些动作", "先别", "明天看", "和上", "与上", "跟上", "比上", "呢",
 )
 _NEW_TOPIC_TOKENS = ("换个话题", "换一个问题", "另一个问题", "另外问", "新话题")
+_CONTEXT_METRIC_LABELS = {
+    "sales_volume": "销量",
+    "recipe_cost": "成本",
+    "gross_margin": "毛利率",
+    "revenue": "营收",
+    "orders": "订单与客单价",
+    "wastage": "损耗",
+    "staffing": "排班人效",
+}
+_SAFE_CONTEXT_METRICS = frozenset(_CONTEXT_METRIC_LABELS)
 
 
-def _structured_focus_entity(parent: Dict[str, Any]) -> Optional[Dict[str, str]]:
-    """Read the last trusted resolver entity without parsing answer prose."""
+def _structured_followup_context(parent: Dict[str, Any]) -> Dict[str, Any]:
+    """Read the newest trusted semantic slots written by a resolver."""
     history = parent.get("turns_history")
     if isinstance(history, str):
         try:
@@ -359,13 +406,80 @@ def _structured_focus_entity(parent: Dict[str, Any]) -> Optional[Dict[str, str]]
         if not isinstance(context, dict):
             continue
         entity = context.get("focus_entity")
-        if not isinstance(entity, dict):
-            continue
-        entity_type = entity.get("type")
-        name = entity.get("name")
-        if entity_type in ("dish", "store") and isinstance(name, str) and name.strip():
-            return {"type": entity_type, "name": name.strip()[:80]}
-    return None
+        safe_entity = None
+        if isinstance(entity, dict):
+            entity_type = entity.get("type")
+            name = entity.get("name")
+            if (
+                entity_type in ("dish", "store")
+                and isinstance(name, str)
+                and name.strip()
+            ):
+                safe_entity = {
+                    "type": entity_type,
+                    "name": name.strip()[:80],
+                }
+        raw_metrics = context.get("requested_metrics")
+        metrics = tuple(
+            metric
+            for metric in (raw_metrics if isinstance(raw_metrics, list) else [])
+            if metric in _SAFE_CONTEXT_METRICS
+        )
+        window_label = context.get("window_label")
+        safe_window = (
+            window_label.strip()[:40]
+            if isinstance(window_label, str) and window_label.strip()
+            else None
+        )
+        if safe_entity or metrics or safe_window:
+            return {
+                "focus_entity": safe_entity,
+                "requested_metrics": metrics,
+                "window_label": safe_window,
+                "analysis_action": (
+                    context.get("analysis_action")
+                    if context.get("analysis_action") in {
+                        "lookup", "compare", "diagnose", "optimize",
+                    }
+                    else "lookup"
+                ),
+            }
+    return {}
+
+
+def _structured_focus_entity(parent: Dict[str, Any]) -> Optional[Dict[str, str]]:
+    """Compatibility wrapper used by older callers/tests."""
+    context = _structured_followup_context(parent)
+    entity = context.get("focus_entity")
+    return entity if isinstance(entity, dict) else None
+
+
+def _context_metric_label(metrics: Sequence[str]) -> Optional[str]:
+    labels: List[str] = []
+    for metric in metrics:
+        label = _CONTEXT_METRIC_LABELS.get(metric)
+        if label and label not in labels:
+            labels.append(label)
+    return "和".join(labels) if labels else None
+
+
+def _strip_followup_reference(text: str) -> str:
+    """Remove only discourse/pronoun scaffolding, never metric words."""
+    body = re.sub(
+        r"^(?:那|这个|那个)?(?:它|这道菜|那道菜|那个菜|这个菜|"
+        r"这家店|那家店|第一名)(?:的)?[，, ]*",
+        "",
+        text,
+        count=1,
+    )
+    if body == text:
+        body = re.sub(
+            r"^(?:那|刚才|继续|再)[，, ]*",
+            "",
+            text,
+            count=1,
+        )
+    return body.strip() or text.strip()
 
 
 def contextualize_restaurant_followup(
@@ -382,7 +496,14 @@ def contextualize_restaurant_followup(
         return current, False
     parent_query = str(parent.get("parent_query") or "").strip()
     parent_code = str(parent.get("parent_template_code") or "").strip()
-    if not parent_query or not parent_code.startswith("RESTAURANT_OPS_"):
+    context = _structured_followup_context(parent)
+    if (
+        not parent_query
+        or (
+            not parent_code.startswith("RESTAURANT_OPS_")
+            and not context
+        )
+    ):
         return current, False
 
     has_followup_signal = (
@@ -403,19 +524,81 @@ def contextualize_restaurant_followup(
     if standalone_code and _uses_relative_sales_window(current) and not leading_dependent:
         return current, False
 
-    # Resolver-produced structured context is the source of truth for pronoun
-    # resolution. It is independent of markdown wording and therefore cannot
-    # drift when an answer template changes.
-    focus_entity = _structured_focus_entity(parent)
-    if focus_entity:
-        resolved = re.sub(
-            r"^(?:那|这个|那个)?(?:它|这道菜|那个菜|这个菜|这家店|那家店|第一名)(?:的)?",
-            f"{focus_entity['name']}的",
-            current,
-            count=1,
+    # Resolver-produced slots are the only inheritance source.  Crucially, we
+    # never concatenate ``parent_query``: doing so re-injected the old metric
+    # and resolver into every later turn ("销量呢" kept answering 毛利).
+    focus_entity = context.get("focus_entity")
+    context_metrics = context.get("requested_metrics") or ()
+    explicit_metrics = _detect_requested_metrics(current)
+    metric_label = _context_metric_label(explicit_metrics or context_metrics)
+    body = _strip_followup_reference(current)
+    action = _detect_analysis_action(current)
+
+    if isinstance(focus_entity, dict):
+        entity_name = focus_entity["name"]
+        entity_type = focus_entity["type"]
+        explicit_entity = (
+            extract_dish_candidate(current)
+            if entity_type == "dish"
+            else extract_store_mention(current)
         )
-        if resolved != current:
-            return resolved, True
+        # An explicitly named object starts a fresh entity scope.  The semantic
+        # planner must validate it instead of having the old entity prefixed.
+        if explicit_entity:
+            return current, False
+
+        if action == "diagnose":
+            resolved = (
+                f"{entity_name}的{metric_label}为什么是这样"
+                if metric_label else f"{entity_name}为什么会这样"
+            )
+        elif action == "optimize":
+            resolved = (
+                f"{entity_name}的{metric_label}怎么优化"
+                if metric_label else f"{entity_name}怎么优化"
+            )
+        elif (
+            not explicit_metrics
+            and _resolve_sales_date_range(body)[1] != "全部历史"
+            and body.rstrip("呢？?") != body
+        ):
+            time_text = body.rstrip("呢？?").strip()
+            resolved = (
+                f"{time_text}{entity_name}的{metric_label}如何"
+                if metric_label else f"{time_text}{entity_name}表现如何"
+            )
+        elif body.startswith(("卖", "赚", "亏")):
+            resolved = f"{entity_name}{body}"
+        elif body.startswith(("和", "与", "跟", "比")) and metric_label:
+            resolved = f"{entity_name}的{metric_label}{body}"
+        else:
+            resolved = f"{entity_name}的{body}"
+    elif metric_label:
+        if action == "diagnose":
+            resolved = f"{metric_label}为什么是这样"
+        elif action == "optimize":
+            resolved = f"{metric_label}怎么优化"
+        elif body.startswith(("和", "与", "跟", "比")):
+            resolved = f"{metric_label}{body}"
+        else:
+            resolved = current
+    else:
+        resolved = current
+
+    parent_window = context.get("window_label")
+    current_window = _resolve_sales_date_range(current)[1]
+    if (
+        isinstance(parent_window, str)
+        and parent_window != "全部历史"
+        and parent_window not in resolved
+        and (
+            current_window == "全部历史"
+            or body.startswith(("和", "与", "跟", "比"))
+        )
+    ):
+        resolved = f"{parent_window}{resolved}"
+    if resolved != current:
+        return resolved, True
 
     # Legacy sessions written before query-plan v2 have no typed context.
     # Keep a narrow compatibility fallback while all new turns write context.
@@ -432,7 +615,10 @@ def contextualize_restaurant_followup(
             )
             if resolved != current:
                 return resolved, True
-    return f"{parent_query}；继续追问：{current}", True
+    # Without trusted slots there is nothing safe to inherit.  Let the current
+    # turn be planned on its own; ambiguity becomes a clarification instead of
+    # silently carrying the previous resolver.
+    return current, False
 
 
 _DEFAULT_METRICS_BY_CODE: Dict[str, Tuple[str, ...]] = {
@@ -472,6 +658,7 @@ def _seal_query_plan(spec: RestaurantQuerySpec) -> RestaurantQuerySpec:
         "requested_metrics": list(spec.requested_metrics),
         "dimensions": list(spec.dimensions),
         "comparison": spec.comparison,
+        "analysis_action": spec.analysis_action,
         "planned_intents": list(spec.planned_intents),
         "dish_slot": spec.dish_slot,
         "store_slot": spec.store_slot,
@@ -596,6 +783,7 @@ def _build_spec(
         asks_priority=asks_priority,
         asks_prohibited_actions=asks_prohibited_actions,
         asks_export=asks_export,
+        analysis_action=_detect_analysis_action(effective_query),
         dish_slot=llm_dish,
         store_slot=llm_store,
         plan_version="restaurant-query-plan-v2",

@@ -647,7 +647,9 @@ _DISH_MULTI_METRIC_RE = re.compile(
 _DISH_QUERY_RE = re.compile(
     r"^[「\"']?(.{1,30}?)[」\"']?(?:的)?"
     r"(?:毛利率|毛利|销量|销售额|营收|成本率|成本|卖得|卖了|卖出)"
-    r"(?:是多少|有多少|怎么样|如何|好不好|多少|几份)?[?？。!！]?$"
+    r"(?:是多少|有多少|怎么样|如何|好不好|多少|几份"
+    r"|为什么(?:是这样|这么高|这么低)?|为何(?:是这样)?|怎么回事"
+    r"|原因是什么|怎么优化|如何优化|怎么改善|如何改善)?[?？。!！]?$"
 )
 # 「米饭赚钱吗」— 盈亏动词形态, 实体点名 + 盈亏由毛利判定 (R20)。
 _DISH_PROFIT_RE = re.compile(
@@ -1041,6 +1043,165 @@ def _rank_cost_complete_margin_entries(
         key=lambda item: item["gross_profit"],
         reverse=True,
     )[:top_n]
+
+
+def _scoped_dish_metric_answer(
+    entry: Dict[str, Any],
+    *,
+    window_label: str,
+    query: str,
+) -> Optional[str]:
+    """Render only the metric/action requested for one named dish.
+
+    The gross-margin resolver owns the real joined sales+cost facts for a
+    named dish, but that does not authorize it to dump the full margin report
+    when the current turn merely asks "销量呢".  This projection keeps the
+    resolver deterministic while respecting the current-turn QueryPlan.
+    """
+    text = (query or "").strip()
+    asks_diagnosis = any(token in text for token in (
+        "为什么", "原因", "怎么回事", "为何",
+    ))
+    asks_optimization = any(token in text for token in (
+        "怎么优化", "如何优化", "优化", "改善", "怎么办", "怎么做",
+    ))
+    asks_sales = any(token in text for token in (
+        "菜品销量", "销量", "销售量", "卖了多少", "卖出",
+    ))
+    asks_cost = any(token in text for token in (
+        "菜品成本", "食材成本", "配方成本", "单品成本", "成本",
+    ))
+    asks_margin = any(token in text for token in (
+        "毛利率", "毛利", "利润", "盈利", "赚钱", "亏钱", "亏损",
+    ))
+    if not any((asks_diagnosis, asks_optimization, asks_sales, asks_cost, asks_margin)):
+        return None
+
+    name = str(entry.get("name") or "该菜品")
+    qty = float(entry.get("qty") or 0.0)
+    revenue = float(entry.get("revenue") or 0.0)
+    bills = int(entry.get("bills") or 0)
+    unit_price = revenue / qty if qty > 0 else None
+    has_cost = bool(entry.get("has_cost"))
+    unit_cost = (
+        float(entry["food_cost_unit"])
+        if has_cost and entry.get("food_cost_unit") is not None
+        else None
+    )
+    total_cost = (
+        float(entry["total_cost"])
+        if has_cost and entry.get("total_cost") is not None
+        else None
+    )
+    gross_profit = (
+        float(entry["gross_profit"])
+        if has_cost and entry.get("gross_profit") is not None
+        else None
+    )
+    margin_rate = (
+        float(entry["margin_rate"])
+        if has_cost and entry.get("margin_rate") is not None
+        else None
+    )
+
+    if asks_diagnosis:
+        if asks_sales and not asks_cost and not asks_margin:
+            units_per_bill = qty / bills if bills > 0 else None
+            composition = (
+                f"、平均每单 {units_per_bill:,.2f} 份"
+                if units_per_bill is not None else ""
+            )
+            return (
+                f"**原因拆解：「{name}」{window_label}销量为 {qty:,.0f} 份，"
+                f"覆盖 {bills} 单{composition}；当前只能解释销量构成，不能证明业务因果。**\n\n"
+                "如果你问的是销量为什么上涨或下降，需要指定对比周期，再核对上架时长、"
+                "售罄缺货、价格与促销、门店和时段分布；这里不会用毛利率替代销量原因。"
+            )
+        if asks_cost and not asks_margin:
+            if unit_cost is None or total_cost is None:
+                return (
+                    f"**原因拆解：「{name}」{window_label}成本数据不完整，"
+                    "当前不能解释成本为什么是这个结果，也不能证明业务因果。**\n\n"
+                    "请先补齐配方标准用量、最近有效采购价和单位换算，再指定对比周期"
+                    "核对采购价、配方与损耗变化。"
+                )
+            return (
+                f"**原因拆解：「{name}」{window_label}单份成本为 ¥{unit_cost:,.2f}，"
+                f"按销量 {qty:,.0f} 份计算总成本 ¥{total_cost:,.2f}；"
+                "当前只能解释计算构成，不能证明业务因果。**\n\n"
+                "成本口径来自配方标准用量 × 最近有效食材单价。若要解释成本涨跌，"
+                "还需指定对比周期并核对采购价、配方用量、单位换算和损耗变化。"
+            )
+        if not has_cost or unit_price is None or gross_profit is None or margin_rate is None:
+            return (
+                f"**原因拆解：暂时只能确认「{name}」{window_label}销量 {qty:,.0f} 份、"
+                f"营收 ¥{revenue:,.2f}，但成本不完整。**\n\n"
+                "当前不能解释毛利率为什么是这个结果，也不会用销量或营收替代原因。"
+                "请先补齐配方、采购价和单位换算；如要分析涨跌原因，还需指定对比周期。"
+            )
+        unit_margin = gross_profit / qty if qty > 0 else 0.0
+        return (
+            f"**原因拆解：「{name}」{window_label}毛利率为 {margin_rate * 100:.1f}%；"
+            "当前数据能解释计算构成，不能证明业务因果。**\n\n"
+            f"- 平均实收单价：¥{unit_price:,.2f}/份\n"
+            f"- 单份食材成本：¥{unit_cost:,.2f}/份\n"
+            f"- 单份毛利：¥{unit_margin:,.2f}/份\n"
+            f"- 计算构成：`毛利率 = (¥{unit_price:,.2f} - ¥{unit_cost:,.2f})"
+            f" ÷ ¥{unit_price:,.2f} = {margin_rate * 100:.1f}%`\n\n"
+            "如果你问的是毛利率为什么上涨或下降，还需要指定对比周期，并继续核对售价/折扣、"
+            "配方用量、采购价和损耗变化；这里不把相关性说成因果。"
+        )
+
+    if asks_optimization:
+        target = (
+            "销量" if asks_sales and not asks_margin and not asks_cost
+            else "成本" if asks_cost and not asks_margin
+            else "毛利率"
+        )
+        known = (
+            f"当前销量 {qty:,.0f} 份、营收 ¥{revenue:,.2f}"
+            + (
+                f"、单份成本 ¥{unit_cost:,.2f}、毛利率 {margin_rate * 100:.1f}%"
+                if unit_cost is not None and margin_rate is not None
+                else "；成本尚未完整覆盖"
+            )
+        )
+        return (
+            f"**优化目标：优化「{name}」{window_label}的{target}，同时避免只看一个指标行动。**\n\n"
+            f"{known}。\n\n"
+            "**优化动作：**\n"
+            "1. 先核对该菜平均实收价、促销折扣和单份标准成本，确认问题来自售价还是成本。\n"
+            "2. 若目标是销量，只做单店/单时段小范围露出测试，同时守住单份毛利；"
+            "若目标是毛利率，先查配方用量、采购价和损耗，不直接全店涨价。\n"
+            "3. 数据不完整时先补齐成本和促销记录，不据此下架或批量调价。\n\n"
+            f"**验证指标：**同一观察周期比较销量、平均实收价、单份成本、毛利额和毛利率；"
+            "只有目标指标改善且其他指标没有明显恶化，才扩大范围。"
+        )
+
+    if asks_sales and not asks_cost and not asks_margin:
+        return (
+            f"「{name}」{window_label}销量 **{qty:,.0f} 份**、"
+            f"营收 **¥{revenue:,.2f}**，覆盖订单 {bills} 单。"
+        )
+    if asks_cost and not asks_margin:
+        if unit_cost is None or total_cost is None:
+            return (
+                f"「{name}」{window_label}销量 {qty:,.0f} 份，但成本数据不完整，"
+                "当前无法可靠计算单份成本和总成本；不会用营收或毛利替代。"
+            )
+        return (
+            f"「{name}」{window_label}单份食材成本 **¥{unit_cost:,.2f}**；"
+            f"按销量 {qty:,.0f} 份计算，对应总成本 **¥{total_cost:,.2f}**。"
+            "成本口径来自配方标准用量 × 最近有效食材单价。"
+        )
+    if asks_margin and gross_profit is not None and margin_rate is not None and total_cost is not None:
+        return (
+            f"「{name}」{window_label}营收 **¥{revenue:,.2f}**、成本 **¥{total_cost:,.2f}**、"
+            f"毛利 **¥{gross_profit:,.2f}**、毛利率 **{margin_rate * 100:.1f}%**。\n\n"
+            f"计算过程：`毛利 ¥{gross_profit:,.2f} = 营收 ¥{revenue:,.2f}"
+            f" − 成本 ¥{total_cost:,.2f}`。"
+        )
+    return None
 
 
 def _aggregate_store_margin_entries(
@@ -2394,6 +2555,18 @@ async def resolve_gross_margin(
         )
         charts = []
 
+    response_title = f"菜品毛利分析 ({window_label})"
+    response_kpis = [
+        {"title": "总营收", "value": f"¥{total_rev:,.0f}", "rawValue": total_rev},
+        {"title": "总毛利", "value": f"¥{total_profit:,.0f}", "rawValue": total_profit},
+        {"title": "平均毛利率", "value": margin_text, "rawValue": avg_margin},
+        {"title": "最赚菜品", "value": top_slice[0]["name"] if top_slice else "—", "rawValue": 0},
+    ]
+    scoped_entry = (
+        enriched[0]
+        if dish_scope_row is not None and enriched
+        else None
+    )
     if dish_scope_row is not None:
         # Sheet 7/22 菜品链: 点名单菜时先给该菜的销量/营收头行, 再接毛利正文,
         # 数字全部来自同一 POS 行, 不会跨窗口混算。
@@ -2405,7 +2578,6 @@ async def resolve_gross_margin(
         )
         # 「米饭赚钱吗」— 盈亏问必须给判定句, 不让用户自己从毛利率倒推 (R20)。
         if _profit_intent(query_text)[1]:
-            scoped_entry = enriched[0] if enriched else None
             if scoped_entry and scoped_entry.get("margin_rate") is not None:
                 rate = float(scoped_entry["margin_rate"])
                 verdict = "在赚钱" if rate > 0 else ("基本打平" if rate == 0 else "在亏钱")
@@ -2418,17 +2590,111 @@ async def resolve_gross_margin(
                     f"**结论：「{dish_scope_row['dish_name']}」成本未覆盖，"
                     "无法判断是否赚钱；请先补齐配方和最近进价。**\n\n" + answer
                 )
+        elif scoped_entry is not None:
+            projected = _scoped_dish_metric_answer(
+                scoped_entry,
+                window_label=window_label,
+                query=query_text,
+            )
+            if projected:
+                answer = projected
+                charts = []
+                asks_sales = any(token in query_text for token in (
+                    "菜品销量", "销量", "销售量", "卖了多少", "卖出",
+                ))
+                asks_cost = any(token in query_text for token in (
+                    "菜品成本", "食材成本", "配方成本", "单品成本", "成本",
+                ))
+                asks_margin = any(token in query_text for token in (
+                    "毛利率", "毛利", "利润", "盈利", "赚钱", "亏钱", "亏损",
+                ))
+                metric_kind = (
+                    "销量" if asks_sales and not asks_cost and not asks_margin
+                    else "成本" if asks_cost and not asks_margin
+                    else "毛利"
+                )
+                if any(token in query_text for token in (
+                    "为什么", "原因", "怎么回事", "为何",
+                )):
+                    response_title = f"菜品{metric_kind}原因拆解 ({window_label})"
+                elif any(token in query_text for token in (
+                    "怎么优化", "如何优化", "优化", "改善", "怎么办", "怎么做",
+                )):
+                    response_title = f"菜品{metric_kind}优化建议 ({window_label})"
+                else:
+                    response_title = f"菜品{metric_kind} ({window_label})"
+
+                if metric_kind == "销量":
+                    response_kpis = [
+                        {
+                            "title": "销量",
+                            "value": f"{float(scoped_entry.get('qty') or 0):,.0f} 份",
+                            "rawValue": scoped_entry.get("qty"),
+                        },
+                        {
+                            "title": "营收",
+                            "value": f"¥{float(scoped_entry.get('revenue') or 0):,.2f}",
+                            "rawValue": scoped_entry.get("revenue"),
+                        },
+                        {
+                            "title": "订单数",
+                            "value": f"{int(scoped_entry.get('bills') or 0)} 单",
+                            "rawValue": scoped_entry.get("bills"),
+                        },
+                    ]
+                elif metric_kind == "成本":
+                    unit_cost = scoped_entry.get("food_cost_unit")
+                    total_cost = scoped_entry.get("total_cost")
+                    response_kpis = [
+                        {
+                            "title": "单份成本",
+                            "value": (
+                                f"¥{float(unit_cost):,.2f}"
+                                if unit_cost is not None else "不可计算"
+                            ),
+                            "rawValue": unit_cost,
+                        },
+                        {
+                            "title": "总成本",
+                            "value": (
+                                f"¥{float(total_cost):,.2f}"
+                                if total_cost is not None else "不可计算"
+                            ),
+                            "rawValue": total_cost,
+                        },
+                    ]
+                else:
+                    response_kpis = [
+                        {
+                            "title": "菜品营收",
+                            "value": f"¥{float(scoped_entry.get('revenue') or 0):,.2f}",
+                            "rawValue": scoped_entry.get("revenue"),
+                        },
+                        {
+                            "title": "菜品毛利",
+                            "value": (
+                                f"¥{float(scoped_entry['gross_profit']):,.2f}"
+                                if scoped_entry.get("gross_profit") is not None
+                                else "不可计算"
+                            ),
+                            "rawValue": scoped_entry.get("gross_profit"),
+                        },
+                        {
+                            "title": "菜品毛利率",
+                            "value": (
+                                f"{float(scoped_entry['margin_rate']) * 100:.1f}%"
+                                if scoped_entry.get("margin_rate") is not None
+                                else "不可计算"
+                            ),
+                            "rawValue": scoped_entry.get("margin_rate"),
+                        },
+                    ]
     return OpsAnswer(
         code="RESTAURANT_OPS_GROSS_MARGIN",
-        title=f"菜品毛利分析 ({window_label})",
+        title=response_title,
         answer_text=answer,
         charts=charts,
-        kpis=[
-            {"title": "总营收", "value": f"¥{total_rev:,.0f}", "rawValue": total_rev},
-            {"title": "总毛利", "value": f"¥{total_profit:,.0f}", "rawValue": total_profit},
-            {"title": "平均毛利率", "value": margin_text, "rawValue": avg_margin},
-            {"title": "最赚菜品", "value": top_slice[0]["name"] if top_slice else "—", "rawValue": 0},
-        ],
+        kpis=response_kpis,
         meta={
             "window_days": analysis_days, "top_n": top_n,
             "window_start": _date_text(window_start) if window_start else None,
@@ -2445,6 +2711,26 @@ async def resolve_gross_margin(
             "trend_requested": trend_requested,
             "reference_lines": reference_lines,
             "low_margin_dishes": [e["name"] for e in low_margin],
+            "focus_entity": (
+                {
+                    "type": "dish",
+                    "id": dish_scope_row["product_id"],
+                    "name": dish_scope_row["dish_name"],
+                }
+                if dish_scope_row is not None else None
+            ),
+            "target_dish_metrics": (
+                {
+                    "qty": scoped_entry.get("qty"),
+                    "revenue": scoped_entry.get("revenue"),
+                    "bills": scoped_entry.get("bills"),
+                    "unit_cost": scoped_entry.get("food_cost_unit"),
+                    "total_cost": scoped_entry.get("total_cost"),
+                    "gross_profit": scoped_entry.get("gross_profit"),
+                    "margin_rate": scoped_entry.get("margin_rate"),
+                }
+                if scoped_entry is not None else None
+            ),
         },
     )
 
