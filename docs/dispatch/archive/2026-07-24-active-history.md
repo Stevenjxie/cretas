@@ -1,5 +1,16 @@
 # 2026-07-24 调度归档
 
+## `DOC-F006-SOP-CURRENT-FLOW-20260724` — `merged`
+
+- Owner: `/root`
+- Base SHA: `db2d666f946de0e74b94f5c60aa328e874bbd581`
+- 结果：工厂 SOP 静态页、RAG 来源与 AI Assist 确定性回答已同步到当前生产链路，覆盖 BOM 创建时自动固定唯一 Workflow 草稿修订、只读工艺来源/DAG 工序、稳定 ID 显式升级与历史不漂移。
+- 报工与状态机：SOP 按“投入 → 工序执行 → 产出 → 确认提交”组织；明确草稿零扣库/零正式成本、正式报工对原料/调料/包材 FEFO 分配并计入实际成本、计划创建幂等、取消/停产可审计、小结入库与库存流水一致。
+- UI 验收：双出成率总览表头与内容线对线，保留鼠标/键盘升降序及表头漏斗筛选；正式报工为唯一主操作，时间/人数与产出数量分区。
+- 验证：`python -m pytest tests/test_food_kb_manual_chat_sop_contract.py -q` 为 `10 passed`；Python 编译、36 个 RAG 分块、HTML 26 sections / 14 tables / 134 steps / 0 duplicate IDs、关键文案和 `git diff --check` 均通过。
+- 发布边界：只允许 PR 合入后从 clean exact `origin/main` 更新 `/lsmsop/`、Python 服务与 SOP RAG；发布前必须确认相关 Codex 任务不存在等待/执行项。
+- Scope 锁已释放。
+
 ## `AUTO-SOP-RAG-SYNC-20260724` — `merged`
 
 - Owner: `/root`

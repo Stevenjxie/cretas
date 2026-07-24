@@ -264,13 +264,13 @@
 
     <main>
       <header class="hero" id="scope">
-        <div class="eyebrow">CURRENT MAIN · MANUAL REGRESSION · 2026-07-19</div>
+        <div class="eyebrow">CURRENT MAIN · MANUAL REGRESSION · 2026-07-24</div>
         <h2>从建档，到入库、生产、报工与盘点</h2>
         <p>这是一份可直接照着点击的 F006 手工测试手册。先选生产来源，再选测试深度：MVP 用最少步骤证明链路能跑通；中度闭环增加关键审批和业务异常；全量闭环覆盖治理、质量、冲销与全数据核对。</p>
         <div class="meta-row">
-          <span class="stamp ok">生产 Workflow / 逐道报工：已做 F006 视觉验证</span>
-          <span class="stamp">SKU / BOM / 销售 / 盘点：按最新 main UI 校准</span>
-          <span class="stamp code">origin/main ebbc989332</span>
+          <span class="stamp ok">Workflow / BOM 自动关联、逐道报工：按最新 main 校准</span>
+          <span class="stamp">计划幂等、包材扣库、成本与小结：按当前生产逻辑校准</span>
+          <span class="stamp code">origin/main · SOP sync 2026-07-24</span>
           <span class="stamp">单文件 · 离线可用 · 可打印</span>
         </div>
         <div class="filter-panel screen-only">
@@ -292,7 +292,7 @@
           </div>
         </div>
         <div class="copy-toolbar copy-compact screen-only">
-          <label class="copy-prefix">复制内容统一前缀 <input id="copyPrefixTop" value="SOP-20260719-01" maxlength="40" aria-label="复制内容统一前缀" /></label>
+          <label class="copy-prefix">复制内容统一前缀 <input id="copyPrefixTop" value="SOP-20260724-01" maxlength="40" aria-label="复制内容统一前缀" /></label>
           <span class="copy-status" id="copyStatusTop" aria-live="polite">仅手工输入字段显示复制按钮</span>
         </div>
       </header>
@@ -357,7 +357,7 @@
           <div class="section-title"><h3>需要创建的对象：单行快速复制</h3><p>先改统一前缀，再逐行复制；内容只提供建档口径，不替你虚构未知配方量或分类</p></div>
         </div>
         <div class="copy-toolbar screen-only">
-          <label class="copy-prefix">本轮测试前缀 <input id="copyPrefix" value="SOP-20260719-01" maxlength="40" aria-label="本轮测试前缀" /></label>
+          <label class="copy-prefix">本轮测试前缀 <input id="copyPrefix" value="SOP-20260724-01" maxlength="40" aria-label="本轮测试前缀" /></label>
           <button class="copy-all" id="copyAllButton" type="button">复制当前路线全部清单</button>
           <span class="copy-status" id="copyStatus" aria-live="polite"></span>
         </div>
@@ -374,8 +374,8 @@
             <div class="copy-row" data-copy-template="{P}-黄油鸡-成品800g｜产品大类：成品｜基本单位：盒｜标准单位换算：1盒=800克｜包装换算：1箱=8盒"><span class="copy-kind">成品 SKU</span><code class="copy-content"></code><button class="copy-button" type="button">复制</button></div>
             <div class="copy-row" data-copy-template="{P}-黄油鸡-原料处理｜工序类别：原料处理｜默认产出类型：半成品｜单位由Workflow端口决定"><span class="copy-kind">工序 P1</span><code class="copy-content"></code><button class="copy-button" type="button">复制</button></div>
             <div class="copy-row" data-copy-template="{P}-黄油鸡-定量包装｜工序类别：包装｜默认产出类型：成品｜单位由Workflow端口决定"><span class="copy-kind">工序 P2</span><code class="copy-content"></code><button class="copy-button" type="button">复制</button></div>
-            <div class="copy-row" data-copy-template="{P}-黄油鸡-成品800g BOM｜产出继承SKU：1盒=800克｜原料A/B/C/D及辅料包材：按真实配方量填写｜原料出成率：待评估｜保存后激活"><span class="copy-kind">BOM</span><code class="copy-content"></code><button class="copy-button" type="button">复制</button></div>
-            <div class="copy-row" data-copy-template="{P}-黄油鸡-主链Workflow｜原料A/B/C/D→原料处理→处理后半成品→定量包装→成品800g｜投入方式：批次自由选择(至少1个)｜单位：kg→kg→盒｜发布并启用"><span class="copy-kind">Workflow</span><code class="copy-content"></code><button class="copy-button" type="button">复制</button></div>
+            <div class="copy-row" data-copy-template="{P}-黄油鸡-成品800g BOM｜创建时系统自动固定完整Workflow草稿｜产出继承SKU：1盒=800克｜原料A/B/C/D及辅料包材：按真实配方量填写｜激活后再发布Workflow"><span class="copy-kind">BOM</span><code class="copy-content"></code><button class="copy-button" type="button">复制</button></div>
+            <div class="copy-row" data-copy-template="{P}-黄油鸡-主链Workflow｜原料A/B/C/D→原料处理→处理后半成品→定量包装→成品800g｜投入方式：批次自由选择(至少1个)｜单位：kg→kg→盒｜先保存完整草稿，待BOM激活后发布并启用"><span class="copy-kind">Workflow</span><code class="copy-content"></code><button class="copy-button" type="button">复制</button></div>
           </div>
         </details>
 
@@ -467,8 +467,9 @@
       <section id="bom">
         <div class="section-head"><span class="section-no">05</span><div class="section-title"><h3>创建、按工序配置并激活 BOM / 配方</h3><p>原料、包材、工序辅料和锅序各有不同录入口径；产出规格从 SKU 只读带入</p></div></div>
         <div class="path">生产管理 <b>›</b> 生产配置 <b>›</b> BOM/配方维护</div>
-        <div class="callout warning"><strong>BOM 与 Workflow 需要两次往返</strong>先建立原料/包材和配方草稿；若“辅料 → 工序编排”尚无工序，先到 Workflow 保存工序链草稿，再返回本页把辅料、锅序绑定到具体工序，激活 BOM，最后回 Workflow 发布并启用。</div>
+        <div class="callout warning"><strong>先有完整 Workflow 草稿，再创建 BOM</strong>若目标 SKU 尚无结构完整的 Workflow 草稿，先完成下一节的 Cell / 工序链并保存草稿。返回本页创建 BOM 时，系统自动固定唯一兼容的工艺修订并生成配置骨架；普通用户不选择 Workflow 版本。配置并激活 BOM 后，再回 Workflow 发布并启用。</div>
         <div class="table-wrap"><table><thead><tr><th>区域</th><th>配置对象</th><th>手工输入</th><th>系统继承/计算</th></tr></thead><tbody>
+          <tr><td>工艺来源</td><td>目标 SKU 唯一兼容的 Workflow 草稿修订</td><td>无；只可查看工艺或显式升级</td><td>自动固定精确修订和快照；按目标终端反向回溯并锁定工序顺序</td></tr>
           <tr><td>配方头</td><td>当前成品 SKU 的版本</td><td>版本备注</td><td>产品、产出单位、标准克重来自 SKU；出成率来自正式报工历史</td></tr>
           <tr><td>原料 RAW</td><td>主要投入物料</td><td>选择原料；必要时备注/高级可选规则</td><td>单位与参考价来自物料主档；当前页面不强迫填写固定出成数量</td></tr>
           <tr><td>包材 PACKAGING</td><td>盒、袋、膜、外箱等</td><td>每成品用量/每产品用量、备注</td><td>单位来自物料主档；按成品基本单位推算需求</td></tr>
@@ -476,15 +477,16 @@
           <tr><td>版本</td><td>DRAFT / ACTIVE / 历史版本</td><td>克隆后的修改内容</td><td>同一 SKU 仅一个生效版本；新版本不回写旧计划</td></tr>
         </tbody></table></div>
         <div class="steps">
-          <label class="step"><span class="check"><input type="checkbox" data-key="bom-1"><span></span></span><span><h4>B01 · 选择 SKU 并核对配方头前置</h4><p>选择“黄油鸡成品 800g”。先核对页面带出的基本单位“盒”和标准克重 800g；若 SKU 缺标准克重，按引导返回 SKU 补录。</p><span class="expect">BOM 不能另写 1盒=多少克；SKU 缺克重时不能创建配方头。</span></span></label>
+          <label class="step"><span class="check"><input type="checkbox" data-key="bom-1"><span></span></span><span><h4>B01 · 选择 SKU 并自动关联工艺来源</h4><p>确认“黄油鸡成品 800g”已有唯一、结构完整的 Workflow 草稿，再选择该 SKU 创建 BOM 草稿。核对页面带出的基本单位“盒”、标准克重 800g 和只读“工艺来源”。</p><span class="expect">系统在同一次创建中固定精确 Workflow 修订；页面没有任意切换版本的选择器。找不到、找到多个或终端不明确时，在写入前明确阻止。</span></span></label>
           <label class="step"><span class="check"><input type="checkbox" data-key="bom-2"><span></span></span><span><h4>B02 · 添加原料 RAW</h4><p>打开“原料”页签逐行添加黄油鸡原料。选择物料后核对计量单位由主档带入；本轮普通原料不填写固定出成率，按需填写备注。高级选项只有真实业务需要时才使用。</p><span class="expect">原料筛选只出现原料类；同量纲单位可明确选择，单位不兼容时提示回主档核对。</span></span></label>
           <label class="step"><span class="check"><input type="checkbox" data-key="bom-3"><span></span></span><span><h4>B03 · 添加包材 PACKAGING</h4><p>切换“包材”页签，添加成品盒/袋、封膜和外箱。填写每 1 个成品基本单位所需包材量；例如 1盒用 1 个盒，8盒共用 1 箱时每产品用量填 0.125。</p><span class="expect">包材单位来自主档；数量按成品基本单位推算，不把 800g 标准克重当包材数量。</span></span></label>
-          <label class="step"><span class="check"><input type="checkbox" data-key="bom-4"><span></span></span><span><h4>B04 · 创建配方头草稿</h4><p>至少已有 1 行原料/包材后点“创建配方”，选择空白创建或复制同源规则；填写版本备注并创建草稿。</p><span class="expect">配方头显示产品、盒、800克/盒均只读；状态 DRAFT；若达到 10 个版本，先清理无用草稿/历史版本。</span></span></label>
-          <label class="step"><span class="check"><input type="checkbox" data-key="bom-5"><span></span></span><span><h4>B05 · 按具体工序绑定辅料</h4><p>切换“辅料 → 工序编排”，选草稿版本，展开“原料处理/熟制/包装”等工序，点“添加工序调料”。选择辅料，填写“每生产 1kg 本工序半成品需要投入”的数量和计量单位，选择是否计入成本。</p><span class="expect">工序由入口锁定不可改；同一辅料可用于多道工序但各自独立；自动单价缺失时先去物料档案配置移动平均价。</span></span></label>
+          <label class="step"><span class="check"><input type="checkbox" data-key="bom-4"><span></span></span><span><h4>B04 · 创建配方头草稿并核对 DAG 骨架</h4><p>至少已有 1 行原料/包材后点“创建配方”，选择空白创建或复制同源规则；填写版本备注并创建草稿。</p><span class="expect">配方头显示产品、盒、800克/盒均只读；工艺来源只读；目标 SKU 的共享祖先和专属工序按拓扑顺序出现，兄弟终端专属分支不混入。</span></span></label>
+          <label class="step"><span class="check"><input type="checkbox" data-key="bom-5"><span></span></span><span><h4>B05 · 按锁定工序配置辅料</h4><p>切换“辅料 → 工序编排”，打开当前 BOM 草稿，按系统生成的顺序展开“原料处理/熟制/包装”等工序，点“添加工序调料”。选择辅料，填写“每生产 1kg 本工序半成品需要投入”的数量和计量单位，选择是否计入成本。</p><span class="expect">工序名称和顺序由 DAG 锁定，不能手选 Workflow 或改工序；同一辅料可用于多道工序但各自独立；缺价持续显示一个可操作提示，不伪造 0 元完整成本。</span></span></label>
           <label class="step"><span class="check"><input type="checkbox" data-key="bom-6"><span></span></span><span><h4>B06 · 配置锅序规则（仅需要的辅料）</h4><p>对需要首锅/续锅差异的辅料打开“按锅序计算”：第一锅固定 100%，填写“后续锅占第一锅”的百分比。没有锅序差异的辅料保持关闭。</p><span class="expect">辅料汇总显示“首锅100% · 后续X%”；报工页面只有 BOM 对本道显式开启锅序时才出现锅数，系统按投入量等分每锅 kg。</span></span></label>
           <label class="step"><span class="check"><input type="checkbox" data-key="bom-7"><span></span></span><span><h4>B07 · 核对辅料汇总、成本与异常</h4><p>切换“辅料汇总”，逐项核对同一辅料在哪些工序使用、g/kg、锅序、自动单价和是否计成本；返回原料/包材页核对成本预览。</p><span class="expect">无重复计成本；历史普通辅料若提示“待绑定工序/可能重复计成本”，保留并记录，不能自动迁移或删除。</span></span></label>
-          <label class="step"><span class="check"><input type="checkbox" data-key="bom-8"><span></span></span><span><h4>B08 · 激活版本并做版本防错</h4><p>确认草稿明细和工序辅料后点“激活”。修改已生效版本时先“复制编辑”，在新草稿中改动再激活。</p><span class="expect">同一 SKU 只有一个 ACTIVE；激活只影响之后新建计划，旧生产计划继续使用原 BOM/Workflow 快照。</span></span></label>
-          <label class="step" data-min-depth="full"><span class="check"><input type="checkbox" data-key="bom-9"><span></span></span><span><h4>B09 · 克隆生效版本并模拟配方变更</h4><p>从当前 ACTIVE 版本克隆新草稿，分别测试数量调整、物料替换和删除物料；不得直接编辑生效版本。记录变更前后物料、单位、数量和预计成本差。</p><span class="expect">原版本保持只读；新草稿拥有独立版本号；旧生产计划不被回写。</span></span></label>
+          <label class="step"><span class="check"><input type="checkbox" data-key="bom-8"><span></span></span><span><h4>B08 · 激活版本并做版本防错</h4><p>确认草稿明细、工序辅料和多产出分摊后点“激活”。修改已生效版本时先“复制编辑”，在新草稿中改动再激活。</p><span class="expect">同一 SKU 只有一个 ACTIVE；激活只影响之后新建计划，旧生产计划继续使用原 BOM/Workflow 快照。</span></span></label>
+          <label class="step" data-min-depth="full"><span class="check"><input type="checkbox" data-key="bom-9"><span></span></span><span><h4>B09 · 克隆生效版本并模拟配方变更</h4><p>从当前 ACTIVE 版本克隆新草稿，分别测试数量调整、物料替换和删除物料；不得直接编辑生效版本。记录变更前后物料、单位、数量和预计成本差。</p><span class="expect">原版本保持只读；新草稿继承同一精确工艺修订和完整快照，不要求新建 Workflow 草稿；旧生产计划不被回写。</span></span></label>
+          <label class="step" data-min-depth="full"><span class="check"><input type="checkbox" data-key="bom-11"><span></span></span><span><h4>B11 · 显式升级到最新工艺</h4><p>另建兼容的新 Workflow 草稿修订，回到 BOM 查看“发现更新的工艺修订”，点击“升级到最新工艺”。</p><span class="expect">只按稳定节点、接口和连线身份迁移可证明兼容的数据；删除、歧义或单位不兼容时列出未映射项并停止，原 ACTIVE BOM 和历史计划保持不变。</span></span></label>
           <label class="step" data-min-depth="full"><span class="check"><input type="checkbox" data-key="bom-10"><span></span></span><span><h4>B10 · 走 ECN、影响分析与版本审批</h4><p>进入“BOM 版本管理 / 工程变更通知”，创建 ECN，填写原因、标题、说明和计划生效日；查看受影响物料、成品 SKU、未结采购单与成本差，再提交审批。</p><span class="expect">审批通过后新版本生效、旧版失效；被拒绝时保留原因；已建计划仍引用原快照。</span></span></label>
         </div>
         <h4 data-min-depth="medium" style="margin:22px 0 10px;font-size:17px">BOM 必测报错矩阵</h4>
@@ -494,6 +496,8 @@
           <tr><td>物料未关联、包材用量≤0、单位不兼容</td><td>指出具体行；不能创建或激活</td></tr>
           <tr><td>辅料没有移动平均价</td><td>表单保留，阻止保存并提供“去配置价格/重新读取价格”</td></tr>
           <tr><td>生效版本直接编辑</td><td>只读；必须克隆为新版本</td></tr>
+          <tr><td>无兼容 Workflow、存在多个候选、终端不唯一或 DAG 不完整</td><td>创建 BOM 前阻止并给出可操作原因；不得按名称或最新时间猜测</td></tr>
+          <tr><td>新工艺删除节点、单位不兼容或映射有歧义</td><td>升级停止并列出冲突；不得让旧 BOM 自动漂移</td></tr>
           <tr><td>两人同时修改同一辅料版本</td><td>409 冲突后重新加载，不能覆盖他人更改</td></tr>
           <tr><td>锅数不是大于等于 1 的整数</td><td>报工阶段阻止；BOM 未开启锅序时不显示锅数字段</td></tr>
         </tbody></table></div>
@@ -515,7 +519,7 @@
           <label class="step"><span class="check"><input type="checkbox" data-key="wf-1"><span></span></span><span><h4>建立 Cell 链路</h4><p>添加 4 个原料 Cell A/B/C/D → 原料处理工序 → 处理后半成品 Cell → 定量包装工序 → 成品 Cell。每个原料只能在一张 Workflow 中选择一次；重复项应从选择器中消失。</p><span class="expect">无重复原料、无悬空线、每个 Cell 的 SKU 已绑定。</span></span></label>
           <label class="step"><span class="check"><input type="checkbox" data-key="wf-2"><span></span></span><span><h4>核对原料投入自动理解</h4><p>只需把 A/B/C/D 的来源 Cell 连接到“原料处理”工序，不再配置替代组或投入关系。系统自动研判为“批次自由选择（至少1个）”。</p><span class="expect">报工时至少选 1 个原料；之后可由用户选择 1 个、多个或全部，不显示主投入/追加投入。</span></span></label>
           <label class="step"><span class="check"><input type="checkbox" data-key="wf-3"><span></span></span><span><h4>核对单位与产出归属</h4><p>原料和处理后半成品均为 kg，最终成品单位为盒。成品归属 Workflow 的终端产出必须与顶部成品一致；原料归属 Workflow 则以画布上的全部终端成品为真实产出集合。</p><span class="expect">不出现 1袋=1盒 或 1kg=1盒；生产计划匹配看终端集合，不被 Workflow 名称或归属类型误导。</span></span></label>
-          <label class="step"><span class="check"><input type="checkbox" data-key="wf-4"><span></span></span><span><h4>保存草稿、完成 BOM 工序辅料后再发布</h4><p>先点“自动布局”并保存 Workflow 草稿；若 BOM 辅料页之前没有工序，返回 BOM 把辅料/锅序绑定到这些工序并激活 BOM，再回本页“发布并启用”。</p><span class="expect">顶部同时显示“已发布 vX”和“已启用 vX”；无未绑定 SKU、缺生效 BOM 或单位复核警告。</span></span></label>
+          <label class="step"><span class="check"><input type="checkbox" data-key="wf-4"><span></span></span><span><h4>保存完整草稿、创建并激活 BOM 后再发布</h4><p>先点“自动布局”并保存结构完整的 Workflow 草稿，此时不要发布。回到 BOM 选择目标 SKU，确认系统自动固定本修订并生成工序配置骨架；完成原料、包材、辅料和成本规则并激活 BOM，再回本页“发布并启用”。</p><span class="expect">BOM 无手选 Workflow 版本控件；顶部同时显示“已发布 vX”和“已启用 vX”；无未绑定 SKU、缺生效 BOM 或单位复核警告。</span></span></label>
         </div>
       </section>
 
@@ -614,7 +618,7 @@
         <div class="steps">
           <label class="step"><span class="check"><input type="checkbox" data-key="stock-1"><span></span></span><span><h4>来源类型选“存货生产”</h4><p>“生产成品”可多选。选择一个成品时应匹配其 Workflow；选择多个时，系统优先完全匹配，没有完全匹配才选最小联产超集。</p><span class="expect">页面显示“本计划已固定工序路线”、拓扑类型、版本和终端产出。</span></span></label>
           <label class="step"><span class="check"><input type="checkbox" data-key="stock-2"><span></span></span><span><h4>处理路线歧义</h4><p>同一匹配层存在多个 Workflow，或所选产品会带出额外联产品时，点“选择生产工序路线”；鼠标悬停“悬浮查看 Cell 图”确认中间工序和连接方式。</p><span class="expect">不能仅靠 Workflow 名字判断；必须确认工序 Cell 图和完整产出集合。</span></span></label>
-          <label class="step"><span class="check"><input type="checkbox" data-key="stock-3"><span></span></span><span><h4>填写计划信息并创建</h4><p>Workflow 驱动的存货生产需要填写大于 0 的计划基准量；报工模式应锁定为“逐道报工”。填写计划日期、预计完成日、人员/主管和备注。</p><span class="expect">计划创建成功，来源标签为“存货生产”，可见“逐道录入 / 小结 / 停产”，不显示“生成调拨单”。</span></span></label>
+          <label class="step"><span class="check"><input type="checkbox" data-key="stock-3"><span></span></span><span><h4>填写计划信息并验证幂等创建</h4><p>Workflow 驱动的存货生产需要填写大于 0 的计划基准量；报工模式应锁定为“逐道报工”。填写计划日期、预计完成日、人员/主管和备注。点击创建后不要反复操作；可用网络重试或重复提交同一请求验证幂等。</p><span class="expect">按钮处理中禁用；重复请求只返回同一张计划、一个计划号。来源标签为“存货生产”，可见“逐道录入 / 小结 / 停产”，不显示“生成调拨单”。</span></span></label>
         </div>
       </section>
 
@@ -627,7 +631,7 @@
           <label class="step"><span class="check"><input type="checkbox" data-key="sales-2"><span></span></span><span><h4>提交审批判定</h4><p>订单创建后点“提交审批判定”。系统按配置自动分流：可能自动通过，也可能进入财务审核。以页面最终状态为准。</p><span class="expect">订单不再是草稿；达到可排产/已财务审核状态。若待财审，先完成财务审核。</span></span></label>
           <label class="step"><span class="check"><input type="checkbox" data-key="sales-3"><span></span></span><span><h4>从订单创建生产计划</h4><p>若系统已自动创建计划，直接打开；否则点订单行的“创建生产计划”，或进入生产计划新建页，来源选“销售订单”并选择该订单。</p><span class="expect">订单客户和产品行自动带出，不能手填另一套产品。</span></span></label>
           <label class="step"><span class="check"><input type="checkbox" data-key="sales-4"><span></span></span><span><h4>选择订单产品行并确认路线</h4><p>产品行默认全选，可取消不生产的行；每保留一行各建一张生产计划，产品/数量来自订单行。多订单合并时，追加订单必须已财务审核。</p><span class="expect">计划数量等于订单行数量；Workflow 路线、版本与目标成品一致。歧义时必须显式选择并预览 Cell 图。</span></span></label>
-          <label class="step"><span class="check"><input type="checkbox" data-key="sales-5"><span></span></span><span><h4>创建计划并检查操作入口</h4><p>Workflow 驱动时逐道报工应被锁定。订单生产有明确计划量，可按 BOM 生成调拨单；缺料是预警，不应静默换成其它料。</p><span class="expect">计划来源标签为“销售订单”，能追溯到订单号；可见“逐道录入 / 核对结单”。</span></span></label>
+          <label class="step"><span class="check"><input type="checkbox" data-key="sales-5"><span></span></span><span><h4>创建计划并检查幂等与操作入口</h4><p>Workflow 驱动时逐道报工应被锁定。订单生产有明确计划量，可按 BOM 生成调拨单；缺料是预警，不应静默换成其它料。对同一订单行重复点击或重试创建。</p><span class="expect">同一订单行只形成一张计划，重复请求回显既有计划并提供查看入口；计划能追溯订单号，可见“逐道录入 / 核对结单”。</span></span></label>
           <label class="step" data-min-depth="full"><span class="check"><input type="checkbox" data-key="sales-6"><span></span></span><span><h4>验证多销售订单合并生产</h4><p>再创建一张已审批销售订单，包含相同成品和不同成品。新建生产计划时追加第二张订单：相同 SKU 需求可归并到对应计划，不同 SKU 仍按产品行分别形成计划。</p><span class="expect">计划详情保留全部来源订单号；相同 SKU 不漏量、不重复建；不同 SKU 不被强行塞进不覆盖它的 Workflow。</span></span></label>
         </div>
       </section>
@@ -668,24 +672,27 @@
       </section>
 
       <section id="report">
-        <div class="section-head"><span class="section-no">08</span><div class="section-title"><h3>逐道录入、正式报工与异常矩阵</h3><p>两条路线共用；每道工序都要验证输入、产出、人员工时、库存和幂等门禁</p></div></div>
+        <div class="section-head"><span class="section-no">08</span><div class="section-title"><h3>逐道录入、正式报工与异常矩阵</h3><p>按现场顺序完成投入 → 工序执行 → 产出 → 确认提交，并验证库存、成本和幂等门禁</p></div></div>
         <div class="path">生产管理 <b>›</b> 生产计划 <b>›</b> 目标计划行 <b>›</b> 逐道录入</div>
         <div class="table-wrap"><table><thead><tr><th>每道工序录入组</th><th>手工输入</th><th>系统固定/自动</th><th>提交前核对</th></tr></thead><tbody>
           <tr><td>报工组</td><td>生产日期</td><td>计划、Workflow 版本、工序顺序</td><td>日期存在，路线未失效</td></tr>
-          <tr><td>投入</td><td>选择实际来源批次、每项投入量</td><td>可选物料、SKU、单位和生产仓可用量</td><td>至少选 1 项；批次身份完整；不能超可用量</td></tr>
-          <tr><td>产出</td><td>每项产出数量</td><td>产出 SKU/单位来自 Workflow；成品净重来自 SKU</td><td>选中项数量大于 0；可选项可不选</td></tr>
-          <tr><td>人工</td><td>开始时间、结束时间、人数，或多段工时</td><td>总工时自动计算；时薪来自全局成本设置（未配置时按系统默认 ¥26/工时）</td><td>开始/结束成对；人数大于 0</td></tr>
+          <tr><td>① 投入</td><td>选择实际来源批次、每项投入量</td><td>可选物料、SKU、单位和生产仓可用量</td><td>至少选 1 项；批次身份完整；不能超可用量</td></tr>
+          <tr><td>② 工序执行</td><td>开始时间、结束时间、人数，或多段工时</td><td>总工时自动计算；时薪来自全局成本设置（未配置时按系统默认 ¥26/工时）</td><td>开始/结束成对；人数大于 0</td></tr>
+          <tr><td>③ 产出明细</td><td>每项产出数量</td><td>产出 SKU/单位来自 Workflow；成品净重来自 SKU</td><td>选中项数量大于 0；数量与只读单位紧邻</td></tr>
           <tr><td>副产/分摊</td><td>副产数量、回收单价；必要时成本分摊比例</td><td>副产单位随产出行；可统一计量时自动分摊</td><td>混合计量维度时每项比例大于 0，合计 100%</td></tr>
+          <tr><td>④ 确认提交</td><td>保存草稿或正式报工</td><td>草稿不扣库；正式报工自动分配生产仓批次并写库存/成本</td><td>正式报工为唯一主按钮；提交前确认影响摘要</td></tr>
         </tbody></table></div>
         <div class="steps">
-          <label class="step"><span class="check"><input type="checkbox" data-key="report-1"><span></span></span><span><h4>R01 · 第一工序正常报工</h4><p>新增报工行，填写生产日期；从生产仓来源中选择本批实际投入的一种、多种或全部原料，逐项选批次并填投入量；填写产出量、开始/结束时间和人数。</p><span class="expect">至少选 1 个投入；正式提交前弹窗逐项列出“库存扣减 / 产出入库”；成功后状态为“已正式报工”。</span></span></label>
+          <label class="step"><span class="check"><input type="checkbox" data-key="report-1"><span></span></span><span><h4>R01 · 第一工序按四阶段正常报工</h4><p>新增报工行并填写生产日期。先在①投入选择实际原料批次和数量；再到②工序执行填写开始/结束时间和人数；然后在③产出明细填写产出数量；最后到④确认提交。</p><span class="expect">投入、时间人数、产出不会散落混排；数量与单位成组。正式提交前列出库存与成本影响，成功后状态为“已正式报工”。</span></span></label>
           <label class="step"><span class="check"><input type="checkbox" data-key="report-2"><span></span></span><span><h4>R02 · 库存不足与占用冲突</h4><p>先把某原料投入量填成大于生产仓可用量，再尝试保存草稿和正式报工；另开一行占用同批次后重复验证。</p><span class="expect">页面明确指出批次及缺口；正式报工不能扣成负数。若草稿允许保存，也不得形成正式库存扣减或成本。</span></span></label>
-          <label class="step"><span class="check"><input type="checkbox" data-key="report-3"><span></span></span><span><h4>R03 · 后续工序与单位继承</h4><p>上游正式报工后，下游选择该计划已产出的半成品批次。包装工序投入按 kg、产出按盒；填写生产日期、产出盒数和工时。</p><span class="expect">上游未正式报工时下游不能正式提交；成品 800g/盒来自 SKU，不出现 1kg=1盒。</span></span></label>
-          <label class="step"><span class="check"><input type="checkbox" data-key="report-4"><span></span></span><span><h4>R04 · 多产出、联产与副产</h4><p>对 1→多或多→多工序，逐项核对正式产出 SKU 和单位不可改，分别填写各产出数量、时间和人数。若本次实际产生肥油等副产，再在报工行的“副产数量、回收单价”字段填写；副产不预建工序、不画 Workflow Cell。</p><span class="expect">正式联产品各自生成可入库批次；报工副产只形成成本回收明细，不生成 SKU 批次，也不冒充正式成品。</span></span></label>
+          <label class="step"><span class="check"><input type="checkbox" data-key="report-3"><span></span></span><span><h4>R03 · 后续包装工序、单位与包材自动分配</h4><p>上游正式报工后，下游选择该计划已产出的半成品批次。包装工序投入按 kg、产出按盒；按四阶段填写时间、人数和产出盒数，再正式报工。</p><span class="expect">上游未正式报工时下游不能正式提交；成品 800g/盒来自 SKU；系统按固定 BOM 从生产仓 FEFO 分配盒、膜、外箱等包材并回显批次、数量、实际单价和成本。</span></span></label>
+          <label class="step"><span class="check"><input type="checkbox" data-key="report-seasoning"><span></span></span><span><h4>R03A · 调料按固定工序自动分配</h4><p>选择 BOM 已配置调料的熟制/调味工序，填写锅数（仅开启锅序时）、实际投入、工序执行和产出，再正式报工。</p><span class="expect">只读取当前 BOM 该工序的调料；按生产仓 FEFO 分配实际批次并扣库，成本进入调料桶且不跨工序重复。库存不足时整次失败；缺价时保持成本未知，不伪造 0 元。</span></span></label>
+          <label class="step"><span class="check"><input type="checkbox" data-key="report-4"><span></span></span><span><h4>R04 · 多产出、联产与副产</h4><p>对 1→多或多→多工序，先在②工序执行区填写各选中产出的开始/结束时间和人数，再到③产出明细填写各产出数量。若本次实际产生肥油等副产，再填写“副产数量、回收单价”；副产不预建工序、不画 Workflow Cell。</p><span class="expect">正式联产品各自生成可入库批次；时间人数与产出数量分区清晰；报工副产只形成成本回收明细，不生成 SKU 批次。</span></span></label>
           <label class="step"><span class="check"><input type="checkbox" data-key="report-5"><span></span></span><span><h4>R05 · 多产出成本分摊</h4><p>先用同单位或可换算质量单位的多个产出，确认系统自动按数量/质量形成分摊；再用无法统一折算的单位组合，手填各产出成本分摊比例。</p><span class="expect">仅在无法可靠统一计量时出现手工比例；任一比例≤0或合计不等于 100% 均阻止正式报工。</span></span></label>
           <label class="step"><span class="check"><input type="checkbox" data-key="report-6"><span></span></span><span><h4>R06 · Workflow 版本与端口身份锁定</h4><p>记录计划固定的 Workflow ID/版本/端口；另处发布新版本后返回旧计划继续录入。</p><span class="expect">旧计划继续使用创建时快照；若端口身份失效或原料已删除，应阻止并提示重新建计划，不能映射到同名物料。</span></span></label>
           <label class="step" data-min-depth="medium"><span class="check"><input type="checkbox" data-key="report-7"><span></span></span><span><h4>R07 · 填齐条件字段、损耗、留样和报工证据</h4><p>按页面实际出现的字段录入损耗量、留样量、异常原因、备注及多段人员工时；需要凭证时上传现场照片或附件。未出现的条件字段不伪造，也不为了测试把高级设置硬塞进工序主档。</p><span class="expect">总工时按报工记录汇总；留样不超过实际产量；损耗、备注和附件随本条报工可回看，且不会被重复计入库存或成本。</span></span></label>
           <label class="step" data-min-depth="full"><span class="check"><input type="checkbox" data-key="report-8"><span></span></span><span><h4>R08 · 触发需要审批的正式报工</h4><p>用满足审批规则的数量、金额或异常条件正式提交，记录提交人、提交时间和审批实例；分别做一次通过、一次驳回后修正重提。</p><span class="expect">待审批记录不能提前成为最终库存、工资或成本事实；驳回保留原因，修正重提形成新审批轨迹；通过只落账一次。</span></span></label>
+          <label class="step"><span class="check"><input type="checkbox" data-key="report-9"><span></span></span><span><h4>R09 · 双出成率总览表头排序与筛选</h4><p>展开计划级双出成率总览，逐列核对表头与数据列边界。点击带 ↕ 的表头切换升/降序，再用 Tab 聚焦后按 Enter 或 Space；工序和状态使用表头漏斗筛选。</p><span class="expect">表头与内容线对线；鼠标和键盘排序结果一致、焦点可见；筛选后列宽和行对齐不跳动。</span></span></label>
         </div>
         <h4 data-min-depth="full" style="margin:22px 0 10px;font-size:17px">报错与冲突等价类（逐项故意触发）</h4>
         <div class="table-wrap" data-min-depth="full"><table><thead><tr><th>编号</th><th>触发方式</th><th>必须出现的结果</th></tr></thead><tbody>
@@ -695,7 +702,7 @@
           <tr><td>E04</td><td>投入量超过批次/半成品剩余量</td><td>显示剩余量和超出量；不形成负库存</td></tr>
           <tr><td>E05</td><td>上游尚未正式报工就提交下游</td><td>只允许草稿或直接阻止；提示先完成上游</td></tr>
           <tr><td>E06</td><td>产出端口为空，或选中产出数量≤0</td><td>指出具体产出项；不能生成空批次</td></tr>
-          <tr><td>E07</td><td>只填开始或结束时间</td><td>提示补全该产出的开始和结束时间</td></tr>
+          <tr><td>E07</td><td>工序执行区只填开始或结束时间</td><td>提示补全该工序产出行的开始和结束时间</td></tr>
           <tr><td>E08</td><td>混合计量多产出未填比例或合计≠100%</td><td>提示成本分摊错误；不持久化正式报工</td></tr>
           <tr><td>E09</td><td>Workflow 原料/端口已失效</td><td>提示重新绑定并重新创建生产计划</td></tr>
           <tr><td>E10</td><td>已正式报工行再次编辑或双击提交</td><td>行只读且幂等；库存、批次、成本各只发生一次</td></tr>
@@ -728,9 +735,10 @@
       <section id="settle">
         <div class="section-head"><span class="section-no">09</span><div class="section-title"><h3>完成库存结算</h3><p>报工记录完成后，还要执行对应路线的库存结算动作</p></div></div>
         <div class="steps stock-only">
-          <label class="step"><span class="check"><input type="checkbox" data-key="settle-stock-1"><span></span></span><span><h4>执行第一次“小结”</h4><p>确认弹窗中的计划号和当前已录入数量。小结会按本轮正式报工增量扣减投入原料，并把半成品/成品入库；计划保持开放。</p><span class="expect">提示“已小结，计划继续挂起”；库存变化只发生一次。</span></span></label>
-          <label class="step"><span class="check"><input type="checkbox" data-key="settle-stock-2"><span></span></span><span><h4>验证第二轮增量小结</h4><p>再报一轮并再次小结，核对只增加第二轮产出、只扣第二轮投入，第一轮不得重复扣减。</p><span class="expect">两次小结的增量可分别解释，总库存等于期初 ± 两轮变动。</span></span></label>
-          <label class="step"><span class="check"><input type="checkbox" data-key="settle-stock-3"><span></span></span><span><h4>生产完成后“停产”</h4><p>确认所有轮次都已小结后点“停产”。停产后计划关闭，不能继续小结。</p><span class="expect">计划不再处于开放生产状态；历史报工和小结仍可查看。</span></span></label>
+          <label class="step"><span class="check"><input type="checkbox" data-key="settle-stock-1"><span></span></span><span><h4>执行第一次“小结”</h4><p>确认弹窗中的计划号和当前已录入数量。小结会按本轮正式报工增量结算投入，并把本轮半成品/成品写入对应入库状态；计划保持开放。</p><span class="expect">提示“已小结，计划继续挂起”；本轮消耗标记已结算，入库状态、批次与库存流水一致；重复请求只返回既有结果。</span></span></label>
+          <label class="step"><span class="check"><input type="checkbox" data-key="settle-stock-2"><span></span></span><span><h4>验证第二轮增量小结</h4><p>再报一轮并再次小结，核对只增加第二轮产出、只结算第二轮投入，第一轮不得重复扣减或重复入库。</p><span class="expect">两次小结的增量可分别解释，总库存等于期初 ± 两轮变动；第一轮历史行只读。</span></span></label>
+          <label class="step"><span class="check"><input type="checkbox" data-key="settle-stock-3"><span></span></span><span><h4>生产完成后“停产”</h4><p>确认所有轮次都已小结后点“停产”，填写停产原因并确认。另在未开工、已取消、已停产等不允许状态尝试停产。</p><span class="expect">只有允许的运行状态可以停产；成功后计划关闭且不能继续小结，操作人、时间和原因可回读；历史报工和小结仍可查看。</span></span></label>
+          <label class="step"><span class="check"><input type="checkbox" data-key="settle-stock-cancel"><span></span></span><span><h4>验证计划取消边界</h4><p>对尚未形成正式报工/结算事实的计划执行取消，填写原因；再对已开工或已有正式事实的计划尝试取消。</p><span class="expect">仅允许状态可以取消并记录操作人、时间、原因；已开工计划被明确阻止并引导使用停产/结算，重复取消不产生第二次状态变化。</span></span></label>
         </div>
         <div class="steps sales-only">
           <label class="step"><span class="check"><input type="checkbox" data-key="settle-sales-1"><span></span></span><span><h4>打开“核对结单”</h4><p>逐项核对实际产量、原料/半成品领用、工时和系统预填值。原料批次下拉应按当前生效 BOM 预过滤。</p><span class="expect">不能选择 BOM 外原料；缺 BOM 时明确提示先去配置，不伪造领用。</span></span></label>
@@ -831,7 +839,7 @@
           <tr><td>所选深度</td><td>MVP 完成正常链；中度额外完成关键审批/常见分支；全量额外完成异常、治理和分析，且高层自动包含低层</td><td>深度按钮 + 当前可见步骤进度</td></tr>
           <tr><td>租户隔离</td><td>所有创建、查询、审批对象均为 F006</td><td>页面工厂标识 / 对象详情</td></tr>
           <tr><td>SKU 单位</td><td>半成品 kg；成品盒；1盒=800g；1箱=8盒</td><td>SKU 编辑页截图</td></tr>
-          <tr><td>BOM / 配方</td><td>原料、每成品包材用量、按具体工序辅料、可选锅序和 ACTIVE 版本均完整；SKU 单位与克重只读继承</td><td>BOM 配方头 + 三类明细 + 辅料汇总 + 版本状态</td></tr>
+          <tr><td>BOM / 配方</td><td>创建时自动固定唯一完整 Workflow 草稿修订；工艺来源只读、DAG 工序锁定；原料、每成品包材用量、按具体工序辅料、可选锅序和 ACTIVE 版本均完整</td><td>工艺来源卡片 + BOM 配方头 + 三类明细 + 辅料汇总 + 版本状态</td></tr>
           <tr><td>人工计价口径</td><td>工序主档不填预估工时/标准时薪；全局工时单价已核对；实际工时只在逐道报工填写</td><td>成本设置 + 工序主档 + 报工行</td></tr>
           <tr><td>Workflow 单位</td><td>kg→kg、kg→盒，仅表达单位流向，不预设出成数量</td><td>Workflow Cell 图</td></tr>
           <tr><td>原料投入选择</td><td>系统自动要求至少选 1 个；用户可选择 1 个、多个或全部；重复原料不可再次加入</td><td>Workflow Cell 图 + 逐道录入截图</td></tr>
@@ -839,9 +847,11 @@
           <tr data-min-depth="full"><td>计划选品冲突</td><td>B01–B06 基础拓扑正确；C01–C10 候选等价类与 S01/S02 来源分支全部通过，不宣称只有固定 16 种组合</td><td>每个选择集合的候选层级、弹窗与计划版本</td></tr>
           <tr><td>生产前仓储交接</td><td>原/辅/包材由主仓/外仓经需求单或调拨进入生产仓；发出、签收和生产仓批次一致</td><td>需求单/调拨单 + 两仓库存前后值</td></tr>
           <tr class="sales-only" data-min-depth="medium"><td>缺料采购</td><td>采购单关联销售订单；审批、收货草稿、确认入库和缺口回读可追溯</td><td>销售单 + 采购单 + 入库批次</td></tr>
-          <tr><td>正式报工</td><td>MVP 正常报工可生效；中度覆盖审批、证据、联产和分摊；全量覆盖 E01–E12、版本锁与并发幂等</td><td>报工确认摘要 + 审批轨迹 + 错误截图</td></tr>
+          <tr><td>报工交互</td><td>投入→工序执行→产出→确认提交顺序清晰；草稿为次操作、正式报工为唯一主操作；表头线对线，排序和筛选可用</td><td>逐道录入截图 + 双出成率总览</td></tr>
+          <tr><td>正式报工</td><td>草稿零扣库；正式报工按固定 BOM 从生产仓 FEFO 分配原料、调料和包材，回显批次/数量/单价/成本；MVP 正常生效，全量覆盖 E01–E12 与并发幂等</td><td>报工确认摘要 + 自动分配明细 + 库存/成本前后值</td></tr>
           <tr data-min-depth="full"><td>质检与冲销</td><td>待检/复检/不合格处置唯一；撤回保留历史且反向库存成本，下游占用时阻止</td><td>质检单 + 处置单 + 冲销单 + 库存前后值</td></tr>
-          <tr class="stock-only"><td>存货生产</td><td>多次小结仅结算增量；停产后不可再小结</td><td>小结前后库存 + 计划状态</td></tr>
+          <tr><td>计划状态机</td><td>重复创建只得到同一计划；取消/停产只允许合法状态并记录原因、操作人和时间</td><td>计划号 + 重试结果 + 状态审计字段</td></tr>
+          <tr class="stock-only"><td>存货生产</td><td>多次小结仅结算增量；消耗结算标记、入库状态与库存流水一致；停产后不可再小结</td><td>小结前后库存 + 入库/结算状态 + 计划状态</td></tr>
           <tr class="sales-only"><td>销售订单生产</td><td>订单行带出产品/数量；结单后可回溯订单</td><td>订单、计划、结单详情</td></tr>
           <tr><td>生产结算与仓库入库</td><td>结单提交不等于入库；仓库确认后才增加生产仓可用成品，重复确认不重复入库</td><td>结单状态 + 仓库确认单 + 成品批次</td></tr>
           <tr><td>生产后仓储交接</td><td>成品从生产仓经完整调拨状态机进入主仓/外仓；同厂总库存不变，差异不静默平账</td><td>成品批次 + 调拨单 + 差异单</td></tr>
