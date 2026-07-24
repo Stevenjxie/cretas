@@ -11,6 +11,8 @@ PROD_CONFIRM=
 PARALLEL_CONFIRM=
 ORDER=backend-first
 ORDER_EXPLICIT=false
+STAGE_BACKEND_CONFIRM=
+FALLBACK_MAIN_GUARD_SECONDS=${CRETAS_RELEASE_FALLBACK_MAIN_GUARD_SECONDS:-8}
 
 usage() {
     cat <<'EOF'
@@ -21,6 +23,7 @@ Usage:
     --confirm-prod YES-PROD \
     [--phase build|deploy|all] \
     [--order backend-first|web-first] \
+    [--stage-backend YES-STAGE] \
     [--parallel-if-independent YES-INDEPENDENT-SERVICES]
 
 The normal Cretas release entry. It detects Java/Web changes relative to the
@@ -28,6 +31,9 @@ registered Base SHA, builds each trusted artifact at most once, and delegates
 deployment to the existing component scripts. Deployment requires a clean
 HEAD exactly equal to origin/main. Use --phase build in a clean reviewed
 candidate worktree, then --phase deploy after merge when needed.
+When production deployment is expected, --phase build may add
+--stage-backend YES-STAGE to pre-warm the immutable server-side JAR cache
+without installing, restarting, or switching production.
 EOF
 }
 
@@ -39,6 +45,7 @@ while [ "$#" -gt 0 ]; do
         --confirm-prod) PROD_CONFIRM=${2:-}; shift 2 ;;
         --parallel-if-independent) PARALLEL_CONFIRM=${2:-}; shift 2 ;;
         --order) ORDER=${2:-}; ORDER_EXPLICIT=true; shift 2 ;;
+        --stage-backend) STAGE_BACKEND_CONFIRM=${2:-}; shift 2 ;;
         -h|--help) usage; exit 0 ;;
         *) echo "ERROR: unknown option: $1" >&2; usage >&2; exit 2 ;;
     esac
@@ -48,6 +55,13 @@ done
 case "$PHASE" in build|deploy|all) ;; *) echo "ERROR: --phase must be build, deploy, or all" >&2; exit 2 ;; esac
 case "$ORDER" in backend-first|web-first) ;; *) echo "ERROR: --order must be backend-first or web-first" >&2; exit 2 ;; esac
 case "$PARALLEL_CONFIRM" in ""|YES-INDEPENDENT-SERVICES) ;; *) echo "ERROR: --parallel-if-independent requires YES-INDEPENDENT-SERVICES" >&2; exit 2 ;; esac
+case "$STAGE_BACKEND_CONFIRM" in ""|YES-STAGE) ;; *) echo "ERROR: --stage-backend requires YES-STAGE" >&2; exit 2 ;; esac
+[[ "$FALLBACK_MAIN_GUARD_SECONDS" =~ ^[0-9]+$ ]] \
+    || { echo "ERROR: CRETAS_RELEASE_FALLBACK_MAIN_GUARD_SECONDS must be a non-negative integer" >&2; exit 2; }
+if [ -n "$STAGE_BACKEND_CONFIRM" ] && [ "$PHASE" != build ]; then
+    echo "ERROR: --stage-backend is only valid with --phase build" >&2
+    exit 2
+fi
 if [ "$PHASE" != build ] && [ "$PROD_CONFIRM" != YES-PROD ]; then
     echo "ERROR: production release requires --confirm-prod YES-PROD" >&2
     exit 2
@@ -109,6 +123,11 @@ VERIFY_SECONDS=0
 FINAL_STATUS=failed
 JAVA_BUILD_COUNT=0
 WEB_BUILD_COUNT=0
+JAVA_STAGE_STATUS=not-requested
+JAVA_STAGE_SECONDS=0
+MAIN_GUARD_STATUS=not-needed
+MAIN_GUARD_SECONDS=0
+FALLBACK_GUARD_COMPLETED=false
 BACKEND_UPSTREAM=
 BACKEND_SLOT=
 BACKEND_PORT=
@@ -197,6 +216,8 @@ write_report() {
         printf '    "java": {"build": "%s", "deploy": "%s", "outcome": "%s", "build_count": %s},\n' "$JAVA_BUILD_STATUS" "$JAVA_DEPLOY_STATUS" "$JAVA_DEPLOY_OUTCOME" "$JAVA_BUILD_COUNT"
         printf '    "web": {"build": "%s", "deploy": "%s", "outcome": "%s", "build_count": %s}\n' "$WEB_BUILD_STATUS" "$WEB_DEPLOY_STATUS" "$WEB_DEPLOY_OUTCOME" "$WEB_BUILD_COUNT"
         printf '  },\n'
+        printf '  "staging": {"java": "%s", "seconds": %s},\n' "$JAVA_STAGE_STATUS" "$JAVA_STAGE_SECONDS"
+        printf '  "main_guard": {"status": "%s", "seconds": %s},\n' "$MAIN_GUARD_STATUS" "$MAIN_GUARD_SECONDS"
         printf '  "java_manifest": {"build_commit": "%s", "tree": "%s", "sha256": "%s", "size_bytes": "%s", "maven_wall_seconds": "%s"},\n' \
             "$(json_escape "$java_build_commit")" "$(json_escape "$java_tree")" "$(json_escape "$java_sha")" "$(json_escape "$java_size")" "$(json_escape "$java_maven_seconds")"
         printf '  "web_manifest": {"build_commit": "%s", "tree": "%s", "sha256": "%s", "index_sha256": "%s"},\n' \
@@ -257,6 +278,23 @@ build_web() {
     fi
 }
 
+stage_backend_artifact() {
+    if [ "$STAGE_BACKEND_CONFIRM" != YES-STAGE ]; then
+        return 0
+    fi
+    if [ "$JAVA_CHANGED" != true ]; then
+        JAVA_STAGE_STATUS=not-needed
+        return 0
+    fi
+    if duration_run JAVA_STAGE_SECONDS "$RUN_LOG_DIR/java-stage.log" \
+        "$SCRIPT_DIR/stage-backend-artifact.sh" --confirm-stage YES-STAGE; then
+        JAVA_STAGE_STATUS=success
+    else
+        JAVA_STAGE_STATUS=failed
+        return 1
+    fi
+}
+
 run_build_phase() {
     local started
     started=$(date +%s)
@@ -306,6 +344,53 @@ detect_parallel_risk() {
     if printf '%s\n' "$diff_text" | grep -Eqi '^[+-].*(@Query|JPQL|HQL)'; then PARALLEL_REJECTION="Repository query contract changed"; return; fi
 }
 
+ensure_exact_main_after_artifacts() {
+    local label=${1:-artifact validation}
+    local started origin_sha dirty
+
+    started=$(date +%s)
+    git -C "$PROJECT_ROOT" fetch --quiet origin main
+    origin_sha=$(git -C "$PROJECT_ROOT" rev-parse origin/main)
+    dirty=$(git -C "$PROJECT_ROOT" status --porcelain --untracked-files=normal)
+    MAIN_GUARD_SECONDS=$((MAIN_GUARD_SECONDS + $(date +%s) - started))
+    if [ "$HEAD_SHA" != "$origin_sha" ]; then
+        MAIN_GUARD_STATUS=failed
+        echo "ERROR: origin/main moved during $label; refusing stale artifacts before any child deployment (HEAD=$HEAD_SHA origin/main=$origin_sha)" >&2
+        return 1
+    fi
+    if [ -n "$dirty" ]; then
+        MAIN_GUARD_STATUS=failed
+        echo "ERROR: release worktree changed during $label; refusing deployment" >&2
+        return 1
+    fi
+    MAIN_GUARD_STATUS=passed
+}
+
+guard_exact_main_before_fallback() {
+    local elapsed=0 step
+
+    [ "$PHASE" != build ] || return 0
+    if [ "$FALLBACK_GUARD_COMPLETED" = true ]; then
+        ensure_exact_main_after_artifacts "additional fallback pre-build check"
+        return
+    fi
+    if [ "$FALLBACK_MAIN_GUARD_SECONDS" -eq 0 ]; then
+        ensure_exact_main_after_artifacts "fallback pre-build check"
+        FALLBACK_GUARD_COMPLETED=true
+        return
+    fi
+    echo "INFO: trusted manifest miss; holding an ${FALLBACK_MAIN_GUARD_SECONDS}s exact-main freshness guard before the expensive fallback build"
+    while [ "$elapsed" -lt "$FALLBACK_MAIN_GUARD_SECONDS" ]; do
+        step=2
+        [ $((elapsed + step)) -le "$FALLBACK_MAIN_GUARD_SECONDS" ] \
+            || step=$((FALLBACK_MAIN_GUARD_SECONDS - elapsed))
+        sleep "$step"
+        elapsed=$((elapsed + step))
+        ensure_exact_main_after_artifacts "fallback freshness guard" || return 1
+    done
+    FALLBACK_GUARD_COMPLETED=true
+}
+
 validate_or_build_java_once() {
     if "$SCRIPT_DIR/release-jar-manifest.sh" validate >"$RUN_LOG_DIR/java-manifest-validate.log" 2>&1; then
         cat "$RUN_LOG_DIR/java-manifest-validate.log"
@@ -313,6 +398,7 @@ validate_or_build_java_once() {
         return 0
     fi
     cat "$RUN_LOG_DIR/java-manifest-validate.log" >&2
+    guard_exact_main_before_fallback
     echo "WARN: Java manifest invalid; using the one permitted build fallback" >&2
     build_java
     record_fallback_build java
@@ -326,6 +412,7 @@ validate_or_build_web_once() {
         return 0
     fi
     cat "$RUN_LOG_DIR/web-manifest-validate.log" >&2
+    guard_exact_main_before_fallback
     echo "WARN: Web manifest invalid; using the one permitted build fallback" >&2
     build_web
     record_fallback_build web
@@ -459,6 +546,7 @@ run_deploy_phase() {
         web) validate_or_build_web_once ;;
         both) validate_or_build_java_once; validate_or_build_web_once ;;
     esac
+    ensure_exact_main_after_artifacts "artifact validation/fallback build"
     case "$BUILD_MODE" in
         *fallback) BUILD_SECONDS=$((JAVA_BUILD_SECONDS + WEB_BUILD_SECONDS)) ;;
     esac
@@ -498,6 +586,7 @@ run_deploy_phase() {
 
 if [ "$PHASE" = build ] || [ "$PHASE" = all ]; then
     run_build_phase
+    stage_backend_artifact
 fi
 if [ "$PHASE" = deploy ] || [ "$PHASE" = all ]; then
     run_deploy_phase

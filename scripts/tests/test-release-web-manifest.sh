@@ -87,6 +87,37 @@ git -C "$repo" commit -qm "squash merge shell"
 git -C "$repo" update-ref refs/remotes/origin/main HEAD
 expect_valid "$manifest" "$repo" "different commit with same web tree"
 
+# Concurrent candidate builds must not evict an older exact Web tree. Build A,
+# then B, then return origin/main to A and restore A from the content-addressed
+# cache without running another build.
+IFS='|' read -r repo manifest dist < <(make_repo tree-cache)
+write_candidate "$repo" "$manifest" "$dist"
+commit_a=$(git -C "$repo" rev-parse HEAD)
+tree_a=$(git -C "$repo" rev-parse HEAD:web-admin)
+archive_a=$(web_release_manifest_field "$manifest" archive_sha256)
+cached_a="$(dirname "$(dirname "$manifest")")/by-tree/$tree_a/$WEB_RELEASE_MANIFEST_NAME"
+[ -f "$cached_a" ] || fail "tree A was not saved in the content-addressed cache"
+
+printf 'export const marker = "two";\n' > "$repo/web-admin/source.ts"
+git -C "$repo" add web-admin/source.ts
+git -C "$repo" commit -qm "build tree B"
+git -C "$repo" update-ref refs/remotes/origin/main HEAD
+printf 'console.log("fixture B")\n' > "$dist/assets/index-test.js"
+write_candidate "$repo" "$manifest" "$dist"
+tree_b=$(git -C "$repo" rev-parse HEAD:web-admin)
+[ "$tree_a" != "$tree_b" ] || fail "tree cache fixture did not create a distinct tree"
+[ -f "$(dirname "$(dirname "$manifest")")/by-tree/$tree_b/$WEB_RELEASE_MANIFEST_NAME" ] \
+    || fail "tree B was not saved in the content-addressed cache"
+
+git -C "$repo" switch --quiet --detach "$commit_a"
+git -C "$repo" update-ref refs/remotes/origin/main "$commit_a"
+web_release_validate_cached "$manifest" "$repo" \
+    || fail "tree A was not restored from the content-addressed cache"
+[ "$(web_release_manifest_field "$manifest" web_tree)" = "$tree_a" ] \
+    || fail "current manifest was not restored to tree A"
+[ "$(web_release_manifest_field "$manifest" archive_sha256)" = "$archive_a" ] \
+    || fail "restored tree A archive hash changed"
+
 # A changed web-admin tree must reject reuse.
 IFS='|' read -r repo manifest dist < <(make_repo tree-mismatch)
 write_candidate "$repo" "$manifest" "$dist"

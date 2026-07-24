@@ -13,6 +13,15 @@ web_release_default_manifest() {
     printf '%s/current/%s\n' "$(web_release_cache_root)" "$WEB_RELEASE_MANIFEST_NAME"
 }
 
+web_release_tree_manifest() {
+    local manifest=$1
+    local web_tree=$2
+    local cache_root
+
+    cache_root=$(dirname "$(dirname "$manifest")")
+    printf '%s/by-tree/%s/%s\n' "$cache_root" "$web_tree" "$WEB_RELEASE_MANIFEST_NAME"
+}
+
 web_release_manifest_field() {
     local manifest=$1
     local key=$2
@@ -130,6 +139,7 @@ web_release_write() {
     local build_command=$4
     local build_commit web_tree node_version npm_version package_lock_sha
     local archive_sha index_sha asset_count cache_root stage_dir old_dir archive_path
+    local tree_dir tree_stage tree_old
 
     web_release_require_clean_worktree "$repo_root" || return 1
     web_release_verify_dist "$source_dist" || return 1
@@ -172,6 +182,28 @@ web_release_write() {
         printf 'build_command=%s\n' "$build_command"
     } > "$stage_dir/$WEB_RELEASE_MANIFEST_NAME" || { rm -rf "$stage_dir"; return 1; }
 
+    # Preserve the immutable archive by web-admin Git tree. Concurrent reviewed
+    # candidates may replace `current`; the exact-main release can restore its
+    # matching tree without another npm ci/build. Snapshot our private staging
+    # directory, never the shared `current` pointer, so another candidate cannot
+    # make this tree key reference the wrong archive.
+    tree_dir="$cache_root/by-tree/$web_tree"
+    tree_stage="$cache_root/.tree-${web_tree}.staging.$$"
+    tree_old="$cache_root/.tree-${web_tree}.old.$$"
+    rm -rf "$tree_stage" "$tree_old"
+    mkdir -p "$tree_stage" || return 1
+    cp -a "$stage_dir/." "$tree_stage/" || { rm -rf "$tree_stage"; return 1; }
+    mkdir -p "$cache_root/by-tree" || { rm -rf "$tree_stage"; return 1; }
+    if [ -e "$tree_dir" ]; then
+        mv "$tree_dir" "$tree_old" || { rm -rf "$tree_stage"; return 1; }
+    fi
+    if ! mv "$tree_stage" "$tree_dir"; then
+        [ ! -e "$tree_old" ] || mv "$tree_old" "$tree_dir" || true
+        rm -rf "$tree_stage"
+        return 1
+    fi
+    rm -rf "$tree_old"
+
     mkdir -p "$cache_root" || { rm -rf "$stage_dir"; return 1; }
     if [ -e "$cache_root/current" ]; then
         mv "$cache_root/current" "$old_dir" || { rm -rf "$stage_dir"; return 1; }
@@ -189,6 +221,31 @@ web_release_write() {
     WEB_RELEASE_ASSET_COUNT=$asset_count
     WEB_RELEASE_BUILD_COMMIT=$build_commit
     WEB_RELEASE_WEB_TREE=$web_tree
+}
+
+web_release_promote_cached_tree() {
+    local cached_manifest=$1
+    local current_manifest=$2
+    local cache_root cached_dir current_dir stage_dir old_dir
+
+    cached_dir=$(cd "$(dirname "$cached_manifest")" 2>/dev/null && pwd) || return 1
+    current_dir=$(dirname "$current_manifest")
+    cache_root=$(dirname "$current_dir")
+    stage_dir="$cache_root/.current.restore.$$"
+    old_dir="$cache_root/.current.restore-old.$$"
+
+    rm -rf "$stage_dir" "$old_dir"
+    mkdir -p "$stage_dir" || return 1
+    cp -a "$cached_dir/." "$stage_dir/" || { rm -rf "$stage_dir"; return 1; }
+    if [ -e "$current_dir" ]; then
+        mv "$current_dir" "$old_dir" || { rm -rf "$stage_dir"; return 1; }
+    fi
+    if ! mv "$stage_dir" "$current_dir"; then
+        [ ! -e "$old_dir" ] || mv "$old_dir" "$current_dir" || true
+        rm -rf "$stage_dir"
+        return 1
+    fi
+    rm -rf "$old_dir"
 }
 
 web_release_validate() {
@@ -247,6 +304,25 @@ web_release_validate() {
     WEB_RELEASE_INDEX_SHA256=$WEB_RELEASE_VERIFIED_INDEX_SHA256
     WEB_RELEASE_ASSET_COUNT=$WEB_RELEASE_VERIFIED_ASSET_COUNT
     WEB_RELEASE_ARCHIVE_PATH=$archive
+}
+
+web_release_validate_cached() {
+    local manifest=$1
+    local repo_root=$2
+    local current_tree cached_manifest
+
+    if web_release_validate "$manifest" "$repo_root"; then
+        return 0
+    fi
+
+    current_tree=$(git -C "$repo_root" rev-parse "origin/main:$WEB_RELEASE_SOURCE_PATH" 2>/dev/null) \
+        || return 1
+    cached_manifest=$(web_release_tree_manifest "$manifest" "$current_tree") || return 1
+    [ "$cached_manifest" != "$manifest" ] && [ -f "$cached_manifest" ] || return 1
+    web_release_validate "$cached_manifest" "$repo_root" || return 1
+    web_release_promote_cached_tree "$cached_manifest" "$manifest" || return 1
+    web_release_validate "$manifest" "$repo_root" || return 1
+    printf 'Restored trusted Web archive from tree cache: %s\n' "$current_tree"
 }
 
 web_release_ensure_dependencies() {
@@ -319,7 +395,7 @@ web_release_main() {
     case "$command" in
         build) web_release_build "$repo_root" "$manifest" ;;
         validate)
-            web_release_validate "$manifest" "$repo_root" || return 1
+            web_release_validate_cached "$manifest" "$repo_root" || return 1
             printf 'Trusted Web archive: %s\n' "$WEB_RELEASE_ARCHIVE_PATH"
             ;;
         *) web_release_usage >&2; return 2 ;;

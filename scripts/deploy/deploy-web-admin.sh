@@ -278,7 +278,7 @@ verify_prod_web_four_way() {
 WEB_MANIFEST_PATH=$(web_release_default_manifest)
 WEB_DIST_REUSED=0
 WEB_ARCHIVE_PATH=""
-if web_release_validate "$WEB_MANIFEST_PATH" "$PROJECT_ROOT"; then
+if web_release_validate_cached "$WEB_MANIFEST_PATH" "$PROJECT_ROOT"; then
     WEB_DIST_REUSED=1
     WEB_ARCHIVE_PATH="$WEB_RELEASE_ARCHIVE_PATH"
     log "✓ Trusted Web dist manifest hit; npm ci/build skipped"
