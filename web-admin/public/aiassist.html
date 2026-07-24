@@ -1187,7 +1187,9 @@
       'use strict';
 
       var CHAT_ENDPOINT = '/api/food-kb/manual-chat';
+      var CHAT_STREAM_ENDPOINT = '/api/food-kb/manual-chat/stream';
       var RELATED_ENDPOINT = '/api/food-kb/manual-chat/related';
+      var SSE_IDLE_TIMEOUT_MS = 30000;
       var MAX_HISTORY_MESSAGES = 10;
       var TAB_KEY = 'cretas_aiassist_tab';
       var TABS = {
@@ -1674,6 +1676,229 @@
         updateComposer();
       }
 
+      /* ---------- SSE 帧解析（对齐 mobile-rest-ai/src/sse.ts，ES5 风格） ---------- */
+
+      function splitSseFrames(input) {
+        var normalized = input.replace(/\r\n/g, '\n');
+        var frames = [];
+        var start = 0;
+        var index = normalized.indexOf('\n\n');
+        while (index !== -1) {
+          var frame = normalized.slice(start, index);
+          if (frame.replace(/^\s+|\s+$/g, '')) frames.push(frame);
+          start = index + 2;
+          index = normalized.indexOf('\n\n', start);
+        }
+        return { frames: frames, rest: normalized.slice(start) };
+      }
+
+      function parseSseFrame(frame) {
+        var event = 'message';
+        var data = [];
+        var lines = frame.split('\n');
+        for (var i = 0; i < lines.length; i += 1) {
+          var line = lines[i];
+          if (!line || line.charAt(0) === ':') continue;
+          var separator = line.indexOf(':');
+          var field = separator === -1 ? line : line.slice(0, separator);
+          var value = separator === -1 ? '' : line.slice(separator + 1);
+          if (value.charAt(0) === ' ') value = value.slice(1);
+          if (field === 'event') {
+            event = value || 'message';
+          } else if (field === 'data') {
+            data.push(value);
+          }
+        }
+        if (!data.length && event === 'message') return null;
+        return { event: event, data: data.join('\n') };
+      }
+
+      /* 后端 data 段是 json.dumps 序列化的（字符串带引号，done 是对象）——先解 JSON */
+      function parseSseData(raw) {
+        try { return JSON.parse(raw); } catch (_) { return raw; }
+      }
+
+      function requestPayload(question, priorHistory, imageData) {
+        return JSON.stringify(state.tab === 'restaurant' ? {
+          question: question,
+          category: 'restaurant',
+          history: priorHistory,
+          image_base64: imageData
+        } : {
+          question: question,
+          category: 'factory',
+          depth: state.depth,
+          business_line: state.businessLine,
+          history: priorHistory,
+          image_base64: imageData
+        });
+      }
+
+      /* 旧的非流式请求 — 仅作为流式端点在收到任何 chunk 前失败时的一次性回退 */
+      function legacyAnswer(body, controller) {
+        var timeout = window.setTimeout(function () { controller.abort(); }, 45000);
+        var clear = function () { window.clearTimeout(timeout); };
+        return fetch(CHAT_ENDPOINT, {
+          method: 'POST',
+          signal: controller.signal,
+          headers: { 'Content-Type': 'application/json' },
+          body: body
+        }).then(function (response) {
+          return response.text().then(function (text) {
+            var payload = {};
+            try { payload = text ? JSON.parse(text) : {}; } catch (_) { payload = {}; }
+            if (!response.ok || payload.success === false) {
+              var serverMessage = typeof payload.message === 'string' && payload.message.length <= 240
+                ? payload.message
+                : '';
+              throw new Error(serverMessage || ('请求失败（HTTP ' + response.status + '）'));
+            }
+            return payload;
+          });
+        }).then(function (payload) { clear(); return payload; }, function (error) { clear(); throw error; });
+      }
+
+      /*
+       * 流式请求：读取 ReadableStream，解析 SSE 帧，chunk 渐进渲染（~80ms 节流），
+       * status 更新占位标签，逐 chunk 空闲超时 30s（长回答不会被固定总超时切断）。
+       * resolve → { answer, sources }；reject 的 error 带 fallbackEligible 标记
+       * （true = 未收到任何 chunk，可透明回退非流式端点）。
+       */
+      function streamAnswer(body, placeholder, controller) {
+        var statusLabel = placeholder.shell.querySelector('.assistant-status span');
+        var markdownBody = placeholder.shell.querySelector('.markdown-body');
+        var accumulated = '';
+        var gotChunk = false;
+        var doneData = null;
+        var closed = false;
+        var idleTimer = null;
+        var idleTimedOut = false;
+        var renderScheduled = false;
+        var lastRender = 0;
+
+        function armIdle() {
+          window.clearTimeout(idleTimer);
+          idleTimer = window.setTimeout(function () {
+            idleTimedOut = true;
+            controller.abort();
+          }, SSE_IDLE_TIMEOUT_MS);
+        }
+
+        function disarmIdle() { window.clearTimeout(idleTimer); }
+
+        function renderPartial() {
+          renderScheduled = false;
+          if (closed) return;
+          lastRender = Date.now();
+          markdownBody.innerHTML = renderMarkdown(accumulated);
+          scrollToBottom(false);
+        }
+
+        function scheduleRender() {
+          if (renderScheduled) return;
+          renderScheduled = true;
+          var wait = Math.max(0, 80 - (Date.now() - lastRender));
+          window.setTimeout(function () { requestAnimationFrame(renderPartial); }, wait);
+        }
+
+        function setStatus(text) {
+          if (statusLabel) statusLabel.textContent = text;
+        }
+
+        function streamError(message) {
+          var error = new Error(message);
+          error.fallbackEligible = !gotChunk;
+          return error;
+        }
+
+        function handleFrame(frame) {
+          var parsed = parseSseFrame(frame);
+          if (!parsed) return;
+          var data = parseSseData(parsed.data);
+          if (parsed.event === 'status') {
+            if (typeof data === 'string' && data) setStatus(data);
+          } else if (parsed.event === 'chunk') {
+            if (typeof data === 'string' && data) {
+              if (!gotChunk) setStatus('正在回答');
+              gotChunk = true;
+              accumulated += data;
+              scheduleRender();
+            }
+          } else if (parsed.event === 'done') {
+            doneData = data && typeof data === 'object' ? data : {};
+          } else if (parsed.event === 'error') {
+            throw streamError(typeof data === 'string' && data ? data : '回答生成失败，请稍后重试。');
+          }
+        }
+
+        return fetch(CHAT_STREAM_ENDPOINT, {
+          method: 'POST',
+          signal: controller.signal,
+          headers: { 'Content-Type': 'application/json' },
+          body: body
+        }).then(function (response) {
+          if (!response.ok) throw streamError('流式请求失败（HTTP ' + response.status + '）');
+          if (!response.body || typeof response.body.getReader !== 'function') {
+            throw streamError('当前浏览器不支持流式响应');
+          }
+          var reader = response.body.getReader();
+          var decoder = new TextDecoder();
+          var buffer = '';
+          armIdle();
+
+          function pump() {
+            return reader.read().then(function (step) {
+              disarmIdle();
+              var i;
+              if (step.done) {
+                var tail = decoder.decode();
+                if (tail) buffer += tail;
+                if (buffer) {
+                  var flush = splitSseFrames(buffer + '\n\n');
+                  for (i = 0; i < flush.frames.length; i += 1) handleFrame(flush.frames[i]);
+                  buffer = '';
+                }
+                return null;
+              }
+              armIdle();
+              buffer += decoder.decode(step.value, { stream: true });
+              var split = splitSseFrames(buffer);
+              buffer = split.rest;
+              for (i = 0; i < split.frames.length; i += 1) handleFrame(split.frames[i]);
+              return pump();
+            });
+          }
+
+          return pump().then(function () {
+            disarmIdle();
+            closed = true;
+            if (doneData) {
+              var answer = typeof doneData.answer === 'string' && doneData.answer
+                ? doneData.answer
+                : accumulated;
+              return { answer: answer, sources: doneData.sources || [] };
+            }
+            throw streamError('流式回答中断，请重试。');
+          }, function (error) {
+            try { reader.cancel(); } catch (_) { /* reader 可能已关闭 */ }
+            throw error;
+          });
+        }).catch(function (error) {
+          disarmIdle();
+          closed = true;
+          if (idleTimedOut) {
+            var timeoutError = new Error('回答超时');
+            timeoutError.name = 'AbortError';
+            timeoutError.isIdleTimeout = true;
+            throw timeoutError;
+          }
+          if (error && typeof error.fallbackEligible === 'undefined') {
+            error.fallbackEligible = !gotChunk;
+          }
+          throw error;
+        });
+      }
+
       function sendQuestion(rawQuestion, fromRetry) {
         if (state.sending) return;
         var question = String(rawQuestion == null ? questionInput.value : rawQuestion).trim();
@@ -1695,52 +1920,36 @@
         var placeholder = createAssistantPlaceholder();
         var controller = new AbortController();
         state.controller = controller;
-        var timeout = window.setTimeout(function () { controller.abort(); }, 45000);
+        var body = requestPayload(question, priorHistory, imageData);
 
-        fetch(CHAT_ENDPOINT, {
-          method: 'POST',
-          signal: controller.signal,
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(state.tab === 'restaurant' ? {
-            question: question,
-            category: 'restaurant',
-            history: priorHistory,
-            image_base64: imageData
-          } : {
-            question: question,
-            category: 'factory',
-            depth: state.depth,
-            business_line: state.businessLine,
-            history: priorHistory,
-            image_base64: imageData
-          })
-        }).then(function (response) {
-          return response.text().then(function (text) {
-            var payload = {};
-            try { payload = text ? JSON.parse(text) : {}; } catch (_) { payload = {}; }
-            if (!response.ok || payload.success === false) {
-              var serverMessage = typeof payload.message === 'string' && payload.message.length <= 240
-                ? payload.message
-                : '';
-              throw new Error(serverMessage || ('请求失败（HTTP ' + response.status + '）'));
-            }
-            return payload;
-          });
-        }).then(function (payload) {
-          var answer = typeof payload.answer === 'string' && payload.answer.trim()
-            ? payload.answer.trim()
+        function finalize(answer, sources) {
+          var text = typeof answer === 'string' && answer.trim()
+            ? answer.trim()
             : '知识库没有返回可显示的答案，请换一种方式描述当前页面或问题。';
-          finishAssistant(placeholder, answer, payload.sources || []);
-          state.messages.push(createMessageRecord('assistant', answer));
+          finishAssistant(placeholder, text, sources || []);
+          state.messages.push(createMessageRecord('assistant', text));
           persistSession();
-          loadRelated(placeholder.shell, question, answer);
+          loadRelated(placeholder.shell, question, text);
+        }
+
+        streamAnswer(body, placeholder, controller).then(function (result) {
+          finalize(result.answer, result.sources);
+        }, function (error) {
+          /* 流式在收到任何 chunk 之前失败（网络/404/500/浏览器不支持）→
+             透明回退旧的非流式端点重试一次，页面不回退。
+             已收到 chunk 后不再回退（直接展示错误 + 重试按钮）。 */
+          if (error && error.fallbackEligible && error.name !== 'AbortError' && !controller.signal.aborted) {
+            return legacyAnswer(body, controller).then(function (payload) {
+              finalize(payload.answer, payload.sources || []);
+            });
+          }
+          throw error;
         }).catch(function (error) {
           var message = error && error.name === 'AbortError'
             ? '请求已超时或被中止。请检查网络后重试；如果问题很长，可以先只问当前一步。'
             : (error && error.message) || '网络请求失败，请稍后重试。';
           showAssistantError(placeholder, question, message);
         }).then(function () {
-          window.clearTimeout(timeout);
           if (state.controller === controller) state.controller = null;
           setSending(false);
           questionInput.focus();
