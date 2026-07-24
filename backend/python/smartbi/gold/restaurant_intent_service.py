@@ -1,29 +1,9 @@
-"""Shared restaurant tiered-intent answer service.
+"""Execute immutable restaurant QueryPlans and enforce their answer contract.
 
-Design doc: docs/superpowers/specs/2026-07-07-restaurant-intent-phase2-java-entry-design.md
-(Phase 2, building on Phase 1: 2026-07-07-restaurant-intent-tiered-routing-design.md)
-
-This module is the extraction target called out in Phase 2 §4: the body of
-what used to live inline as ``chat.py::_try_tiered_restaurant_intent`` now
-lives here as ``tiered_answer()`` so it can be called from TWO places with
-byte-identical behavior:
-
-  1. ``smartbi/api/chat.py`` -- 3 existing SSE/JSON call sites (general
-     analysis / trend pre-check / stream ops routing). ``chat.py`` keeps a
-     thin wrapper with the exact original name + signature so none of the
-     194 pre-existing tests need to change.
-  2. The new ``POST /api/smartbi/gold/restaurant/tiered-answer`` endpoint
-     (``smartbi/api/gold_reads.py``) that the Java
-     ``GoldBackedRestaurantTool.doExecute`` delegate gate calls via
-     ``GoldFinanceClient.fetchTieredIntentAnswer`` BEFORE running its own
-     resolveWindow -> queryGold -> format flow.
-
-``should_delegate()`` is the Phase 2 keystone (design §3): a small, pure,
-independently-testable decision function that the new HTTP endpoint calls
-to decide whether THIS query needs the full tiered/contract machinery
-(delegate) or whether Java's existing Gold Tool flow is already good enough
-(don't delegate -- zero behavior change on the query classes Java already
-answers well).
+Both Chat/SmartBI and the Java restaurant entry point call this service.
+Natural-language v2 plans keep the same resolver list from semantic planning
+through SQL execution; any mismatch, resolver miss, or contract failure
+returns a non-executing clarification instead of a neighboring answer.
 """
 from __future__ import annotations
 
@@ -64,6 +44,135 @@ _PLAN_LABELS = {
     "RESTAURANT_OPS_SALES_SUMMARY": "营收与订单",
     "RESTAURANT_OPS_STAFFING_ADVICE": "排班人效",
 }
+
+_RESOLVER_DIMENSIONS = {
+    "RESTAURANT_OPS_GROSS_MARGIN": frozenset({"dish"}),
+    "RESTAURANT_OPS_RECIPE_COST": frozenset({"dish"}),
+    "RESTAURANT_OPS_STORE_MARGIN": frozenset({"store", "dish"}),
+    "RESTAURANT_OPS_WASTAGE_TOP": frozenset({"ingredient"}),
+    "RESTAURANT_OPS_STOCK_SHORTAGE": frozenset({"ingredient"}),
+    "RESTAURANT_OPS_REQUISITION_TREND": frozenset({"ingredient"}),
+    "RESTAURANT_OPS_SALES_SUMMARY": frozenset(),
+    "RESTAURANT_OPS_TREND_ANALYSIS": frozenset(),
+    "RESTAURANT_OPS_INVENTORY_WARNING": frozenset({"ingredient"}),
+    "RESTAURANT_OPS_STAFFING_ADVICE": frozenset(),
+}
+
+
+def _execution_mismatch(
+    spec: RestaurantQuerySpec,
+    plan: Tuple[str, ...],
+    *,
+    dish_mention: Optional[str],
+    store_mention: Optional[str],
+    store_dish: Optional[str],
+) -> Optional[str]:
+    """Reject any execution-time reinterpretation of an immutable v2 plan."""
+    if spec.plan_version != "restaurant-query-plan-v2":
+        return None
+    if spec.planner_authority not in ("llm", "validated_plan_cache"):
+        return "餐饮执行计划缺少可信语义来源"
+    if not spec.plan_hash or tuple(spec.planned_intents) != plan:
+        return "餐饮执行计划不完整"
+    if spec.intent not in plan:
+        return "主意图与执行步骤不一致"
+    if store_dish and plan != ("RESTAURANT_OPS_STORE_MARGIN",):
+        return "店菜范围与执行 resolver 不一致"
+    if (
+        dish_mention
+        and not store_mention
+        and "RESTAURANT_OPS_SALES_SUMMARY" in plan
+    ):
+        return "菜品范围不能由全店汇总 resolver 代答"
+    if store_mention and any(
+        code in ("RESTAURANT_OPS_SALES_SUMMARY", "RESTAURANT_OPS_GROSS_MARGIN")
+        for code in plan
+    ):
+        return "门店范围不能由全店或全门店 resolver 代答"
+    supported_dimensions = set().union(
+        *(_RESOLVER_DIMENSIONS.get(code, frozenset()) for code in plan)
+    )
+    if not set(spec.dimensions).issubset(supported_dimensions):
+        return "查询维度超出计划 resolver 的能力范围"
+    return None
+
+
+def _execution_receipt(
+    spec: RestaurantQuerySpec,
+    plan: Tuple[str, ...],
+    executed_codes: Tuple[str, ...],
+    meta: Dict[str, Any],
+) -> Dict[str, Any]:
+    receipt = dict(meta)
+    supported_dimensions = set().union(
+        *(_RESOLVER_DIMENSIONS.get(code, frozenset()) for code in executed_codes)
+    )
+    receipt.update({
+        "query_plan_hash": spec.plan_hash,
+        "query_plan_version": spec.plan_version,
+        "planner_authority": spec.planner_authority,
+        "executed_resolvers": list(executed_codes),
+        "execution_plan_match": executed_codes == plan,
+        "actual_dimensions": sorted(supported_dimensions),
+        "scope_matches_request": bool(
+            receipt.get("scope_matches_request", True)
+            and set(spec.dimensions).issubset(supported_dimensions)
+        ),
+    })
+    return receipt
+
+
+def _structured_context(
+    spec: RestaurantQuerySpec,
+    result_meta: Dict[str, Any],
+    *,
+    dish_mention: Optional[str],
+    store_mention: Optional[str],
+) -> Dict[str, Any]:
+    focus = result_meta.get("focus_entity")
+    if not isinstance(focus, dict):
+        ranked = result_meta.get("ranked_entities")
+        if isinstance(ranked, list) and ranked and isinstance(ranked[0], dict):
+            focus = ranked[0]
+    if not isinstance(focus, dict):
+        if dish_mention:
+            focus = {"type": "dish", "name": dish_mention}
+        elif store_mention:
+            focus = {"type": "store", "name": store_mention}
+    if isinstance(focus, dict):
+        entity_type = focus.get("type")
+        entity_name = focus.get("name")
+        if entity_type not in ("dish", "store") or not isinstance(entity_name, str):
+            focus = None
+        else:
+            focus = {
+                "type": entity_type,
+                "id": focus.get("id"),
+                "name": entity_name[:80],
+                "rank": focus.get("rank"),
+            }
+    return {
+        "plan_hash": spec.plan_hash,
+        "plan_version": spec.plan_version,
+        "focus_entity": focus,
+        "window_label": spec.window_label,
+    }
+
+
+def _suggested_followups(context: Dict[str, Any]) -> List[Dict[str, str]]:
+    focus = context.get("focus_entity")
+    if not isinstance(focus, dict) or not focus.get("name"):
+        return []
+    name = str(focus["name"])
+    if focus.get("type") == "dish":
+        return [
+            {"label": "看菜品成本", "question": f"{name}的成本如何？"},
+            {"label": "看菜品毛利", "question": f"{name}的毛利如何？"},
+        ]
+    return [
+        {"label": "看门店营收", "question": f"{name}的营收如何？"},
+        {"label": "看门店毛利", "question": f"{name}的毛利如何？"},
+    ]
 
 
 def _resolver_kwargs(
@@ -190,18 +299,14 @@ async def tiered_answer(
     precomputed_spec: Optional[RestaurantQuerySpec] = None,
     allow_decompose: bool = True,
 ) -> Optional[Dict[str, Any]]:
-    """T2 (vector) / T3 (LLM) restaurant intent routing (2026-07-07 Phase 1
-    design). ONLY call this after the existing T1 keyword fast path
-    (``match_restaurant_ops``) has already missed at the call site --
-    this function does not re-check keywords first, it goes straight to
-    ``parse_restaurant_query`` (which itself re-tries T1 first, cheaply,
-    before T2/T3 -- so calling it unconditionally is safe, just slightly
-    redundant).
+    """Execute one contract-checked restaurant query plan.
 
-    Fail-open: returns None on any miss/exception/business-type-gate-closed,
-    so every caller's existing fallback chain is reached exactly as before
-    this feature existed (zero regression risk for non-restaurant tenants or
-    when anything below throws).
+    Natural-language requests always go through ``parse_restaurant_query``.
+    Keyword/vector matches are candidate hints only; a v2 plan can execute
+    only when its authority is the LLM planner or a validated plan-cache hit.
+    Non-restaurant tenants still return ``None``. Once a v2 plan exists,
+    resolver misses, exceptions, route/scope drift, and contract failures are
+    fail-closed clarifications and never fall through to an adjacent intent.
 
     Return shape:
       {"kind": "clarification", "answer_text": str, "spec": spec}
@@ -235,6 +340,7 @@ async def tiered_answer(
     already resolved. When ``None`` (every other caller), this function
     calls ``parse_restaurant_query`` itself exactly as before.
     """
+    spec = precomputed_spec
     try:
         from smartbi.gold.restaurant_playbook import PLAYBOOK_CODE, PLAYBOOK_TRIGGERS
         if any(trigger in (query or "") for trigger in PLAYBOOK_TRIGGERS):
@@ -297,9 +403,10 @@ async def tiered_answer(
                     combined = assemble_compound_answer(parts, results)
                     if combined:
                         return combined
-        spec = precomputed_spec if precomputed_spec is not None else await parse_restaurant_query(
-            query, pool, factory_id=factory_id, session_key=session_key,
-        )
+        if spec is None:
+            spec = await parse_restaurant_query(
+                query, pool, factory_id=factory_id, session_key=session_key,
+            )
         if spec is None:
             return None
         if spec.clarification_needed or not spec.intent:
@@ -337,56 +444,42 @@ async def tiered_answer(
         # 带 dish_mention 直答 (匿名「哪家店的X」排名 / 具名店+菜单店直答)。
         split_dish = store_dish_split_dish(query) or store_dish_split_dish(resolver_query)
         store_dish = split_dish or (dish_mention if store_mention else None)
-        if store_dish:
-            plan = ("RESTAURANT_OPS_STORE_MARGIN",)
+        mismatch = _execution_mismatch(
+            spec,
+            plan,
+            dish_mention=dish_mention,
+            store_mention=store_mention,
+            store_dish=store_dish,
+        )
+        if mismatch:
+            return {
+                "kind": "clarification",
+                "answer_text": (
+                    f"本次没有执行分析：{mismatch}。"
+                    "请明确要看菜品、门店还是全店汇总，我不会改走相邻分析。"
+                ),
+                "contract_pass": False,
+                "spec": spec,
+            }
         planned_results: List[Tuple[str, Any]] = []
         for code in plan:
-            effective_code = code
-            if (
-                dish_mention
-                and code == "RESTAURANT_OPS_SALES_SUMMARY"
-                and not store_mention
-            ):
-                # planner 把「X的销量」按 sales_volume 归入 SALES_SUMMARY, 但
-                # 点名单菜的销量/营收数据在 gross-margin resolver 的 POS 行里
-                # (Sheet 7/22 菜品链)。dish 限域接管, 全店概览不受影响
-                # (无菜名 → dish_mention None)。
-                effective_code = "RESTAURANT_OPS_GROSS_MARGIN"
-            if (
-                store_mention
-                and code == "RESTAURANT_OPS_SALES_SUMMARY"
-                and "RESTAURANT_OPS_STORE_MARGIN" not in plan
-                and not store_dish
-            ):
-                # R26: 点名门店的营收问 ("日月光店的营收") 此前被全店概览
-                # 无视 — 改走单店毛利/营收; 简称多命中由 canonicalize 澄清。
-                effective_code = "RESTAURANT_OPS_STORE_MARGIN"
-            if (
-                store_mention
-                and code == "RESTAURANT_OPS_GROSS_MARGIN"
-                and "RESTAURANT_OPS_STORE_MARGIN" not in plan
-            ):
-                # A margin question that names one store is a store-margin
-                # question; the dish-level resolver would silently answer for
-                # every store, which is the forbidden all-store fallback.
-                effective_code = "RESTAURANT_OPS_STORE_MARGIN"
             code_kwargs = execution_kwargs
-            if effective_code == "RESTAURANT_OPS_GROSS_MARGIN" and dish_mention:
+            if code == "RESTAURANT_OPS_GROSS_MARGIN" and dish_mention:
                 code_kwargs = dict(execution_kwargs)
                 code_kwargs["dish_mention"] = dish_mention
-            if effective_code == "RESTAURANT_OPS_STORE_MARGIN" and (store_mention or store_dish):
+            if code == "RESTAURANT_OPS_STORE_MARGIN" and (store_mention or store_dish):
                 code_kwargs = dict(execution_kwargs)
                 if store_mention:
                     code_kwargs["store_mention"] = store_mention
                 if store_dish:
                     code_kwargs["dish_mention"] = store_dish
             code_factory = demo_data_factory_for_code(
-                effective_code,
+                code,
                 factory_id,
                 store_scoped=bool(store_mention) or bool(store_dish),
             )
             resolved = await _resolve_tiered(
-                effective_code,
+                code,
                 pool,
                 code_factory,
                 **code_kwargs,
@@ -400,7 +493,7 @@ async def tiered_answer(
                 # 菜单没有 DEMO 自有菜 (如招牌藤椒味) — 换回本租户明细重试,
                 # 两边都查不到才维持定向拒答。
                 retry = await _resolve_tiered(
-                    effective_code,
+                    code,
                     pool,
                     factory_id,
                     **code_kwargs,
@@ -410,13 +503,23 @@ async def tiered_answer(
                 ):
                     resolved = retry
             if resolved is not None:
-                planned_results.append((effective_code, resolved))
+                planned_results.append((code, resolved))
         tiered_result = (
             _combine_planned_answers(spec, planned_results)
             if len(plan) > 1
             else (planned_results[0][1] if planned_results else None)
         )
         if not tiered_result:
+            if spec.plan_version == "restaurant-query-plan-v2":
+                return {
+                    "kind": "clarification",
+                    "answer_text": (
+                        "计划中的餐饮分析没有返回可验证结果，本次没有改走相邻分析。"
+                        "请确认数据范围后重试。"
+                    ),
+                    "contract_pass": False,
+                    "spec": spec,
+                }
             return None
 
         # Guard declines (missing date reference, unknown/ambiguous store) are
@@ -437,20 +540,46 @@ async def tiered_answer(
             }
 
         result_kpis = getattr(tiered_result, "kpis", None) or []
-        result_meta = getattr(tiered_result, "meta", None) or {}
+        executed_codes = tuple(code for code, _ in planned_results)
+        result_meta = _execution_receipt(
+            spec,
+            plan,
+            executed_codes,
+            getattr(tiered_result, "meta", None) or {},
+        )
         result_charts = getattr(tiered_result, "charts", None) or []
-        answer_text = str(getattr(tiered_result, "answer_text", "") or "")
+        answer_text = sanitize_customer_ai_text(
+            str(getattr(tiered_result, "answer_text", "") or "")
+        )
         contract = _contract.validate(
             spec,
             answer_text,
             result_kpis,
             result_meta,
         )
-        if not contract.passed:
-            answer_text += (
-                f"\n\n本次结果没有可靠覆盖{_contract.describe_missing(contract.missing)}，"
-                "因此不把它当作完整结论，也没有用其他时间或指标替代。请补充具体范围后重试。"
+        displayable = has_displayable_business_result(answer_text)
+        if not contract.passed or not displayable:
+            missing = (
+                _contract.describe_missing(contract.missing)
+                if contract.missing
+                else "可展示的真实业务结果"
             )
+            safe_text = (
+                f"本次结果没有可靠覆盖{missing}，因此没有向您展示可能答非所问的数据，"
+                "也没有改走相邻指标。请补充具体范围后重试。"
+            )
+            capture_source = "java_entry_delegate" if java_tool_name else None
+            asyncio.create_task(log_intent_capture(
+                pool, spec, factory_id=factory_id, query=query,
+                answer=safe_text, contract_pass=False, served=False,
+                source=capture_source,
+            ))
+            return {
+                "kind": "clarification",
+                "answer_text": safe_text,
+                "contract_pass": False,
+                "spec": spec,
+            }
         # R26b: 多主题复合句 ("这个月生意怎么样，另外米饭卖得好不好") 目前
         # 只执行一个主题 — 其余部分静默丢弃违反"部分完成不说成全部"。
         # 检测到复合分隔且计划只有单主题时, 尾注明示未覆盖部分。
@@ -465,8 +594,13 @@ async def tiered_answer(
                 "其余部分（如「" + query.split(compound_tail)[-1].strip()[:24]
                 + "」）请单独提问，我会逐个给出数据。"
             )
-        answer_text = sanitize_customer_ai_text(answer_text)
-        contract_pass = contract.passed and has_displayable_business_result(answer_text)
+        contract_pass = True
+        structured_context = _structured_context(
+            spec,
+            result_meta,
+            dish_mention=dish_mention,
+            store_mention=store_mention,
+        )
 
         result: Dict[str, Any] = {
             "kind": "answer",
@@ -479,6 +613,10 @@ async def tiered_answer(
             # selected code hid the 7/24 dish-ranking -> sales-summary mismatch.
             "code": planned_results[0][0] if len(planned_results) == 1 else spec.intent,
             "contract_pass": contract_pass,
+            "query_plan_hash": spec.plan_hash,
+            "executed_resolvers": list(executed_codes),
+            "structured_context": structured_context,
+            "suggested_followups": _suggested_followups(structured_context),
             "spec": spec,
         }
         capture_source = "java_entry_delegate" if java_tool_name else None
@@ -489,7 +627,17 @@ async def tiered_answer(
         ))
         return result
     except Exception as e:
-        logger.warning(f"[restaurant-intent] tiered fast path failed (fail-open): {e}")
+        logger.warning(f"[restaurant-intent] tiered path failed: {e}")
+        if spec is not None and spec.plan_version == "restaurant-query-plan-v2":
+            return {
+                "kind": "clarification",
+                "answer_text": (
+                    "餐饮执行链暂时不可用，本次没有执行任何相邻分析。"
+                    "请稍后重试。"
+                ),
+                "contract_pass": False,
+                "spec": spec,
+            }
         return None
 
 
@@ -497,43 +645,11 @@ def should_delegate(
     spec: Optional[RestaurantQuerySpec], java_tool_name: Optional[str] = None,
     query: Optional[str] = None,
 ) -> bool:
-    """Phase 2 delegate gate (design doc section 3): decide whether the Java
-    ``GoldBackedRestaurantTool.doExecute`` entry point should hand this query
-    off to the Python tiered router (+ Answer Contract) instead of running
-    its own ``resolveWindow -> queryGold -> format`` flow.
+    """Return whether the Python answer path must own this request.
 
-    Rules (evaluated in order; first match wins -- mirrors the design doc's
-    numbered list verbatim):
-
-      1. ``spec is None`` (T1/T2/T3 all missed, non-restaurant tenant, or an
-         upstream exception inside ``parse_restaurant_query``) -> False.
-         Java keeps its own flow untouched.
-      2. ``spec.clarification_needed`` -> True. Java's Gold Tool flow has no
-         mechanism to ask a clarifying question; only the Python tiered path
-         can.
-      3. ``(spec.asks_profitability or spec.wants_margin) and spec.intent in
-         _MARGIN_CAPABLE_INTENTS`` -> True. The Java Gold Tool family never
-         produces a profit/margin verdict, so delegating buys the verdict —
-         but ONLY when the Python resolver for the parsed intent can actually
-         produce one (2026-07-08 audit fix A-3: delegating a WASTAGE_TOP-class
-         intent on a secondary profit mention hands the answer to a resolver
-         that ignores the profit ask entirely, and the Answer Contract then
-         appends a permanent, unfixable disclaimer — worse than Java's own
-         answer, so those stay in Java).
-      4. ``spec.intent == "RESTAURANT_OPS_SALES_SUMMARY" and
-         spec.relative_window`` -> True. "最近N天/周/月" ops-summary windows
-         are only honored by the Python resolver (``_resolve_sales_date_range``
-         family); Java's ``resolveWindow`` only understands absolute months /
-         本月 / 上月.
-      5. Otherwise -> False. Pure trend/ranking/absolute-month queries: Java's
-         existing answer quality is already good here, so this keeps that
-         path byte-for-byte unchanged (zero regression risk).
-
-    ``java_tool_name`` is accepted (not currently branched on) so a future
-    per-tool exception can be added to this function without changing the
-    call signature at every call site (design doc section 3 lists the input
-    as "spec（parse 结果）+ `java_tool_name`" without carving out a
-    per-tool rule yet).
+    Every sealed v2 LLM/cache plan and every v2 clarification stays in Python
+    so Java cannot reinterpret it. Legacy specs retain the older compatibility
+    rules below while callers migrate.
     """
     # Dish-scoped questions ("米饭的销量") delegate unconditionally: the
     # Java Gold tools have no per-dish answer path, while the Python
@@ -573,6 +689,18 @@ def should_delegate(
             return True
     if spec is None:
         return False
+    if spec.plan_version == "restaurant-query-plan-v2":
+        # The Java path must not reinterpret a plan the Python semantic
+        # authority has already sealed. Clarifications (including planner
+        # outages) and executable LLM/cache plans both stay on this path.
+        return bool(
+            spec.clarification_needed
+            or (
+                spec.intent
+                and spec.plan_hash
+                and spec.planner_authority in ("llm", "validated_plan_cache")
+            )
+        )
     if spec.clarification_needed:
         return True
     if len(spec.planned_intents) > 1:

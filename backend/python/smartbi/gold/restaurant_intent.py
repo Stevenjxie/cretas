@@ -1,89 +1,29 @@
-"""Tiered restaurant intent router: keyword (T1) -> vector (T2) -> LLM (T3).
+"""Restaurant semantic query planner.
 
-Design doc: docs/superpowers/specs/2026-07-07-restaurant-intent-tiered-routing-design.md
-Clarification-loop v1 (2026-07-08): the ``history`` parameter reserved (but
-unused) in the design above is now wired up so a user's answer to a
-clarification question gets parsed IN CONTEXT of the original question,
-instead of being re-parsed as a brand-new, context-free query. See the
-"Clarification continuation (v1, 2026-07-08)" section further down.
+For natural-language restaurant analysis, keyword and vector matches are
+candidate hints only.  The LLM (or a cache of a previously validated LLM
+plan) is the sole semantic authority and emits one immutable QuerySpec with a
+stable plan hash.  Deterministic code resolves dates and executes SQL; it may
+not replace the selected resolver at execution time.
 
-Architecture (spec section references below are to that doc):
+Planner, tenant-gate, resolver, and answer-contract failures are fail-closed:
+the caller receives an explicit non-executing clarification instead of an
+adjacent metric.  ``None`` is reserved for empty input or a confirmed
+non-restaurant tenant.
 
-  parse_restaurant_query(query, pool, factory_id=..., history=..., session_key=...)
-      T1 keyword match_restaurant_ops()               (<1ms,  confidence=0.95)
-      T2 vector cosine_topk(code_prefix=RESTAURANT_OPS_) (~30ms, confidence=similarity)
-      T3 LLM structured QuerySpec parse (SLOT.MAPPER)  (thinking off, confidence=0.0-1.0)
-      miss -> None (caller falls through to its existing chain, unchanged)
-
-Six architecture principles (spec section 1.3), enforced here:
-  1. LLM never computes numbers or dates -- only a structured time descriptor;
-     real dates come from `_resolve_sales_date_range` (imported from
-     restaurant_ops_router, unmodified) and are always recomputed on every
-     call (never cached), so a cached routing decision from yesterday still
-     resolves "最近两个月" against *today*.
-  2. Intent selection is tiered; slot extraction (time/margin/profitability/
-     dimension/comparison) is a single deterministic layer shared by all
-     three tiers.
-  3. `_OPS_PATTERNS` (T1) is frozen -- new phrasing is absorbed by T2/T3, not
-     by editing the keyword table.
-  4. Business-type gate: T2/T3 only run for restaurant tenants (see
-     `_is_restaurant_tenant`). T1 is ungated (existing behavior).
-  5. T1 is byte-for-byte unchanged: callers get confidence=0.95,
-     source_tier="keyword", and can keep passing `query=` straight through to
-     `resolve_by_code` exactly as before.
-  6. Fail-open: any exception at any tier is swallowed and logged; the
-     function returns None so the caller's existing fallback chain runs
-     (mirrors template_rag.hybrid_match's "never raises" contract).
-
-Clarification continuation (v1, 2026-07-08):
-
-  When `parse_restaurant_query` returns a clarification AND the caller passed
-  a non-empty `session_key`, the (factory_id, session_key) -> {original
-  question, clarification question} pair is registered in the shared smartbi
-  Postgres table `restaurant_pending_clarifications` (~5 minute TTL, judged
-  Python-side on pop; migration V20260708_01). Storage MUST be the shared DB,
-  not process memory: prod runs `uvicorn --workers 2`, and an in-process
-  store made continuation a coin flip whenever the follow-up landed on the
-  other worker (2026-07-08 prod bug -- see the "Pending-clarification store"
-  section comment below). The NEXT call for that same (factory_id,
-  session_key) is then treated as the user's ANSWER to that clarification,
-  not a fresh standalone query:
-
-    1. Deterministic fast path FIRST: T1 keyword, then T2 vector, both run
-       against the ORIGINAL question concatenated with the new answer (no LLM
-       token spent if that combination is already resolvable).
-    2. Only on a deterministic miss does this escalate to T3, this time with
-       `history=[{"role":"user","content":<original question>},
-       {"role":"assistant","content":<clarification question>}]` so the LLM
-       combines both turns (spec principle 2: the LLM only fills what the
-       deterministic layer could not).
-
-  This whole continuation path bypasses `_ROUTE_CACHE` (a routing decision
-  cached under a single utterance would not reflect the two-turn context,
-  and would poison a later STANDALONE ask of the same follow-up text -- see
-  principle 6 point 6 in the 2026-07-08 clarification-loop design brief).
-
-  Continuation is capped at ONE hop: the pending entry is consumed (removed)
-  the moment it is read, regardless of whether the continuation attempt
-  resolves or produces yet another clarification -- so a second, still-vague
-  answer surfaces a (final) clarification question but does NOT register a
-  new pending entry (no infinite clarification loops). The returned spec's
-  `is_clarification_continuation` flag distinguishes a continuation-produced
-  spec from a fresh single-turn one (for logging / tests).
-
-  A missing/empty `session_key`, or no pending entry for the given key (never
-  registered, already consumed, or past the TTL), simply skips all of the
-  above -- `parse_restaurant_query` behaves exactly as it did before this
-  feature existed (pure fail-open addition, zero behavior change for callers
-  that don't pass `session_key`).
+Clarification continuations are stored in shared Postgres and consumed once.
+The original question, the user's answer, and structured conversation context
+are sent back through the same semantic planner.  Candidate retrieval still
+helps the planner, but never authorizes execution.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import re
 from collections import OrderedDict
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
@@ -136,6 +76,12 @@ class RestaurantQuerySpec:
     # 真伪由下游 resolver 对 dim_product/dim_store 验证 — LLM 只提名, 不裁决)。
     dish_slot: Optional[str] = None
     store_slot: Optional[str] = None
+    # v2 execution contract. Natural-language requests are executable only
+    # when the LLM planner (or its validated cache) produced the plan. T1/T2
+    # are candidate-retrieval hints and never become an authority themselves.
+    plan_version: str = "legacy"
+    planner_authority: str = "legacy"
+    plan_hash: str = ""
 
 
 # ─── Intent catalogue (used by the T3 prompt) ──────────────────────────────
@@ -301,11 +247,12 @@ def _plan_requested_intents(
         elif metric == "wastage":
             code = "RESTAURANT_OPS_WASTAGE_TOP"
         elif metric == "sales_volume":
-            code = (
-                "RESTAURANT_OPS_GROSS_MARGIN"
-                if "dish" in dimensions
-                else "RESTAURANT_OPS_SALES_SUMMARY"
-            )
+            if "store" in dimensions and "dish" in dimensions:
+                code = "RESTAURANT_OPS_STORE_MARGIN"
+            elif "dish" in dimensions:
+                code = "RESTAURANT_OPS_GROSS_MARGIN"
+            else:
+                code = "RESTAURANT_OPS_SALES_SUMMARY"
         elif metric == "gross_margin":
             if selected_code == "RESTAURANT_OPS_SALES_SUMMARY" and has_revenue_scope:
                 code = "RESTAURANT_OPS_SALES_SUMMARY"
@@ -316,11 +263,12 @@ def _plan_requested_intents(
             else:
                 code = "RESTAURANT_OPS_GROSS_MARGIN"
         elif metric in ("revenue", "orders"):
-            code = (
-                "RESTAURANT_OPS_TREND_ANALYSIS"
-                if selected_code == "RESTAURANT_OPS_TREND_ANALYSIS"
-                else "RESTAURANT_OPS_SALES_SUMMARY"
-            )
+            if "store" in dimensions:
+                code = "RESTAURANT_OPS_STORE_MARGIN"
+            elif selected_code == "RESTAURANT_OPS_TREND_ANALYSIS":
+                code = "RESTAURANT_OPS_TREND_ANALYSIS"
+            else:
+                code = "RESTAURANT_OPS_SALES_SUMMARY"
         elif metric == "staffing":
             code = "RESTAURANT_OPS_STAFFING_ADVICE"
 
@@ -391,6 +339,35 @@ _FOLLOWUP_PREFIXES = (
 _NEW_TOPIC_TOKENS = ("换个话题", "换一个问题", "另一个问题", "另外问", "新话题")
 
 
+def _structured_focus_entity(parent: Dict[str, Any]) -> Optional[Dict[str, str]]:
+    """Read the last trusted resolver entity without parsing answer prose."""
+    history = parent.get("turns_history")
+    if isinstance(history, str):
+        try:
+            history = json.loads(history)
+        except (TypeError, ValueError):
+            history = None
+    contexts: List[Any] = []
+    if isinstance(history, list):
+        contexts.extend(
+            turn.get("context")
+            for turn in reversed(history)
+            if isinstance(turn, dict)
+        )
+    contexts.append(parent.get("structured_context"))
+    for context in contexts:
+        if not isinstance(context, dict):
+            continue
+        entity = context.get("focus_entity")
+        if not isinstance(entity, dict):
+            continue
+        entity_type = entity.get("type")
+        name = entity.get("name")
+        if entity_type in ("dish", "store") and isinstance(name, str) and name.strip():
+            return {"type": entity_type, "name": name.strip()[:80]}
+    return None
+
+
 def contextualize_restaurant_followup(
     query: str,
     parent: Optional[Dict[str, Any]],
@@ -426,12 +403,22 @@ def contextualize_restaurant_followup(
     if standalone_code and _uses_relative_sales_window(current) and not leading_dependent:
         return current, False
 
-    # Sheet 7/24: a ranking answer already names the winning dish, but carrying
-    # only ``parent_query`` leaves dependent asks such as "它的成本如何" or
-    # "第一名毛利怎么样" without a concrete entity.  Resolve that narrow,
-    # deterministic referent from our own ranking format instead of asking the
-    # LLM to guess.  If the prior answer is not a dish ranking, keep the
-    # conservative query-only behavior below.
+    # Resolver-produced structured context is the source of truth for pronoun
+    # resolution. It is independent of markdown wording and therefore cannot
+    # drift when an answer template changes.
+    focus_entity = _structured_focus_entity(parent)
+    if focus_entity:
+        resolved = re.sub(
+            r"^(?:那|这个|那个)?(?:它|这道菜|那个菜|这个菜|这家店|那家店|第一名)(?:的)?",
+            f"{focus_entity['name']}的",
+            current,
+            count=1,
+        )
+        if resolved != current:
+            return resolved, True
+
+    # Legacy sessions written before query-plan v2 have no typed context.
+    # Keep a narrow compatibility fallback while all new turns write context.
     if parent_code == "RESTAURANT_OPS_GROSS_MARGIN":
         parent_answer = str(parent.get("parent_answer_summary") or "")
         top_dish_match = re.search(r"(?m)^1\.\s+\*\*([^*\r\n]{1,80})\*\*", parent_answer)
@@ -469,6 +456,38 @@ def _default_metrics_for_code(code: str, wants_margin: bool) -> Tuple[str, ...]:
     return tuple(metrics)
 
 
+def _seal_query_plan(spec: RestaurantQuerySpec) -> RestaurantQuerySpec:
+    """Attach a stable digest to the exact semantics resolvers must execute."""
+    start, end = spec.date_range
+    payload = {
+        "version": spec.plan_version,
+        "intent": spec.intent,
+        "domain": spec.domain,
+        "window": [
+            start.isoformat() if hasattr(start, "isoformat") else start,
+            end.isoformat() if hasattr(end, "isoformat") else end,
+        ],
+        "window_label": spec.window_label,
+        "metrics": list(spec.metrics),
+        "requested_metrics": list(spec.requested_metrics),
+        "dimensions": list(spec.dimensions),
+        "comparison": spec.comparison,
+        "planned_intents": list(spec.planned_intents),
+        "dish_slot": spec.dish_slot,
+        "store_slot": spec.store_slot,
+    }
+    digest = hashlib.sha256(
+        json.dumps(
+            payload,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+            default=str,
+        ).encode("utf-8")
+    ).hexdigest()
+    return replace(spec, plan_hash=digest)
+
+
 def _build_spec(
     code: str,
     query: str,
@@ -483,6 +502,7 @@ def _build_spec(
     is_continuation: bool = False,
     llm_dish: Optional[str] = None,
     llm_store: Optional[str] = None,
+    planner_authority: Optional[str] = None,
 ) -> RestaurantQuerySpec:
     """Compose the final QuerySpec: deterministic slots ALWAYS recomputed
     fresh against `query` + today's date, regardless of which tier picked
@@ -502,7 +522,12 @@ def _build_spec(
     asks_profitability = asks_profitability or llm_asks_profitability
     wants_margin = wants_margin or llm_wants_margin or asks_profitability
     relative_window = _uses_relative_sales_window(effective_query)
-    dimensions = _detect_dimensions(effective_query)
+    dimension_list = list(_detect_dimensions(effective_query))
+    if llm_store and "store" not in dimension_list:
+        dimension_list.append("store")
+    if llm_dish and "dish" not in dimension_list:
+        dimension_list.append("dish")
+    dimensions = tuple(dimension_list)
     comparison = _detect_comparison(effective_query)
     metrics = _default_metrics_for_code(code, wants_margin) if code else ()
     requested_metrics = _detect_requested_metrics(effective_query)
@@ -532,8 +557,24 @@ def _build_spec(
             unsupported_requirements,
             requested_metrics,
         )
+    if (
+        code
+        and planned_intents
+        and code not in planned_intents
+        and not clarification_needed
+    ):
+        clarification_needed = True
+        clarification_question = (
+            "我识别到的问题对象与准备执行的分析范围不一致。"
+            "请明确要看菜品、门店还是全店汇总，我不会用相邻指标替代。"
+        )
+    if planner_authority in {"tenant_gate_unavailable", "llm_unavailable"}:
+        # An infrastructure failure is a sealed decision not to execute.
+        # Keeping a resolver in the plan would make an outage look executable
+        # to downstream code and monitoring.
+        planned_intents = ()
 
-    return RestaurantQuerySpec(
+    spec = RestaurantQuerySpec(
         intent=code or "",
         domain="restaurant",
         date_range=date_range,
@@ -557,7 +598,13 @@ def _build_spec(
         asks_export=asks_export,
         dish_slot=llm_dish,
         store_slot=llm_store,
+        plan_version="restaurant-query-plan-v2",
+        planner_authority=(
+            planner_authority
+            or ("llm" if tier == "llm" else "deterministic_guard")
+        ),
     )
+    return _seal_query_plan(spec)
 
 
 # ─── Routing-decision cache ───────────────────────────────────────────────
@@ -796,13 +843,14 @@ async def _is_restaurant_tenant(pool, factory_id: str) -> bool:
                 factory_id,
             )
     except Exception as exc:
-        # 2026-07-08 audit fix B-3: 查询异常 (DB 抖动) 只本次按 False 处理,
-        # 不写缓存 —— 否则一个瞬时错误会把合法餐饮租户永久锁出 T2/T3
-        # (进程不重启不恢复)。只有拿到明确的 DB 答案才缓存。
         logger.warning(
             f"[restaurant-intent] tenant gate lookup failed for {factory_id} (not cached): {exc}"
         )
-        return False
+        # An unavailable tenant gate is not evidence that this is a
+        # non-restaurant tenant.  Propagate the error so the caller can return
+        # an explicit non-executing clarification instead of falling through
+        # to another router.
+        raise
     is_restaurant = row is not None
     _RESTAURANT_TENANT_CACHE[factory_id] = is_restaurant
     return is_restaurant
@@ -862,8 +910,8 @@ def _build_t3_prompt(query: str, hint: Optional[Tuple[str, float]], history: Opt
     if hint:
         hint_code, hint_sim = hint
         hint_line = (
-            f"\n提示: 向量检索认为最可能是 \"{hint_code}\" (相似度 {hint_sim:.2f})，"
-            f"仅供参考，请结合问题原文自行判断。\n"
+            f"\n候选召回提示: \"{hint_code}\" (候选分 {hint_sim:.2f})。"
+            "这不是路由结论；你必须结合问题原文独立判断，冲突时以原文为准。\n"
         )
     # 2026-07-08 clarification-loop v1: when a continuation attempt (see
     # module docstring) passes the ORIGINAL question + the clarification
@@ -983,8 +1031,8 @@ async def _t3_llm_parse(
 ) -> Optional[Dict[str, Any]]:
     """Call the SmartBI LLM router (SLOT.MAPPER: thinking off, json_object,
     temperature 0) to structurally parse `query`. Returns the parsed dict, or
-    None on any failure/timeout (fail-open -- caller treats None as "T3 had
-    nothing to offer")."""
+    None on any failure/timeout. The caller converts that into an explicit
+    fail-closed, non-executing clarification."""
     try:
         from common.llm_router import call_chain, SLOT
         from common.llm_metrics import llm_caller_context
@@ -1028,11 +1076,12 @@ async def parse_restaurant_query(
     history: Optional[Sequence[Dict[str, str]]] = None,
     session_key: Optional[str] = None,
 ) -> Optional[RestaurantQuerySpec]:
-    """Resolve `query` to a RestaurantQuerySpec via T1 -> T2 -> T3, or None.
+    """Resolve `query` to one immutable RestaurantQuerySpec.
 
-    Fail-open at every tier: any exception is logged and swallowed, and the
-    function degrades to the next tier (or to None), never raising into the
-    caller's chat.py SSE stream.
+    T1/T2 retrieve candidate hints; only T3 or a validated T3-plan cache may
+    authorize execution. A planner outage returns a fail-closed clarification
+    rather than ``None``, preventing the caller from trying an adjacent route.
+    ``None`` is reserved for an empty request or a non-restaurant tenant.
 
     `session_key` (2026-07-08 clarification-loop v1, additive/optional):
     when truthy AND a pending clarification is on record for
@@ -1100,28 +1149,35 @@ async def parse_restaurant_query(
         await _maybe_register_pending(pool, norm_query, spec, factory_id, session_key)
         return spec
 
-    # ── T1: keyword (ungated, unchanged, <1ms) ──
-    try:
-        t1_code = match_restaurant_ops(norm_query)
-    except Exception as exc:
-        logger.warning(f"[restaurant-intent] T1 keyword match raised (fail-open): {exc}")
-        t1_code = None
-    if t1_code:
-        return _build_spec(t1_code, norm_query, confidence=0.95, tier="keyword")
-
-    # ── Business-type gate: T2/T3 only for restaurant tenants ──
+    # Natural-language restaurant queries are executable only after the LLM
+    # has produced one structured plan. Keyword/vector stages retrieve a
+    # candidate hint; neither stage may decide the route.
     try:
         if not await _is_restaurant_tenant(pool, factory_id):
             return None
     except Exception as exc:
-        logger.warning(f"[restaurant-intent] tenant gate raised (fail-open, treat as non-restaurant): {exc}")
-        return None
+        logger.warning(f"[restaurant-intent] tenant gate unavailable: {exc}")
+        return _build_spec(
+            "",
+            norm_query,
+            confidence=0.0,
+            tier="llm",
+            planner_authority="tenant_gate_unavailable",
+            clarification_needed=True,
+            clarification_question=(
+                "暂时无法确认餐饮数据范围，本次没有执行任何分析。请稍后重试。"
+            ),
+        )
 
     cached = _cache_get(factory_id, norm_query)
-    if cached is not None:
+    if (
+        cached is not None
+        and cached.get("plan_version") == "restaurant-query-plan-v2"
+        and cached.get("planner_authority") == "llm"
+    ):
         cached_spec = _build_spec(
             cached["code"] or None, norm_query,
-            confidence=cached["confidence"], tier=cached["tier"],
+            confidence=cached["confidence"], tier="plan_cache",
             clarification_needed=cached["clarification_needed"],
             clarification_question=cached["clarification_question"],
             time_phrase=cached.get("time_phrase", ""),
@@ -1129,27 +1185,49 @@ async def parse_restaurant_query(
             llm_asks_profitability=cached.get("llm_asks_profitability", False),
             llm_dish=cached.get("llm_dish"),
             llm_store=cached.get("llm_store"),
+            planner_authority="validated_plan_cache",
         )
         await _maybe_register_pending(pool, norm_query, cached_spec, factory_id, session_key)
         return cached_spec
 
-    # ── T2: vector (code_prefix=RESTAURANT_OPS_, ~30ms, 0 LLM tokens) ──
+    candidate_hint: Optional[Tuple[str, float]] = None
     try:
-        t2_code, t2_sim, t2_hint = await _t2_vector_match(pool, norm_query)
+        t1_code = match_restaurant_ops(norm_query)
     except Exception as exc:
-        logger.warning(f"[restaurant-intent] T2 vector match raised (fail-open): {exc}")
-        t2_code, t2_sim, t2_hint = None, 0.0, None
-    if t2_code:
-        _cache_put(factory_id, norm_query, {
-            "code": t2_code, "confidence": t2_sim, "tier": "vector",
-            "clarification_needed": False, "clarification_question": None,
-        })
-        return _build_spec(t2_code, norm_query, confidence=t2_sim, tier="vector")
+        logger.warning(f"[restaurant-intent] keyword candidate match raised: {exc}")
+        t1_code = None
+    if t1_code:
+        candidate_hint = (t1_code, 0.95)
 
-    # ── T3: LLM structured parse (thinking off, temperature 0, 5s timeout) ──
-    parsed = await _t3_llm_parse(norm_query, hint=t2_hint, history=history)
+    # Vector retrieval is consulted only when the exact candidate layer has
+    # no opinion. A high similarity remains a hint, not an execution permit.
+    try:
+        if candidate_hint is None:
+            t2_code, t2_sim, t2_hint = await _t2_vector_match(pool, norm_query)
+            candidate_hint = (
+                (t2_code, t2_sim)
+                if t2_code
+                else t2_hint
+            )
+    except Exception as exc:
+        logger.warning(f"[restaurant-intent] vector candidate match raised: {exc}")
+
+    parsed = await _t3_llm_parse(norm_query, hint=candidate_hint, history=history)
     if parsed is None:
-        return None  # miss at every tier -> caller falls through, unchanged
+        # Do not fall through to a neighbouring generic intent. The semantic
+        # authority was unavailable, so the only safe response is fail-closed.
+        return _build_spec(
+            "",
+            norm_query,
+            confidence=0.0,
+            tier="llm",
+            planner_authority="llm_unavailable",
+            clarification_needed=True,
+            clarification_question=(
+                "餐饮语义规划暂时不可用，本次没有执行任何相邻分析。"
+                "请稍后重试。"
+            ),
+        )
 
     t3_code = parsed.get("intent")
     if t3_code not in _VALID_CODES:
@@ -1180,6 +1258,8 @@ async def parse_restaurant_query(
         llm_store = _verbatim_entity(parsed.get("store"), norm_query)
         _cache_put(factory_id, norm_query, {
             "code": t3_code, "confidence": t3_confidence, "tier": "llm",
+            "plan_version": "restaurant-query-plan-v2",
+            "planner_authority": "llm",
             "clarification_needed": False, "clarification_question": None,
             "time_phrase": time_phrase,
             "llm_wants_margin": llm_wants_margin,
@@ -1202,6 +1282,8 @@ async def parse_restaurant_query(
         clarification_question = "能再具体说说想看哪方面的数据吗？比如营收、毛利、损耗还是库存盘点。"
     _cache_put(factory_id, norm_query, {
         "code": t3_code or "", "confidence": t3_confidence, "tier": "llm",
+        "plan_version": "restaurant-query-plan-v2",
+        "planner_authority": "llm",
         "clarification_needed": True, "clarification_question": clarification_question,
     })
     spec = _build_spec(
@@ -1226,12 +1308,9 @@ async def _parse_continuation(
     is already normalized (caller: `parse_restaurant_query`) and is the
     user's ANSWER, not the original question.
 
-    Order of attempts (spec section 3 of the 2026-07-08 clarification-loop
-    design): deterministic T1 keyword, then T2 vector -- both against the
-    ORIGINAL question concatenated with this answer (so slot detectors see
-    the full two-turn context, e.g. a "哪家店" dimension mentioned only in
-    the original question) -- and only on a miss there, T3 LLM with
-    `history` carrying both turns.
+    Keyword and vector retrieval run against the original question plus the
+    new answer and supply a candidate hint. The LLM still authorizes the
+    resulting plan, with ``history`` carrying both turns.
 
     Never touches `_ROUTE_CACHE` (a routing decision cached under a single
     utterance would not reflect this two-turn context) and never registers
@@ -1242,38 +1321,59 @@ async def _parse_continuation(
     clarification_question = pending.get("clarification_question")
     concatenated = f"{original_query} {query}".strip()
 
-    # ── deterministic fast path: T1 then T2 on the concatenated text ──
-    try:
-        t1_code = match_restaurant_ops(concatenated)
-    except Exception as exc:
-        logger.warning(f"[restaurant-intent] continuation T1 match raised (fail-open): {exc}")
-        t1_code = None
-    if t1_code:
-        return _build_spec(t1_code, concatenated, confidence=0.95, tier="keyword", is_continuation=True)
-
     try:
         if not await _is_restaurant_tenant(pool, factory_id):
             return None
     except Exception as exc:
-        logger.warning(f"[restaurant-intent] continuation tenant gate raised (fail-open): {exc}")
-        return None
+        logger.warning(f"[restaurant-intent] continuation tenant gate unavailable: {exc}")
+        return _build_spec(
+            "",
+            concatenated,
+            confidence=0.0,
+            tier="llm",
+            planner_authority="tenant_gate_unavailable",
+            clarification_needed=True,
+            clarification_question=(
+                "暂时无法确认餐饮数据范围，本次没有执行任何分析。请稍后重试。"
+            ),
+            is_continuation=True,
+        )
 
+    candidate_hint: Optional[Tuple[str, float]] = None
     try:
-        t2_code, _t2_sim, t2_hint = await _t2_vector_match(pool, concatenated)
+        t1_code = match_restaurant_ops(concatenated)
     except Exception as exc:
-        logger.warning(f"[restaurant-intent] continuation T2 match raised (fail-open): {exc}")
-        t2_code, t2_hint = None, None
-    if t2_code:
-        return _build_spec(t2_code, concatenated, confidence=_t2_sim, tier="vector", is_continuation=True)
+        logger.warning(f"[restaurant-intent] continuation keyword candidate raised: {exc}")
+        t1_code = None
+    if t1_code:
+        candidate_hint = (t1_code, 0.95)
+    else:
+        try:
+            t2_code, t2_sim, t2_hint = await _t2_vector_match(pool, concatenated)
+            candidate_hint = (t2_code, t2_sim) if t2_code else t2_hint
+        except Exception as exc:
+            logger.warning(f"[restaurant-intent] continuation vector candidate raised: {exc}")
 
     # ── T3 with the two-turn history the caller was asked to answer ──
     history = [
         {"role": "user", "content": original_query},
         {"role": "assistant", "content": clarification_question or ""},
     ]
-    parsed = await _t3_llm_parse(query, hint=t2_hint, history=history)
+    parsed = await _t3_llm_parse(query, hint=candidate_hint, history=history)
     if parsed is None:
-        return None  # miss at every tier -> caller falls through, unchanged
+        return _build_spec(
+            "",
+            concatenated,
+            confidence=0.0,
+            tier="llm",
+            planner_authority="llm_unavailable",
+            clarification_needed=True,
+            clarification_question=(
+                "餐饮语义规划暂时不可用，本次没有执行任何相邻分析。"
+                "请稍后重试。"
+            ),
+            is_continuation=True,
+        )
 
     t3_code = parsed.get("intent")
     if t3_code not in _VALID_CODES:
@@ -1291,11 +1391,15 @@ async def _parse_continuation(
         time_phrase = _parse_t3_time_range(parsed.get("time_range"))
         llm_wants_margin = bool(parsed.get("wants_margin"))
         llm_asks_profitability = bool(parsed.get("asks_profitability"))
+        llm_dish = _verbatim_entity(parsed.get("dish"), concatenated)
+        llm_store = _verbatim_entity(parsed.get("store"), concatenated)
         return _build_spec(
             t3_code, concatenated, confidence=t3_confidence, tier="llm",
             time_phrase=time_phrase,
             llm_wants_margin=llm_wants_margin,
             llm_asks_profitability=llm_asks_profitability,
+            llm_dish=llm_dish,
+            llm_store=llm_store,
             is_continuation=True,
         )
 
@@ -1350,6 +1454,9 @@ async def log_intent_capture(
             "clarification_needed": spec.clarification_needed,
             "requested_metrics": list(spec.requested_metrics),
             "planned_intents": list(spec.planned_intents),
+            "plan_version": spec.plan_version,
+            "planner_authority": spec.planner_authority,
+            "plan_hash": spec.plan_hash,
             "unsupported_requirements": list(spec.unsupported_requirements),
             "asks_priority": spec.asks_priority,
             "asks_prohibited_actions": spec.asks_prohibited_actions,

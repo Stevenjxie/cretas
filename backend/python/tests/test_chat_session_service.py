@@ -6,6 +6,7 @@ they skip cleanly otherwise.
 """
 from __future__ import annotations
 
+import json
 import os
 import uuid
 from contextlib import AbstractAsyncContextManager
@@ -19,6 +20,7 @@ from smartbi.services.chat_session_service import (
     ChatSessionService,
     SUMMARY_CHAR_BUDGET,
     build_context_block,
+    compact_structured_context,
     sanitize_for_storage,
     truncate_summary,
 )
@@ -29,6 +31,34 @@ from smartbi.services.chat_session_service import (
 def test_truncate_short_text_unchanged():
     assert truncate_summary("短文本") == "短文本"
     assert truncate_summary("") == ""
+
+
+def test_compact_structured_context_whitelists_focus_entity():
+    context = compact_structured_context({
+        "focus_entity": {
+            "type": "dish",
+            "id": "dish-42",
+            "name": "招牌藤椒味（单人份）",
+            "rank": 1,
+            "untrusted": "drop-me",
+        },
+        "plan_hash": "a" * 64,
+        "plan_version": "restaurant-query-plan-v2",
+        "window_label": "近 30 天",
+        "extra": "drop-me",
+    })
+
+    assert context == {
+        "focus_entity": {
+            "type": "dish",
+            "id": "dish-42",
+            "name": "招牌藤椒味（单人份）",
+            "rank": 1,
+        },
+        "plan_hash": "a" * 64,
+        "plan_version": "restaurant-query-plan-v2",
+        "window_label": "近 30 天",
+    }
 
 
 def test_truncate_under_budget_unchanged():
@@ -269,6 +299,43 @@ async def test_same_factory_users_can_reuse_sid_without_cross_user_disclosure():
     assert user2 and user2["parent_query"] == "u2 q"
     assert missing_user is None
     assert len(pool.conn.rows) == 2
+
+
+@pytest.mark.asyncio
+async def test_upsert_persists_whitelisted_structured_context_in_turn_history():
+    pool = _IdentityContractPool()
+    svc = ChatSessionService(pool)
+
+    await svc.upsert(
+        "sid-context",
+        "FACTORY_A",
+        "哪个菜卖得好",
+        "招牌菜销量第一",
+        parent_template_code="RESTAURANT_OPS_GROSS_MARGIN",
+        user_id=77,
+        structured_context={
+            "focus_entity": {
+                "type": "dish",
+                "id": "dish-42",
+                "name": "招牌菜",
+                "rank": 1,
+                "drop": "untrusted",
+            },
+            "plan_hash": "a" * 64,
+            "plan_version": "restaurant-query-plan-v2",
+            "drop": "untrusted",
+        },
+    )
+
+    row = pool.conn.rows[("FACTORY_A", 77, "sid-context")]
+    turns = json.loads(row["turns_history"])
+    assert turns[0]["context"]["focus_entity"] == {
+        "type": "dish",
+        "id": "dish-42",
+        "name": "招牌菜",
+        "rank": 1,
+    }
+    assert "drop" not in turns[0]["context"]
 
 
 @pytest.mark.asyncio

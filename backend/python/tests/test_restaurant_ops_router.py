@@ -1532,6 +1532,23 @@ def _gross_margin_pool(rows):
     return _Pool()
 
 
+def test_dish_ranking_emits_typed_focus_entity():
+    result = asyncio.run(_r.resolve_gross_margin(
+        _gross_margin_pool(_dish_rows()),
+        "RES_TEST",
+        role="restaurant_manager",
+        query="哪个菜卖得最好",
+    ))
+
+    assert result.meta["focus_entity"] == {
+        "type": "dish",
+        "id": 1,
+        "name": "米饭(单人份)",
+        "rank": 1,
+    }
+    assert result.meta["ranked_entities"][1]["id"] == 2
+
+
 def test_named_unknown_dish_declines_without_ranking():
     result = asyncio.run(_r.resolve_gross_margin(
         _gross_margin_pool(_dish_rows()), "RES_TEST",

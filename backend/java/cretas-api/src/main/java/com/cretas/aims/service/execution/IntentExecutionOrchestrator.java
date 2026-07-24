@@ -374,6 +374,7 @@ public class IntentExecutionOrchestrator {
         }
         if (!factoryPackConstrained
                 && userInput != null && !userInput.isEmpty()
+                && !(tieredFirstEnabled && isRestaurantTenant(factoryId))
                 && !hasExplicitReadVeto(userInput)
                 && !shouldBypassEarlyPhraseShortcutForStoreReference(userInput)
                 && !isRestaurantCompoundQuestion(factoryId, userInput)) {
@@ -464,6 +465,7 @@ public class IntentExecutionOrchestrator {
         // produce consistent routing).
         if (!factoryPackConstrained
                 && !negationVetoWrite && userInput != null && !userInput.isEmpty()
+                && !(tieredFirstEnabled && isRestaurantTenant(factoryId))
                 && !shouldBypassEarlyPhraseShortcutForStoreReference(userInput)) {
             IntentMatchResult restaurantOpsMatch = tryRestaurantOpsPhraseShortcut(userInput, factoryId);
             if (restaurantOpsMatch != null && restaurantOpsMatch.hasMatch()) {
@@ -500,9 +502,12 @@ public class IntentExecutionOrchestrator {
                 // 短路 — 放行到 tiered 反转, Python 给餐饮语境的域外诚实拒答;
                 // 此处执行会落到工厂措辞的通用助手回复。
                 if (isRestaurantTenant(factoryId)
-                        && "OUT_OF_DOMAIN".equals(phraseIntent.getIntentCode())) {
-                    log.info("[Sprint12-CacheFix-EarlyPhrase] restaurant OUT_OF_DOMAIN 放行反转: input='{}'",
-                            userInput);
+                        && (
+                            "OUT_OF_DOMAIN".equals(phraseIntent.getIntentCode())
+                            || phraseIntent.getIntentCode().startsWith("RESTAURANT_OPS_")
+                        )) {
+                    log.info("[RestaurantQueryPlan] restaurant phrase candidate 放行语义规划: input='{}', candidate={}",
+                            userInput, phraseIntent.getIntentCode());
                 } else {
                 log.info("[Sprint12-CacheFix-EarlyPhrase] Pre-continuation phrase shortcut: input='{}', intentCode={}",
                         userInput, phraseIntent.getIntentCode());
@@ -525,8 +530,18 @@ public class IntentExecutionOrchestrator {
             }
         }
 
-        // 0.3. 多轮对话延续 (runs AFTER phrase shortcut per Sprint 12 cache-fix Phase C)
+        boolean requiresRestaurantSemanticPlan = tieredFirstEnabled
+                && !factoryPackConstrained
+                && !Boolean.TRUE.equals(request.getPreviewOnly())
+                && isRestaurantTenant(factoryId)
+                && userInput != null && !userInput.isEmpty()
+                && !RESTAURANT_WRITE_VERB.matcher(userInput).find();
+
+        // Parameter-filling continuations stay in Java. Read-only restaurant
+        // follow-ups go to the semantic planner below so their typed context
+        // cannot be reinterpreted by the legacy conversation matcher.
         if (!factoryPackConstrained
+                && !requiresRestaurantSemanticPlan
                 && request.getSessionId() != null && !request.getSessionId().isEmpty()) {
             IntentExecuteResponse conversationResponse = handleConversationContinuation(
                     factoryId, request, userId, userRole);
@@ -535,30 +550,23 @@ public class IntentExecutionOrchestrator {
             }
         }
 
-        // 0.35. R16 tiered-first 反转 (餐饮租户默认): 分析类问题先问 Python
-        // tiered 路由, 命中即答。此前是 Java 误匹配工具兜底、十几个 gate 逐点
-        // 摆渡 ("三点齐活"脆弱链); 反转后 gate 退化为非反转路径 (显式
-        // intentCode / SSE) 的保险, 并经 ATTEMPTED_CONTEXT_KEY 去重, 同一
-        // 请求不会二次调用 Python。放在会话延续之后, 不打断参数收集续轮;
-        // 写操作动词的问句不拦, 保留原参数收集/确认流程。
-        if (tieredFirstEnabled
-                && !factoryPackConstrained
-                && !Boolean.TRUE.equals(request.getPreviewOnly())
-                && isRestaurantTenant(factoryId)
-                && userInput != null && !userInput.isEmpty()
-                && !RESTAURANT_WRITE_VERB.matcher(userInput).find()) {
+        // Restaurant read-only natural language has one semantic authority:
+        // Python emits an immutable QueryPlan or an explicit clarification.
+        // Write verbs stay in Java's parameter/confirmation flow.
+        if (requiresRestaurantSemanticPlan) {
             IntentExecuteResponse tieredFirst =
                     tryRestaurantTieredDelegate(factoryId, userInput, request);
             if (tieredFirst != null) {
                 log.info("[Branch:TieredFirst] 反转入口命中: factoryId={}", factoryId);
                 return tieredFirst;
             }
-            if (request.getContext() == null) {
-                request.setContext(new HashMap<>());
-            }
-            request.getContext().put(
-                    com.cretas.aims.ai.tool.impl.restaurant.TieredIntentDelegate.ATTEMPTED_CONTEXT_KEY,
-                    Boolean.TRUE);
+            log.warn("[Branch:TieredFirst] restaurant semantic planner unavailable; fail closed: factoryId={}",
+                    factoryId);
+            return buildRestaurantDeterministicResponse(
+                    request,
+                    "NEED_CLARIFICATION",
+                    true,
+                    "餐饮语义规划暂时不可用，本次没有执行任何分析。请稍后重试。");
         }
 
         // 0.3. 早期问题类型检测
@@ -629,8 +637,7 @@ public class IntentExecutionOrchestrator {
                     : buildNoMatchResponse(matchResult, factoryId, request, userId, userRole);
         }
 
-        AIIntentConfig intent = remapRestaurantStoreMarginIntentIfNeeded(
-                factoryId, userInput, matchResult, matchResult.getBestMatch());
+        AIIntentConfig intent = matchResult.getBestMatch();
         log.info("识别到意图: code={}, category={}, sensitivity={}, matchMethod={}, confidence={}",
                 intent.getIntentCode(), intent.getIntentCategory(), intent.getSensitivityLevel(),
                 matchResult.getMatchMethod(), matchResult.getConfidence());
@@ -1697,6 +1704,18 @@ public class IntentExecutionOrchestrator {
         delegatedData.put("charts", delegated.getOrDefault("charts", java.util.List.of()));
         delegatedData.put("kpis", delegated.getOrDefault("kpis", java.util.List.of()));
         delegatedData.put("source", "restaurant_ops_gold");
+        if (delegated.get("suggestedFollowups") != null) {
+            delegatedData.put("suggestedFollowups", delegated.get("suggestedFollowups"));
+        }
+        if (delegated.get("contractPass") != null) {
+            delegatedData.put("contractPass", delegated.get("contractPass"));
+        }
+        if (delegated.get("queryPlanHash") != null) {
+            delegatedData.put("queryPlanHash", delegated.get("queryPlanHash"));
+        }
+        if (delegated.get("executedResolvers") != null) {
+            delegatedData.put("executedResolvers", delegated.get("executedResolvers"));
+        }
         return IntentExecuteResponse.builder()
                 .intentRecognized(true)
                 .intentCode(delegated.get("code") != null ? delegated.get("code").toString() : null)
@@ -1743,12 +1762,10 @@ public class IntentExecutionOrchestrator {
                 && RESTAURANT_COMPOUND_PATTERN.matcher(userInput).find();
     }
 
-    private static boolean isRestaurantTenant(String factoryId) {
-        if (factoryId == null) {
-            return false;
-        }
-        String normalized = factoryId.trim().toUpperCase();
-        return "DEMO_REST".equals(normalized) || normalized.startsWith("RES_");
+    private boolean isRestaurantTenant(String factoryId) {
+        return isRestaurantOwnerActionFactory(
+                factoryId,
+                resolveFactoryDomainSafe(factoryId));
     }
 
     private IntentExecuteResponse executeAnalysisFlow(String factoryId, String userInput,
@@ -2392,42 +2409,6 @@ public class IntentExecutionOrchestrator {
                 .sessionId(request != null ? request.getSessionId() : null)
                 .executedAt(LocalDateTime.now())
                 .build();
-    }
-
-    AIIntentConfig remapRestaurantStoreMarginIntentIfNeeded(
-            String factoryId,
-            String userInput,
-            IntentMatchResult matchResult,
-            AIIntentConfig currentIntent) {
-        if (currentIntent == null
-                || "RESTAURANT_OPS_STORE_MARGIN".equals(currentIntent.getIntentCode())
-                || !isRestaurantOwnerActionFactory(factoryId, resolveFactoryDomainSafe(factoryId))
-                || userInput == null
-                || !containsAny(userInput, "毛利", "毛利率", "利润", "利润率")
-                || matchResult == null
-                || matchResult.getPreprocessedQuery() == null
-                || matchResult.getPreprocessedQuery().getResolvedReferences() == null) {
-            return currentIntent;
-        }
-        boolean hasResolvedStore = matchResult.getPreprocessedQuery().getResolvedReferences().values().stream()
-                .anyMatch(ref -> ref != null && "STORE".equalsIgnoreCase(ref.getEntityType()));
-        boolean hasReferenceWording = STORE_REFERENCE_PATTERN.matcher(userInput).find()
-                || userInput.contains("它")
-                || userInput.contains("沿用刚才的门店");
-        if (!hasResolvedStore || !hasReferenceWording) {
-            return currentIntent;
-        }
-        Optional<AIIntentConfig> storeMarginIntent = getIntentByCodeWithPlatformFallback(
-                factoryId, "RESTAURANT_OPS_STORE_MARGIN");
-        if (storeMarginIntent.isEmpty()) {
-            return currentIntent;
-        }
-        AIIntentConfig remapped = storeMarginIntent.get();
-        matchResult.setBestMatch(remapped);
-        matchResult.setRequiresConfirmation(false);
-        log.info("[RestaurantStoreFollowup] resolved STORE reference remapped intent {} -> {}",
-                currentIntent.getIntentCode(), remapped.getIntentCode());
-        return remapped;
     }
 
     IntentExecuteResponse buildStoreReferenceClarificationResponse(IntentExecuteRequest request) {

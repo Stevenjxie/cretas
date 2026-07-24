@@ -26,6 +26,7 @@ _ELEMENT_LABELS_CN = {
     "comparison": "您要求的对比周期和高低结论",
     "margin_integrity": "毛利与营收的一致口径校验",
     "request_coverage": "问题中要求的全部指标和动作",
+    "execution_consistency": "语义计划与实际执行范围",
 }
 
 
@@ -230,6 +231,26 @@ def _request_coverage_present(
     return True
 
 
+def _execution_consistency_present(
+    spec: RestaurantQuerySpec,
+    meta: Optional[Dict[str, Any]],
+) -> bool:
+    if spec.plan_version != "restaurant-query-plan-v2":
+        return True
+    payload = meta or {}
+    executed = payload.get("executed_resolvers")
+    return bool(
+        spec.plan_hash
+        and payload.get("query_plan_version") == spec.plan_version
+        and payload.get("query_plan_hash") == spec.plan_hash
+        and payload.get("planner_authority") in ("llm", "validated_plan_cache")
+        and isinstance(executed, list)
+        and tuple(executed) == tuple(spec.planned_intents)
+        and payload.get("execution_plan_match") is True
+        and payload.get("scope_matches_request") is True
+    )
+
+
 # 2026-07-08 audit fix A-3: resolver 能力表 —— 契约只要求 resolver 真正能满足
 # 的元素。8 码里只有 SALES_SUMMARY 的 resolver 接受 query 并按解析出的时间窗
 # 取数/回显; 只有下面三个能产出毛利金额与盈亏判断。对其余 resolver 提这些
@@ -256,6 +277,8 @@ def required_elements(spec: RestaurantQuerySpec) -> List[str]:
     permanent disclaimer, which trains users to ignore disclaimers.
     """
     elements: List[str] = []
+    if spec.plan_version == "restaurant-query-plan-v2":
+        elements.append("execution_consistency")
     if (
         spec.intent in WINDOW_CAPABLE_INTENTS
         and (spec.relative_window or spec.window_label != "全部历史")
@@ -341,5 +364,8 @@ def validate(
                 missing.append(element)
         elif element == "request_coverage":
             if not _request_coverage_present(spec, text, meta):
+                missing.append(element)
+        elif element == "execution_consistency":
+            if not _execution_consistency_present(spec, meta):
                 missing.append(element)
     return ContractResult(missing=missing)

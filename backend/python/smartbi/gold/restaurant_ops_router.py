@@ -2050,12 +2050,26 @@ async def resolve_gross_margin(
         lines.append(
             f"> 仅统计窗口内有销售记录的 {len(rankable_rows)} 道菜品{note}；未售出的菜品不在榜内。"
         )
+        ranked_entities = [
+            {
+                "type": "dish",
+                "id": row.get("product_id"),
+                "name": row["dish_name"],
+                "rank": index,
+            }
+            for index, row in enumerate(ranked[:5], 1)
+        ]
         return OpsAnswer(
             code="RESTAURANT_OPS_GROSS_MARGIN",
             title=f"菜品销量排行（{rank_label}）",
             answer_text="\n".join(lines),
             charts=[], kpis=[],
-            meta={"dish_ranking": ranking_direction, "window_label": window_label},
+            meta={
+                "dish_ranking": ranking_direction,
+                "window_label": window_label,
+                "ranked_entities": ranked_entities,
+                "focus_entity": ranked_entities[0] if ranked_entities else None,
+            },
         )
 
     # Step 2: look up cretas product_types by name (primary) + dim_product_alias (fallback).

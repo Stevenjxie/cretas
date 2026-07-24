@@ -177,7 +177,9 @@ def _configure_cached_tiered_result(monkeypatch, intent_code, clarification_need
         lambda *_args: {
             "code": intent_code,
             "confidence": 0.91,
-            "tier": "vector",
+            "tier": "llm",
+            "plan_version": "restaurant-query-plan-v2",
+            "planner_authority": "llm",
             "clarification_needed": clarification_needed,
             "clarification_question": (
                 "trusted clarification only" if clarification_needed else None
@@ -339,6 +341,7 @@ async def test_stream_invalid_trusted_user_disables_both_tiered_clarification_pa
         chat_mod.GeneralAnalysisRequest(
             query=f"tiered {tiered_path} without trusted user",
             session_id="shared-device-session",
+            table_type="restaurant_ops",
             allow_tenant_data_fallback=False,
         ),
         _Request("F001", user_id=user_id, role="operator"),
@@ -400,3 +403,50 @@ async def test_stream_invalid_trusted_user_disables_session_lookup_and_writeback
 
     assert "role-safe answer" in body
     assert 'event: done' in body
+
+
+async def test_restaurant_trend_uses_query_plan_before_legacy_trend_shortcut(monkeypatch):
+    async def _pool():
+        return object()
+
+    async def _tiered(*_args, **_kwargs):
+        return {
+            "kind": "answer",
+            "answer_text": "query-plan trend answer",
+            "charts": [],
+            "kpis": [],
+            "code": "RESTAURANT_OPS_TREND_ANALYSIS",
+            "contract_pass": True,
+            "query_plan_hash": "plan-stream-trend",
+            "executed_resolvers": ["RESTAURANT_OPS_TREND_ANALYSIS"],
+            "suggested_followups": [],
+        }
+
+    async def _legacy_resolver(*_args, **_kwargs):
+        pytest.fail("explicit restaurant requests must not use the legacy trend shortcut")
+
+    monkeypatch.setattr("smartbi.config.get_pg_pool", _pool)
+    monkeypatch.setattr(
+        "smartbi.gold.restaurant_ops_router.reconcile_restaurant_ops_code",
+        lambda *_args, **_kwargs: "RESTAURANT_OPS_TREND_ANALYSIS",
+    )
+    monkeypatch.setattr(
+        "smartbi.gold.restaurant_ops_router.resolve_by_code",
+        _legacy_resolver,
+    )
+    monkeypatch.setattr(chat_mod, "_try_tiered_restaurant_intent", _tiered)
+
+    response = await chat_mod.general_analysis_stream(
+        chat_mod.GeneralAnalysisRequest(
+            query="做同比和环比趋势分析",
+            table_type="restaurant_ops",
+            allow_tenant_data_fallback=False,
+        ),
+        _Request("F001", user_id="7", role="restaurant_manager"),
+    )
+    body = await _consume_stream(response)
+
+    assert "query-plan trend answer" in body
+    assert '"template_code": "RESTAURANT_OPS_TREND_ANALYSIS"' in body
+    assert '"queryPlanHash": "plan-stream-trend"' in body
+    assert '"executedResolvers": ["RESTAURANT_OPS_TREND_ANALYSIS"]' in body
