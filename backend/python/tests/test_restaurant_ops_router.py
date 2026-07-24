@@ -478,7 +478,8 @@ def test_sales_summary_all_history_locks_margin_to_actual_revenue_scope(monkeypa
 
     assert captured["date_range"] == (date(2026, 1, 1), date(2026, 3, 1))
     assert captured["days"] == 60
-    assert "总营收 ¥100,000.00" in answer.answer_text
+    # markdown typography (2026-07-24): headline figures are bolded
+    assert "总营收 **¥100,000.00**" in answer.answer_text
     assert "可计算毛利的营收 ¥30,000.00" in answer.answer_text
     assert "已覆盖部分毛利率 80.0%" in answer.answer_text
     assert answer.meta["margin"]["outer_window_start"] == "2026-01-01"
@@ -530,7 +531,8 @@ def test_sales_summary_uses_current_calendar_for_comparison_not_latest_data_date
     ]
     assert "2026-07-20" in ans.answer_text
     assert "2026-07-19" in ans.answer_text
-    assert "营收高 ¥2,000.00（20.0%）" in ans.answer_text
+    # markdown typography (2026-07-24): comparison delta is bolded
+    assert "营收高 **¥2,000.00**（20.0%）" in ans.answer_text
     assert ans.meta["comparison"]["answered"] is True
     assert ans.meta["comparison"]["revenue_delta"] == 2000.0
 
@@ -1178,8 +1180,9 @@ def test_store_margin_comparison_uses_both_exact_date_ranges(monkeypatch):
     ))
     assert "2026-07-20 至 2026-07-21" in result.answer_text
     assert "2026-07-18 至 2026-07-19" in result.answer_text
-    assert "毛利为 ¥1,000.00" in result.answer_text
-    assert "毛利为 ¥500.00" in result.answer_text
+    # markdown typography (2026-07-24): the two period profits are bolded
+    assert "毛利为 **¥1,000.00**" in result.answer_text
+    assert "毛利为 **¥500.00**" in result.answer_text
     assert "营业额" not in result.answer_text
     assert result.meta["comparisonComplete"] is True
     date_args = [args[2:4] for query, args in connection.calls if "$5::text" in query]
@@ -1595,8 +1598,9 @@ def test_dish_scoped_answer_prepends_sales_header():
         role="restaurant_manager", query="米饭的销量是多少",
     ))
     assert result.answer_text.startswith("「米饭(单人份)」")
-    assert "销量 100 份" in result.answer_text
-    assert "营收 ¥500.00" in result.answer_text
+    # markdown typography (2026-07-24): dish headline figures are bolded
+    assert "销量 **100 份**" in result.answer_text
+    assert "营收 **¥500.00**" in result.answer_text
     assert result.meta.get("targetDish") == "米饭(单人份)"
 
 

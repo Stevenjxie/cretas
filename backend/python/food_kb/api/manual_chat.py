@@ -62,7 +62,8 @@ _QUERY_EXPANSIONS: Dict[str, str] = {
     "复购率": "复购率 复购 重复消费 retention",
     "新客占比": "新客占比 新客 拉新 first time",
     # 财务结构
-    "毛利率": "毛利率 毛利 gross margin 毛利润",
+    "毛利率": "毛利率 毛利 gross margin 毛利润 总毛利率 单菜毛利 参考值 权威口径",
+    "毛利": "毛利 毛利率 总毛利率 单菜毛利 参考值 权威口径 倒算 成本卡",
     "食材率": "食材率 食材成本率 cost of goods 原料率",
     "人力成本": "人力成本 工资率 人工率 labor cost",
     "充卡": "充卡 储值 储值卡 预收 预付 充卡依赖度",
@@ -140,6 +141,21 @@ _PRODUCTION_SOP_KEYWORDS = frozenset({
     "生产计划", "存货生产", "销售订单", "报工", "结单", "小结", "停产", "成本",
     "入库", "出库", "库存", "仓库", "调拨", "采购", "盘点", "审批", "冲销",
 })
+_BOM_WORKFLOW_SEQUENCE_TRIGGERS = frozenset({
+    "激活", "发布", "启用", "顺序", "前置", "依赖", "为什么还不能",
+})
+_BOM_WORKFLOW_SEQUENCE_ANSWER = """\
+完整强制顺序是：Workflow 完整草稿 → BOM 绑定工序辅料并激活 → Workflow 刷新、发布并启用。
+
+ACTIVE BOM 是 Workflow 发布启用的前置门禁，但 BOM 激活本身不会自动发布 Workflow。BOM 已激活仍不能发布，说明 Workflow 自身的发布门禁还未全部通过。
+
+**操作步骤：**
+1. 进入生产管理 → 生产配置 → 产品-工序配置，打开目标 SKU 的 Workflow 草稿。
+2. 确认草稿链路完整，所有 Cell 已绑定有效 SKU，终端成品与顶部归属一致，关联工序处于启用状态。
+3. 刷新并确认页面引用的是当前 ACTIVE BOM，且没有单位复核或旧草稿警告。
+4. 重新校验后执行发布并启用。
+
+**验收结果：** 页面同时显示“已发布 vX”和“已启用 vX”；若仍失败，按页面列出的具体缺失项逐项修正，不能绕过门禁。"""
 
 
 def _uses_current_production_sop(query: str) -> bool:
@@ -151,6 +167,16 @@ def _uses_current_production_sop(query: str) -> bool:
     """
     normalized = (query or "").lower()
     return any(keyword.lower() in normalized for keyword in _PRODUCTION_SOP_KEYWORDS)
+
+
+def _needs_bom_workflow_sequence_guard(query: str) -> bool:
+    """Use the reviewed deterministic answer for the critical publish gate."""
+    normalized = (query or "").lower()
+    return (
+        "bom" in normalized
+        and "workflow" in normalized
+        and any(trigger in normalized for trigger in _BOM_WORKFLOW_SEQUENCE_TRIGGERS)
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -253,6 +279,7 @@ SYSTEM_PROMPT = """\
 1. 【严格基于检索】只能根据"检索到的相关内容"回答；检索片段没明确提及的具体路径、按钮名、功能名，绝对不要编造或推断。**但技术保密规则优先于本条**：检索片段里的 IP/端口/技术栈即使存在也不能复述。
 2. 【跨域功能识别】如果问题涉及的功能在检索片段中完全没出现（例如餐饮版用户问"生产批次"、"工序报工"、"BOM 配方"等工厂功能；工厂版用户问"翻台率"、"会员卡"、"外卖运营"等餐饮功能），必须**第一句话**明确说："该功能在当前选择的版本（餐饮版 / 工厂版）操作手册中未记录。如果您使用的是另一个版本，请点击右上角『切换类型』。" 然后停止，不要继续给步骤或路径。  # noqa: E501
 3. 【路径来源】所有"进入 X → Y → Z"的菜单路径必须来自检索片段原文；如果片段里没有具体路径，宁可写"请在系统中找对应模块"，也不要编造路径名。
+3c. 【口径冲突裁决】检索片段中带「权威口径」「重要口径」「口径提醒」「必读」标记的内容是最高裁决依据。当它与其他片段（或你的常识）冲突时，必须以标记片段为准。特别是能力边界类问题（"能不能精确算出X"、"是不是自动的"）：除非权威口径片段明确说支持，否则绝不宣称系统"精确/自动/实时"具备该能力；已知硬口径——中餐单菜毛利率是理论参考值（成本BOM卡现实拉不齐），可信口径是期间总毛利率（期初库存+采购−期末库存倒算）。绝不编造检索片段中不存在的开关、按钮、功能名。
 3b. 【禁止计算与数据分析】你是导览与教学助手，不做数值计算、报表汇总、多行数据分析，也不分析用户粘贴/上传的业务数据（明细表、流水、多条记录）。遇到"帮我算/汇总/分析一下(某批数据)"类请求，回答口径：本助手负责解释板块、图表与分析方法；具体数据分析请在系统内对应分析板块（餐饮版：SmartBI 智能数据分析 AI Query；工厂版：对应报表/分析模块）中提问，并告诉用户该去哪个板块、建议怎么问。例外：下方"诊断型问题处理"允许对用户口述的单个指标值做基准对照判断，这不算数据分析。
 4. 系统名称统一用「白垩纪 AI Agent」
 5. 不使用 emoji，保持专业简洁
@@ -324,6 +351,7 @@ FACTORY_SYSTEM_PROMPT = """\
 - 成品的 1盒=800克由 SKU 继承；Workflow 不另写 1kg=1盒 或 1袋=1盒。
 - 面向用户统一说“投入单位 / 产出单位”，不要使用“端口”这个词。
 - Workflow 冲突在生产计划选择成品时按终端产出集合解析；完全匹配优先，其次最小超集，同级重叠必须由用户查看工序链预览后选择。
+- BOM 与 Workflow 的强制顺序是“Workflow 完整草稿 → BOM 绑定工序辅料并激活 → Workflow 刷新、发布并启用”。ACTIVE BOM 是 Workflow 发布启用的前置门禁；禁止回答“两者无依赖”“两者无从属关系”或“先发布 Workflow 再激活 BOM”。
 - 报工、生产结单、仓库确认完工入库、生产仓到主仓/外仓调拨是不同动作，不能互相冒充完成。
 - 副产物在具体报工中记录，不要求为副产物单独建立 Workflow。
 - 人工成本来自本道实际工时乘全局工时单价；工序主档的高级设置不是本轮成本真值。
@@ -783,6 +811,27 @@ async def manual_chat(request: ManualChatRequest) -> dict:
 
     context_text_with_hint = context_text + confidence_hint
 
+    # ------ 硬口径注入: 毛利精确性/能力边界 (2026-07-24) ------
+    # 弱模型会无视片段中的口径警示、按旧手册理想化表述宣称"精确单菜毛利"。
+    # 命中能力边界问法时确定性注入最高优先级口径指令, 不依赖检索排名。
+    _MARGIN_TRIGGERS = ("精确", "每一", "每个菜", "每道菜", "单菜", "加权", "算出", "智能算", "自动算", "算得出", "算不出")
+    if is_restaurant_request and "毛利" in request.question and any(
+        t in request.question for t in _MARGIN_TRIGGERS
+    ):
+        context_text_with_hint += (
+            "\n\n【权威口径指令 — 最高优先级，覆盖以上所有片段】用户在问毛利的计算能力边界。"
+            "必须按以下口径回答，即使检索片段中出现『系统自动计算单菜毛利率』等表述，"
+            "也不得宣称能精确算到每一道菜：\n"
+            "1. 中餐场景单菜精确毛利算不出来：用料灵活（手勺下料、共用料、损耗难分摊），"
+            "成本 BOM 配方卡现实中拉不齐拉不准。系统的单菜毛利率是基于已维护配方的【理论参考值】，"
+            "依赖配方覆盖率与采购价新鲜度。\n"
+            "2. 可信的权威口径是【一段时间的总毛利率】：食材成本 = 期初库存 + 本期采购 − 期末库存（倒算法），"
+            "总毛利率 = (营业额 − 食材成本) ÷ 营业额，只依赖进货与盘点数据准确，不依赖每道菜的配方。\n"
+            "3. 菜品平均毛利率与四象限的毛利轴用的是单菜理论参考值，适合菜品间相对比较，不是精确财务数字。\n"
+            "4. 回答结构：先明确说单菜精确毛利算不准及原因 → 给期间总毛利率权威口径 → "
+            "说明单菜参考值的适用范围与前提（配方覆盖率不足先补 Top 销量菜配方）。"
+        )
+
     # ------ Improvement #4: structured system prompt ------
     system_prompt = SYSTEM_PROMPT if is_restaurant_request else FACTORY_SYSTEM_PROMPT
     messages = [{"role": "system", "content": system_prompt}]
@@ -806,27 +855,36 @@ async def manual_chat(request: ManualChatRequest) -> dict:
     # ------ Improvement #5: adaptive max_tokens ------
     max_tokens = _estimate_max_tokens(request.question)
 
-    # Answer via call_chain(SLOT.CHAT): 免费 fallback 链 + 熔断。删 KB-chat 原
-    # DeepSeek 直连分支 (绕过免费链 + DeepSeek 余额硬失败风险); model 由 router 注入。
-    try:
-        from common.llm_router import call_chain, SLOT
-        from common.llm_metrics import llm_caller_context
+    if (
+        not is_restaurant_request
+        and _needs_bom_workflow_sequence_guard(request.question)
+    ):
+        # This publication gate is safety-critical and has one reviewed answer.
+        # Keep retrieval for source evidence, but do not let model variance invert
+        # or omit the mandatory Workflow → BOM → Workflow sequence.
+        answer = _BOM_WORKFLOW_SEQUENCE_ANSWER
+    else:
+        # Answer via call_chain(SLOT.CHAT): 免费 fallback 链 + 熔断。删 KB-chat 原
+        # DeepSeek 直连分支 (绕过免费链 + DeepSeek 余额硬失败风险); model 由 router 注入。
+        try:
+            from common.llm_router import call_chain, SLOT
+            from common.llm_metrics import llm_caller_context
 
-        payload = {
-            "messages": messages,
-            "max_tokens": max_tokens,
-            "temperature": 0.3,
-            "enable_thinking": False,
-        }
-        with llm_caller_context("food_kb.manual_chat.answer"):
-            data = await call_chain(SLOT.CHAT, payload, timeout=30.0)
-        answer = data["choices"][0]["message"]["content"]
-    except Exception as e:
-        logger.error(f"LLM call failed: {e}")
-        if context_parts:
-            answer = f"AI 服务暂时不可用，以下是检索到的相关内容：\n\n{context_parts[0]}"
-        else:
-            answer = "抱歉，暂时无法回答您的问题。请查看操作手册对应章节。"
+            payload = {
+                "messages": messages,
+                "max_tokens": max_tokens,
+                "temperature": 0.3,
+                "enable_thinking": False,
+            }
+            with llm_caller_context("food_kb.manual_chat.answer"):
+                data = await call_chain(SLOT.CHAT, payload, timeout=30.0)
+            answer = data["choices"][0]["message"]["content"]
+        except Exception as e:
+            logger.error(f"LLM call failed: {e}")
+            if context_parts:
+                answer = f"AI 服务暂时不可用，以下是检索到的相关内容：\n\n{context_parts[0]}"
+            else:
+                answer = "抱歉，暂时无法回答您的问题。请查看操作手册对应章节。"
 
     response = {
         "success": True,

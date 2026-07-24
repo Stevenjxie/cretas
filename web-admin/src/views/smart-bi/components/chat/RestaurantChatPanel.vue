@@ -21,7 +21,12 @@ import { ElInput, ElButton, ElMessage, ElMessageBox } from 'element-plus';
 import ChatBubble from './ChatBubble.vue';
 import ChatTypingIndicator from './ChatTypingIndicator.vue';
 import GrossMarginDeclineRun from './GrossMarginDeclineRun.vue';
-import { askRestaurantSynthesis, sendRestaurantAnswerFeedback } from '@/api/smartbi/restaurant-synthesis';
+import {
+  askRestaurantSynthesis,
+  askRestaurantSynthesisStream,
+  sendRestaurantAnswerFeedback,
+} from '@/api/smartbi/restaurant-synthesis';
+import type { RestaurantSynthesisResult } from '@/api/smartbi/restaurant-synthesis';
 import type { ChatTurn } from '@/types/restaurant-chat';
 
 // This panel answers over the store's whole real 经营 dataset (backend derives
@@ -46,6 +51,32 @@ const chatContainer = ref<HTMLElement | null>(null);
 // (smartbi.services.chat_session_service.ChatSessionService). Reset on
 // clearConversation — a fresh conversation should not inherit old context.
 const sessionId = ref<string>(crypto.randomUUID());
+// Streaming status line ("正在读取经营数据…") shown while the in-flight AI
+// turn has no content yet. Cleared on first chunk / done / error.
+const streamStatus = ref('');
+
+/** Throttle window for flushing streamed chunks into the reactive turn —
+ * ChatBubble re-parses markdown on every content change, so batch ~80ms. */
+const STREAM_FLUSH_MS = 80;
+
+function pushErrorTurn(errMsg: string) {
+  turns.value.push({
+    id: crypto.randomUUID(),
+    role: 'ai',
+    content: `**请求失败**\n\n${errMsg}`,
+    timestamp: Date.now(),
+    error: errMsg,
+  });
+  ElMessage.error('聊天请求失败: ' + errMsg);
+}
+
+function applyResult(turn: ChatTurn, response: RestaurantSynthesisResult, query: string) {
+  turn.content = response.answer || turn.content || '已完成分析';
+  turn.charts = response.charts;
+  turn.alerts = response.alerts;
+  turn.source = response.source;
+  turn.sourceQuery = query;
+}
 
 async function sendMessage(text?: string) {
   const query = (text ?? inputText.value).trim();
@@ -62,47 +93,83 @@ async function sendMessage(text?: string) {
   await scrollToBottom();
 
   isTyping.value = true;
-  try {
-    const response = await askRestaurantSynthesis(query, sessionId.value);
+  streamStatus.value = '';
 
-    if (!response.success) {
-      // Honest failure: show the real backend/network message, never a
-      // silently-degraded fake answer (禁止降级处理 / api-response-handling).
-      const errMsg = response.error || '分析失败，请稍后重试';
-      turns.value.push({
-        id: crypto.randomUUID(),
-        role: 'ai',
-        content: `**请求失败**\n\n${errMsg}`,
-        timestamp: Date.now(),
-        error: errMsg,
-      });
-      ElMessage.error('聊天请求失败: ' + errMsg);
+  // Create the AI turn immediately — chunks stream into it progressively.
+  const aiTurn: ChatTurn = {
+    id: crypto.randomUUID(),
+    role: 'ai',
+    content: '',
+    timestamp: Date.now(),
+  };
+  turns.value.push(aiTurn);
+
+  let receivedChunk = false;
+  let pendingChunk = '';
+  let flushTimer: ReturnType<typeof setTimeout> | undefined;
+  const flushChunks = () => {
+    flushTimer = undefined;
+    if (!pendingChunk) return;
+    aiTurn.content += pendingChunk;
+    pendingChunk = '';
+    void scrollToBottom();
+  };
+
+  try {
+    const doneHolder: { result: RestaurantSynthesisResult | null } = { result: null };
+    await askRestaurantSynthesisStream(query, sessionId.value, {
+      onStatus: (statusText) => {
+        if (!receivedChunk) streamStatus.value = statusText;
+      },
+      onChunk: (chunk) => {
+        receivedChunk = true;
+        streamStatus.value = '';
+        pendingChunk += chunk;
+        if (flushTimer === undefined) {
+          flushTimer = setTimeout(flushChunks, STREAM_FLUSH_MS);
+        }
+      },
+      onCharts: (charts) => {
+        if (charts.length) aiTurn.charts = charts;
+      },
+      onDone: (result) => {
+        doneHolder.result = result;
+      },
+    });
+    if (flushTimer !== undefined) clearTimeout(flushTimer);
+    flushChunks();
+    if (doneHolder.result) {
+      applyResult(aiTurn, doneHolder.result, query);
     } else {
-      turns.value.push({
-        id: crypto.randomUUID(),
-        role: 'ai',
-        content: response.answer || '已完成分析',
-        timestamp: Date.now(),
-        charts: response.charts,
-        alerts: response.alerts,
-        source: response.source,
-        sourceQuery: query,
-      });
+      // Defensive: stream resolved without done — keep streamed text, mark source.
+      aiTurn.sourceQuery = query;
     }
   } catch (error: unknown) {
-    // askRestaurantSynthesis catches internally and returns {success:false};
-    // this is belt-and-suspenders for anything unexpected in rendering.
-    const errMsg = error instanceof Error ? error.message : String(error);
-    turns.value.push({
-      id: crypto.randomUUID(),
-      role: 'ai',
-      content: `**请求失败**\n\n${errMsg}`,
-      timestamp: Date.now(),
-      error: errMsg,
-    });
-    ElMessage.error('聊天请求失败: ' + errMsg);
+    if (flushTimer !== undefined) clearTimeout(flushTimer);
+    flushChunks();
+    streamStatus.value = '';
+    if (!receivedChunk && !aiTurn.content) {
+      // Automatic fallback: stream failed before any content — retry once via
+      // the non-stream endpoint so users on proxies that break SSE still get
+      // an answer. (Honest failure if that also fails; 禁止降级处理.)
+      const response = await askRestaurantSynthesis(query, sessionId.value);
+      if (response.success) {
+        applyResult(aiTurn, response, query);
+      } else {
+        const errMsg = response.error || '分析失败，请稍后重试';
+        turns.value.splice(turns.value.indexOf(aiTurn), 1);
+        pushErrorTurn(errMsg);
+      }
+    } else {
+      // Stream broke mid-answer: keep the partial text, surface the honest error.
+      const errMsg = error instanceof Error ? error.message : String(error);
+      aiTurn.error = errMsg;
+      aiTurn.content = `${aiTurn.content}\n\n**（流式输出中断）** ${errMsg}`;
+      ElMessage.error('聊天请求失败: ' + errMsg);
+    }
   } finally {
     isTyping.value = false;
+    streamStatus.value = '';
     await scrollToBottom();
   }
 }
@@ -188,7 +255,10 @@ defineExpose({
       </div>
 
       <template v-for="turn in turns" :key="turn.id">
-        <ChatBubble :turn="turn" />
+        <ChatBubble
+          v-if="turn.role !== 'ai' || turn.content || turn.error || (turn.alerts && turn.alerts.length)"
+          :turn="turn"
+        />
         <div
           v-if="turn.role === 'ai' && !turn.error && turn.sourceQuery"
           class="chat-feedback-row"
@@ -210,6 +280,9 @@ defineExpose({
         </div>
       </template>
 
+      <div v-if="isTyping && streamStatus" class="chat-stream-status" data-testid="chat-stream-status">
+        {{ streamStatus }}
+      </div>
       <ChatTypingIndicator v-if="isTyping" />
     </div>
 
@@ -306,6 +379,13 @@ defineExpose({
   border-top: 1px solid #d4cdb8;
   display: flex;
   gap: 10px;
+}
+.chat-stream-status {
+  font-family: 'Noto Serif SC', serif;
+  font-size: 12px;
+  font-style: italic;
+  color: #8a8378;
+  padding: 2px 4px 8px;
 }
 .chat-feedback-row {
   display: flex;

@@ -2460,7 +2460,7 @@ def _owner_chat_answer(owner_page: dict[str, Any], scenario: str, message: str, 
     }.get(scenario, "今天动作")
 
     parts = [
-        f"一句话结论：{problem or headline or '今天先抓一个最影响营收的问题。'}",
+        f"**一句话结论：{problem or headline or '今天先抓一个最影响营收的问题。'}**",
         f"以下分析围绕{direction_label}。",
     ]
     if premise_check:
@@ -2477,13 +2477,13 @@ def _owner_chat_answer(owner_page: dict[str, Any], scenario: str, message: str, 
         parts.append("主推排序口径：米饭、餐具、纸巾这类低价值配套项先排除；真正看招牌菜销量、连带加购率和毛利额，三项同时变好才算主推有效。")
     if plain_actions:
         action_lines = "\n".join(f"{index}. {action}" for index, action in enumerate(plain_actions[:3], start=1))
-        parts.append(f"今天建议做：\n{action_lines}")
+        parts.append(f"**今天建议做：**\n\n{action_lines}")
     if do_not_do:
-        parts.append(f"今天先别做：{do_not_do}")
+        parts.append(f"**今天先别做：**{do_not_do}")
     if watch_numbers:
-        parts.append(f"明天怎么验证：{watch_numbers}")
+        parts.append(f"**明天怎么验证：**{watch_numbers}")
     if evidence_text:
-        parts.append(f"本次调用数据：{evidence_text}")
+        parts.append(f"> 本次调用数据：{evidence_text}")
     # (Sheet 行24 采纳: 删掉"你继续追问时…不会换题"这类对自身行为的元陈述 —
     #  多轮上下文由会话机制保证, 不靠自我表白。)
     return "\n\n".join(part for part in parts if part)

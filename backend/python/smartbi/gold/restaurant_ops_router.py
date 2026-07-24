@@ -331,12 +331,12 @@ _CAPABILITY_RE = re.compile(
 )
 
 RESTAURANT_CAPABILITIES_TEXT = (
-    "我可以帮您分析门店经营数据，直接问就行：\n"
-    "• 营收/订单：「最近30天营业额」「今天营业额多少」「上周和上上周营收对比」\n"
-    "• 门店表现：「哪家店业绩最好」「各门店营收排名」「某某店的毛利率」\n"
-    "• 菜品分析：「米饭的销量」「某菜品的成本和毛利率」「哪道菜卖得最好/最差」「有没有毛利为负的菜」\n"
-    "• 盈亏判断：「最近亏钱了吗」「整体毛利率是多少」\n"
-    "• 经营方法：「毛利率低的行业参考做法」（菜单工程、损耗控制等）\n"
+    "我可以帮您分析**门店经营数据**，直接问就行：\n\n"
+    "- 营收/订单：「最近30天营业额」「今天营业额多少」「上周和上上周营收对比」\n"
+    "- 门店表现：「哪家店业绩最好」「各门店营收排名」「某某店的毛利率」\n"
+    "- 菜品分析：「米饭的销量」「某菜品的成本和毛利率」「哪道菜卖得最好/最差」「有没有毛利为负的菜」\n"
+    "- 盈亏判断：「最近亏钱了吗」「整体毛利率是多少」\n"
+    "- 经营方法：「毛利率低的行业参考做法」（菜单工程、损耗控制等）\n\n"
     "支持多轮追问：问完一道菜后可以接着问「成本如何」「那某某菜呢」。"
 )
 
@@ -371,7 +371,7 @@ _OOD_SMALLTALK_RE = re.compile(r"天气|下雨|气温|新闻|股票|彩票|星�
 _OOD_BUSINESS_TOKEN_RE = re.compile(r"生意|营收|营业额|客流|影响|备货|经营|销量|门店")
 
 RESTAURANT_OOD_TEXT = (
-    "天气、新闻这类外部信息不在我的数据范围内，我不会编造答案。\n"
+    "**天气、新闻这类外部信息不在我的数据范围内，我不会编造答案。**\n\n"
     "我可以帮您分析门店经营数据，例如：「最近30天营业额」「哪家店业绩最好」"
     "「米饭的销量」「有没有店在亏损」。"
 )
@@ -1528,9 +1528,9 @@ async def resolve_wastage_top(
         "PROCESSING": "加工损耗", "OTHER": "其他",
     }
     top_list_text = "\n".join([
-        f"  {i+1}. {r['name']} ({r['category'] or '—'}): {r['qty']:.2f} {r['unit'] or ''}"
+        f"{i+1}. {'**' + r['name'] + '**' if i == 0 else r['name']} ({r['category'] or '—'}): {r['qty']:.2f} {r['unit'] or ''}"
         for i, r in enumerate(top_rows)
-    ]) or "  (近 %d 天无损耗记录)" % days
+    ]) or "(近 %d 天无损耗记录)" % days
 
     type_summary = "、".join([
         f"{type_name_map.get(r['type'], r['type'])} ¥{r['cost']:.2f}"
@@ -1539,13 +1539,13 @@ async def resolve_wastage_top(
 
     answer = (
         f"近 {days} 天损耗总览:\n"
-        f"- 总损耗 {total['total_count']} 次, {total['total_qty']:.2f} 单位, 损失 ¥{total['total_cost']:.2f}\n"
+        f"- 总损耗 {total['total_count']} 次, {total['total_qty']:.2f} 单位, 损失 **¥{total['total_cost']:.2f}**\n"
         f"- 损耗类型分布: {type_summary}\n\n"
-        f"损耗食材前 {len(top_rows)} 名（按数量）:\n{top_list_text}\n\n"
+        f"损耗食材前 {len(top_rows)} 名（按数量）:\n\n{top_list_text}\n\n"
         f"建议动作:\n"
-        f"  1. 先把损耗金额最高的类型拆到门店和班次，确认是保存、加工还是报损登记问题。\n"
-        f"  2. 对损耗靠前的食材设一周复盘线，超过日均用量或报损阈值时要求后厨说明原因。\n"
-        f"  3. 对水产、肉类等高价值食材优先复核收货净重和分切标准，避免损耗被当成正常用料。"
+        f"1. 先把损耗金额最高的类型拆到门店和班次，确认是保存、加工还是报损登记问题。\n"
+        f"2. 对损耗靠前的食材设一周复盘线，超过日均用量或报损阈值时要求后厨说明原因。\n"
+        f"3. 对水产、肉类等高价值食材优先复核收货净重和分切标准，避免损耗被当成正常用料。"
     )
 
     charts = []
@@ -1620,18 +1620,18 @@ async def resolve_stock_shortage(
         )
 
     top_text = "\n".join([
-        f"  {i+1}. {r['name']} ({r['category'] or '—'}): 盘亏 {r['shortage_qty']:.2f} {r['unit'] or ''}"
+        f"{i+1}. {'**' + r['name'] + '**' if i == 0 else r['name']} ({r['category'] or '—'}): 盘亏 {r['shortage_qty']:.2f} {r['unit'] or ''}"
         for i, r in enumerate(rows)
-    ]) or f"  (近 {days} 天无盘亏记录)"
+    ]) or f"(近 {days} 天无盘亏记录)"
 
     answer = (
         f"近 {days} 天盘点总览:\n"
-        f"- 盘点 {total['count']} 次, 盘亏总量 {total['shortage']:.2f}, 盘盈总量 {total['surplus']:.2f}\n\n"
-        f"盘亏食材前 {len(rows)} 名:\n{top_text}\n\n"
+        f"- 盘点 {total['count']} 次, 盘亏总量 **{total['shortage']:.2f}**, 盘盈总量 {total['surplus']:.2f}\n\n"
+        f"盘亏食材前 {len(rows)} 名:\n\n{top_text}\n\n"
         f"建议动作:\n"
-        f"  1. 对盘亏最高的食材先核查领料单、报损单和实际库存照片，找出未登记消耗。\n"
-        f"  2. 把连续盘亏食材纳入每日闭店抽盘，连续两天异常就回溯到班组和菜品。\n"
-        f"  3. 对调料类盘亏优先检查称量标准和容器换算，减少账实口径不一致。"
+        f"1. 对盘亏最高的食材先核查领料单、报损单和实际库存照片，找出未登记消耗。\n"
+        f"2. 把连续盘亏食材纳入每日闭店抽盘，连续两天异常就回溯到班组和菜品。\n"
+        f"3. 对调料类盘亏优先检查称量标准和容器换算，减少账实口径不一致。"
     )
     charts = []
     if rows:
@@ -1702,13 +1702,13 @@ async def resolve_recipe_cost(
             logger.warning(f"[recipe_cost] dish name lookup failed: {e}")
 
     top_text = "\n".join([
-        f"  {i+1}. {name_map.get(r['product_source_pk'], '#' + r['product_source_pk'])}: ¥{r['food_cost']:.2f} ({r['ingredient_count']} 种食材)"  # noqa: E501
+        f"{i+1}. {'**' + name_map.get(r['product_source_pk'], '#' + r['product_source_pk']) + '**' if i == 0 else name_map.get(r['product_source_pk'], '#' + r['product_source_pk'])}: ¥{r['food_cost']:.2f} ({r['ingredient_count']} 种食材)"  # noqa: E501
         for i, r in enumerate(rows)
-    ]) or "  (尚未录入配方数据或食材单价为空)"
+    ]) or "(尚未录入配方数据或食材单价为空)"
 
     answer = (
-        f"菜品食材成本前 {len(rows)} 名:\n{top_text}\n\n"
-        "注：成本按标准用量乘以食材单价计算；补齐销售金额后即可计算毛利。"
+        f"菜品食材成本前 {len(rows)} 名:\n\n{top_text}\n\n"
+        "> 注：成本按标准用量乘以食材单价计算；补齐销售金额后即可计算毛利。"
     )
     charts = []
     if rows:
@@ -1767,18 +1767,18 @@ async def resolve_requisition_trend(
     total_qty = sum(r["qty"] or 0 for r in trend)
     total_cost = sum(r["cost"] or 0 for r in trend)
     top_text = "\n".join([
-        f"  {i+1}. {r['name']} ({r['category'] or '—'}): {r['qty']:.2f} {r['unit'] or ''}"
+        f"{i+1}. {'**' + r['name'] + '**' if i == 0 else r['name']} ({r['category'] or '—'}): {r['qty']:.2f} {r['unit'] or ''}"
         for i, r in enumerate(top)
-    ]) or "  (近 %d 天无领料记录)" % days
+    ]) or "(近 %d 天无领料记录)" % days
 
     answer = (
         f"近 {days} 天领料总览:\n"
-        f"- 总量 {total_qty:.2f} 单位, 估算成本 ¥{total_cost:.2f}, {len(trend)} 天有活动\n\n"
-        f"领用食材前 {len(top)} 名:\n{top_text}\n\n"
+        f"- 总量 {total_qty:.2f} 单位, 估算成本 **¥{total_cost:.2f}**, {len(trend)} 天有活动\n\n"
+        f"领用食材前 {len(top)} 名:\n\n{top_text}\n\n"
         f"建议动作:\n"
-        f"  1. 把领用靠前的食材和畅销菜、损耗榜交叉看，判断是销量驱动还是领用过量。\n"
-        f"  2. 对领用量稳定但销售没有同步增长的食材，先查备料标准和退料记录。\n"
-        f"  3. 对成本占比高的食材设置日领用上限，超过上限需店长复核。"
+        f"1. 把领用靠前的食材和畅销菜、损耗榜交叉看，判断是销量驱动还是领用过量。\n"
+        f"2. 对领用量稳定但销售没有同步增长的食材，先查备料标准和退料记录。\n"
+        f"3. 对成本占比高的食材设置日领用上限，超过上限需店长复核。"
     )
     charts = [{
         "chartType": "line",
@@ -1933,8 +1933,8 @@ async def resolve_gross_margin(
                     code="RESTAURANT_OPS_GROSS_MARGIN",
                     title=f"{dish_candidate} — 菜品查询",
                     answer_text=(
-                        f"没有找到名为「{dish_candidate}」的菜品，"
-                        "不能给出该菜的销量或毛利，也不会用全部菜品的榜单替代。"
+                        f"**没有找到名为「{dish_candidate}」的菜品**，"
+                        "不能给出该菜的销量或毛利，也不会用全部菜品的榜单替代。\n\n"
                         "请核对菜名；可以先问「哪个菜卖得最好」查看在售菜品。"
                     ),
                     charts=[], kpis=[],
@@ -2037,16 +2037,18 @@ async def resolve_gross_margin(
             reverse=(ranking_direction == "best"),
         )
         rank_label = "卖得最好" if ranking_direction == "best" else "卖得最差"
-        lines = [f"{window_label}菜品销量排行（{rank_label}前 5）："]
+        lines = [f"**{window_label}菜品销量排行（{rank_label}前 5）：**", ""]
         for idx, r in enumerate(ranked[:5], 1):
+            dish_label = f"**{r['dish_name']}**" if idx == 1 else r["dish_name"]
             lines.append(
-                f"{idx}. {r['dish_name']} — 销量 {float(r['total_qty'] or 0):,.0f} 份、"
+                f"{idx}. {dish_label} — 销量 {float(r['total_qty'] or 0):,.0f} 份、"
                 f"营收 ¥{float(r['total_revenue'] or 0):,.2f}"
             )
         excluded = len(pos_rows) - len(rankable_rows)
         note = f"，已剔除 {excluded} 个非菜品项（打包盒/餐具等）" if excluded > 0 else ""
+        lines.append("")
         lines.append(
-            f"仅统计窗口内有销售记录的 {len(rankable_rows)} 道菜品{note}；未售出的菜品不在榜内。"
+            f"> 仅统计窗口内有销售记录的 {len(rankable_rows)} 道菜品{note}；未售出的菜品不在榜内。"
         )
         return OpsAnswer(
             code="RESTAURANT_OPS_GROSS_MARGIN",
@@ -2162,24 +2164,26 @@ async def resolve_gross_margin(
         cov_pct = f"{coverage_ratio * 100:.1f}%"
         if negative:
             neg_lines = [
-                f"{window_label}有 {len(negative)} 道毛利为负的菜品（卖一份亏一份，属于亏钱菜品）："
+                f"**{window_label}有 {len(negative)} 道毛利为负的菜品（卖一份亏一份，属于亏钱菜品）：**",
+                "",
             ]
             for item in negative[:5]:
                 neg_lines.append(
-                    f"• {item['name']} — 毛利率 {item['margin_rate'] * 100:.1f}%、"
+                    f"- {item['name']} — 毛利率 {item['margin_rate'] * 100:.1f}%、"
                     f"营收 ¥{item['revenue']:,.2f}"
                 )
             if len(negative) > 5:
                 neg_lines.append(f"（仅列前 5，共 {len(negative)} 道）")
+            neg_lines.append("")
             neg_lines.append(
-                f"成本覆盖率 {cov_pct}；未覆盖成本的菜品无法判断盈亏，不在结论内。"
+                f"> 成本覆盖率 {cov_pct}；未覆盖成本的菜品无法判断盈亏，不在结论内。"
             )
             neg_answer = "\n".join(neg_lines)
         else:
             neg_answer = (
                 f"{window_label}可计算毛利的 {len(with_cost)} 道菜品中，"
-                f"没有毛利为负的菜，按已覆盖成本口径没有单品在亏钱。"
-                f"成本覆盖率 {cov_pct}；未覆盖成本的菜品无法判断盈亏，不在结论内。"
+                f"**没有毛利为负的菜**，按已覆盖成本口径没有单品在亏钱。\n\n"
+                f"> 成本覆盖率 {cov_pct}；未覆盖成本的菜品无法判断盈亏，不在结论内。"
             )
         return OpsAnswer(
             code="RESTAURANT_OPS_GROSS_MARGIN",
@@ -2199,18 +2203,18 @@ async def resolve_gross_margin(
         if avg_margin is not None else None
     )
     dragger_text = (
-        f"\n\n最拖整体毛利的菜品（拖累 = 营收占比 × 毛利率差）:\n"
-        f"  - {dragger['name']}: 毛利率 {dragger['margin_rate'] * 100:.1f}% "
+        f"\n\n最拖整体毛利的菜品（拖累 = 营收占比 × 毛利率差）:\n\n"
+        f"- **{dragger['name']}**: 毛利率 {dragger['margin_rate'] * 100:.1f}% "
         f"(低于平均 {avg_margin * 100:.1f}%), 占已覆盖营收 {dragger['share'] * 100:.1f}%"
         f" → 主因：{dragger['cause']}"
         if dragger else ""
     )
 
     top_text = "\n".join([
-        f"  {i+1}. {e['name']}: 营收 ¥{e['revenue']:.2f} / 成本 ¥{e['total_cost']:.2f} / "
+        f"{i+1}. {'**' + e['name'] + '**' if i == 0 else e['name']}: 营收 ¥{e['revenue']:.2f} / 成本 ¥{e['total_cost']:.2f} / "
         f"毛利 ¥{e['gross_profit']:.2f} ({e['margin_rate'] * 100:.1f}%)"
         for i, e in enumerate(top_slice)
-    ]) or "  - 暂无成本完整、可计算毛利的菜品。"
+    ]) or "- 暂无成本完整、可计算毛利的菜品。"
     invalid_cost_count = len([e for e in enriched if e["invalid_cost"]])
     missing_cost_count = len([
         e for e in enriched if not e["has_cost"] and not e["invalid_cost"]
@@ -2221,7 +2225,7 @@ async def resolve_gross_margin(
     if invalid_cost_count > 0:
         exclusion_notes.append(f"{invalid_cost_count} 个菜品成本值明显异常")
     missing_note = (
-        f"\n\n数据说明：{'；'.join(exclusion_notes)}，已从毛利、毛利率、排名和图表中排除；"
+        f"\n\n> 数据说明：{'；'.join(exclusion_notes)}，已从毛利、毛利率、排名和图表中排除；"
         "请补齐配方，或复核食材单位和最近进价后重新计算。"
         if exclusion_notes else ""
     )
@@ -2284,24 +2288,24 @@ async def resolve_gross_margin(
         })
 
     low_margin_text = "\n".join([
-        f"  - {e['name']}: 毛利率 {e['margin_rate'] * 100:.1f}%, 营收 ¥{e['revenue']:,.2f}"
+        f"- {e['name']}: 毛利率 {e['margin_rate'] * 100:.1f}%, 营收 ¥{e['revenue']:,.2f}"
         for e in low_margin
-    ]) or "  - 暂无明显低毛利菜品。"
+    ]) or "- 暂无明显低毛利菜品。"
     margin_text = f"{avg_margin * 100:.1f}%" if avg_margin is not None else "暂不可计算"
     reference_note = ""
     if reference_requested and not reference_lines:
-        reference_note = "\n- 你还没有提供计划值或预警值，我没有擅自添加参照线；请直接回复具体百分比。"
+        reference_note = "\n> 你还没有提供计划值或预警值，我没有擅自添加参照线；请直接回复具体百分比。"
     elif reference_lines:
-        reference_note = "\n- 图中参照线：" + "、".join(
+        reference_note = "\n> 图中参照线：" + "、".join(
             f"{line['name']} {line['yAxis']:.1f}%" for line in reference_lines
         )
     trend_note = (
-        f"\n- 趋势图仅展示毛利额前 {len(top_slice[:min(top_n, 10)])} 个成本完整菜品，避免图例失真。"
+        f"\n> 趋势图仅展示毛利额前 {len(top_slice[:min(top_n, 10)])} 个成本完整菜品，避免图例失真。"
         if trend_requested and any(token in query_text for token in ("菜品", "每个菜", "每道菜", "各菜"))
         else ""
     )
     trend_basis_note = (
-        "\n- 历史趋势按当前成本卡估算，用于观察售价和销售结构变化；若历史成本曾调整，需补充历史成本后再做精确复盘。"
+        "\n> 历史趋势按当前成本卡估算，用于观察售价和销售结构变化；若历史成本曾调整，需补充历史成本后再做精确复盘。"
         if trend_requested else ""
     )
     joint_priority_text = ""
@@ -2339,19 +2343,19 @@ async def resolve_gross_margin(
             "3. 不要做全店无差别打折，先在高销量低毛利菜品上小范围验证。"
         )
     answer = (
-        f"菜品毛利分析（{window_label}）\n"
-        f"- 全部销售营收 ¥{total_rev:,.2f}；其中可计算毛利的营收 ¥{total_rev_with_cost:,.2f}，营收覆盖率 {coverage_ratio * 100:.1f}%\n"
-        f"- 已覆盖部分毛利 ¥{total_profit:,.2f}，加权毛利率 {margin_text}\n"
-        f"- 计算过程：毛利 ¥{total_profit:,.2f} = 可计算毛利营收 ¥{total_rev_with_cost:,.2f}"
-        f" − 对应菜品成本 ¥{total_rev_with_cost - total_profit:,.2f}\n"
-        f"- 计算口径：毛利 = 可计算毛利的营收 - 对应菜品成本；期间与菜品范围完全一致。\n"
-        f"- {len(with_cost)}/{len(enriched)} 个销售菜品有完整成本数据。{reference_note}{trend_note}{trend_basis_note}\n\n"
-        f"毛利前 {len(top_slice)} 名菜品（按绝对毛利）:\n{top_text}{dragger_text}\n\n"
-        f"需要关注的低毛利菜品:\n{low_margin_text}{joint_priority_text}{prohibited_actions_text}\n\n"
+        f"**菜品毛利分析（{window_label}）**\n"
+        f"- 全部销售营收 **¥{total_rev:,.2f}**；其中可计算毛利的营收 ¥{total_rev_with_cost:,.2f}，营收覆盖率 {coverage_ratio * 100:.1f}%\n"
+        f"- 已覆盖部分毛利 **¥{total_profit:,.2f}**，加权毛利率 **{margin_text}**\n\n"
+        f"计算过程：`毛利 ¥{total_profit:,.2f} = 可计算毛利营收 ¥{total_rev_with_cost:,.2f}"
+        f" − 对应菜品成本 ¥{total_rev_with_cost - total_profit:,.2f}`\n\n"
+        f"> 计算口径：毛利 = 可计算毛利的营收 - 对应菜品成本；期间与菜品范围完全一致。\n"
+        f"> {len(with_cost)}/{len(enriched)} 个销售菜品有完整成本数据。{reference_note}{trend_note}{trend_basis_note}\n\n"
+        f"毛利前 {len(top_slice)} 名菜品（按绝对毛利）:\n\n{top_text}{dragger_text}\n\n"
+        f"需要关注的低毛利菜品:\n\n{low_margin_text}{joint_priority_text}{prohibited_actions_text}\n\n"
         f"建议动作:\n"
-        f"  1. 对高营收低毛利菜品先复核售价、赠品和食材规格，优先做小幅提价或份量标准化。\n"
-        f"  2. 对高毛利高销量菜品加大套餐露出和门店推荐，作为拉升整体毛利率的主推款。\n"
-        f"  3. 对缺成本菜品补齐配方和最近进价，否则利润判断会失真。{missing_note}"
+        f"1. 对高营收低毛利菜品先复核售价、赠品和食材规格，优先做小幅提价或份量标准化。\n"
+        f"2. 对高毛利高销量菜品加大套餐露出和门店推荐，作为拉升整体毛利率的主推款。\n"
+        f"3. 对缺成本菜品补齐配方和最近进价，否则利润判断会失真。{missing_note}"
     )
 
     if prohibited_actions_requested:
@@ -2360,9 +2364,9 @@ async def resolve_gross_margin(
             if low_margin else "暂无可确认对象"
         )
         answer = (
-            f"{window_label}先不要做三件事。判断依据：全部销售营收 ¥{total_rev:,.2f}，"
+            f"**{window_label}先不要做三件事。**判断依据：全部销售营收 ¥{total_rev:,.2f}，"
             f"可计算毛利的营收 ¥{total_rev_with_cost:,.2f}，覆盖率 {coverage_ratio * 100:.1f}%；"
-            f"已覆盖毛利 ¥{total_profit:,.2f}，加权毛利率 {margin_text}。\n"
+            f"已覆盖毛利 **¥{total_profit:,.2f}**，加权毛利率 **{margin_text}**。\n\n"
             "1. 不要按单一毛利率批量下架。"
             f"适用前提：同时核对销量、绝对毛利和门店差异；当前低毛利候选是{low_margin_name}。"
             "风险：可能误删引流款或套餐关键菜。最小验证：选一家店、一个菜、观察一周再决定。\n"
@@ -2381,9 +2385,9 @@ async def resolve_gross_margin(
         # 数字全部来自同一 POS 行, 不会跨窗口混算。
         answer = (
             f"「{dish_scope_row['dish_name']}」{window_label}销量 "
-            f"{float(dish_scope_row['total_qty'] or 0):,.0f} 份、"
-            f"营收 ¥{float(dish_scope_row['total_revenue'] or 0):,.2f}、"
-            f"覆盖订单 {int(dish_scope_row['bills'] or 0)} 单。\n" + answer
+            f"**{float(dish_scope_row['total_qty'] or 0):,.0f} 份**、"
+            f"营收 **¥{float(dish_scope_row['total_revenue'] or 0):,.2f}**、"
+            f"覆盖订单 {int(dish_scope_row['bills'] or 0)} 单。\n\n" + answer
         )
         # 「米饭赚钱吗」— 盈亏问必须给判定句, 不让用户自己从毛利率倒推 (R20)。
         if _profit_intent(query_text)[1]:
@@ -2392,13 +2396,13 @@ async def resolve_gross_margin(
                 rate = float(scoped_entry["margin_rate"])
                 verdict = "在赚钱" if rate > 0 else ("基本打平" if rate == 0 else "在亏钱")
                 answer = (
-                    f"结论：按已覆盖成本口径，「{dish_scope_row['dish_name']}」"
-                    f"{window_label}{verdict}（毛利率 {rate * 100:.1f}%）。\n" + answer
+                    f"**结论：按已覆盖成本口径，「{dish_scope_row['dish_name']}」"
+                    f"{window_label}{verdict}（毛利率 {rate * 100:.1f}%）。**\n\n" + answer
                 )
             else:
                 answer = (
-                    f"结论：「{dish_scope_row['dish_name']}」成本未覆盖，"
-                    "无法判断是否赚钱；请先补齐配方和最近进价。\n" + answer
+                    f"**结论：「{dish_scope_row['dish_name']}」成本未覆盖，"
+                    "无法判断是否赚钱；请先补齐配方和最近进价。**\n\n" + answer
                 )
     return OpsAnswer(
         code="RESTAURANT_OPS_GROSS_MARGIN",
@@ -2487,8 +2491,8 @@ async def resolve_store_margin(
                 code="RESTAURANT_OPS_STORE_MARGIN",
                 title=f"{store_mention}毛利分析",
                 answer_text=(
-                    f"没有找到名为「{store_mention}」的门店，"
-                    "不能计算该店的毛利或毛利率，也不会退化为全店榜或其他门店的数据。"
+                    f"**没有找到名为「{store_mention}」的门店**，"
+                    "不能计算该店的毛利或毛利率，也不会退化为全店榜或其他门店的数据。\n\n"
                     "请核对门店名称；可以先问「哪家店业绩最好」查看现有门店。"
                 ),
                 charts=[], kpis=[],
@@ -2578,11 +2582,11 @@ async def resolve_store_margin(
             code="RESTAURANT_OPS_STORE_MARGIN",
             title=f"{target_label}毛利区间比较",
             answer_text=(
-                f"{target_label}在{primary_label}的毛利为 ¥{float(primary_profit):,.2f}，"
-                f"毛利率 {float(primary_rate) * 100:.1f}%；"
-                f"在{comparison_label}的毛利为 ¥{float(comparison_profit):,.2f}，"
-                f"毛利率 {float(comparison_rate) * 100:.1f}%。"
-                f"前一范围毛利{direction}后一范围 ¥{abs(delta):,.2f}。"
+                f"**前一范围毛利{direction}后一范围 ¥{abs(delta):,.2f}。**\n\n"
+                f"- {target_label}在{primary_label}的毛利为 **¥{float(primary_profit):,.2f}**，"
+                f"毛利率 {float(primary_rate) * 100:.1f}%\n"
+                f"- 在{comparison_label}的毛利为 **¥{float(comparison_profit):,.2f}**，"
+                f"毛利率 {float(comparison_rate) * 100:.1f}%"
             ),
             charts=[{
                 "chartType": "bar",
@@ -2867,9 +2871,9 @@ async def resolve_store_margin(
                 title=f"{target_label} — {dish_mention}",
                 answer_text=(
                     f"「{target_label}」的「{dish_mention}」{spec_note}"
-                    f"在{window_label}销量 {target['qty']:,.0f} 份、"
-                    f"营收 ¥{target['revenue']:,.2f}。"
-                    f"如需该菜全部门店合计或毛利口径，可问「{dish_mention}的销量」。"
+                    f"在{window_label}销量 **{target['qty']:,.0f} 份**、"
+                    f"营收 **¥{target['revenue']:,.2f}**。\n\n"
+                    f"> 如需该菜全部门店合计或毛利口径，可问「{dish_mention}的销量」。"
                 ),
                 charts=[], kpis=[],
                 meta={"store_dish": dish_mention, "targetStoreName": target_label,
@@ -2878,13 +2882,15 @@ async def resolve_store_margin(
         ranked_dish_stores = sorted(
             per_store.values(), key=lambda e: e["qty"], reverse=True,
         )
-        rank_lines = [f"「{dish_mention}」{spec_note}各门店销量排行（{window_label}）："]
+        rank_lines = [f"**「{dish_mention}」{spec_note}各门店销量排行（{window_label}）：**", ""]
         for idx, e in enumerate(ranked_dish_stores[:5], 1):
+            store_label = f"**{e['name']}**" if idx == 1 else e["name"]
             rank_lines.append(
-                f"{idx}. {e['name']} — 销量 {e['qty']:,.0f} 份、营收 ¥{e['revenue']:,.2f}"
+                f"{idx}. {store_label} — 销量 {e['qty']:,.0f} 份、营收 ¥{e['revenue']:,.2f}"
             )
+        rank_lines.append("")
         rank_lines.append(
-            f"仅统计窗口内有该菜销售记录的 {len(ranked_dish_stores)} 家门店。"
+            f"> 仅统计窗口内有该菜销售记录的 {len(ranked_dish_stores)} 家门店。"
         )
         return OpsAnswer(
             code="RESTAURANT_OPS_STORE_MARGIN",
@@ -2973,24 +2979,26 @@ async def resolve_store_margin(
         cov_pct = f"{coverage_ratio * 100:.1f}%"
         if negative_stores:
             neg_lines = [
-                f"{window_label}有 {len(negative_stores)} 家门店按已覆盖成本口径在亏钱（毛利为负）："
+                f"**{window_label}有 {len(negative_stores)} 家门店按已覆盖成本口径在亏钱（毛利为负）：**",
+                "",
             ]
             for st in negative_stores[:5]:
                 neg_lines.append(
-                    f"• {st['name']} — 毛利率 {st['margin_rate'] * 100:.1f}%、"
+                    f"- {st['name']} — 毛利率 {st['margin_rate'] * 100:.1f}%、"
                     f"营收 ¥{st['revenue']:,.2f}"
                 )
             if len(negative_stores) > 5:
                 neg_lines.append(f"（仅列前 5，共 {len(negative_stores)} 家）")
+            neg_lines.append("")
             neg_lines.append(
-                f"成本覆盖率 {cov_pct}；未覆盖成本的部分无法判断盈亏，不在结论内。"
+                f"> 成本覆盖率 {cov_pct}；未覆盖成本的部分无法判断盈亏，不在结论内。"
             )
             neg_answer = "\n".join(neg_lines)
         else:
             neg_answer = (
                 f"{window_label}可计算毛利的 {rated_count} 家门店中，"
-                f"没有毛利为负的门店，按已覆盖成本口径没有门店在亏钱。"
-                f"成本覆盖率 {cov_pct}；未覆盖成本的部分无法判断盈亏，不在结论内。"
+                f"**没有毛利为负的门店**，按已覆盖成本口径没有门店在亏钱。\n\n"
+                f"> 成本覆盖率 {cov_pct}；未覆盖成本的部分无法判断盈亏，不在结论内。"
             )
         return OpsAnswer(
             code="RESTAURANT_OPS_STORE_MARGIN",
@@ -3089,12 +3097,12 @@ async def resolve_store_margin(
             )
         )
         targeted_answer = (
-            f"{target_store['name']}在{window_label}的已覆盖销售毛利率为 {target_rate * 100:.1f}%，"
-            f"{rank_sentence}"
+            f"**{target_store['name']}在{window_label}的已覆盖销售毛利率为 {target_rate * 100:.1f}%，"
+            f"{rank_sentence}**\n\n"
             f"该店全部营收 ¥{float(target_store['revenue']):,.2f}，"
             f"其中可计算毛利的营收 ¥{float(target_store['revenue_with_cost']):,.2f}，"
-            f"成本覆盖率 {target_coverage * 100:.1f}%。"
-            "排名只比较同一时间范围内成本完整的销售，不用营收排名替代毛利率排名。"
+            f"成本覆盖率 {target_coverage * 100:.1f}%。\n\n"
+            "> 排名只比较同一时间范围内成本完整的销售，不用营收排名替代毛利率排名。"
         )
         return OpsAnswer(
             code="RESTAURANT_OPS_STORE_MARGIN",
@@ -3135,10 +3143,10 @@ async def resolve_store_margin(
         )
 
     top_text = "\n".join([
-        f"  {i+1}. {s['name']}: 已覆盖营收 ¥{s['revenue_with_cost']:,.2f} / "
+        f"{i+1}. {'**' + s['name'] + '**' if i == 0 else s['name']}: 已覆盖营收 ¥{s['revenue_with_cost']:,.2f} / "
         f"毛利 ¥{s['gross_profit']:,.2f} ({s['margin_rate'] * 100:.1f}%), {s['bills']} 单"
         for i, s in enumerate(top_slice)
-    ]) or "  - 暂无成本完整、可参与毛利排名的门店。"
+    ]) or "- 暂无成本完整、可参与毛利排名的门店。"
 
     charts = [{
         "chartType": "bar",
@@ -3154,11 +3162,11 @@ async def resolve_store_margin(
     if len(ranked_store_list) > 1:
         weakest = sorted(ranked_store_list, key=lambda s: s["margin_rate"])[0]
         weak_store_text = (
-            f"\n需要复盘的门店: {weakest['name']} 毛利率 {weakest['margin_rate'] * 100:.1f}%, "
+            f"\n\n需要复盘的门店: **{weakest['name']}** 毛利率 {weakest['margin_rate'] * 100:.1f}%, "
             f"先查低毛利菜品占比、套餐折扣和损耗领料是否偏高。"
         )
     margin_summary = (
-        f"已覆盖部分毛利 ¥{total_profit:,.2f}，加权毛利率 {avg_rate * 100:.1f}%"
+        f"已覆盖部分毛利 **¥{total_profit:,.2f}**，加权毛利率 **{avg_rate * 100:.1f}%**"
         if total_profit is not None and avg_rate is not None
         else (
             "毛利口径自检未通过，已停止展示异常金额"
@@ -3171,17 +3179,17 @@ async def resolve_store_margin(
         if invalid_cost_count > 0 else ""
     )
     answer = (
-        f"门店毛利对比（{window_label}，{len(store_list)} 家店）\n"
-        f"- 全部营收 ¥{total_rev:,.2f}；可计算毛利的营收 ¥{total_rev_with_cost:,.2f}，"
+        f"**门店毛利对比（{window_label}，{len(store_list)} 家店）**\n"
+        f"- 全部营收 **¥{total_rev:,.2f}**；可计算毛利的营收 ¥{total_rev_with_cost:,.2f}，"
         f"覆盖率 {coverage_ratio * 100:.1f}%\n"
         f"- {margin_summary}。缺成本菜品已排除，不会按零成本计算。{invalid_cost_note}\n\n"
-        f"毛利前 {len(top_slice)} 名门店:\n{top_text}{weak_store_text}\n\n"
-        f"计算口径：毛利 = 可计算毛利的营收 - 对应菜品成本；"
+        f"毛利前 {len(top_slice)} 名门店:\n\n{top_text}{weak_store_text}\n\n"
+        f"> 计算口径：毛利 = 可计算毛利的营收 - 对应菜品成本；"
         f"仅使用同一时间范围、同一门店范围的数据。\n\n"
         f"建议动作:\n"
-        f"  1. 把第一名门店的高毛利菜品组合、套餐结构和时段客流拆出来，作为其他门店对标模板。\n"
-        f"  2. 对毛利率低但营收不低的门店，优先查折扣、赠品和后厨出品标准，避免销售越多利润越薄。\n"
-        f"  3. 对菜品成本覆盖率低的门店，先补齐配方成本再做绩效排序。"
+        f"1. 把第一名门店的高毛利菜品组合、套餐结构和时段客流拆出来，作为其他门店对标模板。\n"
+        f"2. 对毛利率低但营收不低的门店，优先查折扣、赠品和后厨出品标准，避免销售越多利润越薄。\n"
+        f"3. 对菜品成本覆盖率低的门店，先补齐配方成本再做绩效排序。"
     )
     if charts:
         charts[0]["title"] = f"毛利前 {len(top_slice)} 名门店（{window_label}）"
@@ -3462,11 +3470,12 @@ async def resolve_sales_summary(
                             verdict = "按已配置成本卡看，这段时间已覆盖的销售基本打平。"
                     coverage = covered_revenue / margin_revenue if margin_revenue > 0 else 0.0
                     rate_text = f"，已覆盖部分毛利率 {avg_rate * 100:.1f}%" if avg_rate is not None else ""
+                    verdict_md = f"**{verdict}**" if verdict else ""
                     margin_line = (
-                        f"{verdict}同期可计算毛利的营收 {_money(covered_revenue)}，"
+                        f"{verdict_md}同期可计算毛利的营收 {_money(covered_revenue)}，"
                         f"覆盖同期菜品营收的 {coverage * 100:.1f}%；"
-                        f"对应毛利 {_money(total_profit)}{rate_text}。"
-                        "毛利率以可计算毛利的营收为分母，不以全部营收为分母。"
+                        f"对应毛利 {_money(total_profit)}{rate_text}。\n"
+                        "> 毛利率以可计算毛利的营收为分母，不以全部营收为分母。"
                     )
                 elif not scope_ok:
                     margin_line = "毛利与营收的时间范围不一致，已停止展示，避免把不同口径的数据放在一起比较。"
@@ -3523,7 +3532,7 @@ async def resolve_sales_summary(
                     "baseline_avg_bill": float(baseline_avg_bill) if baseline_avg_bill is not None else None,
                 })
                 direction = "高" if revenue_delta > 0 else "低" if revenue_delta < 0 else "持平"
-                revenue_text = f"营收{direction} {_money(abs(revenue_delta))}"
+                revenue_text = f"营收{direction} **{_money(abs(revenue_delta))}**"
                 if revenue_pct is not None:
                     revenue_text += f"（{abs(revenue_pct):.1f}%）"
                 comparison_line = (
@@ -3538,15 +3547,24 @@ async def resolve_sales_summary(
             "今天先不要做：不要只凭总营收立即下架菜品；不要在没有毛利依据时做全店无差别打折；"
             "不要把单一门店或单一时段的波动直接推广到全部门店。先完成菜品毛利、门店差异和时段拆分再行动。"
         )
-    answer = (
-        f"{actual_window}经营能看：覆盖 {day_count} 天、{store_count} 家门店，共 {bill_count:,} 单。"
-        f"总营收 {_money(total_revenue)}，平均每单 {avg_text}。"
-        f"{comparison_line}"
-        f"{margin_line}"
-        f"{top_line}{weak_line}"
-        "建议：先把低于中位的门店拉出来，看是客流少、平均每单低，还是折扣过重；"
-        f"再对照高门店的菜品结构和时段，把能复制的动作做小范围试点。{prohibited_actions_line}"
+    total_revenue_text = (
+        f"**{_money(total_revenue)}**" if can_see_money else _money(total_revenue)
     )
+    answer_parts = [
+        (
+            f"{actual_window}经营能看：覆盖 {day_count} 天、{store_count} 家门店，共 **{bill_count:,} 单**。"
+            f"总营收 {total_revenue_text}，平均每单 {avg_text}。"
+        ),
+        comparison_line,
+        margin_line,
+        f"{top_line}{weak_line}",
+        (
+            "建议：先把低于中位的门店拉出来，看是客流少、平均每单低，还是折扣过重；"
+            "再对照高门店的菜品结构和时段，把能复制的动作做小范围试点。"
+        ),
+        prohibited_actions_line,
+    ]
+    answer = "\n\n".join(part for part in answer_parts if part)
 
     chart_stores = top_stores[:5]
     charts = [{
@@ -3822,17 +3840,18 @@ async def resolve_trend_analysis(
             + "\n"
         )
 
+    cumulative_text = f"**{_money(total_rev)}**" if can_see_money else _money(total_rev)
     answer = (
-        f"营收趋势分析 ({window_text}, 共 {n_months} 个月):\n"
-        f"- 累计营收 {_money(total_rev)}\n"
-        f"- 营收最高月: {peak['month']} ({_money(peak['revenue'])})\n"
+        f"**营收趋势分析 ({window_text}, 共 {n_months} 个月):**\n"
+        f"- 累计营收 {cumulative_text}\n"
+        f"- 营收最高月: **{peak['month']}** ({_money(peak['revenue'])})\n"
         f"- 营收最低月: {trough['month']} ({_money(trough['revenue'])})\n"
         f"{overall_line}{yoy_line}{mom_line}{ww_line}"
         f"\n建议动作:\n"
-        f"  1. 先把最高月和最低月按门店、渠道、折扣三层拆开，找出增长来自客流、客单价还是活动补贴。\n"
-        f"  2. 如果最新月下滑，优先确认是否为未完结月份；若已完结，再复盘低于中位数门店和高折扣渠道。\n"
-        f"  3. 周末与工作日差异不大时，重点做时段活动而不是整天打折，避免折扣侵蚀毛利。\n"
-        f"\n各月营收:\n{month_list_text}"
+        f"1. 先把最高月和最低月按门店、渠道、折扣三层拆开，找出增长来自客流、客单价还是活动补贴。\n"
+        f"2. 如果最新月下滑，优先确认是否为未完结月份；若已完结，再复盘低于中位数门店和高折扣渠道。\n"
+        f"3. 周末与工作日差异不大时，重点做时段活动而不是整天打折，避免折扣侵蚀毛利。\n"
+        f"\n各月营收:\n\n{month_list_text}"
     )
 
     charts = [{
@@ -3958,23 +3977,23 @@ async def resolve_inventory_warning(
     medium.sort(key=lambda e: (e["stock"] - e["safe"]))
 
     high_text = "\n".join([
-        f"  {i+1}. {e['name']} ({e['category'] or '—'}): 剩 {e['stock']:.1f} {e['unit']}，"
+        f"{i+1}. {'**' + e['name'] + '**' if i == 0 else e['name']} ({e['category'] or '—'}): 剩 {e['stock']:.1f} {e['unit']}，"
         f"低于补货点 {e['reorder']:.1f} {e['unit']}，需立即补货"
         for i, e in enumerate(high[:top_n])
-    ]) or "  (无)"
+    ]) or "(无)"
     medium_text = "、".join([
         f"{e['name']} 剩 {e['stock']:.1f} {e['unit']}" for e in medium[:top_n]
     ]) or "无"
 
     answer = (
-        f"库存预警（{_date_text(max_date)}）:\n"
-        f"- 需要立即补货 {len(high)} 项, 关注 {len(medium)} 项, 正常 {len(ok)} 项\n\n"
-        f"需立即补货:\n{high_text}\n\n"
+        f"**库存预警（{_date_text(max_date)}）:**\n"
+        f"- 需要立即补货 **{len(high)} 项**, 关注 {len(medium)} 项, 正常 {len(ok)} 项\n\n"
+        f"需立即补货:\n\n{high_text}\n\n"
         f"接近安全库存需关注: {medium_text}\n\n"
         f"建议动作:\n"
-        f"  1. 需立即补货的食材今天下单，优先安排高频用量的食材避免断货影响出品。\n"
-        f"  2. 接近安全库存的食材纳入未来三天的进货计划，避免临时缺货。\n"
-        f"  3. 定期核对补货点和安全库存设置是否符合实际用量，避免虚高或虚低导致误判。"
+        f"1. 需立即补货的食材今天下单，优先安排高频用量的食材避免断货影响出品。\n"
+        f"2. 接近安全库存的食材纳入未来三天的进货计划，避免临时缺货。\n"
+        f"3. 定期核对补货点和安全库存设置是否符合实际用量，避免虚高或虚低导致误判。"
     )
 
     charts = [{
@@ -4085,11 +4104,13 @@ async def resolve_staffing_advice(smartbi_pool, factory_id: str) -> OpsAnswer:
         if not group:
             continue
         label = _WEEKDAY_TYPE_LABEL.get(wd_type, wd_type)
-        lines.append(f"{label}:")
+        if lines:
+            lines.append("")
+        lines.append(f"**{label}:**")
         for e in group:
             ratio_text = f"{e['actual_per_staff']:.1f}/人" if e["actual_per_staff"] is not None else "—"
             lines.append(
-                f"  - {e['daypart']}: 日均 {e['avg_orders']:.0f} 单, {e['staff']} 人在岗, "
+                f"- {e['daypart']}: 日均 {e['avg_orders']:.0f} 单, {e['staff']} 人在岗, "
                 f"人效 {ratio_text} ({e['advice']})"
             )
     detail_text = "\n".join(lines)
@@ -4100,11 +4121,11 @@ async def resolve_staffing_advice(smartbi_pool, factory_id: str) -> OpsAnswer:
     most_overstaffed = min(overstaffed, key=lambda e: e["delta"], default=None)
 
     answer = (
-        f"排班建议（按时段人效诊断）:\n{detail_text}\n\n"
+        f"**排班建议（按时段人效诊断）:**\n\n{detail_text}\n\n"
         f"建议动作:\n"
-        f"  1. 对人效偏高的时段优先加人，避免出餐延迟和服务质量下降。\n"
-        f"  2. 对人效偏低的时段可精简排班或调配到高峰时段，避免人力浪费。\n"
-        f"  3. 每周复盘一次日均订单数，及时调整目标人效基准。"
+        f"1. 对人效偏高的时段优先加人，避免出餐延迟和服务质量下降。\n"
+        f"2. 对人效偏低的时段可精简排班或调配到高峰时段，避免人力浪费。\n"
+        f"3. 每周复盘一次日均订单数，及时调整目标人效基准。"
     )
 
     charts = [{
@@ -4209,7 +4230,7 @@ async def resolve_channel_mix(
     )
     total_bills = sum(int(r["bills"]) for r in typed.values())
     total_rev = sum(float(r["revenue"]) for r in typed.values())
-    lines = [f"堂食 vs 外卖（{window_label}）："]
+    lines = [f"**堂食 vs 外卖（{window_label}）：**", ""]
     kpis = []
     for name in ("堂食", "外卖"):
         r = typed.get(name)
@@ -4221,17 +4242,19 @@ async def resolve_channel_mix(
         rev_pct = rev / total_rev * 100 if total_rev else 0.0
         if can_see_money:
             lines.append(
-                f"{name}：¥{rev:,.0f}（营收占 {rev_pct:.1f}%），"
-                f"{bills:,} 单（单量占 {bill_pct:.1f}%）"
+                f"- {name}：¥{rev:,.0f}（营收占 {rev_pct:.1f}%），"
+                f"{bills:,} 单（单量占 **{bill_pct:.1f}%**）"
             )
         else:
-            lines.append(f"{name}：{bills:,} 单（单量占 {bill_pct:.1f}%）")
+            lines.append(f"- {name}：{bills:,} 单（单量占 **{bill_pct:.1f}%**）")
         kpis.append({"title": f"{name}单量", "value": f"{bills:,}", "rawValue": bills})
     for name, r in typed.items():
         if name not in ("堂食", "外卖"):
-            lines.append(f"{name}：{int(r['bills']):,} 单")
+            lines.append(f"- {name}：{int(r['bills']):,} 单")
     if untyped_bills:
-        lines.append(f"另有 {untyped_bills:,} 单未标注渠道，不在以上拆分内。")
+        lines.append("")
+        lines.append(f"> 另有 {untyped_bills:,} 单未标注渠道，不在以上拆分内。")
+    lines.append("")
     lines.append(
         "建议：分别看堂食和外卖的客单价与毛利；外卖占比高时先查包装、"
         "出餐时长和平台抽佣，堂食占比高时优化翻台与套餐引导。"
