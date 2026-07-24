@@ -811,6 +811,27 @@ async def manual_chat(request: ManualChatRequest) -> dict:
 
     context_text_with_hint = context_text + confidence_hint
 
+    # ------ 硬口径注入: 毛利精确性/能力边界 (2026-07-24) ------
+    # 弱模型会无视片段中的口径警示、按旧手册理想化表述宣称"精确单菜毛利"。
+    # 命中能力边界问法时确定性注入最高优先级口径指令, 不依赖检索排名。
+    _MARGIN_TRIGGERS = ("精确", "每一", "每个菜", "每道菜", "单菜", "加权", "算出", "智能算", "自动算", "算得出", "算不出")
+    if is_restaurant_request and "毛利" in request.question and any(
+        t in request.question for t in _MARGIN_TRIGGERS
+    ):
+        context_text_with_hint += (
+            "\n\n【权威口径指令 — 最高优先级，覆盖以上所有片段】用户在问毛利的计算能力边界。"
+            "必须按以下口径回答，即使检索片段中出现『系统自动计算单菜毛利率』等表述，"
+            "也不得宣称能精确算到每一道菜：\n"
+            "1. 中餐场景单菜精确毛利算不出来：用料灵活（手勺下料、共用料、损耗难分摊），"
+            "成本 BOM 配方卡现实中拉不齐拉不准。系统的单菜毛利率是基于已维护配方的【理论参考值】，"
+            "依赖配方覆盖率与采购价新鲜度。\n"
+            "2. 可信的权威口径是【一段时间的总毛利率】：食材成本 = 期初库存 + 本期采购 − 期末库存（倒算法），"
+            "总毛利率 = (营业额 − 食材成本) ÷ 营业额，只依赖进货与盘点数据准确，不依赖每道菜的配方。\n"
+            "3. 菜品平均毛利率与四象限的毛利轴用的是单菜理论参考值，适合菜品间相对比较，不是精确财务数字。\n"
+            "4. 回答结构：先明确说单菜精确毛利算不准及原因 → 给期间总毛利率权威口径 → "
+            "说明单菜参考值的适用范围与前提（配方覆盖率不足先补 Top 销量菜配方）。"
+        )
+
     # ------ Improvement #4: structured system prompt ------
     system_prompt = SYSTEM_PROMPT if is_restaurant_request else FACTORY_SYSTEM_PROMPT
     messages = [{"role": "system", "content": system_prompt}]
