@@ -81,6 +81,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from collections import OrderedDict
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -302,7 +303,7 @@ def _plan_requested_intents(
         elif metric == "sales_volume":
             code = (
                 "RESTAURANT_OPS_GROSS_MARGIN"
-                if "gross_margin" in requested_metrics and "dish" in dimensions
+                if "dish" in dimensions
                 else "RESTAURANT_OPS_SALES_SUMMARY"
             )
         elif metric == "gross_margin":
@@ -424,6 +425,26 @@ def contextualize_restaurant_followup(
     leading_dependent = current.startswith(("那", "这个", "那个", "它", "刚才", "继续", "再"))
     if standalone_code and _uses_relative_sales_window(current) and not leading_dependent:
         return current, False
+
+    # Sheet 7/24: a ranking answer already names the winning dish, but carrying
+    # only ``parent_query`` leaves dependent asks such as "它的成本如何" or
+    # "第一名毛利怎么样" without a concrete entity.  Resolve that narrow,
+    # deterministic referent from our own ranking format instead of asking the
+    # LLM to guess.  If the prior answer is not a dish ranking, keep the
+    # conservative query-only behavior below.
+    if parent_code == "RESTAURANT_OPS_GROSS_MARGIN":
+        parent_answer = str(parent.get("parent_answer_summary") or "")
+        top_dish_match = re.search(r"(?m)^1\.\s+\*\*([^*\r\n]{1,80})\*\*", parent_answer)
+        if top_dish_match:
+            top_dish = top_dish_match.group(1).strip()
+            resolved = re.sub(
+                r"^(?:那|这个|那个)?(?:它|这道菜|那个菜|这个菜|第一名)(?:的)?",
+                f"{top_dish}的",
+                current,
+                count=1,
+            )
+            if resolved != current:
+                return resolved, True
     return f"{parent_query}；继续追问：{current}", True
 
 
