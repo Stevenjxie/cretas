@@ -19,7 +19,8 @@
  * sections, followUpChips) is left intact and still covered by its own tests;
  * RestaurantChatPanel.vue now calls this adapter instead for its primary Q&A.
  */
-import { pythonFetch, PYTHON_LLM_TIMEOUT_MS } from './common';
+import { pythonFetch, PYTHON_LLM_TIMEOUT_MS, PYTHON_SMARTBI_URL, getPythonAuthHeaders } from './common';
+import { parseSseFrame, splitSseFrames } from './sse';
 
 /** 🔒 反回扣(anti-kickback) alert — see backend
  * ComprehensiveSynthesisEngine.collect_alerts (smartbi/agent/synthesis_engine.py).
@@ -160,6 +161,166 @@ export async function askRestaurantSynthesis(
       alerts: [],
       error: error instanceof Error ? error.message : String(error),
     };
+  }
+}
+
+export interface RestaurantSynthesisStreamCallbacks {
+  /** Backend progress line (e.g. "正在读取经营数据…") — shown while no content yet. */
+  onStatus?: (text: string) => void;
+  /** Incremental markdown answer text — append to the current AI turn. */
+  onChunk?: (text: string) => void;
+  /** Charts can arrive before `done`; already normalized to ECharts options. */
+  onCharts?: (charts: SynthesisChart[]) => void;
+  /** Final payload — authoritative answer/charts/alerts/source. */
+  onDone?: (result: RestaurantSynthesisResult) => void;
+  /** Backend-signalled stream error (honest message, never a fake answer). */
+  onError?: (message: string) => void;
+}
+
+/** Stream idle timeout: abort if no bytes arrive for this long. */
+const STREAM_IDLE_TIMEOUT_MS = 60000;
+
+function unwrapData(payload: unknown): unknown {
+  if (isRecord(payload) && 'data' in payload) {
+    return (payload as { data: unknown }).data;
+  }
+  return payload;
+}
+
+function parseJsonPayload(payload: string): unknown {
+  if (!payload) return null;
+  try {
+    return JSON.parse(payload);
+  } catch {
+    return null;
+  }
+}
+
+function normalizeStreamDone(payload: unknown): RestaurantSynthesisResult {
+  const data = unwrapData(payload);
+  const record = isRecord(data) ? data : {};
+  return {
+    success: true,
+    answer: typeof record.answer === 'string' ? record.answer : '',
+    charts: normalizeCharts(record.charts),
+    alerts: normalizeAlerts(record.alerts),
+    source: typeof record.source === 'string' ? record.source : undefined,
+    tokens: typeof record.tokens === 'number' ? record.tokens : undefined,
+  };
+}
+
+/**
+ * Streaming variant of {@link askRestaurantSynthesis}: consumes the SSE
+ * endpoint `/api/smartbi/synthesis/comprehensive-stream` (the SAME one
+ * mobile-rest-ai/src/api.ts `askSynthesisStream` uses) via fetch +
+ * ReadableStream, emitting status/chunk/charts/done/error callbacks.
+ *
+ * Auth/base-URL conventions mirror `pythonFetch`: `PYTHON_SMARTBI_URL`
+ * prefix, `getPythonAuthHeaders()` (cookie + Bearer fallback),
+ * `credentials: 'include'`.
+ *
+ * Throws on any failure (HTTP error, stream `error` event, incomplete
+ * stream, idle timeout) — the caller decides whether to fall back to the
+ * non-stream `askRestaurantSynthesis` (RestaurantChatPanel falls back only
+ * when no chunk has arrived yet).
+ */
+export async function askRestaurantSynthesisStream(
+  question: string,
+  sessionId: string | undefined,
+  callbacks: RestaurantSynthesisStreamCallbacks,
+  context?: RestaurantSynthesisContext,
+): Promise<void> {
+  const body: Record<string, unknown> = {
+    question,
+    session_id: sessionId,
+  };
+  if (context?.pageContext) body.page_context = context.pageContext;
+  if (context?.dimensionHints?.length) body.dimension_hints = context.dimensionHints;
+
+  const controller = new AbortController();
+  let idleTimer: ReturnType<typeof setTimeout> | undefined;
+  let idleTimedOut = false;
+  const resetIdle = () => {
+    if (idleTimer !== undefined) clearTimeout(idleTimer);
+    idleTimer = setTimeout(() => {
+      idleTimedOut = true;
+      controller.abort();
+    }, STREAM_IDLE_TIMEOUT_MS);
+  };
+  resetIdle();
+
+  let sawDone = false;
+  const handleFrame = (frame: string) => {
+    const parsed = parseSseFrame(frame);
+    if (!parsed) return;
+    if (parsed.event === 'status') {
+      callbacks.onStatus?.(parsed.data);
+    } else if (parsed.event === 'chunk') {
+      callbacks.onChunk?.(parsed.data);
+    } else if (parsed.event === 'charts') {
+      callbacks.onCharts?.(normalizeCharts(parseJsonPayload(parsed.data)));
+    } else if (parsed.event === 'done') {
+      sawDone = true;
+      callbacks.onDone?.(normalizeStreamDone(parseJsonPayload(parsed.data)));
+    } else if (parsed.event === 'error') {
+      const message = parsed.data || '流式分析失败，请重试';
+      callbacks.onError?.(message);
+      throw new Error(message);
+    }
+  };
+
+  try {
+    let response: Response;
+    try {
+      response = await fetch(`${PYTHON_SMARTBI_URL}/api/smartbi/synthesis/comprehensive-stream`, {
+        method: 'POST',
+        credentials: 'include',
+        signal: controller.signal,
+        headers: getPythonAuthHeaders(),
+        body: JSON.stringify(body),
+      });
+    } catch (error) {
+      if (idleTimedOut) throw new Error('流式响应超时，请重试');
+      throw error;
+    }
+
+    if (!response.ok) {
+      throw new Error(`Python service error: ${response.status} ${response.statusText}`);
+    }
+    const reader = response.body?.getReader();
+    if (!reader) {
+      throw new Error('当前浏览器不支持流式响应');
+    }
+
+    const decoder = new TextDecoder();
+    let buffer = '';
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        resetIdle();
+        buffer += decoder.decode(value, { stream: true });
+        const split = splitSseFrames(buffer);
+        buffer = split.rest;
+        for (const frame of split.frames) handleFrame(frame);
+      }
+      const tail = decoder.decode();
+      if (tail) buffer += tail;
+      if (buffer.trim()) {
+        const split = splitSseFrames(`${buffer}\n\n`);
+        for (const frame of split.frames) handleFrame(frame);
+      }
+      if (!sawDone) {
+        throw new Error('流式响应未完整结束，请重试');
+      }
+    } catch (error) {
+      if (idleTimedOut) throw new Error('流式响应超时，请重试');
+      throw error;
+    } finally {
+      reader.releaseLock();
+    }
+  } finally {
+    if (idleTimer !== undefined) clearTimeout(idleTimer);
   }
 }
 
