@@ -4,9 +4,11 @@ const pythonFetchMock = vi.fn();
 vi.mock('../common', () => ({
   pythonFetch: (...args: unknown[]) => pythonFetchMock(...args),
   PYTHON_LLM_TIMEOUT_MS: 300000,
+  PYTHON_SMARTBI_URL: '/smartbi-api',
+  getPythonAuthHeaders: () => ({ 'Content-Type': 'application/json', Authorization: 'Bearer test-token' }),
 }));
 
-import { askRestaurantSynthesis } from '../restaurant-synthesis';
+import { askRestaurantSynthesis, askRestaurantSynthesisStream } from '../restaurant-synthesis';
 
 describe('askRestaurantSynthesis', () => {
   beforeEach(() => {
@@ -144,5 +146,117 @@ describe('askRestaurantSynthesis', () => {
     expect(result.charts).toEqual([]);
     expect(result.alerts).toEqual([]);
     expect(result.error).toContain('503');
+  });
+});
+
+// ─── askRestaurantSynthesisStream (SSE, 2026-07-24 诊断抽屉真流式) ───────────
+
+function sseResponse(frames: string[], status = 200): Response {
+  const encoder = new TextEncoder();
+  const chunks = frames.map((frame) => encoder.encode(frame));
+  let index = 0;
+  return {
+    ok: status >= 200 && status < 300,
+    status,
+    statusText: status === 200 ? 'OK' : 'Error',
+    body: {
+      getReader: () => ({
+        read: async () => {
+          if (index < chunks.length) {
+            return { done: false, value: chunks[index++] };
+          }
+          return { done: true, value: undefined };
+        },
+        releaseLock: () => undefined,
+      }),
+    },
+  } as unknown as Response;
+}
+
+describe('askRestaurantSynthesisStream', () => {
+  beforeEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('POSTs the stream endpoint with pythonFetch conventions and emits status/chunk/charts/done', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(sseResponse([
+      'event: status\ndata: 正在读取经营数据…\n\n',
+      'event: chunk\ndata: **结论：赚钱**\n\n',
+      'event: charts\ndata: [{"chartType":"bar","title":"t","xAxis":{"data":["A"]},"series":[{"type":"bar","data":[1]}]}]\n\n',
+      'event: done\ndata: {"answer":"**结论：赚钱**","charts":[],"alerts":[],"source":"synthesis"}\n\n',
+    ]));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const events: Array<[string, unknown]> = [];
+    await askRestaurantSynthesisStream('最近赚钱吗', 'sess-9', {
+      onStatus: (text) => events.push(['status', text]),
+      onChunk: (text) => events.push(['chunk', text]),
+      onCharts: (charts) => events.push(['charts', charts]),
+      onDone: (result) => events.push(['done', result]),
+    });
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/smartbi-api/api/smartbi/synthesis/comprehensive-stream',
+      expect.objectContaining({
+        method: 'POST',
+        credentials: 'include',
+        headers: expect.objectContaining({ Authorization: 'Bearer test-token' }),
+        body: JSON.stringify({ question: '最近赚钱吗', session_id: 'sess-9' }),
+      }),
+    );
+    expect(events[0]).toEqual(['status', '正在读取经营数据…']);
+    expect(events[1]).toEqual(['chunk', '**结论：赚钱**']);
+    expect(events[2][0]).toBe('charts');
+    expect((events[2][1] as unknown[])).toHaveLength(1);
+    const done = events[3][1] as { success: boolean; answer: string; source?: string };
+    expect(events[3][0]).toBe('done');
+    expect(done.success).toBe(true);
+    expect(done.answer).toBe('**结论：赚钱**');
+    expect(done.source).toBe('synthesis');
+  });
+
+  it('reassembles frames split across network reads', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(sseResponse([
+      'event: chunk\ndata: 前半',
+      '段\n\nevent: done\ndata: {"answer":"前半段","charts":[],"alerts":[]}\n\n',
+    ]));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const chunks: string[] = [];
+    await askRestaurantSynthesisStream('q', undefined, {
+      onChunk: (text) => chunks.push(text),
+    });
+
+    expect(chunks).toEqual(['前半段']);
+  });
+
+  it('propagates a backend error event as a thrown error after onError', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(sseResponse([
+      'event: error\ndata: 分析引擎过载\n\n',
+    ])));
+
+    const onError = vi.fn();
+    await expect(
+      askRestaurantSynthesisStream('q', 'sess', { onError }),
+    ).rejects.toThrow('分析引擎过载');
+    expect(onError).toHaveBeenCalledWith('分析引擎过载');
+  });
+
+  it('throws on HTTP failure so the caller can fall back to the non-stream endpoint', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(sseResponse([], 502)));
+
+    await expect(
+      askRestaurantSynthesisStream('q', 'sess', {}),
+    ).rejects.toThrow('502');
+  });
+
+  it('throws when the stream ends without a done event (incomplete answer must not pass silently)', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(sseResponse([
+      'event: chunk\ndata: 只有一半\n\n',
+    ])));
+
+    await expect(
+      askRestaurantSynthesisStream('q', 'sess', {}),
+    ).rejects.toThrow('未完整结束');
   });
 });
