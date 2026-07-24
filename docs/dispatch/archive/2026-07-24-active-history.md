@@ -78,3 +78,15 @@
 - 验证：目标 Vitest 4 files / 20 tests 通过，`vue-tsc -b` 通过，Web Interface Guidelines 只读审查完成；可信 Web manifest build 在精确候选 commit 上执行。
 - 边界：只创建 PR，严格 `NOT_DEPLOYED`；未修改报工 API、Java 状态机或生产数据，生产业务写入为 0。
 - Scope 锁已释放。
+
+## `RELEASE-CRETAS-ANDROID-1.0.2-20260724` — `merged`
+
+- Owner: `/root`
+- Base SHA: `6514af9ed352125e9b12ba6aec960f9d74f2b084`
+- 合入：PR [#1750](https://github.com/Stevenjxie/cretas/pull/1750) squash 合并为 `4cbfaf8d1bdf01243a1366d65454dcbc8b3a749d`；Android `versionName=1.0.2`、`versionCode=13`，Expo `app.json` / `app.config.js` 与下载页版本已统一。
+- 构建：隔离工作树以 `.env.production`、`EXPO_PUBLIC_ENV=production` 和正式 keystore 执行 `assembleRelease`；APK 包名 `com.cretas.foodtrace`，内嵌 Expo 配置为 `production`，Babel 验证注入生产域名且未注入测试直连地址。
+- 制品：APK 大小 `122175342` bytes，SHA-256 `44dc6adfca5c4d680e7697d490beb650b08266936c095da40be9680845b363c2`；APK signer SHA-256 `e2c55e0b74e0d12a4e0fbfcf0527d3ef571df950c60932c37faa24689ca6a941` 与 release keystore 完全匹配。
+- 主线等价：候选构建 commit `97ecec42ed8a1131955faee31928e91eea7a89b7` 与合入后 `origin/main` 的 `frontend/CretasFoodTrace` tree 均为 `2eb14592b0896f1a78e85650db8d88c6c75ac112`，下载页 tree 均为 `50500b843cfc949d155689bf0b01b768b640e9b4`。
+- 发布：`cretas-v1.0.2.apk` 与 `cretas-latest.apk` 已写入 `cretas-download` OSS；`https://download.cretaceousfuture.com/` 已切至 1.0.2，页面无 1.0.1 APK 链接残留，版本化直链与 latest 均 HTTP 200、`Content-Length=122175342`、ETag 一致。
+- 公网回验：从 `https://dl.cretaceousfuture.com/cretas-v1.0.2.apk` 完整回下载，字节数与 SHA-256 均与本地正式 APK 一致；公开 health 仍保持最低兼容版本 `appMinVersion=1.0.0`，未将“最新版本”误设为强制最低版本。
+- 边界：未重启 Java/Python/Web 服务，未执行任何生产业务数据写入。Scope 锁已释放。

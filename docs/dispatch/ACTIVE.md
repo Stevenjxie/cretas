@@ -5,7 +5,6 @@
 
 ## 在飞任务
 
-- `RELEASE-CRETAS-ANDROID-1.0.2-20260724` — `review` — Owner: `/root` — Base SHA: `6514af9ed352125e9b12ba6aec960f9d74f2b084` — Worktree: `C:\Users\Steve\cretas-apk-release-1.0.2` — Scope lock: `frontend/CretasFoodTrace/{app.json,app.config.js,android/app/build.gradle}`、`download-page/index.html`、`docs/dispatch/{ACTIVE.md,archive/2026-07-24-active-history.md}`；候选 APK 已通过 production 配置、`1.0.2` / versionCode `13` 元数据、release keystore 指纹和 SHA-256 本地硬闸，严格 `NOT_DEPLOYED`；合入后必须证明 RN tree 等价，并通过 OSS/CDN 上传与公网下载回验后才可归档。
 - `BUG-RESTAURANT-DISH-SALES-PLAN-002` — `review` — Owner: `/root` — Base SHA: `6514af9ed352125e9b12ba6aec960f9d74f2b084` — LLM 错误 resolver/澄清在“显式指标 + 显式对象 + 唯一兼容 resolver”时由 QueryPlan contract repair 收敛；“卖得好/畅销菜品”按主菜销量排行执行并排除米饭、包装、餐具、纸品等附属/基础项，点名查询不受影响；多 resolver/不支持指标继续 fail-closed，等待 PR 合入与 Demo 只读验收，生产业务写入为 0。
 - `SEC-CREDENTIAL-ROTATION-20260719` — `blocked` — Owner: Codex coordinator — Base SHA: `1ba9a241a77144a80851051efbac584abf4db69d` — tracked tree、47/139 非受控副本、数据库/JWT/internal/BaoTa 轮换和生产验收已完成；仍需各供应商控制台吊销无法由当前 API 权限完成的旧长期凭证，详情见 [凭证轮换收尾记录](../security/credential-rotation-closeout-2026-07-20.md)。
 - `ENH-F006-SUPPLIER-IMPORT-001`（含 `REQ-F006-SUPPLIER-REQUIRED-CONTACT-001`、`ENH-F006-SUPPLIER-DETAIL-STATUS-001`）— `in-progress` — Owner: `/root` — Base SHA: `3ddf6751603476205457fcf8aa0ee9f1adbea792` — 复用现有供应链 Excel 共享能力，统一供应商必填资料、导入预览/幂等确认、状态生命周期、采购门禁与详情信息架构；只合入 `main`，严格 `NOT_DEPLOYED`，生产业务写入为 0。
