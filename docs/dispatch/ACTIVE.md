@@ -5,7 +5,7 @@
 
 ## 在飞任务
 
-- `FEATURE-LABEL-QC-COLD-START-001` — `review` — Owner: `/root` — Base SHA: `4c265eb920cf97e1d2d73ec2eb3581d4aa90bb72` — 包装标签拍照质检闭环已实现：RN 录入/多图上传/断点重试，Python VL 重叠切片高召回初筛，Java 多租户持久化/异步恢复/人工真值/训练导出，Web 待审队列/误报纠正/人工补框；Python tile/鉴权、Java 真实 JPA/client/service、Web helper 与 build:check 已通过，RN 新增代码 typecheck 通过但全量仍被既有 `ProcessTaskListScreen.test.tsx:227` 夹具错误阻塞；待 PR 复核，严格 `NOT_DEPLOYED`、生产业务写入为 0。
+- `FEATURE-LABEL-QC-COLD-START-001` — `review` — Owner: `/root` — Base SHA: `4c265eb920cf97e1d2d73ec2eb3581d4aa90bb72` — PR `#1744`；包装标签拍照质检闭环已实现：RN 录入/多图上传/断点重试，Python VL 重叠切片高召回初筛，Java 多租户持久化/异步恢复/人工真值/训练导出，Web 待审队列/误报纠正/人工补框；Python tile/鉴权、Java 真实 JPA/client/service、Web helper 与 build:check 已通过，RN 新增代码 typecheck 通过但全量仍被既有 `ProcessTaskListScreen.test.tsx:227` 夹具错误阻塞；待 PR 复核，严格 `NOT_DEPLOYED`、生产业务写入为 0。
 - `SEC-CREDENTIAL-ROTATION-20260719` — `blocked` — Owner: Codex coordinator — Base SHA: `1ba9a241a77144a80851051efbac584abf4db69d` — tracked tree、47/139 非受控副本、数据库/JWT/internal/BaoTa 轮换和生产验收已完成；仍需各供应商控制台吊销无法由当前 API 权限完成的旧长期凭证，详情见 [凭证轮换收尾记录](../security/credential-rotation-closeout-2026-07-20.md)。
 - `ENH-F006-SUPPLIER-IMPORT-001`（含 `REQ-F006-SUPPLIER-REQUIRED-CONTACT-001`、`ENH-F006-SUPPLIER-DETAIL-STATUS-001`）— `in-progress` — Owner: `/root` — Base SHA: `3ddf6751603476205457fcf8aa0ee9f1adbea792` — 复用现有供应链 Excel 共享能力，统一供应商必填资料、导入预览/幂等确认、状态生命周期、采购门禁与详情信息架构；只合入 `main`，严格 `NOT_DEPLOYED`，生产业务写入为 0。
 - `BUG-F006-MATERIAL-CATEGORY-CASCADE-001`（含 `BUG-F006-MATERIAL-AUTOFILL-UNIT-001`）— `in-progress` — Owner: `/root` — Base SHA: `3ddf6751603476205457fcf8aa0ee9f1adbea792` — 修复原料类型字典 category/L1/L2/L3 单一真值、异步级联与单位建议来源/手动覆盖语义，后端 fail-closed 校验；只合入 `main`，严格 `NOT_DEPLOYED`，生产业务写入为 0。
