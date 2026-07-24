@@ -9,7 +9,7 @@
  *
  * null 值显示为 "—" (诚实, 不造假 — per .claude/rules/api-response-handling.md).
  */
-import { computed, ref, watch } from 'vue';
+import { computed, h, ref, watch } from 'vue';
 import { getInventoryYieldCard, type ProcessSheetInventoryItem } from '@/api/processSheet';
 import { normalizeMassQuantityForReporting } from '@/utils/processSheetUnits';
 
@@ -48,6 +48,23 @@ function filterProcess(value: string, row: ProcessSheetInventoryItem): boolean {
 
 function filterStatus(value: string, row: ProcessSheetInventoryItem): boolean {
   return row.status === value;
+}
+
+function sortableHeader({ column }: { column: { label?: string } }) {
+  const label = column.label || '本列';
+  return h(
+    'button',
+    {
+      type: 'button',
+      class: 'yield-sort-trigger',
+      'aria-label': `按${label}排序，连续操作可切换升序和降序`,
+      title: '点击切换升序和降序',
+    },
+    [
+      h('span', label),
+      h('span', { class: 'yield-sort-trigger__hint', 'aria-hidden': 'true' }, '↕'),
+    ],
+  );
 }
 
 function fmtRate(v: number | null | undefined): string {
@@ -168,7 +185,7 @@ defineExpose({ refresh });
     </el-alert>
   </div>
   <div v-if="rows.length > 0" class="yield-card-scroll-hint">
-    表格可左右滑动查看完整字段 →
+    点击表头可升/降序，漏斗可筛选；表格可左右滑动查看完整字段 →
   </div>
   <el-table
     :data="rows"
@@ -182,8 +199,8 @@ defineExpose({ refresh });
     style="width: 100%"
     :row-class-name="() => ''"
   >
-    <el-table-column prop="processOrder" label="序" width="58" align="center" sortable />
-    <el-table-column prop="processDate" label="流程日期" width="118" align="center" sortable>
+    <el-table-column prop="processOrder" label="序" width="58" align="center" sortable :render-header="sortableHeader" />
+    <el-table-column prop="processDate" label="流程日期" width="118" align="center" sortable :render-header="sortableHeader">
       <template #default="{ row }">
         {{ fmtDate(row.processDate) }}
       </template>
@@ -194,6 +211,7 @@ defineExpose({ refresh });
       min-width="180"
       show-overflow-tooltip
       sortable
+      :render-header="sortableHeader"
       :filters="processFilters"
       :filter-method="filterProcess"
     >
@@ -201,62 +219,62 @@ defineExpose({ refresh });
         {{ row.processName || '—' }}
       </template>
     </el-table-column>
-    <el-table-column prop="batchNumber" label="批次号" min-width="230" show-overflow-tooltip sortable />
-    <el-table-column prop="sourceBatchNumber" label="来源批次" min-width="210" show-overflow-tooltip sortable>
+    <el-table-column prop="batchNumber" label="批次号" min-width="230" show-overflow-tooltip sortable :render-header="sortableHeader" />
+    <el-table-column prop="sourceBatchNumber" label="来源批次" min-width="210" show-overflow-tooltip sortable :render-header="sortableHeader">
       <template #default="{ row }">
         {{ row.sourceBatchNumber || '—' }}
       </template>
     </el-table-column>
-    <el-table-column prop="feedQuantity" label="领用(kg)" width="110" align="right" sortable>
+    <el-table-column prop="feedQuantity" label="领用(kg)" width="110" align="right" sortable :render-header="sortableHeader">
       <template #default="{ row }">
         {{ fmtQty(row.feedQuantity) }}
       </template>
     </el-table-column>
-    <el-table-column prop="sourceConsumedRatio" label="领用占比" width="110" align="right" sortable>
+    <el-table-column prop="sourceConsumedRatio" label="领用占比" width="110" align="right" sortable :render-header="sortableHeader">
       <template #default="{ row }">
         {{ fmtRate(row.sourceConsumedRatio) }}
       </template>
     </el-table-column>
-    <el-table-column prop="inheritedRawEquivalentQuantity" label="继承原料(kg)" width="132" align="right" sortable>
+    <el-table-column prop="inheritedRawEquivalentQuantity" label="继承原料(kg)" width="132" align="right" sortable :render-header="sortableHeader">
       <template #default="{ row }">
         {{ fmtQty(row.inheritedRawEquivalentQuantity, 2) }}
       </template>
     </el-table-column>
-    <el-table-column prop="produced" label="产出" width="100" align="right" sortable>
+    <el-table-column prop="produced" label="产出" width="100" align="right" sortable :render-header="sortableHeader">
       <template #default="{ row }">
         {{ reportingQuantity(row, 'produced') }}
       </template>
     </el-table-column>
-    <el-table-column prop="used" label="已用" width="100" align="right" sortable>
+    <el-table-column prop="used" label="已用" width="100" align="right" sortable :render-header="sortableHeader">
       <template #default="{ row }">
         {{ reportingQuantity(row, 'used') }}
       </template>
     </el-table-column>
-    <el-table-column prop="remaining" label="剩余" width="100" align="right" sortable>
+    <el-table-column prop="remaining" label="剩余" width="100" align="right" sortable :render-header="sortableHeader">
       <template #default="{ row }">
         <span :style="{ color: (row.remaining ?? 0) <= 0 ? '#f56c6c' : '#67c23a' }">
           {{ reportingQuantity(row, 'remaining') }}
         </span>
       </template>
     </el-table-column>
-    <el-table-column prop="rowTotalCost" label="分摊成本" width="116" align="right" sortable>
+    <el-table-column prop="rowTotalCost" label="分摊成本" width="116" align="right" sortable :render-header="sortableHeader">
       <template #default="{ row }">
         {{ fmtMoney(row.rowTotalCost) }}
       </template>
     </el-table-column>
-    <el-table-column prop="unitPrice" label="单价(¥)" width="105" align="right" sortable>
+    <el-table-column prop="unitPrice" label="单价(¥)" width="105" align="right" sortable :render-header="sortableHeader">
       <template #default="{ row }">
         {{ fmtPrice(reportingUnitPrice(row)) }}
       </template>
     </el-table-column>
-    <el-table-column prop="stepYieldRate" label="对上工序出成" width="132" align="right" sortable>
+    <el-table-column prop="stepYieldRate" label="对上工序出成" width="132" align="right" sortable :render-header="sortableHeader">
       <template #default="{ row }">
         <span :style="{ color: rateColor(row.stepYieldRate), fontWeight: 'bold' }">
           {{ fmtRate(row.stepYieldRate) }}
         </span>
       </template>
     </el-table-column>
-    <el-table-column prop="cumulativeYieldRate" label="对原料累计" width="122" align="right" sortable>
+    <el-table-column prop="cumulativeYieldRate" label="对原料累计" width="122" align="right" sortable :render-header="sortableHeader">
       <template #default="{ row }">
         <span :style="{ color: rateColor(row.cumulativeYieldRate) }">
           {{ fmtRate(row.cumulativeYieldRate) }}
@@ -319,11 +337,44 @@ defineExpose({ refresh });
   :deep(.el-table__cell .cell) {
     padding: 0 10px;
     line-height: 18px;
+    font-variant-numeric: tabular-nums;
   }
 
   :deep(.el-table__column-filter-trigger) {
     margin-left: 5px;
     color: #697586;
+  }
+
+  :deep(.yield-sort-trigger) {
+    display: inline-flex;
+    align-items: center;
+    justify-content: inherit;
+    gap: 4px;
+    min-height: 32px;
+    padding: 0;
+    border: 0;
+    border-radius: 4px;
+    background: transparent;
+    color: inherit;
+    font: inherit;
+    font-weight: inherit;
+    cursor: pointer;
+    touch-action: manipulation;
+  }
+
+  :deep(.yield-sort-trigger:hover) {
+    color: var(--el-color-primary, #409eff);
+  }
+
+  :deep(.yield-sort-trigger:focus-visible) {
+    outline: 2px solid var(--el-color-primary, #409eff);
+    outline-offset: 2px;
+  }
+
+  :deep(.yield-sort-trigger__hint) {
+    color: #8a96a6;
+    font-size: 11px;
+    font-weight: 500;
   }
 }
 

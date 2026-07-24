@@ -2923,8 +2923,8 @@ defineExpose({ hasUnsavedRows, refreshSharedInventories });
           </div>
 
           <div class="sp-card-field sp-card-field-full sp-stage-heading">
-            <span><b>②</b> 工序参数</span>
-            <small>填写本工序的作业参数；数量始终与单位成组显示。</small>
+            <span><b>②</b> 工序执行</span>
+            <small>先填写作业参数，再按实际作业记录开始、结束时间和人数。</small>
           </div>
           <!-- Generic columns from config (skip special-cased keys) -->
           <template v-for="col in cols" :key="col.key">
@@ -3006,6 +3006,30 @@ defineExpose({ hasUnsavedRows, refreshSharedInventories });
             </div>
           </template>
 
+          <section
+            v-if="isPortOutputMode"
+            class="sp-card-field sp-card-field-full sp-execution-section"
+            aria-label="工序执行时间与人数"
+          >
+            <div class="sp-execution-section-title">作业时间与人数</div>
+            <div
+              v-for="(o, oi) in row.multiOutputs"
+              :key="`execution-${o.workflowPortId || oi}`"
+              data-testid="workflow-execution-line"
+              class="sp-execution-line"
+              :class="{ 'sp-port-unselected': !o.selected }"
+            >
+              <div class="sp-execution-product">
+                <strong>{{ o.materialName }}</strong>
+                <span>{{ o.finished ? '成品' : '半成品' }}</span>
+              </div>
+              <label data-testid="output-start-time">开始时间<el-time-picker v-model="o.startTime" value-format="HH:mm" format="HH:mm" placeholder="选择开始时间…" size="small" /></label>
+              <label data-testid="output-end-time">结束时间<el-time-picker v-model="o.endTime" value-format="HH:mm" format="HH:mm" placeholder="选择结束时间…" size="small" /></label>
+              <label data-testid="output-worker-count">人数<el-input-number v-model="o.workerCount" :min="1" :precision="0" controls-position="right" size="small" /></label>
+              <label>总工时<span class="sp-readonly">{{ outputLineTotalHours(o).toFixed(2) }} h</span></label>
+            </div>
+          </section>
+
           <!-- ============================================================
                2B.2 多产出 (fan-out): N 个产出端口各自只读品名(+成品/半成品标签) + 填数量。
                产品/端口由 workflow 图固定 (fool-proof Rule 2/3 — 不给操作员自由选产品), 始终展开
@@ -3038,11 +3062,7 @@ defineExpose({ hasUnsavedRows, refreshSharedInventories });
               </div>
               <div class="sp-output-fields sp-output-primary-fields">
                 <label class="sp-output-key-field" data-testid="output-quantity">产出数量<span class="sp-inline-input" role="group" aria-label="产出数量与单位"><el-input-number v-model="o.quantity" :min="0" :precision="outputLinePrecision(o)" controls-position="right" size="small" /><span data-testid="output-unit-readonly" class="sp-fixed-unit">{{ displayProcessUnit(o.unit) }}</span></span></label>
-                <label data-testid="output-start-time">开始时间<el-time-picker v-model="o.startTime" value-format="HH:mm" format="HH:mm" placeholder="开始" size="small" /></label>
-                <label data-testid="output-end-time">结束时间<el-time-picker v-model="o.endTime" value-format="HH:mm" format="HH:mm" placeholder="结束" size="small" /></label>
-                <label data-testid="output-worker-count">人数<el-input-number v-model="o.workerCount" :min="1" :precision="0" controls-position="right" size="small" /></label>
                 <label>出成率<span class="sp-readonly">{{ outputLineYield(row, o) == null ? '—' : `${outputLineYield(row, o)!.toFixed(2)}%` }}</span></label>
-                <label>总工时<span class="sp-readonly">{{ outputLineTotalHours(o).toFixed(2) }} h</span></label>
               </div>
               <div class="sp-output-optional">
                 <div class="sp-output-optional-title">按需填写：副产与成本分摊</div>
@@ -3109,13 +3129,16 @@ defineExpose({ hasUnsavedRows, refreshSharedInventories });
             <span>正式报工后锁定本行，并自动分配生产库批次、扣减库存和计入成本。</span>
           </div>
           <el-button
+            plain
+            class="sp-draft-action"
             :loading="row.saving"
             :disabled="!!draftSaveDisabledReason(row) || row.saving"
             :title="draftSaveDisabledReason(row) || '只保存草稿，不占用生产库库存'"
             @click="handleSave(row, 'draft')"
           >保存草稿</el-button>
           <el-button
-            type="primary" :icon="Check"
+            type="primary" size="large" :icon="Check"
+            class="sp-submit-primary"
             :loading="row.saving"
             :disabled="!!submitDisabledReason(row) || row.saving"
             :title="submitDisabledReason(row) || '正式报工并由系统自动分摊生产库批次'"
@@ -3661,6 +3684,26 @@ defineExpose({ hasUnsavedRows, refreshSharedInventories });
                 :class="['sp-tr-expand', ri % 2 === 0 ? 'sp-tr-even' : 'sp-tr-odd']">
               <td :colspan="999" class="sp-td-expand">
                 <div class="sp-expand-section">
+                  <div class="sp-stage-heading sp-grid-execution-heading">
+                    <span><b>②</b> 工序执行</span>
+                    <small>先确认时间与人数，再填写实际产出。</small>
+                  </div>
+                  <div
+                    v-for="(o, oi) in row.multiOutputs"
+                    :key="`grid-execution-${o.workflowPortId || oi}`"
+                    data-testid="workflow-execution-line"
+                    class="sp-execution-line sp-grid-execution-line"
+                    :class="{ 'sp-port-unselected': !o.selected }"
+                  >
+                    <div class="sp-execution-product">
+                      <strong>{{ o.materialName }}</strong>
+                      <span>{{ o.finished ? '成品' : '半成品' }}</span>
+                    </div>
+                    <label data-testid="output-start-time">开始时间<el-time-picker v-model="o.startTime" value-format="HH:mm" format="HH:mm" placeholder="选择开始时间…" size="small" /></label>
+                    <label data-testid="output-end-time">结束时间<el-time-picker v-model="o.endTime" value-format="HH:mm" format="HH:mm" placeholder="选择结束时间…" size="small" /></label>
+                    <label data-testid="output-worker-count">人数<el-input-number v-model="o.workerCount" :min="1" :precision="0" controls-position="right" size="small" /></label>
+                    <label>总工时<span class="sp-readonly">{{ outputLineTotalHours(o).toFixed(2) }} h</span></label>
+                  </div>
                   <div class="sp-output-section-title">
                     <span><b>③</b> 产出明细 — {{ row.multiOutputs.length }} 项</span>
                     <span>投入按本报工组只扣减一次；SKU 与单位由 Workflow 固定</span>
@@ -3685,14 +3728,10 @@ defineExpose({ hasUnsavedRows, refreshSharedInventories });
                     </div>
                     <div class="sp-output-fields">
                       <label class="sp-output-key-field" data-testid="output-quantity">产出数量<span class="sp-inline-input"><el-input-number v-model="o.quantity" :min="0" :precision="outputLinePrecision(o)" controls-position="right" size="small" /><span data-testid="output-unit-readonly" class="sp-fixed-unit">{{ displayProcessUnit(o.unit) }}</span></span></label>
-                      <label data-testid="output-start-time">开始时间<el-time-picker v-model="o.startTime" value-format="HH:mm" format="HH:mm" placeholder="开始" size="small" /></label>
-                      <label data-testid="output-end-time">结束时间<el-time-picker v-model="o.endTime" value-format="HH:mm" format="HH:mm" placeholder="结束" size="small" /></label>
-                      <label data-testid="output-worker-count">人数<el-input-number v-model="o.workerCount" :min="1" :precision="0" controls-position="right" size="small" /></label>
                       <label>出成率<span class="sp-readonly">{{ outputLineYield(row, o) == null ? '—' : `${outputLineYield(row, o)!.toFixed(2)}%` }}</span></label>
                       <label data-testid="byproduct-quantity">副产数量<span class="sp-inline-input"><el-input-number v-model="o.byproductQuantity" :min="0" :precision="6" controls-position="right" size="small" /><span data-testid="byproduct-unit-readonly" class="sp-fixed-unit">{{ displayProcessUnit(o.byproductUnit) }}</span></span></label>
                       <label data-testid="byproduct-unit-price">副产回收单价<el-input-number v-model="o.byproductUnitPrice" :min="0" :precision="4" controls-position="right" size="small" /></label>
                       <label v-if="requiresManualCostAllocation(row)" data-testid="cost-allocation-ratio">成本分摊比例(%)<el-input-number v-model="o.costAllocationRatio" :min="0" :max="100" :precision="4" controls-position="right" size="small" /></label>
-                      <label>总工时<span class="sp-readonly">{{ outputLineTotalHours(o).toFixed(2) }} h</span></label>
                     </div>
                   </div>
                   <div class="sp-card-submit sp-grid-submit">
@@ -3702,13 +3741,16 @@ defineExpose({ hasUnsavedRows, refreshSharedInventories });
                     </div>
                     <el-button
                       size="small"
+                      plain
+                      class="sp-draft-action"
                       :loading="row.saving"
                       :disabled="!!draftSaveDisabledReason(row) || row.saving"
                       :title="draftSaveDisabledReason(row) || '只保存草稿，不占用生产库库存'"
                       @click="handleSave(row, 'draft')"
                     >保存草稿</el-button>
                     <el-button
-                      type="primary" :icon="Check"
+                      type="primary" size="large" :icon="Check"
+                      class="sp-submit-primary"
                       :loading="row.saving"
                       :disabled="!!submitDisabledReason(row) || row.saving"
                       :title="submitDisabledReason(row) || '正式报工并自动分摊生产库批次'"
@@ -4222,6 +4264,16 @@ defineExpose({ hasUnsavedRows, refreshSharedInventories });
   font-size: 11px;
 }
 
+.sp-draft-action {
+  color: #5f6b7a;
+}
+
+.sp-submit-primary {
+  min-width: 132px;
+  font-weight: 650;
+  box-shadow: 0 4px 10px rgb(22 119 255 / 18%);
+}
+
 .sp-allocation-result {
   padding: 12px 16px;
   border-top: 1px solid #cce8d4;
@@ -4374,6 +4426,67 @@ defineExpose({ hasUnsavedRows, refreshSharedInventories });
   font-size: 11px;
   font-weight: 400;
 }
+.sp-execution-section {
+  padding: 12px;
+  border: 1px solid #d9e6f7;
+  border-radius: 6px;
+  background: #f7faff;
+}
+.sp-execution-section-title {
+  margin-bottom: 8px;
+  color: #303133;
+  font-size: 12px;
+  font-weight: 650;
+}
+.sp-execution-line {
+  display: grid;
+  grid-template-columns: minmax(180px, 1.35fr) repeat(4, minmax(120px, 1fr));
+  align-items: end;
+  gap: 10px 12px;
+  padding: 10px 0;
+  border-top: 1px solid #e4ebf5;
+}
+.sp-execution-line:first-of-type {
+  border-top: 0;
+}
+.sp-execution-line > label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  color: #697586;
+  font-size: 11px;
+  font-weight: 600;
+}
+.sp-execution-line :deep(.el-date-editor),
+.sp-execution-line :deep(.el-input-number) {
+  width: 100%;
+}
+.sp-execution-product {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  align-self: center;
+  min-width: 0;
+  color: #303133;
+  font-size: 12px;
+}
+.sp-execution-product strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.sp-execution-product span {
+  color: #909399;
+  font-size: 11px;
+}
+.sp-grid-execution-heading {
+  margin-bottom: 4px;
+  padding-top: 0;
+  border-top: 0;
+}
+.sp-grid-execution-line {
+  margin-bottom: 4px;
+}
 .sp-output-section-title {
   display: flex;
   justify-content: space-between;
@@ -4460,6 +4573,9 @@ defineExpose({ hasUnsavedRows, refreshSharedInventories });
 }
 
 @media (max-width: 1366px) {
+  .sp-execution-line {
+    grid-template-columns: minmax(180px, 1.2fr) repeat(2, minmax(140px, 1fr));
+  }
   .sp-output-fields {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
@@ -4482,8 +4598,14 @@ defineExpose({ hasUnsavedRows, refreshSharedInventories });
     min-width: 100%;
   }
   .sp-output-fields,
-  .sp-output-optional-fields {
+  .sp-output-optional-fields,
+  .sp-execution-line {
     grid-template-columns: minmax(0, 1fr);
+  }
+  .sp-card-submit :deep(.el-button) {
+    width: 100%;
+    min-height: 40px;
+    margin-left: 0;
   }
 }
 </style>

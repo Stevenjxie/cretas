@@ -45,3 +45,14 @@
 - 制品：候选 JAR SHA-256 `969246e3fe4d603190ef1d08764acd2244ec15935bd54c6b40ca3434f3727432` 已只读校验并暂存至不可变 release cache；暂存未安装、未重启、未切流。
 - 发布边界：等待 PR #1730 合并后，从 clean exact `origin/main` 统一部署 Java/Web；部署只执行 schema migration、蓝绿切流与 Web 原子替换，不执行 F006 或其他租户业务写入。
 - Scope 锁已释放。
+
+## `UX-F006-R6-PROCESS-REPORT-FLOW-SORT-002` — `review`
+
+- Owner: `/root`
+- Base SHA: `ced086481c44eeeb57f43a9b86e908d68529e432`
+- 结果：逐工序报工的卡片与表格视图统一为“投入 → 工序执行 → 产出 → 确认提交”；开始时间、结束时间、人数和总工时从产出区移到工序执行区，草稿降为次操作，正式报工强化为唯一主操作。
+- 总览：双出成率表保留列线对齐和固定布局，为所有可排序表头增加鼠标、键盘焦点、升降序提示及可见焦点反馈；筛选入口继续由原表头漏斗提供。
+- UX Flow：面向车间填报人员按真实作业顺序组织，数量与单位成组，执行信息与产出数量分区，窄屏单列堆叠且提交按钮保持完整触达。
+- 验证：目标 Vitest 4 files / 20 tests 通过，`vue-tsc -b` 通过，Web Interface Guidelines 只读审查完成；可信 Web manifest build 在精确候选 commit 上执行。
+- 边界：只创建 PR，严格 `NOT_DEPLOYED`；未修改报工 API、Java 状态机或生产数据，生产业务写入为 0。
+- Scope 锁已释放。

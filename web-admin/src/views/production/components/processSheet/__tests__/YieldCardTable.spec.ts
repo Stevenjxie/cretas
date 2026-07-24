@@ -154,6 +154,12 @@ describe('YieldCardTable', () => {
     expect(text).toContain('50 kg');
     expect(text).not.toContain('100000 g');
     expect(text).toContain('表格可左右滑动查看完整字段');
+    expect(text).toContain('点击表头可升/降序');
+
+    const sortButtons = wrapper.findAll('button.yield-sort-trigger');
+    expect(sortButtons.length).toBeGreaterThan(10);
+    expect(sortButtons.some((button) => button.attributes('aria-label')?.includes('连续操作可切换升序和降序'))).toBe(true);
+    expect(sortButtons.every((button) => button.attributes('type') === 'button')).toBe(true);
   });
 
   it('explains a genuinely empty plan-wide yield card', async () => {
