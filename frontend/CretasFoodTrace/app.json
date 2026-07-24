@@ -2,7 +2,7 @@
   "expo": {
     "name": "白垩纪AI Agent",
     "slug": "CretasFoodTrace",
-    "version": "1.0.1",
+    "version": "1.0.2",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
@@ -43,7 +43,7 @@
       },
       "edgeToEdgeEnabled": true,
       "package": "com.cretas.foodtrace",
-      "versionCode": 12,
+      "versionCode": 13,
       "permissions": [
         "CAMERA",
         "READ_EXTERNAL_STORAGE",

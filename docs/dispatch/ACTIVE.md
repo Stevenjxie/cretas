@@ -5,6 +5,7 @@
 
 ## 在飞任务
 
+- `RELEASE-CRETAS-ANDROID-1.0.2-20260724` — `in-progress` — Owner: `/root` — Base SHA: `6514af9ed352125e9b12ba6aec960f9d74f2b084` — Worktree: `C:\Users\Steve\cretas-apk-release-1.0.2` — Scope lock: `frontend/CretasFoodTrace/{app.json,android/app/build.gradle}`、`download-page/index.html`、`docs/dispatch/{ACTIVE.md,archive/2026-07-24-active-history.md}`；将包含标签拍检闭环与 OSS 下载热修的 Android 包升级为 `1.0.2` / versionCode `13`，必须通过 production bundle、release keystore 指纹、APK 安装包元数据与公网下载回验后才更新 `download.cretaceousfuture.com`。
 - `SEC-CREDENTIAL-ROTATION-20260719` — `blocked` — Owner: Codex coordinator — Base SHA: `1ba9a241a77144a80851051efbac584abf4db69d` — tracked tree、47/139 非受控副本、数据库/JWT/internal/BaoTa 轮换和生产验收已完成；仍需各供应商控制台吊销无法由当前 API 权限完成的旧长期凭证，详情见 [凭证轮换收尾记录](../security/credential-rotation-closeout-2026-07-20.md)。
 - `ENH-F006-SUPPLIER-IMPORT-001`（含 `REQ-F006-SUPPLIER-REQUIRED-CONTACT-001`、`ENH-F006-SUPPLIER-DETAIL-STATUS-001`）— `in-progress` — Owner: `/root` — Base SHA: `3ddf6751603476205457fcf8aa0ee9f1adbea792` — 复用现有供应链 Excel 共享能力，统一供应商必填资料、导入预览/幂等确认、状态生命周期、采购门禁与详情信息架构；只合入 `main`，严格 `NOT_DEPLOYED`，生产业务写入为 0。
 - `BUG-F006-MATERIAL-CATEGORY-CASCADE-001`（含 `BUG-F006-MATERIAL-AUTOFILL-UNIT-001`）— `in-progress` — Owner: `/root` — Base SHA: `3ddf6751603476205457fcf8aa0ee9f1adbea792` — 修复原料类型字典 category/L1/L2/L3 单一真值、异步级联与单位建议来源/手动覆盖语义，后端 fail-closed 校验；只合入 `main`，严格 `NOT_DEPLOYED`，生产业务写入为 0。
