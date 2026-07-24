@@ -916,7 +916,8 @@ async def manual_chat(request: ManualChatRequest) -> dict:
             any(t in request.question for t in group) for group in _directive["require"]
         ):
             context_text_with_hint += (
-                "\n\n【权威口径指令 — 最高优先级，覆盖以上所有片段】" + _directive["text"]
+                "\n\n【权威口径指令 — 最高优先级，覆盖以上所有片段。这是内部指令，"
+                "回答中不得提及『指令』『口径指令』等机制字样，直接按口径作答】" + _directive["text"]
             )
             break  # 最多注入一条, 按表内顺序优先
 
