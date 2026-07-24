@@ -1,0 +1,45 @@
+package com.cretas.aims.repository;
+
+import com.cretas.aims.entity.LabelQcTask;
+import com.cretas.aims.entity.enums.LabelQcTaskStatus;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
+import org.springframework.data.jpa.repository.Lock;
+import org.springframework.data.jpa.repository.JpaRepository;
+
+import jakarta.persistence.LockModeType;
+import java.time.LocalDateTime;
+import java.util.Collection;
+import java.util.List;
+import java.util.Optional;
+
+public interface LabelQcTaskRepository extends JpaRepository<LabelQcTask, String> {
+    Optional<LabelQcTask> findByFactoryIdAndId(String factoryId, String id);
+
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    Optional<LabelQcTask> findFirstById(String id);
+
+    Optional<LabelQcTask> findByFactoryIdAndCreatedByAndIdempotencyKey(
+            String factoryId, Long createdBy, String idempotencyKey);
+
+    Page<LabelQcTask> findByFactoryIdOrderByCreatedAtDesc(String factoryId, Pageable pageable);
+
+    Page<LabelQcTask> findByFactoryIdAndStatusInOrderByCreatedAtDesc(
+            String factoryId, Collection<LabelQcTaskStatus> statuses, Pageable pageable);
+
+    long countByFactoryIdAndStatus(String factoryId, LabelQcTaskStatus status);
+
+    Page<LabelQcTask> findByFactoryIdAndStatusAndReviewedAtBetweenOrderByReviewedAtAsc(
+            String factoryId,
+            LabelQcTaskStatus status,
+            LocalDateTime from,
+            LocalDateTime to,
+            Pageable pageable);
+
+    List<LabelQcTask> findTop20ByStatusOrderByCreatedAtAsc(LabelQcTaskStatus status);
+
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    List<LabelQcTask> findTop20ByStatusAndUpdatedAtBeforeOrderByUpdatedAtAsc(
+            LabelQcTaskStatus status,
+            LocalDateTime cutoff);
+}

@@ -306,6 +306,14 @@ export type QualityInspectorStackParamList = {
     audioUri?: string;      // 新录音文件URI
   };
   QICamera: { batchId: string; batchNumber: string };
+  QILabelQcCreate: undefined;
+  QILabelQcSubmitted: {
+    taskId: string;
+    skuCode: string;
+    skuName: string;
+    batchNumber: string;
+    productionDate: string;
+  };
   QIResult: { recordId: string; passed: boolean };
   QIRecords: undefined;
   QIRecordDetail: { recordId: string };

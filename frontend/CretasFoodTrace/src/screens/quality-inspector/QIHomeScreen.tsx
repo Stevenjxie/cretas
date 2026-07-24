@@ -18,6 +18,7 @@ import { useNavigation } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useTranslation } from 'react-i18next';
+import { TouchableRipple } from 'react-native-paper';
 
 import { QI_COLORS, QualityInspectorStackParamList, QIBatch, QualityStatistics } from '../../types/qualityInspector';
 import { qualityInspectorApi } from '../../services/api/qualityInspectorApi';
@@ -247,6 +248,24 @@ export default function QIHomeScreen() {
       <View style={styles.quickActions}>
         <Text style={styles.sectionTitle}>{t('home.quickActions')}</Text>
         <View style={styles.actionGrid}>
+          {isScreenEnabled('QualityInspection') && (
+          <TouchableRipple
+            style={styles.actionItem}
+            onPress={() => navigation.navigate('QIInspectTab', { screen: 'QILabelQcCreate' })}
+            borderless
+            accessibilityRole="button"
+            accessibilityLabel="包装标签拍检"
+            testID="qi-home-label-qc-action"
+          >
+            <View style={styles.actionTouchableContent}>
+              <View style={[styles.actionIcon, { backgroundColor: '#FFF1EE' }]}>
+                <MaterialCommunityIcons name="label-multiple-outline" size={24} color="#C84A32" />
+              </View>
+              <Text style={styles.actionText}>标签拍检</Text>
+            </View>
+          </TouchableRipple>
+          )}
+
           {isScreenEnabled('QualityInspection') && (
           <TouchableOpacity
             style={styles.actionItem}
@@ -526,6 +545,14 @@ const styles = StyleSheet.create({
   },
   actionItem: {
     width: '22%',
+    alignItems: 'center',
+    minHeight: 72,
+    borderRadius: 12,
+    overflow: 'hidden',
+  },
+  actionTouchableContent: {
+    minHeight: 72,
+    width: '100%',
     alignItems: 'center',
   },
   actionIcon: {

@@ -74,6 +74,7 @@ def _mw(enabled=True, jwt_secret="test-secret-only-for-jwt-branch"):
 _HARDCODED_OLD_FALLBACK = "cretas-internal-2026"
 _OWNER_ACTION_PATH = "/api/smartbi/restaurant/sections/owner-action-chat"
 _AGENT_RUN_PATH = "/api/internal/smartbi/agent/runs"
+_LABEL_QC_PATH = "/api/label-qc/analyze"
 _GENERAL_ANALYSIS_PATHS = (
     "/api/chat/general-analysis",
     "/api/chat/general-analysis-stream",
@@ -126,6 +127,27 @@ def test_agent_run_prefix_requires_secret_and_injects_trusted_identity(monkeypat
         "business_type": "RESTAURANT",
         "role": "restaurant_owner",
     }
+
+
+def test_label_qc_requires_internal_secret(monkeypatch):
+    monkeypatch.setenv("INTERNAL_API_SECRET", "real-prod-secret-xyz")
+
+    missing_status, missing_echo = _run(_mw(), {}, path=_LABEL_QC_PATH)
+    status, echo = _run(
+        _mw(),
+        {
+            "x-internal-secret": "real-prod-secret-xyz",
+            "x-factory-id": "F001",
+        },
+        path=_LABEL_QC_PATH,
+    )
+
+    assert missing_status == 401
+    assert missing_echo.reached is False
+    assert status == 200
+    assert echo.reached is True
+    assert echo.state.get("auth_method") == "internal"
+    assert echo.state.get("factory_id") == "F001"
 
 
 @pytest.mark.parametrize("path", _GENERAL_ANALYSIS_PATHS)
