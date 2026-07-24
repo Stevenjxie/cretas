@@ -13,6 +13,12 @@ import org.springframework.util.MultiValueMap;
 import org.springframework.web.client.RestClientException;
 import org.springframework.web.client.RestTemplate;
 
+import java.io.InputStream;
+import java.net.URI;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -20,7 +26,10 @@ import java.util.List;
 @Component
 public class LabelQcAnalysisClient {
 
+    private static final int MAX_IMAGE_BYTES = 10 * 1024 * 1024;
+
     private final RestTemplate restTemplate;
+    private final HttpClient imageHttpClient;
     private final String baseUrl;
     private final String internalSecret;
     private final ObjectMapper objectMapper;
@@ -31,6 +40,10 @@ public class LabelQcAnalysisClient {
             @Qualifier("pythonAiInternalSecret") String internalSecret,
             ObjectMapper objectMapper) {
         this.restTemplate = restTemplate;
+        this.imageHttpClient = HttpClient.newBuilder()
+                .connectTimeout(Duration.ofSeconds(5))
+                .followRedirects(HttpClient.Redirect.NORMAL)
+                .build();
         this.baseUrl = baseUrl;
         this.internalSecret = internalSecret;
         this.objectMapper = objectMapper;
@@ -41,10 +54,7 @@ public class LabelQcAnalysisClient {
             throw new LabelQcClientException("图片下载地址为空");
         }
         try {
-            byte[] imageBytes = restTemplate.getForObject(signedDownloadUrl, byte[].class);
-            if (imageBytes == null || imageBytes.length == 0) {
-                throw new LabelQcClientException("图片下载结果为空");
-            }
+            byte[] imageBytes = downloadImage(signedDownloadUrl);
 
             HttpHeaders imageHeaders = new HttpHeaders();
             imageHeaders.setContentType(MediaType.IMAGE_JPEG);
@@ -82,6 +92,53 @@ public class LabelQcAnalysisClient {
             throw new LabelQcClientException("视觉服务暂时不可用", ex);
         } catch (Exception ex) {
             throw new LabelQcClientException("视觉结果解析失败", ex);
+        }
+    }
+
+    private byte[] downloadImage(String signedDownloadUrl) {
+        final URI uri;
+        try {
+            uri = URI.create(signedDownloadUrl);
+        } catch (IllegalArgumentException ex) {
+            throw new LabelQcClientException("图片下载地址无效", ex);
+        }
+
+        HttpRequest request = HttpRequest.newBuilder(uri)
+                .timeout(Duration.ofSeconds(30))
+                .GET()
+                .build();
+        try {
+            HttpResponse<InputStream> response = imageHttpClient.send(
+                    request,
+                    HttpResponse.BodyHandlers.ofInputStream());
+            if (response.statusCode() < 200 || response.statusCode() >= 300) {
+                response.body().close();
+                throw new LabelQcClientException("图片下载失败 HTTP " + response.statusCode());
+            }
+            long contentLength = response.headers()
+                    .firstValueAsLong(HttpHeaders.CONTENT_LENGTH)
+                    .orElse(-1);
+            if (contentLength > MAX_IMAGE_BYTES) {
+                response.body().close();
+                throw new LabelQcClientException("图片超过 10 MB 上限");
+            }
+            try (InputStream body = response.body()) {
+                byte[] imageBytes = body.readNBytes(MAX_IMAGE_BYTES + 1);
+                if (imageBytes.length == 0) {
+                    throw new LabelQcClientException("图片下载结果为空");
+                }
+                if (imageBytes.length > MAX_IMAGE_BYTES) {
+                    throw new LabelQcClientException("图片超过 10 MB 上限");
+                }
+                return imageBytes;
+            }
+        } catch (InterruptedException ex) {
+            Thread.currentThread().interrupt();
+            throw new LabelQcClientException("图片下载被中断", ex);
+        } catch (LabelQcClientException ex) {
+            throw ex;
+        } catch (Exception ex) {
+            throw new LabelQcClientException("图片下载暂时不可用", ex);
         }
     }
 
