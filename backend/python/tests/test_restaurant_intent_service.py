@@ -97,9 +97,53 @@ def test_should_delegate_validated_plan_cache_without_java_reinterpretation():
     assert should_delegate(spec) is True
 
 
+def test_should_delegate_reviewed_exact_plan_without_java_reinterpretation():
+    spec = _build_spec(
+        "RESTAURANT_OPS_GROSS_MARGIN",
+        "哪个菜卖得好 本月 全部门店",
+        confidence=1.0,
+        tier="exact",
+        planner_authority="promoted_exact",
+        require_explicit_time=True,
+    )
+
+    assert spec.clarification_needed is False
+    assert should_delegate(spec) is True
+
+
+@pytest.mark.asyncio
+async def test_reviewed_exact_missing_time_returns_the_four_expected_buttons():
+    spec = _build_spec(
+        "RESTAURANT_OPS_GROSS_MARGIN",
+        "哪个菜卖得好",
+        confidence=1.0,
+        tier="exact",
+        planner_authority="promoted_exact",
+        require_explicit_time=True,
+    )
+
+    result = await tiered_answer(
+        "哪个菜卖得好",
+        object(),
+        "DEMO_REST",
+        "restaurant_manager",
+        precomputed_spec=spec,
+    )
+
+    assert result["kind"] == "clarification"
+    assert result["answer_text"] == TIME_CLARIFICATION_QUESTION
+    assert result["suggested_followups"] == [
+        {"label": "本月", "question": "本月"},
+        {"label": "上个月", "question": "上个月"},
+        {"label": "最近7天", "question": "最近7天"},
+        {"label": "最近30天", "question": "最近30天"},
+    ]
+
+
 @pytest.mark.parametrize("authority", [
     "llm_contract_repair",
     "validated_plan_cache_contract_repair",
+    "promoted_exact_contract_repair",
 ])
 def test_should_delegate_contract_repair_without_java_reinterpretation(authority):
     spec = _spec(
@@ -801,7 +845,16 @@ async def test_endpoint_clarification_shape(monkeypatch):
         "smartbi.gold.restaurant_intent.parse_restaurant_query",
         AsyncMock(return_value=spec),
     )
-    tiered_result = {"kind": "clarification", "answer_text": "您想看哪方面？", "spec": spec}
+    followups = [
+        {"label": "本月", "question": "本月"},
+        {"label": "上个月", "question": "上个月"},
+    ]
+    tiered_result = {
+        "kind": "clarification",
+        "answer_text": "您想看哪方面？",
+        "suggested_followups": followups,
+        "spec": spec,
+    }
     monkeypatch.setattr(
         "smartbi.gold.restaurant_intent_service.tiered_answer",
         AsyncMock(return_value=tiered_result),
@@ -812,7 +865,12 @@ async def test_endpoint_clarification_shape(monkeypatch):
     # 但仍模糊, 走 mock 的 clarification 路径。
     body = TieredIntentAnswerRequest(factory_id="QHJ01", query="赚钱情况怎么样")
     result = await post_restaurant_tiered_answer(_fake_request(), body)
-    assert result == {"delegate": True, "kind": "clarification", "answer_text": "您想看哪方面？"}
+    assert result == {
+        "delegate": True,
+        "kind": "clarification",
+        "answer_text": "您想看哪方面？",
+        "suggested_followups": followups,
+    }
 
 
 @pytest.mark.asyncio

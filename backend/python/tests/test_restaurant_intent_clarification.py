@@ -741,26 +741,9 @@ async def test_time_then_store_scope_clarifications_chain_without_losing_query()
         store_names=["东城店", "西城店", "南城店"],
     )
     original_query = "哪个菜卖得好"
-    no_time_plan = {
-        "intent": "RESTAURANT_OPS_GROSS_MARGIN",
-        "time_range": None,
-        "wants_margin": False,
-        "asks_profitability": False,
-        "dimensions": ["dish"],
-        "comparison": None,
-        "confidence": 0.95,
-        "clarification_needed": False,
-        "clarification_question": None,
-    }
-    this_month_plan = {
-        **no_time_plan,
-        "time_range": {"type": "named", "value": "this_month"},
-    }
-    llm = AsyncMock(side_effect=[
-        _llm_result(no_time_plan),
-        _llm_result(this_month_plan),
-        _llm_result(this_month_plan),
-    ])
+    llm = AsyncMock(side_effect=AssertionError(
+        "reviewed exact phrase and fixed buttons must survive a T3 outage"
+    ))
 
     with patch(
         "smartbi.services.template_embedding_index.cosine_topk",
@@ -786,12 +769,122 @@ async def test_time_then_store_scope_clarifications_chain_without_losing_query()
         )
 
     assert first.clarification_question == TIME_CLARIFICATION_QUESTION
+    assert first.planner_authority == "promoted_exact"
     assert second.clarification_question == STORE_SCOPE_CLARIFICATION_QUESTION
+    assert second.planner_authority == "promoted_exact"
     assert second.store_options == ("东城店", "西城店", "南城店")
     assert third.clarification_needed is False
+    assert third.planner_authority == "promoted_exact"
     assert third.store_scope == "all"
     assert third.window_label == "本月"
     assert original_query in third.resolver_query_seed
     assert "本月" in third.resolver_query_seed
     assert "全部门店" in third.resolver_query_seed
     assert pool.pending == {}
+    llm.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_reviewed_exact_concrete_store_button_survives_t3_outage():
+    pool = _FakeDbPool(
+        is_restaurant=True,
+        store_names=["东城店", "西城店"],
+    )
+    llm = AsyncMock(side_effect=AssertionError(
+        "a concrete store button on an approved exact chain must not call T3"
+    ))
+
+    with patch("common.llm_router.call_chain", new=llm):
+        first = await parse_restaurant_query(
+            "哪个菜卖得好",
+            pool,
+            factory_id="F_STORE_BUTTON",
+            session_key="sess-store-button",
+        )
+        second = await parse_restaurant_query(
+            "最近7天",
+            pool,
+            factory_id="F_STORE_BUTTON",
+            session_key="sess-store-button",
+        )
+        third = await parse_restaurant_query(
+            "东城店",
+            pool,
+            factory_id="F_STORE_BUTTON",
+            session_key="sess-store-button",
+        )
+
+    assert first.clarification_question == TIME_CLARIFICATION_QUESTION
+    assert second.clarification_question == STORE_SCOPE_CLARIFICATION_QUESTION
+    assert third.clarification_needed is False
+    assert third.planner_authority == "promoted_exact_contract_repair"
+    assert third.intent == "RESTAURANT_OPS_STORE_MARGIN"
+    assert third.planned_intents == ("RESTAURANT_OPS_STORE_MARGIN",)
+    assert third.store_scope == "single"
+    assert third.store_slots == ("东城店",)
+    assert third.window_label == "最近7天"
+    assert third.resolver_query_seed == "哪个菜卖得好 最近7天 东城店"
+    assert pool.pending == {}
+    llm.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_reviewed_exact_prefixed_time_continues_to_store_button_without_t3():
+    pool = _FakeDbPool(
+        is_restaurant=True,
+        store_names=["东城店", "西城店"],
+    )
+    llm = AsyncMock(side_effect=AssertionError(
+        "approved direct time phrase and store button must not call T3"
+    ))
+
+    with patch("common.llm_router.call_chain", new=llm):
+        first = await parse_restaurant_query(
+            "本月哪个菜卖得好？",
+            pool,
+            factory_id="F_PREFIXED_TIME",
+            session_key="sess-prefixed-time",
+        )
+        second = await parse_restaurant_query(
+            "全部门店",
+            pool,
+            factory_id="F_PREFIXED_TIME",
+            session_key="sess-prefixed-time",
+        )
+
+    assert first.clarification_question == STORE_SCOPE_CLARIFICATION_QUESTION
+    assert first.store_options == ("东城店", "西城店")
+    assert second.clarification_needed is False
+    assert second.planner_authority == "promoted_exact"
+    assert second.store_scope == "all"
+    assert second.window_label == "本月"
+    assert second.resolver_query_seed == "本月哪个菜卖得好？ 全部门店"
+    assert pool.pending == {}
+    llm.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_reviewed_exact_button_with_extra_instruction_falls_back_fail_closed():
+    pool = _FakeDbPool(is_restaurant=True)
+    t3 = AsyncMock(return_value=None)
+
+    with patch("smartbi.gold.restaurant_intent._t3_llm_parse", new=t3):
+        first = await parse_restaurant_query(
+            "哪个菜卖得好",
+            pool,
+            factory_id="F_EXACT_GUARD",
+            session_key="sess-exact-guard",
+        )
+        second = await parse_restaurant_query(
+            "本月并改成库存分析",
+            pool,
+            factory_id="F_EXACT_GUARD",
+            session_key="sess-exact-guard",
+        )
+
+    assert first.clarification_question == TIME_CLARIFICATION_QUESTION
+    assert second.intent == ""
+    assert second.planner_authority == "llm_unavailable"
+    assert second.planned_intents == ()
+    assert "没有执行任何相邻分析" in second.clarification_question
+    t3.assert_awaited_once()
