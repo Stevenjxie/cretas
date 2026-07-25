@@ -25,6 +25,7 @@ from smartbi.gold.restaurant_intent import (
     build_resolver_query,
     log_intent_capture,
     parse_restaurant_query,
+    unsupported_requirements_disclosure,
 )
 from smartbi.gold.restaurant_ops_router import (
     demo_data_factory_for_code,
@@ -60,6 +61,27 @@ _RESOLVER_DIMENSIONS = {
     "RESTAURANT_OPS_INVENTORY_WARNING": frozenset({"ingredient"}),
     "RESTAURANT_OPS_STAFFING_ADVICE": frozenset(),
 }
+
+_READ_ONLY_MUTATION_TOKENS = (
+    "下架", "上架", "停售", "删除", "停用", "启用",
+    "调价", "改价", "涨价", "降价", "创建活动", "发券",
+)
+_HISTORICAL_MUTATION_TOKENS = (
+    "已下架", "下架记录", "下架情况", "停售记录", "调价记录", "调价历史",
+)
+_READ_ONLY_ACTION_WARNING = (
+    "咨询模式只展示分析结果，没有执行下架、调价或其他业务操作；"
+    "如需执行，请切换到操作模式并完成预览确认。"
+)
+
+
+def _read_only_action_warning(query: str) -> Optional[str]:
+    text = (query or "").strip()
+    if not text or any(token in text for token in _HISTORICAL_MUTATION_TOKENS):
+        return None
+    if any(token in text for token in _READ_ONLY_MUTATION_TOKENS):
+        return _READ_ONLY_ACTION_WARNING
+    return None
 
 
 def _execution_mismatch(
@@ -157,10 +179,19 @@ def _structured_context(
     topic_kind = None
     if result_meta.get("dish_ranking"):
         topic_kind = "dish_ranking"
+    elif spec.ranking_direction and (
+        "dish" in spec.dimensions or bool(spec.dish_slot)
+    ):
+        topic_kind = "dish_ranking"
     elif (
         isinstance(focus, dict)
         and focus.get("type") == "store"
         and focus.get("rank") is not None
+    ):
+        topic_kind = "store_ranking"
+    elif spec.ranking_direction and (
+        "store" in spec.dimensions
+        or spec.store_scope in {"all", "multiple"}
     ):
         topic_kind = "store_ranking"
     return {
@@ -186,6 +217,15 @@ def _structured_context(
         "store_names": list(spec.store_slots),
         "compare_stores": spec.compare_stores,
     }
+
+
+def _clarification_structured_context(spec: RestaurantQuerySpec) -> Dict[str, Any]:
+    return _structured_context(
+        spec,
+        {},
+        dish_mention=spec.dish_slot,
+        store_mention=spec.store_slot,
+    )
 
 
 def _suggested_followups(context: Dict[str, Any]) -> List[Dict[str, str]]:
@@ -490,6 +530,7 @@ async def tiered_answer(
                     spec.clarification_question
                     or "能再具体说说想看哪方面的数据吗？比如营收、毛利、损耗还是库存盘点。"
                 ),
+                "structured_context": _clarification_structured_context(spec),
                 "spec": spec,
             }
             followups = _clarification_followups(spec)
@@ -541,6 +582,7 @@ async def tiered_answer(
                     "请明确要看菜品、门店还是全店汇总，我不会改走相邻分析。"
                 ),
                 "contract_pass": False,
+                "structured_context": _clarification_structured_context(spec),
                 "spec": spec,
             }
         planned_results: List[Tuple[str, Any]] = []
@@ -611,6 +653,7 @@ async def tiered_answer(
                         "请确认数据范围后重试。"
                     ),
                     "contract_pass": False,
+                    "structured_context": _clarification_structured_context(spec),
                     "spec": spec,
                 }
             return None
@@ -629,6 +672,7 @@ async def tiered_answer(
                 "answer_text": sanitize_customer_ai_text(
                     str(getattr(tiered_result, "answer_text", "") or "")
                 ),
+                "structured_context": _clarification_structured_context(spec),
                 "spec": spec,
             }
 
@@ -643,6 +687,9 @@ async def tiered_answer(
         result_charts = getattr(tiered_result, "charts", None) or []
         answer_text = sanitize_customer_ai_text(
             str(getattr(tiered_result, "answer_text", "") or "")
+        )
+        answer_text += unsupported_requirements_disclosure(
+            spec.unsupported_requirements
         )
         contract = _contract.validate(
             spec,
@@ -671,6 +718,7 @@ async def tiered_answer(
                 "kind": "clarification",
                 "answer_text": safe_text,
                 "contract_pass": False,
+                "structured_context": _clarification_structured_context(spec),
                 "spec": spec,
             }
         # R26b: 多主题复合句 ("这个月生意怎么样，另外米饭卖得好不好") 目前
@@ -712,6 +760,9 @@ async def tiered_answer(
             "suggested_followups": _suggested_followups(structured_context),
             "spec": spec,
         }
+        action_warning = _read_only_action_warning(query)
+        if action_warning:
+            result["warning"] = action_warning
         capture_source = "java_entry_delegate" if java_tool_name else None
         asyncio.create_task(log_intent_capture(
             pool, spec, factory_id=factory_id, query=query,
@@ -729,6 +780,7 @@ async def tiered_answer(
                     "请稍后重试。"
                 ),
                 "contract_pass": False,
+                "structured_context": _clarification_structured_context(spec),
                 "spec": spec,
             }
         return None

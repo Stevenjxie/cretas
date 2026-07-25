@@ -290,6 +290,15 @@ _UNSUPPORTED_REQUIREMENTS = frozenset({
     "service_speed", "process_bottleneck",
 })
 
+_UNSUPPORTED_REQUIREMENT_LABELS = {
+    "net_profit": "净利润（缺少费用、税费及其他收支）",
+    "return_rate": "退菜率（缺少退菜时间、菜品、数量、原因和责任门店）",
+    "customer_review": "顾客评价（缺少评分、评价文本、时间、菜品与门店）",
+    "production_time": "菜品制作时长（缺少开始制作和完成时间）",
+    "service_speed": "逐单出餐时长（缺少下单、开始制作和出餐完成时间）",
+    "process_bottleneck": "工序瓶颈（缺少各工序节点及耗时）",
+}
+
 
 def _detect_requested_metrics(text: str) -> Tuple[str, ...]:
     detected = tuple(
@@ -304,6 +313,13 @@ def _detect_requested_metrics(text: str) -> Tuple[str, ...]:
         "毛利" not in text or rejects_gross_substitution
     ):
         detected = tuple(metric for metric in detected if metric != "gross_margin")
+    rejects_revenue_substitution = any(token in text for token in (
+        "不要用营业额", "不能用营业额", "不用营业额", "不拿营业额",
+        "不要用营收", "不能用营收", "不用营收", "不拿营收",
+        "不要用销售额", "不能用销售额", "不用销售额",
+    ))
+    if "net_profit" in detected and rejects_revenue_substitution:
+        detected = tuple(metric for metric in detected if metric != "revenue")
     return detected
 
 
@@ -413,14 +429,6 @@ def _unsupported_requirement_question(
     requirements: Tuple[str, ...],
     requested_metrics: Tuple[str, ...] = (),
 ) -> str:
-    missing_labels = {
-        "net_profit": "净利润（还缺费用、税费及其他收支）",
-        "return_rate": "退菜率（还缺退菜时间、菜品、数量、原因和责任门店）",
-        "customer_review": "顾客评价（还缺评分、评价文本、时间、菜品与门店）",
-        "production_time": "菜品制作时长（还缺开始制作和完成时间）",
-        "service_speed": "逐单出餐时长（还缺下单、开始制作和出餐完成时间）",
-        "process_bottleneck": "工序瓶颈（还缺各工序节点及耗时）",
-    }
     available_labels = {
         "recipe_cost": "菜品成本",
         "wastage": "食材损耗",
@@ -436,12 +444,34 @@ def _unsupported_requirement_question(
     ]
     if not available:
         available = ["订单集中程度", "排班人效", "菜品销量", "已覆盖销售的毛利"]
-    missing = [missing_labels[item] for item in requirements if item in missing_labels]
+    missing = [
+        _UNSUPPORTED_REQUIREMENT_LABELS[item]
+        for item in requirements
+        if item in _UNSUPPORTED_REQUIREMENT_LABELS
+    ]
     return (
         f"当前可以可靠分析：{'、'.join(available)}。"
         f"当前不能可靠分析：{'；'.join(missing)}。"
         "不会用营业额、毛利或其他相近指标替代这些缺失指标，也不会把部分完成说成全部完成。"
         "补齐括号内明细后可以继续；也可以明确只分析当前已有的维度。"
+    )
+
+
+def unsupported_requirements_disclosure(requirements: Tuple[str, ...]) -> str:
+    """Explain which requested dimensions were left blank after partial analysis."""
+    missing = [
+        _UNSUPPORTED_REQUIREMENT_LABELS[item]
+        for item in requirements
+        if item in _UNSUPPORTED_REQUIREMENT_LABELS
+    ]
+    if not missing:
+        return ""
+    bullets = "\n".join(f"- {item}" for item in missing)
+    return (
+        "\n\n### 本次缺少数据、暂时留空的维度\n"
+        f"{bullets}\n"
+        "这些维度本次没有参与结论，也没有用营业额、毛利或其他相邻指标替代。"
+        "补齐上述明细后，可以在同一分析中继续合并判断。"
     )
 
 
@@ -988,6 +1018,11 @@ def _build_spec(
         for requirement in requested_metrics
         if requirement in _UNSUPPORTED_REQUIREMENTS
     )
+    supported_requested_metrics = tuple(
+        requirement
+        for requirement in requested_metrics
+        if requirement not in _UNSUPPORTED_REQUIREMENTS
+    )
     analysis_action = _detect_analysis_action(effective_query)
     effective_planner_authority = (
         planner_authority
@@ -997,9 +1032,11 @@ def _build_spec(
         code
         and len(planned_intents) == 1
         and code not in planned_intents
-        and requested_metrics
-        and not unsupported_requirements
-        and all(metric in _CONTRACT_REPAIRABLE_METRICS for metric in requested_metrics)
+        and supported_requested_metrics
+        and all(
+            metric in _CONTRACT_REPAIRABLE_METRICS
+            for metric in supported_requested_metrics
+        )
     ):
         # The LLM remains the semantic entry point, but its raw resolver label
         # is not executable when it contradicts the metric/object slots in the
@@ -1035,7 +1072,11 @@ def _build_spec(
     asks_export = any(token in effective_query for token in (
         "导出", "下载", "生成文件", "可导出的字段",
     ))
-    if unsupported_requirements and not clarification_needed:
+    if (
+        unsupported_requirements
+        and not supported_requested_metrics
+        and not clarification_needed
+    ):
         clarification_needed = True
         clarification_question = _unsupported_requirement_question(
             unsupported_requirements,
@@ -1778,7 +1819,12 @@ async def parse_restaurant_query(
         for requirement in early_requirements
         if requirement in _UNSUPPORTED_REQUIREMENTS
     )
-    if early_unsupported:
+    early_supported = tuple(
+        requirement
+        for requirement in early_requirements
+        if requirement not in _UNSUPPORTED_REQUIREMENTS
+    )
+    if early_unsupported and not early_supported:
         return _build_spec(
             "",
             norm_query,

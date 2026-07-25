@@ -64,7 +64,7 @@
           </template>
         </el-table-column>
         <el-table-column prop="ingredientName" label="物料" min-width="120">
-          <template #default="{ row }">{{ row.ingredientName || row.normalizedName }}</template>
+          <template #default="{ row }">{{ ingredientDisplayName(row) }}</template>
         </el-table-column>
         <el-table-column prop="supplierName" label="供应商" min-width="120">
           <template #default="{ row }">{{ row.supplierName || '—' }}</template>
@@ -118,7 +118,7 @@
         <div class="acks-title">已确认/已解释 ({{ acks.length }})</div>
         <el-table :data="acks" size="small" stripe style="width: 100%">
           <el-table-column label="物料" min-width="100">
-            <template #default="{ row }">{{ row.ingredientName || row.normalizedName }}</template>
+            <template #default="{ row }">{{ ingredientDisplayName(row) }}</template>
           </el-table-column>
           <el-table-column prop="supplierName" label="供应商" min-width="100">
             <template #default="{ row }">{{ row.supplierName || '—' }}</template>
@@ -206,6 +206,11 @@ import { usePermissionStore } from '@/store/modules/permission';
 import { getErrorMessage } from '@/utils/errorToast';
 import CanvasAwareWrapper from '@/components/canvas/CanvasAwareWrapper.vue';
 import {
+  ingredientDisplayName,
+  normalizeIngredientOption,
+  normalizedIngredientValue,
+} from './ingredientOption';
+import {
   detectPriceAnomalies,
   ackPriceAnomaly,
   listPriceAnomalyAcks,
@@ -237,8 +242,9 @@ let trendChart: echarts.ECharts | null = null;
 const trendIngredients = computed(() => {
   const seen = new Map<string, string>();
   for (const a of anomalies.value) {
-    if (a.normalizedName && !seen.has(a.normalizedName)) {
-      seen.set(a.normalizedName, a.ingredientName || a.normalizedName);
+    const option = normalizeIngredientOption(a);
+    if (option && !seen.has(option.value)) {
+      seen.set(option.value, option.label);
     }
   }
   return Array.from(seen, ([value, label]) => ({ value, label }));
@@ -267,7 +273,9 @@ function renderTrend(points: import('@/api/smartbi/priceAnomaly').SupplierPriceP
   const prices = valid.map((p) => p.unitPrice as number);
 
   // 本食材当前异常 (标红点 + 基线)
-  const anomaly = anomalies.value.find((a) => a.normalizedName === trendIngredient.value);
+  const anomaly = anomalies.value.find(
+    (a) => normalizedIngredientValue(a) === trendIngredient.value,
+  );
   const markData =
     anomaly && anomaly.anomalyDeliveryDate && anomaly.newPrice != null
       ? [{ name: '异常点', coord: [anomaly.anomalyDeliveryDate, anomaly.newPrice], value: anomaly.newPrice }]
@@ -318,8 +326,9 @@ function renderTrend(points: import('@/api/smartbi/priceAnomaly').SupplierPriceP
 }
 
 function onRowClick(row: PriceAnomaly) {
-  if (row.normalizedName && row.normalizedName !== trendIngredient.value) {
-    trendIngredient.value = row.normalizedName;
+  const value = normalizedIngredientValue(row);
+  if (value && value !== trendIngredient.value) {
+    trendIngredient.value = value;
     loadTrend();
   }
 }
@@ -337,7 +346,7 @@ const explainForm = reactive<{ reasonCode: ReasonCode | ''; reasonNote: string }
 
 const explainTitle = computed(() => {
   if (!current.value) return '录入解释';
-  const name = current.value.ingredientName || current.value.normalizedName;
+  const name = ingredientDisplayName(current.value);
   const sup = current.value.supplierName ? ` · ${current.value.supplierName}` : '';
   return `录入解释 — ${name}${sup}`;
 });
@@ -375,7 +384,7 @@ async function loadAnomalies() {
     acks.value = ackList;
     // 默认选第一条异常的食材, 画出它的进价趋势曲线
     if (det.length) {
-      const first = det[0].normalizedName;
+      const first = normalizedIngredientValue(det[0]);
       if (first && !trendIngredients.value.some((o) => o.value === trendIngredient.value)) {
         trendIngredient.value = first;
       }
@@ -411,9 +420,14 @@ async function submitExplain() {
   }
   submitting.value = true;
   try {
+    const ingredient = normalizeIngredientOption(current.value);
+    if (!ingredient) {
+      ElMessage({ message: '缺少有效物料名称，无法记录', type: 'error', duration: 0, showClose: true });
+      return;
+    }
     await ackPriceAnomaly({
-      normalizedName: current.value.normalizedName,
-      ingredientName: current.value.ingredientName,
+      normalizedName: ingredient.value,
+      ingredientName: ingredient.label,
       supplierId: current.value.supplierId,
       supplierName: current.value.supplierName,
       anomalyDeliveryDate: current.value.anomalyDeliveryDate,

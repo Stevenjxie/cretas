@@ -73,7 +73,7 @@ def test_owner_action_http_rejects_header_body_tenant_mismatch_before_side_effec
 def test_owner_action_http_accepts_matching_internal_tenant_and_logs_same_tenant(monkeypatch):
     observed = {}
 
-    def fake_impl(body, request):
+    def fake_impl(body, request, live_overrides=None):
         observed["impl_factory"] = body.factory_id
         observed["request_factory"] = request.state.factory_id
         return {

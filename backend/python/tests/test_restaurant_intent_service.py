@@ -258,7 +258,10 @@ async def test_tiered_answer_clarification_skips_resolver(monkeypatch):
     monkeypatch.setattr(svc, "_resolve_tiered", _boom)
 
     result = await tiered_answer("情况怎么样", object(), "QHJ01", None)
-    assert result == {"kind": "clarification", "answer_text": "您想看哪方面？", "spec": spec}
+    assert result["kind"] == "clarification"
+    assert result["answer_text"] == "您想看哪方面？"
+    assert result["structured_context"]["analysis_action"] == "lookup"
+    assert result["spec"] is spec
 
 
 @pytest.mark.asyncio
@@ -267,6 +270,10 @@ async def test_time_clarification_returns_four_continuation_buttons(monkeypatch)
         intent="RESTAURANT_OPS_GROSS_MARGIN",
         clarification_needed=True,
         clarification_question=TIME_CLARIFICATION_QUESTION,
+        dimensions=("dish",),
+        requested_metrics=("sales_volume",),
+        ranking_direction="best",
+        dish_slot="招牌藤椒味(单人份)",
     )
     monkeypatch.setattr(
         svc,
@@ -289,6 +296,8 @@ async def test_time_clarification_returns_four_continuation_buttons(monkeypatch)
         {"label": "最近7天", "question": "最近7天"},
         {"label": "最近30天", "question": "最近30天"},
     ]
+    assert result["structured_context"]["topic_kind"] == "dish_ranking"
+    assert result["structured_context"]["focus_entity"]["name"] == "招牌藤椒味(单人份)"
 
 
 @pytest.mark.asyncio
@@ -489,6 +498,87 @@ async def test_tiered_answer_executes_and_combines_multi_resolver_plan(monkeypat
     assert "门店毛利" in result["answer_text"]
     assert "优先级" in result["answer_text"]
     assert result["contract_pass"] is True
+
+
+@pytest.mark.asyncio
+async def test_tiered_answer_analyzes_supported_metrics_and_lists_missing_dimensions(
+    monkeypatch,
+):
+    query = "本月优化菜品结构，提高毛利率并降低退菜率"
+    spec = _build_spec(
+        "RESTAURANT_OPS_GROSS_MARGIN",
+        query,
+        confidence=1.0,
+        tier="llm",
+        planner_authority="llm",
+    )
+    assert spec.clarification_needed is False
+
+    monkeypatch.setattr(
+        svc,
+        "_resolve_tiered",
+        AsyncMock(return_value=OpsAnswer(
+            code="RESTAURANT_OPS_GROSS_MARGIN",
+            title="菜品优化",
+            answer_text="本月菜品毛利率为 62%。优化建议：先复核低毛利菜品。",
+            charts=[],
+            kpis=[],
+            meta={
+                "marginInvariantPass": True,
+                "scope_matches_request": True,
+            },
+        )),
+    )
+    monkeypatch.setattr(svc, "log_intent_capture", AsyncMock(return_value=1))
+
+    result = await tiered_answer(
+        query,
+        object(),
+        "QHJ01",
+        "restaurant_owner",
+        precomputed_spec=spec,
+    )
+    await asyncio.sleep(0)
+
+    assert result["kind"] == "answer"
+    assert result["contract_pass"] is True
+    assert "本次缺少数据、暂时留空的维度" in result["answer_text"]
+    assert "退菜率" in result["answer_text"]
+    assert "没有参与结论" in result["answer_text"]
+    assert "相邻指标替代" in result["answer_text"]
+
+
+@pytest.mark.asyncio
+async def test_tiered_answer_marks_operation_words_as_read_only_without_blocking(
+    monkeypatch,
+):
+    spec = _spec(intent="RESTAURANT_OPS_GROSS_MARGIN")
+    monkeypatch.setattr(svc, "parse_restaurant_query", AsyncMock(return_value=spec))
+    monkeypatch.setattr(
+        svc,
+        "_resolve_tiered",
+        AsyncMock(return_value=OpsAnswer(
+            code=spec.intent,
+            title="低销量菜品",
+            answer_text="最近7天销量最低的5道菜已经列出。",
+            charts=[],
+            kpis=[],
+            meta={},
+        )),
+    )
+    monkeypatch.setattr(svc, "log_intent_capture", AsyncMock(return_value=1))
+
+    result = await tiered_answer(
+        "把最近7天销量最低的5道菜全部下架",
+        object(),
+        "QHJ01",
+        "restaurant_owner",
+    )
+    await asyncio.sleep(0)
+
+    assert result["kind"] == "answer"
+    assert "没有执行下架" in result["warning"]
+    assert "切换到操作模式" in result["warning"]
 
 
 def test_priority_section_uses_actual_non_cost_plan():
