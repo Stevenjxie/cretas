@@ -103,3 +103,15 @@
 - 验证：Python 餐饮/会话目标回归 531 通过（同一 6 个本机数据库 fixture 明确排除），`compileall`、增量 Ruff、`git diff --check` 和远端 tracked-secret-scan 通过。
 - 发布：合并后仅从 clean exact `origin/main` 重发 Python，并执行“问题 → 时间 → 门店范围 → 排名反转”四轮只读语义验收；生产业务写入为 0。
 - Scope 锁已释放。
+
+## `BUG-RESTAURANT-AI-ALL-STORE-ENTITY-SLOT-HOTFIX-20260725` — `merged`
+
+- Owner: `/root`
+- Base SHA: `32beb50d2ba8fa684497a071ef7c260e68ba1daa`
+- 合入：PR #1766；实现提交 `2e8e07628`。
+- 生产证据：真实 Demo UI 已显示时间和门店按钮，但点击“全部门店”后偶发返回“门店范围不能由全店或全门店 resolver 代答”；同一接口链也存在成功样本，证明结果受 LLM 实体槽输出形状影响。
+- 根因：T3 LLM 偶尔将“全部门店”原样填入具体 `store` 实体槽。确定性层已正确识别 `store_scope=all`，但执行层同时看到具体门店槽后按不可变计划契约 fail-closed。
+- 修复：全店、所有店、各门店、多家门店等范围/泛指词在进入具体实体槽前确定性拒绝；真实门店原名仍保留，范围门禁和具体门店校验均不削弱。
+- 验证：Python 餐饮/会话目标回归 543 通过（同一 6 个本机数据库 fixture 明确排除），`compileall`、增量 Ruff、`git diff --check` 和远端 tracked-secret-scan 通过。
+- 发布：合并后仅从 clean exact `origin/main` 重发 Python，并重跑生产 Demo 真实按钮链和倒数排行追问；生产业务写入为 0。
+- Scope 锁已释放。
