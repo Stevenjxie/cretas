@@ -934,6 +934,9 @@ _STORE_MENTION_STOPWORDS = frozenset({
     "各店", "所有门店", "全部门店", "门店", "分店", "店铺", "本店", "单店",
     "每家店", "每个店", "一家店", "旗舰店", "连锁店",
 })
+_GENERIC_STORE_SCOPE_FRAGMENTS = frozenset({
+    "全部门店", "所有门店", "各门店", "每家店", "全部店", "所有店", "全店",
+})
 _STORE_MENTION_RE = re.compile(r"[一-龥A-Za-z0-9·]{2,24}(?:门店|店)")
 _STORE_MENTION_PREFIX_TRIM = re.compile(
     r"^(?:有没有|有无|是否有|是否|存不存在|是不是|会不会"
@@ -989,6 +992,14 @@ def extract_store_mentions(query: Optional[str]) -> list[str]:
         for match in _STORE_MENTION_RE.finditer(segment):
             candidate = _STORE_MENTION_PREFIX_TRIM.sub("", match.group(0))
             if len(candidate) < 3 or candidate in _STORE_MENTION_STOPWORDS:
+                continue
+            # Time/range prefixes can be glued to an all-store scope, e.g.
+            # "最近7天全部门店".  The generic scope is never a concrete store
+            # entity, even when the regex captured a prefix before it.
+            if any(
+                fragment in candidate
+                for fragment in _GENERIC_STORE_SCOPE_FRAGMENTS
+            ):
                 continue
             # 疑问词/排名词残留 ("上个月哪家店"/"客单价最高的店") 不是店名 (R20/R27)。
             if any(tok in candidate for tok in ("哪家", "哪个", "哪些", "有没有",

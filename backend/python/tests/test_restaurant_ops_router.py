@@ -1446,6 +1446,9 @@ def test_selected_stores_get_per_store_dish_rankings(monkeypatch):
 @pytest.mark.parametrize("query,expected", [
     ("月球一号幻想店的毛利率是多少？", "月球一号幻想店"),
     ("查一下鲜行者打浦桥日月光店的毛利率", "鲜行者打浦桥日月光店"),
+    ("最近7天全部门店哪个菜卖得好", None),
+    ("近30天所有门店销量最高的菜", None),
+    ("上海全部门店哪个菜卖得好", None),
     ("哪家店业绩最好？", None),
     ("那它的毛利率也是第一吗？", None),
     ("各门店毛利对比", None),
