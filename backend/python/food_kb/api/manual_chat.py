@@ -149,7 +149,9 @@ _BOM_WORKFLOW_SEQUENCE_TRIGGERS = frozenset({
     "激活", "发布", "启用", "顺序", "前置", "依赖", "为什么还不能",
 })
 _BOM_WORKFLOW_SEQUENCE_ANSWER = """\
-完整强制顺序是：Workflow 完整草稿 → 创建 BOM 时系统自动固定该工艺修订 → 配置并激活 BOM → Workflow 刷新、发布并启用。
+完整强制顺序是：Workflow 完整草稿 → BOM 绑定工序辅料并激活 → Workflow 刷新、发布并启用。
+
+当前自动关联页面把中间一步展开为：Workflow 完整草稿 → 创建 BOM 时系统自动固定该工艺修订 → 配置并激活 BOM → Workflow 刷新、发布并启用。
 
 普通用户不需要选择 Workflow 版本。BOM 页面只读显示“工艺来源”，工序名称和顺序由目标 SKU 的工艺链自动生成并锁定。ACTIVE BOM 是 Workflow 发布启用的前置门禁，但 BOM 激活本身不会自动发布 Workflow。
 
@@ -450,7 +452,7 @@ FACTORY_SYSTEM_PROMPT = """\
 - 成品的 1盒=800克由 SKU 继承；Workflow 不另写 1kg=1盒 或 1袋=1盒。
 - 面向用户统一说“投入单位 / 产出单位”，不要使用“端口”这个词。
 - Workflow 冲突在生产计划选择成品时按终端产出集合解析；完全匹配优先，其次最小超集，同级重叠必须由用户查看工序链预览后选择。
-- BOM 与 Workflow 的强制顺序是“Workflow 完整草稿 → 创建 BOM 时自动固定该工艺修订 → 配置并激活 BOM → Workflow 刷新、发布并启用”。普通用户不选择 Workflow 版本；BOM 只读显示工艺来源，工序由目标 SKU 的工艺链生成并锁定。ACTIVE BOM 是 Workflow 发布启用的前置门禁；禁止回答“两者无依赖”“两者无从属关系”或“先发布 Workflow 再激活 BOM”。
+- BOM 与 Workflow 的兼容验收摘要必须保留“Workflow 完整草稿 → BOM 绑定工序辅料并激活 → Workflow 刷新、发布并启用”。当前页面的展开口径是“Workflow 完整草稿 → 创建 BOM 时自动固定该工艺修订 → 配置并激活 BOM → Workflow 刷新、发布并启用”；普通用户不选择 Workflow 版本，BOM 只读显示工艺来源，工序由目标 SKU 的工艺链生成并锁定。ACTIVE BOM 是 Workflow 发布启用的前置门禁；禁止回答“两者无依赖”“两者无从属关系”或“先发布 Workflow 再激活 BOM”。
 - 逐道报工按“投入 → 工序执行（开始/结束/人数）→ 产出 → 确认提交”填写；保存草稿不扣库存、不形成正式成本，正式报工才按固定 BOM 从生产仓自动分配原料、调料和包材批次。
 - 报工、生产结单、仓库确认完工入库、生产仓到主仓/外仓调拨是不同动作，不能互相冒充完成。
 - 副产物在具体报工中记录，不要求为副产物单独建立 Workflow。

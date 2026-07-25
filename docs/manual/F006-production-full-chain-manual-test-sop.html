@@ -467,7 +467,7 @@
       <section id="bom">
         <div class="section-head"><span class="section-no">05</span><div class="section-title"><h3>创建、按工序配置并激活 BOM / 配方</h3><p>原料、包材、工序辅料和锅序各有不同录入口径；产出规格从 SKU 只读带入</p></div></div>
         <div class="path">生产管理 <b>›</b> 生产配置 <b>›</b> BOM/配方维护</div>
-        <div class="callout warning"><strong>先有完整 Workflow 草稿，再创建 BOM</strong>若目标 SKU 尚无结构完整的 Workflow 草稿，先完成下一节的 Cell / 工序链并保存草稿。返回本页创建 BOM 时，系统自动固定唯一兼容的工艺修订并生成配置骨架；普通用户不选择 Workflow 版本。配置并激活 BOM 后，再回 Workflow 发布并启用。</div>
+        <div class="callout warning"><strong>先有完整 Workflow 草稿，再创建 BOM</strong>问答与验收统一摘要为“Workflow 完整草稿 → BOM 绑定工序辅料并激活 → Workflow 刷新、发布并启用”。若目标 SKU 尚无结构完整的 Workflow 草稿，先完成下一节的 Cell / 工序链并保存草稿。返回本页创建 BOM 时，系统自动固定唯一兼容的工艺修订并生成配置骨架；普通用户不选择 Workflow 版本。配置并激活 BOM 后，再回 Workflow 发布并启用。</div>
         <div class="table-wrap"><table><thead><tr><th>区域</th><th>配置对象</th><th>手工输入</th><th>系统继承/计算</th></tr></thead><tbody>
           <tr><td>工艺来源</td><td>目标 SKU 唯一兼容的 Workflow 草稿修订</td><td>无；只可查看工艺或显式升级</td><td>自动固定精确修订和快照；按目标终端反向回溯并锁定工序顺序</td></tr>
           <tr><td>配方头</td><td>当前成品 SKU 的版本</td><td>版本备注</td><td>产品、产出单位、标准克重来自 SKU；出成率来自正式报工历史</td></tr>
