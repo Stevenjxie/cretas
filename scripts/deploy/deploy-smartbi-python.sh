@@ -494,6 +494,40 @@ RUNTIME_STAGE
 set -euo pipefail
 bundle="$1"
 timestamp="$(date +%Y%m%d_%H%M%S)"
+rollback_dir="$bundle/rollback"
+
+snapshot_file() {
+    dest="$1"
+    name="$2"
+    if [ -L "$dest" ]; then
+        echo "[ERROR] refusing to snapshot symlinked systemd path: $dest" >&2
+        exit 1
+    fi
+    if [ -f "$dest" ]; then
+        cp -a "$dest" "$snapshot_tmp/$name"
+    else
+        : > "$snapshot_tmp/$name.absent"
+    fi
+}
+
+if [ ! -f "$rollback_dir/.complete" ]; then
+    if [ -e "$rollback_dir" ] || [ -L "$rollback_dir" ]; then
+        echo "[ERROR] incomplete or unsafe runtime-unit rollback snapshot: $rollback_dir" >&2
+        exit 1
+    fi
+    snapshot_tmp="$(mktemp -d "$bundle/.rollback.tmp.XXXXXX")"
+    trap 'rm -rf -- "$snapshot_tmp"' EXIT
+    snapshot_file /etc/systemd/system/cretas-python.service cretas-python.service
+    snapshot_file \
+        /etc/systemd/system/cretas-gold-etl-refresh.service.d/python-runtime.conf \
+        cretas-gold-etl-refresh.python-runtime.conf
+    snapshot_file \
+        /etc/systemd/system/cretas-corpus-refresh.service.d/python-runtime.conf \
+        cretas-corpus-refresh.python-runtime.conf
+    : > "$snapshot_tmp/.complete"
+    mv "$snapshot_tmp" "$rollback_dir"
+    trap - EXIT
+fi
 
 install_if_changed() {
     src="$1"
@@ -526,6 +560,57 @@ for unit in cretas-python cretas-gold-etl-refresh cretas-corpus-refresh; do
     fi
 done
 RUNTIME_INSTALL
+}
+
+restore_python_runtime_units() {
+    ssh "$SERVER" bash -s -- "$REMOTE_SYSTEMD_BUNDLE" <<'RUNTIME_RESTORE'
+set -euo pipefail
+bundle="$1"
+root="/www/wwwroot/cretas/code/.release-systemd"
+if [[ ! "$bundle" =~ ^${root}/[0-9a-f]{40}$ ]] || [ -L "$bundle" ]; then
+    echo "[ERROR] invalid runtime-unit rollback bundle" >&2
+    exit 1
+fi
+rollback_dir="$bundle/rollback"
+if [ ! -f "$rollback_dir/.complete" ] || [ -L "$rollback_dir" ]; then
+    echo "[ERROR] verified runtime-unit rollback snapshot is unavailable" >&2
+    exit 1
+fi
+if [ "$(realpath -m "$rollback_dir")" != "$rollback_dir" ]; then
+    echo "[ERROR] runtime-unit rollback snapshot resolves outside its bundle" >&2
+    exit 1
+fi
+
+restore_file() {
+    dest="$1"
+    name="$2"
+    snapshot="$rollback_dir/$name"
+    absent="$rollback_dir/$name.absent"
+    if [ -L "$dest" ] || [ -L "$snapshot" ] || [ -L "$absent" ]; then
+        echo "[ERROR] refusing symlinked runtime-unit rollback path for $dest" >&2
+        exit 1
+    fi
+    if [ -f "$snapshot" ]; then
+        install -D -m 0644 "$snapshot" "$dest"
+    elif [ -f "$absent" ]; then
+        rm -f -- "$dest"
+    else
+        echo "[ERROR] rollback snapshot entry missing for $dest" >&2
+        exit 1
+    fi
+}
+
+restore_file \
+    /etc/systemd/system/cretas-python.service \
+    cretas-python.service
+restore_file \
+    /etc/systemd/system/cretas-gold-etl-refresh.service.d/python-runtime.conf \
+    cretas-gold-etl-refresh.python-runtime.conf
+restore_file \
+    /etc/systemd/system/cretas-corpus-refresh.service.d/python-runtime.conf \
+    cretas-corpus-refresh.python-runtime.conf
+systemctl daemon-reload
+RUNTIME_RESTORE
 }
 
 set_runtime_link() {
@@ -561,7 +646,11 @@ if [[ "$DEPLOY_ENV" == "prod" || "$DEPLOY_ENV" == "all" ]]; then
     # Seed the selector with the currently running venv so systemd verification
     # and any interrupted pre-switch deploy remain on the known-good runtime.
     set_runtime_link "$PREVIOUS_RUNTIME_TARGET"
-    sync_python_runtime_units
+    if ! sync_python_runtime_units; then
+        log "ERROR" "Python runtime unit 同步失败，恢复发布前 unit 快照"
+        restore_python_runtime_units || true
+        exit 1
+    fi
 fi
 set_runtime_link "$NEW_RUNTIME_TARGET"
 
@@ -577,10 +666,26 @@ restart_prod_via_systemd() {
     "
 }
 
+verify_prod_business_health() {
+    ssh "$SERVER" bash -s <<'BUSINESS_HEALTH'
+set -euo pipefail
+health_body="$(curl -fsS --max-time 10 http://127.0.0.1:8083/health)"
+printf '%s' "$health_body" | grep -Fq '"postgres":"connected"'
+classifier_body="$(curl -fsS --max-time 20 http://127.0.0.1:8083/api/classifier/health)"
+printf '%s' "$classifier_body" | grep -Fq '"model_available":true'
+BUSINESS_HEALTH
+}
+
 rollback_prod_runtime() {
     log "WARN" "生产 Python 3.11 验证失败，切回 $PREVIOUS_RUNTIME_TARGET"
     set_runtime_link "$PREVIOUS_RUNTIME_TARGET"
-    if restart_prod_via_systemd && wait_for_health_via_ssh "$SERVER" 8083 /health 15 2; then
+    if ! restore_python_runtime_units; then
+        log "ERROR" "生产 Python unit 快照恢复失败，需要立即人工处理"
+        return 1
+    fi
+    if restart_prod_via_systemd &&
+       wait_for_health_via_ssh "$SERVER" 8083 /health 15 2 &&
+       verify_prod_business_health; then
         log "WARN" "生产 Python 已恢复到旧运行时: $PREVIOUS_RUNTIME_TARGET"
         return 0
     fi
@@ -655,6 +760,11 @@ current_link="$remote_dir/venv-current"
 [ -x "$rollback_target/bin/python" ]
 systemctl is-active --quiet cretas-python
 [ "$(systemctl show cretas-python -p NRestarts --value)" = "0" ]
+
+health_body="$(curl -fsS --max-time 10 http://127.0.0.1:8083/health)"
+printf '%s' "$health_body" | grep -Fq '"postgres":"connected"'
+classifier_body="$(curl -fsS --max-time 20 http://127.0.0.1:8083/api/classifier/health)"
+printf '%s' "$classifier_body" | grep -Fq '"model_available":true'
 
 pid="$(systemctl show cretas-python -p MainPID --value)"
 tr '\0' ' ' <"/proc/$pid/cmdline" | grep -Fq '/venv-current/bin/python'
