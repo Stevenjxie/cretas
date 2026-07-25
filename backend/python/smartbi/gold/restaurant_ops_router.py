@@ -1048,6 +1048,18 @@ def _actual_window_text(start_date: Any, end_date: Any, requested_days: int) -> 
     return f"最近 {requested_days} 天"
 
 
+def _format_sales_quantity(value: Any) -> str:
+    """Format POS quantities without turning a positive sale into zero."""
+    quantity = float(value or 0)
+    if math.isclose(quantity, 0.0, abs_tol=1e-9):
+        return "0"
+    if 0 < quantity < 1:
+        return "不足 1"
+    if math.isclose(quantity, round(quantity), abs_tol=1e-9):
+        return f"{quantity:,.0f}"
+    return f"{quantity:,.2f}".rstrip("0").rstrip(".")
+
+
 def _compute_margin_dragger(
     with_cost: List[Dict[str, Any]], avg_margin: float, total_rev_with_cost: float,
     *, min_revenue: float = 1000.0,
@@ -2385,7 +2397,8 @@ async def resolve_gross_margin(
         for idx, r in enumerate(ranked[:requested_rank_limit], 1):
             dish_label = f"**{r['dish_name']}**" if idx == 1 else r["dish_name"]
             lines.append(
-                f"{idx}. {dish_label} — 销量 {float(r['total_qty'] or 0):,.0f} 份、"
+                f"{idx}. {dish_label} — 销量 "
+                f"{_format_sales_quantity(r['total_qty'])} 份、"
                 f"营收 ¥{float(r['total_revenue'] or 0):,.2f}"
             )
         note = (
@@ -3395,7 +3408,8 @@ async def resolve_store_margin(
             for index, row in enumerate(ranked_rows, 1):
                 quantity = float(row["qty"] or 0)
                 lines.append(
-                    f"{index}. {row['dish_name']} — 销量 {quantity:,.0f} 份、"
+                    f"{index}. {row['dish_name']} — 销量 "
+                    f"{_format_sales_quantity(quantity)} 份、"
                     f"营收 ¥{float(row['revenue'] or 0):,.2f}"
                 )
                 ranked_entities.append({

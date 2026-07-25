@@ -1805,6 +1805,54 @@ def test_all_store_scope_does_not_disable_dish_ranking_execution():
     assert "米饭(单人份)" not in result.answer_text
 
 
+def test_dish_ranking_preserves_fractional_quantity_and_markdown_emphasis():
+    rows = [
+        {
+            "product_id": 21,
+            "dish_name": "享库1.8斤波龙套餐399",
+            "normalized_name": "享库1.8斤波龙套餐399",
+            "category": "主菜",
+            "sub_category": "套餐",
+            "total_qty": 0.4,
+            "total_revenue": 190.76,
+            "bills": 1,
+            "window_start": date(2026, 7, 1),
+            "window_end": date(2026, 7, 25),
+        },
+        {
+            "product_id": 22,
+            "dish_name": "非整数销量菜",
+            "normalized_name": "非整数销量菜",
+            "category": "主菜",
+            "sub_category": "单品",
+            "total_qty": 1.5,
+            "total_revenue": 88.0,
+            "bills": 2,
+            "window_start": date(2026, 7, 1),
+            "window_end": date(2026, 7, 25),
+        },
+    ]
+
+    result = asyncio.run(_r.resolve_gross_margin(
+        _gross_margin_pool(rows),
+        "RES_TEST",
+        role="restaurant_manager",
+        query="本月哪道菜卖得最差",
+    ))
+
+    assert result.answer_text.startswith(
+        "**2026-07-01 至 2026-07-25菜品销量排行（卖得最差前 5）：**"
+    )
+    assert (
+        "1. **享库1.8斤波龙套餐399** — 销量 不足 1 份、营收 ¥190.76"
+        in result.answer_text
+    )
+    assert "2. 非整数销量菜 — 销量 1.5 份、营收 ¥88.00" in result.answer_text
+    assert "销量 0 份、营收 ¥190.76" not in result.answer_text
+    assert _r._format_sales_quantity(0) == "0"
+    assert _r._format_sales_quantity(13827) == "13,827"
+
+
 def test_dish_ranking_does_not_restore_excluded_rows_when_all_are_noise():
     rows = [
         {
