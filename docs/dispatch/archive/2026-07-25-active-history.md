@@ -91,3 +91,15 @@
 - 验证：精确生产问句执行级回归通过；Python 餐饮目标回归 574 通过（同一 6 个本机数据库 fixture 明确排除），`compileall`、增量 Ruff、`git diff --check` 和远端 tracked-secret-scan 通过。
 - 发布：合并后仅从 clean exact `origin/main` 重发 Python，并复测同一句、时间按钮与后续倒数排行；生产业务写入为 0。
 - Scope 锁已释放。
+
+## `BUG-RESTAURANT-AI-DEMO-STORE-SCOPE-RLS-HOTFIX-20260725` — `merged`
+
+- Owner: `/root`
+- Base SHA: `249946a6b89c4f37ad6851dc8b81936bab33bdca`
+- 合入：PR #1765；实现提交 `44c9a0ef9`。
+- 生产证据：`DEMO_REST` 登录租户有 27 家门店，餐饮数据映射租户 `RES_3101_009` 有 38 家门店，但门店范围守卫读成 0 家并错误跳过门店追问。
+- 根因：连接池借出时 RLS 仍锁定登录租户；守卫虽然把 SQL 参数映射到数据租户，却没有在数据库会话中同步切换 `app.factory_id`，因此查询被 RLS 静默过滤。
+- 修复：在同一显式事务内将 RLS 临时切换到可信映射数据租户后读取门店；事务结束自动恢复，避免跨请求租户上下文泄漏。真实租户和单店免追问逻辑保持不变。
+- 验证：Python 餐饮/会话目标回归 531 通过（同一 6 个本机数据库 fixture 明确排除），`compileall`、增量 Ruff、`git diff --check` 和远端 tracked-secret-scan 通过。
+- 发布：合并后仅从 clean exact `origin/main` 重发 Python，并执行“问题 → 时间 → 门店范围 → 排名反转”四轮只读语义验收；生产业务写入为 0。
+- Scope 锁已释放。
