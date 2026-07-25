@@ -44,3 +44,14 @@
 - 验证：部署脚本语法、依赖缓存/迁移目标测试通过；服务器侧 `venv311` 的 `pip check`、112 路由主应用导入、Jieba/分类器/Food NER 导入、Torch CPU 运算及 Linux 原子链接拒绝越界测试通过。
 - 发布边界：合并与生产切换是独立事实；生产只允许从 clean exact `origin/main` 执行发布，必须验证 8083/公共网关、`NRestarts=0`、所有运行时消费者和回滚目标，生产业务写入为 0。
 - Scope 锁已释放。
+
+## `BUG-PYTHON311-FASTAPI-COMPAT-002` — `merged`
+
+- Owner: `/root`
+- Base SHA: `89c27a5e1355f6b1d947de87e1c7e00daa7d9f18`
+- 合入：PR #1761；实现提交 `b1f0dd909`。
+- 生产处置：首次 Python 3.11 切换后，主 health 为 200，但 classifier 路由因 FastAPI 0.140.0 / Starlette 1.3.1 与 Prometheus instrumentator 5.11.2 不兼容返回 500；运行时已立即原子回滚至 `venv38`，同一路由恢复 200，`NRestarts=0`。
+- 修复：锁定线上已验证的 FastAPI 0.124.4 / Starlette 0.44.0，并将 `/api/classifier/health` 的完整中间件请求加入部署前 fail-closed 冒烟。
+- 验证：旁路 Python 3.11 环境 `pip check` 通过；classifier 路由返回 200、模型加载 259 个标签；部署测试可模拟该类中间件回归并证明发布在重启前终止。
+- 发布边界：合并后仅从 clean exact `origin/main` 再次发布；必须同时通过主 health、classifier 200、稳定观察、所有 runtime 消费者和回滚目标验证，生产业务写入为 0。
+- Scope 锁已释放。
