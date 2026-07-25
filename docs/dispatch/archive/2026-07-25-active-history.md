@@ -126,3 +126,14 @@
 - 验证：路由目标测试 298 通过；餐饮/会话回归 544 通过、6 个本机旧会话表 fixture 明确排除；`compileall`、增量 Ruff、`git diff --check` 与远端 tracked-secret-scan 通过。
 - 发布：合并后仅从 clean exact `origin/main` 重发 Python，并在真实 Demo 复核“不足 1 份”、标题/第一名字号字重、时间→门店→倒序与指定门店只读链；生产业务写入为 0。
 - Scope 锁已释放。
+
+## `BUG-RESTAURANT-AI-STORE-SCOPE-DATA-WINDOW-20260725` — `merged`
+
+- Owner: `/root`
+- Base SHA: `90e649c74a2d05a7f0eb2f392779d0d1dc846d72`
+- 合入：PR #1768；实现提交 `0a0a1b210`，squash merge `1e8889fc5`。
+- 根因：时间澄清后的门店按钮只查 `dim_store`，会展示实际执行数据租户中当前时间窗没有任何 POS 菜品记录的门店；用户选择后，销量排行进入毛利 resolver 的通用零数据文案，再被 Answer Contract 按指标覆盖不足拦截。
+- 修复：门店候选限定为实际执行租户中、精确所选时间窗内存在 `fact_pos_transaction × fact_pos_item` 数据的门店；用户显式输入无数据门店时，保留菜品销量排行语义并返回可调整门店/时间的非阻塞提示，不放宽 Answer Contract。
+- 验证：餐饮 intent/router/service 目标回归 542 通过；扩大餐饮套件 830 通过，另有 1 个与本次无关的既有 owner-action 测试替身签名失败；`compileall`、增量 Ruff、`git diff --check` 与远端 tracked-secret-scan 通过。
+- 发布：Python 生产发布与真实 Demo 三轮按钮、上下文横幅、字号字重及零业务写入验收在 exact `origin/main` 上继续执行。
+- Scope 锁已释放。
