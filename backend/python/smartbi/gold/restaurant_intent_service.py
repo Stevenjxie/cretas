@@ -19,6 +19,7 @@ from smartbi.gold.customer_text import (
 from smartbi.gold import answer_contract as _contract
 from smartbi.gold.restaurant_intent import (
     RestaurantQuerySpec,
+    STORE_SCOPE_CLARIFICATION_QUESTION,
     TIME_CLARIFICATION_QUESTION,
     TRUSTED_PLANNER_AUTHORITIES,
     build_resolver_query,
@@ -27,7 +28,7 @@ from smartbi.gold.restaurant_intent import (
 )
 from smartbi.gold.restaurant_ops_router import (
     demo_data_factory_for_code,
-    extract_store_mention,
+    extract_store_mentions,
     resolve_by_code as _resolve_tiered,
 )
 
@@ -170,6 +171,20 @@ def _structured_context(
         "requested_metrics": list(spec.requested_metrics),
         "analysis_action": spec.analysis_action,
         "topic_kind": topic_kind,
+        "ranking_direction": (
+            result_meta.get("dish_ranking") or spec.ranking_direction
+        ),
+        "ranking_limit": (
+            result_meta.get("ranking_limit") or spec.ranking_limit
+        ),
+        "excluded_entities": (
+            result_meta.get("excluded_entities")
+            if isinstance(result_meta.get("excluded_entities"), list)
+            else list(spec.excluded_entities)
+        ),
+        "store_scope": spec.store_scope,
+        "store_names": list(spec.store_slots),
+        "compare_stores": spec.compare_stores,
     }
 
 
@@ -218,13 +233,20 @@ def _suggested_followups(context: Dict[str, Any]) -> List[Dict[str, str]]:
 
 
 def _clarification_followups(spec: RestaurantQuerySpec) -> List[Dict[str, str]]:
-    """Return deterministic choices only for a recognized time-slot gap."""
-    if spec.clarification_question != TIME_CLARIFICATION_QUESTION:
-        return []
-    return [
-        {"label": window, "question": window}
-        for window in ("本月", "上个月", "最近7天", "最近30天")
-    ]
+    """Return deterministic choices for recognized structured-slot gaps."""
+    if spec.clarification_question == TIME_CLARIFICATION_QUESTION:
+        return [
+            {"label": window, "question": window}
+            for window in ("本月", "上个月", "最近7天", "最近30天")
+        ]
+    if spec.clarification_question == STORE_SCOPE_CLARIFICATION_QUESTION:
+        choices = [{"label": "全部门店", "question": "全部门店"}]
+        choices.extend(
+            {"label": name[:12], "question": name}
+            for name in spec.store_options[:3]
+        )
+        return choices
+    return []
 
 
 def _resolver_kwargs(
@@ -478,9 +500,13 @@ async def tiered_answer(
         resolver_query = build_resolver_query(query, spec)
         execution_kwargs = _resolver_kwargs(spec, role, resolver_query)
         plan = spec.planned_intents or (spec.intent,)
+        store_mentions = tuple(
+            getattr(spec, "store_slots", ())
+            or extract_store_mentions(resolver_query)
+            or extract_store_mentions(query)
+        )
         store_mention = (
-            extract_store_mention(resolver_query)
-            or extract_store_mention(query)
+            (store_mentions[0] if len(store_mentions) == 1 else None)
             or getattr(spec, "store_slot", None)
             if ("RESTAURANT_OPS_STORE_MARGIN" in plan
                 or "RESTAURANT_OPS_GROSS_MARGIN" in plan
@@ -523,16 +549,27 @@ async def tiered_answer(
             if code == "RESTAURANT_OPS_GROSS_MARGIN" and dish_mention:
                 code_kwargs = dict(execution_kwargs)
                 code_kwargs["dish_mention"] = dish_mention
-            if code == "RESTAURANT_OPS_STORE_MARGIN" and (store_mention or store_dish):
+            if code == "RESTAURANT_OPS_STORE_MARGIN" and (
+                store_mention or len(store_mentions) > 1 or store_dish
+            ):
                 code_kwargs = dict(execution_kwargs)
                 if store_mention:
                     code_kwargs["store_mention"] = store_mention
+                if len(store_mentions) > 1:
+                    code_kwargs["store_mentions"] = list(store_mentions)
                 if store_dish:
                     code_kwargs["dish_mention"] = store_dish
             code_factory = demo_data_factory_for_code(
                 code,
                 factory_id,
-                store_scoped=bool(store_mention) or bool(store_dish),
+                store_scoped=bool(
+                    store_mention
+                    or store_dish
+                    or (
+                        spec.ranking_direction
+                        and spec.store_scope in {"all", "multiple"}
+                    )
+                ),
             )
             resolved = await _resolve_tiered(
                 code,

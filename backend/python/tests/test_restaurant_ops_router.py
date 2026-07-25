@@ -1288,6 +1288,136 @@ def test_store_margin_comparison_missing_period_names_dates_without_fallback(mon
     assert result.meta["comparisonComplete"] is False
 
 
+def test_store_revenue_question_ranks_revenue_instead_of_margin(monkeypatch):
+    start, end = date(2026, 7, 20), date(2026, 7, 21)
+    rows = [
+        _store_margin_row("S-1", "人民路店", 2000, 100, start, end),
+        _store_margin_row("S-2", "湖滨路店", 5000, 100, start, end),
+    ]
+    pool, _ = _store_margin_runtime(monkeypatch, {(start, end): rows})
+
+    result = asyncio.run(_r.resolve_store_margin(
+        pool,
+        "RES_TEST",
+        role="restaurant_manager",
+        date_range=(start, end),
+        query="本月全部门店营收最高的前2名",
+    ))
+
+    assert result.meta["store_ranking"] == "revenue"
+    assert [item["name"] for item in result.meta["ranked_entities"]] == [
+        "湖滨路店",
+        "人民路店",
+    ]
+    assert "湖滨路店 — 营收 ¥5,000.00" in result.answer_text
+    assert "毛利率" not in result.answer_text
+
+
+@pytest.mark.parametrize(
+    "query,ranking_key,expected_first,expected_text",
+    [
+        ("本月全部门店销量排行", "qty", "人民路店", "销量 100 份"),
+        ("本月全部门店客单价排行", "avg_ticket", "湖滨路店", "客单价 ¥625.00"),
+    ],
+)
+def test_store_sales_and_avg_ticket_use_the_requested_metric(
+    monkeypatch,
+    query,
+    ranking_key,
+    expected_first,
+    expected_text,
+):
+    start, end = date(2026, 7, 20), date(2026, 7, 21)
+    rows = [
+        _store_margin_row("S-1", "人民路店", 2000, 100, start, end),
+        _store_margin_row("S-2", "湖滨路店", 5000, 50, start, end),
+    ]
+    pool, _ = _store_margin_runtime(monkeypatch, {(start, end): rows})
+
+    result = asyncio.run(_r.resolve_store_margin(
+        pool,
+        "RES_TEST",
+        role="restaurant_manager",
+        date_range=(start, end),
+        query=query,
+    ))
+
+    assert result.meta["store_ranking"] == ranking_key
+    assert result.meta["ranked_entities"][0]["name"] == expected_first
+    assert expected_text in result.answer_text
+    assert "毛利率" not in result.answer_text
+
+
+def test_multiple_store_names_are_canonicalized_and_sql_scoped(monkeypatch):
+    start, end = date(2026, 7, 20), date(2026, 7, 21)
+    rows = [
+        _store_margin_row("S-1", "人民路店", 2000, 100, start, end),
+        _store_margin_row("S-2", "湖滨路店", 5000, 100, start, end),
+        _store_margin_row("S-3", "南城店", 9000, 100, start, end),
+    ]
+    pool, connection = _store_margin_runtime(monkeypatch, {(start, end): rows})
+
+    async def _canonicalize(_pool, _factory_id, mention):
+        return [mention]
+
+    monkeypatch.setattr(_r, "_canonicalize_store_mention", _canonicalize)
+    result = asyncio.run(_r.resolve_store_margin(
+        pool,
+        "RES_TEST",
+        role="restaurant_manager",
+        date_range=(start, end),
+        query="本月人民路店和湖滨路店的营收对比",
+        store_mentions=["人民路店", "湖滨路店"],
+    ))
+
+    assert result.meta["selected_stores"] == ["人民路店", "湖滨路店"]
+    assert "南城店" not in result.answer_text
+    scoped_calls = [args for query, args in connection.calls if "$7::text[]" in query]
+    assert scoped_calls
+    assert all(args[6] == ["人民路店", "湖滨路店"] for args in scoped_calls)
+
+
+def test_selected_stores_get_per_store_dish_rankings(monkeypatch):
+    start, end = date(2026, 7, 20), date(2026, 7, 21)
+    store_one_main = _store_margin_row(
+        "S-1", "人民路店", 2000, 100, start, end,
+    )
+    store_one_main.update(dish_name="招牌菜", normalized_name="招牌菜")
+    store_one_noise = _store_margin_row(
+        "S-1", "人民路店", 3000, 999, start, end,
+    )
+    store_one_noise.update(dish_name="米饭", normalized_name="米饭")
+    store_two_main = _store_margin_row(
+        "S-2", "湖滨路店", 5000, 200, start, end,
+    )
+    store_two_main.update(dish_name="藤椒鱼", normalized_name="藤椒鱼")
+    pool, _ = _store_margin_runtime(monkeypatch, {
+        (start, end): [store_one_main, store_one_noise, store_two_main],
+    })
+
+    async def _canonicalize(_pool, _factory_id, mention):
+        return [mention]
+
+    monkeypatch.setattr(_r, "_canonicalize_store_mention", _canonicalize)
+    result = asyncio.run(_r.resolve_store_margin(
+        pool,
+        "RES_TEST",
+        role="restaurant_manager",
+        date_range=(start, end),
+        query="本月人民路店和湖滨路店销量最高的前1道菜",
+        store_mentions=["人民路店", "湖滨路店"],
+    ))
+
+    assert result.meta["dish_ranking"] == "best"
+    assert result.meta["compare_stores"] is True
+    assert result.meta["excluded_item_count"] == 1
+    assert "人民路店" in result.answer_text
+    assert "招牌菜 — 销量 100 份" in result.answer_text
+    assert "湖滨路店" in result.answer_text
+    assert "藤椒鱼 — 销量 200 份" in result.answer_text
+    assert "米饭 —" not in result.answer_text
+
+
 # --- R7: explicit store mention extraction + canonicalization (scenario F) ---
 
 
@@ -1632,6 +1762,26 @@ def test_dish_ranking_emits_typed_focus_entity(ranking_query):
     assert result.meta["ranked_entities"][1]["id"] == 3
     assert result.meta["excluded_item_count"] == 1
     assert "米饭(单人份)" not in result.answer_text
+
+
+def test_dish_ranking_applies_user_limit_and_exclusions_in_execution():
+    result = asyncio.run(_r.resolve_gross_margin(
+        _gross_margin_pool(_dish_rows()),
+        "RES_TEST",
+        role="restaurant_manager",
+        query="本月销量最高的1道菜，排除招牌藤椒味(单人份)",
+    ))
+
+    assert result.meta["ranking_limit"] == 1
+    assert result.meta["excluded_entities"] == ["招牌藤椒味(单人份)"]
+    assert result.meta["ranked_entities"] == [{
+        "type": "dish",
+        "id": 3,
+        "name": "藤椒味双人份",
+        "rank": 1,
+    }]
+    assert "招牌藤椒味(单人份)" not in result.answer_text
+    assert "藤椒味双人份" in result.answer_text
 
 
 def test_dish_ranking_does_not_restore_excluded_rows_when_all_are_noise():
@@ -2095,3 +2245,27 @@ def test_r31_channel_mix_routing():
 def test_r32_colloquial_earning_forms():
     assert _r.match_restaurant_ops("挣着钱没有啊最近") == "RESTAURANT_OPS_SALES_SUMMARY"
     assert _r.match_restaurant_ops("最近挣钱吗") == "RESTAURANT_OPS_SALES_SUMMARY"
+
+
+def test_r33_ranking_limit_exclusions_and_multi_store_mentions():
+    assert _r.ranking_limit("本月销量最高的8道菜") == 8
+    assert _r.ranking_limit("那倒数五名呢") == 5
+    assert _r.ranking_limit("前99名") == 20
+    assert _r.ranking_limit("前二十名") == 20
+    assert _r.ranking_exclusions(
+        "本月畅销菜前5名，排除米饭、餐巾纸、湿纸巾和餐具"
+    ) == ["米饭", "餐巾纸", "湿纸巾", "餐具"]
+    assert _r.extract_store_mentions(
+        "本月东城店和西城店的营收对比"
+    ) == ["东城店", "西城店"]
+    assert _r.extract_store_mentions(
+        "本月和平店和西城店的营收对比"
+    ) == ["和平店", "西城店"]
+    assert _r.ranking_exclusions("排除甜品") == ["甜品"]
+
+
+def test_r33_store_scope_words_are_not_store_names():
+    assert _r.extract_store_mentions(
+        "本月全部门店销量最高的5道菜是什么"
+    ) == []
+    assert _r.extract_store_mentions("本月哪家店营收最高") == []

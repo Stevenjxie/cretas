@@ -26,6 +26,7 @@ import smartbi.gold.restaurant_intent_service as svc
 from smartbi.api.gold_reads import TieredIntentAnswerRequest, post_restaurant_tiered_answer
 from smartbi.gold.restaurant_intent import (
     RestaurantQuerySpec,
+    STORE_SCOPE_CLARIFICATION_QUESTION,
     TIME_CLARIFICATION_QUESTION,
     _build_spec,
 )
@@ -1103,3 +1104,18 @@ def test_r24_vector_tier_threshold_gate():
                 source_tier="vector", confidence=0.7)
     assert should_delegate(high) is True
     assert should_delegate(low) is False
+
+
+def test_store_scope_clarification_returns_buttons_with_real_store_names():
+    spec = _spec(
+        clarification_needed=True,
+        clarification_question=STORE_SCOPE_CLARIFICATION_QUESTION,
+        store_options=("东城店", "西城店", "南城店", "北城店"),
+    )
+
+    assert svc._clarification_followups(spec) == [
+        {"label": "全部门店", "question": "全部门店"},
+        {"label": "东城店", "question": "东城店"},
+        {"label": "西城店", "question": "西城店"},
+        {"label": "南城店", "question": "南城店"},
+    ]

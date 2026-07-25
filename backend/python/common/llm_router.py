@@ -890,6 +890,7 @@ async def call_chain(
     payload: Dict[str, Any],
     chain: Optional[List[str]] = None,
     timeout: float = 30.0,
+    total_timeout: Optional[float] = None,
 ) -> Dict[str, Any]:
     """
     Call LLM via provider chain with automatic fallback on 403 FreeTierOnly / 429.
@@ -897,6 +898,9 @@ async def call_chain(
     Per-call timeout: 30s default (Apr 28 2026 optimization, was 120s).
     Worst-case full 4-provider cascade = 120s. qwen-plus typical 15-30s, so
     30s is comfortable margin while failing fast on overloaded providers.
+    Callers with an interactive latency contract may also set ``total_timeout``;
+    it is a wall-clock budget for the entire provider cascade, not another
+    per-provider allowance.
 
     The payload's `model` field is OVERWRITTEN per-provider based on SLOT_MODELS.
     Other fields (messages, temperature, max_tokens, etc.) are preserved.
@@ -912,8 +916,17 @@ async def call_chain(
     # _refuse_reason drops expired/unsafe entries so heads auto-switch as grants lapse.
     client = get_llm_http_client()
     errors: List[str] = []
+    deadline = (
+        time.monotonic() + total_timeout
+        if total_timeout is not None and total_timeout > 0
+        else None
+    )
 
     for account, model in slot_chain:
+        remaining = deadline - time.monotonic() if deadline is not None else None
+        if remaining is not None and remaining <= 0:
+            errors.append("chain: total_timeout")
+            break
         if not model:
             continue
         # ⛔ Unified billing-safety gate (allowlist ∧ ¬denylist ∧ ¬expired ∧ ¬stale).
@@ -966,6 +979,11 @@ async def call_chain(
 
         try:
             logger.debug(f"[llm_router] slot={slot.value} try {account}/{model}")
+            request_timeout = (
+                min(timeout, max(0.05, remaining))
+                if remaining is not None
+                else timeout
+            )
             # Apr 28 2026 (post-review P1, then reviewer round 2 correction):
             # API consistency only — bare `timeout=timeout` and
             # `timeout=httpx.Timeout(timeout)` are EQUIVALENT in httpx (a bare
@@ -974,11 +992,14 @@ async def call_chain(
             # commit message claim about "TOTAL timeout / 7.5s per phase" was
             # wrong. Keeping the explicit form matches `call_chain_stream`
             # below for readability — no behavior change.
-            resp = await client.post(
-                f"{base_url}/chat/completions",
-                headers=headers,
-                json=req_payload,
-                timeout=httpx.Timeout(timeout),
+            resp = await asyncio.wait_for(
+                client.post(
+                    f"{base_url}/chat/completions",
+                    headers=headers,
+                    json=req_payload,
+                    timeout=httpx.Timeout(request_timeout),
+                ),
+                timeout=request_timeout,
             )
             body_text = resp.text  # may trigger aread() internally
 

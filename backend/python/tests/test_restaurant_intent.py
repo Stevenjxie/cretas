@@ -18,7 +18,9 @@ import pytest
 from smartbi.gold import answer_contract as contract
 from smartbi.gold.restaurant_intent import (
     RestaurantQuerySpec,
+    STORE_SCOPE_CLARIFICATION_QUESTION,
     TIME_CLARIFICATION_QUESTION,
+    _apply_store_scope_guard,
     build_resolver_query,
     capability_clarification_question,
     clear_route_cache,
@@ -1622,6 +1624,144 @@ def test_contract_scoping_by_resolver_capability():
     assert contract.required_elements(dish_margin_spec) == [
         "margin_value", "margin_integrity", "dish_name",
     ]
+
+
+def test_dish_ranking_spec_keeps_store_scope_rank_and_exclusions():
+    spec = _build_spec(
+        "RESTAURANT_OPS_GROSS_MARGIN",
+        "本月全部门店销量最高的5道菜是什么？请排除米饭、餐巾纸、湿纸巾和餐具",
+        confidence=0.95,
+        tier="llm",
+    )
+
+    assert spec.store_scope == "all"
+    assert spec.store_slots == ()
+    assert spec.ranking_direction == "best"
+    assert spec.ranking_limit == 5
+    assert spec.excluded_entities == ("米饭", "餐巾纸", "湿纸巾", "餐具")
+    assert spec.requested_metrics == ("sales_volume",)
+    assert spec.planned_intents == ("RESTAURANT_OPS_GROSS_MARGIN",)
+    assert spec.dimensions == ("dish",)
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        "本月东城店销量是多少",
+        "本月东城店毛利率是多少",
+        "本月东城店营收是多少",
+    ],
+)
+def test_named_store_metrics_compile_to_store_resolver(query):
+    spec = _build_spec(
+        "RESTAURANT_OPS_SALES_SUMMARY",
+        query,
+        confidence=0.95,
+        tier="llm",
+    )
+
+    assert spec.store_scope == "single"
+    assert spec.store_slots == ("东城店",)
+    assert spec.planned_intents == ("RESTAURANT_OPS_STORE_MARGIN",)
+
+
+def test_ranking_followup_inherits_window_store_scope_and_exclusions():
+    parent = {
+        "parent_query": "本月全部门店销量最高的5道菜是什么",
+        "parent_template_code": "RESTAURANT_OPS_GROSS_MARGIN",
+        "turns_history": [{
+            "q": "本月全部门店销量最高的5道菜是什么",
+            "a_summary": "已返回前五名",
+            "context": {
+                "topic_kind": "dish_ranking",
+                "ranking_direction": "best",
+                "ranking_limit": 5,
+                "excluded_entities": ["米饭", "餐巾纸", "湿纸巾", "餐具"],
+                "store_scope": "all",
+                "store_names": [],
+                "window_label": "本月",
+                "requested_metrics": ["sales_volume"],
+            },
+        }],
+    }
+
+    contextualized, inherited = contextualize_restaurant_followup(
+        "那倒数五名呢？",
+        parent,
+    )
+
+    assert inherited is True
+    assert contextualized == (
+        "本月全部门店销量最低的前5道菜，排除米饭、餐巾纸、湿纸巾、餐具"
+    )
+
+
+class _StoreScopeConn:
+    def __init__(self, names):
+        self.names = names
+
+    async def fetch(self, _sql, _factory_id):
+        return [{"name": name} for name in self.names]
+
+
+class _StoreScopePool:
+    def __init__(self, names):
+        self.conn = _StoreScopeConn(names)
+
+    def acquire(self):
+        conn = self.conn
+
+        class _Ctx:
+            async def __aenter__(self):
+                return conn
+
+            async def __aexit__(self, *args):
+                return False
+
+        return _Ctx()
+
+
+@pytest.mark.asyncio
+async def test_multi_store_tenant_requires_explicit_scope():
+    spec = _build_spec(
+        "RESTAURANT_OPS_GROSS_MARGIN",
+        "本月销量最高的5道菜是什么",
+        confidence=0.95,
+        tier="llm",
+    )
+
+    guarded = await _apply_store_scope_guard(
+        _StoreScopePool(["东城店", "西城店", "南城店"]),
+        "FACTORY_A",
+        spec,
+    )
+
+    assert guarded is not None
+    assert guarded.clarification_needed is True
+    assert guarded.clarification_question == STORE_SCOPE_CLARIFICATION_QUESTION
+    assert guarded.store_options == ("东城店", "西城店", "南城店")
+
+
+@pytest.mark.asyncio
+async def test_single_store_tenant_infers_scope_without_filtering_name():
+    spec = _build_spec(
+        "RESTAURANT_OPS_GROSS_MARGIN",
+        "本月销量最高的5道菜是什么",
+        confidence=0.95,
+        tier="llm",
+    )
+
+    guarded = await _apply_store_scope_guard(
+        _StoreScopePool(["唯一门店"]),
+        "FACTORY_A",
+        spec,
+    )
+
+    assert guarded is not None
+    assert guarded.clarification_needed is False
+    assert guarded.store_scope == "single"
+    assert guarded.store_slots == ()
+    assert guarded.store_options == ("唯一门店",)
 
 
 def _spec_for_contract(**overrides):

@@ -189,6 +189,32 @@ def compact_structured_context(value: Optional[Dict[str, Any]]) -> Optional[Dict
     topic_kind = value.get("topic_kind")
     if topic_kind not in {"dish_ranking", "store_ranking"}:
         topic_kind = None
+    ranking_direction = value.get("ranking_direction")
+    if ranking_direction not in {"best", "worst"}:
+        ranking_direction = None
+    ranking_limit = value.get("ranking_limit")
+    if not isinstance(ranking_limit, int) or not 1 <= ranking_limit <= 20:
+        ranking_limit = None
+    raw_exclusions = value.get("excluded_entities")
+    excluded_entities = [
+        sanitize_for_storage(str(item).strip())
+        for item in (raw_exclusions if isinstance(raw_exclusions, list) else [])
+        if isinstance(item, str) and 1 <= len(item.strip()) <= 40
+    ][:12]
+    store_scope = value.get("store_scope")
+    if store_scope not in {"all", "single", "multiple"}:
+        store_scope = None
+    raw_store_names = value.get("store_names")
+    store_names = [
+        sanitize_for_storage(str(item).strip())
+        for item in (raw_store_names if isinstance(raw_store_names, list) else [])
+        if isinstance(item, str) and 1 <= len(item.strip()) <= 80
+    ][:8]
+    compare_stores = (
+        bool(value.get("compare_stores"))
+        if store_scope == "multiple"
+        else False
+    )
     context = {
         "focus_entity": safe_entity,
         "plan_hash": str(plan_hash)[:64] if plan_hash else None,
@@ -197,8 +223,15 @@ def compact_structured_context(value: Optional[Dict[str, Any]]) -> Optional[Dict
         "requested_metrics": requested_metrics or None,
         "analysis_action": analysis_action,
         "topic_kind": topic_kind,
+        "ranking_direction": ranking_direction,
+        "ranking_limit": ranking_limit,
+        "excluded_entities": excluded_entities or None,
+        "store_scope": store_scope,
+        "store_names": store_names or None,
+        "compare_stores": compare_stores if store_scope else None,
     }
-    return context if any(item is not None for item in context.values()) else None
+    compact = {key: item for key, item in context.items() if item is not None}
+    return compact or None
 
 
 class ChatSessionService:

@@ -28,6 +28,7 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from smartbi.gold.restaurant_intent import (
+    STORE_SCOPE_CLARIFICATION_QUESTION,
     TIME_CLARIFICATION_QUESTION,
     _build_t3_prompt,
     _cache_get,
@@ -101,11 +102,17 @@ class _FakeDbConn:
             return f"DELETE {n}"
         raise AssertionError(f"unexpected execute SQL in fake pool: {sql}")
 
+    async def fetch(self, sql, *_args):
+        if "FROM dim_store" in sql:
+            return [{"name": name} for name in self._pool.store_names]
+        raise AssertionError(f"unexpected fetch SQL in fake pool: {sql}")
+
 
 class _FakeDbPool:
-    def __init__(self, *, is_restaurant: bool = True):
+    def __init__(self, *, is_restaurant: bool = True, store_names=None):
         self.pending: dict = {}
         self.is_restaurant = is_restaurant
+        self.store_names = list(store_names or [])
         self.acquire_calls = 0
         self.tenant_gate_calls = 0
         self.sweep_calls = 0
@@ -713,3 +720,66 @@ async def test_pending_store_db_failure_fails_open_on_pop_and_put():
     assert spec2 is not None
     assert spec2.clarification_needed is True
     assert pool.pending == {}  # nothing got registered (put failed silently)
+
+
+@pytest.mark.asyncio
+async def test_time_then_store_scope_clarifications_chain_without_losing_query():
+    pool = _FakeDbPool(
+        is_restaurant=True,
+        store_names=["东城店", "西城店", "南城店"],
+    )
+    original_query = "哪个菜卖得好"
+    no_time_plan = {
+        "intent": "RESTAURANT_OPS_GROSS_MARGIN",
+        "time_range": None,
+        "wants_margin": False,
+        "asks_profitability": False,
+        "dimensions": ["dish"],
+        "comparison": None,
+        "confidence": 0.95,
+        "clarification_needed": False,
+        "clarification_question": None,
+    }
+    this_month_plan = {
+        **no_time_plan,
+        "time_range": {"type": "named", "value": "this_month"},
+    }
+    llm = AsyncMock(side_effect=[
+        _llm_result(no_time_plan),
+        _llm_result(this_month_plan),
+        _llm_result(this_month_plan),
+    ])
+
+    with patch(
+        "smartbi.services.template_embedding_index.cosine_topk",
+        new=AsyncMock(return_value=[]),
+    ), patch("common.llm_router.call_chain", new=llm):
+        first = await parse_restaurant_query(
+            original_query,
+            pool,
+            factory_id="F_CHAIN",
+            session_key="sess-chain",
+        )
+        second = await parse_restaurant_query(
+            "本月",
+            pool,
+            factory_id="F_CHAIN",
+            session_key="sess-chain",
+        )
+        third = await parse_restaurant_query(
+            "全部门店",
+            pool,
+            factory_id="F_CHAIN",
+            session_key="sess-chain",
+        )
+
+    assert first.clarification_question == TIME_CLARIFICATION_QUESTION
+    assert second.clarification_question == STORE_SCOPE_CLARIFICATION_QUESTION
+    assert second.store_options == ("东城店", "西城店", "南城店")
+    assert third.clarification_needed is False
+    assert third.store_scope == "all"
+    assert third.window_label == "本月"
+    assert original_query in third.resolver_query_seed
+    assert "本月" in third.resolver_query_seed
+    assert "全部门店" in third.resolver_query_seed
+    assert pool.pending == {}

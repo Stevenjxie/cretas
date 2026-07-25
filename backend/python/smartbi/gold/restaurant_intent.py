@@ -31,12 +31,23 @@ from smartbi.gold.restaurant_ops_router import (
     _profit_intent,
     _resolve_sales_date_range,
     _uses_relative_sales_window,
+    demo_data_factory_for_code,
+    dish_ranking_direction,
     extract_dish_candidate,
     extract_store_mention,
+    extract_store_mentions,
     match_restaurant_ops,
+    ranking_exclusions,
+    ranking_limit,
+    store_dish_split_dish,
 )
 
 logger = logging.getLogger(__name__)
+
+STORE_SCOPE_CLARIFICATION_QUESTION = (
+    "这项分析要看哪一组门店？请选择“全部门店”，或直接输入一家/多家门店名称；"
+    "多家门店会按同一时间和指标自动比较。"
+)
 
 TRUSTED_PLANNER_AUTHORITIES = frozenset({
     "llm",
@@ -85,6 +96,13 @@ class RestaurantQuerySpec:
     # lookup to a diagnosis or an optimisation request; carrying the previous
     # resolver across that boundary is the exact "记得对象但复读旧答案" failure.
     analysis_action: str = "lookup"  # lookup | compare | diagnose | optimize
+    ranking_direction: Optional[str] = None  # best | worst
+    ranking_limit: int = 5
+    excluded_entities: Tuple[str, ...] = ()
+    store_scope: Optional[str] = None  # all | single | multiple
+    store_slots: Tuple[str, ...] = ()
+    compare_stores: bool = False
+    store_options: Tuple[str, ...] = ()
     # R22 T3 结构化规格: LLM 抽取的实体槽位 (必须是问句原文子串, 代码校验;
     # 真伪由下游 resolver 对 dim_product/dim_store 验证 — LLM 只提名, 不裁决)。
     dish_slot: Optional[str] = None
@@ -178,6 +196,39 @@ def _detect_comparison(text: str) -> Optional[str]:
         return "mom"
     if any(tok in text for tok in ("比上周", "周比", "跟上周比")):
         return "wow"
+    return None
+
+
+_ALL_STORE_SCOPE_TOKENS = (
+    "全部门店", "所有门店", "各门店", "各家店", "每家店",
+    "所有店", "全部店", "全店汇总", "连锁整体",
+)
+_STORE_RANK_SCOPE_TOKENS = (
+    "哪家店", "哪个店", "哪家门店", "门店排名", "门店排行", "各店排名",
+)
+
+
+def _detect_store_scope(text: str) -> Tuple[Optional[str], Tuple[str, ...]]:
+    mentions = tuple(extract_store_mentions(text))
+    if len(mentions) >= 2:
+        return "multiple", mentions
+    if len(mentions) == 1:
+        return "single", mentions
+    if any(token in text for token in _ALL_STORE_SCOPE_TOKENS):
+        return "all", ()
+    if any(token in text for token in _STORE_RANK_SCOPE_TOKENS):
+        return "all", ()
+    return None, ()
+
+
+def _detect_ranking_direction(text: str) -> Optional[str]:
+    direct = dish_ranking_direction(text)
+    if direct:
+        return direct
+    if re.search(r"倒数|后\s*[一二三四五六七八九十\d]+\s*名|最低|最差|垫底", text):
+        return "worst"
+    if re.search(r"前\s*[一二三四五六七八九十\d]+\s*名|最高|最好|第一", text):
+        return "best"
     return None
 
 
@@ -282,6 +333,7 @@ def _plan_requested_intents(
     selected_code: str,
     requested_metrics: Tuple[str, ...],
     dimensions: Tuple[str, ...],
+    store_scope: Optional[str],
 ) -> Tuple[str, ...]:
     """Build a deterministic, deduplicated multi-resolver plan.
 
@@ -310,6 +362,13 @@ def _plan_requested_intents(
             code = "RESTAURANT_OPS_WASTAGE_TOP"
         elif metric == "sales_volume":
             if "store" in dimensions and "dish" in dimensions:
+                code = (
+                    "RESTAURANT_OPS_STORE_MARGIN"
+                    if store_scope in {"single", "multiple"}
+                    or store_dish_split_dish(text)
+                    else "RESTAURANT_OPS_GROSS_MARGIN"
+                )
+            elif "store" in dimensions and store_scope in {"single", "multiple"}:
                 code = "RESTAURANT_OPS_STORE_MARGIN"
             elif "dish" in dimensions:
                 code = "RESTAURANT_OPS_GROSS_MARGIN"
@@ -318,7 +377,10 @@ def _plan_requested_intents(
         elif metric == "gross_margin":
             if selected_code == "RESTAURANT_OPS_SALES_SUMMARY" and has_revenue_scope:
                 code = "RESTAURANT_OPS_SALES_SUMMARY"
-            elif explicit_store_margin or (
+            elif (
+                "store" in dimensions
+                and store_scope in {"single", "multiple"}
+            ) or explicit_store_margin or (
                 selected_code == "RESTAURANT_OPS_STORE_MARGIN" and "store" in dimensions
             ):
                 code = "RESTAURANT_OPS_STORE_MARGIN"
@@ -462,7 +524,40 @@ def _structured_followup_context(parent: Dict[str, Any]) -> Dict[str, Any]:
             if isinstance(window_label, str) and window_label.strip()
             else None
         )
-        if safe_entity or metrics or safe_window:
+        ranking_direction = context.get("ranking_direction")
+        if ranking_direction not in {"best", "worst"}:
+            ranking_direction = None
+        ranking_count = context.get("ranking_limit")
+        if not isinstance(ranking_count, int) or not 1 <= ranking_count <= 20:
+            ranking_count = None
+        excluded_entities = tuple(
+            str(item).strip()
+            for item in (
+                context.get("excluded_entities")
+                if isinstance(context.get("excluded_entities"), list)
+                else []
+            )
+            if isinstance(item, str) and 1 <= len(item.strip()) <= 40
+        )[:12]
+        store_scope = context.get("store_scope")
+        if store_scope not in {"all", "single", "multiple"}:
+            store_scope = None
+        store_names = tuple(
+            str(item).strip()
+            for item in (
+                context.get("store_names")
+                if isinstance(context.get("store_names"), list)
+                else []
+            )
+            if isinstance(item, str) and 1 <= len(item.strip()) <= 80
+        )[:8]
+        topic_kind = context.get("topic_kind")
+        if topic_kind not in {"dish_ranking", "store_ranking"}:
+            topic_kind = None
+        if (
+            safe_entity or metrics or safe_window or ranking_direction
+            or store_scope or topic_kind
+        ):
             return {
                 "focus_entity": safe_entity,
                 "requested_metrics": metrics,
@@ -474,6 +569,13 @@ def _structured_followup_context(parent: Dict[str, Any]) -> Dict[str, Any]:
                     }
                     else "lookup"
                 ),
+                "topic_kind": topic_kind,
+                "ranking_direction": ranking_direction,
+                "ranking_limit": ranking_count,
+                "excluded_entities": excluded_entities,
+                "store_scope": store_scope,
+                "store_names": store_names,
+                "compare_stores": bool(context.get("compare_stores")),
             }
     return {}
 
@@ -572,6 +674,48 @@ def contextualize_restaurant_followup(
     metric_label = _context_metric_label(explicit_metrics or context_metrics)
     body = _strip_followup_reference(current)
     action = _detect_analysis_action(current)
+
+    # Ranking follow-ups are changes to ranking slots, not dish names.  Without
+    # this branch "那倒数五名呢" was fed to extract_dish_candidate and became a
+    # fictitious dish called "倒数五名".
+    explicit_ranking_direction = _detect_ranking_direction(current)
+    if (
+        context.get("topic_kind") == "dish_ranking"
+        and explicit_ranking_direction is not None
+    ):
+        inherited_limit = context.get("ranking_limit")
+        effective_limit = ranking_limit(
+            current,
+            inherited_limit if isinstance(inherited_limit, int) else 5,
+        )
+        direction_text = (
+            "销量最高" if explicit_ranking_direction == "best" else "销量最低"
+        )
+        scope = context.get("store_scope")
+        store_names = context.get("store_names") or ()
+        if scope == "all":
+            scope_text = "全部门店"
+        elif scope in {"single", "multiple"} and store_names:
+            scope_text = "和".join(store_names)
+        else:
+            scope_text = ""
+        exclusions = tuple(context.get("excluded_entities") or ())
+        exclusion_text = (
+            f"，排除{'、'.join(exclusions)}"
+            if exclusions
+            else ""
+        )
+        parent_window = context.get("window_label")
+        window_text = (
+            str(parent_window)
+            if isinstance(parent_window, str) and parent_window != "全部历史"
+            else ""
+        )
+        resolved = (
+            f"{window_text}{scope_text}{direction_text}的前{effective_limit}道菜"
+            f"{exclusion_text}"
+        )
+        return resolved, True
 
     if isinstance(focus_entity, dict):
         entity_name = focus_entity["name"]
@@ -730,6 +874,13 @@ def _seal_query_plan(spec: RestaurantQuerySpec) -> RestaurantQuerySpec:
         "dimensions": list(spec.dimensions),
         "comparison": spec.comparison,
         "analysis_action": spec.analysis_action,
+        "ranking_direction": spec.ranking_direction,
+        "ranking_limit": spec.ranking_limit,
+        "excluded_entities": list(spec.excluded_entities),
+        "store_scope": spec.store_scope,
+        "store_slots": list(spec.store_slots),
+        "compare_stores": spec.compare_stores,
+        "store_options": list(spec.store_options),
         "planned_intents": list(spec.planned_intents),
         "dish_slot": spec.dish_slot,
         "store_slot": spec.store_slot,
@@ -803,18 +954,34 @@ def _build_spec(
     relative_window = _uses_relative_sales_window(effective_query)
     deterministic_dish = extract_dish_candidate(effective_query)
     deterministic_store = extract_store_mention(effective_query)
+    store_scope, store_slots = _detect_store_scope(effective_query)
+    ranking_direction = _detect_ranking_direction(effective_query)
     dimension_list = list(_detect_dimensions(effective_query))
     if (llm_store or deterministic_store) and "store" not in dimension_list:
         dimension_list.append("store")
     if (llm_dish or deterministic_dish) and "dish" not in dimension_list:
         dimension_list.append("dish")
+    # "全部门店" is an aggregation scope, not a request to group the answer by
+    # store.  For an all-store dish ranking, keeping it as a dimension would
+    # force the store-margin resolver and reject the correct aggregate plan.
+    if (
+        store_scope == "all"
+        and ranking_direction
+        and "dish" in dimension_list
+        and "store" in dimension_list
+        and not store_dish_split_dish(effective_query)
+    ):
+        dimension_list.remove("store")
     dimensions = tuple(dimension_list)
     comparison = _detect_comparison(effective_query)
+    requested_ranking_limit = ranking_limit(effective_query)
+    excluded_entities = tuple(ranking_exclusions(effective_query))
     planned_intents = _plan_requested_intents(
         effective_query,
         code,
         requested_metrics,
         dimensions,
+        store_scope,
     )
     unsupported_requirements = tuple(
         requirement
@@ -925,6 +1092,12 @@ def _build_spec(
         asks_prohibited_actions=asks_prohibited_actions,
         asks_export=asks_export,
         analysis_action=analysis_action,
+        ranking_direction=ranking_direction,
+        ranking_limit=requested_ranking_limit,
+        excluded_entities=excluded_entities,
+        store_scope=store_scope,
+        store_slots=store_slots,
+        compare_stores=(store_scope == "multiple"),
         dish_slot=llm_dish or deterministic_dish,
         store_slot=llm_store or deterministic_store,
         plan_version="restaurant-query-plan-v2",
@@ -1110,6 +1283,81 @@ async def _maybe_register_pending(
         )
 
 
+_STORE_SCOPE_REQUIRED_METRICS = frozenset({
+    "sales_volume", "gross_margin", "revenue", "orders",
+})
+_STORE_SCOPE_REQUIRED_INTENTS = frozenset({
+    "RESTAURANT_OPS_GROSS_MARGIN",
+    "RESTAURANT_OPS_STORE_MARGIN",
+    "RESTAURANT_OPS_SALES_SUMMARY",
+})
+
+
+async def _apply_store_scope_guard(
+    pool,
+    factory_id: str,
+    spec: Optional[RestaurantQuerySpec],
+) -> Optional[RestaurantQuerySpec]:
+    """Ask multi-store tenants for scope; infer the sole store when unambiguous."""
+    if (
+        spec is None
+        or spec.clarification_needed
+        or spec.store_scope
+        or not spec.intent
+        or (
+            spec.intent not in _STORE_SCOPE_REQUIRED_INTENTS
+            and not set(spec.requested_metrics).intersection(_STORE_SCOPE_REQUIRED_METRICS)
+        )
+    ):
+        return spec
+
+    data_factory = demo_data_factory_for_code(
+        spec.intent,
+        factory_id,
+        store_scoped=True,
+    )
+    try:
+        async with pool.acquire() as conn:
+            rows = await conn.fetch(
+                """
+                SELECT name
+                  FROM dim_store
+                 WHERE factory_id = $1
+                 ORDER BY name
+                 LIMIT 9
+                """,
+                data_factory,
+            )
+    except Exception as exc:
+        logger.warning("[restaurant-intent] store-scope gate unavailable: %s", exc)
+        # Scope enrichment must not invalidate an otherwise sealed query plan
+        # in test/minimal deployments where dim_store is unavailable. Resolver
+        # contracts still fail closed on an explicit unknown store.
+        return spec
+
+    names = tuple(
+        str(row["name"]).strip()[:80]
+        for row in rows
+        if row["name"] and str(row["name"]).strip()
+    )
+    if len(names) <= 1:
+        return _seal_query_plan(replace(
+            spec,
+            store_scope="single",
+            # This is an inferred tenant fact, not an explicit store filter.
+            # Keeping store_slots empty lets all-store SQL read the sole store
+            # without changing the immutable resolver dimension.
+            store_slots=(),
+            store_options=names,
+        ))
+    return _seal_query_plan(replace(
+        spec,
+        clarification_needed=True,
+        clarification_question=STORE_SCOPE_CLARIFICATION_QUESTION,
+        store_options=names,
+    ))
+
+
 def build_resolver_query(query: str, spec: RestaurantQuerySpec) -> str:
     """The string chat.py should pass as `query=` into `resolve_by_code`.
 
@@ -1238,7 +1486,12 @@ async def _t2_vector_match(pool, query: str) -> Tuple[Optional[str], float, Opti
 
 # ─── T3 LLM tier ────────────────────────────────────────────────────────
 
-_T3_TIMEOUT_SECONDS = 5.0
+# Java's tiered endpoint has a 10 s wall-clock deadline.  Keep the complete
+# provider cascade below that deadline, including DB/serialization overhead;
+# a per-provider timeout alone previously allowed 2 × 5 s failures before a
+# later provider succeeded after Java had already returned an error.
+_T3_PROVIDER_TIMEOUT_SECONDS = 2.5
+_T3_TOTAL_TIMEOUT_SECONDS = 7.5
 _T3_MIN_CONFIDENCE = 0.6
 
 
@@ -1390,7 +1643,12 @@ async def _t3_llm_parse(
             "max_tokens": 500,
         }
         with llm_caller_context("restaurant_intent"):
-            result = await call_chain(SLOT.MAPPER, payload, timeout=_T3_TIMEOUT_SECONDS)
+            result = await call_chain(
+                SLOT.MAPPER,
+                payload,
+                timeout=_T3_PROVIDER_TIMEOUT_SECONDS,
+                total_timeout=_T3_TOTAL_TIMEOUT_SECONDS,
+            )
         content = (result["choices"][0]["message"]["content"] or "").strip()
         if content.startswith("```"):
             content = content.strip("`")
@@ -1438,7 +1696,34 @@ async def parse_restaurant_query(
     if session_key:
         pending = await _pending_pop(pool, factory_id, session_key)
         if pending is not None:
-            return await _parse_continuation(norm_query, pool, factory_id=factory_id, pending=pending)
+            continued = await _parse_continuation(
+                norm_query,
+                pool,
+                factory_id=factory_id,
+                pending=pending,
+            )
+            already_clarifying = bool(
+                continued is not None and continued.clarification_needed
+            )
+            continued = await _apply_store_scope_guard(pool, factory_id, continued)
+            if (
+                continued is not None
+                and continued.clarification_needed
+                and not already_clarifying
+                and continued.clarification_question
+                == STORE_SCOPE_CLARIFICATION_QUESTION
+            ):
+                combined_query = (
+                    f"{pending.get('original_query') or ''} {norm_query}".strip()
+                )
+                await _maybe_register_pending(
+                    pool,
+                    combined_query,
+                    continued,
+                    factory_id,
+                    session_key,
+                )
+            return continued
 
     capability_question = capability_clarification_question(norm_query)
     if capability_question:
@@ -1528,6 +1813,7 @@ async def parse_restaurant_query(
             planner_authority="validated_plan_cache",
             require_explicit_time=True,
         )
+        cached_spec = await _apply_store_scope_guard(pool, factory_id, cached_spec)
         await _maybe_register_pending(pool, norm_query, cached_spec, factory_id, session_key)
         return cached_spec
 
@@ -1622,6 +1908,11 @@ async def parse_restaurant_query(
         # user-supplied window). Register that pending turn before returning,
         # so clicking "本月" or another offered option resumes the original
         # question instead of being parsed as a new standalone utterance.
+        successful_spec = await _apply_store_scope_guard(
+            pool,
+            factory_id,
+            successful_spec,
+        )
         await _maybe_register_pending(
             pool, norm_query, successful_spec, factory_id, session_key,
         )
