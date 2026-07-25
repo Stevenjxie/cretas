@@ -638,12 +638,13 @@ SLOT_MODELS: Dict[SLOT, List[Tuple[str, str]]] = {
     # 08-13) — 原头 a/qwen3.6-flash、b/qwen-flash 已过期, c/qwen3.5-flash
     # 额度耗尽 (留链尾靠 403 直落, 万一月度重置还能自愈)。
     # 2026-07-26 生产事故: 该头部随后也返回 403，深链中的多个慢模型先吃完
-    # 7.5s 总预算，导致启动预热已验证 200 的 c/qwen3.7-max 永远不可达。
-    # 将它提升为第二候选：头部额度恢复时仍优先使用 flash；额度耗尽时则
-    # 立即落到健康 max，不再穿过已过期/慢超时的长链。
+    # 7.5s 总预算。首次止血曾把 c/qwen3.7-max 提到第二位，但生产复测发现
+    # 其免费额度也已返回 403。随后用真实餐饮 T3 prompt 探测 c/glm-5.2：
+    # 4/4 正确、1.97-2.47s，且受同一免费额度/到期门禁保护。因此将 glm-5.2
+    # 提为低成本健康候选；max 仅保留在共享深尾，避免成为常态调用。
     SLOT.MAPPER: _dedup_chain([
         ("aliyun_c", "qwen3.6-flash-2026-04-16"),
-        ("aliyun_c", "qwen3.7-max-2026-06-08"),
+        ("aliyun_c", "glm-5.2"),
         ("aliyun_a", "qwen3.6-flash"), ("aliyun_b", "qwen-flash"),
         ("aliyun_c", "qwen3.5-flash"), ("aliyun_c", "qwen3-coder-flash"),
         ("tencent", "qwen3.5-flash"),

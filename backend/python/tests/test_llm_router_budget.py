@@ -46,7 +46,7 @@ async def test_mapper_reserves_total_budget_for_later_healthy_candidate(monkeypa
         SLOT.MAPPER,
         [
             ("aliyun_c", "qwen3.6-flash-2026-04-16"),
-            ("aliyun_c", "qwen3.7-max-2026-06-08"),
+            ("aliyun_c", "glm-5.2"),
         ],
     )
     good = {"choices": [{"message": {"content": '{"intent":"ok"}'}}]}
@@ -77,7 +77,7 @@ async def test_mapper_reserves_total_budget_for_later_healthy_candidate(monkeypa
     assert result == good
     assert client.call_log == [
         "qwen3.6-flash-2026-04-16",
-        "qwen3.7-max-2026-06-08",
+        "glm-5.2",
     ]
 
 
