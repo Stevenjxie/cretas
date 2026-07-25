@@ -1234,6 +1234,23 @@ def test_named_dish_revenue_uses_scoped_unit_economics_resolver():
     assert spec.planned_intents == ("RESTAURANT_OPS_GROSS_MARGIN",)
 
 
+def test_all_store_scope_does_not_erase_named_dish_revenue_object():
+    spec = _build_spec(
+        "RESTAURANT_OPS_SALES_SUMMARY",
+        "本月全部门店招牌青花椒味(单人份)的营业额是多少？",
+        confidence=0.95,
+        tier="llm",
+        planner_authority="llm",
+    )
+
+    assert spec.requested_metrics == ("revenue",)
+    assert spec.store_scope == "all"
+    assert spec.dish_slot == "招牌青花椒味(单人份)"
+    assert "dish" in spec.dimensions
+    assert spec.intent == "RESTAURANT_OPS_GROSS_MARGIN"
+    assert spec.planned_intents == ("RESTAURANT_OPS_GROSS_MARGIN",)
+
+
 def test_conflicting_llm_intent_stays_fail_closed_when_plan_has_multiple_resolvers():
     spec = _build_spec(
         "RESTAURANT_OPS_REQUISITION_TREND",

@@ -65,6 +65,16 @@ public class RestaurantComprehensiveSynthesisGoldTool extends GoldBackedRestaura
         return schema;
     }
 
+    /**
+     * This tool is itself the multi-dimension synthesis owner. Delegating it
+     * back to the single-intent restaurant planner creates a loop that reduces
+     * comprehensive questions to one metric or a generic clarification.
+     */
+    @Override
+    protected boolean shouldDelegateToTieredIntent(String userInput) {
+        return false;
+    }
+
     // getRequiredParameters() inherited — returns empty list.
 
     /**

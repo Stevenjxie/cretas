@@ -44,6 +44,16 @@ class GoldBackedRestaurantToolDelegateTest {
         return tool;
     }
 
+    private RestaurantComprehensiveSynthesisGoldTool newSynthesisTool(
+            GoldFinanceClient goldClient) throws Exception {
+        RestaurantComprehensiveSynthesisGoldTool tool =
+                new RestaurantComprehensiveSynthesisGoldTool();
+        Field f = GoldBackedRestaurantTool.class.getDeclaredField("gold");
+        f.setAccessible(true);
+        f.set(tool, goldClient);
+        return tool;
+    }
+
     private static Map<String, Object> paramsWithInput(String userInput) {
         Map<String, Object> params = new HashMap<>();
         if (userInput != null) {
@@ -75,7 +85,8 @@ class GoldBackedRestaurantToolDelegateTest {
                         "contract_pass", true,
                         "query_plan_hash", "plan-42",
                         "suggested_followups", followups,
-                        "executed_resolvers", List.of("RESTAURANT_OPS_GROSS_MARGIN")
+                        "executed_resolvers", List.of("RESTAURANT_OPS_GROSS_MARGIN"),
+                        "warning", "咨询模式只展示分析结果，没有执行下架操作。"
                 ));
 
         RestaurantPeakMonthGoldTool tool = newTool(gold);
@@ -98,6 +109,8 @@ class GoldBackedRestaurantToolDelegateTest {
         assertThat(result).containsEntry(
                 "executedResolvers", List.of("RESTAURANT_OPS_GROSS_MARGIN"));
         assertThat(result).containsEntry("suggestedFollowups", followups);
+        assertThat(result).containsEntry(
+                "warning", "咨询模式只展示分析结果，没有执行下架操作。");
         // ensureActionableMessage ran (owner-action framing preserved).
         assertThat(result).containsKey("decisionBridge");
         assertThat(result).containsKey("suggestedFollowups");
@@ -406,5 +419,42 @@ class GoldBackedRestaurantToolDelegateTest {
         assertThat((String) result.get("message")).startsWith("最近30天营收共36万。");
         verify(gold).fetchTieredIntentAnswer(eq(FACTORY_ID), eq("过去一个月营业额"), eq("restaurant_peak_month_gold"));
         verify(gold, never()).fetchDataRange(anyString());
+    }
+
+    @Test
+    @DisplayName("comprehensive synthesis owns its multi-dimension query and never loops through tiered")
+    void comprehensiveSynthesisBypassesTieredDelegateGate() throws Exception {
+        GoldFinanceClient gold = mock(GoldFinanceClient.class);
+        Map<String, Object> range = new HashMap<>();
+        range.put("min_date", "2026-06-01");
+        range.put("max_date", "2026-07-26");
+        when(gold.fetchDataRange(FACTORY_ID)).thenReturn(range);
+        when(gold.fetchComprehensiveSynthesis(
+                eq(FACTORY_ID),
+                anyString(),
+                any(LocalDate.class),
+                any(LocalDate.class)))
+                .thenReturn(Map.of(
+                        "answer", "核心结论：已有维度已分析，缺失维度保持为空。",
+                        "charts", List.of(),
+                        "source", "deterministic_fallback"));
+
+        RestaurantComprehensiveSynthesisGoldTool tool = newSynthesisTool(gold);
+        String query = "请综合分析最近30天全部门店经营情况，结合客流、菜品销量、毛利给出建议";
+        Map<String, Object> result = tool.doExecute(
+                FACTORY_ID,
+                paramsWithInput(query),
+                Collections.emptyMap());
+
+        assertThat(result).doesNotContainKey("tieredDelegate");
+        assertThat(result.get("message").toString()).contains("核心结论").contains("缺失维度");
+        verify(gold, never()).fetchTieredIntentAnswer(anyString(), anyString(), anyString());
+        verify(gold, never()).fetchTieredIntentAnswer(
+                anyString(), anyString(), anyString(), anyString());
+        verify(gold).fetchComprehensiveSynthesis(
+                eq(FACTORY_ID),
+                eq(query),
+                any(LocalDate.class),
+                any(LocalDate.class));
     }
 }

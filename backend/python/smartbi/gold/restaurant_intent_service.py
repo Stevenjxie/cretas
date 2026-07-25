@@ -28,6 +28,7 @@ from smartbi.gold.restaurant_intent import (
     unsupported_requirements_disclosure,
 )
 from smartbi.gold.restaurant_ops_router import (
+    _resolve_sales_query_spec,
     demo_data_factory_for_code,
     extract_store_mentions,
     resolve_by_code as _resolve_tiered,
@@ -302,6 +303,10 @@ def _resolver_kwargs(
             kwargs["date_range"] = (start, end)
         except (AttributeError, TypeError):
             pass
+    sales_spec = _resolve_sales_query_spec(query)
+    comparison_start, comparison_end = sales_spec.comparison_range
+    if comparison_start is not None and comparison_end is not None:
+        kwargs["comparison_date_range"] = (comparison_start, comparison_end)
     return kwargs
 
 
@@ -536,6 +541,9 @@ async def tiered_answer(
             followups = _clarification_followups(spec)
             if followups:
                 clarification_result["suggested_followups"] = followups
+            action_warning = _read_only_action_warning(query)
+            if action_warning:
+                clarification_result["warning"] = action_warning
             return clarification_result
 
         resolver_query = build_resolver_query(query, spec)

@@ -270,6 +270,9 @@ public abstract class GoldBackedRestaurantTool extends AbstractBusinessTool {
             if (response.get("structured_context") != null) {
                 result.put("conversationContext", response.get("structured_context"));
             }
+            if (response.get("warning") != null) {
+                result.put("warning", response.get("warning"));
+            }
 
             boolean isClarification = "clarification".equals(response.get("kind"));
             if (isClarification) {
