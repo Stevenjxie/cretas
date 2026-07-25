@@ -27,6 +27,10 @@ def test_factory_prompt_keeps_restaurant_analysis_out_of_ai_assist():
     assert "验收结果" in FACTORY_SYSTEM_PROMPT
     assert "阻塞条件" in FACTORY_SYSTEM_PROMPT
     assert "不要使用“端口”这个词" in FACTORY_SYSTEM_PROMPT
+    assert (
+        "Workflow 完整草稿 → BOM 绑定工序辅料并激活"
+        in FACTORY_SYSTEM_PROMPT
+    )
     assert "Workflow 完整草稿 → 创建 BOM 时自动固定该工艺修订" in FACTORY_SYSTEM_PROMPT
     assert "普通用户不选择 Workflow 版本" in FACTORY_SYSTEM_PROMPT
     assert "投入 → 工序执行（开始/结束/人数）→ 产出 → 确认提交" in FACTORY_SYSTEM_PROMPT
@@ -57,6 +61,11 @@ def test_bom_workflow_publication_questions_use_the_deterministic_guard():
         "BOM 激活后 Workflow 为什么还不能发布？"
     )
     assert not _needs_bom_workflow_sequence_guard("BOM 怎么添加包材？")
+    assert (
+        "Workflow 完整草稿 → BOM 绑定工序辅料并激活"
+        " → Workflow 刷新、发布并启用"
+        in _BOM_WORKFLOW_SEQUENCE_ANSWER
+    )
     assert "Workflow 完整草稿 → 创建 BOM 时系统自动固定该工艺修订" in (
         _BOM_WORKFLOW_SEQUENCE_ANSWER
     )
@@ -113,6 +122,11 @@ def test_latest_f006_sop_is_a_deployable_manual_source():
     assert "15. 成本归集与出厂核算" in titles
 
     current_sop = source_path.read_text(encoding="utf-8")
+    required_sequence = (
+        "Workflow 完整草稿 → BOM 绑定工序辅料并激活"
+        " → Workflow 刷新、发布并启用"
+    )
+    assert required_sequence in current_sop
     assert "ACTIVE BOM 是 Workflow 发布启用的前置门禁" in current_sop
     assert "BOM 激活本身不会自动发布 Workflow" in current_sop
     assert "系统自动固定唯一、完整且兼容的 Workflow 修订" in current_sop
@@ -127,6 +141,7 @@ def test_latest_f006_sop_is_a_deployable_manual_source():
 
     html_path = Path(PROJECT_ROOT) / "docs/manual/F006-production-full-chain-manual-test-sop.html"
     html = html_path.read_text(encoding="utf-8")
+    assert required_sequence in html
     assert "origin/main · SOP sync 2026-07-24" in html
     assert "先有完整 Workflow 草稿，再创建 BOM" in html
     assert "页面没有任意切换版本的选择器" in html
