@@ -60,7 +60,7 @@ YESTERDAY=$(date -d yesterday +%F)
   echo "=== $(date '+%F %T') refresh DEMO_REST ops (end=$TODAY) ==="
   cd "$PYDIR"
   # shellcheck disable=SC1091
-  source "$PYDIR/venv38/bin/activate"
+  source "$PYDIR/venv-current/bin/activate"
   python smartbi/scripts/seed_demo_rest_ops.py --dsn "$DSN" --end "$TODAY"
   echo "=== refresh DEMO_REST sales aggregate (source=RES_3101_009, end=$YESTERDAY) ==="
   python -m smartbi.scripts.refresh_qhj_demo_recent_agg \

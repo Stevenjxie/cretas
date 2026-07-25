@@ -42,6 +42,23 @@ REMOTE_DIR="/www/wwwroot/cretas/code/backend/python"
 REMOTE_CRETAS_DIR="/www/wwwroot/cretas"
 LOCAL_DIR="backend/python"
 SERVER_IP="${SERVER#*@}"
+PYTHON_RUNTIME_BIN="${CRETAS_PYTHON_RUNTIME_BIN:-python3.11}"
+PYTHON_VENV_NAME="${CRETAS_PYTHON_VENV_NAME:-venv311}"
+PYPI_INDEX_URL="${CRETAS_PYPI_INDEX_URL:-https://mirrors.aliyun.com/pypi/simple}"
+
+if [[ "$PYTHON_RUNTIME_BIN" != "python3.11" ]]; then
+    echo "错误: CRETAS_PYTHON_RUNTIME_BIN 必须是 python3.11"
+    exit 1
+fi
+if [[ ! "$PYTHON_VENV_NAME" =~ ^venv[0-9]+$ ]]; then
+    echo "错误: CRETAS_PYTHON_VENV_NAME 必须匹配 venv<数字>"
+    exit 1
+fi
+if [[ "$PYPI_INDEX_URL" != "https://mirrors.aliyun.com/pypi/simple" &&
+      "$PYPI_INDEX_URL" != "https://pypi.org/simple" ]]; then
+    echo "错误: CRETAS_PYPI_INDEX_URL 必须是批准的 HTTPS PyPI 索引"
+    exit 1
+fi
 
 # 参数解析
 DEPLOY_ENV="prod"
@@ -146,6 +163,7 @@ fi
 REMOTE_MIGRATION_BUNDLE="/www/wwwroot/cretas/code/.release-migrations/$RELEASE_COMMIT"
 REMOTE_MIGRATION_DIR="$REMOTE_MIGRATION_BUNDLE/sql"
 REMOTE_MIGRATION_SCRIPT_DIR="$REMOTE_MIGRATION_BUNDLE/scripts"
+REMOTE_SYSTEMD_BUNDLE="/www/wwwroot/cretas/code/.release-systemd/$RELEASE_COMMIT"
 
 prepare_remote_migration_bundle() {
     ssh "$SERVER" bash -s -- "$REMOTE_MIGRATION_BUNDLE" <<'REMOTE_BUNDLE'
@@ -257,6 +275,19 @@ rsync -az --timeout=60 \
     "$PROJECT_ROOT/scripts/promote_learnings.py" \
     "$SERVER:/www/wwwroot/cretas/code/scripts/" 2>&1 | tail -5
 
+# 3d. Keep active cron consumers on the same atomically selected runtime as
+# the production service. Host-local crontab entries continue to own schedule
+# and secrets; only the tracked scripts are synchronized.
+log "INFO" "[3d/5] 同步 Python 定时任务入口..."
+ssh "$SERVER" "mkdir -p /www/wwwroot/cretas/code/scripts/cron"
+rsync -az --timeout=60 \
+    "$PROJECT_ROOT/scripts/cron/restaurant-ai-eval.sh" \
+    "$PROJECT_ROOT/scripts/cron/refresh-demo-rest.sh" \
+    "$SERVER:/www/wwwroot/cretas/code/scripts/cron/" 2>&1 | tail -5
+ssh "$SERVER" "chmod +x \
+    /www/wwwroot/cretas/code/scripts/cron/restaurant-ai-eval.sh \
+    /www/wwwroot/cretas/code/scripts/cron/refresh-demo-rest.sh"
+
 # 3.5. Apply pending smartbi migrations (per spec 2026-05-07-smartbi-migration-runner-spec.md).
 # Trigger: task #30 — 8 个 data fabric C 系列 migrations 当初部署漏跑 prod, T6.2 4h 才发现.
 # Runner consumes smartbi_migrations tracker (PR-A #98) to skip already-applied
@@ -283,30 +314,45 @@ fi
 log "INFO" "[4/5] 验证 Python 依赖缓存并按需安装..."
 # The quoted heredoc prevents local command substitution. A previous unquoted
 # heredoc executed backticks from the cryptography import-smoke comment locally.
-ssh "$SERVER" bash -s -- "$REMOTE_DIR" <<'ENDSSH'
-set -e
+ssh "$SERVER" bash -s -- \
+    "$REMOTE_DIR" "$PYTHON_RUNTIME_BIN" "$PYTHON_VENV_NAME" "$PYPI_INDEX_URL" <<'ENDSSH'
+set -euo pipefail
 REMOTE_DIR="$1"
+PYTHON_BIN="$2"
+VENV_NAME="$3"
+PYPI_INDEX_URL="$4"
 cd "$REMOTE_DIR"
 
-# 使用 Python 3.8
-PYTHON_BIN="python3.8"
-if ! command -v "$PYTHON_BIN" &> /dev/null; then
-    echo "Python 3.8 不可用，尝试 python3..."
-    PYTHON_BIN="python3"
+if [[ "$PYTHON_BIN" != "python3.11" || ! "$VENV_NAME" =~ ^venv[0-9]+$ ]]; then
+    echo "[ERROR] unsupported Python runtime contract: $PYTHON_BIN / $VENV_NAME" >&2
+    exit 1
 fi
+if ! command -v "$PYTHON_BIN" >/dev/null 2>&1; then
+    echo "[ERROR] $PYTHON_BIN is unavailable. Install the approved OS package before deployment." >&2
+    echo "[ERROR] Existing Python service was not restarted." >&2
+    exit 1
+fi
+
 echo "使用 Python: $PYTHON_BIN"
 "$PYTHON_BIN" --version
 
-VENV_PYTHON="$REMOTE_DIR/venv38/bin/python"
+VENV_DIR="$REMOTE_DIR/$VENV_NAME"
+VENV_PYTHON="$VENV_DIR/bin/python"
 # A directory alone is not a trustworthy venv. Rebuild it when its interpreter
 # or pip entry point is missing/broken, then take the normal cache-miss path.
 if [ ! -x "$VENV_PYTHON" ] || ! "$VENV_PYTHON" -m pip --version >/dev/null 2>&1; then
     echo "[Dependencies] venv missing or invalid - rebuilding with $PYTHON_BIN"
-    rm -rf "$REMOTE_DIR/venv38"
-    "$PYTHON_BIN" -m venv "$REMOTE_DIR/venv38"
+    if [ -e "$VENV_DIR" ] || [ -L "$VENV_DIR" ]; then
+        if [ "$(realpath -m "$(dirname "$VENV_DIR")")" != "$(realpath -m "$REMOTE_DIR")" ]; then
+            echo "[ERROR] refusing to rebuild venv outside $REMOTE_DIR" >&2
+            exit 1
+        fi
+        rm -rf -- "$VENV_DIR"
+    fi
+    "$PYTHON_BIN" -m venv "$VENV_DIR"
 fi
 
-MANIFEST="$REMOTE_DIR/.deploy-requirements-manifest"
+MANIFEST="$REMOTE_DIR/.deploy-requirements-manifest.$VENV_NAME"
 REQUIREMENTS_SHA256="$(sha256sum requirements.txt | awk '{print $1}')"
 PYTHON_FINGERPRINT="$($VENV_PYTHON -c 'import platform,sys; print(platform.python_implementation()+"-"+platform.python_version()+"-"+sys.prefix)')"
 INSTALLED_SHA256="$($VENV_PYTHON -m pip freeze --all | LC_ALL=C sort | sha256sum | awk '{print $1}')"
@@ -336,16 +382,12 @@ if [ "$DEPENDENCY_CACHE_HIT" = "1" ]; then
     echo "[Dependencies] cache hit - skipping pip install ($DEPENDENCY_CACHE_REASON)"
 else
     echo "[Dependencies] cache miss - running pip install ($DEPENDENCY_CACHE_REASON)"
-    "$VENV_PYTHON" -m pip install --upgrade pip
-    "$VENV_PYTHON" -m pip install -r requirements.txt
+    "$VENV_PYTHON" -m pip install --no-cache-dir \
+        --index-url "$PYPI_INDEX_URL" --upgrade pip
+    "$VENV_PYTHON" -m pip install --no-cache-dir \
+        --index-url "$PYPI_INDEX_URL" -r requirements.txt
     "$VENV_PYTHON" -m pip check
     INSTALLED_SHA256="$($VENV_PYTHON -m pip freeze --all | LC_ALL=C sort | sha256sum | awk '{print $1}')"
-fi
-
-# 创建 .env 文件 (如果不存在)
-if [ ! -f ".env" ]; then
-    cp .env.example .env 2>/dev/null || true
-    echo "已创建 .env 文件，请配置 LLM API Key"
 fi
 
 # Import smoke test — catch missing deps BEFORE we restart the service.
@@ -362,40 +404,186 @@ if ! "$VENV_PYTHON" -c 'import sys; sys.path.insert(0, "."); import main' 2>&1; 
     exit 1
 fi
 echo "[Import smoke] OK — main.py + all routers import successfully"
+
+echo "[Torch smoke] checking CPU-only inference runtime..."
+if ! "$VENV_PYTHON" -c 'import torch; assert torch.__version__.startswith("2.4.1+cpu"), torch.__version__; assert not torch.cuda.is_available(); assert torch.tensor([1.0, 2.0]).sum().item() == 3.0' 2>&1; then
+    echo "[ERROR] CPU-only Torch smoke FAILED — aborting deploy BEFORE restart" >&2
+    exit 1
+fi
+echo "[Torch smoke] OK — Torch 2.4.1 CPU inference is available"
+
 if [ "$DEPENDENCY_CACHE_HIT" != "1" ]; then
     MANIFEST_TMP="${MANIFEST}.tmp.$$"
     {
         printf 'requirements_sha256=%s\n' "$REQUIREMENTS_SHA256"
         printf 'python_fingerprint=%s\n' "$PYTHON_FINGERPRINT"
         printf 'installed_sha256=%s\n' "$INSTALLED_SHA256"
+        printf 'runtime_bin=%s\n' "$PYTHON_BIN"
+        printf 'venv_name=%s\n' "$VENV_NAME"
     } > "$MANIFEST_TMP"
     mv -f "$MANIFEST_TMP" "$MANIFEST"
     echo "[Dependencies] verified manifest updated: $MANIFEST"
 fi
 ENDSSH
 
-# 重启对应环境的 Python 服务 (通过 restart 脚本，保证环境变量一致)
+capture_prod_runtime_target() {
+    ssh "$SERVER" bash -s -- "$REMOTE_DIR" <<'RUNTIME_CAPTURE'
+set -euo pipefail
+remote_dir="$1"
+current_link="$remote_dir/venv-current"
+if [ -L "$current_link" ]; then
+    target="$(readlink -f "$current_link")"
+else
+    exec_start="$(systemctl show cretas-python -p ExecStart --value)"
+    runtime_python="$(printf '%s\n' "$exec_start" | grep -oE "${remote_dir}/venv[[:alnum:]_-]+/bin/python" | head -n 1 || true)"
+    if [ -z "$runtime_python" ]; then
+        echo "[ERROR] unable to determine current production Python runtime" >&2
+        exit 1
+    fi
+    target="$(dirname "$(dirname "$runtime_python")")"
+fi
+if [[ ! "$target" =~ ^${remote_dir}/venv[0-9]+$ ]] || [ ! -x "$target/bin/python" ]; then
+    echo "[ERROR] refusing unsafe or invalid runtime target: $target" >&2
+    exit 1
+fi
+printf '%s\n' "$target"
+RUNTIME_CAPTURE
+}
+
+sync_python_runtime_units() {
+    log "INFO" "[4.25/5] 同步 Python 3.11 systemd runtime 契约..."
+    ssh "$SERVER" bash -s -- "$REMOTE_SYSTEMD_BUNDLE" <<'RUNTIME_STAGE'
+set -euo pipefail
+root="/www/wwwroot/cretas/code/.release-systemd"
+bundle="$1"
+if [[ ! "$bundle" =~ ^${root}/[0-9a-f]{40}$ ]]; then
+    echo "[ERROR] invalid systemd release bundle path" >&2
+    exit 1
+fi
+if [ -L "$root" ] || [ -L "$bundle" ]; then
+    echo "[ERROR] systemd release bundle must not be a symlink" >&2
+    exit 1
+fi
+mkdir -p \
+    "$bundle/cretas-gold-etl-refresh.service.d" \
+    "$bundle/cretas-corpus-refresh.service.d"
+if [ "$(realpath -m "$bundle")" != "$bundle" ]; then
+    echo "[ERROR] systemd release bundle resolves outside expected path" >&2
+    exit 1
+fi
+RUNTIME_STAGE
+
+    rsync -az --timeout=60 \
+        "$PROJECT_ROOT/scripts/systemd/cretas-python.service" \
+        "$SERVER:$REMOTE_SYSTEMD_BUNDLE/cretas-python.service"
+    rsync -az --timeout=60 \
+        "$PROJECT_ROOT/scripts/systemd/cretas-gold-etl-refresh.service.d/python-runtime.conf" \
+        "$SERVER:$REMOTE_SYSTEMD_BUNDLE/cretas-gold-etl-refresh.service.d/python-runtime.conf"
+    rsync -az --timeout=60 \
+        "$PROJECT_ROOT/scripts/systemd/cretas-corpus-refresh.service.d/python-runtime.conf" \
+        "$SERVER:$REMOTE_SYSTEMD_BUNDLE/cretas-corpus-refresh.service.d/python-runtime.conf"
+
+    ssh "$SERVER" bash -s -- "$REMOTE_SYSTEMD_BUNDLE" <<'RUNTIME_INSTALL'
+set -euo pipefail
+bundle="$1"
+timestamp="$(date +%Y%m%d_%H%M%S)"
+
+install_if_changed() {
+    src="$1"
+    dest="$2"
+    if [ -f "$dest" ] && cmp -s "$src" "$dest"; then
+        return
+    fi
+    if [ -f "$dest" ]; then
+        cp -a "$dest" "${dest}.bak.python-runtime.${timestamp}"
+    fi
+    install -D -m 0644 "$src" "$dest"
+}
+
+systemd-analyze verify "$bundle/cretas-python.service"
+install_if_changed \
+    "$bundle/cretas-python.service" \
+    /etc/systemd/system/cretas-python.service
+install_if_changed \
+    "$bundle/cretas-gold-etl-refresh.service.d/python-runtime.conf" \
+    /etc/systemd/system/cretas-gold-etl-refresh.service.d/python-runtime.conf
+install_if_changed \
+    "$bundle/cretas-corpus-refresh.service.d/python-runtime.conf" \
+    /etc/systemd/system/cretas-corpus-refresh.service.d/python-runtime.conf
+
+systemctl daemon-reload
+for unit in cretas-python cretas-gold-etl-refresh cretas-corpus-refresh; do
+    if ! systemctl show "$unit" -p ExecStart --value | grep -Fq '/venv-current/bin/python'; then
+        echo "[ERROR] $unit did not load the venv-current runtime contract" >&2
+        exit 1
+    fi
+done
+RUNTIME_INSTALL
+}
+
+set_runtime_link() {
+    local target="$1"
+    ssh "$SERVER" bash -s -- "$REMOTE_DIR" "$target" <<'RUNTIME_SWITCH'
+set -euo pipefail
+remote_dir="$1"
+target="$2"
+if [[ ! "$target" =~ ^${remote_dir}/venv[0-9]+$ ]] || [ ! -x "$target/bin/python" ]; then
+    echo "[ERROR] refusing invalid runtime switch target: $target" >&2
+    exit 1
+fi
+link="$remote_dir/venv-current"
+if [ -e "$link" ] && [ ! -L "$link" ]; then
+    echo "[ERROR] runtime selector exists but is not a symlink: $link" >&2
+    exit 1
+fi
+tmp_link="$remote_dir/.venv-current.$$"
+trap 'rm -f "$tmp_link"' EXIT
+ln -s "$target" "$tmp_link"
+mv -Tf "$tmp_link" "$link"
+if [ "$(readlink -f "$link")" != "$target" ]; then
+    echo "[ERROR] runtime selector verification failed" >&2
+    exit 1
+fi
+RUNTIME_SWITCH
+}
+
+PREVIOUS_RUNTIME_TARGET="$(capture_prod_runtime_target)"
+NEW_RUNTIME_TARGET="$REMOTE_DIR/$PYTHON_VENV_NAME"
+
+if [[ "$DEPLOY_ENV" == "prod" || "$DEPLOY_ENV" == "all" ]]; then
+    # Seed the selector with the currently running venv so systemd verification
+    # and any interrupted pre-switch deploy remain on the known-good runtime.
+    set_runtime_link "$PREVIOUS_RUNTIME_TARGET"
+    sync_python_runtime_units
+fi
+set_runtime_link "$NEW_RUNTIME_TARGET"
+
+# 重启对应环境的 Python 服务。生产失败时先把原子链接切回旧 venv，再恢复服务。
 log "INFO" "[4.5/5] 重启 Python 服务 (环境: $DEPLOY_ENV)..."
 
-restart_prod_python() {
-    ssh $SERVER "cd $REMOTE_CRETAS_DIR && bash restart-prod.sh" 2>&1 | grep -i python || true
-}
-
-restart_test_python() {
-    ssh $SERVER "cd $REMOTE_CRETAS_DIR && bash restart-test.sh" 2>&1 | grep -i python || true
-}
-
 restart_prod_via_systemd() {
-    ssh $SERVER "
-        # Use systemd for production — preserves all env vars (JWT_SECRET, LLM keys, DB config)
+    ssh "$SERVER" "
+        set -e
         systemctl restart cretas-python
+        systemctl is-active --quiet cretas-python
         echo 'Production Python restarted (systemd)'
     "
 }
 
+rollback_prod_runtime() {
+    log "WARN" "生产 Python 3.11 验证失败，切回 $PREVIOUS_RUNTIME_TARGET"
+    set_runtime_link "$PREVIOUS_RUNTIME_TARGET"
+    if restart_prod_via_systemd && wait_for_health_via_ssh "$SERVER" 8083 /health 15 2; then
+        log "WARN" "生产 Python 已恢复到旧运行时: $PREVIOUS_RUNTIME_TARGET"
+        return 0
+    fi
+    log "ERROR" "生产 Python 自动回滚失败，需要立即人工处理"
+    return 1
+}
+
 restart_test_via_nohup() {
     # Test credentials are host-local and must never be embedded in this script.
-    ssh $SERVER "
+    ssh "$SERVER" "
         set -euo pipefail
         ENV_FILE=$REMOTE_CRETAS_DIR/.env.test
         if [ ! -r \"\$ENV_FILE\" ]; then
@@ -422,7 +610,7 @@ restart_test_via_nohup() {
         FOOD_KB_POSTGRES_HOST=localhost FOOD_KB_POSTGRES_PORT=5432 \
         LLM_MODEL=qwen3.7-max-2026-06-08 LLM_FAST_MODEL=qwen3.5-flash \
         LLM_REASONING_MODEL=qwen3.5-flash LLM_VL_MODEL=qwen3-vl-plus-2025-12-19 \
-        nohup $REMOTE_CRETAS_DIR/code/backend/python/venv38/bin/python \
+        nohup $REMOTE_CRETAS_DIR/code/backend/python/venv-current/bin/python \
             -m uvicorn main:app --host 0.0.0.0 --port 8084 \
             > $REMOTE_CRETAS_DIR/python-test.log 2>&1 &
         echo 'Test Python restarted (nohup)'
@@ -430,16 +618,48 @@ restart_test_via_nohup() {
 }
 case "$DEPLOY_ENV" in
     prod)
-        restart_prod_via_systemd
+        if ! restart_prod_via_systemd; then
+            rollback_prod_runtime || true
+            exit 1
+        fi
         ;;
     test)
         restart_test_via_nohup
         ;;
     all)
-        restart_prod_via_systemd
+        if ! restart_prod_via_systemd; then
+            rollback_prod_runtime || true
+            exit 1
+        fi
         restart_test_via_nohup
         ;;
 esac
+
+verify_prod_runtime_contract() {
+    ssh "$SERVER" bash -s -- "$REMOTE_DIR" "$NEW_RUNTIME_TARGET" "$PREVIOUS_RUNTIME_TARGET" <<'RUNTIME_VERIFY'
+set -euo pipefail
+remote_dir="$1"
+expected_target="$2"
+rollback_target="$3"
+current_link="$remote_dir/venv-current"
+
+[ "$(readlink -f "$current_link")" = "$expected_target" ]
+"$current_link/bin/python" -c 'import sys, torch; assert sys.version_info[:2] == (3, 11); assert torch.__version__.startswith("2.4.1+cpu")'
+[ -x "$rollback_target/bin/python" ]
+systemctl is-active --quiet cretas-python
+[ "$(systemctl show cretas-python -p NRestarts --value)" = "0" ]
+
+pid="$(systemctl show cretas-python -p MainPID --value)"
+tr '\0' ' ' <"/proc/$pid/cmdline" | grep -Fq '/venv-current/bin/python'
+for unit in cretas-python cretas-gold-etl-refresh cretas-corpus-refresh; do
+    systemctl show "$unit" -p ExecStart --value | grep -Fq '/venv-current/bin/python'
+done
+grep -Fq 'venv-current/bin/activate' \
+    /www/wwwroot/cretas/code/scripts/cron/restaurant-ai-eval.sh
+grep -Fq 'venv-current/bin/activate' \
+    /www/wwwroot/cretas/code/scripts/cron/refresh-demo-rest.sh
+RUNTIME_VERIFY
+}
 
 # 健康检查走 deploy-common.sh 的 wait_for_health_via_ssh: SSH 进 47 本机 curl
 # localhost:<port>/health, 绕过 SG Phase 3 对 47:8083/8084 的 nginx-139-only 限制
@@ -451,9 +671,17 @@ sleep 3
 
 if [[ "$DEPLOY_ENV" == "prod" || "$DEPLOY_ENV" == "all" ]]; then
     if wait_for_health_via_ssh "$SERVER" 8083 /health 15 2; then
-        log "INFO" "[生产] Python 服务 (8083) 部署成功"
+        if verify_prod_runtime_contract; then
+            log "INFO" "[生产] Python 3.11 服务 (8083) 与回滚契约验证成功"
+        else
+            log "ERROR" "[生产] 健康接口成功，但 Python 3.11 runtime 契约验证失败"
+            rollback_prod_runtime || true
+            exit 1
+        fi
     else
-        log "WARN" "[生产] 健康检查超时，请检查: ssh $SERVER 'tail -50 $REMOTE_CRETAS_DIR/python-prod.log'"
+        log "ERROR" "[生产] 健康检查超时，开始自动回滚"
+        rollback_prod_runtime || true
+        exit 1
     fi
 fi
 
@@ -461,7 +689,8 @@ if [[ "$DEPLOY_ENV" == "test" || "$DEPLOY_ENV" == "all" ]]; then
     if wait_for_health_via_ssh "$SERVER" 8084 /health 15 2; then
         log "INFO" "[测试] Python 服务 (8084) 部署成功"
     else
-        log "WARN" "[测试] 健康检查超时，请检查: ssh $SERVER 'tail -50 $REMOTE_CRETAS_DIR/python-test.log'"
+        log "ERROR" "[测试] 健康检查超时，请检查: ssh $SERVER 'tail -50 $REMOTE_CRETAS_DIR/python-test.log'"
+        exit 1
     fi
 fi
 

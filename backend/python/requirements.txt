@@ -1,4 +1,9 @@
-# Compatible with Python 3.8+
+# Compatible with Python 3.8+; production runtime is Python 3.11.
+#
+# PyTorch must resolve from the official CPU wheel index. Using the default
+# Linux wheel pulled CUDA/Triton dependencies onto a CPU-only server and added
+# roughly 4.7 GiB to the virtualenv.
+--extra-index-url https://download.pytorch.org/whl/cpu
 
 # FastAPI and server
 fastapi>=0.70.0,<1.0.0
@@ -37,6 +42,9 @@ cryptography>=42.0.0
 
 # YAML for knowledge base
 PyYAML>=6.0,<7.0.0
+# Chinese tokenization used by food-KB feedback, ingestion and retrieval.
+# It existed only as historical venv state before the Python 3.11 rebuild.
+jieba>=0.42.1,<1.0.0
 
 # Utilities
 python-dateutil>=2.8.0,<3.0.0
@@ -81,7 +89,7 @@ Pillow>=9.0.0,<11.0.0
 # CPU-only torch to keep install size reasonable; model path configured in intent_classifier.py
 # NOTE: If venv is rebuilt, these MUST be reinstalled or /api/classifier/health returns 404
 # and Java ClassifierIntentMatcher floods the error log with "BERT分类器服务不可达".
-torch==2.4.1 ; python_version == "3.8"
+torch==2.4.1+cpu ; python_version >= "3.8"
 transformers>=4.40,<5.0
 tokenizers>=0.20,<1.0
 safetensors>=0.4,<1.0

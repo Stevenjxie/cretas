@@ -1,0 +1,18 @@
+[Unit]
+Description=Cretas Python AI Service (port 8083)
+After=network.target postgresql.service
+
+[Service]
+EnvironmentFile=/www/wwwroot/cretas/.env.prod
+EnvironmentFile=/www/wwwroot/cretas/.env.ota
+Type=simple
+User=root
+WorkingDirectory=/www/wwwroot/cretas/code/backend/python
+ExecStart=/www/wwwroot/cretas/code/backend/python/venv-current/bin/python -m uvicorn main:app --host 0.0.0.0 --port 8083 --workers 2
+Restart=on-failure
+RestartSec=5
+StandardOutput=append:/www/wwwroot/cretas/python-prod.log
+StandardError=append:/www/wwwroot/cretas/python-prod.log
+
+[Install]
+WantedBy=multi-user.target

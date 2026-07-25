@@ -34,3 +34,13 @@
 - 验证：餐饮目标 Pytest `413 passed`，Gold 一次性数据库 `15 passed`，`compileall`、增量 Ruff、`git diff --check` 通过。
 - 发布边界：用户已明确授权合并后从 clean exact `origin/main` 发布 Python SmartBI；发布仅允许迁移、代码同步和服务重启，生产业务写入必须为 0。
 - Scope 锁已释放。
+
+## `OPS-PYTHON311-RUNTIME-UPGRADE-001` — `merged`
+
+- Owner: `/root`
+- Base SHA: `5b2fa05ec2e4e6937cfd45e58ed3263b52bb3895`
+- 合入：PR #1760；实现提交 `4a7e0aa2788d87a27832cdc3105f07e9eab98e44`。
+- 运行时：生产 Python 从 3.8 旁路升级为官方仓库 Python 3.11；PyTorch 固定为官方 CPU wheel，主服务、Gold ETL、语料刷新及餐饮 cron 统一使用原子 `venv-current` 选择器，旧 `venv38` 保留为即时回滚目标。
+- 验证：部署脚本语法、依赖缓存/迁移目标测试通过；服务器侧 `venv311` 的 `pip check`、112 路由主应用导入、Jieba/分类器/Food NER 导入、Torch CPU 运算及 Linux 原子链接拒绝越界测试通过。
+- 发布边界：合并与生产切换是独立事实；生产只允许从 clean exact `origin/main` 执行发布，必须验证 8083/公共网关、`NRestarts=0`、所有运行时消费者和回滚目标，生产业务写入为 0。
+- Scope 锁已释放。
