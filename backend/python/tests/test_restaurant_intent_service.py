@@ -1119,3 +1119,49 @@ def test_store_scope_clarification_returns_buttons_with_real_store_names():
         {"label": "西城店", "question": "西城店"},
         {"label": "南城店", "question": "南城店"},
     ]
+
+
+@pytest.mark.asyncio
+async def test_store_dish_ranking_no_data_is_shown_as_non_blocking_clarification(
+    monkeypatch,
+):
+    query = "哪个菜卖得好 最近7天 无数据店"
+    spec = _build_spec(
+        "RESTAURANT_OPS_SALES_SUMMARY",
+        query,
+        confidence=0.95,
+        tier="llm",
+    )
+    no_data_text = (
+        "指定的无数据店在最近7天没有可用的菜品销售记录，"
+        "因此不能生成销量最高榜。请选择有销售数据的门店，或调整时间范围后重试。"
+    )
+
+    async def _resolve(*_args, **_kwargs):
+        return OpsAnswer(
+            code="RESTAURANT_OPS_STORE_MARGIN",
+            title="无数据店菜品销量排行",
+            answer_text=no_data_text,
+            charts=[],
+            kpis=[],
+            meta={
+                "no_pos_data": True,
+                "dish_ranking": "best",
+                "ranking_limit": 5,
+                "scope_matches_request": True,
+            },
+        )
+
+    monkeypatch.setattr(svc, "_resolve_tiered", _resolve)
+
+    result = await tiered_answer(
+        query,
+        object(),
+        "DEMO_REST",
+        "restaurant_manager",
+        precomputed_spec=spec,
+    )
+
+    assert result["kind"] == "clarification"
+    assert result["answer_text"] == no_data_text
+    assert "没有可靠覆盖" not in result["answer_text"]

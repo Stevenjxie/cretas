@@ -65,6 +65,16 @@ class _FakeDbConn:
     def __init__(self, pool: "_FakeDbPool"):
         self._pool = pool
 
+    def transaction(self):
+        class _Ctx:
+            async def __aenter__(self):
+                return None
+
+            async def __aexit__(self, *_exc):
+                return False
+
+        return _Ctx()
+
     async def fetchrow(self, sql, *args):
         if self._pool.raise_on_pending and "restaurant_pending_clarifications" in sql:
             raise RuntimeError("simulated DB failure (pending store)")
@@ -80,6 +90,8 @@ class _FakeDbConn:
     async def execute(self, sql, *args):
         if self._pool.raise_on_pending and "restaurant_pending_clarifications" in sql:
             raise RuntimeError("simulated DB failure (pending store)")
+        if "set_config('app.factory_id'" in sql:
+            return "SELECT 1"
         if "INSERT INTO restaurant_pending_clarifications" in sql:
             factory_id, session_key, original_query, clarification_question = args
             # Mirrors ON CONFLICT ... DO UPDATE: same-key put overwrites.

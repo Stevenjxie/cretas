@@ -3317,6 +3317,43 @@ async def resolve_store_margin(
         )
         target_label = store_name or (f"门店 {store_id}" if store_id else "门店")
         scoped_no_data = bool(store_id or store_name or selected_store_names)
+        no_data_ranking_direction = dish_ranking_direction(query)
+        if no_data_ranking_direction:
+            rank_label = (
+                "销量最高"
+                if no_data_ranking_direction == "best"
+                else "销量最低"
+            )
+            selected_stores = selected_store_names or (
+                [store_name] if store_name else []
+            )
+            return OpsAnswer(
+                code="RESTAURANT_OPS_STORE_MARGIN",
+                title=f"{target_label}菜品销量排行（{requested_label}）",
+                answer_text=(
+                    f"指定的{target_label}在{requested_label}没有可用的菜品销售记录，"
+                    f"因此不能生成{rank_label}榜。"
+                    "本次没有改成毛利、营业额或其他日期的数据；"
+                    "请选择有销售数据的门店，或调整时间范围后重试。"
+                ),
+                charts=[],
+                kpis=[],
+                meta={
+                    "window_days": days,
+                    "window_start": (
+                        _date_text(exact_start) if exact_start else None
+                    ),
+                    "window_end": _date_text(exact_end) if exact_end else None,
+                    "scope_matches_request": True,
+                    "no_pos_data": True,
+                    "dish_ranking": no_data_ranking_direction,
+                    "ranking_limit": ranking_limit(query),
+                    "selected_stores": selected_stores,
+                    "targetStoreId": store_id,
+                    "targetStoreName": store_name,
+                    "storeScoped": scoped_no_data,
+                },
+            )
         return OpsAnswer(
             code="RESTAURANT_OPS_STORE_MARGIN",
             title=f"{target_label}毛利分析（{requested_label}）",

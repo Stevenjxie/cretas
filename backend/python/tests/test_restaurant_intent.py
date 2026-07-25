@@ -1702,6 +1702,9 @@ class _StoreScopeConn:
         self.names = names
         self.rls_factory_id = None
         self.fetched_factory_id = None
+        self.window_start = None
+        self.window_end = None
+        self.fetch_sql = ""
 
     def transaction(self):
         class _Ctx:
@@ -1716,8 +1719,11 @@ class _StoreScopeConn:
     async def execute(self, _sql, factory_id):
         self.rls_factory_id = factory_id
 
-    async def fetch(self, _sql, factory_id):
+    async def fetch(self, sql, factory_id, window_start=None, window_end=None):
         self.fetched_factory_id = factory_id
+        self.window_start = window_start
+        self.window_end = window_end
+        self.fetch_sql = sql
         return [{"name": name} for name in self.names]
 
 
@@ -1760,6 +1766,10 @@ async def test_multi_store_tenant_requires_explicit_scope():
     assert guarded.store_options == ("东城店", "西城店", "南城店")
     assert pool.conn.rls_factory_id == "FACTORY_A"
     assert pool.conn.fetched_factory_id == "FACTORY_A"
+    assert pool.conn.window_start == spec.date_range[0]
+    assert pool.conn.window_end == spec.date_range[1]
+    assert "fact_pos_transaction" in pool.conn.fetch_sql
+    assert "fact_pos_item" in pool.conn.fetch_sql
 
 
 @pytest.mark.parametrize(
