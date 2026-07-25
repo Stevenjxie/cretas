@@ -388,8 +388,12 @@ class TestSynthesize:
         import datetime
         dr = (datetime.date(2025, 1, 1), datetime.date(2025, 12, 31))
         resp = asyncio.run(eng.synthesize("RES_3101_009", "综合分析", dr))
-        assert resp.source == "degraded"
+        assert resp.source == "deterministic_fallback"
         assert resp.tokens == 0
+        assert "叙述模型预算已用完" in resp.answer
+        assert "确定性多维分析" in resp.answer
+        assert resp.charts
+        assert resp.dimension_coverage
 
     def test_cache_hit_zero_token(self, monkeypatch):
         _install_data_fakes(monkeypatch)
@@ -414,8 +418,14 @@ class TestSynthesize:
         import datetime
         dr = (datetime.date(2025, 1, 1), datetime.date(2025, 12, 31))
         resp = asyncio.run(eng.synthesize("RES_3101_009", "综合分析评价和经营", dr))
-        assert resp.source == "degraded"
-        # factbook still attached for debugging
+        assert resp.source == "deterministic_fallback"
+        assert "叙述模型暂时不可用" in resp.answer
+        assert "平均星级" in resp.answer
+        assert "营业额" in resp.answer
+        assert "缺失维度保持为空" in resp.answer
+        assert resp.charts
+        assert resp.dimension_coverage
+        # FactBook remains attached as auditable evidence.
         assert resp.factbook_text
 
 
@@ -486,8 +496,8 @@ class TestSynthesisCapture:
         import datetime
         dr = (datetime.date(2025, 1, 1), datetime.date(2025, 12, 31))
         resp = asyncio.run(eng.synthesize("RES_3101_009", "综合分析", dr))
-        assert resp.source == "degraded"
-        assert captured == []  # budget-exhausted degraded path must not capture
+        assert resp.source == "deterministic_fallback"
+        assert captured == []  # deterministic fallback is not an LLM teacher sample
 
     def test_llm_failure_not_captured(self, monkeypatch):
         _install_data_fakes(monkeypatch)
@@ -502,8 +512,8 @@ class TestSynthesisCapture:
         import datetime
         dr = (datetime.date(2025, 1, 1), datetime.date(2025, 12, 31))
         resp = asyncio.run(eng.synthesize("RES_3101_009", "综合分析评价和经营", dr))
-        assert resp.source == "degraded"
-        assert captured == []  # LLM-failure degraded path must not capture (guards refactors)
+        assert resp.source == "deterministic_fallback"
+        assert captured == []  # no model output exists to use as a teacher sample
 
     def test_factory_tenant_labeled_factory(self, monkeypatch):
         _install_data_fakes(monkeypatch)

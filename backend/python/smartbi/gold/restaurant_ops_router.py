@@ -733,12 +733,12 @@ _DISH_GENERIC_TOKENS = frozenset({
 })
 _DISH_MULTI_METRIC_RE = re.compile(
     r"^[「\"']?(.{1,30}?)[」\"']?(?:的)?"
-    r"(?:(?:毛利率|毛利|销量|销售额|营收|成本率|成本)[和与、]?){2,}"
+    r"(?:(?:毛利率|毛利|销量|营业额|销售额|营收|成本率|成本)[和与、]?){2,}"
     r"(?:分别)?(?:是多少|有多少|怎么样|如何|多少)?[?？。!！]?$"
 )
 _DISH_QUERY_RE = re.compile(
     r"^[「\"']?(.{1,30}?)[」\"']?(?:的)?"
-    r"(?:毛利率|毛利|销量|销售额|营收|成本率|成本|卖得|卖了|卖出)"
+    r"(?:毛利率|毛利|销量|营业额|销售额|营收|成本率|成本|卖得|卖了|卖出)"
     r"(?:是多少|有多少|怎么样|如何|好不好|多少|几份|呢"
     r"|为什么(?:是这样|这么高|这么低)?|为何(?:是这样)?|怎么回事"
     r"|原因是什么|怎么优化|如何优化|怎么改善|如何改善"
@@ -755,6 +755,9 @@ _DISH_LEADING_TIME_RE = re.compile(
     r"|今年|去年|前年|现在|如今|目前|最近\S{0,4}|近\S{0,4}|过去\S{0,4}"
     r"|20\d{2}年(?:全年|度)?|全年"
     r"|(?:20\d{2}年)?(?:1[0-2]|0?[1-9]|十一|十二|[一二三四五六七八九十])月份?)+"
+)
+_DISH_LEADING_STORE_SCOPE_RE = re.compile(
+    r"^(?:(?:全部|所有|各家|每家)门店|各门店|(?:全部|所有)店|全店(?:汇总)?)(?:的)?"
 )
 
 
@@ -787,6 +790,12 @@ def _extract_dish_candidate_single(text: str) -> "Optional[str]":
     candidate = _DISH_LEADING_TIME_RE.sub("", match.group(1).strip())
     candidate = _DISH_LEADING_PRONOUN_RE.sub("", candidate)
     candidate = _DISH_LEADING_TIME_RE.sub("", candidate)
+    # Aggregate store scope is not part of a dish name.  Without stripping it,
+    # "本月全部门店招牌菜的营业额" yields "全部门店招牌菜"; the generic-token
+    # guard then rejects the whole candidate and the resolver silently falls
+    # back to a store ranking.  Strip only a leading, complete scope phrase —
+    # never an arbitrary "店" substring inside a real dish name.
+    candidate = _DISH_LEADING_STORE_SCOPE_RE.sub("", candidate)
     candidate = candidate.strip("的， ,")
     if len(candidate) < 2 or candidate in _DISH_GENERIC_TOKENS:
         return None
@@ -3437,8 +3446,33 @@ async def resolve_store_margin(
             if scoped_dish_rank_direction == "best"
             else "销量最低"
         )
+        selected_scope_names = (
+            list(selected_store_names)
+            if selected_store_names
+            else ([store_name] if store_name else [])
+        )
+        single_store_scope = (
+            len(grouped_rows) == 1
+            and (
+                len(selected_scope_names) == 1
+                or (not selected_scope_names and bool(store_id))
+            )
+        )
+        single_store_name = (
+            selected_scope_names[0]
+            if selected_scope_names
+            else next(iter(grouped_rows))
+        )
         lines = [
-            f"**{window_label}所选门店菜品对比（每店{rank_label}前 {requested_limit}）：**",
+            (
+                f"**{window_label}{single_store_name}菜品销量排行"
+                f"（{rank_label}前 {requested_limit}）：**"
+                if single_store_scope
+                else (
+                    f"**{window_label}所选门店菜品对比"
+                    f"（每店{rank_label}前 {requested_limit}）：**"
+                )
+            ),
             "",
         ]
         ranked_entities: List[Dict[str, Any]] = []
@@ -3467,7 +3501,11 @@ async def resolve_store_margin(
                     "rank": index,
                     "store_name": current_store,
                 })
-                chart_labels.append(f"{current_store}·{row['dish_name']}")
+                chart_labels.append(
+                    str(row["dish_name"])
+                    if single_store_scope
+                    else f"{current_store}·{row['dish_name']}"
+                )
                 chart_values.append(quantity)
             lines.append("")
 
@@ -3498,16 +3536,28 @@ async def resolve_store_margin(
             )
 
         lines.append(
-            f"> 已按同一时间口径比较 {len(grouped_rows)} 家门店；"
-            "米饭、餐具、纸巾等附属项默认不进入主菜榜。"
+            (
+                "> 已按该门店和同一时间口径统计；"
+                if single_store_scope
+                else f"> 已按同一时间口径比较 {len(grouped_rows)} 家门店；"
+            )
+            + "米饭、餐具、纸巾等附属项默认不进入主菜榜。"
         )
         return OpsAnswer(
             code="RESTAURANT_OPS_STORE_MARGIN",
-            title=f"所选门店菜品销量排行（{window_label}）",
+            title=(
+                f"{single_store_name}菜品销量排行（{window_label}）"
+                if single_store_scope
+                else f"所选门店菜品销量排行（{window_label}）"
+            ),
             answer_text="\n".join(lines),
             charts=[{
                 "chartType": "bar",
-                "title": f"所选门店菜品销量（{window_label}）",
+                "title": (
+                    f"{single_store_name}菜品销量（{window_label}）"
+                    if single_store_scope
+                    else f"所选门店菜品销量（{window_label}）"
+                ),
                 "xAxis": {"data": chart_labels},
                 "series": [{
                     "name": "销量",

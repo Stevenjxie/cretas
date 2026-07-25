@@ -580,6 +580,7 @@ class RestaurantOpsGoldRouteTest {
                         "code", "RESTAURANT_OPS_GROSS_MARGIN",
                         "charts", List.of(),
                         "kpis", List.of(),
+                        "warning", "咨询模式只展示分析结果，没有执行下架操作。",
                         "contractPass", true,
                         "queryPlanHash", "plan-42",
                         "executedResolvers", List.of("RESTAURANT_OPS_GROSS_MARGIN"),
@@ -598,8 +599,75 @@ class RestaurantOpsGoldRouteTest {
         assertThat(resultData.get("executedResolvers"))
                 .isEqualTo(List.of("RESTAURANT_OPS_GROSS_MARGIN"));
         assertThat(resultData.get("suggestedFollowups")).isEqualTo(followups);
+        assertThat(resultData.get("warning"))
+                .isEqualTo("咨询模式只展示分析结果，没有执行下架操作。");
         verify(toolDispatchService, never()).executeWithTool(
                 any(), anyString(), any(), any(), anyLong(), anyString(), any());
+    }
+
+    @Test
+    @DisplayName("explicit comprehensive restaurant analysis reaches synthesis before tiered planner")
+    void comprehensiveAnalysisBypassesSingleIntentPlanner() {
+        TieredIntentDelegate delegate = mock(TieredIntentDelegate.class);
+        ReflectionTestUtils.setField(orchestrator, "tieredFirstEnabled", true);
+        ReflectionTestUtils.setField(orchestrator, "tieredIntentDelegate", delegate);
+
+        AIIntentConfig synthesis = AIIntentConfig.builder()
+                .intentCode("COMPREHENSIVE_SYNTHESIS")
+                .intentName("综合多维分析")
+                .intentCategory("SMARTBI")
+                .toolName("restaurant_comprehensive_synthesis_gold")
+                .businessType("RESTAURANT")
+                .build();
+        when(aiIntentService.getIntentByCode(eq("DEMO_REST"), eq("COMPREHENSIVE_SYNTHESIS")))
+                .thenReturn(Optional.empty());
+        when(aiIntentService.getIntentByCode(eq("COMPREHENSIVE_SYNTHESIS")))
+                .thenReturn(Optional.of(synthesis));
+        when(aiIntentService.hasPermission(eq("COMPREHENSIVE_SYNTHESIS"), eq("admin")))
+                .thenReturn(true);
+
+        ToolExecutor synthesisTool = mock(ToolExecutor.class);
+        when(toolRegistry.getExecutor("restaurant_comprehensive_synthesis_gold"))
+                .thenReturn(Optional.of(synthesisTool));
+        when(toolDispatchService.executeWithTool(
+                eq(synthesisTool),
+                eq("DEMO_REST"),
+                any(IntentExecuteRequest.class),
+                eq(synthesis),
+                eq(7L),
+                eq("admin"),
+                any()))
+                .thenReturn(IntentExecuteResponse.builder()
+                        .intentRecognized(true)
+                        .intentCode("COMPREHENSIVE_SYNTHESIS")
+                        .status("SUCCESS")
+                        .message("已按已有数据完成多维分析，缺失维度保持为空。")
+                        .resultData(Map.of("source", "deterministic_fallback"))
+                        .build());
+
+        String query = "请综合分析最近30天全部门店经营情况，结合客流、菜品销量、毛利、"
+                + "周边竞争、天气、活动、评价和排班给出建议";
+        IntentExecuteResponse response = orchestrator.execute(
+                "DEMO_REST",
+                IntentExecuteRequest.builder().userInput(query).mode("READ").build(),
+                7L,
+                "admin");
+
+        assertThat(orchestrator.isRestaurantComprehensiveSynthesisQuestion(query)).isTrue();
+        assertThat(orchestrator.isRestaurantComprehensiveSynthesisQuestion(
+                "本月全部门店招牌菜营业额是多少")).isFalse();
+        assertThat(response.getStatus()).isEqualTo("SUCCESS");
+        assertThat(response.getIntentCode()).isEqualTo("COMPREHENSIVE_SYNTHESIS");
+        assertThat(response.getMessage()).contains("多维分析").contains("缺失维度");
+        verify(delegate, never()).tryDelegate(any(), any(), any(), any());
+        verify(toolDispatchService).executeWithTool(
+                eq(synthesisTool),
+                eq("DEMO_REST"),
+                any(IntentExecuteRequest.class),
+                eq(synthesis),
+                eq(7L),
+                eq("admin"),
+                any());
     }
 
     @Test

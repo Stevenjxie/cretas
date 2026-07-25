@@ -102,7 +102,10 @@ const globalStubs = {
   'el-option': { template: '<option><slot /></option>' },
   'el-switch': { template: '<input type="checkbox" />' },
   'el-empty': { template: '<div><slot /></div>' },
-  'el-alert': { template: '<div><slot /></div>' },
+  'el-alert': {
+    props: ['title'],
+    template: '<div class="el-alert">{{ title }}<slot /></div>',
+  },
 };
 
 function goldAnswer(message: string) {
@@ -261,6 +264,26 @@ describe('AIQuery P1 conversational depth', () => {
     expect(executeIntentMock.mock.calls[1][1]).toBe('本月');
     expect(executeIntentMock.mock.calls[1][2]?.sessionId)
       .toBe(executeIntentMock.mock.calls[0][2]?.sessionId);
+  });
+
+  it('renders the non-blocking consult-mode action warning from Java resultData', async () => {
+    executeIntentMock.mockResolvedValue({
+      status: 'SUCCESS',
+      sessionId: 'readonly-action-session',
+      intentCode: 'RESTAURANT_OPS_GROSS_MARGIN',
+      message: '本月低销量菜品已经列出。',
+      resultData: {
+        message: '本月低销量菜品已经列出。',
+        warning: '咨询模式只展示分析结果，没有执行下架、调价或其他业务操作。',
+      },
+    });
+
+    const { wrapper, vm } = await mountAndAsk('把本月销量最差的菜直接下架');
+    const assistants = vm.chatHistory.filter((m) => m.role === 'assistant');
+    const assistant = assistants[assistants.length - 1];
+
+    expect(assistant?.warning).toContain('没有执行下架');
+    expect(wrapper.find('.el-alert').text()).toContain('咨询模式只展示分析结果');
   });
 
   it('shows an xlsx data export for a restaurant answer with structured chart data', async () => {

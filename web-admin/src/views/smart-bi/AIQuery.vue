@@ -1554,6 +1554,10 @@ async function tryJavaIntentChat(
       const _rd = res.resultData as any;
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const _td = toolData as any;
+      const _warning = _rd?.warning ?? _td?.warning;
+      if (typeof _warning === 'string' && _warning.trim()) {
+        msg.warning = _warning.trim();
+      }
       const _conversationContext = _rd?.conversationContext
         ?? _td?.conversationContext
         ?? _rd?.structuredContext

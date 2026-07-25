@@ -1440,6 +1440,39 @@ def test_selected_stores_get_per_store_dish_rankings(monkeypatch):
     assert "米饭 —" not in result.answer_text
 
 
+def test_single_selected_store_uses_ranking_wording_not_comparison(monkeypatch):
+    start, end = date(2026, 7, 20), date(2026, 7, 21)
+    main = _store_margin_row(
+        "S-1", "青花椒南方百联店", 2000, 100, start, end,
+    )
+    main.update(dish_name="招牌菜", normalized_name="招牌菜")
+    accessory = _store_margin_row(
+        "S-1", "青花椒南方百联店", 3000, 999, start, end,
+    )
+    accessory.update(dish_name="米饭", normalized_name="米饭")
+    pool, _ = _store_margin_runtime(
+        monkeypatch,
+        {(start, end): [main, accessory]},
+    )
+
+    result = asyncio.run(_r.resolve_store_margin(
+        pool,
+        "RES_TEST",
+        role="restaurant_manager",
+        date_range=(start, end),
+        query="本月青花椒南方百联店哪个菜卖得最好",
+        store_name="青花椒南方百联店",
+    ))
+
+    assert result.meta["compare_stores"] is False
+    assert result.title == "青花椒南方百联店菜品销量排行（2026-07-20 至 2026-07-21）"
+    assert "青花椒南方百联店菜品销量排行" in result.answer_text
+    assert "所选门店菜品对比" not in result.answer_text
+    assert "比较 1 家门店" not in result.answer_text
+    assert "已按该门店和同一时间口径统计" in result.answer_text
+    assert result.charts[0]["xAxis"]["data"] == ["招牌菜"]
+
+
 # --- R7: explicit store mention extraction + canonicalization (scenario F) ---
 
 
@@ -1706,6 +1739,13 @@ def test_sales_summary_declines_future_without_substitution(monkeypatch):
 ])
 def test_extract_dish_candidate(query, expected):
     assert _r.extract_dish_candidate(query) == expected
+
+
+def test_all_store_scope_is_not_swallowed_into_named_dish():
+    query = "本月全部门店招牌青花椒味(单人份)的营业额是多少？"
+
+    assert _r.extract_dish_candidate(query) == "招牌青花椒味(单人份)"
+    assert _r.extract_dish_candidates(query) == ["招牌青花椒味(单人份)"]
 
 
 def test_dish_sales_phrase_routes_to_gross_margin():

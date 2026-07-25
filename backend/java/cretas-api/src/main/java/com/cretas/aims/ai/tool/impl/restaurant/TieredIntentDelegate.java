@@ -85,6 +85,9 @@ public class TieredIntentDelegate {
             result.put("dataAvailable", true);
             result.put("message", answerText);
             result.put("tieredDelegate", true);
+            if (response.get("warning") != null) {
+                result.put("warning", response.get("warning"));
+            }
             if (response.get("suggested_followups") != null) {
                 result.put("suggestedFollowups", response.get("suggested_followups"));
             }
