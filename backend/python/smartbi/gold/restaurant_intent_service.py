@@ -422,10 +422,11 @@ async def tiered_answer(
 
     Natural-language requests always go through ``parse_restaurant_query``.
     Keyword/vector matches are candidate hints only; a v2 plan can execute
-    only when its authority is the LLM planner or a validated plan-cache hit.
-    Non-restaurant tenants still return ``None``. Once a v2 plan exists,
-    resolver misses, exceptions, route/scope drift, and contract failures are
-    fail-closed clarifications and never fall through to an adjacent intent.
+    only when its authority is the LLM planner, a validated plan-cache hit, or
+    the reviewed whole-sentence exact registry. Non-restaurant tenants still
+    return ``None``. Once a v2 plan exists, resolver misses, exceptions,
+    route/scope drift, and contract failures are fail-closed clarifications
+    and never fall through to an adjacent intent.
 
     Return shape:
       {"kind": "clarification", "answer_text": str, "spec": spec}

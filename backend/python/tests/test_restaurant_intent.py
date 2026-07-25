@@ -201,8 +201,8 @@ async def test_t1_hit_becomes_hint_and_llm_remains_semantic_authority():
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(("query", "wrong_intent", "expected_dish"), [
-    ("哪个菜卖得好", "RESTAURANT_OPS_SALES_SUMMARY", None),
-    ("本月哪个菜卖得最好？", "RESTAURANT_OPS_SALES_SUMMARY", None),
+    ("哪些菜卖得好", "RESTAURANT_OPS_SALES_SUMMARY", None),
+    ("本月哪些菜卖得最好？", "RESTAURANT_OPS_SALES_SUMMARY", None),
     ("近30天畅销菜品", "RESTAURANT_OPS_REQUISITION_TREND", None),
     ("本月米饭的销量是多少", "RESTAURANT_OPS_REQUISITION_TREND", "米饭"),
 ])
@@ -386,6 +386,66 @@ async def test_semantic_planner_outage_fails_closed():
     assert spec.clarification_needed is True
     assert spec.planner_authority == "llm_unavailable"
     assert "没有执行任何相邻分析" in spec.clarification_question
+
+
+@pytest.mark.asyncio
+async def test_approved_exact_phrase_survives_planner_outage_without_keyword_contains():
+    t3 = AsyncMock(side_effect=AssertionError("approved exact phrase must not call T3"))
+    with patch("smartbi.gold.restaurant_intent._t3_llm_parse", new=t3):
+        spec = await parse_restaurant_query(
+            " 哪个菜卖得好？ ",
+            _restaurant_pool(),
+            factory_id="QHJ01",
+        )
+
+    assert spec is not None
+    assert spec.intent == "RESTAURANT_OPS_GROSS_MARGIN"
+    assert spec.planner_authority == "promoted_exact"
+    assert spec.source_tier == "exact"
+    assert spec.clarification_question == TIME_CLARIFICATION_QUESTION
+    assert spec.planned_intents == ("RESTAURANT_OPS_GROSS_MARGIN",)
+    t3.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_approved_exact_phrase_does_not_authorize_a_longer_contains_query():
+    query = "我不是问哪个菜卖得好，我想看库存"
+    with patch(
+        "smartbi.gold.restaurant_intent._t3_llm_parse",
+        new=AsyncMock(return_value=None),
+    ) as t3:
+        spec = await parse_restaurant_query(
+            query,
+            _restaurant_pool(),
+            factory_id="QHJ01",
+        )
+
+    assert spec is not None
+    assert spec.intent == ""
+    assert spec.planner_authority == "llm_unavailable"
+    assert "没有执行任何相邻分析" in spec.clarification_question
+    t3.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_approved_exact_time_and_store_composition_survives_planner_outage():
+    t3 = AsyncMock(side_effect=AssertionError(
+        "finite exact time/store composition must not call T3"
+    ))
+    with patch("smartbi.gold.restaurant_intent._t3_llm_parse", new=t3):
+        spec = await parse_restaurant_query(
+            "最近7天全部门店哪个菜卖得最好？",
+            _restaurant_pool(),
+            factory_id="QHJ01",
+        )
+
+    assert spec is not None
+    assert spec.intent == "RESTAURANT_OPS_GROSS_MARGIN"
+    assert spec.planner_authority == "promoted_exact"
+    assert spec.clarification_needed is False
+    assert spec.window_label == "最近7天"
+    assert spec.store_scope == "all"
+    t3.assert_not_awaited()
 
 
 @pytest.mark.asyncio

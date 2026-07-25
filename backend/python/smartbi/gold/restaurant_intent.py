@@ -2,9 +2,12 @@
 
 For natural-language restaurant analysis, keyword and vector matches are
 candidate hints only.  The LLM (or a cache of a previously validated LLM
-plan) is the sole semantic authority and emits one immutable QuerySpec with a
-stable plan hash.  Deterministic code resolves dates and executes SQL; it may
-not replace the selected resolver at execution time.
+plan) is the normal semantic authority and emits one immutable QuerySpec with
+a stable plan hash.  A very small reviewed exact-phrase registry is the only
+deterministic exception: normalized whole-sentence equality may select its
+single approved resolver, while substring/keyword hits never authorize
+execution.  Deterministic code resolves dates and executes SQL; it may not
+replace the selected resolver at execution time.
 
 Planner, tenant-gate, resolver, and answer-contract failures are fail-closed:
 the caller receives an explicit non-executing clarification instead of an
@@ -54,7 +57,31 @@ TRUSTED_PLANNER_AUTHORITIES = frozenset({
     "validated_plan_cache",
     "llm_contract_repair",
     "validated_plan_cache_contract_repair",
+    "promoted_exact",
+    "promoted_exact_contract_repair",
 })
+
+# Human-reviewed, zero-ambiguity whole-sentence promotions. These are not
+# keyword rules: `_approved_exact_route` only accepts equality after a
+# conservative whitespace/case/trailing-punctuation normalization. Keeping
+# the registry explicit makes every deterministic execution grant visible in
+# code review and prevents the historical `contains`-match hijacking class.
+_APPROVED_EXACT_ROUTES: Dict[str, str] = {
+    "哪个菜卖得好": "RESTAURANT_OPS_GROSS_MARGIN",
+    "哪个菜卖得最好": "RESTAURANT_OPS_GROSS_MARGIN",
+    "哪个菜最好卖": "RESTAURANT_OPS_GROSS_MARGIN",
+}
+_APPROVED_TIME_ANSWERS = (
+    "本月",
+    "上个月",
+    "最近7天",
+    "最近30天",
+)
+_APPROVED_DIRECT_TIME_PHRASES = _APPROVED_TIME_ANSWERS + (
+    "本季度",
+    "今年",
+)
+_APPROVED_ALL_STORE_ANSWERS = ("全部门店",)
 
 
 # ─── QuerySpec ────────────────────────────────────────────────────────────
@@ -74,7 +101,7 @@ class RestaurantQuerySpec:
     dimensions: Tuple[str, ...]
     comparison: Optional[str]
     confidence: float
-    source_tier: str                              # "keyword" | "vector" | "llm"
+    source_tier: str  # "keyword" | "vector" | "llm" | "plan_cache" | "exact"
     clarification_needed: bool = False
     clarification_question: Optional[str] = None
     # 2026-07-08 clarification-loop v1: True when this spec was produced by
@@ -108,8 +135,9 @@ class RestaurantQuerySpec:
     dish_slot: Optional[str] = None
     store_slot: Optional[str] = None
     # v2 execution contract. Natural-language requests are executable only
-    # when the LLM planner (or its validated cache) produced the plan. T1/T2
-    # are candidate-retrieval hints and never become an authority themselves.
+    # when the LLM planner, its validated cache, or the reviewed exact-phrase
+    # registry produced the plan. T1/T2 are candidate-retrieval hints and
+    # never become an authority themselves.
     plan_version: str = "legacy"
     planner_authority: str = "legacy"
     plan_hash: str = ""
@@ -1193,6 +1221,102 @@ def _normalize_query(query: str) -> str:
     return (query or "").strip()
 
 
+def _normalize_exact_phrase(query: str) -> str:
+    """Conservative canonical form used only for whole-sentence equality."""
+    compact = re.sub(r"\s+", "", (query or "").strip()).lower()
+    return compact.rstrip("。.!！?？")
+
+
+def _approved_exact_shape(
+    query: str,
+) -> Optional[Tuple[str, bool, bool]]:
+    """Match a finite approved sentence shape, never a substring.
+
+    Besides the bare reviewed phrase, this permits only an approved time slot
+    and/or the exact all-store slot around that phrase. The entire normalized
+    query must equal one of those finite compositions.
+    """
+    normalized = _normalize_exact_phrase(query)
+    matches = set()
+    for phrase, code in _APPROVED_EXACT_ROUTES.items():
+        if code not in _VALID_CODES:
+            continue
+        base = _normalize_exact_phrase(phrase)
+        if normalized == base:
+            matches.add((code, False, False))
+        for store_answer in _APPROVED_ALL_STORE_ANSWERS:
+            store = _normalize_exact_phrase(store_answer)
+            if normalized in {store + base, base + store}:
+                matches.add((code, False, True))
+        for time_phrase in _APPROVED_DIRECT_TIME_PHRASES:
+            window = _normalize_exact_phrase(time_phrase)
+            if normalized in {window + base, base + window}:
+                matches.add((code, True, False))
+            for store_answer in _APPROVED_ALL_STORE_ANSWERS:
+                store = _normalize_exact_phrase(store_answer)
+                if normalized in {
+                    window + store + base,
+                    window + base + store,
+                    base + window + store,
+                    base + store + window,
+                    store + window + base,
+                    store + base + window,
+                }:
+                    matches.add((code, True, True))
+    return next(iter(matches)) if len(matches) == 1 else None
+
+
+def _approved_exact_route(query: str) -> Optional[str]:
+    """Return the resolver for one finite approved whole-sentence shape."""
+    matched = _approved_exact_shape(query)
+    return matched[0] if matched is not None else None
+
+
+def _approved_exact_continuation_route(
+    original_query: str,
+    answer: str,
+    clarification_question: Optional[str],
+) -> Optional[str]:
+    """Authorize only the fixed buttons attached to an approved exact route.
+
+    The first continuation must be one of the four time buttons. The optional
+    second continuation may be the all-store button or exactly one concrete
+    store name. Any extra wording, changed metric, or arbitrary instruction
+    falls back to the LLM/fail-closed path.
+    """
+    matched = _approved_exact_shape(original_query)
+    if matched is None:
+        return None
+    matched_code, inherited_time, inherited_store = matched
+
+    answer_normalized = _normalize_exact_phrase(answer)
+    if clarification_question == TIME_CLARIFICATION_QUESTION:
+        if inherited_time:
+            return None
+        if answer_normalized in {
+            _normalize_exact_phrase(window)
+            for window in _APPROVED_TIME_ANSWERS
+        }:
+            return matched_code
+        return None
+
+    if (
+        clarification_question != STORE_SCOPE_CLARIFICATION_QUESTION
+        or not inherited_time
+        or inherited_store
+    ):
+        return None
+    if answer_normalized == _normalize_exact_phrase("全部门店"):
+        return matched_code
+    store_mentions = extract_store_mentions(answer)
+    if (
+        len(store_mentions) == 1
+        and answer_normalized == _normalize_exact_phrase(store_mentions[0])
+    ):
+        return matched_code
+    return None
+
+
 # ─── Pending-clarification store (2026-07-08 clarification-loop v1) ──────
 # Separate from `_ROUTE_CACHE` above -- this is NOT a routing-decision cache,
 # it is a short-lived "what did we just ask this session, and what was the
@@ -1754,10 +1878,11 @@ async def parse_restaurant_query(
 ) -> Optional[RestaurantQuerySpec]:
     """Resolve `query` to one immutable RestaurantQuerySpec.
 
-    T1/T2 retrieve candidate hints; only T3 or a validated T3-plan cache may
-    authorize execution. A planner outage returns a fail-closed clarification
-    rather than ``None``, preventing the caller from trying an adjacent route.
-    ``None`` is reserved for an empty request or a non-restaurant tenant.
+    T1/T2 retrieve candidate hints; only T3, a validated T3-plan cache, or a
+    reviewed whole-sentence exact promotion may authorize execution. A
+    planner outage returns a fail-closed clarification rather than ``None``,
+    preventing the caller from trying an adjacent route. ``None`` is reserved
+    for an empty request or a non-restaurant tenant.
 
     `session_key` (2026-07-08 clarification-loop v1, additive/optional):
     when truthy AND a pending clarification is on record for
@@ -1857,9 +1982,10 @@ async def parse_restaurant_query(
         await _maybe_register_pending(pool, norm_query, spec, factory_id, session_key)
         return spec
 
-    # Natural-language restaurant queries are executable only after the LLM
-    # has produced one structured plan. Keyword/vector stages retrieve a
-    # candidate hint; neither stage may decide the route.
+    # Natural-language restaurant queries normally require an LLM-produced
+    # structured plan. Keyword/vector stages retrieve a candidate hint;
+    # neither stage may decide the route. The sole exception is the reviewed
+    # whole-sentence exact registry below.
     try:
         if not await _is_restaurant_tenant(pool, factory_id):
             return None
@@ -1876,6 +2002,30 @@ async def parse_restaurant_query(
                 "暂时无法确认餐饮数据范围，本次没有执行任何分析。请稍后重试。"
             ),
         )
+
+    promoted_code = _approved_exact_route(norm_query)
+    if promoted_code:
+        promoted_spec = _build_spec(
+            promoted_code,
+            norm_query,
+            confidence=1.0,
+            tier="exact",
+            planner_authority="promoted_exact",
+            require_explicit_time=True,
+        )
+        promoted_spec = await _apply_store_scope_guard(
+            pool,
+            factory_id,
+            promoted_spec,
+        )
+        await _maybe_register_pending(
+            pool,
+            norm_query,
+            promoted_spec,
+            factory_id,
+            session_key,
+        )
+        return promoted_spec
 
     cached = _cache_get(factory_id, norm_query)
     if (
@@ -2034,8 +2184,9 @@ async def _parse_continuation(
     user's ANSWER, not the original question.
 
     Keyword and vector retrieval run against the original question plus the
-    new answer and supply a candidate hint. The LLM still authorizes the
-    resulting plan, with ``history`` carrying both turns.
+    new answer and supply a candidate hint. The LLM normally authorizes the
+    resulting plan, with ``history`` carrying both turns. The only exception
+    is a fixed time/store button continuing a reviewed exact phrase.
 
     Never touches `_ROUTE_CACHE` (a routing decision cached under a single
     utterance would not reflect this two-turn context) and never registers
@@ -2062,6 +2213,22 @@ async def _parse_continuation(
                 "暂时无法确认餐饮数据范围，本次没有执行任何分析。请稍后重试。"
             ),
             is_continuation=True,
+        )
+
+    promoted_code = _approved_exact_continuation_route(
+        original_query,
+        query,
+        clarification_question,
+    )
+    if promoted_code:
+        return _build_spec(
+            promoted_code,
+            concatenated,
+            confidence=1.0,
+            tier="exact",
+            planner_authority="promoted_exact",
+            is_continuation=True,
+            require_explicit_time=True,
         )
 
     candidate_hint: Optional[Tuple[str, float]] = None
