@@ -1,0 +1,1035 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="description" content="白垩纪食品溯源系统 QC 包装标签拍检操作指南">
+  <meta name="robots" content="noindex,nofollow">
+  <meta name="theme-color" content="#0b6b4c">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='18' fill='%23087a56'/%3E%3Ctext x='32' y='41' text-anchor='middle' font-family='Arial' font-size='26' font-weight='700' fill='white'%3EQC%3C/text%3E%3C/svg%3E">
+  <title>QC 包装标签拍检操作指南</title>
+  <style>
+    :root {
+      --ink: #172231;
+      --muted: #687386;
+      --paper: #ffffff;
+      --canvas: #edf1f5;
+      --line: #dce2e9;
+      --green: #087a56;
+      --green-bright: #00b776;
+      --green-soft: #e9f7f1;
+      --navy: #0e1c2e;
+      --blue-soft: #eaf4ff;
+      --amber: #e99318;
+      --amber-soft: #fff4dc;
+      --red: #c43f3f;
+      --red-soft: #fff0f0;
+      --radius: 22px;
+      --shadow: 0 18px 55px rgba(18, 38, 62, .11);
+      --phone-shadow: 0 22px 60px rgba(12, 27, 43, .18);
+    }
+
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; scroll-padding-top: 86px; }
+    body {
+      margin: 0;
+      color: var(--ink);
+      background: var(--canvas);
+      font-family: "Noto Sans SC", "Source Han Sans SC", "Microsoft YaHei", system-ui, sans-serif;
+      line-height: 1.65;
+      -webkit-font-smoothing: antialiased;
+    }
+    a { color: inherit; }
+    img { display: block; max-width: 100%; }
+    button { font: inherit; }
+
+    .skip-link {
+      position: fixed;
+      top: 8px;
+      left: 8px;
+      z-index: 100;
+      padding: 10px 14px;
+      color: white;
+      background: var(--navy);
+      border-radius: 10px;
+      transform: translateY(-150%);
+    }
+    .skip-link:focus { transform: none; }
+
+    .topbar {
+      position: sticky;
+      top: 0;
+      z-index: 40;
+      height: 66px;
+      color: white;
+      background: rgba(14, 28, 46, .96);
+      border-bottom: 1px solid rgba(255, 255, 255, .12);
+      backdrop-filter: blur(14px);
+    }
+    .topbar__inner {
+      width: min(1240px, calc(100% - 32px));
+      height: 100%;
+      margin: 0 auto;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 18px;
+    }
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 11px;
+      font-weight: 800;
+      letter-spacing: .02em;
+    }
+    .brand__mark {
+      width: 32px;
+      height: 32px;
+      display: grid;
+      place-items: center;
+      color: var(--navy);
+      background: var(--green-bright);
+      border-radius: 10px;
+      font-size: 15px;
+    }
+    .topbar__meta {
+      color: #c8d2df;
+      font-size: 13px;
+      white-space: nowrap;
+    }
+
+    .hero {
+      position: relative;
+      overflow: hidden;
+      color: white;
+      background: var(--navy);
+      border-bottom: 5px solid var(--green-bright);
+    }
+    .hero::before {
+      content: "";
+      position: absolute;
+      inset: 0;
+      opacity: .13;
+      background-image:
+        linear-gradient(rgba(255,255,255,.22) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(255,255,255,.22) 1px, transparent 1px);
+      background-size: 36px 36px;
+      mask-image: linear-gradient(90deg, black, transparent 78%);
+    }
+    .hero__inner {
+      position: relative;
+      width: min(1120px, calc(100% - 32px));
+      margin: 0 auto;
+      padding: 64px 0 58px;
+      display: grid;
+      grid-template-columns: 1.35fr .65fr;
+      gap: 48px;
+      align-items: end;
+    }
+    .eyebrow {
+      margin: 0 0 14px;
+      color: #75e5b7;
+      font-size: 13px;
+      font-weight: 800;
+      letter-spacing: .16em;
+      text-transform: uppercase;
+    }
+    h1 {
+      max-width: 760px;
+      margin: 0;
+      font-size: clamp(38px, 6vw, 70px);
+      line-height: 1.04;
+      letter-spacing: -.045em;
+    }
+    .hero__lead {
+      max-width: 680px;
+      margin: 24px 0 0;
+      color: #cfdae7;
+      font-size: clamp(16px, 2vw, 20px);
+    }
+    .hero__badge {
+      padding: 22px;
+      background: #142840;
+      border: 1px solid #29415c;
+      border-radius: 18px;
+      box-shadow: 10px 10px 0 rgba(0, 183, 118, .18);
+    }
+    .hero__badge strong {
+      display: block;
+      color: #75e5b7;
+      font-size: 28px;
+      line-height: 1.2;
+    }
+    .hero__badge span {
+      display: block;
+      margin-top: 8px;
+      color: #c8d2df;
+      font-size: 14px;
+    }
+
+    .flow-wrap {
+      width: min(1120px, calc(100% - 32px));
+      margin: -22px auto 34px;
+      position: relative;
+      z-index: 5;
+    }
+    .flow {
+      display: grid;
+      grid-template-columns: repeat(6, 1fr);
+      padding: 10px;
+      background: var(--paper);
+      border: 1px solid var(--line);
+      border-radius: 18px;
+      box-shadow: var(--shadow);
+    }
+    .flow__item {
+      min-height: 70px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 12px;
+      border-right: 1px solid var(--line);
+      font-size: 14px;
+      font-weight: 700;
+    }
+    .flow__item:last-child { border-right: 0; }
+    .flow__number {
+      flex: 0 0 auto;
+      width: 30px;
+      height: 30px;
+      display: grid;
+      place-items: center;
+      color: white;
+      background: var(--green);
+      border-radius: 50%;
+      font-size: 13px;
+    }
+
+    .layout {
+      width: min(1120px, calc(100% - 32px));
+      margin: 0 auto 80px;
+      display: grid;
+      grid-template-columns: 230px minmax(0, 1fr);
+      gap: 28px;
+      align-items: start;
+    }
+    .toc {
+      position: sticky;
+      top: 86px;
+      padding: 18px;
+      background: var(--paper);
+      border: 1px solid var(--line);
+      border-radius: 18px;
+    }
+    .toc__title {
+      margin: 0 0 10px;
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 800;
+      letter-spacing: .12em;
+    }
+    .toc a {
+      display: block;
+      margin: 2px 0;
+      padding: 9px 10px;
+      color: #445064;
+      border-radius: 10px;
+      text-decoration: none;
+      font-size: 14px;
+      transition: background .15s ease, color .15s ease;
+    }
+    .toc a:hover,
+    .toc a:focus-visible {
+      color: var(--green);
+      background: var(--green-soft);
+      outline: none;
+    }
+
+    main { min-width: 0; }
+    .notice {
+      display: grid;
+      grid-template-columns: 42px 1fr;
+      gap: 14px;
+      margin-bottom: 24px;
+      padding: 20px 22px;
+      background: var(--blue-soft);
+      border: 1px solid #cfe3f7;
+      border-left: 5px solid #2879c6;
+      border-radius: 16px;
+    }
+    .notice__icon {
+      width: 42px;
+      height: 42px;
+      display: grid;
+      place-items: center;
+      color: white;
+      background: #2879c6;
+      border-radius: 50%;
+      font-weight: 900;
+    }
+    .notice strong { display: block; margin-bottom: 3px; }
+    .notice p { margin: 0; color: #45556a; }
+
+    .section,
+    .step {
+      margin-bottom: 24px;
+      padding: clamp(22px, 4vw, 40px);
+      background: var(--paper);
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      box-shadow: 0 5px 20px rgba(18, 38, 62, .035);
+    }
+    .section__kicker,
+    .step__kicker {
+      margin: 0 0 6px;
+      color: var(--green);
+      font-size: 12px;
+      font-weight: 900;
+      letter-spacing: .12em;
+    }
+    h2 {
+      margin: 0;
+      font-size: clamp(26px, 4vw, 38px);
+      line-height: 1.2;
+      letter-spacing: -.025em;
+    }
+    h3 {
+      margin: 0;
+      font-size: 20px;
+      line-height: 1.35;
+    }
+    .section__intro,
+    .step__intro {
+      max-width: 720px;
+      margin: 12px 0 24px;
+      color: var(--muted);
+    }
+
+    .prep-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 12px;
+    }
+    .prep {
+      padding: 17px;
+      background: #f7f9fb;
+      border: 1px solid var(--line);
+      border-radius: 15px;
+    }
+    .prep__tag {
+      display: inline-flex;
+      margin-bottom: 9px;
+      padding: 3px 8px;
+      color: var(--green);
+      background: var(--green-soft);
+      border-radius: 99px;
+      font-size: 12px;
+      font-weight: 800;
+    }
+    .prep p { margin: 5px 0 0; color: var(--muted); font-size: 14px; }
+
+    .step__heading {
+      display: grid;
+      grid-template-columns: 54px 1fr;
+      gap: 16px;
+      align-items: center;
+      margin-bottom: 25px;
+    }
+    .step__number {
+      width: 54px;
+      height: 54px;
+      display: grid;
+      place-items: center;
+      color: white;
+      background: var(--navy);
+      border-radius: 17px;
+      font-size: 22px;
+      font-weight: 900;
+      box-shadow: 6px 6px 0 var(--green-bright);
+    }
+    .step__heading p { margin: 5px 0 0; color: var(--muted); }
+
+    .screen-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 20px;
+      align-items: start;
+    }
+    .screen-grid--single {
+      grid-template-columns: minmax(280px, 390px) minmax(0, 1fr);
+      align-items: center;
+    }
+    .phone-shot {
+      position: relative;
+      width: 100%;
+      max-width: 390px;
+      margin: 0 auto;
+      padding: 9px;
+      background: #0a111b;
+      border: 1px solid #233149;
+      border-radius: 28px;
+      box-shadow: var(--phone-shadow);
+    }
+    .phone-shot::before {
+      content: "";
+      position: absolute;
+      z-index: 2;
+      top: 4px;
+      left: 50%;
+      width: 72px;
+      height: 5px;
+      background: #2a3442;
+      border-radius: 99px;
+      transform: translateX(-50%);
+    }
+    .phone-shot button {
+      width: 100%;
+      padding: 0;
+      background: transparent;
+      border: 0;
+      border-radius: 20px;
+      cursor: zoom-in;
+      overflow: hidden;
+    }
+    .phone-shot img {
+      width: 100%;
+      height: auto;
+      border-radius: 20px;
+    }
+    .phone-shot figcaption {
+      padding: 10px 4px 3px;
+      color: #ccd5e1;
+      font-size: 12px;
+      text-align: center;
+    }
+    .callouts {
+      display: grid;
+      gap: 12px;
+    }
+    .callout {
+      position: relative;
+      padding: 18px 18px 18px 52px;
+      background: #f7f9fb;
+      border: 1px solid var(--line);
+      border-radius: 15px;
+    }
+    .callout__number {
+      position: absolute;
+      top: 17px;
+      left: 16px;
+      width: 25px;
+      height: 25px;
+      display: grid;
+      place-items: center;
+      color: white;
+      background: var(--green);
+      border-radius: 50%;
+      font-size: 12px;
+      font-weight: 900;
+    }
+    .callout strong { display: block; margin-bottom: 3px; }
+    .callout p { margin: 0; color: var(--muted); font-size: 14px; }
+    .callout--warning {
+      background: var(--amber-soft);
+      border-color: #f1d49a;
+    }
+    .callout--warning .callout__number { background: var(--amber); }
+
+    .checklist {
+      margin: 0;
+      padding: 0;
+      list-style: none;
+      display: grid;
+      gap: 10px;
+    }
+    .checklist li {
+      position: relative;
+      padding: 13px 15px 13px 46px;
+      background: #f7f9fb;
+      border: 1px solid var(--line);
+      border-radius: 13px;
+    }
+    .checklist li::before {
+      content: "✓";
+      position: absolute;
+      left: 15px;
+      top: 12px;
+      width: 23px;
+      height: 23px;
+      display: grid;
+      place-items: center;
+      color: white;
+      background: var(--green);
+      border-radius: 7px;
+      font-size: 13px;
+      font-weight: 900;
+    }
+
+    .photo-rules {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 12px;
+      margin: 22px 0;
+    }
+    .photo-rule {
+      padding: 17px;
+      background: var(--amber-soft);
+      border: 1px solid #f1d49a;
+      border-radius: 15px;
+    }
+    .photo-rule strong {
+      display: block;
+      margin-bottom: 4px;
+      color: #8a5510;
+    }
+    .photo-rule p { margin: 0; color: #755f40; font-size: 14px; }
+
+    .status-strip {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 8px;
+      margin: 18px 0 24px;
+    }
+    .status {
+      padding: 11px;
+      color: #445064;
+      background: #f7f9fb;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      text-align: center;
+      font-size: 13px;
+      font-weight: 700;
+    }
+    .status--active {
+      color: #8a5510;
+      background: var(--amber-soft);
+      border-color: #f1d49a;
+    }
+
+    .danger-note {
+      margin-top: 18px;
+      padding: 18px 20px;
+      color: #7b3030;
+      background: var(--red-soft);
+      border-left: 5px solid var(--red);
+      border-radius: 14px;
+    }
+    .danger-note strong { display: block; margin-bottom: 3px; }
+    .danger-note p { margin: 0; }
+
+    details {
+      margin-top: 10px;
+      background: #f7f9fb;
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      overflow: hidden;
+    }
+    summary {
+      padding: 16px 18px;
+      cursor: pointer;
+      font-weight: 800;
+    }
+    details p {
+      margin: 0;
+      padding: 0 18px 17px;
+      color: var(--muted);
+    }
+
+    .final-check {
+      color: white;
+      background: var(--navy);
+      border: 0;
+    }
+    .final-check .section__kicker { color: #75e5b7; }
+    .final-check .section__intro { color: #c8d2df; }
+    .final-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 12px;
+    }
+    .final-item {
+      padding: 18px;
+      background: #142840;
+      border: 1px solid #29415c;
+      border-radius: 15px;
+    }
+    .final-item strong { display: block; color: #75e5b7; }
+    .final-item span { color: #c8d2df; font-size: 14px; }
+
+    footer {
+      padding: 26px 16px 42px;
+      color: #687386;
+      text-align: center;
+      font-size: 13px;
+    }
+
+    .lightbox {
+      position: fixed;
+      inset: 0;
+      z-index: 100;
+      display: none;
+      place-items: center;
+      padding: 24px;
+      background: rgba(5, 13, 23, .9);
+      border: 0;
+    }
+    .lightbox[open] { display: grid; }
+    .lightbox__inner {
+      position: relative;
+      max-width: min(430px, 95vw);
+      max-height: 92vh;
+    }
+    .lightbox img {
+      max-height: 88vh;
+      border-radius: 22px;
+      box-shadow: 0 30px 90px rgba(0,0,0,.45);
+    }
+    .lightbox__close {
+      position: absolute;
+      top: -14px;
+      right: -14px;
+      width: 40px;
+      height: 40px;
+      color: white;
+      background: var(--green);
+      border: 2px solid white;
+      border-radius: 50%;
+      cursor: pointer;
+      font-size: 24px;
+      line-height: 1;
+    }
+
+    @media (max-width: 920px) {
+      .hero__inner { grid-template-columns: 1fr; gap: 28px; }
+      .hero__badge { max-width: 430px; }
+      .flow { overflow-x: auto; grid-template-columns: repeat(6, minmax(150px, 1fr)); }
+      .layout { grid-template-columns: 1fr; }
+      .toc {
+        position: sticky;
+        top: 66px;
+        z-index: 30;
+        display: flex;
+        gap: 4px;
+        overflow-x: auto;
+        padding: 8px;
+        border-radius: 13px;
+      }
+      .toc__title { display: none; }
+      .toc a { flex: 0 0 auto; white-space: nowrap; }
+      .prep-grid,
+      .photo-rules,
+      .final-grid { grid-template-columns: 1fr; }
+    }
+
+    @media (max-width: 720px) {
+      .topbar__meta { display: none; }
+      .hero__inner { padding: 48px 0 52px; }
+      .hero__badge strong { font-size: 24px; }
+      .flow-wrap { margin-top: -16px; }
+      .layout { width: min(100% - 20px, 1120px); gap: 16px; }
+      .section, .step { padding: 22px 16px; border-radius: 18px; }
+      .screen-grid,
+      .screen-grid--single { grid-template-columns: 1fr; }
+      .step__heading { grid-template-columns: 46px 1fr; gap: 13px; }
+      .step__number {
+        width: 46px;
+        height: 46px;
+        border-radius: 14px;
+        font-size: 19px;
+        box-shadow: 4px 4px 0 var(--green-bright);
+      }
+      .status-strip { grid-template-columns: repeat(2, 1fr); }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      html { scroll-behavior: auto; }
+      * { transition: none !important; }
+    }
+
+    @media print {
+      .topbar, .toc, .lightbox { display: none !important; }
+      body { background: white; }
+      .hero { color: black; background: white; border-bottom: 3px solid black; }
+      .hero__lead, .hero__badge span { color: #333; }
+      .hero__badge { border-color: #999; box-shadow: none; }
+      .layout { display: block; width: 100%; }
+      .section, .step { break-inside: avoid; box-shadow: none; }
+      .phone-shot { box-shadow: none; }
+    }
+  </style>
+</head>
+<body>
+  <a class="skip-link" href="#main">跳到操作步骤</a>
+
+  <header class="topbar">
+    <div class="topbar__inner">
+      <div class="brand">
+        <span class="brand__mark" aria-hidden="true">QC</span>
+        <span>白垩纪 · 质检操作指南</span>
+      </div>
+      <div class="topbar__meta">RN 当前流程 · 2026-07-26</div>
+    </div>
+  </header>
+
+  <section class="hero" aria-labelledby="page-title">
+    <div class="hero__inner">
+      <div>
+        <p class="eyebrow">Quality Control / Label Inspection</p>
+        <h1 id="page-title">包装标签拍检<br>操作指南</h1>
+        <p class="hero__lead">从 QC 账号登录、录入 SKU 与批次、拍摄包装照片，到 AI 初筛后等待人工审核。</p>
+      </div>
+      <aside class="hero__badge" aria-label="预计操作时间">
+        <strong>约 3 分钟</strong>
+        <span>准备好 SKU、批次号、生产日期，并把每盒标签边缘露出来。</span>
+      </aside>
+    </div>
+  </section>
+
+  <div class="flow-wrap" aria-label="操作流程概览">
+    <div class="flow">
+      <div class="flow__item"><span class="flow__number">1</span><span>QC 登录</span></div>
+      <div class="flow__item"><span class="flow__number">2</span><span>打开拍检</span></div>
+      <div class="flow__item"><span class="flow__number">3</span><span>核对批次</span></div>
+      <div class="flow__item"><span class="flow__number">4</span><span>拍 1–6 张</span></div>
+      <div class="flow__item"><span class="flow__number">5</span><span>提交初筛</span></div>
+      <div class="flow__item"><span class="flow__number">6</span><span>人工复核</span></div>
+    </div>
+  </div>
+
+  <div class="layout">
+    <nav class="toc" aria-label="页面目录">
+      <p class="toc__title">操作目录</p>
+      <a href="#prepare">开始前</a>
+      <a href="#step-login">1. 登录</a>
+      <a href="#step-entry">2. 打开拍检</a>
+      <a href="#step-batch">3. 批次信息</a>
+      <a href="#step-photo">4. 拍照提交</a>
+      <a href="#step-review">5. 等待审核</a>
+      <a href="#errors">异常处理</a>
+    </nav>
+
+    <main id="main">
+      <div class="notice" role="note">
+        <div class="notice__icon" aria-hidden="true">i</div>
+        <div>
+          <strong>AI 只做疑似初筛，不会自动判定合格。</strong>
+          <p>无论 AI 找到 0 处还是多处疑似区域，所有照片都会进入人工审核。</p>
+        </div>
+      </div>
+
+      <section class="section" id="prepare">
+        <p class="section__kicker">BEFORE START</p>
+        <h2>开始前准备</h2>
+        <p class="section__intro">先准备三项业务信息，再整理拍摄区域。信息不全时不要先随便选择。</p>
+        <div class="prep-grid">
+          <article class="prep">
+            <span class="prep__tag">必填 01</span>
+            <h3>产品 SKU</h3>
+            <p>按编码或名称搜索，确认与现场产品一致。</p>
+          </article>
+          <article class="prep">
+            <span class="prep__tag">必填 02</span>
+            <h3>批次号</h3>
+            <p>照生产批次原样录入，不用临时简称替代。</p>
+          </article>
+          <article class="prep">
+            <span class="prep__tag">必填 03</span>
+            <h3>生产日期</h3>
+            <p>默认是当天；补拍历史批次时要主动修改。</p>
+          </article>
+        </div>
+      </section>
+
+      <section class="step" id="step-login">
+        <div class="step__heading">
+          <div class="step__number">1</div>
+          <div>
+            <p class="step__kicker">LOGIN</p>
+            <h2>使用 QC 账号登录</h2>
+            <p>打开 App 后先点击“登录”，再输入管理员分配的质检员账号。</p>
+          </div>
+        </div>
+        <div class="screen-grid">
+          <figure class="phone-shot">
+            <button class="shot-button" type="button" data-full="qcsop-assets/01-launch-login.png" aria-label="放大查看启动登录页截图">
+              <img src="qcsop-assets/01-launch-login.png" alt="白垩纪 AI Agent 启动页，底部有登录按钮" loading="lazy">
+            </button>
+            <figcaption>① 启动页点击“登录”</figcaption>
+          </figure>
+          <figure class="phone-shot">
+            <button class="shot-button" type="button" data-full="qcsop-assets/02-login-form.png" aria-label="放大查看账号登录表单截图">
+              <img src="qcsop-assets/02-login-form.png" alt="QC 账号登录表单，包含用户名和密码输入框" loading="lazy">
+            </button>
+            <figcaption>② 输入 QC 用户名与密码</figcaption>
+          </figure>
+        </div>
+        <div class="danger-note">
+          <strong>账号安全</strong>
+          <p>密码向管理员领取。不要把密码写在纸箱、群聊截图或这份公开指南里。</p>
+        </div>
+      </section>
+
+      <section class="step" id="step-entry">
+        <div class="step__heading">
+          <div class="step__number">2</div>
+          <div>
+            <p class="step__kicker">ENTRY</p>
+            <h2>从质检工作台打开“标签拍检”</h2>
+            <p>登录后确认顶部是“质检工作台”，在“快捷操作”区域点击“标签拍检”。</p>
+          </div>
+        </div>
+        <div class="screen-grid screen-grid--single">
+          <figure class="phone-shot">
+            <button class="shot-button" type="button" data-full="qcsop-assets/04-open-label-qc.png" aria-label="放大查看质检工作台标签拍检入口截图">
+              <img src="qcsop-assets/04-open-label-qc.png" alt="质检工作台快捷操作区域，左下方有标签拍检入口" loading="lazy">
+            </button>
+            <figcaption>“快捷操作”第一项是“标签拍检”</figcaption>
+          </figure>
+          <div class="callouts">
+            <div class="callout">
+              <span class="callout__number">1</span>
+              <strong>先确认身份</strong>
+              <p>顶部应显示“质检工作台”和当前质检员姓名。</p>
+            </div>
+            <div class="callout">
+              <span class="callout__number">2</span>
+              <strong>轻微下滑</strong>
+              <p>手机小屏上“快捷操作”可能在首屏下方，向上滑一点即可看到。</p>
+            </div>
+            <div class="callout">
+              <span class="callout__number">3</span>
+              <strong>点击标签拍检</strong>
+              <p>不要点“扫码质检”或“检验记录”，它们是其他业务入口。</p>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="step" id="step-batch">
+        <div class="step__heading">
+          <div class="step__number">3</div>
+          <div>
+            <p class="step__kicker">BATCH INFO</p>
+            <h2>核对 SKU、批次号和生产日期</h2>
+            <p>这三项会和照片、AI 候选及人工标注绑定，录错会影响追溯和后续训练数据。</p>
+          </div>
+        </div>
+        <div class="screen-grid">
+          <figure class="phone-shot">
+            <button class="shot-button" type="button" data-full="qcsop-assets/05-batch-form-top.png" aria-label="放大查看批次信息表单截图">
+              <img src="qcsop-assets/05-batch-form-top.png" alt="包装标签拍检表单，包含 SKU、批次号、生产日期和拍照提示" loading="lazy">
+            </button>
+            <figcaption>先完成三项必填信息</figcaption>
+          </figure>
+          <figure class="phone-shot">
+            <button class="shot-button" type="button" data-full="qcsop-assets/06-select-sku.png" aria-label="放大查看 SKU 搜索列表截图">
+              <img src="qcsop-assets/06-select-sku.png" alt="SKU 选择弹窗，通过名称搜索到产品列表" loading="lazy">
+            </button>
+            <figcaption>可按 SKU 编码或名称搜索</figcaption>
+          </figure>
+        </div>
+        <div class="callouts" style="margin-top: 22px">
+          <div class="callout callout--warning">
+            <span class="callout__number">!</span>
+            <strong>SKU 必须与照片中的产品一致</strong>
+            <p>找不到 SKU 时先联系主管维护产品，不要选择“看起来差不多”的产品。</p>
+          </div>
+          <div class="callout">
+            <span class="callout__number">✓</span>
+            <strong>提交前再读一遍</strong>
+            <p>SKU 编码和名称、批次号、生产日期必须三项全部正确。</p>
+          </div>
+        </div>
+      </section>
+
+      <section class="step" id="step-photo">
+        <div class="step__heading">
+          <div class="step__number">4</div>
+          <div>
+            <p class="step__kicker">PHOTO & SUBMIT</p>
+            <h2>拍 1–6 张清晰照片并提交</h2>
+            <p>手机 App 中按钮显示“拍照”；浏览器演示环境显示“选择照片”，后续流程一致。</p>
+          </div>
+        </div>
+
+        <div class="photo-rules">
+          <div class="photo-rule">
+            <strong>露出标签边缘</strong>
+            <p>彩标和白标所在边缘都要能看见，避免完全被上一盒遮挡。</p>
+          </div>
+          <div class="photo-rule">
+            <strong>每张 8–15 盒</strong>
+            <p>减少过度堆叠；盒子太多、太小会增加漏检。</p>
+          </div>
+          <div class="photo-rule">
+            <strong>避开反光和模糊</strong>
+            <p>避开顶灯强反光，手稳后再拍，必要时换角度补一张。</p>
+          </div>
+        </div>
+
+        <div class="screen-grid screen-grid--single">
+          <figure class="phone-shot">
+            <button class="shot-button" type="button" data-full="qcsop-assets/08-ready-to-submit.png" aria-label="放大查看照片准备完成截图">
+              <img src="qcsop-assets/08-ready-to-submit.png" alt="已选择 SKU、批次号、生产日期并添加一张包装照片，提交拍检按钮可用" loading="lazy">
+            </button>
+            <figcaption>照片出现缩略图后，“提交拍检”变为可点击</figcaption>
+          </figure>
+          <div>
+            <ul class="checklist">
+              <li>照片数量显示为 1/6 至 6/6。</li>
+              <li>缩略图里能看见每盒的标签所在边缘。</li>
+              <li>重新核对 SKU、批次号、生产日期。</li>
+              <li>确认无误后只点击一次“提交拍检”。</li>
+            </ul>
+            <div class="danger-note">
+              <strong>不要连续重复点击</strong>
+              <p>上传过程中保持页面打开。网络失败时按页面提示“重试提交”，不要重新建立同一批次。</p>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="step" id="step-review">
+        <div class="step__heading">
+          <div class="step__number">5</div>
+          <div>
+            <p class="step__kicker">AI SCREENING & REVIEW</p>
+            <h2>等待 AI 初筛与人工审核</h2>
+            <p>提交后页面会显示任务编号、照片数和 AI 疑似区域数量。候选数量不是最终结果。</p>
+          </div>
+        </div>
+
+        <div class="status-strip" aria-label="拍检状态顺序">
+          <div class="status">上传 / 排队</div>
+          <div class="status">AI 初筛中</div>
+          <div class="status status--active">等待人工审核</div>
+          <div class="status">审核完成</div>
+        </div>
+
+        <div class="screen-grid screen-grid--single">
+          <figure class="phone-shot">
+            <button class="shot-button" type="button" data-full="qcsop-assets/10-await-human-review.png" aria-label="放大查看等待人工审核状态截图">
+              <img src="qcsop-assets/10-await-human-review.png" alt="拍检状态为等待人工审核，显示 SKU、批次、日期、任务编号、照片数和 AI 疑似区域数量" loading="lazy">
+            </button>
+            <figcaption>演示任务：AI 初筛完成，等待质量审核员确认</figcaption>
+          </figure>
+          <div class="callouts">
+            <div class="callout">
+              <span class="callout__number">1</span>
+              <strong>记住任务编号</strong>
+              <p>需要追问审核进度或排查上传问题时，用任务编号定位。</p>
+            </div>
+            <div class="callout callout--warning">
+              <span class="callout__number">2</span>
+              <strong>疑似区域不等于缺标数量</strong>
+              <p>AI 可能多框、错框或漏框，必须由人工逐张确认。</p>
+            </div>
+            <div class="callout">
+              <span class="callout__number">3</span>
+              <strong>根据审核结论回现场处理</strong>
+              <p>确认缺白标或缺彩标后，找到对应盒子并补贴，再按现场流程复核。</p>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="section" id="errors">
+        <p class="section__kicker">TROUBLESHOOTING</p>
+        <h2>常见异常怎么处理</h2>
+        <p class="section__intro">先保留当前页面和任务编号，再按下面顺序处理。</p>
+
+        <details>
+          <summary>“提交拍检”按钮是灰色的</summary>
+          <p>检查是否已经选择 SKU、填写批次号、选择生产日期，并至少添加 1 张照片。</p>
+        </details>
+        <details>
+          <summary>上传失败或网络中断</summary>
+          <p>不要退出或重新建同一批次。网络恢复后使用页面上的“重试提交”；系统会尽量复用已经创建的任务和上传完成的照片。</p>
+        </details>
+        <details>
+          <summary>照片反光、模糊或标签被遮挡</summary>
+          <p>提交前删除该缩略图并重拍；减少盒子数量，换一个角度，让彩标和白标所在边缘露出来。</p>
+        </details>
+        <details>
+          <summary>AI 显示 0 处疑似区域</summary>
+          <p>仍然等待人工审核，不要把“0 处”直接当作合格。人工发现漏检后会补标注，用于后续改进模型。</p>
+        </details>
+        <details>
+          <summary>SKU 列表里找不到现场产品</summary>
+          <p>停止提交并联系主管或系统管理员维护 SKU。不要选择相似产品替代。</p>
+        </details>
+      </section>
+
+      <section class="section final-check">
+        <p class="section__kicker">30-SECOND CHECK</p>
+        <h2>提交前 30 秒检查</h2>
+        <p class="section__intro">三项都确认后再提交，可以减少绝大多数无效拍检。</p>
+        <div class="final-grid">
+          <div class="final-item">
+            <strong>信息对</strong>
+            <span>SKU、批次号、生产日期与现场一致。</span>
+          </div>
+          <div class="final-item">
+            <strong>照片清</strong>
+            <span>1–6 张，标签边缘可见，无严重反光和模糊。</span>
+          </div>
+          <div class="final-item">
+            <strong>人复核</strong>
+            <span>AI 只初筛，最终结论必须等待人工审核。</span>
+          </div>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <footer>
+    白垩纪食品溯源系统 · QC 包装标签拍检操作指南 · 版本 2026-07-26
+  </footer>
+
+  <dialog class="lightbox" id="lightbox" aria-label="截图放大预览">
+    <div class="lightbox__inner">
+      <button class="lightbox__close" type="button" aria-label="关闭截图预览">×</button>
+      <img alt="">
+    </div>
+  </dialog>
+
+  <script>
+    (function () {
+      var dialog = document.getElementById('lightbox');
+      var preview = dialog.querySelector('img');
+      var closeButton = dialog.querySelector('.lightbox__close');
+
+      document.querySelectorAll('.shot-button').forEach(function (button) {
+        button.addEventListener('click', function () {
+          var source = button.getAttribute('data-full');
+          var image = button.querySelector('img');
+          preview.src = source;
+          preview.alt = image ? image.alt : '操作截图';
+          if (typeof dialog.showModal === 'function') {
+            dialog.showModal();
+          } else {
+            dialog.setAttribute('open', '');
+          }
+        });
+      });
+
+      function closeDialog() {
+        if (typeof dialog.close === 'function') {
+          dialog.close();
+        } else {
+          dialog.removeAttribute('open');
+        }
+        preview.removeAttribute('src');
+      }
+
+      closeButton.addEventListener('click', closeDialog);
+      dialog.addEventListener('click', function (event) {
+        if (event.target === dialog) closeDialog();
+      });
+      dialog.addEventListener('cancel', function () {
+        preview.removeAttribute('src');
+      });
+    })();
+  </script>
+</body>
+</html>
