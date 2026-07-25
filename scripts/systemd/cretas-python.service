@@ -5,6 +5,11 @@ After=network.target postgresql.service
 [Service]
 EnvironmentFile=/www/wwwroot/cretas/.env.prod
 EnvironmentFile=/www/wwwroot/cretas/.env.ota
+Environment=POSTGRES_DB=smartbi_prod_db
+Environment=POSTGRES_ENABLED=true
+Environment=POSTGRES_HOST=localhost
+Environment=POSTGRES_PORT=5432
+Environment=POSTGRES_USER=smartbi_user
 Type=simple
 User=root
 WorkingDirectory=/www/wwwroot/cretas/code/backend/python

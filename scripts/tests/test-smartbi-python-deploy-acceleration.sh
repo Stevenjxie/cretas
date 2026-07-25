@@ -16,6 +16,14 @@ grep -Fq 'pip check' "$DEPLOY_SCRIPT" || fail "pip consistency check missing"
 grep -Fq 'python3.11' "$DEPLOY_SCRIPT" || fail "Python 3.11 runtime contract missing"
 grep -Fq 'venv-current' "$DEPLOY_SCRIPT" || fail "atomic runtime selector missing"
 grep -Fq 'rollback_prod_runtime' "$DEPLOY_SCRIPT" || fail "production runtime rollback missing"
+grep -Fq 'restore_python_runtime_units' "$DEPLOY_SCRIPT" \
+    || fail "runtime unit rollback is missing"
+grep -Fq 'rollback_dir="$bundle/rollback"' "$DEPLOY_SCRIPT" \
+    || fail "SHA-scoped runtime unit snapshot is missing"
+grep -Fq '"postgres":"connected"' "$DEPLOY_SCRIPT" \
+    || fail "semantic PostgreSQL health gate is missing"
+grep -Fq '"model_available":true' "$DEPLOY_SCRIPT" \
+    || fail "post-restart classifier health gate is missing"
 grep -Fq '/api/classifier/health' "$DEPLOY_SCRIPT" \
     || fail "classifier middleware route smoke missing"
 grep -Fq 'https://mirrors.aliyun.com/pypi/simple' "$DEPLOY_SCRIPT" \
@@ -37,6 +45,15 @@ for runtime_file in \
     "$ROOT/scripts/cron/refresh-demo-rest.sh"; do
     grep -Fq 'venv-current' "$runtime_file" \
         || fail "runtime consumer is not pinned to venv-current: $runtime_file"
+done
+for postgres_environment in \
+    'Environment=POSTGRES_DB=smartbi_prod_db' \
+    'Environment=POSTGRES_ENABLED=true' \
+    'Environment=POSTGRES_HOST=localhost' \
+    'Environment=POSTGRES_PORT=5432' \
+    'Environment=POSTGRES_USER=smartbi_user'; do
+    grep -Fq "$postgres_environment" "$ROOT/scripts/systemd/cretas-python.service" \
+        || fail "main Python unit lost PostgreSQL runtime contract: $postgres_environment"
 done
 
 REMOTE_BODY="$TMP_DIR/remote-dependencies.sh"
