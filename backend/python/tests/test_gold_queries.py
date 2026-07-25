@@ -6,6 +6,8 @@ from __future__ import annotations
 
 from datetime import date
 from decimal import Decimal
+import os
+from urllib.parse import urlsplit
 
 import pytest
 import pytest_asyncio
@@ -24,18 +26,48 @@ from smartbi.gold.triggers import UploadCompleteTrigger
 
 
 _TENANT = "TEST_GQ_A"
+_PG_DSN = os.getenv("SMARTBI_GOLD_PG_DSN")
+_PG_DISPOSABLE_CONFIRMED = (
+    os.getenv("SMARTBI_GOLD_PG_DISPOSABLE_CONFIRM") == "YES"
+)
+
+pytestmark = [
+    pytest.mark.integration,
+    pytest.mark.skipif(
+        not _PG_DSN or not _PG_DISPOSABLE_CONFIRMED,
+        reason=(
+            "set SMARTBI_GOLD_PG_DSN to a disposable loopback test database "
+            "and SMARTBI_GOLD_PG_DISPOSABLE_CONFIRM=YES"
+        ),
+    ),
+]
+
+
+def _validated_test_dsn() -> str:
+    """Return the explicit disposable DSN or fail closed.
+
+    The old fixture used ``settings.postgres_url``. That property is always
+    non-empty because Settings supplies localhost defaults, so a normal local
+    test run accidentally attempted ``localhost:5432`` with an empty password.
+    """
+    if not _PG_DSN:
+        pytest.skip("SMARTBI_GOLD_PG_DSN is not configured")
+
+    parsed = urlsplit(_PG_DSN)
+    if parsed.hostname not in {"127.0.0.1", "localhost", "::1"}:
+        pytest.fail("SMARTBI_GOLD_PG_DSN must use a loopback host")
+    database = parsed.path.lstrip("/")
+    if "test" not in database.lower():
+        pytest.fail("SMARTBI_GOLD_PG_DSN must target a database containing 'test'")
+    return _PG_DSN
 
 
 @pytest_asyncio.fixture
 async def pool():
     import asyncpg
-    from smartbi.config import get_settings
     from smartbi.tenant_ctx import set_pg_connection_tenant
-    settings = get_settings()
-    if not settings.postgres_url:
-        pytest.skip("No Postgres configured")
     p = await asyncpg.create_pool(
-        settings.postgres_url, min_size=1, max_size=3,
+        _validated_test_dsn(), min_size=1, max_size=3,
         setup=set_pg_connection_tenant,
     )
     try:
