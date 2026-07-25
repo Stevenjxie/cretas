@@ -33,7 +33,11 @@ from smartbi.gold.restaurant_intent import (
     _detect_dimensions,
     _verbatim_entity,
 )
-from smartbi.gold.restaurant_ops_router import _resolve_sales_date_range, match_restaurant_ops
+from smartbi.gold.restaurant_ops_router import (
+    _resolve_sales_date_range,
+    extract_store_mention,
+    match_restaurant_ops,
+)
 from smartbi.services.template_rag import hybrid_match
 
 
@@ -1812,6 +1816,24 @@ def test_llm_all_store_slot_cannot_poison_dish_ranking_execution_scope():
     assert spec.store_scope == "all"
     assert spec.store_slot is None
     assert spec.store_slots == ()
+    assert spec.dimensions == ("dish",)
+    assert spec.planned_intents == ("RESTAURANT_OPS_GROSS_MARGIN",)
+
+
+def test_compact_time_and_all_store_scope_never_becomes_store_entity():
+    query = "最近7天全部门店哪个菜卖得好"
+    spec = _build_spec(
+        "RESTAURANT_OPS_GROSS_MARGIN",
+        query,
+        confidence=0.95,
+        tier="llm",
+    )
+
+    assert extract_store_mention(query) is None
+    assert spec.store_scope == "all"
+    assert spec.store_slot is None
+    assert spec.store_slots == ()
+    assert spec.ranking_direction == "best"
     assert spec.dimensions == ("dish",)
     assert spec.planned_intents == ("RESTAURANT_OPS_GROSS_MARGIN",)
 
