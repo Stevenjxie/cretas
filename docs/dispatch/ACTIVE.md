@@ -5,7 +5,7 @@
 
 ## 在飞任务
 
-- `RESTAURANT-ISSUE-CLOSEOUT-20260725-001` — `review` — Owner: `/root` — Base SHA: `f045ccea4d95be28650e319644716ccdce76f516` — 仅收口 Google Sheet“餐饮”Tab 中正在解决、暂缓和已修复待验证项：上下文/时间/门店槽、跨期比较、经营建议、回答契约、餐饮图表与文案、价格异常下拉、本地会话迁移测试和模型池只读诊断；禁止修改工厂业务语义或工厂数据。验收：餐饮 Python 目标回归、Web 餐饮目标测试与构建、生产 Demo 只读语义验收、`actualBusinessWrites == 0`，逐行回写 Sheet 证据；发布前仍需独立生产确认。
+- `RESTAURANT-ISSUE-CLOSEOUT-20260725-001` — `in-progress` — Owner: `/root` — Base SHA: `d91b31cfd1f17f63fae544a6a2e6a3b9175cb424` — 仅收口 Google Sheet“餐饮”Tab 中正在解决、暂缓和已修复待验证项：上下文/时间/门店槽、跨期比较、经营建议、回答契约、餐饮图表与文案、价格异常下拉、本地会话迁移测试和模型池只读诊断；禁止修改工厂业务语义或工厂数据。PR #1772 已合并并首次发布，生产只读复测发现指定菜品营收对象丢失、单门店误写成比较、咨询模式操作提醒未透传，以及模型池不可用时综合经营问题未走确定性降级，现继续修复。验收：餐饮 Python 目标回归、Web 餐饮目标测试与构建、生产 Demo 只读语义验收、`actualBusinessWrites == 0`，逐行回写 Sheet 证据；任何后续生产发布仍需独立确认。
 - `SEC-CREDENTIAL-ROTATION-20260719` — `blocked` — Owner: Codex coordinator — Base SHA: `1ba9a241a77144a80851051efbac584abf4db69d` — tracked tree、47/139 非受控副本、数据库/JWT/internal/BaoTa 轮换和生产验收已完成；仍需各供应商控制台吊销无法由当前 API 权限完成的旧长期凭证，详情见 [凭证轮换收尾记录](../security/credential-rotation-closeout-2026-07-20.md)。
 - `ENH-F006-SUPPLIER-IMPORT-001`（含 `REQ-F006-SUPPLIER-REQUIRED-CONTACT-001`、`ENH-F006-SUPPLIER-DETAIL-STATUS-001`）— `in-progress` — Owner: `/root` — Base SHA: `3ddf6751603476205457fcf8aa0ee9f1adbea792` — 复用现有供应链 Excel 共享能力，统一供应商必填资料、导入预览/幂等确认、状态生命周期、采购门禁与详情信息架构；只合入 `main`，严格 `NOT_DEPLOYED`，生产业务写入为 0。
 - `BUG-F006-MATERIAL-CATEGORY-CASCADE-001`（含 `BUG-F006-MATERIAL-AUTOFILL-UNIT-001`）— `in-progress` — Owner: `/root` — Base SHA: `3ddf6751603476205457fcf8aa0ee9f1adbea792` — 修复原料类型字典 category/L1/L2/L3 单一真值、异步级联与单位建议来源/手动覆盖语义，后端 fail-closed 校验；只合入 `main`，严格 `NOT_DEPLOYED`，生产业务写入为 0。

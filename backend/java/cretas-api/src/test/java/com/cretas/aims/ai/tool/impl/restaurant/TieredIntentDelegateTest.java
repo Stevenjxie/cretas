@@ -35,21 +35,24 @@ class TieredIntentDelegateTest {
     void delegateTrueMapsResult() throws Exception {
         GoldFinanceClient gold = mock(GoldFinanceClient.class);
         when(gold.fetchTieredIntentAnswer(eq(FACTORY_ID), eq("米饭的销量是多少"), eq("restaurant_dish_sales_ranking")))
-                .thenReturn(Map.of(
-                        "delegate", true,
-                        "answer_text", "「米饭(单人份)」销量 100 份。",
-                        "charts", List.of(),
-                        "kpis", List.of(),
-                        "code", "RESTAURANT_OPS_GROSS_MARGIN",
-                        "contract_pass", true,
-                        "query_plan_hash", "plan-42",
-                        "executed_resolvers", List.of("RESTAURANT_OPS_GROSS_MARGIN"),
-                        "suggested_followups", List.of(Map.of(
+                .thenReturn(Map.ofEntries(
+                        Map.entry("delegate", true),
+                        Map.entry("answer_text", "「米饭(单人份)」销量 100 份。"),
+                        Map.entry("charts", List.of()),
+                        Map.entry("kpis", List.of()),
+                        Map.entry("code", "RESTAURANT_OPS_GROSS_MARGIN"),
+                        Map.entry("warning", "咨询模式只展示分析结果，没有执行下架操作。"),
+                        Map.entry("contract_pass", true),
+                        Map.entry("query_plan_hash", "plan-42"),
+                        Map.entry(
+                                "executed_resolvers",
+                                List.of("RESTAURANT_OPS_GROSS_MARGIN")),
+                        Map.entry("suggested_followups", List.of(Map.of(
                                 "label", "看菜品成本",
-                                "question", "米饭(单人份)的成本如何？")),
-                        "structured_context", Map.of(
+                                "question", "米饭(单人份)的成本如何？"))),
+                        Map.entry("structured_context", Map.of(
                                 "window_label", "本月",
-                                "requested_metrics", List.of("sales_volume"))));
+                                "requested_metrics", List.of("sales_volume")))));
 
         Map<String, Object> params = new HashMap<>();
         params.put("userInput", "米饭的销量是多少");
@@ -59,6 +62,7 @@ class TieredIntentDelegateTest {
         assertThat(result).isNotNull()
                 .containsEntry("tieredDelegate", true)
                 .containsEntry("code", "RESTAURANT_OPS_GROSS_MARGIN")
+                .containsEntry("warning", "咨询模式只展示分析结果，没有执行下架操作。")
                 .containsEntry("queryPlanHash", "plan-42");
         assertThat(result.get("executedResolvers"))
                 .isEqualTo(List.of("RESTAURANT_OPS_GROSS_MARGIN"));

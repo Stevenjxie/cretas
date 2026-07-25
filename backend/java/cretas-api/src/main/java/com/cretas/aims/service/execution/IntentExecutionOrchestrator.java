@@ -366,6 +366,32 @@ public class IntentExecutionOrchestrator {
                 && isMarginProhibitedActionAnalysis(userInput)) {
             return buildRestaurantMarginProhibitedActionsResponse(request);
         }
+        // The comprehensive synthesis engine is an existing deterministic
+        // multi-dimension path (FactBook + optional narrative LLM). Route only
+        // explicit synthesis wording before the restaurant single-intent
+        // semantic planner; otherwise the tiered-first branch intercepts the
+        // request and a mapper-provider outage prevents the 21-dimension engine
+        // from running at all. This is intentionally narrower than a generic
+        // keyword route: ordinary revenue/dish/margin questions remain under
+        // the immutable restaurant QueryPlan.
+        if (!factoryPackConstrained
+                && isRestaurantTenant(factoryId)
+                && isRestaurantComprehensiveSynthesisQuestion(userInput)) {
+            log.info("[RestaurantComprehensive] explicit multi-dimension route before tiered planner: "
+                    + "factoryId={}, input={}", factoryId, userInput);
+            IntentExecuteRequest synthesisRequest = IntentExecuteRequest.builder()
+                    .userInput(userInput)
+                    .intentCode("COMPREHENSIVE_SYNTHESIS")
+                    .sessionId(request.getSessionId())
+                    .enableThinking(request.getEnableThinking())
+                    .thinkingBudget(request.getThinkingBudget())
+                    .context(request.getContext())
+                    .mode(request.getMode())
+                    .previewOnly(request.getPreviewOnly())
+                    .build();
+            return executeWithExplicitIntent(
+                    factoryId, synthesisRequest, userId, userRole, factoryPackRoute);
+        }
         if (!factoryPackConstrained
                 && shouldRouteRestaurantOwnerAction(factoryId, userInput, request.getContext())) {
             log.info("[restaurant-owner-action] force-route before restaurant report shortcuts: factoryId={}, input={}",
@@ -1719,6 +1745,9 @@ public class IntentExecutionOrchestrator {
         if (delegated.get("conversationContext") != null) {
             delegatedData.put("conversationContext", delegated.get("conversationContext"));
         }
+        if (delegated.get("warning") != null) {
+            delegatedData.put("warning", delegated.get("warning"));
+        }
         return IntentExecuteResponse.builder()
                 .intentRecognized(true)
                 .intentCode(delegated.get("code") != null ? delegated.get("code").toString() : null)
@@ -1757,6 +1786,17 @@ public class IntentExecutionOrchestrator {
     // python agent 拆解回答。与 python restaurant_agent._COMPOUND_HINT_RE 同款。
     private static final java.util.regex.Pattern RESTAURANT_COMPOUND_PATTERN =
             java.util.regex.Pattern.compile("，另外|，再|，然后|；|，顺便|，以及|，还有|，同时|先.{2,24}?再");
+
+    private static final java.util.regex.Pattern RESTAURANT_COMPREHENSIVE_PATTERN =
+            java.util.regex.Pattern.compile(
+                    "综合分析|全面分析|多维(?:度)?分析|综合诊断|综合评估|"
+                    + "整体经营分析|运营分析|经营分析");
+
+    boolean isRestaurantComprehensiveSynthesisQuestion(String userInput) {
+        return userInput != null
+                && RESTAURANT_COMPREHENSIVE_PATTERN.matcher(
+                        userInput.replaceAll("\\s+", "")).find();
+    }
 
     private boolean isRestaurantCompoundQuestion(String factoryId, String userInput) {
         return userInput != null && userInput.length() >= 12
@@ -2754,7 +2794,6 @@ public class IntentExecutionOrchestrator {
         String normalizedInput = userInput.toLowerCase(Locale.ROOT);
         if (isPureRestaurantReviewRemedyQuestion(normalizedInput)
                 || isPlainRestaurantReadQuestion(normalizedInput)
-                || isRestaurantAnalyticalReadQuestion(normalizedInput)
                 || isRestaurantBusinessMutationRequest(normalizedInput)) {
             return false;
         }
@@ -2776,6 +2815,13 @@ public class IntentExecutionOrchestrator {
         }
         if (RESTAURANT_OWNER_ACTION_FORCE_PATTERN.matcher(userInput).find()) {
             return true;
+        }
+        // A metric word such as "营收" or "营业额" does not turn an explicit
+        // owner decision into a plain report.  The direct/role/decision gates
+        // above are read-only advisory routes; only after they decline should
+        // a remaining analytical question stay in the immutable data plan.
+        if (isRestaurantAnalyticalReadQuestion(normalizedInput)) {
+            return false;
         }
         return false;
     }

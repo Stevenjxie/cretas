@@ -114,10 +114,7 @@ from smartbi.agent.narrative_cache import (
     compute_question_hash,
 )
 from smartbi.agent.orchestrator import (
-    DEGRADED_MESSAGE_BUDGET_EXHAUSTED,
-    DEGRADED_MESSAGE_LLM_UNAVAILABLE,
     RESULT_SOURCE_CACHE,
-    RESULT_SOURCE_DEGRADED,
     RESULT_SOURCE_LLM,
     SYSTEM_PROMPT,
 )
@@ -165,6 +162,11 @@ SYNTHESIS_MAX_TOKENS = 2000  # multi-dim; reasoning models spend tokens on CoT
 # RESULT_SOURCE_CACHE (exact-hash) so hit-rate is measurable per path. FE
 # renders both identically (just an "answer" + optional "charts").
 RESULT_SOURCE_SEMANTIC_CACHE = "semantic_cache"
+# All requested dimensions are still pulled and rendered when the narrative
+# provider pool is unavailable.  Keep this distinct from "degraded": the
+# response contains fresh deterministic business facts, charts and coverage,
+# rather than a generic outage sentence.
+RESULT_SOURCE_DETERMINISTIC = "deterministic_fallback"
 
 
 # ============================================================================
@@ -441,7 +443,7 @@ SYNTHESIS_CONTRACT_VERSION = "restaurant-dimensions-v2"
 @dataclass
 class SynthesisResponse:
     answer: str
-    source: str                      # cache | llm | degraded
+    source: str                      # cache | semantic_cache | llm | deterministic_fallback
     tokens: int
     tokens_used_today: int
     tokens_cap: int
@@ -688,13 +690,9 @@ class ComprehensiveSynthesisEngine:
         budget = await self._budget.check_budget(factory_id)
         if budget.blocked:
             logger.warning(
-                "synthesis budget exhausted: factory=%s used=%d cap=%d q=%r",
+                "synthesis narrative budget exhausted; deterministic analysis continues: "
+                "factory=%s used=%d cap=%d q=%r",
                 factory_id, budget.tokens_used, budget.tokens_cap, question,
-            )
-            return SynthesisResponse(
-                answer=DEGRADED_MESSAGE_BUDGET_EXHAUSTED, source=RESULT_SOURCE_DEGRADED,
-                tokens=0, tokens_used_today=budget.tokens_used, tokens_cap=budget.tokens_cap,
-                elapsed_ms=int((time.monotonic() - t0) * 1000),
             )
 
         # 3. Dimension plan (rules-first, no LLM).
@@ -748,6 +746,16 @@ class ComprehensiveSynthesisEngine:
 
         # 5. Structured multi-dim insights (deterministic correlations).
         insight_summary = self._analyze(factbook, period=f"{start_iso} 至 {end_iso}")
+
+        if budget.blocked:
+            return self._deterministic_fallback_response(
+                factbook,
+                plan,
+                insight_summary,
+                budget,
+                t0,
+                reason="叙述模型预算已用完",
+            )
 
         # 5b. P4 v2: pure-attribution → try a cheap thin restate of the
         # deterministic 客流×客单价 decomposition. Grounded by a numeric-closure
@@ -806,12 +814,13 @@ class ComprehensiveSynthesisEngine:
                 answer = restore_in_scope(answer)
         except Exception as e:
             logger.exception("synthesis LLM call failed: %s", e)
-            return SynthesisResponse(
-                answer=DEGRADED_MESSAGE_LLM_UNAVAILABLE, source=RESULT_SOURCE_DEGRADED,
-                tokens=0, tokens_used_today=budget.tokens_used, tokens_cap=budget.tokens_cap,
-                elapsed_ms=int((time.monotonic() - t0) * 1000),
-                plan=plan, factbook_text=factbook.to_prompt_text(),
-                dimension_coverage=factbook.dimension_coverage(),
+            return self._deterministic_fallback_response(
+                factbook,
+                plan,
+                insight_summary,
+                budget,
+                t0,
+                reason="叙述模型暂时不可用",
             )
 
         # 7. Grounding hard-check (backfill真值 + flag fabricated names).
@@ -1863,6 +1872,83 @@ class ComprehensiveSynthesisEngine:
             lines.append("")
             lines.append("缺失维度当前保持为空，不按 0 处理，也不参与原因判断。")
         return "\n".join(lines)
+
+    def _deterministic_fallback_response(
+        self,
+        factbook: FactBook,
+        plan: Dict[str, Any],
+        insight_summary: str,
+        budget: Any,
+        started_at: float,
+        *,
+        reason: str,
+    ) -> SynthesisResponse:
+        """Return fresh grounded analysis even when no narrative LLM can answer.
+
+        FactBook and InsightDimensionAnalyzer are deterministic DB-backed
+        outputs.  Dropping them because only the prose layer is unavailable
+        turns a partial dependency outage into a false "no analysis" outage.
+        This renderer keeps every available dimension, explicitly leaves
+        missing dimensions blank, and exposes the same charts/alerts.
+        """
+        rendered_lines = []
+        for line in factbook.to_prompt_lines():
+            if line == "## 诚实标注（必须在回答中遵守）":
+                rendered_lines.append("## 数据口径与限制")
+            else:
+                rendered_lines.append(line)
+
+        sections = [
+            "### 核心结论",
+            f"{reason}，以下仍是按当前数据库实时汇总完成的确定性多维分析。"
+            "已有维度照常展示，缺失维度保持为空，不会按 0 或相邻指标替代。",
+        ]
+        if insight_summary:
+            sections.extend([
+                "",
+                "### 确定性计算发现",
+                insight_summary,
+            ])
+        if rendered_lines:
+            sections.extend([
+                "",
+                "### 分维度数据与覆盖情况",
+                "\n".join(rendered_lines),
+            ])
+
+        if factbook.available_dimensions:
+            sections.extend([
+                "",
+                "### 当前可执行的决策步骤",
+                "1. 先复核上面明确显示的落后门店、时段或菜品，负责人当天核对同口径账单、"
+                "排班和成本记录，次日用同一指标复查。",
+                "2. 活动、天气、竞品和评价只有在本轮列为已有数据且具备可比基线时才参与判断；"
+                "仅有相关信号时不宣称因果。",
+                "3. 按缺失维度清单补齐数据后重跑同一分析，再决定调价、下架、活动或排班等操作。",
+            ])
+        else:
+            sections.extend([
+                "",
+                "### 下一步",
+                "当前没有足够的已接入维度形成经营结论；请先按缺失维度清单补齐数据后再做决策。",
+            ])
+
+        charts = self.collect_charts(factbook, plan)
+        alerts = self.collect_alerts(factbook)
+        return SynthesisResponse(
+            answer="\n".join(sections),
+            source=RESULT_SOURCE_DETERMINISTIC,
+            tokens=0,
+            tokens_used_today=budget.tokens_used,
+            tokens_cap=budget.tokens_cap,
+            elapsed_ms=int((time.monotonic() - started_at) * 1000),
+            charts=charts,
+            alerts=alerts,
+            plan=plan,
+            factbook_text=factbook.to_prompt_text(),
+            insight_summary=insight_summary,
+            dimension_coverage=factbook.dimension_coverage(),
+        )
 
     # =====================================================================
     # Step 4: LLM grounded narrative
