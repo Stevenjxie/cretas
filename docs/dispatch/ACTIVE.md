@@ -5,7 +5,6 @@
 
 ## 在飞任务
 
-- `BUG-PYTHON311-FASTAPI-COMPAT-002` — `review` — Owner: `/root` — Base SHA: `89c27a5e1355f6b1d947de87e1c7e00daa7d9f18` — Worktree: `C:\Users\Steve\cretas-python311-compat-fix` — Scope lock: `backend/python/requirements.txt`、`scripts/deploy/deploy-smartbi-python.sh`、`scripts/tests/test-smartbi-python-deploy-acceleration.sh`、必要的同域 Python 发布/路由兼容测试、`docs/dispatch/ACTIVE.md` 与当日归档；Python 3.11 首次切换后发现 FastAPI 0.140.0 / Starlette 1.3.1 与现有 Prometheus instrumentator 5.11.2 不兼容，导致 classifier 业务路由 500，已原子回滚到 `venv38` 并恢复 200。修复要求锁定线上已验证的 FastAPI/Starlette 组合，将真实 classifier 路由加入部署前冒烟，重新构建/验证 `venv311` 后再走 PR、exact-main 发布和生产验收；禁止覆盖 `.env`，生产业务写入为 0。
 - `SEC-CREDENTIAL-ROTATION-20260719` — `blocked` — Owner: Codex coordinator — Base SHA: `1ba9a241a77144a80851051efbac584abf4db69d` — tracked tree、47/139 非受控副本、数据库/JWT/internal/BaoTa 轮换和生产验收已完成；仍需各供应商控制台吊销无法由当前 API 权限完成的旧长期凭证，详情见 [凭证轮换收尾记录](../security/credential-rotation-closeout-2026-07-20.md)。
 - `ENH-F006-SUPPLIER-IMPORT-001`（含 `REQ-F006-SUPPLIER-REQUIRED-CONTACT-001`、`ENH-F006-SUPPLIER-DETAIL-STATUS-001`）— `in-progress` — Owner: `/root` — Base SHA: `3ddf6751603476205457fcf8aa0ee9f1adbea792` — 复用现有供应链 Excel 共享能力，统一供应商必填资料、导入预览/幂等确认、状态生命周期、采购门禁与详情信息架构；只合入 `main`，严格 `NOT_DEPLOYED`，生产业务写入为 0。
 - `BUG-F006-MATERIAL-CATEGORY-CASCADE-001`（含 `BUG-F006-MATERIAL-AUTOFILL-UNIT-001`）— `in-progress` — Owner: `/root` — Base SHA: `3ddf6751603476205457fcf8aa0ee9f1adbea792` — 修复原料类型字典 category/L1/L2/L3 单一真值、异步级联与单位建议来源/手动覆盖语义，后端 fail-closed 校验；只合入 `main`，严格 `NOT_DEPLOYED`，生产业务写入为 0。
