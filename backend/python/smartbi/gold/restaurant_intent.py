@@ -1318,16 +1318,26 @@ async def _apply_store_scope_guard(
     )
     try:
         async with pool.acquire() as conn:
-            rows = await conn.fetch(
-                """
-                SELECT name
-                  FROM dim_store
-                 WHERE factory_id = $1
-                 ORDER BY name
-                 LIMIT 9
-                """,
-                data_factory,
-            )
+            # Demo tenants can read from a deterministic data tenant.  The
+            # pool setup callback scoped this connection to the login tenant,
+            # so querying the mapped factory id without overriding the RLS GUC
+            # silently returns zero rows.  Keep the override transaction-local
+            # so it cannot leak into the next borrower of this connection.
+            async with conn.transaction():
+                await conn.execute(
+                    "SELECT set_config('app.factory_id', $1, true)",
+                    data_factory,
+                )
+                rows = await conn.fetch(
+                    """
+                    SELECT name
+                      FROM dim_store
+                     WHERE factory_id = $1
+                     ORDER BY name
+                     LIMIT 9
+                    """,
+                    data_factory,
+                )
     except Exception as exc:
         logger.warning("[restaurant-intent] store-scope gate unavailable: %s", exc)
         # Scope enrichment must not invalidate an otherwise sealed query plan

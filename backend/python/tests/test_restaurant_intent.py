@@ -1699,8 +1699,24 @@ def test_ranking_followup_inherits_window_store_scope_and_exclusions():
 class _StoreScopeConn:
     def __init__(self, names):
         self.names = names
+        self.rls_factory_id = None
+        self.fetched_factory_id = None
 
-    async def fetch(self, _sql, _factory_id):
+    def transaction(self):
+        class _Ctx:
+            async def __aenter__(self):
+                return None
+
+            async def __aexit__(self, *args):
+                return False
+
+        return _Ctx()
+
+    async def execute(self, _sql, factory_id):
+        self.rls_factory_id = factory_id
+
+    async def fetch(self, _sql, factory_id):
+        self.fetched_factory_id = factory_id
         return [{"name": name} for name in self.names]
 
 
@@ -1723,6 +1739,7 @@ class _StoreScopePool:
 
 @pytest.mark.asyncio
 async def test_multi_store_tenant_requires_explicit_scope():
+    pool = _StoreScopePool(["东城店", "西城店", "南城店"])
     spec = _build_spec(
         "RESTAURANT_OPS_GROSS_MARGIN",
         "本月销量最高的5道菜是什么",
@@ -1731,7 +1748,7 @@ async def test_multi_store_tenant_requires_explicit_scope():
     )
 
     guarded = await _apply_store_scope_guard(
-        _StoreScopePool(["东城店", "西城店", "南城店"]),
+        pool,
         "FACTORY_A",
         spec,
     )
@@ -1740,6 +1757,26 @@ async def test_multi_store_tenant_requires_explicit_scope():
     assert guarded.clarification_needed is True
     assert guarded.clarification_question == STORE_SCOPE_CLARIFICATION_QUESTION
     assert guarded.store_options == ("东城店", "西城店", "南城店")
+    assert pool.conn.rls_factory_id == "FACTORY_A"
+    assert pool.conn.fetched_factory_id == "FACTORY_A"
+
+
+@pytest.mark.asyncio
+async def test_demo_multi_store_guard_scopes_rls_to_mapped_data_factory():
+    pool = _StoreScopePool(["东城店", "西城店"])
+    spec = _build_spec(
+        "RESTAURANT_OPS_GROSS_MARGIN",
+        "本月销量最高的5道菜是什么",
+        confidence=0.95,
+        tier="llm",
+    )
+
+    guarded = await _apply_store_scope_guard(pool, "DEMO_REST", spec)
+
+    assert guarded is not None
+    assert guarded.clarification_needed is True
+    assert pool.conn.rls_factory_id == "RES_3101_009"
+    assert pool.conn.fetched_factory_id == "RES_3101_009"
 
 
 @pytest.mark.asyncio
