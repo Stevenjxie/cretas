@@ -87,12 +87,15 @@ def test_chains_deduped():
         assert len(chain) == len(set(chain)), f"{slot.value} chain has duplicates"
 
 
-def test_mapper_places_verified_healthy_max_before_expired_or_slow_tail():
+def test_mapper_places_verified_healthy_low_cost_model_before_max_tail():
     chain = llm_router.SLOT_MODELS[SLOT.MAPPER]
     assert chain[:2] == [
         ("aliyun_c", "qwen3.6-flash-2026-04-16"),
-        ("aliyun_c", "qwen3.7-max-2026-06-08"),
+        ("aliyun_c", "glm-5.2"),
     ]
+    assert chain.index(("aliyun_c", "glm-5.2")) < chain.index(
+        ("aliyun_c", "qwen3.7-max-2026-06-08")
+    )
 
 
 def test_vl_chain_is_vision_only():
