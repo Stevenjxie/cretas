@@ -405,6 +405,13 @@ if ! "$VENV_PYTHON" -c 'import sys; sys.path.insert(0, "."); import main' 2>&1; 
 fi
 echo "[Import smoke] OK — main.py + all routers import successfully"
 
+echo "[Route smoke] checking classifier route through the full middleware stack..."
+if ! "$VENV_PYTHON" -c 'from fastapi.testclient import TestClient; import main; response = TestClient(main.app, raise_server_exceptions=False).get("/api/classifier/health"); assert response.status_code == 200, (response.status_code, response.text); payload = response.json(); assert payload.get("status") in {"healthy", "degraded"}, payload' 2>&1; then
+    echo "[ERROR] classifier route smoke FAILED — aborting deploy BEFORE restart" >&2
+    exit 1
+fi
+echo "[Route smoke] OK — classifier route and Prometheus middleware are compatible"
+
 echo "[Torch smoke] checking CPU-only inference runtime..."
 if ! "$VENV_PYTHON" -c 'import torch; assert torch.__version__.startswith("2.4.1+cpu"), torch.__version__; assert not torch.cuda.is_available(); assert torch.tensor([1.0, 2.0]).sum().item() == 3.0' 2>&1; then
     echo "[ERROR] CPU-only Torch smoke FAILED — aborting deploy BEFORE restart" >&2

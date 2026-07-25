@@ -16,10 +16,16 @@ grep -Fq 'pip check' "$DEPLOY_SCRIPT" || fail "pip consistency check missing"
 grep -Fq 'python3.11' "$DEPLOY_SCRIPT" || fail "Python 3.11 runtime contract missing"
 grep -Fq 'venv-current' "$DEPLOY_SCRIPT" || fail "atomic runtime selector missing"
 grep -Fq 'rollback_prod_runtime' "$DEPLOY_SCRIPT" || fail "production runtime rollback missing"
+grep -Fq '/api/classifier/health' "$DEPLOY_SCRIPT" \
+    || fail "classifier middleware route smoke missing"
 grep -Fq 'https://mirrors.aliyun.com/pypi/simple' "$DEPLOY_SCRIPT" \
     || fail "approved production PyPI mirror missing"
 grep -Fq -- '--extra-index-url https://download.pytorch.org/whl/cpu' "$REQUIREMENTS" \
     || fail "official PyTorch CPU wheel index missing"
+grep -Fq 'fastapi==0.124.4' "$REQUIREMENTS" \
+    || fail "production-proven FastAPI version is not pinned"
+grep -Fq 'starlette==0.44.0' "$REQUIREMENTS" \
+    || fail "production-proven Starlette version is not pinned"
 grep -Fq 'torch==2.4.1+cpu ; python_version >= "3.8"' "$REQUIREMENTS" \
     || fail "Python 3.11 CPU Torch contract missing"
 for runtime_file in \
@@ -66,6 +72,12 @@ elif [[ "${1:-}" == "-m" && "${2:-}" == "pip" && "${3:-}" == "install" ]]; then
     fi
 elif [[ "${1:-}" == "-c" && "${2:-}" == *"platform.python_implementation"* ]]; then
     echo "CPython-3.11.13-mock-venv"
+elif [[ "${1:-}" == "-c" && "${2:-}" == *"/api/classifier/health"* ]]; then
+    if [[ "${MOCK_CLASSIFIER_FAIL:-0}" == "1" ]]; then
+        echo "mock classifier middleware failure" >&2
+        exit 17
+    fi
+    echo "mock classifier route OK"
 elif [[ "${1:-}" == "-c" && "${2:-}" == *"import main"* ]]; then
     echo "mock import OK"
 elif [[ "${1:-}" == "-c" && "${2:-}" == *"import torch"* ]]; then
@@ -94,6 +106,16 @@ SECOND_OUTPUT="$(bash "$REMOTE_BODY" "$REMOTE_DIR" python3.11 venv311 https://mi
 grep -Fq '[Dependencies] cache hit - skipping pip install' <<< "$SECOND_OUTPUT" || fail "second run should hit"
 SECOND_INSTALLS="$(wc -l < "$MOCK_LOG" | tr -d ' ')"
 [[ "$SECOND_INSTALLS" == "$FIRST_INSTALLS" ]] || fail "cache hit ran pip install"
+
+set +e
+MOCK_CLASSIFIER_FAIL=1 bash "$REMOTE_BODY" \
+    "$REMOTE_DIR" python3.11 venv311 https://mirrors.aliyun.com/pypi/simple \
+    > "$TMP_DIR/classifier-failure.log" 2>&1
+classifier_status=$?
+set -e
+[[ "$classifier_status" -ne 0 ]] || fail "classifier route regression did not abort deploy"
+grep -Fq 'classifier route smoke FAILED' "$TMP_DIR/classifier-failure.log" \
+    || fail "classifier route failure was not reported"
 
 printf 'cryptography==41.0.0\n' > "$MOCK_STATE"
 THIRD_OUTPUT="$(bash "$REMOTE_BODY" "$REMOTE_DIR" python3.11 venv311 https://mirrors.aliyun.com/pypi/simple)"
