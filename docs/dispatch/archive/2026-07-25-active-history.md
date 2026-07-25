@@ -79,3 +79,15 @@
 - 验证：Python 餐饮目标回归 573 通过（本机缺少旧 `smart_bi_chat_session` 测试表的 6 个数据库 fixture 明确排除）、21 维综合分析 25 通过、Java 老板动作路由 4 通过；`compileall`、增量 Ruff、`git diff --check` 与远端 tracked-secret-scan 通过。
 - 发布：用户已明确授权合并后从 clean exact `origin/main` 发布 Java/Python；部署必须复核真实 upstream、Python `postgres=connected`、classifier、systemd/端口和餐饮只读语义，生产业务写入必须为 0。
 - Scope 锁已释放。
+
+## `BUG-RESTAURANT-AI-ALL-STORE-DISH-RANKING-HOTFIX-20260725` — `merged`
+
+- Owner: `/root`
+- Base SHA: `3832ab5ecebd89804cf20a49b9d77621588464c6`
+- 合入：PR #1764；实现提交 `2e27c900a`。
+- 生产证据：PR #1763 部署后只读语义 smoke 中，精确问句“本月全部门店销量最高的5道菜是什么？请排除米饭、餐巾纸、湿纸巾和餐具”进入 `RESTAURANT_OPS_GROSS_MARGIN`，但错误返回“菜品毛利分析”。
+- 根因：`dish_ranking_direction()` 把任何“门店”词都当作门店排行并提前返回空；QuerySpec 已正确识别的菜品销量排行方向在 resolver 被二次抹掉。
+- 修复：门店词只表达 scope；显式菜品/单品/产品名词与销量最高/最低继续产生菜品排行方向。真正的门店营收/业绩排行因没有菜品名词仍保持原路径。
+- 验证：精确生产问句执行级回归通过；Python 餐饮目标回归 574 通过（同一 6 个本机数据库 fixture 明确排除），`compileall`、增量 Ruff、`git diff --check` 和远端 tracked-secret-scan 通过。
+- 发布：合并后仅从 clean exact `origin/main` 重发 Python，并复测同一句、时间按钮与后续倒数排行；生产业务写入为 0。
+- Scope 锁已释放。

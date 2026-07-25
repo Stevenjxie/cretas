@@ -346,12 +346,15 @@ _EXPLICIT_RANKING_EXCLUSION_RE = re.compile(
 
 
 def dish_ranking_direction(query: "Optional[str]") -> "Optional[str]":
-    """「哪道菜卖得最差/最好」→ 'worst'/'best'; 门店排名/无菜品词 → None。"""
+    """「哪道菜卖得最差/最好」→ ``worst``/``best``.
+
+    Store words are scope, not a competing metric: both "全部门店销量最高的
+    5 道菜" and "东城店销量最低的菜" are dish rankings.  A real store-ranking
+    question still returns ``None`` because it has no dish/product noun.
+    """
     if not query:
         return None
     q = query.strip()
-    if any(tok in q for tok in ("门店", "分店", "店铺", "哪家店", "哪个店", "业绩")):
-        return None
     if not any(tok in q for tok in ("菜", "单品", "产品")):
         return None
     if _DISH_RANK_WORST_RE.search(q):

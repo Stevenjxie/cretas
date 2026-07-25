@@ -1784,6 +1784,27 @@ def test_dish_ranking_applies_user_limit_and_exclusions_in_execution():
     assert "藤椒味双人份" in result.answer_text
 
 
+def test_all_store_scope_does_not_disable_dish_ranking_execution():
+    query = "本月全部门店销量最高的5道菜是什么？请排除米饭、餐巾纸、湿纸巾和餐具"
+
+    assert _r.dish_ranking_direction(query) == "best"
+    assert _r.dish_ranking_direction("本月哪家门店营收最高") is None
+
+    result = asyncio.run(_r.resolve_gross_margin(
+        _gross_margin_pool(_dish_rows()),
+        "RES_TEST",
+        role="restaurant_manager",
+        query=query,
+    ))
+
+    assert result.meta["dish_ranking"] == "best"
+    assert result.meta["ranking_limit"] == 5
+    assert result.meta["excluded_entities"] == ["米饭", "餐巾纸", "湿纸巾", "餐具"]
+    assert "菜品销量排行" in result.answer_text
+    assert "菜品毛利分析" not in result.answer_text
+    assert "米饭(单人份)" not in result.answer_text
+
+
 def test_dish_ranking_does_not_restore_excluded_rows_when_all_are_noise():
     rows = [
         {
