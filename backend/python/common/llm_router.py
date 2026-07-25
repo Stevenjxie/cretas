@@ -637,8 +637,13 @@ SLOT_MODELS: Dict[SLOT, List[Tuple[str, str]]] = {
     # 2026-07-23 控制台实测: 头部换 c/qwen3.6-flash-2026-04-16 (剩44.7万,
     # 08-13) — 原头 a/qwen3.6-flash、b/qwen-flash 已过期, c/qwen3.5-flash
     # 额度耗尽 (留链尾靠 403 直落, 万一月度重置还能自愈)。
+    # 2026-07-26 生产事故: 该头部随后也返回 403，深链中的多个慢模型先吃完
+    # 7.5s 总预算，导致启动预热已验证 200 的 c/qwen3.7-max 永远不可达。
+    # 将它提升为第二候选：头部额度恢复时仍优先使用 flash；额度耗尽时则
+    # 立即落到健康 max，不再穿过已过期/慢超时的长链。
     SLOT.MAPPER: _dedup_chain([
         ("aliyun_c", "qwen3.6-flash-2026-04-16"),
+        ("aliyun_c", "qwen3.7-max-2026-06-08"),
         ("aliyun_a", "qwen3.6-flash"), ("aliyun_b", "qwen-flash"),
         ("aliyun_c", "qwen3.5-flash"), ("aliyun_c", "qwen3-coder-flash"),
         ("tencent", "qwen3.5-flash"),
@@ -885,6 +890,52 @@ def _normalize_payload_for_provider(payload: Dict[str, Any], account: str) -> Di
     return {**payload}
 
 
+_BUDGET_AWARE_FAST_SLOTS = frozenset({SLOT.CHAT, SLOT.CHART, SLOT.MAPPER})
+_FAST_SLOT_RESERVE_RATIO = 0.40
+_FAST_SLOT_RESERVE_CAP_SECONDS = 1.0
+_MIN_ATTEMPT_TIMEOUT_SECONDS = 0.05
+
+
+def _has_callable_fallback(
+    slot_chain: List[Tuple[str, str]],
+    start_index: int,
+) -> bool:
+    """Whether a later candidate can pass every local pre-request gate."""
+    for account, model in slot_chain[start_index:]:
+        if (
+            model
+            and _refuse_reason(account, model) is None
+            and not _cb_should_skip(f"{account}/{model}")
+            and not _quota_should_skip(f"{account}/{model}")
+            and bool(_provider_config(account)[1])
+        ):
+            return True
+    return False
+
+
+def _budgeted_attempt_timeout(
+    slot: SLOT,
+    per_provider_timeout: float,
+    remaining: Optional[float],
+    *,
+    has_callable_fallback: bool,
+) -> float:
+    """Reserve part of an interactive deadline for a later healthy candidate."""
+    if remaining is None:
+        return per_provider_timeout
+    usable = max(_MIN_ATTEMPT_TIMEOUT_SECONDS, remaining)
+    if slot not in _BUDGET_AWARE_FAST_SLOTS or not has_callable_fallback:
+        return min(per_provider_timeout, usable)
+    reserve = min(
+        _FAST_SLOT_RESERVE_CAP_SECONDS,
+        usable * _FAST_SLOT_RESERVE_RATIO,
+    )
+    return min(
+        per_provider_timeout,
+        max(_MIN_ATTEMPT_TIMEOUT_SECONDS, usable - reserve),
+    )
+
+
 async def call_chain(
     slot: SLOT,
     payload: Dict[str, Any],
@@ -922,7 +973,7 @@ async def call_chain(
         else None
     )
 
-    for account, model in slot_chain:
+    for candidate_index, (account, model) in enumerate(slot_chain):
         remaining = deadline - time.monotonic() if deadline is not None else None
         if remaining is not None and remaining <= 0:
             errors.append("chain: total_timeout")
@@ -979,10 +1030,14 @@ async def call_chain(
 
         try:
             logger.debug(f"[llm_router] slot={slot.value} try {account}/{model}")
-            request_timeout = (
-                min(timeout, max(0.05, remaining))
-                if remaining is not None
-                else timeout
+            request_timeout = _budgeted_attempt_timeout(
+                slot,
+                timeout,
+                remaining,
+                has_callable_fallback=_has_callable_fallback(
+                    slot_chain,
+                    candidate_index + 1,
+                ),
             )
             # Apr 28 2026 (post-review P1, then reviewer round 2 correction):
             # API consistency only — bare `timeout=timeout` and

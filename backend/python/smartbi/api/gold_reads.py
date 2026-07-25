@@ -1192,6 +1192,7 @@ async def post_restaurant_tiered_answer(
             pool,
             factory_id=fid,
             session_key=clarification_session_key,
+            trusted_followup_context=inherited_context,
         )
         if not inherited_context and not should_delegate(spec, body.java_tool_name, query=effective_query):
             asyncio.create_task(log_intent_miss(

@@ -144,6 +144,8 @@ async def test_reviewed_exact_missing_time_returns_the_four_expected_buttons():
     "llm_contract_repair",
     "validated_plan_cache_contract_repair",
     "promoted_exact_contract_repair",
+    "trusted_context",
+    "trusted_context_contract_repair",
 ])
 def test_should_delegate_contract_repair_without_java_reinterpretation(authority):
     spec = _spec(
@@ -827,6 +829,7 @@ async def test_endpoint_dependent_followup_uses_trusted_context_and_session_key(
     assert result["delegate"] is True
     assert parse_calls[0][0] == "上个月营收为什么是这样"
     assert "继续追问" not in parse_calls[0][0]
+    assert parse_calls[0][2]["trusted_followup_context"] is True
     session_key = parse_calls[0][2]["session_key"]
     assert session_key.startswith("trusted-v1:")
     assert "shared-device-session" not in session_key
