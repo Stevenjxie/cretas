@@ -5,9 +5,8 @@
 # 2026-07-23 飞轮日报: 评测后追加晋升候选 (--list) 与 miss 复盘 (--misses)
 # 报告到本日志; 有待人审条目时各追加一行 alerts (报告失败不影响 eval rc —
 # 报告是 best-effort, 评测是硬门)。
-# ⚠️ 本文件 + scripts/restaurant-intent-promote.py 不被 deploy-smartbi-python
-# 同步 (它只 rsync backend/python) — 改动后需手动 scp 到
-# /www/wwwroot/cretas/code/ 对应路径。
+# 本文件由 deploy-smartbi-python 同步到服务器；运行时通过 venv-current
+# 原子链接切换，避免定时任务与主服务使用不同 Python。
 set -uo pipefail
 
 PYDIR=/www/wwwroot/cretas/code/backend/python
@@ -19,7 +18,7 @@ ALERTS=/www/wwwroot/cretas/logs/restaurant-ai-eval-alerts.log
   echo "=== $(date '+%F %T') restaurant AI eval ==="
   cd "$PYDIR"
   # shellcheck disable=SC1091
-  source "$PYDIR/venv38/bin/activate"
+  source "$PYDIR/venv-current/bin/activate"
   PYTHONIOENCODING=utf-8 python -X utf8 -m smartbi.scripts.restaurant_ai_eval \
     --base https://admin.cretaceousfuture.com
   rc=$?

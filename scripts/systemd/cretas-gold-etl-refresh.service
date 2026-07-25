@@ -22,7 +22,7 @@ EnvironmentFile=/www/wwwroot/cretas/.env.prod
 
 WorkingDirectory=/www/wwwroot/cretas/code/backend/python
 
-ExecStart=/www/wwwroot/cretas/code/backend/python/venv38/bin/python \
+ExecStart=/www/wwwroot/cretas/code/backend/python/venv-current/bin/python \
     -m scripts.gold_etl_daily_refresh
 
 # Log to journal under tag cretas-gold-etl-refresh
