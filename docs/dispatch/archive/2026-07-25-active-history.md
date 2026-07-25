@@ -137,3 +137,14 @@
 - 验证：餐饮 intent/router/service 目标回归 542 通过；扩大餐饮套件 830 通过，另有 1 个与本次无关的既有 owner-action 测试替身签名失败；`compileall`、增量 Ruff、`git diff --check` 与远端 tracked-secret-scan 通过。
 - 发布：Python 生产发布与真实 Demo 三轮按钮、上下文横幅、字号字重及零业务写入验收在 exact `origin/main` 上继续执行。
 - Scope 锁已释放。
+
+## `BUG-RESTAURANT-AI-GENERIC-STORE-SCOPE-TOKEN-20260725` — `merged`
+
+- Owner: `/root`
+- Base SHA: `8bad93291b43bab9ebb298784f334a424fa65735`
+- 合入：PR #1770；实现提交 `3fff7342f`，squash merge `b6a37824e`。
+- 生产复现：“最近7天全部门店哪个菜卖得好”被门店实体提取器解析为具体门店“7天全部门店”，导致全店销量问题错误进入单店不存在文案。
+- 修复：任何包含“全部门店 / 所有门店 / 各门店 / 每家店 / 全店”等范围片段的候选均不得晋升为具体门店实体；时间、区域前缀粘连仍保持全店聚合，真实具名门店和多店提取不变。
+- 验证：餐饮 intent/router/service 目标回归 546 通过；`compileall`、增量 Ruff、`git diff --check` 与远端 tracked-secret-scan 通过。
+- 发布：Python 生产发布与真实 Demo 一句式全店排行、标题/第一名字重及零业务写入验收在 exact `origin/main` 上继续执行。
+- Scope 锁已释放。
