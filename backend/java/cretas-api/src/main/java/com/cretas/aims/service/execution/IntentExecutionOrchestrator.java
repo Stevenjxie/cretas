@@ -2754,7 +2754,8 @@ public class IntentExecutionOrchestrator {
         String normalizedInput = userInput.toLowerCase(Locale.ROOT);
         if (isPureRestaurantReviewRemedyQuestion(normalizedInput)
                 || isPlainRestaurantReadQuestion(normalizedInput)
-                || isRestaurantAnalyticalReadQuestion(normalizedInput)) {
+                || isRestaurantAnalyticalReadQuestion(normalizedInput)
+                || isRestaurantBusinessMutationRequest(normalizedInput)) {
             return false;
         }
         // R20: 纯外部信息闲聊 ("今天天气怎么样") 不进 owner-action — 该路径
@@ -2891,10 +2892,26 @@ public class IntentExecutionOrchestrator {
         boolean hasMetric = containsAny(input,
                 "营收", "营业额", "营业收入", "销售额", "销售收入", "流水",
                 "毛利", "毛利率", "净利润", "净利率", "净利润率",
-                "订单", "单量", "客单价", "经营情况");
+                "订单", "单量", "客单价", "经营情况",
+                "销量", "销售量", "菜品销量", "菜品排行", "菜品排名");
         boolean asksForResult = containsAny(input,
-                "给出", "告诉", "多少", "情况", "怎么样", "如何", "查询", "看一下", "分析");
+                "给出", "告诉", "多少", "情况", "怎么样", "如何", "查询", "看一下", "分析",
+                "什么", "哪些", "哪道", "最高", "最低", "最好", "最差", "排名", "排行", "前");
         return hasPeriod && hasMetric && asksForResult;
+    }
+
+    /**
+     * Actual menu mutations belong to the governed WRITE intent flow, never to
+     * the read-only owner-advice conversation.  In particular, a stale
+     * ownerActionSessionId must not turn "删除/下架菜品" into advisory chat.
+     */
+    private boolean isRestaurantBusinessMutationRequest(String input) {
+        boolean hasBusinessObject = containsAny(input,
+                "菜品", "菜单", "单品", "套餐", "门店", "店铺");
+        boolean hasMutation = containsAny(input,
+                "删除", "移除", "新增", "新建", "创建", "修改", "更新",
+                "上架", "下架", "调价", "改价", "停用", "启用");
+        return hasBusinessObject && hasMutation;
     }
 
     private boolean isExplicitRestaurantSalesPeriodComparison(String input) {

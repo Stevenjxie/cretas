@@ -49,6 +49,12 @@ def test_compact_structured_context_whitelists_focus_entity():
         "requested_metrics": ["sales_volume", "drop-me"],
         "analysis_action": "lookup",
         "topic_kind": "dish_ranking",
+        "ranking_direction": "best",
+        "ranking_limit": 5,
+        "excluded_entities": ["米饭", "餐巾纸", "drop-me" * 20],
+        "store_scope": "multiple",
+        "store_names": ["东城店", "西城店"],
+        "compare_stores": True,
         "extra": "drop-me",
     })
 
@@ -65,6 +71,12 @@ def test_compact_structured_context_whitelists_focus_entity():
         "requested_metrics": ["sales_volume"],
         "analysis_action": "lookup",
         "topic_kind": "dish_ranking",
+        "ranking_direction": "best",
+        "ranking_limit": 5,
+        "excluded_entities": ["米饭", "餐巾纸"],
+        "store_scope": "multiple",
+        "store_names": ["东城店", "西城店"],
+        "compare_stores": True,
     }
 
 

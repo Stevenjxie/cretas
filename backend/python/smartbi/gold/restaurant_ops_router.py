@@ -327,10 +327,21 @@ def _primary_dish_ranking_exclusion_reason(row: Any) -> Optional[str]:
     return None
 _DISH_RANK_WORST_RE = re.compile(
     r"卖得最差|卖得不好|最难卖|卖不动|销量最低|销量垫底|最不受欢迎|最滞销"
-    r"|没人点|无人点|没有人点|点得最少|没什么人点"
+    r"|没人点|无人点|没有人点|点得最少|没什么人点|倒数(?:第)?[一二三四五六七八九十\d]*名"
 )
 _DISH_RANK_BEST_RE = re.compile(
     r"卖得最好|最好卖|最畅销|畅销(?:菜品|菜|单品|产品)?|销量最高|最受欢迎|卖得好"
+)
+_RANK_LIMIT_RE = re.compile(
+    r"(?:前|后|倒数)?\s*([一二三四五六七八九十\d]{1,3})\s*(?:名|道菜|个菜|款菜|个单品)"
+    r"|(?:最高|最低|最好|最差)的?\s*([一二三四五六七八九十\d]{1,3})\s*(?:道菜|个菜|款菜|个单品)"
+)
+_CHINESE_RANK_NUMBERS = {
+    "一": 1, "二": 2, "两": 2, "三": 3, "四": 4, "五": 5,
+    "六": 6, "七": 7, "八": 8, "九": 9, "十": 10,
+}
+_EXPLICIT_RANKING_EXCLUSION_RE = re.compile(
+    r"(?:排除|剔除|去掉|不含|不要算)([^。！？?；;]{1,80})"
 )
 
 
@@ -348,6 +359,56 @@ def dish_ranking_direction(query: "Optional[str]") -> "Optional[str]":
     if _DISH_RANK_BEST_RE.search(q):
         return "best"
     return None
+
+
+def ranking_limit(query: "Optional[str]", default: int = 5) -> int:
+    """Extract a bounded Top-N/Bottom-N request; keep legacy default at five."""
+    if not query:
+        return default
+    match = _RANK_LIMIT_RE.search(query)
+    if not match:
+        return default
+    token = next((value for value in match.groups() if value), "")
+    try:
+        value = int(token)
+    except (TypeError, ValueError):
+        if token in _CHINESE_RANK_NUMBERS:
+            value = _CHINESE_RANK_NUMBERS[token]
+        elif token.endswith("十") and len(token) == 2:
+            value = _CHINESE_RANK_NUMBERS.get(token[0], 1) * 10
+        elif token.startswith("十") and len(token) == 2:
+            value = 10 + _CHINESE_RANK_NUMBERS.get(token[1], 0)
+        elif len(token) == 3 and token[1] == "十":
+            value = (
+                _CHINESE_RANK_NUMBERS.get(token[0], 0) * 10
+                + _CHINESE_RANK_NUMBERS.get(token[2], 0)
+            )
+        else:
+            value = default
+    return max(1, min(value, 20))
+
+
+def ranking_exclusions(query: "Optional[str]") -> list[str]:
+    """Return explicit user exclusions without treating them as advice verbs."""
+    if not query:
+        return []
+    match = _EXPLICIT_RANKING_EXCLUSION_RE.search(query)
+    if not match:
+        return []
+    raw = re.sub(
+        r"(?:即可|就行|的数据|进行排名|参与排名|再排名|等附属项|等基础项)$",
+        "",
+        match.group(1).strip("：:，, "),
+    )
+    values = re.split(r"[、，,和与及]|以及", raw)
+    result: list[str] = []
+    for value in values:
+        item = value.strip(" ：:，,")
+        item = re.sub(r"^(?:和|与|以及)", "", item).strip()
+        item = re.sub(r"(?:这些)?(?:项目|商品|菜品|单品)$", "", item).strip()
+        if 1 <= len(item) <= 40 and item not in result:
+            result.append(item)
+    return result[:12]
 
 
 _CAPABILITY_RE = re.compile(
@@ -875,7 +936,7 @@ _STORE_MENTION_PREFIX_TRIM = re.compile(
     r"^(?:有没有|有无|是否有|是否|存不存在|是不是|会不会"
     r"|上个月|上月|本月|这个月|上周|本周|这周|今天|昨天|今年|去年|最近"
     r"|请|帮我|帮忙|查一下|查查|查询|查|看看|看一下|看|分析一下|分析"
-    r"|对比|比较|了解|统计|计算|那|这|把|给|在|的|和|与|跟|是|说说|讲讲)+"
+    r"|对比|比较|了解|统计|计算|那|这|把|给|在|的|是|说说|讲讲)+"
 )
 
 
@@ -909,21 +970,38 @@ def demo_data_factory_for_code(
     return factory_id
 
 
-def extract_store_mention(query: Optional[str]) -> Optional[str]:
-    """Pull an explicit store-name mention out of free text, or None."""
+def extract_store_mentions(query: Optional[str]) -> list[str]:
+    """Pull one or more explicit store names from free text."""
     if not query:
-        return None
-    for match in _STORE_MENTION_RE.finditer(query):
-        candidate = _STORE_MENTION_PREFIX_TRIM.sub("", match.group(0))
-        if len(candidate) < 3 or candidate in _STORE_MENTION_STOPWORDS:
-            continue
-        # 疑问词/排名词残留 ("上个月哪家店"/"客单价最高的店") 不是店名 (R20/R27)。
-        if any(tok in candidate for tok in ("哪家", "哪个", "哪些", "有没有",
-                                            "最高", "最低", "最好", "最差",
-                                            "排名", "排行", "客单价", "营收")):
-            continue
-        return candidate[:160]
-    return None
+        return []
+    mentions: list[str] = []
+    # Split connectors only after a completed store token.  A global split on
+    # "和" corrupts legitimate names such as "和平店".
+    normalized = re.sub(
+        r"(?<=店)[、，,和与跟及](?=[\u4e00-\u9fffA-Za-z0-9·]{1,24}(?:门店|店))",
+        " ",
+        query,
+    )
+    for segment in normalized.split():
+        for match in _STORE_MENTION_RE.finditer(segment):
+            candidate = _STORE_MENTION_PREFIX_TRIM.sub("", match.group(0))
+            if len(candidate) < 3 or candidate in _STORE_MENTION_STOPWORDS:
+                continue
+            # 疑问词/排名词残留 ("上个月哪家店"/"客单价最高的店") 不是店名 (R20/R27)。
+            if any(tok in candidate for tok in ("哪家", "哪个", "哪些", "有没有",
+                                                "最高", "最低", "最好", "最差",
+                                                "排名", "排行", "客单价", "营收")):
+                continue
+            candidate = candidate[:160]
+            if candidate not in mentions:
+                mentions.append(candidate)
+    return mentions[:8]
+
+
+def extract_store_mention(query: Optional[str]) -> Optional[str]:
+    """Compatibility wrapper returning the first explicit store name."""
+    mentions = extract_store_mentions(query)
+    return mentions[0] if mentions else None
 
 
 async def _canonicalize_store_mention(
@@ -1286,6 +1364,7 @@ def _aggregate_store_margin_entries(
             "store_id": row["store_id"],
             "name": row["store_name"],
             "revenue": 0.0,
+            "qty": 0.0,
             "revenue_with_cost": 0.0,
             "cost": 0.0,
             "bills": 0,
@@ -1294,6 +1373,7 @@ def _aggregate_store_margin_entries(
             "invalid_cost_dishes": 0,
         })
         store["revenue"] += revenue
+        store["qty"] += qty
         store["dishes"] += 1
         if invalid_cost:
             store["invalid_cost_dishes"] += 1
@@ -2246,10 +2326,21 @@ async def resolve_gross_margin(
         if not dish_scope_row and len(dish_candidates) < 2 else None
     )
     if ranking_direction:
+        requested_rank_limit = ranking_limit(query_text)
+        explicit_exclusions = ranking_exclusions(query_text)
         rankable_rows = []
         exclusion_reasons: Dict[str, int] = {}
         for row in pos_rows:
             reason = _primary_dish_ranking_exclusion_reason(row)
+            normalized_dish_name = re.sub(r"\s+", "", str(row.get("dish_name") or ""))
+            if (
+                not reason
+                and any(
+                    re.sub(r"\s+", "", excluded) == normalized_dish_name
+                    for excluded in explicit_exclusions
+                )
+            ):
+                reason = "user_excluded"
             if reason:
                 exclusion_reasons[reason] = exclusion_reasons.get(reason, 0) + 1
             else:
@@ -2268,6 +2359,8 @@ async def resolve_gross_margin(
                 charts=[], kpis=[],
                 meta={
                     "dish_ranking": ranking_direction,
+                    "ranking_limit": requested_rank_limit,
+                    "excluded_entities": explicit_exclusions,
                     "window_label": window_label,
                     "no_primary_dish_data": True,
                     "excluded_item_count": excluded,
@@ -2282,8 +2375,11 @@ async def resolve_gross_margin(
             reverse=(ranking_direction == "best"),
         )
         rank_label = "卖得最好" if ranking_direction == "best" else "卖得最差"
-        lines = [f"**{window_label}菜品销量排行（{rank_label}前 5）：**", ""]
-        for idx, r in enumerate(ranked[:5], 1):
+        lines = [
+            f"**{window_label}菜品销量排行（{rank_label}前 {requested_rank_limit}）：**",
+            "",
+        ]
+        for idx, r in enumerate(ranked[:requested_rank_limit], 1):
             dish_label = f"**{r['dish_name']}**" if idx == 1 else r["dish_name"]
             lines.append(
                 f"{idx}. {dish_label} — 销量 {float(r['total_qty'] or 0):,.0f} 份、"
@@ -2304,7 +2400,7 @@ async def resolve_gross_margin(
                 "name": row["dish_name"],
                 "rank": index,
             }
-            for index, row in enumerate(ranked[:5], 1)
+            for index, row in enumerate(ranked[:requested_rank_limit], 1)
         ]
         return OpsAnswer(
             code="RESTAURANT_OPS_GROSS_MARGIN",
@@ -2313,6 +2409,8 @@ async def resolve_gross_margin(
             charts=[], kpis=[],
             meta={
                 "dish_ranking": ranking_direction,
+                "ranking_limit": requested_rank_limit,
+                "excluded_entities": explicit_exclusions,
                 "window_label": window_label,
                 "excluded_item_count": excluded,
                 "excluded_item_reasons": exclusion_reasons,
@@ -2853,6 +2951,7 @@ async def resolve_store_margin(
     store_id: Optional[str] = None,
     store_name: Optional[str] = None,
     store_mention: Optional[str] = None,
+    store_mentions: Optional[List[str]] = None,
     dish_mention: Optional[str] = None,
 ) -> OpsAnswer:
     """Per-store gross margin: fact_pos_item × fact_pos_transaction.store_id
@@ -2876,7 +2975,38 @@ async def resolve_store_margin(
             kpis=[],
             meta={"rbac_masked": True},
         )
-    if store_mention and not store_id and not store_name:
+    selected_store_names: Optional[List[str]] = None
+    if store_mentions and not store_id and not store_name:
+        selected_store_names = []
+        for mention in store_mentions[:8]:
+            matched_names = await _canonicalize_store_mention(
+                smartbi_pool, factory_id, mention,
+            )
+            if len(matched_names) != 1:
+                detail = (
+                    f"匹配到：{'、'.join(matched_names[:3])}"
+                    if matched_names
+                    else "没有匹配到门店"
+                )
+                return OpsAnswer(
+                    code="RESTAURANT_OPS_STORE_MARGIN",
+                    title="请确认多家门店",
+                    answer_text=(
+                        f"「{mention}」{detail}。请使用门店完整名称重新选择；"
+                        "多家门店只有全部名称唯一匹配后才会执行比较。"
+                    ),
+                    charts=[], kpis=[],
+                    meta={
+                        "store_mention_ambiguous": mention,
+                        "candidates": matched_names,
+                    },
+                )
+            if matched_names[0] not in selected_store_names:
+                selected_store_names.append(matched_names[0])
+        if len(selected_store_names) < 2:
+            store_name = selected_store_names[0] if selected_store_names else None
+
+    if store_mention and not store_id and not store_name and not selected_store_names:
         matched_names = await _canonicalize_store_mention(
             smartbi_pool, factory_id, store_mention,
         )
@@ -2931,6 +3061,7 @@ async def resolve_store_margin(
             query=query,
             store_id=store_id,
             store_name=store_name,
+            store_mentions=selected_store_names,
         )
         comparison = await resolve_store_margin(
             smartbi_pool,
@@ -2942,6 +3073,7 @@ async def resolve_store_margin(
             query=query,
             store_id=store_id,
             store_name=store_name,
+            store_mentions=selected_store_names,
         )
         primary_label = _range_text(exact_start, exact_end)
         comparison_label = _range_text(comparison_start, comparison_end)
@@ -3054,6 +3186,7 @@ async def resolve_store_margin(
                        AND t2.factory_id = $1
                        AND ($5::text IS NULL OR s2.store_id::text = $5::text)
                        AND ($6::text IS NULL OR s2.name = $6::text)
+                       AND ($7::text[] IS NULL OR s2.name = ANY($7::text[]))
                 )) AS end_date
             )
             SELECT s.store_id, s.name AS store_name,
@@ -3088,11 +3221,13 @@ async def resolve_store_margin(
                AND anchor.end_date IS NOT NULL
                AND ($5::text IS NULL OR s.store_id::text = $5::text)
                AND ($6::text IS NULL OR s.name = $6::text)
+               AND ($7::text[] IS NULL OR s.name = ANY($7::text[]))
                AND t.date >= COALESCE($3::date, anchor.end_date - ($2::int))
                AND t.date <= COALESCE($4::date, anchor.end_date)
              GROUP BY s.store_id, s.name, p.name, p.normalized_name
             """,
             factory_id, days, exact_start, exact_end, store_id, store_name,
+            selected_store_names,
         )
         store_bill_rows = await conn.fetch(
             """
@@ -3113,6 +3248,7 @@ async def resolve_store_margin(
                        AND t2.factory_id = $1
                        AND ($5::text IS NULL OR s2.store_id::text = $5::text)
                        AND ($6::text IS NULL OR s2.name = $6::text)
+                       AND ($7::text[] IS NULL OR s2.name = ANY($7::text[]))
                 )) AS end_date
             ), scope AS (
                 SELECT DISTINCT store_id FROM agg_daily WHERE factory_id = $1
@@ -3135,16 +3271,22 @@ async def resolve_store_margin(
                AND t.date <= COALESCE($4::date, anchor.end_date)
                AND ($5::text IS NULL OR s.store_id::text = $5::text)
                AND ($6::text IS NULL OR s.name = $6::text)
+               AND ($7::text[] IS NULL OR s.name = ANY($7::text[]))
              GROUP BY t.store_id
             """,
             factory_id, days, exact_start, exact_end, store_id, store_name,
+            selected_store_names,
         )
 
-    if store_id or store_name:
+    if store_id or store_name or selected_store_names:
         store_dish_rows = [
             row for row in store_dish_rows
             if (not store_id or str(row["store_id"]) == str(store_id))
             and (not store_name or str(row["store_name"]) == store_name)
+            and (
+                not selected_store_names
+                or str(row["store_name"]) in selected_store_names
+            )
         ]
         scoped_store_ids = {str(row["store_id"]) for row in store_dish_rows}
         store_bill_rows = [
@@ -3158,7 +3300,7 @@ async def resolve_store_margin(
             if exact_start and exact_end else f"近 {days} 天"
         )
         target_label = store_name or (f"门店 {store_id}" if store_id else "门店")
-        scoped_no_data = bool(store_id or store_name)
+        scoped_no_data = bool(store_id or store_name or selected_store_names)
         return OpsAnswer(
             code="RESTAURANT_OPS_STORE_MARGIN",
             title=f"{target_label}毛利分析（{requested_label}）",
@@ -3190,6 +3332,141 @@ async def resolve_store_margin(
         if exact_start and exact_end
         else _actual_window_text(window_start, window_end, days)
     )
+
+    # A store choice on a dish-ranking question must change the actual SQL
+    # result scope, not merely survive as conversational text.  Rank dishes
+    # independently inside each selected store; two or more selected stores
+    # therefore become an explicit same-window comparison.
+    query_text = (query or "").strip()
+    scoped_dish_rank_direction = dish_ranking_direction(query_text)
+    if scoped_dish_rank_direction and (store_id or store_name or selected_store_names):
+        requested_limit = ranking_limit(query_text)
+        explicit_exclusions = ranking_exclusions(query_text)
+        grouped_rows: Dict[str, List[Any]] = {}
+        excluded_item_count = 0
+        excluded_item_reasons: Dict[str, int] = {}
+        for row in store_dish_rows:
+            reason = _primary_dish_ranking_exclusion_reason(row)
+            normalized_name = re.sub(
+                r"\s+",
+                "",
+                str(row.get("dish_name") or ""),
+            )
+            if (
+                not reason
+                and any(
+                    re.sub(r"\s+", "", excluded) == normalized_name
+                    for excluded in explicit_exclusions
+                )
+            ):
+                reason = "user_excluded"
+            if reason:
+                excluded_item_count += 1
+                excluded_item_reasons[reason] = (
+                    excluded_item_reasons.get(reason, 0) + 1
+                )
+                continue
+            grouped_rows.setdefault(str(row["store_name"]), []).append(row)
+
+        rank_label = (
+            "销量最高"
+            if scoped_dish_rank_direction == "best"
+            else "销量最低"
+        )
+        lines = [
+            f"**{window_label}所选门店菜品对比（每店{rank_label}前 {requested_limit}）：**",
+            "",
+        ]
+        ranked_entities: List[Dict[str, Any]] = []
+        chart_labels: List[str] = []
+        chart_values: List[float] = []
+        for current_store in sorted(grouped_rows):
+            ranked_rows = sorted(
+                grouped_rows[current_store],
+                key=lambda item: float(item["qty"] or 0),
+                reverse=(scoped_dish_rank_direction == "best"),
+            )[:requested_limit]
+            if not ranked_rows:
+                continue
+            lines.append(f"**{current_store}**")
+            for index, row in enumerate(ranked_rows, 1):
+                quantity = float(row["qty"] or 0)
+                lines.append(
+                    f"{index}. {row['dish_name']} — 销量 {quantity:,.0f} 份、"
+                    f"营收 ¥{float(row['revenue'] or 0):,.2f}"
+                )
+                ranked_entities.append({
+                    "type": "dish",
+                    "id": row.get("product_id"),
+                    "name": str(row["dish_name"]),
+                    "rank": index,
+                    "store_name": current_store,
+                })
+                chart_labels.append(f"{current_store}·{row['dish_name']}")
+                chart_values.append(quantity)
+            lines.append("")
+
+        if not ranked_entities:
+            return OpsAnswer(
+                code="RESTAURANT_OPS_STORE_MARGIN",
+                title=f"所选门店菜品销量排行（{window_label}）",
+                answer_text=(
+                    f"{window_label}所选门店没有可用于主菜销量排行的记录。"
+                    "米饭、餐具、纸巾等附属项及您明确排除的项目不会被重新放回榜单。"
+                ),
+                charts=[],
+                kpis=[],
+                meta={
+                    "dish_ranking": scoped_dish_rank_direction,
+                    "ranking_limit": requested_limit,
+                    "excluded_entities": explicit_exclusions,
+                    "excluded_item_count": excluded_item_count,
+                    "excluded_item_reasons": excluded_item_reasons,
+                    "ranked_entities": [],
+                    "selected_stores": selected_store_names or (
+                        [store_name] if store_name else []
+                    ),
+                    "scope_matches_request": True,
+                    "no_primary_dish_data": True,
+                    "window_label": window_label,
+                },
+            )
+
+        lines.append(
+            f"> 已按同一时间口径比较 {len(grouped_rows)} 家门店；"
+            "米饭、餐具、纸巾等附属项默认不进入主菜榜。"
+        )
+        return OpsAnswer(
+            code="RESTAURANT_OPS_STORE_MARGIN",
+            title=f"所选门店菜品销量排行（{window_label}）",
+            answer_text="\n".join(lines),
+            charts=[{
+                "chartType": "bar",
+                "title": f"所选门店菜品销量（{window_label}）",
+                "xAxis": {"data": chart_labels},
+                "series": [{
+                    "name": "销量",
+                    "type": "bar",
+                    "data": chart_values,
+                }],
+            }],
+            kpis=[],
+            meta={
+                "dish_ranking": scoped_dish_rank_direction,
+                "ranking_limit": requested_limit,
+                "excluded_entities": explicit_exclusions,
+                "excluded_item_count": excluded_item_count,
+                "excluded_item_reasons": excluded_item_reasons,
+                "ranked_entities": ranked_entities,
+                "focus_entity": ranked_entities[0],
+                "selected_stores": selected_store_names or (
+                    [store_name] if store_name else []
+                ),
+                "compare_stores": len(grouped_rows) > 1,
+                "scope_matches_request": True,
+                "window_label": window_label,
+            },
+        )
 
     # Lookup cretas product_types + dim_product_alias (P0-2) + agg_product_cost for food cost.
     dish_names = list({r["normalized_name"] for r in store_dish_rows})
@@ -3374,7 +3651,108 @@ async def resolve_store_margin(
     coverage_ratio = total_rev_with_cost / total_rev if total_rev > 0 else 0.0
     invalid_cost_count = sum(s["invalid_cost_dishes"] for s in store_list)
 
-    query_text = (query or "").strip()
+    asks_store_revenue = any(
+        token in query_text
+        for token in ("营收", "营业额", "销售额", "销售收入", "流水", "收入")
+    )
+    asks_store_orders = any(
+        token in query_text
+        for token in ("订单", "单量")
+    )
+    asks_store_avg_ticket = "客单价" in query_text
+    asks_store_sales_volume = any(
+        token in query_text
+        for token in ("销量", "销售量", "售出数量")
+    )
+    asks_store_margin = any(
+        token in query_text
+        for token in ("毛利", "利润", "盈利", "亏损", "赚钱", "亏钱")
+    )
+    if (
+        asks_store_revenue
+        or asks_store_orders
+        or asks_store_avg_ticket
+        or asks_store_sales_volume
+    ) and not asks_store_margin:
+        if asks_store_revenue:
+            metric_key, metric_label = "revenue", "营收"
+        elif asks_store_avg_ticket:
+            metric_key, metric_label = "avg_ticket", "客单价"
+        elif asks_store_orders:
+            metric_key, metric_label = "bills", "订单数"
+        else:
+            metric_key, metric_label = "qty", "销量"
+
+        def _store_metric_value(store: Dict[str, Any]) -> float:
+            if metric_key == "avg_ticket":
+                bills = float(store.get("bills") or 0)
+                return float(store.get("revenue") or 0) / bills if bills > 0 else 0.0
+            return float(store.get(metric_key) or 0)
+
+        ranked_by_requested_metric = sorted(
+            store_list,
+            key=_store_metric_value,
+            reverse=True,
+        )
+        requested_limit = ranking_limit(query_text, top_n)
+        requested_slice = ranked_by_requested_metric[:requested_limit]
+        scope_label = (
+            "、".join(selected_store_names)
+            if selected_store_names
+            else store_name or "全部门店"
+        )
+        rank_lines = [
+            f"**{scope_label}{window_label}{metric_label}对比：**",
+            "",
+        ]
+        for index, store in enumerate(requested_slice, 1):
+            metric_value = _store_metric_value(store)
+            if asks_store_revenue:
+                value_text = f"营收 ¥{metric_value:,.2f}"
+            elif asks_store_avg_ticket:
+                value_text = f"客单价 ¥{metric_value:,.2f}"
+            elif asks_store_sales_volume:
+                value_text = f"销量 {metric_value:,.0f} 份"
+            else:
+                value_text = f"订单 {int(metric_value):,} 单"
+            rank_lines.append(f"{index}. {store['name']} — {value_text}")
+        ranked_entities = [
+            {
+                "type": "store",
+                "id": store["store_id"],
+                "name": store["name"],
+                "rank": index,
+            }
+            for index, store in enumerate(requested_slice, 1)
+        ]
+        return OpsAnswer(
+            code="RESTAURANT_OPS_STORE_MARGIN",
+            title=f"门店{metric_label}对比（{window_label}）",
+            answer_text="\n".join(rank_lines),
+            charts=[{
+                "chartType": "bar",
+                "title": f"门店{metric_label}",
+                "xAxis": {"data": [store["name"] for store in requested_slice]},
+                "series": [{
+                    "name": metric_label,
+                    "type": "bar",
+                    "data": [
+                        _store_metric_value(store)
+                        for store in requested_slice
+                    ],
+                }],
+            }],
+            kpis=[],
+            meta={
+                "store_ranking": metric_key,
+                "ranking_limit": requested_limit,
+                "ranked_entities": ranked_entities,
+                "focus_entity": ranked_entities[0] if ranked_entities else None,
+                "selected_stores": selected_store_names or [],
+                "scope_matches_request": scope_matches_request,
+                "window_label": window_label,
+            },
+        )
 
     # R15/G5: 「有没有店在亏损」是存在性问题 — 过滤毛利为负的门店直答,
     # 覆盖率如实披露, 不甩全店榜。

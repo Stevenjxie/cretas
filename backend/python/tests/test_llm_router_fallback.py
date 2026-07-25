@@ -13,6 +13,8 @@ locks the money-path that caused the 6/11 silent-billing incident.
 from __future__ import annotations
 
 import datetime
+import asyncio
+import time
 from typing import Dict, List, Tuple
 from unittest.mock import MagicMock
 
@@ -298,3 +300,28 @@ async def test_call_chain_rejects_empty_body_and_falls_back(monkeypatch):
     result = await call_chain(SLOT.CHAT, {"messages": [{"role": "user", "content": "hi"}]})
     assert result == good                                      # skipped the empty 200
     assert len(client.call_log) >= 2                           # did not stop at empty
+
+
+@pytest.mark.asyncio
+async def test_call_chain_total_timeout_caps_the_whole_provider_cascade(monkeypatch):
+    _patch_keys(monkeypatch)
+    monkeypatch.setattr(llm_router, "_today", lambda: datetime.date(2026, 7, 10))
+
+    class _SlowClient(_ScriptedClient):
+        async def post(self, url, headers=None, json=None, timeout=None):
+            await asyncio.sleep(1)
+            return await super().post(url, headers=headers, json=json, timeout=timeout)
+
+    client = _SlowClient({})
+    monkeypatch.setattr(llm_router, "get_llm_http_client", lambda: client)
+    started = time.monotonic()
+
+    with pytest.raises(RuntimeError, match="total_timeout|timed out"):
+        await call_chain(
+            SLOT.CHAT,
+            {"messages": [{"role": "user", "content": "hi"}]},
+            timeout=0.2,
+            total_timeout=0.35,
+        )
+
+    assert time.monotonic() - started < 0.8

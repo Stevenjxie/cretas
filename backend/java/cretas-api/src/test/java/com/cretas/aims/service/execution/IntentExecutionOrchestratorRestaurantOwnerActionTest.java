@@ -194,6 +194,16 @@ class IntentExecutionOrchestratorRestaurantOwnerActionTest {
                 .isFalse();
         assertThat(orchestrator.shouldRouteRestaurantOwnerAction(
                 "DEMO_REST",
+                "本月全部门店销量最高的5道菜是什么？请排除米饭、餐巾纸、湿纸巾和餐具",
+                Collections.emptyMap()))
+                .isFalse();
+        assertThat(orchestrator.shouldRouteRestaurantOwnerAction(
+                "DEMO_REST",
+                "删除米饭这个菜品",
+                Map.of("ownerActionSessionId", "stale-owner-session")))
+                .isFalse();
+        assertThat(orchestrator.shouldRouteRestaurantOwnerAction(
+                "DEMO_REST",
                 "最近7天晚市出餐慢，是订单集中、人员不足还是工序瓶颈？请分别用数据判断。",
                 Map.of("ownerActionSessionId", "stale-owner-session")))
                 .isFalse();
