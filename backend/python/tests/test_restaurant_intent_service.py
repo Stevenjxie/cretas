@@ -67,6 +67,23 @@ def test_should_delegate_none_spec_false():
     assert should_delegate(None) is False
 
 
+def test_resolver_kwargs_preserve_store_comparison_baseline():
+    query = "本月和上月各门店营业额对比"
+    spec = _build_spec(
+        "RESTAURANT_OPS_SALES_SUMMARY",
+        query,
+        confidence=0.95,
+        tier="llm",
+        planner_authority="llm",
+    )
+
+    kwargs = svc._resolver_kwargs(spec, "restaurant_manager", query)
+
+    assert kwargs["date_range"] == spec.date_range
+    assert kwargs["comparison_date_range"][0] is not None
+    assert kwargs["comparison_date_range"][1] is not None
+
+
 def test_should_delegate_validated_plan_cache_without_java_reinterpretation():
     spec = _spec(
         intent="RESTAURANT_OPS_TREND_ANALYSIS",
@@ -969,6 +986,33 @@ async def test_tiered_answer_missing_reference_guard_is_clarification(monkeypatc
     )
     assert result["kind"] == "clarification"
     assert "没有找到可沿用的比较日期" in result["answer_text"]
+
+
+@pytest.mark.asyncio
+async def test_read_only_action_warning_survives_store_scope_clarification(monkeypatch):
+    spec = _spec(
+        intent="RESTAURANT_OPS_GROSS_MARGIN",
+        clarification_needed=True,
+        clarification_question=STORE_SCOPE_CLARIFICATION_QUESTION,
+        store_options=("人民路店", "湖滨路店"),
+    )
+
+    async def _fake_parse(*_args, **_kwargs):
+        return spec
+
+    monkeypatch.setattr(svc, "parse_restaurant_query", _fake_parse)
+
+    result = await tiered_answer(
+        "把本月销量最差的菜直接下架",
+        object(),
+        "DEMO_REST",
+        "restaurant_manager",
+    )
+
+    assert result["kind"] == "clarification"
+    assert result["answer_text"] == STORE_SCOPE_CLARIFICATION_QUESTION
+    assert "咨询模式" in result["warning"]
+    assert "没有执行下架" in result["warning"]
 
 
 @pytest.mark.asyncio

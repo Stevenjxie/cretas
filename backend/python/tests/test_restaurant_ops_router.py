@@ -1310,6 +1310,51 @@ def test_store_margin_comparison_missing_period_names_dates_without_fallback(mon
     assert result.meta["comparisonComplete"] is False
 
 
+def test_store_revenue_comparison_keeps_both_periods_and_each_store(monkeypatch):
+    primary = (date(2026, 7, 1), date(2026, 7, 26))
+    baseline = (date(2026, 6, 1), date(2026, 6, 30))
+    pool, connection = _store_margin_runtime(monkeypatch, {
+        primary: [
+            _store_margin_row("S-1", "人民路店", 2000, 100, *primary),
+            _store_margin_row("S-2", "湖滨路店", 5000, 100, *primary),
+            _store_margin_row("S-3", "江南店", 4000, 100, *primary),
+            _store_margin_row("S-4", "城西店", 3500, 100, *primary),
+            _store_margin_row("S-5", "文一店", 3000, 100, *primary),
+            _store_margin_row("S-6", "庆春店", 2500, 100, *primary),
+        ],
+        baseline: [
+            _store_margin_row("S-1", "人民路店", 1500, 90, *baseline),
+            _store_margin_row("S-2", "湖滨路店", 5500, 110, *baseline),
+            _store_margin_row("S-3", "江南店", 3900, 100, *baseline),
+            _store_margin_row("S-4", "城西店", 3300, 100, *baseline),
+            _store_margin_row("S-5", "文一店", 3100, 100, *baseline),
+            _store_margin_row("S-6", "庆春店", 2400, 100, *baseline),
+        ],
+    })
+
+    result = asyncio.run(_r.resolve_store_margin(
+        pool,
+        "RES_TEST",
+        role="restaurant_manager",
+        date_range=primary,
+        comparison_date_range=baseline,
+        query="本月和上月各门店营业额对比",
+    ))
+
+    assert "本月 vs 上个月" in result.answer_text
+    assert "人民路店" in result.answer_text
+    assert "湖滨路店" in result.answer_text
+    assert "庆春店" in result.answer_text
+    assert "本月 ¥5,000.00；上个月 ¥5,500.00" in result.answer_text
+    assert result.meta["comparisonComplete"] is True
+    assert result.meta["store_metric_comparison"] == "revenue"
+    assert result.meta["storeCount"] == 6
+    assert len(result.charts[0]["xAxis"]["data"]) == 6
+    assert len(result.charts[0]["series"]) == 2
+    date_args = [args[2:4] for query, args in connection.calls if "$5::text" in query]
+    assert primary in date_args and baseline in date_args
+
+
 def test_store_revenue_question_ranks_revenue_instead_of_margin(monkeypatch):
     start, end = date(2026, 7, 20), date(2026, 7, 21)
     rows = [
@@ -1997,6 +2042,8 @@ def test_dish_candidate_singleturn_and_contextualized(query, expected):
     "米饭的销量是多少",
     "米饭的成本如何",
     "招牌藤椒味的销售额是多少",
+    "本月全部门店招牌青花椒味(单人份)的营业额是多少？",
+    "最近30天招牌藤椒味的营收是多少",
 ])
 def test_named_dish_metric_routes_to_gross_margin(query):
     assert match_restaurant_ops(query) == "RESTAURANT_OPS_GROSS_MARGIN"

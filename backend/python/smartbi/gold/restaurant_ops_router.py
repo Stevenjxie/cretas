@@ -593,7 +593,7 @@ def match_restaurant_ops(query: str) -> Optional[str]:
     # dish data + dish scoping live in the gross-margin resolver. Generic
     # phrasings never produce a candidate, so this cannot steal 排行/整体.
     if (
-        any(tok in q for tok in ("销量", "销售额", "成本", "毛利",
+        any(tok in q for tok in ("销量", "销售额", "营业额", "营收", "成本", "毛利",
                                  "卖了", "卖出", "赚钱", "挣钱", "亏钱", "亏本", "赔钱"))
         and extract_dish_candidate(q)
     ):
@@ -750,6 +750,9 @@ _DISH_PROFIT_RE = re.compile(
     r"(?:赚钱|挣钱|亏钱|亏本|赔钱|盈利)(?:吗|了吗|不)?[?？。!！]?$"
 )
 _DISH_LEADING_PRONOUN_RE = re.compile(r"^(?:这个|这道|那个|那道|它|该菜|这|那)+")
+_DISH_LEADING_QUERY_VERB_RE = re.compile(
+    r"^(?:请)?(?:查询|查一下|查看|看一下|看看|统计|汇总)(?:一下)?"
+)
 _DISH_LEADING_TIME_RE = re.compile(
     r"^(?:今天|今日|昨天|昨日|前天|本周|这周|上上周|上周|本月|这个月|上上个月|上上月|上个月|上月"
     r"|今年|去年|前年|现在|如今|目前|最近\S{0,4}|近\S{0,4}|过去\S{0,4}"
@@ -787,7 +790,8 @@ def _extract_dish_candidate_single(text: str) -> "Optional[str]":
         match = re.match(r"^那?[「\"']?(.{2,24}?)[」\"']?呢[?？]?$", text)
     if not match:
         return None
-    candidate = _DISH_LEADING_TIME_RE.sub("", match.group(1).strip())
+    candidate = _DISH_LEADING_QUERY_VERB_RE.sub("", match.group(1).strip())
+    candidate = _DISH_LEADING_TIME_RE.sub("", candidate)
     candidate = _DISH_LEADING_PRONOUN_RE.sub("", candidate)
     candidate = _DISH_LEADING_TIME_RE.sub("", candidate)
     # Aggregate store scope is not part of a dish name.  Without stripping it,
@@ -3113,6 +3117,165 @@ async def resolve_store_margin(
         )
         primary_label = _range_text(exact_start, exact_end)
         comparison_label = _range_text(comparison_start, comparison_end)
+        asks_store_revenue = any(
+            token in (query or "")
+            for token in ("营收", "营业额", "销售额", "销售收入", "流水", "收入")
+        )
+        asks_store_orders = any(token in (query or "") for token in ("订单", "单量"))
+        asks_store_avg_ticket = "客单价" in (query or "")
+        asks_store_sales_volume = any(
+            token in (query or "") for token in ("销量", "销售量", "售出数量")
+        )
+        asks_store_margin = any(
+            token in (query or "")
+            for token in ("毛利", "利润", "盈利", "亏损", "赚钱", "亏钱")
+        )
+
+        if (
+            asks_store_revenue
+            or asks_store_orders
+            or asks_store_avg_ticket
+            or asks_store_sales_volume
+        ) and not asks_store_margin:
+            if asks_store_revenue:
+                metric_key, metric_label = "revenue", "营收"
+            elif asks_store_avg_ticket:
+                metric_key, metric_label = "avg_ticket", "客单价"
+            elif asks_store_orders:
+                metric_key, metric_label = "bills", "订单数"
+            else:
+                metric_key, metric_label = "qty", "销量"
+
+            def _period_store_values(answer: OpsAnswer) -> Dict[str, float]:
+                values: Dict[str, float] = {}
+                for store in answer.meta.get("stores", []):
+                    name = str(store.get("name") or "").strip()
+                    if not name:
+                        continue
+                    if metric_key == "avg_ticket":
+                        bills = float(store.get("bills") or 0)
+                        value = float(store.get("revenue") or 0) / bills if bills > 0 else 0.0
+                    else:
+                        value = float(store.get(metric_key) or 0)
+                    values[name] = value
+                return values
+
+            primary_values = _period_store_values(primary)
+            comparison_values = _period_store_values(comparison)
+            if not primary_values or not comparison_values:
+                missing_periods = []
+                if not primary_values:
+                    missing_periods.append(primary_label)
+                if not comparison_values:
+                    missing_periods.append(comparison_label)
+                return OpsAnswer(
+                    code="RESTAURANT_OPS_STORE_MARGIN",
+                    title=f"门店{metric_label}跨期对比",
+                    answer_text=(
+                        f"{'、'.join(missing_periods)}缺少可用的门店{metric_label}数据，"
+                        f"因此不能比较{primary_label}和{comparison_label}。"
+                        "没有用单一月份、全部历史或其他指标替代。"
+                    ),
+                    charts=[],
+                    kpis=[],
+                    meta={
+                        "store_metric_comparison": metric_key,
+                        "comparisonComplete": False,
+                        "primaryRange": [exact_start.isoformat(), exact_end.isoformat()],
+                        "comparisonRange": [
+                            comparison_start.isoformat(),
+                            comparison_end.isoformat(),
+                        ],
+                        "scope_matches_request": True,
+                    },
+                )
+            store_names = sorted(
+                set(primary_values) | set(comparison_values),
+                key=lambda name: primary_values.get(name, 0.0),
+                reverse=True,
+            )
+            requested_limit = ranking_limit(query or "", top_n)
+            if (
+                any(token in (query or "") for token in ("各门店", "全部门店", "所有门店"))
+                and not _RANK_LIMIT_RE.search(query or "")
+            ):
+                requested_limit = len(store_names)
+            selected_names = store_names[:requested_limit]
+            resolved_spec = _resolve_sales_query_spec(query)
+            display_primary_label = (
+                resolved_spec.window_label
+                if resolved_spec.date_range == (exact_start, exact_end)
+                else primary_label
+            )
+            display_comparison_label = (
+                resolved_spec.comparison_label
+                if resolved_spec.comparison_range == (comparison_start, comparison_end)
+                and resolved_spec.comparison_label
+                else comparison_label
+            )
+
+            def _metric_text(value: float) -> str:
+                if metric_key in {"revenue", "avg_ticket"}:
+                    return f"¥{value:,.2f}"
+                if metric_key == "bills":
+                    return f"{int(value):,} 单"
+                return f"{value:,.0f} 份"
+
+            lines = [
+                f"**各门店{metric_label}对比：{display_primary_label} vs {display_comparison_label}**",
+                "",
+            ]
+            for index, name in enumerate(selected_names, 1):
+                current_value = primary_values.get(name, 0.0)
+                baseline_value = comparison_values.get(name, 0.0)
+                delta = current_value - baseline_value
+                direction = "增加" if delta > 0 else "减少" if delta < 0 else "持平"
+                lines.append(
+                    f"{index}. {name} — {display_primary_label} {_metric_text(current_value)}；"
+                    f"{display_comparison_label} {_metric_text(baseline_value)}；"
+                    f"{direction} {_metric_text(abs(delta))}"
+                )
+            lines.extend([
+                "",
+                f"> 两个时间窗分别为 {primary_label} 和 {comparison_label}；"
+                "所有门店均按相同指标口径比较，没有用单一月份替代。",
+            ])
+            return OpsAnswer(
+                code="RESTAURANT_OPS_STORE_MARGIN",
+                title=f"门店{metric_label}跨期对比",
+                answer_text="\n".join(lines),
+                charts=[{
+                    "chartType": "bar",
+                    "title": f"门店{metric_label}跨期对比",
+                    "xAxis": {"data": selected_names},
+                    "series": [
+                        {
+                            "name": display_primary_label,
+                            "type": "bar",
+                            "data": [primary_values.get(name, 0.0) for name in selected_names],
+                        },
+                        {
+                            "name": display_comparison_label,
+                            "type": "bar",
+                            "data": [comparison_values.get(name, 0.0) for name in selected_names],
+                        },
+                    ],
+                }] if selected_names else [],
+                kpis=[],
+                meta={
+                    "store_metric_comparison": metric_key,
+                    "comparisonComplete": True,
+                    "primaryRange": [exact_start.isoformat(), exact_end.isoformat()],
+                    "comparisonRange": [
+                        comparison_start.isoformat(),
+                        comparison_end.isoformat(),
+                    ],
+                    "primaryLabel": display_primary_label,
+                    "comparisonLabel": display_comparison_label,
+                    "storeCount": len(store_names),
+                    "scope_matches_request": True,
+                },
+            )
 
         def _period_margin(answer: OpsAnswer) -> Tuple[Optional[float], Optional[float], Optional[str]]:
             target = answer.meta.get("targetStore")
@@ -3866,6 +4029,16 @@ async def resolve_store_margin(
                 "selected_stores": selected_store_names or [],
                 "scope_matches_request": scope_matches_request,
                 "window_label": window_label,
+                "stores": [
+                    {
+                        "storeId": store["store_id"],
+                        "name": store["name"],
+                        "revenue": store["revenue"],
+                        "qty": store["qty"],
+                        "bills": store["bills"],
+                    }
+                    for store in store_list
+                ],
             },
         )
 

@@ -403,13 +403,20 @@ def _plan_requested_intents(
             else:
                 code = "RESTAURANT_OPS_GROSS_MARGIN"
         elif metric in ("revenue", "orders"):
-            if "store" in dimensions:
-                code = "RESTAURANT_OPS_STORE_MARGIN"
-            elif "dish" in dimensions:
+            if "dish" in dimensions:
                 # Named-dish revenue/orders live in the joined POS + recipe
                 # unit-economics resolver.  The all-store sales summary cannot
-                # truthfully answer a dish-scoped question.
-                code = "RESTAURANT_OPS_GROSS_MARGIN"
+                # truthfully answer a dish-scoped question.  A concrete
+                # single/multi-store slice still uses STORE_MARGIN because it
+                # owns the store×dish grain; "全部门店" is only an aggregation
+                # scope and must not erase the named dish.
+                code = (
+                    "RESTAURANT_OPS_STORE_MARGIN"
+                    if "store" in dimensions and store_scope in {"single", "multiple"}
+                    else "RESTAURANT_OPS_GROSS_MARGIN"
+                )
+            elif "store" in dimensions:
+                code = "RESTAURANT_OPS_STORE_MARGIN"
             elif selected_code == "RESTAURANT_OPS_TREND_ANALYSIS":
                 code = "RESTAURANT_OPS_TREND_ANALYSIS"
             else:
