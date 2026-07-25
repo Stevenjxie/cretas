@@ -115,3 +115,14 @@
 - 验证：Python 餐饮/会话目标回归 543 通过（同一 6 个本机数据库 fixture 明确排除），`compileall`、增量 Ruff、`git diff --check` 和远端 tracked-secret-scan 通过。
 - 发布：合并后仅从 clean exact `origin/main` 重发 Python，并重跑生产 Demo 真实按钮链和倒数排行追问；生产业务写入为 0。
 - Scope 锁已释放。
+
+## `BUG-RESTAURANT-AI-FRACTIONAL-QTY-DISPLAY-20260725` — `merged`
+
+- Owner: `/root`
+- Base SHA: `3a649cf9246643c4324295ab4fa1d5a52e3559b0`
+- 合入：PR #1767；实现提交 `6f92abb28`。
+- 修复：菜品排行中的正数小数销量不再被四舍五入显示为“0 份”；不足 1 份显示“不足 1 份”，其他非整数销量保留有效小数，整数销量继续保留千分位。
+- 展示契约：全部门店排行与所选门店逐店排行共用同一数量格式；菜品排行标题和第一名 Markdown 强调保持不变。
+- 验证：路由目标测试 298 通过；餐饮/会话回归 544 通过、6 个本机旧会话表 fixture 明确排除；`compileall`、增量 Ruff、`git diff --check` 与远端 tracked-secret-scan 通过。
+- 发布：合并后仅从 clean exact `origin/main` 重发 Python，并在真实 Demo 复核“不足 1 份”、标题/第一名字号字重、时间→门店→倒序与指定门店只读链；生产业务写入为 0。
+- Scope 锁已释放。
