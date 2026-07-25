@@ -31,6 +31,7 @@ from smartbi.gold.restaurant_intent import (
     _build_spec,
     _detect_comparison,
     _detect_dimensions,
+    _verbatim_entity,
 )
 from smartbi.gold.restaurant_ops_router import _resolve_sales_date_range, match_restaurant_ops
 from smartbi.services.template_rag import hybrid_match
@@ -1759,6 +1760,50 @@ async def test_multi_store_tenant_requires_explicit_scope():
     assert guarded.store_options == ("东城店", "西城店", "南城店")
     assert pool.conn.rls_factory_id == "FACTORY_A"
     assert pool.conn.fetched_factory_id == "FACTORY_A"
+
+
+@pytest.mark.parametrize(
+    "generic_scope",
+    (
+        "全部门店",
+        "所有门店",
+        "各门店",
+        "每家店",
+        "所有店",
+        "全部店",
+        "全店汇总",
+        "全店",
+        "多家门店",
+        "指定门店",
+    ),
+)
+def test_all_store_scope_never_becomes_a_concrete_llm_entity(generic_scope):
+    query = f"本月哪个菜卖得好 {generic_scope}"
+
+    assert _verbatim_entity(generic_scope, query) is None
+
+
+def test_real_store_name_remains_a_valid_verbatim_llm_entity():
+    query = "本月有滋有味北外滩店哪个菜卖得好"
+
+    assert _verbatim_entity("有滋有味北外滩店", query) == "有滋有味北外滩店"
+
+
+def test_llm_all_store_slot_cannot_poison_dish_ranking_execution_scope():
+    query = "哪个菜卖得好 本月 全部门店"
+    spec = _build_spec(
+        "RESTAURANT_OPS_GROSS_MARGIN",
+        query,
+        confidence=0.95,
+        tier="llm",
+        llm_store=_verbatim_entity("全部门店", query),
+    )
+
+    assert spec.store_scope == "all"
+    assert spec.store_slot is None
+    assert spec.store_slots == ()
+    assert spec.dimensions == ("dish",)
+    assert spec.planned_intents == ("RESTAURANT_OPS_GROSS_MARGIN",)
 
 
 @pytest.mark.asyncio

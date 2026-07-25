@@ -1620,8 +1620,14 @@ def _verbatim_entity(value: Any, query: str) -> Optional[str]:
     cand = value.strip().strip("「」\"'")
     if not (2 <= len(cand) <= 40) or cand not in query:
         return None
-    if cand in ("这道菜", "那道菜", "这个菜", "哪家店", "哪个店", "门店",
-                "菜品", "这家店", "那家店", "本店"):
+    if cand in (
+        "这道菜", "那道菜", "这个菜", "菜品",
+        "哪家店", "哪个店", "哪家门店", "这家店", "那家店",
+        "门店", "分店", "店铺", "本店", "单店", "全店",
+        "各店", "多家门店", "多家店", "指定门店",
+        *_ALL_STORE_SCOPE_TOKENS,
+        *_STORE_RANK_SCOPE_TOKENS,
+    ):
         return None
     return cand
 
