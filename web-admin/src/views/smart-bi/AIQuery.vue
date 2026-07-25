@@ -330,12 +330,34 @@ function multiChartWithMeta(cfg: ChartConfig): ChartWithMeta | null {
 
 // 客户反馈 (Sheet 7/20): 复杂问题无法生成图表时, 数据要能导出 xlsx 供
 // 数据分析师做高级分析。凡带图表/表格数据的 AI 回答均可一键导出。
+function isRestaurantComplexAnalysisGap(msg: ChatMessage): boolean {
+  return Boolean(
+    isRestaurantTenant.value
+    && msg.role === 'assistant'
+    && /价格弹性|回归曲线|线性回归|决定系数|置信区间|复杂图表/.test(msg.content || ''),
+  );
+}
+
 function messageHasExportableData(msg: ChatMessage): boolean {
   return Boolean(
     msg.role === 'assistant'
     && !msg.loading && !msg.streaming
-    && (msg.chartConfig?.option || msg.charts?.length || msg.table?.data?.length),
+    && (
+      msg.chartConfig?.option
+      || msg.charts?.length
+      || msg.table?.data?.length
+      || isRestaurantComplexAnalysisGap(msg)
+    ),
   );
+}
+
+function messageExportLabel(msg: ChatMessage): string {
+  return isRestaurantComplexAnalysisGap(msg)
+    && !msg.chartConfig?.option
+    && !msg.charts?.length
+    && !msg.table?.data?.length
+    ? '导出分析模板 (xlsx)'
+    : '导出数据 (xlsx)';
 }
 
 function chartOptionToRows(
@@ -397,6 +419,17 @@ async function exportMessageData(msg: ChatMessage): Promise<void> {
     if (msg.table?.data?.length) {
       const ws = XLSX.utils.json_to_sheet(msg.table.data);
       XLSX.utils.book_append_sheet(wb, ws, sheetName('明细数据', '明细数据'));
+    }
+    if (!wb.SheetNames.length && isRestaurantComplexAnalysisGap(msg)) {
+      const requiredFields = [
+        '菜品名称', '日期', '门店', '价格', '销量', '销售额', '订单数',
+        '促销活动', '渠道', '营业时段', '缺货情况', '对照门店或对照时段',
+      ];
+      const ws = XLSX.utils.aoa_to_sheet([
+        requiredFields,
+        requiredFields.map(() => ''),
+      ]);
+      XLSX.utils.book_append_sheet(wb, ws, sheetName('分析数据模板', '分析数据模板'));
     }
     if (!wb.SheetNames.length) {
       ElMessage({ message: '本条回答没有可导出的结构化数据', type: 'info' });
@@ -2770,7 +2803,7 @@ function handleKeydown(event: KeyboardEvent) {
                 <!-- 数据导出 (Sheet 7/20 客户建议: 图表数据可导出 xlsx 做高级分析) -->
                 <div v-if="messageHasExportableData(message)" class="chart-export-row">
                   <el-link type="primary" underline="never" @click="exportMessageData(message)">
-                    <el-icon style="margin-right: 4px"><Download /></el-icon>导出数据 (xlsx)
+                    <el-icon style="margin-right: 4px"><Download /></el-icon>{{ messageExportLabel(message) }}
                   </el-link>
                 </div>
 

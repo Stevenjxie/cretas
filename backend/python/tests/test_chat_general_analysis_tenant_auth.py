@@ -279,7 +279,7 @@ async def test_untrusted_expected_intent_is_ignored(monkeypatch):
 
     await chat_mod.general_analysis(
         chat_mod.GeneralAnalysisRequest(
-            query="整体毛利率是多少",
+            query="本月整体毛利率是多少",
             table_type="restaurant_ops",
             expected_intent="DROP_TABLES",
             allow_tenant_data_fallback=False,
@@ -305,6 +305,11 @@ async def test_restaurant_general_analysis_inherits_only_dependent_session_follo
             return {
                 "parent_query": "本月营收怎么样",
                 "parent_template_code": "RESTAURANT_OPS_SALES_SUMMARY",
+                "structured_context": {
+                    "window_label": "本月",
+                    "requested_metrics": ["revenue"],
+                    "analysis_action": "lookup",
+                },
             }
 
         async def upsert(self, **kwargs):
@@ -342,8 +347,69 @@ async def test_restaurant_general_analysis_inherits_only_dependent_session_follo
 
     assert response.success is True
     assert observed["lookup"] == [("session-7", "F001", 7)]
-    assert observed["queries"] == ["本月营收怎么样；继续追问：那和上个月比呢"]
+    assert observed["queries"] == ["本月营收和上个月比呢"]
     assert observed["upsert"][0]["parent_query"] == observed["queries"][0]
+
+
+async def test_restaurant_clarification_with_slots_is_persisted_for_button_followup(
+    monkeypatch,
+):
+    observed = {"upsert": []}
+    structured_context = {
+        "window_label": "全部历史",
+        "requested_metrics": ["sales_volume"],
+        "analysis_action": "lookup",
+        "topic_kind": "dish_ranking",
+        "ranking_direction": "best",
+        "store_scope": "all",
+    }
+
+    async def _pool():
+        return object()
+
+    class _SessionService:
+        def __init__(self, _pool):
+            pass
+
+        async def lookup(self, *_args, **_kwargs):
+            return None
+
+        async def upsert(self, **kwargs):
+            observed["upsert"].append(kwargs)
+
+    async def _tiered(*_args, **_kwargs):
+        return {
+            "kind": "clarification",
+            "answer_text": "请选择时间范围：本月、上个月、最近7天或最近30天。",
+            "structured_context": structured_context,
+            "spec": SimpleNamespace(intent="RESTAURANT_OPS_GROSS_MARGIN"),
+            "warning": "咨询模式只展示分析结果，没有执行任何业务操作。",
+        }
+
+    _cache_miss(monkeypatch)
+    monkeypatch.setattr("smartbi.config.get_pg_pool", _pool)
+    monkeypatch.setattr(
+        "smartbi.services.chat_session_service.ChatSessionService",
+        _SessionService,
+    )
+    monkeypatch.setattr(chat_mod, "_try_tiered_restaurant_intent", _tiered)
+
+    response = await chat_mod.general_analysis(
+        chat_mod.GeneralAnalysisRequest(
+            query="哪个菜卖得最好",
+            table_type="restaurant_ops",
+            session_id="session-clarification",
+            allow_tenant_data_fallback=False,
+        ),
+        _Request("F001", user_id="7", role="restaurant_manager"),
+    )
+
+    assert response.success is True
+    assert response.warning == "咨询模式只展示分析结果，没有执行任何业务操作。"
+    assert len(observed["upsert"]) == 1
+    assert observed["upsert"][0]["parent_query"] == "哪个菜卖得最好"
+    assert observed["upsert"][0]["parent_template_code"] == "RESTAURANT_OPS_GROSS_MARGIN"
+    assert observed["upsert"][0]["structured_context"] == structured_context
 
 
 @pytest.mark.parametrize(

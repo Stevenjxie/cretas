@@ -1043,7 +1043,7 @@ def test_compound_cost_margin_query_builds_a_multi_resolver_plan():
     assert spec.clarification_needed is False
 
 
-def test_service_speed_root_cause_query_is_not_silently_reduced_to_sales():
+def test_service_speed_root_cause_query_keeps_supported_dimensions_executable():
     spec = _build_spec(
         "RESTAURANT_OPS_SALES_SUMMARY",
         "最近7天晚市出餐慢，是订单集中、人员不足还是工序瓶颈？请分别用数据判断",
@@ -1051,16 +1051,19 @@ def test_service_speed_root_cause_query_is_not_silently_reduced_to_sales():
         tier="test",
     )
 
-    assert spec.clarification_needed is True
+    assert spec.clarification_needed is False
+    assert spec.planned_intents == (
+        "RESTAURANT_OPS_SALES_SUMMARY",
+        "RESTAURANT_OPS_STAFFING_ADVICE",
+    )
     assert spec.unsupported_requirements == ("service_speed", "process_bottleneck")
-    assert "工序" in (spec.clarification_question or "")
-    assert "订单" in (spec.clarification_question or "")
+    assert spec.clarification_question is None
 
 
 @pytest.mark.asyncio
-async def test_parse_catches_service_speed_capability_gap_before_tenant_gate():
+async def test_parse_catches_unsupported_only_capability_gap_before_tenant_gate():
     spec = await parse_restaurant_query(
-        "最近7天晚市出餐慢，是订单集中、人员不足还是工序瓶颈？请分别用数据判断",
+        "最近7天晚市逐单出餐时长和工序瓶颈分别是什么？",
         object(),
         factory_id="DEMO_REST",
     )
@@ -1072,7 +1075,7 @@ async def test_parse_catches_service_speed_capability_gap_before_tenant_gate():
     assert "不会用营业额" in (spec.clarification_question or "")
 
 
-def test_margin_and_return_rate_query_discloses_missing_capability():
+def test_margin_and_return_rate_query_runs_margin_and_leaves_return_rate_blank():
     spec = _build_spec(
         "RESTAURANT_OPS_GROSS_MARGIN",
         "优化菜品结构，以提高毛利率并降低退菜率为目标",
@@ -1080,9 +1083,10 @@ def test_margin_and_return_rate_query_discloses_missing_capability():
         tier="test",
     )
 
-    assert spec.clarification_needed is True
+    assert spec.clarification_needed is False
+    assert spec.planned_intents == ("RESTAURANT_OPS_GROSS_MARGIN",)
     assert spec.unsupported_requirements == ("return_rate",)
-    assert "退菜" in (spec.clarification_question or "")
+    assert spec.clarification_question is None
 
 
 def test_net_profit_is_not_silently_reduced_to_revenue_or_gross_margin():
@@ -1113,15 +1117,12 @@ def test_dish_optimization_reports_every_missing_dimension_together():
     assert set(spec.unsupported_requirements) == {
         "return_rate", "customer_review", "production_time",
     }
-    question = spec.clarification_question or ""
-    assert "退菜率" in question
-    assert "顾客评价" in question
-    assert "菜品制作时长" in question
-    assert "菜品销量" in question
-    assert "营业收入" in question
-    assert "已覆盖销售的毛利" in question
-    assert "食材损耗" in question
-    assert "部分完成说成全部完成" in question
+    assert spec.clarification_needed is False
+    assert spec.clarification_question is None
+    assert spec.planned_intents == (
+        "RESTAURANT_OPS_WASTAGE_TOP",
+        "RESTAURANT_OPS_GROSS_MARGIN",
+    )
 
 
 def test_price_elasticity_discloses_required_controls_and_does_not_claim_causality():

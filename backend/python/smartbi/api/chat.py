@@ -60,6 +60,16 @@ from smartbi.services.llm_guard import (
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["Chat"])
 
+_CHAT_PENDING_BG_TASKS: set[asyncio.Task] = set()
+
+
+def _spawn_chat_bg(coro) -> asyncio.Task:
+    """Anchor chat writebacks without importing the heavy analytics API module."""
+    task = asyncio.create_task(coro)
+    _CHAT_PENDING_BG_TASKS.add(task)
+    task.add_done_callback(_CHAT_PENDING_BG_TASKS.discard)
+    return task
+
 
 async def _log_template_hit_safe(pool, query, factory_id, upload_id, template_code, answer, wall_ms):
     """Safe wrapper around log_template_hit — swallows exceptions so a DB
@@ -688,6 +698,7 @@ class GeneralAnalysisResponse(BaseModel):
     """Response for general analysis (includes Java-compat fields)"""
     success: bool
     error: Optional[str] = None
+    warning: Optional[str] = None
     answer: str = ""
     aiAnalysis: Optional[str] = None
     reasoningContent: Optional[str] = None
@@ -1463,6 +1474,7 @@ async def general_analysis(request: GeneralAnalysisRequest, http_request: Reques
                         response = GeneralAnalysisResponse(
                             success=(tiered["kind"] == "clarification" or contract_pass),
                             error=None if contract_pass else "本次结果未通过完整性校验",
+                            warning=tiered.get("warning"),
                             answer=answer_text,
                             aiAnalysis=answer_text,
                             sessionId=request.session_id,
@@ -1475,17 +1487,25 @@ async def general_analysis(request: GeneralAnalysisRequest, http_request: Reques
                             processing_time_ms=int((time.time() - start_time) * 1000),
                         )
                         if (
-                            tiered["kind"] == "answer"
+                            (
+                                tiered["kind"] == "answer"
+                                or tiered.get("structured_context") is not None
+                            )
                             and request.session_id
                             and trusted_session_user_id is not None
                         ):
                             from smartbi.services.chat_session_service import ChatSessionService
+                            tiered_spec = tiered.get("spec")
                             await ChatSessionService(pool).upsert(
                                 session_id=request.session_id,
                                 factory_id=factory_id_hdr,
                                 parent_query=(effective_ops_query if inherited_context else query),
                                 parent_answer_summary=answer_text,
-                                parent_template_code=tiered.get("code"),
+                                parent_template_code=(
+                                    tiered.get("code")
+                                    or getattr(tiered_spec, "intent", None)
+                                    or "RESTAURANT_OPS_CLARIFICATION"
+                                ),
                                 parent_upload_id=None,
                                 user_id=trusted_session_user_id,
                                 structured_context=tiered.get("structured_context"),
@@ -2485,19 +2505,30 @@ async def general_analysis_stream(request: GeneralAnalysisRequest, http_request:
                                 "queryPlanHash": tiered_ops.get("query_plan_hash"),
                                 "executedResolvers": tiered_ops.get("executed_resolvers") or [],
                                 "suggestedFollowups": tiered_ops.get("suggested_followups") or [],
+                                "warning": tiered_ops.get("warning"),
                                 "processingTimeMs": wall_ms,
                                 "log_id": None,
                             })
-                            if tiered_ops["kind"] == "answer" and _session_can_persist:
+                            if (
+                                (
+                                    tiered_ops["kind"] == "answer"
+                                    or tiered_ops.get("structured_context") is not None
+                                )
+                                and _session_can_persist
+                            ):
                                 try:
                                     from smartbi.services.chat_session_service import ChatSessionService as _CSS_OPS
-                                    from smartbi.api.materialized_analytics import _spawn_bg as _spawn_ops
-                                    _spawn_ops(_CSS_OPS(pool).upsert(
+                                    tiered_spec = tiered_ops.get("spec")
+                                    _spawn_chat_bg(_CSS_OPS(pool).upsert(
                                         session_id=request.session_id,
                                         factory_id=_session_factory_id,
                                         parent_query=effective_user_q if inherited_context else user_q,
                                         parent_answer_summary=answer_text_ops,
-                                        parent_template_code=tiered_ops.get("code") or "RESTAURANT_OPS_UNKNOWN",
+                                        parent_template_code=(
+                                            tiered_ops.get("code")
+                                            or getattr(tiered_spec, "intent", None)
+                                            or "RESTAURANT_OPS_CLARIFICATION"
+                                        ),
                                         parent_upload_id=None,
                                         user_id=_session_user_id,
                                         structured_context=tiered_ops.get("structured_context"),

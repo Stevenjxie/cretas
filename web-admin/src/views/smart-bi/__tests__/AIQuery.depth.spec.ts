@@ -262,4 +262,28 @@ describe('AIQuery P1 conversational depth', () => {
     expect(executeIntentMock.mock.calls[1][2]?.sessionId)
       .toBe(executeIntentMock.mock.calls[0][2]?.sessionId);
   });
+
+  it('shows an xlsx data export for a restaurant answer with structured chart data', async () => {
+    executeIntentMock.mockResolvedValue(goldAnswer('各平台评价对比...'));
+
+    const { wrapper } = await mountAndAsk('各平台评价对比');
+
+    expect(wrapper.text()).toContain('导出数据 (xlsx)');
+  });
+
+  it('shows an honest xlsx template export when complex restaurant analysis lacks data', async () => {
+    executeIntentMock.mockResolvedValue({
+      status: 'NEED_CLARIFICATION',
+      sessionId: 'elasticity-session',
+      message: '当前不能可靠完成价格弹性或回归曲线，需要补齐价格、销量和对照时段。',
+      resultData: {
+        message: '当前不能可靠完成价格弹性或回归曲线，需要补齐价格、销量和对照时段。',
+      },
+    });
+
+    const { wrapper } = await mountAndAsk('分析提价影响和价格弹性');
+
+    expect(wrapper.text()).toContain('导出分析模板 (xlsx)');
+    expect(wrapper.text()).not.toContain('导出数据 (xlsx)');
+  });
 });
