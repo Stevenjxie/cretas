@@ -66,3 +66,16 @@
 - 门禁：发布后必须同时满足 `postgres=connected`、classifier `model_available=true`、`NRestarts=0` 和所有 runtime 消费者契约；回滚后也执行相同业务健康检查。
 - 发布边界：合并后仅从 clean exact `origin/main` 再次发布，生产业务写入为 0。
 - Scope 锁已释放。
+
+## `BUG-RESTAURANT-AI-CONTEXT-ROUTING-20260725` — `merged`
+
+- Owner: `/root`
+- Base SHA: `632e1cdc1023ebc867b905ef55ccbcb5c5d95bff`
+- 合入：PR #1763；实现提交 `b6a0cbebc8e16d199523798cee7fcdfc49526853`。
+- 路由与读写边界：餐饮销量/排行查询不再被老板动作关键词抢走；历史老板动作会话不能把删除、下架、调价等真实业务写请求降级为只读建议。
+- 多轮契约：时间、门店范围、排名方向、Top-N 与排除项进入结构化会话上下文；支持“时间按钮 → 门店按钮 → 执行”连续澄清，并保留最近 20 轮既有会话能力。
+- 多门店执行：多店租户在未指定范围时提供全部/真实门店按钮；选择多店后 SQL 按同一时间窗口限制门店，并分别按销量、营收、订单或客单价回答，菜品排行继续排除米饭、餐巾纸、湿纸巾和餐具等附属项。
+- 稳定性：餐饮 T3 LLM 供应商链增加 7.5 秒总预算，避免单供应商超时累加超过 Java 10 秒截止时间。
+- 验证：Python 餐饮目标回归 573 通过（本机缺少旧 `smart_bi_chat_session` 测试表的 6 个数据库 fixture 明确排除）、21 维综合分析 25 通过、Java 老板动作路由 4 通过；`compileall`、增量 Ruff、`git diff --check` 与远端 tracked-secret-scan 通过。
+- 发布：用户已明确授权合并后从 clean exact `origin/main` 发布 Java/Python；部署必须复核真实 upstream、Python `postgres=connected`、classifier、systemd/端口和餐饮只读语义，生产业务写入必须为 0。
+- Scope 锁已释放。
