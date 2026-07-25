@@ -1245,6 +1245,28 @@ def test_store_margin_structured_target_missing_is_directed_no_data(monkeypatch)
     assert result.charts == []
 
 
+def test_store_dish_ranking_no_data_keeps_sales_semantics(monkeypatch):
+    start, end = date(2026, 7, 19), date(2026, 7, 25)
+    pool, _ = _store_margin_runtime(monkeypatch, {(start, end): []})
+
+    result = asyncio.run(_r.resolve_store_margin(
+        pool,
+        "RES_TEST",
+        role="restaurant_manager",
+        date_range=(start, end),
+        query="哪个菜卖得好 最近7天 无数据店",
+        store_name="无数据店",
+    ))
+
+    assert result.title == "无数据店菜品销量排行（2026-07-19 至 2026-07-25）"
+    assert "不能生成销量最高榜" in result.answer_text
+    assert "没有改成毛利、营业额或其他日期" in result.answer_text
+    assert result.meta["dish_ranking"] == "best"
+    assert result.meta["no_pos_data"] is True
+    assert result.meta["scope_matches_request"] is True
+    assert result.charts == []
+
+
 def test_store_margin_comparison_uses_both_exact_date_ranges(monkeypatch):
     primary = (date(2026, 7, 20), date(2026, 7, 21))
     baseline = (date(2026, 7, 18), date(2026, 7, 19))
