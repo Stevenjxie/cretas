@@ -449,6 +449,126 @@ async def test_approved_exact_time_and_store_composition_survives_planner_outage
 
 
 @pytest.mark.asyncio
+async def test_trusted_dish_followup_survives_planner_outage():
+    query = "最近7天全部门店招牌青花椒味(单人份)的成本和毛利呢？"
+    t3 = AsyncMock(side_effect=AssertionError(
+        "complete trusted dish follow-up must not call T3"
+    ))
+
+    with patch("smartbi.gold.restaurant_intent._t3_llm_parse", new=t3):
+        spec = await parse_restaurant_query(
+            query,
+            _restaurant_pool(),
+            factory_id="DEMO_REST",
+            trusted_followup_context=True,
+        )
+
+    assert spec is not None
+    assert spec.clarification_needed is False
+    assert spec.planner_authority in {
+        "trusted_context",
+        "trusted_context_contract_repair",
+    }
+    assert spec.source_tier == "trusted_context"
+    assert spec.window_label == "最近7天"
+    assert spec.store_scope == "all"
+    assert spec.dish_slot == "招牌青花椒味(单人份)"
+    assert spec.requested_metrics == ("recipe_cost", "gross_margin")
+    # The dish-margin resolver returns sales, recipe cost, and gross margin in
+    # one answer; a second recipe-cost execution would duplicate the same row.
+    assert spec.planned_intents == ("RESTAURANT_OPS_GROSS_MARGIN",)
+    t3.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("scope_text", "expected_scope", "expected_stores"),
+    [
+        ("青花椒南方百联店", "single", ("青花椒南方百联店",)),
+        (
+            "青花椒南方百联店和青花椒徐汇光启城店",
+            "multiple",
+            ("青花椒南方百联店", "青花椒徐汇光启城店"),
+        ),
+    ],
+)
+async def test_trusted_named_store_dish_followup_survives_planner_outage(
+    scope_text,
+    expected_scope,
+    expected_stores,
+):
+    query = f"最近7天{scope_text}招牌青花椒味(单人份)的成本如何"
+    t3 = AsyncMock(side_effect=AssertionError(
+        "complete trusted named-store follow-up must not call T3"
+    ))
+
+    with patch("smartbi.gold.restaurant_intent._t3_llm_parse", new=t3):
+        spec = await parse_restaurant_query(
+            query,
+            _restaurant_pool(),
+            factory_id="DEMO_REST",
+            trusted_followup_context=True,
+        )
+
+    assert spec is not None
+    assert spec.clarification_needed is False
+    assert spec.planner_authority in {
+        "trusted_context",
+        "trusted_context_contract_repair",
+    }
+    assert spec.store_scope == expected_scope
+    assert spec.store_slots == expected_stores
+    assert spec.dish_slot == "招牌青花椒味(单人份)"
+    t3.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_same_dish_text_without_trusted_context_still_fails_closed():
+    query = "最近7天全部门店招牌青花椒味(单人份)的成本和毛利呢？"
+    with patch(
+        "smartbi.gold.restaurant_intent._t3_llm_parse",
+        new=AsyncMock(return_value=None),
+    ) as t3:
+        spec = await parse_restaurant_query(
+            query,
+            _restaurant_pool(),
+            factory_id="DEMO_REST",
+        )
+
+    assert spec is not None
+    assert spec.intent == ""
+    assert spec.planner_authority == "llm_unavailable"
+    t3.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "query",
+    [
+        "全部门店招牌青花椒味(单人份)的成本和毛利呢？",
+        "最近7天招牌青花椒味(单人份)的成本和毛利呢？",
+        "最近7天全部门店招牌青花椒味(单人份)的成本怎么优化？",
+    ],
+)
+async def test_incomplete_or_advisory_trusted_followup_still_fails_closed(query):
+    with patch(
+        "smartbi.gold.restaurant_intent._t3_llm_parse",
+        new=AsyncMock(return_value=None),
+    ) as t3:
+        spec = await parse_restaurant_query(
+            query,
+            _restaurant_pool(),
+            factory_id="DEMO_REST",
+            trusted_followup_context=True,
+        )
+
+    assert spec is not None
+    assert spec.intent == ""
+    assert spec.planner_authority == "llm_unavailable"
+    t3.assert_awaited_once()
+
+
+@pytest.mark.asyncio
 async def test_clarification_path_low_confidence():
     query = "情况怎么样"
     assert match_restaurant_ops(query) is None

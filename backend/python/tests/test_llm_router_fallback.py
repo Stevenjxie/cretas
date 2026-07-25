@@ -87,6 +87,14 @@ def test_chains_deduped():
         assert len(chain) == len(set(chain)), f"{slot.value} chain has duplicates"
 
 
+def test_mapper_places_verified_healthy_max_before_expired_or_slow_tail():
+    chain = llm_router.SLOT_MODELS[SLOT.MAPPER]
+    assert chain[:2] == [
+        ("aliyun_c", "qwen3.6-flash-2026-04-16"),
+        ("aliyun_c", "qwen3.7-max-2026-06-08"),
+    ]
+
+
 def test_vl_chain_is_vision_only():
     for account, model in llm_router.SLOT_MODELS[SLOT.VL]:
         assert ("vl" in model) or (model == "glm-4.6v"), f"VL non-vision {account}/{model}"

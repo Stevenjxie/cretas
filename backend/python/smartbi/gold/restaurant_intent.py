@@ -59,6 +59,8 @@ TRUSTED_PLANNER_AUTHORITIES = frozenset({
     "validated_plan_cache_contract_repair",
     "promoted_exact",
     "promoted_exact_contract_repair",
+    "trusted_context",
+    "trusted_context_contract_repair",
 })
 
 # Human-reviewed, zero-ambiguity whole-sentence promotions. These are not
@@ -101,7 +103,7 @@ class RestaurantQuerySpec:
     dimensions: Tuple[str, ...]
     comparison: Optional[str]
     confidence: float
-    source_tier: str  # "keyword" | "vector" | "llm" | "plan_cache" | "exact"
+    source_tier: str  # keyword | vector | llm | plan_cache | exact | trusted_context
     clarification_needed: bool = False
     clarification_question: Optional[str] = None
     # 2026-07-08 clarification-loop v1: True when this spec was produced by
@@ -1323,6 +1325,70 @@ def _approved_exact_route(query: str) -> Optional[str]:
     return matched[0] if matched is not None else None
 
 
+_TRUSTED_CONTEXT_DISH_METRICS = frozenset({
+    "sales_volume",
+    "revenue",
+    "recipe_cost",
+    "gross_margin",
+})
+_TRUSTED_CONTEXT_DISH_INTENTS = frozenset({
+    "RESTAURANT_OPS_GROSS_MARGIN",
+    "RESTAURANT_OPS_RECIPE_COST",
+})
+
+
+def _trusted_context_dish_followup_spec(
+    query: str,
+) -> Optional[RestaurantQuerySpec]:
+    """Compile a narrow read-only plan from server-restored typed context.
+
+    This is not a keyword fast path. The caller must prove the current turn was
+    reconstructed from the authenticated chat session. Execution is granted
+    only when the rebuilt sentence contains every deterministic slot required
+    for a single-dish lookup: explicit date window, explicit store scope,
+    explicit dish, and a supported metric set. Diagnosis, optimisation,
+    comparison, export, action requests, unsupported metrics, and any
+    incomplete/ambiguous shape still go to T3 and fail closed if T3 is down.
+    """
+    try:
+        candidate_code = match_restaurant_ops(query)
+    except Exception:
+        return None
+    if candidate_code not in _TRUSTED_CONTEXT_DISH_INTENTS:
+        return None
+
+    spec = _build_spec(
+        candidate_code,
+        query,
+        confidence=1.0,
+        tier="trusted_context",
+        planner_authority="trusted_context",
+        require_explicit_time=True,
+    )
+    start_date, end_date = spec.date_range
+    metrics = frozenset(spec.requested_metrics)
+    if (
+        spec.clarification_needed
+        or start_date is None
+        or end_date is None
+        or spec.window_label == "全部历史"
+        or spec.store_scope not in {"all", "single", "multiple"}
+        or not spec.dish_slot
+        or not metrics
+        or not metrics.issubset(_TRUSTED_CONTEXT_DISH_METRICS)
+        or not spec.planned_intents
+        or not set(spec.planned_intents).issubset(_TRUSTED_CONTEXT_DISH_INTENTS)
+        or spec.unsupported_requirements
+        or spec.analysis_action != "lookup"
+        or spec.comparison is not None
+        or spec.asks_priority
+        or spec.asks_prohibited_actions
+        or spec.asks_export
+    ):
+        return None
+    return spec
+
+
 def _approved_exact_continuation_route(
     original_query: str,
     answer: str,
@@ -1926,14 +1992,16 @@ async def parse_restaurant_query(
     factory_id: str,
     history: Optional[Sequence[Dict[str, str]]] = None,
     session_key: Optional[str] = None,
+    trusted_followup_context: bool = False,
 ) -> Optional[RestaurantQuerySpec]:
     """Resolve `query` to one immutable RestaurantQuerySpec.
 
-    T1/T2 retrieve candidate hints; only T3, a validated T3-plan cache, or a
-    reviewed whole-sentence exact promotion may authorize execution. A
-    planner outage returns a fail-closed clarification rather than ``None``,
-    preventing the caller from trying an adjacent route. ``None`` is reserved
-    for an empty request or a non-restaurant tenant.
+    T1/T2 retrieve candidate hints; only T3, a validated T3-plan cache, a
+    reviewed whole-sentence exact promotion, or the narrow typed-context dish
+    continuation guard may authorize execution. A planner outage returns a
+    fail-closed clarification rather than ``None``, preventing the caller from
+    trying an adjacent route. ``None`` is reserved for an empty request or a
+    non-restaurant tenant.
 
     `session_key` (2026-07-08 clarification-loop v1, additive/optional):
     when truthy AND a pending clarification is on record for
@@ -2077,6 +2145,17 @@ async def parse_restaurant_query(
             session_key,
         )
         return promoted_spec
+
+    if trusted_followup_context:
+        trusted_spec = _trusted_context_dish_followup_spec(norm_query)
+        if trusted_spec is not None:
+            trusted_spec = await _apply_store_scope_guard(
+                pool,
+                factory_id,
+                trusted_spec,
+            )
+            if not trusted_spec.clarification_needed:
+                return trusted_spec
 
     cached = _cache_get(factory_id, norm_query)
     if (
