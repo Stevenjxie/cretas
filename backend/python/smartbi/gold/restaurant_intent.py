@@ -236,6 +236,21 @@ _ALL_STORE_SCOPE_TOKENS = (
 _STORE_RANK_SCOPE_TOKENS = (
     "哪家店", "哪个店", "哪家门店", "门店排名", "门店排行", "各店排名",
 )
+_STORE_BREAKDOWN_SCOPE_TOKENS = (
+    *_STORE_RANK_SCOPE_TOKENS,
+    "各门店", "各家店", "每家店", "各店", "每个店",
+    "按门店", "分门店", "逐店", "逐家", "门店之间", "店与店",
+)
+
+
+def _asks_store_breakdown(text: str) -> bool:
+    """Whether an all-store scope also asks for store-grain output.
+
+    “全部门店” by itself is a filter/aggregation scope.  Phrases such as
+    “各门店”“哪家店”“按门店” explicitly request a store breakdown and therefore
+    keep the store dimension.
+    """
+    return any(token in text for token in _STORE_BREAKDOWN_SCOPE_TOKENS)
 
 
 def _detect_store_scope(text: str) -> Tuple[Optional[str], Tuple[str, ...]]:
@@ -1080,14 +1095,13 @@ def _build_spec(
     if (llm_dish or deterministic_dish) and "dish" not in dimension_list:
         dimension_list.append("dish")
     # "全部门店" is an aggregation scope, not a request to group the answer by
-    # store.  For an all-store dish ranking, keeping it as a dimension would
-    # force the store-margin resolver and reject the correct aggregate plan.
+    # store.  Keeping it as a dimension makes otherwise-correct all-store
+    # sales/margin plans fail the immutable resolver-capability check.  Only
+    # explicit store-grain wording ("各门店"/"哪家店"/"按门店"...) keeps it.
     if (
         store_scope == "all"
-        and ranking_direction
-        and "dish" in dimension_list
         and "store" in dimension_list
-        and not store_dish_split_dish(effective_query)
+        and not _asks_store_breakdown(effective_query)
     ):
         dimension_list.remove("store")
     dimensions = tuple(dimension_list)

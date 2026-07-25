@@ -473,11 +473,39 @@ async def test_trusted_dish_followup_survives_planner_outage():
     assert spec.window_label == "最近7天"
     assert spec.store_scope == "all"
     assert spec.dish_slot == "招牌青花椒味(单人份)"
+    assert spec.dimensions == ("dish",)
     assert spec.requested_metrics == ("recipe_cost", "gross_margin")
     # The dish-margin resolver returns sales, recipe cost, and gross margin in
     # one answer; a second recipe-cost execution would duplicate the same row.
     assert spec.planned_intents == ("RESTAURANT_OPS_GROSS_MARGIN",)
     t3.assert_not_awaited()
+
+
+def test_all_store_scope_is_aggregate_unless_store_breakdown_is_explicit():
+    aggregate = _build_spec(
+        "RESTAURANT_OPS_GROSS_MARGIN",
+        "最近7天全部门店招牌青花椒味(单人份)的成本和毛利呢？",
+        confidence=1.0,
+        tier="trusted_context",
+        planner_authority="trusted_context",
+        require_explicit_time=True,
+    )
+    breakdown = _build_spec(
+        "RESTAURANT_OPS_STORE_MARGIN",
+        "最近7天各门店招牌青花椒味(单人份)的毛利分别怎么样？",
+        confidence=1.0,
+        tier="llm",
+        planner_authority="llm",
+        require_explicit_time=True,
+        llm_dish="招牌青花椒味(单人份)",
+    )
+
+    assert aggregate.store_scope == "all"
+    assert aggregate.dimensions == ("dish",)
+    assert aggregate.planned_intents == ("RESTAURANT_OPS_GROSS_MARGIN",)
+    assert breakdown.store_scope == "all"
+    assert breakdown.dimensions == ("store", "dish")
+    assert breakdown.planned_intents == ("RESTAURANT_OPS_STORE_MARGIN",)
 
 
 @pytest.mark.asyncio
