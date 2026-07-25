@@ -244,6 +244,9 @@ async def test_sql_uses_coalesce_canonical_fallback_grouping():
     assert "COALESCE(cd.canonical_name, p.name)" in sql
     assert "MIN(p.product_id)" in sql
     assert "HAVING SUM(a.revenue) > 0" in sql
+    assert "餐巾纸" in sql
+    assert "(?:白)?米饭" in sql
+    assert "p.sub_category" in sql
     assert "ORDER BY g.revenue ASC" in sql          # order whitelist honored
     # Bound args unchanged: factory_id, start_month(=2026-04-01), end_month, top_n.
     args = pool.capture["args"]
