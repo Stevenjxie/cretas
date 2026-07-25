@@ -162,6 +162,29 @@ def test_should_delegate_contract_repair_without_java_reinterpretation(authority
     assert should_delegate(spec) is True
 
 
+def test_all_store_dish_followup_matches_aggregate_resolver_capability():
+    query = "最近7天全部门店招牌青花椒味(单人份)的成本和毛利呢？"
+    spec = _build_spec(
+        "RESTAURANT_OPS_GROSS_MARGIN",
+        query,
+        confidence=1.0,
+        tier="trusted_context",
+        planner_authority="trusted_context",
+        require_explicit_time=True,
+    )
+
+    mismatch = svc._execution_mismatch(
+        spec,
+        spec.planned_intents,
+        dish_mention="招牌青花椒味(单人份)",
+        store_mention=None,
+        store_dish=None,
+    )
+
+    assert spec.dimensions == ("dish",)
+    assert mismatch is None
+
+
 def test_should_delegate_clarification_needed_true():
     """Rule 2: clarification_needed -> True (Java can't ask a clarifying
     question itself)."""
