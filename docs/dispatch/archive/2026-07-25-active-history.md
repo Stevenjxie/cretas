@@ -23,3 +23,14 @@
 - 回归：220 项餐饮 intent/clarification/service 目标测试通过；餐饮全量 796 项通过，另有 1 项与本任务无关的既有 owner-action mock 未接收 `live_overrides` 参数；Ruff、`compileall`、`git diff --check` 通过。
 - 发布：当前会话继续发布 Python，并在生产 Demo“咨询”模式验收“四按钮→本月菜品销量排行”及后续上下文；业务写入必须为 0。
 - Scope 锁已释放。
+
+## `ARCH-RESTAURANT-AUTO-DIMENSION-001` — `merged`
+
+- Owner: `/root`
+- Base SHA: `9925cdad2d76310cc9a3c1fd667f5429109d360e`
+- 合入：PR #1758；餐饮决策分析补齐 21 维数据可用性契约、自动扩维、缺失维度提示、主菜销量排行过滤、供应商稳定数据与异常区分，以及外部信号的 `REAL` / `PROXY` / `SIMULATED` / `MISSING` 明示。
+- Demo 数据：`V20261029_01__demo_rest_comprehensive_dimensions.sql` 为 `DEMO_REST` 提供 2025-07-01 至 2026-07-31 连续种子；迁移在 PostgreSQL 16 中连续执行两遍保持幂等，真实租户哨兵未变化。
+- Gold 集成测试：旧测试不再误连默认 `localhost:5432` 空密码数据库；新增一次性 PostgreSQL 16 runner，显式 loopback/test-DB 门禁下 `15 passed`，普通无 DSN 测试明确 `15 skipped`。
+- 验证：餐饮目标 Pytest `413 passed`，Gold 一次性数据库 `15 passed`，`compileall`、增量 Ruff、`git diff --check` 通过。
+- 发布边界：用户已明确授权合并后从 clean exact `origin/main` 发布 Python SmartBI；发布仅允许迁移、代码同步和服务重启，生产业务写入必须为 0。
+- Scope 锁已释放。
