@@ -2139,6 +2139,9 @@ def test_week_pair_routes_to_sales_summary():
 def test_store_plus_dish_extracts_dish_after_store_strip():
     assert _r.extract_dish_candidate("鲜行者打浦桥日月光店的米饭卖得怎么样") == "米饭"
     assert _r.extract_dish_candidate("鲜行者打浦桥日月光店的毛利率是多少") is None
+    assert _r.extract_store_mentions(
+        "最近7天青花椒南方百联店和青花椒徐汇光启城店的米饭成本"
+    ) == ["青花椒南方百联店", "青花椒徐汇光启城店"]
 
 
 def test_comparative_two_dishes_extracted():
@@ -2153,6 +2156,12 @@ def test_comparative_two_dishes_extracted():
 def test_multi_metric_dish_extraction():
     assert _r.extract_dish_candidate("米饭的销量和毛利率分别是多少") == "米饭"
     assert _r.extract_dish_candidate("招牌藤椒味的营收和成本是多少") == "招牌藤椒味"
+    assert (
+        _r.extract_dish_candidate(
+            "最近7天全部门店招牌青花椒味(单人份)的成本和毛利呢？"
+        )
+        == "招牌青花椒味(单人份)"
+    )
 
 
 def test_profit_colloquial_routes_to_sales_summary():

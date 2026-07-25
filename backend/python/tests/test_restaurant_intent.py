@@ -1422,6 +1422,135 @@ def test_dish_ranking_followup_uses_structured_entity_not_answer_markdown():
     assert effective == "最近30天招牌藤椒味（单人份）的成本如何"
 
 
+def test_dish_followup_inherits_all_store_scope_with_entity_and_window():
+    parent = {
+        "parent_query": "最近7天全部门店哪个菜卖得好",
+        "parent_template_code": "RESTAURANT_OPS_GROSS_MARGIN",
+        "turns_history": [{
+            "q": "最近7天全部门店哪个菜卖得好",
+            "a_summary": "已返回前五名",
+            "context": {
+                "focus_entity": {
+                    "type": "dish",
+                    "id": "dish-42",
+                    "name": "招牌青花椒味(单人份)",
+                    "rank": 1,
+                },
+                "window_label": "最近7天",
+                "requested_metrics": ["sales_volume"],
+                "store_scope": "all",
+                "store_names": [],
+            },
+        }],
+    }
+
+    effective, inherited = contextualize_restaurant_followup(
+        "它的成本和毛利呢？",
+        parent,
+    )
+
+    assert inherited is True
+    assert effective == "最近7天全部门店招牌青花椒味(单人份)的成本和毛利呢？"
+    spec = _build_spec(
+        "RESTAURANT_OPS_GROSS_MARGIN",
+        effective,
+        confidence=0.95,
+        tier="llm",
+        planner_authority="llm",
+    )
+    assert spec.store_scope == "all"
+    assert spec.store_slots == ()
+    assert spec.dish_slot == "招牌青花椒味(单人份)"
+    assert spec.requested_metrics == ("recipe_cost", "gross_margin")
+
+
+@pytest.mark.parametrize(
+    ("store_scope", "store_names", "expected_scope_text"),
+    [
+        ("single", ["青花椒南方百联店"], "青花椒南方百联店"),
+        (
+            "multiple",
+            ["青花椒南方百联店", "青花椒徐汇光启城店"],
+            "青花椒南方百联店和青花椒徐汇光启城店",
+        ),
+    ],
+)
+def test_dish_followup_inherits_named_store_scope(
+    store_scope,
+    store_names,
+    expected_scope_text,
+):
+    parent = {
+        "parent_query": "最近7天菜品销量排行",
+        "parent_template_code": "RESTAURANT_OPS_GROSS_MARGIN",
+        "structured_context": {
+            "focus_entity": {
+                "type": "dish",
+                "name": "招牌青花椒味(单人份)",
+                "rank": 1,
+            },
+            "window_label": "最近7天",
+            "requested_metrics": ["sales_volume"],
+            "store_scope": store_scope,
+            "store_names": store_names,
+        },
+    }
+
+    effective, inherited = contextualize_restaurant_followup("它的成本如何", parent)
+
+    assert inherited is True
+    assert effective == (
+        f"最近7天{expected_scope_text}招牌青花椒味(单人份)的成本如何"
+    )
+    spec = _build_spec(
+        "RESTAURANT_OPS_GROSS_MARGIN",
+        effective,
+        confidence=0.95,
+        tier="llm",
+        planner_authority="llm",
+    )
+    assert spec.store_scope == store_scope
+    assert spec.store_slots == tuple(store_names)
+    assert spec.dish_slot == "招牌青花椒味(单人份)"
+
+
+def test_dish_followup_explicit_store_scope_overrides_parent_scope():
+    parent = {
+        "parent_query": "最近7天全部门店哪个菜卖得好",
+        "parent_template_code": "RESTAURANT_OPS_GROSS_MARGIN",
+        "structured_context": {
+            "focus_entity": {
+                "type": "dish",
+                "name": "招牌青花椒味(单人份)",
+                "rank": 1,
+            },
+            "window_label": "最近7天",
+            "requested_metrics": ["sales_volume"],
+            "store_scope": "all",
+            "store_names": [],
+        },
+    }
+
+    effective, inherited = contextualize_restaurant_followup(
+        "青花椒南方百联店它的成本如何",
+        parent,
+    )
+
+    assert inherited is True
+    assert effective == "最近7天青花椒南方百联店招牌青花椒味(单人份)的成本如何"
+    assert "全部门店" not in effective
+    spec = _build_spec(
+        "RESTAURANT_OPS_GROSS_MARGIN",
+        effective,
+        confidence=0.95,
+        tier="llm",
+        planner_authority="llm",
+    )
+    assert spec.store_scope == "single"
+    assert spec.store_slots == ("青花椒南方百联店",)
+    assert spec.dish_slot == "招牌青花椒味(单人份)"
+
+
 @pytest.mark.asyncio
 async def test_generic_optimization_parses_as_clarification_without_llm():
     spec = await parse_restaurant_query(

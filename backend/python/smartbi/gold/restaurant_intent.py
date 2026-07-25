@@ -737,7 +737,29 @@ def contextualize_restaurant_followup(
     context_metrics = context.get("requested_metrics") or ()
     explicit_metrics = _detect_requested_metrics(current)
     metric_label = _context_metric_label(explicit_metrics or context_metrics)
-    body = _strip_followup_reference(current)
+    current_store_scope, current_store_names = _detect_store_scope(current)
+    current_without_store_scope = current
+    if current_store_scope in {"single", "multiple"}:
+        for store_name in current_store_names:
+            current_without_store_scope = current_without_store_scope.replace(
+                store_name,
+                "",
+                1,
+            )
+        current_without_store_scope = re.sub(
+            r"^(?:和|与|跟|、|，|,|的)+",
+            "",
+            current_without_store_scope,
+        ).strip()
+    elif current_store_scope == "all":
+        for token in sorted(_ALL_STORE_SCOPE_TOKENS, key=len, reverse=True):
+            current_without_store_scope = current_without_store_scope.replace(
+                token,
+                "",
+                1,
+            )
+        current_without_store_scope = current_without_store_scope.strip()
+    body = _strip_followup_reference(current_without_store_scope)
     action = _detect_analysis_action(current)
 
     # Ranking follow-ups are changes to ranking slots, not dish names.  Without
@@ -785,7 +807,11 @@ def contextualize_restaurant_followup(
     if isinstance(focus_entity, dict):
         entity_name = focus_entity["name"]
         entity_type = focus_entity["type"]
-        entity_source = re.sub(r"^(?:换成|改成)", "", current).strip()
+        entity_source = re.sub(
+            r"^(?:换成|改成)",
+            "",
+            current_without_store_scope,
+        ).strip()
         explicit_entity = (
             extract_dish_candidate(entity_source)
             if entity_type == "dish"
@@ -854,6 +880,31 @@ def contextualize_restaurant_followup(
             resolved = current
     else:
         resolved = current
+
+    # Store scope is a first-class trusted slot, just like time and entity.
+    # A dependent follow-up such as "它的成本和毛利呢？" must not forget that
+    # the user already selected "全部门店" (or a named store set) on the
+    # ranking turn.  Explicit store scope in the current utterance wins.
+    if current_store_scope == "all":
+        current_scope_text = "全部门店"
+    elif current_store_scope in {"single", "multiple"} and current_store_names:
+        current_scope_text = "和".join(current_store_names)
+    else:
+        current_scope_text = ""
+    if current_scope_text:
+        if current_scope_text not in resolved:
+            resolved = f"{current_scope_text}{resolved}"
+    else:
+        parent_store_scope = context.get("store_scope")
+        parent_store_names = tuple(context.get("store_names") or ())
+        if parent_store_scope == "all":
+            store_scope_text = "全部门店"
+        elif parent_store_scope in {"single", "multiple"} and parent_store_names:
+            store_scope_text = "和".join(parent_store_names)
+        else:
+            store_scope_text = ""
+        if store_scope_text and store_scope_text not in resolved:
+            resolved = f"{store_scope_text}{resolved}"
 
     parent_window = context.get("window_label")
     current_window = _resolve_sales_date_range(current)[1]

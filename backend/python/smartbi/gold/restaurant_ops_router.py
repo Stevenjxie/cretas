@@ -734,7 +734,7 @@ _DISH_GENERIC_TOKENS = frozenset({
 _DISH_MULTI_METRIC_RE = re.compile(
     r"^[「\"']?(.{1,30}?)[」\"']?(?:的)?"
     r"(?:(?:毛利率|毛利|销量|营业额|销售额|营收|成本率|成本)[和与、]?){2,}"
-    r"(?:分别)?(?:是多少|有多少|怎么样|如何|多少)?[?？。!！]?$"
+    r"(?:分别)?(?:是多少|有多少|怎么样|如何|多少)?(?:呢|啊|呀)?[?？。!！]?$"
 )
 _DISH_QUERY_RE = re.compile(
     r"^[「\"']?(.{1,30}?)[」\"']?(?:的)?"
@@ -755,7 +755,8 @@ _DISH_LEADING_QUERY_VERB_RE = re.compile(
 )
 _DISH_LEADING_TIME_RE = re.compile(
     r"^(?:今天|今日|昨天|昨日|前天|本周|这周|上上周|上周|本月|这个月|上上个月|上上月|上个月|上月"
-    r"|今年|去年|前年|现在|如今|目前|最近\S{0,4}|近\S{0,4}|过去\S{0,4}"
+    r"|今年|去年|前年|现在|如今|目前"
+    r"|(?:最近|近|过去)(?:\d+|[一二三四五六七八九十半两]+)(?:小时|天|日|周|个?月|年)"
     r"|20\d{2}年(?:全年|度)?|全年"
     r"|(?:20\d{2}年)?(?:1[0-2]|0?[1-9]|十一|十二|[一二三四五六七八九十])月份?)+"
 )
@@ -827,9 +828,12 @@ def extract_dish_candidate(query: "Optional[str]") -> "Optional[str]":
         return None
     # 店+菜混合 ("鲜行者店的米饭卖得怎么样"): 先剥离门店名再取菜名;
     # 纯门店问法剥离后剩余过短, 自然返回 None 走门店路线。
-    store_in_text = extract_store_mention(text)
-    if store_in_text:
-        text = text.replace(store_in_text, "").lstrip("的， ,").strip()
+    stores_in_text = extract_store_mentions(text)
+    if stores_in_text:
+        for store_in_text in stores_in_text:
+            text = text.replace(store_in_text, "", 1)
+        text = _DISH_LEADING_TIME_RE.sub("", text)
+        text = text.lstrip("和与跟及、的， ,").strip()
         if len(text) < 4:
             return None
     segments = [text]
@@ -953,6 +957,7 @@ _GENERIC_STORE_SCOPE_FRAGMENTS = frozenset({
 _STORE_MENTION_RE = re.compile(r"[一-龥A-Za-z0-9·]{2,24}(?:门店|店)")
 _STORE_MENTION_PREFIX_TRIM = re.compile(
     r"^(?:有没有|有无|是否有|是否|存不存在|是不是|会不会"
+    r"|(?:最近|近|过去)(?:\d+|[一二三四五六七八九十半两]+)(?:小时|天|日|周|个?月|年)"
     r"|上个月|上月|本月|这个月|上周|本周|这周|今天|昨天|今年|去年|最近"
     r"|请|帮我|帮忙|查一下|查查|查询|查|看看|看一下|看|分析一下|分析"
     r"|对比|比较|了解|统计|计算|那|这|把|给|在|的|是|说说|讲讲)+"
