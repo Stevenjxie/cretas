@@ -55,3 +55,14 @@
 - 验证：旁路 Python 3.11 环境 `pip check` 通过；classifier 路由返回 200、模型加载 259 个标签；部署测试可模拟该类中间件回归并证明发布在重启前终止。
 - 发布边界：合并后仅从 clean exact `origin/main` 再次发布；必须同时通过主 health、classifier 200、稳定观察、所有 runtime 消费者和回滚目标验证，生产业务写入为 0。
 - Scope 锁已释放。
+
+## `BUG-PYTHON311-UNIT-ENV-003` — `merged`
+
+- Owner: `/root`
+- Base SHA: `eb7fad476373200800cac8054427042f1d1bda20`
+- 合入：PR #1762；实现提交 `94cdacb61`。
+- 生产处置：第二次 Python 3.11 切换虽主 health 为 200、classifier 为 200，但语义验收发现 `postgres=disabled`；根因是 tracked 主 unit 漏掉旧 unit 的 5 个 PostgreSQL 非敏感 Environment。已恢复旧 unit 与 `venv38`，主 health 重新 `connected`、classifier 200、`NRestarts=0`。
+- 修复：补齐 PostgreSQL unit 契约；发布前将主 unit 与两个 drop-in 写入 exact-SHA 回滚快照；失败时同时恢复 unit 与 venv；拒绝 symlink 路径。
+- 门禁：发布后必须同时满足 `postgres=connected`、classifier `model_available=true`、`NRestarts=0` 和所有 runtime 消费者契约；回滚后也执行相同业务健康检查。
+- 发布边界：合并后仅从 clean exact `origin/main` 再次发布，生产业务写入为 0。
+- Scope 锁已释放。
