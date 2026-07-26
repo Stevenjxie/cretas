@@ -898,11 +898,93 @@ def test_owner_action_chat_unscoped_prohibition_question_asks_for_goal() -> None
         assert "不会默认成套餐" in data["answer"]
         assert "270" not in data["answer"]
         assert "招牌鱼" not in data["answer"]
+        assert data["scenario"] == "goal_clarification"
+        assert data["ownerDecisionPage"] == {}
+        assert data["charts"] == []
         assert data["followUpSuggestions"] == [
-            "先守住营收",
-            "先守住毛利",
-            "先减少损耗",
+            {
+                "label": "先守住营收",
+                "question": "先守住营收",
+                "ownerActionScenario": "revenue_growth",
+            },
+            {
+                "label": "先守住毛利",
+                "question": "先守住毛利",
+                "ownerActionScenario": "cost_margin",
+            },
+            {
+                "label": "先减少损耗",
+                "question": "先减少损耗",
+                "ownerActionScenario": "cost_margin",
+            },
         ]
+
+
+def test_owner_action_goal_clarification_buttons_select_their_own_scenario() -> None:
+    expected = {
+        "先守住营收": "revenue_growth",
+        "先守住毛利": "cost_margin",
+        "先减少损耗": "cost_margin",
+    }
+
+    for index, (button, expected_scenario) in enumerate(expected.items()):
+        factory_id = f"F_GOAL_CLARIFICATION_{index}"
+        first = owner_action_chat(
+            OwnerActionChatRequest(
+                factory_id=factory_id,
+                message="现在有哪些动作先别做？",
+            )
+        )["data"]
+
+        selected = owner_action_chat(
+            OwnerActionChatRequest(
+                factory_id=factory_id,
+                session_id=first["sessionId"],
+                demo_scenario="goal_clarification",
+                message=button,
+            )
+        )["data"]
+
+        assert selected["scenario"] == expected_scenario
+        assert selected["answer"] != first["answer"]
+        assert "不会默认成套餐" not in selected["answer"]
+
+
+def test_owner_action_goal_clarification_keeps_asking_on_opaque_continue() -> None:
+    first = owner_action_chat(
+        OwnerActionChatRequest(
+            factory_id="F_GOAL_CLARIFICATION_CONTINUE",
+            message="哪些事情先不要做？",
+        )
+    )["data"]
+
+    continued = owner_action_chat(
+        OwnerActionChatRequest(
+            factory_id="F_GOAL_CLARIFICATION_CONTINUE",
+            session_id=first["sessionId"],
+            demo_scenario="goal_clarification",
+            message="继续",
+        )
+    )["data"]
+
+    assert continued["scenario"] == "goal_clarification"
+    assert continued["answer"] == first["answer"]
+    assert continued["followUpSuggestions"] == first["followUpSuggestions"]
+
+
+def test_owner_action_goal_clarification_survives_cross_worker_memory_miss() -> None:
+    data = owner_action_chat(
+        OwnerActionChatRequest(
+            factory_id="F_GOAL_CLARIFICATION_CROSS_WORKER",
+            session_id="owner-action-goal-missing-worker",
+            demo_scenario="goal_clarification",
+            message="继续",
+        )
+    )["data"]
+
+    assert data["scenario"] == "goal_clarification"
+    assert "先确认" in data["answer"]
+    assert data["ownerDecisionPage"] == {}
 
 
 def test_owner_action_chat_common_follow_up_chips_do_not_repeat_first_answer() -> None:

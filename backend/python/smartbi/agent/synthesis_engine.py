@@ -447,7 +447,7 @@ HONEST_LABEL_CLAUSE = (
     "禁止用肯定或否定语气声称该维度发生了什么、影响了什么或没有影响。"
 )
 
-SYNTHESIS_CONTRACT_VERSION = "restaurant-dimensions-v7"
+SYNTHESIS_CONTRACT_VERSION = "restaurant-dimensions-v8"
 
 
 def _is_restaurant_synthesis_tenant(factory_id: str) -> bool:
@@ -1291,6 +1291,25 @@ class ComprehensiveSynthesisEngine:
             "综合分析", "全面分析", "多维分析", "运营分析", "经营分析",
             "整体情况", "整体经营",
         )
+        conceptual_comprehensive_scope = bool(
+            re.search(
+                r"内部(?:经营|数据|指标).{0,20}外部(?:环境|数据|因素|维度)"
+                r"|外部(?:环境|数据|因素|维度).{0,20}内部(?:经营|数据|指标)",
+                ql,
+            )
+        )
+        # "Other available dish operating metrics + explicitly list missing
+        # dimensions" is broader than a plain sales lookup but still narrower
+        # than a 21-dimension whole-business diagnosis. Mirror the dimensions
+        # selected by the fully enumerated dish-optimisation question so vague
+        # wording cannot silently collapse to only revenue + sales.
+        if "菜品经营指标" in ql and "缺失维度" in ql:
+            plan["review"] = True
+            plan["finance"] = True
+            plan["sales"] = True
+            plan["dish_margin"] = True
+            plan["dish_margin_asked"] = True
+            plan["operations"] = True
         has_specific_dimension = any(
             plan.get(key)
             for key in (
@@ -1308,6 +1327,7 @@ class ComprehensiveSynthesisEngine:
             plan["auto_expand"] = True
         elif (
             any(k in ql for k in comprehensive_cues)
+            or conceptual_comprehensive_scope
             or ("分析一下" in ql and not has_specific_dimension)
         ):
             plan["analysis_mode"] = "diagnose"

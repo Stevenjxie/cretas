@@ -582,7 +582,7 @@ class TestSynthesize:
         assert cache.put_calls
 
     def test_contract_version_invalidates_pre_guard_narrative_cache(self):
-        assert se.SYNTHESIS_CONTRACT_VERSION == "restaurant-dimensions-v7"
+        assert se.SYNTHESIS_CONTRACT_VERSION == "restaurant-dimensions-v8"
 
 
 class TestNarrativeGroundingGate:

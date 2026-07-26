@@ -428,7 +428,9 @@ class RestaurantOpsGoldRouteTest {
                 "主推单品怎么判断有没有拉动加购？",
                 "本周营业额下降，仓管厨师长前台分别要做什么？",
                 "这家店不是最差但客单价不高，区域经理今天看什么？",
-                "那就按第2种，指定门店下滑继续分析"
+                "那就按第2种，指定门店下滑继续分析",
+                "现在有哪些动作先别做？",
+                "告诉我哪些经营措施暂时不要做"
         }) {
             Boolean shouldRoute = ReflectionTestUtils.invokeMethod(
                     orchestrator,
