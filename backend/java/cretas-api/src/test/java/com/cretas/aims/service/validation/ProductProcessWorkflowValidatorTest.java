@@ -99,6 +99,39 @@ class ProductProcessWorkflowValidatorTest {
         assertEquals("PRODUCT_PROCESS_WORKFLOW_INVALID", error.getErrorCode());
     }
 
+    @Test
+    void draftCanAutosaveButCompleteRevisionRejectsMissingMultiOutputContract() {
+        ProductProcessWorkflowDTO definition = validMultiOutputPublishDefinition();
+        outputPort(definition, "out-main").remove("outputRole");
+        outputPort(definition, "out-main").remove("costAllocationRatio");
+
+        assertDoesNotThrow(() -> validator.validateForDraft(definition));
+        BusinessException error = assertThrows(
+                BusinessException.class,
+                () -> validator.validateStructureComplete(definition));
+
+        assertEquals("PRODUCT_PROCESS_WORKFLOW_OUTPUT_CONTRACT_REQUIRED", error.getErrorCode());
+    }
+
+    @Test
+    void completeRevisionAcceptsExplicitMultiOutputContract() {
+        ProductProcessWorkflowDTO definition = validMultiOutputPublishDefinition();
+
+        assertDoesNotThrow(() -> validator.validateStructureComplete(definition));
+    }
+
+    @Test
+    void completeRevisionRejectsMultiOutputAllocationThatDoesNotTotalOneHundred() {
+        ProductProcessWorkflowDTO definition = validMultiOutputPublishDefinition();
+        outputPort(definition, "out-main").put("costAllocationRatio", 80);
+
+        BusinessException error = assertThrows(
+                BusinessException.class,
+                () -> validator.validateStructureComplete(definition));
+
+        assertEquals("PRODUCT_PROCESS_WORKFLOW_OUTPUT_CONTRACT_INVALID", error.getErrorCode());
+    }
+
     private ProductProcessWorkflowDTO validMultiInputDefinition() {
         ProductProcessWorkflowDTO definition = new ProductProcessWorkflowDTO();
         definition.setNodes(new ArrayList<>(List.of(
@@ -161,6 +194,39 @@ class ProductProcessWorkflowValidatorTest {
         return definition;
     }
 
+    private ProductProcessWorkflowDTO validMultiOutputPublishDefinition() {
+        ProductProcessWorkflowDTO definition = validPublishDefinition();
+        ProductProcessWorkflowDTO.Node process = definition.getNodes().stream()
+                .filter(node -> "PROCESS".equals(node.getKind()))
+                .findFirst().orElseThrow();
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> ports =
+                (List<Map<String, Object>>) process.getData().get("ports");
+        Map<String, Object> main = ports.stream()
+                .filter(port -> "out".equals(port.get("id")))
+                .findFirst().orElseThrow();
+        main.put("id", "out-main");
+        main.put("outputRole", "MAIN");
+        main.put("costAllocationRatio", 70);
+
+        Map<String, Object> coProduct = port(
+                "out-co", "OUTPUT", "finished-co", "FINISHED_GOOD", 1);
+        coProduct.put("unit", "kg");
+        coProduct.put("outputRole", "CO_PRODUCT");
+        coProduct.put("costAllocationRatio", 30);
+        ports.add(coProduct);
+
+        ProductProcessWorkflowDTO.Node finishedCo = material("finished-co", "FINISHED_GOOD");
+        finishedCo.getData().put("skuId", "SKU-finished-co");
+        definition.getNodes().add(finishedCo);
+        definition.getEdges().add(edge(
+                "e4", "process", "out-co", "finished-co", "input"));
+        definition.getEdges().stream()
+                .filter(edge -> "e3".equals(edge.getId()))
+                .forEach(edge -> edge.setSourceHandle("out-main"));
+        return definition;
+    }
+
     private ProductProcessWorkflowDTO.Node material(String id, String kind) {
         return new ProductProcessWorkflowDTO.Node(
                 id,
@@ -206,6 +272,20 @@ class ProductProcessWorkflowValidatorTest {
 
     @SuppressWarnings("unchecked")
     private Map<String, Object> inputPort(
+            ProductProcessWorkflowDTO definition,
+            String portId) {
+        ProductProcessWorkflowDTO.Node process = definition.getNodes().stream()
+                .filter(node -> "PROCESS".equals(node.getKind()))
+                .findFirst()
+                .orElseThrow();
+        return ((List<Map<String, Object>>) process.getData().get("ports")).stream()
+                .filter(port -> portId.equals(port.get("id")))
+                .findFirst()
+                .orElseThrow();
+    }
+
+    @SuppressWarnings("unchecked")
+    private Map<String, Object> outputPort(
             ProductProcessWorkflowDTO definition,
             String portId) {
         ProductProcessWorkflowDTO.Node process = definition.getNodes().stream()

@@ -126,18 +126,58 @@
           </el-tag>
         </div>
       </div>
-      <div v-for="port in outputPorts" :key="port.id" class="port-row output-row">
-        <WorkflowSkuPicker
-          class="nodrag"
-          test-id="output-sku-select"
-          :model-value="port.skuId || ''"
-          :semi-options="semiOptions"
-          :finished-options="finishedOptions"
-          :disabled="!canWrite"
-          placeholder="选择或现场创建产出 SKU"
-          @change="(skuId) => emit('selectOutput', port.id, skuId)"
-        />
-        <span class="unit-chip" data-testid="output-unit-chip">{{ port.unit }}</span>
+      <div v-for="port in outputPorts" :key="port.id" class="output-entry">
+        <div class="port-row output-row">
+          <WorkflowSkuPicker
+            class="nodrag"
+            test-id="output-sku-select"
+            :model-value="port.skuId || ''"
+            :semi-options="semiOptions"
+            :finished-options="finishedOptions"
+            :disabled="!canWrite"
+            placeholder="选择或现场创建产出 SKU"
+            @change="(skuId) => emit('selectOutput', port.id, skuId)"
+          />
+          <span class="unit-chip" data-testid="output-unit-chip">{{ port.unit }}</span>
+        </div>
+        <div
+          v-if="outputPorts.length > 1"
+          class="output-contract-row nodrag"
+          :data-testid="`output-contract-${port.id}`"
+        >
+          <el-select
+            :model-value="port.outputRole || undefined"
+            :disabled="!canWrite"
+            size="small"
+            placeholder="选择产出角色"
+            @change="(role: WorkflowOutputRole) => updateOutputContract(port.id, { outputRole: role })"
+          >
+            <el-option
+              v-for="option in outputRoleOptions"
+              :key="option.value"
+              :label="option.label"
+              :value="option.value"
+            />
+          </el-select>
+          <label>
+            <span>成本分摊</span>
+            <el-input-number
+              :model-value="port.costAllocationRatio ?? undefined"
+              :disabled="!canWrite"
+              :min="0"
+              :max="100"
+              :precision="4"
+              :controls="false"
+              placeholder="%"
+              size="small"
+              @change="(ratio: number | undefined) => updateOutputContract(port.id, { costAllocationRatio: ratio ?? null })"
+            />
+            <span>%</span>
+          </label>
+        </div>
+      </div>
+      <div v-if="outputPorts.length > 1" class="output-contract-help">
+        必须有且仅有一个主产出；主产出和联产品比例须大于 0，副产品填 0；合计必须为 100%。
       </div>
     </section>
 
@@ -197,7 +237,13 @@ import { computed, ref } from 'vue';
 import { Handle, Position } from '@vue-flow/core';
 import WorkflowSkuPicker, { type WorkflowSkuPickerOption } from './WorkflowSkuPicker.vue';
 import { workflowSkuSpecificationEquation } from './workflowUnits';
-import type { PortSelectionMode, ProcessNodeData, ProcessPortGroup } from './types';
+import type {
+  PortSelectionMode,
+  ProcessNodeData,
+  ProcessPort,
+  ProcessPortGroup,
+  WorkflowOutputRole,
+} from './types';
 
 const props = withDefaults(defineProps<{
   data: ProcessNodeData;
@@ -232,6 +278,11 @@ const inputPortGroups = computed(() => (props.data.portGroups ?? []).filter((gro
 const inputRequirementGroups = computed(() => (props.data.inputRequirementGroups ?? [])
   .filter((group) => group.direction === 'INPUT'));
 const outputPortGroups = computed(() => (props.data.portGroups ?? []).filter((group) => group.direction === 'OUTPUT'));
+const outputRoleOptions: Array<{ value: WorkflowOutputRole; label: string }> = [
+  { value: 'MAIN', label: '主产出' },
+  { value: 'CO_PRODUCT', label: '联产品' },
+  { value: 'BY_PRODUCT', label: '副产品' },
+];
 
 function inputRequirementLabel(mode: PortSelectionMode): string {
   if (mode === 'ALL_REQUIRED') return '必需';
@@ -320,6 +371,17 @@ function updateOutputRelation(mode: PortSelectionMode): void {
   });
 }
 
+function updateOutputContract(
+  portId: string,
+  patch: Pick<ProcessPort, 'outputRole' | 'costAllocationRatio'>,
+): void {
+  emit('update', {
+    ports: props.data.ports.map((port) => (
+      port.id === portId ? { ...port, ...patch } : port
+    )),
+  });
+}
+
 function handleStyle(index: number, count: number): Record<string, string> {
   return { top: `${((index + 1) / (count + 1)) * 100}%` };
 }
@@ -390,6 +452,23 @@ function handleStyle(index: number, count: number): Record<string, string> {
 .section-title { display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px; color: #475467; font-size: 12px; font-weight: 650; }
 .port-row { display: grid; grid-template-columns: minmax(0, 1fr) 76px; gap: 6px; margin-top: 6px; }
 .output-row { grid-template-columns: minmax(0, 1fr) 70px; }
+.output-entry { margin-top: 6px; }
+.output-entry .output-row { margin-top: 0; }
+.output-contract-row {
+  display: grid; grid-template-columns: minmax(132px, 0.8fr) minmax(190px, 1.2fr);
+  align-items: center; gap: 6px; margin-top: 6px; padding: 7px 8px;
+  border: 1px solid #dce8f3; border-radius: 7px; background: #f8fbff;
+}
+.output-contract-row label {
+  display: grid; grid-template-columns: auto minmax(78px, 1fr) auto;
+  align-items: center; gap: 5px; color: #475467; font-size: 12px;
+}
+.output-contract-row :deep(.el-select),
+.output-contract-row :deep(.el-input-number) { width: 100%; }
+.output-contract-help {
+  margin-top: 6px; padding: 7px 8px; border-radius: 7px;
+  background: #fff7e8; color: #8a6116; font-size: 11px; line-height: 1.5;
+}
 .port-relation { margin: 5px 0 7px; padding: 7px 8px; border-radius: 7px; background: #f7f9fc; }
 .port-relation-control { display: grid; grid-template-columns: auto minmax(150px, 1fr); align-items: center; gap: 8px; color: #475467; font-size: 12px; font-weight: 650; }
 .port-relation-control :deep(.el-select) { width: 100%; }

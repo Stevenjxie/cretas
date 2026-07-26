@@ -195,18 +195,49 @@ describe('WorkflowProcessNode 系统研判 + 数量关系 (P2)', () => {
     expect(wrapper.findComponent({ name: 'ElInputNumber' }).exists()).toBe(false);
   });
 
-  it('renders every multi-output unit independently without forcing a shared ratio', () => {
+  it('renders every multi-output unit independently and exposes explicit cost allocation inputs', () => {
     const ports: ProcessPort[] = [
       { id: 'in-1', direction: 'INPUT', unit: 'kg', quantityMode: 'FIXED_RATIO', standardQuantity: 1, ordinal: 0 },
-      { id: 'out-1', direction: 'OUTPUT', materialName: '瘦肉出品', unit: 'g', quantityMode: 'AUTO_CONVERT', ordinal: 0 },
-      { id: 'out-2', direction: 'OUTPUT', materialName: '装盒成品', unit: '盒', quantityMode: 'FIXED_RATIO', standardQuantity: 2, ordinal: 1 },
+      {
+        id: 'out-1', direction: 'OUTPUT', materialName: '瘦肉出品', unit: 'g',
+        quantityMode: 'AUTO_CONVERT', outputRole: 'MAIN', costAllocationRatio: 60, ordinal: 0,
+      },
+      {
+        id: 'out-2', direction: 'OUTPUT', materialName: '装盒成品', unit: '盒',
+        quantityMode: 'FIXED_RATIO', standardQuantity: 2,
+        outputRole: 'CO_PRODUCT', costAllocationRatio: 40, ordinal: 1,
+      },
     ];
     const wrapper = mountNode(true, withPorts({ ports }));
 
     expect(wrapper.findAll('[data-testid="unit-flow-input"]')).toHaveLength(1);
     expect(wrapper.findAll('[data-testid="unit-flow-output"]')).toHaveLength(1);
     expect(wrapper.get('[data-testid="unit-flow-output"]').text()).toContain('主产出 g → 本产出 盒');
-    expect(wrapper.findAllComponents({ name: 'ElInputNumber' })).toHaveLength(0);
+    expect(wrapper.findAllComponents({ name: 'ElInputNumber' })).toHaveLength(2);
+    expect(wrapper.text()).toContain('合计必须为 100%');
+  });
+
+  it('emits role and allocation changes as serializable output-port fields', async () => {
+    const ports: ProcessPort[] = [
+      { id: 'in-1', direction: 'INPUT', unit: 'kg', ordinal: 0 },
+      { id: 'out-1', direction: 'OUTPUT', materialName: '400g 成品', unit: '袋', ordinal: 0 },
+      { id: 'out-2', direction: 'OUTPUT', materialName: '300g 成品', unit: '袋', ordinal: 1 },
+    ];
+    const wrapper = mountNode(true, withPorts({ ports }));
+    const firstContract = wrapper.get('[data-testid="output-contract-out-1"]');
+
+    firstContract.findComponent({ name: 'ElSelect' }).vm.$emit('change', 'MAIN');
+    await wrapper.vm.$nextTick();
+    firstContract.findComponent({ name: 'ElInputNumber' }).vm.$emit('change', 60);
+    await wrapper.vm.$nextTick();
+
+    const patches = wrapper.emitted('update')?.map((event) => event[0] as Partial<ProcessNodeData>) ?? [];
+    expect(patches[0].ports?.find((port) => port.id === 'out-1')).toMatchObject({
+      outputRole: 'MAIN',
+    });
+    expect(patches[1].ports?.find((port) => port.id === 'out-1')).toMatchObject({
+      costAllocationRatio: 60,
+    });
   });
 
   it('does not offer a generic conversion mode selector', () => {

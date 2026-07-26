@@ -7,6 +7,7 @@ export type ProductProcessNodeKind =
 export type WorkflowStatus = 'DRAFT' | 'SNAPSHOT' | 'PUBLISHED';
 export type ConversionMode = 'ACTUAL_WEIGHT' | 'FIXED_RATIO' | 'SUM_OUTPUTS' | 'FORMULA';
 export type PortSelectionMode = 'ALL_REQUIRED' | 'EXACTLY_ONE' | 'AT_LEAST_ONE' | 'OPTIONAL';
+export type WorkflowOutputRole = 'MAIN' | 'CO_PRODUCT' | 'BY_PRODUCT';
 
 export interface WorkflowPosition {
   x: number;
@@ -39,6 +40,10 @@ export interface ProcessPort {
   quantityMode?: 'AUTO_CONVERT' | 'FIXED_RATIO';
   conversionRefId?: string | null;
   conversionVersion?: number | null;
+  /** Required for every port when one process has multiple outputs. */
+  outputRole?: WorkflowOutputRole | null;
+  /** Shared-cost allocation percentage; multi-output ports must total 100. */
+  costAllocationRatio?: number | null;
   ordinal: number;
 }
 
@@ -142,7 +147,8 @@ export type WorkflowPatch =
   | { op: 'SET_NODE_FIELD'; nodeId: string; path: string; value: unknown };
 
 export interface WorkflowValidationError {
-  code: 'SCHEMA' | 'NODE_REFERENCE' | 'SKU_REQUIRED' | 'PORT_REQUIRED' | 'PORT_GROUP_INVALID' | 'CYCLE' | 'BOUNDARY_REQUIRED';
+  code: 'SCHEMA' | 'NODE_REFERENCE' | 'SKU_REQUIRED' | 'PORT_REQUIRED' | 'PORT_GROUP_INVALID'
+    | 'OUTPUT_CONTRACT_INVALID' | 'CYCLE' | 'BOUNDARY_REQUIRED';
   message: string;
   nodeId?: string;
   edgeId?: string;

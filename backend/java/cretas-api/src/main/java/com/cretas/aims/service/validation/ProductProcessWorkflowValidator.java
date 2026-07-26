@@ -23,6 +23,8 @@ public class ProductProcessWorkflowValidator {
             "RAW_MATERIAL", "SEMI_FINISHED", "FINISHED_GOOD");
     private static final Set<String> SELECTION_GROUP_MODES = Set.of(
             "ALL_REQUIRED", "EXACTLY_ONE", "AT_LEAST_ONE", "OPTIONAL");
+    private static final Set<String> OUTPUT_ROLES = Set.of(
+            "MAIN", "CO_PRODUCT", "BY_PRODUCT");
 
     public void validateForDraft(ProductProcessWorkflowDTO definition) {
         if (definition == null) {
@@ -122,6 +124,7 @@ public class ProductProcessWorkflowValidator {
             List<?> ports = (List<?>) portsValue;
             boolean hasInput = false;
             boolean hasOutput = false;
+            List<Map<?, ?>> outputPorts = new ArrayList<>();
             for (Object value : ports) {
                 if (!(value instanceof Map<?, ?>)) {
                     invalid("工序端口格式错误: " + displayName(node));
@@ -137,6 +140,7 @@ public class ProductProcessWorkflowValidator {
                     hasInput = true;
                 } else if ("OUTPUT".equals(direction)) {
                     hasOutput = true;
+                    outputPorts.add(port);
                 } else {
                     invalid("工序端口方向无效: " + displayName(node));
                 }
@@ -144,6 +148,38 @@ public class ProductProcessWorkflowValidator {
             if (!hasInput || !hasOutput) {
                 invalid("工序必须同时包含投入和产出端口: " + displayName(node));
             }
+            validateMultiOutputContract(node, outputPorts);
+        }
+    }
+
+    private void validateMultiOutputContract(
+            ProductProcessWorkflowDTO.Node processNode,
+            List<Map<?, ?>> outputPorts) {
+        if (outputPorts.size() <= 1) {
+            return;
+        }
+        BigDecimal total = BigDecimal.ZERO;
+        int mainCount = 0;
+        for (Map<?, ?> outputPort : outputPorts) {
+            String role = asString(outputPort.get("outputRole"));
+            BigDecimal ratio = decimal(outputPort.get("costAllocationRatio"));
+            if (role == null || !OUTPUT_ROLES.contains(role) || ratio == null
+                    || ("BY_PRODUCT".equals(role) ? ratio.signum() != 0 : ratio.signum() <= 0)) {
+                invalidOutputContract(
+                        "多产出工序“" + displayName(processNode)
+                                + "”必须为每个产出配置角色和成本分摊比例",
+                        "PRODUCT_PROCESS_WORKFLOW_OUTPUT_CONTRACT_REQUIRED");
+            }
+            if ("MAIN".equals(role)) {
+                mainCount++;
+            }
+            total = total.add(ratio);
+        }
+        if (mainCount != 1 || total.compareTo(new BigDecimal("100")) != 0) {
+            invalidOutputContract(
+                    "多产出工序“" + displayName(processNode)
+                            + "”必须有且仅有一个主产出，成本分摊比例合计必须为 100%",
+                    "PRODUCT_PROCESS_WORKFLOW_OUTPUT_CONTRACT_INVALID");
         }
     }
 
@@ -361,6 +397,19 @@ public class ProductProcessWorkflowValidator {
         }
     }
 
+    private BigDecimal decimal(Object value) {
+        if (value == null) {
+            return null;
+        }
+        try {
+            return value instanceof BigDecimal decimal
+                    ? decimal
+                    : new BigDecimal(String.valueOf(value));
+        } catch (NumberFormatException ignored) {
+            return null;
+        }
+    }
+
     private void assertAcyclic(
             List<ProductProcessWorkflowDTO.Node> nodes,
             List<ProductProcessWorkflowDTO.Edge> edges) {
@@ -414,6 +463,13 @@ public class ProductProcessWorkflowValidator {
         throw new BusinessException(400, message)
                 .withCode("PRODUCT_PROCESS_WORKFLOW_INVALID")
                 .withHint("请根据提示定位对应 Cell 后再保存或发布")
+                .withSeverity("warning");
+    }
+
+    private void invalidOutputContract(String message, String errorCode) {
+        throw new BusinessException(400, message)
+                .withCode(errorCode)
+                .withHint("请为多产出工序逐项配置产出角色和成本分摊比例")
                 .withSeverity("warning");
     }
 

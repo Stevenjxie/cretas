@@ -164,6 +164,21 @@ class BomWorkflowRevisionServiceTest {
     }
 
     @Test
+    void firstBomSurfacesTheOnlyTargetDraftsExactOutputContractFailure() throws Exception {
+        BomRecipe draft = recipe(null);
+        ProductProcessWorkflowRevision revision = revision(oneToTwo(false));
+        revision.setRevisionHash(snapshotService.hash(revision));
+        when(revisionRepository.findCurrentFactoryDraftRevisions(FACTORY)).thenReturn(List.of(revision));
+
+        BusinessException error = assertThrows(BusinessException.class,
+                () -> service.autoBindUniqueDraft(FACTORY, draft));
+
+        assertEquals("BOM_WORKFLOW_MULTI_OUTPUT_CONTRACT_REQUIRED", error.getErrorCode());
+        assertTrue(error.getMessage().contains("角色和成本分摊比例"));
+        verify(recipeRepository, never()).saveAndFlush(draft);
+    }
+
+    @Test
     void firstBomRejectsAmbiguousCompatibleDraftsBeforeWriting() throws Exception {
         BomRecipe draft = recipe(null);
         ProductProcessWorkflowRevision first = revision(oneToOne());

@@ -10,6 +10,7 @@ import {
   validateWorkflow,
 } from '../workflowModel';
 import type {
+  ProcessNodeData,
   ProductProcessWorkflowDefinition,
   ProductProcessWorkflowNode,
   WorkflowPatch,
@@ -462,6 +463,44 @@ describe('product process workflow model', () => {
     expect(errors.some((error) => error.code === 'SKU_REQUIRED' && error.nodeId === 'finished')).toBe(true);
     expect(errors.some((error) => error.code === 'CYCLE')).toBe(true);
   });
+
+  it('allows incomplete multi-output autosave but blocks BOM/publish readiness', () => {
+    const definition = branchedDefinition();
+    const process = definition.nodes.find((node) => node.id === 'split');
+    const ports = (process?.data as ProcessNodeData).ports.filter((port) => port.direction === 'OUTPUT');
+    ports.forEach((port) => {
+      delete port.outputRole;
+      delete port.costAllocationRatio;
+    });
+
+    expect(validateWorkflow(definition, 'draft')).toEqual([]);
+    expect(validateWorkflow(definition, 'publish')).toContainEqual(expect.objectContaining({
+      code: 'OUTPUT_CONTRACT_INVALID',
+      nodeId: 'split',
+    }));
+  });
+
+  it('accepts one MAIN and an explicit multi-output allocation totaling 100%', () => {
+    const definition = branchedDefinition();
+
+    expect(validateWorkflow(definition, 'publish')
+      .some((error) => error.code === 'OUTPUT_CONTRACT_INVALID')).toBe(false);
+  });
+
+  it('rejects multiple-output allocations with no unique MAIN or a non-100 total', () => {
+    const definition = branchedDefinition();
+    const process = definition.nodes.find((node) => node.id === 'split');
+    const ports = (process?.data as ProcessNodeData).ports.filter((port) => port.direction === 'OUTPUT');
+    ports[0].outputRole = 'CO_PRODUCT';
+    ports[0].costAllocationRatio = 70;
+
+    const errors = validateWorkflow(definition, 'publish');
+
+    expect(errors).toContainEqual(expect.objectContaining({
+      code: 'OUTPUT_CONTRACT_INVALID',
+      message: expect.stringContaining('一个主产出'),
+    }));
+  });
 });
 
 function expectWorkflowPatchRejected(
@@ -567,8 +606,14 @@ function branchedDefinition(): ProductProcessWorkflowDefinition {
           workProcessId: 'WP-SPLIT', processName: '拆包 / 分切', inputUnit: 'kg', outputUnit: 'kg',
           ports: [
             { id: 'in', direction: 'INPUT', unit: 'kg', ordinal: 0 },
-            { id: 'out-a', direction: 'OUTPUT', unit: 'kg', ordinal: 0 },
-            { id: 'out-b', direction: 'OUTPUT', unit: 'kg', ordinal: 1 },
+            {
+              id: 'out-a', direction: 'OUTPUT', unit: 'kg', ordinal: 0,
+              outputRole: 'MAIN', costAllocationRatio: 60,
+            },
+            {
+              id: 'out-b', direction: 'OUTPUT', unit: 'kg', ordinal: 1,
+              outputRole: 'CO_PRODUCT', costAllocationRatio: 40,
+            },
           ],
           conversionRule: { mode: 'ACTUAL_WEIGHT' }, reportingRequired: true,
         },
