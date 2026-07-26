@@ -34,6 +34,7 @@ import com.cretas.aims.service.ResultValidatorService;
 import com.cretas.aims.service.RuleEngineService;
 import com.cretas.aims.service.SemanticCacheService;
 import com.cretas.aims.service.intent.IntentConfigManagementService;
+import com.cretas.aims.service.restaurant.RestaurantGrossMarginChatRouteSelector;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -745,8 +746,19 @@ class RestaurantOpsGoldRouteTest {
     @DisplayName("explicit comprehensive restaurant analysis reaches synthesis before tiered planner")
     void comprehensiveAnalysisBypassesSingleIntentPlanner() {
         TieredIntentDelegate delegate = mock(TieredIntentDelegate.class);
+        RestaurantGrossMarginChatRouteSelector boundedSelector =
+                mock(RestaurantGrossMarginChatRouteSelector.class);
         ReflectionTestUtils.setField(orchestrator, "tieredFirstEnabled", true);
         ReflectionTestUtils.setField(orchestrator, "tieredIntentDelegate", delegate);
+        ReflectionTestUtils.setField(
+                orchestrator, "restaurantGrossMarginChatRouteSelector", boundedSelector);
+        when(boundedSelector.select(anyString(), anyString(), anyString()))
+                .thenReturn(Optional.of(IntentExecuteResponse.builder()
+                        .intentRecognized(true)
+                        .intentCode("RESTAURANT_OPS_SALES_SUMMARY")
+                        .status("SUCCESS")
+                        .message("不应抢答的单维营收结果")
+                        .build()));
 
         AIIntentConfig synthesis = AIIntentConfig.builder()
                 .intentCode("COMPREHENSIVE_SYNTHESIS")
@@ -799,6 +811,25 @@ class RestaurantOpsGoldRouteTest {
                         .build(),
                 7L,
                 "admin");
+        String supplierQuestion = "最近30天青花椒南方百联店采购价格稳定吗？";
+        IntentExecuteResponse supplierResponse = orchestrator.execute(
+                "DEMO_REST",
+                IntentExecuteRequest.builder()
+                        .userInput(supplierQuestion)
+                        .mode("READ")
+                        .build(),
+                7L,
+                "admin");
+        String scopedVariation = "请分析最近30天青花椒徐汇光启城店的营收、"
+                + "菜品销售与活动背景，活动只作同期描述，不计算因果ROI";
+        IntentExecuteResponse scopedVariationResponse = orchestrator.execute(
+                "DEMO_REST",
+                IntentExecuteRequest.builder()
+                        .userInput(scopedVariation)
+                        .mode("READ")
+                        .build(),
+                7L,
+                "admin");
 
         assertThat(orchestrator.isRestaurantComprehensiveSynthesisQuestion(query)).isTrue();
         assertThat(orchestrator.isRestaurantComprehensiveSynthesisQuestion(dimensionsFollowup)).isTrue();
@@ -810,13 +841,22 @@ class RestaurantOpsGoldRouteTest {
                 "分析最近30天排班")).isFalse();
         assertThat(orchestrator.isRestaurantComprehensiveSynthesisQuestion(
                 "比较菜品销量和毛利")).isFalse();
+        assertThat(orchestrator.isRestaurantComprehensiveSynthesisQuestion(
+                supplierQuestion)).isTrue();
+        assertThat(orchestrator.isRestaurantComprehensiveSynthesisQuestion(
+                scopedVariation)).isTrue();
         assertThat(response.getStatus()).isEqualTo("SUCCESS");
         assertThat(response.getIntentCode()).isEqualTo("COMPREHENSIVE_SYNTHESIS");
         assertThat(response.getMessage()).contains("多维分析").contains("缺失维度");
         assertThat(followupResponse.getStatus()).isEqualTo("SUCCESS");
         assertThat(followupResponse.getIntentCode()).isEqualTo("COMPREHENSIVE_SYNTHESIS");
+        assertThat(supplierResponse.getStatus()).isEqualTo("SUCCESS");
+        assertThat(supplierResponse.getIntentCode()).isEqualTo("COMPREHENSIVE_SYNTHESIS");
+        assertThat(scopedVariationResponse.getStatus()).isEqualTo("SUCCESS");
+        assertThat(scopedVariationResponse.getIntentCode()).isEqualTo("COMPREHENSIVE_SYNTHESIS");
+        verify(boundedSelector, never()).select(anyString(), anyString(), anyString());
         verify(delegate, never()).tryDelegate(any(), any(), any(), any());
-        verify(toolDispatchService, times(2)).executeWithTool(
+        verify(toolDispatchService, times(4)).executeWithTool(
                 eq(synthesisTool),
                 eq("DEMO_REST"),
                 any(IntentExecuteRequest.class),

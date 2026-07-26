@@ -319,6 +319,7 @@ public class IntentExecutionOrchestrator {
         // every tenant/role/rollout check.
         if (!factoryPackConstrained
                 && !Boolean.TRUE.equals(request.getPreviewOnly())
+                && !isRestaurantComprehensiveSynthesisQuestion(request.getUserInput())
                 && restaurantGrossMarginChatRouteSelector != null) {
             Optional<IntentExecuteResponse> restaurantAgentRoute =
                     restaurantGrossMarginChatRouteSelector.select(
@@ -1984,6 +1985,13 @@ public class IntentExecutionOrchestrator {
     private static final java.util.regex.Pattern RESTAURANT_COMPREHENSIVE_ANALYSIS_HINT =
             java.util.regex.Pattern.compile("分析|诊断|评估|原因|建议|决策|方案|优化");
 
+    private static final java.util.regex.Pattern RESTAURANT_SUPPLIER_PRICE_STABILITY_PATTERN =
+            java.util.regex.Pattern.compile(
+                    "(?:采购|进货|食材|原料|供应商).{0,10}(?:价格|进价|成本)"
+                    + ".{0,10}(?:稳定|波动|异常|上涨|涨价|下降|降价|趋势)"
+                    + "|(?:价格|进价|成本).{0,10}(?:稳定|波动|异常|上涨|涨价|下降|降价|趋势)"
+                    + ".{0,10}(?:采购|进货|食材|原料|供应商)");
+
     private static final List<java.util.regex.Pattern> RESTAURANT_COMPREHENSIVE_DIMENSIONS =
             List.of(
                     java.util.regex.Pattern.compile("客流|客流量|到店|进店|顾客数|人数"),
@@ -2001,6 +2009,14 @@ public class IntentExecutionOrchestrator {
         }
         String normalized = userInput.replaceAll("\\s+", "");
         if (RESTAURANT_COMPREHENSIVE_PATTERN.matcher(normalized).find()) {
+            return true;
+        }
+        // Supplier-price stability already has a deterministic synthesis fact
+        // path (coverage + anomaly rules). Treat this narrow one-dimension
+        // question as synthesis even without words such as "综合分析"; otherwise
+        // the earlier bounded chat selector can degrade it to an unsupported
+        // capability response.
+        if (RESTAURANT_SUPPLIER_PRICE_STABILITY_PATTERN.matcher(normalized).find()) {
             return true;
         }
         if (!RESTAURANT_COMPREHENSIVE_ANALYSIS_HINT.matcher(normalized).find()) {
