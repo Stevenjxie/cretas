@@ -192,12 +192,51 @@ async function loadCustomers() {
     customerOptionsLoaded.value = true;
   }
 }
-const packaging = ref({
-  level1PerLevel2: '' as number | string,
-  level2Unit: '',
-  level2PerLevel3: '' as number | string,
-  level3Unit: '',
-});
+interface MaterialPackagingRule {
+  id?: string;
+  name: string;
+  packageUnit: string;
+  baseUnit: string;
+  conversionFactor?: number;
+  defaultSpec: boolean;
+  active: boolean;
+  sortOrder: number;
+  version?: number;
+}
+
+function blankPackagingRule(index = 0): MaterialPackagingRule {
+  return {
+    name: index === 0 ? '默认包装' : `包装规格 ${index + 1}`,
+    packageUnit: '',
+    baseUnit: form.value.unit?.trim() || '',
+    conversionFactor: undefined,
+    defaultSpec: index === 0,
+    active: true,
+    sortOrder: index,
+  };
+}
+
+const packagingRules = ref<MaterialPackagingRule[]>([blankPackagingRule()]);
+
+function addPackagingRule(): void {
+  packagingRules.value.push(blankPackagingRule(packagingRules.value.length));
+}
+
+function removePackagingRule(index: number): void {
+  if (index === 0) return;
+  packagingRules.value.splice(index, 1);
+  packagingRules.value.forEach((rule, ruleIndex) => {
+    rule.name = ruleIndex === 0 ? '默认包装' : `包装规格 ${ruleIndex + 1}`;
+    rule.defaultSpec = ruleIndex === 0;
+    rule.sortOrder = ruleIndex;
+  });
+}
+
+function packagingRuleText(rule: MaterialPackagingRule): string {
+  const factor = Number(rule.conversionFactor);
+  if (!rule.packageUnit || !form.value.unit || !Number.isFinite(factor) || factor <= 0) return '';
+  return `1 ${displayUnit(rule.packageUnit)} = ${factor} ${displayUnit(form.value.unit)}`;
+}
 const dialogTitle = computed(() => (editingId.value ? '编辑原料类型' : '新建原料类型'));
 
 // SP4: 含税单价 → 未税联动
@@ -622,7 +661,7 @@ const unitManuallyEdited = ref(false);
 const categoryManuallyEdited = ref(false);
 const storageTypeManuallyEdited = ref(false);
 const shelfLifeManuallyEdited = ref(false);
-const packagingManuallyEdited = ref(false); // covers level1PerLevel2 + level2Unit together
+const packagingManuallyEdited = ref(false);
 
 // Unit manual state is driven by UnitSelect's user-only change event. Watching
 // v-model cannot distinguish form initialization from a real user action.
@@ -646,12 +685,9 @@ watch(() => form.value.storageType, () => {
 watch(() => form.value.shelfLifeDays, () => {
   if (!cascadeWriting.value) shelfLifeManuallyEdited.value = true;
 });
-watch(() => packaging.value.level1PerLevel2, () => {
+watch(packagingRules, () => {
   if (!cascadeWriting.value) packagingManuallyEdited.value = true;
-});
-watch(() => packaging.value.level2Unit, () => {
-  if (!cascadeWriting.value) packagingManuallyEdited.value = true;
-});
+}, { deep: true, flush: 'sync' });
 
 function resetManuallyEditedFlags() {
   unitManuallyEdited.value = false;
@@ -673,8 +709,7 @@ function clearCascadeFields() {
     if (!storageTypeManuallyEdited.value) form.value.storageType = storageTypeOptions.value[0]?.enumLabel || '';
     if (!shelfLifeManuallyEdited.value) form.value.shelfLifeDays = null;
     if (!packagingManuallyEdited.value) {
-      packaging.value.level1PerLevel2 = '';
-      packaging.value.level2Unit = '';
+      packagingRules.value = [blankPackagingRule()];
     }
   } finally {
     cascadeWriting.value = false;
@@ -775,8 +810,11 @@ watch(
           if (d.storageType != null && !storageTypeManuallyEdited.value) form.value.storageType = d.storageType;
           if (d.shelfLifeDays != null && !shelfLifeManuallyEdited.value) form.value.shelfLifeDays = d.shelfLifeDays;
           if (!packagingManuallyEdited.value) {
-            if (d.level1PerLevel2 != null) packaging.value.level1PerLevel2 = d.level1PerLevel2;
-            if (d.level2Unit != null) packaging.value.level2Unit = d.level2Unit;
+            const firstRule = packagingRules.value[0] || blankPackagingRule();
+            if (!packagingRules.value[0]) packagingRules.value = [firstRule];
+            if (d.level1PerLevel2 != null) firstRule.conversionFactor = d.level1PerLevel2;
+            if (d.level2Unit != null) firstRule.packageUnit = d.level2Unit;
+            firstRule.baseUnit = form.value.unit;
           }
         } finally {
           cascadeWriting.value = false;
@@ -789,7 +827,7 @@ watch(
 );
 
 function resetPackaging() {
-  packaging.value = { level1PerLevel2: '', level2Unit: '', level2PerLevel3: '', level3Unit: '' };
+  packagingRules.value = [blankPackagingRule()];
 }
 
 function openCreate() {
@@ -859,38 +897,48 @@ async function openEdit(row: TableRow) {
   if (segmentTree.value.length === 0) loadSegmentTree();
   // 原料、辅料和包材共用计量/包装层级；库存基本单位始终来自 form.unit。
   try {
-    const res = await get<{ level1PerLevel2: number | null; level2Unit: string | null; level2PerLevel3: number | null; level3Unit: string | null }>(
+    const res = await get<{
+      level1PerLevel2: number | null;
+      level2Unit: string | null;
+      level2PerLevel3: number | null;
+      level3Unit: string | null;
+      packagingSpecs?: MaterialPackagingRule[] | null;
+    }>(
       `/${factoryId.value}/material-packaging/by-material/${editingId.value}`,
     );
     if (res.success && res.data) {
-      packaging.value = {
-        level1PerLevel2: res.data.level1PerLevel2 ?? '',
-        level2Unit: res.data.level2Unit || '',
-        level2PerLevel3: res.data.level2PerLevel3 ?? '',
-        level3Unit: res.data.level3Unit || '',
-      };
+      if (res.data.packagingSpecs?.length) {
+        packagingRules.value = res.data.packagingSpecs.map((rule, index) => ({
+          ...rule,
+          baseUnit: form.value.unit,
+          defaultSpec: index === 0,
+          active: rule.active !== false,
+          sortOrder: index,
+        }));
+      } else {
+        const legacyRules: MaterialPackagingRule[] = [];
+        const firstFactor = Number(res.data.level1PerLevel2);
+        if (res.data.level2Unit && firstFactor > 0) {
+          legacyRules.push({
+            ...blankPackagingRule(0),
+            packageUnit: res.data.level2Unit,
+            conversionFactor: firstFactor,
+          });
+        }
+        const secondFactor = Number(res.data.level2PerLevel3);
+        if (res.data.level3Unit && firstFactor > 0 && secondFactor > 0) {
+          legacyRules.push({
+            ...blankPackagingRule(1),
+            packageUnit: res.data.level3Unit,
+            conversionFactor: firstFactor * secondFactor,
+          });
+        }
+        packagingRules.value = legacyRules.length ? legacyRules : [blankPackagingRule()];
+      }
     }
   } catch { /* 未配置换算时正常空 */ }
   dialogVisible.value = true;
 }
-
-// ==================== T159-A: Packaging inline live preview (SKU-style) ====================
-// 「1 [二级单位] = [换算数] [一级单位]」
-const packagingL2Preview = computed(() => {
-  const qty = Number(packaging.value.level1PerLevel2);
-  const l1 = form.value.unit ? displayUnit(form.value.unit) : '主单位';
-  const l2 = packaging.value.level2Unit;
-  if (!l2 || !qty || qty <= 0) return '';
-  return `1 ${displayUnit(l2)} = ${qty} ${l1}`;
-});
-
-const packagingL3Preview = computed(() => {
-  const qty = Number(packaging.value.level2PerLevel3);
-  const l2 = packaging.value.level2Unit ? displayUnit(packaging.value.level2Unit) : '二级单位';
-  const l3 = packaging.value.level3Unit;
-  if (!l3 || !qty || qty <= 0) return '';
-  return `1 ${displayUnit(l3)} = ${qty} ${l2}`;
-});
 
 const submitting = ref(false);
 const editingNeedsSegmentRepair = computed(() =>
@@ -918,14 +966,35 @@ async function handleSave() {
     return;
   }
 
-  // 所有物料均可维护包装换算；库存基本单位仍以 form.unit 为唯一真值。
-  const hasL2Unit = !!packaging.value.level2Unit?.trim();
-  const hasL2Qty = packaging.value.level1PerLevel2 !== '' && Number(packaging.value.level1PerLevel2) > 0;
-  const hasL3Unit = !!packaging.value.level3Unit?.trim();
-  const hasL3Qty = packaging.value.level2PerLevel3 !== '' && Number(packaging.value.level2PerLevel3) > 0;
-  if (hasL2Unit !== hasL2Qty) return ElMessage.warning('二级单位和换算数量必须同时填写或同时清空');
-  if (hasL3Unit !== hasL3Qty) return ElMessage.warning('三级单位和换算数量必须同时填写或同时清空');
-  if (hasL3Unit && !hasL2Unit) return ElMessage.warning('必须先配置二级单位才能配置三级');
+  // 与 SKU 相同：每条包装规则都直接换算到唯一库存基本单位。
+  const incompleteRule = packagingRules.value.some((rule) => {
+    const hasUnit = Boolean(rule.packageUnit?.trim());
+    const hasFactor = Number(rule.conversionFactor) > 0;
+    return hasUnit !== hasFactor;
+  });
+  if (incompleteRule) return ElMessage.warning('每条包装规则的包装单位和换算数量必须同时填写或同时清空');
+
+  const submittedPackagingRules = packagingRules.value
+    .filter((rule) => rule.packageUnit?.trim() && Number(rule.conversionFactor) > 0)
+    .map((rule, index) => ({
+      id: rule.id,
+      name: index === 0 ? '默认包装' : `包装规格 ${index + 1}`,
+      packageUnit: rule.packageUnit.trim(),
+      baseUnit: form.value.unit,
+      conversionFactor: Number(rule.conversionFactor),
+      defaultSpec: index === 0,
+      active: true,
+      sortOrder: index,
+      version: rule.version,
+    }));
+  const repeatedUnits = submittedPackagingRules.some((rule, index, all) =>
+    all.findIndex(candidate =>
+      candidate.packageUnit.trim().toLowerCase() === rule.packageUnit.trim().toLowerCase()) !== index);
+  if (repeatedUnits) return ElMessage.warning('同一种包装单位只能配置一条换算规则');
+  if (submittedPackagingRules.some(rule =>
+    rule.packageUnit.trim().toLowerCase() === form.value.unit.trim().toLowerCase())) {
+    return ElMessage.warning('包装单位不能与库存基本单位相同');
+  }
 
   submitting.value = true;
   try {
@@ -964,17 +1033,14 @@ async function handleSave() {
       ElMessage.success('创建成功');
     }
 
-    // 计量/包装层级 upsert / delete
-    if (hasL2Unit || hasL3Unit) {
+    // 动态包装规则 upsert / delete；后端同时投影旧层级字段，兼容历史调用方。
+    if (submittedPackagingRules.length) {
       await put(`/${factoryId.value}/material-packaging/by-material/${materialId}`, {
         level1Unit: form.value.unit,
-        level1PerLevel2: hasL2Unit ? Number(packaging.value.level1PerLevel2) : null,
-        level2Unit: hasL2Unit ? packaging.value.level2Unit.trim() : null,
-        level2PerLevel3: hasL3Unit ? Number(packaging.value.level2PerLevel3) : null,
-        level3Unit: hasL3Unit ? packaging.value.level3Unit.trim() : null,
+        packagingSpecs: submittedPackagingRules,
       });
     } else if (editingId.value) {
-      // 编辑模式下用户清空了二三级 → 删除现有配置
+      // 编辑模式下用户清空全部规则 → 删除现有配置
       try { await del(`/${factoryId.value}/material-packaging/by-material/${materialId}`); }
       catch { /* 不存在也 OK */ }
     }
@@ -1610,7 +1676,7 @@ function handleSizeChange(size: number) {
           </el-form-item>
         </template>
 
-        <!-- ==================== T159-A: 计量/包装层级 内联换算行 (SKU-style) ==================== -->
+        <!-- 与 SKU 新建一致：每条采购包装规则都直接换算到唯一库存基本单位 -->
         <template v-if="form.unit">
           <el-divider>
             <span class="divider-title">采购与库存单位换算（可选）</span>
@@ -1625,78 +1691,64 @@ function handleSizeChange(size: number) {
             <template #default>例如：基本单位选 kg，再配置 1 箱 = 10 kg。采购 8 箱时，系统按快照折算为 80 kg 入库。</template>
           </el-alert>
 
-        <!-- 一级: 显示主单位 (read-only echo — single source of truth = 上方单位字段) -->
-          <el-form-item label="一级 (主单位)">
-          <div class="packaging-inline-row">
-            <el-tag type="info" class="unit-tag">{{ form.unit ? displayUnit(form.unit) : '请先填单位' }}</el-tag>
-            <span class="packaging-equals-hint">← 同「单位」字段（主数据 canonical 单位，不可单独更改）</span>
-          </div>
-          </el-form-item>
-
-        <!-- 二级换算: SKU-style inline row -->
-        <!-- 布局: 1 [二级单位 select] = [换算数] [一级单位 tag] -->
-          <el-form-item label="二级换算">
-          <div class="packaging-conversion-row">
-            <span class="conversion-label">1</span>
-            <UnitSelect
-              v-model="packaging.level2Unit"
-              :factory-id="factoryId"
-              usage-scope="PURCHASE_QUANTITY"
-              placeholder="二级单位（如箱）"
-              style="width: 155px"
-            />
-            <span class="conversion-equals">=</span>
-            <el-input-number
-              v-model="packaging.level1PerLevel2"
-              :min="0"
-              :controls="false"
-              placeholder="换算数"
-              style="width: 100px"
-            />
-            <el-tag type="info" class="unit-tag-echo">{{ form.unit ? displayUnit(form.unit) : '主单位' }}</el-tag>
-          </div>
-          <!-- Live preview summary (SKU-style) -->
-          <div v-if="packagingL2Preview" class="packaging-preview">
-            <el-tag size="small" type="success">{{ packagingL2Preview }}</el-tag>
-          </div>
-          <div
-            v-else-if="(packaging.level2Unit || packaging.level1PerLevel2)"
-            class="packaging-preview packaging-preview--warn"
-          >
-            请同时填写二级单位和换算数量
-          </div>
-          </el-form-item>
-
-        <!-- 三级换算 -->
-          <el-form-item label="三级换算">
-          <div class="packaging-conversion-row">
-            <span class="conversion-label">1</span>
-            <UnitSelect
-              v-model="packaging.level3Unit"
-              :factory-id="factoryId"
-              usage-scope="PURCHASE_QUANTITY"
-              placeholder="三级单位（如柜）"
-              style="width: 155px"
-              :disabled="!packaging.level2Unit"
-            />
-            <span class="conversion-equals">=</span>
-            <el-input-number
-              v-model="packaging.level2PerLevel3"
-              :min="0"
-              :controls="false"
-              placeholder="换算数"
-              style="width: 100px"
-              :disabled="!packaging.level2Unit"
-            />
-            <el-tag type="info" class="unit-tag-echo">{{ packaging.level2Unit ? displayUnit(packaging.level2Unit) : '二级单位' }}</el-tag>
-          </div>
-          <!-- Live preview summary -->
-          <div v-if="packagingL3Preview" class="packaging-preview">
-            <el-tag size="small" type="success">{{ packagingL3Preview }}</el-tag>
-          </div>
-          <div v-if="!packaging.level2Unit" class="field-hint">
-            请先配置二级单位才能配置三级
-          </div>
+          <el-form-item label="包装换算">
+            <div class="material-packaging-spec-list">
+              <div class="packaging-rule-note">
+                一个原料只有一个库存基本单位；下面每一条都是不同采购包装对基本单位的换算规则。
+              </div>
+              <div
+                v-for="(rule, index) in packagingRules"
+                :key="rule.id || `new-${index}`"
+                class="material-packaging-spec-item"
+              >
+                <div class="spec-conversion-row">
+                  <el-tag v-if="index === 0" type="success" size="small">默认</el-tag>
+                  <span v-else class="packaging-rule-index">规则 {{ index + 1 }}</span>
+                  <span class="conversion-label">1</span>
+                  <UnitSelect
+                    v-model="rule.packageUnit"
+                    :factory-id="factoryId"
+                    usage-scope="PURCHASE_QUANTITY"
+                    placeholder="包装单位（如箱）"
+                    class="spec-unit-select"
+                  />
+                  <span class="conversion-equals">=</span>
+                  <el-input-number
+                    v-model="rule.conversionFactor"
+                    :min="0.00000001"
+                    :precision="8"
+                    :controls="false"
+                    placeholder="换算数"
+                    class="spec-factor-input"
+                  />
+                  <el-input
+                    :model-value="displayUnit(form.unit)"
+                    disabled
+                    class="spec-base-unit"
+                  />
+                  <el-button
+                    v-if="index > 0"
+                    type="danger"
+                    link
+                    @click="removePackagingRule(index)"
+                  >
+                    删除
+                  </el-button>
+                </div>
+                <div
+                  v-if="rule.packageUnit && rule.packageUnit.trim().toLowerCase() === form.unit.trim().toLowerCase()"
+                  class="spec-same-warn"
+                >
+                  包装单位不能与库存基本单位相同
+                </div>
+                <div v-else-if="packagingRuleText(rule)" class="spec-echo">
+                  {{ packagingRuleText(rule) }}
+                </div>
+              </div>
+              <el-button class="add-packaging-rule-button" @click="addPackagingRule">
+                添加多包装换算规则
+              </el-button>
+            </div>
           </el-form-item>
         </template>
 
@@ -1931,34 +1983,43 @@ function handleSizeChange(size: number) {
   color: #67c23a;
 }
 
-/* T159-A: Packaging inline row (SKU-style) */
-.packaging-inline-row {
+/* 与 SKU 新建保持相同的动态包装规则编辑体验 */
+.material-packaging-spec-list {
   display: flex;
-  align-items: center;
+  flex-direction: column;
   gap: 10px;
+  width: 100%;
 }
-.packaging-equals-hint {
+.packaging-rule-note {
+  padding: 10px 12px;
   font-size: 12px;
-  color: #909399;
+  line-height: 1.6;
+  color: #606266;
+  background: #f5f7fa;
+  border: 1px solid #ebeef5;
+  border-radius: 8px;
 }
-.unit-tag {
-  font-size: 13px;
-  padding: 0 10px;
-  height: 28px;
-  line-height: 26px;
+.material-packaging-spec-item {
+  padding: 10px 12px;
+  background: #fafcff;
+  border: 1px solid #e4e7ed;
+  border-radius: 8px;
 }
-.unit-tag-echo {
-  font-size: 13px;
-  padding: 0 10px;
-  height: 28px;
-  line-height: 26px;
-  flex-shrink: 0;
-}
-.packaging-conversion-row {
-  display: flex;
+.spec-conversion-row {
+  display: grid;
+  grid-template-columns: auto auto minmax(150px, 1fr) auto minmax(110px, 0.75fr) minmax(92px, 0.55fr) auto;
   align-items: center;
   gap: 8px;
-  flex-wrap: wrap;
+}
+.packaging-rule-index {
+  min-width: 42px;
+  color: #909399;
+  font-size: 12px;
+}
+.spec-unit-select,
+.spec-factor-input,
+.spec-base-unit {
+  width: 100%;
 }
 .conversion-label {
   font-size: 15px;
@@ -1971,12 +2032,34 @@ function handleSizeChange(size: number) {
   color: #606266;
   padding: 0 2px;
 }
-.packaging-preview {
+.spec-echo,
+.spec-same-warn {
   margin-top: 6px;
+  padding-left: 54px;
   font-size: 12px;
 }
-.packaging-preview--warn {
+.spec-echo {
+  color: #67c23a;
+}
+.spec-same-warn {
   color: #e6a23c;
-  font-size: 12px;
+}
+.add-packaging-rule-button {
+  width: 100%;
+  color: var(--el-color-primary);
+  border-color: var(--el-color-primary-light-5);
+}
+@media (max-width: 760px) {
+  .spec-conversion-row {
+    grid-template-columns: auto auto minmax(0, 1fr) auto;
+  }
+  .spec-factor-input,
+  .spec-base-unit {
+    grid-column: span 2;
+  }
+  .spec-echo,
+  .spec-same-warn {
+    padding-left: 0;
+  }
 }
 </style>

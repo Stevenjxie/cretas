@@ -43,6 +43,7 @@ class MaterialBatchMovingAverageNormalizationTest {
 
         MaterialUomConverter converter = new MaterialUomConverter(
                 mock(MaterialPackagingHierarchyRepository.class),
+                mock(com.cretas.aims.repository.material.MaterialPackagingSpecRepository.class),
                 materialRepository,
                 com.cretas.aims.service.unit.TestUnitContractFactory.legacyFacade());
         ReflectionTestUtils.setField(service, "materialMovingAverageCalculator",

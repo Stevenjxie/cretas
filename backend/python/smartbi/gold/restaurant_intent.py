@@ -574,7 +574,7 @@ def capability_clarification_question(query: str) -> Optional[str]:
 
 _FOLLOWUP_PREFIXES = (
     "那", "这个", "那个", "这道菜", "那道菜", "它", "该菜", "该店", "刚才", "继续", "再", "为什么", "怎么做", "怎么办", "怎么",
-    "如何", "下一步", "先做", "换成", "改成", "哪些动作", "先别", "明天看",
+    "如何", "下一步", "先做", "换成", "改成", "换回", "改回", "哪些动作", "先别", "明天看",
     "和上", "与上", "跟上", "比上", "呢",
 )
 _NEW_TOPIC_TOKENS = ("换个话题", "换一个问题", "另一个问题", "另外问", "新话题")
@@ -726,6 +726,58 @@ def _strip_followup_reference(text: str) -> str:
     return body.strip() or text.strip()
 
 
+_TIME_SLOT_ONLY_PATTERN = re.compile(
+    r"^(?:"
+    r"今天|今日|昨天|昨日|前天|前日|前一天|前一日|"
+    r"本周|这周|本星期|这星期|上周|上星期|上个星期|"
+    r"本月|这个月|上个月|上月|上上个月|上上月|"
+    r"今年|去年|上半年|下半年|半年|"
+    r"(?:最近|近|过去)\s*[0-9一二两三四五六七八九十俩仨]{0,4}\s*"
+    r"个?\s*(?:天|日|周|星期|月|年)|"
+    r"这\s*[0-9一二两三四五六七八九十俩仨]{1,4}\s*"
+    r"个?\s*(?:天|日|周|星期|月|年)|"
+    r"(?:(?:20\d{2})\s*年|去年|今年)?\s*"
+    r"(?:1[0-2]|0?[1-9]|[一二三四五六七八九十]|十一|十二)\s*月"
+    r")$"
+)
+_SLOT_UPDATE_PREFIX_PATTERN = re.compile(
+    r"^(?:换回|改回|换成|改成|换到|改到|改为|只看|就看|看|查)\s*"
+)
+
+
+def _strip_slot_update_scaffolding(text: str) -> str:
+    """Remove only verbs/particles surrounding a single-slot replacement."""
+    normalized = (text or "").strip()
+    normalized = _SLOT_UPDATE_PREFIX_PATTERN.sub("", normalized, count=1)
+    normalized = re.sub(
+        r"\s*(?:呢|吧|可以吗|行吗|怎么样)?[？?。！!]*$",
+        "",
+        normalized,
+        count=1,
+    )
+    return normalized.strip(" ，,、")
+
+
+def _is_pure_time_slot_update(text: str) -> bool:
+    """True only when the whole turn is a supported time replacement."""
+    candidate = _strip_slot_update_scaffolding(text)
+    return bool(
+        candidate
+        and _TIME_SLOT_ONLY_PATTERN.fullmatch(candidate)
+        and _resolve_sales_date_range(candidate)[1] != "全部历史"
+    )
+
+
+def _is_pure_store_slot_update(
+    text_without_store_scope: str,
+    store_scope: Optional[str],
+) -> bool:
+    """True only when removing the parsed store leaves replacement scaffolding."""
+    if store_scope not in {"all", "single", "multiple"}:
+        return False
+    return not _strip_slot_update_scaffolding(text_without_store_scope)
+
+
 def contextualize_restaurant_followup(
     query: str,
     parent: Optional[Dict[str, Any]],
@@ -771,7 +823,7 @@ def contextualize_restaurant_followup(
     # pronouns such as "那毛利呢" remain dependent and intentionally inherit.
     standalone_code = match_restaurant_ops(current)
     leading_dependent = current.startswith((
-        "那", "这个", "那个", "它", "刚才", "继续", "再", "换成", "改成",
+        "那", "这个", "那个", "它", "刚才", "继续", "再", "换成", "改成", "换回", "改回",
     ))
     if standalone_code and _uses_relative_sales_window(current) and not leading_dependent:
         return current, False
@@ -784,6 +836,16 @@ def contextualize_restaurant_followup(
     explicit_metrics = _detect_requested_metrics(current)
     metric_label = _context_metric_label(explicit_metrics or context_metrics)
     current_store_scope, current_store_names = _detect_store_scope(current)
+    normalized_store_names: List[str] = []
+    for name in current_store_names:
+        normalized_name = _SLOT_UPDATE_PREFIX_PATTERN.sub(
+            "",
+            name,
+            count=1,
+        ).strip()
+        if normalized_name:
+            normalized_store_names.append(normalized_name)
+    current_store_names = tuple(normalized_store_names)
     current_without_store_scope = current
     if current_store_scope in {"single", "multiple"}:
         for store_name in current_store_names:
@@ -807,6 +869,20 @@ def contextualize_restaurant_followup(
         current_without_store_scope = current_without_store_scope.strip()
     body = _strip_followup_reference(current_without_store_scope)
     action = _detect_analysis_action(current)
+    current_window = _resolve_sales_date_range(current)[1]
+    pure_time_slot_update = bool(
+        not explicit_metrics
+        and current_store_scope is None
+        and _is_pure_time_slot_update(current)
+    )
+    pure_store_slot_update = bool(
+        not explicit_metrics
+        and current_window == "全部历史"
+        and _is_pure_store_slot_update(
+            current_without_store_scope,
+            current_store_scope,
+        )
+    )
 
     # Ranking follow-ups are changes to ranking slots, not dish names.  Without
     # this branch "那倒数五名呢" was fed to extract_dish_candidate and became a
@@ -886,7 +962,11 @@ def contextualize_restaurant_followup(
         # An explicitly named object replaces the entity slot while retaining
         # the trusted metric/window slots when this utterance is dependent
         # ("换成 X 呢", "X 的营收呢").  This must not re-prefix the old entity.
-        if explicit_entity:
+        if pure_time_slot_update and metric_label:
+            resolved = f"{current_window}{entity_name}的{metric_label}如何"
+        elif pure_store_slot_update and metric_label:
+            resolved = f"{entity_name}的{metric_label}如何"
+        elif explicit_entity:
             explicit_window = _resolve_sales_date_range(current)[1]
             resolved_metric = metric_label
             if action == "diagnose":
@@ -981,7 +1061,6 @@ def contextualize_restaurant_followup(
             resolved = f"{store_scope_text}{resolved}"
 
     parent_window = context.get("window_label")
-    current_window = _resolve_sales_date_range(current)[1]
     if (
         isinstance(parent_window, str)
         and parent_window != "全部历史"
@@ -1278,10 +1357,15 @@ def _build_spec(
         # query (including a trusted inherited window) authorizes execution.
         clarification_needed = True
         clarification_question = TIME_CLARIFICATION_QUESTION
-    if planner_authority in {"tenant_gate_unavailable", "llm_unavailable"}:
-        # An infrastructure failure is a sealed decision not to execute.
-        # Keeping a resolver in the plan would make an outage look executable
-        # to downstream code and monitoring.
+    if planner_authority in {
+        "tenant_gate_unavailable",
+        "llm_unavailable",
+        "explicit_time_override_requires_baseline",
+        "explicit_current_time_conflict",
+    }:
+        # Infrastructure failure and explicit-slot conflict are both sealed
+        # decisions not to execute. Keeping a resolver in either plan would
+        # make a clarification look executable to downstream code.
         planned_intents = ()
 
     spec = RestaurantQuerySpec(
@@ -1438,6 +1522,19 @@ def _is_pure_store_scope_answer(answer: str) -> bool:
         remainder = remainder.replace(mention, "", 1)
     remainder = re.sub(r"[\s和与跟、，,及以及]+", "", remainder)
     return not remainder
+
+
+def _sales_metric_phrase(query: str) -> str:
+    """Render only supported sales metrics back into a clarification seed."""
+    labels = {
+        "revenue": "营业额",
+        "orders": "订单量",
+    }
+    return "和".join(
+        labels[metric]
+        for metric in _detect_requested_metrics(query)
+        if metric in labels
+    )
 
 
 def _explicit_sales_period_comparison_spec(
@@ -1620,7 +1717,11 @@ def _trusted_context_dish_followup_spec(
         candidate_code = match_restaurant_ops(query)
     except Exception:
         return None
-    if candidate_code not in _TRUSTED_CONTEXT_DISH_INTENTS:
+    # The initial keyword code is only a candidate. An absolute-month dish
+    # revenue sentence can first look like SALES_SUMMARY, then `_build_spec`
+    # deterministically contract-repairs it to GROSS_MARGIN. The strict checks
+    # below authorize only the final sealed dish plan, never this raw hint.
+    if candidate_code is None:
         return None
 
     spec = _build_spec(
@@ -2669,6 +2770,56 @@ async def _parse_continuation(
 
     if (
         clarification_question == STORE_SCOPE_CLARIFICATION_QUESTION
+        and _is_explicit_sales_period_comparison(original_query)
+    ):
+        original_sales_spec = _resolve_sales_query_spec(original_query)
+        current_sales_spec = _resolve_sales_query_spec(query)
+        if current_sales_spec.window_label != "全部历史":
+            metric_phrase = _sales_metric_phrase(original_query)
+            current_seed = (
+                f"{metric_phrase} {query}".strip()
+                if metric_phrase
+                else query
+            )
+            # A fully restated replacement comparison belongs entirely to
+            # the current turn. Do not concatenate the old day/month pair.
+            fresh_comparison_spec = _explicit_sales_period_comparison_spec(
+                current_seed,
+                is_continuation=True,
+            )
+            if fresh_comparison_spec is not None:
+                return fresh_comparison_spec
+
+            # Repeating the original primary window alongside a store choice
+            # is harmless ("全部门店，昨天"). It may retain the sealed original
+            # baseline. A genuinely different primary window may not.
+            if current_sales_spec.date_range == original_sales_spec.date_range:
+                repeated_window_spec = _explicit_sales_period_comparison_spec(
+                    concatenated,
+                    is_continuation=True,
+                )
+                if repeated_window_spec is not None:
+                    return repeated_window_spec
+
+            return _build_spec(
+                "",
+                current_seed,
+                confidence=1.0,
+                tier="exact",
+                planner_authority="explicit_time_override_requires_baseline",
+                clarification_needed=True,
+                clarification_question=(
+                    f"你把时间改成了“{current_sales_spec.window_label}”，"
+                    "但没有说明新的对比期。本次没有沿用"
+                    f"“{original_sales_spec.comparison_label or '原对比期'}”。"
+                    f"请完整说明，例如“{current_sales_spec.window_label}与上一个同期比较”，"
+                    f"或说“只看{current_sales_spec.window_label}”。"
+                ),
+                is_continuation=True,
+            )
+
+    if (
+        clarification_question == STORE_SCOPE_CLARIFICATION_QUESTION
         and _is_pure_store_scope_answer(query)
     ):
         explicit_comparison_spec = _explicit_sales_period_comparison_spec(
@@ -2732,7 +2883,7 @@ async def _parse_continuation(
         llm_asks_profitability = bool(parsed.get("asks_profitability"))
         llm_dish = _verbatim_entity(parsed.get("dish"), concatenated)
         llm_store = _verbatim_entity(parsed.get("store"), concatenated)
-        return _build_spec(
+        t3_spec = _build_spec(
             t3_code, concatenated, confidence=t3_confidence, tier="llm",
             time_phrase=time_phrase,
             llm_wants_margin=llm_wants_margin,
@@ -2742,6 +2893,32 @@ async def _parse_continuation(
             is_continuation=True,
             require_explicit_time=True,
         )
+        current_sales_spec = _resolve_sales_query_spec(query)
+        if (
+            current_sales_spec.window_label != "全部历史"
+            and t3_spec.date_range != current_sales_spec.date_range
+        ):
+            metric_phrase = _sales_metric_phrase(concatenated)
+            current_seed = (
+                f"{metric_phrase} {query}".strip()
+                if metric_phrase
+                else query
+            )
+            return _build_spec(
+                "",
+                current_seed,
+                confidence=1.0,
+                tier="exact",
+                planner_authority="explicit_current_time_conflict",
+                clarification_needed=True,
+                clarification_question=(
+                    f"你当前明确指定了“{current_sales_spec.window_label}”，"
+                    "但它与上一轮时间条件冲突。本次没有沿用旧时间，也没有执行查询。"
+                    "请把新的时间范围和要比较的对象完整说一次。"
+                ),
+                is_continuation=True,
+            )
+        return t3_spec
 
     # Still unresolved after combining both turns -- surface a (final)
     # clarification question, but per the module docstring do NOT register a

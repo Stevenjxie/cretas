@@ -18,10 +18,10 @@ import org.springframework.web.bind.annotation.*;
 import java.util.List;
 
 /**
- * 原料包装层级 Controller.
+ * 原料采购包装换算 Controller.
  *
- * 三级单位换算 (例: 三文鱼 一级 kg, 10 kg/箱, 12 箱/柜).
- * 一级必填, 二/三级可选 (Service 层 + DB CHECK 双重校验).
+ * 每条包装规则直接换算到唯一库存基本单位，例如 1 箱 = 10 kg、1 桶 = 18.5 kg。
+ * 旧二/三级字段继续读写，供历史调用方兼容。
  *
  * @since 2026-05-06
  */
@@ -29,21 +29,21 @@ import java.util.List;
 @RestController
 @RequestMapping("/api/mobile/{factoryId}/material-packaging")
 @RequiredArgsConstructor
-@Tag(name = "原料包装层级", description = "原料的三级单位换算配置 (kg/箱/柜)")
+@Tag(name = "原料包装换算", description = "采购包装单位到库存基本单位的多规则换算")
 public class MaterialPackagingHierarchyController {
 
     private final MaterialPackagingHierarchyService service;
     private final MobileService mobileService;
 
     @GetMapping
-    @Operation(summary = "列出工厂全部包装层级", description = "用于报表/批量管理")
+    @Operation(summary = "列出工厂全部原料包装换算", description = "用于报表/批量管理")
     public ApiResponse<List<MaterialPackagingHierarchyDTO>> list(
             @PathVariable @Parameter(description = "工厂ID") String factoryId) {
         return ApiResponse.success(service.listByFactory(factoryId));
     }
 
     @GetMapping("/by-material/{materialTypeId}")
-    @Operation(summary = "查询某原料的包装层级", description = "无配置返回 success=true, data=null")
+    @Operation(summary = "查询某原料的包装换算", description = "无配置返回 success=true, data=null")
     public ApiResponse<MaterialPackagingHierarchyDTO> getByMaterial(
             @PathVariable String factoryId,
             @PathVariable String materialTypeId) {
@@ -52,7 +52,7 @@ public class MaterialPackagingHierarchyController {
 
     @RequirePermission({"production:read_write"})
     @PutMapping("/by-material/{materialTypeId}")
-    @Operation(summary = "保存某原料的包装层级 (upsert)", description = "已存在则更新, 不存在则创建")
+    @Operation(summary = "保存某原料的包装换算 (upsert)", description = "支持多条包装单位直接换算到库存基本单位")
     public ApiResponse<MaterialPackagingHierarchyDTO> upsert(
             @PathVariable String factoryId,
             @PathVariable String materialTypeId,
@@ -64,7 +64,7 @@ public class MaterialPackagingHierarchyController {
 
     @RequirePermission({"production:read_write"})
     @DeleteMapping("/by-material/{materialTypeId}")
-    @Operation(summary = "删除某原料的包装层级", description = "软删除")
+    @Operation(summary = "删除某原料的包装换算", description = "软删除")
     public ApiResponse<Void> delete(
             @PathVariable String factoryId,
             @PathVariable String materialTypeId) {
