@@ -1375,7 +1375,7 @@ def test_followup_switch_entity_inherits_parent_metric_and_window():
     assert effective == "本月招牌藤椒鱼可乐单人套餐的销量如何"
 
 
-def test_sales_improvement_and_next_step_are_optimization_followups():
+def test_sales_improvement_optimization_and_next_step_are_followups():
     parent = {
         "parent_query": "本月招牌藤椒味(单人份)销量如何",
         "parent_template_code": "RESTAURANT_OPS_GROSS_MARGIN",
@@ -1390,9 +1390,39 @@ def test_sales_improvement_and_next_step_are_optimization_followups():
     assert inherited is True
     assert improved == "本月招牌藤椒味(单人份)的销量怎么优化"
 
+    optimized, inherited = contextualize_restaurant_followup("销量怎么优化", parent)
+    assert inherited is True
+    assert optimized == "本月招牌藤椒味(单人份)的销量怎么优化"
+
     next_step, inherited = contextualize_restaurant_followup("下一步先做什么", parent)
     assert inherited is True
     assert next_step == "本月招牌藤椒味(单人份)的销量怎么优化"
+
+
+def test_whole_store_sales_optimization_does_not_inherit_ranked_dish():
+    parent = {
+        "parent_query": "最近7天全部门店哪个菜卖得好",
+        "parent_template_code": "RESTAURANT_OPS_GROSS_MARGIN",
+        "structured_context": {
+            "focus_entity": {
+                "type": "dish",
+                "name": "招牌青花椒味(单人份)",
+                "rank": 1,
+            },
+            "window_label": "最近7天",
+            "requested_metrics": ["sales_volume"],
+            "topic_kind": "dish_ranking",
+            "store_scope": "all",
+        },
+    }
+
+    effective, inherited = contextualize_restaurant_followup(
+        "全店销量怎么优化",
+        parent,
+    )
+
+    assert inherited is False
+    assert effective == "全店销量怎么优化"
 
 
 def test_named_dish_cost_uses_scoped_unit_economics_resolver():

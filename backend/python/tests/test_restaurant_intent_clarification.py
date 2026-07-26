@@ -22,7 +22,7 @@ cosine_topk / common.llm_router.call_chain).
 from __future__ import annotations
 
 import json
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -1105,6 +1105,11 @@ async def test_explicit_period_comparison_survives_store_button_without_t3(
     original_query,
     baseline_label,
 ):
+    class _FrozenDate(date):
+        @classmethod
+        def today(cls):
+            return cls(2026, 7, 26)
+
     pool = _FakeDbPool(
         is_restaurant=True,
         store_names=["东城店", "西城店", "南城店"],
@@ -1113,7 +1118,13 @@ async def test_explicit_period_comparison_survives_store_button_without_t3(
         "complete period-comparison slots must not be rewritten by T3"
     ))
 
-    with patch("common.llm_router.call_chain", new=llm):
+    # This test locks context preservation, not the calendar-dependent
+    # partial-week rule. Freeze the business date so it remains deterministic
+    # when CI crosses a week/month boundary.
+    with (
+        patch("common.llm_router.call_chain", new=llm),
+        patch("smartbi.gold.restaurant_ops_router.date", new=_FrozenDate),
+    ):
         first = await parse_restaurant_query(
             original_query,
             pool,

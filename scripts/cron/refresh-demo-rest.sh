@@ -21,7 +21,8 @@
 #
 # Install (on server 47, as root):
 #   crontab -e
-#   17 3 * * *  /www/wwwroot/cretas/code/scripts/cron/refresh-demo-rest.sh
+# Run just after midnight so "昨天" is available before the first demo query:
+#   5 0 * * *  /www/wwwroot/cretas/code/scripts/cron/refresh-demo-rest.sh
 #
 set -euo pipefail
 
