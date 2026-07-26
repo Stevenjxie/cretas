@@ -1,26 +1,19 @@
 /**
- * Restaurant comprehensive-synthesis chat adapter (2026-07-11).
+ * Restaurant AI adapters.
  *
- * The web-admin 餐饮 AI 聊天 (RestaurantChatPanel.vue) previously routed every
- * question through the Java intent executor (`askRestaurantQuestion` in
- * `./restaurant-chat.ts`), which does NOT reach the Python P2 comprehensive
- * synthesis engine — so 成本率/供应商价格异常(反回扣)/同比环比/加权毛利率
- * questions returned empty data on web-admin even though the mobile page
- * (`mobile-rest-ai/`) already answers them correctly.
+ * Free-form browser chat must call {@link askRestaurantIntent}; the unified
+ * Java orchestrator then chooses a narrow Gold read, clarification,
+ * deterministic session continuation or comprehensive synthesis. Dedicated,
+ * fixed comprehensive-analysis actions may still use
+ * {@link askRestaurantSynthesis} or its streaming variant directly.
  *
- * This adapter calls the SAME endpoint mobile-rest-ai/src/api.ts uses
- * (`POST /api/smartbi/synthesis/comprehensive`) directly from web-admin,
- * closing that gap. Chart normalization mirrors mobile-rest-ai's
- * `normalizeCharts` (backend emits a flat {chartType, title, xAxis, series}
- * shape — this strips the wrapper keys into a renderable ECharts `option`).
- *
- * NOTE: this does NOT touch `./restaurant-chat.ts` / `askRestaurantQuestion` —
- * that Java-intent path (RESTAURANT_OWNER_ACTION_CHAT scenario chaining,
- * sections, followUpChips) is left intact and still covered by its own tests;
- * RestaurantChatPanel.vue now calls this adapter instead for its primary Q&A.
+ * Chart normalization mirrors mobile-rest-ai: the backend may emit a flat
+ * `{chartType, title, xAxis, series}` shape, which is converted into a
+ * renderable ECharts option.
  */
 import { pythonFetch, PYTHON_LLM_TIMEOUT_MS, PYTHON_SMARTBI_URL, getPythonAuthHeaders } from './common';
 import { parseSseFrame, splitSseFrames } from './sse';
+import { executeIntent } from './intent-chat';
 
 /** 🔒 反回扣(anti-kickback) alert — see backend
  * ComprehensiveSynthesisEngine.collect_alerts (smartbi/agent/synthesis_engine.py).
@@ -44,9 +37,15 @@ export interface RestaurantSynthesisResult {
   answer: string;
   charts: SynthesisChart[];
   alerts: SynthesisAlert[];
+  followUpActions?: SynthesisFollowUpAction[];
   source?: string;
   tokens?: number;
   error?: string;
+}
+
+export interface SynthesisFollowUpAction {
+  label: string;
+  question: string;
 }
 
 export interface RestaurantSynthesisContext {
@@ -58,6 +57,33 @@ export interface RestaurantSynthesisContext {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+}
+
+function normalizeFollowUpActions(...values: unknown[]): SynthesisFollowUpAction[] {
+  const normalized: SynthesisFollowUpAction[] = [];
+  for (const value of values) {
+    if (!Array.isArray(value)) continue;
+    for (const item of value) {
+      if (typeof item === 'string') {
+        const question = item.trim();
+        if (question) normalized.push({ label: question, question });
+        continue;
+      }
+      if (!isRecord(item)) continue;
+      const rawQuestion = item.question ?? item.text ?? item.label;
+      if (typeof rawQuestion !== 'string' || !rawQuestion.trim()) continue;
+      const question = rawQuestion.trim();
+      const label = typeof item.label === 'string' && item.label.trim()
+        ? item.label.trim()
+        : question;
+      normalized.push({ label, question });
+    }
+  }
+  return normalized
+    .filter((item, index, all) =>
+      all.findIndex((candidate) => candidate.question === item.question) === index,
+    )
+    .slice(0, 4);
 }
 
 function hasRenderableOption(option: Record<string, unknown>): boolean {
@@ -118,6 +144,61 @@ function normalizeAlerts(rawAlerts: unknown): SynthesisAlert[] {
       detail,
     }];
   });
+}
+
+/**
+ * Route free-form restaurant questions through the unified Java intent
+ * orchestrator. This is the only browser chat entry that may decide between
+ * narrow Gold reads, clarification, deterministic context continuation and
+ * comprehensive synthesis. `page_context` remains a separate hint and never
+ * becomes part of the user's routing text.
+ */
+export async function askRestaurantIntent(
+  factoryId: string,
+  question: string,
+  sessionId?: string,
+  context?: RestaurantSynthesisContext,
+): Promise<RestaurantSynthesisResult> {
+  try {
+    const response = await executeIntent(factoryId, question, {
+      sessionId,
+      mode: 'READ',
+      context: {
+        pageContext: context?.pageContext,
+        dimensionHints: context?.dimensionHints ?? [],
+      },
+    });
+    const resultData = isRecord(response.resultData) ? response.resultData : {};
+    const nestedData = isRecord(resultData.data) ? resultData.data : {};
+    const answer = response.message || response.formattedText || '';
+    const failed = response.status === 'FAILED' || response.status === 'ERROR';
+
+    return {
+      success: !failed && Boolean(answer.trim()),
+      answer,
+      charts: normalizeCharts(resultData.charts ?? nestedData.charts),
+      alerts: normalizeAlerts(resultData.alerts ?? nestedData.alerts),
+      followUpActions: normalizeFollowUpActions(
+        resultData.suggestedFollowups,
+        resultData.followUpSuggestions,
+        nestedData.suggestedFollowups,
+        nestedData.followUpSuggestions,
+        response.clarificationQuestions,
+      ),
+      source: typeof resultData.source === 'string'
+        ? resultData.source
+        : typeof nestedData.source === 'string' ? nestedData.source : undefined,
+      error: failed ? (answer || '餐饮分析请求失败，请稍后重试') : undefined,
+    };
+  } catch (error) {
+    return {
+      success: false,
+      answer: '',
+      charts: [],
+      alerts: [],
+      error: error instanceof Error ? error.message : String(error),
+    };
+  }
 }
 
 /**
@@ -220,9 +301,9 @@ function normalizeStreamDone(payload: unknown): RestaurantSynthesisResult {
  * `credentials: 'include'`.
  *
  * Throws on any failure (HTTP error, stream `error` event, incomplete
- * stream, idle timeout) — the caller decides whether to fall back to the
- * non-stream `askRestaurantSynthesis` (RestaurantChatPanel falls back only
- * when no chunk has arrived yet).
+ * stream, idle timeout). This remains available for fixed comprehensive
+ * synthesis surfaces; free-form restaurant chat must use
+ * {@link askRestaurantIntent}.
  */
 export async function askRestaurantSynthesisStream(
   question: string,

@@ -342,7 +342,7 @@ function focusChart(key: string) {
       </div>
 
       <div class="bah-side">
-        <AnalysisChatPanel ref="analysisChatPanelRef" :contexts="analysisContexts" page-title="经营分析" />
+        <AnalysisChatPanel ref="analysisChatPanelRef" :factory-id="factoryId" :contexts="analysisContexts" page-title="经营分析" />
       </div>
     </div>
   </div>

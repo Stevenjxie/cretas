@@ -244,7 +244,7 @@
       </div>
 
       <div class="cma-side">
-        <AnalysisChatPanel ref="analysisChatPanelRef" :contexts="analysisContexts" page-title="会员分析" />
+        <AnalysisChatPanel ref="analysisChatPanelRef" :factory-id="factoryId" :contexts="analysisContexts" page-title="会员分析" />
       </div>
     </div>
   </div>

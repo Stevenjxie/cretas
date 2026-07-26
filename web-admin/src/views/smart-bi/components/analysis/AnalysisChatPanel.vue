@@ -3,10 +3,10 @@
  * AnalysisChatPanel — reusable "整页 AI 分析面板" for analytics pages
  * (2026-07-12, member-analysis is the first consumer).
  *
- * Reuses the SAME governed synthesis call the 餐饮诊断助手 chat uses
- * (askRestaurantSynthesis → POST /api/smartbi/synthesis/comprehensive —
- * LLM router + billing caps + caching, see @/api/smartbi/restaurant-synthesis).
- * This component adds NO new LLM endpoint; it only changes WHAT gets asked.
+ * Free-form questions use the unified Java intent orchestrator first. The
+ * server then decides whether the turn is a narrow Gold read, a clarification,
+ * a trusted context continuation or comprehensive synthesis. This prevents
+ * analytics-page context from bypassing QueryPlan and Answer Contract.
  *
  * The focused chart context is sent in a dedicated `page_context` field rather
  * than prepended to `question`. This keeps display copy out of routing, date
@@ -22,11 +22,13 @@ import { computed, nextTick, ref } from 'vue';
 import { ElButton, ElInput, ElMessage, ElRadioButton, ElRadioGroup } from 'element-plus';
 import ChatBubble from '../chat/ChatBubble.vue';
 import ChatTypingIndicator from '../chat/ChatTypingIndicator.vue';
-import { askRestaurantSynthesis } from '@/api/smartbi/restaurant-synthesis';
+import { askRestaurantIntent } from '@/api/smartbi/restaurant-synthesis';
 import type { ChatTurn } from '@/types/restaurant-chat';
 import type { AnalysisChartContext } from './analysisBullets';
 
 const props = defineProps<{
+  /** Authenticated tenant used by the unified Java intent endpoint. */
+  factoryId: string;
   /** One entry per chart on the page. Order is preserved in the 聚焦 selector. */
   contexts: AnalysisChartContext[];
   /** Page title, used as the "全页" focus label + fallback context title. */
@@ -144,7 +146,7 @@ async function sendMessage(text?: string) {
 
   isTyping.value = true;
   try {
-    const response = await askRestaurantSynthesis(question, sessionId.value, {
+    const response = await askRestaurantIntent(props.factoryId, question, sessionId.value, {
       pageContext: buildPageContext(),
       dimensionHints: focusedContext.value.dimensionHints,
     });
@@ -168,6 +170,7 @@ async function sendMessage(text?: string) {
         timestamp: Date.now(),
         charts: response.charts,
         alerts: response.alerts,
+        followUpActions: response.followUpActions,
         source: response.source,
       });
     }
@@ -237,7 +240,24 @@ defineExpose({ setFocus, sendMessage, clearConversation });
       </div>
 
       <template v-for="turn in turns" :key="turn.id">
-        <ChatBubble :turn="turn" />
+        <ChatBubble :turn="turn">
+          <template #followups>
+            <div
+              v-if="turn.role === 'ai' && turn.followUpActions?.length"
+              class="acp-followups"
+            >
+              <el-button
+                v-for="action in turn.followUpActions"
+                :key="action.question"
+                size="small"
+                round
+                @click="sendMessage(action.question)"
+              >
+                {{ action.label }}
+              </el-button>
+            </div>
+          </template>
+        </ChatBubble>
         <div v-if="sourceNote(turn)" class="acp-source-note">{{ sourceNote(turn) }}</div>
       </template>
 
@@ -323,6 +343,12 @@ defineExpose({ setFocus, sendMessage, clearConversation });
   margin: -12px 0 16px 46px;
   font-size: 11px;
   color: #e6a23c;
+}
+.acp-followups {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 12px;
 }
 .acp-input {
   padding: 12px 16px;

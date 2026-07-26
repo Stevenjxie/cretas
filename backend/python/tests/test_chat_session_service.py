@@ -10,6 +10,7 @@ import json
 import os
 import uuid
 from contextlib import AbstractAsyncContextManager
+from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
 
@@ -434,7 +435,8 @@ async def test_session_sql_uses_exact_identity_conflict_and_prune_predicates():
     insert_sql, insert_args = pool.conn.execute_calls[0]
     prune_sql, prune_args = pool.conn.execute_calls[1]
     lookup_sql, lookup_args = pool.conn.fetchrow_calls[0]
-    normalize = lambda sql: " ".join(sql.split())
+    def normalize(sql: str) -> str:
+        return " ".join(sql.split())
 
     assert "ON CONFLICT DO NOTHING" in normalize(insert_sql)
     assert "ON CONFLICT (" not in normalize(insert_sql)
@@ -482,6 +484,13 @@ async def test_pre_migration_same_identity_updates_inside_constraint_agnostic_pa
 _TENANT_A = "TEST_CHATSESSION_A"
 _TENANT_B = "TEST_CHATSESSION_B"
 _USER_A = 91001
+_PYTHON_ROOT = Path(__file__).resolve().parents[1]
+_MIGRATIONS = _PYTHON_ROOT / "smartbi" / "database" / "migrations"
+_CHAT_SESSION_MIGRATIONS = (
+    "V20260426_02__chat_session.sql",
+    "V20260427_01__chat_session_v3_history.sql",
+    "V20261028_02__chat_session_user_identity.sql",
+)
 
 
 def _assert_safe_local_test_dsn(dsn: str) -> None:
@@ -517,26 +526,52 @@ async def pool():
         "postgresql://smartbi_user:smartbi_pass@localhost:5432/smartbi_db",
     )
     _assert_safe_local_test_dsn(dsn)
+    admin = None
+    p = None
+    schema = f"test_chat_session_{uuid.uuid4().hex}"
     try:
+        admin = await asyncpg.connect(dsn)
+        database = await admin.fetchval("SELECT current_database()")
+        if database != "smartbi_db" and "test" not in str(database).lower():
+            pytest.fail("connected database failed the local test safety gate")
+        await admin.execute(f'CREATE SCHEMA "{schema}"')
+
+        # Every DB-backed test owns a real, isolated schema. Applying the
+        # production migrations here removes the hidden dependency on a
+        # developer's public schema while still validating the actual DDL.
         p = await asyncpg.create_pool(
-            dsn, min_size=1, max_size=2,
+            dsn,
+            min_size=1,
+            max_size=2,
+            server_settings={"search_path": f"{schema},public"},
         )
     except Exception as exc:
         if _is_local_postgres_absent(exc):
+            if admin is not None:
+                await admin.close()
             pytest.skip(
                 f"Local PostgreSQL is not accepting connections: {type(exc).__name__}"
             )
+        if admin is not None:
+            try:
+                await admin.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
+            finally:
+                await admin.close()
         raise
     try:
-        # Ensure table exists for first-run test envs.
         async with p.acquire() as conn:
+            async with conn.transaction():
+                for filename in _CHAT_SESSION_MIGRATIONS:
+                    await conn.execute(
+                        (_MIGRATIONS / filename).read_text(encoding="utf-8")
+                    )
+
             exists = await conn.fetchval(
-                "SELECT to_regclass('public.smart_bi_chat_session') IS NOT NULL"
+                "SELECT to_regclass('smart_bi_chat_session') IS NOT NULL"
             )
             if not exists:
                 pytest.fail(
-                    "smart_bi_chat_session table not created — "
-                    "apply V20260426_02__chat_session.sql first"
+                    "isolated smart_bi_chat_session migration bootstrap failed"
                 )
             identity_constraint = await conn.fetchval(
                 """
@@ -563,7 +598,13 @@ async def pool():
                 )
         yield p
     finally:
-        await p.close()
+        if p is not None:
+            await p.close()
+        if admin is not None:
+            try:
+                await admin.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
+            finally:
+                await admin.close()
 
 
 async def _reset(pool, *tenants):
