@@ -47,6 +47,8 @@ const detailLoading = ref(false);
 const detail = ref<LabelQcTaskDetail | null>(null);
 const submitting = ref(false);
 const retryingTaskId = ref<string | null>(null);
+const reviewDirty = ref(false);
+const allowDrawerClose = ref(false);
 
 const canReview = computed(() => {
   const status = detail.value?.task.status;
@@ -101,6 +103,8 @@ function statusText(status: LabelQcTaskStatus): string {
 
 async function openReview(row: LabelQcTaskSummary) {
   if (!factoryId.value) return;
+  reviewDirty.value = false;
+  allowDrawerClose.value = false;
   drawerVisible.value = true;
   detailLoading.value = true;
   detail.value = null;
@@ -137,6 +141,8 @@ async function submitReview(payload: LabelQcReviewRequest) {
     if (response.success) {
       detail.value = response.data;
       ElMessage.success('人工审核已完成，结论已保存为训练真值');
+      reviewDirty.value = false;
+      allowDrawerClose.value = true;
       drawerVisible.value = false;
       await load();
     }
@@ -145,15 +151,17 @@ async function submitReview(payload: LabelQcReviewRequest) {
   }
 }
 
-async function retryAnalysis(row: LabelQcTaskSummary) {
-  if (!factoryId.value) return;
+async function retryAnalysis(row: LabelQcTaskSummary): Promise<boolean> {
+  if (!factoryId.value) return false;
   retryingTaskId.value = row.id;
   try {
     const response = await retryLabelQcTask(factoryId.value, row.id);
     if (response.success) {
       ElMessage.success('已重新进入 AI 初筛队列');
       await load();
+      return true;
     }
+    return false;
   } finally {
     retryingTaskId.value = null;
   }
@@ -161,8 +169,59 @@ async function retryAnalysis(row: LabelQcTaskSummary) {
 
 async function retryCurrentTask() {
   if (!detail.value) return;
-  await retryAnalysis(detail.value.task);
+  if (reviewDirty.value) {
+    try {
+      await ElMessageBox.confirm(
+        '重新执行 AI 初筛会放弃当前尚未提交的人工标注。',
+        '确认重新初筛？',
+        {
+          type: 'warning',
+          confirmButtonText: '放弃草稿并重试',
+          cancelButtonText: '继续审核',
+        },
+      );
+    } catch {
+      return;
+    }
+  }
+  const retried = await retryAnalysis(detail.value.task);
+  if (!retried) return;
+  reviewDirty.value = false;
+  allowDrawerClose.value = true;
   drawerVisible.value = false;
+}
+
+function updateReviewDirty(dirty: boolean): void {
+  reviewDirty.value = dirty;
+}
+
+async function handleReviewBeforeClose(done: () => void): Promise<void> {
+  if (allowDrawerClose.value) {
+    allowDrawerClose.value = false;
+    reviewDirty.value = false;
+    done();
+    return;
+  }
+  if (!reviewDirty.value) {
+    done();
+    return;
+  }
+  try {
+    await ElMessageBox.confirm(
+      '当前还有未提交的人工标注，关闭后本次修改会丢失。',
+      '放弃未提交草稿？',
+      {
+        type: 'warning',
+        confirmButtonText: '放弃草稿',
+        cancelButtonText: '继续审核',
+        distinguishCancelAndClose: true,
+      },
+    );
+    reviewDirty.value = false;
+    done();
+  } catch {
+    // 保留抽屉和当前标注，审核员可以继续操作。
+  }
 }
 
 async function exportTrainingData() {
@@ -329,6 +388,7 @@ onMounted(load);
       direction="rtl"
       :close-on-click-modal="false"
       :destroy-on-close="true"
+      :before-close="handleReviewBeforeClose"
       class="review-drawer"
     >
       <template #header>
@@ -337,7 +397,10 @@ onMounted(load);
             <strong>逐张人工审核</strong>
             <span>每个 AI 疑点必须确认或拒绝，每张照片必须给出整图结论</span>
           </div>
-          <div class="review-rule">宁可多报 · 不可漏报</div>
+          <div class="drawer-statuses">
+            <div v-if="reviewDirty" class="draft-status">● 未提交草稿</div>
+            <div class="review-rule">宁可多报 · 不可漏报</div>
+          </div>
         </div>
       </template>
 
@@ -350,6 +413,7 @@ onMounted(load);
           :retrying="retryingTaskId === detail.task.id"
           @submit="submitReview"
           @retry="retryCurrentTask"
+          @dirty-change="updateReviewDirty"
         />
       </div>
     </el-drawer>
@@ -539,6 +603,22 @@ onMounted(load);
   border-radius: 8px;
   color: #965600;
   background: #fff7e7;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.drawer-statuses {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.draft-status {
+  padding: 7px 11px;
+  border: 1px solid #efb3ad;
+  border-radius: 8px;
+  color: #a83d34;
+  background: #fff1ef;
   font-size: 12px;
   font-weight: 800;
 }

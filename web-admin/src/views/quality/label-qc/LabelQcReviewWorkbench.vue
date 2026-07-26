@@ -7,7 +7,7 @@ import {
   ref,
   watch,
 } from 'vue';
-import { ElMessage } from 'element-plus';
+import { ElMessage, ElMessageBox } from 'element-plus';
 import {
   Aim,
   Check,
@@ -38,6 +38,7 @@ import {
   pendingItemCount,
   pointBox,
   resizeBox,
+  restoreRejectedAiCandidate,
   toReviewRequest,
   validateReviewDraft,
   type LabelQcPhotoDraft,
@@ -54,6 +55,7 @@ const props = defineProps<{
 const emit = defineEmits<{
   submit: [payload: LabelQcReviewRequest];
   retry: [];
+  dirtyChange: [dirty: boolean];
 }>();
 
 const LABEL_TEXT: Record<LabelQcLabel, string> = {
@@ -71,6 +73,7 @@ const planeRef = ref<HTMLElement | null>(null);
 const viewportSize = ref({ width: 800, height: 600 });
 const zoom = ref(1);
 const pan = ref({ x: 0, y: 0 });
+const isDirty = ref(false);
 let resizeObserver: ResizeObserver | null = null;
 
 type PointerInteraction = {
@@ -103,6 +106,19 @@ const visibleItems = computed(() => (
 const pendingItems = computed(() => (
   activeDraft.value?.items.filter((item) => !item.label) ?? []
 ));
+const rejectedAiItems = computed(() => (
+  activeDraft.value?.items.filter((item) => (
+    item.source === 'AI' && item.label === 'NO_DEFECT'
+  )) ?? []
+));
+const currentHumanItemCount = computed(() => (
+  activeDraft.value?.items.filter((item) => item.source === 'HUMAN').length ?? 0
+));
+const normalAiImpactCount = computed(() => (
+  activeDraft.value?.items.filter((item) => (
+    item.source === 'AI' && item.label !== 'NO_DEFECT'
+  )).length ?? 0
+));
 const completedCount = computed(() => completedPhotoCount(drafts.value));
 const allComplete = computed(() => (
   drafts.value.length > 0 && completedCount.value === drafts.value.length
@@ -115,9 +131,26 @@ const reviewPercent = computed(() => (
     ? Math.round((completedCount.value / drafts.value.length) * 100)
     : 0
 ));
-const currentAiCount = computed(() => (
+const currentAiTotalCount = computed(() => (
   activeDraft.value?.items.filter((item) => item.source === 'AI').length ?? 0
 ));
+const currentAiPendingCount = computed(() => (
+  activeDraft.value?.items.filter((item) => item.source === 'AI' && !item.label).length ?? 0
+));
+const aiReviewStatusText = computed(() => {
+  if (currentAiPendingCount.value > 0) {
+    return `${currentAiPendingCount.value} 个 AI 疑点待复核`;
+  }
+  if (currentAiTotalCount.value > 0) {
+    return `${currentAiTotalCount.value} 个 AI 疑点已处理`;
+  }
+  return 'AI 未发现疑点，仍需人工确认';
+});
+const nextButtonText = computed(() => {
+  if (!currentPhotoComplete.value) return '请先完成本图';
+  if (activePhotoIndex.value < drafts.value.length - 1) return '下一张';
+  return '回到未完成照片';
+});
 
 const imagePlaneStyle = computed(() => {
   const photo = activePhoto.value;
@@ -144,7 +177,7 @@ function labelText(label?: LabelQcLabel | null): string {
 }
 
 function itemColor(item: LabelQcReviewDraft): string {
-  if (!item.label) return item.source === 'AI' ? '#f5a524' : '#00a987';
+  if (!item.label) return item.source === 'AI' ? '#f5a524' : '#2f6fdd';
   if (item.label === 'MISSING_WHITE_LABEL') return '#e54d42';
   if (item.label === 'MISSING_COLOR_LABEL') return '#d97706';
   if (item.label === 'UNJUDGEABLE') return '#6b7280';
@@ -191,8 +224,15 @@ function selectPhoto(index: number): void {
   void nextTick(choosePreferredItem);
 }
 
+function setDirty(value: boolean): void {
+  if (isDirty.value === value) return;
+  isDirty.value = value;
+  emit('dirtyChange', value);
+}
+
 function touchPhoto(): void {
   if (activeDraft.value) activeDraft.value.reviewed = false;
+  setDirty(true);
 }
 
 function selectItem(item: LabelQcReviewDraft): void {
@@ -234,6 +274,16 @@ function rejectAiCandidate(): void {
   resolveSelected('NO_DEFECT');
 }
 
+function undoRejectedAiCandidate(item: LabelQcReviewDraft): void {
+  const draft = activeDraft.value;
+  if (!draft || !props.canReview) return;
+  const restored = restoreRejectedAiCandidate(draft, item.key);
+  if (!restored) return;
+  selectedKey.value = restored.key;
+  setDirty(true);
+  ElMessage.info('已撤销拒绝，请重新确认这个 AI 疑点');
+}
+
 function setHumanLabel(label: Exclude<LabelQcLabel, 'NO_DEFECT'>): void {
   const item = selectedItem.value;
   if (!item || item.source !== 'HUMAN') return;
@@ -247,6 +297,7 @@ function deleteHumanItem(): void {
   draft.items = draft.items.filter((candidate) => candidate.key !== item.key);
   draft.reviewed = false;
   selectedKey.value = null;
+  setDirty(true);
   void nextTick(choosePreferredItem);
 }
 
@@ -262,6 +313,7 @@ function addHumanBoxAt(clientX: number, clientY: number): void {
     `human-${activeDraft.value.photoId}-${Date.now()}`,
   );
   selectedKey.value = item.key;
+  setDirty(true);
   ElMessage.success('已补一个人工框，请在右侧选择问题类型');
 }
 
@@ -354,19 +406,49 @@ function confirmCurrentPhoto(): void {
     choosePreferredItem();
     return;
   }
+  setDirty(true);
   ElMessage.success(`第 ${activePhotoIndex.value + 1} 张整图结论已确认`);
 }
 
-function confirmCurrentPhotoNormal(): void {
+async function confirmCurrentPhotoNormal(): Promise<void> {
   if (!activeDraft.value || !props.canReview) return;
-  markPhotoNormal(activeDraft.value);
+  if (currentHumanItemCount.value > 0) {
+    const firstHuman = activeDraft.value.items.find((item) => item.source === 'HUMAN');
+    if (firstHuman) selectedKey.value = firstHuman.key;
+    ElMessage.warning(`还有 ${currentHumanItemCount.value} 个人工补框，请先确认问题或删除框`);
+    return;
+  }
+  if (normalAiImpactCount.value > 0) {
+    try {
+      await ElMessageBox.confirm(
+        `这会把本图 ${normalAiImpactCount.value} 个 AI 疑点全部记录为误报，并作为后续训练真值。`,
+        '确认整图正常？',
+        {
+          type: 'warning',
+          confirmButtonText: `确认拒绝 ${normalAiImpactCount.value} 个疑点`,
+          cancelButtonText: '继续逐个检查',
+          distinguishCancelAndClose: true,
+        },
+      );
+    } catch {
+      return;
+    }
+  }
+  try {
+    markPhotoNormal(activeDraft.value);
+  } catch (error) {
+    ElMessage.warning(error instanceof Error ? error.message : '本图仍有未处理的人工补框');
+    return;
+  }
   selectedKey.value = null;
+  setDirty(true);
   ElMessage.success('已标记本图正常，所有 AI 疑点均按误报记录');
 }
 
 function reopenCurrentPhoto(): void {
   if (!activeDraft.value || !props.canReview) return;
   activeDraft.value.reviewed = false;
+  setDirty(true);
   choosePreferredItem();
 }
 
@@ -412,6 +494,7 @@ watch(
     drafts.value = buildReviewDraft(detail);
     activePhotoIndex.value = 0;
     selectedKey.value = null;
+    setDirty(false);
     resetView();
     void nextTick(() => {
       updateViewportSize();
@@ -473,9 +556,7 @@ onBeforeUnmount(() => resizeObserver?.disconnect());
         <div class="image-toolbar">
           <div>
             <span class="toolbar-kicker">第 {{ activePhotoIndex + 1 }} 张原图</span>
-            <strong>
-              {{ currentAiCount ? `${currentAiCount} 个 AI 疑点待复核` : 'AI 未发现疑点，仍需人工确认' }}
-            </strong>
+            <strong>{{ aiReviewStatusText }}</strong>
           </div>
           <div class="zoom-tools" aria-label="照片缩放">
             <button type="button" aria-label="缩小照片" @click="changeZoom(-0.25)"><Minus /></button>
@@ -542,7 +623,8 @@ onBeforeUnmount(() => resizeObserver?.disconnect());
       </main>
 
       <aside class="decision-rail">
-        <section class="must-act-card" :class="{ resolved: selectedItem?.label }">
+        <div class="decision-scroll">
+          <section class="must-act-card" :class="{ resolved: selectedItem?.label }">
           <div class="must-act-heading">
             <span>当前必须操作</span>
             <em v-if="pendingItems.length">{{ pendingItems.length }} 个待确认</em>
@@ -603,8 +685,45 @@ onBeforeUnmount(() => resizeObserver?.disconnect());
             :disabled="!canReview"
             maxlength="200"
             placeholder="可选：补充判断依据"
+            @update:model-value="touchPhoto"
           />
-        </section>
+          </section>
+
+          <section v-if="rejectedAiItems.length" class="rejected-history">
+            <div class="rejected-heading">
+              <div>
+                <strong>已拒绝 AI 疑点</strong>
+                <span>这些框不会显示在照片上，可在提交前撤销</span>
+              </div>
+              <em>{{ rejectedAiItems.length }}</em>
+            </div>
+            <div
+              v-for="item in rejectedAiItems"
+              :key="item.key"
+              class="rejected-item"
+            >
+              <span>{{ labelText(item.aiLabel) }} · 置信度 {{ confidence(item.aiConfidence) }}</span>
+              <button
+                type="button"
+                :disabled="!canReview"
+                @click="undoRejectedAiCandidate(item)"
+              >
+                撤销
+              </button>
+            </div>
+          </section>
+
+          <section v-if="activePhoto.analysisError" class="analysis-error">
+            <Warning />
+            <div>
+              <strong>本图 AI 初筛异常</strong>
+              <span>{{ activePhoto.analysisError }}</span>
+            </div>
+            <button type="button" :disabled="retrying" @click="emit('retry')">
+              {{ retrying ? '重试中…' : '重试 AI' }}
+            </button>
+          </section>
+        </div>
 
         <section class="whole-photo-card" :class="{ complete: currentPhotoComplete }">
           <div class="step-label">第 2 步</div>
@@ -627,25 +746,22 @@ onBeforeUnmount(() => resizeObserver?.disconnect());
             <button
               type="button"
               class="whole-normal"
-              :disabled="!canReview"
+              :disabled="!canReview || currentHumanItemCount > 0"
               @click="confirmCurrentPhotoNormal"
             >
-              整图正常 · 拒绝全部候选框
+              <template v-if="currentHumanItemCount">
+                请先处理 {{ currentHumanItemCount }} 个人工补框
+              </template>
+              <template v-else-if="normalAiImpactCount">
+                整图正常 · 拒绝 {{ normalAiImpactCount }} 个 AI 疑点
+              </template>
+              <template v-else>
+                整图正常 · 本图没有其他问题
+              </template>
             </button>
           </template>
           <button v-else type="button" class="reopen" :disabled="!canReview" @click="reopenCurrentPhoto">
             <Check /> 本图已完成 · 点击重新检查
-          </button>
-        </section>
-
-        <section v-if="activePhoto.analysisError" class="analysis-error">
-          <Warning />
-          <div>
-            <strong>本图 AI 初筛异常</strong>
-            <span>{{ activePhoto.analysisError }}</span>
-          </div>
-          <button type="button" :disabled="retrying" @click="emit('retry')">
-            {{ retrying ? '重试中…' : '重试 AI' }}
           </button>
         </section>
       </aside>
@@ -663,9 +779,10 @@ onBeforeUnmount(() => resizeObserver?.disconnect());
         v-if="!allComplete"
         type="button"
         class="next"
+        :disabled="!currentPhotoComplete"
         @click="nextPhoto"
       >
-        {{ activePhotoIndex < drafts.length - 1 ? '下一张' : '回到未完成照片' }}
+        {{ nextButtonText }}
         <Right />
       </button>
       <button
@@ -975,7 +1092,7 @@ button {
 }
 
 .annotation-box.human {
-  background: rgba(0, 169, 135, .1);
+  background: rgba(47, 111, 221, .12);
 }
 
 .annotation-box.selected {
@@ -1022,8 +1139,17 @@ button {
 }
 
 .decision-rail {
+  display: grid;
+  min-height: 0;
+  grid-template-rows: minmax(0, 1fr) auto;
+  gap: 12px;
+  overflow: hidden;
+}
+
+.decision-scroll {
   min-height: 0;
   overflow-y: auto;
+  padding-right: 4px;
   scrollbar-width: thin;
 }
 
@@ -1106,7 +1232,7 @@ button {
 }
 
 .human-title i {
-  background: var(--green);
+  background: #2f6fdd;
 }
 
 .evidence {
@@ -1213,10 +1339,10 @@ button:disabled {
 .whole-photo-card {
   display: grid;
   gap: 9px;
-  margin-top: 12px;
   padding: 14px;
   border-color: #c8dfd7;
   background: #f1fbf7;
+  box-shadow: 0 -6px 18px rgba(18, 38, 31, .07);
 }
 
 .whole-photo-card.complete {
@@ -1250,6 +1376,79 @@ button:disabled {
   border: 1px solid #8bcdbb;
   color: var(--green-dark);
   background: #fff;
+}
+
+.rejected-history {
+  margin-top: 12px;
+  padding: 12px;
+  border: 1px solid #ead7b2;
+  border-radius: 11px;
+  background: #fffaf0;
+}
+
+.rejected-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.rejected-heading > div {
+  display: grid;
+  gap: 2px;
+}
+
+.rejected-heading strong {
+  font-size: 12px;
+}
+
+.rejected-heading span {
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 1.4;
+}
+
+.rejected-heading em {
+  display: grid;
+  min-width: 24px;
+  height: 24px;
+  place-items: center;
+  border-radius: 99px;
+  color: #8a5013;
+  background: #ffe8bc;
+  font-size: 11px;
+  font-style: normal;
+  font-weight: 900;
+}
+
+.rejected-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid #f0e3ca;
+}
+
+.rejected-item span {
+  overflow: hidden;
+  color: #685845;
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.rejected-item button {
+  flex: 0 0 auto;
+  padding: 4px 8px;
+  border: 1px solid #d9ad70;
+  border-radius: 6px;
+  color: #80501e;
+  background: #fff;
+  font-size: 10px;
+  font-weight: 800;
+  cursor: pointer;
 }
 
 .analysis-error {

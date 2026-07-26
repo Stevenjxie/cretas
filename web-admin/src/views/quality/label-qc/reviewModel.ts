@@ -111,6 +111,10 @@ export function markPhotoReviewed(photo: LabelQcPhotoDraft): string | null {
 }
 
 export function markPhotoNormal(photo: LabelQcPhotoDraft): void {
+  const humanItemCount = photo.items.filter((item) => item.source === 'HUMAN').length;
+  if (humanItemCount > 0) {
+    throw new Error(`还有 ${humanItemCount} 个人工补框，请先逐个删除或确认问题`);
+  }
   photo.items = photo.items
     .filter((item) => item.source === 'AI')
     .map((item) => ({
@@ -119,6 +123,23 @@ export function markPhotoNormal(photo: LabelQcPhotoDraft): void {
       notes: item.notes || '人工复核：本图未发现缺标',
     }));
   photo.reviewed = true;
+}
+
+const AUTO_REJECTION_NOTES = new Set([
+  '人工复核：AI 疑点不成立',
+  '人工复核：本图未发现缺标',
+]);
+
+export function restoreRejectedAiCandidate(
+  photo: LabelQcPhotoDraft,
+  itemKey: string,
+): LabelQcReviewDraft | null {
+  const item = photo.items.find((candidate) => candidate.key === itemKey);
+  if (!item || item.source !== 'AI' || item.label !== 'NO_DEFECT') return null;
+  item.label = undefined;
+  if (item.notes && AUTO_REJECTION_NOTES.has(item.notes)) item.notes = '';
+  photo.reviewed = false;
+  return item;
 }
 
 export function validateReviewDraft(drafts: LabelQcPhotoDraft[]): string | null {
