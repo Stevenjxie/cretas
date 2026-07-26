@@ -470,6 +470,8 @@ class TestSynthesize:
     @pytest.mark.parametrize("unsafe_answer", [
         "峰值月主因是晚市爆发，不是天气或活动带动。",
         "3月营收主要靠晚市堂食和高价菜拉动。",
+        "建议投入5000元预算，目标日均订单提升到110单。",
+        "VIP顾客优先出餐。",
     ])
     def test_unsupported_causality_and_missing_dimension_claim_fall_back(
         self,
@@ -513,7 +515,22 @@ class TestSynthesize:
         assert "叙述未通过数据因果门禁" in resp.answer
         assert unsafe_answer not in resp.answer
         assert resp.fact_check
-        assert any("无保留因果断言" in item for item in resp.fact_check["violations"])
+        assert resp.fact_check["violations"]
+        if "主因" in unsafe_answer or "拉动" in unsafe_answer:
+            assert any(
+                "无保留因果断言" in item
+                for item in resp.fact_check["violations"]
+            )
+        if "预算" in unsafe_answer:
+            assert any(
+                "未标注为假设的预算或目标" in item
+                for item in resp.fact_check["violations"]
+            )
+        if "优先出餐" in unsafe_answer:
+            assert any(
+                "未经验证或确认的高影响动作" in item
+                for item in resp.fact_check["violations"]
+            )
         if "天气" in unsafe_answer or "活动" in unsafe_answer:
             assert any(
                 "缺失维度被当作事实" in item
@@ -565,7 +582,7 @@ class TestSynthesize:
         assert cache.put_calls
 
     def test_contract_version_invalidates_pre_guard_narrative_cache(self):
-        assert se.SYNTHESIS_CONTRACT_VERSION == "restaurant-dimensions-v5"
+        assert se.SYNTHESIS_CONTRACT_VERSION == "restaurant-dimensions-v6"
 
 
 class TestNarrativeGroundingGate:
@@ -647,6 +664,70 @@ class TestNarrativeGroundingGate:
 
         assert not any("weather" in item for item in violations)
         assert any("promotion" in item for item in violations)
+
+    def test_rejects_unlabelled_budget_and_kpi_targets(self):
+        violations = se._narrative_grounding_violations(
+            "建议投入5000元预算，目标日均订单提升到110单。",
+            FactBook(),
+        )
+
+        assert any("未标注为假设的预算或目标" in item for item in violations)
+
+    def test_allows_adjustable_budget_and_target_pending_owner_confirmation(self):
+        assert se._narrative_grounding_violations(
+            "试点参数（建议值，需老板确认）：预算5000元，目标日均订单110单。",
+            FactBook(),
+        ) == []
+
+    def test_user_supplied_budget_is_not_treated_as_model_fabrication(self):
+        assert se._narrative_grounding_violations(
+            "按预算5000元做小范围试点，确认后再执行。",
+            FactBook(),
+            "我只有预算5000元，应该怎么测试？",
+        ) == []
+
+    def test_rejects_unapproved_high_impact_action(self):
+        violations = se._narrative_grounding_violations(
+            "VIP顾客优先出餐。",
+            FactBook(),
+        )
+
+        assert any("未经验证或确认的高影响动作" in item for item in violations)
+
+    def test_allows_high_impact_action_only_as_confirmed_reversible_experiment(self):
+        assert se._narrative_grounding_violations(
+            "先小范围试点VIP优先出餐，需门店确认后执行。",
+            FactBook(),
+        ) == []
+
+    def test_allows_observed_discount_fact_without_treating_it_as_an_action(self):
+        assert se._narrative_grounding_violations(
+            "本月满减金额500元，占营业额5%。",
+            FactBook(),
+        ) == []
+
+    def test_factbook_exposes_both_high_and_low_dish_sales_candidates(self):
+        factbook = FactBook(sales={
+            "top_products": [{
+                "product_name": "招牌鱼",
+                "revenue": 3000,
+                "qty_sold": 40,
+                "bill_count": 30,
+            }],
+            "bottom_products": [{
+                "product_name": "冷门菜",
+                "revenue": 30,
+                "qty_sold": 2,
+                "bill_count": 2,
+            }],
+        })
+
+        prompt = factbook.to_prompt_text()
+        facts = factbook.to_facts_index()
+        assert "高营业额菜品" in prompt
+        assert "低营业额菜品候选" in prompt
+        assert "冷门菜" in prompt
+        assert facts["低营业额冷门菜菜品销量"] == 2
 
 
 # --------------------------------------------------------------------------

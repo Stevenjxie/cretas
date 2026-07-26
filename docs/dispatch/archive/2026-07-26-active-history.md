@@ -67,3 +67,35 @@
   - Web HTTP 200；local/server/gateway HTTP/public HTTPS 四方 `index.html` SHA-256 均为 `2f13d31d0e672b06ac2041d18abb80cff4389a03ac56a2b97d2f5ab7c69171c7`。
   - 后续 `origin/main@0a1e8c2f7` 仅变更调度文档，Java/Web tree 与已部署提交一致。
 - **业务写入审计**：本次仅发布代码和静态 Web 制品；生产业务数据写入为 0，未执行写入型业务 E2E。
+
+### `ENH-LABEL-QC-MOBILE-REVIEW-20260726`
+
+- **状态**：`merged`
+- **Owner**：`/root`
+- **Base SHA**：`f2e1a5f9a23cb5ce7a968fd3512830e965b93735`
+- **功能提交 / PR**：`890f2ba04338a60a60773848cfce58a0bb107a9a` / [#1812](https://github.com/Stevenjxie/cretas/pull/1812)
+- **实际范围**：
+  - RN 质检员端新增标签拍检任务队列、逐张人工审核和提交状态回流。
+  - AI 疑点必须逐一确认或拒绝；拒绝后从照片移除框，但以原 annotation ID 和 `NO_DEFECT` 保存训练真值。
+  - 支持点击照片补人工框、移动/缩放/删除框、照片缩放/平移、照片级整图结论及未完成照片循环回补。
+- **验收证据**：
+  - RN 目标 Jest：2 suites、`6 passed`；ESLint 目标文件 quiet 检查通过。
+  - 390×844 Expo Web 手机视口实操覆盖队列、固定当前操作、AI 确认/拒绝、点击补框、框移动/缩放、照片缩放/平移、4 张照片完成和最终提交按钮。
+  - 浏览器验收标签质检业务写入为 0。
+- **发布边界**：仅合并代码，严格 `NOT_DEPLOYED`；未发布 OTA、未构建或分发 APK，生产业务数据写入为 0。
+
+### `ENH-LABEL-QC-WEB-REVIEW-20260726`
+
+- **状态**：`merged`
+- **Owner**：`/root`
+- **Base SHA**：`890f2ba04338a60a60773848cfce58a0bb107a9a`
+- **功能提交 / PR**：`6362d7fd873ed9d754f631615623e64d7b0dd6c4` / [#1812](https://github.com/Stevenjxie/cretas/pull/1812)
+- **实际范围**：
+  - Web 审核抽屉重构为左侧照片队列、中央可缩放大图、右侧固定当前操作和底部固定导航的桌面质检工作台。
+  - AI 疑点不再默认接受；支持显式确认/拒绝、人工点图补框、框移动/缩放/删除、整图结论和未完成照片循环回补。
+  - Web 与 RN 源码保持隔离，仅共享现有 Label QC 后端请求契约。
+- **验收证据**：
+  - Web 目标 Vitest `6 passed`；`npm run build:check` 的 Vue 类型检查和 Vite production build 通过。
+  - 1440×900 与 1024×768 浏览器实操均证明三栏工作台和底部导航完整可见；AI 拒绝后框移除、点击补框、框移动/缩放、照片放大、4 张照片完成和最终提交按钮均通过。
+  - 浏览器验收无控制台错误，标签质检业务写入为 0。
+- **发布边界**：仅合并代码，严格 `NOT_DEPLOYED`；未发布 Web 制品，生产业务数据写入为 0。
