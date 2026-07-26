@@ -75,6 +75,26 @@ public class RestaurantComprehensiveSynthesisGoldTool extends GoldBackedRestaura
         return false;
     }
 
+    /**
+     * Keep the caller tenant for synthesis so Python can select the correct
+     * fact tenant per dimension. The public demo uses the full POS alias for
+     * sales and reviews, but its seeded procurement and external-dimension
+     * facts remain under {@code DEMO_REST}.
+     */
+    @Override
+    protected String resolveGoldFactoryId(String factoryId) {
+        return factoryId;
+    }
+
+    /**
+     * Resolve the time window from the complete POS tenant while preserving
+     * the original demo tenant for the synthesis request itself.
+     */
+    @Override
+    protected LocalDate[] resolveWindow(String factoryId, Map<String, Object> params) {
+        return super.resolveWindow(super.resolveGoldFactoryId(factoryId), params);
+    }
+
     // getRequiredParameters() inherited — returns empty list.
 
     /**

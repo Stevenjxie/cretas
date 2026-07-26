@@ -457,4 +457,38 @@ class GoldBackedRestaurantToolDelegateTest {
                 any(LocalDate.class),
                 any(LocalDate.class));
     }
+
+    @Test
+    @DisplayName("demo synthesis keeps source tenant while resolving its window from the POS alias")
+    void demoComprehensiveSynthesisPreservesSourceTenant() throws Exception {
+        GoldFinanceClient gold = mock(GoldFinanceClient.class);
+        Map<String, Object> range = new HashMap<>();
+        range.put("min_date", "2026-06-01");
+        range.put("max_date", "2026-07-26");
+        when(gold.fetchDataRange(FACTORY_ID)).thenReturn(range);
+        when(gold.fetchComprehensiveSynthesis(
+                eq("DEMO_REST"),
+                anyString(),
+                any(LocalDate.class),
+                any(LocalDate.class)))
+                .thenReturn(Map.of(
+                        "answer", "采购价格已有品牌共享数据。",
+                        "charts", List.of(),
+                        "source", "deterministic_fallback"));
+
+        RestaurantComprehensiveSynthesisGoldTool tool = newSynthesisTool(gold);
+        String query = "最近30天青花椒南方百联店采购价格稳定吗？";
+        Map<String, Object> result = tool.doExecute(
+                "DEMO_REST",
+                paramsWithInput(query),
+                Collections.emptyMap());
+
+        assertThat(result.get("message").toString()).contains("采购价格");
+        verify(gold).fetchDataRange(FACTORY_ID);
+        verify(gold).fetchComprehensiveSynthesis(
+                eq("DEMO_REST"),
+                eq(query),
+                any(LocalDate.class),
+                any(LocalDate.class));
+    }
 }
