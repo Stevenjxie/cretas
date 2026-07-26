@@ -1860,7 +1860,10 @@ public class IntentExecutionOrchestrator {
     private static final java.util.regex.Pattern RESTAURANT_COMPREHENSIVE_PATTERN =
             java.util.regex.Pattern.compile(
                     "综合分析|全面分析|多维(?:度)?分析|综合诊断|综合评估|"
-                    + "整体经营分析|运营分析|经营分析");
+                    + "整体经营分析|运营分析|经营分析|"
+                    + "内部(?:经营|数据|指标).{0,20}外部(?:环境|数据|因素|维度)|"
+                    + "外部(?:环境|数据|因素|维度).{0,20}内部(?:经营|数据|指标)|"
+                    + "(?:明确|逐项说明|告诉我)?缺失维度");
 
     private static final java.util.regex.Pattern RESTAURANT_COMPREHENSIVE_ANALYSIS_HINT =
             java.util.regex.Pattern.compile("分析|诊断|评估|原因|建议|决策|方案|优化");

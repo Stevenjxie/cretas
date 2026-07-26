@@ -880,24 +880,29 @@ def test_owner_action_chat_follow_up_chips_return_distinct_next_step_answers() -
 
 
 def test_owner_action_chat_unscoped_prohibition_question_asks_for_goal() -> None:
-    data = owner_action_chat(
-        OwnerActionChatRequest(
-            factory_id="F_UNSCOPED_PROHIBITION",
-            message="哪些事情先不要做？",
-        )
-    )["data"]
+    for message in (
+        "哪些事情先不要做？",
+        "现在有哪些动作先别做？",
+        "告诉我哪些经营措施暂时不要做",
+    ):
+        data = owner_action_chat(
+            OwnerActionChatRequest(
+                factory_id="F_UNSCOPED_PROHIBITION",
+                message=message,
+            )
+        )["data"]
 
-    assert "先确认" in data["answer"]
-    assert "营收" in data["answer"]
-    assert "毛利" in data["answer"]
-    assert "不会默认成套餐" in data["answer"]
-    assert "270" not in data["answer"]
-    assert "招牌鱼" not in data["answer"]
-    assert data["followUpSuggestions"] == [
-        "先守住营收",
-        "先守住毛利",
-        "先减少损耗",
-    ]
+        assert "先确认" in data["answer"]
+        assert "营收" in data["answer"]
+        assert "毛利" in data["answer"]
+        assert "不会默认成套餐" in data["answer"]
+        assert "270" not in data["answer"]
+        assert "招牌鱼" not in data["answer"]
+        assert data["followUpSuggestions"] == [
+            "先守住营收",
+            "先守住毛利",
+            "先减少损耗",
+        ]
 
 
 def test_owner_action_chat_common_follow_up_chips_do_not_repeat_first_answer() -> None:

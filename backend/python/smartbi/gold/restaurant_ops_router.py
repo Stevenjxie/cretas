@@ -2533,6 +2533,9 @@ async def resolve_gross_margin(
                 "id": row.get("product_id"),
                 "name": row["dish_name"],
                 "rank": index,
+                "sales_volume": float(row["total_qty"] or 0),
+                "revenue": float(row["total_revenue"] or 0),
+                "bill_count": int(row["bills"] or 0),
             }
             for index, row in enumerate(ranked[:requested_rank_limit], 1)
         ]
@@ -3822,6 +3825,9 @@ async def resolve_store_margin(
                     "name": str(row["dish_name"]),
                     "rank": index,
                     "store_name": current_store,
+                    "sales_volume": quantity,
+                    "revenue": float(row["revenue"] or 0),
+                    "bill_count": int(row["bills"] or 0),
                 })
                 chart_labels.append(
                     str(row["dish_name"])
