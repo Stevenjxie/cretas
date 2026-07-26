@@ -3,6 +3,7 @@ package com.cretas.aims.service.unit;
 import com.cretas.aims.entity.unit.ProductUnitConversion;
 import com.cretas.aims.repository.MaterialPackagingHierarchyRepository;
 import com.cretas.aims.repository.config.UnitOfMeasurementRepository;
+import com.cretas.aims.repository.material.MaterialPackagingSpecRepository;
 import com.cretas.aims.repository.unit.ProductUnitConversionRepository;
 import com.cretas.aims.service.unit.impl.UnitContractServiceImpl;
 import org.junit.jupiter.api.BeforeEach;
@@ -35,12 +36,16 @@ class ProductUnitConversionGraphTest {
     @Mock
     private MaterialPackagingHierarchyRepository materialPackagingRepository;
 
+    @Mock
+    private MaterialPackagingSpecRepository materialPackagingSpecRepository;
+
     private UnitContractService service;
 
     @BeforeEach
     void setUp() {
         service = new UnitContractServiceImpl(
-                unitRepository, conversionRepository, materialPackagingRepository);
+                unitRepository, conversionRepository, materialPackagingRepository,
+                materialPackagingSpecRepository);
     }
 
     @Test

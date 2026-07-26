@@ -6,6 +6,8 @@ import com.cretas.aims.entity.ProductProcessWorkflow;
 import com.cretas.aims.entity.RawMaterialType;
 import com.cretas.aims.entity.User;
 import com.cretas.aims.entity.enums.FactoryType;
+import com.cretas.aims.entity.material.MaterialPackagingSpec;
+import com.cretas.aims.repository.material.MaterialPackagingSpecRepository;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.autoconfigure.domain.EntityScan;
@@ -32,6 +34,7 @@ class ProductMasterDataRepositoryQueryValidationTest {
     @Autowired ProductTypeRepository productRepository;
     @Autowired RawMaterialTypeRepository materialRepository;
     @Autowired MaterialPackagingHierarchyRepository hierarchyRepository;
+    @Autowired MaterialPackagingSpecRepository materialPackagingSpecRepository;
     @Autowired ProductProcessWorkflowRepository workflowRepository;
 
     @Test
@@ -82,6 +85,19 @@ class ProductMasterDataRepositoryQueryValidationTest {
         raw.setIsActive(true);
         raw.setCreatedBy(user.getId());
         entityManager.persist(raw);
+
+        MaterialPackagingSpec packagingSpec = new MaterialPackagingSpec();
+        packagingSpec.setFactoryId(factory.getId());
+        packagingSpec.setMaterialTypeId(raw.getId());
+        packagingSpec.setName("默认包装");
+        packagingSpec.setPackageUnit("箱");
+        packagingSpec.setBaseUnit("kg");
+        packagingSpec.setConversionFactor(new BigDecimal("10"));
+        packagingSpec.setDefaultSpec(true);
+        packagingSpec.setActive(true);
+        packagingSpec.setSortOrder(0);
+        packagingSpec.setVersion(0L);
+        entityManager.persist(packagingSpec);
         entityManager.flush();
         entityManager.clear();
 
@@ -119,6 +135,14 @@ class ProductMasterDataRepositoryQueryValidationTest {
         assertThat(materialRepository.existsByFactoryIdAndNormalizedNameExcludingId(
                 factory.getId(), " RAW MATERIAL ", raw.getId())).isFalse();
         assertThat(hierarchyRepository).isNotNull();
+        assertThat(materialPackagingSpecRepository
+                .findByFactoryIdAndMaterialTypeIdAndActiveTrueOrderBySortOrderAscCreatedAtAsc(
+                        factory.getId(), raw.getId()))
+                .singleElement()
+                .satisfies(spec -> {
+                    assertThat(spec.getPackageUnit()).isEqualTo("箱");
+                    assertThat(spec.getConversionFactor()).isEqualByComparingTo("10");
+                });
         assertThat(workflowRepository
                 .findFirstByFactoryIdAndProductTypeIdAndStatusOrderByDefinitionVersionDesc(
                         factory.getId(), visible.getId(), ProductProcessWorkflow.Status.SNAPSHOT))

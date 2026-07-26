@@ -2,9 +2,11 @@ package com.cretas.aims.service.unit.impl;
 
 import com.cretas.aims.entity.config.UnitOfMeasurement;
 import com.cretas.aims.entity.MaterialPackagingHierarchy;
+import com.cretas.aims.entity.material.MaterialPackagingSpec;
 import com.cretas.aims.entity.unit.ProductUnitConversion;
 import com.cretas.aims.repository.MaterialPackagingHierarchyRepository;
 import com.cretas.aims.repository.config.UnitOfMeasurementRepository;
+import com.cretas.aims.repository.material.MaterialPackagingSpecRepository;
 import com.cretas.aims.repository.unit.ProductUnitConversionRepository;
 import com.cretas.aims.service.unit.CanonicalUnit;
 import com.cretas.aims.service.unit.UnitContractService;
@@ -51,14 +53,17 @@ public class UnitContractServiceImpl implements UnitContractService {
     private final UnitOfMeasurementRepository unitRepository;
     private final ProductUnitConversionRepository conversionRepository;
     private final MaterialPackagingHierarchyRepository materialPackagingRepository;
+    private final MaterialPackagingSpecRepository materialPackagingSpecRepository;
 
     public UnitContractServiceImpl(
             UnitOfMeasurementRepository unitRepository,
             ProductUnitConversionRepository conversionRepository,
-            MaterialPackagingHierarchyRepository materialPackagingRepository) {
+            MaterialPackagingHierarchyRepository materialPackagingRepository,
+            MaterialPackagingSpecRepository materialPackagingSpecRepository) {
         this.unitRepository = unitRepository;
         this.conversionRepository = conversionRepository;
         this.materialPackagingRepository = materialPackagingRepository;
+        this.materialPackagingSpecRepository = materialPackagingSpecRepository;
     }
 
     @Override
@@ -271,10 +276,10 @@ public class UnitContractServiceImpl implements UnitContractService {
     }
 
     /**
-     * Legacy raw-material packaging hierarchy is still the master-data editor used for relations
-     * such as {@code 1 case = 10 kg}. Explicit effective product conversions keep precedence; this
-     * fallback only runs when that graph has no path. Purchase orders snapshot the resulting factor,
-     * so later master-data changes do not rewrite historical receipts.
+     * Raw-material master data supplies direct packaging rules such as {@code 1 case = 10 kg};
+     * the legacy hierarchy remains a read fallback. Explicit effective product conversions keep
+     * precedence. Purchase orders snapshot the selected factor, so later master-data changes do not
+     * rewrite historical receipts.
      */
     private Optional<UnitConversionResult> convertViaMaterialPackagingHierarchy(
             BigDecimal quantity,
@@ -282,6 +287,30 @@ public class UnitContractServiceImpl implements UnitContractService {
             Catalog catalog,
             UnitNormalizationResult from,
             UnitNormalizationResult to) {
+        if (materialPackagingSpecRepository != null) {
+            List<MaterialPackagingSpec> specs = materialPackagingSpecRepository
+                    .findByFactoryIdAndMaterialTypeIdAndActiveTrueOrderBySortOrderAscCreatedAtAsc(
+                            context.factoryId(), context.productTypeId());
+            for (MaterialPackagingSpec spec : specs) {
+                UnitNormalizationResult packageUnit = normalize(spec.getPackageUnit(), catalog);
+                UnitNormalizationResult baseUnit = normalize(spec.getBaseUnit(), catalog);
+                BigDecimal factor = positive(spec.getConversionFactor());
+                if (!packageUnit.recognized() || !baseUnit.recognized() || factor == null) {
+                    continue;
+                }
+                if (from.code().equals(packageUnit.code()) && to.code().equals(baseUnit.code())) {
+                    return Optional.of(packagingResult(
+                            quantity, from.code(), to.code(), List.of(from.code(), to.code()),
+                            List.of(packagingStep(from.code(), to.code(), factor, spec.getId()))));
+                }
+                if (from.code().equals(baseUnit.code()) && to.code().equals(packageUnit.code())) {
+                    BigDecimal inverse = BigDecimal.ONE.divide(factor, FACTOR_CONTEXT);
+                    return Optional.of(packagingResult(
+                            quantity, from.code(), to.code(), List.of(from.code(), to.code()),
+                            List.of(packagingStep(from.code(), to.code(), inverse, spec.getId()))));
+                }
+            }
+        }
         if (materialPackagingRepository == null) {
             return Optional.empty();
         }

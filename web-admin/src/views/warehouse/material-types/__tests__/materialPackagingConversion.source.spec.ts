@@ -14,15 +14,16 @@ describe('raw material purchase packaging conversion', () => {
     expect(source).not.toContain('<template v-if="isPackagingMaterial">\n          <el-divider>\n            <span class="divider-title">包装层级');
   });
 
-  it('loads, validates and persists hierarchy without a packaging-category gate', () => {
-    expect(source).toContain('原料、辅料和包材共用计量/包装层级');
-    expect(source).toContain('if (hasL2Unit !== hasL2Qty)');
-    expect(source).toContain('if (hasL2Unit || hasL3Unit)');
-    expect(source).not.toContain('if (isPackagingMaterial.value && hasL2Unit !== hasL2Qty)');
-    expect(source).not.toContain('if (isPackagingMaterial.value && (hasL2Unit || hasL3Unit))');
+  it('uses the same dynamic direct-to-base rule model as SKU creation', () => {
+    expect(source).toContain('v-for="(rule, index) in packagingRules"');
+    expect(source).toContain('添加多包装换算规则');
+    expect(source).toContain('每一条都是不同采购包装对基本单位的换算规则');
+    expect(source).toContain('packagingSpecs: submittedPackagingRules');
+    expect(source).not.toContain('label="二级换算"');
+    expect(source).not.toContain('label="三级换算"');
   });
 
   it('limits packaging-unit choices to the shared purchase quantity contract', () => {
-    expect(source.match(/usage-scope="PURCHASE_QUANTITY"/g)?.length).toBeGreaterThanOrEqual(3);
+    expect(source.match(/usage-scope="PURCHASE_QUANTITY"/g)?.length).toBeGreaterThanOrEqual(2);
   });
 });
