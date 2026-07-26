@@ -17,6 +17,9 @@ import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /**
@@ -160,6 +163,41 @@ class RestaurantPeakMonthGoldToolTest {
 
         assertThat(result).containsEntry("dataAvailable", true);
         assertThat(result).containsEntry("峰值月份", "2026-03");
+    }
+
+    @Test
+    @DisplayName("UT-PMG-08: peak-month query owns the full-range comparison and never delegates to missing-time clarification")
+    void doExecute_peakMonthQuestionDoesNotDelegate() throws Exception {
+        when(goldClient.fetchDataRange(FACTORY_ID))
+                .thenReturn(Map.of(
+                        "min_date", "2026-01-01",
+                        "max_date", "2026-03-31",
+                        "day_count", 90
+                ));
+        when(goldClient.fetchDailyTrend(
+                FACTORY_ID, LocalDate.parse("2026-01-01"), LocalDate.parse("2026-03-31")))
+                .thenReturn(buildTrendResult(List.of(
+                        point("2026-01-10", 5_000_000.0),
+                        point("2026-03-10", 7_000_000.0)
+                )));
+
+        Map<String, Object> result = tool.doExecute(
+                FACTORY_ID,
+                new HashMap<>(Map.of("userInput", "哪个月营收最高，为什么")),
+                new HashMap<>());
+
+        assertThat(result).containsEntry("峰值月份", "2026-03");
+        assertThat(result.get("message").toString())
+                .contains("当前结果使用的是按日营收数据")
+                .contains("不能仅凭营收序列断定原因")
+                .contains("缺少的维度应保持为空");
+        assertThat(result.get("suggestedFollowups")).isInstanceOf(List.class);
+        verify(goldClient, never()).fetchTieredIntentAnswer(
+                eq(FACTORY_ID), any(), eq("restaurant_peak_month_gold"));
+
+        assertThat(tool.shouldDelegateToTieredIntent("营收最高的是哪个月份")).isFalse();
+        assertThat(tool.shouldDelegateToTieredIntent("月度营收峰值在哪里")).isFalse();
+        assertThat(tool.shouldDelegateToTieredIntent("这两个月生意怎么样")).isTrue();
     }
 
     // -------------------------------------------------------------------------

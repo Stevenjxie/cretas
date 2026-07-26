@@ -699,21 +699,23 @@ public abstract class GoldBackedRestaurantTool extends AbstractBusinessTool {
             }
         }
 
-        // 5. Relative month — anchored to data's latest month, NOT today
+        // 5. Relative month — anchored to data's latest day, NOT today.
+        // An unfinished anchor month ends at the anchor itself; reporting the
+        // calendar month-end would imply that future days were already covered.
         if (userInput.contains("本月") || userInput.contains("这个月") || userInput.contains("当月")) {
             YearMonth ym = YearMonth.from(anchor);
-            return new LocalDate[]{ym.atDay(1), ym.atEndOfMonth()};
+            return new LocalDate[]{ym.atDay(1), anchor};
         }
         if (userInput.contains("上月") || userInput.contains("上个月")) {
             YearMonth ym = YearMonth.from(anchor).minusMonths(1);
             return new LocalDate[]{ym.atDay(1), ym.atEndOfMonth()};
         }
 
-        // 6. Relative week — anchored to data's latest day (Mon..Sun of anchor's week)
+        // 6. Relative week — anchored to data's latest day. The current week
+        // ends at the anchor, not at a future Sunday.
         if (userInput.contains("本周") || userInput.contains("这周") || userInput.contains("本星期")) {
             LocalDate start = anchor.with(java.time.temporal.TemporalAdjusters.previousOrSame(java.time.DayOfWeek.MONDAY));
-            LocalDate end = anchor.with(java.time.temporal.TemporalAdjusters.nextOrSame(java.time.DayOfWeek.SUNDAY));
-            return new LocalDate[]{start, end};
+            return new LocalDate[]{start, anchor};
         }
         if (userInput.contains("上周") || userInput.contains("上个星期") || userInput.contains("上星期")) {
             LocalDate ref = anchor.minusWeeks(1);
