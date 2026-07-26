@@ -1835,6 +1835,12 @@ def test_store_margin_comparison_missing_period_names_dates_without_fallback(mon
 
 
 def test_store_revenue_comparison_keeps_both_periods_and_each_store(monkeypatch):
+    class _FrozenDate(date):
+        @classmethod
+        def today(cls):
+            return cls(2026, 7, 26)
+
+    monkeypatch.setattr(_r, "date", _FrozenDate)
     primary = (date(2026, 7, 1), date(2026, 7, 26))
     baseline = (date(2026, 6, 1), date(2026, 6, 30))
     pool, connection = _store_margin_runtime(monkeypatch, {
@@ -1885,6 +1891,12 @@ def test_store_revenue_comparison_keeps_both_periods_and_each_store(monkeypatch)
 
 
 def test_store_revenue_partial_month_aligns_to_actual_primary_end(monkeypatch):
+    class _FrozenDate(date):
+        @classmethod
+        def today(cls):
+            return cls(2026, 7, 26)
+
+    monkeypatch.setattr(_r, "date", _FrozenDate)
     primary_requested = (date(2026, 7, 1), date(2026, 7, 26))
     primary_actual = (date(2026, 7, 1), date(2026, 7, 25))
     baseline_requested = (date(2026, 6, 1), date(2026, 6, 26))

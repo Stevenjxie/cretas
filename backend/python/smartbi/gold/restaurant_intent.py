@@ -835,7 +835,8 @@ def contextualize_restaurant_followup(
                 token in current
                 for token in (
                     "相比", "对比", "比呢", "高还是低", "是否",
-                    "怎么提升", "如何提升", "下一步", "先做什么",
+                    "怎么提升", "如何提升", "怎么优化", "如何优化",
+                    "下一步", "先做什么",
                 )
             )
         )
@@ -893,6 +894,31 @@ def contextualize_restaurant_followup(
         current_without_store_scope = current_without_store_scope.strip()
     body = _strip_followup_reference(current_without_store_scope)
     action = _detect_analysis_action(current)
+    # A short metric-action turn normally continues the focused entity
+    # ("销量怎么优化" after a dish ranking).  An explicit whole-business
+    # scope is different: it starts a store/menu-wide question and must not
+    # silently inherit the previous top dish.
+    explicit_whole_business_scope = any(
+        token in current
+        for token in (
+            "全店", "整个门店", "门店整体", "整体经营",
+            "全部菜品", "所有菜品",
+        )
+    )
+    explicit_entity_reference = any(
+        token in current
+        for token in (
+            "这个菜", "那个菜", "这道菜", "那道菜", "它",
+            "第一名", "第二名", "第三名",
+        )
+    )
+    if (
+        explicit_whole_business_scope
+        and explicit_metrics
+        and action in {"diagnose", "optimize"}
+        and not explicit_entity_reference
+    ):
+        return current, False
     current_window = _resolve_sales_date_range(current)[1]
     pure_time_slot_update = bool(
         not explicit_metrics
