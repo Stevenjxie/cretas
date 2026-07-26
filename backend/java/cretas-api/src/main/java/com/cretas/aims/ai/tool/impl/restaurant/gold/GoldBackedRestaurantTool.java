@@ -155,6 +155,24 @@ public abstract class GoldBackedRestaurantTool extends AbstractBusinessTool {
                 userInput = req.getUserInput();
             }
         }
+        Map<String, Object> effectiveParams = params;
+        if (userInput != null && !userInput.isBlank()
+                && (getString(params, "userInput") == null
+                || getString(params, "userInput").isBlank())) {
+            // The raw query recovered from context must also participate in
+            // deterministic time parsing and output formatting. Previously it
+            // was used only by the delegate gate, so a locally owned Gold tool
+            // could still fall back to the tenant's entire data range.
+            effectiveParams = new HashMap<>(params);
+            effectiveParams.put("userInput", userInput);
+        }
+
+        Map<String, Object> preQueryResult = beforeGoldQuery(
+                userInput, effectiveParams, context);
+        if (preQueryResult != null) {
+            return preQueryResult;
+        }
+
         if (userInput != null && !userInput.isBlank() && shouldDelegateToTieredIntent(userInput)) {
             Map<String, Object> delegated = tryDelegateToTieredIntent(
                     factoryId, userInput, extractSessionId(context));
@@ -166,12 +184,12 @@ public abstract class GoldBackedRestaurantTool extends AbstractBusinessTool {
         String goldFactoryId = resolveGoldFactoryId(factoryId);
 
         // 1. Resolve the analysis window
-        LocalDate[] win = resolveWindow(goldFactoryId, params);
+        LocalDate[] win = resolveWindow(goldFactoryId, effectiveParams);
 
         // 2. Call Gold — isolate failures
         Map<String, Object> g;
         try {
-            g = queryGold(goldFactoryId, win[0], win[1], params);
+            g = queryGold(goldFactoryId, win[0], win[1], effectiveParams);
         } catch (Exception ex) {
             log.warn("[{}] Gold call failed factory={} range={}..{}: {}",
                     getToolName(), goldFactoryId, win[0], win[1], ex.getMessage());
@@ -203,6 +221,23 @@ public abstract class GoldBackedRestaurantTool extends AbstractBusinessTool {
      */
     protected boolean shouldDelegateToTieredIntent(String userInput) {
         return true;
+    }
+
+    /**
+     * Optional deterministic guard that runs after the raw query has been
+     * recovered from the request context but before any Python/LLM delegation
+     * or Gold query.
+     *
+     * <p>Return a complete Tool result to short-circuit execution, or
+     * {@code null} to continue. Concrete tools should use this only for
+     * unambiguous contract checks such as a missing time window; fuzzy intent
+     * decisions still belong to the tiered router.
+     */
+    protected Map<String, Object> beforeGoldQuery(
+            String userInput,
+            Map<String, Object> params,
+            Map<String, Object> context) {
+        return null;
     }
 
     /**
@@ -762,7 +797,7 @@ public abstract class GoldBackedRestaurantTool extends AbstractBusinessTool {
      * @param label one of: {@code "上月"}, {@code "本月"}, {@code "YYYY-MM"}
      * @return window or {@code null} if the label is unrecognised
      */
-    private LocalDate[] parseMonthLabel(String label) {
+    LocalDate[] parseMonthLabel(String label) {
         if (label == null) return null;
         switch (label) {
             case "本月":

@@ -32,6 +32,8 @@ public class RestaurantStoreRevenueRankGoldTool extends GoldBackedRestaurantTool
     private static final String FILTER_STORE_NAME = "store_name";
     private static final String FILTER_STORE_ID = "store_id";
     private static final String USER_INPUT = "userInput";
+    private static final String TIME_CLARIFICATION =
+            "你想看哪个时间范围？请选择本月、上个月、最近7天或最近30天。";
 
     @Override
     public String getToolName() {
@@ -47,7 +49,9 @@ public class RestaurantStoreRevenueRankGoldTool extends GoldBackedRestaurantTool
     public Map<String, Object> getParametersSchema() {
         Map<String, Object> monthProp = new HashMap<>();
         monthProp.put("type", "string");
-        monthProp.put("description", "分析月份, 如 '2026年3月' / '上月', 不传默认全部数据");
+        monthProp.put(
+                "description",
+                "分析月份, 如 '2026年3月' / '上月'；询问哪家店业绩最好时缺失则先向用户确认时间");
 
         Map<String, Object> storeNameProp = new HashMap<>();
         storeNameProp.put("type", "string");
@@ -204,16 +208,69 @@ public class RestaurantStoreRevenueRankGoldTool extends GoldBackedRestaurantTool
             return false;
         }
         String input = rawInput.toString().replaceAll("\\s+", "");
-        boolean asksForTop = input.contains("第一名")
-                || input.contains("哪家店业绩最好")
-                || input.contains("哪家门店业绩最好")
+        boolean mentionsStore = input.contains("店") || input.contains("门店");
+        boolean asksForTop = input.contains("业绩最好")
+                || input.contains("营收最高")
+                || input.contains("营业额最高")
+                || input.contains("销售额最高")
+                || input.contains("最赚钱")
+                || input.contains("第一名")
                 || input.contains("冠军");
-        return asksForTop;
+        return asksForTop && (mentionsStore
+                || input.contains("第一名")
+                || input.contains("冠军"));
     }
 
     @Override
     protected boolean shouldDelegateToTieredIntent(String userInput) {
         return !isDirectTopStoreQuestion(userInput);
+    }
+
+    @Override
+    protected Map<String, Object> beforeGoldQuery(
+            String userInput,
+            Map<String, Object> params,
+            Map<String, Object> context) {
+        if (!isDirectTopStoreQuestion(userInput) || hasExplicitTimeWindow(userInput, params)) {
+            return null;
+        }
+
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("dataAvailable", true);
+        result.put("message", TIME_CLARIFICATION);
+        result.put("clarificationRequired", true);
+        result.put("suggestedFollowups", List.of(
+                Map.of("label", "本月", "question", "本月哪家店业绩最好"),
+                Map.of("label", "上个月", "question", "上个月哪家店业绩最好"),
+                Map.of("label", "最近7天", "question", "最近7天哪家店业绩最好"),
+                Map.of("label", "最近30天", "question", "最近30天哪家店业绩最好")));
+        return result;
+    }
+
+    private boolean hasExplicitTimeWindow(String userInput, Map<String, Object> params) {
+        if (params != null) {
+            if (hasText(params.get("month"))
+                    && parseMonthLabel(params.get("month").toString().trim()) != null) {
+                return true;
+            }
+            if (isValidIsoWindow(params.get("startDate"), params.get("endDate"))) {
+                return true;
+            }
+        }
+        return parseNlTimeWindow(userInput, LocalDate.now(), null) != null;
+    }
+
+    private static boolean isValidIsoWindow(Object rawStart, Object rawEnd) {
+        if (!hasText(rawStart) || !hasText(rawEnd)) {
+            return false;
+        }
+        try {
+            LocalDate start = LocalDate.parse(rawStart.toString());
+            LocalDate end = LocalDate.parse(rawEnd.toString());
+            return !start.isAfter(end);
+        } catch (java.time.format.DateTimeParseException ignored) {
+            return false;
+        }
     }
 
     private static boolean matchesStore(Map<String, Object> row, Object storeId, Object storeName) {
