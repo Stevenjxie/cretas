@@ -3317,6 +3317,46 @@ async def _parse_continuation(
     if explicit_action_read_spec is not None:
         return explicit_action_read_spec
 
+    # A pending named-dish clarification is already a typed context even
+    # though no resolver answer has been produced yet. Reuse the same
+    # conservative follow-up contextualizer used for completed answers so a
+    # dependent turn such as "怎么优化它" cannot discard "米饭 + 销量" and
+    # escape into the generic owner-action route. Explicit new topics/entities
+    # still make contextualize_restaurant_followup decline inheritance.
+    pending_named_dish_spec = _explicit_named_dish_metric_spec(original_query)
+    if (
+        pending_named_dish_spec is not None
+        and pending_named_dish_spec.dish_slot
+        and pending_named_dish_spec.requested_metrics
+    ):
+        contextualized_query, inherited_pending = contextualize_restaurant_followup(
+            query,
+            {
+                "parent_query": original_query,
+                "parent_template_code": pending_named_dish_spec.intent,
+                "structured_context": {
+                    "focus_entity": {
+                        "type": "dish",
+                        "name": pending_named_dish_spec.dish_slot,
+                    },
+                    "requested_metrics": list(
+                        pending_named_dish_spec.requested_metrics
+                    ),
+                    "analysis_action": pending_named_dish_spec.analysis_action,
+                    "window_label": pending_named_dish_spec.window_label,
+                    "store_scope": pending_named_dish_spec.store_scope,
+                    "store_names": list(pending_named_dish_spec.store_slots),
+                },
+            },
+        )
+        if inherited_pending:
+            contextualized_spec = _explicit_named_dish_metric_spec(
+                contextualized_query,
+                is_continuation=True,
+            )
+            if contextualized_spec is not None:
+                return contextualized_spec
+
     explicit_ranking_spec = _explicit_store_dish_ranking_spec(
         concatenated,
         is_continuation=True,

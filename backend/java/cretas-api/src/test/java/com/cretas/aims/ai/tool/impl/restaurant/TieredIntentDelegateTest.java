@@ -90,6 +90,7 @@ class TieredIntentDelegateTest {
                         "delegate", true,
                         "kind", "clarification",
                         "answer_text", "你想看哪个时间范围？",
+                        "clarification_continuation", true,
                         "suggested_followups", followups,
                         "structured_context", structuredContext));
 
@@ -100,6 +101,7 @@ class TieredIntentDelegateTest {
                 "restaurant_dish_sales_ranking");
 
         assertThat(result).containsEntry("message", "你想看哪个时间范围？");
+        assertThat(result).containsEntry("clarificationContinuation", true);
         assertThat(result).containsEntry("suggestedFollowups", followups);
         assertThat(result).containsEntry("conversationContext", structuredContext);
     }
