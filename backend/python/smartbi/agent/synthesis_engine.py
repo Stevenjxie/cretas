@@ -1630,12 +1630,6 @@ class ComprehensiveSynthesisEngine:
             "RESTAURANT_OPS_GROSS_MARGIN",
             factory_id,
         )
-        # Demo's deterministic restaurant facts live in the unified Gold
-        # tenant. Supplier-price observations belong to that same seeded data
-        # universe; authentication and cache identity stay on ``factory_id``.
-        # Answers still label these as brand-shared, never store-local, facts.
-        gold_supplier_factory = gold_margin_factory
-
         tasks: Dict[str, Any] = {}
         if plan.get("review"):
             tasks["review_summary"] = _safe(review_summary(self._pool, factory_id), "review_summary")
@@ -1680,13 +1674,13 @@ class ComprehensiveSynthesisEngine:
             )
         if plan.get("supplier_anomaly"):
             tasks["supplier_anomaly"] = _safe(
-                detect_price_anomalies(self._pool, gold_supplier_factory),
+                detect_price_anomalies(self._pool, factory_id),
                 "supplier_anomaly",
             )
             tasks["supplier_price_coverage"] = _safe(
                 supplier_price_coverage(
                     self._pool,
-                    gold_supplier_factory,
+                    factory_id,
                     date_range,
                 ),
                 "supplier_price_coverage",
