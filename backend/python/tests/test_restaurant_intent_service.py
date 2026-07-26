@@ -1295,7 +1295,7 @@ async def test_tiered_answer_keeps_sales_objective_when_llm_margin_slot_conflict
     assert "毛利" not in captured["query"]
 
 
-def test_named_entity_followups_are_self_contained_and_do_not_repeat_metric():
+def test_named_entity_followups_use_server_restored_context():
     followups = svc._suggested_followups({
         "focus_entity": {"type": "dish", "name": "米饭"},
         "window_label": "上个月",
@@ -1306,11 +1306,11 @@ def test_named_entity_followups_are_self_contained_and_do_not_repeat_metric():
     assert followups == [
         {
             "label": "看菜品销量",
-            "question": "上个月「米饭」的销量是多少？",
+            "question": "这个菜的销量呢？",
         },
         {
             "label": "看菜品成本",
-            "question": "上个月「米饭」的成本如何？",
+            "question": "这个菜的成本呢？",
         },
     ]
 
