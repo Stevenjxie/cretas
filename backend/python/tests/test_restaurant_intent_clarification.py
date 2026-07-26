@@ -866,6 +866,43 @@ async def test_time_then_store_scope_clarifications_chain_without_losing_query()
 
 
 @pytest.mark.asyncio
+async def test_dependent_optimization_cannot_escape_pending_named_dish_time_scope():
+    pool = _FakeDbPool(
+        is_restaurant=True,
+        store_names=["东城店", "西城店"],
+    )
+    llm = AsyncMock(side_effect=AssertionError(
+        "named-dish continuation must keep its deterministic pending context"
+    ))
+
+    with patch(
+        "smartbi.services.template_embedding_index.cosine_topk",
+        new=AsyncMock(return_value=[]),
+    ), patch("common.llm_router.call_chain", new=llm):
+        first = await parse_restaurant_query(
+            "米饭的销量为什么这样？",
+            pool,
+            factory_id="F_NAMED_DISH_PENDING",
+            session_key="sess-named-dish-pending",
+        )
+        second = await parse_restaurant_query(
+            "怎么优化它",
+            pool,
+            factory_id="F_NAMED_DISH_PENDING",
+            session_key="sess-named-dish-pending",
+        )
+
+    assert first.clarification_question == TIME_CLARIFICATION_QUESTION
+    assert second.is_clarification_continuation is True
+    assert second.clarification_question == TIME_CLARIFICATION_QUESTION
+    assert second.dish_slot == "米饭"
+    assert second.requested_metrics == ("sales_volume",)
+    assert second.analysis_action == "optimize"
+    assert second.intent == "RESTAURANT_OPS_GROSS_MARGIN"
+    llm.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_read_action_store_then_view_choice_compiles_dish_ranking():
     pool = _FakeDbPool(
         is_restaurant=True,

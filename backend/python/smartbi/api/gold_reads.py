@@ -1232,6 +1232,11 @@ async def post_restaurant_tiered_answer(
                 "kind": "clarification",
                 "answer_text": result["answer_text"],
             }
+            if (
+                spec is not None
+                and spec.is_clarification_continuation
+            ):
+                clarification_response["clarification_continuation"] = True
             if result.get("suggested_followups"):
                 clarification_response["suggested_followups"] = result["suggested_followups"]
             return clarification_response

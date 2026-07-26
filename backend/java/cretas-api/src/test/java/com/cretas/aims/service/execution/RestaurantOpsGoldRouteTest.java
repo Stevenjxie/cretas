@@ -192,6 +192,42 @@ class RestaurantOpsGoldRouteTest {
     }
 
     @Test
+    @DisplayName("pending named-dish clarification beats generic owner action")
+    void pendingNamedDishClarificationBeatsOwnerAction() {
+        TieredIntentDelegate delegate = mock(TieredIntentDelegate.class);
+        ReflectionTestUtils.setField(orchestrator, "tieredIntentDelegate", delegate);
+        when(delegate.tryDelegate(
+                eq("DEMO_REST"),
+                any(),
+                any(),
+                eq("orchestrator_null_intent")))
+                .thenReturn(Map.of(
+                        "message", "你想看哪个时间范围？",
+                        "clarificationContinuation", true,
+                        "suggestedFollowups", List.of(
+                                Map.of("label", "本月", "question", "本月"))));
+
+        IntentExecuteResponse response = ReflectionTestUtils.invokeMethod(
+                orchestrator,
+                "executeRestaurantOwnerActionChat",
+                "DEMO_REST",
+                IntentExecuteRequest.builder()
+                        .userInput("怎么优化它")
+                        .sessionId("named-dish-pending-time")
+                        .build(),
+                7L,
+                "restaurant_owner");
+
+        assertThat(response).isNotNull();
+        assertThat(response.getMessage()).isEqualTo("你想看哪个时间范围？");
+        Map<?, ?> resultData = (Map<?, ?>) response.getResultData();
+        assertThat(resultData.get("clarificationContinuation")).isEqualTo(true);
+        assertThat(resultData.get("suggestedFollowups"))
+                .isEqualTo(List.of(Map.of("label", "本月", "question", "本月")));
+        verify(toolExecutionGateway, never()).execute(any(ToolExecutionCommand.class));
+    }
+
+    @Test
     void ownerActionRejectsDeniedFailedAndMalformedGatewayResults() {
         IntentExecuteRequest request = IntentExecuteRequest.builder()
                 .userInput("今天老板先做什么？")

@@ -1818,6 +1818,11 @@ public class IntentExecutionOrchestrator {
         if (delegated.get("warning") != null) {
             delegatedData.put("warning", delegated.get("warning"));
         }
+        if (delegated.get("clarificationContinuation") != null) {
+            delegatedData.put(
+                    "clarificationContinuation",
+                    delegated.get("clarificationContinuation"));
+        }
         return IntentExecuteResponse.builder()
                 .intentRecognized(true)
                 .intentCode(delegated.get("code") != null ? delegated.get("code").toString() : null)
@@ -3274,12 +3279,22 @@ public class IntentExecutionOrchestrator {
                                                                    Long userId,
                                                                    String userRole) {
         // Sheet 7/22 菜品链轮5: 「怎么优化」若 session 里刚聊过某道菜, 应答该菜
-        // 的优化依据而非全店 owner 建议。仅当 Python 委派给出 GROSS_MARGIN
-        // (菜品限域) 答案时采用; 其余情况 (全店语境/无 session) 原 owner 流程。
+        // 的优化依据而非全店 owner 建议。Python 已消费同会话 pending
+        // clarification 后返回的续接澄清同样优先；否则会把“还缺时间”的
+        // 具名菜问题丢给全店 owner advisor。普通全店语境/无 pending session
+        // 仍走原 owner 流程。
         IntentExecuteResponse dishScoped = tryRestaurantTieredDelegate(
                 factoryId, request.getUserInput(), request);
+        boolean clarificationContinuation = false;
+        if (dishScoped != null && dishScoped.getResultData() instanceof Map<?, ?> data) {
+            clarificationContinuation = Boolean.TRUE.equals(
+                    data.get("clarificationContinuation"));
+        }
         if (dishScoped != null
-                && "RESTAURANT_OPS_GROSS_MARGIN".equals(dishScoped.getIntentCode())) {
+                && (
+                    "RESTAURANT_OPS_GROSS_MARGIN".equals(dishScoped.getIntentCode())
+                    || clarificationContinuation
+                )) {
             return dishScoped;
         }
         Map<String, Object> context = request.getContext() == null

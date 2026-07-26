@@ -1066,6 +1066,54 @@ async def test_endpoint_clarification_shape(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_endpoint_marks_consumed_pending_clarification_continuation(monkeypatch):
+    monkeypatch.setattr(gold_reads_mod, "get_factory_id", lambda: "DEMO_REST")
+    monkeypatch.setattr(
+        gold_reads_mod,
+        "get_pg_pool",
+        AsyncMock(return_value=object()),
+    )
+    from smartbi.services.chat_session_service import ChatSessionService
+
+    monkeypatch.setattr(ChatSessionService, "lookup", AsyncMock(return_value=None))
+    spec = _spec(
+        intent="RESTAURANT_OPS_GROSS_MARGIN",
+        clarification_needed=True,
+        clarification_question="你想看哪个时间范围？",
+        is_clarification_continuation=True,
+    )
+    monkeypatch.setattr(
+        "smartbi.gold.restaurant_intent.parse_restaurant_query",
+        AsyncMock(return_value=spec),
+    )
+    monkeypatch.setattr(
+        "smartbi.gold.restaurant_intent_service.tiered_answer",
+        AsyncMock(return_value={
+            "kind": "clarification",
+            "answer_text": "你想看哪个时间范围？",
+            "spec": spec,
+        }),
+    )
+
+    result = await post_restaurant_tiered_answer(
+        _fake_request("restaurant_manager", user_id="88"),
+        TieredIntentAnswerRequest(
+            factory_id="DEMO_REST",
+            query="怎么优化它",
+            java_tool_name="orchestrator_null_intent",
+            session_id="named-dish-pending-time",
+        ),
+    )
+
+    assert result == {
+        "delegate": True,
+        "kind": "clarification",
+        "answer_text": "你想看哪个时间范围？",
+        "clarification_continuation": True,
+    }
+
+
+@pytest.mark.asyncio
 async def test_endpoint_signal_free_query_reaches_semantic_planner(monkeypatch):
     """Keyword absence must never bypass the restaurant semantic planner."""
     monkeypatch.setattr(gold_reads_mod, "get_factory_id", lambda: "QHJ01")
