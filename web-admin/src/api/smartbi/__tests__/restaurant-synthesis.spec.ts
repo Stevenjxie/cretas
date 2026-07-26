@@ -109,6 +109,7 @@ describe('askRestaurantIntent', () => {
       option: {
         xAxis: { data: ['A店'] },
         series: [{ type: 'bar', data: [100] }],
+        tooltip: { trigger: 'axis', confine: true, axisPointer: { type: 'shadow' } },
         yAxis: { type: 'value' },
       },
     }]);
@@ -190,10 +191,29 @@ describe('askRestaurantSynthesis', () => {
       option: {
         xAxis: { data: ['A店', 'B店'] },
         series: [{ name: '营收', type: 'bar', data: [1, 2] }],
+        tooltip: { trigger: 'axis', confine: true, axisPointer: { type: 'shadow' } },
         // needsValueAxis: bar series + xAxis present + no yAxis → auto value axis.
         yAxis: { type: 'value' },
       },
     });
+  });
+
+  it('preserves an explicit backend tooltip instead of replacing its formatter', async () => {
+    const tooltip = { trigger: 'item', formatter: '__FMT__financial_rich_tooltip' };
+    pythonFetchMock.mockResolvedValue({
+      answer: '渠道占比',
+      charts: [{
+        chartType: 'pie',
+        title: '渠道占比',
+        tooltip,
+        series: [{ type: 'pie', data: [{ name: '堂食', value: 70 }] }],
+      }],
+      alerts: [],
+    });
+
+    const result = await askRestaurantSynthesis('渠道占比');
+
+    expect(result.charts[0].option.tooltip).toEqual(tooltip);
   });
 
   it('preserves grounded markLine reference values from synthesis charts', async () => {
