@@ -1606,7 +1606,13 @@ def _store_margin_runtime(monkeypatch, rows_by_range, *, include_cost=True):
     class _CretasConnection:
         async def fetch(self, query, *_args):
             if "FROM product_types" in query:
-                return [{"id": "PT-DISH", "name": "测试菜"}]
+                return [
+                    {
+                        "id": "PT-DISH" if name == "测试菜" else f"PT-{name}",
+                        "name": name,
+                    }
+                    for name in _args[1]
+                ]
             raise AssertionError(f"unexpected Cretas query: {query}")
 
         async def close(self):
@@ -1707,6 +1713,74 @@ def test_single_store_dish_margin_uses_store_dish_grain(monkeypatch):
     assert result.meta["targetStoreName"] == "青花椒南方百联店"
     assert result.meta["marginInvariantPass"] is True
     assert result.meta["scope_matches_request"] is True
+
+
+def test_single_store_overall_revenue_and_named_dish_sales_keep_both_grains(
+    monkeypatch,
+):
+    start, end = date(2026, 7, 20), date(2026, 7, 21)
+    dish_row = _store_margin_row(
+        "S-1",
+        "青花椒南方百联店",
+        2000,
+        100,
+        start,
+        end,
+    )
+    other_row = {
+        **dish_row,
+        "dish_name": "配菜",
+        "normalized_name": "配菜",
+        "qty": 50.0,
+        "revenue": 3000.0,
+    }
+    pool, _ = _store_margin_runtime(
+        monkeypatch,
+        {(start, end): [dish_row, other_row]},
+    )
+
+    result = asyncio.run(_r.resolve_store_margin(
+        pool,
+        "RES_TEST",
+        role="restaurant_manager",
+        date_range=(start, end),
+        query="本月青花椒南方百联店营业额和测试菜销量情况",
+        store_name="青花椒南方百联店",
+        dish_mention="测试菜",
+    ))
+
+    assert "门店整体营业额 **¥5,000.00**" in result.answer_text
+    assert "销量 **100 份**、营收 **¥2,000.00**" in result.answer_text
+    assert result.meta["crossGrainRead"] is True
+    assert result.meta["storeOverallRevenue"] == 5000.0
+
+
+def test_single_store_named_dish_revenue_and_sales_do_not_expand_to_store_total(
+    monkeypatch,
+):
+    start, end = date(2026, 7, 20), date(2026, 7, 21)
+    row = _store_margin_row(
+        "S-1",
+        "青花椒南方百联店",
+        2000,
+        100,
+        start,
+        end,
+    )
+    pool, _ = _store_margin_runtime(monkeypatch, {(start, end): [row]})
+
+    result = asyncio.run(_r.resolve_store_margin(
+        pool,
+        "RES_TEST",
+        role="restaurant_manager",
+        date_range=(start, end),
+        query="本月青花椒南方百联店测试菜的营业额和销量",
+        store_name="青花椒南方百联店",
+        dish_mention="测试菜",
+    ))
+
+    assert "门店整体营业额" not in result.answer_text
+    assert result.meta["crossGrainRead"] is False
 
 
 def test_single_store_dish_sales_optimization_survives_missing_cost(monkeypatch):
@@ -2527,6 +2601,15 @@ def test_all_store_scope_is_not_swallowed_into_named_dish():
 
     assert _r.extract_dish_candidate(query) == "招牌青花椒味(单人份)"
     assert _r.extract_dish_candidates(query) == ["招牌青花椒味(单人份)"]
+
+
+def test_store_overall_revenue_prefix_is_not_swallowed_into_named_dish():
+    cross_grain = "本月青花椒南方百联店营业额和娃娃菜销量情况"
+    dish_scoped = "本月青花椒南方百联店娃娃菜的营业额和销量"
+
+    assert _r.extract_dish_candidate(cross_grain) == "娃娃菜"
+    assert _r.extract_dish_candidates(cross_grain) == ["娃娃菜"]
+    assert _r.extract_dish_candidate(dish_scoped) == "娃娃菜"
 
 
 def test_dish_sales_phrase_routes_to_gross_margin():

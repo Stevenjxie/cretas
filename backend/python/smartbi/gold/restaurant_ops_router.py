@@ -26,7 +26,7 @@ import math
 import re
 from dataclasses import dataclass
 from datetime import date, timedelta
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -758,6 +758,14 @@ _DISH_MULTI_METRIC_RE = re.compile(
     + r")[和与、]?){2,}"
     r"(?:分别)?(?:是多少|有多少|怎么样|如何|多少)?(?:呢|啊|呀)?[?？。!！]?$"
 )
+_STORE_REVENUE_THEN_DISH_SALES_RE = re.compile(
+    r"^(?:营业额|营收|销售额|流水)"
+    r"(?:是多少|有多少|怎么样|如何|情况)?"
+    r"[和与及、，,]+[「\"']?(.{2,30}?)[」\"']?(?:的)?"
+    r"(?:销量|销售量|卖了多少|卖出多少|卖出)"
+    r"(?:是多少|有多少|怎么样|如何|多少|情况)?"
+    r"(?:呢|啊|呀)?[?？。!！]?$"
+)
 _DISH_QUERY_RE = re.compile(
     r"^[「\"']?(.{1,30}?)[」\"']?(?:的)?"
     r"(?:毛利率|毛利|销量|营业额|销售额|营收|"
@@ -866,6 +874,24 @@ def extract_dish_candidate(query: "Optional[str]") -> "Optional[str]":
         text = text.lstrip("和与跟及、的， ,").strip()
         if len(text) < 4:
             return None
+        # Cross-grain read: "本月 A 店营业额和娃娃菜销量情况" asks for
+        # the store's overall revenue plus one named dish's sales volume.  The
+        # leading store metric is not part of the dish name.  Recognize only
+        # this explicit ordering so ordinary "A 店娃娃菜的营收和销量" keeps
+        # both metrics scoped to the dish.
+        cross_grain_match = _STORE_REVENUE_THEN_DISH_SALES_RE.match(text)
+        if cross_grain_match:
+            candidate = cross_grain_match.group(1).strip("「」\"' 的， ,")
+            if (
+                len(candidate) >= 2
+                and candidate not in _DISH_GENERIC_TOKENS
+                and not any(token in candidate for token in (
+                    "排行", "排名", "趋势", "对比", "分析", "整体", "全部",
+                    "情况", "多少", "营收", "营业额", "销售", "销量",
+                    "毛利", "成本", "利润",
+                ))
+            ):
+                return candidate[:60]
     segments = [text]
     if "继续追问" in text:
         # 追问段优先: 「那招牌藤椒味呢」显式点名新菜时切换实体;
@@ -881,6 +907,50 @@ def extract_dish_candidate(query: "Optional[str]") -> "Optional[str]":
         if candidate:
             return candidate
     return None
+
+
+def _asks_store_revenue_then_dish_sales(
+    query: str,
+    store_names: Sequence[str],
+    dish_name: str,
+) -> bool:
+    """Whether one sentence explicitly asks two different result grains.
+
+    The accepted shape is store name -> overall revenue metric -> named dish
+    -> sales-volume metric.  Requiring this order keeps the common
+    "A 店娃娃菜的营收和销量" request scoped entirely to the dish.
+    """
+    compact = re.sub(r"\s+", "", query or "")
+    dish = re.sub(r"\s+", "", dish_name or "")
+    if not compact or not dish:
+        return False
+    store_positions = [
+        compact.find(re.sub(r"\s+", "", store_name))
+        for store_name in store_names
+        if store_name
+    ]
+    store_positions = [position for position in store_positions if position >= 0]
+    if not store_positions:
+        return False
+    store_position = min(store_positions)
+    revenue_positions = [
+        compact.find(token, store_position + 1)
+        for token in ("营业额", "营收", "销售额", "流水")
+    ]
+    revenue_positions = [position for position in revenue_positions if position >= 0]
+    dish_position = compact.find(dish)
+    if not revenue_positions or dish_position < 0:
+        return False
+    revenue_position = min(revenue_positions)
+    sales_positions = [
+        compact.find(token, dish_position + len(dish))
+        for token in ("销量", "销售量", "卖了多少", "卖出多少", "卖出")
+    ]
+    sales_positions = [position for position in sales_positions if position >= 0]
+    return bool(
+        sales_positions
+        and store_position < revenue_position < dish_position < min(sales_positions)
+    )
 
 
 _DISH_COMPARE_RE = re.compile(
@@ -4257,6 +4327,23 @@ async def resolve_store_margin(
                     window_label=window_label,
                     query=query_text,
                 )
+                cross_grain_read = _asks_store_revenue_then_dish_sales(
+                    query_text,
+                    [target_store],
+                    dish_mention,
+                )
+                store_overall_revenue = None
+                if cross_grain_read:
+                    store_overall_revenue = sum(
+                        float(row.get("revenue") or 0.0)
+                        for row in store_dish_rows
+                        if str(row.get("store_name") or "") == target_store
+                    )
+                    projected = (
+                        f"「{target_store}」{window_label}门店整体营业额 "
+                        f"**¥{store_overall_revenue:,.2f}**。\n\n"
+                        f"{projected}"
+                    )
                 if complete and asks_profitability:
                     rate = float(metric_entry["margin_rate"])
                     verdict = (
@@ -4313,6 +4400,8 @@ async def resolve_store_margin(
                         "marginInvariantPass": True,
                         "marginFormula": "毛利=同一门店同一菜品营收-对应菜品成本",
                         "scope_matches_request": True,
+                        "crossGrainRead": cross_grain_read,
+                        "storeOverallRevenue": store_overall_revenue,
                     },
                 )
 
