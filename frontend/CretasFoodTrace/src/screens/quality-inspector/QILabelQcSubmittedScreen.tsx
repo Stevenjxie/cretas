@@ -20,7 +20,7 @@ const STATUS_COPY: Record<LabelQcTaskStatus, { title: string; body: string; colo
   QUEUED: { title: '等待 AI 初筛', body: '任务已安全保存，稍后会自动处理。', color: QI_COLORS.secondary },
   ANALYZING: { title: 'AI 正在初筛', body: '正在查找疑似缺白标或缺彩标区域。', color: QI_COLORS.secondary },
   NEEDS_REVIEW: { title: '等待人工审核', body: 'AI 初筛已完成，最终结果由质量审核员确认。', color: QI_COLORS.warning },
-  REVIEWED: { title: '人工审核已完成', body: '审核结果已经保存，可在 Web 质检台查看详情。', color: QI_COLORS.success },
+  REVIEWED: { title: '人工审核已完成', body: '审核结果已经保存，可在手机端查看最终标注。', color: QI_COLORS.success },
   ANALYSIS_FAILED: { title: 'AI 初筛失败', body: '照片仍已保存，人工审核员可以直接检查或重新分析。', color: QI_COLORS.danger },
 };
 
@@ -135,11 +135,30 @@ export default function QILabelQcSubmittedScreen() {
         </View>
       )}
 
+      {['NEEDS_REVIEW', 'ANALYSIS_FAILED', 'REVIEWED'].includes(status) && (
+        <Button
+          mode="contained"
+          buttonColor={QI_COLORS.primary}
+          contentStyle={styles.buttonContent}
+          labelStyle={styles.buttonLabel}
+          icon={status === 'REVIEWED' ? 'eye-outline' : 'gesture-tap'}
+          onPress={() =>
+            navigation.navigate('QILabelQcReview', {
+              taskId: route.params.taskId,
+            })
+          }
+          testID="qi-label-qc-submitted-review-button"
+        >
+          {status === 'REVIEWED' ? '查看人工审核结果' : '开始逐张人工审核'}
+        </Button>
+      )}
       <Button
-        mode="contained"
-        buttonColor={QI_COLORS.primary}
+        mode={['NEEDS_REVIEW', 'ANALYSIS_FAILED', 'REVIEWED'].includes(status) ? 'outlined' : 'contained'}
+        buttonColor={['NEEDS_REVIEW', 'ANALYSIS_FAILED', 'REVIEWED'].includes(status) ? undefined : QI_COLORS.primary}
+        textColor={['NEEDS_REVIEW', 'ANALYSIS_FAILED', 'REVIEWED'].includes(status) ? QI_COLORS.primary : undefined}
         contentStyle={styles.buttonContent}
         labelStyle={styles.buttonLabel}
+        style={['NEEDS_REVIEW', 'ANALYSIS_FAILED', 'REVIEWED'].includes(status) ? styles.secondaryButton : undefined}
         onPress={() => navigation.replace('QILabelQcCreate')}
         testID="qi-label-qc-submitted-new-task-button"
       >

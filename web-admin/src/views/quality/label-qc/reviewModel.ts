@@ -1,50 +1,54 @@
 import type {
   LabelQcAnnotationReview,
   LabelQcBoundingBox,
+  LabelQcLabel,
   LabelQcPhoto,
   LabelQcPhotoReview,
   LabelQcTaskDetail,
 } from '@/api/labelQc';
 
-export interface LabelQcReviewDraft extends LabelQcAnnotationReview {
+export interface LabelQcReviewDraft extends Omit<LabelQcAnnotationReview, 'label'> {
   key: string;
   source: 'AI' | 'HUMAN';
-  aiLabel?: LabelQcAnnotationReview['label'];
+  aiLabel?: LabelQcLabel;
   aiConfidence?: number | null;
   aiEvidence?: string | null;
+  label?: LabelQcLabel;
 }
 
 export interface LabelQcPhotoDraft {
   photoId: string;
+  reviewed: boolean;
   items: LabelQcReviewDraft[];
 }
 
-const candidateDefault = (photo: LabelQcPhoto): LabelQcReviewDraft[] => {
-  if (photo.annotations.length === 0) {
-    return [{
-      key: `negative-${photo.id}`,
-      source: 'HUMAN',
-      label: 'NO_DEFECT',
-      bbox: null,
-      notes: '',
-    }];
-  }
-  return photo.annotations.map((annotation) => ({
-    key: annotation.id,
-    source: annotation.source,
-    annotationId: annotation.source === 'AI' ? annotation.id : undefined,
-    aiLabel: annotation.aiLabel ?? undefined,
-    aiConfidence: annotation.aiConfidence,
-    aiEvidence: annotation.aiEvidence,
-    label: annotation.humanLabel ?? annotation.aiLabel ?? 'UNJUDGEABLE',
-    bbox: annotation.bbox ?? null,
-    notes: annotation.reviewerNotes ?? '',
-  }));
-};
+const isDefect = (label?: LabelQcLabel): boolean => (
+  label === 'MISSING_WHITE_LABEL' || label === 'MISSING_COLOR_LABEL'
+);
+
+const candidateDefault = (photo: LabelQcPhoto): LabelQcReviewDraft[] => (
+  photo.annotations.map((annotation) => {
+    const persistedLabel = annotation.humanLabel
+      ?? (photo.status === 'REVIEWED' ? annotation.aiLabel : null)
+      ?? undefined;
+    return {
+      key: annotation.id,
+      source: annotation.source,
+      annotationId: annotation.source === 'AI' ? annotation.id : undefined,
+      aiLabel: annotation.aiLabel ?? undefined,
+      aiConfidence: annotation.aiConfidence,
+      aiEvidence: annotation.aiEvidence,
+      label: persistedLabel,
+      bbox: annotation.bbox ?? null,
+      notes: annotation.reviewerNotes ?? '',
+    };
+  })
+);
 
 export function buildReviewDraft(detail: LabelQcTaskDetail): LabelQcPhotoDraft[] {
   return detail.photos.map((photo) => ({
     photoId: photo.id,
+    reviewed: photo.status === 'REVIEWED',
     items: candidateDefault(photo),
   }));
 }
@@ -53,53 +57,106 @@ export function appendHumanBox(
   photoDraft: LabelQcPhotoDraft,
   bbox: LabelQcBoundingBox,
   key: string,
-): void {
-  const onlyAutoNegative = photoDraft.items.length === 1
-    && photoDraft.items[0]?.source === 'HUMAN'
-    && photoDraft.items[0]?.label === 'NO_DEFECT'
-    && !photoDraft.items[0]?.annotationId
-    && !photoDraft.items[0]?.bbox;
-  if (onlyAutoNegative) {
-    photoDraft.items = [];
-  }
-  photoDraft.items.push({
+): LabelQcReviewDraft {
+  const item: LabelQcReviewDraft = {
     key,
     source: 'HUMAN',
-    label: 'MISSING_WHITE_LABEL',
     bbox,
     notes: '',
-  });
+  };
+  photoDraft.items.push(item);
+  photoDraft.reviewed = false;
+  return item;
+}
+
+export function pendingItemCount(photo: LabelQcPhotoDraft): number {
+  return photo.items.filter((item) => !item.label).length;
+}
+
+export function isPhotoComplete(photo: LabelQcPhotoDraft): boolean {
+  return photo.reviewed && pendingItemCount(photo) === 0;
+}
+
+export function completedPhotoCount(drafts: LabelQcPhotoDraft[]): number {
+  return drafts.filter(isPhotoComplete).length;
+}
+
+export function firstIncompletePhotoIndex(
+  drafts: LabelQcPhotoDraft[],
+  afterIndex = -1,
+): number {
+  if (drafts.length === 0) return -1;
+  for (let offset = 1; offset <= drafts.length; offset += 1) {
+    const index = (afterIndex + offset) % drafts.length;
+    const photo = drafts[index];
+    if (photo && !isPhotoComplete(photo)) return index;
+  }
+  return -1;
+}
+
+export function validatePhotoConclusion(photo: LabelQcPhotoDraft): string | null {
+  const pending = pendingItemCount(photo);
+  if (pending > 0) return `还有 ${pending} 个框未确认`;
+  for (const item of photo.items) {
+    if (isDefect(item.label) && !item.bbox) return '缺标结论缺少问题框';
+  }
+  return null;
+}
+
+export function markPhotoReviewed(photo: LabelQcPhotoDraft): string | null {
+  const validation = validatePhotoConclusion(photo);
+  if (validation) return validation;
+  photo.reviewed = true;
+  return null;
+}
+
+export function markPhotoNormal(photo: LabelQcPhotoDraft): void {
+  photo.items = photo.items
+    .filter((item) => item.source === 'AI')
+    .map((item) => ({
+      ...item,
+      label: 'NO_DEFECT' as const,
+      notes: item.notes || '人工复核：本图未发现缺标',
+    }));
+  photo.reviewed = true;
 }
 
 export function validateReviewDraft(drafts: LabelQcPhotoDraft[]): string | null {
   if (drafts.length === 0) return '任务没有可审核照片';
   for (let photoIndex = 0; photoIndex < drafts.length; photoIndex += 1) {
     const photo = drafts[photoIndex];
-    if (!photo || photo.items.length === 0) {
-      return `第 ${photoIndex + 1} 张照片尚未给出审核结论`;
-    }
-    for (const item of photo.items) {
-      const isDefect = item.label === 'MISSING_WHITE_LABEL'
-        || item.label === 'MISSING_COLOR_LABEL';
-      if (isDefect && !item.bbox) {
-        return `第 ${photoIndex + 1} 张照片的缺标结论缺少问题框`;
-      }
-    }
+    if (!photo) return `第 ${photoIndex + 1} 张照片数据缺失`;
+    const photoValidation = validatePhotoConclusion(photo);
+    if (photoValidation) return `第 ${photoIndex + 1} 张照片${photoValidation}`;
+    if (!photo.reviewed) return `第 ${photoIndex + 1} 张照片尚未给出整图结论`;
   }
   return null;
 }
 
 export function toReviewRequest(drafts: LabelQcPhotoDraft[]): { photos: LabelQcPhotoReview[] } {
+  const validation = validateReviewDraft(drafts);
+  if (validation) throw new Error(validation);
   return {
-    photos: drafts.map((photo) => ({
-      photoId: photo.photoId,
-      annotations: photo.items.map((item) => ({
+    photos: drafts.map((photo) => {
+      const annotations = photo.items.map((item) => ({
         annotationId: item.annotationId,
-        label: item.label,
+        label: item.label!,
         bbox: item.bbox ?? null,
         notes: item.notes?.trim() || undefined,
-      })),
-    })),
+      }));
+      if (annotations.length === 0) {
+        annotations.push({
+          annotationId: undefined,
+          label: 'NO_DEFECT',
+          bbox: null,
+          notes: '人工复核：本图未发现缺标',
+        });
+      }
+      return {
+        photoId: photo.photoId,
+        annotations,
+      };
+    }),
   };
 }
 
@@ -122,5 +179,46 @@ export function normalizedBox(
     yMin: top / height,
     xMax: right / width,
     yMax: bottom / height,
+  };
+}
+
+export function pointBox(
+  x: number,
+  y: number,
+  width = 0.22,
+  height = 0.12,
+): LabelQcBoundingBox {
+  const xMin = Math.max(0, Math.min(1 - width, x - width / 2));
+  const yMin = Math.max(0, Math.min(1 - height, y - height / 2));
+  return {
+    xMin,
+    yMin,
+    xMax: xMin + width,
+    yMax: yMin + height,
+  };
+}
+
+export function moveBox(
+  box: LabelQcBoundingBox,
+  deltaX: number,
+  deltaY: number,
+): LabelQcBoundingBox {
+  const width = box.xMax - box.xMin;
+  const height = box.yMax - box.yMin;
+  const xMin = Math.max(0, Math.min(1 - width, box.xMin + deltaX));
+  const yMin = Math.max(0, Math.min(1 - height, box.yMin + deltaY));
+  return { xMin, yMin, xMax: xMin + width, yMax: yMin + height };
+}
+
+export function resizeBox(
+  box: LabelQcBoundingBox,
+  deltaX: number,
+  deltaY: number,
+  minimumSize = 0.03,
+): LabelQcBoundingBox {
+  return {
+    ...box,
+    xMax: Math.max(box.xMin + minimumSize, Math.min(1, box.xMax + deltaX)),
+    yMax: Math.max(box.yMin + minimumSize, Math.min(1, box.yMax + deltaY)),
   };
 }

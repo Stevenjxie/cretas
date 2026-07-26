@@ -76,3 +76,32 @@ export interface LabelQcTaskDetail {
   task: LabelQcTaskSummary;
   photos: LabelQcPhoto[];
 }
+
+export interface LabelQcTaskPage {
+  content: LabelQcTaskSummary[];
+  page: number;
+  currentPage: number;
+  size: number;
+  totalElements: number;
+  totalPages: number;
+  first: boolean;
+  last: boolean;
+  number?: number;
+  empty?: boolean;
+}
+
+export interface LabelQcAnnotationReviewRequest {
+  annotationId?: string;
+  label: LabelQcLabel;
+  bbox?: LabelQcBoundingBox;
+  notes?: string;
+}
+
+export interface LabelQcPhotoReviewRequest {
+  photoId: string;
+  annotations: LabelQcAnnotationReviewRequest[];
+}
+
+export interface LabelQcReviewTaskRequest {
+  photos: LabelQcPhotoReviewRequest[];
+}

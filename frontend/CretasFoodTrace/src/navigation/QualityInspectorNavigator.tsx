@@ -31,7 +31,9 @@ import QIFormScreen from '../screens/quality-inspector/QIFormScreen';
 import QIVoiceScreen from '../screens/quality-inspector/QIVoiceScreen';
 import VoiceInspectionResultScreen from '../screens/quality-inspector/VoiceInspectionResultScreen';
 import QICameraScreen from '../screens/quality-inspector/QICameraScreen';
+import QILabelQcQueueScreen from '../screens/quality-inspector/QILabelQcQueueScreen';
 import QILabelQcCreateScreen from '../screens/quality-inspector/QILabelQcCreateScreen';
+import QILabelQcReviewScreen from '../screens/quality-inspector/QILabelQcReviewScreen';
 import QILabelQcSubmittedScreen from '../screens/quality-inspector/QILabelQcSubmittedScreen';
 import QIResultScreen from '../screens/quality-inspector/QIResultScreen';
 import QIRecordsScreen from '../screens/quality-inspector/QIRecordsScreen';
@@ -157,9 +159,19 @@ function InspectStack() {
         options={{ title: '拍照质检' }}
       />
       <Stack.Screen
+        name="QILabelQcQueue"
+        component={QILabelQcQueueScreen}
+        options={{ title: '标签拍检任务' }}
+      />
+      <Stack.Screen
         name="QILabelQcCreate"
         component={QILabelQcCreateScreen}
         options={{ title: '包装标签拍检' }}
+      />
+      <Stack.Screen
+        name="QILabelQcReview"
+        component={QILabelQcReviewScreen}
+        options={{ title: '逐张人工审核' }}
       />
       <Stack.Screen
         name="QILabelQcSubmitted"
