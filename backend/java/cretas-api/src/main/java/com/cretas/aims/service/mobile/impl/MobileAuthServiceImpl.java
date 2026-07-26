@@ -3,7 +3,6 @@ package com.cretas.aims.service.mobile.impl;
 import com.cretas.aims.dto.MobileDTO;
 import com.cretas.aims.dto.user.UserDTO;
 import com.cretas.aims.entity.PlatformAdmin;
-import com.cretas.aims.entity.Session;
 import com.cretas.aims.entity.User;
 import com.cretas.aims.entity.Whitelist;
 import com.cretas.aims.entity.enums.FactoryUserRole;
@@ -362,25 +361,18 @@ public class MobileAuthServiceImpl implements MobileAuthService {
             }
         }
 
-        // 撤销用户的所有活跃session
-        if (userId != null) {
-            List<Session> activeSessions = sessionRepository.findByUserIdAndIsRevokedFalse(userId);
-            for (Session session : activeSessions) {
-                session.setIsRevoked(true);
-                // 将session中的token也加入黑名单
-                if (StringUtils.hasText(session.getToken())) {
-                    Date expiration = jwtUtil.getExpirationDateFromToken(session.getToken());
-                    long ttl = 0;
-                    if (expiration != null) {
-                        ttl = expiration.getTime() - System.currentTimeMillis();
-                    }
-                    if (ttl > 0) {
-                        tokenBlacklistService.blacklistToken(session.getToken(), ttl);
-                    }
+        // 仅撤销本次登出的会话，保留同一账号在其他手机上的独立登录。
+        if (StringUtils.hasText(token)) {
+            sessionRepository.findByTokenAndIsRevokedFalse(token).ifPresent(session -> {
+                if (userId != null && !Objects.equals(userId, session.getUserId())) {
+                    log.warn("跳过不属于当前用户的session撤销: userId={}, sessionUserId={}",
+                            userId, session.getUserId());
+                    return;
                 }
-            }
-            sessionRepository.saveAll(activeSessions);
-            log.info("已撤销用户 {} 的 {} 个活跃session", userId, activeSessions.size());
+                session.setIsRevoked(true);
+                sessionRepository.save(session);
+                log.info("已撤销当前设备session: userId={}, sessionId={}", userId, session.getId());
+            });
         }
     }
 

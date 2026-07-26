@@ -63,6 +63,7 @@ export interface LabelQcTaskSummary {
   productionDate: string;
   createdBy: number;
   status: LabelQcTaskStatus;
+  version: number;
   photoCount: number;
   aiCandidateCount: number;
   finalDefectCount: number;
@@ -103,5 +104,7 @@ export interface LabelQcPhotoReviewRequest {
 }
 
 export interface LabelQcReviewTaskRequest {
+  expectedVersion: number;
+  reviewRequestId: string;
   photos: LabelQcPhotoReviewRequest[];
 }

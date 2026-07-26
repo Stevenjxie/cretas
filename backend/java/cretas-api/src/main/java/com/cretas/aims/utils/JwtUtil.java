@@ -17,6 +17,7 @@ import java.nio.charset.StandardCharsets;
 import java.util.Date;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.UUID;
 
 /**
  * JWT工具类
@@ -83,6 +84,7 @@ public class JwtUtil {
         Date expiryDate = new Date(now.getTime() + expiration);
         return Jwts.builder()
                 .setClaims(claims)
+                .setId(UUID.randomUUID().toString())
                 .setSubject(subject)
                 .setIssuedAt(now)
                 .setExpiration(expiryDate)
@@ -230,6 +232,14 @@ public class JwtUtil {
     }
 
     /**
+     * 获取令牌的唯一会话标识。
+     */
+    public String getTokenId(String token) {
+        Claims claims = getClaimsFromToken(token);
+        return claims != null ? claims.getId() : null;
+    }
+
+    /**
      * 检查Token是否过期
      */
     public boolean isTokenExpired(String token) {
@@ -277,6 +287,7 @@ public class JwtUtil {
         Date expiryDate = new Date(now.getTime() + refreshExpiration);
         return Jwts.builder()
                 .setClaims(claims)
+                .setId(UUID.randomUUID().toString())
                 .setSubject(userId)
                 .setIssuedAt(now)
                 .setExpiration(expiryDate)

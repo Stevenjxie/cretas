@@ -107,7 +107,9 @@ class LabelQcServiceTest {
                 .yMax(0.9)
                 .build();
 
-        when(taskRepository.findByFactoryIdAndId(FACTORY_ID, TASK_ID))
+        lenient().when(taskRepository.findByFactoryIdAndId(FACTORY_ID, TASK_ID))
+                .thenReturn(Optional.of(task));
+        lenient().when(taskRepository.findByFactoryIdAndIdForUpdate(FACTORY_ID, TASK_ID))
                 .thenReturn(Optional.of(task));
         lenient().when(photoRepository.findByFactoryIdAndTaskIdOrderByOrderIndexAsc(FACTORY_ID, TASK_ID))
                 .thenReturn(List.of(photo));
@@ -121,7 +123,7 @@ class LabelQcServiceTest {
     void reviewPreservesAiOriginAndPersistsHumanTruth() {
         BoundingBox originalBox = new BoundingBox(0.1, 0.6, 0.4, 0.9);
         BoundingBox missedBox = new BoundingBox(0.55, 0.7, 0.9, 0.98);
-        ReviewTaskRequest request = new ReviewTaskRequest(List.of(
+        ReviewTaskRequest request = new ReviewTaskRequest(0L, "review-device-a", List.of(
                 new PhotoReviewRequest(PHOTO_ID, List.of(
                         new AnnotationReviewRequest(
                                 aiCandidate.getId(),
@@ -142,6 +144,7 @@ class LabelQcServiceTest {
         assertEquals(LabelQcTaskStatus.REVIEWED, task.getStatus());
         assertEquals(2, task.getFinalDefectCount());
         assertEquals(LabelQcPhotoStatus.REVIEWED, photo.getStatus());
+        assertEquals("review-device-a", task.getReviewRequestId());
 
         @SuppressWarnings("unchecked")
         ArgumentCaptor<Iterable<LabelQcAnnotation>> captor = ArgumentCaptor.forClass(Iterable.class);
@@ -166,12 +169,100 @@ class LabelQcServiceTest {
                         FACTORY_ID,
                         TASK_ID,
                         REVIEWER_ID,
-                        new ReviewTaskRequest(List.of(
+                        new ReviewTaskRequest(0L, "review-device-a", List.of(
                                 new PhotoReviewRequest(PHOTO_ID, List.of(first, duplicate))))));
 
         assertEquals("LABEL_QC_ANNOTATION_DUPLICATE", error.getErrorCode());
         verify(annotationRepository, never()).saveAll(any());
         verify(photoRepository, never()).saveAll(any());
+    }
+
+    @Test
+    void legacyReviewPayloadGetsStableServerFingerprint() {
+        ReviewTaskRequest request = new ReviewTaskRequest(null, null, List.of(
+                new PhotoReviewRequest(PHOTO_ID, List.of(
+                        new AnnotationReviewRequest(
+                                aiCandidate.getId(),
+                                LabelQcLabel.MISSING_WHITE_LABEL,
+                                new BoundingBox(0.1, 0.6, 0.4, 0.9),
+                                null)))));
+
+        service.review(FACTORY_ID, TASK_ID, REVIEWER_ID, request);
+
+        assertNotNull(task.getReviewRequestId());
+        assertTrue(task.getReviewRequestId().startsWith("legacy-"));
+        assertEquals(LabelQcTaskStatus.REVIEWED, task.getStatus());
+    }
+
+    @Test
+    void repeatedReviewRequestIsIdempotent() {
+        task.setStatus(LabelQcTaskStatus.REVIEWED);
+        task.setReviewRequestId("review-device-a");
+
+        service.review(
+                FACTORY_ID,
+                TASK_ID,
+                REVIEWER_ID,
+                new ReviewTaskRequest(0L, "review-device-a", List.of(
+                        new PhotoReviewRequest(PHOTO_ID, List.of(
+                                new AnnotationReviewRequest(
+                                        aiCandidate.getId(),
+                                        LabelQcLabel.MISSING_WHITE_LABEL,
+                                        new BoundingBox(0.1, 0.6, 0.4, 0.9),
+                                        null))))));
+
+        verify(annotationRepository, never()).saveAll(any());
+        verify(photoRepository, never()).saveAll(any());
+        verify(taskRepository, never()).save(any(LabelQcTask.class));
+    }
+
+    @Test
+    void reviewRejectsAnotherDeviceAfterTaskWasCompleted() {
+        task.setStatus(LabelQcTaskStatus.REVIEWED);
+        task.setReviewRequestId("review-device-a");
+
+        BusinessException error = assertThrows(
+                BusinessException.class,
+                () -> service.review(
+                        FACTORY_ID,
+                        TASK_ID,
+                        REVIEWER_ID,
+                        new ReviewTaskRequest(0L, "review-device-b", List.of(
+                                new PhotoReviewRequest(PHOTO_ID, List.of(
+                                        new AnnotationReviewRequest(
+                                                aiCandidate.getId(),
+                                                LabelQcLabel.MISSING_WHITE_LABEL,
+                                                new BoundingBox(0.1, 0.6, 0.4, 0.9),
+                                                null)))))));
+
+        assertEquals("LABEL_QC_ALREADY_REVIEWED", error.getErrorCode());
+        verify(annotationRepository, never()).saveAll(any());
+        verify(photoRepository, never()).saveAll(any());
+        verify(taskRepository, never()).save(any(LabelQcTask.class));
+    }
+
+    @Test
+    void reviewRejectsStaleTaskVersionBeforeWritingAnnotations() {
+        task.setVersion(2L);
+
+        BusinessException error = assertThrows(
+                BusinessException.class,
+                () -> service.review(
+                        FACTORY_ID,
+                        TASK_ID,
+                        REVIEWER_ID,
+                        new ReviewTaskRequest(1L, "review-device-b", List.of(
+                                new PhotoReviewRequest(PHOTO_ID, List.of(
+                                        new AnnotationReviewRequest(
+                                                aiCandidate.getId(),
+                                                LabelQcLabel.MISSING_WHITE_LABEL,
+                                                new BoundingBox(0.1, 0.6, 0.4, 0.9),
+                                                null)))))));
+
+        assertEquals("LABEL_QC_REVIEW_STALE", error.getErrorCode());
+        verify(annotationRepository, never()).saveAll(any());
+        verify(photoRepository, never()).saveAll(any());
+        verify(taskRepository, never()).save(any(LabelQcTask.class));
     }
 
     @Test

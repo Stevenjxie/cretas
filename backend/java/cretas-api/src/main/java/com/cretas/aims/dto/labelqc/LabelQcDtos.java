@@ -49,6 +49,8 @@ public final class LabelQcDtos {
     ) {}
 
     public record ReviewTaskRequest(
+            @Min(0) Long expectedVersion,
+            @Size(max = 100) String reviewRequestId,
             @NotEmpty @Size(max = 6) List<@Valid PhotoReviewRequest> photos
     ) {}
 
@@ -87,6 +89,7 @@ public final class LabelQcDtos {
             LocalDate productionDate,
             Long createdBy,
             LabelQcTaskStatus status,
+            Long version,
             Integer photoCount,
             Integer aiCandidateCount,
             Integer finalDefectCount,
