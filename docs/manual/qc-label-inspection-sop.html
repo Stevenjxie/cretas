@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-  <meta name="description" content="白垩纪食品溯源系统 QC 包装标签拍检操作指南">
+  <meta name="description" content="六扇门 F006 QC 包装标签拍检操作指南">
   <meta name="robots" content="noindex,nofollow">
   <meta name="theme-color" content="#0b6b4c">
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='18' fill='%23087a56'/%3E%3Ctext x='32' y='41' text-anchor='middle' font-family='Arial' font-size='26' font-weight='700' fill='white'%3EQC%3C/text%3E%3C/svg%3E">
@@ -402,6 +402,16 @@
       font-size: 12px;
       text-align: center;
     }
+    .status-crop {
+      max-height: 300px;
+      overflow: hidden;
+      border-radius: 20px;
+    }
+    .status-crop img {
+      width: 100%;
+      height: auto;
+      border-radius: 20px;
+    }
     .callouts {
       display: grid;
       gap: 12px;
@@ -667,7 +677,7 @@
         <span class="brand__mark" aria-hidden="true">QC</span>
         <span>白垩纪 · 质检操作指南</span>
       </div>
-      <div class="topbar__meta">RN 当前流程 · 2026-07-26</div>
+      <div class="topbar__meta">六扇门 F006 · RN 当前流程 · 2026-07-26</div>
     </div>
   </header>
 
@@ -676,7 +686,7 @@
       <div>
         <p class="eyebrow">Quality Control / Label Inspection</p>
         <h1 id="page-title">包装标签拍检<br>操作指南</h1>
-        <p class="hero__lead">从 QC 账号登录、录入 SKU 与批次、拍摄包装照片，到 AI 初筛后等待人工审核。</p>
+        <p class="hero__lead">六扇门 F006：从 QC 账号登录、录入 SKU 与批次、拍摄包装照片，到 AI 初筛后等待人工审核。</p>
       </div>
       <aside class="hero__badge" aria-label="预计操作时间">
         <strong>约 3 分钟</strong>
@@ -783,7 +793,7 @@
             <button class="shot-button" type="button" data-full="qcsop-assets/04-open-label-qc.png" aria-label="放大查看质检工作台标签拍检入口截图">
               <img src="qcsop-assets/04-open-label-qc.png" alt="质检工作台快捷操作区域，左下方有标签拍检入口" loading="lazy">
             </button>
-            <figcaption>“快捷操作”第一项是“标签拍检”</figcaption>
+            <figcaption>“快捷操作”第一项是“标签拍检”（业务信息已脱敏）</figcaption>
           </figure>
           <div class="callouts">
             <div class="callout">
@@ -907,11 +917,11 @@
         </div>
 
         <div class="screen-grid screen-grid--single">
-          <figure class="phone-shot">
-            <button class="shot-button" type="button" data-full="qcsop-assets/10-await-human-review.png" aria-label="放大查看等待人工审核状态截图">
-              <img src="qcsop-assets/10-await-human-review.png" alt="拍检状态为等待人工审核，显示 SKU、批次、日期、任务编号、照片数和 AI 疑似区域数量" loading="lazy">
-            </button>
-            <figcaption>演示任务：AI 初筛完成，等待质量审核员确认</figcaption>
+          <figure class="phone-shot phone-shot--status">
+            <div class="status-crop">
+              <img src="qcsop-assets/10-await-human-review.png" alt="拍检状态为等待人工审核，AI 初筛完成后提示由质量审核员确认" loading="lazy">
+            </div>
+            <figcaption>状态界面示意：只展示无租户业务字段区域</figcaption>
           </figure>
           <div class="callouts">
             <div class="callout">
@@ -983,7 +993,7 @@
   </div>
 
   <footer>
-    白垩纪食品溯源系统 · QC 包装标签拍检操作指南 · 版本 2026-07-26
+    白垩纪食品溯源系统 · 六扇门 F006 QC 包装标签拍检操作指南 · 版本 2026-07-26
   </footer>
 
   <dialog class="lightbox" id="lightbox" aria-label="截图放大预览">

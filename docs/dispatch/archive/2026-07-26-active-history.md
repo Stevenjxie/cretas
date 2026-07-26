@@ -14,8 +14,9 @@
   - `docs/manual/qc-label-inspection-sop.html`
   - `docs/manual/qcsop-assets/**`
 - **验收证据**：
-  - 生产 QC 测试账号以 `quality_inspector` 角色登录并进入“质检工作台”。
+  - 六扇门 F006 QC 账号以 `quality_inspector` 角色登录并进入“质检工作台”。
   - 截图覆盖启动登录、账号表单、标签拍检入口、批次信息、SKU 搜索、照片预览/提交和等待人工审核。
+  - F006 表单仅预填 `QC-GUIDE-SAMPLE` 并上传照片预览，没有点击提交；首页在途字段在浏览器 DOM 中脱敏，等待审核截图只展示裁切后的通用状态区域。
   - 390px 与 1440px 视口均无横向溢出；7 张内容截图均加载成功；截图放大和 Esc 关闭通过。
   - HTML 未检出测试用户名、密码、Bearer Token 或 Access Token；设置 `noindex,nofollow`。
   - `git diff --check` 通过。
