@@ -150,3 +150,17 @@
   - 1440×900 与 1024×768 浏览器实操均证明三栏工作台和底部导航完整可见；AI 拒绝后框移除、点击补框、框移动/缩放、照片放大、4 张照片完成和最终提交按钮均通过。
   - 浏览器验收无控制台错误，标签质检业务写入为 0。
 - **发布边界**：仅合并代码，严格 `NOT_DEPLOYED`；未发布 Web 制品，生产业务数据写入为 0。
+
+### `ARCH-OA-CANVAS-RUNTIME-CUTOVER-20260726`
+
+- **状态**：`merged`
+- **Owner**：`/root`
+- **Base SHA**：`6d7dba97ede29249a043ed052196aacd15b4d47e`
+- **功能提交 / PR**：`1e9b25c11`、`6cb69c6a2`、`e661150b3` / [#1820](https://github.com/Stevenjxie/cretas/pull/1820)
+- **实际范围**：
+  - 新审批请求统一解析 published + enabled Canvas Workflow；无审批明确直通，旧平面配置仍启用时 fail-closed 并要求迁移。
+  - 采购、销售、调拨、库存调整及餐饮 AI 审核接入持久化 Canvas 实例和业务状态投影；未接入业务阻止发布，避免假启用。
+  - 实例固定稳定定义摘要；兼容切换前摘要，在途实例可在版本停用或归档后继续按原图运行。
+  - 多 active、草稿启用和旧配置写入均有明确状态机门禁；Web 业务目录展示启用、无需审批、待迁移、未接入和版本冲突。
+- **验收证据**：后端范围测试累计 `101 passed`（最终受影响复验 `37/37`）；Web 目录测试 `7/7`、`vue-tsc`、production build、tracked secret scan 与 `git diff --check` 通过。
+- **数据与发布边界**：未修改 Entity、Repository、JPQL 或数据库结构；无生产业务写入；仅合并代码，严格 `NOT_DEPLOYED`。
