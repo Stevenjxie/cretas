@@ -429,7 +429,15 @@ class TestSynthesize:
         # FactBook remains attached as auditable evidence.
         assert resp.factbook_text
 
-    def test_unsupported_causality_and_missing_dimension_claim_fall_back(self, monkeypatch):
+    @pytest.mark.parametrize("unsafe_answer", [
+        "峰值月主因是晚市爆发，不是天气或活动带动。",
+        "3月营收主要靠晚市堂食和高价菜拉动。",
+    ])
+    def test_unsupported_causality_and_missing_dimension_claim_fall_back(
+        self,
+        monkeypatch,
+        unsafe_answer,
+    ):
         cache = FakeCache()
         eng = _engine(monkeypatch, cache=cache)
         factbook = FactBook(
@@ -445,8 +453,7 @@ class TestSynthesize:
 
         async def fake_call_chain(slot, payload, chain=None, timeout=30.0):
             return {
-                "choices": [{"message": {"content":
-                    "峰值月主因是晚市爆发，不是天气或活动带动。"}}],
+                "choices": [{"message": {"content": unsafe_answer}}],
                 "usage": {"total_tokens": 321},
             }
 
@@ -466,10 +473,14 @@ class TestSynthesize:
         assert resp.tokens == 321
         assert resp.tokens_used_today == 331
         assert "叙述未通过数据因果门禁" in resp.answer
-        assert "不是天气或活动带动" not in resp.answer
+        assert unsafe_answer not in resp.answer
         assert resp.fact_check
         assert any("无保留因果断言" in item for item in resp.fact_check["violations"])
-        assert any("缺失维度被当作事实" in item for item in resp.fact_check["violations"])
+        if "天气" in unsafe_answer or "活动" in unsafe_answer:
+            assert any(
+                "缺失维度被当作事实" in item
+                for item in resp.fact_check["violations"]
+            )
         assert cache.put_calls == []
 
     def test_hedged_correlation_and_explicit_missing_disclosure_can_be_cached(self, monkeypatch):
@@ -516,10 +527,37 @@ class TestSynthesize:
         assert cache.put_calls
 
     def test_contract_version_invalidates_pre_guard_narrative_cache(self):
-        assert se.SYNTHESIS_CONTRACT_VERSION == "restaurant-dimensions-v3"
+        assert se.SYNTHESIS_CONTRACT_VERSION == "restaurant-dimensions-v4"
 
 
 class TestNarrativeGroundingGate:
+    @pytest.mark.parametrize("claim", [
+        "3月营收主要靠晚市堂食和高价菜拉动。",
+        "晚市堂食支撑了3月营收峰值。",
+        "高价菜推动营收增长。",
+        "增长主要来自活动优惠。",
+        "3月峰值得益于天气转好。",
+        "客单价是这轮增长的关键因素。",
+        "头部门店撑起了3月营收。",
+        "优惠促成了订单增长。",
+    ])
+    def test_rejects_causal_language_family(self, claim):
+        violations = se._narrative_grounding_violations(claim, FactBook())
+
+        assert any("无保留因果断言" in item for item in violations)
+
+    def test_allows_composition_share_without_turning_it_into_cause(self):
+        assert se._narrative_grounding_violations(
+            "晚市贡献54.8%的营收，这是经营构成，不能证明因果。",
+            FactBook(),
+        ) == []
+
+    def test_allows_explicitly_hedged_causal_language(self):
+        assert se._narrative_grounding_violations(
+            "3月营收可能主要靠晚市堂食拉动，但仍待对照数据验证。",
+            FactBook(),
+        ) == []
+
     def test_rejects_unhedged_cause_and_missing_dimension_fact(self):
         factbook = FactBook(missing_dimensions=[
             missing_status("weather", reason="未接入逐日天气"),
