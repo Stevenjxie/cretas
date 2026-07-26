@@ -75,6 +75,25 @@ def test_no_thinking_only_model_in_fast_slots():
             assert m not in llm_router._THINKING_ONLY, f"{slot.value} has thinking-only {m}"
 
 
+def test_non_thinking_profile_slots_exclude_force_thinking_models():
+    """Console quota does not make a model protocol-compatible.
+
+    Live A/B/C probes showed the 05-17 and preview Max SKUs reject
+    enable_thinking=false. Any slot that injects false must exclude them.
+    """
+    force_thinking = {
+        "qwen3.7-max-2026-05-17",
+        "qwen3.7-max-preview",
+    }
+    for slot, profile in llm_router._SLOT_PARAMS.items():
+        if profile.get("enable_thinking") is False:
+            models = {model for _account, model in llm_router.SLOT_MODELS[slot]}
+            assert models.isdisjoint(force_thinking), (
+                f"{slot.value} would send enable_thinking=false to "
+                f"{sorted(models & force_thinking)}"
+            )
+
+
 def test_no_denylist_name_in_registry():
     for account, model in llm_router._SAFE_MODELS:
         assert model not in llm_router._PAID_MODEL_DENYLIST, (
@@ -98,6 +117,7 @@ def test_mapper_uses_bounded_fast_models_without_max_or_reasoners():
     assert ("aliyun_c", "glm-5.2") in chain
     assert ("aliyun_c", "qwen3.7-plus") in chain
     assert ("aliyun_b", "qwen3.7-plus") in chain
+    assert ("aliyun_a", "qwen3.7-plus") in chain
     assert ("zhipu", "glm-4.5-air") in chain
     assert all(
         token not in model
@@ -108,15 +128,31 @@ def test_mapper_uses_bounded_fast_models_without_max_or_reasoners():
 
 def test_insights_prefers_interleaved_free_plus_before_max_deep_tail():
     chain = llm_router.SLOT_MODELS[SLOT.INSIGHTS]
-    assert chain[:4] == [
+    assert chain[:6] == [
         ("aliyun_c", "qwen3.7-plus"),
         ("aliyun_b", "qwen3.7-plus"),
+        ("aliyun_a", "qwen3.7-plus"),
         ("aliyun_c", "qwen3.7-plus-2026-05-26"),
         ("aliyun_b", "qwen3.7-plus-2026-05-26"),
+        ("aliyun_a", "qwen3.7-plus-2026-05-26"),
     ]
     first_max = next(i for i, (_account, model) in enumerate(chain) if "max" in model)
-    assert first_max >= 6
-    assert all(model not in llm_router._THINKING_ONLY for _account, model in chain[:6])
+    assert first_max >= 8
+    assert all(model not in llm_router._THINKING_ONLY for _account, model in chain[:8])
+    assert ("aliyun_a", "qwen3.7-max-2026-05-20") not in chain
+    assert ("aliyun_a", "qwen3.7-max-2026-06-08") in chain
+
+
+def test_review_uses_verified_non_thinking_abc_fallbacks():
+    chain = llm_router.SLOT_MODELS[SLOT.REVIEW]
+    assert chain[:5] == [
+        ("aliyun_a", "qwen3.7-max-2026-06-08"),
+        ("aliyun_c", "qwen3.7-max-2026-06-08"),
+        ("aliyun_c", "qwen3.7-plus"),
+        ("aliyun_b", "qwen3.7-plus"),
+        ("aliyun_a", "qwen3.7-plus"),
+    ]
+    assert all(model not in llm_router._THINKING_ONLY for _account, model in chain)
 
 
 def test_new_b_and_c_flash_quota_pairs_are_registered_and_head_fast_slots():
