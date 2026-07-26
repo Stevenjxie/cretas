@@ -3215,14 +3215,21 @@ async def resolve_store_margin(
         )
         primary_actual_end = _date_from_any(primary.meta.get("window_end"))
         aligned_to_actual_progress = False
+        effective_comparison_label = resolved_spec.comparison_label
         if (
             resolved_spec.comparison_label
-            and resolved_spec.comparison_label.endswith("同期")
             and resolved_spec.date_range == (exact_start, exact_end)
             and resolved_spec.comparison_range
             == (comparison_start, comparison_end)
             and primary_actual_start is not None
             and primary_actual_end is not None
+            and (
+                resolved_spec.comparison_label.endswith("同期")
+                or (
+                    exact_end == date.today()
+                    and primary_actual_end < exact_end
+                )
+            )
         ):
             start_offset = max(
                 0,
@@ -3245,6 +3252,10 @@ async def resolve_store_margin(
                     aligned_end,
                 )
                 aligned_to_actual_progress = True
+                if not resolved_spec.comparison_label.endswith("同期"):
+                    effective_comparison_label = (
+                        f"{resolved_spec.comparison_label}同期"
+                    )
         comparison = await resolve_store_margin(
             smartbi_pool,
             factory_id,
@@ -3352,13 +3363,13 @@ async def resolve_store_margin(
                 else primary_label
             )
             display_comparison_label = (
-                resolved_spec.comparison_label
+                effective_comparison_label
                 if (
                     resolved_spec.comparison_range
                     == (comparison_start, comparison_end)
                     or aligned_to_actual_progress
                 )
-                and resolved_spec.comparison_label
+                and effective_comparison_label
                 else comparison_label
             )
 
@@ -4787,18 +4798,29 @@ async def resolve_sales_summary(
         "actual_start_date",
     )
     primary_actual_end = _coerce_summary_date(summary, "actual_end_date")
-    # QueryPlan marks an unfinished current week/month/year baseline as
-    # "...同期". If ingestion itself trails today, align the baseline again
-    # to the primary window's actual observed offsets before querying it.
-    if (
+    comparison_requires_equal_coverage = bool(
         resolved_comparison_label
         and resolved_comparison_label.endswith("同期")
+    )
+    # QueryPlan marks an unfinished current week/month/year baseline as
+    # "...同期". If ingestion itself trails today (including a calendar
+    # boundary such as Sunday), align the baseline again to the primary
+    # window's actual observed offsets before querying it.
+    if (
+        resolved_comparison_label
         and date_range[0] is not None
         and date_range[1] is not None
         and resolved_comparison_range[0] is not None
         and resolved_comparison_range[1] is not None
         and primary_actual_start is not None
         and primary_actual_end is not None
+        and (
+            comparison_requires_equal_coverage
+            or (
+                date_range[1] == (today or date.today())
+                and primary_actual_end < date_range[1]
+            )
+        )
     ):
         start_offset = max(0, (primary_actual_start - date_range[0]).days)
         end_offset = max(
@@ -4814,6 +4836,11 @@ async def resolve_sales_summary(
         )
         if baseline_start <= baseline_end:
             resolved_comparison_range = (baseline_start, baseline_end)
+            comparison_requires_equal_coverage = True
+            if not resolved_comparison_label.endswith("同期"):
+                resolved_comparison_label = (
+                    f"{resolved_comparison_label}同期"
+                )
 
     comparison_summary: Optional[Dict[str, Any]] = None
     if (
@@ -5060,7 +5087,10 @@ async def resolve_sales_summary(
                 "bill_delta": bill_delta,
                 "bill_change_pct": bill_pct,
             })
-            if day_count != baseline_day_count:
+            if (
+                comparison_requires_equal_coverage
+                and day_count != baseline_day_count
+            ):
                 comparison_meta["coverage_mismatch"] = True
                 comparison_line = (
                     f"{actual_window}有 {day_count} 个数据日，"
