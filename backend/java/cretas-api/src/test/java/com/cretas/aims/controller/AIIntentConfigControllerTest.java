@@ -226,6 +226,27 @@ class AIIntentConfigControllerTest {
                     request.getIntentCode(),
                     rankedOrComparativeQuestion + " must reach object-aware downstream routing");
         }
+
+        for (String diagnosticQuestion : List.of(
+                "结合天气、客流和活动分析2026年3月营收高峰原因",
+                "为什么本月营收下降",
+                "天气对本月营业额有什么影响",
+                "分析本月营收的拉动因素")) {
+            IntentExecuteRequest request = IntentExecuteRequest.builder()
+                    .userInput(diagnosticQuestion)
+                    .build();
+            shortcut.invoke(controller, "DEMO_REST", request);
+            assertEquals(
+                    null,
+                    request.getIntentCode(),
+                    diagnosticQuestion + " must reach diagnostic/comprehensive downstream routing");
+        }
+
+        IntentExecuteRequest plainAnalysis = IntentExecuteRequest.builder()
+                .userInput("分析本月营收")
+                .build();
+        shortcut.invoke(controller, "DEMO_REST", plainAnalysis);
+        assertEquals("RESTAURANT_OPS_SALES_SUMMARY", plainAnalysis.getIntentCode());
     }
 
     @Test
