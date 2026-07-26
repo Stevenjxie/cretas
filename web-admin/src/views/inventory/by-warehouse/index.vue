@@ -111,6 +111,7 @@ async function loadWarehouses() {
 interface MaterialBatchRow {
   id: string;
   batchNumber: string;
+  materialCode?: string;
   materialName?: string;
   materialTypeId?: string;
   currentQuantity?: number;
@@ -195,8 +196,9 @@ const filteredMaterials = computed<MaterialBatchRow[]>(() => {
   if (!kw) return data.value.materials;
   return data.value.materials.filter((r) => {
     const name = (r.materialName || '').toLowerCase();
+    const code = (r.materialCode || '').toLowerCase();
     const bn = (r.batchNumber || '').toLowerCase();
-    return name.includes(kw) || bn.includes(kw);
+    return name.includes(kw) || code.includes(kw) || bn.includes(kw);
   });
 });
 
@@ -338,7 +340,7 @@ onMounted(async () => {
           <label>搜索:</label>
           <el-input
             v-model="keywordFilter"
-            placeholder="批次号 / 物料 / 产品名称"
+            placeholder="批次号 / 物料编码 / 物料名称"
             :prefix-icon="Search"
             clearable
             style="width: 240px"
@@ -388,6 +390,11 @@ onMounted(async () => {
             style="width: 100%"
           >
             <el-table-column prop="batchNumber" label="批次号" width="180" show-overflow-tooltip />
+            <el-table-column prop="materialCode" label="物料编码" width="150" show-overflow-tooltip>
+              <template #default="{ row }">
+                {{ row.materialCode || '-' }}
+              </template>
+            </el-table-column>
             <el-table-column prop="materialName" label="原料名称" min-width="160" show-overflow-tooltip />
             <el-table-column label="当前数量" width="120" align="right">
               <template #default="{ row }">
