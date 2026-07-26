@@ -34,6 +34,7 @@ from smartbi.gold.restaurant_intent import (
     _cache_get,
     _cache_put,
     _explicit_read_only_action_ranking_spec,
+    _is_restaurant_tenant,
     _pending_pop,
     _pending_put,
     build_resolver_query,
@@ -67,11 +68,17 @@ class _FakeDbConn:
         self._pool = pool
 
     def transaction(self):
+        pool = self._pool
+
         class _Ctx:
             async def __aenter__(self):
+                pool.in_transaction = True
+                pool.active_factory = None
                 return None
 
             async def __aexit__(self, *_exc):
+                pool.active_factory = None
+                pool.in_transaction = False
                 return False
 
         return _Ctx()
@@ -81,7 +88,13 @@ class _FakeDbConn:
             raise RuntimeError("simulated DB failure (pending store)")
         if "agg_restaurant_daily_totals" in sql:
             self._pool.tenant_gate_calls += 1
-            return {"?column?": 1} if self._pool.is_restaurant else None
+            return (
+                {"?column?": 1}
+                if self._pool.is_restaurant
+                and self._pool.in_transaction
+                and self._pool.active_factory == args[0]
+                else None
+            )
         if "DELETE FROM restaurant_pending_clarifications" in sql and "RETURNING" in sql:
             factory_id, session_key = args
             # dict with original_query / clarification_question / created_at, or None
@@ -92,6 +105,9 @@ class _FakeDbConn:
         if self._pool.raise_on_pending and "restaurant_pending_clarifications" in sql:
             raise RuntimeError("simulated DB failure (pending store)")
         if "set_config('app.factory_id'" in sql:
+            assert self._pool.in_transaction is True
+            self._pool.active_factory = args[0]
+            self._pool.tenant_rls_calls += 1
             return "SELECT 1"
         if "INSERT INTO restaurant_pending_clarifications" in sql:
             factory_id, session_key, original_query, clarification_question = args
@@ -128,6 +144,9 @@ class _FakeDbPool:
         self.store_names = list(store_names or [])
         self.acquire_calls = 0
         self.tenant_gate_calls = 0
+        self.tenant_rls_calls = 0
+        self.in_transaction = False
+        self.active_factory = None
         self.sweep_calls = 0
         self.raise_on_pending = False  # simulate pending-store DB failure
 
@@ -151,6 +170,21 @@ def _restaurant_pool() -> _FakeDbPool:
 
 def _llm_result(payload: dict) -> dict:
     return {"choices": [{"message": {"content": json.dumps(payload)}}]}
+
+
+@pytest.mark.asyncio
+async def test_restaurant_tenant_gate_binds_rls_context_before_caching():
+    pool = _restaurant_pool()
+
+    first = await _is_restaurant_tenant(pool, "F_RLS_RESTAURANT")
+    second = await _is_restaurant_tenant(pool, "F_RLS_RESTAURANT")
+
+    assert first is True
+    assert second is True
+    assert pool.tenant_rls_calls == 1
+    assert pool.tenant_gate_calls == 1
+    assert pool.active_factory is None
+    assert pool.in_transaction is False
 
 
 _CLARIFY_JSON = {
