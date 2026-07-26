@@ -9,6 +9,7 @@ import com.cretas.aims.exception.EntityNotFoundException;
 import com.cretas.aims.repository.config.ApprovalWorkflowRepository;
 import com.cretas.aims.repository.workflow.ApprovalWorkflowInstanceRepository;
 import com.cretas.aims.entity.workflow.ApprovalWorkflowInstance;
+import com.cretas.aims.service.workflow.DecisionTypeMetadataRegistry;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -260,7 +261,7 @@ class ApprovalWorkflowServiceImplTest {
     }
 
     @Test
-    void running_instance_blocks_all_mutating_workflow_operations() {
+    void runningInstanceBlocksDefinitionMutationButAllowsDisableAndArchive() {
         ApprovalWorkflow existing = validSequentialWorkflow();
         existing.setId(WORKFLOW_ID);
         existing.setFactoryId(FACTORY_ID);
@@ -273,36 +274,47 @@ class ApprovalWorkflowServiceImplTest {
                 () -> service.update(FACTORY_ID, WORKFLOW_ID, new ApprovalWorkflow()));
         BusinessException delete = assertThrows(BusinessException.class,
                 () -> service.delete(FACTORY_ID, WORKFLOW_ID));
-        BusinessException archive = assertThrows(BusinessException.class,
-                () -> service.archive(FACTORY_ID, WORKFLOW_ID));
-        BusinessException toggle = assertThrows(BusinessException.class,
-                () -> service.toggleEnabled(FACTORY_ID, WORKFLOW_ID, false));
+        when(repository.save(existing)).thenReturn(existing);
+        ApprovalWorkflow archived = service.archive(FACTORY_ID, WORKFLOW_ID);
+        ApprovalWorkflow disabled = service.toggleEnabled(FACTORY_ID, WORKFLOW_ID, false);
 
         assertEquals("OA_WORKFLOW_RUNNING_INSTANCE_EXISTS", update.getErrorCode());
         assertEquals("OA_WORKFLOW_RUNNING_INSTANCE_EXISTS", delete.getErrorCode());
-        assertEquals("OA_WORKFLOW_RUNNING_INSTANCE_EXISTS", archive.getErrorCode());
-        assertEquals("OA_WORKFLOW_RUNNING_INSTANCE_EXISTS", toggle.getErrorCode());
+        assertEquals("archived", archived.getPublishStatus());
+        assertFalse(disabled.getEnabled());
         verify(repository, never()).delete(any());
-        verify(repository, never()).save(any());
+        verify(repository, times(2)).save(existing);
     }
 
     @Test
-    @DisplayName("Case 8: getActiveByDecisionType returns highest priority published+enabled")
-    void getActive_returnsHighestPriority() {
+    @DisplayName("Case 8: getActiveByDecisionType returns the unique published+enabled version")
+    void getActiveReturnsUniqueVersion() {
         ApprovalWorkflow high = validSequentialWorkflow();
         high.setId("wf-high");
         high.setPriority(100);
-        ApprovalWorkflow low = validSequentialWorkflow();
-        low.setId("wf-low");
-        low.setPriority(10);
-        // Repository 已按 priority DESC 排序, 返回顺序固定
         when(repository.findActiveByDecisionType(FACTORY_ID, DecisionType.QUALITY_RELEASE))
-                .thenReturn(List.of(high, low));
+                .thenReturn(List.of(high));
 
         Optional<ApprovalWorkflow> result = service.getActiveByDecisionType(FACTORY_ID, DecisionType.QUALITY_RELEASE);
 
         assertTrue(result.isPresent());
         assertEquals("wf-high", result.get().getId());
+    }
+
+    @Test
+    void multipleActiveWorkflowsFailClosed() {
+        ApprovalWorkflow first = validSequentialWorkflow();
+        ApprovalWorkflow second = validSequentialWorkflow();
+        when(repository.findActiveByDecisionType(
+                FACTORY_ID, DecisionType.PURCHASE_ORDER_APPROVAL))
+                .thenReturn(List.of(first, second));
+
+        BusinessException error = assertThrows(
+                BusinessException.class,
+                () -> service.getActiveByDecisionType(
+                        FACTORY_ID, DecisionType.PURCHASE_ORDER_APPROVAL));
+
+        assertEquals("OA_MULTIPLE_ACTIVE_WORKFLOWS", error.getErrorCode());
     }
 
     @Test
@@ -387,6 +399,67 @@ class ApprovalWorkflowServiceImplTest {
 
         assertEquals("published", published.getPublishStatus());
         assertTrue(published.getEnabled());
+    }
+
+    @Test
+    void publishingNewVersionAtomicallyDisablesPreviousActiveVersion() {
+        ApprovalWorkflow draft = validSequentialWorkflow();
+        draft.setId(WORKFLOW_ID);
+        draft.setFactoryId(FACTORY_ID);
+        draft.setPublishStatus("draft");
+        draft.setEnabled(false);
+        ApprovalWorkflow previous = validSequentialWorkflow();
+        previous.setId("wf-active-v1");
+        previous.setFactoryId(FACTORY_ID);
+        previous.setPublishStatus("published");
+        previous.setEnabled(true);
+
+        when(repository.findById(WORKFLOW_ID)).thenReturn(Optional.of(draft));
+        when(repository.findActiveByDecisionType(
+                FACTORY_ID, draft.getDecisionType())).thenReturn(List.of(previous));
+        when(repository.save(any(ApprovalWorkflow.class)))
+                .thenAnswer(invocation -> invocation.getArgument(0));
+
+        ApprovalWorkflow published = service.publishDraft(FACTORY_ID, WORKFLOW_ID);
+
+        assertFalse(previous.getEnabled());
+        assertTrue(published.getEnabled());
+        assertEquals("published", published.getPublishStatus());
+        verify(repository).save(argThat(workflow ->
+                "wf-active-v1".equals(workflow.getId())
+                        && Boolean.FALSE.equals(workflow.getEnabled())));
+        verify(repository).save(argThat(workflow ->
+                WORKFLOW_ID.equals(workflow.getId())
+                        && "published".equals(workflow.getPublishStatus())
+                        && Boolean.TRUE.equals(workflow.getEnabled())));
+    }
+
+    @Test
+    @DisplayName("未接入业务只能保存草稿，不能发布或重新启用")
+    void unwiredBusinessCannotBePublishedOrEnabled() {
+        DecisionTypeMetadataRegistry registry = new DecisionTypeMetadataRegistry();
+        registry.init();
+        ReflectionTestUtils.setField(service, "decisionTypeMetadataRegistry", registry);
+
+        ApprovalWorkflow draft = validSequentialWorkflow();
+        draft.setId(WORKFLOW_ID);
+        draft.setFactoryId(FACTORY_ID);
+        draft.setDecisionType(DecisionType.LEAVE_APPROVAL);
+        draft.setPublishStatus("draft");
+        draft.setEnabled(false);
+        when(repository.findById(WORKFLOW_ID)).thenReturn(Optional.of(draft));
+
+        BusinessException publishError = assertThrows(
+                BusinessException.class,
+                () -> service.publishDraft(FACTORY_ID, WORKFLOW_ID));
+        assertEquals("OA_BUSINESS_NOT_WIRED", publishError.getErrorCode());
+
+        draft.setPublishStatus("published");
+        BusinessException enableError = assertThrows(
+                BusinessException.class,
+                () -> service.toggleEnabled(FACTORY_ID, WORKFLOW_ID, true));
+        assertEquals("OA_BUSINESS_NOT_WIRED", enableError.getErrorCode());
+        verify(repository, never()).save(any());
     }
 
     @Test

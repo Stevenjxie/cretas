@@ -103,7 +103,9 @@ export interface DecisionTypeMetadataDTO {
 export type ApprovalCutoverRuntimeStatus =
   | 'CANVAS_ACTIVE'
   | 'CANVAS_DRAFT_ONLY'
+  | 'CANVAS_CONFLICT'
   | 'LEGACY_MIGRATION_REQUIRED'
+  | 'BUSINESS_NOT_WIRED'
   | 'NO_APPROVAL'
 
 export interface ApprovalCutoverReadinessDTO {
@@ -114,6 +116,7 @@ export interface ApprovalCutoverReadinessDTO {
   approvalRequired: boolean
   legacyEnabled: boolean
   workflowCount: number
+  activeWorkflowCount: number
 }
 
 export type PublishStatus = 'draft' | 'published' | 'archived'

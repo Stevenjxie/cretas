@@ -13,6 +13,8 @@ export type ApprovalCatalogStatus =
   | 'published-disabled'
   | 'archived'
   | 'legacy-migration-required'
+  | 'canvas-conflict'
+  | 'business-not-wired'
   | 'unconfigured'
 
 export interface ApprovalCatalogItem {
@@ -41,7 +43,9 @@ const STATUS_RANK: Record<ApprovalCatalogStatus, number> = {
   'published-disabled': 3,
   archived: 4,
   'legacy-migration-required': 5,
-  unconfigured: 6,
+  'canvas-conflict': 6,
+  'business-not-wired': 7,
+  unconfigured: 8,
 }
 
 function workflowRank(workflow: ApprovalWorkflowDTO): number {
@@ -107,9 +111,13 @@ export function buildApprovalCatalog(
       .sort((left, right) => right.localeCompare(left))[0]
     const cutover = readinessByType.get(item.decisionType)
     const workflowStatus = resolveStatus(typeWorkflows)
-    const status = cutover?.runtimeStatus === 'LEGACY_MIGRATION_REQUIRED'
-      ? 'legacy-migration-required'
-      : workflowStatus
+    const status = cutover?.runtimeStatus === 'CANVAS_CONFLICT'
+      ? 'canvas-conflict'
+      : cutover?.runtimeStatus === 'BUSINESS_NOT_WIRED'
+      ? 'business-not-wired'
+      : cutover?.runtimeStatus === 'LEGACY_MIGRATION_REQUIRED'
+        ? 'legacy-migration-required'
+        : workflowStatus
     return {
       decisionType: item.decisionType,
       chineseName: item.chineseName,

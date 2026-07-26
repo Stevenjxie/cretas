@@ -30,8 +30,8 @@ import java.util.Map;
 /**
  * Graph-native 审批工作流控制器.
  *
- * <p>Sprint 3 Track-I (C-APPROVAL-EDITOR-1) 引入. 跟 {@link ApprovalChainController}
- * 互补 — Chain 管 flat list (legacy), Workflow 管 graph (new).
+ * <p>Sprint 3 Track-I (C-APPROVAL-EDITOR-1) 引入。当前 Canvas graph 是新审批
+ * 请求的唯一运行时配置；旧 flat chain API 只保留只读迁移与审计能力。
  *
  * @author Cretas Team
  * @version 1.0.0
@@ -242,16 +242,21 @@ public class ApprovalWorkflowController {
             DecisionType decisionType = metadata.getDecisionType();
             List<ApprovalWorkflow> workflows =
                     workflowsByType.getOrDefault(decisionType, List.of());
-            boolean active = workflows.stream().anyMatch(workflow ->
+            long activeCount = workflows.stream().filter(workflow ->
                     "published".equals(workflow.getPublishStatus())
-                            && Boolean.TRUE.equals(workflow.getEnabled()));
+                            && Boolean.TRUE.equals(workflow.getEnabled())).count();
+            boolean active = activeCount == 1;
             boolean draft = workflows.stream().anyMatch(workflow ->
                     "draft".equals(workflow.getPublishStatus()));
             boolean legacyEnabled =
                     approvalChainService.hasEnabledLegacyConfig(factoryId, decisionType);
 
             String runtimeStatus;
-            if (active) {
+            if (!metadata.isWired()) {
+                runtimeStatus = "BUSINESS_NOT_WIRED";
+            } else if (activeCount > 1) {
+                runtimeStatus = "CANVAS_CONFLICT";
+            } else if (active) {
                 runtimeStatus = "CANVAS_ACTIVE";
             } else if (legacyEnabled) {
                 runtimeStatus = "LEGACY_MIGRATION_REQUIRED";
@@ -266,9 +271,10 @@ public class ApprovalWorkflowController {
             item.put("moduleCode", metadata.getModuleCode());
             item.put("wired", metadata.isWired());
             item.put("runtimeStatus", runtimeStatus);
-            item.put("approvalRequired", active);
+            item.put("approvalRequired", active && metadata.isWired());
             item.put("legacyEnabled", legacyEnabled);
             item.put("workflowCount", workflows.size());
+            item.put("activeWorkflowCount", activeCount);
             result.add(item);
         }
         return ApiResponse.success(result);

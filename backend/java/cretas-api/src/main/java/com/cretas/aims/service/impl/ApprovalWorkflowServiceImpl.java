@@ -9,6 +9,8 @@ import com.cretas.aims.exception.EntityNotFoundException;
 import com.cretas.aims.repository.config.ApprovalWorkflowRepository;
 import com.cretas.aims.repository.workflow.ApprovalWorkflowInstanceRepository;
 import com.cretas.aims.service.ApprovalWorkflowService;
+import com.cretas.aims.service.workflow.DecisionTypeMetadata;
+import com.cretas.aims.service.workflow.DecisionTypeMetadataRegistry;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -38,6 +40,9 @@ public class ApprovalWorkflowServiceImpl implements ApprovalWorkflowService {
 
     @Autowired(required = false)
     private ApprovalWorkflowInstanceRepository workflowInstanceRepository;
+
+    @Autowired
+    private DecisionTypeMetadataRegistry decisionTypeMetadataRegistry;
 
     private static final Set<String> VALID_NODE_TYPES = Set.of(
             "start", "approval", "condition", "parallel", "join", "notify", "end");
@@ -165,6 +170,11 @@ public class ApprovalWorkflowServiceImpl implements ApprovalWorkflowService {
     @Override
     public Optional<ApprovalWorkflow> getActiveByDecisionType(String factoryId, DecisionType decisionType) {
         List<ApprovalWorkflow> candidates = workflowRepository.findActiveByDecisionType(factoryId, decisionType);
+        if (candidates.size() > 1) {
+            throw new BusinessException(409, "同一审批业务存在多个启用的运行版本")
+                    .withCode("OA_MULTIPLE_ACTIVE_WORKFLOWS")
+                    .withHint("请在系统设置 → 审批业务中只保留一个启用版本");
+        }
         return candidates.isEmpty() ? Optional.empty() : Optional.of(candidates.get(0));
     }
 
@@ -229,6 +239,7 @@ public class ApprovalWorkflowServiceImpl implements ApprovalWorkflowService {
             throw new BusinessException(400, "仅 draft 状态可发布, 当前状态: " + workflow.getPublishStatus())
                     .withHint("如需重新发布, 先 archive 当前版本再创建新 draft");
         }
+        assertBusinessRuntimeWired(workflow);
 
         // 发布前再次校验
         Map<String, Object> validation = validateGraph(workflow);
@@ -237,6 +248,15 @@ public class ApprovalWorkflowServiceImpl implements ApprovalWorkflowService {
                     .withHint("请先修复 graph 错误再发布");
         }
 
+        List<ApprovalWorkflow> previousActive =
+                workflowRepository.findActiveByDecisionType(
+                        factoryId, workflow.getDecisionType());
+        for (ApprovalWorkflow previous : previousActive) {
+            if (!Objects.equals(previous.getId(), workflow.getId())) {
+                previous.setEnabled(false);
+                workflowRepository.save(previous);
+            }
+        }
         workflow.setPublishStatus("published");
         workflow.setEnabled(true);
         return workflowRepository.save(workflow);
@@ -253,9 +273,8 @@ public class ApprovalWorkflowServiceImpl implements ApprovalWorkflowService {
         if (!workflow.getFactoryId().equals(factoryId)) {
             throw new BusinessException(403, "无权归档其他工厂的工作流");
         }
-        assertNoRunningInstances(factoryId, id);
-
         workflow.setPublishStatus("archived");
+        workflow.setEnabled(false);
         return workflowRepository.save(workflow);
     }
 
@@ -270,10 +289,27 @@ public class ApprovalWorkflowServiceImpl implements ApprovalWorkflowService {
         if (!workflow.getFactoryId().equals(factoryId)) {
             throw new BusinessException(403, "无权修改其他工厂的工作流");
         }
-        assertNoRunningInstances(factoryId, id);
+        if (enabled) {
+            assertBusinessRuntimeWired(workflow);
+        }
 
         workflow.setEnabled(enabled);
         return workflowRepository.save(workflow);
+    }
+
+    private void assertBusinessRuntimeWired(ApprovalWorkflow workflow) {
+        // Direct-construction unit tests predating the registry injection exercise
+        // graph/lifecycle mechanics only. The Spring runtime always injects this bean.
+        if (decisionTypeMetadataRegistry == null) {
+            return;
+        }
+        DecisionTypeMetadata metadata =
+                decisionTypeMetadataRegistry.get(workflow.getDecisionType());
+        if (metadata == null || !metadata.isWired()) {
+            throw new BusinessException(409, "该审批业务尚未接入画布运行时，不能发布或启用")
+                    .withCode("OA_BUSINESS_NOT_WIRED")
+                    .withHint("画布草稿已保留；完成业务状态投影和审批实例接入后再发布");
+        }
     }
 
     private void assertNoRunningInstances(String factoryId, String workflowId) {

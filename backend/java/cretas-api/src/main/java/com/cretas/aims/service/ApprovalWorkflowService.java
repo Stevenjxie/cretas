@@ -12,16 +12,12 @@ import java.util.Optional;
 /**
  * Graph-native 审批工作流服务.
  *
- * <p>Sprint 3 Track-I (C-APPROVAL-EDITOR-1) 引入 — 跟 {@link ApprovalChainService}
- * 互补:
+ * <p>Sprint 3 Track-I (C-APPROVAL-EDITOR-1) 引入。Canvas graph 是新审批请求
+ * 的唯一运行时配置来源:
  * <ul>
- *   <li>ApprovalChainService manages flat-list ApprovalChainConfig (legacy)</li>
- *   <li>ApprovalWorkflowService manages graph ApprovalWorkflow (new)</li>
+ *   <li>ApprovalWorkflowService 管理可执行的 graph 与不可变发布版本.</li>
+ *   <li>ApprovalChainService 仅保留旧 flat-list 的只读迁移证据.</li>
  * </ul>
- *
- * <p>ApprovalChainService.requiresApproval() dual-source 读取: 先查
- * {@link #getActiveByDecisionType}, 找到则走 graph executor; 否则 fallback
- * 到 ApprovalChainConfig flat-list 逻辑.
  *
  * @since 2026-05-16
  */
@@ -52,7 +48,8 @@ public interface ApprovalWorkflowService {
      * <p>Filter: {@code publishStatus='published'} + {@code enabled=true}.
      * <p>Ordering: priority DESC, version DESC. 取第一个.
      *
-     * @return Optional.empty() 表示没有 active workflow, caller 应 fallback 到 flat-list
+     * @return Optional.empty() 表示没有 active workflow，新请求按“无需审批”直通；
+     *         如仍存在启用的旧配置则由 cutover gate 阻止并要求迁移
      */
     Optional<ApprovalWorkflow> getActiveByDecisionType(String factoryId, DecisionType decisionType);
 

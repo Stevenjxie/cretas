@@ -37,8 +37,9 @@ public interface WorkflowEngineService {
      * 检查是否有 active workflow 配置 — caller 用此避免触发 startWorkflow 的 throw 路径,
      * 防止 Spring "rollback-only" 事务陷阱 (Phase 1 prod hotfix 2026-05-18).
      *
-     * <p>使用场景: PurchaseServiceImpl 等业务模块 approve 前预检. 无 workflow 时
-     * caller 自行走 legacy fallback, 不进 startWorkflow.
+     * <p>兼容旧调用方的只读预检。新业务提交应优先调用
+     * {@link #startWorkflowIfConfigured}，在同一事务内完成解析和实例创建；
+     * 无 workflow 时按明确的“无需审批”业务语义处理，不再回退旧配置。
      *
      * @return true 若 (factoryId, moduleCode) 有 published+enabled workflow.
      *         moduleCode 未映射 → false (不抛, 保持调用侧简洁).

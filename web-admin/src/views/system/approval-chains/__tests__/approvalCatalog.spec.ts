@@ -34,6 +34,7 @@ function readiness(
     approvalRequired: runtimeStatus === 'CANVAS_ACTIVE',
     legacyEnabled: runtimeStatus === 'LEGACY_MIGRATION_REQUIRED',
     workflowCount: 0,
+    activeWorkflowCount: runtimeStatus === 'CANVAS_ACTIVE' ? 1 : 0,
   }
 }
 
@@ -118,5 +119,40 @@ describe('approval business catalog', () => {
     expect(item.status).toBe('legacy-migration-required')
     expect(item.approvalEnabled).toBe(false)
     expect(item.legacyCount).toBe(1)
+  })
+
+  it('does not present an unwired business as enabled or no approval', () => {
+    const unwiredMetadata = [{ ...metadata[0], wired: false }]
+    const cutover = {
+      ...readiness('BUSINESS_NOT_WIRED'),
+      wired: false,
+      approvalRequired: false,
+    }
+    const [item] = buildApprovalCatalog(
+      unwiredMetadata,
+      [workflow({ publishStatus: 'published', enabled: true })],
+      [cutover],
+    )
+
+    expect(item.status).toBe('business-not-wired')
+    expect(item.approvalEnabled).toBe(false)
+  })
+
+  it('surfaces multiple active workflow versions as a blocking conflict', () => {
+    const cutover = {
+      ...readiness('CANVAS_CONFLICT'),
+      activeWorkflowCount: 2,
+    }
+    const [item] = buildApprovalCatalog(
+      metadata,
+      [
+        workflow({ id: 'active-v1', publishStatus: 'published', enabled: true }),
+        workflow({ id: 'active-v2', version: 2, publishStatus: 'published', enabled: true }),
+      ],
+      [cutover],
+    )
+
+    expect(item.status).toBe('canvas-conflict')
+    expect(item.approvalEnabled).toBe(false)
   })
 })

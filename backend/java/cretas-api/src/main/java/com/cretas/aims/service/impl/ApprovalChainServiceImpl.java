@@ -7,6 +7,8 @@ import com.cretas.aims.exception.EntityNotFoundException;
 import com.cretas.aims.repository.config.ApprovalChainConfigRepository;
 import com.cretas.aims.service.ApprovalChainService;
 import com.cretas.aims.service.ApprovalWorkflowService;
+import com.cretas.aims.service.workflow.DecisionTypeMetadata;
+import com.cretas.aims.service.workflow.DecisionTypeMetadataRegistry;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.context.annotation.Lazy;
@@ -36,6 +38,7 @@ public class ApprovalChainServiceImpl implements ApprovalChainService {
 
     /** Canvas is the sole runtime source; legacy rows are migration evidence only. */
     private final @Lazy ApprovalWorkflowService approvalWorkflowService;
+    private final DecisionTypeMetadataRegistry decisionTypeMetadataRegistry;
 
     // ==================== 配置管理 ====================
 
@@ -336,6 +339,12 @@ public class ApprovalChainServiceImpl implements ApprovalChainService {
                 .getActiveByDecisionType(factoryId, decisionType)
                 .isPresent();
         if (hasGraphWorkflow) {
+            DecisionTypeMetadata metadata = decisionTypeMetadataRegistry.get(decisionType);
+            if (metadata == null || !metadata.isWired()) {
+                throw new BusinessException(409, "该审批业务尚未接入画布运行时")
+                        .withCode("OA_BUSINESS_NOT_WIRED")
+                        .withHint("可先保存画布草稿；待业务接入完成后再发布启用");
+            }
             log.debug("使用 Canvas 审批画布 - factoryId={}, decisionType={}",
                     factoryId, decisionType);
             return true;

@@ -62,7 +62,10 @@ const filteredCatalog = computed(() => {
     const matchesStatus = approvalFilter.value === 'all'
       || (approvalFilter.value === 'enabled'
         ? item.approvalEnabled
-        : !item.approvalEnabled && item.status !== 'legacy-migration-required')
+        : !item.approvalEnabled
+          && item.status !== 'legacy-migration-required'
+          && item.status !== 'canvas-conflict'
+          && item.status !== 'business-not-wired')
     return matchesKeyword && matchesStatus
   })
 })
@@ -71,8 +74,17 @@ const enabledCount = computed(() => catalog.value.filter((item) => item.approval
 const migrationCount = computed(() => catalog.value.filter(
   (item) => item.status === 'legacy-migration-required',
 ).length)
+const unwiredCount = computed(() => catalog.value.filter(
+  (item) => item.status === 'business-not-wired',
+).length)
+const conflictCount = computed(() => catalog.value.filter(
+  (item) => item.status === 'canvas-conflict',
+).length)
 const noApprovalCount = computed(() => catalog.value.filter(
-  (item) => !item.approvalEnabled && item.status !== 'legacy-migration-required',
+  (item) => !item.approvalEnabled
+    && item.status !== 'legacy-migration-required'
+    && item.status !== 'canvas-conflict'
+    && item.status !== 'business-not-wired',
 ).length)
 const draftCount = computed(() => catalog.value.filter((item) => item.hasDraft).length)
 
@@ -140,16 +152,22 @@ function formatUpdatedAt(value?: string) {
 
 function actionLabel(item: ApprovalCatalogItem) {
   if (item.status === 'legacy-migration-required') return '迁移到审批画布'
+  if (item.status === 'canvas-conflict') return '修复运行版本'
+  if (item.status === 'business-not-wired') return '配置画布草稿'
   return item.approvalEnabled || item.hasDraft ? '配置审批' : '查看设置'
 }
 
 function statusLabel(item: ApprovalCatalogItem) {
   if (item.status === 'legacy-migration-required') return '旧配置待迁移'
+  if (item.status === 'canvas-conflict') return '运行版本冲突'
+  if (item.status === 'business-not-wired') return '业务待接入'
   return item.approvalEnabled ? '审批已启用' : '无需审批'
 }
 
 function statusTagType(item: ApprovalCatalogItem) {
   if (item.status === 'legacy-migration-required') return 'warning'
+  if (item.status === 'canvas-conflict') return 'danger'
+  if (item.status === 'business-not-wired') return 'danger'
   return item.approvalEnabled ? 'success' : 'info'
 }
 
@@ -199,6 +217,14 @@ onMounted(loadData)
       <div v-if="migrationCount" class="summary-card migration">
         <span>旧配置待迁移</span>
         <strong>{{ migrationCount }}</strong>
+      </div>
+      <div v-if="unwiredCount" class="summary-card unwired">
+        <span>业务待接入</span>
+        <strong>{{ unwiredCount }}</strong>
+      </div>
+      <div v-if="conflictCount" class="summary-card conflict">
+        <span>运行版本冲突</span>
+        <strong>{{ conflictCount }}</strong>
       </div>
     </section>
 
@@ -273,6 +299,12 @@ onMounted(loadData)
               <strong>{{ versionSummary(row) }}</strong>
               <span v-if="row.status === 'legacy-migration-required'">
                 发布审批画布后再停用旧配置，切换期间不会漏审
+              </span>
+              <span v-else-if="row.status === 'canvas-conflict'">
+                已停止新建审批，请只保留一个启用版本
+              </span>
+              <span v-else-if="row.status === 'business-not-wired'">
+                可先保存画布草稿；业务接入前不能发布启用
               </span>
               <span v-else-if="row.hasDraft">草稿修改不会影响当前运行流程</span>
               <span v-else-if="!row.approvalEnabled">业务提交后直接进入下一环节</span>
@@ -385,6 +417,8 @@ h1 {
 .summary-card.no-approval { border-top: 3px solid #a8b1bf; }
 .summary-card.draft { border-top: 3px solid #e6a23c; }
 .summary-card.migration { border-top: 3px solid #d97706; }
+.summary-card.unwired { border-top: 3px solid #f56c6c; }
+.summary-card.conflict { border-top: 3px solid #c45656; }
 
 .business-card {
   border-color: #edf2f7;
