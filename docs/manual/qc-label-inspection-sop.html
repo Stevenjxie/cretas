@@ -3,11 +3,11 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-  <meta name="description" content="六扇门 F006 QC 包装标签拍检操作指南">
+  <meta name="description" content="六扇门 F006 QC 包装标签拍检与人工标注操作指南">
   <meta name="robots" content="noindex,nofollow">
   <meta name="theme-color" content="#0b6b4c">
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='18' fill='%23087a56'/%3E%3Ctext x='32' y='41' text-anchor='middle' font-family='Arial' font-size='26' font-weight='700' fill='white'%3EQC%3C/text%3E%3C/svg%3E">
-  <title>QC 包装标签拍检操作指南</title>
+  <title>QC 包装标签拍检与人工标注操作指南</title>
   <style>
     :root {
       --ink: #172231;
@@ -175,7 +175,7 @@
     }
     .flow {
       display: grid;
-      grid-template-columns: repeat(6, 1fr);
+      grid-template-columns: repeat(8, 1fr);
       padding: 10px;
       background: var(--paper);
       border: 1px solid var(--line);
@@ -272,6 +272,7 @@
 
     .section,
     .step {
+      scroll-margin-top: 140px;
       margin-bottom: 24px;
       padding: clamp(22px, 4vw, 40px);
       background: var(--paper);
@@ -612,7 +613,7 @@
     @media (max-width: 920px) {
       .hero__inner { grid-template-columns: 1fr; gap: 28px; }
       .hero__badge { max-width: 430px; }
-      .flow { overflow-x: auto; grid-template-columns: repeat(6, minmax(150px, 1fr)); }
+      .flow { overflow-x: auto; grid-template-columns: repeat(8, minmax(150px, 1fr)); }
       .layout { grid-template-columns: 1fr; }
       .toc {
         position: sticky;
@@ -685,12 +686,12 @@
     <div class="hero__inner">
       <div>
         <p class="eyebrow">Quality Control / Label Inspection</p>
-        <h1 id="page-title">包装标签拍检<br>操作指南</h1>
-        <p class="hero__lead">六扇门 F006：从 QC 账号登录、录入 SKU 与批次、拍摄包装照片，到 AI 初筛后等待人工审核。</p>
+        <h1 id="page-title">包装标签拍检<br>与人工标注指南</h1>
+        <p class="hero__lead">六扇门 F006：从 QC 账号登录、录入 SKU 与批次、拍摄包装照片，到 AI 初筛、人工逐图标注和最终提交。</p>
       </div>
       <aside class="hero__badge" aria-label="预计操作时间">
-        <strong>约 3 分钟</strong>
-        <span>准备好 SKU、批次号、生产日期，并把每盒标签边缘露出来。</span>
+        <strong>约 5 分钟</strong>
+        <span>准备好 SKU、批次号、生产日期；审核时每一张照片都要给出结论。</span>
       </aside>
     </div>
   </section>
@@ -702,7 +703,9 @@
       <div class="flow__item"><span class="flow__number">3</span><span>核对批次</span></div>
       <div class="flow__item"><span class="flow__number">4</span><span>拍 1–6 张</span></div>
       <div class="flow__item"><span class="flow__number">5</span><span>提交初筛</span></div>
-      <div class="flow__item"><span class="flow__number">6</span><span>人工复核</span></div>
+      <div class="flow__item"><span class="flow__number">6</span><span>确认 AI 框</span></div>
+      <div class="flow__item"><span class="flow__number">7</span><span>人工补框</span></div>
+      <div class="flow__item"><span class="flow__number">8</span><span>逐图提交</span></div>
     </div>
   </div>
 
@@ -714,7 +717,10 @@
       <a href="#step-entry">2. 打开拍检</a>
       <a href="#step-batch">3. 批次信息</a>
       <a href="#step-photo">4. 拍照提交</a>
-      <a href="#step-review">5. 等待审核</a>
+      <a href="#step-review">5. 进入待审</a>
+      <a href="#step-ai-review">6. 确认 AI 框</a>
+      <a href="#step-human-frame">7. 人工补框</a>
+      <a href="#step-photo-conclusion">8. 本图结论</a>
       <a href="#errors">异常处理</a>
     </nav>
 
@@ -903,9 +909,9 @@
         <div class="step__heading">
           <div class="step__number">5</div>
           <div>
-            <p class="step__kicker">AI SCREENING & REVIEW</p>
-            <h2>等待 AI 初筛与人工审核</h2>
-            <p>提交后页面会显示任务编号、照片数和 AI 疑似区域数量。候选数量不是最终结果。</p>
+            <p class="step__kicker">AI SCREENING → REVIEW QUEUE</p>
+            <h2>AI 完成后进入“待我审核”</h2>
+            <p>提交后先等待 AI 初筛。任务变为“待人工审核”后，从“待我审核”打开任务；候选数量不是最终缺标数量。</p>
           </div>
         </div>
 
@@ -916,29 +922,163 @@
           <div class="status">审核完成</div>
         </div>
 
-        <div class="screen-grid screen-grid--single">
+        <div class="screen-grid">
           <figure class="phone-shot phone-shot--status">
             <div class="status-crop">
               <img src="qcsop-assets/10-await-human-review.png" alt="拍检状态为等待人工审核，AI 初筛完成后提示由质量审核员确认" loading="lazy">
             </div>
-            <figcaption>状态界面示意：只展示无租户业务字段区域</figcaption>
+            <figcaption>① 初筛完成后状态变为“等待人工审核”</figcaption>
+          </figure>
+          <figure class="phone-shot">
+            <button class="shot-button" type="button" data-full="qcsop-assets/11-review-queue-expo.png" aria-label="放大查看待我审核任务队列截图">
+              <img src="qcsop-assets/11-review-queue-expo.png" alt="Expo Web 标签拍检任务页，待我审核列表显示示例任务、照片数和 AI 疑点数" loading="lazy">
+            </button>
+            <figcaption>② 打开“待我审核”，点击对应 SKU 与批次</figcaption>
+          </figure>
+        </div>
+
+        <div class="callouts" style="margin-top: 22px">
+          <div class="callout">
+            <span class="callout__number">1</span>
+            <strong>先核对任务</strong>
+            <p>进入照片前确认 SKU、批次、生产日期和照片数都与现场一致。</p>
+          </div>
+          <div class="callout callout--warning">
+            <span class="callout__number">2</span>
+            <strong>AI 疑点数不是缺标数</strong>
+            <p>AI 可能多框、错框或漏框，必须逐张、逐框人工判断。</p>
+          </div>
+          <div class="callout">
+            <span class="callout__number">3</span>
+            <strong>AI 失败也要人工检查</strong>
+            <p>状态为“AI 失败·人工检查”时不要跳过，仍然按全图人工检查流程处理。</p>
+          </div>
+        </div>
+      </section>
+
+      <section class="step" id="step-ai-review">
+        <div class="step__heading">
+          <div class="step__number">6</div>
+          <div>
+            <p class="step__kicker">CHECK AI CANDIDATES</p>
+            <h2>逐个确认或拒绝 AI 疑点</h2>
+            <p>橙色框是 AI 候选。先看框内盒子，再用照片下方当前操作卡给出人工判断。</p>
+          </div>
+        </div>
+
+        <div class="screen-grid screen-grid--single">
+          <figure class="phone-shot">
+            <button class="shot-button" type="button" data-full="qcsop-assets/12-review-ai-candidate-expo.png" aria-label="放大查看 AI 疑点确认页面截图">
+              <img src="qcsop-assets/12-review-ai-candidate-expo.png" alt="Expo Web 逐张人工审核页，包装照片上有橙色 AI 疑点框，下方有确认和拒绝按钮" loading="lazy">
+            </button>
+            <figcaption>当前代码 Expo Web：橙色框为 AI 疑点</figcaption>
           </figure>
           <div class="callouts">
             <div class="callout">
               <span class="callout__number">1</span>
-              <strong>记住任务编号</strong>
-              <p>需要追问审核进度或排查上传问题时，用任务编号定位。</p>
+              <strong>AI 判断正确</strong>
+              <p>确认确实缺白标、缺彩标或无法判断时，点击“确认：对应类型”。</p>
             </div>
             <div class="callout callout--warning">
               <span class="callout__number">2</span>
-              <strong>疑似区域不等于缺标数量</strong>
-              <p>AI 可能多框、错框或漏框，必须由人工逐张确认。</p>
+              <strong>AI 判断错误</strong>
+              <p>框内没有问题或框错位置时点击“拒绝疑点”，不要为了省事直接确认。</p>
             </div>
             <div class="callout">
               <span class="callout__number">3</span>
-              <strong>根据审核结论回现场处理</strong>
-              <p>确认缺白标或缺彩标后，找到对应盒子并补贴，再按现场流程复核。</p>
+              <strong>放大后再判断</strong>
+              <p>双指放大或双击缩放照片；放大后拖动画面查看标签边缘，再确认结论。</p>
             </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="step" id="step-human-frame">
+        <div class="step__heading">
+          <div class="step__number">7</div>
+          <div>
+            <p class="step__kicker">ADD OR CORRECT FRAMES</p>
+            <h2>AI 漏检时，轻点照片新增人工框</h2>
+            <p>轻点缺标盒所在位置会出现绿色人工框和类型菜单。框只要尽量贴近问题盒，不需要框住文字。</p>
+          </div>
+        </div>
+
+        <div class="photo-rules" aria-label="人工标注手势说明">
+          <div class="photo-rule">
+            <strong>轻点空白处</strong>
+            <p>新增绿色人工框；选择“缺白、缺彩或不清”。</p>
+          </div>
+          <div class="photo-rule">
+            <strong>拖框 / 拉右下角</strong>
+            <p>拖动框本体移动；拖动右下角圆点只改变框大小。</p>
+          </div>
+          <div class="photo-rule">
+            <strong>双指放大照片</strong>
+            <p>放大后拖动画面；再次点击框上的小标签可编辑或删除。</p>
+          </div>
+        </div>
+
+        <div class="screen-grid">
+          <figure class="phone-shot">
+            <button class="shot-button" type="button" data-full="qcsop-assets/13-review-add-frame-expo.png" aria-label="放大查看轻点照片新增人工框截图">
+              <img src="qcsop-assets/13-review-add-frame-expo.png" alt="Expo Web 审核照片底部新增绿色人工框，框旁显示缺白、缺彩、不清和删除菜单" loading="lazy">
+            </button>
+            <figcaption>① 轻点漏检位置，立即出现绿色框和类型菜单</figcaption>
+          </figure>
+          <figure class="phone-shot">
+            <button class="shot-button" type="button" data-full="qcsop-assets/14-review-labeled-frame-expo.png" aria-label="放大查看人工框已选择缺白标截图">
+              <img src="qcsop-assets/14-review-labeled-frame-expo.png" alt="Expo Web 人工新增框选择缺白标后，类型菜单收起为小标签" loading="lazy">
+            </button>
+            <figcaption>② 选择类型后菜单收起；点击小标签可再次编辑</figcaption>
+          </figure>
+        </div>
+
+        <div class="danger-note">
+          <strong>不要用框住整张照片代替准确定位</strong>
+          <p>框应落在具体问题盒附近。误点可拖动修正；不需要的人工框点击小标签后选择“删除”。</p>
+        </div>
+      </section>
+
+      <section class="step" id="step-photo-conclusion">
+        <div class="step__heading">
+          <div class="step__number">8</div>
+          <div>
+            <p class="step__kicker">PHOTO CONCLUSION & SUBMIT</p>
+            <h2>每张给出结论，再提交人工审核</h2>
+            <p>所有框完成判断后，再扫一遍整张照片。只有完成本图结论，底部按钮才会进入下一张或最终提交。</p>
+          </div>
+        </div>
+
+        <div class="screen-grid">
+          <figure class="phone-shot">
+            <button class="shot-button" type="button" data-full="qcsop-assets/15-review-photo-conclusion-expo.png" aria-label="放大查看给出本图结论截图">
+              <img src="qcsop-assets/15-review-photo-conclusion-expo.png" alt="Expo Web 审核页所有候选处理完毕，出现给出本图结论和确认本图标注无误按钮" loading="lazy">
+            </button>
+            <figcaption>① 再看全图，点击“确认本图标注无误”</figcaption>
+          </figure>
+          <figure class="phone-shot">
+            <button class="shot-button" type="button" data-full="qcsop-assets/16-review-ready-submit-expo.png" aria-label="放大查看提交人工审核就绪截图">
+              <img src="qcsop-assets/16-review-ready-submit-expo.png" alt="Expo Web 当前照片审核完成，底部主按钮变为提交人工审核" loading="lazy">
+            </button>
+            <figcaption>② 全部照片完成后，主按钮变为“提交人工审核”</figcaption>
+          </figure>
+        </div>
+
+        <div class="callouts" style="margin-top: 22px">
+          <div class="callout">
+            <span class="callout__number">1</span>
+            <strong>还有未完成照片</strong>
+            <p>点击“下一张未审核”，顶部缩略图的数字和感叹号会帮助定位。</p>
+          </div>
+          <div class="callout callout--warning">
+            <span class="callout__number">2</span>
+            <strong>提交前最后核对</strong>
+            <p>确认顶部进度为全部完成，再点击一次“提交人工审核”。提交后结果成为服务端人工真值。</p>
+          </div>
+          <div class="callout">
+            <span class="callout__number">3</span>
+            <strong>回现场处理</strong>
+            <p>确认缺白标或缺彩标后，根据照片位置找出对应盒子，补贴后按现场流程复核。</p>
           </div>
         </div>
       </section>
@@ -962,7 +1102,19 @@
         </details>
         <details>
           <summary>AI 显示 0 处疑似区域</summary>
-          <p>仍然等待人工审核，不要把“0 处”直接当作合格。人工发现漏检后会补标注，用于后续改进模型。</p>
+          <p>仍然进入“待我审核”逐张检查，不要把“0 处”直接当作合格。发现漏检时轻点照片补框，再给出本图结论。</p>
+        </details>
+        <details>
+          <summary>“请先完成本图”一直是灰色的</summary>
+          <p>检查是否还有橙色 AI 框未确认/拒绝，或绿色人工框还没有选择缺白、缺彩或不清。全部框处理后，再点击本图结论。</p>
+        </details>
+        <details>
+          <summary>点错框、框太大或标错类型</summary>
+          <p>拖动框本体移动，拖动右下角圆点缩放；点击框上的小标签重新选类型，不需要的人工框可选择“删除”。</p>
+        </details>
+        <details>
+          <summary>提交人工审核失败或网络中断</summary>
+          <p>停留在当前页面并保留草稿，检查网络后重试。不要重新新建同一批次；仍失败时记录 SKU、批次和时间并联系管理员。</p>
         </details>
         <details>
           <summary>SKU 列表里找不到现场产品</summary>
@@ -972,8 +1124,8 @@
 
       <section class="section final-check">
         <p class="section__kicker">30-SECOND CHECK</p>
-        <h2>提交前 30 秒检查</h2>
-        <p class="section__intro">三项都确认后再提交，可以减少绝大多数无效拍检。</p>
+        <h2>最终提交前 30 秒检查</h2>
+        <p class="section__intro">创建信息、照片和逐图结论都确认后再提交，可以减少无效拍检和错误训练数据。</p>
         <div class="final-grid">
           <div class="final-item">
             <strong>信息对</strong>
@@ -984,8 +1136,8 @@
             <span>1–6 张，标签边缘可见，无严重反光和模糊。</span>
           </div>
           <div class="final-item">
-            <strong>人复核</strong>
-            <span>AI 只初筛，最终结论必须等待人工审核。</span>
+            <strong>逐图完</strong>
+            <span>AI 框已逐个判断，漏检已补框，每张都有本图结论。</span>
           </div>
         </div>
       </section>
@@ -993,7 +1145,7 @@
   </div>
 
   <footer>
-    白垩纪食品溯源系统 · 六扇门 F006 QC 包装标签拍检操作指南 · 版本 2026-07-26
+    白垩纪食品溯源系统 · 六扇门 F006 QC 包装标签拍检与人工标注操作指南 · 版本 2026-07-26
   </footer>
 
   <dialog class="lightbox" id="lightbox" aria-label="截图放大预览">
