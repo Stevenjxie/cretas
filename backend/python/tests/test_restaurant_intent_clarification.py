@@ -1075,6 +1075,23 @@ def test_read_action_choice_does_not_inherit_over_explicit_new_semantics(
     ) is None
 
 
+@pytest.mark.parametrize(
+    "replacement",
+    [
+        "只看门店低销量排行",
+        "只看食材领用量排行",
+        "只看毛利最低排行",
+    ],
+)
+def test_persisted_read_choice_semantic_replacement_cannot_revive_dish_plan(
+    replacement,
+):
+    assert _explicit_read_only_action_ranking_spec(
+        f"把最近7天销量最低的5道菜全部下架 {replacement}",
+        "全部门店",
+    ) is None
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "original_query,baseline_label",

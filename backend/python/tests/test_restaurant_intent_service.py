@@ -592,6 +592,45 @@ async def test_tiered_answer_internal_only_text_is_not_a_success(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_contract_failure_keeps_read_action_non_execution_notice(monkeypatch):
+    spec = _spec(
+        intent="RESTAURANT_OPS_GROSS_MARGIN",
+        resolver_query_seed="把最近7天销量最低的5道菜全部下架",
+    )
+    monkeypatch.setattr(
+        svc,
+        "parse_restaurant_query",
+        AsyncMock(return_value=spec),
+    )
+    monkeypatch.setattr(
+        svc,
+        "_resolve_tiered",
+        AsyncMock(return_value=OpsAnswer(
+            code=spec.intent,
+            title="低销量菜品",
+            answer_text="通过调用 income_statement_query 工具获取数据表。",
+            charts=[],
+            kpis=[],
+            meta={},
+        )),
+    )
+    monkeypatch.setattr(svc, "log_intent_capture", AsyncMock(return_value=1))
+
+    result = await tiered_answer(
+        "全部门店",
+        object(),
+        "DEMO_REST",
+        "restaurant_manager",
+    )
+    await asyncio.sleep(0)
+
+    assert result["kind"] == "clarification"
+    assert result["contract_pass"] is False
+    assert "当前未执行任何下架" in result["answer_text"]
+    assert result["warning"] == svc._READ_ONLY_ACTION_WARNING
+
+
+@pytest.mark.asyncio
 async def test_tiered_answer_executes_and_combines_multi_resolver_plan(monkeypatch):
     spec = _spec(
         intent="RESTAURANT_OPS_STORE_MARGIN",
