@@ -174,3 +174,18 @@
   - 多 active、草稿启用和旧配置写入均有明确状态机门禁；Web 业务目录展示启用、无需审批、待迁移、未接入和版本冲突。
 - **验收证据**：后端范围测试累计 `101 passed`（最终受影响复验 `37/37`）；Web 目录测试 `7/7`、`vue-tsc`、production build、tracked secret scan 与 `git diff --check` 通过。
 - **数据与发布边界**：未修改 Entity、Repository、JPQL 或数据库结构；无生产业务写入；仅合并代码，严格 `NOT_DEPLOYED`。
+
+### `DOC-QC-LABEL-ANNOTATION-SOP-20260726-002`
+
+- **状态**：`merged`
+- **Owner**：`/root`
+- **Base SHA**：`de9d9b9c9746608f1ef92dfdcdeaaeb624c9fe7a`
+- **功能提交 / PR**：`69c1dacb1d171a45764efefc23876907ef20a7be` / [#1826](https://github.com/Stevenjxie/cretas/pull/1826)
+- **实际范围**：
+  - 把 QC SOP 从“等待人工审核”继续衔接到“待我审核”任务队列、逐个确认/拒绝 AI 疑点、轻点补框、移动/缩放/删除框、照片缩放、本图结论、下一张和最终提交。
+  - 新增 6 张当前 `origin/main` Expo Web 390×844 页面截图，并按 `ux-flow` 门控补齐用户画像、用户旅程、摩擦点和逐项设计回应。
+- **验收证据**：
+  - Expo Web 只读打开既有演示任务；仅浏览器草稿交互，未点击“提交人工审核”，生产业务写入为 0。
+  - 390×844 与 1440×1000 无横向溢出；13 张图片全部加载，目录锚点、截图灯箱、图片引用/alt/重复 ID 静态检查均通过。
+  - `git diff --check`、tracked secret scan 与 PR Secret regression gate 均通过。
+- **发布边界**：代码与文档已合入 `origin/main`；静态 SOP 由协调者从 clean exact-main 单独发布并核对公开 HTTP 与哈希。
