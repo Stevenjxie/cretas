@@ -6,6 +6,7 @@ import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.repository.MaterialPackagingHierarchyRepository;
 import com.cretas.aims.repository.RawMaterialTypeRepository;
 import com.cretas.aims.service.MaterialPackagingHierarchyService;
+import com.cretas.aims.service.unit.UnitContractService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -17,7 +18,7 @@ import java.util.Optional;
 import java.util.stream.Collectors;
 
 /**
- * 原料包装层级 Service 实现.
+ * 原料计量/包装层级 Service 实现.
  *
  * @since 2026-05-06
  */
@@ -28,6 +29,7 @@ public class MaterialPackagingHierarchyServiceImpl implements MaterialPackagingH
 
     private final MaterialPackagingHierarchyRepository repository;
     private final RawMaterialTypeRepository materialTypeRepository;
+    private final UnitContractService unitContractService;
 
     @Override
     @Transactional(readOnly = true)
@@ -53,13 +55,7 @@ public class MaterialPackagingHierarchyServiceImpl implements MaterialPackagingH
         com.cretas.aims.entity.RawMaterialType materialType = materialTypeRepository.findById(materialTypeId)
                 .filter(m -> factoryId.equals(m.getFactoryId()))
                 .orElseThrow(() -> new BusinessException(404, "原材料不存在或不属于此工厂"));
-        if (!isPackagingCategory(materialType.getCategory())) {
-            throw new BusinessException(409, "仅包材可以配置包装层级")
-                    .withHint("请先将物料大类设置为包材，再维护包装层级")
-                    .withHintTarget("category");
-        }
-
-        validateLevels(dto);
+        validateLevels(factoryId, materialType.getUnit(), dto);
 
         MaterialPackagingHierarchy entity = repository.findByMaterialTypeId(materialTypeId)
                 .orElseGet(MaterialPackagingHierarchy::new);
@@ -95,9 +91,15 @@ public class MaterialPackagingHierarchyServiceImpl implements MaterialPackagingH
      * 校验层级配对完整性.
      * DB CHECK 约束已经会兜底, 这里在 service 层早一步给出更友好的错误信息.
      */
-    private void validateLevels(MaterialPackagingHierarchyDTO dto) {
+    private void validateLevels(
+            String factoryId, String materialBaseUnit, MaterialPackagingHierarchyDTO dto) {
         if (dto.getLevel1Unit() == null || dto.getLevel1Unit().trim().isEmpty()) {
             throw new BusinessException(400, "一级单位必填");
+        }
+        if (!sameUnit(factoryId, dto.getLevel1Unit(), materialBaseUnit)) {
+            throw new BusinessException(400, "一级单位必须与原料库存基本单位一致")
+                    .withHint("请返回原料基本信息确认库存单位，包装换算不能另设一套基本单位")
+                    .withHintTarget("level1Unit");
         }
 
         boolean hasLevel2Unit = dto.getLevel2Unit() != null && !dto.getLevel2Unit().trim().isEmpty();
@@ -116,11 +118,25 @@ public class MaterialPackagingHierarchyServiceImpl implements MaterialPackagingH
         if (hasLevel3Unit && !hasLevel2Unit) {
             throw new BusinessException(400, "必须先配置二级单位才能配置三级");
         }
+        if (hasLevel2Unit && sameUnit(factoryId, dto.getLevel1Unit(), dto.getLevel2Unit())) {
+            throw new BusinessException(400, "二级单位不能与库存基本单位相同")
+                    .withHintTarget("level2Unit");
+        }
+        if (hasLevel3Unit && (sameUnit(factoryId, dto.getLevel2Unit(), dto.getLevel3Unit())
+                || sameUnit(factoryId, dto.getLevel1Unit(), dto.getLevel3Unit()))) {
+            throw new BusinessException(400, "三级单位不能与已有层级单位相同")
+                    .withHintTarget("level3Unit");
+        }
     }
 
-    private boolean isPackagingCategory(String category) {
-        return category != null
-                && ("PACKAGING".equalsIgnoreCase(category.trim()) || "包材".equals(category.trim()));
+    private boolean sameUnit(String factoryId, String left, String right) {
+        if (left == null || right == null) {
+            return false;
+        }
+        if (left.trim().equalsIgnoreCase(right.trim())) {
+            return true;
+        }
+        return unitContractService != null && unitContractService.areEquivalent(factoryId, left, right);
     }
 
     private MaterialPackagingHierarchyDTO toDTO(MaterialPackagingHierarchy e) {

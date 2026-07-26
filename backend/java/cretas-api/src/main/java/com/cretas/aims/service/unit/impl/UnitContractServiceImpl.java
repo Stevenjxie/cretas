@@ -1,7 +1,9 @@
 package com.cretas.aims.service.unit.impl;
 
 import com.cretas.aims.entity.config.UnitOfMeasurement;
+import com.cretas.aims.entity.MaterialPackagingHierarchy;
 import com.cretas.aims.entity.unit.ProductUnitConversion;
+import com.cretas.aims.repository.MaterialPackagingHierarchyRepository;
 import com.cretas.aims.repository.config.UnitOfMeasurementRepository;
 import com.cretas.aims.repository.unit.ProductUnitConversionRepository;
 import com.cretas.aims.service.unit.CanonicalUnit;
@@ -48,12 +50,15 @@ public class UnitContractServiceImpl implements UnitContractService {
 
     private final UnitOfMeasurementRepository unitRepository;
     private final ProductUnitConversionRepository conversionRepository;
+    private final MaterialPackagingHierarchyRepository materialPackagingRepository;
 
     public UnitContractServiceImpl(
             UnitOfMeasurementRepository unitRepository,
-            ProductUnitConversionRepository conversionRepository) {
+            ProductUnitConversionRepository conversionRepository,
+            MaterialPackagingHierarchyRepository materialPackagingRepository) {
         this.unitRepository = unitRepository;
         this.conversionRepository = conversionRepository;
+        this.materialPackagingRepository = materialPackagingRepository;
     }
 
     @Override
@@ -222,6 +227,11 @@ public class UnitContractServiceImpl implements UnitContractService {
             );
         }
         if (search.paths().isEmpty()) {
+            Optional<UnitConversionResult> hierarchyResult = convertViaMaterialPackagingHierarchy(
+                    quantity, context, catalog, from, to);
+            if (hierarchyResult.isPresent()) {
+                return hierarchyResult.get();
+            }
             return result(
                     UnitConversionStatus.PRODUCT_CONVERSION_MISSING,
                     quantity,
@@ -258,6 +268,114 @@ public class UnitContractServiceImpl implements UnitContractService {
                 selected.steps(),
                 null
         );
+    }
+
+    /**
+     * Legacy raw-material packaging hierarchy is still the master-data editor used for relations
+     * such as {@code 1 case = 10 kg}. Explicit effective product conversions keep precedence; this
+     * fallback only runs when that graph has no path. Purchase orders snapshot the resulting factor,
+     * so later master-data changes do not rewrite historical receipts.
+     */
+    private Optional<UnitConversionResult> convertViaMaterialPackagingHierarchy(
+            BigDecimal quantity,
+            UnitConversionContext context,
+            Catalog catalog,
+            UnitNormalizationResult from,
+            UnitNormalizationResult to) {
+        if (materialPackagingRepository == null) {
+            return Optional.empty();
+        }
+        MaterialPackagingHierarchy hierarchy = materialPackagingRepository
+                .findByMaterialTypeId(context.productTypeId())
+                .filter(value -> context.factoryId().equals(value.getFactoryId()))
+                .orElse(null);
+        if (hierarchy == null) {
+            return Optional.empty();
+        }
+
+        UnitNormalizationResult level1 = normalize(hierarchy.getLevel1Unit(), catalog);
+        UnitNormalizationResult level2 = normalize(hierarchy.getLevel2Unit(), catalog);
+        UnitNormalizationResult level3 = normalize(hierarchy.getLevel3Unit(), catalog);
+        if (!level1.recognized()) {
+            return Optional.empty();
+        }
+
+        BigDecimal level1PerLevel2 = positive(hierarchy.getLevel1PerLevel2());
+        BigDecimal level2PerLevel3 = positive(hierarchy.getLevel2PerLevel3());
+        String conversionRef = hierarchy.getId();
+
+        if (level2.recognized() && level1PerLevel2 != null) {
+            if (from.code().equals(level2.code()) && to.code().equals(level1.code())) {
+                return Optional.of(packagingResult(
+                        quantity, from.code(), to.code(), List.of(from.code(), to.code()),
+                        List.of(packagingStep(from.code(), to.code(), level1PerLevel2, conversionRef))));
+            }
+            if (from.code().equals(level1.code()) && to.code().equals(level2.code())) {
+                BigDecimal inverse = BigDecimal.ONE.divide(level1PerLevel2, FACTOR_CONTEXT);
+                return Optional.of(packagingResult(
+                        quantity, from.code(), to.code(), List.of(from.code(), to.code()),
+                        List.of(packagingStep(from.code(), to.code(), inverse, conversionRef))));
+            }
+        }
+
+        if (level2.recognized() && level3.recognized() && level2PerLevel3 != null) {
+            if (from.code().equals(level3.code()) && to.code().equals(level2.code())) {
+                return Optional.of(packagingResult(
+                        quantity, from.code(), to.code(), List.of(from.code(), to.code()),
+                        List.of(packagingStep(from.code(), to.code(), level2PerLevel3, conversionRef))));
+            }
+            if (from.code().equals(level2.code()) && to.code().equals(level3.code())) {
+                BigDecimal inverse = BigDecimal.ONE.divide(level2PerLevel3, FACTOR_CONTEXT);
+                return Optional.of(packagingResult(
+                        quantity, from.code(), to.code(), List.of(from.code(), to.code()),
+                        List.of(packagingStep(from.code(), to.code(), inverse, conversionRef))));
+            }
+        }
+
+        if (level2.recognized() && level3.recognized()
+                && level1PerLevel2 != null && level2PerLevel3 != null) {
+            if (from.code().equals(level3.code()) && to.code().equals(level1.code())) {
+                return Optional.of(packagingResult(
+                        quantity, from.code(), to.code(), List.of(from.code(), level2.code(), to.code()),
+                        List.of(
+                                packagingStep(from.code(), level2.code(), level2PerLevel3, conversionRef),
+                                packagingStep(level2.code(), to.code(), level1PerLevel2, conversionRef))));
+            }
+            if (from.code().equals(level1.code()) && to.code().equals(level3.code())) {
+                BigDecimal inverseLevel1 = BigDecimal.ONE.divide(level1PerLevel2, FACTOR_CONTEXT);
+                BigDecimal inverseLevel2 = BigDecimal.ONE.divide(level2PerLevel3, FACTOR_CONTEXT);
+                return Optional.of(packagingResult(
+                        quantity, from.code(), to.code(), List.of(from.code(), level2.code(), to.code()),
+                        List.of(
+                                packagingStep(from.code(), level2.code(), inverseLevel1, conversionRef),
+                                packagingStep(level2.code(), to.code(), inverseLevel2, conversionRef))));
+            }
+        }
+        return Optional.empty();
+    }
+
+    private UnitConversionResult packagingResult(
+            BigDecimal quantity,
+            String fromUnit,
+            String toUnit,
+            List<String> path,
+            List<UnitConversionStep> steps) {
+        BigDecimal converted = quantity;
+        if (converted != null) {
+            for (UnitConversionStep step : steps) {
+                converted = converted.multiply(step.factor(), FACTOR_CONTEXT);
+            }
+        }
+        return result(UnitConversionStatus.CONVERTED, converted, fromUnit, toUnit, path, steps, null);
+    }
+
+    private UnitConversionStep packagingStep(
+            String fromUnit, String toUnit, BigDecimal factor, String conversionRef) {
+        return new UnitConversionStep(fromUnit, toUnit, factor, conversionRef, null);
+    }
+
+    private BigDecimal positive(BigDecimal value) {
+        return value != null && value.compareTo(BigDecimal.ZERO) > 0 ? value : null;
     }
 
     @Override
