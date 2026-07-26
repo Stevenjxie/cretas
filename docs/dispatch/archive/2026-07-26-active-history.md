@@ -2,6 +2,18 @@
 
 ## 已完成
 
+### `UX-OA-APPROVAL-CELL-VISUAL-20260726`
+
+- **状态**：`review`
+- **Owner**：`/root`
+- **Base SHA**：`e8c41c349a37ad6ac3e81e2cb7665c918023fdc2`
+- **PR**：[#1802](https://github.com/Stevenjxie/cretas/pull/1802)
+- **修正**：移除审批画布遗留的大圆形开始节点、彩色大标题审批节点和旋转菱形条件节点。开始/结束改为 136px 白底胶囊；审批、条件、并行、汇聚、通知统一为 208px 紧凑业务卡片，标题、节点类型、业务内容与辅助信息分层展示。
+- **溢出控制**：审批角色、指定审批人和通知对象使用固定宽度与省略显示，悬停可查看完整内容，不再因长用户名撑宽 Cell。
+- **画布适配**：取消无上限的初始化自动放大，首次/加载/自动布局使用最高 1.1 倍并为顶部文字工具栏和底部 AI 留出安全区；用户仍可手动放大到 1.8 倍。
+- **验证**：审批编辑器目标 Vitest `54 passed`，`npx vue-tsc -b --pretty false` 通过；本地 Mock API 浏览器实测 5 个 Cell、5 条连线、无 Cell 裁切、无工具栏遮挡且 `scrollWidth == clientWidth`；`git diff --check` 通过。
+- **边界**：未修改审批业务逻辑、API、数据库或生产数据；严格 `NOT_DEPLOYED`。
+
 ### `UX-OA-APPROVAL-BUSINESS-CANVAS-20260726`
 
 - **状态**：`review`

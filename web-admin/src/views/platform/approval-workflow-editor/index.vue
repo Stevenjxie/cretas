@@ -180,7 +180,6 @@
             multi-selection-key-code="Control"
             :selection-mode="SelectionMode.Partial"
             :is-valid-connection="isValidConnection"
-            fit-view-on-init
             @node-click="onNodeClick"
             @edge-click="onEdgeClick"
             @pane-click="onPaneClick"
@@ -737,7 +736,11 @@ async function zoomCanvasOut() {
 }
 
 async function fitCanvas() {
-  await fitView({ padding: 0.16, duration: 260, maxZoom: 1.1 })
+  await fitView({
+    padding: { top: '96px', right: '24px', bottom: '72px', left: '24px' },
+    duration: 260,
+    maxZoom: 1.1,
+  })
 }
 
 async function autoLayout() {
@@ -852,7 +855,7 @@ function deleteSelectedElements() {
   draftDirty.value = true
 }
 
-function createDefaultDraft() {
+async function createDefaultDraft() {
   const defaultRoles = decisionTypeMetadata.value.find(
     (item) => item.decisionType === selectedDecisionType.value,
   )?.defaultApproverRoles ?? []
@@ -902,11 +905,13 @@ function createDefaultDraft() {
   undoHistory.value = []
   redoHistory.value = []
   draftDirty.value = true
+  await nextTick()
+  await fitCanvas()
 }
 
-function enableApprovalDraft() {
+async function enableApprovalDraft() {
   approvalSetupStarted.value = true
-  createDefaultDraft()
+  await createDefaultDraft()
 }
 
 async function cloneCurrentAsDraft() {
@@ -1448,6 +1453,8 @@ async function loadWorkflow(id: string | undefined, silent: boolean) {
       undoHistory.value = []
       redoHistory.value = []
       draftDirty.value = false
+      await nextTick()
+      await fitCanvas()
       if (!silent) {
         ElMessage.success(`已加载: ${res.data.name} v${res.data.version}`)
       }
