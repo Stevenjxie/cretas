@@ -714,6 +714,17 @@ def _date_text(value: Any) -> str:
     return value.isoformat() if hasattr(value, "isoformat") else str(value)
 
 
+def _date_from_any(value: Any) -> Optional[date]:
+    if isinstance(value, date):
+        return value
+    if value:
+        try:
+            return date.fromisoformat(str(value))
+        except ValueError:
+            return None
+    return None
+
+
 def _range_text(start_date: Any, end_date: Any) -> str:
     """Render a date range; a single-day range reads as one date, not "X 至 X"."""
     if start_date and end_date and _date_text(start_date) == _date_text(end_date):
@@ -1820,6 +1831,64 @@ def _resolve_sales_query_spec(query: Optional[str], *, today: Optional[date] = N
         token in (query or "") for token in ("本月", "这个月", "当月", "上上个月", "上上月")
     ):
         date_range, window_label = (anchor.replace(day=1), anchor), "本月"
+    primary_start, primary_end = date_range
+    baseline_start, baseline_end = comparison_range
+    if (
+        comparison_kind == "previous_month"
+        and primary_start == anchor.replace(day=1)
+        and primary_end == anchor
+        and baseline_start is not None
+        and baseline_end is not None
+    ):
+        next_month = (
+            date(anchor.year + 1, 1, 1)
+            if anchor.month == 12
+            else date(anchor.year, anchor.month + 1, 1)
+        )
+        current_month_end = next_month - timedelta(days=1)
+        if anchor < current_month_end:
+            elapsed_days = (anchor - primary_start).days
+            comparison_range = (
+                baseline_start,
+                min(
+                    baseline_end,
+                    baseline_start + timedelta(days=elapsed_days),
+                ),
+            )
+            comparison_label = f"{comparison_label}同期"
+    elif (
+        comparison_kind == "previous_week"
+        and primary_start == anchor - timedelta(days=anchor.weekday())
+        and primary_end == anchor
+        and anchor.weekday() < 6
+        and baseline_start is not None
+        and baseline_end is not None
+    ):
+        comparison_range = (
+            baseline_start,
+            min(
+                baseline_end,
+                baseline_start + timedelta(days=anchor.weekday()),
+            ),
+        )
+        comparison_label = f"{comparison_label}同期"
+    elif (
+        comparison_kind == "previous_year"
+        and primary_start == date(anchor.year, 1, 1)
+        and primary_end == anchor
+        and anchor < date(anchor.year, 12, 31)
+        and baseline_start is not None
+        and baseline_end is not None
+    ):
+        elapsed_days = (anchor - primary_start).days
+        comparison_range = (
+            baseline_start,
+            min(
+                baseline_end,
+                baseline_start + timedelta(days=elapsed_days),
+            ),
+        )
+        comparison_label = f"{comparison_label}同期"
     wants_margin, asks_profitability = _profit_intent(query)
     return SalesQuerySpec(
         date_range=date_range,
@@ -3128,6 +3197,7 @@ async def resolve_store_margin(
         raise ValueError("comparison_date_range requires an explicit primary date_range")
 
     if comparison_start and comparison_end:
+        resolved_spec = _resolve_sales_query_spec(query)
         primary = await resolve_store_margin(
             smartbi_pool,
             factory_id,
@@ -3140,6 +3210,41 @@ async def resolve_store_margin(
             store_name=store_name,
             store_mentions=selected_store_names,
         )
+        primary_actual_start = _date_from_any(
+            primary.meta.get("window_start")
+        )
+        primary_actual_end = _date_from_any(primary.meta.get("window_end"))
+        aligned_to_actual_progress = False
+        if (
+            resolved_spec.comparison_label
+            and resolved_spec.comparison_label.endswith("同期")
+            and resolved_spec.date_range == (exact_start, exact_end)
+            and resolved_spec.comparison_range
+            == (comparison_start, comparison_end)
+            and primary_actual_start is not None
+            and primary_actual_end is not None
+        ):
+            start_offset = max(
+                0,
+                (primary_actual_start - exact_start).days,
+            )
+            end_offset = max(
+                start_offset,
+                (primary_actual_end - exact_start).days,
+            )
+            aligned_start = comparison_start + timedelta(
+                days=start_offset,
+            )
+            aligned_end = min(
+                comparison_end,
+                comparison_start + timedelta(days=end_offset),
+            )
+            if aligned_start <= aligned_end:
+                comparison_start, comparison_end = (
+                    aligned_start,
+                    aligned_end,
+                )
+                aligned_to_actual_progress = True
         comparison = await resolve_store_margin(
             smartbi_pool,
             factory_id,
@@ -3152,7 +3257,10 @@ async def resolve_store_margin(
             store_name=store_name,
             store_mentions=selected_store_names,
         )
-        primary_label = _range_text(exact_start, exact_end)
+        primary_label = _range_text(
+            primary_actual_start or exact_start,
+            primary_actual_end or exact_end,
+        )
         comparison_label = _range_text(comparison_start, comparison_end)
         asks_store_revenue = any(
             token in (query or "")
@@ -3238,7 +3346,6 @@ async def resolve_store_margin(
             ):
                 requested_limit = len(store_names)
             selected_names = store_names[:requested_limit]
-            resolved_spec = _resolve_sales_query_spec(query)
             display_primary_label = (
                 resolved_spec.window_label
                 if resolved_spec.date_range == (exact_start, exact_end)
@@ -3246,7 +3353,11 @@ async def resolve_store_margin(
             )
             display_comparison_label = (
                 resolved_spec.comparison_label
-                if resolved_spec.comparison_range == (comparison_start, comparison_end)
+                if (
+                    resolved_spec.comparison_range
+                    == (comparison_start, comparison_end)
+                    or aligned_to_actual_progress
+                )
                 and resolved_spec.comparison_label
                 else comparison_label
             )
@@ -4290,6 +4401,18 @@ async def resolve_store_margin(
                 "selected_stores": selected_store_names or [],
                 "scope_matches_request": scope_matches_request,
                 "window_label": window_label,
+                "window_start": (
+                    _date_text(window_start) if window_start else None
+                ),
+                "window_end": (
+                    _date_text(window_end) if window_end else None
+                ),
+                "requested_window_start": (
+                    _date_text(exact_start) if exact_start else None
+                ),
+                "requested_window_end": (
+                    _date_text(exact_end) if exact_end else None
+                ),
                 "stores": [
                     {
                         "storeId": store["store_id"],
@@ -4638,7 +4761,60 @@ async def resolve_sales_summary(
             charts=[], kpis=[],
             meta={"future_request": True, "window_label": window_label},
         )
-    summary = await finance_summary(smartbi_pool, factory_id, date_range, top_n_stores=5)
+    summary = await finance_summary(
+        smartbi_pool,
+        factory_id,
+        date_range,
+        top_n_stores=5,
+    )
+
+    def _coerce_summary_date(
+        source: Dict[str, Any],
+        key: str,
+    ) -> Optional[date]:
+        raw_value = source.get(key)
+        if isinstance(raw_value, date):
+            return raw_value
+        if raw_value:
+            try:
+                return date.fromisoformat(str(raw_value))
+            except ValueError:
+                return None
+        return None
+
+    primary_actual_start = _coerce_summary_date(
+        summary,
+        "actual_start_date",
+    )
+    primary_actual_end = _coerce_summary_date(summary, "actual_end_date")
+    # QueryPlan marks an unfinished current week/month/year baseline as
+    # "...同期". If ingestion itself trails today, align the baseline again
+    # to the primary window's actual observed offsets before querying it.
+    if (
+        resolved_comparison_label
+        and resolved_comparison_label.endswith("同期")
+        and date_range[0] is not None
+        and date_range[1] is not None
+        and resolved_comparison_range[0] is not None
+        and resolved_comparison_range[1] is not None
+        and primary_actual_start is not None
+        and primary_actual_end is not None
+    ):
+        start_offset = max(0, (primary_actual_start - date_range[0]).days)
+        end_offset = max(
+            start_offset,
+            (primary_actual_end - date_range[0]).days,
+        )
+        baseline_start = resolved_comparison_range[0] + timedelta(
+            days=start_offset,
+        )
+        baseline_end = min(
+            resolved_comparison_range[1],
+            resolved_comparison_range[0] + timedelta(days=end_offset),
+        )
+        if baseline_start <= baseline_end:
+            resolved_comparison_range = (baseline_start, baseline_end)
+
     comparison_summary: Optional[Dict[str, Any]] = None
     if (
         resolved_comparison_label
@@ -4662,19 +4838,8 @@ async def resolve_sales_summary(
     store_count = int(summary.get("store_count") or 0)
     top_stores = summary.get("top_stores") or []
 
-    def _summary_date(key: str) -> Optional[date]:
-        raw_value = summary.get(key)
-        if isinstance(raw_value, date):
-            return raw_value
-        if raw_value:
-            try:
-                return date.fromisoformat(str(raw_value))
-            except ValueError:
-                return None
-        return None
-
-    sales_scope_start = date_range[0] or _summary_date("actual_start_date")
-    sales_scope_end = date_range[1] or _summary_date("actual_end_date")
+    sales_scope_start = primary_actual_start or date_range[0]
+    sales_scope_end = primary_actual_end or date_range[1]
     sales_scope = (
         (sales_scope_start, sales_scope_end)
         if sales_scope_start is not None and sales_scope_end is not None
@@ -4695,8 +4860,12 @@ async def resolve_sales_summary(
             "answered": True,
             "kind": resolved_comparison_kind,
             "primary_label": window_label,
-            "primary_start": _date_text(date_range[0]) if date_range[0] else None,
-            "primary_end": _date_text(date_range[1]) if date_range[1] else None,
+            "primary_start": (
+                _date_text(sales_scope_start) if sales_scope_start else None
+            ),
+            "primary_end": (
+                _date_text(sales_scope_end) if sales_scope_end else None
+            ),
             "baseline_label": resolved_comparison_label,
             "baseline_start": _date_text(resolved_comparison_range[0]),
             "baseline_end": _date_text(resolved_comparison_range[1]),
@@ -4877,6 +5046,7 @@ async def resolve_sales_summary(
                 "没有用全部历史或其他月份代替。"
             )
         else:
+            baseline_day_count = int(baseline.get("day_count") or 0)
             bill_delta = bill_count - baseline_bills
             bill_pct = (bill_delta / baseline_bills * 100.0) if baseline_bills else None
             comparison_meta.update({
@@ -4885,35 +5055,75 @@ async def resolve_sales_summary(
                 "baseline_revenue": baseline_revenue if can_see_money else None,
                 "primary_bills": bill_count,
                 "baseline_bills": baseline_bills,
+                "primary_day_count": day_count,
+                "baseline_day_count": baseline_day_count,
                 "bill_delta": bill_delta,
                 "bill_change_pct": bill_pct,
             })
-            order_direction = "增加" if bill_delta > 0 else "减少" if bill_delta < 0 else "持平"
-            order_text = (
-                f"订单数{order_direction} {abs(bill_delta):,} 单"
-                + (f"（{abs(bill_pct):.1f}%）" if bill_pct is not None else "")
-            )
-            if can_see_money:
-                revenue_delta = total_revenue - baseline_revenue
-                revenue_pct = (
-                    revenue_delta / baseline_revenue * 100.0
-                    if baseline_revenue else None
-                )
-                comparison_meta.update({
-                    "revenue_delta": revenue_delta,
-                    "revenue_change_pct": revenue_pct,
-                    "primary_avg_bill": float(avg_bill) if avg_bill is not None else None,
-                    "baseline_avg_bill": float(baseline_avg_bill) if baseline_avg_bill is not None else None,
-                })
-                direction = "高" if revenue_delta > 0 else "低" if revenue_delta < 0 else "持平"
-                revenue_text = f"营收{direction} **{_money(abs(revenue_delta))}**"
-                if revenue_pct is not None:
-                    revenue_text += f"（{abs(revenue_pct):.1f}%）"
+            if day_count != baseline_day_count:
+                comparison_meta["coverage_mismatch"] = True
                 comparison_line = (
-                    f"与{baseline_range_text}相比，{revenue_text}，{order_text}。"
+                    f"{actual_window}有 {day_count} 个数据日，"
+                    f"{baseline_range_text}有 {baseline_day_count} 个数据日；"
+                    "覆盖天数不同，本次不直接判断高低，也没有用未对齐总额"
+                    "替代同口径比较。"
                 )
             else:
-                comparison_line = f"与{baseline_range_text}相比，{order_text}。"
+                comparison_meta["coverage_mismatch"] = False
+                order_direction = (
+                    "增加"
+                    if bill_delta > 0
+                    else "减少"
+                    if bill_delta < 0
+                    else "持平"
+                )
+                order_text = (
+                    f"订单数{order_direction} {abs(bill_delta):,} 单"
+                    + (
+                        f"（{abs(bill_pct):.1f}%）"
+                        if bill_pct is not None
+                        else ""
+                    )
+                )
+                if can_see_money:
+                    revenue_delta = total_revenue - baseline_revenue
+                    revenue_pct = (
+                        revenue_delta / baseline_revenue * 100.0
+                        if baseline_revenue
+                        else None
+                    )
+                    comparison_meta.update({
+                        "revenue_delta": revenue_delta,
+                        "revenue_change_pct": revenue_pct,
+                        "primary_avg_bill": (
+                            float(avg_bill) if avg_bill is not None else None
+                        ),
+                        "baseline_avg_bill": (
+                            float(baseline_avg_bill)
+                            if baseline_avg_bill is not None
+                            else None
+                        ),
+                    })
+                    direction = (
+                        "高"
+                        if revenue_delta > 0
+                        else "低"
+                        if revenue_delta < 0
+                        else "持平"
+                    )
+                    revenue_text = (
+                        f"营收{direction} **{_money(abs(revenue_delta))}**"
+                    )
+                    if revenue_pct is not None:
+                        revenue_text += f"（{abs(revenue_pct):.1f}%）"
+                    comparison_line = (
+                        f"与{baseline_range_text}相比，"
+                        f"{revenue_text}，{order_text}。"
+                    )
+                else:
+                    comparison_line = (
+                        f"与{baseline_range_text}相比，{order_text}。"
+                    )
 
     prohibited_actions_line = ""
     if asks_prohibited_actions:

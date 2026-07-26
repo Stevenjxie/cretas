@@ -896,7 +896,9 @@ async def test_store_scope_reply_with_extra_time_cannot_use_comparison_fast_path
         original_query=original_query,
         clarification_question=STORE_SCOPE_CLARIFICATION_QUESTION,
     )
-    llm = AsyncMock(return_value=None)
+    llm = AsyncMock(side_effect=AssertionError(
+        "an explicit current-turn time conflict must fail closed before T3"
+    ))
 
     with patch("common.llm_router.call_chain", new=llm):
         spec = await parse_restaurant_query(
@@ -907,10 +909,80 @@ async def test_store_scope_reply_with_extra_time_cannot_use_comparison_fast_path
         )
 
     assert spec is not None
-    assert spec.planner_authority == "llm_unavailable"
+    assert spec.planner_authority == "explicit_time_override_requires_baseline"
     assert spec.clarification_needed is True
     assert spec.planned_intents == ()
-    assert llm.await_count == 1
+    assert spec.window_label == "本月"
+    assert spec.comparison_range == (None, None)
+    assert "没有沿用" in spec.clarification_question
+    assert "前天" in spec.clarification_question
+    assert llm.await_count == 0
+
+
+@pytest.mark.asyncio
+async def test_store_scope_reply_may_repeat_same_primary_window_without_t3():
+    pool = _FakeDbPool(
+        is_restaurant=True,
+        store_names=["东城店", "西城店"],
+    )
+    llm = AsyncMock(side_effect=AssertionError(
+        "a redundant current-turn primary window must not call T3"
+    ))
+
+    with patch("common.llm_router.call_chain", new=llm):
+        first = await parse_restaurant_query(
+            "昨天的营业额是高于前天还是低于前天？",
+            pool,
+            factory_id="F_PERIOD_REPEAT",
+            session_key="sess-period-repeat",
+        )
+        second = await parse_restaurant_query(
+            "全部门店，昨天",
+            pool,
+            factory_id="F_PERIOD_REPEAT",
+            session_key="sess-period-repeat",
+        )
+
+    assert first.clarification_needed is True
+    assert second.clarification_needed is False
+    assert second.planner_authority == "explicit_comparison_slots"
+    assert second.window_label == "昨天"
+    assert second.comparison_label == "前天"
+    assert second.store_scope == "all"
+    llm.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_store_scope_reply_complete_new_comparison_replaces_old_periods():
+    pool = _FakeDbPool(
+        is_restaurant=True,
+        store_names=["东城店", "西城店"],
+    )
+    llm = AsyncMock(side_effect=AssertionError(
+        "a complete current-turn replacement comparison must not call T3"
+    ))
+
+    with patch("common.llm_router.call_chain", new=llm):
+        await parse_restaurant_query(
+            "昨天的营业额是高于前天还是低于前天？",
+            pool,
+            factory_id="F_PERIOD_REPLACE",
+            session_key="sess-period-replace",
+        )
+        second = await parse_restaurant_query(
+            "全部门店，本月和上月比",
+            pool,
+            factory_id="F_PERIOD_REPLACE",
+            session_key="sess-period-replace",
+        )
+
+    assert second.clarification_needed is False
+    assert second.planner_authority == "explicit_comparison_slots"
+    assert second.window_label == "本月"
+    assert second.comparison_label == "上个月同期"
+    assert second.store_scope == "all"
+    assert second.comparison_range != (None, None)
+    llm.assert_not_awaited()
 
 
 @pytest.mark.asyncio
