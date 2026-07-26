@@ -1501,6 +1501,183 @@ _EXPLICIT_RANKING_NEGATION_TOKENS = (
     "不是", "并非", "不想", "不要", "别查", "别看", "不查", "不看",
     "不问", "取消", "而是", "改问", "换个问题",
 )
+_READ_ONLY_RANKING_MUTATION_TOKENS = (
+    "下架", "停售",
+)
+
+
+def _is_read_only_ranking_action_seed(text: str) -> bool:
+    """Recognize a fully slotted dish-ranking request that asked for a write."""
+    candidate = (text or "").strip()
+    metrics = _detect_requested_metrics(candidate)
+    start_date, end_date = _resolve_sales_date_range(candidate)[0]
+    return bool(
+        any(token in candidate for token in _READ_ONLY_RANKING_MUTATION_TOKENS)
+        and any(token in candidate for token in ("道菜", "菜品", "哪个菜"))
+        and metrics == ("sales_volume",)
+        and _detect_ranking_direction(candidate) in {"best", "worst"}
+        and start_date is not None
+        and end_date is not None
+    )
+
+
+def _requests_read_only_ranking(text: str) -> bool:
+    """Allow only an explicit choice to view/query the ranking, never execute."""
+    normalized = _normalize_exact_phrase(text)
+    if (
+        not normalized
+        or any(
+            token in normalized
+            for token in _READ_ONLY_RANKING_MUTATION_TOKENS
+        )
+    ):
+        return False
+    if normalized in {
+        "查看排行",
+        "只看排行",
+        "仅看排行",
+        "查询排行",
+        "只查看排行",
+    }:
+        return True
+    return bool(
+        re.search(r"(?:查看|只看|仅看|查询)", normalized)
+        and re.search(r"(?:低销量|销量最低|倒数|排行|排名|榜)", normalized)
+    )
+
+
+def _contains_read_only_ranking_choice(text: str) -> bool:
+    """Find a prior explicit choice in the space-delimited continuation log."""
+    if _requests_read_only_ranking(text):
+        return True
+    return any(
+        _requests_read_only_ranking(turn)
+        for turn in re.split(r"\s+", (text or "").strip())
+        if turn
+    )
+
+
+def _explicit_read_only_action_ranking_spec(
+    original_query: str,
+    answer: str,
+) -> Optional[RestaurantQuerySpec]:
+    """Turn an explicit READ choice into a sealed dish-ranking QueryPlan.
+
+    The write verb is used only to prove why the system asked the user to
+    choose between viewing and executing.  It is never copied into the
+    resolver seed. Every read-side slot is reconstructed independently and
+    checked again before this deterministic continuation may execute.
+    """
+    history_text = f"{original_query} {answer}".strip()
+    if (
+        not _is_read_only_ranking_action_seed(history_text)
+        or not (
+            _contains_read_only_ranking_choice(original_query)
+            or _contains_read_only_ranking_choice(answer)
+        )
+    ):
+        return None
+
+    current_metrics = _detect_requested_metrics(answer)
+    if current_metrics and current_metrics != ("sales_volume",):
+        return None
+    if (
+        _contains_read_only_ranking_choice(answer)
+        and (
+            (
+                (
+                    _asks_store_breakdown(answer)
+                    or "门店" in answer
+                )
+                and _detect_store_scope(answer)[0] != "all"
+                and not any(token in answer for token in ("菜", "菜品"))
+            )
+            or any(token in answer for token in ("食材", "原料", "员工", "人员"))
+        )
+    ):
+        # A newly named object is a semantic replacement, not a harmless
+        # confirmation of the retained dish slot. Let the normal planner
+        # decide that new request instead of silently forcing it back to dishes.
+        return None
+
+    current_range, current_window = _resolve_sales_date_range(answer)
+    history_range, history_window = _resolve_sales_date_range(history_text)
+    date_range = (
+        current_range
+        if current_window != "全部历史"
+        else history_range
+    )
+    window_label = (
+        current_window
+        if current_window != "全部历史"
+        else history_window
+    )
+    if any(value is None for value in date_range) or window_label == "全部历史":
+        return None
+
+    current_scope, current_stores = _detect_store_scope(answer)
+    history_scope, history_stores = _detect_store_scope(history_text)
+    store_scope = current_scope or history_scope
+    store_slots = current_stores if current_scope else history_stores
+    if store_scope == "all":
+        scope_text = "全部门店"
+    elif store_scope in {"single", "multiple"} and store_slots:
+        scope_text = "和".join(store_slots)
+    else:
+        scope_text = ""
+
+    direction = (
+        _detect_ranking_direction(answer)
+        or _detect_ranking_direction(history_text)
+    )
+    if direction not in {"best", "worst"}:
+        return None
+    direction_text = "销量最高" if direction == "best" else "销量最低"
+    limit = ranking_limit(answer, ranking_limit(history_text, 5))
+    exclusions = tuple(ranking_exclusions(history_text))
+    exclusion_text = (
+        f"，排除{'、'.join(exclusions)}"
+        if exclusions
+        else ""
+    )
+    resolver_seed = (
+        f"{window_label}{scope_text}{direction_text}的{limit}道菜"
+        f"{exclusion_text}"
+    )
+    spec = _build_spec(
+        "RESTAURANT_OPS_GROSS_MARGIN",
+        resolver_seed,
+        confidence=1.0,
+        tier="explicit_action_read_choice",
+        planner_authority="explicit_action_read_choice",
+        is_continuation=True,
+        require_explicit_time=True,
+    )
+    if (
+        spec.clarification_needed
+        or spec.requested_metrics != ("sales_volume",)
+        or spec.ranking_direction != direction
+        or spec.ranking_limit != limit
+        or "dish" not in spec.dimensions
+        or spec.store_scope != store_scope
+        or spec.store_slots != store_slots
+        or not spec.planned_intents
+        or not set(spec.planned_intents).issubset({
+            "RESTAURANT_OPS_GROSS_MARGIN",
+            "RESTAURANT_OPS_STORE_MARGIN",
+        })
+        or spec.unsupported_requirements
+        or spec.analysis_action != "lookup"
+        or spec.asks_priority
+        or spec.asks_prohibited_actions
+        or spec.asks_export
+        or any(
+            token in spec.resolver_query_seed
+            for token in _READ_ONLY_RANKING_MUTATION_TOKENS
+        )
+    ):
+        return None
+    return spec
 
 
 def _is_pure_store_scope_answer(answer: str) -> bool:
@@ -2396,16 +2573,28 @@ async def parse_restaurant_query(
                 continued is not None and continued.clarification_needed
             )
             continued = await _apply_store_scope_guard(pool, factory_id, continued)
+            combined_query = (
+                f"{pending.get('original_query') or ''} {norm_query}".strip()
+            )
             if (
                 continued is not None
                 and continued.clarification_needed
-                and not already_clarifying
-                and continued.clarification_question
-                == STORE_SCOPE_CLARIFICATION_QUESTION
-            ):
-                combined_query = (
-                    f"{pending.get('original_query') or ''} {norm_query}".strip()
+                and (
+                    (
+                        not already_clarifying
+                        and continued.clarification_question
+                        == STORE_SCOPE_CLARIFICATION_QUESTION
+                    )
+                    or (
+                        already_clarifying
+                        and _is_read_only_ranking_action_seed(combined_query)
+                        and (
+                            _is_pure_store_scope_answer(norm_query)
+                            or _requests_read_only_ranking(norm_query)
+                        )
+                    )
                 )
+            ):
                 await _maybe_register_pending(
                     pool,
                     combined_query,
@@ -2760,6 +2949,13 @@ async def _parse_continuation(
             is_continuation=True,
             require_explicit_time=True,
         )
+
+    explicit_action_read_spec = _explicit_read_only_action_ranking_spec(
+        original_query,
+        query,
+    )
+    if explicit_action_read_spec is not None:
+        return explicit_action_read_spec
 
     explicit_ranking_spec = _explicit_store_dish_ranking_spec(
         concatenated,

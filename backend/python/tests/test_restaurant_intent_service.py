@@ -1226,6 +1226,48 @@ async def test_read_only_action_warning_survives_resolved_store_scope_answer(
 
 
 @pytest.mark.asyncio
+async def test_explicit_read_choice_answer_keeps_non_execution_notice(
+    monkeypatch,
+):
+    spec = _spec(
+        intent="RESTAURANT_OPS_GROSS_MARGIN",
+        planner_authority="explicit_action_read_choice",
+        resolver_query_seed="最近7天全部门店销量最低的5道菜",
+    )
+    monkeypatch.setattr(
+        svc,
+        "parse_restaurant_query",
+        AsyncMock(return_value=spec),
+    )
+    monkeypatch.setattr(
+        svc,
+        "_resolve_tiered",
+        AsyncMock(return_value=OpsAnswer(
+            code=spec.intent,
+            title="低销量菜品",
+            answer_text="最近7天销量最低的5道菜已经列出。",
+            charts=[],
+            kpis=[],
+            meta={},
+        )),
+    )
+    monkeypatch.setattr(svc, "log_intent_capture", AsyncMock(return_value=1))
+
+    result = await tiered_answer(
+        "只看低销量排行",
+        object(),
+        "DEMO_REST",
+        "restaurant_manager",
+    )
+    await asyncio.sleep(0)
+
+    assert result["kind"] == "answer"
+    assert "当前未执行任何下架" in result["answer_text"]
+    assert "最近7天销量最低的5道菜已经列出" in result["answer_text"]
+    assert result["warning"] == svc._READ_ONLY_ACTION_WARNING
+
+
+@pytest.mark.asyncio
 async def test_tiered_answer_sales_summary_reads_demo_gold_ops_stays_trusted(monkeypatch):
     """R8 contract: revenue/store/trend answers for the demo tenant read the
     seeded gold tenant (consistent store universe with the Java rank tools);
