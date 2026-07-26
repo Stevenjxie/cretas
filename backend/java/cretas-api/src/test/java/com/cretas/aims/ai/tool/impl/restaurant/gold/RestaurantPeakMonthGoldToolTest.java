@@ -163,6 +163,18 @@ class RestaurantPeakMonthGoldToolTest {
 
         assertThat(result).containsEntry("dataAvailable", true);
         assertThat(result).containsEntry("峰值月份", "2026-03");
+        assertThat(result.get("suggestedFollowups")).isInstanceOf(List.class);
+        @SuppressWarnings("unchecked")
+        List<Map<String, String>> followups =
+                (List<Map<String, String>>) result.get("suggestedFollowups");
+        assertThat(followups)
+                .extracting(item -> item.get("label"))
+                .containsExactly("拆解订单与客单价", "补充经营维度");
+        assertThat(followups.get(0).get("question"))
+                .isEqualTo("对比峰值月和次高月的订单量与客单价");
+        assertThat(followups.get(1).get("question"))
+                .contains("2026-03峰值月")
+                .contains("经营构成与可能原因");
     }
 
     @Test

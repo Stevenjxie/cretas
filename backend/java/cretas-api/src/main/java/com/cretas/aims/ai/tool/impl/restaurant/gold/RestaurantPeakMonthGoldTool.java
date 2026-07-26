@@ -196,7 +196,11 @@ public class RestaurantPeakMonthGoldTool extends GoldBackedRestaurantTool {
             result.put("chartConfig", barChartConfig(
                     "各月营收 (万元)", chartMonths, chartVals, "万元"));
         }
-        if (asksWhy) {
+        // These are semantic continuations of the peak-month result, not generic
+        // owner-action prompts. Always expose them for this tool so a UI click
+        // sends the complete peak-month question even when the first question
+        // did not contain "为什么".
+        if (peakMonth != null) {
             result.put("suggestedFollowups", List.of(
                     Map.of("label", "拆解订单与客单价", "question", "对比峰值月和次高月的订单量与客单价"),
                     Map.of(
