@@ -251,7 +251,7 @@ export default function QIHomeScreen() {
           {isScreenEnabled('QualityInspection') && (
           <TouchableRipple
             style={styles.actionItem}
-            onPress={() => navigation.navigate('QIInspectTab', { screen: 'QILabelQcCreate' })}
+            onPress={() => navigation.navigate('QIInspectTab', { screen: 'QILabelQcQueue' })}
             borderless
             accessibilityRole="button"
             accessibilityLabel="包装标签拍检"

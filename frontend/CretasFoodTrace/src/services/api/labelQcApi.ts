@@ -1,6 +1,11 @@
 import { apiClient } from './apiClient';
 import { getCurrentFactoryId } from '../../utils/factoryIdHelper';
-import { LabelQcTaskDetail } from '../../types/labelQc';
+import {
+  LabelQcReviewTaskRequest,
+  LabelQcTaskDetail,
+  LabelQcTaskPage,
+  LabelQcTaskStatus,
+} from '../../types/labelQc';
 
 interface ApiEnvelope<T> {
   success: boolean;
@@ -58,6 +63,39 @@ class LabelQcApi {
   async getTask(taskId: string, factoryId?: string): Promise<LabelQcTaskDetail> {
     const response = await apiClient.get<ApiEnvelope<LabelQcTaskDetail>>(
       `${this.base(factoryId)}/tasks/${taskId}`,
+    );
+    return response.data;
+  }
+
+  async listTasks(
+    options: {
+      statuses?: LabelQcTaskStatus[];
+      page?: number;
+      size?: number;
+    } = {},
+    factoryId?: string,
+  ): Promise<LabelQcTaskPage> {
+    const response = await apiClient.get<ApiEnvelope<LabelQcTaskPage>>(
+      `${this.base(factoryId)}/tasks`,
+      {
+        params: {
+          statuses: options.statuses?.join(','),
+          page: options.page ?? 1,
+          size: options.size ?? 20,
+        },
+      },
+    );
+    return response.data;
+  }
+
+  async reviewTask(
+    taskId: string,
+    request: LabelQcReviewTaskRequest,
+    factoryId?: string,
+  ): Promise<LabelQcTaskDetail> {
+    const response = await apiClient.put<ApiEnvelope<LabelQcTaskDetail>>(
+      `${this.base(factoryId)}/tasks/${taskId}/review`,
+      request,
     );
     return response.data;
   }
