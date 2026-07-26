@@ -348,6 +348,17 @@ class TestCharts:
 # synthesize end-to-end (mock call_chain)
 # --------------------------------------------------------------------------
 class TestSynthesize:
+    @pytest.mark.parametrize("factory_id", [
+        "RES_3101_009",
+        "qhj_prod",
+        "R_GML_DEMO",
+    ])
+    def test_restaurant_scope_covers_supported_tenant_id_families(self, factory_id):
+        assert se._is_restaurant_synthesis_tenant(factory_id) is True
+
+    def test_factory_scope_remains_outside_restaurant_guard(self):
+        assert se._is_restaurant_synthesis_tenant("F001") is False
+
     def test_grounded_with_factcheck_and_redaction(self, monkeypatch):
         _install_data_fakes(monkeypatch)
         scope_seen = {}
@@ -428,6 +439,33 @@ class TestSynthesize:
         assert resp.dimension_coverage
         # FactBook remains attached as auditable evidence.
         assert resp.factbook_text
+
+    def test_restaurant_fallback_does_not_compare_unrelated_total_columns(
+        self,
+        monkeypatch,
+    ):
+        eng = _engine(monkeypatch)
+        factbook = FactBook(
+            finance={"total_revenue": 11_575_402.91},
+            discount={"total_discount_amount": 1_608_809.74},
+        )
+
+        restaurant_summary = eng._analyze(
+            factbook,
+            period="2026-03-01 至 2026-03-31",
+            restaurant_scope=True,
+        )
+        factory_summary = eng._analyze(
+            factbook,
+            period="2026-03-01 至 2026-03-31",
+            restaurant_scope=False,
+        )
+
+        assert restaurant_summary == ""
+        assert "总营业额占折扣金额合计" not in restaurant_summary
+        # The shared factory analyzer is deliberately unchanged by this
+        # restaurant-only guard.
+        assert "总营业额占折扣金额合计" in factory_summary
 
     @pytest.mark.parametrize("unsafe_answer", [
         "峰值月主因是晚市爆发，不是天气或活动带动。",
@@ -527,7 +565,7 @@ class TestSynthesize:
         assert cache.put_calls
 
     def test_contract_version_invalidates_pre_guard_narrative_cache(self):
-        assert se.SYNTHESIS_CONTRACT_VERSION == "restaurant-dimensions-v4"
+        assert se.SYNTHESIS_CONTRACT_VERSION == "restaurant-dimensions-v5"
 
 
 class TestNarrativeGroundingGate:
