@@ -857,22 +857,20 @@ async function openEdit(row: TableRow) {
   l3MatchHint.value = '';
   l3ManuallyEdited.value = false;
   if (segmentTree.value.length === 0) loadSegmentTree();
-  // 包装层级是包材专属；原料/辅料不读取、不展示，也不会提交 hierarchy。
-  if (isPackagingMaterial.value) {
-    try {
-      const res = await get<{ level1PerLevel2: number | null; level2Unit: string | null; level2PerLevel3: number | null; level3Unit: string | null }>(
-        `/${factoryId.value}/material-packaging/by-material/${editingId.value}`,
-      );
-      if (res.success && res.data) {
-        packaging.value = {
-          level1PerLevel2: res.data.level1PerLevel2 ?? '',
-          level2Unit: res.data.level2Unit || '',
-          level2PerLevel3: res.data.level2PerLevel3 ?? '',
-          level3Unit: res.data.level3Unit || '',
-        };
-      }
-    } catch { /* 包材无配置时正常空 */ }
-  }
+  // 原料、辅料和包材共用计量/包装层级；库存基本单位始终来自 form.unit。
+  try {
+    const res = await get<{ level1PerLevel2: number | null; level2Unit: string | null; level2PerLevel3: number | null; level3Unit: string | null }>(
+      `/${factoryId.value}/material-packaging/by-material/${editingId.value}`,
+    );
+    if (res.success && res.data) {
+      packaging.value = {
+        level1PerLevel2: res.data.level1PerLevel2 ?? '',
+        level2Unit: res.data.level2Unit || '',
+        level2PerLevel3: res.data.level2PerLevel3 ?? '',
+        level3Unit: res.data.level3Unit || '',
+      };
+    }
+  } catch { /* 未配置换算时正常空 */ }
   dialogVisible.value = true;
 }
 
@@ -920,14 +918,14 @@ async function handleSave() {
     return;
   }
 
-  // 包装层级仅包材校验并提交；原料/辅料完全不发送 hierarchy。
+  // 所有物料均可维护包装换算；库存基本单位仍以 form.unit 为唯一真值。
   const hasL2Unit = !!packaging.value.level2Unit?.trim();
   const hasL2Qty = packaging.value.level1PerLevel2 !== '' && Number(packaging.value.level1PerLevel2) > 0;
   const hasL3Unit = !!packaging.value.level3Unit?.trim();
   const hasL3Qty = packaging.value.level2PerLevel3 !== '' && Number(packaging.value.level2PerLevel3) > 0;
-  if (isPackagingMaterial.value && hasL2Unit !== hasL2Qty) return ElMessage.warning('二级单位和换算数量必须同时填写或同时清空');
-  if (isPackagingMaterial.value && hasL3Unit !== hasL3Qty) return ElMessage.warning('三级单位和换算数量必须同时填写或同时清空');
-  if (isPackagingMaterial.value && hasL3Unit && !hasL2Unit) return ElMessage.warning('必须先配置二级单位才能配置三级');
+  if (hasL2Unit !== hasL2Qty) return ElMessage.warning('二级单位和换算数量必须同时填写或同时清空');
+  if (hasL3Unit !== hasL3Qty) return ElMessage.warning('三级单位和换算数量必须同时填写或同时清空');
+  if (hasL3Unit && !hasL2Unit) return ElMessage.warning('必须先配置二级单位才能配置三级');
 
   submitting.value = true;
   try {
@@ -966,8 +964,8 @@ async function handleSave() {
       ElMessage.success('创建成功');
     }
 
-    // 包装层级 upsert / delete
-    if (isPackagingMaterial.value && (hasL2Unit || hasL3Unit)) {
+    // 计量/包装层级 upsert / delete
+    if (hasL2Unit || hasL3Unit) {
       await put(`/${factoryId.value}/material-packaging/by-material/${materialId}`, {
         level1Unit: form.value.unit,
         level1PerLevel2: hasL2Unit ? Number(packaging.value.level1PerLevel2) : null,
@@ -975,7 +973,7 @@ async function handleSave() {
         level2PerLevel3: hasL3Unit ? Number(packaging.value.level2PerLevel3) : null,
         level3Unit: hasL3Unit ? packaging.value.level3Unit.trim() : null,
       });
-    } else if (isPackagingMaterial.value && editingId.value) {
+    } else if (editingId.value) {
       // 编辑模式下用户清空了二三级 → 删除现有配置
       try { await del(`/${factoryId.value}/material-packaging/by-material/${materialId}`); }
       catch { /* 不存在也 OK */ }
@@ -1612,11 +1610,20 @@ function handleSizeChange(size: number) {
           </el-form-item>
         </template>
 
-        <!-- ==================== T159-A: 包装层级 内联换算行 (SKU-style) ==================== -->
-        <template v-if="isPackagingMaterial">
+        <!-- ==================== T159-A: 计量/包装层级 内联换算行 (SKU-style) ==================== -->
+        <template v-if="form.unit">
           <el-divider>
-            <span class="divider-title">包装层级（包材专属，可选）</span>
+            <span class="divider-title">采购与库存单位换算（可选）</span>
           </el-divider>
+          <el-alert
+            title="库存始终按上方基本单位记账；采购可按箱、袋、桶等包装单位下单"
+            type="info"
+            :closable="false"
+            show-icon
+            style="margin-bottom: 14px"
+          >
+            <template #default>例如：基本单位选 kg，再配置 1 箱 = 10 kg。采购 8 箱时，系统按快照折算为 80 kg 入库。</template>
+          </el-alert>
 
         <!-- 一级: 显示主单位 (read-only echo — single source of truth = 上方单位字段) -->
           <el-form-item label="一级 (主单位)">
@@ -1634,6 +1641,7 @@ function handleSizeChange(size: number) {
             <UnitSelect
               v-model="packaging.level2Unit"
               :factory-id="factoryId"
+              usage-scope="PURCHASE_QUANTITY"
               placeholder="二级单位（如箱）"
               style="width: 155px"
             />
@@ -1666,6 +1674,7 @@ function handleSizeChange(size: number) {
             <UnitSelect
               v-model="packaging.level3Unit"
               :factory-id="factoryId"
+              usage-scope="PURCHASE_QUANTITY"
               placeholder="三级单位（如柜）"
               style="width: 155px"
               :disabled="!packaging.level2Unit"

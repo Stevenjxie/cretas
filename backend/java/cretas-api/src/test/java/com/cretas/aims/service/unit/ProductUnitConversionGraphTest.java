@@ -1,6 +1,7 @@
 package com.cretas.aims.service.unit;
 
 import com.cretas.aims.entity.unit.ProductUnitConversion;
+import com.cretas.aims.repository.MaterialPackagingHierarchyRepository;
 import com.cretas.aims.repository.config.UnitOfMeasurementRepository;
 import com.cretas.aims.repository.unit.ProductUnitConversionRepository;
 import com.cretas.aims.service.unit.impl.UnitContractServiceImpl;
@@ -31,11 +32,15 @@ class ProductUnitConversionGraphTest {
     @Mock
     private ProductUnitConversionRepository conversionRepository;
 
+    @Mock
+    private MaterialPackagingHierarchyRepository materialPackagingRepository;
+
     private UnitContractService service;
 
     @BeforeEach
     void setUp() {
-        service = new UnitContractServiceImpl(unitRepository, conversionRepository);
+        service = new UnitContractServiceImpl(
+                unitRepository, conversionRepository, materialPackagingRepository);
     }
 
     @Test

@@ -1,7 +1,9 @@
 package com.cretas.aims.service.unit;
 
 import com.cretas.aims.entity.config.UnitOfMeasurement;
+import com.cretas.aims.entity.MaterialPackagingHierarchy;
 import com.cretas.aims.entity.unit.ProductUnitConversion;
+import com.cretas.aims.repository.MaterialPackagingHierarchyRepository;
 import com.cretas.aims.repository.config.UnitOfMeasurementRepository;
 import com.cretas.aims.repository.unit.ProductUnitConversionRepository;
 import com.cretas.aims.service.unit.impl.UnitContractServiceImpl;
@@ -17,6 +19,7 @@ import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.BDDMockito.given;
@@ -36,11 +39,15 @@ class UnitContractServiceTest {
     @Mock
     private ProductUnitConversionRepository conversionRepository;
 
+    @Mock
+    private MaterialPackagingHierarchyRepository materialPackagingRepository;
+
     private UnitContractService service;
 
     @BeforeEach
     void setUp() {
-        service = new UnitContractServiceImpl(unitRepository, conversionRepository);
+        service = new UnitContractServiceImpl(
+                unitRepository, conversionRepository, materialPackagingRepository);
     }
 
     @ParameterizedTest
@@ -186,6 +193,55 @@ class UnitContractServiceTest {
     }
 
     @Test
+    void convertsRawMaterialPurchaseCasesToInventoryKilogramsBothWays() {
+        given(conversionRepository.findEffectiveByFactoryIdAndProductTypeIdAt(
+                FACTORY_ID, "MAT-1", AT)).willReturn(List.of());
+        given(materialPackagingRepository.findByMaterialTypeId("MAT-1"))
+                .willReturn(Optional.of(packagingHierarchy("MAT-1", "kg", "case", "10", null, null)));
+
+        UnitConversionResult inbound = service.convert(
+                new BigDecimal("8"), context("MAT-1", "case", "kg"));
+        UnitConversionResult reverse = service.convert(
+                new BigDecimal("25"), context("MAT-1", "kg", "case"));
+
+        assertThat(inbound.status()).isEqualTo(UnitConversionStatus.CONVERTED);
+        assertThat(inbound.quantity()).isEqualByComparingTo("80");
+        assertThat(inbound.path()).containsExactly("case", "kg");
+        assertThat(reverse.quantity()).isEqualByComparingTo("2.5");
+    }
+
+    @Test
+    void composesRawMaterialThirdLevelPackagingConversion() {
+        given(conversionRepository.findEffectiveByFactoryIdAndProductTypeIdAt(
+                FACTORY_ID, "MAT-1", AT)).willReturn(List.of());
+        given(materialPackagingRepository.findByMaterialTypeId("MAT-1"))
+                .willReturn(Optional.of(packagingHierarchy(
+                        "MAT-1", "kg", "case", "10", "crate", "12")));
+
+        UnitConversionResult result = service.convert(
+                new BigDecimal("2"), context("MAT-1", "crate", "kg"));
+
+        assertThat(result.status()).isEqualTo(UnitConversionStatus.CONVERTED);
+        assertThat(result.quantity()).isEqualByComparingTo("240");
+        assertThat(result.path()).containsExactly("crate", "case", "kg");
+        assertThat(result.steps()).hasSize(2);
+    }
+
+    @Test
+    void explicitProductConversionKeepsPrecedenceOverMaterialHierarchy() {
+        given(conversionRepository.findEffectiveByFactoryIdAndProductTypeIdAt(
+                FACTORY_ID, "MAT-1", AT))
+                .willReturn(List.of(conversion("manual-case-kg", "case", "kg", "12", 8L)));
+
+        UnitConversionResult result = service.convert(
+                new BigDecimal("2"), context("MAT-1", "case", "kg"));
+
+        assertThat(result.quantity()).isEqualByComparingTo("24");
+        assertThat(result.conversionRefId()).isEqualTo("manual-case-kg");
+        verifyNoInteractions(materialPackagingRepository);
+    }
+
+    @Test
     void normalizesFactoryCatalogAliasesWithoutTreatingThemAsPackageConversions() {
         UnitOfMeasurement crate = UnitOfMeasurement.builder()
                 .factoryId(FACTORY_ID)
@@ -280,6 +336,26 @@ class UnitContractServiceTest {
                 .effectiveFrom(AT.minusDays(1))
                 .version(version)
                 .build();
+    }
+
+    private MaterialPackagingHierarchy packagingHierarchy(
+            String materialTypeId,
+            String level1Unit,
+            String level2Unit,
+            String level1PerLevel2,
+            String level3Unit,
+            String level2PerLevel3) {
+        MaterialPackagingHierarchy hierarchy = new MaterialPackagingHierarchy();
+        hierarchy.setId("MPH-" + materialTypeId);
+        hierarchy.setFactoryId(FACTORY_ID);
+        hierarchy.setMaterialTypeId(materialTypeId);
+        hierarchy.setLevel1Unit(level1Unit);
+        hierarchy.setLevel2Unit(level2Unit);
+        hierarchy.setLevel1PerLevel2(new BigDecimal(level1PerLevel2));
+        hierarchy.setLevel3Unit(level3Unit);
+        hierarchy.setLevel2PerLevel3(
+                level2PerLevel3 == null ? null : new BigDecimal(level2PerLevel3));
+        return hierarchy;
     }
 
     private UnitConversionContext context(String fromUnit, String toUnit) {
