@@ -1844,6 +1844,112 @@ def test_time_only_switch_preserves_dish_cost_and_all_store_scope():
     assert spec.planned_intents == ("RESTAURANT_OPS_GROSS_MARGIN",)
 
 
+@pytest.mark.parametrize(
+    ("query", "expected_window"),
+    [
+        ("换成最近7天", "最近7天"),
+        ("最近30天呢", "最近30天"),
+        ("改成2026年6月", "2026年6月"),
+    ],
+)
+def test_time_only_switch_without_question_particle_freezes_other_slots(
+    query,
+    expected_window,
+):
+    parent = {
+        "parent_query": "上个月全部门店抖音松叶蟹368套餐的营收如何",
+        "parent_template_code": "RESTAURANT_OPS_GROSS_MARGIN",
+        "structured_context": {
+            "focus_entity": {
+                "type": "dish",
+                "name": "抖音松叶蟹368套餐",
+            },
+            "window_label": "上个月",
+            "requested_metrics": ["revenue"],
+            "store_scope": "all",
+            "store_names": [],
+        },
+    }
+
+    effective, inherited = contextualize_restaurant_followup(query, parent)
+
+    assert inherited is True
+    assert effective == (
+        f"全部门店{expected_window}抖音松叶蟹368套餐的营收如何"
+    )
+    spec = _trusted_context_dish_followup_spec(effective)
+    assert spec is not None
+    assert spec.window_label == expected_window
+    assert spec.store_scope == "all"
+    assert spec.dish_slot == "抖音松叶蟹368套餐"
+    assert spec.requested_metrics == ("revenue",)
+
+
+@pytest.mark.parametrize(
+    ("parent_scope", "parent_stores", "query", "expected_scope"),
+    [
+        (
+            "all",
+            [],
+            "改成青花椒南方百联店",
+            "青花椒南方百联店",
+        ),
+        (
+            "single",
+            ["青花椒南方百联店"],
+            "换回全部门店",
+            "全部门店",
+        ),
+    ],
+)
+def test_store_only_switch_freezes_dish_metric_and_window(
+    parent_scope,
+    parent_stores,
+    query,
+    expected_scope,
+):
+    parent = {
+        "parent_query": "上个月抖音松叶蟹368套餐的营收如何",
+        "parent_template_code": "RESTAURANT_OPS_GROSS_MARGIN",
+        "structured_context": {
+            "focus_entity": {
+                "type": "dish",
+                "name": "抖音松叶蟹368套餐",
+            },
+            "window_label": "上个月",
+            "requested_metrics": ["revenue"],
+            "store_scope": parent_scope,
+            "store_names": parent_stores,
+        },
+    }
+
+    effective, inherited = contextualize_restaurant_followup(query, parent)
+
+    assert inherited is True
+    assert effective == (
+        f"上个月{expected_scope}抖音松叶蟹368套餐的营收如何"
+    )
+    spec = _trusted_context_dish_followup_spec(effective)
+    assert spec is not None
+    assert spec.window_label == "上个月"
+    assert spec.dish_slot == "抖音松叶蟹368套餐"
+    assert spec.requested_metrics == ("revenue",)
+    assert spec.store_scope == ("all" if expected_scope == "全部门店" else "single")
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        "最近7天全部门店库存预警",
+        "最近7天全部门店抖音松叶蟹368套餐为什么销量低",
+        "最近7天全部门店抖音松叶蟹368套餐营收和上个月对比",
+        "换成最近7天看天气对销量的影响",
+    ],
+)
+def test_trusted_context_dish_plan_still_rejects_non_lookup_shapes(query):
+    assert _trusted_context_dish_followup_spec(query) is None
+
+
 def test_dish_metric_button_followup_restores_entity_window_and_store_scope():
     parent = {
         "parent_query": "上个月全部门店招牌青花椒味(单人份)的成本如何",
