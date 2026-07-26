@@ -188,6 +188,10 @@ _TIME_SCOPED_INTENTS = frozenset({
 _STORE_TOKENS = ("门店", "分店", "店铺", "哪家店", "哪个店", "各店")
 _DISH_TOKENS = ("菜品", "菜系", "菜价", "哪道菜", "哪个菜", "单品")
 _INGREDIENT_TOKENS = ("食材", "原料", "配料", "领料", "领用")
+_INGREDIENT_COST_METRIC_RE = re.compile(
+    r"(?:食材|原材料|原料|配料)(?:的)?"
+    r"(?:单份|每份|每一份|一份|单位)?成本(?:率)?"
+)
 
 
 def _detect_dimensions(text: str) -> Tuple[str, ...]:
@@ -200,7 +204,12 @@ def _detect_dimensions(text: str) -> Tuple[str, ...]:
         dims.append("store")
     if any(tok in text for tok in _DISH_TOKENS) or "菜" in text:
         dims.append("dish")
-    if any(tok in text for tok in _INGREDIENT_TOKENS):
+    # ``食材成本`` is a metric label, not automatically a request to group by
+    # ingredient.  Keep real grain requests such as ``按食材拆分`` or
+    # ``哪些原料影响毛利`` intact while removing only the compound metric
+    # phrase before the dimension scan.
+    ingredient_dimension_text = _INGREDIENT_COST_METRIC_RE.sub("", text)
+    if any(tok in ingredient_dimension_text for tok in _INGREDIENT_TOKENS):
         dims.append("ingredient")
     return tuple(dims)
 
