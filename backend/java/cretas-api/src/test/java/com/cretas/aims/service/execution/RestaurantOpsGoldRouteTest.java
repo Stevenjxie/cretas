@@ -493,6 +493,37 @@ class RestaurantOpsGoldRouteTest {
     }
 
     @Test
+    @DisplayName("metric optimisation follow-ups stay on typed restaurant analysis context")
+    void metricOptimizationFollowUpsBypassOwnerAction() {
+        IntentConfigManagementService configService = mock(IntentConfigManagementService.class);
+        ReflectionTestUtils.setField(orchestrator, "configService", configService);
+        when(configService.resolveBusinessDomain("DEMO_REST")).thenReturn("RESTAURANT");
+
+        for (String question : new String[]{
+                "销量怎么优化",
+                "第一名的毛利如何提升",
+                "这个菜的成本怎么改善"
+        }) {
+            Boolean shouldRoute = ReflectionTestUtils.invokeMethod(
+                    orchestrator,
+                    "shouldRouteRestaurantOwnerAction",
+                    "DEMO_REST",
+                    question,
+                    Map.of("ownerActionSessionId", "stale-owner-context"));
+
+            assertThat(shouldRoute).as(question).isFalse();
+        }
+
+        Boolean realOwnerPlan = ReflectionTestUtils.invokeMethod(
+                orchestrator,
+                "shouldRouteRestaurantOwnerAction",
+                "DEMO_REST",
+                "本周营业额下降，仓管、厨师长和前台分别要做什么？",
+                Map.of());
+        assertThat(realOwnerPlan).isTrue();
+    }
+
+    @Test
     @DisplayName("owner action route refuses manufacturing factories even with owner context")
     void ownerActionRouteRefusesFactoryDomainEvenWithContext() {
         IntentConfigManagementService configService = mock(IntentConfigManagementService.class);
