@@ -6,8 +6,13 @@
           规则 #{{ index + 1 }} — {{ RULE_TYPE_LABELS[localRule.ruleType] }}
         </span>
         <div class="rule-actions">
-          <el-switch v-model="localRule.enabled" size="small" @change="emitChange" />
-          <el-button size="small" type="primary" link @click="$emit('test')">测试</el-button>
+          <el-switch
+            v-model="localRule.enabled"
+            size="small"
+            aria-label="启用规则"
+            @change="emitChange"
+          />
+          <el-button v-if="!businessMode" size="small" type="primary" link @click="$emit('test')">测试</el-button>
           <el-button size="small" type="danger" link @click="$emit('delete')">删除</el-button>
         </div>
       </div>
@@ -15,9 +20,13 @@
 
     <el-form label-position="top" size="small" @submit.prevent>
       <el-form-item label="规则类型">
-        <el-select v-model="localRule.ruleType" @change="onRuleTypeChange">
+        <el-select
+          v-model="localRule.ruleType"
+          :disabled="businessMode && localRule.ruleType === 'SPEL_CUSTOM'"
+          @change="onRuleTypeChange"
+        >
           <el-option
-            v-for="t in RULE_TYPES"
+            v-for="t in availableRuleTypes"
             :key="t"
             :value="t"
             :label="RULE_TYPE_LABELS[t]"
@@ -57,20 +66,20 @@
         <el-form-item :label="localRule.ruleType === 'DEPT_MATCH' ? '部门列表' : '角色列表'">
           <el-select
             :model-value="(expr as InListExpr).in || []"
-            multiple filterable allow-create
-            placeholder="选择或输入"
+            multiple filterable
+            placeholder="请选择…"
             style="width: 100%"
             @change="(v: string[]) => updateExpr({ in: v })"
           >
             <el-option
-              v-for="opt in (localRule.ruleType === 'DEPT_MATCH' ? DEPT_OPTIONS : ROLE_OPTIONS)"
-              :key="opt"
-              :value="opt"
-              :label="opt"
+              v-for="opt in (localRule.ruleType === 'DEPT_MATCH' ? DEPT_OPTIONS : roleOptions)"
+              :key="opt.value"
+              :value="opt.value"
+              :label="opt.label"
             />
           </el-select>
         </el-form-item>
-        <el-form-item label="字段名 (可选)" v-if="(expr as InListExpr).field">
+        <el-form-item v-if="(expr as InListExpr).field && !businessMode" label="字段名 (可选)">
           <el-input
             :model-value="(expr as InListExpr).field"
             placeholder="默认 department / role"
@@ -80,7 +89,7 @@
       </template>
 
       <!-- SPEL_CUSTOM -->
-      <template v-if="localRule.ruleType === 'SPEL_CUSTOM'">
+      <template v-if="localRule.ruleType === 'SPEL_CUSTOM' && !businessMode">
         <el-form-item label="SpEL 表达式">
           <el-input
             type="textarea" :rows="3"
@@ -91,6 +100,14 @@
  <div class="hint"> 受 sandbox 保护; 拒绝 T()/Runtime/Process/Class/@/new</div>
         </el-form-item>
       </template>
+      <el-alert
+        v-else-if="localRule.ruleType === 'SPEL_CUSTOM'"
+        type="warning"
+        :closable="false"
+        show-icon
+        title="这是一条高级判断规则"
+        description="业务配置页不会展示或修改表达式。需要调整时请由平台管理员在高级模式处理。"
+      />
 
       <el-divider />
 
@@ -157,28 +174,34 @@ import {
   type SpelExpr,
 } from '@/api/workflowRule'
 import type { ApprovalWorkflowNode } from '@/api/approvalWorkflow'
+import type { DirectoryOption } from '../lib/approvalDirectory'
 
 const props = defineProps<{
   rule: WorkflowRuleDTO
   index: number
   candidateNodes: ApprovalWorkflowNode[]
+  businessMode?: boolean
+  roleOptions: DirectoryOption[]
 }>()
 
 const emit = defineEmits<{ change: [rule: WorkflowRuleDTO]; delete: []; test: [] }>()
 
 const RULE_TYPES: WorkflowRuleType[] = ['AMOUNT_THRESHOLD', 'DEPT_MATCH', 'ROLE_MATCH', 'SPEL_CUSTOM']
+const availableRuleTypes = computed(() => (
+  props.businessMode
+    ? RULE_TYPES.filter((type) => type !== 'SPEL_CUSTOM')
+    : RULE_TYPES
+))
 
-const DEPT_OPTIONS = ['finance', 'purchasing', 'sales', 'production', 'quality', 'warehouse', 'hr']
-const ROLE_OPTIONS = [
-  'factory_super_admin',
-  'factory_admin',
-  'department_admin',
-  'department_manager',
-  'operator',
-  'warehouse_manager',
-  'quality_manager',
+const DEPT_OPTIONS = [
+  { value: 'finance', label: '财务部' },
+  { value: 'purchasing', label: '采购部' },
+  { value: 'sales', label: '销售部' },
+  { value: 'production', label: '生产部' },
+  { value: 'quality', label: '质量部' },
+  { value: 'warehouse', label: '仓储部' },
+  { value: 'hr', label: '人事部' },
 ]
-
 // 拷贝一份做 reactive local edit
 const localRule = reactive<WorkflowRuleDTO>({ ...props.rule })
 

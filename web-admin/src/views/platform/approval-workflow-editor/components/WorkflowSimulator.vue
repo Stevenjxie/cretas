@@ -38,7 +38,7 @@
           <div class="pending-info">
             <strong>{{ pending.label }}</strong>
             <span class="hint">
-              {{ pending.approverRoles.join(' / ') || '(无角色限制)' }}
+              {{ pending.approverSummary }}
               · 会签 {{ pending.currentApprovers }}/{{ pending.requiredApprovers }}
             </span>
           </div>
@@ -194,7 +194,7 @@ const statusTagType = computed<'success' | 'danger' | 'warning' | 'info' | 'prim
 interface PendingDisplay {
   id: string
   label: string
-  approverRoles: string[]
+  approverSummary: string
   requiredApprovers: number
   currentApprovers: number
 }
@@ -207,10 +207,26 @@ const pendingNodes = computed<PendingDisplay[]>(() => {
     if (!node || node.type !== 'approval') continue
     const recs = ctx.value.nodeHistory.get(nodeId) ?? []
     const currentApprovers = recs.filter(r => r.decision === 'APPROVED').length
+    const roleLabels = (node.config?.approverRoleLabels as string[]) ?? []
+    const userLabels = (node.config?.approverUserLabels as string[]) ?? []
+    const roleCount = ((node.config?.approverRoles as string[]) ?? []).length
+    const userCount = ((node.config?.approverUserIds as string[]) ?? []).length
+    const approverSummary = [
+      roleLabels.length > 0
+        ? roleLabels.join(' / ')
+        : roleCount > 0
+          ? `${roleCount} 个审批角色`
+          : '',
+      userLabels.length > 0
+        ? userLabels.join(' / ')
+        : userCount > 0
+          ? `${userCount} 位指定审批人`
+          : '',
+    ].filter(Boolean).join(' · ') || '无角色限制'
     out.push({
       id: nodeId,
       label: node.label ?? nodeId,
-      approverRoles: (node.config?.approverRoles as string[]) ?? [],
+      approverSummary,
       requiredApprovers: Number(node.config?.requiredApprovers ?? 1),
       currentApprovers,
     })

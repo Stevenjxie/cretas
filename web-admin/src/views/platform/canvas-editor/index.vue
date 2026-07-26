@@ -5,7 +5,17 @@
     <el-result icon="warning" title="请使用更宽的屏幕" sub-title="Canvas 编辑器需要至少 1024px 宽度" />
   </div>
 
-  <!-- Onboarding or Editor -->
+  <!-- 审批业务从系统设置进入时使用独立业务画布，不再套通用 Canvas 左右侧栏。 -->
+  <ApprovalWorkflowEditor
+    v-else-if="approvalBusinessLocked"
+    :embedded="true"
+    :initial-decision-type="initialApprovalDecisionType"
+    :initial-workflow-id="initialApprovalWorkflowId"
+    :lock-decision-type="true"
+    @exit-context="exitApprovalBusiness"
+  />
+
+  <!-- Onboarding or generic Editor -->
   <OnboardingWizard v-else-if="isOnboarding" @complete="isOnboarding = false" />
 
   <div v-else class="canvas-editor">
@@ -19,11 +29,19 @@
     <div class="canvas-body">
       <!-- Left: Module Tree (collapsible) -->
       <aside class="canvas-left" :class="{ collapsed: leftCollapsed }" :style="{ width: leftCollapsed ? '32px' : '180px' }">
-        <div v-if="leftCollapsed" class="collapse-label" @click="toggleLeft">▶ 模块</div>
+        <button
+          v-if="leftCollapsed"
+          type="button"
+          class="collapse-label"
+          aria-label="展开模块面板"
+          @click="toggleLeft"
+        >
+          ▶ 模块
+        </button>
         <template v-else>
           <div class="panel-header">
             <span class="panel-title">模块</span>
-            <span class="collapse-btn" @click="toggleLeft">◀</span>
+            <button type="button" class="collapse-btn" aria-label="收起模块面板" @click="toggleLeft">◀</button>
           </div>
           <ModuleTree :factory-id="factoryId" :selected-module="selectedModule" @select="selectedModule = $event" />
         </template>
@@ -41,6 +59,9 @@
             v-else-if="activeTab === 'approval'"
             :embedded="true"
             :initial-decision-type="initialApprovalDecisionType"
+            :initial-workflow-id="initialApprovalWorkflowId"
+            :lock-decision-type="approvalBusinessLocked"
+            @exit-context="exitApprovalBusiness"
           />
           <TriggerChainDesigner v-else-if="activeTab === 'triggers'" :factory-id="factoryId" />
           <ValidationRulePanel v-else-if="activeTab === 'validation'" :factory-id="factoryId" :module-code="selectedModule" />
@@ -94,18 +115,38 @@
         </div>
 
         <!-- Diff viewer -->
-        <ConfigDiffViewer v-if="pendingChanges.length > 0" :changes="pendingChanges" @apply="applyChanges" @discard="pendingChanges = []" />
+        <ConfigDiffViewer
+          v-if="pendingChanges.length > 0"
+          :changes="pendingChanges"
+          :show-technical-values="!approvalBusinessLocked"
+          @apply="applyChanges"
+          @discard="pendingChanges = []"
+        />
 
-        <StatusBar :is-complete="true" @show-json="showSchemaPreview = true" @show-history="showVersionHistory = true" @show-publish-window="showPublishWindow = true" />
+        <StatusBar
+          :is-complete="true"
+          :hide-technical-details="approvalBusinessLocked"
+          @show-json="showSchemaPreview = true"
+          @show-history="showVersionHistory = true"
+          @show-publish-window="showPublishWindow = true"
+        />
       </main>
 
       <!-- Right: AI Panel (collapsible) -->
       <aside class="canvas-right" :class="{ collapsed: rightCollapsed }" :style="{ width: rightCollapsed ? '32px' : '300px' }">
-        <div v-if="rightCollapsed" class="collapse-label right" @click="toggleRight">◀ AI</div>
+        <button
+          v-if="rightCollapsed"
+          type="button"
+          class="collapse-label right"
+          aria-label="展开 AI 助手"
+          @click="toggleRight"
+        >
+          ◀ AI
+        </button>
         <template v-else>
           <div class="panel-header">
             <span class="panel-title">AI 助手</span>
-            <span class="collapse-btn" @click="toggleRight">▶</span>
+            <button type="button" class="collapse-btn" aria-label="收起 AI 助手" @click="toggleRight">▶</button>
           </div>
           <AIChatPanel :factory-id="factoryId" :selected-module="selectedModule" @apply-diff="handleAIDiff" />
         </template>
@@ -116,7 +157,7 @@
     <ReviewDialog v-if="showApproveDialog" mode="approve" @confirm="doApprove" @cancel="showApproveDialog = false" />
     <ReviewDialog v-if="showRejectDialog" mode="reject" @confirm="doReject" @cancel="showRejectDialog = false" />
     <PublishWindowDialog v-if="showPublishWindow" :factory-id="factoryId" @close="showPublishWindow = false" />
-    <el-drawer v-model="showSchemaPreview" title="JSON 预览" size="500px">
+    <el-drawer v-if="!approvalBusinessLocked" v-model="showSchemaPreview" title="JSON 预览" size="500px">
       <SchemaPreview :factory-id="factoryId" :module-code="selectedModule" />
     </el-drawer>
     <el-drawer v-model="showVersionHistory" title="版本历史" size="400px">
@@ -127,13 +168,13 @@
 
 <script setup lang="ts">
 import { computed, ref, onMounted, onUnmounted, watch } from 'vue'
-import { useRoute } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { useCanvasEditor } from './composables/useCanvasEditor'
 import { aiApplyDiffs, submitForReview, approveConfig, rejectConfig, publishNow as apiPublishNow, cancelApproval as apiCancelApproval } from '@/api/canvasApi'
 import { saveModuleConfig } from '@/api/configApi'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import type { ConfigDiff } from '@/types/canvas'
-import type { DecisionType } from '@/api/approvalWorkflow'
+import { isDecisionType, type DecisionType } from '@/api/approvalWorkflow'
 
 // Components
 import CanvasHeader from './components/CanvasHeader.vue'
@@ -187,13 +228,30 @@ const {
   loadVersion, applyResponsive, clearDirty,
 } = useCanvasEditor()
 const route = useRoute()
+const router = useRouter()
 
 const initialApprovalDecisionType = computed<DecisionType | undefined>(() => {
   const value = Array.isArray(route.query.decisionType)
     ? route.query.decisionType[0]
     : route.query.decisionType
-  return value === 'SALES_ORDER_APPROVAL' ? value : undefined
+  return isDecisionType(value) ? value : undefined
 })
+
+const initialApprovalWorkflowId = computed<string | undefined>(() => {
+  const value = Array.isArray(route.query.workflowId)
+    ? route.query.workflowId[0]
+    : route.query.workflowId
+  return typeof value === 'string' && value.trim() ? value : undefined
+})
+
+const approvalBusinessLocked = computed(() => (
+  initialApprovalDecisionType.value !== undefined
+  && route.query.source === 'approval-chains'
+))
+
+async function exitApprovalBusiness() {
+  await router.push({ name: 'SystemApprovalChains' })
+}
 
 function applyRouteDeepLink() {
   const tab = Array.isArray(route.query.tab) ? route.query.tab[0] : route.query.tab
@@ -206,7 +264,7 @@ function applyRouteDeepLink() {
 }
 
 watch(
-  () => [route.query.tab, route.query.decisionType],
+  () => [route.query.tab, route.query.decisionType, route.query.workflowId],
   applyRouteDeepLink,
   { immediate: true },
 )
@@ -359,9 +417,35 @@ onUnmounted(() => {
 
 .panel-header { display:flex; justify-content:space-between; align-items:center; padding:8px 12px; font-size:12px; }
 .panel-title { font-weight:bold; text-transform:uppercase; letter-spacing:1px; color:var(--el-text-color-secondary); font-size:10px; }
-.collapse-btn { cursor:pointer; color:var(--el-text-color-secondary); font-size:12px; }
+.collapse-btn {
+  padding: 4px;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+  color: var(--el-text-color-secondary);
+  font-size: 12px;
+}
 .collapse-btn:hover { color:var(--el-text-color-primary); }
-.collapse-label { writing-mode:vertical-lr; text-align:center; padding:12px 0; cursor:pointer; font-size:11px; color:var(--el-text-color-secondary); height:100%; display:flex; align-items:center; justify-content:center; }
+.collapse-btn:focus-visible,
+.collapse-label:focus-visible {
+  outline: 2px solid var(--el-color-primary);
+  outline-offset: -2px;
+}
+.collapse-label {
+  width: 100%;
+  height: 100%;
+  padding: 12px 0;
+  border: 0;
+  background: transparent;
+  writing-mode: vertical-lr;
+  text-align: center;
+  cursor: pointer;
+  font-size: 11px;
+  color: var(--el-text-color-secondary);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
 .collapse-label:hover { color:var(--el-text-color-primary); background:var(--el-fill-color-light); }
 .collapse-label.right { writing-mode:vertical-rl; }
 

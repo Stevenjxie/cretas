@@ -66,6 +66,69 @@ public class CanvasAIController {
             Selected node id: %s
             """;
 
+    private static final String APPROVAL_WORKFLOW_MODULE = "approval_workflow_config";
+    private static final String APPROVAL_WORKFLOW_REPLY = "当前审批草稿已更新";
+    private static final String APPROVAL_WORKFLOW_SYSTEM_PROMPT = """
+            You are a preview-only approval Workflow draft editor. Return ONLY one JSON object.
+            Never call tools, APIs, save, publish, enable, archive, approve, reject, or change
+            running approval instances. The frontend applies the result only to the reversible
+            local DRAFT.
+
+            Output shape:
+            {
+              "name": "<friendly workflow name>",
+              "startNodeId": "<id of the only start node>",
+              "nodes": [
+                {
+                  "id": "<preserve existing id; new ids use ai_<short_key>>",
+                  "type": "start|approval|condition|parallel|join|notify|end",
+                  "label": "<friendly Chinese label>",
+                  "config": {
+                    "approverRoles": ["<exact role code from directory>"],
+                    "approverUserIds": ["<exact user id from directory>"],
+                    "requiredApprovers": 1,
+                    "timeoutMinutes": 0,
+                    "departmentIds": [],
+                    "delegateUserId": "<exact user id from directory>",
+                    "notifyRoles": ["<exact role code from directory>"],
+                    "channels": ["wechat|dingtalk|email"],
+                    "mode": "ALL|N_OF_M|ANY",
+                    "n": 2,
+                    "outcome": "APPROVED|REJECTED|TIMEOUT|CANCELLED",
+                    "description": "<friendly condition description>"
+                  }
+                }
+              ],
+              "edges": [
+                {
+                  "id": "<preserve existing id; new ids use ai_edge_<short_key>>",
+                  "source": "<node id>",
+                  "target": "<node id>",
+                  "label": "<friendly branch label>",
+                  "priority": 0,
+                  "amountThreshold": 50000,
+                  "default": false
+                }
+              ]
+            }
+
+            Rules:
+            - Return the complete desired draft, preserving every unchanged node and edge.
+            - Existing ids must remain stable. Do not invent role codes, user ids, or department ids.
+            - Use only directory identities included in context. If the requested person or role
+              is absent, return {"error":"<clear Chinese reason>"}.
+            - Never output raw JSON expressions, SpEL, UUIDs for people, hashes, or database code.
+              For amount routing use amountThreshold/default only.
+            - Keep exactly one start node, at least one end node, no duplicate edges, no cycles,
+              and no edges entering start or leaving end.
+            - Omit config keys irrelevant to the node type. Preserve advanced fields that the user
+              did not ask to change by keeping the existing node config.
+            - If a selected Cell is present and the request says "this/current/selected", modify it.
+
+            Current approval draft and allowed directories:
+            %s
+            """;
+
     // 长久方案 (弃补丁): LLM 只出「语义规格」(rawMaterials + steps), 不再拼底层图补丁。
     // 前端确定性编译器 (复用 createProcessBranch) 把规格建成合法图 —— LLM 再也不碰 node/edge/id。
     private static final String PRODUCT_PROCESS_WORKFLOW_SPEC_PROMPT = """
@@ -195,6 +258,9 @@ public class CanvasAIController {
                 return ApiResponse.success(handleWorkProcessCatalogChat(
                         request, authenticatedPrincipal(factoryId, authorization)));
             }
+            if (APPROVAL_WORKFLOW_MODULE.equals(request.getModuleCode())) {
+                return ApiResponse.success(handleApprovalWorkflowConfigChat(request));
+            }
 
             Map<String, Object> toolContext = buildToolContext(factoryId, authorization);
             if (PRODUCT_PROCESS_WORKFLOW_MODULE.equals(request.getModuleCode())) {
@@ -227,6 +293,50 @@ public class CanvasAIController {
         }
 
         return ApiResponse.success(response);
+    }
+
+    private AIResponse handleApprovalWorkflowConfigChat(AIRequest request) throws Exception {
+        Map<String, Object> requestParams = request.getParams() != null
+                ? request.getParams()
+                : Map.of();
+        Map<String, Object> context = readStringObjectMap(requestParams.get("context"));
+        String prompt = APPROVAL_WORKFLOW_SYSTEM_PROMPT.formatted(
+                objectMapper.writeValueAsString(context));
+        String llmResponse = dashScopeClient.chatLowTemp(prompt, request.getMessage());
+        Map<String, Object> spec;
+        try {
+            spec = objectMapper.readValue(
+                    extractJsonObject(llmResponse), new TypeReference<Map<String, Object>>() {});
+        } catch (Exception parseError) {
+            return approvalWorkflowFailureResponse("AI 未能生成可用的审批草稿，请换一种说法重试");
+        }
+        if (spec.get("error") != null) {
+            return approvalWorkflowFailureResponse(Objects.toString(spec.get("error")));
+        }
+        if (!(spec.get("nodes") instanceof List<?> nodeList) || nodeList.isEmpty()
+                || !(spec.get("edges") instanceof List<?>)
+                || !(spec.get("startNodeId") instanceof String startNodeId)
+                || startNodeId.isBlank()) {
+            return approvalWorkflowFailureResponse("AI 返回的审批草稿结构不完整，请把审批顺序说清楚后重试");
+        }
+
+        AIResponse response = new AIResponse();
+        response.setApplied(false);
+        response.setReply(APPROVAL_WORKFLOW_REPLY);
+        response.setDiffs(List.of(Map.of(
+                "type", "APPROVAL_WORKFLOW_SPEC",
+                "tool", "canvas_approval_workflow_draft",
+                "params", Map.of("spec", spec),
+                "description", APPROVAL_WORKFLOW_REPLY)));
+        return response;
+    }
+
+    private AIResponse approvalWorkflowFailureResponse(String message) {
+        AIResponse response = new AIResponse();
+        response.setApplied(false);
+        response.setDiffs(List.of());
+        response.setReply(message);
+        return response;
     }
 
     /**

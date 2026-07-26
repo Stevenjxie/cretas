@@ -1,9 +1,7 @@
 <template>
   <div class="wf-node end-node" :class="['outcome-' + outcomeClass, { selected }]">
     <Handle type="target" :position="Position.Top" />
-    <div class="node-icon">{{ outcomeIcon }}</div>
     <div class="node-label">{{ data?.label || outcomeLabel }}</div>
-    <div class="outcome-tag">{{ outcomeLabel }}</div>
   </div>
 </template>
 
@@ -18,14 +16,6 @@ const props = defineProps<{
 
 const outcome = computed(() => String(props.data?.config?.outcome ?? 'APPROVED'))
 const outcomeClass = computed(() => outcome.value.toLowerCase())
-const outcomeIcon = computed(() => {
-  switch (outcome.value) {
- case 'REJECTED': return ''
-    case 'TIMEOUT': return '⏱'
-    case 'CANCELLED': return '⊘'
- default: return ''
-  }
-})
 const outcomeLabel = computed(() => {
   switch (outcome.value) {
     case 'REJECTED': return '拒绝'
@@ -38,21 +28,39 @@ const outcomeLabel = computed(() => {
 
 <style scoped>
 .wf-node {
-  width: 100px; padding: 10px 6px; border-radius: 6px;
-  display: flex; flex-direction: column; align-items: center;
-  color: #fff;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
-  border: 3px solid transparent;
-  transition: all 0.15s;
+  box-sizing: border-box;
+  display: flex;
+  width: 136px;
+  min-height: 40px;
+  align-items: center;
+  justify-content: center;
+  padding: 8px 18px;
+  border: 1px solid #cbd6e2;
+  border-radius: 999px;
+  background: #fff;
+  box-shadow: 0 2px 6px rgb(31 62 92 / 8%);
+  color: #1a2332;
+  transition: border-color 0.15s, box-shadow 0.15s;
 }
-.wf-node.selected { border-color: #fff; }
-.wf-node.outcome-approved { background: #67c23a; box-shadow: 0 2px 8px rgba(103, 194, 58, 0.4); }
-.wf-node.outcome-approved.selected { box-shadow: 0 0 0 3px #67c23a, 0 2px 12px rgba(0, 0, 0, 0.2); }
-.wf-node.outcome-rejected { background: #f56c6c; box-shadow: 0 2px 8px rgba(245, 108, 108, 0.4); }
-.wf-node.outcome-rejected.selected { box-shadow: 0 0 0 3px #f56c6c, 0 2px 12px rgba(0, 0, 0, 0.2); }
-.wf-node.outcome-timeout { background: #e6a23c; box-shadow: 0 2px 8px rgba(230, 162, 60, 0.4); }
-.wf-node.outcome-cancelled { background: #909399; box-shadow: 0 2px 8px rgba(144, 147, 153, 0.4); }
-.node-icon { font-size: 18px; line-height: 1; }
-.node-label { font-size: 12px; font-weight: 600; margin-top: 2px; }
-.outcome-tag { font-size: 10px; opacity: 0.85; font-family: monospace; margin-top: 1px; }
+.wf-node.selected {
+  border-color: #1b65a8;
+  box-shadow: 0 0 0 3px rgb(27 101 168 / 16%), 0 4px 10px rgb(31 62 92 / 12%);
+}
+.wf-node.outcome-rejected { border-color: #e6b0b0; }
+.wf-node.outcome-timeout { border-color: #e7c990; }
+.wf-node.outcome-cancelled { border-color: #bfc7d1; }
+.node-label {
+  overflow: hidden;
+  font-size: 13px;
+  font-weight: 650;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+:deep(.vue-flow__handle) {
+  width: 8px;
+  height: 8px;
+  border: 2px solid #fff;
+  background: #2fa66a;
+  box-shadow: 0 0 0 1px #8aa0b5;
+}
 </style>

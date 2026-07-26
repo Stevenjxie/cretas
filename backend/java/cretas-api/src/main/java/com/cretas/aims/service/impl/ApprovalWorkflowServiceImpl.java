@@ -93,6 +93,11 @@ public class ApprovalWorkflowServiceImpl implements ApprovalWorkflowService {
             throw new BusinessException(403, "无权修改其他工厂的工作流")
                     .withHint("请切换到该工作流所属的工厂后再操作");
         }
+        if (!"draft".equals(existing.getPublishStatus())) {
+            throw new BusinessException(409, "已发布或历史审批版本不可原地修改")
+                    .withCode("OA_WORKFLOW_IMMUTABLE")
+                    .withHint("请先克隆为新草稿，再修改并发布新版本");
+        }
         assertNoRunningInstances(factoryId, id);
 
         // PATCH 语义: null 字段不动
@@ -110,14 +115,6 @@ public class ApprovalWorkflowServiceImpl implements ApprovalWorkflowService {
             throw new BusinessException(400, "工作流校验失败: " + validation.get("errors"))
                     .withHint("更新后的 graph 校验未通过")
                     .withHintTarget("nodes");
-        }
-
-        // 改动 published workflow → 自动 revert 回 draft (避免线上立即生效)
-        if ("published".equals(existing.getPublishStatus())) {
-            existing.setPublishStatus("draft");
-            existing.setVersion(existing.getVersion() + 1);
-            log.info("已发布工作流被修改, 自动 revert 到 draft - id={}, newVersion={}",
-                    id, existing.getVersion());
         }
 
         return workflowRepository.save(existing);
@@ -175,6 +172,49 @@ public class ApprovalWorkflowServiceImpl implements ApprovalWorkflowService {
 
     @Override
     @Transactional
+    public ApprovalWorkflow cloneAsDraft(String factoryId, String id) {
+        ApprovalWorkflow source = workflowRepository.findByFactoryIdAndIdForUpdate(factoryId, id)
+                .orElseThrow(() -> new EntityNotFoundException("ApprovalWorkflow", id));
+        if (!source.getFactoryId().equals(factoryId)) {
+            throw new BusinessException(403, "无权克隆其他工厂的工作流");
+        }
+
+        List<ApprovalWorkflow> sameType = workflowRepository
+                .findByFactoryIdAndDecisionTypeOrderByPriorityDesc(
+                        factoryId, source.getDecisionType());
+        Optional<ApprovalWorkflow> existingDraft = sameType.stream()
+                .filter(workflow -> "draft".equals(workflow.getPublishStatus()))
+                .findFirst();
+        if (existingDraft.isPresent()) {
+            return existingDraft.get();
+        }
+
+        int nextVersion = sameType.stream()
+                .map(ApprovalWorkflow::getVersion)
+                .filter(Objects::nonNull)
+                .max(Integer::compareTo)
+                .orElse(0) + 1;
+
+        ApprovalWorkflow draft = new ApprovalWorkflow();
+        draft.setFactoryId(factoryId);
+        draft.setDecisionType(source.getDecisionType());
+        draft.setName(source.getName() + " - 草稿 v" + nextVersion);
+        draft.setDescription(source.getDescription());
+        draft.setNodesJson(source.getNodesJson());
+        draft.setEdgesJson(source.getEdgesJson());
+        draft.setStartNodeId(source.getStartNodeId());
+        draft.setVersion(nextVersion);
+        draft.setPublishStatus("draft");
+        draft.setEnabled(false);
+        draft.setPriority(source.getPriority());
+        ApprovalWorkflow saved = workflowRepository.save(draft);
+        log.info("审批工作流克隆为独立草稿 - sourceId={}, draftId={}, version={}",
+                id, saved.getId(), nextVersion);
+        return saved;
+    }
+
+    @Override
+    @Transactional
     public ApprovalWorkflow publishDraft(String factoryId, String id) {
         log.info("发布审批工作流 - factoryId={}, id={}", factoryId, id);
 
@@ -198,6 +238,7 @@ public class ApprovalWorkflowServiceImpl implements ApprovalWorkflowService {
         }
 
         workflow.setPublishStatus("published");
+        workflow.setEnabled(true);
         return workflowRepository.save(workflow);
     }
 
