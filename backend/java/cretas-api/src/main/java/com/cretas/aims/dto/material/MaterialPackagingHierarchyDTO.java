@@ -1,5 +1,6 @@
 package com.cretas.aims.dto.material;
 
+import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
@@ -8,10 +9,11 @@ import lombok.NoArgsConstructor;
 
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
+import java.util.List;
 
 /**
- * 原料包装层级 DTO.
- * 一级必填; 二/三级可选 (DB CHECK 约束保证配对完整性).
+ * 原料包装换算 DTO.
+ * 库存基本单位必填；动态包装规则优先，旧二/三级字段仅保留兼容。
  *
  * @since 2026-05-06
  */
@@ -34,6 +36,10 @@ public class MaterialPackagingHierarchyDTO {
     private String level3Unit;
 
     private String notes;
+
+    /** 每条采购包装单位直接换算到库存基本单位。 */
+    @Valid
+    private List<MaterialPackagingSpecDTO> packagingSpecs;
 
     private LocalDateTime createdAt;
     private LocalDateTime updatedAt;

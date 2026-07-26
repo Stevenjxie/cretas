@@ -101,10 +101,13 @@ describe('material type family source contract', () => {
     expect(source).toContain('label="入库计量单位"');
     expect(source).toContain('新建默认 kg（公斤）');
     expect(source).toContain('v-if="!isPackagingMaterial" label="储存类型"');
-    expect(source).toContain('v-if="isPackagingMaterial" :label="form.taxTreatment');
+    expect(source).toContain('<template v-if="canViewPrice">');
     expect(source).toContain('<template v-if="isPackagingMaterial">');
-    expect(source).toContain('包装层级（包材专属，可选）');
-    expect(source).toContain('原料/辅料完全不发送 hierarchy');
+    expect(source).toContain('包材专属字段（选填）');
+    expect(source).toContain('采购与库存单位换算（可选）');
+    expect(source).toContain('v-for="(rule, index) in packagingRules"');
+    expect(source).toContain('packagingSpecs: submittedPackagingRules');
+    expect(source).not.toContain('包装层级（包材专属，可选）');
   });
 
   it('matches historical L3 under the selected L1/L2 and reuses the real dictionary create endpoint', () => {

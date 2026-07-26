@@ -2,8 +2,10 @@ package com.cretas.aims.service.uom;
 
 import com.cretas.aims.entity.MaterialPackagingHierarchy;
 import com.cretas.aims.entity.RawMaterialType;
+import com.cretas.aims.entity.material.MaterialPackagingSpec;
 import com.cretas.aims.repository.MaterialPackagingHierarchyRepository;
 import com.cretas.aims.repository.RawMaterialTypeRepository;
+import com.cretas.aims.repository.material.MaterialPackagingSpecRepository;
 import com.cretas.aims.service.UnitConversionService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -33,6 +35,7 @@ import static org.mockito.Mockito.when;
 class MaterialUomConverterTest {
 
     private MaterialPackagingHierarchyRepository packagingRepo;
+    private MaterialPackagingSpecRepository packagingSpecRepo;
     private RawMaterialTypeRepository materialRepo;
     private MaterialUomConverter converter;
 
@@ -42,9 +45,10 @@ class MaterialUomConverterTest {
     @BeforeEach
     void setUp() {
         packagingRepo = mock(MaterialPackagingHierarchyRepository.class);
+        packagingSpecRepo = mock(MaterialPackagingSpecRepository.class);
         materialRepo = mock(RawMaterialTypeRepository.class);
         // UnitConversionService 无状态, 用真实实例 (验证真实 g↔kg 算术)
-        converter = new MaterialUomConverter(packagingRepo, materialRepo,
+        converter = new MaterialUomConverter(packagingRepo, packagingSpecRepo, materialRepo,
                 com.cretas.aims.service.unit.TestUnitContractFactory.legacyFacade());
 
         // 默认: 物料查不到 (各 case 覆写)
@@ -97,6 +101,36 @@ class MaterialUomConverterTest {
                 converter.toComparableQuantity(MAT_ZHUSHE, new BigDecimal("50000"), "g", "箱");
         assertThat(r.isConverted()).isTrue();
         assertThat(r.getQuantity()).isEqualByComparingTo("5");
+    }
+
+    @Test
+    @DisplayName("动态包装规则: 4桶 × 18.5kg = 74kg")
+    void dynamicPackagingSpec_toBaseUnit() {
+        RawMaterialType material = new RawMaterialType();
+        material.setId(MAT_ZHUSHE);
+        material.setFactoryId("F006");
+        material.setName("冷冻猪舌");
+        material.setUnit("kg");
+        when(materialRepo.findById(MAT_ZHUSHE)).thenReturn(Optional.of(material));
+
+        MaterialPackagingSpec spec = new MaterialPackagingSpec();
+        spec.setId("SPEC-PAIL");
+        spec.setFactoryId("F006");
+        spec.setMaterialTypeId(MAT_ZHUSHE);
+        spec.setPackageUnit("桶");
+        spec.setBaseUnit("kg");
+        spec.setConversionFactor(new BigDecimal("18.5"));
+        spec.setActive(true);
+        when(packagingSpecRepo
+                .findByFactoryIdAndMaterialTypeIdAndActiveTrueOrderBySortOrderAscCreatedAtAsc(
+                        "F006", MAT_ZHUSHE))
+                .thenReturn(java.util.List.of(spec));
+
+        MaterialUomConverter.ConversionResult result =
+                converter.toComparableQuantity(MAT_ZHUSHE, new BigDecimal("4"), "桶", "kg");
+
+        assertThat(result.isConverted()).isTrue();
+        assertThat(result.getQuantity()).isEqualByComparingTo("74");
     }
 
     @Test

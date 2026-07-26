@@ -92,7 +92,9 @@ class MaterialBatchServiceImplUomGuardTest {
         MaterialPackagingHierarchyRepository packagingRepo =
                 mock(MaterialPackagingHierarchyRepository.class);
         when(packagingRepo.findByMaterialTypeId(anyString())).thenReturn(Optional.empty());
-        uomConverter = new MaterialUomConverter(packagingRepo, materialTypeRepository,
+        uomConverter = new MaterialUomConverter(
+                packagingRepo, mock(com.cretas.aims.repository.material.MaterialPackagingSpecRepository.class),
+                materialTypeRepository,
                 com.cretas.aims.service.unit.TestUnitContractFactory.legacyFacade());
         ReflectionTestUtils.setField(service, "materialUomConverter", uomConverter);
 
