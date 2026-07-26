@@ -2,6 +2,16 @@
 
 ## 已完成
 
+### `UX-INVENTORY-MATERIAL-CODE-COLUMN-20260726`
+
+- **状态**：`merged`
+- **Owner**：`/root`
+- **Base SHA**：`24d73dd70a9b2c9d8d7eaf5a7fe696df1704f1a0`
+- **功能提交 / PR**：`68e5e8787e3ff2a28b580dcda531e735940cab1d` / [#1825](https://github.com/Stevenjxie/cretas/pull/1825)
+- **实现**：分仓库存查询的原料库存表新增独立“物料编码”列，缺失编码显示 `-`；关键词搜索同步支持批次号、物料编码和物料名称。复用既有 `MaterialBatchDTO.materialCode`，未修改 Java、数据库或生产业务数据。
+- **验证**：合入最新 `origin/main` 后目标 Vitest `8 passed`，`vue-tsc -b` 与 Vite production build 通过，PR tracked secret scan 通过。
+- **发布边界**：用户已授权合并后执行 Web-only 生产部署；实际部署状态以 clean exact `origin/main` 的统一发布回执和 Web 四方哈希验收为准。
+
 ### `REL-CRETAS-OTA-OPTIMIZED-APK-20260726`
 
 - **状态**：`merged`
