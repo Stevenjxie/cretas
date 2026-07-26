@@ -9,6 +9,7 @@ import com.cretas.aims.entity.config.ApprovalWorkflow;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.exception.ResourceNotFoundException;
 import com.cretas.aims.service.ApprovalWorkflowService;
+import com.cretas.aims.service.ApprovalChainService;
 import com.cretas.aims.service.workflow.DecisionTypeMetadata;
 import com.cretas.aims.service.workflow.DecisionTypeMetadataRegistry;
 import io.swagger.v3.oas.annotations.Operation;
@@ -20,6 +21,8 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.Arrays;
+import java.util.ArrayList;
+import java.util.EnumMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -27,8 +30,8 @@ import java.util.Map;
 /**
  * Graph-native 审批工作流控制器.
  *
- * <p>Sprint 3 Track-I (C-APPROVAL-EDITOR-1) 引入. 跟 {@link ApprovalChainController}
- * 互补 — Chain 管 flat list (legacy), Workflow 管 graph (new).
+ * <p>Sprint 3 Track-I (C-APPROVAL-EDITOR-1) 引入。当前 Canvas graph 是新审批
+ * 请求的唯一运行时配置；旧 flat chain API 只保留只读迁移与审计能力。
  *
  * @author Cretas Team
  * @version 1.0.0
@@ -43,6 +46,7 @@ import java.util.Map;
 public class ApprovalWorkflowController {
 
     private final ApprovalWorkflowService approvalWorkflowService;
+    private final ApprovalChainService approvalChainService;
     private final DecisionTypeMetadataRegistry decisionTypeMetadataRegistry;
 
     // ==================== CRUD ====================
@@ -214,6 +218,66 @@ public class ApprovalWorkflowController {
                 factoryId, decisionTypeMetadataRegistry.size(), decisionTypeMetadataRegistry.getWiredCount());
         // 按 enum declaration order 输出 (EnumMap 保 enum order), admin UI 分类 group-by category
         return ApiResponse.success(List.copyOf(decisionTypeMetadataRegistry.getAll().values()));
+    }
+
+    /**
+     * One tenant-scoped source of truth for the approval-business directory.
+     *
+     * <p>LEGACY_MIGRATION_REQUIRED is deliberately different from NO_APPROVAL:
+     * an enabled old flat-chain must never be silently interpreted as direct flow.
+     */
+    @GetMapping("/cutover-readiness")
+    @Operation(summary = "获取审批画布切换状态")
+    public ApiResponse<List<Map<String, Object>>> getCutoverReadiness(
+            @PathVariable String factoryId) {
+        Map<DecisionType, List<ApprovalWorkflow>> workflowsByType =
+                new EnumMap<>(DecisionType.class);
+        for (ApprovalWorkflow workflow : approvalWorkflowService.getAllByFactory(factoryId)) {
+            workflowsByType.computeIfAbsent(
+                    workflow.getDecisionType(), ignored -> new ArrayList<>()).add(workflow);
+        }
+
+        List<Map<String, Object>> result = new ArrayList<>();
+        for (DecisionTypeMetadata metadata : decisionTypeMetadataRegistry.getAll().values()) {
+            DecisionType decisionType = metadata.getDecisionType();
+            List<ApprovalWorkflow> workflows =
+                    workflowsByType.getOrDefault(decisionType, List.of());
+            long activeCount = workflows.stream().filter(workflow ->
+                    "published".equals(workflow.getPublishStatus())
+                            && Boolean.TRUE.equals(workflow.getEnabled())).count();
+            boolean active = activeCount == 1;
+            boolean draft = workflows.stream().anyMatch(workflow ->
+                    "draft".equals(workflow.getPublishStatus()));
+            boolean legacyEnabled =
+                    approvalChainService.hasEnabledLegacyConfig(factoryId, decisionType);
+
+            String runtimeStatus;
+            if (!metadata.isWired()) {
+                runtimeStatus = "BUSINESS_NOT_WIRED";
+            } else if (activeCount > 1) {
+                runtimeStatus = "CANVAS_CONFLICT";
+            } else if (active) {
+                runtimeStatus = "CANVAS_ACTIVE";
+            } else if (legacyEnabled) {
+                runtimeStatus = "LEGACY_MIGRATION_REQUIRED";
+            } else if (draft) {
+                runtimeStatus = "CANVAS_DRAFT_ONLY";
+            } else {
+                runtimeStatus = "NO_APPROVAL";
+            }
+
+            Map<String, Object> item = new LinkedHashMap<>();
+            item.put("decisionType", decisionType);
+            item.put("moduleCode", metadata.getModuleCode());
+            item.put("wired", metadata.isWired());
+            item.put("runtimeStatus", runtimeStatus);
+            item.put("approvalRequired", active && metadata.isWired());
+            item.put("legacyEnabled", legacyEnabled);
+            item.put("workflowCount", workflows.size());
+            item.put("activeWorkflowCount", activeCount);
+            result.add(item);
+        }
+        return ApiResponse.success(result);
     }
 
     // ==================== Wire → entity mappers (Rule 17.1 pattern) ====================

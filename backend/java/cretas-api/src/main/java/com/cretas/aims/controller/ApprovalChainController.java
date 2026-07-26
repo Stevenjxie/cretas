@@ -94,11 +94,7 @@ public class ApprovalChainController {
     public ApiResponse<ApprovalChainConfig> createConfig(
             @PathVariable String factoryId,
             @Valid @RequestBody CreateApprovalChainConfigRequest request) {
-        log.info("创建审批链配置 - factoryId={}, name={}", factoryId, request.getName());
-        ApprovalChainConfig config = toApprovalChainConfig(request);
-        // 业务层 throw BusinessException(409 dup / 400 validation) by R67-FIX-3
-        ApprovalChainConfig created = approvalChainService.createConfig(factoryId, config);
-        return ApiResponse.success("审批链配置创建成功", created);
+        throw legacyMutationRemoved();
     }
 
     @RequirePermission({"system:read_write"})
@@ -108,10 +104,7 @@ public class ApprovalChainController {
             @PathVariable String factoryId,
             @PathVariable String configId,
             @Valid @RequestBody UpdateApprovalChainConfigRequest request) {
-        log.info("更新审批链配置 - factoryId={}, configId={}", factoryId, configId);
-        ApprovalChainConfig partial = toPartialApprovalChainConfig(request);
-        ApprovalChainConfig updated = approvalChainService.updateConfig(factoryId, configId, partial);
-        return ApiResponse.success("审批链配置更新成功", updated);
+        throw legacyMutationRemoved();
     }
 
     @RequirePermission({"system:read_write"})
@@ -120,9 +113,7 @@ public class ApprovalChainController {
     public ApiResponse<Void> deleteConfig(
             @PathVariable String factoryId,
             @PathVariable String configId) {
-        log.info("删除审批链配置 - factoryId={}, configId={}", factoryId, configId);
-        approvalChainService.deleteConfig(factoryId, configId);
-        return ApiResponse.successMessage("审批链配置已删除");
+        throw legacyMutationRemoved();
     }
 
     @RequirePermission({"system:read_write"})
@@ -132,9 +123,12 @@ public class ApprovalChainController {
             @PathVariable String factoryId,
             @PathVariable String configId,
             @RequestParam boolean enabled) {
-        log.info("切换审批链配置状态 - factoryId={}, configId={}, enabled={}", factoryId, configId, enabled);
+        if (enabled) {
+            throw legacyMutationRemoved();
+        }
+        log.info("停用旧版审批配置 - factoryId={}, configId={}", factoryId, configId);
         ApprovalChainConfig updated = approvalChainService.toggleEnabled(factoryId, configId, enabled);
-        return ApiResponse.success(enabled ? "配置已启用" : "配置已禁用", updated);
+        return ApiResponse.success("旧版审批配置已停用", updated);
     }
 
     // ==================== 审批判断 ====================
@@ -199,9 +193,7 @@ public class ApprovalChainController {
     public ApiResponse<Map<String, Object>> validateConfig(
             @PathVariable String factoryId,
             @Valid @RequestBody CreateApprovalChainConfigRequest request) {
-        log.info("验证审批链配置 - factoryId={}", factoryId);
-        ApprovalChainConfig config = toApprovalChainConfig(request);
-        return ApiResponse.success(approvalChainService.validateConfig(config));
+        throw legacyMutationRemoved();
     }
 
     @GetMapping("/decision-types")
@@ -210,6 +202,12 @@ public class ApprovalChainController {
             @PathVariable String factoryId) {
         log.info("获取所有决策类型 - factoryId={}", factoryId);
         return ApiResponse.success(DecisionType.values());
+    }
+
+    private BusinessException legacyMutationRemoved() {
+        return new BusinessException(410, "旧版审批配置已停止编辑")
+                .withCode("OA_LEGACY_CONFIG_READ_ONLY")
+                .withHint("请前往系统设置 → 审批业务，在对应业务的审批画布中配置");
     }
 
     // ===================================================================

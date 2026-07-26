@@ -32,8 +32,8 @@ import java.util.Objects;
  *
  * <p><b>wired flag</b>:
  * <ul>
- *   <li>true: 已有业务 service 调用 ApprovalWorkflowExecutor.start 触发审批 (e.g.
- *       LeaveRequestServiceImpl 调 LEAVE_APPROVAL). admin UI 显 "已接入" 标签.</li>
+ *   <li>true: 业务 service 会创建持久化的 Canvas Workflow 实例，并把实例状态投影回
+ *       业务单据。仅调用 {@code ApprovalChainService.requiresApproval} 做布尔判断不算接入.</li>
  *   <li>false: enum + UI dropdown 已上, 但业务 service 接入留 follow-up. admin UI
  *       显 "未接入业务 (审批可配置, 但需 service 代码改造才会触发)" 警示.</li>
  * </ul>
@@ -58,7 +58,7 @@ public class DecisionTypeMetadataRegistry {
                 .category(Category.PRODUCTION)
                 .defaultApproverRoles(List.of("factory_super_admin", "production_manager"))
                 .moduleCode("FORCE_INSERT")
-                .wired(true)  // UrgentInsertServiceImpl 已接入
+                .wired(false)  // 仅做 requiresApproval 布尔判断，尚未创建 Canvas 实例
                 .build());
 
         register(DecisionTypeMetadata.builder()
@@ -131,7 +131,7 @@ public class DecisionTypeMetadataRegistry {
                 .category(Category.QUALITY_MATERIAL)
                 .defaultApproverRoles(List.of("quality_manager", "factory_super_admin"))
                 .moduleCode("QUALITY_RELEASE")
-                .wired(true)  // QualityDispositionRuleServiceImpl 已接入
+                .wired(false)  // 仅做 requiresApproval 布尔判断，尚未创建 Canvas 实例
                 .build());
 
         register(DecisionTypeMetadata.builder()
@@ -141,7 +141,7 @@ public class DecisionTypeMetadataRegistry {
                 .category(Category.QUALITY_MATERIAL)
                 .defaultApproverRoles(List.of("quality_manager", "factory_super_admin"))
                 .moduleCode("QUALITY_EXCEPTION")
-                .wired(true)  // QualityDispositionRuleServiceImpl 已接入
+                .wired(false)  // 仅做 requiresApproval 布尔判断，尚未创建 Canvas 实例
                 .build());
 
         register(DecisionTypeMetadata.builder()
@@ -184,7 +184,7 @@ public class DecisionTypeMetadataRegistry {
                 .category(Category.PURCHASE_SUPPLIER)
                 .defaultApproverRoles(List.of("purchasing_manager", "quality_manager", "factory_super_admin"))
                 .moduleCode("SUPPLIER_APPROVAL")
-                .wired(true)  // SupplierAdmissionRuleServiceImpl 已接入
+                .wired(false)  // 尚未创建 Canvas 实例并投影供应商状态
                 .build());
 
         register(DecisionTypeMetadata.builder()
@@ -214,7 +214,7 @@ public class DecisionTypeMetadataRegistry {
                 .category(Category.PURCHASE_SUPPLIER)
                 .defaultApproverRoles(List.of("finance_manager", "factory_super_admin"))
                 .moduleCode("PURCHASE_PAYMENT")
-                .wired(false)
+                .wired(true)  // PaymentRequestServiceImpl 已创建/推进 PURCHASE_PAYMENT 实例
                 .build());
 
         register(DecisionTypeMetadata.builder()
@@ -300,7 +300,7 @@ public class DecisionTypeMetadataRegistry {
                 .category(Category.FINANCE_VOUCHER)
                 .defaultApproverRoles(List.of("department_admin", "finance_manager"))
                 .moduleCode("EXPENSE")
-                .wired(true)  // ExpenseRequestServiceImpl 已接入
+                .wired(false)  // 仅做 requiresApproval 布尔判断，尚未创建 Canvas 实例
                 .build());
 
         register(DecisionTypeMetadata.builder()
@@ -343,7 +343,7 @@ public class DecisionTypeMetadataRegistry {
                 .category(Category.HR_WAGE)
                 .defaultApproverRoles(List.of("department_admin", "hr_manager"))
                 .moduleCode("LEAVE")
-                .wired(true)  // LeaveRequestServiceImpl 已接入
+                .wired(false)  // 仅做 requiresApproval 布尔判断，尚未创建 Canvas 实例
                 .build());
 
         register(DecisionTypeMetadata.builder()
@@ -353,7 +353,7 @@ public class DecisionTypeMetadataRegistry {
                 .category(Category.HR_WAGE)
                 .defaultApproverRoles(List.of("department_admin", "hr_manager"))
                 .moduleCode("OVERTIME")
-                .wired(true)  // OvertimeRequestServiceImpl 已接入
+                .wired(false)  // 仅做 requiresApproval 布尔判断，尚未创建 Canvas 实例
                 .build());
 
         register(DecisionTypeMetadata.builder()
@@ -363,7 +363,7 @@ public class DecisionTypeMetadataRegistry {
                 .category(Category.HR_WAGE)
                 .defaultApproverRoles(List.of("hr_manager", "finance_manager", "factory_super_admin"))
                 .moduleCode("WAGE_RECORD")
-                .wired(true)  // Sprint 6 W4-B 工资 modes 接入 (WagePolicyController + WageMonthlyScheduler)
+                .wired(false)  // 工资状态机尚未创建 Canvas 实例
                 .build());
 
         register(DecisionTypeMetadata.builder()
@@ -396,7 +396,7 @@ public class DecisionTypeMetadataRegistry {
                 .category(Category.WAREHOUSE_TRANSFER)
                 .defaultApproverRoles(List.of("warehouse_manager", "finance_manager"))
                 .moduleCode("INVENTORY_ADJUSTMENT")
-                .wired(false)
+                .wired(true)  // 工厂/半成品盘点均已创建实例并投影审批终态
                 .build());
 
         register(DecisionTypeMetadata.builder()
