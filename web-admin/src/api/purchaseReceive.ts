@@ -141,6 +141,18 @@ export interface CustomerSuppliedReceiptResult {
   unit?: string | null;
 }
 
+export type PurchaseReceivingCloseReason =
+  | 'SUPPLIER_SHORT_SHIPMENT'
+  | 'QUALITY_REJECTION'
+  | 'PURCHASE_BALANCE_CANCELLED'
+  | 'DEMAND_CHANGED'
+  | 'OTHER';
+
+export interface ClosePurchaseReceivingTaskRequest {
+  reasonCode: PurchaseReceivingCloseReason;
+  notes?: string;
+}
+
 /**
  * 生产结单后等待仓库确认的既有 settlement 投影。
  * 来源是真实 ProductionSettlement，不是另一套入库任务。
@@ -179,6 +191,17 @@ export function createCustomerSuppliedReceipt(
 ) {
   return post<CustomerSuppliedReceiptResult>(
     `/${factoryId}/warehouse/receiving/tasks/${taskId}/receipts`,
+    request,
+  );
+}
+
+export function closePurchaseReceivingTask(
+  factoryId: string,
+  taskId: string,
+  request: ClosePurchaseReceivingTaskRequest,
+) {
+  return post<'CLOSED' | 'COMPLETED'>(
+    `/${factoryId}/warehouse/receiving/tasks/${taskId}/close-short`,
     request,
   );
 }

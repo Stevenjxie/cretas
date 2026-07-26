@@ -1,6 +1,7 @@
 package com.cretas.aims.service.inventory;
 
 import com.cretas.aims.dto.inventory.CreateReceiveRecordRequest;
+import com.cretas.aims.dto.inventory.ClosePurchaseReceivingTaskRequest;
 import com.cretas.aims.dto.inventory.PurchaseReceivingTaskResponse;
 import com.cretas.aims.entity.Supplier;
 import com.cretas.aims.entity.enums.PurchaseOrderStatus;
@@ -159,6 +160,94 @@ class PurchaseServiceImplReceivingTaskTest {
     }
 
     @Test
+    void exactConfirmedReceiptAutomaticallyCompletesOrder() {
+        assertReceiptCompletion("7", "3");
+    }
+
+    @Test
+    void permittedOverReceiptAutomaticallyCompletesOrder() {
+        assertReceiptCompletion("9", "2");
+    }
+
+    @Test
+    void manualShortCloseKeepsConfirmedQuantityAndRecordsAudit() {
+        PurchaseOrder order = order(PurchaseOrderStatus.PARTIAL_RECEIVED);
+        PurchaseOrderItem line = item("10", "6");
+        when(orderRepository.findByIdAndFactoryIdForUpdate(PO_ID, FACTORY))
+                .thenReturn(Optional.of(order));
+        when(itemRepository.findByPurchaseOrderId(PO_ID)).thenReturn(List.of(line));
+        when(receiveRepository.findByFactoryIdAndPurchaseOrderIdOrderByCreatedAtAsc(FACTORY, PO_ID))
+                .thenReturn(List.of());
+        ClosePurchaseReceivingTaskRequest request = closeRequest(
+                ClosePurchaseReceivingTaskRequest.ReasonCode.SUPPLIER_SHORT_SHIPMENT, "供应商确认不再补发");
+
+        service.closeReceivingTask(FACTORY, PO_ID, request, 1309L);
+
+        assertEquals(PurchaseOrderStatus.CLOSED, order.getStatus());
+        assertEquals("SUPPLIER_SHORT_SHIPMENT", order.getReceivingCloseReasonCode());
+        assertEquals("供应商确认不再补发", order.getReceivingCloseNotes());
+        assertEquals(1309L, order.getReceivingClosedBy());
+        assertNotNull(order.getReceivingClosedAt());
+        assertEquals(new BigDecimal("6"), line.getReceivedQuantity());
+        verify(orderRepository).save(order);
+        verify(itemRepository, never()).saveAll(any());
+    }
+
+    @Test
+    void activeReceiptBlocksManualShortClose() {
+        PurchaseOrder order = order(PurchaseOrderStatus.PARTIAL_RECEIVED);
+        when(orderRepository.findByIdAndFactoryIdForUpdate(PO_ID, FACTORY))
+                .thenReturn(Optional.of(order));
+        when(receiveRepository.findByFactoryIdAndPurchaseOrderIdOrderByCreatedAtAsc(FACTORY, PO_ID))
+                .thenReturn(List.of(receipt("RCV-ACTIVE", PurchaseReceiveStatus.DRAFT, "2")));
+
+        BusinessException error = assertThrows(BusinessException.class, () ->
+                service.closeReceivingTask(FACTORY, PO_ID,
+                        closeRequest(ClosePurchaseReceivingTaskRequest.ReasonCode.DEMAND_CHANGED, null),
+                        1309L));
+
+        assertEquals("PURCHASE_RECEIVING_ACTIVE_RECEIPT", error.getErrorCode());
+        verify(orderRepository, never()).save(any());
+        verifyNoInteractions(itemRepository);
+    }
+
+    @Test
+    void otherManualCloseReasonRequiresNotes() {
+        PurchaseOrder order = order(PurchaseOrderStatus.FINANCE_APPROVED);
+        when(orderRepository.findByIdAndFactoryIdForUpdate(PO_ID, FACTORY))
+                .thenReturn(Optional.of(order));
+        when(receiveRepository.findByFactoryIdAndPurchaseOrderIdOrderByCreatedAtAsc(FACTORY, PO_ID))
+                .thenReturn(List.of());
+        when(itemRepository.findByPurchaseOrderId(PO_ID)).thenReturn(List.of(item("10", "0")));
+
+        BusinessException error = assertThrows(BusinessException.class, () ->
+                service.closeReceivingTask(FACTORY, PO_ID,
+                        closeRequest(ClosePurchaseReceivingTaskRequest.ReasonCode.OTHER, " "),
+                        1309L));
+
+        assertEquals("PURCHASE_RECEIVING_CLOSE_NOTES_REQUIRED", error.getErrorCode());
+        verify(orderRepository, never()).save(any());
+    }
+
+    @Test
+    void repeatedManualCloseIsIdempotentAndDoesNotOverwriteAudit() {
+        PurchaseOrder order = order(PurchaseOrderStatus.CLOSED);
+        order.setReceivingCloseReasonCode("DEMAND_CHANGED");
+        order.setReceivingClosedBy(1309L);
+        when(orderRepository.findByIdAndFactoryIdForUpdate(PO_ID, FACTORY))
+                .thenReturn(Optional.of(order));
+
+        service.closeReceivingTask(FACTORY, PO_ID,
+                closeRequest(ClosePurchaseReceivingTaskRequest.ReasonCode.OTHER, "重复点击"),
+                9999L);
+
+        assertEquals("DEMAND_CHANGED", order.getReceivingCloseReasonCode());
+        assertEquals(1309L, order.getReceivingClosedBy());
+        verify(orderRepository, never()).save(any());
+        verifyNoInteractions(itemRepository, receiveRepository);
+    }
+
+    @Test
     void secondActiveDraftIsRejectedBeforeAnyWrite() {
         PurchaseOrder order = order(PurchaseOrderStatus.FINANCE_APPROVED);
         Supplier supplier = new Supplier();
@@ -255,5 +344,30 @@ class PurchaseServiceImplReceivingTaskTest {
         line.setUnit("kg");
         request.setItems(List.of(line));
         return request;
+    }
+
+    private ClosePurchaseReceivingTaskRequest closeRequest(
+            ClosePurchaseReceivingTaskRequest.ReasonCode reasonCode,
+            String notes) {
+        ClosePurchaseReceivingTaskRequest request = new ClosePurchaseReceivingTaskRequest();
+        request.setReasonCode(reasonCode);
+        request.setNotes(notes);
+        return request;
+    }
+
+    private void assertReceiptCompletion(String alreadyReceived, String currentReceipt) {
+        PurchaseOrder order = order(PurchaseOrderStatus.PARTIAL_RECEIVED);
+        PurchaseOrderItem line = item("10", alreadyReceived);
+        PurchaseReceiveRecord receipt = receipt("RCV-COMPLETE", PurchaseReceiveStatus.DRAFT, currentReceipt);
+        receipt.getItems().get(0).setPurchaseOrderItemId(line.getId());
+        when(orderRepository.findById(PO_ID)).thenReturn(Optional.of(order));
+        when(itemRepository.findByPurchaseOrderId(PO_ID)).thenReturn(List.of(line));
+
+        ReflectionTestUtils.invokeMethod(service, "updateOrderReceiveStatus", receipt);
+
+        assertTrue(line.getReceivedQuantity().compareTo(line.getQuantity()) >= 0);
+        assertEquals(PurchaseOrderStatus.COMPLETED, order.getStatus());
+        verify(itemRepository).saveAll(List.of(line));
+        verify(orderRepository).save(order);
     }
 }

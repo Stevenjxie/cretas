@@ -3,6 +3,7 @@ package com.cretas.aims.service.inventory.impl;
 import com.cretas.aims.dto.common.PageResponse;
 import com.cretas.aims.dto.inventory.CreatePurchaseOrderRequest;
 import com.cretas.aims.dto.inventory.CreateReceiveRecordRequest;
+import com.cretas.aims.dto.inventory.ClosePurchaseReceivingTaskRequest;
 import com.cretas.aims.dto.inventory.UpdatePurchaseOrderRequest;
 import com.cretas.aims.dto.inventory.MaterialPriceComparisonDTO;
 import com.cretas.aims.dto.inventory.PurchaseSuggestionResponse;
@@ -1644,6 +1645,89 @@ public class PurchaseServiceImpl implements PurchaseService {
     private boolean isActiveReceipt(PurchaseReceiveRecord receipt) {
         return receipt.getStatus() == PurchaseReceiveStatus.DRAFT
                 || receipt.getStatus() == PurchaseReceiveStatus.PENDING_QC;
+    }
+
+    @Override
+    @Transactional
+    @Loggable(module = "PURCHASE_ORDER", action = "CLOSE_RECEIVING",
+            entityType = "PurchaseOrder", entityIdParam = "purchaseOrderId",
+            summary = "'仓储少收关闭采购单 ' + #purchaseOrderId")
+    public PurchaseOrderStatus closeReceivingTask(
+            String factoryId,
+            String purchaseOrderId,
+            ClosePurchaseReceivingTaskRequest request,
+            Long userId) {
+        PurchaseOrder order = purchaseOrderRepository
+                .findByIdAndFactoryIdForUpdate(purchaseOrderId, factoryId)
+                .orElseThrow(() -> new ResourceNotFoundException("采购订单不存在或不属于当前组织"));
+
+        // Double click / stale browser retry is idempotent and must never downgrade a completed order.
+        if (order.getStatus() == PurchaseOrderStatus.CLOSED
+                || order.getStatus() == PurchaseOrderStatus.COMPLETED) {
+            return order.getStatus();
+        }
+        if (order.getStatus() != PurchaseOrderStatus.FINANCE_APPROVED
+                && order.getStatus() != PurchaseOrderStatus.PARTIAL_RECEIVED) {
+            throw new BusinessException(409, "当前采购订单状态不能少收关闭")
+                    .withCode("PURCHASE_RECEIVING_CLOSE_STATUS_INVALID")
+                    .withHint("请刷新待入库任务后查看最新状态");
+        }
+
+        List<PurchaseReceiveRecord> activeReceipts = receiveRecordRepository
+                .findByFactoryIdAndPurchaseOrderIdOrderByCreatedAtAsc(factoryId, purchaseOrderId)
+                .stream()
+                .filter(this::isActiveReceipt)
+                .toList();
+        if (!activeReceipts.isEmpty()) {
+            PurchaseReceiveRecord active = activeReceipts.get(0);
+            throw new BusinessException(409,
+                    "采购单仍有未确认的收货单 " + active.getReceiveNumber() + "，不能少收关闭")
+                    .withCode("PURCHASE_RECEIVING_ACTIVE_RECEIPT")
+                    .withHint("请先继续收货并确认入库；如草稿有误，请由仓储主管处理该草稿");
+        }
+
+        List<PurchaseOrderItem> orderItems =
+                purchaseOrderItemRepository.findByPurchaseOrderId(purchaseOrderId);
+        if (orderItems.isEmpty()) {
+            throw new BusinessException(409, "采购订单没有可核对的物料行，不能少收关闭")
+                    .withCode("PURCHASE_RECEIVING_LINES_REQUIRED")
+                    .withHint("请联系采购主管核对订单明细");
+        }
+
+        boolean allReceived = orderItems.stream().allMatch(item ->
+                zeroIfNull(item.getReceivedQuantity())
+                        .compareTo(zeroIfNull(item.getQuantity())) >= 0);
+        if (allReceived) {
+            order.setStatus(PurchaseOrderStatus.COMPLETED);
+            purchaseOrderRepository.save(order);
+            return PurchaseOrderStatus.COMPLETED;
+        }
+
+        if (request == null || request.getReasonCode() == null) {
+            throw new BusinessException(400, "请选择少收关闭原因")
+                    .withCode("PURCHASE_RECEIVING_CLOSE_REASON_REQUIRED");
+        }
+        String notes = request.getNotes() == null ? null : request.getNotes().trim();
+        if (request.getReasonCode() == ClosePurchaseReceivingTaskRequest.ReasonCode.OTHER
+                && (notes == null || notes.isBlank())) {
+            throw new BusinessException(400, "选择“其他原因”时必须填写补充说明")
+                    .withCode("PURCHASE_RECEIVING_CLOSE_NOTES_REQUIRED")
+                    .withHintTarget("少收关闭补充说明");
+        }
+        if (notes != null && notes.length() > 500) {
+            throw new BusinessException(400, "补充说明不能超过500字")
+                    .withCode("PURCHASE_RECEIVING_CLOSE_NOTES_TOO_LONG");
+        }
+
+        order.setStatus(PurchaseOrderStatus.CLOSED);
+        order.setReceivingCloseReasonCode(request.getReasonCode().name());
+        order.setReceivingCloseNotes(notes == null || notes.isBlank() ? null : notes);
+        order.setReceivingClosedBy(userId);
+        order.setReceivingClosedAt(LocalDateTime.now());
+        purchaseOrderRepository.save(order);
+        log.info("仓储少收关闭采购单: factoryId={}, purchaseOrderId={}, orderNumber={}, reason={}, userId={}",
+                factoryId, purchaseOrderId, order.getOrderNumber(), request.getReasonCode(), userId);
+        return PurchaseOrderStatus.CLOSED;
     }
 
     private BigDecimal zeroIfNull(BigDecimal value) {

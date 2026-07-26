@@ -33,7 +33,8 @@ describe('统一仓储待收货入口', () => {
     expect(panel).toContain('pending-receive-row');
     expect(panel).toContain('type="danger" effect="dark"');
     expect(panel).toContain('计划数量');
-    expect(panel).toContain('已收数量');
+    expect(panel).toContain('已确认收货');
+    expect(panel).toContain('草稿待确认');
     expect(panel).toContain('待收数量');
     expect(panel).toContain('SALES_ORDER_CUSTOMER_SUPPLIED');
     expect(panel).not.toContain('PRODUCTION_PLAN');
@@ -65,6 +66,17 @@ describe('统一仓储待收货入口', () => {
     );
     expect(customerConfirm).not.toContain('/warehouse/receiving/receipts/');
     expect(materials).not.toContain('>入库登记</el-button>');
+  });
+
+  it('采购收齐后自动退出待办，少收时提供有原因和差额的手动关闭', () => {
+    expect(panel).toContain('计划已收齐，入库任务已自动完成');
+    expect(panel).toContain('confirmedShortfallGroups');
+    expect(panel).toContain('少收关闭');
+    expect(panel).toContain('确认少收并关闭');
+    expect(panel).toContain('closeReasonOptions');
+    expect(panel).toContain("closeForm.reasonCode === 'OTHER'");
+    expect(panel).toContain('row.activeReceiptCount > 0');
+    expect(receiveApi).toContain('/warehouse/receiving/tasks/${taskId}/close-short');
   });
 
   it('旧采购入库路由兼容重定向且菜单不再暴露割裂入口', () => {

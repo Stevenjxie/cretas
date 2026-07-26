@@ -22,7 +22,8 @@ class WarehouseReceivingControllerTest {
         for (String name : List.of(
                 "getTasks", "receiveCustomerSuppliedMaterial",
                 "getDefaultWarehouse", "createReceipt",
-                "getReceipt", "getReceiptsByOrder", "confirmReceipt")) {
+                "getReceipt", "getReceiptsByOrder", "confirmReceipt",
+                "closePurchaseTaskShort")) {
             Method method = List.of(WarehouseReceivingController.class.getDeclaredMethods()).stream()
                     .filter(candidate -> candidate.getName().equals(name))
                     .findFirst()
