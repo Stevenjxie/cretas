@@ -28,9 +28,9 @@ describe('quality inspector home workflow contract', () => {
 
   it('adds the device safe area to the full bottom navigation height', () => {
     expect(navigatorSource).toContain('useSafeAreaInsets');
-    expect(navigatorSource).toContain('height: 54 + bottomInset');
-    expect(navigatorSource).toContain('paddingBottom: bottomInset');
-    expect(navigatorSource).toContain('minHeight: 44');
+    expect(navigatorSource).toContain('height: 64 + bottomInset');
+    expect(navigatorSource).toContain('paddingBottom: bottomInset + 2');
+    expect(navigatorSource).toContain('minHeight: 48');
     expect(navigatorSource).toContain('tabBarHideOnKeyboard: true');
   });
 });
