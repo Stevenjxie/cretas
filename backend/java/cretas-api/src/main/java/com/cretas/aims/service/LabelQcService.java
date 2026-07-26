@@ -15,6 +15,7 @@ import org.springframework.data.domain.*;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.nio.charset.StandardCharsets;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.*;
@@ -255,9 +256,25 @@ public class LabelQcService {
             Long reviewerId,
             ReviewTaskRequest request) {
         requireUser(reviewerId);
-        LabelQcTask task = requireTask(factoryId, taskId);
+        String reviewRequestId = resolveReviewRequestId(taskId, reviewerId, request);
+        LabelQcTask task = taskRepository.findByFactoryIdAndIdForUpdate(factoryId, taskId)
+                .orElseThrow(() -> new BusinessException(404, "标签拍检任务不存在")
+                        .withCode("LABEL_QC_TASK_NOT_FOUND"));
         if (task.getStatus() == LabelQcTaskStatus.REVIEWED) {
-            return detail(factoryId, taskId);
+            if (Objects.equals(task.getReviewRequestId(), reviewRequestId)) {
+                return detail(factoryId, taskId);
+            }
+            throw new BusinessException(409, "这条质检任务已由另一台设备或页面完成，未覆盖已保存结果")
+                    .withCode("LABEL_QC_ALREADY_REVIEWED")
+                    .withHint("返回待审核列表并选择下一条任务")
+                    .withSeverity("warning");
+        }
+        if (request.expectedVersion() != null
+                && !Objects.equals(task.getVersion(), request.expectedVersion())) {
+            throw new BusinessException(409, "这条质检任务已发生变化，当前修改尚未提交")
+                    .withCode("LABEL_QC_REVIEW_STALE")
+                    .withHint("返回待审核列表刷新后再处理")
+                    .withSeverity("warning");
         }
         if (task.getStatus() != LabelQcTaskStatus.NEEDS_REVIEW
                 && task.getStatus() != LabelQcTaskStatus.ANALYSIS_FAILED) {
@@ -354,6 +371,7 @@ public class LabelQcService {
         task.setFinalDefectCount(finalDefects);
         task.setReviewedBy(reviewerId);
         task.setReviewedAt(LocalDateTime.now());
+        task.setReviewRequestId(reviewRequestId);
         taskRepository.save(task);
         return detail(factoryId, taskId);
     }
@@ -407,6 +425,19 @@ public class LabelQcService {
                         .withCode("LABEL_QC_TASK_NOT_FOUND"));
     }
 
+    private String resolveReviewRequestId(
+            String taskId,
+            Long reviewerId,
+            ReviewTaskRequest request) {
+        String supplied = trimToNull(request.reviewRequestId());
+        if (supplied != null) {
+            return supplied;
+        }
+        String legacyFingerprint = taskId + "|" + reviewerId + "|" + request.photos();
+        return "legacy-" + UUID.nameUUIDFromBytes(
+                legacyFingerprint.getBytes(StandardCharsets.UTF_8));
+    }
+
     private void requireUser(Long userId) {
         if (userId == null) {
             throw new BusinessException(401, "登录状态无效，请重新登录")
@@ -455,6 +486,7 @@ public class LabelQcService {
                 task.getProductionDate(),
                 task.getCreatedBy(),
                 task.getStatus(),
+                task.getVersion(),
                 task.getPhotoCount(),
                 task.getAiCandidateCount(),
                 task.getFinalDefectCount(),

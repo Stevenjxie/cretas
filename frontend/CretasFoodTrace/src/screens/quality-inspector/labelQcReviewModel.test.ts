@@ -2,6 +2,7 @@ import {
   addHumanAnnotation,
   buildLabelQcReviewRequest,
   createCenteredBoundingBox,
+  getLabelQcReviewConflictMessage,
   hydrateLabelQcReviewDrafts,
   markPhotoReviewed,
   nextIncompletePhotoIndex,
@@ -21,6 +22,7 @@ const detail: LabelQcTaskDetail = {
     productionDate: '2026-07-26',
     createdBy: 7,
     status: 'NEEDS_REVIEW',
+    version: 3,
     photoCount: 4,
     aiCandidateCount: 3,
     finalDefectCount: 0,
@@ -103,8 +105,14 @@ describe('labelQcReviewModel', () => {
       }),
     );
 
-    const request = buildLabelQcReviewRequest(drafts);
+    const request = buildLabelQcReviewRequest(
+      drafts,
+      detail.task.version,
+      'review-device-a',
+    );
 
+    expect(request.expectedVersion).toBe(3);
+    expect(request.reviewRequestId).toBe('review-device-a');
     expect(request.photos).toEqual([
       {
         photoId: 'photo-1',
@@ -150,7 +158,10 @@ describe('labelQcReviewModel', () => {
       updateDraftAnnotation(drafts[0]!, 'ai-1', { label: 'NO_DEFECT' }),
     );
 
-    expect(buildLabelQcReviewRequest(drafts).photos[0]!.annotations[0]).toEqual(
+    expect(
+      buildLabelQcReviewRequest(drafts, 3, 'review-device-a')
+        .photos[0]!.annotations[0],
+    ).toEqual(
       expect.objectContaining({
         annotationId: 'ai-1',
         label: 'NO_DEFECT',
@@ -161,7 +172,7 @@ describe('labelQcReviewModel', () => {
 
   it('未做整图结论或还有未确认框时禁止提交，并定位下一张未完成照片', () => {
     const drafts = hydrateLabelQcReviewDrafts(detail);
-    expect(() => buildLabelQcReviewRequest(drafts)).toThrow(
+    expect(() => buildLabelQcReviewRequest(drafts, 3, 'review-device-a')).toThrow(
       '仍有照片未完成最终确认',
     );
     expect(nextIncompletePhotoIndex(drafts, 3)).toBe(0);
@@ -179,5 +190,30 @@ describe('labelQcReviewModel', () => {
     const resized = resizeBoundingBox(moved, -2, -2);
     expect(resized.xMax - resized.xMin).toBeGreaterThanOrEqual(0.04);
     expect(resized.yMax - resized.yMin).toBeGreaterThanOrEqual(0.04);
+  });
+
+  it('将另一台设备已提交和版本过期识别为防覆盖冲突', () => {
+    expect(
+      getLabelQcReviewConflictMessage({
+        response: {
+          data: {
+            errorCode: 'LABEL_QC_ALREADY_REVIEWED',
+            message: '另一台设备已完成',
+          },
+        },
+      }),
+    ).toBe('另一台设备已完成');
+    expect(
+      getLabelQcReviewConflictMessage({
+        response: {
+          data: { errorCode: 'LABEL_QC_REVIEW_STALE' },
+        },
+      }),
+    ).toContain('没有覆盖');
+    expect(
+      getLabelQcReviewConflictMessage({
+        response: { data: { errorCode: 'NETWORK_ERROR' } },
+      }),
+    ).toBeNull();
   });
 });

@@ -50,6 +50,8 @@ describe('labelQcApi mobile review contract', () => {
 
   it('submits AI decisions and human additions to the existing review endpoint', async () => {
     const request: LabelQcReviewTaskRequest = {
+      expectedVersion: 3,
+      reviewRequestId: 'review-device-a',
       photos: [
         {
           photoId: 'photo-1',

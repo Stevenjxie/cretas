@@ -74,6 +74,9 @@ public class LabelQcTask extends BaseEntity {
     @Column(name = "reviewed_at")
     private LocalDateTime reviewedAt;
 
+    @Column(name = "review_request_id", length = 100)
+    private String reviewRequestId;
+
     @Version
     @Column(name = "version", nullable = false)
     private Long version;

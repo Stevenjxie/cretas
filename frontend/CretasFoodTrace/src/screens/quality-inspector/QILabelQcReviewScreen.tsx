@@ -22,7 +22,13 @@ import {
   GestureDetector,
   GestureHandlerRootView,
 } from 'react-native-gesture-handler';
-import { ActivityIndicator, Button, TouchableRipple } from 'react-native-paper';
+import {
+  ActivityIndicator,
+  Button,
+  Dialog,
+  Portal,
+  TouchableRipple,
+} from 'react-native-paper';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { labelQcApi } from '../../services/api/labelQcApi';
@@ -40,6 +46,8 @@ import {
 import {
   addHumanAnnotation,
   buildLabelQcReviewRequest,
+  createLabelQcReviewRequestId,
+  getLabelQcReviewConflictMessage,
   hydrateLabelQcReviewDrafts,
   isDefectLabel,
   isPhotoReviewComplete,
@@ -718,6 +726,10 @@ export default function QILabelQcReviewScreen() {
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [conflictMessage, setConflictMessage] = useState<string | null>(null);
+  const reviewRequestIdRef = useRef(
+    createLabelQcReviewRequestId(route.params.taskId),
+  );
 
   const load = useCallback(async () => {
     if (!factoryId) {
@@ -728,6 +740,7 @@ export default function QILabelQcReviewScreen() {
     try {
       setLoading(true);
       setError(null);
+      setConflictMessage(null);
       const taskDetail = await labelQcApi.getTask(route.params.taskId, factoryId);
       const initialDrafts = hydrateLabelQcReviewDrafts(taskDetail);
       setDetail(taskDetail);
@@ -797,7 +810,7 @@ export default function QILabelQcReviewScreen() {
   };
 
   const resolveAi = (accept: boolean) => {
-    if (!selected || selected.source !== 'AI') return;
+    if (!selected || selected.source !== 'AI' || !draft) return;
     const nextPending = draft.annotations.find(
       (annotation) => annotation.key !== selected.key && !annotation.label,
     );
@@ -831,7 +844,11 @@ export default function QILabelQcReviewScreen() {
     try {
       setSubmitting(true);
       setError(null);
-      const request = buildLabelQcReviewRequest(drafts);
+      const request = buildLabelQcReviewRequest(
+        drafts,
+        detail.task.version,
+        reviewRequestIdRef.current,
+      );
       const reviewed = await labelQcApi.reviewTask(detail.task.id, request, factoryId);
       setDetail(reviewed);
       setDrafts(hydrateLabelQcReviewDrafts(reviewed));
@@ -843,7 +860,12 @@ export default function QILabelQcReviewScreen() {
         productionDate: reviewed.task.productionDate,
       });
     } catch (submitError) {
-      setError(getErrorMessage(submitError));
+      const conflict = getLabelQcReviewConflictMessage(submitError);
+      if (conflict) {
+        setConflictMessage(conflict);
+      } else {
+        setError(getErrorMessage(submitError));
+      }
     } finally {
       setSubmitting(false);
     }
@@ -907,6 +929,32 @@ export default function QILabelQcReviewScreen() {
       style={styles.screen}
       testID="qi-label-qc-review-screen"
     >
+      <Portal>
+        <Dialog
+          visible={Boolean(conflictMessage)}
+          dismissable={false}
+          onDismiss={() => undefined}
+          testID="qi-label-qc-review-conflict-dialog"
+        >
+          <Dialog.Title>这条任务已处理</Dialog.Title>
+          <Dialog.Content>
+            <Text>
+              {conflictMessage}
+            </Text>
+          </Dialog.Content>
+          <Dialog.Actions>
+            <Button
+              mode="contained"
+              buttonColor={QI_COLORS.primary}
+              onPress={() => navigation.replace('QILabelQcQueue')}
+              testID="qi-label-qc-review-conflict-back-button"
+            >
+              返回待审核列表
+            </Button>
+          </Dialog.Actions>
+        </Dialog>
+      </Portal>
+
       <View style={styles.contextBar}>
         <View style={styles.contextMain}>
           <Text style={styles.skuName} numberOfLines={1}>

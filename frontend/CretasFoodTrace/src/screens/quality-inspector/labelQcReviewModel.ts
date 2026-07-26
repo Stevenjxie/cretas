@@ -177,12 +177,22 @@ export const markPhotoReviewed = (
 
 export const buildLabelQcReviewRequest = (
   photos: LabelQcReviewPhotoDraft[],
+  expectedVersion: number,
+  reviewRequestId: string,
 ): LabelQcReviewTaskRequest => {
   if (!photos.length || photos.some((photo) => !isPhotoReviewComplete(photo))) {
     throw new Error('仍有照片未完成最终确认');
   }
+  if (!Number.isInteger(expectedVersion) || expectedVersion < 0) {
+    throw new Error('质检任务版本无效，请返回列表刷新');
+  }
+  if (!reviewRequestId.trim()) {
+    throw new Error('审核请求标识无效，请重新打开任务');
+  }
 
   return {
+    expectedVersion,
+    reviewRequestId: reviewRequestId.trim(),
     photos: photos.map((photo) => {
       const annotations = photo.annotations.map((annotation) => {
         if (!annotation.label) {
@@ -211,4 +221,32 @@ export const buildLabelQcReviewRequest = (
       };
     }),
   };
+};
+
+export const createLabelQcReviewRequestId = (taskId: string): string =>
+  `label-qc-${taskId}-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+
+export const getLabelQcReviewConflictMessage = (
+  error: unknown,
+): string | null => {
+  const data = (
+    error as {
+      response?: {
+        data?: {
+          errorCode?: string;
+          code?: string;
+          message?: string;
+        };
+      };
+    }
+  )?.response?.data;
+  const errorCode = data?.errorCode ?? data?.code;
+  if (
+    errorCode !== 'LABEL_QC_ALREADY_REVIEWED'
+    && errorCode !== 'LABEL_QC_REVIEW_STALE'
+  ) {
+    return null;
+  }
+  return data?.message
+    ?? '这条质检任务已由另一台设备完成，当前修改没有覆盖已保存结果。';
 };
