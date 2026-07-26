@@ -4140,10 +4140,34 @@ async def resolve_store_margin(
             "单位成本", "每份成本", "成本",
         ))
         asks_margin, asks_profitability = _profit_intent(query_text)
-        if asks_cost or asks_margin:
+        asks_sales = any(token in query_text for token in (
+            "菜品销量", "销量", "销售量", "卖了多少", "卖出",
+        ))
+        asks_revenue = any(token in query_text for token in (
+            "营收", "营业额", "销售额", "销售收入", "营业收入", "流水",
+        ))
+        asks_diagnosis = any(token in query_text for token in (
+            "为什么", "原因", "怎么回事", "为何",
+        ))
+        asks_optimization = any(token in query_text for token in (
+            "怎么优化", "如何优化", "优化", "改善", "怎么办", "怎么做",
+            "怎么提升", "如何提升", "提升", "下一步", "先做什么",
+        ))
+        if (
+            asks_cost
+            or asks_margin
+            or asks_sales
+            or asks_revenue
+            or asks_diagnosis
+            or asks_optimization
+        ):
             # STORE_MARGIN owns the concrete store×dish grain. Reuse the same
             # cost-completeness and plausibility rules as store aggregation,
             # but render only the named dish requested by the current plan.
+            # Sales diagnosis/optimisation belongs here too: the previous
+            # cost-only gate dropped the requested action after a user selected
+            # one or more concrete stores, so the Answer Contract correctly
+            # rejected an otherwise valid four-turn dish chain.
             scoped_margin_entries = _aggregate_store_margin_entries(
                 matched,
                 name_to_pk,
@@ -4226,28 +4250,27 @@ async def resolve_store_margin(
 
             if store_id or store_name:
                 target_store, metric_entry, complete = scoped_results[0]
-                if complete:
-                    projected = _scoped_dish_metric_answer(
-                        metric_entry,
-                        window_label=window_label,
-                        query=query_text,
+                projected = _scoped_dish_metric_answer(
+                    metric_entry,
+                    window_label=window_label,
+                    query=query_text,
+                )
+                if complete and asks_profitability:
+                    rate = float(metric_entry["margin_rate"])
+                    verdict = (
+                        "在赚钱"
+                        if rate > 0
+                        else "基本打平"
+                        if rate == 0
+                        else "在亏钱"
                     )
-                    if asks_profitability:
-                        rate = float(metric_entry["margin_rate"])
-                        verdict = (
-                            "在赚钱"
-                            if rate > 0
-                            else "基本打平"
-                            if rate == 0
-                            else "在亏钱"
-                        )
-                        projected = (
-                            f"**结论：按已覆盖成本口径，"
-                            f"「{target_store}」的「{dish_mention}」{window_label}"
-                            f"{verdict}（毛利率 {rate * 100:.1f}%）。**\n\n"
-                            f"{projected}"
-                        )
-                else:
+                    projected = (
+                        f"**结论：按已覆盖成本口径，"
+                        f"「{target_store}」的「{dish_mention}」{window_label}"
+                        f"{verdict}（毛利率 {rate * 100:.1f}%）。**\n\n"
+                        f"{projected}"
+                    )
+                if not projected:
                     projected = (
                         f"「{dish_mention}」{window_label}在「{target_store}」"
                         f"销量 {metric_entry['qty']:,.0f} 份、"
@@ -4255,9 +4278,18 @@ async def resolve_store_margin(
                         "当前无法可靠计算单份成本、总成本、毛利和毛利率；"
                         "不会用全部门店或其他菜品替代。"
                     )
+                title_suffix = (
+                    "优化建议"
+                    if asks_optimization
+                    else "原因拆解"
+                    if asks_diagnosis
+                    else "成本毛利"
+                    if asks_cost or asks_margin
+                    else "销量营收"
+                )
                 return OpsAnswer(
                     code="RESTAURANT_OPS_STORE_MARGIN",
-                    title=f"{target_store} · {dish_mention}成本毛利",
+                    title=f"{target_store} · {dish_mention}{title_suffix}",
                     answer_text=f"门店范围：**{target_store}**\n\n{projected}",
                     charts=[],
                     kpis=[],
@@ -4285,8 +4317,17 @@ async def resolve_store_margin(
             # Two or more explicitly selected stores mean a same-window
             # comparison. Keep missing cost visible per store instead of
             # dropping that store or silently aggregating all selected stores.
+            comparison_label = (
+                "销量优化对比"
+                if asks_optimization and asks_sales and not asks_margin
+                else "销量原因拆解"
+                if asks_diagnosis and asks_sales and not asks_margin
+                else "成本毛利对比"
+                if asks_cost or asks_margin
+                else "销量营收对比"
+            )
             lines = [
-                f"**「{dish_mention}」所选门店成本毛利对比（{window_label}）：**",
+                f"**「{dish_mention}」所选门店{comparison_label}（{window_label}）：**",
                 "",
             ]
             result_stores: List[Dict[str, Any]] = []
@@ -4298,11 +4339,17 @@ async def resolve_store_margin(
                         f"毛利 ¥{metric_entry['gross_profit']:,.2f}、"
                         f"毛利率 {metric_entry['margin_rate'] * 100:.1f}%"
                     )
-                elif complete:
+                elif complete and asks_cost:
                     lines.append(
                         f"- **{target_store}**：销量 {metric_entry['qty']:,.0f} 份、"
                         f"单份食材成本 ¥{metric_entry['food_cost_unit']:,.2f}、"
                         f"总成本 ¥{metric_entry['total_cost']:,.2f}"
+                    )
+                elif complete:
+                    lines.append(
+                        f"- **{target_store}**：销量 {metric_entry['qty']:,.0f} 份、"
+                        f"营收 ¥{metric_entry['revenue']:,.2f}、"
+                        f"单份食材成本 ¥{metric_entry['food_cost_unit']:,.2f}"
                     )
                 else:
                     if (
@@ -4331,9 +4378,40 @@ async def resolve_store_margin(
                 "> 各门店使用同一菜品、同一时间和同一成本口径；"
                 "未把所选门店合并成全店结果。",
             ])
+            if asks_optimization:
+                lines.extend([
+                    "",
+                    "**优化动作：**",
+                    "1. 先把所选门店作为同口径对照，核对该菜销量、平均实收价、"
+                    "促销折扣和成本覆盖差异，不把门店差异直接说成因果。",
+                    "2. 只在一家店或一个时段做小范围露出测试；"
+                    "成本不完整时不直接多店同步调价、下架或扩大活动。",
+                    "3. 使用同一观察周期复查各店销量、营收、单份成本、毛利额和毛利率，"
+                    "目标改善且其他指标没有明显恶化后再扩大范围。",
+                    "",
+                    "**验证指标：**所选门店同一时间口径下的销量、平均实收价、"
+                    "单份成本、毛利额和毛利率。",
+                ])
+            elif asks_diagnosis:
+                lines.extend([
+                    "",
+                    "**原因拆解：**当前数据只能确认所选门店在同一时间口径下的"
+                    "销量、营收和成本覆盖差异，不能证明业务因果。",
+                    "如需解释差异，还要继续核对各店上架时长、售罄缺货、价格与促销、"
+                    "时段曝光和评价数据。",
+                ])
+            title_suffix = (
+                "优化建议"
+                if asks_optimization
+                else "原因拆解"
+                if asks_diagnosis
+                else "成本毛利对比"
+                if asks_cost or asks_margin
+                else "销量营收对比"
+            )
             return OpsAnswer(
                 code="RESTAURANT_OPS_STORE_MARGIN",
-                title=f"{dish_mention}所选门店成本毛利对比",
+                title=f"{dish_mention}所选门店{title_suffix}",
                 answer_text="\n".join(lines),
                 charts=[],
                 kpis=[],

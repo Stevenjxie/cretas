@@ -1566,7 +1566,7 @@ def _store_margin_row(store_id, store_name, revenue, qty, start, end):
     }
 
 
-def _store_margin_runtime(monkeypatch, rows_by_range):
+def _store_margin_runtime(monkeypatch, rows_by_range, *, include_cost=True):
     class _Connection:
         def __init__(self):
             self.calls = []
@@ -1577,7 +1577,11 @@ def _store_margin_runtime(monkeypatch, rows_by_range):
         async def fetch(self, query, *args):
             self.calls.append((query, args))
             if "FROM agg_restaurant_product_cost" in query:
-                return [{"product_source_pk": "PT-DISH", "c": 10.0}]
+                return (
+                    [{"product_source_pk": "PT-DISH", "c": 10.0}]
+                    if include_cost
+                    else []
+                )
             current_rows = rows_by_range.get((args[2], args[3]), [])
             if "COUNT(DISTINCT t.id)::int AS bills" in query:
                 return [{"store_id": sid, "bills": 8}
@@ -1705,6 +1709,74 @@ def test_single_store_dish_margin_uses_store_dish_grain(monkeypatch):
     assert result.meta["scope_matches_request"] is True
 
 
+def test_single_store_dish_sales_optimization_survives_missing_cost(monkeypatch):
+    start, end = date(2026, 7, 20), date(2026, 7, 21)
+    row = _store_margin_row(
+        "S-1",
+        "青花椒徐汇日月光店",
+        2000,
+        100,
+        start,
+        end,
+    )
+    pool, _ = _store_margin_runtime(
+        monkeypatch,
+        {(start, end): [row]},
+        include_cost=False,
+    )
+
+    result = asyncio.run(_r.resolve_store_margin(
+        pool,
+        "RES_TEST",
+        role="restaurant_manager",
+        date_range=(start, end),
+        query="本月青花椒徐汇日月光店测试菜的销量怎么优化",
+        store_name="青花椒徐汇日月光店",
+        dish_mention="测试菜",
+    ))
+
+    assert "门店范围：**青花椒徐汇日月光店**" in result.answer_text
+    assert "**优化目标：优化「测试菜」" in result.answer_text
+    assert "当前销量 100 份、营收 ¥2,000.00；成本尚未完整覆盖" in result.answer_text
+    assert "**优化动作：**" in result.answer_text
+    assert "**验证指标：**" in result.answer_text
+    assert result.meta["targetStoreName"] == "青花椒徐汇日月光店"
+    assert result.meta["scope_matches_request"] is True
+
+
+def test_single_store_dish_sales_diagnosis_keeps_reason_contract(monkeypatch):
+    start, end = date(2026, 7, 20), date(2026, 7, 21)
+    row = _store_margin_row(
+        "S-1",
+        "青花椒徐汇日月光店",
+        2000,
+        100,
+        start,
+        end,
+    )
+    pool, _ = _store_margin_runtime(
+        monkeypatch,
+        {(start, end): [row]},
+        include_cost=False,
+    )
+
+    result = asyncio.run(_r.resolve_store_margin(
+        pool,
+        "RES_TEST",
+        role="restaurant_manager",
+        date_range=(start, end),
+        query="本月青花椒徐汇日月光店测试菜的销量为什么这样",
+        store_name="青花椒徐汇日月光店",
+        dish_mention="测试菜",
+    ))
+
+    assert "门店范围：**青花椒徐汇日月光店**" in result.answer_text
+    assert "**原因拆解：「测试菜」" in result.answer_text
+    assert "当前只能解释销量构成，不能证明业务因果" in result.answer_text
+    assert "不会用毛利率替代销量原因" in result.answer_text
+    assert result.meta["scope_matches_request"] is True
+
+
 def test_multi_store_dish_margin_compares_each_selected_store(monkeypatch):
     start, end = date(2026, 7, 20), date(2026, 7, 21)
     async def _canonicalize(_pool, _factory_id, mention):
@@ -1753,6 +1825,59 @@ def test_multi_store_dish_margin_compares_each_selected_store(monkeypatch):
     ]
     assert result.meta["compare_stores"] is True
     assert result.meta["marginInvariantPass"] is True
+
+
+def test_multi_store_dish_sales_optimization_keeps_action_and_scope(monkeypatch):
+    start, end = date(2026, 7, 20), date(2026, 7, 21)
+
+    async def _canonicalize(_pool, _factory_id, mention):
+        return [mention]
+
+    monkeypatch.setattr(_r, "_canonicalize_store_mention", _canonicalize)
+    rows = [
+        _store_margin_row(
+            "S-1", "青花椒徐汇日月光店", 2000, 100, start, end,
+        ),
+        _store_margin_row(
+            "S-2", "青花椒紫荆广场店", 1500, 80, start, end,
+        ),
+    ]
+    pool, _ = _store_margin_runtime(
+        monkeypatch,
+        {(start, end): rows},
+        include_cost=False,
+    )
+
+    result = asyncio.run(_r.resolve_store_margin(
+        pool,
+        "RES_TEST",
+        role="restaurant_manager",
+        date_range=(start, end),
+        query=(
+            "本月青花椒徐汇日月光店和青花椒紫荆广场店"
+            "测试菜的销量怎么优化"
+        ),
+        store_mentions=[
+            "青花椒徐汇日月光店",
+            "青花椒紫荆广场店",
+        ],
+        dish_mention="测试菜",
+    ))
+
+    assert "所选门店销量优化对比" in result.answer_text
+    assert "青花椒徐汇日月光店" in result.answer_text
+    assert "销量 100 份、营收 ¥2,000.00" in result.answer_text
+    assert "青花椒紫荆广场店" in result.answer_text
+    assert "销量 80 份、营收 ¥1,500.00" in result.answer_text
+    assert "**优化动作：**" in result.answer_text
+    assert "**验证指标：**" in result.answer_text
+    assert "不直接多店同步调价、下架或扩大活动" in result.answer_text
+    assert result.meta["selected_stores"] == [
+        "青花椒徐汇日月光店",
+        "青花椒紫荆广场店",
+    ]
+    assert result.meta["compare_stores"] is True
+    assert result.meta["scope_matches_request"] is True
 
 
 def test_multi_store_dish_margin_keeps_selected_store_with_no_sales(monkeypatch):
