@@ -49,6 +49,44 @@ def test_comprehensive_or_decision_questions_auto_expand_but_lookup_stays_narrow
     assert generic["auto_expand"] is True
 
 
+def test_conceptual_internal_external_scope_expands_all_dimensions():
+    engine = ComprehensiveSynthesisEngine(pool=object())
+
+    plan = engine.plan_dimensions(
+        "最近30天全部门店最值得优先解决的经营问题是什么？"
+        "把内部经营和外部环境维度一起看，缺数据就告诉我还需补什么，不要猜数字"
+    )
+
+    assert plan["analysis_mode"] == "diagnose"
+    assert plan["auto_expand"] is True
+    for key in (
+        "review", "finance", "sales", "dish_margin", "traffic", "operations",
+        "staffing", "external_signals", "holiday", "attribution", "weather",
+        "channel", "meal_period", "discount", "period_comparison",
+        "supplier_anomaly",
+    ):
+        assert plan[key] is True
+
+
+def test_dish_metric_coverage_wording_expands_relevant_dish_dimensions_only():
+    engine = ComprehensiveSynthesisEngine(pool=object())
+
+    plan = engine.plan_dimensions(
+        "不要只把优化理解成滞销。请按最近30天全部门店的销量、销售额"
+        "和其他可用菜品经营指标给出优化候选，并明确缺失维度"
+    )
+
+    assert plan["auto_expand"] is False
+    assert plan["review"] is True
+    assert plan["finance"] is True
+    assert plan["sales"] is True
+    assert plan["dish_margin"] is True
+    assert plan["dish_margin_asked"] is True
+    assert plan["operations"] is True
+    assert plan["external_signals"] is False
+    assert plan["staffing"] is False
+
+
 def test_missing_dimension_guidance_is_deterministic_and_never_turns_missing_into_zero():
     fb = FactBook(missing_dimensions=[
         missing_status("physical_traffic", reason="没有物理客流"),

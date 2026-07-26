@@ -531,6 +531,10 @@ def _is_broad_revenue_growth_question(message: str) -> bool:
 
 def _infer_owner_action_scenario_from_message(message: str) -> str:
     text = message or ""
+    if "先守住营收" in text:
+        return "revenue_growth"
+    if any(keyword in text for keyword in ("先守住毛利", "先减少损耗")):
+        return "cost_margin"
     if any(keyword in text for keyword in (
         "营收杠杆",
         "先拆客流转化",
@@ -600,6 +604,15 @@ def _pick_owner_action_scenario(message: str, requested: str, previous: str) -> 
     requested = _OWNER_ACTION_SCENARIO_ALIASES.get(str(requested or "").strip(), requested)
     previous = _OWNER_ACTION_SCENARIO_ALIASES.get(str(previous or "").strip(), previous)
     explicit = _infer_owner_action_scenario_from_message(message)
+    if requested == "goal_clarification" and not explicit:
+        return "goal_clarification"
+    if (
+        previous == "goal_clarification"
+        and requested in ("", "goal_clarification")
+        and _is_follow_up(message)
+        and not explicit
+    ):
+        return "goal_clarification"
     if previous == "revenue_growth" and _is_follow_up(message) and any(keyword in (message or "") for keyword in (
         "选一个营收杠杆",
         "继续拆",
@@ -1939,12 +1952,27 @@ def _owner_chat_follow_ups(
     message: str = "",
     *,
     is_follow_up: bool = False,
-) -> list[str]:
-    if _is_unscoped_owner_prohibition_question(message) and not is_follow_up:
+) -> list[Any]:
+    if (
+        scenario == "goal_clarification"
+        or (_is_unscoped_owner_prohibition_question(message) and not is_follow_up)
+    ):
         return [
-            "先守住营收",
-            "先守住毛利",
-            "先减少损耗",
+            {
+                "label": "先守住营收",
+                "question": "先守住营收",
+                "ownerActionScenario": "revenue_growth",
+            },
+            {
+                "label": "先守住毛利",
+                "question": "先守住毛利",
+                "ownerActionScenario": "cost_margin",
+            },
+            {
+                "label": "先减少损耗",
+                "question": "先减少损耗",
+                "ownerActionScenario": "cost_margin",
+            },
         ]
     if scenario == "revenue_growth":
         text = message or ""
@@ -2650,8 +2678,52 @@ def _owner_action_chat_impl(
     previous = _OWNER_ACTION_CHAT_SESSIONS.get(session_key, {})
     requested = _effective_str(body.demo_scenario, body.demoScenario)
     requested_scenario = _OWNER_ACTION_SCENARIO_ALIASES.get(str(requested or "").strip(), requested)
-    scenario = _pick_owner_action_scenario(body.message, requested, previous.get("scenario", ""))
     scenarios = set(list_owner_action_demo_scenarios())
+    is_unscoped_goal_clarification = (
+        _is_unscoped_owner_prohibition_question(body.message)
+        and not previous.get("scenario")
+        and requested_scenario not in scenarios
+    )
+    scenario = (
+        "goal_clarification"
+        if is_unscoped_goal_clarification
+        else _pick_owner_action_scenario(body.message, requested, previous.get("scenario", ""))
+    )
+    if scenario == "goal_clarification":
+        answer = (
+            "先确认你这次最想守住哪个目标：营收、毛利、减少损耗，"
+            "还是提升复购和评价？目标不同，暂时不该做的事情也不同。"
+            "在你选定目标前，我不会默认成套餐、打折或投流方案。"
+        )
+        follow_ups = _owner_chat_follow_ups(
+            scenario,
+            body.message,
+            is_follow_up=bool(previous.get("scenario")),
+        )
+        _OWNER_ACTION_CHAT_SESSIONS[session_key] = {
+            "scenario": scenario,
+            "lastMessage": body.message,
+            "lastAnswer": answer,
+        }
+        return {
+            "success": True,
+            "data": {
+                "sessionId": session_id,
+                "scenario": scenario,
+                "answer": answer,
+                "responseText": answer,
+                "log_id": None,
+                "logId": None,
+                "followUpSuggestions": follow_ups,
+                "charts": [],
+                "chartGuide": "",
+                "roleActionPlan": [],
+                "decisionFocus": None,
+                "ownerDecisionPage": {},
+                "dataReadiness": {},
+                "demoActionScenarios": list_owner_action_demo_scenarios(),
+            },
+        }
     is_follow_up_turn = _is_follow_up(body.message) and (
         (bool(previous.get("scenario")) and scenario == previous.get("scenario"))
         or (bool(provided_session_id) and requested_scenario in scenarios and scenario == requested_scenario)
