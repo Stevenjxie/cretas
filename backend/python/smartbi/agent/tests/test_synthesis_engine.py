@@ -119,11 +119,19 @@ def _install_data_fakes(monkeypatch, *, review_empty=False):
     async def fake_review_worst(pool, fid, *, dim, order, top_n):
         return {"stores": [{"store": "鲜行者X顺德小馆", "low_star_count": 64, "review_count": 800}]}
 
-    async def fake_finance(pool, fid, dr, *, top_n_stores=10):
+    async def fake_finance(
+        pool,
+        fid,
+        dr,
+        *,
+        top_n_stores=10,
+        store_names=None,
+    ):
         return {
             "start_date": dr[0].isoformat(), "end_date": dr[1].isoformat(),
             "total_revenue": 20640000.0, "bill_count": 141000, "avg_bill_value": 146.4,
             "store_count": 8, "day_count": 365,
+            "store_names": list(store_names) if store_names is not None else None,
             "top_stores": [{"store_id": 1, "store_name": "青花椒大融城店",
                             "revenue": 3500000.0, "bill_count": 24000}],
         }
@@ -229,6 +237,106 @@ class TestPlanDimensions:
         assert eng.plan_dimensions("哪家供应商送货人少")["attribution"] is False
 
 
+class TestExplicitRestaurantStoreScope:
+    def test_resolves_only_unambiguous_canonical_store_names(self, monkeypatch):
+        monkeypatch.setattr(
+            se,
+            "extract_store_mentions",
+            lambda _q: ["最近30天青花椒南方百联店"],
+        )
+
+        async def canonicalize(_pool, _factory_id, mention):
+            assert mention == "最近30天青花椒南方百联店"
+            return ["青花椒南方百联店"]
+
+        monkeypatch.setattr(se, "_canonicalize_store_mention", canonicalize)
+        resolved = asyncio.run(se._resolve_synthesis_store_scope(
+            object(),
+            "DEMO_REST",
+            "最近30天青花椒南方百联店经营情况",
+        ))
+        assert resolved == ("青花椒南方百联店",)
+
+    def test_ambiguous_store_scope_fails_closed(self, monkeypatch):
+        monkeypatch.setattr(
+            se,
+            "extract_store_mentions",
+            lambda _q: ["南方店"],
+        )
+
+        async def canonicalize(_pool, _factory_id, _mention):
+            return ["青花椒南方百联店", "青花椒南方商城店"]
+
+        monkeypatch.setattr(se, "_canonicalize_store_mention", canonicalize)
+        resolved = asyncio.run(se._resolve_synthesis_store_scope(
+            object(),
+            "DEMO_REST",
+            "南方店经营情况",
+        ))
+        assert resolved == ()
+
+    def test_scoped_synthesis_skips_shared_semantic_cache(
+        self, monkeypatch,
+    ):
+        cache = FakeCache(semantic_hit={
+            "answer": "错误的全部门店缓存",
+            "chart_config": {},
+        })
+        eng = _engine(
+            monkeypatch,
+            budget=FakeBudget(blocked=True),
+            cache=cache,
+        )
+        captured = {}
+
+        async def resolve_scope(_pool, _factory_id, _question):
+            return ("青花椒南方百联店",)
+
+        async def no_embedding(_text):
+            raise AssertionError("scoped synthesis must not use semantic cache")
+
+        async def build_factbook(
+            _factory_id,
+            _date_range,
+            _plan,
+            *,
+            period,
+            store_names=None,
+        ):
+            captured["period"] = period
+            captured["store_names"] = store_names
+            return FactBook(
+                period=period,
+                finance={
+                    "total_revenue": 1000.0,
+                    "bill_count": 10,
+                    "avg_bill_value": 100.0,
+                    "store_count": 1,
+                    "top_stores": [{
+                        "store_name": "青花椒南方百联店",
+                        "revenue": 1000.0,
+                        "bill_count": 10,
+                    }],
+                },
+            )
+
+        monkeypatch.setattr(se, "_resolve_synthesis_store_scope", resolve_scope)
+        monkeypatch.setattr(se, "_get_embedding", no_embedding)
+        monkeypatch.setattr(eng, "_build_factbook", build_factbook)
+
+        import datetime
+        response = asyncio.run(eng.synthesize(
+            "DEMO_REST",
+            "最近30天青花椒南方百联店经营情况",
+            (datetime.date(2026, 6, 26), datetime.date(2026, 7, 25)),
+        ))
+
+        assert response.source == se.RESULT_SOURCE_DETERMINISTIC
+        assert cache.get_semantic_calls == []
+        assert captured["store_names"] == ("青花椒南方百联店",)
+        assert "门店范围：青花椒南方百联店" in captured["period"]
+
+
 # --------------------------------------------------------------------------
 # _build_factbook
 # --------------------------------------------------------------------------
@@ -248,6 +356,136 @@ class TestBuildFactbook:
         # honest notes
         assert se.NOTE_DISH_TAG_NOT_NAME in fb.notes
         assert se.NOTE_VIP_SIGNAL in fb.notes  # VIP 4.50 < 非VIP 4.83
+
+    def test_store_scope_filters_internal_facts_and_labels_external_context(
+        self, monkeypatch,
+    ):
+        captured = {
+            "finance_store_names": None,
+            "trend_store_names": None,
+            "resolver_queries": [],
+        }
+
+        async def finance(
+            _pool,
+            _factory_id,
+            _date_range,
+            *,
+            top_n_stores,
+            store_names,
+        ):
+            captured["finance_store_names"] = store_names
+            return {
+                "total_revenue": 1000.0,
+                "bill_count": 10,
+                "avg_bill_value": 100.0,
+                "store_count": 1,
+                "day_count": 30,
+                "store_names": list(store_names),
+                "top_stores": [{
+                    "store_name": store_names[0],
+                    "revenue": 1000.0,
+                    "bill_count": 10,
+                }],
+            }
+
+        async def trend(
+            _pool,
+            _factory_id,
+            _date_range,
+            *,
+            store_names,
+        ):
+            captured["trend_store_names"] = store_names
+            return {"points": []}
+
+        class GoldAnswer:
+            def __init__(self, name):
+                self.meta = {
+                    "ranked_entities": [{
+                        "id": name,
+                        "name": name,
+                        "sales_volume": 12.5,
+                        "revenue": 625.0,
+                        "bill_count": 10,
+                    }],
+                }
+
+        async def resolver(
+            _code,
+            _pool,
+            _factory_id,
+            *,
+            query,
+            date_range,
+            role,
+        ):
+            assert date_range
+            assert role == "restaurant_owner"
+            captured["resolver_queries"].append(query)
+            return GoldAnswer("娃娃菜")
+
+        async def external(_pool, _factory_id, _date_range):
+            return {
+                "dimensions": {
+                    "promotion": {
+                        "evidence_level": "SIMULATED",
+                        "sources": [{
+                            "source_code": "internal_seed_campaign",
+                            "source_name": "Demo月度活动",
+                        }],
+                        "metrics": [{
+                            "metric_code": "campaign_exposure",
+                            "sum": 1000.0,
+                        }],
+                    },
+                },
+            }
+
+        monkeypatch.setattr(se, "finance_summary", finance)
+        monkeypatch.setattr(se, "daily_trend", trend)
+        monkeypatch.setattr(se, "resolve_by_code", resolver)
+        monkeypatch.setattr(se, "restaurant_dimension_signals", external)
+        eng = _engine(monkeypatch)
+
+        import datetime
+        plan = {
+            "review": True,
+            "finance": True,
+            "sales": True,
+            "external_signals": True,
+            "holiday": False,
+            "supplier_anomaly": False,
+            "weather": False,
+            "cross": [],
+        }
+        fb = asyncio.run(eng._build_factbook(
+            "DEMO_REST",
+            (datetime.date(2026, 6, 26), datetime.date(2026, 7, 25)),
+            plan,
+            period=(
+                "2026-06-26 至 2026-07-25；"
+                "门店范围：青花椒南方百联店"
+            ),
+            store_names=("青花椒南方百联店",),
+        ))
+
+        assert captured["finance_store_names"] == ("青花椒南方百联店",)
+        assert captured["trend_store_names"] == ("青花椒南方百联店",)
+        assert all(
+            "青花椒南方百联店" in query
+            and "全部门店" not in query
+            for query in captured["resolver_queries"]
+        )
+        assert len(captured["resolver_queries"]) == 2
+        assert fb.finance["store_count"] == 1
+        assert fb.sales["top_products"][0]["product_name"] == "娃娃菜"
+        assert fb.review is None
+        assert fb.external_dimensions is not None
+        prompt = fb.to_prompt_text()
+        assert "门店范围：青花椒南方百联店" in prompt
+        assert "商圈/品牌级描述性背景" in prompt
+        assert "不用全部门店数据代替" in prompt
 
     def test_attribution_dimension_populates_from_store_comparison(self, monkeypatch):
         _install_data_fakes(monkeypatch)
@@ -582,7 +820,7 @@ class TestSynthesize:
         assert cache.put_calls
 
     def test_contract_version_invalidates_pre_guard_narrative_cache(self):
-        assert se.SYNTHESIS_CONTRACT_VERSION == "restaurant-dimensions-v8"
+        assert se.SYNTHESIS_CONTRACT_VERSION == "restaurant-dimensions-v9"
 
 
 class TestNarrativeGroundingGate:
@@ -705,6 +943,13 @@ class TestNarrativeGroundingGate:
             "本月满减金额500元，占营业额5%。",
             FactBook(),
         ) == []
+
+    def test_observed_discount_exception_does_not_authorize_new_promotion(self):
+        violations = se._narrative_grounding_violations(
+            "建议满减10元。",
+            FactBook(),
+        )
+        assert any("高影响动作" in item for item in violations)
 
     def test_factbook_exposes_both_high_and_low_dish_sales_candidates(self):
         factbook = FactBook(sales={

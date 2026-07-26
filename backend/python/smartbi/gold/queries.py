@@ -156,6 +156,8 @@ async def daily_trend(
     pool: asyncpg.Pool,
     factory_id: str,
     date_range: Tuple[Optional[date], Optional[date]],
+    *,
+    store_names: Optional[Tuple[str, ...]] = None,
 ) -> Dict[str, Any]:
     """Daily revenue/bill-count trend — feeds 分析概览 trend line chart.
 
@@ -175,6 +177,14 @@ async def daily_trend(
     if end is not None:
         params.append(end)
         conds.append(f"date <= ${len(params)}")
+    if store_names is not None:
+        params.append(list(store_names))
+        conds.append(
+            "store_id IN ("
+            "SELECT store_id FROM dim_store "
+            f"WHERE factory_id = $1 AND name = ANY(${len(params)}::text[])"
+            ")"
+        )
     where = " AND ".join(conds)
     async with pool.acquire() as conn:
         rows = await conn.fetch(
@@ -204,6 +214,7 @@ async def daily_trend(
         "factory_id": factory_id,
         "start_date": start.isoformat() if start is not None else None,
         "end_date": end.isoformat() if end is not None else None,
+        "store_names": list(store_names) if store_names is not None else None,
         "points": points,
     }
 
@@ -1086,6 +1097,7 @@ async def finance_summary(
     date_range: Tuple[Optional[date], Optional[date]],
     *,
     top_n_stores: int = 10,
+    store_names: Optional[Tuple[str, ...]] = None,
 ) -> Dict[str, Any]:
     """Finance KPI summary for the Vue 财务报表 page.
 
@@ -1122,6 +1134,16 @@ async def finance_summary(
         params.append(end)
         totals_conds.append(f"a.date <= ${len(params)}")
         stores_conds.append(f"a.date <= ${len(params)}")
+    if store_names is not None:
+        params.append(list(store_names))
+        scope_condition = (
+            "a.store_id IN ("
+            "SELECT store_id FROM dim_store "
+            f"WHERE factory_id = $1 AND name = ANY(${len(params)}::text[])"
+            ")"
+        )
+        totals_conds.append(scope_condition)
+        stores_conds.append(scope_condition)
     totals_where = " AND ".join(totals_conds)
     stores_where = " AND ".join(stores_conds)
     # top_n_stores comes AFTER the dynamic date params → renumbered $N.
@@ -1187,6 +1209,7 @@ async def finance_summary(
         "factory_id": factory_id,
         "start_date": start.isoformat() if start is not None else None,
         "end_date": end.isoformat() if end is not None else None,
+        "store_names": list(store_names) if store_names is not None else None,
         "total_revenue": float(total_revenue),
         "bill_count": bill_count,
         "avg_bill_value": float(avg_bill_value) if avg_bill_value is not None else None,

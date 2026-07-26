@@ -226,6 +226,29 @@ async def test_finance_summary_top_n_cap(pool, seeded):
     assert out["top_stores"][0]["store_name"] == "S1"
 
 
+@pytest.mark.asyncio
+async def test_finance_summary_explicit_store_scope_never_rolls_up_other_stores(
+    pool, seeded,
+):
+    from smartbi.tenant_ctx import set_factory_id, reset_factory_id
+    token = set_factory_id(_TENANT)
+    try:
+        out = await finance_summary(
+            pool,
+            _TENANT,
+            (date(2026, 4, 21), date(2026, 4, 22)),
+            store_names=("S1",),
+        )
+    finally:
+        reset_factory_id(token)
+
+    assert out["store_names"] == ["S1"]
+    assert out["total_revenue"] == 150.0
+    assert out["bill_count"] == 2
+    assert out["store_count"] == 1
+    assert [item["store_name"] for item in out["top_stores"]] == ["S1"]
+
+
 # ── daily_trend ─────────────────────────────────────────────
 
 @pytest.mark.asyncio
@@ -256,6 +279,31 @@ async def test_daily_trend_empty_range_returns_empty_points(pool, seeded):
     finally:
         reset_factory_id(token)
     assert out["points"] == []
+
+
+@pytest.mark.asyncio
+async def test_daily_trend_explicit_store_scope_never_uses_chain_totals(
+    pool, seeded,
+):
+    from smartbi.tenant_ctx import set_factory_id, reset_factory_id
+    token = set_factory_id(_TENANT)
+    try:
+        out = await daily_trend(
+            pool,
+            _TENANT,
+            (date(2026, 4, 21), date(2026, 4, 22)),
+            store_names=("S1",),
+        )
+    finally:
+        reset_factory_id(token)
+
+    assert out["store_names"] == ["S1"]
+    assert out["points"] == [{
+        "date": "2026-04-21",
+        "revenue": 150.0,
+        "bill_count": 2,
+        "avg_bill_value": 75.0,
+    }]
 
 
 # ── top_products ────────────────────────────────────────────
