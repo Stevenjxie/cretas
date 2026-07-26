@@ -65,6 +65,15 @@ interface MaterialPackagingHierarchy {
   level2Unit?: string | null;
   level2PerLevel3?: number | null;
   level3Unit?: string | null;
+  packagingSpecs?: Array<{
+    id: string;
+    name: string;
+    packageUnit: string;
+    baseUnit: string;
+    conversionFactor: number;
+    defaultSpec?: boolean;
+    active?: boolean;
+  }>;
 }
 
 // editable item for PO creation
@@ -151,6 +160,7 @@ function quantityUnitOptions(item: EditableItem) {
     packaging?.level1Unit,
     packaging?.level2Unit,
     packaging?.level3Unit,
+    ...(packaging?.packagingSpecs || []).map((spec) => spec.packageUnit),
     item.quantityUnit,
     item.unit,
   ).map((unit) => ({ value: unit, label: displayUnit(unit) }));
@@ -165,6 +175,10 @@ function priceUnitOptions(item: EditableItem) {
 
 function packagingSummary(item: EditableItem): string {
   const packaging = packagingByMaterial.value[item.materialTypeId];
+  const dynamic = (packaging?.packagingSpecs || [])
+    .filter((spec) => spec.active !== false)
+    .map((spec) => `1 ${displayUnit(spec.packageUnit)} = ${spec.conversionFactor} ${displayUnit(spec.baseUnit)}`);
+  if (dynamic.length > 0) return dynamic.join('；');
   if (!packaging?.level1Unit || !packaging.level2Unit || !packaging.level1PerLevel2) return '';
   const level2 = `1 ${displayUnit(packaging.level2Unit)} = ${packaging.level1PerLevel2} ${displayUnit(packaging.level1Unit)}`;
   if (!packaging.level3Unit || !packaging.level2PerLevel3) return level2;
@@ -197,9 +211,13 @@ function quantityUnitToLevel1Factor(item: EditableItem, unit: string): number | 
   const level3Unit = canonicalUnitCode(packaging?.level3Unit);
   const level1PerLevel2 = Number(packaging?.level1PerLevel2);
   const level2PerLevel3 = Number(packaging?.level2PerLevel3);
+  const dynamic = (packaging?.packagingSpecs || []).find(
+    (spec) => canonicalUnitCode(spec.packageUnit) === candidate,
+  );
 
   if (!candidate) return null;
   if (candidate === level1Unit) return 1;
+  if (dynamic && Number(dynamic.conversionFactor) > 0) return Number(dynamic.conversionFactor);
   if (candidate === level2Unit && Number.isFinite(level1PerLevel2) && level1PerLevel2 > 0) {
     return level1PerLevel2;
   }
@@ -401,6 +419,8 @@ async function handleConfirm() {
         specification: it.specification || null,
         boxQuantity: it.boxQuantity,
         remark: it.remark || '',
+        materialPackagingSpecId: packagingByMaterial.value[it.materialTypeId]?.packagingSpecs
+          ?.find((spec) => canonicalUnitCode(spec.packageUnit) === canonicalUnitCode(it.quantityUnit))?.id,
       })),
     };
 

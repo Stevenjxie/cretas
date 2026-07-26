@@ -21,8 +21,20 @@ export interface MaterialPackagingHierarchy {
   level2PerLevel3?: number | null;
   level3Unit?: string | null;
   notes?: string | null;
+  packagingSpecs?: MaterialPackagingSpec[];
   createdAt?: string;
   updatedAt?: string;
+}
+
+export interface MaterialPackagingSpec {
+  id: string;
+  name: string;
+  packageUnit: string;
+  baseUnit: string;
+  conversionFactor: number;
+  defaultSpec?: boolean | null;
+  active?: boolean | null;
+  sortOrder?: number | null;
 }
 
 export const materialPackagingApiClient = {

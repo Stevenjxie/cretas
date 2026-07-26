@@ -18,6 +18,17 @@ export interface TransferCreateRow {
   itemName: string;
   quantity?: number;
   unit: string;
+  materialPackagingSpecId?: string;
+  packagingOptions?: Array<{
+    id: string;
+    name: string;
+    packageUnit: string;
+    baseUnit: string;
+    conversionFactor: number;
+    defaultSpec?: boolean;
+  }>;
+  _inventoryUnit?: string;
+  _packageFactor?: number;
   unitPrice?: number;
   remark?: string;
   _currentStock?: number | string | null;
@@ -155,6 +166,10 @@ export function applySelectedOption(row: TransferCreateRow, option: TransferSele
   row.selectedItemId = option.id;
   row.itemName = option.name;
   row.unit = canonicalUnitCode(option.unit);
+  row._inventoryUnit = canonicalUnitCode(option.unit);
+  row._packageFactor = 1;
+  row.materialPackagingSpecId = undefined;
+  row.packagingOptions = [];
   row.unitPrice = option.unitPrice;
   row._currentStock = option.currentStock;
   if (row.itemType === 'FINISHED_GOODS') {
@@ -173,6 +188,10 @@ export function resetSelectedOption(row: TransferCreateRow): void {
   row.itemName = '';
   row.quantity = undefined;
   row.unit = '';
+  row._inventoryUnit = '';
+  row._packageFactor = 1;
+  row.materialPackagingSpecId = undefined;
+  row.packagingOptions = [];
   row._currentStock = null;
 }
 
@@ -186,7 +205,12 @@ export function toTransferItemPayload(row: TransferCreateRow) {
     itemName: row.itemName,
     quantity: row.quantity,
     unit: canonicalUnitCode(row.unit),
-    unitPrice: row.unitPrice,
+    ...(row.materialPackagingSpecId
+      ? { materialPackagingSpecId: row.materialPackagingSpecId }
+      : {}),
+    unitPrice: row.unitPrice == null
+      ? undefined
+      : row.unitPrice * Number(row._packageFactor || 1),
     remark: row.remark || undefined,
   };
 }

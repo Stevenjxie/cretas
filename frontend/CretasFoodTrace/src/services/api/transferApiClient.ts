@@ -39,6 +39,11 @@ export interface TransferItem {
   receivedQuantity: number;
   unitPrice: number;
   unit: string;
+  materialPackagingSpecId?: string;
+  packageQuantitySnapshot?: number;
+  packageUnitSnapshot?: string;
+  inventoryBaseUnitSnapshot?: string;
+  packageToBaseFactorSnapshot?: number;
 }
 
 export interface CreateTransferRequest {
@@ -50,6 +55,7 @@ export interface CreateTransferRequest {
     itemType: string;
     materialTypeId?: string;
     productTypeId?: string;
+    materialPackagingSpecId?: string;
     quantity: number;
     unitPrice: number;
     unit: string;

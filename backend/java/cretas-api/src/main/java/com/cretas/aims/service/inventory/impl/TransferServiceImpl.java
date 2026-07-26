@@ -20,6 +20,7 @@ import com.cretas.aims.repository.MaterialBatchRepository;
 import com.cretas.aims.repository.MaterialConsumptionRepository;
 import com.cretas.aims.repository.RawMaterialTypeRepository;
 import com.cretas.aims.repository.UserRepository;
+import com.cretas.aims.repository.material.MaterialPackagingSpecRepository;
 import com.cretas.aims.repository.inventory.*;
 import com.cretas.aims.service.MaterialBatchService;
 import com.cretas.aims.service.ApprovalWorkflowService;
@@ -104,6 +105,9 @@ public class TransferServiceImpl implements TransferService {
     /** 调拨 payload 单位只保存 canonical code；中文仅属于 Web displayUnit。 */
     @Autowired(required = false)
     private UnitContractService unitContractService;
+
+    @Autowired(required = false)
+    private MaterialPackagingSpecRepository materialPackagingSpecRepository;
 
     /**
      * 🟢 PURE DISPLAY (fool-proof-design Rule 1, 2026-07-05): 用于 getAvailableBatchesForItem
@@ -216,6 +220,11 @@ public class TransferServiceImpl implements TransferService {
             item.setQuantity(itemDTO.getQuantity());
             item.setUnit(itemDTO.getUnit());
             item.setUnitPrice(itemDTO.getUnitPrice());
+            item.setMaterialPackagingSpecId(itemDTO.getMaterialPackagingSpecId());
+            item.setPackageQuantitySnapshot(itemDTO.getPackageQuantitySnapshot());
+            item.setPackageUnitSnapshot(itemDTO.getPackageUnitSnapshot());
+            item.setInventoryBaseUnitSnapshot(itemDTO.getInventoryBaseUnitSnapshot());
+            item.setPackageToBaseFactorSnapshot(itemDTO.getPackageToBaseFactorSnapshot());
             item.setRemark(itemDTO.getRemark());
             transfer.getItems().add(item);
 
@@ -346,11 +355,13 @@ public class TransferServiceImpl implements TransferService {
                     throw new BusinessException(400, "原料/包材调拨必须提交 materialTypeId")
                             .withHint("请重新选择与当前类型匹配的物料");
                 }
+                normalizeRawTransferPackaging(factoryId, item, materialTypeId);
+                String rawInventoryUnit = item.getUnit();
                 if (transferType == TransferType.WAREHOUSE_TO_WAREHOUSE) {
                     BigDecimal available = materialBatchRepository
                             .findAvailableBatchesFEFOByWarehouse(factoryId, materialTypeId, sourceWarehouseId)
                             .stream()
-                            .filter(batch -> canonicalUnit.equals(canonicalTransferUnit(factoryId, batch.getQuantityUnit())))
+                            .filter(batch -> rawInventoryUnit.equals(canonicalTransferUnit(factoryId, batch.getQuantityUnit())))
                             .map(batch -> {
                                 BigDecimal receipt = batch.getReceiptQuantity() != null
                                         ? batch.getReceiptQuantity() : BigDecimal.ZERO;
@@ -390,6 +401,80 @@ public class TransferServiceImpl implements TransferService {
         if (unitContractService == null) return value;
         var normalized = unitContractService.normalize(factoryId, value);
         return normalized.recognized() ? normalized.code() : value;
+    }
+
+    private void normalizeRawTransferPackaging(
+            String factoryId, CreateTransferRequest.TransferItemDTO item, String materialTypeId) {
+        RawMaterialType material = rawMaterialTypeRepository.findById(materialTypeId)
+                .orElseThrow(() -> new BusinessException(404, "调拨原料不存在: " + materialTypeId));
+        if (!factoryId.equals(material.getFactoryId())) {
+            throw new BusinessException(403, "调拨原料不属于当前工厂");
+        }
+        String baseUnit = canonicalTransferUnit(factoryId, material.getUnit());
+        String transactionUnit = canonicalTransferUnit(factoryId, item.getUnit());
+        BigDecimal factor = BigDecimal.ONE;
+        String specId = trimToNull(item.getMaterialPackagingSpecId());
+
+        if (Boolean.TRUE.equals(material.getIsAbacaPackaging()) && !transactionUnit.equals(baseUnit)) {
+            throw new BusinessException(422, "抄码原料调拨必须按实际称重基本单位")
+                    .withCode("ABACA_TRANSFER_BASE_UNIT_REQUIRED")
+                    .withHint("请改用 " + baseUnit + " 输入实际重量");
+        }
+        if (specId != null) {
+            if (materialPackagingSpecRepository == null) {
+                throw new BusinessException(503, "原料包装规格服务不可用")
+                        .withHint("请稍后重试；系统未执行库存扣减");
+            }
+            var spec = materialPackagingSpecRepository
+                    .findByIdAndFactoryIdAndMaterialTypeIdAndActiveTrue(specId, factoryId, materialTypeId)
+                    .orElseThrow(() -> new BusinessException(400, "调拨包装规格不存在、已停用或不属于当前原料")
+                            .withCode("TRANSFER_MATERIAL_PACKAGING_SPEC_MISMATCH")
+                            .withHintTarget("materialPackagingSpecId"));
+            String specUnit = canonicalTransferUnit(factoryId, spec.getPackageUnit());
+            String specBase = canonicalTransferUnit(factoryId, spec.getBaseUnit());
+            if (!transactionUnit.equals(specUnit) || !baseUnit.equals(specBase)) {
+                throw new BusinessException(409, "调拨包装规格与原料基本单位不一致")
+                        .withHint("请返回原料类型修正包装换算");
+            }
+            factor = spec.getConversionFactor();
+        } else if (!transactionUnit.equals(baseUnit)) {
+            if (materialPackagingSpecRepository == null) {
+                throw new BusinessException(422, "调拨包装单位必须选择具体规格")
+                        .withHintTarget("materialPackagingSpecId");
+            }
+            List<com.cretas.aims.entity.material.MaterialPackagingSpec> matches =
+                    materialPackagingSpecRepository
+                            .findByFactoryIdAndMaterialTypeIdAndActiveTrueOrderBySortOrderAscCreatedAtAsc(
+                                    factoryId, materialTypeId).stream()
+                            .filter(spec -> transactionUnit.equals(
+                                    canonicalTransferUnit(factoryId, spec.getPackageUnit())))
+                            .toList();
+            if (matches.size() != 1) {
+                throw new BusinessException(422, "调拨包装单位必须选择具体规格")
+                        .withCode("TRANSFER_MATERIAL_PACKAGING_SPEC_REQUIRED")
+                        .withHintTarget("materialPackagingSpecId");
+            }
+            var matched = matches.get(0);
+            specId = matched.getId();
+            factor = matched.getConversionFactor();
+        }
+        if (factor == null || factor.signum() <= 0) {
+            throw new BusinessException(409, "调拨包装换算数无效")
+                    .withHint("请先修正原料包装规格");
+        }
+
+        BigDecimal packageQuantity = item.getQuantity();
+        item.setMaterialPackagingSpecId(specId);
+        item.setPackageQuantitySnapshot(packageQuantity);
+        item.setPackageUnitSnapshot(transactionUnit);
+        item.setInventoryBaseUnitSnapshot(baseUnit);
+        item.setPackageToBaseFactorSnapshot(factor);
+        item.setQuantity(packageQuantity.multiply(factor));
+        item.setUnit(baseUnit);
+        if (item.getUnitPrice() != null && factor.compareTo(BigDecimal.ONE) != 0) {
+            item.setUnitPrice(item.getUnitPrice().divide(
+                    factor, 12, java.math.RoundingMode.HALF_UP));
+        }
     }
 
     @Override

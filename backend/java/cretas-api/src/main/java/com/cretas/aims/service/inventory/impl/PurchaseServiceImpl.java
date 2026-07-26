@@ -124,6 +124,10 @@ public class PurchaseServiceImpl implements PurchaseService {
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private com.cretas.aims.repository.SupplierMaterialPurchaseSpecRepository supplierMaterialPurchaseSpecRepository;
 
+    /** Material-master transaction packaging; inventory still lands in RawMaterialType.unit. */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.cretas.aims.repository.material.MaterialPackagingSpecRepository materialPackagingSpecRepository;
+
     /**
      * 销售订单采购建议必须与以销定产使用同一包装换算契约：先把销售展示单位
      * （例如 10 箱）换算为成品基本单位（500 盒），再乘每基本单位 BOM 用量。
@@ -1459,6 +1463,7 @@ public class PurchaseServiceImpl implements PurchaseService {
                     ? srcItem.getQuantityToPriceFactor() : BigDecimal.ONE);
             newItem.setSupplierMaterialId(srcItem.getSupplierMaterialId());
             newItem.setPurchasePackagingSpecId(srcItem.getPurchasePackagingSpecId());
+            newItem.setMaterialPackagingSpecId(srcItem.getMaterialPackagingSpecId());
             newItem.setPurchasePackageUnitSnapshot(srcItem.getPurchasePackageUnitSnapshot());
             newItem.setInventoryBaseUnitSnapshot(srcItem.getInventoryBaseUnitSnapshot());
             newItem.setPackageToBaseFactorSnapshot(srcItem.getPackageToBaseFactorSnapshot());
@@ -1545,12 +1550,22 @@ public class PurchaseServiceImpl implements PurchaseService {
         for (PurchaseReceiveRecord receipt : activeReceipts) {
             if (receipt.getItems() == null) continue;
             for (PurchaseReceiveItem item : receipt.getItems()) {
+                BigDecimal allocatedQuantity = zeroIfNull(item.getReceivedQuantity());
+                try {
+                    PurchaseOrderItem orderItem = resolvePurchaseOrderItem(
+                            orderItems, item.getPurchaseOrderItemId(), item.getMaterialTypeId());
+                    allocatedQuantity = receiptQuantityInOrderUnit(
+                            order.getFactoryId(), orderItem, item);
+                } catch (BusinessException ex) {
+                    log.warn("活动收货草稿缺少安全换算快照: receiptId={}, itemId={}, error={}",
+                            receipt.getId(), item.getId(), ex.getMessage());
+                }
                 if (item.getPurchaseOrderItemId() != null) {
                     activeAllocatedByOrderItem.merge(item.getPurchaseOrderItemId(),
-                            zeroIfNull(item.getReceivedQuantity()), BigDecimal::add);
+                            allocatedQuantity, BigDecimal::add);
                 } else {
                     legacyAllocatedByMaterial.merge(item.getMaterialTypeId(),
-                            zeroIfNull(item.getReceivedQuantity()), BigDecimal::add);
+                            allocatedQuantity, BigDecimal::add);
                 }
             }
         }
@@ -1587,6 +1602,18 @@ public class PurchaseServiceImpl implements PurchaseService {
                     .remainingReceivableQuantity(remaining)
                     .unit(item.getUnit())
                     .specification(item.getSpecification())
+                    .materialPackagingSpecId(item.getMaterialPackagingSpecId())
+                    .inventoryBaseUnit(item.getInventoryBaseUnitSnapshot())
+                    .packageToBaseFactor(item.getPackageToBaseFactorSnapshot())
+                    .packagingSpecs(materialPackagingSpecRepository == null ? List.of()
+                            : materialPackagingSpecRepository
+                                    .findByFactoryIdAndMaterialTypeIdAndActiveTrueOrderBySortOrderAscCreatedAtAsc(
+                                            order.getFactoryId(), item.getMaterialTypeId()).stream()
+                                    .map(spec -> new com.cretas.aims.dto.material.MaterialPackagingSpecDTO(
+                                            spec.getId(), spec.getName(), spec.getPackageUnit(), spec.getBaseUnit(),
+                                            spec.getConversionFactor(), spec.getDefaultSpec(), spec.getActive(),
+                                            spec.getSortOrder(), spec.getVersion()))
+                                    .toList())
                     .build());
         }
 
@@ -1678,9 +1705,9 @@ public class PurchaseServiceImpl implements PurchaseService {
                 PurchaseOrderItem poLine = resolvePurchaseOrderItem(
                         poLines, line.getPurchaseOrderItemId(), line.getMaterialTypeId());
                 line.setPurchaseOrderItemId(poLine.getId());
-                line.setUnit(validateReceiveLineUnit(factoryId, poLine, line.getUnit()));
+                line.setUnit(resolveReceiptSelection(factoryId, poLine, line).packageUnit());
             }
-            // 必须在行身份与 canonical 单位均锁定后再比较数量，禁止 kg/case 等跨单位裸数相加。
+            // 必须先折合到采购行基本量，再比较上限；禁止 kg/case 等跨单位裸数相加。
             validateOverReceiveCap(order, request.getItems());
         }
 
@@ -1737,8 +1764,24 @@ public class PurchaseServiceImpl implements PurchaseService {
             item.setMaterialTypeId(itemDTO.getMaterialTypeId());
             item.setMaterialName(itemDTO.getMaterialName());
             item.setReceivedQuantity(itemDTO.getReceivedQuantity());
-            String quantityUnit = canonicalUnit(factoryId, itemDTO.getUnit(), "收货数量单位");
+            RawMaterialType material = materialTypeRepository.findById(itemDTO.getMaterialTypeId())
+                    .orElseThrow(() -> new ResourceNotFoundException("收货物料不存在: " + itemDTO.getMaterialTypeId()));
+            MaterialPackagingSelection packagingSelection;
+            if (order != null) {
+                PurchaseOrderItem poLine = resolvePurchaseOrderItem(
+                        poLines, itemDTO.getPurchaseOrderItemId(), itemDTO.getMaterialTypeId());
+                packagingSelection = resolveReceiptSelection(factoryId, poLine, itemDTO);
+            } else {
+                packagingSelection = resolveMaterialPackagingSelection(
+                        factoryId, material, itemDTO.getMaterialPackagingSpecId(), itemDTO.getUnit());
+            }
+            String quantityUnit = packagingSelection.packageUnit();
             item.setUnit(quantityUnit);
+            item.setMaterialPackagingSpecId(packagingSelection.specId());
+            item.setReceivePackageUnitSnapshot(quantityUnit);
+            item.setInventoryBaseUnitSnapshot(packagingSelection.baseUnit());
+            item.setPackageToBaseFactorSnapshot(packagingSelection.factor());
+            item.setInventoryQuantitySnapshot(packagingSelection.toBase(itemDTO.getReceivedQuantity()));
             // BUG-RCV: 行价为空 → 继承 PO 行价 (合同价); 无 PO / PO 无此物料价 → 保持 null (诚实, 不伪造 0).
             PurchasePriceQuote inheritedQuote = poLinePrices.get(String.valueOf(itemDTO.getPurchaseOrderItemId()));
             // PO 收货价只能来自已审批采购行快照；仓储请求中的价格字段不具有改价权限。
@@ -1834,7 +1877,7 @@ public class PurchaseServiceImpl implements PurchaseService {
             for (PurchaseReceiveItem receiveItem : record.getItems()) {
                 PurchaseOrderItem poLine = resolvePurchaseOrderItem(
                         poLines, receiveItem.getPurchaseOrderItemId(), receiveItem.getMaterialTypeId());
-                validateReceiveLineUnit(factoryId, poLine, receiveItem.getUnit());
+                validatePersistedReceiptSelection(factoryId, poLine, receiveItem);
             }
             validateOverReceiveCapForConfirm(record);
         }
@@ -1849,8 +1892,8 @@ public class PurchaseServiceImpl implements PurchaseService {
             item.setMaterialBatchId(batch.getId());
             materialBatchService.recalculateMovingAvgPrice(
                     item.getMaterialTypeId(),
-                    item.getReceivedQuantity(),
-                    item.getUnitPrice(),
+                    batch.getReceiptQuantity(),
+                    batch.getUnitPrice(),
                     batch.getId());
         }
 
@@ -1920,7 +1963,9 @@ public class PurchaseServiceImpl implements PurchaseService {
         // 发布物料收货事件 → 触发供应链联动（检查PP原料到齐状态）
         for (PurchaseReceiveItem item : record.getItems()) {
             try {
-                BigDecimal qty = item.getReceivedQuantity() != null ? item.getReceivedQuantity() : BigDecimal.ZERO;
+                BigDecimal qty = item.getInventoryQuantitySnapshot() != null
+                        ? item.getInventoryQuantitySnapshot()
+                        : item.getReceivedQuantity() != null ? item.getReceivedQuantity() : BigDecimal.ZERO;
                 applicationEventPublisher.publishEvent(new MaterialReceivedEvent(
                     this, factoryId, record.getPurchaseOrderId(),
                     item.getMaterialTypeId(), qty));
@@ -2533,25 +2578,68 @@ public class PurchaseServiceImpl implements PurchaseService {
         return normalized.code();
     }
 
-    /**
-     * Warehouse receipt quantities are recorded in the immutable PO line quantity unit.
-     * Cross-unit receipt conversion is deliberately fail-closed until a pinned packaging
-     * conversion snapshot can prove the relationship; bare numeric comparison is unsafe.
-     */
-    private String validateReceiveLineUnit(
-            String factoryId, PurchaseOrderItem poLine, String requestedUnit) {
-        String orderUnit = canonicalUnit(factoryId,
-                firstNonBlank(poLine.getPurchasePackageUnitSnapshot(), poLine.getUnit()),
-                "采购订单行数量单位");
-        String receiveUnit = canonicalUnit(factoryId, requestedUnit, "收货数量单位");
-        if (!orderUnit.equals(receiveUnit)) {
-            throw new BusinessException(400,
-                    "收货单位必须与采购订单行一致：订单为 " + orderUnit + "，本次为 " + receiveUnit)
-                    .withCode("PURCHASE_RECEIPT_UNIT_MISMATCH")
-                    .withHint("请按采购订单锁定单位收货；系统不会猜测跨单位换算")
-                    .withHintTarget("unit");
+    private void validatePersistedReceiptSelection(
+            String factoryId, PurchaseOrderItem poLine, PurchaseReceiveItem receiveItem) {
+        String orderBase = canonicalUnit(factoryId,
+                firstNonBlank(poLine.getInventoryBaseUnitSnapshot(), poLine.getUnit()),
+                "采购订单行库存基本单位");
+        String receiveBase = canonicalUnit(factoryId,
+                firstNonBlank(receiveItem.getInventoryBaseUnitSnapshot(), receiveItem.getUnit()),
+                "收货库存基本单位");
+        if (!orderBase.equals(receiveBase)) {
+            throw new BusinessException(409, "收货包装与采购单的库存基本单位不一致")
+                    .withCode("PURCHASE_RECEIPT_BASE_UNIT_MISMATCH")
+                    .withHint("请返回收货草稿重新选择正确包装规格");
         }
-        return receiveUnit;
+        if (receiveItem.getInventoryQuantitySnapshot() == null
+                || receiveItem.getPackageToBaseFactorSnapshot() == null
+                || receiveItem.getPackageToBaseFactorSnapshot().signum() <= 0) {
+            String orderUnit = canonicalUnit(factoryId,
+                    firstNonBlank(poLine.getPurchasePackageUnitSnapshot(), poLine.getUnit()),
+                    "采购订单行数量单位");
+            String receiveUnit = canonicalUnit(factoryId, receiveItem.getUnit(), "收货数量单位");
+            if (!orderUnit.equals(receiveUnit)) {
+                throw new BusinessException(409, "历史收货草稿缺少跨单位换算快照")
+                        .withCode("PURCHASE_RECEIPT_CONVERSION_SNAPSHOT_REQUIRED")
+                        .withHint("请删除草稿后从待收货任务重新创建");
+            }
+        }
+    }
+
+    private BigDecimal receiptQuantityInOrderUnit(
+            String factoryId, PurchaseOrderItem orderItem,
+            CreateReceiveRecordRequest.ReceiveItemDTO receiveItem) {
+        MaterialPackagingSelection selection = resolveReceiptSelection(factoryId, orderItem, receiveItem);
+        return selection.toBase(receiveItem.getReceivedQuantity())
+                .divide(requiredOrderBaseFactor(factoryId, orderItem), 12, java.math.RoundingMode.HALF_UP);
+    }
+
+    private BigDecimal receiptQuantityInOrderUnit(
+            String factoryId, PurchaseOrderItem orderItem, PurchaseReceiveItem receiveItem) {
+        BigDecimal baseQuantity = receiveItem.getInventoryQuantitySnapshot();
+        if (baseQuantity == null) {
+            String orderUnit = canonicalUnit(factoryId,
+                    firstNonBlank(orderItem.getPurchasePackageUnitSnapshot(), orderItem.getUnit()),
+                    "采购订单行数量单位");
+            String receiveUnit = canonicalUnit(factoryId, receiveItem.getUnit(), "收货数量单位");
+            if (!orderUnit.equals(receiveUnit)) {
+                throw new BusinessException(409, "历史收货行缺少跨单位换算快照")
+                        .withCode("PURCHASE_RECEIPT_CONVERSION_SNAPSHOT_REQUIRED");
+            }
+            return receiveItem.getReceivedQuantity();
+        }
+        return baseQuantity.divide(
+                requiredOrderBaseFactor(factoryId, orderItem), 12, java.math.RoundingMode.HALF_UP);
+    }
+
+    private BigDecimal requiredOrderBaseFactor(String factoryId, PurchaseOrderItem orderItem) {
+        BigDecimal factor = orderItem.getPackageToBaseFactorSnapshot();
+        if (factor != null && factor.signum() > 0) return factor;
+        String orderUnit = canonicalUnit(factoryId, orderItem.getUnit(), "采购订单行数量单位");
+        String baseUnit = canonicalUnit(factoryId,
+                firstNonBlank(orderItem.getInventoryBaseUnitSnapshot(), orderItem.getUnit()),
+                "采购订单行库存基本单位");
+        return conversionFactor(factoryId, orderItem.getMaterialTypeId(), orderUnit, baseUnit);
     }
 
     private String canonicalUnitOrRaw(String factoryId, String rawUnit) {
@@ -2565,6 +2653,98 @@ public class PurchaseServiceImpl implements PurchaseService {
 
     private String firstNonBlank(String first, String fallback) {
         return first != null && !first.isBlank() ? first : fallback;
+    }
+
+    private record MaterialPackagingSelection(
+            String specId, String packageUnit, String baseUnit, BigDecimal factor) {
+        BigDecimal toBase(BigDecimal packageQuantity) {
+            return packageQuantity == null ? BigDecimal.ZERO : packageQuantity.multiply(factor);
+        }
+    }
+
+    private MaterialPackagingSelection resolveMaterialPackagingSelection(
+            String factoryId, RawMaterialType material, String requestedSpecId, String requestedUnit) {
+        String baseUnit = canonicalUnit(factoryId, material.getUnit(), "库存基本单位");
+        String unit = canonicalUnit(factoryId, requestedUnit, "交易数量单位");
+        if (requestedSpecId != null && !requestedSpecId.isBlank()) {
+            if (materialPackagingSpecRepository == null) {
+                throw new BusinessException(503, "原料包装规格服务不可用")
+                        .withHint("请稍后重试；系统未执行任何库存写入");
+            }
+            com.cretas.aims.entity.material.MaterialPackagingSpec spec =
+                    materialPackagingSpecRepository
+                            .findByIdAndFactoryIdAndMaterialTypeIdAndActiveTrue(
+                                    requestedSpecId, factoryId, material.getId())
+                            .orElseThrow(() -> new BusinessException(400, "原料包装规格不存在、已停用或不属于当前物料")
+                                    .withCode("MATERIAL_PACKAGING_SPEC_IDENTITY_MISMATCH")
+                                    .withHintTarget("materialPackagingSpecId"));
+            String specUnit = canonicalUnit(factoryId, spec.getPackageUnit(), "包装单位");
+            String specBase = canonicalUnit(factoryId, spec.getBaseUnit(), "包装基本单位");
+            if (!baseUnit.equals(specBase)) {
+                throw new BusinessException(409, "包装规格基本单位与原料库存基本单位不一致")
+                        .withCode("MATERIAL_PACKAGING_BASE_UNIT_MISMATCH")
+                        .withHint("请先修正原料类型的包装换算")
+                        .withHintTarget("materialPackagingSpecId");
+            }
+            if (!unit.equals(specUnit)) {
+                throw new BusinessException(400, "交易数量单位与所选包装规格不一致")
+                        .withCode("MATERIAL_PACKAGING_UNIT_MISMATCH")
+                        .withHintTarget("unit");
+            }
+            return new MaterialPackagingSelection(
+                    spec.getId(), specUnit, baseUnit, spec.getConversionFactor());
+        }
+        if (unit.equals(baseUnit)) {
+            return new MaterialPackagingSelection(null, baseUnit, baseUnit, BigDecimal.ONE);
+        }
+        List<com.cretas.aims.entity.material.MaterialPackagingSpec> matches =
+                materialPackagingSpecRepository == null ? List.of()
+                        : materialPackagingSpecRepository
+                                .findByFactoryIdAndMaterialTypeIdAndActiveTrueOrderBySortOrderAscCreatedAtAsc(
+                                        factoryId, material.getId()).stream()
+                                .filter(spec -> unit.equals(canonicalUnitOrRaw(factoryId, spec.getPackageUnit())))
+                                .toList();
+        if (matches.size() != 1) {
+            throw new BusinessException(422, matches.isEmpty()
+                    ? "所选包装单位未配置到库存基本单位的换算"
+                    : "存在多个同单位包装规格，必须选择具体规格")
+                    .withCode("MATERIAL_PACKAGING_SPEC_REQUIRED")
+                    .withHint("请在原料类型中配置并选择具体包装规格")
+                    .withHintTarget("materialPackagingSpecId");
+        }
+        var spec = matches.get(0);
+        return new MaterialPackagingSelection(
+                spec.getId(), unit, baseUnit, spec.getConversionFactor());
+    }
+
+    private MaterialPackagingSelection resolveReceiptSelection(
+            String factoryId, PurchaseOrderItem poLine,
+            CreateReceiveRecordRequest.ReceiveItemDTO line) {
+        String requestedUnit = canonicalUnit(factoryId, line.getUnit(), "收货数量单位");
+        String orderPackageUnit = canonicalUnit(factoryId,
+                firstNonBlank(poLine.getPurchasePackageUnitSnapshot(), poLine.getUnit()),
+                "采购订单行包装单位");
+        String orderBaseUnit = canonicalUnit(factoryId,
+                firstNonBlank(poLine.getInventoryBaseUnitSnapshot(), poLine.getUnit()),
+                "采购订单行库存基本单位");
+        if ((line.getMaterialPackagingSpecId() == null || line.getMaterialPackagingSpecId().isBlank())
+                && requestedUnit.equals(orderPackageUnit)) {
+            BigDecimal factor = poLine.getPackageToBaseFactorSnapshot() != null
+                    ? poLine.getPackageToBaseFactorSnapshot()
+                    : conversionFactor(factoryId, poLine.getMaterialTypeId(), orderPackageUnit, orderBaseUnit);
+            return new MaterialPackagingSelection(
+                    poLine.getMaterialPackagingSpecId(), orderPackageUnit, orderBaseUnit, factor);
+        }
+        RawMaterialType material = materialTypeRepository.findById(line.getMaterialTypeId())
+                .orElseThrow(() -> new ResourceNotFoundException("收货物料不存在: " + line.getMaterialTypeId()));
+        MaterialPackagingSelection selection = resolveMaterialPackagingSelection(
+                factoryId, material, line.getMaterialPackagingSpecId(), requestedUnit);
+        if (!orderBaseUnit.equals(selection.baseUnit())) {
+            throw new BusinessException(409, "实际到货包装与采购单的库存基本单位不一致")
+                    .withCode("PURCHASE_RECEIPT_BASE_UNIT_MISMATCH")
+                    .withHint("请选择换算到 " + orderBaseUnit + " 的包装规格");
+        }
+        return selection;
     }
 
     private record PurchasePriceQuote(BigDecimal unitPrice, String priceUnit) {
@@ -2777,11 +2957,18 @@ public class PurchaseServiceImpl implements PurchaseService {
         batch.setBatchNumber(batchNumber);
         batch.setMaterialTypeId(item.getMaterialTypeId());
         batch.setSupplierId(record.getSupplierId());
-        batch.setReceiptQuantity(item.getReceivedQuantity());
+        BigDecimal inventoryQuantity = item.getInventoryQuantitySnapshot() != null
+                ? item.getInventoryQuantitySnapshot() : item.getReceivedQuantity();
+        String inventoryUnit = firstNonBlank(item.getInventoryBaseUnitSnapshot(), item.getUnit());
+        batch.setReceiptQuantity(inventoryQuantity);
         batch.setUsedQuantity(BigDecimal.ZERO);
         batch.setReservedQuantity(BigDecimal.ZERO);
-        batch.setQuantityUnit(item.getUnit());
-        batch.setUnitPrice(item.getUnitPrice());
+        batch.setQuantityUnit(inventoryUnit);
+        BigDecimal factor = item.getPackageToBaseFactorSnapshot();
+        batch.setUnitPrice(item.getUnitPrice() == null ? null
+                : factor != null && factor.signum() > 0
+                        ? item.getUnitPrice().divide(factor, 12, java.math.RoundingMode.HALF_UP)
+                        : item.getUnitPrice());
         batch.setReceiptDate(record.getReceiveDate());
         batch.setPurchaseDate(record.getReceiveDate());
         batch.setFactoryNumber(item.getFactoryNumber());
@@ -2879,7 +3066,7 @@ public class PurchaseServiceImpl implements PurchaseService {
             checkOverReceiveCap(
                     receiveItem.getMaterialName(),
                     orderItem.getReceivedQuantity(),
-                    receiveItem.getReceivedQuantity(),
+                    receiptQuantityInOrderUnit(order.getFactoryId(), orderItem, receiveItem),
                     orderItem.getQuantity());
         }
     }
@@ -2905,7 +3092,7 @@ public class PurchaseServiceImpl implements PurchaseService {
             checkOverReceiveCap(
                     receiveItem.getMaterialName(),
                     orderItem.getReceivedQuantity(),
-                    receiveItem.getReceivedQuantity(),
+                    receiptQuantityInOrderUnit(record.getFactoryId(), orderItem, receiveItem),
                     orderItem.getQuantity());
         }
     }
@@ -2997,11 +3184,13 @@ public class PurchaseServiceImpl implements PurchaseService {
                     checkOverReceiveCap(
                             receiveItem.getMaterialName(),
                             orderItem.getReceivedQuantity(),
-                            receiveItem.getReceivedQuantity(),
+                            receiptQuantityInOrderUnit(record.getFactoryId(), orderItem, receiveItem),
                             orderItem.getQuantity());
 
+                    BigDecimal receivedInOrderUnit =
+                            receiptQuantityInOrderUnit(record.getFactoryId(), orderItem, receiveItem);
                     orderItem.setReceivedQuantity(
-                            orderItem.getReceivedQuantity().add(receiveItem.getReceivedQuantity()));
+                            orderItem.getReceivedQuantity().add(receivedInOrderUnit));
         }
         purchaseOrderItemRepository.saveAll(orderItems);
 
@@ -3051,7 +3240,13 @@ public class PurchaseServiceImpl implements PurchaseService {
 
         if (supplierId == null || supplierId.isBlank()) {
             applyPurchasePriceContract(factoryId, item, request.getQuantityUnit(), request.getUnit(), request.getPriceUnit());
-            snapshotBaseUnit(factoryId, item, material);
+            MaterialPackagingSelection selection = resolveMaterialPackagingSelection(
+                    factoryId, material, request.getMaterialPackagingSpecId(), item.getUnit());
+            item.setMaterialPackagingSpecId(selection.specId());
+            item.setPurchasePackageUnitSnapshot(selection.packageUnit());
+            item.setInventoryBaseUnitSnapshot(selection.baseUnit());
+            item.setPackageToBaseFactorSnapshot(selection.factor());
+            item.setInventoryQuantitySnapshot(selection.toBase(item.getQuantity()));
             return;
         }
         assertSupplierMaterialActive(factoryId, supplierId, item.getMaterialTypeId());
@@ -3067,13 +3262,11 @@ public class PurchaseServiceImpl implements PurchaseService {
                 ? List.of() : supplierMaterialPurchaseSpecRepository
                 .findByFactoryIdAndSupplierMaterialIdAndActiveTrue(factoryId, relation.getId());
         if (specs.isEmpty()) {
-            String purchaseUnit = canonicalUnit(factoryId, relation.getPurchaseUnit(), "供应关系采购单位");
-            String requestedUnit = firstNonBlank(request.getQuantityUnit(), request.getUnit());
-            if (requestedUnit != null
-                    && !purchaseUnit.equals(canonicalUnit(factoryId, requestedUnit, "采购数量单位"))) {
-                throw new BusinessException(400, "采购数量单位必须与供应关系的采购单位一致")
-                        .withCode("PURCHASE_SUPPLIER_UNIT_MISMATCH").withHintTarget("quantityUnit");
-            }
+            String requestedUnit = firstNonBlank(
+                    request.getQuantityUnit(), firstNonBlank(request.getUnit(), relation.getPurchaseUnit()));
+            MaterialPackagingSelection selection = resolveMaterialPackagingSelection(
+                    factoryId, material, request.getMaterialPackagingSpecId(), requestedUnit);
+            String purchaseUnit = selection.packageUnit();
             if (request.getPriceUnit() != null
                     && !purchaseUnit.equals(canonicalUnit(factoryId, request.getPriceUnit(), "采购计价单位"))) {
                 throw new BusinessException(400, "计价单位必须与供应关系的采购单位一致")
@@ -3082,13 +3275,11 @@ public class PurchaseServiceImpl implements PurchaseService {
             item.setUnit(purchaseUnit);
             item.setPriceUnit(purchaseUnit);
             item.setQuantityToPriceFactor(BigDecimal.ONE);
-            String baseUnit = canonicalUnit(factoryId, material.getUnit(), "库存基本单位");
-            BigDecimal purchaseToBaseFactor = conversionFactor(
-                    factoryId, material.getId(), purchaseUnit, baseUnit);
+            item.setMaterialPackagingSpecId(selection.specId());
             item.setPurchasePackageUnitSnapshot(purchaseUnit);
-            item.setInventoryBaseUnitSnapshot(baseUnit);
-            item.setPackageToBaseFactorSnapshot(purchaseToBaseFactor);
-            item.setInventoryQuantitySnapshot(item.getQuantity().multiply(purchaseToBaseFactor));
+            item.setInventoryBaseUnitSnapshot(selection.baseUnit());
+            item.setPackageToBaseFactorSnapshot(selection.factor());
+            item.setInventoryQuantitySnapshot(selection.toBase(item.getQuantity()));
             item.setUnitPrice(resolvePurchaseUnitPrice(
                     factoryId, material, relation, request, purchaseUnit, null));
             return;
@@ -3117,6 +3308,16 @@ public class PurchaseServiceImpl implements PurchaseService {
         item.setPriceUnit(spec.getPurchasePackageUnit());
         item.setQuantityToPriceFactor(BigDecimal.ONE);
         item.setPurchasePackagingSpecId(spec.getId());
+        if (request.getMaterialPackagingSpecId() != null && !request.getMaterialPackagingSpecId().isBlank()) {
+            MaterialPackagingSelection materialSelection = resolveMaterialPackagingSelection(
+                    factoryId, material, request.getMaterialPackagingSpecId(), spec.getPurchasePackageUnit());
+            if (materialSelection.factor().compareTo(spec.getConversionFactor()) != 0) {
+                throw new BusinessException(409, "供应商包装规格与原料包装换算不一致")
+                        .withCode("SUPPLIER_MATERIAL_PACKAGING_FACTOR_MISMATCH")
+                        .withHint("请先统一供应商规格和原料类型包装规格");
+            }
+            item.setMaterialPackagingSpecId(materialSelection.specId());
+        }
         item.setPurchasePackageUnitSnapshot(spec.getPurchasePackageUnit());
         item.setInventoryBaseUnitSnapshot(spec.getInventoryBaseUnit());
         item.setPackageToBaseFactorSnapshot(spec.getConversionFactor());

@@ -34,6 +34,9 @@ class InternalTransferRepositoryQueryValidationTest {
         assertNotNull(transferRepository);
         assertNotNull(entityManager.getMetamodel().entity(
                 com.cretas.aims.entity.inventory.InternalTransfer.class));
+        assertNotNull(entityManager.getMetamodel().entity(
+                com.cretas.aims.entity.inventory.InternalTransferItem.class)
+                .getAttribute("packageQuantitySnapshot"));
 
         assertThatNoException().isThrownBy(() -> transferRepository
                 .findBySourceFactoryIdAndProductionPlanIdAndStatusInOrderByCreatedAtDesc(

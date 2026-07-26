@@ -229,6 +229,7 @@ const { summary: footerSummary, loading: footerLoading } = useListSummary('purch
 interface ProcurementOrderItem {
   supplierMaterialId?: string;
   purchasePackagingSpecId?: string | null;
+  materialPackagingSpecId?: string | null;
   materialTypeId: string;
   quantity: number;
   unit: string;
@@ -297,6 +298,7 @@ const materials = ref<TableRow[]>([]);
 const salesOrders = ref<TableRow[]>([]);
 const supplierMaterialRelations = ref<SupplierMaterialRelation[]>([]);
 const purchaseSpecCache = ref<Record<string, SupplierPurchaseSpec[]>>({});
+const materialSpecCache = ref<Record<string, SupplierPurchaseSpec[]>>({});
 
 function materialTaxRate(value: unknown): number | null {
   if (value == null || value === '') return null;
@@ -310,12 +312,14 @@ async function onSupplierChange(): Promise<void> {
     ? (await listSupplierMaterials(factoryId.value, form.value.supplierId)).filter((row) => row.active !== false)
     : [];
   purchaseSpecCache.value = {};
+  materialSpecCache.value = {};
   form.value.items = [newPurchaseItem()];
 }
 
 function newPurchaseItem(): ProcurementOrderItem {
   return {
-    supplierMaterialId: '', purchasePackagingSpecId: null, materialTypeId: '', quantity: 0,
+    supplierMaterialId: '', purchasePackagingSpecId: null, materialPackagingSpecId: null,
+    materialTypeId: '', quantity: 0,
     unit: '', quantityUnit: '', unitPrice: null, priceUnit: '', priceSource: null, taxRate: null,
   };
 }
@@ -329,8 +333,42 @@ async function loadPurchaseSpecs(relationId: string): Promise<SupplierPurchaseSp
   return purchaseSpecCache.value[relationId];
 }
 
+async function loadMaterialSpecs(materialTypeId: string): Promise<SupplierPurchaseSpec[]> {
+  if (!materialSpecCache.value[materialTypeId]) {
+    const response = await get<{
+      packagingSpecs?: Array<{
+        id: string;
+        name: string;
+        packageUnit: string;
+        baseUnit: string;
+        conversionFactor: number;
+        defaultSpec?: boolean;
+        active?: boolean;
+      }>;
+    } | null>(`/${factoryId.value}/material-packaging/by-material/${materialTypeId}`);
+    materialSpecCache.value[materialTypeId] = (response.data?.packagingSpecs || [])
+      .filter((row) => row.active !== false)
+      .map((row) => ({
+        id: `material:${row.id}`,
+        supplierMaterialId: '',
+        materialTypeId,
+        name: row.name,
+        purchasePackageUnit: row.packageUnit,
+        inventoryBaseUnit: row.baseUnit,
+        factor: Number(row.conversionFactor),
+        defaultSpec: row.defaultSpec,
+        active: row.active,
+      }));
+  }
+  return materialSpecCache.value[materialTypeId];
+}
+
 function specsForItem(item: ProcurementOrderItem): SupplierPurchaseSpec[] {
-  return item.supplierMaterialId ? (purchaseSpecCache.value[item.supplierMaterialId] ?? []) : [];
+  const supplierSpecs = item.supplierMaterialId
+    ? (purchaseSpecCache.value[item.supplierMaterialId] ?? []) : [];
+  return supplierSpecs.length > 0
+    ? supplierSpecs
+    : (materialSpecCache.value[item.materialTypeId] ?? []);
 }
 
 function hasConfiguredPrice(value: unknown): boolean {
@@ -383,13 +421,18 @@ async function onSupplierMaterialChange(item: ProcurementOrderItem): Promise<voi
   if (!relation) return;
   item.materialTypeId = relation.materialTypeId;
   item.purchasePackagingSpecId = null;
+  item.materialPackagingSpecId = null;
   const purchaseUnit = canonicalUnitCode(relation.purchaseUnit || relation.baseUnit);
   item.unit = purchaseUnit;
   item.quantityUnit = purchaseUnit;
   applyRelationPrice(item, relation, purchaseUnit);
   const material = materials.value.find((row) => String(row.id) === relation.materialTypeId);
   item.taxRate = materialTaxRate(material?.taxRate);
-  const specs = await loadPurchaseSpecs(relation.id);
+  const [supplierSpecs, materialSpecs] = await Promise.all([
+    loadPurchaseSpecs(relation.id),
+    loadMaterialSpecs(relation.materialTypeId),
+  ]);
+  const specs = supplierSpecs.length > 0 ? supplierSpecs : materialSpecs;
   const defaultSpec = specs.find((row) => row.defaultSpec);
   if (defaultSpec) {
     item.purchasePackagingSpecId = defaultSpec.id;
@@ -402,6 +445,8 @@ function onPurchaseSpecChange(item: ProcurementOrderItem): void {
   const relation = supplierMaterialRelations.value.find((row) => row.id === item.supplierMaterialId);
   if (!relation) return;
   const unit = canonicalUnitCode(spec?.purchasePackageUnit || relation.purchaseUnit || relation.baseUnit);
+  item.materialPackagingSpecId = spec?.id.startsWith('material:')
+    ? spec.id.slice('material:'.length) : null;
   item.unit = unit;
   item.quantityUnit = unit;
   item.priceUnit = unit;
@@ -609,6 +654,11 @@ async function handleCreate() {
       ...formData,
       items: items.map((i) => ({
         ...i,
+        purchasePackagingSpecId: i.purchasePackagingSpecId?.startsWith('material:')
+          ? null : i.purchasePackagingSpecId,
+        materialPackagingSpecId: i.purchasePackagingSpecId?.startsWith('material:')
+          ? i.purchasePackagingSpecId.slice('material:'.length)
+          : i.materialPackagingSpecId || null,
         unit: canonicalUnitCode(i.quantityUnit || i.unit),
         quantityUnit: canonicalUnitCode(i.quantityUnit || i.unit),
         priceUnit: canonicalUnitCode(i.priceUnit),
@@ -715,7 +765,10 @@ async function openEditDialog(orderId: string) {
   supplierMaterialRelations.value = (
     await listSupplierMaterials(factoryId.value, orderSupplierId)
   ).filter((row) => row.active !== false);
-  await Promise.all(supplierMaterialRelations.value.map((relation) => loadPurchaseSpecs(relation.id)));
+  await Promise.all(supplierMaterialRelations.value.flatMap((relation) => [
+    loadPurchaseSpecs(relation.id),
+    loadMaterialSpecs(relation.materialTypeId),
+  ]));
   form.value = {
     supplierId: orderSupplierId,
     purchaseType: String(order.purchaseType || 'DIRECT'),
@@ -730,7 +783,12 @@ async function openEditDialog(orderId: string) {
       const quantityUnit = canonicalUnitCode(item.quantityUnit || item.unit);
       return {
         supplierMaterialId: String(item.supplierMaterialId || supplierMaterialRelations.value.find((relation) => relation.materialTypeId === String(item.materialTypeId || ''))?.id || ''),
-        purchasePackagingSpecId: item.purchasePackagingSpecId ? String(item.purchasePackagingSpecId) : null,
+        purchasePackagingSpecId: item.purchasePackagingSpecId
+          ? String(item.purchasePackagingSpecId)
+          : item.materialPackagingSpecId
+            ? `material:${String(item.materialPackagingSpecId)}`
+            : null,
+        materialPackagingSpecId: item.materialPackagingSpecId ? String(item.materialPackagingSpecId) : null,
         materialTypeId: String(item.materialTypeId || ''),
         quantity: Number(item.quantity || 0),
         unit: quantityUnit,

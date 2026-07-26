@@ -280,6 +280,10 @@ function addItem() {
     itemName: '',
     quantity: undefined,
     unit: '',
+    materialPackagingSpecId: undefined,
+    packagingOptions: [],
+    _inventoryUnit: '',
+    _packageFactor: 1,
     unitPrice: undefined,
     remark: '',
   });
@@ -289,12 +293,43 @@ function removeItem(idx: number) {
   form.value.items.splice(idx, 1);
 }
 
-function handleMaterialChange(idx: number, selectedId: string) {
+async function handleMaterialChange(idx: number, selectedId: string) {
   const row = form.value.items[idx];
   const m = selectableOptions(row).find(o => o.id === selectedId);
   if (m) {
     applySelectedOption(row, m);
+    if (row.itemType !== 'FINISHED_GOODS' && row.materialTypeId) {
+      const response = await get<{
+        packagingSpecs?: NonNullable<TransferCreateRow['packagingOptions']>;
+      } | null>(`/${factoryId.value}/material-packaging/by-material/${row.materialTypeId}`);
+      row.packagingOptions = (response.data?.packagingSpecs || []).filter((spec) => spec);
+      const selected = row.packagingOptions.find((spec) => spec.defaultSpec)
+        || (row.packagingOptions.length === 1 ? row.packagingOptions[0] : undefined);
+      if (selected) applyTransferPackaging(row, selected.id);
+      else if (row.packagingOptions.length > 1) {
+        row.unit = '';
+        row.materialPackagingSpecId = undefined;
+      }
+    }
   }
+}
+
+function applyTransferPackaging(row: TransferCreateRow, specId: string) {
+  const selected = row.packagingOptions?.find((spec) => spec.id === specId);
+  if (!selected) return;
+  row.materialPackagingSpecId = selected.id;
+  row.unit = selected.packageUnit;
+  row._inventoryUnit = selected.baseUnit;
+  row._packageFactor = Number(selected.conversionFactor);
+}
+
+function transferBaseQuantity(row: TransferCreateRow): number {
+  return Number(row.quantity || 0) * Number(row._packageFactor || 1);
+}
+
+function transferPackageLimit(row: TransferCreateRow): number | undefined {
+  if (row._currentStock == null || row._currentStock === '') return undefined;
+  return Number(row._currentStock) / Number(row._packageFactor || 1);
 }
 
 function formatStock(v: unknown): string {
@@ -318,10 +353,15 @@ async function submitCreate() {
     }
     if (!it.quantity || it.quantity <= 0) { ElMessage.warning('每行数量必须大于 0'); return; }
     if (!it.unit) { ElMessage.warning('每行必须有单位'); return; }
+    if (it.itemType !== 'FINISHED_GOODS'
+        && (it.packagingOptions?.length || 0) > 0
+        && !it.materialPackagingSpecId) {
+      ElMessage.warning(`请为「${it.itemName}」选择调拨包装规格`); return;
+    }
     // F-FP-3 Rule1: 超过现有库存时阻止提交，边界前置
     const stock = (it as any)._currentStock;
-    if (stock != null && stock !== '' && Number(it.quantity) > Number(stock)) {
-      ElMessage({ message: `调拨数量 ${it.quantity} 超过现有库存 ${stock}（物料：${it.itemName || it.materialTypeId}），请调整数量`, type: 'error', duration: 0, showClose: true });
+    if (stock != null && stock !== '' && transferBaseQuantity(it) > Number(stock)) {
+      ElMessage({ message: `折合基本量 ${transferBaseQuantity(it)} ${displayUnit(it._inventoryUnit)} 超过现有库存 ${stock}（物料：${it.itemName || it.materialTypeId}），请调整数量`, type: 'error', duration: 0, showClose: true });
       return;
     }
   }
@@ -633,18 +673,41 @@ function isOutbound(row: TableRow) { return row.sourceFactoryId === factoryId.va
               </el-select>
             </template>
           </el-table-column>
+          <el-table-column label="调拨包装" min-width="230">
+            <template #default="{ row }">
+              <el-select
+                v-if="row.itemType !== 'FINISHED_GOODS' && (row.packagingOptions?.length || 0) > 0"
+                v-model="row.materialPackagingSpecId"
+                placeholder="选择包装规格"
+                size="small"
+                style="width:100%"
+                @change="(value: string) => applyTransferPackaging(row, value)"
+              >
+                <el-option
+                  v-for="spec in row.packagingOptions"
+                  :key="spec.id"
+                  :label="`${spec.name} · 1${displayUnit(spec.packageUnit)}=${spec.conversionFactor}${displayUnit(spec.baseUnit)}`"
+                  :value="spec.id"
+                />
+              </el-select>
+              <span v-else>{{ row.selectedItemId ? `${displayUnit(row.unit)}（基本单位）` : '请先选择物料' }}</span>
+            </template>
+          </el-table-column>
           <el-table-column label="数量 / 单位" width="190">
             <!-- F-FP-3 Rule1: :max = 现有库存，超量时橙色提示边框，超量禁提交 -->
             <template #default="{ row }">
               <div class="quantity-unit-cell">
                 <el-input-number
                   v-model="row.quantity" :min="0.01" :precision="3"
-                  :max="row._currentStock != null && row._currentStock !== '' ? Number(row._currentStock) : undefined"
+                  :max="transferPackageLimit(row)"
                   :controls="false" size="small" placeholder="数量"
                   :disabled="!row.selectedItemId"
-                  :class="{ 'over-stock': row._currentStock != null && row._currentStock !== '' && Number(row.quantity) > Number(row._currentStock) }"
+                  :class="{ 'over-stock': row._currentStock != null && row._currentStock !== '' && transferBaseQuantity(row) > Number(row._currentStock) }"
                 />
                 <span class="unit-chip">{{ row.selectedItemId ? displayUnit(row.unit) : '单位' }}</span>
+              </div>
+              <div v-if="row.selectedItemId && row.quantity" class="base-quantity-preview">
+                折合 {{ formatStock(transferBaseQuantity(row)) }} {{ displayUnit(row._inventoryUnit || row.unit) }}
               </div>
             </template>
           </el-table-column>
@@ -654,8 +717,8 @@ function isOutbound(row: TableRow) { return row.sourceFactoryId === factoryId.va
           <el-table-column label="现有库存" width="110" align="right">
             <template #default="{ row }">
               <span v-if="row._currentStock != null && row._currentStock !== ''"
-                    :style="{ color: Number(row._currentStock) < Number(row.quantity || 0) ? '#f56c6c' : '#67c23a' }">
-                {{ formatStock(row._currentStock) }} {{ displayUnit(row.unit) }}
+                    :style="{ color: Number(row._currentStock) < transferBaseQuantity(row) ? '#f56c6c' : '#67c23a' }">
+                {{ formatStock(row._currentStock) }} {{ displayUnit(row._inventoryUnit || row.unit) }}
               </span>
               <span v-else style="color: #c0c4cc">-</span>
             </template>

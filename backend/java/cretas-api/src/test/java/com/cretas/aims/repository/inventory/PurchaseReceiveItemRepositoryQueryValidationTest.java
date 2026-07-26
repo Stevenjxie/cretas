@@ -34,5 +34,9 @@ class PurchaseReceiveItemRepositoryQueryValidationTest {
         assertNotNull(receiveRecordRepository);
         assertThat(entityManager.getMetamodel().entity(PurchaseReceiveItem.class)
                 .getAttribute("purchaseOrderItemId")).isNotNull();
+        assertThat(entityManager.getMetamodel().entity(PurchaseReceiveItem.class)
+                .getAttribute("materialPackagingSpecId")).isNotNull();
+        assertThat(entityManager.getMetamodel().entity(PurchaseReceiveItem.class)
+                .getAttribute("inventoryQuantitySnapshot")).isNotNull();
     }
 }

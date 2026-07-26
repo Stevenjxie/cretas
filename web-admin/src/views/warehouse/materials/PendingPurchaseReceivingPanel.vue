@@ -39,6 +39,20 @@ interface ReceiveItemForm {
   materialName: string;
   receivedQuantity: number;
   unit: string;
+  materialPackagingSpecId?: string;
+  packagingKey: string;
+  inventoryBaseUnit: string;
+  packageToBaseFactor: number;
+  packagingOptions: PackagingOption[];
+}
+
+interface PackagingOption {
+  key: string;
+  id?: string;
+  name: string;
+  packageUnit: string;
+  baseUnit: string;
+  factor: number;
 }
 
 interface PurchaseReceiptDetail {
@@ -226,11 +240,45 @@ async function openReceive(task: PurchaseReceivingTask) {
       items: task.items
         .filter((item) => Number(item.remainingReceivableQuantity) > 0)
         .map((item) => ({
+          ...(() => {
+            const orderOption: PackagingOption = {
+              key: '__ORDER__',
+              id: item.materialPackagingSpecId || undefined,
+              name: '采购单规格',
+              packageUnit: item.unit,
+              baseUnit: item.inventoryBaseUnit || item.unit,
+              factor: Number(item.packageToBaseFactor || 1),
+            };
+            const masterOptions: PackagingOption[] = (item.packagingSpecs || []).map((spec) => ({
+              key: spec.id,
+              id: spec.id,
+              name: spec.name,
+              packageUnit: spec.packageUnit,
+              baseUnit: spec.baseUnit,
+              factor: Number(spec.conversionFactor),
+            }));
+            const selected = masterOptions.find((option) => option.id === item.materialPackagingSpecId)
+              || masterOptions.find((option) =>
+                option.packageUnit === item.unit
+                && option.baseUnit === item.inventoryBaseUnit
+                && option.factor === Number(item.packageToBaseFactor || 1))
+              || orderOption;
+            const options = selected.key === '__ORDER__'
+              ? [orderOption, ...masterOptions]
+              : masterOptions;
+            return {
+              materialPackagingSpecId: selected.id,
+              packagingKey: selected.key,
+              inventoryBaseUnit: selected.baseUnit,
+              packageToBaseFactor: selected.factor,
+              packagingOptions: options,
+              unit: selected.packageUnit,
+            };
+          })(),
           purchaseOrderItemId: item.purchaseOrderItemId,
           materialTypeId: item.materialTypeId,
           materialName: item.materialName,
           receivedQuantity: Number(item.remainingReceivableQuantity),
-          unit: item.unit,
         })),
     };
     await loadWarehouses();
@@ -248,7 +296,24 @@ async function openReceive(task: PurchaseReceivingTask) {
 function remainingLimit(row: ReceiveItemForm): number {
   const line = selectedTask.value?.items.find((item) =>
     item.purchaseOrderItemId === row.purchaseOrderItemId);
-  return Number(line?.remainingReceivableQuantity || 0);
+  const orderFactor = Number(line?.packageToBaseFactor || 1);
+  const selectedFactor = Number(row.packageToBaseFactor || 1);
+  return Number(line?.remainingReceivableQuantity || 0) * orderFactor / selectedFactor;
+}
+
+function onPackagingChange(row: ReceiveItemForm) {
+  const selected = row.packagingOptions.find((option) => option.key === row.packagingKey);
+  if (!selected) return;
+  row.materialPackagingSpecId = selected.id;
+  row.unit = selected.packageUnit;
+  row.inventoryBaseUnit = selected.baseUnit;
+  row.packageToBaseFactor = selected.factor;
+  row.receivedQuantity = Number(remainingLimit(row).toFixed(4));
+}
+
+function baseQuantityPreview(row: ReceiveItemForm): string {
+  const quantity = Number(row.receivedQuantity || 0) * Number(row.packageToBaseFactor || 1);
+  return `${fmtQty(quantity)}${displayUnit(row.inventoryBaseUnit)}`;
 }
 
 async function createReceipt() {
@@ -260,7 +325,18 @@ async function createReceipt() {
   }
   submitting.value = true;
   try {
-    const response = await post<PurchaseReceiptDetail>(`/${props.factoryId}/warehouse/receiving/receipts`, form.value);
+    const payload = {
+      ...form.value,
+      items: form.value.items.map((item) => ({
+        purchaseOrderItemId: item.purchaseOrderItemId,
+        materialTypeId: item.materialTypeId,
+        materialName: item.materialName,
+        receivedQuantity: item.receivedQuantity,
+        unit: item.unit,
+        materialPackagingSpecId: item.materialPackagingSpecId,
+      })),
+    };
+    const response = await post<PurchaseReceiptDetail>(`/${props.factoryId}/warehouse/receiving/receipts`, payload);
     if (response.success && response.data) {
       receipt.value = response.data;
       ElMessage.success('收货单草稿已创建；请上传供货凭证并核对后确认入库');
@@ -535,6 +611,18 @@ defineExpose({ loadTasks });
           </el-form>
           <el-table :data="form.items" border>
             <el-table-column prop="materialName" label="物料" min-width="210" />
+            <el-table-column label="实际到货包装" min-width="255">
+              <template #default="{ row }">
+                <el-select v-model="row.packagingKey" style="width:100%" @change="onPackagingChange(row)">
+                  <el-option
+                    v-for="option in row.packagingOptions"
+                    :key="option.key"
+                    :label="`${option.name} · 1${displayUnit(option.packageUnit)}=${fmtQty(option.factor)}${displayUnit(option.baseUnit)}`"
+                    :value="option.key"
+                  />
+                </el-select>
+              </template>
+            </el-table-column>
             <el-table-column label="本次实收" width="190">
               <template #default="{ row }">
                 <el-input-number v-model="row.receivedQuantity" :min="0.001" :max="remainingLimit(row)"
@@ -542,7 +630,9 @@ defineExpose({ loadTasks });
                 <span class="unit-suffix">{{ displayUnit(row.unit) }}</span>
               </template>
             </el-table-column>
-            <el-table-column label="单位" width="90"><template #default="{ row }">{{ displayUnit(row.unit) }}</template></el-table-column>
+            <el-table-column label="折合基本量" width="150">
+              <template #default="{ row }">{{ baseQuantityPreview(row) }}</template>
+            </el-table-column>
           </el-table>
         </template>
 

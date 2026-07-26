@@ -2,12 +2,14 @@ package com.cretas.aims.service.inventory;
 
 import com.cretas.aims.domain.OrderUsageWhitelists;
 import com.cretas.aims.dto.inventory.CreateReceiveRecordRequest;
+import com.cretas.aims.entity.RawMaterialType;
 import com.cretas.aims.entity.Supplier;
 import com.cretas.aims.entity.enums.PurchaseOrderStatus;
 import com.cretas.aims.entity.inventory.PurchaseOrder;
 import com.cretas.aims.entity.inventory.PurchaseOrderItem;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.repository.SupplierRepository;
+import com.cretas.aims.repository.RawMaterialTypeRepository;
 import com.cretas.aims.repository.inventory.PurchaseOrderItemRepository;
 import com.cretas.aims.repository.inventory.PurchaseOrderRepository;
 import com.cretas.aims.repository.inventory.PurchaseReceiveRecordRepository;
@@ -55,6 +57,7 @@ class PurchaseServiceImplOverReceiveTest {
     @Mock private PurchaseOrderItemRepository purchaseOrderItemRepository;
     @Mock private PurchaseReceiveRecordRepository receiveRecordRepository;
     @Mock private SupplierRepository supplierRepository;
+    @Mock private RawMaterialTypeRepository rawMaterialTypeRepository;
 
     private PurchaseServiceImpl service;
 
@@ -75,7 +78,7 @@ class PurchaseServiceImplOverReceiveTest {
                 purchaseOrderItemRepository,
                 receiveRecordRepository,
                 supplierRepository,
-                /* materialTypeRepository */ null,
+                rawMaterialTypeRepository,
                 /* materialBatchRepository */ null,
                 /* bomItemRepository */ null,
                 /* arApService */ null,
@@ -101,7 +104,7 @@ class PurchaseServiceImplOverReceiveTest {
         return req;
     }
 
-    private void mockOrderFixture(BigDecimal orderedQty, BigDecimal alreadyReceived) {
+    private PurchaseOrderItem mockOrderFixture(BigDecimal orderedQty, BigDecimal alreadyReceived) {
         Supplier supplier = new Supplier();
         supplier.setId(SUPPLIER_ID);
         supplier.setFactoryId(FACTORY_ID);
@@ -127,6 +130,7 @@ class PurchaseServiceImplOverReceiveTest {
         orderItem.setReceivedQuantity(alreadyReceived);
         when(purchaseOrderItemRepository.findByPurchaseOrderId(PO_ID))
                 .thenReturn(List.of(orderItem));
+        return orderItem;
     }
 
     @Test
@@ -168,6 +172,35 @@ class PurchaseServiceImplOverReceiveTest {
         assertEquals(409, ex.getCode());
         assertTrue(ex.getMessage().contains("累计 131"),
                 "expected accumulated qty 131 in message, got: " + ex.getMessage());
+    }
+
+    @Test
+    @DisplayName("订单 10 case (1 case=10kg) + 本次 140kg → 折合 14 case 后按上限拒绝")
+    void receive_crossUnitBaseQuantityUsesPinnedPackageFactorForCap() {
+        PurchaseOrderItem orderItem =
+                mockOrderFixture(new BigDecimal("10"), BigDecimal.ZERO);
+        orderItem.setUnit("case");
+        orderItem.setPurchasePackageUnitSnapshot("case");
+        orderItem.setInventoryBaseUnitSnapshot("kg");
+        orderItem.setPackageToBaseFactorSnapshot(new BigDecimal("10"));
+
+        RawMaterialType material = new RawMaterialType();
+        material.setId(MAT_ID);
+        material.setFactoryId(FACTORY_ID);
+        material.setName(MAT_NAME);
+        material.setUnit("kg");
+        when(rawMaterialTypeRepository.findById(MAT_ID)).thenReturn(Optional.of(material));
+
+        CreateReceiveRecordRequest request = buildRequest(new BigDecimal("140"));
+        request.getItems().get(0).setUnit("kg");
+
+        BusinessException ex = assertThrows(BusinessException.class,
+                () -> service.createReceiveRecord(FACTORY_ID, request, 1L));
+
+        assertEquals(409, ex.getCode());
+        assertTrue(ex.getMessage().contains("14"),
+                "cap message should compare converted order quantity, got: " + ex.getMessage());
+        verify(receiveRecordRepository, never()).save(any());
     }
 
     @Test

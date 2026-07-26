@@ -47,6 +47,7 @@ interface DraftItem {
   materialUnit: string; // 原料默认单位 (一级)
   quantity: string;
   unit: string; // 实际下单单位 (可能是 1/2/3 级)
+  materialPackagingSpecId: string;
   unitPrice: string;
   remark?: string;
 }
@@ -58,6 +59,7 @@ const blankItem = (): DraftItem => ({
   materialUnit: '',
   quantity: '',
   unit: '',
+  materialPackagingSpecId: '',
   unitPrice: '',
   remark: '',
 });
@@ -130,13 +132,15 @@ export default function PurchaseOrderCreateScreen() {
   }, [items]);
 
   // 选定原料后, 获取该原料的包装层级 (用于单位下拉)
-  const ensurePackagingLoaded = async (materialId: string) => {
-    if (packagingByMaterial[materialId] !== undefined) return; // 已加载 (含 null)
+  const ensurePackagingLoaded = async (materialId: string): Promise<MaterialPackagingHierarchy | null> => {
+    if (packagingByMaterial[materialId] !== undefined) return packagingByMaterial[materialId] || null;
     try {
       const data = await materialPackagingApiClient.getByMaterial(materialId);
       setPackagingByMaterial((prev) => ({ ...prev, [materialId]: data }));
+      return data;
     } catch {
       setPackagingByMaterial((prev) => ({ ...prev, [materialId]: null }));
+      return null;
     }
   };
 
@@ -172,6 +176,7 @@ export default function PurchaseOrderCreateScreen() {
       remark: header.remark || undefined,
       items: cleanedItems.map((it) => ({
         materialTypeId: it.materialTypeId,
+        materialPackagingSpecId: it.materialPackagingSpecId || undefined,
         quantity: Number(it.quantity),
         unitPrice: Number(it.unitPrice),
         unit: it.unit,
@@ -213,6 +218,9 @@ export default function PurchaseOrderCreateScreen() {
     if (item.materialUnit) set.add(item.materialUnit);
     const pkg = packagingByMaterial[item.materialTypeId];
     if (pkg) {
+      for (const spec of pkg.packagingSpecs || []) {
+        if (spec.active !== false && spec.packageUnit) set.add(spec.packageUnit);
+      }
       if (pkg.level1Unit) set.add(pkg.level1Unit);
       if (pkg.level2Unit) set.add(pkg.level2Unit);
       if (pkg.level3Unit) set.add(pkg.level3Unit);
@@ -324,9 +332,20 @@ export default function PurchaseOrderCreateScreen() {
                             materialName: m.name,
                             materialUnit: m.unit,
                             unit: forcedUnit,
+                            materialPackagingSpecId: '',
                           });
                           setOpenMenuFor(null);
-                          ensurePackagingLoaded(m.id);
+                          void ensurePackagingLoaded(m.id).then((pkg) => {
+                            if (m.isAbacaPackaging) return;
+                            const active = (pkg?.packagingSpecs || []).filter((spec) => spec.active !== false);
+                            const selected = active.find((spec) => spec.defaultSpec) || (active.length === 1 ? active[0] : undefined);
+                            if (selected) {
+                              updateItem(item.key, {
+                                unit: selected.packageUnit,
+                                materialPackagingSpecId: selected.id,
+                              });
+                            }
+                          });
                         }}
                       />
                     ))
@@ -383,9 +402,20 @@ export default function PurchaseOrderCreateScreen() {
                       unitOptions.map((u) => (
                         <Menu.Item
                           key={u}
-                          title={u}
+                          title={(() => {
+                            const spec = (packagingByMaterial[item.materialTypeId]?.packagingSpecs || [])
+                              .find((candidate) => candidate.packageUnit === u);
+                            return spec
+                              ? `${spec.name} · 1${spec.packageUnit}=${spec.conversionFactor}${spec.baseUnit}`
+                              : `${u}（基本单位）`;
+                          })()}
                           onPress={() => {
-                            updateItem(item.key, { unit: u });
+                            const spec = (packagingByMaterial[item.materialTypeId]?.packagingSpecs || [])
+                              .find((candidate) => candidate.packageUnit === u);
+                            updateItem(item.key, {
+                              unit: u,
+                              materialPackagingSpecId: spec?.id || '',
+                            });
                             setOpenMenuFor(null);
                           }}
                         />
@@ -393,6 +423,19 @@ export default function PurchaseOrderCreateScreen() {
                     )}
                   </Menu>
                 </View>
+                {item.unit && Number(item.quantity) > 0 && (
+                  <Text style={styles.packagingPreview}>
+                    {(() => {
+                      const spec = (packagingByMaterial[item.materialTypeId]?.packagingSpecs || [])
+                        .find((candidate) => candidate.id === item.materialPackagingSpecId);
+                      const baseQuantity = spec
+                        ? Number(item.quantity) * Number(spec.conversionFactor)
+                        : Number(item.quantity);
+                      const baseUnit = spec?.baseUnit || item.materialUnit || item.unit;
+                      return `折合库存：${baseQuantity} ${baseUnit}`;
+                    })()}
+                  </Text>
+                )}
 
                 {/* 单价 + 小计 */}
                 <View style={styles.row}>
@@ -511,5 +554,11 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: '#92400e',
     lineHeight: 18,
+  },
+  packagingPreview: {
+    fontSize: 13,
+    color: '#2563eb',
+    marginTop: -4,
+    marginBottom: 10,
   },
 });

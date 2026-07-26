@@ -58,6 +58,18 @@ export interface PurchaseReceivingTaskItem {
   remainingReceivableQuantity: number;
   unit: string;
   specification?: string | null;
+  materialPackagingSpecId?: string | null;
+  inventoryBaseUnit?: string | null;
+  packageToBaseFactor?: number | null;
+  packagingSpecs?: Array<{
+    id: string;
+    name: string;
+    packageUnit: string;
+    baseUnit: string;
+    conversionFactor: number;
+    defaultSpec?: boolean | null;
+    active?: boolean | null;
+  }>;
 }
 
 export interface PurchaseReceivingTask {
