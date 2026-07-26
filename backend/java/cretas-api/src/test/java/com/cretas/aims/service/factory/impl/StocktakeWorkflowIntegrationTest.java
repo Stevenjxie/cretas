@@ -150,11 +150,17 @@ class StocktakeWorkflowIntegrationTest {
     @Test
     @DisplayName("UT-ST-WF-04: 无需审批且状态已 APPROVED 时允许执行盘点调整")
     void executeAdjustment_withoutWorkflow_whenDirectlyApproved() {
-        FactoryStocktake stocktake = buildStocktake(FactoryStocktake.Status.APPROVED);
-        stocktake.setWorkflowInstanceId(null); // no workflow bypass!
+        FactoryStocktake stocktake = buildStocktake(FactoryStocktake.Status.COUNTING);
         when(stocktakeRepo.findById(STOCKTAKE_ID)).thenReturn(Optional.of(stocktake));
+        when(stocktakeRepo.save(any())).thenAnswer(invocation -> invocation.getArgument(0));
+        when(workflowEngine.startWorkflowIfConfigured(
+                eq(FACTORY_ID), eq("INVENTORY_ADJUSTMENT"),
+                eq(STOCKTAKE_ID), any(), eq(USER_ID))).thenReturn(Optional.empty());
 
+        service.submitForApproval(STOCKTAKE_ID, FACTORY_ID, USER_ID);
         service.executeAdjustment(STOCKTAKE_ID);
+
+        assertThat(stocktake.getApprovedBy()).isEqualTo(USER_ID);
         assertThat(stocktake.getStatus()).isEqualTo(FactoryStocktake.Status.APPLIED);
     }
 

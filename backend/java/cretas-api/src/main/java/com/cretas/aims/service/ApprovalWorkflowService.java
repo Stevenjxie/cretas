@@ -46,7 +46,7 @@ public interface ApprovalWorkflowService {
      * 找当前 active workflow.
      *
      * <p>Filter: {@code publishStatus='published'} + {@code enabled=true}.
-     * <p>Ordering: priority DESC, version DESC. 取第一个.
+     * <p>必须恰好 0 或 1 个 active；历史异常出现多个时 fail-closed，不按优先级猜选.
      *
      * @return Optional.empty() 表示没有 active workflow，新请求按“无需审批”直通；
      *         如仍存在启用的旧配置则由 cutover gate 阻止并要求迁移

@@ -557,8 +557,13 @@ public class SemiFinishedStocktakeServiceImpl implements SemiFinishedStocktakeSe
                 .orElseThrow(() -> new BusinessException(404, "盘点任务不存在: " + stocktakeId));
 
         // 红线: 必须有 workflowInstanceId (不允许绕过 workflow)
-        if (stocktake.getWorkflowInstanceId() == null
-                && stocktake.getStatus() != SemiFinishedStocktake.Status.APPROVED) {
+        boolean directNoApproval = stocktake.getWorkflowInstanceId() == null
+                && stocktake.getStatus() == SemiFinishedStocktake.Status.APPROVED
+                && stocktake.getSubmittedBy() != null
+                && stocktake.getSubmittedAt() != null
+                && stocktake.getApprovedBy() != null
+                && stocktake.getApprovedAt() != null;
+        if (stocktake.getWorkflowInstanceId() == null && !directNoApproval) {
             throw new BusinessException(403,
                     "半成品盘点调账必须经过 INVENTORY_ADJUSTMENT 工作流审批，无法直接调账")
                     .withCode("WORKFLOW_BYPASS_FORBIDDEN")

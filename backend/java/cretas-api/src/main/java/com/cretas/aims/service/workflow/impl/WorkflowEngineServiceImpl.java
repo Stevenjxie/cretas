@@ -141,7 +141,7 @@ public class WorkflowEngineServiceImpl implements WorkflowEngineService {
     @Autowired(required = false)
     private DecisionTypeMetadataRegistry decisionTypeMetadataRegistry;
 
-    @Autowired(required = false)
+    @Autowired
     private ApprovalChainService approvalChainService;
 
     @Autowired
@@ -269,6 +269,14 @@ public class WorkflowEngineServiceImpl implements WorkflowEngineService {
     }
 
     private String definitionDigest(ApprovalWorkflow workflow) {
+        return definitionDigest(
+                workflow, workflow.getPublishStatus(), workflow.getEnabled());
+    }
+
+    private String definitionDigest(
+            ApprovalWorkflow workflow,
+            String publishStatus,
+            Boolean enabled) {
         try {
             MessageDigest digest = MessageDigest.getInstance("SHA-256");
             updateDigest(digest, workflow.getId());
@@ -277,8 +285,8 @@ public class WorkflowEngineServiceImpl implements WorkflowEngineService {
                     ? null : workflow.getDecisionType().name());
             updateDigest(digest, workflow.getName());
             updateDigest(digest, String.valueOf(workflow.getVersion()));
-            updateDigest(digest, workflow.getPublishStatus());
-            updateDigest(digest, String.valueOf(workflow.getEnabled()));
+            updateDigest(digest, publishStatus);
+            updateDigest(digest, String.valueOf(enabled));
             updateDigest(digest, workflow.getStartNodeId());
             updateDigest(digest, workflow.getNodesJson());
             updateDigest(digest, workflow.getEdgesJson());
@@ -348,12 +356,21 @@ public class WorkflowEngineServiceImpl implements WorkflowEngineService {
         String stableDigest = stableBoundDefinitionDigest(instance);
         boolean unchanged = stableDigest != null
                 ? expectedDigest.equals(stableDefinitionDigest(workflow))
-                : "published".equals(workflow.getPublishStatus())
-                        && Boolean.TRUE.equals(workflow.getEnabled())
-                        && expectedDigest.equals(definitionDigest(workflow));
+                : expectedDigest.equals(definitionDigest(workflow))
+                        || expectedDigest.equals(legacyActiveDefinitionDigest(workflow));
         if (!unchanged) {
             throw new BusinessException(409, "WORKFLOW_BOUND_DEFINITION_CHANGED");
         }
+    }
+
+    /**
+     * Compatibility for instances created before the stable v2 digest existed.
+     * Old digests included the runtime flags, which were always published=true at
+     * creation time. Reconstructing only those two original values permits a safe
+     * disable/archive while still detecting every structural definition change.
+     */
+    private String legacyActiveDefinitionDigest(ApprovalWorkflow workflow) {
+        return definitionDigest(workflow, "published", true);
     }
 
     private ApprovalWorkflowInstance startWorkflowWithResolvedDefinition(

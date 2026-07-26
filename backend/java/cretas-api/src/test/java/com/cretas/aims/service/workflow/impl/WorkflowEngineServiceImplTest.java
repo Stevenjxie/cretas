@@ -26,6 +26,7 @@ import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.data.redis.core.ValueOperations;
 import org.springframework.orm.ObjectOptimisticLockingFailureException;
+import org.springframework.test.util.ReflectionTestUtils;
 import org.springframework.transaction.support.TransactionSynchronization;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
 
@@ -250,6 +251,42 @@ class WorkflowEngineServiceImplTest {
         ApprovalWorkflowInstance completed = engine.transitionNode(
                 instance.getId(), APPROVER_ID, "factory_admin",
                 HistoryAction.APPROVE, "continue original version");
+
+        assertEquals(InstanceStatus.APPROVED, completed.getStatus());
+    }
+
+    @Test
+    @DisplayName("pre-cutover running instance also survives disable without permitting graph drift")
+    void legacy_bound_running_instance_survives_later_disable() {
+        wireInstanceLookup();
+        ApprovalWorkflow workflow = buildWorkflow(
+                List.of(
+                        node("start", "start", null),
+                        node("approve1", "approval", approvalCfg()),
+                        node("end_ok", "end", Map.of("outcome", "APPROVED"))),
+                List.of(
+                        edge("e1", "start", "approve1", null, 0, null),
+                        edge("e2", "approve1", "end_ok", null, 0, null)),
+                "start");
+        workflow.setPublishStatus("published");
+        workflow.setEnabled(true);
+
+        ApprovalWorkflowInstance instance = engine.startWorkflowIfConfigured(
+                FACTORY_ID, "PURCHASE_ORDER", "PO-LEGACY-IN-FLIGHT",
+                Map.of(), INITIATOR_ID).orElseThrow();
+        String legacyDigest = ReflectionTestUtils.invokeMethod(
+                engine, "definitionDigest", workflow);
+        assertNotNull(legacyDigest);
+        instance.getContextJson().remove(
+                "_cretas_bound_workflow_definition_v2_sha256");
+        instance.getContextJson().put(
+                "_cretas_bound_workflow_definition_sha256", legacyDigest);
+        workflow.setEnabled(false);
+        workflow.setPublishStatus("archived");
+
+        ApprovalWorkflowInstance completed = engine.transitionNode(
+                instance.getId(), APPROVER_ID, "factory_admin",
+                HistoryAction.APPROVE, "continue pre-cutover version");
 
         assertEquals(InstanceStatus.APPROVED, completed.getStatus());
     }

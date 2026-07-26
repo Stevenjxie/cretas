@@ -1113,8 +1113,13 @@ public class FactoryStocktakeServiceImpl implements FactoryStocktakeService {
                 .orElseThrow(() -> new BusinessException(404, "盘点任务不存在: " + stocktakeId));
 
         // 红线 R1: 必须有 workflowInstanceId（不允许绕过 workflow）
-        if (stocktake.getWorkflowInstanceId() == null
-                && stocktake.getStatus() != FactoryStocktake.Status.APPROVED) {
+        boolean directNoApproval = stocktake.getWorkflowInstanceId() == null
+                && stocktake.getStatus() == FactoryStocktake.Status.APPROVED
+                && stocktake.getSubmittedBy() != null
+                && stocktake.getSubmittedAt() != null
+                && stocktake.getApprovedBy() != null
+                && stocktake.getApprovedAt() != null;
+        if (stocktake.getWorkflowInstanceId() == null && !directNoApproval) {
             throw new BusinessException(403,
                     "盘点调账必须经过 INVENTORY_ADJUSTMENT 工作流审批，无法直接调账")
                     .withCode("WORKFLOW_BYPASS_FORBIDDEN")

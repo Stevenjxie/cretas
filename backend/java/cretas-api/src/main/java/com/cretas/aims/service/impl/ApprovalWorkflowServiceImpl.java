@@ -291,6 +291,20 @@ public class ApprovalWorkflowServiceImpl implements ApprovalWorkflowService {
         }
         if (enabled) {
             assertBusinessRuntimeWired(workflow);
+            if (!"published".equals(workflow.getPublishStatus())) {
+                throw new BusinessException(409, "只有已发布的审批画布可以启用")
+                        .withCode("OA_WORKFLOW_NOT_PUBLISHED")
+                        .withHint("请先完成校验并发布该草稿");
+            }
+            boolean otherActive = workflowRepository
+                    .findActiveByDecisionType(factoryId, workflow.getDecisionType())
+                    .stream()
+                    .anyMatch(active -> !Objects.equals(active.getId(), workflow.getId()));
+            if (otherActive) {
+                throw new BusinessException(409, "该审批业务已有其他启用版本")
+                        .withCode("OA_ACTIVE_WORKFLOW_EXISTS")
+                        .withHint("请先停用当前运行版本，再启用所选版本");
+            }
         }
 
         workflow.setEnabled(enabled);

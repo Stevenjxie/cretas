@@ -111,13 +111,14 @@ export function buildApprovalCatalog(
       .sort((left, right) => right.localeCompare(left))[0]
     const cutover = readinessByType.get(item.decisionType)
     const workflowStatus = resolveStatus(typeWorkflows)
-    const status = cutover?.runtimeStatus === 'CANVAS_CONFLICT'
-      ? 'canvas-conflict'
-      : cutover?.runtimeStatus === 'BUSINESS_NOT_WIRED'
-      ? 'business-not-wired'
-      : cutover?.runtimeStatus === 'LEGACY_MIGRATION_REQUIRED'
-        ? 'legacy-migration-required'
-        : workflowStatus
+    let status: ApprovalCatalogStatus = workflowStatus
+    if (cutover?.runtimeStatus === 'CANVAS_CONFLICT') {
+      status = 'canvas-conflict'
+    } else if (cutover?.runtimeStatus === 'BUSINESS_NOT_WIRED') {
+      status = 'business-not-wired'
+    } else if (cutover?.runtimeStatus === 'LEGACY_MIGRATION_REQUIRED') {
+      status = 'legacy-migration-required'
+    }
     return {
       decisionType: item.decisionType,
       chineseName: item.chineseName,

@@ -463,6 +463,35 @@ class ApprovalWorkflowServiceImplTest {
     }
 
     @Test
+    void onlyPublishedUniqueWorkflowCanBeEnabled() {
+        ApprovalWorkflow draft = validSequentialWorkflow();
+        draft.setId(WORKFLOW_ID);
+        draft.setFactoryId(FACTORY_ID);
+        draft.setPublishStatus("draft");
+        draft.setEnabled(false);
+        when(repository.findById(WORKFLOW_ID)).thenReturn(Optional.of(draft));
+
+        BusinessException draftError = assertThrows(
+                BusinessException.class,
+                () -> service.toggleEnabled(FACTORY_ID, WORKFLOW_ID, true));
+        assertEquals("OA_WORKFLOW_NOT_PUBLISHED", draftError.getErrorCode());
+
+        draft.setPublishStatus("published");
+        ApprovalWorkflow other = validSequentialWorkflow();
+        other.setId("wf-other-active");
+        other.setEnabled(true);
+        other.setPublishStatus("published");
+        when(repository.findActiveByDecisionType(
+                FACTORY_ID, draft.getDecisionType())).thenReturn(List.of(other));
+
+        BusinessException activeError = assertThrows(
+                BusinessException.class,
+                () -> service.toggleEnabled(FACTORY_ID, WORKFLOW_ID, true));
+        assertEquals("OA_ACTIVE_WORKFLOW_EXISTS", activeError.getErrorCode());
+        verify(repository, never()).save(any());
+    }
+
+    @Test
     @DisplayName("Case 10: publishDraft non-draft → BusinessException(400)")
     void publish_nonDraft_throws400() {
         ApprovalWorkflow existing = validSequentialWorkflow();
