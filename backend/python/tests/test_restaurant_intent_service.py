@@ -185,6 +185,39 @@ def test_all_store_dish_followup_matches_aggregate_resolver_capability():
     assert mismatch is None
 
 
+@pytest.mark.parametrize(
+    "query",
+    [
+        "最近7天青花椒南方百联店招牌青花椒味(单人份)的成本和毛利呢？",
+        (
+            "最近7天青花椒南方百联店和青花椒徐汇光启城店"
+            "招牌青花椒味(单人份)的成本和毛利呢？"
+        ),
+    ],
+)
+def test_named_store_dish_followup_matches_store_resolver_capability(query):
+    spec = _build_spec(
+        "RESTAURANT_OPS_GROSS_MARGIN",
+        query,
+        confidence=1.0,
+        tier="trusted_context",
+        planner_authority="trusted_context",
+        require_explicit_time=True,
+    )
+
+    mismatch = svc._execution_mismatch(
+        spec,
+        spec.planned_intents,
+        dish_mention="招牌青花椒味(单人份)",
+        store_mention=spec.store_slot,
+        store_dish="招牌青花椒味(单人份)",
+    )
+
+    assert set(spec.dimensions) == {"store", "dish"}
+    assert spec.planned_intents == ("RESTAURANT_OPS_STORE_MARGIN",)
+    assert mismatch is None
+
+
 def test_should_delegate_clarification_needed_true():
     """Rule 2: clarification_needed -> True (Java can't ask a clarifying
     question itself)."""

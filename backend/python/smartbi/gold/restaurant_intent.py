@@ -423,9 +423,18 @@ def _plan_requested_intents(
             # The recipe-cost ranking resolver has no named-dish scope.  A
             # question such as "米饭的成本" must use the scoped unit-economics
             # resolver; otherwise it silently returns the all-dish cost榜.
+            # A concrete single/multi-store slice belongs to STORE_MARGIN
+            # because it owns the store×dish grain. Routing that shape to the
+            # all-store GROSS_MARGIN resolver caused a live immutable-plan
+            # rejection after a single-store dish ranking.
+            has_dish = bool(extract_dish_candidate(text))
             code = (
-                "RESTAURANT_OPS_GROSS_MARGIN"
-                if extract_dish_candidate(text)
+                "RESTAURANT_OPS_STORE_MARGIN"
+                if has_dish
+                and "store" in dimensions
+                and store_scope in {"single", "multiple"}
+                else "RESTAURANT_OPS_GROSS_MARGIN"
+                if has_dish
                 else "RESTAURANT_OPS_RECIPE_COST"
             )
         elif metric == "wastage":
@@ -1385,6 +1394,7 @@ _TRUSTED_CONTEXT_DISH_METRICS = frozenset({
 _TRUSTED_CONTEXT_DISH_INTENTS = frozenset({
     "RESTAURANT_OPS_GROSS_MARGIN",
     "RESTAURANT_OPS_RECIPE_COST",
+    "RESTAURANT_OPS_STORE_MARGIN",
 })
 
 

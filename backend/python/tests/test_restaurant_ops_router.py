@@ -1340,6 +1340,128 @@ def test_store_dish_ranking_no_data_keeps_sales_semantics(monkeypatch):
     assert result.charts == []
 
 
+def test_single_store_dish_margin_uses_store_dish_grain(monkeypatch):
+    start, end = date(2026, 7, 20), date(2026, 7, 21)
+    row = _store_margin_row(
+        "S-1",
+        "青花椒南方百联店",
+        2000,
+        100,
+        start,
+        end,
+    )
+    pool, _ = _store_margin_runtime(monkeypatch, {(start, end): [row]})
+
+    result = asyncio.run(_r.resolve_store_margin(
+        pool,
+        "RES_TEST",
+        role="restaurant_manager",
+        date_range=(start, end),
+        query="最近7天青花椒南方百联店测试菜的成本和毛利呢？",
+        store_name="青花椒南方百联店",
+        dish_mention="测试菜",
+    ))
+
+    assert "门店范围：**青花椒南方百联店**" in result.answer_text
+    assert "「测试菜」2026-07-20 至 2026-07-21" in result.answer_text
+    assert "成本 **¥1,000.00**" in result.answer_text
+    assert "毛利 **¥1,000.00**" in result.answer_text
+    assert "毛利率 **50.0%**" in result.answer_text
+    assert result.meta["targetStoreName"] == "青花椒南方百联店"
+    assert result.meta["marginInvariantPass"] is True
+    assert result.meta["scope_matches_request"] is True
+
+
+def test_multi_store_dish_margin_compares_each_selected_store(monkeypatch):
+    start, end = date(2026, 7, 20), date(2026, 7, 21)
+    async def _canonicalize(_pool, _factory_id, mention):
+        return [mention]
+
+    monkeypatch.setattr(_r, "_canonicalize_store_mention", _canonicalize)
+    rows = [
+        _store_margin_row(
+            "S-1", "青花椒南方百联店", 2000, 100, start, end,
+        ),
+        _store_margin_row(
+            "S-2", "青花椒徐汇光启城店", 1500, 100, start, end,
+        ),
+    ]
+    pool, _ = _store_margin_runtime(monkeypatch, {(start, end): rows})
+
+    result = asyncio.run(_r.resolve_store_margin(
+        pool,
+        "RES_TEST",
+        role="restaurant_manager",
+        date_range=(start, end),
+        query=(
+            "最近7天青花椒南方百联店和青花椒徐汇光启城店"
+            "测试菜的成本和毛利呢？"
+        ),
+        store_mentions=[
+            "青花椒南方百联店",
+            "青花椒徐汇光启城店",
+        ],
+        dish_mention="测试菜",
+    ))
+
+    assert "青花椒南方百联店" in result.answer_text
+    assert (
+        "营收 ¥2,000.00、成本 ¥1,000.00、毛利 ¥1,000.00、毛利率 50.0%"
+        in result.answer_text
+    )
+    assert "青花椒徐汇光启城店" in result.answer_text
+    assert (
+        "营收 ¥1,500.00、成本 ¥1,000.00、毛利 ¥500.00、毛利率 33.3%"
+        in result.answer_text
+    )
+    assert result.meta["selected_stores"] == [
+        "青花椒南方百联店",
+        "青花椒徐汇光启城店",
+    ]
+    assert result.meta["compare_stores"] is True
+    assert result.meta["marginInvariantPass"] is True
+
+
+def test_multi_store_dish_margin_keeps_selected_store_with_no_sales(monkeypatch):
+    start, end = date(2026, 7, 20), date(2026, 7, 21)
+
+    async def _canonicalize(_pool, _factory_id, mention):
+        return [mention]
+
+    monkeypatch.setattr(_r, "_canonicalize_store_mention", _canonicalize)
+    pool, _ = _store_margin_runtime(monkeypatch, {
+        (start, end): [
+            _store_margin_row(
+                "S-1", "青花椒南方百联店", 2000, 100, start, end,
+            ),
+        ],
+    })
+
+    result = asyncio.run(_r.resolve_store_margin(
+        pool,
+        "RES_TEST",
+        role="restaurant_manager",
+        date_range=(start, end),
+        query=(
+            "最近7天青花椒南方百联店和青花椒徐汇光启城店"
+            "测试菜的成本和毛利呢？"
+        ),
+        store_mentions=[
+            "青花椒南方百联店",
+            "青花椒徐汇光启城店",
+        ],
+        dish_mention="测试菜",
+    ))
+
+    assert "青花椒南方百联店" in result.answer_text
+    assert "青花椒徐汇光启城店" in result.answer_text
+    assert "所选时间内没有该菜的销售记录" in result.answer_text
+    assert result.meta["selected_stores"] == [
+        "青花椒南方百联店",
+        "青花椒徐汇光启城店",
+    ]
+
+
 def test_store_margin_comparison_uses_both_exact_date_ranges(monkeypatch):
     primary = (date(2026, 7, 20), date(2026, 7, 21))
     baseline = (date(2026, 7, 18), date(2026, 7, 19))

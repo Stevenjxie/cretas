@@ -548,6 +548,9 @@ async def test_trusted_named_store_dish_followup_survives_planner_outage(
     assert spec.store_scope == expected_scope
     assert spec.store_slots == expected_stores
     assert spec.dish_slot == "招牌青花椒味(单人份)"
+    assert set(spec.dimensions) == {"store", "dish"}
+    assert spec.planned_intents == ("RESTAURANT_OPS_STORE_MARGIN",)
+    assert spec.intent == "RESTAURANT_OPS_STORE_MARGIN"
     t3.assert_not_awaited()
 
 
