@@ -3872,6 +3872,222 @@ async def resolve_store_margin(
             })
             entry["qty"] += float(r["qty"] or 0)
             entry["revenue"] += float(r["revenue"] or 0)
+        asks_cost = any(token in query_text for token in (
+            "菜品成本", "食材成本", "配方成本", "单品成本", "单份成本",
+            "单位成本", "每份成本", "成本",
+        ))
+        asks_margin, asks_profitability = _profit_intent(query_text)
+        if asks_cost or asks_margin:
+            # STORE_MARGIN owns the concrete store×dish grain. Reuse the same
+            # cost-completeness and plausibility rules as store aggregation,
+            # but render only the named dish requested by the current plan.
+            scoped_margin_entries = _aggregate_store_margin_entries(
+                matched,
+                name_to_pk,
+                cost_by_pk,
+            )
+            margin_by_store = {
+                str(item["name"]): item for item in scoped_margin_entries
+            }
+            requested_store_names = (
+                list(selected_store_names)
+                if selected_store_names
+                else [store_name] if store_name else [
+                    str(item["name"]) for item in scoped_margin_entries
+                ]
+            )
+
+            def _metric_entry(item: Dict[str, Any]) -> Tuple[Dict[str, Any], bool]:
+                qty = float(item.get("qty") or 0.0)
+                revenue = float(item.get("revenue") or 0.0)
+                coverage = float(item.get("cost_coverage_ratio") or 0.0)
+                complete = bool(
+                    coverage >= 0.999999
+                    and item.get("gross_profit") is not None
+                    and qty > 0
+                )
+                total_cost = float(item.get("cost") or 0.0) if complete else None
+                gross_profit = (
+                    revenue - total_cost
+                    if total_cost is not None
+                    else None
+                )
+                return {
+                    "name": dish_mention,
+                    "qty": qty,
+                    "revenue": revenue,
+                    "bills": int(item.get("bills") or 0),
+                    "food_cost_unit": (
+                        total_cost / qty
+                        if total_cost is not None and qty > 0
+                        else None
+                    ),
+                    "total_cost": total_cost,
+                    "gross_profit": gross_profit,
+                    "margin_rate": (
+                        gross_profit / revenue
+                        if gross_profit is not None and revenue > 0
+                        else None
+                    ),
+                    "has_cost": complete,
+                    "invalid_cost": bool(item.get("invalid_cost_dishes")),
+                }, complete
+
+            scoped_results: List[Tuple[str, Dict[str, Any], bool]] = []
+            for requested_store in requested_store_names:
+                store_item = margin_by_store.get(str(requested_store))
+                if store_item is None:
+                    scoped_results.append((
+                        str(requested_store),
+                        {
+                            "name": dish_mention,
+                            "qty": 0.0,
+                            "revenue": 0.0,
+                            "bills": 0,
+                            "food_cost_unit": None,
+                            "total_cost": None,
+                            "gross_profit": None,
+                            "margin_rate": None,
+                            "has_cost": False,
+                            "invalid_cost": False,
+                        },
+                        False,
+                    ))
+                    continue
+                metric_entry, complete = _metric_entry(store_item)
+                scoped_results.append((
+                    str(store_item["name"]),
+                    metric_entry,
+                    complete,
+                ))
+
+            if store_id or store_name:
+                target_store, metric_entry, complete = scoped_results[0]
+                if complete:
+                    projected = _scoped_dish_metric_answer(
+                        metric_entry,
+                        window_label=window_label,
+                        query=query_text,
+                    )
+                    if asks_profitability:
+                        rate = float(metric_entry["margin_rate"])
+                        verdict = (
+                            "在赚钱"
+                            if rate > 0
+                            else "基本打平"
+                            if rate == 0
+                            else "在亏钱"
+                        )
+                        projected = (
+                            f"**结论：按已覆盖成本口径，"
+                            f"「{target_store}」的「{dish_mention}」{window_label}"
+                            f"{verdict}（毛利率 {rate * 100:.1f}%）。**\n\n"
+                            f"{projected}"
+                        )
+                else:
+                    projected = (
+                        f"「{dish_mention}」{window_label}在「{target_store}」"
+                        f"销量 {metric_entry['qty']:,.0f} 份、"
+                        f"营收 ¥{metric_entry['revenue']:,.2f}，但成本数据不完整，"
+                        "当前无法可靠计算单份成本、总成本、毛利和毛利率；"
+                        "不会用全部门店或其他菜品替代。"
+                    )
+                return OpsAnswer(
+                    code="RESTAURANT_OPS_STORE_MARGIN",
+                    title=f"{target_store} · {dish_mention}成本毛利",
+                    answer_text=f"门店范围：**{target_store}**\n\n{projected}",
+                    charts=[],
+                    kpis=[],
+                    meta={
+                        "store_dish": dish_mention,
+                        "targetStoreName": target_store,
+                        "stores": [{"name": target_store}],
+                        "focus_entity": {
+                            "type": "dish",
+                            "name": dish_mention,
+                        },
+                        "costCoverageRatio": (
+                            1.0 if complete else float(
+                                margin_by_store[target_store].get(
+                                    "cost_coverage_ratio",
+                                ) or 0.0
+                            )
+                        ),
+                        "marginInvariantPass": True,
+                        "marginFormula": "毛利=同一门店同一菜品营收-对应菜品成本",
+                        "scope_matches_request": True,
+                    },
+                )
+
+            # Two or more explicitly selected stores mean a same-window
+            # comparison. Keep missing cost visible per store instead of
+            # dropping that store or silently aggregating all selected stores.
+            lines = [
+                f"**「{dish_mention}」所选门店成本毛利对比（{window_label}）：**",
+                "",
+            ]
+            result_stores: List[Dict[str, Any]] = []
+            for target_store, metric_entry, complete in scoped_results:
+                if complete and asks_margin:
+                    lines.append(
+                        f"- **{target_store}**：营收 ¥{metric_entry['revenue']:,.2f}、"
+                        f"成本 ¥{metric_entry['total_cost']:,.2f}、"
+                        f"毛利 ¥{metric_entry['gross_profit']:,.2f}、"
+                        f"毛利率 {metric_entry['margin_rate'] * 100:.1f}%"
+                    )
+                elif complete:
+                    lines.append(
+                        f"- **{target_store}**：销量 {metric_entry['qty']:,.0f} 份、"
+                        f"单份食材成本 ¥{metric_entry['food_cost_unit']:,.2f}、"
+                        f"总成本 ¥{metric_entry['total_cost']:,.2f}"
+                    )
+                else:
+                    if (
+                        metric_entry["qty"] <= 0
+                        and metric_entry["revenue"] <= 0
+                    ):
+                        lines.append(
+                            f"- **{target_store}**：所选时间内没有该菜的销售记录，"
+                            "无法计算成本和毛利"
+                        )
+                    else:
+                        lines.append(
+                            f"- **{target_store}**：销量 {metric_entry['qty']:,.0f} 份、"
+                            f"营收 ¥{metric_entry['revenue']:,.2f}；成本数据不完整，"
+                            "无法可靠计算成本和毛利"
+                        )
+                result_stores.append({
+                    "name": target_store,
+                    "revenue": metric_entry["revenue"],
+                    "cost": metric_entry["total_cost"],
+                    "gross_profit": metric_entry["gross_profit"],
+                    "margin_rate": metric_entry["margin_rate"],
+                })
+            lines.extend([
+                "",
+                "> 各门店使用同一菜品、同一时间和同一成本口径；"
+                "未把所选门店合并成全店结果。",
+            ])
+            return OpsAnswer(
+                code="RESTAURANT_OPS_STORE_MARGIN",
+                title=f"{dish_mention}所选门店成本毛利对比",
+                answer_text="\n".join(lines),
+                charts=[],
+                kpis=[],
+                meta={
+                    "store_dish": dish_mention,
+                    "stores": result_stores,
+                    "selected_stores": requested_store_names,
+                    "compare_stores": True,
+                    "focus_entity": {
+                        "type": "dish",
+                        "name": dish_mention,
+                    },
+                    "marginInvariantPass": True,
+                    "marginFormula": "毛利=同一门店同一菜品营收-对应菜品成本",
+                    "scope_matches_request": True,
+                },
+            )
         if store_id or store_name:
             target = next(iter(per_store.values()))
             target_label = store_name or target["name"]
