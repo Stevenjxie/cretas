@@ -18,6 +18,7 @@ import smartbi.agent.synthesis_engine as se
 from smartbi.agent.synthesis_engine import ComprehensiveSynthesisEngine, SynthesisResponse
 from smartbi.agent.factbook import FactBook
 from smartbi.agent.budget_tracker import BudgetCheckResult
+from smartbi.agent.dimension_catalog import missing_status
 from common.llm_redactor import current_redaction_scope
 
 
@@ -427,6 +428,149 @@ class TestSynthesize:
         assert resp.dimension_coverage
         # FactBook remains attached as auditable evidence.
         assert resp.factbook_text
+
+    def test_unsupported_causality_and_missing_dimension_claim_fall_back(self, monkeypatch):
+        cache = FakeCache()
+        eng = _engine(monkeypatch, cache=cache)
+        factbook = FactBook(
+            period="2026-03-01 至 2026-03-31",
+            missing_dimensions=[
+                missing_status("weather", reason="未接入逐日天气"),
+                missing_status("promotion", reason="未接入活动成本和对照基线"),
+            ],
+        )
+
+        async def fake_build(*_args, **_kwargs):
+            return factbook
+
+        async def fake_call_chain(slot, payload, chain=None, timeout=30.0):
+            return {
+                "choices": [{"message": {"content":
+                    "峰值月主因是晚市爆发，不是天气或活动带动。"}}],
+                "usage": {"total_tokens": 321},
+            }
+
+        monkeypatch.setattr(eng, "_build_factbook", fake_build)
+        monkeypatch.setattr(eng, "_analyze", lambda *_args, **_kwargs: "")
+        monkeypatch.setattr(se, "call_chain", fake_call_chain)
+
+        import datetime
+        dr = (datetime.date(2026, 3, 1), datetime.date(2026, 3, 31))
+        resp = asyncio.run(eng.synthesize(
+            "RES_3101_009",
+            "结合客流、菜品、活动、天气、评价和排班分析2026-03峰值月的经营构成与可能原因",
+            dr,
+        ))
+
+        assert resp.source == "deterministic_fallback"
+        assert resp.tokens == 321
+        assert resp.tokens_used_today == 331
+        assert "叙述未通过数据因果门禁" in resp.answer
+        assert "不是天气或活动带动" not in resp.answer
+        assert resp.fact_check
+        assert any("无保留因果断言" in item for item in resp.fact_check["violations"])
+        assert any("缺失维度被当作事实" in item for item in resp.fact_check["violations"])
+        assert cache.put_calls == []
+
+    def test_hedged_correlation_and_explicit_missing_disclosure_can_be_cached(self, monkeypatch):
+        cache = FakeCache()
+        eng = _engine(monkeypatch, cache=cache)
+        factbook = FactBook(
+            period="2026-03-01 至 2026-03-31",
+            missing_dimensions=[
+                missing_status("weather", reason="未接入逐日天气"),
+                missing_status("promotion", reason="未接入活动成本和对照基线"),
+            ],
+        )
+
+        async def fake_build(*_args, **_kwargs):
+            return factbook
+
+        async def fake_call_chain(slot, payload, chain=None, timeout=30.0):
+            return {
+                "choices": [{"message": {"content":
+                    "晚市占比较高，但只能说明经营构成，不能证明因果。"
+                    "天气和营销活动数据未提供，无法判断其影响。"}}],
+                "usage": {"total_tokens": 210},
+            }
+
+        async def no_capture(*_args, **_kwargs):
+            return None
+
+        monkeypatch.setattr(eng, "_build_factbook", fake_build)
+        monkeypatch.setattr(eng, "_analyze", lambda *_args, **_kwargs: "")
+        monkeypatch.setattr(eng, "_capture_distillation", no_capture)
+        monkeypatch.setattr(se, "call_chain", fake_call_chain)
+
+        import datetime
+        dr = (datetime.date(2026, 3, 1), datetime.date(2026, 3, 31))
+        resp = asyncio.run(eng.synthesize(
+            "RES_3101_009",
+            "分析2026-03峰值月的经营构成与可能原因",
+            dr,
+        ))
+
+        assert resp.source == "llm"
+        assert "不能证明因果" in resp.answer
+        assert "天气和营销活动数据未提供" in resp.answer
+        assert cache.put_calls
+
+    def test_contract_version_invalidates_pre_guard_narrative_cache(self):
+        assert se.SYNTHESIS_CONTRACT_VERSION == "restaurant-dimensions-v3"
+
+
+class TestNarrativeGroundingGate:
+    def test_rejects_unhedged_cause_and_missing_dimension_fact(self):
+        factbook = FactBook(missing_dimensions=[
+            missing_status("weather", reason="未接入逐日天气"),
+            missing_status("staffing", reason="未接入逐时在岗人数"),
+        ])
+
+        violations = se._narrative_grounding_violations(
+            "主因是晚市爆发，不是天气带动。高峰排班充足。",
+            factbook,
+        )
+
+        assert any("无保留因果断言" in item for item in violations)
+        assert any("weather" in item for item in violations)
+        assert any("staffing" in item for item in violations)
+
+    def test_allows_deterministic_attribution_and_missing_disclosure(self):
+        factbook = FactBook(
+            attribution={"primary_cause": "客单价"},
+            missing_dimensions=[
+                missing_status("weather", reason="未接入逐日天气"),
+            ],
+        )
+
+        assert se._narrative_grounding_violations(
+            "这家店拖后腿的主要原因是客单价。天气数据未提供，无法判断其影响。",
+            factbook,
+        ) == []
+
+    def test_attribution_fact_does_not_exempt_a_different_cause(self):
+        factbook = FactBook(attribution={"primary_cause": "客单价"})
+
+        violations = se._narrative_grounding_violations(
+            "客单价是主要原因，天气又造成了增长。",
+            factbook,
+        )
+
+        assert any("无保留因果断言" in item for item in violations)
+
+    def test_one_missing_disclosure_does_not_exempt_another_clause(self):
+        factbook = FactBook(missing_dimensions=[
+            missing_status("weather", reason="未接入逐日天气"),
+            missing_status("promotion", reason="未接入活动成本和对照基线"),
+        ])
+
+        violations = se._narrative_grounding_violations(
+            "天气数据未提供，但活动带动了晚市增长。",
+            factbook,
+        )
+
+        assert not any("weather" in item for item in violations)
+        assert any("promotion" in item for item in violations)
 
 
 # --------------------------------------------------------------------------

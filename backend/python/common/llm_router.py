@@ -634,11 +634,20 @@ SLOT_MODELS: Dict[SLOT, List[Tuple[str, str]]] = {
         ("aliyun_c", "qwen3.5-flash"), ("aliyun_c", "qwen3.6-flash-2026-04-16"),
         ("aliyun_c", "qwen-plus-latest"), ("tencent", "qwen3.5-flash"),
     ] + _TEXT_TAIL),
-    # INSIGHTS — 质量 (thinking off = fast concise insight, 实测 qwen3.7-max 1.1s).
+    # INSIGHTS — 长经营分析优先 Plus（质量/时延平衡），Max 仅作深尾。
+    # 2026-07-26 用户逐账户截图确认 B/C 的 Plus 与指定版本均有大额免费额度，
+    # 且全部开启“免费额度用完即停”。生产 14:55 已证明把三个耗尽 Max 放在
+    # 链头会连续 403，既浪费延迟也没有提升质量；C/B 交错可在单账户故障时
+    # 一次切换，同时保留 Max 作为真正需要更深推理时的后备。
     SLOT.INSIGHTS: _dedup_chain([
-        ("aliyun_a", "qwen3.7-max-2026-05-20"), ("aliyun_b", "qwen3.7-max-2026-05-20"),
-        ("aliyun_c", "qwen3.7-max-2026-06-08"), ("aliyun_c", "qwen3-max-preview"),
+        ("aliyun_c", "qwen3.7-plus"), ("aliyun_b", "qwen3.7-plus"),
+        ("aliyun_c", "qwen3.7-plus-2026-05-26"),
+        ("aliyun_b", "qwen3.7-plus-2026-05-26"),
         ("aliyun_c", "glm-5.2"), ("aliyun_c", "qwen-plus-latest"),
+        ("aliyun_a", "qwen3.7-max-2026-05-20"),
+        ("aliyun_b", "qwen3.7-max-2026-05-20"),
+        ("aliyun_c", "qwen3.7-max-2026-06-08"),
+        ("aliyun_c", "qwen3-max-preview"),
     ] + _TEXT_TAIL),
     # CHART — compact JSON (thinking off + json_object) → flash/coder; NO glm-5 head (60s).
     SLOT.CHART: _dedup_chain([

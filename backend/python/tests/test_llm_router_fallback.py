@@ -106,6 +106,19 @@ def test_mapper_uses_bounded_fast_models_without_max_or_reasoners():
     )
 
 
+def test_insights_prefers_interleaved_free_plus_before_max_deep_tail():
+    chain = llm_router.SLOT_MODELS[SLOT.INSIGHTS]
+    assert chain[:4] == [
+        ("aliyun_c", "qwen3.7-plus"),
+        ("aliyun_b", "qwen3.7-plus"),
+        ("aliyun_c", "qwen3.7-plus-2026-05-26"),
+        ("aliyun_b", "qwen3.7-plus-2026-05-26"),
+    ]
+    first_max = next(i for i, (_account, model) in enumerate(chain) if "max" in model)
+    assert first_max >= 6
+    assert all(model not in llm_router._THINKING_ONLY for _account, model in chain[:6])
+
+
 def test_new_b_and_c_flash_quota_pairs_are_registered_and_head_fast_slots():
     expected = [
         ("aliyun_c", "qwen3.7-flash-2026-07-15"),
