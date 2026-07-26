@@ -106,6 +106,12 @@ function normalizeOption(raw: Record<string, unknown>): Record<string, unknown> 
     : Object.fromEntries(
         Object.entries(raw).filter(([key]) => !['chartType', 'title', 'type'].includes(key)),
       );
+  if (!('tooltip' in candidate)) {
+    const chartType = String(raw.chartType || raw.type || 'bar').toLowerCase();
+    candidate.tooltip = chartType === 'pie'
+      ? { trigger: 'item', confine: true }
+      : { trigger: 'axis', confine: true, axisPointer: { type: 'shadow' } };
+  }
   if (needsValueAxis(candidate)) {
     candidate.yAxis = { type: 'value' };
   }
