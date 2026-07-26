@@ -840,6 +840,77 @@ async def test_endpoint_delegate_true_answer_shape(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_endpoint_delegates_sealed_read_action_choice(monkeypatch):
+    """The final READ/store reply must preserve its sealed v2 authority."""
+    monkeypatch.setattr(gold_reads_mod, "get_factory_id", lambda: "DEMO_REST")
+    monkeypatch.setattr(
+        gold_reads_mod,
+        "get_pg_pool",
+        AsyncMock(return_value=object()),
+    )
+    from smartbi.services.chat_session_service import ChatSessionService
+    monkeypatch.setattr(
+        ChatSessionService,
+        "lookup",
+        AsyncMock(return_value=None),
+    )
+    monkeypatch.setattr(
+        ChatSessionService,
+        "upsert",
+        AsyncMock(return_value=None),
+    )
+    spec = _build_spec(
+        "RESTAURANT_OPS_GROSS_MARGIN",
+        "最近7天全部门店销量最低的5道菜",
+        confidence=1.0,
+        tier="explicit_action_read_choice",
+        planner_authority="explicit_action_read_choice",
+        is_continuation=True,
+        require_explicit_time=True,
+    )
+    assert spec.clarification_needed is False
+    assert "下架" not in spec.resolver_query_seed
+    monkeypatch.setattr(
+        "smartbi.gold.restaurant_intent.parse_restaurant_query",
+        AsyncMock(return_value=spec),
+    )
+    tiered_result = {
+        "kind": "answer",
+        "answer_text": (
+            "**当前未执行任何下架、调价或其他业务操作。**\n\n"
+            "最近7天全部门店卖得最差前 5 道菜。"
+        ),
+        "charts": [],
+        "kpis": [],
+        "title": "低销量菜品",
+        "code": spec.intent,
+        "contract_pass": True,
+        "spec": spec,
+    }
+    tiered_mock = AsyncMock(return_value=tiered_result)
+    monkeypatch.setattr(
+        "smartbi.gold.restaurant_intent_service.tiered_answer",
+        tiered_mock,
+    )
+
+    result = await post_restaurant_tiered_answer(
+        _fake_request("restaurant_manager", user_id="88"),
+        TieredIntentAnswerRequest(
+            factory_id="DEMO_REST",
+            query="全部门店",
+            java_tool_name="orchestrator_null_intent",
+            session_id="read-action-view-first",
+        ),
+    )
+
+    assert result["delegate"] is True
+    assert result["contract_pass"] is True
+    assert "当前未执行任何下架" in result["answer_text"]
+    tiered_mock.assert_awaited_once()
+    assert tiered_mock.await_args.kwargs["precomputed_spec"] is spec
+
+
+@pytest.mark.asyncio
 async def test_endpoint_dependent_followup_uses_trusted_context_and_session_key(monkeypatch):
     monkeypatch.setattr(gold_reads_mod, "get_factory_id", lambda: "QHJ01")
     pool = object()
