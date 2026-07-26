@@ -1,5 +1,15 @@
 # Dispatch 完成归档 — 2026-07-27
 
+### `FEATURE-RN-MULTIDEVICE-QC-CONCURRENCY-20260727-001`
+
+- **状态**：`merged`
+- **Owner**：`/root`
+- **Base SHA**：`986676d1ec1e4e8de54c72f8071a00fe6e0dfda3`
+- **功能提交 / PR / main 合并提交**：`4157c93b6c8b4562af7bf8c7279af879c770d541` / [#1839](https://github.com/Stevenjxie/cretas/pull/1839) / `412e6f610bd97889f3bcb6efaa931d08eb21b4f8`
+- **实际范围**：移动端 JWT 增加唯一 `jti`，退出仅撤销当前设备会话；标签 QC 审核增加版本、请求幂等键和租户范围行锁；RN 对其他设备已抢先审核的任务给出明确返回待审核列表提示。
+- **验证证据**：最终 exact-main 前置 release Maven 目标测试 `13/13`，其中真实 JPA Context 与双线程锁测试 `2/2`；RN 目标 Jest `7/7`；PR 密钥回归门禁通过。
+- **发布状态**：按用户指示仅合并，后端生产与 RN OTA 均未部署；生产账号、QC 数据和其他业务数据写入为 `0`。
+
 ### `BUG-LABEL-QC-WEB-FOOLPROOF-20260726-001`
 
 - **状态**：`merged`

@@ -41,6 +41,10 @@ public class WhitelistDTO {
     @Min(value = 1, message = "最大使用次数必须大于0")
     private Integer maxUsageCount;
     private String role;
+    private Boolean accountCreated;
+    private Boolean accountActive;
+    private Long registeredUserId;
+    private String registeredUsername;
     private List<String> permissions;
     private String notes;
     private Long addedBy;
@@ -101,6 +105,7 @@ public class WhitelistDTO {
         @Min(value = 1, message = "最大使用次数必须大于0")
         private Integer maxUsageCount;
         private String department;
+        @Size(max = 50, message = "角色代码长度不能超过50个字符")
         private String role;
         private String notes;
     }
@@ -140,6 +145,7 @@ public class WhitelistDTO {
         @Size(max = 50, message = "姓名长度不能超过50个字符")
         private String name;
 
+        @Size(max = 50, message = "角色代码长度不能超过50个字符")
         private String role;
 
         /**
@@ -175,6 +181,9 @@ public class WhitelistDTO {
 
         @Size(max = 50, message = "职位长度不能超过50个字符")
         private String position;
+
+        @Size(max = 50, message = "角色代码长度不能超过50个字符")
+        private String role;
 
         private String status;
 

@@ -8,11 +8,11 @@ import { renderHook, act } from '@testing-library/react-native';
 import { useRegister } from '../../../hooks/useRegister';
 
 const mockRegisterPhaseOne = jest.fn();
-const mockRegister = jest.fn();
+const mockRegisterPhaseTwo = jest.fn();
 jest.mock('../../../services/serviceFactory', () => ({
   AuthServiceInstance: {
     registerPhaseOne: (...args: any[]) => mockRegisterPhaseOne(...args),
-    register: (...args: any[]) => mockRegister(...args),
+    registerPhaseTwo: (...args: any[]) => mockRegisterPhaseTwo(...args),
   },
 }));
 jest.mock('../../../types/auth', () => ({ RegisterRequest: {} }));
@@ -26,7 +26,7 @@ describe('useRegister', () => {
   beforeEach(() => {
     jest.clearAllMocks();
     mockRegisterPhaseOne.mockReset();
-    mockRegister.mockReset();
+    mockRegisterPhaseTwo.mockReset();
   });
 
   // ========== Initial State ==========
@@ -62,7 +62,15 @@ describe('useRegister', () => {
   });
 
   it('should set tempToken and advance step on successful verify', async () => {
-    mockRegisterPhaseOne.mockResolvedValue({ success: true, tempToken: 'mock-temp-token' });
+    mockRegisterPhaseOne.mockResolvedValue({
+      success: true,
+      tempToken: 'mock-temp-token',
+      factoryId: 'F001',
+      phoneNumber: '13800138000',
+      loginAccount: '13800138000',
+      invitedRole: 'quality_inspector',
+      invitedRoleName: '质检员',
+    });
 
     const { result } = renderHook(() => useRegister());
 
@@ -72,6 +80,11 @@ describe('useRegister', () => {
 
     expect(result.current.tempToken).toBe('mock-temp-token');
     expect(result.current.currentStep).toBe('info');
+    expect(result.current.invitation).toMatchObject({
+      factoryId: 'F001',
+      loginAccount: '13800138000',
+      invitedRole: 'quality_inspector',
+    });
     expect(result.current.error).toBeNull();
   });
 
@@ -110,12 +123,18 @@ describe('useRegister', () => {
 
   // ========== register ==========
   it('should call AuthService.register on successful registration', async () => {
-    mockRegisterPhaseOne.mockResolvedValue({ success: true, tempToken: 'mock-temp-token' });
-    mockRegister.mockResolvedValue({
+    mockRegisterPhaseOne.mockResolvedValue({
       success: true,
-      user: { id: 1, username: 'testuser' },
-      tokens: { accessToken: 'at', refreshToken: 'rt', expiresIn: 86400, tokenType: 'Bearer' },
-      message: '注册成功',
+      tempToken: 'mock-temp-token',
+      factoryId: 'F001',
+      phoneNumber: '13800138000',
+    });
+    mockRegisterPhaseTwo.mockResolvedValue({
+      success: true,
+      userId: 1,
+      username: '13800138000',
+      role: 'quality_inspector',
+      message: '开户成功',
     });
 
     const { result } = renderHook(() => useRegister());
@@ -129,14 +148,17 @@ describe('useRegister', () => {
     await act(async () => {
       await result.current.register({
         tempToken: 'mock-temp-token',
-        username: 'testuser',
+        username: '13800138000',
         password: 'password123',
         realName: '测试用户',
         factoryId: 'F001',
       });
     });
 
-    expect(mockRegister).toHaveBeenCalled();
+    expect(mockRegisterPhaseTwo).toHaveBeenCalledWith(expect.objectContaining({
+      username: '13800138000',
+      factoryId: 'F001',
+    }));
   });
 
   it('should set error when required fields are missing', async () => {
@@ -157,7 +179,12 @@ describe('useRegister', () => {
   });
 
   it('should set error when password is too short', async () => {
-    mockRegisterPhaseOne.mockResolvedValue({ success: true, tempToken: 'mock-temp-token' });
+    mockRegisterPhaseOne.mockResolvedValue({
+      success: true,
+      tempToken: 'mock-temp-token',
+      factoryId: 'F001',
+      phoneNumber: '13800138000',
+    });
     const { result } = renderHook(() => useRegister());
 
     await act(async () => {
@@ -179,8 +206,13 @@ describe('useRegister', () => {
   });
 
   it('should set error on register API failure', async () => {
-    mockRegisterPhaseOne.mockResolvedValue({ success: true, tempToken: 'mock-temp-token' });
-    mockRegister.mockRejectedValue(new Error('注册失败'));
+    mockRegisterPhaseOne.mockResolvedValue({
+      success: true,
+      tempToken: 'mock-temp-token',
+      factoryId: 'F001',
+      phoneNumber: '13800138000',
+    });
+    mockRegisterPhaseTwo.mockRejectedValue(new Error('注册失败'));
 
     const { result } = renderHook(() => useRegister());
 
@@ -191,7 +223,7 @@ describe('useRegister', () => {
     await act(async () => {
       await result.current.register({
         tempToken: 'mock-temp-token',
-        username: 'testuser',
+        username: '13800138000',
         password: 'password123',
         realName: '测试用户',
         factoryId: 'F001',
@@ -220,7 +252,12 @@ describe('useRegister', () => {
 
   // ========== resetForm ==========
   it('should reset step to phone on resetForm', async () => {
-    mockRegisterPhaseOne.mockResolvedValue({ success: true, tempToken: 'mock-temp-token' });
+    mockRegisterPhaseOne.mockResolvedValue({
+      success: true,
+      tempToken: 'mock-temp-token',
+      factoryId: 'F001',
+      phoneNumber: '13800138000',
+    });
 
     const { result } = renderHook(() => useRegister());
 
@@ -237,7 +274,12 @@ describe('useRegister', () => {
   });
 
   it('should clear tempToken on resetForm', async () => {
-    mockRegisterPhaseOne.mockResolvedValue({ success: true, tempToken: 'mock-temp-token' });
+    mockRegisterPhaseOne.mockResolvedValue({
+      success: true,
+      tempToken: 'mock-temp-token',
+      factoryId: 'F001',
+      phoneNumber: '13800138000',
+    });
 
     const { result } = renderHook(() => useRegister());
 

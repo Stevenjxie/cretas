@@ -422,6 +422,9 @@ export type WhitelistStatus = 'pending' | 'active' | 'disabled' | 'expired';
 export interface WhitelistEntry {
   id: string;
   phoneNumber: string;
+  name?: string;
+  accountCreated?: boolean;
+  accountActive?: boolean;
   maskedPhone?: string;
   presetRole?: string;
   presetRoleName?: string;
@@ -498,13 +501,16 @@ export const HR_THEME = {
 
 /** 角色选项 - 用于白名单添加时选择预设角色 */
 export const ROLE_OPTIONS = [
-  { label: '普通员工', value: 'worker' },
+  { label: '操作员', value: 'operator' },
+  { label: '报工员', value: 'yield_operator' },
   { label: '质检员', value: 'quality_inspector' },
   { label: '车间主任', value: 'workshop_supervisor' },
-  { label: '仓库管理员', value: 'warehouse_manager' },
+  { label: '仓储主管', value: 'warehouse_manager' },
+  { label: '仓库员', value: 'warehouse_worker' },
   { label: '调度员', value: 'dispatcher' },
+  { label: '质量经理', value: 'quality_manager' },
   { label: 'HR管理员', value: 'hr_admin' },
-  { label: '工厂管理员', value: 'factory_super_admin' },
+  { label: '工厂总监', value: 'factory_super_admin' },
 ] as const;
 
 export type RoleOptionValue = typeof ROLE_OPTIONS[number]['value'];

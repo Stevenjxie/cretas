@@ -15,12 +15,17 @@ import { getCurrentFactoryId } from '../../utils/factoryIdHelper';
 export interface WhitelistDTO {
   id: number;
   phoneNumber: string;
-  realName: string;
+  name?: string;
+  realName?: string;
   role: string;
   department?: string;
   status: 'PENDING' | 'ACTIVE' | 'DISABLED' | 'EXPIRED' | 'LIMIT_REACHED' | 'DELETED';
   maxUsageCount?: number;
-  usedCount: number;
+  usedCount?: number;
+  accountCreated?: boolean;
+  accountActive?: boolean;
+  registeredUserId?: number;
+  registeredUsername?: string;
   expiresAt?: string;
   createdBy: string;
   createdAt: string;
@@ -37,13 +42,22 @@ export interface CreateWhitelistRequest {
 }
 
 export interface BatchAddRequest {
-  whitelists: CreateWhitelistRequest[];
+  entries: Array<{
+    phoneNumber: string;
+    name?: string;
+    position?: string;
+  }>;
+  department?: string;
+  role?: string;
+  notes?: string;
+  expiresAt?: string;
 }
 
 export interface BatchResult {
-  success: number;
-  failed: number;
-  errors?: string[];
+  successCount: number;
+  failedCount: number;
+  successPhones: string[];
+  failedEntries: Array<{ phoneNumber: string; reason: string }>;
 }
 
 export interface PageResponse<T> {
@@ -73,30 +87,57 @@ class WhitelistApiClient {
     phoneNumber: string;
     presetRole: string;
     presetRoleName?: string;
+    realName?: string;
+    department?: string;
     notes?: string;
     status?: string;
     factoryId?: string;
   }): Promise<{ success: boolean; message?: string; data?: WhitelistDTO }> {
-    const { factoryId, phoneNumber, presetRole, presetRoleName, notes } = params;
+    const { factoryId, phoneNumber, presetRole, realName, department, notes } = params;
     try {
-      // 使用批量添加接口，添加单个条目
-      const request: BatchAddRequest = {
-        whitelists: [{
+      const response = await apiClient.post<{
+        code: number;
+        data: BatchResult;
+        message: string;
+        success: boolean;
+      }>(this.getPath(factoryId), {
           phoneNumber,
+          name: realName,
           role: presetRole,
-          realName: presetRoleName || '待注册',
-          department: notes,
-        }]
-      };
-      const result = await this.batchAddWhitelist(request, factoryId);
+          departmentId: department,
+          notes,
+        });
+      const result = response.data;
+      const firstFailure = result.failedEntries?.[0]?.reason;
       return {
-        success: result.success > 0,
-        message: result.success > 0 ? '添加成功' : (result.errors?.[0] || '添加失败'),
+        success: result.successCount > 0,
+        message: result.successCount > 0 ? '邀请已发送' : (firstFailure || '邀请失败'),
       };
     } catch (error) {
       console.error('添加白名单失败:', error);
       throw error;
     }
+  }
+
+  /**
+   * 兼容批量邀请：后端要求 entries + 公共 role/department 字段。
+   */
+  createBatchRequest(
+    whitelists: CreateWhitelistRequest[],
+    role: string,
+    department?: string
+  ): BatchAddRequest {
+    return {
+      entries: whitelists.map(item => {
+        const name = item.realName.trim();
+        return {
+          phoneNumber: item.phoneNumber,
+          ...(name ? { name } : {}),
+        };
+      }),
+      role,
+      department,
+    };
   }
 
   /**
@@ -229,13 +270,30 @@ class WhitelistApiClient {
   }> {
     const response = await apiClient.get<{
       code: number;
-      data: { total: number; pending: number; active: number; disabled: number; expired: number; limitReached: number };
+      data: {
+        totalCount?: number;
+        activeCount?: number;
+        activeUsersCount?: number;
+        disabledCount?: number;
+        expiredCount?: number;
+        limitReachedCount?: number;
+      };
       message: string;
       success: boolean;
     }>(
       `${this.getPath(factoryId)}/stats`
     );
-    return response.data;
+    const data = response.data || {};
+    const activeInvitations = data.activeCount || 0;
+    const openedAccounts = data.activeUsersCount || 0;
+    return {
+      total: data.totalCount || 0,
+      pending: Math.max(0, activeInvitations - openedAccounts),
+      active: openedAccounts,
+      disabled: data.disabledCount || 0,
+      expired: data.expiredCount || 0,
+      limitReached: data.limitReachedCount || 0,
+    };
   }
 
   /**

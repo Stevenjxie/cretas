@@ -22,6 +22,7 @@ import { whitelistApiClient, WhitelistDTO, CreateWhitelistRequest } from '../../
 import { useAuthStore } from '../../store/authStore';
 import { handleError, getErrorMsg } from '../../utils/errorHandler';
 import { logger } from '../../utils/logger';
+import { ROLE_OPTIONS } from '../../types/hrNavigation';
 
 // 创建WhitelistManagement专用logger
 const whitelistLogger = logger.createContextLogger('WhitelistManagement');
@@ -50,8 +51,7 @@ export default function WhitelistManagementScreen() {
   const isPlatformAdmin = userType === 'platform';
   const isSuperAdmin = roleCode === 'factory_super_admin';
   const isPermissionAdmin = roleCode === 'permission_admin';
-  const isDepartmentAdmin = roleCode === 'department_admin';
-  const canManage = isPlatformAdmin || isSuperAdmin || isPermissionAdmin || isDepartmentAdmin;
+  const canManage = isPlatformAdmin || isSuperAdmin || isPermissionAdmin;
 
   // 批量添加表单
   const [batchFormData, setBatchFormData] = useState({
@@ -60,10 +60,7 @@ export default function WhitelistManagementScreen() {
     defaultDepartment: 'processing',
   });
 
-  const roleOptions = [
-    { label: '操作员', value: 'operator' },
-    { label: '部门管理员', value: 'department_admin' },
-  ];
+  const roleOptions = ROLE_OPTIONS;
 
   const departmentOptions = [
     { label: '加工部', value: 'processing' },
@@ -132,9 +129,9 @@ export default function WhitelistManagementScreen() {
       return;
     }
 
-    // 简单验证手机号格式
+    // 与后端白名单契约保持一致：仅支持中国大陆 11 位手机号
     const invalidPhones = phoneLines.filter(phone => {
-      return !phone.match(/^\+?[0-9]{10,15}$/);
+      return !phone.match(/^1[3-9]\d{9}$/);
     });
 
     if (invalidPhones.length > 0) {
@@ -145,19 +142,26 @@ export default function WhitelistManagementScreen() {
     try {
       const whitelists: CreateWhitelistRequest[] = phoneLines.map(phone => ({
         phoneNumber: phone,
-        realName: '待完善', // 用户注册时会填写真实姓名
+        realName: '', // 批量邀请不预设姓名，员工开户时填写
         role: batchFormData.defaultRole,
         department: batchFormData.defaultDepartment,
       }));
-
       const result = await whitelistApiClient.batchAddWhitelist(
-        { whitelists },
+        whitelistApiClient.createBatchRequest(
+          whitelists,
+          batchFormData.defaultRole,
+          batchFormData.defaultDepartment
+        ),
         user?.factoryId
       );
 
       Alert.alert(
         '批量添加完成',
-        `成功：${result.success}条\n失败：${result.failed}条${result.errors && result.errors.length > 0 ? '\n\n错误：\n' + result.errors.join('\n') : ''}`
+        `成功：${result.successCount}条\n失败：${result.failedCount}条${
+          result.failedEntries?.length
+            ? '\n\n错误：\n' + result.failedEntries.map(item => `${item.phoneNumber}：${item.reason}`).join('\n')
+            : ''
+        }`
       );
 
       setModalVisible(false);
@@ -165,8 +169,8 @@ export default function WhitelistManagementScreen() {
 
       whitelistLogger.info('批量添加白名单成功', {
         factoryId: user?.factoryId,
-        successCount: result.success,
-        failedCount: result.failed,
+        successCount: result.successCount,
+        failedCount: result.failedCount,
         totalCount: phoneLines.length,
       });
     } catch (error) {
@@ -378,7 +382,7 @@ export default function WhitelistManagementScreen() {
                 <View style={styles.itemInfo}>
                   <View style={styles.infoRow}>
                     <List.Icon icon="account" style={styles.infoIcon} />
-                    <Text style={styles.infoText}>{item.realName}</Text>
+                    <Text style={styles.infoText}>{item.realName || item.name || '开户时填写姓名'}</Text>
                   </View>
                   <View style={styles.infoRow}>
                     <List.Icon icon="shield-account" style={styles.infoIcon} />
@@ -399,18 +403,20 @@ export default function WhitelistManagementScreen() {
                 </View>
 
                 {/* Actions */}
-                <View style={styles.actionRow}>
-                  <Button
-                    mode="outlined"
-                    icon="delete"
-                    onPress={() => handleDelete(item.id, item.phoneNumber)}
-                    style={styles.actionButton}
-                    compact
-                    textColor="#C62828"
-                  >
-                    删除
-                  </Button>
-                </View>
+                {!item.accountCreated && (
+                  <View style={styles.actionRow}>
+                    <Button
+                      mode="outlined"
+                      icon="delete"
+                      onPress={() => handleDelete(item.id, item.phoneNumber)}
+                      style={styles.actionButton}
+                      compact
+                      textColor="#C62828"
+                    >
+                      删除
+                    </Button>
+                  </View>
+                )}
               </Card.Content>
             </Card>
           ))
@@ -429,9 +435,9 @@ export default function WhitelistManagementScreen() {
           <Text style={styles.modalTitle}>批量添加白名单</Text>
 
           <Text style={styles.helpText}>
-            每行一个手机号，支持格式：{'\n'}
-            • +8613800138000{'\n'}
-            • 13800138000
+            每行一个中国大陆手机号，例如：{'\n'}
+            • 13800138000{'\n'}
+            • 13900139000
           </Text>
 
           <ScrollView style={styles.modalScrollView}>
@@ -445,7 +451,7 @@ export default function WhitelistManagementScreen() {
               style={styles.textArea}
               multiline
               numberOfLines={8}
-              placeholder="每行一个手机号&#10;+8613800138000&#10;+8613800138001&#10;+8613800138002"
+              placeholder="每行一个手机号&#10;13800138000&#10;13900139000&#10;13700137000"
             />
 
             {/* Default Role */}
@@ -513,7 +519,7 @@ export default function WhitelistManagementScreen() {
             <Card style={styles.tipCard}>
               <Card.Content>
                 <Text style={styles.tipText}>
-                  💡 提示：用户注册时会填写真实姓名，这里的"待完善"会被替换
+                  💡 批量邀请不预设姓名，员工使用受邀手机号开户时填写真实姓名
                 </Text>
               </Card.Content>
             </Card>

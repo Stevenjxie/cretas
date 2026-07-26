@@ -32,6 +32,7 @@ import {
 import {
   UnifiedLoginApiResponse,
   RegisterPhaseOneApiResponse,
+  RegisterPhaseTwoApiResponse,
   RegisterApiResponse,
   LogoutApiResponse,
   ResetPasswordApiResponse,
@@ -373,6 +374,10 @@ export class AuthService {
           tempToken: data.tempToken,
           factoryId: data.factoryId,
           phoneNumber: data.phoneNumber,
+          loginAccount: data.loginAccount || data.phoneNumber,
+          invitedName: data.invitedName,
+          invitedRole: data.invitedRole,
+          invitedRoleName: data.invitedRoleName,
           expiresAt: data.expiresAt,
           isNewUser: data.isNewUser
         };
@@ -402,20 +407,22 @@ export class AuthService {
   // 注册第二阶段 - 完整资料
   static async registerPhaseTwo(request: RegisterPhaseTwoRequest): Promise<RegisterResponse> {
     try {
-      const response = await apiClient.post<RegisterResponse>('/api/mobile/auth/register-phase-two', request);
+      const rawResponse = await apiClient.post<RegisterPhaseTwoApiResponse>(
+        '/api/mobile/auth/register-phase-two',
+        request
+      );
+      const data = rawResponse.data;
+      const response: RegisterResponse = {
+        success: Boolean(rawResponse.success && data?.success !== false),
+        message: data?.message || rawResponse.message || '开户成功',
+        userId: data?.userId,
+        username: data?.username,
+        role: data?.role,
+        registeredAt: data?.registeredAt,
+      };
 
-      if (response.success && response.user && response.tokens) {
-        // 转换后端用户数据为前端格式
-        const transformedUser = transformBackendUser(response.user);
-
-        await this.saveAuthTokens(response.tokens);
-        await this.saveUserInfo(transformedUser);
-
-        // 清除临时token
+      if (response.success) {
         await StorageService.removeSecureItem('temp_token');
-
-        // 返回转换后的用户数据
-        response.user = transformedUser;
       }
 
       return response;

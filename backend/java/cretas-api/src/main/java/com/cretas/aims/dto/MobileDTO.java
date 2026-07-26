@@ -8,6 +8,7 @@ import lombok.Data;
 import lombok.NoArgsConstructor;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
+import jakarta.validation.constraints.Size;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Map;
@@ -445,6 +446,10 @@ public class MobileDTO {
         private Long expiresAt;
         private String phoneNumber;
         private String factoryId;
+        private String loginAccount;
+        private String invitedName;
+        private String invitedRole;
+        private String invitedRoleName;
         private Boolean isNewUser;
         private String message;
     }
@@ -462,6 +467,7 @@ public class MobileDTO {
         @NotBlank(message = "用户名不能为空")
         private String username;
         @NotBlank(message = "密码不能为空")
+        @Size(min = 6, max = 72, message = "密码长度必须为6-72个字符")
         private String password;
         @NotBlank(message = "真实姓名不能为空")
         private String realName;

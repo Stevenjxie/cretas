@@ -88,7 +88,7 @@ const statCards = computed<Array<{
 const quickActions = [
   { title: '员工档案', icon: User, route: '/hr/employees', color: '#409eff' },
   { title: '考勤统计', icon: Clock, route: '/hr/attendance', color: '#67c23a' },
-  { title: '入职白名单', icon: Files, route: '/hr/whitelist', color: '#e6a23c' },
+  { title: '账号邀请', icon: Files, route: '/hr/whitelist', color: '#e6a23c' },
   { title: '部门管理', icon: UserFilled, route: '/hr/departments', color: '#909399' }
 ];
 

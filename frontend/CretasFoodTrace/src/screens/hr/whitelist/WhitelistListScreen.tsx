@@ -16,7 +16,13 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { useTranslation } from 'react-i18next';
 
 import { whitelistApiClient } from '../../../services/api/whitelistApiClient';
-import { HR_THEME, WHITELIST_STATUS_CONFIG, type WhitelistEntry, type WhitelistStatus } from '../../../types/hrNavigation';
+import {
+  HR_THEME,
+  ROLE_OPTIONS,
+  WHITELIST_STATUS_CONFIG,
+  type WhitelistEntry,
+  type WhitelistStatus,
+} from '../../../types/hrNavigation';
 
 export default function WhitelistListScreen() {
   const navigation = useNavigation();
@@ -35,16 +41,19 @@ export default function WhitelistListScreen() {
         const mappedEntries: WhitelistEntry[] = res.content.map((w) => {
           // Map backend status to frontend WhitelistStatus
           let status: WhitelistStatus = 'pending';
-          if (w.status === 'ACTIVE') status = 'active';
-          else if (w.status === 'DISABLED') status = 'disabled';
+          if (w.status === 'DISABLED') status = 'disabled';
           else if (w.status === 'EXPIRED') status = 'expired';
+          else if (w.accountCreated && w.accountActive) status = 'active';
           return {
             id: String(w.id),
             phoneNumber: w.phoneNumber,
+            name: w.name || w.realName,
             maskedPhone: w.phoneNumber.replace(/(\d{3})\d{4}(\d{4})/, '$1****$2'),
             presetRole: w.role,
-            presetRoleName: w.role,
+            presetRoleName: ROLE_OPTIONS.find(role => role.value === w.role)?.label || w.role,
             status,
+            accountCreated: w.accountCreated,
+            accountActive: w.accountActive,
             addedBy: undefined,
             addedByName: w.createdBy,
             addedAt: w.createdAt,
@@ -92,10 +101,13 @@ export default function WhitelistListScreen() {
               <Chip mode="flat" textStyle={{ fontSize: 10, color: config.color }}
                 style={[styles.chip, { backgroundColor: config.bgColor }]}>{config.label}</Chip>
             </View>
+            {item.name ? <Text style={styles.name}>{item.name}</Text> : null}
             <Text style={styles.role}>{item.presetRoleName || t('whitelist.list.noRole')}</Text>
             <Text style={styles.date}>{t('whitelist.list.addedAt')}: {item.addedAt?.split('T')[0]}</Text>
           </View>
-          <IconButton icon="delete" size={20} iconColor={HR_THEME.danger} onPress={() => handleDelete(item)} />
+          {!item.accountCreated ? (
+            <IconButton icon="delete" size={20} iconColor={HR_THEME.danger} onPress={() => handleDelete(item)} />
+          ) : null}
         </Card.Content>
       </Card>
     );
@@ -131,6 +143,7 @@ const styles = StyleSheet.create({
   row: { flexDirection: 'row', alignItems: 'center' },
   phone: { fontSize: 16, fontWeight: '500', color: HR_THEME.textPrimary, marginRight: 8 },
   chip: { height: 22 },
+  name: { fontSize: 14, color: HR_THEME.textPrimary, marginTop: 4 },
   role: { fontSize: 13, color: HR_THEME.textSecondary, marginTop: 4 },
   date: { fontSize: 12, color: HR_THEME.textMuted, marginTop: 2 },
   empty: { alignItems: 'center', paddingVertical: 60 },

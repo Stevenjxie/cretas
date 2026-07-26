@@ -438,7 +438,9 @@ public class MobileAuthServiceImpl implements MobileAuthService {
         // 智能推断 factoryId（如果未提供）
         if (factoryId == null || factoryId.trim().isEmpty()) {
             log.info("factoryId未提供，通过手机号查找白名单: phone={}", phoneNumber);
-            List<Whitelist> whitelists = whitelistRepository.findAllByPhoneNumber(phoneNumber);
+            List<Whitelist> whitelists = whitelistRepository.findAllByPhoneNumber(phoneNumber).stream()
+                    .filter(Whitelist::isValid)
+                    .toList();
 
             if (whitelists.isEmpty()) {
                 throw new BusinessException(403, "该手机号未在任何工厂白名单中")
@@ -474,6 +476,10 @@ public class MobileAuthServiceImpl implements MobileAuthService {
         // 检查用户是否已存在
         Optional<User> existingUser = userRepository.findByFactoryIdAndPhone(factoryId, phoneNumber);
         boolean isNewUser = !existingUser.isPresent();
+        if (!isNewUser) {
+            throw new BusinessException(409, "该手机号已完成注册")
+                    .withHint("请直接使用手机号登录").withHintTarget("username");
+        }
 
         // 生成临时令牌（30分钟有效）
         String tempToken = tempTokenService.generateTempToken(phoneNumber, 30);
@@ -486,15 +492,22 @@ public class MobileAuthServiceImpl implements MobileAuthService {
                 .expiresAt(expiresAt)
                 .phoneNumber(phoneNumber)
                 .factoryId(factoryId)
+                .loginAccount(phoneNumber)
+                .invitedName(whitelist.getName())
+                .invitedRole(whitelist.getInvitedRoleCode() != null
+                        ? whitelist.getInvitedRoleCode().name() : null)
+                .invitedRoleName(whitelist.getInvitedRoleCode() != null
+                        ? whitelist.getInvitedRoleCode().getDisplayName() : null)
                 .isNewUser(isNewUser)
-                .message(isNewUser ? "验证成功，请继续填写注册信息" : "该手机号已注册")
+                .message("验证成功，登录账号将使用该手机号")
                 .build();
     }
 
     @Override
     @Transactional
     public MobileDTO.RegisterPhaseTwoResponse registerPhaseTwo(MobileDTO.RegisterPhaseTwoRequest request) {
-        log.info("移动端注册第二阶段: factory={}, username={}", request.getFactoryId(), request.getUsername());
+        log.info("移动端注册第二阶段: factory={}, phoneAccount={}",
+                request.getFactoryId(), request.getUsername());
 
         // 验证临时令牌
         String phoneNumber = tempTokenService.validateAndGetPhone(request.getTempToken());
@@ -507,7 +520,9 @@ public class MobileAuthServiceImpl implements MobileAuthService {
         String factoryId = request.getFactoryId();
         if (factoryId == null || factoryId.trim().isEmpty()) {
             // 从白名单推断 factoryId
-            List<Whitelist> whitelists = whitelistRepository.findAllByPhoneNumber(phoneNumber);
+            List<Whitelist> whitelists = whitelistRepository.findAllByPhoneNumber(phoneNumber).stream()
+                    .filter(Whitelist::isValid)
+                    .toList();
             if (whitelists.isEmpty()) {
                 throw new BusinessException(400, "无法推断工厂ID")
                         .withHint("请在注册界面选择具体工厂").withHintTarget("factoryId");
@@ -520,21 +535,52 @@ public class MobileAuthServiceImpl implements MobileAuthService {
             }
         }
 
-        // 检查用户名是否已存在（用户名全局唯一）
-        if (userRepository.existsByUsername(request.getUsername())) {
-            throw new BusinessException(409, "该用户名已被使用")
-                    .withHint("请使用其他用户名").withHintTarget("username");
+        // 阶段二必须再次校验同一手机号 + 工厂的有效白名单。
+        // factoryId 来自客户端，不能只依赖阶段一推断结果，否则可被篡改。
+        Whitelist whitelist = whitelistRepository.findByFactoryIdAndPhoneNumber(factoryId, phoneNumber)
+                .filter(Whitelist::isValid)
+                .orElseThrow(() -> new BusinessException(403, "该手机号没有当前工厂的有效邀请")
+                        .withHint("请返回手机号验证步骤重新确认工厂").withHintTarget("phoneNumber"));
+
+        // 登录账号由服务端固定为手机号，拒绝客户端自定义用户名，避免账号与邀请身份脱节。
+        if (!phoneNumber.equals(request.getUsername())) {
+            throw new BusinessException(400, "登录账号必须与受邀手机号一致")
+                    .withHint("请返回上一步重新验证手机号").withHintTarget("username");
         }
+
+        if (userRepository.findByFactoryIdAndPhone(factoryId, phoneNumber).isPresent()) {
+            throw new BusinessException(409, "该手机号已完成注册")
+                    .withHint("请直接使用手机号登录").withHintTarget("username");
+        }
+
+        // users.username 当前为全局唯一；手机号账号已在其他工厂注册时明确拒绝，
+        // 不允许依靠客户端换一个用户名绕过身份唯一性。
+        if (userRepository.existsByUsername(phoneNumber)) {
+            throw new BusinessException(409, "该手机号已绑定其他账号")
+                    .withHint("请联系管理员核对账号所属工厂").withHintTarget("phoneNumber");
+        }
+
+        FactoryUserRole invitedRole = whitelist.getInvitedRoleCode();
+        FactoryUserRole effectiveRole = invitedRole != null
+                ? invitedRole : FactoryUserRole.unactivated;
+        boolean trustedInvitation = invitedRole != null;
 
         // 创建用户
         User user = new User();
         user.setFactoryId(factoryId);
-        user.setUsername(request.getUsername());
+        user.setUsername(phoneNumber);
         user.setPasswordHash(passwordEncoder.encode(request.getPassword()));
-        user.setFullName(request.getRealName());
+        user.setFullName(StringUtils.hasText(whitelist.getName())
+                ? whitelist.getName().trim() : request.getRealName().trim());
         user.setPhone(phoneNumber);
-        user.setPosition(request.getPosition() != null ? request.getPosition() : FactoryUserRole.unactivated.name());
-        user.setIsActive(false); // 需要管理员激活
+        user.setEmail(request.getEmail());
+        user.setDepartment(whitelist.getDepartment());
+        user.setPosition(StringUtils.hasText(whitelist.getPosition())
+                ? whitelist.getPosition() : effectiveRole.getDisplayName());
+        user.setRoleCode(effectiveRole.name());
+        user.setLevel(effectiveRole.getLevel());
+        user.setPlatformType("web,mobile");
+        user.setIsActive(trustedInvitation);
         user = userRepository.save(user);
 
         // 删除临时令牌
@@ -551,9 +597,14 @@ public class MobileAuthServiceImpl implements MobileAuthService {
         log.info("移动端注册成功: userId={}, username={}", user.getId(), user.getUsername());
 
         return MobileDTO.RegisterPhaseTwoResponse.builder()
-                .role(user.getPosition() != null ? user.getPosition() : "unactivated") // 使用position字段
+                .success(true)
+                .userId(user.getId())
+                .username(user.getUsername())
+                .role(user.getRoleCode())
                 .profile(profile)
-                .message("注册成功，请等待管理员激活您的账户")
+                .message(trustedInvitation
+                        ? "开户成功，请使用手机号登录"
+                        : "注册成功，请等待管理员激活您的账户")
                 .registeredAt(LocalDateTime.now())
                 .build();
     }

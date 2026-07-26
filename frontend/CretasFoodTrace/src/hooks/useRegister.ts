@@ -7,9 +7,11 @@
 
 import { useState } from 'react';
 import { Alert } from 'react-native';
-import { useAuthStore } from '../store';
 import { AuthServiceInstance as AuthService } from '../services/serviceFactory';
-import { RegisterRequest } from '../types/auth';
+import {
+  RegisterPhaseTwoRequest,
+  RegistrationInvitation,
+} from '../types/auth';
 
 interface UseRegisterOptions {
   maxRetries?: number;
@@ -17,16 +19,21 @@ interface UseRegisterOptions {
 
 interface UseRegisterReturn {
   // 第一步：手机验证（不需要验证码）
-  verifyPhoneNumber: (phoneNumber: string) => Promise<{ success: boolean; tempToken?: string }>;
+  verifyPhoneNumber: (phoneNumber: string) => Promise<{
+    success: boolean;
+    tempToken?: string;
+    invitation?: RegistrationInvitation;
+  }>;
 
   // 第二步：完整注册
-  register: (request: RegisterRequest) => Promise<boolean>;
+  register: (request: RegisterPhaseTwoRequest) => Promise<boolean>;
 
   // 状态管理
   isLoading: boolean;
   error: string | null;
   currentStep: 'phone' | 'info';  // 当前步骤
   tempToken: string | null;
+  invitation: RegistrationInvitation | null;
 
   // 工具方法
   clearError: () => void;
@@ -38,15 +45,18 @@ export function useRegister(options?: UseRegisterOptions): UseRegisterReturn {
   const [error, setError] = useState<string | null>(null);
   const [currentStep, setCurrentStep] = useState<'phone' | 'info'>('phone');
   const [tempToken, setTempToken] = useState<string | null>(null);
-
-  const { login: setAuthState } = useAuthStore();
+  const [invitation, setInvitation] = useState<RegistrationInvitation | null>(null);
 
   /**
    * 第一步：验证手机号码（不需要验证码，直接查询白名单）
    */
   const verifyPhoneNumber = async (
     phoneNumber: string
-  ): Promise<{ success: boolean; tempToken?: string }> => {
+  ): Promise<{
+    success: boolean;
+    tempToken?: string;
+    invitation?: RegistrationInvitation;
+  }> => {
     if (!phoneNumber.trim()) {
       setError('请输入手机号码');
       return { success: false };
@@ -61,13 +71,26 @@ export function useRegister(options?: UseRegisterOptions): UseRegisterReturn {
         phoneNumber: phoneNumber.trim()
       });
 
-      if (result.success && result.tempToken) {
+      if (result.success && result.tempToken && result.factoryId) {
+        const nextInvitation: RegistrationInvitation = {
+          phoneNumber: result.phoneNumber || phoneNumber.trim(),
+          loginAccount: result.loginAccount || result.phoneNumber || phoneNumber.trim(),
+          factoryId: result.factoryId,
+          invitedName: result.invitedName,
+          invitedRole: result.invitedRole,
+          invitedRoleName: result.invitedRoleName,
+        };
         setTempToken(result.tempToken);
+        setInvitation(nextInvitation);
         setCurrentStep('info');
-        Alert.alert('成功', '手机验证完成，请填写完整信息');
-        return { success: true, tempToken: result.tempToken };
+        Alert.alert('验证通过', '已找到管理员邀请，请设置登录密码');
+        return {
+          success: true,
+          tempToken: result.tempToken,
+          invitation: nextInvitation,
+        };
       } else {
-        throw new Error(result.message || '手机验证失败');
+        throw new Error(result.message || '未找到有效的工厂邀请');
       }
     } catch (err: any) {
       console.error('手机验证失败:', err);
@@ -83,7 +106,7 @@ export function useRegister(options?: UseRegisterOptions): UseRegisterReturn {
   /**
    * 第三步：完成注册（使用新的register API）
    */
-  const register = async (request: RegisterRequest): Promise<boolean> => {
+  const register = async (request: RegisterPhaseTwoRequest): Promise<boolean> => {
     // 验证必需字段
     if (!request.tempToken || !request.username || !request.password || !request.realName || !request.factoryId) {
       setError('缺少必需字段');
@@ -101,18 +124,10 @@ export function useRegister(options?: UseRegisterOptions): UseRegisterReturn {
     setError(null);
 
     try {
-      const result = await AuthService.register(request);
+      const result = await AuthService.registerPhaseTwo(request);
 
-      if (result.success && result.user && result.tokens) {
-        // 保存认证信息到store
-        setAuthState(result.user, {
-          accessToken: result.tokens.accessToken || '',
-          refreshToken: result.tokens.refreshToken || '',
-          expiresIn: result.tokens.expiresIn || 86400,
-          tokenType: result.tokens.tokenType || 'Bearer',
-        });
-
-        Alert.alert('注册成功', result.message || '账户注册成功，等待管理员激活');
+      if (result.success) {
+        Alert.alert('开户成功', result.message || '账户已创建，请使用手机号登录');
         resetForm();
         return true;
       } else {
@@ -137,6 +152,7 @@ export function useRegister(options?: UseRegisterOptions): UseRegisterReturn {
     setError(null);
     setCurrentStep('phone');
     setTempToken(null);
+    setInvitation(null);
   };
 
   return {
@@ -146,6 +162,7 @@ export function useRegister(options?: UseRegisterOptions): UseRegisterReturn {
     error,
     currentStep,
     tempToken,
+    invitation,
     clearError,
     resetForm,
   };

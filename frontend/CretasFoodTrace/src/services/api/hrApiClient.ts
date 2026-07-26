@@ -360,11 +360,22 @@ class HRApiClient {
     createdAt: string;
   }>> {
     const { factoryId, ...queryParams } = params || {};
-    return await whitelistApiClient.getWhitelist({
+    const response = await whitelistApiClient.getWhitelist({
       factoryId,
       status: 'PENDING',
       ...queryParams,
     });
+    return {
+      ...response,
+      content: response.content.map(item => ({
+        id: item.id,
+        phoneNumber: item.phoneNumber,
+        realName: item.name || item.realName || '',
+        role: item.role,
+        department: item.department,
+        createdAt: item.createdAt,
+      })),
+    };
   }
 
   /**
