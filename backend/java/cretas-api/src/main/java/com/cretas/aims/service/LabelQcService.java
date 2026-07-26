@@ -202,6 +202,7 @@ public class LabelQcService {
     public PageResponse<TaskSummaryResponse> list(
             String factoryId,
             Collection<LabelQcTaskStatus> statuses,
+            boolean archived,
             int page,
             int size) {
         int safePage = Math.max(1, page);
@@ -211,9 +212,10 @@ public class LabelQcService {
                 safeSize,
                 Sort.by(Sort.Direction.DESC, "createdAt"));
         Page<LabelQcTask> result = statuses == null || statuses.isEmpty()
-                ? taskRepository.findByFactoryIdOrderByCreatedAtDesc(factoryId, pageable)
-                : taskRepository.findByFactoryIdAndStatusInOrderByCreatedAtDesc(
-                        factoryId, statuses, pageable);
+                ? taskRepository.findByFactoryIdAndArchivedOrderByCreatedAtDesc(
+                        factoryId, archived, pageable)
+                : taskRepository.findByFactoryIdAndArchivedAndStatusInOrderByCreatedAtDesc(
+                        factoryId, archived, statuses, pageable);
         List<TaskSummaryResponse> content = result.getContent().stream()
                 .map(this::toSummary)
                 .toList();
@@ -224,7 +226,9 @@ public class LabelQcService {
     public StatusCountsResponse statusCounts(String factoryId) {
         EnumMap<LabelQcTaskStatus, Long> counts = new EnumMap<>(LabelQcTaskStatus.class);
         for (LabelQcTaskStatus status : LabelQcTaskStatus.values()) {
-            counts.put(status, taskRepository.countByFactoryIdAndStatus(factoryId, status));
+            counts.put(
+                    status,
+                    taskRepository.countByFactoryIdAndArchivedAndStatus(factoryId, false, status));
         }
         return new StatusCountsResponse(counts);
     }
@@ -372,6 +376,79 @@ public class LabelQcService {
         task.setReviewedBy(reviewerId);
         task.setReviewedAt(LocalDateTime.now());
         task.setReviewRequestId(reviewRequestId);
+        task.setTrainingStatus(LabelQcTrainingStatus.PENDING);
+        task.setTrainingDecidedBy(null);
+        task.setTrainingDecidedAt(null);
+        task.setTrainingDecisionNotes(null);
+        taskRepository.save(task);
+        return detail(factoryId, taskId);
+    }
+
+    @Transactional
+    public TaskDetailResponse archive(
+            String factoryId,
+            String taskId,
+            Long userId) {
+        requireUser(userId);
+        LabelQcTask task = requireReviewedTaskForUpdate(factoryId, taskId);
+        if (!Boolean.TRUE.equals(task.getArchived())) {
+            task.setArchived(true);
+            task.setArchivedBy(userId);
+            task.setArchivedAt(LocalDateTime.now());
+            taskRepository.save(task);
+        }
+        return detail(factoryId, taskId);
+    }
+
+    @Transactional
+    public TaskDetailResponse restore(
+            String factoryId,
+            String taskId,
+            Long userId) {
+        requireUser(userId);
+        LabelQcTask task = requireReviewedTaskForUpdate(factoryId, taskId);
+        if (Boolean.TRUE.equals(task.getArchived())) {
+            task.setArchived(false);
+            task.setArchivedBy(null);
+            task.setArchivedAt(null);
+            taskRepository.save(task);
+        }
+        return detail(factoryId, taskId);
+    }
+
+    @Transactional
+    public TaskBackupResponse exportBackup(
+            String factoryId,
+            String taskId,
+            Long userId) {
+        requireUser(userId);
+        LabelQcTask task = requireReviewedTaskForUpdate(factoryId, taskId);
+        LocalDateTime exportedAt = LocalDateTime.now();
+        task.setBackupExportedBy(userId);
+        task.setBackupExportedAt(exportedAt);
+        taskRepository.save(task);
+        return new TaskBackupResponse(detail(factoryId, taskId), exportedAt, userId);
+    }
+
+    @Transactional
+    public TaskDetailResponse decideTraining(
+            String factoryId,
+            String taskId,
+            Long technicalAdminId,
+            TrainingDecisionRequest request) {
+        requireUser(technicalAdminId);
+        LabelQcTask task = requireReviewedTaskForUpdate(factoryId, taskId);
+        if (request.expectedVersion() != null
+                && !Objects.equals(task.getVersion(), request.expectedVersion())) {
+            throw new BusinessException(409, "任务已被其他管理员更新，请刷新后重试")
+                    .withCode("LABEL_QC_TRAINING_DECISION_STALE");
+        }
+        task.setTrainingStatus(Boolean.TRUE.equals(request.approved())
+                ? LabelQcTrainingStatus.APPROVED
+                : LabelQcTrainingStatus.REJECTED);
+        task.setTrainingDecidedBy(technicalAdminId);
+        task.setTrainingDecidedAt(LocalDateTime.now());
+        task.setTrainingDecisionNotes(trimToNull(request.notes()));
         taskRepository.save(task);
         return detail(factoryId, taskId);
     }
@@ -384,9 +461,10 @@ public class LabelQcService {
             int limit) {
         int safeLimit = Math.min(Math.max(limit, 1), 500);
         Page<LabelQcTask> tasks = taskRepository
-                .findByFactoryIdAndStatusAndReviewedAtBetweenOrderByReviewedAtAsc(
+                .findByFactoryIdAndStatusAndTrainingStatusAndReviewedAtBetweenOrderByReviewedAtAsc(
                         factoryId,
                         LabelQcTaskStatus.REVIEWED,
+                        LabelQcTrainingStatus.APPROVED,
                         from,
                         to,
                         PageRequest.of(0, safeLimit));
@@ -423,6 +501,17 @@ public class LabelQcService {
         return taskRepository.findByFactoryIdAndId(factoryId, taskId)
                 .orElseThrow(() -> new BusinessException(404, "标签拍检任务不存在")
                         .withCode("LABEL_QC_TASK_NOT_FOUND"));
+    }
+
+    private LabelQcTask requireReviewedTaskForUpdate(String factoryId, String taskId) {
+        LabelQcTask task = taskRepository.findByFactoryIdAndIdForUpdate(factoryId, taskId)
+                .orElseThrow(() -> new BusinessException(404, "标签拍检任务不存在")
+                        .withCode("LABEL_QC_TASK_NOT_FOUND"));
+        if (task.getStatus() != LabelQcTaskStatus.REVIEWED) {
+            throw new BusinessException(409, "只有已完成人工审核的任务可以整理")
+                    .withCode("LABEL_QC_REVIEW_REQUIRED");
+        }
+        return task;
     }
 
     private String resolveReviewRequestId(
@@ -492,6 +581,17 @@ public class LabelQcService {
                 task.getFinalDefectCount(),
                 task.getReviewedBy(),
                 task.getReviewedAt(),
+                Boolean.TRUE.equals(task.getArchived()),
+                task.getArchivedBy(),
+                task.getArchivedAt(),
+                task.getTrainingStatus() == null
+                        ? LabelQcTrainingStatus.PENDING
+                        : task.getTrainingStatus(),
+                task.getTrainingDecidedBy(),
+                task.getTrainingDecidedAt(),
+                task.getTrainingDecisionNotes(),
+                task.getBackupExportedBy(),
+                task.getBackupExportedAt(),
                 task.getCreatedAt(),
                 task.getUpdatedAt());
     }

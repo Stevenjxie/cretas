@@ -7,6 +7,8 @@ export type LabelQcTaskStatus =
   | 'REVIEWED'
   | 'ANALYSIS_FAILED';
 
+export type LabelQcTrainingStatus = 'PENDING' | 'APPROVED' | 'REJECTED';
+
 export type LabelQcPhotoStatus =
   | 'UPLOADED'
   | 'QUEUED'
@@ -69,6 +71,15 @@ export interface LabelQcTaskSummary {
   finalDefectCount: number;
   reviewedBy?: number;
   reviewedAt?: string;
+  archived: boolean;
+  archivedBy?: number;
+  archivedAt?: string;
+  trainingStatus: LabelQcTrainingStatus;
+  trainingDecidedBy?: number;
+  trainingDecidedAt?: string;
+  trainingDecisionNotes?: string;
+  backupExportedBy?: number;
+  backupExportedAt?: string;
   createdAt: string;
   updatedAt: string;
 }

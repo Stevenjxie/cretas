@@ -12,11 +12,15 @@ import {
 } from '@element-plus/icons-vue';
 import { useAuthStore } from '@/store/modules/auth';
 import {
+  archiveLabelQcTask,
+  backupLabelQcTask,
+  decideLabelQcTraining,
   exportLabelQcTrainingData,
   getLabelQcStatusCounts,
   getLabelQcTask,
   listLabelQcTasks,
   retryLabelQcTask,
+  restoreLabelQcTask,
   reviewLabelQcTask,
   type LabelQcReviewRequest,
   type LabelQcTaskDetail,
@@ -49,6 +53,14 @@ const submitting = ref(false);
 const retryingTaskId = ref<string | null>(null);
 const reviewDirty = ref(false);
 const allowDrawerClose = ref(false);
+const queueMode = ref<'REVIEW' | 'MANAGE' | 'ARCHIVED'>('REVIEW');
+const actionTaskId = ref<string | null>(null);
+
+const canManageTraining = computed(() => {
+  const currentUser = authStore.user;
+  return currentUser?.userType === 'factory'
+    && currentUser.factoryUser.permissions.includes('system:read_write');
+});
 
 const canReview = computed(() => {
   const status = detail.value?.task.status;
@@ -65,6 +77,7 @@ async function load() {
     const [listResponse, countResponse] = await Promise.all([
       listLabelQcTasks(factoryId.value, {
         statuses: selectedStatuses.value.length ? selectedStatuses.value : undefined,
+        archived: queueMode.value === 'ARCHIVED',
         page: pagination.value.page,
         size: pagination.value.size,
       }),
@@ -83,6 +96,15 @@ async function load() {
 function changeFilter() {
   pagination.value.page = 1;
   void load();
+}
+
+function changeQueueMode(value: string | number | boolean | undefined) {
+  const mode = String(value) as 'REVIEW' | 'MANAGE' | 'ARCHIVED';
+  queueMode.value = mode;
+  selectedStatuses.value = mode === 'REVIEW'
+    ? ['NEEDS_REVIEW', 'ANALYSIS_FAILED']
+    : ['REVIEWED'];
+  changeFilter();
 }
 
 function changePage(page: number) {
@@ -120,7 +142,7 @@ async function submitReview(payload: LabelQcReviewRequest) {
   if (!factoryId.value || !detail.value) return;
   try {
     await ElMessageBox.confirm(
-      `即将提交 ${payload.photos.length} 张照片的人工真值，提交后进入 YOLO 训练数据。`,
+      `即将提交 ${payload.photos.length} 张照片的人工真值。提交后仍需技术管理员确认，才会进入训练集。`,
       '确认完成整单审核',
       {
         type: 'warning',
@@ -136,11 +158,16 @@ async function submitReview(payload: LabelQcReviewRequest) {
     const response = await reviewLabelQcTask(
       factoryId.value,
       detail.value.task.id,
-      payload,
+      {
+        ...payload,
+        expectedVersion: detail.value.task.version,
+        reviewRequestId: globalThis.crypto?.randomUUID?.()
+          ?? `web-${detail.value.task.id}-${Date.now()}`,
+      },
     );
     if (response.success) {
       detail.value = response.data;
-      ElMessage.success('人工审核已完成，结论已保存为训练真值');
+      ElMessage.success('人工审核已完成，当前状态为待训练确认');
       reviewDirty.value = false;
       allowDrawerClose.value = true;
       drawerVisible.value = false;
@@ -148,6 +175,108 @@ async function submitReview(payload: LabelQcReviewRequest) {
     }
   } finally {
     submitting.value = false;
+  }
+}
+
+async function archiveTask(row: LabelQcTaskSummary) {
+  if (!factoryId.value) return;
+  try {
+    await ElMessageBox.confirm(
+      '归档不会删除照片和标注，之后可以在“归档记录”中恢复。',
+      '确认归档这条任务？',
+      {
+        type: 'warning',
+        confirmButtonText: '确认归档',
+        cancelButtonText: '取消',
+      },
+    );
+  } catch {
+    return;
+  }
+  actionTaskId.value = row.id;
+  try {
+    const response = await archiveLabelQcTask(factoryId.value, row.id);
+    if (response.success) {
+      ElMessage.success('已归档，照片和人工标注均已保留');
+      await load();
+    }
+  } finally {
+    actionTaskId.value = null;
+  }
+}
+
+async function restoreTask(row: LabelQcTaskSummary) {
+  if (!factoryId.value) return;
+  actionTaskId.value = row.id;
+  try {
+    const response = await restoreLabelQcTask(factoryId.value, row.id);
+    if (response.success) {
+      ElMessage.success('已恢复到“已审核整理”');
+      await load();
+    }
+  } finally {
+    actionTaskId.value = null;
+  }
+}
+
+function downloadJson(payload: unknown, filename: string) {
+  const content = JSON.stringify(payload, null, 2);
+  const blob = new Blob([content], { type: 'application/json;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement('a');
+  anchor.href = url;
+  anchor.download = filename;
+  anchor.click();
+  URL.revokeObjectURL(url);
+}
+
+async function backupTask(row: LabelQcTaskSummary) {
+  if (!factoryId.value) return;
+  actionTaskId.value = row.id;
+  try {
+    const response = await backupLabelQcTask(factoryId.value, row.id);
+    if (!response.success) return;
+    downloadJson(
+      response.data,
+      `label-qc-backup-${row.skuCode}-${row.batchNumber}.json`,
+    );
+    ElMessage.success('完整备份已下载，并记录本次备份时间');
+    await load();
+  } finally {
+    actionTaskId.value = null;
+  }
+}
+
+async function decideTraining(row: LabelQcTaskSummary, approved: boolean) {
+  if (!factoryId.value || !canManageTraining.value) return;
+  try {
+    await ElMessageBox.confirm(
+      approved
+        ? '批准后，这条人工真值会进入技术管理员可导出的训练集。此操作不会自动训练或发布模型。'
+        : '拒绝后，这条数据仍会保留，但不会进入训练集。',
+      approved ? '确认进入训练集？' : '确认拒绝训练？',
+      {
+        type: approved ? 'warning' : 'info',
+        confirmButtonText: approved ? '确认批准' : '确认拒绝',
+        cancelButtonText: '取消',
+      },
+    );
+  } catch {
+    return;
+  }
+  actionTaskId.value = row.id;
+  try {
+    const response = await decideLabelQcTraining(factoryId.value, row.id, {
+      approved,
+      expectedVersion: row.version,
+      notes: approved ? '技术管理员已复核' : '技术管理员拒绝进入训练集',
+    });
+    if (response.success) {
+      ElMessage.success(approved ? '已批准进入训练集' : '已拒绝进入训练集');
+      await load();
+    }
+  } finally {
+    actionTaskId.value = null;
   }
 }
 
@@ -235,15 +364,11 @@ async function exportTrainingData() {
     limit: 500,
   });
   if (!response.success) return;
-  const content = JSON.stringify(response.data, null, 2);
-  const blob = new Blob([content], { type: 'application/json;charset=utf-8' });
-  const url = URL.createObjectURL(blob);
-  const anchor = document.createElement('a');
-  anchor.href = url;
-  anchor.download = `label-qc-training-${to.toISOString().slice(0, 10)}.json`;
-  anchor.click();
-  URL.revokeObjectURL(url);
-  ElMessage.success(`已导出 ${response.data.length} 张人工审核照片`);
+  downloadJson(
+    response.data,
+    `label-qc-training-approved-${to.toISOString().slice(0, 10)}.json`,
+  );
+  ElMessage.success(`已导出 ${response.data.length} 张已批准训练照片`);
 }
 
 onMounted(load);
@@ -258,7 +383,13 @@ onMounted(load);
         <p>AI 负责宁可多报的初筛，人工逐张确认后才形成最终结论和训练数据。</p>
       </div>
       <div class="header-actions">
-        <el-button :icon="Download" @click="exportTrainingData">导出近 7 天训练集</el-button>
+        <el-button
+          v-if="canManageTraining"
+          :icon="Download"
+          @click="exportTrainingData"
+        >
+          导出已批准训练集
+        </el-button>
         <el-button :icon="Refresh" :loading="loading" @click="load">刷新</el-button>
       </div>
     </header>
@@ -290,29 +421,51 @@ onMounted(load);
     <section class="queue-card">
       <div class="queue-toolbar">
         <div>
-          <h2>审核队列</h2>
-          <span>默认只看需要处理的任务</span>
+          <h2>
+            {{ queueMode === 'REVIEW' ? '审核队列' : queueMode === 'MANAGE' ? '已审核整理' : '归档记录' }}
+          </h2>
+          <span>
+            {{
+              queueMode === 'REVIEW'
+                ? '默认只看需要处理的任务'
+                : queueMode === 'MANAGE'
+                  ? '备份、归档，并由技术管理员确认训练'
+                  : '归档不删除，可随时恢复'
+            }}
+          </span>
         </div>
-        <el-select
-          v-model="selectedStatuses"
-          multiple
-          collapse-tags
-          collapse-tags-tooltip
-          placeholder="全部状态"
-          style="width: 300px"
-          @change="changeFilter"
-        >
-          <el-option
-            v-for="(label, status) in STATUS_LABELS"
-            :key="status"
-            :label="label"
-            :value="status"
-          />
-        </el-select>
+        <div class="queue-controls">
+          <el-radio-group
+            v-model="queueMode"
+            size="large"
+            @change="changeQueueMode"
+          >
+            <el-radio-button value="REVIEW">待人工审核</el-radio-button>
+            <el-radio-button value="MANAGE">已审核整理</el-radio-button>
+            <el-radio-button value="ARCHIVED">归档记录</el-radio-button>
+          </el-radio-group>
+          <el-select
+            v-if="queueMode === 'REVIEW'"
+            v-model="selectedStatuses"
+            multiple
+            collapse-tags
+            collapse-tags-tooltip
+            placeholder="处理状态"
+            style="width: 240px"
+            @change="changeFilter"
+          >
+            <el-option
+              v-for="(label, status) in STATUS_LABELS"
+              :key="status"
+              :label="label"
+              :value="status"
+            />
+          </el-select>
+        </div>
       </div>
 
       <el-table v-loading="loading" :data="rows" row-key="id" class="queue-table">
-        <el-table-column label="SKU / 批次" min-width="230">
+        <el-table-column label="SKU / 批次" min-width="210">
           <template #default="{ row }">
             <div class="sku-cell">
               <strong>{{ row.skuName }}</strong>
@@ -320,26 +473,56 @@ onMounted(load);
             </div>
           </template>
         </el-table-column>
-        <el-table-column prop="productionDate" label="生产日期" width="120" />
-        <el-table-column label="照片 / AI 疑点" width="140">
+        <el-table-column prop="productionDate" label="生产日期" width="105" />
+        <el-table-column label="照片 / AI 疑点" width="120">
           <template #default="{ row }">
             <span>{{ row.photoCount }} 张 / </span>
             <strong class="candidate-count">{{ row.aiCandidateCount }} 处</strong>
           </template>
         </el-table-column>
-        <el-table-column label="状态" width="140">
+        <el-table-column label="状态" width="95">
           <template #default="{ row }">
             <el-tag :type="statusType(row.status)" effect="light">
               {{ statusText(row.status) }}
             </el-tag>
           </template>
         </el-table-column>
-        <el-table-column prop="createdAt" label="提交时间" min-width="170">
+        <el-table-column
+          v-if="queueMode !== 'REVIEW'"
+          label="训练确认"
+          width="110"
+        >
+          <template #default="{ row }">
+            <el-tag
+              :type="
+                row.trainingStatus === 'APPROVED'
+                  ? 'success'
+                  : row.trainingStatus === 'REJECTED'
+                    ? 'danger'
+                    : 'warning'
+              "
+              effect="plain"
+            >
+              {{
+                row.trainingStatus === 'APPROVED'
+                  ? '已批准'
+                  : row.trainingStatus === 'REJECTED'
+                    ? '已拒绝'
+                    : '待技术确认'
+              }}
+            </el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column prop="createdAt" label="提交时间" min-width="145">
           <template #default="{ row }">
             {{ new Date(row.createdAt).toLocaleString() }}
           </template>
         </el-table-column>
-        <el-table-column label="操作" width="210" fixed="right">
+        <el-table-column
+          label="操作"
+          :width="queueMode === 'REVIEW' ? 210 : 330"
+          fixed="right"
+        >
           <template #default="{ row }">
             <el-button
               v-if="row.status === 'NEEDS_REVIEW' || row.status === 'ANALYSIS_FAILED'"
@@ -359,6 +542,51 @@ onMounted(load);
             >
               重试 AI
             </el-button>
+            <template v-if="row.status === 'REVIEWED'">
+              <el-button
+                text
+                :loading="actionTaskId === row.id"
+                @click="backupTask(row)"
+              >
+                下载备份
+              </el-button>
+              <el-button
+                v-if="queueMode !== 'ARCHIVED'"
+                text
+                type="warning"
+                :loading="actionTaskId === row.id"
+                @click="archiveTask(row)"
+              >
+                归档
+              </el-button>
+              <el-button
+                v-else
+                text
+                type="primary"
+                :loading="actionTaskId === row.id"
+                @click="restoreTask(row)"
+              >
+                恢复
+              </el-button>
+              <el-button
+                v-if="canManageTraining && row.trainingStatus !== 'APPROVED'"
+                text
+                type="success"
+                :loading="actionTaskId === row.id"
+                @click="decideTraining(row, true)"
+              >
+                批准训练
+              </el-button>
+              <el-button
+                v-if="canManageTraining && row.trainingStatus !== 'REJECTED'"
+                text
+                type="danger"
+                :loading="actionTaskId === row.id"
+                @click="decideTraining(row, false)"
+              >
+                拒绝训练
+              </el-button>
+            </template>
           </template>
         </el-table-column>
         <template #empty>
@@ -539,6 +767,14 @@ onMounted(load);
   font-size: 18px;
 }
 
+.queue-controls {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
 .queue-table {
   width: 100%;
 }
@@ -649,6 +885,11 @@ onMounted(load);
   .queue-toolbar {
     align-items: flex-start;
     flex-direction: column;
+  }
+
+  .queue-controls {
+    align-items: stretch;
+    justify-content: flex-start;
   }
 }
 </style>

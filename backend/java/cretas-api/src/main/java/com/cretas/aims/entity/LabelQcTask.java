@@ -1,6 +1,7 @@
 package com.cretas.aims.entity;
 
 import com.cretas.aims.entity.enums.LabelQcTaskStatus;
+import com.cretas.aims.entity.enums.LabelQcTrainingStatus;
 import jakarta.persistence.*;
 import lombok.*;
 import lombok.experimental.SuperBuilder;
@@ -77,6 +78,34 @@ public class LabelQcTask extends BaseEntity {
     @Column(name = "review_request_id", length = 100)
     private String reviewRequestId;
 
+    @Column(name = "archived", nullable = false)
+    private Boolean archived;
+
+    @Column(name = "archived_by")
+    private Long archivedBy;
+
+    @Column(name = "archived_at")
+    private LocalDateTime archivedAt;
+
+    @Enumerated(EnumType.STRING)
+    @Column(name = "training_status", nullable = false, length = 20)
+    private LabelQcTrainingStatus trainingStatus;
+
+    @Column(name = "training_decided_by")
+    private Long trainingDecidedBy;
+
+    @Column(name = "training_decided_at")
+    private LocalDateTime trainingDecidedAt;
+
+    @Column(name = "training_decision_notes", length = 500)
+    private String trainingDecisionNotes;
+
+    @Column(name = "backup_exported_by")
+    private Long backupExportedBy;
+
+    @Column(name = "backup_exported_at")
+    private LocalDateTime backupExportedAt;
+
     @Version
     @Column(name = "version", nullable = false)
     private Long version;
@@ -90,5 +119,7 @@ public class LabelQcTask extends BaseEntity {
         if (photoCount == null) photoCount = 0;
         if (aiCandidateCount == null) aiCandidateCount = 0;
         if (finalDefectCount == null) finalDefectCount = 0;
+        if (archived == null) archived = false;
+        if (trainingStatus == null) trainingStatus = LabelQcTrainingStatus.PENDING;
     }
 }

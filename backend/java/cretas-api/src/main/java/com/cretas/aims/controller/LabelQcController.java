@@ -84,12 +84,13 @@ public class LabelQcController {
     public ApiResponse<PageResponse<TaskSummaryResponse>> list(
             @PathVariable String factoryId,
             @RequestParam(required = false) Collection<LabelQcTaskStatus> statuses,
+            @RequestParam(defaultValue = "false") boolean archived,
             @RequestParam(defaultValue = "1") @Min(1) int page,
             @RequestParam(defaultValue = "20") @Min(1) @Max(100) int size,
             HttpServletRequest servletRequest) {
         trustedUser(factoryId, servletRequest);
         return ApiResponse.success(
-                labelQcService.list(factoryId, statuses, page, size));
+                labelQcService.list(factoryId, statuses, archived, page, size));
     }
 
     @GetMapping("/tasks/status-counts")
@@ -124,8 +125,60 @@ public class LabelQcController {
                 labelQcService.review(factoryId, taskId, reviewerId, request));
     }
 
+    @PostMapping("/tasks/{taskId}/archive")
+    @RequirePermission({"quality:read_write", "system:read_write"})
+    public ApiResponse<TaskDetailResponse> archive(
+            @PathVariable String factoryId,
+            @PathVariable String taskId,
+            HttpServletRequest servletRequest) {
+        Long userId = trustedUser(factoryId, servletRequest);
+        return ApiResponse.success(
+                "任务已归档，可随时恢复",
+                labelQcService.archive(factoryId, taskId, userId));
+    }
+
+    @PostMapping("/tasks/{taskId}/restore")
+    @RequirePermission({"quality:read_write", "system:read_write"})
+    public ApiResponse<TaskDetailResponse> restore(
+            @PathVariable String factoryId,
+            @PathVariable String taskId,
+            HttpServletRequest servletRequest) {
+        Long userId = trustedUser(factoryId, servletRequest);
+        return ApiResponse.success(
+                "任务已恢复",
+                labelQcService.restore(factoryId, taskId, userId));
+    }
+
+    @PostMapping("/tasks/{taskId}/backup")
+    @RequirePermission({"quality:read_write", "system:read_write"})
+    public ApiResponse<TaskBackupResponse> backup(
+            @PathVariable String factoryId,
+            @PathVariable String taskId,
+            HttpServletRequest servletRequest) {
+        Long userId = trustedUser(factoryId, servletRequest);
+        return ApiResponse.success(
+                "备份数据已生成",
+                labelQcService.exportBackup(factoryId, taskId, userId));
+    }
+
+    @PutMapping("/tasks/{taskId}/training-decision")
+    @RequirePermission({"system:read_write"})
+    public ApiResponse<TaskDetailResponse> decideTraining(
+            @PathVariable String factoryId,
+            @PathVariable String taskId,
+            @Valid @RequestBody TrainingDecisionRequest request,
+            HttpServletRequest servletRequest) {
+        Long technicalAdminId = trustedUser(factoryId, servletRequest);
+        return ApiResponse.success(
+                Boolean.TRUE.equals(request.approved())
+                        ? "已确认进入训练集"
+                        : "已拒绝进入训练集",
+                labelQcService.decideTraining(
+                        factoryId, taskId, technicalAdminId, request));
+    }
+
     @GetMapping("/training-export")
-    @RequirePermission({"quality:read_write"})
+    @RequirePermission({"system:read_write"})
     public ApiResponse<List<TrainingPhoto>> exportTrainingData(
             @PathVariable String factoryId,
             @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) LocalDateTime from,

@@ -70,6 +70,7 @@ class LabelQcApi {
   async listTasks(
     options: {
       statuses?: LabelQcTaskStatus[];
+      archived?: boolean;
       page?: number;
       size?: number;
     } = {},
@@ -80,6 +81,7 @@ class LabelQcApi {
       {
         params: {
           statuses: options.statuses?.join(','),
+          archived: options.archived ?? false,
           page: options.page ?? 1,
           size: options.size ?? 20,
         },

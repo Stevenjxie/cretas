@@ -16,6 +16,7 @@ import React from 'react';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { Ionicons } from '@expo/vector-icons';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { QI_COLORS, QualityInspectorStackParamList } from '../types/qualityInspector';
 import { useFactoryFeatureStore } from '../store/factoryFeatureStore';
 
@@ -284,6 +285,8 @@ function ProfileStack() {
  */
 export default function QualityInspectorNavigator() {
   const { isScreenEnabled } = useFactoryFeatureStore();
+  const insets = useSafeAreaInsets();
+  const bottomInset = Math.max(insets.bottom, 6);
 
   return (
     <Tab.Navigator
@@ -302,14 +305,22 @@ export default function QualityInspectorNavigator() {
         tabBarStyle: {
           backgroundColor: QI_COLORS.card,
           borderTopColor: QI_COLORS.border,
-          height: 60,
-          paddingBottom: 8,
-          paddingTop: 8,
+          height: 64 + bottomInset,
+          paddingBottom: bottomInset + 2,
+          paddingTop: 6,
+        },
+        tabBarItemStyle: {
+          minHeight: 48,
+          paddingHorizontal: 0,
         },
         tabBarLabelStyle: {
-          fontSize: 11,
-          fontWeight: '500',
+          fontSize: 10,
+          lineHeight: 13,
+          fontWeight: '600',
+          marginBottom: 1,
         },
+        tabBarIconStyle: { marginTop: 1 },
+        tabBarHideOnKeyboard: true,
       })}
     >
       <Tab.Screen

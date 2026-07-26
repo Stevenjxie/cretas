@@ -4,6 +4,7 @@ import com.cretas.aims.entity.enums.LabelQcAnnotationSource;
 import com.cretas.aims.entity.enums.LabelQcLabel;
 import com.cretas.aims.entity.enums.LabelQcPhotoStatus;
 import com.cretas.aims.entity.enums.LabelQcTaskStatus;
+import com.cretas.aims.entity.enums.LabelQcTrainingStatus;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.*;
 
@@ -54,6 +55,12 @@ public final class LabelQcDtos {
             @NotEmpty @Size(max = 6) List<@Valid PhotoReviewRequest> photos
     ) {}
 
+    public record TrainingDecisionRequest(
+            @NotNull Boolean approved,
+            @Min(0) Long expectedVersion,
+            @Size(max = 500) String notes
+    ) {}
+
     public record AnnotationResponse(
             String id,
             LabelQcAnnotationSource source,
@@ -95,6 +102,15 @@ public final class LabelQcDtos {
             Integer finalDefectCount,
             Long reviewedBy,
             LocalDateTime reviewedAt,
+            Boolean archived,
+            Long archivedBy,
+            LocalDateTime archivedAt,
+            LabelQcTrainingStatus trainingStatus,
+            Long trainingDecidedBy,
+            LocalDateTime trainingDecidedAt,
+            String trainingDecisionNotes,
+            Long backupExportedBy,
+            LocalDateTime backupExportedAt,
             LocalDateTime createdAt,
             LocalDateTime updatedAt
     ) {}
@@ -105,6 +121,12 @@ public final class LabelQcDtos {
     ) {}
 
     public record StatusCountsResponse(Map<LabelQcTaskStatus, Long> counts) {}
+
+    public record TaskBackupResponse(
+            TaskDetailResponse data,
+            LocalDateTime exportedAt,
+            Long exportedBy
+    ) {}
 
     public record TrainingPhoto(
             String taskId,
