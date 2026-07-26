@@ -434,10 +434,116 @@ HONEST_LABEL_CLAUSE = (
     "3. 若数据显示 VIP 评分低于非VIP，这是真实信号，可陈述该关系；但任何因果归因"
     "(如'VIP期望更高')必须明确标注为'推测'，不得当作结论。\n"
     "4. '投诉类型'为商家申诉口径(小样本)，不等于客诉总量，提到时必须注明。\n"
-    "5. 只陈述数据中的相关关系，相关≠因果；跨维度因果推断一律标注'推测'。"
+    "5. 只陈述数据中的相关关系，相关≠因果；跨维度因果推断一律标注'推测'。\n"
+    "6. 任何包含'主因/导致/带动/驱动/拉高/拉低/归因于/因为/由于'的句子，"
+    "必须同时明确写出'可能/推测/待验证/相关不等于因果/不能证明因果'之一；"
+    "否则该句无论语气多肯定都视为无数据支持。\n"
+    "7. FactBook 标为缺失的维度只能作为'未提供/无法判断/需要补充'说明，"
+    "禁止用肯定或否定语气声称该维度发生了什么、影响了什么或没有影响。"
 )
 
-SYNTHESIS_CONTRACT_VERSION = "restaurant-dimensions-v2"
+SYNTHESIS_CONTRACT_VERSION = "restaurant-dimensions-v3"
+
+
+_CAUSAL_ASSERTION_RE = re.compile(
+    r"主因|主要原因|根因|导致|带动|驱动|拉高|拉低|造成|归因于|源于|因为|由于"
+)
+_CAUSAL_HEDGE_RE = re.compile(
+    r"相关不等于因果|相关≠因果|不能证明|无法证明|无法判断|尚无法|不能归因|"
+    r"不代表|可能|推测|假设|待验证|需验证|数据不足"
+)
+_MISSING_DISCLOSURE_RE = re.compile(
+    r"缺|未提供|没有(?:提供|接入|记录|数据)|无法|未知|不可|待补|需补|"
+    r"需要补充|尚无|不参与|不能判断|数据不足"
+)
+_MISSING_DIMENSION_TERMS: Dict[str, Tuple[str, ...]] = {
+    "revenue": ("营业额", "营收", "实收", "订单量", "订单数", "客单价"),
+    "period_comparison": ("同比", "环比", "较上期", "较去年", "增长率", "下降率"),
+    "store_comparison": ("门店对比", "各店", "多门店", "领先店", "落后店"),
+    "guest_traffic": ("就餐人数", "用餐人数", "人均消费", "桌均人数"),
+    "physical_traffic": ("物理客流", "商场客流", "门前客流", "经过人数", "进店人数", "进店率"),
+    "dish_sales": ("菜品销量", "菜品销售", "热卖菜", "畅销菜", "菜品热卖"),
+    "dish_margin": ("菜品毛利", "单品毛利", "BOM", "采购价", "标准份量"),
+    "channel": ("堂食", "外卖", "自提", "渠道结构"),
+    "meal_period": ("午市", "晚市", "夜宵", "餐段", "分时段"),
+    "review": ("评价", "口碑", "星级", "好评", "差评", "VIP评分"),
+    "inventory": ("库存", "缺货", "积压", "安全库存", "补货点"),
+    "waste": ("损耗", "报损", "废弃"),
+    "stocktaking": ("盘点", "盘亏", "账实"),
+    "staffing": ("排班", "人效", "在岗", "员工人数", "高峰缺人", "低谷冗余"),
+    "weather": ("天气", "晴天", "下雨", "雨天", "雨雪", "气温", "高温", "低温"),
+    "holiday": ("节假日", "假期", "调休"),
+    "mall_activity": ("商场活动", "会员日", "市集", "快闪"),
+    "nearby_event": ("周边活动", "演出", "赛事", "比赛", "展览", "散场"),
+    "competitor": ("竞品", "商圈", "竞争门店", "价格竞争"),
+    "supplier_cost": ("供应商", "采购价格", "进价", "到货价"),
+    "promotion": ("活动", "营销活动", "促销", "优惠", "折扣", "核销", "活动带动"),
+}
+
+
+def _narrative_grounding_violations(
+    answer: str,
+    factbook: FactBook,
+) -> List[str]:
+    """Reject ungrounded causality and claims about explicitly missing data.
+
+    FactReconciler protects numbers and entity names.  This complementary gate
+    protects semantic honesty: an LLM may not turn a composition signal into a
+    causal conclusion, and it may not use a missing dimension as either
+    positive or negative evidence.  The gate runs before cache/distillation.
+    """
+    violations: List[str] = []
+    sentences = [
+        sentence.strip(" \t\r\n-*#")
+        for sentence in re.split(r"[。！？!?\n]+", answer or "")
+        if sentence.strip(" \t\r\n-*#")
+    ]
+    missing_codes = {
+        str(item.get("code") or "")
+        for item in (factbook.missing_dimensions or [])
+        if item.get("code")
+    }
+
+    attribution = factbook.attribution or {}
+    primary_cause = str(attribution.get("primary_cause") or "").strip()
+    for sentence in sentences:
+        clauses = [
+            clause.strip()
+            for clause in re.split(r"[，,；;]+", sentence)
+            if clause.strip()
+        ]
+        # A hedge may follow the assertion in the next clause ("X 导致 Y，但这
+        # 只是推测"), so it qualifies the whole sentence.  A deterministic
+        # attribution exemption, however, is clause-local: "客单价是主因，天气
+        # 造成增长" must not let the second claim through.
+        sentence_is_hedged = bool(_CAUSAL_HEDGE_RE.search(sentence))
+        if not sentence_is_hedged:
+            for clause in clauses:
+                if not _CAUSAL_ASSERTION_RE.search(clause):
+                    continue
+                grounded_attribution = bool(
+                    primary_cause
+                    and re.search(
+                        rf"(?:主因|主要原因|拖后腿|归因).{{0,16}}"
+                        rf"{re.escape(primary_cause)}|"
+                        rf"{re.escape(primary_cause)}.{{0,16}}"
+                        r"(?:主因|主要原因|拖后腿|归因)",
+                        clause,
+                    )
+                )
+                if not grounded_attribution:
+                    violations.append(f"无保留因果断言：{clause[:120]}")
+
+        for clause in clauses:
+            if _MISSING_DISCLOSURE_RE.search(clause):
+                continue
+            for code in sorted(missing_codes):
+                terms = _MISSING_DIMENSION_TERMS.get(code, ())
+                if any(term in clause for term in terms):
+                    violations.append(f"缺失维度被当作事实（{code}）：{clause[:120]}")
+                    break
+
+    return list(dict.fromkeys(violations))
 
 
 @dataclass
@@ -772,6 +878,31 @@ class ComprehensiveSynthesisEngine:
                     thin_tokens = thin[1]
             if thin_answer is not None:
                 thin_answer, fc_meta = self._reconciler.reconcile(thin_answer, factbook)
+                grounding_violations = _narrative_grounding_violations(
+                    thin_answer, factbook,
+                )
+                if grounding_violations:
+                    logger.warning(
+                        "thin synthesis rejected by narrative grounding gate: "
+                        "factory=%s violations=%s",
+                        factory_id,
+                        grounding_violations,
+                    )
+                    fc_meta["reconciled"] = True
+                    fc_meta["violations"] = (
+                        list(fc_meta.get("violations") or []) + grounding_violations
+                    )
+                    post_budget = await self._budget.consume(factory_id, thin_tokens)
+                    return self._deterministic_fallback_response(
+                        factbook,
+                        plan,
+                        insight_summary,
+                        post_budget,
+                        t0,
+                        reason="叙述未通过数据因果门禁",
+                        tokens=thin_tokens,
+                        fact_check=fc_meta,
+                    )
                 thin_answer = self._append_dimension_guidance(thin_answer, factbook)
                 charts = self.collect_charts(factbook, plan)
                 alerts = self.collect_alerts(factbook)
@@ -825,6 +956,29 @@ class ComprehensiveSynthesisEngine:
 
         # 7. Grounding hard-check (backfill真值 + flag fabricated names).
         answer, fc_meta = self._reconciler.reconcile(answer, factbook)
+        grounding_violations = _narrative_grounding_violations(answer, factbook)
+        if grounding_violations:
+            logger.warning(
+                "synthesis rejected by narrative grounding gate: "
+                "factory=%s violations=%s",
+                factory_id,
+                grounding_violations,
+            )
+            fc_meta["reconciled"] = True
+            fc_meta["violations"] = (
+                list(fc_meta.get("violations") or []) + grounding_violations
+            )
+            post_budget = await self._budget.consume(factory_id, tokens)
+            return self._deterministic_fallback_response(
+                factbook,
+                plan,
+                insight_summary,
+                post_budget,
+                t0,
+                reason="叙述未通过数据因果门禁",
+                tokens=tokens,
+                fact_check=fc_meta,
+            )
         answer = self._append_dimension_guidance(answer, factbook)
 
         # 8. Charts + 🔒 反回扣 alerts (both gated by plan/factbook; alerts derive
@@ -1882,6 +2036,8 @@ class ComprehensiveSynthesisEngine:
         started_at: float,
         *,
         reason: str,
+        tokens: int = 0,
+        fact_check: Optional[Dict[str, Any]] = None,
     ) -> SynthesisResponse:
         """Return fresh grounded analysis even when no narrative LLM can answer.
 
@@ -1938,7 +2094,7 @@ class ComprehensiveSynthesisEngine:
         return SynthesisResponse(
             answer="\n".join(sections),
             source=RESULT_SOURCE_DETERMINISTIC,
-            tokens=0,
+            tokens=tokens,
             tokens_used_today=budget.tokens_used,
             tokens_cap=budget.tokens_cap,
             elapsed_ms=int((time.monotonic() - started_at) * 1000),
@@ -1947,6 +2103,7 @@ class ComprehensiveSynthesisEngine:
             plan=plan,
             factbook_text=factbook.to_prompt_text(),
             insight_summary=insight_summary,
+            fact_check=fact_check,
             dimension_coverage=factbook.dimension_coverage(),
         )
 
@@ -1997,7 +2154,10 @@ class ComprehensiveSynthesisEngine:
             "请综合以上多维数据回答用户问题：先给 1-2 句核心结论，再分维度("
             "评价/经营/菜品/客流/运营/外部环境/交叉关系)简述，最后给 2-3 条 "
             "4 要素齐全的可执行建议。缺失维度由系统在回答末尾确定性追加，正文不得把缺失当作 0、"
-            "不得自行补造，也不用重复输出缺失清单。严格遵守诚实标注规则。"
+            "不得自行补造，也不用重复输出缺失清单。任何'主因/导致/带动/驱动/归因于'只能"
+            "陈述 FactBook 已明确给出的确定性分解；其他跨维关系必须写成可能/推测/待验证，"
+            "并明确相关不等于因果。标为缺失的维度只能说明未提供和需要补数，绝不能用来支持"
+            "肯定或否定结论。严格遵守诚实标注规则。"
         )
         return "\n".join(lines)
 

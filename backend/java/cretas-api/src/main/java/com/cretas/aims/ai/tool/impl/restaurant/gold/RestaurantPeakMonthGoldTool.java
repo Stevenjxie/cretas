@@ -199,7 +199,10 @@ public class RestaurantPeakMonthGoldTool extends GoldBackedRestaurantTool {
         if (asksWhy) {
             result.put("suggestedFollowups", List.of(
                     Map.of("label", "拆解订单与客单价", "question", "对比峰值月和次高月的订单量与客单价"),
-                    Map.of("label", "补充经营维度", "question", "结合客流、菜品、活动、天气、评价和排班分析峰值月原因")));
+                    Map.of(
+                            "label", "补充经营维度",
+                            "question", "结合客流、菜品、活动、天气、评价和排班分析"
+                                    + peakMonth + "峰值月的经营构成与可能原因")));
         }
         return result;
     }

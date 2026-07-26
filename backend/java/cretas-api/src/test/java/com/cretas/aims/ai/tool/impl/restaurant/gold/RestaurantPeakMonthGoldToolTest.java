@@ -192,6 +192,17 @@ class RestaurantPeakMonthGoldToolTest {
                 .contains("不能仅凭营收序列断定原因")
                 .contains("缺少的维度应保持为空");
         assertThat(result.get("suggestedFollowups")).isInstanceOf(List.class);
+        @SuppressWarnings("unchecked")
+        List<Map<String, String>> followups =
+                (List<Map<String, String>>) result.get("suggestedFollowups");
+        Map<String, String> dimensionsFollowup = followups.stream()
+                .filter(item -> "补充经营维度".equals(item.get("label")))
+                .findFirst()
+                .orElseThrow();
+        assertThat(dimensionsFollowup.get("question"))
+                .contains("2026-03峰值月")
+                .contains("经营构成与可能原因")
+                .doesNotContain("分析峰值月原因");
         verify(goldClient, never()).fetchTieredIntentAnswer(
                 eq(FACTORY_ID), any(), eq("restaurant_peak_month_gold"));
 

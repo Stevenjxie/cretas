@@ -116,10 +116,14 @@ class TestNumericReconcile:
 class TestFabricatedNames:
     def test_fabricated_store_flagged(self):
         rec = FactReconciler()
-        ans = "建议关注招牌牛肉店的表现。"
+        # Fabricated-name handling is deliberately metadata-only: the answer is
+        # not polluted with a possibly false inline warning.  Use a known brand
+        # prefix so this is an actual store-name candidate rather than a generic
+        # dish/shop phrase.
+        ans = "建议关注“青花椒未来中心店”的表现。"
         out, meta = rec.reconcile(ans, _fb())
-        assert "未在数据中找到该名称" in out
-        assert any("招牌牛肉店" in v for v in meta["violations"])
+        assert out == ans
+        assert any("青花椒未来中心店" in v for v in meta["violations"])
 
     def test_known_store_not_flagged(self):
         rec = FactReconciler()
