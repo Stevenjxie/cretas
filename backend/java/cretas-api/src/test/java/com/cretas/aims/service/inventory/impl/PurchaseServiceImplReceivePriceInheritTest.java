@@ -1,6 +1,7 @@
 package com.cretas.aims.service.inventory.impl;
 
 import com.cretas.aims.dto.inventory.CreateReceiveRecordRequest;
+import com.cretas.aims.entity.RawMaterialType;
 import com.cretas.aims.entity.Supplier;
 import com.cretas.aims.entity.enums.PurchaseOrderStatus;
 import com.cretas.aims.entity.inventory.PurchaseOrder;
@@ -107,6 +108,10 @@ class PurchaseServiceImplReceivePriceInheritTest {
         // PO 行: A=32.00 (合同价), B=无价. validateOverReceiveCap + 价继承都读这个 repository.
         lenient().when(purchaseOrderItemRepository.findByPurchaseOrderId(PO_ID))
                 .thenReturn(List.of(poItem(MAT_A, new BigDecimal("32.00")), poItem(MAT_B, null)));
+        lenient().when(materialTypeRepository.findById(MAT_A))
+                .thenReturn(Optional.of(rawMaterial(MAT_A)));
+        lenient().when(materialTypeRepository.findById(MAT_B))
+                .thenReturn(Optional.of(rawMaterial(MAT_B)));
 
         lenient().when(receiveRecordRepository.save(any(PurchaseReceiveRecord.class)))
                 .thenAnswer(inv -> inv.getArgument(0));
@@ -178,7 +183,7 @@ class PurchaseServiceImplReceivePriceInheritTest {
         BusinessException error = assertThrows(BusinessException.class,
                 () -> service.createReceiveRecord(FACTORY, req, USER_ID));
 
-        assertEquals("PURCHASE_RECEIPT_UNIT_MISMATCH", error.getErrorCode());
+        assertEquals("MATERIAL_PACKAGING_SPEC_REQUIRED", error.getErrorCode());
     }
 
     @Test
@@ -209,6 +214,15 @@ class PurchaseServiceImplReceivePriceInheritTest {
         it.setQuantity(new BigDecimal("100"));
         it.setReceivedQuantity(BigDecimal.ZERO);
         return it;
+    }
+
+    private RawMaterialType rawMaterial(String materialTypeId) {
+        RawMaterialType material = new RawMaterialType();
+        material.setId(materialTypeId);
+        material.setFactoryId(FACTORY);
+        material.setName(materialTypeId);
+        material.setUnit("kg");
+        return material;
     }
 
     private CreateReceiveRecordRequest receiveReq(String materialTypeId, BigDecimal qty, BigDecimal price) {

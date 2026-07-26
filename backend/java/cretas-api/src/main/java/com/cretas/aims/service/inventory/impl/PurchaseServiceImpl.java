@@ -1764,14 +1764,15 @@ public class PurchaseServiceImpl implements PurchaseService {
             item.setMaterialTypeId(itemDTO.getMaterialTypeId());
             item.setMaterialName(itemDTO.getMaterialName());
             item.setReceivedQuantity(itemDTO.getReceivedQuantity());
-            RawMaterialType material = materialTypeRepository.findById(itemDTO.getMaterialTypeId())
-                    .orElseThrow(() -> new ResourceNotFoundException("收货物料不存在: " + itemDTO.getMaterialTypeId()));
             MaterialPackagingSelection packagingSelection;
             if (order != null) {
                 PurchaseOrderItem poLine = resolvePurchaseOrderItem(
                         poLines, itemDTO.getPurchaseOrderItemId(), itemDTO.getMaterialTypeId());
                 packagingSelection = resolveReceiptSelection(factoryId, poLine, itemDTO);
             } else {
+                RawMaterialType material = materialTypeRepository.findById(itemDTO.getMaterialTypeId())
+                        .orElseThrow(() -> new ResourceNotFoundException(
+                                "收货物料不存在: " + itemDTO.getMaterialTypeId()));
                 packagingSelection = resolveMaterialPackagingSelection(
                         factoryId, material, itemDTO.getMaterialPackagingSpecId(), itemDTO.getUnit());
             }
