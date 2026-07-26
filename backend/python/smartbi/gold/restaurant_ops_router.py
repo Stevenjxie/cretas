@@ -5054,6 +5054,14 @@ async def resolve_sales_summary(
                 f"（{_range_text(comparison_meta['baseline_start'], comparison_meta['baseline_end'])}）"
             )
             comparison_bill_count = int((comparison_summary or {}).get("bill_count") or 0)
+            comparison_meta.update({
+                "primary_start": _date_text(date_range[0]),
+                "primary_end": _date_text(date_range[1]),
+                "primary_bills": 0,
+                "primary_no_data": True,
+                "baseline_bills": comparison_bill_count,
+                "baseline_no_data": comparison_bill_count <= 0,
+            })
             if comparison_bill_count > 0:
                 comparison_note = (
                     f"{comparison_window}有可用记录，但{actual_window}没有数据，"

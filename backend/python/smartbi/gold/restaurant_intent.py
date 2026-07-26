@@ -67,6 +67,7 @@ TRUSTED_PLANNER_AUTHORITIES = frozenset({
     "explicit_comparison_slots_contract_repair",
     "explicit_action_read_choice",
     "explicit_named_dish_slots",
+    "explicit_financial_overview",
     "explicit_revenue_trend",
     "explicit_store_operations",
     "trusted_context",
@@ -2028,6 +2029,66 @@ def _explicit_named_dish_metric_spec(
     return spec
 
 
+def _explicit_financial_overview_spec(
+    query: str,
+    *,
+    is_continuation: bool = False,
+) -> Optional[RestaurantQuerySpec]:
+    """Compile a complete revenue + gross-margin overview without T3.
+
+    A concrete time range, an aggregate store scope, and the two compatible
+    financial metrics form a closed read-only request.  The sales-summary
+    resolver already owns both values and their shared calculation basis, so
+    sending this shape through T3 only adds an avoidable outage path.
+    """
+    text = (query or "").strip()
+    requested_metrics = _detect_requested_metrics(text)
+    requested_set = set(requested_metrics)
+    start_date, end_date = _resolve_sales_date_range(text)[0]
+    store_scope, store_slots = _detect_store_scope(text)
+    if (
+        not {"gross_margin", "revenue"}.issubset(requested_set)
+        or not requested_set.issubset({"gross_margin", "revenue", "orders"})
+        or start_date is None
+        or end_date is None
+        or extract_dish_candidate(text)
+        or _detect_analysis_action(text) != "lookup"
+        or _detect_comparison(text) is not None
+        or _detect_ranking_direction(text) is not None
+        or any(token in text for token in _EXPLICIT_READ_MUTATION_TOKENS)
+        or store_scope not in {None, "all"}
+        or store_slots
+    ):
+        return None
+
+    spec = _build_spec(
+        "RESTAURANT_OPS_SALES_SUMMARY",
+        text,
+        confidence=1.0,
+        tier="explicit_slots",
+        planner_authority="explicit_financial_overview",
+        is_continuation=is_continuation,
+        require_explicit_time=True,
+    )
+    if (
+        spec.clarification_needed
+        or spec.intent != "RESTAURANT_OPS_SALES_SUMMARY"
+        or spec.requested_metrics != requested_metrics
+        or spec.planned_intents != ("RESTAURANT_OPS_SALES_SUMMARY",)
+        or spec.date_range != (start_date, end_date)
+        or spec.store_scope != store_scope
+        or spec.store_slots
+        or spec.dish_slot
+        or not set(spec.dimensions).issubset({"store"})
+        or spec.unsupported_requirements
+        or spec.asks_priority
+        or spec.asks_prohibited_actions
+        or spec.asks_export
+    ):
+        return None
+    return spec
+
+
 def _explicit_revenue_trend_spec(
     query: str,
     *,
@@ -3034,6 +3095,7 @@ async def parse_restaurant_query(
 
     for explicit_compiler in (
         _explicit_named_dish_metric_spec,
+        _explicit_financial_overview_spec,
         _explicit_revenue_trend_spec,
         _explicit_store_operations_spec,
     ):
@@ -3274,6 +3336,7 @@ async def _parse_continuation(
 
     for explicit_compiler in (
         _explicit_named_dish_metric_spec,
+        _explicit_financial_overview_spec,
         _explicit_revenue_trend_spec,
         _explicit_store_operations_spec,
     ):

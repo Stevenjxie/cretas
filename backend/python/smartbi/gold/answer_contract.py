@@ -143,7 +143,8 @@ def _comparison_present(
     if not all(comparison.get(key) for key in required_scope):
         return False
     has_result = bool(
-        comparison.get("baseline_no_data") is True
+        comparison.get("primary_no_data") is True
+        or comparison.get("baseline_no_data") is True
         or (
             comparison.get("primary_bills") is not None
             and comparison.get("baseline_bills") is not None

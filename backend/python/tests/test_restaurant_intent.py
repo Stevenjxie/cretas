@@ -32,6 +32,7 @@ from smartbi.gold.restaurant_intent import (
     _detect_comparison,
     _detect_dimensions,
     _detect_requested_metrics,
+    _explicit_financial_overview_spec,
     _explicit_named_dish_metric_spec,
     _explicit_revenue_trend_spec,
     _explicit_sales_period_comparison_spec,
@@ -2127,6 +2128,37 @@ def test_explicit_daily_revenue_curve_keeps_chart_and_export_as_one_plan():
     assert spec.planner_authority == "explicit_revenue_trend"
 
 
+def test_complete_financial_overview_compiles_without_semantic_planner():
+    query = "最近30天全部门店毛利和营业额分别是多少，并展示计算口径"
+    spec = _explicit_financial_overview_spec(query)
+
+    assert spec is not None
+    assert spec.intent == "RESTAURANT_OPS_SALES_SUMMARY"
+    assert spec.requested_metrics == ("gross_margin", "revenue")
+    assert spec.planned_intents == ("RESTAURANT_OPS_SALES_SUMMARY",)
+    assert spec.store_scope == "all"
+    assert spec.planner_authority == "explicit_financial_overview"
+
+
+@pytest.mark.asyncio
+async def test_complete_financial_overview_survives_planner_outage():
+    t3 = AsyncMock(side_effect=AssertionError(
+        "complete financial overview must not call T3"
+    ))
+    with patch("smartbi.gold.restaurant_intent._t3_llm_parse", new=t3):
+        spec = await parse_restaurant_query(
+            "最近30天全部门店毛利和营业额分别是多少，并展示计算口径",
+            _restaurant_pool(),
+            factory_id="QHJ01",
+        )
+
+    assert spec is not None
+    assert spec.intent == "RESTAURANT_OPS_SALES_SUMMARY"
+    assert spec.clarification_needed is False
+    assert spec.planner_authority == "explicit_financial_overview"
+    t3.assert_not_awaited()
+
+
 def test_calendar_chart_word_boundary_does_not_inject_recipe_cost():
     query = "生成本月每日营业额图，并加入计划值10万元和预警值8万元参考线"
 
@@ -2362,6 +2394,26 @@ def test_contract_requires_executed_comparison_metadata():
         },
     )
     assert "comparison" not in passed.missing
+
+    no_primary_data = contract.validate(
+        spec,
+        "本周没有数据；上周同期有记录，因此不能可靠判断相比是上升还是下降。",
+        kpis=[],
+        meta={
+            "comparison": {
+                "answered": True,
+                "primary_start": "2026-07-27",
+                "primary_end": "2026-07-27",
+                "baseline_start": "2026-07-20",
+                "baseline_end": "2026-07-20",
+                "baseline_label": "上周同期",
+                "primary_bills": 0,
+                "baseline_bills": 80,
+                "primary_no_data": True,
+            },
+        },
+    )
+    assert "comparison" not in no_primary_data.missing
 
 
 def test_contract_rejects_partial_multi_objective_answer():

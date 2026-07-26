@@ -361,6 +361,10 @@ def test_sales_summary_no_data_names_both_comparison_dates(monkeypatch):
     assert "昨天（2026-07-20 当天）" in answer.answer_text
     assert "前天（2026-07-19 当天）" in answer.answer_text
     assert "不能可靠判断两个日期谁高谁低" in answer.answer_text
+    assert answer.meta["comparison"]["primary_no_data"] is True
+    assert answer.meta["comparison"]["baseline_no_data"] is True
+    assert answer.meta["comparison"]["primary_start"] == "2026-07-20"
+    assert answer.meta["comparison"]["baseline_start"] == "2026-07-19"
 
 
 @pytest.mark.parametrize(
