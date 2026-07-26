@@ -91,6 +91,12 @@ def _read_only_action_warning_for_spec(
     spec: Optional[RestaurantQuerySpec],
 ) -> Optional[str]:
     """Retain a mutation warning across pure slot-clarification replies."""
+    if (
+        spec is not None
+        and getattr(spec, "planner_authority", "")
+        == "explicit_action_read_choice"
+    ):
+        return _READ_ONLY_ACTION_WARNING
     sources = [query]
     if spec is not None:
         sources.append(str(getattr(spec, "resolver_query_seed", "") or ""))

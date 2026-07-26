@@ -33,6 +33,7 @@ from smartbi.gold.restaurant_intent import (
     _build_t3_prompt,
     _cache_get,
     _cache_put,
+    _explicit_read_only_action_ranking_spec,
     _pending_pop,
     _pending_put,
     build_resolver_query,
@@ -828,6 +829,168 @@ async def test_time_then_store_scope_clarifications_chain_without_losing_query()
     assert "全部门店" in third.resolver_query_seed
     assert pool.pending == {}
     llm.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_read_action_store_then_view_choice_compiles_dish_ranking():
+    pool = _FakeDbPool(
+        is_restaurant=True,
+        store_names=["东城店", "西城店"],
+    )
+    factory_id = "F_READ_ACTION_STORE_FIRST"
+    session_key = "sess-read-action-store-first"
+    original_query = "把最近7天销量最低的5道菜全部下架"
+    await _pending_put(
+        pool,
+        factory_id,
+        session_key,
+        original_query=original_query,
+        clarification_question="您是想查看低销量菜品排行，还是执行下架？",
+    )
+    second_turn_plan = {
+        "intent": "RESTAURANT_OPS_GROSS_MARGIN",
+        "time_range": {"type": "relative", "unit": "day", "count": 7},
+        "wants_margin": False,
+        "asks_profitability": False,
+        "dimensions": ["dish"],
+        "comparison": None,
+        "confidence": 0.95,
+        "clarification_needed": True,
+        "clarification_question": "您是想查看全部门店的低销量菜品排行，还是执行下架？",
+    }
+    with patch(
+        "common.llm_router.call_chain",
+        new=AsyncMock(return_value=_llm_result(second_turn_plan)),
+    ):
+        second = await parse_restaurant_query(
+            "全部门店",
+            pool,
+            factory_id=factory_id,
+            session_key=session_key,
+        )
+
+    assert second.clarification_needed is True
+    assert (factory_id, session_key) in pool.pending
+    assert "全部门店" in pool.pending[(factory_id, session_key)]["original_query"]
+
+    t3 = AsyncMock(side_effect=AssertionError(
+        "explicit READ choice must compile the retained ranking slots without T3"
+    ))
+    with patch("common.llm_router.call_chain", new=t3):
+        third = await parse_restaurant_query(
+            "只看低销量排行",
+            pool,
+            factory_id=factory_id,
+            session_key=session_key,
+        )
+
+    assert third.clarification_needed is False
+    assert third.planner_authority == "explicit_action_read_choice"
+    assert third.intent == "RESTAURANT_OPS_GROSS_MARGIN"
+    assert third.planned_intents == ("RESTAURANT_OPS_GROSS_MARGIN",)
+    assert third.requested_metrics == ("sales_volume",)
+    assert third.ranking_direction == "worst"
+    assert third.ranking_limit == 5
+    assert third.window_label == "最近7天"
+    assert third.store_scope == "all"
+    assert third.dimensions == ("dish",)
+    assert "下架" not in third.resolver_query_seed
+    assert pool.pending == {}
+    t3.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_read_action_view_then_store_choice_compiles_dish_ranking():
+    pool = _FakeDbPool(
+        is_restaurant=True,
+        store_names=["东城店", "西城店"],
+    )
+    factory_id = "F_READ_ACTION_VIEW_FIRST"
+    session_key = "sess-read-action-view-first"
+    original_query = "把最近7天销量最低的5道菜全部下架"
+    await _pending_put(
+        pool,
+        factory_id,
+        session_key,
+        original_query=original_query,
+        clarification_question="您是想查看低销量菜品排行，还是执行下架？",
+    )
+    t3 = AsyncMock(side_effect=AssertionError(
+        "explicit READ/store choices must not require T3"
+    ))
+    with patch("common.llm_router.call_chain", new=t3):
+        second = await parse_restaurant_query(
+            "只看排行",
+            pool,
+            factory_id=factory_id,
+            session_key=session_key,
+        )
+        third = await parse_restaurant_query(
+            "全部门店",
+            pool,
+            factory_id=factory_id,
+            session_key=session_key,
+        )
+
+    assert second.clarification_needed is True
+    assert second.clarification_question == STORE_SCOPE_CLARIFICATION_QUESTION
+    assert third.clarification_needed is False
+    assert third.planner_authority == "explicit_action_read_choice"
+    assert third.store_scope == "all"
+    assert third.window_label == "最近7天"
+    assert third.ranking_direction == "worst"
+    assert third.ranking_limit == 5
+    assert "下架" not in third.resolver_query_seed
+    assert pool.pending == {}
+    t3.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_read_action_choice_allows_explicit_current_time_override():
+    pool = _restaurant_pool()
+    factory_id = "F_READ_ACTION_TIME_OVERRIDE"
+    session_key = "sess-read-action-time-override"
+    await _pending_put(
+        pool,
+        factory_id,
+        session_key,
+        original_query="把最近7天全部门店销量最低的5道菜全部下架",
+        clarification_question="您是想查看排行，还是执行下架？",
+    )
+    t3 = AsyncMock(side_effect=AssertionError(
+        "explicit current time must override retained time without T3"
+    ))
+    with patch("common.llm_router.call_chain", new=t3):
+        spec = await parse_restaurant_query(
+            "只看本月低销量排行",
+            pool,
+            factory_id=factory_id,
+            session_key=session_key,
+        )
+
+    assert spec.clarification_needed is False
+    assert spec.window_label == "本月"
+    assert spec.store_scope == "all"
+    assert spec.ranking_direction == "worst"
+    assert "下架" not in spec.resolver_query_seed
+    t3.assert_not_awaited()
+
+
+@pytest.mark.parametrize(
+    "replacement",
+    [
+        "只看门店低销量排行",
+        "只看食材低销量排行",
+        "只看毛利最低排行",
+    ],
+)
+def test_read_action_choice_does_not_inherit_over_explicit_new_semantics(
+    replacement,
+):
+    assert _explicit_read_only_action_ranking_spec(
+        "把最近7天全部门店销量最低的5道菜全部下架",
+        replacement,
+    ) is None
 
 
 @pytest.mark.asyncio
