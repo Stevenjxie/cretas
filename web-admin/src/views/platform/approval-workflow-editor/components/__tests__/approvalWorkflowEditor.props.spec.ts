@@ -7,11 +7,13 @@ const api = vi.hoisted(() => ({
   getWorkflowsByDecisionType: vi.fn(),
   getWorkflowById: vi.fn(),
   createWorkflow: vi.fn(),
+  cloneWorkflowDraft: vi.fn(),
   updateWorkflow: vi.fn(),
   deleteWorkflow: vi.fn(),
   publishWorkflow: vi.fn(),
   archiveWorkflow: vi.fn(),
   validateWorkflow: vi.fn(),
+  getApprovalDirectory: vi.fn(),
 }));
 
 vi.mock('@/store/modules/auth', () => ({
@@ -29,6 +31,7 @@ describe('ApprovalWorkflowEditor decision type prop', () => {
     api.getDecisionTypesMetadata.mockResolvedValue({ success: true, data: [] });
     api.getWorkflowsByDecisionType.mockResolvedValue({ success: true, data: [] });
     api.getWorkflowById.mockResolvedValue({ success: false });
+    api.getApprovalDirectory.mockResolvedValue({ roles: [], users: [] });
   });
 
   it('reloads workflow definitions when the deep-linked decision type changes', async () => {
@@ -100,6 +103,7 @@ describe('ApprovalWorkflowEditor decision type prop', () => {
     );
     expect(api.getWorkflowById).toHaveBeenCalledWith('F006', 'purchase-flow');
     expect(wrapper.text()).toContain('正在配置：');
-    expect(wrapper.text()).toContain('业务已定位');
+    expect(wrapper.text()).toContain('审批已启用');
+    expect(wrapper.text()).toContain('克隆为新版本');
   });
 });

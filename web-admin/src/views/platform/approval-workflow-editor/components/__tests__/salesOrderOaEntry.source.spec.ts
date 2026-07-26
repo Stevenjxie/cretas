@@ -15,9 +15,11 @@ describe('business-scoped unified OA entry contract', () => {
   const financeApi = source('src/api/salesFinanceReview.ts');
   const pending = source('src/views/workflow/pending.vue');
 
-  it('turns the legacy approval-chain page into a read-only compatibility catalog', () => {
-    expect(legacyChains).toContain('审批业务目录');
-    expect(legacyChains).toContain('旧 OA 兼容记录');
+  it('turns system settings into a business-first approval catalog', () => {
+    expect(legacyChains).toContain('<h1>审批业务</h1>');
+    expect(legacyChains).toContain('审批已启用');
+    expect(legacyChains).toContain('无需审批');
+    expect(legacyChains).toContain('在途审批继续使用原运行版本');
     expect(legacyChains).toContain('buildOaCanvasQuery');
     expect(legacyChains).not.toContain("post(`/${factoryId.value}/approval-chains`");
     expect(legacyChains).not.toContain("put(`/${factoryId.value}/approval-chains/");

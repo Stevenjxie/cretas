@@ -1,37 +1,38 @@
 <template>
   <div class="approval-workflow-editor" :class="{ embedded: props.embedded }">
-    <!-- Toolbar (h2 title 隐藏当 Canvas 内嵌入 — Canvas 已有 header; 但工具栏 buttons 保留) -->
     <el-card shadow="never" class="header-card">
       <div v-if="props.lockDecisionType" class="business-context">
-        <el-button link type="primary" :icon="ArrowLeft" @click="emit('exit-context')">
-          返回审批业务
-        </el-button>
+        <el-button link type="primary" @click="emit('exit-context')">返回审批业务</el-button>
         <span class="context-divider" aria-hidden="true" />
         <div>
           <strong>正在配置：{{ selectedDecisionTypeLabel }}</strong>
-          <span>已锁定到此审批业务，保存内容不会串到其他业务。</span>
+          <span>当前业务使用独立画布；运行版本和在途审批不会被草稿修改。</span>
         </div>
-        <el-tag type="success" effect="plain">业务已定位</el-tag>
+        <el-tag :type="runtimeApprovalEnabled ? 'success' : 'info'" effect="plain">
+          {{ runtimeApprovalEnabled ? '审批已启用' : '无需审批' }}
+        </el-tag>
       </div>
+
       <div class="header-row">
         <div class="header-left">
           <h2 v-if="!props.embedded">审批工作流编辑器</h2>
+          <strong v-else>{{ workflowName || selectedDecisionTypeLabel }}</strong>
           <el-tag v-if="currentWorkflow" :type="publishStatusType" size="small">
             {{ publishStatusLabel }} v{{ currentWorkflow.version }}
           </el-tag>
+          <span v-if="draftDirty" class="draft-dirty">有未保存修改</span>
         </div>
         <div class="header-actions">
           <el-select
+            v-if="!props.lockDecisionType"
             v-model="selectedDecisionType"
-            placeholder="选择决策类型"
-            style="width: 260px"
+            placeholder="选择审批业务"
+            style="width: 240px"
             filterable
             :loading="decisionTypeMetaLoading"
-            :disabled="props.lockDecisionType"
             aria-label="审批业务类型"
             @change="onDecisionTypeChange"
           >
-            <!-- Sprint 6 W3-B (2026-05-19): 改 dynamic 32 enum, 按 category group + wired badge -->
             <el-option-group
               v-for="(items, catLabel) in groupedDecisionTypeOptions"
               :key="catLabel"
@@ -40,144 +41,244 @@
               <el-option
                 v-for="dt in items"
                 :key="dt.decisionType"
-                :label="`${dt.chineseName} (${dt.decisionType})`"
+                :label="dt.chineseName"
                 :value="dt.decisionType"
-              >
-                <span style="float: left">{{ dt.chineseName }}</span>
-                <span
-                  style="float: right; font-size: 11px; margin-left: 8px"
-                  :style="{ color: dt.wired ? '#67C23A' : '#909399' }"
-                >
-                  {{ dt.wired ? '已接入' : '未接入' }}
-                </span>
-              </el-option>
+              />
             </el-option-group>
           </el-select>
           <el-select
+            v-if="workflowList.length"
             v-model="selectedWorkflowId"
-            placeholder="选择工作流"
-            clearable
-            :disabled="workflowList.length === 0"
+            placeholder="选择版本"
             style="width: 220px"
             aria-label="审批工作流版本"
             @change="onWorkflowSelectionChange"
           >
             <el-option
-              v-for="w in workflowList"
-              :key="w.id"
-              :label="`${w.name} (v${w.version} · ${w.publishStatus})`"
-              :value="w.id"
+              v-for="workflow in workflowList"
+              :key="workflow.id"
+              :label="workflowVersionLabel(workflow)"
+              :value="workflow.id"
             />
           </el-select>
           <el-input
+            v-if="!showNoApproval"
             v-model="workflowName"
-            placeholder="工作流名称…"
-            style="width: 200px"
-            aria-label="工作流名称"
+            placeholder="审批流程名称"
+            style="width: 190px"
+            :disabled="readOnlyWorkflow"
+            aria-label="审批流程名称"
             name="approval-workflow-name"
             autocomplete="off"
+            @change="markDraftChanged"
           />
-          <el-button :icon="Plus" @click="resetEditor">新建</el-button>
-          <el-button :icon="View" @click="handleValidate" :disabled="nodes.length === 0">校验</el-button>
           <el-button
-            v-if="!props.lockDecisionType"
-            :icon="VideoPlay"
+            v-if="readOnlyWorkflow"
+            type="primary"
+            :loading="saving"
+            @click="cloneCurrentAsDraft"
+          >
+            克隆为新版本
+          </el-button>
+          <el-button v-if="!showNoApproval" :disabled="nodes.length === 0" @click="handleValidate">
+            校验画布
+          </el-button>
+          <el-button
+            v-if="!props.lockDecisionType && !showNoApproval"
             :disabled="nodes.length === 0"
             @click="openSimulator"
           >
-            模拟
+            模拟运行
           </el-button>
           <el-button
+            v-if="!showNoApproval && !readOnlyWorkflow"
             type="primary"
-            :icon="Download"
             :disabled="!canSave"
             :loading="saving"
             @click="handleSave"
           >
-            {{ currentWorkflow ? '保存' : '保存草稿' }}
+            保存草稿
           </el-button>
           <el-button
+            v-if="!showNoApproval && !readOnlyWorkflow"
             type="success"
-            :icon="Upload"
             :disabled="!canPublish"
             @click="handlePublish"
           >
-            发布
+            发布并启用
           </el-button>
           <el-button
-            v-if="currentWorkflow && currentWorkflow.publishStatus === 'published'"
+            v-if="currentWorkflow?.publishStatus === 'published'"
             type="warning"
             @click="handleArchive"
           >
-            归档
+            停用审批
           </el-button>
-          <el-button
-            v-if="currentWorkflow"
-            type="danger"
-            @click="handleDelete"
-          >
-            删除
+          <el-button v-if="currentWorkflow && !readOnlyWorkflow" type="danger" @click="handleDelete">
+            删除草稿
           </el-button>
         </div>
       </div>
     </el-card>
 
-    <!-- 3-pane body: palette | canvas | properties -->
-    <div class="editor-body">
-      <!-- Left: Node palette (Day 6 fills in real nodes) -->
-      <div class="palette">
-        <h4>节点类型</h4>
-        <div
-          v-for="schema in nodeSchemas"
-          :key="schema.type"
-          class="palette-node"
-          draggable="true"
-          @dragstart="onPaletteDragStart($event, schema)"
-        >
-          <span class="palette-icon" :style="{ backgroundColor: schema.color }">
-            {{ schema.icon }}
-          </span>
-          <div class="palette-info">
-            <span class="palette-name">{{ schema.displayName }}</span>
-            <span class="palette-desc">{{ schema.description }}</span>
+    <section v-if="showNoApproval" class="no-approval-state">
+      <div class="no-approval-copy">
+        <span class="no-approval-label">无需审批</span>
+        <h2>{{ selectedDecisionTypeLabel }} 当前不需要审批</h2>
+        <p>业务提交后直接进入下一环节。没有空画布、没有隐藏审批人，也不会影响历史单据。</p>
+      </div>
+      <el-button type="primary" @click="enableApprovalDraft">启用该业务审批</el-button>
+    </section>
+
+    <template v-else>
+      <div class="editor-body">
+        <aside class="palette" aria-label="流程节点">
+          <div class="panel-title-row">
+            <h4>流程节点</h4>
+            <span>{{ nodeSchemas.length }} 类</span>
           </div>
-        </div>
-      </div>
+          <p>拖到画布中，或直接选择后添加，再按实际审批顺序连接。</p>
+          <button
+            v-for="schema in nodeSchemas"
+            :key="schema.type"
+            type="button"
+            class="palette-node"
+            :class="{ disabled: !canEditDraft }"
+            :disabled="!canEditDraft"
+            :draggable="canEditDraft"
+            @dragstart="onPaletteDragStart($event, schema)"
+            @click="addPaletteNode(schema)"
+          >
+            <span class="palette-badge" :style="{ backgroundColor: schema.color }">
+              {{ schema.shortLabel }}
+            </span>
+            <div class="palette-info">
+              <span class="palette-name">{{ schema.displayName }}</span>
+              <span class="palette-desc">{{ schema.description }}</span>
+            </div>
+          </button>
+        </aside>
 
-      <!-- Center: VueFlow canvas -->
-      <div class="canvas-container" @drop="onCanvasDrop" @dragover.prevent>
-        <VueFlow
-          v-model:nodes="nodes"
-          v-model:edges="edges"
-          :node-types="nodeTypes"
-          :default-viewport="{ zoom: 0.9, x: 50, y: 50 }"
-          fit-view-on-init
-          @node-click="onNodeClick"
-          @edge-click="onEdgeClick"
-          @connect="onConnect"
+        <main
+          class="canvas-container"
+          @drop="onCanvasDrop"
+          @dragover.prevent
         >
-          <Background />
-          <Controls />
-        </VueFlow>
+          <VueFlow
+            id="approval-workflow-canvas"
+            v-model:nodes="nodes"
+            v-model:edges="edges"
+            :node-types="nodeTypes"
+            :default-viewport="{ zoom: 0.9, x: 50, y: 50 }"
+            :min-zoom="0.35"
+            :max-zoom="1.8"
+            :nodes-draggable="canEditDraft"
+            :nodes-connectable="canEditDraft"
+            :elements-selectable="true"
+            :pan-on-drag="interactionMode === 'PAN' ? true : [1, 2]"
+            :selection-key-code="canEditDraft && interactionMode === 'SELECT' ? true : false"
+            multi-selection-key-code="Control"
+            :selection-mode="SelectionMode.Partial"
+            :is-valid-connection="isValidConnection"
+            fit-view-on-init
+            @node-click="onNodeClick"
+            @edge-click="onEdgeClick"
+            @pane-click="onPaneClick"
+            @connect="onConnect"
+            @node-drag-start="captureHistory"
+            @node-drag-stop="markDraftChanged"
+            @selection-end="onSelectionEnd"
+          >
+            <Background />
+          </VueFlow>
+
+          <div class="canvas-text-tools" aria-label="画布操作">
+            <el-button
+              :type="interactionMode === 'PAN' ? 'primary' : 'default'"
+              @click="interactionMode = 'PAN'"
+            >
+              拖动画布
+            </el-button>
+            <el-button
+              :type="interactionMode === 'SELECT' ? 'primary' : 'default'"
+              @click="interactionMode = 'SELECT'"
+            >
+              批量选择
+            </el-button>
+            <el-button :disabled="!canUndo" @click="undo">撤销</el-button>
+            <el-button :disabled="!canRedo" @click="redo">重做</el-button>
+            <el-button @click="zoomCanvasOut">缩小</el-button>
+            <el-button @click="zoomCanvasIn">放大</el-button>
+            <el-button @click="fitCanvas">适应画布</el-button>
+            <el-button :disabled="!canEditDraft || nodes.length < 2" @click="autoLayout">
+              自动布局
+            </el-button>
+            <el-button
+              type="danger"
+              :disabled="!canEditDraft || selectedCount === 0"
+              @click="deleteSelectedElements"
+            >
+              删除所选
+            </el-button>
+          </div>
+
+          <div v-if="interactionMode === 'SELECT'" class="selection-guide">
+            空白处拖框选择，按住 Ctrl 可追加；已选 {{ selectedCount }} 项。
+          </div>
+
+          <section
+            v-if="props.lockDecisionType"
+            class="approval-ai-dock"
+            :class="{ collapsed: aiCollapsed }"
+            aria-label="审批 Workflow AI"
+          >
+            <div class="ai-dock-header">
+              <div>
+                <strong>Workflow AI</strong>
+                <span>{{ aiContextLabel }}</span>
+              </div>
+              <el-button text @click="aiCollapsed = !aiCollapsed">
+                {{ aiCollapsed ? '展开' : '收起' }}
+              </el-button>
+            </div>
+            <ApprovalWorkflowAIComposer
+              v-show="!aiCollapsed"
+              :factory-id="factoryId"
+              :context="aiContext"
+              :context-label="aiContextLabel"
+              :disabled="!canEditDraft || directoryLoading || Boolean(directoryError)"
+              :apply-spec="applyAiSpec"
+            />
+          </section>
+        </main>
+
+        <aside class="properties-panel" aria-label="属性设置">
+          <PropertyPanel
+            v-if="selectedElement"
+            :key="selectedElement.id"
+            :element="selectedElement"
+            :decision-type="selectedDecisionType"
+            :business-mode="props.lockDecisionType"
+            :read-only="!canEditDraft"
+            @update="onPropertyUpdate"
+            @delete="onDeleteSelected"
+            @manage-rules="openRulesPanel"
+          />
+          <div v-else class="property-empty">
+            <strong>属性设置</strong>
+            <span>选择一个 Cell 或连线后，在这里配置。</span>
+          </div>
+        </aside>
       </div>
 
-      <!-- Right: Property panel -->
-      <div class="properties-panel">
-        <PropertyPanel
-          v-if="selectedElement"
-          :key="selectedElement.id"
-          :element="selectedElement"
-          :decision-type="selectedDecisionType"
-          :business-mode="props.lockDecisionType"
-          @update="onPropertyUpdate"
-          @delete="onDeleteSelected"
-          @manage-rules="openRulesPanel"
-        />
-        <el-empty v-else description="点击节点或边查看属性" :image-size="80" />
-      </div>
-    </div>
+      <footer class="editor-status">
+        <span>{{ canEditDraft ? '当前为可编辑草稿' : '当前版本只读' }}</span>
+        <span>{{ nodes.length }} 个 Cell · {{ edges.length }} 条连线</span>
+        <span v-if="draftDirty">尚未保存</span>
+        <span v-else>已与当前版本同步</span>
+      </footer>
+    </template>
 
-    <!-- Simulator modal -->
     <WorkflowSimulator
       v-if="!props.lockDecisionType && simulatorOpen && simulatorInput"
       v-model="simulatorOpen"
@@ -187,7 +288,6 @@
       @traversal-update="onSimulatorTraversalUpdate"
     />
 
-    <!-- Sprint 4 Wave 1 (C-WF-RULE-1): WorkflowRule 管理 drawer -->
     <ConditionRulesPanel
       v-if="rulesPanelOpen && rulesPanelNodeId && currentWorkflow && factoryId && selectedDecisionType !== 'SALES_ORDER_APPROVAL'"
       v-model:visible="rulesPanelOpen"
@@ -202,11 +302,17 @@
 </template>
 
 <script setup lang="ts">
-import { markRaw, ref, computed, onMounted, watch } from 'vue'
-import { VueFlow, type Connection, type Node, type Edge, type NodeTypesObject } from '@vue-flow/core'
+import { markRaw, ref, computed, nextTick, onMounted, watch } from 'vue'
+import {
+  VueFlow,
+  SelectionMode,
+  useVueFlow,
+  type Connection,
+  type Node,
+  type Edge,
+  type NodeTypesObject,
+} from '@vue-flow/core'
 import { Background } from '@vue-flow/background'
-import { Controls } from '@vue-flow/controls'
-import { ArrowLeft, Download, Plus, Upload, View, VideoPlay } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { useAuthStore } from '@/store/modules/auth'
 import StartNode from './components/nodes/StartNode.vue'
@@ -217,22 +323,27 @@ import JoinNode from './components/nodes/JoinNode.vue'
 import NotifyNode from './components/nodes/NotifyNode.vue'
 import EndNode from './components/nodes/EndNode.vue'
 import PropertyPanel from './components/PropertyPanel.vue'
+import ApprovalWorkflowAIComposer from './components/ApprovalWorkflowAIComposer.vue'
 import WorkflowSimulator from './components/WorkflowSimulator.vue'
 import ConditionRulesPanel from './components/ConditionRulesPanel.vue'
 import { parseSalesApprovalAmountThreshold } from './lib/salesApprovalCondition'
+import { compileApprovalWorkflowAiDraft } from './lib/approvalWorkflowAi'
 import type { SimulatorInput } from './composables/useSimulator'
 import {
+  getApprovalDirectory,
   getDecisionTypes,
   getDecisionTypesMetadata,
   getWorkflowsByDecisionType,
   getWorkflowById,
   createWorkflow,
+  cloneWorkflowDraft,
   updateWorkflow,
   deleteWorkflow,
   publishWorkflow,
   archiveWorkflow,
   validateWorkflow,
   type ApprovalWorkflowDTO,
+  type ApprovalDirectory,
   type ApprovalWorkflowNode,
   type ApprovalWorkflowEdge as ApiEdge,
   type CreateWorkflowRequest,
@@ -243,7 +354,6 @@ import {
 
 import '@vue-flow/core/dist/style.css'
 import '@vue-flow/core/dist/theme-default.css'
-import '@vue-flow/controls/dist/style.css'
 
 // ==================== Props ====================
 
@@ -263,6 +373,7 @@ const emit = defineEmits<{
 
 const authStore = useAuthStore()
 const factoryId = computed(() => authStore.factoryId)
+const { fitView, zoomIn, zoomOut, screenToFlowCoordinate } = useVueFlow('approval-workflow-canvas')
 
 const selectedDecisionType = ref<DecisionType>(props.initialDecisionType ?? 'QUALITY_RELEASE')
 const workflowName = ref('')
@@ -273,6 +384,24 @@ const edges = ref<Edge[]>([])
 const currentWorkflow = ref<ApprovalWorkflowDTO | null>(null)
 const workflowList = ref<ApprovalWorkflowDTO[]>([])
 const selectedWorkflowId = ref<string | undefined>(undefined)
+const approvalSetupStarted = ref(false)
+const draftDirty = ref(false)
+const interactionMode = ref<'PAN' | 'SELECT'>('PAN')
+const aiCollapsed = ref(false)
+const approvalDirectory = ref<ApprovalDirectory>({ roles: [], users: [] })
+const directoryLoading = ref(false)
+const directoryError = ref('')
+
+interface EditorSnapshot {
+  workflowName: string
+  nodes: Node[]
+  edges: Edge[]
+}
+
+const undoHistory = ref<EditorSnapshot[]>([])
+const redoHistory = ref<EditorSnapshot[]>([])
+const canUndo = computed(() => undoHistory.value.length > 0)
+const canRedo = computed(() => redoHistory.value.length > 0)
 
 // Simulator modal state
 const simulatorOpen = ref(false)
@@ -399,18 +528,18 @@ interface PaletteSchema {
   type: NodeType
   displayName: string
   description: string
-  icon: string
+  shortLabel: string
   color: string
 }
 
 const nodeSchemas: PaletteSchema[] = [
-  { type: 'start',     displayName: '开始',   description: '工作流入口',            icon: '▶', color: '#67C23A' },
- { type: 'approval', displayName: '审批', description: '单签 / 会签节点', icon: '', color: '#409EFF' },
-  { type: 'condition', displayName: '条件',   description: 'SpEL 分支判断',          icon: '?', color: '#E6A23C' },
-  { type: 'parallel',  displayName: '并行',   description: '同时启动多分支',         icon: '⇉', color: '#909399' },
-  { type: 'join',      displayName: '汇聚',   description: 'ALL / N_OF_M / ANY',     icon: '⇇', color: '#909399' },
- { type: 'notify', displayName: '通知', description: '推 InAppNotification', icon: '', color: '#909399' },
-  { type: 'end',       displayName: '结束',   description: 'APPROVED / REJECTED',    icon: '■', color: '#F56C6C' },
+  { type: 'start', displayName: '开始', description: '流程入口', shortLabel: '始', color: '#2FA66A' },
+  { type: 'approval', displayName: '审批', description: '角色或指定人员', shortLabel: '审', color: '#409EFF' },
+  { type: 'condition', displayName: '条件', description: '金额、部门等分流', shortLabel: '判', color: '#D88900' },
+  { type: 'parallel', displayName: '并行审批', description: '多部门同时处理', shortLabel: '并', color: '#7657C8' },
+  { type: 'join', displayName: '汇聚', description: '等待分支完成', shortLabel: '汇', color: '#6B7788' },
+  { type: 'notify', displayName: '通知', description: '微信、钉钉或邮件', shortLabel: '通', color: '#4C6F8C' },
+  { type: 'end', displayName: '结束', description: '通过、拒绝或取消', shortLabel: '终', color: '#4A5568' },
 ]
 
 /**
@@ -453,8 +582,74 @@ const selectedDecisionTypeLabel = computed(() => (
   )?.chineseName ?? selectedDecisionType.value
 ))
 
-const canSave = computed(() => Boolean(workflowName.value && selectedDecisionType.value && nodes.value.length > 0))
+const showNoApproval = computed(() => (
+  Boolean(props.lockDecisionType)
+  && workflowList.value.length === 0
+  && !approvalSetupStarted.value
+))
+const runtimeApprovalEnabled = computed(() => workflowList.value.some((workflow) => (
+  workflow.publishStatus === 'published' && workflow.enabled
+)))
+const readOnlyWorkflow = computed(() => (
+  currentWorkflow.value?.publishStatus === 'published'
+  || currentWorkflow.value?.publishStatus === 'archived'
+))
+const canEditDraft = computed(() => !showNoApproval.value && !readOnlyWorkflow.value)
+const canSave = computed(() => Boolean(
+  canEditDraft.value
+  && workflowName.value
+  && selectedDecisionType.value
+  && nodes.value.length > 0,
+))
 const canPublish = computed(() => currentWorkflow.value?.publishStatus === 'draft')
+const selectedNodes = computed(() => nodes.value.filter((node) => (
+  Boolean((node as Node & { selected?: boolean }).selected)
+)))
+const selectedEdges = computed(() => edges.value.filter((edge) => (
+  Boolean((edge as Edge & { selected?: boolean }).selected)
+)))
+const selectedCount = computed(() => selectedNodes.value.length + selectedEdges.value.length)
+const aiContextLabel = computed(() => {
+  if (selectedNodes.value.length === 1 && selectedEdges.value.length === 0) {
+    return `当前范围：${String(selectedNodes.value[0].data?.label ?? '已选 Cell')}`
+  }
+  if (selectedCount.value > 0) {
+    return `当前范围：已选 ${selectedCount.value} 项`
+  }
+  return `当前范围：${selectedDecisionTypeLabel.value} 整个画布`
+})
+const aiContext = computed<Record<string, unknown>>(() => ({
+  decisionType: selectedDecisionType.value,
+  selectedNodeIds: selectedNodes.value.map((node) => node.id),
+  selectedEdgeIds: selectedEdges.value.map((edge) => edge.id),
+  workflow: {
+    name: workflowName.value,
+    startNodeId: nodes.value.find((node) => node.type === 'start')?.id ?? '',
+    nodes: nodes.value.map((node) => ({
+      id: node.id,
+      type: node.type,
+      label: node.data?.label,
+      config: node.data?.config ?? {},
+    })),
+    edges: edges.value.map((edge) => ({
+      id: edge.id,
+      source: edge.source,
+      target: edge.target,
+      label: edge.label ?? '',
+      priority: edge.data?.priority ?? 0,
+      condition: edge.data?.condition ?? '',
+    })),
+  },
+  roles: approvalDirectory.value.roles.map((role) => ({
+    code: role.name,
+    label: role.displayName,
+  })),
+  users: approvalDirectory.value.users.map((user) => ({
+    id: String(user.id),
+    username: user.username,
+    name: user.fullName || user.realName || user.username,
+  })),
+}))
 
 const publishStatusType = computed<'success' | 'warning' | 'info'>(() => {
   if (!currentWorkflow.value) return 'info'
@@ -472,6 +667,355 @@ const publishStatusLabel = computed(() => {
   return map[currentWorkflow.value.publishStatus] ?? currentWorkflow.value.publishStatus
 })
 
+function workflowVersionLabel(workflow: ApprovalWorkflowDTO) {
+  const status = workflow.publishStatus === 'draft'
+    ? '草稿'
+    : workflow.publishStatus === 'published' && workflow.enabled
+      ? '运行中'
+      : workflow.publishStatus === 'published'
+        ? '已停用'
+        : '历史版本'
+  return `${workflow.name} · v${workflow.version} · ${status}`
+}
+
+function cloneValue<T>(value: T): T {
+  return JSON.parse(JSON.stringify(value)) as T
+}
+
+function currentSnapshot(): EditorSnapshot {
+  return {
+    workflowName: workflowName.value,
+    nodes: cloneValue(nodes.value),
+    edges: cloneValue(edges.value),
+  }
+}
+
+function restoreSnapshot(snapshot: EditorSnapshot) {
+  workflowName.value = snapshot.workflowName
+  nodes.value = cloneValue(snapshot.nodes)
+  edges.value = cloneValue(snapshot.edges)
+  selectedElement.value = null
+  draftDirty.value = true
+}
+
+function captureHistory() {
+  if (!canEditDraft.value) return
+  const snapshot = currentSnapshot()
+  const serialized = JSON.stringify(snapshot)
+  const last = undoHistory.value.at(-1)
+  if (!last || JSON.stringify(last) !== serialized) {
+    undoHistory.value.push(snapshot)
+    if (undoHistory.value.length > 50) undoHistory.value.shift()
+  }
+  redoHistory.value = []
+}
+
+function markDraftChanged() {
+  if (canEditDraft.value) draftDirty.value = true
+}
+
+function undo() {
+  const previous = undoHistory.value.pop()
+  if (!previous) return
+  redoHistory.value.push(currentSnapshot())
+  restoreSnapshot(previous)
+}
+
+function redo() {
+  const next = redoHistory.value.pop()
+  if (!next) return
+  undoHistory.value.push(currentSnapshot())
+  restoreSnapshot(next)
+}
+
+async function zoomCanvasIn() {
+  await zoomIn({ duration: 180 })
+}
+
+async function zoomCanvasOut() {
+  await zoomOut({ duration: 180 })
+}
+
+async function fitCanvas() {
+  await fitView({ padding: 0.16, duration: 260, maxZoom: 1.1 })
+}
+
+async function autoLayout() {
+  if (!canEditDraft.value || nodes.value.length < 2) return
+  captureHistory()
+  const indegree = new Map(nodes.value.map((node) => [node.id, 0]))
+  const outgoing = new Map(nodes.value.map((node) => [node.id, [] as string[]]))
+  edges.value.forEach((edge) => {
+    indegree.set(edge.target, (indegree.get(edge.target) ?? 0) + 1)
+    outgoing.get(edge.source)?.push(edge.target)
+  })
+  const queue = [...indegree.entries()].filter(([, degree]) => degree === 0).map(([id]) => id)
+  const level = new Map<string, number>()
+  queue.forEach((id) => level.set(id, 0))
+  while (queue.length) {
+    const id = queue.shift()!
+    outgoing.get(id)?.forEach((target) => {
+      level.set(target, Math.max(level.get(target) ?? 0, (level.get(id) ?? 0) + 1))
+      const nextDegree = (indegree.get(target) ?? 0) - 1
+      indegree.set(target, nextDegree)
+      if (nextDegree === 0) queue.push(target)
+    })
+  }
+  const byLevel = new Map<number, Node[]>()
+  nodes.value.forEach((node) => {
+    const nodeLevel = level.get(node.id) ?? 0
+    const group = byLevel.get(nodeLevel) ?? []
+    group.push(node)
+    byLevel.set(nodeLevel, group)
+  })
+  nodes.value = nodes.value.map((node) => {
+    const nodeLevel = level.get(node.id) ?? 0
+    const group = byLevel.get(nodeLevel) ?? []
+    const index = group.findIndex((candidate) => candidate.id === node.id)
+    const width = Math.max(1, group.length - 1) * 240
+    return {
+      ...node,
+      position: {
+        x: 420 + index * 240 - width / 2,
+        y: 60 + nodeLevel * 150,
+      },
+    }
+  })
+  draftDirty.value = true
+  await nextTick()
+  await fitCanvas()
+}
+
+function hasPath(from: string, to: string): boolean {
+  const outgoing = new Map<string, string[]>()
+  edges.value.forEach((edge) => {
+    const targets = outgoing.get(edge.source) ?? []
+    targets.push(edge.target)
+    outgoing.set(edge.source, targets)
+  })
+  const stack = [from]
+  const visited = new Set<string>()
+  while (stack.length) {
+    const id = stack.pop()!
+    if (id === to) return true
+    if (visited.has(id)) continue
+    visited.add(id)
+    stack.push(...(outgoing.get(id) ?? []))
+  }
+  return false
+}
+
+function isValidConnection(connection: Connection): boolean {
+  if (!canEditDraft.value || !connection.source || !connection.target) return false
+  if (connection.source === connection.target) return false
+  // VueFlow also calls this hook while normalizing an existing batch of
+  // edges. Ignore that edge itself, while continuing to reject a second
+  // manual connection between the same pair of cells.
+  const connectionId = 'id' in connection ? String(connection.id ?? '') : ''
+  if (edges.value.some((edge) => (
+    edge.id !== connectionId
+    && edge.source === connection.source
+    && edge.target === connection.target
+  ))) return false
+  const sourceNode = nodes.value.find((node) => node.id === connection.source)
+  const targetNode = nodes.value.find((node) => node.id === connection.target)
+  if (sourceNode?.type === 'end' || targetNode?.type === 'start') return false
+  return !hasPath(connection.target, connection.source)
+}
+
+function onPaneClick() {
+  selectedElement.value = null
+  nodes.value = nodes.value.map((node) => ({ ...node, selected: false }))
+  edges.value = edges.value.map((edge) => ({ ...edge, selected: false }))
+}
+
+function onSelectionEnd() {
+  if (selectedNodes.value.length === 1 && selectedEdges.value.length === 0) {
+    onNodeClick({ node: selectedNodes.value[0] })
+  } else if (selectedEdges.value.length === 1 && selectedNodes.value.length === 0) {
+    onEdgeClick({ edge: selectedEdges.value[0] })
+  } else if (selectedCount.value !== 1) {
+    selectedElement.value = null
+  }
+}
+
+function deleteSelectedElements() {
+  if (!canEditDraft.value || selectedCount.value === 0) return
+  captureHistory()
+  const nodeIds = new Set(selectedNodes.value.map((node) => node.id))
+  const edgeIds = new Set(selectedEdges.value.map((edge) => edge.id))
+  nodes.value = nodes.value.filter((node) => node.type === 'start' || !nodeIds.has(node.id))
+  edges.value = edges.value.filter((edge) => (
+    !edgeIds.has(edge.id) && !nodeIds.has(edge.source) && !nodeIds.has(edge.target)
+  ))
+  selectedElement.value = null
+  draftDirty.value = true
+}
+
+function createDefaultDraft() {
+  const defaultRoles = decisionTypeMetadata.value.find(
+    (item) => item.decisionType === selectedDecisionType.value,
+  )?.defaultApproverRoles ?? []
+  const timestamp = Date.now()
+  nodes.value = [
+    {
+      id: `start_${timestamp}`,
+      type: 'start',
+      position: { x: 420, y: 40 },
+      data: { label: '开始', nodeType: 'start', config: {} },
+    },
+    {
+      id: `approval_${timestamp}`,
+      type: 'approval',
+      position: { x: 420, y: 200 },
+      data: {
+        label: '主管审批',
+        nodeType: 'approval',
+        config: { approverRoles: defaultRoles, requiredApprovers: 1, timeoutMinutes: 0 },
+      },
+    },
+    {
+      id: `end_${timestamp}`,
+      type: 'end',
+      position: { x: 420, y: 360 },
+      data: { label: '审批通过', nodeType: 'end', config: { outcome: 'APPROVED' } },
+    },
+  ]
+  edges.value = [
+    {
+      id: `edge_start_${timestamp}`,
+      source: `start_${timestamp}`,
+      target: `approval_${timestamp}`,
+      data: { priority: 0 },
+    },
+    {
+      id: `edge_end_${timestamp}`,
+      source: `approval_${timestamp}`,
+      target: `end_${timestamp}`,
+      data: { priority: 0 },
+    },
+  ]
+  workflowName.value = `${selectedDecisionTypeLabel.value}流程`
+  currentWorkflow.value = null
+  selectedWorkflowId.value = undefined
+  selectedElement.value = null
+  undoHistory.value = []
+  redoHistory.value = []
+  draftDirty.value = true
+}
+
+function enableApprovalDraft() {
+  approvalSetupStarted.value = true
+  createDefaultDraft()
+}
+
+async function cloneCurrentAsDraft() {
+  if (!factoryId.value || !currentWorkflow.value?.id || saving.value) return
+  saving.value = true
+  try {
+    const response = await cloneWorkflowDraft(factoryId.value, currentWorkflow.value.id)
+    if (!response.success || !response.data) {
+      ElMessage.error(response.message || '克隆草稿失败')
+      return
+    }
+    approvalSetupStarted.value = true
+    workflowList.value = [
+      response.data,
+      ...workflowList.value.filter((workflow) => workflow.id !== response.data?.id),
+    ]
+    selectedWorkflowId.value = response.data.id
+    await loadWorkflow(response.data.id, true)
+    ElMessage.success('已克隆为独立草稿，运行版本不受影响')
+  } catch (error) {
+    console.error('[clone approval workflow draft failed]', error)
+    ElMessage.error('克隆草稿失败')
+  } finally {
+    saving.value = false
+  }
+}
+
+async function loadApprovalAiDirectory() {
+  if (!factoryId.value || !props.lockDecisionType) return
+  directoryLoading.value = true
+  directoryError.value = ''
+  try {
+    approvalDirectory.value = await getApprovalDirectory(factoryId.value)
+  } catch (error) {
+    directoryError.value = error instanceof Error ? error.message : '审批目录加载失败'
+  } finally {
+    directoryLoading.value = false
+  }
+}
+
+async function applyAiSpec(spec: unknown): Promise<boolean> {
+  if (!canEditDraft.value) return false
+  try {
+    const draft = compileApprovalWorkflowAiDraft({
+      spec,
+      currentName: workflowName.value,
+      currentNodes: nodes.value.map((node) => ({
+        id: node.id,
+        type: (node.type ?? 'approval') as NodeType,
+        label: String(node.data?.label ?? node.id),
+        position: { x: node.position.x, y: node.position.y },
+        config: (node.data?.config as Record<string, unknown>) ?? {},
+      })),
+      currentEdges: edges.value.map((edge) => ({
+        id: edge.id,
+        source: edge.source,
+        target: edge.target,
+        label: edge.label ? String(edge.label) : undefined,
+        condition: (edge.data?.condition as string) || undefined,
+        priority: Number(edge.data?.priority ?? 0),
+      })),
+      decisionType: selectedDecisionType.value,
+      directory: approvalDirectory.value,
+    })
+    captureHistory()
+    workflowName.value = draft.name
+    // VueFlow validates edge endpoints as soon as the edge model changes.
+    // When an AI edit replaces stable IDs across the whole graph, register
+    // the new cells first; otherwise edges are checked against the previous
+    // node set and silently discarded as dangling connections.
+    edges.value = []
+    nodes.value = draft.nodes.map((node) => ({
+      id: node.id,
+      type: node.type,
+      position: { x: node.position?.x ?? 0, y: node.position?.y ?? 0 },
+      data: {
+        label: node.label ?? node.id,
+        nodeType: node.type,
+        config: node.config ?? {},
+      },
+    }))
+    await nextTick()
+    edges.value = draft.edges.map((edge) => ({
+      id: edge.id,
+      source: edge.source,
+      target: edge.target,
+      label: edge.label ?? '',
+      data: { condition: edge.condition ?? '', priority: edge.priority ?? 0 },
+    }))
+    selectedElement.value = null
+    draftDirty.value = true
+    await nextTick()
+    await autoLayoutWithoutHistory()
+    return true
+  } catch (error) {
+    ElMessage.error(error instanceof Error ? error.message : 'AI 草稿无法应用')
+    return false
+  }
+}
+
+async function autoLayoutWithoutHistory() {
+  const previousUndo = undoHistory.value
+  const beforeLength = previousUndo.length
+  await autoLayout()
+  if (undoHistory.value.length > beforeLength) {
+    undoHistory.value.splice(beforeLength, 1)
+  }
+}
+
 // ==================== Handlers ====================
 
 async function onDecisionTypeChange() {
@@ -480,6 +1024,10 @@ async function onDecisionTypeChange() {
 }
 
 function onPaletteDragStart(event: DragEvent, schema: PaletteSchema) {
+  if (!canEditDraft.value) {
+    event.preventDefault()
+    return
+  }
   if (event.dataTransfer) {
     event.dataTransfer.setData('application/vueflow', JSON.stringify(schema))
     event.dataTransfer.effectAllowed = 'move'
@@ -487,33 +1035,45 @@ function onPaletteDragStart(event: DragEvent, schema: PaletteSchema) {
 }
 
 function onCanvasDrop(event: DragEvent) {
+  if (!canEditDraft.value) return
   const raw = event.dataTransfer?.getData('application/vueflow')
   if (!raw) return
   const schema: PaletteSchema = JSON.parse(raw)
-  const canvasRect = (event.currentTarget as HTMLElement).getBoundingClientRect()
-  const position = {
-    x: event.clientX - canvasRect.left,
-    y: event.clientY - canvasRect.top,
-  }
+  const position = screenToFlowCoordinate({ x: event.clientX, y: event.clientY })
+  addPaletteNode(schema, position)
+}
+
+function addPaletteNode(schema: PaletteSchema, position?: { x: number; y: number }) {
+  if (!canEditDraft.value) return
   // Enforce singleton for start (only one entry node allowed).
   if (schema.type === 'start' && nodes.value.some(n => n.type === 'start')) {
     ElMessage.warning('工作流只能有一个 start 节点')
     return
   }
+  captureHistory()
   const id = `${schema.type}_${Date.now()}`
   nodes.value.push({
     id,
     type: schema.type,
-    position,
+    position: position ?? {
+      x: 320 + (nodes.value.length % 2) * 240,
+      y: 100 + Math.floor(nodes.value.length / 2) * 140,
+    },
     data: {
       label: schema.displayName,
       nodeType: schema.type,
       config: defaultConfigFor(schema.type),
     },
   })
+  draftDirty.value = true
 }
 
 function onConnect(connection: Connection) {
+  if (!isValidConnection(connection)) {
+    ElMessage.warning('这条连线会重复、回到自身或形成循环')
+    return
+  }
+  captureHistory()
   const id = `e_${Date.now()}`
   edges.value.push({
     id,
@@ -524,6 +1084,7 @@ function onConnect(connection: Connection) {
     label: '',
     data: { condition: '', priority: 0 },
   })
+  draftDirty.value = true
 }
 
 function onNodeClick({ node }: { node: Node }) {
@@ -556,7 +1117,8 @@ function onEdgeClick({ edge }: { edge: Edge }) {
 
 /** Property panel emits new data — apply to nodes/edges array. */
 function onPropertyUpdate(newData: Record<string, unknown>) {
-  if (!selectedElement.value) return
+  if (!selectedElement.value || !canEditDraft.value) return
+  captureHistory()
   const sel = selectedElement.value
   if (sel.kind === 'node') {
     const idx = nodes.value.findIndex(n => n.id === sel.id)
@@ -583,23 +1145,27 @@ function onPropertyUpdate(newData: Record<string, unknown>) {
     }
   }
   sel.data = { ...newData }
+  draftDirty.value = true
 }
 
 function onDeleteSelected() {
-  if (!selectedElement.value) return
+  if (!selectedElement.value || !canEditDraft.value) return
   const sel = selectedElement.value
   if (sel.kind === 'node') {
     if (sel.type === 'start') {
       ElMessage.warning('start 节点不可删除 (工作流入口)')
       return
     }
+    captureHistory()
     nodes.value = nodes.value.filter(n => n.id !== sel.id)
     // 删除所有以此 node 为端点的边
     edges.value = edges.value.filter(e => e.source !== sel.id && e.target !== sel.id)
   } else {
+    captureHistory()
     edges.value = edges.value.filter(e => e.id !== sel.id)
   }
   selectedElement.value = null
+  draftDirty.value = true
 }
 
 /** Serialize current VueFlow graph state → CreateWorkflowRequest wire shape. */
@@ -664,7 +1230,8 @@ async function handleSave() {
       const res = await updateWorkflow(factoryId.value, currentWorkflow.value.id, payload)
       if (res.success && res.data) {
         currentWorkflow.value = res.data
-        ElMessage.success('已保存 (草稿)')
+        draftDirty.value = false
+        ElMessage.success('草稿已保存')
         await refreshWorkflowList()
       } else {
         ElMessage.error(res.message ?? '保存失败')
@@ -675,6 +1242,7 @@ async function handleSave() {
       if (res.success && res.data) {
         currentWorkflow.value = res.data
         selectedWorkflowId.value = res.data.id
+        draftDirty.value = false
         ElMessage.success('草稿已创建')
         await refreshWorkflowList()
       } else {
@@ -692,8 +1260,8 @@ async function handlePublish() {
   if (!factoryId.value || !currentWorkflow.value?.id) return
   try {
     await ElMessageBox.confirm(
-      '发布后, 同 decisionType 的新审批实例将走这个 graph workflow. 确认?',
-      '发布工作流',
+      '发布后，新提交的业务将使用此审批流程；正在审批的单据仍按原版本运行。',
+      '发布并启用审批',
       { type: 'warning' },
     )
   } catch {
@@ -703,7 +1271,8 @@ async function handlePublish() {
     const res = await publishWorkflow(factoryId.value, currentWorkflow.value.id)
     if (res.success && res.data) {
       currentWorkflow.value = res.data
-      ElMessage.success('工作流已发布')
+      draftDirty.value = false
+      ElMessage.success('审批流程已发布并启用')
       await refreshWorkflowList()
     } else {
       ElMessage.error(res.message ?? '发布失败')
@@ -717,8 +1286,8 @@ async function handleArchive() {
   if (!factoryId.value || !currentWorkflow.value?.id) return
   try {
     await ElMessageBox.confirm(
-      '归档后, 该工作流不再被 executor 选中. 已运行实例不受影响. 确认?',
-      '归档工作流',
+      '停用后，新业务将不再进入此审批流程；在途审批不受影响。',
+      '停用审批',
       { type: 'warning' },
     )
   } catch {
@@ -727,7 +1296,7 @@ async function handleArchive() {
   const res = await archiveWorkflow(factoryId.value, currentWorkflow.value.id)
   if (res.success && res.data) {
     currentWorkflow.value = res.data
-    ElMessage.success('已归档')
+    ElMessage.success('审批已停用')
     await refreshWorkflowList()
   } else {
     ElMessage.error(res.message ?? '归档失败')
@@ -738,8 +1307,8 @@ async function handleDelete() {
   if (!factoryId.value || !currentWorkflow.value?.id) return
   try {
     await ElMessageBox.confirm(
-      `确定删除工作流 "${currentWorkflow.value.name}" ? (软删除可恢复, 但 UI 上不再显示)`,
-      '删除工作流',
+      `确定删除草稿“${currentWorkflow.value.name}”吗？已发布的运行版本不受影响。`,
+      '删除草稿',
       { type: 'error' },
     )
   } catch {
@@ -793,6 +1362,9 @@ function resetEditor() {
   selectedWorkflowId.value = undefined
   workflowName.value = ''
   selectedElement.value = null
+  undoHistory.value = []
+  redoHistory.value = []
+  draftDirty.value = false
 }
 
 /** Load list of workflows for the currently selected decisionType. */
@@ -802,6 +1374,11 @@ async function refreshWorkflowList() {
     const res = await getWorkflowsByDecisionType(factoryId.value, selectedDecisionType.value)
     if (res.success && res.data) {
       workflowList.value = res.data
+      if (res.data.length === 0) {
+        resetEditor()
+        approvalSetupStarted.value = false
+        return
+      }
       const requested = props.initialWorkflowId
         ? res.data.find((workflow) => workflow.id === props.initialWorkflowId)
         : undefined
@@ -867,6 +1444,10 @@ async function loadWorkflow(id: string | undefined, silent: boolean) {
       selectedDecisionType.value = res.data.decisionType
       deserializeGraph(res.data)
       selectedElement.value = null
+      approvalSetupStarted.value = true
+      undoHistory.value = []
+      redoHistory.value = []
+      draftDirty.value = false
       if (!silent) {
         ElMessage.success(`已加载: ${res.data.name} v${res.data.version}`)
       }
@@ -917,6 +1498,7 @@ onMounted(async () => {
     await Promise.all([
       loadDecisionTypeMetadata(),
       getDecisionTypes(factoryId.value).catch((): undefined => undefined),
+      loadApprovalAiDirectory(),
     ])
     await refreshWorkflowList()
   } catch (e) {
@@ -986,11 +1568,17 @@ onMounted(async () => {
 
 .palette-node {
   display: flex; align-items: center; gap: 8px;
+  width: 100%; text-align: left; background: #fff; color: inherit; font: inherit;
   padding: 8px; margin-bottom: 4px;
   border: 1px solid #e4e7ed; border-radius: 6px;
   cursor: grab; transition: border-color 0.2s, background-color 0.2s;
 }
 .palette-node:hover { border-color: #409EFF; background: #f0f7ff; }
+.palette-node:focus-visible {
+  outline: 2px solid #409eff;
+  outline-offset: 2px;
+}
+.palette-node:disabled { cursor: not-allowed; opacity: 0.55; }
 .palette-icon {
   width: 28px; height: 28px; border-radius: 6px; flex-shrink: 0;
   display: flex; align-items: center; justify-content: center;
@@ -1033,5 +1621,304 @@ onMounted(async () => {
 @keyframes sim-pulse {
   0%, 100% { box-shadow: 0 0 0 2px #e6a23c; }
   50% { box-shadow: 0 0 0 6px rgba(230, 162, 60, 0.4); }
+}
+
+.approval-workflow-editor {
+  min-height: 680px;
+  padding: 12px;
+  background: #f4f6f9;
+  color: #1a2332;
+}
+
+.approval-workflow-editor.embedded {
+  height: calc(100vh - 60px);
+}
+
+.header-card {
+  border-color: #edf2f7;
+  border-radius: 10px;
+}
+
+.business-context {
+  margin-bottom: 10px;
+  border-color: #d9e5f2;
+  background: #f3f8fe;
+}
+
+.header-row {
+  gap: 12px;
+}
+
+.header-left {
+  min-width: 200px;
+}
+
+.header-left > strong {
+  overflow: hidden;
+  max-width: 300px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.header-actions {
+  flex: 1;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.draft-dirty {
+  color: #d88900;
+  font-size: 12px;
+}
+
+.no-approval-state {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  justify-content: space-between;
+  gap: 32px;
+  min-height: 360px;
+  padding: 48px;
+  border: 1px solid #edf2f7;
+  border-radius: 10px;
+  background: #fff;
+}
+
+.no-approval-copy {
+  max-width: 680px;
+}
+
+.no-approval-copy h2 {
+  margin: 12px 0 8px;
+  font-size: 24px;
+}
+
+.no-approval-copy p {
+  margin: 0;
+  color: #7a8599;
+  line-height: 1.7;
+}
+
+.no-approval-label {
+  display: inline-flex;
+  padding: 5px 10px;
+  border-radius: 999px;
+  background: #eef1f5;
+  color: #5d6879;
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.editor-body {
+  position: relative;
+  gap: 10px;
+}
+
+.palette,
+.properties-panel {
+  border-color: #edf2f7;
+  border-radius: 10px;
+  box-shadow: 0 3px 10px rgb(31 62 92 / 5%);
+}
+
+.palette {
+  width: 190px;
+}
+
+.palette > p {
+  margin: -4px 0 12px;
+  color: #7a8599;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.panel-title-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.panel-title-row h4 {
+  margin-bottom: 8px;
+}
+
+.panel-title-row span {
+  color: #7a8599;
+  font-size: 12px;
+}
+
+.palette-node {
+  min-height: 52px;
+  margin-bottom: 7px;
+  padding: 8px 9px;
+  border-color: #edf2f7;
+}
+
+.palette-node.disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.palette-badge {
+  display: inline-flex;
+  width: 28px;
+  height: 28px;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  border-radius: 7px;
+  color: #fff;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.canvas-container {
+  position: relative;
+  min-width: 0;
+  min-height: 520px;
+  overflow: hidden;
+  border-color: #dfe7f0;
+  border-radius: 10px;
+  background: #fbfcfe;
+}
+
+.canvas-text-tools {
+  position: absolute;
+  z-index: 8;
+  top: 10px;
+  right: 10px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  max-width: calc(100% - 20px);
+  padding: 5px;
+  border: 1px solid #d9e5f2;
+  border-radius: 9px;
+  background: rgb(255 255 255 / 96%);
+  box-shadow: 0 4px 12px rgb(31 62 92 / 11%);
+}
+
+.canvas-text-tools :deep(.el-button + .el-button) {
+  margin-left: 0;
+}
+
+.selection-guide {
+  position: absolute;
+  z-index: 7;
+  top: 62px;
+  right: 12px;
+  padding: 6px 9px;
+  border-radius: 6px;
+  background: rgb(27 101 168 / 88%);
+  color: #fff;
+  font-size: 12px;
+}
+
+.approval-ai-dock {
+  position: absolute;
+  z-index: 9;
+  right: 50%;
+  bottom: 14px;
+  width: min(720px, calc(100% - 44px));
+  transform: translateX(50%);
+}
+
+.approval-ai-dock.collapsed {
+  width: auto;
+}
+
+.ai-dock-header {
+  display: flex;
+  width: max-content;
+  max-width: 100%;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin: 0 auto 6px;
+  padding: 5px 10px 5px 12px;
+  border: 1px solid #d9e5f2;
+  border-radius: 999px;
+  background: #fff;
+  box-shadow: 0 4px 12px rgb(31 62 92 / 12%);
+}
+
+.ai-dock-header > div {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 8px;
+}
+
+.ai-dock-header span {
+  overflow: hidden;
+  max-width: 360px;
+  color: #7a8599;
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.properties-panel {
+  width: 330px;
+  padding: 0;
+}
+
+.property-empty {
+  display: flex;
+  min-height: 180px;
+  align-items: center;
+  justify-content: center;
+  flex-direction: column;
+  gap: 6px;
+  padding: 24px;
+  text-align: center;
+}
+
+.property-empty span {
+  color: #7a8599;
+  font-size: 12px;
+}
+
+.editor-status {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 16px;
+  min-height: 34px;
+  margin-top: 8px;
+  padding: 0 12px;
+  border: 1px solid #edf2f7;
+  border-radius: 8px;
+  background: #fff;
+  color: #7a8599;
+  font-size: 12px;
+}
+
+:deep(.vue-flow__node.selected) {
+  box-shadow: 0 0 0 2px #409eff, 0 4px 12px rgb(31 62 92 / 16%) !important;
+}
+
+:deep(.vue-flow__edge.selected .vue-flow__edge-path) {
+  stroke: #409eff !important;
+  stroke-width: 3px !important;
+}
+
+@media (max-width: 1360px) {
+  .palette {
+    width: 168px;
+  }
+
+  .properties-panel {
+    width: 300px;
+  }
+
+  .header-actions {
+    justify-content: flex-start;
+  }
+
+  .header-row {
+    align-items: flex-start;
+    flex-direction: column;
+  }
 }
 </style>

@@ -3,7 +3,7 @@
     <!-- Node properties -->
     <template v-if="kind === 'node'">
       <h4>{{ nodeTypeLabel }} 属性</h4>
-      <el-form label-position="top" size="small" @submit.prevent>
+      <el-form label-position="top" size="small" :disabled="props.readOnly" @submit.prevent>
         <div
           v-if="directoryError && (nodeType === 'approval' || nodeType === 'notify')"
           class="directory-error"
@@ -17,8 +17,8 @@
           />
           <el-button size="small" plain @click="loadApprovalDirectory(true)">重新加载</el-button>
         </div>
-        <!-- Common: label -->
-        <el-form-item label="显示名">
+        <div class="section-heading">基础配置</div>
+        <el-form-item label="显示名称">
           <el-input v-model="localData.label" @change="emitUpdate" placeholder="节点标签" />
         </el-form-item>
 
@@ -46,7 +46,7 @@
                 </div>
               </el-option>
             </el-select>
-            <div class="hint">可多选；候选项来自当前工厂角色目录，不能手工新增。</div>
+            <div class="hint">从当前工厂角色目录选择，不能手工输入角色代码。</div>
           </el-form-item>
           <el-form-item label="指定审批人（可选）">
             <el-select-v2
@@ -60,91 +60,96 @@
             />
             <div class="hint">明确指定人员优先用于精确路由；未指定时按上方角色匹配。</div>
           </el-form-item>
-          <el-alert
-            class="self-approval-note"
-            type="info"
-            :closable="false"
-            show-icon
-            title="自审规则"
-            description="只有“指定审批人”明确包含发起人本人时才允许自审；仅角色相同不会放开自审。"
-          />
-          <el-form-item label="必需审批人数 (≥2 即会签)">
+          <el-form-item label="必需审批人数">
             <el-input-number
               v-model="requiredApprovers"
               :min="1" :max="20"
               @change="(v: number | undefined) => syncConfig({ requiredApprovers: v ?? 1 })"
             />
+            <div class="hint">填写 2 人及以上时按会签处理。</div>
           </el-form-item>
-          <el-form-item label="超时 (分钟, 0 = 不超时)">
-            <el-input-number
-              v-model="timeoutMinutes"
-              :min="0" :step="30"
-              @change="(v: number | undefined) => syncConfig({ timeoutMinutes: v ?? 0 })"
+
+          <button
+            type="button"
+            class="advanced-toggle"
+            :aria-expanded="advancedOpen"
+            @click="advancedOpen = !advancedOpen"
+          >
+            {{ advancedOpen ? '收起高级配置' : '展开高级配置' }}
+          </button>
+          <div v-show="advancedOpen" class="advanced-section">
+            <div class="section-heading">高级配置</div>
+            <el-alert
+              class="self-approval-note"
+              type="info"
+              :closable="false"
+              title="自审规则"
+              description="只有“指定审批人”明确包含发起人本人时才允许自审；仅角色相同不会放开自审。"
             />
-          </el-form-item>
-          <!-- Phase 1 B.5 Task 1: 部门选择器 (可选) -->
-          <el-form-item label="部门 (可选)">
-            <el-select
-              v-model="departmentIds"
-              multiple filterable clearable
-              placeholder="选择审批所属部门 (限定审批人范围)"
-              :loading="deptLoading"
-              :disabled="Boolean(deptError)"
-              style="width: 100%"
-              @change="(v: number[]) => syncConfig({ departmentIds: v })"
-            >
-              <el-option
-                v-for="dept in deptOptions"
-                :key="dept.id"
-                :label="dept.name"
-                :value="dept.id"
+            <el-form-item label="审批时限（分钟）">
+              <el-input-number
+                v-model="timeoutMinutes"
+                :min="0" :step="30"
+                @change="(v: number | undefined) => syncConfig({ timeoutMinutes: v ?? 0 })"
               />
-            </el-select>
-            <div class="hint">仅这些部门下的角色用户可审批; 留空 = 全工厂范围</div>
-            <div v-if="deptError" class="hint warn">
-              部门目录加载失败。
-              <el-button link type="warning" @click="loadDepartments">重新加载</el-button>
-            </div>
-          </el-form-item>
-          <!-- Phase 1 B.5 Task 2: 委托人 (可选) -->
-          <el-form-item label="委托人 (可选 — 主审超时后转派)">
-            <el-select-v2
-              v-model="delegateUserId"
-              filterable clearable
-              :options="delegateUserOptions"
-              :loading="directoryLoading"
-              :disabled="Boolean(directoryError)"
-              placeholder="请选择超时转派人员…"
-              style="width: 100%"
+              <div class="hint">填写 0 表示不设置超时。</div>
+            </el-form-item>
+            <el-form-item label="限定部门（可选）">
+              <el-select
+                v-model="departmentIds"
+                multiple filterable clearable
+                placeholder="选择审批人所属部门"
+                :loading="deptLoading"
+                :disabled="Boolean(deptError) || props.readOnly"
+                style="width: 100%"
+                @change="(v: number[]) => syncConfig({ departmentIds: v })"
+              >
+                <el-option
+                  v-for="dept in deptOptions"
+                  :key="dept.id"
+                  :label="dept.name"
+                  :value="dept.id"
+                />
+              </el-select>
+              <div class="hint">留空表示全工厂范围。</div>
+              <div v-if="deptError" class="hint warn">
+                部门目录加载失败。
+                <el-button link type="warning" @click="loadDepartments">重新加载</el-button>
+              </div>
+            </el-form-item>
+            <el-form-item label="超时转派（可选）">
+              <el-select-v2
+                v-model="delegateUserId"
+                filterable clearable
+                :options="delegateUserOptions"
+                :loading="directoryLoading"
+                :disabled="Boolean(directoryError) || props.readOnly"
+                placeholder="请选择转派人员…"
+                style="width: 100%"
+              />
+              <div class="hint">审批超时后转派给当前工厂的有效人员。</div>
+            </el-form-item>
+            <template v-if="!props.businessMode">
+              <el-form-item label="自动通过条件">
+                <el-input
+                  v-model="autoApproveCondition"
+                  @change="syncConfig({ autoApproveCondition })"
+                />
+              </el-form-item>
+              <el-form-item label="自动拒绝条件">
+                <el-input
+                  v-model="autoRejectCondition"
+                  @change="syncConfig({ autoRejectCondition })"
+                />
+              </el-form-item>
+            </template>
+            <el-alert
+              v-else-if="hasAdvancedApprovalConditions"
+              type="warning"
+              :closable="false"
+              title="此节点包含平台级自动判断，业务页面仅保留不展示。"
             />
-            <div class="hint">主审超时后自动转派；只能选择当前工厂的有效人员。</div>
-          </el-form-item>
-          <template v-if="!props.businessMode">
-            <el-form-item label="自动通过条件 (SpEL)">
-              <el-input
-                v-model="autoApproveCondition"
-                placeholder="如: #trusted == true"
-                @change="syncConfig({ autoApproveCondition })"
-              />
-              <div class="hint">满足时跳过审批人, 直接通过</div>
-            </el-form-item>
-            <el-form-item label="自动拒绝条件 (SpEL)">
-              <el-input
-                v-model="autoRejectCondition"
-                placeholder="如: #amount > 1000000"
-                @change="syncConfig({ autoRejectCondition })"
-              />
-              <div class="hint">满足时直接拒绝整个工作流</div>
-            </el-form-item>
-          </template>
-          <el-alert
-            v-else-if="hasAdvancedApprovalConditions"
-            type="warning"
-            :closable="false"
-            show-icon
-            title="此节点包含高级自动判断"
-            description="业务配置页不会展示或修改表达式。需要调整时请由平台管理员在高级模式处理。"
-          />
+          </div>
         </template>
 
         <!-- condition — 条件分叉 -->
@@ -157,13 +162,14 @@
               @change="syncConfig({ description })"
             />
             <div v-if="isSalesOrderDecision" class="hint">销售订单分支只使用运行引擎读取的连线条件，不使用独立 WorkflowRule。</div>
-            <div v-else class="hint">分支条件可走两种配置: (1) 结构化 WorkflowRule (推荐); (2) edge.condition (raw SpEL)</div>
+            <div v-else-if="props.businessMode" class="hint">选择对应连线设置业务分流条件。</div>
+            <div v-else class="hint">平台管理员可配置结构化规则或高级表达式。</div>
           </el-form-item>
-          <el-form-item v-if="!isSalesOrderDecision">
+          <el-form-item v-if="!isSalesOrderDecision && !props.businessMode">
             <el-button type="primary" plain size="small" @click="$emit('manage-rules')">
-              管理流转规则 (WorkflowRule)
+              管理流转规则
             </el-button>
-            <div class="hint">Sprint 4 Wave 1 (C-WF-RULE-1) — 金额/部门/角色/SpEL 4 类规则, executor 优先评估</div>
+            <div class="hint">配置金额、部门、角色和平台级规则。</div>
           </el-form-item>
           <el-alert
             v-else
@@ -241,13 +247,24 @@
             </div>
             <div v-else class="hint">已选 {{ notifyChannels.length }} 个渠道</div>
           </el-form-item>
-          <el-form-item label="通知模板 (可选)">
-            <el-input
-              v-model="notifyTemplate"
-              placeholder="预留 Sprint 4 NotificationTemplate id"
-              @change="syncConfig({ notifyTemplate })"
-            />
-          </el-form-item>
+          <button
+            type="button"
+            class="advanced-toggle"
+            :aria-expanded="advancedOpen"
+            @click="advancedOpen = !advancedOpen"
+          >
+            {{ advancedOpen ? '收起高级配置' : '展开高级配置' }}
+          </button>
+          <div v-show="advancedOpen" class="advanced-section">
+            <div class="section-heading">高级配置</div>
+            <el-form-item label="通知模板（可选）">
+              <el-input
+                v-model="notifyTemplate"
+                placeholder="选择或填写通知模板"
+                @change="syncConfig({ notifyTemplate })"
+              />
+            </el-form-item>
+          </div>
         </template>
 
         <!-- end — 结束 -->
@@ -269,7 +286,13 @@
       </el-form>
 
       <el-divider />
-      <el-button v-if="nodeType !== 'start'" type="danger" size="small" text @click="$emit('delete')">
+      <el-button
+        v-if="nodeType !== 'start' && !props.readOnly"
+        type="danger"
+        size="small"
+        text
+        @click="$emit('delete')"
+      >
         删除节点
       </el-button>
     </template>
@@ -277,7 +300,8 @@
     <!-- Edge properties -->
     <template v-if="kind === 'edge'">
       <h4>边属性</h4>
-      <el-form label-position="top" size="small">
+      <el-form label-position="top" size="small" :disabled="props.readOnly">
+        <div class="section-heading">基础配置</div>
         <el-form-item label="标签">
           <el-input v-model="localData.label" @change="emitUpdate" placeholder="如: >10000 / DEFAULT" />
           <div class="hint">设 label=DEFAULT 时, condition 节点优先评估其他 edge 后兜底走这里</div>
@@ -316,16 +340,30 @@
           title="此连线包含高级判断条件"
           description="业务配置页不会显示表达式内容。需要调整时请由平台管理员在高级模式处理。"
         />
-        <el-form-item label="优先级 (数值越小越优先)">
-          <el-input-number
-            :model-value="Number(localData.priority ?? 0)"
-            :min="0"
-            @change="(v: number | undefined) => updateEdgePriority(v ?? 0)"
-          />
-        </el-form-item>
+        <button
+          type="button"
+          class="advanced-toggle"
+          :aria-expanded="advancedOpen"
+          @click="advancedOpen = !advancedOpen"
+        >
+          {{ advancedOpen ? '收起高级配置' : '展开高级配置' }}
+        </button>
+        <div v-show="advancedOpen" class="advanced-section">
+          <div class="section-heading">高级配置</div>
+          <el-form-item label="分支优先级">
+            <el-input-number
+              :model-value="Number(localData.priority ?? 0)"
+              :min="0"
+              @change="(v: number | undefined) => updateEdgePriority(v ?? 0)"
+            />
+            <div class="hint">数字越小越先判断。</div>
+          </el-form-item>
+        </div>
       </el-form>
       <el-divider />
-      <el-button type="danger" size="small" text @click="$emit('delete')">删除边</el-button>
+      <el-button v-if="!props.readOnly" type="danger" size="small" text @click="$emit('delete')">
+        删除连线
+      </el-button>
     </template>
   </div>
 </template>
@@ -363,6 +401,7 @@ const props = defineProps<{
   element: SelectedElement
   decisionType?: DecisionType
   businessMode?: boolean
+  readOnly?: boolean
 }>()
 
 const emit = defineEmits<{
@@ -374,6 +413,7 @@ const emit = defineEmits<{
 const kind = computed(() => props.element.kind)
 const nodeType = computed<NodeType | undefined>(() => props.element.type)
 const isSalesOrderDecision = computed(() => props.decisionType === 'SALES_ORDER_APPROVAL')
+const advancedOpen = ref(false)
 
 const NODE_TYPE_LABELS: Record<NodeType, string> = {
   start: '开始',
@@ -604,6 +644,38 @@ function emitUpdate() {
 <style scoped>
 .property-panel { padding: 12px; }
 h4 { margin: 0 0 12px; font-size: 14px; color: #303133; }
+.section-heading {
+  margin: 2px 0 10px;
+  color: #1a2332;
+  font-size: 13px;
+  font-weight: 650;
+}
+.advanced-toggle {
+  width: 100%;
+  min-height: 34px;
+  margin: 4px 0 10px;
+  border: 1px solid #d9e5f2;
+  border-radius: 7px;
+  background: #f7f9fc;
+  color: #1b65a8;
+  cursor: pointer;
+  font-weight: 600;
+}
+.advanced-toggle:hover {
+  border-color: #409eff;
+  background: #eef6ff;
+}
+.advanced-toggle:focus-visible {
+  outline: 2px solid #409eff;
+  outline-offset: 2px;
+}
+.advanced-section {
+  margin-bottom: 10px;
+  padding: 10px;
+  border: 1px solid #edf2f7;
+  border-radius: 8px;
+  background: #fafbfd;
+}
 .hint { font-size: 11px; color: #909399; margin-top: 2px; }
 .hint.warn { color: #e6a23c; font-weight: 500; }
 .directory-error,

@@ -29,6 +29,11 @@ export interface ApprovalCatalogItem {
   preferredWorkflowId?: string
   preferredWorkflowName?: string
   preferredWorkflowVersion?: number
+  activeWorkflowVersion?: number
+  draftWorkflowVersion?: number
+  latestUpdatedAt?: string
+  approvalEnabled: boolean
+  hasDraft: boolean
   status: ApprovalCatalogStatus
 }
 
@@ -97,6 +102,16 @@ export function buildApprovalCatalog(
   return metadata.map((item) => {
     const typeWorkflows = workflowsByType.get(item.decisionType) ?? []
     const preferred = selectPreferredWorkflow(typeWorkflows)
+    const active = [...typeWorkflows]
+      .filter((workflow) => workflow.publishStatus === 'published' && workflow.enabled)
+      .sort((left, right) => right.version - left.version)[0]
+    const draft = [...typeWorkflows]
+      .filter((workflow) => workflow.publishStatus === 'draft')
+      .sort((left, right) => right.version - left.version)[0]
+    const latestUpdatedAt = typeWorkflows
+      .map((workflow) => workflow.updatedAt ?? workflow.createdAt)
+      .filter((value): value is string => Boolean(value))
+      .sort((left, right) => right.localeCompare(left))[0]
     return {
       decisionType: item.decisionType,
       chineseName: item.chineseName,
@@ -108,6 +123,11 @@ export function buildApprovalCatalog(
       preferredWorkflowId: preferred?.id,
       preferredWorkflowName: preferred?.name,
       preferredWorkflowVersion: preferred?.version,
+      activeWorkflowVersion: active?.version,
+      draftWorkflowVersion: draft?.version,
+      latestUpdatedAt,
+      approvalEnabled: Boolean(active),
+      hasDraft: Boolean(draft),
       status: resolveStatus(typeWorkflows),
     }
   }).sort((left, right) => (

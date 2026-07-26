@@ -249,6 +249,9 @@ export const updateWorkflow = (factoryId: string, id: string, payload: UpdateWor
 export const deleteWorkflow = (factoryId: string, id: string) =>
   request.delete<ApiResponse<void>>(`${base(factoryId)}/${id}`)
 
+export const cloneWorkflowDraft = (factoryId: string, id: string) =>
+  request.post<ApiResponse<ApprovalWorkflowDTO>>(`${base(factoryId)}/${id}/clone-draft`)
+
 export const publishWorkflow = (factoryId: string, id: string) =>
   request.patch<ApiResponse<ApprovalWorkflowDTO>>(`${base(factoryId)}/${id}/publish`)
 

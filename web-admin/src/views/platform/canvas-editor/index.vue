@@ -5,7 +5,17 @@
     <el-result icon="warning" title="请使用更宽的屏幕" sub-title="Canvas 编辑器需要至少 1024px 宽度" />
   </div>
 
-  <!-- Onboarding or Editor -->
+  <!-- 审批业务从系统设置进入时使用独立业务画布，不再套通用 Canvas 左右侧栏。 -->
+  <ApprovalWorkflowEditor
+    v-else-if="approvalBusinessLocked"
+    :embedded="true"
+    :initial-decision-type="initialApprovalDecisionType"
+    :initial-workflow-id="initialApprovalWorkflowId"
+    :lock-decision-type="true"
+    @exit-context="exitApprovalBusiness"
+  />
+
+  <!-- Onboarding or generic Editor -->
   <OnboardingWizard v-else-if="isOnboarding" @complete="isOnboarding = false" />
 
   <div v-else class="canvas-editor">

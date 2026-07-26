@@ -58,6 +58,9 @@ public interface ApprovalWorkflowService {
 
     // ==================== Lifecycle ====================
 
+    /** Clone an immutable published/history definition into a separate editable draft. */
+    ApprovalWorkflow cloneAsDraft(String factoryId, String id);
+
     /** Draft → Published (transactional). */
     ApprovalWorkflow publishDraft(String factoryId, String id);
 

@@ -107,6 +107,53 @@ class CanvasAIWorkflowConfigTest {
         verify(workflowTool, never()).execute(any(ToolCall.class), anyMap());
     }
 
+    @Test
+    void approvalWorkflowModuleReturnsLocalDraftSpecWithoutExecutingTools() throws Exception {
+        when(dashScopeClient.chatLowTemp(any(String.class), eq("金额超过五万元给管理员审批")))
+                .thenReturn("""
+                        {
+                          "name":"采购订单审批",
+                          "startNodeId":"start",
+                          "nodes":[
+                            {"id":"start","type":"start","label":"开始","config":{}},
+                            {"id":"ai_admin","type":"approval","label":"管理员审批",
+                             "config":{"approverUserIds":["42"],"requiredApprovers":1}},
+                            {"id":"end","type":"end","label":"审批通过",
+                             "config":{"outcome":"APPROVED"}}
+                          ],
+                          "edges":[
+                            {"id":"ai_edge_1","source":"start","target":"ai_admin","priority":0},
+                            {"id":"ai_edge_2","source":"ai_admin","target":"end","priority":0}
+                          ]
+                        }
+                        """);
+
+        CanvasAIController.AIResponse response =
+                controller.chat("F006", null, approvalWorkflowRequest()).getData();
+
+        assertFalse(response.isApplied());
+        assertEquals("当前审批草稿已更新", response.getReply());
+        assertEquals(1, response.getDiffs().size());
+        assertEquals("APPROVAL_WORKFLOW_SPEC", response.getDiffs().get(0).get("type"));
+        verify(toolRegistry, never()).getExecutor(any(String.class));
+        verify(toolExecutionGateway, never()).execute(any(ToolExecutionCommand.class));
+    }
+
+    @Test
+    void invalidApprovalWorkflowSpecReturnsNoDiffAndNeverWrites() throws Exception {
+        when(dashScopeClient.chatLowTemp(any(String.class), any(String.class)))
+                .thenReturn("{\"error\":\"找不到 liushanmen_admin，请先确认人员目录\"}");
+
+        CanvasAIController.AIResponse response =
+                controller.chat("F006", null, approvalWorkflowRequest()).getData();
+
+        assertFalse(response.isApplied());
+        assertTrue(response.getDiffs().isEmpty());
+        assertTrue(response.getReply().contains("liushanmen_admin"));
+        verify(toolRegistry, never()).getExecutor(any(String.class));
+        verify(toolExecutionGateway, never()).execute(any(ToolExecutionCommand.class));
+    }
+
     @ParameterizedTest
     @ValueSource(strings = {"", "{\"op\":\"SET_NODE_FIELD\"}", "[{not-json]"})
     void emptyNonArrayOrMalformedLlmOutputReturnsSafeNoDiffResponse(String llmOutput) throws Exception {
@@ -302,6 +349,24 @@ class CanvasAIWorkflowConfigTest {
                         "edges", List.of(),
                         "viewport", Map.of("x", 0, "y", 0, "zoom", 1)),
                 "selectedNodeId", "process:1")));
+        return request;
+    }
+
+    private CanvasAIController.AIRequest approvalWorkflowRequest() {
+        CanvasAIController.AIRequest request = new CanvasAIController.AIRequest();
+        request.setModuleCode("approval_workflow_config");
+        request.setMode("plan");
+        request.setMessage("金额超过五万元给管理员审批");
+        request.setParams(Map.of("context", Map.of(
+                "decisionType", "PURCHASE_ORDER_APPROVAL",
+                "selectedNodeIds", List.of(),
+                "workflow", Map.of(
+                        "name", "采购订单审批",
+                        "startNodeId", "start",
+                        "nodes", List.of(),
+                        "edges", List.of()),
+                "roles", List.of(Map.of("code", "factory_super_admin", "label", "工厂总管理员")),
+                "users", List.of(Map.of("id", "42", "username", "liushanmen_admin")))));
         return request;
     }
 
