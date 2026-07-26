@@ -776,6 +776,12 @@ def _strip_slot_update_scaffolding(text: str) -> str:
     normalized = (text or "").strip()
     normalized = _SLOT_UPDATE_PREFIX_PATTERN.sub("", normalized, count=1)
     normalized = re.sub(
+        r"^(?:和|与|跟|、|，|,)+",
+        "",
+        normalized,
+        count=1,
+    ).strip()
+    normalized = re.sub(
         r"\s*(?:呢|吧|可以吗|行吗|怎么样)?[？?。！!]*$",
         "",
         normalized,
@@ -804,6 +810,51 @@ def _is_pure_store_slot_update(
     return not _strip_slot_update_scaffolding(text_without_store_scope)
 
 
+def _parse_followup_store_scope(
+    text: str,
+) -> Tuple[Optional[str], Tuple[str, ...], str]:
+    """Parse a scope update and return normalized stores plus the remainder.
+
+    Store extraction intentionally keeps leading words such as ``只看`` in the
+    raw mention so independently named stores remain verbatim.  For a dependent
+    slot update those words are conversational scaffolding, not part of the
+    store name.  Remove the raw mention from the utterance first, normalize only
+    the returned store slot, then discard conjunctions left between multiple
+    stores.  This prevents ``只看 A 和 B`` from leaking ``只看和`` into the dish
+    extractor.
+    """
+    scope, raw_names = _detect_store_scope(text)
+    remainder = (text or "").strip()
+    if scope not in {"all", "single", "multiple"}:
+        return scope, (), remainder
+    normalized_names: List[str] = []
+    if scope in {"single", "multiple"}:
+        for raw_name in raw_names:
+            normalized_name = _SLOT_UPDATE_PREFIX_PATTERN.sub(
+                "",
+                raw_name,
+                count=1,
+            ).strip()
+            if normalized_name:
+                normalized_names.append(normalized_name)
+            if raw_name and raw_name in remainder:
+                remainder = remainder.replace(raw_name, "", 1)
+            elif normalized_name and normalized_name in remainder:
+                remainder = remainder.replace(normalized_name, "", 1)
+    elif scope == "all":
+        for token in sorted(_ALL_STORE_SCOPE_TOKENS, key=len, reverse=True):
+            if token in remainder:
+                remainder = remainder.replace(token, "", 1)
+                break
+    remainder = re.sub(
+        r"^(?:和|与|跟|、|，|,)+",
+        "",
+        remainder,
+        count=1,
+    ).strip()
+    return scope, tuple(normalized_names), remainder
+
+
 def contextualize_restaurant_followup(
     query: str,
     parent: Optional[Dict[str, Any]],
@@ -828,11 +879,22 @@ def contextualize_restaurant_followup(
     ):
         return current, False
 
+    preview_store_scope, _, preview_store_remainder = _parse_followup_store_scope(
+        current,
+    )
+    pure_store_scope_signal = bool(
+        preview_store_scope in {"all", "single", "multiple"}
+        and _is_pure_store_slot_update(
+            preview_store_remainder,
+            preview_store_scope,
+        )
+    )
     has_followup_signal = (
         len(current) <= 32
         and (
             current.startswith(_FOLLOWUP_PREFIXES)
             or _ORDINAL_FOLLOWUP_RE.match(current)
+            or pure_store_scope_signal
             or current.endswith(("呢", "吗", "怎么办", "为什么", "如何", "怎么样", "合理"))
             or any(
                 token in current
@@ -865,38 +927,11 @@ def contextualize_restaurant_followup(
     context_metrics = context.get("requested_metrics") or ()
     explicit_metrics = _detect_requested_metrics(current)
     metric_label = _context_metric_label(explicit_metrics or context_metrics)
-    current_store_scope, current_store_names = _detect_store_scope(current)
-    normalized_store_names: List[str] = []
-    for name in current_store_names:
-        normalized_name = _SLOT_UPDATE_PREFIX_PATTERN.sub(
-            "",
-            name,
-            count=1,
-        ).strip()
-        if normalized_name:
-            normalized_store_names.append(normalized_name)
-    current_store_names = tuple(normalized_store_names)
-    current_without_store_scope = current
-    if current_store_scope in {"single", "multiple"}:
-        for store_name in current_store_names:
-            current_without_store_scope = current_without_store_scope.replace(
-                store_name,
-                "",
-                1,
-            )
-        current_without_store_scope = re.sub(
-            r"^(?:和|与|跟|、|，|,|的)+",
-            "",
-            current_without_store_scope,
-        ).strip()
-    elif current_store_scope == "all":
-        for token in sorted(_ALL_STORE_SCOPE_TOKENS, key=len, reverse=True):
-            current_without_store_scope = current_without_store_scope.replace(
-                token,
-                "",
-                1,
-            )
-        current_without_store_scope = current_without_store_scope.strip()
+    (
+        current_store_scope,
+        current_store_names,
+        current_without_store_scope,
+    ) = _parse_followup_store_scope(current)
     body = _strip_followup_reference(current_without_store_scope)
     action = _detect_analysis_action(current)
     # A short metric-action turn normally continues the focused entity

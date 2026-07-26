@@ -3368,6 +3368,7 @@ public class IntentExecutionOrchestrator {
         if (dishScoped != null
                 && (
                     "RESTAURANT_OPS_GROSS_MARGIN".equals(dishScoped.getIntentCode())
+                    || isDishScopedRestaurantOpsResponse(dishScoped)
                     || clarificationContinuation
                 )) {
             return dishScoped;
@@ -3453,6 +3454,20 @@ public class IntentExecutionOrchestrator {
                 .build();
         recordOwnerActionIntentMatch(factoryId, request, userId, response);
         return response;
+    }
+
+    private boolean isDishScopedRestaurantOpsResponse(IntentExecuteResponse response) {
+        if (response == null
+                || response.getIntentCode() == null
+                || !response.getIntentCode().startsWith("RESTAURANT_OPS_")
+                || !(response.getResultData() instanceof Map<?, ?> resultData)
+                || !(resultData.get("conversationContext") instanceof Map<?, ?> conversationContext)
+                || !(conversationContext.get("focus_entity") instanceof Map<?, ?> focusEntity)) {
+            return false;
+        }
+        String entityType = stringValue(focusEntity.get("type"));
+        String entityName = stringValue(focusEntity.get("name"));
+        return "dish".equals(entityType) && entityName != null && !entityName.isBlank();
     }
 
     private void recordOwnerActionIntentMatch(String factoryId,
