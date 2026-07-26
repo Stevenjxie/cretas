@@ -447,7 +447,7 @@ HONEST_LABEL_CLAUSE = (
     "禁止用肯定或否定语气声称该维度发生了什么、影响了什么或没有影响。"
 )
 
-SYNTHESIS_CONTRACT_VERSION = "restaurant-dimensions-v8"
+SYNTHESIS_CONTRACT_VERSION = "restaurant-dimensions-v9"
 
 
 def _is_restaurant_synthesis_tenant(factory_id: str) -> bool:
@@ -499,11 +499,13 @@ _MISSING_DIMENSION_TERMS: Dict[str, Tuple[str, ...]] = {
 }
 
 _PRESCRIBED_NUMBER_RE = re.compile(
-    r"(?:预算|目标|KPI|投入|投放|花费|提升到|提升至|降到|降至|"
-    r"控制在|争取达到|预计达到|目标达到|目标设为|目标定为)"
+    r"(?:预算|目标|KPI|投入|投放|花费|提升到|提升至|提高到|提高至|"
+    r"回升到|回升至|增加到|增加至|降到|降至|控制在|争取达到|"
+    r"预计达到|目标达到|目标设为|目标定为|试点|收集|访谈|抽查|"
+    r"测试|梳理|选择|准备)"
     r"[^。！？\n]{0,32}?"
     r"[-+]?\d+(?:,\d{3})*(?:\.\d+)?\s*"
-    r"(?:万元|亿元|元|块|单|人|份|%|个百分点)?"
+    r"(?:万元|亿元|元|块|单|人|份|条|次|天|周|家|个|款|%|个百分点)?"
 )
 _PRESCRIBED_NUMBER_ASSUMPTION_RE = re.compile(
     r"假设|建议目标|建议值|暂定|待[^。！？\n]{0,8}确认|"
@@ -511,9 +513,6 @@ _PRESCRIBED_NUMBER_ASSUMPTION_RE = re.compile(
     r"非现状数据|不是现状数据|试点参数|可调整"
 )
 _HIGH_IMPACT_ACTION_RE = re.compile(
-    r"(?:建议|应该|应当|需要|要|可以|直接|立即|马上|先|全部|统一|"
-    r"安排|执行|实行|把)"
-    r"[^。！？\n]{0,24}"
     r"(?:下架|停售|停用|调价|涨价|降价|打折|满减|投流|发券|"
     r"增员|减员|裁员|调整排班|优先出餐)"
     r"|(?:VIP|会员|顾客)[^。！？\n]{0,12}优先出餐"

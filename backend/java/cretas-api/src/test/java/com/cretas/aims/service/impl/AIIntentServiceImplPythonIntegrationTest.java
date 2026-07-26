@@ -236,6 +236,36 @@ class AIIntentServiceImplPythonIntegrationTest {
                 "那它的毛利率也是第一吗？", "RESTAURANT", null));
         assertTrue(!AIIntentServiceImpl.requiresContextAwareRestaurantRecognition(
                 "查询本周营收", "RESTAURANT", "sid"));
+        assertTrue(AIIntentServiceImpl.requiresContextAwareRestaurantRecognition(
+                "最近30天", "RESTAURANT", "sid"));
+        assertTrue(AIIntentServiceImpl.requiresContextAwareRestaurantRecognition(
+                "本月，全部门店", "RESTAURANT", "sid"));
+        assertTrue(AIIntentServiceImpl.requiresContextAwareRestaurantRecognition(
+                "全部门店", "RESTAURANT", "sid"));
+        assertTrue(!AIIntentServiceImpl.requiresContextAwareRestaurantRecognition(
+                "最近30天哪家店业绩最好", "RESTAURANT", "sid"));
+    }
+
+    @Test
+    void restaurantBareTimeClarification_bypassesSessionBlindCacheAndPython() {
+        when(configService.resolveBusinessDomain("RES_3101_009")).thenReturn("RESTAURANT");
+        IntentMatchResult legacy = buildRealMatch(
+                "RESTAURANT_STORE_REVENUE_RANK", "最近30天");
+        when(pipelineService.recognizeIntentWithConfidence(
+                eq("最近30天"), eq("RES_3101_009"), eq(3),
+                eq(22L), eq("restaurant_owner"), eq("sid-store-time")))
+                .thenReturn(legacy);
+
+        IntentMatchResult result = service.recognizeIntentWithConfidence(
+                "最近30天", "RES_3101_009", 3,
+                22L, "restaurant_owner", "sid-store-time");
+
+        assertSame(legacy, result);
+        verifyNoInteractions(pythonClient);
+        verifyNoInteractions(cache);
+        verify(pipelineService).recognizeIntentWithConfidence(
+                "最近30天", "RES_3101_009", 3,
+                22L, "restaurant_owner", "sid-store-time");
     }
 
     @Test

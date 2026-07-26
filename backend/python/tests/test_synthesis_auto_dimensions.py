@@ -111,6 +111,42 @@ def test_demo_disclaimer_is_appended_even_when_no_dimension_is_missing():
     assert "还可补充的分析维度" not in answer
 
 
+def test_live_comprehensive_unsafe_targets_and_high_impact_actions_are_rejected():
+    answer = (
+        "具体建议：\n"
+        "1. 试点14天，观察该店人均消费是否从102元回升至110元以上。\n"
+        "2. 收集50条VIP专项反馈，找出扣分项。\n"
+        "3. 结果：下架或重新研发零销量菜品，减少备料浪费。\n"
+        "条件：需厨师长确认这些菜品无特殊保留价值。"
+    )
+
+    violations = se._narrative_grounding_violations(
+        answer,
+        FactBook(),
+        "请分析当前最需要解决的经营问题并给出可执行方案",
+    )
+
+    assert any("未标注为假设的预算或目标" in item for item in violations)
+    assert any("未经验证或确认的高影响动作" in item for item in violations)
+
+
+def test_adjustable_confirmed_trial_parameters_do_not_trip_narrative_gate():
+    answer = (
+        "试点参数（建议值，需老板确认）：客单价建议目标110元，"
+        "只做小范围试点；暂不下架任何菜品。"
+    )
+
+    assert se._narrative_grounding_violations(
+        answer,
+        FactBook(),
+        "请给出可执行方案",
+    ) == []
+
+
+def test_synthesis_cache_contract_invalidates_pre_guard_v8_answers():
+    assert se.SYNTHESIS_CONTRACT_VERSION == "restaurant-dimensions-v9"
+
+
 def test_single_store_and_missing_comparison_remain_missing_but_stable_supplier_data_is_available():
     engine = ComprehensiveSynthesisEngine(pool=object())
     fb = FactBook(
