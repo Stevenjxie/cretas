@@ -13,6 +13,7 @@ import com.cretas.aims.service.conversation.ConversationStateService;
 import com.cretas.aims.service.intent.IntentConfigManagementService;
 import com.cretas.aims.service.intent.IntentFeedbackLearningService;
 import com.cretas.aims.service.intent.IntentRecognitionPipelineService;
+import com.cretas.aims.service.intent.RestaurantClarificationInputGuard;
 import io.micrometer.core.instrument.MeterRegistry;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -24,7 +25,6 @@ import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
 import java.util.Optional;
-import java.util.regex.Pattern;
 
 /**
  * AI Intent Service Facade
@@ -50,22 +50,6 @@ import java.util.regex.Pattern;
 @Service
 @RequiredArgsConstructor
 public class AIIntentServiceImpl implements AIIntentService {
-
-    /**
-     * Answers to restaurant clarification buttons are session-dependent even
-     * when they contain no pronoun. Sending a bare time/store reply through
-     * the session-blind Python matcher or its cache can turn "最近30天" into a
-     * fresh generic query and bypass the legacy pipeline that owns
-     * lastIntentCode continuation.
-     */
-    private static final Pattern RESTAURANT_CLARIFICATION_ANSWER = Pattern.compile(
-            "^(?:(?:本月|这个月|当月|上月|上个月|最近7天|近7天|过去7天|"
-                    + "最近30天|近30天|过去30天|今天|今日|昨天|昨日|前天|"
-                    + "本周|这周|上周|今年|本年|去年|上一年)"
-                    + "(?:[,，、]?(?:全部门店|所有门店|全部店|所有店))?"
-                    + "|(?:全部门店|所有门店|全部店|所有店))"
-                    + "(?:呢|吗|呀|啊|吧|？|\\?)?$"
-    );
 
     private final IntentRecognitionPipelineService pipelineService;
     private final IntentConfigManagementService configService;
@@ -406,8 +390,8 @@ public class AIIntentServiceImpl implements AIIntentService {
                 || userInput == null || userInput.isBlank()) {
             return false;
         }
-        String compactInput = userInput.replaceAll("\\s+", "");
-        return RESTAURANT_CLARIFICATION_ANSWER.matcher(compactInput).matches()
+        return RestaurantClarificationInputGuard.requiresSessionAwareRecognition(
+                    userInput, businessType, sessionId)
                 || containsAny(userInput,
                 "它", "那家店", "这家店", "该店", "那个店", "这个店", "该门店",
                 "那道菜", "这道菜", "该菜品", "这个菜", "那个菜", "这款菜", "那款菜",

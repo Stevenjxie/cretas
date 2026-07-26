@@ -30,17 +30,20 @@ import org.junit.jupiter.api.Test;
 import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.mockito.Mockito.mock;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.*;
 
 @DisplayName("IntentExecutionOrchestrator STORE reference clarification")
 class IntentExecutionOrchestratorStoreClarificationTest {
 
     private IntentExecutionOrchestrator orchestrator;
+    private AIIntentService aiIntentService;
 
     @BeforeEach
     void setUp() {
+        aiIntentService = mock(AIIntentService.class);
         orchestrator = new IntentExecutionOrchestrator(
-                mock(AIIntentService.class),
+                aiIntentService,
                 mock(IntentSemanticsParser.class),
                 mock(SemanticCacheService.class),
                 mock(RuleEngineService.class),
@@ -60,6 +63,54 @@ class IntentExecutionOrchestratorStoreClarificationTest {
                 mock(ToolDispatchService.class),
                 mock(DynamicToolSelectionService.class),
                 mock(QueryPreprocessorService.class));
+    }
+
+    @Test
+    @DisplayName("bare restaurant time reply bridges only a verified READ continuation")
+    void bareRestaurantTimeBridgesVerifiedContinuation() {
+        IntentMatchResult inherited = IntentMatchResult.builder()
+                .bestMatch(storeRankIntent())
+                .confidence(0.97)
+                .matchMethod(IntentMatchResult.MatchMethod.CONTINUATION_INHERIT)
+                .build();
+        when(aiIntentService.recognizeIntentWithConfidence(
+                eq("最近30天"), eq("DEMO_REST"), eq(3),
+                eq(1632L), eq("factory_super_admin"), eq("sid-store-time")))
+                .thenReturn(inherited);
+
+        IntentMatchResult result = orchestrator.recognizeSessionAwareRestaurantContinuation(
+                "DEMO_REST",
+                request("最近30天", "sid-store-time"),
+                1632L,
+                "factory_super_admin");
+
+        assertThat(result).isSameAs(inherited);
+    }
+
+    @Test
+    @DisplayName("session bridge cannot steal a full question or an unverified match")
+    void sessionBridgeRejectsStandaloneAndUnverifiedMatches() {
+        assertThat(orchestrator.recognizeSessionAwareRestaurantContinuation(
+                "DEMO_REST",
+                request("最近30天哪家店业绩最好", "sid-full-question"),
+                1632L,
+                "factory_super_admin")).isNull();
+        verifyNoInteractions(aiIntentService);
+
+        when(aiIntentService.recognizeIntentWithConfidence(
+                eq("最近30天"), eq("DEMO_REST"), eq(3),
+                eq(1632L), eq("factory_super_admin"), eq("sid-unverified")))
+                .thenReturn(IntentMatchResult.builder()
+                        .bestMatch(storeRankIntent())
+                        .confidence(0.85)
+                        .matchMethod(IntentMatchResult.MatchMethod.SEMANTIC)
+                        .build());
+
+        assertThat(orchestrator.recognizeSessionAwareRestaurantContinuation(
+                "DEMO_REST",
+                request("最近30天", "sid-unverified"),
+                1632L,
+                "factory_super_admin")).isNull();
     }
 
     @Test
