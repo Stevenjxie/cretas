@@ -595,7 +595,9 @@ def capability_clarification_question(query: str) -> Optional[str]:
 
 _FOLLOWUP_PREFIXES = (
     "那", "这个", "那个", "这道菜", "那道菜", "它", "该菜", "该店", "刚才", "继续", "再", "为什么", "怎么做", "怎么办", "怎么",
-    "如何", "下一步", "先做", "换成", "改成", "换回", "改回", "哪些动作", "先别", "明天看",
+    "如何", "下一步", "先做", "换成", "改成", "换回", "改回",
+    "换看", "改看", "换查", "改查", "只看", "就看", "只查", "就查",
+    "哪些动作", "先别", "明天看",
     "和上", "与上", "跟上", "比上", "呢",
 )
 _ORDINAL_FOLLOWUP_RE = re.compile(
@@ -765,7 +767,7 @@ _TIME_SLOT_ONLY_PATTERN = re.compile(
     r")$"
 )
 _SLOT_UPDATE_PREFIX_PATTERN = re.compile(
-    r"^(?:换回|改回|换成|改成|换到|改到|改为|只看|就看|看|查)\s*"
+    r"^(?:换回|改回|换成|改成|换到|改到|改为|换看|改看|换查|改查|只看|就看|只查|就查|看|查)\s*"
 )
 
 
@@ -849,7 +851,9 @@ def contextualize_restaurant_followup(
     # pronouns such as "那毛利呢" remain dependent and intentionally inherit.
     standalone_code = match_restaurant_ops(current)
     leading_dependent = current.startswith((
-        "那", "这个", "那个", "它", "刚才", "继续", "再", "换成", "改成", "换回", "改回",
+        "那", "这个", "那个", "它", "刚才", "继续", "再",
+        "换成", "改成", "换回", "改回", "换看", "改看", "换查", "改查",
+        "只看", "就看", "只查", "就查",
     ))
     if standalone_code and _uses_relative_sales_window(current) and not leading_dependent:
         return current, False
