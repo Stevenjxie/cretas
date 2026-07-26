@@ -1,7 +1,7 @@
 # 质检首页、训练数据生命周期与开户指引规格
 
-**任务 ID**：`FEATURE-QC-ENTRY-WEB-TRAINING-QCSOP-20260727-002`  
-**Base SHA**：`cb09348e7ecbd1520e0666932e5d5c1a9fb0b8a0`  
+**任务 ID**：`FEATURE-QC-ENTRY-WEB-TRAINING-QCSOP-20260727-002`
+**Base SHA**：`cb09348e7ecbd1520e0666932e5d5c1a9fb0b8a0`
 **发布边界**：只实现、测试、截图和合并；不部署生产，不训练或发布模型，不写入生产账号、白名单或 QC 数据。
 
 ## 目标
