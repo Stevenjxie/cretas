@@ -1,50 +1,66 @@
-/**
- * UpdateOverlay — 启动时 OTA 自动更新遮罩
- *
- * 显示时机: App 启动检测到可用更新，下载期间全屏展示。
- * 防呆设计: 大字体 + 居中 spinner，无按钮（自动）。
- * 受众: 低文化素质的仓管员 / 操作员 — 字号 24+，文案简洁。
- */
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import {
-  View,
-  Text,
   ActivityIndicator,
-  StyleSheet,
   Image,
+  Modal,
   StatusBar,
+  StyleSheet,
+  Text,
+  View,
 } from 'react-native';
 
-const UpdateOverlay: React.FC = () => (
-  <View style={styles.container}>
-    <StatusBar translucent backgroundColor="transparent" barStyle="light-content" />
+import i18n from '../../i18n';
+import { subscribeOtaUpdating } from '../../services/otaUpdateService';
 
-    {/* App 图标 */}
-    <Image
-      source={require('../../../assets/icon.png')}
-      style={styles.logo}
-      resizeMode="contain"
-    />
+/**
+ * Full-screen feedback shown only after the user accepts an OTA update.
+ * Background checks and pre-downloads never block the application shell.
+ */
+const UpdateOverlay: React.FC = () => {
+  const [visible, setVisible] = useState(false);
 
-    {/* 主提示文字 — 24px+，低文化素质友好 */}
-    <Text style={styles.titleText}>正在更新到最新版</Text>
-    <Text style={styles.subtitleText}>请稍候，更新完成后自动继续…</Text>
+  useEffect(() => subscribeOtaUpdating(setVisible), []);
 
-    {/* 居中 spinner */}
-    <ActivityIndicator
-      size="large"
-      color="#FFFFFF"
-      style={styles.spinner}
-    />
-  </View>
-);
+  return (
+    <Modal
+      visible={visible}
+      animationType="fade"
+      presentationStyle="fullScreen"
+      onRequestClose={() => undefined}
+    >
+      <View style={styles.container}>
+        <StatusBar
+          translucent
+          backgroundColor="transparent"
+          barStyle="light-content"
+        />
+        <Image
+          source={require('../../../assets/icon.png')}
+          style={styles.logo}
+          resizeMode="contain"
+        />
+        <Text style={styles.titleText}>
+          {i18n.t('common:ota.updating_title')}
+        </Text>
+        <Text style={styles.subtitleText}>
+          {i18n.t('common:ota.updating_message')}
+        </Text>
+        <ActivityIndicator
+          size="large"
+          color="#FFFFFF"
+          style={styles.spinner}
+        />
+      </View>
+    </Modal>
+  );
+};
 
 export default UpdateOverlay;
 
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#2d5016',       // 与 splash 背景色一致，视觉无缝衔接
+    backgroundColor: '#2d5016',
     alignItems: 'center',
     justifyContent: 'center',
     paddingHorizontal: 32,
@@ -56,7 +72,7 @@ const styles = StyleSheet.create({
     borderRadius: 20,
   },
   titleText: {
-    fontSize: 26,                      // 大字号：低文化素质防呆
+    fontSize: 26,
     fontWeight: '700',
     color: '#FFFFFF',
     textAlign: 'center',

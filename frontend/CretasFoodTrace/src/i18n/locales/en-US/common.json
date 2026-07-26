@@ -546,6 +546,22 @@
   "quick_actions": "Quick Actions",
   "see_all": "See All",
   "noData": "No data",
-  "legend": "Legend"
+  "legend": "Legend",
+  "ota": {
+    "update_ready_title": "Update available",
+    "update_ready_message": "The update is being prepared. Update now to get the latest fixes.",
+    "updating_title": "Updating Cretas",
+    "updating_message": "Keep the app open. It will restart automatically when ready.",
+    "later": "Later",
+    "update_now": "Update now",
+    "check_title": "Check for updates",
+    "checking": "Checking…",
+    "up_to_date_message": "You're on the latest version.",
+    "timeout_message": "Network timed out. Try again on a stable connection.",
+    "download_timeout_message": "Download timed out. Retry on a stable connection.",
+    "check_failed_title": "Update check failed",
+    "failed_message": "Update check failed: {{error}}",
+    "disabled_message": "Manual update checks are not available in this build."
+  }
 }
 

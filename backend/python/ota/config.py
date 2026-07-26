@@ -18,6 +18,8 @@ class OTASettings:
     admin_token: Optional[str] = None
     hostname: str = "http://47.100.235.168:8083"
     default_channel: str = "production"
+    asset_base_url: Optional[str] = None
+    asset_store_base_url: Optional[str] = None
 
 
 def get_settings() -> OTASettings:
@@ -32,4 +34,6 @@ def get_settings() -> OTASettings:
         admin_token=os.environ.get("OTA_ADMIN_TOKEN"),
         hostname=os.environ.get("OTA_HOSTNAME", "http://47.100.235.168:8083"),
         default_channel=os.environ.get("OTA_DEFAULT_CHANNEL", "production"),
+        asset_base_url=os.environ.get("OTA_ASSET_BASE_URL") or None,
+        asset_store_base_url=os.environ.get("OTA_ASSET_STORE_BASE_URL") or None,
     )

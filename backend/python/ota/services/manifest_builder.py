@@ -17,6 +17,7 @@ import json
 import mimetypes
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Optional
 from urllib.parse import quote
 
 
@@ -57,6 +58,12 @@ def _asset_url(hostname: str, rel_path: Path, runtime_version: str, platform: st
     )
 
 
+def _cdn_url(base_url: str, rel_path: Path) -> str:
+    """Join a trusted CDN base URL with an encoded object key."""
+    encoded_path = quote(rel_path.as_posix(), safe="/")
+    return f"{base_url.rstrip('/')}/{encoded_path}"
+
+
 def _build_asset_entry(
     bundle_dir: Path,
     ota_root: Path,
@@ -66,6 +73,8 @@ def _build_asset_entry(
     runtime_version: str,
     platform: str,
     hostname: str,
+    asset_base_url: Optional[str],
+    asset_store_base_url: Optional[str],
 ) -> dict:
     """Construct one asset/launchAsset dict per Expo Updates v1 protocol."""
     abs_path = bundle_dir / asset_relative_path
@@ -81,12 +90,20 @@ def _build_asset_entry(
         guessed, _ = mimetypes.guess_type(f"x.{ext}")
         content_type = guessed or "application/octet-stream"
 
+    if not is_launch_asset and asset_store_base_url:
+        url = _cdn_url(asset_store_base_url, Path(abs_path.name))
+    elif asset_base_url:
+        # OTA_ASSET_BASE_URL already points at app-updates/updates.
+        url = _cdn_url(asset_base_url, rel_to_root.relative_to("updates"))
+    else:
+        url = _asset_url(hostname, rel_to_root, runtime_version, platform)
+
     return {
         "hash": _base64url_sha256(asset_bytes),
         "key": _md5_hex(asset_bytes),
         "fileExtension": file_extension,
         "contentType": content_type,
-        "url": _asset_url(hostname, rel_to_root, runtime_version, platform),
+        "url": url,
     }
 
 
@@ -97,6 +114,8 @@ def build_manifest(
     runtime_version: str,
     platform: str,
     hostname: str,
+    asset_base_url: Optional[str] = None,
+    asset_store_base_url: Optional[str] = None,
 ) -> dict:
     """Construct the Expo Updates v1 manifest dict for the given bundle.
 
@@ -122,6 +141,8 @@ def build_manifest(
             runtime_version=runtime_version,
             platform=platform,
             hostname=hostname,
+            asset_base_url=asset_base_url,
+            asset_store_base_url=asset_store_base_url,
         )
         for a in platform_meta["assets"]
     ]
@@ -134,6 +155,8 @@ def build_manifest(
         runtime_version=runtime_version,
         platform=platform,
         hostname=hostname,
+        asset_base_url=asset_base_url,
+        asset_store_base_url=asset_store_base_url,
     )
 
     return {

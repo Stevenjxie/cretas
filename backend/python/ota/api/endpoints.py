@@ -151,6 +151,8 @@ def manifest(
             runtime_version=expo_runtime_version,
             platform=expo_platform,
             hostname=settings.hostname,
+            asset_base_url=settings.asset_base_url,
+            asset_store_base_url=settings.asset_store_base_url,
         )
     except (json.JSONDecodeError, KeyError, ValueError, FileNotFoundError, OSError):
         # Per chat2 audit Important C: a corrupt / missing metadata.json /
