@@ -891,6 +891,18 @@ async def test_dependent_optimization_cannot_escape_pending_named_dish_time_scop
             factory_id="F_NAMED_DISH_PENDING",
             session_key="sess-named-dish-pending",
         )
+        third = await parse_restaurant_query(
+            "本月",
+            pool,
+            factory_id="F_NAMED_DISH_PENDING",
+            session_key="sess-named-dish-pending",
+        )
+        fourth = await parse_restaurant_query(
+            "全部门店",
+            pool,
+            factory_id="F_NAMED_DISH_PENDING",
+            session_key="sess-named-dish-pending",
+        )
 
     assert first.clarification_question == TIME_CLARIFICATION_QUESTION
     assert second.is_clarification_continuation is True
@@ -899,6 +911,24 @@ async def test_dependent_optimization_cannot_escape_pending_named_dish_time_scop
     assert second.requested_metrics == ("sales_volume",)
     assert second.analysis_action == "optimize"
     assert second.intent == "RESTAURANT_OPS_GROSS_MARGIN"
+    assert third.is_clarification_continuation is True
+    assert third.clarification_question == STORE_SCOPE_CLARIFICATION_QUESTION
+    assert third.dish_slot == "米饭"
+    assert third.requested_metrics == ("sales_volume",)
+    assert third.analysis_action == "optimize"
+    assert third.window_label == "本月"
+    assert fourth.clarification_needed is False
+    assert fourth.is_clarification_continuation is True
+    assert fourth.dish_slot == "米饭"
+    assert fourth.requested_metrics == ("sales_volume",)
+    assert fourth.analysis_action == "optimize"
+    assert fourth.window_label == "本月"
+    assert fourth.store_scope == "all"
+    assert "米饭" in fourth.resolver_query_seed
+    assert "怎么优化" in fourth.resolver_query_seed
+    assert "本月" in fourth.resolver_query_seed
+    assert "全部门店" in fourth.resolver_query_seed
+    assert pool.pending == {}
     llm.assert_not_awaited()
 
 

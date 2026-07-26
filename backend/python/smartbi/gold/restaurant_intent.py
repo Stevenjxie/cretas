@@ -2913,6 +2913,28 @@ async def parse_restaurant_query(
             combined_query = (
                 f"{pending.get('original_query') or ''} {norm_query}".strip()
             )
+            # A dependent named-dish action can consume the original pending
+            # clarification while still legitimately needing the same time
+            # slot.  Persist the enriched deterministic seed (for example
+            # "米饭的销量怎么优化") so the next button answer continues that
+            # exact dish/metric/action contract instead of becoming a fresh
+            # generic query.  Keep this deliberately narrow: only the trusted
+            # named-dish compiler may re-arm a time clarification here.
+            if (
+                continued is not None
+                and continued.clarification_needed
+                and continued.is_clarification_continuation
+                and continued.planner_authority == "explicit_named_dish_slots"
+                and continued.clarification_question == TIME_CLARIFICATION_QUESTION
+                and continued.resolver_query_seed
+            ):
+                await _maybe_register_pending(
+                    pool,
+                    continued.resolver_query_seed,
+                    continued,
+                    factory_id,
+                    session_key,
+                )
             if (
                 continued is not None
                 and continued.clarification_needed
@@ -3329,6 +3351,20 @@ async def _parse_continuation(
         and pending_named_dish_spec.dish_slot
         and pending_named_dish_spec.requested_metrics
     ):
+        if (
+            clarification_question == STORE_SCOPE_CLARIFICATION_QUESTION
+            and _is_pure_store_scope_answer(query)
+        ):
+            # Store-scope buttons are syntactically trailing answers, while
+            # the dish extractor's trusted grammar accepts scope prefixes.
+            # Reorder only this already-validated pure scope answer ahead of
+            # the sealed named-dish seed; no user semantics are invented.
+            scoped_named_dish_spec = _explicit_named_dish_metric_spec(
+                f"{query} {original_query}".strip(),
+                is_continuation=True,
+            )
+            if scoped_named_dish_spec is not None:
+                return scoped_named_dish_spec
         contextualized_query, inherited_pending = contextualize_restaurant_followup(
             query,
             {
