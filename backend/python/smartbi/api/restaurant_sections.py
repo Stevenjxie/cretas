@@ -575,6 +575,10 @@ def _infer_owner_action_scenario_from_message(message: str) -> str:
         return "cost_margin"
     if any(keyword in text for keyword in ("不想打折", "不要打折", "不打折", "满减", "提高客单", "提升客单", "客单价")):
         return "package"
+    if any(keyword in text for keyword in (
+        "培训", "训练", "服务员", "服务态度", "服务差评", "话术", "开班前",
+    )):
+        return "staff_training"
     if any(keyword in text for keyword in ("厨房", "后厨", "厨师长", "出餐", "上菜慢", "退菜", "重做", "口味", "太咸")) and not any(keyword in text for keyword in ("备菜", "备货", "补货", "库存")):
         return "kitchen_quality"
     if any(keyword in text for keyword in ("盘点", "月盘点", "损耗")) and any(keyword in text for keyword in ("厨房", "厨师长", "出品", "后厨")):
@@ -1890,7 +1894,32 @@ def _owner_chart_guide(scenario: str) -> str:
     return "图表是给建议做证据用的：先看差距最大的柱子，再决定今天先改哪一个动作。"
 
 
-def _owner_chat_follow_ups(scenario: str, message: str = "") -> list[str]:
+def _is_unscoped_owner_prohibition_question(message: str) -> bool:
+    text = re.sub(r"[\s，。！？、,.!?；;：:]+", "", (message or "").strip())
+    return text in {
+        "哪些事情先不要做",
+        "哪些事情今天先不要做",
+        "今天哪些事情先不要做",
+        "现在有哪些事情先不要做",
+        "现在有什么先别做",
+        "有什么先不要做",
+        "先不要做什么",
+        "先别做什么",
+    }
+
+
+def _owner_chat_follow_ups(
+    scenario: str,
+    message: str = "",
+    *,
+    is_follow_up: bool = False,
+) -> list[str]:
+    if _is_unscoped_owner_prohibition_question(message) and not is_follow_up:
+        return [
+            "先守住营收",
+            "先守住毛利",
+            "先减少损耗",
+        ]
     if scenario == "revenue_growth":
         text = message or ""
         if "门口海报" in text or "首图" in text:
@@ -2415,6 +2444,13 @@ def _owner_direct_special_answer(owner_page: dict[str, Any], scenario: str, mess
 
 
 def _owner_chat_answer(owner_page: dict[str, Any], scenario: str, message: str, is_follow_up: bool = False) -> str:
+    if _is_unscoped_owner_prohibition_question(message) and not is_follow_up:
+        return (
+            "先确认你这次最想守住哪个目标：营收、毛利、减少损耗，"
+            "还是提升复购和评价？目标不同，暂时不该做的事情也不同。"
+            "在你选定目标前，我不会默认成套餐、打折或投流方案。"
+        )
+
     headline = _plain_text(owner_page.get("headline"))
     diagnosis = _plain_text(owner_page.get("plainDiagnosis"))
     focus = owner_page.get("decisionFocus") or {}
@@ -2646,7 +2682,11 @@ def _owner_action_chat_impl(
         if role_plan:
             owner_page["roleActionPlan"] = role_plan
     answer = _owner_chat_answer(owner_page, scenario, body.message, is_follow_up=is_follow_up_turn)
-    follow_ups = _owner_chat_follow_ups(scenario, body.message)
+    follow_ups = _owner_chat_follow_ups(
+        scenario,
+        body.message,
+        is_follow_up=is_follow_up_turn,
+    )
     charts = _owner_evidence_charts(owner_page, scenario, params)
     chart_guide = _owner_chart_guide(scenario) if charts else ""
     data_readiness = _owner_action_data_readiness(scenario, params)

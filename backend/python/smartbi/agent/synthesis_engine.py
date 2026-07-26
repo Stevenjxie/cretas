@@ -146,6 +146,7 @@ from smartbi.gold.queries import (
     weather_daily,
 )
 from smartbi.gold.restaurant_intent_promotion import classify_question_family
+from smartbi.gold.restaurant_ops_router import demo_data_factory_for_code
 from smartbi.services.distillation_capture import persist_distillation_sample
 from smartbi.services.insight_dimensions import (
     InsightDimension,
@@ -443,7 +444,7 @@ HONEST_LABEL_CLAUSE = (
     "禁止用肯定或否定语气声称该维度发生了什么、影响了什么或没有影响。"
 )
 
-SYNTHESIS_CONTRACT_VERSION = "restaurant-dimensions-v5"
+SYNTHESIS_CONTRACT_VERSION = "restaurant-dimensions-v6"
 
 
 def _is_restaurant_synthesis_tenant(factory_id: str) -> bool:
@@ -494,10 +495,36 @@ _MISSING_DIMENSION_TERMS: Dict[str, Tuple[str, ...]] = {
     "promotion": ("活动", "营销活动", "促销", "优惠", "折扣", "核销", "活动带动"),
 }
 
+_PRESCRIBED_NUMBER_RE = re.compile(
+    r"(?:预算|目标|KPI|投入|投放|花费|提升到|提升至|降到|降至|"
+    r"控制在|争取达到|预计达到|目标达到|目标设为|目标定为)"
+    r"[^。！？\n]{0,32}?"
+    r"[-+]?\d+(?:,\d{3})*(?:\.\d+)?\s*"
+    r"(?:万元|亿元|元|块|单|人|份|%|个百分点)?"
+)
+_PRESCRIBED_NUMBER_ASSUMPTION_RE = re.compile(
+    r"假设|建议目标|建议值|暂定|待[^。！？\n]{0,8}确认|"
+    r"需[^。！？\n]{0,8}确认|需要[^。！？\n]{0,8}确认|由[^。！？\n]{0,12}确认|"
+    r"非现状数据|不是现状数据|试点参数|可调整"
+)
+_HIGH_IMPACT_ACTION_RE = re.compile(
+    r"(?:建议|应该|应当|需要|要|可以|直接|立即|马上|先|全部|统一|"
+    r"安排|执行|实行|把)"
+    r"[^。！？\n]{0,24}"
+    r"(?:下架|停售|停用|调价|涨价|降价|打折|满减|投流|发券|"
+    r"增员|减员|裁员|调整排班|优先出餐)"
+    r"|(?:VIP|会员|顾客)[^。！？\n]{0,12}优先出餐"
+)
+_HIGH_IMPACT_ACTION_SAFETY_RE = re.compile(
+    r"不要|别|不建议|暂不|不直接|未执行|没有执行|先验证|先试点|小范围试点|"
+    r"待确认|需确认|需要确认|预览|确认后|可回滚"
+)
+
 
 def _narrative_grounding_violations(
     answer: str,
     factbook: FactBook,
+    question: str = "",
 ) -> List[str]:
     """Reject ungrounded causality and claims about explicitly missing data.
 
@@ -558,6 +585,28 @@ def _narrative_grounding_violations(
                 if any(term in clause for term in terms):
                     violations.append(f"缺失维度被当作事实（{code}）：{clause[:120]}")
                     break
+
+            # Exact budgets and KPI targets are proposals, not observed facts.
+            # They may be shown only when the user supplied them or the answer
+            # labels them as an adjustable assumption that still needs approval.
+            # This rejects the live failure "5000元预算、日均94→110单" while
+            # allowing "试点参数（建议值，需老板确认）".
+            prescribed = _PRESCRIBED_NUMBER_RE.search(clause)
+            if (
+                prescribed
+                and prescribed.group(0) not in (question or "")
+                and not _PRESCRIBED_NUMBER_ASSUMPTION_RE.search(sentence)
+            ):
+                violations.append(f"未标注为假设的预算或目标：{clause[:120]}")
+
+            # High-impact operational actions need an explicit non-execution,
+            # experiment, approval, preview, or rollback frame. Descriptive
+            # signals alone never authorize "VIP优先出餐"/调价/下架等动作.
+            if (
+                _HIGH_IMPACT_ACTION_RE.search(clause)
+                and not _HIGH_IMPACT_ACTION_SAFETY_RE.search(clause)
+            ):
+                violations.append(f"未经验证或确认的高影响动作：{clause[:120]}")
 
     return list(dict.fromkeys(violations))
 
@@ -907,7 +956,7 @@ class ComprehensiveSynthesisEngine:
             if thin_answer is not None:
                 thin_answer, fc_meta = self._reconciler.reconcile(thin_answer, factbook)
                 grounding_violations = _narrative_grounding_violations(
-                    thin_answer, factbook,
+                    thin_answer, factbook, question,
                 )
                 if grounding_violations:
                     logger.warning(
@@ -984,7 +1033,9 @@ class ComprehensiveSynthesisEngine:
 
         # 7. Grounding hard-check (backfill真值 + flag fabricated names).
         answer, fc_meta = self._reconciler.reconcile(answer, factbook)
-        grounding_violations = _narrative_grounding_violations(answer, factbook)
+        grounding_violations = _narrative_grounding_violations(
+            answer, factbook, question,
+        )
         if grounding_violations:
             logger.warning(
                 "synthesis rejected by narrative grounding gate: "
@@ -1410,6 +1461,21 @@ class ComprehensiveSynthesisEngine:
                 logger.warning("[synthesis] %s pull failed: %s", label, e)
                 return None
 
+        # Authentication, cache and conversation identity always remain on the
+        # trusted tenant.  The public Demo account is the sole exception on the
+        # read side: its POS/菜品/成本 Gold facts are intentionally seeded in the
+        # same unified data tenant used by the deterministic restaurant tools.
+        # Without this source mapping, a direct dish query can see 400+ dishes
+        # while comprehensive analysis falsely reports dish sales as missing.
+        gold_sales_factory = demo_data_factory_for_code(
+            "RESTAURANT_OPS_SALES_SUMMARY",
+            factory_id,
+        )
+        gold_margin_factory = demo_data_factory_for_code(
+            "RESTAURANT_OPS_GROSS_MARGIN",
+            factory_id,
+        )
+
         tasks: Dict[str, Any] = {}
         if plan.get("review"):
             tasks["review_summary"] = _safe(review_summary(self._pool, factory_id), "review_summary")
@@ -1424,7 +1490,13 @@ class ComprehensiveSynthesisEngine:
             )
         if plan.get("finance"):
             tasks["finance"] = _safe(
-                finance_summary(self._pool, factory_id, date_range, top_n_stores=5), "finance",
+                finance_summary(
+                    self._pool,
+                    gold_sales_factory,
+                    date_range,
+                    top_n_stores=5,
+                ),
+                "finance",
             )
         if plan.get("period_comparison"):
             _pc_s, _pc_e = (
@@ -1433,7 +1505,13 @@ class ComprehensiveSynthesisEngine:
                 else (getattr(date_range, "start", None), getattr(date_range, "end", None))
             )
             tasks["period_comparison"] = _safe(
-                period_comparison(self._pool, factory_id, _pc_s, _pc_e), "period_comparison",
+                period_comparison(
+                    self._pool,
+                    gold_sales_factory,
+                    _pc_s,
+                    _pc_e,
+                ),
+                "period_comparison",
             )
         if plan.get("supplier_anomaly"):
             tasks["supplier_anomaly"] = _safe(
@@ -1447,37 +1525,93 @@ class ComprehensiveSynthesisEngine:
             # store_comparison returns ALL stores (no top-N) — needed for the
             # chain benchmark + laggard, which finance_summary's top-5 can't give.
             tasks["attribution"] = _safe(
-                store_comparison(self._pool, factory_id, date_range), "attribution",
+                store_comparison(
+                    self._pool,
+                    gold_sales_factory,
+                    date_range,
+                ),
+                "attribution",
             )
         if plan.get("sales"):
             tasks["top_products"] = _safe(
-                top_products(self._pool, factory_id, date_range, top_n=5), "top_products",
+                top_products(
+                    self._pool,
+                    gold_sales_factory,
+                    date_range,
+                    top_n=5,
+                ),
+                "top_products",
+            )
+            tasks["bottom_products"] = _safe(
+                top_products(
+                    self._pool,
+                    gold_sales_factory,
+                    date_range,
+                    top_n=5,
+                    order="asc",
+                ),
+                "bottom_products",
             )
             tasks["channels"] = _safe(
-                channel_breakdown(self._pool, factory_id, date_range), "channels",
+                channel_breakdown(
+                    self._pool,
+                    gold_sales_factory,
+                    date_range,
+                ),
+                "channels",
             )
             tasks["discounts"] = _safe(
-                discount_breakdown(self._pool, factory_id, date_range), "discounts",
+                discount_breakdown(
+                    self._pool,
+                    gold_sales_factory,
+                    date_range,
+                ),
+                "discounts",
             )
         if plan.get("dish_margin"):
             tasks["dish_margin"] = _safe(
-                dish_margin(self._pool, factory_id, top_n=5), "dish_margin",
+                dish_margin(
+                    self._pool,
+                    gold_margin_factory,
+                    top_n=5,
+                ),
+                "dish_margin",
             )
         if plan.get("channel"):
             tasks["channel_dim"] = _safe(
-                order_type_breakdown(self._pool, factory_id, date_range), "channel_dim",
+                order_type_breakdown(
+                    self._pool,
+                    gold_sales_factory,
+                    date_range,
+                ),
+                "channel_dim",
             )
         if plan.get("meal_period"):
             tasks["meal_period_dim"] = _safe(
-                meal_period_breakdown(self._pool, factory_id, date_range), "meal_period_dim",
+                meal_period_breakdown(
+                    self._pool,
+                    gold_sales_factory,
+                    date_range,
+                ),
+                "meal_period_dim",
             )
         if plan.get("discount"):
             tasks["discount_dim"] = _safe(
-                discount_summary(self._pool, factory_id, date_range), "discount_dim",
+                discount_summary(
+                    self._pool,
+                    gold_sales_factory,
+                    date_range,
+                ),
+                "discount_dim",
             )
         if plan.get("weather"):
             tasks["weather_sales"] = _safe(
-                daily_trend(self._pool, factory_id, date_range), "weather_sales",
+                daily_trend(
+                    self._pool,
+                    gold_sales_factory,
+                    date_range,
+                ),
+                "weather_sales",
             )
             tasks["weather_daily"] = _safe(
                 weather_daily(self._pool, factory_id, date_range), "weather_daily",
@@ -1615,11 +1749,15 @@ class ComprehensiveSynthesisEngine:
         # ---- assemble sales ----
         if plan.get("sales"):
             prods = (results.get("top_products") or {}).get("top_products") or []
+            low_prods = (
+                (results.get("bottom_products") or {}).get("top_products") or []
+            )
             channels = (results.get("channels") or {}).get("channels") or []
             discounts = (results.get("discounts") or {}).get("discounts") or []
-            if prods or channels or discounts:
+            if prods or low_prods or channels or discounts:
                 fb.sales = {
                     "top_products": prods,
+                    "bottom_products": low_prods,
                     "channels": channels,
                     "discounts": discounts,
                 }
@@ -1792,8 +1930,15 @@ class ComprehensiveSynthesisEngine:
                 coverage={"customer_count": fin.get("customer_count")},
             )
         sales = fb.sales or {}
-        if sales.get("top_products"):
-            mark_available("dish_sales", "agg_product+dim_product")
+        if sales.get("top_products") or sales.get("bottom_products"):
+            mark_available(
+                "dish_sales",
+                "agg_product+dim_product",
+                coverage={
+                    "ranked_high_count": len(sales.get("top_products") or []),
+                    "ranked_low_count": len(sales.get("bottom_products") or []),
+                },
+            )
         if fb.dish_margin:
             mark_available(
                 "dish_margin", "restaurant_sku_forms完整BOM成本",
