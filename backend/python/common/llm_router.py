@@ -91,12 +91,12 @@ _PAID_MODEL_DENYLIST: frozenset = frozenset({
 # exhausted-ON models that showed no date; None for tencent/zhipu which have no
 # DashScope expiry — they are billing-safe via their own 用完即停/pool cap).
 # ═══════════════════════════════════════════════════════════════════════════
-_REGISTRY_AUDIT_DATE = datetime.date(2026, 7, 23)  # 三控制台实测核对
-# (2026-07-23 Playwright 走查, #1598): 三账号免费额度页逐条比对, 计费模式/
-# 用完即停开关全部未变, 注册表日期与控制台一致。实测新知: aliyun_c 的
-# qwen3.5-flash 额度已耗尽(非日期过期), qwen3.6-flash-2026-04-16 剩 44.7万;
-# a/b 各有 qwen3.5-ocr + kimi-k2.7-code 新额度未收录(留待下轮扩充)。
-# 下次保鲜到期 08-13 恰逢 aliyun_c 批量额度日 — 届时需真正重核而不只续期。
+_REGISTRY_AUDIT_DATE = datetime.date(2026, 7, 26)  # 三控制台实测核对
+# (2026-07-26 用户逐账户控制台截图): 所拍 A/B/C 模型均已开启
+# “免费额度用完即停”。这里只收录经任务能力筛选后的通用文本模型，不把
+# OCR/VL/Math/Character/Code 专用 SKU 混入通用链。B/C 两账户的
+# qwen3.7-flash-2026-07-15 与 qwen3.7-flash 均剩 1,000,000/1,000,000，
+# 到期 2026-10-23；它们成为快速文本槽的主链和跨账户故障转移。
 _REGISTRY_MAX_AGE_DAYS = 21  # staleness fail-safe: WARN + fall to minimal set beyond this
 _FAR_FUTURE = datetime.date(2099, 1, 1)  # tencent/zhipu + missing dates sort last among safe
 
@@ -127,6 +127,8 @@ _SAFE_MODELS: Dict[Tuple[str, str], Optional[datetime.date]] = {
     ("aliyun_a", "kimi-k2.7-code"): _d(2026, 9, 14),  # thinking-only → REASONING slot only
 
     # ── aliyun_b (3177) — bulk 07/16; premium drained. Curated good ON models.
+    ("aliyun_b", "qwen3.7-flash-2026-07-15"): _d(2026, 10, 23),
+    ("aliyun_b", "qwen3.7-flash"): _d(2026, 10, 23),
     ("aliyun_b", "qwen3.7-max-2026-05-20"): _d(2026, 8, 20),
     ("aliyun_b", "qwen3.7-max-preview"): _d(2026, 8, 24),
     ("aliyun_b", "qwen3.7-max-2026-05-17"): _d(2026, 8, 24),
@@ -156,6 +158,8 @@ _SAFE_MODELS: Dict[Tuple[str, str], Optional[datetime.date]] = {
     ("aliyun_b", "qwen3.6-27b"): _d(2026, 7, 23),
 
     # ── aliyun_c (a736) — bulk 08/13; fullest account, nearly all ON+quota.
+    ("aliyun_c", "qwen3.7-flash-2026-07-15"): _d(2026, 10, 23),
+    ("aliyun_c", "qwen3.7-flash"): _d(2026, 10, 23),
     ("aliyun_c", "qwen3.5-flash"): _d(2026, 8, 13),
     ("aliyun_c", "qwen3.6-flash-2026-04-16"): _d(2026, 8, 13),
     ("aliyun_c", "qwen3-coder-flash"): _d(2026, 8, 13),
@@ -216,6 +220,10 @@ _THINKING_ONLY: frozenset = frozenset({
 # (tencent/zhipu 用完即停) so NO slot — including VL — goes fully dark under staleness.
 # Fail SAFE, not open.
 _MINIMAL_SAFE_SET: frozenset = frozenset({
+    ("aliyun_c", "qwen3.7-flash-2026-07-15"),  # 10/23 fast JSON/text
+    ("aliyun_b", "qwen3.7-flash-2026-07-15"),  # independent-account fallback
+    ("aliyun_c", "qwen3.7-flash"),
+    ("aliyun_b", "qwen3.7-flash"),
     ("aliyun_c", "qwen3.7-max-2026-06-08"),   # 09/08 max
     ("aliyun_c", "glm-5.2"),                  # 09/15 quality
     ("aliyun_c", "qwen-plus-latest"),
@@ -618,6 +626,9 @@ _VL_CHAIN: List[Tuple[str, str]] = _dedup_chain([
 SLOT_MODELS: Dict[SLOT, List[Tuple[str, str]]] = {
     # CHAT — 高频低延迟, thinking off → flash/turbo, perishable first.
     SLOT.CHAT: _dedup_chain([
+        ("aliyun_c", "qwen3.7-flash-2026-07-15"),
+        ("aliyun_b", "qwen3.7-flash-2026-07-15"),
+        ("aliyun_c", "qwen3.7-flash"), ("aliyun_b", "qwen3.7-flash"),
         ("aliyun_a", "qwen3.6-flash"), ("aliyun_b", "qwen3.6-flash-2026-04-16"),
         ("aliyun_b", "qwen-flash"), ("aliyun_b", "qwen-turbo"),
         ("aliyun_c", "qwen3.5-flash"), ("aliyun_c", "qwen3.6-flash-2026-04-16"),
@@ -631,30 +642,28 @@ SLOT_MODELS: Dict[SLOT, List[Tuple[str, str]]] = {
     ] + _TEXT_TAIL),
     # CHART — compact JSON (thinking off + json_object) → flash/coder; NO glm-5 head (60s).
     SLOT.CHART: _dedup_chain([
+        ("aliyun_c", "qwen3.7-flash-2026-07-15"),
+        ("aliyun_b", "qwen3.7-flash-2026-07-15"),
+        ("aliyun_c", "qwen3.7-flash"), ("aliyun_b", "qwen3.7-flash"),
         ("aliyun_b", "qwen3.6-flash-2026-04-16"), ("aliyun_b", "qwen-turbo"),
         ("aliyun_c", "qwen3.5-flash"), ("aliyun_c", "qwen3-coder-flash"),
         ("aliyun_b", "qwen3-coder-flash"), ("tencent", "qwen3.5-flash"),
     ] + _TEXT_TAIL),
-    # MAPPER — 字段映射 JSON (thinking off + json_object) → fast flash/coder.
-    # 2026-07-23 控制台实测: 头部换 c/qwen3.6-flash-2026-04-16 (剩44.7万,
-    # 08-13) — 原头 a/qwen3.6-flash、b/qwen-flash 已过期, c/qwen3.5-flash
-    # 额度耗尽 (留链尾靠 403 直落, 万一月度重置还能自愈)。
-    # 2026-07-26 生产事故: 该头部随后也返回 403，深链中的多个慢模型先吃完
-    # 7.5s 总预算。首次止血曾把 c/qwen3.7-max 提到第二位，但生产复测发现
-    # 其免费额度也已返回 403。随后用真实餐饮 T3 prompt 探测 c/glm-5.2：
-    # 4/4 正确、1.97-2.47s，且受同一免费额度/到期门禁保护。因此将 glm-5.2
-    # 提为低成本健康候选。MAPPER 不再追加通用 _TEXT_TAIL：Max/DeepSeek/Kimi
-    # 对短 JSON 分类既慢又浪费，生产已证明它们只会把一次请求拖成长尾。
-    # 保留独立的 flash/plus/zhipu 小链；真正的经营深度分析仍由
-    # INSIGHTS/REASONING 槽负责，不牺牲其模型质量。
+    # MAPPER — 字段映射 JSON (thinking off + json_object) → fast text models.
+    # 2026-07-26 用户控制台截图确认 B/C 的 versioned Flash 与 alias 均有
+    # 100 万免费额度且用完即停；用独立账户交错排列，单账户限流/故障时一次
+    # 即切换。链尾只保留 GLM/Plus/Zhipu，不追加通用 _TEXT_TAIL：
+    # Max/DeepSeek/Kimi 对短 JSON 分类既慢又浪费，生产已证明会放大超时。
+    # 深度经营分析继续由 INSIGHTS/REASONING 槽负责。
     SLOT.MAPPER: _dedup_chain([
-        ("aliyun_c", "qwen3.6-flash-2026-04-16"),
+        ("aliyun_c", "qwen3.7-flash-2026-07-15"),
+        ("aliyun_b", "qwen3.7-flash-2026-07-15"),
+        ("aliyun_c", "qwen3.7-flash"),
+        ("aliyun_b", "qwen3.7-flash"),
         ("aliyun_c", "glm-5.2"),
-        ("aliyun_a", "qwen3.6-flash"), ("aliyun_b", "qwen-flash"),
-        ("aliyun_c", "qwen3.5-flash"), ("aliyun_c", "qwen3-coder-flash"),
-        ("tencent", "qwen3.5-flash"),
-        ("aliyun_b", "qwen3.6-flash-2026-04-16"), ("aliyun_b", "qwen-turbo"),
-        ("aliyun_c", "qwen-plus-latest"), ("zhipu", "glm-4.5-air"),
+        ("aliyun_c", "qwen3.7-plus"),
+        ("aliyun_b", "qwen3.7-plus"),
+        ("zhipu", "glm-4.5-air"),
     ]),
     # REASONING — 深度 (thinking on / thinking-only OK) → deepseek/MoE reasoners.
     SLOT.REASONING: _dedup_chain([

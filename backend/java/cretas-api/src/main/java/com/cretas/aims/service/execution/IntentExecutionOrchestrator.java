@@ -367,13 +367,14 @@ public class IntentExecutionOrchestrator {
             return buildRestaurantMarginProhibitedActionsResponse(request);
         }
         // The comprehensive synthesis engine is an existing deterministic
-        // multi-dimension path (FactBook + optional narrative LLM). Route only
-        // explicit synthesis wording before the restaurant single-intent
-        // semantic planner; otherwise the tiered-first branch intercepts the
-        // request and a mapper-provider outage prevents the 21-dimension engine
-        // from running at all. This is intentionally narrower than a generic
-        // keyword route: ordinary revenue/dish/margin questions remain under
-        // the immutable restaurant QueryPlan.
+        // multi-dimension path (FactBook + optional narrative LLM). Route
+        // explicit synthesis wording, or a genuine multi-dimension analysis
+        // request, before the restaurant single-intent semantic planner.
+        // Otherwise a dimension word such as "排班" can be intercepted by an
+        // early single-intent phrase and the 21-dimension engine never runs.
+        // The multi-dimension form needs at least three distinct business
+        // dimensions plus analysis/cause/advice wording, so ordinary
+        // revenue/dish/margin questions remain under the immutable QueryPlan.
         if (!factoryPackConstrained
                 && isRestaurantTenant(factoryId)
                 && isRestaurantComprehensiveSynthesisQuestion(userInput)) {
@@ -1861,10 +1862,38 @@ public class IntentExecutionOrchestrator {
                     "综合分析|全面分析|多维(?:度)?分析|综合诊断|综合评估|"
                     + "整体经营分析|运营分析|经营分析");
 
+    private static final java.util.regex.Pattern RESTAURANT_COMPREHENSIVE_ANALYSIS_HINT =
+            java.util.regex.Pattern.compile("分析|诊断|评估|原因|建议|决策|方案|优化");
+
+    private static final List<java.util.regex.Pattern> RESTAURANT_COMPREHENSIVE_DIMENSIONS =
+            List.of(
+                    java.util.regex.Pattern.compile("客流|客流量|到店|进店|顾客数|人数"),
+                    java.util.regex.Pattern.compile("菜品|菜式|单品|销量|点单|爆品"),
+                    java.util.regex.Pattern.compile("毛利|成本|利润|营收|营业额|客单价|订单量|单量"),
+                    java.util.regex.Pattern.compile("周边|商圈|竞品|竞争"),
+                    java.util.regex.Pattern.compile("天气|气温|降雨|下雨|高温|低温"),
+                    java.util.regex.Pattern.compile("活动|促销|折扣|优惠|团购|核销"),
+                    java.util.regex.Pattern.compile("评价|差评|好评|口碑|评分"),
+                    java.util.regex.Pattern.compile("排班|人效|员工|前厅|后厨|工时"));
+
     boolean isRestaurantComprehensiveSynthesisQuestion(String userInput) {
-        return userInput != null
-                && RESTAURANT_COMPREHENSIVE_PATTERN.matcher(
-                        userInput.replaceAll("\\s+", "")).find();
+        if (userInput == null) {
+            return false;
+        }
+        String normalized = userInput.replaceAll("\\s+", "");
+        if (RESTAURANT_COMPREHENSIVE_PATTERN.matcher(normalized).find()) {
+            return true;
+        }
+        if (!RESTAURANT_COMPREHENSIVE_ANALYSIS_HINT.matcher(normalized).find()) {
+            return false;
+        }
+        int matchedDimensions = 0;
+        for (java.util.regex.Pattern dimension : RESTAURANT_COMPREHENSIVE_DIMENSIONS) {
+            if (dimension.matcher(normalized).find() && ++matchedDimensions >= 3) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private boolean isRestaurantCompoundQuestion(String factoryId, String userInput) {
