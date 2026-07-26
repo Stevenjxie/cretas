@@ -17,6 +17,7 @@ import com.cretas.aims.service.AIIntentService;
 import com.cretas.aims.service.IntentExecutorService;
 import com.cretas.aims.service.KeywordEffectivenessService;
 import com.cretas.aims.service.ParameterExtractionLearningService;
+import com.cretas.aims.service.restaurant.RestaurantComprehensiveQuestionPolicy;
 import com.cretas.aims.service.impl.IntentConfigRollbackService;
 import com.cretas.aims.entity.learning.ParameterExtractionRule;
 import com.cretas.aims.entity.config.AIIntentConfigHistory;
@@ -288,6 +289,11 @@ public class AIIntentConfigController {
             return;
         }
         String q = input.replaceAll("\\s+", "");
+        if (RestaurantComprehensiveQuestionPolicy.matches(q)) {
+            log.info("[RestaurantDemoIntentShortcut] defer comprehensive question to shared policy: "
+                    + "factoryId={}, input={}", factoryId, input);
+            return;
+        }
         if (isRestaurantOwnerActionQuestion(q)) {
             log.info("[RestaurantDemoIntentShortcut] skip report shortcut for owner-action phrase: factoryId={}, input={}",
                     factoryId, input);

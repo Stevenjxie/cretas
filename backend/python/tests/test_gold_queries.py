@@ -20,6 +20,7 @@ from smartbi.gold import (
     discount_breakdown,
     finance_summary,
     kpi_summary,
+    supplier_price_coverage,
     top_products,
 )
 from smartbi.gold.restaurant_ops_router import resolve_store_margin
@@ -356,6 +357,94 @@ async def test_store_scoped_dish_ranking_never_reuses_chain_totals(
     assert [row["revenue"] for row in ranked] == [100.0, 50.0]
     # The chain has x=130, but S1-only must remain x=100.
     assert ranked[0]["revenue"] != 130.0
+
+
+@pytest.mark.asyncio
+async def test_supplier_price_coverage_establishes_its_own_rls_tenant():
+    """Concurrent synthesis pulls cannot inherit tenant state from each other."""
+    import asyncpg
+
+    isolated_pool = await asyncpg.create_pool(
+        _validated_test_dsn(),
+        min_size=1,
+        max_size=1,
+    )
+    try:
+        async with isolated_pool.acquire() as conn:
+            await conn.execute(
+                "SELECT set_config('app.factory_id', $1, false)",
+                _TENANT,
+            )
+            await conn.execute(
+                "DELETE FROM agg_supplier_price WHERE factory_id=$1",
+                _TENANT,
+            )
+            await conn.executemany(
+                """
+                INSERT INTO agg_supplier_price (
+                    factory_id, source_note_id, supplier_id, supplier_name,
+                    ingredient_name, normalized_name, delivery_date,
+                    unit_price, quantity, unit, line_amount
+                ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+                """,
+                [
+                    (
+                        _TENANT,
+                        "N1",
+                        "SUP1",
+                        "供应商A",
+                        "青花椒",
+                        "青花椒",
+                        date(2026, 4, 10),
+                        Decimal("100"),
+                        Decimal("10"),
+                        "kg",
+                        Decimal("1000"),
+                    ),
+                    (
+                        _TENANT,
+                        "N2",
+                        "SUP1",
+                        "供应商A",
+                        "青花椒",
+                        "青花椒",
+                        date(2026, 4, 20),
+                        Decimal("102"),
+                        Decimal("10"),
+                        "kg",
+                        Decimal("1020"),
+                    ),
+                ],
+            )
+            # Poison the sole pooled connection. The production function must
+            # replace this value before its SELECT or FORCE RLS returns zero.
+            await conn.execute(
+                "SELECT set_config('app.factory_id', 'OTHER_TENANT', false)"
+            )
+
+        out = await supplier_price_coverage(
+            isolated_pool,
+            _TENANT,
+            (date(2026, 4, 1), date(2026, 4, 30)),
+        )
+        assert out == {
+            "observation_count": 2,
+            "ingredient_count": 1,
+            "supplier_count": 1,
+            "first_date": "2026-04-10",
+            "last_date": "2026-04-20",
+        }
+    finally:
+        async with isolated_pool.acquire() as conn:
+            await conn.execute(
+                "SELECT set_config('app.factory_id', $1, false)",
+                _TENANT,
+            )
+            await conn.execute(
+                "DELETE FROM agg_supplier_price WHERE factory_id=$1",
+                _TENANT,
+            )
+        await isolated_pool.close()
 
 
 @pytest.mark.asyncio

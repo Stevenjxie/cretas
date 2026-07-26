@@ -1524,6 +1524,14 @@ async def supplier_price_coverage(
     start, end = date_range
     _validate_range(start, end)
     async with pool.acquire() as conn:
+        # This function is called concurrently with other synthesis pulls, so
+        # it can receive a different pooled connection from the anomaly
+        # detector. RLS state is connection-local: always establish the tenant
+        # here rather than relying on another coroutine's set_config call.
+        await conn.execute(
+            "SELECT set_config('app.factory_id', $1, false)",
+            factory_id,
+        )
         row = await conn.fetchrow(
             """
             SELECT COUNT(*)::int AS observation_count,

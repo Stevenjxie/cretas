@@ -33,6 +33,7 @@ MIGRATIONS = (
     "2026_05_25_agg_discount.sql",
     "V20260602_03__p4_canonical_dish.sql",
     "V20260709_01__agg_daily_cost.sql",
+    "V20260916_01__agg_supplier_price.sql",
 )
 
 

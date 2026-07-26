@@ -215,6 +215,10 @@ class _SignalConn:
 class _CoverageConn:
     def __init__(self):
         self.calls = []
+        self.execute_calls = []
+
+    async def execute(self, sql, *params):
+        self.execute_calls.append((sql, params))
 
     async def fetchrow(self, sql, *params):
         self.calls.append((sql, params))
@@ -292,6 +296,9 @@ async def test_supplier_price_coverage_distinguishes_stable_data_from_no_data():
         "first_date": "2026-07-01",
         "last_date": "2026-07-20",
     }
+    rls_sql, rls_params = conn.execute_calls[0]
+    assert "set_config('app.factory_id'" in rls_sql
+    assert rls_params == ("REAL_RESTAURANT",)
     sql, params = conn.calls[0]
     assert "factory_id = $1" in sql
     assert params == ("REAL_RESTAURANT", date(2026, 7, 1), date(2026, 7, 31))

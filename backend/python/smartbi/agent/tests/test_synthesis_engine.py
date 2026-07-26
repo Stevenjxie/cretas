@@ -510,7 +510,7 @@ class TestBuildFactbook:
         assert "商圈/品牌级描述性背景" in prompt
         assert "不用全部门店数据代替" in prompt
 
-    def test_demo_supplier_price_facts_use_unified_gold_tenant(
+    def test_demo_supplier_price_facts_use_demo_procurement_tenant(
         self, monkeypatch,
     ):
         captured = {}
@@ -545,8 +545,8 @@ class TestBuildFactbook:
         ))
 
         assert captured == {
-            "anomaly_factory": "RES_3101_009",
-            "coverage_factory": "RES_3101_009",
+            "anomaly_factory": "DEMO_REST",
+            "coverage_factory": "DEMO_REST",
         }
         assert fb.supplier_anomaly["coverage"]["observation_count"] == 12
         prompt = fb.to_prompt_text()
