@@ -60,9 +60,36 @@ class _FakeConn:
     def __init__(self, fetchrow_result):
         self._fetchrow_result = fetchrow_result
         self.fetchrow_calls = 0
+        self.in_transaction = False
+        self.active_factory = None
+
+    def transaction(self):
+        conn = self
+
+        class _Ctx:
+            async def __aenter__(self):
+                conn.in_transaction = True
+                conn.active_factory = None
+                return None
+
+            async def __aexit__(self, *_exc):
+                conn.active_factory = None
+                conn.in_transaction = False
+                return False
+
+        return _Ctx()
+
+    async def execute(self, sql, *args):
+        if "set_config('app.factory_id'" not in sql:
+            raise AssertionError(f"unexpected execute SQL: {sql}")
+        assert self.in_transaction is True
+        self.active_factory = args[0]
+        return "SELECT 1"
 
     async def fetchrow(self, sql, *args):
         self.fetchrow_calls += 1
+        assert self.in_transaction is True
+        assert self.active_factory == args[0]
         return self._fetchrow_result
 
 

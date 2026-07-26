@@ -2283,10 +2283,26 @@ async def _is_restaurant_tenant(pool, factory_id: str) -> bool:
         return cached
     try:
         async with pool.acquire() as conn:
-            row = await conn.fetchrow(
-                "SELECT 1 FROM agg_restaurant_daily_totals WHERE factory_id = $1 LIMIT 1",
-                factory_id,
-            )
+            # ``agg_restaurant_daily_totals`` is protected by factory RLS.
+            # A newly-created asyncpg connection has no tenant context, so
+            # querying it directly can return no rows even when this factory
+            # has restaurant data.  Caching that false result made the gate
+            # worker-dependent in multi-worker Uvicorn: whichever worker saw
+            # the context-free lookup first rejected every later request.
+            #
+            # Bind the trusted factory id locally to this transaction before
+            # reading.  ``is_local=true`` guarantees the context cannot leak
+            # back into the pool after the transaction ends.
+            async with conn.transaction():
+                await conn.execute(
+                    "SELECT set_config('app.factory_id', $1, true)",
+                    factory_id,
+                )
+                row = await conn.fetchrow(
+                    "SELECT 1 FROM agg_restaurant_daily_totals"
+                    " WHERE factory_id = $1 LIMIT 1",
+                    factory_id,
+                )
     except Exception as exc:
         logger.warning(
             f"[restaurant-intent] tenant gate lookup failed for {factory_id} (not cached): {exc}"
