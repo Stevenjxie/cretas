@@ -2765,6 +2765,7 @@ def test_rolling_window_revenue_routes_to_sales_summary(query, expected):
 
 @pytest.mark.parametrize("query,expected", [
     ("米饭的销量是多少", "米饭"),
+    ("本月全部门店米饭销量是多少，表现怎么样", "米饭"),
     ("米饭的成本如何", "米饭"),
     ("招牌藤椒味的成本是多少", "招牌藤椒味"),
     ("这个过去一个月的销量如何", None),
@@ -2778,6 +2779,7 @@ def test_dish_candidate_singleturn_and_contextualized(query, expected):
 
 @pytest.mark.parametrize("query", [
     "米饭的销量是多少",
+    "本月全部门店米饭销量是多少，表现怎么样",
     "米饭的成本如何",
     "招牌藤椒味的销售额是多少",
     "本月全部门店招牌青花椒味(单人份)的营业额是多少？",

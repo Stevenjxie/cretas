@@ -1356,6 +1356,48 @@ def test_followup_with_explicit_new_entity_replaces_dish_but_inherits_time():
     assert effective == "最近30天招牌藤椒味的成本如何"
 
 
+@pytest.mark.parametrize(
+    ("query", "expected_dish"),
+    [
+        ("本月全部门店米饭销量是多少，表现怎么样", "米饭"),
+        ("本月全部门店娃娃菜销量是多少，表现怎么样", "娃娃菜"),
+        (
+            "最近30天全部门店享库1.8斤波龙套餐399销量是多少，表现如何",
+            "享库1.8斤波龙套餐399",
+        ),
+    ],
+)
+def test_fully_scoped_named_dish_overrides_ranked_dish_context(
+    query,
+    expected_dish,
+):
+    parent = {
+        "parent_query": "本月全部门店销量最高的10个菜是什么",
+        "parent_template_code": "RESTAURANT_OPS_GROSS_MARGIN",
+        "structured_context": {
+            "focus_entity": {
+                "type": "dish",
+                "name": "招牌青花椒味(单人份)",
+                "rank": 1,
+            },
+            "window_label": "本月",
+            "requested_metrics": ["sales_volume"],
+            "topic_kind": "dish_ranking",
+            "store_scope": "all",
+        },
+    }
+
+    effective, inherited = contextualize_restaurant_followup(query, parent)
+    spec = _explicit_named_dish_metric_spec(effective)
+
+    assert inherited is False
+    assert effective == query
+    assert spec is not None
+    assert spec.dish_slot == expected_dish
+    assert spec.store_scope == "all"
+    assert spec.requested_metrics == ("sales_volume",)
+
+
 def test_followup_switch_entity_inherits_parent_metric_and_window():
     parent = {
         "parent_query": "本月招牌藤椒味(单人份)销量如何",
