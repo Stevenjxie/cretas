@@ -1,5 +1,6 @@
 package com.cretas.aims.service.intent.impl;
 
+import com.cretas.aims.dto.ai.PreprocessedQuery;
 import com.cretas.aims.dto.conversation.ConversationContext;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -34,6 +35,18 @@ import static org.assertj.core.api.Assertions.assertThat;
  */
 @DisplayName("X1 Part B — continuation-intent inheritance")
 class IntentContinuationAugmentTest {
+
+    @Test
+    @DisplayName("bare time continuation preserves its augmented executable query")
+    void bareTimeContinuationPreservesAugmentedExecutableQuery() {
+        PreprocessedQuery result =
+                IntentRecognitionPipelineServiceImpl.ensureContinuationFinalQuery(
+                        "最近30天", "最近30天门店营收排行", null);
+
+        assertThat(result.getOriginalInput()).isEqualTo("最近30天");
+        assertThat(result.getNormalizedText()).isEqualTo("最近30天门店营收排行");
+        assertThat(result.getFinalQuery()).isEqualTo("最近30天门店营收排行");
+    }
 
     private IntentRecognitionPipelineServiceImpl newService() {
         // maybeAugmentContinuation touches no instance field — all 26 deps may be null.

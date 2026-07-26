@@ -7,6 +7,7 @@ import com.cretas.aims.config.IntentKnowledgeBase;
 import com.cretas.aims.dto.ai.IntentExecuteRequest;
 import com.cretas.aims.dto.ai.IntentExecuteResponse;
 import com.cretas.aims.dto.ai.PreprocessedQuery;
+import com.cretas.aims.dto.conversation.ConversationMessage;
 import com.cretas.aims.dto.intent.IntentMatchResult;
 import com.cretas.aims.entity.config.AIIntentConfig;
 import com.cretas.aims.repository.AIAnalysisResultRepository;
@@ -27,6 +28,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
+import java.util.List;
 import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -38,17 +40,19 @@ class IntentExecutionOrchestratorStoreClarificationTest {
 
     private IntentExecutionOrchestrator orchestrator;
     private AIIntentService aiIntentService;
+    private ConversationMemoryService conversationMemoryService;
 
     @BeforeEach
     void setUp() {
         aiIntentService = mock(AIIntentService.class);
+        conversationMemoryService = mock(ConversationMemoryService.class);
         orchestrator = new IntentExecutionOrchestrator(
                 aiIntentService,
                 mock(IntentSemanticsParser.class),
                 mock(SemanticCacheService.class),
                 mock(RuleEngineService.class),
                 mock(ConversationService.class),
-                mock(ConversationMemoryService.class),
+                conversationMemoryService,
                 new ObjectMapper(),
                 mock(DashScopeClient.class),
                 mock(DashScopeConfig.class),
@@ -63,6 +67,54 @@ class IntentExecutionOrchestratorStoreClarificationTest {
                 mock(ToolDispatchService.class),
                 mock(DynamicToolSelectionService.class),
                 mock(QueryPreprocessorService.class));
+    }
+
+    @Test
+    @DisplayName("verified time clarification carries the parent ranking question into execution")
+    void timeClarificationCarriesParentQuestionIntoExecution() {
+        when(conversationMemoryService.getRecentMessages("sid-store-time", 8))
+                .thenReturn(List.of(
+                        ConversationMessage.user("哪家店业绩最好"),
+                        ConversationMessage.assistant(
+                                "你想看哪个时间范围？请选择本月、上个月、最近7天或最近30天。")));
+        IntentMatchResult inherited = IntentMatchResult.builder()
+                .bestMatch(storeRankIntent())
+                .matchMethod(IntentMatchResult.MatchMethod.CONTINUATION_INHERIT)
+                .preprocessedQuery(PreprocessedQuery.builder()
+                        .originalInput("最近30天")
+                        .finalQuery("最近30天门店营收排行")
+                        .build())
+                .build();
+
+        String executionInput = orchestrator.resolveSessionAwareRestaurantContinuationInput(
+                request("最近30天", "sid-store-time"), inherited);
+
+        assertThat(executionInput).isEqualTo("哪家店业绩最好，最近30天");
+    }
+
+    @Test
+    @DisplayName("non-clarification continuation uses the safe augmented query")
+    void nonClarificationContinuationUsesAugmentedQuery() {
+        when(conversationMemoryService.getRecentMessages("sid-period-change", 8))
+                .thenReturn(List.of(
+                        ConversationMessage.user("哪家店业绩最好"),
+                        ConversationMessage.assistant(
+                                "你想看哪个时间范围？请选择本月、上个月、最近7天或最近30天。"),
+                        ConversationMessage.user("本月门店营收排行"),
+                        ConversationMessage.assistant("门店营收排行结果")));
+        IntentMatchResult inherited = IntentMatchResult.builder()
+                .bestMatch(storeRankIntent())
+                .matchMethod(IntentMatchResult.MatchMethod.CONTINUATION_INHERIT)
+                .preprocessedQuery(PreprocessedQuery.builder()
+                        .originalInput("上个月")
+                        .finalQuery("上个月门店营收排行")
+                        .build())
+                .build();
+
+        String executionInput = orchestrator.resolveSessionAwareRestaurantContinuationInput(
+                request("上个月", "sid-period-change"), inherited);
+
+        assertThat(executionInput).isEqualTo("上个月门店营收排行");
     }
 
     @Test
