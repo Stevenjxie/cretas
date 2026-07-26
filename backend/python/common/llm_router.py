@@ -213,6 +213,11 @@ _SAFE_MODELS: Dict[Tuple[str, str], Optional[datetime.date]] = {
 _THINKING_ONLY: frozenset = frozenset({
     "deepseek-r1", "deepseek-r1-0528", "deepseek-r1-distill-qwen-32b",
     "qwen3-235b-a22b-thinking-2507", "qwq-plus", "kimi-k2.7-code", "kimi-k2-thinking",
+    # 2026-07-26 live probes on A/B/C: both SKUs reject
+    # enable_thinking=false with Algo.InvalidParameter. Keep them out of every
+    # slot whose profile disables thinking; quota and protocol compatibility
+    # are separate concerns.
+    "qwen3.7-max-2026-05-17", "qwen3.7-max-preview",
 })
 
 # Minimal hard-coded known-safe fallback set if the registry goes stale (>21d).
@@ -635,17 +640,20 @@ SLOT_MODELS: Dict[SLOT, List[Tuple[str, str]]] = {
         ("aliyun_c", "qwen-plus-latest"), ("tencent", "qwen3.5-flash"),
     ] + _TEXT_TAIL),
     # INSIGHTS — 长经营分析优先 Plus（质量/时延平衡），Max 仅作深尾。
-    # 2026-07-26 用户逐账户截图确认 B/C 的 Plus 与指定版本均有大额免费额度，
+    # 2026-07-26 用户逐账户截图确认 A/B/C 的 Plus 与指定版本均有大额免费额度，
     # 且全部开启“免费额度用完即停”。生产 14:55 已证明把三个耗尽 Max 放在
-    # 链头会连续 403，既浪费延迟也没有提升质量；C/B 交错可在单账户故障时
-    # 一次切换，同时保留 Max 作为真正需要更深推理时的后备。
+    # 链头会连续 403，既浪费延迟也没有提升质量。当天真实最小探针确认
+    # C/B/A Plus 均 200，A qwen3.7-max-2026-06-08 也 200；旧 A
+    # qwen3.7-max-2026-05-20 已 403。按独立账户交错，在单账户故障时一次
+    # 切换，同时只保留已验证兼容非思考请求的 Max 作为深尾。
     SLOT.INSIGHTS: _dedup_chain([
         ("aliyun_c", "qwen3.7-plus"), ("aliyun_b", "qwen3.7-plus"),
+        ("aliyun_a", "qwen3.7-plus"),
         ("aliyun_c", "qwen3.7-plus-2026-05-26"),
         ("aliyun_b", "qwen3.7-plus-2026-05-26"),
+        ("aliyun_a", "qwen3.7-plus-2026-05-26"),
         ("aliyun_c", "glm-5.2"), ("aliyun_c", "qwen-plus-latest"),
-        ("aliyun_a", "qwen3.7-max-2026-05-20"),
-        ("aliyun_b", "qwen3.7-max-2026-05-20"),
+        ("aliyun_a", "qwen3.7-max-2026-06-08"),
         ("aliyun_c", "qwen3.7-max-2026-06-08"),
         ("aliyun_c", "qwen3-max-preview"),
     ] + _TEXT_TAIL),
@@ -672,6 +680,7 @@ SLOT_MODELS: Dict[SLOT, List[Tuple[str, str]]] = {
         ("aliyun_c", "glm-5.2"),
         ("aliyun_c", "qwen3.7-plus"),
         ("aliyun_b", "qwen3.7-plus"),
+        ("aliyun_a", "qwen3.7-plus"),
         ("zhipu", "glm-4.5-air"),
     ]),
     # REASONING — 深度 (thinking on / thinking-only OK) → deepseek/MoE reasoners.
@@ -683,10 +692,15 @@ SLOT_MODELS: Dict[SLOT, List[Tuple[str, str]]] = {
     ] + _TEXT_TAIL),
     # VL — 仅视觉链.
     SLOT.VL: _VL_CHAIN,
-    # REVIEW — 中文 critique 质量 → max/plus + deepseek-v3.2 (实测 concise+complete).
+    # REVIEW — 中文 critique 质量 → verified non-thinking Max/Plus.
+    # 05-17/preview Max 强制 enable_thinking=true，与 REVIEW 的低延迟
+    # enable_thinking=false 契约冲突；改用 A/C 06-08（实测均兼容）并以
+    # 三账户 Plus 收尾，避免每次稳定 400 后才 fallback。
     SLOT.REVIEW: _dedup_chain([
-        ("aliyun_a", "qwen3.7-max-2026-05-17"), ("aliyun_b", "qwen3-max-2025-09-23"),
-        ("aliyun_c", "qwen3.7-max-2026-06-08"), ("aliyun_c", "qwen3-max-preview"),
+        ("aliyun_a", "qwen3.7-max-2026-06-08"),
+        ("aliyun_c", "qwen3.7-max-2026-06-08"),
+        ("aliyun_c", "qwen3.7-plus"), ("aliyun_b", "qwen3.7-plus"),
+        ("aliyun_a", "qwen3.7-plus"),
         ("aliyun_c", "deepseek-v3.2"), ("aliyun_c", "glm-5.2"),
     ] + _TEXT_TAIL),
 }
