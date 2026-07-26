@@ -846,6 +846,11 @@ def test_detect_dimensions(query, expected_dim):
     assert expected_dim in _detect_dimensions(query)
 
 
+def test_ingredient_cost_metric_is_not_an_ingredient_breakdown_dimension():
+    assert _detect_dimensions("这道菜的食材成本是多少") == ("dish",)
+    assert "ingredient" in _detect_dimensions("按食材拆分这道菜的成本")
+
+
 # ─── 6. Answer Contract ────────────────────────────────────────────────────
 
 def _spec(**overrides) -> RestaurantQuerySpec:
@@ -1659,6 +1664,7 @@ def test_dish_cost_qualifiers_after_context_reference_do_not_become_dish_names(
     )
     assert spec.store_scope == "all"
     assert spec.dish_slot == "招牌青花椒味(单人份)"
+    assert spec.dimensions == ("dish",)
     assert spec.requested_metrics == ("recipe_cost",)
 
 
