@@ -357,8 +357,28 @@ class RestaurantOpsGoldRouteTest {
                 .contains("RESTAURANT_OPS_GROSS_MARGIN");
         assertThat(orchestrator.matchRestaurantOpsIntent("周末周中营业额对比如何", "RESTAURANT"))
                 .contains("RESTAURANT_WEEKDAY_WEEKEND");
+        assertThat(orchestrator.matchRestaurantOpsIntent("上个月哪家门店营收最高？", "RESTAURANT"))
+                .contains("RESTAURANT_STORE_REVENUE_RANK");
+        assertThat(orchestrator.matchRestaurantOpsIntent("本月哪个店营业额最高", "RESTAURANT"))
+                .contains("RESTAURANT_STORE_REVENUE_RANK");
+        assertThat(orchestrator.matchRestaurantOpsIntent("2026年6月销售额冠军是哪家分店", "RESTAURANT"))
+                .contains("RESTAURANT_STORE_REVENUE_RANK");
+        assertThat(orchestrator.matchRestaurantOpsIntent("上个月各门店营收排名", "RESTAURANT"))
+                .contains("RESTAURANT_STORE_REVENUE_RANK");
+        assertThat(orchestrator.matchRestaurantOpsIntent("上个月营收最高的门店是哪家", "RESTAURANT"))
+                .contains("RESTAURANT_STORE_REVENUE_RANK");
         assertThat(orchestrator.matchRestaurantOpsIntent("哪个月营收最高，为什么", "RESTAURANT"))
                 .contains("RESTAURANT_PEAK_MONTH");
+        assertThat(orchestrator.matchRestaurantOpsIntent("营收最高的是哪个月份", "RESTAURANT"))
+                .contains("RESTAURANT_PEAK_MONTH");
+        assertThat(orchestrator.matchRestaurantOpsIntent("哪个月门店营收最高", "RESTAURANT"))
+                .contains("RESTAURANT_PEAK_MONTH");
+        assertThat(orchestrator.matchRestaurantOpsIntent("哪个门店哪个月营收最高", "RESTAURANT"))
+                .isEmpty();
+        assertThat(orchestrator.matchRestaurantOpsIntent("上个月哪家门店营收最高，为什么", "RESTAURANT"))
+                .isEmpty();
+        assertThat(orchestrator.matchRestaurantOpsIntent("上个月哪家门店毛利最高", "RESTAURANT"))
+                .contains("RESTAURANT_OPS_STORE_MARGIN");
         assertThat(orchestrator.matchRestaurantOpsIntent("慢销菜品有哪些，怎么处理", "RESTAURANT"))
                 .contains("RESTAURANT_DISH_SLOW");
     }
