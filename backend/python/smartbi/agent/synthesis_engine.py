@@ -146,7 +146,10 @@ from smartbi.gold.queries import (
     weather_daily,
 )
 from smartbi.gold.restaurant_intent_promotion import classify_question_family
-from smartbi.gold.restaurant_ops_router import demo_data_factory_for_code
+from smartbi.gold.restaurant_ops_router import (
+    demo_data_factory_for_code,
+    resolve_by_code,
+)
 from smartbi.services.distillation_capture import persist_distillation_sample
 from smartbi.services.insight_dimensions import (
     InsightDimension,
@@ -444,7 +447,7 @@ HONEST_LABEL_CLAUSE = (
     "禁止用肯定或否定语气声称该维度发生了什么、影响了什么或没有影响。"
 )
 
-SYNTHESIS_CONTRACT_VERSION = "restaurant-dimensions-v6"
+SYNTHESIS_CONTRACT_VERSION = "restaurant-dimensions-v7"
 
 
 def _is_restaurant_synthesis_tenant(factory_id: str) -> bool:
@@ -1638,6 +1641,75 @@ class ComprehensiveSynthesisEngine:
             done = await asyncio.gather(*(tasks[k] for k in keys))
             results = dict(zip(keys, done))
 
+        # Demo and recently imported restaurant tenants can have complete POS
+        # item facts before the monthly agg_product projection is populated.
+        # The single-dish Gold route already owns the canonical POS ranking
+        # query and the accessory exclusion contract, so reuse that source of
+        # truth instead of declaring dish sales/revenue missing or duplicating
+        # its SQL here.  Authentication/cache identity stays on factory_id;
+        # only the read-side data tenant is passed to the resolver.
+        if plan.get("sales"):
+            current_top = (
+                (results.get("top_products") or {}).get("top_products") or []
+            )
+            current_bottom = (
+                (results.get("bottom_products") or {}).get("top_products") or []
+            )
+
+            async def _pos_ranking(direction: str):
+                label = "最高" if direction == "best" else "最低"
+                return await _safe(
+                    resolve_by_code(
+                        "RESTAURANT_OPS_GROSS_MARGIN",
+                        self._pool,
+                        gold_margin_factory,
+                        query=(
+                            f"{date_range[0].isoformat()}至"
+                            f"{date_range[1].isoformat()}全部门店"
+                            f"销量{label}的5道菜"
+                        ),
+                        date_range=date_range,
+                        # Comprehensive synthesis is permission-gated by the
+                        # Java analysis tool.  Use the restaurant owner read
+                        # role so the shared resolver can return the same
+                        # revenue facts already exposed by finance_summary.
+                        role="restaurant_owner",
+                    ),
+                    f"pos_{direction}_products",
+                )
+
+            missing_rankings = []
+            if not current_top:
+                missing_rankings.append(("top_products", "best"))
+            if not current_bottom:
+                missing_rankings.append(("bottom_products", "worst"))
+            if missing_rankings:
+                fallback_answers = await asyncio.gather(
+                    *(_pos_ranking(direction) for _, direction in missing_rankings)
+                )
+                for (result_key, _), answer in zip(
+                    missing_rankings,
+                    fallback_answers,
+                ):
+                    ranked_entities = (
+                        (getattr(answer, "meta", None) or {}).get("ranked_entities")
+                        if answer is not None else []
+                    ) or []
+                    products = [
+                        {
+                            "product_id": entity.get("id"),
+                            "product_name": entity.get("name"),
+                            "qty_sold": entity.get("sales_volume"),
+                            "revenue": entity.get("revenue"),
+                            "bill_count": entity.get("bill_count"),
+                        }
+                        for entity in ranked_entities
+                        if entity.get("name")
+                        and entity.get("sales_volume") is not None
+                    ]
+                    if products:
+                        results[result_key] = {"top_products": products}
+
         # ---- assemble review ----
         if plan.get("review"):
             summary = results.get("review_summary")
@@ -1933,7 +2005,7 @@ class ComprehensiveSynthesisEngine:
         if sales.get("top_products") or sales.get("bottom_products"):
             mark_available(
                 "dish_sales",
-                "agg_product+dim_product",
+                "agg_product/POS明细+dim_product",
                 coverage={
                     "ranked_high_count": len(sales.get("top_products") or []),
                     "ranked_low_count": len(sales.get("bottom_products") or []),

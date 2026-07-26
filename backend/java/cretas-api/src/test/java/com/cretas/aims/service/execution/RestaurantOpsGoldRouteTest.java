@@ -73,6 +73,22 @@ class RestaurantOpsGoldRouteTest {
     private AuthenticatedToolPrincipalFactory principalFactory;
     private final ObjectMapper objectMapper = new ObjectMapper();
 
+    @Test
+    @DisplayName("conceptual internal-external and missing-dimension wording uses comprehensive synthesis")
+    void conceptualComprehensiveWordingDoesNotFallIntoOwnerActionShortcuts() {
+        assertThat(orchestrator.isRestaurantComprehensiveSynthesisQuestion(
+                "最近30天全部门店最值得优先解决的经营问题是什么？"
+                        + "把内部经营和外部环境维度一起看，缺数据就告诉我还需补什么，不要猜数字"))
+                .isTrue();
+        assertThat(orchestrator.isRestaurantComprehensiveSynthesisQuestion(
+                "不要只把优化理解成滞销。请按最近30天全部门店的销量、销售额"
+                        + "和其他可用菜品经营指标给出优化候选，并明确缺失维度"))
+                .isTrue();
+        assertThat(orchestrator.isRestaurantComprehensiveSynthesisQuestion(
+                "本月全部门店招牌菜营业额是多少"))
+                .isFalse();
+    }
+
     @BeforeEach
     void setUp() {
         aiIntentService = mock(AIIntentService.class);

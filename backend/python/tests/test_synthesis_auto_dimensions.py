@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import date
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -454,6 +455,99 @@ async def test_demo_comprehensive_uses_unified_gold_tenant_only_for_pos_facts(
         period="2026-07-01 至 2026-07-02",
     )
     assert calls["finance"] == ["REAL_RESTAURANT"]
+
+
+@pytest.mark.asyncio
+async def test_sales_dimension_falls_back_to_canonical_pos_dish_rankings(
+    monkeypatch,
+):
+    async def empty_products(*_args, **_kwargs):
+        return {"top_products": []}
+
+    async def empty_breakdown(*_args, **_kwargs):
+        return {}
+
+    ranking_calls: list[dict[str, object]] = []
+
+    async def fake_resolve(code, _pool, factory_id, **kwargs):
+        ranking_calls.append({
+            "code": code,
+            "factory_id": factory_id,
+            **kwargs,
+        })
+        best = "最高" in str(kwargs["query"])
+        return SimpleNamespace(meta={
+            "ranked_entities": [{
+                "type": "dish",
+                "id": "D-BEST" if best else "D-WORST",
+                "name": "招牌藤椒鱼" if best else "清炒时蔬",
+                "rank": 1,
+                "sales_volume": 88.0 if best else 3.0,
+                "revenue": 8800.0 if best else 180.0,
+                "bill_count": 72 if best else 3,
+            }],
+            "excluded_item_count": 4,
+            "excluded_item_reasons": {"accessory": 4},
+        })
+
+    monkeypatch.setattr(se, "top_products", empty_products)
+    monkeypatch.setattr(se, "channel_breakdown", empty_breakdown)
+    monkeypatch.setattr(se, "discount_breakdown", empty_breakdown)
+    monkeypatch.setattr(se, "resolve_by_code", fake_resolve)
+
+    engine = ComprehensiveSynthesisEngine(
+        pool=object(),
+        budget_tracker=object(),
+        cache=object(),
+    )
+    plan = {"sales": True, "cross": []}
+    fb = await engine._build_factbook(
+        "DEMO_REST",
+        (date(2026, 6, 26), date(2026, 7, 25)),
+        plan,
+        period="2026-06-26 至 2026-07-25",
+    )
+
+    assert len(ranking_calls) == 2
+    assert {call["code"] for call in ranking_calls} == {
+        "RESTAURANT_OPS_GROSS_MARGIN",
+    }
+    assert {call["factory_id"] for call in ranking_calls} == {
+        "RES_3101_009",
+    }
+    assert all(
+        call["date_range"] == (date(2026, 6, 26), date(2026, 7, 25))
+        for call in ranking_calls
+    )
+    assert fb.sales == {
+        "top_products": [{
+            "product_id": "D-BEST",
+            "product_name": "招牌藤椒鱼",
+            "qty_sold": 88.0,
+            "revenue": 8800.0,
+            "bill_count": 72,
+        }],
+        "bottom_products": [{
+            "product_id": "D-WORST",
+            "product_name": "清炒时蔬",
+            "qty_sold": 3.0,
+            "revenue": 180.0,
+            "bill_count": 3,
+        }],
+        "channels": [],
+        "discounts": [],
+    }
+    dish_sales = next(
+        item for item in fb.available_dimensions if item["code"] == "dish_sales"
+    )
+    assert dish_sales["source"] == "agg_product/POS明细+dim_product"
+    assert not any(
+        item["code"] == "dish_sales" for item in fb.missing_dimensions
+    )
+    prompt = fb.to_prompt_text()
+    assert "招牌藤椒鱼" in prompt
+    assert "清炒时蔬" in prompt
+    assert "米饭：" not in prompt
 
 
 def test_demo_seed_has_fixed_long_window_all_dimension_sources_and_demo_isolation():

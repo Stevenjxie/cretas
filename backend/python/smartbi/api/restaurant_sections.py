@@ -1896,7 +1896,7 @@ def _owner_chart_guide(scenario: str) -> str:
 
 def _is_unscoped_owner_prohibition_question(message: str) -> bool:
     text = re.sub(r"[\s，。！？、,.!?；;：:]+", "", (message or "").strip())
-    return text in {
+    if text in {
         "哪些事情先不要做",
         "哪些事情今天先不要做",
         "今天哪些事情先不要做",
@@ -1905,7 +1905,33 @@ def _is_unscoped_owner_prohibition_question(message: str) -> bool:
         "有什么先不要做",
         "先不要做什么",
         "先别做什么",
-    }
+    }:
+        return True
+
+    has_prohibition = bool(re.search(
+        r"先(?:不要|别)做|暂时(?:不要|别)做|先不做",
+        text,
+    ))
+    has_generic_action = bool(re.search(
+        r"事情|动作|经营措施|措施|操作|项目",
+        text,
+    ))
+    has_request = bool(re.search(
+        r"哪些|什么|有什么|告诉我|帮我|说说|建议",
+        text,
+    ))
+    has_explicit_scope = bool(re.search(
+        r"营收|营业额|毛利|利润|成本|损耗|复购|评价|客流|"
+        r"菜品|套餐|折扣|优惠|投流|库存|采购|排班|活动|"
+        r"门店|客单|订单|外卖|堂食|厨房|出餐",
+        text,
+    ))
+    return (
+        has_prohibition
+        and has_generic_action
+        and has_request
+        and not has_explicit_scope
+    )
 
 
 def _owner_chat_follow_ups(

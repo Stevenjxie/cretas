@@ -2382,12 +2382,13 @@ def test_dish_ranking_emits_typed_focus_entity(ranking_query):
         query=ranking_query,
     ))
 
-    assert result.meta["focus_entity"] == {
-        "type": "dish",
-        "id": 2,
-        "name": "招牌藤椒味(单人份)",
-        "rank": 1,
-    }
+    assert result.meta["focus_entity"]["type"] == "dish"
+    assert result.meta["focus_entity"]["id"] == 2
+    assert result.meta["focus_entity"]["name"] == "招牌藤椒味(单人份)"
+    assert result.meta["focus_entity"]["rank"] == 1
+    assert result.meta["focus_entity"]["sales_volume"] == 50.0
+    assert result.meta["focus_entity"]["revenue"] == 4000.0
+    assert result.meta["focus_entity"]["bill_count"] == 45
     assert result.meta["ranked_entities"][1]["id"] == 3
     assert result.meta["excluded_item_count"] == 1
     assert "米饭(单人份)" not in result.answer_text
@@ -2403,12 +2404,13 @@ def test_dish_ranking_applies_user_limit_and_exclusions_in_execution():
 
     assert result.meta["ranking_limit"] == 1
     assert result.meta["excluded_entities"] == ["招牌藤椒味(单人份)"]
-    assert result.meta["ranked_entities"] == [{
-        "type": "dish",
-        "id": 3,
-        "name": "藤椒味双人份",
-        "rank": 1,
-    }]
+    assert result.meta["ranked_entities"][0]["type"] == "dish"
+    assert result.meta["ranked_entities"][0]["id"] == 3
+    assert result.meta["ranked_entities"][0]["name"] == "藤椒味双人份"
+    assert result.meta["ranked_entities"][0]["rank"] == 1
+    assert result.meta["ranked_entities"][0]["sales_volume"] == 20.0
+    assert result.meta["ranked_entities"][0]["revenue"] == 3000.0
+    assert result.meta["ranked_entities"][0]["bill_count"] == 18
     assert "招牌藤椒味(单人份)" not in result.answer_text
     assert "藤椒味双人份" in result.answer_text
 
