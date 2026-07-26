@@ -36,6 +36,7 @@ from smartbi.gold.restaurant_intent import (
 )
 from smartbi.gold.restaurant_ops_router import (
     _resolve_sales_date_range,
+    _resolve_sales_query_spec,
     extract_store_mention,
     match_restaurant_ops,
 )
@@ -173,6 +174,32 @@ def test_matrix_object_dimensions_detected():
     assert "store" in _build_spec("RESTAURANT_OPS_STORE_MARGIN", "哪家店拖后腿", confidence=1.0, tier="test").dimensions
     assert "dish" in _build_spec("RESTAURANT_OPS_GROSS_MARGIN", "菜品毛利", confidence=1.0, tier="test").dimensions
     assert "ingredient" in _build_spec("RESTAURANT_OPS_REQUISITION_TREND", "领料", confidence=1.0, tier="test").dimensions
+
+
+@pytest.mark.parametrize(
+    "query,baseline_label",
+    [
+        ("昨天的营业额是高于前天还是低于前天？", "前天"),
+        ("上个月营业额和上上个月相比怎么样", "上上个月"),
+    ],
+)
+def test_query_plan_seals_primary_and_baseline_windows(query, baseline_label):
+    expected = _resolve_sales_query_spec(query)
+    spec = _build_spec(
+        "RESTAURANT_OPS_SALES_SUMMARY",
+        query,
+        confidence=1.0,
+        tier="explicit_comparison_slots",
+        planner_authority="explicit_comparison_slots",
+        require_explicit_time=True,
+    )
+
+    assert spec.date_range == expected.date_range
+    assert spec.comparison_range == expected.comparison_range
+    assert spec.comparison_label == baseline_label
+    assert spec.comparison == expected.comparison_kind
+    assert spec.analysis_action == "compare"
+    assert spec.plan_hash
 
 
 # ─── 2. Tiered routing ─────────────────────────────────────────────────────

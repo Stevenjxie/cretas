@@ -84,6 +84,28 @@ def test_resolver_kwargs_preserve_store_comparison_baseline():
     assert kwargs["comparison_date_range"][1] is not None
 
 
+def test_resolver_kwargs_use_sealed_comparison_when_current_text_is_only_store_scope():
+    spec = _build_spec(
+        "RESTAURANT_OPS_SALES_SUMMARY",
+        "昨天的营业额是高于前天还是低于前天？ 全部门店",
+        confidence=1.0,
+        tier="explicit_comparison_slots",
+        planner_authority="explicit_comparison_slots",
+    )
+
+    kwargs = svc._resolver_kwargs(
+        spec,
+        "restaurant_manager",
+        "全部门店",
+    )
+
+    assert kwargs["date_range"] == spec.date_range
+    assert kwargs["comparison_date_range"] == spec.comparison_range
+    assert kwargs["window_label"] == spec.window_label
+    assert kwargs["comparison_label"] == spec.comparison_label
+    assert kwargs["comparison_kind"] == spec.comparison
+
+
 def test_should_delegate_validated_plan_cache_without_java_reinterpretation():
     spec = _spec(
         intent="RESTAURANT_OPS_TREND_ANALYSIS",

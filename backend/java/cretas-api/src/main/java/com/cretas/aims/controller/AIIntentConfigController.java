@@ -420,6 +420,10 @@ public class AIIntentConfigController {
                 "\u6392\u884c",
                 "\u5bf9\u6bd4",
                 "\u6bd4\u8f83",
+                "\u76f8\u6bd4",
+                "\u9ad8\u4e8e",
+                "\u4f4e\u4e8e",
+                "\u9ad8\u8fd8\u662f\u4f4e",
                 "\u7b2c\u4e00\u540d",
                 "\u51a0\u519b");
     }

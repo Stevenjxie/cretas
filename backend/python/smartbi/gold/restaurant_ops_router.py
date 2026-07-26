@@ -4581,6 +4581,13 @@ async def resolve_sales_summary(
     role: Optional[str] = None,
     query: Optional[str] = None,
     today: Optional[date] = None,
+    date_range: Optional[Tuple[Optional[date], Optional[date]]] = None,
+    window_label: Optional[str] = None,
+    comparison_date_range: Optional[
+        Tuple[Optional[date], Optional[date]]
+    ] = None,
+    comparison_label: Optional[str] = None,
+    comparison_kind: Optional[str] = None,
 ) -> OpsAnswer:
     from smartbi.gold.queries import finance_summary, store_comparison
     from smartbi_compat._rbac_strip import PRICE_VIEW_ROLES
@@ -4592,10 +4599,33 @@ async def resolve_sales_summary(
     # like a result for the requested period.  ``today`` is injectable only for
     # deterministic tests; production callers use the server's current date.
     spec = _resolve_sales_query_spec(query, today=today)
+    if date_range is not None and (
+        len(date_range) != 2
+        or date_range[0] is None
+        or date_range[1] is None
+    ):
+        raise ValueError("date_range must include both start and end")
+    if comparison_date_range is not None and (
+        len(comparison_date_range) != 2
+        or comparison_date_range[0] is None
+        or comparison_date_range[1] is None
+    ):
+        raise ValueError(
+            "comparison_date_range must include both start and end"
+        )
+    resolved_date_range = date_range or spec.date_range
+    resolved_window_label = window_label or spec.window_label
+    resolved_comparison_range = (
+        comparison_date_range or spec.comparison_range
+    )
+    resolved_comparison_label = (
+        comparison_label or spec.comparison_label
+    )
+    resolved_comparison_kind = comparison_kind or spec.comparison_kind
     asks_prohibited_actions = any(token in (query or "") for token in (
         "先不要做", "不要做", "先别做", "不该做", "避免做", "暂时别",
     ))
-    date_range, window_label = spec.date_range, spec.window_label
+    date_range, window_label = resolved_date_range, resolved_window_label
     if window_label == _FUTURE_WINDOW_LABEL:
         return OpsAnswer(
             code="RESTAURANT_OPS_SALES_SUMMARY",
@@ -4610,11 +4640,15 @@ async def resolve_sales_summary(
         )
     summary = await finance_summary(smartbi_pool, factory_id, date_range, top_n_stores=5)
     comparison_summary: Optional[Dict[str, Any]] = None
-    if spec.comparison_label and spec.comparison_range[0] and spec.comparison_range[1]:
+    if (
+        resolved_comparison_label
+        and resolved_comparison_range[0]
+        and resolved_comparison_range[1]
+    ):
         comparison_summary = await finance_summary(
             smartbi_pool,
             factory_id,
-            spec.comparison_range,
+            resolved_comparison_range,
             top_n_stores=5,
         )
     stores_data = await store_comparison(smartbi_pool, factory_id, date_range)
@@ -4652,16 +4686,20 @@ async def resolve_sales_summary(
     )
 
     comparison_meta: Optional[Dict[str, Any]] = None
-    if spec.comparison_label and spec.comparison_range[0] and spec.comparison_range[1]:
+    if (
+        resolved_comparison_label
+        and resolved_comparison_range[0]
+        and resolved_comparison_range[1]
+    ):
         comparison_meta = {
             "answered": True,
-            "kind": spec.comparison_kind,
+            "kind": resolved_comparison_kind,
             "primary_label": window_label,
             "primary_start": _date_text(date_range[0]) if date_range[0] else None,
             "primary_end": _date_text(date_range[1]) if date_range[1] else None,
-            "baseline_label": spec.comparison_label,
-            "baseline_start": _date_text(spec.comparison_range[0]),
-            "baseline_end": _date_text(spec.comparison_range[1]),
+            "baseline_label": resolved_comparison_label,
+            "baseline_start": _date_text(resolved_comparison_range[0]),
+            "baseline_end": _date_text(resolved_comparison_range[1]),
         }
 
     def _money(v: Optional[float]) -> str:
@@ -4829,7 +4867,7 @@ async def resolve_sales_summary(
         baseline_bills = int(baseline.get("bill_count") or 0)
         baseline_avg_bill = baseline.get("avg_bill_value")
         baseline_range_text = (
-            f"{spec.comparison_label}"
+            f"{resolved_comparison_label}"
             f"（{_range_text(comparison_meta['baseline_start'], comparison_meta['baseline_end'])}）"
         )
         if baseline_bills <= 0:
