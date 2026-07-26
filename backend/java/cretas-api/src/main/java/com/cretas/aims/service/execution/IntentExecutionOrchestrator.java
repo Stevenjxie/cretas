@@ -1578,6 +1578,9 @@ public class IntentExecutionOrchestrator {
                 || isMarginProhibitedActionAnalysis(unicodeSafeInput)) {
             return Optional.of("RESTAURANT_OPS_GROSS_MARGIN");
         }
+        if (isRestaurantStoreRevenueRankQuestion(unicodeSafeInput)) {
+            return Optional.of("RESTAURANT_STORE_REVENUE_RANK");
+        }
         if (containsAny(unicodeSafeInput, "\u8425\u6536", "\u8425\u4e1a\u989d", "\u9500\u552e\u989d", "\u9500\u552e", "\u5ba2\u5355\u4ef7", "\u8ba2\u5355")
                 && containsAny(unicodeSafeInput, "\u67e5\u8be2", "\u67e5\u4e00\u4e0b", "\u770b\u4e00\u4e0b", "\u770b\u770b",
                         "\u672c\u5468", "\u8fd9\u5468", "\u4eca\u5929", "\u672c\u6708", "\u8868\u73b0", "\u600e\u4e48\u6837",
@@ -1594,9 +1597,7 @@ public class IntentExecutionOrchestrator {
             return Optional.of("RESTAURANT_WEEKDAY_WEEKEND");
         }
 
-        if (containsAny(q, "月", "月份")
-                && containsAny(q, "营收", "营业额", "销售额", "销售")
-                && containsAny(q, "最高", "最多", "峰值", "为什么", "原因")) {
+        if (isRestaurantPeakMonthQuestion(q)) {
             return Optional.of("RESTAURANT_PEAK_MONTH");
         }
 
@@ -1665,6 +1666,64 @@ public class IntentExecutionOrchestrator {
 
     private boolean isRestaurantFactoryId(String factoryId) {
         return factoryId != null && (factoryId.startsWith("RES_") || "DEMO_REST".equalsIgnoreCase(factoryId));
+    }
+
+    /**
+     * Routes a ranking whose comparison object is a store, not a month.
+     *
+     * <p>A relative time such as “上个月” is only a filter. It must not turn
+     * “上个月哪家门店营收最高” into the peak-month intent. Questions that ask
+     * “哪个月/哪个月份” remain outside this route, as do causal/optimization
+     * requests that need the tiered analysis path.
+     */
+    private boolean isRestaurantStoreRevenueRankQuestion(String input) {
+        if (input == null || input.isBlank()) {
+            return false;
+        }
+        String q = input.replaceAll("\\s+", "");
+        if (asksForMonthAsComparisonObject(q)
+                || containsAny(q, "为什么", "原因", "怎么改善", "怎么提升", "如何改善", "如何提升", "诊断")) {
+            return false;
+        }
+        boolean hasRevenueMetric = containsAny(
+                q, "营收", "营业额", "销售额", "销售业绩", "门店业绩", "客单价");
+        if (!hasRevenueMetric) {
+            return false;
+        }
+        boolean mentionsStore = containsAny(q, "门店", "分店", "店铺", "哪家店", "哪间店", "哪个店");
+        boolean asksForStoreRank = asksForStoreAsComparisonObject(q)
+                || containsAny(q, "排名", "排行", "对比", "比较", "第一名", "冠军", "最高", "最好", "最多");
+        return mentionsStore && asksForStoreRank;
+    }
+
+    private boolean isRestaurantPeakMonthQuestion(String input) {
+        if (input == null || input.isBlank()) {
+            return false;
+        }
+        String q = input.replaceAll("\\s+", "");
+        if (asksForStoreAsComparisonObject(q)) {
+            return false;
+        }
+        boolean hasRevenueMetric = containsAny(q, "营收", "营业额", "销售额", "销售");
+        boolean asksForPeak = containsAny(q, "最高", "最多", "峰值", "最好", "为什么", "原因");
+        return hasRevenueMetric
+                && asksForPeak
+                && (asksForMonthAsComparisonObject(q)
+                || containsAny(q, "峰值月份", "营收峰值月", "销售峰值月", "月度峰值"));
+    }
+
+    private boolean asksForMonthAsComparisonObject(String input) {
+        return containsAny(
+                input,
+                "哪个月", "哪一个月", "哪月", "哪个月份", "哪一个月份", "什么月份",
+                "最高的月份", "最多的月份", "峰值月份");
+    }
+
+    private boolean asksForStoreAsComparisonObject(String input) {
+        return containsAny(
+                input,
+                "哪家", "哪间", "哪个门店", "哪一个门店", "哪个店", "哪一个店",
+                "哪家分店", "哪个分店", "哪一个分店");
     }
 
     private boolean containsAny(String input, String... terms) {
