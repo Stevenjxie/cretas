@@ -1613,6 +1613,56 @@ def test_dish_followup_inherits_all_store_scope_with_entity_and_window():
 
 
 @pytest.mark.parametrize(
+    ("query", "expected_body"),
+    [
+        ("这个菜的单份成本是多少？", "单份成本是多少？"),
+        ("这道菜每份成本呢？", "每份成本呢？"),
+        ("该菜的单位成本如何", "单位成本如何"),
+        ("它的食材成本呢？", "食材成本呢？"),
+    ],
+)
+def test_dish_cost_qualifiers_after_context_reference_do_not_become_dish_names(
+    query,
+    expected_body,
+):
+    parent = {
+        "parent_query": "最近7天全部门店哪个菜卖得好",
+        "parent_template_code": "RESTAURANT_OPS_GROSS_MARGIN",
+        "structured_context": {
+            "focus_entity": {
+                "type": "dish",
+                "id": "dish-42",
+                "name": "招牌青花椒味(单人份)",
+                "rank": 1,
+            },
+            "window_label": "最近7天",
+            "requested_metrics": ["sales_volume"],
+            "store_scope": "all",
+            "store_names": [],
+        },
+    }
+
+    effective, inherited = contextualize_restaurant_followup(query, parent)
+
+    assert inherited is True
+    assert effective == (
+        "最近7天全部门店招牌青花椒味(单人份)的"
+        f"{expected_body}"
+    )
+    assert "菜的单份" not in effective
+    spec = _build_spec(
+        "RESTAURANT_OPS_GROSS_MARGIN",
+        effective,
+        confidence=0.95,
+        tier="llm",
+        planner_authority="llm",
+    )
+    assert spec.store_scope == "all"
+    assert spec.dish_slot == "招牌青花椒味(单人份)"
+    assert spec.requested_metrics == ("recipe_cost",)
+
+
+@pytest.mark.parametrize(
     ("store_scope", "store_names", "expected_scope_text"),
     [
         ("single", ["青花椒南方百联店"], "青花椒南方百联店"),

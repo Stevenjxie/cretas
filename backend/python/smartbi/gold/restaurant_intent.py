@@ -544,7 +544,7 @@ def capability_clarification_question(query: str) -> Optional[str]:
 
 
 _FOLLOWUP_PREFIXES = (
-    "那", "这个", "那个", "它", "刚才", "继续", "再", "为什么", "怎么做", "怎么办", "怎么",
+    "那", "这个", "那个", "这道菜", "那道菜", "它", "该菜", "该店", "刚才", "继续", "再", "为什么", "怎么做", "怎么办", "怎么",
     "如何", "下一步", "先做", "换成", "改成", "哪些动作", "先别", "明天看",
     "和上", "与上", "跟上", "比上", "呢",
 )
@@ -682,7 +682,7 @@ def _strip_followup_reference(text: str) -> str:
     """Remove only discourse/pronoun scaffolding, never metric words."""
     body = re.sub(
         r"^(?:那|这个|那个)?(?:它|这道菜|那道菜|那个菜|这个菜|"
-        r"这家店|那家店|第一名)(?:的)?[，, ]*",
+        r"该菜|这家店|那家店|该店|第一名)(?:的)?[，, ]*",
         "",
         text,
         count=1,
@@ -829,10 +829,30 @@ def contextualize_restaurant_followup(
             "",
             current_without_store_scope,
         ).strip()
-        explicit_entity = (
-            extract_dish_candidate(entity_source)
+        # A generic reference is not a newly named entity.  In particular,
+        # ``这个菜的单份成本`` used to be parsed as a dish called ``菜的单份``
+        # after the leading pronoun was stripped by the dish-name extractor.
+        # Keep explicit switches such as ``那招牌藤椒味呢`` working, but let
+        # trusted context resolve pronoun-led dish/store follow-ups first.
+        context_reference = (
+            re.match(
+                r"^(?:它|这个菜|这道菜|那个菜|那道菜|该菜|第一名)(?:的)?",
+                entity_source,
+            )
             if entity_type == "dish"
-            else extract_store_mention(entity_source)
+            else re.match(
+                r"^(?:它|这个店|那个店|这家店|那家店|该店|第一名)(?:的)?",
+                entity_source,
+            )
+        )
+        explicit_entity = (
+            None
+            if context_reference
+            else (
+                extract_dish_candidate(entity_source)
+                if entity_type == "dish"
+                else extract_store_mention(entity_source)
+            )
         )
         # An explicitly named object replaces the entity slot while retaining
         # the trusted metric/window slots when this utterance is dependent

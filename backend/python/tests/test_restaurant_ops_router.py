@@ -2390,6 +2390,20 @@ def test_r17c_appended_window_hint_does_not_break_entity_switch():
     assert _r.extract_dish_candidate("米饭的销量是多少 最近30天") == "米饭"
 
 
+@pytest.mark.parametrize(
+    "query",
+    [
+        "招牌青花椒味(单人份)的单份成本是多少？",
+        "招牌青花椒味(单人份)每份成本呢？",
+        "招牌青花椒味(单人份)的单位成本如何",
+        "招牌青花椒味(单人份)的食材成本呢？",
+        "招牌青花椒味(单人份)的每份原材料成本是多少？",
+    ],
+)
+def test_extract_dish_candidate_stops_before_cost_scope_qualifier(query):
+    assert _r.extract_dish_candidate(query) == "招牌青花椒味(单人份)"
+
+
 def test_r20_colloquial_dish_forms():
     assert _r.extract_dish_candidate("这周米饭卖了多少") == "米饭"
     assert _r.extract_dish_candidate("米饭赚钱吗") == "米饭"
