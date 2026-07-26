@@ -36,6 +36,7 @@ from smartbi.gold.restaurant_intent import (
     _explicit_named_dish_metric_spec,
     _explicit_revenue_trend_spec,
     _explicit_sales_period_comparison_spec,
+    _explicit_store_dish_ranking_spec,
     _explicit_store_operations_spec,
     _trusted_context_dish_followup_spec,
     _verbatim_entity,
@@ -594,6 +595,72 @@ async def test_explicit_multi_store_ranking_missing_time_asks_for_time_without_t
         "青花椒南方百联店",
         "青花椒徐汇光启城店",
     )
+    t3.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "query,direction",
+    [
+        ("全部门店销量最高的5道菜", "best"),
+        ("全部门店销量最低的5道菜", "worst"),
+    ],
+)
+async def test_explicit_all_store_ranking_missing_time_asks_without_t3(
+    query,
+    direction,
+):
+    t3 = AsyncMock(side_effect=AssertionError(
+        "an all-store dish ranking may not invent a default time window"
+    ))
+    with patch("smartbi.gold.restaurant_intent._t3_llm_parse", new=t3):
+        spec = await parse_restaurant_query(
+            query,
+            _restaurant_pool(),
+            factory_id="DEMO_REST",
+        )
+
+    assert spec is not None
+    assert spec.intent == "RESTAURANT_OPS_GROSS_MARGIN"
+    assert spec.planner_authority == "explicit_slots"
+    assert spec.clarification_needed is True
+    assert spec.clarification_question == TIME_CLARIFICATION_QUESTION
+    assert spec.store_scope == "all"
+    assert spec.store_slots == ()
+    assert spec.dimensions == ("dish",)
+    assert spec.requested_metrics == ("sales_volume",)
+    assert spec.ranking_direction == direction
+    assert spec.ranking_limit == 5
+    t3.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_all_store_limited_ranking_time_button_keeps_full_plan():
+    t3 = AsyncMock(side_effect=AssertionError(
+        "the fixed time answer must complete the explicit ranking plan"
+    ))
+    with patch("smartbi.gold.restaurant_intent._t3_llm_parse", new=t3):
+        first = await parse_restaurant_query(
+            "全部门店销量最低的5道菜",
+            _restaurant_pool(),
+            factory_id="DEMO_REST",
+        )
+    second = _explicit_store_dish_ranking_spec(
+        "全部门店销量最低的5道菜 最近7天",
+        is_continuation=True,
+    )
+
+    assert first.clarification_question == TIME_CLARIFICATION_QUESTION
+    assert second is not None
+    assert second.clarification_needed is False
+    assert second.intent == "RESTAURANT_OPS_GROSS_MARGIN"
+    assert second.window_label == "最近7天"
+    assert second.store_scope == "all"
+    assert second.ranking_direction == "worst"
+    assert second.ranking_limit == 5
+    assert second.requested_metrics == ("sales_volume",)
+    assert "全部门店销量最低的5道菜" in second.resolver_query_seed
+    assert "最近7天" in second.resolver_query_seed
     t3.assert_not_awaited()
 
 

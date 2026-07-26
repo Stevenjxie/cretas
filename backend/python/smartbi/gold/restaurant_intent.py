@@ -1869,16 +1869,17 @@ def _explicit_store_dish_ranking_spec(
     *,
     is_continuation: bool = False,
 ) -> Optional[RestaurantQuerySpec]:
-    """Compile or clarify a structured, read-only store × dish ranking.
+    """Compile or clarify a structured, read-only scoped dish ranking.
 
     This is deliberately narrower than a keyword route.  It grants execution
     only when every resolver-facing semantic slot is independently present:
-    one or more concrete store names, the dish-sales metric, a best/worst
-    ranking direction, and a concrete date window.  When time alone is
-    missing, it deterministically returns the existing time clarification
-    instead of spending T3 budget. Any extra metric, named dish, comparison,
-    diagnosis, optimisation, export, or negated ranking phrase remains
-    LLM-authorised and fail-closed.
+    either an explicit all-store scope or one or more concrete store names,
+    the dish-sales metric, a best/worst ranking direction, and a concrete
+    date window. When time alone is missing, it deterministically returns the
+    existing time clarification instead of allowing T3 to invent a default
+    30-day window. Any extra metric, named dish, comparison, diagnosis,
+    optimisation, export, or negated ranking phrase remains LLM-authorised
+    and fail-closed.
 
     The live failure that motivated this guard supplied two exact store names,
     ``最近7天`` and ``哪个菜卖得好``. Sending that already-complete plan to T3
@@ -1893,7 +1894,8 @@ def _explicit_store_dish_ranking_spec(
     missing_time = start_date is None and end_date is None
     requested_metrics = _detect_requested_metrics(text)
     if (
-        store_scope not in {"single", "multiple"}
+        store_scope not in {"all", "single", "multiple"}
+        or (store_scope == "all" and store_slots)
         or (store_scope == "single" and len(store_slots) != 1)
         or (store_scope == "multiple" and len(store_slots) < 2)
         or ((start_date is None) != (end_date is None))
@@ -1905,8 +1907,18 @@ def _explicit_store_dish_ranking_spec(
     ):
         return None
 
+    selected_code = (
+        "RESTAURANT_OPS_STORE_MARGIN"
+        if store_scope in {"single", "multiple"}
+        else "RESTAURANT_OPS_GROSS_MARGIN"
+    )
+    expected_dimensions = (
+        {"store", "dish"}
+        if store_scope in {"single", "multiple"}
+        else {"dish"}
+    )
     spec = _build_spec(
-        "RESTAURANT_OPS_STORE_MARGIN",
+        selected_code,
         text,
         confidence=1.0,
         tier="explicit_slots",
@@ -1925,9 +1937,9 @@ def _explicit_store_dish_ranking_spec(
         or (not missing_time and spec.clarification_needed)
         or spec.store_scope != store_scope
         or spec.store_slots != store_slots
-        or set(spec.dimensions) != {"store", "dish"}
+        or set(spec.dimensions) != expected_dimensions
         or spec.requested_metrics != ("sales_volume",)
-        or spec.planned_intents != ("RESTAURANT_OPS_STORE_MARGIN",)
+        or spec.planned_intents != (selected_code,)
         or spec.dish_slot
         or spec.unsupported_requirements
         or spec.asks_priority
