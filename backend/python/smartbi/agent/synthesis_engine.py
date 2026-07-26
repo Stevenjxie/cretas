@@ -1630,6 +1630,11 @@ class ComprehensiveSynthesisEngine:
             "RESTAURANT_OPS_GROSS_MARGIN",
             factory_id,
         )
+        # Demo's deterministic restaurant facts live in the unified Gold
+        # tenant. Supplier-price observations belong to that same seeded data
+        # universe; authentication and cache identity stay on ``factory_id``.
+        # Answers still label these as brand-shared, never store-local, facts.
+        gold_supplier_factory = gold_margin_factory
 
         tasks: Dict[str, Any] = {}
         if plan.get("review"):
@@ -1675,10 +1680,15 @@ class ComprehensiveSynthesisEngine:
             )
         if plan.get("supplier_anomaly"):
             tasks["supplier_anomaly"] = _safe(
-                detect_price_anomalies(self._pool, factory_id), "supplier_anomaly",
+                detect_price_anomalies(self._pool, gold_supplier_factory),
+                "supplier_anomaly",
             )
             tasks["supplier_price_coverage"] = _safe(
-                supplier_price_coverage(self._pool, factory_id, date_range),
+                supplier_price_coverage(
+                    self._pool,
+                    gold_supplier_factory,
+                    date_range,
+                ),
                 "supplier_price_coverage",
             )
         if plan.get("attribution"):
@@ -1835,9 +1845,20 @@ class ComprehensiveSynthesisEngine:
                     if store_names
                     else "全部门店"
                 )
+                resolver_code = (
+                    "RESTAURANT_OPS_STORE_MARGIN"
+                    if store_names
+                    else "RESTAURANT_OPS_GROSS_MARGIN"
+                )
+                resolver_scope = {}
+                if store_names:
+                    if len(store_names) == 1:
+                        resolver_scope["store_name"] = store_names[0]
+                    else:
+                        resolver_scope["store_mentions"] = list(store_names)
                 return await _safe(
                     resolve_by_code(
-                        "RESTAURANT_OPS_GROSS_MARGIN",
+                        resolver_code,
                         self._pool,
                         gold_margin_factory,
                         query=(
@@ -1851,6 +1872,7 @@ class ComprehensiveSynthesisEngine:
                         # role so the shared resolver can return the same
                         # revenue facts already exposed by finance_summary.
                         role="restaurant_owner",
+                        **resolver_scope,
                     ),
                     f"pos_{direction}_products",
                 )

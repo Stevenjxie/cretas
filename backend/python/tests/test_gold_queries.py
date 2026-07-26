@@ -22,6 +22,7 @@ from smartbi.gold import (
     kpi_summary,
     top_products,
 )
+from smartbi.gold.restaurant_ops_router import resolve_store_margin
 from smartbi.gold.triggers import UploadCompleteTrigger
 
 
@@ -327,6 +328,34 @@ async def test_top_products_ranked_by_revenue(pool, seeded):
     assert products[0]["qty_sold"] == 2.0
     assert products[1]["product_name"] == "y"
     assert products[1]["revenue"] == 50.0
+
+
+@pytest.mark.asyncio
+async def test_store_scoped_dish_ranking_never_reuses_chain_totals(
+    pool, seeded,
+):
+    """The synthesis fallback uses this resolver for explicit store scope."""
+    from smartbi.tenant_ctx import set_factory_id, reset_factory_id
+    token = set_factory_id(_TENANT)
+    try:
+        out = await resolve_store_margin(
+            pool,
+            _TENANT,
+            role="restaurant_owner",
+            query="2026-04-21至2026-04-22 S1销量最高的5道菜",
+            date_range=(date(2026, 4, 21), date(2026, 4, 22)),
+            store_name="S1",
+        )
+    finally:
+        reset_factory_id(token)
+
+    assert out.meta["scope_matches_request"] is True
+    assert out.meta["selected_stores"] == ["S1"]
+    ranked = out.meta["ranked_entities"]
+    assert [row["name"] for row in ranked] == ["x", "y"]
+    assert [row["revenue"] for row in ranked] == [100.0, 50.0]
+    # The chain has x=130, but S1-only must remain x=100.
+    assert ranked[0]["revenue"] != 130.0
 
 
 @pytest.mark.asyncio
