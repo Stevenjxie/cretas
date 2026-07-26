@@ -247,24 +247,17 @@ def _suggested_followups(context: Dict[str, Any]) -> List[Dict[str, str]]:
     focus = context.get("focus_entity")
     if not isinstance(focus, dict) or not focus.get("name"):
         return []
-    name = str(focus["name"])
-    window_label = str(context.get("window_label") or "").strip()
-    time_prefix = (
-        ""
-        if not window_label or window_label == "全部历史"
-        else window_label
-    )
     current_metrics = set(context.get("requested_metrics") or [])
     if focus.get("type") == "dish":
         candidates = [
-            ("sales_volume", "看菜品销量", f"{time_prefix}「{name}」的销量是多少？"),
-            ("recipe_cost", "看菜品成本", f"{time_prefix}「{name}」的成本如何？"),
-            ("gross_margin", "看菜品毛利", f"{time_prefix}「{name}」的毛利率如何？"),
+            ("sales_volume", "看菜品销量", "这个菜的销量呢？"),
+            ("recipe_cost", "看菜品成本", "这个菜的成本呢？"),
+            ("gross_margin", "看菜品毛利", "这个菜的毛利率呢？"),
         ]
     else:
         candidates = [
-            ("revenue", "看门店营收", f"{time_prefix}「{name}」的营收如何？"),
-            ("gross_margin", "看门店毛利", f"{time_prefix}「{name}」的毛利率如何？"),
+            ("revenue", "看门店营收", "这家店的营收呢？"),
+            ("gross_margin", "看门店毛利", "这家店的毛利率呢？"),
         ]
     return [
         {"label": label, "question": question}

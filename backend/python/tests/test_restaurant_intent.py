@@ -31,6 +31,7 @@ from smartbi.gold.restaurant_intent import (
     _build_spec,
     _detect_comparison,
     _detect_dimensions,
+    _trusted_context_dish_followup_spec,
     _verbatim_entity,
 )
 from smartbi.gold.restaurant_ops_router import (
@@ -1702,6 +1703,38 @@ def test_time_only_switch_preserves_dish_cost_and_all_store_scope():
     assert spec.store_scope == "all"
     assert spec.dish_slot == "招牌青花椒味(单人份)"
     assert spec.requested_metrics == ("recipe_cost",)
+    assert spec.planned_intents == ("RESTAURANT_OPS_GROSS_MARGIN",)
+
+
+def test_dish_metric_button_followup_restores_entity_window_and_store_scope():
+    parent = {
+        "parent_query": "上个月全部门店招牌青花椒味(单人份)的成本如何",
+        "parent_template_code": "RESTAURANT_OPS_GROSS_MARGIN",
+        "structured_context": {
+            "focus_entity": {
+                "type": "dish",
+                "name": "招牌青花椒味(单人份)",
+            },
+            "window_label": "上个月",
+            "requested_metrics": ["recipe_cost"],
+            "store_scope": "all",
+            "store_names": [],
+        },
+    }
+
+    effective, inherited = contextualize_restaurant_followup(
+        "这个菜的销量呢？",
+        parent,
+    )
+
+    assert inherited is True
+    assert effective == "上个月全部门店招牌青花椒味(单人份)的销量呢？"
+    spec = _trusted_context_dish_followup_spec(effective)
+    assert spec is not None
+    assert spec.dish_slot == "招牌青花椒味(单人份)"
+    assert spec.window_label == "上个月"
+    assert spec.store_scope == "all"
+    assert spec.requested_metrics == ("sales_volume",)
     assert spec.planned_intents == ("RESTAURANT_OPS_GROSS_MARGIN",)
 
 
