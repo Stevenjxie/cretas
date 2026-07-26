@@ -109,14 +109,21 @@ public class BomWorkflowRevisionService {
             throw invalid(409, "只有当前工厂的 BOM 草稿可以自动关联工艺", "BOM_WORKFLOW_AUTO_BIND_READ_ONLY");
         }
         List<WorkflowBinding> matches = new ArrayList<>();
+        List<BusinessException> targetFailures = new ArrayList<>();
         for (ProductProcessWorkflowRevision revision : revisionRepository.findCurrentFactoryDraftRevisions(factoryId)) {
             try {
                 matches.add(binding(revision, recipe.getProductTypeId()));
-            } catch (BusinessException ignored) {
+            } catch (BusinessException error) {
                 // Incompatible revisions are not candidates; ambiguity is evaluated after the full scan.
+                if (containsFinishedSku(revision, recipe.getProductTypeId())) {
+                    targetFailures.add(error);
+                }
             }
         }
         if (matches.isEmpty()) {
+            if (targetFailures.size() == 1) {
+                throw targetFailures.getFirst();
+            }
             throw invalid(409,
                     "未找到唯一且结构完整、包含当前 SKU 终端产出的 Workflow 草稿",
                     "BOM_WORKFLOW_DRAFT_NOT_FOUND");
@@ -130,6 +137,18 @@ public class BomWorkflowRevisionService {
         applyBinding(recipe, match);
         recipeRepository.saveAndFlush(recipe);
         return match;
+    }
+
+    private boolean containsFinishedSku(
+            ProductProcessWorkflowRevision revision,
+            String productTypeId) {
+        try {
+            return revisionSnapshotService.definition(revision).getNodes().stream()
+                    .filter(node -> "FINISHED_GOOD".equals(node.getKind()))
+                    .anyMatch(node -> productTypeId.equals(string(node.getData(), "skuId")));
+        } catch (BusinessException invalidRevision) {
+            return false;
+        }
     }
 
     @Transactional
@@ -208,7 +227,7 @@ public class BomWorkflowRevisionService {
             throw invalid(409, "BOM 尚未选择已保存的 Workflow 修订", "BOM_WORKFLOW_REVISION_REQUIRED");
         }
         ProductProcessWorkflowDTO definition = definitionFromRecipe(recipe);
-        validator.validateStructureComplete(definition);
+        validateStructureForBom(definition);
         catalogValidator.validateForBomConfiguration(factoryId, recipe.getProductTypeId(), definition);
         return resolveTargetGraph(recipe.getWorkflowRevisionId(), definition, recipe.getProductTypeId());
     }
@@ -455,10 +474,24 @@ public class BomWorkflowRevisionService {
             throw invalid(409, "Workflow 修订内容哈希不一致", "BOM_WORKFLOW_REVISION_HASH_INVALID");
         }
         ProductProcessWorkflowDTO definition = revisionSnapshotService.definition(revision);
-        validator.validateStructureComplete(definition);
+        validateStructureForBom(definition);
         catalogValidator.validateForBomConfiguration(revision.getFactoryId(), targetProductTypeId, definition);
         resolveTargetGraph(revision.getId(), definition, targetProductTypeId);
         return definition;
+    }
+
+    private void validateStructureForBom(ProductProcessWorkflowDTO definition) {
+        try {
+            validator.validateStructureComplete(definition);
+        } catch (BusinessException error) {
+            if ("PRODUCT_PROCESS_WORKFLOW_OUTPUT_CONTRACT_REQUIRED".equals(error.getErrorCode())) {
+                throw invalid(409, error.getMessage(), "BOM_WORKFLOW_MULTI_OUTPUT_CONTRACT_REQUIRED");
+            }
+            if ("PRODUCT_PROCESS_WORKFLOW_OUTPUT_CONTRACT_INVALID".equals(error.getErrorCode())) {
+                throw invalid(409, error.getMessage(), "BOM_WORKFLOW_MULTI_OUTPUT_CONTRACT_INVALID");
+            }
+            throw error;
+        }
     }
 
     private WorkflowBinding binding(

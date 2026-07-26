@@ -809,6 +809,35 @@ export function validateWorkflow(
     processPortGroupErrors(data).forEach((message) => {
       errors.push({ code: 'PORT_GROUP_INVALID', nodeId: node.id, message: `${data.processName}: ${message}` });
     });
+    const outputPorts = ports.filter((port) => port.direction === 'OUTPUT');
+    if (outputPorts.length > 1) {
+      const roles = new Set(['MAIN', 'CO_PRODUCT', 'BY_PRODUCT']);
+      const hasIncompleteContract = outputPorts.some((port) => {
+        const ratio = port.costAllocationRatio;
+        return !port.outputRole
+          || !roles.has(port.outputRole)
+          || typeof ratio !== 'number'
+          || !Number.isFinite(ratio)
+          || (port.outputRole === 'BY_PRODUCT' ? ratio !== 0 : ratio <= 0);
+      });
+      if (hasIncompleteContract) {
+        errors.push({
+          code: 'OUTPUT_CONTRACT_INVALID',
+          nodeId: node.id,
+          message: `${data.processName} 的每个产出都必须配置角色和成本分摊比例`,
+        });
+      } else {
+        const mainCount = outputPorts.filter((port) => port.outputRole === 'MAIN').length;
+        const ratioTotal = outputPorts.reduce((total, port) => total + (port.costAllocationRatio ?? 0), 0);
+        if (mainCount !== 1 || Math.abs(ratioTotal - 100) > 0.0001) {
+          errors.push({
+            code: 'OUTPUT_CONTRACT_INVALID',
+            nodeId: node.id,
+            message: `${data.processName} 必须有且仅有一个主产出，成本分摊比例合计必须为 100%`,
+          });
+        }
+      }
+    }
     ports.forEach((port) => {
       const connected = port.direction === 'INPUT'
         ? definition.edges.some((edge) => edge.target === node.id && edge.targetHandle === port.id)

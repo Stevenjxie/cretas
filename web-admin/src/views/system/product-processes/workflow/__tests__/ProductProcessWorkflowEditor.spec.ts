@@ -79,6 +79,7 @@ interface EditorVm {
   confirmCreateAndAddProcess: () => Promise<void>;
   addOutputToProcess: (processId: string) => void;
   addInputToProcess: (processId: string) => void;
+  updateProcessData: (processId: string, patch: Record<string, unknown>) => void;
   addStandaloneRaw: () => void;
   selectOutputSku: (processId: string, portId: string, skuId: string) => Promise<void>;
   selectMaterialSku: (materialNodeId: string, skuId: string) => Promise<void>;
@@ -103,6 +104,7 @@ interface EditorVm {
     selectedEdgeIds: string[];
   };
   snapshotWorkflow: () => Promise<void>;
+  saveDraft: (options?: { silent?: boolean; preserveHistory?: boolean }) => Promise<boolean>;
   definition: ProductProcessWorkflowDefinition;
   dirty: boolean;
 }
@@ -116,6 +118,8 @@ interface TestPort {
   unit?: string;
   standardQuantity?: number;
   quantityMode?: 'AUTO_CONVERT' | 'FIXED_RATIO';
+  outputRole?: 'MAIN' | 'CO_PRODUCT' | 'BY_PRODUCT' | null;
+  costAllocationRatio?: number | null;
   ordinal: number;
 }
 
@@ -146,6 +150,7 @@ interface SkuOption {
 }
 
 const SKU_OPTIONS: SkuOption[] = [
+  { id: 'PT-PIG-400', name: '五香去骨猪蹄 400g', unit: 'kg', productCategory: 'FINISHED_PRODUCT' },
   { id: 'SKU-SEMI', name: 'Semi output', unit: 'kg', productCategory: 'SEMI_FINISHED' },
   { id: 'SKU-COUNT', name: 'Count output', unit: '只', productCategory: 'SEMI_FINISHED' },
   { id: 'SKU-COUNT-PIECE', name: 'Piece output', unit: '件', productCategory: 'SEMI_FINISHED' },
@@ -269,6 +274,45 @@ describe('ProductProcessWorkflowEditor process branch integration', () => {
     expect(vm.flowEdges).toEqual(expect.arrayContaining([
       expect.objectContaining({ source: 'raw' }),
       expect.objectContaining({ target: expect.stringContaining('material:finished:') }),
+    ]));
+  });
+
+  it('serializes multi-output role and allocation fields in the real editor save payload', async () => {
+    apiMocks.saveProductProcessWorkflowDraft.mockImplementation((
+      _factoryId: string,
+      _productTypeId: string,
+      definition: ProductProcessWorkflowDefinition,
+    ) => Promise.resolve({
+      success: true,
+      data: { ...structuredClone(definition), id: 1, lockVersion: 1 },
+    }));
+    const vm = await mountEditor();
+    const { process, port: secondPort } = addSecondOutput(vm);
+    await vm.selectOutputSku(process.id, secondPort.id, 'SKU-FINISHED');
+    const outputPorts = (process.data.ports ?? []).filter((port) => port.direction === 'OUTPUT')
+      .sort((left, right) => left.ordinal - right.ordinal)
+      .map((port, index) => ({
+        ...port,
+        outputRole: index === 0 ? 'MAIN' as const : 'CO_PRODUCT' as const,
+        costAllocationRatio: index === 0 ? 60 : 40,
+      }));
+    vm.updateProcessData(process.id, {
+      ports: [
+        ...(process.data.ports ?? []).filter((port) => port.direction === 'INPUT'),
+        ...outputPorts,
+      ],
+    });
+
+    await vm.saveDraft();
+    expect(apiMocks.saveProductProcessWorkflowDraft).toHaveBeenCalledTimes(1);
+
+    const payload = (
+      apiMocks.saveProductProcessWorkflowDraft.mock.calls.at(-1)?.[2]
+    ) as unknown as ProductProcessWorkflowDefinition;
+    const savedProcess = payload.nodes.find((node) => node.id === process.id);
+    expect(savedProcess?.data.ports).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: outputPorts[0].id, outputRole: 'MAIN', costAllocationRatio: 60 }),
+      expect.objectContaining({ id: outputPorts[1].id, outputRole: 'CO_PRODUCT', costAllocationRatio: 40 }),
     ]));
   });
 
@@ -503,6 +547,7 @@ describe('ProductProcessWorkflowEditor process branch integration', () => {
     const vm = await mountEditor();
 
     expect(vm.outputSkuOptions.map((option) => option.id)).toEqual([
+      'PT-PIG-400',
       'SKU-SEMI',
       'SKU-COUNT',
       'SKU-COUNT-PIECE',

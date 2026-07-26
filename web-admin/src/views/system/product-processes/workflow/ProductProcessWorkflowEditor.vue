@@ -882,6 +882,9 @@ const publishDisabledReason = computed(() => {
     return '当前不是可发布的 Workflow 草稿；请先另存或修改后保存草稿';
   }
   if (flowNodes.value.length === 0) return '请先在画布中配置 Workflow Cell';
+  const outputContractError = validateWorkflow(currentDefinition(), 'publish')
+    .find((error) => error.code === 'OUTPUT_CONTRACT_INVALID');
+  if (outputContractError) return outputContractError.message;
   if (bomMissingProducts.value.length > 0) {
     return `${bomMissingProducts.value.map((item) => item.name).join('、')} 尚未配置原辅料 BOM`;
   }
@@ -982,6 +985,15 @@ watch(
 
 // #10: 打开 BOM 配置抽屉; 关闭时刷新本产品 BOM (原料分组 + 提示随即更新)
 function openBomDrawer(): void {
+  const errors = validateWorkflow(currentDefinition(), 'publish');
+  if (errors.length > 0) {
+    const first = errors[0];
+    if (first.nodeId) {
+      selectedNodeId.value = first.nodeId;
+    }
+    ElMessage.error(first.message);
+    return;
+  }
   bomDrawerVisible.value = true;
 }
 async function onBomDrawerClosed(): Promise<void> {
