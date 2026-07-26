@@ -5,7 +5,7 @@
  * @since 2025-12-29
  */
 
-import React, { useState, useCallback, useEffect } from 'react';
+import React, { useState } from 'react';
 import {
   View, ScrollView, StyleSheet, TouchableOpacity, Alert, KeyboardAvoidingView, Platform,
 } from 'react-native';
@@ -16,13 +16,14 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { useTranslation } from 'react-i18next';
 
 import { whitelistApiClient } from '../../../services/api/whitelistApiClient';
-import { HR_THEME, type WhitelistStatus, ROLE_OPTIONS } from '../../../types/hrNavigation';
+import { HR_THEME, ROLE_OPTIONS } from '../../../types/hrNavigation';
 
 export default function WhitelistAddScreen() {
   const navigation = useNavigation();
   const { t } = useTranslation('hr');
   const [loading, setLoading] = useState(false);
   const [phoneNumber, setPhoneNumber] = useState('');
+  const [realName, setRealName] = useState('');
   const [presetRole, setPresetRole] = useState('');
   const [presetRoleName, setPresetRoleName] = useState('');
   const [notes, setNotes] = useState('');
@@ -50,6 +51,10 @@ export default function WhitelistAddScreen() {
       Alert.alert(t('whitelist.add.tipTitle'), t('whitelist.add.roleRequired'));
       return;
     }
+    if (!realName.trim()) {
+      Alert.alert(t('whitelist.add.tipTitle'), t('whitelist.add.nameRequired'));
+      return;
+    }
 
     setLoading(true);
     try {
@@ -57,8 +62,8 @@ export default function WhitelistAddScreen() {
         phoneNumber,
         presetRole,
         presetRoleName,
+        realName: realName.trim(),
         notes,
-        status: 'pending' as WhitelistStatus,
       });
 
       if (res.success) {
@@ -120,6 +125,19 @@ export default function WhitelistAddScreen() {
                   {phoneError}
                 </HelperText>
               ) : null}
+            </View>
+
+            <View style={styles.inputGroup}>
+              <Text style={styles.label}>{t('whitelist.add.name')} *</Text>
+              <TextInput
+                mode="outlined"
+                value={realName}
+                onChangeText={setRealName}
+                placeholder={t('whitelist.add.namePlaceholder')}
+                style={styles.input}
+                outlineColor={HR_THEME.border}
+                activeOutlineColor={HR_THEME.primary}
+              />
             </View>
 
             <View style={styles.inputGroup}>

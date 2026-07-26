@@ -35,9 +35,23 @@ const departments = ref<TableRow[]>([]);
 // 统计数据
 const statistics = ref({
   total: 0,
-  used: 0,
+  opened: 0,
   expired: 0
 });
+
+const roleOptions = [
+  { value: 'factory_super_admin', label: '工厂总监' },
+  { value: 'hr_admin', label: 'HR管理员' },
+  { value: 'dispatcher', label: '调度员' },
+  { value: 'quality_manager', label: '质量经理' },
+  { value: 'quality_inspector', label: '质检员' },
+  { value: 'workshop_supervisor', label: '车间主任' },
+  { value: 'yield_operator', label: '报工员' },
+  { value: 'operator', label: '操作员' },
+  { value: 'warehouse_manager', label: '仓储主管' },
+  { value: 'warehouse_worker', label: '仓库员' },
+  { value: 'viewer', label: '查看者' }
+];
 
 onMounted(() => {
   loadData();
@@ -91,7 +105,11 @@ async function loadStatistics() {
   try {
     const response = await get(`/${factoryId.value}/whitelist/stats`);
     if (response.success && response.data) {
-      statistics.value = { total: response.data.totalCount || 0, used: response.data.activeCount || 0, expired: response.data.expiredCount || 0 };
+      statistics.value = {
+        total: response.data.totalCount || 0,
+        opened: response.data.activeUsersCount || 0,
+        expired: response.data.expiredCount || 0
+      };
     } else if (response.success === false) {
       ElMessage.error(response.message || '加载统计失败');
     }
@@ -145,8 +163,8 @@ function handleEdit(row: TableRow) {
     phoneNumber: row.phoneNumber,
     name: row.name,
     role: row.role,
-    departmentId: row.departmentId || '',
-    expirationDate: row.expirationDate || '',
+    departmentId: row.department || '',
+    expirationDate: row.expiresAt ? row.expiresAt.substring(0, 10) : '',
     notes: row.notes || ''
   };
   dialogVisible.value = true;
@@ -168,17 +186,27 @@ async function submitForm() {
   try {
     let response;
     if (isEdit.value) {
-      response = await put(`/${factoryId.value}/whitelist/${whitelistForm.value.id}`, whitelistForm.value);
+      response = await put(`/${factoryId.value}/whitelist/${whitelistForm.value.id}`, {
+        name: whitelistForm.value.name,
+        role: whitelistForm.value.role,
+        department: whitelistForm.value.departmentId || undefined,
+        expiresAt: whitelistForm.value.expirationDate
+          ? `${whitelistForm.value.expirationDate} 23:59:59`
+          : undefined,
+        notes: whitelistForm.value.notes
+      });
     } else {
       response = await post(`/${factoryId.value}/whitelist`, whitelistForm.value);
     }
-    if (response.success) {
-      ElMessage.success(isEdit.value ? '更新成功' : '添加成功');
+    const batchSucceeded = isEdit.value || (response.data?.successCount ?? 0) > 0;
+    if (response.success && batchSucceeded) {
+      ElMessage.success(isEdit.value ? '邀请更新成功' : '账号邀请已创建');
       dialogVisible.value = false;
       loadData();
       loadStatistics();
     } else {
-      ElMessage.error(response.message || '操作失败');
+      const failure = response.data?.failedEntries?.[0]?.reason;
+      ElMessage.error(failure || response.message || '操作失败');
     }
   } catch (error) {
     // Interceptor already shows specific sticky toast; debug-only log.
@@ -206,26 +234,23 @@ async function handleDelete(row: TableRow) {
 }
 
 function getStatusType(row: TableRow) {
-  if (row.isUsed) return 'success';
-  if (row.isExpired) return 'danger';
-  return 'info';
+  if (row.accountCreated && row.accountActive) return 'success';
+  if (row.accountCreated) return 'warning';
+  if (row.status === 'EXPIRED') return 'danger';
+  if (row.status === 'DISABLED') return 'info';
+  return 'primary';
 }
 
 function getStatusText(row: TableRow) {
-  if (row.isUsed) return '已使用';
-  if (row.isExpired) return '已过期';
-  return '待使用';
+  if (row.accountCreated && row.accountActive) return '已开户';
+  if (row.accountCreated) return '待激活';
+  if (row.status === 'EXPIRED') return '已过期';
+  if (row.status === 'DISABLED') return '已禁用';
+  return '邀请待领取';
 }
 
 function getRoleText(role: string) {
-  const map: Record<string, string> = {
-    factory_super_admin: '工厂超级管理员',
-    department_admin: '部门管理员',
-    quality_inspector: '质检员',
-    production_worker: '生产工人',
-    warehouse_worker: '仓库工人'
-  };
-  return map[role] || role;
+  return roleOptions.find(option => option.value === role)?.label || role || '历史白名单';
 }
 </script>
 
@@ -241,8 +266,8 @@ function getRoleText(role: string) {
       </el-card>
       <el-card class="stat-card success" shadow="hover">
         <div class="stat-content">
-          <div class="stat-value">{{ statistics.used }}</div>
-          <div class="stat-label">已使用</div>
+          <div class="stat-value">{{ statistics.opened }}</div>
+          <div class="stat-label">已开户</div>
         </div>
       </el-card>
       <el-card class="stat-card danger" shadow="hover">
@@ -257,16 +282,24 @@ function getRoleText(role: string) {
       <template #header>
         <div class="card-header">
           <div class="header-left">
-            <span class="page-title">入职白名单</span>
+            <span class="page-title">账号邀请（白名单）</span>
             <span class="data-count">共 {{ pagination.total }} 条记录</span>
           </div>
           <div class="header-right">
             <el-button v-if="canWrite" type="primary" :icon="Plus" @click="handleCreate">
-              添加白名单
+              创建账号邀请
             </el-button>
           </div>
         </div>
       </template>
+
+      <div class="invitation-guide">
+        <div class="guide-step"><strong>1</strong><span>管理员填写手机号、姓名和角色</span></div>
+        <div class="guide-arrow">→</div>
+        <div class="guide-step"><strong>2</strong><span>员工在手机端用该手机号注册并设置密码</span></div>
+        <div class="guide-arrow">→</div>
+        <div class="guide-step"><strong>3</strong><span>账号自动归属当前工厂并获得预设角色</span></div>
+      </div>
 
       <div class="search-bar">
         <el-input
@@ -289,8 +322,12 @@ function getRoleText(role: string) {
             {{ getRoleText(row.role) }}
           </template>
         </el-table-column>
-        <el-table-column prop="departmentName" label="部门" min-width="150" show-overflow-tooltip />
-        <el-table-column prop="expirationDate" label="过期时间" width="120" />
+        <el-table-column prop="department" label="部门" min-width="150" show-overflow-tooltip />
+        <el-table-column label="过期时间" width="120">
+          <template #default="{ row }">
+            {{ row.expiresAt ? row.expiresAt.substring(0, 10) : '长期有效' }}
+          </template>
+        </el-table-column>
         <el-table-column label="状态" width="100" align="center">
           <template #default="{ row }">
             <el-tag :type="getStatusType(row)" size="small">
@@ -306,7 +343,7 @@ function getRoleText(role: string) {
         <el-table-column label="操作" width="150" fixed="right" align="center">
           <template #default="{ row }">
             <el-button
-              v-if="canWrite && !row.isUsed"
+              v-if="canWrite && !row.accountCreated"
               type="primary"
               link
               size="small"
@@ -314,7 +351,7 @@ function getRoleText(role: string) {
               @click="handleEdit(row)"
             >编辑</el-button>
             <el-button
-              v-if="canWrite && !row.isUsed"
+              v-if="canWrite && !row.accountCreated"
               type="danger"
               link
               size="small"
@@ -339,7 +376,14 @@ function getRoleText(role: string) {
     </el-card>
 
     <!-- 编辑对话框 -->
-    <el-dialog v-model="dialogVisible" :title="isEdit ? '编辑白名单' : '添加白名单'" width="500px" :close-on-click-modal="false">
+    <el-dialog v-model="dialogVisible" :title="isEdit ? '编辑账号邀请' : '创建账号邀请'" width="520px" :close-on-click-modal="false">
+      <el-alert
+        v-if="!isEdit"
+        class="dialog-alert"
+        type="info"
+        :closable="false"
+        title="手机号将作为员工的登录账号；工厂和角色由本邀请锁定，员工注册时不能自行修改。"
+      />
       <el-form :model="whitelistForm" label-width="100px">
         <el-form-item label="手机号" required>
           <el-input
@@ -354,11 +398,12 @@ function getRoleText(role: string) {
         </el-form-item>
         <el-form-item label="角色" required>
           <el-select v-model="whitelistForm.role" placeholder="选择角色" style="width: 100%">
-            <el-option label="工厂超级管理员" value="factory_super_admin" />
-            <el-option label="部门管理员" value="department_admin" />
-            <el-option label="质检员" value="quality_inspector" />
-            <el-option label="生产工人" value="production_worker" />
-            <el-option label="仓库工人" value="warehouse_worker" />
+            <el-option
+              v-for="option in roleOptions"
+              :key="option.value"
+              :label="option.label"
+              :value="option.value"
+            />
           </el-select>
         </el-form-item>
         <el-form-item label="部门">
@@ -386,7 +431,9 @@ function getRoleText(role: string) {
       </el-form>
       <template #footer>
         <el-button @click="dialogVisible = false">取消</el-button>
-        <el-button type="primary" :loading="dialogLoading" @click="submitForm">确定</el-button>
+        <el-button type="primary" :loading="dialogLoading" @click="submitForm">
+          {{ isEdit ? '保存邀请' : '创建邀请' }}
+        </el-button>
       </template>
     </el-dialog>
   </div>
@@ -482,8 +529,62 @@ function getRoleText(role: string) {
   flex-wrap: wrap;
 }
 
+.invitation-guide {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 16px;
+  margin-bottom: 16px;
+  border: 1px solid #b3e0d2;
+  border-radius: 10px;
+  background: #f0faf7;
+  color: #334155;
+
+  .guide-step {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex: 1;
+    min-width: 0;
+    font-size: 13px;
+    line-height: 1.45;
+
+    strong {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      flex: 0 0 24px;
+      width: 24px;
+      height: 24px;
+      border-radius: 50%;
+      background: #0f8f72;
+      color: #fff;
+    }
+  }
+
+  .guide-arrow {
+    color: #0f8f72;
+    font-weight: 700;
+  }
+}
+
+.dialog-alert {
+  margin-bottom: 18px;
+}
+
 .el-table {
   flex: 1;
+}
+
+@media (max-width: 900px) {
+  .invitation-guide {
+    align-items: stretch;
+    flex-direction: column;
+
+    .guide-arrow {
+      display: none;
+    }
+  }
 }
 
 .pagination-wrapper {

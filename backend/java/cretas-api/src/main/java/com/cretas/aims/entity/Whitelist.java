@@ -1,6 +1,7 @@
 package com.cretas.aims.entity;
 
 import com.cretas.aims.entity.enums.WhitelistStatus;
+import com.cretas.aims.entity.enums.FactoryUserRole;
 import lombok.*;
 import jakarta.persistence.*;
 import java.time.LocalDateTime;
@@ -52,6 +53,16 @@ public class Whitelist extends BaseEntity {
 
     @Column(name = "position", length = 50)
     private String position;
+
+    /**
+     * 管理员邀请时指定的工厂角色。
+     *
+     * <p>为空表示历史白名单，仅允许完成传统“待管理员激活”注册；
+     * 非空表示可信邀请，注册时由服务端赋予该角色并激活账号。</p>
+     */
+    @Enumerated(EnumType.STRING)
+    @Column(name = "invited_role_code", length = 50)
+    private FactoryUserRole invitedRoleCode;
 
     @Enumerated(EnumType.STRING)
     @Column(name = "status", nullable = false)

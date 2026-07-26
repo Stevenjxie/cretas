@@ -3,7 +3,10 @@ package com.cretas.aims.service.impl;
 import com.cretas.aims.dto.WhitelistDTO;
 import com.cretas.aims.dto.common.PageResponse;
 import com.cretas.aims.entity.Whitelist;
+import com.cretas.aims.entity.User;
+import com.cretas.aims.entity.enums.FactoryUserRole;
 import com.cretas.aims.entity.enums.WhitelistStatus;
+import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.exception.ResourceNotFoundException;
 import com.cretas.aims.repository.UserRepository;
 import com.cretas.aims.repository.WhitelistRepository;
@@ -74,6 +77,7 @@ public class WhitelistServiceImpl implements WhitelistService {
                         .name(entry.getName())
                         .position(entry.getPosition())
                         .department(request.getDepartment())
+                        .invitedRoleCode(parseInvitedRole(request.getRole()))
                         .status(WhitelistStatus.ACTIVE)
                         .expiresAt(request.getExpiresAt())
                         .notes(request.getNotes())
@@ -146,6 +150,13 @@ public class WhitelistServiceImpl implements WhitelistService {
         if (StringUtils.hasText(request.getPosition())) {
             whitelist.setPosition(request.getPosition());
         }
+        if (StringUtils.hasText(request.getRole())) {
+            if (userRepository.findByFactoryIdAndPhone(factoryId, whitelist.getPhoneNumber()).isPresent()) {
+                throw new BusinessException(409, "该手机号已完成开户，不能再修改邀请角色")
+                        .withHint("请到用户管理中调整账号角色");
+            }
+            whitelist.setInvitedRoleCode(parseInvitedRole(request.getRole()));
+        }
         if (StringUtils.hasText(request.getStatus())) {
             whitelist.setStatus(WhitelistStatus.fromCode(request.getStatus()));
         }
@@ -166,6 +177,10 @@ public class WhitelistServiceImpl implements WhitelistService {
         Whitelist whitelist = whitelistRepository.findById(id)
                 .filter(w -> w.getFactoryId().equals(factoryId))
                 .orElseThrow(() -> new ResourceNotFoundException("白名单记录不存在: " + id));
+        if (userRepository.findByFactoryIdAndPhone(factoryId, whitelist.getPhoneNumber()).isPresent()) {
+            throw new BusinessException(409, "该手机号已完成开户，不能删除邀请记录")
+                    .withHint("如需停用账号，请到用户管理中操作");
+        }
         // 软删除
         whitelist.setStatus(WhitelistStatus.DELETED);
         whitelistRepository.save(whitelist);
@@ -175,6 +190,16 @@ public class WhitelistServiceImpl implements WhitelistService {
     @Transactional
     public Integer batchDelete(String factoryId, List<Integer> ids) {
         log.info("批量删除白名单: factoryId={}, ids={}", factoryId, ids);
+        List<Whitelist> factoryInvitations = whitelistRepository.findAllById(ids).stream()
+                .filter(whitelist -> factoryId.equals(whitelist.getFactoryId()))
+                .toList();
+        boolean containsRegisteredAccount = factoryInvitations.stream()
+                .anyMatch(whitelist -> userRepository.findByFactoryIdAndPhone(
+                        factoryId, whitelist.getPhoneNumber()).isPresent());
+        if (containsRegisteredAccount) {
+            throw new BusinessException(409, "批量选择中包含已完成开户的手机号，不能删除邀请记录")
+                    .withHint("请取消选择已开户记录；如需停用账号，请到用户管理中操作");
+        }
         return whitelistRepository.batchDelete(ids, factoryId);
     }
 
@@ -237,7 +262,7 @@ public class WhitelistServiceImpl implements WhitelistService {
         );
 
         // 不再追踪使用次数和使用时间，设置默认值
-        stats.setActiveUsersCount(stats.getActiveCount());
+        stats.setActiveUsersCount(whitelistRepository.countRegisteredAccounts(factoryId));
         stats.setMostActiveUsers(new ArrayList<>());
         stats.setRecentlyUsedUsers(new ArrayList<>());
         stats.setTotalUsageCount(0L);
@@ -294,7 +319,7 @@ public class WhitelistServiceImpl implements WhitelistService {
                 .isValid(true)
                 .phone(phoneNumber)
                 .name(whitelist.getName())
-                .role(null) // 角色字段已删除
+                .role(whitelist.getInvitedRoleCode() != null ? whitelist.getInvitedRoleCode().name() : null)
                 .permissions(null) // 权限字段已删除
                 .expiresAt(whitelist.getExpiresAt())
                 .remainingUsage(null) // 使用次数功能已删除
@@ -504,12 +529,21 @@ public class WhitelistServiceImpl implements WhitelistService {
                 .lastUsedAt(null) // 已删除
                 .usageCount(null) // 已删除
                 .maxUsageCount(null) // 已删除
-                .role(null) // 已删除
+                .role(whitelist.getInvitedRoleCode() != null ? whitelist.getInvitedRoleCode().name() : null)
                 .notes(whitelist.getNotes())
                 .addedBy(whitelist.getAddedBy())
                 .createdAt(whitelist.getCreatedAt())
                 .updatedAt(whitelist.getUpdatedAt())
                 .build();
+
+        Optional<User> registeredUser = userRepository.findByFactoryIdAndPhone(
+                whitelist.getFactoryId(), whitelist.getPhoneNumber());
+        dto.setAccountCreated(registeredUser.isPresent());
+        dto.setAccountActive(registeredUser.map(User::getIsActive).orElse(false));
+        registeredUser.ifPresent(user -> {
+            dto.setRegisteredUserId(user.getId());
+            dto.setRegisteredUsername(user.getUsername());
+        });
 
         // 权限字段已删除
         dto.setPermissions(null);
@@ -533,5 +567,29 @@ public class WhitelistServiceImpl implements WhitelistService {
         }
 
         return dto;
+    }
+
+    /**
+     * 解析管理员预设角色。空值保留历史白名单兼容语义；非空值必须是工厂角色，
+     * 且禁止借白名单创建平台管理员或未激活伪角色。
+     */
+    private FactoryUserRole parseInvitedRole(String roleCode) {
+        if (!StringUtils.hasText(roleCode)) {
+            return null;
+        }
+
+        final FactoryUserRole role;
+        try {
+            role = FactoryUserRole.valueOf(roleCode.trim());
+        } catch (IllegalArgumentException exception) {
+            throw new BusinessException(400, "无效的工厂角色: " + roleCode)
+                    .withHint("请从系统角色列表中重新选择");
+        }
+
+        if (role == FactoryUserRole.platform_admin || role == FactoryUserRole.unactivated) {
+            throw new BusinessException(400, "该角色不能用于工厂白名单邀请")
+                    .withHint("请选择有效的工厂账号角色");
+        }
+        return role;
     }
 }

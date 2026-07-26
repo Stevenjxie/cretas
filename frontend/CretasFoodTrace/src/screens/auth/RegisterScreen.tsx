@@ -15,7 +15,7 @@ import { Ionicons } from '@expo/vector-icons';
 type IoniconsName = React.ComponentProps<typeof Ionicons>['name'];
 import { useTranslation } from 'react-i18next';
 import { useRegister } from '../../hooks/useRegister';
-import { RegisterRequest } from '../../types/auth';
+import { RegisterPhaseTwoRequest } from '../../types/auth';
 import { NeoCard, NeoButton, ScreenWrapper } from '../../components/ui';
 import { theme } from '../../theme';
 import { logger } from '../../utils/logger';
@@ -36,14 +36,9 @@ export const RegisterScreen: React.FC<RegisterScreenProps> = ({ navigation }) =>
   const [phoneNumber, setPhoneNumber] = useState('');
 
   // Step 2: Info Form
-  const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
   const [realName, setRealName] = useState('');
-  const [factoryId, setFactoryId] = useState('');
-  const [department, setDepartment] = useState('');
-  const [position, setPosition] = useState('');
-  const [email, setEmail] = useState('');
 
   // UI State
   const [showPassword, setShowPassword] = useState(false);
@@ -56,6 +51,7 @@ export const RegisterScreen: React.FC<RegisterScreenProps> = ({ navigation }) =>
     error,
     currentStep,
     tempToken,
+    invitation,
     clearError,
     resetForm
   } = useRegister();
@@ -66,13 +62,14 @@ export const RegisterScreen: React.FC<RegisterScreenProps> = ({ navigation }) =>
       return;
     }
     const result = await verifyPhoneNumber(phoneNumber);
-    if (result.success && result.tempToken) {
+    if (result.success && result.tempToken && result.invitation) {
+      setRealName(result.invitation.invitedName || '');
       clearError();
     }
   };
 
   const handleRegister = async () => {
-    if (!username.trim() || !password.trim() || !realName.trim() || !factoryId.trim()) {
+    if (!password.trim() || !realName.trim()) {
       Alert.alert(t('register.alerts.hint'), t('register.alerts.allFieldsRequired'));
       return;
     }
@@ -82,20 +79,17 @@ export const RegisterScreen: React.FC<RegisterScreenProps> = ({ navigation }) =>
       return;
     }
 
-    if (!tempToken) {
+    if (!tempToken || !invitation) {
       Alert.alert(t('register.alerts.error'), t('register.alerts.tokenExpired'));
       return;
     }
 
-    const registerRequest: RegisterRequest = {
+    const registerRequest: RegisterPhaseTwoRequest = {
       tempToken,
-      username: username.trim(),
+      username: invitation.loginAccount,
       password: password.trim(),
       realName: realName.trim(),
-      factoryId: factoryId.trim(),
-      department: department.trim() || undefined,
-      position: position.trim() || undefined,
-      email: email.trim() || undefined
+      factoryId: invitation.factoryId,
     };
 
     try {
@@ -198,12 +192,29 @@ export const RegisterScreen: React.FC<RegisterScreenProps> = ({ navigation }) =>
         <Text style={styles.stepDescription}>{t('register.fillCompleteInfo')}</Text>
       </View>
 
-      {renderInput(t('register.usernamePlaceholder'), username, setUsername, "person-outline")}
+      {invitation && (
+        <View style={styles.invitationCard}>
+          <View style={styles.invitationHeader}>
+            <Ionicons name="shield-checkmark-outline" size={22} color={theme.colors.primary} />
+            <Text style={styles.invitationTitle}>{t('register.invitationVerified')}</Text>
+          </View>
+          <View style={styles.invitationRow}>
+            <Text style={styles.invitationLabel}>{t('register.loginAccount')}</Text>
+            <Text style={styles.invitationValue}>{invitation.loginAccount}</Text>
+          </View>
+          <View style={styles.invitationRow}>
+            <Text style={styles.invitationLabel}>{t('register.factoryId')}</Text>
+            <Text style={styles.invitationValue}>{invitation.factoryId}</Text>
+          </View>
+          <View style={styles.invitationRow}>
+            <Text style={styles.invitationLabel}>{t('register.invitedRole')}</Text>
+            <Text style={styles.invitationValue}>
+              {invitation.invitedRoleName || invitation.invitedRole || t('register.pendingActivation')}
+            </Text>
+          </View>
+        </View>
+      )}
       {renderInput(t('register.realNamePlaceholder'), realName, setRealName, "card-outline")}
-      {renderInput(t('register.factoryIdPlaceholder'), factoryId, setFactoryId, "business-outline")}
-      {renderInput(t('register.departmentPlaceholder'), department, setDepartment, "briefcase-outline")}
-      {renderInput(t('register.positionPlaceholder'), position, setPosition, "shield-checkmark-outline")}
-      {renderInput(t('register.emailPlaceholder'), email, setEmail, "mail-outline", false, false, undefined, "email-address")}
 
       {renderInput(t('register.passwordPlaceholder'), password, setPassword, "lock-closed-outline", true, showPassword, () => setShowPassword(!showPassword))}
       {renderInput(t('register.confirmPasswordLabel'), confirmPassword, setConfirmPassword, "lock-closed-outline", true, showConfirmPassword, () => setShowConfirmPassword(!showConfirmPassword))}
@@ -356,6 +367,43 @@ const styles = StyleSheet.create({
     color: theme.colors.textSecondary,
     fontSize: 13,
     flex: 1,
+  },
+  invitationCard: {
+    backgroundColor: theme.colors.primaryContainer,
+    borderRadius: 14,
+    padding: 14,
+    marginBottom: 16,
+    borderWidth: 1,
+    borderColor: theme.colors.primary,
+  },
+  invitationHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 10,
+  },
+  invitationTitle: {
+    marginLeft: 8,
+    fontSize: 15,
+    fontWeight: '700',
+    color: theme.colors.primary,
+  },
+  invitationRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'flex-start',
+    paddingVertical: 4,
+  },
+  invitationLabel: {
+    color: theme.colors.onSurfaceVariant,
+    fontSize: 13,
+  },
+  invitationValue: {
+    flex: 1,
+    marginLeft: 16,
+    textAlign: 'right',
+    color: theme.colors.onSurface,
+    fontSize: 13,
+    fontWeight: '600',
   },
   errorContainer: {
     flexDirection: 'row',

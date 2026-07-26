@@ -273,18 +273,21 @@ export async function testWhitelistAPIs(token: string) {
     console.log('\n2️⃣  POST /api/{factoryId}/whitelist/batch - 批量添加');
     try {
       const batchAddRes = await whitelistApiClient.batchAddWhitelist({
-        whitelists: [
-          TEST_CONFIG.TEST_WHITELIST,
+        entries: [
+          {
+            phoneNumber: TEST_CONFIG.TEST_WHITELIST.phoneNumber,
+            name: TEST_CONFIG.TEST_WHITELIST.realName,
+          },
           {
             phoneNumber: '+8613800000003',
-            realName: '批量测试用户2',
-            role: 'operator',
-            department: 'processing'
+            name: '批量测试用户2',
           }
-        ]
+        ],
+        role: 'operator',
+        department: 'processing',
       }, TEST_CONFIG.FACTORY_ID);
 
-      console.log(`   ✅ 批量添加成功: 成功${batchAddRes.success}条，失败${batchAddRes.failed}条`);
+      console.log(`   ✅ 批量添加成功: 成功${batchAddRes.successCount}条，失败${batchAddRes.failedCount}条`);
       results.passed++;
     } catch (error: any) {
       console.log('   ❌ 失败:', error.message);

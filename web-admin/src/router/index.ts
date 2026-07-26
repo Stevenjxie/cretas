@@ -926,7 +926,7 @@ const businessRoutes: RouteRecordRaw[] = [
             path: 'whitelist',
             name: 'HRWhitelist',
             component: () => import('@/views/hr/whitelist/index.vue'),
-            meta: { requiresAuth: true, title: '入职白名单', module: 'hr' }
+            meta: { requiresAuth: true, title: '账号邀请', module: 'hr' }
           },
           {
             path: 'departments',

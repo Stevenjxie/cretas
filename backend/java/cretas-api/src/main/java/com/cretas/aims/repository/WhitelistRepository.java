@@ -140,4 +140,12 @@ public interface WhitelistRepository extends JpaRepository<Whitelist, Integer> {
            "AND CAST(w.created_at AS DATE) = CURRENT_DATE",
            nativeQuery = true)
     long countTodayAdded(@Param("factoryId") String factoryId);
+
+    /**
+     * 统计已由白名单邀请完成开户的手机号数量。
+     */
+    @Query("SELECT COUNT(w) FROM Whitelist w WHERE w.factoryId = :factoryId " +
+           "AND EXISTS (SELECT u.id FROM User u WHERE u.factoryId = w.factoryId " +
+           "AND u.phone = w.phoneNumber)")
+    long countRegisteredAccounts(@Param("factoryId") String factoryId);
 }

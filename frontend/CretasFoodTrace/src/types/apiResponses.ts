@@ -1,4 +1,4 @@
-import { User, AuthTokens, UserDTO } from './auth';
+import { User, AuthTokens, UserDTO, FactoryRole } from './auth';
 
 /**
  * API响应类型定义
@@ -55,6 +55,10 @@ export interface RegisterPhaseOneResponseData {
   tempToken: string;
   factoryId?: string;
   phoneNumber: string;
+  loginAccount?: string;
+  invitedName?: string;
+  invitedRole?: FactoryRole;
+  invitedRoleName?: string;
   expiresAt: number;
   isNewUser: boolean;
   message?: string;
@@ -62,6 +66,17 @@ export interface RegisterPhaseOneResponseData {
 
 // 注册第一阶段API响应
 export type RegisterPhaseOneApiResponse = BaseApiResponse<RegisterPhaseOneResponseData>;
+
+export interface RegisterPhaseTwoResponseData {
+  success: boolean;
+  userId: number;
+  username: string;
+  role: FactoryRole;
+  message: string;
+  registeredAt: string;
+}
+
+export type RegisterPhaseTwoApiResponse = BaseApiResponse<RegisterPhaseTwoResponseData>;
 
 // 用户注册API响应数据
 export interface RegisterApiResponseData {

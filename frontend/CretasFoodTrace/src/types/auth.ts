@@ -262,20 +262,19 @@ export interface RegisterPhaseOneRequest {
 
 // 注册请求接口 (第二阶段 - 完整资料)
 export interface RegisterPhaseTwoRequest {
-  phoneNumber: string;
-  verificationCode: string;
+  tempToken: string;
   username: string;
   password: string;
   realName: string;
+  factoryId: string;
   email?: string;
-  departmentId?: string;
-  role?: UserRole;
-  deviceInfo: {
+  position?: string;
+  deviceInfo?: {
     deviceId: string;
-    deviceModel: string;
+    deviceType?: string;
+    model?: string;
     osVersion: string;
     appVersion: string;
-    platform: 'ios' | 'android';
   };
 }
 
@@ -287,7 +286,15 @@ export interface RegisterResponse {
   expiresAt?: number; // 临时令牌过期时间（时间戳）
   phoneNumber?: string;
   factoryId?: string;
+  loginAccount?: string;
+  invitedName?: string;
+  invitedRole?: FactoryRole;
+  invitedRoleName?: string;
   isNewUser?: boolean; // 是否是新用户
+  userId?: number;
+  username?: string;
+  role?: FactoryRole;
+  registeredAt?: string;
   user?: User;
   tokens?: AuthTokens;
   nextStep?: 'phone_verification' | 'complete_profile' | 'done';
@@ -341,6 +348,16 @@ export interface RegisterRequest {
   department?: string;         // 部门（可选）
   position?: string;           // 职位（可选）
   email?: string;              // 邮箱（可选）
+}
+
+/** 第一阶段白名单验证后，服务端返回的可信邀请信息。 */
+export interface RegistrationInvitation {
+  phoneNumber: string;
+  loginAccount: string;
+  factoryId: string;
+  invitedName?: string;
+  invitedRole?: FactoryRole;
+  invitedRoleName?: string;
 }
 
 // 用户注册响应接口 (新的 /api/auth/register)
