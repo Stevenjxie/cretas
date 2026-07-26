@@ -694,6 +694,8 @@ class RestaurantOpsGoldRouteTest {
         assertThat(orchestrator.isRestaurantComprehensiveSynthesisQuestion(query)).isTrue();
         assertThat(orchestrator.isRestaurantComprehensiveSynthesisQuestion(dimensionsFollowup)).isTrue();
         assertThat(orchestrator.isRestaurantComprehensiveSynthesisQuestion(
+                "结合天气、客流和活动分析2026年3月营收高峰原因")).isTrue();
+        assertThat(orchestrator.isRestaurantComprehensiveSynthesisQuestion(
                 "本月全部门店招牌菜营业额是多少")).isFalse();
         assertThat(orchestrator.isRestaurantComprehensiveSynthesisQuestion(
                 "分析最近30天排班")).isFalse();

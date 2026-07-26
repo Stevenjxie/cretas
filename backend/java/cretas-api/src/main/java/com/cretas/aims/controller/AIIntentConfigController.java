@@ -382,6 +382,18 @@ public class AIIntentConfigController {
                     factoryId, input);
             return;
         }
+        if (salesMetric && isRestaurantDiagnosticAnalysisQuestion(q)) {
+            // A metric plus a causal/diagnostic action is not a plain report.
+            // Leave it unpinned so the orchestrator can choose its existing
+            // multi-dimension synthesis route (or the tiered semantic planner
+            // for a single-dimension diagnostic). Otherwise phrases such as
+            // "结合天气、客流和活动分析3月营收高峰原因" are prematurely
+            // reduced to SALES_SUMMARY and the available FactBook dimensions
+            // are never consulted.
+            log.info("[RestaurantDemoIntentShortcut] defer diagnostic sales question: factoryId={}, input={}",
+                    factoryId, input);
+            return;
+        }
         if (reportMetric && trendAction) {
             request.setIntentCode("RESTAURANT_OPS_TREND_ANALYSIS");
             log.info("[RestaurantDemoIntentShortcut] route trend report phrase before intent recognition: factoryId={}, intentCode={}",
@@ -410,6 +422,23 @@ public class AIIntentConfigController {
                 "\u6bd4\u8f83",
                 "\u7b2c\u4e00\u540d",
                 "\u51a0\u519b");
+    }
+
+    private boolean isRestaurantDiagnosticAnalysisQuestion(String q) {
+        return containsAny(
+                q,
+                "\u539f\u56e0",
+                "\u4e3a\u4ec0\u4e48",
+                "\u4e3a\u4f55",
+                "\u8bca\u65ad",
+                "\u5f52\u56e0",
+                "\u5f71\u54cd",
+                "\u62c9\u52a8",
+                "\u9a71\u52a8",
+                "\u5efa\u8bae",
+                "\u51b3\u7b56",
+                "\u65b9\u6848",
+                "\u4f18\u5316");
     }
 
     private boolean isRestaurantOwnerActionQuestion(String q) {
