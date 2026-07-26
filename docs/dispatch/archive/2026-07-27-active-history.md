@@ -1,5 +1,15 @@
 # Dispatch 完成归档 — 2026-07-27
 
+### `FEATURE-QC-ENTRY-WEB-TRAINING-QCSOP-20260727-002`
+
+- **状态**：`merged`
+- **Owner**：`/root`
+- **Base SHA**：`cb09348e7ecbd1520e0666932e5d5c1a9fb0b8a0`
+- **功能提交 / PR**：`3a5e4d80f`、`bfce86dc1` / [#1844](https://github.com/Stevenjxie/cretas/pull/1844)
+- **实际范围**：质检员 RN 首页首屏增加待人工审核入口并收敛无关信息，底部导航适配安全区；QCSOP 使用真实 Expo Web 与 Web Admin 截图，覆盖手机号白名单邀请、锁定工厂与角色、员工本人设密、登录及忘记密码；Web 标签质检审核后增加可恢复归档、备份记录、技术管理员训练集确认与已批准数据导出，普通质检员无训练确认权限。
+- **验证证据**：真实 JPA Context、权限、服务及多设备会话 Java 目标测试 `15/15`；RN Jest `10/10`；Web Vitest `11/11`；Java JAR 与 Web production 制品构建成功且 relevant Git tree 与可信 manifest 一致；tracked secret scan、diff check、真实 Expo Web/Web Admin 截图及 QCSOP 资源完整性检查通过。RN 全量 typecheck 仅剩未修改文件 `ProcessTaskListScreen.test.tsx:227` 的既有 `totalPages` 基线错误。
+- **发布状态**：按用户指示仅合并；Java/Web 生产与 RN OTA 均未部署，未训练或发布模型，生产账号、白名单、QC 任务及其他业务数据写入为 `0`。
+
 ### `FEATURE-LIUSHANMEN-PHONE-WHITELIST-ONBOARDING-20260727-001`
 
 - **状态**：`merged`
