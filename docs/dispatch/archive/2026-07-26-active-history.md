@@ -2,6 +2,18 @@
 
 ## 已完成
 
+### `REL-CRETAS-OTA-OPTIMIZED-APK-20260726`
+
+- **状态**：`merged`
+- **Owner**：`/root`
+- **Base SHA**：`6d7dba97ede29249a043ed052196aacd15b4d47e`
+- **功能提交 / PR / main 合并提交**：`5b470a6fdf267c45b49b07ddda92b2ac91d5206a` / [#1818](https://github.com/Stevenjxie/cretas/pull/1818) / `c1d13bb3dcfe2db9ec2c650088c1587ff7ca7cf8`
+- **实现**：RN OTA 对齐自托管 Expo Updates v1：runtime/channel 隔离、JS 冷启动与前台主动检查、后台预下载、用户确认后重载、会话防抖与失败冷却；服务端使用 RSA 代码签名，Hermes bundle 以 gzip 发布到 OSS/CDN，共享资源使用内容寻址资产仓并在 CDN 完成后原子公开 bundle。
+- **验证**：Python OTA `119 passed`、RN OTA `4 passed`；production Expo export 与正式 APK 构建通过。APK `1.0.3` / versionCode `14` / `122224038` bytes，SHA-256 `0bf94bbe174ab544822de93dc982167390c23970c899a31516fc5c20f773005a`，正式签名 SHA-256 `e2c55e0b74e0d12a4e0fbfcf0527d3ef571df950c60932c37faa24689ca6a941`；版本化地址与 `cretas-latest.apk` 完整下载哈希一致。
+- **OTA 生产验收**：公网 manifest runtime `1.0.3` 的 RSA 签名由 APK 内证书成功验证；Hermes gzip 对象为 `6910672` bytes、解压 SHA-256 与 manifest hash 一致；39/39 个共享资源 HTTP 200 且 immutable。版本网关对 `1.0.2` 返回 `updateAvailable=true`、`latestVersion=1.0.3`、正确版本化下载地址与文件大小。
+- **生产发布**：Python OTA 服务从 exact `origin/main` 发布并健康；Java 版本网关通过可信相同 JAR 的强制蓝绿配置刷新加载新版本，最终 active 为 `cretas-backend` / `10010`，5/5 切流后观察通过。下载页已发布 `1.0.3`。
+- **业务写入审计**：本次仅发布代码、静态制品、OTA bundle 与版本配置；生产业务数据写入为 0。
+
 ### `BUG-F006-MATERIAL-PACKAGING-REQUIRED-LAYOUT-001`
 
 - **状态**：`merged`
