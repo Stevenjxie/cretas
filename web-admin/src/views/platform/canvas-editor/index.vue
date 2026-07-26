@@ -41,6 +41,9 @@
             v-else-if="activeTab === 'approval'"
             :embedded="true"
             :initial-decision-type="initialApprovalDecisionType"
+            :initial-workflow-id="initialApprovalWorkflowId"
+            :lock-decision-type="approvalBusinessLocked"
+            @exit-context="exitApprovalBusiness"
           />
           <TriggerChainDesigner v-else-if="activeTab === 'triggers'" :factory-id="factoryId" />
           <ValidationRulePanel v-else-if="activeTab === 'validation'" :factory-id="factoryId" :module-code="selectedModule" />
@@ -127,13 +130,13 @@
 
 <script setup lang="ts">
 import { computed, ref, onMounted, onUnmounted, watch } from 'vue'
-import { useRoute } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { useCanvasEditor } from './composables/useCanvasEditor'
 import { aiApplyDiffs, submitForReview, approveConfig, rejectConfig, publishNow as apiPublishNow, cancelApproval as apiCancelApproval } from '@/api/canvasApi'
 import { saveModuleConfig } from '@/api/configApi'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import type { ConfigDiff } from '@/types/canvas'
-import type { DecisionType } from '@/api/approvalWorkflow'
+import { isDecisionType, type DecisionType } from '@/api/approvalWorkflow'
 
 // Components
 import CanvasHeader from './components/CanvasHeader.vue'
@@ -187,13 +190,30 @@ const {
   loadVersion, applyResponsive, clearDirty,
 } = useCanvasEditor()
 const route = useRoute()
+const router = useRouter()
 
 const initialApprovalDecisionType = computed<DecisionType | undefined>(() => {
   const value = Array.isArray(route.query.decisionType)
     ? route.query.decisionType[0]
     : route.query.decisionType
-  return value === 'SALES_ORDER_APPROVAL' ? value : undefined
+  return isDecisionType(value) ? value : undefined
 })
+
+const initialApprovalWorkflowId = computed<string | undefined>(() => {
+  const value = Array.isArray(route.query.workflowId)
+    ? route.query.workflowId[0]
+    : route.query.workflowId
+  return typeof value === 'string' && value.trim() ? value : undefined
+})
+
+const approvalBusinessLocked = computed(() => (
+  initialApprovalDecisionType.value !== undefined
+  && route.query.source === 'approval-chains'
+))
+
+async function exitApprovalBusiness() {
+  await router.push({ name: 'SystemApprovalChains' })
+}
 
 function applyRouteDeepLink() {
   const tab = Array.isArray(route.query.tab) ? route.query.tab[0] : route.query.tab
@@ -206,7 +226,7 @@ function applyRouteDeepLink() {
 }
 
 watch(
-  () => [route.query.tab, route.query.decisionType],
+  () => [route.query.tab, route.query.decisionType, route.query.workflowId],
   applyRouteDeepLink,
   { immediate: true },
 )

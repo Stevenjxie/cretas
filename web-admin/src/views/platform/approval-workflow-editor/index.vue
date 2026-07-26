@@ -2,6 +2,17 @@
   <div class="approval-workflow-editor" :class="{ embedded: props.embedded }">
     <!-- Toolbar (h2 title 隐藏当 Canvas 内嵌入 — Canvas 已有 header; 但工具栏 buttons 保留) -->
     <el-card shadow="never" class="header-card">
+      <div v-if="props.lockDecisionType" class="business-context">
+        <el-button link type="primary" :icon="ArrowLeft" @click="emit('exit-context')">
+          返回审批业务
+        </el-button>
+        <span class="context-divider" aria-hidden="true" />
+        <div>
+          <strong>正在配置：{{ selectedDecisionTypeLabel }}</strong>
+          <span>已锁定到此审批业务，保存内容不会串到其他业务。</span>
+        </div>
+        <el-tag type="success" effect="plain">业务已定位</el-tag>
+      </div>
       <div class="header-row">
         <div class="header-left">
           <h2 v-if="!props.embedded">审批工作流编辑器</h2>
@@ -16,6 +27,8 @@
             style="width: 260px"
             filterable
             :loading="decisionTypeMetaLoading"
+            :disabled="props.lockDecisionType"
+            aria-label="审批业务类型"
             @change="onDecisionTypeChange"
           >
             <!-- Sprint 6 W3-B (2026-05-19): 改 dynamic 32 enum, 按 category group + wired badge -->
@@ -46,6 +59,7 @@
             clearable
             :disabled="workflowList.length === 0"
             style="width: 220px"
+            aria-label="审批工作流版本"
             @change="onWorkflowSelectionChange"
           >
             <el-option
@@ -57,8 +71,11 @@
           </el-select>
           <el-input
             v-model="workflowName"
-            placeholder="工作流名称"
+            placeholder="工作流名称…"
             style="width: 200px"
+            aria-label="工作流名称"
+            name="approval-workflow-name"
+            autocomplete="off"
           />
           <el-button :icon="Plus" @click="resetEditor">新建</el-button>
           <el-button :icon="View" @click="handleValidate" :disabled="nodes.length === 0">校验</el-button>
@@ -180,7 +197,7 @@ import { markRaw, ref, computed, onMounted, watch } from 'vue'
 import { VueFlow, type Connection, type Node, type Edge, type NodeTypesObject } from '@vue-flow/core'
 import { Background } from '@vue-flow/background'
 import { Controls } from '@vue-flow/controls'
-import { Download, Plus, Upload, View, VideoPlay } from '@element-plus/icons-vue'
+import { ArrowLeft, Download, Plus, Upload, View, VideoPlay } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { useAuthStore } from '@/store/modules/auth'
 import StartNode from './components/nodes/StartNode.vue'
@@ -226,6 +243,11 @@ import '@vue-flow/controls/dist/style.css'
 const props = defineProps<{
   embedded?: boolean
   initialDecisionType?: DecisionType
+  initialWorkflowId?: string
+  lockDecisionType?: boolean
+}>()
+const emit = defineEmits<{
+  (event: 'exit-context'): void
 }>()
 
 // ==================== State ====================
@@ -415,6 +437,12 @@ const groupedDecisionTypeOptions = computed<Record<string, DecisionTypeMetadataD
 })
 
 // ==================== Computed ====================
+
+const selectedDecisionTypeLabel = computed(() => (
+  decisionTypeMetadata.value.find(
+    (item) => item.decisionType === selectedDecisionType.value,
+  )?.chineseName ?? selectedDecisionType.value
+))
 
 const canSave = computed(() => Boolean(workflowName.value && selectedDecisionType.value && nodes.value.length > 0))
 const canPublish = computed(() => currentWorkflow.value?.publishStatus === 'draft')
@@ -765,6 +793,18 @@ async function refreshWorkflowList() {
     const res = await getWorkflowsByDecisionType(factoryId.value, selectedDecisionType.value)
     if (res.success && res.data) {
       workflowList.value = res.data
+      const requested = props.initialWorkflowId
+        ? res.data.find((workflow) => workflow.id === props.initialWorkflowId)
+        : undefined
+      const preferred = requested ?? (
+        props.initialDecisionType === selectedDecisionType.value
+          ? selectPreferredWorkflow(res.data)
+          : undefined
+      )
+      if (preferred && preferred.id !== selectedWorkflowId.value) {
+        selectedWorkflowId.value = preferred.id
+        await loadWorkflow(preferred.id, true)
+      }
     }
   } catch (e) {
     console.warn('[refreshWorkflowList failed]', e)
@@ -772,9 +812,13 @@ async function refreshWorkflowList() {
 }
 
 watch(
-  () => props.initialDecisionType,
-  async (nextDecisionType) => {
-    if (!nextDecisionType || nextDecisionType === selectedDecisionType.value) return
+  () => [props.initialDecisionType, props.initialWorkflowId] as const,
+  async ([nextDecisionType]) => {
+    if (!nextDecisionType) return
+    if (
+      nextDecisionType === selectedDecisionType.value
+      && props.initialWorkflowId === selectedWorkflowId.value
+    ) return
     selectedDecisionType.value = nextDecisionType
     resetEditor()
     await refreshWorkflowList()
@@ -782,6 +826,26 @@ watch(
 )
 
 async function onWorkflowSelectionChange(id: string | undefined) {
+  await loadWorkflow(id, false)
+}
+
+function selectPreferredWorkflow(
+  candidates: ApprovalWorkflowDTO[],
+): ApprovalWorkflowDTO | undefined {
+  return [...candidates].sort((left, right) => {
+    const statusRank = (workflow: ApprovalWorkflowDTO) => {
+      if (workflow.publishStatus === 'draft') return 0
+      if (workflow.publishStatus === 'published' && workflow.enabled) return 1
+      if (workflow.publishStatus === 'published') return 2
+      return 3
+    }
+    return statusRank(left) - statusRank(right)
+      || right.priority - left.priority
+      || right.version - left.version
+  })[0]
+}
+
+async function loadWorkflow(id: string | undefined, silent: boolean) {
   if (!factoryId.value || !id) {
     resetEditor()
     return
@@ -794,7 +858,9 @@ async function onWorkflowSelectionChange(id: string | undefined) {
       selectedDecisionType.value = res.data.decisionType
       deserializeGraph(res.data)
       selectedElement.value = null
-      ElMessage.success(`已加载: ${res.data.name} v${res.data.version}`)
+      if (!silent) {
+        ElMessage.success(`已加载: ${res.data.name} v${res.data.version}`)
+      }
     }
   } catch (e) {
     console.error('[load workflow failed]', e)
@@ -855,6 +921,41 @@ onMounted(async () => {
   height: calc(100vh - 90px);
   display: flex;
   flex-direction: column;
+}
+
+.business-context {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--el-color-primary-light-7);
+  border-radius: 8px;
+  background: var(--el-color-primary-light-9);
+}
+
+.business-context > div {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.business-context strong {
+  color: var(--el-text-color-primary);
+  font-size: 14px;
+}
+
+.business-context span {
+  color: var(--el-text-color-secondary);
+  font-size: 12px;
+}
+
+.business-context .context-divider {
+  width: 1px;
+  height: 28px;
+  background: var(--el-border-color);
 }
 /* 当 canvas-editor 内嵌时, 父容器 (.canvas-content) 已提供 flex:1 + 滚动 */
 .approval-workflow-editor.embedded {

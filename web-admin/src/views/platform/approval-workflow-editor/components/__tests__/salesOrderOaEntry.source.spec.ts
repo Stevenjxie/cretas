@@ -6,7 +6,7 @@ function source(path: string): string {
   return readFileSync(resolve(process.cwd(), path), 'utf8');
 }
 
-describe('sales order unified OA entry contract', () => {
+describe('business-scoped unified OA entry contract', () => {
   const legacyChains = source('src/views/system/approval-chains/list.vue');
   const canvas = source('src/views/platform/canvas-editor/index.vue');
   const editor = source('src/views/platform/approval-workflow-editor/index.vue');
@@ -15,20 +15,26 @@ describe('sales order unified OA entry contract', () => {
   const financeApi = source('src/api/salesFinanceReview.ts');
   const pending = source('src/views/workflow/pending.vue');
 
-  it('keeps legacy sales approval-chain rows read-only and links to Canvas OA', () => {
-    expect(legacyChains).toContain("const UNIFIED_OA_DECISION_TYPES = new Set(['SALES_ORDER_APPROVAL'])");
-    expect(legacyChains).toContain('销售订单审批已迁移至统一 OA');
-    expect(legacyChains).toContain('前往统一 OA');
-    expect(legacyChains).toContain("types: ['SALES_RETURN_APPROVAL'");
-    expect(legacyChains).not.toContain("types: ['SALES_ORDER_APPROVAL', 'SALES_RETURN_APPROVAL'");
+  it('turns the legacy approval-chain page into a read-only compatibility catalog', () => {
+    expect(legacyChains).toContain('审批业务目录');
+    expect(legacyChains).toContain('旧 OA 兼容记录');
+    expect(legacyChains).toContain('buildOaCanvasQuery');
+    expect(legacyChains).not.toContain("post(`/${factoryId.value}/approval-chains`");
+    expect(legacyChains).not.toContain("put(`/${factoryId.value}/approval-chains/");
+    expect(legacyChains).not.toContain("del(`/${factoryId.value}/approval-chains/");
   });
 
-  it('opens the approval tab with the requested sales decision type', () => {
+  it('opens the exact approval business and workflow in Canvas', () => {
     expect(canvas).toContain(':initial-decision-type="initialApprovalDecisionType"');
+    expect(canvas).toContain(':initial-workflow-id="initialApprovalWorkflowId"');
+    expect(canvas).toContain(':lock-decision-type="approvalBusinessLocked"');
     expect(canvas).toContain("if (tab === 'approval')");
-    expect(canvas).toContain("value === 'SALES_ORDER_APPROVAL'");
+    expect(canvas).toContain('isDecisionType(value)');
     expect(editor).toContain('initialDecisionType?: DecisionType');
+    expect(editor).toContain('initialWorkflowId?: string');
+    expect(editor).toContain('lockDecisionType?: boolean');
     expect(editor).toContain("props.initialDecisionType ?? 'QUALITY_RELEASE'");
+    expect(editor).toContain('await loadWorkflow(preferred.id, true)');
   });
 
   it('removes business-page direct approval and routes old screens to personal OA', () => {
