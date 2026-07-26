@@ -970,6 +970,79 @@ def test_gross_margin_prohibited_actions_uses_real_low_margin_candidate(monkeypa
     assert "当前低毛利候选是低毛利菜" in result.answer_text
 
 
+def test_gross_margin_uses_smartbi_cost_product_fallback_when_erp_seed_is_gone(
+    monkeypatch,
+):
+    pos_rows = [{
+        "product_id": 505,
+        "dish_name": "招牌青花椒味(单人份)",
+        "normalized_name": "招牌青花椒味(单人份)",
+        "category": "主菜",
+        "sub_category": "鱼类",
+        "total_qty": 100.0,
+        "total_revenue": 5800.0,
+        "bills": 80,
+        "window_start": date(2026, 7, 15),
+        "window_end": date(2026, 7, 21),
+    }]
+
+    class _SmartBIConnection:
+        async def execute(self, *_args):
+            return None
+
+        async def fetch(self, query, *_args):
+            if "FROM fact_pos_item" in query:
+                return pos_rows
+            if "FROM dim_restaurant_cost_product" in query:
+                return [{
+                    "normalized_name": "招牌青花椒味(单人份)",
+                    "product_source_pk": "pt_qhj_001",
+                }]
+            if "FROM agg_restaurant_product_cost" in query:
+                return [{"product_source_pk": "pt_qhj_001", "food_cost": 7.58}]
+            raise AssertionError(f"unexpected SmartBI query: {query}")
+
+    class _AcquireContext:
+        async def __aenter__(self):
+            return _SmartBIConnection()
+
+        async def __aexit__(self, *_args):
+            return None
+
+    class _SmartBIPool:
+        def acquire(self):
+            return _AcquireContext()
+
+    class _CretasConnection:
+        async def fetch(self, query, *_args):
+            if "FROM product_types" in query or "FROM dim_product_alias" in query:
+                return []
+            raise AssertionError(f"unexpected Cretas query: {query}")
+
+        async def close(self):
+            return None
+
+    async def _connect(_url):
+        return _CretasConnection()
+
+    import asyncpg
+    monkeypatch.setattr(asyncpg, "connect", _connect)
+
+    result = asyncio.run(_r.resolve_gross_margin(
+        _SmartBIPool(),
+        "RES_3101_009",
+        role="restaurant_manager",
+        query="招牌青花椒味(单人份)的成本和毛利呢？",
+        dish_mention="招牌青花椒味(单人份)",
+    ))
+
+    assert result.meta["targetDish"] == "招牌青花椒味(单人份)"
+    assert result.meta["missing_cost_count"] == 0
+    assert result.meta["target_dish_metrics"]["unit_cost"] == 7.58
+    assert "成本 **¥758.00**" in result.answer_text
+    assert "成本数据不足" not in result.answer_text
+
+
 def test_missing_cost_dish_never_gets_profit_or_enters_margin_ranking():
     """缺成本是未知值，不是零成本；不能进入利润/毛利率排名。"""
     build_entries = getattr(_r, "_build_margin_entries", None)
@@ -1703,7 +1776,7 @@ def test_range_text_collapses_single_day():
     ("RESTAURANT_OPS_SALES_SUMMARY", "RES_3101_009"),
     ("RESTAURANT_OPS_STORE_MARGIN", "RES_3101_009"),
     ("RESTAURANT_OPS_TREND_ANALYSIS", "RES_3101_009"),
-    ("RESTAURANT_OPS_GROSS_MARGIN", "DEMO_REST"),
+    ("RESTAURANT_OPS_GROSS_MARGIN", "RES_3101_009"),
     ("RESTAURANT_OPS_WASTAGE_TOP", "DEMO_REST"),
     ("RESTAURANT_OPS_STOCK_SHORTAGE", "DEMO_REST"),
 ])

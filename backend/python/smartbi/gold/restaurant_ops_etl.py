@@ -451,22 +451,30 @@ async def sync_fact_recipe(
         try:
             rows = await src.fetch(
                 """
-                SELECT id, product_type_id, raw_material_type_id,
-                       standard_quantity, unit, net_yield_rate,
-                       is_main_ingredient, is_active
-                  FROM v_recipes_effective
-                 WHERE factory_id = $1::varchar
+                SELECT r.id, r.product_type_id, r.raw_material_type_id,
+                       r.standard_quantity, r.unit, r.net_yield_rate,
+                       r.is_main_ingredient, r.is_active,
+                       p.name AS product_name
+                  FROM v_recipes_effective r
+                  LEFT JOIN product_types p
+                    ON p.factory_id = r.factory_id
+                   AND p.id = r.product_type_id
+                 WHERE r.factory_id = $1::varchar
                 """,
                 factory_id,
             )
         except Exception:
             rows = await src.fetch(
                 """
-                SELECT id, product_type_id, raw_material_type_id,
-                       standard_quantity, unit, net_yield_rate,
-                       is_main_ingredient, is_active
-                  FROM recipes
-                 WHERE factory_id = $1::varchar AND deleted_at IS NULL
+                SELECT r.id, r.product_type_id, r.raw_material_type_id,
+                       r.standard_quantity, r.unit, r.net_yield_rate,
+                       r.is_main_ingredient, r.is_active,
+                       p.name AS product_name
+                  FROM recipes r
+                  LEFT JOIN product_types p
+                    ON p.factory_id = r.factory_id
+                   AND p.id = r.product_type_id
+                 WHERE r.factory_id = $1::varchar AND r.deleted_at IS NULL
                 """,
                 factory_id,
             )
@@ -487,10 +495,45 @@ async def sync_fact_recipe(
     yield_rates = [float(r["net_yield_rate"]) if r["net_yield_rate"] is not None else None for r in rows]
     is_mains = [bool(r["is_main_ingredient"]) for r in rows]
     is_actives = [bool(r["is_active"]) for r in rows]
+    # One authoritative product-name snapshot per recipe cost key.  It lives in
+    # SmartBI so historical Gold cost rows remain resolvable even if an old demo
+    # or operational product seed is later removed from the Cretas database.
+    product_names_by_pk = {
+        str(r["product_type_id"]): str(r["product_name"]).strip()
+        for r in rows
+        if r["product_type_id"] and r["product_name"] and str(r["product_name"]).strip()
+    }
 
     async with smartbi_pool.acquire() as dst:
         async with dst.transaction():
             await _set_tenant(dst, factory_id)
+            if product_names_by_pk:
+                mapping_pks = list(product_names_by_pk)
+                mapping_names = [product_names_by_pk[pk] for pk in mapping_pks]
+                mapping_normalized = [_normalize_name(name) for name in mapping_names]
+                await dst.fetch(
+                    """
+                    INSERT INTO dim_restaurant_cost_product (
+                        factory_id, product_source_pk, product_name,
+                        normalized_name, source, is_active
+                    )
+                    SELECT $1::varchar, pk, n, nn, 'recipe_etl', TRUE
+                      FROM UNNEST(
+                        $2::text[], $3::text[], $4::text[]
+                      ) AS t(pk, n, nn)
+                    ON CONFLICT (factory_id, product_source_pk) DO UPDATE SET
+                        product_name = EXCLUDED.product_name,
+                        normalized_name = EXCLUDED.normalized_name,
+                        source = EXCLUDED.source,
+                        is_active = TRUE,
+                        updated_at = NOW()
+                    RETURNING product_source_pk
+                    """,
+                    factory_id,
+                    mapping_pks,
+                    mapping_names,
+                    mapping_normalized,
+                )
             result = await dst.fetch(
                 """
                 INSERT INTO fact_restaurant_recipe_line (

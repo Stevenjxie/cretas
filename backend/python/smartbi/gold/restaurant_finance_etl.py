@@ -56,6 +56,8 @@ from typing import Dict, List, Optional, Tuple
 
 import asyncpg
 
+from smartbi.gold.restaurant_cost_mapping import merge_cost_product_mapping
+
 logger = logging.getLogger(__name__)
 
 # ETL sentinel — RestaurantFinancialMetricsFetcher.filterToLatestUpload picks
@@ -375,6 +377,12 @@ async def sync_cost_from_pos_recipe(
                 if "does not exist" not in str(e):
                     logger.warning("[finance-etl] alias lookup failed: %s", e)
 
+    name_to_pk = await merge_cost_product_mapping(
+        smartbi_pool,
+        factory_id,
+        distinct_names,
+        name_to_pk,
+    )
     resolved = sum(1 for n in distinct_names if n in name_to_pk)
     unresolved = len(distinct_names) - resolved
 

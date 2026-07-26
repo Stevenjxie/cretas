@@ -967,6 +967,7 @@ _STORE_MENTION_PREFIX_TRIM = re.compile(
 _DEMO_GOLD_TENANT = "RES_3101_009"
 _DEMO_GOLD_MAPPED_CODES = frozenset({
     "RESTAURANT_OPS_SALES_SUMMARY",
+    "RESTAURANT_OPS_GROSS_MARGIN",
     "RESTAURANT_OPS_STORE_MARGIN",
     "RESTAURANT_OPS_TREND_ANALYSIS",
 })
@@ -977,13 +978,12 @@ def demo_data_factory_for_code(
 ) -> Optional[str]:
     """Data-read tenant for the demo account, unified per answer family.
 
-    Revenue/store/trend answers read the seeded gold tenant so their store
+    Revenue/store/trend and dish-margin answers read the seeded gold tenant so their store
     universe agrees with the Java-native ranking tools (previously the rank
     said one store was #1 while the sales summary praised a store from a
-    different data space). Dish-margin and ops KPIs stay on the demo
-    tenant's own seed — the gold tenant has no recipe-cost data, so mapping
-    them would degrade real answers to zero coverage. Auth, session and
-    cache identity always stay on the trusted tenant.
+    different data space). Dish ranking and its later cost/margin follow-up
+    therefore cannot switch tenants mid-conversation. Auth, session and cache
+    identity always stay on the trusted tenant.
     """
     if (
         factory_id
@@ -2041,6 +2041,14 @@ async def resolve_recipe_cost(
         except Exception as e:
             logger.warning(f"[recipe_cost] dish name lookup failed: {e}")
 
+    from smartbi.gold.restaurant_cost_mapping import merge_cost_product_names
+    name_map = await merge_cost_product_names(
+        smartbi_pool,
+        factory_id,
+        source_pks,
+        name_map,
+    )
+
     top_text = "\n".join([
         f"{i+1}. {'**' + name_map.get(r['product_source_pk'], '#' + r['product_source_pk']) + '**' if i == 0 else name_map.get(r['product_source_pk'], '#' + r['product_source_pk'])}: ¥{r['food_cost']:.2f} ({r['ingredient_count']} 种食材)"  # noqa: E501
         for i, r in enumerate(rows)
@@ -2501,6 +2509,18 @@ async def resolve_gross_margin(
             await cretas.close()
     except Exception as e:
         logger.warning(f"[gross_margin] cretas name lookup failed: {e}")
+
+    # Historical/demo Gold cost rows can outlive the operational product_types
+    # seed that originally produced them.  Supplement only unresolved names
+    # from SmartBI's tenant-scoped cost-product read model; ambiguous names stay
+    # unresolved rather than guessing a COGS key.
+    from smartbi.gold.restaurant_cost_mapping import merge_cost_product_mapping
+    cretas_map = await merge_cost_product_mapping(
+        smartbi_pool,
+        factory_id,
+        normalized_names,
+        cretas_map,
+    )
 
     # Step 3: load food cost per source_pk
     cost_map: Dict[str, float] = {}
@@ -3782,6 +3802,14 @@ async def resolve_store_margin(
             await cretas.close()
     except Exception as e:
         logger.warning(f"[store_margin] cretas lookup failed: {e}")
+
+    from smartbi.gold.restaurant_cost_mapping import merge_cost_product_mapping
+    name_to_pk = await merge_cost_product_mapping(
+        smartbi_pool,
+        factory_id,
+        dish_names,
+        name_to_pk,
+    )
 
     cost_by_pk: Dict[str, float] = {}
     if name_to_pk:

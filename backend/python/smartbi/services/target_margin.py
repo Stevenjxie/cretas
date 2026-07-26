@@ -30,6 +30,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import asyncpg
 
+from smartbi.gold.restaurant_cost_mapping import merge_cost_product_mapping
 from smartbi.gold.queries import _period_bounds, _period_key_for_target
 from smartbi.services.target_decomposition import compute_pace_alert
 from smartbi.services.target_forecast import (
@@ -288,6 +289,12 @@ async def fetch_period_cogs(
         return {}, CogsCoverage(0, 0, 0, Decimal("0"), Decimal("0"))
 
     name_to_pk = await _resolve_names_to_pk(cretas_pool, factory_id, distinct_names)
+    name_to_pk = await merge_cost_product_mapping(
+        smartbi_pool,
+        factory_id,
+        distinct_names,
+        name_to_pk,
+    )
     cost_by_pk, priced_pks = await _fetch_food_cost(
         smartbi_pool, factory_id, list(name_to_pk.values())
     )

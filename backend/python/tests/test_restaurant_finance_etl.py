@@ -337,6 +337,8 @@ async def test_sync_cost_from_pos_recipe_unresolved_names_contribute_zero():
             {"record_date": date(2025, 12, 1), "normalized_name": "未登录菜",
              "total_qty": Decimal("99")},
         ],
+        # SmartBI cost-product fallback: keep the unknown dish unresolved.
+        [],
         [
             {"product_source_pk": "PT-001", "food_cost": Decimal("8.0000")},
         ],

@@ -24,6 +24,7 @@ from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, Query, Request
 
+from smartbi.gold.restaurant_cost_mapping import merge_cost_product_mapping
 from smartbi_compat._rbac_strip import PRICE_VIEW_ROLES, strip_price_for_role
 
 logger = logging.getLogger(__name__)
@@ -407,6 +408,13 @@ async def gross_margin(request: Request, days: int = Query(30, ge=1, le=365)) ->
                 await cretas.close()
         except Exception as e:
             logger.warning(f"[gross-margin] cretas lookup failed: {e}")
+
+    cretas_map = await merge_cost_product_mapping(
+        pool,
+        factory_id,
+        normalized_names,
+        cretas_map,
+    )
 
     # Filter out excluded dishes from pos_rows before margin calc
     if excluded_set:
