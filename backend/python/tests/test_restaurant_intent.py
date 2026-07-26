@@ -1668,6 +1668,43 @@ def test_dish_cost_qualifiers_after_context_reference_do_not_become_dish_names(
     assert spec.requested_metrics == ("recipe_cost",)
 
 
+def test_time_only_switch_preserves_dish_cost_and_all_store_scope():
+    parent = {
+        "parent_query": "最近7天全部门店招牌青花椒味(单人份)的食材成本呢？",
+        "parent_template_code": "RESTAURANT_OPS_GROSS_MARGIN",
+        "structured_context": {
+            "focus_entity": {
+                "type": "dish",
+                "name": "招牌青花椒味(单人份)",
+            },
+            "window_label": "最近7天",
+            "requested_metrics": ["recipe_cost"],
+            "store_scope": "all",
+            "store_names": [],
+        },
+    }
+
+    effective, inherited = contextualize_restaurant_followup(
+        "换成上个月呢？",
+        parent,
+    )
+
+    assert inherited is True
+    assert effective == "全部门店上个月招牌青花椒味(单人份)的成本如何"
+    spec = _build_spec(
+        "RESTAURANT_OPS_GROSS_MARGIN",
+        effective,
+        confidence=0.95,
+        tier="trusted_context",
+        planner_authority="trusted_context",
+    )
+    assert spec.window_label == "上个月"
+    assert spec.store_scope == "all"
+    assert spec.dish_slot == "招牌青花椒味(单人份)"
+    assert spec.requested_metrics == ("recipe_cost",)
+    assert spec.planned_intents == ("RESTAURANT_OPS_GROSS_MARGIN",)
+
+
 @pytest.mark.parametrize(
     ("store_scope", "store_names", "expected_scope_text"),
     [

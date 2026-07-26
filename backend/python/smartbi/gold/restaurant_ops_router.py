@@ -809,6 +809,10 @@ def _extract_dish_candidate_single(text: str) -> "Optional[str]":
     # back to a store ranking.  Strip only a leading, complete scope phrase —
     # never an arbitrary "店" substring inside a real dish name.
     candidate = _DISH_LEADING_STORE_SCOPE_RE.sub("", candidate)
+    # Explicit time-only follow-ups are compiled as
+    # ``全部门店 + 上个月 + 菜名`` while ordinary turns often arrive as
+    # ``上个月 + 全部门店 + 菜名``.  Accept either trusted prefix order.
+    candidate = _DISH_LEADING_TIME_RE.sub("", candidate)
     candidate = candidate.strip("的， ,")
     if len(candidate) < 2 or candidate in _DISH_GENERIC_TOKENS:
         return None
