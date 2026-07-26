@@ -31,7 +31,9 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from smartbi.gold.restaurant_ops_router import (
+    _is_explicit_sales_period_comparison,
     _profit_intent,
+    _resolve_sales_query_spec,
     _resolve_sales_date_range,
     _uses_relative_sales_window,
     demo_data_factory_for_code,
@@ -60,6 +62,8 @@ TRUSTED_PLANNER_AUTHORITIES = frozenset({
     "promoted_exact",
     "promoted_exact_contract_repair",
     "explicit_slots",
+    "explicit_comparison_slots",
+    "explicit_comparison_slots_contract_repair",
     "trusted_context",
     "trusted_context_contract_repair",
 })
@@ -108,6 +112,11 @@ class RestaurantQuerySpec:
     source_tier: str
     clarification_needed: bool = False
     clarification_question: Optional[str] = None
+    # Explicit primary/baseline windows are first-class immutable plan slots.
+    # Resolver execution must not have to rediscover them from a later
+    # clarification answer such as "全部门店".
+    comparison_range: Tuple[Optional[Any], Optional[Any]] = (None, None)
+    comparison_label: Optional[str] = None
     # 2026-07-08 clarification-loop v1: True when this spec was produced by
     # CONTINUING a previous clarification (see module docstring) rather than
     # a fresh single-turn parse. Additive-only (default False preserves every
@@ -1041,6 +1050,7 @@ def _default_metrics_for_code(code: str, wants_margin: bool) -> Tuple[str, ...]:
 def _seal_query_plan(spec: RestaurantQuerySpec) -> RestaurantQuerySpec:
     """Attach a stable digest to the exact semantics resolvers must execute."""
     start, end = spec.date_range
+    comparison_start, comparison_end = spec.comparison_range
     payload = {
         "version": spec.plan_version,
         "intent": spec.intent,
@@ -1054,6 +1064,19 @@ def _seal_query_plan(spec: RestaurantQuerySpec) -> RestaurantQuerySpec:
         "requested_metrics": list(spec.requested_metrics),
         "dimensions": list(spec.dimensions),
         "comparison": spec.comparison,
+        "comparison_window": [
+            (
+                comparison_start.isoformat()
+                if hasattr(comparison_start, "isoformat")
+                else comparison_start
+            ),
+            (
+                comparison_end.isoformat()
+                if hasattr(comparison_end, "isoformat")
+                else comparison_end
+            ),
+        ],
+        "comparison_label": spec.comparison_label,
         "analysis_action": spec.analysis_action,
         "ranking_direction": spec.ranking_direction,
         "ranking_limit": spec.ranking_limit,
@@ -1115,7 +1138,8 @@ def _build_spec(
     effective_query = query
     if time_phrase and _resolve_sales_date_range(query)[1] == "全部历史":
         effective_query = f"{query} {time_phrase}".strip()
-    date_range, window_label = _resolve_sales_date_range(effective_query)
+    sales_spec = _resolve_sales_query_spec(effective_query)
+    date_range, window_label = sales_spec.date_range, sales_spec.window_label
     requested_metrics = _detect_requested_metrics(effective_query)
     wants_margin, asks_profitability = _profit_intent(effective_query)
     # T3 profit booleans are supplements only when deterministic metric parsing
@@ -1153,7 +1177,7 @@ def _build_spec(
     ):
         dimension_list.remove("store")
     dimensions = tuple(dimension_list)
-    comparison = _detect_comparison(effective_query)
+    comparison = sales_spec.comparison_kind or _detect_comparison(effective_query)
     requested_ranking_limit = ranking_limit(effective_query)
     excluded_entities = tuple(ranking_exclusions(effective_query))
     planned_intents = _plan_requested_intents(
@@ -1275,6 +1299,8 @@ def _build_spec(
         source_tier=tier,
         clarification_needed=clarification_needed,
         clarification_question=clarification_question,
+        comparison_range=sales_spec.comparison_range,
+        comparison_label=sales_spec.comparison_label,
         is_clarification_continuation=is_continuation,
         requested_metrics=requested_metrics,
         planned_intents=planned_intents,
@@ -1391,6 +1417,103 @@ _EXPLICIT_RANKING_NEGATION_TOKENS = (
     "不是", "并非", "不想", "不要", "别查", "别看", "不查", "不看",
     "不问", "取消", "而是", "改问", "换个问题",
 )
+
+
+def _is_pure_store_scope_answer(answer: str) -> bool:
+    """Whether a clarification reply contains only one approved store scope."""
+    text = (answer or "").strip()
+    normalized = _normalize_exact_phrase(text)
+    if not normalized:
+        return False
+    if any(
+        normalized == _normalize_exact_phrase(token)
+        for token in _ALL_STORE_SCOPE_TOKENS
+    ):
+        return True
+    mentions = extract_store_mentions(text)
+    if not mentions:
+        return False
+    remainder = text
+    for mention in mentions:
+        remainder = remainder.replace(mention, "", 1)
+    remainder = re.sub(r"[\s和与跟、，,及以及]+", "", remainder)
+    return not remainder
+
+
+def _explicit_sales_period_comparison_spec(
+    query: str,
+    *,
+    is_continuation: bool = False,
+) -> Optional[RestaurantQuerySpec]:
+    """Compile a fully specified, read-only sales-period comparison.
+
+    This is a slot compiler, not a keyword router.  It grants execution only
+    when the user explicitly names a supported sales metric, both sides of a
+    known non-overlapping period pair, and a comparison direction.  Store scope
+    may be absent here because the existing multi-store guard will ask for it;
+    once the user selects a store scope, the original question plus that answer
+    is compiled again without allowing T3 to replace the two-period contract.
+    """
+    text = (query or "").strip()
+    if (
+        not text
+        or any(token in text for token in _EXPLICIT_RANKING_NEGATION_TOKENS)
+        or not _is_explicit_sales_period_comparison(text)
+    ):
+        return None
+
+    sales_spec = _resolve_sales_query_spec(text)
+    primary_start, primary_end = sales_spec.date_range
+    baseline_start, baseline_end = sales_spec.comparison_range
+    requested_metrics = _detect_requested_metrics(text)
+    store_scope, _ = _detect_store_scope(text)
+    if (
+        primary_start is None
+        or primary_end is None
+        or baseline_start is None
+        or baseline_end is None
+        or not sales_spec.comparison_label
+        or not requested_metrics
+        or not set(requested_metrics).issubset({"revenue", "orders"})
+        or extract_dish_candidate(text)
+        or _detect_analysis_action(text) != "compare"
+    ):
+        return None
+
+    selected_code = (
+        "RESTAURANT_OPS_STORE_MARGIN"
+        if store_scope in {"single", "multiple"}
+        else "RESTAURANT_OPS_SALES_SUMMARY"
+    )
+    spec = _build_spec(
+        selected_code,
+        text,
+        confidence=1.0,
+        tier="explicit_comparison_slots",
+        planner_authority="explicit_comparison_slots",
+        is_continuation=is_continuation,
+        require_explicit_time=True,
+    )
+    expected_planned = (selected_code,)
+    if (
+        spec.clarification_needed
+        or spec.analysis_action != "compare"
+        or spec.date_range != sales_spec.date_range
+        or spec.comparison_range != sales_spec.comparison_range
+        or spec.comparison_label != sales_spec.comparison_label
+        or spec.comparison != sales_spec.comparison_kind
+        or spec.requested_metrics != requested_metrics
+        or spec.planned_intents != expected_planned
+        or spec.intent != selected_code
+        or not set(spec.dimensions).issubset({"store"})
+        or spec.dish_slot
+        or spec.unsupported_requirements
+        or spec.asks_priority
+        or spec.asks_prohibited_actions
+        or spec.asks_export
+    ):
+        return None
+    return spec
 
 
 def _explicit_store_dish_ranking_spec(
@@ -2306,6 +2429,22 @@ async def parse_restaurant_query(
         )
         return explicit_ranking_spec
 
+    explicit_comparison_spec = _explicit_sales_period_comparison_spec(norm_query)
+    if explicit_comparison_spec is not None:
+        explicit_comparison_spec = await _apply_store_scope_guard(
+            pool,
+            factory_id,
+            explicit_comparison_spec,
+        )
+        await _maybe_register_pending(
+            pool,
+            norm_query,
+            explicit_comparison_spec,
+            factory_id,
+            session_key,
+        )
+        return explicit_comparison_spec
+
     if trusted_followup_context:
         trusted_spec = _trusted_context_dish_followup_spec(norm_query)
         if trusted_spec is not None:
@@ -2527,6 +2666,17 @@ async def _parse_continuation(
     )
     if explicit_ranking_spec is not None:
         return explicit_ranking_spec
+
+    if (
+        clarification_question == STORE_SCOPE_CLARIFICATION_QUESTION
+        and _is_pure_store_scope_answer(query)
+    ):
+        explicit_comparison_spec = _explicit_sales_period_comparison_spec(
+            concatenated,
+            is_continuation=True,
+        )
+        if explicit_comparison_spec is not None:
+            return explicit_comparison_spec
 
     candidate_hint: Optional[Tuple[str, float]] = None
     try:

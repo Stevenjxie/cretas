@@ -216,6 +216,8 @@ class AIIntentConfigControllerTest {
                 "本周门店营收排名",
                 "分析哪个月营收最高",
                 "本月和上月营收对比",
+                "昨天的营业额是高于前天还是低于前天？",
+                "上个月营业额和上上个月相比怎么样",
                 "本月客单价最高的门店是哪家")) {
             IntentExecuteRequest request = IntentExecuteRequest.builder()
                     .userInput(rankedOrComparativeQuestion)

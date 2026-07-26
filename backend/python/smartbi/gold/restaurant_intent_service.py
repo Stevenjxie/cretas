@@ -202,6 +202,12 @@ def _structured_context(
         "window_label": spec.window_label,
         "requested_metrics": list(spec.requested_metrics),
         "analysis_action": spec.analysis_action,
+        "comparison_kind": spec.comparison,
+        "comparison_label": spec.comparison_label,
+        "comparison_range": [
+            value.isoformat() if hasattr(value, "isoformat") else value
+            for value in spec.comparison_range
+        ],
         "topic_kind": topic_kind,
         "ranking_direction": (
             result_meta.get("dish_ranking") or spec.ranking_direction
@@ -294,12 +300,19 @@ def _resolver_kwargs(
         try:
             kwargs["days"] = max(1, min((end - start).days + 1, 365))
             kwargs["date_range"] = (start, end)
+            kwargs["window_label"] = spec.window_label
         except (AttributeError, TypeError):
             pass
-    sales_spec = _resolve_sales_query_spec(query)
-    comparison_start, comparison_end = sales_spec.comparison_range
+    comparison_start, comparison_end = spec.comparison_range
+    if comparison_start is None and comparison_end is None:
+        # Legacy plans created before comparison windows became immutable
+        # first-class slots still get the previous parser-based behavior.
+        sales_spec = _resolve_sales_query_spec(query)
+        comparison_start, comparison_end = sales_spec.comparison_range
     if comparison_start is not None and comparison_end is not None:
         kwargs["comparison_date_range"] = (comparison_start, comparison_end)
+        kwargs["comparison_label"] = spec.comparison_label
+        kwargs["comparison_kind"] = spec.comparison
     return kwargs
 
 
