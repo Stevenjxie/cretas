@@ -1558,6 +1558,17 @@ def _contains_read_only_ranking_choice(text: str) -> bool:
     )
 
 
+def _latest_read_only_ranking_choice(text: str) -> str:
+    """Return the newest explicit READ-ranking clause from a turn log.
+
+    Pending clarification rows join turns with one space. Resolving the
+    whole joined string gives old windows priority (for example ``最近7天``
+    before a later ``只看本月``), so the newest READ clause is parsed first.
+    """
+    matches = list(re.finditer(r"(?:查看|只看|仅看|查询)", text or ""))
+    return (text or "")[matches[-1].start():].strip() if matches else ""
+
+
 def _explicit_read_only_action_ranking_spec(
     original_query: str,
     answer: str,
@@ -1602,17 +1613,16 @@ def _explicit_read_only_action_ranking_spec(
         return None
 
     current_range, current_window = _resolve_sales_date_range(answer)
+    choice_range, choice_window = _resolve_sales_date_range(
+        _latest_read_only_ranking_choice(original_query)
+    )
     history_range, history_window = _resolve_sales_date_range(history_text)
-    date_range = (
-        current_range
-        if current_window != "全部历史"
-        else history_range
-    )
-    window_label = (
-        current_window
-        if current_window != "全部历史"
-        else history_window
-    )
+    if current_window != "全部历史":
+        date_range, window_label = current_range, current_window
+    elif choice_window != "全部历史":
+        date_range, window_label = choice_range, choice_window
+    else:
+        date_range, window_label = history_range, history_window
     if any(value is None for value in date_range) or window_label == "全部历史":
         return None
 
