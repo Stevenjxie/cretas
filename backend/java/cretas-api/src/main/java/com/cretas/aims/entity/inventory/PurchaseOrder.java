@@ -134,6 +134,24 @@ public class PurchaseOrder extends BaseEntity {
     @Column(name = "remark", columnDefinition = "TEXT")
     private String remark;
 
+    // ==================== 仓储少收关闭审计 ====================
+
+    /** 少收关闭原因代码；仅 status=CLOSED 且由仓储待入库任务关闭时填写。 */
+    @Column(name = "receiving_close_reason_code", length = 40)
+    private String receivingCloseReasonCode;
+
+    /** 少收关闭补充说明；不与采购备注混写，便于独立审计。 */
+    @Column(name = "receiving_close_notes", columnDefinition = "TEXT")
+    private String receivingCloseNotes;
+
+    /** 执行少收关闭的仓储用户。 */
+    @Column(name = "receiving_closed_by")
+    private Long receivingClosedBy;
+
+    /** 少收关闭提交时间。 */
+    @Column(name = "receiving_closed_at")
+    private java.time.LocalDateTime receivingClosedAt;
+
     /**
      * U-MARKER-1 (Sprint 4 Wave 2 Chat L) — 行标颜色标记 (red/orange/yellow/green/blue/null).
      */

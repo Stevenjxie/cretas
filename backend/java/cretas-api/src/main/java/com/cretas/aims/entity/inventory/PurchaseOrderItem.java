@@ -77,6 +77,9 @@ public class PurchaseOrderItem extends BaseEntity {
     @Column(name = "purchase_packaging_spec_id", length = 64)
     private String purchasePackagingSpecId;
 
+    @Column(name = "material_packaging_spec_id", length = 36)
+    private String materialPackagingSpecId;
+
     /** Immutable unit/conversion snapshots for historical receipts and copies. */
     @Column(name = "purchase_package_unit_snapshot", length = 20)
     private String purchasePackageUnitSnapshot;

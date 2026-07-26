@@ -4,12 +4,14 @@ import com.cretas.aims.annotation.RequireModule;
 import com.cretas.aims.annotation.RequirePermission;
 import com.cretas.aims.dto.common.ApiResponse;
 import com.cretas.aims.dto.inventory.CreateReceiveRecordRequest;
+import com.cretas.aims.dto.inventory.ClosePurchaseReceivingTaskRequest;
 import com.cretas.aims.dto.inventory.CustomerSuppliedMaterialReceiptRequest;
 import com.cretas.aims.dto.inventory.CustomerSuppliedMaterialReceivingTaskResponse;
 import com.cretas.aims.dto.inventory.PurchaseReceivingTaskResponse;
 import com.cretas.aims.dto.material.MaterialBatchDTO;
 import com.cretas.aims.entity.factory.FactoryWarehouse;
 import com.cretas.aims.entity.inventory.PurchaseReceiveRecord;
+import com.cretas.aims.entity.enums.PurchaseOrderStatus;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.repository.factory.FactoryWarehouseRepository;
 import com.cretas.aims.service.MobileService;
@@ -168,6 +170,23 @@ public class WarehouseReceivingController {
         PurchaseReceiveRecord record = purchaseService.confirmReceive(
                 factoryId, receiptId, extractUserId(authorization));
         return ApiResponse.success("收货确认成功，库存批次已生成", record);
+    }
+
+    @RequireModule("warehouse")
+    @PostMapping("/tasks/{taskId}/close-short")
+    @Operation(summary = "少收关闭采购待入库任务")
+    @RequirePermission({"warehouse:read_write", "inventory:write"})
+    public ApiResponse<String> closePurchaseTaskShort(
+            @PathVariable @NotBlank String factoryId,
+            @PathVariable @NotBlank String taskId,
+            @RequestHeader("Authorization") String authorization,
+            @Valid @RequestBody ClosePurchaseReceivingTaskRequest request) {
+        PurchaseOrderStatus status = purchaseService.closeReceivingTask(
+                factoryId, taskId, request, extractUserId(authorization));
+        String message = status == PurchaseOrderStatus.COMPLETED
+                ? "采购计划已收齐，入库任务已自动完成"
+                : "少收关闭成功，已确认库存保持不变";
+        return ApiResponse.success(message, status.name());
     }
 
     private Long extractUserId(String authorization) {

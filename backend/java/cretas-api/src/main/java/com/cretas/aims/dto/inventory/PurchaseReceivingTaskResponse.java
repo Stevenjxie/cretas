@@ -10,6 +10,7 @@ import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
+import com.cretas.aims.dto.material.MaterialPackagingSpecDTO;
 
 /**
  * 仓储统一入库页的采购待收货只读投影。
@@ -68,5 +69,10 @@ public class PurchaseReceivingTaskResponse {
         private BigDecimal remainingReceivableQuantity;
         private String unit;
         private String specification;
+        private String materialPackagingSpecId;
+        private String inventoryBaseUnit;
+        private BigDecimal packageToBaseFactor;
+        @Builder.Default
+        private List<MaterialPackagingSpecDTO> packagingSpecs = new ArrayList<>();
     }
 }

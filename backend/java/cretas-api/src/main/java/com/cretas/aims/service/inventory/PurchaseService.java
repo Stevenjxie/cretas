@@ -3,6 +3,7 @@ package com.cretas.aims.service.inventory;
 import com.cretas.aims.dto.common.PageResponse;
 import com.cretas.aims.dto.inventory.CreatePurchaseOrderRequest;
 import com.cretas.aims.dto.inventory.CreateReceiveRecordRequest;
+import com.cretas.aims.dto.inventory.ClosePurchaseReceivingTaskRequest;
 import com.cretas.aims.dto.inventory.UpdatePurchaseOrderRequest;
 import com.cretas.aims.dto.inventory.PurchaseApprovalRecoveryResponse;
 import com.cretas.aims.dto.inventory.PurchaseReceivingTaskResponse;
@@ -116,6 +117,15 @@ public interface PurchaseService {
      */
     List<PurchaseReceivingTaskResponse> getPendingReceivingTasks(
             String factoryId, String purchaseOrderId, String orderNumber);
+
+    /**
+     * 仓储手动少收关闭。已确认库存不回滚；活动收货草稿存在时拒绝关闭。
+     */
+    com.cretas.aims.entity.enums.PurchaseOrderStatus closeReceivingTask(
+            String factoryId,
+            String purchaseOrderId,
+            ClosePurchaseReceivingTaskRequest request,
+            Long userId);
 
     PurchaseReceiveRecord confirmReceive(String factoryId, String receiveId, Long userId);
 

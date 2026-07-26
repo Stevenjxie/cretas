@@ -104,7 +104,8 @@ describe('material type family source contract', () => {
     expect(source).toContain('<template v-if="canViewPrice">');
     expect(source).toContain('<template v-if="isPackagingMaterial">');
     expect(source).toContain('包材专属字段（选填）');
-    expect(source).toContain('采购与库存单位换算（可选）');
+    expect(source).toContain('<el-form-item v-if="form.unit" label="包装换算" required>');
+    expect(source).not.toContain('采购与库存单位换算（可选）');
     expect(source).toContain('v-for="(rule, index) in packagingRules"');
     expect(source).toContain('packagingSpecs: submittedPackagingRules');
     expect(source).not.toContain('包装层级（包材专属，可选）');

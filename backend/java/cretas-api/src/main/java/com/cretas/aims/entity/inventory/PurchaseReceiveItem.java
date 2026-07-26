@@ -47,6 +47,10 @@ public class PurchaseReceiveItem extends BaseEntity {
     @Column(name = "purchase_order_item_id")
     private Long purchaseOrderItemId;
 
+    /** Material-master packaging identity selected at receipt time. */
+    @Column(name = "material_packaging_spec_id", length = 36)
+    private String materialPackagingSpecId;
+
     @Column(name = "material_type_id", nullable = false, length = 191)
     private String materialTypeId;
 
@@ -60,6 +64,19 @@ public class PurchaseReceiveItem extends BaseEntity {
 
     @Column(name = "unit", nullable = false, length = 20)
     private String unit;
+
+    /** Immutable receipt-package to inventory-base conversion snapshots. */
+    @Column(name = "receive_package_unit_snapshot", length = 20)
+    private String receivePackageUnitSnapshot;
+
+    @Column(name = "inventory_base_unit_snapshot", length = 20)
+    private String inventoryBaseUnitSnapshot;
+
+    @Column(name = "package_to_base_factor_snapshot", precision = 24, scale = 12)
+    private BigDecimal packageToBaseFactorSnapshot;
+
+    @Column(name = "inventory_quantity_snapshot", precision = 24, scale = 12)
+    private BigDecimal inventoryQuantitySnapshot;
 
     /** Canonical denominator of unitPrice. Receipt prices are normalized to {@link #unit}. */
     @Column(name = "price_unit", nullable = false, length = 20)

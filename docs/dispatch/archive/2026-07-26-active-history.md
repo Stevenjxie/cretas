@@ -2,6 +2,19 @@
 
 ## 已完成
 
+### `BUG-F006-MATERIAL-PACKAGING-REQUIRED-LAYOUT-001`
+
+- **状态**：`merged`
+- **Owner**：`/root`
+- **Base SHA**：`76e87cae68a5572930d9c0be369e364041fb4c73`
+- **功能提交 / PR**：`f2e723a4ebe114290adc02cddadf01ef3c8973c5` / [#1810](https://github.com/Stevenjxie/cretas/pull/1810)
+- **实现**：原料多包装规格已贯通采购、收货入库与跨仓调拨；交易行保留包装规格、单位、基本单位和换算系数快照，库存批次、调拨库存与生产事件只使用原料基本单位。
+- **入库任务闭环**：仅按已确认累计量判断完成；每个采购行已收大于等于计划时采购单变为 `COMPLETED` 并退出待入库。活动草稿量独立展示，不再把“草稿占用后可新增量为零”误报为已收齐。
+- **少收关闭**：仓储可在无活动草稿时选择标准原因关闭剩余数量；界面显示计划、已确认和少收差额，后端记录原因、说明、操作人和时间，已确认库存不回滚，重复关闭幂等。
+- **验收证据**：精确分支单一 fallback Maven 生命周期 12 个选择器 `48 passed`，其中 4 个真实 JPA Context 通过；可信 JAR SHA-256 `5b549c720f5296db817b4a11b7f7e092f7822db25fe278ea37ccea6f636bb1e6`。Web 目标 `9 passed`，`vue-tsc -b` 与 Vite production build 通过；PR tracked secret scan 通过。
+- **业务写入审计**：仅本地代码、迁移映射和构建验证；生产业务写入为 0。
+- **发布边界**：严格 `NOT_DEPLOYED`；合并代码不等于生产部署，后续部署需独立授权和 exact-main 发布门禁。
+
 ### `UX-OA-APPROVAL-CELL-VISUAL-20260726`
 
 - **状态**：`review`

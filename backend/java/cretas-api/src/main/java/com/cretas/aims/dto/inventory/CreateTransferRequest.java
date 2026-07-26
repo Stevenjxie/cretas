@@ -73,6 +73,10 @@ public class CreateTransferRequest {
         @Size(max = 191, message = "产品ID长度不能超过191个字符")
         private String productTypeId;
 
+        /** 原料调拨时选用的交易包装规格；库存仍按基本单位落账。 */
+        @Size(max = 36, message = "原料包装规格ID长度不能超过36个字符")
+        private String materialPackagingSpecId;
+
         @Size(max = 200, message = "品项名称长度不能超过200个字符")
         private String itemName;
 
@@ -88,5 +92,15 @@ public class CreateTransferRequest {
 
         @Size(max = 5000, message = "备注长度不能超过5000个字符")
         private String remark;
+
+        /** Service-computed immutable transaction snapshots; never accepted from JSON. */
+        @com.fasterxml.jackson.annotation.JsonIgnore
+        private BigDecimal packageQuantitySnapshot;
+        @com.fasterxml.jackson.annotation.JsonIgnore
+        private String packageUnitSnapshot;
+        @com.fasterxml.jackson.annotation.JsonIgnore
+        private String inventoryBaseUnitSnapshot;
+        @com.fasterxml.jackson.annotation.JsonIgnore
+        private BigDecimal packageToBaseFactorSnapshot;
     }
 }

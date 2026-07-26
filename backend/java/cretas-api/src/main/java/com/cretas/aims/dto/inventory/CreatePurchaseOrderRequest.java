@@ -87,6 +87,10 @@ public class CreatePurchaseOrderRequest {
         @Size(max = 64, message = "采购包装规格ID长度不能超过64个字符")
         private String purchasePackagingSpecId;
 
+        /** Active material-master packaging specification selected for this line. */
+        @Size(max = 36, message = "原料包装规格ID长度不能超过36个字符")
+        private String materialPackagingSpecId;
+
         @Size(max = 200, message = "原料名称长度不能超过200个字符")
         private String materialName;
 

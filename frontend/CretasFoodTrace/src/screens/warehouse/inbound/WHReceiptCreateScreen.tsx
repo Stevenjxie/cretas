@@ -35,6 +35,7 @@ import {
   Button,
   Card,
   Chip,
+  Menu,
   Text,
   TextInput,
 } from 'react-native-paper';
@@ -60,6 +61,10 @@ import {
 import { abacaApiClient } from '../../../services/api/abacaApiClient';
 import { attachmentApi } from '../../../services/api/attachmentApi';
 import { materialBatchApiClient } from '../../../services/api/materialBatchApiClient';
+import {
+  materialPackagingApiClient,
+  MaterialPackagingHierarchy,
+} from '../../../services/api/materialPackagingApiClient';
 import { handleError } from '../../../utils/errorHandler';
 import { useAuthStore } from '../../../store/authStore';
 
@@ -69,6 +74,10 @@ type RouteProps = RouteProp<WHInboundStackParamList, 'WHReceiptCreate'>;
 interface RowDraft {
   receivedQuantity: string;
   productionDate: string;       // YYYY-MM-DD
+  materialPackagingSpecId: string;
+  unit: string;
+  baseUnit: string;
+  factor: number;
 }
 
 // Issue #794: 收货拍照 — 提交前拍, 提交后批量上传到 entity=PURCHASE_RECEIPT
@@ -93,6 +102,8 @@ export default function WHReceiptCreateScreen() {
 
   const [order, setOrder] = useState<PurchaseOrder | null>(null);
   const [materialsById, setMaterialsById] = useState<Record<string, MaterialType>>({});
+  const [packagingByMaterial, setPackagingByMaterial] = useState<Record<string, MaterialPackagingHierarchy | null>>({});
+  const [packagingMenuItemId, setPackagingMenuItemId] = useState<string | null>(null);
   const [rows, setRows] = useState<Record<string, RowDraft>>({});
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
@@ -125,6 +136,10 @@ export default function WHReceiptCreateScreen() {
           initRows[it.id] = {
             receivedQuantity: remaining > 0 ? String(remaining) : '',
             productionDate: todayStr(),
+            materialPackagingSpecId: it.materialPackagingSpecId || '',
+            unit: it.purchasePackageUnitSnapshot || it.unit,
+            baseUnit: it.inventoryBaseUnitSnapshot || it.unit,
+            factor: Number(it.packageToBaseFactorSnapshot || 1),
           };
         }
         setRows(initRows);
@@ -144,6 +159,15 @@ export default function WHReceiptCreateScreen() {
           if (t && typeId) map[typeId] = t;
         });
         setMaterialsById(map);
+        const packagingArr = await Promise.all(
+          uniqueTypeIds.map((id) => materialPackagingApiClient.getByMaterial(id, factoryId).catch(() => null)),
+        );
+        const packagingMap: Record<string, MaterialPackagingHierarchy | null> = {};
+        packagingArr.forEach((value, idx) => {
+          const typeId = uniqueTypeIds[idx];
+          if (typeId) packagingMap[typeId] = value;
+        });
+        setPackagingByMaterial(packagingMap);
       } catch (err) {
         handleError(err, { title: '加载采购订单失败' });
       } finally {
@@ -165,15 +189,25 @@ export default function WHReceiptCreateScreen() {
     (item: PurchaseOrderItem): string => {
       const m = materialsById[item.materialTypeId];
       if (m?.isAbacaPackaging) return m.abacaDefaultUnit || 'kg';
-      return item.unit || m?.unit || '';
+      return rows[item.id]?.unit || item.purchasePackageUnitSnapshot || item.unit || m?.unit || '';
     },
-    [materialsById],
+    [materialsById, rows],
   );
 
   const updateRow = (itemId: string, patch: Partial<RowDraft>) => {
     setRows((prev) => ({
       ...prev,
-      [itemId]: { ...(prev[itemId] || { receivedQuantity: '', productionDate: todayStr() }), ...patch },
+      [itemId]: {
+        ...(prev[itemId] || {
+          receivedQuantity: '',
+          productionDate: todayStr(),
+          materialPackagingSpecId: '',
+          unit: '',
+          baseUnit: '',
+          factor: 1,
+        }),
+        ...patch,
+      },
     }));
   };
 
@@ -258,6 +292,17 @@ export default function WHReceiptCreateScreen() {
         Alert.alert('提示', `行 "${it.materialTypeName || it.materialTypeId}" 商品日期格式不对, 应为 YYYY-MM-DD`);
         return;
       }
+      const row = rows[it.id];
+      const orderRemaining = Math.max(0, Number(it.quantity || 0) - Number(it.receivedQuantity || 0));
+      const maxInSelectedPackage = orderRemaining * Number(it.packageToBaseFactorSnapshot || 1)
+        / Number(row?.factor || 1);
+      if (Number(row?.receivedQuantity || 0) > maxInSelectedPackage + 1e-9) {
+        Alert.alert(
+          '超过可收数量',
+          `${it.materialTypeName || it.materialTypeId} 本次最多可收 ${maxInSelectedPackage} ${row?.unit || unitFor(it)}`,
+        );
+        return;
+      }
     }
 
     setSubmitting(true);
@@ -272,10 +317,12 @@ export default function WHReceiptCreateScreen() {
           const row = rows[it.id];
           if (!row) throw new Error(`收货行缺失: ${it.materialTypeName || it.materialTypeId}`);
           return {
+            purchaseOrderItemId: Number(it.id),
             materialTypeId: it.materialTypeId,
+            materialPackagingSpecId: row.materialPackagingSpecId || undefined,
             materialName: it.materialTypeName,
             receivedQuantity: Number(row.receivedQuantity),
-            unit: unitFor(it),
+            unit: row.unit || unitFor(it),
             unitPrice: it.unitPrice,
           };
         }),
@@ -486,7 +533,17 @@ export default function WHReceiptCreateScreen() {
           {(order.items || []).map((it, idx) => {
             const abaca = isAbacaItem(it);
             const m = materialsById[it.materialTypeId];
-            const row = rows[it.id] || { receivedQuantity: '', productionDate: todayStr() };
+            const row = rows[it.id] || {
+              receivedQuantity: '',
+              productionDate: todayStr(),
+              materialPackagingSpecId: '',
+              unit: unitFor(it),
+              baseUnit: it.inventoryBaseUnitSnapshot || it.unit,
+              factor: Number(it.packageToBaseFactorSnapshot || 1),
+            };
+            const packagingOptions = (packagingByMaterial[it.materialTypeId]?.packagingSpecs || [])
+              .filter((spec) => spec.active !== false);
+            const basePreview = Number(row.receivedQuantity || 0) * Number(row.factor || 1);
             return (
               <Card key={it.id} style={styles.itemCard}>
                 <Card.Content>
@@ -526,6 +583,44 @@ export default function WHReceiptCreateScreen() {
                     </View>
                   )}
 
+                  {!abaca && packagingOptions.length > 0 && (
+                    <Menu
+                      visible={packagingMenuItemId === it.id}
+                      onDismiss={() => setPackagingMenuItemId(null)}
+                      anchor={
+                        <Button
+                          mode="outlined"
+                          icon="package-variant"
+                          onPress={() => setPackagingMenuItemId(it.id)}
+                          style={styles.packagingButton}
+                        >
+                          {`到货包装：1${row.unit}=${row.factor}${row.baseUnit}`}
+                        </Button>
+                      }
+                    >
+                      {packagingOptions.map((spec) => (
+                        <Menu.Item
+                          key={spec.id}
+                          title={`${spec.name} · 1${spec.packageUnit}=${spec.conversionFactor}${spec.baseUnit}`}
+                          onPress={() => {
+                            const remainingBase = Math.max(
+                              0,
+                              Number(it.quantity || 0) - Number(it.receivedQuantity || 0),
+                            ) * Number(it.packageToBaseFactorSnapshot || 1);
+                            updateRow(it.id, {
+                              materialPackagingSpecId: spec.id,
+                              unit: spec.packageUnit,
+                              baseUnit: spec.baseUnit,
+                              factor: Number(spec.conversionFactor),
+                              receivedQuantity: String(Number((remainingBase / Number(spec.conversionFactor)).toFixed(4))),
+                            });
+                            setPackagingMenuItemId(null);
+                          }}
+                        />
+                      ))}
+                    </Menu>
+                  )}
+
                   <View style={styles.fieldsRow}>
                     <TextInput
                       label={abaca ? `估算重量 (${unitFor(it)}) *` : `数量 (${unitFor(it)}) *`}
@@ -548,6 +643,11 @@ export default function WHReceiptCreateScreen() {
                       style={[styles.field, styles.flex1]}
                     />
                   </View>
+                  {!abaca && (
+                    <Text style={styles.baseQuantityPreview}>
+                      本次入库折合：{basePreview} {row.baseUnit}
+                    </Text>
+                  )}
                 </Card.Content>
               </Card>
             );
@@ -692,6 +792,8 @@ const styles = StyleSheet.create({
   abacaBannerText: { fontSize: 12, color: '#92400e', lineHeight: 18 },
 
   fieldsRow: { flexDirection: 'row', gap: 8, marginTop: 6 },
+  packagingButton: { marginTop: 8, marginBottom: 4 },
+  baseQuantityPreview: { fontSize: 13, color: '#2563eb', marginTop: 4 },
   field: { backgroundColor: 'transparent' },
   flex1: { flex: 1 },
 

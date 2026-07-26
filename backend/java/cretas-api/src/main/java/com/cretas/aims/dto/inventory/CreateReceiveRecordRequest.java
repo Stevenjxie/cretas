@@ -56,6 +56,10 @@ public class CreateReceiveRecordRequest {
         /** Required for PO-backed receipts; nullable only for legacy/non-PO callers. */
         private Long purchaseOrderItemId;
 
+        /** Actual arrival packaging selected from the material master. */
+        @Size(max = 36, message = "原料包装规格ID长度不能超过36个字符")
+        private String materialPackagingSpecId;
+
         @NotBlank(message = "原料类型ID不能为空")
         @Size(max = 191, message = "原料类型ID长度不能超过191个字符")
         private String materialTypeId;

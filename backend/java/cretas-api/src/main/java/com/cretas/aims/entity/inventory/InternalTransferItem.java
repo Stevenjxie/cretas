@@ -69,6 +69,22 @@ public class InternalTransferItem extends BaseEntity {
     @Column(name = "unit", nullable = false, length = 20)
     private String unit;
 
+    /** Optional transaction packaging; quantity/unit above remain canonical inventory values. */
+    @Column(name = "material_packaging_spec_id", length = 36)
+    private String materialPackagingSpecId;
+
+    @Column(name = "package_quantity_snapshot", precision = 24, scale = 12)
+    private BigDecimal packageQuantitySnapshot;
+
+    @Column(name = "package_unit_snapshot", length = 20)
+    private String packageUnitSnapshot;
+
+    @Column(name = "inventory_base_unit_snapshot", length = 20)
+    private String inventoryBaseUnitSnapshot;
+
+    @Column(name = "package_to_base_factor_snapshot", precision = 24, scale = 12)
+    private BigDecimal packageToBaseFactorSnapshot;
+
     /** 调拨单价（按总部定价或协议价） */
     @PriceSensitive
     @Column(name = "unit_price", precision = 15, scale = 4)

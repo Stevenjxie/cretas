@@ -10,7 +10,7 @@ import org.springframework.test.context.ActiveProfiles;
 
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 
-/** Real Hibernate startup gate for supplier import, relation, spec and attachment queries. */
+/** Real Hibernate startup gate for supplier, purchase receiving and attachment queries/entities. */
 @DataJpaTest
 @AutoConfigureTestDatabase(replace = AutoConfigureTestDatabase.Replace.NONE)
 @ActiveProfiles("test")

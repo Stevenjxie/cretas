@@ -128,4 +128,32 @@ describe('M08 手动调拨选择器契约', () => {
     });
     expect(packagingRow.productTypeId).toBeUndefined();
   });
+
+  it('原料可按包装数量调拨，但 payload 带规格身份并由后端折合基本量', () => {
+    const raw = row('RAW_MATERIAL');
+    applySelectedOption(raw, {
+      id: 'RAW-KG',
+      name: '冷冻原料',
+      unit: 'kg',
+      currentStock: 80,
+      unitPrice: 12,
+    });
+    raw.quantity = 8;
+    raw.unit = 'case';
+    raw.materialPackagingSpecId = 'SPEC-CASE-10KG';
+    raw._packageFactor = 10;
+    raw._inventoryUnit = 'kg';
+
+    expect(toTransferItemPayload(raw)).toMatchObject({
+      itemType: 'RAW_MATERIAL',
+      materialTypeId: 'RAW-KG',
+      materialPackagingSpecId: 'SPEC-CASE-10KG',
+      quantity: 8,
+      unit: 'case',
+      unitPrice: 120,
+    });
+    expect(listSource).toContain('label="调拨包装"');
+    expect(listSource).toContain('折合 {{ formatStock(transferBaseQuantity(row)) }}');
+    expect(listSource).toContain('transferBaseQuantity(it) > Number(stock)');
+  });
 });

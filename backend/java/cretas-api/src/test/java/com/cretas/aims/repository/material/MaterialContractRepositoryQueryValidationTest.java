@@ -22,11 +22,16 @@ class MaterialContractRepositoryQueryValidationTest {
     @Autowired MaterialCodeSegmentRepository segmentRepository;
     @Autowired RawMaterialTypeRepository materialTypeRepository;
     @Autowired UnitOfMeasurementRepository unitOfMeasurementRepository;
+    @Autowired MaterialPackagingSpecRepository materialPackagingSpecRepository;
 
     @Test
     void repositoriesBootAndAllDeclaredQueriesParse() {
         assertNotNull(segmentRepository);
         assertNotNull(materialTypeRepository);
         assertNotNull(unitOfMeasurementRepository);
+        assertNotNull(materialPackagingSpecRepository);
+        assertNotNull(materialPackagingSpecRepository
+                .findByIdAndFactoryIdAndMaterialTypeIdAndActiveTrue(
+                        "missing", "F006", "missing"));
     }
 }

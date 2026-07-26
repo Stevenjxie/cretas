@@ -6,12 +6,14 @@ import { Document, Refresh } from '@element-plus/icons-vue';
 import { get, post } from '@/api/request';
 import {
   createCustomerSuppliedReceipt,
+  closePurchaseReceivingTask,
   getPendingPurchaseReceivingTasks,
   getPendingWarehouseReceivingTasks,
   getPurchaseInboundDefaultWarehouse,
   type CustomerSuppliedReceivingTask,
   type PurchaseReceivingTask,
   type PurchaseReceivingTaskItem,
+  type PurchaseReceivingCloseReason,
   type WarehouseReceivingTask,
 } from '@/api/purchaseReceive';
 import {
@@ -39,6 +41,20 @@ interface ReceiveItemForm {
   materialName: string;
   receivedQuantity: number;
   unit: string;
+  materialPackagingSpecId?: string;
+  packagingKey: string;
+  inventoryBaseUnit: string;
+  packageToBaseFactor: number;
+  packagingOptions: PackagingOption[];
+}
+
+interface PackagingOption {
+  key: string;
+  id?: string;
+  name: string;
+  packageUnit: string;
+  baseUnit: string;
+  factor: number;
 }
 
 interface PurchaseReceiptDetail {
@@ -70,6 +86,23 @@ const customerConfirming = ref(false);
 const customerAttachmentRefreshKey = ref(0);
 const customerAttachmentQueue = ref({ pending: 0, failed: 0 });
 const customerIdempotencyKey = ref('');
+const closeDialogVisible = ref(false);
+const selectedCloseTask = ref<PurchaseReceivingTask | null>(null);
+const closingTask = ref(false);
+const closeForm = ref<{
+  reasonCode: PurchaseReceivingCloseReason | '';
+  notes: string;
+}>({
+  reasonCode: '',
+  notes: '',
+});
+const closeReasonOptions: Array<{ value: PurchaseReceivingCloseReason; label: string }> = [
+  { value: 'SUPPLIER_SHORT_SHIPMENT', label: '供应商少发且不再补发' },
+  { value: 'QUALITY_REJECTION', label: '质检拒收造成少收' },
+  { value: 'PURCHASE_BALANCE_CANCELLED', label: '采购取消剩余数量' },
+  { value: 'DEMAND_CHANGED', label: '需求或计划发生变化' },
+  { value: 'OTHER', label: '其他原因' },
+];
 const selectedCustomerLine = computed(() => selectedCustomerTask.value
   ? customerTaskItem(selectedCustomerTask.value)
   : null);
@@ -128,7 +161,7 @@ function localDateText(): string {
 
 function unitGroups(
   task: WarehouseReceivingTask,
-  field: 'orderedQuantity' | 'receivedQuantity' | 'remainingReceivableQuantity',
+  field: 'orderedQuantity' | 'receivedQuantity' | 'activeDraftAllocatedQuantity' | 'remainingReceivableQuantity',
 ) {
   const groups = new Map<string, number>();
   for (const item of task.items || []) {
@@ -140,9 +173,24 @@ function unitGroups(
     .join(' + ') || '—';
 }
 
+function shortfallForItem(item: PurchaseReceivingTaskItem): number {
+  return Math.max(Number(item.orderedQuantity || 0) - Number(item.receivedQuantity || 0), 0);
+}
+
+function confirmedShortfallGroups(task: WarehouseReceivingTask): string {
+  const groups = new Map<string, number>();
+  for (const item of task.items || []) {
+    const unit = displayUnit(item.unit) || '未配置';
+    groups.set(unit, (groups.get(unit) || 0) + shortfallForItem(item));
+  }
+  return Array.from(groups.entries())
+    .map(([unit, quantity]) => `${fmtQty(quantity)}${unit}`)
+    .join(' + ') || '—';
+}
+
 function materialSummary(task: WarehouseReceivingTask): string {
   return (task.items || [])
-    .map((item) => `${item.materialName} ${fmtQty(item.remainingReceivableQuantity)}${displayUnit(item.unit)}`)
+    .map((item) => `${item.materialName} ${fmtQty(shortfallForItem(item))}${displayUnit(item.unit)}`)
     .join('；');
 }
 
@@ -226,11 +274,45 @@ async function openReceive(task: PurchaseReceivingTask) {
       items: task.items
         .filter((item) => Number(item.remainingReceivableQuantity) > 0)
         .map((item) => ({
+          ...(() => {
+            const orderOption: PackagingOption = {
+              key: '__ORDER__',
+              id: item.materialPackagingSpecId || undefined,
+              name: '采购单规格',
+              packageUnit: item.unit,
+              baseUnit: item.inventoryBaseUnit || item.unit,
+              factor: Number(item.packageToBaseFactor || 1),
+            };
+            const masterOptions: PackagingOption[] = (item.packagingSpecs || []).map((spec) => ({
+              key: spec.id,
+              id: spec.id,
+              name: spec.name,
+              packageUnit: spec.packageUnit,
+              baseUnit: spec.baseUnit,
+              factor: Number(spec.conversionFactor),
+            }));
+            const selected = masterOptions.find((option) => option.id === item.materialPackagingSpecId)
+              || masterOptions.find((option) =>
+                option.packageUnit === item.unit
+                && option.baseUnit === item.inventoryBaseUnit
+                && option.factor === Number(item.packageToBaseFactor || 1))
+              || orderOption;
+            const options = selected.key === '__ORDER__'
+              ? [orderOption, ...masterOptions]
+              : masterOptions;
+            return {
+              materialPackagingSpecId: selected.id,
+              packagingKey: selected.key,
+              inventoryBaseUnit: selected.baseUnit,
+              packageToBaseFactor: selected.factor,
+              packagingOptions: options,
+              unit: selected.packageUnit,
+            };
+          })(),
           purchaseOrderItemId: item.purchaseOrderItemId,
           materialTypeId: item.materialTypeId,
           materialName: item.materialName,
           receivedQuantity: Number(item.remainingReceivableQuantity),
-          unit: item.unit,
         })),
     };
     await loadWarehouses();
@@ -248,7 +330,24 @@ async function openReceive(task: PurchaseReceivingTask) {
 function remainingLimit(row: ReceiveItemForm): number {
   const line = selectedTask.value?.items.find((item) =>
     item.purchaseOrderItemId === row.purchaseOrderItemId);
-  return Number(line?.remainingReceivableQuantity || 0);
+  const orderFactor = Number(line?.packageToBaseFactor || 1);
+  const selectedFactor = Number(row.packageToBaseFactor || 1);
+  return Number(line?.remainingReceivableQuantity || 0) * orderFactor / selectedFactor;
+}
+
+function onPackagingChange(row: ReceiveItemForm) {
+  const selected = row.packagingOptions.find((option) => option.key === row.packagingKey);
+  if (!selected) return;
+  row.materialPackagingSpecId = selected.id;
+  row.unit = selected.packageUnit;
+  row.inventoryBaseUnit = selected.baseUnit;
+  row.packageToBaseFactor = selected.factor;
+  row.receivedQuantity = Number(remainingLimit(row).toFixed(4));
+}
+
+function baseQuantityPreview(row: ReceiveItemForm): string {
+  const quantity = Number(row.receivedQuantity || 0) * Number(row.packageToBaseFactor || 1);
+  return `${fmtQty(quantity)}${displayUnit(row.inventoryBaseUnit)}`;
 }
 
 async function createReceipt() {
@@ -260,7 +359,18 @@ async function createReceipt() {
   }
   submitting.value = true;
   try {
-    const response = await post<PurchaseReceiptDetail>(`/${props.factoryId}/warehouse/receiving/receipts`, form.value);
+    const payload = {
+      ...form.value,
+      items: form.value.items.map((item) => ({
+        purchaseOrderItemId: item.purchaseOrderItemId,
+        materialTypeId: item.materialTypeId,
+        materialName: item.materialName,
+        receivedQuantity: item.receivedQuantity,
+        unit: item.unit,
+        materialPackagingSpecId: item.materialPackagingSpecId,
+      })),
+    };
+    const response = await post<PurchaseReceiptDetail>(`/${props.factoryId}/warehouse/receiving/receipts`, payload);
     if (response.success && response.data) {
       receipt.value = response.data;
       ElMessage.success('收货单草稿已创建；请上传供货凭证并核对后确认入库');
@@ -291,13 +401,58 @@ async function confirmReceipt() {
       `确认收货入库 — ${receipt.value.receiveNumber}`,
       { type: 'warning', confirmButtonText: '确认收货入库', cancelButtonText: '返回核对' },
     );
+    const confirmedOrderId = selectedTask.value?.purchaseOrderId;
     await post(`/${props.factoryId}/warehouse/receiving/receipts/${receipt.value.id}/confirm`);
-    ElMessage.success('收货入库完成，库存批次已生成');
     dialogVisible.value = false;
     await loadTasks();
+    const automaticallyCompleted = Boolean(confirmedOrderId
+      && !tasks.value.some((task) =>
+        isPurchaseTask(task) && task.purchaseOrderId === confirmedOrderId));
+    ElMessage.success(automaticallyCompleted
+      ? '收货入库完成，计划已收齐，入库任务已自动完成'
+      : '本次收货入库完成，库存批次已生成');
     emit('refreshed');
   } finally {
     confirming.value = false;
+  }
+}
+
+function openShortClose(task: PurchaseReceivingTask) {
+  if (task.activeReceiptCount > 0 || task.activeReceiptId) {
+    ElMessage.warning('该任务仍有收货草稿，请先继续收货并确认入库后再决定是否少收关闭');
+    return;
+  }
+  selectedCloseTask.value = task;
+  closeForm.value = { reasonCode: '', notes: '' };
+  closeDialogVisible.value = true;
+}
+
+async function submitShortClose() {
+  const task = selectedCloseTask.value;
+  if (!task || closingTask.value) return;
+  if (!closeForm.value.reasonCode) {
+    ElMessage.warning('请选择少收关闭原因');
+    return;
+  }
+  const notes = closeForm.value.notes.trim();
+  if (closeForm.value.reasonCode === 'OTHER' && !notes) {
+    ElMessage.warning('选择“其他原因”时必须填写补充说明');
+    return;
+  }
+  closingTask.value = true;
+  try {
+    const response = await closePurchaseReceivingTask(props.factoryId, task.purchaseOrderId, {
+      reasonCode: closeForm.value.reasonCode,
+      notes: notes || undefined,
+    });
+    if (!response.success) return;
+    closeDialogVisible.value = false;
+    selectedCloseTask.value = null;
+    await loadTasks();
+    ElMessage.success(response.message || '入库任务已结束');
+    emit('refreshed');
+  } finally {
+    closingTask.value = false;
   }
 }
 
@@ -409,7 +564,11 @@ function receivedQuantity(task: WarehouseReceivingTask): string {
 }
 
 function remainingQuantity(task: WarehouseReceivingTask): string {
-  return unitGroups(task, 'remainingReceivableQuantity');
+  return confirmedShortfallGroups(task);
+}
+
+function draftQuantity(task: WarehouseReceivingTask): string {
+  return unitGroups(task, 'activeDraftAllocatedQuantity');
 }
 
 function taskWarehouse(task: WarehouseReceivingTask): string {
@@ -481,8 +640,11 @@ defineExpose({ loadTasks });
       <el-table-column label="计划数量" min-width="120">
         <template #default="{ row }">{{ plannedQuantity(row) }}</template>
       </el-table-column>
-      <el-table-column label="已收数量" min-width="120">
+      <el-table-column label="已确认收货" min-width="120">
         <template #default="{ row }">{{ receivedQuantity(row) }}</template>
+      </el-table-column>
+      <el-table-column label="草稿待确认" min-width="120">
+        <template #default="{ row }">{{ draftQuantity(row) }}</template>
       </el-table-column>
       <el-table-column label="待收数量" min-width="120">
         <template #default="{ row }"><strong>{{ remainingQuantity(row) }}</strong></template>
@@ -493,12 +655,29 @@ defineExpose({ loadTasks });
       <el-table-column label="责任人" width="125">
         <template #default="{ row }">{{ row.responsibleName || '仓储待确认' }}</template>
       </el-table-column>
-      <el-table-column label="操作" width="130" fixed="right">
+      <el-table-column label="操作" width="205" fixed="right">
         <template #default="{ row }">
-          <el-button v-if="canWrite && isPurchaseTask(row)" type="danger" :disabled="row.receiptConflict || Boolean(openingTaskId)"
-            :loading="openingTaskId === row.purchaseOrderId" @click="openReceive(row)">
-            {{ row.activeReceiptId ? '继续收货' : '收货' }}
-          </el-button>
+          <div v-if="canWrite && isPurchaseTask(row)" class="task-actions">
+            <el-button type="danger" :disabled="row.receiptConflict || Boolean(openingTaskId)"
+              :loading="openingTaskId === row.purchaseOrderId" @click="openReceive(row)">
+              {{ row.activeReceiptId ? '继续收货' : '收货' }}
+            </el-button>
+            <el-tooltip
+              :content="row.activeReceiptCount > 0 ? '请先确认当前收货草稿，再处理剩余少收数量' : '保留已确认库存并关闭剩余未收数量'"
+              placement="top"
+            >
+              <span>
+                <el-button
+                  link
+                  type="danger"
+                  :disabled="row.activeReceiptCount > 0 || Boolean(openingTaskId)"
+                  @click="openShortClose(row)"
+                >
+                  少收关闭
+                </el-button>
+              </span>
+            </el-tooltip>
+          </div>
           <el-button v-else-if="canWrite" type="danger" :disabled="row.receiptConflict || Boolean(openingTaskId)"
             :loading="openingTaskId === row.taskId" @click="openCustomerReceive(row)">
             {{ row.activeReceiptId ? '继续收货' : '收货' }}
@@ -535,6 +714,18 @@ defineExpose({ loadTasks });
           </el-form>
           <el-table :data="form.items" border>
             <el-table-column prop="materialName" label="物料" min-width="210" />
+            <el-table-column label="实际到货包装" min-width="255">
+              <template #default="{ row }">
+                <el-select v-model="row.packagingKey" style="width:100%" @change="onPackagingChange(row)">
+                  <el-option
+                    v-for="option in row.packagingOptions"
+                    :key="option.key"
+                    :label="`${option.name} · 1${displayUnit(option.packageUnit)}=${fmtQty(option.factor)}${displayUnit(option.baseUnit)}`"
+                    :value="option.key"
+                  />
+                </el-select>
+              </template>
+            </el-table-column>
             <el-table-column label="本次实收" width="190">
               <template #default="{ row }">
                 <el-input-number v-model="row.receivedQuantity" :min="0.001" :max="remainingLimit(row)"
@@ -542,7 +733,9 @@ defineExpose({ loadTasks });
                 <span class="unit-suffix">{{ displayUnit(row.unit) }}</span>
               </template>
             </el-table-column>
-            <el-table-column label="单位" width="90"><template #default="{ row }">{{ displayUnit(row.unit) }}</template></el-table-column>
+            <el-table-column label="折合基本量" width="150">
+              <template #default="{ row }">{{ baseQuantityPreview(row) }}</template>
+            </el-table-column>
           </el-table>
         </template>
 
@@ -569,6 +762,72 @@ defineExpose({ loadTasks });
         <el-button v-if="receipt" :icon="Document" @click="safePrint('purchase-receipt', factoryId, receipt.id, { fileName: `收货单_${receipt.receiveNumber}` })">打印收货单</el-button>
         <el-button v-if="!receipt" type="primary" :loading="submitting" @click="createReceipt">创建收货单草稿</el-button>
         <el-button v-else-if="receipt.status === 'DRAFT'" type="success" :loading="confirming" @click="confirmReceipt">确认收货入库</el-button>
+      </template>
+    </el-dialog>
+
+    <el-dialog
+      v-model="closeDialogVisible"
+      :title="`少收关闭 — ${selectedCloseTask?.orderNumber || ''}`"
+      width="min(760px, calc(100vw - 32px))"
+      :close-on-click-modal="false"
+    >
+      <template v-if="selectedCloseTask">
+        <el-alert
+          type="warning"
+          :closable="false"
+          show-icon
+          title="关闭后，已确认入库的库存保持不变；剩余未收数量不再生成待入库任务。"
+          description="本操作用于供应商不再补发或计划确实终止的少收场景。若仍会补货，请取消并继续收货。"
+        />
+        <el-descriptions :column="2" border class="short-close-context">
+          <el-descriptions-item label="采购单号">{{ selectedCloseTask.orderNumber }}</el-descriptions-item>
+          <el-descriptions-item label="供应商">{{ selectedCloseTask.supplierName || selectedCloseTask.supplierId }}</el-descriptions-item>
+          <el-descriptions-item label="计划数量">{{ plannedQuantity(selectedCloseTask) }}</el-descriptions-item>
+          <el-descriptions-item label="已确认收货">{{ receivedQuantity(selectedCloseTask) }}</el-descriptions-item>
+          <el-descriptions-item label="少收差额" :span="2">
+            <strong class="shortfall-value">{{ remainingQuantity(selectedCloseTask) }}</strong>
+          </el-descriptions-item>
+        </el-descriptions>
+        <el-table :data="selectedCloseTask.items" border class="short-close-lines">
+          <el-table-column prop="materialName" label="物料" min-width="220" />
+          <el-table-column label="计划" width="130">
+            <template #default="{ row }">{{ fmtQty(row.orderedQuantity) }}{{ displayUnit(row.unit) }}</template>
+          </el-table-column>
+          <el-table-column label="已确认" width="130">
+            <template #default="{ row }">{{ fmtQty(row.receivedQuantity) }}{{ displayUnit(row.unit) }}</template>
+          </el-table-column>
+          <el-table-column label="少收" width="130">
+            <template #default="{ row }"><strong>{{ fmtQty(shortfallForItem(row)) }}{{ displayUnit(row.unit) }}</strong></template>
+          </el-table-column>
+        </el-table>
+        <el-form label-width="110px" class="short-close-form">
+          <el-form-item label="关闭原因" required>
+            <el-select v-model="closeForm.reasonCode" placeholder="请选择标准原因" style="width: 100%">
+              <el-option
+                v-for="option in closeReasonOptions"
+                :key="option.value"
+                :label="option.label"
+                :value="option.value"
+              />
+            </el-select>
+          </el-form-item>
+          <el-form-item label="补充说明" :required="closeForm.reasonCode === 'OTHER'">
+            <el-input
+              v-model="closeForm.notes"
+              type="textarea"
+              :rows="3"
+              maxlength="500"
+              show-word-limit
+              placeholder="可填写供应商确认、质检结论或计划变更依据"
+            />
+          </el-form-item>
+        </el-form>
+      </template>
+      <template #footer>
+        <el-button :disabled="closingTask" @click="closeDialogVisible = false">取消</el-button>
+        <el-button type="danger" :loading="closingTask" @click="submitShortClose">
+          确认少收并关闭
+        </el-button>
       </template>
     </el-dialog>
 
@@ -650,6 +909,11 @@ defineExpose({ loadTasks });
 .receive-form { margin-top: 16px; }
 .unit-suffix { margin-left: 8px; color: #606266; }
 .receipt-lines { margin: 12px 0; }
+.task-actions { display: flex; align-items: center; gap: 4px; }
+.short-close-context { margin-top: 12px; }
+.short-close-lines { margin-top: 12px; }
+.short-close-form { margin-top: 16px; }
+.shortfall-value { color: #b42318; }
 .customer-task-context { margin-top: 12px; }
 .quantity-limit { margin-left: 12px; color: #606266; font-size: 12px; }
 @media (max-width: 720px) {

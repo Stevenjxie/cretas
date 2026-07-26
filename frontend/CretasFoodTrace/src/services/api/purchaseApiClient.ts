@@ -49,6 +49,11 @@ export interface PurchaseOrderItem {
   receivedQuantity: number;
   unitPrice: number;
   unit: string;
+  materialPackagingSpecId?: string;
+  purchasePackageUnitSnapshot?: string;
+  inventoryBaseUnitSnapshot?: string;
+  packageToBaseFactorSnapshot?: number;
+  inventoryQuantitySnapshot?: number;
   totalPrice: number;
   remark?: string;
 }
@@ -78,6 +83,9 @@ export interface CreatePurchaseOrderRequest {
   remark?: string;
   items: {
     materialTypeId: string;
+    supplierMaterialId?: string;
+    purchasePackagingSpecId?: string;
+    materialPackagingSpecId?: string;
     quantity: number;
     unitPrice: number;
     unit: string;
@@ -92,7 +100,9 @@ export interface CreateReceiveRecordRequest {
   warehouseId?: string;
   remark?: string;
   items: {
+    purchaseOrderItemId?: number;
     materialTypeId: string;
+    materialPackagingSpecId?: string;
     materialName?: string;
     receivedQuantity: number;
     unit: string;
