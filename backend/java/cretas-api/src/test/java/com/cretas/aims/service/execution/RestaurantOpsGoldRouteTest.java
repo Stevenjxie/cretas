@@ -371,6 +371,12 @@ class RestaurantOpsGoldRouteTest {
                 .contains("RESTAURANT_PEAK_MONTH");
         assertThat(orchestrator.matchRestaurantOpsIntent("营收最高的是哪个月份", "RESTAURANT"))
                 .contains("RESTAURANT_PEAK_MONTH");
+        assertThat(orchestrator.matchRestaurantOpsIntent(
+                "对比峰值月和次高月的订单量与客单价", "RESTAURANT"))
+                .contains("RESTAURANT_PEAK_MONTH");
+        assertThat(orchestrator.matchRestaurantOpsIntent(
+                "比较营收峰值月与第二高月份的单量、平均客单", "RESTAURANT"))
+                .contains("RESTAURANT_PEAK_MONTH");
         assertThat(orchestrator.matchRestaurantOpsIntent("哪个月门店营收最高", "RESTAURANT"))
                 .contains("RESTAURANT_PEAK_MONTH");
         assertThat(orchestrator.matchRestaurantOpsIntent("哪个门店哪个月营收最高", "RESTAURANT"))

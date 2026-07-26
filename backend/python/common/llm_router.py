@@ -526,7 +526,9 @@ class SLOT(str, Enum):
 # every account exhausted" surfaces an error — a paid charge is structurally
 # impossible (no paid SKU is ever in a chain).
 #
-# Each slot = slot-tuned HEAD + shared _TEXT_TAIL (deduped) → ≥10 fallbacks.
+# Most text slots = slot-tuned HEAD + shared _TEXT_TAIL (deduped). MAPPER is
+# intentionally narrower: JSON classification must fail fast instead of
+# cascading through expensive/slow Max, DeepSeek and Kimi models.
 # Order: aliyun_c (freshest, exp 2026/08) → aliyun_b → aliyun_a (small free
 # list) → tencent (TokenHub free trial) → zhipu (independent GLM pool). VL slot
 # uses a vision-only chain.
@@ -641,14 +643,19 @@ SLOT_MODELS: Dict[SLOT, List[Tuple[str, str]]] = {
     # 7.5s 总预算。首次止血曾把 c/qwen3.7-max 提到第二位，但生产复测发现
     # 其免费额度也已返回 403。随后用真实餐饮 T3 prompt 探测 c/glm-5.2：
     # 4/4 正确、1.97-2.47s，且受同一免费额度/到期门禁保护。因此将 glm-5.2
-    # 提为低成本健康候选；max 仅保留在共享深尾，避免成为常态调用。
+    # 提为低成本健康候选。MAPPER 不再追加通用 _TEXT_TAIL：Max/DeepSeek/Kimi
+    # 对短 JSON 分类既慢又浪费，生产已证明它们只会把一次请求拖成长尾。
+    # 保留独立的 flash/plus/zhipu 小链；真正的经营深度分析仍由
+    # INSIGHTS/REASONING 槽负责，不牺牲其模型质量。
     SLOT.MAPPER: _dedup_chain([
         ("aliyun_c", "qwen3.6-flash-2026-04-16"),
         ("aliyun_c", "glm-5.2"),
         ("aliyun_a", "qwen3.6-flash"), ("aliyun_b", "qwen-flash"),
         ("aliyun_c", "qwen3.5-flash"), ("aliyun_c", "qwen3-coder-flash"),
         ("tencent", "qwen3.5-flash"),
-    ] + _TEXT_TAIL),
+        ("aliyun_b", "qwen3.6-flash-2026-04-16"), ("aliyun_b", "qwen-turbo"),
+        ("aliyun_c", "qwen-plus-latest"), ("zhipu", "glm-4.5-air"),
+    ]),
     # REASONING — 深度 (thinking on / thinking-only OK) → deepseek/MoE reasoners.
     SLOT.REASONING: _dedup_chain([
         ("aliyun_c", "deepseek-v3.1"), ("aliyun_b", "deepseek-v3.2"),
@@ -863,9 +870,12 @@ def _is_quota_exhausted(status_code: int, body_text: str) -> bool:
     quota-skip. Only 403 FreeTierOnly / 402 grant-exhaustion warrant the long skip."""
     if status_code == 403:
         return "FreeTierOnly" in body_text or "AllocationQuota" in body_text
+    lowered_body = body_text.lower()
     if status_code == 402 and (
-        "Insufficient Balance" in body_text
-        or "FREE_QUOTA_EXHAUSTED" in body_text
+        "insufficient balance" in lowered_body
+        or "free_quota_exhausted" in lowered_body
+        or ("free trial quota" in lowered_body and "exhaust" in lowered_body)
+        or "401008" in lowered_body
     ):
         # DeepSeek-official balance-0 returns 402 with body "Insufficient
         # Balance". Tencent TokenHub returns 402 with body "endpoint is

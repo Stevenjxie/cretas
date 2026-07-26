@@ -200,6 +200,78 @@ class RestaurantPeakMonthGoldToolTest {
         assertThat(tool.shouldDelegateToTieredIntent("这两个月生意怎么样")).isTrue();
     }
 
+    @Test
+    @DisplayName("UT-PMG-09: peak-month order/ticket follow-up is deterministic and uses weighted monthly metrics")
+    void doExecute_orderTicketFollowupUsesDailyTrendWithoutLlm() throws Exception {
+        when(goldClient.fetchDataRange(FACTORY_ID))
+                .thenReturn(Map.of(
+                        "min_date", "2026-01-01",
+                        "max_date", "2026-03-31",
+                        "day_count", 90
+                ));
+        when(goldClient.fetchDailyTrend(
+                FACTORY_ID, LocalDate.parse("2026-01-01"), LocalDate.parse("2026-03-31")))
+                .thenReturn(buildTrendResult(List.of(
+                        point("2026-01-10", 5_000_000.0, 200),
+                        point("2026-03-10", 7_000_000.0, 300)
+                )));
+
+        Map<String, Object> result = tool.doExecute(
+                FACTORY_ID,
+                new HashMap<>(Map.of(
+                        "userInput", "对比峰值月和次高月的订单量与客单价")),
+                new HashMap<>());
+
+        assertThat(result)
+                .containsEntry("峰值月份", "2026-03")
+                .containsEntry("次高月份", "2026-01");
+        assertThat(result.get("message").toString())
+                .contains("峰值月与次高月的订单量、客单价对比")
+                .contains("峰值月 2026-03：营收 700.0万，订单 300 单，客单价 ¥23333.33")
+                .contains("次高月 2026-01：营收 500.0万，订单 200 单，客单价 ¥25000.00")
+                .contains("峰值月订单量多 100 单，客单价低 ¥1666.67")
+                .contains("不能单独证明营收差异的原因");
+        verify(goldClient, never()).fetchTieredIntentAnswer(
+                eq(FACTORY_ID), any(), eq("restaurant_peak_month_gold"));
+        assertThat(tool.shouldDelegateToTieredIntent(
+                "对比峰值月和次高月的订单量与客单价")).isFalse();
+    }
+
+    @Test
+    @DisplayName("UT-PMG-10: synonym follow-up routes deterministically and partial order data stays missing")
+    void doExecute_synonymFollowupDoesNotFabricatePartialMonthlyOrders() throws Exception {
+        when(goldClient.fetchDataRange(FACTORY_ID))
+                .thenReturn(Map.of(
+                        "min_date", "2026-01-01",
+                        "max_date", "2026-03-31",
+                        "day_count", 90
+                ));
+        Map<String, Object> missingOrderPoint = new HashMap<>();
+        missingOrderPoint.put("date", "2026-03-11");
+        missingOrderPoint.put("revenue", 1_000_000.0);
+        when(goldClient.fetchDailyTrend(
+                FACTORY_ID, LocalDate.parse("2026-01-01"), LocalDate.parse("2026-03-31")))
+                .thenReturn(buildTrendResult(List.of(
+                        point("2026-01-10", 5_000_000.0, 200),
+                        point("2026-03-10", 7_000_000.0, 300),
+                        missingOrderPoint
+                )));
+
+        Map<String, Object> result = tool.doExecute(
+                FACTORY_ID,
+                new HashMap<>(Map.of(
+                        "userInput", "比较营收峰值月与第二高月份的单量、平均客单")),
+                new HashMap<>());
+
+        assertThat(result.get("message").toString())
+                .contains("峰值月 2026-03：营收 800.0万，订单量/客单价缺失")
+                .contains("缺失值不会按 0 处理");
+        verify(goldClient, never()).fetchTieredIntentAnswer(
+                eq(FACTORY_ID), any(), eq("restaurant_peak_month_gold"));
+        assertThat(tool.shouldDelegateToTieredIntent(
+                "比较营收峰值月与第二高月份的单量、平均客单")).isFalse();
+    }
+
     // -------------------------------------------------------------------------
     // Helpers
     // -------------------------------------------------------------------------
@@ -214,11 +286,15 @@ class RestaurantPeakMonthGoldToolTest {
     }
 
     private static Map<String, Object> point(String date, double revenue) {
+        return point(date, revenue, 100);
+    }
+
+    private static Map<String, Object> point(String date, double revenue, int billCount) {
         Map<String, Object> p = new HashMap<>();
         p.put("date", date);
         p.put("revenue", revenue);
-        p.put("bill_count", 100);
-        p.put("avg_bill_value", revenue / 100.0);
+        p.put("bill_count", billCount);
+        p.put("avg_bill_value", revenue / billCount);
         return p;
     }
 

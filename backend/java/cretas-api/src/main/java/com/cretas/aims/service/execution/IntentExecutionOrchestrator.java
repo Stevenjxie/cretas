@@ -1704,6 +1704,16 @@ public class IntentExecutionOrchestrator {
         if (asksForStoreAsComparisonObject(q)) {
             return false;
         }
+        // Follow-up buttons emitted by RestaurantPeakMonthGoldTool refer to
+        // the already-derived peak and runner-up months. daily-trend owns
+        // revenue, bill_count and weighted average ticket for both months, so
+        // this is a complete deterministic read rather than a new T3 problem.
+        if (containsAny(q, "峰值月", "营收峰值月")
+                && containsAny(q, "次高月", "第二高月份")
+                && containsAny(q, "订单量", "订单数", "单量")
+                && containsAny(q, "客单价", "平均客单")) {
+            return true;
+        }
         boolean hasRevenueMetric = containsAny(q, "营收", "营业额", "销售额", "销售");
         boolean asksForPeak = containsAny(q, "最高", "最多", "峰值", "最好", "为什么", "原因");
         return hasRevenueMetric

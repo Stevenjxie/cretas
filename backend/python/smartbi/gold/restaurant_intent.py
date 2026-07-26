@@ -1942,12 +1942,13 @@ async def _t2_vector_match(pool, query: str) -> Tuple[Optional[str], float, Opti
 
 # ─── T3 LLM tier ────────────────────────────────────────────────────────
 
-# Java's tiered endpoint has a 10 s wall-clock deadline.  Keep the complete
-# provider cascade below that deadline, including DB/serialization overhead;
-# a per-provider timeout alone previously allowed 2 × 5 s failures before a
-# later provider succeeded after Java had already returned an error.
+# Java's tiered endpoint has a 10 s wall-clock deadline. Keep the complete
+# provider cascade below that deadline, including vector/DB/serialization
+# overhead. Six seconds leave room for at most two full 2.5 s slow candidates
+# plus fast quota/refusal fall-throughs; a long mapper tail must not consume
+# the entire interactive request after deterministic tiers have missed.
 _T3_PROVIDER_TIMEOUT_SECONDS = 2.5
-_T3_TOTAL_TIMEOUT_SECONDS = 7.5
+_T3_TOTAL_TIMEOUT_SECONDS = 6.0
 _T3_MIN_CONFIDENCE = 0.6
 
 
