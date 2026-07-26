@@ -37,6 +37,7 @@ import com.cretas.aims.repository.IntentMatchRecordRepository;
 import com.cretas.aims.repository.ProductTypeRepository;
 import com.cretas.aims.service.*;
 import com.cretas.aims.service.calibration.BehaviorCalibrationService;
+import com.cretas.aims.service.intent.RestaurantClarificationInputGuard;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.extern.slf4j.Slf4j;
@@ -563,6 +564,26 @@ public class IntentExecutionOrchestrator {
                 && isRestaurantTenant(factoryId)
                 && userInput != null && !userInput.isEmpty()
                 && !RESTAURANT_WRITE_VERB.matcher(userInput).find();
+
+        // A pure clarification reply such as "最近30天" carries no standalone
+        // business topic. Before the session-blind restaurant planner sees it,
+        // allow the conversation-aware Java pipeline to inherit a previously
+        // persisted, whitelist-only READ intent. Accept only the explicit
+        // CONTINUATION_INHERIT match method; every other result falls through
+        // to the existing Python QueryPlan authority unchanged.
+        if (requiresRestaurantSemanticPlan) {
+            IntentMatchResult continuationMatch = recognizeSessionAwareRestaurantContinuation(
+                    factoryId, request, userId, userRole);
+            if (continuationMatch != null) {
+                String inheritedIntent = continuationMatch.getBestMatch().getIntentCode();
+                log.info("[RestaurantSessionBridge] force-route verified READ continuation: "
+                                + "sessionId={}, input='{}', intent={}",
+                        request.getSessionId(), userInput, inheritedIntent);
+                request.setIntentCode(inheritedIntent);
+                request.setForceExecute(true);
+                return executeWithExplicitIntent(factoryId, request, userId, userRole);
+            }
+        }
 
         // Parameter-filling continuations stay in Java. Read-only restaurant
         // follow-ups go to the semantic planner below so their typed context
@@ -1269,6 +1290,31 @@ public class IntentExecutionOrchestrator {
             return responseBuilder.build();
         } catch (Exception e) {
             log.error("会话延续失败: sessionId={}, error={}", request.getSessionId(), e.getMessage(), e);
+            return null;
+        }
+    }
+
+    IntentMatchResult recognizeSessionAwareRestaurantContinuation(
+            String factoryId, IntentExecuteRequest request, Long userId, String userRole) {
+        if (request == null
+                || !RestaurantClarificationInputGuard.requiresSessionAwareRecognition(
+                        request.getUserInput(), "RESTAURANT", request.getSessionId())) {
+            return null;
+        }
+        try {
+            IntentMatchResult match = aiIntentService.recognizeIntentWithConfidence(
+                    request.getUserInput(), factoryId, 3, userId, userRole, request.getSessionId());
+            if (match == null
+                    || !match.hasMatch()
+                    || match.getBestMatch() == null
+                    || match.getMatchMethod() != IntentMatchResult.MatchMethod.CONTINUATION_INHERIT) {
+                return null;
+            }
+            return match;
+        } catch (Exception e) {
+            log.warn("[RestaurantSessionBridge] session-aware continuation lookup failed; "
+                            + "fall through to restaurant semantic planner: sessionId={}, error={}",
+                    request.getSessionId(), e.getMessage());
             return null;
         }
     }
