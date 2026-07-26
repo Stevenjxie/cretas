@@ -55,6 +55,7 @@ import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.atLeastOnce;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -678,15 +679,33 @@ class RestaurantOpsGoldRouteTest {
                 IntentExecuteRequest.builder().userInput(query).mode("READ").build(),
                 7L,
                 "admin");
+        String dimensionsFollowup =
+                "结合客流、菜品、活动、天气、评价和排班分析峰值月原因";
+        IntentExecuteResponse followupResponse = orchestrator.execute(
+                "DEMO_REST",
+                IntentExecuteRequest.builder()
+                        .userInput(dimensionsFollowup)
+                        .sessionId("peak-month-followup")
+                        .mode("READ")
+                        .build(),
+                7L,
+                "admin");
 
         assertThat(orchestrator.isRestaurantComprehensiveSynthesisQuestion(query)).isTrue();
+        assertThat(orchestrator.isRestaurantComprehensiveSynthesisQuestion(dimensionsFollowup)).isTrue();
         assertThat(orchestrator.isRestaurantComprehensiveSynthesisQuestion(
                 "本月全部门店招牌菜营业额是多少")).isFalse();
+        assertThat(orchestrator.isRestaurantComprehensiveSynthesisQuestion(
+                "分析最近30天排班")).isFalse();
+        assertThat(orchestrator.isRestaurantComprehensiveSynthesisQuestion(
+                "比较菜品销量和毛利")).isFalse();
         assertThat(response.getStatus()).isEqualTo("SUCCESS");
         assertThat(response.getIntentCode()).isEqualTo("COMPREHENSIVE_SYNTHESIS");
         assertThat(response.getMessage()).contains("多维分析").contains("缺失维度");
+        assertThat(followupResponse.getStatus()).isEqualTo("SUCCESS");
+        assertThat(followupResponse.getIntentCode()).isEqualTo("COMPREHENSIVE_SYNTHESIS");
         verify(delegate, never()).tryDelegate(any(), any(), any(), any());
-        verify(toolDispatchService).executeWithTool(
+        verify(toolDispatchService, times(2)).executeWithTool(
                 eq(synthesisTool),
                 eq("DEMO_REST"),
                 any(IntentExecuteRequest.class),

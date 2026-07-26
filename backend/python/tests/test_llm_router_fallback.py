@@ -89,16 +89,35 @@ def test_chains_deduped():
 
 def test_mapper_uses_bounded_fast_models_without_max_or_reasoners():
     chain = llm_router.SLOT_MODELS[SLOT.MAPPER]
-    assert chain[:2] == [
-        ("aliyun_c", "qwen3.6-flash-2026-04-16"),
-        ("aliyun_c", "glm-5.2"),
+    assert chain[:4] == [
+        ("aliyun_c", "qwen3.7-flash-2026-07-15"),
+        ("aliyun_b", "qwen3.7-flash-2026-07-15"),
+        ("aliyun_c", "qwen3.7-flash"),
+        ("aliyun_b", "qwen3.7-flash"),
     ]
+    assert ("aliyun_c", "glm-5.2") in chain
+    assert ("aliyun_c", "qwen3.7-plus") in chain
+    assert ("aliyun_b", "qwen3.7-plus") in chain
     assert ("zhipu", "glm-4.5-air") in chain
     assert all(
         token not in model
         for _account, model in chain
         for token in ("max", "deepseek", "kimi")
     )
+
+
+def test_new_b_and_c_flash_quota_pairs_are_registered_and_head_fast_slots():
+    expected = [
+        ("aliyun_c", "qwen3.7-flash-2026-07-15"),
+        ("aliyun_b", "qwen3.7-flash-2026-07-15"),
+        ("aliyun_c", "qwen3.7-flash"),
+        ("aliyun_b", "qwen3.7-flash"),
+    ]
+    for pair in expected:
+        assert llm_router._SAFE_MODELS[pair] == datetime.date(2026, 10, 23)
+        assert pair in llm_router._MINIMAL_SAFE_SET
+    for slot in (SLOT.CHAT, SLOT.CHART, SLOT.MAPPER):
+        assert llm_router.SLOT_MODELS[slot][:4] == expected
 
 
 def test_vl_chain_is_vision_only():
@@ -110,13 +129,19 @@ def test_vl_chain_is_vision_only():
 # _refuse_reason — the single shared billing gate
 # ════════════════════════════════════════════════════════════════════════
 
-_TODAY = datetime.date(2026, 7, 23)  # registry audit date → not stale
+_TODAY = datetime.date(2026, 7, 26)  # registry audit date → not stale
 # (与 llm_router._REGISTRY_AUDIT_DATE 同步更新; call_chain 类测试用
 # monkeypatch llm_router._today 冻结, 不再随真实日期漂移碎裂)
 
 
 def test_refuse_allows_current_registered_model():
     assert llm_router._refuse_reason("aliyun_c", "qwen3.7-max-2026-06-08", _TODAY) is None
+    assert llm_router._refuse_reason(
+        "aliyun_c", "qwen3.7-flash-2026-07-15", _TODAY
+    ) is None
+    assert llm_router._refuse_reason(
+        "aliyun_b", "qwen3.7-flash-2026-07-15", _TODAY
+    ) is None
 
 
 def test_refuse_rejects_unregistered_landmine():
