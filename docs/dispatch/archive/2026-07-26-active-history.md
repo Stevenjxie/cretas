@@ -189,3 +189,16 @@
   - 390×844 与 1440×1000 无横向溢出；13 张图片全部加载，目录锚点、截图灯箱、图片引用/alt/重复 ID 静态检查均通过。
   - `git diff --check`、tracked secret scan 与 PR Secret regression gate 均通过。
 - **发布边界**：代码与文档已合入 `origin/main`；静态 SOP 由协调者从 clean exact-main 单独发布并核对公开 HTTP 与哈希。
+
+### `BUG-WORKFLOW-MULTI-OUTPUT-CONTRACT-20260726-001`
+
+- **状态**：`merged`
+- **Owner**：`/root`
+- **Base SHA**：`7e15310df92b85b6031973908e4ee9bc7ae584c2`
+- **功能提交 / PR**：`425fb8befa43992a16230ce7e5d861e006aca424` / [#1829](https://github.com/Stevenjxie/cretas/pull/1829)
+- **实际范围**：
+  - Web Workflow 多产出端口直接配置主产出、联产品、副产品与成本分摊比例；草稿允许中途保存，发布和进入 BOM 前要求恰一主产出且比例合计 100%。
+  - Java Workflow 修订完整性使用同一多产出合同；BOM 首次自动绑定将唯一目标 Workflow 的精确失败原因返回给用户，不再降级成泛化“未找到”。
+  - 单产出沿用既有兼容规则；不回写历史发布、启用、生产计划或批次快照。
+- **验收证据**：Web 目标测试 `75/75`、`npm run build:check`；Java 目标测试 `24/24`；跨端字段 `outputRole` / `costAllocationRatio` 审查、`git diff --check` 与 PR tracked secret scan 均通过。
+- **数据与发布边界**：无数据库迁移、Entity、Repository、JPQL 或 Security 变更；生产业务数据写入为 0；合并后由协调者从 clean exact `origin/main` 统一发布 Java + Web。
