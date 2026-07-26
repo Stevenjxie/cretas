@@ -15,6 +15,7 @@ server 47 + an admin token; that's Phase 6 emulator E2E scope).
 from __future__ import annotations
 
 import os
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -25,6 +26,20 @@ from ota.services import storage
 # repo root from .../backend/python/ota/tests/test_scripts.py
 REPO_ROOT = Path(__file__).resolve().parents[4]
 SCRIPT_DIR = REPO_ROOT / "scripts" / "ota"
+CDN_HELPER = SCRIPT_DIR / "lib" / "ota-cdn.sh"
+
+
+def _resolve_bash() -> str:
+    """Prefer Git Bash on Windows, where system32/bash.exe may be a broken WSL shim."""
+    if os.name == "nt":
+        program_files = Path(os.environ.get("ProgramFiles", r"C:\Program Files"))
+        git_bash = program_files / "Git" / "bin" / "bash.exe"
+        if git_bash.is_file():
+            return str(git_bash)
+    return shutil.which("bash") or "bash"
+
+
+BASH = _resolve_bash()
 
 
 @pytest.fixture(scope="session")
@@ -45,7 +60,7 @@ def test_all_scripts_pass_bash_n_syntax_check(script_paths):
     """`bash -n` parses the script without executing — catches syntax errors."""
     for p in script_paths:
         result = subprocess.run(
-            ["bash", "-n", str(p)],
+            [BASH, "-n", str(p)],
             capture_output=True,
             text=True,
             encoding="utf-8",
@@ -54,6 +69,21 @@ def test_all_scripts_pass_bash_n_syntax_check(script_paths):
         assert result.returncode == 0, (
             f"{p.name} failed `bash -n`:\nstdout={result.stdout}\nstderr={result.stderr}"
         )
+
+
+def test_cdn_helper_exists_and_passes_bash_n_syntax_check():
+    assert CDN_HELPER.is_file(), f"missing script: {CDN_HELPER}"
+    result = subprocess.run(
+        [BASH, "-n", str(CDN_HELPER)],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+    )
+    assert result.returncode == 0, (
+        f"{CDN_HELPER.name} failed `bash -n`:\n"
+        f"stdout={result.stdout}\nstderr={result.stderr}"
+    )
 
 
 def test_bash_safe_component_regex_matches_storage_regex(script_paths):
@@ -85,7 +115,7 @@ def _run(script: Path, args: list[str], env_extra: dict | None = None) -> subpro
     if env_extra:
         env.update(env_extra)
     return subprocess.run(
-        ["bash", str(script), *args],
+        [BASH, str(script), *args],
         capture_output=True,
         text=True,
         encoding="utf-8",
@@ -113,7 +143,7 @@ def test_push_bundle_requires_admin_token():
     env = os.environ.copy()
     env.pop("OTA_ADMIN_TOKEN", None)
     result = subprocess.run(
-        ["bash", str(SCRIPT_DIR / "push-bundle.sh"), "production", "android"],
+        [BASH, str(SCRIPT_DIR / "push-bundle.sh"), "production", "android"],
         capture_output=True,
         text=True,
         encoding="utf-8",

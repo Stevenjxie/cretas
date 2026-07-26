@@ -200,6 +200,45 @@ def test_asset_url_safe_values_remain_readable():
     assert "platform=android" in url
 
 
+def test_cdn_launch_asset_url_uses_per_update_prefix(
+    populated_bundle_dir: Path, ota_root: Path
+):
+    manifest = manifest_builder.build_manifest(
+        bundle_dir=populated_bundle_dir,
+        ota_root=ota_root,
+        runtime_version="1.0.0",
+        platform="android",
+        hostname="http://test.local",
+        asset_base_url="https://dl.example.com/app-updates/updates",
+        asset_store_base_url="https://dl.example.com/app-updates/assets-store",
+    )
+
+    assert manifest["launchAsset"]["url"] == (
+        "https://dl.example.com/app-updates/updates/"
+        "1.0.0/production/200/bundles/index-abc123.hbc"
+    )
+
+
+def test_cdn_regular_assets_use_shared_content_addressed_store(
+    populated_bundle_dir: Path, ota_root: Path
+):
+    manifest = manifest_builder.build_manifest(
+        bundle_dir=populated_bundle_dir,
+        ota_root=ota_root,
+        runtime_version="1.0.0",
+        platform="android",
+        hostname="http://test.local",
+        asset_base_url="https://dl.example.com/app-updates/updates/",
+        asset_store_base_url="https://dl.example.com/app-updates/assets-store/",
+    )
+
+    urls = {asset["url"] for asset in manifest["assets"]}
+    assert urls == {
+        "https://dl.example.com/app-updates/assets-store/img-1.png",
+        "https://dl.example.com/app-updates/assets-store/font-roboto.ttf",
+    }
+
+
 def test_manifest_field_order_matches_reference(
     populated_bundle_dir: Path, ota_root: Path
 ):

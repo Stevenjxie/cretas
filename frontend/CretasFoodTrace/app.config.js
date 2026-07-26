@@ -1,55 +1,52 @@
+const SELF_HOSTED_OTA_PLUGIN = './plugins/withSelfHostedOta';
+
 module.exports = ({ config }) => {
-  // 从环境变量读取环境配置，默认为 test
-  const env = process.env.EXPO_PUBLIC_ENV || 'test';
+  const environment = process.env.EXPO_PUBLIC_ENV || 'production';
+  const isTestBuild = environment === 'development' || environment === 'test';
+  const version = config.version || '1.0.3';
+  const explicitRuntime = process.env.APP_OTA_RUNTIME?.trim();
+  const runtimeVersion = explicitRuntime || (isTestBuild ? `${version}-test` : version);
+  const existingPlugins = config.plugins || [];
+  const plugins = existingPlugins.includes(SELF_HOSTED_OTA_PLUGIN)
+    ? existingPlugins
+    : [...existingPlugins, SELF_HOSTED_OTA_PLUGIN];
 
   return {
     ...config,
     name: '白垩纪AI Agent',
     slug: 'CretasFoodTrace',
-    version: '1.0.2',
+    version,
+    runtimeVersion,
     orientation: 'portrait',
     icon: './assets/icon.png',
     userInterfaceStyle: 'light',
     newArchEnabled: true,
-    splash: {
-      image: './assets/splash-icon.png',
-      resizeMode: 'contain',
-      backgroundColor: '#ffffff',
-    },
-    ios: {
-      supportsTablet: true,
-      bundleIdentifier: 'com.cretaceousfuture',
-      infoPlist: {
-        NSCameraUsageDescription: '需要使用相机拍摄收货签收照片作为凭证',
-        NSPhotoLibraryUsageDescription: '需要访问相册选择收货凭证照片',
+    updates: {
+      ...config.updates,
+      enabled: true,
+      url: 'https://ota.cretaceousfuture.com/api/ota/manifest',
+      checkAutomatically: 'NEVER',
+      fallbackToCacheTimeout: 0,
+      codeSigningCertificate: './ota_cert.pem',
+      codeSigningMetadata: {
+        keyid: 'main',
+        alg: 'rsa-v1_5-sha256',
+      },
+      requestHeaders: {
+        ...config.updates?.requestHeaders,
+        'expo-channel-name': isTestBuild ? 'staging' : 'production',
       },
     },
     android: {
-      adaptiveIcon: {
-        foregroundImage: './assets/adaptive-icon.png',
-        backgroundColor: '#ffffff',
-      },
-      edgeToEdgeEnabled: true,
+      ...config.android,
       package: 'com.cretas.foodtrace',
-      permissions: ['android.permission.CAMERA'],
+      versionCode: 14,
     },
-    web: {
-      favicon: './assets/favicon.png',
-      bundler: 'metro',
-    },
-    plugins: [
-      'expo-secure-store',
-      'expo-localization',
-      [
-        'expo-image-picker',
-        {
-          cameraPermission: '需要使用相机拍摄收货签收照片作为凭证',
-        },
-      ],
-    ],
     extra: {
-      // 将环境变量传递给应用
-      env: env,
+      ...config.extra,
+      env: environment,
+      otaRuntimeVersion: runtimeVersion,
     },
+    plugins,
   };
 };

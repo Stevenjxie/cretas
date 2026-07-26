@@ -2,17 +2,16 @@
   "expo": {
     "name": "白垩纪AI Agent",
     "slug": "CretasFoodTrace",
-    "version": "1.0.2",
+    "version": "1.0.3",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
     "newArchEnabled": true,
-    "runtimeVersion": {
-      "policy": "appVersion"
-    },
+    "runtimeVersion": "1.0.3",
     "updates": {
+      "enabled": true,
       "url": "https://ota.cretaceousfuture.com/api/ota/manifest",
-      "checkAutomatically": "ON_LOAD",
+      "checkAutomatically": "NEVER",
       "fallbackToCacheTimeout": 0,
       "codeSigningCertificate": "./ota_cert.pem",
       "codeSigningMetadata": {
@@ -43,7 +42,7 @@
       },
       "edgeToEdgeEnabled": true,
       "package": "com.cretas.foodtrace",
-      "versionCode": 13,
+      "versionCode": 14,
       "permissions": [
         "CAMERA",
         "READ_EXTERNAL_STORAGE",
@@ -105,7 +104,8 @@
         {
           "faceIDPermission": "Allow $(PRODUCT_NAME) to use Face ID for secure authentication."
         }
-      ]
+      ],
+      "./plugins/withSelfHostedOta"
     ],
     "extra": {
       "router": {}
