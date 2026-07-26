@@ -776,6 +776,99 @@ def test_sales_summary_refuses_verdict_when_comparison_data_days_differ(monkeypa
     assert "revenue_delta" not in answer.meta["comparison"]
 
 
+def test_sales_summary_aligns_week_when_ingestion_trails_sunday(monkeypatch):
+    calls = []
+
+    async def _fake_finance_summary(
+        pool,
+        factory_id,
+        date_range,
+        top_n_stores=5,
+    ):
+        calls.append(date_range)
+        primary = date_range[0] == date(2026, 7, 20)
+        return {
+            "total_revenue": 6000.0 if primary else 5000.0,
+            "bill_count": 60 if primary else 50,
+            "avg_bill_value": 100.0,
+            "day_count": 6,
+            "store_count": 2,
+            "actual_start_date": date_range[0].isoformat(),
+            "actual_end_date": (
+                "2026-07-25" if primary else date_range[1].isoformat()
+            ),
+            "top_stores": [],
+        }
+
+    async def _fake_store_comparison(pool, factory_id, date_range):
+        return {"stores": [], "weakStores": []}
+
+    import smartbi.gold.queries as _q
+
+    monkeypatch.setattr(_q, "finance_summary", _fake_finance_summary)
+    monkeypatch.setattr(_q, "store_comparison", _fake_store_comparison)
+
+    answer = asyncio.run(resolve_sales_summary(
+        object(),
+        "RES_TEST",
+        role="restaurant_manager",
+        query="本周营业额和上周相比是上升还是下降？",
+        today=date(2026, 7, 26),
+    ))
+
+    assert calls == [
+        (date(2026, 7, 20), date(2026, 7, 26)),
+        (date(2026, 7, 13), date(2026, 7, 18)),
+    ]
+    assert "本周（2026-07-20 至 2026-07-25）" in answer.answer_text
+    assert "上周同期（2026-07-13 至 2026-07-18）" in answer.answer_text
+    assert "营收高 **¥1,000.00**（20.0%）" in answer.answer_text
+
+
+def test_sales_summary_complete_months_allow_different_calendar_lengths(
+    monkeypatch,
+):
+    async def _fake_finance_summary(
+        pool,
+        factory_id,
+        date_range,
+        top_n_stores=5,
+    ):
+        primary = date_range[0] == date(2026, 6, 1)
+        return {
+            "total_revenue": 9000.0 if primary else 10000.0,
+            "bill_count": 90 if primary else 100,
+            "avg_bill_value": 100.0,
+            "day_count": 30 if primary else 31,
+            "store_count": 2,
+            "actual_start_date": date_range[0].isoformat(),
+            "actual_end_date": date_range[1].isoformat(),
+            "top_stores": [],
+        }
+
+    async def _fake_store_comparison(pool, factory_id, date_range):
+        return {"stores": [], "weakStores": []}
+
+    import smartbi.gold.queries as _q
+
+    monkeypatch.setattr(_q, "finance_summary", _fake_finance_summary)
+    monkeypatch.setattr(_q, "store_comparison", _fake_store_comparison)
+
+    answer = asyncio.run(resolve_sales_summary(
+        object(),
+        "RES_TEST",
+        role="restaurant_manager",
+        query="上个月营业额和上上个月相比怎么样",
+        today=date(2026, 7, 26),
+    ))
+
+    assert "上个月（2026-06-01 至 2026-06-30）" in answer.answer_text
+    assert "上上个月（2026-05-01 至 2026-05-31）" in answer.answer_text
+    assert "营收低 **¥1,000.00**（10.0%）" in answer.answer_text
+    assert "覆盖天数不同" not in answer.answer_text
+    assert answer.meta["comparison"]["coverage_mismatch"] is False
+
+
 # ──────────────────────────────────────────────────────────────────────────
 # resolve_by_code → trend_analysis resolver (pure, mocked trend_bundle).
 # ──────────────────────────────────────────────────────────────────────────
