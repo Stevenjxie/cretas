@@ -373,6 +373,15 @@ public class AIIntentConfigController {
                     factoryId, request.getIntentCode());
             return;
         }
+        if (salesMetric && isRestaurantSalesRankingOrComparison(q)) {
+            // The controller shortcut is intentionally limited to plain reports.
+            // Ranking/comparison questions need the orchestrator's object-aware
+            // classifier (store vs month) or the tiered semantic planner. Setting
+            // SALES_SUMMARY here would bypass both layers.
+            log.info("[RestaurantDemoIntentShortcut] defer ranked/comparative sales question: factoryId={}, input={}",
+                    factoryId, input);
+            return;
+        }
         if (reportMetric && trendAction) {
             request.setIntentCode("RESTAURANT_OPS_TREND_ANALYSIS");
             log.info("[RestaurantDemoIntentShortcut] route trend report phrase before intent recognition: factoryId={}, intentCode={}",
@@ -384,6 +393,23 @@ public class AIIntentConfigController {
             log.info("[RestaurantDemoIntentShortcut] route report phrase before intent recognition: factoryId={}, intentCode={}",
                     factoryId, request.getIntentCode());
         }
+    }
+
+    private boolean isRestaurantSalesRankingOrComparison(String q) {
+        return containsAny(
+                q,
+                "\u6700\u9ad8",
+                "\u6700\u4f4e",
+                "\u6700\u591a",
+                "\u6700\u5c11",
+                "\u6700\u597d",
+                "\u6700\u5dee",
+                "\u6392\u540d",
+                "\u6392\u884c",
+                "\u5bf9\u6bd4",
+                "\u6bd4\u8f83",
+                "\u7b2c\u4e00\u540d",
+                "\u51a0\u519b");
     }
 
     private boolean isRestaurantOwnerActionQuestion(String q) {

@@ -209,6 +209,23 @@ class AIIntentConfigControllerTest {
                 .build();
         shortcut.invoke(controller, "DEMO_REST", regionalManager);
         assertEquals(null, regionalManager.getIntentCode());
+
+        for (String rankedOrComparativeQuestion : List.of(
+                "本月哪个店营业额最高",
+                "今天哪家门店营收最高",
+                "本周门店营收排名",
+                "分析哪个月营收最高",
+                "本月和上月营收对比",
+                "本月客单价最高的门店是哪家")) {
+            IntentExecuteRequest request = IntentExecuteRequest.builder()
+                    .userInput(rankedOrComparativeQuestion)
+                    .build();
+            shortcut.invoke(controller, "DEMO_REST", request);
+            assertEquals(
+                    null,
+                    request.getIntentCode(),
+                    rankedOrComparativeQuestion + " must reach object-aware downstream routing");
+        }
     }
 
     @Test
