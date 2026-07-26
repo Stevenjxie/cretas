@@ -377,7 +377,7 @@ public abstract class GoldBackedRestaurantTool extends AbstractBusinessTool {
         return null;
     }
 
-    private String resolveGoldFactoryId(String factoryId) {
+    protected String resolveGoldFactoryId(String factoryId) {
         if ("DEMO_REST".equalsIgnoreCase(factoryId)) {
             // Public no-login restaurant demo account: use the complete QHJ-style
             // Gold dataset so AI demo questions have dish/revenue/review depth.
