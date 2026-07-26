@@ -106,3 +106,4 @@
 - 状态只允许：`queued`、`claimed`、`in-progress`、`review`、`merged`、`blocked`。
 - 合并完成时必须同时归档任务、释放 scope 锁，不能留下已经结束的在飞行。
 - 同一仓库默认 WIP 上限：2 个代码执行任务 + 1 个只读/测试任务。
+- `BUG-RESTAURANT-SYNTHESIS-QUANTITY-R14-20260727-023` — `review` — Owner: `/root` — Base SHA: `2a1dd6ccef5397f5c831037a251643b0fed7aabb` — Worktree: `C:\Users\Steve\cretas-release-2a1dd6cc` — Scope lock：仅综合分析 FactBook 销量格式 `backend/python/smartbi/agent/factbook.py`、对应 `backend/python/smartbi/agent/tests/test_factbook.py` 及本台账；不修改工厂语义、路由、模型池、Java/Web、迁移或生产业务数据。R12 部署后真实综合分析发现低营业额非米饭菜品的 `qty_sold=0.4` 仍被 `int(qty)` 展示为 0，而同版本显式单菜查询已正确显示“不足 1 份”。R14 统一综合分析的数量展示契约：0<销量<1 显示“不足 1 份”，非整数保留最多两位有效小数，整数使用千分位；目标测试 `test_factbook.py` 18/18 通过，扩展综合分析测试除 exact-main 既有 2 条契约漂移外 81 条通过；Ruff 通过，待合并部署后真实回归。

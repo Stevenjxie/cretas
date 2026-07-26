@@ -76,6 +76,21 @@ def _money(v: Any) -> str:
         return str(v)
 
 
+def _quantity(v: Any) -> str:
+    """Render fractional restaurant sales without rounding real demand to zero."""
+    if v is None:
+        return "0"
+    try:
+        quantity = float(v)
+    except (TypeError, ValueError):
+        return str(v)
+    if 0 < quantity < 1:
+        return "不足 1"
+    if quantity.is_integer():
+        return f"{int(quantity):,}"
+    return f"{quantity:,.2f}".rstrip("0").rstrip(".")
+
+
 def _num(v: Any) -> Optional[float]:
     if v is None:
         return None
@@ -381,14 +396,14 @@ class FactBook:
                 name = p.get("product_name") or p.get("name") or "未知商品"
                 rev = p.get("revenue")
                 qty = p.get("qty_sold") or p.get("quantity") or 0
-                lines.append(f"  {i}. {name}：¥{_money(rev)}（销量 {int(qty):,}）")
+                lines.append(f"  {i}. {name}：¥{_money(rev)}（销量 {_quantity(qty)} 份）")
         if low_prods:
             lines.append("- 低营业额菜品候选（已排除米饭、餐具、纸巾等附属项）：")
             for i, p in enumerate(low_prods[:5], 1):
                 name = p.get("product_name") or p.get("name") or "未知商品"
                 rev = p.get("revenue")
                 qty = p.get("qty_sold") or p.get("quantity") or 0
-                lines.append(f"  {i}. {name}：¥{_money(rev)}（销量 {int(qty):,}）")
+                lines.append(f"  {i}. {name}：¥{_money(rev)}（销量 {_quantity(qty)} 份）")
         if channels:
             seg = "；".join(
                 f"{c.get('channel_name')} ¥{_money(c.get('amount'))}（{c.get('share_pct')}%）"

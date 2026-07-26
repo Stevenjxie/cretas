@@ -100,6 +100,26 @@ class TestRendering:
         assert "[按" not in text
         assert "藤椒鱼" in text
 
+    def test_sales_quantity_preserves_fractional_dishes(self):
+        fb = FactBook(sales={
+            "top_products": [{
+                "product_name": "试销菜",
+                "revenue": 188.0,
+                "qty_sold": 1.5,
+            }],
+            "bottom_products": [{
+                "product_name": "波龙套餐",
+                "revenue": 190.76,
+                "qty_sold": 0.4,
+            }],
+        })
+
+        text = fb.to_prompt_text()
+
+        assert "试销菜：¥188.00（销量 1.5 份）" in text
+        assert "波龙套餐：¥190.76（销量 不足 1 份）" in text
+        assert "波龙套餐：¥190.76（销量 0" not in text
+
     def test_empty_review_omitted_with_nextaction(self):
         fb = FactBook(review=None, finance=_full_finance(),
                       notes=[NOTE_REVIEW_ABSENT_NEXTACTION])
