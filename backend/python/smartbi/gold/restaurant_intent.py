@@ -904,7 +904,15 @@ def contextualize_restaurant_followup(
             and _resolve_sales_date_range(body)[1] != "全部历史"
             and body.rstrip("呢？?") != body
         ):
-            time_text = body.rstrip("呢？?").strip()
+            # ``换成/改成 + 时间`` changes only the time slot.  Leaving the
+            # switch verb in front of the date prevents the downstream dish
+            # extractor from reaching the trusted entity and silently falls
+            # back to an all-dish resolver.
+            time_text = re.sub(
+                r"^(?:换成|改成)",
+                "",
+                body.rstrip("呢？?").strip(),
+            ).strip()
             resolved = (
                 f"{time_text}{entity_name}的{metric_label}如何"
                 if metric_label else f"{time_text}{entity_name}表现如何"

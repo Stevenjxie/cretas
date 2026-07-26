@@ -2398,6 +2398,7 @@ def test_r17c_appended_window_hint_does_not_break_entity_switch():
         "招牌青花椒味(单人份)的单位成本如何",
         "招牌青花椒味(单人份)的食材成本呢？",
         "招牌青花椒味(单人份)的每份原材料成本是多少？",
+        "全部门店上个月招牌青花椒味(单人份)的成本如何",
     ],
 )
 def test_extract_dish_candidate_stops_before_cost_scope_qualifier(query):
