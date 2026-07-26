@@ -2223,6 +2223,20 @@ def test_explicit_named_dish_multi_store_metrics_compile_without_llm():
     assert spec.planner_authority == "explicit_named_dish_slots"
 
 
+def test_single_store_overall_revenue_and_named_dish_sales_compile_without_llm():
+    spec = _explicit_named_dish_metric_spec(
+        "本月青花椒南方百联店营业额和娃娃菜销量情况"
+    )
+
+    assert spec is not None
+    assert spec.intent == "RESTAURANT_OPS_STORE_MARGIN"
+    assert spec.planner_authority == "explicit_named_dish_slots"
+    assert spec.requested_metrics == ("sales_volume", "revenue")
+    assert spec.store_scope == "single"
+    assert spec.store_slots == ("青花椒南方百联店",)
+    assert spec.dish_slot == "娃娃菜"
+
+
 def test_explicit_daily_revenue_curve_keeps_chart_and_export_as_one_plan():
     query = (
         "用二次函数拟合最近30天全部门店每日营业额曲线；"
