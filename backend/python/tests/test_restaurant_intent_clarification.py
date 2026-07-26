@@ -290,6 +290,52 @@ async def test_time_guard_clarification_button_resumes_original_query():
     assert pool.pending == {}
 
 
+@pytest.mark.asyncio
+async def test_explicit_multi_store_ranking_time_button_never_needs_t3():
+    pool = _restaurant_pool()
+    original_query = (
+        "青花椒南方百联店和青花椒徐汇光启城店哪个菜卖得好"
+    )
+    t3 = AsyncMock(side_effect=AssertionError(
+        "structured ranking and its time continuation must not call T3"
+    ))
+
+    with patch("smartbi.gold.restaurant_intent._t3_llm_parse", new=t3):
+        first = await parse_restaurant_query(
+            original_query,
+            pool,
+            factory_id="DEMO_REST",
+            session_key="sess-explicit-multi-store",
+        )
+
+        assert first is not None
+        assert first.planner_authority == "explicit_slots"
+        assert first.clarification_question == TIME_CLARIFICATION_QUESTION
+        assert first.store_scope == "multiple"
+        assert ("DEMO_REST", "sess-explicit-multi-store") in pool.pending
+
+        resolved = await parse_restaurant_query(
+            "最近7天",
+            pool,
+            factory_id="DEMO_REST",
+            session_key="sess-explicit-multi-store",
+        )
+
+    assert resolved is not None
+    assert resolved.planner_authority == "explicit_slots"
+    assert resolved.source_tier == "explicit_slots"
+    assert resolved.is_clarification_continuation is True
+    assert resolved.clarification_needed is False
+    assert resolved.window_label == "最近7天"
+    assert resolved.store_slots == (
+        "青花椒南方百联店",
+        "青花椒徐汇光启城店",
+    )
+    assert resolved.planned_intents == ("RESTAURANT_OPS_STORE_MARGIN",)
+    assert pool.pending == {}
+    t3.assert_not_awaited()
+
+
 # ─── 2. Still ambiguous after continuation -> no re-registration ─────────
 
 @pytest.mark.asyncio

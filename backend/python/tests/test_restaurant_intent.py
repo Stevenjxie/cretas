@@ -450,6 +450,112 @@ async def test_approved_exact_time_and_store_composition_survives_planner_outage
 
 
 @pytest.mark.asyncio
+async def test_explicit_multi_store_dish_ranking_survives_planner_outage():
+    query = "最近7天青花椒南方百联店和青花椒徐汇光启城店哪个菜卖得好"
+    t3 = AsyncMock(side_effect=AssertionError(
+        "complete explicit store ranking must not call T3"
+    ))
+
+    with patch("smartbi.gold.restaurant_intent._t3_llm_parse", new=t3):
+        spec = await parse_restaurant_query(
+            query,
+            _restaurant_pool(),
+            factory_id="DEMO_REST",
+        )
+
+    assert spec is not None
+    assert spec.intent == "RESTAURANT_OPS_STORE_MARGIN"
+    assert spec.planner_authority == "explicit_slots"
+    assert spec.source_tier == "explicit_slots"
+    assert spec.clarification_needed is False
+    assert spec.window_label == "最近7天"
+    assert spec.store_scope == "multiple"
+    assert spec.store_slots == (
+        "青花椒南方百联店",
+        "青花椒徐汇光启城店",
+    )
+    assert spec.dimensions == ("store", "dish")
+    assert spec.requested_metrics == ("sales_volume",)
+    assert spec.ranking_direction == "best"
+    assert spec.planned_intents == ("RESTAURANT_OPS_STORE_MARGIN",)
+    assert spec.compare_stores is True
+    t3.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_explicit_single_store_dish_ranking_uses_the_same_narrow_guard():
+    t3 = AsyncMock(side_effect=AssertionError(
+        "complete explicit single-store ranking must not call T3"
+    ))
+    with patch("smartbi.gold.restaurant_intent._t3_llm_parse", new=t3):
+        spec = await parse_restaurant_query(
+            "最近7天青花椒南方百联店哪个菜卖得好",
+            _restaurant_pool(),
+            factory_id="DEMO_REST",
+        )
+
+    assert spec is not None
+    assert spec.intent == "RESTAURANT_OPS_STORE_MARGIN"
+    assert spec.planner_authority == "explicit_slots"
+    assert spec.store_scope == "single"
+    assert spec.store_slots == ("青花椒南方百联店",)
+    assert spec.compare_stores is False
+    assert spec.clarification_needed is False
+    t3.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_explicit_multi_store_ranking_missing_time_asks_for_time_without_t3():
+    query = "青花椒南方百联店和青花椒徐汇光启城店哪个菜卖得好"
+    t3 = AsyncMock(side_effect=AssertionError(
+        "a single missing time slot must be clarified without T3"
+    ))
+    with patch("smartbi.gold.restaurant_intent._t3_llm_parse", new=t3):
+        spec = await parse_restaurant_query(
+            query,
+            _restaurant_pool(),
+            factory_id="DEMO_REST",
+        )
+
+    assert spec is not None
+    assert spec.intent == "RESTAURANT_OPS_STORE_MARGIN"
+    assert spec.planner_authority == "explicit_slots"
+    assert spec.clarification_needed is True
+    assert spec.clarification_question == TIME_CLARIFICATION_QUESTION
+    assert spec.store_scope == "multiple"
+    assert spec.store_slots == (
+        "青花椒南方百联店",
+        "青花椒徐汇光启城店",
+    )
+    t3.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "query",
+    [
+        # A negated phrase must never become a deterministic execution grant.
+        "最近7天青花椒南方百联店和青花椒徐汇光启城店不要看哪个菜卖得好",
+        # More than the one supported metric still needs semantic authority.
+        "最近7天青花椒南方百联店和青花椒徐汇光启城店哪个菜卖得好并看毛利",
+    ],
+)
+async def test_incomplete_or_ambiguous_multi_store_ranking_still_uses_t3(query):
+    t3 = AsyncMock(return_value=None)
+    with patch("smartbi.gold.restaurant_intent._t3_llm_parse", new=t3):
+        spec = await parse_restaurant_query(
+            query,
+            _restaurant_pool(),
+            factory_id="DEMO_REST",
+        )
+
+    assert spec is not None
+    assert spec.intent == ""
+    assert spec.planner_authority == "llm_unavailable"
+    t3.assert_awaited_once()
+
+
+@pytest.mark.asyncio
 async def test_trusted_dish_followup_survives_planner_outage():
     query = "最近7天全部门店招牌青花椒味(单人份)的成本和毛利呢？"
     t3 = AsyncMock(side_effect=AssertionError(

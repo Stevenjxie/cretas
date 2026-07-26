@@ -59,6 +59,7 @@ TRUSTED_PLANNER_AUTHORITIES = frozenset({
     "validated_plan_cache_contract_repair",
     "promoted_exact",
     "promoted_exact_contract_repair",
+    "explicit_slots",
     "trusted_context",
     "trusted_context_contract_repair",
 })
@@ -103,7 +104,8 @@ class RestaurantQuerySpec:
     dimensions: Tuple[str, ...]
     comparison: Optional[str]
     confidence: float
-    source_tier: str  # keyword | vector | llm | plan_cache | exact | trusted_context
+    # keyword | vector | llm | plan_cache | exact | explicit_slots | trusted_context
+    source_tier: str
     clarification_needed: bool = False
     clarification_question: Optional[str] = None
     # 2026-07-08 clarification-loop v1: True when this spec was produced by
@@ -1385,6 +1387,86 @@ def _approved_exact_route(query: str) -> Optional[str]:
     return matched[0] if matched is not None else None
 
 
+_EXPLICIT_RANKING_NEGATION_TOKENS = (
+    "不是", "并非", "不想", "不要", "别查", "别看", "不查", "不看",
+    "不问", "取消", "而是", "改问", "换个问题",
+)
+
+
+def _explicit_store_dish_ranking_spec(
+    query: str,
+    *,
+    is_continuation: bool = False,
+) -> Optional[RestaurantQuerySpec]:
+    """Compile or clarify a structured, read-only store × dish ranking.
+
+    This is deliberately narrower than a keyword route.  It grants execution
+    only when every resolver-facing semantic slot is independently present:
+    one or more concrete store names, the dish-sales metric, a best/worst
+    ranking direction, and a concrete date window.  When time alone is
+    missing, it deterministically returns the existing time clarification
+    instead of spending T3 budget. Any extra metric, named dish, comparison,
+    diagnosis, optimisation, export, or negated ranking phrase remains
+    LLM-authorised and fail-closed.
+
+    The live failure that motivated this guard supplied two exact store names,
+    ``最近7天`` and ``哪个菜卖得好``. Sending that already-complete plan to T3
+    made a model-pool outage block a deterministic read-only query.
+    """
+    text = (query or "").strip()
+    if not text or any(token in text for token in _EXPLICIT_RANKING_NEGATION_TOKENS):
+        return None
+
+    store_scope, store_slots = _detect_store_scope(text)
+    start_date, end_date = _resolve_sales_date_range(text)[0]
+    missing_time = start_date is None and end_date is None
+    requested_metrics = _detect_requested_metrics(text)
+    if (
+        store_scope not in {"single", "multiple"}
+        or (store_scope == "single" and len(store_slots) != 1)
+        or (store_scope == "multiple" and len(store_slots) < 2)
+        or ((start_date is None) != (end_date is None))
+        or _detect_ranking_direction(text) not in {"best", "worst"}
+        or requested_metrics != ("sales_volume",)
+        or extract_dish_candidate(text)
+        or _detect_analysis_action(text) != "lookup"
+        or _detect_comparison(text) is not None
+    ):
+        return None
+
+    spec = _build_spec(
+        "RESTAURANT_OPS_STORE_MARGIN",
+        text,
+        confidence=1.0,
+        tier="explicit_slots",
+        planner_authority="explicit_slots",
+        is_continuation=is_continuation,
+        require_explicit_time=True,
+    )
+    if (
+        (
+            missing_time
+            and (
+                not spec.clarification_needed
+                or spec.clarification_question != TIME_CLARIFICATION_QUESTION
+            )
+        )
+        or (not missing_time and spec.clarification_needed)
+        or spec.store_scope != store_scope
+        or spec.store_slots != store_slots
+        or set(spec.dimensions) != {"store", "dish"}
+        or spec.requested_metrics != ("sales_volume",)
+        or spec.planned_intents != ("RESTAURANT_OPS_STORE_MARGIN",)
+        or spec.dish_slot
+        or spec.unsupported_requirements
+        or spec.asks_priority
+        or spec.asks_prohibited_actions
+        or spec.asks_export
+    ):
+        return None
+    return spec
+
+
 _TRUSTED_CONTEXT_DISH_METRICS = frozenset({
     "sales_volume",
     "revenue",
@@ -2207,6 +2289,22 @@ async def parse_restaurant_query(
         )
         return promoted_spec
 
+    explicit_ranking_spec = _explicit_store_dish_ranking_spec(norm_query)
+    if explicit_ranking_spec is not None:
+        explicit_ranking_spec = await _apply_store_scope_guard(
+            pool,
+            factory_id,
+            explicit_ranking_spec,
+        )
+        await _maybe_register_pending(
+            pool,
+            norm_query,
+            explicit_ranking_spec,
+            factory_id,
+            session_key,
+        )
+        return explicit_ranking_spec
+
     if trusted_followup_context:
         trusted_spec = _trusted_context_dish_followup_spec(norm_query)
         if trusted_spec is not None:
@@ -2421,6 +2519,13 @@ async def _parse_continuation(
             is_continuation=True,
             require_explicit_time=True,
         )
+
+    explicit_ranking_spec = _explicit_store_dish_ranking_spec(
+        concatenated,
+        is_continuation=True,
+    )
+    if explicit_ranking_spec is not None:
+        return explicit_ranking_spec
 
     candidate_hint: Optional[Tuple[str, float]] = None
     try:
