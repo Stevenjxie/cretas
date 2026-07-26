@@ -11,6 +11,7 @@ import {
   normalizedBox,
   pointBox,
   resizeBox,
+  restoreRejectedAiCandidate,
   toReviewRequest,
   validateReviewDraft,
 } from './reviewModel';
@@ -70,6 +71,37 @@ describe('label QC review model', () => {
       label: 'NO_DEFECT',
     });
     expect(request.photos[1]?.annotations[0]?.label).toBe('NO_DEFECT');
+  });
+
+  it('restores a rejected AI candidate for another explicit decision', () => {
+    const drafts = buildReviewDraft(buildDetail(true));
+    const item = drafts[0]!.items[0]!;
+    item.label = 'NO_DEFECT';
+    item.notes = '人工复核：AI 疑点不成立';
+    drafts[0]!.reviewed = true;
+
+    const restored = restoreRejectedAiCandidate(drafts[0]!, item.key);
+
+    expect(restored).toBe(item);
+    expect(item.label).toBeUndefined();
+    expect(item.notes).toBe('');
+    expect(drafts[0]!.reviewed).toBe(false);
+    expect(validateReviewDraft(drafts)).toBe('第 1 张照片还有 1 个框未确认');
+  });
+
+  it('refuses to mark a photo normal while a human box still exists', () => {
+    const drafts = buildReviewDraft(buildDetail());
+    appendHumanBox(
+      drafts[0]!,
+      { xMin: 0.1, yMin: 0.2, xMax: 0.3, yMax: 0.4 },
+      'human-guard',
+    );
+
+    expect(() => markPhotoNormal(drafts[0]!)).toThrow(
+      '还有 1 个人工补框，请先逐个删除或确认问题',
+    );
+    expect(drafts[0]!.items).toHaveLength(1);
+    expect(drafts[0]!.reviewed).toBe(false);
   });
 
   it('requires an explicit whole-image conclusion after a human box is labelled', () => {
