@@ -12,9 +12,11 @@
       <div v-for="(c, i) in changes" :key="i" class="diff-row">
         <el-tag :type="tagType(c.type)" size="small">{{ c.type }}</el-tag>
         <span>{{ c.description }}</span>
-        <code v-if="c.before">{{ JSON.stringify(c.before) }}</code>
-        <span v-if="c.before && c.after"> → </span>
-        <code v-if="c.after">{{ JSON.stringify(c.after) }}</code>
+        <template v-if="showTechnicalValues">
+          <code v-if="c.before">{{ JSON.stringify(c.before) }}</code>
+          <span v-if="c.before && c.after"> → </span>
+          <code v-if="c.after">{{ JSON.stringify(c.after) }}</code>
+        </template>
       </div>
     </div>
   </div>
@@ -23,7 +25,10 @@
 <script setup lang="ts">
 import type { ConfigDiff } from '@/types/canvas'
 
-defineProps<{ changes: ConfigDiff[] }>()
+withDefaults(
+  defineProps<{ changes: ConfigDiff[]; showTechnicalValues?: boolean }>(),
+  { showTechnicalValues: true },
+)
 defineEmits<{ apply: []; discard: [] }>()
 
 function tagType(type: string) {

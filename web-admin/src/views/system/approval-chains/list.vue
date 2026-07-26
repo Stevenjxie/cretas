@@ -1,538 +1,507 @@
 <script setup lang="ts">
-/**
- * 审批链配置 (approval_chain_configs)
- *
- * 控制 4-eye 审批 / 报工审批 / 财务审批等流程, 之前只能 SQL 改.
- * N9 update: 新增 triggerCondition / autoApproveCondition / autoRejectCondition /
- *             approverUserIds 字段支持; 完整 DecisionType 枚举 map;
- *             错误 toast 改 sticky (duration:0 + showClose) per fool-proof-design 规范.
- */
-import { ref, computed, onMounted } from 'vue';
-import { useRouter } from 'vue-router';
-import { useAuthStore } from '@/store/modules/auth';
-import { usePermissionStore } from '@/store/modules/permission';
-import { get, post, put, del } from '@/api/request';
-import { ElMessage, ElMessageBox } from 'element-plus';
-import { Plus, Edit, Delete as DeleteIcon, Refresh } from '@element-plus/icons-vue';
-import type { TableRow } from '@/types/api';
-import { canConfigureUnifiedOaForRole } from './unifiedOaAccess';
+import { computed, onMounted, ref } from 'vue'
+import { useRouter } from 'vue-router'
+import { useAuthStore } from '@/store/modules/auth'
+import { usePermissionStore } from '@/store/modules/permission'
+import { get } from '@/api/request'
+import {
+  getAllWorkflows,
+  getDecisionTypesMetadata,
+  type ApprovalWorkflowDTO,
+  type DecisionTypeCategory,
+  type DecisionTypeMetadataDTO,
+} from '@/api/approvalWorkflow'
+import { canConfigureUnifiedOaForRole } from './unifiedOaAccess'
+import {
+  buildApprovalCatalog,
+  buildOaCanvasQuery,
+  type ApprovalCatalogItem,
+  type LegacyApprovalChainSummary,
+} from './approvalCatalog'
 
-const authStore = useAuthStore();
-const permissionStore = usePermissionStore();
-const router = useRouter();
-const factoryId = computed(() => authStore.factoryId);
-const canWrite = computed(() => permissionStore.canWrite('system'));
-const canConfigureUnifiedOa = computed(() => (
-  canConfigureUnifiedOaForRole(permissionStore.currentRole)
-));
+interface LegacyChainRow extends LegacyApprovalChainSummary {
+  id?: string
+  name?: string
+}
 
-const loading = ref(false);
-const tableData = ref<TableRow[]>([]);
+type ApprovalFilter = 'all' | 'enabled' | 'no-approval'
 
-onMounted(loadData);
+const DEPARTMENT_LABELS: Record<DecisionTypeCategory, string> = {
+  PRODUCTION: '生产部',
+  QUALITY_MATERIAL: '质量部',
+  PURCHASE_SUPPLIER: '采购部',
+  SALES_CUSTOMER: '销售部',
+  FINANCE_VOUCHER: '财务部',
+  HR_WAGE: '人事部',
+  WAREHOUSE_TRANSFER: '仓储部',
+  OTHER: '其他业务',
+}
+
+const authStore = useAuthStore()
+const permissionStore = usePermissionStore()
+const router = useRouter()
+const factoryId = computed(() => authStore.factoryId)
+const canConfigure = computed(() => canConfigureUnifiedOaForRole(permissionStore.currentRole))
+
+const loading = ref(false)
+const loadError = ref('')
+const metadata = ref<DecisionTypeMetadataDTO[]>([])
+const workflows = ref<ApprovalWorkflowDTO[]>([])
+const legacyChains = ref<LegacyChainRow[]>([])
+const keyword = ref('')
+const approvalFilter = ref<ApprovalFilter>('all')
+
+const catalog = computed(() => buildApprovalCatalog(
+  metadata.value,
+  workflows.value,
+  legacyChains.value,
+))
+
+const filteredCatalog = computed(() => {
+  const normalizedKeyword = keyword.value.trim().toLocaleLowerCase()
+  return catalog.value.filter((item) => {
+    const matchesKeyword = !normalizedKeyword
+      || item.chineseName.toLocaleLowerCase().includes(normalizedKeyword)
+      || item.description.toLocaleLowerCase().includes(normalizedKeyword)
+      || DEPARTMENT_LABELS[item.category].toLocaleLowerCase().includes(normalizedKeyword)
+    const matchesStatus = approvalFilter.value === 'all'
+      || (approvalFilter.value === 'enabled' ? item.approvalEnabled : !item.approvalEnabled)
+    return matchesKeyword && matchesStatus
+  })
+})
+
+const enabledCount = computed(() => catalog.value.filter((item) => item.approvalEnabled).length)
+const noApprovalCount = computed(() => catalog.value.length - enabledCount.value)
+const draftCount = computed(() => catalog.value.filter((item) => item.hasDraft).length)
 
 async function loadData() {
-  if (!factoryId.value) return;
-  loading.value = true;
+  if (!factoryId.value) return
+  loading.value = true
+  loadError.value = ''
   try {
-    const res = await get(`/${factoryId.value}/approval-chains`);
-    if (res.success && res.data) {
-      tableData.value = Array.isArray(res.data) ? res.data : (res.data.content || []);
+    const [metadataResponse, workflowResponse, legacyResponse] = await Promise.all([
+      getDecisionTypesMetadata(factoryId.value),
+      getAllWorkflows(factoryId.value),
+      get<LegacyChainRow[]>(`/${factoryId.value}/approval-chains`),
+    ])
+    if (!metadataResponse.success || !Array.isArray(metadataResponse.data)) {
+      throw new Error(metadataResponse.message || '审批业务加载失败')
     }
-  } catch (e) {
-    showError('加载审批链配置失败', e);
+    if (!workflowResponse.success || !Array.isArray(workflowResponse.data)) {
+      throw new Error(workflowResponse.message || '审批流程加载失败')
+    }
+    metadata.value = metadataResponse.data
+    workflows.value = workflowResponse.data
+    legacyChains.value = legacyResponse.success && Array.isArray(legacyResponse.data)
+      ? legacyResponse.data
+      : []
+  } catch (error) {
+    loadError.value = error instanceof Error ? error.message : String(error)
   } finally {
-    loading.value = false;
+    loading.value = false
   }
 }
 
-/** Sticky error toast per fool-proof-design §4-位一体 */
-function showError(prefix: string, e: unknown) {
-  const msg = e instanceof Error ? e.message : String(e);
-  ElMessage({
-    message: `${prefix}: ${msg}`,
-    type: 'error',
-    duration: 0,
-    showClose: true,
-  });
-}
-
-const dialogVisible = ref(false);
-const editingId = ref<string | null>(null);
-const editingName = ref('');
-
-const emptyForm = () => ({
-  decisionType: 'FORCE_INSERT',
-  name: '',
-  description: '',
-  triggerCondition: '',
-  approvalLevel: 1,
-  requiredApprovers: 1,
-  approverRoles: '',
-  approverUserIds: '',
-  autoApproveCondition: '',
-  autoRejectCondition: '',
-  timeoutMinutes: null as number | null,
-  priority: 0,
-  enabled: true,
-});
-
-const form = ref(emptyForm());
-
-/** Dialog title includes decision type + config name for context (fool-proof Rule 2) */
-const dialogTitle = computed(() => {
-  if (!editingId.value) return '新建审批链';
-  const typeName = decisionTypeMap[form.value.decisionType] || form.value.decisionType;
-  return `编辑审批链 — ${typeName}${editingName.value ? ` (${editingName.value})` : ''}`;
-});
-
-const submitting = ref(false);
-const UNIFIED_OA_DECISION_TYPES = new Set(['SALES_ORDER_APPROVAL']);
-
-function isUnifiedOaDecision(rowOrType: TableRow | string): boolean {
-  const decisionType = typeof rowOrType === 'string'
-    ? rowOrType
-    : String(rowOrType.decisionType || '');
-  return UNIFIED_OA_DECISION_TYPES.has(decisionType);
-}
-
-async function goToUnifiedOa(decisionType = 'SALES_ORDER_APPROVAL') {
-  if (!canConfigureUnifiedOa.value) {
-    ElMessage.info('当前账号无统一 OA 配置权限，请联系管理员配置');
-    return;
-  }
-  await router.push({
+function canvasHref(item: ApprovalCatalogItem) {
+  return router.resolve({
     name: 'CanvasEditor',
-    query: { tab: 'approval', decisionType },
-  });
+    query: buildOaCanvasQuery(item),
+  }).href
 }
 
-function openCreate() {
-  editingId.value = null;
-  editingName.value = '';
-  form.value = emptyForm();
-  dialogVisible.value = true;
+function departmentLabel(category: DecisionTypeCategory) {
+  return DEPARTMENT_LABELS[category]
 }
 
-function openEdit(row: TableRow) {
-  if (isUnifiedOaDecision(row)) {
-    ElMessage.info('销售订单审批已迁移至统一 OA，此处仅保留历史配置只读展示');
-    void goToUnifiedOa(String(row.decisionType));
-    return;
-  }
-  editingId.value = String(row.id || '');
-  editingName.value = String(row.name || '');
-  form.value = {
-    decisionType: String(row.decisionType || 'FORCE_INSERT'),
-    name: String(row.name || ''),
-    description: String(row.description || ''),
-    triggerCondition: String(row.triggerCondition || ''),
-    approvalLevel: Number(row.approvalLevel || 1),
-    requiredApprovers: Number(row.requiredApprovers || 1),
-    // 后端存的是 JSON 数组字符串, 编辑时转回逗号分隔友好格式
-    approverRoles: (() => {
-      const raw = row.approverRoles;
-      if (!raw) return '';
-      try {
-        const arr = JSON.parse(String(raw));
-        return Array.isArray(arr) ? arr.join(',') : String(raw);
-      } catch { return String(raw); }
-    })(),
-    approverUserIds: (() => {
-      const raw = row.approverUserIds;
-      if (!raw) return '';
-      try {
-        const arr = JSON.parse(String(raw));
-        return Array.isArray(arr) ? arr.join(',') : String(raw);
-      } catch { return String(raw); }
-    })(),
-    autoApproveCondition: String(row.autoApproveCondition || ''),
-    autoRejectCondition: String(row.autoRejectCondition || ''),
-    timeoutMinutes: row.timeoutMinutes as number | null ?? null,
-    priority: Number(row.priority || 0),
-    enabled: row.enabled !== false,
-  };
-  dialogVisible.value = true;
+function versionSummary(item: ApprovalCatalogItem) {
+  const parts: string[] = []
+  if (item.activeWorkflowVersion) parts.push(`运行 v${item.activeWorkflowVersion}`)
+  if (item.draftWorkflowVersion) parts.push(`草稿 v${item.draftWorkflowVersion}`)
+  if (!parts.length && item.workflowCount) parts.push('仅保留历史版本')
+  return parts.join(' · ') || '直接流转'
 }
 
-async function handleSave() {
-  if (isUnifiedOaDecision(form.value.decisionType)) {
-    ElMessage.warning('销售订单审批请前往统一 OA 配置');
-    dialogVisible.value = false;
-    await goToUnifiedOa(form.value.decisionType);
-    return;
-  }
-  if (!form.value.name?.trim()) {
-    ElMessage.warning('请填写审批链名称');
-    return;
-  }
-  if (!form.value.approverRoles?.trim()) {
-    ElMessage.warning('请填写审批角色 (逗号分隔多个)');
-    return;
-  }
-
-  // 后端 validateConfig 要求 approverRoles 是 JSON 数组格式
-  const roles = form.value.approverRoles
-    .split(/[,，]/)
-    .map((r: string) => r.trim())
-    .filter((r: string) => r.length > 0);
-
-  const userIds = form.value.approverUserIds
-    ? form.value.approverUserIds
-        .split(/[,，]/)
-        .map((u: string) => u.trim())
-        .filter((u: string) => u.length > 0)
-    : null;
-
-  const payload = {
-    ...form.value,
-    approverRoles: JSON.stringify(roles),
-    approverUserIds: userIds && userIds.length > 0 ? JSON.stringify(userIds) : null,
-    triggerCondition: form.value.triggerCondition?.trim() || null,
-    autoApproveCondition: form.value.autoApproveCondition?.trim() || null,
-    autoRejectCondition: form.value.autoRejectCondition?.trim() || null,
-  };
-
-  submitting.value = true;
-  try {
-    if (editingId.value) {
-      const res = await put(`/${factoryId.value}/approval-chains/${editingId.value}`, payload);
-      if (res.success) ElMessage.success('更新成功');
-    } else {
-      const res = await post(`/${factoryId.value}/approval-chains`, payload);
-      if (res.success) ElMessage.success('创建成功');
-    }
-    dialogVisible.value = false;
-    loadData();
-  } catch (e) {
-    showError('保存失败', e);
-  } finally {
-    submitting.value = false;
-  }
+function formatUpdatedAt(value?: string) {
+  if (!value) return '—'
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return '—'
+  return new Intl.DateTimeFormat('zh-CN', {
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  }).format(date)
 }
 
-async function handleDelete(row: TableRow) {
-  if (isUnifiedOaDecision(row)) {
-    ElMessage.warning('销售订单历史审批链不可在旧页面删除，请前往统一 OA');
-    return;
-  }
-  try {
-    await ElMessageBox.confirm(
-      `确定删除审批链「${row.name}」(决策类型: ${decisionTypeMap[String(row.decisionType)] || row.decisionType})?`,
-      '删除确认',
-      { type: 'warning' }
-    );
-    const res = await del(`/${factoryId.value}/approval-chains/${row.id}`);
-    if (res.success) { ElMessage.success('删除成功'); loadData(); }
-  } catch (e) {
-    if (e === 'cancel') return;
-    showError('删除失败', e);
-  }
+function actionLabel(item: ApprovalCatalogItem) {
+  return item.approvalEnabled || item.hasDraft ? '配置审批' : '查看设置'
 }
 
-async function handleToggle(row: TableRow) {
-  if (isUnifiedOaDecision(row)) {
-    ElMessage.warning('销售订单历史审批链不可在旧页面变更，请前往统一 OA');
-    return;
-  }
-  const willEnable = !row.enabled;
-  try {
-    const res = await put(
-      `/${factoryId.value}/approval-chains/${row.id}/toggle?enabled=${willEnable}`,
-      {}
-    );
-    if (res.success) {
-      ElMessage.success(willEnable ? '已启用' : '已禁用');
-      loadData();
-    }
-  } catch (e) {
-    showError('状态切换失败', e);
-  }
-}
-
-// 来自后端 ApprovalChainConfig.DecisionType enum (完整列表, Sprint 5 H-3 扩展)
-const decisionTypeMap: Record<string, string> = {
-  // 生产 / 工序
-  FORCE_INSERT: '强制插单',
-  PRODUCTION_PLAN_CHANGE: '生产计划变更',
-  EQUIPMENT_STATUS_CHANGE: '设备状态变更',
-  BOM_VERSION_APPROVAL: 'BOM 版本审批',
-  ECN_APPROVAL: 'ECN 工程变更审批',
-  WORK_ORDER_APPROVAL: '工单审批',
-  PRODUCTION_REVERSAL_APPROVAL: '生产撤单审批',
-  // 质检 / 物料
-  QUALITY_RELEASE: '质检放行',
-  QUALITY_EXCEPTION: '质检特批',
-  BATCH_STATUS_CHANGE: '批次状态变更',
-  MATERIAL_DISPOSAL: '原料处置',
-  MATERIAL_REQUISITION_APPROVAL: '请购单审批',
-  // 采购 / 供应商
-  SUPPLIER_APPROVAL: '供应商准入',
-  SUPPLIER_STATUS_CHANGE: '供应商状态变更',
-  PURCHASE_ORDER_APPROVAL: '采购订单审批',
-  PURCHASE_PAYMENT_APPROVAL: '采购付款审批',
-  PURCHASE_RETURN_APPROVAL: '采购退货审批',
-  // 销售 / 客户
-  SALES_ORDER_APPROVAL: '销售订单审批',
-  SALES_RETURN_APPROVAL: '销售退货审批',
-  SALES_DISCOUNT_APPROVAL: '销售折扣审批',
-  CUSTOMER_CREDIT_APPROVAL: '客户额度审批',
-  INVOICE_ISSUANCE_APPROVAL: '发票开具审批',
-  // 财务 / 凭证
-  VOUCHER_APPROVAL: '凭证审核',
-  EXPENSE_APPROVAL: '报销审批',
-  BUDGET_APPROVAL: '预算审批',
-  PAYMENT_APPROVAL: '付款审批',
-  TAX_FILING_APPROVAL: '报税审批',
-  // 人事 / 工资
-  LEAVE_APPROVAL: '请假审批',
-  OVERTIME_APPROVAL: '加班审批',
-  WAGE_RECORD_APPROVAL: '工资记录审批',
-  HIRE_APPROVAL: '入职审批',
-  // 仓储 / 调拨
-  INVENTORY_TRANSFER_APPROVAL: '库存调拨审批',
-  INVENTORY_ADJUSTMENT_APPROVAL: '库存调整审批',
-  WASTAGE_APPROVAL: '损耗记录审批',
-  CUSTOM: '自定义',
-};
-
-/** Group label for decision type option groups */
-const decisionTypeGroups: { label: string; types: string[] }[] = [
-  {
-    label: '生产 / 工序',
-    types: ['FORCE_INSERT', 'PRODUCTION_PLAN_CHANGE', 'EQUIPMENT_STATUS_CHANGE', 'BOM_VERSION_APPROVAL', 'ECN_APPROVAL', 'WORK_ORDER_APPROVAL', 'PRODUCTION_REVERSAL_APPROVAL'],
-  },
-  {
-    label: '质检 / 物料',
-    types: ['QUALITY_RELEASE', 'QUALITY_EXCEPTION', 'BATCH_STATUS_CHANGE', 'MATERIAL_DISPOSAL', 'MATERIAL_REQUISITION_APPROVAL'],
-  },
-  {
-    label: '采购 / 供应商',
-    types: ['SUPPLIER_APPROVAL', 'SUPPLIER_STATUS_CHANGE', 'PURCHASE_ORDER_APPROVAL', 'PURCHASE_PAYMENT_APPROVAL', 'PURCHASE_RETURN_APPROVAL'],
-  },
-  {
-    label: '销售 / 客户',
-    types: ['SALES_RETURN_APPROVAL', 'SALES_DISCOUNT_APPROVAL', 'CUSTOMER_CREDIT_APPROVAL', 'INVOICE_ISSUANCE_APPROVAL'],
-  },
-  {
-    label: '财务 / 凭证',
-    types: ['VOUCHER_APPROVAL', 'EXPENSE_APPROVAL', 'BUDGET_APPROVAL', 'PAYMENT_APPROVAL', 'TAX_FILING_APPROVAL'],
-  },
-  {
-    label: '人事 / 工资',
-    types: ['LEAVE_APPROVAL', 'OVERTIME_APPROVAL', 'WAGE_RECORD_APPROVAL', 'HIRE_APPROVAL'],
-  },
-  {
-    label: '仓储 / 调拨',
-    types: ['INVENTORY_TRANSFER_APPROVAL', 'INVENTORY_ADJUSTMENT_APPROVAL', 'WASTAGE_APPROVAL'],
-  },
-  {
-    label: '其他',
-    types: ['CUSTOM'],
-  },
-];
+onMounted(loadData)
 </script>
 
 <template>
-  <div class="page-wrapper">
-    <el-card shadow="never">
+  <div class="approval-business-page">
+    <section class="page-heading">
+      <div>
+        <h1>审批业务</h1>
+        <p>选择要配置的业务。每个业务使用独立审批画布，不会混用其他部门的流程。</p>
+      </div>
+      <el-button :loading="loading" @click="loadData">刷新</el-button>
+    </section>
+
+    <el-alert
+      v-if="loadError"
+      class="load-error"
+      type="error"
+      :closable="false"
+      title="审批业务加载失败"
+    >
+      <template #default>
+        <span>{{ loadError }}</span>
+        <el-button link type="primary" @click="loadData">重新加载</el-button>
+      </template>
+    </el-alert>
+
+    <section class="summary-grid" aria-label="审批业务概况">
+      <div class="summary-card">
+        <span>审批业务</span>
+        <strong>{{ catalog.length }}</strong>
+      </div>
+      <div class="summary-card enabled">
+        <span>审批已启用</span>
+        <strong>{{ enabledCount }}</strong>
+      </div>
+      <div class="summary-card no-approval">
+        <span>无需审批</span>
+        <strong>{{ noApprovalCount }}</strong>
+      </div>
+      <div class="summary-card draft">
+        <span>待发布草稿</span>
+        <strong>{{ draftCount }}</strong>
+      </div>
+    </section>
+
+    <el-card shadow="never" class="business-card">
       <template #header>
-        <div class="card-header">
-          <div class="header-left">
-            <span class="page-title">审批链配置</span>
-            <span class="data-count">控制 4-eye 审批 / 报工审批 / 财务审批等流程</span>
+        <div class="card-heading">
+          <div>
+            <h2>选择审批业务</h2>
+            <span>共 {{ catalog.length }} 项，当前显示 {{ filteredCatalog.length }} 项</span>
           </div>
-          <div class="header-right">
-            <el-button :icon="Refresh" @click="loadData">刷新</el-button>
-            <el-button v-if="canWrite" type="primary" :icon="Plus" @click="openCreate">新建审批链</el-button>
-          </div>
+          <span class="running-note">在途审批继续使用原运行版本</span>
         </div>
       </template>
 
-      <el-table v-loading="loading" :data="tableData" stripe>
-        <el-table-column label="决策类型" width="160">
+      <div class="filters" role="search">
+        <el-input
+          v-model="keyword"
+          clearable
+          placeholder="搜索部门或审批业务…"
+          aria-label="搜索部门或审批业务"
+          name="approval-business-search"
+          autocomplete="off"
+        />
+        <div class="status-switch" aria-label="按审批状态筛选">
+          <button
+            v-for="option in [
+              { value: 'all', label: '全部' },
+              { value: 'enabled', label: '审批已启用' },
+              { value: 'no-approval', label: '无需审批' },
+            ]"
+            :key="option.value"
+            type="button"
+            :class="{ active: approvalFilter === option.value }"
+            @click="approvalFilter = option.value as ApprovalFilter"
+          >
+            {{ option.label }}
+          </button>
+        </div>
+      </div>
+
+      <el-table
+        v-loading="loading"
+        :data="filteredCatalog"
+        border
+        row-key="decisionType"
+        class="business-table"
+        empty-text="没有符合条件的审批业务"
+      >
+        <el-table-column prop="category" label="部门" width="140" sortable>
           <template #default="{ row }">
-            <el-tooltip :content="String(row.decisionType || '')" placement="top">
-              <span>{{ decisionTypeMap[String(row.decisionType)] || row.decisionType }}</span>
-            </el-tooltip>
-            <el-tag v-if="isUnifiedOaDecision(row)" type="info" size="small" style="margin-left: 6px">旧配置只读</el-tag>
+            <strong class="department-name">{{ departmentLabel(row.category) }}</strong>
           </template>
         </el-table-column>
-        <el-table-column prop="name" label="名称" min-width="150" />
-        <el-table-column prop="approvalLevel" label="审批级别" width="90" align="center" />
-        <el-table-column prop="requiredApprovers" label="所需审批人数" width="110" align="center" />
-        <el-table-column prop="approverRoles" label="审批角色" min-width="160" show-overflow-tooltip />
-        <el-table-column prop="triggerCondition" label="触发条件" min-width="160" show-overflow-tooltip>
+        <el-table-column prop="chineseName" label="审批业务" min-width="260" sortable>
           <template #default="{ row }">
-            <el-tag v-if="row.triggerCondition" type="warning" size="small" style="font-size: 11px; max-width: 150px; overflow: hidden; text-overflow: ellipsis;">
-              {{ row.triggerCondition }}
+            <div class="business-name">
+              <strong>{{ row.chineseName }}</strong>
+              <span>{{ row.description }}</span>
+            </div>
+          </template>
+        </el-table-column>
+        <el-table-column label="审批状态" width="140" align="center">
+          <template #default="{ row }">
+            <el-tag :type="row.approvalEnabled ? 'success' : 'info'" effect="light">
+              {{ row.approvalEnabled ? '审批已启用' : '无需审批' }}
             </el-tag>
-            <span v-else style="color: #c0c4cc">—</span>
           </template>
         </el-table-column>
-        <el-table-column prop="autoApproveCondition" label="自动通过" width="90" align="center">
+        <el-table-column label="版本状态" min-width="210">
           <template #default="{ row }">
-            <el-tag v-if="row.autoApproveCondition" type="success" size="small">有</el-tag>
-            <span v-else style="color: #c0c4cc">—</span>
+            <div class="version-cell">
+              <strong>{{ versionSummary(row) }}</strong>
+              <span v-if="row.hasDraft">草稿修改不会影响当前运行流程</span>
+              <span v-else-if="!row.approvalEnabled">业务提交后直接进入下一环节</span>
+            </div>
           </template>
         </el-table-column>
-        <el-table-column prop="timeoutMinutes" label="超时(分)" width="85" align="center">
-          <template #default="{ row }">
-            <span v-if="row.timeoutMinutes">{{ row.timeoutMinutes }}</span>
-            <span v-else style="color: #c0c4cc">—</span>
-          </template>
+        <el-table-column label="最后更新" width="170" sortable>
+          <template #default="{ row }">{{ formatUpdatedAt(row.latestUpdatedAt) }}</template>
         </el-table-column>
-        <el-table-column label="状态" width="75">
+        <el-table-column label="操作" width="140" fixed="right" align="center">
           <template #default="{ row }">
-            <el-tag v-if="row.enabled" type="success" size="small">启用</el-tag>
-            <el-tag v-else type="info" size="small">停用</el-tag>
-          </template>
-        </el-table-column>
-        <el-table-column label="操作" width="220" fixed="right">
-          <template #default="{ row }">
-            <template v-if="isUnifiedOaDecision(row)">
-              <el-tooltip
-                v-if="canConfigureUnifiedOa"
-                content="销售订单审批已迁移至统一 OA；此处历史配置仅供查看"
-              >
-                <el-button link type="primary" @click="goToUnifiedOa(String(row.decisionType))">前往统一 OA</el-button>
-              </el-tooltip>
-              <el-tooltip v-else content="仅管理员可进入统一 OA 配置">
-                <el-tag type="info">请联系管理员配置</el-tag>
-              </el-tooltip>
-            </template>
-            <template v-else>
-              <el-button v-if="canWrite" link type="primary" :icon="Edit" @click="openEdit(row)">编辑</el-button>
-              <el-button
-                v-if="canWrite"
-                link
-                :type="row.enabled ? 'warning' : 'success'"
-                @click="handleToggle(row)"
-              >{{ row.enabled ? '停用' : '启用' }}</el-button>
-              <el-button v-if="canWrite" link type="danger" :icon="DeleteIcon" @click="handleDelete(row)">删除</el-button>
-            </template>
+            <el-button v-if="!canConfigure" type="primary" disabled>
+              {{ actionLabel(row) }}
+            </el-button>
+            <el-button
+              v-else
+              tag="a"
+              type="primary"
+              :href="canvasHref(row)"
+              :aria-label="`${row.chineseName}：${actionLabel(row)}`"
+            >
+              {{ actionLabel(row) }}
+            </el-button>
           </template>
         </el-table-column>
       </el-table>
+
+      <div class="continuity-note">
+        <strong>无缝衔接</strong>
+        <span>
+          新画布只影响保存并发布后的新审批；旧配置和正在审批的单据继续按原版本运行。
+        </span>
+      </div>
     </el-card>
-
-    <!-- 新建/编辑 dialog — 标题含决策类型+名称提供操作上下文 (fool-proof Rule 2) -->
-    <el-dialog v-model="dialogVisible" :title="dialogTitle" width="680px" destroy-on-close>
-      <el-form :model="form" label-width="130px">
-        <!-- 决策类型 (分组下拉) -->
-        <el-form-item label="决策类型" required>
-          <el-select v-model="form.decisionType" style="width: 100%" filterable>
-            <el-option-group
-              v-for="group in decisionTypeGroups"
-              :key="group.label"
-              :label="group.label"
-            >
-              <el-option
-                v-for="k in group.types"
-                :key="k"
-                :label="`${decisionTypeMap[k]} (${k})`"
-                :value="k"
-              />
-            </el-option-group>
-          </el-select>
-        </el-form-item>
-
-        <el-form-item label="审批链名称" required>
-          <el-input v-model="form.name" placeholder="如 采购大额订单审批" />
-        </el-form-item>
-
-        <el-form-item label="审批级别">
-          <el-input-number v-model="form.approvalLevel" :min="1" :max="10" style="width: 100%" />
-          <div class="field-hint">1 = 一级审批, 2 = 二级审批, 以此类推</div>
-        </el-form-item>
-
-        <el-form-item label="所需审批人数">
-          <el-input-number v-model="form.requiredApprovers" :min="1" :max="10" style="width: 100%" />
-        </el-form-item>
-
-        <el-form-item label="审批角色" required>
-          <el-input
-            v-model="form.approverRoles"
-            placeholder="多个角色用逗号分隔, 如 finance_manager,factory_super_admin"
-          />
-          <div class="field-hint">逗号分隔多个角色. 该角色的用户可审批此类型.</div>
-        </el-form-item>
-
-        <el-form-item label="指定审批人 ID">
-          <el-input
-            v-model="form.approverUserIds"
-            placeholder="可选 — 用户 ID 逗号分隔, 如 101,202"
-          />
-          <div class="field-hint">可选. 指定后仅这些用户可审批 (优先于角色限制).</div>
-        </el-form-item>
-
-        <el-divider content-position="left" style="font-size: 13px; color: #909399">触发 & 自动审批条件 (JSON)</el-divider>
-
-        <el-form-item label="触发条件 JSON">
-          <el-input
-            v-model="form.triggerCondition"
-            type="textarea"
-            :rows="2"
-            placeholder='如 {"amount": ">5000"} 表示金额>5000 才触发审批'
-          />
-          <div class="field-hint">留空 = 此决策类型所有操作都触发审批.</div>
-        </el-form-item>
-
-        <el-form-item label="自动通过 JSON">
-          <el-input
-            v-model="form.autoApproveCondition"
-            type="textarea"
-            :rows="2"
-            placeholder='如 {"externalOrder": true} 表示外部渠道订单自动通过'
-          />
-          <div class="field-hint">满足条件时系统自动审批通过, 无需人工操作.</div>
-        </el-form-item>
-
-        <el-form-item label="自动拒绝 JSON">
-          <el-input
-            v-model="form.autoRejectCondition"
-            type="textarea"
-            :rows="2"
-            placeholder="可留空"
-          />
-        </el-form-item>
-
-        <el-divider content-position="left" style="font-size: 13px; color: #909399">其他设置</el-divider>
-
-        <el-form-item label="超时 (分钟)">
-          <el-input-number v-model="form.timeoutMinutes" :min="0" style="width: 100%" placeholder="留空 = 不超时" />
-          <div class="field-hint">超时后升级到 escalationConfigId 配置的规则 (若已设置).</div>
-        </el-form-item>
-
-        <el-form-item label="优先级">
-          <el-input-number v-model="form.priority" :min="0" :max="100" style="width: 100%" />
-          <div class="field-hint">同决策类型有多条规则时, 数值越大优先级越高.</div>
-        </el-form-item>
-
-        <el-form-item label="启用状态">
-          <el-switch v-model="form.enabled" />
-          <span style="margin-left: 12px; color: #909399; font-size: 12px">
-            关闭后此规则不参与审批判断
-          </span>
-        </el-form-item>
-
-        <el-form-item label="描述">
-          <el-input v-model="form.description" type="textarea" :rows="2" />
-        </el-form-item>
-      </el-form>
-      <template #footer>
-        <el-button @click="dialogVisible = false">取消</el-button>
-        <el-button type="primary" :loading="submitting" @click="handleSave">保存</el-button>
-      </template>
-    </el-dialog>
   </div>
 </template>
 
 <style scoped>
-.page-wrapper { padding: 20px; }
-.card-header { display: flex; justify-content: space-between; align-items: center; }
-.header-left { display: flex; align-items: baseline; gap: 12px; }
-.page-title { font-size: 18px; font-weight: 600; }
-.data-count { font-size: 13px; color: #909399; }
-.field-hint { font-size: 12px; color: #909399; margin-top: 4px; line-height: 1.4; }
+.approval-business-page {
+  min-height: 100%;
+  padding: 20px;
+  background: #f4f6f9;
+  color: #1a2332;
+}
+
+.page-heading,
+.card-heading,
+.filters,
+.continuity-note {
+  display: flex;
+  align-items: center;
+}
+
+.page-heading {
+  justify-content: space-between;
+  gap: 24px;
+  margin-bottom: 16px;
+}
+
+h1,
+h2,
+p {
+  margin: 0;
+}
+
+h1 {
+  font-size: 24px;
+  line-height: 32px;
+}
+
+.page-heading p {
+  margin-top: 6px;
+  color: #7a8599;
+  font-size: 14px;
+}
+
+.load-error,
+.summary-grid {
+  margin-bottom: 16px;
+}
+
+.summary-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.summary-card {
+  min-height: 92px;
+  padding: 16px;
+  border: 1px solid #edf2f7;
+  border-radius: 10px;
+  background: #fff;
+  box-shadow: 0 3px 10px rgb(31 62 92 / 5%);
+}
+
+.summary-card span {
+  color: #7a8599;
+  font-size: 13px;
+}
+
+.summary-card strong {
+  display: block;
+  margin-top: 8px;
+  font-size: 28px;
+  font-variant-numeric: tabular-nums;
+}
+
+.summary-card.enabled { border-top: 3px solid #67c23a; }
+.summary-card.no-approval { border-top: 3px solid #a8b1bf; }
+.summary-card.draft { border-top: 3px solid #e6a23c; }
+
+.business-card {
+  border-color: #edf2f7;
+  border-radius: 10px;
+}
+
+.card-heading {
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.card-heading h2 {
+  font-size: 18px;
+}
+
+.card-heading span,
+.running-note {
+  color: #7a8599;
+  font-size: 13px;
+}
+
+.filters {
+  gap: 12px;
+  justify-content: space-between;
+  margin-bottom: 14px;
+}
+
+.filters .el-input {
+  width: min(420px, 48%);
+}
+
+.status-switch {
+  display: inline-flex;
+  padding: 3px;
+  border: 1px solid #edf2f7;
+  border-radius: 8px;
+  background: #f4f6f9;
+}
+
+.status-switch button {
+  min-height: 32px;
+  padding: 0 14px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: #5d6879;
+  cursor: pointer;
+}
+
+.status-switch button.active {
+  background: #fff;
+  color: #1b65a8;
+  font-weight: 600;
+  box-shadow: 0 1px 4px rgb(31 62 92 / 12%);
+}
+
+.status-switch button:focus-visible {
+  outline: 2px solid #409eff;
+  outline-offset: 1px;
+}
+
+.business-table :deep(th.el-table__cell) {
+  height: 44px;
+  background: #f7f9fc;
+  color: #5d6879;
+}
+
+.business-table :deep(td.el-table__cell) {
+  height: 62px;
+}
+
+.department-name {
+  color: #1a2332;
+}
+
+.business-name,
+.version-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+
+.business-name strong,
+.version-cell strong {
+  font-weight: 600;
+}
+
+.business-name span,
+.version-cell span {
+  overflow: hidden;
+  color: #7a8599;
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.continuity-note {
+  gap: 10px;
+  margin-top: 14px;
+  padding: 12px 14px;
+  border-left: 3px solid #1b65a8;
+  border-radius: 8px;
+  background: #f0f7ff;
+  color: #5d6879;
+  font-size: 13px;
+}
+
+.continuity-note strong {
+  flex: 0 0 auto;
+  color: #1a2332;
+}
+
+@media (max-width: 1080px) {
+  .summary-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .filters {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .filters .el-input {
+    width: 100%;
+  }
+
+  .status-switch {
+    align-self: flex-start;
+  }
+}
+
+@media (max-width: 720px) {
+  .approval-business-page {
+    padding: 12px;
+  }
+
+  .summary-grid {
+    grid-template-columns: 1fr;
+  }
+}
 </style>

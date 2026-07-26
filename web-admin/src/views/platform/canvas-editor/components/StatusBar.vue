@@ -7,7 +7,7 @@
       <span v-if="dirtyCount > 0" class="dirty-label">· {{ dirtyCount }} 项未保存</span>
     </div>
     <div class="status-right">
-      <el-button link size="small" @click="$emit('show-json')">JSON 预览</el-button>
+      <el-button v-if="!hideTechnicalDetails" link size="small" @click="$emit('show-json')">JSON 预览</el-button>
       <el-button link size="small" @click="$emit('show-history')">版本历史</el-button>
       <el-button link size="small" @click="$emit('show-publish-window')">发布窗口</el-button>
     </div>
@@ -18,7 +18,7 @@
 import { useCanvasEditor } from '../composables/useCanvasEditor'
 
 const { dirtyCount } = useCanvasEditor()
-defineProps<{ isComplete?: boolean }>()
+defineProps<{ isComplete?: boolean; hideTechnicalDetails?: boolean }>()
 defineEmits<{ 'show-json': []; 'show-history': []; 'show-publish-window': [] }>()
 </script>
 

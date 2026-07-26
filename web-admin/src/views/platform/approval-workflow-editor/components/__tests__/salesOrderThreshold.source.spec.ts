@@ -24,7 +24,7 @@ describe('sales order approval threshold editor', () => {
 
   it('does not offer the disconnected WorkflowRule editor for sales order routing', () => {
     expect(editor).toContain("selectedDecisionType !== 'SALES_ORDER_APPROVAL'");
-    expect(properties).toContain('v-if="!isSalesOrderDecision"');
+    expect(properties).toContain('v-if="!isSalesOrderDecision && !props.businessMode"');
     expect(properties).toContain('销售订单金额分流由连线条件决定');
   });
 });

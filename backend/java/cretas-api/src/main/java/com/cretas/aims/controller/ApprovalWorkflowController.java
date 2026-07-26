@@ -123,6 +123,18 @@ public class ApprovalWorkflowController {
     // ==================== Lifecycle ====================
 
     @RequirePermission({"system:read_write"})
+    @PostMapping("/{id}/clone-draft")
+    @Operation(summary = "从已发布或历史版本克隆独立草稿")
+    public ApiResponse<ApprovalWorkflow> cloneDraft(
+            @PathVariable String factoryId,
+            @PathVariable String id) {
+        log.info("审批工作流克隆草稿 - factoryId={}, sourceId={}", factoryId, id);
+        return ApiResponse.success(
+                "已克隆为新草稿",
+                approvalWorkflowService.cloneAsDraft(factoryId, id));
+    }
+
+    @RequirePermission({"system:read_write"})
     @PatchMapping("/{id}/publish")
     @Operation(summary = "发布草稿 (draft → published)")
     public ApiResponse<ApprovalWorkflow> publish(

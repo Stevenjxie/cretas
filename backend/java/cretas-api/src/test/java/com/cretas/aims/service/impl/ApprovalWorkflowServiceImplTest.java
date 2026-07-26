@@ -14,7 +14,6 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
-import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.test.util.ReflectionTestUtils;
@@ -213,8 +212,8 @@ class ApprovalWorkflowServiceImplTest {
     }
 
     @Test
-    @DisplayName("Case 5: update published workflow → 自动 revert 到 draft + version +1")
-    void update_publishedRevertsToDraft() {
+    @DisplayName("Case 5: update published workflow → reject and require clone")
+    void update_publishedWorkflowIsImmutable() {
         ApprovalWorkflow existing = validSequentialWorkflow();
         existing.setId(WORKFLOW_ID);
         existing.setFactoryId(FACTORY_ID);
@@ -222,20 +221,18 @@ class ApprovalWorkflowServiceImplTest {
         existing.setVersion(3);
 
         when(repository.findById(WORKFLOW_ID)).thenReturn(Optional.of(existing));
-        when(repository.save(any(ApprovalWorkflow.class))).thenAnswer(inv -> inv.getArgument(0));
-
         ApprovalWorkflow partial = new ApprovalWorkflow();
         partial.setName("renamed");
 
-        ApprovalWorkflow result = service.update(FACTORY_ID, WORKFLOW_ID, partial);
+        BusinessException exception = assertThrows(
+                BusinessException.class,
+                () -> service.update(FACTORY_ID, WORKFLOW_ID, partial));
 
-        assertEquals("renamed", result.getName());
-        assertEquals("draft", result.getPublishStatus());
-        assertEquals(4, result.getVersion());
-
-        ArgumentCaptor<ApprovalWorkflow> captor = ArgumentCaptor.forClass(ApprovalWorkflow.class);
-        verify(repository).save(captor.capture());
-        assertEquals("draft", captor.getValue().getPublishStatus());
+        assertEquals(409, exception.getCode());
+        assertEquals("OA_WORKFLOW_IMMUTABLE", exception.getErrorCode());
+        assertEquals("published", existing.getPublishStatus());
+        assertEquals(3, existing.getVersion());
+        verify(repository, never()).save(any());
     }
 
     @Test
@@ -317,6 +314,79 @@ class ApprovalWorkflowServiceImplTest {
         Optional<ApprovalWorkflow> result = service.getActiveByDecisionType(FACTORY_ID, DecisionType.QUALITY_RELEASE);
 
         assertTrue(result.isEmpty());
+    }
+
+    @Test
+    @DisplayName("克隆已发布版本会创建独立递增草稿且不修改源版本")
+    void cloneAsDraft_createsIndependentIncrementedDraft() {
+        ApprovalWorkflow source = validSequentialWorkflow();
+        source.setId(WORKFLOW_ID);
+        source.setFactoryId(FACTORY_ID);
+        source.setPublishStatus("published");
+        source.setEnabled(true);
+        source.setVersion(3);
+        source.setPriority(20);
+        when(repository.findByFactoryIdAndIdForUpdate(FACTORY_ID, WORKFLOW_ID))
+                .thenReturn(Optional.of(source));
+        when(repository.findByFactoryIdAndDecisionTypeOrderByPriorityDesc(
+                FACTORY_ID, DecisionType.QUALITY_RELEASE))
+                .thenReturn(List.of(source));
+        when(repository.save(any(ApprovalWorkflow.class))).thenAnswer(invocation -> {
+            ApprovalWorkflow saved = invocation.getArgument(0);
+            saved.setId("wf-draft-v4");
+            return saved;
+        });
+
+        ApprovalWorkflow draft = service.cloneAsDraft(FACTORY_ID, WORKFLOW_ID);
+
+        assertEquals("wf-draft-v4", draft.getId());
+        assertEquals(4, draft.getVersion());
+        assertEquals("draft", draft.getPublishStatus());
+        assertFalse(draft.getEnabled());
+        assertEquals(source.getNodesJson(), draft.getNodesJson());
+        assertEquals("published", source.getPublishStatus());
+        assertTrue(source.getEnabled());
+    }
+
+    @Test
+    @DisplayName("已有同业务草稿时克隆幂等返回该草稿")
+    void cloneAsDraft_returnsExistingDraftIdempotently() {
+        ApprovalWorkflow source = validSequentialWorkflow();
+        source.setId(WORKFLOW_ID);
+        source.setFactoryId(FACTORY_ID);
+        source.setPublishStatus("published");
+        ApprovalWorkflow draft = validSequentialWorkflow();
+        draft.setId("existing-draft");
+        draft.setFactoryId(FACTORY_ID);
+        draft.setPublishStatus("draft");
+        draft.setVersion(4);
+        when(repository.findByFactoryIdAndIdForUpdate(FACTORY_ID, WORKFLOW_ID))
+                .thenReturn(Optional.of(source));
+        when(repository.findByFactoryIdAndDecisionTypeOrderByPriorityDesc(
+                FACTORY_ID, DecisionType.QUALITY_RELEASE))
+                .thenReturn(List.of(draft, source));
+
+        ApprovalWorkflow result = service.cloneAsDraft(FACTORY_ID, WORKFLOW_ID);
+
+        assertSame(draft, result);
+        verify(repository, never()).save(any());
+    }
+
+    @Test
+    @DisplayName("发布草稿会启用新版本供新实例选择")
+    void publishDraft_enablesPublishedVersion() {
+        ApprovalWorkflow draft = validSequentialWorkflow();
+        draft.setId(WORKFLOW_ID);
+        draft.setFactoryId(FACTORY_ID);
+        draft.setPublishStatus("draft");
+        draft.setEnabled(false);
+        when(repository.findById(WORKFLOW_ID)).thenReturn(Optional.of(draft));
+        when(repository.save(any(ApprovalWorkflow.class))).thenAnswer(invocation -> invocation.getArgument(0));
+
+        ApprovalWorkflow published = service.publishDraft(FACTORY_ID, WORKFLOW_ID);
+
+        assertEquals("published", published.getPublishStatus());
+        assertTrue(published.getEnabled());
     }
 
     @Test

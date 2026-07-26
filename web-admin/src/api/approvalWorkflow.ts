@@ -6,7 +6,7 @@
  *
  * @since 2026-05-16
  */
-import request from './request'
+import request, { get } from './request'
 
 // ==================== Wire types ====================
 
@@ -15,49 +15,60 @@ import request from './request'
  * workflow finding). Sprint 6 W3-B (2026-05-19) admin UI 加入 dropdown 全部 32 项,
  * 通过 /decision-types-meta endpoint 拿后端元数据 (中文名/分类/默认审批角色).
  */
-export type DecisionType =
-  // 生产 / 工序 (6)
-  | 'FORCE_INSERT'
-  | 'PRODUCTION_PLAN_CHANGE'
-  | 'EQUIPMENT_STATUS_CHANGE'
-  | 'BOM_VERSION_APPROVAL'
-  | 'ECN_APPROVAL'
-  | 'WORK_ORDER_APPROVAL'
+export const DECISION_TYPES = [
+  // 生产 / 工序
+  'FORCE_INSERT',
+  'PRODUCTION_PLAN_CHANGE',
+  'PRODUCTION_REVERSAL_APPROVAL',
+  'EQUIPMENT_STATUS_CHANGE',
+  'BOM_VERSION_APPROVAL',
+  'ECN_APPROVAL',
+  'WORK_ORDER_APPROVAL',
   // 质检 / 物料 (5)
-  | 'QUALITY_RELEASE'
-  | 'QUALITY_EXCEPTION'
-  | 'BATCH_STATUS_CHANGE'
-  | 'MATERIAL_DISPOSAL'
-  | 'MATERIAL_REQUISITION_APPROVAL'
+  'QUALITY_RELEASE',
+  'QUALITY_EXCEPTION',
+  'BATCH_STATUS_CHANGE',
+  'MATERIAL_DISPOSAL',
+  'MATERIAL_REQUISITION_APPROVAL',
   // 采购 / 供应商 (5)
-  | 'SUPPLIER_APPROVAL'
-  | 'SUPPLIER_STATUS_CHANGE'
-  | 'PURCHASE_ORDER_APPROVAL'
-  | 'PURCHASE_PAYMENT_APPROVAL'
-  | 'PURCHASE_RETURN_APPROVAL'
+  'SUPPLIER_APPROVAL',
+  'SUPPLIER_STATUS_CHANGE',
+  'PURCHASE_ORDER_APPROVAL',
+  'PURCHASE_PAYMENT_APPROVAL',
+  'PURCHASE_RETURN_APPROVAL',
   // 销售 / 客户 (5)
-  | 'SALES_ORDER_APPROVAL'
-  | 'SALES_RETURN_APPROVAL'
-  | 'SALES_DISCOUNT_APPROVAL'
-  | 'CUSTOMER_CREDIT_APPROVAL'
-  | 'INVOICE_ISSUANCE_APPROVAL'
+  'SALES_ORDER_APPROVAL',
+  'SALES_RETURN_APPROVAL',
+  'SALES_DISCOUNT_APPROVAL',
+  'CUSTOMER_CREDIT_APPROVAL',
+  'INVOICE_ISSUANCE_APPROVAL',
   // 财务 / 凭证 (5)
-  | 'VOUCHER_APPROVAL'
-  | 'EXPENSE_APPROVAL'
-  | 'BUDGET_APPROVAL'
-  | 'PAYMENT_APPROVAL'
-  | 'TAX_FILING_APPROVAL'
+  'VOUCHER_APPROVAL',
+  'EXPENSE_APPROVAL',
+  'BUDGET_APPROVAL',
+  'PAYMENT_APPROVAL',
+  'TAX_FILING_APPROVAL',
   // 人事 / 工资 (4)
-  | 'LEAVE_APPROVAL'
-  | 'OVERTIME_APPROVAL'
-  | 'WAGE_RECORD_APPROVAL'
-  | 'HIRE_APPROVAL'
+  'LEAVE_APPROVAL',
+  'OVERTIME_APPROVAL',
+  'WAGE_RECORD_APPROVAL',
+  'HIRE_APPROVAL',
   // 仓储 / 调拨 (3)
-  | 'INVENTORY_TRANSFER_APPROVAL'
-  | 'INVENTORY_ADJUSTMENT_APPROVAL'
-  | 'WASTAGE_APPROVAL'
-  // 其他 (1)
-  | 'CUSTOM'
+  'INVENTORY_TRANSFER_APPROVAL',
+  'INVENTORY_ADJUSTMENT_APPROVAL',
+  'WASTAGE_APPROVAL',
+  // 其他
+  'RESTAURANT_AGENT_ACTION_REVIEW',
+  'CUSTOM',
+] as const
+
+export type DecisionType = (typeof DECISION_TYPES)[number]
+
+const DECISION_TYPE_SET = new Set<string>(DECISION_TYPES)
+
+export function isDecisionType(value: unknown): value is DecisionType {
+  return typeof value === 'string' && DECISION_TYPE_SET.has(value)
+}
 
 /**
  * DecisionType 业务分类 — 后端 DecisionTypeMetadata.Category enum 镜像.
@@ -185,6 +196,37 @@ export interface ApiResponse<T> {
   code?: string
 }
 
+export interface ApprovalRoleDirectoryItem {
+  name: string
+  displayName: string
+  description?: string
+  level?: number
+  department?: string
+}
+
+export interface ApprovalUserDirectoryItem {
+  id: number
+  username: string
+  fullName?: string
+  realName?: string
+  isActive?: boolean
+  roleCode?: string
+  roleDisplayName?: string
+  department?: string
+  departmentDisplayName?: string
+}
+
+export interface ApprovalUserDirectoryPage {
+  content: ApprovalUserDirectoryItem[]
+  totalElements?: number
+  totalPages?: number
+}
+
+export interface ApprovalDirectory {
+  roles: ApprovalRoleDirectoryItem[]
+  users: ApprovalUserDirectoryItem[]
+}
+
 // ==================== API methods ====================
 
 const base = (factoryId: string) => `/${factoryId}/approval-workflows`
@@ -206,6 +248,9 @@ export const updateWorkflow = (factoryId: string, id: string, payload: UpdateWor
 
 export const deleteWorkflow = (factoryId: string, id: string) =>
   request.delete<ApiResponse<void>>(`${base(factoryId)}/${id}`)
+
+export const cloneWorkflowDraft = (factoryId: string, id: string) =>
+  request.post<ApiResponse<ApprovalWorkflowDTO>>(`${base(factoryId)}/${id}/clone-draft`)
 
 export const publishWorkflow = (factoryId: string, id: string) =>
   request.patch<ApiResponse<ApprovalWorkflowDTO>>(`${base(factoryId)}/${id}/publish`)
@@ -233,3 +278,55 @@ export const getDecisionTypes = (factoryId: string) =>
  */
 export const getDecisionTypesMetadata = (factoryId: string) =>
   request.get<ApiResponse<DecisionTypeMetadataDTO[]>>(`${base(factoryId)}/decision-types-meta`)
+
+/**
+ * 审批配置目录。
+ *
+ * 角色和用户仍以现有同工厂 RBAC / 用户目录为真值；调用方只展示友好名称，
+ * 保存时保留稳定 roleCode / userId，禁止自由录入不存在的身份。
+ */
+export const getApprovalRoleDirectory = (factoryId: string) =>
+  get<ApprovalRoleDirectoryItem[]>(`/${factoryId}/roles`, { _silent: true })
+
+export const getApprovalUserDirectory = (factoryId: string) =>
+  get<ApprovalUserDirectoryPage>(`/${factoryId}/users`, {
+    params: { page: 1, size: 500, sortBy: 'fullName', sortDirection: 'ASC' },
+    _silent: true,
+  })
+
+const APPROVAL_DIRECTORY_TTL_MS = 60_000
+const approvalDirectoryCache = new Map<
+  string,
+  { expiresAt: number; data: ApprovalDirectory }
+>()
+
+export async function getApprovalDirectory(
+  factoryId: string,
+  forceRefresh = false,
+): Promise<ApprovalDirectory> {
+  const cached = approvalDirectoryCache.get(factoryId)
+  if (!forceRefresh && cached && cached.expiresAt > Date.now()) {
+    return cached.data
+  }
+
+  const [rolesResponse, usersResponse] = await Promise.all([
+    getApprovalRoleDirectory(factoryId),
+    getApprovalUserDirectory(factoryId),
+  ])
+  if (!rolesResponse.success || !Array.isArray(rolesResponse.data)) {
+    throw new Error(rolesResponse.message || '角色目录返回异常')
+  }
+  if (!usersResponse.success || !Array.isArray(usersResponse.data?.content)) {
+    throw new Error(usersResponse.message || '人员目录返回异常')
+  }
+
+  const data: ApprovalDirectory = {
+    roles: rolesResponse.data,
+    users: usersResponse.data.content,
+  }
+  approvalDirectoryCache.set(factoryId, {
+    data,
+    expiresAt: Date.now() + APPROVAL_DIRECTORY_TTL_MS,
+  })
+  return data
+}

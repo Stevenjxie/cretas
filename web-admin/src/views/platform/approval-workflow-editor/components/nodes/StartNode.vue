@@ -1,6 +1,5 @@
 <template>
   <div class="wf-node start-node" :class="{ selected }">
-    <div class="node-icon">▶</div>
     <div class="node-label">{{ data?.label || '开始' }}</div>
     <Handle type="source" :position="Position.Bottom" />
   </div>
@@ -17,14 +16,36 @@ defineProps<{
 
 <style scoped>
 .wf-node {
-  width: 80px; height: 80px; border-radius: 50%;
-  display: flex; flex-direction: column; align-items: center; justify-content: center;
-  background: #67c23a; color: #fff;
-  box-shadow: 0 2px 8px rgba(103, 194, 58, 0.4);
-  border: 3px solid transparent;
-  transition: all 0.15s;
+  box-sizing: border-box;
+  display: flex;
+  width: 136px;
+  min-height: 40px;
+  align-items: center;
+  justify-content: center;
+  padding: 8px 18px;
+  border: 1px solid #cbd6e2;
+  border-radius: 999px;
+  background: #fff;
+  box-shadow: 0 2px 6px rgb(31 62 92 / 8%);
+  color: #1a2332;
+  transition: border-color 0.15s, box-shadow 0.15s;
 }
-.wf-node.selected { border-color: #fff; box-shadow: 0 0 0 3px #67c23a, 0 2px 12px rgba(0, 0, 0, 0.2); }
-.node-icon { font-size: 20px; line-height: 1; }
-.node-label { font-size: 11px; margin-top: 2px; font-weight: 600; }
+.wf-node.selected {
+  border-color: #1b65a8;
+  box-shadow: 0 0 0 3px rgb(27 101 168 / 16%), 0 4px 10px rgb(31 62 92 / 12%);
+}
+.node-label {
+  overflow: hidden;
+  font-size: 13px;
+  font-weight: 650;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+:deep(.vue-flow__handle) {
+  width: 8px;
+  height: 8px;
+  border: 2px solid #fff;
+  background: #2fa66a;
+  box-shadow: 0 0 0 1px #8aa0b5;
+}
 </style>
