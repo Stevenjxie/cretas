@@ -310,6 +310,8 @@ async def test_t2_low_confidence_falls_to_t3_llm_and_ignores_llm_dates():
     from common.llm_router import SLOT
     args, kwargs = mock_chain.call_args
     assert args[0] == SLOT.MAPPER
+    assert kwargs["timeout"] == 2.5
+    assert kwargs["total_timeout"] == 6.0
 
 
 @pytest.mark.asyncio

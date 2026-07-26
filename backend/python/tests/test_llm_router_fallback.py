@@ -87,14 +87,17 @@ def test_chains_deduped():
         assert len(chain) == len(set(chain)), f"{slot.value} chain has duplicates"
 
 
-def test_mapper_places_verified_healthy_low_cost_model_before_max_tail():
+def test_mapper_uses_bounded_fast_models_without_max_or_reasoners():
     chain = llm_router.SLOT_MODELS[SLOT.MAPPER]
     assert chain[:2] == [
         ("aliyun_c", "qwen3.6-flash-2026-04-16"),
         ("aliyun_c", "glm-5.2"),
     ]
-    assert chain.index(("aliyun_c", "glm-5.2")) < chain.index(
-        ("aliyun_c", "qwen3.7-max-2026-06-08")
+    assert ("zhipu", "glm-4.5-air") in chain
+    assert all(
+        token not in model
+        for _account, model in chain
+        for token in ("max", "deepseek", "kimi")
     )
 
 
@@ -226,6 +229,12 @@ def test_403_and_402_are_quota_exhausted():
     assert llm_router._is_quota_exhausted(403, "AllocationQuota.FreeTierOnly") is True
     assert llm_router._is_quota_exhausted(402, "Insufficient Balance") is True
     assert llm_router._is_quota_exhausted(402, "endpoint inactive: FREE_QUOTA_EXHAUSTED") is True
+    assert llm_router._is_quota_exhausted(
+        402,
+        '{"error":{"code":"401008","message":"The free trial quota for the service '
+        'has been exhausted and postpaid billing is not enabled"}}',
+    ) is True
+    assert llm_router._is_quota_exhausted(402, '{"error":{"code":401008}}') is True
     assert llm_router._is_quota_exhausted(500, "FreeTierOnly") is False
 
 
