@@ -2914,6 +2914,15 @@ public class IntentExecutionOrchestrator {
         if (isExplicitRestaurantDataFactRequest(normalizedInput)) {
             return false;
         }
+        // A short metric + optimisation utterance is normally a dependent
+        // analytical follow-up ("销量怎么优化", "第一名毛利如何提升").
+        // Let the Python restaurant session restore the typed dish/time/store
+        // slots.  The generic owner-action advisor has no access to that typed
+        // result context and otherwise replaces a scoped question with broad
+        // whole-store advice.  Longer role/action plans still belong here.
+        if (isDependentRestaurantMetricOptimization(normalizedInput)) {
+            return false;
+        }
         if (hasOwnerActionContinuationContext(context)) {
             return true;
         }
@@ -2934,6 +2943,51 @@ public class IntentExecutionOrchestrator {
             return false;
         }
         return false;
+    }
+
+    private boolean isDependentRestaurantMetricOptimization(String input) {
+        if (input == null || input.isBlank()) {
+            return false;
+        }
+        String compact = input.replaceAll("[\\s，。？！?、,；;：:]", "");
+        if (compact.length() > 28) {
+            return false;
+        }
+        String[] metrics = {
+                "营业收入", "销售收入", "营业额", "销售额", "客单价",
+                "毛利率", "净利润", "销售量", "销量", "营收", "毛利",
+                "利润", "成本", "订单", "单量", "损耗", "人效"
+        };
+        String[] actions = {
+                "怎么优化", "如何优化", "怎么提升", "如何提升",
+                "怎么改善", "如何改善", "怎么提高", "如何提高"
+        };
+        String matchedMetric = null;
+        for (String metric : metrics) {
+            if (compact.contains(metric)) {
+                matchedMetric = metric;
+                break;
+            }
+        }
+        String matchedAction = null;
+        for (String action : actions) {
+            if (compact.contains(action)) {
+                matchedAction = action;
+                break;
+            }
+        }
+        if (matchedMetric == null || matchedAction == null) {
+            return false;
+        }
+        String remainder = compact
+                .replace(matchedMetric, "")
+                .replace(matchedAction, "");
+        remainder = remainder.replaceFirst(
+                "^(?:这个菜|那个菜|这道菜|那道菜|该菜|菜品|它|这个|那个|该|"
+                        + "刚才|上面|前面|第[一二三四五六七八九十百千万两0-9]+名)*",
+                "");
+        remainder = remainder.replaceAll("(?:的|呢|吗|啊|呀|吧|一下)+", "");
+        return remainder.isBlank();
     }
 
     private boolean isExplicitRestaurantDataFactRequest(String input) {

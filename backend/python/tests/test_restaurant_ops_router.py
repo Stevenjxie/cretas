@@ -155,6 +155,7 @@ LEGITIMATE_TRIGGERS = [
     ("本月营业额", "RESTAURANT_OPS_SALES_SUMMARY"),
     ("昨天营业额比前天高还是低", "RESTAURANT_OPS_SALES_SUMMARY"),
     ("昨天的营业额是高于前天还是低于前天？", "RESTAURANT_OPS_SALES_SUMMARY"),
+    ("昨天与前天全部门店营业额分别是多少？请给差额和升降结论", "RESTAURANT_OPS_SALES_SUMMARY"),
     ("昨日营业额较前日上升还是下降？", "RESTAURANT_OPS_SALES_SUMMARY"),
     ("昨天营业收入比前天高吗？", "RESTAURANT_OPS_SALES_SUMMARY"),
     ("昨天流水比前一日旺不旺？", "RESTAURANT_OPS_SALES_SUMMARY"),
@@ -1456,7 +1457,7 @@ def test_daily_revenue_chart_includes_reference_lines_and_quadratic_fit(monkeypa
         date_range=(date(2026, 7, 1), date(2026, 7, 10)),
         query=(
             "用二次函数拟合最近10天全部门店每日营业额曲线，"
-            "计划值10万元，预警值8万元"
+            "计划值10万元，预警值8万元；如果无法绘图，请提供可导出的Excel或XLS数据"
         ),
     ))
 
@@ -1470,6 +1471,9 @@ def test_daily_revenue_chart_includes_reference_lines_and_quadratic_fit(monkeypa
     assert answer.meta["quadratic_fit"]["r_squared"] > 0.999
     assert answer.meta["daily_point_count"] == 10
     assert len(answer.meta["export_rows"]) == 10
+    assert answer.meta["export_requested"] is True
+    assert "可导出字段" in answer.answer_text
+    assert "Excel/XLS" in answer.answer_text
     assert "不代表" in answer.answer_text
 
 

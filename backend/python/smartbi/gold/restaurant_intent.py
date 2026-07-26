@@ -373,11 +373,24 @@ _UNSUPPORTED_REQUIREMENT_LABELS = {
 
 
 def _detect_requested_metrics(text: str) -> Tuple[str, ...]:
-    detected = tuple(
-        metric
-        for metric, tokens in _REQUEST_METRIC_RULES
-        if any(token in text for token in tokens)
-    )
+    detected_items: List[str] = []
+    for metric, tokens in _REQUEST_METRIC_RULES:
+        if metric == "recipe_cost":
+            # A raw substring search sees the character boundary in
+            # ``生成本月`` / ``完成本周`` as the word ``成本`` and injects an
+            # unrelated recipe-cost resolver into revenue chart requests.
+            # Longer cost phrases remain exact; the generic word is accepted
+            # unless ``本`` is immediately starting a calendar-period word.
+            has_metric = any(token in text for token in tokens if token != "成本")
+            has_metric = has_metric or bool(
+                re.search(r"成本(?![日周月季年])", text)
+                or re.search(r"成本(?:日|周|月|季|年)报", text)
+            )
+        else:
+            has_metric = any(token in text for token in tokens)
+        if has_metric:
+            detected_items.append(metric)
+    detected = tuple(detected_items)
     rejects_gross_substitution = any(token in text for token in (
         "不要用毛利", "不能用毛利", "不用毛利", "不拿毛利", "毛利替代",
     ))
@@ -902,6 +915,7 @@ def contextualize_restaurant_followup(
     if (
         context.get("topic_kind") == "dish_ranking"
         and explicit_ranking_direction is not None
+        and not explicit_metrics
     ):
         inherited_limit = context.get("ranking_limit")
         effective_limit = ranking_limit(
@@ -1934,13 +1948,12 @@ def _explicit_named_dish_metric_spec(
     dish_candidates = extract_dish_candidates(text)
     requested_metrics = _detect_requested_metrics(text)
     start_date, end_date = _resolve_sales_date_range(text)[0]
+    missing_time = start_date is None and end_date is None
     store_scope, store_slots = _detect_store_scope(text)
     if (
         len(dish_candidates) != 1
         or not requested_metrics
         or not set(requested_metrics).issubset(_EXPLICIT_NAMED_DISH_METRICS)
-        or start_date is None
-        or end_date is None
         or ((start_date is None) != (end_date is None))
         or store_scope not in {None, "all", "single", "multiple"}
         or (store_scope == "single" and len(store_slots) != 1)
@@ -1964,7 +1977,14 @@ def _explicit_named_dish_metric_spec(
         require_explicit_time=True,
     )
     if (
-        spec.clarification_needed
+        (
+            missing_time
+            and (
+                not spec.clarification_needed
+                or spec.clarification_question != TIME_CLARIFICATION_QUESTION
+            )
+        )
+        or (not missing_time and spec.clarification_needed)
         or spec.intent != selected_code
         or spec.dish_slot != dish_candidates[0]
         or spec.requested_metrics != requested_metrics

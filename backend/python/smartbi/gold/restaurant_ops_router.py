@@ -253,6 +253,7 @@ _COMPARISON_DIRECTION_TOKENS = (
     "对比", "比较", "相比", "比", "较", "高于", "低于", "上升", "下降",
     "增加", "减少", "高还是低", "多还是少", "旺不旺", "环比",
     "哪个高", "哪个低", "更高", "更低", "高了", "低了",
+    "差额", "升降", "增减", "变化结论",
 )
 
 
@@ -763,7 +764,7 @@ _DISH_QUERY_RE = re.compile(
     + _DISH_COST_METRIC_PATTERN
     + r"|卖得|卖了|卖出)"
     r"(?:是多少|有多少|怎么样|如何|好不好|多少|几份|呢"
-    r"|为什么(?:是这样|这么高|这么低)?|为何(?:是这样)?|怎么回事"
+    r"|为什么(?:(?:是)?这样|这么高|这么低)?|为何(?:(?:是)?这样)?|怎么回事"
     r"|原因是什么|怎么优化|如何优化|怎么改善|如何改善"
     r"|怎么提升|如何提升)?[?？。!！]?$"
 )
@@ -5425,6 +5426,9 @@ async def resolve_trend_analysis(
     reference_requested = any(token in query_text for token in (
         "参照线", "计划线", "预警线", "计划值", "目标值", "预警值",
     ))
+    export_requested = any(token in query_text for token in (
+        "导出", "下载", "Excel", "excel", "XLS", "xls", "生成文件",
+    ))
 
     # R24: trend_bundle 本就支持时间窗, resolver 此前写死全历史 —
     # 「最近三个月营收趋势」答 19 个月属于窗口替代。带窗时如实标注。
@@ -5644,6 +5648,16 @@ async def resolve_trend_analysis(
                 )
     elif daily_requested:
         daily_detail = "- 当前窗口没有日级营收明细，本次没有把月度数据伪装成每日曲线。\n"
+    if export_requested:
+        if dated_daily:
+            daily_detail += (
+                "- 可导出字段：`date`（日期）、`revenue`（营业额）；"
+                f"本次共有 {len(dated_daily)} 行，可用于 Excel/XLS 数据导出。\n"
+            )
+        else:
+            daily_detail += (
+                "- 当前窗口没有可导出的日级营业额记录，本次没有生成空文件或伪造数据。\n"
+            )
 
     cumulative_text = f"**{_money(total_rev)}**" if can_see_money else _money(total_rev)
     answer = (
@@ -5743,6 +5757,7 @@ async def resolve_trend_analysis(
                 if quadratic_fit is not None else None
             ),
             "reference_lines": revenue_reference_lines,
+            "export_requested": export_requested,
             "export_rows": (
                 [
                     {

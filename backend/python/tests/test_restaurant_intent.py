@@ -31,8 +31,10 @@ from smartbi.gold.restaurant_intent import (
     _build_spec,
     _detect_comparison,
     _detect_dimensions,
+    _detect_requested_metrics,
     _explicit_named_dish_metric_spec,
     _explicit_revenue_trend_spec,
+    _explicit_sales_period_comparison_spec,
     _explicit_store_operations_spec,
     _trusted_context_dish_followup_spec,
     _verbatim_entity,
@@ -746,7 +748,7 @@ async def test_fully_slotted_named_dish_executes_without_t3():
 
 
 @pytest.mark.asyncio
-async def test_named_dish_without_time_still_fails_closed():
+async def test_named_dish_without_time_asks_for_time_without_t3():
     query = "全部门店招牌青花椒味(单人份)的成本和毛利呢？"
     with patch(
         "smartbi.gold.restaurant_intent._t3_llm_parse",
@@ -760,9 +762,13 @@ async def test_named_dish_without_time_still_fails_closed():
         )
 
     assert spec is not None
-    assert spec.intent == ""
-    assert spec.planner_authority == "llm_unavailable"
-    t3.assert_awaited_once()
+    assert spec.intent == "RESTAURANT_OPS_GROSS_MARGIN"
+    assert spec.planner_authority == "explicit_named_dish_slots"
+    assert spec.dish_slot == "招牌青花椒味(单人份)"
+    assert spec.requested_metrics == ("recipe_cost", "gross_margin")
+    assert spec.clarification_needed is True
+    assert spec.clarification_question == TIME_CLARIFICATION_QUESTION
+    t3.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -2047,6 +2053,15 @@ def test_ordinal_followup_restores_ranked_dish_context(followup):
     assert "最近7天" in effective
     assert "全部门店" in effective
     assert "第一名" not in effective and "第1名" not in effective
+    if "成本和毛利" in followup:
+        assert effective.rstrip("？?") == (
+            "最近7天全部门店招牌青花椒味(单人份)的成本和毛利呢"
+        )
+        spec = _trusted_context_dish_followup_spec(effective)
+        assert spec is not None
+        assert spec.requested_metrics == ("recipe_cost", "gross_margin")
+        assert spec.ranking_direction is None
+        assert spec.ranking_limit == 5
 
 
 def test_explicit_named_dish_multi_store_metrics_compile_without_llm():
@@ -2080,6 +2095,39 @@ def test_explicit_daily_revenue_curve_keeps_chart_and_export_as_one_plan():
     assert spec.requested_metrics == ("revenue",)
     assert spec.asks_export is True
     assert spec.planner_authority == "explicit_revenue_trend"
+
+
+def test_calendar_chart_word_boundary_does_not_inject_recipe_cost():
+    query = "生成本月每日营业额图，并加入计划值10万元和预警值8万元参考线"
+
+    assert _detect_requested_metrics(query) == ("revenue",)
+    spec = _explicit_revenue_trend_spec(query)
+    assert spec is not None
+    assert spec.planned_intents == ("RESTAURANT_OPS_TREND_ANALYSIS",)
+
+
+def test_difference_and_direction_wording_compiles_period_comparison():
+    query = "昨天与前天全部门店营业额分别是多少？请给差额和升降结论"
+
+    spec = _explicit_sales_period_comparison_spec(query)
+    assert spec is not None
+    assert spec.intent == "RESTAURANT_OPS_SALES_SUMMARY"
+    assert spec.planned_intents == ("RESTAURANT_OPS_SALES_SUMMARY",)
+    assert spec.analysis_action == "compare"
+    assert spec.comparison == "previous_day"
+    assert spec.comparison_label == "前天"
+
+
+def test_named_dish_colloquial_diagnosis_without_time_asks_time_first():
+    spec = _explicit_named_dish_metric_spec("米饭的销量为什么这样？")
+
+    assert spec is not None
+    assert spec.intent == "RESTAURANT_OPS_GROSS_MARGIN"
+    assert spec.dish_slot == "米饭"
+    assert spec.requested_metrics == ("sales_volume",)
+    assert spec.analysis_action == "diagnose"
+    assert spec.clarification_needed is True
+    assert spec.clarification_question == TIME_CLARIFICATION_QUESTION
 
 
 def test_explicit_single_store_operations_uses_store_margin_plan():
