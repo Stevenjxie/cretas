@@ -443,7 +443,13 @@ HONEST_LABEL_CLAUSE = (
     "禁止用肯定或否定语气声称该维度发生了什么、影响了什么或没有影响。"
 )
 
-SYNTHESIS_CONTRACT_VERSION = "restaurant-dimensions-v4"
+SYNTHESIS_CONTRACT_VERSION = "restaurant-dimensions-v5"
+
+
+def _is_restaurant_synthesis_tenant(factory_id: str) -> bool:
+    """Mirror this engine's existing restaurant/factory tenant split."""
+    fid = str(factory_id or "").strip().upper()
+    return not (fid.startswith("F") and len(fid) <= 6)
 
 
 _CAUSAL_ASSERTION_RE = re.compile(
@@ -861,7 +867,19 @@ class ComprehensiveSynthesisEngine:
         )
 
         # 5. Structured multi-dim insights (deterministic correlations).
-        insight_summary = self._analyze(factbook, period=f"{start_iso} 至 {end_iso}")
+        #
+        # Restaurant FactBooks are flattened to a single cross-sectional row.
+        # The shared analyzer's generic "total" heuristic may otherwise treat
+        # any unrelated numeric column as a component of a column whose name
+        # contains "合计" (for example: 总营业额 / 折扣金额合计).  That produces
+        # mathematically computable but semantically invalid "contribution"
+        # claims.  Keep the factory analyzer contract unchanged and make the
+        # restaurant branch explicit.
+        insight_summary = self._analyze(
+            factbook,
+            period=f"{start_iso} 至 {end_iso}",
+            restaurant_scope=_is_restaurant_synthesis_tenant(factory_id),
+        )
 
         if budget.blocked:
             return self._deterministic_fallback_response(
@@ -1275,8 +1293,11 @@ class ComprehensiveSynthesisEngine:
         Never affects the user-facing response."""
         try:
             grounded_clean = not (fc_meta or {}).get("violations")
-            fid_up = (factory_id or "").upper()
-            biz_type = "factory" if (fid_up.startswith("F") and len(fid_up) <= 6) else "restaurant"
+            biz_type = (
+                "restaurant"
+                if _is_restaurant_synthesis_tenant(factory_id)
+                else "factory"
+            )
             has_data = any([factbook.review, factbook.finance, factbook.sales,
                             factbook.period_comparison, factbook.supplier_anomaly,
                             factbook.attribution, factbook.channel,
@@ -1984,13 +2005,25 @@ class ComprehensiveSynthesisEngine:
     # =====================================================================
     # Step 3: structured multi-dim insights
     # =====================================================================
-    def _analyze(self, factbook: FactBook, *, period: str) -> str:
+    def _analyze(
+        self,
+        factbook: FactBook,
+        *,
+        period: str,
+        restaurant_scope: bool = False,
+    ) -> str:
         """Run InsightDimensionAnalyzer over the flattened FactBook → summary text.
 
         Best-effort: the analyzer is statistical and never raises on small data;
         we only need its executive_summary + top insights as grounding context
         for the LLM (NOT as the final answer).
         """
+        if restaurant_scope:
+            # Restaurant's deterministic FactBook already contains the
+            # dimension-specific calculations and coverage disclosures.  A
+            # one-row snapshot has no valid generic correlation/contribution
+            # semantics, so do not manufacture a second summary from it.
+            return ""
         try:
             df = factbook_to_dataframe(factbook)
             if df is None or df.empty:
