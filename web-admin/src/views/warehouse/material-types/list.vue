@@ -966,16 +966,18 @@ async function handleSave() {
     return;
   }
 
-  // 与 SKU 相同：每条包装规则都直接换算到唯一库存基本单位。
+  // 与 SKU 相同：每条包装规则都直接换算到唯一库存基本单位；原料至少需要一条完整规则。
+  if (!packagingRules.value.length) {
+    return ElMessage.warning('请至少填写一条采购包装换算规则');
+  }
   const incompleteRule = packagingRules.value.some((rule) => {
     const hasUnit = Boolean(rule.packageUnit?.trim());
     const hasFactor = Number(rule.conversionFactor) > 0;
-    return hasUnit !== hasFactor;
+    return !hasUnit || !hasFactor;
   });
-  if (incompleteRule) return ElMessage.warning('每条包装规则的包装单位和换算数量必须同时填写或同时清空');
+  if (incompleteRule) return ElMessage.warning('请完整填写每条包装规则的包装单位和换算数');
 
   const submittedPackagingRules = packagingRules.value
-    .filter((rule) => rule.packageUnit?.trim() && Number(rule.conversionFactor) > 0)
     .map((rule, index) => ({
       id: rule.id,
       name: index === 0 ? '默认包装' : `包装规格 ${index + 1}`,
@@ -1433,6 +1435,67 @@ function handleSizeChange(size: number) {
           </div>
         </el-form-item>
 
+        <!-- 与 SKU 新建一致：采购包装直接换算到唯一库存基本单位，且至少配置一条 -->
+        <el-form-item v-if="form.unit" label="包装换算" required>
+          <div class="material-packaging-spec-list">
+            <div class="packaging-rule-note">
+              库存按上方入库计量单位记账；请至少填写一条采购包装换算。例如：1 箱 = 10 kg。
+            </div>
+            <div
+              v-for="(rule, index) in packagingRules"
+              :key="rule.id || `new-${index}`"
+              class="material-packaging-spec-item"
+            >
+              <div class="spec-conversion-row">
+                <el-tag v-if="index === 0" type="success" size="small">默认</el-tag>
+                <span v-else class="packaging-rule-index">规则 {{ index + 1 }}</span>
+                <span class="conversion-label">1</span>
+                <UnitSelect
+                  v-model="rule.packageUnit"
+                  :factory-id="factoryId"
+                  usage-scope="PURCHASE_QUANTITY"
+                  placeholder="包装单位（必填，如箱）"
+                  class="spec-unit-select"
+                />
+                <span class="conversion-equals">=</span>
+                <el-input-number
+                  v-model="rule.conversionFactor"
+                  :min="0.00000001"
+                  :precision="8"
+                  :controls="false"
+                  placeholder="换算数（必填）"
+                  class="spec-factor-input"
+                />
+                <el-input
+                  :model-value="displayUnit(form.unit)"
+                  disabled
+                  class="spec-base-unit"
+                />
+                <el-button
+                  v-if="index > 0"
+                  type="danger"
+                  link
+                  @click="removePackagingRule(index)"
+                >
+                  删除
+                </el-button>
+              </div>
+              <div
+                v-if="rule.packageUnit && rule.packageUnit.trim().toLowerCase() === form.unit.trim().toLowerCase()"
+                class="spec-same-warn"
+              >
+                包装单位不能与库存基本单位相同
+              </div>
+              <div v-else-if="packagingRuleText(rule)" class="spec-echo">
+                {{ packagingRuleText(rule) }}
+              </div>
+            </div>
+            <el-button class="add-packaging-rule-button" @click="addPackagingRule">
+              添加多包装换算规则
+            </el-button>
+          </div>
+        </el-form-item>
+
         <el-form-item v-if="!isPackagingMaterial" label="储存类型" required>
           <el-select v-model="form.storageType" placeholder="请选择储存类型" style="width: 100%">
             <el-option
@@ -1673,82 +1736,6 @@ function handleSizeChange(size: number) {
                 </div>
               </template>
             </el-alert>
-          </el-form-item>
-        </template>
-
-        <!-- 与 SKU 新建一致：每条采购包装规则都直接换算到唯一库存基本单位 -->
-        <template v-if="form.unit">
-          <el-divider>
-            <span class="divider-title">采购与库存单位换算（可选）</span>
-          </el-divider>
-          <el-alert
-            title="库存始终按上方基本单位记账；采购可按箱、袋、桶等包装单位下单"
-            type="info"
-            :closable="false"
-            show-icon
-            style="margin-bottom: 14px"
-          >
-            <template #default>例如：基本单位选 kg，再配置 1 箱 = 10 kg。采购 8 箱时，系统按快照折算为 80 kg 入库。</template>
-          </el-alert>
-
-          <el-form-item label="包装换算">
-            <div class="material-packaging-spec-list">
-              <div class="packaging-rule-note">
-                一个原料只有一个库存基本单位；下面每一条都是不同采购包装对基本单位的换算规则。
-              </div>
-              <div
-                v-for="(rule, index) in packagingRules"
-                :key="rule.id || `new-${index}`"
-                class="material-packaging-spec-item"
-              >
-                <div class="spec-conversion-row">
-                  <el-tag v-if="index === 0" type="success" size="small">默认</el-tag>
-                  <span v-else class="packaging-rule-index">规则 {{ index + 1 }}</span>
-                  <span class="conversion-label">1</span>
-                  <UnitSelect
-                    v-model="rule.packageUnit"
-                    :factory-id="factoryId"
-                    usage-scope="PURCHASE_QUANTITY"
-                    placeholder="包装单位（如箱）"
-                    class="spec-unit-select"
-                  />
-                  <span class="conversion-equals">=</span>
-                  <el-input-number
-                    v-model="rule.conversionFactor"
-                    :min="0.00000001"
-                    :precision="8"
-                    :controls="false"
-                    placeholder="换算数"
-                    class="spec-factor-input"
-                  />
-                  <el-input
-                    :model-value="displayUnit(form.unit)"
-                    disabled
-                    class="spec-base-unit"
-                  />
-                  <el-button
-                    v-if="index > 0"
-                    type="danger"
-                    link
-                    @click="removePackagingRule(index)"
-                  >
-                    删除
-                  </el-button>
-                </div>
-                <div
-                  v-if="rule.packageUnit && rule.packageUnit.trim().toLowerCase() === form.unit.trim().toLowerCase()"
-                  class="spec-same-warn"
-                >
-                  包装单位不能与库存基本单位相同
-                </div>
-                <div v-else-if="packagingRuleText(rule)" class="spec-echo">
-                  {{ packagingRuleText(rule) }}
-                </div>
-              </div>
-              <el-button class="add-packaging-rule-button" @click="addPackagingRule">
-                添加多包装换算规则
-              </el-button>
-            </div>
           </el-form-item>
         </template>
 
