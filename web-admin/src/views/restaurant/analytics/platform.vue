@@ -461,7 +461,7 @@ function focusChart(key: string) {
     </div>
 
     <div class="platform-side">
-      <AnalysisChatPanel ref="analysisChatPanelRef" :contexts="analysisContexts" page-title="平台分析" />
+      <AnalysisChatPanel ref="analysisChatPanelRef" :factory-id="factoryId" :contexts="analysisContexts" page-title="平台分析" />
     </div>
     </div>
   </div>

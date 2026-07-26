@@ -1,14 +1,133 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const pythonFetchMock = vi.fn();
+const executeIntentMock = vi.fn();
 vi.mock('../common', () => ({
   pythonFetch: (...args: unknown[]) => pythonFetchMock(...args),
   PYTHON_LLM_TIMEOUT_MS: 300000,
   PYTHON_SMARTBI_URL: '/smartbi-api',
   getPythonAuthHeaders: () => ({ 'Content-Type': 'application/json', Authorization: 'Bearer test-token' }),
 }));
+vi.mock('../intent-chat', () => ({
+  executeIntent: (...args: unknown[]) => executeIntentMock(...args),
+}));
 
-import { askRestaurantSynthesis, askRestaurantSynthesisStream } from '../restaurant-synthesis';
+import {
+  askRestaurantIntent,
+  askRestaurantSynthesis,
+  askRestaurantSynthesisStream,
+} from '../restaurant-synthesis';
+
+describe('askRestaurantIntent', () => {
+  beforeEach(() => {
+    executeIntentMock.mockReset();
+  });
+
+  it('uses READ mode and keeps page context separate from the raw question', async () => {
+    executeIntentMock.mockResolvedValue({
+      status: 'NEED_MORE_INFO',
+      message: '你想看哪个时间范围？',
+      formattedText: '',
+      resultData: {
+        source: 'restaurant_ops_gold',
+        charts: [],
+        alerts: [],
+        suggestedFollowups: [
+          { label: '本月', question: '本月哪家店业绩最好' },
+          { label: '最近30天', question: '最近30天哪家店业绩最好' },
+        ],
+      },
+    });
+
+    const result = await askRestaurantIntent(
+      'DEMO_REST',
+      '哪家店业绩最好',
+      'session-1',
+      { pageContext: '页面撤单率 0.55%', dimensionHints: ['void-audit'] },
+    );
+
+    expect(executeIntentMock).toHaveBeenCalledWith(
+      'DEMO_REST',
+      '哪家店业绩最好',
+      {
+        sessionId: 'session-1',
+        mode: 'READ',
+        context: {
+          pageContext: '页面撤单率 0.55%',
+          dimensionHints: ['void-audit'],
+        },
+      },
+    );
+    expect(result).toMatchObject({
+      success: true,
+      answer: '你想看哪个时间范围？',
+      source: 'restaurant_ops_gold',
+      followUpActions: [
+        { label: '本月', question: '本月哪家店业绩最好' },
+        { label: '最近30天', question: '最近30天哪家店业绩最好' },
+      ],
+    });
+  });
+
+  it('normalizes string clarification questions as clickable actions', async () => {
+    executeIntentMock.mockResolvedValue({
+      status: 'NEED_MORE_INFO',
+      message: '请选择门店范围',
+      clarificationQuestions: ['全部门店', '指定门店'],
+      resultData: {},
+    });
+
+    const result = await askRestaurantIntent('DEMO_REST', '本月菜品销量排行');
+
+    expect(result.followUpActions).toEqual([
+      { label: '全部门店', question: '全部门店' },
+      { label: '指定门店', question: '指定门店' },
+    ]);
+  });
+
+  it('normalizes charts returned by the Java-orchestrated comprehensive path', async () => {
+    executeIntentMock.mockResolvedValue({
+      status: 'SUCCESS',
+      message: '综合经营分析',
+      resultData: {
+        source: 'deterministic_fallback',
+        charts: [{
+          chartType: 'bar',
+          title: '门店营收',
+          xAxis: { data: ['A店'] },
+          series: [{ type: 'bar', data: [100] }],
+        }],
+      },
+    });
+
+    const result = await askRestaurantIntent('DEMO_REST', '综合分析最近30天经营情况');
+
+    expect(result.success).toBe(true);
+    expect(result.charts).toEqual([{
+      type: 'bar',
+      title: '门店营收',
+      option: {
+        xAxis: { data: ['A店'] },
+        series: [{ type: 'bar', data: [100] }],
+        yAxis: { type: 'value' },
+      },
+    }]);
+  });
+
+  it('returns an honest failure when the unified orchestrator fails', async () => {
+    executeIntentMock.mockResolvedValue({
+      status: 'ERROR',
+      message: '餐饮意图服务不可用',
+      resultData: null,
+    });
+
+    const result = await askRestaurantIntent('DEMO_REST', '哪家店业绩最好');
+
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('不可用');
+    expect(result.answer).toBe('餐饮意图服务不可用');
+  });
+});
 
 describe('askRestaurantSynthesis', () => {
   beforeEach(() => {

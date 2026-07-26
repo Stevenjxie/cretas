@@ -148,7 +148,7 @@
       </div>
 
       <div class="opa-side">
-        <AnalysisChatPanel ref="analysisChatPanelRef" :contexts="analysisContexts" page-title="运营分析" />
+        <AnalysisChatPanel ref="analysisChatPanelRef" :factory-id="factoryId" :contexts="analysisContexts" page-title="运营分析" />
       </div>
     </div>
   </div>

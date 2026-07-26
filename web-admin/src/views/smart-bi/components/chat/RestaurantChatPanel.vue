@@ -1,20 +1,12 @@
 <script setup lang="ts">
 /**
- * P2 web-admin/mobile synthesis parity (2026-07-11):
+ * Restaurant free-form chat.
  *
- * This panel now calls the Python comprehensive-synthesis engine directly
- * (askRestaurantSynthesis → POST /api/smartbi/synthesis/comprehensive) —
- * the SAME endpoint mobile-rest-ai/ uses — instead of the Java intent
- * executor (askRestaurantQuestion). That path never reached the synthesis
- * engine, so 成本率/供应商价格异常(反回扣)/同比环比/加权毛利率 questions
- * returned empty data on web-admin (verified) even though mobile answered
- * them correctly. The Java-intent path (askRestaurantQuestion, owner-action
- * scenario chaining, sections/followUpChips) is untouched in
- * `@/api/smartbi/restaurant-chat` and still covered by its own tests — this
- * panel just no longer calls it as the primary Q&A path.
- *
- * Tenant scope is derived by the backend from the JWT (request.state.factory_id
- * via auth_middleware) — `props.factoryId` is not sent explicitly.
+ * Every user turn enters through the unified Java intent orchestrator. It owns
+ * query planning, missing-time/store clarification, session continuation,
+ * narrow Gold reads and comprehensive-synthesis fallback. Calling Python
+ * synthesis directly here would bypass those contracts and make page behavior
+ * disagree with the same question sent through the canonical API.
  */
 import { ref, nextTick } from 'vue';
 import { ElInput, ElButton, ElMessage, ElMessageBox } from 'element-plus';
@@ -22,8 +14,7 @@ import ChatBubble from './ChatBubble.vue';
 import ChatTypingIndicator from './ChatTypingIndicator.vue';
 import GrossMarginDeclineRun from './GrossMarginDeclineRun.vue';
 import {
-  askRestaurantSynthesis,
-  askRestaurantSynthesisStream,
+  askRestaurantIntent,
   sendRestaurantAnswerFeedback,
 } from '@/api/smartbi/restaurant-synthesis';
 import type { RestaurantSynthesisResult } from '@/api/smartbi/restaurant-synthesis';
@@ -33,9 +24,8 @@ import type { ChatTurn } from '@/types/restaurant-chat';
 // the tenant from the JWT). It intentionally does NOT read the dashboard's
 // selected upload-Excel — that upload-driven Q&A is a separate surface. The
 // former subSector/uploadId props were passed but ignored, so they are dropped
-// here (and unbound in the parent) to avoid misleading callers. factoryId is
-// kept for potential display use; it is not sent to the API.
-defineProps<{
+// here (and unbound in the parent) to avoid misleading callers.
+const props = defineProps<{
   factoryId: string;
   agentRunEligible: boolean;
   startDate: string;
@@ -51,13 +41,8 @@ const chatContainer = ref<HTMLElement | null>(null);
 // (smartbi.services.chat_session_service.ChatSessionService). Reset on
 // clearConversation — a fresh conversation should not inherit old context.
 const sessionId = ref<string>(crypto.randomUUID());
-// Streaming status line ("正在读取经营数据…") shown while the in-flight AI
-// turn has no content yet. Cleared on first chunk / done / error.
+// Non-blocking status line shown while the canonical intent route is running.
 const streamStatus = ref('');
-
-/** Throttle window for flushing streamed chunks into the reactive turn —
- * ChatBubble re-parses markdown on every content change, so batch ~80ms. */
-const STREAM_FLUSH_MS = 80;
 
 function pushErrorTurn(errMsg: string) {
   turns.value.push({
@@ -74,6 +59,7 @@ function applyResult(turn: ChatTurn, response: RestaurantSynthesisResult, query:
   turn.content = response.answer || turn.content || '已完成分析';
   turn.charts = response.charts;
   turn.alerts = response.alerts;
+  turn.followUpActions = response.followUpActions;
   turn.source = response.source;
   turn.sourceQuery = query;
 }
@@ -93,80 +79,28 @@ async function sendMessage(text?: string) {
   await scrollToBottom();
 
   isTyping.value = true;
-  streamStatus.value = '';
-
-  // Create the AI turn immediately — chunks stream into it progressively.
-  const aiTurn: ChatTurn = {
-    id: crypto.randomUUID(),
-    role: 'ai',
-    content: '',
-    timestamp: Date.now(),
-  };
-  turns.value.push(aiTurn);
-
-  let receivedChunk = false;
-  let pendingChunk = '';
-  let flushTimer: ReturnType<typeof setTimeout> | undefined;
-  const flushChunks = () => {
-    flushTimer = undefined;
-    if (!pendingChunk) return;
-    aiTurn.content += pendingChunk;
-    pendingChunk = '';
-    void scrollToBottom();
-  };
+  streamStatus.value = '正在识别问题并读取经营数据…';
 
   try {
-    const doneHolder: { result: RestaurantSynthesisResult | null } = { result: null };
-    await askRestaurantSynthesisStream(query, sessionId.value, {
-      onStatus: (statusText) => {
-        if (!receivedChunk) streamStatus.value = statusText;
-      },
-      onChunk: (chunk) => {
-        receivedChunk = true;
-        streamStatus.value = '';
-        pendingChunk += chunk;
-        if (flushTimer === undefined) {
-          flushTimer = setTimeout(flushChunks, STREAM_FLUSH_MS);
-        }
-      },
-      onCharts: (charts) => {
-        if (charts.length) aiTurn.charts = charts;
-      },
-      onDone: (result) => {
-        doneHolder.result = result;
-      },
-    });
-    if (flushTimer !== undefined) clearTimeout(flushTimer);
-    flushChunks();
-    if (doneHolder.result) {
-      applyResult(aiTurn, doneHolder.result, query);
+    const response = await askRestaurantIntent(
+      props.factoryId,
+      query,
+      sessionId.value,
+    );
+    if (response.success) {
+      const aiTurn: ChatTurn = {
+        id: crypto.randomUUID(),
+        role: 'ai',
+        content: '',
+        timestamp: Date.now(),
+      };
+      applyResult(aiTurn, response, query);
+      turns.value.push(aiTurn);
     } else {
-      // Defensive: stream resolved without done — keep streamed text, mark source.
-      aiTurn.sourceQuery = query;
+      pushErrorTurn(response.error || '分析失败，请稍后重试');
     }
   } catch (error: unknown) {
-    if (flushTimer !== undefined) clearTimeout(flushTimer);
-    flushChunks();
-    streamStatus.value = '';
-    if (!receivedChunk && !aiTurn.content) {
-      // Automatic fallback: stream failed before any content — retry once via
-      // the non-stream endpoint so users on proxies that break SSE still get
-      // an answer. (Honest failure if that also fails; 禁止降级处理.)
-      const response = await askRestaurantSynthesis(query, sessionId.value);
-      if (response.success) {
-        applyResult(aiTurn, response, query);
-      } else {
-        const errMsg = response.error || '分析失败，请稍后重试';
-        turns.value.splice(turns.value.indexOf(aiTurn), 1);
-        pushErrorTurn(errMsg);
-      }
-    } else {
-      // Stream broke mid-answer: keep the partial text, surface the honest error.
-      const errMsg = error instanceof Error ? error.message : String(error);
-      aiTurn.error = errMsg;
-      aiTurn.content = `${aiTurn.content}\n\n**（流式输出中断）** ${errMsg}`;
-      ElMessage.error('聊天请求失败: ' + errMsg);
-    }
+    pushErrorTurn(error instanceof Error ? error.message : String(error));
   } finally {
     isTyping.value = false;
     streamStatus.value = '';
@@ -258,7 +192,24 @@ defineExpose({
         <ChatBubble
           v-if="turn.role !== 'ai' || turn.content || turn.error || (turn.alerts && turn.alerts.length)"
           :turn="turn"
-        />
+        >
+          <template #followups>
+            <div
+              v-if="turn.role === 'ai' && turn.followUpActions?.length"
+              class="chat-followups"
+            >
+              <el-button
+                v-for="action in turn.followUpActions"
+                :key="action.question"
+                size="small"
+                round
+                @click="sendMessage(action.question)"
+              >
+                {{ action.label }}
+              </el-button>
+            </div>
+          </template>
+        </ChatBubble>
         <div
           v-if="turn.role === 'ai' && !turn.error && turn.sourceQuery"
           class="chat-feedback-row"
@@ -386,6 +337,12 @@ defineExpose({
   font-style: italic;
   color: #8a8378;
   padding: 2px 4px 8px;
+}
+.chat-followups {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 12px;
 }
 .chat-feedback-row {
   display: flex;

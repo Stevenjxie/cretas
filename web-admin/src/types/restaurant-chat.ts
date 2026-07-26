@@ -7,7 +7,11 @@
  */
 
 import type { ChartConfig } from '@/api/smartbi/common';
-import type { SynthesisAlert, SynthesisChart } from '@/api/smartbi/restaurant-synthesis';
+import type {
+  SynthesisAlert,
+  SynthesisChart,
+  SynthesisFollowUpAction,
+} from '@/api/smartbi/restaurant-synthesis';
 
 /** Output from one Python section endpoint (one entry in sections array) */
 export interface SectionPayload {
@@ -30,6 +34,8 @@ export interface ChatTurn {
   skillName?: string;
   sections?: SectionPayload[];
   followUpChips?: string[];
+  /** Short button label + full canonical question from the intent response. */
+  followUpActions?: SynthesisFollowUpAction[];
   error?: string;
   // P2 synthesis (2026-07-11): comprehensive-synthesis charts/alerts.
   // `content` for a synthesis turn is markdown (rendered via ChatBubble).

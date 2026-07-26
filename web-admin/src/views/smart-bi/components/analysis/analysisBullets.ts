@@ -9,8 +9,9 @@
  *   a fabricated fact. Callers render nothing when the array is empty.
  * - `*Bullets()` = human-readable sentences for on-page display.
  * - `*Summary()` = compact "N人/¥X" strings embedded into the AI query so the
- *   governed askRestaurantSynthesis() call reasons over the EXACT numbers the
- *   user sees (the "grounding trick" — no backend change needed).
+ *   dedicated chart-interpretation synthesis call reasons over the EXACT
+ *   numbers the user sees. Free-form questions are routed separately through
+ *   the unified Java intent orchestrator.
  *
  * This file is page-agnostic infrastructure (see splitMarkdownBullets, used
  * by the shared ChartInsights.vue). The `member*` builders are the first

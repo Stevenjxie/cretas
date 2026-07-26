@@ -5,11 +5,11 @@
  * Two tiers, both shown under a chart:
  *   1. Deterministic bullets (props.bullets) — always rendered, 0 LLM, computed
  *      by the page from its own real refs (see analysisBullets.ts builders).
- *   2. On-demand AI 解读 — user clicks 「🤖 AI 解读」 → calls the SAME governed
- *      askRestaurantSynthesis() the page's AnalysisChatPanel uses (no new LLM
- *      endpoint), embedding this chart's `dataSummary` (real numbers) so the
- *      answer is grounded in what's on screen. Cached in-component after the
- *      first successful load (re-click re-fires — 用户驱动, never auto-fires).
+ *   2. On-demand AI 解读 — user clicks 「🤖 AI 解读」 → sends a fixed,
+ *      non-free-form chart-interpretation task directly to governed synthesis,
+ *      embedding this chart's `dataSummary` (real numbers) so the answer is
+ *      grounded in what's on screen. Free-form chat does NOT use this path; it
+ *      enters through the unified Java intent orchestrator.
  *
  * Also emits `focus` so the page can point its AnalysisChatPanel at this
  * specific chart (multi-turn 聚焦 conversation) — see member-analysis/index.vue.
