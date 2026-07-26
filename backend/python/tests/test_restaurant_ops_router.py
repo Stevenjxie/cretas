@@ -1160,10 +1160,23 @@ def test_gross_margin_prohibited_actions_uses_real_low_margin_candidate(monkeypa
             "window_start": date(2026, 7, 1),
             "window_end": date(2026, 7, 21),
         },
+        {
+            "product_id": "POS-RICE",
+            "dish_name": "米饭",
+            "normalized_name": "米饭",
+            "category": "主食",
+            "sub_category": "米饭",
+            "total_qty": 100.0,
+            "total_revenue": 3000.0,
+            "bills": 80,
+            "window_start": date(2026, 7, 1),
+            "window_end": date(2026, 7, 21),
+        },
     ]
     cost_rows = [
         {"product_source_pk": "PT-LOW", "food_cost": 18.0},
         {"product_source_pk": "PT-HIGH", "food_cost": 20.0},
+        {"product_source_pk": "PT-RICE", "food_cost": 29.0},
     ]
 
     class _SmartBIConnection:
@@ -1194,6 +1207,7 @@ def test_gross_margin_prohibited_actions_uses_real_low_margin_candidate(monkeypa
                 return [
                     {"id": "PT-LOW", "name": "低毛利菜"},
                     {"id": "PT-HIGH", "name": "高毛利菜"},
+                    {"id": "PT-RICE", "name": "米饭"},
                 ]
             raise AssertionError(f"unexpected Cretas query: {query}")
 
@@ -1221,6 +1235,8 @@ def test_gross_margin_prohibited_actions_uses_real_low_margin_candidate(monkeypa
     assert "风险" in result.answer_text
     assert "最小验证" in result.answer_text
     assert "当前低毛利候选是低毛利菜" in result.answer_text
+    assert "当前低毛利候选是米饭" not in result.answer_text
+    assert "米饭/附属用品仅计入总额、不参与主菜排名与建议" in result.answer_text
 
 
 def test_gross_margin_uses_smartbi_cost_product_fallback_when_erp_seed_is_gone(
@@ -1399,6 +1415,62 @@ def test_margin_reference_lines_only_use_explicit_user_values():
         {"name": "预警值", "yAxis": 60.0},
     ]
     assert parse_lines("加入计划值和预警值参照线") == []
+
+
+def test_revenue_reference_lines_parse_explicit_yuan_values():
+    assert _r._parse_revenue_reference_lines(
+        "每日营业额曲线，计划值10万元，预警值8万元"
+    ) == [
+        {"name": "计划值", "yAxis": 100000.0},
+        {"name": "预警值", "yAxis": 80000.0},
+    ]
+    assert _r._parse_revenue_reference_lines("加入计划值和预警值") == []
+
+
+def test_daily_revenue_chart_includes_reference_lines_and_quadratic_fit(monkeypatch):
+    daily = [
+        {
+            "date": f"2026-07-{day:02d}",
+            "revenue": float(1000 + 25 * day + 3 * day * day),
+            "bill_count": 10,
+        }
+        for day in range(1, 11)
+    ]
+    bundle = {
+        "weekdayWeekend": {},
+        "dailyTrend": daily,
+        "monthlyTrend": [{"month": "2026-07", "revenue": sum(
+            item["revenue"] for item in daily
+        )}],
+    }
+
+    async def _fake_trend_bundle(pool, factory_id, date_range):
+        return bundle
+
+    import smartbi.gold.queries as _q
+    monkeypatch.setattr(_q, "trend_bundle", _fake_trend_bundle)
+    answer = asyncio.run(_r.resolve_trend_analysis(
+        object(),
+        "RES_TEST",
+        role="restaurant_manager",
+        date_range=(date(2026, 7, 1), date(2026, 7, 10)),
+        query=(
+            "用二次函数拟合最近10天全部门店每日营业额曲线，"
+            "计划值10万元，预警值8万元"
+        ),
+    ))
+
+    assert answer.charts[0]["title"].startswith("每日营收趋势")
+    assert answer.charts[0]["xAxis"]["data"][0] == "2026-07-01"
+    assert answer.charts[0]["series"][0]["markLine"]["data"] == [
+        {"name": "计划值", "yAxis": 100000.0},
+        {"name": "预警值", "yAxis": 80000.0},
+    ]
+    assert answer.charts[0]["series"][1]["name"] == "二次趋势拟合"
+    assert answer.meta["quadratic_fit"]["r_squared"] > 0.999
+    assert answer.meta["daily_point_count"] == 10
+    assert len(answer.meta["export_rows"]) == 10
+    assert "不代表" in answer.answer_text
 
 
 def test_partial_latest_month_uses_same_day_count_comparison(monkeypatch):
@@ -2588,6 +2660,32 @@ def test_dish_scoped_answer_prepends_sales_header():
     assert [item["title"] for item in result.kpis] == ["销量", "营收", "订单数"]
     assert "总毛利" not in {item["title"] for item in result.kpis}
     assert result.meta.get("targetDish") == "米饭(单人份)"
+
+
+def test_named_dish_positive_fractional_quantity_is_never_rendered_as_zero():
+    rows = [{
+        "product_id": 21,
+        "dish_name": "享库1.8斤波龙套餐399",
+        "normalized_name": "享库1.8斤波龙套餐399",
+        "category": "主菜",
+        "sub_category": "套餐",
+        "total_qty": 0.4,
+        "total_revenue": 190.76,
+        "bills": 1,
+        "window_start": date(2026, 7, 1),
+        "window_end": date(2026, 7, 25),
+    }]
+
+    result = asyncio.run(_r.resolve_gross_margin(
+        _gross_margin_pool(rows),
+        "RES_TEST",
+        role="restaurant_manager",
+        query="本月享库1.8斤波龙套餐399的销量是多少",
+    ))
+
+    assert "销量 **不足 1 份**" in result.answer_text
+    assert "销量 **0 份**" not in result.answer_text
+    assert result.kpis[0]["value"] == "不足 1 份"
 
 
 @pytest.mark.parametrize(

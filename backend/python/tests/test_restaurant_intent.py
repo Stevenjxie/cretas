@@ -31,6 +31,9 @@ from smartbi.gold.restaurant_intent import (
     _build_spec,
     _detect_comparison,
     _detect_dimensions,
+    _explicit_named_dish_metric_spec,
+    _explicit_revenue_trend_spec,
+    _explicit_store_operations_spec,
     _trusted_context_dish_followup_spec,
     _verbatim_entity,
 )
@@ -288,7 +291,12 @@ async def test_explicit_dish_sales_contract_repairs_live_llm_failure_shape(
     assert spec.clarification_needed is False
     assert spec.clarification_question is None
     assert spec.dish_slot == expected_dish
-    assert spec.planner_authority == "llm_contract_repair"
+    if expected_dish:
+        assert spec.planner_authority == "explicit_named_dish_slots"
+        llm.assert_not_awaited()
+    else:
+        assert spec.planner_authority == "llm_contract_repair"
+        llm.assert_awaited_once()
 
 
 @pytest.mark.asyncio
@@ -717,7 +725,7 @@ async def test_trusted_named_store_dish_followup_survives_planner_outage(
 
 
 @pytest.mark.asyncio
-async def test_same_dish_text_without_trusted_context_still_fails_closed():
+async def test_fully_slotted_named_dish_executes_without_t3():
     query = "最近7天全部门店招牌青花椒味(单人份)的成本和毛利呢？"
     with patch(
         "smartbi.gold.restaurant_intent._t3_llm_parse",
@@ -730,21 +738,16 @@ async def test_same_dish_text_without_trusted_context_still_fails_closed():
         )
 
     assert spec is not None
-    assert spec.intent == ""
-    assert spec.planner_authority == "llm_unavailable"
-    t3.assert_awaited_once()
+    assert spec.intent == "RESTAURANT_OPS_GROSS_MARGIN"
+    assert spec.planner_authority == "explicit_named_dish_slots"
+    assert spec.requested_metrics == ("recipe_cost", "gross_margin")
+    assert spec.dish_slot == "招牌青花椒味(单人份)"
+    t3.assert_not_awaited()
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "query",
-    [
-        "全部门店招牌青花椒味(单人份)的成本和毛利呢？",
-        "最近7天招牌青花椒味(单人份)的成本和毛利呢？",
-        "最近7天全部门店招牌青花椒味(单人份)的成本怎么优化？",
-    ],
-)
-async def test_incomplete_or_advisory_trusted_followup_still_fails_closed(query):
+async def test_named_dish_without_time_still_fails_closed():
+    query = "全部门店招牌青花椒味(单人份)的成本和毛利呢？"
     with patch(
         "smartbi.gold.restaurant_intent._t3_llm_parse",
         new=AsyncMock(return_value=None),
@@ -760,6 +763,30 @@ async def test_incomplete_or_advisory_trusted_followup_still_fails_closed(query)
     assert spec.intent == ""
     assert spec.planner_authority == "llm_unavailable"
     t3.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_trusted_named_dish_optimization_executes_without_t3():
+    query = "最近7天全部门店招牌青花椒味(单人份)的成本怎么优化？"
+    with patch(
+        "smartbi.gold.restaurant_intent._t3_llm_parse",
+        new=AsyncMock(side_effect=AssertionError("typed optimization must not call T3")),
+    ) as t3:
+        spec = await parse_restaurant_query(
+            query,
+            _restaurant_pool(),
+            factory_id="DEMO_REST",
+            trusted_followup_context=True,
+        )
+
+    assert spec is not None
+    assert spec.intent == "RESTAURANT_OPS_GROSS_MARGIN"
+    assert spec.analysis_action == "optimize"
+    assert spec.planner_authority in {
+        "trusted_context",
+        "trusted_context_contract_repair",
+    }
+    t3.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -1968,13 +1995,119 @@ def test_store_only_switch_freezes_dish_metric_and_window(
     "query",
     [
         "最近7天全部门店库存预警",
-        "最近7天全部门店抖音松叶蟹368套餐为什么销量低",
         "最近7天全部门店抖音松叶蟹368套餐营收和上个月对比",
         "换成最近7天看天气对销量的影响",
     ],
 )
-def test_trusted_context_dish_plan_still_rejects_non_lookup_shapes(query):
+def test_trusted_context_dish_plan_still_rejects_unsafe_shapes(query):
     assert _trusted_context_dish_followup_spec(query) is None
+
+
+@pytest.mark.parametrize("action", ("销量为什么是这样", "销量怎么优化"))
+def test_trusted_context_dish_plan_accepts_typed_diagnosis_and_optimization(action):
+    spec = _trusted_context_dish_followup_spec(
+        f"最近7天全部门店抖音松叶蟹368套餐的{action}"
+    )
+
+    assert spec is not None
+    assert spec.dish_slot == "抖音松叶蟹368套餐"
+    assert spec.analysis_action in {"diagnose", "optimize"}
+    assert spec.planned_intents == ("RESTAURANT_OPS_GROSS_MARGIN",)
+
+
+@pytest.mark.parametrize(
+    "followup",
+    (
+        "第一名为什么卖得好",
+        "第一名的成本和毛利呢",
+        "第1名销量怎么优化",
+    ),
+)
+def test_ordinal_followup_restores_ranked_dish_context(followup):
+    parent = {
+        "parent_query": "最近7天全部门店菜品销量排行",
+        "parent_template_code": "RESTAURANT_OPS_GROSS_MARGIN",
+        "structured_context": {
+            "focus_entity": {
+                "type": "dish",
+                "name": "招牌青花椒味(单人份)",
+                "rank": 1,
+            },
+            "window_label": "最近7天",
+            "requested_metrics": ["sales_volume"],
+            "store_scope": "all",
+            "store_names": [],
+        },
+    }
+
+    effective, inherited = contextualize_restaurant_followup(followup, parent)
+
+    assert inherited is True
+    assert "招牌青花椒味(单人份)" in effective
+    assert "最近7天" in effective
+    assert "全部门店" in effective
+    assert "第一名" not in effective and "第1名" not in effective
+
+
+def test_explicit_named_dish_multi_store_metrics_compile_without_llm():
+    query = (
+        "最近7天青花椒南方百联店和青花椒徐汇光启城店的"
+        "招牌青花椒味(单人份)成本和毛利分别是多少"
+    )
+    spec = _explicit_named_dish_metric_spec(query)
+
+    assert spec is not None
+    assert spec.intent == "RESTAURANT_OPS_STORE_MARGIN"
+    assert spec.store_scope == "multiple"
+    assert spec.store_slots == (
+        "青花椒南方百联店",
+        "青花椒徐汇光启城店",
+    )
+    assert spec.dish_slot == "招牌青花椒味(单人份)"
+    assert spec.requested_metrics == ("recipe_cost", "gross_margin")
+    assert spec.planner_authority == "explicit_named_dish_slots"
+
+
+def test_explicit_daily_revenue_curve_keeps_chart_and_export_as_one_plan():
+    query = (
+        "用二次函数拟合最近30天全部门店每日营业额曲线；"
+        "如果无法绘图，请提供可导出的日期和营业额字段"
+    )
+    spec = _explicit_revenue_trend_spec(query)
+
+    assert spec is not None
+    assert spec.intent == "RESTAURANT_OPS_TREND_ANALYSIS"
+    assert spec.requested_metrics == ("revenue",)
+    assert spec.asks_export is True
+    assert spec.planner_authority == "explicit_revenue_trend"
+
+
+def test_explicit_single_store_operations_uses_store_margin_plan():
+    spec = _explicit_store_operations_spec(
+        "最近30天青花椒南方百联店的经营情况怎么样"
+    )
+
+    assert spec is not None
+    assert spec.intent == "RESTAURANT_OPS_STORE_MARGIN"
+    assert spec.store_scope == "single"
+    assert spec.store_slots == ("青花椒南方百联店",)
+    assert spec.dimensions == ("store",)
+    assert spec.planner_authority == "explicit_store_operations"
+
+
+@pytest.mark.asyncio
+async def test_net_profit_and_table_turnover_disclose_both_missing_dimensions():
+    spec = await parse_restaurant_query(
+        "最近30天全部门店的净利润和翻台率是多少？缺数据不要猜",
+        _restaurant_pool(),
+        factory_id="DEMO_REST",
+    )
+
+    assert spec is not None
+    assert spec.clarification_needed is True
+    assert spec.unsupported_requirements == ("net_profit", "table_turnover")
+    assert "净利润" in (spec.clarification_question or "")
+    assert "翻台率" in (spec.clarification_question or "")
 
 
 def test_dish_metric_button_followup_restores_entity_window_and_store_scope():

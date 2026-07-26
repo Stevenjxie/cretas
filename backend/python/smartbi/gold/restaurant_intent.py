@@ -39,6 +39,7 @@ from smartbi.gold.restaurant_ops_router import (
     demo_data_factory_for_code,
     dish_ranking_direction,
     extract_dish_candidate,
+    extract_dish_candidates,
     extract_store_mention,
     extract_store_mentions,
     match_restaurant_ops,
@@ -65,6 +66,9 @@ TRUSTED_PLANNER_AUTHORITIES = frozenset({
     "explicit_comparison_slots",
     "explicit_comparison_slots_contract_repair",
     "explicit_action_read_choice",
+    "explicit_named_dish_slots",
+    "explicit_revenue_trend",
+    "explicit_store_operations",
     "trusted_context",
     "trusted_context_contract_repair",
 })
@@ -333,6 +337,7 @@ def optimization_clarification_question(query: str) -> Optional[str]:
 
 _REQUEST_METRIC_RULES: Tuple[Tuple[str, Tuple[str, ...]], ...] = (
     ("net_profit", ("净利润", "净利率", "净利润率", "经营利润", "实际利润", "净赚")),
+    ("table_turnover", ("翻台率", "翻台")),
     ("recipe_cost", ("菜品成本", "食材成本", "配方成本", "单品成本", "成本")),
     ("wastage", ("食材损耗", "损耗", "浪费", "报损", "腐坏", "过期")),
     ("sales_volume", (
@@ -352,12 +357,13 @@ _REQUEST_METRIC_RULES: Tuple[Tuple[str, Tuple[str, ...]], ...] = (
 )
 
 _UNSUPPORTED_REQUIREMENTS = frozenset({
-    "net_profit", "return_rate", "customer_review", "production_time",
+    "net_profit", "table_turnover", "return_rate", "customer_review", "production_time",
     "service_speed", "process_bottleneck",
 })
 
 _UNSUPPORTED_REQUIREMENT_LABELS = {
     "net_profit": "净利润（缺少费用、税费及其他收支）",
+    "table_turnover": "翻台率（缺少桌台、开台/结账时间、就餐轮次和可用桌数）",
     "return_rate": "退菜率（缺少退菜时间、菜品、数量、原因和责任门店）",
     "customer_review": "顾客评价（缺少评分、评价文本、时间、菜品与门店）",
     "production_time": "菜品制作时长（缺少开始制作和完成时间）",
@@ -578,6 +584,9 @@ _FOLLOWUP_PREFIXES = (
     "如何", "下一步", "先做", "换成", "改成", "换回", "改回", "哪些动作", "先别", "明天看",
     "和上", "与上", "跟上", "比上", "呢",
 )
+_ORDINAL_FOLLOWUP_RE = re.compile(
+    r"^第(?:[一二三四五六七八九十百千万两\d]{1,8})名(?:的)?"
+)
 _NEW_TOPIC_TOKENS = ("换个话题", "换一个问题", "另一个问题", "另外问", "新话题")
 _CONTEXT_METRIC_LABELS = {
     "sales_volume": "销量",
@@ -712,7 +721,7 @@ def _strip_followup_reference(text: str) -> str:
     """Remove only discourse/pronoun scaffolding, never metric words."""
     body = re.sub(
         r"^(?:那|这个|那个)?(?:它|这道菜|那道菜|那个菜|这个菜|"
-        r"该菜|这家店|那家店|该店|第一名)(?:的)?[，, ]*",
+        r"该菜|这家店|那家店|该店|第[一二三四五六七八九十百千万两\d]{1,8}名)(?:的)?[，, ]*",
         "",
         text,
         count=1,
@@ -807,6 +816,7 @@ def contextualize_restaurant_followup(
         len(current) <= 32
         and (
             current.startswith(_FOLLOWUP_PREFIXES)
+            or _ORDINAL_FOLLOWUP_RE.match(current)
             or current.endswith(("呢", "吗", "怎么办", "为什么", "如何", "怎么样", "合理"))
             or any(
                 token in current
@@ -942,12 +952,14 @@ def contextualize_restaurant_followup(
         # trusted context resolve pronoun-led dish/store follow-ups first.
         context_reference = (
             re.match(
-                r"^(?:它|这个菜|这道菜|那个菜|那道菜|该菜|第一名)(?:的)?",
+                r"^(?:它|这个菜|这道菜|那个菜|那道菜|该菜|"
+                r"第[一二三四五六七八九十百千万两\d]{1,8}名)(?:的)?",
                 entity_source,
             )
             if entity_type == "dish"
             else re.match(
-                r"^(?:它|这个店|那个店|这家店|那家店|该店|第一名)(?:的)?",
+                r"^(?:它|这个店|那个店|这家店|那家店|该店|"
+                r"第[一二三四五六七八九十百千万两\d]{1,8}名)(?:的)?",
                 entity_source,
             )
         )
@@ -1083,7 +1095,8 @@ def contextualize_restaurant_followup(
         if top_dish_match:
             top_dish = top_dish_match.group(1).strip()
             resolved = re.sub(
-                r"^(?:那|这个|那个)?(?:它|这道菜|那个菜|这个菜|第一名)(?:的)?",
+                r"^(?:那|这个|那个)?(?:它|这道菜|那个菜|这个菜|"
+                r"第[一二三四五六七八九十百千万两\d]{1,8}名)(?:的)?",
                 f"{top_dish}的",
                 current,
                 count=1,
@@ -1884,6 +1897,194 @@ def _explicit_store_dish_ranking_spec(
     return spec
 
 
+_EXPLICIT_READ_MUTATION_TOKENS = (
+    "下架", "上架", "停售", "删除", "停用", "启用",
+    "调价", "改价", "涨价", "降价", "创建活动", "发券",
+)
+_EXPLICIT_NAMED_DISH_METRICS = frozenset({
+    "sales_volume",
+    "revenue",
+    "recipe_cost",
+    "gross_margin",
+})
+
+
+def _explicit_named_dish_metric_spec(
+    query: str,
+    *,
+    is_continuation: bool = False,
+) -> Optional[RestaurantQuerySpec]:
+    """Compile a fully slotted, read-only single-dish metric request.
+
+    A named dish, supported metric set and explicit time are semantic facts,
+    not keyword guesses. Concrete stores select the store×dish resolver;
+    all-store or not-yet-selected scope selects the all-store dish resolver
+    and the normal store-scope guard may still ask the user to choose.
+    """
+    text = (query or "").strip()
+    if (
+        not text
+        or any(token in text for token in _EXPLICIT_RANKING_NEGATION_TOKENS)
+        or any(token in text for token in _EXPLICIT_READ_MUTATION_TOKENS)
+        or _detect_comparison(text) is not None
+        or _detect_ranking_direction(text) is not None
+    ):
+        return None
+
+    dish_candidates = extract_dish_candidates(text)
+    requested_metrics = _detect_requested_metrics(text)
+    start_date, end_date = _resolve_sales_date_range(text)[0]
+    store_scope, store_slots = _detect_store_scope(text)
+    if (
+        len(dish_candidates) != 1
+        or not requested_metrics
+        or not set(requested_metrics).issubset(_EXPLICIT_NAMED_DISH_METRICS)
+        or start_date is None
+        or end_date is None
+        or ((start_date is None) != (end_date is None))
+        or store_scope not in {None, "all", "single", "multiple"}
+        or (store_scope == "single" and len(store_slots) != 1)
+        or (store_scope == "multiple" and len(store_slots) < 2)
+        or _detect_analysis_action(text) not in {"lookup", "diagnose", "optimize"}
+    ):
+        return None
+
+    selected_code = (
+        "RESTAURANT_OPS_STORE_MARGIN"
+        if store_scope in {"single", "multiple"}
+        else "RESTAURANT_OPS_GROSS_MARGIN"
+    )
+    spec = _build_spec(
+        selected_code,
+        text,
+        confidence=1.0,
+        tier="explicit_slots",
+        planner_authority="explicit_named_dish_slots",
+        is_continuation=is_continuation,
+        require_explicit_time=True,
+    )
+    if (
+        spec.clarification_needed
+        or spec.intent != selected_code
+        or spec.dish_slot != dish_candidates[0]
+        or spec.requested_metrics != requested_metrics
+        or spec.planned_intents != (selected_code,)
+        or "dish" not in spec.dimensions
+        or not set(spec.dimensions).issubset({"store", "dish"})
+        or spec.store_scope != store_scope
+        or spec.store_slots != store_slots
+        or spec.unsupported_requirements
+        or spec.asks_priority
+        or spec.asks_prohibited_actions
+        or spec.asks_export
+    ):
+        return None
+    return spec
+
+
+def _explicit_revenue_trend_spec(
+    query: str,
+    *,
+    is_continuation: bool = False,
+) -> Optional[RestaurantQuerySpec]:
+    """Compile a time-scoped revenue chart/trend request without T3 drift."""
+    text = (query or "").strip()
+    visual_signal = any(token in text for token in (
+        "趋势", "走势", "曲线", "图表", "绘图", "画图", "按日", "每日", "每天",
+        "逐日", "二次函数", "二次拟合", "参照线", "计划线", "预警线",
+    ))
+    requested_metrics = _detect_requested_metrics(text)
+    start_date, end_date = _resolve_sales_date_range(text)[0]
+    store_scope, store_slots = _detect_store_scope(text)
+    if (
+        not visual_signal
+        or requested_metrics != ("revenue",)
+        or start_date is None
+        or end_date is None
+        or extract_dish_candidate(text)
+        or _detect_analysis_action(text) != "lookup"
+        or _detect_comparison(text) is not None
+        or any(token in text for token in _EXPLICIT_READ_MUTATION_TOKENS)
+        or store_scope not in {None, "all"}
+        or store_slots
+    ):
+        return None
+
+    spec = _build_spec(
+        "RESTAURANT_OPS_TREND_ANALYSIS",
+        text,
+        confidence=1.0,
+        tier="explicit_slots",
+        planner_authority="explicit_revenue_trend",
+        is_continuation=is_continuation,
+        require_explicit_time=True,
+    )
+    if (
+        spec.clarification_needed
+        or spec.intent != "RESTAURANT_OPS_TREND_ANALYSIS"
+        or spec.requested_metrics != ("revenue",)
+        or spec.planned_intents != ("RESTAURANT_OPS_TREND_ANALYSIS",)
+        or spec.dish_slot
+        or not set(spec.dimensions).issubset({"store"})
+        or spec.unsupported_requirements
+        or spec.asks_priority
+        or spec.asks_prohibited_actions
+    ):
+        return None
+    return spec
+
+
+def _explicit_store_operations_spec(
+    query: str,
+    *,
+    is_continuation: bool = False,
+) -> Optional[RestaurantQuerySpec]:
+    """Compile one concrete store's time-scoped operating overview."""
+    text = (query or "").strip()
+    asks_overview = any(token in text for token in (
+        "经营情况", "经营表现", "经营概况", "经营数据", "生意怎么样",
+    ))
+    store_scope, store_slots = _detect_store_scope(text)
+    start_date, end_date = _resolve_sales_date_range(text)[0]
+    if (
+        not asks_overview
+        or store_scope != "single"
+        or len(store_slots) != 1
+        or start_date is None
+        or end_date is None
+        or extract_dish_candidate(text)
+        or _detect_analysis_action(text) != "lookup"
+        or _detect_comparison(text) is not None
+        or any(token in text for token in _EXPLICIT_READ_MUTATION_TOKENS)
+    ):
+        return None
+
+    spec = _build_spec(
+        "RESTAURANT_OPS_STORE_MARGIN",
+        text,
+        confidence=1.0,
+        tier="explicit_slots",
+        planner_authority="explicit_store_operations",
+        is_continuation=is_continuation,
+        require_explicit_time=True,
+    )
+    if (
+        spec.clarification_needed
+        or spec.intent != "RESTAURANT_OPS_STORE_MARGIN"
+        or spec.planned_intents != ("RESTAURANT_OPS_STORE_MARGIN",)
+        or spec.store_scope != "single"
+        or spec.store_slots != store_slots
+        or set(spec.dimensions) != {"store"}
+        or spec.dish_slot
+        or spec.unsupported_requirements
+        or spec.asks_priority
+        or spec.asks_prohibited_actions
+        or spec.asks_export
+    ):
+        return None
+    return spec
+
+
 _TRUSTED_CONTEXT_DISH_METRICS = frozenset({
     "sales_volume",
     "revenue",
@@ -1906,20 +2107,23 @@ def _trusted_context_dish_followup_spec(
     reconstructed from the authenticated chat session. Execution is granted
     only when the rebuilt sentence contains every deterministic slot required
     for a single-dish lookup: explicit date window, explicit store scope,
-    explicit dish, and a supported metric set. Diagnosis, optimisation,
-    comparison, export, action requests, unsupported metrics, and any
-    incomplete/ambiguous shape still go to T3 and fail closed if T3 is down.
+    explicit dish, and a supported metric set. A diagnosis or optimisation
+    may execute only after those typed slots were restored from the trusted
+    server-side session; comparison, export, write/action requests,
+    unsupported metrics, and any incomplete/ambiguous shape still go to T3
+    and fail closed if T3 is down.
     """
     try:
         candidate_code = match_restaurant_ops(query)
     except Exception:
         return None
-    # The initial keyword code is only a candidate. An absolute-month dish
-    # revenue sentence can first look like SALES_SUMMARY, then `_build_spec`
-    # deterministically contract-repairs it to GROSS_MARGIN. The strict checks
-    # below authorize only the final sealed dish plan, never this raw hint.
+    # The initial keyword code is only a candidate. A diagnosis such as
+    # "为什么销量低" may have no ranking/report keyword at all; typed
+    # server-restored dish+metric+time+store slots still compile through the
+    # scoped unit-economics resolver. The strict checks below authorize only
+    # the final sealed dish plan, never this raw hint.
     if candidate_code is None:
-        return None
+        candidate_code = "RESTAURANT_OPS_GROSS_MARGIN"
 
     spec = _build_spec(
         candidate_code,
@@ -1943,7 +2147,7 @@ def _trusted_context_dish_followup_spec(
         or not spec.planned_intents
         or not set(spec.planned_intents).issubset(_TRUSTED_CONTEXT_DISH_INTENTS)
         or spec.unsupported_requirements
-        or spec.analysis_action != "lookup"
+        or spec.analysis_action not in {"lookup", "diagnose", "optimize"}
         or spec.comparison is not None
         or spec.asks_priority
         or spec.asks_prohibited_actions
@@ -2782,6 +2986,28 @@ async def parse_restaurant_query(
             if not trusted_spec.clarification_needed:
                 return trusted_spec
 
+    for explicit_compiler in (
+        _explicit_named_dish_metric_spec,
+        _explicit_revenue_trend_spec,
+        _explicit_store_operations_spec,
+    ):
+        explicit_spec = explicit_compiler(norm_query)
+        if explicit_spec is None:
+            continue
+        explicit_spec = await _apply_store_scope_guard(
+            pool,
+            factory_id,
+            explicit_spec,
+        )
+        await _maybe_register_pending(
+            pool,
+            norm_query,
+            explicit_spec,
+            factory_id,
+            session_key,
+        )
+        return explicit_spec
+
     cached = _cache_get(factory_id, norm_query)
     if (
         cached is not None
@@ -2999,6 +3225,18 @@ async def _parse_continuation(
     )
     if explicit_ranking_spec is not None:
         return explicit_ranking_spec
+
+    for explicit_compiler in (
+        _explicit_named_dish_metric_spec,
+        _explicit_revenue_trend_spec,
+        _explicit_store_operations_spec,
+    ):
+        explicit_spec = explicit_compiler(
+            concatenated,
+            is_continuation=True,
+        )
+        if explicit_spec is not None:
+            return explicit_spec
 
     if (
         clarification_question == STORE_SCOPE_CLARIFICATION_QUESTION

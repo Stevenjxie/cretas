@@ -2905,6 +2905,15 @@ public class IntentExecutionOrchestrator {
                 && !RESTAURANT_OOD_BUSINESS_TOKEN_PATTERN.matcher(userInput).find()) {
             return false;
         }
+        // A fully stated fact request must reach the immutable restaurant
+        // QueryPlan even when its metric words overlap an owner-action
+        // pattern, or when a stale ownerActionSessionId is present. This
+        // guard is deliberately narrower than the general analytical-read
+        // detector: explicit action/advice wording keeps owner-action
+        // authority, while period + metric + requested result stays READ.
+        if (isExplicitRestaurantDataFactRequest(normalizedInput)) {
+            return false;
+        }
         if (hasOwnerActionContinuationContext(context)) {
             return true;
         }
@@ -2925,6 +2934,42 @@ public class IntentExecutionOrchestrator {
             return false;
         }
         return false;
+    }
+
+    private boolean isExplicitRestaurantDataFactRequest(String input) {
+        if (isExplicitRestaurantSalesPeriodComparison(input)) {
+            return true;
+        }
+        boolean asksForAction = containsAny(input,
+                "\u5e94\u8be5\u600e\u4e48", "\u8981\u505a\u4ec0\u4e48", "\u505a\u4ec0\u4e48",
+                "\u600e\u4e48\u63d0\u9ad8", "\u600e\u4e48\u63d0\u5347", "\u600e\u4e48\u4f18\u5316",
+                "\u5982\u4f55\u63d0\u9ad8", "\u5982\u4f55\u63d0\u5347", "\u5982\u4f55\u4f18\u5316",
+                "\u600e\u4e48\u6539", "\u600e\u4e48\u8c03", "\u600e\u4e48\u6392",
+                "\u600e\u4e48\u5904\u7406", "\u600e\u4e48\u57f9\u8bad",
+                "\u5148\u505a", "\u5148\u6539", "\u5148\u7ba1", "\u5efa\u8bae",
+                "\u52a8\u4f5c", "\u4f18\u5316\u65b9\u6848", "\u600e\u4e48\u89e3\u51b3");
+        if (asksForAction) {
+            return false;
+        }
+        boolean hasPeriod = containsAny(input,
+                "\u4eca\u5929", "\u4eca\u65e5", "\u6628\u5929", "\u6628\u65e5",
+                "\u524d\u5929", "\u524d\u65e5", "\u672c\u5468", "\u8fd9\u5468",
+                "\u4e0a\u5468", "\u672c\u6708", "\u8fd9\u4e2a\u6708", "\u4e0a\u6708",
+                "\u6700\u8fd1", "\u8fd1\u671f", "\u8fc7\u53bb", "\u4eca\u5e74", "\u53bb\u5e74");
+        boolean hasMetric = containsAny(input,
+                "\u8425\u6536", "\u8425\u4e1a\u989d", "\u8425\u4e1a\u6536\u5165",
+                "\u9500\u552e\u989d", "\u9500\u552e\u6536\u5165", "\u6d41\u6c34",
+                "\u6bdb\u5229", "\u6bdb\u5229\u7387", "\u51c0\u5229\u6da6", "\u51c0\u5229\u7387",
+                "\u6210\u672c", "\u9500\u91cf", "\u9500\u552e\u91cf",
+                "\u8ba2\u5355", "\u5355\u91cf", "\u5ba2\u5355\u4ef7",
+                "\u7ffb\u53f0\u7387", "\u7ffb\u53f0");
+        boolean asksForFact = containsAny(input,
+                "\u591a\u5c11", "\u662f\u591a\u5c11", "\u5206\u522b\u662f",
+                "\u5dee\u989d", "\u5347\u964d\u7ed3\u8bba", "\u8ba1\u7b97\u53e3\u5f84",
+                "\u5c55\u793a\u8ba1\u7b97", "\u67e5\u8be2", "\u67e5\u4e00\u4e0b",
+                "\u62a5\u8868", "\u6392\u540d", "\u6392\u884c", "\u6700\u9ad8", "\u6700\u4f4e",
+                "\u8d8b\u52bf", "\u66f2\u7ebf", "\u56fe\u8868", "\u53c2\u7167\u7ebf");
+        return hasPeriod && hasMetric && asksForFact;
     }
 
     boolean matchesOwnerActionKeywordHeuristic(String userInput) {

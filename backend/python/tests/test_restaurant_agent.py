@@ -9,6 +9,10 @@ def test_compound_heuristic():
     assert agent.is_compound_question("先告诉我昨天的营收，再告诉我哪家店业绩最好")
     assert not agent.is_compound_question("米饭的销量是多少")
     assert not agent.is_compound_question("米饭的销量是多少；继续追问：成本如何")
+    assert not agent.is_compound_question(
+        "用二次函数拟合最近30天全部门店每日营业额曲线；"
+        "如果无法绘图，请提供可导出的日期和营业额字段"
+    )
 
 
 def test_parse_parts_validation():

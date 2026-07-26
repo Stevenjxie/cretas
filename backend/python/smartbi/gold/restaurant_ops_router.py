@@ -319,7 +319,11 @@ def _primary_dish_ranking_exclusion_reason(row: Any) -> Optional[str]:
     if category_text and _NON_PRIMARY_DISH_CATEGORY_RE.search(category_text):
         return "category"
 
-    item_name = re.sub(r"\s+", "", str(row.get("dish_name") or ""))
+    item_name = re.sub(
+        r"\s+",
+        "",
+        str(row.get("dish_name") or row.get("name") or ""),
+    )
     if _NON_DISH_POS_ITEM_RE.search(item_name):
         return "accessory"
     if _RICE_STAPLE_ITEM_RE.fullmatch(item_name):
@@ -1260,6 +1264,7 @@ def _scoped_dish_metric_answer(
 
     name = str(entry.get("name") or "该菜品")
     qty = float(entry.get("qty") or 0.0)
+    qty_text = _format_sales_quantity(qty)
     revenue = float(entry.get("revenue") or 0.0)
     bills = int(entry.get("bills") or 0)
     unit_price = revenue / qty if qty > 0 else None
@@ -1293,7 +1298,7 @@ def _scoped_dish_metric_answer(
                 if units_per_bill is not None else ""
             )
             return (
-                f"**原因拆解：「{name}」{window_label}销量为 {qty:,.0f} 份，"
+                f"**原因拆解：「{name}」{window_label}销量为 {qty_text} 份，"
                 f"覆盖 {bills} 单{composition}；当前只能解释销量构成，不能证明业务因果。**\n\n"
                 "如果你问的是销量为什么上涨或下降，需要指定对比周期，再核对上架时长、"
                 "售罄缺货、价格与促销、门店和时段分布；这里不会用毛利率替代销量原因。"
@@ -1308,7 +1313,7 @@ def _scoped_dish_metric_answer(
                 )
             return (
                 f"**原因拆解：「{name}」{window_label}单份成本为 ¥{unit_cost:,.2f}，"
-                f"按销量 {qty:,.0f} 份计算总成本 ¥{total_cost:,.2f}；"
+                f"按销量 {qty_text} 份计算总成本 ¥{total_cost:,.2f}；"
                 "当前只能解释计算构成，不能证明业务因果。**\n\n"
                 "成本口径来自配方标准用量 × 最近有效食材单价。若要解释成本涨跌，"
                 "还需指定对比周期并核对采购价、配方用量、单位换算和损耗变化。"
@@ -1321,14 +1326,14 @@ def _scoped_dish_metric_answer(
             )
             return (
                 f"**原因拆解：「{name}」{window_label}营收为 ¥{revenue:,.2f}，"
-                f"销量 {qty:,.0f} 份、覆盖 {bills} 单{price_text}；"
+                f"销量 {qty_text} 份、覆盖 {bills} 单{price_text}；"
                 "当前只能解释营收构成，不能证明业务因果。**\n\n"
                 "若要解释营收为什么上涨或下降，需要指定对比周期，并核对售价/折扣、"
                 "销量、缺货、门店与时段分布；这里不会用毛利率替代营收原因。"
             )
         if not has_cost or unit_price is None or gross_profit is None or margin_rate is None:
             return (
-                f"**原因拆解：暂时只能确认「{name}」{window_label}销量 {qty:,.0f} 份、"
+                f"**原因拆解：暂时只能确认「{name}」{window_label}销量 {qty_text} 份、"
                 f"营收 ¥{revenue:,.2f}，但成本不完整。**\n\n"
                 "当前不能解释毛利率为什么是这个结果，也不会用销量或营收替代原因。"
                 "请先补齐配方、采购价和单位换算；如要分析涨跌原因，还需指定对比周期。"
@@ -1354,7 +1359,7 @@ def _scoped_dish_metric_answer(
             else "毛利率"
         )
         known = (
-            f"当前销量 {qty:,.0f} 份、营收 ¥{revenue:,.2f}"
+            f"当前销量 {qty_text} 份、营收 ¥{revenue:,.2f}"
             + (
                 f"、单份成本 ¥{unit_cost:,.2f}、毛利率 {margin_rate * 100:.1f}%"
                 if unit_cost is not None and margin_rate is not None
@@ -1375,23 +1380,23 @@ def _scoped_dish_metric_answer(
 
     if asks_sales and not asks_cost and not asks_margin:
         return (
-            f"「{name}」{window_label}销量 **{qty:,.0f} 份**、"
+            f"「{name}」{window_label}销量 **{qty_text} 份**、"
             f"营收 **¥{revenue:,.2f}**，覆盖订单 {bills} 单。"
         )
     if asks_revenue and not asks_cost and not asks_margin:
         return (
             f"「{name}」{window_label}营收 **¥{revenue:,.2f}**，"
-            f"对应销量 {qty:,.0f} 份、覆盖订单 {bills} 单。"
+            f"对应销量 {qty_text} 份、覆盖订单 {bills} 单。"
         )
     if asks_cost and not asks_margin:
         if unit_cost is None or total_cost is None:
             return (
-                f"「{name}」{window_label}销量 {qty:,.0f} 份，但成本数据不完整，"
+                f"「{name}」{window_label}销量 {qty_text} 份，但成本数据不完整，"
                 "当前无法可靠计算单份成本和总成本；不会用营收或毛利替代。"
             )
         return (
             f"「{name}」{window_label}单份食材成本 **¥{unit_cost:,.2f}**；"
-            f"按销量 {qty:,.0f} 份计算，对应总成本 **¥{total_cost:,.2f}**。"
+            f"按销量 {qty_text} 份计算，对应总成本 **¥{total_cost:,.2f}**。"
             "成本口径来自配方标准用量 × 最近有效食材单价。"
         )
     if asks_margin and gross_profit is not None and margin_rate is not None and total_cost is not None:
@@ -1498,6 +1503,92 @@ def _parse_margin_reference_lines(query: Optional[str]) -> List[Dict[str, float]
     if warning is not None:
         result.append({"name": "预警值", "yAxis": warning})
     return result
+
+
+def _parse_revenue_reference_lines(query: Optional[str]) -> List[Dict[str, float]]:
+    """Extract explicit monetary target/warning lines; never add defaults."""
+    text = query or ""
+
+    def _find(label_pattern: str) -> Optional[float]:
+        patterns = (
+            rf"(?:{label_pattern})(?:值|线|参照线)?\s*(?:为|是|设为|设置为)?\s*"
+            rf"(?:¥|￥)?\s*(\d+(?:\.\d+)?)\s*(万|千)?元?",
+            rf"(?:¥|￥)?\s*(\d+(?:\.\d+)?)\s*(万|千)?元?\s*"
+            rf"(?:的)?(?:{label_pattern})(?:值|线|参照线)?",
+        )
+        for pattern in patterns:
+            match = re.search(pattern, text)
+            if not match:
+                continue
+            value = float(match.group(1))
+            unit = match.group(2)
+            if unit == "万":
+                value *= 10000
+            elif unit == "千":
+                value *= 1000
+            if 0 <= value <= 1_000_000_000:
+                return value
+        return None
+
+    result: List[Dict[str, float]] = []
+    target = _find("计划|目标")
+    warning = _find("预警|警戒")
+    if target is not None:
+        result.append({"name": "计划值", "yAxis": target})
+    if warning is not None:
+        result.append({"name": "预警值", "yAxis": warning})
+    return result
+
+
+def _quadratic_least_squares(
+    values: List[float],
+) -> Optional[Tuple[float, float, float, float, List[float]]]:
+    """Fit y=a*x²+b*x+c with a tiny dependency-free 3×3 solver."""
+    if len(values) < 3 or any(not math.isfinite(value) for value in values):
+        return None
+    xs = [float(index) for index in range(len(values))]
+    sx = sum(xs)
+    sx2 = sum(x * x for x in xs)
+    sx3 = sum(x * x * x for x in xs)
+    sx4 = sum(x * x * x * x for x in xs)
+    sy = sum(values)
+    sxy = sum(x * y for x, y in zip(xs, values))
+    sx2y = sum(x * x * y for x, y in zip(xs, values))
+    matrix = [
+        [sx4, sx3, sx2, sx2y],
+        [sx3, sx2, sx, sxy],
+        [sx2, sx, float(len(values)), sy],
+    ]
+    for column in range(3):
+        pivot = max(range(column, 3), key=lambda row: abs(matrix[row][column]))
+        if math.isclose(matrix[pivot][column], 0.0, abs_tol=1e-12):
+            return None
+        if pivot != column:
+            matrix[column], matrix[pivot] = matrix[pivot], matrix[column]
+        divisor = matrix[column][column]
+        matrix[column] = [value / divisor for value in matrix[column]]
+        for row in range(3):
+            if row == column:
+                continue
+            factor = matrix[row][column]
+            matrix[row] = [
+                current - factor * reference
+                for current, reference in zip(matrix[row], matrix[column])
+            ]
+    a, b, c = (matrix[row][3] for row in range(3))
+    fitted = [a * x * x + b * x + c for x in xs]
+    mean = sy / len(values)
+    ss_total = sum((value - mean) ** 2 for value in values)
+    ss_residual = sum(
+        (value - estimate) ** 2
+        for value, estimate in zip(values, fitted)
+    )
+    r_squared = (
+        1.0 - ss_residual / ss_total
+        if not math.isclose(ss_total, 0.0, abs_tol=1e-12)
+        else 1.0
+    )
+    return a, b, c, r_squared, fitted
 
 
 _CN_SMALL_NUMBERS = {
@@ -2626,7 +2717,22 @@ async def resolve_gross_margin(
     # Step 4: compute only from rows whose cost is actually present.
     enriched = _build_margin_entries(pos_rows, cretas_map, cost_map)
     with_cost = [item for item in enriched if item["has_cost"]]
-    top_slice = _rank_cost_complete_margin_entries(enriched, top_n)
+    # Generic dish rankings and recommendations are for sellable primary
+    # dishes. Rice/staples, tissues, wet wipes and disposable tableware remain
+    # in the all-sales totals, but cannot become "best dish", "low margin
+    # dish" or a promotion/repair recommendation. A user who explicitly names
+    # one of those items still receives its exact scoped facts.
+    ranking_pool = (
+        enriched
+        if dish_scope_row is not None
+        else [
+            item for item in enriched
+            if _primary_dish_ranking_exclusion_reason(item) is None
+        ]
+    )
+    ranking_with_cost = [item for item in ranking_pool if item["has_cost"]]
+    primary_excluded_count = len(enriched) - len(ranking_pool)
+    top_slice = _rank_cost_complete_margin_entries(ranking_pool, top_n)
     total_rev = sum(item["revenue"] for item in enriched)
     total_rev_with_cost = sum(item["revenue"] for item in with_cost)
     total_profit = sum(float(item["gross_profit"]) for item in with_cost)
@@ -2658,9 +2764,17 @@ async def resolve_gross_margin(
         total_profit / total_rev_with_cost
         if total_rev_with_cost > 0 else None
     )
+    ranking_rev_with_cost = sum(item["revenue"] for item in ranking_with_cost)
+    ranking_profit = sum(
+        float(item["gross_profit"]) for item in ranking_with_cost
+    )
+    ranking_avg_margin = (
+        ranking_profit / ranking_rev_with_cost
+        if ranking_rev_with_cost > 0 else None
+    )
     coverage_ratio = total_rev_with_cost / total_rev if total_rev > 0 else 0.0
     low_margin = sorted(
-        [item for item in with_cost if item["revenue"] >= 1000],
+        [item for item in ranking_with_cost if item["revenue"] >= 1000],
         key=lambda item: item["margin_rate"],
     )[:3]
 
@@ -2668,7 +2782,10 @@ async def resolve_gross_margin(
     # 返回全局毛利榜 — 答非所问。直接过滤负毛利行给结论, 覆盖率如实披露。
     if not dish_scope_row and _NEGATIVE_MARGIN_EXISTENCE_RE.search(query_text):
         negative = sorted(
-            (i for i in with_cost if i["margin_rate"] is not None and i["margin_rate"] < 0),
+            (
+                i for i in ranking_with_cost
+                if i["margin_rate"] is not None and i["margin_rate"] < 0
+            ),
             key=lambda i: i["margin_rate"],
         )
         cov_pct = f"{coverage_ratio * 100:.1f}%"
@@ -2709,13 +2826,18 @@ async def resolve_gross_margin(
     # whether it's a rate problem or a volume-amplified one — answers "哪个菜拖
     # 毛利，是率低还是量大" directly instead of only listing bottom-rate dishes.
     dragger = (
-        _compute_margin_dragger(with_cost, avg_margin, total_rev_with_cost)
-        if avg_margin is not None else None
+        _compute_margin_dragger(
+            ranking_with_cost,
+            ranking_avg_margin,
+            ranking_rev_with_cost,
+        )
+        if ranking_avg_margin is not None else None
     )
     dragger_text = (
         f"\n\n最拖整体毛利的菜品（拖累 = 营收占比 × 毛利率差）:\n\n"
         f"- **{dragger['name']}**: 毛利率 {dragger['margin_rate'] * 100:.1f}% "
-        f"(低于平均 {avg_margin * 100:.1f}%), 占已覆盖营收 {dragger['share'] * 100:.1f}%"
+        f"(低于主菜平均 {ranking_avg_margin * 100:.1f}%), "
+        f"占主菜已覆盖营收 {dragger['share'] * 100:.1f}%"
         f" → 主因：{dragger['cause']}"
         if dragger else ""
     )
@@ -2734,6 +2856,10 @@ async def resolve_gross_margin(
         exclusion_notes.append(f"{missing_cost_count} 个菜品缺少完整成本")
     if invalid_cost_count > 0:
         exclusion_notes.append(f"{invalid_cost_count} 个菜品成本值明显异常")
+    if primary_excluded_count > 0:
+        exclusion_notes.append(
+            f"{primary_excluded_count} 个米饭/附属用品仅计入总额、不参与主菜排名与建议"
+        )
     missing_note = (
         f"\n\n> 数据说明：{'；'.join(exclusion_notes)}，已从毛利、毛利率、排名和图表中排除；"
         "请补齐配方，或复核食材单位和最近进价后重新计算。"
@@ -2748,7 +2874,13 @@ async def resolve_gross_margin(
         for row in monthly_pos_rows:
             entry = _build_margin_entries([row], cretas_map, cost_map)[0]
             entry["month"] = _date_text(row["month"])[:7]
-            if entry["has_cost"]:
+            if (
+                entry["has_cost"]
+                and (
+                    dish_scope_row is not None
+                    or _primary_dish_ranking_exclusion_reason(entry) is None
+                )
+            ):
                 monthly_entries.append(entry)
         months = sorted({entry["month"] for entry in monthly_entries})
         per_dish = any(token in query_text for token in ("菜品", "每个菜", "每道菜", "各菜"))
@@ -2822,25 +2954,26 @@ async def resolve_gross_margin(
     if (
         any(token in query_text for token in ("菜品销量", "销量", "销售量"))
         and any(token in query_text for token in ("毛利", "毛利率", "利润"))
-        and with_cost
+        and ranking_with_cost
     ):
         promote = max(
-            with_cost,
+            ranking_with_cost,
             key=lambda item: (item["qty"] * max(float(item["margin_rate"]), 0.0), item["gross_profit"]),
         )
         repair_pool = [
-            item for item in with_cost
-            if avg_margin is not None and float(item["margin_rate"]) < avg_margin
+            item for item in ranking_with_cost
+            if ranking_avg_margin is not None
+            and float(item["margin_rate"]) < ranking_avg_margin
         ]
         repair = max(repair_pool, key=lambda item: item["qty"], default=None)
         joint_priority_text = (
             "\n\n销量与毛利联合优先级与依据：\n"
-            f"1. 优先推广 {promote['name']}：销量 {promote['qty']:.0f}，"
+            f"1. 优先推广 {promote['name']}：销量 {_format_sales_quantity(promote['qty'])}，"
             f"毛利率 {promote['margin_rate'] * 100:.1f}%，依据是销量与毛利率的联合贡献最高。"
         )
         if repair is not None and repair["name"] != promote["name"]:
             joint_priority_text += (
-                f"\n2. 优先整改 {repair['name']}：销量 {repair['qty']:.0f}，"
+                f"\n2. 优先整改 {repair['name']}：销量 {_format_sales_quantity(repair['qty'])}，"
                 f"毛利率 {repair['margin_rate'] * 100:.1f}%，依据是销量不低但毛利率低于整体平均。"
             )
         joint_priority_text += "\n3. 其余菜品先小范围验证，不按单一销量或单一毛利率直接下架。"
@@ -2887,6 +3020,7 @@ async def resolve_gross_margin(
             "3. 不要对成本不完整的菜直接做利润决策。"
             f"适用前提：先补齐成本；当前缺成本 {missing_cost_count} 个、成本异常 {invalid_cost_count} 个。"
             "风险：毛利率会被高估或低估。最小验证：补齐配方和最近进价后再重算。"
+            f"{missing_note}"
         )
         charts = []
 
@@ -2907,7 +3041,7 @@ async def resolve_gross_margin(
         # 数字全部来自同一 POS 行, 不会跨窗口混算。
         answer = (
             f"「{dish_scope_row['dish_name']}」{window_label}销量 "
-            f"**{float(dish_scope_row['total_qty'] or 0):,.0f} 份**、"
+            f"**{_format_sales_quantity(dish_scope_row['total_qty'])} 份**、"
             f"营收 **¥{float(dish_scope_row['total_revenue'] or 0):,.2f}**、"
             f"覆盖订单 {int(dish_scope_row['bills'] or 0)} 单。\n\n" + answer
         )
@@ -2971,7 +3105,7 @@ async def resolve_gross_margin(
                             "value": (
                                 f"¥{float(scoped_entry.get('revenue') or 0):,.2f}"
                                 if metric_kind == "营收"
-                                else f"{float(scoped_entry.get('qty') or 0):,.0f} 份"
+                                else f"{_format_sales_quantity(scoped_entry.get('qty'))} 份"
                             ),
                             "rawValue": (
                                 scoped_entry.get("revenue")
@@ -2982,7 +3116,7 @@ async def resolve_gross_margin(
                         {
                             "title": "销量" if metric_kind == "营收" else "营收",
                             "value": (
-                                f"{float(scoped_entry.get('qty') or 0):,.0f} 份"
+                                f"{_format_sales_quantity(scoped_entry.get('qty'))} 份"
                                 if metric_kind == "营收"
                                 else f"¥{float(scoped_entry.get('revenue') or 0):,.2f}"
                             ),
@@ -5280,6 +5414,17 @@ async def resolve_trend_analysis(
     from smartbi_compat._rbac_strip import PRICE_VIEW_ROLES
 
     can_see_money = bool(role) and role in PRICE_VIEW_ROLES
+    query_text = query or ""
+    daily_requested = any(token in query_text for token in (
+        "每日", "每天", "按日", "逐日", "日度", "二次函数", "二次拟合",
+    ))
+    quadratic_requested = any(token in query_text for token in (
+        "二次函数", "二次拟合", "二次曲线",
+    ))
+    revenue_reference_lines = _parse_revenue_reference_lines(query_text)
+    reference_requested = any(token in query_text for token in (
+        "参照线", "计划线", "预警线", "计划值", "目标值", "预警值",
+    ))
 
     # R24: trend_bundle 本就支持时间窗, resolver 此前写死全历史 —
     # 「最近三个月营收趋势」答 19 个月属于窗口替代。带窗时如实标注。
@@ -5318,11 +5463,11 @@ async def resolve_trend_analysis(
         except (TypeError, ValueError):
             return None
 
-    dated_daily = [
+    dated_daily = sorted([
         (parsed, float(item.get("revenue") or 0.0))
         for item in daily
         if (parsed := _parse_daily_date(item)) is not None
-    ]
+    ], key=lambda item: item[0])
     latest_month = str(monthly[-1].get("month") or "")
     latest_month_days = [item for item in dated_daily if item[0].strftime("%Y-%m") == latest_month]
     latest_data_date = max((item[0] for item in latest_month_days), default=None)
@@ -5460,13 +5605,53 @@ async def resolve_trend_analysis(
             + "\n"
         )
 
+    quadratic_fit = (
+        _quadratic_least_squares([value for _, value in dated_daily])
+        if quadratic_requested and can_see_money
+        else None
+    )
+    daily_detail = ""
+    if daily_requested and dated_daily:
+        daily_start = dated_daily[0][0]
+        daily_end = dated_daily[-1][0]
+        daily_detail = (
+            f"- 日级数据点：{len(dated_daily)} 个"
+            f"（{daily_start.isoformat()} 至 {daily_end.isoformat()}）\n"
+        )
+        if quadratic_requested:
+            if quadratic_fit is not None:
+                a, b, c, r_squared, _ = quadratic_fit
+                daily_detail += (
+                    "- 二次趋势拟合："
+                    f"`y = {a:,.4f}x² {b:+,.4f}x {c:+,.2f}`，"
+                    f"R² = {r_squared:.4f}；x=0 对应 {daily_start.isoformat()}。"
+                    "这是描述性趋势线，不代表价格、活动或其他因素造成了营收变化。\n"
+                )
+            else:
+                daily_detail += (
+                    "- 日级有效数据不足或矩阵不可解，本次没有伪造二次拟合线；"
+                    "仍展示实际每日营收。\n"
+                )
+        if reference_requested:
+            if revenue_reference_lines:
+                daily_detail += "- 图中参照线：" + "、".join(
+                    f"{line['name']} ¥{line['yAxis']:,.2f}"
+                    for line in revenue_reference_lines
+                ) + "\n"
+            else:
+                daily_detail += (
+                    "- 你要求了参照线但没有提供可解析金额，本次没有擅自添加默认值。\n"
+                )
+    elif daily_requested:
+        daily_detail = "- 当前窗口没有日级营收明细，本次没有把月度数据伪装成每日曲线。\n"
+
     cumulative_text = f"**{_money(total_rev)}**" if can_see_money else _money(total_rev)
     answer = (
         f"**营收趋势分析 ({window_text}, 共 {n_months} 个月):**\n"
         f"- 累计营收 {cumulative_text}\n"
         f"- 营收最高月: **{peak['month']}** ({_money(peak['revenue'])})\n"
         f"- 营收最低月: {trough['month']} ({_money(trough['revenue'])})\n"
-        f"{overall_line}{yoy_line}{mom_line}{ww_line}"
+        f"{overall_line}{yoy_line}{mom_line}{ww_line}{daily_detail}"
         f"\n建议动作:\n"
         f"1. 先把最高月和最低月按门店、渠道、折扣三层拆开，找出增长来自客流、客单价还是活动补贴。\n"
         f"2. 如果最新月下滑，优先确认是否为未完结月份；若已完结，再复盘低于中位数门店和高折扣渠道。\n"
@@ -5474,23 +5659,56 @@ async def resolve_trend_analysis(
         f"\n各月营收:\n\n{month_list_text}"
     )
 
-    charts = [{
-        "chartType": "line",
-        "title": f"月度营收趋势 ({window_text})",
-        "xAxis": {"data": [
-            (
-                f"{m['month']}（截至{latest_data_date.day}日）"
-                if latest_month_partial and m is monthly[-1] and latest_data_date
-                else m["month"]
-            )
-            for m in monthly
-        ]},
-        "series": [{
-            "name": "营收",
+    if daily_requested and dated_daily:
+        actual_series: Dict[str, Any] = {
+            "name": "每日营收",
             "type": "line",
-            "data": [(m["revenue"] if can_see_money else None) for m in monthly],
-        }],
-    }]
+            "data": [
+                value if can_see_money else None
+                for _, value in dated_daily
+            ],
+        }
+        if revenue_reference_lines and can_see_money:
+            actual_series["markLine"] = {
+                "silent": True,
+                "symbol": "none",
+                "lineStyle": {"type": "dashed"},
+                "data": revenue_reference_lines,
+            }
+        daily_series: List[Dict[str, Any]] = [actual_series]
+        if quadratic_fit is not None:
+            daily_series.append({
+                "name": "二次趋势拟合",
+                "type": "line",
+                "symbol": "none",
+                "lineStyle": {"type": "dashed"},
+                "data": [round(value, 2) for value in quadratic_fit[4]],
+            })
+        charts = [{
+            "chartType": "line",
+            "title": f"每日营收趋势 ({window_text})",
+            "xAxis": {"data": [day.isoformat() for day, _ in dated_daily]},
+            "yAxis": {"type": "value", "name": "营收(元)"},
+            "series": daily_series,
+        }]
+    else:
+        charts = [{
+            "chartType": "line",
+            "title": f"月度营收趋势 ({window_text})",
+            "xAxis": {"data": [
+                (
+                    f"{m['month']}（截至{latest_data_date.day}日）"
+                    if latest_month_partial and m is monthly[-1] and latest_data_date
+                    else m["month"]
+                )
+                for m in monthly
+            ]},
+            "series": [{
+                "name": "营收",
+                "type": "line",
+                "data": [(m["revenue"] if can_see_money else None) for m in monthly],
+            }],
+        }]
 
     kpis = [
         {"title": "数据月数", "value": n_months, "rawValue": n_months},
@@ -5512,6 +5730,29 @@ async def resolve_trend_analysis(
         meta={
             "all_history": True,
             "month_count": n_months,
+            "daily_requested": daily_requested,
+            "daily_point_count": len(dated_daily),
+            "quadratic_requested": quadratic_requested,
+            "quadratic_fit": (
+                {
+                    "a": quadratic_fit[0],
+                    "b": quadratic_fit[1],
+                    "c": quadratic_fit[2],
+                    "r_squared": quadratic_fit[3],
+                }
+                if quadratic_fit is not None else None
+            ),
+            "reference_lines": revenue_reference_lines,
+            "export_rows": (
+                [
+                    {
+                        "date": day.isoformat(),
+                        "revenue": value if can_see_money else None,
+                    }
+                    for day, value in dated_daily
+                ]
+                if daily_requested else []
+            ),
             "peak_month": peak["month"],
             "trough_month": trough["month"],
             "price_view": can_see_money,

@@ -26,6 +26,10 @@ logger = logging.getLogger(__name__)
 _COMPOUND_HINT_RE = re.compile(
     r"，另外|，再|，然后|；|，顺便|，以及|，还有|，同时|先.{2,24}?再"
 )
+_FALLBACK_OUTPUT_CLAUSE_RE = re.compile(
+    r"[；;，,](?:如果|若)(?:无法|不能|不支持).{0,60}"
+    r"(?:绘图|画图|图表|曲线|导出|下载|字段)"
+)
 _AGENT_LLM_TIMEOUT_SECONDS = 6.0
 _MAX_PARTS = 3
 
@@ -36,6 +40,11 @@ def is_compound_question(query: Optional[str]) -> bool:
         return False
     q = query.strip()
     if len(q) < 12 or "继续追问" in q:
+        return False
+    # “如果无法绘图则导出字段” is a fallback representation of the same
+    # analytical request, not a second business topic. Splitting it made the
+    # chart half lose its time/store slots and the export half lose its metric.
+    if _FALLBACK_OUTPUT_CLAUSE_RE.search(q):
         return False
     return bool(_COMPOUND_HINT_RE.search(q))
 
