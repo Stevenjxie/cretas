@@ -4,6 +4,19 @@
     <template v-if="kind === 'node'">
       <h4>{{ nodeTypeLabel }} 属性</h4>
       <el-form label-position="top" size="small" @submit.prevent>
+        <div
+          v-if="directoryError && (nodeType === 'approval' || nodeType === 'notify')"
+          class="directory-error"
+        >
+          <el-alert
+            type="error"
+            :closable="false"
+            show-icon
+            title="审批人员目录加载失败"
+            description="暂时不能选择审批角色或人员。请重试；系统不会回退为手工填写角色代码或用户 ID。"
+          />
+          <el-button size="small" plain @click="loadApprovalDirectory(true)">重新加载</el-button>
+        </div>
         <!-- Common: label -->
         <el-form-item label="显示名">
           <el-input v-model="localData.label" @change="emitUpdate" placeholder="节点标签" />
@@ -14,21 +27,47 @@
           <el-form-item label="审批人角色">
             <el-select
               v-model="approverRoles"
-              multiple filterable allow-create
-              placeholder="选择或输入审批角色"
+              multiple filterable clearable
+              :loading="directoryLoading"
+              :disabled="Boolean(directoryError)"
+              placeholder="请选择审批角色…"
               style="width: 100%"
-              @change="syncConfig({ approverRoles })"
             >
-              <el-option v-for="r in ROLE_OPTIONS" :key="r.value" :label="r.label" :value="r.value" />
+              <el-option
+                v-for="role in approverRoleOptions"
+                :key="role.value"
+                :label="role.label"
+                :value="role.value"
+                :disabled="role.disabled"
+              >
+                <div class="directory-option">
+                  <span>{{ role.label }}</span>
+                  <small v-if="role.description">{{ role.description }}</small>
+                </div>
+              </el-option>
             </el-select>
+            <div class="hint">可多选；候选项来自当前工厂角色目录，不能手工新增。</div>
           </el-form-item>
-          <el-form-item label="审批人 userId (可选)">
-            <el-input
-              :model-value="(approverUserIds || []).join(',')"
-              placeholder="逗号分隔 e.g. 100,101"
-              @change="(v: string | number) => syncConfig({ approverUserIds: String(v).split(',').map(s => s.trim()).filter(Boolean) })"
+          <el-form-item label="指定审批人（可选）">
+            <el-select-v2
+              v-model="approverUserIds"
+              multiple filterable clearable
+              :options="approverUserOptions"
+              :loading="directoryLoading"
+              :disabled="Boolean(directoryError)"
+              placeholder="按姓名或账号搜索…"
+              style="width: 100%"
             />
+            <div class="hint">明确指定人员优先用于精确路由；未指定时按上方角色匹配。</div>
           </el-form-item>
+          <el-alert
+            class="self-approval-note"
+            type="info"
+            :closable="false"
+            show-icon
+            title="自审规则"
+            description="只有“指定审批人”明确包含发起人本人时才允许自审；仅角色相同不会放开自审。"
+          />
           <el-form-item label="必需审批人数 (≥2 即会签)">
             <el-input-number
               v-model="requiredApprovers"
@@ -50,6 +89,7 @@
               multiple filterable clearable
               placeholder="选择审批所属部门 (限定审批人范围)"
               :loading="deptLoading"
+              :disabled="Boolean(deptError)"
               style="width: 100%"
               @change="(v: number[]) => syncConfig({ departmentIds: v })"
             >
@@ -61,32 +101,50 @@
               />
             </el-select>
             <div class="hint">仅这些部门下的角色用户可审批; 留空 = 全工厂范围</div>
+            <div v-if="deptError" class="hint warn">
+              部门目录加载失败。
+              <el-button link type="warning" @click="loadDepartments">重新加载</el-button>
+            </div>
           </el-form-item>
           <!-- Phase 1 B.5 Task 2: 委托人 (可选) -->
           <el-form-item label="委托人 (可选 — 主审超时后转派)">
-            <el-input
+            <el-select-v2
               v-model="delegateUserId"
-              placeholder="userId (如: 100)"
-              @change="syncConfig({ delegateUserId })"
+              filterable clearable
+              :options="delegateUserOptions"
+              :loading="directoryLoading"
+              :disabled="Boolean(directoryError)"
+              placeholder="请选择超时转派人员…"
+              style="width: 100%"
             />
-            <div class="hint">主审 SLA 超时后, 自动转派给该 userId; Sprint 4 B.4 后端会消费此字段</div>
+            <div class="hint">主审超时后自动转派；只能选择当前工厂的有效人员。</div>
           </el-form-item>
-          <el-form-item label="自动通过条件 (SpEL)">
-            <el-input
-              v-model="autoApproveCondition"
-              placeholder="如: #trusted == true"
-              @change="syncConfig({ autoApproveCondition })"
-            />
-            <div class="hint">满足时跳过审批人, 直接通过</div>
-          </el-form-item>
-          <el-form-item label="自动拒绝条件 (SpEL)">
-            <el-input
-              v-model="autoRejectCondition"
-              placeholder="如: #amount > 1000000"
-              @change="syncConfig({ autoRejectCondition })"
-            />
-            <div class="hint">满足时直接拒绝整个工作流</div>
-          </el-form-item>
+          <template v-if="!props.businessMode">
+            <el-form-item label="自动通过条件 (SpEL)">
+              <el-input
+                v-model="autoApproveCondition"
+                placeholder="如: #trusted == true"
+                @change="syncConfig({ autoApproveCondition })"
+              />
+              <div class="hint">满足时跳过审批人, 直接通过</div>
+            </el-form-item>
+            <el-form-item label="自动拒绝条件 (SpEL)">
+              <el-input
+                v-model="autoRejectCondition"
+                placeholder="如: #amount > 1000000"
+                @change="syncConfig({ autoRejectCondition })"
+              />
+              <div class="hint">满足时直接拒绝整个工作流</div>
+            </el-form-item>
+          </template>
+          <el-alert
+            v-else-if="hasAdvancedApprovalConditions"
+            type="warning"
+            :closable="false"
+            show-icon
+            title="此节点包含高级自动判断"
+            description="业务配置页不会展示或修改表达式。需要调整时请由平台管理员在高级模式处理。"
+          />
         </template>
 
         <!-- condition — 条件分叉 -->
@@ -152,13 +210,21 @@
           <el-form-item label="通知对象">
             <el-select
               v-model="notifyRoles"
-              multiple filterable allow-create
-              placeholder="选择角色"
+              multiple filterable clearable
+              :loading="directoryLoading"
+              :disabled="Boolean(directoryError)"
+              placeholder="请选择通知角色…"
               style="width: 100%"
-              @change="syncConfig({ notifyRoles })"
             >
-              <el-option v-for="r in ROLE_OPTIONS" :key="r.value" :label="r.label" :value="r.value" />
+              <el-option
+                v-for="role in notifyRoleOptions"
+                :key="role.value"
+                :label="role.label"
+                :value="role.value"
+                :disabled="role.disabled"
+              />
             </el-select>
+            <div class="hint">通知对象来自当前工厂角色目录，不能手工新增。</div>
           </el-form-item>
           <!-- Phase 1 B.5 Task 3: 通知渠道 (微信 / 钉钉 / 邮件) -->
           <el-form-item label="通知渠道">
@@ -234,7 +300,7 @@
             <el-button link type="warning" @click="clearCustomSalesCondition">改用金额阈值</el-button>
           </div>
         </el-form-item>
-        <el-form-item v-else-if="!isSalesOrderDecision" label="条件 (SpEL)">
+        <el-form-item v-else-if="!isSalesOrderDecision && !props.businessMode" label="条件 (SpEL)">
           <el-input
             :model-value="(localData.condition as string) ?? ''"
             placeholder="如: #amount > 10000"
@@ -242,6 +308,14 @@
           />
           <div class="hint">空 = 总是走 (无条件)</div>
         </el-form-item>
+        <el-alert
+          v-else-if="!isSalesOrderDecision && hasAdvancedEdgeCondition"
+          type="warning"
+          :closable="false"
+          show-icon
+          title="此连线包含高级判断条件"
+          description="业务配置页不会显示表达式内容。需要调整时请由平台管理员在高级模式处理。"
+        />
         <el-form-item label="优先级 (数值越小越优先)">
           <el-input-number
             :model-value="Number(localData.priority ?? 0)"
@@ -258,9 +332,21 @@
 
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref, watch } from 'vue'
-import type { DecisionType, NodeType } from '@/api/approvalWorkflow'
+import {
+  getApprovalDirectory,
+  type ApprovalRoleDirectoryItem,
+  type ApprovalUserDirectoryItem,
+  type DecisionType,
+  type NodeType,
+} from '@/api/approvalWorkflow'
 import { useAuthStore } from '@/store/modules/auth'
 import { get } from '@/api/request'
+import {
+  buildRoleOptions,
+  buildUserOptions,
+  labelsForValues,
+  type DirectoryOption,
+} from '../lib/approvalDirectory'
 import {
   buildSalesApprovalAmountCondition,
   parseSalesApprovalAmountThreshold,
@@ -273,7 +359,11 @@ interface SelectedElement {
   data: Record<string, unknown>
 }
 
-const props = defineProps<{ element: SelectedElement; decisionType?: DecisionType }>()
+const props = defineProps<{
+  element: SelectedElement
+  decisionType?: DecisionType
+  businessMode?: boolean
+}>()
 
 const emit = defineEmits<{
   update: [data: Record<string, unknown>]
@@ -296,17 +386,6 @@ const NODE_TYPE_LABELS: Record<NodeType, string> = {
 }
 const nodeTypeLabel = computed(() => (nodeType.value ? NODE_TYPE_LABELS[nodeType.value] : ''))
 
-const ROLE_OPTIONS = [
-  { value: 'factory_super_admin', label: '工厂管理员 (factory_super_admin)' },
-  { value: 'factory_admin', label: '工厂 admin (factory_admin)' },
-  { value: 'department_admin', label: '部门管理员 (department_admin)' },
-  { value: 'workshop_supervisor', label: '车间主管 (workshop_supervisor)' },
-  { value: 'quality_inspector', label: '质检员 (quality_inspector)' },
-  { value: 'finance_manager', label: '财务主管 (finance_manager)' },
-  { value: 'warehouse_manager', label: '仓管员 (warehouse_manager)' },
-  { value: 'permission_admin', label: '权限管理员 (permission_admin)' },
-]
-
 // Local mutable copy of selected element data — emitted on change
 const localData = reactive<Record<string, unknown>>({ ...props.element.data })
 const isDefaultEdge = computed(() => String(localData.label ?? '').trim().toUpperCase() === 'DEFAULT')
@@ -321,6 +400,7 @@ const hasCustomSalesCondition = computed(() => (
   && Boolean(String(localData.condition ?? '').trim())
   && salesAmountThreshold.value === null
 ))
+const hasAdvancedEdgeCondition = computed(() => Boolean(String(localData.condition ?? '').trim()))
 
 watch(
   () => props.element,
@@ -337,9 +417,18 @@ const config = computed(() => {
 })
 const approverRoles = computed({
   get: () => (config.value.approverRoles as string[]) ?? [],
-  set: (v: string[]) => syncConfig({ approverRoles: v }),
+  set: (v: string[]) => syncConfig({
+    approverRoles: v,
+    approverRoleLabels: labelsForValues(approverRoleOptions.value, v),
+  }),
 })
-const approverUserIds = computed(() => (config.value.approverUserIds as string[]) ?? [])
+const approverUserIds = computed({
+  get: () => ((config.value.approverUserIds as Array<string | number>) ?? []).map(String),
+  set: (v: string[]) => syncConfig({
+    approverUserIds: v,
+    approverUserLabels: labelsForValues(approverUserOptions.value, v),
+  }),
+})
 const requiredApprovers = computed({
   get: () => Number(config.value.requiredApprovers ?? 1),
   set: (v: number) => syncConfig({ requiredApprovers: v }),
@@ -356,6 +445,9 @@ const autoRejectCondition = computed({
   get: () => String(config.value.autoRejectCondition ?? ''),
   set: (v: string) => syncConfig({ autoRejectCondition: v }),
 })
+const hasAdvancedApprovalConditions = computed(() => (
+  Boolean(autoApproveCondition.value.trim()) || Boolean(autoRejectCondition.value.trim())
+))
 const description = computed({
   get: () => String(config.value.description ?? ''),
   set: (v: string) => syncConfig({ description: v }),
@@ -370,7 +462,10 @@ const joinN = computed({
 })
 const notifyRoles = computed({
   get: () => (config.value.notifyRoles as string[]) ?? [],
-  set: (v: string[]) => syncConfig({ notifyRoles: v }),
+  set: (v: string[]) => syncConfig({
+    notifyRoles: v,
+    notifyRoleLabels: labelsForValues(notifyRoleOptions.value, v),
+  }),
 })
 const notifyTemplate = computed({
   get: () => String(config.value.notifyTemplate ?? ''),
@@ -390,24 +485,71 @@ const outcome = computed({
 interface DeptOption { id: number; name: string }
 const deptOptions = ref<DeptOption[]>([])
 const deptLoading = ref(false)
+const deptError = ref('')
 const authStore = useAuthStore()
 async function loadDepartments() {
   const factoryId = authStore.factoryId
   if (!factoryId) return
   deptLoading.value = true
+  deptError.value = ''
   try {
     const res = await get(`/${factoryId}/departments/active`)
     if (res.success && Array.isArray(res.data)) {
       deptOptions.value = (res.data as Array<{ id: number; name: string }>).map(d => ({ id: d.id, name: d.name }))
     }
   } catch (e) {
-    // silent — fall back to empty list (selector still usable for manual ids)
-    console.warn('[PropertyPanel] load departments failed', e)
+    deptError.value = e instanceof Error ? e.message : '部门目录加载失败'
   } finally {
     deptLoading.value = false
   }
 }
-onMounted(() => { loadDepartments() })
+const directoryLoading = ref(false)
+const directoryError = ref('')
+const directoryRoles = ref<ApprovalRoleDirectoryItem[]>([])
+const directoryUsers = ref<ApprovalUserDirectoryItem[]>([])
+
+const approverRoleOptions = computed<DirectoryOption[]>(() => (
+  buildRoleOptions(directoryRoles.value, approverRoles.value)
+))
+const notifyRoleOptions = computed<DirectoryOption[]>(() => (
+  buildRoleOptions(directoryRoles.value, notifyRoles.value)
+))
+const approverUserOptions = computed<DirectoryOption[]>(() => (
+  buildUserOptions(directoryUsers.value, approverUserIds.value)
+))
+const delegateUserOptions = computed<DirectoryOption[]>(() => (
+  buildUserOptions(
+    directoryUsers.value,
+    config.value.delegateUserId ? [String(config.value.delegateUserId)] : [],
+  )
+))
+
+async function loadApprovalDirectory(forceRefresh = false) {
+  const factoryId = authStore.factoryId
+  if (!factoryId) {
+    directoryError.value = '未识别当前工厂，无法加载审批人员目录。'
+    return
+  }
+  directoryLoading.value = true
+  directoryError.value = ''
+  try {
+    const directory = await getApprovalDirectory(factoryId, forceRefresh)
+    directoryRoles.value = directory.roles
+    directoryUsers.value = directory.users
+  } catch (error) {
+    directoryError.value = error instanceof Error ? error.message : '目录加载失败'
+  } finally {
+    directoryLoading.value = false
+  }
+}
+
+onMounted(() => {
+  if (nodeType.value === 'approval') {
+    void Promise.all([loadDepartments(), loadApprovalDirectory()])
+  } else if (nodeType.value === 'notify') {
+    void loadApprovalDirectory()
+  }
+})
 
 const departmentIds = computed({
   get: () => (config.value.departmentIds as number[]) ?? [],
@@ -417,7 +559,12 @@ const departmentIds = computed({
 // Phase 1 B.5 Task 2: 委托人 userId (string for input v-model; backend can parse)
 const delegateUserId = computed({
   get: () => String(config.value.delegateUserId ?? ''),
-  set: (v: string) => syncConfig({ delegateUserId: v }),
+  set: (v: string) => syncConfig({
+    delegateUserId: v,
+    delegateUserLabel: v
+      ? labelsForValues(delegateUserOptions.value, [v])[0]
+      : '',
+  }),
 })
 
 function syncConfig(patch: Record<string, unknown>) {
@@ -459,4 +606,29 @@ function emitUpdate() {
 h4 { margin: 0 0 12px; font-size: 14px; color: #303133; }
 .hint { font-size: 11px; color: #909399; margin-top: 2px; }
 .hint.warn { color: #e6a23c; font-weight: 500; }
+.directory-error,
+.self-approval-note { margin-bottom: 12px; }
+.directory-error {
+  display: grid;
+  gap: 8px;
+  justify-items: start;
+}
+.directory-option {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.directory-option span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.directory-option small {
+  overflow: hidden;
+  color: var(--el-text-color-secondary);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 </style>

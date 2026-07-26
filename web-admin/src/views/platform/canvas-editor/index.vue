@@ -19,11 +19,19 @@
     <div class="canvas-body">
       <!-- Left: Module Tree (collapsible) -->
       <aside class="canvas-left" :class="{ collapsed: leftCollapsed }" :style="{ width: leftCollapsed ? '32px' : '180px' }">
-        <div v-if="leftCollapsed" class="collapse-label" @click="toggleLeft">▶ 模块</div>
+        <button
+          v-if="leftCollapsed"
+          type="button"
+          class="collapse-label"
+          aria-label="展开模块面板"
+          @click="toggleLeft"
+        >
+          ▶ 模块
+        </button>
         <template v-else>
           <div class="panel-header">
             <span class="panel-title">模块</span>
-            <span class="collapse-btn" @click="toggleLeft">◀</span>
+            <button type="button" class="collapse-btn" aria-label="收起模块面板" @click="toggleLeft">◀</button>
           </div>
           <ModuleTree :factory-id="factoryId" :selected-module="selectedModule" @select="selectedModule = $event" />
         </template>
@@ -97,18 +105,38 @@
         </div>
 
         <!-- Diff viewer -->
-        <ConfigDiffViewer v-if="pendingChanges.length > 0" :changes="pendingChanges" @apply="applyChanges" @discard="pendingChanges = []" />
+        <ConfigDiffViewer
+          v-if="pendingChanges.length > 0"
+          :changes="pendingChanges"
+          :show-technical-values="!approvalBusinessLocked"
+          @apply="applyChanges"
+          @discard="pendingChanges = []"
+        />
 
-        <StatusBar :is-complete="true" @show-json="showSchemaPreview = true" @show-history="showVersionHistory = true" @show-publish-window="showPublishWindow = true" />
+        <StatusBar
+          :is-complete="true"
+          :hide-technical-details="approvalBusinessLocked"
+          @show-json="showSchemaPreview = true"
+          @show-history="showVersionHistory = true"
+          @show-publish-window="showPublishWindow = true"
+        />
       </main>
 
       <!-- Right: AI Panel (collapsible) -->
       <aside class="canvas-right" :class="{ collapsed: rightCollapsed }" :style="{ width: rightCollapsed ? '32px' : '300px' }">
-        <div v-if="rightCollapsed" class="collapse-label right" @click="toggleRight">◀ AI</div>
+        <button
+          v-if="rightCollapsed"
+          type="button"
+          class="collapse-label right"
+          aria-label="展开 AI 助手"
+          @click="toggleRight"
+        >
+          ◀ AI
+        </button>
         <template v-else>
           <div class="panel-header">
             <span class="panel-title">AI 助手</span>
-            <span class="collapse-btn" @click="toggleRight">▶</span>
+            <button type="button" class="collapse-btn" aria-label="收起 AI 助手" @click="toggleRight">▶</button>
           </div>
           <AIChatPanel :factory-id="factoryId" :selected-module="selectedModule" @apply-diff="handleAIDiff" />
         </template>
@@ -119,7 +147,7 @@
     <ReviewDialog v-if="showApproveDialog" mode="approve" @confirm="doApprove" @cancel="showApproveDialog = false" />
     <ReviewDialog v-if="showRejectDialog" mode="reject" @confirm="doReject" @cancel="showRejectDialog = false" />
     <PublishWindowDialog v-if="showPublishWindow" :factory-id="factoryId" @close="showPublishWindow = false" />
-    <el-drawer v-model="showSchemaPreview" title="JSON 预览" size="500px">
+    <el-drawer v-if="!approvalBusinessLocked" v-model="showSchemaPreview" title="JSON 预览" size="500px">
       <SchemaPreview :factory-id="factoryId" :module-code="selectedModule" />
     </el-drawer>
     <el-drawer v-model="showVersionHistory" title="版本历史" size="400px">
@@ -379,9 +407,35 @@ onUnmounted(() => {
 
 .panel-header { display:flex; justify-content:space-between; align-items:center; padding:8px 12px; font-size:12px; }
 .panel-title { font-weight:bold; text-transform:uppercase; letter-spacing:1px; color:var(--el-text-color-secondary); font-size:10px; }
-.collapse-btn { cursor:pointer; color:var(--el-text-color-secondary); font-size:12px; }
+.collapse-btn {
+  padding: 4px;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+  color: var(--el-text-color-secondary);
+  font-size: 12px;
+}
 .collapse-btn:hover { color:var(--el-text-color-primary); }
-.collapse-label { writing-mode:vertical-lr; text-align:center; padding:12px 0; cursor:pointer; font-size:11px; color:var(--el-text-color-secondary); height:100%; display:flex; align-items:center; justify-content:center; }
+.collapse-btn:focus-visible,
+.collapse-label:focus-visible {
+  outline: 2px solid var(--el-color-primary);
+  outline-offset: -2px;
+}
+.collapse-label {
+  width: 100%;
+  height: 100%;
+  padding: 12px 0;
+  border: 0;
+  background: transparent;
+  writing-mode: vertical-lr;
+  text-align: center;
+  cursor: pointer;
+  font-size: 11px;
+  color: var(--el-text-color-secondary);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
 .collapse-label:hover { color:var(--el-text-color-primary); background:var(--el-fill-color-light); }
 .collapse-label.right { writing-mode:vertical-rl; }
 

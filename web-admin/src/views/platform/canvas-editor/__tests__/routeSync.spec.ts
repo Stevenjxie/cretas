@@ -2,7 +2,10 @@ import { flushPromises, shallowMount } from '@vue/test-utils';
 import { nextTick } from 'vue';
 import { describe, expect, it, vi } from 'vitest';
 
-const routerHarness = vi.hoisted(() => ({ route: null as any }));
+const routerHarness = vi.hoisted(() => ({
+  route: null as any,
+  push: vi.fn().mockResolvedValue(undefined),
+}));
 const canvasHarness = vi.hoisted(() => ({ state: null as any }));
 
 vi.mock('vue-router', async () => {
@@ -10,7 +13,10 @@ vi.mock('vue-router', async () => {
   routerHarness.route = reactive({
     query: { tab: 'approval', decisionType: 'SALES_ORDER_APPROVAL' } as Record<string, string | undefined>,
   });
-  return { useRoute: () => routerHarness.route };
+  return {
+    useRoute: () => routerHarness.route,
+    useRouter: () => ({ push: routerHarness.push }),
+  };
 });
 
 vi.mock('../composables/useCanvasEditor', async () => {

@@ -14,6 +14,15 @@
         title="求值顺序"
         description="先按 priority ASC 评估规则; 第一个命中 (true) 走 trueTargetNodeId, 第一个明确否决 (false + falseTargetNodeId 非空) 走 false 分支; 全部规则不明确路由再 fall through 到 edge.condition (SpEL escape hatch)."
       />
+      <el-alert
+        v-if="roleDirectoryError"
+        class="role-directory-alert"
+        type="error"
+        :closable="false"
+        show-icon
+        title="审批角色目录加载失败"
+        description="角色条件暂时只能读取历史配置，不能新增角色。关闭后重开可重试。"
+      />
       <el-button type="primary" size="small" @click="addRule" style="margin-top: 12px">+ 添加规则</el-button>
     </div>
 
@@ -33,6 +42,8 @@
         :rule="r"
         :index="idx"
         :candidate-nodes="candidateNodes"
+        :business-mode="businessMode"
+        :role-options="roleOptions"
         @change="(updated: WorkflowRuleDTO) => onRuleChange(idx, updated)"
         @delete="onDelete(r)"
         @test="onTest(r)"
@@ -45,6 +56,7 @@
     </template>
 
     <RuleTestModal
+      v-if="!businessMode"
       v-model:visible="testModalVisible"
       :factory-id="factoryId"
       :rule="testingRule"
@@ -53,7 +65,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, watch } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import {
   createRule,
@@ -65,7 +77,15 @@ import {
   type WorkflowRuleExpression,
 } from '@/api/workflowRule'
 import type { ApprovalWorkflowNode } from '@/api/approvalWorkflow'
+import {
+  getApprovalDirectory,
+  type ApprovalRoleDirectoryItem,
+} from '@/api/approvalWorkflow'
 import type { ApiResponse } from '@/types/api'
+import {
+  buildRoleOptions,
+  type DirectoryOption,
+} from '../lib/approvalDirectory'
 import RuleEditor from './RuleEditor.vue'
 import RuleTestModal from './RuleTestModal.vue'
 
@@ -76,6 +96,7 @@ const props = defineProps<{
   nodeId: string
   nodeLabel: string
   candidateNodes: ApprovalWorkflowNode[]
+  businessMode?: boolean
 }>()
 
 const emit = defineEmits<{ 'update:visible': [v: boolean]; saved: [] }>()
@@ -83,15 +104,39 @@ const emit = defineEmits<{ 'update:visible': [v: boolean]; saved: [] }>()
 const loading = ref(false)
 const saving = ref(false)
 const rules = ref<WorkflowRuleDTO[]>([])
+const directoryRoles = ref<ApprovalRoleDirectoryItem[]>([])
+const roleDirectoryError = ref('')
 const testModalVisible = ref(false)
 const testingRule = ref<WorkflowRuleDTO | null>(null)
 
 watch(
   () => props.visible,
   (v) => {
-    if (v) void loadRules()
+    if (v) void Promise.all([loadRules(), loadRoleDirectory()])
   },
 )
+
+const selectedRoleCodes = computed(() => rules.value.flatMap((rule) => {
+  if (rule.ruleType !== 'ROLE_MATCH') return []
+  const expression = parseExpr(rule.expression)
+  const values = 'in' in expression ? expression.in : []
+  return Array.isArray(values)
+    ? values.map(String)
+    : []
+}))
+const roleOptions = computed<DirectoryOption[]>(() => (
+  buildRoleOptions(directoryRoles.value, selectedRoleCodes.value)
+))
+
+async function loadRoleDirectory() {
+  roleDirectoryError.value = ''
+  try {
+    const directory = await getApprovalDirectory(props.factoryId)
+    directoryRoles.value = directory.roles
+  } catch (error) {
+    roleDirectoryError.value = error instanceof Error ? error.message : '角色目录加载失败'
+  }
+}
 
 async function loadRules() {
   if (!props.workflowId || !props.nodeId) return
@@ -211,6 +256,9 @@ function parseExpr(raw: string | WorkflowRuleExpression): WorkflowRuleExpression
 <style scoped>
 .rules-toolbar {
   margin-bottom: 12px;
+}
+.role-directory-alert {
+  margin-top: 12px;
 }
 .rules-list {
   min-height: 200px;

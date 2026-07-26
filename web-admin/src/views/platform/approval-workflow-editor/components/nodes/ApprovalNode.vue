@@ -6,8 +6,17 @@
       <span class="node-title">{{ data?.label || '审批节点' }}</span>
     </div>
     <div class="node-body">
-      <div v-if="approverRoles.length" class="badge roles">
- {{ approverRoles.join(' / ') }}
+      <div v-if="approverRoleLabels.length" class="badge roles">
+        {{ approverRoleLabels.join(' / ') }}
+      </div>
+      <div v-else-if="approverRoleCount > 0" class="badge roles">
+        已选 {{ approverRoleCount }} 个审批角色
+      </div>
+      <div v-if="approverUserLabels.length" class="badge users">
+        {{ approverUserLabels.join(' / ') }}
+      </div>
+      <div v-else-if="approverUserCount > 0" class="badge users">
+        已指定 {{ approverUserCount }} 位审批人
       </div>
       <div v-if="departmentIds.length" class="badge depts">
  {{ departmentIds.length }} 个部门
@@ -19,7 +28,7 @@
         ⏱ {{ timeoutMinutes }} 分钟
       </div>
       <div v-if="delegateUserId" class="badge delegate">
- 委托: {{ delegateUserId }}
+        超时转派：{{ delegateUserLabel || '已指定人员' }}
       </div>
       <div v-if="autoApprove" class="badge auto">
  自动审批
@@ -40,6 +49,8 @@ const props = defineProps<{
     config?: {
       approverRoles?: string[]
       approverUserIds?: string[]
+      approverRoleLabels?: string[]
+      approverUserLabels?: string[]
       requiredApprovers?: number
       timeoutMinutes?: number
       autoApproveCondition?: string
@@ -47,18 +58,23 @@ const props = defineProps<{
       // Phase 1 B.5 additions
       departmentIds?: number[]
       delegateUserId?: string
+      delegateUserLabel?: string
     }
   }
   selected?: boolean
 }>()
 
-const approverRoles = computed(() => props.data?.config?.approverRoles ?? [])
+const approverRoleLabels = computed(() => props.data?.config?.approverRoleLabels ?? [])
+const approverUserLabels = computed(() => props.data?.config?.approverUserLabels ?? [])
+const approverRoleCount = computed(() => props.data?.config?.approverRoles?.length ?? 0)
+const approverUserCount = computed(() => props.data?.config?.approverUserIds?.length ?? 0)
 const requiredApprovers = computed(() => Number(props.data?.config?.requiredApprovers ?? 1))
 const timeoutMinutes = computed(() => Number(props.data?.config?.timeoutMinutes ?? 0))
 const autoApprove = computed(() => Boolean(props.data?.config?.autoApproveCondition))
 // Phase 1 B.5
 const departmentIds = computed(() => props.data?.config?.departmentIds ?? [])
 const delegateUserId = computed(() => props.data?.config?.delegateUserId ?? '')
+const delegateUserLabel = computed(() => props.data?.config?.delegateUserLabel ?? '')
 </script>
 
 <style scoped>
@@ -66,7 +82,7 @@ const delegateUserId = computed(() => props.data?.config?.delegateUserId ?? '')
   min-width: 180px; background: #fff; border-radius: 8px;
   border: 2px solid #409eff; border-left: 6px solid #409eff;
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
-  transition: all 0.15s;
+  transition: border-color 0.15s, box-shadow 0.15s;
 }
 .wf-node.selected { border-color: #ecf5ff; box-shadow: 0 0 0 3px #409eff, 0 2px 12px rgba(0, 0, 0, 0.2); }
 .wf-node.co-sign { border-left-color: #e6a23c; }
@@ -80,6 +96,7 @@ const delegateUserId = computed(() => props.data?.config?.delegateUserId ?? '')
 .node-body { padding: 6px 12px; font-size: 11px; color: #606266; display: flex; flex-direction: column; gap: 3px; }
 .badge { padding: 2px 6px; border-radius: 3px; background: #f4f4f5; }
 .badge.roles { color: #409eff; }
+.badge.users { color: #337ecc; }
 .badge.depts { color: #909399; }
 .badge.cosign { color: #e6a23c; font-weight: 600; }
 .badge.sla { color: #f56c6c; }

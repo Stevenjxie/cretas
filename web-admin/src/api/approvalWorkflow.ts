@@ -6,7 +6,7 @@
  *
  * @since 2026-05-16
  */
-import request from './request'
+import request, { get } from './request'
 
 // ==================== Wire types ====================
 
@@ -196,6 +196,37 @@ export interface ApiResponse<T> {
   code?: string
 }
 
+export interface ApprovalRoleDirectoryItem {
+  name: string
+  displayName: string
+  description?: string
+  level?: number
+  department?: string
+}
+
+export interface ApprovalUserDirectoryItem {
+  id: number
+  username: string
+  fullName?: string
+  realName?: string
+  isActive?: boolean
+  roleCode?: string
+  roleDisplayName?: string
+  department?: string
+  departmentDisplayName?: string
+}
+
+export interface ApprovalUserDirectoryPage {
+  content: ApprovalUserDirectoryItem[]
+  totalElements?: number
+  totalPages?: number
+}
+
+export interface ApprovalDirectory {
+  roles: ApprovalRoleDirectoryItem[]
+  users: ApprovalUserDirectoryItem[]
+}
+
 // ==================== API methods ====================
 
 const base = (factoryId: string) => `/${factoryId}/approval-workflows`
@@ -244,3 +275,55 @@ export const getDecisionTypes = (factoryId: string) =>
  */
 export const getDecisionTypesMetadata = (factoryId: string) =>
   request.get<ApiResponse<DecisionTypeMetadataDTO[]>>(`${base(factoryId)}/decision-types-meta`)
+
+/**
+ * 审批配置目录。
+ *
+ * 角色和用户仍以现有同工厂 RBAC / 用户目录为真值；调用方只展示友好名称，
+ * 保存时保留稳定 roleCode / userId，禁止自由录入不存在的身份。
+ */
+export const getApprovalRoleDirectory = (factoryId: string) =>
+  get<ApprovalRoleDirectoryItem[]>(`/${factoryId}/roles`, { _silent: true })
+
+export const getApprovalUserDirectory = (factoryId: string) =>
+  get<ApprovalUserDirectoryPage>(`/${factoryId}/users`, {
+    params: { page: 1, size: 500, sortBy: 'fullName', sortDirection: 'ASC' },
+    _silent: true,
+  })
+
+const APPROVAL_DIRECTORY_TTL_MS = 60_000
+const approvalDirectoryCache = new Map<
+  string,
+  { expiresAt: number; data: ApprovalDirectory }
+>()
+
+export async function getApprovalDirectory(
+  factoryId: string,
+  forceRefresh = false,
+): Promise<ApprovalDirectory> {
+  const cached = approvalDirectoryCache.get(factoryId)
+  if (!forceRefresh && cached && cached.expiresAt > Date.now()) {
+    return cached.data
+  }
+
+  const [rolesResponse, usersResponse] = await Promise.all([
+    getApprovalRoleDirectory(factoryId),
+    getApprovalUserDirectory(factoryId),
+  ])
+  if (!rolesResponse.success || !Array.isArray(rolesResponse.data)) {
+    throw new Error(rolesResponse.message || '角色目录返回异常')
+  }
+  if (!usersResponse.success || !Array.isArray(usersResponse.data?.content)) {
+    throw new Error(usersResponse.message || '人员目录返回异常')
+  }
+
+  const data: ApprovalDirectory = {
+    roles: rolesResponse.data,
+    users: usersResponse.data.content,
+  }
+  approvalDirectoryCache.set(factoryId, {
+    data,
+    expiresAt: Date.now() + APPROVAL_DIRECTORY_TTL_MS,
+  })
+  return data
+}

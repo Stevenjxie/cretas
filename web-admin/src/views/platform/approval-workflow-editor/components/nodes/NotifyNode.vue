@@ -4,8 +4,11 @@
     <div class="node-content">
  <div class="node-icon"></div>
       <div class="node-label">{{ data?.label || '通知' }}</div>
-      <div v-if="notifyRoles.length" class="node-roles">
-        → {{ notifyRoles.join(', ') }}
+      <div v-if="notifyRoleLabels.length" class="node-roles">
+        → {{ notifyRoleLabels.join('、') }}
+      </div>
+      <div v-else-if="notifyRoleCount > 0" class="node-roles">
+        → 已选 {{ notifyRoleCount }} 个通知角色
       </div>
       <div v-if="channels.length" class="node-channels">
  <span v-if="channels.includes('wechat')" title="微信"></span>
@@ -26,12 +29,18 @@ const props = defineProps<{
   data?: {
     label?: string
     nodeType?: string
-    config?: { notifyRoles?: string[]; notifyTemplate?: string; channels?: string[] }
+    config?: {
+      notifyRoles?: string[]
+      notifyRoleLabels?: string[]
+      notifyTemplate?: string
+      channels?: string[]
+    }
   }
   selected?: boolean
 }>()
 
-const notifyRoles = computed(() => props.data?.config?.notifyRoles ?? [])
+const notifyRoleLabels = computed(() => props.data?.config?.notifyRoleLabels ?? [])
+const notifyRoleCount = computed(() => props.data?.config?.notifyRoles?.length ?? 0)
 const channels = computed(() => props.data?.config?.channels ?? [])
 </script>
 
@@ -40,7 +49,7 @@ const channels = computed(() => props.data?.config?.channels ?? [])
   min-width: 150px; padding: 8px 12px; background: #fff;
   border: 2px dashed #909399; border-radius: 8px;
   box-shadow: 0 2px 6px rgba(0, 0, 0, 0.05);
-  transition: all 0.15s;
+  transition: border-color 0.15s, box-shadow 0.15s;
 }
 .wf-node.selected { box-shadow: 0 0 0 3px #909399, 0 2px 12px rgba(0, 0, 0, 0.2); }
 .node-content { display: flex; flex-direction: column; align-items: center; }

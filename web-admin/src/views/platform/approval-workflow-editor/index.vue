@@ -79,7 +79,14 @@
           />
           <el-button :icon="Plus" @click="resetEditor">新建</el-button>
           <el-button :icon="View" @click="handleValidate" :disabled="nodes.length === 0">校验</el-button>
-          <el-button :icon="VideoPlay" :disabled="nodes.length === 0" @click="openSimulator">模拟</el-button>
+          <el-button
+            v-if="!props.lockDecisionType"
+            :icon="VideoPlay"
+            :disabled="nodes.length === 0"
+            @click="openSimulator"
+          >
+            模拟
+          </el-button>
           <el-button
             type="primary"
             :icon="Download"
@@ -161,6 +168,7 @@
           :key="selectedElement.id"
           :element="selectedElement"
           :decision-type="selectedDecisionType"
+          :business-mode="props.lockDecisionType"
           @update="onPropertyUpdate"
           @delete="onDeleteSelected"
           @manage-rules="openRulesPanel"
@@ -171,7 +179,7 @@
 
     <!-- Simulator modal -->
     <WorkflowSimulator
-      v-if="simulatorOpen && simulatorInput"
+      v-if="!props.lockDecisionType && simulatorOpen && simulatorInput"
       v-model="simulatorOpen"
       :nodes="simulatorInput.nodes"
       :edges="simulatorInput.edges"
@@ -188,6 +196,7 @@
       :node-id="rulesPanelNodeId"
       :node-label="rulesPanelNodeLabel"
       :candidate-nodes="rulesPanelCandidateNodes"
+      :business-mode="props.lockDecisionType"
     />
   </div>
 </template>
@@ -979,7 +988,7 @@ onMounted(async () => {
   display: flex; align-items: center; gap: 8px;
   padding: 8px; margin-bottom: 4px;
   border: 1px solid #e4e7ed; border-radius: 6px;
-  cursor: grab; transition: all 0.2s;
+  cursor: grab; transition: border-color 0.2s, background-color 0.2s;
 }
 .palette-node:hover { border-color: #409EFF; background: #f0f7ff; }
 .palette-icon {
