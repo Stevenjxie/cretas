@@ -147,7 +147,9 @@ from smartbi.gold.queries import (
 )
 from smartbi.gold.restaurant_intent_promotion import classify_question_family
 from smartbi.gold.restaurant_ops_router import (
+    _canonicalize_store_mention,
     demo_data_factory_for_code,
+    extract_store_mentions,
     resolve_by_code,
 )
 from smartbi.services.distillation_capture import persist_distillation_sample
@@ -456,6 +458,53 @@ def _is_restaurant_synthesis_tenant(factory_id: str) -> bool:
     return not (fid.startswith("F") and len(fid) <= 6)
 
 
+async def _resolve_synthesis_store_scope(
+    pool: asyncpg.Pool,
+    factory_id: str,
+    question: str,
+) -> Optional[Tuple[str, ...]]:
+    """Resolve explicit restaurant store mentions against ``dim_store``.
+
+    ``None`` means the question contains no concrete store scope.  An empty
+    tuple means a concrete-looking scope was present but could not be resolved
+    unambiguously; callers must fail closed instead of broadening it to all
+    stores.
+    """
+    mentions = extract_store_mentions(question)
+    if not mentions:
+        return None
+
+    resolved: List[str] = []
+    try:
+        for mention in mentions:
+            matches = await _canonicalize_store_mention(
+                pool,
+                factory_id,
+                mention,
+            )
+            if len(matches) != 1:
+                logger.warning(
+                    "[synthesis] explicit store scope is ambiguous: "
+                    "factory=%s mention=%r matches=%r",
+                    factory_id,
+                    mention,
+                    matches,
+                )
+                return ()
+            if matches[0] not in resolved:
+                resolved.append(matches[0])
+    except Exception as exc:
+        logger.warning(
+            "[synthesis] explicit store scope resolution failed closed: "
+            "factory=%s mentions=%r error=%s",
+            factory_id,
+            mentions,
+            exc,
+        )
+        return ()
+    return tuple(resolved)
+
+
 _CAUSAL_ASSERTION_RE = re.compile(
     r"主因|主要原因|根因|主要靠|主要依靠|主要来自|主要来源|"
     r"导致|带动|拉动|推动|驱动|支撑|撑起|拉高|拉低|造成|引发|促成|"
@@ -520,6 +569,9 @@ _HIGH_IMPACT_ACTION_RE = re.compile(
 _HIGH_IMPACT_ACTION_SAFETY_RE = re.compile(
     r"不要|别|不建议|暂不|不直接|未执行|没有执行|先验证|先试点|小范围试点|"
     r"待确认|需确认|需要确认|预览|确认后|可回滚"
+)
+_OBSERVED_PROMOTION_FACT_RE = re.compile(
+    r"(?:满减|折扣|优惠)(?:金额|占比|率|构成|订单|核销)"
 )
 
 
@@ -606,6 +658,7 @@ def _narrative_grounding_violations(
             # signals alone never authorize "VIP优先出餐"/调价/下架等动作.
             if (
                 _HIGH_IMPACT_ACTION_RE.search(clause)
+                and not _OBSERVED_PROMOTION_FACT_RE.search(clause)
                 and not _HIGH_IMPACT_ACTION_SAFETY_RE.search(clause)
             ):
                 violations.append(f"未经验证或确认的高影响动作：{clause[:120]}")
@@ -821,12 +874,32 @@ class ComprehensiveSynthesisEngine:
         t0 = time.monotonic()
         start, end = date_range
         start_iso, end_iso = start.isoformat(), end.isoformat()
+        scope_store_names: Optional[Tuple[str, ...]] = None
+        if _is_restaurant_synthesis_tenant(factory_id):
+            store_data_factory = demo_data_factory_for_code(
+                "RESTAURANT_OPS_SALES_SUMMARY",
+                factory_id,
+            )
+            scope_store_names = await _resolve_synthesis_store_scope(
+                self._pool,
+                store_data_factory,
+                question,
+            )
         # Exact cache entries must not cross page-focus contexts. Semantic cache
         # is skipped below for contextual requests because its vector/index key
         # represents the user's literal question, not the focused chart.
         cache_material = (
             f"{question}\n\n[SYNTHESIS_CONTRACT]\n{SYNTHESIS_CONTRACT_VERSION}"
         )
+        if scope_store_names is not None:
+            cache_material += (
+                "\n\n[STORE_SCOPE]\n"
+                + (
+                    ",".join(scope_store_names)
+                    if scope_store_names
+                    else "<UNRESOLVED_EXPLICIT_SCOPE>"
+                )
+            )
         if page_context:
             cache_material += "\n\n[PAGE_CONTEXT]\n" + page_context[:2000]
         normalized_hints = sorted(
@@ -895,7 +968,12 @@ class ComprehensiveSynthesisEngine:
             + f"|contract={SYNTHESIS_CONTRACT_VERSION}"
         )
         q_emb: Optional[List[float]] = None
-        if not conversation_history and not page_context and not normalized_hints:
+        if (
+            not conversation_history
+            and not page_context
+            and not normalized_hints
+            and scope_store_names is None
+        ):
             q_emb = await _get_embedding(question)
             if q_emb is not None:
                 sem = await self._cache.get_semantic(factory_id, q_emb, window_key, plan_key)
@@ -913,8 +991,17 @@ class ComprehensiveSynthesisEngine:
                     )
 
         # 4. Build FactBook (parallel deterministic pulls per plan).
+        factbook_period = f"{start_iso} 至 {end_iso}"
+        if scope_store_names:
+            factbook_period += "；门店范围：" + "、".join(scope_store_names)
+        elif scope_store_names == ():
+            factbook_period += "；门店范围：未能唯一识别"
         factbook = await self._build_factbook(
-            factory_id, date_range, plan, period=f"{start_iso} 至 {end_iso}",
+            factory_id,
+            date_range,
+            plan,
+            period=factbook_period,
+            store_names=scope_store_names,
         )
 
         # 5. Structured multi-dim insights (deterministic correlations).
@@ -1460,6 +1547,7 @@ class ComprehensiveSynthesisEngine:
         plan: Dict[str, Any],
         *,
         period: str,
+        store_names: Optional[Tuple[str, ...]] = None,
     ) -> FactBook:
         """Pull only the plan's dimensions concurrently (asyncio.gather —
         orchestrator _gather_data pattern; different tables, no contention).
@@ -1475,6 +1563,51 @@ class ComprehensiveSynthesisEngine:
             data_mode="DEMO" if factory_id == "DEMO_REST" else "PRODUCTION",
         )
         notes: List[str] = []
+        has_explicit_store_scope = store_names is not None
+        has_resolved_store_scope = bool(store_names)
+        if has_resolved_store_scope:
+            notes.append(
+                "内部经营指标已严格限定门店范围："
+                + "、".join(store_names)
+                + "；没有门店粒度的内部维度保持缺失，不用全部门店数据代替。"
+            )
+            if requested_plan.get("external_signals") or requested_plan.get("holiday"):
+                notes.append(
+                    "活动、商场和周边信号为商圈/品牌级描述性背景，"
+                    "不是该门店的因果增量或ROI证据。"
+                )
+            if requested_plan.get("supplier_anomaly"):
+                notes.append(
+                    "采购价格为品牌共享采购口径，不代表该门店独立采购价格。"
+                )
+        elif has_explicit_store_scope:
+            notes.append(
+                "问题包含具体门店，但未能在门店主数据中唯一识别；"
+                "本次不扩大为全部门店，也不返回跨店经营数字。"
+            )
+
+        # Most internal synthesis sources currently aggregate at tenant grain.
+        # When a concrete store was requested, only the two sources with a
+        # proven store filter stay enabled: finance_summary and the restaurant
+        # POS dish resolver. External/area signals and shared procurement may
+        # still be included as explicitly labelled context.
+        if has_explicit_store_scope:
+            for dimension in (
+                "review",
+                "period_comparison",
+                "attribution",
+                "dish_margin",
+                "channel",
+                "meal_period",
+                "discount",
+                "operations",
+                "staffing",
+            ):
+                plan[dimension] = False
+        if has_explicit_store_scope and not has_resolved_store_scope:
+            plan["finance"] = False
+            plan["sales"] = False
+            plan["weather"] = False
 
         async def _safe(coro, label):
             try:
@@ -1517,6 +1650,11 @@ class ComprehensiveSynthesisEngine:
                     gold_sales_factory,
                     date_range,
                     top_n_stores=5,
+                    **(
+                        {"store_names": store_names}
+                        if store_names is not None
+                        else {}
+                    ),
                 ),
                 "finance",
             )
@@ -1555,41 +1693,42 @@ class ComprehensiveSynthesisEngine:
                 "attribution",
             )
         if plan.get("sales"):
-            tasks["top_products"] = _safe(
-                top_products(
-                    self._pool,
-                    gold_sales_factory,
-                    date_range,
-                    top_n=5,
-                ),
-                "top_products",
-            )
-            tasks["bottom_products"] = _safe(
-                top_products(
-                    self._pool,
-                    gold_sales_factory,
-                    date_range,
-                    top_n=5,
-                    order="asc",
-                ),
-                "bottom_products",
-            )
-            tasks["channels"] = _safe(
-                channel_breakdown(
-                    self._pool,
-                    gold_sales_factory,
-                    date_range,
-                ),
-                "channels",
-            )
-            tasks["discounts"] = _safe(
-                discount_breakdown(
-                    self._pool,
-                    gold_sales_factory,
-                    date_range,
-                ),
-                "discounts",
-            )
+            if not has_explicit_store_scope:
+                tasks["top_products"] = _safe(
+                    top_products(
+                        self._pool,
+                        gold_sales_factory,
+                        date_range,
+                        top_n=5,
+                    ),
+                    "top_products",
+                )
+                tasks["bottom_products"] = _safe(
+                    top_products(
+                        self._pool,
+                        gold_sales_factory,
+                        date_range,
+                        top_n=5,
+                        order="asc",
+                    ),
+                    "bottom_products",
+                )
+                tasks["channels"] = _safe(
+                    channel_breakdown(
+                        self._pool,
+                        gold_sales_factory,
+                        date_range,
+                    ),
+                    "channels",
+                )
+                tasks["discounts"] = _safe(
+                    discount_breakdown(
+                        self._pool,
+                        gold_sales_factory,
+                        date_range,
+                    ),
+                    "discounts",
+                )
         if plan.get("dish_margin"):
             tasks["dish_margin"] = _safe(
                 dish_margin(
@@ -1632,6 +1771,11 @@ class ComprehensiveSynthesisEngine:
                     self._pool,
                     gold_sales_factory,
                     date_range,
+                    **(
+                        {"store_names": store_names}
+                        if store_names is not None
+                        else {}
+                    ),
                 ),
                 "weather_sales",
             )
@@ -1650,7 +1794,16 @@ class ComprehensiveSynthesisEngine:
             )
             if "weather_sales" not in tasks:
                 tasks["external_sales"] = _safe(
-                    daily_trend(self._pool, factory_id, date_range),
+                    daily_trend(
+                        self._pool,
+                        gold_sales_factory,
+                        date_range,
+                        **(
+                            {"store_names": store_names}
+                            if store_names is not None
+                            else {}
+                        ),
+                    ),
                     "external_sales",
                 )
 
@@ -1677,6 +1830,11 @@ class ComprehensiveSynthesisEngine:
 
             async def _pos_ranking(direction: str):
                 label = "最高" if direction == "best" else "最低"
+                store_scope_text = (
+                    "、".join(store_names)
+                    if store_names
+                    else "全部门店"
+                )
                 return await _safe(
                     resolve_by_code(
                         "RESTAURANT_OPS_GROSS_MARGIN",
@@ -1684,7 +1842,7 @@ class ComprehensiveSynthesisEngine:
                         gold_margin_factory,
                         query=(
                             f"{date_range[0].isoformat()}至"
-                            f"{date_range[1].isoformat()}全部门店"
+                            f"{date_range[1].isoformat()}{store_scope_text}"
                             f"销量{label}的5道菜"
                         ),
                         date_range=date_range,

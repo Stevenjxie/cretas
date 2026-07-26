@@ -3405,12 +3405,23 @@ async def _parse_continuation(
             if contextualized_spec is not None:
                 return contextualized_spec
 
-    explicit_ranking_spec = _explicit_store_dish_ranking_spec(
-        concatenated,
-        is_continuation=True,
+    # A time/store-only answer may fill one ranking slot, but it never answers
+    # the separate READ-vs-WRITE question raised by an earlier "下架/停售"
+    # request.  Keep the clarification alive until the current/history turns
+    # contain an explicit view/query choice.  Otherwise the generic ranking
+    # compiler would silently erase the write verb and convert the request to
+    # READ merely because a store button was clicked.
+    unresolved_action_choice = bool(
+        _is_read_only_ranking_action_seed(concatenated)
+        and not _contains_read_only_ranking_choice(concatenated)
     )
-    if explicit_ranking_spec is not None:
-        return explicit_ranking_spec
+    if not unresolved_action_choice:
+        explicit_ranking_spec = _explicit_store_dish_ranking_spec(
+            concatenated,
+            is_continuation=True,
+        )
+        if explicit_ranking_spec is not None:
+            return explicit_ranking_spec
 
     for explicit_compiler in (
         _explicit_named_dish_metric_spec,
