@@ -43,6 +43,7 @@ describe('labelQcApi mobile review contract', () => {
     ).resolves.toEqual(page);
     expect(mock.history.get[0]!.params).toEqual({
       statuses: 'NEEDS_REVIEW,ANALYSIS_FAILED',
+      archived: false,
       page: 1,
       size: 50,
     });

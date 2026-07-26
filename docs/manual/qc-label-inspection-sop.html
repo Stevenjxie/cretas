@@ -175,7 +175,7 @@
     }
     .flow {
       display: grid;
-      grid-template-columns: repeat(8, 1fr);
+      grid-template-columns: repeat(9, 1fr);
       padding: 10px;
       background: var(--paper);
       border: 1px solid var(--line);
@@ -403,6 +403,35 @@
       font-size: 12px;
       text-align: center;
     }
+    .web-shot {
+      margin: 20px 0;
+      padding: 10px;
+      background: #0a111b;
+      border: 1px solid #233149;
+      border-radius: 20px;
+      box-shadow: var(--phone-shadow);
+    }
+    .web-shot button {
+      width: 100%;
+      padding: 0;
+      background: transparent;
+      border: 0;
+      border-radius: 12px;
+      cursor: zoom-in;
+      overflow: hidden;
+    }
+    .web-shot img {
+      display: block;
+      width: 100%;
+      height: auto;
+      border-radius: 12px;
+    }
+    .web-shot figcaption {
+      padding: 10px 6px 2px;
+      color: #ccd5e1;
+      font-size: 12px;
+      text-align: center;
+    }
     .status-crop {
       max-height: 300px;
       overflow: hidden;
@@ -613,7 +642,7 @@
     @media (max-width: 920px) {
       .hero__inner { grid-template-columns: 1fr; gap: 28px; }
       .hero__badge { max-width: 430px; }
-      .flow { overflow-x: auto; grid-template-columns: repeat(8, minmax(150px, 1fr)); }
+      .flow { overflow-x: auto; grid-template-columns: repeat(9, minmax(150px, 1fr)); }
       .layout { grid-template-columns: 1fr; }
       .toc {
         position: sticky;
@@ -678,7 +707,7 @@
         <span class="brand__mark" aria-hidden="true">QC</span>
         <span>白垩纪 · 质检操作指南</span>
       </div>
-      <div class="topbar__meta">六扇门 F006 · RN 当前流程 · 2026-07-26</div>
+      <div class="topbar__meta">六扇门 · Web 开户 + RN 质检 · 2026-07-27</div>
     </div>
   </header>
 
@@ -687,7 +716,7 @@
       <div>
         <p class="eyebrow">Quality Control / Label Inspection</p>
         <h1 id="page-title">包装标签拍检<br>与人工标注指南</h1>
-        <p class="hero__lead">六扇门 F006：从 QC 账号登录、录入 SKU 与批次、拍摄包装照片，到 AI 初筛、人工逐图标注和最终提交。</p>
+        <p class="hero__lead">六扇门：从管理员按手机号开户、员工本人设密和登录，到录入 SKU、拍摄包装照片、AI 初筛、人工逐图标注及训练数据整理。</p>
       </div>
       <aside class="hero__badge" aria-label="预计操作时间">
         <strong>约 5 分钟</strong>
@@ -698,6 +727,7 @@
 
   <div class="flow-wrap" aria-label="操作流程概览">
     <div class="flow">
+      <div class="flow__item"><span class="flow__number">0</span><span>管理员开户</span></div>
       <div class="flow__item"><span class="flow__number">1</span><span>QC 登录</span></div>
       <div class="flow__item"><span class="flow__number">2</span><span>打开拍检</span></div>
       <div class="flow__item"><span class="flow__number">3</span><span>核对批次</span></div>
@@ -712,6 +742,7 @@
   <div class="layout">
     <nav class="toc" aria-label="页面目录">
       <p class="toc__title">操作目录</p>
+      <a href="#step-account">0. Web 开户</a>
       <a href="#prepare">开始前</a>
       <a href="#step-login">1. 登录</a>
       <a href="#step-entry">2. 打开拍检</a>
@@ -721,6 +752,7 @@
       <a href="#step-ai-review">6. 确认 AI 框</a>
       <a href="#step-human-frame">7. 人工补框</a>
       <a href="#step-photo-conclusion">8. 本图结论</a>
+      <a href="#step-data-management">Web 数据整理</a>
       <a href="#errors">异常处理</a>
     </nav>
 
@@ -732,6 +764,77 @@
           <p>无论 AI 找到 0 处还是多处疑似区域，所有照片都会进入人工审核。</p>
         </div>
       </div>
+
+      <section class="step" id="step-account">
+        <div class="step__heading">
+          <div class="step__number">0</div>
+          <div>
+            <p class="step__kicker">WEB ACCOUNT ONBOARDING</p>
+            <h2>管理员先按手机号开通 QC 账号</h2>
+            <p>这一步在 Web 管理端完成。手机号既是白名单身份，也是员工后续唯一登录账号；角色权限由管理员邀请决定。</p>
+          </div>
+        </div>
+
+        <div class="notice" role="note" style="margin-bottom: 22px">
+          <div class="notice__icon" aria-hidden="true">A</div>
+          <div>
+            <strong>谁来开户、从哪里进入</strong>
+            <p>工厂总监或具备人事读写权限的管理员先登录 Web 管理端，再从左侧进入“人事管理 → 账号邀请”。管理员使用自己的账号密码登录，不使用待开户员工的手机号。</p>
+          </div>
+        </div>
+
+        <figure class="web-shot">
+          <button class="shot-button" type="button" data-full="qcsop-assets/17-web-account-whitelist.png" aria-label="放大查看 Web 入职白名单页面">
+            <img src="qcsop-assets/17-web-account-whitelist.png" alt="Web 管理端人事模块中的账号邀请白名单页面" loading="lazy">
+          </button>
+          <figcaption>Web 管理端：人事 → 账号邀请（白名单）</figcaption>
+        </figure>
+
+        <div class="callouts">
+          <div class="callout">
+            <span class="callout__number">1</span>
+            <strong>设置账号</strong>
+            <p>点击“创建账号邀请”，输入员工真实手机号和姓名。手机号会固定成为登录账号，不再另起用户名。</p>
+          </div>
+          <div class="callout">
+            <span class="callout__number">2</span>
+            <strong>设置角色与权限</strong>
+            <p>选择“质量检验员”。角色决定能看到的质检功能，员工注册时只能领取该角色，不能自行改成管理员。</p>
+          </div>
+          <div class="callout">
+            <span class="callout__number">3</span>
+            <strong>加入本厂白名单</strong>
+            <p>保存后应显示“邀请待领取/待注册”。白名单只在当前工厂有效，手机号和工厂必须同时匹配。</p>
+          </div>
+          <div class="callout callout--warning">
+            <span class="callout__number">!</span>
+            <strong>管理员不设置员工明文密码</strong>
+            <p>管理员只配置手机号、姓名、工厂和角色。密码必须由员工本人在手机注册时设置，管理员不代存、不索取。</p>
+          </div>
+        </div>
+
+        <div class="screen-grid" style="margin-top: 22px">
+          <figure class="phone-shot">
+            <button class="shot-button" type="button" data-full="qcsop-assets/18-register-phone-expo.png" aria-label="放大查看手机号注册邀请验证页面">
+              <img src="qcsop-assets/18-register-phone-expo.png" alt="Expo Web 手机注册页输入白名单手机号并验证邀请" loading="lazy">
+            </button>
+            <figcaption>① 员工输入白名单中的同一手机号</figcaption>
+          </figure>
+          <figure class="phone-shot">
+            <button class="shot-button" type="button" data-full="qcsop-assets/19-register-password-expo.png" aria-label="放大查看员工本人设置密码页面">
+              <img src="qcsop-assets/19-register-password-expo.png" alt="Expo Web 显示受邀工厂和质量检验员角色，由员工本人设置并确认密码" loading="lazy">
+            </button>
+            <figcaption>② 核对工厂与角色，再由本人设置密码</figcaption>
+          </figure>
+        </div>
+
+        <ul class="checklist" style="margin-top: 22px">
+          <li>账号：白名单手机号；登录时仍填写这个手机号。</li>
+          <li>权限：来自管理员邀请的“质量检验员”角色，只开放 RN 质检工作流；不要给普通 QC 增加系统管理员或训练审批权限。</li>
+          <li>密码：员工本人按页面规则输入并二次确认；忘记时走“忘记密码”，不要新建重复账号。</li>
+          <li>多手机：同一个手机号可在多台授权 RN App 同时登录，彼此不会被普通登录或退出操作误踢下线。</li>
+        </ul>
+      </section>
 
       <section class="section" id="prepare">
         <p class="section__kicker">BEFORE START</p>
@@ -761,8 +864,8 @@
           <div class="step__number">1</div>
           <div>
             <p class="step__kicker">LOGIN</p>
-            <h2>使用 QC 账号登录</h2>
-            <p>打开 App 后先点击“登录”，再输入管理员分配的质检员账号。</p>
+            <h2>使用手机号和本人密码登录</h2>
+            <p>打开 App 后点击“登录”，账号填写白名单手机号，密码填写注册时由本人设置的密码。</p>
           </div>
         </div>
         <div class="screen-grid">
@@ -776,12 +879,12 @@
             <button class="shot-button" type="button" data-full="qcsop-assets/02-login-form.png" aria-label="放大查看账号登录表单截图">
               <img src="qcsop-assets/02-login-form.png" alt="QC 账号登录表单，包含用户名和密码输入框" loading="lazy">
             </button>
-            <figcaption>② 输入 QC 用户名与密码</figcaption>
+            <figcaption>② 账号填手机号，密码填本人设置的密码</figcaption>
           </figure>
         </div>
         <div class="danger-note">
           <strong>账号安全</strong>
-          <p>密码向管理员领取。不要把密码写在纸箱、群聊截图或这份公开指南里。</p>
+          <p>管理员不会发放或查看你的明文密码。忘记密码请使用找回流程；不要把密码写在纸箱、群聊截图或这份公开指南里。</p>
         </div>
       </section>
 
@@ -790,16 +893,16 @@
           <div class="step__number">2</div>
           <div>
             <p class="step__kicker">ENTRY</p>
-            <h2>从质检工作台打开“标签拍检”</h2>
-            <p>登录后确认顶部是“质检工作台”，在“快捷操作”区域点击“标签拍检”。</p>
+            <h2>首页首屏直接打开“待我审核”</h2>
+            <p>登录后确认顶部是“质检工作台”。首页第一张卡显示待审核数量，点击即可进入；需要新拍检时点击下方“发起标签拍检”。</p>
           </div>
         </div>
         <div class="screen-grid screen-grid--single">
           <figure class="phone-shot">
-            <button class="shot-button" type="button" data-full="qcsop-assets/04-open-label-qc.png" aria-label="放大查看质检工作台标签拍检入口截图">
-              <img src="qcsop-assets/04-open-label-qc.png" alt="质检工作台快捷操作区域，左下方有标签拍检入口" loading="lazy">
+            <button class="shot-button" type="button" data-full="qcsop-assets/20-qc-home-review-entry-expo.png" aria-label="放大查看质检首页待我审核入口截图">
+              <img src="qcsop-assets/20-qc-home-review-entry-expo.png" alt="Expo Web 质检工作台首页，首屏显示待我审核和发起标签拍检" loading="lazy">
             </button>
-            <figcaption>“快捷操作”第一项是“标签拍检”（业务信息已脱敏）</figcaption>
+            <figcaption>“待我审核”在首屏，不需要向下寻找</figcaption>
           </figure>
           <div class="callouts">
             <div class="callout">
@@ -809,13 +912,13 @@
             </div>
             <div class="callout">
               <span class="callout__number">2</span>
-              <strong>轻微下滑</strong>
-              <p>手机小屏上“快捷操作”可能在首屏下方，向上滑一点即可看到。</p>
+              <strong>审核已有任务</strong>
+              <p>点击橙色“待我审核”卡，直接进入待人工审核列表。</p>
             </div>
             <div class="callout">
               <span class="callout__number">3</span>
-              <strong>点击标签拍检</strong>
-              <p>不要点“扫码质检”或“检验记录”，它们是其他业务入口。</p>
+              <strong>发起新拍检</strong>
+              <p>点击“发起标签拍检”，再录入 SKU、批次和照片；“查看质检记录”只用于追踪历史。</p>
             </div>
           </div>
         </div>
@@ -1083,10 +1186,61 @@
         </div>
       </section>
 
+      <section class="step" id="step-data-management">
+        <div class="step__heading">
+          <div class="step__number">Web</div>
+          <div>
+            <p class="step__kicker">ARCHIVE / BACKUP / TRAINING APPROVAL</p>
+            <h2>人工审核后，由 Web 整理训练数据</h2>
+            <p>质检员提交只完成“人工真值”，不会自动训练。后续备份、归档和训练确认由 Web 管理端分开完成。</p>
+          </div>
+        </div>
+
+        <figure class="web-shot">
+          <button class="shot-button" type="button" data-full="qcsop-assets/21-web-training-management.png" aria-label="放大查看 Web 已审核数据整理页面">
+            <img src="qcsop-assets/21-web-training-management.png" alt="Web 包装标签拍检页面，包含待人工审核、已审核整理、归档记录及训练确认操作" loading="lazy">
+          </button>
+          <figcaption>Web 管理端：质量管理 → 包装标签拍检 → 已审核整理</figcaption>
+        </figure>
+
+        <div class="callouts">
+          <div class="callout">
+            <span class="callout__number">1</span>
+            <strong>下载备份</strong>
+            <p>导出当前任务的照片地址、SKU、批次、AI 候选和人工标注。备份不会改变训练状态。</p>
+          </div>
+          <div class="callout">
+            <span class="callout__number">2</span>
+            <strong>归档与恢复</strong>
+            <p>归档只是从日常整理列表移出，不会删除数据；需要时可在“归档记录”中恢复。</p>
+          </div>
+          <div class="callout callout--warning">
+            <span class="callout__number">3</span>
+            <strong>技术管理员确认训练</strong>
+            <p>只有具备系统管理权限的技术管理员能“批准训练/拒绝训练”。批准也只允许导出，不会自动启动本地训练或发布模型。</p>
+          </div>
+        </div>
+      </section>
+
       <section class="section" id="errors">
         <p class="section__kicker">TROUBLESHOOTING</p>
         <h2>常见异常怎么处理</h2>
         <p class="section__intro">先保留当前页面和任务编号，再按下面顺序处理。</p>
+
+        <details>
+          <summary>注册提示“未找到有效的工厂邀请”</summary>
+          <p>让管理员核对手机号是否与白名单完全一致、邀请是否属于当前工厂、状态是否仍为“邀请待领取”。不要临时换手机号，也不要让员工自己选择工厂或管理员角色。</p>
+        </details>
+
+        <details>
+          <summary>登录时账号或密码错误</summary>
+          <p>账号必须填写注册时使用的手机号。密码由员工本人设置；忘记时使用“忘记密码”，不要让管理员新建同手机号的重复账号。</p>
+        </details>
+
+        <details>
+          <summary>登录成功但看不到质检功能</summary>
+          <p>联系管理员检查白名单邀请角色是否为“质量检验员”以及工厂质检模块是否启用。员工端不能自行增加权限。</p>
+        </details>
 
         <details>
           <summary>“提交拍检”按钮是灰色的</summary>

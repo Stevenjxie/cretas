@@ -1,5 +1,15 @@
 # Dispatch 完成归档 — 2026-07-27
 
+### `FEATURE-LIUSHANMEN-PHONE-WHITELIST-ONBOARDING-20260727-001`
+
+- **状态**：`merged`
+- **Owner**：`/root`
+- **Base SHA**：`96025f9e3cfb1d7de1c87fe70cb92177c4760aeb`
+- **功能提交 / PR / main 合并提交**：`fef5ec7fb` / [#1840](https://github.com/Stevenjxie/cretas/pull/1840) / `cb09348e7ecbd1520e0666932e5d5c1a9fb0b8a0`
+- **实际范围**：工厂管理员按手机号创建白名单邀请并指定本厂角色；员工注册账号固定为手机号、本人设置密码；注册阶段二再次验证同一工厂邀请并拒绝客户端提权；同时保留同手机号多设备并发登录。
+- **验证证据**：真实 JPA Context 与 Java 注册/白名单/多设备目标测试 `10/10`，RN Jest `19/19`，Web Vitest `3/3`，Java/Web 候选制品一次构建成功，PR 密钥扫描通过。
+- **发布状态**：按用户指示仅合并，Java/Web 生产与 RN OTA 均未部署；生产账号、白名单和业务数据写入为 `0`。
+
 ### `FEATURE-RN-MULTIDEVICE-QC-CONCURRENCY-20260727-001`
 
 - **状态**：`merged`

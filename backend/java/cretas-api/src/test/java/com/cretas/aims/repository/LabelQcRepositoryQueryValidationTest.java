@@ -49,6 +49,7 @@ class LabelQcRepositoryQueryValidationTest {
     void repositoriesBootAndQueriesKeepTenantIsolation() {
         LabelQcTask taskA = persistTask("F-LABEL-A", 11L, "idem-a");
         LabelQcTask taskB = persistTask("F-LABEL-B", 11L, "idem-b");
+        taskA.setTrainingStatus(LabelQcTrainingStatus.APPROVED);
         LabelQcPhoto photoA = persistPhoto(taskA, "attachment-a");
         persistAnnotation(taskA, photoA);
         entityManager.flush();
@@ -69,6 +70,15 @@ class LabelQcRepositoryQueryValidationTest {
                         List.of(LabelQcTaskStatus.NEEDS_REVIEW),
                         PageRequest.of(0, 10));
         assertThat(matchingTasks.getTotalElements()).isEqualTo(1L);
+        assertThat(taskRepository.findByFactoryIdAndArchivedAndStatusInOrderByCreatedAtDesc(
+                "F-LABEL-A",
+                false,
+                List.of(LabelQcTaskStatus.NEEDS_REVIEW),
+                PageRequest.of(0, 10))).hasSize(1);
+        assertThat(taskRepository.findByFactoryIdAndArchivedOrderByCreatedAtDesc(
+                "F-LABEL-A", false, PageRequest.of(0, 10))).hasSize(1);
+        assertThat(taskRepository.countByFactoryIdAndArchivedAndStatus(
+                "F-LABEL-A", false, LabelQcTaskStatus.NEEDS_REVIEW)).isEqualTo(1);
         assertThat(photoRepository.findByFactoryIdAndTaskIdOrderByOrderIndexAsc(
                 "F-LABEL-A", taskA.getId())).hasSize(1);
         assertThat(photoRepository.findByFactoryIdAndTaskIdOrderByOrderIndexAsc(
@@ -83,6 +93,14 @@ class LabelQcRepositoryQueryValidationTest {
                 LocalDateTime.now().minusDays(1),
                 LocalDateTime.now().plusDays(1),
                 PageRequest.of(0, 10))).hasSize(1);
+        assertThat(taskRepository
+                .findByFactoryIdAndStatusAndTrainingStatusAndReviewedAtBetweenOrderByReviewedAtAsc(
+                        "F-LABEL-A",
+                        LabelQcTaskStatus.NEEDS_REVIEW,
+                        LabelQcTrainingStatus.APPROVED,
+                        LocalDateTime.now().minusDays(1),
+                        LocalDateTime.now().plusDays(1),
+                        PageRequest.of(0, 10))).hasSize(1);
         assertThat(taskRepository.findTop20ByStatusOrderByCreatedAtAsc(
                 LabelQcTaskStatus.NEEDS_REVIEW)).hasSize(2);
         assertThat(taskRepository.findTop20ByStatusAndUpdatedAtBeforeOrderByUpdatedAtAsc(

@@ -10,6 +10,8 @@ export type LabelQcTaskStatus =
   | 'REVIEWED'
   | 'ANALYSIS_FAILED';
 
+export type LabelQcTrainingStatus = 'PENDING' | 'APPROVED' | 'REJECTED';
+
 export type LabelQcPhotoStatus =
   | 'UPLOADED'
   | 'QUEUED'
@@ -66,11 +68,21 @@ export interface LabelQcTaskSummary {
   productionDate: string;
   createdBy: number;
   status: LabelQcTaskStatus;
+  version: number;
   photoCount: number;
   aiCandidateCount: number;
   finalDefectCount: number;
   reviewedBy?: number | null;
   reviewedAt?: string | null;
+  archived: boolean;
+  archivedBy?: number | null;
+  archivedAt?: string | null;
+  trainingStatus: LabelQcTrainingStatus;
+  trainingDecidedBy?: number | null;
+  trainingDecidedAt?: string | null;
+  trainingDecisionNotes?: string | null;
+  backupExportedBy?: number | null;
+  backupExportedAt?: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -108,7 +120,21 @@ export interface LabelQcPhotoReview {
 }
 
 export interface LabelQcReviewRequest {
+  expectedVersion?: number;
+  reviewRequestId?: string;
   photos: LabelQcPhotoReview[];
+}
+
+export interface LabelQcTrainingDecisionRequest {
+  approved: boolean;
+  expectedVersion: number;
+  notes?: string;
+}
+
+export interface LabelQcTaskBackup {
+  data: LabelQcTaskDetail;
+  exportedAt: string;
+  exportedBy: number;
 }
 
 export interface LabelQcTrainingPhoto {
@@ -129,13 +155,19 @@ export function listLabelQcTasks(
   factoryId: string,
   params: {
     statuses?: LabelQcTaskStatus[];
+    archived?: boolean;
     page?: number;
     size?: number;
   } = {},
 ): Promise<ApiResponse<LabelQcPage<LabelQcTaskSummary>>> {
   const statuses = params.statuses?.length ? params.statuses.join(',') : undefined;
   return get<LabelQcPage<LabelQcTaskSummary>>(`/${factoryId}/label-qc/tasks`, {
-    params: { page: params.page ?? 1, size: params.size ?? 20, statuses },
+    params: {
+      page: params.page ?? 1,
+      size: params.size ?? 20,
+      statuses,
+      archived: params.archived ?? false,
+    },
   });
 }
 
@@ -165,6 +197,38 @@ export function retryLabelQcTask(
   taskId: string,
 ): Promise<ApiResponse<LabelQcTaskDetail>> {
   return post<LabelQcTaskDetail>(`/${factoryId}/label-qc/tasks/${taskId}/retry`);
+}
+
+export function archiveLabelQcTask(
+  factoryId: string,
+  taskId: string,
+): Promise<ApiResponse<LabelQcTaskDetail>> {
+  return post<LabelQcTaskDetail>(`/${factoryId}/label-qc/tasks/${taskId}/archive`);
+}
+
+export function restoreLabelQcTask(
+  factoryId: string,
+  taskId: string,
+): Promise<ApiResponse<LabelQcTaskDetail>> {
+  return post<LabelQcTaskDetail>(`/${factoryId}/label-qc/tasks/${taskId}/restore`);
+}
+
+export function backupLabelQcTask(
+  factoryId: string,
+  taskId: string,
+): Promise<ApiResponse<LabelQcTaskBackup>> {
+  return post<LabelQcTaskBackup>(`/${factoryId}/label-qc/tasks/${taskId}/backup`);
+}
+
+export function decideLabelQcTraining(
+  factoryId: string,
+  taskId: string,
+  payload: LabelQcTrainingDecisionRequest,
+): Promise<ApiResponse<LabelQcTaskDetail>> {
+  return put<LabelQcTaskDetail>(
+    `/${factoryId}/label-qc/tasks/${taskId}/training-decision`,
+    payload,
+  );
 }
 
 export function exportLabelQcTrainingData(

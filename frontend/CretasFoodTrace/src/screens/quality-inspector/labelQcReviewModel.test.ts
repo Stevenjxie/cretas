@@ -26,6 +26,8 @@ const detail: LabelQcTaskDetail = {
     photoCount: 4,
     aiCandidateCount: 3,
     finalDefectCount: 0,
+    archived: false,
+    trainingStatus: 'PENDING',
     createdAt: '2026-07-26T09:41:00',
     updatedAt: '2026-07-26T09:42:00',
   },

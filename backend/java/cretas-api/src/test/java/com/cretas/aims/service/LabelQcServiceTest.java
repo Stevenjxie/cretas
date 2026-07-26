@@ -5,6 +5,7 @@ import com.cretas.aims.dto.labelqc.LabelQcDtos.AddPhotoRequest;
 import com.cretas.aims.dto.labelqc.LabelQcDtos.BoundingBox;
 import com.cretas.aims.dto.labelqc.LabelQcDtos.PhotoReviewRequest;
 import com.cretas.aims.dto.labelqc.LabelQcDtos.ReviewTaskRequest;
+import com.cretas.aims.dto.labelqc.LabelQcDtos.TrainingDecisionRequest;
 import com.cretas.aims.entity.Attachment;
 import com.cretas.aims.entity.LabelQcAnnotation;
 import com.cretas.aims.entity.LabelQcPhoto;
@@ -13,6 +14,7 @@ import com.cretas.aims.entity.enums.LabelQcAnnotationSource;
 import com.cretas.aims.entity.enums.LabelQcLabel;
 import com.cretas.aims.entity.enums.LabelQcPhotoStatus;
 import com.cretas.aims.entity.enums.LabelQcTaskStatus;
+import com.cretas.aims.entity.enums.LabelQcTrainingStatus;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.repository.LabelQcAnnotationRepository;
 import com.cretas.aims.repository.LabelQcPhotoRepository;
@@ -79,6 +81,8 @@ class LabelQcServiceTest {
                 .photoCount(1)
                 .aiCandidateCount(1)
                 .finalDefectCount(0)
+                .archived(false)
+                .trainingStatus(LabelQcTrainingStatus.PENDING)
                 .version(0L)
                 .build();
         photo = LabelQcPhoto.builder()
@@ -145,6 +149,7 @@ class LabelQcServiceTest {
         assertEquals(2, task.getFinalDefectCount());
         assertEquals(LabelQcPhotoStatus.REVIEWED, photo.getStatus());
         assertEquals("review-device-a", task.getReviewRequestId());
+        assertEquals(LabelQcTrainingStatus.PENDING, task.getTrainingStatus());
 
         @SuppressWarnings("unchecked")
         ArgumentCaptor<Iterable<LabelQcAnnotation>> captor = ArgumentCaptor.forClass(Iterable.class);
@@ -153,6 +158,52 @@ class LabelQcServiceTest {
         assertEquals(1, additions.size());
         assertEquals(LabelQcAnnotationSource.HUMAN, additions.get(0).getSource());
         assertEquals(LabelQcLabel.MISSING_COLOR_LABEL, additions.get(0).getHumanLabel());
+    }
+
+    @Test
+    void reviewedTaskCanBeArchivedRestoredAndBackedUpWithoutDeletion() {
+        task.setStatus(LabelQcTaskStatus.REVIEWED);
+
+        service.archive(FACTORY_ID, TASK_ID, REVIEWER_ID);
+        assertTrue(task.getArchived());
+        assertEquals(REVIEWER_ID, task.getArchivedBy());
+        assertNotNull(task.getArchivedAt());
+        verify(taskRepository, never()).delete(any(LabelQcTask.class));
+
+        service.restore(FACTORY_ID, TASK_ID, REVIEWER_ID);
+        assertFalse(task.getArchived());
+        assertNull(task.getArchivedBy());
+        assertNull(task.getArchivedAt());
+
+        var backup = service.exportBackup(FACTORY_ID, TASK_ID, REVIEWER_ID);
+        assertEquals(REVIEWER_ID, backup.exportedBy());
+        assertEquals(TASK_ID, backup.data().task().id());
+        assertNotNull(task.getBackupExportedAt());
+    }
+
+    @Test
+    void technicalAdminDecisionIsExplicitAndVersionGuarded() {
+        task.setStatus(LabelQcTaskStatus.REVIEWED);
+
+        var approved = service.decideTraining(
+                FACTORY_ID,
+                TASK_ID,
+                REVIEWER_ID,
+                new TrainingDecisionRequest(true, 0L, "标注已复核"));
+
+        assertEquals(LabelQcTrainingStatus.APPROVED, task.getTrainingStatus());
+        assertEquals(REVIEWER_ID, task.getTrainingDecidedBy());
+        assertEquals("标注已复核", task.getTrainingDecisionNotes());
+        assertEquals(LabelQcTrainingStatus.APPROVED, approved.task().trainingStatus());
+
+        BusinessException stale = assertThrows(
+                BusinessException.class,
+                () -> service.decideTraining(
+                        FACTORY_ID,
+                        TASK_ID,
+                        REVIEWER_ID,
+                        new TrainingDecisionRequest(false, 9L, "旧页面")));
+        assertEquals("LABEL_QC_TRAINING_DECISION_STALE", stale.getErrorCode());
     }
 
     @Test

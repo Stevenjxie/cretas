@@ -2,6 +2,7 @@ package com.cretas.aims.repository;
 
 import com.cretas.aims.entity.LabelQcTask;
 import com.cretas.aims.entity.enums.LabelQcTaskStatus;
+import com.cretas.aims.entity.enums.LabelQcTrainingStatus;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.Lock;
@@ -40,11 +41,31 @@ public interface LabelQcTaskRepository extends JpaRepository<LabelQcTask, String
     Page<LabelQcTask> findByFactoryIdAndStatusInOrderByCreatedAtDesc(
             String factoryId, Collection<LabelQcTaskStatus> statuses, Pageable pageable);
 
+    Page<LabelQcTask> findByFactoryIdAndArchivedOrderByCreatedAtDesc(
+            String factoryId, Boolean archived, Pageable pageable);
+
+    Page<LabelQcTask> findByFactoryIdAndArchivedAndStatusInOrderByCreatedAtDesc(
+            String factoryId,
+            Boolean archived,
+            Collection<LabelQcTaskStatus> statuses,
+            Pageable pageable);
+
     long countByFactoryIdAndStatus(String factoryId, LabelQcTaskStatus status);
+
+    long countByFactoryIdAndArchivedAndStatus(
+            String factoryId, Boolean archived, LabelQcTaskStatus status);
 
     Page<LabelQcTask> findByFactoryIdAndStatusAndReviewedAtBetweenOrderByReviewedAtAsc(
             String factoryId,
             LabelQcTaskStatus status,
+            LocalDateTime from,
+            LocalDateTime to,
+            Pageable pageable);
+
+    Page<LabelQcTask> findByFactoryIdAndStatusAndTrainingStatusAndReviewedAtBetweenOrderByReviewedAtAsc(
+            String factoryId,
+            LabelQcTaskStatus status,
+            LabelQcTrainingStatus trainingStatus,
             LocalDateTime from,
             LocalDateTime to,
             Pageable pageable);
