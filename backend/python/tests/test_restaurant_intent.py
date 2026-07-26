@@ -2764,7 +2764,7 @@ class _StoreScopePool:
 
 
 @pytest.mark.asyncio
-async def test_multi_store_tenant_requires_explicit_scope():
+async def test_multi_store_tenant_requires_scope_independent_of_query_window_activity():
     pool = _StoreScopePool(["东城店", "西城店", "南城店"])
     spec = _build_spec(
         "RESTAURANT_OPS_GROSS_MARGIN",
@@ -2785,10 +2785,10 @@ async def test_multi_store_tenant_requires_explicit_scope():
     assert guarded.store_options == ("东城店", "西城店", "南城店")
     assert pool.conn.rls_factory_id == "FACTORY_A"
     assert pool.conn.fetched_factory_id == "FACTORY_A"
-    assert pool.conn.window_start == spec.date_range[0]
-    assert pool.conn.window_end == spec.date_range[1]
-    assert "fact_pos_transaction" in pool.conn.fetch_sql
-    assert "fact_pos_item" in pool.conn.fetch_sql
+    assert pool.conn.window_start is None
+    assert pool.conn.window_end is None
+    assert "$2" not in pool.conn.fetch_sql
+    assert "fact_pos_transaction" not in pool.conn.fetch_sql
 
 
 @pytest.mark.parametrize(
@@ -2891,6 +2891,26 @@ async def test_single_store_tenant_infers_scope_without_filtering_name():
     assert guarded.store_scope == "single"
     assert guarded.store_slots == ()
     assert guarded.store_options == ("唯一门店",)
+
+
+@pytest.mark.asyncio
+async def test_missing_store_dimension_does_not_invent_single_store_scope():
+    spec = _build_spec(
+        "RESTAURANT_OPS_SALES_SUMMARY",
+        "本周营业额和上周相比是上升还是下降",
+        confidence=0.95,
+        tier="llm",
+    )
+
+    guarded = await _apply_store_scope_guard(
+        _StoreScopePool([]),
+        "FACTORY_A",
+        spec,
+    )
+
+    assert guarded is spec
+    assert guarded.clarification_needed is False
+    assert guarded.store_scope is None
 
 
 def _spec_for_contract(**overrides):

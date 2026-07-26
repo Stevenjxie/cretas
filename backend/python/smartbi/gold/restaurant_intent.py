@@ -2492,29 +2492,15 @@ async def _apply_store_scope_guard(
                     "SELECT set_config('app.factory_id', $1, true)",
                     data_factory,
                 )
-                window_start, window_end = spec.date_range
                 rows = await conn.fetch(
                     """
                     SELECT s.name
                       FROM dim_store s
                      WHERE s.factory_id = $1
-                       AND EXISTS (
-                           SELECT 1
-                             FROM fact_pos_transaction t
-                             JOIN fact_pos_item i
-                               ON i.factory_id = t.factory_id
-                              AND i.transaction_id = t.id
-                            WHERE t.factory_id = s.factory_id
-                              AND t.store_id = s.store_id
-                              AND ($2::date IS NULL OR t.date >= $2::date)
-                              AND ($3::date IS NULL OR t.date <= $3::date)
-                       )
                      ORDER BY s.name
                      LIMIT 9
                     """,
                     data_factory,
-                    window_start,
-                    window_end,
                 )
     except Exception as exc:
         logger.warning("[restaurant-intent] store-scope gate unavailable: %s", exc)
@@ -2528,7 +2514,7 @@ async def _apply_store_scope_guard(
         for row in rows
         if row["name"] and str(row["name"]).strip()
     )
-    if len(names) <= 1:
+    if len(names) == 1:
         return _seal_query_plan(replace(
             spec,
             store_scope="single",
@@ -2538,6 +2524,10 @@ async def _apply_store_scope_guard(
             store_slots=(),
             store_options=names,
         ))
+    if not names:
+        # No dimension rows means the tenant cardinality is unknown, not one.
+        # Preserve the sealed plan without inventing a single-store fact.
+        return spec
     return _seal_query_plan(replace(
         spec,
         clarification_needed=True,
