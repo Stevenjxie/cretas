@@ -744,6 +744,7 @@ async def tiered_answer(
             result_kpis,
             result_meta,
         )
+        action_warning = _read_only_action_warning_for_spec(query, spec)
         displayable = has_displayable_business_result(answer_text)
         if not contract.passed or not displayable:
             missing = (
@@ -755,19 +756,23 @@ async def tiered_answer(
                 f"本次结果没有可靠覆盖{missing}，因此没有向您展示可能答非所问的数据，"
                 "也没有改走相邻指标。请补充具体范围后重试。"
             )
+            safe_text = _prepend_action_warning(safe_text, action_warning)
             capture_source = "java_entry_delegate" if java_tool_name else None
             asyncio.create_task(log_intent_capture(
                 pool, spec, factory_id=factory_id, query=query,
                 answer=safe_text, contract_pass=False, served=False,
                 source=capture_source,
             ))
-            return {
+            failed_result = {
                 "kind": "clarification",
                 "answer_text": safe_text,
                 "contract_pass": False,
                 "structured_context": _clarification_structured_context(spec),
                 "spec": spec,
             }
+            if action_warning:
+                failed_result["warning"] = action_warning
+            return failed_result
         # R26b: 多主题复合句 ("这个月生意怎么样，另外米饭卖得好不好") 目前
         # 只执行一个主题 — 其余部分静默丢弃违反"部分完成不说成全部"。
         # 检测到复合分隔且计划只有单主题时, 尾注明示未覆盖部分。
@@ -790,7 +795,6 @@ async def tiered_answer(
             store_mention=store_mention,
         )
 
-        action_warning = _read_only_action_warning_for_spec(query, spec)
         answer_text = _prepend_action_warning(answer_text, action_warning)
         result: Dict[str, Any] = {
             "kind": "answer",

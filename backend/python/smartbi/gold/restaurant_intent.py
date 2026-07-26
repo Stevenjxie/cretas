@@ -1569,6 +1569,26 @@ def _latest_read_only_ranking_choice(text: str) -> str:
     return (text or "")[matches[-1].start():].strip() if matches else ""
 
 
+def _read_choice_replaces_dish_sales(text: str) -> bool:
+    """Whether a READ choice explicitly replaces the retained object/metric."""
+    if not _contains_read_only_ranking_choice(text):
+        return False
+    metrics = _detect_requested_metrics(text)
+    if metrics and metrics != ("sales_volume",):
+        return True
+    return bool(
+        (
+            (
+                _asks_store_breakdown(text)
+                or "门店" in text
+            )
+            and _detect_store_scope(text)[0] != "all"
+            and not any(token in text for token in ("菜", "菜品"))
+        )
+        or any(token in text for token in ("食材", "原料", "员工", "人员"))
+    )
+
+
 def _explicit_read_only_action_ranking_spec(
     original_query: str,
     answer: str,
@@ -1590,22 +1610,11 @@ def _explicit_read_only_action_ranking_spec(
     ):
         return None
 
-    current_metrics = _detect_requested_metrics(answer)
-    if current_metrics and current_metrics != ("sales_volume",):
-        return None
-    if (
-        _contains_read_only_ranking_choice(answer)
-        and (
-            (
-                (
-                    _asks_store_breakdown(answer)
-                    or "门店" in answer
-                )
-                and _detect_store_scope(answer)[0] != "all"
-                and not any(token in answer for token in ("菜", "菜品"))
-            )
-            or any(token in answer for token in ("食材", "原料", "员工", "人员"))
-        )
+    latest_choice = _latest_read_only_ranking_choice(original_query)
+    if any(
+        _read_choice_replaces_dish_sales(choice)
+        for choice in (answer, latest_choice)
+        if choice
     ):
         # A newly named object is a semantic replacement, not a harmless
         # confirmation of the retained dish slot. Let the normal planner
@@ -1614,7 +1623,7 @@ def _explicit_read_only_action_ranking_spec(
 
     current_range, current_window = _resolve_sales_date_range(answer)
     choice_range, choice_window = _resolve_sales_date_range(
-        _latest_read_only_ranking_choice(original_query)
+        latest_choice
     )
     history_range, history_window = _resolve_sales_date_range(history_text)
     if current_window != "全部历史":
