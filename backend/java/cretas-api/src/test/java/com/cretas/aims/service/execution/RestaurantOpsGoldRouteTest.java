@@ -469,6 +469,30 @@ class RestaurantOpsGoldRouteTest {
     }
 
     @Test
+    @DisplayName("explicit restaurant facts are never stolen by owner action keywords")
+    void explicitRestaurantFactsBypassOwnerAction() {
+        IntentConfigManagementService configService = mock(IntentConfigManagementService.class);
+        ReflectionTestUtils.setField(orchestrator, "configService", configService);
+        when(configService.resolveBusinessDomain("DEMO_REST")).thenReturn("RESTAURANT");
+
+        for (String question : new String[]{
+                "昨天与前天全部门店营业额分别是多少？请给差额和升降结论",
+                "最近30天全部门店毛利和营业额分别是多少，并展示计算口径",
+                "最近7天青花椒南方百联店和青花椒徐汇光启城店的招牌青花椒味(单人份)成本和毛利分别是多少",
+                "最近30天全部门店的净利润和翻台率是多少？缺数据不要猜"
+        }) {
+            Boolean shouldRoute = ReflectionTestUtils.invokeMethod(
+                    orchestrator,
+                    "shouldRouteRestaurantOwnerAction",
+                    "DEMO_REST",
+                    question,
+                    Map.of());
+
+            assertThat(shouldRoute).as(question).isFalse();
+        }
+    }
+
+    @Test
     @DisplayName("owner action route refuses manufacturing factories even with owner context")
     void ownerActionRouteRefusesFactoryDomainEvenWithContext() {
         IntentConfigManagementService configService = mock(IntentConfigManagementService.class);
