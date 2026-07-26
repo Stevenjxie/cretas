@@ -145,6 +145,8 @@ class WorkflowEngineServiceImplTest {
         lenient().when(workflowService.getActiveByDecisionType(FACTORY_ID, decisionType))
                 .thenReturn(Optional.of(w));
         lenient().when(workflowService.getById(FACTORY_ID, WORKFLOW_ID)).thenReturn(Optional.of(w));
+        lenient().when(workflowService.getByIdForUpdate(FACTORY_ID, WORKFLOW_ID))
+                .thenReturn(Optional.of(w));
         return w;
     }
 
@@ -185,6 +187,72 @@ class WorkflowEngineServiceImplTest {
     }
 
     // ==================== Tests ====================
+
+    @Test
+    @DisplayName("optional start returns empty and writes nothing when approval is not configured")
+    void optional_start_returns_empty_when_not_configured() {
+        when(workflowService.getActiveByDecisionType(
+                FACTORY_ID, DecisionType.PURCHASE_ORDER_APPROVAL))
+                .thenReturn(Optional.empty());
+
+        Optional<ApprovalWorkflowInstance> result = engine.startWorkflowIfConfigured(
+                FACTORY_ID, "PURCHASE_ORDER", "PO-DIRECT", Map.of(), INITIATOR_ID);
+
+        assertTrue(result.isEmpty());
+        verify(instanceRepository, never()).save(any());
+        verify(historyRepository, never()).save(any());
+    }
+
+    @Test
+    @DisplayName("optional start binds the exact active Canvas definition")
+    void optional_start_binds_exact_active_definition() {
+        ApprovalWorkflow workflow = buildWorkflow(
+                List.of(
+                        node("start", "start", null),
+                        node("approve1", "approval", approvalCfg()),
+                        node("end_ok", "end", Map.of("outcome", "APPROVED"))),
+                List.of(
+                        edge("e1", "start", "approve1", null, 0, null),
+                        edge("e2", "approve1", "end_ok", null, 0, null)),
+                "start");
+
+        ApprovalWorkflowInstance instance = engine.startWorkflowIfConfigured(
+                FACTORY_ID, "PURCHASE_ORDER", "PO-CANVAS", Map.of(), INITIATOR_ID)
+                .orElseThrow();
+
+        assertEquals(workflow.getId(), instance.getWorkflowId());
+        assertTrue(instance.getContextJson().containsKey(
+                "_cretas_bound_workflow_definition_v2_sha256"));
+    }
+
+    @Test
+    @DisplayName("running instance keeps its bound graph after the definition is disabled")
+    void running_instance_survives_later_disable() {
+        wireInstanceLookup();
+        ApprovalWorkflow workflow = buildWorkflow(
+                List.of(
+                        node("start", "start", null),
+                        node("approve1", "approval", approvalCfg()),
+                        node("end_ok", "end", Map.of("outcome", "APPROVED"))),
+                List.of(
+                        edge("e1", "start", "approve1", null, 0, null),
+                        edge("e2", "approve1", "end_ok", null, 0, null)),
+                "start");
+        workflow.setPublishStatus("published");
+        workflow.setEnabled(true);
+
+        ApprovalWorkflowInstance instance = engine.startWorkflowIfConfigured(
+                FACTORY_ID, "PURCHASE_ORDER", "PO-IN-FLIGHT", Map.of(), INITIATOR_ID)
+                .orElseThrow();
+        workflow.setEnabled(false);
+        workflow.setPublishStatus("archived");
+
+        ApprovalWorkflowInstance completed = engine.transitionNode(
+                instance.getId(), APPROVER_ID, "factory_admin",
+                HistoryAction.APPROVE, "continue original version");
+
+        assertEquals(InstanceStatus.APPROVED, completed.getStatus());
+    }
 
     @Test
     @DisplayName("F006 sales threshold: <=5000 auto-completes OA, >5000 creates finance task")

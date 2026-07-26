@@ -96,18 +96,16 @@ class SalesServiceImplApprovalThresholdN9Test {
     void confirm_starts_persisted_oa_with_actual_jwt_initiator() {
         SalesOrder order = order(SalesOrderStatus.DRAFT);
         mockConfirmInput(order);
-        when(approvalWorkflowService.getActiveByDecisionType(
-                FACTORY, DecisionType.SALES_ORDER_APPROVAL)).thenReturn(Optional.of(activeWorkflow));
         ApprovalWorkflowInstance running = instance(InstanceStatus.RUNNING, INITIATOR);
-        when(workflowEngine.startWorkflowWithDefinition(
-                eq(FACTORY), eq("SALES_ORDER"), eq(ORDER_ID), anyMap(), eq(INITIATOR), eq(activeWorkflow)))
-                .thenReturn(running);
+        when(workflowEngine.startWorkflowIfConfigured(
+                eq(FACTORY), eq("SALES_ORDER"), eq(ORDER_ID), anyMap(), eq(INITIATOR)))
+                .thenReturn(Optional.of(running));
 
         SalesOrder result = salesService.confirmOrder(FACTORY, ORDER_ID, INITIATOR);
 
         assertEquals(SalesOrderStatus.PENDING_FINANCE_REVIEW, result.getStatus());
-        verify(workflowEngine).startWorkflowWithDefinition(
-                eq(FACTORY), eq("SALES_ORDER"), eq(ORDER_ID), anyMap(), eq(INITIATOR), eq(activeWorkflow));
+        verify(workflowEngine).startWorkflowIfConfigured(
+                eq(FACTORY), eq("SALES_ORDER"), eq(ORDER_ID), anyMap(), eq(INITIATOR));
         verify(eventPublisher).publishEvent(any(SalesOrderConfirmedEvent.class));
         verify(eventPublisher, never()).publishEvent(any(SalesOrderFinanceApprovedEvent.class));
     }
@@ -116,47 +114,40 @@ class SalesServiceImplApprovalThresholdN9Test {
     void confirm_auto_route_still_persists_terminal_oa_instance() {
         SalesOrder order = order(SalesOrderStatus.DRAFT);
         mockConfirmInput(order);
-        when(approvalWorkflowService.getActiveByDecisionType(
-                FACTORY, DecisionType.SALES_ORDER_APPROVAL)).thenReturn(Optional.of(activeWorkflow));
-        when(workflowEngine.startWorkflowWithDefinition(
-                eq(FACTORY), eq("SALES_ORDER"), eq(ORDER_ID), anyMap(), eq(INITIATOR), eq(activeWorkflow)))
-                .thenReturn(instance(InstanceStatus.APPROVED, INITIATOR));
+        when(workflowEngine.startWorkflowIfConfigured(
+                eq(FACTORY), eq("SALES_ORDER"), eq(ORDER_ID), anyMap(), eq(INITIATOR)))
+                .thenReturn(Optional.of(instance(InstanceStatus.APPROVED, INITIATOR)));
 
         SalesOrder result = salesService.confirmOrder(FACTORY, ORDER_ID, INITIATOR);
 
         assertEquals(SalesOrderStatus.FINANCE_APPROVED, result.getStatus());
-        verify(workflowEngine).startWorkflowWithDefinition(
-                eq(FACTORY), eq("SALES_ORDER"), eq(ORDER_ID), anyMap(), eq(INITIATOR), eq(activeWorkflow));
+        verify(workflowEngine).startWorkflowIfConfigured(
+                eq(FACTORY), eq("SALES_ORDER"), eq(ORDER_ID), anyMap(), eq(INITIATOR));
         verify(eventPublisher).publishEvent(any(SalesOrderFinanceApprovedEvent.class));
     }
 
     @Test
-    void confirm_without_active_sales_graph_fails_before_domain_mutation() {
+    void confirm_without_active_sales_graph_directly_approves() {
         SalesOrder order = order(SalesOrderStatus.DRAFT);
-        when(salesOrderRepository.findByIdAndFactoryIdForUpdate(ORDER_ID, FACTORY))
-                .thenReturn(Optional.of(order));
-        when(approvalWorkflowService.getActiveByDecisionType(
-                FACTORY, DecisionType.SALES_ORDER_APPROVAL)).thenReturn(Optional.empty());
+        mockConfirmInput(order);
+        when(workflowEngine.startWorkflowIfConfigured(
+                eq(FACTORY), eq("SALES_ORDER"), eq(ORDER_ID), anyMap(), eq(INITIATOR)))
+                .thenReturn(Optional.empty());
 
-        BusinessException error = assertThrows(
-                BusinessException.class,
-                () -> salesService.confirmOrder(FACTORY, ORDER_ID, INITIATOR));
+        SalesOrder result = salesService.confirmOrder(FACTORY, ORDER_ID, INITIATOR);
 
-        assertEquals("SALES_APPROVAL_WORKFLOW_REQUIRED", error.getErrorCode());
-        assertEquals(SalesOrderStatus.DRAFT, order.getStatus());
-        verify(salesOrderRepository, never()).save(any(SalesOrder.class));
-        verify(eventPublisher, never()).publishEvent(any(SalesOrderConfirmedEvent.class));
+        assertEquals(SalesOrderStatus.FINANCE_APPROVED, result.getStatus());
+        assertEquals(INITIATOR, result.getFinanceReviewedBy());
+        verify(eventPublisher).publishEvent(any(SalesOrderConfirmedEvent.class));
     }
 
     @Test
     void repeated_confirm_under_order_lock_starts_only_one_oa_instance() {
         SalesOrder order = order(SalesOrderStatus.DRAFT);
         mockConfirmInput(order);
-        when(approvalWorkflowService.getActiveByDecisionType(
-                FACTORY, DecisionType.SALES_ORDER_APPROVAL)).thenReturn(Optional.of(activeWorkflow));
-        when(workflowEngine.startWorkflowWithDefinition(
-                eq(FACTORY), eq("SALES_ORDER"), eq(ORDER_ID), anyMap(), eq(INITIATOR), eq(activeWorkflow)))
-                .thenReturn(instance(InstanceStatus.RUNNING, INITIATOR));
+        when(workflowEngine.startWorkflowIfConfigured(
+                eq(FACTORY), eq("SALES_ORDER"), eq(ORDER_ID), anyMap(), eq(INITIATOR)))
+                .thenReturn(Optional.of(instance(InstanceStatus.RUNNING, INITIATOR)));
 
         SalesOrder first = salesService.confirmOrder(FACTORY, ORDER_ID, INITIATOR);
         BusinessException replay = assertThrows(
@@ -167,8 +158,8 @@ class SalesServiceImplApprovalThresholdN9Test {
         assertEquals(409, replay.getCode());
         verify(salesOrderRepository, times(2))
                 .findByIdAndFactoryIdForUpdate(ORDER_ID, FACTORY);
-        verify(workflowEngine, times(1)).startWorkflowWithDefinition(
-                eq(FACTORY), eq("SALES_ORDER"), eq(ORDER_ID), anyMap(), eq(INITIATOR), eq(activeWorkflow));
+        verify(workflowEngine, times(1)).startWorkflowIfConfigured(
+                eq(FACTORY), eq("SALES_ORDER"), eq(ORDER_ID), anyMap(), eq(INITIATOR));
     }
 
     @Test

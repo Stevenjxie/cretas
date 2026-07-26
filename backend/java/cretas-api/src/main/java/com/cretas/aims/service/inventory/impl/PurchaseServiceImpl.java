@@ -505,6 +505,10 @@ public class PurchaseServiceImpl implements PurchaseService {
             Optional<ApprovalWorkflowInstance> existing = workflowEngine == null
                     ? Optional.empty()
                     : workflowEngine.getLatestInstance(factoryId, "PURCHASE_ORDER", orderId);
+            if (order.getStatus() == PurchaseOrderStatus.FINANCE_APPROVED
+                    && existing.isEmpty()) {
+                return order;
+            }
             if (existing.isPresent() && EnumSet.of(
                     PurchaseOrderStatus.WORKFLOW_RUNNING,
                     PurchaseOrderStatus.FINANCE_APPROVED,
@@ -528,10 +532,9 @@ public class PurchaseServiceImpl implements PurchaseService {
         requireActiveSupplier(factoryId, order.getSupplierId());
         validateOrderLinesBeforeApproval(factoryId, order);
 
-        if (workflowEngine == null || !workflowEngine.hasActiveWorkflow(factoryId, "PURCHASE_ORDER")) {
-            throw new BusinessException(422, "当前工厂未配置可用的采购 OA 审批流程")
-                    .withCode("PURCHASE_APPROVAL_ROUTE_REQUIRED")
-                    .withHint("请管理员先发布并启用 PURCHASE_ORDER 审批流程；采购单仍保持草稿");
+        if (workflowEngine == null) {
+            throw new BusinessException(503, "审批运行时暂不可用")
+                    .withCode("OA_RUNTIME_UNAVAILABLE");
         }
         // Phase 4a follow-up (issue #45): Option A wrap. The annotated helper
         // evaluateOrderRules() must be invoked through the Spring proxy ({@code self}, not
@@ -540,16 +543,23 @@ public class PurchaseServiceImpl implements PurchaseService {
         // ORDER scope rules against it.
         self.evaluateOrderRules(factoryId, order);
 
-        ApprovalWorkflowInstance instance = workflowEngine.startWorkflow(
-                factoryId,
-                "PURCHASE_ORDER",
-                order.getId(),
-                buildPurchaseWorkflowContext(factoryId, order),
-                initiatorUserId);
-        validateRunnableApprovalRoute(factoryId, instance);
-        projectWorkflowState(order, instance, initiatorUserId);
+        Optional<ApprovalWorkflowInstance> instance = workflowEngine.startWorkflowIfConfigured(
+                factoryId, "PURCHASE_ORDER", order.getId(),
+                buildPurchaseWorkflowContext(factoryId, order), initiatorUserId);
+        if (instance.isEmpty()) {
+            order.setStatus(PurchaseOrderStatus.FINANCE_APPROVED);
+            order.setApprovedBy(initiatorUserId);
+            order.setApprovedAt(LocalDateTime.now());
+            order.setFinanceReviewedBy(initiatorUserId);
+            order.setFinanceReviewedAt(LocalDateTime.now());
+            log.info("采购订单无需审批，直接生效: orderId={}, orderNumber={}",
+                    orderId, order.getOrderNumber());
+            return purchaseOrderRepository.save(order);
+        }
+        validateRunnableApprovalRoute(factoryId, instance.get());
+        projectWorkflowState(order, instance.get(), initiatorUserId);
         log.info("提交采购订单并启动 OA: orderId={}, orderNumber={}, instanceId={}, workflowStatus={}",
-                orderId, order.getOrderNumber(), instance.getId(), instance.getStatus());
+                orderId, order.getOrderNumber(), instance.get().getId(), instance.get().getStatus());
         return purchaseOrderRepository.save(order);
     }
 

@@ -170,6 +170,9 @@ public interface ApprovalChainService {
      */
     boolean requiresApproval(String factoryId, DecisionType decisionType, Map<String, Object> context);
 
+    /** Returns true when an enabled legacy flat-chain row still needs migration. */
+    boolean hasEnabledLegacyConfig(String factoryId, DecisionType decisionType);
+
     // ==================== 统计与分析 ====================
 
     /**

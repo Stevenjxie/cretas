@@ -40,6 +40,7 @@ import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.UUID;
 
 /**
@@ -519,21 +520,28 @@ public class SemiFinishedStocktakeServiceImpl implements SemiFinishedStocktakeSe
                     .withHint("前往审批中心: /approval-center");
         }
 
-        stocktake.setStatus(SemiFinishedStocktake.Status.PENDING_APPROVAL);
         stocktake.setSubmittedBy(userId);
         stocktake.setSubmittedAt(LocalDateTime.now());
 
-        // 启动 INVENTORY_ADJUSTMENT workflow (与 SP7 完全一致, 张权要求的审批)
-        if (workflowEngine != null && workflowEngine.hasActiveWorkflow(factoryId, WORKFLOW_MODULE_CODE)) {
-            ApprovalWorkflowInstance instance = workflowEngine.startWorkflow(
-                    factoryId,
-                    WORKFLOW_MODULE_CODE,
-                    stocktakeId,
-                    Map.of("stocktakeNo", stocktake.getStocktakeNo(),
-                           "periodMonth", stocktake.getPeriodMonth(),
-                           "type", "SEMI_FINISHED_STOCKTAKE"),
-                    userId);
-            stocktake.setWorkflowInstanceId(instance.getId());
+        if (workflowEngine == null) {
+            throw new BusinessException(503, "审批运行时暂不可用")
+                    .withCode("OA_RUNTIME_UNAVAILABLE");
+        }
+        Optional<ApprovalWorkflowInstance> instance = workflowEngine.startWorkflowIfConfigured(
+                factoryId,
+                WORKFLOW_MODULE_CODE,
+                stocktakeId,
+                Map.of("stocktakeNo", stocktake.getStocktakeNo(),
+                       "periodMonth", stocktake.getPeriodMonth(),
+                       "type", "SEMI_FINISHED_STOCKTAKE"),
+                userId);
+        if (instance.isPresent()) {
+            stocktake.setStatus(SemiFinishedStocktake.Status.PENDING_APPROVAL);
+            stocktake.setWorkflowInstanceId(instance.get().getId());
+        } else {
+            stocktake.setStatus(SemiFinishedStocktake.Status.APPROVED);
+            stocktake.setApprovedBy(userId);
+            stocktake.setApprovedAt(LocalDateTime.now());
         }
 
         stocktakeRepo.save(stocktake);
@@ -549,7 +557,8 @@ public class SemiFinishedStocktakeServiceImpl implements SemiFinishedStocktakeSe
                 .orElseThrow(() -> new BusinessException(404, "盘点任务不存在: " + stocktakeId));
 
         // 红线: 必须有 workflowInstanceId (不允许绕过 workflow)
-        if (stocktake.getWorkflowInstanceId() == null) {
+        if (stocktake.getWorkflowInstanceId() == null
+                && stocktake.getStatus() != SemiFinishedStocktake.Status.APPROVED) {
             throw new BusinessException(403,
                     "半成品盘点调账必须经过 INVENTORY_ADJUSTMENT 工作流审批，无法直接调账")
                     .withCode("WORKFLOW_BYPASS_FORBIDDEN")

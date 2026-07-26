@@ -34,13 +34,7 @@ public class ApprovalChainServiceImpl implements ApprovalChainService {
     private final ApprovalChainConfigRepository approvalChainConfigRepository;
     private final ObjectMapper objectMapper;
 
-    /**
-     * Sprint 3 Track-I (C-APPROVAL-EDITOR-1) dual-source read:
-     * {@link #requiresApproval(String, DecisionType, Map)} 优先查 graph
-     * workflow, 不存在则 fallback 到 flat-list ApprovalChainConfig.
-     *
-     * <p>{@code @Lazy} 防御未来潜在循环依赖 (当前无, Day 4 verified).
-     */
+    /** Canvas is the sole runtime source; legacy rows are migration evidence only. */
     private final @Lazy ApprovalWorkflowService approvalWorkflowService;
 
     // ==================== 配置管理 ====================
@@ -338,45 +332,31 @@ public class ApprovalChainServiceImpl implements ApprovalChainService {
 
     @Override
     public boolean requiresApproval(String factoryId, DecisionType decisionType, Map<String, Object> context) {
-        // ① Sprint 3 Track-I dual-source: 优先查 ApprovalWorkflow (graph)
-        // ApprovalWorkflowService.getActiveByDecisionType() 已 filter published+enabled.
-        // graph 存在即认定需要审批 (graph 自身管 auto-approve 逻辑).
         boolean hasGraphWorkflow = approvalWorkflowService
                 .getActiveByDecisionType(factoryId, decisionType)
                 .isPresent();
         if (hasGraphWorkflow) {
-            log.debug("使用 graph workflow (Sprint 3 Track-I) - factoryId={}, decisionType={}",
+            log.debug("使用 Canvas 审批画布 - factoryId={}, decisionType={}",
                     factoryId, decisionType);
             return true;
         }
 
-        // ② Fallback to legacy flat-list ApprovalChainConfig
-        log.debug("Fallback to legacy ApprovalChainConfig - factoryId={}, decisionType={}",
-                factoryId, decisionType);
-
-        // 查找匹配的配置
-        Optional<ApprovalChainConfig> configOpt = findMatchingConfig(factoryId, decisionType, context);
-
-        if (configOpt.isEmpty()) {
-            log.debug("未找到审批配置，不需要审批 - factoryId={}, decisionType={}", factoryId, decisionType);
-            return false;
+        if (hasEnabledLegacyConfig(factoryId, decisionType)) {
+            throw new BusinessException(409, "旧版审批配置尚未迁移到审批画布")
+                    .withCode("OA_LEGACY_CONFIG_MIGRATION_REQUIRED")
+                    .withHint("请在系统设置 → 审批业务中发布并启用对应审批画布");
         }
 
-        ApprovalChainConfig config = configOpt.get();
+        return false;
+    }
 
-        // 检查是否可以自动通过
-        if (canAutoApprove(config, context)) {
-            log.debug("满足自动审批条件 - configId={}", config.getId());
-            return false;
-        }
-
-        // 检查是否可以自动拒绝 (仍然需要审批流程来处理拒绝)
-        if (canAutoReject(config, context)) {
-            log.debug("满足自动拒绝条件，需要进入审批流程 - configId={}", config.getId());
-            return true;
-        }
-
-        return true;
+    @Override
+    @Transactional(readOnly = true)
+    public boolean hasEnabledLegacyConfig(String factoryId, DecisionType decisionType) {
+        return !approvalChainConfigRepository
+                .findByFactoryIdAndDecisionTypeAndEnabledTrueOrderByApprovalLevel(
+                        factoryId, decisionType)
+                .isEmpty();
     }
 
     // ==================== 统计与分析 ====================

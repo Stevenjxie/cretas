@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type {
+  ApprovalCutoverReadinessDTO,
   ApprovalWorkflowDTO,
   DecisionTypeMetadataDTO,
 } from '@/api/approvalWorkflow'
@@ -21,6 +22,20 @@ const metadata: DecisionTypeMetadataDTO[] = [
     wired: true,
   },
 ]
+
+function readiness(
+  runtimeStatus: ApprovalCutoverReadinessDTO['runtimeStatus'],
+): ApprovalCutoverReadinessDTO {
+  return {
+    decisionType: 'PURCHASE_ORDER_APPROVAL',
+    moduleCode: 'PURCHASE_ORDER',
+    wired: true,
+    runtimeStatus,
+    approvalRequired: runtimeStatus === 'CANVAS_ACTIVE',
+    legacyEnabled: runtimeStatus === 'LEGACY_MIGRATION_REQUIRED',
+    workflowCount: 0,
+  }
+}
 
 function workflow(
   overrides: Partial<ApprovalWorkflowDTO>,
@@ -60,21 +75,21 @@ describe('approval business catalog', () => {
 
     expect(selectPreferredWorkflow([draft, active])?.id).toBe('draft')
 
-    const [item] = buildApprovalCatalog(metadata, [draft, active], [
-      { decisionType: 'PURCHASE_ORDER_APPROVAL', enabled: true },
-    ])
+    const [item] = buildApprovalCatalog(
+      metadata, [draft, active], [readiness('CANVAS_ACTIVE')],
+    )
     expect(item).toMatchObject({
       status: 'active-with-draft',
       preferredWorkflowId: 'draft',
       workflowCount: 2,
-      legacyCount: 1,
+      legacyCount: 0,
     })
   })
 
   it('deep-links directly to the matching OA canvas workflow', () => {
     const [item] = buildApprovalCatalog(metadata, [
       workflow({ id: 'purchase-flow', publishStatus: 'published', enabled: true }),
-    ], [])
+    ], [readiness('CANVAS_ACTIVE')])
 
     expect(buildOaCanvasQuery(item)).toEqual({
       tab: 'approval',
@@ -85,7 +100,7 @@ describe('approval business catalog', () => {
   })
 
   it('opens a business-scoped empty canvas when no workflow exists', () => {
-    const [item] = buildApprovalCatalog(metadata, [], [])
+    const [item] = buildApprovalCatalog(metadata, [], [readiness('NO_APPROVAL')])
 
     expect(item.status).toBe('unconfigured')
     expect(buildOaCanvasQuery(item)).toEqual({
@@ -93,5 +108,15 @@ describe('approval business catalog', () => {
       decisionType: 'PURCHASE_ORDER_APPROVAL',
       source: 'approval-chains',
     })
+  })
+
+  it('does not present legacy-only configuration as no approval', () => {
+    const [item] = buildApprovalCatalog(
+      metadata, [], [readiness('LEGACY_MIGRATION_REQUIRED')],
+    )
+
+    expect(item.status).toBe('legacy-migration-required')
+    expect(item.approvalEnabled).toBe(false)
+    expect(item.legacyCount).toBe(1)
   })
 })

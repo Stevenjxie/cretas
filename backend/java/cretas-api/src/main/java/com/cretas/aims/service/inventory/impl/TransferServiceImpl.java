@@ -595,6 +595,9 @@ public class TransferServiceImpl implements TransferService {
                 && existing.filter(instance -> instance.getStatus() == InstanceStatus.RUNNING).isPresent()) {
             return transfer;
         }
+        if (transfer.getStatus() == TransferStatus.APPROVED && existing.isEmpty()) {
+            return transfer;
+        }
         if (transfer.getStatus() != TransferStatus.DRAFT) {
             if (transfer.getStatus() == TransferStatus.REQUESTED && existing.isEmpty()) {
                 throw new BusinessException(409, "调拨单已提交但缺少 OA 审批实例")
@@ -604,25 +607,28 @@ public class TransferServiceImpl implements TransferService {
             throw new BusinessException(409, "只有草稿状态的调拨单可以提交审批")
                     .withCode("TRANSFER_SUBMIT_STATUS_INVALID");
         }
-        if (workflowEngine == null
-                || !workflowEngine.hasActiveWorkflow(factoryId, "INVENTORY_TRANSFER")) {
-            throw new BusinessException(422, "当前工厂未配置可用的库存调拨 OA 审批流程")
-                    .withCode("TRANSFER_APPROVAL_ROUTE_REQUIRED")
-                    .withHint("请管理员先发布并启用 INVENTORY_TRANSFER 审批流程；调拨单仍保持草稿");
+        if (workflowEngine == null) {
+            throw new BusinessException(503, "审批运行时暂不可用")
+                    .withCode("OA_RUNTIME_UNAVAILABLE");
         }
 
-        ApprovalWorkflowInstance instance = workflowEngine.startWorkflow(
-                factoryId,
-                "INVENTORY_TRANSFER",
-                transferId,
-                buildTransferWorkflowContext(transfer),
-                userId);
-        validateRunnableApprovalRoute(factoryId, instance, userId);
+        Optional<ApprovalWorkflowInstance> instance = workflowEngine.startWorkflowIfConfigured(
+                factoryId, "INVENTORY_TRANSFER", transferId,
+                buildTransferWorkflowContext(transfer), userId);
         transfer.setRequestedBy(userId);
         transfer.setRequestedAt(LocalDateTime.now());
-        projectWorkflowState(transfer, instance, userId, null);
+        if (instance.isEmpty()) {
+            transfer.setStatus(TransferStatus.APPROVED);
+            transfer.setApprovedBy(userId);
+            transfer.setApprovedAt(LocalDateTime.now());
+            log.info("调拨单无需审批，直接批准: transferId={}, transferNumber={}",
+                    transferId, transfer.getTransferNumber());
+            return transferRepository.save(transfer);
+        }
+        validateRunnableApprovalRoute(factoryId, instance.get(), userId);
+        projectWorkflowState(transfer, instance.get(), userId, null);
         log.info("提交调拨申请并启动 OA: transferId={}, transferNumber={}, instanceId={}, workflowStatus={}",
-                transferId, transfer.getTransferNumber(), instance.getId(), instance.getStatus());
+                transferId, transfer.getTransferNumber(), instance.get().getId(), instance.get().getStatus());
         return transferRepository.save(transfer);
     }
 

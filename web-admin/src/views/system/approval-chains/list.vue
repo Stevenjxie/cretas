@@ -3,10 +3,11 @@ import { computed, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { useAuthStore } from '@/store/modules/auth'
 import { usePermissionStore } from '@/store/modules/permission'
-import { get } from '@/api/request'
 import {
+  getApprovalCutoverReadiness,
   getAllWorkflows,
   getDecisionTypesMetadata,
+  type ApprovalCutoverReadinessDTO,
   type ApprovalWorkflowDTO,
   type DecisionTypeCategory,
   type DecisionTypeMetadataDTO,
@@ -16,13 +17,7 @@ import {
   buildApprovalCatalog,
   buildOaCanvasQuery,
   type ApprovalCatalogItem,
-  type LegacyApprovalChainSummary,
 } from './approvalCatalog'
-
-interface LegacyChainRow extends LegacyApprovalChainSummary {
-  id?: string
-  name?: string
-}
 
 type ApprovalFilter = 'all' | 'enabled' | 'no-approval'
 
@@ -47,14 +42,14 @@ const loading = ref(false)
 const loadError = ref('')
 const metadata = ref<DecisionTypeMetadataDTO[]>([])
 const workflows = ref<ApprovalWorkflowDTO[]>([])
-const legacyChains = ref<LegacyChainRow[]>([])
+const readiness = ref<ApprovalCutoverReadinessDTO[]>([])
 const keyword = ref('')
 const approvalFilter = ref<ApprovalFilter>('all')
 
 const catalog = computed(() => buildApprovalCatalog(
   metadata.value,
   workflows.value,
-  legacyChains.value,
+  readiness.value,
 ))
 
 const filteredCatalog = computed(() => {
@@ -65,13 +60,20 @@ const filteredCatalog = computed(() => {
       || item.description.toLocaleLowerCase().includes(normalizedKeyword)
       || DEPARTMENT_LABELS[item.category].toLocaleLowerCase().includes(normalizedKeyword)
     const matchesStatus = approvalFilter.value === 'all'
-      || (approvalFilter.value === 'enabled' ? item.approvalEnabled : !item.approvalEnabled)
+      || (approvalFilter.value === 'enabled'
+        ? item.approvalEnabled
+        : !item.approvalEnabled && item.status !== 'legacy-migration-required')
     return matchesKeyword && matchesStatus
   })
 })
 
 const enabledCount = computed(() => catalog.value.filter((item) => item.approvalEnabled).length)
-const noApprovalCount = computed(() => catalog.value.length - enabledCount.value)
+const migrationCount = computed(() => catalog.value.filter(
+  (item) => item.status === 'legacy-migration-required',
+).length)
+const noApprovalCount = computed(() => catalog.value.filter(
+  (item) => !item.approvalEnabled && item.status !== 'legacy-migration-required',
+).length)
 const draftCount = computed(() => catalog.value.filter((item) => item.hasDraft).length)
 
 async function loadData() {
@@ -79,10 +81,10 @@ async function loadData() {
   loading.value = true
   loadError.value = ''
   try {
-    const [metadataResponse, workflowResponse, legacyResponse] = await Promise.all([
+    const [metadataResponse, workflowResponse, readinessResponse] = await Promise.all([
       getDecisionTypesMetadata(factoryId.value),
       getAllWorkflows(factoryId.value),
-      get<LegacyChainRow[]>(`/${factoryId.value}/approval-chains`),
+      getApprovalCutoverReadiness(factoryId.value),
     ])
     if (!metadataResponse.success || !Array.isArray(metadataResponse.data)) {
       throw new Error(metadataResponse.message || '审批业务加载失败')
@@ -90,11 +92,12 @@ async function loadData() {
     if (!workflowResponse.success || !Array.isArray(workflowResponse.data)) {
       throw new Error(workflowResponse.message || '审批流程加载失败')
     }
+    if (!readinessResponse.success || !Array.isArray(readinessResponse.data)) {
+      throw new Error(readinessResponse.message || '审批切换状态加载失败')
+    }
     metadata.value = metadataResponse.data
     workflows.value = workflowResponse.data
-    legacyChains.value = legacyResponse.success && Array.isArray(legacyResponse.data)
-      ? legacyResponse.data
-      : []
+    readiness.value = readinessResponse.data
   } catch (error) {
     loadError.value = error instanceof Error ? error.message : String(error)
   } finally {
@@ -136,7 +139,18 @@ function formatUpdatedAt(value?: string) {
 }
 
 function actionLabel(item: ApprovalCatalogItem) {
+  if (item.status === 'legacy-migration-required') return '迁移到审批画布'
   return item.approvalEnabled || item.hasDraft ? '配置审批' : '查看设置'
+}
+
+function statusLabel(item: ApprovalCatalogItem) {
+  if (item.status === 'legacy-migration-required') return '旧配置待迁移'
+  return item.approvalEnabled ? '审批已启用' : '无需审批'
+}
+
+function statusTagType(item: ApprovalCatalogItem) {
+  if (item.status === 'legacy-migration-required') return 'warning'
+  return item.approvalEnabled ? 'success' : 'info'
 }
 
 onMounted(loadData)
@@ -181,6 +195,10 @@ onMounted(loadData)
       <div class="summary-card draft">
         <span>待发布草稿</span>
         <strong>{{ draftCount }}</strong>
+      </div>
+      <div v-if="migrationCount" class="summary-card migration">
+        <span>旧配置待迁移</span>
+        <strong>{{ migrationCount }}</strong>
       </div>
     </section>
 
@@ -244,8 +262,8 @@ onMounted(loadData)
         </el-table-column>
         <el-table-column label="审批状态" width="140" align="center">
           <template #default="{ row }">
-            <el-tag :type="row.approvalEnabled ? 'success' : 'info'" effect="light">
-              {{ row.approvalEnabled ? '审批已启用' : '无需审批' }}
+            <el-tag :type="statusTagType(row)" effect="light">
+              {{ statusLabel(row) }}
             </el-tag>
           </template>
         </el-table-column>
@@ -253,7 +271,10 @@ onMounted(loadData)
           <template #default="{ row }">
             <div class="version-cell">
               <strong>{{ versionSummary(row) }}</strong>
-              <span v-if="row.hasDraft">草稿修改不会影响当前运行流程</span>
+              <span v-if="row.status === 'legacy-migration-required'">
+                发布审批画布后再停用旧配置，切换期间不会漏审
+              </span>
+              <span v-else-if="row.hasDraft">草稿修改不会影响当前运行流程</span>
               <span v-else-if="!row.approvalEnabled">业务提交后直接进入下一环节</span>
             </div>
           </template>
@@ -282,7 +303,7 @@ onMounted(loadData)
       <div class="continuity-note">
         <strong>无缝衔接</strong>
         <span>
-          新画布只影响保存并发布后的新审批；旧配置和正在审批的单据继续按原版本运行。
+          新画布只影响发布后的新审批；在途单据继续固定原版本。旧配置未迁移时系统会阻止新单据静默放行。
         </span>
       </div>
     </el-card>
@@ -335,7 +356,7 @@ h1 {
 
 .summary-grid {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
   gap: 12px;
 }
 
@@ -363,6 +384,7 @@ h1 {
 .summary-card.enabled { border-top: 3px solid #67c23a; }
 .summary-card.no-approval { border-top: 3px solid #a8b1bf; }
 .summary-card.draft { border-top: 3px solid #e6a23c; }
+.summary-card.migration { border-top: 3px solid #d97706; }
 
 .business-card {
   border-color: #edf2f7;

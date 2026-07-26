@@ -100,6 +100,22 @@ export interface DecisionTypeMetadataDTO {
   wired: boolean
 }
 
+export type ApprovalCutoverRuntimeStatus =
+  | 'CANVAS_ACTIVE'
+  | 'CANVAS_DRAFT_ONLY'
+  | 'LEGACY_MIGRATION_REQUIRED'
+  | 'NO_APPROVAL'
+
+export interface ApprovalCutoverReadinessDTO {
+  decisionType: DecisionType
+  moduleCode: string | null
+  wired: boolean
+  runtimeStatus: ApprovalCutoverRuntimeStatus
+  approvalRequired: boolean
+  legacyEnabled: boolean
+  workflowCount: number
+}
+
 export type PublishStatus = 'draft' | 'published' | 'archived'
 
 export type NodeType =
@@ -278,6 +294,11 @@ export const getDecisionTypes = (factoryId: string) =>
  */
 export const getDecisionTypesMetadata = (factoryId: string) =>
   request.get<ApiResponse<DecisionTypeMetadataDTO[]>>(`${base(factoryId)}/decision-types-meta`)
+
+export const getApprovalCutoverReadiness = (factoryId: string) =>
+  request.get<ApiResponse<ApprovalCutoverReadinessDTO[]>>(
+    `${base(factoryId)}/cutover-readiness`,
+  )
 
 /**
  * 审批配置目录。

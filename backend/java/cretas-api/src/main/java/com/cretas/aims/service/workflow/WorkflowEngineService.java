@@ -46,6 +46,20 @@ public interface WorkflowEngineService {
     boolean hasActiveWorkflow(String factoryId, String moduleCode);
 
     /**
+     * Starts the published and enabled Canvas workflow when one is configured.
+     *
+     * <p>An empty result explicitly means that this business does not require
+     * approval. Lookup and instance creation happen in one transaction so callers
+     * do not need a racy {@code hasActiveWorkflow} pre-check.
+     */
+    Optional<ApprovalWorkflowInstance> startWorkflowIfConfigured(
+            String factoryId,
+            String moduleCode,
+            String businessEntityId,
+            Map<String, Object> contextJson,
+            Long initiatorUserId);
+
+    /**
      * 启动 workflow 实例.
      *
      * <p>流程:

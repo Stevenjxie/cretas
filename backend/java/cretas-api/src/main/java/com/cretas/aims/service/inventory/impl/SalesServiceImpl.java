@@ -808,7 +808,6 @@ public class SalesServiceImpl implements SalesService {
             throw new BusinessException(409, "只有草稿状态的订单可以确认")
                     .withHint("请刷新订单列表查看最新状态");
         }
-        requireActiveSalesWorkflow(factoryId);
         checkTransitionAllowed(factoryId, order.getStatus().name(), "CONFIRMED");
         order.setStatus(SalesOrderStatus.CONFIRMED);
         order.setConfirmedAt(LocalDateTime.now());
@@ -1025,17 +1024,27 @@ public class SalesServiceImpl implements SalesService {
 
     private SalesOrder routeSalesOrderByWorkflow(String factoryId, SalesOrder order, Map<String, Object> context,
                                                  String notes, Long initiatorUserId) {
-        ApprovalWorkflow activeWorkflow = requireActiveSalesWorkflow(factoryId);
+        if (workflowEngine == null) {
+            throw new BusinessException(503, "审批运行时暂不可用")
+                    .withCode("OA_RUNTIME_UNAVAILABLE");
+        }
         if (initiatorUserId == null) {
             throw new BusinessException(401, "无法识别销售订单审批发起人")
                     .withCode("SALES_APPROVAL_INITIATOR_REQUIRED");
         }
 
-        ApprovalWorkflowInstance instance = workflowEngine.getCurrentInstance(factoryId, "SALES_ORDER", order.getId())
-                .filter(existing -> existing.getStatus() == InstanceStatus.RUNNING)
-                .orElseGet(() -> workflowEngine.startWorkflowWithDefinition(
-                        factoryId, "SALES_ORDER", order.getId(), context, initiatorUserId,
-                        activeWorkflow));
+        Optional<ApprovalWorkflowInstance> instanceLookup = workflowEngine
+                .getCurrentInstance(factoryId, "SALES_ORDER", order.getId())
+                .filter(existing -> existing.getStatus() == InstanceStatus.RUNNING);
+        if (instanceLookup.isEmpty()) {
+            instanceLookup = workflowEngine.startWorkflowIfConfigured(
+                    factoryId, "SALES_ORDER", order.getId(), context, initiatorUserId);
+        }
+        if (instanceLookup.isEmpty()) {
+            return approveFinanceForOrder(
+                    factoryId, order, "当前业务无需审批，系统直接通过", null, initiatorUserId);
+        }
+        ApprovalWorkflowInstance instance = instanceLookup.get();
 
         if (instance.getStatus() == InstanceStatus.RUNNING) {
             checkTransitionAllowed(factoryId, order.getStatus().name(), "PENDING_FINANCE_REVIEW");

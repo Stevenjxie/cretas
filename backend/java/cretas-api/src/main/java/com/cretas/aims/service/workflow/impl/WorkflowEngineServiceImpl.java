@@ -18,6 +18,7 @@ import com.cretas.aims.repository.notify.NotifyLogRepository;
 import com.cretas.aims.repository.workflow.ApprovalHistoryRepository;
 import com.cretas.aims.repository.workflow.ApprovalWorkflowInstanceRepository;
 import com.cretas.aims.service.ApprovalWorkflowService;
+import com.cretas.aims.service.ApprovalChainService;
 import com.cretas.aims.service.notify.NotifyRequest;
 import com.cretas.aims.service.notify.NotifyResult;
 import com.cretas.aims.service.notify.NotifySenderRegistry;
@@ -104,6 +105,9 @@ public class WorkflowEngineServiceImpl implements WorkflowEngineService {
     /** Reserved context key set only by exact-bound starts. */
     private static final String BOUND_DEFINITION_DIGEST_CONTEXT_KEY =
             "_cretas_bound_workflow_definition_sha256";
+    /** Stable definition digest for new instances; runtime enable/archive state is excluded. */
+    private static final String STABLE_DEFINITION_DIGEST_CONTEXT_KEY =
+            "_cretas_bound_workflow_definition_v2_sha256";
 
     private final ApprovalWorkflowInstanceRepository instanceRepository;
     private final ApprovalHistoryRepository historyRepository;
@@ -136,6 +140,9 @@ public class WorkflowEngineServiceImpl implements WorkflowEngineService {
      */
     @Autowired(required = false)
     private DecisionTypeMetadataRegistry decisionTypeMetadataRegistry;
+
+    @Autowired(required = false)
+    private ApprovalChainService approvalChainService;
 
     @Autowired
     public WorkflowEngineServiceImpl(
@@ -178,7 +185,40 @@ public class WorkflowEngineServiceImpl implements WorkflowEngineService {
 
         return startWorkflowWithResolvedDefinition(
                 factoryId, moduleCode, businessEntityId, contextJson, initiatorUserId,
-                workflow, null);
+                workflow, stableDefinitionDigest(workflow), true);
+    }
+
+    @Override
+    @Transactional
+    public Optional<ApprovalWorkflowInstance> startWorkflowIfConfigured(
+            String factoryId,
+            String moduleCode,
+            String businessEntityId,
+            Map<String, Object> contextJson,
+            Long initiatorUserId) {
+        Objects.requireNonNull(factoryId, "factoryId must not be null");
+        Objects.requireNonNull(moduleCode, "moduleCode must not be null");
+        Objects.requireNonNull(businessEntityId, "businessEntityId must not be null");
+
+        DecisionType decisionType = lookupDecisionType(moduleCode);
+        Optional<ApprovalWorkflow> activeWorkflow =
+                workflowService.getActiveByDecisionType(factoryId, decisionType);
+        if (activeWorkflow.isEmpty()
+                && approvalChainService != null
+                && approvalChainService.hasEnabledLegacyConfig(factoryId, decisionType)) {
+            throw new BusinessException(409, "旧版审批配置尚未迁移到审批画布")
+                    .withCode("OA_LEGACY_CONFIG_MIGRATION_REQUIRED")
+                    .withHint("请在系统设置 → 审批业务中发布并启用对应审批画布");
+        }
+        return activeWorkflow.map(workflow -> startWorkflowWithResolvedDefinition(
+                        factoryId,
+                        moduleCode,
+                        businessEntityId,
+                        contextJson,
+                        initiatorUserId,
+                        workflow,
+                        stableDefinitionDigest(workflow),
+                        true));
     }
 
     @Override
@@ -210,7 +250,7 @@ public class WorkflowEngineServiceImpl implements WorkflowEngineService {
 
         return startWorkflowWithResolvedDefinition(
                 factoryId, moduleCode, businessEntityId, contextJson, initiatorUserId,
-                locked, definitionDigest(locked));
+                locked, stableDefinitionDigest(locked), true);
     }
 
     private boolean sameDefinitionSnapshot(
@@ -248,6 +288,24 @@ public class WorkflowEngineServiceImpl implements WorkflowEngineService {
         }
     }
 
+    private String stableDefinitionDigest(ApprovalWorkflow workflow) {
+        try {
+            MessageDigest digest = MessageDigest.getInstance("SHA-256");
+            updateDigest(digest, workflow.getId());
+            updateDigest(digest, workflow.getFactoryId());
+            updateDigest(digest, workflow.getDecisionType() == null
+                    ? null : workflow.getDecisionType().name());
+            updateDigest(digest, workflow.getName());
+            updateDigest(digest, String.valueOf(workflow.getVersion()));
+            updateDigest(digest, workflow.getStartNodeId());
+            updateDigest(digest, workflow.getNodesJson());
+            updateDigest(digest, workflow.getEdgesJson());
+            return HexFormat.of().formatHex(digest.digest());
+        } catch (NoSuchAlgorithmException impossible) {
+            throw new IllegalStateException("SHA-256 is unavailable", impossible);
+        }
+    }
+
     private void updateDigest(MessageDigest digest, String value) {
         byte[] bytes = String.valueOf(value).getBytes(StandardCharsets.UTF_8);
         digest.update(ByteBuffer.allocate(Integer.BYTES).putInt(bytes.length).array());
@@ -267,6 +325,19 @@ public class WorkflowEngineServiceImpl implements WorkflowEngineService {
         return digest;
     }
 
+    private String stableBoundDefinitionDigest(ApprovalWorkflowInstance instance) {
+        Object value = instance.getContextJson() == null
+                ? null
+                : instance.getContextJson().get(STABLE_DEFINITION_DIGEST_CONTEXT_KEY);
+        if (value == null) {
+            return null;
+        }
+        if (!(value instanceof String digest) || !digest.matches("^[0-9a-f]{64}$")) {
+            throw new BusinessException(409, "WORKFLOW_BOUND_DEFINITION_INVALID");
+        }
+        return digest;
+    }
+
     private void verifyBoundDefinition(
             ApprovalWorkflowInstance instance,
             ApprovalWorkflow workflow,
@@ -274,9 +345,13 @@ public class WorkflowEngineServiceImpl implements WorkflowEngineService {
         if (expectedDigest == null) {
             return;
         }
-        if (!"published".equals(workflow.getPublishStatus())
-                || !Boolean.TRUE.equals(workflow.getEnabled())
-                || !expectedDigest.equals(definitionDigest(workflow))) {
+        String stableDigest = stableBoundDefinitionDigest(instance);
+        boolean unchanged = stableDigest != null
+                ? expectedDigest.equals(stableDefinitionDigest(workflow))
+                : "published".equals(workflow.getPublishStatus())
+                        && Boolean.TRUE.equals(workflow.getEnabled())
+                        && expectedDigest.equals(definitionDigest(workflow));
+        if (!unchanged) {
             throw new BusinessException(409, "WORKFLOW_BOUND_DEFINITION_CHANGED");
         }
     }
@@ -288,7 +363,8 @@ public class WorkflowEngineServiceImpl implements WorkflowEngineService {
             Map<String, Object> contextJson,
             Long initiatorUserId,
             ApprovalWorkflow workflow,
-            String boundDefinitionDigest) {
+            String boundDefinitionDigest,
+            boolean stableDigest) {
 
         // 3. 解析 graph
         List<ApprovalWorkflowNode> nodes = workflowService.deserializeNodes(workflow.getNodesJson());
@@ -300,8 +376,13 @@ public class WorkflowEngineServiceImpl implements WorkflowEngineService {
                 ? new HashMap<>()
                 : new HashMap<>(contextJson);
         safeContext.remove(BOUND_DEFINITION_DIGEST_CONTEXT_KEY);
+        safeContext.remove(STABLE_DEFINITION_DIGEST_CONTEXT_KEY);
         if (boundDefinitionDigest != null) {
-            safeContext.put(BOUND_DEFINITION_DIGEST_CONTEXT_KEY, boundDefinitionDigest);
+            safeContext.put(
+                    stableDigest
+                            ? STABLE_DEFINITION_DIGEST_CONTEXT_KEY
+                            : BOUND_DEFINITION_DIGEST_CONTEXT_KEY,
+                    boundDefinitionDigest);
         }
 
         ApprovalWorkflowInstance instance = ApprovalWorkflowInstance.builder()
@@ -384,7 +465,10 @@ public class WorkflowEngineServiceImpl implements WorkflowEngineService {
         String fromNodeId = instance.getCurrentNodeIds().get(0);
 
         // 3. 取 workflow + 索引 graph
-        String expectedDefinitionDigest = boundDefinitionDigest(instance);
+        String expectedDefinitionDigest = stableBoundDefinitionDigest(instance);
+        if (expectedDefinitionDigest == null) {
+            expectedDefinitionDigest = boundDefinitionDigest(instance);
+        }
         Optional<ApprovalWorkflow> workflowLookup = expectedDefinitionDigest == null
                 ? workflowService.getById(instance.getFactoryId(), instance.getWorkflowId())
                 : workflowService.getByIdForUpdate(instance.getFactoryId(), instance.getWorkflowId());
