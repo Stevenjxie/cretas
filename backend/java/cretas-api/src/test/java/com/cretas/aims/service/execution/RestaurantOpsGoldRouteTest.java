@@ -229,6 +229,45 @@ class RestaurantOpsGoldRouteTest {
     }
 
     @Test
+    @DisplayName("store-scoped named-dish optimization beats generic owner action")
+    void storeScopedNamedDishOptimizationBeatsOwnerAction() {
+        TieredIntentDelegate delegate = mock(TieredIntentDelegate.class);
+        ReflectionTestUtils.setField(orchestrator, "tieredIntentDelegate", delegate);
+        when(delegate.tryDelegate(
+                eq("DEMO_REST"),
+                any(),
+                any(),
+                eq("orchestrator_null_intent")))
+                .thenReturn(Map.of(
+                        "code", "RESTAURANT_OPS_STORE_MARGIN",
+                        "message", "门店范围：青花椒南方百联店；娃娃菜销量优化建议。",
+                        "conversationContext", Map.of(
+                                "focus_entity", Map.of(
+                                        "type", "dish",
+                                        "name", "娃娃菜"),
+                                "requested_metrics", List.of("sales_volume"),
+                                "analysis_action", "optimize",
+                                "store_scope", "single",
+                                "store_names", List.of("青花椒南方百联店"))));
+
+        IntentExecuteResponse response = ReflectionTestUtils.invokeMethod(
+                orchestrator,
+                "executeRestaurantOwnerActionChat",
+                "DEMO_REST",
+                IntentExecuteRequest.builder()
+                        .userInput("怎么优化它")
+                        .sessionId("named-dish-store-optimization")
+                        .build(),
+                7L,
+                "restaurant_owner");
+
+        assertThat(response).isNotNull();
+        assertThat(response.getIntentCode()).isEqualTo("RESTAURANT_OPS_STORE_MARGIN");
+        assertThat(response.getMessage()).contains("娃娃菜销量优化");
+        verify(toolExecutionGateway, never()).execute(any(ToolExecutionCommand.class));
+    }
+
+    @Test
     void ownerActionRejectsDeniedFailedAndMalformedGatewayResults() {
         IntentExecuteRequest request = IntentExecuteRequest.builder()
                 .userInput("今天老板先做什么？")

@@ -1455,6 +1455,59 @@ def test_named_dish_followup_can_replace_time_then_store_slots(
     assert store_query == f"本月青花椒南方百联店{dish_name}的销量如何"
 
 
+@pytest.mark.parametrize(
+    ("scope_followup", "expected_scope", "expected_scope_kind", "expected_stores"),
+    [
+        ("全部门店", "全部门店", "all", ()),
+        ("所有门店", "全部门店", "all", ()),
+        (
+            "只看青花椒南方百联店",
+            "青花椒南方百联店",
+            "single",
+            ("青花椒南方百联店",),
+        ),
+        (
+            "只看青花椒南方百联店和青花椒徐汇光启城店",
+            "青花椒南方百联店和青花椒徐汇光启城店",
+            "multiple",
+            ("青花椒南方百联店", "青花椒徐汇光启城店"),
+        ),
+    ],
+)
+def test_named_dish_followup_can_replace_store_scope_without_polluting_dish(
+    scope_followup,
+    expected_scope,
+    expected_scope_kind,
+    expected_stores,
+):
+    parent = {
+        "parent_query": "本月青花椒南方百联店娃娃菜的销量为什么是这样",
+        "parent_template_code": "RESTAURANT_OPS_STORE_MARGIN",
+        "structured_context": {
+            "focus_entity": {"type": "dish", "name": "娃娃菜"},
+            "window_label": "本月",
+            "requested_metrics": ["sales_volume"],
+            "analysis_action": "diagnose",
+            "store_scope": "single",
+            "store_names": ["青花椒南方百联店"],
+        },
+    }
+
+    effective, inherited = contextualize_restaurant_followup(
+        scope_followup,
+        parent,
+    )
+
+    assert inherited is True
+    assert effective == f"本月{expected_scope}娃娃菜的销量如何"
+    assert "只看和" not in effective
+    spec = _trusted_context_dish_followup_spec(effective)
+    assert spec is not None
+    assert spec.dish_slot == "娃娃菜"
+    assert spec.store_scope == expected_scope_kind
+    assert spec.store_slots == expected_stores
+
+
 def test_followup_with_explicit_new_entity_replaces_dish_but_inherits_time():
     parent = {
         "parent_query": "米饭的毛利率如何",
