@@ -93,9 +93,9 @@ class StocktakeWorkflowIntegrationTest {
 
         ApprovalWorkflowInstance instance = mock(ApprovalWorkflowInstance.class);
         when(instance.getId()).thenReturn(INSTANCE_ID);
-        when(workflowEngine.hasActiveWorkflow(FACTORY_ID, "INVENTORY_ADJUSTMENT")).thenReturn(true);
-        when(workflowEngine.startWorkflow(eq(FACTORY_ID), eq("INVENTORY_ADJUSTMENT"),
-                eq(STOCKTAKE_ID), any(), eq(USER_ID))).thenReturn(instance);
+        when(workflowEngine.startWorkflowIfConfigured(
+                eq(FACTORY_ID), eq("INVENTORY_ADJUSTMENT"),
+                eq(STOCKTAKE_ID), any(), eq(USER_ID))).thenReturn(Optional.of(instance));
 
         String resultInstanceId = service.submitForApproval(STOCKTAKE_ID, FACTORY_ID, USER_ID);
 
@@ -125,7 +125,7 @@ class StocktakeWorkflowIntegrationTest {
     // UT-ST-WF-03: submitForApproval 无 workflowEngine → fail-closed
     // -------------------------------------------------------
     @Test
-    @DisplayName("UT-ST-WF-03: submitForApproval 无 workflow engine → 422 且不改变盘点状态")
+    @DisplayName("UT-ST-WF-03: submitForApproval 无 workflow engine → 503 且不改变盘点状态")
     void submitForApproval_noWorkflowEngine_failsClosed() {
         // Override workflowEngine to null
         ReflectionTestUtils.setField(service, "workflowEngine", null);
@@ -135,7 +135,7 @@ class StocktakeWorkflowIntegrationTest {
         assertThatThrownBy(() -> service.submitForApproval(STOCKTAKE_ID, FACTORY_ID, USER_ID))
                 .isInstanceOf(BusinessException.class)
                 .extracting(e -> ((BusinessException) e).getCode())
-                .isEqualTo(422);
+                .isEqualTo(503);
         assertThat(stocktake.getStatus()).isEqualTo(FactoryStocktake.Status.COUNTING);
         assertThat(stocktake.getWorkflowInstanceId()).isNull();
         verify(stocktakeRepo, never()).save(any());
@@ -148,16 +148,20 @@ class StocktakeWorkflowIntegrationTest {
     // UT-ST-WF-04: executeAdjustment 无 workflowInstanceId → 403 (红线 R1)
     // -------------------------------------------------------
     @Test
-    @DisplayName("UT-ST-WF-04: executeAdjustment workflowInstanceId=null → 403 (红线 R1 禁止绕过)")
-    void executeAdjustment_noWorkflowInstanceId_throws403() {
-        FactoryStocktake stocktake = buildStocktake(FactoryStocktake.Status.APPROVED);
-        stocktake.setWorkflowInstanceId(null); // no workflow bypass!
+    @DisplayName("UT-ST-WF-04: 无需审批且状态已 APPROVED 时允许执行盘点调整")
+    void executeAdjustment_withoutWorkflow_whenDirectlyApproved() {
+        FactoryStocktake stocktake = buildStocktake(FactoryStocktake.Status.COUNTING);
         when(stocktakeRepo.findById(STOCKTAKE_ID)).thenReturn(Optional.of(stocktake));
+        when(stocktakeRepo.save(any())).thenAnswer(invocation -> invocation.getArgument(0));
+        when(workflowEngine.startWorkflowIfConfigured(
+                eq(FACTORY_ID), eq("INVENTORY_ADJUSTMENT"),
+                eq(STOCKTAKE_ID), any(), eq(USER_ID))).thenReturn(Optional.empty());
 
-        assertThatThrownBy(() -> service.executeAdjustment(STOCKTAKE_ID))
-                .isInstanceOf(BusinessException.class)
-                .extracting(e -> ((BusinessException) e).getCode())
-                .isEqualTo(403);
+        service.submitForApproval(STOCKTAKE_ID, FACTORY_ID, USER_ID);
+        service.executeAdjustment(STOCKTAKE_ID);
+
+        assertThat(stocktake.getApprovedBy()).isEqualTo(USER_ID);
+        assertThat(stocktake.getStatus()).isEqualTo(FactoryStocktake.Status.APPLIED);
     }
 
     // -------------------------------------------------------

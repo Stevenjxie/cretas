@@ -50,6 +50,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.Collectors;
@@ -842,20 +843,25 @@ public class FactoryStocktakeServiceImpl implements FactoryStocktakeService {
         }
         assertAllItemsCounted(stocktake);
 
-        if (workflowEngine == null || !workflowEngine.hasActiveWorkflow(factoryId, "INVENTORY_ADJUSTMENT")) {
-            throw new BusinessException(422, "未配置可用的盘点 OA 审批流程，不能提交")
-                    .withCode("STOCKTAKE_WORKFLOW_REQUIRED")
-                    .withHint("请配置 INVENTORY_ADJUSTMENT 审批流程");
+        if (workflowEngine == null) {
+            throw new BusinessException(503, "审批运行时暂不可用")
+                    .withCode("OA_RUNTIME_UNAVAILABLE");
         }
-        stocktake.setStatus(FactoryStocktake.Status.PENDING_APPROVAL);
         stocktake.setSubmittedBy(userId);
         stocktake.setSubmittedAt(LocalDateTime.now());
-        ApprovalWorkflowInstance instance = workflowEngine.startWorkflow(
+        Optional<ApprovalWorkflowInstance> instance = workflowEngine.startWorkflowIfConfigured(
                 factoryId, "INVENTORY_ADJUSTMENT", stocktakeId,
                 Map.of("stocktakeNo", stocktake.getStocktakeNo(),
                        "periodMonth", stocktake.getPeriodMonth(),
                        "warehouseId", stocktake.getWarehouseId()), userId);
-        stocktake.setWorkflowInstanceId(instance.getId());
+        if (instance.isPresent()) {
+            stocktake.setStatus(FactoryStocktake.Status.PENDING_APPROVAL);
+            stocktake.setWorkflowInstanceId(instance.get().getId());
+        } else {
+            stocktake.setStatus(FactoryStocktake.Status.APPROVED);
+            stocktake.setApprovedBy(userId);
+            stocktake.setApprovedAt(LocalDateTime.now());
+        }
 
         stocktakeRepo.save(stocktake);
         log.info("SP12: 盘点任务已提交审批 stocktakeId={} workflowInstanceId={}",
@@ -1107,7 +1113,13 @@ public class FactoryStocktakeServiceImpl implements FactoryStocktakeService {
                 .orElseThrow(() -> new BusinessException(404, "盘点任务不存在: " + stocktakeId));
 
         // 红线 R1: 必须有 workflowInstanceId（不允许绕过 workflow）
-        if (stocktake.getWorkflowInstanceId() == null) {
+        boolean directNoApproval = stocktake.getWorkflowInstanceId() == null
+                && stocktake.getStatus() == FactoryStocktake.Status.APPROVED
+                && stocktake.getSubmittedBy() != null
+                && stocktake.getSubmittedAt() != null
+                && stocktake.getApprovedBy() != null
+                && stocktake.getApprovedAt() != null;
+        if (stocktake.getWorkflowInstanceId() == null && !directNoApproval) {
             throw new BusinessException(403,
                     "盘点调账必须经过 INVENTORY_ADJUSTMENT 工作流审批，无法直接调账")
                     .withCode("WORKFLOW_BYPASS_FORBIDDEN")

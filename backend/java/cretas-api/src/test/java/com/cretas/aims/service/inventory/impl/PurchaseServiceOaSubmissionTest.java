@@ -162,15 +162,15 @@ class PurchaseServiceOaSubmissionTest {
 
     @Test
     void firstSubmitCreatesOneVisibleOaInstanceAndProjectsRunningState() {
-        when(workflowEngine.hasActiveWorkflow("F006", "PURCHASE_ORDER")).thenReturn(true);
-        when(workflowEngine.startWorkflow(eq("F006"), eq("PURCHASE_ORDER"), eq("po-1"),
-                anyMap(), eq(1309L))).thenReturn(instance(ApprovalWorkflowInstance.InstanceStatus.RUNNING));
+        when(workflowEngine.startWorkflowIfConfigured(
+                eq("F006"), eq("PURCHASE_ORDER"), eq("po-1"), anyMap(), eq(1309L)))
+                .thenReturn(Optional.of(instance(ApprovalWorkflowInstance.InstanceStatus.RUNNING)));
 
         PurchaseOrder result = service.submitOrder("F006", "po-1", 1309L);
 
         assertThat(result.getStatus()).isEqualTo(PurchaseOrderStatus.WORKFLOW_RUNNING);
-        verify(workflowEngine, times(1)).startWorkflow(eq("F006"), eq("PURCHASE_ORDER"),
-                eq("po-1"), anyMap(), eq(1309L));
+        verify(workflowEngine).startWorkflowIfConfigured(
+                eq("F006"), eq("PURCHASE_ORDER"), eq("po-1"), anyMap(), eq(1309L));
     }
 
     @Test
@@ -321,21 +321,23 @@ class PurchaseServiceOaSubmissionTest {
     }
 
     @Test
-    void missingWorkflowFailsClosedAndLeavesDraft() {
-        when(workflowEngine.hasActiveWorkflow("F006", "PURCHASE_ORDER")).thenReturn(false);
+    void missingWorkflowMeansNoApprovalAndDirectlyActivatesOrder() {
+        when(workflowEngine.startWorkflowIfConfigured(
+                eq("F006"), eq("PURCHASE_ORDER"), eq("po-1"), anyMap(), eq(1309L)))
+                .thenReturn(Optional.empty());
 
-        assertThatThrownBy(() -> service.submitOrder("F006", "po-1", 1309L))
-                .isInstanceOf(BusinessException.class)
-                .hasMessageContaining("OA 审批流程");
-        assertThat(order.getStatus()).isEqualTo(PurchaseOrderStatus.DRAFT);
-        verify(workflowEngine, never()).startWorkflow(anyString(), anyString(), anyString(), anyMap(), any());
+        PurchaseOrder result = service.submitOrder("F006", "po-1", 1309L);
+
+        assertThat(result.getStatus()).isEqualTo(PurchaseOrderStatus.FINANCE_APPROVED);
+        assertThat(result.getApprovedBy()).isEqualTo(1309L);
+        verify(orderRepository).save(order);
     }
 
     @Test
     void autoApprovedWorkflowCompletesWholeBusinessAndFinanceChain() {
-        when(workflowEngine.hasActiveWorkflow("F006", "PURCHASE_ORDER")).thenReturn(true);
-        when(workflowEngine.startWorkflow(eq("F006"), eq("PURCHASE_ORDER"), eq("po-1"),
-                anyMap(), eq(1309L))).thenReturn(instance(ApprovalWorkflowInstance.InstanceStatus.APPROVED));
+        when(workflowEngine.startWorkflowIfConfigured(
+                eq("F006"), eq("PURCHASE_ORDER"), eq("po-1"), anyMap(), eq(1309L)))
+                .thenReturn(Optional.of(instance(ApprovalWorkflowInstance.InstanceStatus.APPROVED)));
 
         PurchaseOrder result = service.submitOrder("F006", "po-1", 1309L);
 

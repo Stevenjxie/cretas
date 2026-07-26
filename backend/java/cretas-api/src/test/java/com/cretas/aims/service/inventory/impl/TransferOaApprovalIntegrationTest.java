@@ -83,10 +83,9 @@ class TransferOaApprovalIntegrationTest {
                 .thenReturn(Optional.of(transfer));
         when(workflowEngine.getLatestInstance(FACTORY, "INVENTORY_TRANSFER", TRANSFER_ID))
                 .thenReturn(Optional.empty());
-        when(workflowEngine.hasActiveWorkflow(FACTORY, "INVENTORY_TRANSFER")).thenReturn(true);
-        when(workflowEngine.startWorkflow(
+        when(workflowEngine.startWorkflowIfConfigured(
                 eq(FACTORY), eq("INVENTORY_TRANSFER"), eq(TRANSFER_ID), any(), eq(INITIATOR)))
-                .thenReturn(running);
+                .thenReturn(Optional.of(running));
         mockRunnableRoute(running, 2001L);
         when(transferRepository.save(transfer)).thenReturn(transfer);
 
@@ -94,28 +93,28 @@ class TransferOaApprovalIntegrationTest {
 
         assertEquals(TransferStatus.REQUESTED, result.getStatus());
         assertEquals(INITIATOR, result.getRequestedBy());
-        verify(workflowEngine).startWorkflow(
+        verify(workflowEngine).startWorkflowIfConfigured(
                 eq(FACTORY), eq("INVENTORY_TRANSFER"), eq(TRANSFER_ID), any(), eq(INITIATOR));
         verify(transferRepository).save(transfer);
     }
 
     @Test
-    void missing_route_fails_closed_and_keeps_draft() {
+    void missing_route_means_no_approval_and_directly_approves() {
         InternalTransfer transfer = draftTransfer();
         when(transferRepository.findByIdAndEitherFactoryId(TRANSFER_ID, FACTORY))
                 .thenReturn(Optional.of(transfer));
         when(workflowEngine.getLatestInstance(FACTORY, "INVENTORY_TRANSFER", TRANSFER_ID))
                 .thenReturn(Optional.empty());
-        when(workflowEngine.hasActiveWorkflow(FACTORY, "INVENTORY_TRANSFER")).thenReturn(false);
+        when(workflowEngine.startWorkflowIfConfigured(
+                eq(FACTORY), eq("INVENTORY_TRANSFER"), eq(TRANSFER_ID), any(), eq(INITIATOR)))
+                .thenReturn(Optional.empty());
+        when(transferRepository.save(transfer)).thenReturn(transfer);
 
-        BusinessException error = assertThrows(
-                BusinessException.class,
-                () -> service.requestTransfer(FACTORY, TRANSFER_ID, INITIATOR));
+        InternalTransfer result = service.requestTransfer(FACTORY, TRANSFER_ID, INITIATOR);
 
-        assertEquals("TRANSFER_APPROVAL_ROUTE_REQUIRED", error.getErrorCode());
-        assertEquals(TransferStatus.DRAFT, transfer.getStatus());
-        verify(workflowEngine, never()).startWorkflow(any(), any(), any(), any(), any());
-        verify(transferRepository, never()).save(any());
+        assertEquals(TransferStatus.APPROVED, result.getStatus());
+        assertEquals(INITIATOR, result.getApprovedBy());
+        verify(transferRepository).save(transfer);
     }
 
     @Test

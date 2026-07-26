@@ -77,9 +77,8 @@ class DecisionTypeMetadataRegistryTest {
         int unwired = (int) registry.getAll().values().stream().filter(m -> !m.isWired()).count();
         assertEquals(registry.size(), wired + unwired,
                 "wired + unwired 必须 = 总数");
-        // Sprint 6 W3-B ship 时, wired 至少应包含已知接入: LEAVE/OVERTIME/EXPENSE/PURCHASE/SALES/
-        // QUALITY_RELEASE/QUALITY_EXCEPTION/FORCE_INSERT/SUPPLIER_APPROVAL = 9 个
-        assertTrue(wired >= 9, "已 wired DecisionType 应 >= 9 (Sprint 5 前已接入), 实际=" + wired);
+        assertTrue(wired >= 7,
+                "已 wired DecisionType 应至少覆盖采购/销售/付款/预算/调拨/盘点/餐饮复核, 实际=" + wired);
     }
 
     // ==================== 17 NEW DecisionType (Sprint 5 PR #55 H 加) ====================
@@ -132,6 +131,7 @@ class DecisionTypeMetadataRegistryTest {
         assertNotNull(m);
         assertEquals("采购付款申请审批", m.getChineseName());
         assertEquals(Category.PURCHASE_SUPPLIER, m.getCategory());
+        assertTrue(m.isWired());
     }
 
     @Test
@@ -246,6 +246,7 @@ class DecisionTypeMetadataRegistryTest {
         DecisionTypeMetadata m = registry.get(DecisionType.INVENTORY_ADJUSTMENT_APPROVAL);
         assertNotNull(m);
         assertEquals("库存调整审批", m.getChineseName());
+        assertTrue(m.isWired());
     }
 
     @Test
@@ -260,11 +261,11 @@ class DecisionTypeMetadataRegistryTest {
     // ==================== Existing 14 (sanity check) ====================
 
     @Test
-    @DisplayName("UT-MR-24: LEAVE_APPROVAL — Sprint 4 W2 ship, wired=true")
-    void leaveApprovalIsWired() {
+    @DisplayName("UT-MR-24: LEAVE_APPROVAL — 旧式布尔门禁不等于 Canvas 运行时接入")
+    void leaveApprovalIsNotCanvasWired() {
         DecisionTypeMetadata m = registry.get(DecisionType.LEAVE_APPROVAL);
         assertNotNull(m);
-        assertTrue(m.isWired(), "LEAVE_APPROVAL 已被 LeaveRequestServiceImpl 接入");
+        assertFalse(m.isWired(), "未创建持久化 Canvas 实例前不得标记 wired");
         assertEquals("LEAVE", m.getModuleCode());
     }
 

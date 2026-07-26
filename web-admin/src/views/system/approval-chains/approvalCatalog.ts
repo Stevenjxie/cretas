@@ -1,5 +1,6 @@
 import type {
   ApprovalWorkflowDTO,
+  ApprovalCutoverReadinessDTO,
   DecisionType,
   DecisionTypeCategory,
   DecisionTypeMetadataDTO,
@@ -11,12 +12,10 @@ export type ApprovalCatalogStatus =
   | 'draft'
   | 'published-disabled'
   | 'archived'
+  | 'legacy-migration-required'
+  | 'canvas-conflict'
+  | 'business-not-wired'
   | 'unconfigured'
-
-export interface LegacyApprovalChainSummary {
-  decisionType?: string
-  enabled?: boolean
-}
 
 export interface ApprovalCatalogItem {
   decisionType: DecisionType
@@ -43,7 +42,10 @@ const STATUS_RANK: Record<ApprovalCatalogStatus, number> = {
   draft: 2,
   'published-disabled': 3,
   archived: 4,
-  unconfigured: 5,
+  'legacy-migration-required': 5,
+  'canvas-conflict': 6,
+  'business-not-wired': 7,
+  unconfigured: 8,
 }
 
 function workflowRank(workflow: ApprovalWorkflowDTO): number {
@@ -81,7 +83,7 @@ function resolveStatus(workflows: ApprovalWorkflowDTO[]): ApprovalCatalogStatus 
 export function buildApprovalCatalog(
   metadata: DecisionTypeMetadataDTO[],
   workflows: ApprovalWorkflowDTO[],
-  legacyChains: LegacyApprovalChainSummary[],
+  readiness: ApprovalCutoverReadinessDTO[],
 ): ApprovalCatalogItem[] {
   const workflowsByType = new Map<DecisionType, ApprovalWorkflowDTO[]>()
   for (const workflow of workflows) {
@@ -90,14 +92,9 @@ export function buildApprovalCatalog(
     workflowsByType.set(workflow.decisionType, group)
   }
 
-  const legacyCountByType = new Map<string, number>()
-  for (const chain of legacyChains) {
-    if (!chain.decisionType) continue
-    legacyCountByType.set(
-      chain.decisionType,
-      (legacyCountByType.get(chain.decisionType) ?? 0) + 1,
-    )
-  }
+  const readinessByType = new Map(
+    readiness.map((item) => [item.decisionType, item]),
+  )
 
   return metadata.map((item) => {
     const typeWorkflows = workflowsByType.get(item.decisionType) ?? []
@@ -112,6 +109,16 @@ export function buildApprovalCatalog(
       .map((workflow) => workflow.updatedAt ?? workflow.createdAt)
       .filter((value): value is string => Boolean(value))
       .sort((left, right) => right.localeCompare(left))[0]
+    const cutover = readinessByType.get(item.decisionType)
+    const workflowStatus = resolveStatus(typeWorkflows)
+    let status: ApprovalCatalogStatus = workflowStatus
+    if (cutover?.runtimeStatus === 'CANVAS_CONFLICT') {
+      status = 'canvas-conflict'
+    } else if (cutover?.runtimeStatus === 'BUSINESS_NOT_WIRED') {
+      status = 'business-not-wired'
+    } else if (cutover?.runtimeStatus === 'LEGACY_MIGRATION_REQUIRED') {
+      status = 'legacy-migration-required'
+    }
     return {
       decisionType: item.decisionType,
       chineseName: item.chineseName,
@@ -119,16 +126,16 @@ export function buildApprovalCatalog(
       category: item.category,
       wired: item.wired,
       workflowCount: typeWorkflows.length,
-      legacyCount: legacyCountByType.get(item.decisionType) ?? 0,
+      legacyCount: cutover?.legacyEnabled ? 1 : 0,
       preferredWorkflowId: preferred?.id,
       preferredWorkflowName: preferred?.name,
       preferredWorkflowVersion: preferred?.version,
       activeWorkflowVersion: active?.version,
       draftWorkflowVersion: draft?.version,
       latestUpdatedAt,
-      approvalEnabled: Boolean(active),
+      approvalEnabled: cutover?.approvalRequired ?? Boolean(active),
       hasDraft: Boolean(draft),
-      status: resolveStatus(typeWorkflows),
+      status,
     }
   }).sort((left, right) => (
     STATUS_RANK[left.status] - STATUS_RANK[right.status]
