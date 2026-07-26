@@ -1010,6 +1010,54 @@ async def test_read_action_choice_allows_explicit_current_time_override():
     t3.assert_not_awaited()
 
 
+@pytest.mark.asyncio
+async def test_read_action_view_then_time_override_then_store_keeps_new_time():
+    pool = _FakeDbPool(
+        is_restaurant=True,
+        store_names=["东城店", "西城店"],
+    )
+    factory_id = "F_READ_ACTION_TIME_THREE_TURNS"
+    session_key = "sess-read-action-time-three-turns"
+    await _pending_put(
+        pool,
+        factory_id,
+        session_key,
+        original_query="把最近7天销量最低的5道菜全部下架",
+        clarification_question="您是想查看低销量菜品排行，还是执行下架？",
+    )
+    t3 = AsyncMock(side_effect=AssertionError(
+        "explicit READ/time/store choices must not require T3"
+    ))
+    with patch("common.llm_router.call_chain", new=t3):
+        second = await parse_restaurant_query(
+            "只看本月低销量排行",
+            pool,
+            factory_id=factory_id,
+            session_key=session_key,
+        )
+        third = await parse_restaurant_query(
+            "全部门店",
+            pool,
+            factory_id=factory_id,
+            session_key=session_key,
+        )
+
+    assert second.clarification_needed is True
+    assert second.clarification_question == STORE_SCOPE_CLARIFICATION_QUESTION
+    assert third.clarification_needed is False
+    assert third.planner_authority == "explicit_action_read_choice"
+    assert third.window_label == "本月"
+    assert third.date_range[0].day == 1
+    assert third.store_scope == "all"
+    assert third.ranking_direction == "worst"
+    assert third.ranking_limit == 5
+    assert "最近7天" not in third.resolver_query_seed
+    assert "本月" in third.resolver_query_seed
+    assert "下架" not in third.resolver_query_seed
+    assert pool.pending == {}
+    t3.assert_not_awaited()
+
+
 @pytest.mark.parametrize(
     "replacement",
     [
