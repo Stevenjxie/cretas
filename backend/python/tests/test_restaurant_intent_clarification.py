@@ -866,7 +866,13 @@ async def test_time_then_store_scope_clarifications_chain_without_losing_query()
 
 
 @pytest.mark.asyncio
-async def test_dependent_optimization_cannot_escape_pending_named_dish_time_scope():
+@pytest.mark.parametrize(
+    "dish_name",
+    ["米饭", "娃娃菜", "招牌藤椒味(单人份)"],
+)
+async def test_dependent_optimization_cannot_escape_pending_named_dish_time_scope(
+    dish_name,
+):
     pool = _FakeDbPool(
         is_restaurant=True,
         store_names=["东城店", "西城店"],
@@ -880,7 +886,7 @@ async def test_dependent_optimization_cannot_escape_pending_named_dish_time_scop
         new=AsyncMock(return_value=[]),
     ), patch("common.llm_router.call_chain", new=llm):
         first = await parse_restaurant_query(
-            "米饭的销量为什么这样？",
+            f"{dish_name}的销量为什么这样？",
             pool,
             factory_id="F_NAMED_DISH_PENDING",
             session_key="sess-named-dish-pending",
@@ -891,14 +897,44 @@ async def test_dependent_optimization_cannot_escape_pending_named_dish_time_scop
             factory_id="F_NAMED_DISH_PENDING",
             session_key="sess-named-dish-pending",
         )
+        third = await parse_restaurant_query(
+            "本月",
+            pool,
+            factory_id="F_NAMED_DISH_PENDING",
+            session_key="sess-named-dish-pending",
+        )
+        fourth = await parse_restaurant_query(
+            "全部门店",
+            pool,
+            factory_id="F_NAMED_DISH_PENDING",
+            session_key="sess-named-dish-pending",
+        )
 
     assert first.clarification_question == TIME_CLARIFICATION_QUESTION
     assert second.is_clarification_continuation is True
     assert second.clarification_question == TIME_CLARIFICATION_QUESTION
-    assert second.dish_slot == "米饭"
+    assert second.dish_slot == dish_name
     assert second.requested_metrics == ("sales_volume",)
     assert second.analysis_action == "optimize"
     assert second.intent == "RESTAURANT_OPS_GROSS_MARGIN"
+    assert third.is_clarification_continuation is True
+    assert third.clarification_question == STORE_SCOPE_CLARIFICATION_QUESTION
+    assert third.dish_slot == dish_name
+    assert third.requested_metrics == ("sales_volume",)
+    assert third.analysis_action == "optimize"
+    assert third.window_label == "本月"
+    assert fourth.clarification_needed is False
+    assert fourth.is_clarification_continuation is True
+    assert fourth.dish_slot == dish_name
+    assert fourth.requested_metrics == ("sales_volume",)
+    assert fourth.analysis_action == "optimize"
+    assert fourth.window_label == "本月"
+    assert fourth.store_scope == "all"
+    assert dish_name in fourth.resolver_query_seed
+    assert "怎么优化" in fourth.resolver_query_seed
+    assert "本月" in fourth.resolver_query_seed
+    assert "全部门店" in fourth.resolver_query_seed
+    assert pool.pending == {}
     llm.assert_not_awaited()
 
 
