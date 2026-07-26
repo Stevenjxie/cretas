@@ -576,9 +576,13 @@ public class IntentExecutionOrchestrator {
                     factoryId, request, userId, userRole);
             if (continuationMatch != null) {
                 String inheritedIntent = continuationMatch.getBestMatch().getIntentCode();
+                String continuationInput = resolveSessionAwareRestaurantContinuationInput(
+                        request, continuationMatch);
                 log.info("[RestaurantSessionBridge] force-route verified READ continuation: "
-                                + "sessionId={}, input='{}', intent={}",
-                        request.getSessionId(), userInput, inheritedIntent);
+                                + "sessionId={}, input='{}', executionInput='{}', intent={}",
+                        request.getSessionId(), userInput, continuationInput, inheritedIntent);
+                request.setUserInput(continuationInput);
+                request.setPreprocessedQuery(continuationMatch.getPreprocessedQuery());
                 request.setIntentCode(inheritedIntent);
                 request.setForceExecute(true);
                 return executeWithExplicitIntent(factoryId, request, userId, userRole);
@@ -1317,6 +1321,67 @@ public class IntentExecutionOrchestrator {
                     request.getSessionId(), e.getMessage());
             return null;
         }
+    }
+
+    String resolveSessionAwareRestaurantContinuationInput(
+            IntentExecuteRequest request, IntentMatchResult continuationMatch) {
+        String currentInput = request != null && request.getUserInput() != null
+                ? request.getUserInput().trim()
+                : "";
+        String augmentedInput = continuationMatch != null
+                && continuationMatch.getPreprocessedQuery() != null
+                ? continuationMatch.getPreprocessedQuery().getFinalQuery()
+                : null;
+
+        if (request != null && request.getSessionId() != null) {
+            try {
+                List<ConversationMessage> recent =
+                        conversationMemoryService.getRecentMessages(request.getSessionId(), 8);
+                if (recent != null && !recent.isEmpty()) {
+                    int clarificationIndex = -1;
+                    for (int i = recent.size() - 1; i >= 0; i--) {
+                        ConversationMessage message = recent.get(i);
+                        if (message != null
+                                && message.getRole() == ConversationMessage.Role.ASSISTANT) {
+                            if (isRestaurantSlotClarificationMessage(message.getContent())) {
+                                clarificationIndex = i;
+                            }
+                            break;
+                        }
+                    }
+                    if (clarificationIndex >= 0) {
+                        for (int i = clarificationIndex - 1; i >= 0; i--) {
+                            ConversationMessage message = recent.get(i);
+                            if (message == null
+                                    || message.getRole() != ConversationMessage.Role.USER
+                                    || message.getContent() == null
+                                    || message.getContent().isBlank()
+                                    || message.getContent().trim().equals(currentInput)) {
+                                continue;
+                            }
+                            return message.getContent().trim() + "，" + currentInput;
+                        }
+                    }
+                }
+            } catch (Exception e) {
+                log.warn("[RestaurantSessionBridge] failed to load parent clarification input; "
+                                + "using augmented continuation: sessionId={}, error={}",
+                        request.getSessionId(), e.getMessage());
+            }
+        }
+        return augmentedInput != null && !augmentedInput.isBlank()
+                ? augmentedInput.trim()
+                : currentInput;
+    }
+
+    static boolean isRestaurantSlotClarificationMessage(String message) {
+        if (message == null || message.isBlank()) {
+            return false;
+        }
+        return message.contains("你想看哪个时间范围")
+                || message.contains("请选择本月、上个月、最近7天或最近30天")
+                || message.contains("这项分析要看哪一组门店")
+                || message.contains("请选择“全部门店”");
     }
 
     private IntentExecuteResponse handleEarlyQuestionTypeDetection(String factoryId, String userInput,

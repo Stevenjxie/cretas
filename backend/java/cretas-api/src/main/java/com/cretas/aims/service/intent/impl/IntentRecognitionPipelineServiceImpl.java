@@ -533,6 +533,12 @@ public class IntentRecognitionPipelineServiceImpl implements IntentRecognitionPi
                         log.info("[X1-Continuation] inherit prior intent: lastIntent={}, '{}' -> '{}'",
                                 context.getLastIntentCode(), userInput, augmented);
                         processedInput = augmented;
+                        // T129: Preserve the augmented query even when this continuation has no
+                        // entity pronoun. Previously a bare time reply such as "最近30天" left
+                        // preprocessedQuery null, so the execution layer inherited only the intent
+                        // code while the tool still received the topic-free raw reply.
+                        preprocessedQuery = ensureContinuationFinalQuery(
+                                userInput, processedInput, preprocessedQuery);
                         // T120 fix: the continuation path augments processedInput (e.g. "它呢" →
                         // "畅销菜品") but previously skipped store/dish coref resolution. When the
                         // raw userInput contains a store/dish pronoun ("它", "那家店"), the slot must
@@ -4071,6 +4077,27 @@ public class IntentRecognitionPipelineServiceImpl implements IntentRecognitionPi
             return canonicalPhrase;
         }
         return null; // core 含其它内容 (e.g. 动词/未知名词) → 不增强, 交给常规管线。
+    }
+
+    static PreprocessedQuery ensureContinuationFinalQuery(
+            String originalInput, String augmentedInput, PreprocessedQuery preprocessedQuery) {
+        if (augmentedInput == null || augmentedInput.isBlank()) {
+            return preprocessedQuery;
+        }
+        PreprocessedQuery result = preprocessedQuery;
+        if (result == null) {
+            return PreprocessedQuery.builder()
+                    .originalInput(originalInput)
+                    .normalizedText(augmentedInput)
+                    .finalQuery(augmentedInput)
+                    .build();
+        }
+        if (result.getOriginalInput() == null || result.getOriginalInput().isBlank()) {
+            result.setOriginalInput(originalInput);
+        }
+        result.setNormalizedText(augmentedInput);
+        result.setFinalQuery(augmentedInput);
+        return result;
     }
 
     // ==================== T128: Continuation-inherit safety + result builder ====================
