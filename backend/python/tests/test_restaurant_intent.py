@@ -1403,6 +1403,58 @@ def test_four_turn_chain_updates_metric_before_diagnosis_and_optimization():
     assert optimization_query == "本月米饭的销量怎么优化"
 
 
+@pytest.mark.parametrize(
+    "dish_name",
+    ["米饭", "娃娃菜", "招牌青花椒味(单人份)"],
+)
+@pytest.mark.parametrize(
+    "time_followup",
+    ["改看本月", "换看本月", "只看本月", "改查本月"],
+)
+def test_named_dish_followup_can_replace_time_then_store_slots(
+    dish_name,
+    time_followup,
+):
+    first_parent = {
+        "parent_query": f"最近30天全部门店{dish_name}的销量怎么优化",
+        "parent_template_code": "RESTAURANT_OPS_GROSS_MARGIN",
+        "structured_context": {
+            "focus_entity": {"type": "dish", "name": dish_name},
+            "window_label": "最近30天",
+            "requested_metrics": ["sales_volume"],
+            "analysis_action": "optimize",
+            "store_scope": "all",
+            "store_names": [],
+        },
+    }
+
+    time_query, inherited = contextualize_restaurant_followup(
+        time_followup,
+        first_parent,
+    )
+    assert inherited is True
+    assert time_query == f"全部门店本月{dish_name}的销量如何"
+
+    second_parent = {
+        "parent_query": time_query,
+        "parent_template_code": "RESTAURANT_OPS_GROSS_MARGIN",
+        "structured_context": {
+            "focus_entity": {"type": "dish", "name": dish_name},
+            "window_label": "本月",
+            "requested_metrics": ["sales_volume"],
+            "analysis_action": "lookup",
+            "store_scope": "all",
+            "store_names": [],
+        },
+    }
+    store_query, inherited = contextualize_restaurant_followup(
+        "只看青花椒南方百联店",
+        second_parent,
+    )
+    assert inherited is True
+    assert store_query == f"本月青花椒南方百联店{dish_name}的销量如何"
+
+
 def test_followup_with_explicit_new_entity_replaces_dish_but_inherits_time():
     parent = {
         "parent_query": "米饭的毛利率如何",
