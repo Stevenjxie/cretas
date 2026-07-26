@@ -64,6 +64,7 @@ TRUSTED_PLANNER_AUTHORITIES = frozenset({
     "explicit_slots",
     "explicit_comparison_slots",
     "explicit_comparison_slots_contract_repair",
+    "explicit_action_read_choice",
     "trusted_context",
     "trusted_context_contract_repair",
 })
