@@ -718,7 +718,8 @@ async def test_tiered_answer_marks_operation_words_as_read_only_without_blocking
     await asyncio.sleep(0)
 
     assert result["kind"] == "answer"
-    assert "没有执行下架" in result["warning"]
+    assert "当前未执行任何下架" in result["warning"]
+    assert "当前未执行任何下架" in result["answer_text"]
     assert "切换到操作模式" in result["warning"]
 
 
@@ -1149,9 +1150,79 @@ async def test_read_only_action_warning_survives_store_scope_clarification(monke
     )
 
     assert result["kind"] == "clarification"
-    assert result["answer_text"] == STORE_SCOPE_CLARIFICATION_QUESTION
+    assert STORE_SCOPE_CLARIFICATION_QUESTION in result["answer_text"]
+    assert "当前未执行任何下架" in result["answer_text"]
     assert "咨询模式" in result["warning"]
-    assert "没有执行下架" in result["warning"]
+    assert "当前未执行任何下架" in result["warning"]
+
+
+@pytest.mark.asyncio
+async def test_read_only_action_warning_survives_pure_store_scope_reply(monkeypatch):
+    spec = _spec(
+        intent="RESTAURANT_OPS_GROSS_MARGIN",
+        clarification_needed=True,
+        clarification_question=STORE_SCOPE_CLARIFICATION_QUESTION,
+        store_options=("人民路店", "湖滨路店"),
+        resolver_query_seed="把最近7天销量最低的5道菜全部下架 全部门店",
+    )
+
+    async def _fake_parse(*_args, **_kwargs):
+        return spec
+
+    monkeypatch.setattr(svc, "parse_restaurant_query", _fake_parse)
+
+    result = await tiered_answer(
+        "全部门店",
+        object(),
+        "DEMO_REST",
+        "restaurant_manager",
+    )
+
+    assert result["kind"] == "clarification"
+    assert STORE_SCOPE_CLARIFICATION_QUESTION in result["answer_text"]
+    assert "当前未执行任何下架" in result["answer_text"]
+    assert result["warning"] == svc._READ_ONLY_ACTION_WARNING
+
+
+@pytest.mark.asyncio
+async def test_read_only_action_warning_survives_resolved_store_scope_answer(
+    monkeypatch,
+):
+    spec = _spec(
+        intent="RESTAURANT_OPS_GROSS_MARGIN",
+        resolver_query_seed="把最近7天销量最低的5道菜全部下架 全部门店",
+    )
+    monkeypatch.setattr(
+        svc,
+        "parse_restaurant_query",
+        AsyncMock(return_value=spec),
+    )
+    monkeypatch.setattr(
+        svc,
+        "_resolve_tiered",
+        AsyncMock(return_value=OpsAnswer(
+            code=spec.intent,
+            title="低销量菜品",
+            answer_text="最近7天销量最低的5道菜已经列出。",
+            charts=[],
+            kpis=[],
+            meta={},
+        )),
+    )
+    monkeypatch.setattr(svc, "log_intent_capture", AsyncMock(return_value=1))
+
+    result = await tiered_answer(
+        "全部门店",
+        object(),
+        "DEMO_REST",
+        "restaurant_manager",
+    )
+    await asyncio.sleep(0)
+
+    assert result["kind"] == "answer"
+    assert "当前未执行任何下架" in result["answer_text"]
+    assert "最近7天销量最低的5道菜已经列出" in result["answer_text"]
+    assert result["warning"] == svc._READ_ONLY_ACTION_WARNING
 
 
 @pytest.mark.asyncio

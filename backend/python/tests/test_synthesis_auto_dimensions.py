@@ -357,6 +357,105 @@ async def test_auto_expand_builds_all_available_dimensions_when_sources_exist(mo
     assert "库存、损耗与人效" in text
 
 
+@pytest.mark.asyncio
+async def test_demo_comprehensive_uses_unified_gold_tenant_only_for_pos_facts(
+    monkeypatch,
+):
+    calls: dict[str, list[str]] = {}
+    product_orders: list[str] = []
+
+    def capture(name, result):
+        async def fake(_pool, factory_id, *_args, **_kwargs):
+            calls.setdefault(name, []).append(factory_id)
+            return result
+        return fake
+
+    monkeypatch.setattr(se, "finance_summary", capture("finance", {
+        "total_revenue": 100,
+        "bill_count": 2,
+        "customer_count": 3,
+        "top_stores": [],
+    }))
+    async def fake_products(_pool, factory_id, *_args, **kwargs):
+        calls.setdefault("products", []).append(factory_id)
+        product_orders.append(str(kwargs.get("order", "desc")))
+        return {
+            "top_products": [{
+                "product_name": "招牌鱼",
+                "revenue": 100,
+                "qty_sold": 2,
+            }],
+        }
+
+    monkeypatch.setattr(se, "top_products", fake_products)
+    monkeypatch.setattr(se, "channel_breakdown", capture("channels", {"channels": []}))
+    monkeypatch.setattr(se, "discount_breakdown", capture("discounts", {"discounts": []}))
+    monkeypatch.setattr(se, "dish_margin", capture("dish_margin", {
+        "cost_basis_complete": True,
+        "top_margin": [],
+        "low_margin": [],
+    }))
+    monkeypatch.setattr(se, "review_summary", capture("review", {
+        "total_reviews": 1,
+        "avg_star": 4.5,
+    }))
+    for name in (
+        "review_vip", "review_platform", "review_time_period",
+        "review_good_tags", "review_dish_issues", "review_store_ranking",
+    ):
+        monkeypatch.setattr(se, name, capture(name, {}))
+    monkeypatch.setattr(
+        se,
+        "restaurant_operations_summary",
+        capture("operations", {}),
+    )
+    monkeypatch.setattr(
+        se,
+        "restaurant_dimension_signals",
+        capture("external", {"dimensions": {}}),
+    )
+
+    engine = ComprehensiveSynthesisEngine(
+        pool=object(),
+        budget_tracker=object(),
+        cache=object(),
+    )
+    plan = {
+        "review": True,
+        "finance": True,
+        "sales": True,
+        "dish_margin": True,
+        "operations": True,
+        "external_signals": True,
+        "cross": [],
+    }
+    await engine._build_factbook(
+        "DEMO_REST",
+        (date(2026, 7, 1), date(2026, 7, 2)),
+        plan,
+        period="2026-07-01 至 2026-07-02",
+    )
+
+    assert calls["finance"] == ["RES_3101_009"]
+    assert calls["products"] == ["RES_3101_009", "RES_3101_009"]
+    assert product_orders == ["desc", "asc"]
+    assert calls["channels"] == ["RES_3101_009"]
+    assert calls["discounts"] == ["RES_3101_009"]
+    assert calls["dish_margin"] == ["RES_3101_009"]
+    assert calls["review"] == ["DEMO_REST"]
+    assert calls["operations"] == ["DEMO_REST"]
+    assert calls["external"] == ["DEMO_REST"]
+
+    calls.clear()
+    await engine._build_factbook(
+        "REAL_RESTAURANT",
+        (date(2026, 7, 1), date(2026, 7, 2)),
+        {"finance": True, "cross": []},
+        period="2026-07-01 至 2026-07-02",
+    )
+    assert calls["finance"] == ["REAL_RESTAURANT"]
+
+
 def test_demo_seed_has_fixed_long_window_all_dimension_sources_and_demo_isolation():
     path = _migrations_dir() / "V20261029_01__demo_rest_comprehensive_dimensions.sql"
     sql = path.read_text(encoding="utf-8")

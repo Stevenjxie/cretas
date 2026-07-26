@@ -71,8 +71,9 @@ _HISTORICAL_MUTATION_TOKENS = (
     "已下架", "下架记录", "下架情况", "停售记录", "调价记录", "调价历史",
 )
 _READ_ONLY_ACTION_WARNING = (
-    "咨询模式只展示分析结果，没有执行下架、调价或其他业务操作；"
-    "如需执行，请切换到操作模式并完成预览确认。"
+    "当前未执行任何下架、调价或其他业务操作。"
+    "咨询模式只展示分析结果；如需执行，请切换到操作模式，"
+    "先生成预览，确认后再执行。"
 )
 
 
@@ -83,6 +84,27 @@ def _read_only_action_warning(query: str) -> Optional[str]:
     if any(token in text for token in _READ_ONLY_MUTATION_TOKENS):
         return _READ_ONLY_ACTION_WARNING
     return None
+
+
+def _read_only_action_warning_for_spec(
+    query: str,
+    spec: Optional[RestaurantQuerySpec],
+) -> Optional[str]:
+    """Retain a mutation warning across pure slot-clarification replies."""
+    sources = [query]
+    if spec is not None:
+        sources.append(str(getattr(spec, "resolver_query_seed", "") or ""))
+    for source in sources:
+        warning = _read_only_action_warning(source)
+        if warning:
+            return warning
+    return None
+
+
+def _prepend_action_warning(answer_text: str, warning: Optional[str]) -> str:
+    if not warning or warning in (answer_text or ""):
+        return answer_text
+    return f"**{warning}**\n\n{answer_text}"
 
 
 def _execution_mismatch(
@@ -536,11 +558,16 @@ async def tiered_answer(
         if spec is None:
             return None
         if spec.clarification_needed or not spec.intent:
+            action_warning = _read_only_action_warning_for_spec(query, spec)
+            clarification_text = (
+                spec.clarification_question
+                or "能再具体说说想看哪方面的数据吗？比如营收、毛利、损耗还是库存盘点。"
+            )
             clarification_result = {
                 "kind": "clarification",
-                "answer_text": (
-                    spec.clarification_question
-                    or "能再具体说说想看哪方面的数据吗？比如营收、毛利、损耗还是库存盘点。"
+                "answer_text": _prepend_action_warning(
+                    clarification_text,
+                    action_warning,
                 ),
                 "structured_context": _clarification_structured_context(spec),
                 "spec": spec,
@@ -548,7 +575,6 @@ async def tiered_answer(
             followups = _clarification_followups(spec)
             if followups:
                 clarification_result["suggested_followups"] = followups
-            action_warning = _read_only_action_warning(query)
             if action_warning:
                 clarification_result["warning"] = action_warning
             return clarification_result
@@ -758,6 +784,8 @@ async def tiered_answer(
             store_mention=store_mention,
         )
 
+        action_warning = _read_only_action_warning_for_spec(query, spec)
+        answer_text = _prepend_action_warning(answer_text, action_warning)
         result: Dict[str, Any] = {
             "kind": "answer",
             "answer_text": answer_text,
@@ -775,7 +803,6 @@ async def tiered_answer(
             "suggested_followups": _suggested_followups(structured_context),
             "spec": spec,
         }
-        action_warning = _read_only_action_warning(query)
         if action_warning:
             result["warning"] = action_warning
         capture_source = "java_entry_delegate" if java_tool_name else None

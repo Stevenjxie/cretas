@@ -9,7 +9,7 @@ Composition (filled by ``synthesis_engine._build_factbook`` per the dimension pl
                   review_time_period / review_good_tags / review_dish_issues /
                   review_store_ranking (差评门店) etc.
   - ``finance`` : gold finance_summary (total_revenue / bills / avg_bill / top_stores)
-  - ``sales``   : gold top_products / channel_breakdown / discount_breakdown
+  - ``sales``   : gold top/bottom_products / channel_breakdown / discount_breakdown
   - ``channel``     : gold order_type_breakdown (渠道/点餐方式 堂食/外卖/自提 —
                   NOT the payment-channel breakdown embedded in ``sales``)
   - ``meal_period`` : gold meal_period_breakdown (时段 午市/晚市/夜宵)
@@ -369,14 +369,22 @@ class FactBook:
         if not sales:
             return
         prods = sales.get("top_products") or []
+        low_prods = sales.get("bottom_products") or []
         channels = sales.get("channels") or []
         discounts = sales.get("discounts") or []
-        if not (prods or channels or discounts):
+        if not (prods or low_prods or channels or discounts):
             return
         lines.append("## 销售")
         if prods:
-            lines.append("- Top 商品（按营业额）：")
+            lines.append("- 高营业额菜品（已排除米饭、餐具、纸巾等附属项）：")
             for i, p in enumerate(prods[:5], 1):
+                name = p.get("product_name") or p.get("name") or "未知商品"
+                rev = p.get("revenue")
+                qty = p.get("qty_sold") or p.get("quantity") or 0
+                lines.append(f"  {i}. {name}：¥{_money(rev)}（销量 {int(qty):,}）")
+        if low_prods:
+            lines.append("- 低营业额菜品候选（已排除米饭、餐具、纸巾等附属项）：")
+            for i, p in enumerate(low_prods[:5], 1):
                 name = p.get("product_name") or p.get("name") or "未知商品"
                 rev = p.get("revenue")
                 qty = p.get("qty_sold") or p.get("quantity") or 0
@@ -777,6 +785,24 @@ class FactBook:
             if _gm is not None:
                 idx["加权毛利率"] = _gm
 
+        sales = self.sales or {}
+        for bucket, prefix in (
+            ("top_products", "高营业额"),
+            ("bottom_products", "低营业额"),
+        ):
+            for item in (sales.get(bucket) or []):
+                name = item.get("product_name") or item.get("name")
+                if not name:
+                    continue
+                for label, key in (
+                    ("菜品营收", "revenue"),
+                    ("菜品销量", "qty_sold"),
+                    ("菜品订单数", "bill_count"),
+                ):
+                    value = _num(item.get(key))
+                    if value is not None:
+                        idx[f"{prefix}{name}{label}"] = value
+
         dm = self.dish_margin if _has_reliable_dish_margin(self.dish_margin) else {}
         for bucket in ("top_margin", "low_margin"):
             for item in (dm.get(bucket) or []):
@@ -1042,10 +1068,11 @@ class FactBook:
             out["门店"] = stores
         sales = self.sales or {}
         prods = []
-        for p in (sales.get("top_products") or []):
-            n = p.get("product_name") or p.get("name")
-            if isinstance(n, str) and n.strip():
-                prods.append(n.strip())
+        for bucket in ("top_products", "bottom_products"):
+            for p in (sales.get(bucket) or []):
+                n = p.get("product_name") or p.get("name")
+                if isinstance(n, str) and n.strip():
+                    prods.append(n.strip())
         dm = self.dish_margin if _has_reliable_dish_margin(self.dish_margin) else {}
         for bucket in ("top_margin", "low_margin"):
             for p in (dm.get(bucket) or []):
