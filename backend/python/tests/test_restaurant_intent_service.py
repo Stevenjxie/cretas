@@ -1186,7 +1186,10 @@ async def test_endpoint_no_pool_delegate_false(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_tiered_answer_store_mention_maps_demo_and_declines_unknown(monkeypatch):
-    spec = _spec(intent="RESTAURANT_OPS_STORE_MARGIN")
+    spec = _spec(
+        intent="RESTAURANT_OPS_STORE_MARGIN",
+        resolver_query_seed="把最近7天销量最低的5道菜全部下架 月球一号幻想店",
+    )
     captured = {}
 
     async def _fake_parse(*a, **kw):
@@ -1212,6 +1215,8 @@ async def test_tiered_answer_store_mention_maps_demo_and_declines_unknown(monkey
     assert captured["kwargs"]["store_mention"] == "月球一号幻想店"
     assert result["kind"] == "clarification"
     assert "没有找到名为「月球一号幻想店」的门店" in result["answer_text"]
+    assert "当前未执行任何下架" in result["answer_text"]
+    assert result["warning"] == svc._READ_ONLY_ACTION_WARNING
 
 
 @pytest.mark.asyncio
@@ -1418,6 +1423,7 @@ async def test_tiered_answer_store_scope_mismatch_fails_closed_without_reroute(m
         plan_version="restaurant-query-plan-v2",
         planner_authority="llm",
         plan_hash="plan-store-mismatch",
+        resolver_query_seed="把最近7天销量最低的5道菜全部下架 只看食材领用量排行 全部门店",
     )
     resolver = AsyncMock()
 
@@ -1433,6 +1439,8 @@ async def test_tiered_answer_store_scope_mismatch_fails_closed_without_reroute(m
     assert result["kind"] == "clarification"
     assert result["contract_pass"] is False
     assert "门店范围" in result["answer_text"]
+    assert "当前未执行任何下架" in result["answer_text"]
+    assert result["warning"] == svc._READ_ONLY_ACTION_WARNING
     resolver.assert_not_awaited()
 
 

@@ -495,6 +495,7 @@ async def tiered_answer(
     calls ``parse_restaurant_query`` itself exactly as before.
     """
     spec = precomputed_spec
+    action_warning: Optional[str] = None
     try:
         from smartbi.gold.restaurant_playbook import PLAYBOOK_CODE, PLAYBOOK_TRIGGERS
         if any(trigger in (query or "") for trigger in PLAYBOOK_TRIGGERS):
@@ -563,8 +564,8 @@ async def tiered_answer(
             )
         if spec is None:
             return None
+        action_warning = _read_only_action_warning_for_spec(query, spec)
         if spec.clarification_needed or not spec.intent:
-            action_warning = _read_only_action_warning_for_spec(query, spec)
             clarification_text = (
                 spec.clarification_question
                 or "能再具体说说想看哪方面的数据吗？比如营收、毛利、损耗还是库存盘点。"
@@ -622,16 +623,22 @@ async def tiered_answer(
             store_dish=store_dish,
         )
         if mismatch:
-            return {
+            mismatch_result = {
                 "kind": "clarification",
-                "answer_text": (
-                    f"本次没有执行分析：{mismatch}。"
-                    "请明确要看菜品、门店还是全店汇总，我不会改走相邻分析。"
+                "answer_text": _prepend_action_warning(
+                    (
+                        f"本次没有执行分析：{mismatch}。"
+                        "请明确要看菜品、门店还是全店汇总，我不会改走相邻分析。"
+                    ),
+                    action_warning,
                 ),
                 "contract_pass": False,
                 "structured_context": _clarification_structured_context(spec),
                 "spec": spec,
             }
+            if action_warning:
+                mismatch_result["warning"] = action_warning
+            return mismatch_result
         planned_results: List[Tuple[str, Any]] = []
         for code in plan:
             code_kwargs = execution_kwargs
@@ -693,16 +700,22 @@ async def tiered_answer(
         )
         if not tiered_result:
             if spec.plan_version == "restaurant-query-plan-v2":
-                return {
+                empty_result = {
                     "kind": "clarification",
-                    "answer_text": (
-                        "计划中的餐饮分析没有返回可验证结果，本次没有改走相邻分析。"
-                        "请确认数据范围后重试。"
+                    "answer_text": _prepend_action_warning(
+                        (
+                            "计划中的餐饮分析没有返回可验证结果，本次没有改走相邻分析。"
+                            "请确认数据范围后重试。"
+                        ),
+                        action_warning,
                     ),
                     "contract_pass": False,
                     "structured_context": _clarification_structured_context(spec),
                     "spec": spec,
                 }
+                if action_warning:
+                    empty_result["warning"] = action_warning
+                return empty_result
             return None
 
         # Guard declines (missing date reference, unknown/ambiguous store) are
@@ -714,14 +727,20 @@ async def tiered_answer(
             for key in ("missing_reference", "store_not_found", "store_mention_ambiguous",
                     "dish_not_found", "dish_mention_ambiguous", "no_pos_data")
         ):
-            return {
+            guard_result = {
                 "kind": "clarification",
-                "answer_text": sanitize_customer_ai_text(
-                    str(getattr(tiered_result, "answer_text", "") or "")
+                "answer_text": _prepend_action_warning(
+                    sanitize_customer_ai_text(
+                        str(getattr(tiered_result, "answer_text", "") or "")
+                    ),
+                    action_warning,
                 ),
                 "structured_context": _clarification_structured_context(spec),
                 "spec": spec,
             }
+            if action_warning:
+                guard_result["warning"] = action_warning
+            return guard_result
 
         result_kpis = getattr(tiered_result, "kpis", None) or []
         executed_codes = tuple(code for code, _ in planned_results)
@@ -744,7 +763,6 @@ async def tiered_answer(
             result_kpis,
             result_meta,
         )
-        action_warning = _read_only_action_warning_for_spec(query, spec)
         displayable = has_displayable_business_result(answer_text)
         if not contract.passed or not displayable:
             missing = (
@@ -825,16 +843,22 @@ async def tiered_answer(
     except Exception as e:
         logger.warning(f"[restaurant-intent] tiered path failed: {e}")
         if spec is not None and spec.plan_version == "restaurant-query-plan-v2":
-            return {
+            failure_result = {
                 "kind": "clarification",
-                "answer_text": (
-                    "餐饮执行链暂时不可用，本次没有执行任何相邻分析。"
-                    "请稍后重试。"
+                "answer_text": _prepend_action_warning(
+                    (
+                        "餐饮执行链暂时不可用，本次没有执行任何相邻分析。"
+                        "请稍后重试。"
+                    ),
+                    action_warning,
                 ),
                 "contract_pass": False,
                 "structured_context": _clarification_structured_context(spec),
                 "spec": spec,
             }
+            if action_warning:
+                failure_result["warning"] = action_warning
+            return failure_result
         return None
 
 
