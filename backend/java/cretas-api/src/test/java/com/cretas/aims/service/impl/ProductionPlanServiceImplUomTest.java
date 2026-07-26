@@ -108,7 +108,8 @@ class ProductionPlanServiceImplUomTest {
 
     private MaterialUomConverter converterWith(RawMaterialTypeRepository matRepo,
                                                MaterialPackagingHierarchyRepository pkgRepo) {
-        return new MaterialUomConverter(pkgRepo, matRepo,
+        return new MaterialUomConverter(
+                pkgRepo, mock(com.cretas.aims.repository.material.MaterialPackagingSpecRepository.class), matRepo,
                 com.cretas.aims.service.unit.TestUnitContractFactory.legacyFacade());
     }
 

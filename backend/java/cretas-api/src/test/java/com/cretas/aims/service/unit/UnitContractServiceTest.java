@@ -2,9 +2,11 @@ package com.cretas.aims.service.unit;
 
 import com.cretas.aims.entity.config.UnitOfMeasurement;
 import com.cretas.aims.entity.MaterialPackagingHierarchy;
+import com.cretas.aims.entity.material.MaterialPackagingSpec;
 import com.cretas.aims.entity.unit.ProductUnitConversion;
 import com.cretas.aims.repository.MaterialPackagingHierarchyRepository;
 import com.cretas.aims.repository.config.UnitOfMeasurementRepository;
+import com.cretas.aims.repository.material.MaterialPackagingSpecRepository;
 import com.cretas.aims.repository.unit.ProductUnitConversionRepository;
 import com.cretas.aims.service.unit.impl.UnitContractServiceImpl;
 import org.junit.jupiter.api.BeforeEach;
@@ -42,12 +44,16 @@ class UnitContractServiceTest {
     @Mock
     private MaterialPackagingHierarchyRepository materialPackagingRepository;
 
+    @Mock
+    private MaterialPackagingSpecRepository materialPackagingSpecRepository;
+
     private UnitContractService service;
 
     @BeforeEach
     void setUp() {
         service = new UnitContractServiceImpl(
-                unitRepository, conversionRepository, materialPackagingRepository);
+                unitRepository, conversionRepository, materialPackagingRepository,
+                materialPackagingSpecRepository);
     }
 
     @ParameterizedTest
@@ -211,6 +217,26 @@ class UnitContractServiceTest {
     }
 
     @Test
+    void convertsAnyDynamicMaterialPackagingRuleDirectlyToInventoryBaseUnit() {
+        given(conversionRepository.findEffectiveByFactoryIdAndProductTypeIdAt(
+                FACTORY_ID, "MAT-1", AT)).willReturn(List.of());
+        given(materialPackagingSpecRepository
+                .findByFactoryIdAndMaterialTypeIdAndActiveTrueOrderBySortOrderAscCreatedAtAsc(
+                        FACTORY_ID, "MAT-1"))
+                .willReturn(List.of(packagingSpec("SPEC-PAIL", "MAT-1", "pail", "kg", "18.5")));
+
+        UnitConversionResult inbound = service.convert(
+                new BigDecimal("4"), context("MAT-1", "pail", "kg"));
+        UnitConversionResult reverse = service.convert(
+                new BigDecimal("37"), context("MAT-1", "kg", "pail"));
+
+        assertThat(inbound.status()).isEqualTo(UnitConversionStatus.CONVERTED);
+        assertThat(inbound.quantity()).isEqualByComparingTo("74");
+        assertThat(inbound.conversionRefId()).isEqualTo("SPEC-PAIL");
+        assertThat(reverse.quantity()).isEqualByComparingTo("2");
+    }
+
+    @Test
     void composesRawMaterialThirdLevelPackagingConversion() {
         given(conversionRepository.findEffectiveByFactoryIdAndProductTypeIdAt(
                 FACTORY_ID, "MAT-1", AT)).willReturn(List.of());
@@ -356,6 +382,23 @@ class UnitContractServiceTest {
         hierarchy.setLevel2PerLevel3(
                 level2PerLevel3 == null ? null : new BigDecimal(level2PerLevel3));
         return hierarchy;
+    }
+
+    private MaterialPackagingSpec packagingSpec(
+            String id, String materialTypeId, String packageUnit, String baseUnit, String factor) {
+        MaterialPackagingSpec spec = new MaterialPackagingSpec();
+        spec.setId(id);
+        spec.setFactoryId(FACTORY_ID);
+        spec.setMaterialTypeId(materialTypeId);
+        spec.setName("包装规格");
+        spec.setPackageUnit(packageUnit);
+        spec.setBaseUnit(baseUnit);
+        spec.setConversionFactor(new BigDecimal(factor));
+        spec.setDefaultSpec(true);
+        spec.setActive(true);
+        spec.setSortOrder(0);
+        spec.setVersion(0L);
+        return spec;
     }
 
     private UnitConversionContext context(String fromUnit, String toUnit) {

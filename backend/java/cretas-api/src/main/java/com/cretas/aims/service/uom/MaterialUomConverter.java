@@ -2,8 +2,10 @@ package com.cretas.aims.service.uom;
 
 import com.cretas.aims.entity.MaterialPackagingHierarchy;
 import com.cretas.aims.entity.RawMaterialType;
+import com.cretas.aims.entity.material.MaterialPackagingSpec;
 import com.cretas.aims.repository.MaterialPackagingHierarchyRepository;
 import com.cretas.aims.repository.RawMaterialTypeRepository;
+import com.cretas.aims.repository.material.MaterialPackagingSpecRepository;
 import com.cretas.aims.service.UnitConversionService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -11,6 +13,7 @@ import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
+import java.util.List;
 import java.util.Map;
 
 /**
@@ -46,6 +49,7 @@ import java.util.Map;
 public class MaterialUomConverter {
 
     private final MaterialPackagingHierarchyRepository packagingRepository;
+    private final MaterialPackagingSpecRepository packagingSpecRepository;
     private final RawMaterialTypeRepository rawMaterialTypeRepository;
     private final UnitConversionService unitConversionService;
 
@@ -87,7 +91,20 @@ public class MaterialUomConverter {
             return ConversionResult.abacaSkip(material.getName());
         }
 
-        // 3. 跨 箱(level)↔base(kg/g): 查 MaterialPackagingHierarchy.
+        // 3. 动态包装规格优先：每条规则都直接指向库存基本单位，行为与 SKU 包装规格一致。
+        List<MaterialPackagingSpec> packagingSpecs = materialTypeId == null
+                ? List.of()
+                : packagingSpecRepository
+                        .findByFactoryIdAndMaterialTypeIdAndActiveTrueOrderBySortOrderAscCreatedAtAsc(
+                                material == null ? "" : material.getFactoryId(), materialTypeId);
+        for (MaterialPackagingSpec spec : packagingSpecs) {
+            ConversionResult viaSpec = convertViaPackagingSpec(qty, from, stock, spec);
+            if (viaSpec != null) {
+                return viaSpec;
+            }
+        }
+
+        // 4. 历史兼容：跨 箱(level)↔base(kg/g) 查 MaterialPackagingHierarchy.
         MaterialPackagingHierarchy hierarchy =
                 materialTypeId == null ? null
                         : packagingRepository.findByMaterialTypeId(materialTypeId).orElse(null);
@@ -100,7 +117,7 @@ public class MaterialUomConverter {
             }
         }
 
-        // 4. 无法换算 — 绝不静默 default. Caller 必须 fail-loud.
+        // 5. 无法换算 — 绝不静默 default. Caller 必须 fail-loud.
         log.warn("[UOM] 无法换算 material={} {}{} → {} (非抄码, 无装箱规格 / 非同维度)",
                 materialTypeId, qty, fromUnit, materialStockUnit);
         return ConversionResult.unconvertible(
@@ -108,6 +125,29 @@ public class MaterialUomConverter {
                         materialName(material, materialTypeId),
                         materialStockUnit != null ? materialStockUnit : "?",
                         fromUnit != null ? fromUnit : "?"));
+    }
+
+    private ConversionResult convertViaPackagingSpec(
+            BigDecimal qty, String from, String stock, MaterialPackagingSpec spec) {
+        String packageUnit = normalize(spec.getPackageUnit());
+        String baseUnit = normalize(spec.getBaseUnit());
+        BigDecimal factor = spec.getConversionFactor();
+        if (packageUnit == null || baseUnit == null || factor == null || factor.signum() <= 0) {
+            return null;
+        }
+        if (stock != null && stock.equals(packageUnit)) {
+            BigDecimal inBase = toBase(qty, from, baseUnit);
+            if (inBase == null) return null;
+            return ConversionResult.converted(
+                    inBase.divide(factor, 6, RoundingMode.HALF_UP), spec.getPackageUnit());
+        }
+        if (from != null && from.equals(packageUnit)) {
+            BigDecimal inBase = qty.multiply(factor);
+            BigDecimal inStock = fromBase(inBase, baseUnit, stock);
+            if (inStock == null) return null;
+            return ConversionResult.converted(inStock, stock != null ? stock : spec.getBaseUnit());
+        }
+        return null;
     }
 
     /**

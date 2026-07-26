@@ -28,6 +28,7 @@ class MaterialMovingAverageCalculatorTest {
         RawMaterialTypeRepository materialRepository = mock(RawMaterialTypeRepository.class);
         MaterialUomConverter converter = new MaterialUomConverter(
                 packagingRepository,
+                mock(com.cretas.aims.repository.material.MaterialPackagingSpecRepository.class),
                 materialRepository,
                 com.cretas.aims.service.unit.TestUnitContractFactory.legacyFacade());
         calculator = new MaterialMovingAverageCalculator(converter);
