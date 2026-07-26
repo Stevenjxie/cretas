@@ -661,10 +661,12 @@ public class PurchaseServiceImpl implements PurchaseService {
             // append history, or bump the purchase-order version on a duplicate action.
             return order;
         }
-        if (actorId != null && actorId.equals(instance.getInitiatedBy())) {
+        if (actorId != null
+                && actorId.equals(instance.getInitiatedBy())
+                && !isExplicitCurrentNodeApprover(factoryId, instance, actorId)) {
             throw new BusinessException(403, "发起人不能审批自己的采购单")
                     .withCode("PURCHASE_SELF_APPROVAL_FORBIDDEN")
-                    .withHint("请由当前 OA 节点授权的其他审批人处理");
+                    .withHint("请由当前 OA 节点授权的其他审批人处理，或在 Canvas 中明确将发起人配置为该节点审批人");
         }
         if (action == HistoryAction.REJECT && (notes == null || notes.isBlank())) {
             throw new BusinessException(422, "驳回采购单必须填写原因").withHintTarget("notes");
@@ -825,6 +827,54 @@ public class PurchaseServiceImpl implements PurchaseService {
                         .withHint("请为当前工厂配置匹配审批角色的有效账号；采购单仍保持草稿");
             }
         }
+    }
+
+    /**
+     * A workflow may intentionally name the initiator as the approver for a single-user factory.
+     * Role membership alone is not enough to bypass separation of duties: the active node must
+     * explicitly contain the actor in {@code approverUserIds}.
+     */
+    private boolean isExplicitCurrentNodeApprover(
+            String factoryId,
+            ApprovalWorkflowInstance instance,
+            Long actorId) {
+        if (approvalWorkflowService == null
+                || instance.getCurrentNodeIds() == null
+                || instance.getCurrentNodeIds().isEmpty()) {
+            return false;
+        }
+        ApprovalWorkflow workflow = approvalWorkflowService
+                .getById(factoryId, instance.getWorkflowId())
+                .orElse(null);
+        if (workflow == null) {
+            return false;
+        }
+        String currentNodeId = instance.getCurrentNodeIds().get(0);
+        ApprovalWorkflowNode currentNode = approvalWorkflowService
+                .deserializeNodes(workflow.getNodesJson()).stream()
+                .filter(node -> currentNodeId.equals(node.getId()))
+                .findFirst()
+                .orElse(null);
+        if (currentNode == null
+                || !"approval".equalsIgnoreCase(currentNode.getType())
+                || currentNode.getConfig() == null) {
+            return false;
+        }
+        Object configuredApprovers = currentNode.getConfig().get("approverUserIds");
+        if (!(configuredApprovers instanceof Iterable<?> approvers)) {
+            return false;
+        }
+        for (Object configuredApprover : approvers) {
+            if (configuredApprover instanceof Number number
+                    && actorId.equals(number.longValue())) {
+                return true;
+            }
+            if (configuredApprover != null
+                    && actorId.toString().equals(String.valueOf(configuredApprover).trim())) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private void projectWorkflowState(PurchaseOrder order,

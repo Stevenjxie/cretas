@@ -356,6 +356,38 @@ class PurchaseServiceOaSubmissionTest {
     }
 
     @Test
+    void oaActionAllowsSelfApprovalWhenCurrentNodeExplicitlyNamesInitiator() {
+        order.setStatus(PurchaseOrderStatus.WORKFLOW_RUNNING);
+        ApprovalWorkflowInstance running = instance(ApprovalWorkflowInstance.InstanceStatus.RUNNING);
+        ApprovalWorkflowInstance approved = instance(ApprovalWorkflowInstance.InstanceStatus.APPROVED);
+        when(workflowEngine.getInstance("F006", "instance-1"))
+                .thenReturn(Optional.of(running));
+        when(approvalWorkflowService.deserializeNodes("[]"))
+                .thenReturn(List.of(ApprovalWorkflowNode.builder()
+                        .id("finance-approval")
+                        .type("approval")
+                        .label("财务审批")
+                        .config(Map.of(
+                                "approverRoles", List.of("finance_manager"),
+                                "approverUserIds", List.of(1309L)))
+                        .build()));
+        when(workflowEngine.transitionNode(
+                "instance-1", 1309L, "finance_manager", HistoryAction.APPROVE, null))
+                .thenReturn(approved);
+
+        PurchaseOrder result = service.applyWorkflowAction(
+                "F006", "po-1", "instance-1",
+                1309L, "finance_manager", HistoryAction.APPROVE, null);
+
+        assertThat(result.getStatus()).isEqualTo(PurchaseOrderStatus.FINANCE_APPROVED);
+        assertThat(result.getApprovedBy()).isEqualTo(1309L);
+        assertThat(result.getFinanceReviewedBy()).isEqualTo(1309L);
+        verify(workflowEngine).transitionNode(
+                "instance-1", 1309L, "finance_manager", HistoryAction.APPROVE, null);
+        verify(orderRepository).save(order);
+    }
+
+    @Test
     void terminalOaActionReplayIsPureReadWithoutTimestampOrVersionWrite() {
         order.setStatus(PurchaseOrderStatus.FINANCE_APPROVED);
         order.setApprovedAt(java.time.LocalDateTime.of(2026, 7, 21, 10, 0));
