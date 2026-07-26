@@ -43,4 +43,27 @@
   - PR tracked secret scan 通过；`git diff --check 4b088aa70^ 4b088aa70` 通过。
   - 未修改 Entity、Repository、JPQL 或数据库结构，不触发 JPA Repository 启动门禁。
 - **业务写入审计**：仅源码审查与本地测试，生产采购单和审批实例写入均为 0。
-- **发布边界**：代码已合并，严格 `NOT_DEPLOYED`；未经新的明确生产部署授权不发布。
+- **发布状态**：在后续已获授权的统一发布中随 exact `origin/main@4b088aa70` 一并部署；其 `PurchaseServiceOaSubmissionTest` 与本次物料换算测试在同一最终 JAR 生命周期共 `72 passed`，生产业务数据写入为 0。
+
+### `BUG-F006-MATERIAL-PACKAGING-CONVERSION-001`
+
+- **状态**：`merged`
+- **Owner**：`/root`
+- **Base SHA**：`a39e25717059b742a56a1b8e01286addbd95e33f`
+- **功能提交 / PR / main 合并提交**：`9ffd4365596e22e8dadab3f45e5d36acae5cbe98` / [#1801](https://github.com/Stevenjxie/cretas/pull/1801) / `98367382ddbb5f0997c6871db9b168101fb71406`
+- **实际范围**：
+  - 原料、辅料和包装材料均可配置采购包装层级及“1 箱 = N kg”等换算关系。
+  - 显式产品单位换算不存在路径时，`UnitContractService` 回退使用物料包装层级；显式换算仍优先。
+  - 保留采购订单换算快照和库存基本单位真值，并增加基本单位一致性、重复层级和不完整层级校验。
+  - Web 物料类型页面增加可选的采购与库存单位换算配置。
+- **验收证据**：
+  - 候选提交 Java 目标测试 `58 passed`；Web 目标测试 `7 passed`；`npm run build:check` 与 `git diff --check` 通过。
+  - 发布期间 `main` 合入 #1803，故在 exact `origin/main@4b088aa70` 重新执行单一 Maven 生命周期，覆盖本任务与并发采购审批改动：`72 passed`，JAR SHA-256 `830233a1a547396059c44097b34d70677c822dd46fab5b1cfd74ae5b4c83f78c`。
+  - Web 复用相同 `web-admin` tree 的可信制品，archive SHA-256 `3c8492bbf57636dd83406e084f06ea1de6c22051de01aa761e8bdff71b7ad6a9`。
+  - PR tracked secret scan 通过；未修改 Entity、Repository、JPQL 或数据库结构，不触发 JPA Repository 启动门禁。
+- **生产发布**：
+  - 统一发布回执：`cretas-1785056733-1742.json`，最终状态 `deployed`，发布提交 `4b088aa70a6d9cd0cb61e9cbfe54dc36f8038c6d`。
+  - Java 蓝绿切换后 active 为 `cretas-backend` / `10010`，5/5 切流后观察通过，网关和直连健康均为 `UP`。
+  - Web HTTP 200；local/server/gateway HTTP/public HTTPS 四方 `index.html` SHA-256 均为 `2f13d31d0e672b06ac2041d18abb80cff4389a03ac56a2b97d2f5ab7c69171c7`。
+  - 后续 `origin/main@0a1e8c2f7` 仅变更调度文档，Java/Web tree 与已部署提交一致。
+- **业务写入审计**：本次仅发布代码和静态 Web 制品；生产业务数据写入为 0，未执行写入型业务 E2E。
