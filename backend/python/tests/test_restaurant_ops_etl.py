@@ -27,3 +27,11 @@ def test_recipe_line_cost_is_cleared_before_recomputation():
     source = inspect.getsource(restaurant_ops_etl.sync_fact_recipe)
 
     assert source.index("SET line_cost = NULL") < source.index("SET line_cost = ROUND")
+
+
+def test_recipe_etl_snapshots_product_name_for_historical_cost_resolution():
+    source = inspect.getsource(restaurant_ops_etl.sync_fact_recipe)
+
+    assert "p.name AS product_name" in source
+    assert "INSERT INTO dim_restaurant_cost_product" in source
+    assert "ON CONFLICT (factory_id, product_source_pk) DO UPDATE" in source
