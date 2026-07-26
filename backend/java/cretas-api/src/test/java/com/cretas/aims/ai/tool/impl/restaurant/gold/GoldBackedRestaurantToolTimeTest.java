@@ -177,6 +177,26 @@ class GoldBackedRestaurantToolTimeTest {
     }
 
     @Test
+    @DisplayName("未结束的本月 → upper bound is data anchor, never a future month-end")
+    void unfinishedCurrentMonthStopsAtAnchor() {
+        LocalDate anchor = LocalDate.of(2026, 4, 18);
+        LocalDate[] range = {DATA_MIN, anchor};
+
+        assertThat(tool.parseNlTimeWindow("本月哪个店营业额最高", anchor, range))
+                .isEqualTo(win("2026-04-01", "2026-04-18"));
+    }
+
+    @Test
+    @DisplayName("未结束的本周 → upper bound is data anchor, never a future Sunday")
+    void unfinishedCurrentWeekStopsAtAnchor() {
+        LocalDate anchor = LocalDate.of(2026, 4, 18);
+        LocalDate[] range = {DATA_MIN, anchor};
+
+        assertThat(tool.parseNlTimeWindow("本周营业额", anchor, range))
+                .isEqualTo(win("2026-04-13", "2026-04-18"));
+    }
+
+    @Test
     @DisplayName("上月 → month before data latest (2026-03-01..2026-03-31)")
     void lastMonthAnchoredToData() {
         assertThat(parse("上月哪个菜卖得好")).isEqualTo(win("2026-03-01", "2026-03-31"));
