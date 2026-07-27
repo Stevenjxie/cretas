@@ -3739,6 +3739,25 @@ def test_semantic_contract_repairs_plain_profit_lookup_action_and_dish():
     assert spec.planned_intents == ("RESTAURANT_OPS_GROSS_MARGIN",)
 
 
+def test_all_store_profit_comparison_keeps_first_named_dish_slot_clean():
+    spec = _build_spec(
+        "RESTAURANT_OPS_GROSS_MARGIN",
+        "本月全部门店米饭和招牌藤椒味(单人份)哪个赚钱",
+        confidence=0.96,
+        tier="llm",
+        llm_requested_metrics=("gross_margin",),
+        llm_dimensions=("dish",),
+        llm_analysis_action="lookup",
+        llm_store_scope="all",
+        planner_authority="llm",
+        llm_semantics_authoritative=True,
+    )
+
+    assert spec.dish_slot == "米饭"
+    assert spec.store_scope == "all"
+    assert spec.planned_intents == ("RESTAURANT_OPS_GROSS_MARGIN",)
+
+
 def test_semantic_contract_repairs_store_loss_existence_lookup():
     spec = _build_spec(
         "RESTAURANT_OPS_GROSS_MARGIN",

@@ -1109,6 +1109,12 @@ def extract_dish_candidates(query: "Optional[str]") -> list:
         out = []
         for raw in (match.group(1), match.group(2)):
             cand = _DISH_LEADING_TIME_RE.sub("", raw.strip())
+            cand = re.sub(
+                r"^(?:全部门店|所有门店|各门店|所有店|全部店|全店汇总|连锁整体)",
+                "",
+                cand,
+                count=1,
+            ).strip()
             cand = _DISH_LEADING_PRONOUN_RE.sub("", cand).strip("的， ,")
             if len(cand) >= 2 and cand not in _DISH_GENERIC_TOKENS:
                 out.append(cand[:60])
@@ -3258,6 +3264,143 @@ async def resolve_gross_margin(
                 "cost_covered_revenue": total_rev_with_cost,
             },
         )
+
+    profit_comparison_requested = bool(
+        len(dish_candidates) >= 2
+        and any(token in query_text for token in (
+            "哪个赚钱", "哪个更赚钱", "哪道赚钱", "哪道更赚钱",
+            "哪个毛利高", "哪个毛利率高", "哪个利润高", "哪个更划算",
+        ))
+    )
+    if profit_comparison_requested:
+        match_map = dict(multi_dish_matches)
+        summaries: List[Dict[str, Any]] = []
+        for candidate in dish_candidates:
+            matched_names = {
+                str(row.get("dish_name") or "")
+                for row in match_map.get(candidate, [])
+            }
+            candidate_entries = [
+                item for item in enriched
+                if str(item.get("name") or "") in matched_names
+            ]
+            complete = bool(candidate_entries) and all(
+                bool(item.get("has_cost")) for item in candidate_entries
+            )
+            revenue = sum(float(item.get("revenue") or 0) for item in candidate_entries)
+            qty = sum(float(item.get("qty") or 0) for item in candidate_entries)
+            bills = sum(int(item.get("bills") or 0) for item in candidate_entries)
+            total_cost = (
+                sum(float(item.get("total_cost") or 0) for item in candidate_entries)
+                if complete else None
+            )
+            gross_profit = (
+                revenue - total_cost if total_cost is not None else None
+            )
+            margin_rate = (
+                gross_profit / revenue
+                if gross_profit is not None and revenue > 0 else None
+            )
+            summaries.append({
+                "name": candidate,
+                "qty": qty,
+                "bills": bills,
+                "revenue": revenue,
+                "total_cost": total_cost,
+                "gross_profit": gross_profit,
+                "margin_rate": margin_rate,
+                "complete": complete,
+            })
+
+        comparable = [item for item in summaries if item["complete"]]
+        missing = [item["name"] for item in summaries if not item["complete"]]
+        if len(comparable) == len(summaries) and summaries:
+            ordered = sorted(
+                summaries,
+                key=lambda item: float(item["gross_profit"] or 0),
+                reverse=True,
+            )
+            winner = ordered[0]
+            runner_up = ordered[1]
+            profit_gap = float(winner["gross_profit"]) - float(runner_up["gross_profit"])
+            if abs(profit_gap) <= 0.01:
+                conclusion = (
+                    f"**结论：按总毛利，「{winner['name']}」和"
+                    f"「{runner_up['name']}」基本打平。**"
+                )
+            else:
+                conclusion = (
+                    f"**结论：按总毛利，「{winner['name']}」更赚钱，"
+                    f"比「{runner_up['name']}」多 ¥{profit_gap:,.2f} 毛利。**"
+                )
+        else:
+            missing_text = "、".join(f"「{name}」" for name in missing)
+            conclusion = (
+                "**结论：目前无法可靠判断哪个更赚钱。**"
+                f"{missing_text}缺少完整成本，不能拿销量或营收替代毛利结论。"
+            )
+
+        lines = [conclusion, "", f"**{window_label}同口径对比：**"]
+        kpis: List[Dict[str, Any]] = []
+        target_entities: List[Dict[str, Any]] = []
+        for item in summaries:
+            name = item["name"]
+            if item["complete"]:
+                verdict = (
+                    "赚钱"
+                    if float(item["gross_profit"]) > 0.01
+                    else "亏钱"
+                    if float(item["gross_profit"]) < -0.01
+                    else "打平"
+                )
+                lines.append(
+                    f"- 「{name}」：销量 {_format_sales_quantity(item['qty'])} 份，"
+                    f"营收 ¥{item['revenue']:,.2f}，成本 ¥{item['total_cost']:,.2f}，"
+                    f"毛利 **¥{item['gross_profit']:,.2f}**，"
+                    f"毛利率 **{item['margin_rate'] * 100:.1f}%**（{verdict}）"
+                )
+                kpis.append({
+                    "title": f"{name}毛利",
+                    "value": f"¥{item['gross_profit']:,.2f}",
+                    "rawValue": item["gross_profit"],
+                })
+            else:
+                lines.append(
+                    f"- 「{name}」：销量 {_format_sales_quantity(item['qty'])} 份，"
+                    "毛利暂时无法计算（缺少完整成本）"
+                )
+            target_entities.append({
+                "type": "dish",
+                "name": name,
+                "sales_volume": item["qty"],
+                "revenue": item["revenue"],
+                "gross_profit": item["gross_profit"],
+                "margin_rate": item["margin_rate"],
+                "cost_complete": item["complete"],
+            })
+        lines.extend((
+            "",
+            "> 比较口径：总毛利 = 同一期间、同一门店范围内的营收 − 对应菜品成本；"
+            "成本未覆盖的菜品不强行排名。",
+        ))
+        return OpsAnswer(
+            code="RESTAURANT_OPS_GROSS_MARGIN",
+            title=f"菜品赚钱能力对比 ({window_label})",
+            answer_text="\n".join(lines),
+            charts=[],
+            kpis=kpis,
+            meta={
+                "marginInvariantPass": True,
+                "marginFormula": "毛利=同口径营收-对应菜品成本",
+                "targetDishes": dish_candidates,
+                "ranked_entities": target_entities,
+                "focus_entity": target_entities[0] if target_entities else None,
+                "cost_coverage_ratio": (
+                    len(comparable) / len(summaries) if summaries else 0.0
+                ),
+            },
+        )
+
     avg_margin = (
         total_profit / total_rev_with_cost
         if total_rev_with_cost > 0 else None

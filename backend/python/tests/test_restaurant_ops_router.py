@@ -3354,7 +3354,29 @@ def test_elliptical_entity_switch_beats_parent_inheritance():
 def test_r14_dish_compare_accepts_zhuanqian():
     cands = _r.extract_dish_candidates("米饭和招牌藤椒味(单人份)哪个赚钱")
     assert cands == ["米饭", "招牌藤椒味(单人份)"]
+    prefixed = _r.extract_dish_candidates(
+        "本月全部门店米饭和招牌藤椒味(单人份)哪个赚钱"
+    )
+    assert prefixed == ["米饭", "招牌藤椒味(单人份)"]
     assert _r.extract_dish_candidates("米饭和面条哪个毛利率高") == ["米饭", "面条"]
+
+
+def test_multi_dish_profit_comparison_names_both_objects_and_margin_gap():
+    result = asyncio.run(_r.resolve_gross_margin(
+        _gross_margin_pool(_dish_rows()),
+        "RES_TEST",
+        role="restaurant_manager",
+        query="本月全部门店米饭和招牌藤椒味(单人份)哪个赚钱",
+        requested_metrics=("gross_margin",),
+        date_range=(date(2026, 4, 1), date(2026, 4, 30)),
+        window_label="本月",
+    ))
+
+    assert "赚钱" in result.answer_text
+    assert "「米饭」" in result.answer_text
+    assert "「招牌藤椒味(单人份)」" in result.answer_text
+    assert "毛利" in result.answer_text
+    assert result.meta["targetDishes"] == ["米饭", "招牌藤椒味(单人份)"]
 
 
 def test_r14_dish_ranking_direction():
