@@ -136,6 +136,7 @@ from smartbi.gold import (
     review_vip,
     top_products,
 )
+from smartbi.gold.customer_text import sanitize_customer_ai_text
 from smartbi.gold.price_anomaly import detect_price_anomalies
 from smartbi.gold.queries import (
     dish_margin,
@@ -456,6 +457,13 @@ def _is_restaurant_synthesis_tenant(factory_id: str) -> bool:
     """Mirror this engine's existing restaurant/factory tenant split."""
     fid = str(factory_id or "").strip().upper()
     return not (fid.startswith("F") and len(fid) <= 6)
+
+
+def _customer_visible_answer(answer: str, *, restaurant_scope: bool) -> str:
+    """Apply the restaurant language boundary without changing factory output."""
+    if not restaurant_scope:
+        return answer
+    return sanitize_customer_ai_text(answer)
 
 
 async def _resolve_synthesis_store_scope(
@@ -874,8 +882,9 @@ class ComprehensiveSynthesisEngine:
         t0 = time.monotonic()
         start, end = date_range
         start_iso, end_iso = start.isoformat(), end.isoformat()
+        restaurant_scope = _is_restaurant_synthesis_tenant(factory_id)
         scope_store_names: Optional[Tuple[str, ...]] = None
-        if _is_restaurant_synthesis_tenant(factory_id):
+        if restaurant_scope:
             store_data_factory = demo_data_factory_for_code(
                 "RESTAURANT_OPS_SALES_SUMMARY",
                 factory_id,
@@ -925,7 +934,11 @@ class ComprehensiveSynthesisEngine:
                 alerts = hit_cfg.get("alerts") or []
                 dimension_coverage = hit_cfg.get("dimension_coverage")
                 return SynthesisResponse(
-                    answer=hit["answer"], source=RESULT_SOURCE_CACHE, tokens=0,
+                    answer=_customer_visible_answer(
+                        hit["answer"],
+                        restaurant_scope=restaurant_scope,
+                    ),
+                    source=RESULT_SOURCE_CACHE, tokens=0,
                     tokens_used_today=budget.tokens_used, tokens_cap=budget.tokens_cap,
                     elapsed_ms=int((time.monotonic() - t0) * 1000),
                     charts=charts, alerts=alerts,
@@ -983,7 +996,11 @@ class ComprehensiveSynthesisEngine:
                     sem_alerts = sem_cfg.get("alerts") or []
                     sem_coverage = sem_cfg.get("dimension_coverage")
                     return SynthesisResponse(
-                        answer=sem["answer"], source=RESULT_SOURCE_SEMANTIC_CACHE, tokens=0,
+                        answer=_customer_visible_answer(
+                            sem["answer"],
+                            restaurant_scope=restaurant_scope,
+                        ),
+                        source=RESULT_SOURCE_SEMANTIC_CACHE, tokens=0,
                         tokens_used_today=budget.tokens_used, tokens_cap=budget.tokens_cap,
                         elapsed_ms=int((time.monotonic() - t0) * 1000),
                         charts=sem_charts, alerts=sem_alerts, plan=plan,
@@ -1016,7 +1033,7 @@ class ComprehensiveSynthesisEngine:
         insight_summary = self._analyze(
             factbook,
             period=f"{start_iso} 至 {end_iso}",
-            restaurant_scope=_is_restaurant_synthesis_tenant(factory_id),
+            restaurant_scope=restaurant_scope,
         )
 
         if budget.blocked:
@@ -1027,6 +1044,7 @@ class ComprehensiveSynthesisEngine:
                 budget,
                 t0,
                 reason="叙述模型预算已用完",
+                plain_language=restaurant_scope,
             )
 
         # 5b. P4 v2: pure-attribution → try a cheap thin restate of the
@@ -1068,8 +1086,13 @@ class ComprehensiveSynthesisEngine:
                         reason="叙述未通过数据因果门禁",
                         tokens=thin_tokens,
                         fact_check=fc_meta,
+                        plain_language=restaurant_scope,
                     )
                 thin_answer = self._append_dimension_guidance(thin_answer, factbook)
+                thin_answer = _customer_visible_answer(
+                    thin_answer,
+                    restaurant_scope=restaurant_scope,
+                )
                 charts = self.collect_charts(factbook, plan)
                 alerts = self.collect_alerts(factbook)
                 dimension_coverage = factbook.dimension_coverage()
@@ -1118,6 +1141,7 @@ class ComprehensiveSynthesisEngine:
                 budget,
                 t0,
                 reason="叙述模型暂时不可用",
+                plain_language=restaurant_scope,
             )
 
         # 7. Grounding hard-check (backfill真值 + flag fabricated names).
@@ -1146,8 +1170,13 @@ class ComprehensiveSynthesisEngine:
                 reason="叙述未通过数据因果门禁",
                 tokens=tokens,
                 fact_check=fc_meta,
+                plain_language=restaurant_scope,
             )
         answer = self._append_dimension_guidance(answer, factbook)
+        answer = _customer_visible_answer(
+            answer,
+            restaurant_scope=restaurant_scope,
+        )
 
         # 8. Charts + 🔒 反回扣 alerts (both gated by plan/factbook; alerts derive
         # solely from grounded FactBook signals — see collect_alerts).
@@ -2491,6 +2520,7 @@ class ComprehensiveSynthesisEngine:
         reason: str,
         tokens: int = 0,
         fact_check: Optional[Dict[str, Any]] = None,
+        plain_language: bool = False,
     ) -> SynthesisResponse:
         """Return fresh grounded analysis even when no narrative LLM can answer.
 
@@ -2509,43 +2539,49 @@ class ComprehensiveSynthesisEngine:
 
         sections = [
             "### 核心结论",
-            f"{reason}，以下仍是按当前数据库实时汇总完成的确定性多维分析。"
-            "已有维度照常展示，缺失维度保持为空，不会按 0 或相邻指标替代。",
+            f"{reason}。我先把系统当前能查到的真实经营数据整理给你。"
+            "有数据的部分照常展示；没有数据的部分会留空，不会当成 0，"
+            "也不会拿别的数据顶替。",
         ]
         if insight_summary:
             sections.extend([
                 "",
-                "### 确定性计算发现",
+                "### 从数据里看到的重点",
                 insight_summary,
             ])
         if rendered_lines:
             sections.extend([
                 "",
-                "### 分维度数据与覆盖情况",
+                "### 各方面的经营数据",
                 "\n".join(rendered_lines),
             ])
 
         if factbook.available_dimensions:
             sections.extend([
                 "",
-                "### 当前可执行的决策步骤",
-                "1. 先复核上面明确显示的落后门店、时段或菜品，负责人当天核对同口径账单、"
-                "排班和成本记录，次日用同一指标复查。",
-                "2. 活动、天气、竞品和评价只有在本轮列为已有数据且具备可比基线时才参与判断；"
-                "仅有相关信号时不宣称因果。",
-                "3. 按缺失维度清单补齐数据后重跑同一分析，再决定调价、下架、活动或排班等操作。",
+                "### 接下来可以怎么做",
+                "1. 先看上面表现落后的门店、时段或菜品，负责人当天核对账单、排班和"
+                "成本记录，第二天再用同一种算法看一次。",
+                "2. 活动、天气、竞品和评价要有能公平对比的历史数据才能参与判断；"
+                "如果只是一起变化，不能直接说它就是原因。",
+                "3. 把还没有数据的方面补齐后再分析一次，然后再决定要不要调价、下架、"
+                "做活动或调整排班。",
             ])
         else:
             sections.extend([
                 "",
                 "### 下一步",
-                "当前没有足够的已接入维度形成经营结论；请先按缺失维度清单补齐数据后再做决策。",
+                "系统当前能查到的数据还不够，暂时不能下经营结论。请先把缺少的数据"
+                "补齐，再决定下一步怎么做。",
             ])
 
         charts = self.collect_charts(factbook, plan)
         alerts = self.collect_alerts(factbook)
+        answer = "\n".join(sections)
+        if plain_language:
+            answer = sanitize_customer_ai_text(answer)
         return SynthesisResponse(
-            answer="\n".join(sections),
+            answer=answer,
             source=RESULT_SOURCE_DETERMINISTIC,
             tokens=tokens,
             tokens_used_today=budget.tokens_used,

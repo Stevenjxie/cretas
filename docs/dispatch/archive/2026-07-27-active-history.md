@@ -125,3 +125,15 @@
 - `BUG-RESTAURANT-SYNTHESIS-QUANTITY-R14-20260727-023`
 - `BUG-RESTAURANT-EXPLICIT-DISH-SWITCH-R15-20260727-024`
 - `BUG-RESTAURANT-RANKING-TIME-R16-20260727-025`
+
+## 餐饮 AI LLM-first 语义与白话出口收口（PR #1871）
+
+- **任务**：`UX-RESTAURANT-PLAIN-LANGUAGE-20260727`
+- **状态**：`merged`
+- **Owner**：`/root`
+- **Base SHA**：`c1e4ed173eb8487e1af7d3b5cb3617c5e638e806`
+- **功能提交 / PR**：`7b868f75d6afea59d27178d1c6ec86e3ebb365a9` / [#1871](https://github.com/Stevenjxie/cretas/pull/1871)
+- **实际范围**：餐饮 Web、流式和 Java 入口统一由 LLM 先理解用户原话，接收最多 20 轮可信历史与真实门店清单；关键词/向量退到工具匹配与执行校验层。修复具体门店选择重复追问、“营收怎么提高”退化为只报营收、门店数量/名单无法回答，并统一顾客可见白话出口。
+- **安全边界**：LLM 不可用或返回不完整契约时明确停止，不按关键词猜测；LLM 追问优先于复合句拆分；只读数据继续由确定性 SQL/Gold resolver 计算，写操作权限和确认边界不变。未修改共享模型账号顺序、数据库结构或工厂问答。
+- **验证证据**：餐饮目标回归 `833/833`，新增门店按钮续接、20 轮上下文、经营优化、门店目录、LLM 不完整契约 fail-closed、Java 单次语义计划和白话出口覆盖；`py_compile`、`git diff --check` 通过。
+- **发布边界**：合并后仅从 clean exact `origin/main` 发布 Python 服务；Java/Web 无代码变化。合并前生产业务写入为 `0`。

@@ -149,6 +149,11 @@ class RestaurantQuerySpec:
     store_slots: Tuple[str, ...] = ()
     compare_stores: bool = False
     store_options: Tuple[str, ...] = ()
+    # Options are proposed by the LLM after it sees the tenant's real store
+    # catalogue, then allowlisted here before the UI renders them.  This keeps
+    # the decision about *what to ask* semantic while keeping every displayed
+    # button factual and tenant-scoped.
+    clarification_options: Tuple[str, ...] = ()
     # R22 T3 结构化规格: LLM 抽取的实体槽位 (必须是问句原文子串, 代码校验;
     # 真伪由下游 resolver 对 dim_product/dim_store 验证 — LLM 只提名, 不裁决)。
     dish_slot: Optional[str] = None
@@ -168,11 +173,16 @@ class RestaurantQuerySpec:
 
 
 # ─── Intent catalogue (used by the T3 prompt) ──────────────────────────────
-# One-line description per code so the LLM has enough signal to classify
-# without re-deriving it from SAMPLE_QUERIES on every call. Kept in sync with
-# the 8 RESTAURANT_OPS_* codes in restaurant_ops_router. No new codes are
-# introduced in this round (spec section 7 defers new domains).
+# One-line capability descriptions for the restaurant semantic compiler.
+# In production's semantic-first mode the LLM must choose from this catalogue
+# before any tool/skill/resolver is allowed to run.
 _INTENT_DESCRIPTIONS: Dict[str, str] = {
+    "RESTAURANT_OPS_CAPABILITIES": "询问餐饮助手能做什么、能分析哪些经营问题",
+    "RESTAURANT_OPS_OUT_OF_DOMAIN": "天气、新闻、股票等不属于当前餐饮经营数据的问题",
+    "RESTAURANT_OPS_PLAYBOOK": "询问餐饮行业常见做法、经营方法或参考方案，不要求当前门店数据结论",
+    "RESTAURANT_OPS_STORE_DIRECTORY": "查询当前账号有几家门店、有哪些门店、门店名单",
+    "RESTAURANT_OPS_BUSINESS_OPTIMIZATION": "基于内部多方面经营数据诊断原因并给出提高营收、利润、客流或整体经营的行动方案；不能退化成只报一个指标",
+    "RESTAURANT_OPS_CHANNEL_MIX": "堂食与外卖的占比、结构和渠道表现",
     "RESTAURANT_OPS_WASTAGE_TOP": "损耗/浪费/报损排行，按食材或类型统计损耗量和金额",
     "RESTAURANT_OPS_STOCK_SHORTAGE": "库存盘点差异（盘亏/盘盈）排行",
     "RESTAURANT_OPS_RECIPE_COST": "菜品食材成本排行（不含毛利/售价）",
@@ -190,6 +200,7 @@ TIME_CLARIFICATION_QUESTION = (
     "你想看哪个时间范围？请选择本月、上个月、最近7天或最近30天。"
 )
 _TIME_SCOPED_INTENTS = frozenset({
+    "RESTAURANT_OPS_BUSINESS_OPTIMIZATION",
     "RESTAURANT_OPS_WASTAGE_TOP",
     "RESTAURANT_OPS_REQUISITION_TREND",
     "RESTAURANT_OPS_GROSS_MARGIN",
@@ -430,6 +441,31 @@ def _detect_analysis_action(text: str) -> str:
     return "lookup"
 
 
+_SEMANTIC_ACTIONS = frozenset({"lookup", "compare", "diagnose", "optimize"})
+_SEMANTIC_DIMENSIONS = frozenset({"store", "dish", "ingredient", "channel", "customer", "time"})
+_SEMANTIC_STORE_SCOPES = frozenset({"all", "single", "multiple"})
+_SEMANTIC_METRICS = frozenset(metric for metric, _ in _REQUEST_METRIC_RULES)
+
+
+def _validated_semantic_tuple(value: Any, allowed: frozenset[str]) -> Optional[Tuple[str, ...]]:
+    """Validate an LLM list without silently turning a malformed value into data."""
+    if value is None:
+        return None
+    if not isinstance(value, list):
+        return None
+    output: List[str] = []
+    for item in value:
+        if not isinstance(item, str) or item not in allowed:
+            continue
+        if item not in output:
+            output.append(item)
+    return tuple(output)
+
+
+def _validated_semantic_scalar(value: Any, allowed: frozenset[str]) -> Optional[str]:
+    return value if isinstance(value, str) and value in allowed else None
+
+
 def _plan_requested_intents(
     text: str,
     selected_code: str,
@@ -443,6 +479,20 @@ def _plan_requested_intents(
     dish-margin resolver already reads both dish sales volume and margin, and
     the sales-summary resolver can satisfy a revenue + margin owner question.
     """
+    # These capabilities are complete tools/skills in their own right.  Their
+    # requested metrics describe what the user cares about, but must not
+    # rewrite the LLM-selected capability into a neighbouring single-metric
+    # resolver (the former "怎么提高" -> 只报营收 failure).
+    if selected_code in {
+        "RESTAURANT_OPS_CAPABILITIES",
+        "RESTAURANT_OPS_OUT_OF_DOMAIN",
+        "RESTAURANT_OPS_PLAYBOOK",
+        "RESTAURANT_OPS_STORE_DIRECTORY",
+        "RESTAURANT_OPS_BUSINESS_OPTIMIZATION",
+        "RESTAURANT_OPS_CHANNEL_MIX",
+    }:
+        return (selected_code,)
+
     planned: List[str] = []
     has_revenue_scope = any(metric in requested_metrics for metric in ("revenue", "orders"))
     explicit_store_margin = any(token in text for token in (
@@ -1190,6 +1240,12 @@ def contextualize_restaurant_followup(
 
 
 _DEFAULT_METRICS_BY_CODE: Dict[str, Tuple[str, ...]] = {
+    "RESTAURANT_OPS_CAPABILITIES": (),
+    "RESTAURANT_OPS_OUT_OF_DOMAIN": (),
+    "RESTAURANT_OPS_PLAYBOOK": (),
+    "RESTAURANT_OPS_STORE_DIRECTORY": ("store_count",),
+    "RESTAURANT_OPS_BUSINESS_OPTIMIZATION": (),
+    "RESTAURANT_OPS_CHANNEL_MIX": ("channel_mix",),
     "RESTAURANT_OPS_WASTAGE_TOP": ("wastage_qty", "wastage_cost"),
     "RESTAURANT_OPS_STOCK_SHORTAGE": ("shortage_qty",),
     "RESTAURANT_OPS_RECIPE_COST": ("food_cost",),
@@ -1258,6 +1314,7 @@ def _seal_query_plan(spec: RestaurantQuerySpec) -> RestaurantQuerySpec:
         "store_slots": list(spec.store_slots),
         "compare_stores": spec.compare_stores,
         "store_options": list(spec.store_options),
+        "clarification_options": list(spec.clarification_options),
         "planned_intents": list(spec.planned_intents),
         "dish_slot": spec.dish_slot,
         "store_slot": spec.store_slot,
@@ -1289,8 +1346,16 @@ def _build_spec(
     is_continuation: bool = False,
     llm_dish: Optional[str] = None,
     llm_store: Optional[str] = None,
+    llm_stores: Optional[Sequence[str]] = None,
+    llm_requested_metrics: Optional[Tuple[str, ...]] = None,
+    llm_dimensions: Optional[Tuple[str, ...]] = None,
+    llm_analysis_action: Optional[str] = None,
+    llm_store_scope: Optional[str] = None,
+    store_options: Sequence[str] = (),
+    clarification_options: Sequence[str] = (),
     planner_authority: Optional[str] = None,
     require_explicit_time: bool = False,
+    llm_semantics_authoritative: bool = False,
 ) -> RestaurantQuerySpec:
     """Compose the final QuerySpec: deterministic slots ALWAYS recomputed
     fresh against `query` + today's date, regardless of which tier picked
@@ -1313,8 +1378,16 @@ def _build_spec(
         effective_query = f"{query} {time_phrase}".strip()
     sales_spec = _resolve_sales_query_spec(effective_query)
     date_range, window_label = sales_spec.date_range, sales_spec.window_label
-    requested_metrics = _detect_requested_metrics(effective_query)
-    wants_margin, asks_profitability = _profit_intent(effective_query)
+    requested_metrics = (
+        llm_requested_metrics
+        if llm_requested_metrics is not None
+        else _detect_requested_metrics(effective_query)
+    )
+    if llm_semantics_authoritative:
+        wants_margin = bool(llm_wants_margin)
+        asks_profitability = bool(llm_asks_profitability)
+    else:
+        wants_margin, asks_profitability = _profit_intent(effective_query)
     # T3 profit booleans are supplements only when deterministic metric parsing
     # found no objective. Letting them survive an explicit sales/cost/etc.
     # metric creates a contradictory sealed plan: requested_metrics says
@@ -1330,11 +1403,38 @@ def _build_spec(
         or (allow_llm_profit_supplement and llm_wants_margin)
     )
     relative_window = _uses_relative_sales_window(effective_query)
-    deterministic_dish = extract_dish_candidate(effective_query)
-    deterministic_store = extract_store_mention(effective_query)
-    store_scope, store_slots = _detect_store_scope(effective_query)
+    deterministic_dish = (
+        None if llm_semantics_authoritative
+        else extract_dish_candidate(effective_query)
+    )
+    deterministic_store = (
+        None if llm_semantics_authoritative
+        else extract_store_mention(effective_query)
+    )
+    store_scope, store_slots = (
+        (None, ())
+        if llm_semantics_authoritative
+        else _detect_store_scope(effective_query)
+    )
+    validated_llm_stores = tuple(
+        name
+        for name in (llm_stores or ())
+        if isinstance(name, str) and name.strip()
+    )
+    if validated_llm_stores:
+        store_slots = validated_llm_stores
+    elif llm_store:
+        store_slots = (llm_store,)
+    if llm_store_scope in _SEMANTIC_STORE_SCOPES:
+        store_scope = llm_store_scope
+    elif store_slots and not store_scope:
+        store_scope = "single" if len(store_slots) == 1 else "multiple"
     ranking_direction = _detect_ranking_direction(effective_query)
-    dimension_list = list(_detect_dimensions(effective_query))
+    dimension_list = list(
+        llm_dimensions
+        if llm_dimensions is not None
+        else _detect_dimensions(effective_query)
+    )
     if (llm_store or deterministic_store) and "store" not in dimension_list:
         dimension_list.append("store")
     if (llm_dish or deterministic_dish) and "dish" not in dimension_list:
@@ -1370,7 +1470,18 @@ def _build_spec(
         for requirement in requested_metrics
         if requirement not in _UNSUPPORTED_REQUIREMENTS
     )
-    analysis_action = _detect_analysis_action(effective_query)
+    if llm_semantics_authoritative:
+        analysis_action = (
+            llm_analysis_action
+            if llm_analysis_action in _SEMANTIC_ACTIONS
+            else "lookup"
+        )
+    else:
+        analysis_action = (
+            llm_analysis_action
+            if llm_analysis_action in _SEMANTIC_ACTIONS
+            else _detect_analysis_action(effective_query)
+        )
     effective_planner_authority = (
         planner_authority
         or ("llm" if tier == "llm" else "deterministic_guard")
@@ -1493,6 +1604,8 @@ def _build_spec(
         store_scope=store_scope,
         store_slots=store_slots,
         compare_stores=(store_scope == "multiple"),
+        store_options=tuple(store_options),
+        clarification_options=tuple(clarification_options),
         dish_slot=llm_dish or deterministic_dish,
         store_slot=llm_store or deterministic_store,
         plan_version="restaurant-query-plan-v2",
@@ -2518,7 +2631,43 @@ _STORE_SCOPE_REQUIRED_INTENTS = frozenset({
     "RESTAURANT_OPS_GROSS_MARGIN",
     "RESTAURANT_OPS_STORE_MARGIN",
     "RESTAURANT_OPS_SALES_SUMMARY",
+    "RESTAURANT_OPS_BUSINESS_OPTIMIZATION",
 })
+
+
+async def _load_store_options(
+    pool,
+    factory_id: str,
+    *,
+    code: str = "RESTAURANT_OPS_SALES_SUMMARY",
+) -> Tuple[str, ...]:
+    """Read the tenant's factual store catalogue for LLM clarification choices."""
+    data_factory = demo_data_factory_for_code(
+        code,
+        factory_id,
+        store_scoped=True,
+    )
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            await conn.execute(
+                "SELECT set_config('app.factory_id', $1, true)",
+                data_factory,
+            )
+            rows = await conn.fetch(
+                """
+                SELECT s.name
+                  FROM dim_store s
+                 WHERE s.factory_id = $1
+                 ORDER BY s.name
+                 LIMIT 50
+                """,
+                data_factory,
+            )
+    return tuple(
+        str(row["name"]).strip()[:80]
+        for row in rows
+        if row["name"] and str(row["name"]).strip()
+    )
 
 
 async def _apply_store_scope_guard(
@@ -2539,33 +2688,12 @@ async def _apply_store_scope_guard(
     ):
         return spec
 
-    data_factory = demo_data_factory_for_code(
-        spec.intent,
-        factory_id,
-        store_scoped=True,
-    )
     try:
-        async with pool.acquire() as conn:
-            # Demo tenants can read from a deterministic data tenant.  The
-            # pool setup callback scoped this connection to the login tenant,
-            # so querying the mapped factory id without overriding the RLS GUC
-            # silently returns zero rows.  Keep the override transaction-local
-            # so it cannot leak into the next borrower of this connection.
-            async with conn.transaction():
-                await conn.execute(
-                    "SELECT set_config('app.factory_id', $1, true)",
-                    data_factory,
-                )
-                rows = await conn.fetch(
-                    """
-                    SELECT s.name
-                      FROM dim_store s
-                     WHERE s.factory_id = $1
-                     ORDER BY s.name
-                     LIMIT 9
-                    """,
-                    data_factory,
-                )
+        names = spec.store_options or await _load_store_options(
+            pool,
+            factory_id,
+            code=spec.intent,
+        )
     except Exception as exc:
         logger.warning("[restaurant-intent] store-scope gate unavailable: %s", exc)
         # Scope enrichment must not invalidate an otherwise sealed query plan
@@ -2573,11 +2701,6 @@ async def _apply_store_scope_guard(
         # contracts still fail closed on an explicit unknown store.
         return spec
 
-    names = tuple(
-        str(row["name"]).strip()[:80]
-        for row in rows
-        if row["name"] and str(row["name"]).strip()
-    )
     if len(names) == 1:
         return _seal_query_plan(replace(
             spec,
@@ -2597,6 +2720,7 @@ async def _apply_store_scope_guard(
         clarification_needed=True,
         clarification_question=STORE_SCOPE_CLARIFICATION_QUESTION,
         store_options=names,
+        clarification_options=("全部门店", *names[:3]),
     ))
 
 
@@ -2754,7 +2878,12 @@ _T3_TOTAL_TIMEOUT_SECONDS = 6.0
 _T3_MIN_CONFIDENCE = 0.6
 
 
-def _build_t3_prompt(query: str, hint: Optional[Tuple[str, float]], history: Optional[Sequence[Dict[str, str]]]) -> str:
+def _build_t3_prompt(
+    query: str,
+    hint: Optional[Tuple[str, float]],
+    history: Optional[Sequence[Dict[str, Any]]],
+    available_stores: Sequence[str] = (),
+) -> str:
     intent_lines = "\n".join(
         f'  - "{code}": {desc}' for code, desc in _INTENT_DESCRIPTIONS.items()
     )
@@ -2775,34 +2904,86 @@ def _build_t3_prompt(query: str, hint: Optional[Tuple[str, float]], history: Opt
     history_line = ""
     if history:
         turns = []
-        for turn in history:
-            role = turn.get("role") if isinstance(turn, dict) else None
-            content = (turn.get("content") if isinstance(turn, dict) else None) or ""
+        # ChatSessionService stores the latest 20 complete turns as
+        # {q, a_summary}; the clarification loop uses {role, content}. Accept
+        # both shapes so the semantic compiler sees the same conversation on
+        # the Web and Java entry paths.
+        for turn in list(history)[-20:]:
+            if not isinstance(turn, dict):
+                continue
+            if turn.get("q") or turn.get("a_summary"):
+                question = str(turn.get("q") or "").strip()[:200]
+                answer = str(turn.get("a_summary") or "").strip()[:500]
+                if question:
+                    turns.append(f"用户: {question}")
+                if answer:
+                    turns.append(f"你(已回答): {answer}")
+                continue
+            role = turn.get("role")
+            content = str(turn.get("content") or "").strip()[:500]
+            if not content:
+                continue
             label = "你(追问)" if role == "assistant" else "用户"
             turns.append(f"{label}: {content}")
         history_line = (
-            "\n上一轮对话 (用户当前这条消息是在回答你上一轮提出的澄清问题，"
-            "请结合上一轮的原始问题和这次的回答来判断完整意图，不要只看当前这一句):\n"
+            "\n最近对话（最多20轮，仅用于理解对象、时间、门店和指代；"
+            "当前问题有新要求时以当前问题为准）:\n"
             + "\n".join(turns) + "\n"
+        )
+    store_line = ""
+    if available_stores:
+        factual_stores = [str(name).strip()[:80] for name in available_stores if str(name).strip()]
+        store_line = (
+            "\n当前账号真实可选门店（只能从这里选择，禁止编造）: "
+            + json.dumps(factual_stores, ensure_ascii=False)
+            + "\n"
         )
     few_shot = (
         '示例1: "这两个月生意咋样，挣着钱没" -> '
         '{"intent": "RESTAURANT_OPS_SALES_SUMMARY", "time_range": {"type": "relative", '
         '"unit": "month", "count": 2}, "wants_margin": true, "asks_profitability": true, '
-        '"dimensions": [], "comparison": null, "dish": null, "store": null, '
+        '"requested_metrics": ["revenue", "orders", "gross_margin"], '
+        '"analysis_action": "diagnose", "dimensions": [], "comparison": null, '
+        '"dish": null, "store": null, "stores": [], "store_scope": null, '
         '"confidence": 0.9, '
-        '"clarification_needed": false, "clarification_question": null}\n'
+        '"clarification_needed": false, "missing_fields": [], '
+        '"clarification_question": null, "clarification_options": []}\n'
         '示例3: "帮我看看水煮鱼这道菜最近表现咋样" -> '
         '{"intent": "RESTAURANT_OPS_GROSS_MARGIN", "time_range": {"type": "relative", '
         '"unit": "day", "count": 30}, "wants_margin": true, "asks_profitability": false, '
-        '"dimensions": ["dish"], "comparison": null, "dish": "水煮鱼", "store": null, '
+        '"requested_metrics": ["sales_volume", "gross_margin"], '
+        '"analysis_action": "diagnose", "dimensions": ["dish"], "comparison": null, '
+        '"dish": "水煮鱼", "store": null, "stores": [], "store_scope": null, '
         '"confidence": 0.85, '
-        '"clarification_needed": false, "clarification_question": null}\n'
+        '"clarification_needed": false, "missing_fields": [], '
+        '"clarification_question": null, "clarification_options": []}\n'
+        '示例4: "这周营收怎么提高"（账号有多家门店且用户没选范围）-> '
+        '{"intent": "RESTAURANT_OPS_BUSINESS_OPTIMIZATION", '
+        '"time_range": {"type": "named", "value": "this_week"}, '
+        '"wants_margin": false, "asks_profitability": false, '
+        '"requested_metrics": ["revenue"], "analysis_action": "optimize", '
+        '"dimensions": [], "comparison": null, "dish": null, "store": null, '
+        '"stores": [], "store_scope": null, "confidence": 0.95, '
+        '"clarification_needed": true, "missing_fields": ["store_scope"], '
+        '"clarification_question": "这次想提高哪几家门店的营收？", '
+        '"clarification_options": ["全部门店"]}\n'
+        '示例5: "我们现在有几家店" -> '
+        '{"intent": "RESTAURANT_OPS_STORE_DIRECTORY", "time_range": null, '
+        '"wants_margin": false, "asks_profitability": false, '
+        '"requested_metrics": [], "analysis_action": "lookup", '
+        '"dimensions": ["store"], "comparison": null, "dish": null, "store": null, '
+        '"stores": [], "store_scope": "all", "confidence": 0.99, '
+        '"clarification_needed": false, "missing_fields": [], '
+        '"clarification_question": null, "clarification_options": []}\n'
         '示例2: "情况怎么样" (完全没有可判断的对象/指标) -> '
         '{"intent": null, "time_range": null, "wants_margin": false, '
-        '"asks_profitability": false, "dimensions": [], "comparison": null, '
+        '"asks_profitability": false, "requested_metrics": [], '
+        '"analysis_action": "lookup", "dimensions": [], "comparison": null, '
+        '"dish": null, "store": null, "stores": [], "store_scope": null, '
         '"confidence": 0.2, "clarification_needed": true, '
-        '"clarification_question": "您想了解营收、毛利、损耗还是库存盘点的情况？"}\n'
+        '"missing_fields": ["metric"], '
+        '"clarification_question": "你这次最想先看哪件事？", '
+        '"clarification_options": ["营收和订单", "毛利", "损耗", "库存"]}\n'
     )
     # 段落顺序是 DashScope 隐式前缀缓存的契约 (2026-07-23 重排): 指令+意图
     # 目录+严格规则+few-shot 全部是静态块, 必须排在最前 — 每次 T3 调用共享
@@ -2822,11 +3003,27 @@ def _build_t3_prompt(query: str, hint: Optional[Tuple[str, float]], history: Opt
         "2b. dish/store: 如果问题点名了具体菜品或门店，原样摘抄那个名字 "
         "(必须是问题原文里连续出现的子串，绝不改写、翻译或补全)；没点名就输出 null。"
         "泛指词 (这道菜/哪家店/门店) 不是名字，输出 null。\n"
-        "3. 如果问题太模糊无法判断 intent，输出 intent:null 且 clarification_needed:true，"
-        "并给出一个具体的澄清问题(clarification_question)。\n"
-        "4. 只输出 JSON，不要 markdown 代码块，不要解释。\n\n"
+        "3. analysis_action 必须是 lookup、compare、diagnose、optimize 之一；"
+        "用户问“为什么/原因”是 diagnose，问“怎么提高/改善/下一步怎么做”是 optimize。"
+        "优化请求必须选 BUSINESS_OPTIMIZATION，不能退化成只报营收的 SALES_SUMMARY。\n"
+        "4. requested_metrics 只能使用 net_profit、table_turnover、recipe_cost、wastage、"
+        "sales_volume、gross_margin、revenue、orders、staffing、return_rate、"
+        "customer_review、production_time、service_speed、process_bottleneck；"
+        "dimensions 只能使用 store、dish、ingredient、channel、customer、time。\n"
+        "5. 你负责决定是否需要追问。先结合最近20轮对话补齐已经说过的内容，禁止重复追问。"
+        "只有缺少会改变结果的必要信息时 clarification_needed 才为 true；"
+        "time_range 为空且所选分析依赖时间时应追问时间。多门店账号的营收、销量、毛利、"
+        "订单、诊断或优化若未指定门店范围，应追问门店；但询问门店数量/名单时绝不能追问时间或门店范围。\n"
+        "6. 每次最多追问一个最关键缺项。missing_fields 只能从 metric、object、time_range、"
+        "store_scope 中选；clarification_options 必须是简短可直接点击的回答。"
+        "门店选项只能使用“全部门店”或上面真实门店列表中的原名；时间选项只能使用"
+        "“本月”“上个月”“最近7天”“最近30天”。\n"
+        "7. stores 是用户明确选择的一个或多个真实门店名；store_scope 只能是 all、single、"
+        "multiple 或 null。用户当前回答了具体门店名时，要把它合并进原任务并继续，不能重复问门店。\n"
+        "8. 只输出 JSON，不要 markdown 代码块，不要解释。\n\n"
         f"{few_shot}"
         f"{hint_line}"
+        f"{store_line}"
         f"{history_line}\n"
         f'用户问题: "{query}"\n'
         "JSON:"
@@ -2881,11 +3078,265 @@ def _verbatim_entity(value: Any, query: str) -> Optional[str]:
     return cand
 
 
+_SEMANTIC_MISSING_FIELDS = frozenset({"metric", "object", "time_range", "store_scope"})
+_SEMANTIC_TIME_OPTIONS = ("本月", "上个月", "最近7天", "最近30天")
+
+
+def _validated_llm_store_names(
+    parsed: Dict[str, Any],
+    query: str,
+    available_stores: Sequence[str],
+) -> Tuple[str, ...]:
+    raw: List[Any] = []
+    if isinstance(parsed.get("stores"), list):
+        raw.extend(parsed["stores"])
+    if parsed.get("store") is not None:
+        raw.append(parsed.get("store"))
+    available = set(available_stores)
+    output: List[str] = []
+    for value in raw:
+        name = _verbatim_entity(value, query)
+        if not name:
+            continue
+        if available and name not in available:
+            continue
+        if name not in output:
+            output.append(name)
+    return tuple(output[:8])
+
+
+def _validated_llm_clarification_options(
+    parsed: Dict[str, Any],
+    *,
+    missing_fields: Tuple[str, ...],
+    available_stores: Sequence[str],
+) -> Tuple[str, ...]:
+    raw = parsed.get("clarification_options")
+    proposed = raw if isinstance(raw, list) else []
+    if "store_scope" in missing_fields:
+        allowed = {"全部门店", *available_stores}
+        choices = [
+            str(value).strip()
+            for value in proposed
+            if isinstance(value, str) and str(value).strip() in allowed
+        ]
+        # The LLM decides that store scope is missing; deterministic code only
+        # completes its choice set with factual tenant values.
+        ordered = ["全部门店", *available_stores[:3], *choices]
+        return tuple(dict.fromkeys(ordered))
+    if "time_range" in missing_fields:
+        choices = [
+            str(value).strip()
+            for value in proposed
+            if isinstance(value, str)
+            and str(value).strip() in _SEMANTIC_TIME_OPTIONS
+        ]
+        return tuple(dict.fromkeys([*choices, *_SEMANTIC_TIME_OPTIONS]))
+    choices = []
+    for value in proposed:
+        if not isinstance(value, str):
+            continue
+        choice = value.strip()
+        if not choice or len(choice) > 24:
+            continue
+        if choice not in choices:
+            choices.append(choice)
+    return tuple(choices[:6])
+
+
+def _semantic_spec_from_t3(
+    parsed: Dict[str, Any],
+    query: str,
+    *,
+    available_stores: Sequence[str] = (),
+    is_continuation: bool = False,
+) -> RestaurantQuerySpec:
+    """Compile validated LLM semantics into the immutable execution contract."""
+    required_fields = {
+        "intent",
+        "time_range",
+        "wants_margin",
+        "asks_profitability",
+        "requested_metrics",
+        "analysis_action",
+        "dimensions",
+        "dish",
+        "store",
+        "stores",
+        "store_scope",
+        "confidence",
+        "clarification_needed",
+        "missing_fields",
+        "clarification_question",
+        "clarification_options",
+    }
+    list_contracts = (
+        ("requested_metrics", _SEMANTIC_METRICS),
+        ("dimensions", _SEMANTIC_DIMENSIONS),
+        ("missing_fields", _SEMANTIC_MISSING_FIELDS),
+    )
+    contract_complete = (
+        required_fields.issubset(parsed)
+        and all(
+            isinstance(parsed.get(field), list)
+            and all(
+                isinstance(value, str) and value in allowed
+                for value in parsed.get(field, ())
+            )
+            for field, allowed in list_contracts
+        )
+        and isinstance(parsed.get("stores"), list)
+        and all(isinstance(value, str) for value in parsed.get("stores", ()))
+        and isinstance(parsed.get("clarification_options"), list)
+        and all(
+            isinstance(value, str)
+            for value in parsed.get("clarification_options", ())
+        )
+        and isinstance(parsed.get("clarification_needed"), bool)
+        and isinstance(parsed.get("wants_margin"), bool)
+        and isinstance(parsed.get("asks_profitability"), bool)
+        and isinstance(parsed.get("confidence"), (int, float))
+        and not isinstance(parsed.get("confidence"), bool)
+        and (
+            parsed.get("time_range") is None
+            or isinstance(parsed.get("time_range"), dict)
+        )
+        and (
+            parsed.get("dish") is None
+            or isinstance(parsed.get("dish"), str)
+        )
+        and (
+            parsed.get("store") is None
+            or isinstance(parsed.get("store"), str)
+        )
+        and (
+            parsed.get("clarification_question") is None
+            or isinstance(parsed.get("clarification_question"), str)
+        )
+        and _validated_semantic_scalar(
+            parsed.get("analysis_action"),
+            _SEMANTIC_ACTIONS,
+        ) is not None
+        and (
+            parsed.get("store_scope") is None
+            or _validated_semantic_scalar(
+                parsed.get("store_scope"),
+                _SEMANTIC_STORE_SCOPES,
+            ) is not None
+        )
+    )
+    if not contract_complete:
+        return _build_spec(
+            "",
+            query,
+            confidence=0.0,
+            tier="llm",
+            clarification_needed=True,
+            clarification_question=(
+                "我还没有完整理解这句话，本次没有按关键词猜测，也没有执行查询。"
+                "请再说具体一点，或稍后重试。"
+            ),
+            llm_requested_metrics=(),
+            llm_dimensions=(),
+            llm_analysis_action="lookup",
+            planner_authority="llm_contract_incomplete",
+            require_explicit_time=True,
+            llm_semantics_authoritative=True,
+            is_continuation=is_continuation,
+        )
+
+    code = parsed.get("intent")
+    if code not in _VALID_CODES:
+        code = ""
+    try:
+        confidence = float(parsed.get("confidence") or 0.0)
+    except (TypeError, ValueError):
+        confidence = 0.0
+    confidence = max(0.0, min(confidence, 1.0))
+
+    requested_metrics = _validated_semantic_tuple(
+        parsed.get("requested_metrics"),
+        _SEMANTIC_METRICS,
+    )
+    dimensions = _validated_semantic_tuple(
+        parsed.get("dimensions"),
+        _SEMANTIC_DIMENSIONS,
+    )
+    analysis_action = _validated_semantic_scalar(
+        parsed.get("analysis_action"),
+        _SEMANTIC_ACTIONS,
+    )
+    store_scope = _validated_semantic_scalar(
+        parsed.get("store_scope"),
+        _SEMANTIC_STORE_SCOPES,
+    )
+    missing_fields = (
+        _validated_semantic_tuple(
+            parsed.get("missing_fields"),
+            _SEMANTIC_MISSING_FIELDS,
+        )
+        or ()
+    )
+    store_names = _validated_llm_store_names(parsed, query, available_stores)
+    if store_names and not store_scope:
+        store_scope = "single" if len(store_names) == 1 else "multiple"
+    if code == "RESTAURANT_OPS_STORE_DIRECTORY":
+        store_scope = "all"
+        analysis_action = "lookup"
+    elif code == "RESTAURANT_OPS_BUSINESS_OPTIMIZATION":
+        analysis_action = "optimize"
+
+    clarification_needed = bool(parsed.get("clarification_needed"))
+    clarification_question = parsed.get("clarification_question")
+    if not isinstance(clarification_question, str) or not clarification_question.strip():
+        clarification_question = None
+    clarification_options = _validated_llm_clarification_options(
+        parsed,
+        missing_fields=missing_fields,
+        available_stores=available_stores,
+    )
+    if not code or confidence < _T3_MIN_CONFIDENCE:
+        clarification_needed = True
+    if clarification_needed and not clarification_question:
+        clarification_question = "我还缺一个关键信息，能再具体说一下这次想看什么吗？"
+
+    time_phrase = _parse_t3_time_range(parsed.get("time_range"))
+    wants_margin = bool(parsed.get("wants_margin"))
+    asks_profitability = bool(parsed.get("asks_profitability"))
+    dish = _verbatim_entity(parsed.get("dish"), query)
+    primary_store = store_names[0] if len(store_names) == 1 else None
+    return _build_spec(
+        code,
+        query,
+        confidence=confidence,
+        tier="llm",
+        clarification_needed=clarification_needed,
+        clarification_question=clarification_question,
+        time_phrase=time_phrase,
+        llm_wants_margin=wants_margin,
+        llm_asks_profitability=asks_profitability,
+        is_continuation=is_continuation,
+        llm_dish=dish,
+        llm_store=primary_store,
+        llm_stores=store_names,
+        llm_requested_metrics=requested_metrics,
+        llm_dimensions=dimensions,
+        llm_analysis_action=analysis_action,
+        llm_store_scope=store_scope,
+        store_options=available_stores,
+        clarification_options=clarification_options,
+        planner_authority="llm",
+        require_explicit_time=True,
+        llm_semantics_authoritative=True,
+    )
+
+
 async def _t3_llm_parse(
     query: str,
     *,
     hint: Optional[Tuple[str, float]],
-    history: Optional[Sequence[Dict[str, str]]],
+    history: Optional[Sequence[Dict[str, Any]]],
+    available_stores: Sequence[str] = (),
 ) -> Optional[Dict[str, Any]]:
     """Call the SmartBI LLM router (SLOT.MAPPER: thinking off, json_object,
     temperature 0) to structurally parse `query`. Returns the parsed dict, or
@@ -2895,7 +3346,7 @@ async def _t3_llm_parse(
         from common.llm_router import call_chain, SLOT
         from common.llm_metrics import llm_caller_context
 
-        prompt = _build_t3_prompt(query, hint, history)
+        prompt = _build_t3_prompt(query, hint, history, available_stores)
         payload = {
             "messages": [
                 {
@@ -2936,9 +3387,10 @@ async def parse_restaurant_query(
     pool,
     *,
     factory_id: str,
-    history: Optional[Sequence[Dict[str, str]]] = None,
+    history: Optional[Sequence[Dict[str, Any]]] = None,
     session_key: Optional[str] = None,
     trusted_followup_context: bool = False,
+    semantic_first: bool = False,
 ) -> Optional[RestaurantQuerySpec]:
     """Resolve `query` to one immutable RestaurantQuerySpec.
 
@@ -2969,6 +3421,8 @@ async def parse_restaurant_query(
                 pool,
                 factory_id=factory_id,
                 pending=pending,
+                history=history,
+                semantic_first=semantic_first,
             )
             already_clarifying = bool(
                 continued is not None and continued.clarification_needed
@@ -3026,6 +3480,71 @@ async def parse_restaurant_query(
                     session_key,
                 )
             return continued
+
+    if semantic_first:
+        # Production restaurant chat enters here: after authenticated context
+        # loading, the LLM is the first and only natural-language authority.
+        # Keyword/vector/exact compilers below remain a legacy compatibility
+        # path for offline tests and non-production callers; they are not
+        # consulted by Web or Java restaurant chat.
+        try:
+            if not await _is_restaurant_tenant(pool, factory_id):
+                return None
+        except Exception as exc:
+            logger.warning("[restaurant-intent] semantic-first tenant gate unavailable: %s", exc)
+            return _build_spec(
+                "",
+                norm_query,
+                confidence=0.0,
+                tier="llm",
+                planner_authority="tenant_gate_unavailable",
+                clarification_needed=True,
+                clarification_question=(
+                    "暂时无法确认你可以查看哪些餐饮数据，本次没有执行分析。请稍后重试。"
+                ),
+            )
+        try:
+            available_stores = await _load_store_options(pool, factory_id)
+        except Exception as exc:
+            logger.warning("[restaurant-intent] semantic-first store catalogue unavailable: %s", exc)
+            available_stores = ()
+        parsed = await _t3_llm_parse(
+            norm_query,
+            hint=None,
+            history=history,
+            available_stores=available_stores,
+        )
+        if parsed is None:
+            return _build_spec(
+                "",
+                norm_query,
+                confidence=0.0,
+                tier="llm",
+                planner_authority="llm_unavailable",
+                clarification_needed=True,
+                clarification_question=(
+                    "我现在暂时无法完整理解这句话，本次没有按关键词猜测，也没有执行查询。"
+                    "请稍后重试。"
+                ),
+            )
+        semantic_spec = _semantic_spec_from_t3(
+            parsed,
+            norm_query,
+            available_stores=available_stores,
+        )
+        semantic_spec = await _apply_store_scope_guard(
+            pool,
+            factory_id,
+            semantic_spec,
+        )
+        await _maybe_register_pending(
+            pool,
+            norm_query,
+            semantic_spec,
+            factory_id,
+            session_key,
+        )
+        return semantic_spec
 
     capability_question = capability_clarification_question(norm_query)
     if capability_question:
@@ -3342,6 +3861,8 @@ async def _parse_continuation(
     *,
     factory_id: str,
     pending: Dict[str, Any],
+    history: Optional[Sequence[Dict[str, Any]]] = None,
+    semantic_first: bool = False,
 ) -> Optional[RestaurantQuerySpec]:
     """Resolve a follow-up answer to a previously-asked clarification
     question (module docstring "Clarification continuation"). `query` here
@@ -3377,6 +3898,47 @@ async def _parse_continuation(
             clarification_question=(
                 "暂时无法确认餐饮数据范围，本次没有执行任何分析。请稍后重试。"
             ),
+            is_continuation=True,
+        )
+
+    if semantic_first:
+        try:
+            available_stores = await _load_store_options(pool, factory_id)
+        except Exception as exc:
+            logger.warning(
+                "[restaurant-intent] continuation store catalogue unavailable: %s",
+                exc,
+            )
+            available_stores = ()
+        semantic_history: List[Dict[str, Any]] = list(history or [])[-20:]
+        semantic_history.extend([
+            {"role": "user", "content": original_query},
+            {"role": "assistant", "content": clarification_question or ""},
+        ])
+        parsed = await _t3_llm_parse(
+            query,
+            hint=None,
+            history=semantic_history,
+            available_stores=available_stores,
+        )
+        if parsed is None:
+            return _build_spec(
+                "",
+                concatenated,
+                confidence=0.0,
+                tier="llm",
+                planner_authority="llm_unavailable",
+                clarification_needed=True,
+                clarification_question=(
+                    "我暂时无法把这次选择与上一轮问题合并，本次没有按关键词猜测，"
+                    "也没有执行查询。请稍后重试。"
+                ),
+                is_continuation=True,
+            )
+        return _semantic_spec_from_t3(
+            parsed,
+            concatenated,
+            available_stores=available_stores,
             is_continuation=True,
         )
 

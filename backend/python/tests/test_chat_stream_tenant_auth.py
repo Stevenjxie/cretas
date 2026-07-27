@@ -170,23 +170,31 @@ def _configure_cached_tiered_result(monkeypatch, intent_code, clarification_need
     async def _capture(*_args, **_kwargs):
         return None
 
-    monkeypatch.setattr(restaurant_intent, "match_restaurant_ops", lambda _query: None)
     monkeypatch.setattr(restaurant_intent, "_is_restaurant_tenant", _restaurant_tenant)
-    monkeypatch.setattr(
-        restaurant_intent,
-        "_cache_get",
-        lambda *_args: {
-            "code": intent_code,
+    async def _semantic_plan(*_args, **_kwargs):
+        is_trend = intent_code == "RESTAURANT_OPS_TREND_ANALYSIS"
+        return {
+            "intent": intent_code,
+            "time_range": {"type": "relative", "unit": "day", "count": 30},
+            "wants_margin": False,
+            "asks_profitability": False,
+            "requested_metrics": [],
+            "analysis_action": "compare" if is_trend else "lookup",
+            "dimensions": [],
+            "dish": None,
+            "store": None,
+            "stores": [],
+            "store_scope": "all" if is_trend else None,
             "confidence": 0.91,
-            "tier": "llm",
-            "plan_version": "restaurant-query-plan-v2",
-            "planner_authority": "llm",
             "clarification_needed": clarification_needed,
+            "missing_fields": [],
             "clarification_question": (
                 "trusted clarification only" if clarification_needed else None
             ),
-        },
-    )
+            "clarification_options": [],
+        }
+
+    monkeypatch.setattr(restaurant_intent, "_t3_llm_parse", _semantic_plan)
     monkeypatch.setattr(restaurant_intent, "_pending_pop", _pending_pop)
     monkeypatch.setattr(restaurant_intent, "_pending_put", _pending_put)
     monkeypatch.setattr(restaurant_intent_service, "_resolve_tiered", _resolve)

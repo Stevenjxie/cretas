@@ -78,21 +78,28 @@ def _configure_cached_tiered_clarification(monkeypatch):
     async def _pending_put(*_args, **_kwargs):
         pending_calls.append("put")
 
-    monkeypatch.setattr(restaurant_intent, "match_restaurant_ops", lambda _query: None)
     monkeypatch.setattr(restaurant_intent, "_is_restaurant_tenant", _restaurant_tenant)
-    monkeypatch.setattr(
-        restaurant_intent,
-        "_cache_get",
-        lambda *_args: {
-            "code": "",
+    async def _semantic_plan(*_args, **_kwargs):
+        return {
+            "intent": "",
+            "time_range": None,
+            "wants_margin": False,
+            "asks_profitability": False,
             "confidence": 0.2,
-            "tier": "llm",
-            "plan_version": "restaurant-query-plan-v2",
-            "planner_authority": "llm",
+            "requested_metrics": [],
+            "analysis_action": "lookup",
+            "dimensions": [],
+            "dish": None,
+            "store": None,
+            "stores": [],
+            "store_scope": None,
             "clarification_needed": True,
+            "missing_fields": [],
             "clarification_question": "trusted clarification only",
-        },
-    )
+            "clarification_options": [],
+        }
+
+    monkeypatch.setattr(restaurant_intent, "_t3_llm_parse", _semantic_plan)
     monkeypatch.setattr(restaurant_intent, "_pending_pop", _pending_pop)
     monkeypatch.setattr(restaurant_intent, "_pending_put", _pending_put)
     return pending_calls
@@ -262,9 +269,21 @@ async def test_untrusted_expected_intent_is_ignored(monkeypatch):
     async def _semantic_plan(*_args, **_kwargs):
         return {
             "intent": "RESTAURANT_OPS_GROSS_MARGIN",
+            "time_range": {"type": "named", "value": "this_month"},
+            "wants_margin": True,
+            "asks_profitability": True,
+            "requested_metrics": ["gross_margin"],
+            "analysis_action": "lookup",
+            "dimensions": [],
+            "dish": None,
+            "store": None,
+            "stores": [],
+            "store_scope": "all",
             "confidence": 0.96,
             "clarification_needed": False,
+            "missing_fields": [],
             "clarification_question": None,
+            "clarification_options": [],
         }
 
     monkeypatch.setattr("smartbi.config.get_pg_pool", _pool)
@@ -290,8 +309,8 @@ async def test_untrusted_expected_intent_is_ignored(monkeypatch):
     assert observed == ["RESTAURANT_OPS_GROSS_MARGIN"]
 
 
-async def test_restaurant_general_analysis_inherits_only_dependent_session_followup(monkeypatch):
-    observed = {"lookup": [], "upsert": [], "queries": []}
+async def test_restaurant_general_analysis_sends_raw_followup_and_history_to_llm(monkeypatch):
+    observed = {"lookup": [], "upsert": [], "queries": [], "histories": []}
 
     async def _pool():
         return object()
@@ -315,8 +334,9 @@ async def test_restaurant_general_analysis_inherits_only_dependent_session_follo
         async def upsert(self, **kwargs):
             observed["upsert"].append(kwargs)
 
-    async def _tiered(query, *_args, **_kwargs):
+    async def _tiered(query, *_args, **kwargs):
         observed["queries"].append(query)
+        observed["histories"].append(kwargs.get("history"))
         return {
             "kind": "answer",
             "answer_text": "本月与上个月相比，营收更高。",
@@ -347,8 +367,17 @@ async def test_restaurant_general_analysis_inherits_only_dependent_session_follo
 
     assert response.success is True
     assert observed["lookup"] == [("session-7", "F001", 7)]
-    assert observed["queries"] == ["本月营收和上个月比呢"]
-    assert observed["upsert"][0]["parent_query"] == observed["queries"][0]
+    assert observed["queries"] == ["那和上个月比呢"]
+    assert observed["histories"] == [[{
+        "q": "本月营收怎么样",
+        "a_summary": "",
+        "context": {
+            "window_label": "本月",
+            "requested_metrics": ["revenue"],
+            "analysis_action": "lookup",
+        },
+    }]]
+    assert observed["upsert"][0]["parent_query"] == "那和上个月比呢"
 
 
 async def test_restaurant_clarification_with_slots_is_persisted_for_button_followup(

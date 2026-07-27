@@ -31,6 +31,7 @@ from smartbi.gold.restaurant_ops_router import (
     reconcile_restaurant_ops_code,
     resolve_by_code,
     resolve_sales_summary,
+    resolve_store_directory,
 )
 
 
@@ -3333,3 +3334,46 @@ def test_r33_store_scope_words_are_not_store_names():
         "本月全部门店销量最高的5道菜是什么"
     ) == []
     assert _r.extract_store_mentions("本月哪家店营收最高") == []
+
+
+@pytest.mark.asyncio
+async def test_store_directory_answers_count_and_names_without_time_question():
+    class _Conn:
+        def transaction(self):
+            class _Tx:
+                async def __aenter__(self):
+                    return None
+
+                async def __aexit__(self, *_exc):
+                    return False
+
+            return _Tx()
+
+        async def execute(self, *_args):
+            return "SELECT 1"
+
+        async def fetch(self, *_args):
+            return [
+                {"name": "兄弟土菜馆"},
+                {"name": "有滋有味总部"},
+                {"name": "有滋有味北外滩店"},
+            ]
+
+    class _Pool:
+        def acquire(self):
+            class _Acquire:
+                async def __aenter__(self):
+                    return _Conn()
+
+                async def __aexit__(self, *_exc):
+                    return False
+
+            return _Acquire()
+
+    answer = await resolve_store_directory(_Pool(), "RES_3101_009")
+
+    assert answer.code == "RESTAURANT_OPS_STORE_DIRECTORY"
+    assert "共有 **3 家门店**" in answer.answer_text
+    assert "兄弟土菜馆" in answer.answer_text
+    assert answer.kpis == [{"label": "门店数量", "value": 3, "unit": "家"}]
+    assert "时间" not in answer.answer_text

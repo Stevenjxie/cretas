@@ -755,8 +755,11 @@ class TestSynthesize:
         resp = asyncio.run(eng.synthesize("RES_3101_009", "综合分析", dr))
         assert resp.source == "deterministic_fallback"
         assert resp.tokens == 0
-        assert "叙述模型预算已用完" in resp.answer
-        assert "确定性多维分析" in resp.answer
+        assert "今天的智能分析次数已经用完" in resp.answer
+        assert "系统当前能查到的真实经营数据" in resp.answer
+        assert "叙述模型" not in resp.answer
+        assert "确定性" not in resp.answer
+        assert "维度" not in resp.answer
         assert resp.charts
         assert resp.dimension_coverage
 
@@ -772,6 +775,23 @@ class TestSynthesize:
         assert resp.answer == "缓存答案"
         assert resp.charts  # restored from cache chart_config
 
+    def test_cache_hit_is_rewritten_for_restaurant_customer(self, monkeypatch):
+        _install_data_fakes(monkeypatch)
+        cache = FakeCache(hit={
+            "answer": "请显式指定时间槽位，再查看确定性多维分析。",
+            "chart_config": {},
+        })
+        eng = _engine(monkeypatch, cache=cache)
+        import datetime
+        dr = (datetime.date(2025, 1, 1), datetime.date(2025, 12, 31))
+
+        resp = asyncio.run(eng.synthesize("RES_3101_009", "综合分析", dr))
+
+        assert resp.source == "cache"
+        assert resp.answer == (
+            "请直接告诉我时间条件，再查看按系统真实数据做的综合分析。"
+        )
+
     def test_llm_failure_degraded(self, monkeypatch):
         _install_data_fakes(monkeypatch)
 
@@ -784,10 +804,14 @@ class TestSynthesize:
         dr = (datetime.date(2025, 1, 1), datetime.date(2025, 12, 31))
         resp = asyncio.run(eng.synthesize("RES_3101_009", "综合分析评价和经营", dr))
         assert resp.source == "deterministic_fallback"
-        assert "叙述模型暂时不可用" in resp.answer
+        assert "智能分析暂时有点忙" in resp.answer
         assert "平均星级" in resp.answer
         assert "营业额" in resp.answer
-        assert "缺失维度保持为空" in resp.answer
+        assert "没有数据的部分会留空" in resp.answer
+        assert "叙述模型" not in resp.answer
+        assert "结构化" not in resp.answer
+        assert "确定性" not in resp.answer
+        assert "维度" not in resp.answer
         assert resp.charts
         assert resp.dimension_coverage
         # FactBook remains attached as auditable evidence.
@@ -865,7 +889,8 @@ class TestSynthesize:
         assert resp.source == "deterministic_fallback"
         assert resp.tokens == 321
         assert resp.tokens_used_today == 331
-        assert "叙述未通过数据因果门禁" in resp.answer
+        assert "刚才生成的说明和系统数据对不上" in resp.answer
+        assert "数据因果门禁" not in resp.answer
         assert unsafe_answer not in resp.answer
         assert resp.fact_check
         assert resp.fact_check["violations"]
