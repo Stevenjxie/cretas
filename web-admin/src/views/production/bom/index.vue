@@ -17,13 +17,14 @@ import type {
 } from '@/api/bom';
 import * as XLSX from 'xlsx';
 import { ElMessage, ElMessageBox } from 'element-plus';
-import { Plus, Edit, Delete, Download, Refresh, InfoFilled } from '@element-plus/icons-vue';
+import { Download, Refresh, InfoFilled } from '@element-plus/icons-vue';
 import { useRoute, useRouter } from 'vue-router';
 import BomChangeLog from './BomChangeLog.vue'
 import CanvasAwareWrapper from '@/components/canvas/CanvasAwareWrapper.vue'
 import BomAuxiliaryWorkspace from './seasoning/BomAuxiliaryWorkspace.vue'
 import BomCopySuggestionDialog from './BomCopySuggestionDialog.vue'
 import { createBomDraftEnsurer, validateBomActivation } from './bomDraftLifecycle'
+import { buildBomLifecycleUiState, draftEntryLabel } from './bomVersionLifecycleUi'
 import type { TableRow } from '@/types/api';
 // 客户张权反馈 (2026-07-02): "辅料 添加剂全混在一起了" — 「添加原辅料」对话框的「关联原料」
 // 下拉需按上方「物料类别」筛选, 归类逻辑复用 procurement/receives/list.vue 同款共享工具。
@@ -93,11 +94,15 @@ const workflowFirstGuidance = computed(() => {
 const recipeVersionLimitReached = computed(() => bomRecipes.value.length >= MAX_RECIPE_VERSIONS);
 const ensureDraftLoading = ref(false);
 const draftRecipe = computed(() => bomRecipes.value.find((recipe) => recipe.status === 'DRAFT') ?? null);
-const draftActionLabel = computed(() => {
-  if (draftRecipe.value) return '继续编辑草稿';
-  if (bomRecipes.value.some((recipe) => recipe.status === 'ACTIVE' && recipe.isCurrent)) return '新建版本';
-  return '创建首版 BOM';
-});
+const selectedRecipeEditable = computed(() => Boolean(
+  canWrite.value && selectedRecipe.value?.status === 'DRAFT',
+));
+const lifecycleUiState = computed(() => buildBomLifecycleUiState(
+  selectedRecipe.value,
+  draftRecipe.value,
+  canWrite.value,
+));
+const draftActionLabel = computed(() => draftEntryLabel(bomRecipes.value, draftRecipe.value));
 
 function formatFriendlyNumber(value: unknown, maxDecimals = 4): string {
   const number = Number(value);
@@ -233,6 +238,29 @@ async function handleEnsureDraftVersion() {
 
 async function handleCloneSelectedRecipe() {
   await handleEnsureDraftVersion();
+}
+
+async function handleLifecyclePrimaryAction() {
+  switch (lifecycleUiState.value.primaryAction) {
+    case 'GO_TO_DRAFT':
+      if (draftRecipe.value) selectedRecipeId.value = draftRecipe.value.id;
+      return;
+    case 'ACTIVATE_DRAFT':
+      if (selectedRecipe.value) await handleActivateRecipe(selectedRecipe.value);
+      return;
+    case 'CREATE_DRAFT':
+    case 'CLONE_ACTIVE':
+      await handleEnsureDraftVersion();
+      return;
+    default:
+      return;
+  }
+}
+
+function requireEditableRecipe(): boolean {
+  if (selectedRecipeEditable.value) return true;
+  ElMessage.warning('当前版本只读，请通过“克隆为新版本修改”进入草稿后再操作');
+  return false;
 }
 
 async function handleDeleteRecipe(recipe: BomRecipeSummary) {
@@ -1222,10 +1250,7 @@ async function loadBomItems() {
 
 async function handleAddBomItem() {
   if (!(await ensureBomConfigurable())) return;
-  if (!selectedRecipe.value || selectedRecipe.value.status !== 'DRAFT') {
-    const draft = await ensureEditableDraft();
-    if (!draft) return;
-  }
+  if (!requireEditableRecipe()) return;
   isBomEdit.value = false;
   // Phase A side-effect: yieldRate 默认 null (出成率待评估), 不是 100
   bomForm.value = {
@@ -1494,6 +1519,7 @@ async function loadAllLaborCosts() {
 }
 
 function handleAddLaborCost() {
+  if (!requireEditableRecipe()) return;
   isLaborEdit.value = false;
   laborForm.value = {
     id: null,
@@ -1510,6 +1536,7 @@ function handleAddLaborCost() {
 }
 
 function handleEditLaborCost(row: TableRow) {
+  if (!requireEditableRecipe()) return;
   isLaborEdit.value = true;
   laborForm.value = {
     id: row.id,
@@ -1526,6 +1553,7 @@ function handleEditLaborCost(row: TableRow) {
 }
 
 async function submitLaborForm() {
+  if (!requireEditableRecipe()) return;
   // fool-proof Rule 1: 字段级校验, 不静默丢给后端报晦涩 400.
   if (!laborForm.value.processName) {
     ElMessage.warning('请输入工序名称');
@@ -1570,6 +1598,7 @@ async function submitLaborForm() {
 }
 
 async function handleDeleteLaborCost(row: TableRow) {
+  if (!requireEditableRecipe()) return;
   try {
     await ElMessageBox.confirm(
       `确定删除人工费用『${String(row.processName || row.name || '未命名费用')}』吗？`,
@@ -1617,6 +1646,7 @@ async function loadOverheadCosts() {
 }
 
 function handleAddOverheadCost() {
+  if (!requireEditableRecipe()) return;
   isOverheadEdit.value = false;
   overheadForm.value = {
     id: null,
@@ -1632,6 +1662,7 @@ function handleAddOverheadCost() {
 }
 
 function handleEditOverheadCost(row: TableRow) {
+  if (!requireEditableRecipe()) return;
   isOverheadEdit.value = true;
   overheadForm.value = {
     id: row.id,
@@ -1647,6 +1678,7 @@ function handleEditOverheadCost(row: TableRow) {
 }
 
 async function submitOverheadForm() {
+  if (!requireEditableRecipe()) return;
   // fool-proof Rule 1: 字段级校验, 不静默丢给后端报晦涩 400.
   if (!overheadForm.value.name) {
     ElMessage.warning('请输入费用名称');
@@ -1691,6 +1723,7 @@ async function submitOverheadForm() {
 }
 
 async function handleDeleteOverheadCost(row: TableRow) {
+  if (!requireEditableRecipe()) return;
   try {
     await ElMessageBox.confirm(
       `确定删除均摊费用『${String(row.name || '未命名费用')}』吗？`,
@@ -2345,7 +2378,7 @@ watch(adjustDialogVisible, (visible) => {
             <el-tag size="small" :type="recipeVersionLimitReached ? 'warning' : 'info'">
               已用 {{ bomRecipes.length }}/{{ MAX_RECIPE_VERSIONS }} 个版本
             </el-tag>
-            <el-button v-if="canWrite && bomRecipes.length > 0" type="primary" size="small" :icon="Plus" :loading="ensureDraftLoading" :disabled="recipeVersionLimitReached && !draftRecipe" @click="handleEnsureDraftVersion">
+            <el-button v-if="canWrite" type="primary" size="small" :loading="ensureDraftLoading" :disabled="recipeVersionLimitReached && !draftRecipe" @click="handleEnsureDraftVersion">
               {{ draftActionLabel }}
             </el-button>
             <el-button
@@ -2438,9 +2471,26 @@ watch(adjustDialogVisible, (visible) => {
             <span v-else class="text-secondary">—</span>
           </template>
         </el-table-column>
-        <el-table-column label="操作" width="260" fixed="right" align="center">
+        <el-table-column label="操作" width="320" fixed="right" align="center">
           <template #default="{ row }">
-            <el-button type="primary" link size="small" @click="selectedRecipeId = row.id">查看</el-button>
+            <el-button
+              type="primary"
+              link
+              size="small"
+              @click="selectedRecipeId = row.id"
+            >
+              {{ row.status === 'DRAFT' ? '编辑草稿' : '查看' }}
+            </el-button>
+            <el-button
+              v-if="canWrite && row.status === 'ACTIVE' && row.isCurrent"
+              type="primary"
+              size="small"
+              :loading="ensureDraftLoading"
+              :disabled="recipeVersionLimitReached && !draftRecipe"
+              @click="draftRecipe ? selectedRecipeId = draftRecipe.id : handleEnsureDraftVersion()"
+            >
+              {{ draftRecipe ? `前往 v${draftRecipe.version} 草稿` : '克隆修改' }}
+            </el-button>
             <el-button
               v-if="canWrite && row.status !== 'ACTIVE'"
               type="danger"
@@ -2452,7 +2502,7 @@ watch(adjustDialogVisible, (visible) => {
               删除
             </el-button>
             <el-button
-              v-if="canWrite && !row.isCurrent"
+              v-if="canWrite && row.status === 'DRAFT'"
               type="success"
               size="small"
               :loading="activatingRecipeId === row.id"
@@ -2460,12 +2510,47 @@ watch(adjustDialogVisible, (visible) => {
             >
               激活
             </el-button>
+            <el-button
+              v-if="canWrite && row.status === 'ARCHIVED'"
+              type="success"
+              link
+              size="small"
+              :loading="activatingRecipeId === row.id"
+              @click="handleActivateRecipe(row)"
+            >
+              重新启用
+            </el-button>
           </template>
         </el-table-column>
       </el-table>
+      <el-alert
+        :type="lifecycleUiState.tone"
+        :closable="false"
+        show-icon
+        class="bom-lifecycle-alert"
+        data-testid="bom-version-lifecycle"
+        :title="lifecycleUiState.title"
+        role="status"
+        aria-live="polite"
+      >
+        <template #default>
+          <div class="bom-lifecycle-alert__content">
+            <span>{{ lifecycleUiState.description }}</span>
+            <el-button
+              v-if="lifecycleUiState.primaryAction"
+              type="primary"
+              size="small"
+              :loading="ensureDraftLoading || activatingRecipeId === selectedRecipe?.id"
+              @click="handleLifecyclePrimaryAction"
+            >
+              {{ lifecycleUiState.primaryActionLabel }}
+            </el-button>
+          </div>
+        </template>
+      </el-alert>
       <div class="recipe-status-hint">
         <el-icon><InfoFilled /></el-icon>
-        <span>草稿和历史正式版本都可激活；同一 SKU 始终只有一个生效版本。生效版本不可删除，达到 10 个版本后请先删除无用草稿或历史版本。</span>
+        <span>草稿可编辑；生效和历史版本只读。同一 SKU 始终只有一个当前生效版本，激活新草稿不会改写旧版本。</span>
       </div>
     </el-card>
 
@@ -2478,7 +2563,7 @@ watch(adjustDialogVisible, (visible) => {
             <span class="table-title">{{ activeCategoryTab === 'AUXILIARY' ? '工序辅料明细' : activeCategoryTab === 'PACKAGING' ? '包材需求明细' : '原料需求明细' }}</span>
             <div v-if="activeCategoryTab !== 'AUXILIARY'" class="table-actions">
               <el-tooltip
-                v-if="canWrite"
+                v-if="selectedRecipeEditable"
                 :disabled="bomConfigurationAllowed"
                 :content="workflowFirstGuidance"
                 placement="top"
@@ -2487,7 +2572,6 @@ watch(adjustDialogVisible, (visible) => {
                   <el-button
                     type="primary"
                     size="small"
-                    :icon="Plus"
                     :disabled="!bomConfigurationAllowed || configurationReadinessLoading"
                     data-testid="add-bom-item"
                     @click="handleAddBomItem"
@@ -2557,6 +2641,7 @@ watch(adjustDialogVisible, (visible) => {
             :recipe-status="selectedRecipe.status"
             :can-write="canWrite"
             :can-view-price="canViewPrice"
+            :show-readonly-notice="false"
             @request-clone="handleCloneSelectedRecipe"
             @workflow-upgraded="handleWorkflowUpgraded"
             @changed="handleSeasoningWorkspaceChanged"
@@ -2613,10 +2698,10 @@ watch(adjustDialogVisible, (visible) => {
               <span v-else class="text-secondary">{{ bomLineAmountPreview(row).message }}</span>
             </template>
           </el-table-column>
-          <el-table-column label="操作" width="100" fixed="right" align="center">
+          <el-table-column v-if="selectedRecipeEditable" label="操作" width="120" fixed="right" align="center">
             <template #default="{ row }">
-              <el-button v-if="canWrite" type="primary" link size="small" :icon="Edit" @click="handleEditBomItem(row)" />
-              <el-button v-if="canWrite" type="danger" link size="small" :icon="Delete" @click="handleDeleteBomItem(row)" />
+              <el-button type="primary" link size="small" @click="handleEditBomItem(row)">编辑</el-button>
+              <el-button type="danger" link size="small" @click="handleDeleteBomItem(row)">删除</el-button>
             </template>
           </el-table-column>
         </el-table>
@@ -2633,7 +2718,7 @@ watch(adjustDialogVisible, (visible) => {
           <div class="table-header">
             <span class="table-title">人工费用表</span>
             <div class="table-actions">
-              <el-button v-if="canWrite" type="primary" size="small" :icon="Plus" @click="handleAddLaborCost">
+              <el-button v-if="selectedRecipeEditable" type="primary" size="small" @click="handleAddLaborCost">
                 添加
               </el-button>
               <el-button size="small" :icon="Download" @click="exportToExcel('labor')">导出</el-button>
@@ -2659,10 +2744,10 @@ watch(adjustDialogVisible, (visible) => {
             </template>
           </el-table-column>
           <el-table-column prop="processCategory" label="工序大类" width="100" show-overflow-tooltip />
-          <el-table-column label="操作" width="100" fixed="right" align="center">
+          <el-table-column v-if="selectedRecipeEditable" label="操作" width="120" fixed="right" align="center">
             <template #default="{ row }">
-              <el-button v-if="canWrite" type="primary" link size="small" :icon="Edit" @click="handleEditLaborCost(row)" />
-              <el-button v-if="canWrite" type="danger" link size="small" :icon="Delete" @click="handleDeleteLaborCost(row)" />
+              <el-button type="primary" link size="small" @click="handleEditLaborCost(row)">编辑</el-button>
+              <el-button type="danger" link size="small" @click="handleDeleteLaborCost(row)">删除</el-button>
             </template>
           </el-table-column>
         </el-table>
@@ -2678,7 +2763,7 @@ watch(adjustDialogVisible, (visible) => {
           <div class="table-header">
             <span class="table-title">均摊费用表</span>
             <div class="table-actions">
-              <el-button v-if="canWrite" type="primary" size="small" :icon="Plus" @click="handleAddOverheadCost">
+              <el-button v-if="selectedRecipeEditable" type="primary" size="small" @click="handleAddOverheadCost">
                 添加
               </el-button>
               <el-button size="small" :icon="Download" @click="exportToExcel('overhead')">导出</el-button>
@@ -2704,10 +2789,10 @@ watch(adjustDialogVisible, (visible) => {
             </template>
           </el-table-column>
           <el-table-column prop="category" label="费用类别" width="100" show-overflow-tooltip />
-          <el-table-column label="操作" width="100" fixed="right" align="center">
+          <el-table-column v-if="selectedRecipeEditable" label="操作" width="120" fixed="right" align="center">
             <template #default="{ row }">
-              <el-button v-if="canWrite" type="primary" link size="small" :icon="Edit" @click="handleEditOverheadCost(row)" />
-              <el-button v-if="canWrite" type="danger" link size="small" :icon="Delete" @click="handleDeleteOverheadCost(row)" />
+              <el-button type="primary" link size="small" @click="handleEditOverheadCost(row)">编辑</el-button>
+              <el-button type="danger" link size="small" @click="handleDeleteOverheadCost(row)">删除</el-button>
             </template>
           </el-table-column>
         </el-table>
@@ -3505,6 +3590,23 @@ watch(adjustDialogVisible, (visible) => {
   flex-shrink: 0;
 }
 
+.bom-lifecycle-alert {
+  margin-top: 12px;
+}
+
+.bom-lifecycle-alert__content {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  width: 100%;
+
+  span {
+    min-width: 0;
+    overflow-wrap: anywhere;
+  }
+}
+
 .recipe-status-hint {
   display: flex;
   align-items: center;
@@ -3516,6 +3618,13 @@ watch(adjustDialogVisible, (visible) => {
   .el-icon {
     color: #909399;
     flex-shrink: 0;
+  }
+}
+
+@media (max-width: 900px) {
+  .bom-lifecycle-alert__content {
+    align-items: flex-start;
+    flex-direction: column;
   }
 }
 

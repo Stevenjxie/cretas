@@ -19,14 +19,17 @@ import SeasoningBindingDialog, { type SeasoningMaterialOption } from './Seasonin
 import BomFamilyOutputCostingDialog from './BomFamilyOutputCostingDialog.vue';
 import { buildMaterialSummaries, uniqueProcessesByNode } from './seasoningModel';
 
-const props = defineProps<{
+const props = withDefaults(defineProps<{
   factoryId: string;
   productTypeId: string;
   recipeId: string;
   recipeStatus: BomRecipeStatus;
   canWrite: boolean;
   canViewPrice: boolean;
-}>();
+  showReadonlyNotice?: boolean;
+}>(), {
+  showReadonlyNotice: true,
+});
 
 const emit = defineEmits<{
   'request-clone': [];
@@ -399,7 +402,7 @@ function usageLabel(usage: { dosagePerKgG: number; basisQuantity?: number | null
     />
 
     <el-alert
-      v-if="recipeStatus !== 'DRAFT'"
+      v-if="showReadonlyNotice && recipeStatus !== 'DRAFT'"
       type="warning"
       show-icon
       :closable="false"
