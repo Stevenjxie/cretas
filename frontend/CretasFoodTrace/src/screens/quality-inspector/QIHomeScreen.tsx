@@ -5,7 +5,7 @@
  * 首页按「待我审核 → 发起拍检/记录 → 其他批次 → 今日摘要」排序。
  */
 
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useRef, useState } from 'react';
 import {
   RefreshControl,
   ScrollView,
@@ -15,7 +15,7 @@ import {
   View,
 } from 'react-native';
 import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
-import { useNavigation } from '@react-navigation/native';
+import { useFocusEffect, useNavigation } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useTranslation } from 'react-i18next';
@@ -41,6 +41,7 @@ export default function QIHomeScreen() {
   const { user } = useAuthStore();
   const { isScreenEnabled } = useFactoryFeatureStore();
   const factoryId = user?.factoryId;
+  const userId = user?.id;
 
   const [refreshing, setRefreshing] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -50,10 +51,27 @@ export default function QIHomeScreen() {
   const [unreadCount, setUnreadCount] = useState(0);
   const [pendingReviewCount, setPendingReviewCount] = useState(0);
   const [nextReviewTask, setNextReviewTask] = useState<LabelQcTaskSummary | null>(null);
+  const reviewRefreshInFlightRef = useRef(false);
+
+  const loadReviewQueue = useCallback(async () => {
+    if (!factoryId || reviewRefreshInFlightRef.current) return;
+
+    reviewRefreshInFlightRef.current = true;
+    try {
+      const page = await labelQcApi.listTasks(
+        { statuses: ['NEEDS_REVIEW', 'ANALYSIS_FAILED'], page: 1, size: 1 },
+        factoryId,
+      );
+      setPendingReviewCount(page.totalElements);
+      setNextReviewTask(page.content[0] ?? null);
+    } finally {
+      reviewRefreshInFlightRef.current = false;
+    }
+  }, [factoryId]);
 
   const loadData = useCallback(async () => {
-    if (!factoryId) {
-      setError('登录信息缺少工厂，请重新登录');
+    if (!factoryId || !userId) {
+      setError('登录信息不完整，请退出后重新登录');
       setLoading(false);
       return;
     }
@@ -65,32 +83,31 @@ export default function QIHomeScreen() {
     const results = await Promise.allSettled([
       qualityInspectorApi.getStatistics(),
       qualityInspectorApi.getPendingBatches({ page: 1, size: 1 }),
-      qualityInspectorApi.getUnreadCount(),
-      labelQcApi.listTasks(
-        { statuses: ['NEEDS_REVIEW', 'ANALYSIS_FAILED'], page: 1, size: 1 },
-        factoryId,
-      ),
+      qualityInspectorApi.getUnreadCount(userId),
+      loadReviewQueue(),
     ]);
 
-    const [statsResult, batchesResult, unreadResult, reviewResult] = results;
+    const [statsResult, batchesResult, unreadResult] = results;
     if (statsResult.status === 'fulfilled') setStatistics(statsResult.value);
     if (batchesResult.status === 'fulfilled') {
       setNextBatch(batchesResult.value.content[0] ?? null);
     }
     if (unreadResult.status === 'fulfilled') setUnreadCount(unreadResult.value);
-    if (reviewResult.status === 'fulfilled') {
-      setPendingReviewCount(reviewResult.value.totalElements);
-      setNextReviewTask(reviewResult.value.content[0] ?? null);
-    }
     if (results.every((result) => result.status === 'rejected')) {
       setError('首页信息加载失败，请检查网络后重试');
     }
     setLoading(false);
-  }, [factoryId]);
+  }, [factoryId, loadReviewQueue, userId]);
 
-  useEffect(() => {
-    void loadData();
-  }, [loadData]);
+  useFocusEffect(
+    useCallback(() => {
+      void loadData();
+      const reviewRefreshTimer = setInterval(() => {
+        void loadReviewQueue().catch(() => undefined);
+      }, 10_000);
+      return () => clearInterval(reviewRefreshTimer);
+    }, [loadData, loadReviewQueue]),
+  );
 
   const onRefresh = useCallback(async () => {
     setRefreshing(true);

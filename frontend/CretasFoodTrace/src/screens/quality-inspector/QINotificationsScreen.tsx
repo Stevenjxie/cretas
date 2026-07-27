@@ -3,7 +3,7 @@
  * Quality Inspector - Notifications Screen
  */
 
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
   View,
   Text,
@@ -43,76 +43,72 @@ const NOTIFICATION_ICONS: Record<Notification['type'], { icon: IoniconsName; col
   warning: { icon: 'alert-circle', color: '#F57C00', bg: '#FFF3E0' },
 };
 
+const mapNotificationType = (apiType: NotificationType): Notification['type'] => {
+  switch (apiType) {
+    case 'urgent':
+      return 'urgent';
+    case 'new_batch':
+      return 'info';
+    case 'review_result':
+      return 'success';
+    case 'system':
+      return 'warning';
+    default:
+      return 'info';
+  }
+};
+
+const formatRelativeTime = (dateStr: string): string => {
+  const date = new Date(dateStr);
+  const now = new Date();
+  const diffMs = now.getTime() - date.getTime();
+  const diffMinutes = Math.floor(diffMs / 60000);
+  const diffHours = Math.floor(diffMs / 3600000);
+  const diffDays = Math.floor(diffMs / 86400000);
+
+  if (diffMinutes < 1) return '刚刚';
+  if (diffMinutes < 60) return `${diffMinutes}分钟前`;
+  if (diffHours < 24) return `${diffHours}小时前`;
+  if (diffDays < 7) return `${diffDays}天前`;
+  return date.toLocaleDateString();
+};
+
+const transformNotification = (apiNotification: QINotification): Notification => ({
+  id: apiNotification.id,
+  type: mapNotificationType(apiNotification.type),
+  title: apiNotification.title,
+  content: apiNotification.content,
+  time: formatRelativeTime(apiNotification.createdAt),
+  read: apiNotification.read,
+});
+
 export default function QINotificationsScreen() {
   const { t } = useTranslation('quality');
   const insets = useSafeAreaInsets();
   const { user } = useAuthStore();
   const factoryId = user?.factoryId;
+  const userId = user?.id;
 
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [notifications, setNotifications] = useState<Notification[]>([]);
   const [filter, setFilter] = useState<FilterType>('all');
+  const [pendingReadIds, setPendingReadIds] = useState<Set<string>>(() => new Set());
+  const [markingAll, setMarkingAll] = useState(false);
+  const pendingReadIdsRef = useRef<Set<string>>(new Set());
+  const markingAllRef = useRef(false);
 
-  useEffect(() => {
-    if (factoryId) {
-      qualityInspectorApi.setFactoryId(factoryId);
-      loadNotifications();
-    }
-  }, [factoryId]);
-
-  /**
-   * 将 API 返回的 NotificationType 映射为本地显示类型
-   */
-  const mapNotificationType = (apiType: NotificationType): Notification['type'] => {
-    switch (apiType) {
-      case 'urgent':
-        return 'urgent';
-      case 'new_batch':
-        return 'info';
-      case 'review_result':
-        return 'success';
-      case 'system':
-        return 'warning';
-      default:
-        return 'info';
-    }
-  };
-
-  /**
-   * 格式化时间为相对时间显示
-   */
-  const formatRelativeTime = (dateStr: string): string => {
-    const date = new Date(dateStr);
-    const now = new Date();
-    const diffMs = now.getTime() - date.getTime();
-    const diffMinutes = Math.floor(diffMs / 60000);
-    const diffHours = Math.floor(diffMs / 3600000);
-    const diffDays = Math.floor(diffMs / 86400000);
-
-    if (diffMinutes < 1) return '刚刚';
-    if (diffMinutes < 60) return `${diffMinutes}分钟前`;
-    if (diffHours < 24) return `${diffHours}小时前`;
-    if (diffDays < 7) return `${diffDays}天前`;
-    return date.toLocaleDateString();
-  };
-
-  /**
-   * 将 API 返回的 QINotification 转换为本地 Notification 格式
-   */
-  const transformNotification = (apiNotification: QINotification): Notification => ({
-    id: apiNotification.id,
-    type: mapNotificationType(apiNotification.type),
-    title: apiNotification.title,
-    content: apiNotification.content,
-    time: formatRelativeTime(apiNotification.createdAt),
-    read: apiNotification.read,
-  });
-
-  const loadNotifications = async () => {
+  const loadNotifications = useCallback(async () => {
     try {
       setLoading(true);
-      const response = await qualityInspectorApi.getNotifications({ page: 1, size: 20 });
+      if (!userId) {
+        throw new Error('登录信息不完整，请退出后重新登录');
+      }
+      const response = await qualityInspectorApi.getNotifications({
+        page: 1,
+        size: 20,
+        userId,
+      });
 
       if (response && response.content) {
         const transformedNotifications = response.content.map(transformNotification);
@@ -140,18 +136,45 @@ export default function QINotificationsScreen() {
     } finally {
       setLoading(false);
     }
-  };
+  }, [t, userId]);
+
+  useEffect(() => {
+    if (factoryId && userId) {
+      qualityInspectorApi.setFactoryId(factoryId);
+      void loadNotifications();
+    }
+  }, [factoryId, loadNotifications, userId]);
 
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
     await loadNotifications();
     setRefreshing(false);
-  }, []);
+  }, [loadNotifications]);
 
-  const handleMarkAsRead = (id: string) => {
-    setNotifications((prev) =>
-      prev.map((n) => (n.id === id ? { ...n, read: true } : n))
-    );
+  const handleMarkAsRead = async (notification: Notification) => {
+    if (notification.read || pendingReadIdsRef.current.has(notification.id)) {
+      return;
+    }
+
+    pendingReadIdsRef.current.add(notification.id);
+    setPendingReadIds((prev) => new Set(prev).add(notification.id));
+    try {
+      await qualityInspectorApi.markNotificationRead(notification.id);
+      setNotifications((prev) =>
+        prev.map((item) => (
+          item.id === notification.id ? { ...item, read: true } : item
+        )),
+      );
+    } catch {
+      Alert.alert('未能标记已读', '网络或服务器暂时不可用，请检查网络后重试。');
+    } finally {
+      pendingReadIdsRef.current.delete(notification.id);
+      setPendingReadIds((prev) => {
+        const next = new Set(prev);
+        next.delete(notification.id);
+        return next;
+      });
+    }
   };
 
   const handleMarkAllAsRead = () => {
@@ -159,8 +182,21 @@ export default function QINotificationsScreen() {
       { text: t('common.cancel'), style: 'cancel' },
       {
         text: t('common.confirm'),
-        onPress: () => {
-          setNotifications((prev) => prev.map((n) => ({ ...n, read: true })));
+        onPress: async () => {
+          if (!userId || markingAllRef.current) {
+            return;
+          }
+          markingAllRef.current = true;
+          setMarkingAll(true);
+          try {
+            await qualityInspectorApi.markAllNotificationsRead(userId);
+            setNotifications((prev) => prev.map((n) => ({ ...n, read: true })));
+          } catch {
+            Alert.alert('未能全部标记已读', '网络或服务器暂时不可用，请检查网络后重试。');
+          } finally {
+            markingAllRef.current = false;
+            setMarkingAll(false);
+          }
         },
       },
     ]);
@@ -210,10 +246,16 @@ export default function QINotificationsScreen() {
 
     return (
       <TouchableOpacity
+        testID={`qi-notification-${item.id}`}
         style={[styles.notificationItem, !item.read && styles.notificationUnread]}
-        onPress={() => handleMarkAsRead(item.id)}
+        onPress={() => void handleMarkAsRead(item)}
         onLongPress={() => handleDelete(item.id)}
         activeOpacity={0.7}
+        disabled={pendingReadIds.has(item.id)}
+        accessibilityState={{
+          disabled: pendingReadIds.has(item.id),
+          busy: pendingReadIds.has(item.id),
+        }}
       >
         <View style={[styles.iconContainer, { backgroundColor: iconConfig.bg }]}>
           <Ionicons name={iconConfig.icon} size={22} color={iconConfig.color} />
@@ -223,7 +265,9 @@ export default function QINotificationsScreen() {
             <Text style={[styles.notificationTitle, !item.read && styles.titleUnread]}>
               {item.title}
             </Text>
-            {!item.read && <View style={styles.unreadDot} />}
+            {!item.read && (
+              <View testID={`qi-notification-unread-${item.id}`} style={styles.unreadDot} />
+            )}
           </View>
           <Text style={styles.notificationText} numberOfLines={2}>
             {item.content}
@@ -263,8 +307,16 @@ export default function QINotificationsScreen() {
           {renderFilterTab('urgent', t('notifications.urgent'))}
         </View>
         {unreadCount > 0 && (
-          <TouchableOpacity style={styles.markAllBtn} onPress={handleMarkAllAsRead}>
-            <Text style={styles.markAllText}>{t('notifications.markAllRead')}</Text>
+          <TouchableOpacity
+            testID="qi-notifications-mark-all"
+            style={[styles.markAllBtn, markingAll && styles.markAllBtnDisabled]}
+            onPress={handleMarkAllAsRead}
+            disabled={markingAll}
+            accessibilityState={{ disabled: markingAll, busy: markingAll }}
+          >
+            <Text style={styles.markAllText}>
+              {markingAll ? '处理中…' : t('notifications.markAllRead')}
+            </Text>
           </TouchableOpacity>
         )}
       </View>
@@ -327,6 +379,7 @@ const styles = StyleSheet.create({
   filterTab: {
     flexDirection: 'row',
     alignItems: 'center',
+    minHeight: 44,
     paddingHorizontal: 14,
     paddingVertical: 8,
     borderRadius: 20,
@@ -365,9 +418,11 @@ const styles = StyleSheet.create({
     color: '#fff',
   },
   markAllBtn: {
+    minHeight: 44,
+    justifyContent: 'center',
     paddingHorizontal: 12,
-    paddingVertical: 6,
   },
+  markAllBtnDisabled: { opacity: 0.55 },
   markAllText: {
     fontSize: 14,
     color: QI_COLORS.primary,
