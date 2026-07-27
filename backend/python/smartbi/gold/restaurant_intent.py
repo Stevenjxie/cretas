@@ -3019,7 +3019,54 @@ async def _load_relevant_store_options(
     """
     (start_date, end_date), _ = _resolve_sales_date_range(query)
     if start_date is None or end_date is None:
-        return ()
+        # A partial store name can be ambiguous before the user supplies a
+        # time range ("日月光店的营收").  In that case the useful buttons are
+        # the factual stores matching that fragment, not the first three rows
+        # of the tenant catalogue.  Keep this branch narrow: the fragment must
+        # appear immediately before a supported store metric and the SQL still
+        # uses an exact substring parameter under the tenant RLS scope.
+        fragment_match = re.search(
+            r"(?P<fragment>[\u4e00-\u9fffA-Za-z0-9（）()·\-]{2,30}?"
+            r"(?:门店|店))(?:的)?(?:营收|营业额|销售额|销售|毛利|订单)",
+            query,
+        )
+        if fragment_match is None:
+            return ()
+        fragment = re.sub(
+            r"^(?:请问|帮我看|查看|想看|哪家|哪个|某家)",
+            "",
+            fragment_match.group("fragment"),
+        ).strip()
+        if len(fragment) < 2:
+            return ()
+        data_factory = demo_data_factory_for_code(
+            None,
+            factory_id,
+            store_scoped=True,
+        )
+        async with pool.acquire() as conn:
+            async with conn.transaction():
+                await conn.execute(
+                    "SELECT set_config('app.factory_id', $1, true)",
+                    data_factory,
+                )
+                rows = await conn.fetch(
+                    """
+                    SELECT s.name
+                      FROM dim_store s
+                     WHERE s.factory_id = $1
+                       AND POSITION($2::text IN s.name) > 0
+                     ORDER BY LENGTH(s.name), s.name
+                     LIMIT 20
+                    """,
+                    data_factory,
+                    fragment,
+                )
+        return tuple(
+            str(row["name"]).strip()[:80]
+            for row in rows
+            if row["name"] and str(row["name"]).strip()
+        )
 
     dish_name = extract_dish_candidate(query)
     data_factory = demo_data_factory_for_code(
@@ -4023,10 +4070,35 @@ async def parse_restaurant_query(
                 history=history,
                 semantic_first=semantic_first,
             )
-            continued = await _apply_store_scope_guard(pool, factory_id, continued)
             combined_query = (
                 f"{pending.get('original_query') or ''} {norm_query}".strip()
             )
+            if (
+                continued is not None
+                and continued.planner_authority == "trusted_context"
+                and not continued.store_scope
+                and not continued.store_options
+            ):
+                try:
+                    relevant_stores = await _load_relevant_store_options(
+                        pool,
+                        factory_id,
+                        combined_query,
+                    )
+                except Exception as exc:
+                    logger.warning(
+                        "[restaurant-intent] trusted continuation store "
+                        "suggestions unavailable: %s",
+                        exc,
+                    )
+                    relevant_stores = ()
+                if relevant_stores:
+                    continued = _seal_query_plan(replace(
+                        continued,
+                        store_options=relevant_stores,
+                        plan_hash="",
+                    ))
+            continued = await _apply_store_scope_guard(pool, factory_id, continued)
             if (
                 continued is not None
                 and continued.clarification_needed

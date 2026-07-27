@@ -139,6 +139,14 @@ class _FakeDbConn:
                 {"name": name}
                 for name in self._pool.relevant_store_names
             ]
+        if "FROM dim_store" in sql and "POSITION(" in sql:
+            self._pool.relevant_store_args = _args
+            fragment = str(_args[1])
+            return [
+                {"name": name}
+                for name in self._pool.store_names
+                if fragment in name
+            ]
         if "FROM dim_store" in sql:
             return [{"name": name} for name in self._pool.store_names]
         raise AssertionError(f"unexpected fetch SQL in fake pool: {sql}")
@@ -210,6 +218,30 @@ async def test_relevant_store_options_use_period_and_named_dish_activity():
     assert pool.active_factory == "RES_3101_009" or pool.active_factory is None
     assert pool.relevant_store_args[0] == "RES_3101_009"
     assert pool.relevant_store_args[3] == "米饭"
+
+
+@pytest.mark.asyncio
+async def test_relevant_store_options_without_time_use_only_matching_store_fragment():
+    pool = _FakeDbPool(
+        store_names=[
+            "兄弟土菜馆",
+            "鲜行者打浦桥日月光店",
+            "青花椒徐汇日月光店",
+            "有滋有味总部",
+        ],
+    )
+
+    names = await _load_relevant_store_options(
+        pool,
+        "DEMO_REST",
+        "日月光店的营收",
+    )
+
+    assert names == (
+        "鲜行者打浦桥日月光店",
+        "青花椒徐汇日月光店",
+    )
+    assert pool.relevant_store_args == ("RES_3101_009", "日月光店")
 
 
 @pytest.mark.asyncio
@@ -1598,6 +1630,12 @@ async def test_semantic_first_dish_time_store_buttons_survive_t3_outage():
     pool = _FakeDbPool(
         is_restaurant=True,
         store_names=[
+            "兄弟土菜馆",
+            "有滋有味总部",
+            "青花椒新世界新丸中心店",
+            "青花椒徐汇光启城店",
+        ],
+        relevant_store_names=[
             "青花椒新世界新丸中心店",
             "青花椒徐汇光启城店",
         ],
@@ -1654,6 +1692,12 @@ async def test_semantic_first_dish_time_store_buttons_survive_t3_outage():
     assert first.clarification_question == TIME_CLARIFICATION_QUESTION
     assert second.clarification_question == STORE_SCOPE_CLARIFICATION_QUESTION
     assert second.planner_authority == "trusted_context"
+    assert second.store_options == (
+        "青花椒新世界新丸中心店",
+        "青花椒徐汇光启城店",
+    )
+    assert "兄弟土菜馆" not in second.clarification_options
+    assert "有滋有味总部" not in second.clarification_options
     assert third.clarification_needed is False
     assert third.planner_authority == "trusted_context"
     assert third.intent == "RESTAURANT_OPS_STORE_MARGIN"

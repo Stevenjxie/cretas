@@ -128,8 +128,9 @@ CASES: List[Dict[str, Any]] = [
     {"q": "全部门店2025年全年营收多少", "contains": ["2025年"],
      "excludes": ["没有找到名为"]},
     {"q": "日月光店的营收",
-     "contains": ["哪家日月光店"],
-     "followup_contains": ["鲜行者打浦桥日月光店"]},
+     "contains": ["请问您指的是哪家", "日月光店"],
+     "followup_contains": ["鲜行者打浦桥日月光店", "青花椒徐汇日月光店"],
+     "followup_excludes": ["兄弟土菜馆", "有滋有味总部"]},
     {"q": "本月全部门店米饭和娃娃菜和招牌藤椒味(单人份)的销量",
      "contains": ["米饭", "娃娃菜", "招牌藤椒味(单人份)"],
      "excludes": ["请指定其中一道"]},
@@ -173,8 +174,9 @@ CASES: List[Dict[str, Any]] = [
          "请先把缺少的数据补齐",
      ]},
     # ── 操作模式：自然说法进入确认；数据筛选批量操作先列候选再逐项确认 ──
-    {"q": "下架卤炸牛肉串", "mode": "OPERATE",
-     "contains": ["下架菜品", "执行前需要确认"],
+    {"q": "下架卤炸牛肉串", "mode": "OPERATE", "preview_only": True,
+     "contains": ["确认后将下架菜品"],
+     "result_contains": ["卤炸牛肉串", "已下架"],
      "excludes": ["还没有把握直接回答", "请切换到【操作】页"]},
     {"q": "把最近7天全部门店销量最低的5道菜下架", "mode": "OPERATE",
      "contains": ["先查看候选菜品", "具体菜名", "只有确认后才会执行"],
@@ -222,6 +224,7 @@ def run_eval(base: str, only: Optional[str] = None) -> int:
         problems: List[str] = []
         case_started = time.time()
         flat = ""
+        flat_result = ""
         flat_followups = ""
         # 蓝绿切换/熔断窗口会产生瞬态失败 — 失败自动重试一次再定论。
         for attempt in (1, 2):
@@ -229,6 +232,8 @@ def run_eval(base: str, only: Optional[str] = None) -> int:
                 payload = {"userInput": q, "sessionId": sid}
                 if case.get("mode"):
                     payload["mode"] = case["mode"]
+                if case.get("preview_only"):
+                    payload["previewOnly"] = True
                 resp = _post_json(
                     f"{base}/api/mobile/{FACTORY_ID}/ai-intents/execute",
                     payload,
@@ -237,6 +242,11 @@ def run_eval(base: str, only: Optional[str] = None) -> int:
                 response_data = resp.get("data") or {}
                 message = str(response_data.get("message") or "")
                 result_data = response_data.get("resultData") or {}
+                flat_result = json.dumps(
+                    response_data,
+                    ensure_ascii=False,
+                    sort_keys=True,
+                )
                 followups = result_data.get("suggestedFollowups") or []
                 flat_followups = " ".join(
                     f"{item.get('label') or ''} {item.get('question') or ''}"
@@ -245,6 +255,7 @@ def run_eval(base: str, only: Optional[str] = None) -> int:
                 )
             except Exception as exc:  # noqa: BLE001 — eval must report, not crash
                 message = f"<TRANSPORT ERROR: {exc}>"
+                flat_result = ""
                 flat_followups = ""
             flat = " ".join(message.split())
             problems = []
@@ -254,6 +265,9 @@ def run_eval(base: str, only: Optional[str] = None) -> int:
             for marker in case.get("excludes", []) + _FORBIDDEN_EVERYWHERE:
                 if marker in flat:
                     problems.append(f"不应出现「{marker}」")
+            for marker in case.get("result_contains", []):
+                if marker not in flat_result:
+                    problems.append(f"结构化结果缺少「{marker}」")
             for marker in case.get("followup_contains", []):
                 if marker not in flat_followups:
                     problems.append(f"按钮缺少「{marker}」")
