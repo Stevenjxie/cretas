@@ -1821,7 +1821,7 @@ public class IntentExecutionOrchestrator {
                 "哪家分店", "哪个分店", "哪一个分店");
     }
 
-    private boolean containsAny(String input, String... terms) {
+    private static boolean containsAny(String input, String... terms) {
         if (input == null || terms == null) {
             return false;
         }
@@ -1884,8 +1884,13 @@ public class IntentExecutionOrchestrator {
      * \u4e2a\u5b57\u7b26\u5185\u662f\u5426\u7d27\u8ddf "\u53ea\u770b/\u53ea\u8981/\u53ea\u67e5/\u4f46\u770b/\u4f46\u8981/\u4f46\u67e5/\u800c\u770b/\u800c\u8981/\u800c\u67e5" \u7c7b\u5bf9\u6bd4\u5b50\u53e5 \u2014
      * \u547d\u4e2d\u5219\u8bf4\u660e\u662f\u7ef4\u5ea6\u7ea7\u5426\u5b9a (\u6392\u9664\u5b50\u96c6, \u4fdd\u7559\u53e6\u4e00\u4e2a\u5173\u6ce8\u5bf9\u8c61), \u653e\u884c\u8bed\u4e49\u89c4\u5212; \u5426\u5219\u624d\u662f
      * \u5426\u5b9a\u6574\u6761\u67e5\u8be2\u7684 veto\u3002
+     *
+     * <p>Card4 (2026-07-28 \u5165\u53e3\u6536\u655b): package-private static, \u65e0\u5b9e\u4f8b\u72b6\u6001,
+     * \u4e13\u95e8\u4e3a\u8ba9 {@code SseStreamingService} \u540c\u5305\u76f4\u63a5\u590d\u7528\u2014\u2014\u540c\u4e00\u4e2a\u5224\u65ad\u53ea\u80fd\u6709
+     * \u4e00\u4efd\u5b9e\u73b0, \u5426\u5219 SSE \u548c /execute \u4e24\u4e2a\u5165\u53e3\u5bf9\u540c\u4e00\u53e5\u8bdd\u7684 veto \u5224\u65ad\u4f1a\u56e0\u526f\u672c
+     * \u6f02\u79fb\u800c\u5206\u5c90 \u2014\u2014 \u6b63\u662f\u672c\u5361\u8981\u6d88\u706d\u7684\u75c5\u3002\u5207\u52ff\u518d\u590d\u5236\u4e00\u4efd\u3002
      */
-    private boolean hasExplicitReadVeto(String input) {
+    static boolean hasExplicitReadVeto(String input) {
         if (input == null || input.isBlank()) {
             return false;
         }
