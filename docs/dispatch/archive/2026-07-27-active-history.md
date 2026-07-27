@@ -1,5 +1,17 @@
 # Dispatch 完成归档 — 2026-07-27
 
+### `SOP-DUAL-LINE-SYNC-20260727`
+
+- **状态**：`merged`、双线生产发布与真实回答验收完成，scope 锁已释放。
+- **Base / 检查区间**：Base SHA `a55c9d71ab6239e3856bdf109194c6744b1f957d`；自动化基线 `77a0c419082d42ff999612d732636b928f48046e` 至本次功能合并。
+- **功能提交 / PR / main 合并提交**：SOP/回答合同 [#1864](https://github.com/Stevenjxie/cretas/pull/1864) → `4ef75ee79300d6dd2183915936818526b0cf5d94`；HTML 解析依赖补齐 [#1865](https://github.com/Stevenjxie/cretas/pull/1865) → `547bfc233bfcbece8a85425454eff8033499301d`。
+- **验证证据**：SOP 合同测试 `19/19`、`py_compile`、BeautifulSoup clean-runtime HTML 解析、`git diff --check` 与两个 PR 的 tracked-secret gate 通过；production preflight 通过，migration dry-run `would-apply=0 / skipped=122`。
+- **静态页面**：`/aiassist.html`、`/lsmsop/`、`/cysop/` 均从合入后的仓库精确文件做备份、传输哈希核对与原子替换；仓库/服务器/公网 SHA-256 分别为 `ec6c4ef53a2b29ffba936f7f0393d978397bf55afc280c1264577e6a96216d2c`、`a93242cb887956f68a3ac0290d4a6c09d379fb219213f3327bfe8c72c8258036`、`cd2091a29ba7aec22b198a324a230a52bd3a3991c3771116b9007fcbe5ef4b30`。回滚点：`/www/wwwroot/web-admin/aiassist.html.bak-auto-20260727T094503`、`/www/wwwroot/lsmsop/index.html.bak-auto-20260727T094503`、`/www/wwwroot/cysop/index.html.bak-auto-20260727T094503`。
+- **RAG 正式块**：仅重建本次变化的 canonical sources；`f006-production-full-chain-sop.md=42`，`restaurant-full-chain-sop.html=65`，`restaurant-product-manual.html=229`，`restaurant-metrics-glossary.html=169`，创建时间均为 `2026-07-27 09:57–09:58`，`.NEW=0`。工厂真实回答只引用 F006 source；餐饮只引用注册表中的三个餐饮 source。
+- **真实回答验收**：工厂 `3/3`（BOM/Workflow ACTIVE 门禁及发布启用、原料包装换算、Workflow 多产出与标签人工审核）；餐饮 `3/3`（中餐单菜毛利边界、同会话范围继承/覆盖、导览助手不做数值计算并指向 SmartBI）。固定基准口径与页面流程一致，无跨业务线引用。
+- **生产健康与写入**：Python exact `origin/main@547bfc233bfcbece8a85425454eff8033499301d` 发布完成；8083、Embedding 9090、PostgreSQL 5432 与数据库连接健康。未运行 test 环境发布；生产 ERP 业务写入 `0`。
+- **安全后续**：一次失败的环境继承诊断把生产进程环境显示到了当前私有 Codex 任务日志；未写入 tracked 文件或 PR，正文不记录任何值。该事件不影响本次双线页面/RAG/回答一致性验收，但相关可轮换凭证必须另项立即轮换。
+
 ### `FEATURE-QC-ENTRY-WEB-TRAINING-QCSOP-20260727-002`
 
 - **状态**：`merged`
