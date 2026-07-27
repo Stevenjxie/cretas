@@ -60,6 +60,8 @@ export interface ProcessPortGroup {
 export interface ProcessNodeData extends Record<string, unknown> {
   workProcessId: string;
   processName: string;
+  /** New drafts use actual report selections; legacy snapshots may omit this marker. */
+  reportingSelectionMode?: 'ACTUAL_IO';
   inputUnit: string;
   outputUnit: string;
   ports: ProcessPort[];

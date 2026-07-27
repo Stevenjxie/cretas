@@ -16,6 +16,7 @@ import com.cretas.aims.service.validation.ProductProcessWorkflowCatalogValidator
 import com.cretas.aims.service.validation.ProductProcessWorkflowValidator;
 import com.cretas.aims.service.workflow.PinnedWorkflowGraph;
 import com.cretas.aims.service.workflow.WorkflowRevisionSnapshotService;
+import com.cretas.aims.service.workflow.WorkflowActualIoSemantics;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -110,7 +111,10 @@ public class BomWorkflowRevisionService {
         }
         List<WorkflowBinding> matches = new ArrayList<>();
         List<BusinessException> targetFailures = new ArrayList<>();
-        for (ProductProcessWorkflowRevision revision : revisionRepository.findCurrentFactoryDraftRevisions(factoryId)) {
+        for (ProductProcessWorkflowRevision storedRevision :
+                revisionRepository.findCurrentFactoryDraftRevisions(factoryId)) {
+            ProductProcessWorkflowRevision revision =
+                    repairCurrentDraftRevisionIfNeeded(factoryId, storedRevision);
             try {
                 matches.add(binding(revision, recipe.getProductTypeId()));
             } catch (BusinessException error) {
@@ -137,6 +141,72 @@ public class BomWorkflowRevisionService {
         applyBinding(recipe, match);
         recipeRepository.saveAndFlush(recipe);
         return match;
+    }
+
+    /**
+     * A historical rollout could leave a mutable draft pointing at a stale/corrupt
+     * revision identity. Never rewrite that immutable row: recapture the current
+     * draft content and move only the draft pointer to the new valid revision.
+     */
+    private ProductProcessWorkflowRevision repairCurrentDraftRevisionIfNeeded(
+            String factoryId, ProductProcessWorkflowRevision revision) {
+        if (Objects.equals(revision.getRevisionHash(), revisionSnapshotService.hash(revision))) {
+            return revision;
+        }
+        ProductProcessWorkflow workflow = workflowRepository
+                .findByIdAndFactoryId(revision.getWorkflowId(), factoryId)
+                .filter(candidate -> candidate.getStatus() == ProductProcessWorkflow.Status.DRAFT)
+                .filter(candidate -> Objects.equals(candidate.getCurrentRevisionId(), revision.getId()))
+                .orElseThrow(() -> invalid(
+                        409,
+                        "Workflow 修订内容哈希不一致，且该修订已不是当前可修复草稿",
+                        "BOM_WORKFLOW_REVISION_HASH_INVALID"));
+        ProductProcessWorkflowRevision repaired;
+        String workflowHash = revisionSnapshotService.hash(workflow);
+        if (Objects.equals(workflowHash, revision.getRevisionHash())) {
+            boolean referenced = java.util.Arrays.stream(BomRecipe.Status.values())
+                    .anyMatch(status -> !recipeRepository
+                            .findByFactoryIdAndWorkflowRevisionIdAndStatusOrderByProductTypeIdAsc(
+                                    factoryId, revision.getId(), status)
+                            .isEmpty());
+            if (referenced) {
+                throw invalid(409,
+                        "Workflow 修订内容哈希不一致，且已有 BOM 固定该修订，不能自动修复",
+                        "BOM_WORKFLOW_REVISION_HASH_INVALID");
+            }
+            // This row never represented its advertised hash and has no consumer.
+            // Repair the invalid DRAFT snapshot in place without touching history.
+            revision.setProductTypeId(workflow.getProductTypeId());
+            revision.setDefinitionVersion(workflow.getDefinitionVersion());
+            revision.setSchemaVersion(workflow.getSchemaVersion());
+            revision.setNodesJson(workflow.getNodesJson());
+            revision.setEdgesJson(workflow.getEdgesJson());
+            revision.setViewportJson(workflow.getViewportJson());
+            ProductProcessWorkflowDTO repairedDefinition =
+                    revisionSnapshotService.definition(revision);
+            revision.setProcessCount((int) repairedDefinition.getNodes().stream()
+                    .filter(node -> "PROCESS".equals(node.getKind()))
+                    .count());
+            try {
+                validator.validateStructureComplete(repairedDefinition);
+                revision.setStructurallyComplete(true);
+                revision.setValidationMessage(null);
+            } catch (BusinessException error) {
+                revision.setStructurallyComplete(false);
+                revision.setValidationMessage(error.getMessage());
+            }
+            repaired = revisionRepository.saveAndFlush(revision);
+        } else {
+            repaired = revisionSnapshotService.capture(workflow);
+        }
+        if (!Objects.equals(repaired.getRevisionHash(), revisionSnapshotService.hash(repaired))) {
+            throw invalid(409, "Workflow 修订重新捕获后仍无法验证",
+                    "BOM_WORKFLOW_REVISION_HASH_INVALID");
+        }
+        workflow.setCurrentRevisionId(repaired.getId());
+        workflow.setCurrentRevisionHash(repaired.getRevisionHash());
+        workflowRepository.saveAndFlush(workflow);
+        return repaired;
     }
 
     private boolean containsFinishedSku(
@@ -642,6 +712,7 @@ public class BomWorkflowRevisionService {
         for (String nodeId : ancestors) {
             ProductProcessWorkflowDTO.Node node = nodeById.get(nodeId);
             if (node == null || !"PROCESS".equals(node.getKind()) || node.getData() == null) continue;
+            if (WorkflowActualIoSemantics.enabled(node)) continue;
             Object rawPorts = node.getData().get("ports");
             if (!(rawPorts instanceof List<?> ports)) continue;
             List<Map<?, ?>> outputs = ports.stream()
@@ -688,7 +759,8 @@ public class BomWorkflowRevisionService {
         }
 
         List<TerminalOutput> outputs = new ArrayList<>();
-        for (ProductProcessWorkflowDTO.Node terminal : terminals) {
+        for (int terminalIndex = 0; terminalIndex < terminals.size(); terminalIndex++) {
+            ProductProcessWorkflowDTO.Node terminal = terminals.get(terminalIndex);
             String productTypeId = string(terminal.getData(), "skuId");
             List<ProductProcessWorkflowDTO.Edge> producerEdges = incoming.getOrDefault(terminal.getId(), List.of());
             if (productTypeId == null || producerEdges.size() != 1) {
@@ -700,7 +772,12 @@ public class BomWorkflowRevisionService {
             Map<?, ?> outputPort = processPort(process, producerEdge.getSourceHandle(), "OUTPUT");
             String roleValue = value(outputPort.get("outputRole"));
             BigDecimal ratio = decimal(outputPort.get("costAllocationRatio"));
-            if (terminals.size() == 1) {
+            if (WorkflowActualIoSemantics.enabled(process)) {
+                // Compatibility-only storage metadata. It is not authored or shown to
+                // users and does not control which outputs may be reported.
+                roleValue = terminalIndex == 0 ? "MAIN" : "BY_PRODUCT";
+                ratio = terminalIndex == 0 ? new BigDecimal("100") : BigDecimal.ZERO;
+            } else if (terminals.size() == 1) {
                 roleValue = roleValue == null ? "MAIN" : roleValue;
                 ratio = ratio == null ? new BigDecimal("100") : ratio;
             }

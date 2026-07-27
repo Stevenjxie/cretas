@@ -29,6 +29,7 @@ import java.util.function.Consumer;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
@@ -142,6 +143,21 @@ class ProductProcessWorkflowServiceImplTest {
     void saveDraftSerializesAndReadsDefinition() {
         ProductProcessWorkflowDTO request = validDefinition();
         request.setLockVersion(null);
+        request.getNodes().stream()
+                .filter(node -> "PROCESS".equals(node.getKind()))
+                .findFirst()
+                .ifPresent(node -> {
+                    node.getData().put("portGroups", List.of(Map.of("id", "legacy")));
+                    @SuppressWarnings("unchecked")
+                    List<Map<String, Object>> ports =
+                            (List<Map<String, Object>>) node.getData().get("ports");
+                    ports.stream()
+                            .filter(port -> "OUTPUT".equals(port.get("direction")))
+                            .forEach(port -> {
+                                port.put("outputRole", "MAIN");
+                                port.put("costAllocationRatio", 100);
+                            });
+                });
         when(repository.findFirstByFactoryIdAndProductTypeIdAndStatusOrderByDefinitionVersionDesc(
                 FACTORY_ID, PRODUCT_ID, ProductProcessWorkflow.Status.DRAFT))
                 .thenReturn(Optional.empty());
@@ -161,6 +177,11 @@ class ProductProcessWorkflowServiceImplTest {
         assertEquals(6, saved.getEdges().size());
         assertEquals("kg", saved.getNodes().get(2).getData().get("inputUnit"));
         assertEquals(ProductProcessWorkflow.Status.DRAFT.name(), saved.getStatus());
+        String savedNodes = captor.getAllValues().get(0).getNodesJson();
+        assertTrue(savedNodes.contains("\"reportingSelectionMode\":\"ACTUAL_IO\""));
+        assertFalse(savedNodes.contains("\"portGroups\""));
+        assertFalse(savedNodes.contains("\"outputRole\""));
+        assertFalse(savedNodes.contains("\"costAllocationRatio\""));
         verify(catalogValidator, never()).validateForPublish(any(), any(), any());
     }
 
@@ -189,6 +210,8 @@ class ProductProcessWorkflowServiceImplTest {
         assertEquals(draft.getNodesJson(), snapshot.getNodesJson());
         assertEquals(ProductProcessWorkflow.Status.DRAFT.name(), nextDraft.getStatus());
         assertEquals(3, nextDraft.getVersion());
+        assertNull(nextDraft.getRevisionId());
+        assertNull(nextDraft.getRevisionHash());
         verify(catalogValidator, never()).validateForPublish(any(), any(), any());
     }
 
@@ -604,6 +627,7 @@ class ProductProcessWorkflowServiceImplTest {
         Map<String, Object> data = new LinkedHashMap<>();
         data.put("workProcessId", "WP-" + id);
         data.put("processName", name);
+        data.put("reportingSelectionMode", "ACTUAL_IO");
         data.put("inputUnit", "kg");
         data.put("outputUnit", "kg");
         data.put("ports", new ArrayList<>(ports));

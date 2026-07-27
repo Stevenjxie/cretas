@@ -371,6 +371,45 @@ class ProcessSheetWorkflowRowValidationTest {
     }
 
     @Test
+    @DisplayName("实际投入只能选择计划固定 BOM 的主料或替代料")
+    void actualInput_acceptsPinnedBomSubstituteAndRejectsUnlistedMaterial() throws Throwable {
+        PortDescriptor input = PortDescriptor.builder()
+                .workflowPortId("in-a")
+                .materialName("主料")
+                .skuId("RAW-MAIN")
+                .allowedSkuIds(List.of("RAW-MAIN", "RAW-SUB"))
+                .unit("kg")
+                .required(false)
+                .finished(false)
+                .selectionGroupId("inputs")
+                .selectionGroupLabel("实际投入")
+                .selectionGroupMode("AT_LEAST_ONE")
+                .selectionGroupMinSelections(1)
+                .selectionGroupMaxSelections(1)
+                .build();
+        PortDescriptor output = ungroupedOutput("out-a", "PT-A");
+        ProcessDescriptor descriptor = ProcessDescriptor.builder()
+                .processOrder(9)
+                .inputs(List.of(input))
+                .output(output)
+                .outputs(List.of(output))
+                .build();
+        WorkflowClerkSheetService svc = workflowService(descriptor);
+
+        ProcessSheetRowRequest substitute =
+                multiRequest(9, outputLine("out-a", "PT-A"));
+        substitute.setMaterialInputTotals(List.of(materialInput("in-a", "RAW-SUB")));
+        assertDoesNotThrow(() -> invokeSubmission(newImpl(svc), substitute));
+
+        ProcessSheetRowRequest outsideBom =
+                multiRequest(9, outputLine("out-a", "PT-A"));
+        outsideBom.setMaterialInputTotals(List.of(materialInput("in-a", "RAW-OTHER")));
+        BusinessException error = assertThrows(BusinessException.class,
+                () -> invokeSubmission(newImpl(svc), outsideBom));
+        assertEquals("WORKFLOW_ROW_INPUT_SKU_NOT_AUTHORIZED", error.getErrorCode());
+    }
+
+    @Test
     @DisplayName("OPTIONAL 多产出正式报工只统计正数量已选端口")
     void optionalMultiOutput_onlyPositiveSelectionCounts() throws Throwable {
         PortDescriptor input = groupedPort("in-a", "RAW-A", "OPTIONAL", 0, 1, false);

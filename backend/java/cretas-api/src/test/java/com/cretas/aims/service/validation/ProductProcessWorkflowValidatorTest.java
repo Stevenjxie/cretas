@@ -132,6 +132,27 @@ class ProductProcessWorkflowValidatorTest {
         assertEquals("PRODUCT_PROCESS_WORKFLOW_OUTPUT_CONTRACT_INVALID", error.getErrorCode());
     }
 
+    @Test
+    void actualIoReportingDoesNotRequireStaticOutputRolesOrAllocation() {
+        ProductProcessWorkflowDTO definition = validMultiOutputPublishDefinition();
+        definition.getNodes().stream()
+                .filter(node -> "PROCESS".equals(node.getKind()))
+                .forEach(node -> {
+                    node.getData().put("reportingSelectionMode", "ACTUAL_IO");
+                    @SuppressWarnings("unchecked")
+                    List<Map<String, Object>> ports =
+                            (List<Map<String, Object>>) node.getData().get("ports");
+                    ports.stream()
+                            .filter(port -> "OUTPUT".equals(port.get("direction")))
+                            .forEach(port -> {
+                                port.remove("outputRole");
+                                port.remove("costAllocationRatio");
+                            });
+                });
+
+        assertDoesNotThrow(() -> validator.validateStructureComplete(definition));
+    }
+
     private ProductProcessWorkflowDTO validMultiInputDefinition() {
         ProductProcessWorkflowDTO definition = new ProductProcessWorkflowDTO();
         definition.setNodes(new ArrayList<>(List.of(

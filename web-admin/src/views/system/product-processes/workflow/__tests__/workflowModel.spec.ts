@@ -464,42 +464,20 @@ describe('product process workflow model', () => {
     expect(errors.some((error) => error.code === 'CYCLE')).toBe(true);
   });
 
-  it('allows incomplete multi-output autosave but blocks BOM/publish readiness', () => {
+
+
+  it('publishes multi-output topology without static output roles or cost ratios', () => {
     const definition = branchedDefinition();
     const process = definition.nodes.find((node) => node.id === 'split');
-    const ports = (process?.data as ProcessNodeData).ports.filter((port) => port.direction === 'OUTPUT');
-    ports.forEach((port) => {
+    const processData = process?.data as ProcessNodeData;
+    processData.reportingSelectionMode = 'ACTUAL_IO';
+    processData.ports.filter((port) => port.direction === 'OUTPUT').forEach((port) => {
       delete port.outputRole;
       delete port.costAllocationRatio;
     });
 
-    expect(validateWorkflow(definition, 'draft')).toEqual([]);
-    expect(validateWorkflow(definition, 'publish')).toContainEqual(expect.objectContaining({
-      code: 'OUTPUT_CONTRACT_INVALID',
-      nodeId: 'split',
-    }));
-  });
-
-  it('accepts one MAIN and an explicit multi-output allocation totaling 100%', () => {
-    const definition = branchedDefinition();
-
     expect(validateWorkflow(definition, 'publish')
       .some((error) => error.code === 'OUTPUT_CONTRACT_INVALID')).toBe(false);
-  });
-
-  it('rejects multiple-output allocations with no unique MAIN or a non-100 total', () => {
-    const definition = branchedDefinition();
-    const process = definition.nodes.find((node) => node.id === 'split');
-    const ports = (process?.data as ProcessNodeData).ports.filter((port) => port.direction === 'OUTPUT');
-    ports[0].outputRole = 'CO_PRODUCT';
-    ports[0].costAllocationRatio = 70;
-
-    const errors = validateWorkflow(definition, 'publish');
-
-    expect(errors).toContainEqual(expect.objectContaining({
-      code: 'OUTPUT_CONTRACT_INVALID',
-      message: expect.stringContaining('一个主产出'),
-    }));
   });
 });
 

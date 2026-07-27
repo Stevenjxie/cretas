@@ -157,6 +157,8 @@ public class ProductProcessWorkflowRuntimeCompiler {
                 outputUnit,
                 standardTime,
                 reportingRequired,
+                WorkflowActualIoSemantics.ACTUAL_IO.equals(data.get(
+                        WorkflowActualIoSemantics.MODE_FIELD)),
                 ports,
                 portGroups,
                 conversionRule);
@@ -478,10 +480,12 @@ public class ProductProcessWorkflowRuntimeCompiler {
                 : processData.conversionRule();
         for (int index = 0; index < processData.ports().size(); index++) {
             DeclaredPort declaredPort = processData.ports().get(index);
-            DeclaredPortGroup selectionGroup = processData.portGroups().stream()
-                    .filter(group -> group.portIds().contains(declaredPort.id()))
-                    .findFirst()
-                    .orElse(null);
+            DeclaredPortGroup selectionGroup = processData.actualIoReporting()
+                    ? actualIoSelectionGroup(workflowNodeId, declaredPort, processData.ports())
+                    : processData.portGroups().stream()
+                            .filter(group -> group.portIds().contains(declaredPort.id()))
+                            .findFirst()
+                            .orElse(null);
             ProductProcessWorkflowDTO.Node materialNode = nodesById.get(declaredPort.materialNodeId());
             if (materialNode == null) {
                 throw runtimeInvalid(
@@ -520,6 +524,26 @@ public class ProductProcessWorkflowRuntimeCompiler {
                     selectionGroup == null ? null : selectionGroup.minSelections(),
                     selectionGroup == null ? null : selectionGroup.maxSelections()));
         }
+    }
+
+    private DeclaredPortGroup actualIoSelectionGroup(
+            String workflowNodeId,
+            DeclaredPort declaredPort,
+            List<DeclaredPort> ports) {
+        List<String> portIds = ports.stream()
+                .filter(port -> declaredPort.direction().equals(port.direction()))
+                .sorted(Comparator.comparingInt(DeclaredPort::ordinal))
+                .map(DeclaredPort::id)
+                .toList();
+        String directionLabel = "INPUT".equals(declaredPort.direction()) ? "实际投入" : "实际产出";
+        return new DeclaredPortGroup(
+                "actual-io:" + workflowNodeId + ":" + declaredPort.direction().toLowerCase(),
+                declaredPort.direction(),
+                directionLabel,
+                "AT_LEAST_ONE",
+                1,
+                portIds.size(),
+                portIds);
     }
 
     private String serializeRuntimeNodes(
@@ -655,6 +679,7 @@ public class ProductProcessWorkflowRuntimeCompiler {
             String outputUnit,
             Integer standardTime,
             Boolean reportingRequired,
+            boolean actualIoReporting,
             List<DeclaredPort> ports,
             List<DeclaredPortGroup> portGroups,
             ConversionRule conversionRule) {

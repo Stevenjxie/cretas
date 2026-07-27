@@ -159,32 +159,7 @@ describe('WorkflowProcessNode output gestures', () => {
 });
 
 describe('WorkflowProcessNode 系统研判 + 数量关系 (P2)', () => {
-  it('shows a single-in/single-out 系统研判 line without the multi-source/multi-output suffixes', () => {
-    const wrapper = mountNode();
-    const badge = wrapper.get('[data-testid="system-inference"]');
 
-    expect(badge.text()).toContain('系统研判');
-    expect(badge.text()).toContain('1 入');
-    expect(badge.text()).toContain('1 出');
-    expect(badge.text()).not.toContain('多来源合流');
-    expect(badge.text()).not.toContain('同时多产出');
-    expect(badge.text()).toContain('增删左右的来源/产出 Cell 后自动更新');
-  });
-
-  it('reflects multi-input/multi-output port counts with the 合流/多产出 suffixes', () => {
-    const ports: ProcessPort[] = [
-      { id: 'in-1', direction: 'INPUT', materialName: '猪前腿肉', unit: 'kg', ordinal: 0 },
-      { id: 'in-2', direction: 'INPUT', materialName: '猪五花肉', unit: 'kg', ordinal: 1 },
-      { id: 'out-1', direction: 'OUTPUT', materialName: '腌制猪肉', unit: 'kg', ordinal: 0 },
-      { id: 'out-2', direction: 'OUTPUT', materialName: '猪皮下脚料', unit: 'kg', ordinal: 1 },
-      { id: 'out-3', direction: 'OUTPUT', materialName: '肉汁', unit: 'kg', ordinal: 2 },
-    ];
-    const wrapper = mountNode(true, withPorts({ ports }));
-    const badge = wrapper.get('[data-testid="system-inference"]');
-
-    expect(badge.text()).toContain('2 入（多来源合流）');
-    expect(badge.text()).toContain('3 出（同时多产出）');
-  });
 
   it('shows unit flow without inventing an input-to-output quantity', () => {
     const wrapper = mountNode();
@@ -195,49 +170,25 @@ describe('WorkflowProcessNode 系统研判 + 数量关系 (P2)', () => {
     expect(wrapper.findComponent({ name: 'ElInputNumber' }).exists()).toBe(false);
   });
 
-  it('renders every multi-output unit independently and exposes explicit cost allocation inputs', () => {
-    const ports: ProcessPort[] = [
-      { id: 'in-1', direction: 'INPUT', unit: 'kg', quantityMode: 'FIXED_RATIO', standardQuantity: 1, ordinal: 0 },
-      {
-        id: 'out-1', direction: 'OUTPUT', materialName: '瘦肉出品', unit: 'g',
-        quantityMode: 'AUTO_CONVERT', outputRole: 'MAIN', costAllocationRatio: 60, ordinal: 0,
-      },
-      {
-        id: 'out-2', direction: 'OUTPUT', materialName: '装盒成品', unit: '盒',
-        quantityMode: 'FIXED_RATIO', standardQuantity: 2,
-        outputRole: 'CO_PRODUCT', costAllocationRatio: 40, ordinal: 1,
-      },
-    ];
-    const wrapper = mountNode(true, withPorts({ ports }));
 
-    expect(wrapper.findAll('[data-testid="unit-flow-input"]')).toHaveLength(1);
-    expect(wrapper.findAll('[data-testid="unit-flow-output"]')).toHaveLength(1);
-    expect(wrapper.get('[data-testid="unit-flow-output"]').text()).toContain('主产出 g → 本产出 盒');
-    expect(wrapper.findAllComponents({ name: 'ElInputNumber' })).toHaveLength(2);
-    expect(wrapper.text()).toContain('合计必须为 100%');
-  });
 
-  it('emits role and allocation changes as serializable output-port fields', async () => {
+  it('keeps input and output relations in formal reporting instead of Workflow', () => {
     const ports: ProcessPort[] = [
-      { id: 'in-1', direction: 'INPUT', unit: 'kg', ordinal: 0 },
+      { id: 'in-1', direction: 'INPUT', materialName: '主料入口', unit: 'kg', ordinal: 0 },
+      { id: 'in-2', direction: 'INPUT', materialName: '替代入口', unit: 'kg', ordinal: 1 },
       { id: 'out-1', direction: 'OUTPUT', materialName: '400g 成品', unit: '袋', ordinal: 0 },
       { id: 'out-2', direction: 'OUTPUT', materialName: '300g 成品', unit: '袋', ordinal: 1 },
     ];
     const wrapper = mountNode(true, withPorts({ ports }));
-    const firstContract = wrapper.get('[data-testid="output-contract-out-1"]');
 
-    firstContract.findComponent({ name: 'ElSelect' }).vm.$emit('change', 'MAIN');
-    await wrapper.vm.$nextTick();
-    firstContract.findComponent({ name: 'ElInputNumber' }).vm.$emit('change', 60);
-    await wrapper.vm.$nextTick();
-
-    const patches = wrapper.emitted('update')?.map((event) => event[0] as Partial<ProcessNodeData>) ?? [];
-    expect(patches[0].ports?.find((port) => port.id === 'out-1')).toMatchObject({
-      outputRole: 'MAIN',
-    });
-    expect(patches[1].ports?.find((port) => port.id === 'out-1')).toMatchObject({
-      costAllocationRatio: 60,
-    });
+    expect(wrapper.get('[data-testid="system-inference"]').text())
+      .toContain('2 个投入 · 2 个产出');
+    expect(wrapper.text()).toContain('投入和产出至少各一项');
+    expect(wrapper.text()).toContain('主料和替代料由生产计划固定的 BOM 自动限定');
+    expect(wrapper.text()).toContain('不配置产出关系、主副角色或固定比例');
+    expect(wrapper.find('[data-testid="input-relation-select"]').exists()).toBe(false);
+    expect(wrapper.find('[data-testid="output-port-relation"]').exists()).toBe(false);
+    expect(wrapper.find('[data-testid^="output-contract-"]').exists()).toBe(false);
   });
 
   it('does not offer a generic conversion mode selector', () => {
@@ -375,61 +326,5 @@ describe('WorkflowProcessNode 系统研判 + 数量关系 (P2)', () => {
     expect(wrapper.get('[data-testid="output-unit-chip"]').text()).toBe('kg');
   });
 
-  it('shows BOM-pending instead of guessing a free-choice input rule', async () => {
-    const ports: ProcessPort[] = [
-      { id: 'in-1', direction: 'INPUT', unit: 'kg', ordinal: 0 },
-      { id: 'in-2', direction: 'INPUT', unit: 'kg', ordinal: 1 },
-      { id: 'out-1', direction: 'OUTPUT', unit: 'kg', ordinal: 0 },
-      { id: 'out-2', direction: 'OUTPUT', unit: 'kg', ordinal: 1 },
-    ];
-    const wrapper = mountNode(true, withPorts({ ports, portGroups: [] }));
 
-    expect(wrapper.get('[data-testid="input-requirement-pending"]').text()).toBe('待 BOM 配置');
-    expect(wrapper.find('[data-testid="input-relation-select"]').exists()).toBe(false);
-    expect(wrapper.get('[data-testid="output-port-relation"]').text()).toContain('全部产出');
-    expect(wrapper.get('[data-testid="input-relation-help"]').text()).toBe('BOM 尚未返回完整投入要求，暂不推断必选关系。');
-    expect(wrapper.get('[data-testid="output-relation-help"]').text()).toBe('所有产出都会生成。');
-    wrapper.get('[data-testid="output-port-relation"]')
-      .findComponent({ name: 'ElSelect' }).vm.$emit('change', 'OPTIONAL');
-    await wrapper.vm.$nextTick();
-
-    const patch = wrapper.emitted('update')?.[0]?.[0] as Partial<ProcessNodeData>;
-    expect(patch.portGroups).toEqual([{
-      id: 'port-group:output:all', direction: 'OUTPUT', label: '产出关系', mode: 'OPTIONAL',
-      minSelections: 0, maxSelections: 2, portIds: ['out-1', 'out-2'],
-    }]);
-  });
-
-  it('renders structured BOM input requirement groups without rewriting their modes', () => {
-    const ports: ProcessPort[] = [
-      { id: 'in-required', direction: 'INPUT', unit: 'kg', ordinal: 0 },
-      { id: 'in-choice-a', direction: 'INPUT', unit: 'kg', ordinal: 1 },
-      { id: 'in-choice-b', direction: 'INPUT', unit: 'kg', ordinal: 2 },
-      { id: 'in-optional', direction: 'INPUT', unit: 'kg', ordinal: 3 },
-      { id: 'out-1', direction: 'OUTPUT', unit: 'box', ordinal: 0 },
-    ];
-    const wrapper = mountNode(true, withPorts({
-      ports,
-      inputRequirementGroups: [
-        {
-          id: 'required', direction: 'INPUT', label: '主料', mode: 'ALL_REQUIRED',
-          minSelections: 1, maxSelections: 1, portIds: ['in-required'],
-        },
-        {
-          id: 'choice', direction: 'INPUT', label: '辅料候选', mode: 'EXACTLY_ONE',
-          minSelections: 1, maxSelections: 1, portIds: ['in-choice-a', 'in-choice-b'],
-        },
-        {
-          id: 'optional', direction: 'INPUT', label: '可选料', mode: 'OPTIONAL',
-          minSelections: 0, maxSelections: 1, portIds: ['in-optional'],
-        },
-      ],
-    }));
-
-    const text = wrapper.get('[data-testid="input-requirement-groups"]').text();
-    expect(text).toContain('必需');
-    expect(text).toContain('必选其一');
-    expect(text).toContain('可选');
-    expect(wrapper.find('[data-testid="input-requirement-pending"]').exists()).toBe(false);
-  });
 });

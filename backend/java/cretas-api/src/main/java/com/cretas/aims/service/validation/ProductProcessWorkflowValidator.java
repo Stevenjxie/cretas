@@ -2,6 +2,7 @@ package com.cretas.aims.service.validation;
 
 import com.cretas.aims.dto.ProductProcessWorkflowDTO;
 import com.cretas.aims.exception.BusinessException;
+import com.cretas.aims.service.workflow.WorkflowActualIoSemantics;
 import org.springframework.stereotype.Component;
 
 import java.math.BigDecimal;
@@ -148,7 +149,9 @@ public class ProductProcessWorkflowValidator {
             if (!hasInput || !hasOutput) {
                 invalid("工序必须同时包含投入和产出端口: " + displayName(node));
             }
-            validateMultiOutputContract(node, outputPorts);
+            if (!WorkflowActualIoSemantics.enabled(node)) {
+                validateMultiOutputContract(node, outputPorts);
+            }
         }
     }
 

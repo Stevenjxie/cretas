@@ -2,6 +2,7 @@ package com.cretas.aims.service.bom;
 
 import com.cretas.aims.dto.ProductProcessWorkflowDTO;
 import com.cretas.aims.dto.bom.BomWorkflowRevisionPinRequest;
+import com.cretas.aims.entity.ProductProcessWorkflow;
 import com.cretas.aims.entity.ProductProcessWorkflowRevision;
 import com.cretas.aims.entity.ProductProcessWorkflowActivation;
 import com.cretas.aims.entity.bom.BomRecipe;
@@ -176,6 +177,77 @@ class BomWorkflowRevisionServiceTest {
         assertEquals("BOM_WORKFLOW_MULTI_OUTPUT_CONTRACT_REQUIRED", error.getErrorCode());
         assertTrue(error.getMessage().contains("角色和成本分摊比例"));
         verify(recipeRepository, never()).saveAndFlush(draft);
+    }
+
+    @Test
+    void actualIoDraftAutoBindsWithoutUserAuthoredOutputRolesOrRatios() throws Exception {
+        BomRecipe draft = recipe(null);
+        ProductProcessWorkflowDTO definition = oneToTwo(false);
+        definition.getNodes().stream()
+                .filter(node -> "PROCESS".equals(node.getKind()))
+                .forEach(node -> node.getData().put("reportingSelectionMode", "ACTUAL_IO"));
+        ProductProcessWorkflowRevision revision = revision(definition);
+        revision.setRevisionHash(snapshotService.hash(revision));
+        when(revisionRepository.findCurrentFactoryDraftRevisions(FACTORY))
+                .thenReturn(List.of(revision));
+        when(recipeRepository.saveAndFlush(draft)).thenReturn(draft);
+
+        BomWorkflowRevisionService.WorkflowBinding binding =
+                service.autoBindUniqueDraft(FACTORY, draft);
+
+        assertEquals(revision.getId(), draft.getWorkflowRevisionId());
+        assertEquals("finished", draft.getTargetTerminalNodeId());
+        assertEquals(PRODUCT, binding.target().productTypeId());
+        verify(recipeRepository).saveAndFlush(draft);
+    }
+
+    @Test
+    void currentUnreferencedDraftRepairsCorruptSnapshotBeforeAutoBinding() throws Exception {
+        BomRecipe draft = recipe(null);
+        ProductProcessWorkflowDTO definition = oneToOne();
+        definition.getNodes().stream()
+                .filter(node -> "PROCESS".equals(node.getKind()))
+                .forEach(node -> node.getData().put("reportingSelectionMode", "ACTUAL_IO"));
+        ProductProcessWorkflowRevision revision = revision(definition);
+
+        ProductProcessWorkflow workflow = new ProductProcessWorkflow();
+        workflow.setId(revision.getWorkflowId());
+        workflow.setFactoryId(FACTORY);
+        workflow.setProductTypeId(revision.getProductTypeId());
+        workflow.setStatus(ProductProcessWorkflow.Status.DRAFT);
+        workflow.setDefinitionVersion(revision.getDefinitionVersion());
+        workflow.setSchemaVersion(revision.getSchemaVersion());
+        workflow.setNodesJson(revision.getNodesJson());
+        workflow.setEdgesJson(revision.getEdgesJson());
+        workflow.setViewportJson(revision.getViewportJson());
+        workflow.setCurrentRevisionId(revision.getId());
+        String advertisedHash = snapshotService.hash(workflow);
+        workflow.setCurrentRevisionHash(advertisedHash);
+        revision.setRevisionHash(advertisedHash);
+        revision.setNodesJson("[]");
+
+        when(revisionRepository.findCurrentFactoryDraftRevisions(FACTORY))
+                .thenReturn(List.of(revision));
+        when(workflowRepository.findByIdAndFactoryId(revision.getWorkflowId(), FACTORY))
+                .thenReturn(Optional.of(workflow));
+        for (BomRecipe.Status status : BomRecipe.Status.values()) {
+            when(recipeRepository
+                    .findByFactoryIdAndWorkflowRevisionIdAndStatusOrderByProductTypeIdAsc(
+                            FACTORY, revision.getId(), status))
+                    .thenReturn(List.of());
+        }
+        when(revisionRepository.saveAndFlush(revision)).thenReturn(revision);
+        when(workflowRepository.saveAndFlush(workflow)).thenReturn(workflow);
+        when(recipeRepository.saveAndFlush(draft)).thenReturn(draft);
+
+        BomWorkflowRevisionService.WorkflowBinding binding =
+                service.autoBindUniqueDraft(FACTORY, draft);
+
+        assertEquals(advertisedHash, snapshotService.hash(revision));
+        assertEquals(revision.getId(), binding.revision().getId());
+        assertEquals(revision.getId(), draft.getWorkflowRevisionId());
+        verify(revisionRepository).saveAndFlush(revision);
+        verify(workflowRepository).saveAndFlush(workflow);
     }
 
     @Test

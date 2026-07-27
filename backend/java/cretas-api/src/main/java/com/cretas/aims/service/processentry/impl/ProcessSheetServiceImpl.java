@@ -3493,7 +3493,7 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
             for (ProcessSheetRowRequest.MaterialInputTotal input : req.getMaterialInputTotals()) {
                 com.cretas.aims.dto.workflow.WorkflowClerkSheetConfigDTO.PortDescriptor port =
                         resolveInputPort(byId, ports, input.getWorkflowPortId());
-                assertInputSku(port, input.getMaterialTypeId());
+                resolveAllowedInputSku(port, input.getMaterialTypeId());
                 String portUnit = requireWorkflowPortUnit(port.getUnit(), "投入");
                 assertConfiguredUnit(factoryId, input.getUnit(), portUnit, "投入");
                 assertNonNegativeWorkflowInput(input.getQuantity());
@@ -3509,9 +3509,9 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
             for (ProcessSheetRowRequest.RawInput input : req.getRawMaterialInputs()) {
                 com.cretas.aims.dto.workflow.WorkflowClerkSheetConfigDTO.PortDescriptor port =
                         resolveInputPort(byId, ports, input.getWorkflowPortId());
-                assertInputSku(port, input.getSkuId());
+                String selectedSkuId = resolveAllowedInputSku(port, input.getSkuId());
                 assertNonNegativeWorkflowInput(input.getQuantity());
-                input.setSkuId(port.getSkuId());
+                input.setSkuId(selectedSkuId);
                 input.setWorkflowPortId(port.getWorkflowPortId());
                 if (input.getMaterialNodeId() == null) input.setMaterialNodeId(port.getMaterialNodeId());
                 if (input.getQuantity() != null && input.getQuantity().signum() > 0) {
@@ -3523,9 +3523,9 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
             for (ProcessSheetRowRequest.UpstreamRef input : req.getUpstreamSources()) {
                 com.cretas.aims.dto.workflow.WorkflowClerkSheetConfigDTO.PortDescriptor port =
                         resolveInputPort(byId, ports, input.getWorkflowPortId());
-                assertInputSku(port, input.getSkuId());
+                String selectedSkuId = resolveAllowedInputSku(port, input.getSkuId());
                 assertNonNegativeWorkflowInput(input.getFeedQuantityKg());
-                input.setSkuId(port.getSkuId());
+                input.setSkuId(selectedSkuId);
                 input.setWorkflowPortId(port.getWorkflowPortId());
                 if (input.getMaterialNodeId() == null) input.setMaterialNodeId(port.getMaterialNodeId());
                 if (input.getFeedQuantityKg() != null && input.getFeedQuantityKg().signum() > 0) {
@@ -3587,18 +3587,24 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
         return port;
     }
 
-    private static void assertInputSku(
+    private static String resolveAllowedInputSku(
             com.cretas.aims.dto.workflow.WorkflowClerkSheetConfigDTO.PortDescriptor port,
             String actualSkuId) {
-        if (actualSkuId != null && !actualSkuId.isBlank()
-                && port.getSkuId() != null && !port.getSkuId().equals(actualSkuId)) {
-            throw new BusinessException(409, "投入「"
-                    + (port.getMaterialName() != null ? port.getMaterialName() : port.getWorkflowPortId())
-                    + "」SKU 与 Workflow 端口绑定不一致")
-                    .withCode("WORKFLOW_ROW_INPUT_SKU_MISMATCH")
-                    .withHint("请刷新逐道录入页面后重新填写")
-                    .withSeverity("BLOCKING");
+        String selectedSkuId = actualSkuId == null || actualSkuId.isBlank()
+                ? port.getSkuId()
+                : actualSkuId;
+        List<String> allowedSkuIds = port.getAllowedSkuIds() == null
+                || port.getAllowedSkuIds().isEmpty()
+                ? (port.getSkuId() == null ? List.of() : List.of(port.getSkuId()))
+                : port.getAllowedSkuIds();
+        if (selectedSkuId == null || !allowedSkuIds.contains(selectedSkuId)) {
+            throw new BusinessException(409, "本次投入不属于计划固定 BOM 允许的主料或替代料")
+                    .withCode("WORKFLOW_ROW_INPUT_SKU_NOT_AUTHORIZED")
+                    .withHint("请刷新报工页面，并从当前工序显示的可用批次中选择")
+                    .withSeverity("BLOCKING")
+                    .withHintTarget("实际投入");
         }
+        return selectedSkuId;
     }
 
     private static String requireWorkflowPortUnit(String unit, String side) {

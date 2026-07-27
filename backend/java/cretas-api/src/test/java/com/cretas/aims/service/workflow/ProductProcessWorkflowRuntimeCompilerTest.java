@@ -257,6 +257,35 @@ class ProductProcessWorkflowRuntimeCompilerTest {
     }
 
     @Test
+    void actualIoReportingRequiresAtLeastOneActualInputAndOutput() {
+        ProductProcessWorkflowDTO definition = multiInputOutputWorkflow();
+        processData(definition, "mix").put("reportingSelectionMode", "ACTUAL_IO");
+        processData(definition, "mix").put("portGroups", List.of(
+                portGroup("legacy-input", "INPUT", "旧投入关系", "EXACTLY_ONE",
+                        1, 1, List.of("in-a", "in-b")),
+                portGroup("legacy-output", "OUTPUT", "旧产出关系", "OPTIONAL",
+                        0, 2, List.of("out-main", "out-side"))));
+
+        CompiledProductProcessWorkflow compiled = compiler.compile(definition);
+        List<CompiledProductProcessWorkflow.CompiledPort> ports = compiled.portsFor("mix");
+
+        ports.stream().filter(port -> "INPUT".equals(port.direction())).forEach(port -> {
+            assertEquals("actual-io:mix:input", port.selectionGroupId());
+            assertEquals("AT_LEAST_ONE", port.selectionGroupMode());
+            assertEquals(1, port.selectionGroupMinSelections());
+            assertEquals(2, port.selectionGroupMaxSelections());
+            assertFalse(port.required());
+        });
+        ports.stream().filter(port -> "OUTPUT".equals(port.direction())).forEach(port -> {
+            assertEquals("actual-io:mix:output", port.selectionGroupId());
+            assertEquals("AT_LEAST_ONE", port.selectionGroupMode());
+            assertEquals(1, port.selectionGroupMinSelections());
+            assertEquals(2, port.selectionGroupMaxSelections());
+            assertFalse(port.required());
+        });
+    }
+
+    @Test
     void rejectsInvalidSelectionGroupReferencesDirectionsDuplicatesAndBounds() {
         ProductProcessWorkflowDTO missing = multiInputOutputWorkflow();
         processData(missing, "mix").put("portGroups", List.of(
@@ -482,6 +511,17 @@ class ProductProcessWorkflowRuntimeCompilerTest {
                 edge("b-mix", "raw-b", "output", "mix", "in-b"),
                 edge("mix-main", "mix", "out-main", "finished", "input"),
                 edge("mix-side", "mix", "out-side", "side", "input"))));
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> ports =
+                (List<Map<String, Object>>) processData(definition, "mix").get("ports");
+        ports.stream().filter(port -> "out-main".equals(port.get("id"))).forEach(port -> {
+            port.put("outputRole", "MAIN");
+            port.put("costAllocationRatio", 70);
+        });
+        ports.stream().filter(port -> "out-side".equals(port.get("id"))).forEach(port -> {
+            port.put("outputRole", "CO_PRODUCT");
+            port.put("costAllocationRatio", 30);
+        });
         return definition;
     }
 

@@ -1,11 +1,15 @@
 package com.cretas.aims.service.workflow.impl;
 
 import com.cretas.aims.dto.workflow.WorkflowClerkSheetConfigDTO;
+import com.cretas.aims.dto.bom.BomItemSubstituteDTO;
 import com.cretas.aims.entity.ProductType;
 import com.cretas.aims.entity.ProductWorkProcess;
 import com.cretas.aims.entity.ProductionBatch;
+import com.cretas.aims.entity.ProductionPlan;
 import com.cretas.aims.entity.RawMaterialType;
 import com.cretas.aims.entity.WorkProcess;
+import com.cretas.aims.entity.bom.BomRecipe;
+import com.cretas.aims.entity.bom.BomRecipeItem;
 import com.cretas.aims.entity.workflow.ProductionWorkflowInstance;
 import com.cretas.aims.entity.workflow.WorkflowTaskPort;
 import com.cretas.aims.entity.workprocess.WorkProcessTask;
@@ -13,13 +17,17 @@ import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.repository.ProductTypeRepository;
 import com.cretas.aims.repository.ProductWorkProcessRepository;
 import com.cretas.aims.repository.ProductionBatchRepository;
+import com.cretas.aims.repository.ProductionPlanRepository;
 import com.cretas.aims.repository.RawMaterialTypeRepository;
 import com.cretas.aims.repository.WorkProcessRepository;
+import com.cretas.aims.repository.bom.BomRecipeItemRepository;
+import com.cretas.aims.repository.bom.BomRecipeRepository;
 import com.cretas.aims.repository.workflow.ProductionWorkflowInstanceRepository;
 import com.cretas.aims.repository.workflow.WorkflowTaskPortRepository;
 import com.cretas.aims.repository.workprocess.WorkProcessTaskRepository;
 import com.cretas.aims.service.workflow.WorkflowClerkSheetService;
 import com.cretas.aims.service.workflow.WorkflowReportingUnitResolver;
+import com.cretas.aims.service.bom.BomItemSubstituteService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -29,6 +37,8 @@ import java.util.Comparator;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.LinkedHashSet;
+import java.util.Set;
 
 /**
  * 2B Task B2 — thin projection: workflow 批次快照 → clerk 过程单配置。
@@ -45,6 +55,7 @@ public class WorkflowClerkSheetServiceImpl implements WorkflowClerkSheetService 
     private static final String FINISHED_GOOD = "FINISHED_GOOD";
 
     private final ProductionBatchRepository productionBatchRepository;
+    private final ProductionPlanRepository productionPlanRepository;
     private final ProductionWorkflowInstanceRepository instanceRepository;
     private final WorkProcessTaskRepository taskRepository;
     private final WorkflowTaskPortRepository portRepository;
@@ -52,6 +63,9 @@ public class WorkflowClerkSheetServiceImpl implements WorkflowClerkSheetService 
     private final ProductWorkProcessRepository productWorkProcessRepository;
     private final RawMaterialTypeRepository rawMaterialTypeRepository;
     private final ProductTypeRepository productTypeRepository;
+    private final BomRecipeRepository bomRecipeRepository;
+    private final BomRecipeItemRepository bomRecipeItemRepository;
+    private final BomItemSubstituteService substituteService;
     private final WorkflowReportingUnitResolver reportingUnitResolver;
 
     @Override
@@ -83,6 +97,8 @@ public class WorkflowClerkSheetServiceImpl implements WorkflowClerkSheetService 
         }
         List<WorkflowTaskPort> ports = portRepository
                 .findByFactoryIdAndWorkflowInstanceId(factoryId, instance.getId());
+        Map<String, List<String>> allowedSkuIdsByPort =
+                resolvePinnedBomInputCandidates(factoryId, planId);
 
         Map<Long, List<WorkflowTaskPort>> portsByTask = new HashMap<>();
         for (WorkflowTaskPort port : ports) {
@@ -92,7 +108,10 @@ public class WorkflowClerkSheetServiceImpl implements WorkflowClerkSheetService 
         List<WorkflowClerkSheetConfigDTO.ProcessDescriptor> processes = new ArrayList<>(tasks.size());
         for (WorkProcessTask task : tasks) {
             processes.add(buildDescriptor(
-                    factoryId, task, portsByTask.getOrDefault(task.getId(), List.of())));
+                    factoryId,
+                    task,
+                    portsByTask.getOrDefault(task.getId(), List.of()),
+                    allowedSkuIdsByPort));
         }
 
         return WorkflowClerkSheetConfigDTO.builder()
@@ -153,7 +172,10 @@ public class WorkflowClerkSheetServiceImpl implements WorkflowClerkSheetService 
             ProductionBatch batch, ProductionWorkflowInstance instance) {}
 
     private WorkflowClerkSheetConfigDTO.ProcessDescriptor buildDescriptor(
-            String factoryId, WorkProcessTask task, List<WorkflowTaskPort> taskPorts) {
+            String factoryId,
+            WorkProcessTask task,
+            List<WorkflowTaskPort> taskPorts,
+            Map<String, List<String>> allowedSkuIdsByPort) {
         boolean projectReportingUnits = task.getStatus() == null || !task.getStatus().isTerminal();
         List<WorkflowTaskPort> inputs = new ArrayList<>();
         List<WorkflowTaskPort> outputs = new ArrayList<>();
@@ -211,7 +233,8 @@ public class WorkflowClerkSheetServiceImpl implements WorkflowClerkSheetService 
                 .allowFinishedGoodsSource(allowFinishedGoodsSource)
                 .customFieldSchema(workProcess != null ? workProcess.getCustomFieldSchema() : null)
                 .inputs(inputs.stream()
-                        .map(port -> toPortDescriptor(factoryId, port, projectReportingUnits))
+                        .map(port -> toPortDescriptor(
+                                factoryId, port, projectReportingUnits, allowedSkuIdsByPort))
                         .toList())
                 .output(outputDescriptors.isEmpty() ? null : outputDescriptors.get(0)) // 向后兼容单产出 FE
                 .outputs(outputDescriptors)
@@ -220,7 +243,22 @@ public class WorkflowClerkSheetServiceImpl implements WorkflowClerkSheetService 
 
     private WorkflowClerkSheetConfigDTO.PortDescriptor toPortDescriptor(
             String factoryId, WorkflowTaskPort port, boolean projectReportingUnit) {
-        SkuLookup lookup = resolveSku(factoryId, port.getMaterialKind(), port.getSkuId());
+        return toPortDescriptor(factoryId, port, projectReportingUnit, Map.of());
+    }
+
+    private WorkflowClerkSheetConfigDTO.PortDescriptor toPortDescriptor(
+            String factoryId,
+            WorkflowTaskPort port,
+            boolean projectReportingUnit,
+            Map<String, List<String>> allowedSkuIdsByPort) {
+        List<String> allowedSkuIds = allowedSkuIdsByPort.getOrDefault(
+                port.getWorkflowPortId(),
+                port.getSkuId() == null ? List.of() : List.of(port.getSkuId()));
+        String effectiveSkuId = WorkflowTaskPort.Direction.INPUT.equals(port.getDirection())
+                && !allowedSkuIds.isEmpty()
+                ? allowedSkuIds.getFirst()
+                : port.getSkuId();
+        SkuLookup lookup = resolveSku(factoryId, port.getMaterialKind(), effectiveSkuId);
         String unit = port.getUnit();
         if (unit == null || unit.isBlank()) {
             throw new BusinessException(409, "Workflow 运行时端口缺少快照单位")
@@ -232,13 +270,14 @@ public class WorkflowClerkSheetServiceImpl implements WorkflowClerkSheetService 
         if (projectReportingUnit
                 && (lookup.resolved() || !FINISHED_GOOD.equals(port.getMaterialKind()))) {
             unit = reportingUnitResolver.resolve(
-                    factoryId, port.getMaterialKind(), port.getSkuId(), unit);
+                    factoryId, port.getMaterialKind(), effectiveSkuId, unit);
         }
         return WorkflowClerkSheetConfigDTO.PortDescriptor.builder()
                 .workflowPortId(port.getWorkflowPortId())
                 .materialNodeId(port.getMaterialNodeId())
                 .materialKind(port.getMaterialKind())
-                .skuId(port.getSkuId())
+                .skuId(effectiveSkuId)
+                .allowedSkuIds(allowedSkuIds)
                 .materialName(lookup.name())
                 .unit(unit.trim())
                 .gramsPerUnit(port.getNetWeightGramsSnapshot())
@@ -251,6 +290,50 @@ public class WorkflowClerkSheetServiceImpl implements WorkflowClerkSheetService 
                 .skuResolved(lookup.resolved())
                 .finished(FINISHED_GOOD.equals(port.getMaterialKind()))
                 .build();
+    }
+
+    private Map<String, List<String>> resolvePinnedBomInputCandidates(
+            String factoryId, String planId) {
+        ProductionPlan plan = productionPlanRepository.findByIdAndFactoryId(planId, factoryId)
+                .orElseThrow(() -> new BusinessException(403, "无权访问该生产计划"));
+        String recipeId = plan.getSelectedBomRecipeId();
+        if (recipeId == null || recipeId.isBlank()) {
+            return Map.of();
+        }
+        BomRecipe recipe = bomRecipeRepository.findById(recipeId)
+                .filter(candidate -> factoryId.equals(candidate.getFactoryId()))
+                .orElseThrow(() -> new BusinessException(409, "计划固定的 BOM 版本不存在")
+                        .withCode("PINNED_BOM_NOT_FOUND")
+                        .withSeverity("BLOCKING"));
+        List<BomRecipeItem> items =
+                bomRecipeItemRepository.findByRecipeIdOrderBySortOrderAsc(recipe.getId());
+        Map<Long, List<BomItemSubstituteDTO>> substitutesByParent = new HashMap<>();
+        for (BomItemSubstituteDTO substitute :
+                substituteService.listByRecipe(factoryId, recipe.getId())) {
+            if (substitute.getParentRecipeItemId() != null) {
+                substitutesByParent.computeIfAbsent(
+                        substitute.getParentRecipeItemId(), ignored -> new ArrayList<>())
+                        .add(substitute);
+            }
+        }
+        Map<String, List<String>> result = new HashMap<>();
+        for (BomRecipeItem item : items) {
+            String portId = item.getWorkflowInputPortId();
+            if (portId == null || portId.isBlank()) {
+                continue;
+            }
+            Set<String> candidates = new LinkedHashSet<>();
+            candidates.add(item.getMaterialTypeId());
+            for (BomItemSubstituteDTO substitute :
+                    substitutesByParent.getOrDefault(item.getId(), List.of())) {
+                if (substitute.getSubstituteMaterialTypeId() != null
+                        && !substitute.getSubstituteMaterialTypeId().isBlank()) {
+                    candidates.add(substitute.getSubstituteMaterialTypeId());
+                }
+            }
+            result.put(portId, List.copyOf(candidates));
+        }
+        return Map.copyOf(result);
     }
 
     /**

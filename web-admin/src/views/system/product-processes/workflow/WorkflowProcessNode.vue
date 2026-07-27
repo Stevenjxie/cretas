@@ -44,14 +44,14 @@
         aria-label="快捷编辑工序"
         data-testid="quick-edit-process"
         @click.stop="emit('editProcess')"
-      >✎</button>
+      >编辑工序</button>
     </div>
 
     <div class="system-inference" data-testid="system-inference">
       <span class="system-inference-badge">
-        系统研判 · {{ inputPorts.length }} 入{{ inputPorts.length > 1 ? '（多来源合流）' : '' }} · {{ outputPorts.length }} 出{{ outputPorts.length > 1 ? '（同时多产出）' : '' }}
+        可报工接口 · {{ inputPorts.length }} 个投入 · {{ outputPorts.length }} 个产出
       </span>
-      <span class="system-inference-hint">增删左右的来源/产出 Cell 后自动更新</span>
+      <span class="system-inference-hint">正式报工时按实际情况选择，投入和产出至少各一项</span>
     </div>
 
     <section class="port-section">
@@ -59,25 +59,8 @@
         <span>投入物料</span>
         <el-button v-if="canWrite && allowAddInput" text size="small" type="primary" class="nodrag" @click="emit('addInput')">+ 来源 Cell（合流）</el-button>
       </div>
-      <div v-if="inputPorts.length > 1" class="port-relation nodrag" data-testid="input-port-relation">
-        <template v-if="inputRequirementGroups.length > 0">
-          <div class="port-relation-control">
-            <span>投入要求</span>
-            <div class="port-relation-labels" data-testid="input-requirement-groups">
-              <el-tag v-for="group in inputRequirementGroups" :key="group.id" type="primary" effect="light">
-                {{ group.label }} · {{ inputRequirementLabel(group.mode) }}
-              </el-tag>
-            </div>
-          </div>
-          <div class="port-relation-help" data-testid="input-relation-help">按 BOM 返回的投入要求执行，不在画布中猜测。</div>
-        </template>
-        <template v-else>
-          <div class="port-relation-control">
-            <span>投入要求</span>
-            <el-tag type="warning" effect="light" data-testid="input-requirement-pending">待 BOM 配置</el-tag>
-          </div>
-          <div class="port-relation-help" data-testid="input-relation-help">BOM 尚未返回完整投入要求，暂不推断必选关系。</div>
-        </template>
+      <div class="actual-io-help">
+        Workflow 只声明可投入物料；主料和替代料由生产计划固定的 BOM 自动限定。
       </div>
       <div v-for="port in inputPorts" :key="port.id" class="port-row">
         <el-input
@@ -103,28 +86,8 @@
           @click.stop="emit('addOutput')"
         >+ 产出 Cell（分流）</el-button>
       </div>
-      <div v-if="outputPorts.length > 1" class="port-relation nodrag" data-testid="output-port-relation">
-        <div class="port-relation-control">
-          <span>产出关系</span>
-          <el-select
-            :model-value="relationMode('OUTPUT')"
-            :disabled="!canWrite || outputPortGroups.length > 1"
-            size="small"
-            data-testid="output-relation-select"
-            @change="(mode: PortSelectionMode) => updateOutputRelation(mode)"
-          >
-            <el-option v-for="option in relationOptions('OUTPUT')" :key="option.value" :label="option.label" :value="option.value" />
-          </el-select>
-        </div>
-        <div class="port-relation-help" data-testid="output-relation-help">
-          {{ relationDescription(relationMode('OUTPUT'), 'OUTPUT') }}
-        </div>
-        <div class="port-relation-labels">
-          <el-tag v-if="outputPortGroups.length === 0" size="small" type="success">兼容旧配置 · 全部产出</el-tag>
-          <el-tag v-for="group in outputPortGroups" :key="group.id" size="small" type="success">
-            {{ group.label }} · {{ selectionModeLabel(group.mode, 'OUTPUT') }}
-          </el-tag>
-        </div>
+      <div class="actual-io-help">
+        这里不配置产出关系、主副角色或固定比例；每次报工填写本次实际产出的 SKU 和数量。
       </div>
       <div v-for="port in outputPorts" :key="port.id" class="output-entry">
         <div class="port-row output-row">
@@ -140,44 +103,6 @@
           />
           <span class="unit-chip" data-testid="output-unit-chip">{{ port.unit }}</span>
         </div>
-        <div
-          v-if="outputPorts.length > 1"
-          class="output-contract-row nodrag"
-          :data-testid="`output-contract-${port.id}`"
-        >
-          <el-select
-            :model-value="port.outputRole || undefined"
-            :disabled="!canWrite"
-            size="small"
-            placeholder="选择产出角色"
-            @change="(role: WorkflowOutputRole) => updateOutputContract(port.id, { outputRole: role })"
-          >
-            <el-option
-              v-for="option in outputRoleOptions"
-              :key="option.value"
-              :label="option.label"
-              :value="option.value"
-            />
-          </el-select>
-          <label>
-            <span>成本分摊</span>
-            <el-input-number
-              :model-value="port.costAllocationRatio ?? undefined"
-              :disabled="!canWrite"
-              :min="0"
-              :max="100"
-              :precision="4"
-              :controls="false"
-              placeholder="%"
-              size="small"
-              @change="(ratio: number | undefined) => updateOutputContract(port.id, { costAllocationRatio: ratio ?? null })"
-            />
-            <span>%</span>
-          </label>
-        </div>
-      </div>
-      <div v-if="outputPorts.length > 1" class="output-contract-help">
-        必须有且仅有一个主产出；主产出和联产品比例须大于 0，副产品填 0；合计必须为 100%。
       </div>
     </section>
 
@@ -205,13 +130,13 @@
             {{ port.unit }}投入 <span>→</span> {{ primaryOutput?.unit }}产出
           </div>
         </div>
-        <div v-for="(port, index) in secondaryOutputs" :key="`unit:${port.id}`" class="unit-relationship-row">
+        <div v-for="(port, index) in outputPorts" :key="`unit:${port.id}`" class="unit-relationship-row">
           <div class="unit-port-name">
             <el-tag size="small" type="success">产出{{ index + 1 }}</el-tag>
             <span>{{ port.materialName || `产出 ${index + 1}` }}</span>
           </div>
           <div class="unit-flow-chip" data-testid="unit-flow-output">
-            主产出 {{ primaryOutput?.unit }} <span>→</span> 本产出 {{ port.unit }}
+            报工单位：{{ port.unit }}
           </div>
         </div>
       </div>
@@ -233,17 +158,11 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref } from 'vue';
+import { computed } from 'vue';
 import { Handle, Position } from '@vue-flow/core';
 import WorkflowSkuPicker, { type WorkflowSkuPickerOption } from './WorkflowSkuPicker.vue';
 import { workflowSkuSpecificationEquation } from './workflowUnits';
-import type {
-  PortSelectionMode,
-  ProcessNodeData,
-  ProcessPort,
-  ProcessPortGroup,
-  WorkflowOutputRole,
-} from './types';
+import type { ProcessNodeData } from './types';
 
 const props = withDefaults(defineProps<{
   data: ProcessNodeData;
@@ -274,27 +193,13 @@ const emit = defineEmits<{
 const processNodeStyle = { minHeight: '96px' } as const;
 const inputPorts = computed(() => props.data.ports.filter((port) => port.direction === 'INPUT'));
 const outputPorts = computed(() => props.data.ports.filter((port) => port.direction === 'OUTPUT'));
-const inputPortGroups = computed(() => (props.data.portGroups ?? []).filter((group) => group.direction === 'INPUT'));
-const inputRequirementGroups = computed(() => (props.data.inputRequirementGroups ?? [])
-  .filter((group) => group.direction === 'INPUT'));
-const outputPortGroups = computed(() => (props.data.portGroups ?? []).filter((group) => group.direction === 'OUTPUT'));
-const outputRoleOptions: Array<{ value: WorkflowOutputRole; label: string }> = [
-  { value: 'MAIN', label: '主产出' },
-  { value: 'CO_PRODUCT', label: '联产品' },
-  { value: 'BY_PRODUCT', label: '副产品' },
-];
-
-function inputRequirementLabel(mode: PortSelectionMode): string {
-  if (mode === 'ALL_REQUIRED') return '必需';
-  if (mode === 'EXACTLY_ONE' || mode === 'AT_LEAST_ONE') return '必选其一';
-  return '可选';
-}
 const primaryOutput = computed(() => [...outputPorts.value].sort((a, b) => a.ordinal - b.ordinal)[0]);
-const secondaryOutputs = computed(() => outputPorts.value.filter((port) => port.id !== primaryOutput.value?.id));
 const unitRelationshipSummary = computed(() => {
   const inputUnits = [...new Set(inputPorts.value.map((port) => port.unit).filter(Boolean))];
+  const outputUnits = [...new Set(outputPorts.value.map((port) => port.unit).filter(Boolean))];
   const inputLabel = inputUnits.length === 1 ? inputUnits[0] : inputUnits.join(' / ');
-  return `投入单位：${inputLabel || '待绑定'} · 产出单位：${primaryOutput.value?.unit || '待绑定'}`;
+  const outputLabel = outputUnits.length === 1 ? outputUnits[0] : outputUnits.join(' / ');
+  return `投入单位：${inputLabel || '待绑定'} · 产出单位：${outputLabel || '待绑定'}`;
 });
 const primaryOutputSpecification = computed(() => {
   const port = primaryOutput.value;
@@ -309,77 +214,6 @@ function isLongMaterialName(name: string | undefined): boolean {
     0,
   );
   return visualLength > 24;
-}
-
-function relationOptions(direction: 'INPUT' | 'OUTPUT'): Array<{ value: PortSelectionMode; label: string }> {
-  return [
-    { value: 'ALL_REQUIRED', label: direction === 'INPUT' ? '全部必投' : '全部产出' },
-    { value: 'EXACTLY_ONE', label: '互相替代（选1）' },
-    { value: 'AT_LEAST_ONE', label: '至少选1' },
-    { value: 'OPTIONAL', label: '可选' },
-  ];
-}
-
-function relationDescription(mode: PortSelectionMode, direction: 'INPUT' | 'OUTPUT'): string {
-  if (mode === 'EXACTLY_ONE') return '组内只能选择一个。';
-  if (mode === 'AT_LEAST_ONE') return '可以选择一个或多个。';
-  if (mode === 'OPTIONAL') return '可以一个都不选。';
-  return direction === 'INPUT' ? '所有投入都必须选择。' : '所有产出都会生成。';
-}
-
-function selectionModeLabel(mode: PortSelectionMode, direction: 'INPUT' | 'OUTPUT'): string {
-  return relationOptions(direction).find((option) => option.value === mode)?.label ?? mode;
-}
-
-function directionGroups(direction: 'INPUT' | 'OUTPUT'): ProcessPortGroup[] {
-  return direction === 'INPUT' ? inputPortGroups.value : outputPortGroups.value;
-}
-
-function relationMode(direction: 'INPUT' | 'OUTPUT'): PortSelectionMode {
-  const groups = directionGroups(direction);
-  return groups.length === 1 ? groups[0].mode : 'ALL_REQUIRED';
-}
-
-function updateOutputRelation(mode: PortSelectionMode): void {
-  const direction = 'OUTPUT' as const;
-  const portIds = props.data.ports
-    .filter((port) => port.direction === direction)
-    .sort((left, right) => left.ordinal - right.ordinal)
-    .map((port) => port.id);
-  if (portIds.length < 2) return;
-  const bounds = mode === 'ALL_REQUIRED'
-    ? { minSelections: portIds.length, maxSelections: portIds.length }
-    : mode === 'EXACTLY_ONE'
-      ? { minSelections: 1, maxSelections: 1 }
-      : mode === 'AT_LEAST_ONE'
-        ? { minSelections: 1, maxSelections: portIds.length }
-        : { minSelections: 0, maxSelections: portIds.length };
-  const existing = directionGroups(direction)[0];
-  const group: ProcessPortGroup = {
-    id: existing?.id || `port-group:${direction.toLowerCase()}:all`,
-    direction,
-    label: '产出关系',
-    mode,
-    ...bounds,
-    portIds,
-  };
-  emit('update', {
-    portGroups: [
-      ...(props.data.portGroups ?? []).filter((candidate) => candidate.direction !== direction),
-      group,
-    ],
-  });
-}
-
-function updateOutputContract(
-  portId: string,
-  patch: Pick<ProcessPort, 'outputRole' | 'costAllocationRatio'>,
-): void {
-  emit('update', {
-    ports: props.data.ports.map((port) => (
-      port.id === portId ? { ...port, ...patch } : port
-    )),
-  });
 }
 
 function handleStyle(index: number, count: number): Record<string, string> {
@@ -437,9 +271,9 @@ function handleStyle(index: number, count: number): Record<string, string> {
 .process-heading { display: flex; align-items: flex-start; gap: 8px; }
 .process-heading > div { min-width: 0; flex: 1; }
 .quick-edit-process {
-  display: grid; place-items: center; width: 26px; height: 26px; flex: 0 0 auto;
-  padding: 0; border: 1px solid #b9d8f4; border-radius: 6px; background: #fff;
-  color: #1b65a8; cursor: pointer; font-size: 14px;
+  min-height: 32px; flex: 0 0 auto;
+  padding: 0 10px; border: 1px solid #b9d8f4; border-radius: 6px; background: #fff;
+  color: #1b65a8; cursor: pointer; font-size: 12px; font-weight: 600;
 }
 .quick-edit-process:hover { border-color: #409eff; background: #eef6ff; }
 .step-mark { display: grid; place-items: center; width: 28px; height: 28px; border-radius: 7px; color: #1b65a8; background: #eaf4ff; font-weight: 700; }
@@ -454,6 +288,15 @@ function handleStyle(index: number, count: number): Record<string, string> {
 .output-row { grid-template-columns: minmax(0, 1fr) 70px; }
 .output-entry { margin-top: 6px; }
 .output-entry .output-row { margin-top: 0; }
+.actual-io-help {
+  margin: 5px 0 7px;
+  padding: 8px 10px;
+  border-radius: 7px;
+  background: #eef6ff;
+  color: #1b65a8;
+  font-size: 12px;
+  line-height: 1.5;
+}
 .output-contract-row {
   display: grid; grid-template-columns: minmax(132px, 0.8fr) minmax(190px, 1.2fr);
   align-items: center; gap: 6px; margin-top: 6px; padding: 7px 8px;
