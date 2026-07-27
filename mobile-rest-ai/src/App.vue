@@ -220,9 +220,9 @@
 import DOMPurify from 'dompurify'
 import { marked } from 'marked'
 import { computed, defineComponent, h, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
-import { RequestTimeoutError, askSynthesis, askSynthesisStream, clearToken, demoLogin, sendAnswerFeedback } from './api'
+import { RequestTimeoutError, askIntent, clearToken, demoLogin, sendAnswerFeedback } from './api'
 import ChartBlock from './components/ChartBlock.vue'
-import type { ChartPayload, ChatMessage, SynthesisResponse } from './types'
+import type { ChatMessage, SynthesisResponse } from './types'
 
 type AuthStatus = 'loading' | 'ready' | 'error'
 type MessageActionMenu = {
@@ -486,7 +486,7 @@ async function sendQuestion(question: string): Promise<void> {
   const assistantMessage = createMessage('assistant', '')
   assistantMessage.sourceQuery = normalized
   assistantMessage.isStreaming = true
-  assistantMessage.status = '正在连接…'
+  assistantMessage.status = '正在识别意图并读取经营数据…'
   messages.value.push(assistantMessage)
   draft.value = ''
   void nextTick(resizeComposerInput)
@@ -498,8 +498,6 @@ async function sendQuestion(question: string): Promise<void> {
   }, 3000)
   await scrollToBottom(true)
 
-  let sawStreamPayload = false
-  let streamErrorMessage = ''
   const stillCurrent = () => myGen === genCounter && currentAbort === controller
   const finishAssistant = (payload: SynthesisResponse): void => {
     if (!stillCurrent()) return
@@ -512,62 +510,18 @@ async function sendQuestion(question: string): Promise<void> {
   }
 
   try {
-    await askSynthesisStream(normalized, sessionId.value, {
-      onStatus(text) {
-        if (!stillCurrent()) return
-        sawStreamPayload = true
-        assistantMessage.status = text || '正在分析…'
-      },
-      onChunk(text) {
-        if (!stillCurrent()) return
-        sawStreamPayload = true
-        assistantMessage.content += text
-        assistantMessage.status = '正在生成中'
-        void scrollToBottom()
-      },
-      onCharts(charts: ChartPayload[]) {
-        if (!stillCurrent()) return
-        sawStreamPayload = true
-        assistantMessage.charts = charts
-      },
-      onDone(payload) {
-        sawStreamPayload = true
-        finishAssistant(payload)
-      },
-      onError(message) {
-        streamErrorMessage = message
-        if (!stillCurrent() || !sawStreamPayload) return
-        threadError.value = message
-        assistantMessage.content = `**请求失败**\n\n${message}`
-        assistantMessage.isStreaming = false
-        assistantMessage.status = '分析失败'
-      },
-    }, controller.signal)
+    // Card4 (2026-07-28): unified Java intent entry — same route as
+    // web-admin's RestaurantChatPanel.vue (askRestaurantIntent →
+    // executeIntent). No incremental token streaming here (Java returns the
+    // full answer in one response), so the status line is the only feedback
+    // while waiting; content is filled once on completion.
+    const response = await askIntent(normalized, sessionId.value, controller.signal)
+    finishAssistant(response)
   } catch (error) {
     if (myGen !== genCounter || controller.signal.aborted) return
-    if (!(error instanceof RequestTimeoutError) && !sawStreamPayload) {
-      try {
-        assistantMessage.status = '正在切换普通分析…'
-        assistantMessage.content = ''
-        assistantMessage.isStreaming = true
-        const response = await askSynthesis(normalized, sessionId.value, controller.signal)
-        finishAssistant(response)
-        return
-      } catch (fallbackError) {
-        if (myGen !== genCounter || controller.signal.aborted) return
-        const message = fallbackError instanceof RequestTimeoutError
-          ? '分析超时，请重试'
-          : fallbackError instanceof Error ? fallbackError.message : streamErrorMessage || '网络失败，请稍后重试。'
-        threadError.value = message
-        assistantMessage.content = `**请求失败**\n\n${message}`
-        assistantMessage.isStreaming = false
-        assistantMessage.status = '分析失败'
-        return
-      }
-    }
     const message = error instanceof RequestTimeoutError
       ? '分析超时，请重试'
-      : error instanceof Error ? error.message : streamErrorMessage || '网络失败，请稍后重试。'
+      : error instanceof Error ? error.message : '网络失败，请稍后重试。'
     threadError.value = message
     assistantMessage.content = `**请求失败**\n\n${message}`
     assistantMessage.isStreaming = false

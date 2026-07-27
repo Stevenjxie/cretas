@@ -6,10 +6,10 @@
  *   1. Deterministic bullets (props.bullets) — always rendered, 0 LLM, computed
  *      by the page from its own real refs (see analysisBullets.ts builders).
  *   2. On-demand AI 解读 — user clicks 「🤖 AI 解读」 → sends a fixed,
- *      non-free-form chart-interpretation task directly to governed synthesis,
- *      embedding this chart's `dataSummary` (real numbers) so the answer is
- *      grounded in what's on screen. Free-form chat does NOT use this path; it
- *      enters through the unified Java intent orchestrator.
+ *      non-free-form chart-interpretation task through the unified Java
+ *      intent orchestrator (same entry as free-form chat, see Card4 note
+ *      below), embedding this chart's `dataSummary` (real numbers) so the
+ *      answer is grounded in what's on screen.
  *
  * Also emits `focus` so the page can point its AnalysisChatPanel at this
  * specific chart (multi-turn 聚焦 conversation) — see member-analysis/index.vue.
@@ -17,10 +17,18 @@
  * Page-agnostic: takes plain props, no page-specific imports. Reusable by
  * any analytics page that has computed deterministic bullets + a dataSummary
  * string for its chart.
+ *
+ * Card4 (2026-07-28, 餐饮 AI 飞轮回接): AI 解读 now goes through the unified
+ * Java intent orchestrator (askRestaurantIntent → executeIntent), the same
+ * entry RestaurantChatPanel.vue's free-form chat uses, instead of calling
+ * Python comprehensive synthesis directly. Direct-to-Python bypassed query
+ * planning, session continuation and the tiered-first/cache contracts, so a
+ * chart's "AI 解读" could disagree with the same question asked in chat.
  */
 import { ref } from 'vue';
 import { ElButton } from 'element-plus';
-import { askRestaurantSynthesis } from '@/api/smartbi/restaurant-synthesis';
+import { askRestaurantIntent } from '@/api/smartbi/restaurant-synthesis';
+import { getFactoryId } from '@/api/smartbi/common';
 import { splitMarkdownBullets } from './analysisBullets';
 
 const props = defineProps<{
@@ -51,8 +59,10 @@ async function loadAiInsight() {
       `[${props.chartTitle}数据] ${props.dataSummary}\n\n` +
       `请用不超过3条bullet要点解读这张「${props.chartTitle}」图的数据含义，并给出可执行的营销/运营建议。`;
     // One-off ask — not part of the page's multi-turn conversation, so a
-    // fresh sessionId each time (no cross-chart memory bleed).
-    const res = await askRestaurantSynthesis(query, crypto.randomUUID());
+    // fresh sessionId each time (no cross-chart memory bleed). Routed through
+    // the unified Java orchestrator (Card4) so this answer can never diverge
+    // from what the same question would get through free-form chat.
+    const res = await askRestaurantIntent(getFactoryId(), query, crypto.randomUUID());
 
     if (!res.success) {
       aiError.value = res.error || 'AI 解读失败，请稍后重试';

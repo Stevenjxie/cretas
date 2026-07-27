@@ -2,6 +2,9 @@ export interface DemoLoginResponse {
   token: string
   refreshToken?: string
   expiresIn?: number
+  /** Backend-issued tenant, needed to call the unified Java intent entry
+   * (/api/mobile/{factoryId}/ai-intents/execute). */
+  factoryId?: string
 }
 
 export interface ChartPayload {
