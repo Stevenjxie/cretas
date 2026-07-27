@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>白垩纪餐饮版产品使用手册</title>
-<!-- last-verified-against-product: 2026-04-29 -->
+<!-- last-verified-against-product: 2026-07-27 -->
 <style>
 body{font-family:-apple-system,'Segoe UI','PingFang SC','Microsoft YaHei',sans-serif;max-width:960px;margin:30px auto;padding:0 20px;color:#1f2937;line-height:1.7}
 h1{color:#1e40af;border-bottom:3px solid #1e40af;padding-bottom:8px;margin-top:40px}
@@ -81,8 +81,9 @@ nav.toc a:hover{text-decoration:underline}
 
 <section id="ch1">
   <h1>§1 智能数据分析 (AI Query)</h1>
-  <!-- last-verified-against-product: 2026-04-29 -->
+  <!-- last-verified-against-product: 2026-07-27 -->
   <p class="overview">智能数据分析 (AI Query) 是白垩纪 SaaS 的核心分析入口，允许用户用自然语言直接提问，例如"本月畅销菜品是什么？"或"哪家门店毛利率最低？"，无需编写 SQL 或配置报表。系统自动识别数据集字段、执行聚合计算、生成图表并输出文字解读。解决了传统 BI 工具需要专业配置人员的痛点，适用于经营分析、成本监控、门店对比等日常场景，让前台员工和管理层都能独立获取数据洞察。</p>
+  <div class="tip"><strong>当前 21 维综合分析目录：</strong>1 营收与订单、2 同比环比、3 多门店比较、4 真实就餐人数、5 商场及门前物理客流、6 菜品销售结构、7 菜品毛利、8 堂食/外卖/自提、9 午晚市与时段、10 优惠与营销活动、11 评价与口碑、12 供应商与采购价格、13 库存风险、14 损耗与报损、15 盘点差异、16 排班与人效、17 天气、18 节假日与调休、19 商场活动、20 周边演出与赛事、21 竞品与商圈。每一维按 REAL / PROXY / SIMULATED / MISSING 标注证据；缺失不能由演示值补齐，相关性不能写成因果。</div>
 
   <!-- 入门 / 怎么用 (新员工视角) -->
   <h2 id="ch1-1">§1.1 进入路径</h2>
@@ -113,7 +114,7 @@ nav.toc a:hover{text-decoration:underline}
     <li><strong>输入自然语言问题</strong>：在中央输入框输入问题，如"本月各门店营业额对比"或"上周食材成本最高的五个菜品"。也可点击下方快捷问题按钮直接提问。</li>
     <li><strong>发送并等待</strong>：点击发送按钮（或按回车），AI 处理通常需 5-15 秒，期间显示"正在分析中..."。</li>
     <li><strong>查看回答</strong>：结果展示区出现 AI 文字回答，下方附带对应图表（图表类型由 AI 自动选择）。</li>
-    <li><strong>追问</strong>：可直接在输入框继续追问，如"刚才最高的那家门店上个月呢？"，AI 会引用上一轮回答的上下文。</li>
+    <li><strong>追问</strong>：可在同一会话继续追问，但要先确认范围。门店、菜品和时间只沿用当前会话中已经明确且与新问题兼容的值；新问题明确写出的值覆盖旧值。名称有歧义或缺少分析必需范围时，系统应先澄清，不能猜。</li>
     <li><strong>导出结果</strong>：点击图表右上角下载图标，可保存图表为 PNG；点击数据表格右上角导出图标，可下载 CSV。</li>
     <li><strong>查阅历史</strong>：点击左侧历史面板中的记录，可重新加载该轮对话，继续追问或分享截图。</li>
   </ol>
@@ -168,6 +169,7 @@ nav.toc a:hover{text-decoration:underline}
       <tr><td><a href="#ch13">§13 多门店对比分析</a></td><td>AI Query 发现门店间差异明显</td><td>使用多门店对比模块进行标准化横向比较，排除规模差异</td></tr>
     </tbody>
   </table>
+  <div class="warn"><strong>会话范围合同：</strong>“全部门店是聚合范围”，不能被写进具体门店槽；点击“清空对话”后旧范围失效。AI Query 与 PBI、Dashboard、导览助手之间是导航联动，不代表筛选条件自动继承；跨页面或跨模块继续分析时，应重新说明门店、菜品和时间。</div>
 
   <h2 id="ch1-8">§1.8 常见决策场景</h2>
   <h3>场景 A：月度营收下滑 5%</h3>

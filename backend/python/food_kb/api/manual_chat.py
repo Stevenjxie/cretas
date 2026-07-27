@@ -164,6 +164,55 @@ _BOM_WORKFLOW_SEQUENCE_ANSWER = """\
 **验收结果：** BOM 页面没有可任意切换工艺修订的选择器，工艺来源只读；Workflow 页面同时显示“已发布 vX”和“已启用 vX”。若仍失败，按页面列出的具体缺失项逐项修正，不能绕过门禁。"""
 
 
+_MATERIAL_PACKAGING_TRIGGERS = frozenset({
+    "包装", "箱", "袋", "换算", "采购", "收货", "入库", "调拨",
+})
+_MATERIAL_PACKAGING_ANSWER = """\
+原料包装换算在“仓储管理 → 原料类型字典”中、紧邻库存基本单位维护，不在成品 SKU 管理里配置。
+
+**正确口径：**
+1. 原料类型只保留一个库存基本单位，例如 kg。
+2. 在同一原料下维护一条或多条“采购包装单位 → 库存基本单位”的直接换算，例如 1箱=10kg、1袋=2.5kg。
+3. 采购、收货和跨仓调拨可以按箱或袋录入，并实时显示折合基本量；库存批次、库存余额、BOM 可用量和生产领料只使用 kg。
+4. 单据会保存当时的包装身份、包装数量、换算系数和折合基本量快照，之后修改主档不会重解释历史单据。
+
+**仓储收货：**
+- 默认继承采购行的包装规格；实际到货包装不同时，只能从该原料当前有效规格中改选。
+- 多个有效规格时必须显式选择；只有一个可证明规格时才可自动带入，系统不能猜。
+- 超收上限按折合后的基本量比较，不能把“箱数”和“kg 数”直接相加。
+- 抄码/称重原料不套固定箱重，仍按现场实际称重的基本单位入库。
+
+**验收结果：** 收货确认后，包装快照仍可回读，但新批次数量单位等于原料库存基本单位；生产领料页不出现箱、袋等交易包装单位。成品的“1箱=8盒”仍属于成品 SKU 包装规格，与原料包装换算是两套不同主数据。"""
+_MULTI_OUTPUT_LABEL_QC_TRIGGERS = frozenset({
+    "标签", "拍检", "人工质检", "人工复核", "人工审核",
+})
+_MULTI_OUTPUT_LABEL_QC_ANSWER = """\
+多产出成本合同和标签人工审核是两个独立步骤，不能把“人工工时”当作标签人工复核。
+
+**多产出 Workflow：**
+1. 一个工序有多个产出时，为每个产出选择“主产出 / 联产品 / 副产品”角色并填写成本分摊比例。
+2. 必须有且仅有一个主产出；主产出和联产品比例都大于 0，副产品比例固定为 0；全部比例合计必须为 100%，否则草稿不能通过结构校验。
+3. 该比例只分配成本，不预设实际产出数量。每个产出的真实数量仍在正式报工的“产出明细”中逐项填写并落账。
+
+**包装标签人工审核：**
+1. 管理员先按真实手机号邀请“质量检验员”，员工本人在手机端设密码；不要由管理员代设或保存密码。
+2. 质检员拍摄并提交标签照片后，所有照片都进入“待我审核”；AI 找到 0 处或多处候选都不能直接判合格。
+3. 人工逐张确认/拒绝 AI 框，漏检时补画人工框，并为每张照片给出结论；全部完成后只提交一次人工审核，结果成为人工真值。
+4. Web 管理端后续可备份、归档并由有权限的技术管理员批准或拒绝训练；批准只允许导出训练数据，不会自动训练或发布模型。
+
+**验收结果：** Workflow 的角色/比例合计与正式报工的实际产出数量可分别回读；标签任务的每张照片、AI 候选、人工框、逐图结论、审核人和时间均可追溯。"""
+_RESTAURANT_CONTEXT_SCOPE_ANSWER = """\
+餐饮导览助手只解释用法；真实门店数据比较和连续追问请在 SmartBI 餐饮 AI 中完成。
+
+**同一会话的范围规则：**
+1. 首轮明确门店、菜品和时间范围；系统只在当前连续会话里保留已确认且与新问题兼容的范围。
+2. 后续明确写出的新门店、新菜品或新时间优先，覆盖对应旧条件；“全部门店”保持聚合范围，不能被塞成某一家具体门店。
+3. 缺少分析必需的门店、菜品或时间，或名称有歧义时，系统应先澄清并停止猜测；没有可比周期或成本覆盖不足时，明确降级而不是补造数字。
+4. 点击“清空对话”会创建新会话并清除旧上下文。另一个页面或模块上的筛选不保证自动带入，因此跨模块继续分析时要重新说明门店、菜品和时间。
+
+例如首问“比较 A 店宫保鸡丁 4–6 月销量”，追问“那成本和毛利呢”可沿用三项范围；若改问“换 B 店看 7 月”，则 B 店和 7 月覆盖旧值。"""
+
+
 def _uses_current_production_sop(query: str) -> bool:
     """Route production-chain questions to the reviewed current SOP only.
 
@@ -182,6 +231,39 @@ def _needs_bom_workflow_sequence_guard(query: str) -> bool:
         "bom" in normalized
         and "workflow" in normalized
         and any(trigger in normalized for trigger in _BOM_WORKFLOW_SEQUENCE_TRIGGERS)
+    )
+
+
+def _needs_material_packaging_guard(query: str) -> bool:
+    """Keep raw-material packaging separate from finished-goods SKU packaging."""
+    normalized = (query or "").lower()
+    return (
+        any(term in normalized for term in ("原料", "物料"))
+        and sum(term in normalized for term in _MATERIAL_PACKAGING_TRIGGERS) >= 2
+    )
+
+
+def _needs_multi_output_label_qc_guard(query: str) -> bool:
+    """Separate the multi-output cost contract from label human review."""
+    normalized = (query or "").lower()
+    has_multi_output = "多产出" in normalized or (
+        "多个" in normalized and "产出" in normalized
+    )
+    return has_multi_output and any(
+        term in normalized for term in _MULTI_OUTPUT_LABEL_QC_TRIGGERS
+    )
+
+
+def _needs_restaurant_context_scope_guard(query: str) -> bool:
+    """Use the reviewed SmartBI session-scope contract for follow-up questions."""
+    normalized = (query or "").lower()
+    dimensions = (
+        any(term in normalized for term in ("门店", "店")),
+        any(term in normalized for term in ("菜品", "菜")),
+        any(term in normalized for term in ("时间", "月份", "周期")),
+    )
+    return sum(dimensions) >= 2 and any(
+        term in normalized for term in ("追问", "上下文", "保持", "沿用", "范围")
     )
 
 
@@ -382,6 +464,8 @@ SYSTEM_PROMPT = """\
 3. 【路径来源】所有"进入 X → Y → Z"的菜单路径必须来自检索片段原文；如果片段里没有具体路径，宁可写"请在系统中找对应模块"，也不要编造路径名。
 3c. 【口径冲突裁决】检索片段中带「权威口径」「重要口径」「口径提醒」「必读」标记的内容是最高裁决依据。当它与其他片段（或你的常识）冲突时，必须以标记片段为准。特别是能力边界类问题（"能不能精确算出X"、"是不是自动的"）：除非权威口径片段明确说支持，否则绝不宣称系统"精确/自动/实时"具备该能力；已知硬口径——中餐单菜毛利率是理论参考值（成本BOM卡现实拉不齐），可信口径是期间总毛利率（期初库存+采购−期末库存倒算）。绝不编造检索片段中不存在的开关、按钮、功能名。
 3b. 【禁止计算与数据分析】你是导览与教学助手，不做数值计算、报表汇总、多行数据分析，也不分析用户粘贴/上传的业务数据（明细表、流水、多条记录）。遇到"帮我算/汇总/分析一下(某批数据)"类请求，回答口径：本助手负责解释板块、图表与分析方法；具体数据分析请在系统内对应分析板块（餐饮版：SmartBI 智能数据分析 AI Query；工厂版：对应报表/分析模块）中提问，并告诉用户该去哪个板块、建议怎么问。例外：下方"诊断型问题处理"允许对用户口述的单个指标值做基准对照判断，这不算数据分析。
+3d. 【餐饮 SmartBI 会话范围】导览助手只能解释以下合同，不得假装已经替用户运行分析：门店、菜品、时间范围只在同一连续会话中保留；用户最新明确写出的条件覆盖对应旧条件；“全部门店”始终是聚合范围，不能写进具体门店槽。缺少必需维度、名称有歧义、周期不可比或成本覆盖不足时必须澄清/降级，不能猜。清空对话会重置会话；另一个页面或模块的筛选不保证自动带入，禁止宣称“跨模块联动锁定”。
+3e. 【餐饮综合分析维度】当前目录固定为 21 个维度：营收与订单、同比环比、多门店比较、真实就餐人数、商场及门前物理客流、菜品销售结构、菜品毛利、堂食/外卖/自提、午晚市与时段、优惠与营销活动、评价与口碑、供应商与采购价格、库存风险、损耗与报损、盘点差异、排班与人效、天气、节假日与调休、商场活动、周边演出与赛事、竞品与商圈。每个维度必须注明真实、代理、模拟或缺失证据；缺数据就写缺失，不得拿演示值冒充真实租户事实，也不得把相关性写成因果。
 4. 系统名称统一用「白垩纪 AI Agent」
 5. 不使用 emoji，保持专业简洁
 6. 菜单路径用 → 连接，如: 首页 → 仓储管理 → 入库
@@ -448,9 +532,12 @@ FACTORY_SYSTEM_PROMPT = """\
 【SOP 核心口径】
 - 默认从 MVP 非阻塞最小闭环回答；用户选择中度或全量时再加入拓扑冲突、异常、审批、冲销和治理用例。
 - SKU 定义库存/销售基本单位和成品标准克重；BOM 定义物料及工序辅料；Workflow 定义 Cell 与工序连接和报工单位；实际投入产出在报工中形成。
+- 原料包装换算在“原料类型字典”中紧邻库存基本单位维护，采购/收货/调拨可按包装录入并折合为基本量；库存批次、BOM 可用量和生产领料只用基本单位。绝不能把原料的箱/袋换算指向成品 SKU 管理。
 - 多个原料连接到同一工序表示批次自由选择且至少 1 个，不区分主投入与追加投入，也不要求全部必投。
 - 成品的 1盒=800克由 SKU 继承；Workflow 不另写 1kg=1盒 或 1袋=1盒。
 - 面向用户统一说“投入单位 / 产出单位”，不要使用“端口”这个词。
+- 多产出工序必须有且仅有一个主产出；主产出/联产品成本比例大于 0，副产品比例为 0，总计 100%。比例只用于成本分配，真实产出数量仍在正式报工逐项填写。
+- 包装标签拍检是独立质检流程：AI 候选无论 0 处还是多处都进入人工审核；人工逐图确认/拒绝/补框并提交结论后才形成真值。人工审核不等于报工工时，训练批准只允许导出，不会自动训练或发布模型。
 - Workflow 冲突在生产计划选择成品时按终端产出集合解析；完全匹配优先，其次最小超集，同级重叠必须由用户查看工序链预览后选择。
 - BOM 与 Workflow 的兼容验收摘要必须保留“Workflow 完整草稿 → BOM 绑定工序辅料并激活 → Workflow 刷新、发布并启用”。当前页面的展开口径是“Workflow 完整草稿 → 创建 BOM 时自动固定该工艺修订 → 配置并激活 BOM → Workflow 刷新、发布并启用”；普通用户不选择 Workflow 版本，BOM 只读显示工艺来源，工序由目标 SKU 的工艺链生成并锁定。ACTIVE BOM 是 Workflow 发布启用的前置门禁；禁止回答“两者无依赖”“两者无从属关系”或“先发布 Workflow 再激活 BOM”。
 - 逐道报工按“投入 → 工序执行（开始/结束/人数）→ 产出 → 确认提交”填写；保存草稿不扣库存、不形成正式成本，正式报工才按固定 BOM 从生产仓自动分配原料、调料和包材批次。
@@ -980,6 +1067,21 @@ async def _prepare_generation(request: ManualChatRequest) -> _PreparedGeneration
         # Keep retrieval for source evidence, but do not let model variance invert
         # or omit the mandatory Workflow → BOM → Workflow sequence.
         guard_answer = _BOM_WORKFLOW_SEQUENCE_ANSWER
+    elif (
+        not is_restaurant_request
+        and _needs_material_packaging_guard(request.question)
+    ):
+        guard_answer = _MATERIAL_PACKAGING_ANSWER
+    elif (
+        not is_restaurant_request
+        and _needs_multi_output_label_qc_guard(request.question)
+    ):
+        guard_answer = _MULTI_OUTPUT_LABEL_QC_ANSWER
+    elif (
+        is_restaurant_request
+        and _needs_restaurant_context_scope_guard(request.question)
+    ):
+        guard_answer = _RESTAURANT_CONTEXT_SCOPE_ANSWER
 
     return _PreparedGeneration(
         messages=messages,
