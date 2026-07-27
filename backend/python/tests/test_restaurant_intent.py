@@ -382,6 +382,58 @@ async def test_t2_low_confidence_falls_to_t3_llm_and_ignores_llm_dates():
 
 
 @pytest.mark.asyncio
+async def test_semantic_first_front_door_uses_high_accuracy_review_budget():
+    """Production restaurant chat must not inherit MAPPER's six-second tail.
+
+    The live regression had two fast 403 responses followed by several
+    candidates timing out on the tiny remaining budget.  Semantic-first chat
+    therefore uses the billing-safe REVIEW chain and its bounded fallback
+    budget, while the legacy T3 test above remains on MAPPER.
+    """
+    llm_json = json.dumps({
+        "intent": "RESTAURANT_OPS_GROSS_MARGIN",
+        "time_range": None,
+        "wants_margin": False,
+        "asks_profitability": False,
+        "requested_metrics": ["sales_volume"],
+        "analysis_action": "lookup",
+        "dimensions": ["dish"],
+        "dish": "米饭",
+        "store": None,
+        "stores": [],
+        "store_scope": None,
+        "confidence": 0.98,
+        "clarification_needed": True,
+        "missing_fields": ["time_range", "store_scope"],
+        "clarification_question": "想看哪个时间范围和哪些门店？",
+        "clarification_options": ["本月", "全部门店"],
+    }, ensure_ascii=False)
+    fake_llm_result = {"choices": [{"message": {"content": llm_json}}]}
+
+    with patch(
+        "common.llm_router.call_chain",
+        new=AsyncMock(return_value=fake_llm_result),
+    ) as mock_chain:
+        spec = await parse_restaurant_query(
+            "米饭的销量是多少",
+            _restaurant_pool(),
+            factory_id="DEMO_REST",
+            semantic_first=True,
+        )
+
+    assert spec is not None
+    assert spec.planner_authority == "llm"
+    assert spec.requested_metrics == ("sales_volume",)
+    assert spec.dish_slot == "米饭"
+    assert spec.clarification_needed is True
+    from common.llm_router import SLOT
+    args, kwargs = mock_chain.call_args
+    assert args[0] == SLOT.REVIEW
+    assert kwargs["timeout"] == 5.0
+    assert kwargs["total_timeout"] == 12.0
+
+
+@pytest.mark.asyncio
 async def test_t3_adversarial_raw_date_in_time_range_is_ignored():
     """If a (malformed/adversarial) LLM response smuggles a raw date string
     into time_range instead of a structured descriptor, it must be silently

@@ -1522,6 +1522,8 @@ async def test_semantic_first_store_choice_is_merged_and_not_asked_twice():
     assert planner.await_count == 2
     assert planner.await_args_list[0].kwargs["hint"] is None
     assert planner.await_args_list[1].kwargs["hint"] is None
+    assert planner.await_args_list[0].kwargs["prefer_high_accuracy"] is True
+    assert planner.await_args_list[1].kwargs["prefer_high_accuracy"] is True
     assert "兄弟土菜馆" in planner.await_args_list[1].kwargs["available_stores"]
 
 
