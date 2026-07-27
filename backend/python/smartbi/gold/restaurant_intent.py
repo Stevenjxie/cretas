@@ -72,6 +72,7 @@ TRUSTED_PLANNER_AUTHORITIES = frozenset({
     "explicit_store_operations",
     "trusted_context",
     "trusted_context_contract_repair",
+    "llm_trusted_context_repair",
 })
 
 # Human-reviewed, zero-ambiguity whole-sentence promotions. These are not
@@ -3717,6 +3718,7 @@ async def parse_restaurant_query(
                 ),
             )
         semantic_query = norm_query
+        trusted_followup_spec: Optional[RestaurantQuerySpec] = None
         if history:
             # The LLM still owns the intent decision, but it must receive a
             # complete utterance when the user switches only one slot in a
@@ -3751,6 +3753,14 @@ async def parse_restaurant_query(
                 )
                 if inherited:
                     semantic_query = contextualized_query
+                    # The semantic planner still runs first.  This sealed
+                    # deterministic plan is only a post-LLM truth source for
+                    # slots restored from the authenticated session.  It
+                    # cannot authorize writes, exports, comparisons,
+                    # unsupported metrics, or an incomplete dish question.
+                    trusted_followup_spec = (
+                        _trusted_context_dish_followup_spec(semantic_query)
+                    )
         try:
             available_stores = await _load_store_options(pool, factory_id)
         except Exception as exc:
@@ -3781,6 +3791,54 @@ async def parse_restaurant_query(
             semantic_query,
             available_stores=available_stores,
         )
+        if (
+            trusted_followup_spec is not None
+            and semantic_spec.planner_authority != "llm_contract_incomplete"
+            and (
+                semantic_spec.clarification_needed
+                or semantic_spec.intent != trusted_followup_spec.intent
+                or semantic_spec.date_range != trusted_followup_spec.date_range
+                or (
+                    semantic_spec.requested_metrics
+                    != trusted_followup_spec.requested_metrics
+                )
+                or (
+                    semantic_spec.analysis_action
+                    != trusted_followup_spec.analysis_action
+                )
+                or semantic_spec.store_scope != trusted_followup_spec.store_scope
+                or semantic_spec.store_slots != trusted_followup_spec.store_slots
+                or semantic_spec.dish_slot != trusted_followup_spec.dish_slot
+            )
+        ):
+            # The LLM has already interpreted the complete reconstructed
+            # utterance.  If it nevertheless claims a trusted slot is missing
+            # or changes that slot, repair the executable contract from the
+            # server-owned context instead of asking the user for information
+            # they already supplied.  Re-seal the plan so the hash describes
+            # the exact repaired semantics.
+            logger.warning(
+                "[restaurant-intent] trusted follow-up repair: "
+                "llm_intent=%s trusted_intent=%s llm_missing=%s "
+                "dish=%s window=%s scope=%s",
+                semantic_spec.intent,
+                trusted_followup_spec.intent,
+                parsed.get("missing_fields"),
+                trusted_followup_spec.dish_slot,
+                trusted_followup_spec.window_label,
+                trusted_followup_spec.store_scope,
+            )
+            semantic_spec = _seal_query_plan(replace(
+                trusted_followup_spec,
+                confidence=max(
+                    semantic_spec.confidence,
+                    trusted_followup_spec.confidence,
+                ),
+                source_tier="llm",
+                planner_authority="llm_trusted_context_repair",
+                store_options=tuple(available_stores),
+                plan_hash="",
+            ))
         semantic_spec = await _apply_store_scope_guard(
             pool,
             factory_id,
