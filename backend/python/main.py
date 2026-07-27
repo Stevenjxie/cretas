@@ -1199,6 +1199,15 @@ app.include_router(
     tags=["Factory Config"],
 )
 
+# 卡5b (2026-07-28): AI 飞轮运营台后端 API — 总览看板 / 晋升审核 / Miss 复盘 /
+# 质量与回归 / 蒸馏数据集导出。平台管理员权限 (require_admin)。
+from smartbi.api import flywheel  # noqa: E402
+app.include_router(
+    flywheel.router,
+    prefix="/api/smartbi/flywheel",
+    tags=["AI Flywheel Console"],
+)
+
 # Week 5 Agent layer — gated by env flag until verified on test.
 # When flag is off, /api/smartbi/insights/custom does not exist.
 if os.getenv("SMARTBI_AGENT_LAYER_ENABLED", "false").lower() == "true":
