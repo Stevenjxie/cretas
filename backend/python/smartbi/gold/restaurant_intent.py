@@ -25,6 +25,7 @@ import hashlib
 import json
 import logging
 import re
+import time
 from collections import OrderedDict
 from dataclasses import dataclass, replace
 from datetime import datetime, timezone
@@ -1894,8 +1895,17 @@ def _cache_put(factory_id: str, norm_query: str, value) -> None:
 
 
 def clear_route_cache() -> None:
-    """Test-only helper: reset the in-process routing cache."""
+    """Test-only helper: reset EVERY in-process planner cache.
+
+    Deliberately broader than `_ROUTE_CACHE`: the semantic-first plan cache
+    and the reviewed-promotion catalogue below are process-global too, so a
+    test that resets only the legacy cache would leak a plan (or a fail-open
+    negative catalogue entry) into the next test. Every existing caller is an
+    autouse test fixture that means "start from a cold planner".
+    """
     _ROUTE_CACHE.clear()
+    clear_semantic_plan_cache()
+    clear_promoted_routes_cache()
 
 
 def _normalize_query(query: str) -> str:
@@ -1908,31 +1918,44 @@ def _normalize_exact_phrase(query: str) -> str:
     return compact.rstrip("。.!！?？")
 
 
-def _approved_exact_shape(
+def _exact_shape_matches(
     query: str,
-) -> Optional[Tuple[str, bool, bool]]:
+    routes: Sequence[Tuple[str, str, Any]],
+) -> Optional[Tuple[Any, bool, bool]]:
     """Match a finite approved sentence shape, never a substring.
 
     Besides the bare reviewed phrase, this permits only an approved time slot
     and/or the exact all-store slot around that phrase. The entire normalized
-    query must equal one of those finite compositions.
+    query must equal one of those finite compositions, and exactly one
+    composition may match -- an ambiguous registry never authorizes execution.
+
+    ``routes`` is a sequence of ``(phrase, dedupe_key, payload)``.  The
+    dedupe key exists because two reviewed phrases may legitimately carry the
+    SAME plan ("哪个菜卖得好" / "哪个菜最好卖"); collapsing them keeps that
+    from looking like an ambiguous double match, exactly as the original
+    set-of-(code, has_time, has_store) implementation did.  ``payload`` is
+    whatever the caller wants back: a resolver code for the in-code registry,
+    a full plan dict for the reviewed promotion table.
     """
     normalized = _normalize_exact_phrase(query)
-    matches = set()
-    for phrase, code in _APPROVED_EXACT_ROUTES.items():
-        if code not in _VALID_CODES:
-            continue
+    if not normalized:
+        return None
+    matches: Dict[Tuple[str, bool, bool], Any] = {}
+    for phrase, dedupe_key, payload in routes:
         base = _normalize_exact_phrase(phrase)
+        if not base:
+            continue
+        shapes: List[Tuple[bool, bool]] = []
         if normalized == base:
-            matches.add((code, False, False))
+            shapes.append((False, False))
         for store_answer in _APPROVED_ALL_STORE_ANSWERS:
             store = _normalize_exact_phrase(store_answer)
             if normalized in {store + base, base + store}:
-                matches.add((code, False, True))
+                shapes.append((False, True))
         for time_phrase in _APPROVED_DIRECT_TIME_PHRASES:
             window = _normalize_exact_phrase(time_phrase)
             if normalized in {window + base, base + window}:
-                matches.add((code, True, False))
+                shapes.append((True, False))
             for store_answer in _APPROVED_ALL_STORE_ANSWERS:
                 store = _normalize_exact_phrase(store_answer)
                 if normalized in {
@@ -1943,14 +1966,366 @@ def _approved_exact_shape(
                     store + window + base,
                     store + base + window,
                 }:
-                    matches.add((code, True, True))
-    return next(iter(matches)) if len(matches) == 1 else None
+                    shapes.append((True, True))
+        for has_time, has_store in shapes:
+            matches.setdefault((dedupe_key, has_time, has_store), payload)
+    if len(matches) != 1:
+        return None
+    (_, has_time, has_store), payload = next(iter(matches.items()))
+    return payload, has_time, has_store
+
+
+def _approved_exact_shape(
+    query: str,
+) -> Optional[Tuple[str, bool, bool]]:
+    """Legacy in-code registry view of `_exact_shape_matches`."""
+    return _exact_shape_matches(
+        query,
+        [
+            (phrase, code, code)
+            for phrase, code in _APPROVED_EXACT_ROUTES.items()
+            if code in _VALID_CODES
+        ],
+    )
 
 
 def _approved_exact_route(query: str) -> Optional[str]:
     """Return the resolver for one finite approved whole-sentence shape."""
     matched = _approved_exact_shape(query)
     return matched[0] if matched is not None else None
+
+
+# ─── Zero-token flywheel exits (2026-07-28 flywheel reconnect, card 2) ─────
+#
+# Production restaurant chat is `parse_restaurant_query(semantic_first=True)`.
+# Before this change that branch called the REVIEW-tier planner (5-12s) for
+# EVERY question, because the two zero-token mechanisms below the branch --
+# the validated-plan cache and the reviewed exact-phrase registry -- were only
+# wired into the legacy compatibility path ("they are not consulted by Web or
+# Java restaurant chat").  Both are reconnected here in the only form that is
+# safe for the semantic-first contract:
+#
+#   1. WHAT IS CACHED IS THE RAW PLANNER OUTPUT, NEVER A SEALED SPEC.
+#      A sealed spec carries `date_range` as concrete dates; replaying one
+#      across midnight would answer yesterday's window.  The raw plan keeps
+#      time as a structured relative description, and a hit re-runs
+#      `_semantic_spec_from_t3`, which recomputes every deterministic slot
+#      (dates included) against TODAY.  This is the same principle the
+#      in-process `_ROUTE_CACHE` docstring above states for the legacy path.
+#
+#   2. CONVERSATION STATE DISQUALIFIES BOTH EXITS.  A turn that consumed a
+#      pending clarification, or whose utterance was rewritten by context
+#      inheritance, is not the sentence these stores are keyed on.  Those
+#      turns go straight to the planner -- the "带上下文追问 100% 由 LLM 理解"
+#      rule is unchanged.
+#
+#   3. FAIL-OPEN, NEVER FAIL-WRONG.  Any storage error degrades to "no
+#      zero-token hit" and the planner runs exactly as before.
+_PLAN_VERSION = "restaurant-query-plan-v2"
+
+# Authorities `_semantic_spec_from_t3` may return for a plan that is safe to
+# replay.  `llm_contract_incomplete` (the model's answer did not satisfy the
+# execution contract) and `llm_trusted_context_repair` (derived from session
+# context, not from the sentence) are deliberately absent.
+_REPLAYABLE_PLAN_AUTHORITIES: Dict[str, Tuple[str, str]] = {
+    # planner authority -> (promoted-route authority, plan-cache authority)
+    "llm": ("promoted_exact", "validated_plan_cache"),
+    "llm_contract_repair": (
+        "promoted_exact_contract_repair",
+        "validated_plan_cache_contract_repair",
+    ),
+}
+
+# 4-6h TTL: long enough that a working session and the next shift reuse one
+# planner call, short enough that a prompt/catalogue change is not pinned for
+# a day.  Process-local by design (`uvicorn --workers 2` means each worker
+# warms its own copy): this is a pure performance cache, so a cold worker
+# costs latency, never correctness -- the same trade-off the legacy
+# `_ROUTE_CACHE` documents. Conversation STATE stays in Postgres.
+_SEMANTIC_PLAN_CACHE_TTL_SECONDS = 6 * 3600
+_SEMANTIC_PLAN_CACHE_MAX = 500
+# key -> (expires_at_monotonic, plan JSON text)
+_SEMANTIC_PLAN_CACHE: "OrderedDict[Tuple[str, str, str], Tuple[float, str]]" = (
+    OrderedDict()
+)
+
+
+def _semantic_plan_cache_key(factory_id: str, query: str) -> Tuple[str, str, str]:
+    """(tenant, normalized sentence, plan contract version).
+
+    `plan_version` is part of the key so a future contract revision cannot
+    replay plans compiled against the previous one, and `factory_id` is part
+    of it so no plan ever crosses a tenant boundary.
+    """
+    return (factory_id, _normalize_exact_phrase(query), _PLAN_VERSION)
+
+
+def _semantic_plan_cache_get(
+    factory_id: str,
+    query: str,
+    *,
+    allow_stale: bool = False,
+) -> Optional[Dict[str, Any]]:
+    """Return a stored raw plan, or None.
+
+    `allow_stale=True` is the planner-outage lifeboat: an expired plan is
+    still date-correct once recompiled, so serving it beats telling the user
+    "请稍后重试" while the planner is down.
+    """
+    key = _semantic_plan_cache_key(factory_id, query)
+    entry = _SEMANTIC_PLAN_CACHE.get(key)
+    if entry is None:
+        return None
+    expires_at, payload = entry
+    if expires_at <= time.monotonic() and not allow_stale:
+        return None
+    _SEMANTIC_PLAN_CACHE.move_to_end(key)
+    try:
+        plan = json.loads(payload)
+    except (TypeError, ValueError):
+        _SEMANTIC_PLAN_CACHE.pop(key, None)
+        return None
+    return plan if isinstance(plan, dict) else None
+
+
+def _semantic_plan_cache_put(
+    factory_id: str,
+    query: str,
+    parsed: Dict[str, Any],
+) -> None:
+    """Store the raw planner output. Serialising here both isolates the entry
+    from later mutation and proves the plan is JSON -- a plan that cannot be
+    round-tripped is simply not cached."""
+    try:
+        payload = json.dumps(parsed, ensure_ascii=False, sort_keys=True)
+    except (TypeError, ValueError):
+        return
+    key = _semantic_plan_cache_key(factory_id, query)
+    _SEMANTIC_PLAN_CACHE[key] = (
+        time.monotonic() + _SEMANTIC_PLAN_CACHE_TTL_SECONDS,
+        payload,
+    )
+    _SEMANTIC_PLAN_CACHE.move_to_end(key)
+    while len(_SEMANTIC_PLAN_CACHE) > _SEMANTIC_PLAN_CACHE_MAX:
+        _SEMANTIC_PLAN_CACHE.popitem(last=False)
+
+
+def clear_semantic_plan_cache() -> None:
+    """Test/ops helper: reset the in-process semantic plan cache."""
+    _SEMANTIC_PLAN_CACHE.clear()
+
+
+# ─── Reviewed promotion table (`ai_promoted_routes`) ──────────────────────
+# Migration V20261030_01. `domain` discriminates the business line so the
+# table stays a platform asset; `scope` is 'global' or a single factory_id and
+# is enforced by RLS. The catalogue is small (human-reviewed phrases only), so
+# it is loaded whole and matched in Python with the SAME conservative
+# whole-sentence machinery the in-code registry always used -- no LIKE, no
+# substring, no keyword.
+PROMOTED_ROUTE_DOMAIN = "restaurant"
+# Short TTL rather than process lifetime: a newly approved promotion must
+# reach both uvicorn workers without a restart, and this is what "clear the
+# process cache after --apply" means for a CLI that runs in a different
+# process than the servers.
+_PROMOTED_ROUTES_TTL_SECONDS = 60.0
+# (domain, factory_id) -> (expires_at_monotonic, routes)
+_PROMOTED_ROUTES_CACHE: Dict[
+    Tuple[str, str], Tuple[float, Tuple[Tuple[str, str, Dict[str, Any]], ...]]
+] = {}
+
+
+def clear_promoted_routes_cache() -> None:
+    """Test/ops helper: force the next question to re-read the table."""
+    _PROMOTED_ROUTES_CACHE.clear()
+
+
+async def _load_promoted_routes(
+    pool,
+    factory_id: str,
+    *,
+    domain: str = PROMOTED_ROUTE_DOMAIN,
+) -> Tuple[Tuple[str, str, Dict[str, Any]], ...]:
+    """Load this tenant's replayable reviewed routes as `_exact_shape_matches`
+    input. Fail-open: an unavailable/ungranted table yields no routes, so the
+    planner runs exactly as it did before this table existed."""
+    key = (domain, factory_id)
+    now = time.monotonic()
+    cached = _PROMOTED_ROUTES_CACHE.get(key)
+    if cached is not None and cached[0] > now:
+        return cached[1]
+
+    try:
+        async with pool.acquire() as conn:
+            async with conn.transaction():
+                # Transaction-local GUC: the pool's setup callback pins the
+                # ambient tenant (or the '__internal__' sentinel), which is not
+                # necessarily the tenant this question belongs to. Setting it
+                # locally is the pattern every other RLS read in this module
+                # uses, and `is_local=True` cannot leak back into the pool.
+                await conn.execute(
+                    "SELECT set_config('app.factory_id', $1, true)",
+                    factory_id,
+                )
+                rows = await conn.fetch(
+                    """
+                    SELECT normalized_phrase, plan_json
+                      FROM ai_promoted_routes
+                     WHERE domain = $1
+                       AND plan_version = $2
+                       AND (scope = 'global' OR scope = $3)
+                     ORDER BY normalized_phrase
+                    """,
+                    domain, _PLAN_VERSION, factory_id,
+                )
+    except Exception as exc:
+        logger.warning(
+            "[restaurant-intent] promoted-route catalogue unavailable "
+            "(fail-open, planner path unchanged): %s",
+            exc,
+        )
+        # Negative-cache for the same short TTL so a missing table or a
+        # missing GRANT does not add a failing round trip to every question.
+        _PROMOTED_ROUTES_CACHE[key] = (now + _PROMOTED_ROUTES_TTL_SECONDS, ())
+        return ()
+
+    routes: List[Tuple[str, str, Dict[str, Any]]] = []
+    for row in rows or ():
+        phrase = _normalize_exact_phrase(row["normalized_phrase"] or "")
+        if not phrase:
+            continue
+        plan = row["plan_json"]
+        if isinstance(plan, (bytes, bytearray)):
+            plan = plan.decode("utf-8", "ignore")
+        if isinstance(plan, str):
+            # asyncpg hands JSONB back as text unless a codec is registered.
+            try:
+                plan = json.loads(plan)
+            except (TypeError, ValueError):
+                logger.warning(
+                    "[restaurant-intent] promoted route %s has unparsable "
+                    "plan_json; skipped",
+                    phrase,
+                )
+                continue
+        if not isinstance(plan, dict) or plan.get("intent") not in _VALID_CODES:
+            # A row whose resolver was retired must not authorize anything.
+            continue
+        routes.append(
+            (phrase, json.dumps(plan, ensure_ascii=False, sort_keys=True), plan)
+        )
+
+    frozen = tuple(routes)
+    _PROMOTED_ROUTES_CACHE[key] = (now + _PROMOTED_ROUTES_TTL_SECONDS, frozen)
+    return frozen
+
+
+async def _replay_zero_token_plan(
+    pool,
+    factory_id: str,
+    query: str,
+    *,
+    available_stores: Sequence[str],
+    suggested_stores: Sequence[str],
+    allow_stale: bool,
+) -> Optional[Tuple[RestaurantQuerySpec, str]]:
+    """Rebuild an executable plan for `query` without calling the planner.
+
+    Reviewed promotions win over the plan cache: a human approved the former.
+    Returns ``(spec, source_label)`` or None. The caller is responsible for
+    the store-scope guard and pending registration, exactly as on the planner
+    path -- this helper only replaces the LLM call, never a safety gate.
+    """
+    routes = await _load_promoted_routes(pool, factory_id)
+    if routes:
+        matched = _exact_shape_matches(query, routes)
+        if matched is not None:
+            spec = _replay_plan_spec(
+                matched[0],
+                query,
+                available_stores=available_stores,
+                suggested_stores=suggested_stores,
+                authority_index=0,
+            )
+            if spec is not None:
+                logger.info(
+                    "[restaurant-intent] zero-token promoted-route hit: "
+                    "authority=%s intent=%s clarification=%s query=%s",
+                    spec.planner_authority,
+                    spec.intent,
+                    spec.clarification_needed,
+                    query,
+                )
+                return spec, "promoted_route"
+            logger.warning(
+                "[restaurant-intent] promoted route did not compile to an "
+                "executable plan; falling through to the planner: %s",
+                query,
+            )
+
+    plan = _semantic_plan_cache_get(factory_id, query, allow_stale=allow_stale)
+    if plan is not None:
+        spec = _replay_plan_spec(
+            plan,
+            query,
+            available_stores=available_stores,
+            suggested_stores=suggested_stores,
+            authority_index=1,
+        )
+        if spec is not None:
+            logger.info(
+                "[restaurant-intent] zero-token plan-cache hit: "
+                "authority=%s intent=%s clarification=%s stale=%s query=%s",
+                spec.planner_authority,
+                spec.intent,
+                spec.clarification_needed,
+                allow_stale,
+                query,
+            )
+            return spec, "plan_cache"
+        logger.warning(
+            "[restaurant-intent] cached plan did not compile to an executable "
+            "plan; falling through to the planner: %s",
+            query,
+        )
+    return None
+
+
+def _replay_plan_spec(
+    plan: Dict[str, Any],
+    query: str,
+    *,
+    available_stores: Sequence[str],
+    suggested_stores: Sequence[str],
+    authority_index: int,
+) -> Optional[RestaurantQuerySpec]:
+    """Compile a stored raw plan against TODAY and re-seal it under the
+    replay authority. None when the stored plan no longer satisfies the
+    execution contract (fail-closed: fall through to the planner)."""
+    spec = _semantic_spec_from_t3(
+        plan,
+        query,
+        available_stores=available_stores,
+        suggested_stores=suggested_stores,
+    )
+    authorities = _REPLAYABLE_PLAN_AUTHORITIES.get(spec.planner_authority)
+    if authorities is None:
+        return None
+    return _seal_query_plan(replace(
+        spec,
+        source_tier="exact" if authority_index == 0 else "plan_cache",
+        planner_authority=authorities[authority_index],
+        plan_hash="",
+    ))
+
+
+def plan_is_replayable(spec: RestaurantQuerySpec) -> bool:
+    """True when the planner output behind `spec` may be stored for replay.
+
+    "Complete plan, or a standard clarification the compiler itself derived"
+    -- a plan the compiler rejected (`llm_contract_incomplete`) or one
+    repaired from session context is never stored.
+    """
+    return spec.planner_authority in _REPLAYABLE_PLAN_AUTHORITIES
 
 
 _EXPLICIT_RANKING_NEGATION_TOKENS = (
@@ -4059,9 +4434,11 @@ async def parse_restaurant_query(
         if not history:
             history = None
 
+    consumed_pending = False
     if session_key:
         pending = await _pending_pop(pool, factory_id, session_key)
         if pending is not None:
+            consumed_pending = True
             continued = await _parse_continuation(
                 norm_query,
                 pool,
@@ -4207,6 +4584,48 @@ async def parse_restaurant_query(
                 exc,
             )
             suggested_stores = ()
+
+        # ── Zero-token flywheel exits (see `_replay_zero_token_plan`) ──────
+        # Admission is deliberately narrow: this turn must be the SELF-
+        # CONTAINED sentence the reviewed registry / plan cache are keyed on.
+        #   * `not consumed_pending` -- a clarification answer is a two-turn
+        #     accumulated task, not this sentence (that path returns above;
+        #     the flag keeps the requirement explicit rather than incidental).
+        #   * `semantic_query == norm_query` -- context inheritance rewrote
+        #     the utterance, so neither store speaks about what the user
+        #     actually asked. `trusted_followup_spec` can only be set on that
+        #     same branch, so it is None here by construction.
+        # Everything else -- new phrasings, follow-ups with context, compound
+        # questions -- still reaches the planner, unchanged.
+        zero_token_eligible = (
+            not consumed_pending
+            and semantic_query == norm_query
+        )
+        if zero_token_eligible:
+            replayed = await _replay_zero_token_plan(
+                pool,
+                factory_id,
+                norm_query,
+                available_stores=available_stores,
+                suggested_stores=suggested_stores,
+                allow_stale=False,
+            )
+            if replayed is not None:
+                replay_spec, _replay_source = replayed
+                replay_spec = await _apply_store_scope_guard(
+                    pool,
+                    factory_id,
+                    replay_spec,
+                )
+                await _maybe_register_pending(
+                    pool,
+                    norm_query,
+                    replay_spec,
+                    factory_id,
+                    session_key,
+                )
+                return replay_spec
+
         parsed = await _t3_llm_parse(
             semantic_query,
             hint=None,
@@ -4215,6 +4634,41 @@ async def parse_restaurant_query(
             prefer_high_accuracy=True,
         )
         if parsed is None:
+            # Planner outage lifeboat. A reviewed promotion is a human
+            # decision that does not expire, and an aged cached plan is still
+            # date-correct once recompiled -- both beat refusing to answer a
+            # question we have already answered correctly. Anything else stays
+            # fail-closed: no keyword guess, no adjacent metric.
+            if zero_token_eligible:
+                replayed = await _replay_zero_token_plan(
+                    pool,
+                    factory_id,
+                    norm_query,
+                    available_stores=available_stores,
+                    suggested_stores=suggested_stores,
+                    allow_stale=True,
+                )
+                if replayed is not None:
+                    replay_spec, replay_source = replayed
+                    logger.warning(
+                        "[restaurant-intent] planner unavailable; served from "
+                        "zero-token %s instead of failing closed: %s",
+                        replay_source,
+                        norm_query,
+                    )
+                    replay_spec = await _apply_store_scope_guard(
+                        pool,
+                        factory_id,
+                        replay_spec,
+                    )
+                    await _maybe_register_pending(
+                        pool,
+                        norm_query,
+                        replay_spec,
+                        factory_id,
+                        session_key,
+                    )
+                    return replay_spec
             return _build_spec(
                 "",
                 norm_query,
@@ -4233,6 +4687,12 @@ async def parse_restaurant_query(
             available_stores=available_stores,
             suggested_stores=suggested_stores,
         )
+        if zero_token_eligible and plan_is_replayable(semantic_spec):
+            # Store the RAW planner output, never `semantic_spec`: the sealed
+            # spec's date_range is concrete, so replaying it tomorrow would
+            # answer today's window. A replay recompiles this same JSON
+            # against the day it is served.
+            _semantic_plan_cache_put(factory_id, norm_query, parsed)
         if (
             trusted_followup_spec is not None
             and semantic_spec.planner_authority != "llm_contract_incomplete"
