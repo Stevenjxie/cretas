@@ -71,10 +71,16 @@ _RESOLVER_DIMENSIONS = {
     "RESTAURANT_OPS_WASTAGE_TOP": frozenset({"ingredient"}),
     "RESTAURANT_OPS_STOCK_SHORTAGE": frozenset({"ingredient"}),
     "RESTAURANT_OPS_REQUISITION_TREND": frozenset({"ingredient"}),
-    "RESTAURANT_OPS_SALES_SUMMARY": frozenset(),
+    # The sales summary resolver returns a real per-store Top-N table in
+    # addition to the chain aggregate, so an all-store revenue ranking is a
+    # supported store-grain read rather than a resolver mismatch.
+    "RESTAURANT_OPS_SALES_SUMMARY": frozenset({"store"}),
     "RESTAURANT_OPS_TREND_ANALYSIS": frozenset({"time"}),
     "RESTAURANT_OPS_INVENTORY_WARNING": frozenset({"ingredient"}),
-    "RESTAURANT_OPS_STAFFING_ADVICE": frozenset(),
+    # Staffing facts are keyed by daypart (午市/晚市/夜宵).  Treat that
+    # daypart as the supported time dimension; otherwise a correctly compiled
+    # “晚上生意怎么样” plan is rejected before its resolver can run.
+    "RESTAURANT_OPS_STAFFING_ADVICE": frozenset({"time"}),
 }
 
 _READ_ONLY_MUTATION_TOKENS = (
@@ -660,10 +666,14 @@ async def tiered_answer(
             extract_dish_candidate,
             store_dish_split_dish,
         )
+        # The sealed QueryPlan is the execution authority.  Re-running a
+        # best-effort regex over the contextualized resolver query can see
+        # wording from an older turn and must never replace the already
+        # validated dish slot (live example: “那成本呢” after a rice query).
         dish_mention = (
-            extract_dish_candidate(resolver_query)
+            getattr(spec, "dish_slot", None)
+            or extract_dish_candidate(resolver_query)
             or extract_dish_candidate(query)
-            or getattr(spec, "dish_slot", None)
         )
         # R18: 店×菜下钻 — store_dish_rows 本就是店×菜粒度, 路由 STORE_MARGIN
         # 带 dish_mention 直答 (匿名「哪家店的X」排名 / 具名店+菜单店直答)。

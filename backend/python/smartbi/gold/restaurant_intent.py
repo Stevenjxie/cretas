@@ -272,7 +272,7 @@ _ALL_STORE_SCOPE_TOKENS = (
     "所有店", "全部店", "全店汇总", "连锁整体",
 )
 _STORE_RANK_SCOPE_TOKENS = (
-    "哪家店", "哪个店", "哪家门店", "门店排名", "门店排行", "各店排名",
+    "哪家店", "哪个店", "哪家门店", "哪个门店", "门店排名", "门店排行", "各店排名",
 )
 _STORE_BREAKDOWN_SCOPE_TOKENS = (
     *_STORE_RANK_SCOPE_TOKENS,
@@ -670,7 +670,16 @@ def _plan_requested_intents(
                     else "RESTAURANT_OPS_GROSS_MARGIN"
                 )
             elif "store" in dimensions:
-                code = "RESTAURANT_OPS_STORE_MARGIN"
+                # “哪个门店营收最好” is an all-store revenue ranking.  The
+                # sales-summary resolver owns the real per-store revenue Top-N;
+                # STORE_MARGIN would silently rank a neighbouring profit
+                # metric instead.
+                code = (
+                    "RESTAURANT_OPS_SALES_SUMMARY"
+                    if store_scope == "all"
+                    and any(token in text for token in _STORE_RANK_SCOPE_TOKENS)
+                    else "RESTAURANT_OPS_STORE_MARGIN"
+                )
             elif comparison:
                 code = "RESTAURANT_OPS_SALES_SUMMARY"
             elif (
@@ -1610,6 +1619,14 @@ def _build_spec(
         store_scope = llm_store_scope
     elif store_slots and not store_scope:
         store_scope = "single" if len(store_slots) == 1 else "multiple"
+    if llm_semantics_authoritative and allow_explicit_slot_repair:
+        explicit_store_scope, _ = _detect_store_scope(effective_query)
+        if explicit_store_scope == "all":
+            # Literal all-store/ranking wording is an immutable scope slot.
+            # A fallback model may omit it, but may not turn a comparison into
+            # another “which stores?” clarification.
+            store_scope = "all"
+            store_slots = ()
     dimension_list = list(
         llm_dimensions
         if llm_dimensions is not None
@@ -1708,10 +1725,10 @@ def _build_spec(
         or ("llm" if tier == "llm" else "deterministic_guard")
     )
     if (
-        code
-        and len(planned_intents) == 1
-        and code not in planned_intents
+        len(planned_intents) == 1
+        and (not code or code not in planned_intents)
         and supported_requested_metrics
+        and (bool(code) or bool(explicit_requested_metrics))
         and all(
             metric in _CONTRACT_REPAIRABLE_METRICS
             for metric in supported_requested_metrics

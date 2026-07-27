@@ -109,13 +109,26 @@ def _collect_named_entities(kpis: Optional[List[Dict[str, Any]]], meta: Optional
         value = kpi.get("value")
         if isinstance(value, str) and value not in ("—", "***", "暂无"):
             names.append(value)
-    for meta_list_key in ("stores", "weak_stores", "low_margin_dishes"):
+    for meta_list_key in (
+        "stores",
+        "weak_stores",
+        "low_margin_dishes",
+        "ranked_entities",
+        "targetDishes",
+        "target_dishes",
+    ):
         entries = (meta or {}).get(meta_list_key) or []
         for entry in entries:
             if isinstance(entry, dict) and isinstance(entry.get("name"), str):
                 names.append(entry["name"])
             elif isinstance(entry, str):
                 names.append(entry)
+    for meta_value_key in ("focus_entity", "targetDish", "target_dish", "store_dish"):
+        value = (meta or {}).get(meta_value_key)
+        if isinstance(value, dict) and isinstance(value.get("name"), str):
+            names.append(value["name"])
+        elif isinstance(value, str):
+            names.append(value)
     return names
 
 
@@ -387,7 +400,12 @@ def validate(
             if not _dimension_object_named("store", text, entities):
                 missing.append(element)
         elif element == "dish_name":
-            if not _dimension_object_named("dish", text, entities):
+            # When the semantic plan has a sealed dish slot, require that very
+            # object (or a more specific menu name containing it), not merely
+            # any dish emitted by an accidental all-menu resolver.
+            if spec.dish_slot and spec.dish_slot not in text:
+                missing.append(element)
+            elif not _dimension_object_named("dish", text, entities):
                 missing.append(element)
         elif element == "comparison":
             if not _comparison_present(spec, text, meta):

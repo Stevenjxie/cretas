@@ -16,6 +16,7 @@ Covers:
 from __future__ import annotations
 
 import asyncio
+from dataclasses import replace
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -166,6 +167,31 @@ def test_time_dimension_is_supported_by_time_aware_resolvers(code, query):
         store_dish=None,
     )
 
+    assert mismatch is None
+
+
+def test_daypart_time_dimension_matches_staffing_resolver_capability():
+    spec = _build_spec(
+        "RESTAURANT_OPS_STAFFING_ADVICE",
+        "本月全部门店晚上生意怎么样",
+        confidence=0.99,
+        tier="llm",
+        llm_dimensions=("time",),
+        llm_analysis_action="lookup",
+        llm_store_scope="all",
+        planner_authority="llm_contract_repair",
+        require_explicit_time=True,
+    )
+
+    mismatch = svc._execution_mismatch(
+        spec,
+        spec.planned_intents,
+        dish_mention=None,
+        store_mention=None,
+        store_dish=None,
+    )
+
+    assert spec.planned_intents == ("RESTAURANT_OPS_STAFFING_ADVICE",)
     assert mismatch is None
 
 
@@ -505,6 +531,59 @@ async def test_time_clarification_returns_four_continuation_buttons(monkeypatch)
     ]
     assert result["structured_context"]["topic_kind"] == "dish_ranking"
     assert result["structured_context"]["focus_entity"]["name"] == "招牌藤椒味(单人份)"
+
+
+@pytest.mark.asyncio
+async def test_tiered_answer_executes_the_sealed_dish_slot_before_context_regex(monkeypatch):
+    spec = _build_spec(
+        "RESTAURANT_OPS_GROSS_MARGIN",
+        "本月全部门店米饭的成本如何",
+        confidence=0.99,
+        tier="llm",
+        llm_requested_metrics=("recipe_cost",),
+        llm_dimensions=("dish",),
+        llm_analysis_action="lookup",
+        llm_store_scope="all",
+        planner_authority="llm_contract_repair",
+        require_explicit_time=True,
+    )
+    spec = replace(
+        spec,
+        # Simulate a stale surface string from an older context turn.  The
+        # immutable dish slot above must remain the execution object.
+        resolver_query_seed="招牌藤椒味(单人份)的成本 本月 全部门店",
+    )
+    captured = {}
+
+    async def _resolve(code, _pool, _factory_id, **kwargs):
+        captured.update(kwargs)
+        return OpsAnswer(
+            code=code,
+            title="米饭成本",
+            answer_text="「米饭」本月单份成本 ¥2.26，总成本 ¥69,501.17。",
+            charts=[],
+            kpis=[],
+            meta={
+                "targetDish": "米饭",
+                "focus_entity": {"type": "dish", "name": "米饭"},
+            },
+        )
+
+    monkeypatch.setattr(svc, "_resolve_tiered", _resolve)
+    monkeypatch.setattr(svc, "log_intent_capture", AsyncMock(return_value=None))
+
+    result = await tiered_answer(
+        "那成本呢",
+        object(),
+        "DEMO_REST",
+        "restaurant_manager",
+        precomputed_spec=spec,
+    )
+
+    assert captured["dish_mention"] == "米饭"
+    assert result["kind"] == "answer"
+    assert result["contract_pass"] is True
+    assert "「米饭」" in result["answer_text"]
 
 
 @pytest.mark.asyncio

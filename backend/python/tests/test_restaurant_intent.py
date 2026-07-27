@@ -1484,6 +1484,37 @@ def test_contract_store_dimension_missing_when_no_name_mentioned():
     assert "store_name" in result.missing
 
 
+def test_contract_accepts_named_dish_from_focus_meta_and_rejects_substitution():
+    spec = _spec(
+        intent="RESTAURANT_OPS_GROSS_MARGIN",
+        metrics=(),
+        dimensions=("dish",),
+        requested_metrics=("recipe_cost",),
+        dish_slot="米饭",
+    )
+    meta = {
+        "targetDish": "米饭",
+        "focus_entity": {"type": "dish", "name": "米饭"},
+    }
+
+    passed = contract.validate(
+        spec,
+        "「米饭」本月单份成本 ¥2.26，总成本 ¥69,501.17。",
+        kpis=[],
+        meta=meta,
+    )
+    substituted = contract.validate(
+        spec,
+        "「娃娃菜」本月单份成本 ¥3.10。",
+        kpis=[],
+        meta=meta,
+    )
+
+    assert "dish_name" not in passed.missing
+    assert passed.passed
+    assert "dish_name" in substituted.missing
+
+
 def test_contract_all_satisfied_passes():
     spec = _spec(
         window_label="今天", relative_window=True,
@@ -3822,6 +3853,68 @@ def test_daypart_business_question_repairs_adjacent_sales_summary():
     assert spec.requested_metrics == ()
     assert spec.analysis_action == "lookup"
     assert spec.planner_authority == "llm_contract_repair"
+
+
+def test_named_dish_metric_repairs_generic_llm_clarification_to_time_slot():
+    spec = _semantic_spec_from_t3(
+        {
+            "intent": None,
+            "time_range": None,
+            "wants_margin": False,
+            "asks_profitability": False,
+            "requested_metrics": [],
+            "analysis_action": "lookup",
+            "dimensions": [],
+            "dish": None,
+            "store": None,
+            "stores": [],
+            "store_scope": None,
+            "confidence": 0.92,
+            "clarification_needed": True,
+            "missing_fields": ["metric"],
+            "clarification_question": "你最想先看哪件事？",
+            "clarification_options": ["营收", "毛利", "库存"],
+        },
+        "米饭的销量是多少",
+    )
+
+    assert spec.intent == "RESTAURANT_OPS_GROSS_MARGIN"
+    assert spec.dish_slot == "米饭"
+    assert spec.requested_metrics == ("sales_volume",)
+    assert spec.clarification_needed is True
+    assert spec.clarification_question == TIME_CLARIFICATION_QUESTION
+    assert spec.clarification_options == ("本月", "上个月", "最近7天", "最近30天")
+    assert spec.planner_authority == "llm_contract_repair"
+
+
+def test_store_revenue_ranking_implies_all_store_scope_after_llm():
+    spec = _semantic_spec_from_t3(
+        {
+            "intent": "RESTAURANT_OPS_SALES_SUMMARY",
+            "time_range": None,
+            "wants_margin": False,
+            "asks_profitability": False,
+            "requested_metrics": ["revenue"],
+            "analysis_action": "lookup",
+            "dimensions": ["store"],
+            "dish": None,
+            "store": None,
+            "stores": [],
+            "store_scope": None,
+            "confidence": 0.95,
+            "clarification_needed": False,
+            "missing_fields": ["time_range"],
+            "clarification_question": None,
+            "clarification_options": [],
+        },
+        "哪个门店营收最好",
+    )
+
+    assert spec.store_scope == "all"
+    assert spec.dimensions == ("store",)
+    assert spec.planned_intents == ("RESTAURANT_OPS_SALES_SUMMARY",)
+    assert spec.clarification_needed is True
+    assert spec.clarification_question == TIME_CLARIFICATION_QUESTION
 
 
 @pytest.mark.asyncio
