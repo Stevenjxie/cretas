@@ -22,6 +22,7 @@ from food_kb.services.knowledge_retriever import KnowledgeRetriever
 from food_kb.services.manual_ingester import (
     MANUAL_SOURCES,
     PROJECT_ROOT,
+    parse_html_to_sections,
     parse_markdown_to_sections,
 )
 
@@ -264,6 +265,15 @@ def test_restaurant_registered_sources_match_current_product_contract():
     assert "原料包装换算、标签人工审核或多产出成本怎么做？" in ai_assist
     assert "21 维证据地图与连续追问范围" in ai_assist
     assert "不做计算" in ai_assist
+
+
+def test_restaurant_registered_html_sources_parse_in_a_clean_runtime():
+    for source_info in MANUAL_SOURCES:
+        if source_info.get("subcategory") != "restaurant":
+            continue
+        source_path = PROJECT_ROOT / source_info["path"]
+        sections = parse_html_to_sections(source_path.read_text(encoding="utf-8"))
+        assert sections, source_info["source"]
 
 
 @pytest.mark.asyncio
