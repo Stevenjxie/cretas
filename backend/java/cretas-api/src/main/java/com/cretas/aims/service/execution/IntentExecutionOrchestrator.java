@@ -2994,6 +2994,18 @@ public class IntentExecutionOrchestrator {
         if (isExplicitRestaurantDataFactRequest(normalizedInput)) {
             return false;
         }
+        // A bounded diagnostic that explicitly asks the system to judge
+        // alternative causes from data is still an analytical READ.  It must
+        // reach the restaurant QueryPlan instead of the generic owner-advice
+        // heuristic merely because the wording contains "分别".
+        if (isEvidenceBasedRestaurantDiagnosis(normalizedInput)) {
+            return false;
+        }
+        if (isCostMarginClarificationQuestion(normalizedInput)
+                || isRestaurantContextualMarginFollowup(normalizedInput)
+                || isMarginProhibitedActionAnalysis(normalizedInput)) {
+            return false;
+        }
         // A short metric + optimisation utterance is normally a dependent
         // analytical follow-up ("销量怎么优化", "第一名毛利如何提升").
         // Let the Python restaurant session restore the typed dish/time/store
@@ -3256,6 +3268,8 @@ public class IntentExecutionOrchestrator {
                         && containsAny(input, "\u6628\u5929", "\u6628\u65e5"))
                 || (containsAny(input, "\u672c\u6708", "\u8fd9\u4e2a\u6708", "\u5f53\u6708")
                         && containsAny(input, "\u4e0a\u4e2a\u6708", "\u4e0a\u6708"))
+                || (containsAny(input, "\u672c\u5468", "\u8fd9\u5468", "\u672c\u661f\u671f", "\u8fd9\u661f\u671f")
+                        && containsAny(input, "\u4e0a\u5468", "\u4e0a\u661f\u671f", "\u4e0a\u4e2a\u661f\u671f"))
                 || (containsAny(input, "\u4e0a\u4e2a\u6708", "\u4e0a\u6708")
                         && containsAny(input, "\u4e0a\u4e0a\u4e2a\u6708", "\u4e0a\u4e0a\u6708"));
         return hasSalesMetric && hasDirection && hasPeriodPair;

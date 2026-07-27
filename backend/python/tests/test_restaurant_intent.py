@@ -635,6 +635,66 @@ async def test_explicit_all_store_ranking_missing_time_asks_without_t3(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "query,direction,exclusions",
+    [
+        ("销量最低的5道菜有哪些？", "worst", ()),
+        (
+            "销量最高的5道菜是什么？请排除米饭、餐巾纸、湿纸巾和餐具",
+            "best",
+            ("米饭", "餐巾纸", "湿纸巾", "餐具"),
+        ),
+    ],
+)
+async def test_explicit_ranking_without_store_or_time_asks_time_before_scope(
+    query,
+    direction,
+    exclusions,
+):
+    t3 = AsyncMock(side_effect=AssertionError(
+        "an explicit sales ranking may not ask which metric the user meant"
+    ))
+    with patch("smartbi.gold.restaurant_intent._t3_llm_parse", new=t3):
+        spec = await parse_restaurant_query(
+            query,
+            _restaurant_pool(),
+            factory_id="DEMO_REST",
+        )
+
+    assert spec is not None
+    assert spec.intent == "RESTAURANT_OPS_GROSS_MARGIN"
+    assert spec.planner_authority == "explicit_slots"
+    assert spec.clarification_needed is True
+    assert spec.clarification_question == TIME_CLARIFICATION_QUESTION
+    assert spec.store_scope is None
+    assert spec.store_slots == ()
+    assert spec.dimensions == ("dish",)
+    assert spec.requested_metrics == ("sales_volume",)
+    assert spec.ranking_direction == direction
+    assert spec.ranking_limit == 5
+    assert spec.excluded_entities == exclusions
+    t3.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_explicit_ranking_asks_store_after_time_is_supplied():
+    pool = _StoreScopePool(["东城店", "西城店", "南城店"])
+    spec = _explicit_store_dish_ranking_spec(
+        "本月销量最高的5道菜是什么",
+        is_continuation=True,
+    )
+
+    guarded = await _apply_store_scope_guard(pool, "FACTORY_A", spec)
+
+    assert guarded is not None
+    assert guarded.clarification_needed is True
+    assert guarded.clarification_question == STORE_SCOPE_CLARIFICATION_QUESTION
+    assert guarded.store_options == ("东城店", "西城店", "南城店")
+    assert guarded.requested_metrics == ("sales_volume",)
+    assert guarded.ranking_direction == "best"
+
+
+@pytest.mark.asyncio
 async def test_all_store_limited_ranking_time_button_keeps_full_plan():
     t3 = AsyncMock(side_effect=AssertionError(
         "the fixed time answer must complete the explicit ranking plan"
