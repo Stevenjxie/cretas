@@ -1,5 +1,16 @@
 # Dispatch 完成归档 — 2026-07-27
 
+### `BUG-QC-WEB-REVIEW-CLOSEOUT-20260727-003`
+
+- **状态**：`merged`、Web Admin/QCSOP 生产发布与公网只读验收完成，scope 锁已释放。
+- **Base / PR / main 合并提交**：Base SHA `c1e4ed173eb8487e1af7d3b5cb3617c5e638e806`；候选 `d1306c00b`、调度收口 `29082c3a4`；[#1868](https://github.com/Stevenjxie/cretas/pull/1868) → `0b91d47a50301302156b5dd96f3dd2d44441bbd3`。
+- **实际范围**：质量管理侧栏补“包装标签拍检”入口；质量经理使用真实 Web Admin 完成 AI 框确认/拒绝、人工补框、拖动/缩放/删除、逐图结论、下一张与整单提交；QCSOP 增加 Web 人工审核章节及四张真实页面截图，并明确一线质检员与 Web 质量经理角色边界。
+- **验证证据**：Web 人工审核 Playwright `1/1`（包含提交载荷与提交后回读），QCSOP 桌面/390px/资源/灯箱 Playwright `2/2`，菜单/审核模型/训练生命周期 Vitest `71/71`；唯一可信 Web production build 成功，archive SHA-256 `c842d507d9c967f20dd316b01aed7d5f9cfd4a79131cdbc7c789b8e790caf19f`。
+- **Web 发布**：从 clean exact `origin/main@0b91d47a50301302156b5dd96f3dd2d44441bbd3` 复用相同 Web tree 制品并原子发布；本地、服务器、网关 HTTP、公网 HTTPS 四方 `index.html` SHA-256 均为 `b85b9076cc8ae66eadf5674523b4d808e4f29883c4b707fb7a94dd0425082948`。菜单 chunk `AppLayout-nmFjW8yY.js` 与审核 chunk `index-DvsWgssf.js` 的本地/公网 SHA-256 分别一致。
+- **QCSOP 发布**：原子发布至 `https://aiassist.cretaceousfuture.com/lsmsop/qcsop/`；公网 HTML SHA-256 `6204646ab5442bcc7a5e6ad006498f5e5dbfbcd9f034f4bf4a6c992007e005d6` 与仓库一致，正文 Web 人工审核标记存在，HTML 引用的 21 张图片全部 HTTP 成功（发布目录共 22 张资源），回滚点 `/www/wwwroot/lsmsop/qcsop.bak.20260727T1046`。
+- **发布异常与恢复**：首轮远端脚本经 PowerShell 管道带入 BOM，旧目录改名后在新目录切入前中止；通过已核验备份立即恢复，公网回读 HTTP 200。随后改用无 BOM/CRLF 的 LF 脚本重跑并成功完成原子切换、`nginx -t` 与公网哈希验收。
+- **业务写入**：本次仅发布静态 Web/QCSOP 制品；未创建生产拍检任务，生产账号、白名单、QC 与其他业务数据写入均为 `0`，未训练或发布模型。
+
 ### `SOP-DUAL-LINE-SYNC-20260727`
 
 - **状态**：`merged`、双线生产发布与真实回答验收完成，scope 锁已释放。
