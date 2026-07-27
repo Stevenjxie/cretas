@@ -1,6 +1,6 @@
 # Model and Effort Matrix
 
-Evidence snapshot: 2026-07-18. Use the live model picker as availability truth. This policy is Cretas-specific and provisional because GPT-5.6 and Fable 5 community experience is still early.
+Evidence snapshot: 2026-07-18; **Claude-side tiers refreshed 2026-07-28 (source A)**. Use the live model picker as availability truth. This policy is Cretas-specific and provisional because GPT-5.6 and Fable 5 community experience is still early.
 
 ## Evidence discipline
 
@@ -19,7 +19,8 @@ Do not turn a single benchmark or anecdote into a universal rule. Model choice m
 - **Terra is demoted from general daily default to a situational alternative.** OpenAI positions it as balanced, but Artificial Analysis currently finds every Terra effort point Pareto-dominated by a Sol or Luna option, and early user reports frequently describe excess steps, latency, or weak focus.
 - **Luna is promoted beyond purely mechanical work.** Official guidance places it in fast/high-volume and subagent roles; repeated community reports find Luna High/Extra High effective for clear, reversible implementation. It is still not the lead for ambiguous or high-blast-radius work.
 - **Sol Max and Ultra are exception paths.** Independent results show diminishing gains from Extra High to Max, while Ultra adds parallel agents and can consume allowance very quickly. Ultra is an orchestration mode, not merely deeper thinking.
-- **Fable High becomes the default external review setting.** Anthropic explicitly recommends High for most work and XHigh only for capability-sensitive workloads. Community feedback broadly agrees; Max and Ultracode are exceptional.
+- **Fable High is the default effort *once Fable is already the right tier*.** Anthropic explicitly recommends High for most work and XHigh only for capability-sensitive workloads. Community feedback broadly agrees; Max and Ultracode are exceptional.
+- **The Claude handoff target is a three-tier ladder, and Fable is no longer its default (2026-07-28, source A).** Claude Code exposes Sonnet 5, Opus 5, and Fable 5. Fable 5 costs **exactly 2x Opus 5** ($10/$50 vs $5/$25 per MTok) and is gated repository-side by `.claude/skills/multi-model-dispatch`: earned-not-predicted (Opus must visibly fail one serious attempt first), three narrow pre-authorized bypasses, and a single-digit-per-session frequency cap. **Default the external-review handoff to Opus 5; escalate to Fable only once that gate has actually fired.** Sending every external review to Fable contradicts the repository gate and spends the scarcest tier first.
 
 ## Choose the model first
 
@@ -28,7 +29,9 @@ Do not turn a single benchmark or anecdote into a universal rule. Model choice m
 | GPT-5.6 Sol | Repository-grounded daily work, difficult implementation, debugging, architecture, migration, verification, and final adjudication | Using Max or Ultra as a permanent default |
 | GPT-5.6 Terra | Usage-conscious exploration, bounded noncritical work, and an alternative reviewer whose different behavior may add diversity | Treating it as the automatic middle/default tier or using it for destructive/high-stakes work |
 | GPT-5.6 Luna | Fast high-volume work, subagents, and well-specified reversible implementation with strong tests | Ambiguous architecture, auth/payment/security/migration/production leadership, or destructive data operations |
-| Claude Fable 5 via Claude Code | External independent architecture research, long-horizon critique, and adversarial second-opinion reports | Routine Cretas implementation or final repository-truth authority |
+| Claude Opus 5 via Claude Code | **Default Claude handoff target:** external independent architecture research, long-horizon critique, adversarial second-opinion reports, and high-stakes judgment | Treating it as a Codex substitute for repository-grounded execution |
+| Claude Fable 5 via Claude Code | Break-glass only, after the repository-side earned gate fires: Opus 5 already tried and stalled, or a pre-authorized bypass applies | Routine Cretas implementation, final repository-truth authority, or **any external review that Opus 5 has not already failed** |
+| Claude Sonnet 5 via Claude Code | Rule-heavy execution on the Claude side (`.claude/rules` auto-loads there); not normally a Codex review handoff target | Ambiguous architecture and the hardest locked-down judgment calls |
 
 When uncertain on a Cretas task, prefer Sol Medium. Do not assume that a smaller model at Max is equivalent to a larger model at Medium; benchmarks can be close while tool behavior, context retention, and failure modes differ.
 
@@ -71,13 +74,23 @@ Terra note: provider positioning and early real-world feedback conflict. Keep Te
 
 Luna note: community reports often favor Luna High/Extra High as a daily implementation model, but this is early evidence. Use Sol for architecture and critical business judgment, then Luna for an explicit execution packet only when the affected scope is safe and verifiable.
 
-## Claude Fable 5 in Claude Code
+## Claude handoffs in Claude Code
 
-Fable 5 is external. The user must open Claude Code manually, select Fable 5 and the effort, and paste a purpose-built prompt. Never imply that Codex can invoke or switch to it.
+Claude models are external. The user must open Claude Code manually, select the model and effort, and paste a purpose-built prompt. Never imply that Codex can invoke or switch to any of them.
+
+### Pick the Claude tier before the effort (2026-07-28)
+
+| Tier | When it is the right handoff target |
+|---|---|
+| **Opus 5** (default) | Any normal external review: independent architecture challenge, adversarial second opinion, high-stakes judgment. High for a normal review, XHigh for the full multi-repository report. |
+| **Fable 5** (break-glass) | Only after the gate in `.claude/skills/multi-model-dispatch` fires — Opus 5 visibly stalled on one serious attempt, Opus 5 XHigh returned self-contradicting conclusions, or a pre-authorized bypass applies (production incident on the clock / documented same-family precedent / irreversible small-diff final gate). |
+| **Sonnet 5** | Rule-heavy execution on the Claude side, not a Codex review handoff. |
+
+⚠️ **Never route to Fable merely because a task looks hard, long-running, or important.** That is a *predicted* rather than *earned* escalation, which the repository gate explicitly forbids; Fable is 2x Opus 5 and capped at single-digit uses per session. When in doubt the correct handoff is Opus 5.
 
 ### Mandatory prompt delivery contract
 
-Every route to Fable must deliver a complete, task-specific, paste-ready prompt in the same response. Never stop at “use Fable,” provide only a prompt outline, or ask whether the user wants a prompt. Populate all known details; use an explicit assumption only when a required fact is genuinely unknown.
+Every Claude handoff — Opus 5 or Fable 5 — must deliver a complete, task-specific, paste-ready prompt in the same response. Never stop at “use Claude Code,” provide only a prompt outline, or ask whether the user wants a prompt. Populate all known details; use an explicit assumption only when a required fact is genuinely unknown.
 
 The delivered prompt must contain:
 
@@ -93,6 +106,8 @@ The delivered prompt must contain:
 
 The routing response must wrap that fully populated prompt in a copyable text code block and precede it with the exact Claude Code model/effort selection. Follow it with: `回交方式：将完整报告原样交回当前 Codex task，由 GPT-5.6 Sol 结合仓库真值裁决和落地。`
 
+### Effort ladder (identical labels on Opus 5 and Fable 5)
+
 | Effort / mode | Route | Confidence |
 |---|---|---|
 | Low | Routine high-volume work if Fable is already required, though a cheaper model is normally more appropriate | A |
@@ -102,7 +117,9 @@ The routing response must wrap that fully populated prompt in a copyable text co
 | Max | Absolute highest single-agent capability with no practical cost/latency constraint; do not assume it always beats High/XHigh on every task | A/B/C |
 | Ultracode | Claude Code XHigh plus standing permission to launch multiagent workflows; use only for genuinely isolated parallel work, never as a synonym for deeper reasoning | A |
 
-For the Cretas architecture program, prefer **Fable High** for a normal independent review and **Fable XHigh** for the full multi-repository architecture/rebuttal report. Return the report to **Sol Extra High** for repository-grounded adjudication. Escalate to Sol Max only if material contradictions remain unresolved.
+For the Cretas architecture program, prefer **Opus 5 High** for a normal independent review and **Opus 5 XHigh** for the full multi-repository architecture/rebuttal report; use the same effort labels on **Fable 5** only once the earned gate above has fired. Return the report to **Sol Extra High** for repository-grounded adjudication. Escalate to Sol Max only if material contradictions remain unresolved.
+
+Three Claude-side constraints worth knowing when writing the handoff (source A, 2026-07-28): Fable 5 always thinks and cannot have thinking disabled; Fable 5 requires 30-day data retention, so an organization on zero data retention gets a hard failure on every Fable call and Opus 5 is the only viable tier there; and neither model returns its raw chain of thought, so the report you get back is written output, not a reasoning trace.
 
 Require the Fable handoff to contain:
 
@@ -124,7 +141,8 @@ Require the Fable handoff to contain:
 | Clear reversible implementation with tests | Sol Medium, or Luna High/Extra High when conserving allowance |
 | Ambiguous bug or unfamiliar cross-module work | Sol High |
 | Complex architecture, security review, data consistency, or migration planning | Sol Extra High |
-| Independent external architecture challenge | Fable High; use Fable XHigh for the full multi-project report; the routing reply must include the paste-ready Claude Code prompt, then Sol Extra High adjudication |
+| Independent external architecture challenge | **Opus 5 High**; use Opus 5 XHigh for the full multi-project report; the routing reply must include the paste-ready Claude Code prompt, then Sol Extra High adjudication |
+| Opus 5 already stalled or self-contradicted on that same challenge | Fable 5 High/XHigh as break-glass, per the earned gate in `.claude/skills/multi-model-dispatch` |
 | Alternative exploratory/reviewer pass | Terra Medium, with an explicit reason |
 | Extra High failed on a high-stakes decision | Sol Max |
 | Several genuinely independent workstreams | Sol Ultra only with explicit approval and repository coordination gates |
@@ -140,6 +158,8 @@ Require the Fable handoff to contain:
 - [Anthropic effort documentation](https://platform.claude.com/docs/en/build-with-claude/effort) — Fable High default, XHigh capability-sensitive, Max unconstrained, Ultracode semantics.
 - [Anthropic Fable prompting guidance](https://platform.claude.com/docs/en/build-with-claude/prompt-engineering/prompting-claude-fable-5) — higher-effort strengths, overthinking/overbuilding risk, and long-horizon behavior.
 - [Anthropic Fable product page](https://www.anthropic.com/claude/fable) — intended long-running research, coding, enterprise workflow, and self-verification use.
+- [Anthropic model overview](https://platform.claude.com/docs/en/about-claude/models/overview) — Sonnet 5 / Opus 5 / Fable 5 identifiers, context windows, pricing, and effort support (checked 2026-07-28).
+- Repository gate `.claude/skills/multi-model-dispatch` — the earned-not-predicted ladder, five escalation landing points, three pre-authorized bypasses, and the frequency cap that this matrix defers to for Claude tier selection.
 
 ### B — Independent evaluation
 
@@ -163,5 +183,6 @@ Refresh this matrix when any of the following occurs:
 - the live picker adds or removes a model/effort combination;
 - OpenAI or Anthropic changes effort semantics, pricing, context, or multiagent behavior;
 - a material Codex/Claude Code harness update changes subagent routing;
+- the repository-side Claude gate in `.claude/skills/multi-model-dispatch` changes its tier ladder, escalation thresholds, or pre-authorized bypass list;
 - independent evaluations add stable task-level results;
 - Cretas accumulates at least ten comparable task outcomes that contradict a route above.

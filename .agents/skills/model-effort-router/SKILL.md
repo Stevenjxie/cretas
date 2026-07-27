@@ -26,10 +26,11 @@ Route the task before executing it. Optimize for sufficient capability, not maxi
 - Reserve Ultra for genuinely parallelizable work. Ultra does not bypass repository subagent, dispatch, scope-lock, WIP, or verification rules.
 - Do not make Terra the default merely because it is positioned as balanced. Current independent cost curves and early community reports often favor either Sol or Luna; use Terra only when its exploration or diversity role fits.
 - Allow Luna High or Extra High for well-specified, reversible implementation with strong tests. Do not route ambiguous architecture, security, migrations, production changes, or destructive data operations to Luna as lead.
-- Treat Fable 5 as external to Codex and available only through Claude Code. Never imply that Codex can switch to or invoke it directly.
-- Use Fable 5 primarily for independent architecture research and adversarial reports. Return its handoff to GPT-5.6 Sol for repository-grounded adjudication.
-- Whenever recommending Fable 5, include a complete, task-specific, paste-ready Claude Code prompt in the same response. Never provide only the model recommendation, an abstract prompt outline, or an offer to write the prompt later.
-- Fill the Fable prompt with the known task and Cretas context. Include the role, objective, repository path and access assumptions, current evidence, read-only or mutation boundary, required sources, deliverables, constraints, selected effort, output format, and the handoff packet for GPT-5.6 Sol. Do not leave generic placeholders that the user must complete when the required value is already known.
+- Treat Claude models (Sonnet 5 / Opus 5 / Fable 5) as external to Codex and available only through Claude Code. Never imply that Codex can switch to or invoke any of them directly.
+- Default the Claude handoff to **Opus 5**, not Fable 5. Use Claude handoffs primarily for independent architecture research and adversarial reports, and return the report to GPT-5.6 Sol for repository-grounded adjudication.
+- Escalate to Fable 5 only once the repository gate in `.claude/skills/multi-model-dispatch` has actually fired: Opus 5 visibly stalled on one serious attempt, Opus 5 XHigh returned self-contradicting conclusions, or a pre-authorized bypass applies (production incident on the clock / documented same-family precedent / irreversible small-diff final gate). Fable 5 costs 2x Opus 5 and is capped at single-digit uses per session; a task merely looking hard, long-running, or important is a *predicted* escalation and does not qualify.
+- Whenever recommending a Claude handoff (Opus 5 or Fable 5), include a complete, task-specific, paste-ready Claude Code prompt in the same response. Never provide only the model recommendation, an abstract prompt outline, or an offer to write the prompt later.
+- Fill the Claude prompt with the known task and Cretas context. Include the role, objective, repository path and access assumptions, current evidence, read-only or mutation boundary, required sources, deliverables, constraints, selected model and effort, output format, and the handoff packet for GPT-5.6 Sol. Do not leave generic placeholders that the user must complete when the required value is already known.
 - When the current model or effort cannot be observed, state that limitation and ask the user to compare the recommendation with the picker.
 - If the picker differs from the reference, treat the live picker as availability truth; do not invent unsupported combinations.
 - Treat the dated evidence snapshot in the reference as provisional. Re-check official availability and refresh the matrix after a material model, pricing, harness, or effort change.
@@ -51,7 +52,7 @@ Use this exact compact structure:
 When recommending Fable 5, append all of the following. Because Fable is external, stop and wait for the user to run it and return the report:
 
 ````text
-Claude Code 操作：打开 Claude Code，选择 Claude Fable 5，Effort <exact effort>
+Claude Code 操作：打开 Claude Code，选择 <Claude Opus 5 | Claude Fable 5>，Effort <exact effort>
 可直接粘贴 Prompt：
 ```text
 <complete task-specific prompt following the Fable prompt contract in the reference>
