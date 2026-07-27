@@ -68,13 +68,45 @@ CREATE TABLE IF NOT EXISTS ai_promoted_routes (
 CREATE INDEX IF NOT EXISTS idx_ai_promoted_routes_domain_scope
     ON ai_promoted_routes (domain, plan_version, scope);
 
--- RLS: mirrors external_benchmark_observation (V20261004_05), the existing
--- "global rows + tenant rows in one table" precedent.  The asymmetry is the
--- whole point: everyone READS the globally reviewed dictionary, but no tenant
--- session may CREATE or MODIFY a global row — otherwise one tenant could
--- poison the deterministic answer of every other tenant.  Only the seeding /
--- promotion path, which pins app.factory_id to the '__internal__' sentinel,
--- writes global rows.
+-- ##########################################################################
+-- ##  READ THIS BEFORE ADDING ANY CODE PATH THAT TOUCHES THIS TABLE.      ##
+-- ##  '__internal__' MEANS THE OPPOSITE HERE THAN IT DOES EVERYWHERE ELSE.##
+-- ##########################################################################
+--
+-- 1. ON THIS TABLE, '__internal__' IS FULL VISIBILITY AND FULL WRITE ACCESS.
+--    It is in the SELECT policy's USING clause and in both the INSERT and
+--    UPDATE WITH CHECK clauses below. This is DELIBERATE: the promotion CLI
+--    (scripts/restaurant-intent-promote.py --apply) and the platform ops
+--    console both have to operate across tenants -- seeding a 'global' row
+--    is by definition not a single-tenant action, and reviewing what is
+--    promoted means reading every tenant's rows at once.
+--
+-- 2. THIS IS THE REVERSE OF THE PLATFORM CONVENTION. The pool setup callback
+--    in smartbi/.../tenant_ctx.py pins app.factory_id to '__internal__' when
+--    no tenant is in context precisely so that an RLS table returns ZERO
+--    ROWS -- its comment calls that the "safe default". The precedent this
+--    file otherwise mirrors, V20261004_05 (external_benchmark_observation),
+--    has NO '__internal__' branch in its read USING clause for that reason.
+--    On this table the sentinel is a skeleton key instead of a locked door.
+--
+-- 3. THEREFORE: ANY NEW CODE THAT READS OR WRITES ai_promoted_routes MUST
+--    SET app.factory_id EXPLICITLY (transaction-local) FOR THE TENANT IT IS
+--    ACTING FOR. It may NOT rely on the pool's default. Both current call
+--    sites do this -- _load_promoted_routes() pins the questioner's tenant,
+--    apply_route_promotions() pins '__internal__' or the target factory --
+--    so there is no leak today. A future call site that skips the explicit
+--    set_config would silently inherit the pool default '__internal__' and
+--    thereby see, and be able to write, EVERY tenant's rows. That failure
+--    would be invisible: no error, just cross-tenant data.
+--
+-- With that caveat stated, the intended asymmetry is: everyone READS the
+-- globally reviewed dictionary, but no tenant session may CREATE or MODIFY a
+-- global row -- otherwise one tenant could poison the deterministic answer of
+-- every other tenant. Only the seeding / promotion path, pinned to
+-- '__internal__', writes global rows. Splitting SELECT / INSERT / UPDATE into
+-- three policies (rather than the precedent's single FOR ALL) is what makes
+-- that asymmetry expressible, and it also means no DELETE policy exists:
+-- retiring a promotion is a reviewed superuser operation.
 ALTER TABLE ai_promoted_routes ENABLE ROW LEVEL SECURITY;
 ALTER TABLE ai_promoted_routes FORCE ROW LEVEL SECURITY;
 
