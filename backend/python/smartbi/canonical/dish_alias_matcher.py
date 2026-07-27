@@ -159,6 +159,15 @@ async def propose_dish_alias_candidates(
 ) -> List[DishAliasCandidate]:
     """匹配 `names` 对该 factory 的 active dim_canonical_dish, 产出 PENDING 别名候选.
 
+    Args:
+        store_id: 门店级候选的作用域。⚠️ Wave 1 建议保持 None (per 卡3 fable 终审 5)：
+            写入侧唯一性仍是 (factory_id, original_name)（migration V20260728_02 头注
+            §2 明确的 Wave 1 边界），所以传非 None 值只会写出一条别人（租户级查询,
+            store_id IS NULL）永远查不到的行 —— 不会返回错答案, 但会静默失效 (候选
+            白提, 人也审不到)。要用店级候选必须等 Wave 2 把唯一性改成
+            (factory_id, store_id, original_name) 且同步改 alias_normalizer 的
+            ON CONFLICT 子句之后。
+
     dry_run=True (默认): 只计算 + 返回候选, 不写库。
     dry_run=False: 额外 INSERT ... ON CONFLICT DO NOTHING (status='pending')。已存在
       的行 (任意 status) 保持不动 —— 机器提议绝不覆盖既有人工判断 (confirmed/

@@ -21,8 +21,15 @@ Wave 2 打开店级写入 (需同步改 alias_normalizer 的 ON CONFLICT 子句)
 resolver 本身。
 
 调用方 (Wave 2, gold/restaurant_intent.py) 应先 SET app.factory_id 后调用本模块——
-restaurant_dish_alias 无 FORCE RLS, 但仍显式按 factory_id 过滤 (defense in depth,
-不依赖 RLS 兜底)。
+restaurant_dish_alias 无 FORCE RLS 但仍显式按 factory_id 过滤 (defense in depth);
+dim_canonical_dish **有** FORCE RLS (per V20260602_03), 下面的 JOIN 命中它时若未
+SET app.factory_id 会直接 0 行 (fail-closed, 不是权限报错) —— 调用方必须先设 GUC。
+
+canonical_name 取权威源 (per 卡3 fable 终审 4): 返回的 canonical_name 来自
+dim_canonical_dish.canonical_name (JOIN), 不取 restaurant_dish_alias.canonical_name
+本身 —— 后者只是候选/确认时刻写入别名行的展示名快照, 人工后续可能单独改
+dim_canonical_dish 的规范名 (例如纠错/统一措辞), 两者会漂移。ID 和名字必须自洽,
+所以 ID 权威表是谁, 名字就该从谁读, 不能各读各的半份数据。
 
 TODO(Wave 2, 卡2 restaurant_intent.py): 把菜品名查询链路接到 resolve_dish_reference()
 —— 优先用 canonical_dish_id 聚合跨店同菜销量/营收, kind='original_name' 时继续走
@@ -36,18 +43,24 @@ if TYPE_CHECKING:
     import asyncpg
 
 
+# JOIN dim_canonical_dish 取权威 canonical_name (见上方模块头注 "canonical_name 取权威源")。
+# canonical_dish_id 仍来自别名行 (a.), 名字改从 canonical 表 (c.) 读, ID/名字自洽。
 _STORE_SCOPED_SQL = """
-    SELECT canonical_dish_id, canonical_name
-      FROM restaurant_dish_alias
-     WHERE factory_id = $1 AND store_id = $2 AND original_name = $3
-       AND status = 'confirmed' AND canonical_dish_id IS NOT NULL
+    SELECT a.canonical_dish_id, c.canonical_name
+      FROM restaurant_dish_alias a
+      JOIN dim_canonical_dish c
+        ON c.canonical_dish_id = a.canonical_dish_id AND c.factory_id = a.factory_id
+     WHERE a.factory_id = $1 AND a.store_id = $2 AND a.original_name = $3
+       AND a.status = 'confirmed' AND a.canonical_dish_id IS NOT NULL
 """
 
 _TENANT_SCOPED_SQL = """
-    SELECT canonical_dish_id, canonical_name
-      FROM restaurant_dish_alias
-     WHERE factory_id = $1 AND store_id IS NULL AND original_name = $2
-       AND status = 'confirmed' AND canonical_dish_id IS NOT NULL
+    SELECT a.canonical_dish_id, c.canonical_name
+      FROM restaurant_dish_alias a
+      JOIN dim_canonical_dish c
+        ON c.canonical_dish_id = a.canonical_dish_id AND c.factory_id = a.factory_id
+     WHERE a.factory_id = $1 AND a.store_id IS NULL AND a.original_name = $2
+       AND a.status = 'confirmed' AND a.canonical_dish_id IS NOT NULL
 """
 
 
