@@ -48,7 +48,10 @@ class DemoFactoryGateConfigTest {
     void publicDemoTenantIsInsideWriteGate() throws Exception {
         assertTrue(demoFactoryIdsValue().contains("F_DEMO"),
                 "F_DEMO 必须在 " + DEMO_FACTORY_IDS_KEY
-                        + " 内，否则 /api/public/ai-demo 的写意图绕过编排器 demo 写闸");
+                        + " 内，否则 /api/public/ai-demo 的写意图绕过编排器 demo 写闸。"
+                        + "⚠️ 注意本测试只守 application.properties 里的**文件默认值**；"
+                        + "若生产设置了环境变量 CRETAS_DEMO_FACTORY_IDS 覆盖该值，"
+                        + "本测试照样通过但写闸实际失效 —— 部署时必须另行核对服务器环境变量。");
     }
 
     @Test
