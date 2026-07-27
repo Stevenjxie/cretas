@@ -21,7 +21,9 @@ function pageHtml(pathname) {
       </script>
     </body></html>`;
   }
-  const content = pathname === '/system/product-processes'
+  const content = pathname === '/quality/label-qc'
+    ? '<main><h1>包装标签拍检</h1><p>AI 初筛只提供疑点，人工审核形成最终结论。</p><div class="el-table"></div><button>待人工审核</button><button>已审核整理</button><button>归档记录</button><button>人工审核</button></main>'
+    : pathname === '/system/product-processes'
     ? '<main><h1>Workflow 工序管理</h1><p>原料 Cell 与原料 SKU 只读检查，投入产出数量关系，保存、发布和应用按钮均不会点击。</p><span data-testid="input-unit-chip">kg</span></main>'
     : pathname === '/production/bom'
       ? `<main><h1>BOM 配方版本</h1><p>系统历史出成率 参考单价 30 元/kg 总成本 12 元/袋</p><div class="el-table"></div><div class="el-tabs__item">原料</div><button id="add-raw">添加原料</button><div class="el-dialog" hidden><p>选择原料</p><button id="cancel-raw">取消</button></div><script>const dialog=document.querySelector('.el-dialog');document.querySelector('#add-raw').onclick=()=>{dialog.hidden=false};document.querySelector('#cancel-raw').onclick=()=>{dialog.hidden=true}</script></main>`
@@ -86,14 +88,14 @@ test.describe('production read-only harness local fixture', () => {
     const report = await runSuiteWithPage(page, {
       baseUrl,
       evidenceDir,
-      scenarios: ['tenant-isolation', 'bom-readonly', 'workflow-readonly'],
+      scenarios: ['tenant-isolation', 'bom-readonly', 'workflow-readonly', 'label-qc-readonly'],
       username: 'f006_admin',
       password: 'fixture-only',
       expectedUsername: 'f006_admin',
       expectedFactoryId: 'F006',
       productionReadonly: true,
     });
-    expect(report.scenarios.map((result) => result.result)).toEqual(['PASS', 'PASS', 'PASS']);
+    expect(report.scenarios.map((result) => result.result)).toEqual(['PASS', 'PASS', 'PASS', 'PASS']);
     expect(report.authRequests).toHaveLength(1);
     expect(report.actualBusinessWrites).toBe(0);
     expect(report.blockedMutationAttempts).toHaveLength(0);
