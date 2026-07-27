@@ -26,7 +26,7 @@ function pageHtml(pathname) {
     : pathname === '/system/product-processes'
     ? '<main><h1>Workflow 工序管理</h1><p>原料 Cell 与原料 SKU 只读检查，投入产出数量关系，保存、发布和应用按钮均不会点击。</p><span data-testid="input-unit-chip">kg</span></main>'
     : pathname === '/production/bom'
-      ? `<main><h1>BOM 配方版本</h1><p>系统历史出成率 参考单价 30 元/kg 总成本 12 元/袋</p><div class="el-table"></div><div class="el-tabs__item">原料</div><button id="add-raw">添加原料</button><div class="el-dialog" hidden><p>选择原料</p><button id="cancel-raw">取消</button></div><script>const dialog=document.querySelector('.el-dialog');document.querySelector('#add-raw').onclick=()=>{dialog.hidden=false};document.querySelector('#cancel-raw').onclick=()=>{dialog.hidden=true}</script></main>`
+      ? '<main><h1>BOM 配方版本</h1><p>系统历史出成率 参考单价 30 元/kg 总成本 12 元/袋</p><div class="el-table"><span>已生效</span></div><section data-testid="bom-version-lifecycle"><p>v2 当前生效，内容已锁定</p><p>生产计划继续使用当前版本。</p><button>克隆为新版本修改</button></section><div class="el-tabs__item">原料</div></main>'
       : '<main><h1>工作台</h1><p>f006_admin 六膳门食品科技 F006</p></main>';
   return `<!doctype html><html><body>${content}</body></html>`;
 }
