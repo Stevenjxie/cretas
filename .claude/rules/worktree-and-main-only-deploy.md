@@ -36,6 +36,11 @@ git diff origin/main...HEAD --stat   # 应只有你的文件, 没有 sister 的 
 ```bash
 # ✅ 正确: 部署 prod 前先在 main
 git checkout main && git pull origin main
+
+# 正常 Java/Web 发布 — 统一入口 (脚本自身强制 clean HEAD == origin/main, 与本规则互为保险):
+./scripts/deploy/release-cretas.sh --phase deploy --base-sha '<Base SHA>' --tests '<tests>' --confirm-prod YES-PROD
+
+# 单组件/排查入口:
 ./scripts/deploy/deploy-backend.sh --env prod        # Java
 ./scripts/deploy/deploy-smartbi-python.sh --env prod # Python
 ./scripts/deploy/deploy-web-admin.sh --env prod      # web-admin

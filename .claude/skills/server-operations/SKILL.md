@@ -207,11 +207,14 @@ ssh root@47.100.235.168 "journalctl -u cretas-backend --since '5 min ago' --no-p
 
 | 部署目标 | 脚本 | 说明 |
 |----------|------|------|
-| Java 后端 | `./scripts/deploy/deploy-backend.sh [--env prod\|test\|all]` | Maven 打包 → rsync 主 (scp 兜底) → 备份 → Blue-Green 部署 → 健康检查 + 防御 ping 另一环境 |
+| **正常 Java/Web 发布（首选）** | `./scripts/deploy/release-cretas.sh --phase build\|deploy --base-sha <SHA> --tests '<tests>' --confirm-prod YES-PROD` | 统一入口：自动检测变更范围、构建一次 + manifest/tree-cache 复用、默认安全串行（并行需 `YES-INDEPENDENT-SERVICES` 口令）、JSON 回执；deploy 阶段强制 clean HEAD == origin/main |
+| 发布证据（只读） | `./scripts/deploy/verify-release.sh --target backend\|web-admin\|all --env prod` | 汇总真实 upstream / systemd / 直连健康 / Web 四方哈希；回执成功不重复手工检查 |
+| Java 单组件/排查 | `./scripts/deploy/deploy-backend.sh [--env prod\|test\|all]` | Maven 打包 → rsync 主 (scp 兜底) → 备份 → Blue-Green 部署 → 健康检查 + 防御 ping 另一环境 |
 | Python 服务 | `./scripts/deploy/deploy-smartbi-python.sh [--env prod\|test\|all]` | rsync 增量同步 → 安装依赖 → 重启 → 健康检查 |
-| 全栈部署 | 使用 `/deploy-backend` skill | 根据指令自动选择部署范围 |
+| Web 单组件/排查 | `./scripts/deploy/deploy-web-admin.sh --env prod` | npm build → tar+scp → 139 网关原子切换 |
+| 全栈部署 | 使用 `/deploy-backend` skill | 根据指令自动选择部署范围（其 Phase -1 即统一入口） |
 
-`--env` 默认 `prod`，只更新生产环境。
+`--env` 默认 `prod`，只更新生产环境。**蓝绿槽位**：prod Java `10010`/`10020` 交替 active，部署/核对前先读 `139:/www/server/panel/vhost/nginx/_upstream_cretas.conf`，禁止假设某槽永久停用。
 
 ### 双环境部署最佳实践 (Apr 7 2026)
 
