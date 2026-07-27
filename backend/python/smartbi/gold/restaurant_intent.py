@@ -2735,6 +2735,85 @@ def _approved_exact_continuation_route(
     return None
 
 
+def _trusted_named_dish_button_continuation(
+    original_query: str,
+    answer: str,
+    clarification_question: Optional[str],
+) -> Optional[RestaurantQuerySpec]:
+    """Compile only fixed time/store buttons after an LLM-authorized dish turn.
+
+    The pending clarification row proves that the previous semantic plan asked
+    this exact question.  We recompile the sealed original utterance plus one
+    bounded button so provider availability cannot erase dish/metric context.
+    Free-form text, changed metrics/actions, comparisons and unsupported
+    requirements are rejected and still go to T3.
+    """
+    base = _explicit_named_dish_metric_spec(original_query)
+    if (
+        base is None
+        or not base.dish_slot
+        or not base.requested_metrics
+        or not set(base.requested_metrics).issubset(_TRUSTED_CONTEXT_DISH_METRICS)
+        or base.analysis_action not in {"lookup", "diagnose", "optimize"}
+        or base.comparison is not None
+        or base.unsupported_requirements
+        or base.asks_priority
+        or base.asks_prohibited_actions
+        or base.asks_export
+    ):
+        return None
+
+    answer_normalized = _normalize_exact_phrase(answer)
+    if clarification_question == TIME_CLARIFICATION_QUESTION:
+        if base.window_label != "全部历史" or answer_normalized not in {
+            _normalize_exact_phrase(window)
+            for window in _APPROVED_TIME_ANSWERS
+        }:
+            return None
+    elif clarification_question == STORE_SCOPE_CLARIFICATION_QUESTION:
+        if base.window_label == "全部历史" or base.store_scope:
+            return None
+        if answer_normalized != _normalize_exact_phrase("全部门店"):
+            store_mentions = extract_store_mentions(answer)
+            if (
+                len(store_mentions) != 1
+                or answer_normalized
+                != _normalize_exact_phrase(store_mentions[0])
+            ):
+                return None
+    else:
+        return None
+
+    combined = f"{original_query} {answer}".strip()
+    candidate = _explicit_named_dish_metric_spec(combined)
+    if (
+        candidate is None
+        or candidate.dish_slot != base.dish_slot
+        or candidate.requested_metrics != base.requested_metrics
+        or candidate.analysis_action != base.analysis_action
+        or candidate.window_label == "全部历史"
+        or candidate.comparison is not None
+        or candidate.unsupported_requirements
+        or candidate.asks_priority
+        or candidate.asks_prohibited_actions
+        or candidate.asks_export
+    ):
+        return None
+    if (
+        clarification_question == STORE_SCOPE_CLARIFICATION_QUESTION
+        and candidate.store_scope not in {"all", "single"}
+    ):
+        return None
+    return _seal_query_plan(replace(
+        candidate,
+        confidence=1.0,
+        source_tier="trusted_context",
+        planner_authority="trusted_context",
+        is_clarification_continuation=True,
+        plan_hash="",
+    ))
+
+
 # ─── Pending-clarification store (2026-07-08 clarification-loop v1) ──────
 # Separate from `_ROUTE_CACHE` above -- this is NOT a routing-decision cache,
 # it is a short-lived "what did we just ask this session, and what was the
@@ -4500,6 +4579,36 @@ async def _parse_continuation(
             is_continuation=True,
         )
 
+    # The production semantic-first path still has one reviewed deterministic
+    # exception: a fixed time/store button that continues an approved whole
+    # sentence.  Resolve it before calling T3 so a transient provider outage
+    # cannot erase an already sealed dish, metric, time or store scope.  This
+    # is exact equality plus a bounded button vocabulary; free-form follow-ups
+    # continue to use the LLM below.
+    trusted_dish_button = _trusted_named_dish_button_continuation(
+        original_query,
+        query,
+        clarification_question,
+    )
+    if trusted_dish_button is not None:
+        return trusted_dish_button
+
+    promoted_code = _approved_exact_continuation_route(
+        original_query,
+        query,
+        clarification_question,
+    )
+    if promoted_code:
+        return _build_spec(
+            promoted_code,
+            concatenated,
+            confidence=1.0,
+            tier="exact",
+            planner_authority="promoted_exact",
+            is_continuation=True,
+            require_explicit_time=True,
+        )
+
     if semantic_first:
         try:
             available_stores = await _load_store_options(pool, factory_id)
@@ -4553,22 +4662,6 @@ async def _parse_continuation(
             available_stores=available_stores,
             suggested_stores=suggested_stores,
             is_continuation=True,
-        )
-
-    promoted_code = _approved_exact_continuation_route(
-        original_query,
-        query,
-        clarification_question,
-    )
-    if promoted_code:
-        return _build_spec(
-            promoted_code,
-            concatenated,
-            confidence=1.0,
-            tier="exact",
-            planner_authority="promoted_exact",
-            is_continuation=True,
-            require_explicit_time=True,
         )
 
     explicit_action_read_spec = _explicit_read_only_action_ranking_spec(

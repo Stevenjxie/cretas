@@ -95,6 +95,12 @@ public class IntentExecutionOrchestrator {
             "^(?:请(?:帮我)?|麻烦)?(?:删除|下架|停售)\\s*"
                     + "(?<name>[^，。！？!?]{1,60}?)\\s*(?:这道菜|这个菜|这道菜品|菜品)"
                     + "\\s*(?:一下)?[。！？!?]?$");
+    private static final Pattern RESTAURANT_EXPLICIT_DISH_DELETE_DIRECT = Pattern.compile(
+            "^(?:请(?:帮我)?|麻烦)?(?:删除|下架|停售)\\s*"
+                    + "(?<name>[^，。！？!?]{1,40}?)\\s*(?:一下)?[。！？!?]?$");
+    private static final Pattern RESTAURANT_DERIVED_DISH_SELECTION_WRITE = Pattern.compile(
+            "(?:(?:销量|营收|毛利|成本).{0,16}(?:最高|最低|前\\s*\\d+|后\\s*\\d+|排名)"
+                    + "|(?:最高|最低|前\\s*\\d+|后\\s*\\d+).{0,16}(?:道菜|菜品))");
     private static final Pattern RESTAURANT_DISH_DELETE_ADVICE_OR_READ = Pattern.compile(
             "哪些|哪道|什么|是否|能否|可不可以|应该|建议|考虑|要不要|适合|查询|查看|"
                     + "已下架|下架记录|下架情况|停售记录|为什么");
@@ -327,6 +333,11 @@ public class IntentExecutionOrchestrator {
         }
 
         String userInput = request.getUserInput();
+        if (!factoryPackConstrained
+                && isRestaurantTenant(factoryId)
+                && isRestaurantDerivedDishSelectionWrite(userInput)) {
+            return buildRestaurantDerivedDishWriteClarification(request);
+        }
         Optional<String> explicitDishDeleteTarget =
                 extractExplicitRestaurantDishDeleteTarget(userInput);
         if (!factoryPackConstrained
@@ -2016,12 +2027,14 @@ public class IntentExecutionOrchestrator {
 
     static Optional<String> extractExplicitRestaurantDishDeleteTarget(String userInput) {
         if (userInput == null || userInput.isBlank()
-                || RESTAURANT_DISH_DELETE_ADVICE_OR_READ.matcher(userInput).find()) {
+                || RESTAURANT_DISH_DELETE_ADVICE_OR_READ.matcher(userInput).find()
+                || isRestaurantDerivedDishSelectionWrite(userInput)) {
             return Optional.empty();
         }
         for (Pattern pattern : List.of(
                 RESTAURANT_EXPLICIT_DISH_DELETE_WITH_OBJECT_MARKER,
-                RESTAURANT_EXPLICIT_DISH_DELETE_WITH_NOUN)) {
+                RESTAURANT_EXPLICIT_DISH_DELETE_WITH_NOUN,
+                RESTAURANT_EXPLICIT_DISH_DELETE_DIRECT)) {
             Matcher matcher = pattern.matcher(userInput.trim());
             if (!matcher.matches()) {
                 continue;
@@ -2032,13 +2045,52 @@ public class IntentExecutionOrchestrator {
             }
             String normalized = name.trim()
                     .replaceFirst("^(?:这道|这个|该|菜单里的)", "")
-                    .replaceFirst("(?:这道|这个|该)?菜品?$", "")
                     .trim();
             if (!normalized.isBlank()) {
                 return Optional.of(normalized);
             }
         }
         return Optional.empty();
+    }
+
+    static boolean isRestaurantDerivedDishSelectionWrite(String userInput) {
+        if (userInput == null || userInput.isBlank()
+                || !RESTAURANT_WRITE_VERB.matcher(userInput).find()) {
+            return false;
+        }
+        return RESTAURANT_DERIVED_DISH_SELECTION_WRITE.matcher(userInput).find();
+    }
+
+    private IntentExecuteResponse buildRestaurantDerivedDishWriteClarification(
+            IntentExecuteRequest request) {
+        String message;
+        String status;
+        Map<String, Object> resultData = null;
+        if ("READ".equalsIgnoreCase(request.getMode())) {
+            message = "这是按排行筛选菜品后的操作请求，请切换到【操作】页处理。"
+                    + "系统会先列出候选菜品，不会把排行条件当成菜名，也不会直接批量下架。";
+            status = "READ_MODE_WRITE_BLOCKED";
+        } else {
+            message = "这是按经营数据筛选后的批量操作。为避免误下架，请先查看候选菜品，"
+                    + "再输入要下架的具体菜名；每道菜都会单独生成操作预览，只有确认后才会执行。";
+            status = "NEED_MORE_INFO";
+            resultData = Map.of(
+                    "suggestedFollowups", List.of(Map.of(
+                            "label", "先查看这5道菜",
+                            "question", "最近7天全部门店销量最低的5道菜")));
+        }
+        return IntentExecuteResponse.builder()
+                .intentRecognized(true)
+                .intentCode("RESTAURANT_DISH_DELETE")
+                .intentName("下架菜品")
+                .intentCategory("RESTAURANT")
+                .status(status)
+                .message(message)
+                .formattedText(message)
+                .resultData(resultData)
+                .aiMode("WRITE")
+                .executedAt(LocalDateTime.now())
+                .build();
     }
 
     // R28: 餐饮复合句 ("先说说A，再说说B") — 早期 phrase shortcut 的 contains

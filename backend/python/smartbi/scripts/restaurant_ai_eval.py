@@ -172,6 +172,14 @@ CASES: List[Dict[str, Any]] = [
          "我没太看懂",
          "请先把缺少的数据补齐",
      ]},
+    # ── 操作模式：自然说法进入确认；数据筛选批量操作先列候选再逐项确认 ──
+    {"q": "下架卤炸牛肉串", "mode": "OPERATE",
+     "contains": ["下架菜品", "执行前需要确认"],
+     "excludes": ["还没有把握直接回答", "请切换到【操作】页"]},
+    {"q": "把最近7天全部门店销量最低的5道菜下架", "mode": "OPERATE",
+     "contains": ["先查看候选菜品", "具体菜名", "只有确认后才会执行"],
+     "followup_contains": ["先查看这5道菜"],
+     "excludes": ["未找到菜品「最近7天全部门店销量最低的5道」"]},
 ]
 
 
@@ -218,9 +226,12 @@ def run_eval(base: str, only: Optional[str] = None) -> int:
         # 蓝绿切换/熔断窗口会产生瞬态失败 — 失败自动重试一次再定论。
         for attempt in (1, 2):
             try:
+                payload = {"userInput": q, "sessionId": sid}
+                if case.get("mode"):
+                    payload["mode"] = case["mode"]
                 resp = _post_json(
                     f"{base}/api/mobile/{FACTORY_ID}/ai-intents/execute",
-                    {"userInput": q, "sessionId": sid},
+                    payload,
                     headers=auth,
                 )
                 response_data = resp.get("data") or {}

@@ -819,12 +819,22 @@ class RestaurantOpsGoldRouteTest {
         assertThat(IntentExecutionOrchestrator.extractExplicitRestaurantDishDeleteTarget(
                 "删除红烧肉这道菜"))
                 .contains("红烧肉");
+        assertThat(IntentExecutionOrchestrator.extractExplicitRestaurantDishDeleteTarget(
+                "下架卤炸牛肉串"))
+                .contains("卤炸牛肉串");
+        assertThat(IntentExecutionOrchestrator.extractExplicitRestaurantDishDeleteTarget(
+                "停售宫保鸡丁"))
+                .contains("宫保鸡丁");
+        assertThat(IntentExecutionOrchestrator.extractExplicitRestaurantDishDeleteTarget(
+                "下架娃娃菜"))
+                .contains("娃娃菜");
 
         for (String readOrAdvice : new String[]{
                 "哪些菜应该下架",
                 "卤炸牛肉串为什么下架",
                 "查询已下架菜品",
-                "是否要下架卤炸牛肉串"
+                "是否要下架卤炸牛肉串",
+                "把最近7天全部门店销量最低的5道菜下架"
         }) {
             assertThat(IntentExecutionOrchestrator.extractExplicitRestaurantDishDeleteTarget(
                     readOrAdvice))
@@ -867,6 +877,54 @@ class RestaurantOpsGoldRouteTest {
 
         assertThat(response.getStatus()).isEqualTo("WRITE_CONFIRM_REQUIRED");
         assertThat(response.getIntentCode()).isEqualTo("RESTAURANT_DISH_DELETE");
+        verify(toolDispatchService, never()).executeWithTool(
+                any(), anyString(), any(), any(), anyLong(), anyString(), any());
+    }
+
+    @Test
+    @DisplayName("operation mode data-derived batch removal asks for a ranked list before any preview")
+    void derivedBatchDishRemovalRequiresConcreteDishSelection() {
+        IntentExecuteResponse response = orchestrator.execute(
+                "DEMO_REST",
+                IntentExecuteRequest.builder()
+                        .userInput("把最近7天全部门店销量最低的5道菜下架")
+                        .mode("OPERATE")
+                        .sessionId("derived-batch-write-session")
+                        .build(),
+                7L,
+                "admin");
+
+        assertThat(response.getStatus()).isEqualTo("NEED_MORE_INFO");
+        assertThat(response.getIntentCode()).isEqualTo("RESTAURANT_DISH_DELETE");
+        assertThat(response.getMessage())
+                .contains("先查看候选菜品")
+                .contains("具体菜名")
+                .contains("只有确认后才会执行");
+        assertThat(response.getResultData().toString())
+                .contains("先查看这5道菜")
+                .contains("最近7天全部门店销量最低的5道菜");
+        verify(toolDispatchService, never()).executeWithTool(
+                any(), anyString(), any(), any(), anyLong(), anyString(), any());
+    }
+
+    @Test
+    @DisplayName("consultation mode data-derived batch removal stays on the write-mode gate")
+    void derivedBatchDishRemovalInReadModeOffersOperationPage() {
+        IntentExecuteResponse response = orchestrator.execute(
+                "DEMO_REST",
+                IntentExecuteRequest.builder()
+                        .userInput("下架最近7天销量最低的5道菜")
+                        .mode("READ")
+                        .sessionId("derived-batch-read-session")
+                        .build(),
+                7L,
+                "admin");
+
+        assertThat(response.getStatus()).isEqualTo("READ_MODE_WRITE_BLOCKED");
+        assertThat(response.getAiMode()).isEqualTo("WRITE");
+        assertThat(response.getMessage())
+                .contains("切换到【操作】页")
+                .contains("不会把排行条件当成菜名");
         verify(toolDispatchService, never()).executeWithTool(
                 any(), anyString(), any(), any(), anyLong(), anyString(), any());
     }
