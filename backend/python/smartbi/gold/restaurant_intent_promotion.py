@@ -32,9 +32,21 @@ this module's shape):
   source of truth `populate_restaurant_ops` embeds from -- ledger entries are
   first-class members of the sample set, not a parallel DB-only index.
 
-Never silently graduates: `apply_promotions` is only ever invoked by a human
-running the CLI's `--apply` flag with a file the human already reviewed.
-Nothing in this module, `aggregate_candidates` included, writes on its own.
+TWO DIFFERENT LEDGERS, DO NOT CONFLATE (2026-07-28):
+  * the JSON file above = the sample corpus the VECTOR INDEX embeds. It is a
+    retrieval hint. Repo file, for the two reasons just given.
+  * `ai_promoted_routes` (Postgres, migration V20261030_01, written by
+    `apply_route_promotions` below) = an EXECUTION GRANT: reviewed whole
+    sentences that production may answer WITHOUT calling the planner. Neither
+    of the two reasons above applies to it -- it must be visible to both
+    uvicorn workers the moment a human approves it (no deploy), it carries a
+    whole plan rather than a bare code, and nothing re-embeds it. That is why
+    it is a table and the sample corpus is not.
+
+Never silently graduates: `apply_promotions` / `apply_route_promotions` are
+only ever invoked by a human running the CLI's `--apply-ledger` / `--apply`
+flag with a file the human already reviewed. Nothing in this module,
+`aggregate_candidates` included, writes on its own.
 """
 from __future__ import annotations
 
@@ -380,3 +392,238 @@ def apply_promotions(entries: List[Dict[str, str]]) -> Dict[str, Any]:
         "ledger_path": str(LEDGER_FILE),
         "ledger_size": sum(len(v) for v in ledger.values()),
     }
+
+
+# ─── Reviewed route promotion -> `ai_promoted_routes` (2026-07-28) ────────
+#
+# The ledger above answers "which sample sentences does the VECTOR INDEX
+# embed"; it is a retrieval-hint corpus and stays a repo file for the two
+# reasons in the module docstring (rsync deploys, embedding-model upgrades).
+#
+# This section answers a different question: "which reviewed sentences may be
+# ANSWERED WITHOUT CALLING THE PLANNER". That is an execution grant, it must
+# be readable by both uvicorn workers the moment it is approved, and it
+# carries a whole plan rather than a bare code -- so it lives in Postgres
+# (`ai_promoted_routes`, migration V20261030_01), which is exactly the storage
+# the semantic-first branch of `parse_restaurant_query` reads.
+#
+# Still never automatic: `apply_route_promotions` is only reachable from a
+# human running the CLI's `--apply` with a file that human reviewed.
+
+_PROMOTION_SOURCES = ("flywheel", "manual_seed")
+# RLS on `ai_promoted_routes` refuses a global-scope write from a tenant
+# session; the reviewed-promotion path is explicitly an internal operation.
+_INTERNAL_SENTINEL = "__internal__"
+
+
+def default_seed_plan(code: str) -> Dict[str, Any]:
+    """A minimal, contract-complete planner plan for a bare reviewed phrase.
+
+    Used when a reviewed entry names only a resolver code. Time is left NULL
+    on purpose: the phrase itself carries no window, so the deterministic time
+    gate still asks for one -- identical to how the in-code exact registry
+    behaved. A concrete date must NEVER appear in a stored plan (it would be
+    replayed verbatim tomorrow); relative time belongs in `time_range`.
+    """
+    return {
+        "intent": code,
+        "time_range": None,
+        "wants_margin": False,
+        "asks_profitability": False,
+        "requested_metrics": [],
+        "analysis_action": "lookup",
+        "dimensions": [],
+        "dish": None,
+        "store": None,
+        "stores": [],
+        "store_scope": None,
+        "confidence": 1.0,
+        "clarification_needed": False,
+        "missing_fields": [],
+        "clarification_question": None,
+        "clarification_options": [],
+    }
+
+
+def _plan_rejection_reason(plan: Any, phrase: str) -> Optional[str]:
+    """Reject a plan the runtime could not replay, BEFORE it reaches the
+    table. Compiling it here is the same check the read path performs, so a
+    row that would silently never fire is never written."""
+    from smartbi.gold.restaurant_intent import (
+        _semantic_spec_from_t3,
+        plan_is_replayable,
+    )
+
+    if not isinstance(plan, dict):
+        return "plan_not_an_object"
+    if json.dumps(plan, ensure_ascii=False).find('"date_range"') != -1:
+        return "plan_contains_resolved_dates"
+    try:
+        spec = _semantic_spec_from_t3(plan, phrase)
+    except Exception as exc:  # pragma: no cover - defensive
+        return f"plan_compile_error:{exc}"
+    if not plan_is_replayable(spec):
+        return f"plan_not_replayable:{spec.planner_authority}"
+    return None
+
+
+async def apply_route_promotions(
+    pool,
+    entries: List[Dict[str, Any]],
+    *,
+    domain: str = "restaurant",
+    scope: str = "global",
+    source: str = "manual_seed",
+    reviewed_by: Optional[str] = None,
+) -> Dict[str, Any]:
+    """UPSERT human-reviewed whole-sentence promotions into
+    `ai_promoted_routes`.
+
+    `entries` are `{"query": ..., "code": ...}` (a default plan is built) or
+    `{"query": ..., "plan": {...}}` (an explicit reviewed plan). Every entry
+    is normalized with the SAME whole-sentence normalizer the runtime matcher
+    uses, so what is stored is exactly what can match.
+
+    Invalid entries are reported with a reason rather than dropped. Raises on
+    a DB failure: unlike the read path, an apply that did not persist must not
+    look like it succeeded.
+    """
+    from smartbi.gold.restaurant_intent import (
+        _VALID_CODES,
+        _normalize_exact_phrase,
+        clear_promoted_routes_cache,
+    )
+
+    if source not in _PROMOTION_SOURCES:
+        raise ValueError(f"source must be one of {_PROMOTION_SOURCES}, got {source!r}")
+    if not scope:
+        raise ValueError("scope must be 'global' or a factory_id")
+
+    accepted: List[Dict[str, Any]] = []
+    skipped: List[Dict[str, Any]] = []
+    seen: set = set()
+    for entry in entries or []:
+        entry = entry or {}
+        raw_query = str(entry.get("query") or "")
+        phrase = _normalize_exact_phrase(raw_query)
+        code = str(entry.get("code") or "").strip()
+        plan = entry.get("plan")
+        if plan is None and code:
+            plan = default_seed_plan(code)
+        if not phrase:
+            skipped.append({"query": raw_query, "reason": "empty_query"})
+            continue
+        if not isinstance(plan, dict):
+            skipped.append({"query": raw_query, "reason": "missing_plan_and_code"})
+            continue
+        if plan.get("intent") not in _VALID_CODES:
+            skipped.append({
+                "query": raw_query,
+                "reason": f"unknown_intent:{plan.get('intent')}",
+            })
+            continue
+        reason = _plan_rejection_reason(plan, phrase)
+        if reason:
+            skipped.append({"query": raw_query, "reason": reason})
+            continue
+        if phrase in seen:
+            skipped.append({"query": raw_query, "reason": "duplicate_in_batch"})
+            continue
+        seen.add(phrase)
+        accepted.append({"query": raw_query, "phrase": phrase, "plan": plan})
+
+    written: List[Dict[str, Any]] = []
+    if accepted:
+        # The GUC decides what RLS lets us write: a global promotion is an
+        # internal operation, a tenant promotion must run as that tenant.
+        guc = _INTERNAL_SENTINEL if scope == "global" else scope
+        async with pool.acquire() as conn:
+            async with conn.transaction():
+                await conn.execute(
+                    "SELECT set_config('app.factory_id', $1, true)", guc,
+                )
+                for item in accepted:
+                    await conn.execute(
+                        """
+                        INSERT INTO ai_promoted_routes
+                            (domain, normalized_phrase, plan_json, plan_version,
+                             source, scope, reviewed_by)
+                        VALUES ($1, $2, $3::jsonb, $4, $5, $6, $7)
+                        ON CONFLICT (domain, normalized_phrase) DO UPDATE
+                           SET plan_json    = EXCLUDED.plan_json,
+                               plan_version = EXCLUDED.plan_version,
+                               source       = EXCLUDED.source,
+                               scope        = EXCLUDED.scope,
+                               reviewed_by  = EXCLUDED.reviewed_by
+                        """,
+                        domain,
+                        item["phrase"],
+                        json.dumps(item["plan"], ensure_ascii=False, sort_keys=True),
+                        "restaurant-query-plan-v2",
+                        source,
+                        scope,
+                        reviewed_by,
+                    )
+                    written.append({
+                        "query": item["query"],
+                        "normalized_phrase": item["phrase"],
+                        "intent": item["plan"].get("intent"),
+                    })
+
+    # This process is the CLI, not a server worker; the servers pick the new
+    # rows up on their own short catalogue TTL. Clearing here keeps a
+    # same-process caller (tests, a future admin endpoint) honest.
+    clear_promoted_routes_cache()
+
+    return {
+        "domain": domain,
+        "scope": scope,
+        "source": source,
+        "written": written,
+        "skipped": skipped,
+    }
+
+
+async def list_route_promotions(
+    pool,
+    *,
+    domain: str = "restaurant",
+    factory_id: str = _INTERNAL_SENTINEL,
+) -> List[Dict[str, Any]]:
+    """Read back what is currently promoted, for CLI review. Read-only."""
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            await conn.execute(
+                "SELECT set_config('app.factory_id', $1, true)", factory_id,
+            )
+            rows = await conn.fetch(
+                """
+                SELECT normalized_phrase, plan_json, plan_version, source,
+                       scope, reviewed_by, created_at, hit_count
+                  FROM ai_promoted_routes
+                 WHERE domain = $1
+                 ORDER BY normalized_phrase
+                """,
+                domain,
+            )
+    out: List[Dict[str, Any]] = []
+    for row in rows or ():
+        plan = row["plan_json"]
+        if isinstance(plan, (bytes, bytearray)):
+            plan = plan.decode("utf-8", "ignore")
+        if isinstance(plan, str):
+            try:
+                plan = json.loads(plan)
+            except (TypeError, ValueError):
+                plan = {}
+        out.append({
+            "normalized_phrase": row["normalized_phrase"],
+            "intent": (plan or {}).get("intent"),
+            "plan_version": row["plan_version"],
+            "source": row["source"],
+            "scope": row["scope"],
+            "reviewed_by": row["reviewed_by"],
+            "created_at": row["created_at"],
+            "hit_count": row["hit_count"],
+        })
+    return out
