@@ -2925,6 +2925,78 @@ async def _load_store_options(
     )
 
 
+async def _load_relevant_store_options(
+    pool,
+    factory_id: str,
+    query: str,
+) -> Tuple[str, ...]:
+    """Return stores that actually have data for the pending question.
+
+    The full tenant catalogue remains the authority for validating an explicit
+    store typed by the user.  This narrower list is only used for clarification
+    buttons: suggesting the first three alphabetical stores caused the UI to
+    offer headquarters/closed/no-sale stores for a named-dish question, so all
+    named buttons appeared broken even though ``全部门店`` worked.
+    """
+    (start_date, end_date), _ = _resolve_sales_date_range(query)
+    if start_date is None or end_date is None:
+        return ()
+
+    dish_name = extract_dish_candidate(query)
+    data_factory = demo_data_factory_for_code(
+        None,
+        factory_id,
+        store_scoped=True,
+    )
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            await conn.execute(
+                "SELECT set_config('app.factory_id', $1, true)",
+                data_factory,
+            )
+            rows = await conn.fetch(
+                """
+                SELECT s.name
+                  FROM fact_pos_item i
+                  JOIN fact_pos_transaction t
+                    ON t.id = i.transaction_id
+                   AND t.factory_id = i.factory_id
+                  JOIN dim_product p
+                    ON p.product_id = i.product_id
+                   AND p.factory_id = i.factory_id
+                  JOIN dim_store s
+                    ON s.store_id = t.store_id
+                   AND s.factory_id = t.factory_id
+                 WHERE i.factory_id = $1
+                   AND t.factory_id = $1
+                   AND t.date BETWEEN $2::date AND $3::date
+                   AND (
+                        $4::text IS NULL
+                        OR p.name = $4::text
+                        OR p.normalized_name = $4::text
+                   )
+                 GROUP BY s.name
+                 ORDER BY
+                   CASE
+                     WHEN $4::text IS NULL
+                     THEN SUM(ABS(COALESCE(i.amount, 0)))
+                     ELSE SUM(ABS(COALESCE(i.qty, 0)))
+                   END DESC,
+                   s.name
+                 LIMIT 50
+                """,
+                data_factory,
+                start_date,
+                end_date,
+                dish_name,
+            )
+    return tuple(
+        str(row["name"]).strip()[:80]
+        for row in rows
+        if row["name"] and str(row["name"]).strip()
+    )
+
+
 async def _apply_store_scope_guard(
     pool,
     factory_id: str,
@@ -3509,6 +3581,7 @@ def _semantic_spec_from_t3(
     query: str,
     *,
     available_stores: Sequence[str] = (),
+    suggested_stores: Sequence[str] = (),
     is_continuation: bool = False,
 ) -> RestaurantQuerySpec:
     """Compile validated LLM semantics into the immutable execution contract."""
@@ -3676,7 +3749,7 @@ def _semantic_spec_from_t3(
     clarification_options = _validated_llm_clarification_options(
         parsed,
         missing_fields=missing_fields,
-        available_stores=available_stores,
+        available_stores=suggested_stores or available_stores,
     )
     if daypart_contract_repair:
         # Daypart business questions are served by the grounded staffing /
@@ -3728,7 +3801,7 @@ def _semantic_spec_from_t3(
         llm_dimensions=dimensions,
         llm_analysis_action=analysis_action,
         llm_store_scope=store_scope,
-        store_options=available_stores,
+        store_options=suggested_stores or available_stores,
         clarification_options=clarification_options,
         planner_authority=(
             "llm_contract_repair"
@@ -3971,6 +4044,18 @@ async def parse_restaurant_query(
         except Exception as exc:
             logger.warning("[restaurant-intent] semantic-first store catalogue unavailable: %s", exc)
             available_stores = ()
+        try:
+            suggested_stores = await _load_relevant_store_options(
+                pool,
+                factory_id,
+                semantic_query,
+            )
+        except Exception as exc:
+            logger.warning(
+                "[restaurant-intent] relevant store suggestions unavailable: %s",
+                exc,
+            )
+            suggested_stores = ()
         parsed = await _t3_llm_parse(
             semantic_query,
             hint=None,
@@ -3995,6 +4080,7 @@ async def parse_restaurant_query(
             parsed,
             semantic_query,
             available_stores=available_stores,
+            suggested_stores=suggested_stores,
         )
         if (
             trusted_followup_spec is not None
@@ -4423,6 +4509,18 @@ async def _parse_continuation(
                 exc,
             )
             available_stores = ()
+        try:
+            suggested_stores = await _load_relevant_store_options(
+                pool,
+                factory_id,
+                concatenated,
+            )
+        except Exception as exc:
+            logger.warning(
+                "[restaurant-intent] continuation relevant store suggestions unavailable: %s",
+                exc,
+            )
+            suggested_stores = ()
         semantic_history: List[Dict[str, Any]] = list(history or [])[-20:]
         semantic_history.extend([
             {"role": "user", "content": original_query},
@@ -4453,6 +4551,7 @@ async def _parse_continuation(
             parsed,
             concatenated,
             available_stores=available_stores,
+            suggested_stores=suggested_stores,
             is_continuation=True,
         )
 

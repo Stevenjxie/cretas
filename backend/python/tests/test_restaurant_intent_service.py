@@ -1716,6 +1716,62 @@ async def test_tiered_answer_store_mention_maps_demo_and_declines_unknown(monkey
 
 
 @pytest.mark.asyncio
+async def test_demo_dish_fallback_does_not_replace_truth_with_missing_store(monkeypatch):
+    spec = _spec(
+        intent="RESTAURANT_OPS_STORE_MARGIN",
+        resolver_query_seed="米饭的销量是多少 本月 兄弟土菜馆",
+        requested_metrics=("sales_volume",),
+        dimensions=("dish", "store"),
+        dish_slot="米饭",
+        store_scope="single",
+        store_slots=("兄弟土菜馆",),
+    )
+    calls = []
+
+    async def _fake_resolve(code, pool, factory_id, **kwargs):
+        calls.append(factory_id)
+        if factory_id == "RES_3101_009":
+            return OpsAnswer(
+                code=code,
+                title="米饭门店销量",
+                answer_text=(
+                    "本月没有找到「米饭」的门店销售记录，"
+                    "没有用其他菜品或榜单替代。"
+                ),
+                charts=[],
+                kpis=[],
+                meta={"dish_not_found": "米饭"},
+            )
+        return OpsAnswer(
+            code=code,
+            title="兄弟土菜馆毛利分析",
+            answer_text=(
+                "没有找到名为「兄弟土菜馆」的门店，"
+                "不能计算该店的毛利或毛利率。"
+            ),
+            charts=[],
+            kpis=[],
+            meta={"store_not_found": "兄弟土菜馆"},
+        )
+
+    monkeypatch.setattr(svc, "_resolve_tiered", _fake_resolve)
+
+    result = await tiered_answer(
+        "兄弟土菜馆",
+        object(),
+        "DEMO_REST",
+        "restaurant_manager",
+        precomputed_spec=spec,
+    )
+
+    assert calls == ["RES_3101_009", "DEMO_REST"]
+    assert result["kind"] == "clarification"
+    assert "米饭" in result["answer_text"]
+    assert "门店销售记录" in result["answer_text"]
+    assert "毛利或毛利率" not in result["answer_text"]
+
+
+@pytest.mark.asyncio
 async def test_tiered_answer_missing_reference_guard_is_clarification(monkeypatch):
     spec = _spec(intent="RESTAURANT_OPS_GROSS_MARGIN")
 

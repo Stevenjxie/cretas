@@ -58,6 +58,17 @@ CASES: List[Dict[str, Any]] = [
     {"q": "怎么优化", "chain": "dish", "contains": ["「招牌藤椒味(单人份)」"]},
     {"q": "换成上个月呢", "chain": "dish",
      "contains": ["「招牌藤椒味(单人份)」", "2026-06"]},
+    # ── 真实前端按钮链：具名门店必须来自当前菜品/时间的实际销售范围 ──
+    {"q": "米饭的销量是多少", "chain": "dish_named_store",
+     "contains": ["哪个时间范围"],
+     "followup_contains": ["本月", "上个月", "最近7天", "最近30天"]},
+    {"q": "本月", "chain": "dish_named_store",
+     "contains": ["哪一组门店"],
+     "followup_contains": ["青花椒新世界新丸中心店"],
+     "followup_excludes": ["兄弟土菜馆", "有滋有味总部"]},
+    {"q": "青花椒新世界新丸中心店", "chain": "dish_named_store",
+     "contains": ["青花椒新世界新丸中心店", "「米饭」", "销量"],
+     "excludes": ["没有找到", "毛利或毛利率"]},
     # ── 菜品独立问 ──
     {"q": "本月全部门店米饭赚钱吗", "contains": ["结论", "「米饭」", "毛利率"]},
     {"q": "这周全部门店米饭卖了多少", "contains": ["「米饭」", "销量"]},
