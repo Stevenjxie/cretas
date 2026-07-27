@@ -51,6 +51,15 @@ public class LabelQcService {
                 .orElseThrow(() -> new BusinessException(404, "SKU 不存在或已停用")
                         .withCode("LABEL_QC_SKU_NOT_AVAILABLE")
                         .withHint("请重新选择当前工厂的有效 SKU"));
+        String productCategory = Optional.ofNullable(product.getProductCategory())
+                .map(String::trim)
+                .map(value -> value.toUpperCase(Locale.ROOT))
+                .orElse("");
+        if (!ProductCategory.FINISHED_PRODUCT.equals(productCategory)) {
+            throw new BusinessException(400, "该 SKU 不是成品，不能用于标签拍检")
+                    .withCode("LABEL_QC_FINISHED_SKU_REQUIRED")
+                    .withHint("请重新选择当前工厂已启用的成品 SKU");
+        }
         if (product.getCode() == null || product.getCode().isBlank()) {
             throw new BusinessException("SKU 编码未配置，不能创建拍检任务")
                     .withCode("LABEL_QC_SKU_CODE_REQUIRED")
