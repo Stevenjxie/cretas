@@ -253,6 +253,8 @@ const rawMenuConfig: MenuItem[] = [
       { path: '/system/ai-intents', title: 'AI意图配置', icon: '', module: 'system', roles: PLATFORM_ADMIN_ONLY, groupLabel: '平台治理' },
       { path: '/system/skill-tools', title: 'Skill/Tool治理', icon: '', module: 'system', roles: PLATFORM_ADMIN_ONLY },
       { path: '/system/llm-usage', title: 'LLM 用量监控', icon: '', module: 'system', roles: PLATFORM_ADMIN_ONLY },
+      // 卡5 (2026-07-28 飞轮回接方案 P4 批): 飞轮运营台 5 个子页, 单一菜单入口跳总览, 页内 tab 切换其余 4 页.
+      { path: '/system/ai-flywheel', title: 'AI 飞轮运营台', icon: '', module: 'system', roles: PLATFORM_ADMIN_ONLY },
       { path: '/system/encoding-rules', title: '编码规则字典', icon: '', module: 'system', roles: PLATFORM_ADMIN_ONLY },
       { path: '/system/ai-quota', title: 'AI 配额规则', icon: '', module: 'system', roles: PLATFORM_ADMIN_ONLY },
       { path: '/system/pos', title: 'POS集成', icon: '', module: 'system', roles: PLATFORM_ADMIN_ONLY },
