@@ -950,7 +950,7 @@ async def test_endpoint_delegates_sealed_read_action_choice(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_endpoint_dependent_followup_uses_trusted_context_and_session_key(monkeypatch):
+async def test_endpoint_dependent_followup_sends_raw_query_and_history_to_llm(monkeypatch):
     monkeypatch.setattr(gold_reads_mod, "get_factory_id", lambda: "QHJ01")
     pool = object()
     monkeypatch.setattr(gold_reads_mod, "get_pg_pool", AsyncMock(return_value=pool))
@@ -1016,14 +1016,19 @@ async def test_endpoint_dependent_followup_uses_trusted_context_and_session_key(
     )
 
     assert result["delegate"] is True
-    assert parse_calls[0][0] == "上个月营收为什么是这样"
-    assert "继续追问" not in parse_calls[0][0]
-    assert parse_calls[0][2]["trusted_followup_context"] is True
+    assert parse_calls[0][0] == "那为什么呢"
+    assert parse_calls[0][2]["semantic_first"] is True
+    assert parse_calls[0][2]["history"] == [{
+        "q": "上个月营收怎么样",
+        "a_summary": "上个月营收已完成分析",
+        "context": parent["structured_context"],
+    }]
     session_key = parse_calls[0][2]["session_key"]
     assert session_key.startswith("trusted-v1:")
     assert "shared-device-session" not in session_key
     assert tiered_calls[0][4]["session_key"] == session_key
     assert tiered_calls[0][4]["precomputed_spec"] is spec
+    assert tiered_calls[0][4]["history"] == parse_calls[0][2]["history"]
     lookup.assert_awaited_once_with("shared-device-session", "QHJ01", user_id=88)
     upsert.assert_awaited_once()
 
@@ -1047,9 +1052,10 @@ async def test_endpoint_clarification_shape(monkeypatch):
         "suggested_followups": followups,
         "spec": spec,
     }
+    tiered_mock = AsyncMock(return_value=tiered_result)
     monkeypatch.setattr(
         "smartbi.gold.restaurant_intent_service.tiered_answer",
-        AsyncMock(return_value=tiered_result),
+        tiered_mock,
     )
 
     # query 必须带确定性利润/时间窗信号 (2026-07-08 audit fix C-2 端点前置滤:
@@ -1063,6 +1069,41 @@ async def test_endpoint_clarification_shape(monkeypatch):
         "answer_text": "您想看哪方面？",
         "suggested_followups": followups,
     }
+    assert tiered_mock.await_args.kwargs["precomputed_spec"] is spec
+
+
+@pytest.mark.asyncio
+async def test_llm_clarification_cannot_be_bypassed_by_compound_split(monkeypatch):
+    spec = _spec(
+        intent="",
+        clarification_needed=True,
+        clarification_question="这次想分析哪些门店？",
+    )
+    monkeypatch.setattr(
+        svc,
+        "parse_restaurant_query",
+        AsyncMock(return_value=spec),
+    )
+
+    import smartbi.gold.restaurant_agent as restaurant_agent
+
+    monkeypatch.setattr(
+        restaurant_agent,
+        "is_compound_question",
+        lambda _query: pytest.fail(
+            "compound splitting must not bypass the LLM clarification"
+        ),
+    )
+
+    result = await tiered_answer(
+        "看看营收，另外告诉我怎么提高",
+        object(),
+        "DEMO_REST",
+        "restaurant_manager",
+    )
+
+    assert result["kind"] == "clarification"
+    assert result["answer_text"] == "这次想分析哪些门店？"
 
 
 @pytest.mark.asyncio
@@ -1143,9 +1184,18 @@ async def test_endpoint_forwards_role_and_java_tool_name_to_tiered_answer(monkey
 
     captured: dict = {}
 
-    async def _fake_tiered_answer(query, pool, factory_id, role, *, java_tool_name=None):
+    async def _fake_tiered_answer(
+        query,
+        pool,
+        factory_id,
+        role,
+        *,
+        java_tool_name=None,
+        precomputed_spec=None,
+    ):
         captured["role"] = role
         captured["java_tool_name"] = java_tool_name
+        captured["precomputed_spec"] = precomputed_spec
         return {
             "kind": "answer", "answer_text": "毛利 12%", "charts": [], "kpis": [],
             "title": "t", "code": spec.intent, "contract_pass": True, "spec": spec,
@@ -1159,6 +1209,7 @@ async def test_endpoint_forwards_role_and_java_tool_name_to_tiered_answer(monkey
     await post_restaurant_tiered_answer(_fake_request(role="finance_manager"), body)
     assert captured["role"] == "finance_manager"
     assert captured["java_tool_name"] == "restaurant_store_revenue_rank_gold"
+    assert captured["precomputed_spec"] is spec
 
 
 @pytest.mark.asyncio
@@ -1717,3 +1768,54 @@ async def test_store_dish_ranking_no_data_is_shown_as_non_blocking_clarification
     assert result["kind"] == "clarification"
     assert result["answer_text"] == no_data_text
     assert "没有可靠覆盖" not in result["answer_text"]
+
+
+@pytest.mark.asyncio
+async def test_revenue_improvement_executes_grounded_optimization_not_sales_only(monkeypatch):
+    spec = _build_spec(
+        "RESTAURANT_OPS_BUSINESS_OPTIMIZATION",
+        "这周全部门店营收怎么提高",
+        confidence=0.99,
+        tier="llm",
+        planner_authority="llm",
+        time_phrase="本周",
+        llm_requested_metrics=("revenue",),
+        llm_dimensions=(),
+        llm_analysis_action="optimize",
+        llm_store_scope="all",
+        require_explicit_time=True,
+    )
+    monkeypatch.setattr(
+        svc,
+        "parse_restaurant_query",
+        AsyncMock(return_value=spec),
+    )
+    optimization = AsyncMock(return_value=OpsAnswer(
+        code="RESTAURANT_OPS_BUSINESS_OPTIMIZATION",
+        title="经营诊断与提升方案",
+        answer_text=(
+            "本周营收为 ¥100,000。优化建议：先核对低表现门店和低毛利菜品；"
+            "验证指标是下周营收、订单和毛利率。"
+        ),
+        charts=[],
+        kpis=[],
+        meta={"scope_matches_request": True},
+    ))
+    monkeypatch.setattr(svc, "_resolve_business_optimization", optimization)
+    neighbouring = AsyncMock(side_effect=AssertionError("must not degrade to sales-only resolver"))
+    monkeypatch.setattr(svc, "_resolve_tiered", neighbouring)
+    monkeypatch.setattr(svc, "log_intent_capture", AsyncMock(return_value=None))
+
+    result = await tiered_answer(
+        "这周全部门店营收怎么提高",
+        object(),
+        "DEMO_REST",
+        "restaurant_manager",
+    )
+
+    assert result["kind"] == "answer"
+    assert result["code"] == "RESTAURANT_OPS_BUSINESS_OPTIMIZATION"
+    assert "优化建议" in result["answer_text"]
+    assert result["executed_resolvers"] == ["RESTAURANT_OPS_BUSINESS_OPTIMIZATION"]
+    optimization.assert_awaited_once()
+    neighbouring.assert_not_awaited()

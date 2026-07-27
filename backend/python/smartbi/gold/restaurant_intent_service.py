@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from smartbi.gold.customer_text import (
     has_displayable_business_result,
@@ -42,6 +42,12 @@ logger = logging.getLogger(__name__)
 _MARGIN_CAPABLE_INTENTS = _contract.MARGIN_CAPABLE_INTENTS
 
 _PLAN_LABELS = {
+    "RESTAURANT_OPS_CAPABILITIES": "可用能力",
+    "RESTAURANT_OPS_OUT_OF_DOMAIN": "可用数据范围",
+    "RESTAURANT_OPS_PLAYBOOK": "经营参考做法",
+    "RESTAURANT_OPS_STORE_DIRECTORY": "门店名单",
+    "RESTAURANT_OPS_BUSINESS_OPTIMIZATION": "经营诊断与提升方案",
+    "RESTAURANT_OPS_CHANNEL_MIX": "堂食与外卖",
     "RESTAURANT_OPS_RECIPE_COST": "菜品成本",
     "RESTAURANT_OPS_WASTAGE_TOP": "食材损耗",
     "RESTAURANT_OPS_GROSS_MARGIN": "菜品毛利",
@@ -51,6 +57,14 @@ _PLAN_LABELS = {
 }
 
 _RESOLVER_DIMENSIONS = {
+    "RESTAURANT_OPS_CAPABILITIES": frozenset(),
+    "RESTAURANT_OPS_OUT_OF_DOMAIN": frozenset(),
+    "RESTAURANT_OPS_PLAYBOOK": frozenset(),
+    "RESTAURANT_OPS_STORE_DIRECTORY": frozenset({"store"}),
+    "RESTAURANT_OPS_BUSINESS_OPTIMIZATION": frozenset(
+        {"store", "dish", "ingredient", "channel", "customer", "time"}
+    ),
+    "RESTAURANT_OPS_CHANNEL_MIX": frozenset({"channel"}),
     "RESTAURANT_OPS_GROSS_MARGIN": frozenset({"dish"}),
     "RESTAURANT_OPS_RECIPE_COST": frozenset({"dish"}),
     "RESTAURANT_OPS_STORE_MARGIN": frozenset({"store", "dish"}),
@@ -301,7 +315,12 @@ def _suggested_followups(context: Dict[str, Any]) -> List[Dict[str, str]]:
 
 
 def _clarification_followups(spec: RestaurantQuerySpec) -> List[Dict[str, str]]:
-    """Return deterministic choices for recognized structured-slot gaps."""
+    """Render LLM-selected choices after they passed factual allowlists."""
+    if spec.clarification_options:
+        return [
+            {"label": option[:12], "question": option}
+            for option in spec.clarification_options[:6]
+        ]
     if spec.clarification_question == TIME_CLARIFICATION_QUESTION:
         return [
             {"label": window, "question": window}
@@ -441,6 +460,58 @@ def _combine_planned_answers(
     )
 
 
+async def _resolve_business_optimization(
+    pool,
+    factory_id: str,
+    query: str,
+    spec: RestaurantQuerySpec,
+    history: Optional[Sequence[Dict[str, Any]]],
+):
+    """Use the existing grounded multi-dimension engine for owner actions."""
+    from smartbi.agent.synthesis_engine import ComprehensiveSynthesisEngine
+    from smartbi.api.synthesis import _resolve_window
+    from smartbi.gold.restaurant_ops_router import OpsAnswer
+
+    start, end = spec.date_range
+    if start is None or end is None:
+        date_range = await _resolve_window(
+            pool,
+            factory_id,
+            None,
+            None,
+            question=query,
+        )
+    else:
+        date_range = (start, end)
+    response = await ComprehensiveSynthesisEngine(pool).synthesize(
+        factory_id,
+        query,
+        date_range,
+        conversation_history=list(history or [])[-20:] or None,
+    )
+    answer = sanitize_customer_ai_text(response.answer or "")
+    if not any(
+        marker in answer
+        for marker in ("优化建议", "优化动作", "行动建议", "接下来可以怎么做")
+    ):
+        answer = f"优化建议\n{answer}".strip()
+    meta = {
+        "scope_matches_request": True,
+        "synthesis_source": response.source,
+        "synthesis_plan": response.plan,
+        "fact_check": response.fact_check,
+        "dimension_coverage": response.dimension_coverage,
+    }
+    return OpsAnswer(
+        code="RESTAURANT_OPS_BUSINESS_OPTIMIZATION",
+        title="经营诊断与提升方案",
+        answer_text=answer,
+        charts=response.charts or [],
+        kpis=[],
+        meta=meta,
+    )
+
+
 async def tiered_answer(
     query: str,
     pool,
@@ -449,6 +520,7 @@ async def tiered_answer(
     *,
     java_tool_name: Optional[str] = None,
     session_key: Optional[str] = None,
+    history: Optional[Sequence[Dict[str, Any]]] = None,
     precomputed_spec: Optional[RestaurantQuerySpec] = None,
     allow_decompose: bool = True,
 ) -> Optional[Dict[str, Any]]:
@@ -497,74 +569,19 @@ async def tiered_answer(
     spec = precomputed_spec
     action_warning: Optional[str] = None
     try:
-        from smartbi.gold.restaurant_playbook import PLAYBOOK_CODE, PLAYBOOK_TRIGGERS
-        if any(trigger in (query or "") for trigger in PLAYBOOK_TRIGGERS):
-            # R16b: 此前 fail-open 依赖 chat.py 的 resolve_by_code 兜底; 反转后
-            # Java 委托路径没有那个兜底 (fail-open → delegate:false → Java LLM
-            # 误匹配工厂工具)。playbook 零 DB 零租户数据, 直接解析原文返回。
-            resolved = await _resolve_tiered(PLAYBOOK_CODE, pool, factory_id, query=query)
-            if resolved is not None:
-                return {
-                    "kind": "clarification",
-                    "answer_text": str(getattr(resolved, "answer_text", "") or ""),
-                    "spec": None,
-                }
-            return None
-        from smartbi.gold.restaurant_ops_router import (
-            RESTAURANT_CAPABILITIES_TEXT,
-            RESTAURANT_OOD_TEXT,
-            is_capability_question,
-            is_out_of_domain_smalltalk,
-        )
-        if is_out_of_domain_smalltalk(query):
-            # 域外闲聊 — 诚实拒答, 绝不编造外部事实 (R20)。
-            return {
-                "kind": "clarification",
-                "answer_text": RESTAURANT_OOD_TEXT,
-                "spec": None,
-            }
-        if is_capability_question(query):
-            # 零 DB 静态能力自述 — 原文直出, 不走 Answer Contract (R14/G4)。
-            return {
-                "kind": "clarification",
-                "answer_text": RESTAURANT_CAPABILITIES_TEXT,
-                "spec": None,
-            }
-        # R28 复合问题 agent: LLM 只拆解, 子问题各自走本函数完整管道
-        # (递归一层, allow_decompose=False 防套娃), 答案确定性拼装 —
-        # LLM 不写正文不碰数字。拆解失败 fail-open 回单主题路径
-        # (R26b 诚实尾注在那里兜底)。
-        if allow_decompose:
-            from smartbi.gold.restaurant_agent import (
-                assemble_compound_answer,
-                decompose_compound_question,
-                is_compound_question,
-            )
-            if is_compound_question(query):
-                parts = await decompose_compound_question(query)
-                if parts:
-                    import asyncio as _aio
-                    raw_results = await _aio.gather(*[
-                        tiered_answer(
-                            part, pool, factory_id, role,
-                            java_tool_name=java_tool_name,
-                            allow_decompose=False,
-                        )
-                        for part in parts
-                    ], return_exceptions=True)
-                    results = [
-                        r if isinstance(r, dict) else None for r in raw_results
-                    ]
-                    combined = assemble_compound_answer(parts, results)
-                    if combined:
-                        return combined
         if spec is None:
             spec = await parse_restaurant_query(
-                query, pool, factory_id=factory_id, session_key=session_key,
+                query,
+                pool,
+                factory_id=factory_id,
+                history=history,
+                session_key=session_key,
+                semantic_first=True,
             )
         if spec is None:
             return None
         action_warning = _read_only_action_warning_for_spec(query, spec)
+
         if spec.clarification_needed or not spec.intent:
             clarification_text = (
                 spec.clarification_question
@@ -585,6 +602,36 @@ async def tiered_answer(
             if action_warning:
                 clarification_result["warning"] = action_warning
             return clarification_result
+
+        # The complete LLM decision has already been made above. Compound
+        # decomposition is only an execution strategy beneath that plan. A
+        # clarification always wins, so deterministic splitting cannot bypass
+        # a question the semantic planner decided it still needs to ask.
+        if allow_decompose:
+            from smartbi.gold.restaurant_agent import (
+                assemble_compound_answer,
+                decompose_compound_question,
+                is_compound_question,
+            )
+            if is_compound_question(query):
+                parts = await decompose_compound_question(query)
+                if parts:
+                    import asyncio as _aio
+                    raw_results = await _aio.gather(*[
+                        tiered_answer(
+                            part, pool, factory_id, role,
+                            java_tool_name=java_tool_name,
+                            history=history,
+                            allow_decompose=False,
+                        )
+                        for part in parts
+                    ], return_exceptions=True)
+                    results = [
+                        r if isinstance(r, dict) else None for r in raw_results
+                    ]
+                    combined = assemble_compound_answer(parts, results)
+                    if combined:
+                        return combined
 
         resolver_query = build_resolver_query(query, spec)
         execution_kwargs = _resolver_kwargs(spec, role, resolver_query)
@@ -667,12 +714,21 @@ async def tiered_answer(
                     )
                 ),
             )
-            resolved = await _resolve_tiered(
-                code,
-                pool,
-                code_factory,
-                **code_kwargs,
-            )
+            if code == "RESTAURANT_OPS_BUSINESS_OPTIMIZATION":
+                resolved = await _resolve_business_optimization(
+                    pool,
+                    code_factory,
+                    resolver_query,
+                    spec,
+                    history,
+                )
+            else:
+                resolved = await _resolve_tiered(
+                    code,
+                    pool,
+                    code_factory,
+                    **code_kwargs,
+                )
             if (
                 resolved is not None
                 and code_factory != factory_id

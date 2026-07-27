@@ -1146,7 +1146,6 @@ async def post_restaurant_tiered_answer(
        "code": str, "contract_pass": bool}
     """
     from smartbi.gold.restaurant_intent import (
-        contextualize_restaurant_followup,
         log_intent_miss,
         parse_restaurant_query,
     )
@@ -1172,16 +1171,24 @@ async def post_restaurant_tiered_answer(
             return {"delegate": False}
 
         effective_query = query
-        inherited_context = False
+        conversation_history = None
         if body.session_id and trusted_user_id is not None:
             parent = await ChatSessionService(pool).lookup(
                 body.session_id,
                 fid,
                 user_id=trusted_user_id,
             )
-            effective_query, inherited_context = contextualize_restaurant_followup(
-                query, parent,
+            conversation_history = (
+                parent.get("turns_history")
+                if parent
+                else None
             )
+            if parent and not conversation_history:
+                conversation_history = [{
+                    "q": parent.get("parent_query") or "",
+                    "a_summary": parent.get("parent_answer_summary") or "",
+                    "context": parent.get("structured_context") or {},
+                }]
 
         clarification_session_key = build_trusted_restaurant_session_key(
             fid, trusted_user_id, body.session_id,
@@ -1191,10 +1198,11 @@ async def post_restaurant_tiered_answer(
             effective_query,
             pool,
             factory_id=fid,
+            history=conversation_history,
             session_key=clarification_session_key,
-            trusted_followup_context=inherited_context,
+            semantic_first=True,
         )
-        if not inherited_context and not should_delegate(spec, body.java_tool_name, query=effective_query):
+        if not should_delegate(spec, body.java_tool_name, query=effective_query):
             asyncio.create_task(log_intent_miss(
                 pool, factory_id=fid, query=effective_query,
                 reason="should_delegate", spec=spec,
@@ -1202,20 +1210,14 @@ async def post_restaurant_tiered_answer(
             ))
             return {"delegate": False}
 
-        # 2026-07-08 clarification-loop v1: `parse_restaurant_query` above
-        # already consumed (popped) any pending clarification for
-        # (fid, body.session_id) -- continuation is single-use (see
-        # restaurant_intent module docstring). Passing THIS SAME spec into
-        # tiered_answer as `precomputed_spec` stops it from calling
-        # parse_restaurant_query a second time, which would find the
-        # pending entry already gone and silently degrade to a fresh,
-        # context-free parse. When no session_id was supplied (every
-        # pre-existing caller), this branch is skipped entirely and the
-        # call below is byte-identical to before this feature existed.
-        extra_kwargs: Dict[str, Any] = {}
+        # The semantic plan above is the sole LLM decision for this request.
+        # Reuse it for execution so session continuations are not consumed
+        # twice and session-free Java calls do not pay for a second LLM parse.
+        extra_kwargs: Dict[str, Any] = {"precomputed_spec": spec}
         if clarification_session_key:
             extra_kwargs["session_key"] = clarification_session_key
-            extra_kwargs["precomputed_spec"] = spec
+        if conversation_history:
+            extra_kwargs["history"] = conversation_history
         result = await tiered_answer(
             effective_query, pool, fid, role, java_tool_name=body.java_tool_name,
             **extra_kwargs,
@@ -1245,7 +1247,7 @@ async def post_restaurant_tiered_answer(
             await ChatSessionService(pool).upsert(
                 session_id=body.session_id,
                 factory_id=fid,
-                parent_query=effective_query if inherited_context else query,
+                parent_query=query,
                 parent_answer_summary=result["answer_text"],
                 parent_template_code=result.get("code"),
                 parent_upload_id=None,

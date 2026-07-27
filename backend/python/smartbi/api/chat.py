@@ -18,7 +18,7 @@ import json as _json
 import logging
 from datetime import date
 import time
-from typing import Any, AsyncGenerator, Dict, List, Optional
+from typing import Any, AsyncGenerator, Dict, List, Optional, Sequence
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
@@ -87,13 +87,15 @@ async def _log_template_hit_safe(pool, query, factory_id, upload_id, template_co
 async def _try_tiered_restaurant_intent(
     query: str, pool, factory_id: str, role: Optional[str],
     *, session_key: Optional[str] = None,
+    history: Optional[Sequence[Dict[str, Any]]] = None,
 ) -> Optional[Dict[str, Any]]:
     """Run the shared immutable restaurant QueryPlan pipeline.
 
-    Keyword/vector retrieval happens inside the planner and is hint-only.
-    A planner or contract failure is returned as a clarification once a v2
-    plan exists. ``None`` therefore means empty/non-restaurant input or a
-    legacy call-site miss; explicit restaurant call sites must fail closed.
+    The restaurant LLM is the first natural-language authority. Deterministic
+    matching only selects and validates tools after the semantic contract has
+    been compiled. A planner or contract failure is returned as a clarification
+    once a v2 plan exists. ``None`` therefore means empty/non-restaurant input
+    or a legacy call-site miss; explicit restaurant call sites must fail closed.
 
     Return shape:
       {"kind": "clarification", "answer_text": str, "spec": spec}
@@ -102,7 +104,36 @@ async def _try_tiered_restaurant_intent(
     """
     from smartbi.gold.restaurant_intent_service import tiered_answer
 
-    return await tiered_answer(query, pool, factory_id, role, session_key=session_key)
+    kwargs: Dict[str, Any] = {"session_key": session_key}
+    if history:
+        kwargs["history"] = history
+    return await tiered_answer(query, pool, factory_id, role, **kwargs)
+
+
+def _restaurant_llm_history(
+    parent: Optional[Dict[str, Any]],
+) -> Optional[List[Dict[str, Any]]]:
+    """Return at most 20 trusted prior turns for restaurant semantic planning.
+
+    New session rows expose ``turns_history``. The one-turn fallback keeps
+    older rows useful without rewriting the user's current sentence before the
+    LLM sees it.
+    """
+    if not parent:
+        return None
+    turns = parent.get("turns_history")
+    if isinstance(turns, (list, tuple)):
+        history = [item for item in turns if isinstance(item, dict)][-20:]
+        if history:
+            return history
+    parent_query = parent.get("parent_query")
+    if not isinstance(parent_query, str) or not parent_query.strip():
+        return None
+    return [{
+        "q": parent_query.strip(),
+        "a_summary": str(parent.get("parent_answer_summary") or "").strip(),
+        "context": parent.get("structured_context"),
+    }]
 
 
 def _build_qa_input_text(query: str, data_context: Optional[str]) -> str:
@@ -1348,6 +1379,8 @@ async def general_analysis(request: GeneralAnalysisRequest, http_request: Reques
                 pool = await _get_pool()
                 effective_ops_query = query
                 inherited_context = False
+                chat_session_parent = None
+                structured_ops_code = expected_ops_code
                 if (
                     pool
                     and request.session_id
@@ -1360,14 +1393,18 @@ async def general_analysis(request: GeneralAnalysisRequest, http_request: Reques
                         factory_id_hdr,
                         user_id=trusted_session_user_id,
                     )
-                    effective_ops_query, inherited_context = contextualize_restaurant_followup(
-                        query, parent,
-                    )
+                    chat_session_parent = parent
+                    if structured_ops_code:
+                        # A trusted typed intent may still use the legacy slot
+                        # merger. Natural language below stays raw and gives
+                        # the prior turns to the LLM instead.
+                        effective_ops_query, inherited_context = (
+                            contextualize_restaurant_followup(query, parent)
+                        )
 
                 # This direct path is only for an explicit typed intent plus
                 # typed scope. Natural-language requests must use QueryPlan
                 # below; text reconciliation is not an execution authority.
-                structured_ops_code = expected_ops_code
 
                 if pool and structured_ops_code:
                     scope_context = restaurant_context or {}
@@ -1467,6 +1504,7 @@ async def general_analysis(request: GeneralAnalysisRequest, http_request: Reques
                         factory_id_hdr,
                         trusted_role,
                         session_key=trusted_restaurant_session_key,
+                        history=_restaurant_llm_history(chat_session_parent),
                     )
                     if tiered:
                         answer_text = tiered["answer_text"]
@@ -2303,7 +2341,10 @@ async def general_analysis_stream(request: GeneralAnalysisRequest, http_request:
                 factory_id_hdr = trusted_factory_id
                 if user_q and factory_id_hdr:
                     from smartbi.agent.synthesis_router import match_comprehensive_synthesis
-                    if match_comprehensive_synthesis(user_q):
+                    if (
+                        request.table_type != "restaurant_ops"
+                        and match_comprehensive_synthesis(user_q)
+                    ):
                         from smartbi.agent.synthesis_engine import (
                             ComprehensiveSynthesisEngine,
                         )
@@ -2402,10 +2443,20 @@ async def general_analysis_stream(request: GeneralAnalysisRequest, http_request:
                     )
                     pool = await _get_pool()
                     if pool:
-                        from smartbi.gold.restaurant_intent import contextualize_restaurant_followup
-                        effective_user_q, inherited_context = contextualize_restaurant_followup(
-                            user_q, chat_session_parent,
-                        )
+                        if request.table_type == "restaurant_ops":
+                            # The restaurant semantic compiler receives the
+                            # bounded 20-turn history directly. Do not rewrite
+                            # pronouns with keyword rules before the LLM sees
+                            # the user's original sentence.
+                            effective_user_q = user_q
+                        else:
+                            from smartbi.gold.restaurant_intent import (
+                                contextualize_restaurant_followup,
+                            )
+                            effective_user_q, _ = contextualize_restaurant_followup(
+                                user_q,
+                                chat_session_parent,
+                            )
                         ops_code = reconcile_restaurant_ops_code(
                             effective_user_q,
                             expected_ops_code,
@@ -2414,6 +2465,7 @@ async def general_analysis_stream(request: GeneralAnalysisRequest, http_request:
                             await _try_tiered_restaurant_intent(
                                 effective_user_q, pool, factory_id_hdr, trusted_role,
                                 session_key=trusted_restaurant_session_key,
+                                history=_restaurant_llm_history(chat_session_parent),
                             )
                             if request.table_type == "restaurant_ops"
                             else None
@@ -2522,7 +2574,7 @@ async def general_analysis_stream(request: GeneralAnalysisRequest, http_request:
                                     _spawn_chat_bg(_CSS_OPS(pool).upsert(
                                         session_id=request.session_id,
                                         factory_id=_session_factory_id,
-                                        parent_query=effective_user_q if inherited_context else user_q,
+                                        parent_query=user_q,
                                         parent_answer_summary=answer_text_ops,
                                         parent_template_code=(
                                             tiered_ops.get("code")
