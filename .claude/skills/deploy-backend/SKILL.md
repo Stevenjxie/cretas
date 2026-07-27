@@ -16,6 +16,33 @@ allowed-tools:
 
 ---
 
+## ⭐ Phase -1: 统一发布入口优先（2026-07 吸收自 Codex 发布优化）
+
+**正常 Java/Web 发布优先用 `release-cretas.sh` 统一入口，不要自行把单组件脚本拼接成全栈发布流程**：
+
+```bash
+# ① 合并前（在干净的已审查候选 worktree）：唯一一次构建 + Java 制品预上传（不安装/不重启/不切流）
+./scripts/deploy/release-cretas.sh --phase build \
+  --base-sha '<dispatch 登记的 Base SHA>' --tests '<Maven 测试选择器>' \
+  --stage-backend YES-STAGE
+
+# ② 合并后（强制 clean HEAD == origin/main）：自动检测 Java/Web 变更范围，
+#    复用 manifest / tree cache，部署或安全 no-op，输出统一 JSON 回执
+./scripts/deploy/release-cretas.sh --phase deploy \
+  --base-sha '<Base SHA>' --tests '<tests>' --confirm-prod YES-PROD
+```
+
+要点：
+- **构建一次**：Java 目标测试 + 最终 JAR = 同一条 `mvn clean package -Dtest=<tests>` 生命周期（`release-jar-manifest.sh build`）；Web = `release-web-manifest.sh build` 产不可变 `dist.tar.gz` + 可信 manifest。squash 后 commit 不同但 Git tree 相同**可复用制品**，禁止重复构建；任一校验失败只回退一次本地构建。
+- **默认安全串行**；仅显式传 `--parallel-if-independent YES-INDEPENDENT-SERVICES` 且迁移/Entity/Security/跨端契约等风险检测全部未命中时才并行。`--order backend-first|web-first` 控制串行顺序。
+- **发布证据复用**：入口自动调 `verify-release.sh`（真实 upstream / systemd / 直连健康 / Web 四方哈希）写入结构化回执；回执完整且成功时**不要手工重复同类检查**，只补任务特有断言。单独验证：`./scripts/deploy/verify-release.sh --target backend|web-admin|all --env prod`。
+- **蓝绿槽位**：prod Java 的 `10010` 与 `10020` **交替成为 active**。部署/核对前必须读 `139.196.165.140:/www/server/panel/vhost/nginx/_upstream_cretas.conf`，禁止假设某槽永久停用。
+- `deploy-backend.sh` / `deploy-web-admin.sh` / `release-jar-manifest.sh` 保留为**单组件发布与故障排查入口**（下方 Phase 1-3），适用：只动 Python、紧急单点修复、排查部署链路本身。
+
+> ⚠️ test 环境已于 2026-07-13 下线（见 server-operations skill）。下文 `--env test` / 10011 相关内容暂留作历史参考；部 prod 后"防御 ping test"的警告可忽略。
+
+---
+
 ## Phase 0: 解析部署目标
 
 根据用户输入判断部署范围：
