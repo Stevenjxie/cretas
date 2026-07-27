@@ -1,5 +1,13 @@
 # Dispatch 完成归档 — 2026-07-27
 
+### `BUG-QC-NOTIFICATION-READ-BADGE-20260727`
+
+- **状态**：`merged`，scope 锁已释放；production Android OTA 待按本次用户授权从 exact `origin/main` 发布并核验。
+- **Base / 功能提交 / PR**：Base SHA `fddf0b75d97d2f240c42929ab8ece2512bab101d`；候选 `57a05fee4f94d1e444be2629d3dbe132a474e759`；[#1873](https://github.com/Stevenjxie/cretas/pull/1873)。
+- **实际范围**：质检通知列表按当前用户查询；单条/全部已读均先写服务器，失败保留未读状态；兼容后端 `isRead` 与大写通知类型；返回首页时重新拉取铃铛角标。首页“待我审核”在聚焦时立即读取，并在停留期间每 10 秒静默刷新，AI 初筛完成后无需手动下拉即可出现。
+- **验证证据**：通知 API、失败保护、首页回焦与待审核自动刷新目标 Jest `13/13`，Android production Expo export 成功，runtimeVersion `1.0.3`，`git diff --check` 与 tracked-secret-scan 通过；全仓 TypeScript 仅有未修改的 `ProcessTaskListScreen.test.tsx:227` 既有夹具字段错误，本次文件 0 条类型错误。
+- **安全边界**：未修改 Java 通知模型、Repository、迁移或其他角色通知页；未写入生产通知、QC 任务或其他业务数据。
+
 ### `BUG-QC-WEB-REVIEW-CLOSEOUT-20260727-003`
 
 - **状态**：`merged`、Web Admin/QCSOP 生产发布与公网只读验收完成，scope 锁已释放。
