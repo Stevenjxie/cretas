@@ -3716,13 +3716,48 @@ async def parse_restaurant_query(
                     "暂时无法确认你可以查看哪些餐饮数据，本次没有执行分析。请稍后重试。"
                 ),
             )
+        semantic_query = norm_query
+        if history:
+            # The LLM still owns the intent decision, but it must receive a
+            # complete utterance when the user switches only one slot in a
+            # typed follow-up ("那毛利呢" after a named dish result).  The
+            # resolver-written context is trusted data, whereas asking the LLM
+            # to rediscover the entity from prose history is probabilistic and
+            # previously produced a needless dish-vs-store clarification.
+            #
+            # contextualize_restaurant_followup is deliberately conservative:
+            # it inherits only a short dependent turn, respects explicit new
+            # topics/entities, and copies only allowlisted entity, metric,
+            # time and store-scope slots.  It does not choose an intent.
+            safe_history = [
+                turn for turn in list(history)[-20:]
+                if isinstance(turn, dict)
+            ]
+            latest_parent_query = next(
+                (
+                    str(turn.get("q") or "").strip()
+                    for turn in reversed(safe_history)
+                    if str(turn.get("q") or "").strip()
+                ),
+                "",
+            )
+            if latest_parent_query:
+                contextualized_query, inherited = contextualize_restaurant_followup(
+                    norm_query,
+                    {
+                        "parent_query": latest_parent_query,
+                        "turns_history": safe_history,
+                    },
+                )
+                if inherited:
+                    semantic_query = contextualized_query
         try:
             available_stores = await _load_store_options(pool, factory_id)
         except Exception as exc:
             logger.warning("[restaurant-intent] semantic-first store catalogue unavailable: %s", exc)
             available_stores = ()
         parsed = await _t3_llm_parse(
-            norm_query,
+            semantic_query,
             hint=None,
             history=history,
             available_stores=available_stores,
@@ -3743,7 +3778,7 @@ async def parse_restaurant_query(
             )
         semantic_spec = _semantic_spec_from_t3(
             parsed,
-            norm_query,
+            semantic_query,
             available_stores=available_stores,
         )
         semantic_spec = await _apply_store_scope_guard(
@@ -3753,7 +3788,7 @@ async def parse_restaurant_query(
         )
         await _maybe_register_pending(
             pool,
-            norm_query,
+            semantic_query,
             semantic_spec,
             factory_id,
             session_key,
