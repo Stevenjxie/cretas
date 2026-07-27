@@ -231,3 +231,14 @@
 - **UI**：保留“转换率”标签，仅移除 BOM 页灰色概念说明提示。
 - **验证**：Java 目标测试 `33/33`、Web 目标测试 `41/41`、`vue-tsc -b`、Vite build、只读 UI/代码审查、编码与 `git diff --check` 均通过；PR 密钥扫描通过。
 - **Scope**：随 PR 合并归档并释放；未修改 Entity、Repository、JPQL、Flyway 或生产业务数据。
+
+## BOM 仅原料必填门禁调整（PR #1899）
+
+- **任务**：`CHANGE-BOM-RAW-ONLY-READINESS-20260727`
+- **状态**：`merged`
+- **Owner**：`/root`
+- **Base SHA**：`60666f620e5e898abea9b8344c19e620328bb6c1`
+- **功能提交 / PR**：`aaa783dc237d2910c1d0e21fdf0a9f06b1874182` / [#1899](https://github.com/Stevenjxie/cretas/pull/1899)
+- **业务结果**：BOM 激活与生产可用门禁只要求至少一项 RAW 主原料；工序辅料、基本包装和各层包材均为可选。已配置的辅料/包材仍保留状态展示、计价、报工与库存扣减能力。
+- **验证**：`ProductConfigurationReadinessServiceTest` `7/7`、tracked secret scan、编码检查和 `git diff --check` 通过；覆盖仅原料可用、缺原料 fail-closed、辅料/包材缺省不阻断。
+- **Scope**：随 PR 合并归档并释放；未修改 Entity、Repository、JPQL、Flyway、前端或生产业务数据。
