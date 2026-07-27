@@ -15,6 +15,8 @@ Usage: publish-main-fastlane.sh --base-sha <sha> --confirm YES-DIRECT-MAIN
 
 Fast-forward a reviewed codex/* branch directly to main without a PR. The
 command never force-pushes. Production deployment remains a separate step.
+Docs-only batches (docs/, .claude/, *.md; not touching docs/dispatch/) skip
+the ACTIVE ledger gate; high-risk path gating always applies.
 EOF
 }
 
@@ -91,7 +93,20 @@ changed_files=$(git diff --name-only "$BASE_SHA..$head_sha")
 [[ -n "$changed_files" ]] || fail "no committed changes to publish"
 git -c core.whitespace=cr-at-eol diff --check "$BASE_SHA..$head_sha"
 
-if [[ -f docs/dispatch/ACTIVE.md ]]; then
+# Docs-only batches are not ledger-registered work; the ACTIVE gate exists so a
+# coordinator archives its OWN batch in the same commit. Skip it when every
+# changed file is docs-class AND none touches the ledger itself. High-risk path
+# gating below still applies unconditionally.
+docs_only=1
+while IFS= read -r path; do
+    case "$path" in
+        docs/dispatch/*) docs_only=0; break ;;
+        docs/*|.claude/*|*.md|.gitignore) ;;
+        *) docs_only=0; break ;;
+    esac
+done <<<"$changed_files"
+
+if [[ -f docs/dispatch/ACTIVE.md && "$docs_only" -ne 1 ]]; then
     in_flight=$(awk '
         /^## Scope / { exit }
         { print }
