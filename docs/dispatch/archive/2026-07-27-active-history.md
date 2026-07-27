@@ -156,3 +156,15 @@
 - **安全边界**：LLM 不可用或返回不完整契约时明确停止，不按关键词猜测；LLM 追问优先于复合句拆分；只读数据继续由确定性 SQL/Gold resolver 计算，写操作权限和确认边界不变。未修改共享模型账号顺序、数据库结构或工厂问答。
 - **验证证据**：餐饮目标回归 `833/833`，新增门店按钮续接、20 轮上下文、经营优化、门店目录、LLM 不完整契约 fail-closed、Java 单次语义计划和白话出口覆盖；`py_compile`、`git diff --check` 通过。
 - **发布边界**：合并后仅从 clean exact `origin/main` 发布 Python 服务；Java/Web 无代码变化。合并前生产业务写入为 `0`。
+
+## 餐饮 AI 生产回归修复：完整语义上下文与按钮续接（PR #1874）
+
+- **任务**：`BUG-RESTAURANT-LIVE-REGRESSION-20260727-039`
+- **状态**：`merged`
+- **Owner**：`/root`
+- **Base SHA**：`fddf0b75d97d2f240c42929ab8ece2512bab101d`
+- **功能提交 / PR**：`a62f17ebbee674be29c8b273828785fd0ba92e53` / [#1874](https://github.com/Stevenjxie/cretas/pull/1874)
+- **根因与修复**：餐饮只读自然语言曾被 Java 前置规则、关键词与旧会话继承先于 LLM 抢答；完成多轮补槽后又只保存最后的“全部门店”等按钮文字，导致指标、时间、比较与动作丢失。现将认证餐饮 READ 请求先交给 LLM 生成完整 QueryPlan，显式零歧义门店目录仅作契约修复；补槽续接保存完整 sealed query 和白名单结构化槽位，最多保留最近 20 轮；库存按钮明确为最新库存快照，不再错误询问时间。
+- **执行契约**：resolver 接收不可变 requested metrics、action、ranking direction/limit；“这个星期”正确解析为本周并保留上周比较；菜品销量 Top 不再降级为毛利，无销售数据时也不使用相邻指标代答。未修改工厂意图和共享 `common/llm_router.py`。
+- **合并门禁**：Python 餐饮/chat/synthesis `1122/1122`；Web 餐饮单测 `53/53`；Java 单次 `clean package` 生命周期 `40/40`、最终 JAR 与可信 manifest 生成成功；compileall、Ruff fatal、编码与 diff check 通过。
+- **发布与验收边界**：本归档随 PR 合入；生产 Java/Python 发布和 Google Sheet 88 条餐饮清单的同版本只读验收在合并后执行并另行回写。合并前 `actualBusinessWrites=0`。
