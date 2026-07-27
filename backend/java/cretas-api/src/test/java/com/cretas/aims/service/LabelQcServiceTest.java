@@ -1,12 +1,6 @@
 package com.cretas.aims.service;
 
-import com.cretas.aims.dto.labelqc.LabelQcDtos.AnnotationReviewRequest;
-import com.cretas.aims.dto.labelqc.LabelQcDtos.AddPhotoRequest;
-import com.cretas.aims.dto.labelqc.LabelQcDtos.BoundingBox;
-import com.cretas.aims.dto.labelqc.LabelQcDtos.CreateTaskRequest;
-import com.cretas.aims.dto.labelqc.LabelQcDtos.PhotoReviewRequest;
-import com.cretas.aims.dto.labelqc.LabelQcDtos.ReviewTaskRequest;
-import com.cretas.aims.dto.labelqc.LabelQcDtos.TrainingDecisionRequest;
+import com.cretas.aims.dto.labelqc.LabelQcDtos.*;
 import com.cretas.aims.entity.Attachment;
 import com.cretas.aims.entity.LabelQcAnnotation;
 import com.cretas.aims.entity.LabelQcPhoto;
