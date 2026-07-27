@@ -16,7 +16,6 @@ import type {
 } from '@/api/bom';
 import * as XLSX from 'xlsx';
 import { ElMessage, ElMessageBox } from 'element-plus';
-import { Download, Refresh, InfoFilled } from '@element-plus/icons-vue';
 import { useRoute, useRouter } from 'vue-router';
 import BomChangeLog from './BomChangeLog.vue'
 import CanvasAwareWrapper from '@/components/canvas/CanvasAwareWrapper.vue'
@@ -71,6 +70,8 @@ const bomRecipesLoading = ref(false);
 const activatingRecipeId = ref<string | null>(null);
 const deletingRecipeId = ref<string | null>(null);
 const selectedRecipeId = ref<string>('');
+const versionHistoryVisible = ref(false);
+const costDetailsExpanded = ref(false);
 const historicalYield = ref<YieldEstimateResponse | null>(null);
 const historicalYieldLoadFailed = ref(false);
 const selectedRecipe = computed(() =>
@@ -102,6 +103,20 @@ const lifecycleUiState = computed(() => buildBomLifecycleUiState(
   canWrite.value,
 ));
 const draftActionLabel = computed(() => draftEntryLabel(bomRecipes.value, draftRecipe.value));
+const activeRecipe = computed(() => bomRecipes.value.find(
+  (recipe) => recipe.status === 'ACTIVE' && recipe.isCurrent,
+) ?? null);
+const heroStatusLabel = computed(() => (
+  selectedRecipe.value
+    ? `v${selectedRecipe.value.version} ${recipeStatusLabel[selectedRecipe.value.status]}`
+    : '尚未创建版本'
+));
+const heroPrimaryActionLabel = computed(() => {
+  if (!selectedRecipe.value) return '创建首版 BOM';
+  if (selectedRecipe.value.status === 'DRAFT') return '检查并生效';
+  if (draftRecipe.value) return `继续修改 v${draftRecipe.value.version} 草稿`;
+  return '修改配方';
+});
 
 function formatFriendlyNumber(value: unknown, maxDecimals = 4): string {
   const number = Number(value);
@@ -407,6 +422,17 @@ const costSummary = ref<BomCostSummaryView | null>(null);
 const selectedProductName = computed(() => {
   const product = productTypes.value.find((item) => item.id === selectedProductTypeId.value);
   return String(product?.name || '');
+});
+const selectedProductCode = computed(() => {
+  const product = productTypes.value.find((item) => item.id === selectedProductTypeId.value);
+  return String(
+    product?.code
+      || product?.productCode
+      || selectedProductMeta.value?.code
+      || selectedProductMeta.value?.productCode
+      || selectedProductTypeId.value
+      || '',
+  );
 });
 
 // Phase 1: 配方头产出规格改为从 SKU (ProductType) 只读带入，不再让用户手填。
@@ -1708,6 +1734,28 @@ function matchCategory(row: TableRow, code: 'RAW' | 'AUXILIARY' | 'PACKAGING') {
 const rawItems = computed(() => bomItems.value.filter((i: TableRow) => matchCategory(i, 'RAW')));
 const auxiliaryItems = computed(() => bomItems.value.filter((i: TableRow) => matchCategory(i, 'AUXILIARY')));
 const packagingItems = computed(() => bomItems.value.filter((i: TableRow) => matchCategory(i, 'PACKAGING')));
+const activationChecklist = computed(() => [
+  {
+    label: '至少配置 1 项原料',
+    note: rawItems.value.length > 0 ? `当前已配置 ${rawItems.value.length} 项` : '尚未配置必需原料',
+    passed: rawItems.value.length > 0,
+  },
+  {
+    label: '计量单位完整',
+    note: selectedProductTypeId.value ? `直接使用 SKU 档案单位：${displayUnit(skuOutputUnit.value)}` : '请先选择成品 SKU',
+    passed: Boolean(selectedProductTypeId.value && skuOutputUnit.value),
+  },
+  {
+    label: '工艺来源已固定',
+    note: bomConfigurationAllowed.value ? '生产工艺与 BOM 版本已关联' : workflowFirstGuidance.value,
+    passed: bomConfigurationAllowed.value,
+  },
+  {
+    label: '辅料和包材可选',
+    note: '未配置也可以生效',
+    passed: true,
+  },
+]);
 const currentTabItems = computed(() => {
   if (activeCategoryTab.value === 'RAW') return rawItems.value;
   if (activeCategoryTab.value === 'AUXILIARY') return auxiliaryItems.value;
@@ -2140,79 +2188,101 @@ watch(adjustDialogVisible, (visible) => {
     <!-- BOM 编辑保存后立即对生产计划生效, 无需再手动同步到转换率配置. -->
     <!-- RPF (MaterialProductConversion) 仅作 fallback (老工厂数据无 BOM 配置时沿用). -->
     <!-- 详见 docs/architecture/2026-05-10-rpf-vs-bomitem-divergence.md §7 -->
-    <el-alert
-      type="success"
-      :closable="false"
-      show-icon
-      style="margin-bottom: 12px;"
-    >
-      <template #title>
-        BOM 已对接生产计划, 录入即生效
-      </template>
-      <template #default>
-        原料、包材和各工序辅料先保存到配方版本；激活后仅供之后新建的生产计划使用，
-        已有生产计划快照与已激活 Workflow 不受影响。物料价格从档案带入，历史出成率由正式报工自动统计。
-      </template>
-    </el-alert>
-    <!-- Header -->
-    <el-card class="header-card" shadow="never">
-      <div class="header-content">
-        <div class="header-left">
-          <h2 class="page-title">BOM成本管理</h2>
-          <el-select
-            :key="bomProductSelectKey"
-            v-model="selectedProductTypeId"
-            placeholder="输入产品名称搜索并选择"
-            style="width: 280px; margin-left: 20px;"
-            filterable
-            remote
-            :remote-method="handleProductTypeRemoteSearch"
-            :loading="productSearchLoading"
-            @visible-change="onProductSelectVisibleChange"
-          >
-            <el-option
-              v-for="product in productTypes"
-              :key="product.id"
-              :label="product.name"
-              :value="product.id"
-            />
-          </el-select>
-          <el-button :icon="Refresh" style="margin-left: 12px;" @click="refreshData">刷新</el-button>
-          <el-button style="margin-left: 12px;" @click="changeLogVisible = true" :disabled="!selectedProductTypeId">变更记录</el-button>
+    <el-card class="bom-hero-card" shadow="never">
+      <div class="bom-hero">
+        <div class="bom-hero__identity">
+          <div class="bom-hero__title-row">
+            <h1>BOM / 配方管理</h1>
+            <el-tag v-if="selectedRecipe" :type="recipeStatusTagType[selectedRecipe.status]" effect="plain">
+              {{ heroStatusLabel }}
+            </el-tag>
+          </div>
+          <div class="bom-hero__product-row">
+            <el-select
+              :key="bomProductSelectKey"
+              v-model="selectedProductTypeId"
+              placeholder="输入产品名称搜索并选择"
+              filterable
+              remote
+              :remote-method="handleProductTypeRemoteSearch"
+              :loading="productSearchLoading"
+              @visible-change="onProductSelectVisibleChange"
+            >
+              <el-option
+                v-for="product in productTypes"
+                :key="product.id"
+                :label="product.name"
+                :value="product.id"
+              />
+            </el-select>
+            <span v-if="selectedProductName" class="bom-hero__sku">
+              {{ selectedProductName }}<template v-if="selectedProductCode"> · {{ selectedProductCode }}</template>
+            </span>
+          </div>
         </div>
-        <div v-if="canViewPrice" class="header-right">
-          <el-card class="cost-summary-card" shadow="never">
-            <div class="cost-summary">
-              <div class="cost-item">
-                <span class="cost-label">原料成本:</span>
-                <span v-if="hasPendingActualMaterialUsage" class="cost-value cost-value--pending">待生产报工归集</span>
-                <span v-else class="cost-value">{{ formatFriendlyNumber(estimatedMaterialCost, 2) }} {{ costDisplayUnit }}</span>
-              </div>
-              <div class="cost-item">
-                <span class="cost-label">人工成本:</span>
-                <span class="cost-value">{{ formatFriendlyNumber(estimatedLaborCost, 2) }} {{ costDisplayUnit }}</span>
-              </div>
-              <div class="cost-item">
-                <span class="cost-label">均摊费用:</span>
-                <span class="cost-value">{{ formatFriendlyNumber(estimatedOverheadCost, 2) }} {{ costDisplayUnit }}</span>
-              </div>
-              <div class="cost-item total">
-                <span class="cost-label">{{ hasPendingActualMaterialUsage ? '当前已归集成本:' : '总成本:' }}</span>
-                <span class="cost-value">{{ formatFriendlyNumber(costPerSkuUnit, 2) }} {{ costDisplayUnit }}</span>
-                <span v-if="costPerKg != null" class="cost-secondary">
-                  {{ formatFriendlyNumber(costPerKg, 2) }} 元/kg
-                </span>
-              </div>
-            </div>
-          </el-card>
+        <div class="bom-hero__actions">
+          <el-button :disabled="!selectedProductTypeId" @click="versionHistoryVisible = !versionHistoryVisible">
+            {{ versionHistoryVisible ? '收起版本历史' : '版本历史' }}
+          </el-button>
+          <el-button
+            v-if="canWrite && lifecycleUiState.primaryAction"
+            type="primary"
+            :loading="ensureDraftLoading || activatingRecipeId === selectedRecipe?.id"
+            @click="handleLifecyclePrimaryAction"
+          >
+            {{ heroPrimaryActionLabel }}
+          </el-button>
         </div>
       </div>
     </el-card>
 
+    <section
+      v-if="selectedProductTypeId && selectedRecipe"
+      class="bom-lifecycle-card"
+      :class="`bom-lifecycle-card--${selectedRecipe.status.toLowerCase()}`"
+      data-testid="bom-version-lifecycle"
+      role="status"
+      aria-live="polite"
+    >
+      <span class="bom-lifecycle-card__eyebrow">
+        {{ selectedRecipe.status === 'ACTIVE' ? '当前生产正在使用' : selectedRecipe.status === 'DRAFT' ? '当前编辑草稿' : '历史版本' }}
+      </span>
+      <h2>{{ lifecycleUiState.title }}</h2>
+      <p>{{ lifecycleUiState.description }}</p>
+      <div class="bom-lifecycle-card__meta">
+        <span v-if="selectedRecipe.activatedAt">生效时间：{{ selectedRecipe.activatedAt.substring(0, 16).replace('T', ' ') }}</span>
+        <span>每单位产出：{{ formatFriendlyNumber(selectedRecipe.outputQuantityPerUnit ?? 1) }} {{ displayUnit(selectedRecipe.outputUnit || skuOutputUnit) }}</span>
+        <span v-if="activeRecipe && selectedRecipe.status !== 'ACTIVE'">生产计划继续使用 v{{ activeRecipe.version }}</span>
+      </div>
+    </section>
+
+    <div v-if="selectedProductTypeId" class="bom-summary-grid" aria-label="配方摘要">
+      <div class="bom-summary-card">
+        <span>必需原料</span>
+        <strong>{{ rawItems.length }} 项</strong>
+        <small>{{ rawItems.length > 0 ? '已满足生效条件' : '至少需要配置 1 项' }}</small>
+      </div>
+      <div class="bom-summary-card">
+        <span>工序辅料</span>
+        <strong>{{ auxiliaryItems.length }} 项</strong>
+        <small>可选，不影响生效</small>
+      </div>
+      <div class="bom-summary-card">
+        <span>包材</span>
+        <strong>{{ packagingItems.length }} 项</strong>
+        <small>可选，不影响生效</small>
+      </div>
+      <div v-if="canViewPrice" class="bom-summary-card">
+        <span>{{ hasPendingActualMaterialUsage ? '当前归集成本' : '当前总成本' }}</span>
+        <strong>{{ formatFriendlyNumber(costPerSkuUnit, 2) }} {{ costDisplayUnit }}</strong>
+        <small>{{ hasPendingActualMaterialUsage ? '原料实际用量待生产报工' : '按当前配方自动汇总' }}</small>
+      </div>
+    </div>
+
     <!-- BOM Recipe Status Card — shows DRAFT/ACTIVE/ARCHIVED status + 激活 button -->
     <el-card
-      v-if="selectedProductTypeId"
-      class="recipe-status-card table-card"
+      v-if="selectedProductTypeId && versionHistoryVisible"
+      class="recipe-status-card table-card bom-version-history"
       shadow="never"
     >
       <template #header>
@@ -2232,7 +2302,7 @@ watch(adjustDialogVisible, (visible) => {
               :disabled="recipeVersionLimitReached"
               @click="openBomCopySuggestions(true)"
             >从其他产品复制规则</el-button>
-            <el-button size="small" :icon="Refresh" :loading="bomRecipesLoading" @click="loadBomRecipes">
+            <el-button size="small" :loading="bomRecipesLoading" @click="loadBomRecipes">
               刷新
             </el-button>
           </div>
@@ -2367,44 +2437,16 @@ watch(adjustDialogVisible, (visible) => {
           </template>
         </el-table-column>
       </el-table>
-      <el-alert
-        :type="lifecycleUiState.tone"
-        :closable="false"
-        show-icon
-        class="bom-lifecycle-alert"
-        data-testid="bom-version-lifecycle"
-        :title="lifecycleUiState.title"
-        role="status"
-        aria-live="polite"
-      >
-        <template #default>
-          <div class="bom-lifecycle-alert__content">
-            <span>{{ lifecycleUiState.description }}</span>
-            <el-button
-              v-if="lifecycleUiState.primaryAction"
-              type="primary"
-              size="small"
-              :loading="ensureDraftLoading || activatingRecipeId === selectedRecipe?.id"
-              @click="handleLifecyclePrimaryAction"
-            >
-              {{ lifecycleUiState.primaryActionLabel }}
-            </el-button>
-          </div>
-        </template>
-      </el-alert>
-      <div class="recipe-status-hint">
-        <el-icon><InfoFilled /></el-icon>
-        <span>草稿可编辑；生效和历史版本只读。同一 SKU 始终只有一个当前生效版本，激活新草稿不会改写旧版本。</span>
-      </div>
     </el-card>
 
     <!-- Main Content -->
-    <div class="tables-container">
+    <div v-if="selectedProductTypeId" class="bom-workspace">
+      <div class="bom-workspace__main">
       <!-- BOM Items Table (原辅料需求明细表) -->
-      <el-card class="table-card" shadow="never">
+      <el-card class="table-card bom-content-card" shadow="never">
         <template #header>
           <div class="table-header">
-            <span class="table-title">{{ activeCategoryTab === 'AUXILIARY' ? '工序辅料明细' : activeCategoryTab === 'PACKAGING' ? '包材需求明细' : '原料需求明细' }}</span>
+            <span class="table-title">配方内容</span>
             <div v-if="activeCategoryTab !== 'AUXILIARY'" class="table-actions">
               <el-tooltip
                 v-if="selectedRecipeEditable"
@@ -2422,7 +2464,7 @@ watch(adjustDialogVisible, (visible) => {
                   >{{ activeCategoryTab === 'PACKAGING' ? '添加包材' : '添加原料' }}</el-button>
                 </span>
               </el-tooltip>
-              <el-button size="small" :icon="Download" @click="exportToExcel('material')">导出</el-button>
+              <el-button size="small" @click="exportToExcel('material')">导出</el-button>
             </div>
           </div>
         </template>
@@ -2441,10 +2483,26 @@ watch(adjustDialogVisible, (visible) => {
           </template>
         </el-alert>
         <el-tabs v-model="activeCategoryTab" class="bom-category-tabs">
-          <el-tab-pane name="RAW" :label="`原料 (${rawItems.length})`" />
-          <el-tab-pane name="AUXILIARY" :label="`辅料 (${auxiliaryItems.length})`" />
-          <el-tab-pane name="PACKAGING" :label="`包材 (${packagingItems.length})`" />
+          <el-tab-pane name="RAW" :label="`原料（${rawItems.length}）`" />
+          <el-tab-pane name="AUXILIARY" :label="`辅料（${auxiliaryItems.length}）· 可选`" />
+          <el-tab-pane name="PACKAGING" :label="`包材（${packagingItems.length}）· 可选`" />
         </el-tabs>
+
+        <div class="bom-content-context" :class="{ 'is-editable': selectedRecipeEditable }">
+          <span>
+            {{ selectedRecipeEditable
+              ? `正在编辑 v${selectedRecipe?.version} 草稿；修改不会影响当前生产版本`
+              : '当前为只读版本，避免正在生产的配方被改写' }}
+          </span>
+          <el-button
+            v-if="!selectedRecipeEditable && canWrite && lifecycleUiState.primaryAction"
+            link
+            type="primary"
+            @click="handleLifecyclePrimaryAction"
+          >
+            {{ lifecycleUiState.primaryActionLabel }}
+          </el-button>
+        </div>
 
         <div v-if="activeCategoryTab === 'AUXILIARY'" data-testid="bom-auxiliary-integration" class="auxiliary-integration">
           <el-alert
@@ -2546,6 +2604,21 @@ watch(adjustDialogVisible, (visible) => {
         </div>
       </el-card>
 
+      <button
+        type="button"
+        class="bom-advanced-toggle"
+        :aria-expanded="costDetailsExpanded"
+        @click="costDetailsExpanded = !costDetailsExpanded"
+      >
+        <span>
+          <strong>人工与均摊费用</strong>
+          <small>高级配置 · 日常配置原料、辅料和包材时无需展开</small>
+        </span>
+        <span>{{ costDetailsExpanded ? '收起' : '展开' }}</span>
+      </button>
+
+      <el-collapse-transition>
+        <div v-show="costDetailsExpanded" class="bom-advanced-costs">
       <!-- Labor Cost Table (人工费用表) -->
       <el-card class="table-card" shadow="never">
         <template #header>
@@ -2555,7 +2628,7 @@ watch(adjustDialogVisible, (visible) => {
               <el-button v-if="selectedRecipeEditable" type="primary" size="small" @click="handleAddLaborCost">
                 添加
               </el-button>
-              <el-button size="small" :icon="Download" @click="exportToExcel('labor')">导出</el-button>
+              <el-button size="small" @click="exportToExcel('labor')">导出</el-button>
             </div>
           </div>
         </template>
@@ -2600,7 +2673,7 @@ watch(adjustDialogVisible, (visible) => {
               <el-button v-if="selectedRecipeEditable" type="primary" size="small" @click="handleAddOverheadCost">
                 添加
               </el-button>
-              <el-button size="small" :icon="Download" @click="exportToExcel('overhead')">导出</el-button>
+              <el-button size="small" @click="exportToExcel('overhead')">导出</el-button>
             </div>
           </div>
         </template>
@@ -2635,7 +2708,75 @@ watch(adjustDialogVisible, (visible) => {
           <span class="total-value">{{ overheadCostTotal.toFixed(4) }} 元</span>
         </div>
       </el-card>
+        </div>
+      </el-collapse-transition>
+      </div>
+
+      <aside class="bom-side-stack" aria-label="配方生效条件与成本概览">
+        <el-card class="bom-side-card" shadow="never">
+          <template #header><strong>生效条件</strong></template>
+          <div class="bom-checklist">
+            <div
+              v-for="item in activationChecklist"
+              :key="item.label"
+              class="bom-checklist__item"
+              :class="{ 'is-pending': !item.passed }"
+            >
+              <span class="bom-checklist__mark">{{ item.passed ? '✓' : '!' }}</span>
+              <span>
+                <strong>{{ item.label }}</strong>
+                <small>{{ item.note }}</small>
+              </span>
+            </div>
+          </div>
+        </el-card>
+
+        <el-card v-if="canViewPrice" class="bom-side-card" shadow="never">
+          <template #header><strong>成本概览</strong></template>
+          <div class="bom-cost-overview">
+            <div><span>原料成本</span><strong>{{ hasPendingActualMaterialUsage ? '待报工归集' : `${formatFriendlyNumber(estimatedMaterialCost, 2)} ${costDisplayUnit}` }}</strong></div>
+            <div><span>人工成本</span><strong>{{ formatFriendlyNumber(estimatedLaborCost, 2) }} {{ costDisplayUnit }}</strong></div>
+            <div><span>均摊费用</span><strong>{{ formatFriendlyNumber(estimatedOverheadCost, 2) }} {{ costDisplayUnit }}</strong></div>
+            <div class="is-total"><span>当前总成本</span><strong>{{ formatFriendlyNumber(costPerSkuUnit, 2) }} {{ costDisplayUnit }}</strong></div>
+            <small v-if="costPerKg != null">{{ formatFriendlyNumber(costPerKg, 2) }} 元/kg</small>
+            <p class="bom-cost-overview__note">历史出成率由正式报工自动统计。</p>
+          </div>
+        </el-card>
+      </aside>
     </div>
+
+    <footer v-if="selectedRecipeEditable && selectedRecipe" class="bom-draft-bar" aria-label="草稿操作">
+      <div>
+        <strong>正在编辑 v{{ selectedRecipe.version }} 草稿</strong>
+        <span>
+          每项保存后立即写入当前草稿；生产继续使用
+          {{ activeRecipe ? `v${activeRecipe.version}` : '尚未生效的版本' }}
+        </span>
+      </div>
+      <div class="bom-draft-bar__actions">
+        <el-button
+          v-if="activeRecipe"
+          @click="selectedRecipeId = activeRecipe.id"
+        >
+          查看当前生效版
+        </el-button>
+        <el-button
+          type="danger"
+          plain
+          :loading="deletingRecipeId === selectedRecipe.id"
+          @click="handleDeleteRecipe(selectedRecipe)"
+        >
+          删除草稿
+        </el-button>
+        <el-button
+          type="success"
+          :loading="activatingRecipeId === selectedRecipe.id"
+          @click="handleActivateRecipe(selectedRecipe)"
+        >
+          检查并生效
+        </el-button>
+      </div>
+    </footer>
 
     <BomCopySuggestionDialog
       v-model="bomCopyDialogVisible"
@@ -3094,12 +3235,357 @@ watch(adjustDialogVisible, (visible) => {
 
 <style lang="scss" scoped>
 .bom-page {
-  padding: 16px;
+  padding: 20px;
   height: 100%;
   display: flex;
   flex-direction: column;
-  gap: 16px;
+  gap: 14px;
   overflow: auto;
+  background: #f4f7fb;
+}
+
+.bom-hero-card,
+.bom-version-history,
+.bom-content-card,
+.bom-side-card {
+  border-color: #dfe6ef;
+  border-radius: 10px;
+  box-shadow: 0 4px 14px rgb(33 56 82 / 5%);
+}
+
+.bom-hero-card :deep(.el-card__body) {
+  padding: 18px 20px;
+}
+
+.bom-hero {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+}
+
+.bom-hero__identity {
+  min-width: 0;
+}
+
+.bom-hero__title-row,
+.bom-hero__product-row,
+.bom-hero__actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.bom-hero__title-row h1 {
+  margin: 0;
+  color: #12243a;
+  font-size: 22px;
+  line-height: 1.25;
+}
+
+.bom-hero__product-row {
+  margin-top: 10px;
+}
+
+.bom-hero__product-row :deep(.el-select) {
+  width: min(360px, 100%);
+}
+
+.bom-hero__sku {
+  color: #59708d;
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+
+.bom-hero__actions {
+  justify-content: flex-end;
+  flex-shrink: 0;
+}
+
+.bom-lifecycle-card {
+  padding: 20px;
+  border: 1px solid #dfe6ef;
+  border-left: 4px solid #409eff;
+  border-radius: 10px;
+  background: #fff;
+  box-shadow: 0 4px 14px rgb(33 56 82 / 5%);
+}
+
+.bom-lifecycle-card--active {
+  border-left-color: #19a957;
+}
+
+.bom-lifecycle-card--archived {
+  border-left-color: #e6a23c;
+}
+
+.bom-lifecycle-card__eyebrow {
+  color: #168549;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.bom-lifecycle-card h2 {
+  margin: 8px 0 6px;
+  color: #12243a;
+  font-size: 18px;
+}
+
+.bom-lifecycle-card p {
+  margin: 0;
+  color: #5d718b;
+  line-height: 1.6;
+}
+
+.bom-lifecycle-card__meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 18px;
+  margin-top: 12px;
+  color: #8191a6;
+  font-size: 12px;
+}
+
+.bom-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  overflow: hidden;
+  border: 1px solid #dfe6ef;
+  border-radius: 10px;
+  background: #fff;
+  box-shadow: 0 4px 14px rgb(33 56 82 / 4%);
+}
+
+.bom-summary-card {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+  padding: 17px 20px;
+  border-right: 1px solid #dfe6ef;
+}
+
+.bom-summary-card:last-child {
+  border-right: 0;
+}
+
+.bom-summary-card > span {
+  color: #647a95;
+  font-size: 13px;
+}
+
+.bom-summary-card strong {
+  color: #10233a;
+  font-size: 19px;
+  overflow-wrap: anywhere;
+}
+
+.bom-summary-card small {
+  color: #8b9aaf;
+}
+
+.bom-workspace {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 280px;
+  align-items: start;
+  gap: 14px;
+}
+
+.bom-workspace__main,
+.bom-side-stack,
+.bom-advanced-costs {
+  display: grid;
+  gap: 14px;
+  min-width: 0;
+}
+
+.bom-content-card {
+  min-height: 430px;
+}
+
+.bom-content-card :deep(.el-card__header),
+.bom-side-card :deep(.el-card__header) {
+  background: #fff;
+}
+
+.bom-content-context {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 2px 0 14px;
+  padding: 11px 13px;
+  border-radius: 7px;
+  background: #f4f7fb;
+  color: #50667f;
+  font-size: 13px;
+}
+
+.bom-content-context.is-editable {
+  background: #eef6ff;
+  color: #2866a7;
+}
+
+.bom-side-stack {
+  position: sticky;
+  top: 0;
+}
+
+.bom-checklist {
+  display: grid;
+  gap: 16px;
+}
+
+.bom-checklist__item {
+  display: grid;
+  grid-template-columns: 22px minmax(0, 1fr);
+  gap: 8px;
+}
+
+.bom-checklist__item > span:last-child {
+  display: grid;
+  gap: 4px;
+}
+
+.bom-checklist__item strong {
+  color: #1e334c;
+  font-size: 13px;
+}
+
+.bom-checklist__item small {
+  color: #8998ab;
+  line-height: 1.45;
+}
+
+.bom-checklist__mark {
+  display: inline-grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: #e9f8ef;
+  color: #19a957;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.bom-checklist__item.is-pending .bom-checklist__mark {
+  background: #fff4e5;
+  color: #d98513;
+}
+
+.bom-cost-overview {
+  display: grid;
+  gap: 0;
+}
+
+.bom-cost-overview > div {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px 0;
+  border-bottom: 1px solid #e8edf4;
+  color: #61758e;
+  font-size: 13px;
+}
+
+.bom-cost-overview strong {
+  color: #162a42;
+  text-align: right;
+}
+
+.bom-cost-overview .is-total {
+  margin-top: 8px;
+  border-bottom: 0;
+  font-size: 14px;
+}
+
+.bom-cost-overview .is-total strong {
+  color: #1268c4;
+  font-size: 18px;
+}
+
+.bom-cost-overview > small {
+  color: #8a9aaf;
+  text-align: right;
+}
+
+.bom-cost-overview__note {
+  margin: 8px 0 0;
+  color: #8190a5;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.bom-advanced-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  width: 100%;
+  padding: 14px 16px;
+  border: 1px solid #dfe6ef;
+  border-radius: 9px;
+  background: #fff;
+  color: #1f344d;
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 0.18s ease, background 0.18s ease;
+  touch-action: manipulation;
+}
+
+.bom-advanced-toggle:hover,
+.bom-advanced-toggle:focus-visible {
+  border-color: #8ebcf2;
+  background: #f8fbff;
+  outline: none;
+}
+
+.bom-advanced-toggle > span:first-child {
+  display: grid;
+  gap: 4px;
+}
+
+.bom-advanced-toggle small {
+  color: #8998ab;
+}
+
+.bom-draft-bar {
+  position: sticky;
+  bottom: 0;
+  z-index: 8;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+  padding: 12px 16px;
+  border: 1px solid #cfdced;
+  border-radius: 10px;
+  background: rgb(255 255 255 / 96%);
+  box-shadow: 0 -8px 24px rgb(34 58 86 / 10%);
+  backdrop-filter: blur(8px);
+}
+
+.bom-draft-bar > div:first-child {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.bom-draft-bar strong {
+  color: #19314e;
+}
+
+.bom-draft-bar span {
+  color: #71849c;
+  font-size: 12px;
+}
+
+.bom-draft-bar__actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
 }
 
 .header-card {
@@ -3535,6 +4021,65 @@ watch(adjustDialogVisible, (visible) => {
 
   td {
     background-color: #f0f9eb !important;
+  }
+}
+
+@media (max-width: 1180px) {
+  .bom-workspace {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .bom-side-stack {
+    position: static;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 820px) {
+  .bom-page {
+    padding: 12px;
+  }
+
+  .bom-hero,
+  .bom-draft-bar {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .bom-hero__actions,
+  .bom-draft-bar__actions {
+    justify-content: stretch;
+  }
+
+  .bom-hero__actions :deep(.el-button),
+  .bom-draft-bar__actions :deep(.el-button) {
+    flex: 1;
+    margin-left: 0;
+  }
+
+  .bom-summary-grid,
+  .bom-side-stack {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .bom-summary-card {
+    border-right: 0;
+    border-bottom: 1px solid #dfe6ef;
+  }
+
+  .bom-summary-card:last-child {
+    border-bottom: 0;
+  }
+
+  .bom-content-context,
+  .table-header {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .table-actions {
+    width: 100%;
+    flex-wrap: wrap;
   }
 }
 </style>
