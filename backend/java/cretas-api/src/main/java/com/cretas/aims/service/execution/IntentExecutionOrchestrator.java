@@ -87,6 +87,18 @@ public class IntentExecutionOrchestrator {
     private static final Pattern RESTAURANT_EXPLICIT_TIME_OVERRIDE_PATTERN = Pattern.compile(
             "今天|今日|昨天|昨日|前天|前日|本周|上周|本月|上月|近\\d+天|\\d{4}-\\d{2}-\\d{2}");
 
+    private static final Pattern RESTAURANT_EXPLICIT_DISH_DELETE_WITH_OBJECT_MARKER = Pattern.compile(
+            "^(?:请(?:帮我)?|麻烦)?(?:把|将)\\s*(?<name>[^，。！？!?]{1,60}?)\\s*"
+                    + "(?:(?:这道菜|这个菜|该菜品|这道菜品)?\\s*(?:下架|停售|删除)"
+                    + "|从(?:当前)?菜单(?:里|中)?\\s*(?:移除|删除))\\s*(?:一下)?[。！？!?]?$");
+    private static final Pattern RESTAURANT_EXPLICIT_DISH_DELETE_WITH_NOUN = Pattern.compile(
+            "^(?:请(?:帮我)?|麻烦)?(?:删除|下架|停售)\\s*"
+                    + "(?<name>[^，。！？!?]{1,60}?)\\s*(?:这道菜|这个菜|这道菜品|菜品)"
+                    + "\\s*(?:一下)?[。！？!?]?$");
+    private static final Pattern RESTAURANT_DISH_DELETE_ADVICE_OR_READ = Pattern.compile(
+            "哪些|哪道|什么|是否|能否|可不可以|应该|建议|考虑|要不要|适合|查询|查看|"
+                    + "已下架|下架记录|下架情况|停售记录|为什么");
+
     private static final Pattern RESTAURANT_OWNER_ACTION_DIRECT_PATTERN = Pattern.compile(
             "老板|店长|区域经理|今天.*动作|今天.*应该|今天.*最应该|今天.*怎么|今天.*要不要|今天.*适合|今天.*查|今天.*调|今天.*改|今天.*提高|"
                     + "具体动作|提高营收|提升营收|提高营业额|提高客单价|怎么提高|怎么提升|应该怎么|应该先|怎么处理|怎么培训|先改|先做|"
@@ -315,6 +327,36 @@ public class IntentExecutionOrchestrator {
         }
 
         String userInput = request.getUserInput();
+        Optional<String> explicitDishDeleteTarget =
+                extractExplicitRestaurantDishDeleteTarget(userInput);
+        if (!factoryPackConstrained
+                && isRestaurantTenant(factoryId)
+                && explicitDishDeleteTarget.isPresent()) {
+            Map<String, Object> writeContext = new LinkedHashMap<>();
+            if (request.getContext() != null) {
+                writeContext.putAll(request.getContext());
+            }
+            writeContext.putIfAbsent("name", explicitDishDeleteTarget.get());
+            IntentExecuteRequest dishDeleteRequest = IntentExecuteRequest.builder()
+                    .userInput(userInput)
+                    .intentCode("RESTAURANT_DISH_DELETE")
+                    .entityType(request.getEntityType())
+                    .entityId(request.getEntityId())
+                    .context(writeContext)
+                    .previewOnly(request.getPreviewOnly())
+                    .forceExecute(request.getForceExecute())
+                    .sessionId(request.getSessionId())
+                    .enableThinking(request.getEnableThinking())
+                    .thinkingBudget(request.getThinkingBudget())
+                    .preprocessedQuery(request.getPreprocessedQuery())
+                    .skipSlotFilling(request.getSkipSlotFilling())
+                    .mode(request.getMode())
+                    .build();
+            log.info("[RestaurantDishDelete] explicit governed write route: factoryId={}, dish={}",
+                    factoryId, explicitDishDeleteTarget.get());
+            return executeWithExplicitIntent(
+                    factoryId, dishDeleteRequest, userId, userRole, factoryPackRoute);
+        }
         boolean requiresRestaurantSemanticPlan = tieredFirstEnabled
                 && !factoryPackConstrained
                 && !Boolean.TRUE.equals(request.getPreviewOnly())
@@ -716,7 +758,9 @@ public class IntentExecutionOrchestrator {
         }
 
         // 审批检查
-        if (intent.needsApproval() && !Boolean.TRUE.equals(request.getForceExecute())) {
+        if (intent.needsApproval()
+                && !Boolean.TRUE.equals(request.getPreviewOnly())
+                && !Boolean.TRUE.equals(request.getForceExecute())) {
             return buildApprovalResponse(intent);
         }
 
@@ -966,7 +1010,12 @@ public class IntentExecutionOrchestrator {
                     .build();
         }
 
-        if (intent.needsApproval() && !Boolean.TRUE.equals(request.getForceExecute())) {
+        // Approval governs the mutation, not its read-only TCC preview. Keeping
+        // previewOnly outside this gate lets the user inspect before/after and
+        // impact details before deciding whether to request approval/confirm.
+        if (intent.needsApproval()
+                && !Boolean.TRUE.equals(request.getPreviewOnly())
+                && !Boolean.TRUE.equals(request.getForceExecute())) {
             return buildApprovalResponse(intent);
         }
 
@@ -1963,6 +2012,33 @@ public class IntentExecutionOrchestrator {
             return false;
         }
         return RESTAURANT_WRITE_VERB.matcher(userInput).find();
+    }
+
+    static Optional<String> extractExplicitRestaurantDishDeleteTarget(String userInput) {
+        if (userInput == null || userInput.isBlank()
+                || RESTAURANT_DISH_DELETE_ADVICE_OR_READ.matcher(userInput).find()) {
+            return Optional.empty();
+        }
+        for (Pattern pattern : List.of(
+                RESTAURANT_EXPLICIT_DISH_DELETE_WITH_OBJECT_MARKER,
+                RESTAURANT_EXPLICIT_DISH_DELETE_WITH_NOUN)) {
+            Matcher matcher = pattern.matcher(userInput.trim());
+            if (!matcher.matches()) {
+                continue;
+            }
+            String name = matcher.group("name");
+            if (name == null) {
+                continue;
+            }
+            String normalized = name.trim()
+                    .replaceFirst("^(?:这道|这个|该|菜单里的)", "")
+                    .replaceFirst("(?:这道|这个|该)?菜品?$", "")
+                    .trim();
+            if (!normalized.isBlank()) {
+                return Optional.of(normalized);
+            }
+        }
+        return Optional.empty();
     }
 
     // R28: 餐饮复合句 ("先说说A，再说说B") — 早期 phrase shortcut 的 contains
