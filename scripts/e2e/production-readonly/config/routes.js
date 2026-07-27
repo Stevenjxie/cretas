@@ -10,6 +10,7 @@ const ROUTES = Object.freeze({
   products: '/system/products',
   workflow: '/system/product-processes',
   productionPlans: '/production/plans',
+  labelQc: '/quality/label-qc',
 });
 
 module.exports = { ROUTES };

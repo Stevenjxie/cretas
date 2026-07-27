@@ -19,6 +19,7 @@ const SCENARIOS = [
   require('../scenarios/ai-readonly'),
   require('../scenarios/workflow-readonly'),
   require('../scenarios/production-plan-routing-readonly'),
+  require('../scenarios/label-qc-readonly'),
   require('../scenarios/ui-stability'),
 ];
 
