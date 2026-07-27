@@ -1445,6 +1445,30 @@ def test_contract_requires_current_turn_analysis_action(
     assert accepted.passed
 
 
+@pytest.mark.parametrize(
+    "covered_answer",
+    [
+        (
+            "判断：卤炸牛肉串低于中位数，“销量低”的前提成立。"
+            "现有汇总数据还不能证明为什么低。"
+        ),
+        (
+            "判断：卤炸牛肉串不低于中位数，“销量低”的前提不成立。"
+            "因此不能按低销量问题直接制定动作。"
+        ),
+        (
+            "判断：可比主菜不足，当前不能判断“销量低”的前提是否成立。"
+        ),
+    ],
+)
+def test_contract_accepts_safe_low_sales_premise_diagnosis(covered_answer):
+    spec = _spec(analysis_action="diagnose")
+
+    result = contract.validate(spec, covered_answer, kpis=[], meta={})
+
+    assert result.passed
+
+
 def test_contextualize_only_dependent_restaurant_followups():
     parent = {
         "parent_query": "本月营收趋势怎么样",

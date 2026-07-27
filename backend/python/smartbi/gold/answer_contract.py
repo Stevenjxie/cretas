@@ -260,7 +260,16 @@ def _analysis_action_present(spec: RestaurantQuerySpec, answer_text: str) -> boo
     if spec.analysis_action == "diagnose":
         return _contains_any(
             answer_text,
-            ("原因拆解", "计算构成", "驱动因素", "不能证明因果"),
+            (
+                "原因拆解",
+                "计算构成",
+                "驱动因素",
+                "不能证明因果",
+                "前提成立",
+                "前提不成立",
+                "不能判断“销量低”的前提",
+                "还不能证明为什么低",
+            ),
         )
     if spec.analysis_action == "optimize":
         return _contains_any(
