@@ -348,6 +348,15 @@ _CHINESE_RANK_NUMBERS = {
 _EXPLICIT_RANKING_EXCLUSION_RE = re.compile(
     r"(?:排除|剔除|去掉|不含|不要算)([^。！？?；;]{1,80})"
 )
+_RANKING_CLARIFICATION_SUFFIX_RE = re.compile(
+    r"\s+(?:"
+    r"本月|上月|上个月|本周|上周|今天|昨天|前天|"
+    r"最近\d{1,3}天|近\d{1,3}天|"
+    r"全部门店|所有门店|各门店|全部店|所有店|全店|"
+    r"(?:[\u4e00-\u9fffA-Za-z0-9()（）·-]{2,40}店"
+    r"(?:\s*(?:和|与|、)\s*[\u4e00-\u9fffA-Za-z0-9()（）·-]{2,40}店)*)"
+    r")$"
+)
 
 
 def dish_ranking_direction(query: "Optional[str]") -> "Optional[str]":
@@ -408,6 +417,12 @@ def ranking_exclusions(query: "Optional[str]") -> list[str]:
         "",
         match.group(1).strip("：:，, "),
     )
+    # Clarification replies are reconstructed as
+    # ``<original query> <time reply> <store reply>``.  Those suffixes are
+    # scope slots, not part of the last exclusion.  Requiring a whitespace
+    # boundary avoids stripping legitimate item names such as “便利店套餐”.
+    while _RANKING_CLARIFICATION_SUFFIX_RE.search(raw):
+        raw = _RANKING_CLARIFICATION_SUFFIX_RE.sub("", raw).rstrip()
     values = re.split(r"[、，,和与及]|以及", raw)
     result: list[str] = []
     for value in values:

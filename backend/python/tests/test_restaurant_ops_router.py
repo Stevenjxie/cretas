@@ -3309,6 +3309,16 @@ def test_r33_ranking_limit_exclusions_and_multi_store_mentions():
     assert _r.ranking_exclusions(
         "本月畅销菜前5名，排除米饭、餐巾纸、湿纸巾和餐具"
     ) == ["米饭", "餐巾纸", "湿纸巾", "餐具"]
+    assert _r.ranking_exclusions(
+        "销量最高的5道菜，排除米饭、餐巾纸、湿纸巾和餐具 本月 全部门店"
+    ) == ["米饭", "餐巾纸", "湿纸巾", "餐具"]
+    assert _r.ranking_exclusions(
+        "最近7天销量最高的5道菜，排除米饭、餐巾纸、湿纸巾和餐具 青花椒南方百联店"
+    ) == ["米饭", "餐巾纸", "湿纸巾", "餐具"]
+    assert _r.ranking_exclusions(
+        "销量最高的5道菜，排除米饭、餐具 近7天 青花椒南方百联店与鲜行者打浦桥日月光店"
+    ) == ["米饭", "餐具"]
+    assert _r.ranking_exclusions("排除便利店套餐") == ["便利店套餐"]
     assert _r.extract_store_mentions(
         "本月东城店和西城店的营收对比"
     ) == ["东城店", "西城店"]
