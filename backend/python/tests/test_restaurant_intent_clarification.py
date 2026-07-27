@@ -1594,6 +1594,79 @@ async def test_reviewed_exact_concrete_store_button_survives_t3_outage():
 
 
 @pytest.mark.asyncio
+async def test_semantic_first_dish_time_store_buttons_survive_t3_outage():
+    pool = _FakeDbPool(
+        is_restaurant=True,
+        store_names=[
+            "青花椒新世界新丸中心店",
+            "青花椒徐汇光启城店",
+        ],
+    )
+    first_plan = {
+        "intent": "RESTAURANT_OPS_GROSS_MARGIN",
+        "time_range": None,
+        "wants_margin": False,
+        "asks_profitability": False,
+        "requested_metrics": ["sales_volume"],
+        "analysis_action": "lookup",
+        "dimensions": ["dish"],
+        "dish": "米饭",
+        "store": None,
+        "stores": [],
+        "store_scope": None,
+        "confidence": 0.99,
+        "clarification_needed": True,
+        "missing_fields": ["time_range"],
+        "clarification_question": TIME_CLARIFICATION_QUESTION,
+        "clarification_options": ["本月", "上个月", "最近7天", "最近30天"],
+    }
+    planner = AsyncMock(side_effect=[
+        first_plan,
+        AssertionError("fixed time/store buttons must not depend on T3"),
+    ])
+
+    with patch(
+        "smartbi.gold.restaurant_intent._t3_llm_parse",
+        new=planner,
+    ):
+        first = await parse_restaurant_query(
+            "米饭的销量是多少",
+            pool,
+            factory_id="DEMO_REST",
+            session_key="semantic-exact-button-chain",
+            semantic_first=True,
+        )
+        second = await parse_restaurant_query(
+            "本月",
+            pool,
+            factory_id="DEMO_REST",
+            session_key="semantic-exact-button-chain",
+            semantic_first=True,
+        )
+        third = await parse_restaurant_query(
+            "青花椒新世界新丸中心店",
+            pool,
+            factory_id="DEMO_REST",
+            session_key="semantic-exact-button-chain",
+            semantic_first=True,
+        )
+
+    assert first.clarification_question == TIME_CLARIFICATION_QUESTION
+    assert second.clarification_question == STORE_SCOPE_CLARIFICATION_QUESTION
+    assert second.planner_authority == "trusted_context"
+    assert third.clarification_needed is False
+    assert third.planner_authority == "trusted_context"
+    assert third.intent == "RESTAURANT_OPS_STORE_MARGIN"
+    assert third.requested_metrics == ("sales_volume",)
+    assert third.dish_slot == "米饭"
+    assert third.window_label == "本月"
+    assert third.store_scope == "single"
+    assert third.store_slots == ("青花椒新世界新丸中心店",)
+    assert pool.pending == {}
+    assert planner.await_count == 1
+
+
+@pytest.mark.asyncio
 async def test_reviewed_exact_prefixed_time_continues_to_store_button_without_t3():
     pool = _FakeDbPool(
         is_restaurant=True,
