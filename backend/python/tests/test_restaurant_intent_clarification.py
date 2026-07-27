@@ -35,6 +35,7 @@ from smartbi.gold.restaurant_intent import (
     _cache_put,
     _explicit_read_only_action_ranking_spec,
     _is_restaurant_tenant,
+    _load_relevant_store_options,
     _pending_pop,
     _pending_put,
     build_resolver_query,
@@ -132,16 +133,34 @@ class _FakeDbConn:
         raise AssertionError(f"unexpected execute SQL in fake pool: {sql}")
 
     async def fetch(self, sql, *_args):
+        if "FROM fact_pos_item i" in sql and "JOIN dim_store s" in sql:
+            self._pool.relevant_store_args = _args
+            return [
+                {"name": name}
+                for name in self._pool.relevant_store_names
+            ]
         if "FROM dim_store" in sql:
             return [{"name": name} for name in self._pool.store_names]
         raise AssertionError(f"unexpected fetch SQL in fake pool: {sql}")
 
 
 class _FakeDbPool:
-    def __init__(self, *, is_restaurant: bool = True, store_names=None):
+    def __init__(
+        self,
+        *,
+        is_restaurant: bool = True,
+        store_names=None,
+        relevant_store_names=None,
+    ):
         self.pending: dict = {}
         self.is_restaurant = is_restaurant
         self.store_names = list(store_names or [])
+        self.relevant_store_names = list(
+            relevant_store_names
+            if relevant_store_names is not None
+            else self.store_names
+        )
+        self.relevant_store_args = ()
         self.acquire_calls = 0
         self.tenant_gate_calls = 0
         self.tenant_rls_calls = 0
@@ -166,6 +185,89 @@ class _FakeDbPool:
 
 def _restaurant_pool() -> _FakeDbPool:
     return _FakeDbPool(is_restaurant=True)
+
+
+@pytest.mark.asyncio
+async def test_relevant_store_options_use_period_and_named_dish_activity():
+    pool = _FakeDbPool(
+        store_names=["兄弟土菜馆", "有滋有味总部"],
+        relevant_store_names=[
+            "青花椒新世界新丸中心店",
+            "青花椒徐汇光启城店",
+        ],
+    )
+
+    names = await _load_relevant_store_options(
+        pool,
+        "DEMO_REST",
+        "本月米饭的销量是多少",
+    )
+
+    assert names == (
+        "青花椒新世界新丸中心店",
+        "青花椒徐汇光启城店",
+    )
+    assert pool.active_factory == "RES_3101_009" or pool.active_factory is None
+    assert pool.relevant_store_args[0] == "RES_3101_009"
+    assert pool.relevant_store_args[3] == "米饭"
+
+
+@pytest.mark.asyncio
+async def test_semantic_first_store_buttons_only_offer_data_bearing_dish_stores():
+    pool = _FakeDbPool(
+        store_names=[
+            "兄弟土菜馆",
+            "有滋有味总部",
+            "青花椒新世界新丸中心店",
+            "青花椒徐汇光启城店",
+        ],
+        relevant_store_names=[
+            "青花椒新世界新丸中心店",
+            "青花椒徐汇光启城店",
+        ],
+    )
+    plan = {
+        "intent": "RESTAURANT_OPS_GROSS_MARGIN",
+        "time_range": {"type": "named", "value": "this_month"},
+        "wants_margin": False,
+        "asks_profitability": False,
+        "requested_metrics": ["sales_volume"],
+        "analysis_action": "lookup",
+        "dimensions": ["dish"],
+        "dish": "米饭",
+        "store": None,
+        "stores": [],
+        "store_scope": None,
+        "confidence": 0.99,
+        "clarification_needed": True,
+        "missing_fields": ["store_scope"],
+        "clarification_question": "这项分析要看哪一组门店？",
+        "clarification_options": ["全部门店", "兄弟土菜馆"],
+    }
+
+    with patch(
+        "smartbi.gold.restaurant_intent._t3_llm_parse",
+        new=AsyncMock(return_value=plan),
+    ):
+        spec = await parse_restaurant_query(
+            "本月米饭的销量是多少",
+            pool,
+            factory_id="DEMO_REST",
+            session_key="dish-store-options",
+            semantic_first=True,
+        )
+
+    assert spec.clarification_needed is True
+    assert spec.store_options == (
+        "青花椒新世界新丸中心店",
+        "青花椒徐汇光启城店",
+    )
+    assert spec.clarification_options == (
+        "全部门店",
+        "青花椒新世界新丸中心店",
+        "青花椒徐汇光启城店",
+    )
+    assert "兄弟土菜馆" not in spec.clarification_options
 
 
 def _llm_result(payload: dict) -> dict:

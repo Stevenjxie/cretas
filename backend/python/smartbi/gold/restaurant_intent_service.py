@@ -760,8 +760,20 @@ async def tiered_answer(
                     factory_id,
                     **code_kwargs,
                 )
-                if retry is not None and "dish_not_found" not in (
-                    getattr(retry, "meta", None) or {}
+                retry_meta = getattr(retry, "meta", None) or {}
+                # Keep the primary data-space answer when the fallback merely
+                # trades one missing entity for another.  Live Demo regression:
+                # RES_3101_009 correctly said a selected store had no rice
+                # sales, then DEMO_REST could not find that store at all and
+                # the worse "store not found / gross margin" response replaced
+                # the truthful sales answer.
+                if retry is not None and not any(
+                    marker in retry_meta
+                    for marker in (
+                        "dish_not_found",
+                        "store_not_found",
+                        "store_mention_ambiguous",
+                    )
                 ):
                     resolved = retry
             if resolved is not None:
