@@ -537,11 +537,14 @@ async def test_semantic_first_repairs_false_missing_slots_after_llm_planning():
             "那毛利呢",
             _restaurant_pool(),
             factory_id="DEMO_REST",
-            history=history,
+            # Production asyncpg returns JSONB as text unless a custom codec
+            # is registered.  Exercise that real boundary shape here.
+            history=json.dumps(history, ensure_ascii=False),
             semantic_first=True,
         )
 
     assert mock_parse.await_args.args[0] == "本月全部门店卤炸牛肉串的毛利呢"
+    assert mock_parse.await_args.kwargs["history"] == tuple(history)
     assert spec is not None
     assert spec.planner_authority == "llm_trusted_context_repair"
     assert spec.source_tier == "llm"

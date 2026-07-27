@@ -3654,6 +3654,26 @@ async def parse_restaurant_query(
     norm_query = _normalize_query(query)
     if not norm_query or not factory_id:
         return None
+    if isinstance(history, str):
+        # asyncpg's default JSONB codec returns text in production, while
+        # unit-test fakes and some callers provide an already-decoded list.
+        # Normalize both shapes at the planner boundary.  Treating JSON text
+        # as a Sequence below would split it into characters, silently erase
+        # every structured context turn, and make typed follow-ups look
+        # sessionless even though ChatSessionService found the correct row.
+        try:
+            decoded_history = json.loads(history)
+        except (TypeError, ValueError):
+            decoded_history = None
+        history = decoded_history if isinstance(decoded_history, list) else None
+    if history:
+        history = tuple(
+            turn
+            for turn in list(history)[-20:]
+            if isinstance(turn, dict)
+        )
+        if not history:
+            history = None
 
     if session_key:
         pending = await _pending_pop(pool, factory_id, session_key)
