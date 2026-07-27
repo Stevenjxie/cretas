@@ -1662,6 +1662,17 @@ def _build_spec(
         # query (including a trusted inherited window) authorizes execution.
         clarification_needed = True
         clarification_question = TIME_CLARIFICATION_QUESTION
+        # The LLM may have proposed choices for a different missing slot
+        # (typically stores) before this deterministic time gate ran.  Once the
+        # executable contract decides that time is the next required slot, its
+        # buttons must describe time as well; otherwise the UI asks one
+        # question and offers answers to another one.
+        clarification_options = (
+            "本月",
+            "上个月",
+            "最近7天",
+            "最近30天",
+        )
     if planner_authority in {
         "tenant_gate_unavailable",
         "llm_unavailable",
