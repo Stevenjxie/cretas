@@ -496,6 +496,66 @@ async def test_semantic_first_inherits_typed_dish_slots_before_llm_planning():
 
 
 @pytest.mark.asyncio
+async def test_semantic_first_repairs_false_missing_slots_after_llm_planning():
+    """A valid LLM contract cannot re-ask slots stored by the resolver."""
+    history = [{
+        "q": "全部门店卤炸牛肉串本月销量为什么高",
+        "a_summary": "本月卤炸牛肉串销量 251.56 份。",
+        "context": {
+            "focus_entity": {"type": "dish", "name": "卤炸牛肉串"},
+            "window_label": "本月",
+            "requested_metrics": ["sales_volume"],
+            "analysis_action": "diagnose",
+            "store_scope": "all",
+            "store_names": [],
+        },
+    }]
+    false_clarification = {
+        "intent": "RESTAURANT_OPS_GROSS_MARGIN",
+        "time_range": None,
+        "wants_margin": True,
+        "asks_profitability": True,
+        "requested_metrics": ["gross_margin"],
+        "analysis_action": "lookup",
+        "dimensions": [],
+        "dish": None,
+        "store": None,
+        "stores": [],
+        "store_scope": None,
+        "confidence": 0.96,
+        "clarification_needed": True,
+        "missing_fields": ["time_range", "store_scope", "object"],
+        "clarification_question": "你想看哪个时间范围的哪道菜？",
+        "clarification_options": ["本月", "最近30天"],
+    }
+
+    with patch(
+        "smartbi.gold.restaurant_intent._t3_llm_parse",
+        new=AsyncMock(return_value=false_clarification),
+    ) as mock_parse:
+        spec = await parse_restaurant_query(
+            "那毛利呢",
+            _restaurant_pool(),
+            factory_id="DEMO_REST",
+            history=history,
+            semantic_first=True,
+        )
+
+    assert mock_parse.await_args.args[0] == "本月全部门店卤炸牛肉串的毛利呢"
+    assert spec is not None
+    assert spec.planner_authority == "llm_trusted_context_repair"
+    assert spec.source_tier == "llm"
+    assert spec.clarification_needed is False
+    assert spec.intent == "RESTAURANT_OPS_GROSS_MARGIN"
+    assert spec.dish_slot == "卤炸牛肉串"
+    assert spec.window_label == "本月"
+    assert spec.store_scope == "all"
+    assert spec.requested_metrics == ("gross_margin",)
+    assert spec.analysis_action == "lookup"
+    assert spec.plan_hash
+
+
+@pytest.mark.asyncio
 async def test_t3_adversarial_raw_date_in_time_range_is_ignored():
     """If a (malformed/adversarial) LLM response smuggles a raw date string
     into time_range instead of a structured descriptor, it must be silently
