@@ -18,6 +18,10 @@ interface ApiResponse<T> {
   data: T;
 }
 
+interface PageData<T> {
+  content: T[];
+}
+
 // ==================== Phase 5: SKU Configuration Types ====================
 
 /**
@@ -175,6 +179,21 @@ export interface ProductType {
   customSchemaOverrides?: Record<string, unknown>;
 }
 
+/**
+ * 下拉选择器使用的精简 SKU 数据。
+ * 与后端 ProductTypeOptionDTO 对齐，避免为选择器加载完整产品配置。
+ */
+export interface ProductTypePickerOption {
+  id: string;
+  code: string;
+  name: string;
+  unit?: string;
+  specification?: string;
+  gramsPerUnit?: number;
+  productCategory?: string;
+  isActive?: boolean;
+}
+
 export interface ProductPackagingSpec {
   id: string;
   name: string;
@@ -261,6 +280,24 @@ class ProductTypeApiClient {
   async getActiveProductTypes(factoryId?: string): Promise<ProductType[]> {
     const response = await apiClient.get<ApiResponse<ProductType[]>>(`${this.getPath(factoryId)}/active`);
     return response.data || [];
+  }
+
+  /**
+   * 标签拍检专用：仅返回当前工厂已启用的成品 SKU。
+   *
+   * 这里使用精简 options 端点，并在客户端按后端主数据字段做严格过滤；
+   * 创建拍检任务时后端还会再次校验，旧客户端也不能提交半成品。
+   */
+  async getActiveFinishedProductOptions(factoryId?: string): Promise<ProductTypePickerOption[]> {
+    const response = await apiClient.get<ApiResponse<PageData<ProductTypePickerOption>>>(
+      `${this.getPath(factoryId)}/options`
+    );
+    const options = response.data?.content ?? [];
+    return options.filter(
+      (option) =>
+        option.isActive === true &&
+        option.productCategory?.trim().toUpperCase() === 'FINISHED_PRODUCT'
+    );
   }
 
   async getPackagingSpecs(id: string, factoryId?: string): Promise<ProductPackagingSpec[]> {

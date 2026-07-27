@@ -3,6 +3,7 @@ package com.cretas.aims.service;
 import com.cretas.aims.dto.labelqc.LabelQcDtos.AnnotationReviewRequest;
 import com.cretas.aims.dto.labelqc.LabelQcDtos.AddPhotoRequest;
 import com.cretas.aims.dto.labelqc.LabelQcDtos.BoundingBox;
+import com.cretas.aims.dto.labelqc.LabelQcDtos.CreateTaskRequest;
 import com.cretas.aims.dto.labelqc.LabelQcDtos.PhotoReviewRequest;
 import com.cretas.aims.dto.labelqc.LabelQcDtos.ReviewTaskRequest;
 import com.cretas.aims.dto.labelqc.LabelQcDtos.TrainingDecisionRequest;
@@ -10,11 +11,13 @@ import com.cretas.aims.entity.Attachment;
 import com.cretas.aims.entity.LabelQcAnnotation;
 import com.cretas.aims.entity.LabelQcPhoto;
 import com.cretas.aims.entity.LabelQcTask;
+import com.cretas.aims.entity.ProductType;
 import com.cretas.aims.entity.enums.LabelQcAnnotationSource;
 import com.cretas.aims.entity.enums.LabelQcLabel;
 import com.cretas.aims.entity.enums.LabelQcPhotoStatus;
 import com.cretas.aims.entity.enums.LabelQcTaskStatus;
 import com.cretas.aims.entity.enums.LabelQcTrainingStatus;
+import com.cretas.aims.entity.enums.ProductCategory;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.repository.LabelQcAnnotationRepository;
 import com.cretas.aims.repository.LabelQcPhotoRepository;
@@ -121,6 +124,67 @@ class LabelQcServiceTest {
                 .thenReturn(List.of(aiCandidate));
         lenient().when(attachmentService.generateDownloadUrl(FACTORY_ID, "attachment-1"))
                 .thenReturn("https://example.invalid/signed");
+    }
+
+    @Test
+    void createTaskAcceptsOnlyActiveFinishedProduct() {
+        ProductType product = product("finished-id", ProductCategory.FINISHED_PRODUCT);
+        when(taskRepository.findByFactoryIdAndCreatedByAndIdempotencyKey(
+                FACTORY_ID, 7L, "create-finished")).thenReturn(Optional.empty());
+        when(productTypeRepository.findByIdAndFactoryId("finished-id", FACTORY_ID))
+                .thenReturn(Optional.of(product));
+
+        var result = service.createTask(
+                FACTORY_ID,
+                7L,
+                new CreateTaskRequest(
+                        "finished-id",
+                        "BATCH-FINISHED",
+                        LocalDate.now(),
+                        "create-finished"));
+
+        assertEquals("finished-id", result.task().productTypeId());
+        assertEquals("CP-FINISHED", result.task().skuCode());
+        assertEquals("成品牛肉", result.task().skuName());
+        ArgumentCaptor<LabelQcTask> saved = ArgumentCaptor.forClass(LabelQcTask.class);
+        verify(taskRepository).save(saved.capture());
+        assertEquals(LabelQcTaskStatus.DRAFT, saved.getValue().getStatus());
+    }
+
+    @Test
+    void createTaskRejectsActiveSemiFinishedProductBeforeWriting() {
+        ProductType product = product("semi-id", ProductCategory.SEMI_FINISHED);
+        when(taskRepository.findByFactoryIdAndCreatedByAndIdempotencyKey(
+                FACTORY_ID, 7L, "create-semi")).thenReturn(Optional.empty());
+        when(productTypeRepository.findByIdAndFactoryId("semi-id", FACTORY_ID))
+                .thenReturn(Optional.of(product));
+
+        BusinessException error = assertThrows(
+                BusinessException.class,
+                () -> service.createTask(
+                        FACTORY_ID,
+                        7L,
+                        new CreateTaskRequest(
+                                "semi-id",
+                                "BATCH-SEMI",
+                                LocalDate.now(),
+                                "create-semi")));
+
+        assertEquals("LABEL_QC_FINISHED_SKU_REQUIRED", error.getErrorCode());
+        assertEquals("请重新选择当前工厂已启用的成品 SKU", error.getActionHint());
+        verify(taskRepository, never()).save(any(LabelQcTask.class));
+    }
+
+    private ProductType product(String id, String productCategory) {
+        ProductType product = new ProductType();
+        product.setId(id);
+        product.setFactoryId(FACTORY_ID);
+        product.setCode("finished-id".equals(id) ? "CP-FINISHED" : "PT-SEMI");
+        product.setName("finished-id".equals(id) ? "成品牛肉" : "滚揉半成品");
+        product.setUnit("盒");
+        product.setIsActive(true);
+        product.setProductCategory(productCategory);
+        return product;
     }
 
     @Test

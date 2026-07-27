@@ -26,7 +26,7 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import {
-  ProductType,
+  ProductTypePickerOption,
   productTypeApiClient,
 } from '../../services/api/productTypeApiClient';
 import { attachmentApi } from '../../services/api/attachmentApi';
@@ -35,7 +35,6 @@ import { useAuthStore } from '../../store/authStore';
 import { QI_COLORS, QualityInspectorStackParamList } from '../../types/qualityInspector';
 
 type NavigationProp = NativeStackNavigationProp<QualityInspectorStackParamList>;
-type ProductWithCode = ProductType & { code?: string };
 type ScrollViewRef = React.ElementRef<typeof ScrollView>;
 
 const MAX_PHOTOS = 6;
@@ -61,12 +60,12 @@ export default function QILabelQcCreateScreen() {
   const insets = useSafeAreaInsets();
   const factoryId = useAuthStore((state) => state.user?.factoryId);
 
-  const [products, setProducts] = useState<ProductType[]>([]);
+  const [products, setProducts] = useState<ProductTypePickerOption[]>([]);
   const [productsLoading, setProductsLoading] = useState(true);
   const [productsError, setProductsError] = useState<string | null>(null);
   const [productModalVisible, setProductModalVisible] = useState(false);
   const [productKeyword, setProductKeyword] = useState('');
-  const [selectedProduct, setSelectedProduct] = useState<ProductType | null>(null);
+  const [selectedProduct, setSelectedProduct] = useState<ProductTypePickerOption | null>(null);
   const [batchNumber, setBatchNumber] = useState('');
   const [productionDate, setProductionDate] = useState(new Date());
   const [datePickerVisible, setDatePickerVisible] = useState(false);
@@ -90,8 +89,8 @@ export default function QILabelQcCreateScreen() {
     try {
       setProductsLoading(true);
       setProductsError(null);
-      const result = await productTypeApiClient.getActiveProductTypes(factoryId);
-      setProducts(result.filter((item) => item.isActive !== false));
+      const result = await productTypeApiClient.getActiveFinishedProductOptions(factoryId);
+      setProducts(result);
     } catch (error) {
       setProductsError(getErrorMessage(error));
     } finally {
@@ -118,20 +117,17 @@ export default function QILabelQcCreateScreen() {
     const keyword = productKeyword.trim().toLowerCase();
     if (!keyword) return products;
     return products.filter((item) => {
-      const code = ((item as ProductWithCode).code ?? item.productCode ?? '').toLowerCase();
-      return item.name.toLowerCase().includes(keyword) || code.includes(keyword);
+      return item.name.toLowerCase().includes(keyword) || item.code.toLowerCase().includes(keyword);
     });
   }, [productKeyword, products]);
 
-  const selectedCode = selectedProduct
-    ? ((selectedProduct as ProductWithCode).code ?? selectedProduct.productCode ?? '')
-    : '';
+  const selectedCode = selectedProduct?.code ?? '';
   const formLocked = Boolean(draftTaskId);
   const isReadyToSubmit = Boolean(
     selectedProduct && batchNumber.trim() && photos.length > 0,
   );
   const readinessHint = !selectedProduct
-    ? '先选择 SKU'
+    ? '先选择成品 SKU'
     : !batchNumber.trim()
       ? '再填写批次号'
       : photos.length === 0
@@ -181,7 +177,7 @@ export default function QILabelQcCreateScreen() {
   };
 
   const validate = (): string | null => {
-    if (!selectedProduct) return '请选择 SKU';
+    if (!selectedProduct) return '请选择成品 SKU';
     const batch = batchNumber.trim();
     if (!batch) return '请输入批次号';
     if (batch.length > 100) return '批次号不能超过 100 个字符';
@@ -315,20 +311,20 @@ export default function QILabelQcCreateScreen() {
         </View>
 
         <Text style={styles.sectionTitle}>1. 核对批次信息</Text>
-        <Text style={styles.fieldLabel}>SKU *</Text>
+        <Text style={styles.fieldLabel}>成品 SKU *</Text>
         <TouchableRipple
           style={[styles.selector, formLocked && styles.disabledControl]}
           onPress={() => !formLocked && setProductModalVisible(true)}
           disabled={formLocked}
           borderless={false}
           accessibilityRole="button"
-          accessibilityLabel="选择 SKU"
+          accessibilityLabel="选择成品 SKU"
           testID="qi-label-qc-create-sku-selector"
         >
           <View style={styles.selectorContent}>
             <View style={styles.selectorText}>
               <Text style={selectedProduct ? styles.selectorValue : styles.selectorPlaceholder}>
-                {selectedProduct ? `${selectedCode} · ${selectedProduct.name}` : '请选择产品 SKU'}
+                {selectedProduct ? `${selectedCode} · ${selectedProduct.name}` : '请选择成品 SKU'}
               </Text>
             </View>
             <Ionicons name="chevron-forward" size={20} color={QI_COLORS.textSecondary} />
@@ -499,29 +495,30 @@ export default function QILabelQcCreateScreen() {
       >
         <View style={[styles.modalScreen, { paddingTop: insets.top + 8 }]}>
           <View style={styles.modalHeader}>
-            <Text style={styles.modalTitle}>选择 SKU</Text>
+            <Text style={styles.modalTitle}>选择成品 SKU</Text>
             <TouchableRipple
               style={styles.modalClose}
               onPress={() => setProductModalVisible(false)}
               borderless
               accessibilityRole="button"
-              accessibilityLabel="关闭 SKU 选择"
+              accessibilityLabel="关闭成品 SKU 选择"
               testID="qi-label-qc-create-sku-close-button"
             >
               <Ionicons name="close" size={24} color={QI_COLORS.text} />
             </TouchableRipple>
           </View>
           <Searchbar
-            placeholder="搜索 SKU 编码或名称"
+            placeholder="搜索成品 SKU 编码或名称"
             value={productKeyword}
             onChangeText={setProductKeyword}
             style={styles.searchbar}
             testID="qi-label-qc-create-sku-search-input"
           />
+          <Text style={styles.modalScopeHint}>仅显示当前工厂已启用的成品 SKU</Text>
           {productsLoading ? (
             <View style={styles.modalState}>
               <ActivityIndicator color={QI_COLORS.primary} />
-              <Text style={styles.modalStateText}>正在加载 SKU…</Text>
+              <Text style={styles.modalStateText}>正在加载成品 SKU…</Text>
             </View>
           ) : productsError ? (
             <View style={styles.modalState}>
@@ -538,7 +535,20 @@ export default function QILabelQcCreateScreen() {
           ) : filteredProducts.length === 0 ? (
             <View style={styles.modalState}>
               <Ionicons name="search-outline" size={42} color={QI_COLORS.disabled} />
-              <Text style={styles.modalStateText}>没有匹配的 SKU，请更换关键词</Text>
+              <Text style={styles.modalStateText}>
+                {productKeyword.trim()
+                  ? '没有匹配的成品 SKU，请更换关键词'
+                  : '当前工厂没有可用的成品 SKU，请联系工厂管理员先创建并启用成品 SKU'}
+              </Text>
+              {!productKeyword.trim() && (
+                <Button
+                  mode="outlined"
+                  onPress={loadProducts}
+                  testID="qi-label-qc-create-sku-empty-retry-button"
+                >
+                  重新加载
+                </Button>
+              )}
             </View>
           ) : (
             <ScrollView
@@ -546,7 +556,7 @@ export default function QILabelQcCreateScreen() {
               testID="qi-label-qc-create-sku-results-scroll"
             >
               {filteredProducts.map((product) => {
-                const code = (product as ProductWithCode).code ?? product.productCode ?? '';
+                const code = product.code;
                 return (
                   <TouchableRipple
                     key={product.id}
@@ -569,7 +579,7 @@ export default function QILabelQcCreateScreen() {
                       <View style={styles.productText}>
                         <Text style={styles.productName}>{product.name}</Text>
                         <Text style={styles.productMeta}>
-                          {[product.unit, product.packageSpec].filter(Boolean).join(' · ') || '未配置规格'}
+                          {[product.unit, product.specification].filter(Boolean).join(' · ') || '未配置规格'}
                         </Text>
                       </View>
                       {selectedProduct?.id === product.id && (
@@ -764,7 +774,13 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     marginRight: 4,
   },
-  searchbar: { margin: 16, backgroundColor: QI_COLORS.card },
+  searchbar: { marginHorizontal: 16, marginTop: 16, marginBottom: 8, backgroundColor: QI_COLORS.card },
+  modalScopeHint: {
+    marginHorizontal: 20,
+    marginBottom: 10,
+    fontSize: 12,
+    color: QI_COLORS.textSecondary,
+  },
   modalState: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: 30, gap: 14 },
   modalStateText: { fontSize: 14, color: QI_COLORS.textSecondary, textAlign: 'center' },
   productRow: {
