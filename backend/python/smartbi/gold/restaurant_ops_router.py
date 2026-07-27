@@ -268,7 +268,10 @@ def _has_explicit_sales_period_pair(query: str) -> bool:
     pairs = (
         (("昨天", "昨日"), ("前天", "前日", "前一天", "前一日")),
         (("今天", "今日"), ("昨天", "昨日")),
-        (("本周", "这周", "本星期", "这星期"), ("上周", "上星期", "上个星期")),
+        (
+            ("本周", "这周", "本星期", "这星期", "这个星期"),
+            ("上周", "上星期", "上个星期"),
+        ),
         (("本月", "这个月", "当月"), ("上个月", "上月")),
         (("上个月", "上月"), ("上上个月", "上上月")),
         (("上周", "上星期", "上个星期"), ("上上周", "上上星期", "上上个星期")),
@@ -403,6 +406,9 @@ def ranking_limit(query: "Optional[str]", default: int = 5) -> int:
         else:
             value = default
     return max(1, min(value, 20))
+
+
+_ranking_limit_from_query = ranking_limit
 
 
 def ranking_exclusions(query: "Optional[str]") -> list[str]:
@@ -1903,7 +1909,10 @@ def _resolve_sales_date_range(
             start, end = _previous_calendar_month(anchor, 2)
             return (start, end), "上上个月"
 
-    if any(token in text for token in ("本周", "这周", "本星期", "这星期")):
+    if any(
+        token in text
+        for token in ("本周", "这周", "本星期", "这星期", "这个星期")
+    ):
         return (anchor - timedelta(days=anchor.weekday()), anchor), "本周"
 
     if any(token in text for token in ("上周", "上星期", "上个星期")):
@@ -2016,7 +2025,10 @@ def _resolve_sales_comparison(
         return (start, end), "上个月", "previous_month"
 
     if (
-        any(token in text for token in ("本周", "这周", "本星期", "这星期"))
+        any(
+            token in text
+            for token in ("本周", "这周", "本星期", "这星期", "这个星期")
+        )
         and any(token in text for token in ("上周", "上星期", "上个星期"))
     ):
         this_monday = anchor - timedelta(days=anchor.weekday())
@@ -2048,7 +2060,8 @@ def _uses_relative_sales_window(query: Optional[str]) -> bool:
     return bool(
         _relative_period_match(text)
         or any(token in text for token in (
-            "今天", "今日", "本周", "这周", "本星期", "这星期", "本月", "这个月",
+            "今天", "今日", "本周", "这周", "本星期", "这星期", "这个星期",
+            "本月", "这个月",
             "昨天", "昨日", "前天", "前日", "前一天", "前一日", "上周", "上星期", "上个星期",
             "上个月", "上月", "上上个月", "上上月", "半年", "对比", "比较", "相比", "环比",
             "最近", "今年", "去年", "上半年", "下半年",
@@ -2484,6 +2497,10 @@ async def resolve_gross_margin(
     *, role: Optional[str] = None, query: Optional[str] = None,
     date_range: Optional[Tuple[Optional[date], Optional[date]]] = None,
     dish_mention: Optional[str] = None,
+    requested_metrics: Sequence[str] = (),
+    analysis_action: Optional[str] = None,
+    ranking_direction: Optional[str] = None,
+    ranking_limit: Optional[int] = None,
 ) -> OpsAnswer:
     """Cross-module gross margin analysis: POS sold_price × recipe food_cost.
 
@@ -2502,8 +2519,21 @@ async def resolve_gross_margin(
     参数, resolve_by_code 的签名过滤把 role 静默丢弃, 任何角色都能拿到未
     脱敏金额。非价格角色现在拿到诚实披露 + 非金额替代入口, 不出金额。
     """
+    query_text = query or ""
+    resolved_ranking_direction = (
+        ranking_direction or dish_ranking_direction(query_text)
+    )
+    requested_metric_set = {
+        value for value in requested_metrics if isinstance(value, str)
+    }
+    quantity_only_ranking = bool(
+        requested_metric_set
+        and requested_metric_set.issubset({"sales_volume"})
+        and resolved_ranking_direction
+    )
     from smartbi_compat._rbac_strip import PRICE_VIEW_ROLES
-    if not (bool(role) and role in PRICE_VIEW_ROLES):
+    can_view_prices = bool(role) and role in PRICE_VIEW_ROLES
+    if not can_view_prices and not quantity_only_ranking:
         return OpsAnswer(
             code="RESTAURANT_OPS_GROSS_MARGIN",
             title="菜品毛利分析",
@@ -2516,7 +2546,6 @@ async def resolve_gross_margin(
             kpis=[],
             meta={"rbac_masked": True},
         )
-    query_text = query or ""
     prohibited_actions_requested = any(token in query_text for token in (
         "先不要做", "不要做", "先别做", "不该做", "避免做", "暂时别",
     ))
@@ -2671,6 +2700,33 @@ async def resolve_gross_margin(
             _range_text(exact_start, exact_end)
             if exact_start and exact_end else f"近 {analysis_days} 天"
         )
+        if resolved_ranking_direction:
+            requested_rank_limit = (
+                max(1, min(int(ranking_limit), 20))
+                if isinstance(ranking_limit, int) and not isinstance(ranking_limit, bool)
+                else _ranking_limit_from_query(query_text)
+            )
+            return OpsAnswer(
+                code="RESTAURANT_OPS_GROSS_MARGIN",
+                title="菜品销量排行（暂无销售数据）",
+                answer_text=(
+                    f"{requested_window}没有可用于菜品销量排行的销售记录，"
+                    "本次没有改成毛利分析，也没有用其他时间范围代替。\n"
+                    "请确认 POS 菜品销售明细已经同步后再试。"
+                ),
+                charts=[],
+                kpis=[],
+                meta={
+                    "dish_ranking": resolved_ranking_direction,
+                    "ranking_limit": requested_rank_limit,
+                    "window_days": analysis_days,
+                    "no_pos_data": True,
+                    "window_start": _date_text(exact_start) if exact_start else None,
+                    "window_end": _date_text(exact_end) if exact_end else None,
+                    "ranked_entities": [],
+                    "focus_entity": None,
+                },
+            )
         return OpsAnswer(
             code="RESTAURANT_OPS_GROSS_MARGIN",
             title=f"菜品毛利分析 ({requested_window})",
@@ -2695,12 +2751,16 @@ async def resolve_gross_margin(
     # Sheet 7/22 扫雷 R14: 「哪道菜卖得最差/最好」此前只有 Java 报表工具
     # (依赖上传的商品销量报表, DEMO 无数据 → 死胡同)。POS 行就在手上, 按
     # 销量直接排; 不涉及成本, 不需要毛利覆盖。
-    ranking_direction = (
-        dish_ranking_direction(query_text)
+    resolved_ranking_direction = (
+        resolved_ranking_direction
         if not dish_scope_row and len(dish_candidates) < 2 else None
     )
-    if ranking_direction:
-        requested_rank_limit = ranking_limit(query_text)
+    if resolved_ranking_direction:
+        requested_rank_limit = (
+            max(1, min(int(ranking_limit), 20))
+            if isinstance(ranking_limit, int) and not isinstance(ranking_limit, bool)
+            else _ranking_limit_from_query(query_text)
+        )
         explicit_exclusions = ranking_exclusions(query_text)
         rankable_rows = []
         exclusion_reasons: Dict[str, int] = {}
@@ -2732,7 +2792,7 @@ async def resolve_gross_margin(
                 ),
                 charts=[], kpis=[],
                 meta={
-                    "dish_ranking": ranking_direction,
+                    "dish_ranking": resolved_ranking_direction,
                     "ranking_limit": requested_rank_limit,
                     "excluded_entities": explicit_exclusions,
                     "window_label": window_label,
@@ -2746,20 +2806,24 @@ async def resolve_gross_margin(
 
         ranked = sorted(
             rankable_rows, key=lambda r: float(r["total_qty"] or 0),
-            reverse=(ranking_direction == "best"),
+            reverse=(resolved_ranking_direction == "best"),
         )
-        rank_label = "卖得最好" if ranking_direction == "best" else "卖得最差"
+        rank_label = (
+            "卖得最好" if resolved_ranking_direction == "best" else "卖得最差"
+        )
         lines = [
             f"**{window_label}菜品销量排行（{rank_label}前 {requested_rank_limit}）：**",
             "",
         ]
         for idx, r in enumerate(ranked[:requested_rank_limit], 1):
             dish_label = f"**{r['dish_name']}**" if idx == 1 else r["dish_name"]
-            lines.append(
+            line = (
                 f"{idx}. {dish_label} — 销量 "
-                f"{_format_sales_quantity(r['total_qty'])} 份、"
-                f"营收 ¥{float(r['total_revenue'] or 0):,.2f}"
+                f"{_format_sales_quantity(r['total_qty'])} 份"
             )
+            if can_view_prices:
+                line += f"、营收 ¥{float(r['total_revenue'] or 0):,.2f}"
+            lines.append(line)
         note = (
             f"，已剔除 {excluded} 个附属/基础项（米饭、包装、餐具、纸巾等）"
             if excluded > 0 else ""
@@ -2775,8 +2839,11 @@ async def resolve_gross_margin(
                 "name": row["dish_name"],
                 "rank": index,
                 "sales_volume": float(row["total_qty"] or 0),
-                "revenue": float(row["total_revenue"] or 0),
                 "bill_count": int(row["bills"] or 0),
+                **(
+                    {"revenue": float(row["total_revenue"] or 0)}
+                    if can_view_prices else {}
+                ),
             }
             for index, row in enumerate(ranked[:requested_rank_limit], 1)
         ]
@@ -2786,7 +2853,7 @@ async def resolve_gross_margin(
             answer_text="\n".join(lines),
             charts=[], kpis=[],
             meta={
-                "dish_ranking": ranking_direction,
+                "dish_ranking": resolved_ranking_direction,
                 "ranking_limit": requested_rank_limit,
                 "excluded_entities": explicit_exclusions,
                 "window_label": window_label,

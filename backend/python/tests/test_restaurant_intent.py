@@ -38,6 +38,7 @@ from smartbi.gold.restaurant_intent import (
     _explicit_sales_period_comparison_spec,
     _explicit_store_dish_ranking_spec,
     _explicit_store_operations_spec,
+    _semantic_spec_from_t3,
     _trusted_context_dish_followup_spec,
     _verbatim_entity,
 )
@@ -1916,6 +1917,118 @@ def test_sheet_dish_question_repairs_wrong_llm_summary_intent_before_execution()
     assert spec.planner_authority == "llm_contract_repair"
 
 
+def test_generic_dish_sales_ranking_defaults_to_descending_without_becoming_margin():
+    spec = _build_spec(
+        "RESTAURANT_OPS_SALES_SUMMARY",
+        "上个月全部门店菜品销量排名",
+        confidence=0.97,
+        tier="llm",
+        llm_requested_metrics=("sales_volume",),
+        llm_dimensions=("dish",),
+        llm_analysis_action="lookup",
+        llm_store_scope="all",
+        planner_authority="llm",
+        llm_semantics_authoritative=True,
+    )
+
+    assert spec.intent == "RESTAURANT_OPS_GROSS_MARGIN"
+    assert spec.planned_intents == ("RESTAURANT_OPS_GROSS_MARGIN",)
+    assert spec.requested_metrics == ("sales_volume",)
+    assert spec.ranking_direction == "best"
+    assert spec.window_label == "上个月"
+    assert spec.store_scope == "all"
+
+
+def test_explicit_revenue_optimization_repairs_adjacent_llm_report_choice():
+    spec = _semantic_spec_from_t3(
+        {
+            "intent": "RESTAURANT_OPS_SALES_SUMMARY",
+            "time_range": {"type": "named", "value": "this_week"},
+            "wants_margin": False,
+            "asks_profitability": False,
+            "requested_metrics": ["revenue"],
+            "analysis_action": "lookup",
+            "dimensions": [],
+            "dish": None,
+            "store": None,
+            "stores": [],
+            "store_scope": "all",
+            "confidence": 0.96,
+            "clarification_needed": False,
+            "missing_fields": [],
+            "clarification_question": None,
+            "clarification_options": [],
+        },
+        "这周全部门店营收怎么提高",
+    )
+
+    assert spec.intent == "RESTAURANT_OPS_BUSINESS_OPTIMIZATION"
+    assert spec.planned_intents == ("RESTAURANT_OPS_BUSINESS_OPTIMIZATION",)
+    assert spec.analysis_action == "optimize"
+    assert spec.requested_metrics == ("revenue",)
+
+
+def test_explicit_daily_revenue_chart_repairs_summary_to_trend_plan():
+    spec = _semantic_spec_from_t3(
+        {
+            "intent": "RESTAURANT_OPS_SALES_SUMMARY",
+            "time_range": {"type": "named", "value": "this_month"},
+            "wants_margin": False,
+            "asks_profitability": False,
+            "requested_metrics": ["revenue"],
+            "analysis_action": "lookup",
+            "dimensions": ["time"],
+            "dish": None,
+            "store": None,
+            "stores": [],
+            "store_scope": "all",
+            "confidence": 0.97,
+            "clarification_needed": False,
+            "missing_fields": [],
+            "clarification_question": None,
+            "clarification_options": [],
+        },
+        "生成本月全部门店营业额趋势图，按天，画二次拟合和计划线",
+    )
+
+    assert spec.intent == "RESTAURANT_OPS_TREND_ANALYSIS"
+    assert spec.planned_intents == ("RESTAURANT_OPS_TREND_ANALYSIS",)
+    assert spec.dimensions == ("time",)
+    assert spec.requested_metrics == ("revenue",)
+
+
+def test_explicit_two_period_comparison_keeps_both_windows_even_if_llm_selects_trend():
+    spec = _semantic_spec_from_t3(
+        {
+            "intent": "RESTAURANT_OPS_TREND_ANALYSIS",
+            "time_range": {"type": "named", "value": "today"},
+            "wants_margin": False,
+            "asks_profitability": False,
+            "requested_metrics": ["revenue"],
+            "analysis_action": "lookup",
+            "dimensions": ["time"],
+            "dish": None,
+            "store": None,
+            "stores": [],
+            "store_scope": "all",
+            "confidence": 0.97,
+            "clarification_needed": False,
+            "missing_fields": [],
+            "clarification_question": None,
+            "clarification_options": [],
+        },
+        "昨天全部门店营业额比前天高还是低",
+    )
+
+    expected = _resolve_sales_query_spec("昨天全部门店营业额比前天高还是低")
+    assert spec.intent == "RESTAURANT_OPS_SALES_SUMMARY"
+    assert spec.planned_intents == ("RESTAURANT_OPS_SALES_SUMMARY",)
+    assert spec.analysis_action == "compare"
+    assert spec.date_range == expected.date_range
+    assert spec.comparison_range == expected.comparison_range
+    assert all(spec.comparison_range)
+
+
 def test_named_dish_sales_repairs_wrong_llm_intent_and_recovers_entity_slot():
     spec = _build_spec(
         "RESTAURANT_OPS_REQUISITION_TREND",
@@ -2861,13 +2974,15 @@ async def test_build_resolver_query_splices_profit_phrase_for_llm_only_detection
 
 # ─── 8. 2026-07-08 audit fixes (window ordering / vocab / contract scoping) ─
 
-def test_demo_acceptance_string_week_window_not_hijacked_by_today():
+@pytest.mark.parametrize("week_phrase", ["这周", "这个星期"])
+def test_demo_acceptance_string_week_window_not_hijacked_by_today(week_phrase):
     """Audit fix A-1: the LITERAL Phase-1 acceptance query — the trailing
     action clause "今天先做哪几个动作" must not hijack the data window away
     from 本周. (The earlier regression test used a truncated string and
     missed this; 今天 branch now runs AFTER all week/month branches.)"""
     (start, end), label = _resolve_sales_date_range(
-        "这周营收比上周差在哪里，今天先做哪几个动作", today=date(2026, 7, 7),
+        f"{week_phrase}营收比上周差在哪里，今天先做哪几个动作",
+        today=date(2026, 7, 7),
     )
     assert label == "本周"
     assert start == date(2026, 7, 6) and end == date(2026, 7, 7)

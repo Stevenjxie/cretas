@@ -65,14 +65,14 @@ _RESOLVER_DIMENSIONS = {
         {"store", "dish", "ingredient", "channel", "customer", "time"}
     ),
     "RESTAURANT_OPS_CHANNEL_MIX": frozenset({"channel"}),
-    "RESTAURANT_OPS_GROSS_MARGIN": frozenset({"dish"}),
+    "RESTAURANT_OPS_GROSS_MARGIN": frozenset({"dish", "time"}),
     "RESTAURANT_OPS_RECIPE_COST": frozenset({"dish"}),
     "RESTAURANT_OPS_STORE_MARGIN": frozenset({"store", "dish"}),
     "RESTAURANT_OPS_WASTAGE_TOP": frozenset({"ingredient"}),
     "RESTAURANT_OPS_STOCK_SHORTAGE": frozenset({"ingredient"}),
     "RESTAURANT_OPS_REQUISITION_TREND": frozenset({"ingredient"}),
     "RESTAURANT_OPS_SALES_SUMMARY": frozenset(),
-    "RESTAURANT_OPS_TREND_ANALYSIS": frozenset(),
+    "RESTAURANT_OPS_TREND_ANALYSIS": frozenset({"time"}),
     "RESTAURANT_OPS_INVENTORY_WARNING": frozenset({"ingredient"}),
     "RESTAURANT_OPS_STAFFING_ADVICE": frozenset(),
 }
@@ -341,7 +341,14 @@ def _resolver_kwargs(
     role: Optional[str],
     query: str,
 ) -> Dict[str, Any]:
-    kwargs: Dict[str, Any] = {"role": role, "query": query}
+    kwargs: Dict[str, Any] = {
+        "role": role,
+        "query": query,
+        "requested_metrics": tuple(spec.requested_metrics),
+        "analysis_action": spec.analysis_action,
+        "ranking_direction": spec.ranking_direction,
+        "ranking_limit": spec.ranking_limit,
+    }
     start, end = spec.date_range
     if start is not None and end is not None and hasattr(end, "__sub__"):
         try:

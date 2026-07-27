@@ -431,7 +431,8 @@ def _detect_analysis_action(text: str) -> str:
         return "diagnose"
     if any(token in current for token in (
         "怎么优化", "如何优化", "优化", "改善", "怎么办", "怎么做",
-        "怎么提升", "如何提升", "提升", "下一步", "先做什么",
+        "怎么提升", "如何提升", "提升", "怎么提高", "如何提高", "提高",
+        "下一步", "先做什么",
     )):
         return "optimize"
     if _detect_comparison(current) or any(token in current for token in (
@@ -472,6 +473,8 @@ def _plan_requested_intents(
     requested_metrics: Tuple[str, ...],
     dimensions: Tuple[str, ...],
     store_scope: Optional[str],
+    analysis_action: str,
+    comparison: Optional[str],
 ) -> Tuple[str, ...]:
     """Build a deterministic, deduplicated multi-resolver plan.
 
@@ -492,6 +495,18 @@ def _plan_requested_intents(
         "RESTAURANT_OPS_CHANNEL_MIX",
     }:
         return (selected_code,)
+
+    # The LLM is the semantic authority, but an explicit action word in the
+    # user's own sentence is an immutable slot.  A broad "营收怎么提高" request
+    # must use the multi-dimension optimisation capability even if the model's
+    # adjacent raw label says SALES_SUMMARY.  Named/scoped dish optimisation
+    # remains on the dish resolver, which owns that entity grain.
+    if (
+        analysis_action == "optimize"
+        and "dish" not in dimensions
+        and "ingredient" not in dimensions
+    ):
+        return ("RESTAURANT_OPS_BUSINESS_OPTIMIZATION",)
 
     planned: List[str] = []
     has_revenue_scope = any(metric in requested_metrics for metric in ("revenue", "orders"))
@@ -562,7 +577,16 @@ def _plan_requested_intents(
                 )
             elif "store" in dimensions:
                 code = "RESTAURANT_OPS_STORE_MARGIN"
-            elif selected_code == "RESTAURANT_OPS_TREND_ANALYSIS":
+            elif comparison:
+                code = "RESTAURANT_OPS_SALES_SUMMARY"
+            elif (
+                selected_code == "RESTAURANT_OPS_TREND_ANALYSIS"
+                or "time" in dimensions
+                or any(token in text for token in (
+                    "趋势", "走势", "曲线", "按天", "按日", "按周", "按月",
+                    "拟合", "参照线", "计划线", "预警线",
+                ))
+            ):
                 code = "RESTAURANT_OPS_TREND_ANALYSIS"
             else:
                 code = "RESTAURANT_OPS_SALES_SUMMARY"
@@ -741,9 +765,31 @@ def _structured_followup_context(parent: Dict[str, Any]) -> Dict[str, Any]:
         topic_kind = context.get("topic_kind")
         if topic_kind not in {"dish_ranking", "store_ranking"}:
             topic_kind = None
+        comparison_kind = context.get("comparison_kind")
+        if comparison_kind not in {
+            "previous_day",
+            "previous_week",
+            "previous_month",
+            "previous_year",
+            "previous_period",
+            "wow",
+            "mom",
+            "yoy",
+        }:
+            comparison_kind = None
+        comparison_label = context.get("comparison_label")
+        safe_comparison_label = (
+            comparison_label.strip()[:40]
+            if (
+                comparison_kind
+                and isinstance(comparison_label, str)
+                and comparison_label.strip()
+            )
+            else None
+        )
         if (
             safe_entity or metrics or safe_window or ranking_direction
-            or store_scope or topic_kind
+            or store_scope or topic_kind or comparison_kind
         ):
             return {
                 "focus_entity": safe_entity,
@@ -756,6 +802,8 @@ def _structured_followup_context(parent: Dict[str, Any]) -> Dict[str, Any]:
                     }
                     else "lookup"
                 ),
+                "comparison_kind": comparison_kind,
+                "comparison_label": safe_comparison_label,
                 "topic_kind": topic_kind,
                 "ranking_direction": ranking_direction,
                 "ranking_limit": ranking_count,
@@ -805,7 +853,7 @@ def _strip_followup_reference(text: str) -> str:
 _TIME_SLOT_ONLY_PATTERN = re.compile(
     r"^(?:"
     r"今天|今日|昨天|昨日|前天|前日|前一天|前一日|"
-    r"本周|这周|本星期|这星期|上周|上星期|上个星期|"
+    r"本周|这周|本星期|这星期|这个星期|上周|上星期|上个星期|"
     r"本月|这个月|上个月|上月|上上个月|上上月|"
     r"今年|去年|上半年|下半年|半年|"
     r"(?:最近|近|过去)\s*[0-9一二两三四五六七八九十俩仨]{0,4}\s*"
@@ -1356,6 +1404,7 @@ def _build_spec(
     planner_authority: Optional[str] = None,
     require_explicit_time: bool = False,
     llm_semantics_authoritative: bool = False,
+    allow_explicit_slot_repair: bool = True,
 ) -> RestaurantQuerySpec:
     """Compose the final QuerySpec: deterministic slots ALWAYS recomputed
     fresh against `query` + today's date, regardless of which tier picked
@@ -1383,6 +1432,16 @@ def _build_spec(
         if llm_requested_metrics is not None
         else _detect_requested_metrics(effective_query)
     )
+    explicit_requested_metrics = (
+        _detect_requested_metrics(effective_query)
+        if llm_semantics_authoritative and allow_explicit_slot_repair
+        else ()
+    )
+    if explicit_requested_metrics:
+        # The model decides the overall meaning.  Exact metric words written by
+        # the user remain the execution contract, especially after a button
+        # continuation where a later model call may omit the original metric.
+        requested_metrics = explicit_requested_metrics
     if llm_semantics_authoritative:
         wants_margin = bool(llm_wants_margin)
         asks_profitability = bool(llm_asks_profitability)
@@ -1429,7 +1488,6 @@ def _build_spec(
         store_scope = llm_store_scope
     elif store_slots and not store_scope:
         store_scope = "single" if len(store_slots) == 1 else "multiple"
-    ranking_direction = _detect_ranking_direction(effective_query)
     dimension_list = list(
         llm_dimensions
         if llm_dimensions is not None
@@ -1451,6 +1509,42 @@ def _build_spec(
         dimension_list.remove("store")
     dimensions = tuple(dimension_list)
     comparison = sales_spec.comparison_kind or _detect_comparison(effective_query)
+    if comparison and "time" in dimensions:
+        # Two explicit windows are immutable filters/baselines, not a request
+        # to group the output by time. Keeping ``time`` here makes the correct
+        # sales-comparison resolver fail its capability check.
+        dimensions = tuple(value for value in dimensions if value != "time")
+    if llm_semantics_authoritative:
+        llm_action = (
+            llm_analysis_action
+            if llm_analysis_action in _SEMANTIC_ACTIONS
+            else "lookup"
+        )
+        explicit_action = (
+            _detect_analysis_action(effective_query)
+            if allow_explicit_slot_repair
+            else "lookup"
+        )
+        analysis_action = (
+            explicit_action if explicit_action != "lookup" else llm_action
+        )
+    else:
+        analysis_action = (
+            llm_analysis_action
+            if llm_analysis_action in _SEMANTIC_ACTIONS
+            else _detect_analysis_action(effective_query)
+        )
+    ranking_direction = _detect_ranking_direction(effective_query)
+    if (
+        ranking_direction is None
+        and "sales_volume" in requested_metrics
+        and "dish" in dimensions
+        and re.search(r"排名|排行|榜单|销售榜|销量榜", effective_query)
+    ):
+        # A generic ranking without "最好/最差" follows the conventional
+        # descending Top-N interpretation.  This is formatting of an already
+        # LLM-selected dish-sales plan, not a keyword route decision.
+        ranking_direction = "best"
     requested_ranking_limit = ranking_limit(effective_query)
     excluded_entities = tuple(ranking_exclusions(effective_query))
     planned_intents = _plan_requested_intents(
@@ -1459,6 +1553,8 @@ def _build_spec(
         requested_metrics,
         dimensions,
         store_scope,
+        analysis_action,
+        comparison,
     )
     unsupported_requirements = tuple(
         requirement
@@ -1470,18 +1566,6 @@ def _build_spec(
         for requirement in requested_metrics
         if requirement not in _UNSUPPORTED_REQUIREMENTS
     )
-    if llm_semantics_authoritative:
-        analysis_action = (
-            llm_analysis_action
-            if llm_analysis_action in _SEMANTIC_ACTIONS
-            else "lookup"
-        )
-    else:
-        analysis_action = (
-            llm_analysis_action
-            if llm_analysis_action in _SEMANTIC_ACTIONS
-            else _detect_analysis_action(effective_query)
-        )
     effective_planner_authority = (
         planner_authority
         or ("llm" if tier == "llm" else "deterministic_guard")
@@ -2918,6 +3002,19 @@ def _build_t3_prompt(
                     turns.append(f"用户: {question}")
                 if answer:
                     turns.append(f"你(已回答): {answer}")
+                safe_context = _structured_followup_context({
+                    "structured_context": turn.get("context"),
+                })
+                if safe_context:
+                    compact_context = {
+                        key: value
+                        for key, value in safe_context.items()
+                        if value not in (None, (), [])
+                    }
+                    turns.append(
+                        "已确认的安全上下文槽位: "
+                        + json.dumps(compact_context, ensure_ascii=False)
+                    )
                 continue
             role = turn.get("role")
             content = str(turn.get("content") or "").strip()[:500]
@@ -2975,6 +3072,14 @@ def _build_t3_prompt(
         '"stores": [], "store_scope": "all", "confidence": 0.99, '
         '"clarification_needed": false, "missing_fields": [], '
         '"clarification_question": null, "clarification_options": []}\n'
+        '示例6: "库存"（用户点击经营指标里的“库存”）-> '
+        '{"intent": "RESTAURANT_OPS_INVENTORY_WARNING", "time_range": null, '
+        '"wants_margin": false, "asks_profitability": false, '
+        '"requested_metrics": [], "analysis_action": "lookup", '
+        '"dimensions": ["ingredient"], "comparison": null, "dish": null, "store": null, '
+        '"stores": [], "store_scope": null, "confidence": 0.95, '
+        '"clarification_needed": false, "missing_fields": [], '
+        '"clarification_question": null, "clarification_options": []}\n'
         '示例2: "情况怎么样" (完全没有可判断的对象/指标) -> '
         '{"intent": null, "time_range": null, "wants_margin": false, '
         '"asks_profitability": false, "requested_metrics": [], '
@@ -3014,6 +3119,8 @@ def _build_t3_prompt(
         "只有缺少会改变结果的必要信息时 clarification_needed 才为 true；"
         "time_range 为空且所选分析依赖时间时应追问时间。多门店账号的营收、销量、毛利、"
         "订单、诊断或优化若未指定门店范围，应追问门店；但询问门店数量/名单时绝不能追问时间或门店范围。\n"
+        "5b. “库存”或“库存预警”默认查看最新库存快照，不依赖时间，不能追问本月/最近几天，"
+        "也不能再反问营收、毛利还是库存；明确出现盘亏、盘盈、账实差时才选择 STOCK_SHORTAGE。\n"
         "6. 每次最多追问一个最关键缺项。missing_fields 只能从 metric、object、time_range、"
         "store_scope 中选；clarification_options 必须是简短可直接点击的回答。"
         "门店选项只能使用“全部门店”或上面真实门店列表中的原名；时间选项只能使用"
@@ -3080,6 +3187,31 @@ def _verbatim_entity(value: Any, query: str) -> Optional[str]:
 
 _SEMANTIC_MISSING_FIELDS = frozenset({"metric", "object", "time_range", "store_scope"})
 _SEMANTIC_TIME_OPTIONS = ("本月", "上个月", "最近7天", "最近30天")
+
+
+def _is_explicit_store_directory_query(query: str) -> bool:
+    """Recognize only zero-ambiguity store-count/list questions.
+
+    The LLM is still called first. This predicate is a post-LLM contract
+    compiler guard: a complete model response may not turn an explicit
+    directory object into an unrelated metric clarification.
+    """
+    text = re.sub(r"[\s，,。！？?!；;：:]+", "", query or "")
+    subject = r"(?:(?:我们|我|咱们)(?:现在|目前|当前)?|现在|目前|当前)?"
+    return bool(
+        re.fullmatch(
+            subject + r"(?:一共|总共)?(?:有)?(?:多少|几)家(?:门店|店|分店)(?:呢|吗)?",
+            text,
+        )
+        or re.fullmatch(
+            subject + r"(?:有)?(?:哪些|哪几家)(?:门店|店|分店)(?:呢|吗)?",
+            text,
+        )
+        or re.fullmatch(
+            subject + r"(?:门店|店铺|分店)(?:名单|列表)(?:是什么|有哪些)?(?:呢|吗)?",
+            text,
+        )
+    )
 
 
 def _validated_llm_store_names(
@@ -3242,12 +3374,14 @@ def _semantic_spec_from_t3(
             planner_authority="llm_contract_incomplete",
             require_explicit_time=True,
             llm_semantics_authoritative=True,
+            allow_explicit_slot_repair=False,
             is_continuation=is_continuation,
         )
 
     code = parsed.get("intent")
     if code not in _VALID_CODES:
         code = ""
+    raw_code = code
     try:
         confidence = float(parsed.get("confidence") or 0.0)
     except (TypeError, ValueError):
@@ -3280,7 +3414,27 @@ def _semantic_spec_from_t3(
     store_names = _validated_llm_store_names(parsed, query, available_stores)
     if store_names and not store_scope:
         store_scope = "single" if len(store_names) == 1 else "multiple"
-    if code == "RESTAURANT_OPS_STORE_DIRECTORY":
+    explicit_store_directory = _is_explicit_store_directory_query(query)
+    store_directory_contract_repair = bool(
+        explicit_store_directory
+        and (
+            raw_code != "RESTAURANT_OPS_STORE_DIRECTORY"
+            or requested_metrics
+            or dimensions != ("store",)
+            or analysis_action != "lookup"
+            or store_scope != "all"
+            or parsed.get("clarification_needed")
+        )
+    )
+    if explicit_store_directory:
+        code = "RESTAURANT_OPS_STORE_DIRECTORY"
+        confidence = max(confidence, 0.99)
+        requested_metrics = ()
+        dimensions = ("store",)
+        analysis_action = "lookup"
+        store_scope = "all"
+        store_names = ()
+    elif code == "RESTAURANT_OPS_STORE_DIRECTORY":
         store_scope = "all"
         analysis_action = "lookup"
     elif code == "RESTAURANT_OPS_BUSINESS_OPTIMIZATION":
@@ -3297,12 +3451,20 @@ def _semantic_spec_from_t3(
     )
     if not code or confidence < _T3_MIN_CONFIDENCE:
         clarification_needed = True
+    if explicit_store_directory:
+        clarification_needed = False
+        clarification_question = None
+        clarification_options = ()
     if clarification_needed and not clarification_question:
         clarification_question = "我还缺一个关键信息，能再具体说一下这次想看什么吗？"
 
     time_phrase = _parse_t3_time_range(parsed.get("time_range"))
     wants_margin = bool(parsed.get("wants_margin"))
     asks_profitability = bool(parsed.get("asks_profitability"))
+    if explicit_store_directory:
+        time_phrase = ""
+        wants_margin = False
+        asks_profitability = False
     dish = _verbatim_entity(parsed.get("dish"), query)
     primary_store = store_names[0] if len(store_names) == 1 else None
     return _build_spec(
@@ -3325,7 +3487,11 @@ def _semantic_spec_from_t3(
         llm_store_scope=store_scope,
         store_options=available_stores,
         clarification_options=clarification_options,
-        planner_authority="llm",
+        planner_authority=(
+            "llm_contract_repair"
+            if store_directory_contract_repair
+            else "llm"
+        ),
         require_explicit_time=True,
         llm_semantics_authoritative=True,
     )
@@ -3424,57 +3590,29 @@ async def parse_restaurant_query(
                 history=history,
                 semantic_first=semantic_first,
             )
-            already_clarifying = bool(
-                continued is not None and continued.clarification_needed
-            )
             continued = await _apply_store_scope_guard(pool, factory_id, continued)
             combined_query = (
                 f"{pending.get('original_query') or ''} {norm_query}".strip()
             )
-            # A dependent named-dish action can consume the original pending
-            # clarification while still legitimately needing the same time
-            # slot.  Persist the enriched deterministic seed (for example
-            # "米饭的销量怎么优化") so the next button answer continues that
-            # exact dish/metric/action contract instead of becoming a fresh
-            # generic query.  Keep this deliberately narrow: only the trusted
-            # named-dish compiler may re-arm a time clarification here.
             if (
                 continued is not None
                 and continued.clarification_needed
                 and continued.is_clarification_continuation
-                and continued.planner_authority == "explicit_named_dish_slots"
-                and continued.clarification_question == TIME_CLARIFICATION_QUESTION
-                and continued.resolver_query_seed
             ):
+                # Each turn atomically consumes one pending row.  If the LLM
+                # truthfully asks for another missing slot, register the sealed
+                # accumulated task again so the next answer remains a
+                # continuation.  The prompt/history stays capped at 20 turns
+                # and the shared row still expires by TTL; this removes the
+                # former one-hop limit without creating unbounded chat state.
                 await _maybe_register_pending(
                     pool,
-                    continued.resolver_query_seed,
-                    continued,
-                    factory_id,
-                    session_key,
-                )
-            if (
-                continued is not None
-                and continued.clarification_needed
-                and (
                     (
-                        not already_clarifying
-                        and continued.clarification_question
-                        == STORE_SCOPE_CLARIFICATION_QUESTION
-                    )
-                    or (
-                        already_clarifying
-                        and _is_read_only_ranking_action_seed(combined_query)
-                        and (
-                            _is_pure_store_scope_answer(norm_query)
-                            or _requests_read_only_ranking(norm_query)
-                        )
-                    )
-                )
-            ):
-                await _maybe_register_pending(
-                    pool,
-                    combined_query,
+                        combined_query
+                        if continued.planner_authority
+                        == "explicit_action_read_choice"
+                        else continued.resolver_query_seed or combined_query
+                    ),
                     continued,
                     factory_id,
                     session_key,
@@ -3875,9 +4013,10 @@ async def _parse_continuation(
     is a fixed time/store button continuing a reviewed exact phrase.
 
     Never touches `_ROUTE_CACHE` (a routing decision cached under a single
-    utterance would not reflect this two-turn context) and never registers
-    a NEW pending entry regardless of outcome (continuation is capped at one
-    hop -- the caller already popped/consumed the entry that got us here).
+    utterance would not reflect this accumulated context). The caller
+    atomically consumes one pending row and may register the returned sealed
+    clarification as the next missing slot; recent prompt history is capped at
+    20 turns and pending state remains TTL-bound.
     """
     original_query = pending.get("original_query") or ""
     clarification_question = pending.get("clarification_question")

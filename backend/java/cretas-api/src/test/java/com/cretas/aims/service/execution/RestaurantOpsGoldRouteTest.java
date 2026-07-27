@@ -782,8 +782,8 @@ class RestaurantOpsGoldRouteTest {
     }
 
     @Test
-    @DisplayName("explicit comprehensive restaurant analysis reaches synthesis before tiered planner")
-    void comprehensiveAnalysisBypassesSingleIntentPlanner() {
+    @DisplayName("tiered-first semantic planner precedes comprehensive and owner-action heuristics")
+    void semanticPlannerPrecedesLegacyRestaurantHeuristics() {
         TieredIntentDelegate delegate = mock(TieredIntentDelegate.class);
         RestaurantGrossMarginChatRouteSelector boundedSelector =
                 mock(RestaurantGrossMarginChatRouteSelector.class);
@@ -791,118 +791,72 @@ class RestaurantOpsGoldRouteTest {
         ReflectionTestUtils.setField(orchestrator, "tieredIntentDelegate", delegate);
         ReflectionTestUtils.setField(
                 orchestrator, "restaurantGrossMarginChatRouteSelector", boundedSelector);
-        when(boundedSelector.select(anyString(), anyString(), anyString()))
-                .thenReturn(Optional.of(IntentExecuteResponse.builder()
-                        .intentRecognized(true)
-                        .intentCode("RESTAURANT_OPS_SALES_SUMMARY")
-                        .status("SUCCESS")
-                        .message("不应抢答的单维营收结果")
-                        .build()));
-
-        AIIntentConfig synthesis = AIIntentConfig.builder()
-                .intentCode("COMPREHENSIVE_SYNTHESIS")
-                .intentName("综合多维分析")
-                .intentCategory("SMARTBI")
-                .toolName("restaurant_comprehensive_synthesis_gold")
-                .businessType("RESTAURANT")
-                .build();
-        when(aiIntentService.getIntentByCode(eq("DEMO_REST"), eq("COMPREHENSIVE_SYNTHESIS")))
-                .thenReturn(Optional.empty());
-        when(aiIntentService.getIntentByCode(eq("COMPREHENSIVE_SYNTHESIS")))
-                .thenReturn(Optional.of(synthesis));
-        when(aiIntentService.hasPermission(eq("COMPREHENSIVE_SYNTHESIS"), eq("admin")))
-                .thenReturn(true);
-
-        ToolExecutor synthesisTool = mock(ToolExecutor.class);
-        when(toolRegistry.getExecutor("restaurant_comprehensive_synthesis_gold"))
-                .thenReturn(Optional.of(synthesisTool));
-        when(toolDispatchService.executeWithTool(
-                eq(synthesisTool),
+        when(delegate.tryDelegate(
                 eq("DEMO_REST"),
-                any(IntentExecuteRequest.class),
-                eq(synthesis),
-                eq(7L),
-                eq("admin"),
-                any()))
-                .thenReturn(IntentExecuteResponse.builder()
-                        .intentRecognized(true)
-                        .intentCode("COMPREHENSIVE_SYNTHESIS")
-                        .status("SUCCESS")
-                        .message("已按已有数据完成多维分析，缺失维度保持为空。")
-                        .resultData(Map.of("source", "deterministic_fallback"))
-                        .build());
+                any(),
+                any(),
+                eq("orchestrator_null_intent")))
+                .thenReturn(Map.of(
+                        "message", "已按可用经营数据完成诊断并给出提升方案。",
+                        "code", "RESTAURANT_OPS_BUSINESS_OPTIMIZATION",
+                        "charts", List.of(),
+                        "kpis", List.of(),
+                        "contractPass", true,
+                        "queryPlanHash", "plan-llm-first"));
 
-        String query = "请综合分析最近30天全部门店经营情况，结合客流、菜品销量、毛利、"
-                + "周边竞争、天气、活动、评价和排班给出建议";
+        for (String query : new String[]{
+                "请综合分析最近30天全部门店经营情况，结合客流、菜品销量、毛利、周边竞争、天气、活动、评价和排班给出建议",
+                "这周营收怎么提高",
+                "本月毛利下降，仓管、厨师长和前台分别要做什么"
+        }) {
+            IntentExecuteResponse response = orchestrator.execute(
+                    "DEMO_REST",
+                    IntentExecuteRequest.builder().userInput(query).mode("READ").build(),
+                    7L,
+                    "admin");
+
+            assertThat(response.getStatus()).isEqualTo("SUCCESS");
+            assertThat(response.getIntentCode())
+                    .isEqualTo("RESTAURANT_OPS_BUSINESS_OPTIMIZATION");
+            assertThat(response.getMessage()).contains("诊断").contains("提升方案");
+        }
+
+        verify(boundedSelector, never()).select(anyString(), anyString(), anyString());
+        verify(delegate, times(3)).tryDelegate(
+                eq("DEMO_REST"),
+                any(),
+                any(),
+                eq("orchestrator_null_intent"));
+        verify(toolDispatchService, never()).executeWithTool(
+                any(), anyString(), any(), any(), anyLong(), anyString(), any());
+    }
+
+    @Test
+    @DisplayName("explicit read veto stays ahead of both restaurant semantic runtimes")
+    void explicitReadVetoCannotBeExecutedBySemanticPlannerOrBoundedRuntime() {
+        TieredIntentDelegate delegate = mock(TieredIntentDelegate.class);
+        RestaurantGrossMarginChatRouteSelector boundedSelector =
+                mock(RestaurantGrossMarginChatRouteSelector.class);
+        ReflectionTestUtils.setField(orchestrator, "tieredFirstEnabled", true);
+        ReflectionTestUtils.setField(orchestrator, "tieredIntentDelegate", delegate);
+        ReflectionTestUtils.setField(
+                orchestrator, "restaurantGrossMarginChatRouteSelector", boundedSelector);
+        when(queryPreprocessorService.detectNegationVeto(any(), any()))
+                .thenReturn(QueryPreprocessorService.NegationKind.VETO_READ);
+
         IntentExecuteResponse response = orchestrator.execute(
                 "DEMO_REST",
-                IntentExecuteRequest.builder().userInput(query).mode("READ").build(),
-                7L,
-                "admin");
-        String dimensionsFollowup =
-                "结合客流、菜品、活动、天气、评价和排班分析峰值月原因";
-        IntentExecuteResponse followupResponse = orchestrator.execute(
-                "DEMO_REST",
-                IntentExecuteRequest.builder()
-                        .userInput(dimensionsFollowup)
-                        .sessionId("peak-month-followup")
-                        .mode("READ")
-                        .build(),
-                7L,
-                "admin");
-        String supplierQuestion = "最近30天青花椒南方百联店采购价格稳定吗？";
-        IntentExecuteResponse supplierResponse = orchestrator.execute(
-                "DEMO_REST",
-                IntentExecuteRequest.builder()
-                        .userInput(supplierQuestion)
-                        .mode("READ")
-                        .build(),
-                7L,
-                "admin");
-        String scopedVariation = "请分析最近30天青花椒徐汇光启城店的营收、"
-                + "菜品销售与活动背景，活动只作同期描述，不计算因果ROI";
-        IntentExecuteResponse scopedVariationResponse = orchestrator.execute(
-                "DEMO_REST",
-                IntentExecuteRequest.builder()
-                        .userInput(scopedVariation)
-                        .mode("READ")
-                        .build(),
+                IntentExecuteRequest.builder().userInput("别看订单").mode("READ").build(),
                 7L,
                 "admin");
 
-        assertThat(orchestrator.isRestaurantComprehensiveSynthesisQuestion(query)).isTrue();
-        assertThat(orchestrator.isRestaurantComprehensiveSynthesisQuestion(dimensionsFollowup)).isTrue();
-        assertThat(orchestrator.isRestaurantComprehensiveSynthesisQuestion(
-                "结合天气、客流和活动分析2026年3月营收高峰原因")).isTrue();
-        assertThat(orchestrator.isRestaurantComprehensiveSynthesisQuestion(
-                "本月全部门店招牌菜营业额是多少")).isFalse();
-        assertThat(orchestrator.isRestaurantComprehensiveSynthesisQuestion(
-                "分析最近30天排班")).isFalse();
-        assertThat(orchestrator.isRestaurantComprehensiveSynthesisQuestion(
-                "比较菜品销量和毛利")).isFalse();
-        assertThat(orchestrator.isRestaurantComprehensiveSynthesisQuestion(
-                supplierQuestion)).isTrue();
-        assertThat(orchestrator.isRestaurantComprehensiveSynthesisQuestion(
-                scopedVariation)).isTrue();
-        assertThat(response.getStatus()).isEqualTo("SUCCESS");
-        assertThat(response.getIntentCode()).isEqualTo("COMPREHENSIVE_SYNTHESIS");
-        assertThat(response.getMessage()).contains("多维分析").contains("缺失维度");
-        assertThat(followupResponse.getStatus()).isEqualTo("SUCCESS");
-        assertThat(followupResponse.getIntentCode()).isEqualTo("COMPREHENSIVE_SYNTHESIS");
-        assertThat(supplierResponse.getStatus()).isEqualTo("SUCCESS");
-        assertThat(supplierResponse.getIntentCode()).isEqualTo("COMPREHENSIVE_SYNTHESIS");
-        assertThat(scopedVariationResponse.getStatus()).isEqualTo("SUCCESS");
-        assertThat(scopedVariationResponse.getIntentCode()).isEqualTo("COMPREHENSIVE_SYNTHESIS");
+        assertThat(response.getStatus()).isEqualTo("NEED_CLARIFICATION");
+        assertThat(response.getIntentRecognized()).isFalse();
+        assertThat(response.getMessage()).contains("取消").contains("查询或处理什么");
+        verify(delegate, never()).tryDelegate(anyString(), any(), any(), anyString());
         verify(boundedSelector, never()).select(anyString(), anyString(), anyString());
-        verify(delegate, never()).tryDelegate(any(), any(), any(), any());
-        verify(toolDispatchService, times(4)).executeWithTool(
-                eq(synthesisTool),
-                eq("DEMO_REST"),
-                any(IntentExecuteRequest.class),
-                eq(synthesis),
-                eq(7L),
-                eq("admin"),
-                any());
+        verify(toolDispatchService, never()).executeWithTool(
+                any(), anyString(), any(), any(), anyLong(), anyString(), any());
     }
 
     @Test

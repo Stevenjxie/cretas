@@ -6,6 +6,7 @@ import asyncio
 import pytest
 
 import smartbi.gold.restaurant_playbook as pb
+from smartbi.gold.restaurant_intent import RestaurantQuerySpec
 from smartbi.gold.restaurant_ops_router import (
     match_restaurant_ops,
     reconcile_restaurant_ops_code,
@@ -87,17 +88,40 @@ def test_content_has_no_internal_identifiers_or_fabricated_citations():
 
 
 @pytest.mark.asyncio
-async def test_tiered_serves_playbook_directly(monkeypatch):
-    """R16b: 反转后委托路径无 resolve_by_code 兜底 — tiered 必须直答 playbook
-    (零 DB), 且解析器仍不运行。"""
+async def test_tiered_playbook_uses_llm_plan_then_serves_without_db(monkeypatch):
+    """LLM-first still executes the curated playbook without touching tenant data."""
     import smartbi.gold.restaurant_intent_service as svc
 
-    async def _boom(*a, **kw):
-        raise AssertionError("tiered parser must not run for explicit playbook phrases")
+    planner_calls = []
 
-    monkeypatch.setattr(svc, "parse_restaurant_query", _boom)
+    async def _llm_playbook_plan(query, *args, **kwargs):
+        planner_calls.append((query, kwargs.get("semantic_first")))
+        return RestaurantQuerySpec(
+            intent=pb.PLAYBOOK_CODE,
+            domain="restaurant",
+            date_range=(None, None),
+            window_label="不适用",
+            relative_window=False,
+            metrics=(),
+            wants_margin=False,
+            asks_profitability=False,
+            dimensions=(),
+            comparison=None,
+            confidence=0.99,
+            source_tier="llm",
+            planned_intents=(pb.PLAYBOOK_CODE,),
+            plan_version="restaurant-query-plan-v2",
+            planner_authority="llm",
+            plan_hash="playbook-plan",
+            resolver_query_seed=query,
+        )
+
+    monkeypatch.setattr(svc, "parse_restaurant_query", _llm_playbook_plan)
     result = await svc.tiered_answer(
         "毛利率偏低的行业参考做法", object(), "DEMO_REST", "restaurant_manager",
     )
-    assert result is not None and result["kind"] == "clarification"
+    assert planner_calls == [("毛利率偏低的行业参考做法", True)]
+    assert result is not None and result["kind"] == "answer"
+    assert result["code"] == pb.PLAYBOOK_CODE
+    assert result["spec"].planner_authority == "llm"
     assert "菜单工程" in result["answer_text"] or "行业参考做法" in result["answer_text"]

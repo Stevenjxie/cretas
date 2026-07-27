@@ -106,6 +106,69 @@ def test_resolver_kwargs_use_sealed_comparison_when_current_text_is_only_store_s
     assert kwargs["comparison_kind"] == spec.comparison
 
 
+def test_resolver_kwargs_forward_immutable_metric_action_and_ranking_slots():
+    spec = _build_spec(
+        "RESTAURANT_OPS_GROSS_MARGIN",
+        "上个月全部门店菜品销量排名",
+        confidence=0.98,
+        tier="llm",
+        llm_requested_metrics=("sales_volume",),
+        llm_dimensions=("dish",),
+        llm_analysis_action="lookup",
+        llm_store_scope="all",
+        planner_authority="llm",
+        llm_semantics_authoritative=True,
+    )
+
+    kwargs = svc._resolver_kwargs(spec, "restaurant_manager", "全部门店")
+
+    assert kwargs["requested_metrics"] == ("sales_volume",)
+    assert kwargs["analysis_action"] == "lookup"
+    assert kwargs["ranking_direction"] == "best"
+    assert kwargs["ranking_limit"] == 5
+
+
+@pytest.mark.parametrize(
+    ("code", "query"),
+    [
+        (
+            "RESTAURANT_OPS_TREND_ANALYSIS",
+            "生成本月全部门店营业额趋势图，按天，画二次拟合和计划线",
+        ),
+        (
+            "RESTAURANT_OPS_GROSS_MARGIN",
+            "生成本月全部门店菜品毛利趋势图",
+        ),
+    ],
+)
+def test_time_dimension_is_supported_by_time_aware_resolvers(code, query):
+    spec = _build_spec(
+        code,
+        query,
+        confidence=0.98,
+        tier="llm",
+        llm_requested_metrics=(
+            ("revenue",) if code == "RESTAURANT_OPS_TREND_ANALYSIS"
+            else ("gross_margin",)
+        ),
+        llm_dimensions=("time",),
+        llm_analysis_action="lookup",
+        llm_store_scope="all",
+        planner_authority="llm",
+        llm_semantics_authoritative=True,
+    )
+
+    mismatch = svc._execution_mismatch(
+        spec,
+        spec.planned_intents,
+        dish_mention=None,
+        store_mention=None,
+        store_dish=None,
+    )
+
+    assert mismatch is None
+
+
 def test_should_delegate_validated_plan_cache_without_java_reinterpretation():
     spec = _spec(
         intent="RESTAURANT_OPS_TREND_ANALYSIS",
@@ -973,7 +1036,11 @@ async def test_endpoint_dependent_followup_sends_raw_query_and_history_to_llm(mo
     monkeypatch.setattr(ChatSessionService, "upsert", upsert)
 
     parse_calls = []
-    spec = _spec(intent="RESTAURANT_OPS_TREND_ANALYSIS", relative_window=False)
+    spec = _spec(
+        intent="RESTAURANT_OPS_TREND_ANALYSIS",
+        relative_window=False,
+        resolver_query_seed="上个月营收怎么样 那为什么呢",
+    )
 
     async def _fake_parse(query, pool_arg, **kwargs):
         parse_calls.append((query, pool_arg, kwargs))
@@ -1031,6 +1098,10 @@ async def test_endpoint_dependent_followup_sends_raw_query_and_history_to_llm(mo
     assert tiered_calls[0][4]["history"] == parse_calls[0][2]["history"]
     lookup.assert_awaited_once_with("shared-device-session", "QHJ01", user_id=88)
     upsert.assert_awaited_once()
+    assert (
+        upsert.await_args.kwargs["parent_query"]
+        == "上个月营收怎么样 那为什么呢"
+    )
 
 
 @pytest.mark.asyncio
