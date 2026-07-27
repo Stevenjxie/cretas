@@ -82,7 +82,41 @@ public class RestaurantDishDeleteTool extends AbstractBusinessTool {
 
     @Override
     public boolean supportsPreview() {
-        return false;
+        return true;
+    }
+
+    @Override
+    protected Map<String, Object> doPreview(String factoryId, Map<String, Object> params,
+                                            Map<String, Object> context) {
+        String dishId = getString(params, "id");
+        String dishName = getString(params, "name");
+        ProductType dish = resolveDish(factoryId, dishId, dishName);
+        if (dish == null) {
+            throw new IllegalArgumentException(String.format(
+                    "未找到菜品「%s」，请确认菜品名称或ID。",
+                    dishName != null ? dishName : dishId));
+        }
+
+        boolean active = Boolean.TRUE.equals(dish.getIsActive());
+        Map<String, Object> currentValues = new LinkedHashMap<>();
+        currentValues.put("菜品", dish.getName());
+        currentValues.put("状态", active ? "在售" : "已下架");
+
+        Map<String, Object> newValues = new LinkedHashMap<>();
+        newValues.put("菜品", dish.getName());
+        newValues.put("状态", "已下架");
+
+        Map<String, Object> preview = new LinkedHashMap<>();
+        preview.put("status", "PREVIEW");
+        preview.put("message", active
+                ? String.format("确认后将下架菜品「%s」，顾客将无法继续购买。", dish.getName())
+                : String.format("菜品「%s」已经处于下架状态，不会产生新的变更。", dish.getName()));
+        preview.put("currentValues", currentValues);
+        preview.put("newValues", newValues);
+        preview.put("impactSummary", active
+                ? "确认后该菜品会从在售变为已下架；这是高风险写操作，当前仅展示预览，尚未执行。"
+                : "菜品已下架；当前预览不会修改任何数据。");
+        return preview;
     }
 
     /**
@@ -120,13 +154,7 @@ public class RestaurantDishDeleteTool extends AbstractBusinessTool {
             throw new IllegalArgumentException("请提供需要下架的菜品名称或ID");
         }
 
-        ProductType dish = null;
-        if (dishId != null) {
-            dish = productTypeRepository.findByIdAndFactoryId(dishId, factoryId).orElse(null);
-        }
-        if (dish == null && dishName != null) {
-            dish = productTypeRepository.findByFactoryIdAndName(factoryId, dishName.trim()).orElse(null);
-        }
+        ProductType dish = resolveDish(factoryId, dishId, dishName);
 
         if (dish == null) {
             return buildSimpleResult(
@@ -147,6 +175,17 @@ public class RestaurantDishDeleteTool extends AbstractBusinessTool {
         result.put("message", String.format("菜品「%s」已成功下架。如需重新上架，请在菜品管理中操作。", dish.getName()));
 
         return result;
+    }
+
+    private ProductType resolveDish(String factoryId, String dishId, String dishName) {
+        ProductType dish = null;
+        if (dishId != null) {
+            dish = productTypeRepository.findByIdAndFactoryId(dishId, factoryId).orElse(null);
+        }
+        if (dish == null && dishName != null) {
+            dish = productTypeRepository.findByFactoryIdAndName(factoryId, dishName.trim()).orElse(null);
+        }
+        return dish;
     }
 
     @Override

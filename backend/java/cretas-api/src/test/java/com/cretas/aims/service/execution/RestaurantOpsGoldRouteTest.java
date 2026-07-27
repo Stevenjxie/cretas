@@ -808,6 +808,134 @@ class RestaurantOpsGoldRouteTest {
     }
 
     @Test
+    @DisplayName("explicit named-dish removal is extracted without hijacking advisory questions")
+    void explicitNamedDishRemovalUsesNarrowWriteGrammar() {
+        assertThat(IntentExecutionOrchestrator.extractExplicitRestaurantDishDeleteTarget(
+                "把卤炸牛肉串下架"))
+                .contains("卤炸牛肉串");
+        assertThat(IntentExecutionOrchestrator.extractExplicitRestaurantDishDeleteTarget(
+                "请把宫保鸡丁从菜单里移除"))
+                .contains("宫保鸡丁");
+        assertThat(IntentExecutionOrchestrator.extractExplicitRestaurantDishDeleteTarget(
+                "删除红烧肉这道菜"))
+                .contains("红烧肉");
+
+        for (String readOrAdvice : new String[]{
+                "哪些菜应该下架",
+                "卤炸牛肉串为什么下架",
+                "查询已下架菜品",
+                "是否要下架卤炸牛肉串"
+        }) {
+            assertThat(IntentExecutionOrchestrator.extractExplicitRestaurantDishDeleteTarget(
+                    readOrAdvice))
+                    .as(readOrAdvice)
+                    .isEmpty();
+        }
+    }
+
+    @Test
+    @DisplayName("operation mode named-dish removal enters confirmation before any tool execution")
+    void explicitNamedDishRemovalEntersGovernedConfirmation() {
+        AIIntentConfig dishDelete = AIIntentConfig.builder()
+                .intentCode("RESTAURANT_DISH_DELETE")
+                .intentName("下架菜品")
+                .intentCategory("RESTAURANT")
+                .toolName("restaurant_dish_delete")
+                .businessType("RESTAURANT")
+                .sensitivityLevel("HIGH")
+                .requiredPermission("restaurant:read_write")
+                .requiresApproval(true)
+                .build();
+        when(aiIntentService.getIntentByCode(
+                eq("DEMO_REST"), eq("RESTAURANT_DISH_DELETE")))
+                .thenReturn(Optional.empty());
+        when(aiIntentService.getIntentByCode(eq("RESTAURANT_DISH_DELETE")))
+                .thenReturn(Optional.of(dishDelete));
+        when(aiIntentService.hasPermission(eq("RESTAURANT_DISH_DELETE"), eq("admin")))
+                .thenReturn(true);
+        when(writeGuardService.isWriteIntent(dishDelete)).thenReturn(true);
+
+        IntentExecuteResponse response = orchestrator.execute(
+                "DEMO_REST",
+                IntentExecuteRequest.builder()
+                        .userInput("把卤炸牛肉串下架")
+                        .mode("OPERATE")
+                        .sessionId("write-preview-session")
+                        .build(),
+                7L,
+                "admin");
+
+        assertThat(response.getStatus()).isEqualTo("WRITE_CONFIRM_REQUIRED");
+        assertThat(response.getIntentCode()).isEqualTo("RESTAURANT_DISH_DELETE");
+        verify(toolDispatchService, never()).executeWithTool(
+                any(), anyString(), any(), any(), anyLong(), anyString(), any());
+    }
+
+    @Test
+    @DisplayName("named-dish removal preview stays read-only and carries extracted dish scope")
+    void explicitNamedDishRemovalBuildsPreviewBeforeApproval() {
+        AIIntentConfig dishDelete = AIIntentConfig.builder()
+                .intentCode("RESTAURANT_DISH_DELETE")
+                .intentName("下架菜品")
+                .intentCategory("RESTAURANT")
+                .toolName("restaurant_dish_delete")
+                .businessType("RESTAURANT")
+                .sensitivityLevel("HIGH")
+                .requiredPermission("restaurant:read_write")
+                .requiresApproval(true)
+                .build();
+        when(aiIntentService.getIntentByCode(
+                eq("DEMO_REST"), eq("RESTAURANT_DISH_DELETE")))
+                .thenReturn(Optional.empty());
+        when(aiIntentService.getIntentByCode(eq("RESTAURANT_DISH_DELETE")))
+                .thenReturn(Optional.of(dishDelete));
+        when(aiIntentService.hasPermission(eq("RESTAURANT_DISH_DELETE"), eq("admin")))
+                .thenReturn(true);
+        when(writeGuardService.isWriteIntent(dishDelete)).thenReturn(true);
+        ToolExecutor dishDeleteTool = mock(ToolExecutor.class);
+        when(dishDeleteTool.supportsPreview()).thenReturn(true);
+        when(toolRegistry.getExecutor("restaurant_dish_delete"))
+                .thenReturn(Optional.of(dishDeleteTool));
+        when(toolDispatchService.executeToolPreview(
+                eq(dishDeleteTool),
+                eq("DEMO_REST"),
+                any(IntentExecuteRequest.class),
+                eq(dishDelete),
+                eq(7L),
+                eq("admin")))
+                .thenReturn(IntentExecuteResponse.builder()
+                        .intentRecognized(true)
+                        .intentCode("RESTAURANT_DISH_DELETE")
+                        .status("PREVIEW")
+                        .message("确认后将下架菜品「卤炸牛肉串」")
+                        .build());
+
+        IntentExecuteResponse response = orchestrator.execute(
+                "DEMO_REST",
+                IntentExecuteRequest.builder()
+                        .userInput("把卤炸牛肉串下架")
+                        .mode("OPERATE")
+                        .previewOnly(true)
+                        .sessionId("write-preview-session")
+                        .build(),
+                7L,
+                "admin");
+
+        assertThat(response.getStatus()).isEqualTo("PREVIEW");
+        ArgumentCaptor<IntentExecuteRequest> previewRequest =
+                ArgumentCaptor.forClass(IntentExecuteRequest.class);
+        verify(toolDispatchService).executeToolPreview(
+                eq(dishDeleteTool),
+                eq("DEMO_REST"),
+                previewRequest.capture(),
+                eq(dishDelete),
+                eq(7L),
+                eq("admin"));
+        assertThat(previewRequest.getValue().getContext())
+                .containsEntry("name", "卤炸牛肉串");
+    }
+
+    @Test
     @DisplayName("tiered-first semantic planner precedes comprehensive and owner-action heuristics")
     void semanticPlannerPrecedesLegacyRestaurantHeuristics() {
         TieredIntentDelegate delegate = mock(TieredIntentDelegate.class);
