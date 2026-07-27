@@ -3668,6 +3668,56 @@ def test_multi_dish_extraction_keeps_first_dish_after_all_store_scope():
     ) == ["米饭", "娃娃菜", "招牌藤椒味(单人份)"]
 
 
+def test_multi_dish_sales_returns_every_requested_dish_not_margin_aggregate():
+    rows = _dish_rows() + [{
+        "product_id": 4,
+        "dish_name": "娃娃菜",
+        "normalized_name": "娃娃菜",
+        "total_qty": 36.0,
+        "total_revenue": 720.0,
+        "bills": 30,
+        "window_start": date(2026, 7, 1),
+        "window_end": date(2026, 7, 27),
+    }]
+    query = "本月全部门店米饭和娃娃菜和招牌藤椒味(单人份)的销量"
+
+    result = asyncio.run(_r.resolve_gross_margin(
+        _gross_margin_pool(rows),
+        "RES_TEST",
+        role="restaurant_manager",
+        query=query,
+        date_range=(date(2026, 7, 1), date(2026, 7, 27)),
+        window_label="本月",
+        requested_metrics=("sales_volume",),
+    ))
+
+    assert result.title.startswith("多菜品销量对比")
+    assert "「米饭」" in result.answer_text
+    assert "「娃娃菜」" in result.answer_text
+    assert "「招牌藤椒味(单人份)」" in result.answer_text
+    assert "菜品毛利分析" not in result.answer_text
+    assert result.meta["targetDishes"] == [
+        "米饭", "娃娃菜", "招牌藤椒味(单人份)",
+    ]
+
+
+def test_named_dish_no_data_keeps_named_week_scope_and_object():
+    result = asyncio.run(_r.resolve_gross_margin(
+        _gross_margin_pool([]),
+        "RES_TEST",
+        role="restaurant_manager",
+        query="这周全部门店米饭卖了多少",
+        date_range=(date(2026, 7, 27), date(2026, 7, 27)),
+        window_label="本周",
+        requested_metrics=("sales_volume",),
+    ))
+
+    assert "本周" in result.answer_text
+    assert "「米饭」" in result.answer_text
+    assert "销量" in result.title
+    assert result.meta["no_pos_data"] is True
+
+
 def test_scoped_dish_reasonableness_answers_without_inventing_a_threshold():
     answer = _scoped_dish_metric_answer(
         _dish_metric_entry(),

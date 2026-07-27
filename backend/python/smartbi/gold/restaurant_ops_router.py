@@ -2685,6 +2685,7 @@ async def resolve_gross_margin(
     smartbi_pool, factory_id: str, days: int = 30, top_n: int = 10,
     *, role: Optional[str] = None, query: Optional[str] = None,
     date_range: Optional[Tuple[Optional[date], Optional[date]]] = None,
+    window_label: Optional[str] = None,
     dish_mention: Optional[str] = None,
     requested_metrics: Sequence[str] = (),
     analysis_action: Optional[str] = None,
@@ -2753,6 +2754,8 @@ async def resolve_gross_margin(
 
     # Need cretas connection for product_types name↔id lookup
     monthly_pos_rows: List[Any] = []
+    dish_candidates: List[str] = []
+    multi_dish_matches: List[Tuple[str, List[Any]]] = []
     async with smartbi_pool.acquire() as conn:
         await conn.execute("SELECT set_config('app.factory_id', $1, false)", factory_id)
 
@@ -2809,7 +2812,9 @@ async def resolve_gross_margin(
             compare_rows = []
             for cand in dish_candidates:
                 # 多规格菜 ("招牌藤椒味"→单人份/双人份) 全部纳入对比。
-                compare_rows.extend(_match_dish_rows(cand, pos_rows))
+                matched = list(_match_dish_rows(cand, pos_rows))
+                multi_dish_matches.append((cand, matched))
+                compare_rows.extend(matched)
             if len({r["product_id"] for r in compare_rows}) >= 2:
                 seen_pid = set()
                 pos_rows = [
@@ -2886,10 +2891,44 @@ async def resolve_gross_margin(
             "今天先不要做：不要在销售明细缺失时批量提价、下架菜品或取消套餐；先完成数据同步。"
             if prohibited_actions_requested else ""
         )
-        requested_window = (
+        concrete_window = (
             _range_text(exact_start, exact_end)
             if exact_start and exact_end else f"近 {analysis_days} 天"
         )
+        requested_window = (
+            f"{window_label}（{concrete_window}）"
+            if window_label and window_label not in concrete_window
+            else concrete_window
+        )
+        if dish_candidates:
+            named = "、".join(f"「{candidate}」" for candidate in dish_candidates)
+            if requested_metric_set == {"sales_volume"}:
+                metric_label = "销量"
+            elif requested_metric_set == {"recipe_cost"}:
+                metric_label = "成本"
+            elif requested_metric_set == {"gross_margin"}:
+                metric_label = "毛利"
+            else:
+                metric_label = "菜品数据"
+            return OpsAnswer(
+                code="RESTAURANT_OPS_GROSS_MARGIN",
+                title=f"{named}{metric_label}（暂无销售数据）",
+                answer_text=(
+                    f"{requested_window}{named}没有可用的销售记录，"
+                    f"所以本次不能给出可靠{metric_label}；没有用其他时间范围替代，"
+                    "也没有用全部菜品代替。\n"
+                    "请确认该时段的 POS 菜品明细已同步后再试。"
+                ),
+                charts=[],
+                kpis=[],
+                meta={
+                    "no_pos_data": True,
+                    "targetDishes": dish_candidates,
+                    "window_days": analysis_days,
+                    "window_start": _date_text(exact_start) if exact_start else None,
+                    "window_end": _date_text(exact_end) if exact_end else None,
+                },
+            )
         if resolved_ranking_direction:
             requested_rank_limit = (
                 max(1, min(int(ranking_limit), 20))
@@ -2932,11 +2971,63 @@ async def resolve_gross_margin(
 
     window_start = min((r["window_start"] for r in pos_rows if r["window_start"]), default=None)
     window_end = max((r["window_end"] for r in pos_rows if r["window_end"]), default=None)
-    window_label = (
+    concrete_window = (
         _range_text(exact_start, exact_end)
         if exact_start and exact_end
         else _actual_window_text(window_start, window_end, analysis_days)
     )
+    window_label = (
+        f"{window_label}（{concrete_window}）"
+        if window_label and window_label not in concrete_window
+        else concrete_window
+    )
+
+    if len(dish_candidates) >= 2 and requested_metric_set == {"sales_volume"}:
+        match_map = dict(multi_dish_matches)
+        lines = [f"**{window_label}多菜品销量对比：**", ""]
+        kpis: List[Dict[str, Any]] = []
+        target_entities: List[Dict[str, Any]] = []
+        for candidate in dish_candidates:
+            matched_rows = match_map.get(candidate, [])
+            if not matched_rows:
+                lines.append(f"- 「{candidate}」：没有找到该时段的销售记录")
+                target_entities.append({"type": "dish", "name": candidate, "no_data": True})
+                continue
+            qty = sum(float(row.get("total_qty") or 0) for row in matched_rows)
+            bills = sum(int(row.get("bills") or 0) for row in matched_rows)
+            qty_text = _format_sales_quantity(qty)
+            lines.append(f"- 「{candidate}」：销量 **{qty_text} 份**，覆盖 {bills} 单")
+            kpis.append({
+                "title": f"{candidate}销量",
+                "value": f"{qty_text} 份",
+                "rawValue": qty,
+            })
+            target_entities.append({
+                "type": "dish",
+                "name": candidate,
+                "sales_volume": qty,
+                "bill_count": bills,
+            })
+        lines.extend((
+            "",
+            "以上按同一时间范围、同一全部门店口径统计；"
+            "本次只回答销量，没有改成毛利榜或全菜单汇总。",
+        ))
+        return OpsAnswer(
+            code="RESTAURANT_OPS_GROSS_MARGIN",
+            title=f"多菜品销量对比 ({window_label})",
+            answer_text="\n".join(lines),
+            charts=[],
+            kpis=kpis,
+            meta={
+                "window_days": analysis_days,
+                "window_start": _date_text(window_start) if window_start else None,
+                "window_end": _date_text(window_end) if window_end else None,
+                "targetDishes": dish_candidates,
+                "ranked_entities": target_entities,
+                "focus_entity": target_entities[0] if target_entities else None,
+            },
+        )
 
     # Sheet 7/22 扫雷 R14: 「哪道菜卖得最差/最好」此前只有 Java 报表工具
     # (依赖上传的商品销量报表, DEMO 无数据 → 死胡同)。POS 行就在手上, 按
