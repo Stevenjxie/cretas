@@ -28,9 +28,20 @@ async function selectTargetProduct(page) {
   }
   if (!(await targetOption.isVisible().catch(() => false))) {
     await page.keyboard.press('Escape');
-    if (await page.getByText('BOM 配方版本', { exact: true }).isVisible().catch(() => false)) {
-      const selectedLabel = (await productInput.inputValue().catch(() => '')).trim() || null;
-      return { selected: true, selectedLabel, selectionMode: 'auto-selected-fallback', failure: null };
+    const selectedBomLoaded = await page.locator(
+      '[data-testid="bom-version-lifecycle"], .bom-summary-grid, .recipe-status-card',
+    ).first().isVisible().catch(() => false);
+    if (selectedBomLoaded) {
+      const selectedLabel = (
+        await page.locator('.bom-hero__sku').first().innerText().catch(() => '')
+        || await productInput.inputValue().catch(() => '')
+      ).trim() || null;
+      return {
+        selected: true,
+        selectedLabel,
+        selectionMode: 'deterministic-page-selection',
+        failure: null,
+      };
     }
     return { selected: false, selectedLabel: null, selectionMode: null, failure: 'target product option missing' };
   }
