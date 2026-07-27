@@ -33,4 +33,19 @@ describe('quality inspector home workflow contract', () => {
     expect(navigatorSource).toContain('minHeight: 48');
     expect(navigatorSource).toContain('tabBarHideOnKeyboard: true');
   });
+
+  it('refreshes the current-user unread badge whenever the home screen regains focus', () => {
+    expect(homeSource).toContain('useFocusEffect(');
+    expect(homeSource).toContain('qualityInspectorApi.getUnreadCount(userId)');
+    expect(homeSource).toContain('}, [factoryId, loadReviewQueue, userId])');
+  });
+
+  it('keeps the pending human-review card current while AI analysis finishes', () => {
+    expect(homeSource).toContain('const loadReviewQueue = useCallback');
+    expect(homeSource).toContain('setPendingReviewCount(page.totalElements)');
+    expect(homeSource).toContain('setNextReviewTask(page.content[0] ?? null)');
+    expect(homeSource).toContain('setInterval(() =>');
+    expect(homeSource).toContain('}, 10_000)');
+    expect(homeSource).toContain('clearInterval(reviewRefreshTimer)');
+  });
 });

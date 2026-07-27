@@ -16,6 +16,38 @@ import {
   QIPagedResponse,
 } from '../../types/qualityInspector';
 
+type QINotificationWire = Omit<QINotification, 'id' | 'type' | 'read'> & {
+  id: string | number;
+  type: QINotification['type'] | 'ALERT' | 'INFO' | 'WARNING' | 'SUCCESS' | 'SYSTEM';
+  read?: boolean;
+  isRead?: boolean;
+};
+
+const normalizeNotification = (notification: QINotificationWire): QINotification => {
+  const normalizedType: QINotification['type'] = (() => {
+    switch (notification.type) {
+      case 'ALERT':
+      case 'WARNING':
+        return 'urgent';
+      case 'SUCCESS':
+        return 'review_result';
+      case 'SYSTEM':
+        return 'system';
+      case 'INFO':
+        return 'new_batch';
+      default:
+        return notification.type;
+    }
+  })();
+
+  return {
+    ...notification,
+    id: String(notification.id),
+    type: normalizedType,
+    read: notification.read ?? notification.isRead ?? false,
+  };
+};
+
 /**
  * 质检 API 客户端
  */
@@ -328,12 +360,23 @@ class QualityInspectorApiClient {
     page?: number;
     size?: number;
     unreadOnly?: boolean;
+    userId?: number;
   }): Promise<QIPagedResponse<QINotification>> {
-    const response = await apiClient.get<QIApiResponse<QIPagedResponse<QINotification>>>(
+    const response = await apiClient.get<QIApiResponse<QIPagedResponse<QINotificationWire>>>(
       `${this.getBasePath()}/notifications`,
-      { params }
+      {
+        params: {
+          page: params?.page,
+          size: params?.size,
+          isRead: params?.unreadOnly ? false : undefined,
+          userId: params?.userId,
+        },
+      }
     );
-    return response.data;
+    return {
+      ...response.data,
+      content: response.data.content.map(normalizeNotification),
+    };
   }
 
   /**
@@ -348,16 +391,19 @@ class QualityInspectorApiClient {
   /**
    * 标记所有通知已读
    */
-  async markAllNotificationsRead(): Promise<void> {
-    await apiClient.put(`${this.getBasePath()}/notifications/read-all`);
+  async markAllNotificationsRead(userId: number): Promise<void> {
+    await apiClient.put(`${this.getBasePath()}/notifications/read-all`, undefined, {
+      params: { userId },
+    });
   }
 
   /**
    * 获取未读通知数量
    */
-  async getUnreadCount(): Promise<number> {
+  async getUnreadCount(userId: number): Promise<number> {
     const response = await apiClient.get<QIApiResponse<{ count: number }>>(
-      `${this.getBasePath()}/notifications/unread-count`
+      `${this.getBasePath()}/notifications/unread-count`,
+      { params: { userId } }
     );
     return response.data.count;
   }
