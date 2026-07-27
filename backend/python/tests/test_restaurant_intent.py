@@ -434,6 +434,68 @@ async def test_semantic_first_front_door_uses_high_accuracy_review_budget():
 
 
 @pytest.mark.asyncio
+async def test_semantic_first_inherits_typed_dish_slots_before_llm_planning():
+    """A metric-only follow-up keeps the trusted object/time/store scope.
+
+    The LLM remains the sole intent authority; it receives a complete,
+    resolver-grounded utterance instead of being asked to rediscover the dish
+    from prose history.
+    """
+    history = [{
+        "q": "全部门店卤炸牛肉串本月销量为什么高",
+        "a_summary": "本月卤炸牛肉串销量 251.56 份。",
+        "context": {
+            "focus_entity": {"type": "dish", "name": "卤炸牛肉串"},
+            "window_label": "本月",
+            "requested_metrics": ["sales_volume"],
+            "analysis_action": "diagnose",
+            "store_scope": "all",
+            "store_names": [],
+        },
+    }]
+    llm_plan = {
+        "intent": "RESTAURANT_OPS_GROSS_MARGIN",
+        "time_range": {"type": "relative", "unit": "month", "count": 1},
+        "wants_margin": True,
+        "asks_profitability": True,
+        "requested_metrics": ["gross_margin"],
+        "analysis_action": "lookup",
+        "dimensions": ["dish"],
+        "dish": "卤炸牛肉串",
+        "store": None,
+        "stores": [],
+        "store_scope": "all",
+        "confidence": 0.99,
+        "clarification_needed": False,
+        "missing_fields": [],
+        "clarification_question": None,
+        "clarification_options": [],
+    }
+
+    with patch(
+        "smartbi.gold.restaurant_intent._t3_llm_parse",
+        new=AsyncMock(return_value=llm_plan),
+    ) as mock_parse:
+        spec = await parse_restaurant_query(
+            "那毛利呢",
+            _restaurant_pool(),
+            factory_id="DEMO_REST",
+            history=history,
+            semantic_first=True,
+        )
+
+    effective_query = mock_parse.await_args.args[0]
+    assert effective_query == "本月全部门店卤炸牛肉串的毛利呢"
+    assert spec is not None
+    assert spec.planner_authority == "llm"
+    assert spec.dish_slot == "卤炸牛肉串"
+    assert spec.window_label == "本月"
+    assert spec.store_scope == "all"
+    assert spec.requested_metrics == ("gross_margin",)
+    assert spec.clarification_needed is False
+
+
+@pytest.mark.asyncio
 async def test_t3_adversarial_raw_date_in_time_range_is_ignored():
     """If a (malformed/adversarial) LLM response smuggles a raw date string
     into time_range instead of a structured descriptor, it must be silently
