@@ -707,7 +707,7 @@
         <span class="brand__mark" aria-hidden="true">QC</span>
         <span>白垩纪 · 质检操作指南</span>
       </div>
-      <div class="topbar__meta">六扇门 · Web 开户 + RN 质检 · 2026-07-27</div>
+      <div class="topbar__meta">六扇门 · Web 开户/复核 + RN 质检 · 2026-07-27</div>
     </div>
   </header>
 
@@ -716,7 +716,7 @@
       <div>
         <p class="eyebrow">Quality Control / Label Inspection</p>
         <h1 id="page-title">包装标签拍检<br>与人工标注指南</h1>
-        <p class="hero__lead">六扇门：从管理员按手机号开户、员工本人设密和登录，到录入 SKU、拍摄包装照片、AI 初筛、人工逐图标注及训练数据整理。</p>
+        <p class="hero__lead">六扇门：从管理员按手机号开户、员工本人设密和登录，到录入 SKU、拍摄包装照片、AI 初筛、手机或 Web 人工复核及训练数据整理。</p>
       </div>
       <aside class="hero__badge" aria-label="预计操作时间">
         <strong>约 5 分钟</strong>
@@ -752,6 +752,7 @@
       <a href="#step-ai-review">6. 确认 AI 框</a>
       <a href="#step-human-frame">7. 人工补框</a>
       <a href="#step-photo-conclusion">8. 本图结论</a>
+      <a href="#step-web-review">Web 人工审核</a>
       <a href="#step-data-management">Web 数据整理</a>
       <a href="#errors">异常处理</a>
     </nav>
@@ -1182,6 +1183,71 @@
             <span class="callout__number">3</span>
             <strong>回现场处理</strong>
             <p>确认缺白标或缺彩标后，根据照片位置找出对应盒子，补贴后按现场流程复核。</p>
+          </div>
+        </div>
+      </section>
+
+      <section class="step" id="step-web-review">
+        <div class="step__heading">
+          <div class="step__number">Web</div>
+          <div>
+            <p class="step__kicker">DESKTOP HUMAN REVIEW</p>
+            <h2>质量主管也可在 Web 完成同一套人工审核</h2>
+            <p>质量经理或具备质量模块权限的工厂管理员登录 Web 后，从“质量管理 → 包装标签拍检 → 待人工审核”进入。手机与 Web 写回的是同一份审核结果。</p>
+          </div>
+        </div>
+
+        <div class="notice" role="note" style="margin-bottom: 22px">
+          <div class="notice__icon" aria-hidden="true">W</div>
+          <div>
+            <strong>质检员用手机，质量主管用 Web</strong>
+            <p>“质量检验员”是一线移动端角色；需要在电脑复核时，请使用“质量经理”或已获质量模块权限的工厂管理员账号，不要把一线账号改成管理员。</p>
+          </div>
+        </div>
+
+        <figure class="web-shot">
+          <button class="shot-button" type="button" data-full="qcsop-assets/22-web-review-entry.png" aria-label="放大查看 Web 包装标签拍检审核队列">
+            <img src="qcsop-assets/22-web-review-entry.png" alt="真实 Web 管理端质量管理菜单已展开，包装标签拍检待人工审核队列显示 SKU、批次、照片数和 AI 疑点数" loading="lazy">
+          </button>
+          <figcaption>① 左侧“质量管理 → 包装标签拍检”，在“待人工审核”点击“人工审核”</figcaption>
+        </figure>
+
+        <figure class="web-shot">
+          <button class="shot-button" type="button" data-full="qcsop-assets/23-web-review-ai-candidate.png" aria-label="放大查看 Web AI 疑点确认操作">
+            <img src="qcsop-assets/23-web-review-ai-candidate.png" alt="真实 Web 管理端逐张人工审核页面，照片上显示橙色 AI 缺白标候选框，右侧可确认、拒绝或改为其他类型" loading="lazy">
+          </button>
+          <figcaption>② 橙色是 AI 疑点：确认、拒绝，或改成缺白标/缺彩标/无法判断</figcaption>
+        </figure>
+
+        <figure class="web-shot">
+          <button class="shot-button" type="button" data-full="qcsop-assets/24-web-review-human-frame.png" aria-label="放大查看 Web 人工补框操作">
+            <img src="qcsop-assets/24-web-review-human-frame.png" alt="真实 Web 管理端照片复核页面，同时显示已处理的 AI 框和新增人工缺彩标框，右侧可选择类型和删除" loading="lazy">
+          </button>
+          <figcaption>③ AI 漏检时点击照片补框；框可拖动、缩放、改类型或删除</figcaption>
+        </figure>
+
+        <figure class="web-shot">
+          <button class="shot-button" type="button" data-full="qcsop-assets/25-web-review-ready-submit.png" aria-label="放大查看 Web 整单人工审核提交页面">
+            <img src="qcsop-assets/25-web-review-ready-submit.png" alt="真实 Web 管理端两张照片都完成逐图结论，底部提交整单人工审核按钮可用" loading="lazy">
+          </button>
+          <figcaption>④ 每张都给出本图结论；进度 100% 后提交整单人工审核</figcaption>
+        </figure>
+
+        <div class="callouts">
+          <div class="callout">
+            <span class="callout__number">1</span>
+            <strong>逐框处理</strong>
+            <p>每个 AI 框都必须确认、拒绝或改类型；候选没处理完时不能给出本图结论。</p>
+          </div>
+          <div class="callout">
+            <span class="callout__number">2</span>
+            <strong>逐图收口</strong>
+            <p>完成框以后，再看整图有没有漏框；有漏检就点击照片补框，没有其他问题再确认本图结论。</p>
+          </div>
+          <div class="callout callout--warning">
+            <span class="callout__number">3</span>
+            <strong>整单提交才写回</strong>
+            <p>只有所有照片完成后点击“提交整单人工审核”，服务端才保存最终人工真值。提交前的操作只是当前审核草稿。</p>
           </div>
         </div>
       </section>
