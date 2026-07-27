@@ -219,3 +219,15 @@
 - **验证**：Java release 生命周期目标测试 `96/96`，Web 目标测试 `42/42`，`vue-tsc`、Vite build、只读 UI/代码审查、编码与 `git diff --check` 均通过；PR 密钥扫描通过。
 - **生产发布**：exact-main `20cbfce60b3f11a2e7b19635c6a4c64c10f29915` 已按 backend-first 串行发布。Java 切换到 green `10020`，5/5 健康观察通过；Web HTTP 200，四方 index 哈希一致。
 - **Scope**：已归档并释放；未修改 Entity、Repository、JPQL、Flyway 或生产业务数据。
+
+## Workflow → BOM 上下文、单位与多成品报工修复（PR #1898）
+
+- **任务**：`BUG-WORKFLOW-BOM-CONTEXT-UNIT-20260727`
+- **状态**：`merged`
+- **Owner**：`/root`
+- **Base SHA**：`29a04fc3bcd0836fced1d670617c1494485da43c`
+- **功能提交 / PR**：`a6ea4bec0dea67bf6a69ade96b8f63e37e7191ec` / [#1898](https://github.com/Stevenjxie/cretas/pull/1898)
+- **业务结果**：Workflow 缺 BOM 快捷入口精确打开缺失成品 SKU，通用入口稳定选择终端 SKU；BOM 辅料按绑定 SKU/Workflow 的非空单位直接建立基准，`只`、`袋` 和租户自定义单位不再被白名单误拦；多成品报工按实际成品逐一解析同一固定 Family 内的对应 BOM，分别计算专属包材，合并主料/替代料候选，共享辅料按稳定记录去重。
+- **UI**：保留“转换率”标签，仅移除 BOM 页灰色概念说明提示。
+- **验证**：Java 目标测试 `33/33`、Web 目标测试 `41/41`、`vue-tsc -b`、Vite build、只读 UI/代码审查、编码与 `git diff --check` 均通过；PR 密钥扫描通过。
+- **Scope**：随 PR 合并归档并释放；未修改 Entity、Repository、JPQL、Flyway 或生产业务数据。
