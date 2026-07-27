@@ -168,3 +168,15 @@
 - **执行契约**：resolver 接收不可变 requested metrics、action、ranking direction/limit；“这个星期”正确解析为本周并保留上周比较；菜品销量 Top 不再降级为毛利，无销售数据时也不使用相邻指标代答。未修改工厂意图和共享 `common/llm_router.py`。
 - **合并门禁**：Python 餐饮/chat/synthesis `1122/1122`；Web 餐饮单测 `53/53`；Java 单次 `clean package` 生命周期 `40/40`、最终 JAR 与可信 manifest 生成成功；compileall、Ruff fatal、编码与 diff check 通过。
 - **发布与验收边界**：本归档随 PR 合入；生产 Java/Python 发布和 Google Sheet 88 条餐饮清单的同版本只读验收在合并后执行并另行回写。合并前 `actualBusinessWrites=0`。
+
+## 餐饮 AI semantic-first 高质量模型链 hotfix（PR #1875）
+
+- **任务**：`BUG-RESTAURANT-SEMANTIC-FRONTDOOR-20260727-040`
+- **状态**：`merged`
+- **Owner**：`/root`
+- **Base SHA**：`e5bc7fc87ae96edda20120f9e9a84bfd6c4672d6`
+- **功能提交 / PR**：`c447ad7788bfecd1813f2e918951dcdd4171d45e` / [#1875](https://github.com/Stevenjxie/cretas/pull/1875)
+- **生产根因**：PR #1874 发布后的真实餐饮电池记录到共享 MAPPER 两个 versioned Flash 返回 403，随后 alias、GLM、Plus 在 6 秒总预算的剩余碎片内连续超时，顶层 LLM 只能安全拒绝首句。
+- **修复**：认证餐饮 semantic-first 与其补槽续接改用共享 Router 已审核的 REVIEW 高质量免费链，单候选 5 秒、总链 12 秒；legacy/offline T3 仍使用 MAPPER 2.5/6 秒。未修改 `common/llm_router.py`、工厂意图、账号模型 allowlist、到期或付费保护。
+- **验证**：根因目标回归 `308/308`；餐饮/chat/synthesis 扩大回归 `1123/1123`；compileall、Ruff fatal、编码与 diff check 通过。
+- **发布与验收边界**：本归档随 PR 合入；exact-main Python 发布、Demo 多轮按钮/上下文和 Google Sheet 餐饮清单回归在合并后继续执行。合并前 `actualBusinessWrites=0`。
