@@ -64,11 +64,10 @@ function mountDialog(price: number | null, materials = [{ id: 'M1', name: '辣�
   });
 }
 
-async function fillRequiredFields(wrapper: ReturnType<typeof mountDialog>, value: number, unit: 'g' | 'kg') {
+async function fillRequiredFields(wrapper: ReturnType<typeof mountDialog>, value: number) {
   const selects = wrapper.findAllComponents({ name: 'ElSelect' });
   selects[0].vm.$emit('update:modelValue', 'M1');
-  wrapper.get('[data-testid="seasoning-dosage-unit"]').findComponent({ name: 'ElSelect' })
-    .vm.$emit('update:modelValue', unit);
+  await flushPromises();
   wrapper.findComponent({ name: 'ElInputNumber' }).vm.$emit('update:modelValue', value);
   await flushPromises();
 }
@@ -110,11 +109,9 @@ describe('SeasoningBindingDialog', () => {
     expect(convertUnit).toHaveBeenCalledWith('F006', expect.objectContaining({
       quantity: 1, fromUnit: '斤', toUnit: 'g',
     }));
-    expect(wrapper.findComponent({ name: 'ElInputNumber' }).props('modelValue')).toBe(1);
+    expect(wrapper.findComponent({ name: 'ElInputNumber' }).props('modelValue')).toBe(2);
     expect(wrapper.text()).toContain('每生产 1 kg 本工序半成品');
-    const unitSelect = wrapper.get('[data-testid="seasoning-dosage-unit"]')
-      .findComponent({ name: 'ElSelect' });
-    unitSelect.vm.$emit('update:modelValue', '斤');
+    expect(wrapper.get('[data-testid="seasoning-dosage-unit"]').text()).toBe('斤');
     wrapper.findComponent({ name: 'ElInputNumber' }).vm.$emit('update:modelValue', 1);
     await wrapper.findAll('button').find((button) => button.text().includes('保存到本工序'))?.trigger('click');
     await flushPromises();
@@ -126,8 +123,8 @@ describe('SeasoningBindingDialog', () => {
 
   it('uses the pinned node basis and converts kg input back to the legacy API quantity', async () => {
     createBinding.mockResolvedValue({ success: true, data: {} });
-    const wrapper = mountDialog(18);
-    await fillRequiredFields(wrapper, 1.5, 'kg');
+    const wrapper = mountDialog(18, [{ id: 'M1', name: '辣椒粉', unit: 'kg', movingAvgPrice: 18 }]);
+    await fillRequiredFields(wrapper, 1.5);
 
     expect(wrapper.get('[data-testid="seasoning-dosage-sentence"]').text())
       .toContain('每生产 1 kg 本工序半成品需要投入');
@@ -148,9 +145,9 @@ describe('SeasoningBindingDialog', () => {
     await wrapper.setProps({
       process: { ...process, standardBasisUnit: basisUnit, standardBasisQuantity: 1, standardUsageSupported: false },
     });
-    await fillRequiredFields(wrapper, 5, 'g');
+    await fillRequiredFields(wrapper, 5);
     expect(wrapper.text()).toContain(`1 ${basisUnit}`);
-    expect(wrapper.text()).toContain('无法解析本工序产出单位');
+    expect(wrapper.text()).toContain('本工序缺少可用的产出基准');
     await wrapper.findAll('button').find((button) => button.text().includes('保存到本工序'))?.trigger('click');
     await flushPromises();
     expect(createBinding).not.toHaveBeenCalled();
@@ -163,7 +160,7 @@ describe('SeasoningBindingDialog', () => {
       { id: 'M2', name: '细辣椒粉', unit: 'g', movingAvgPrice: 19 },
       { id: 'M3', name: '桶装辣椒酱', unit: 'kg', movingAvgPrice: 20 },
     ]);
-    await fillRequiredFields(wrapper, 5, 'g');
+    await fillRequiredFields(wrapper, 5);
     wrapper.get('[data-testid="seasoning-substitute-select"]').findComponent({ name: 'ElSelect' })
       .vm.$emit('update:modelValue', ['M2']);
     await flushPromises();
@@ -178,7 +175,7 @@ describe('SeasoningBindingDialog', () => {
       { id: 'M1', name: '辣椒粉', unit: 'g', movingAvgPrice: 18 },
       { id: 'M3', name: '桶装辣椒酱', unit: 'kg', movingAvgPrice: 20 },
     ]);
-    await fillRequiredFields(crossUnit, 5, 'g');
+    await fillRequiredFields(crossUnit, 5);
     crossUnit.get('[data-testid="seasoning-substitute-select"]').findComponent({ name: 'ElSelect' })
       .vm.$emit('update:modelValue', ['M3']);
     await flushPromises();
@@ -202,7 +199,7 @@ describe('SeasoningBindingDialog', () => {
       movingAvgPrice: 18,
       unitPrice: 17.7,
     }]);
-    await fillRequiredFields(wrapper, 5, 'g');
+    await fillRequiredFields(wrapper, 5);
 
     expect(wrapper.get('[data-testid="seasoning-automatic-price"]')
       .findComponent({ name: 'ElInput' }).props('modelValue')).toBe('¥18.0000 / 千克');
@@ -218,7 +215,7 @@ describe('SeasoningBindingDialog', () => {
       movingAvgPrice: null,
       unitPrice: 17.7,
     }]);
-    await fillRequiredFields(wrapper, 12, 'g');
+    await fillRequiredFields(wrapper, 12);
 
     expect(wrapper.get('[data-testid="seasoning-automatic-price"]')
       .findComponent({ name: 'ElInput' }).props('modelValue')).toBe('¥17.7000 / 千克');
@@ -248,7 +245,7 @@ describe('SeasoningBindingDialog', () => {
       movingAvgPrice: null,
       unitPrice: null,
     }]);
-    await fillRequiredFields(wrapper, 12, 'g');
+    await fillRequiredFields(wrapper, 12);
     expect(wrapper.get('[data-testid="configure-seasoning-price"]').exists()).toBe(true);
 
     await wrapper.get('[data-testid="refresh-seasoning-price"]').trigger('click');
@@ -271,7 +268,7 @@ describe('SeasoningBindingDialog', () => {
       movingAvgPrice: null,
       unitPrice: null,
     }]);
-    await fillRequiredFields(wrapper, 5, 'g');
+    await fillRequiredFields(wrapper, 5);
 
     expect(wrapper.get('[data-testid="configure-seasoning-price"]').exists()).toBe(true);
     await wrapper.findAll('button').find((button) => button.text().includes('保存到本工序'))?.trigger('click');
@@ -291,7 +288,7 @@ describe('SeasoningBindingDialog', () => {
       movingAvgPrice: invalidPrice,
       unitPrice: invalidPrice,
     }]);
-    await fillRequiredFields(wrapper, 12, 'g');
+    await fillRequiredFields(wrapper, 12);
     expect(wrapper.get('[data-testid="configure-seasoning-price"]').exists()).toBe(true);
     await wrapper.findAll('button').find((button) => button.text().includes('保存到本工序'))?.trigger('click');
     await flushPromises();

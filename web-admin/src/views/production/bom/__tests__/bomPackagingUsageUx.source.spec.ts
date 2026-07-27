@@ -5,12 +5,16 @@ import { describe, expect, it } from 'vitest';
 const source = readFileSync(resolve(import.meta.dirname, '../index.vue'), 'utf8');
 
 describe('BOM packaging usage UX', () => {
-  it('uses SKU packaging layers as the primary business expression', () => {
-    expect(source).toContain('function matchPackagingLayerForMaterial()');
-    expect(source).toContain('canonicalUnitCode(layer.packageUnit) === materialUnit');
-    expect(source).toContain('function onPackagingRoleChange(role: string)');
-    expect(source).toContain('每1${displayUnit(denominator)}成品使用');
-    expect(source).toContain('label="业务用量"');
-    expect(source).toContain('label="基础单位折算（成本）"');
+  it('only asks for per-output usage and inherits the packaging material unit', () => {
+    expect(source).toContain('label="每 1 份成品使用量"');
+    expect(source).toContain('单位固定来自包材档案，不在 BOM 中修改');
+    expect(source).toContain("packagingSpecId: null");
+    expect(source).toContain("packagingRole: isPackaging ? 'PRIMARY_CONTAINER' : null");
+    expect(source).toContain('bomForm.value.standardQuantity = naturalQuantity');
+    expect(source).toContain('label="每 1 份成品用量"');
+    expect(source).not.toContain('label="包装规格"');
+    expect(source).not.toContain('label="包材角色"');
+    expect(source).not.toContain('function matchPackagingLayerForMaterial()');
+    expect(source).not.toContain('function onPackagingRoleChange(role: string)');
   });
 });
