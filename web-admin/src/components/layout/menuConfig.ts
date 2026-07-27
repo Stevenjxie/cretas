@@ -141,6 +141,7 @@ const rawMenuConfig: MenuItem[] = [
     hideForFactoryTypes: ['RESTAURANT'],
     children: [
       { path: '/quality/inspections', title: '质检记录', icon: '', module: 'quality', groupLabel: '质量检验' },
+      { path: '/quality/label-qc', title: '包装标签拍检', icon: '', module: 'quality' },
       // Sprint4-H Q-PROCESS-1: 工序质检不良闭环
       { path: '/quality/defects', title: '工序质检不良', icon: '', module: 'quality' },
       // Sprint4-H Q-RETURN-1: 质检退回单 (上游退回, 不含客户销售退货)
