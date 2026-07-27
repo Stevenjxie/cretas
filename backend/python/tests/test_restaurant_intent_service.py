@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import replace
+from datetime import date
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -2272,3 +2273,106 @@ async def test_revenue_improvement_executes_grounded_optimization_not_sales_only
     assert result["executed_resolvers"] == ["RESTAURANT_OPS_BUSINESS_OPTIMIZATION"]
     optimization.assert_awaited_once()
     neighbouring.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_current_week_optimization_without_data_offers_usable_period_buttons(
+    monkeypatch,
+):
+    import smartbi.agent.synthesis_engine as synthesis_mod
+
+    response = SimpleNamespace(
+        answer="系统当前能查到的数据还不够，请先补齐数据。",
+        source="deterministic",
+        plan={"intent": "business_optimization"},
+        fact_check=None,
+        dimension_coverage={
+            "data_mode": "DEMO",
+            "available_dimensions": [],
+            "missing_dimensions": ["finance"],
+        },
+        charts=[],
+    )
+    engine = SimpleNamespace(synthesize=AsyncMock(return_value=response))
+    monkeypatch.setattr(
+        synthesis_mod,
+        "ComprehensiveSynthesisEngine",
+        lambda _pool: engine,
+    )
+    spec = _spec(
+        intent="RESTAURANT_OPS_BUSINESS_OPTIMIZATION",
+        date_range=(date(2026, 7, 27), date(2026, 7, 27)),
+    )
+
+    answer = await svc._resolve_business_optimization(
+        object(),
+        "DEMO_REST",
+        "这周全部门店营收怎么提高，给我今天能做的动作",
+        spec,
+        [],
+    )
+
+    assert "本周截至今天还没有可用的经营数据" in answer.answer_text
+    assert "请先把缺少的数据补齐" not in answer.answer_text
+    assert answer.meta["no_pos_data"] is True
+    assert answer.meta["period_data_unavailable"] is True
+    assert [item["label"] for item in answer.meta["suggested_followups"]] == [
+        "最近7天",
+        "上周",
+        "最近30天",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_period_unavailable_guard_forwards_actionable_followups(monkeypatch):
+    query = "这周全部门店营收怎么提高，给我今天能做的动作"
+    spec = _build_spec(
+        "RESTAURANT_OPS_BUSINESS_OPTIMIZATION",
+        query,
+        confidence=0.99,
+        tier="llm",
+        planner_authority="llm",
+        time_phrase="本周",
+        llm_requested_metrics=("revenue",),
+        llm_analysis_action="optimize",
+        llm_store_scope="all",
+        require_explicit_time=True,
+    )
+    followups = [
+        {
+            "label": "最近7天",
+            "question": "最近7天全部门店营收怎么提高，给我今天能做的动作",
+        },
+        {
+            "label": "上周",
+            "question": "上周全部门店营收怎么提高，给我今天能做的动作",
+        },
+    ]
+    monkeypatch.setattr(
+        svc,
+        "_resolve_business_optimization",
+        AsyncMock(return_value=OpsAnswer(
+            code="RESTAURANT_OPS_BUSINESS_OPTIMIZATION",
+            title="经营诊断与提升方案",
+            answer_text="本周截至今天还没有可用的经营数据。",
+            charts=[],
+            kpis=[],
+            meta={
+                "scope_matches_request": True,
+                "no_pos_data": True,
+                "period_data_unavailable": True,
+                "suggested_followups": followups,
+            },
+        )),
+    )
+
+    result = await tiered_answer(
+        query,
+        object(),
+        "DEMO_REST",
+        "restaurant_manager",
+        precomputed_spec=spec,
+    )
+
+    assert result["kind"] == "clarification"
+    assert result["suggested_followups"] == followups
