@@ -421,7 +421,6 @@ function patchPhase(operation: WorkflowPatch['op']): number {
 function isPathCompatibleWithNodeKind(kind: ProductProcessNodeKind, path: string): boolean {
   if (kind === 'PROCESS') {
     return path === 'ports'
-      || path === 'portGroups'
       || path === 'conversionRule'
       || path.startsWith('conversionRule.')
       || path === 'reportingRequired';
@@ -441,15 +440,15 @@ const portSelectionModes = new Set(['ALL_REQUIRED', 'EXACTLY_ONE', 'AT_LEAST_ONE
 const materialDataKeys = new Set(['name', 'skuId', 'skuCode', 'specification', 'baseUnit', 'bound']);
 const processDataKeys = new Set([
   'workProcessId', 'processName', 'processCategory', 'inputUnit', 'outputUnit', 'standardTime',
-  'ports', 'portGroups', 'inputRequirementGroups', 'conversionRule', 'reportingRequired', 'allowMultipleUpstreamSources',
-  'allowFinishedGoodsSource',
+  'ports', 'conversionRule', 'reportingRequired', 'allowMultipleUpstreamSources',
+  'allowFinishedGoodsSource', 'reportingSelectionMode',
 ]);
 const portKeys = new Set([
   'id', 'direction', 'materialNodeId', 'materialName', 'skuId', 'materialKind', 'unit',
   'conversionRefId', 'conversionVersion', 'ordinal',
 ]);
 const fieldPaths = new Set([
-  'name', 'skuId', 'skuCode', 'specification', 'ports', 'portGroups', 'conversionRule',
+  'name', 'skuId', 'skuCode', 'specification', 'ports', 'conversionRule',
   'conversionRule.mode', 'conversionRule.expression', 'reportingRequired',
 ]);
 
@@ -550,7 +549,8 @@ function isProcessNodeData(value: Record<string, unknown>): value is ProcessNode
     && optionalNullableString(value.processCategory)
     && optionalNullableFiniteNumber(value.standardTime)
     && optionalBoolean(value.allowMultipleUpstreamSources)
-    && optionalBoolean(value.allowFinishedGoodsSource);
+    && optionalBoolean(value.allowFinishedGoodsSource)
+    && (value.reportingSelectionMode === undefined || value.reportingSelectionMode === 'ACTUAL_IO');
 }
 
 function isProcessPortGroup(value: unknown): value is ProcessPortGroup {
@@ -618,7 +618,6 @@ function isAllowedFieldValue(path: string, value: unknown): boolean {
   if (path === 'conversionRule.mode') return typeof value === 'string' && conversionModes.has(value);
   if (path === 'conversionRule') return isConversionRule(value);
   if (path === 'ports') return Array.isArray(value) && value.every(isProcessPort);
-  if (path === 'portGroups') return Array.isArray(value) && value.every(isProcessPortGroup);
   return false;
 }
 
@@ -809,35 +808,6 @@ export function validateWorkflow(
     processPortGroupErrors(data).forEach((message) => {
       errors.push({ code: 'PORT_GROUP_INVALID', nodeId: node.id, message: `${data.processName}: ${message}` });
     });
-    const outputPorts = ports.filter((port) => port.direction === 'OUTPUT');
-    if (outputPorts.length > 1) {
-      const roles = new Set(['MAIN', 'CO_PRODUCT', 'BY_PRODUCT']);
-      const hasIncompleteContract = outputPorts.some((port) => {
-        const ratio = port.costAllocationRatio;
-        return !port.outputRole
-          || !roles.has(port.outputRole)
-          || typeof ratio !== 'number'
-          || !Number.isFinite(ratio)
-          || (port.outputRole === 'BY_PRODUCT' ? ratio !== 0 : ratio <= 0);
-      });
-      if (hasIncompleteContract) {
-        errors.push({
-          code: 'OUTPUT_CONTRACT_INVALID',
-          nodeId: node.id,
-          message: `${data.processName} 的每个产出都必须配置角色和成本分摊比例`,
-        });
-      } else {
-        const mainCount = outputPorts.filter((port) => port.outputRole === 'MAIN').length;
-        const ratioTotal = outputPorts.reduce((total, port) => total + (port.costAllocationRatio ?? 0), 0);
-        if (mainCount !== 1 || Math.abs(ratioTotal - 100) > 0.0001) {
-          errors.push({
-            code: 'OUTPUT_CONTRACT_INVALID',
-            nodeId: node.id,
-            message: `${data.processName} 必须有且仅有一个主产出，成本分摊比例合计必须为 100%`,
-          });
-        }
-      }
-    }
     ports.forEach((port) => {
       const connected = port.direction === 'INPUT'
         ? definition.edges.some((edge) => edge.target === node.id && edge.targetHandle === port.id)

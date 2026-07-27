@@ -479,6 +479,8 @@ export interface WorkflowPortDescriptor {
   materialNodeId?: string;
   materialKind: 'RAW_MATERIAL' | 'SEMI_FINISHED' | 'FINISHED_GOOD';
   skuId: string;
+  /** Pinned-BOM main/substitute candidates for this logical input. */
+  allowedSkuIds?: string[];
   materialName: string | null;
   unit: string | null;
   /** 固定包装成品的 SKU 单位净重（克/基本单位）；缺失时前端不得猜测重量换算。 */

@@ -65,6 +65,12 @@ public class WorkflowClerkSheetConfigDTO {
         private String materialNodeId;
         private String materialKind;
         private String skuId;
+        /**
+         * Exact material candidates authorized for this logical input by the
+         * production plan's pinned BOM (main material plus structured substitutes).
+         * Empty is never interpreted as "all materials".
+         */
+        private List<String> allowedSkuIds;
         private String materialName;
         private String unit;
         /** Workflow 运行时物化时锁定的 SKU 每基本单位净重（克）。 */

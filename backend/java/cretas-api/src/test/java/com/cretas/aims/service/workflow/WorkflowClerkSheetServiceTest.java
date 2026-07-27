@@ -1,11 +1,15 @@
 package com.cretas.aims.service.workflow;
 
 import com.cretas.aims.dto.workflow.WorkflowClerkSheetConfigDTO;
+import com.cretas.aims.dto.bom.BomItemSubstituteDTO;
 import com.cretas.aims.entity.ProductType;
 import com.cretas.aims.entity.ProductWorkProcess;
 import com.cretas.aims.entity.ProductionBatch;
+import com.cretas.aims.entity.ProductionPlan;
 import com.cretas.aims.entity.RawMaterialType;
 import com.cretas.aims.entity.WorkProcess;
+import com.cretas.aims.entity.bom.BomRecipe;
+import com.cretas.aims.entity.bom.BomRecipeItem;
 import com.cretas.aims.entity.workflow.ProductionWorkflowInstance;
 import com.cretas.aims.entity.workflow.WorkflowTaskPort;
 import com.cretas.aims.entity.workprocess.WorkProcessTask;
@@ -13,12 +17,16 @@ import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.repository.ProductTypeRepository;
 import com.cretas.aims.repository.ProductWorkProcessRepository;
 import com.cretas.aims.repository.ProductionBatchRepository;
+import com.cretas.aims.repository.ProductionPlanRepository;
 import com.cretas.aims.repository.RawMaterialTypeRepository;
 import com.cretas.aims.repository.WorkProcessRepository;
+import com.cretas.aims.repository.bom.BomRecipeItemRepository;
+import com.cretas.aims.repository.bom.BomRecipeRepository;
 import com.cretas.aims.repository.workflow.ProductionWorkflowInstanceRepository;
 import com.cretas.aims.repository.workflow.WorkflowTaskPortRepository;
 import com.cretas.aims.repository.workprocess.WorkProcessTaskRepository;
 import com.cretas.aims.service.workflow.impl.WorkflowClerkSheetServiceImpl;
+import com.cretas.aims.service.bom.BomItemSubstituteService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -43,6 +51,7 @@ import static org.mockito.Mockito.lenient;
 class WorkflowClerkSheetServiceTest {
 
     @Mock private ProductionBatchRepository productionBatchRepository;
+    @Mock private ProductionPlanRepository productionPlanRepository;
     @Mock private ProductionWorkflowInstanceRepository instanceRepository;
     @Mock private WorkProcessTaskRepository taskRepository;
     @Mock private WorkflowTaskPortRepository portRepository;
@@ -50,6 +59,9 @@ class WorkflowClerkSheetServiceTest {
     @Mock private ProductWorkProcessRepository productWorkProcessRepository;
     @Mock private RawMaterialTypeRepository rawMaterialTypeRepository;
     @Mock private ProductTypeRepository productTypeRepository;
+    @Mock private BomRecipeRepository bomRecipeRepository;
+    @Mock private BomRecipeItemRepository bomRecipeItemRepository;
+    @Mock private BomItemSubstituteService substituteService;
     @Mock private WorkflowReportingUnitResolver reportingUnitResolver;
 
     private WorkflowClerkSheetService service;
@@ -62,8 +74,14 @@ class WorkflowClerkSheetServiceTest {
                 org.mockito.ArgumentMatchers.any(),
                 org.mockito.ArgumentMatchers.anyString()))
                 .thenAnswer(invocation -> invocation.getArgument(3));
+        ProductionPlan plan = new ProductionPlan();
+        plan.setId("PLAN-1");
+        plan.setFactoryId("F006");
+        lenient().when(productionPlanRepository.findByIdAndFactoryId("PLAN-1", "F006"))
+                .thenReturn(Optional.of(plan));
         service = new WorkflowClerkSheetServiceImpl(
                 productionBatchRepository,
+                productionPlanRepository,
                 instanceRepository,
                 taskRepository,
                 portRepository,
@@ -71,6 +89,9 @@ class WorkflowClerkSheetServiceTest {
                 productWorkProcessRepository,
                 rawMaterialTypeRepository,
                 productTypeRepository,
+                bomRecipeRepository,
+                bomRecipeItemRepository,
+                substituteService,
                 reportingUnitResolver);
     }
 
@@ -235,6 +256,60 @@ class WorkflowClerkSheetServiceTest {
         assertTrue(packDescriptor.getOutput().getFinished());
         assertEquals("box", packDescriptor.getOutput().getUnit());
         assertEquals(0, new BigDecimal("200").compareTo(packDescriptor.getOutput().getGramsPerUnit()));
+    }
+
+    @Test
+    void limitsActualRawMaterialCandidatesToPinnedBomMainAndSubstitutes() {
+        ProductionPlan plan = new ProductionPlan();
+        plan.setId("PLAN-1");
+        plan.setFactoryId("F006");
+        plan.setSelectedBomRecipeId("BOM-1");
+        when(productionPlanRepository.findByIdAndFactoryId("PLAN-1", "F006"))
+                .thenReturn(Optional.of(plan));
+
+        ProductionBatch workflowBatch = batch(901L, ProductionBatch.WorkflowSelectionMode.WORKFLOW);
+        ProductionWorkflowInstance instance = instance(501L);
+        when(productionBatchRepository.findByFactoryIdAndProductionPlanId("F006", "PLAN-1"))
+                .thenReturn(List.of(workflowBatch));
+        when(instanceRepository.findByFactoryIdAndProductionBatchId("F006", 901L))
+                .thenReturn(Optional.of(instance));
+        when(taskRepository.findByFactoryIdAndWorkflowInstanceIdOrderByProcessOrderAsc("F006", 501L))
+                .thenReturn(List.of(task(801L, 501L, "mix", "MIX", 1, "kg")));
+        when(portRepository.findByFactoryIdAndWorkflowInstanceId("F006", 501L))
+                .thenReturn(List.of(
+                        port(801L, "mix-in", WorkflowTaskPort.Direction.INPUT,
+                                1, "RAW_MATERIAL", "WORKFLOW-PLACEHOLDER", "kg", false),
+                        port(801L, "mix-out", WorkflowTaskPort.Direction.OUTPUT,
+                                2, "SEMI_FINISHED", "PT-SEMI", "kg", false)));
+
+        BomRecipe recipe = new BomRecipe();
+        recipe.setId("BOM-1");
+        recipe.setFactoryId("F006");
+        when(bomRecipeRepository.findById("BOM-1")).thenReturn(Optional.of(recipe));
+        BomRecipeItem item = new BomRecipeItem();
+        item.setId(31L);
+        item.setRecipeId("BOM-1");
+        item.setFactoryId("F006");
+        item.setWorkflowInputPortId("mix-in");
+        item.setMaterialTypeId("RM-MAIN");
+        when(bomRecipeItemRepository.findByRecipeIdOrderBySortOrderAsc("BOM-1"))
+                .thenReturn(List.of(item));
+        when(substituteService.listByRecipe("F006", "BOM-1")).thenReturn(List.of(
+                BomItemSubstituteDTO.builder()
+                        .parentRecipeItemId(31L)
+                        .substituteMaterialTypeId("RM-SUB")
+                        .build()));
+        when(rawMaterialTypeRepository.findById("RM-MAIN"))
+                .thenReturn(Optional.of(rawMaterialType("RM-MAIN", "F006", "主料", "kg")));
+
+        WorkflowClerkSheetConfigDTO result =
+                service.getWorkflowSheetConfig("F006", "PLAN-1");
+        WorkflowClerkSheetConfigDTO.PortDescriptor input =
+                result.getProcesses().getFirst().getInputs().getFirst();
+
+        assertEquals("RM-MAIN", input.getSkuId());
+        assertEquals("主料", input.getMaterialName());
+        assertEquals(List.of("RM-MAIN", "RM-SUB"), input.getAllowedSkuIds());
     }
 
     @Test

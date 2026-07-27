@@ -23,6 +23,7 @@ import com.cretas.aims.service.validation.ProductProcessWorkflowCatalogValidator
 import com.cretas.aims.service.validation.ProductProcessWorkflowValidator;
 import com.cretas.aims.service.validation.ProductProcessWorkflowUnitValidator;
 import com.cretas.aims.service.workflow.WorkflowRevisionSnapshotService;
+import com.cretas.aims.service.workflow.WorkflowActualIoSemantics;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -67,6 +68,7 @@ public class ProductProcessWorkflowServiceImpl implements ProductProcessWorkflow
             String productTypeId,
             ProductProcessWorkflowDTO definition) {
         requireWorkflowOwner(factoryId, productTypeId);
+        WorkflowActualIoSemantics.normalizeDraft(definition);
         validator.validateForDraft(definition);
         var unitValidation = unitValidator.validate(factoryId, definition);
         definition.setUnitWarnings(java.util.stream.Stream.concat(
@@ -172,6 +174,10 @@ public class ProductProcessWorkflowServiceImpl implements ProductProcessWorkflow
         repository.saveAndFlush(snapshot);
 
         draft.setDefinitionVersion(draft.getDefinitionVersion() + 1);
+        // The draft now represents a new mutable definition version. It must not
+        // continue advertising the immutable revision captured for the snapshot.
+        draft.setCurrentRevisionId(null);
+        draft.setCurrentRevisionHash(null);
         return toDTO(repository.saveAndFlush(draft));
     }
 

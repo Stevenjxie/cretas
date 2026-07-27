@@ -508,7 +508,9 @@ async function loadRawBatches() {
     // raw_material_types.id) 过滤: 不传 productTypeId 拉全仓可用原料, 再客户端筛到本道所需原料类型。
     // legacy 计划 (无 workflowContext) 保持原按 productTypeId 查 BOM 原料的行为 (不回归)。
     const wfRawTypeIds = new Set(
-      workflowRawInputs.value.map((p) => p.skuId).filter((id): id is string => !!id),
+      workflowRawInputs.value.flatMap((port) => (
+        port.allowedSkuIds?.length ? port.allowedSkuIds : [port.skuId]
+      )).filter((id): id is string => !!id),
     );
     const useWorkflowRaw = wfRawTypeIds.size > 0;
     const resp = await getAvailableRawBatches(
@@ -575,6 +577,29 @@ function portById(portId?: string): WorkflowPortDescriptor | undefined {
   if (!portId) return undefined;
   return [...(props.workflowContext?.inputs ?? []), ...outputPorts.value]
     .find((port) => port.workflowPortId === portId);
+}
+
+function materialOptionsForPort(portId?: string): Array<{ value: string; label: string }> {
+  const port = portById(portId);
+  if (!port) return [];
+  const allowed = new Set(port.allowedSkuIds?.length ? port.allowedSkuIds : [port.skuId]);
+  const seen = new Set<string>();
+  return rawBatchOptions.value.flatMap((batch) => {
+    const materialTypeId = batch.materialTypeId;
+    if (!materialTypeId || !allowed.has(materialTypeId) || seen.has(materialTypeId)) return [];
+    seen.add(materialTypeId);
+    return [{
+      value: materialTypeId,
+      label: batch.materialName || batch.materialTypeName || materialTypeId,
+    }];
+  });
+}
+
+function selectMaterialForInput(item: MaterialInputTotalLine, materialTypeId: string): void {
+  const option = materialOptionsForPort(item.workflowPortId)
+    .find((candidate) => candidate.value === materialTypeId);
+  item.materialTypeId = materialTypeId;
+  item.materialName = option?.label || materialTypeId;
 }
 
 function setPortSelected(
@@ -2692,7 +2717,25 @@ defineExpose({ hasUnsavedRows, refreshSharedInventories });
                   @change="(selected: boolean) => setPortSelected(row, portById(item.workflowPortId), selected)"
                 >选用</el-checkbox>
                 <span class="sp-port-selection-hint">{{ portSelectionSummary(portById(item.workflowPortId)) }}</span>
-                <label class="sp-card-label">{{ item.materialName }} · 投料总量</label>
+                <label class="sp-card-label">本次投入原料</label>
+                <el-select
+                  :model-value="item.materialTypeId"
+                  :disabled="!item.selected"
+                  data-testid="bom-authorized-material-select"
+                  aria-label="选择本次实际投入物料"
+                  placeholder="选择主料或替代料…"
+                  style="width:180px"
+                  size="small"
+                  @change="(materialTypeId: string) => selectMaterialForInput(item, materialTypeId)"
+                >
+                  <el-option
+                    v-for="option in materialOptionsForPort(item.workflowPortId)"
+                    :key="option.value"
+                    :label="option.label"
+                    :value="option.value"
+                  />
+                </el-select>
+                <label class="sp-card-label">投料总量</label>
                 <el-input-number
                   v-model="item.quantity"
                   :disabled="!item.selected"
@@ -3326,7 +3369,23 @@ defineExpose({ hasUnsavedRows, refreshSharedInventories });
                 <template v-if="usesAutoMaterialTotals(row)">
                   <td class="sp-td">
                     <div v-for="item in row.materialInputTotals" :key="item.workflowPortId || item.materialTypeId">
-                      {{ item.materialName }}
+                      <el-select
+                        :model-value="item.materialTypeId"
+                        :disabled="!item.selected"
+                        data-testid="bom-authorized-material-select"
+                        aria-label="选择本次实际投入物料"
+                        placeholder="选择主料或替代料…"
+                        style="width:180px"
+                        size="small"
+                        @change="(materialTypeId: string) => selectMaterialForInput(item, materialTypeId)"
+                      >
+                        <el-option
+                          v-for="option in materialOptionsForPort(item.workflowPortId)"
+                          :key="option.value"
+                          :label="option.label"
+                          :value="option.value"
+                        />
+                      </el-select>
                     </div>
                   </td>
                   <td class="sp-td sp-td-num">
