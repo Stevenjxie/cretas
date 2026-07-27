@@ -27,6 +27,7 @@ from smartbi.gold.restaurant_ops_router import (
     _resolve_sales_date_range,
     _resolve_sales_query_spec,
     _scoped_dish_metric_answer,
+    extract_dish_candidates,
     match_restaurant_ops,
     reconcile_restaurant_ops_code,
     resolve_by_code,
@@ -3659,3 +3660,23 @@ async def test_store_directory_answers_count_and_names_without_time_question():
     assert "兄弟土菜馆" in answer.answer_text
     assert answer.kpis == [{"label": "门店数量", "value": 3, "unit": "家"}]
     assert "时间" not in answer.answer_text
+
+
+def test_multi_dish_extraction_keeps_first_dish_after_all_store_scope():
+    assert extract_dish_candidates(
+        "本月全部门店米饭和娃娃菜和招牌藤椒味(单人份)的销量"
+    ) == ["米饭", "娃娃菜", "招牌藤椒味(单人份)"]
+
+
+def test_scoped_dish_reasonableness_answers_without_inventing_a_threshold():
+    answer = _scoped_dish_metric_answer(
+        _dish_metric_entry(),
+        window_label="本月",
+        query="本月米饭的毛利率是否合理",
+    )
+
+    assert answer is not None
+    assert "「米饭」" in answer
+    assert "毛利率 80.0%" in answer
+    assert "不能判断是否合理" in answer
+    assert "不会用主观阈值" in answer

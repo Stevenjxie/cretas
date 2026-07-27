@@ -3686,3 +3686,196 @@ def _spec_for_contract(**overrides):
     )
     defaults.update(overrides)
     return RestaurantQuerySpec(**defaults)
+
+
+def test_semantic_contract_repairs_plain_profit_lookup_action_and_dish():
+    spec = _build_spec(
+        "RESTAURANT_OPS_GROSS_MARGIN",
+        "本月全部门店米饭赚钱吗",
+        confidence=0.96,
+        tier="llm",
+        llm_requested_metrics=("gross_margin",),
+        llm_dimensions=("dish",),
+        llm_analysis_action="diagnose",
+        llm_store_scope="all",
+        planner_authority="llm",
+        llm_semantics_authoritative=True,
+    )
+
+    assert spec.analysis_action == "lookup"
+    assert spec.dish_slot == "米饭"
+    assert spec.requested_metrics == ("gross_margin",)
+    assert spec.planned_intents == ("RESTAURANT_OPS_GROSS_MARGIN",)
+
+
+def test_semantic_contract_repairs_store_loss_existence_lookup():
+    spec = _build_spec(
+        "RESTAURANT_OPS_GROSS_MARGIN",
+        "本月全部门店有没有店在亏损",
+        confidence=0.95,
+        tier="llm",
+        llm_requested_metrics=("gross_margin",),
+        llm_dimensions=(),
+        llm_analysis_action="diagnose",
+        llm_store_scope="all",
+        planner_authority="llm",
+        llm_semantics_authoritative=True,
+    )
+
+    assert spec.analysis_action == "lookup"
+    assert "store" in spec.dimensions
+    assert spec.intent == "RESTAURANT_OPS_STORE_MARGIN"
+    assert spec.planned_intents == ("RESTAURANT_OPS_STORE_MARGIN",)
+
+
+def test_semantic_contract_repairs_store_dish_ranking_from_verbatim_query():
+    spec = _build_spec(
+        "RESTAURANT_OPS_SALES_SUMMARY",
+        "本月全部门店哪家店的米饭卖得最好",
+        confidence=0.94,
+        tier="llm",
+        llm_requested_metrics=("sales_volume",),
+        llm_dimensions=("store", "ingredient"),
+        llm_analysis_action="lookup",
+        llm_store_scope="all",
+        planner_authority="llm",
+        llm_semantics_authoritative=True,
+    )
+
+    assert spec.dish_slot == "米饭"
+    assert set(spec.dimensions) == {"store", "dish"}
+    assert spec.intent == "RESTAURANT_OPS_STORE_MARGIN"
+    assert spec.planned_intents == ("RESTAURANT_OPS_STORE_MARGIN",)
+
+
+def test_semantic_contract_removes_model_invented_overview_metrics():
+    spec = _build_spec(
+        "RESTAURANT_OPS_SALES_SUMMARY",
+        "这个月全部门店生意怎么样",
+        confidence=0.95,
+        tier="llm",
+        llm_requested_metrics=("revenue", "orders", "sales_volume"),
+        llm_dimensions=(),
+        llm_analysis_action="lookup",
+        llm_store_scope="all",
+        planner_authority="llm",
+        llm_semantics_authoritative=True,
+    )
+
+    assert spec.requested_metrics == ()
+    assert spec.intent == "RESTAURANT_OPS_SALES_SUMMARY"
+    assert spec.planned_intents == ("RESTAURANT_OPS_SALES_SUMMARY",)
+
+
+def test_money_wording_is_revenue_not_quantity():
+    assert _detect_requested_metrics("昨天全部门店卖了多少钱") == ("revenue",)
+
+
+def test_semantic_contract_repairs_named_store_dish_sales_without_margin_inflation():
+    spec = _build_spec(
+        "RESTAURANT_OPS_GROSS_MARGIN",
+        "本月鲜行者打浦桥日月光店的米饭卖得怎么样",
+        confidence=0.95,
+        tier="llm",
+        llm_requested_metrics=("sales_volume", "gross_margin"),
+        llm_dimensions=("dish", "store"),
+        llm_analysis_action="diagnose",
+        llm_store="鲜行者打浦桥日月光店",
+        llm_stores=("鲜行者打浦桥日月光店",),
+        llm_store_scope="single",
+        planner_authority="llm",
+        llm_semantics_authoritative=True,
+    )
+
+    assert spec.requested_metrics == ("sales_volume",)
+    assert spec.analysis_action == "lookup"
+    assert spec.dish_slot == "米饭"
+    assert spec.store_slots == ("鲜行者打浦桥日月光店",)
+    assert spec.planned_intents == ("RESTAURANT_OPS_STORE_MARGIN",)
+
+
+def test_daypart_business_question_repairs_adjacent_sales_summary():
+    spec = _semantic_spec_from_t3(
+        {
+            "intent": "RESTAURANT_OPS_SALES_SUMMARY",
+            "time_range": {"type": "named", "value": "this_month"},
+            "wants_margin": False,
+            "asks_profitability": False,
+            "requested_metrics": ["revenue", "orders", "sales_volume"],
+            "analysis_action": "lookup",
+            "dimensions": ["time"],
+            "dish": None,
+            "store": None,
+            "stores": [],
+            "store_scope": "all",
+            "confidence": 0.93,
+            "clarification_needed": False,
+            "missing_fields": [],
+            "clarification_question": None,
+            "clarification_options": [],
+        },
+        "本月全部门店晚上生意怎么样",
+    )
+
+    assert spec.intent == "RESTAURANT_OPS_STAFFING_ADVICE"
+    assert spec.planned_intents == ("RESTAURANT_OPS_STAFFING_ADVICE",)
+    assert spec.requested_metrics == ()
+    assert spec.analysis_action == "lookup"
+    assert spec.planner_authority == "llm_contract_repair"
+
+
+@pytest.mark.asyncio
+async def test_playbook_never_asks_for_store_scope():
+    spec = _build_spec(
+        "RESTAURANT_OPS_PLAYBOOK",
+        "毛利率低有什么行业参考做法",
+        confidence=0.96,
+        tier="llm",
+        llm_requested_metrics=("gross_margin",),
+        llm_dimensions=(),
+        llm_analysis_action="lookup",
+        planner_authority="llm",
+        llm_semantics_authoritative=True,
+    )
+
+    guarded = await _apply_store_scope_guard(None, "FACTORY_A", spec)
+    assert guarded is spec
+    assert guarded.clarification_needed is False
+
+
+def test_typed_dish_context_keeps_cost_slot_after_store_choice():
+    parent = {
+        "parent_query": "米饭的销量是多少 本月 全部门店",
+        "parent_template_code": "RESTAURANT_OPS_GROSS_MARGIN",
+        "turns_history": [{
+            "q": "全部门店",
+            "context": {
+                "focus_entity": {"type": "dish", "name": "米饭"},
+                "requested_metrics": ["sales_volume"],
+                "window_label": "本月",
+                "analysis_action": "lookup",
+                "store_scope": "all",
+            },
+        }],
+    }
+
+    effective, inherited = contextualize_restaurant_followup("那成本呢", parent)
+    assert inherited is True
+    assert "米饭" in effective
+    assert "成本" in effective
+    assert "本月" in effective
+    assert "全部门店" in effective
+
+    spec = _build_spec(
+        "RESTAURANT_OPS_RECIPE_COST",
+        effective,
+        confidence=0.95,
+        tier="llm",
+        llm_requested_metrics=("recipe_cost",),
+        llm_dimensions=(),
+        llm_analysis_action="lookup",
+        planner_authority="llm",
+        llm_semantics_authoritative=True,
+    )
+    assert spec.dish_slot == "米饭"
+    assert spec.planned_intents == ("RESTAURANT_OPS_GROSS_MARGIN",)
