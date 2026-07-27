@@ -194,6 +194,11 @@ class IntentExecutionOrchestratorRestaurantOwnerActionTest {
                 .isFalse();
         assertThat(orchestrator.shouldRouteRestaurantOwnerAction(
                 "DEMO_REST",
+                "本周和上周全部门店营业额相比是上升还是下降",
+                Collections.emptyMap()))
+                .isFalse();
+        assertThat(orchestrator.shouldRouteRestaurantOwnerAction(
+                "DEMO_REST",
                 "本月全部门店销量最高的5道菜是什么？请排除米饭、餐巾纸、湿纸巾和餐具",
                 Collections.emptyMap()))
                 .isFalse();

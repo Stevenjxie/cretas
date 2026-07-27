@@ -1912,13 +1912,14 @@ def _explicit_store_dish_ranking_spec(
 
     This is deliberately narrower than a keyword route.  It grants execution
     only when every resolver-facing semantic slot is independently present:
-    either an explicit all-store scope or one or more concrete store names,
-    the dish-sales metric, a best/worst ranking direction, and a concrete
-    date window. When time alone is missing, it deterministically returns the
-    existing time clarification instead of allowing T3 to invent a default
-    30-day window. Any extra metric, named dish, comparison, diagnosis,
-    optimisation, export, or negated ranking phrase remains LLM-authorised
-    and fail-closed.
+    the dish-sales metric and a best/worst ranking direction. Store scope may
+    be an explicit all-store scope, one or more concrete store names, or the
+    one remaining slot to clarify after time. When time is missing it
+    deterministically returns the existing time clarification first instead
+    of allowing T3 to invent a default 30-day window; the normal tenant-aware
+    store-scope guard then asks for all/single/multiple stores. Any extra
+    metric, named dish, comparison, diagnosis, optimisation, export, or
+    negated ranking phrase remains LLM-authorised and fail-closed.
 
     The live failure that motivated this guard supplied two exact store names,
     ``最近7天`` and ``哪个菜卖得好``. Sending that already-complete plan to T3
@@ -1933,7 +1934,12 @@ def _explicit_store_dish_ranking_spec(
     missing_time = start_date is None and end_date is None
     requested_metrics = _detect_requested_metrics(text)
     if (
-        store_scope not in {"all", "single", "multiple"}
+        store_scope not in {None, "all", "single", "multiple"}
+        or (store_scope is None and store_slots)
+        or (
+            store_scope is None
+            and not any(token in text for token in ("销量", "销售量"))
+        )
         or (store_scope == "all" and store_slots)
         or (store_scope == "single" and len(store_slots) != 1)
         or (store_scope == "multiple" and len(store_slots) < 2)
