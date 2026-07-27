@@ -100,9 +100,8 @@ node scripts/validate-tokens.cjs --dir src/
 ## Integration
 
 **With brand:** Extract primitives from brand colors/typography
-**With ui-styling:** Component tokens → Tailwind config
 
-**Skill Dependencies:** brand, ui-styling
+**Skill Dependencies:** brand
 **Primary Agents:** ui-ux-designer, frontend-developer
 
 ## Slide System
