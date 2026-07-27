@@ -7,7 +7,7 @@ description: 多模型分发路由规范(Opus/Sonnet/Fable/Codex/Composer)。触
 
 **最后更新**: 2026-06-10
 **触发**: Steve 要"Claude 出计划时直接产出可分发的 task 输出, 我去派给其他 chat, 并指定哪些给 GPT-5.5·Codex / 哪些给 Composer 2.5"。增补：Sonnet 执行层 + 三轴路由（模型/effort/orchestration）+ 预算均衡注记 + 两通道 + 审查分层。**2026-06-10**: Fable 5 上线(2x Opus 消耗)→ 加 model 轴破玻璃顶层 + Fable 5 定位铁律(organizer 本体不换 Fable 5, 只派 `fable` subagent 做四落点单点)。**2026-06-10 晚 v2(Steve 拍板)**: 升级闸修订 — 卡死阈值 2轮→**1轮认真尝试**; 新增**三类预授权直通**(prod 事故计时中/同族前科/不可逆小diff终审)可跳过 Opus 直接 Fable; Opus 失败轮产物必须回收进 fable brief。
-**关系**: 这是 `.claude/rules/parallel-work-analysis.md` 的**升级层** —— 老规则回答"能不能并行", 本规则在它之上回答"每块并行工作派给哪个模型 + 怎么物理隔离 + 怎么交接回 main"。隔离铁律继承 `.claude/rules/worktree-and-main-only-deploy.md` + `.claude/rules/concurrent-edit-safety.md`。编排顶层入口 → `organizer` skill。
+**关系**: 本规则同时回答"能不能并行"与"每块并行工作派给哪个模型 + 怎么物理隔离 + 怎么交接回 main"（前身 `.claude/rules/parallel-work-analysis.md` 已于 2026-07-28 删除并入本 skill）。隔离铁律继承 `.claude/rules/worktree-and-main-only-deploy.md` + `.claude/rules/concurrent-edit-safety.md`。编排顶层入口 → `organizer` skill。
 
 ---
 
@@ -81,7 +81,7 @@ Composer 2.5   = 独立 UI / 样式 / lint / 补测试 (Cursor 内便宜耐用)
 
 ## 默认行为: 每个计划末尾产「分发卡」
 
-**触发**: 我(Claude/Opus)每次出**计划 / 设计**, 末尾**默认**追加一段分发卡。这取代 `parallel-work-analysis.md` 的"并行工作建议"输出格式(把它升级成带模型路由 + 隔离命令的版本)。
+**触发**: 我(Claude/Opus)每次出**计划 / 设计**, 末尾**默认**追加一段分发卡。
 
 **形态**: 总览表 + 每任务独立 brief 卡。
 
