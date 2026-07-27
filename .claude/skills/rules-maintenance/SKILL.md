@@ -46,8 +46,7 @@ allowed-tools:
 
 | Rule 文件 | 需要检查的统计数据 |
 |-----------|-------------------|
-| `api-response-handling.md` | Controller 数量、API 端点数 |
-| `typescript-type-safety.md` | `as any` 使用数 |
+| `coding-conventions.md` | 内容与代码库一致（响应格式/命名/JWT） |
 | `server-operations.md` | 服务器 IP、端口、目录结构 |
 | `aliyun-credentials.md` | 服务器到期时间、实例信息 |
 | `CREDENTIAL-MANAGEMENT.md` | 环境变量列表 |

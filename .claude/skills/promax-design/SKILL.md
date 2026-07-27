@@ -29,7 +29,7 @@ Unified design skill: brand, tokens, UI, logo, CIP, slides, banners, social phot
 |------|-----------|---------|
 | Brand identity, voice, assets | `brand` | External skill |
 | Tokens, specs, CSS vars | `design-system` | External skill |
-| shadcn/ui, Tailwind, code | `ui-styling` | External skill |
+| UI implementation, styling code | `impeccable` (global) | ui-styling removed 2026-07-28 (stack mismatch) |
 | Logo creation, AI generation | Logo (built-in) | `references/logo-design.md` |
 | CIP mockups, deliverables | CIP (built-in) | `references/cip-design.md` |
 | Presentations, pitch decks | Slides (built-in) | `references/slides.md` |
@@ -252,7 +252,7 @@ Load `references/social-photos-design.md` for sizes, templates, best practices.
 
 1. **Brand** (brand skill) → Define colors, typography, voice
 2. **Tokens** (design-system skill) → Create semantic token layers
-3. **Implement** (ui-styling skill) → Configure Tailwind, shadcn/ui
+3. **Implement** (`impeccable` global skill) → production-grade UI code (ui-styling removed 2026-07-28)
 
 ## References
 
@@ -309,5 +309,5 @@ pip install google-genai pillow
 
 ## Integration
 
-**External sub-skills:** brand, design-system, ui-styling
+**External sub-skills:** brand, design-system
 **Related Skills:** frontend-design, ui-ux-pro-max, ai-multimodal, chrome-devtools

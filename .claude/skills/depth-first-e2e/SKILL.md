@@ -121,7 +121,7 @@ If any "next round" phrase appears, the audit MUST treat it as a hard stop and d
 
 ### Rule 5: Critic must scrutinize depth, not just feasibility
 
-When using agent-team skill for audit ② step, the Critic prompt MUST include:
+The audit ② step's independent Critic subagent prompt MUST include:
 
 ```
 MANDATORY depth scrutiny — answer these BEFORE discussing feasibility/math:
@@ -209,13 +209,13 @@ When a deep test catches a real bug, **the fix MUST include a same-root-cause au
 
 ### Rule 9: Critic must be a separate agent, not self-impersonation
 
-When using agent-team 4-phase audit (Researcher → Analyst → Critic → Integrator):
+For the audit's Critic phase (independent-agent review; the old agent-team skill's 4-phase flow was retired 2026-07-28 — native subagents below are the standard mechanism):
 
 1. **The Critic phase MUST be executed via a separate Agent invocation**, not inline by the Manager writing "Critic challenges" sections themselves.
 
 2. **Why**: Self-impersonated Critic suffers from confirmation bias. The Manager already believes the fix is complete when writing the Critic phase, so the challenges they generate are softball questions whose answers they already know. Independent Critic is what makes 4-phase audit valuable.
 
-3. **Acceptable shortcut** (instead of full agent-team): run a single-agent `Explore` or `code-reviewer` sub-agent that has zero conversation context with the Manager. Pass it:
+3. **Standard mechanism**: run a single-agent `Explore` or `code-reviewer` sub-agent that has zero conversation context with the Manager. Pass it:
    - The fix diff (`git diff` output)
    - The test that caught the bug (file path + testId)
    - The question: "What does this fix NOT cover? What's the most damaging same-pattern bug that would survive this fix?"
@@ -227,7 +227,7 @@ When using agent-team 4-phase audit (Researcher → Analyst → Critic → Integ
    - Step ① 方案自审 (initial plan brainstorm)
    - Daily progress notes
    - Anything *outside* the formal R{N}-② or R{N}-⑤ audit phases
-   But **not** for the agent-team Critic phase itself.
+   But **not** for the Critic phase itself.
 
 **Why**: R3 of canvas-security-e2e skipped the independent Critic phase. The Manager wrote 4 self-impersonated "Critic challenges" all of which validated the existing plan. Independent Critic would have asked "are there sibling endpoints?" — exactly the question the Manager was unconsciously avoiding. See `references/case-r3-incomplete-fix.md`.
 
