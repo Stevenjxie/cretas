@@ -21,7 +21,6 @@ import { Plus, Edit, Delete, Download, Refresh, InfoFilled } from '@element-plus
 import { useRoute, useRouter } from 'vue-router';
 import BomChangeLog from './BomChangeLog.vue'
 import CanvasAwareWrapper from '@/components/canvas/CanvasAwareWrapper.vue'
-import ConceptDisambiguationAlert from '@/components/common/ConceptDisambiguationAlert.vue'
 import BomAuxiliaryWorkspace from './seasoning/BomAuxiliaryWorkspace.vue'
 import BomCopySuggestionDialog from './BomCopySuggestionDialog.vue'
 import { createBomDraftEnsurer, validateBomActivation } from './bomDraftLifecycle'
@@ -35,6 +34,11 @@ import {
   formatPriceUnit,
   pricingAmountPreview,
 } from '@/utils/unitPricing';
+
+const props = defineProps<{
+  /** 嵌入 Workflow 抽屉时显式固定当前目标 SKU；完整页面仍使用路由 query。 */
+  initialProductTypeId?: string;
+}>();
 
 const authStore = useAuthStore();
 const permissionStore = usePermissionStore();
@@ -961,8 +965,10 @@ onMounted(async () => {
   // 防呆 #1236 系列: 从「产品新建」页跳过来带 ?productTypeId= 时直接定位到该产品,
   // 不需要用户在几百条里翻找刚建的 SKU (Rule 1 预先显示边界 / Rule 5 导航直达)。
   const routeProductTypeId = route.query.productTypeId;
-  if (typeof routeProductTypeId === 'string' && routeProductTypeId) {
-    await selectProductFromRoute(routeProductTypeId);
+  const requestedProductTypeId = props.initialProductTypeId
+    || (typeof routeProductTypeId === 'string' ? routeProductTypeId : '');
+  if (requestedProductTypeId) {
+    await selectProductFromRoute(requestedProductTypeId);
   } else if (productTypes.value.length > 0 && !selectedProductTypeId.value) {
     selectedProductTypeId.value = productTypes.value[0].id;
   }
@@ -2271,14 +2277,6 @@ watch(adjustDialogVisible, (visible) => {
         已有生产计划快照与已激活 Workflow 不受影响。物料价格从档案带入，历史出成率由正式报工自动统计。
       </template>
     </el-alert>
-    <ConceptDisambiguationAlert
-      here-name="BOM 成本管理"
-      here="一个成品关联哪些原料、包材和工序辅料，以及系统如何汇总成本"
-      other-name="生产管理 → 转换率配置"
-      other="旧工厂遗留的单一原料到单一成品转换关系"
-      other-path="/production/conversions"
-      consequence="新配方统一在 BOM 与 Workflow 中维护；实际出成率只从正式报工历史计算"
-    />
     <!-- Header -->
     <el-card class="header-card" shadow="never">
       <div class="header-content">

@@ -522,14 +522,11 @@ public class BomSeasoningWorkspaceServiceImpl implements BomSeasoningWorkspaceSe
         if (outputKinds.size() > 1) return StandardBasis.unsupported();
         if ("kg".equals(unit)) return new StandardBasis(BigDecimal.ONE, "kg", materialKind, true);
         if ("g".equals(unit)) return new StandardBasis(new BigDecimal("1000"), "g", materialKind, true);
-        // The standard dosage is relative to the authoritative Workflow output basis,
-        // not inherently "per kg". Known count and volume outputs are valid once the
-        // output port resolves to one unambiguous canonical unit; unknown legacy text
-        // still fails closed instead of silently inventing a conversion.
-        if (Set.of("box", "case", "slice", "ml", "l").contains(unit)) {
-            return new StandardBasis(BigDecimal.ONE, unit, materialKind, true);
-        }
-        return new StandardBasis(BigDecimal.ONE, unit, materialKind, false);
+        // The dosage basis is the authoritative SKU/Workflow output unit itself. A
+        // custom unit such as 只、袋 or a tenant-defined code is an opaque "per one
+        // output unit" basis and needs no dimensional conversion. We only fail closed
+        // above when the pinned graph has no unit or conflicting output contracts.
+        return new StandardBasis(BigDecimal.ONE, unit, materialKind, true);
     }
 
     private void collectMaterialNodeContract(ProductProcessWorkflowDTO.Node materialNode,

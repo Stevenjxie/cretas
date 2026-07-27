@@ -7,6 +7,7 @@ const readSource = (path: string) => readFileSync(resolve(process.cwd(), path), 
 const bomSource = readSource('src/views/production/bom/index.vue');
 const materialTypeSource = readSource('src/views/warehouse/material-types/list.vue');
 const unifiedSource = readSource('src/views/production/bom-unified/index.vue');
+const workflowEditorSource = readSource('src/views/system/product-processes/workflow/ProductProcessWorkflowEditor.vue');
 const routerSource = readSource('src/router/index.ts');
 const bomCostDtoSource = readSource('../backend/java/cretas-api/src/main/java/com/cretas/aims/dto/bom/BomCostSummaryDTO.java');
 
@@ -16,6 +17,21 @@ describe('seasoning BOM integration source contract', () => {
     expect(unifiedSource).toContain('label="转换率"');
     expect(unifiedSource).not.toContain('label="调料配方"');
     expect(unifiedSource).not.toContain('RecipeContent');
+  });
+
+  it('passes the Workflow target SKU into the embedded BOM while keeping the conversion tab', () => {
+    expect(workflowEditorSource).toContain(':initial-product-type-id="bomDrawerProductTypeId"');
+    expect(workflowEditorSource).toContain('openBomDrawer(bomMissingProducts[0]?.id)');
+    expect(workflowEditorSource).toContain('targetIds.includes(productTypeId.value)');
+    expect(unifiedSource).toContain(':initial-product-type-id="props.initialProductTypeId"');
+    expect(bomSource).toContain('props.initialProductTypeId');
+    expect(unifiedSource).toContain('name="conversion"');
+  });
+
+  it('removes the legacy conversion guidance banner without removing conversion management', () => {
+    expect(bomSource).not.toContain('ConceptDisambiguationAlert');
+    expect(bomSource).not.toContain('other-path="/production/conversions"');
+    expect(unifiedSource).toContain("const ConversionContent");
   });
 
   it('keeps the canonical BOM auxiliary entry without restoring the removed product recipe route', () => {
