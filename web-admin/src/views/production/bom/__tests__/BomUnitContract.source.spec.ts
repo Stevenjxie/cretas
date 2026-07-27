@@ -9,8 +9,8 @@ describe('BOM item unit contract wiring', () => {
     expect(source).toContain('const quantityUnit = canonicalUnitCode(bomForm.value.quantityUnit || bomForm.value.unit)');
     expect(source).toContain('unit: quantityUnit');
     expect(source).toContain('<el-input :model-value="bomFormUnitLabel" disabled />');
-    expect(source).toContain('单位从物料档案自动继承，业务页面只显示中文');
-    expect(source).toContain('return `每1${baseUnit}折算 ${formatFriendlyNumber(row.standardQuantity)}${displayUnit(row.unit)}`;');
+    expect(source).toContain('单位从物料档案自动继承且只读');
+    expect(source).toContain('function packagingUsagePerOutput(row: BomItemRow)');
     expect(source).toContain('<template #default="{ row }">{{ displayUnit(row.unit) }}</template>');
     expect(source).toContain('{{ formatFriendlyNumber(row.unitPrice, 4) }} {{ formatPriceUnit(row.priceUnit) }}');
     expect(source).toContain('return formatPriceUnit(skuOutputUnit.value);');

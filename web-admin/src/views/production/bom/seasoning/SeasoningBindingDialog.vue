@@ -51,9 +51,10 @@ const form = reactive({
   substituteFactors: {} as Record<string, number | null>,
 });
 const saving = reactive({ value: false });
-const dosageUnit = ref('kg');
+const dosageUnit = ref('g');
 const dosageUnitFactorsToG = ref<Record<string, number>>({ g: 1, kg: 1000 });
 const materialUnitLoading = ref(false);
+const materialUnitError = ref('');
 const selectedMaterial = computed(() => props.materials.find((item) => item.id === form.materialTypeId));
 const selectedMaterialUnit = computed(() => selectedMaterial.value?.unit?.trim() || '');
 const positivePrice = (value?: number | null): value is number => (
@@ -82,14 +83,6 @@ const basisObjectLabel = computed(() => (
       ? '本工序成品'
       : '本工序产出'
 ));
-const dosageUnitOptions = computed(() => {
-  const options = ['kg', 'g'];
-  const materialUnit = selectedMaterialUnit.value;
-  if (materialUnit && dosageUnitFactorsToG.value[materialUnit] && !options.includes(materialUnit)) {
-    options.unshift(materialUnit);
-  }
-  return options;
-});
 const refreshedPrices = ref<Pick<SeasoningMaterialOption, 'movingAvgPrice' | 'unitPrice'> | undefined>();
 const effectivePrice = computed(() => {
   const movingAvgPrice = refreshedPrices.value === undefined
@@ -127,7 +120,9 @@ watch(() => [props.modelValue, props.binding] as const, () => {
   if (!props.modelValue) return;
   form.materialTypeId = props.binding?.materialTypeId || '';
   form.dosagePerKgG = props.binding?.dosagePerKgG ?? 1000;
-  dosageUnit.value = props.binding && props.binding.dosagePerKgG < 1000 ? 'g' : 'kg';
+  dosageUnit.value = canonicalUnitCode(
+    props.materials.find((item) => item.id === (props.binding?.materialTypeId || ''))?.unit,
+  ) || 'g';
   form.potEnabled = props.binding?.subsequentPotRatio != null;
   form.subsequentPercent = props.binding?.subsequentPotRatio == null ? 50 : props.binding.subsequentPotRatio * 100;
   form.countInSeasoning = props.binding?.countInSeasoning ?? true;
@@ -144,8 +139,9 @@ watch(() => form.materialTypeId, () => {
 });
 
 async function loadSelectedMaterialUnit(): Promise<void> {
-  const unit = selectedMaterialUnit.value;
-  if (!['g', 'kg', unit].includes(dosageUnit.value)) dosageUnit.value = 'kg';
+  const unit = canonicalUnitCode(selectedMaterialUnit.value);
+  dosageUnit.value = unit || 'g';
+  materialUnitError.value = '';
   if (!unit || dosageUnitFactorsToG.value[unit]) return;
   materialUnitLoading.value = true;
   try {
@@ -161,10 +157,10 @@ async function loadSelectedMaterialUnit(): Promise<void> {
     if (Number.isFinite(factor) && factor > 0) {
       dosageUnitFactorsToG.value = { ...dosageUnitFactorsToG.value, [unit]: factor };
     } else {
-      ElMessage.warning(`调料单位“${unit}”无法换算为重量，投入量暂按 kg/g 填写`);
+      materialUnitError.value = `辅料档案单位“${businessUnitLabel(unit)}”缺少成本换算关系，当前条目暂不能保存。`;
     }
   } catch {
-    ElMessage.warning(`调料单位“${unit}”换算读取失败，投入量暂按 kg/g 填写`);
+    materialUnitError.value = `辅料档案单位“${businessUnitLabel(unit)}”的换算关系读取失败，当前条目暂不能保存。`;
   } finally {
     materialUnitLoading.value = false;
   }
@@ -181,6 +177,7 @@ async function submit() {
     return ElMessage.warning('该工序的投入基准单位尚未形成可换算契约，暂不能保存标准辅料用量');
   }
   if (!form.materialTypeId) return ElMessage.warning('请选择调料');
+  if (materialUnitError.value) return ElMessage.warning('请先完善辅料档案的单位换算关系');
   if (form.dosagePerKgG == null || form.dosagePerKgG <= 0) return ElMessage.warning('投入量必须大于 0');
   if (form.potEnabled && (form.subsequentPercent == null || form.subsequentPercent < 0 || form.subsequentPercent > 100)) {
     return ElMessage.warning('后续锅比例必须在 0% 到 100% 之间');
@@ -322,28 +319,36 @@ async function refreshSelectedMaterialPrice() {
           </div>
           <span class="dosage-contract__arrow">需要投入</span>
           <div class="dosage-contract__input">
-            <el-input-number v-model="dosageDisplayValue" :min="0" :precision="4" :controls="false" />
-            <el-select
-              v-model="dosageUnit"
-              :loading="materialUnitLoading"
-              style="width: 96px"
-              data-testid="seasoning-dosage-unit"
-            >
-              <el-option v-for="unit in dosageUnitOptions" :key="unit" :label="businessUnitLabel(unit)" :value="unit" />
-            </el-select>
+            <el-input-number
+              v-model="dosageDisplayValue"
+              :disabled="materialUnitLoading || Boolean(materialUnitError)"
+              :min="0"
+              :precision="4"
+              :controls="false"
+            />
+            <span class="dosage-contract__unit" data-testid="seasoning-dosage-unit">
+              {{ materialUnitLoading ? '读取中…' : businessUnitLabel(dosageUnit) }}
+            </span>
           </div>
         </div>
         <div v-if="process?.standardUsageSupported === true" class="dosage-preview">
-          保存口径：{{ Number(form.dosagePerKgG || 0).toFixed(4).replace(/\.?0+$/, '') }} g/kg；
-          生产基准来自已固定 Workflow 修订的产出端口。
+          辅料单位由物料档案固定带入；BOM 不提供单位切换。
         </div>
         <el-alert
-          v-else
+          v-if="materialUnitError"
           type="warning"
           :closable="false"
           show-icon
-          title="无法解析本工序产出单位，当前不能保存"
-          description="请回到 Workflow，为该工序绑定带合法重量单位的半成品或成品产出后重新保存修订。"
+          :title="materialUnitError"
+          description="请先在物料档案维护该单位的权威成本换算关系；系统不会猜测或按 0 成本保存。"
+        />
+        <el-alert
+          v-else-if="process?.standardUsageSupported !== true"
+          type="warning"
+          :closable="false"
+          show-icon
+          title="本工序缺少可用的产出基准，当前不能保存"
+          description="请回到 Workflow，为该工序绑定明确的半成品或成品产出后重新保存修订。"
         />
       </el-form-item>
       <el-form-item label="按锅序计算"><el-switch v-model="form.potEnabled" /></el-form-item>
@@ -391,8 +396,9 @@ async function refreshSelectedMaterialPrice() {
 .dosage-contract__basis { display: grid; gap: 3px; }
 .dosage-contract__eyebrow { color: var(--el-text-color-secondary); font-size: 12px; }
 .dosage-contract__arrow { color: var(--el-text-color-secondary); font-size: 12px; white-space: nowrap; }
-.dosage-contract__input { display: flex; gap: 8px; }
+.dosage-contract__input { display: flex; align-items: center; gap: 8px; }
 .dosage-contract__input :deep(.el-input-number) { width: 130px; }
+.dosage-contract__unit { min-width: 52px; color: var(--el-text-color-regular); font-weight: 600; }
 .dosage-preview { width: 100%; margin-top: 6px; color: var(--el-text-color-secondary); font-size: 12px; }
 .automatic-price { display: flex; align-items: center; gap: 8px; width: 100%; }
 .automatic-price :deep(.el-input) { flex: 1; }

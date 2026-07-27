@@ -16,17 +16,21 @@ import { bigCategoryOf } from '@/utils/materialCategory';
 import { canonicalUnitCode, displayUnit } from '@/utils/unitPricing';
 import ProcessSeasoningCard from './ProcessSeasoningCard.vue';
 import SeasoningBindingDialog, { type SeasoningMaterialOption } from './SeasoningBindingDialog.vue';
+import AuxiliaryAiImportDialog from './AuxiliaryAiImportDialog.vue';
 import BomFamilyOutputCostingDialog from './BomFamilyOutputCostingDialog.vue';
 import { buildMaterialSummaries, uniqueProcessesByNode } from './seasoningModel';
 
-const props = defineProps<{
+const props = withDefaults(defineProps<{
   factoryId: string;
   productTypeId: string;
   recipeId: string;
   recipeStatus: BomRecipeStatus;
   canWrite: boolean;
   canViewPrice: boolean;
-}>();
+  showReadonlyNotice?: boolean;
+}>(), {
+  showReadonlyNotice: true,
+});
 
 const emit = defineEmits<{
   'request-clone': [];
@@ -49,6 +53,7 @@ const substitutesLoaded = ref(false);
 const substituteLoadError = ref('');
 const upgradingWorkflow = ref(false);
 const outputCostingVisible = ref(false);
+const aiImportVisible = ref(false);
 
 const processes = computed(() => uniqueProcessesByNode(workspace.value?.processes || []));
 const summaries = computed(() => buildMaterialSummaries(processes.value));
@@ -399,7 +404,7 @@ function usageLabel(usage: { dosagePerKgG: number; basisQuantity?: number | null
     />
 
     <el-alert
-      v-if="recipeStatus !== 'DRAFT'"
+      v-if="showReadonlyNotice && recipeStatus !== 'DRAFT'"
       type="warning"
       show-icon
       :closable="false"
@@ -441,6 +446,15 @@ function usageLabel(usage: { dosagePerKgG: number; basisQuantity?: number | null
         <el-radio-button value="summary">辅料汇总</el-radio-button>
       </el-radio-group>
       <div class="workspace-toolbar__right">
+        <el-button
+          v-if="editable"
+          type="primary"
+          plain
+          data-testid="open-auxiliary-ai-import"
+          @click="aiImportVisible = true"
+        >
+          AI 识别批量添加
+        </el-button>
         <el-button
           v-if="activeView === 'process' && processes.length"
           data-testid="toggle-all-processes"
@@ -553,6 +567,15 @@ function usageLabel(usage: { dosagePerKgG: number; basisQuantity?: number | null
       :revision="workspace?.seasoningRevision || 0"
       @saved="afterSaved"
       @conflict="handleConflict"
+    />
+    <AuxiliaryAiImportDialog
+      v-model="aiImportVisible"
+      :factory-id="factoryId"
+      :recipe-id="recipeId"
+      :revision="workspace?.seasoningRevision || 0"
+      :processes="processes"
+      :materials="materials"
+      @applied="afterSaved"
     />
   </section>
 </template>

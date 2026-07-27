@@ -85,11 +85,13 @@ describe('seasoning BOM integration source contract', () => {
 
   it('supports single-active version lifecycle with direct historical activation and a ten-version UX limit', () => {
     expect(bomSource).toContain("ARCHIVED: '历史 / 未生效'");
-    expect(bomSource).toContain('!row.isCurrent');
+    expect(bomSource).toContain("row.status === 'ARCHIVED'");
     expect(bomSource).toContain("row.status !== 'ACTIVE'");
     expect(bomSource).toContain('MAX_RECIPE_VERSIONS = 10');
     expect(bomSource).toContain('已有生产计划快照和已激活 Workflow 不受影响');
     expect(bomSource).toContain('prop="notes" label="备注"');
+    expect(bomSource).toContain('draftEntryLabel');
+    expect(bomSource).toContain('selectedRecipeEditable');
   });
 
   it('labels cost bases explicitly and formats numbers without meaningless trailing zeros', () => {
