@@ -508,6 +508,67 @@ async def resolve_capabilities(smartbi_pool, factory_id: str, **kwargs) -> "OpsA
     )
 
 
+async def resolve_out_of_domain(smartbi_pool, factory_id: str, **kwargs) -> "OpsAnswer":
+    """Honest non-business boundary selected by the semantic compiler."""
+    return OpsAnswer(
+        code="RESTAURANT_OPS_OUT_OF_DOMAIN",
+        title="当前可用的数据范围",
+        answer_text=RESTAURANT_OOD_TEXT,
+        charts=[],
+        kpis=[],
+        meta={"out_of_domain": True},
+    )
+
+
+async def resolve_store_directory(
+    smartbi_pool,
+    factory_id: str,
+    **kwargs,
+) -> "OpsAnswer":
+    """Return the tenant-scoped store count and names; no time range required."""
+    async with smartbi_pool.acquire() as conn:
+        async with conn.transaction():
+            await conn.execute(
+                "SELECT set_config('app.factory_id', $1, true)",
+                factory_id,
+            )
+            rows = await conn.fetch(
+                """
+                SELECT s.name
+                  FROM dim_store s
+                 WHERE s.factory_id = $1
+                 ORDER BY s.name
+                 LIMIT 50
+                """,
+                factory_id,
+            )
+    stores = [
+        str(row["name"]).strip()
+        for row in rows
+        if row["name"] and str(row["name"]).strip()
+    ]
+    if not stores:
+        return OpsAnswer(
+            code="RESTAURANT_OPS_STORE_DIRECTORY",
+            title="门店名单",
+            answer_text="当前账号下还没有可用的门店资料。",
+            charts=[],
+            kpis=[{"label": "门店数量", "value": 0, "unit": "家"}],
+            meta={"stores": [], "store_count": 0, "no_data": True},
+        )
+    answer = f"当前账号共有 **{len(stores)} 家门店**：\n" + "\n".join(
+        f"{index}. {name}" for index, name in enumerate(stores, 1)
+    )
+    return OpsAnswer(
+        code="RESTAURANT_OPS_STORE_DIRECTORY",
+        title="门店名单",
+        answer_text=answer,
+        charts=[],
+        kpis=[{"label": "门店数量", "value": len(stores), "unit": "家"}],
+        meta={"stores": stores, "store_count": len(stores)},
+    )
+
+
 def match_restaurant_ops(query: str) -> Optional[str]:
     """Return the ops template code if query matches, else None.
 
@@ -1081,6 +1142,7 @@ _STORE_MENTION_PREFIX_TRIM = re.compile(
 
 _DEMO_GOLD_TENANT = "RES_3101_009"
 _DEMO_GOLD_MAPPED_CODES = frozenset({
+    "RESTAURANT_OPS_STORE_DIRECTORY",
     "RESTAURANT_OPS_SALES_SUMMARY",
     "RESTAURANT_OPS_GROSS_MARGIN",
     "RESTAURANT_OPS_STORE_MARGIN",
@@ -6340,6 +6402,8 @@ async def resolve_channel_mix(
 _RESOLVERS = {
     "RESTAURANT_OPS_PLAYBOOK": _resolve_playbook,
     "RESTAURANT_OPS_CAPABILITIES": resolve_capabilities,
+    "RESTAURANT_OPS_OUT_OF_DOMAIN": resolve_out_of_domain,
+    "RESTAURANT_OPS_STORE_DIRECTORY": resolve_store_directory,
     "RESTAURANT_OPS_CHANNEL_MIX": resolve_channel_mix,
     "RESTAURANT_OPS_WASTAGE_TOP": resolve_wastage_top,
     "RESTAURANT_OPS_STOCK_SHORTAGE": resolve_stock_shortage,
