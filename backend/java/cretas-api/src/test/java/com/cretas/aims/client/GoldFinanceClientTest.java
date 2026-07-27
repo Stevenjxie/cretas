@@ -244,6 +244,19 @@ class GoldFinanceClientTest {
     // =========================================================================
 
     @Test
+    void tieredAnswerTimeoutNeverReusesLegacySixOrTenSecondBudget() {
+        PythonSmartBIConfig config =
+                (PythonSmartBIConfig) ReflectionTestUtils.getField(client, "config");
+        assertNotNull(config);
+
+        config.setRestaurantTieredAnswerTimeout(6_000);
+        assertEquals(30_000L, client.tieredAnswerTimeoutMs());
+
+        config.setRestaurantTieredAnswerTimeout(45_000);
+        assertEquals(45_000L, client.tieredAnswerTimeoutMs());
+    }
+
+    @Test
     void fetchTieredIntentAnswer_4arg_withSessionId_includesSessionIdInBody() throws Exception {
         server.enqueue(new MockResponse().setResponseCode(200).setBody("{\"delegate\":false}"));
         MockHttpServletRequest servletRequest = new MockHttpServletRequest();

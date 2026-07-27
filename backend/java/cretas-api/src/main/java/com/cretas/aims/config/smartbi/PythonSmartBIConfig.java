@@ -59,6 +59,16 @@ public class PythonSmartBIConfig {
     private int connectTimeout = 5000;
 
     /**
+     * 餐饮自然语言 QueryPlan + resolver 的端到端等待时间（毫秒）。
+     *
+     * 复杂问题会先经过高质量 LLM 语义规划，再执行确定性数据查询。该链路不能复用
+     * 旧的 6/10 秒快速匹配预算，否则 Python 已经正确理解问题时，Java 仍会提前
+     * 取消请求并向用户返回“语义规划不可用”。GoldFinanceClient 会保证实际值不低于
+     * 30 秒；此配置主要用于在确有需要时继续向上放宽。
+     */
+    private int restaurantTieredAnswerTimeout = 30000;
+
+    /**
      * 错误时是否降级到 Java 实现
      * 注意：已禁用 Java fallback，所有 SmartBI 功能完全由 Python 服务处理
      */

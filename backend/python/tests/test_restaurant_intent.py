@@ -2020,6 +2020,36 @@ def test_explicit_revenue_optimization_repairs_adjacent_llm_report_choice():
     assert spec.requested_metrics == ("revenue",)
 
 
+def test_named_dish_low_sales_diagnosis_repairs_broad_optimization_to_dish_resolver():
+    spec = _semantic_spec_from_t3(
+        {
+            "intent": "RESTAURANT_OPS_BUSINESS_OPTIMIZATION",
+            "time_range": {"type": "named", "value": "this_month"},
+            "wants_margin": False,
+            "asks_profitability": False,
+            "requested_metrics": ["sales_volume"],
+            "analysis_action": "diagnose",
+            "dimensions": ["dish", "store"],
+            "dish": "卤炸牛肉串",
+            "store": None,
+            "stores": [],
+            "store_scope": "all",
+            "confidence": 0.95,
+            "clarification_needed": False,
+            "missing_fields": [],
+            "clarification_question": None,
+            "clarification_options": [],
+        },
+        "全部门店卤炸牛肉串本月销量为什么低",
+    )
+
+    assert spec.intent == "RESTAURANT_OPS_GROSS_MARGIN"
+    assert spec.planned_intents == ("RESTAURANT_OPS_GROSS_MARGIN",)
+    assert spec.requested_metrics == ("sales_volume",)
+    assert spec.analysis_action == "diagnose"
+    assert spec.dish_slot == "卤炸牛肉串"
+
+
 def test_explicit_daily_revenue_chart_repairs_summary_to_trend_plan():
     spec = _semantic_spec_from_t3(
         {
@@ -3271,6 +3301,67 @@ def test_real_store_name_remains_a_valid_verbatim_llm_entity():
     query = "本月有滋有味北外滩店哪个菜卖得好"
 
     assert _verbatim_entity("有滋有味北外滩店", query) == "有滋有味北外滩店"
+
+
+@pytest.mark.parametrize(
+    "phrase",
+    (
+        "截至目前",
+        "到目前",
+        "目前为止",
+        "当前为止",
+        "到今天为止",
+        "截至今天",
+        "开业至今",
+        "至今累计",
+        "当前累计",
+    ),
+)
+def test_cumulative_time_phrases_are_explicit_all_history_to_today(phrase):
+    (start, end), label = _resolve_sales_date_range(
+        f"{phrase}的总销售额",
+        today=date(2026, 7, 27),
+    )
+
+    assert (start, end) == (date(2000, 1, 1), date(2026, 7, 27))
+    assert label == "截至目前"
+
+
+def test_llm_store_total_sales_to_date_does_not_reask_time():
+    query = "到目前的有滋有味北外滩店的总销售额呢"
+    spec = _semantic_spec_from_t3(
+        {
+            "intent": "RESTAURANT_OPS_STORE_MARGIN",
+            "time_range": None,
+            "wants_margin": False,
+            "asks_profitability": False,
+            "confidence": 0.98,
+            "clarification_needed": False,
+            "missing_fields": [],
+            "clarification_question": None,
+            "clarification_options": [],
+            "requested_metrics": ["revenue"],
+            "dimensions": ["store"],
+            "analysis_action": "lookup",
+            "store_scope": "single",
+            "dish": None,
+            "store": "有滋有味北外滩店",
+            "stores": ["有滋有味北外滩店"],
+        },
+        query,
+        available_stores=(
+            "兄弟土菜馆",
+            "有滋有味北外滩店",
+        ),
+    )
+
+    assert spec.clarification_needed is False
+    assert spec.window_label == "截至目前"
+    assert spec.date_range[0] == date(2000, 1, 1)
+    assert spec.date_range[1] == date.today()
+    assert spec.store_scope == "single"
+    assert spec.store_slot == "有滋有味北外滩店"
+    assert spec.requested_metrics == ("revenue",)
 
 
 def test_llm_all_store_slot_cannot_poison_dish_ranking_execution_scope():

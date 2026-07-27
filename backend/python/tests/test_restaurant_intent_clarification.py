@@ -326,6 +326,117 @@ async def test_time_guard_clarification_button_resumes_original_query():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "original_query,requested_metrics,dimensions,analysis_action,ranking_direction",
+    (
+        (
+            "鲜行者打浦桥日月光店这家店的销售情况",
+            ["revenue", "orders", "sales_volume"],
+            ["store"],
+            "lookup",
+            None,
+        ),
+        (
+            "鲜行者打浦桥日月光店这家店买的最好的是哪一道菜",
+            ["sales_volume"],
+            ["store", "dish"],
+            "lookup",
+            "best",
+        ),
+    ),
+)
+async def test_natural_store_question_keeps_full_semantics_after_time_button(
+    original_query,
+    requested_metrics,
+    dimensions,
+    analysis_action,
+    ranking_direction,
+):
+    """The one-word button answer must continue the original natural request.
+
+    These are the exact two screenshot flows that previously reached the
+    resolver as only ``本月`` and then failed the answer contract or forgot
+    that the user asked for the store's best-selling dish.
+    """
+    store_name = "鲜行者打浦桥日月光店"
+    pool = _FakeDbPool(is_restaurant=True, store_names=[store_name])
+    first_plan = {
+        "intent": "RESTAURANT_OPS_STORE_MARGIN",
+        "time_range": None,
+        "wants_margin": False,
+        "asks_profitability": False,
+        "requested_metrics": requested_metrics,
+        "analysis_action": analysis_action,
+        "dimensions": dimensions,
+        "comparison": None,
+        "dish": None,
+        "store": store_name,
+        "stores": [store_name],
+        "store_scope": "single",
+        "confidence": 0.97,
+        "clarification_needed": True,
+        "missing_fields": ["time_range"],
+        "clarification_question": TIME_CLARIFICATION_QUESTION,
+        "clarification_options": ["本月", "上个月", "最近7天", "最近30天"],
+    }
+    with patch(
+        "smartbi.services.template_embedding_index.cosine_topk",
+        new=AsyncMock(return_value=[]),
+    ), patch(
+        "common.llm_router.call_chain",
+        new=AsyncMock(return_value=_llm_result(first_plan)),
+    ):
+        first = await parse_restaurant_query(
+            original_query,
+            pool,
+            factory_id="DEMO_REST",
+            session_key=f"natural-{len(dimensions)}",
+            semantic_first=True,
+        )
+
+    assert first is not None
+    assert first.clarification_question == TIME_CLARIFICATION_QUESTION
+    assert first.store_slot == store_name
+    assert first.requested_metrics == tuple(requested_metrics)
+
+    resolved_plan = {
+        **first_plan,
+        "time_range": {"type": "named", "value": "this_month"},
+        "clarification_needed": False,
+        "missing_fields": [],
+        "clarification_question": None,
+        "clarification_options": [],
+    }
+    with patch(
+        "smartbi.services.template_embedding_index.cosine_topk",
+        new=AsyncMock(return_value=[]),
+    ), patch(
+        "common.llm_router.call_chain",
+        new=AsyncMock(return_value=_llm_result(resolved_plan)),
+    ):
+        resolved = await parse_restaurant_query(
+            "本月",
+            pool,
+            factory_id="DEMO_REST",
+            session_key=f"natural-{len(dimensions)}",
+            semantic_first=True,
+        )
+
+    assert resolved is not None
+    assert resolved.is_clarification_continuation is True
+    assert resolved.clarification_needed is False
+    assert resolved.window_label == "本月"
+    assert resolved.store_slot == store_name
+    assert resolved.store_scope == "single"
+    assert resolved.requested_metrics == tuple(requested_metrics)
+    assert resolved.analysis_action == analysis_action
+    assert resolved.ranking_direction == ranking_direction
+    assert resolved.resolver_query_seed == f"{original_query} 本月"
+    assert build_resolver_query("本月", resolved) == f"{original_query} 本月"
+    assert pool.pending == {}
+
+
+@pytest.mark.asyncio
 async def test_explicit_multi_store_ranking_time_button_never_needs_t3():
     pool = _restaurant_pool()
     original_query = (
