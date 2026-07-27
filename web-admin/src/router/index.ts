@@ -1285,6 +1285,45 @@ const businessRoutes: RouteRecordRaw[] = [
             component: () => import('@/views/system/llm-usage/index.vue'),
             meta: { requiresAuth: true, title: 'LLM 用量监控', module: 'system', roles: platformAdminOnlyRoles }
           },
+          // 卡5 (2026-07-28 飞轮回接方案 P4 批): 飞轮运营台 — 蒸馏训练的驾驶舱.
+          // 5 个子页面, 平台管理员权限. real-only — 真实接口失败就是失败, 不回落假数据
+          // (阻断项修复); mock 仅限 FLYWHEEL_MOCK_ACTIVE 显式开关 + 本地 dev 构建双重条件下生效,
+          // 见 @/api/smartbi/ai-flywheel.ts 文件头。
+          {
+            path: 'ai-flywheel',
+            redirect: '/system/ai-flywheel/overview',
+            meta: { requiresAuth: true, title: 'AI 飞轮运营台', module: 'system', roles: platformAdminOnlyRoles }
+          },
+          {
+            path: 'ai-flywheel/overview',
+            name: 'SystemFlywheelOverview',
+            component: () => import('@/views/system/ai-flywheel/Overview.vue'),
+            meta: { requiresAuth: true, title: '飞轮总览看板', module: 'system', roles: platformAdminOnlyRoles }
+          },
+          {
+            path: 'ai-flywheel/candidates',
+            name: 'SystemFlywheelCandidates',
+            component: () => import('@/views/system/ai-flywheel/Candidates.vue'),
+            meta: { requiresAuth: true, title: '晋升审核工作台', module: 'system', roles: platformAdminOnlyRoles }
+          },
+          {
+            path: 'ai-flywheel/misses',
+            name: 'SystemFlywheelMisses',
+            component: () => import('@/views/system/ai-flywheel/Misses.vue'),
+            meta: { requiresAuth: true, title: 'Miss 复盘', module: 'system', roles: platformAdminOnlyRoles }
+          },
+          {
+            path: 'ai-flywheel/quality',
+            name: 'SystemFlywheelQuality',
+            component: () => import('@/views/system/ai-flywheel/Quality.vue'),
+            meta: { requiresAuth: true, title: '质量与回归', module: 'system', roles: platformAdminOnlyRoles }
+          },
+          {
+            path: 'ai-flywheel/dataset',
+            name: 'SystemFlywheelDataset',
+            component: () => import('@/views/system/ai-flywheel/Dataset.vue'),
+            meta: { requiresAuth: true, title: '蒸馏数据集', module: 'system', roles: platformAdminOnlyRoles }
+          },
           {
             // Sprint 4 Chat K C-LOG-AUDIT-1 (2026-05-16): 系统操作日志独立 menu.
             // Tracks entity-level CRUD via @Loggable AOP. backend: OperationLogController.
