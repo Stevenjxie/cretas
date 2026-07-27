@@ -138,4 +138,68 @@ class SseStreamingServiceTieredFirstTest {
         verifyNoInteractions(delegate);
         verify(semanticCacheService, never()).queryCache(anyString(), anyString());
     }
+
+    /**
+     * Fix-round regression (2026-07-28): the SSE tiered-first gate now calls
+     * {@link IntentExecutionOrchestrator#hasExplicitReadVeto(String)} directly instead of a
+     * local copy. An earlier local copy of that phrase-matcher silently diverged from 卡1's
+     * dimension-contrast-aware rewrite (PR #1914, merged into main during this card's work) —
+     * "不看堂食只看外卖营收" is a dimension-level negation (exclude one dimension, still asks
+     * about the other) that orchestrator's /execute path treats as NOT a veto and routes to
+     * tiered-first, but a naive contains-based copy would veto on the bare "不看" substring and
+     * fall back to the legacy 8-layer chain — the exact "same question, different entry,
+     * different answer" bug this card exists to close. This test is the parity proof.
+     */
+    @Test
+    void tieredFirstTreatsDimensionLevelNegationAsNonVetoSameAsExecute() throws Exception {
+        setUp();
+        Map<String, Object> delegated = new LinkedHashMap<>();
+        delegated.put("message", "外卖营收本月合计 12.4 万元，环比上升 3.1%");
+        delegated.put("code", "TAKEOUT_REVENUE");
+        when(delegate.tryDelegate(eq("DEMO_REST"), any(), any(), eq("sse_tiered_first")))
+                .thenReturn(delegated);
+        IntentExecuteRequest request = IntentExecuteRequest.builder()
+                .userInput("不看堂食只看外卖营收")
+                .build();
+
+        ReflectionTestUtils.invokeMethod(
+                service, "executeStreamAsync", emitter, "DEMO_REST", request, 42L, "restaurant_owner");
+
+        verify(delegate).tryDelegate(eq("DEMO_REST"), any(), any(), eq("sse_tiered_first"));
+        org.mockito.ArgumentCaptor<Object> resultCaptor = org.mockito.ArgumentCaptor.forClass(Object.class);
+        verify(service).sendSseEvent(eq(emitter), eq("result"), resultCaptor.capture());
+        IntentExecuteResponse response = (IntentExecuteResponse) resultCaptor.getValue();
+        assertThat(response.getStatus()).isEqualTo("SUCCESS");
+        assertThat(response.getMessage()).isEqualTo("外卖营收本月合计 12.4 万元，环比上升 3.1%");
+        verifyNoInteractions(aiIntentService, semanticCacheService, knowledgeBase);
+    }
+
+    /**
+     * Companion to the dimension-level test above: a full-query negation ("别看订单" — no
+     * contrast clause follows "别看") must still veto tiered-first and fall through to the
+     * legacy branches, exactly as /execute does. Guards against a fix that makes the SSE gate
+     * too permissive while chasing parity on the dimension-level case.
+     */
+    @Test
+    void tieredFirstStillVetoesFullQueryNegation() throws Exception {
+        setUp();
+        IntentMatchResult noMatch = IntentMatchResult.builder()
+                .confidence(0.0d)
+                .matchMethod(IntentMatchResult.MatchMethod.NONE)
+                .questionType(IntentKnowledgeBase.QuestionType.OPERATIONAL_COMMAND)
+                .build();
+        when(aiIntentService.recognizeIntentWithConfidence(
+                anyString(), eq("DEMO_REST"), org.mockito.ArgumentMatchers.eq(3),
+                any(), anyString(), any()))
+                .thenReturn(noMatch);
+        IntentExecuteRequest request = IntentExecuteRequest.builder()
+                .userInput("别看订单")
+                .build();
+
+        ReflectionTestUtils.invokeMethod(
+                service, "executeStreamAsync", emitter, "DEMO_REST", request, 42L, "restaurant_owner");
+
+        verifyNoInteractions(delegate);
+        verify(semanticCacheService, never()).queryCache(anyString(), anyString());
+    }
 }

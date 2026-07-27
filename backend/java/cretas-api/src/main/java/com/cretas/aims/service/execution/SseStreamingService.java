@@ -225,13 +225,20 @@ public class SseStreamingService {
             // streamed answer can no longer diverge from /execute's answer to the same question.
             // Explicit intent codes are handled above and never reach here; write verbs and
             // explicit read-vetoes fall through unchanged to the legacy branches.
+            //
+            // hasExplicitReadVeto/isRestaurantWriteRequest are called on IntentExecutionOrchestrator
+            // itself (package-private static there) rather than duplicated here — a card4 fix-round
+            // finding (2026-07-28): an earlier copy of the veto phrase-matcher in this file silently
+            // diverged from orchestrator's dimension-contrast-aware rewrite (卡1, PR #1914), which
+            // reintroduced exactly the "same question, different entry, different answer" bug this
+            // card exists to close. Single source of truth — never copy this logic again.
             boolean restaurantTenant = isRestaurantTenant(factoryId);
             boolean requiresRestaurantSemanticPlan = tieredFirstEnabled
                     && !factoryPackConstrained
                     && !Boolean.TRUE.equals(request.getPreviewOnly())
                     && restaurantTenant
                     && userInput != null && !userInput.isEmpty()
-                    && !hasExplicitReadVeto(userInput)
+                    && !IntentExecutionOrchestrator.hasExplicitReadVeto(userInput)
                     && !IntentExecutionOrchestrator.isRestaurantWriteRequest(userInput);
             if (requiresRestaurantSemanticPlan) {
                 IntentExecuteResponse tieredFirst = tryRestaurantTieredDelegate(
@@ -1055,6 +1062,14 @@ public class SseStreamingService {
      * duplication R16's noToolResponseWithRestaurantFallback already accepted (no factory-domain
      * DB lookup is wired into SseStreamingService); this change only adds the missing REST_
      * prefix so the two SSE call sites (this and the no-tool fallback) now agree.
+     *
+     * <p><b>NOT equivalent</b> to orchestrator's {@code isRestaurantTenant()} (:2113), which
+     * additionally resolves the factory's actual domain via {@code resolveFactoryDomainSafe()}
+     * (a DB-backed lookup) and treats {@code "RESTAURANT".equalsIgnoreCase(factoryDomain)} as a
+     * standalone true — a factory whose id doesn't match RES_/REST_/DEMO_REST but whose domain
+     * IS resolved as RESTAURANT would gate tiered-first in /execute but NOT here. Accepted as
+     * pre-existing scope (same gap R16 shipped with, card4 review 2026-07-28), not a card4
+     * regression — but do not assume the two checks always agree.
      */
     private static boolean isRestaurantTenant(String factoryId) {
         if (factoryId == null || factoryId.isBlank()) {
@@ -1064,25 +1079,5 @@ public class SseStreamingService {
         return "DEMO_REST".equals(normalized)
                 || normalized.startsWith("RES_")
                 || normalized.startsWith("REST_");
-    }
-
-    /**
-     * Card4 (2026-07-28): duplicated from IntentExecutionOrchestrator#hasExplicitReadVeto
-     * (private there, same phrase list) so the SSE tiered-first gate condition matches
-     * execute() :376 without touching the orchestrator file (out of card4's allowed scope).
-     */
-    private static boolean hasExplicitReadVeto(String input) {
-        if (input == null || input.isBlank()) {
-            return false;
-        }
-        String q = input.replaceAll("\\s+", "");
-        return q.contains("不要查") || q.contains("不要看")
-                || q.contains("别查") || q.contains("别看")
-                || q.contains("不用查") || q.contains("不用看")
-                || q.contains("不需要查") || q.contains("不需要看")
-                || q.contains("不想查") || q.contains("不想看")
-                || q.contains("先别查") || q.contains("先别看")
-                || q.contains("无需查") || q.contains("无需看")
-                || q.contains("不查") || q.contains("不看");
     }
 }
