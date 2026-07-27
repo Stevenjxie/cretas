@@ -1,3 +1,10 @@
+---
+paths:
+  - "tests/**"
+  - "**/*.spec.ts"
+  - "**/playwright.config.*"
+---
+
 # Playwright Headed Mode + 多 chat 共存
 
 **最后更新**: 2026-05-28

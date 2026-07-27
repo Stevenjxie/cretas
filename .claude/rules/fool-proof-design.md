@@ -1,3 +1,9 @@
+---
+paths:
+  - "web-admin/**"
+  - "frontend/**"
+---
+
 # 防呆设计 (Fool-Proof Design) 规范
 
 **最后更新**: 2026-05-17
