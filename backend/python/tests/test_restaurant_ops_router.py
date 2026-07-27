@@ -2695,6 +2695,47 @@ def test_dish_ranking_emits_typed_focus_entity(ranking_query):
     assert "米饭(单人份)" not in result.answer_text
 
 
+def test_generic_sales_ranking_executes_sealed_descending_plan_not_margin_report():
+    result = asyncio.run(_r.resolve_gross_margin(
+        _gross_margin_pool(_dish_rows()),
+        "RES_TEST",
+        role="restaurant_manager",
+        query="上个月全部门店菜品销量排名",
+        requested_metrics=("sales_volume",),
+        analysis_action="lookup",
+        ranking_direction="best",
+        ranking_limit=5,
+    ))
+
+    assert result.title == "菜品销量排行（卖得最好）"
+    assert result.meta["dish_ranking"] == "best"
+    assert result.meta["ranking_limit"] == 5
+    assert result.meta["ranked_entities"][0]["name"] == "招牌藤椒味(单人份)"
+    assert "菜品毛利分析" not in result.answer_text
+    assert "米饭(单人份)" not in result.answer_text
+
+
+def test_generic_sales_ranking_no_data_does_not_fall_back_to_margin_wording():
+    result = asyncio.run(_r.resolve_gross_margin(
+        _gross_margin_pool([]),
+        "RES_TEST",
+        role="restaurant_manager",
+        query="上个月全部门店菜品销量排名",
+        requested_metrics=("sales_volume",),
+        analysis_action="lookup",
+        ranking_direction="best",
+        ranking_limit=5,
+    ))
+
+    assert result.title == "菜品销量排行（暂无销售数据）"
+    assert result.meta["dish_ranking"] == "best"
+    assert result.meta["ranking_limit"] == 5
+    assert result.meta["no_pos_data"] is True
+    assert result.meta["ranked_entities"] == []
+    assert "没有改成毛利分析" in result.answer_text
+    assert "菜品毛利分析" not in result.answer_text
+
+
 def test_dish_ranking_applies_user_limit_and_exclusions_in_execution():
     result = asyncio.run(_r.resolve_gross_margin(
         _gross_margin_pool(_dish_rows()),

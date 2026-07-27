@@ -1244,10 +1244,19 @@ async def post_restaurant_tiered_answer(
             return clarification_response
 
         if body.session_id and trusted_user_id is not None:
+            persisted_query = (
+                spec.resolver_query_seed
+                if spec is not None and spec.resolver_query_seed
+                else query
+            )
             await ChatSessionService(pool).upsert(
                 session_id=body.session_id,
                 factory_id=fid,
-                parent_query=query,
+                # A continuation button is only the latest slot value, not
+                # the completed user task. Persist the sealed accumulated
+                # query so the next natural-language follow-up still sees
+                # metric, time, comparison, action and store scope.
+                parent_query=persisted_query,
                 parent_answer_summary=result["answer_text"],
                 parent_template_code=result.get("code"),
                 parent_upload_id=None,

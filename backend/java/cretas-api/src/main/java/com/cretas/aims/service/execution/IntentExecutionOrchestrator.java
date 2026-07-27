@@ -314,6 +314,38 @@ public class IntentExecutionOrchestrator {
                     : executeWithExplicitIntent(factoryId, request, userId, userRole);
         }
 
+        String userInput = request.getUserInput();
+        boolean requiresRestaurantSemanticPlan = tieredFirstEnabled
+                && !factoryPackConstrained
+                && !Boolean.TRUE.equals(request.getPreviewOnly())
+                && isRestaurantTenant(factoryId)
+                && userInput != null && !userInput.isEmpty()
+                && !hasExplicitReadVeto(userInput)
+                && !RESTAURANT_WRITE_VERB.matcher(userInput).find();
+
+        // Restaurant READ natural language has one top-level semantic
+        // authority. Run it before bounded-agent selectors, special report
+        // contracts, comprehensive/owner-action heuristics, phrase shortcuts,
+        // Java conversation inheritance and caches. Python emits an immutable
+        // QueryPlan or an explicit clarification; Java still owns explicit
+        // intents, write verbs, permission checks, preview and confirmation.
+        if (requiresRestaurantSemanticPlan) {
+            IntentExecuteResponse tieredFirst =
+                    tryRestaurantTieredDelegate(factoryId, userInput, request);
+            if (tieredFirst != null) {
+                log.info("[Branch:TieredFirst] restaurant semantic planner accepted: factoryId={}",
+                        factoryId);
+                return tieredFirst;
+            }
+            log.warn("[Branch:TieredFirst] restaurant semantic planner unavailable; fail closed: factoryId={}",
+                    factoryId);
+            return buildRestaurantDeterministicResponse(
+                    request,
+                    "NEED_CLARIFICATION",
+                    true,
+                    "餐饮语义规划暂时不可用，本次没有执行任何分析。请稍后重试。");
+        }
+
         // The bounded restaurant Runtime is selected before owner-advice, report shortcuts,
         // conversation inheritance, cache and general intent recognition. This branch returns
         // launch metadata only; the JWT-protected run facade performs the actual start and repeats
@@ -321,6 +353,7 @@ public class IntentExecutionOrchestrator {
         if (!factoryPackConstrained
                 && !Boolean.TRUE.equals(request.getPreviewOnly())
                 && !isRestaurantComprehensiveSynthesisQuestion(request.getUserInput())
+                && !hasExplicitReadVeto(request.getUserInput())
                 && restaurantGrossMarginChatRouteSelector != null) {
             Optional<IntentExecuteResponse> restaurantAgentRoute =
                     restaurantGrossMarginChatRouteSelector.select(
@@ -341,7 +374,6 @@ public class IntentExecutionOrchestrator {
         //                  recognizeIntentWithConfidence, which already handles VETO_WRITE safely
         //                  (OUT_OF_DOMAIN / read-twin, never an executed write).
         boolean negationVetoWrite = false;
-        String userInput = request.getUserInput();
         if (!factoryPackConstrained
                 && isRestaurantOwnerActionFactory(factoryId, resolveFactoryDomainSafe(factoryId))
                 && isAmbiguousRestaurantTurnoverMetricQuestion(userInput)) {
@@ -560,67 +592,15 @@ public class IntentExecutionOrchestrator {
             }
         }
 
-        boolean requiresRestaurantSemanticPlan = tieredFirstEnabled
-                && !factoryPackConstrained
-                && !Boolean.TRUE.equals(request.getPreviewOnly())
-                && isRestaurantTenant(factoryId)
-                && userInput != null && !userInput.isEmpty()
-                && !RESTAURANT_WRITE_VERB.matcher(userInput).find();
-
-        // A pure clarification reply such as "最近30天" carries no standalone
-        // business topic. Before the session-blind restaurant planner sees it,
-        // allow the conversation-aware Java pipeline to inherit a previously
-        // persisted, whitelist-only READ intent. Accept only the explicit
-        // CONTINUATION_INHERIT match method; every other result falls through
-        // to the existing Python QueryPlan authority unchanged.
-        if (requiresRestaurantSemanticPlan) {
-            IntentMatchResult continuationMatch = recognizeSessionAwareRestaurantContinuation(
-                    factoryId, request, userId, userRole);
-            if (continuationMatch != null) {
-                String inheritedIntent = continuationMatch.getBestMatch().getIntentCode();
-                String continuationInput = resolveSessionAwareRestaurantContinuationInput(
-                        request, continuationMatch);
-                log.info("[RestaurantSessionBridge] force-route verified READ continuation: "
-                                + "sessionId={}, input='{}', executionInput='{}', intent={}",
-                        request.getSessionId(), userInput, continuationInput, inheritedIntent);
-                request.setUserInput(continuationInput);
-                request.setPreprocessedQuery(continuationMatch.getPreprocessedQuery());
-                request.setIntentCode(inheritedIntent);
-                request.setForceExecute(true);
-                return executeWithExplicitIntent(factoryId, request, userId, userRole);
-            }
-        }
-
-        // Parameter-filling continuations stay in Java. Read-only restaurant
-        // follow-ups go to the semantic planner below so their typed context
-        // cannot be reinterpreted by the legacy conversation matcher.
+        // Parameter-filling continuations stay in Java when the semantic-first
+        // restaurant path is disabled or the request is an operational write.
         if (!factoryPackConstrained
-                && !requiresRestaurantSemanticPlan
                 && request.getSessionId() != null && !request.getSessionId().isEmpty()) {
             IntentExecuteResponse conversationResponse = handleConversationContinuation(
                     factoryId, request, userId, userRole);
             if (conversationResponse != null) {
                 return conversationResponse;
             }
-        }
-
-        // Restaurant read-only natural language has one semantic authority:
-        // Python emits an immutable QueryPlan or an explicit clarification.
-        // Write verbs stay in Java's parameter/confirmation flow.
-        if (requiresRestaurantSemanticPlan) {
-            IntentExecuteResponse tieredFirst =
-                    tryRestaurantTieredDelegate(factoryId, userInput, request);
-            if (tieredFirst != null) {
-                log.info("[Branch:TieredFirst] 反转入口命中: factoryId={}", factoryId);
-                return tieredFirst;
-            }
-            log.warn("[Branch:TieredFirst] restaurant semantic planner unavailable; fail closed: factoryId={}",
-                    factoryId);
-            return buildRestaurantDeterministicResponse(
-                    request,
-                    "NEED_CLARIFICATION",
-                    true,
-                    "餐饮语义规划暂时不可用，本次没有执行任何分析。请稍后重试。");
         }
 
         // 0.3. 早期问题类型检测

@@ -186,6 +186,21 @@ def compact_structured_context(value: Optional[Dict[str, Any]]) -> Optional[Dict
     analysis_action = value.get("analysis_action")
     if analysis_action not in {"lookup", "compare", "diagnose", "optimize"}:
         analysis_action = None
+    comparison_kind = value.get("comparison_kind")
+    if comparison_kind not in {
+        "previous_day",
+        "previous_week",
+        "previous_month",
+        "previous_year",
+        "previous_period",
+        "wow",
+        "mom",
+        "yoy",
+    }:
+        comparison_kind = None
+    comparison_label = value.get("comparison_label")
+    if not isinstance(comparison_label, str) or not comparison_label.strip():
+        comparison_label = None
     topic_kind = value.get("topic_kind")
     if topic_kind not in {"dish_ranking", "store_ranking"}:
         topic_kind = None
@@ -222,6 +237,12 @@ def compact_structured_context(value: Optional[Dict[str, Any]]) -> Optional[Dict
         "window_label": sanitize_for_storage(str(window_label))[:40] if window_label else None,
         "requested_metrics": requested_metrics or None,
         "analysis_action": analysis_action,
+        "comparison_kind": comparison_kind,
+        "comparison_label": (
+            sanitize_for_storage(comparison_label.strip())[:40]
+            if comparison_kind and comparison_label
+            else None
+        ),
         "topic_kind": topic_kind,
         "ranking_direction": ranking_direction,
         "ranking_limit": ranking_limit,

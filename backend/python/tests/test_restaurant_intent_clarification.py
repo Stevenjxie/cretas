@@ -371,10 +371,10 @@ async def test_explicit_multi_store_ranking_time_button_never_needs_t3():
     t3.assert_not_awaited()
 
 
-# ─── 2. Still ambiguous after continuation -> no re-registration ─────────
+# ─── 2. Still ambiguous after continuation remains resumable ──────────────
 
 @pytest.mark.asyncio
-async def test_continuation_still_ambiguous_does_not_reregister_pending():
+async def test_continuation_still_ambiguous_reregisters_accumulated_pending():
     pool = _restaurant_pool()
     original_query = "情况怎么样"
     with patch(
@@ -405,10 +405,12 @@ async def test_continuation_still_ambiguous_does_not_reregister_pending():
     assert spec2.is_clarification_continuation is True
     assert spec2.clarification_question  # never empty (default filled in)
 
-    # No new pending was registered for this (factory, session) -- a THIRD
-    # message would be treated as fresh, not another continuation hop.
-    assert pool.pending == {}
-    assert await _pending_pop(pool, "F_LOOP", "sess-loop") is None
+    # The clarification remains resumable for another slot/answer instead of
+    # silently turning the third message into a fresh context-free request.
+    pending = await _pending_pop(pool, "F_LOOP", "sess-loop")
+    assert pending is not None
+    assert pending["original_query"] == "情况怎么样 随便啦"
+    assert pending["clarification_question"] == spec2.clarification_question
 
 
 # ─── 3. No session_key -> continuation never attempted ────────────────────
@@ -1524,6 +1526,101 @@ async def test_semantic_first_store_choice_is_merged_and_not_asked_twice():
 
 
 @pytest.mark.asyncio
+async def test_semantic_first_three_turn_metric_time_store_chain_keeps_original_metric():
+    pool = _FakeDbPool(
+        is_restaurant=True,
+        store_names=["兄弟土菜馆", "有滋有味总部", "有滋有味北外滩店"],
+    )
+    first_plan = {
+        "intent": "RESTAURANT_OPS_GROSS_MARGIN",
+        "time_range": None,
+        "wants_margin": True,
+        "asks_profitability": True,
+        "requested_metrics": ["gross_margin"],
+        "analysis_action": "lookup",
+        "dimensions": [],
+        "dish": None,
+        "store": None,
+        "stores": [],
+        "store_scope": None,
+        "confidence": 0.98,
+        "clarification_needed": True,
+        "missing_fields": ["time_range"],
+        "clarification_question": "想看哪个时间范围的整体毛利率？",
+        "clarification_options": ["本月", "上个月"],
+    }
+    second_plan = {
+        **first_plan,
+        "time_range": {"type": "named", "value": "this_month"},
+        # Reproduce the production model drift: it understood the button but
+        # omitted the original metric while asking for the next missing slot.
+        "requested_metrics": [],
+        "wants_margin": False,
+        "asks_profitability": False,
+        "clarification_needed": True,
+        "missing_fields": ["store_scope"],
+        "clarification_question": "这次要看哪几家门店？",
+        "clarification_options": ["全部门店", "兄弟土菜馆"],
+    }
+    third_plan = {
+        **second_plan,
+        "requested_metrics": [],
+        "store_scope": "all",
+        "clarification_needed": False,
+        "missing_fields": [],
+        "clarification_question": None,
+        "clarification_options": [],
+    }
+    planner = AsyncMock(side_effect=[first_plan, second_plan, third_plan])
+
+    with patch(
+        "smartbi.gold.restaurant_intent._t3_llm_parse",
+        new=planner,
+    ), patch(
+        "smartbi.gold.restaurant_intent.match_restaurant_ops",
+        side_effect=AssertionError("keyword matcher must remain below semantic planning"),
+    ), patch(
+        "smartbi.gold.restaurant_intent._t2_vector_match",
+        new=AsyncMock(side_effect=AssertionError("vector matcher must remain below semantic planning")),
+    ):
+        first = await parse_restaurant_query(
+            "整体毛利率是多少",
+            pool,
+            factory_id="DEMO_REST",
+            session_key="semantic-three-turn",
+            semantic_first=True,
+        )
+        second = await parse_restaurant_query(
+            "本月",
+            pool,
+            factory_id="DEMO_REST",
+            session_key="semantic-three-turn",
+            semantic_first=True,
+        )
+        third = await parse_restaurant_query(
+            "全部门店",
+            pool,
+            factory_id="DEMO_REST",
+            session_key="semantic-three-turn",
+            semantic_first=True,
+        )
+
+    assert first.clarification_needed is True
+    assert second.clarification_needed is True
+    assert second.clarification_question == "这次要看哪几家门店？"
+    assert third.clarification_needed is False
+    assert third.intent == "RESTAURANT_OPS_GROSS_MARGIN"
+    assert third.requested_metrics == ("gross_margin",)
+    assert third.window_label == "本月"
+    assert third.store_scope == "all"
+    assert "整体毛利率是多少" in third.resolver_query_seed
+    assert "本月" in third.resolver_query_seed
+    assert "全部门店" in third.resolver_query_seed
+    assert pool.pending == {}
+    assert planner.await_count == 3
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("query", "payload", "expected_intent", "expected_action"),
     [
@@ -1669,3 +1766,194 @@ def test_t3_prompt_includes_latest_twenty_turns_and_real_store_choices():
     assert "兄弟土菜馆" in prompt
     assert "有滋有味总部" in prompt
     assert "最多20轮" in prompt
+
+
+def test_t3_prompt_includes_safe_structured_slots_after_completed_store_choice():
+    prompt = _build_t3_prompt(
+        "先拆客流转化怎么做",
+        None,
+        [{
+            "q": (
+                "这个星期营收比上周怎么提高？"
+                "给我今天能做的动作 全部门店"
+            ),
+            "a_summary": "已给出本周对比上周的营收行动建议。",
+            "context": {
+                "window_label": "本周",
+                "requested_metrics": ["revenue"],
+                "analysis_action": "optimize",
+                "comparison_kind": "previous_week",
+                "comparison_label": "上周同期",
+                "store_scope": "all",
+                "store_names": [],
+                "compare_stores": False,
+                "drop_me": "never-render",
+            },
+        }],
+        ("兄弟土菜馆", "有滋有味总部"),
+    )
+
+    assert "这个星期营收比上周怎么提高" in prompt
+    assert "已确认的安全上下文槽位" in prompt
+    assert '"window_label": "本周"' in prompt
+    assert '"requested_metrics": ["revenue"]' in prompt
+    assert '"analysis_action": "optimize"' in prompt
+    assert '"comparison_kind": "previous_week"' in prompt
+    assert '"store_scope": "all"' in prompt
+    assert "drop_me" not in prompt
+    assert '用户问题: "先拆客流转化怎么做"' in prompt
+
+
+def test_t3_prompt_treats_inventory_button_as_latest_snapshot_without_time_loop():
+    prompt = _build_t3_prompt(
+        "库存",
+        None,
+        [{
+            "q": "我们现在有几家店",
+            "a_summary": "当前共 16 家门店。",
+            "context": {
+                "store_scope": "all",
+                "store_names": [],
+            },
+        }],
+        ("兄弟土菜馆", "有滋有味总部"),
+    )
+
+    assert '示例6: "库存"' in prompt
+    assert '"intent": "RESTAURANT_OPS_INVENTORY_WARNING"' in prompt
+    assert "默认查看最新库存快照，不依赖时间" in prompt
+    assert "不能追问本月/最近几天" in prompt
+    assert "不能再反问营收、毛利还是库存" in prompt
+    assert '用户问题: "库存"' in prompt
+
+
+@pytest.mark.asyncio
+async def test_semantic_first_repairs_complete_llm_store_count_misclassification():
+    pool = _FakeDbPool(
+        is_restaurant=True,
+        store_names=["兄弟土菜馆", "有滋有味总部", "有滋有味北外滩店"],
+    )
+    wrong_but_complete_plan = {
+        "intent": "RESTAURANT_OPS_SALES_SUMMARY",
+        "time_range": None,
+        "wants_margin": False,
+        "asks_profitability": False,
+        "requested_metrics": [],
+        "analysis_action": "lookup",
+        "dimensions": [],
+        "dish": None,
+        "store": None,
+        "stores": [],
+        "store_scope": None,
+        "confidence": 0.96,
+        "clarification_needed": True,
+        "missing_fields": ["metric"],
+        "clarification_question": "您想看营收、毛利、损耗还是库存？",
+        "clarification_options": ["营收和订单", "毛利", "损耗", "库存"],
+    }
+
+    with patch(
+        "smartbi.gold.restaurant_intent._t3_llm_parse",
+        new=AsyncMock(return_value=wrong_but_complete_plan),
+    ), patch(
+        "smartbi.gold.restaurant_intent.match_restaurant_ops",
+        side_effect=AssertionError("keyword matcher must remain below the LLM"),
+    ), patch(
+        "smartbi.gold.restaurant_intent._t2_vector_match",
+        new=AsyncMock(side_effect=AssertionError("vector matcher must remain below the LLM")),
+    ):
+        spec = await parse_restaurant_query(
+            "我们现在有几家店",
+            pool,
+            factory_id="DEMO_REST",
+            semantic_first=True,
+        )
+
+    assert spec.intent == "RESTAURANT_OPS_STORE_DIRECTORY"
+    assert spec.planned_intents == ("RESTAURANT_OPS_STORE_DIRECTORY",)
+    assert spec.store_scope == "all"
+    assert spec.requested_metrics == ()
+    assert spec.analysis_action == "lookup"
+    assert spec.clarification_needed is False
+    assert spec.planner_authority == "llm_contract_repair"
+
+
+@pytest.mark.asyncio
+async def test_semantic_first_week_comparison_action_keeps_all_slots_after_store_button():
+    pool = _FakeDbPool(
+        is_restaurant=True,
+        store_names=["兄弟土菜馆", "有滋有味总部", "有滋有味北外滩店"],
+    )
+    first_plan = {
+        "intent": "RESTAURANT_OPS_BUSINESS_OPTIMIZATION",
+        "time_range": {"type": "named", "value": "this_week"},
+        "wants_margin": False,
+        "asks_profitability": False,
+        "requested_metrics": ["revenue"],
+        "analysis_action": "optimize",
+        "dimensions": [],
+        "dish": None,
+        "store": None,
+        "stores": [],
+        "store_scope": None,
+        "confidence": 0.99,
+        "clarification_needed": True,
+        "missing_fields": ["store_scope"],
+        "clarification_question": "这次想提高哪几家门店的营收？",
+        "clarification_options": ["全部门店", "兄弟土菜馆"],
+    }
+    second_plan = {
+        **first_plan,
+        # Reproduce a weak continuation parse: the button is understood, but
+        # the previous metric/window/action are omitted. The sealed original
+        # task must still be the execution contract.
+        "time_range": None,
+        "requested_metrics": [],
+        "analysis_action": "lookup",
+        "store_scope": "all",
+        "clarification_needed": False,
+        "missing_fields": [],
+        "clarification_question": None,
+        "clarification_options": [],
+    }
+    planner = AsyncMock(side_effect=[first_plan, second_plan])
+
+    with patch(
+        "smartbi.gold.restaurant_intent._t3_llm_parse",
+        new=planner,
+    ), patch(
+        "smartbi.gold.restaurant_intent.match_restaurant_ops",
+        side_effect=AssertionError("keyword matcher must remain below semantic planning"),
+    ), patch(
+        "smartbi.gold.restaurant_intent._t2_vector_match",
+        new=AsyncMock(side_effect=AssertionError("vector matcher must remain below semantic planning")),
+    ):
+        first = await parse_restaurant_query(
+            (
+                "这个星期营收比上周怎么提高？"
+                "给我今天能做的动作"
+            ),
+            pool,
+            factory_id="DEMO_REST",
+            session_key="week-action-store-choice",
+            semantic_first=True,
+        )
+        second = await parse_restaurant_query(
+            "全部门店",
+            pool,
+            factory_id="DEMO_REST",
+            session_key="week-action-store-choice",
+            semantic_first=True,
+        )
+
+    assert first.clarification_needed is True
+    assert second.clarification_needed is False
+    assert second.intent == "RESTAURANT_OPS_BUSINESS_OPTIMIZATION"
+    assert second.requested_metrics == ("revenue",)
+    assert second.analysis_action == "optimize"
+    assert second.window_label == "本周"
+    assert second.comparison == "previous_week"
+    assert second.store_scope == "all"
+    assert "这个星期营收比上周怎么提高" in second.resolver_query_seed
+    assert "全部门店" in second.resolver_query_seed
+    assert pool.pending == {}
