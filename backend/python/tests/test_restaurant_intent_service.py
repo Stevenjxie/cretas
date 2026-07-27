@@ -474,6 +474,9 @@ async def test_time_clarification_returns_four_continuation_buttons(monkeypatch)
         intent="RESTAURANT_OPS_GROSS_MARGIN",
         clarification_needed=True,
         clarification_question=TIME_CLARIFICATION_QUESTION,
+        # A stale LLM proposal for the next store slot must never override the
+        # deterministic time question displayed to the user.
+        clarification_options=("全部门店", "东城店"),
         dimensions=("dish",),
         requested_metrics=("sales_volume",),
         ranking_direction="best",

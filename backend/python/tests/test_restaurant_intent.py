@@ -211,6 +211,30 @@ def test_matrix_object_dimensions_detected():
     assert "ingredient" in _build_spec("RESTAURANT_OPS_REQUISITION_TREND", "领料", confidence=1.0, tier="test").dimensions
 
 
+def test_time_gate_replaces_llm_store_choices_with_time_choices():
+    spec = _build_spec(
+        "RESTAURANT_OPS_GROSS_MARGIN",
+        "米饭的销量是多少",
+        confidence=0.95,
+        tier="llm",
+        planner_authority="llm",
+        clarification_options=("全部门店", "东城店"),
+        llm_dish="米饭",
+        llm_requested_metrics=("sales_volume",),
+        llm_dimensions=("dish",),
+        require_explicit_time=True,
+        llm_semantics_authoritative=True,
+    )
+
+    assert spec.clarification_question == TIME_CLARIFICATION_QUESTION
+    assert spec.clarification_options == (
+        "本月",
+        "上个月",
+        "最近7天",
+        "最近30天",
+    )
+
+
 @pytest.mark.parametrize(
     "query,baseline_label",
     [

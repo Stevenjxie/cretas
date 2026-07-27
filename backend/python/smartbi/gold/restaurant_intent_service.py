@@ -316,11 +316,6 @@ def _suggested_followups(context: Dict[str, Any]) -> List[Dict[str, str]]:
 
 def _clarification_followups(spec: RestaurantQuerySpec) -> List[Dict[str, str]]:
     """Render LLM-selected choices after they passed factual allowlists."""
-    if spec.clarification_options:
-        return [
-            {"label": option[:12], "question": option}
-            for option in spec.clarification_options[:6]
-        ]
     if spec.clarification_question == TIME_CLARIFICATION_QUESTION:
         return [
             {"label": window, "question": window}
@@ -333,6 +328,11 @@ def _clarification_followups(spec: RestaurantQuerySpec) -> List[Dict[str, str]]:
             for name in spec.store_options[:3]
         )
         return choices
+    if spec.clarification_options:
+        return [
+            {"label": option[:12], "question": option}
+            for option in spec.clarification_options[:6]
+        ]
     return []
 
 
