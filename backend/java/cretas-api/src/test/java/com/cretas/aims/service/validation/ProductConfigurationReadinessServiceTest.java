@@ -3,10 +3,11 @@ package com.cretas.aims.service.validation;
 import com.cretas.aims.dto.ProductProcessWorkflowDTO;
 import com.cretas.aims.dto.workflow.ProductConfigurationCompletenessReport;
 import com.cretas.aims.entity.ProductProcessWorkflow;
+import com.cretas.aims.entity.ProductType;
 import com.cretas.aims.entity.bom.BomRecipe;
 import com.cretas.aims.entity.bom.BomRecipeItem;
 import com.cretas.aims.entity.bom.BomSeasoningItem;
-import com.cretas.aims.exception.BusinessException;
+import com.cretas.aims.entity.product.ProductPackagingSpec;
 import com.cretas.aims.repository.ProductProcessWorkflowActivationRepository;
 import com.cretas.aims.repository.ProductProcessWorkflowRepository;
 import com.cretas.aims.repository.ProductTypeRepository;
@@ -15,7 +16,9 @@ import com.cretas.aims.repository.bom.BomRecipeRepository;
 import com.cretas.aims.repository.bom.BomSeasoningItemRepository;
 import com.cretas.aims.repository.product.ProductPackagingSpecRepository;
 import com.cretas.aims.service.bom.BomWorkflowRevisionService;
+import com.cretas.aims.service.unit.CanonicalUnit;
 import com.cretas.aims.service.unit.UnitContractService;
+import com.cretas.aims.service.unit.UnitDimension;
 import com.cretas.aims.service.workflow.PinnedWorkflowGraph;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.BeforeEach;
@@ -34,7 +37,6 @@ import java.util.Optional;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
-import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
@@ -131,7 +133,7 @@ class ProductConfigurationReadinessServiceTest {
     }
 
     @Test
-    void pinnedRepeatedMasterProcessNodesRequireTheirOwnNodeBindings() {
+    void pinnedRepeatedMasterProcessNodesMayOmitAuxiliaryBindings() {
         BomRecipe recipe = pinnedRecipe(BomRecipe.Status.DRAFT, false);
         ProductProcessWorkflowDTO.Node first = processNode("process-first", "WP-SAME", "REQUIRED");
         ProductProcessWorkflowDTO.Node second = processNode("process-second", "WP-SAME", "REQUIRED");
@@ -146,7 +148,7 @@ class ProductConfigurationReadinessServiceTest {
 
         ProductConfigurationCompletenessReport report = service.evaluate(FACTORY, PRODUCT, recipe.getId());
 
-        assertFalse(report.isBomComplete());
+        assertTrue(report.isBomComplete());
         assertEquals(2, report.getProcessAuxiliaryStatuses().size());
         ProductConfigurationCompletenessReport.ProcessAuxiliaryStatus firstStatus =
                 report.getProcessAuxiliaryStatuses().get(0);
@@ -157,10 +159,9 @@ class ProductConfigurationReadinessServiceTest {
         assertTrue(firstStatus.isComplete());
         assertEquals("process-second", secondStatus.getWorkflowProcessNodeId());
         assertEquals(0, secondStatus.getBindingCount());
-        assertFalse(secondStatus.isComplete());
-        assertTrue(report.getIssues().stream().anyMatch(issue ->
-                "BOM_AUXILIARY_REQUIRED".equals(issue.getCode())
-                        && "process-second".equals(issue.getTarget())));
+        assertTrue(secondStatus.isComplete());
+        assertTrue(report.getIssues().stream().noneMatch(issue ->
+                issue.getCode().startsWith("BOM_AUXILIARY")));
     }
 
     @Test
@@ -192,7 +193,7 @@ class ProductConfigurationReadinessServiceTest {
     }
 
     @Test
-    void activePinnedBomWithMissingAuxiliaryPolicyFailsClosedWithoutNullPointer() {
+    void activePinnedBomWithMissingAuxiliaryPolicyRemainsUsableWhenRawConfigured() {
         BomRecipe recipe = pinnedRecipe(BomRecipe.Status.ACTIVE, true);
         ProductProcessWorkflowDTO.Node process = processNode("legacy-process", "WP-LEGACY", null);
         PinnedWorkflowGraph graph = graph(
@@ -204,15 +205,68 @@ class ProductConfigurationReadinessServiceTest {
                 FACTORY, PRODUCT, BomRecipe.Status.ACTIVE)).thenReturn(Optional.of(recipe));
         when(bomWorkflowRevisionService.resolvePinnedGraph(FACTORY, recipe)).thenReturn(graph);
 
-        BusinessException error = assertThrows(BusinessException.class,
-                () -> service.requireActiveBomComplete(FACTORY, PRODUCT));
-
-        assertEquals("ACTIVE_BOM_INCOMPLETE", error.getErrorCode());
+        ProductConfigurationCompletenessReport activeReport =
+                service.requireActiveBomComplete(FACTORY, PRODUCT);
         ProductConfigurationCompletenessReport report = service.evaluate(FACTORY, PRODUCT, recipe.getId());
+        assertTrue(activeReport.isBomActive());
+        assertTrue(report.isBomComplete());
+        assertTrue(report.getProcessAuxiliaryStatuses().getFirst().isComplete());
+        assertTrue(report.getIssues().stream().noneMatch(issue ->
+                issue.getCode().startsWith("BOM_AUXILIARY")));
+    }
+
+    @Test
+    void missingRawMaterialStillBlocksBomReadiness() {
+        BomRecipe recipe = pinnedRecipe(BomRecipe.Status.DRAFT, false);
+        PinnedWorkflowGraph graph = graph(List.of(), List.of(), List.of());
+        stubCommon(recipe, List.of());
+        when(itemRepository.findByRecipeIdOrderBySortOrderAsc(recipe.getId())).thenReturn(List.of());
+        when(bomWorkflowRevisionService.resolvePinnedGraph(FACTORY, recipe)).thenReturn(graph);
+
+        ProductConfigurationCompletenessReport report =
+                service.evaluate(FACTORY, PRODUCT, recipe.getId());
+
         assertFalse(report.isBomComplete());
         assertTrue(report.getIssues().stream().anyMatch(issue ->
-                "BOM_AUXILIARY_DECISION_REQUIRED".equals(issue.getCode())
-                        && "legacy-process".equals(issue.getTarget())));
+                "BOM_RAW_REQUIRED".equals(issue.getCode())));
+    }
+
+    @Test
+    void packagingLevelsAreOptionalWhenRawMaterialIsConfigured() {
+        BomRecipe recipe = pinnedRecipe(BomRecipe.Status.DRAFT, false);
+        PinnedWorkflowGraph graph = graph(List.of("RAW-A"), List.of(), List.of());
+        stubCommon(recipe, List.of());
+        when(bomWorkflowRevisionService.resolvePinnedGraph(FACTORY, recipe)).thenReturn(graph);
+
+        ProductType product = new ProductType();
+        product.setId(PRODUCT);
+        product.setFactoryId(FACTORY);
+        product.setUnit("袋");
+        when(productTypeRepository.findByIdAndFactoryId(PRODUCT, FACTORY)).thenReturn(Optional.of(product));
+        when(unitContractService.describe(FACTORY, "袋")).thenReturn(Optional.of(new CanonicalUnit(
+                "bag", UnitDimension.PACKAGE, "bag", BigDecimal.ONE, "袋", 0)));
+
+        ProductPackagingSpec outerCase = new ProductPackagingSpec();
+        outerCase.setId("PACK-CASE");
+        outerCase.setFactoryId(FACTORY);
+        outerCase.setProductTypeId(PRODUCT);
+        outerCase.setName("外箱");
+        outerCase.setPackageUnit("箱");
+        outerCase.setBaseUnit("袋");
+        when(packagingSpecRepository
+                .findByFactoryIdAndProductTypeIdAndActiveTrueOrderBySortOrderAscCreatedAtAsc(FACTORY, PRODUCT))
+                .thenReturn(List.of(outerCase));
+
+        ProductConfigurationCompletenessReport report =
+                service.evaluate(FACTORY, PRODUCT, recipe.getId());
+
+        assertTrue(report.isBomComplete());
+        assertEquals(2, report.getPackagingLevels().size());
+        assertTrue(report.getPackagingLevels().stream()
+                .allMatch(ProductConfigurationCompletenessReport.PackagingLevelStatus::isComplete));
+        assertTrue(report.getIssues().stream().noneMatch(issue ->
+                issue.getCode().startsWith("BOM_PACKAGING")
+                        || "BOM_BASE_PACKAGING_REQUIRED".equals(issue.getCode())));
     }
 
     private void stubCommon(BomRecipe recipe, List<BomSeasoningItem> bindings) {

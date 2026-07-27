@@ -44,8 +44,6 @@ import java.util.Set;
 @RequiredArgsConstructor
 public class ProductConfigurationReadinessService {
 
-    private static final Set<String> AUXILIARY_POLICIES = Set.of("REQUIRED", "NOT_REQUIRED");
-
     private final ProductProcessWorkflowRepository workflowRepository;
     private final ProductProcessWorkflowActivationRepository activationRepository;
     private final ProductProcessWorkflowValidator workflowValidator;
@@ -189,7 +187,7 @@ public class ProductConfigurationReadinessService {
                     .reduce((left, right) -> left + "；" + right).orElse("BOM 配置不完整");
             throw new BusinessException(409, detail)
                     .withCode("BOM_COMPLETENESS_REQUIRED")
-                    .withHint("请按缺失项补齐原料关系、工序辅料确认和各包装层包材后再激活")
+                    .withHint("请至少配置一项主原料后再激活；工序辅料和包材可按实际需要补充")
                     .withHintTarget("bomCompleteness")
                     .withSeverity("warning");
         }
@@ -260,25 +258,12 @@ public class ProductConfigurationReadinessService {
             long bindingCount = seasonings.stream()
                     .filter(item -> matchesProcess(item, processNodeId, processId, pinnedGraph != null))
                     .count();
-            // Set.of(...).contains(null) throws NPE. Legacy/published workflow snapshots may
-            // legitimately lack this newer field. Readiness and future activation remain
-            // fail-closed, while production-plan admission separately preserves already-active
-            // historical BOM/Workflow snapshots without rewriting them.
-            boolean validPolicy = policy != null && AUXILIARY_POLICIES.contains(policy);
-            boolean complete = validPolicy && ("NOT_REQUIRED".equals(policy) || bindingCount > 0);
+            // Auxiliary configuration remains visible and editable, but it is optional for
+            // BOM readiness. A raw-material-only BOM can be activated and used immediately.
             processStatuses.add(ProductConfigurationCompletenessReport.ProcessAuxiliaryStatus.builder()
                     .workflowProcessNodeId(processNodeId).workProcessId(processId)
                     .processName(processName).auxiliaryPolicy(policy)
-                    .bindingCount(bindingCount).complete(complete).build());
-            if (!validPolicy) {
-                issues.add(issue("BOM_AUXILIARY_DECISION_REQUIRED",
-                        "工序「" + display(processName, processId) + "」尚未确认是否需要辅料",
-                        processNodeId));
-            } else if ("REQUIRED".equals(policy) && bindingCount == 0) {
-                issues.add(issue("BOM_AUXILIARY_REQUIRED",
-                        "工序「" + display(processName, processId) + "」需要辅料但尚未配置",
-                        processNodeId));
-            }
+                    .bindingCount(bindingCount).complete(true).build());
         }
 
         List<BomRecipeItem> packagingItems = items.stream()
@@ -291,24 +276,16 @@ public class ProductConfigurationReadinessService {
         if (basePackagingRequired) {
             packagingStatuses.add(ProductConfigurationCompletenessReport.PackagingLevelStatus.builder()
                     .packagingSpecId(null).name("基本规格").packageUnit(product.getUnit())
-                    .baseUnit(product.getUnit()).materialCount(baseCount).complete(baseCount > 0).build());
-            if (baseCount == 0) {
-                issues.add(issue("BOM_BASE_PACKAGING_REQUIRED", "基本销售规格尚未配置包材", "packaging:base"));
-            }
+                    .baseUnit(product.getUnit()).materialCount(baseCount).complete(true).build());
         }
         for (ProductPackagingSpec spec : packagingSpecRepository
                 .findByFactoryIdAndProductTypeIdAndActiveTrueOrderBySortOrderAscCreatedAtAsc(factoryId, productTypeId)) {
             long count = packagingItems.stream().filter(item -> spec.getId().equals(item.getPackagingSpecId())).count();
             packagingStatuses.add(ProductConfigurationCompletenessReport.PackagingLevelStatus.builder()
                     .packagingSpecId(spec.getId()).name(spec.getName()).packageUnit(spec.getPackageUnit())
-                    .baseUnit(spec.getBaseUnit()).materialCount(count).complete(count > 0).build());
-            if (count == 0) {
-                issues.add(issue("BOM_PACKAGING_LEVEL_REQUIRED",
-                        "包装规格「" + spec.getName() + "」尚未配置该层新增包材",
-                        "packaging:" + spec.getId()));
-            }
+                    .baseUnit(spec.getBaseUnit()).materialCount(count).complete(true).build());
         }
-        return issues.stream().noneMatch(issue -> issue.getCode().startsWith("BOM_"));
+        return rawCount > 0;
     }
 
     private List<WorkflowProcessContext> processContexts(
@@ -428,10 +405,6 @@ public class ProductConfigurationReadinessService {
 
     private String string(Object value) {
         return value == null ? null : String.valueOf(value).trim();
-    }
-
-    private String display(String name, String fallback) {
-        return name == null || name.isBlank() ? fallback : name;
     }
 
     private record WorkflowProcessContext(
