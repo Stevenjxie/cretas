@@ -357,6 +357,76 @@ class TestBuildFactbook:
         assert se.NOTE_DISH_TAG_NOT_NAME in fb.notes
         assert se.NOTE_VIP_SIGNAL in fb.notes  # VIP 4.50 < 非VIP 4.83
 
+    def test_finance_falls_back_to_pos_bills_when_daily_projection_is_empty(
+        self,
+        monkeypatch,
+    ):
+        _install_data_fakes(monkeypatch)
+        eng = _engine(monkeypatch)
+        import datetime
+
+        async def empty_finance(*_args, **_kwargs):
+            return {
+                "total_revenue": 0.0,
+                "bill_count": 0,
+                "store_count": 0,
+                "day_count": 0,
+                "top_stores": [],
+            }
+
+        async def pos_finance(
+            _pool,
+            factory_id,
+            date_range,
+            *,
+            top_n_stores,
+            store_names,
+        ):
+            assert factory_id == "RES_3101_009"
+            assert date_range == (
+                datetime.date(2026, 7, 21),
+                datetime.date(2026, 7, 27),
+            )
+            assert top_n_stores == 5
+            assert store_names is None
+            return {
+                "total_revenue": 188000.0,
+                "bill_count": 1200,
+                "avg_bill_value": 156.67,
+                "customer_count": 2300,
+                "avg_per_capita": 81.74,
+                "store_count": 3,
+                "day_count": 6,
+                "top_stores": [{
+                    "store_id": 1,
+                    "store_name": "青花椒新世界新丸中心店",
+                    "revenue": 88000.0,
+                    "bill_count": 520,
+                }],
+                "data_source": "fact_pos_transaction",
+            }
+
+        monkeypatch.setattr(se, "finance_summary", empty_finance)
+        monkeypatch.setattr(se, "_pos_finance_summary", pos_finance)
+        plan = {
+            "review": False,
+            "finance": True,
+            "sales": False,
+            "cross": [],
+        }
+
+        fb = asyncio.run(eng._build_factbook(
+            "DEMO_REST",
+            (datetime.date(2026, 7, 21), datetime.date(2026, 7, 27)),
+            plan,
+            period="最近7天",
+        ))
+
+        assert fb.finance["total_revenue"] == 188000.0
+        assert fb.finance["bill_count"] == 1200
+        assert fb.finance["data_source"] == "fact_pos_transaction"
+        assert any("收银小票明细" in note for note in fb.notes)
+
     def test_store_scope_filters_internal_facts_and_labels_external_context(
         self, monkeypatch,
     ):

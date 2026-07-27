@@ -176,6 +176,119 @@ RESULT_SOURCE_SEMANTIC_CACHE = "semantic_cache"
 RESULT_SOURCE_DETERMINISTIC = "deterministic_fallback"
 
 
+async def _pos_finance_summary(
+    pool: asyncpg.Pool,
+    factory_id: str,
+    date_range: Tuple[date, date],
+    *,
+    top_n_stores: int = 5,
+    store_names: Optional[Tuple[str, ...]] = None,
+) -> Dict[str, Any]:
+    """Read revenue/order facts from bill-grain POS data when agg_daily lags.
+
+    Imported restaurant data lands in ``fact_pos_transaction`` before the
+    optional ``agg_daily`` projection. Comprehensive analysis must not report
+    revenue as missing while the deterministic dish/store tools can already
+    see the same bills. This fallback stays read-only, keeps the exact requested
+    date/store scope, and deliberately exposes no cost or profit fields.
+    """
+    start, end = date_range
+    params: List[Any] = [factory_id, start, end]
+    conditions = [
+        "t.factory_id = $1",
+        "t.date >= $2",
+        "t.date <= $3",
+    ]
+    if store_names is not None:
+        params.append(list(store_names))
+        conditions.append(f"s.name = ANY(${len(params)}::text[])")
+    where_sql = " AND ".join(conditions)
+    params.append(int(top_n_stores))
+    limit_placeholder = f"${len(params)}"
+
+    async with pool.acquire() as conn:
+        # The Demo authentication tenant and its seeded POS data tenant differ.
+        # Pin the read-side RLS context to the explicitly supplied data tenant;
+        # auth, cache and conversation identity remain untouched.
+        await conn.execute(
+            "SELECT set_config('app.factory_id', $1, false)",
+            factory_id,
+        )
+        totals = await conn.fetchrow(
+            f"""
+            SELECT
+              COALESCE(SUM(COALESCE(t.actual_receive, t.net_amount, 0)), 0)
+                ::numeric(18,2) AS total_revenue,
+              COUNT(DISTINCT t.id)::bigint AS bill_count,
+              COALESCE(SUM(t.customer_count), 0)::bigint AS customer_count,
+              COUNT(DISTINCT t.store_id)::int AS store_count,
+              COUNT(DISTINCT t.date)::int AS day_count,
+              MIN(t.date) AS actual_start_date,
+              MAX(t.date) AS actual_end_date
+            FROM fact_pos_transaction t
+            JOIN dim_store s
+              ON s.store_id = t.store_id
+             AND s.factory_id = t.factory_id
+            WHERE {where_sql}
+            """,
+            *params[:-1],
+        )
+        top_stores = await conn.fetch(
+            f"""
+            SELECT
+              t.store_id,
+              s.name AS store_name,
+              COALESCE(SUM(COALESCE(t.actual_receive, t.net_amount, 0)), 0)
+                ::numeric(18,2) AS revenue,
+              COUNT(DISTINCT t.id)::bigint AS bill_count
+            FROM fact_pos_transaction t
+            JOIN dim_store s
+              ON s.store_id = t.store_id
+             AND s.factory_id = t.factory_id
+            WHERE {where_sql}
+            GROUP BY t.store_id, s.name
+            ORDER BY revenue DESC
+            LIMIT {limit_placeholder}
+            """,
+            *params,
+        )
+
+    total_revenue = float(totals["total_revenue"] or 0)
+    bill_count = int(totals["bill_count"] or 0)
+    customer_count = int(totals["customer_count"] or 0)
+    return {
+        "factory_id": factory_id,
+        "start_date": start.isoformat(),
+        "end_date": end.isoformat(),
+        "store_names": list(store_names) if store_names is not None else None,
+        "total_revenue": total_revenue,
+        "bill_count": bill_count,
+        "avg_bill_value": total_revenue / bill_count if bill_count else None,
+        "customer_count": customer_count,
+        "avg_per_capita": total_revenue / customer_count if customer_count else None,
+        "store_count": int(totals["store_count"] or 0),
+        "day_count": int(totals["day_count"] or 0),
+        "actual_start_date": (
+            totals["actual_start_date"].isoformat()
+            if totals["actual_start_date"] is not None else None
+        ),
+        "actual_end_date": (
+            totals["actual_end_date"].isoformat()
+            if totals["actual_end_date"] is not None else None
+        ),
+        "top_stores": [
+            {
+                "store_id": int(row["store_id"]),
+                "store_name": row["store_name"],
+                "revenue": float(row["revenue"] or 0),
+                "bill_count": int(row["bill_count"] or 0),
+            }
+            for row in top_stores
+        ],
+        "data_source": "fact_pos_transaction",
+    }
+
+
 # ============================================================================
 # P2 multi-turn memory (2026-07-09) — bounded conversation-history window
 # ============================================================================
@@ -1845,6 +1958,37 @@ class ComprehensiveSynthesisEngine:
             keys = list(tasks.keys())
             done = await asyncio.gather(*(tasks[k] for k in keys))
             results = dict(zip(keys, done))
+
+        # ``agg_daily`` is an optional projection and may lag behind freshly
+        # imported POS bills.  The comprehensive answer used to declare
+        # revenue missing in that window even though dish/store resolvers could
+        # already answer from ``fact_pos_transaction``. Keep the exact requested
+        # scope and fill only factual revenue/order fields; cost stays missing.
+        if plan.get("finance"):
+            finance_result = results.get("finance") or {}
+            if not (
+                finance_result.get("bill_count")
+                or finance_result.get("total_revenue")
+            ):
+                pos_finance = await _safe(
+                    _pos_finance_summary(
+                        self._pool,
+                        gold_sales_factory,
+                        date_range,
+                        top_n_stores=5,
+                        store_names=store_names,
+                    ),
+                    "finance_pos_fallback",
+                )
+                if pos_finance and (
+                    pos_finance.get("bill_count")
+                    or pos_finance.get("total_revenue")
+                ):
+                    results["finance"] = pos_finance
+                    notes.append(
+                        "营收与订单来自收银小票明细；成本字段未随小票提供，"
+                        "因此本次不计算毛利或净利润。"
+                    )
 
         # Demo and recently imported restaurant tenants can have complete POS
         # item facts before the monthly agg_product projection is populated.
