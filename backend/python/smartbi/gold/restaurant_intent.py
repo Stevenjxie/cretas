@@ -2959,6 +2959,16 @@ async def _t2_vector_match(pool, query: str) -> Tuple[Optional[str], float, Opti
 # the entire interactive request after deterministic tiers have missed.
 _T3_PROVIDER_TIMEOUT_SECONDS = 2.5
 _T3_TOTAL_TIMEOUT_SECONDS = 6.0
+# Authenticated restaurant chat uses the LLM as its natural-language front
+# door.  The shared MAPPER slot deliberately carries an aggressive interactive
+# budget, but a cold quota/circuit state can consume that budget before any
+# healthy fallback receives a meaningful attempt.  REVIEW starts with the
+# verified non-thinking Max pair and remains behind the same free-tier
+# allowlist/expiry guards in ``common.llm_router``.  Give that high-accuracy
+# semantic-first path enough time to reach its Plus tail without changing the
+# shared router or the legacy T3 latency contract.
+_SEMANTIC_PROVIDER_TIMEOUT_SECONDS = 5.0
+_SEMANTIC_TOTAL_TIMEOUT_SECONDS = 12.0
 _T3_MIN_CONFIDENCE = 0.6
 
 
@@ -3503,15 +3513,33 @@ async def _t3_llm_parse(
     hint: Optional[Tuple[str, float]],
     history: Optional[Sequence[Dict[str, Any]]],
     available_stores: Sequence[str] = (),
+    prefer_high_accuracy: bool = False,
 ) -> Optional[Dict[str, Any]]:
-    """Call the SmartBI LLM router (SLOT.MAPPER: thinking off, json_object,
-    temperature 0) to structurally parse `query`. Returns the parsed dict, or
-    None on any failure/timeout. The caller converts that into an explicit
-    fail-closed, non-executing clarification."""
+    """Call the SmartBI LLM router to structurally parse ``query``.
+
+    Legacy/offline T3 keeps the low-latency MAPPER contract.  Authenticated
+    semantic-first restaurant chat selects REVIEW: the same billing-safe
+    router, but with the verified high-quality non-thinking chain and a budget
+    that can actually reach a healthy fallback after quota failures.
+
+    Returns the parsed dict, or ``None`` on any failure/timeout. The caller
+    converts that into an explicit fail-closed, non-executing clarification.
+    """
     try:
         from common.llm_router import call_chain, SLOT
         from common.llm_metrics import llm_caller_context
 
+        selected_slot = SLOT.REVIEW if prefer_high_accuracy else SLOT.MAPPER
+        provider_timeout = (
+            _SEMANTIC_PROVIDER_TIMEOUT_SECONDS
+            if prefer_high_accuracy
+            else _T3_PROVIDER_TIMEOUT_SECONDS
+        )
+        total_timeout = (
+            _SEMANTIC_TOTAL_TIMEOUT_SECONDS
+            if prefer_high_accuracy
+            else _T3_TOTAL_TIMEOUT_SECONDS
+        )
         prompt = _build_t3_prompt(query, hint, history, available_stores)
         payload = {
             "messages": [
@@ -3526,10 +3554,10 @@ async def _t3_llm_parse(
         }
         with llm_caller_context("restaurant_intent"):
             result = await call_chain(
-                SLOT.MAPPER,
+                selected_slot,
                 payload,
-                timeout=_T3_PROVIDER_TIMEOUT_SECONDS,
-                total_timeout=_T3_TOTAL_TIMEOUT_SECONDS,
+                timeout=provider_timeout,
+                total_timeout=total_timeout,
             )
         content = (result["choices"][0]["message"]["content"] or "").strip()
         if content.startswith("```"):
@@ -3651,6 +3679,7 @@ async def parse_restaurant_query(
             hint=None,
             history=history,
             available_stores=available_stores,
+            prefer_high_accuracy=True,
         )
         if parsed is None:
             return _build_spec(
@@ -4059,6 +4088,7 @@ async def _parse_continuation(
             hint=None,
             history=semantic_history,
             available_stores=available_stores,
+            prefer_high_accuracy=True,
         )
         if parsed is None:
             return _build_spec(
