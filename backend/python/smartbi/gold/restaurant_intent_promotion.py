@@ -50,6 +50,7 @@ flag with a file the human already reviewed. Nothing in this module,
 """
 from __future__ import annotations
 
+import datetime as _dt
 import json
 import logging
 from collections import Counter
@@ -66,6 +67,24 @@ LEDGER_FILE = _DATA / "promoted_restaurant_intent_samples.json"
 # 人工编辑 (否决和通过一样是人的判断, 不自动写)。
 REJECTED_FILE = _DATA / "rejected_restaurant_intent_samples.json"
 
+# Miss 复盘处理状态 (卡5b 补充, 2026-07-28): `aggregate_misses` 每条是
+# RESTAURANT_OPS_MISS 聚合行 (只读, 来自 capture 表), 复盘时人工标注"这条
+# 打算怎么处理"没地方存 -- 同 REJECTED_FILE 一样是纯人工判断的小体量数据,
+# 走 repo-committed JSON 文件而不是新建 DB 表/migration (本卡任务卡明确
+# 禁止自建 migration; 这个数据量级和访问模式也不需要一张表)。
+# 格式: {normalized_query: {"status": ..., "note": ..., "reviewed_by": ...,
+# "updated_at": ISO8601}}。
+MISS_STATUS_FILE = _DATA / "restaurant_intent_miss_status.json"
+# 允许的处理状态 -- 显式枚举, 不接受任意字符串 (禁止降级/明确原则: 前端传
+# 错值要 400, 不能悄悄存一个前端和后端理解不一致的自由文本)。
+MISS_STATUS_VALUES = frozenset({
+    "unreviewed",   # 默认/未处理 (未显式设置时的隐含状态, 不需要写一条记录)
+    "planned",      # 已排入 resolver/意图目录扩展计划
+    "wontfix",      # 评估后判定不做 (如误触发/低频/超出产品范围)
+    "duplicate",    # 与已有 miss 或已支持意图重复
+    "resolved",     # 已有后续版本覆盖 (resolver 已扩展/晋升表已收录)
+})
+
 # Two-level objective gate thresholds (spec section 5). Row-level filter (a)
 # is always applied (tier=llm, contract_pass=true, served=true -- see the SQL
 # in aggregate_candidates). Group-level recommendation (b) additionally
@@ -74,6 +93,53 @@ REJECTED_FILE = _DATA / "rejected_restaurant_intent_samples.json"
 # (`conflict`) -- those still surface for human review, just unmarked.
 _RECOMMEND_MIN_COUNT = 2
 _RECOMMEND_MIN_CONFIDENCE = 0.85
+
+
+# ─── RLS GUC helper (shared by aggregate_candidates / aggregate_misses) ────
+#
+# `factory_id=None` means "platform admin channel" (卡5b 运营台聚合看板 —
+# 跨租户读所有 domain 命中行, 不按发起管理员自己的工厂过滤). This is
+# DIFFERENT from "not calling set_config at all":
+#
+# `smartbi/tenant_ctx.py`'s asyncpg pool `setup` callback
+# (`set_pg_connection_tenant`) already runs `SELECT set_config('app.factory_id',
+# fid, false)` on EVERY connection checkout, using the ambient per-request
+# ContextVar. When no tenant is in scope (e.g. a platform_admin JWT with no
+# `factoryId` claim) that callback's `fid` falls back to the sentinel
+# `"__internal__"` (`tenant_ctx.INTERNAL_SENTINEL`), NOT an empty string.
+# `smart_bi_llm_fallback_log`'s FORCE RLS `tenant_select` policy is:
+#     factory_id = current_setting('app.factory_id', true)
+#     OR current_setting('app.factory_id', true) = ''
+#     OR current_setting('app.factory_id', true) IS NULL
+# `'__internal__'` matches none of those three branches (it isn't empty/NULL
+# and no real row has factory_id='__internal__') -- so relying on "the pool
+# already set something" for a platform-wide read would silently return ZERO
+# rows, not "all rows". This is the same 假0 failure class as
+# `feedback_smartbi_rls_set_guc_before_query` / the CLI's original bug, just
+# one layer further from view (the pool sets *something*, it's just the
+# wrong something for this call).
+#
+# So the admin channel here explicitly RESETS the GUC to `''` on the borrowed
+# connection, after `pool.acquire()`, before the query -- deterministically
+# overwriting whatever the pool `setup` callback (or a prior borrower, since
+# asyncpg physically reuses connections) left behind. `is_local` stays
+# `false` (session-scoped, not `SET LOCAL`/transaction-scoped) because
+# asyncpg's `is_local=true` set_config has been verified in this project to
+# NOT reliably apply across the acquire()/execute() step boundary on a pooled
+# connection (`feedback_asyncpg_local_setconfig_rls_never_applies`) -- `false`
+# mirrors both `tenant_ctx.set_pg_connection_tenant` and this module's
+# pre-existing per-tenant `set_config` calls below.
+async def _set_rls_guc(conn, factory_id: Optional[str]) -> None:
+    """Explicitly set (or reset) `app.factory_id` on `conn` before a query.
+
+    `factory_id=None` -> admin channel: reset to `''` so the FORCE RLS
+    permissive branch matches and ALL tenants' rows are visible (platform-wide
+    aggregation, e.g. 卡5b 运营台). `factory_id=<str>` -> tenant-scoped read
+    (CLI usage, one factory at a time).
+    """
+    await conn.execute(
+        "SELECT set_config('app.factory_id', $1, false)", factory_id or ""
+    )
 
 
 # ─── Ledger I/O ────────────────────────────────────────────────────────────
@@ -195,9 +261,13 @@ async def aggregate_candidates(
     min_confidence: float = 0.75,
     min_count: int = 1,
     limit: int = 200,
-    factory_id: str = "DEMO_REST",
+    factory_id: Optional[str] = "DEMO_REST",
 ) -> List[Dict[str, Any]]:
     """Aggregate `smart_bi_llm_fallback_log` rows into promotion candidates.
+
+    `factory_id=None` -> platform admin channel (see `_set_rls_guc` docstring):
+    reads across ALL tenants, for 卡5b's cross-tenant 运营台候选队列. The CLI
+    keeps passing an explicit tenant string (default "DEMO_REST"), unaffected.
 
     Row-level gate (a) -- only rows that are ALL of: tier='llm' (T3 parsed
     it, meaning T1/T2 could not), contract_pass=true (Answer Contract did not
@@ -246,10 +316,9 @@ async def aggregate_candidates(
             # smart_bi_llm_fallback_log 带 FORCE RLS (tenant_select 策略):
             # 不设 app.factory_id GUC 会假性 0 行 → CLI 误报"无候选"
             # (2026-07-23 首次真跑晋升 CLI 踩中, 同 feedback_smartbi_rls
-            # 记忆里的裸 psql 坑)。显式事务级 set_config 后再查。
-            await conn.execute(
-                "SELECT set_config('app.factory_id', $1, false)", factory_id
-            )
+            # 记忆里的裸 psql 坑)。显式 set_config 后再查 -- factory_id=None
+            # 时用管理员通道 (见 _set_rls_guc), 否则单租户扫描 (CLI 用法)。
+            await _set_rls_guc(conn, factory_id)
             rows = await conn.fetch(sql, min_confidence, min_count, limit)
     except Exception as exc:
         logger.warning(f"[restaurant-intent-promotion] aggregate_candidates query failed (fail-open): {exc}")
@@ -296,7 +365,7 @@ async def aggregate_misses(
     pool,
     *,
     limit: int = 200,
-    factory_id: str = "DEMO_REST",
+    factory_id: Optional[str] = "DEMO_REST",
 ) -> List[Dict[str, Any]]:
     """Aggregate delegate:false misses (哨兵 template_code='RESTAURANT_OPS_MISS',
     log_intent_miss 写入) -- 飞轮的另一半原料: tiered 没接住的问法。
@@ -305,7 +374,8 @@ async def aggregate_misses(
     spec_intent (should_delegate miss 时 T1-T3 实际解析出的意图, 有值说明
     "解析对了但路由拒了" -- 通常是 resolver 缺口或 A-3 类例外)。
 
-    只读, fail-open []。RLS 同 aggregate_candidates: 查询前设 GUC。"""
+    只读, fail-open []。RLS 同 aggregate_candidates: 查询前设 GUC
+    (`factory_id=None` -> 管理员通道, 见 `_set_rls_guc`)。"""
     sql = """
         SELECT trim(query)                                          AS norm_query,
                COUNT(*)                                             AS occurrence_count,
@@ -321,9 +391,7 @@ async def aggregate_misses(
     """
     try:
         async with pool.acquire() as conn:
-            await conn.execute(
-                "SELECT set_config('app.factory_id', $1, false)", factory_id
-            )
+            await _set_rls_guc(conn, factory_id)
             rows = await conn.fetch(sql, limit)
     except Exception as exc:
         logger.warning(f"[restaurant-intent-promotion] aggregate_misses query failed (fail-open): {exc}")
@@ -627,3 +695,126 @@ async def list_route_promotions(
             "hit_count": row["hit_count"],
         })
     return out
+
+
+# ─── Human-reviewed reject (卡5b: web 否决通道, alongside the CLI/manual one) ─
+
+def reject_candidate(
+    query: str, reason: str, *, rejected_by: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Append one human-reviewed rejection to `REJECTED_FILE`.
+
+    Mirrors `apply_promotions`'s shape (explicit human decision, explicit
+    write, never called from the read-only aggregation path) but for the
+    否决账本 instead of the promotion ledger -- module docstring previously
+    described this file as "仅 CLI --apply 之外人工编辑"; this is that same
+    human decision now reachable from 卡5's web 一键否决 button instead of a
+    manual JSON edit, not a new automated write path.
+
+    Idempotent: re-rejecting an already-rejected query is a no-op (returns
+    `already_rejected=True`, does not duplicate the entry or touch the file).
+
+    ⚠️ Known limitation (same as `LEDGER_FILE`, see module docstring point 1):
+    this file is deployed via `rsync` of the code tree, not owned by the DB --
+    a rejection written here by the web UI survives until the next Python
+    deploy overwrites the working tree from git, unless a human commits
+    `REJECTED_FILE` afterwards (same operational discipline the promotion
+    ledger already requires). The API response's `durable=False` flags this
+    so a caller (web UI) can surface "记得 commit 否决账本" rather than
+    silently assuming the rejection is permanent.
+    """
+    query = (query or "").strip()
+    if not query:
+        return {"ok": False, "reason": "empty_query"}
+
+    entries: List[Dict[str, str]] = []
+    if REJECTED_FILE.exists():
+        try:
+            with open(REJECTED_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            if isinstance(data, list):
+                entries = [e for e in data if isinstance(e, dict)]
+        except Exception as exc:
+            logger.warning(f"[restaurant-intent-promotion] reject: load existing rejected.json failed (treating as empty): {exc}")
+            entries = []
+
+    if any((e.get("query") or "").strip() == query for e in entries):
+        return {"ok": True, "already_rejected": True, "ledger_path": str(REJECTED_FILE)}
+
+    entry: Dict[str, Any] = {"query": query, "reason": (reason or "").strip() or "未说明原因"}
+    if rejected_by:
+        entry["rejected_by"] = rejected_by
+    entries.append(entry)
+
+    REJECTED_FILE.parent.mkdir(parents=True, exist_ok=True)
+    REJECTED_FILE.write_text(
+        json.dumps(entries, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    return {
+        "ok": True,
+        "already_rejected": False,
+        "ledger_path": str(REJECTED_FILE),
+        "ledger_size": len(entries),
+        "durable": False,
+    }
+
+
+# ─── Miss 复盘处理状态 (卡5b 补充契约: POST /misses/status) ─────────────────
+
+def load_miss_status() -> Dict[str, Dict[str, Any]]:
+    """Read `MISS_STATUS_FILE`. Fail-open: missing/corrupt file -> {} (same
+    fail-open convention as `load_promoted_samples`/`load_rejected_queries`)."""
+    try:
+        if MISS_STATUS_FILE.exists():
+            with open(MISS_STATUS_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            if isinstance(data, dict):
+                return {
+                    str(q): v for q, v in data.items()
+                    if isinstance(v, dict) and isinstance(q, str) and q.strip()
+                }
+    except Exception as exc:
+        logger.warning(f"[restaurant-intent-promotion] load miss status failed (ignored): {exc}")
+    return {}
+
+
+def set_miss_status(
+    query: str, status: str, *, note: Optional[str] = None,
+    reviewed_by: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Human-reviewed write for `/misses/status` (卡5 前端补充契约). Same
+    write-discipline as `reject_candidate`: explicit human action, explicit
+    write, never called from a read-only aggregation path.
+
+    `status` must be one of `MISS_STATUS_VALUES` -- rejects (does not
+    silently accept) an unrecognized value so the FE and this ledger never
+    drift into "free text the backend can't group/filter on".
+
+    ⚠️ Same rsync-deploy durability caveat as `REJECTED_FILE`/`LEDGER_FILE`
+    (see module docstring point 1 and `reject_candidate`'s docstring):
+    response includes `durable=False`.
+    """
+    query = (query or "").strip()
+    if not query:
+        return {"ok": False, "reason": "empty_query"}
+    if status not in MISS_STATUS_VALUES:
+        return {"ok": False, "reason": f"invalid_status:{status!r} (允许值: {sorted(MISS_STATUS_VALUES)})"}
+
+    all_status = load_miss_status()
+    entry: Dict[str, Any] = {
+        "status": status,
+        "updated_at": _dt.datetime.utcnow().isoformat() + "Z",
+    }
+    if note:
+        entry["note"] = note
+    if reviewed_by:
+        entry["reviewed_by"] = reviewed_by
+    all_status[query] = entry
+
+    MISS_STATUS_FILE.parent.mkdir(parents=True, exist_ok=True)
+    MISS_STATUS_FILE.write_text(
+        json.dumps(all_status, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    return {"ok": True, "query": query, "status": status, "ledger_path": str(MISS_STATUS_FILE), "durable": False}

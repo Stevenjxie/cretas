@@ -510,3 +510,96 @@ def test_rejected_file_missing_or_corrupt_fails_open(tmp_path):
     assert promo.load_rejected_queries() == frozenset()
     (tmp_path / "rejected.json").write_text("{not json", encoding="utf-8")
     assert promo.load_rejected_queries() == frozenset()
+
+
+# ─── 卡5b: platform admin channel (factory_id=None -> GUC reset to '') ──────
+# See `_set_rls_guc` docstring for the full RLS reasoning: the asyncpg pool's
+# own `setup` callback (`tenant_ctx.set_pg_connection_tenant`) defaults an
+# unset ambient factory_id to the sentinel "__internal__", NOT ''  — so a
+# cross-tenant admin read (卡5b 运营台) must explicitly reset the GUC to ''
+# itself rather than relying on "nobody set anything".
+
+async def test_aggregate_candidates_admin_channel_resets_guc_to_empty_string():
+    conn = _FakeConn(rows=[])
+    pool = _FakePool(conn)
+
+    await promo.aggregate_candidates(pool, factory_id=None)
+
+    assert conn.guc_calls, "admin channel must still call set_config"
+    assert conn.guc_calls[0][1] == ("",), "admin channel must reset GUC to '' (not None, not skip)"
+
+
+async def test_aggregate_candidates_tenant_channel_unaffected():
+    # Backward-compat: CLI-style explicit tenant string still works exactly
+    # as before (default "DEMO_REST" behavior is untouched by the new
+    # factory_id=None branch).
+    conn = _FakeConn(rows=[])
+    pool = _FakePool(conn)
+
+    await promo.aggregate_candidates(pool, factory_id="RES_3101_009")
+
+    assert conn.guc_calls[0][1] == ("RES_3101_009",)
+
+
+async def test_aggregate_misses_admin_channel_resets_guc_to_empty_string():
+    conn = _FakeConn(rows=[])
+    pool = _FakePool(conn)
+
+    await promo.aggregate_misses(pool, factory_id=None)
+
+    assert conn.guc_calls[0][1] == ("",)
+
+
+# ─── reject_candidate: 卡5b web 否决通道 (writes REJECTED_FILE) ────────────
+
+def test_reject_candidate_writes_new_entry(tmp_path, monkeypatch):
+    rejected = tmp_path / "rejected.json"
+    monkeypatch.setattr(promo, "REJECTED_FILE", rejected)
+
+    result = promo.reject_candidate("帮我录入今天的报损", "写操作错接", rejected_by="reviewer_zhang")
+
+    assert result["ok"] is True
+    assert result["already_rejected"] is False
+    assert result["durable"] is False
+    on_disk = json.loads(rejected.read_text(encoding="utf-8"))
+    assert on_disk == [{
+        "query": "帮我录入今天的报损", "reason": "写操作错接", "rejected_by": "reviewer_zhang",
+    }]
+
+
+def test_reject_candidate_idempotent_on_repeat(tmp_path, monkeypatch):
+    rejected = tmp_path / "rejected.json"
+    monkeypatch.setattr(promo, "REJECTED_FILE", rejected)
+
+    first = promo.reject_candidate("某问题", "理由A")
+    second = promo.reject_candidate("某问题", "理由B（会被忽略）")
+
+    assert first["already_rejected"] is False
+    assert second["already_rejected"] is True
+    on_disk = json.loads(rejected.read_text(encoding="utf-8"))
+    assert len(on_disk) == 1
+    assert on_disk[0]["reason"] == "理由A"  # first write wins, not overwritten
+
+
+def test_reject_candidate_empty_query_rejected(tmp_path, monkeypatch):
+    rejected = tmp_path / "rejected.json"
+    monkeypatch.setattr(promo, "REJECTED_FILE", rejected)
+
+    result = promo.reject_candidate("   ", "理由")
+
+    assert result["ok"] is False
+    assert not rejected.exists()
+
+
+def test_reject_candidate_appends_to_existing_file(tmp_path, monkeypatch):
+    rejected = tmp_path / "rejected.json"
+    rejected.write_text(
+        json.dumps([{"query": "已有问题", "reason": "旧理由"}]), encoding="utf-8",
+    )
+    monkeypatch.setattr(promo, "REJECTED_FILE", rejected)
+
+    result = promo.reject_candidate("新问题", "新理由")
+
+    assert result["ledger_size"] == 2
+    on_disk = json.loads(rejected.read_text(encoding="utf-8"))
+    assert [e["query"] for e in on_disk] == ["已有问题", "新问题"]
