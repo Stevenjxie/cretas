@@ -222,7 +222,7 @@ Opus 从 main 部署 prod → 核对运行中 jar/代码确含修复
 | 单个难 turn | 该 prompt 加 `ultrathink` (只点一轮, 最省) |
 | 长自主 session(30min+) / 真模糊架构 | `xhigh` |
 | `max` | ⛔ 破玻璃; 实测 xhigh 不足才用; 稀缺 Opus 配额杀手 |
-| Sonnet 5 | 默认 `high`; **最硬的 coding/agentic 可上 `xhigh`** — 2026-07-28 纠错: 原写"xhigh 无收益"的证据来自 Sonnet **4.6**(那代根本没有 xhigh 档), Sonnet 5 有这档且官方推荐用于最硬 coding/agentic |
+| Sonnet 5 | 默认 `high`; **最硬的 coding/agentic 可上 `xhigh`**(2026-07-28 官方文档查证纠错: 原写"high 封顶 / xhigh 无收益"的证据来自 Sonnet **4.6** —— 那代根本没有 xhigh 档)。**已框清 brief 的执行仍用 `high`**(xhigh 主要买延迟); 单个 subagent 要深想走 `.claude/agents/<name>.md` frontmatter `effort:` 覆盖 —— 子代理默认**继承会话 effort**, Agent 工具调用本身没有 effort 参数 |
 | Codex/Composer | organizer 在 brief 里"建议", 设不了 |
 
 **Effort ≠ Max 订阅**: 订阅控制用哪个模型/多少额度; effort 控制每轮想多深。两轴正交。
@@ -235,7 +235,8 @@ Opus 从 main 部署 prod → 核对运行中 jar/代码确含修复
 
 `inline`(默认) → `单 subagent`(侧产出污染 Opus 主上下文/需工具隔离) → `workflow`(10+ agent 交叉核验/跨文件广覆盖) → `ultracode`(常驻 workflow-by-default、最大彻底、不计 token)
 
-- **铁律**: fan-out 时 workers 跑 Sonnet+默认 effort, 只 Opus 编排者 high。**cost = agents × effort, 乘不是加。**
+- **铁律**: fan-out 时 workers 跑 Sonnet+低 effort, 只 Opus 编排者 high。**cost = agents × effort, 乘不是加。**
+- ⚠️ **这条铁律不会自动成立**: 子代理默认**继承会话 effort**(Agent 工具调用没有 effort 参数), 所以编排者蹲在 `xhigh` 时 fan 出去的 workers **也是 xhigh** —— 正好是乘法炸配额的那种情形。要真压住 worker effort, 必须在 `.claude/agents/<name>.md` frontmatter 写 `effort:` 覆盖。
 - **`ultrathink`(深化一个脑) ≠ `ultracode`(开很多脑)**: 名字像, 但前者 effort 轴顶、后者 orchestration 轴顶。
 - **反例**: 概念咨询/单点问题/对话轮 → inline 或单 subagent, **哪怕 ultracode 关键词出现也别默认上 workflow**。
 
