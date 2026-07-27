@@ -871,7 +871,8 @@ _DISH_QUERY_RE = re.compile(
     + _DISH_COST_METRIC_PATTERN
     + r"|卖得|卖了|卖出)"
     r"(?:是多少|有多少|怎么样|如何|好不好|多少|几份|呢"
-    r"|为什么(?:(?:是)?这样|这么高|这么低)?|为何(?:(?:是)?这样)?|怎么回事"
+    r"|为什么(?:(?:是)?这样|这么高|这么低|这么多|这么少|高|低|多|少)?"
+    r"|为何(?:(?:是)?这样|这么高|这么低|这么多|这么少|高|低|多|少)?|怎么回事"
     r"|原因是什么|怎么优化|如何优化|怎么改善|如何改善"
     r"|怎么提升|如何提升)?"
     r"(?:[，,；;](?:它|这个菜|这道菜)?(?:整体)?表现(?:怎么样|如何|好不好)?)?"
@@ -893,6 +894,19 @@ _DISH_LEADING_TIME_RE = re.compile(
     r"|20\d{2}年(?:全年|度)?|全年"
     r"|(?:20\d{2}年)?(?:1[0-2]|0?[1-9]|十一|十二|[一二三四五六七八九十])月份?)+"
 )
+_DISH_INLINE_TIME_BEFORE_METRIC_RE = re.compile(
+    r"(?:(?:今天|今日|昨天|昨日|前天|本周|这周|上上周|上周|本月|这个月"
+    r"|上上个月|上上月|上个月|上月|今年|去年|前年|现在|如今|目前|截至目前"
+    r"|到目前|到今天|截至今天|当前累计|全部历史"
+    r"|(?:最近|近|过去)(?:\d+|[一二三四五六七八九十半两]+)"
+    r"(?:小时|天|日|周|个?月|年)"
+    r"|20\d{2}年(?:全年|度)?|全年"
+    r"|(?:20\d{2}年)?(?:1[0-2]|0?[1-9]|十一|十二|[一二三四五六七八九十])月份?))"
+    r"(?:的)?"
+    r"(?=(?:毛利率|毛利|销量|营业额|销售额|营收|"
+    r"(?:单份|每份|每一份|一份|单位|单品|菜品)?"
+    r"(?:食材|原料|原材料|配方|标准)?成本(?:率)?|卖得|卖了|卖出))"
+)
 _DISH_LEADING_STORE_SCOPE_RE = re.compile(
     r"^(?:(?:全部|所有|各家|每家)门店|各门店|(?:全部|所有)店|全店(?:汇总)?)(?:的)?"
 )
@@ -912,6 +926,11 @@ def _extract_dish_candidate_single(text: str) -> "Optional[str]":
     text = _RESOLVER_QUERY_HINT_RE.sub("", text).strip()
     # 旧路径会在句尾追加「（窗口标签）」— 剥掉再做锚定匹配。
     text = re.sub(r"[（(][^（）()]{0,24}[）)]\s*$", "", text).strip()
+    # Chinese speakers commonly place the time immediately before the metric:
+    # "卤炸牛肉串本月销量为什么低".  The date parser still receives the
+    # untouched original query; this normalization is only for isolating the
+    # named dish, so the time phrase cannot be swallowed into the dish slot.
+    text = _DISH_INLINE_TIME_BEFORE_METRIC_RE.sub("", text, count=1)
     # 复合指标形态更具体, 先试 — 否则单指标懒惰前缀会吞掉「营收和」等垃圾段。
     match = _DISH_MULTI_METRIC_RE.match(text)
     if not match:

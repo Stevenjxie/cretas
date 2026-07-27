@@ -929,6 +929,32 @@ async def test_fully_slotted_named_dish_executes_without_t3():
 
 
 @pytest.mark.asyncio
+async def test_named_dish_inline_time_diagnosis_executes_without_t3():
+    query = "全部门店卤炸牛肉串本月销量为什么低"
+    with patch(
+        "smartbi.gold.restaurant_intent._t3_llm_parse",
+        new=AsyncMock(side_effect=AssertionError(
+            "fully slotted named-dish diagnosis must not call T3"
+        )),
+    ) as t3:
+        spec = await parse_restaurant_query(
+            query,
+            _restaurant_pool(),
+            factory_id="DEMO_REST",
+        )
+
+    assert spec is not None
+    assert spec.intent == "RESTAURANT_OPS_GROSS_MARGIN"
+    assert spec.planner_authority == "explicit_named_dish_slots"
+    assert spec.requested_metrics == ("sales_volume",)
+    assert spec.analysis_action == "diagnose"
+    assert spec.store_scope == "all"
+    assert spec.dish_slot == "卤炸牛肉串"
+    assert spec.clarification_needed is False
+    t3.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_named_dish_without_time_asks_for_time_without_t3():
     query = "全部门店招牌青花椒味(单人份)的成本和毛利呢？"
     with patch(
