@@ -624,6 +624,62 @@ async def test_store_sales_overview_contract_passes_with_all_llm_metrics(monkeyp
 
 
 @pytest.mark.asyncio
+async def test_low_sales_premise_verification_survives_answer_contract(monkeypatch):
+    query = "全部门店卤炸牛肉串本月销量为什么低"
+    spec = _build_spec(
+        "RESTAURANT_OPS_GROSS_MARGIN",
+        query,
+        confidence=0.98,
+        tier="llm",
+        llm_dish="卤炸牛肉串",
+        llm_requested_metrics=("sales_volume",),
+        llm_dimensions=("dish",),
+        llm_analysis_action="diagnose",
+        llm_store_scope="all",
+        planner_authority="llm_contract_repair",
+        require_explicit_time=True,
+        llm_semantics_authoritative=True,
+    )
+
+    async def _resolve(code, pool, factory_id, **kwargs):
+        return OpsAnswer(
+            code=code,
+            title="菜品销量诊断",
+            answer_text=(
+                "判断：「卤炸牛肉串」2026-07-01 至 2026-07-27销量 251.56 份，"
+                "在 476 道可比主菜中按销量从高到低排第 117，中位数 51.48 份；"
+                "不低于中位数，“销量低”的前提不成立。覆盖321单，平均每单0.78份。"
+                "因此不能按“低销量问题”直接制定动作。"
+            ),
+            charts=[],
+            kpis=[],
+            meta={
+                "scope_matches_request": True,
+                "focus_entity": {
+                    "type": "dish",
+                    "name": "卤炸牛肉串",
+                },
+            },
+        )
+
+    monkeypatch.setattr(svc, "_resolve_tiered", _resolve)
+    monkeypatch.setattr(svc, "log_intent_capture", AsyncMock(return_value=None))
+
+    result = await tiered_answer(
+        query,
+        object(),
+        "DEMO_REST",
+        "restaurant_manager",
+        precomputed_spec=spec,
+    )
+
+    assert result["kind"] == "answer"
+    assert result["contract_pass"] is True
+    assert "前提不成立" in result["answer_text"]
+    assert "没有可靠覆盖" not in result["answer_text"]
+
+
+@pytest.mark.asyncio
 async def test_colloquial_store_best_dish_uses_llm_ranking_slot(monkeypatch):
     query = "鲜行者打浦桥日月光店这家店买的最好的是哪一道菜 本月"
     spec = _build_spec(
