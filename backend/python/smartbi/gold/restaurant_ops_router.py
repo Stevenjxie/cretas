@@ -1132,6 +1132,12 @@ def extract_dish_candidates(query: "Optional[str]") -> list:
         multi = []
         for cand in parts:
             cand = _DISH_LEADING_TIME_RE.sub("", cand.strip()).strip("「」\"' 的")
+            cand = re.sub(
+                r"^(?:全部门店|所有门店|各门店|所有店|全部店|全店汇总|连锁整体)",
+                "",
+                cand,
+                count=1,
+            ).strip("「」\"' 的")
             if (
                 len(cand) >= 2
                 and cand not in _DISH_GENERIC_TOKENS
@@ -1456,7 +1462,10 @@ def _scoped_dish_metric_answer(
     resolver deterministic while respecting the current-turn QueryPlan.
     """
     text = (query or "").strip()
-    asks_diagnosis = any(token in text for token in (
+    asks_reasonableness = any(token in text for token in (
+        "是否合理", "合理吗", "正不正常", "正常吗", "是否异常",
+    ))
+    asks_diagnosis = asks_reasonableness or any(token in text for token in (
         "为什么", "原因", "怎么回事", "为何",
     ))
     asks_optimization = any(token in text for token in (
@@ -1514,6 +1523,33 @@ def _scoped_dish_metric_answer(
     )
 
     if asks_diagnosis:
+        if asks_reasonableness:
+            if asks_cost and not asks_margin:
+                value_text = (
+                    f"单份成本 ¥{unit_cost:,.2f}、总成本 ¥{total_cost:,.2f}"
+                    if unit_cost is not None and total_cost is not None
+                    else "成本数据尚未完整覆盖"
+                )
+                benchmark = "目标单份成本、同类菜成本或上一可比周期"
+            elif asks_sales and not asks_margin:
+                value_text = f"销量 {qty_text} 份、覆盖 {bills} 单"
+                benchmark = "同类主菜中位数、上架天数和上一可比周期"
+            elif margin_rate is not None and gross_profit is not None:
+                value_text = (
+                    f"毛利率 {margin_rate * 100:.1f}%、毛利 ¥{gross_profit:,.2f}"
+                )
+                benchmark = "门店目标毛利率、同类菜毛利率或上一可比周期"
+            else:
+                value_text = (
+                    f"销量 {qty_text} 份、营收 ¥{revenue:,.2f}，但成本尚未完整覆盖"
+                )
+                benchmark = "完整成本、目标毛利率和同类菜基准"
+            return (
+                f"**判断：「{name}」{window_label}{value_text}；"
+                "仅凭当前绝对值还不能判断是否合理。**\n\n"
+                f"需要补充{benchmark}后，才能按同一时间和门店范围判断偏高、偏低或正常；"
+                "这里不会用主观阈值替代真实基准。"
+            )
         if asks_sales and not asks_cost and not asks_margin:
             units_per_bill = qty / bills if bills > 0 else None
             composition = (

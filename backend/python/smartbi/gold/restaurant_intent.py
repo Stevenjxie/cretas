@@ -278,6 +278,7 @@ _STORE_BREAKDOWN_SCOPE_TOKENS = (
     *_STORE_RANK_SCOPE_TOKENS,
     "各门店", "各家店", "每家店", "各店", "每个店",
     "按门店", "分门店", "逐店", "逐家", "门店之间", "店与店",
+    "有没有店", "有无门店", "是否有门店", "哪些门店", "哪些店",
 )
 
 
@@ -356,10 +357,14 @@ _REQUEST_METRIC_RULES: Tuple[Tuple[str, Tuple[str, ...]], ...] = (
     ("sales_volume", (
         "菜品销量", "销量", "销售量", "卖得好", "卖得最好", "最好卖",
         "销量最高", "最受欢迎", "卖得慢", "卖了多少", "卖出",
+        "卖得怎么样", "卖得如何", "卖得好不好",
         "畅销", "慢销", "滞销",
     )),
     ("gross_margin", ("毛利率", "毛利", "利润", "盈利", "赚钱", "亏钱", "亏损", "亏本", "赔钱")),
-    ("revenue", ("营业收入", "销售收入", "营业额", "销售额", "营收", "流水")),
+    ("revenue", (
+        "营业收入", "销售收入", "营业额", "销售额", "营收", "流水",
+        "卖了多少钱", "卖了多少元", "卖了多少块", "收入多少",
+    )),
     ("orders", ("订单集中", "订单数", "订单", "单量", "客单价")),
     ("staffing", ("人员不足", "人手不足", "人手", "人员", "排班", "人效", "在岗人数")),
     ("return_rate", ("退菜率", "退菜", "退款率", "退款")),
@@ -418,6 +423,16 @@ def _detect_requested_metrics(text: str) -> Tuple[str, ...]:
     ))
     if "net_profit" in detected and rejects_revenue_substitution:
         detected = tuple(metric for metric in detected if metric != "revenue")
+    # “卖了多少” normally asks quantity, but a currency suffix makes the
+    # object unambiguously revenue.  The shorter sales token is a substring of
+    # “卖了多少钱”; without this repair one model/provider switch can seal a
+    # quantity plan for an amount question.
+    if any(token in text for token in (
+        "卖了多少钱", "卖了多少元", "卖了多少块", "收入多少",
+    )):
+        detected = tuple(metric for metric in detected if metric != "sales_volume")
+        if "revenue" not in detected:
+            detected = (*detected, "revenue")
     return detected
 
 
@@ -441,6 +456,63 @@ def _detect_analysis_action(text: str) -> str:
     )):
         return "compare"
     return "lookup"
+
+
+def _explicit_analysis_action(text: str) -> Optional[str]:
+    """Return an action only when the user's wording makes it immutable.
+
+    The LLM remains the first semantic authority.  This validator prevents a
+    fallback model from escalating a plain lookup (“赚钱吗”“有没有店亏损”)
+    into a diagnosis/optimisation contract that the user never requested.
+    Paraphrases without an explicit signal still keep the LLM decision.
+    """
+    current = (text or "").strip()
+    if any(token in current for token in (
+        "为什么", "原因", "怎么回事", "为何",
+        "是否合理", "合理吗", "正不正常", "正常吗", "是否异常",
+    )):
+        return "diagnose"
+    if any(token in current for token in (
+        "怎么优化", "如何优化", "优化", "改善", "怎么办", "怎么做",
+        "怎么提升", "如何提升", "提升", "怎么提高", "如何提高", "提高",
+        "下一步", "先做什么",
+    )):
+        return "optimize"
+    if _detect_comparison(current) or any(token in current for token in (
+        "相比", "对比", "比较", "高还是低", "多还是少",
+    )):
+        return "compare"
+    if (
+        re.search(r"(?:多少|几成|赚钱吗|亏钱了吗|有没有|有无|是否有|哪家|哪个|哪道)", current)
+        or any(token in current for token in (
+            "怎么样", "如何", "好不好", "排名", "排行", "最高", "最低",
+            "最好", "最差", "卖得",
+        ))
+    ):
+        return "lookup"
+    return None
+
+
+def _is_broad_business_overview(text: str) -> bool:
+    """True when the user asks for an overview without naming a metric."""
+    return bool(
+        any(token in text for token in ("生意", "经营情况", "经营表现", "业绩", "整体情况"))
+        and any(token in text for token in ("怎么样", "如何", "好不好", "情况"))
+        and not _detect_requested_metrics(text)
+    )
+
+
+def _is_daypart_business_query(text: str) -> bool:
+    return bool(
+        any(token in text for token in (
+            "早上", "上午", "中午", "午市", "下午", "晚上", "晚市",
+            "夜宵", "下午茶",
+        ))
+        and any(token in text for token in (
+            "生意", "营收", "客流", "人效", "情况", "忙不忙",
+        ))
+        and any(token in text for token in ("怎么样", "如何", "好不好", "多少", "忙不忙"))
+    )
 
 
 _SEMANTIC_ACTIONS = frozenset({"lookup", "compare", "diagnose", "optimize"})
@@ -539,7 +611,11 @@ def _plan_requested_intents(
             # because it owns the store×dish grain. Routing that shape to the
             # all-store GROSS_MARGIN resolver caused a live immutable-plan
             # rejection after a single-store dish ranking.
-            has_dish = bool(extract_dish_candidate(text))
+            has_dish = bool(
+                dish_slot
+                or extract_dish_candidate(text)
+                or store_dish_split_dish(text)
+            )
             code = (
                 "RESTAURANT_OPS_STORE_MARGIN"
                 if has_dish
@@ -570,7 +646,10 @@ def _plan_requested_intents(
                 code = "RESTAURANT_OPS_SALES_SUMMARY"
             elif (
                 "store" in dimensions
-                and store_scope in {"single", "multiple"}
+                and (
+                    store_scope in {"single", "multiple"}
+                    or _asks_store_breakdown(text)
+                )
             ) or explicit_store_margin or (
                 selected_code == "RESTAURANT_OPS_STORE_MARGIN" and "store" in dimensions
             ):
@@ -1457,6 +1536,17 @@ def _build_spec(
         # the user remain the execution contract, especially after a button
         # continuation where a later model call may omit the original metric.
         requested_metrics = explicit_requested_metrics
+    elif (
+        llm_semantics_authoritative
+        and allow_explicit_slot_repair
+        and _is_broad_business_overview(effective_query)
+    ):
+        # requested_metrics is a strict “the answer must mention every item”
+        # contract, not the resolver's default dashboard contents.  A broad
+        # “生意怎么样” question names no individual metric, so a model must not
+        # invent sales_volume/orders requirements and then reject an otherwise
+        # valid revenue overview for failing to echo the invented list.
+        requested_metrics = ()
     if llm_semantics_authoritative:
         wants_margin = bool(llm_wants_margin)
         asks_profitability = bool(llm_asks_profitability)
@@ -1477,13 +1567,30 @@ def _build_spec(
         or (allow_llm_profit_supplement and llm_wants_margin)
     )
     relative_window = _uses_relative_sales_window(effective_query)
+    explicit_dish_candidates = extract_dish_candidates(effective_query)
+    explicit_dish = (
+        explicit_dish_candidates[0]
+        if explicit_dish_candidates
+        else (
+            extract_dish_candidate(effective_query)
+            or store_dish_split_dish(effective_query)
+        )
+    )
     deterministic_dish = (
-        None if llm_semantics_authoritative
-        else extract_dish_candidate(effective_query)
+        explicit_dish
+        if (
+            not llm_semantics_authoritative
+            or allow_explicit_slot_repair
+        )
+        else None
     )
     deterministic_store = (
-        None if llm_semantics_authoritative
-        else extract_store_mention(effective_query)
+        extract_store_mention(effective_query)
+        if (
+            not llm_semantics_authoritative
+            or allow_explicit_slot_repair
+        )
+        else None
     )
     store_scope, store_slots = (
         (None, ())
@@ -1508,10 +1615,26 @@ def _build_spec(
         if llm_dimensions is not None
         else _detect_dimensions(effective_query)
     )
+    if llm_semantics_authoritative and allow_explicit_slot_repair:
+        for explicit_dimension in _detect_dimensions(effective_query):
+            if explicit_dimension not in dimension_list:
+                dimension_list.append(explicit_dimension)
     if (llm_store or deterministic_store) and "store" not in dimension_list:
         dimension_list.append("store")
     if (llm_dish or deterministic_dish) and "dish" not in dimension_list:
         dimension_list.append("dish")
+    if (
+        deterministic_dish
+        and "ingredient" in dimension_list
+        and not any(token in effective_query for token in (
+            "食材", "原料", "配料", "采购", "领料", "库存",
+        ))
+    ):
+        # A fallback model occasionally labels a named menu item as an
+        # ingredient.  Keep the verbatim dish slot and remove only this
+        # contradictory dimension; the SQL resolver still validates the name
+        # against the tenant menu before returning anything.
+        dimension_list.remove("ingredient")
     # "全部门店" is an aggregation scope, not a request to group the answer by
     # store.  Keeping it as a dimension makes otherwise-correct all-store
     # sales/margin plans fail the immutable resolver-capability check.  Only
@@ -1536,13 +1659,11 @@ def _build_spec(
             else "lookup"
         )
         explicit_action = (
-            _detect_analysis_action(effective_query)
+            _explicit_analysis_action(effective_query)
             if allow_explicit_slot_repair
-            else "lookup"
+            else None
         )
-        analysis_action = (
-            explicit_action if explicit_action != "lookup" else llm_action
-        )
+        analysis_action = explicit_action or llm_action
     else:
         analysis_action = (
             llm_analysis_action
@@ -2744,6 +2865,12 @@ _STORE_SCOPE_REQUIRED_INTENTS = frozenset({
     "RESTAURANT_OPS_SALES_SUMMARY",
     "RESTAURANT_OPS_BUSINESS_OPTIMIZATION",
 })
+_STORE_SCOPE_FREE_INTENTS = frozenset({
+    "RESTAURANT_OPS_CAPABILITIES",
+    "RESTAURANT_OPS_OUT_OF_DOMAIN",
+    "RESTAURANT_OPS_PLAYBOOK",
+    "RESTAURANT_OPS_STORE_DIRECTORY",
+})
 
 
 async def _load_store_options(
@@ -2792,6 +2919,7 @@ async def _apply_store_scope_guard(
         or spec.clarification_needed
         or spec.store_scope
         or not spec.intent
+        or spec.intent in _STORE_SCOPE_FREE_INTENTS
         or (
             spec.intent not in _STORE_SCOPE_REQUIRED_INTENTS
             and not set(spec.requested_metrics).intersection(_STORE_SCOPE_REQUIRED_METRICS)
@@ -3077,7 +3205,7 @@ def _build_t3_prompt(
         '{"intent": "RESTAURANT_OPS_SALES_SUMMARY", "time_range": {"type": "relative", '
         '"unit": "month", "count": 2}, "wants_margin": true, "asks_profitability": true, '
         '"requested_metrics": ["revenue", "orders", "gross_margin"], '
-        '"analysis_action": "diagnose", "dimensions": [], "comparison": null, '
+        '"analysis_action": "lookup", "dimensions": [], "comparison": null, '
         '"dish": null, "store": null, "stores": [], "store_scope": null, '
         '"confidence": 0.9, '
         '"clarification_needed": false, "missing_fields": [], '
@@ -3085,12 +3213,22 @@ def _build_t3_prompt(
         '示例3: "帮我看看水煮鱼这道菜最近表现咋样" -> '
         '{"intent": "RESTAURANT_OPS_GROSS_MARGIN", "time_range": {"type": "relative", '
         '"unit": "day", "count": 30}, "wants_margin": true, "asks_profitability": false, '
-        '"requested_metrics": ["sales_volume", "gross_margin"], '
-        '"analysis_action": "diagnose", "dimensions": ["dish"], "comparison": null, '
+        '"requested_metrics": [], '
+        '"analysis_action": "lookup", "dimensions": ["dish"], "comparison": null, '
         '"dish": "水煮鱼", "store": null, "stores": [], "store_scope": null, '
         '"confidence": 0.85, '
         '"clarification_needed": false, "missing_fields": [], '
         '"clarification_question": null, "clarification_options": []}\n'
+        '示例10: "本月全部门店晚上生意怎么样" -> '
+        '{"intent": "RESTAURANT_OPS_STAFFING_ADVICE", '
+        '"time_range": {"type": "named", "value": "this_month"}, '
+        '"wants_margin": false, "asks_profitability": false, '
+        '"requested_metrics": [], "analysis_action": "lookup", '
+        '"dimensions": ["time"], "comparison": null, "dish": null, '
+        '"store": null, "stores": [], "store_scope": "all", '
+        '"confidence": 0.95, "clarification_needed": false, '
+        '"missing_fields": [], "clarification_question": null, '
+        '"clarification_options": []}\n'
         '示例4: "这周营收怎么提高"（账号有多家门店且用户没选范围）-> '
         '{"intent": "RESTAURANT_OPS_BUSINESS_OPTIMIZATION", '
         '"time_range": {"type": "named", "value": "this_week"}, '
@@ -3179,11 +3317,15 @@ def _build_t3_prompt(
         "泛指词 (这道菜/哪家店/门店) 不是名字，输出 null。\n"
         "3. analysis_action 必须是 lookup、compare、diagnose、optimize 之一；"
         "用户问“为什么/原因”是 diagnose，问“怎么提高/改善/下一步怎么做”是 optimize。"
+        "“多少/怎么样/赚钱吗/有没有店亏损/哪家店最好”是 lookup，不是 diagnose；"
+        "除非用户明确问原因，否则不得擅自升级为原因诊断。"
         "优化请求必须选 BUSINESS_OPTIMIZATION，不能退化成只报营收的 SALES_SUMMARY。\n"
         "4. requested_metrics 只能使用 net_profit、table_turnover、recipe_cost、wastage、"
         "sales_volume、gross_margin、revenue、orders、staffing、return_rate、"
         "customer_review、production_time、service_speed、process_bottleneck；"
-        "dimensions 只能使用 store、dish、ingredient、channel、customer、time。\n"
+        "dimensions 只能使用 store、dish、ingredient、channel、customer、time。"
+        "requested_metrics 只列用户原话明确要求的指标；“生意怎么样/经营情况如何”这种"
+        "概览问题不要自行填入 revenue、orders 或 sales_volume，resolver 会返回概览默认项。\n"
         "5. 你负责决定是否需要追问。先结合最近20轮对话补齐已经说过的内容，禁止重复追问。"
         "只有缺少会改变结果的必要信息时 clarification_needed 才为 true；"
         "time_range 为空且所选分析依赖时间时应追问时间。多门店账号的营收、销量、毛利、"
@@ -3484,6 +3626,7 @@ def _semantic_spec_from_t3(
     if store_names and not store_scope:
         store_scope = "single" if len(store_names) == 1 else "multiple"
     explicit_store_directory = _is_explicit_store_directory_query(query)
+    daypart_contract_repair = _is_daypart_business_query(query)
     store_directory_contract_repair = bool(
         explicit_store_directory
         and (
@@ -3518,6 +3661,20 @@ def _semantic_spec_from_t3(
         missing_fields=missing_fields,
         available_stores=available_stores,
     )
+    if daypart_contract_repair:
+        # Daypart business questions are served by the grounded staffing /
+        # order-volume resolver.  This is a post-LLM capability compilation,
+        # not a keyword-first route: the model already saw the whole sentence,
+        # while the explicit “晚市/午市/夜宵 + 生意” slot prevents a fallback
+        # provider from drifting to a monthly all-store sales summary.
+        code = "RESTAURANT_OPS_STAFFING_ADVICE"
+        confidence = max(confidence, 0.99)
+        requested_metrics = ()
+        dimensions = ("time",)
+        analysis_action = "lookup"
+        clarification_needed = False
+        clarification_question = None
+        clarification_options = ()
     if not code or confidence < _T3_MIN_CONFIDENCE:
         clarification_needed = True
     if explicit_store_directory:
@@ -3558,7 +3715,7 @@ def _semantic_spec_from_t3(
         clarification_options=clarification_options,
         planner_authority=(
             "llm_contract_repair"
-            if store_directory_contract_repair
+            if store_directory_contract_repair or daypart_contract_repair
             else "llm"
         ),
         require_explicit_time=True,
@@ -4600,6 +4757,11 @@ async def log_intent_capture(
             "asks_priority": spec.asks_priority,
             "asks_prohibited_actions": spec.asks_prohibited_actions,
             "asks_export": spec.asks_export,
+            "analysis_action": spec.analysis_action,
+            "dimensions": list(spec.dimensions),
+            "dish_slot": spec.dish_slot,
+            "store_scope": spec.store_scope,
+            "store_slots": list(spec.store_slots),
         }
         if source:
             agg_meta["source"] = source
