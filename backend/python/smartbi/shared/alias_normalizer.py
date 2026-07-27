@@ -94,7 +94,19 @@ class AliasNormalizer:
       - normalize_by_rules(name: str) -> str  规则层归一 (返回去后缀的名字)
       - get_alias_table_name() -> str         返回别名表名 (例: 'restaurant_dish_alias')
       - get_proposal_type() -> str            返回 proposal_type 值 ('merge_dishes' 或 'merge_skus')
+
+    子类可选覆写:
+      - HAS_STATUS_COLUMN: bool               别名表是否带 status 三态列
+        (pending/confirmed/rejected, per migration V20260728_02)。默认 False。
+        ``_load_confirmed_aliases`` 据此决定是否加 status 过滤 —— 没有 status 列的
+        别名表 (例如工厂侧尚未建的 factory_sku_alias) 加这个 WHERE 子句会直接报
+        UndefinedColumn, 故按子类显式开关走, 不做"猜列存在"的隐式探测。
+        ⛔ 目前只有 RestaurantMenuNormalizer (对应 restaurant_dish_alias) 应设为 True
+        (per 卡3 fable 终审 B1: 老读路径不过滤 status, 机器 pending 候选会污染线上
+        POS 归一结果 — 与 migration 头注 + resolver 承诺的 fail-closed 矛盾)。
     """
+
+    HAS_STATUS_COLUMN: bool = False
 
     def __init__(
         self,
@@ -428,7 +440,21 @@ class AliasNormalizer:
     # ── 内部辅助方法 ───────────────────────────────────
 
     def _load_confirmed_aliases(self) -> dict[str, str]:
-        """从别名表加载所有已确认的 {original: canonical} 映射 (带缓存)"""
+        """从别名表加载所有已确认的 {original: canonical} 映射 (带缓存)
+
+        ⛔ 只加载已确认的行 —— pending (机器初匹配候选, 尚未人审, per
+        dish_alias_matcher.propose_dish_alias_candidates) 绝不能进这份缓存, 否则
+        apply() 会拿它去改写线上 POS 归一结果 (违反 migration V20260728_02 头注 +
+        dish_alias_resolver 承诺的"pending 绝不影响线上答案" fail-closed 原则)。
+
+        过滤条件 ``status IS NULL OR status = 'confirmed'``: 保留 IS NULL 分支是
+        兼容"代码先于 migration 起来"的极端情况的零成本保险 (正常部署顺序下 migration
+        先跑, runner 失败会 ABORT 部署、不重启 Python, 所以这个分支理论上不会命中,
+        但加上不亏)。
+
+        只在 HAS_STATUS_COLUMN=True 的子类才加这个过滤 —— 没有 status 列的别名表
+        (工厂侧 factory_sku_alias, Phase 2 才建) 加了会直接报 UndefinedColumn。
+        """
         if self._alias_cache is not None:
             return self._alias_cache
 
@@ -437,9 +463,15 @@ class AliasNormalizer:
             return self._alias_cache
 
         alias_table = self.get_alias_table_name()
+        status_filter = (
+            " AND (status IS NULL OR status = 'confirmed')" if self.HAS_STATUS_COLUMN else ""
+        )
         try:
             rows = self.db.execute(
-                text(f"SELECT original_name, canonical_name FROM {alias_table} WHERE factory_id = :fid"),
+                text(
+                    f"SELECT original_name, canonical_name FROM {alias_table} "
+                    f"WHERE factory_id = :fid{status_filter}"
+                ),
                 {"fid": self.factory_id},
             ).fetchall()
             self._alias_cache = {row.original_name: row.canonical_name for row in rows}

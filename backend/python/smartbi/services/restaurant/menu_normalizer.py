@@ -120,6 +120,11 @@ class RestaurantMenuNormalizer(AliasNormalizer):
         + PREPARATION_PATTERNS
     )
 
+    # restaurant_dish_alias 带 status 三态列 (pending/confirmed/rejected, per
+    # migration V20260728_02) —— 告知基类 _load_confirmed_aliases 加 status 过滤,
+    # 避免机器 pending 候选污染 apply() 应用到线上 POS 归一结果 (per 卡3 fable 终审 B1)。
+    HAS_STATUS_COLUMN = True
+
     def __init__(self, factory_id: str, db_session: Optional[Session] = None):
         super().__init__(factory_id=factory_id, domain="restaurant", db_session=db_session)
 
