@@ -98,7 +98,13 @@
           {{ bomMissingProducts.map((item) => item.name).join('、') }} 尚未配置原辅料 BOM
         </template>
         <template #default>
-          <el-button link type="primary" @click="openBomDrawer">在右侧配置 BOM →</el-button>
+          <el-button
+            link
+            type="primary"
+            @click="openBomDrawer(bomMissingProducts[0]?.id)"
+          >
+            在右侧配置 BOM →
+          </el-button>
         </template>
       </el-alert>
 
@@ -488,7 +494,10 @@
       destroy-on-close
       @closed="onBomDrawerClosed"
     >
-      <BomUnifiedPanel v-if="bomDrawerVisible" />
+      <BomUnifiedPanel
+        v-if="bomDrawerVisible"
+        :initial-product-type-id="bomDrawerProductTypeId"
+      />
     </el-drawer>
 
     <!-- #12b: 版本记录抽屉 (只读浏览之前发布过的版本) -->
@@ -680,6 +689,7 @@ let autoSaveTimer: ReturnType<typeof setTimeout> | null = null;
 let editSeq = 0;
 // #10: BOM 配置抽屉 (右侧滑出, 不跳转页面, 关闭即回工序配置, 避免丢失未保存草稿)
 const bomDrawerVisible = ref(false);
+const bomDrawerProductTypeId = ref('');
 const BomUnifiedPanel = defineAsyncComponent(() => import('@/views/production/bom-unified/index.vue'));
 // #12b: 版本记录浏览 (只读查看之前发布过的版本); previewingVersion 非空时 = 正在预览历史版本
 const versionDrawerVisible = ref(false);
@@ -984,7 +994,7 @@ watch(
 );
 
 // #10: 打开 BOM 配置抽屉; 关闭时刷新本产品 BOM (原料分组 + 提示随即更新)
-function openBomDrawer(): void {
+function openBomDrawer(requestedProductTypeId?: string): void {
   const errors = validateWorkflow(currentDefinition(), 'publish');
   if (errors.length > 0) {
     const first = errors[0];
@@ -994,6 +1004,19 @@ function openBomDrawer(): void {
     ElMessage.error(first.message);
     return;
   }
+  const finishedOutputIds = flowNodes.value
+    .filter((node) => node.data?.kind === 'FINISHED_GOOD' && node.data?.skuId)
+    .map((node) => String(node.data.skuId))
+    .filter(Boolean);
+  const targetIds = [...new Set(finishedOutputIds)].sort();
+  // Workflow 的锚点 SKU 若也是终端产出，始终优先；否则稳定选择第一个终端产出，
+  // 避免多产出画布每次打开随机跳到不同 BOM。
+  bomDrawerProductTypeId.value = requestedProductTypeId
+    && targetIds.includes(requestedProductTypeId)
+    ? requestedProductTypeId
+    : (targetIds.includes(productTypeId.value)
+      ? productTypeId.value
+      : (targetIds[0] || productTypeId.value));
   bomDrawerVisible.value = true;
 }
 async function onBomDrawerClosed(): Promise<void> {

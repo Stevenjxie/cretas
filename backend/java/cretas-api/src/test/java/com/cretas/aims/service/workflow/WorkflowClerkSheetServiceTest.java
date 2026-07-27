@@ -313,6 +313,71 @@ class WorkflowClerkSheetServiceTest {
     }
 
     @Test
+    void combinesPinnedFamilyInputCandidatesForMultiOutputWorkflow() {
+        ProductionPlan plan = new ProductionPlan();
+        plan.setId("PLAN-1");
+        plan.setFactoryId("F006");
+        plan.setSelectedBomRecipeId("BOM-A");
+        when(productionPlanRepository.findByIdAndFactoryId("PLAN-1", "F006"))
+                .thenReturn(Optional.of(plan));
+
+        ProductionBatch workflowBatch = batch(901L, ProductionBatch.WorkflowSelectionMode.WORKFLOW);
+        ProductionWorkflowInstance instance = instance(501L);
+        when(productionBatchRepository.findByFactoryIdAndProductionPlanId("F006", "PLAN-1"))
+                .thenReturn(List.of(workflowBatch));
+        when(instanceRepository.findByFactoryIdAndProductionBatchId("F006", 901L))
+                .thenReturn(Optional.of(instance));
+        when(taskRepository.findByFactoryIdAndWorkflowInstanceIdOrderByProcessOrderAsc("F006", 501L))
+                .thenReturn(List.of(task(801L, 501L, "mix", "MIX", 1, "kg")));
+        when(portRepository.findByFactoryIdAndWorkflowInstanceId("F006", 501L))
+                .thenReturn(List.of(
+                        port(801L, "shared-in", WorkflowTaskPort.Direction.INPUT,
+                                1, "RAW_MATERIAL", "WORKFLOW-PLACEHOLDER", "kg", false),
+                        port(801L, "mix-out", WorkflowTaskPort.Direction.OUTPUT,
+                                2, "SEMI_FINISHED", "PT-SEMI", "kg", false)));
+
+        BomRecipe recipeA = new BomRecipe();
+        recipeA.setId("BOM-A");
+        recipeA.setFactoryId("F006");
+        recipeA.setBomFamilyId("FAMILY-1");
+        recipeA.setWorkflowRevisionId(7L);
+        BomRecipe recipeB = new BomRecipe();
+        recipeB.setId("BOM-B");
+        recipeB.setFactoryId("F006");
+        recipeB.setBomFamilyId("FAMILY-1");
+        recipeB.setWorkflowRevisionId(7L);
+        when(bomRecipeRepository.findById("BOM-A")).thenReturn(Optional.of(recipeA));
+        when(bomRecipeRepository.findByFactoryIdAndBomFamilyIdOrderByProductTypeIdAscVersionDesc(
+                "F006", "FAMILY-1")).thenReturn(List.of(recipeA, recipeB));
+
+        BomRecipeItem sharedMain = new BomRecipeItem();
+        sharedMain.setId(41L);
+        sharedMain.setRecipeId("BOM-A");
+        sharedMain.setWorkflowInputPortId("shared-in");
+        sharedMain.setMaterialTypeId("RM-MAIN");
+        BomRecipeItem siblingAlternative = new BomRecipeItem();
+        siblingAlternative.setId(42L);
+        siblingAlternative.setRecipeId("BOM-B");
+        siblingAlternative.setWorkflowInputPortId("shared-in");
+        siblingAlternative.setMaterialTypeId("RM-ALT");
+        when(bomRecipeItemRepository.findByRecipeIdOrderBySortOrderAsc("BOM-A"))
+                .thenReturn(List.of(sharedMain));
+        when(bomRecipeItemRepository.findByRecipeIdOrderBySortOrderAsc("BOM-B"))
+                .thenReturn(List.of(siblingAlternative));
+        when(substituteService.listByRecipe("F006", "BOM-A")).thenReturn(List.of());
+        when(substituteService.listByRecipe("F006", "BOM-B")).thenReturn(List.of());
+        when(rawMaterialTypeRepository.findById("RM-MAIN"))
+                .thenReturn(Optional.of(rawMaterialType("RM-MAIN", "F006", "主料", "kg")));
+
+        WorkflowClerkSheetConfigDTO result =
+                service.getWorkflowSheetConfig("F006", "PLAN-1");
+
+        assertEquals(
+                List.of("RM-MAIN", "RM-ALT"),
+                result.getProcesses().getFirst().getInputs().getFirst().getAllowedSkuIds());
+    }
+
+    @Test
     void flagsUnresolvedSkuWithoutCrashingWhenReferencedProductWasDeleted() {
         ProductionBatch workflowBatch = batch(901L, ProductionBatch.WorkflowSelectionMode.WORKFLOW);
         ProductionWorkflowInstance instance = instance(501L);

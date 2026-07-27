@@ -337,6 +337,24 @@ class BomSeasoningWorkspaceServiceTest {
     }
 
     @Test
+    void customSkuOutputUnitIsAValidOpaquePerOutputBasis() {
+        BomRecipe recipe = recipe(BomRecipe.Status.DRAFT, 3L);
+        when(recipeRepository.findById(RECIPE)).thenReturn(Optional.of(recipe));
+        pinWithLinkedOutput(recipe, "p1", "袋", "SEMI_FINISHED");
+        when(workProcessRepository.findByFactoryIdAndIdIn(eq(FACTORY), anyList())).thenReturn(List.of(
+                workProcess("p1", "装袋")));
+        when(seasoningItemRepository.findByRecipeIdOrderBySeqAsc(RECIPE)).thenReturn(List.of());
+        when(materialTypeRepository.findAllById(any())).thenReturn(List.of());
+
+        BomSeasoningWorkspaceResponse response = service.getWorkspace(FACTORY, RECIPE);
+
+        var process = response.getProcesses().getFirst();
+        assertEquals(BigDecimal.ONE, process.getStandardBasisQuantity());
+        assertEquals("袋", process.getStandardBasisUnit());
+        assertTrue(process.isStandardUsageSupported());
+    }
+
+    @Test
     void workspaceFailsClosedWhenPinnedOutputUnitsConflict() {
         BomRecipe recipe = recipe(BomRecipe.Status.DRAFT, 3L);
         when(recipeRepository.findById(RECIPE)).thenReturn(Optional.of(recipe));

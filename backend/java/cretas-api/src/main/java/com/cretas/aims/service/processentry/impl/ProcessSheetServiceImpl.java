@@ -385,29 +385,32 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
                 .orElseThrow(() -> new BusinessException(409, "计划固定的 BOM 版本不存在")
                         .withCode("PINNED_BOM_NOT_FOUND")
                         .withSeverity("BLOCKING"));
+        List<BomRecipe> pinnedFamily = resolvePinnedBomFamily(recipe);
 
         List<ProductionStockAllocationService.AutomaticRequirement> requirements = new ArrayList<>();
         if (producesFinishedGoods) {
-            BigDecimal finishedOutput = finishedOutputQuantity(req);
-            if (finishedOutput.signum() > 0) {
-                String reportedUnit = canonicalBomUnit(firstNonBlank(req.getOutputUnit(), req.getUnit()));
-                String bomOutputUnit = canonicalBomUnit(recipe.getOutputUnit());
+            for (FinishedBomOutput reportedOutput : finishedBomOutputs(req)) {
+                BomRecipe outputRecipe = resolvePinnedOutputRecipe(
+                        pinnedFamily, reportedOutput.productTypeId());
+                String reportedUnit = canonicalBomUnit(reportedOutput.unit());
+                String bomOutputUnit = canonicalBomUnit(outputRecipe.getOutputUnit());
                 if (!Objects.equals(reportedUnit, bomOutputUnit)) {
                     throw new BusinessException(409, "成品报工单位与计划固定 BOM 的产出单位不一致")
                             .withCode("BOM_OUTPUT_UNIT_MISMATCH")
-                            .withHint("报工单位: " + reportedUnit + "，BOM 单位: " + bomOutputUnit)
+                            .withHint("SKU " + reportedOutput.productTypeId()
+                                    + "：报工单位 " + reportedUnit + "，BOM 单位 " + bomOutputUnit)
                             .withSeverity("BLOCKING");
                 }
-                if (recipe.getOutputQuantityPerUnit() == null
-                        || recipe.getOutputQuantityPerUnit().signum() <= 0) {
+                if (outputRecipe.getOutputQuantityPerUnit() == null
+                        || outputRecipe.getOutputQuantityPerUnit().signum() <= 0) {
                     throw new BusinessException(409, "计划固定 BOM 缺少有效的基准产出数量")
                             .withCode("BOM_OUTPUT_BASIS_INVALID")
                             .withSeverity("BLOCKING");
                 }
-                BigDecimal scale = finishedOutput.divide(
-                        recipe.getOutputQuantityPerUnit(), 12, RoundingMode.HALF_UP);
+                BigDecimal scale = reportedOutput.quantity().divide(
+                        outputRecipe.getOutputQuantityPerUnit(), 12, RoundingMode.HALF_UP);
                 for (BomRecipeItem item : bomRecipeItemRepository
-                        .findByRecipeIdOrderBySortOrderAsc(pinnedRecipeId)) {
+                        .findByRecipeIdOrderBySortOrderAsc(outputRecipe.getId())) {
                     if (!"PACKAGING".equalsIgnoreCase(item.getMaterialCategory())
                             || Boolean.TRUE.equals(item.getIsOptional())) {
                         continue;
@@ -435,7 +438,8 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
                 resolveProcessSeasoningItems(
                         factoryId,
                         planId,
-                        pinnedRecipeId,
+                        recipe,
+                        pinnedFamily,
                         plan.getSelectedWorkflowId() != null,
                         req);
         if (!seasoningItems.isEmpty()) {
@@ -491,9 +495,12 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
     private List<BomSeasoningItem> resolveProcessSeasoningItems(
             String factoryId,
             String planId,
-            String recipeId,
+            BomRecipe pinnedRecipe,
+            List<BomRecipe> pinnedFamily,
             boolean pinnedWorkflow,
             ProcessSheetRowRequest req) {
+        String workflowProcessNodeId = null;
+        String workProcessId = null;
         if (pinnedWorkflow && workflowClerkSheetService != null && req.getProcessOrder() != null) {
             WorkflowClerkSheetConfigDTO config =
                     workflowClerkSheetService.getWorkflowSheetConfig(factoryId, planId);
@@ -503,37 +510,146 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
                             .filter(process -> Objects.equals(
                                     process.getProcessOrder(), req.getProcessOrder()))
                             .findFirst().orElse(null);
-            String nodeId = descriptor != null ? descriptor.getWorkflowNodeId() : null;
-            if (nodeId == null || nodeId.isBlank()) {
+            workflowProcessNodeId = descriptor != null ? descriptor.getWorkflowNodeId() : null;
+            if (workflowProcessNodeId == null || workflowProcessNodeId.isBlank()) {
                 throw new BusinessException(409, "计划固定的 Workflow 无法解析当前工序调料")
                         .withCode("SEASONING_PROCESS_NODE_UNRESOLVED")
                         .withHint("请刷新报工页；若工序版本已变化，请重新创建生产计划")
                         .withSeverity("BLOCKING");
             }
-            return bomSeasoningItemRepository
-                    .findByRecipeIdAndWorkflowProcessNodeIdOrderBySeqAsc(recipeId, nodeId);
+        } else {
+            WorkProcess process = resolveWorkProcess(
+                    factoryId, req.getProductTypeId(), req.getProcessOrder());
+            workProcessId = process == null ? null : process.getId();
         }
-        WorkProcess process = resolveWorkProcess(
-                factoryId, req.getProductTypeId(), req.getProcessOrder());
-        if (process != null && process.getId() != null) {
-            return bomSeasoningItemRepository
-                    .findByRecipeIdAndWorkProcessIdOrderBySeqAsc(recipeId, process.getId());
+
+        Set<String> reportedProductIds = new LinkedHashSet<>(
+                reportedFinishedProductIds(req));
+        if (reportedProductIds.isEmpty()) {
+            reportedProductIds.add(pinnedRecipe.getProductTypeId());
         }
-        return List.of();
+        Set<String> reportedTerminalNodeIds = pinnedFamily.stream()
+                .filter(member -> reportedProductIds.contains(member.getProductTypeId()))
+                .map(BomRecipe::getTargetTerminalNodeId)
+                .filter(Objects::nonNull)
+                .collect(Collectors.toSet());
+
+        LinkedHashMap<Long, BomSeasoningItem> applicable = new LinkedHashMap<>();
+        for (BomRecipe member : pinnedFamily) {
+            List<BomSeasoningItem> memberItems;
+            if (workflowProcessNodeId != null) {
+                memberItems = bomSeasoningItemRepository
+                        .findByRecipeIdAndWorkflowProcessNodeIdOrderBySeqAsc(
+                                member.getId(), workflowProcessNodeId);
+            } else if (workProcessId != null) {
+                memberItems = bomSeasoningItemRepository
+                        .findByRecipeIdAndWorkProcessIdOrderBySeqAsc(member.getId(), workProcessId);
+            } else {
+                memberItems = List.of();
+            }
+            for (BomSeasoningItem item : memberItems) {
+                if (seasoningAppliesToReportedOutputs(
+                        item, member, reportedProductIds, reportedTerminalNodeIds)) {
+                    applicable.putIfAbsent(item.getId(), item);
+                }
+            }
+        }
+        return List.copyOf(applicable.values());
     }
 
-    private BigDecimal finishedOutputQuantity(ProcessSheetRowRequest req) {
+    private boolean seasoningAppliesToReportedOutputs(
+            BomSeasoningItem item,
+            BomRecipe owner,
+            Set<String> reportedProductIds,
+            Set<String> reportedTerminalNodeIds) {
+        String scopeKey = item.getCostScopeKey();
+        if (scopeKey != null && !scopeKey.isBlank()) {
+            return java.util.Arrays.stream(scopeKey.split(","))
+                    .map(String::trim)
+                    .anyMatch(reportedTerminalNodeIds::contains);
+        }
+        if ("OUTPUT_GROUP".equals(item.getCostScope())) return false;
+        if ("OUTPUT_EXCLUSIVE".equals(item.getCostScope())) {
+            return reportedProductIds.contains(owner.getProductTypeId());
+        }
+        return true;
+    }
+
+    private Set<String> reportedFinishedProductIds(ProcessSheetRowRequest req) {
         if (req.getOutputs() != null && !req.getOutputs().isEmpty()) {
             return req.getOutputs().stream()
                     .filter(Objects::nonNull)
                     .filter(ProcessSheetRowRequest.OutputLine::isFinished)
-                    .map(ProcessSheetRowRequest.OutputLine::getQuantity)
+                    .filter(output -> output.getQuantity() != null
+                            && output.getQuantity().signum() > 0)
+                    .map(ProcessSheetRowRequest.OutputLine::getProductTypeId)
                     .filter(Objects::nonNull)
-                    .reduce(BigDecimal.ZERO, BigDecimal::add);
+                    .collect(Collectors.toCollection(LinkedHashSet::new));
         }
-        return req.isFinished() && req.getOutputQuantity() != null
-                ? req.getOutputQuantity() : BigDecimal.ZERO;
+        return req.isFinished() && req.getProductTypeId() != null
+                ? Set.of(req.getProductTypeId()) : Set.of();
     }
+
+    private List<FinishedBomOutput> finishedBomOutputs(ProcessSheetRowRequest req) {
+        if (req.getOutputs() != null && !req.getOutputs().isEmpty()) {
+            return req.getOutputs().stream()
+                    .filter(Objects::nonNull)
+                    .filter(ProcessSheetRowRequest.OutputLine::isFinished)
+                    .filter(output -> output.getQuantity() != null
+                            && output.getQuantity().signum() > 0)
+                    .map(output -> new FinishedBomOutput(
+                            output.getProductTypeId(),
+                            output.getQuantity(),
+                            firstNonBlank(output.getUnit(), req.getOutputUnit(), req.getUnit())))
+                    .toList();
+        }
+        if (!req.isFinished() || req.getOutputQuantity() == null
+                || req.getOutputQuantity().signum() <= 0) {
+            return List.of();
+        }
+        return List.of(new FinishedBomOutput(
+                req.getProductTypeId(),
+                req.getOutputQuantity(),
+                firstNonBlank(req.getOutputUnit(), req.getUnit())));
+    }
+
+    private List<BomRecipe> resolvePinnedBomFamily(BomRecipe pinnedRecipe) {
+        if (pinnedRecipe.getBomFamilyId() == null
+                || pinnedRecipe.getBomFamilyId().isBlank()) {
+            return List.of(pinnedRecipe);
+        }
+        List<BomRecipe> family = bomRecipeRepository
+                .findByFactoryIdAndBomFamilyIdOrderByProductTypeIdAscVersionDesc(
+                        pinnedRecipe.getFactoryId(), pinnedRecipe.getBomFamilyId()).stream()
+                .filter(member -> Objects.equals(
+                        pinnedRecipe.getWorkflowRevisionId(), member.getWorkflowRevisionId()))
+                .toList();
+        return family.isEmpty() ? List.of(pinnedRecipe) : family;
+    }
+
+    private BomRecipe resolvePinnedOutputRecipe(
+            List<BomRecipe> family, String productTypeId) {
+        List<BomRecipe> matches = family.stream()
+                .filter(member -> Objects.equals(productTypeId, member.getProductTypeId()))
+                .toList();
+        if (matches.size() != 1) {
+            throw new BusinessException(409,
+                    matches.isEmpty()
+                            ? "本次成品产出没有对应的计划固定 BOM"
+                            : "本次成品产出匹配到多个计划固定 BOM")
+                    .withCode(matches.isEmpty()
+                            ? "PINNED_BOM_OUTPUT_RECIPE_MISSING"
+                            : "PINNED_BOM_OUTPUT_RECIPE_AMBIGUOUS")
+                    .withHint("SKU: " + productTypeId + "。请确保同一 Workflow 的每个成品 SKU 都有且只有一个 BOM")
+                    .withSeverity("BLOCKING");
+        }
+        return matches.getFirst();
+    }
+
+    private record FinishedBomOutput(
+            String productTypeId,
+            BigDecimal quantity,
+            String unit) { }
 
     private BigDecimal reportingMassToKg(BigDecimal quantity, String unit) {
         if (quantity == null || quantity.signum() <= 0) return BigDecimal.ZERO;

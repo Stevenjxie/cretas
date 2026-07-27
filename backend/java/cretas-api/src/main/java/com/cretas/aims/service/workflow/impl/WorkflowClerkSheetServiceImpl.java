@@ -305,24 +305,40 @@ public class WorkflowClerkSheetServiceImpl implements WorkflowClerkSheetService 
                 .orElseThrow(() -> new BusinessException(409, "计划固定的 BOM 版本不存在")
                         .withCode("PINNED_BOM_NOT_FOUND")
                         .withSeverity("BLOCKING"));
-        List<BomRecipeItem> items =
-                bomRecipeItemRepository.findByRecipeIdOrderBySortOrderAsc(recipe.getId());
+        List<BomRecipe> family = recipe.getBomFamilyId() == null
+                || recipe.getBomFamilyId().isBlank()
+                ? List.of(recipe)
+                : bomRecipeRepository
+                .findByFactoryIdAndBomFamilyIdOrderByProductTypeIdAscVersionDesc(
+                        factoryId, recipe.getBomFamilyId()).stream()
+                .filter(member -> java.util.Objects.equals(
+                        recipe.getWorkflowRevisionId(), member.getWorkflowRevisionId()))
+                .toList();
+        if (family.isEmpty()) {
+            family = List.of(recipe);
+        }
         Map<Long, List<BomItemSubstituteDTO>> substitutesByParent = new HashMap<>();
-        for (BomItemSubstituteDTO substitute :
-                substituteService.listByRecipe(factoryId, recipe.getId())) {
-            if (substitute.getParentRecipeItemId() != null) {
-                substitutesByParent.computeIfAbsent(
-                        substitute.getParentRecipeItemId(), ignored -> new ArrayList<>())
-                        .add(substitute);
+        List<BomRecipeItem> items = new ArrayList<>();
+        for (BomRecipe member : family) {
+            items.addAll(bomRecipeItemRepository
+                    .findByRecipeIdOrderBySortOrderAsc(member.getId()));
+            for (BomItemSubstituteDTO substitute :
+                    substituteService.listByRecipe(factoryId, member.getId())) {
+                if (substitute.getParentRecipeItemId() != null) {
+                    substitutesByParent.computeIfAbsent(
+                            substitute.getParentRecipeItemId(), ignored -> new ArrayList<>())
+                            .add(substitute);
+                }
             }
         }
-        Map<String, List<String>> result = new HashMap<>();
+        Map<String, LinkedHashSet<String>> candidatesByPort = new HashMap<>();
         for (BomRecipeItem item : items) {
             String portId = item.getWorkflowInputPortId();
             if (portId == null || portId.isBlank()) {
                 continue;
             }
-            Set<String> candidates = new LinkedHashSet<>();
+            LinkedHashSet<String> candidates = candidatesByPort.computeIfAbsent(
+                    portId, ignored -> new LinkedHashSet<>());
             candidates.add(item.getMaterialTypeId());
             for (BomItemSubstituteDTO substitute :
                     substitutesByParent.getOrDefault(item.getId(), List.of())) {
@@ -331,8 +347,10 @@ public class WorkflowClerkSheetServiceImpl implements WorkflowClerkSheetService 
                     candidates.add(substitute.getSubstituteMaterialTypeId());
                 }
             }
-            result.put(portId, List.copyOf(candidates));
         }
+        Map<String, List<String>> result = new HashMap<>();
+        candidatesByPort.forEach((portId, candidates) ->
+                result.put(portId, List.copyOf(candidates)));
         return Map.copyOf(result);
     }
 

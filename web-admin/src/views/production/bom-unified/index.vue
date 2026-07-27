@@ -5,6 +5,9 @@ import { useRoute, useRouter } from 'vue-router';
 const route = useRoute();
 const router = useRouter();
 const activeTab = ref('materials');
+const props = defineProps<{
+  initialProductTypeId?: string;
+}>();
 
 const BomContent = defineAsyncComponent(() => import('@/views/production/bom/index.vue'));
 const ConversionContent = defineAsyncComponent(() => import('@/views/production/conversions/index.vue'));
@@ -42,7 +45,7 @@ watch(() => route.query.tab, syncTabFromQuery);
       </template>
       <el-tabs v-model="activeTab" type="border-card">
         <el-tab-pane label="原辅料配方" name="materials">
-          <BomContent />
+          <BomContent :initial-product-type-id="props.initialProductTypeId" />
         </el-tab-pane>
         <el-tab-pane label="转换率" name="conversion">
           <ConversionContent />
