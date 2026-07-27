@@ -316,7 +316,14 @@ _LOW_SALES_STATE_RE = re.compile(
     r"销量[^。；，,？?]{0,8}(?:偏低|很低|太低|这么低|那么低|低|偏少|很少|太少)"
     r"|卖得(?:很|太|比较)?少|卖得不好|不好卖|没人点|很少人点|点得少"
 )
+_HIGH_SALES_STATE_RE = re.compile(
+    r"销量[^。；，,？?]{0,8}(?:偏高|很高|太高|这么高|那么高|高|偏多|很多|太多|这么多)"
+    r"|卖得(?:很|太|比较)?多|卖得(?:很|太|比较)?好|好卖|很多人点|点得多"
+)
 _SALES_TREND_CHANGE_RE = re.compile(r"下降|下滑|减少|降低|跌了|变少")
+_SALES_TREND_INCREASE_RE = re.compile(
+    r"上涨|上升|增长|增加|提高|提升|走高|拉升|变多"
+)
 
 
 def _primary_dish_ranking_exclusion_reason(row: Any) -> Optional[str]:
@@ -348,6 +355,18 @@ def _asks_low_sales_state(query: str) -> bool:
         and _LOW_SALES_STATE_RE.search(text)
         and not _SALES_TREND_CHANGE_RE.search(text)
     )
+
+
+def _asks_high_sales_state(query: str) -> bool:
+    """True for a cross-sectional "is sales high?" premise, not a trend."""
+    text = (query or "").strip()
+    return bool(
+        text
+        and _HIGH_SALES_STATE_RE.search(text)
+        and not _SALES_TREND_INCREASE_RE.search(text)
+    )
+
+
 _DISH_RANK_WORST_RE = re.compile(
     r"卖得最差|卖得不好|最难卖|卖不动|销量最低|销量垫底|最不受欢迎|最滞销"
     r"|没人点|无人点|没有人点|点得最少|没什么人点|倒数(?:第)?[一二三四五六七八九十\d]*名"
@@ -1444,9 +1463,13 @@ def _scoped_dish_metric_answer(
         "怎么优化", "如何优化", "优化", "改善", "怎么办", "怎么做",
         "怎么提升", "如何提升", "提升", "下一步", "先做什么",
     ))
-    asks_sales = any(token in text for token in (
-        "菜品销量", "销量", "销售量", "卖了多少", "卖出",
-    ))
+    asks_sales = (
+        any(token in text for token in (
+            "菜品销量", "销量", "销售量", "卖了多少", "卖出",
+        ))
+        or _asks_low_sales_state(text)
+        or _asks_high_sales_state(text)
+    )
     asks_cost = any(token in text for token in (
         "菜品成本", "食材成本", "配方成本", "单品成本", "成本",
     ))
@@ -1497,7 +1520,14 @@ def _scoped_dish_metric_answer(
                 f"、平均每单 {units_per_bill:,.2f} 份"
                 if units_per_bill is not None else ""
             )
-            if _asks_low_sales_state(text):
+            sales_state = (
+                "low"
+                if _asks_low_sales_state(text)
+                else "high"
+                if _asks_high_sales_state(text)
+                else None
+            )
+            if sales_state:
                 peers = [
                     float(value)
                     for value in (peer_sales_quantities or ())
@@ -1516,22 +1546,40 @@ def _scoped_dish_metric_answer(
                         else (comparable[midpoint - 1] + comparable[midpoint]) / 2.0
                     )
                     rank = 1 + sum(value > qty for value in peers)
-                    premise_holds = qty < median_qty
-                    premise_text = (
-                        "低于中位数，**“销量低”的前提成立**"
-                        if premise_holds
-                        else "不低于中位数，**“销量低”的前提不成立**"
-                    )
-                    next_step = (
-                        "现有汇总数据能确认相对位置，但还不能证明为什么低。"
-                        "下一步应按同一时间和门店范围核对上架天数、售罄缺货、"
-                        "平均实收价与促销、门店和时段分布；在这些数据补齐前，"
-                        "不把任何一项直接说成原因。"
-                        if premise_holds
-                        else "因此不能按“低销量问题”直接制定动作。若目标是继续提高销量，"
-                        "可以在守住单份毛利的前提下，选择单店/单时段做小范围露出或套餐测试，"
-                        "再与同口径对照组比较。"
-                    )
+                    if sales_state == "low":
+                        premise_holds = qty < median_qty
+                        premise_text = (
+                            "低于中位数，**“销量低”的前提成立**"
+                            if premise_holds
+                            else "不低于中位数，**“销量低”的前提不成立**"
+                        )
+                        next_step = (
+                            "现有汇总数据能确认相对位置，但还不能证明为什么低。"
+                            "下一步应按同一时间和门店范围核对上架天数、售罄缺货、"
+                            "平均实收价与促销、门店和时段分布；在这些数据补齐前，"
+                            "不把任何一项直接说成原因。"
+                            if premise_holds
+                            else "因此不能按“低销量问题”直接制定动作。若目标是继续提高销量，"
+                            "可以在守住单份毛利的前提下，选择单店/单时段做小范围露出或套餐测试，"
+                            "再与同口径对照组比较。"
+                        )
+                    else:
+                        premise_holds = qty > median_qty
+                        premise_text = (
+                            "高于中位数，**“销量高”的前提成立**"
+                            if premise_holds
+                            else "不高于中位数，**“销量高”的前提不成立**"
+                        )
+                        next_step = (
+                            "现有汇总数据能确认相对位置，但还不能证明为什么高。"
+                            "下一步应按同一时间和门店范围核对上架天数、曝光与点单入口、"
+                            "平均实收价与促销、门店和时段分布；在这些数据补齐前，"
+                            "不把任何一项直接说成原因。"
+                            if premise_holds
+                            else "因此不能按“高销量”解释现状。若目标是继续提高销量，"
+                            "可以在守住单份毛利的前提下，选择单店/单时段做小范围露出或套餐测试，"
+                            "再与同口径对照组比较。"
+                        )
                     return (
                         f"**判断：「{name}」{window_label}销量 {qty_text} 份，"
                         f"在 {count} 道可比主菜中按销量从高到低排第 {rank}，"
@@ -1539,9 +1587,10 @@ def _scoped_dish_metric_answer(
                         f"{premise_text}。**\n\n"
                         f"覆盖 {bills} 单{composition}。{next_step}"
                     )
+                premise_label = "销量低" if sales_state == "low" else "销量高"
                 return (
                     f"**判断：「{name}」{window_label}销量 {qty_text} 份，"
-                    "但可比主菜不足，当前不能判断“销量低”的前提是否成立。**\n\n"
+                    f"但可比主菜不足，当前不能判断“{premise_label}”的前提是否成立。**\n\n"
                     f"覆盖 {bills} 单{composition}。请先补齐同一时间、同一门店范围内"
                     "其他主菜销量，再核对上架天数、缺货、价格促销、门店和时段分布；"
                     "这里不会先假设用户的前提正确。"
