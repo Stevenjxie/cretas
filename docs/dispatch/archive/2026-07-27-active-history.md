@@ -125,3 +125,14 @@
 - `BUG-RESTAURANT-SYNTHESIS-QUANTITY-R14-20260727-023`
 - `BUG-RESTAURANT-EXPLICIT-DISH-SWITCH-R15-20260727-024`
 - `BUG-RESTAURANT-RANKING-TIME-R16-20260727-025`
+
+### `TEST-LABEL-QC-PROD-READONLY-20260727`
+
+- **状态**：`merged`
+- **Owner**：`/root`
+- **Base SHA**：`98e14c8038b829bb0e0f2a8424cc43e2b76fcb7e`
+- **功能提交 / PR / main 合并提交**：`5b2d7dc6de31182e51503d5e17292896020518b6` / [#1870](https://github.com/Stevenjxie/cretas/pull/1870) / `61fb4554346d35fa1730715a0a1c6f616865282b`
+- **实际范围**：在生产只读 Playwright harness 中新增 `/quality/label-qc` 路由与 `label-qc-readonly` 场景，检查“包装标签拍检 / 待人工审核 / 已审核整理 / 归档记录”，同步确定性 MCP bundle 与本地 fixture；未修改业务页面、API、数据或 mutation allowlist。
+- **验证证据**：unit `15/15`、fixture `4/4`、dry-run、CLI/MCP syntax 与 diff gate 通过；PR `tracked-secret-scan` 通过。
+- **生产只读验收**：同一干净 UI 登录会话中，F006 `tenant-isolation` 与 `label-qc-readonly` 均 PASS；标签 QC 状态统计与任务列表两个 GET 均为 200，HTTP errors、failed requests、console/page errors、blocked mutation attempts 和 actual business writes 均为 0。
+- **发布状态**：测试覆盖已合入 `main`；没有生产业务代码或静态制品变化，因此未重复部署。
