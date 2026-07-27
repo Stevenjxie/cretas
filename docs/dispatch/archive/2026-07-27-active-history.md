@@ -180,3 +180,14 @@
 - **修复**：认证餐饮 semantic-first 与其补槽续接改用共享 Router 已审核的 REVIEW 高质量免费链，单候选 5 秒、总链 12 秒；legacy/offline T3 仍使用 MAPPER 2.5/6 秒。未修改 `common/llm_router.py`、工厂意图、账号模型 allowlist、到期或付费保护。
 - **验证**：根因目标回归 `308/308`；餐饮/chat/synthesis 扩大回归 `1123/1123`；compileall、Ruff fatal、编码与 diff check 通过。
 - **发布与验收边界**：本归档随 PR 合入；exact-main Python 发布、Demo 多轮按钮/上下文和 Google Sheet 餐饮清单回归在合并后继续执行。合并前 `actualBusinessWrites=0`。
+
+## 质检拍检成品 SKU 选择器（PR #1876）
+
+- **任务**：`QC-FINISHED-SKU-PICKER-20260727`
+- **状态**：`merged`
+- **Owner**：`/root`
+- **Base SHA**：`73d60d9d297fc643fcb2ccb380be27805b74ea53`
+- **功能提交 / PR**：`ef7f5143e5c84f2697d691377760a6e4bbae8298` / [#1876](https://github.com/Stevenjxie/cretas/pull/1876)
+- **实际范围**：质检标签拍检的 SKU 选择器只加载当前工厂已启用的 `FINISHED_PRODUCT` 成品，支持编码和名称搜索；Java 创建任务入口同步 fail-closed，拒绝半成品或其他非成品绕过提交。
+- **验证证据**：RN 目标测试 `2/2`、Java `LabelQcServiceTest` `12/12`、Android production Expo export 与 `git diff --check` 通过；全量 RN typecheck 仍只有既存 `ProcessTaskListScreen.test.tsx:227 totalPages` 基线错误。
+- **发布边界**：合并后仅从 clean exact `origin/main` 发布 Java 后端与 Android OTA；Web Admin 无变更；生产业务写入保持 `0`。
