@@ -31,6 +31,16 @@ git diff origin/main...HEAD --stat   # 应只有你的文件, 没有 sister 的 
 ```
 如夹带 sister 文件 → 说明 worktree 没 off origin/main, 用 `git cherry-pick <你的commit范围>` 到干净的 origin/main worktree 重做。
 
+### 2b. 合入通道双轨 (2026-07-28 Steve 拍板; 免 PR 三往返的网速优化)
+
+| 变更类型 | 通道 |
+|---|---|
+| docs / `.claude/`(skills/rules) / 配置类, 零 CI 相关 | **fastlane 直推 main**: `./scripts/deploy/publish-main-fastlane.sh --base-sha <起点SHA> --confirm YES-DIRECT-MAIN`(先 `--dry-run` 预检)。脚本门禁: fast-forward only / 禁 force push / 推前 re-fetch 证明 origin/main 未前进。⚠️ 分支名硬性要求 `codex/*` 前缀 — Claude 侧统一用 `codex/claude-<task>` |
+| 碰 backend / web-admin 代码 | **PR** — CI `JPA repository query startup gate` 挂在 PR 上; PR 号是台账/memory 的引用锚点 |
+| AGENTS.md / workflows / `scripts/deploy/*` / db 迁移 / entity / repository / security | **强制 PR** — fastlane 将这些列为高风险路径自动拒绝(除非 owner 显式 `YES-HIGH-RISK-REVIEWED` 覆盖, 默认不用) |
+
+⛔ 双轨底线不变: **任何通道都必须推上 origin/main 后才可部署**。origin/main 是多 session 唯一汇合点(本规则 5/30 事故的根治点), "本地 main 不推就部署"在任何轨道都禁止 — 省的是 PR 仪式往返, 不是 push 本身。
+
 ### 3. prod 永远从 main 构建/部署 —— 绝不从 feature 分支部署 prod
 
 ```bash

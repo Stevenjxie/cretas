@@ -41,6 +41,8 @@ allowed-tools:
 
 > ⚠️ test 环境已于 2026-07-13 下线（见 server-operations skill）。下文 `--env test` / 10011 相关内容暂留作历史参考；部 prod 后"防御 ping test"的警告可忽略。
 
+**合入通道双轨**（部署前置，详见 `worktree-and-main-only-deploy.md` §2b）：docs/`.claude/`/配置类可走 `publish-main-fastlane.sh` 直推 main（免 PR 往返；分支需 `codex/*` 前缀）；碰 backend/web-admin 代码走 PR（CI JPA 门禁）；AGENTS.md/迁移/Entity/Security/`scripts/deploy/*` 强制 PR。任何通道都必须推上 origin/main 才可部署。
+
 ---
 
 ## Phase 0: 解析部署目标
