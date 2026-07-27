@@ -73,6 +73,16 @@ helper, 见下)。`is_local` 第三参传 `false` (session-scoped), 不是 `true
 `candidates`/`misses` 两个端点复用 `restaurant_intent_promotion.
 aggregate_candidates`/`aggregate_misses`, 传 `factory_id=None` 触发它们内部
 同款的管理员通道 (`_set_rls_guc(conn, None)` -> reset to `''`)。
+
+⚠️ **`ai_promoted_routes` 是例外, 不遵守上面这条约定** (2026-07-28 卡2
+merge 后确认): 这张表的 RLS 语义与上面 `smart_bi_llm_fallback_log` 相反 ——
+`'__internal__'` 在这张表上是"全读+全写"的万能钥匙, `''` 反而两个策略分支都
+不命中。见 migration `V20261030_01__ai_promoted_routes.sql` 顶部的大段警示
+注释。**本文件不直接操作这张表** —— `/candidates/approve`、
+`/candidates/seed-import`、`overview` 里的 `_read_promoted_routes_summary`
+全部委托给 `restaurant_intent_promotion.apply_route_promotions` /
+`list_route_promotions` (卡2 给的、已验证正确的读写路径, 内部自己处理这张
+表专属的 GUC/事务写法), 本文件不重复一份可能漂移的 GUC 逻辑。
 ═══════════════════════════════════════════════════════════════════════════
 """
 from __future__ import annotations
@@ -297,57 +307,43 @@ async def overview(
 
 
 async def _read_promoted_routes_summary(domain: str) -> Dict[str, Any]:
-    """`ai_promoted_routes` (卡2 建表) 的 hit_count 汇总 -- 表可能尚不存在
-    (卡2 未 merge), 用 `UndefinedTableError` 兜底而不是让整个 overview 500。
+    """`ai_promoted_routes` (卡2 建表) 的汇总 -- 表可能尚不存在 (卡2 未
+    merge 前), 用 `UndefinedTableError` 兜底而不是让整个 overview 500。
     显式 `available=False` 让前端知道这不是"晋升表里 0 条", 而是"表还没建"。
 
-    ⚠️ 2026-07-28 审查发现: 本函数之前完全没设 GUC, 靠"侥幸" —— `overview`
-    调用者收窄到 platform_admin 之前, `factory_super_admin` 也能到这里, 其
-    JWT 常带自己的 factory_id, ambient GUC (连接池 setup 回调的默认值)
-    就会是那个具体工厂, 而不是 `'__internal__'`——SELECT 会悄悄只统计一个
-    工厂的 `ai_promoted_routes` 行, 却仍然返回 `available: True`, 变成"数据
-    不完整但看起来正常"这种最难发现的 bug。现在调用者已锁定 platform_admin
-    (`_require_platform_admin`), 但仍然显式设 GUC, 不依赖调用方角色间接保证:
-    这张表是纯平台级晋升配置 (不是 per-tenant capture 数据), 显式重置为
-    `tenant_ctx.INTERNAL_SENTINEL` ('__internal__') 而不是 `''` —— 空串是
-    `smart_bi_llm_fallback_log` 那类 tenant_select 策略"放行全部租户"的哨兵,
-    `ai_promoted_routes` 语义上不是"多租户行的集合", 用 `__internal__` 这个
-    项目既有的"平台级/内部调用"哨兵更准确 (与 `tenant_ctx.
-    set_pg_connection_tenant` 对无租户上下文请求的默认值一致)。
+    2026-07-28 卡2 merge 后重写: 不再自己手写 SELECT + GUC ——
+    `promo.list_route_promotions` 是卡2 给的、已验证正确的读路径, 用它的
+    默认 `factory_id` (卡2 模块内的 `_INTERNAL_SENTINEL`, 即 `'__internal__'`)
+    读全量。migration V20261030_01 顶部大段警示注释写明: `ai_promoted_routes`
+    的 RLS 语义与全平台其它表**相反** —— `'__internal__'` 在这张表上是
+    "全读+全写"的万能钥匙 (不是别处那种"查不到租户就 0 行"的安全默认),
+    所以绝不能沿用 `_admin_channel_guc`(`''`) 或依赖连接池默认值 (那两种在
+    这张表上要么读不到 scope='global' 的行, 要么 -- 更危险的另一个方向 --
+    对某些调用路径意外获得写权限)。复用 `list_route_promotions` 保证这张表
+    唯一的 GUC 写法只活在卡2 那一处, 这里不重复一份可能悄悄漂移的副本。
 
     ⚠️ 2026-07-28 追加修复 (organizer 转达卡2 终审确认): `ai_promoted_routes.
     hit_count` 目前**恒为 0** —— 没有任何代码在回放命中晋升表时更新它 (卡2
     有意不在热路径写: 那是读路径上做写, 且 global 行 UPDATE 需要开一个 RLS
-    写口子, 这个取舍是对的, 不要求卡2 改)。因此本函数**不再返回
-    `SUM(hit_count)`** —— 一个永远是 0 的数字包装成"晋升命中"指标展示出去,
-    等于诚实到毫米原则要防的"看起来正常但是假的"。真实的晋升命中信号见
-    `overview` 顶层的 `promoted_hit_count`/`promoted_hit_rate`
-    (来自 capture 表 `agg_meta.tier='exact'` + `planner_authority=
-    'promoted_exact'` 的真实统计, 不依赖这张表的 hit_count 列)。这里只返回
-    `route_count` (真实 -- 这张表里实际有多少条被人审通过的晋升配置) 和一个
+    写口子, 这个取舍是对的, 不要求卡2 改)。因此本函数**不再返回**任何基于
+    `hit_count` 的聚合数字 -- 一个永远是 0 的数字包装成"晋升命中"指标展示
+    出去, 等于诚实到毫米原则要防的"看起来正常但是假的"。真实的晋升命中信号
+    见 `overview` 顶层的 `promoted_hit_count`/`promoted_hit_rate` (来自
+    capture 表 `agg_meta.tier='exact'` + `planner_authority='promoted_exact'`
+    的真实统计, 不依赖这张表的 hit_count 列)。这里只返回 `route_count`
+    (真实 -- 这张表里实际有多少条被人审通过的晋升配置) 和一个
     `hit_count_instrumented: False` 标记, 让前端/复核者能从响应本身看出
     hit_count 未接线, 而不是只能从代码注释里才知道。"""
     try:
         from smartbi.config import get_pg_pool
-        from smartbi.tenant_ctx import INTERNAL_SENTINEL
+        from smartbi.gold.restaurant_intent_promotion import list_route_promotions
         pool = await get_pg_pool()
         if pool is None:
             return {"available": False, "reason": "pool_unavailable"}
-        async with pool.acquire() as conn:
-            await conn.execute(
-                "SELECT set_config('app.factory_id', $1, false)", INTERNAL_SENTINEL
-            )
-            row = await conn.fetchrow(
-                """
-                SELECT COUNT(*) AS route_count
-                  FROM ai_promoted_routes
-                 WHERE domain = $1
-                """,
-                domain,
-            )
+        routes = await list_route_promotions(pool, domain=domain)
         return {
             "available": True,
-            "route_count": int(row["route_count"] or 0) if row else 0,
+            "route_count": len(routes),
             "hit_count_instrumented": False,
         }
     except asyncpg.UndefinedTableError:
@@ -435,53 +431,52 @@ async def _enrich_candidates(pool, base: List[Dict[str, Any]]) -> List[Dict[str,
     return out
 
 
-async def _insert_promoted_route(
-    conn, *, domain: str, normalized_phrase: str, plan_json: Dict[str, Any],
-    plan_version: str, source: str, scope: str, reviewed_by: Optional[str],
-):
-    """Shared INSERT ... ON CONFLICT DO UPDATE for `ai_promoted_routes`, used
-    by both `/candidates/approve` (source='flywheel') and
-    `/candidates/seed-import` (source='manual_seed'). Caller must have
-    already called `_admin_channel_guc(conn)` on this connection (see
-    `approve_candidate`'s comment for why the admin/global write channel is
-    correct here — approve/seed-import are inherently cross-tenant actions).
-
-    Raises `asyncpg.UndefinedTableError` / `asyncpg.exceptions.
-    InsufficientPrivilegeError` uncaught -- callers translate those to the
-    appropriate HTTP/per-entry response (single-entry `approve_candidate`
-    aborts the whole request; batched `seed_import_candidates` catches per
-    entry so one bad row doesn't sink the whole paste)."""
-    return await conn.fetchrow(
-        """
-        INSERT INTO ai_promoted_routes
-            (domain, normalized_phrase, plan_json, plan_version, source, scope, reviewed_by, hit_count, created_at)
-        VALUES ($1, $2, $3::jsonb, $4, $5, $6, $7, 0, NOW())
-        ON CONFLICT (domain, normalized_phrase) DO UPDATE
-           SET plan_json = EXCLUDED.plan_json,
-               plan_version = EXCLUDED.plan_version,
-               source = EXCLUDED.source,
-               scope = EXCLUDED.scope,
-               reviewed_by = EXCLUDED.reviewed_by
-        RETURNING domain, normalized_phrase, hit_count
-        """,
-        domain, normalized_phrase, _json.dumps(plan_json, ensure_ascii=False, default=str),
-        plan_version, source, scope, reviewed_by,
-    )
-
-
 # ═══════════════════════════════════════════════════════════════════════
 # POST /candidates/approve
 # ═══════════════════════════════════════════════════════════════════════
+#
+# 2026-07-28 卡2 merge 后重写: 不再自己手写 INSERT/GUC ——
+# `restaurant_intent_promotion.apply_route_promotions` 是卡2 给的、已验证
+# 正确的唯一写路径, 原因三条 (删掉的旧实现三条都踩过坑, 记录在此避免重犯):
+#
+# 1. GUC 值错了。旧实现对写请求也用 `_admin_channel_guc` 把 GUC 设成 `''`
+#    (空串)。`ai_promoted_routes` 的 INSERT 策略是
+#    `scope = current_setting('app.factory_id', true) OR
+#     current_setting('app.factory_id', true) = '__internal__'`
+#    (migration V20261030_01) —— 空串两个分支都不命中, 默认 scope='global'
+#    的写入会**每次**撞 RLS 拒绝。`apply_route_promotions` 内部按
+#    `scope == 'global'` 正确算出 `_INTERNAL_SENTINEL`。
+# 2. `is_local` 参数错了。这张表的 INSERT/UPDATE 需要 `set_config(...,
+#    true)` **配合显式 `async with conn.transaction()`** 才可靠生效 (卡2 的
+#    实现方式, 与 `smart_bi_llm_fallback_log` 那类表用 `is_local=false` 是两
+#    种不同但都有效的 asyncpg 坑规避 —— 组件必须成对, 不能互相抄)。
+# 3. plan_json 的 shape 错了。旧实现在调用者没传 plan_json 时, 会把 capture
+#    表 `agg_meta` 的字段 (requested_metrics/dimensions/dish_slot/store_slots
+#    等) 直接当 plan_json 写进去 —— 但 `ai_promoted_routes.plan_json` 是
+#    "raw T3 planner-contract shape" (intent/time_range/wants_margin/dish/
+#    store/stores/...), 跟 agg_meta 完全是两套不同 key, 写进去要么编译失败
+#    要么产出一个永远不会被回放命中的死行。`apply_route_promotions` 在没有
+#    显式 plan 时用 `default_seed_plan(code)` 生成一个已知合法、可回放的最小
+#    计划 (与原硬编码 `_APPROVED_EXACT_ROUTES` 的裸短语行为一致), 并且对任何
+#    传入的 plan 都跑 `_plan_rejection_reason` 校验 (拒绝含具体日期的计划、
+#    编译不过的计划) —— 这些校验旧实现完全没做。
 
 class ApproveCandidateRequest(BaseModel):
     domain: str = Field("restaurant")
     query: str = Field(..., min_length=1, max_length=500)
-    code: str = Field(..., description="RESTAURANT_OPS_* 意图代码")
+    code: str = Field(..., description="RESTAURANT_OPS_* 意图代码 (无 plan 时用于生成最小合法计划)")
     scope: str = Field("global", description="'global' 或具体 factory_id")
-    plan_json: Optional[Dict[str, Any]] = Field(
-        None, description="不传则取该问法最近一条捕获行的 agg_meta 作为计划"
+    plan: Optional[Dict[str, Any]] = Field(
+        None,
+        description=(
+            "可选: 显式 raw planner-contract 计划 (与 _t3_llm_parse 输出同 shape: "
+            "intent/time_range/wants_margin/asks_profitability/requested_metrics/"
+            "analysis_action/dimensions/dish/store/stores/store_scope/confidence/"
+            "clarification_needed/missing_fields/clarification_question/"
+            "clarification_options)。不传则用 default_seed_plan(code) 生成最小合法计划 "
+            "(禁止用 capture 表 agg_meta 字段拼一个假 shape 的计划——那不是同一种 schema)。"
+        ),
     )
-    plan_version: Optional[str] = Field(None)
 
 
 @router.post("/candidates/approve")
@@ -489,93 +484,49 @@ async def approve_candidate(request: Request, body: ApproveCandidateRequest) -> 
     _require_platform_admin(request, action_name="AI 飞轮候选通过")
     _domain_prefix(body.domain)
 
-    from smartbi.gold.restaurant_intent import _VALID_CODES, _normalize_exact_phrase
+    from smartbi.gold import restaurant_intent_promotion as promo
+    from smartbi.gold.restaurant_intent import _VALID_CODES
 
     if body.code not in _VALID_CODES:
         raise HTTPException(status_code=400, detail=f"code={body.code!r} 不是有效的 RESTAURANT_OPS_* 代码")
-
     query = body.query.strip()
     if not query:
         raise HTTPException(status_code=400, detail="query 不能为空")
-    normalized_phrase = _normalize_exact_phrase(query)
 
     pool = await _get_pool_or_503()
+    entry: Dict[str, Any] = {"query": query, "code": body.code}
+    if body.plan is not None:
+        entry["plan"] = body.plan
 
-    plan_json = body.plan_json
-    plan_version = body.plan_version
-    if plan_json is None:
-        async with pool.acquire() as conn:
-            await _admin_channel_guc(conn)
-            row = await conn.fetchrow(
-                """
-                SELECT agg_meta FROM smart_bi_llm_fallback_log
-                 WHERE source = 'template' AND trim(query) = $1
-                 ORDER BY created_at DESC LIMIT 1
-                """,
-                query,
-            )
-        if row and row["agg_meta"]:
-            try:
-                raw = _json.loads(row["agg_meta"]) if isinstance(row["agg_meta"], str) else dict(row["agg_meta"])
-                plan_json = raw
-                plan_version = plan_version or raw.get("plan_version")
-            except Exception:
-                plan_json = None
-    plan_json = plan_json or {}
-    plan_version = plan_version or "1"
-
-    reviewed_by = _reviewed_by(request)
     try:
-        async with pool.acquire() as conn:
-            # 2026-07-28 审查发现: 这个 acquire() 之前也没显式设 GUC —— 若
-            # ambient GUC (连接池 setup 回调默认值) 恰好是调用者自己的
-            # factory_id (即使调用者现在已锁定 platform_admin, 其 JWT 仍可能
-            # 带一个 factory_id), 而 body.scope 默认是 'global' (不等于那个
-            # factory_id), INSERT 就可能撞上 `ai_promoted_routes` 的 RLS
-            # WITH CHECK (若卡2 建的表带类似 V20260502_05 那种"GUC 为空/未设
-            # 或等于目标行租户列"策略) 而失败, 之前被下面的通用 except
-            # Exception 兜底成语义不清的 500。显式设为 admin 通道 ('', 空串)
-            # ——写 scope='global' 或任意具体 factory_id 都不应受当前调用者
-            # 租户限制 (approve 本身就是跨租户操作: 一个 platform_admin 审核
-            # 通过的问法可以属于任何工厂或全局)。
-            await _admin_channel_guc(conn)
-            try:
-                row = await _insert_promoted_route(
-                    conn, domain=body.domain, normalized_phrase=normalized_phrase,
-                    plan_json=plan_json, plan_version=plan_version, source="flywheel",
-                    scope=body.scope, reviewed_by=reviewed_by,
-                )
-            except asyncpg.exceptions.InsufficientPrivilegeError as exc:
-                # RLS WITH CHECK 违规的标准 asyncpg 映射 (SQLSTATE 42501,
-                # "new row violates row-level security policy") —— 显式 403,
-                # 不要糊进下面的通用 500 分支 (那样调用者分不清"服务器错误"
-                # 还是"这条写入本来就不该被允许")。
-                logger.warning(f"[flywheel] approve_candidate RLS violation: {exc}")
-                raise HTTPException(
-                    status_code=403,
-                    detail=f"写入 ai_promoted_routes 被 RLS 拒绝 (scope={body.scope!r} 与当前租户上下文不匹配): {exc}",
-                )
-    except HTTPException:
-        raise
+        result = await promo.apply_route_promotions(
+            pool, [entry], domain=body.domain, scope=body.scope,
+            source="flywheel", reviewed_by=_reviewed_by(request),
+        )
     except asyncpg.UndefinedTableError:
         raise HTTPException(
             status_code=503,
             detail="ai_promoted_routes 表不存在（依赖卡2 migration，尚未 merge，approve 暂不可用）",
         )
+    except asyncpg.exceptions.InsufficientPrivilegeError as exc:
+        logger.warning(f"[flywheel] approve_candidate RLS violation: {exc}")
+        raise HTTPException(
+            status_code=403,
+            detail=f"写入 ai_promoted_routes 被 RLS 拒绝 (scope={body.scope!r}): {exc}",
+        )
     except Exception as exc:
         logger.error(f"[flywheel] approve_candidate insert failed: {exc}")
         raise HTTPException(status_code=500, detail="写入 ai_promoted_routes 失败")
 
-    return success_response(
-        data={
-            "domain": body.domain,
-            "normalized_phrase": normalized_phrase,
-            "code": body.code,
-            "scope": body.scope,
-            "hit_count": int(row["hit_count"] or 0) if row else 0,
-        },
-        message="候选已通过并写入晋升表",
-    )
+    if result["skipped"]:
+        # 校验拒绝 (无效 code / 计划编译不过 / 含具体日期) 是调用者能改正的
+        # 400, 不是服务器错误。
+        raise HTTPException(
+            status_code=400,
+            detail=f"候选未通过校验: {result['skipped'][0].get('reason', '未知原因')}",
+        )
+
+    return success_response(data=result, message="候选已通过并写入晋升表")
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -617,26 +568,29 @@ async def reject_candidate(request: Request, body: RejectCandidateRequest) -> di
 # spec §1.5 / §P4 item 2: "manual_seed 来源: 客户提供的常问问题清单 → 离线
 # 批量跑一次 LLM 出计划 → 人审 → 落表"。"离线批量跑 LLM 出计划" 那一步不在
 # 这个端点里发生（不适合同步 HTTP 调用一次性跑几十条 LLM 请求，也不该由这个
-# 端点自己臆造 plan_json——那会违反"禁止降级返回假数据"：没有真实 LLM
-# parse 结果时绝不能自己拼一个假计划充数）。这个端点对应的是流程最后一步
-# "逐条人审入表"：调用方（人工审核完毕后的 web UI，或离线批跑脚本的输出）
-# 为每条问法都带上已经跑出来、已经人审过的 plan_json，本端点只做批量校验
-# + 落 `ai_promoted_routes`（source='manual_seed'，与 approve 的
-# source='flywheel' 区分晋升来源）。逐条独立处理、一条失败不拖累其余条目，
-# 响应里同时报 added/skipped，镜像 `apply_promotions` 的既有设计哲学。
+# 端点自己臆造计划——那会违反"禁止降级返回假数据"）。这个端点对应流程最后
+# 一步"逐条人审入表"：调用方（人工审核完毕后的 web UI，或离线批跑脚本的
+# 输出）为每条问法可选带上已审过的 raw planner-contract 计划，没有计划的
+# 条目走 `default_seed_plan(code)` 生成最小合法计划（同 approve 的 fallback,
+# 见 approve_candidate 上方注释三条踩坑记录）。
+#
+# 直接把整批 entries 一次性交给 `promo.apply_route_promotions` —— 它本身就是
+# 批量接口 (每条独立校验/跳过, 一条不合格不拖累其它条, 返回 written/skipped),
+# 不需要在这里再包一层循环。domain/scope 是整批统一的 (migration 的
+# `scope` 语义是"这一行归谁看", 不支持一次请求内混不同 scope; 需要混合 scope
+# 的场景请求分批调用)。
 
 class SeedImportEntry(BaseModel):
     query: str = Field(..., min_length=1, max_length=500)
-    code: str = Field(..., description="RESTAURANT_OPS_* 意图代码")
-    plan_json: Dict[str, Any] = Field(
-        ..., description="离线批跑 LLM 出的计划 (必填——本端点不臆造计划)"
+    code: str = Field(..., description="RESTAURANT_OPS_* 意图代码 (无 plan 时用于生成最小合法计划)")
+    plan: Optional[Dict[str, Any]] = Field(
+        None, description="可选: 离线批跑 LLM 出的 raw planner-contract 计划 (shape 同 approve 端点)"
     )
-    scope: str = Field("global")
-    plan_version: Optional[str] = Field(None)
 
 
 class SeedImportRequest(BaseModel):
     domain: str = Field("restaurant")
+    scope: str = Field("global", description="整批统一 scope: 'global' 或具体 factory_id")
     entries: List[SeedImportEntry] = Field(..., min_length=1, max_length=200)
 
 
@@ -645,55 +599,37 @@ async def seed_import_candidates(request: Request, body: SeedImportRequest) -> d
     _require_platform_admin(request, action_name="AI 飞轮 manual_seed 批量导入")
     _domain_prefix(body.domain)
 
-    from smartbi.gold.restaurant_intent import _VALID_CODES, _normalize_exact_phrase
+    from smartbi.gold import restaurant_intent_promotion as promo
 
-    reviewed_by = _reviewed_by(request)
     pool = await _get_pool_or_503()
+    entries = [
+        {"query": e.query, "code": e.code, **({"plan": e.plan} if e.plan is not None else {})}
+        for e in body.entries
+    ]
 
-    added: List[Dict[str, Any]] = []
-    skipped: List[Dict[str, Any]] = []
-    for entry in body.entries:
-        query = entry.query.strip()
-        if not query:
-            skipped.append({"query": entry.query, "reason": "empty_query"})
-            continue
-        if entry.code not in _VALID_CODES:
-            skipped.append({"query": query, "reason": f"invalid_code:{entry.code!r}"})
-            continue
-        normalized_phrase = _normalize_exact_phrase(query)
-        plan_version = entry.plan_version or (entry.plan_json.get("plan_version") if isinstance(entry.plan_json, dict) else None) or "1"
-        try:
-            async with pool.acquire() as conn:
-                await _admin_channel_guc(conn)  # 同 approve_candidate: 批量导入是跨租户操作
-                try:
-                    row = await _insert_promoted_route(
-                        conn, domain=body.domain, normalized_phrase=normalized_phrase,
-                        plan_json=entry.plan_json, plan_version=plan_version,
-                        source="manual_seed", scope=entry.scope, reviewed_by=reviewed_by,
-                    )
-                except asyncpg.exceptions.InsufficientPrivilegeError as exc:
-                    skipped.append({"query": query, "reason": f"rls_denied: {exc}"})
-                    continue
-        except asyncpg.UndefinedTableError:
-            # 表不存在是全局性的（不是某一条的问题）——不必逐条重复报同一件事,
-            # 整个请求直接 503，比把 200 条同样的 skipped 塞进响应更清楚。
-            raise HTTPException(
-                status_code=503,
-                detail="ai_promoted_routes 表不存在（依赖卡2 migration，尚未 merge，seed-import 暂不可用）",
-            )
-        except Exception as exc:
-            logger.error(f"[flywheel] seed_import_candidates entry failed (query={query!r}): {exc}")
-            skipped.append({"query": query, "reason": f"insert_failed: {exc}"})
-            continue
-        added.append({
-            "query": query, "code": entry.code, "normalized_phrase": normalized_phrase,
-            "hit_count": int(row["hit_count"] or 0) if row else 0,
-        })
+    try:
+        result = await promo.apply_route_promotions(
+            pool, entries, domain=body.domain, scope=body.scope,
+            source="manual_seed", reviewed_by=_reviewed_by(request),
+        )
+    except asyncpg.UndefinedTableError:
+        raise HTTPException(
+            status_code=503,
+            detail="ai_promoted_routes 表不存在（依赖卡2 migration，尚未 merge，seed-import 暂不可用）",
+        )
+    except asyncpg.exceptions.InsufficientPrivilegeError as exc:
+        logger.warning(f"[flywheel] seed_import_candidates RLS violation: {exc}")
+        raise HTTPException(
+            status_code=403,
+            detail=f"写入 ai_promoted_routes 被 RLS 拒绝 (scope={body.scope!r}): {exc}",
+        )
+    except Exception as exc:
+        logger.error(f"[flywheel] seed_import_candidates failed: {exc}")
+        raise HTTPException(status_code=500, detail="批量导入失败")
 
     return success_response(
-        data={"domain": body.domain, "added": added, "skipped": skipped,
-              "added_count": len(added), "skipped_count": len(skipped)},
-        message=f"批量导入完成: {len(added)} 条通过, {len(skipped)} 条跳过",
+        data=result,
+        message=f"批量导入完成: {len(result['written'])} 条通过, {len(result['skipped'])} 条跳过",
     )
 
 
