@@ -191,3 +191,18 @@
 - **实际范围**：质检标签拍检的 SKU 选择器只加载当前工厂已启用的 `FINISHED_PRODUCT` 成品，支持编码和名称搜索；Java 创建任务入口同步 fail-closed，拒绝半成品或其他非成品绕过提交。
 - **验证证据**：RN 目标测试 `2/2`、Java `LabelQcServiceTest` `12/12`、Android production Expo export 与 `git diff --check` 通过；全量 RN typecheck 仍只有既存 `ProcessTaskListScreen.test.tsx:227 totalPages` 基线错误。
 - **发布边界**：合并后仅从 clean exact `origin/main` 发布 Java 后端与 Android OTA；Web Admin 无变更；生产业务写入保持 `0`。
+
+## 餐饮 AI Google Sheet R30–R38 最终收口（PR #1890–#1894）
+
+- **任务**：`BUG-RESTAURANT-SHEET-R30-R33-20260727-041`
+- **状态**：`merged`
+- **Owner**：`/root`
+- **Base SHA**：`73d60d9d297fc643fcb2ccb380be27805b74ea53`
+- **功能提交 / PR**：`0978fa1f30bc8a169b89a986be7b8c54472dca83` / [#1890](https://github.com/Stevenjxie/cretas/pull/1890)，`c41d572fa674f9dd811e8603cee6cd85b64890f6` / [#1891](https://github.com/Stevenjxie/cretas/pull/1891)，`94329c4eda18aed6896693ccda2eefd3906299de` / [#1892](https://github.com/Stevenjxie/cretas/pull/1892)，`57f185344587dbc2a43d46183ab50aa7ca4c417a` / [#1893](https://github.com/Stevenjxie/cretas/pull/1893)，`acc74696932307b050041cdbab47dbdaf3329e8c` / [#1894](https://github.com/Stevenjxie/cretas/pull/1894)。
+- **最终能力**：自由文本先由 LLM 完整理解，再由确定性 resolver/tool 取真实数据；固定时间/门店按钮在可信上下文中补齐缺失槽位，不因模型失败丢上下文；具名菜仅推荐当前期间确有数据的门店；同名/简称门店先缩小候选；当前周期缺数时保留原任务并给相邻周期；营收提升可使用同口径 POS 财务摘要生成行动方案。
+- **操作安全**：具名菜下架只生成 W0 预览，展示当前状态与目标状态；排行派生批量下架先查候选、逐菜确认，不能把整段排行条件当菜名，也不能直接批量写入。
+- **合并门禁**：最终 Python 餐饮与综合回归 `1161/1161`，澄清专项 `60/60`，Java `RestaurantOpsGoldRouteTest` 单次 release 生命周期 `39/39` 并生成最终 JAR；Ruff、`py_compile`、diff check 通过。
+- **生产发布**：Java `57f185344587dbc2a43d46183ab50aa7ca4c417a` 已发布到蓝槽 `10010`，切流后 `5/5` 健康观察通过；Python `acc74696932307b050041cdbab47dbdaf3329e8c` 已从 clean exact-main 发布，122 项迁移均 up-to-date，import、route、Torch smoke 和内部健康通过。
+- **最终验收**：生产餐饮全量语义电池 `65/65`，平均 `4.8s`、中位 `4.8s`、P95 `6.8s`、最大 `11.8s`，确认不存在 6 秒硬截断；真实 Demo 前端通过米饭三轮补槽、具名门店销量、营收行动方案、具名菜下架预览与排行派生动作安全提示。
+- **Google Sheet**：`餐饮` R30–R38 与 `餐饮整改清单` 9 条对应记录均为“已解决”；统计公式已扩展至第 1000 行，回读为总计 `97`、未解决 `0`、P0/P1 `89`。
+- **业务写入审计**：所有生产验收均为只读或 `previewOnly`，未点击确认，`actualBusinessWrites=0`。
