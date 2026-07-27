@@ -502,7 +502,20 @@ async def _resolve_business_optimization(
         date_range,
         conversation_history=list(history or [])[-20:] or None,
     )
-    answer = sanitize_customer_ai_text(response.answer or "")
+    coverage = response.dimension_coverage or {}
+    available_dimensions = coverage.get("available_dimensions") or []
+    current_week_without_data = (
+        not available_dimensions
+        and any(token in query for token in ("这周", "本周"))
+    )
+    if current_week_without_data:
+        answer = (
+            "本周截至今天还没有可用的经营数据，暂时不能可靠判断怎么提高营收，"
+            "也不会拿其他周期的数据冒充本周结果。你可以改看最近7天、上周或最近30天；"
+            "我会保留“提高营收并给出今天能执行的动作”这个目标继续分析。"
+        )
+    else:
+        answer = sanitize_customer_ai_text(response.answer or "")
     if not any(
         marker in answer
         for marker in ("优化建议", "优化动作", "行动建议", "接下来可以怎么做")
@@ -513,8 +526,27 @@ async def _resolve_business_optimization(
         "synthesis_source": response.source,
         "synthesis_plan": response.plan,
         "fact_check": response.fact_check,
-        "dimension_coverage": response.dimension_coverage,
+        "dimension_coverage": coverage,
     }
+    if current_week_without_data:
+        meta.update({
+            "no_pos_data": True,
+            "period_data_unavailable": True,
+            "suggested_followups": [
+                {
+                    "label": "最近7天",
+                    "question": "最近7天全部门店营收怎么提高，给我今天能做的动作",
+                },
+                {
+                    "label": "上周",
+                    "question": "上周全部门店营收怎么提高，给我今天能做的动作",
+                },
+                {
+                    "label": "最近30天",
+                    "question": "最近30天全部门店营收怎么提高，给我今天能做的动作",
+                },
+            ],
+        })
     return OpsAnswer(
         code="RESTAURANT_OPS_BUSINESS_OPTIMIZATION",
         title="经营诊断与提升方案",
@@ -825,6 +857,9 @@ async def tiered_answer(
             }
             if action_warning:
                 guard_result["warning"] = action_warning
+            guard_followups = guard_meta.get("suggested_followups")
+            if isinstance(guard_followups, list) and guard_followups:
+                guard_result["suggested_followups"] = guard_followups
             return guard_result
 
         result_kpis = getattr(tiered_result, "kpis", None) or []

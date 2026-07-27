@@ -46,7 +46,8 @@ CASES: List[Dict[str, Any]] = [
      "followup_excludes": ["全部门店", "兄弟土菜馆"]},
     {"q": "本月", "chain": "dish",
      "contains": ["哪一组门店"],
-     "followup_contains": ["全部门店", "兄弟土菜馆"]},
+     "followup_contains": ["全部门店", "青花椒新世界新丸中心店"],
+     "followup_excludes": ["兄弟土菜馆", "有滋有味总部"]},
     {"q": "全部门店", "chain": "dish",
      "contains": ["「米饭」", "销量"]},
     {"q": "那成本呢", "chain": "dish", "contains": ["「米饭」", "成本"]},
@@ -159,6 +160,11 @@ CASES: List[Dict[str, Any]] = [
     {"q": "行业参考做法", "contains": ["行业参考做法"]},
     # ── 损耗 / 库存 (Java 工具面) ──
     {"q": "最近损耗怎么样", "contains": ["损耗"]},
+    # ── 周初当前周期暂无数据：不泛化补数，主动给可执行的相邻周期 ──
+    {"q": "这周全部门店营收怎么提高，给我今天能做的动作",
+     "contains": ["本周截至今天", "没有可用的经营数据", "最近7天", "上周"],
+     "followup_contains": ["最近7天", "上周", "最近30天"],
+     "excludes": ["请先把缺少的数据补齐", "当前能查到的数据还不够"]},
 ]
 
 
