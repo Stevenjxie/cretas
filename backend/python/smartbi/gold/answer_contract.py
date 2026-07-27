@@ -268,7 +268,9 @@ def _analysis_action_present(spec: RestaurantQuerySpec, answer_text: str) -> boo
                 "前提成立",
                 "前提不成立",
                 "不能判断“销量低”的前提",
+                "不能判断“销量高”的前提",
                 "还不能证明为什么低",
+                "还不能证明为什么高",
             ),
         )
     if spec.analysis_action == "optimize":

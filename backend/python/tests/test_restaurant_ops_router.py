@@ -145,6 +145,63 @@ def test_scoped_dish_does_not_guess_low_status_without_comparable_dishes():
     assert "不能判断“销量低”的前提是否成立" in answer
 
 
+def test_scoped_dish_high_sales_premise_is_verified_before_causal_guidance():
+    entry = _dish_metric_entry()
+    entry["name"] = "卤炸牛肉串"
+    entry["qty"] = 100.0
+    answer = _scoped_dish_metric_answer(
+        entry,
+        window_label="本月",
+        query="全部门店卤炸牛肉串本月销量为什么高",
+        peer_sales_quantities=[80.0, 60.0, 40.0, 20.0],
+    )
+
+    assert answer.startswith("**判断")
+    assert "按销量从高到低排第 1" in answer
+    assert "“销量高”的前提成立" in answer
+    assert "还不能证明为什么高" in answer
+    assert "上涨或下降" not in answer
+
+
+def test_scoped_dish_rejects_false_high_sales_premise():
+    entry = _dish_metric_entry()
+    entry["name"] = "卤炸牛肉串"
+    entry["qty"] = 20.0
+    answer = _scoped_dish_metric_answer(
+        entry,
+        window_label="本月",
+        query="卤炸牛肉串为什么卖得好",
+        peer_sales_quantities=[100.0, 80.0, 60.0, 40.0],
+    )
+
+    assert "“销量高”的前提不成立" in answer
+    assert "不能按“高销量”解释现状" in answer
+
+
+def test_scoped_dish_does_not_guess_high_status_without_comparable_dishes():
+    answer = _scoped_dish_metric_answer(
+        _dish_metric_entry(),
+        window_label="本月",
+        query="米饭本月销量为什么高",
+    )
+
+    assert "可比主菜不足" in answer
+    assert "不能判断“销量高”的前提是否成立" in answer
+
+
+def test_scoped_dish_growth_question_remains_a_trend_diagnosis():
+    answer = _scoped_dish_metric_answer(
+        _dish_metric_entry(),
+        window_label="本月",
+        query="米饭本月销量为什么上涨",
+        peer_sales_quantities=[80.0, 60.0, 40.0, 20.0],
+    )
+
+    assert answer.startswith("**原因拆解")
+    assert "需要指定对比周期" in answer
+    assert "“销量高”的前提" not in answer
+
+
 def test_scoped_dish_optimization_contains_actions_and_validation_metrics():
     answer = _scoped_dish_metric_answer(
         _dish_metric_entry(),
