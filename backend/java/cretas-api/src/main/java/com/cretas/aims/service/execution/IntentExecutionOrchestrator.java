@@ -37,7 +37,6 @@ import com.cretas.aims.repository.IntentMatchRecordRepository;
 import com.cretas.aims.repository.ProductTypeRepository;
 import com.cretas.aims.service.*;
 import com.cretas.aims.service.calibration.BehaviorCalibrationService;
-import com.cretas.aims.service.intent.RestaurantClarificationInputGuard;
 import com.cretas.aims.service.restaurant.RestaurantComprehensiveQuestionPolicy;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -1340,82 +1339,6 @@ public class IntentExecutionOrchestrator {
         }
     }
 
-    IntentMatchResult recognizeSessionAwareRestaurantContinuation(
-            String factoryId, IntentExecuteRequest request, Long userId, String userRole) {
-        if (request == null
-                || !RestaurantClarificationInputGuard.requiresSessionAwareRecognition(
-                        request.getUserInput(), "RESTAURANT", request.getSessionId())) {
-            return null;
-        }
-        try {
-            IntentMatchResult match = aiIntentService.recognizeIntentWithConfidence(
-                    request.getUserInput(), factoryId, 3, userId, userRole, request.getSessionId());
-            if (match == null
-                    || !match.hasMatch()
-                    || match.getBestMatch() == null
-                    || match.getMatchMethod() != IntentMatchResult.MatchMethod.CONTINUATION_INHERIT) {
-                return null;
-            }
-            return match;
-        } catch (Exception e) {
-            log.warn("[RestaurantSessionBridge] session-aware continuation lookup failed; "
-                            + "fall through to restaurant semantic planner: sessionId={}, error={}",
-                    request.getSessionId(), e.getMessage());
-            return null;
-        }
-    }
-
-    String resolveSessionAwareRestaurantContinuationInput(
-            IntentExecuteRequest request, IntentMatchResult continuationMatch) {
-        String currentInput = request != null && request.getUserInput() != null
-                ? request.getUserInput().trim()
-                : "";
-        String augmentedInput = continuationMatch != null
-                && continuationMatch.getPreprocessedQuery() != null
-                ? continuationMatch.getPreprocessedQuery().getFinalQuery()
-                : null;
-
-        if (request != null && request.getSessionId() != null) {
-            try {
-                List<ConversationMessage> recent =
-                        conversationMemoryService.getRecentMessages(request.getSessionId(), 8);
-                if (recent != null && !recent.isEmpty()) {
-                    int clarificationIndex = -1;
-                    for (int i = recent.size() - 1; i >= 0; i--) {
-                        ConversationMessage message = recent.get(i);
-                        if (message != null
-                                && message.getRole() == ConversationMessage.Role.ASSISTANT) {
-                            if (isRestaurantSlotClarificationMessage(message.getContent())) {
-                                clarificationIndex = i;
-                            }
-                            break;
-                        }
-                    }
-                    if (clarificationIndex >= 0) {
-                        for (int i = clarificationIndex - 1; i >= 0; i--) {
-                            ConversationMessage message = recent.get(i);
-                            if (message == null
-                                    || message.getRole() != ConversationMessage.Role.USER
-                                    || message.getContent() == null
-                                    || message.getContent().isBlank()
-                                    || message.getContent().trim().equals(currentInput)) {
-                                continue;
-                            }
-                            return message.getContent().trim() + "，" + currentInput;
-                        }
-                    }
-                }
-            } catch (Exception e) {
-                log.warn("[RestaurantSessionBridge] failed to load parent clarification input; "
-                                + "using augmented continuation: sessionId={}, error={}",
-                        request.getSessionId(), e.getMessage());
-            }
-        }
-        return augmentedInput != null && !augmentedInput.isBlank()
-                ? augmentedInput.trim()
-                : currentInput;
-    }
-
     static boolean isRestaurantSlotClarificationMessage(String message) {
         if (message == null || message.isBlank()) {
             return false;
@@ -1540,6 +1463,11 @@ public class IntentExecutionOrchestrator {
                         .userInput(userInput)
                         .intentCode(matchedIntent)
                         .sessionId(request.getSessionId())
+                        // 卡1 修复: 与上面 interceptRequest 一致 — 写意图可经此转发,
+                        // mode(READ 拦截)与 previewOnly(预览契约)必须随行, 否则 READ
+                        // 模式下写意图会绕过 READ_MODE_WRITE_BLOCKED 拦截。
+                        .mode(request.getMode())
+                        .previewOnly(request.getPreviewOnly())
                         .build();
                 return executeWithExplicitIntent(factoryId, phraseRequest, userId, userRole);
             }
@@ -1562,8 +1490,11 @@ public class IntentExecutionOrchestrator {
             SemanticCacheHit cacheHit = semanticCacheService.queryCache(factoryId, userInput);
             if (cacheHit.isHit()) {
                 if (cacheHit.hasExecutionResult()) {
-                    // Note: full cache hit with execution result is returned directly
-                    // from the original execute() -- this method just primes the request context
+                    // Note: execute() 目前并不会为 execution-result 缓存命中做提前返回 —
+                    // 无论 hasExecutionResult() 与否, 这个方法都只是把下面的意图匹配缓存
+                    // 结果标记进 request context (__cacheHit/__cacheHitType), 流程仍会继续
+                    // 走完整识别流水线。此分支目前是 no-op (曾设想的"直接返回缓存执行结果"
+                    // 未实现)。
                 }
                 IntentMatchResult cachedMatch = deserializeIntentResult(cacheHit.getIntentResult());
                 if (cachedMatch != null && cachedMatch.hasMatch()) {
@@ -1902,28 +1833,77 @@ public class IntentExecutionOrchestrator {
         return false;
     }
 
+    // 16 \u4e2a\u663e\u5f0f\u53ea\u8bfb\u5426\u5b9a\u8bcd (\u4e0d\u8981\u67e5/\u4e0d\u8981\u770b/\u522b\u67e5/\u522b\u770b/\u4e0d\u7528\u67e5/\u4e0d\u7528\u770b/\u4e0d\u9700\u8981\u67e5/\u4e0d\u9700\u8981\u770b/
+    // \u4e0d\u60f3\u67e5/\u4e0d\u60f3\u770b/\u5148\u522b\u67e5/\u5148\u522b\u770b/\u65e0\u9700\u67e5/\u65e0\u9700\u770b/\u4e0d\u67e5/\u4e0d\u770b)\u3002
+    private static final String[] READ_VETO_TERMS = {
+            "\u4e0d\u8981\u67e5",
+            "\u4e0d\u8981\u770b",
+            "\u522b\u67e5",
+            "\u522b\u770b",
+            "\u4e0d\u7528\u67e5",
+            "\u4e0d\u7528\u770b",
+            "\u4e0d\u9700\u8981\u67e5",
+            "\u4e0d\u9700\u8981\u770b",
+            "\u4e0d\u60f3\u67e5",
+            "\u4e0d\u60f3\u770b",
+            "\u5148\u522b\u67e5",
+            "\u5148\u522b\u770b",
+            "\u65e0\u9700\u67e5",
+            "\u65e0\u9700\u770b",
+            "\u4e0d\u67e5",
+            "\u4e0d\u770b",
+    };
+
+    // \u7ef4\u5ea6\u7ea7\u5426\u5b9a\u653e\u884c\u6807\u8bb0 (\u53ea\u770b/\u53ea\u8981/\u53ea\u67e5/\u4f46\u770b/\u4f46\u8981/\u4f46\u67e5/\u800c\u770b/\u800c\u8981/\u800c\u67e5)\u3002\u5426\u5b9a\u8bcd\u540e\u9762
+    // \u7d27\u8ddf\u8fd9\u4e9b\u5bf9\u6bd4\u5b50\u53e5 (\u5982 "\u4e0d\u770b\u5802\u98df\u53ea\u770b\u5916\u5356\u8425\u6536") \u8bf4\u660e\u53ea\u662f\u6392\u9664\u67d0\u4e00\u4e2a\u7ef4\u5ea6\u3001\u5f15\u51fa\u53e6\u4e00\u4e2a
+    // \u5173\u6ce8\u5bf9\u8c61, \u5e76\u975e\u5426\u5b9a\u6574\u6761\u67e5\u8be2 \u2014 \u5e94\u653e\u884c\u8bed\u4e49\u89c4\u5212, \u4e0d\u7b97 veto\u3002
+    private static final String[] READ_VETO_DIMENSION_CONTRAST_MARKERS = {
+            "\u53ea\u770b",
+            "\u53ea\u8981",
+            "\u53ea\u67e5",
+            "\u4f46\u770b",
+            "\u4f46\u8981",
+            "\u4f46\u67e5",
+            "\u800c\u770b",
+            "\u800c\u8981",
+            "\u800c\u67e5",
+    };
+
+    // \u5426\u5b9a\u8bcd\u4e4b\u540e\u5f80\u540e\u770b\u591a\u5c11\u4e2a\u5b57\u7b26\u627e\u5bf9\u6bd4\u5b50\u53e5 \u2014 \u591f\u8986\u76d6 "\u4e0d\u770b\u5802\u98df\u53ea\u770b\u5916\u5356\u8425\u6536" \u8fd9\u7c7b\u77ed\u53e5,
+    // \u53c8\u4e0d\u81f3\u4e8e\u628a\u5f88\u8fdc\u5904\u4e0d\u76f8\u5173\u7684 "\u53ea\u770b" \u8bef\u5224\u6210\u540c\u4e00\u5426\u5b9a\u7684\u5bf9\u6bd4\u5bf9\u8c61\u3002
+    private static final int READ_VETO_DIMENSION_CONTRAST_WINDOW = 12;
+
+    /**
+     * R? (2026-07-28 \u98de\u8f6e\u56de\u63a5\u53611): \u5224\u65ad\u5426\u5b9a\u5bf9\u8c61, \u800c\u975e\u7eaf contains \u5339\u914d\u3002
+     *
+     * <p>\u65e7\u5b9e\u73b0\u5bf9 16 \u4e2a\u5426\u5b9a\u8bcd\u505a\u7eaf contains \u5339\u914d \u2014\u2014 "\u4e0d\u770b\u5802\u98df\u53ea\u770b\u5916\u5356\u8425\u6536" \u53ea\u662f\u6392\u9664
+     * "\u5802\u98df" \u8fd9\u4e00\u4e2a\u7ef4\u5ea6, \u540e\u534a\u53e5 "\u53ea\u770b\u5916\u5356\u8425\u6536" \u4ecd\u7136\u662f\u4e00\u4e2a\u660e\u786e\u7684\u8bfb\u8bf7\u6c42, \u4f46\u65e7\u903b\u8f91\u4e00\u89c1
+     * "\u4e0d\u770b" \u5b50\u4e32\u5c31\u6574\u6761 veto, \u628a\u8bf7\u6c42\u6253\u56de Java 8 \u5c42\u65e7\u94fe (\u77ed\u8bed\u76f4\u6267\u884c + Stage-8 \u76f4\u9009)\u3002
+     *
+     * <p>\u65b0\u903b\u8f91: \u5426\u5b9a\u8bcd\u547d\u4e2d\u540e, \u68c0\u67e5\u5176\u540e {@link #READ_VETO_DIMENSION_CONTRAST_WINDOW}
+     * \u4e2a\u5b57\u7b26\u5185\u662f\u5426\u7d27\u8ddf "\u53ea\u770b/\u53ea\u8981/\u53ea\u67e5/\u4f46\u770b/\u4f46\u8981/\u4f46\u67e5/\u800c\u770b/\u800c\u8981/\u800c\u67e5" \u7c7b\u5bf9\u6bd4\u5b50\u53e5 \u2014
+     * \u547d\u4e2d\u5219\u8bf4\u660e\u662f\u7ef4\u5ea6\u7ea7\u5426\u5b9a (\u6392\u9664\u5b50\u96c6, \u4fdd\u7559\u53e6\u4e00\u4e2a\u5173\u6ce8\u5bf9\u8c61), \u653e\u884c\u8bed\u4e49\u89c4\u5212; \u5426\u5219\u624d\u662f
+     * \u5426\u5b9a\u6574\u6761\u67e5\u8be2\u7684 veto\u3002
+     */
     private boolean hasExplicitReadVeto(String input) {
         if (input == null || input.isBlank()) {
             return false;
         }
         String q = input.replaceAll("\\s+", "");
-        return containsAny(q,
-                "\u4e0d\u8981\u67e5",
-                "\u4e0d\u8981\u770b",
-                "\u522b\u67e5",
-                "\u522b\u770b",
-                "\u4e0d\u7528\u67e5",
-                "\u4e0d\u7528\u770b",
-                "\u4e0d\u9700\u8981\u67e5",
-                "\u4e0d\u9700\u8981\u770b",
-                "\u4e0d\u60f3\u67e5",
-                "\u4e0d\u60f3\u770b",
-                "\u5148\u522b\u67e5",
-                "\u5148\u522b\u770b",
-                "\u65e0\u9700\u67e5",
-                "\u65e0\u9700\u770b",
-                "\u4e0d\u67e5",
-                "\u4e0d\u770b");
+        for (String term : READ_VETO_TERMS) {
+            int idx = q.indexOf(term);
+            if (idx < 0) {
+                continue;
+            }
+            int remainderStart = idx + term.length();
+            int windowEnd = Math.min(q.length(), remainderStart + READ_VETO_DIMENSION_CONTRAST_WINDOW);
+            String window = q.substring(remainderStart, windowEnd);
+            if (containsAny(window, READ_VETO_DIMENSION_CONTRAST_MARKERS)) {
+                continue;
+            }
+            return true;
+        }
+        return false;
     }
 
     // ==================== 分析流程 ====================
@@ -1945,6 +1925,24 @@ public class IntentExecutionOrchestrator {
         delegateContext.put("request", request);
         java.util.Map<String, Object> delegated = tieredIntentDelegate.tryDelegate(
                 factoryId, delegateParams, delegateContext, "orchestrator_null_intent");
+        // R16 tiered-first 反转去重: 无论命中与否, 本请求已经问过一次 Python tiered
+        // 路由 — 在 request context 打 ATTEMPTED_CONTEXT_KEY 标记。下游全部 gate
+        // (工具头 / no-tool 出口 / slot-filling 前置, 均经由本方法调用)
+        // 见 TieredIntentDelegate.tryDelegate 内部检查该标记即跳过, 同一请求绝不
+        // 二次调用 Python (tiered parse 可能含 T3 LLM, 重复调用是纯浪费)。
+        if (request != null) {
+            // Copy-then-put: request.getContext() may be an immutable Map (e.g. Map.of(...)
+            // built by callers/tests) — mutating it in place would throw
+            // UnsupportedOperationException, so always materialize a fresh mutable map.
+            java.util.Map<String, Object> mutableRequestContext =
+                    request.getContext() != null
+                            ? new java.util.HashMap<>(request.getContext())
+                            : new java.util.HashMap<>();
+            mutableRequestContext.put(
+                    com.cretas.aims.ai.tool.impl.restaurant.TieredIntentDelegate.ATTEMPTED_CONTEXT_KEY,
+                    Boolean.TRUE);
+            request.setContext(mutableRequestContext);
+        }
         if (delegated == null || delegated.get("message") == null) {
             return null;
         }
