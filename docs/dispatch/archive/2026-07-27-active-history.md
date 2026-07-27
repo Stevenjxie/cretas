@@ -206,3 +206,16 @@
 - **最终验收**：生产餐饮全量语义电池 `65/65`，平均 `4.8s`、中位 `4.8s`、P95 `6.8s`、最大 `11.8s`，确认不存在 6 秒硬截断；真实 Demo 前端通过米饭三轮补槽、具名门店销量、营收行动方案、具名菜下架预览与排行派生动作安全提示。
 - **Google Sheet**：`餐饮` R30–R38 与 `餐饮整改清单` 9 条对应记录均为“已解决”；统计公式已扩展至第 1000 行，回读为总计 `97`、未解决 `0`、P0/P1 `89`。
 - **业务写入审计**：所有生产验收均为只读或 `previewOnly`，未点击确认，`actualBusinessWrites=0`。
+
+## Workflow 实际投入/产出语义修复（PR #1896）
+
+- **任务**：`BUG-WORKFLOW-ACTUAL-IO-SEMANTICS-20260727`
+- **状态**：`merged`
+- **Owner**：`/root`
+- **Base SHA**：`27486b3077ec2f305807d347e4b4965659bfdcd6`
+- **功能提交 / PR / main 合并提交**：`b0e5f2137632d1247b38e67bc9af81a7cd1ce11f` / [#1896](https://github.com/Stevenjxie/cretas/pull/1896) / `20cbfce60b3f11a2e7b19635c6a4c64c10f29915`
+- **业务结果**：Workflow 工序 Cell 只声明可用投入与可报工产出，不再配置投入关系、产出关系、产出角色或静态成本比例；正式报工按固定 BOM 主料/替代料与可用库存批次交集选择实际投入，并允许多产出分次、跨日或同次按实际数量报工。
+- **一致性修复**：仅允许修复当前、未被 BOM 引用的 DRAFT 修订哈希不一致；已引用或历史修订继续不可变并 fail closed。
+- **验证**：Java release 生命周期目标测试 `96/96`，Web 目标测试 `42/42`，`vue-tsc`、Vite build、只读 UI/代码审查、编码与 `git diff --check` 均通过；PR 密钥扫描通过。
+- **生产发布**：exact-main `20cbfce60b3f11a2e7b19635c6a4c64c10f29915` 已按 backend-first 串行发布。Java 切换到 green `10020`，5/5 健康观察通过；Web HTTP 200，四方 index 哈希一致。
+- **Scope**：已归档并释放；未修改 Entity、Repository、JPQL、Flyway 或生产业务数据。
