@@ -312,6 +312,11 @@ _RICE_STAPLE_ITEM_RE = re.compile(
     r"(?:(?:[\[(（【][^\])）】]{0,12}[\])）】])|(?:[一二两单双\d]+人?份)|"
     r"(?:[大小]碗)|(?:加量))?$"
 )
+_LOW_SALES_STATE_RE = re.compile(
+    r"销量[^。；，,？?]{0,8}(?:偏低|很低|太低|这么低|那么低|低|偏少|很少|太少)"
+    r"|卖得(?:很|太|比较)?少|卖得不好|不好卖|没人点|很少人点|点得少"
+)
+_SALES_TREND_CHANGE_RE = re.compile(r"下降|下滑|减少|降低|跌了|变少")
 
 
 def _primary_dish_ranking_exclusion_reason(row: Any) -> Optional[str]:
@@ -333,12 +338,24 @@ def _primary_dish_ranking_exclusion_reason(row: Any) -> Optional[str]:
     if _RICE_STAPLE_ITEM_RE.fullmatch(item_name):
         return "staple"
     return None
+
+
+def _asks_low_sales_state(query: str) -> bool:
+    """True for a cross-sectional "is sales low?" premise, not a trend."""
+    text = (query or "").strip()
+    return bool(
+        text
+        and _LOW_SALES_STATE_RE.search(text)
+        and not _SALES_TREND_CHANGE_RE.search(text)
+    )
 _DISH_RANK_WORST_RE = re.compile(
     r"卖得最差|卖得不好|最难卖|卖不动|销量最低|销量垫底|最不受欢迎|最滞销"
     r"|没人点|无人点|没有人点|点得最少|没什么人点|倒数(?:第)?[一二三四五六七八九十\d]*名"
 )
 _DISH_RANK_BEST_RE = re.compile(
-    r"卖得最好|最好卖|最畅销|畅销(?:菜品|菜|单品|产品)?|销量最高|最受欢迎|卖得好"
+    r"卖得最好|最好卖|买得最好|买的最好|最畅销|最热销|最火"
+    r"|畅销(?:菜品|菜|单品|产品)?|销量最高|最受欢迎|卖得好"
+    r"|点得最多|点的最多|最常点|最爱点"
 )
 _RANK_LIMIT_RE = re.compile(
     r"(?:前|后|倒数)?\s*([一二三四五六七八九十\d]{1,3})\s*(?:名|道菜|个菜|款菜|个单品)"
@@ -1137,6 +1154,7 @@ _GENERIC_STORE_SCOPE_FRAGMENTS = frozenset({
     "全部门店", "所有门店", "各门店", "每家店", "全部店", "所有店", "全店",
 })
 _STORE_MENTION_RE = re.compile(r"[一-龥A-Za-z0-9·]{2,24}(?:门店|店)")
+_STORE_REFERENCE_SUFFIX_RE = re.compile(r"(?<=店)(?:这|那|该)家?店$")
 _STORE_MENTION_PREFIX_TRIM = re.compile(
     r"^(?:有没有|有无|是否有|是否|存不存在|是不是|会不会"
     r"|(?:最近|近|过去)(?:\d+|[一二三四五六七八九十半两]+)(?:小时|天|日|周|个?月|年)"
@@ -1192,6 +1210,12 @@ def extract_store_mentions(query: Optional[str]) -> list[str]:
     for segment in normalized.split():
         for match in _STORE_MENTION_RE.finditer(segment):
             candidate = _STORE_MENTION_PREFIX_TRIM.sub("", match.group(0))
+            # Natural speech often repeats the entity as a pronoun:
+            # “鲜行者打浦桥日月光店这家店…”.  The greedy lexical matcher used
+            # to treat the trailing “这家店” as part of the catalogue name.
+            # Keep only the concrete name; the suffix remains discourse
+            # context and is never a store identifier.
+            candidate = _STORE_REFERENCE_SUFFIX_RE.sub("", candidate)
             if len(candidate) < 3 or candidate in _STORE_MENTION_STOPWORDS:
                 continue
             # Time/range prefixes can be glued to an all-store scope, e.g.
@@ -1384,6 +1408,7 @@ def _scoped_dish_metric_answer(
     *,
     window_label: str,
     query: str,
+    peer_sales_quantities: Optional[Sequence[float]] = None,
 ) -> Optional[str]:
     """Render only the metric/action requested for one named dish.
 
@@ -1453,6 +1478,55 @@ def _scoped_dish_metric_answer(
                 f"、平均每单 {units_per_bill:,.2f} 份"
                 if units_per_bill is not None else ""
             )
+            if _asks_low_sales_state(text):
+                peers = [
+                    float(value)
+                    for value in (peer_sales_quantities or ())
+                    if isinstance(value, (int, float))
+                    and not isinstance(value, bool)
+                    and math.isfinite(float(value))
+                    and float(value) >= 0
+                ]
+                if peers:
+                    comparable = sorted([qty, *peers])
+                    count = len(comparable)
+                    midpoint = count // 2
+                    median_qty = (
+                        comparable[midpoint]
+                        if count % 2
+                        else (comparable[midpoint - 1] + comparable[midpoint]) / 2.0
+                    )
+                    rank = 1 + sum(value > qty for value in peers)
+                    premise_holds = qty < median_qty
+                    premise_text = (
+                        "低于中位数，**“销量低”的前提成立**"
+                        if premise_holds
+                        else "不低于中位数，**“销量低”的前提不成立**"
+                    )
+                    next_step = (
+                        "现有汇总数据能确认相对位置，但还不能证明为什么低。"
+                        "下一步应按同一时间和门店范围核对上架天数、售罄缺货、"
+                        "平均实收价与促销、门店和时段分布；在这些数据补齐前，"
+                        "不把任何一项直接说成原因。"
+                        if premise_holds
+                        else "因此不能按“低销量问题”直接制定动作。若目标是继续提高销量，"
+                        "可以在守住单份毛利的前提下，选择单店/单时段做小范围露出或套餐测试，"
+                        "再与同口径对照组比较。"
+                    )
+                    return (
+                        f"**判断：「{name}」{window_label}销量 {qty_text} 份，"
+                        f"在 {count} 道可比主菜中按销量从高到低排第 {rank}，"
+                        f"中位数为 {_format_sales_quantity(median_qty)} 份；"
+                        f"{premise_text}。**\n\n"
+                        f"覆盖 {bills} 单{composition}。{next_step}"
+                    )
+                return (
+                    f"**判断：「{name}」{window_label}销量 {qty_text} 份，"
+                    "但可比主菜不足，当前不能判断“销量低”的前提是否成立。**\n\n"
+                    f"覆盖 {bills} 单{composition}。请先补齐同一时间、同一门店范围内"
+                    "其他主菜销量，再核对上架天数、缺货、价格促销、门店和时段分布；"
+                    "这里不会先假设用户的前提正确。"
+                )
             return (
                 f"**原因拆解：「{name}」{window_label}销量为 {qty_text} 份，"
                 f"覆盖 {bills} 单{composition}；当前只能解释销量构成，不能证明业务因果。**\n\n"
@@ -1821,6 +1895,17 @@ def _resolve_sales_date_range(
     """Resolve common owner-facing time phrases for sales summary prompts."""
     text = (query or "").strip()
     anchor = today or date.today()
+
+    # “截至目前/到现在” is an explicit cumulative range, not a missing time
+    # slot.  A concrete lower bound keeps every downstream resolver on the
+    # same all-history-to-today scope instead of letting store-margin silently
+    # fall back to its rolling 30-day default.
+    if any(token in text for token in (
+        "截至目前", "截止目前", "到目前", "截至现在", "截止现在",
+        "到现在", "目前为止", "当前为止", "到今天为止", "截至今天",
+        "截止今天", "开业至今", "至今累计", "当前累计", "累计到现在",
+    )):
+        return (date(2000, 1, 1), anchor), "截至目前"
 
     # Calendar-day phrases are resolved before rolling ranges.  They used to
     # fall through to "全部历史", which made questions such as "昨天营业额比前天
@@ -2605,6 +2690,7 @@ async def resolve_gross_margin(
             """,
             factory_id, analysis_days, exact_start, exact_end,
         )
+        benchmark_pos_rows = list(pos_rows)
         # Sheet 7/22 实体检测: 点名单菜的问题 ("米饭的毛利率") 此前返回全菜品
         # 榜 — 菜品版的全店榜退化。候选名必须命中本租户菜品行才限域; 命不中
         # 定向拒答, 多命中请求澄清。泛指问法 (整体/哪道/排行) 不受影响。
@@ -3281,6 +3367,12 @@ async def resolve_gross_margin(
                 scoped_entry,
                 window_label=window_label,
                 query=query_text,
+                peer_sales_quantities=[
+                    float(row.get("total_qty") or 0.0)
+                    for row in benchmark_pos_rows
+                    if row.get("product_id") != dish_scope_row.get("product_id")
+                    and _primary_dish_ranking_exclusion_reason(row) is None
+                ],
             )
             if projected:
                 answer = projected
@@ -3453,6 +3545,11 @@ async def resolve_store_margin(
     store_mention: Optional[str] = None,
     store_mentions: Optional[List[str]] = None,
     dish_mention: Optional[str] = None,
+    requested_metrics: Sequence[str] = (),
+    analysis_action: Optional[str] = None,
+    ranking_direction: Optional[str] = None,
+    window_label: Optional[str] = None,
+    **semantic_slots: Any,
 ) -> OpsAnswer:
     """Per-store gross margin: fact_pos_item × fact_pos_transaction.store_id
     × dim_store.name × recipe food_cost. Connects POS bill → store → dish → cost
@@ -3462,6 +3559,13 @@ async def resolve_store_margin(
     门, 此前无 role 参数导致任何角色可见未脱敏门店营收/毛利金额。
     """
     from smartbi_compat._rbac_strip import PRICE_VIEW_ROLES
+    requested_metric_set = {
+        metric for metric in requested_metrics if isinstance(metric, str)
+    }
+    requested_ranking_limit = semantic_slots.get("ranking_limit")
+    if not isinstance(requested_ranking_limit, int) or requested_ranking_limit <= 0:
+        requested_ranking_limit = None
+    requested_window_label = window_label
     if not (bool(role) and role in PRICE_VIEW_ROLES):
         return OpsAnswer(
             code="RESTAURANT_OPS_STORE_MARGIN",
@@ -4013,7 +4117,9 @@ async def resolve_store_margin(
         )
         target_label = store_name or (f"门店 {store_id}" if store_id else "门店")
         scoped_no_data = bool(store_id or store_name or selected_store_names)
-        no_data_ranking_direction = dish_ranking_direction(query)
+        no_data_ranking_direction = (
+            ranking_direction or dish_ranking_direction(query)
+        )
         if no_data_ranking_direction:
             rank_label = (
                 "销量最高"
@@ -4043,20 +4149,43 @@ async def resolve_store_margin(
                     "scope_matches_request": True,
                     "no_pos_data": True,
                     "dish_ranking": no_data_ranking_direction,
-                    "ranking_limit": ranking_limit(query),
+                    "ranking_limit": requested_ranking_limit or ranking_limit(query),
                     "selected_stores": selected_stores,
                     "targetStoreId": store_id,
                     "targetStoreName": store_name,
                     "storeScoped": scoped_no_data,
                 },
             )
+        sales_overview_requested = bool(
+            requested_metric_set.intersection({
+                "revenue", "orders", "sales_volume",
+            })
+            or any(
+                token in (query or "")
+                for token in ("销售情况", "经营情况", "生意情况")
+            )
+        )
         return OpsAnswer(
             code="RESTAURANT_OPS_STORE_MARGIN",
-            title=f"{target_label}毛利分析（{requested_label}）",
+            title=(
+                f"{target_label}销售情况（{requested_label}）"
+                if sales_overview_requested
+                else f"{target_label}毛利分析（{requested_label}）"
+            ),
             answer_text=((
-                f"指定的{target_label}在{requested_label}没有可用的销售与成本数据，"
-                "不能计算该店毛利、毛利率或排名，也没有退化为全店榜、其他日期或营业额指标。"
-                "请确认门店名称或编号，并补齐对应日期的营业账单、配方和最近进价。"
+                (
+                    f"指定的{target_label}在{requested_label}没有可用的销售记录，"
+                    "因此无法给出该店的营收、订单和菜品销量。"
+                    "本次没有改成全部门店、其他日期或毛利数据；"
+                    "请确认门店名称或编号，并检查对应日期的营业流水是否已同步。"
+                )
+                if sales_overview_requested
+                else (
+                    f"指定的{target_label}在{requested_label}没有可用的销售与成本数据，"
+                    "不能计算该店毛利、毛利率或排名，也没有退化为全店榜、"
+                    "其他日期或营业额指标。请确认门店名称或编号，并补齐对应日期的"
+                    "营业账单、配方和最近进价。"
+                )
             ) if scoped_no_data else (
                 f"{requested_label}没有可用的收银销售数据，没有用其他时间范围替代。"
                 "请先确认营业账单已同步。"
@@ -4077,9 +4206,12 @@ async def resolve_store_margin(
     window_start = min((r["window_start"] for r in store_dish_rows if r["window_start"]), default=None)
     window_end = max((r["window_end"] for r in store_dish_rows if r["window_end"]), default=None)
     window_label = (
-        f"{_date_text(exact_start)} 至 {_date_text(exact_end)}"
-        if exact_start and exact_end
-        else _actual_window_text(window_start, window_end, days)
+        requested_window_label
+        or (
+            f"{_date_text(exact_start)} 至 {_date_text(exact_end)}"
+            if exact_start and exact_end
+            else _actual_window_text(window_start, window_end, days)
+        )
     )
 
     # A store choice on a dish-ranking question must change the actual SQL
@@ -4087,9 +4219,11 @@ async def resolve_store_margin(
     # independently inside each selected store; two or more selected stores
     # therefore become an explicit same-window comparison.
     query_text = (query or "").strip()
-    scoped_dish_rank_direction = dish_ranking_direction(query_text)
+    scoped_dish_rank_direction = (
+        ranking_direction or dish_ranking_direction(query_text)
+    )
     if scoped_dish_rank_direction and (store_id or store_name or selected_store_names):
-        requested_limit = ranking_limit(query_text)
+        requested_limit = requested_ranking_limit or ranking_limit(query_text)
         explicit_exclusions = ranking_exclusions(query_text)
         grouped_rows: Dict[str, List[Any]] = {}
         excluded_item_count = 0
@@ -4470,6 +4604,13 @@ async def resolve_store_margin(
                     metric_entry,
                     window_label=window_label,
                     query=query_text,
+                    peer_sales_quantities=[
+                        float(row.get("qty") or 0.0)
+                        for row in store_dish_rows
+                        if str(row.get("store_name") or "") == target_store
+                        and dish_mention not in str(row.get("dish_name") or "")
+                        and _primary_dish_ranking_exclusion_reason(row) is None
+                    ],
                 )
                 cross_grain_read = _asks_store_revenue_then_dish_sales(
                     query_text,
@@ -4766,23 +4907,43 @@ async def resolve_store_margin(
     coverage_ratio = total_rev_with_cost / total_rev if total_rev > 0 else 0.0
     invalid_cost_count = sum(s["invalid_cost_dishes"] for s in store_list)
 
-    asks_store_revenue = any(
+    generic_store_sales_overview = any(
+        token in query_text
+        for token in ("销售情况", "经营情况", "生意情况")
+    )
+    asks_store_revenue = (
+        "revenue" in requested_metric_set
+        or any(
         token in query_text
         for token in ("营收", "营业额", "销售额", "销售收入", "流水", "收入")
+        )
     )
-    asks_store_orders = any(
+    asks_store_orders = (
+        "orders" in requested_metric_set
+        or any(
         token in query_text
         for token in ("订单", "单量")
+        )
     )
     asks_store_avg_ticket = "客单价" in query_text
-    asks_store_sales_volume = any(
+    asks_store_sales_volume = (
+        "sales_volume" in requested_metric_set
+        or any(
         token in query_text
         for token in ("销量", "销售量", "售出数量")
+        )
     )
-    asks_store_margin = any(
+    asks_store_margin = (
+        bool({"gross_margin", "recipe_cost"}.intersection(requested_metric_set))
+        or any(
         token in query_text
         for token in ("毛利", "利润", "盈利", "亏损", "赚钱", "亏钱")
+        )
     )
+    if generic_store_sales_overview and not asks_store_margin:
+        asks_store_revenue = True
+        asks_store_orders = True
+        asks_store_sales_volume = True
     if (
         asks_store_revenue
         or asks_store_orders
@@ -4809,28 +4970,72 @@ async def resolve_store_margin(
             key=_store_metric_value,
             reverse=True,
         )
-        requested_limit = ranking_limit(query_text, top_n)
+        requested_limit = (
+            requested_ranking_limit or ranking_limit(query_text, top_n)
+        )
         requested_slice = ranked_by_requested_metric[:requested_limit]
         scope_label = (
             "、".join(selected_store_names)
             if selected_store_names
             else store_name or "全部门店"
         )
-        rank_lines = [
-            f"**{scope_label}{window_label}{metric_label}对比：**",
-            "",
-        ]
+        single_store_overview = bool(
+            (store_id or store_name)
+            and len(requested_slice) == 1
+        )
+        answer_title = (
+            f"{scope_label}{window_label}销售情况"
+            if single_store_overview or generic_store_sales_overview
+            else f"{scope_label}{window_label}{metric_label}对比"
+        )
+        rank_lines = [f"**{answer_title}：**", ""]
         for index, store in enumerate(requested_slice, 1):
             metric_value = _store_metric_value(store)
+            detail_parts: List[str] = []
             if asks_store_revenue:
-                value_text = f"营收 ¥{metric_value:,.2f}"
-            elif asks_store_avg_ticket:
-                value_text = f"客单价 ¥{metric_value:,.2f}"
-            elif asks_store_sales_volume:
-                value_text = f"销量 {metric_value:,.0f} 份"
-            else:
-                value_text = f"订单 {int(metric_value):,} 单"
-            rank_lines.append(f"{index}. {store['name']} — {value_text}")
+                detail_parts.append(f"营收 ¥{float(store.get('revenue') or 0):,.2f}")
+            if asks_store_orders:
+                detail_parts.append(f"订单 {int(store.get('bills') or 0):,} 单")
+            if asks_store_avg_ticket:
+                detail_parts.append(
+                    f"客单价 ¥{_store_metric_value(store):,.2f}"
+                )
+            if asks_store_sales_volume:
+                detail_parts.append(
+                    f"菜品销量 {float(store.get('qty') or 0):,.0f} 份"
+                )
+            value_text = "、".join(detail_parts) or f"{metric_label} {metric_value:,.0f}"
+            prefix = "" if single_store_overview else f"{index}. "
+            rank_lines.append(f"{prefix}{store['name']} — {value_text}")
+        if (
+            ranking_direction == "best"
+            and requested_slice
+            and not single_store_overview
+        ):
+            leader = requested_slice[0]
+            rank_lines.insert(
+                0,
+                f"**结论：{window_label}{metric_label}最高的是"
+                f"{leader['name']}。**",
+            )
+        if analysis_action == "diagnose":
+            rank_lines.extend([
+                "",
+                (
+                    "**原因拆解：**现有营业流水能确认营收、订单和菜品销量的"
+                    "结果，但仅凭这三项不能证明变化原因。若要继续定位，应在同一"
+                    "时间口径下对照客流、客单价、折扣、缺货、菜品结构和时段分布。"
+                ),
+            ])
+        elif analysis_action == "optimize":
+            rank_lines.extend([
+                "",
+                (
+                    "**优化建议：**先从订单、客单价和主力菜销量中找出最弱的一项，"
+                    "只做一个小范围动作，并用下一周期同口径数据验证；在原因未确认前"
+                    "不直接全店打折。"
+                ),
+            ])
         ranked_entities = [
             {
                 "type": "store",
@@ -4842,7 +5047,11 @@ async def resolve_store_margin(
         ]
         return OpsAnswer(
             code="RESTAURANT_OPS_STORE_MARGIN",
-            title=f"门店{metric_label}对比（{window_label}）",
+            title=(
+                f"门店销售情况（{window_label}）"
+                if single_store_overview or generic_store_sales_overview
+                else f"门店{metric_label}对比（{window_label}）"
+            ),
             answer_text="\n".join(rank_lines),
             charts=[{
                 "chartType": "bar",
@@ -5210,9 +5419,19 @@ async def resolve_sales_summary(
         comparison_label or spec.comparison_label
     )
     resolved_comparison_kind = comparison_kind or spec.comparison_kind
+    query_text = (query or "").strip()
     asks_prohibited_actions = any(token in (query or "") for token in (
         "先不要做", "不要做", "先别做", "不该做", "避免做", "暂时别",
     ))
+    asks_best_store_revenue = bool(
+        any(token in query_text for token in ("门店", "哪家店", "哪个店", "哪一个店"))
+        and any(token in query_text for token in (
+            "营收", "营业额", "销售额", "营业收入", "流水", "业绩",
+        ))
+        and any(token in query_text for token in (
+            "最好", "最高", "最多", "第一", "最强", "冠军",
+        ))
+    )
     date_range, window_label = resolved_date_range, resolved_window_label
     if window_label == _FUTURE_WINDOW_LABEL:
         return OpsAnswer(
@@ -5415,6 +5634,16 @@ async def resolve_sales_summary(
         top_line = f"表现最强的是{top['store_name']}，订单数 {top['bill_count']} 单。"
         if can_see_money:
             top_line = f"表现最强的是{top['store_name']}，营收 {_money(top['revenue'])}，订单数 {top['bill_count']} 单。"
+        if asks_best_store_revenue:
+            top_line = (
+                f"**结论：{actual_window}营收最高的是{top['store_name']}，"
+                f"营收 {_money(top['revenue'])}，订单数 {top['bill_count']} 单。**"
+                if can_see_money
+                else (
+                    "**当前角色不能查看门店营收排名；"
+                    "下面仅展示有权限查看的订单与经营概览。**"
+                )
+            )
 
     weak_line = ""
     if weak_stores:
@@ -5627,13 +5856,14 @@ async def resolve_sales_summary(
         f"**{_money(total_revenue)}**" if can_see_money else _money(total_revenue)
     )
     answer_parts = [
+        top_line if asks_best_store_revenue else "",
         (
             f"{actual_window}经营能看：覆盖 {day_count} 天、{store_count} 家门店，共 **{bill_count:,} 单**。"
             f"总营收 {total_revenue_text}，平均每单 {avg_text}。"
         ),
         comparison_line,
         margin_line,
-        f"{top_line}{weak_line}",
+        weak_line if asks_best_store_revenue else f"{top_line}{weak_line}",
         (
             "建议：先把低于中位的门店拉出来，看是客流少、平均每单低，还是折扣过重；"
             "再对照高门店的菜品结构和时段，把能复制的动作做小范围试点。"

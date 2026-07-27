@@ -1368,11 +1368,19 @@ public class GoldFinanceClient {
     // method here.
     // =========================================================================
 
-    /** Per-call timeout for {@link #fetchTieredIntentAnswer} — T3 LLM parse
-     * is capped at 5s Python-side; 10s leaves headroom for the vector/DB
-     * resolve + network round-trip without holding the Tool call open too
-     * long (design section 4: "timeout 10s（T3 LLM 最多 5s + resolve）"). */
-    private static final long TIERED_ANSWER_TIMEOUT_MS = 10_000L;
+    /**
+     * Restaurant semantic-first is an end-to-end planning + deterministic
+     * resolver path, not the legacy 6-second mapper fast path.  Keep a
+     * production-safe bound, but never let the old 6/10-second budget cancel
+     * a valid high-quality semantic plan before its data query completes.
+     */
+    private static final long MIN_TIERED_ANSWER_TIMEOUT_MS = 30_000L;
+
+    long tieredAnswerTimeoutMs() {
+        return Math.max(
+                MIN_TIERED_ANSWER_TIMEOUT_MS,
+                config.getRestaurantTieredAnswerTimeout());
+    }
 
     /**
      * Ask Python's tiered restaurant-intent router whether {@code userInput}
@@ -1487,7 +1495,7 @@ public class GoldFinanceClient {
             Request req = reqBuilder.build();
 
             okhttp3.Call call = http.newCall(req);
-            call.timeout().timeout(TIERED_ANSWER_TIMEOUT_MS, TimeUnit.MILLISECONDS);
+            call.timeout().timeout(tieredAnswerTimeoutMs(), TimeUnit.MILLISECONDS);
             try (Response resp = call.execute()) {
                 long elapsed = System.currentTimeMillis() - t0;
                 if (!resp.isSuccessful()) {

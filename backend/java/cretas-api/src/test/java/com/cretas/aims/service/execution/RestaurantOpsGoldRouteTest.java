@@ -782,6 +782,32 @@ class RestaurantOpsGoldRouteTest {
     }
 
     @Test
+    @DisplayName("restaurant mutation verbs stay on governed write route, while history reads stay semantic")
+    void restaurantMutationVocabularyDoesNotFallIntoReadOnlySemanticPlanner() {
+        for (String query : new String[]{
+                "下架最近7天销量最低的5道菜",
+                "把卤炸牛肉串停售",
+                "给招牌菜调价",
+                "创建一个满减活动",
+                "给本月复购客户发券"
+        }) {
+            assertThat(IntentExecutionOrchestrator.isRestaurantWriteRequest(query))
+                    .as(query)
+                    .isTrue();
+        }
+
+        for (String query : new String[]{
+                "看看已下架菜品",
+                "查询下架记录",
+                "分析调价历史"
+        }) {
+            assertThat(IntentExecutionOrchestrator.isRestaurantWriteRequest(query))
+                    .as(query)
+                    .isFalse();
+        }
+    }
+
+    @Test
     @DisplayName("tiered-first semantic planner precedes comprehensive and owner-action heuristics")
     void semanticPlannerPrecedesLegacyRestaurantHeuristics() {
         TieredIntentDelegate delegate = mock(TieredIntentDelegate.class);

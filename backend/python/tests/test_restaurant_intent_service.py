@@ -560,6 +560,138 @@ async def test_tiered_answer_forwards_role_to_resolver(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_store_sales_overview_contract_passes_with_all_llm_metrics(monkeypatch):
+    query = "鲜行者打浦桥日月光店这家店的销售情况 本月"
+    spec = _build_spec(
+        "RESTAURANT_OPS_STORE_MARGIN",
+        query,
+        confidence=0.98,
+        tier="llm",
+        llm_store="鲜行者打浦桥日月光店",
+        llm_requested_metrics=("revenue", "orders", "sales_volume"),
+        llm_dimensions=("store",),
+        llm_analysis_action="diagnose",
+        llm_store_scope="single",
+        planner_authority="llm",
+        require_explicit_time=True,
+        llm_semantics_authoritative=True,
+    )
+    captured = {}
+
+    async def _resolve(code, pool, factory_id, **kwargs):
+        captured.update(kwargs)
+        return OpsAnswer(
+            code=code,
+            title="门店销售情况",
+            answer_text=(
+                "**本月鲜行者打浦桥日月光店销售情况：**"
+                "营收 ¥12,680.00、订单 8 单、菜品销量 236 份。"
+                "**原因拆解：**现有数据能确认结果，但不能单独证明原因。"
+            ),
+            charts=[],
+            kpis=[],
+            meta={
+                "scope_matches_request": True,
+                "focus_entity": {
+                    "type": "store",
+                    "name": "鲜行者打浦桥日月光店",
+                },
+                "stores": [{"name": "鲜行者打浦桥日月光店"}],
+            },
+        )
+
+    monkeypatch.setattr(svc, "_resolve_tiered", _resolve)
+    monkeypatch.setattr(svc, "log_intent_capture", AsyncMock(return_value=1))
+
+    result = await tiered_answer(
+        query,
+        object(),
+        "DEMO_REST",
+        "restaurant_manager",
+        precomputed_spec=spec,
+    )
+    await asyncio.sleep(0)
+
+    assert result["kind"] == "answer"
+    assert result["contract_pass"] is True
+    assert captured["requested_metrics"] == (
+        "revenue",
+        "orders",
+        "sales_volume",
+    )
+    assert captured["analysis_action"] == "diagnose"
+    assert captured["window_label"] == "本月"
+
+
+@pytest.mark.asyncio
+async def test_colloquial_store_best_dish_uses_llm_ranking_slot(monkeypatch):
+    query = "鲜行者打浦桥日月光店这家店买的最好的是哪一道菜 本月"
+    spec = _build_spec(
+        "RESTAURANT_OPS_STORE_MARGIN",
+        query,
+        confidence=0.98,
+        tier="llm",
+        llm_store="鲜行者打浦桥日月光店",
+        llm_requested_metrics=("sales_volume",),
+        llm_dimensions=("store", "dish"),
+        llm_analysis_action="lookup",
+        llm_store_scope="single",
+        planner_authority="llm",
+        require_explicit_time=True,
+        llm_semantics_authoritative=True,
+    )
+    assert spec.ranking_direction == "best"
+    captured = {}
+
+    async def _resolve(code, pool, factory_id, **kwargs):
+        captured.update(kwargs)
+        return OpsAnswer(
+            code=code,
+            title="门店菜品销量排行",
+            answer_text=(
+                "**本月鲜行者打浦桥日月光店菜品销量排行：**"
+                "1. 招牌藤椒鸡 — 销量 120 份。"
+            ),
+            charts=[],
+            kpis=[],
+            meta={
+                "scope_matches_request": True,
+                "dish_ranking": "best",
+                "ranking_limit": 5,
+                "focus_entity": {
+                    "type": "dish",
+                    "name": "招牌藤椒鸡",
+                    "rank": 1,
+                },
+                "ranked_entities": [{
+                    "type": "dish",
+                    "name": "招牌藤椒鸡",
+                    "rank": 1,
+                }],
+                "stores": [{"name": "鲜行者打浦桥日月光店"}],
+            },
+        )
+
+    monkeypatch.setattr(svc, "_resolve_tiered", _resolve)
+    monkeypatch.setattr(svc, "log_intent_capture", AsyncMock(return_value=1))
+
+    result = await tiered_answer(
+        query,
+        object(),
+        "DEMO_REST",
+        "restaurant_manager",
+        precomputed_spec=spec,
+    )
+    await asyncio.sleep(0)
+
+    assert result["kind"] == "answer"
+    assert result["contract_pass"] is True
+    assert captured["ranking_direction"] == "best"
+    assert captured["requested_metrics"] == ("sales_volume",)
+    assert "dish_mention" not in captured
+
+
+@pytest.mark.asyncio
 async def test_tiered_answer_capture_tags_java_entry_delegate_source(monkeypatch):
     """When called with java_tool_name (Phase 2 delegate-gate path), the
     fire-and-forget capture log must tag agg_meta.source =

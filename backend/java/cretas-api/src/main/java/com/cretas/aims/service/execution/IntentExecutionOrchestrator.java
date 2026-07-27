@@ -321,7 +321,7 @@ public class IntentExecutionOrchestrator {
                 && isRestaurantTenant(factoryId)
                 && userInput != null && !userInput.isEmpty()
                 && !hasExplicitReadVeto(userInput)
-                && !RESTAURANT_WRITE_VERB.matcher(userInput).find();
+                && !isRestaurantWriteRequest(userInput);
 
         // Restaurant READ natural language has one top-level semantic
         // authority. Run it before bounded-agent selectors, special report
@@ -776,7 +776,7 @@ public class IntentExecutionOrchestrator {
         // 「今年比去年增长多少」曾被指标查询 slot-filling 抢走并把 UPPER_SNAKE
         // 指标码直接问用户。写操作动词的问句不拦, 保留其参数收集流程。
         if (isRestaurantTenant(factoryId) && request.getUserInput() != null
-                && !RESTAURANT_WRITE_VERB.matcher(request.getUserInput()).find()) {
+                && !isRestaurantWriteRequest(request.getUserInput())) {
             IntentExecuteResponse preSlotDelegated =
                     tryRestaurantTieredDelegate(factoryId, request.getUserInput(), request);
             if (preSlotDelegated != null) {
@@ -1947,7 +1947,23 @@ public class IntentExecutionOrchestrator {
 
     // R15: 写操作动词 — 命中则不做 slot-filling 前置委托, 保留参数收集流程。
     private static final java.util.regex.Pattern RESTAURANT_WRITE_VERB =
-            java.util.regex.Pattern.compile("创建|新增|新建|添加|录入|登记|修改|更新|删除|作废|取消|审批|下单|入库|出库|盘点");
+            java.util.regex.Pattern.compile(
+                    "创建|新增|新建|添加|录入|登记|修改|更新|删除|作废|取消|审批|"
+                            + "下单|入库|出库|盘点|上架|下架|停售|启用|停用|"
+                            + "调价|改价|涨价|降价|发券|创建活动");
+    private static final java.util.regex.Pattern RESTAURANT_HISTORICAL_WRITE_READ =
+            java.util.regex.Pattern.compile(
+                    "已下架|下架记录|下架情况|已停售|停售记录|调价记录|调价历史|价格调整记录");
+
+    static boolean isRestaurantWriteRequest(String userInput) {
+        if (userInput == null || userInput.isBlank()) {
+            return false;
+        }
+        if (RESTAURANT_HISTORICAL_WRITE_READ.matcher(userInput).find()) {
+            return false;
+        }
+        return RESTAURANT_WRITE_VERB.matcher(userInput).find();
+    }
 
     // R28: 餐饮复合句 ("先说说A，再说说B") — 早期 phrase shortcut 的 contains
     // 匹配会把内嵌的预设短语抢走, 只答一半; 复合句放行到 tiered 反转由

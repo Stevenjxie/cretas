@@ -100,6 +100,51 @@ def test_scoped_dish_sales_diagnosis_never_falls_back_to_margin_explanation():
     assert "80.0%" not in answer
 
 
+def test_scoped_dish_low_sales_premise_is_verified_before_causal_guidance():
+    entry = _dish_metric_entry()
+    entry["name"] = "卤炸牛肉串"
+    entry["qty"] = 25.0
+    answer = _scoped_dish_metric_answer(
+        entry,
+        window_label="本月",
+        query="全部门店卤炸牛肉串本月销量为什么低",
+        peer_sales_quantities=[100.0, 80.0, 60.0, 40.0, 20.0],
+    )
+
+    assert answer.startswith("**判断")
+    assert "第 5" in answer
+    assert "“销量低”的前提成立" in answer
+    assert "还不能证明为什么低" in answer
+    assert "上涨或下降" not in answer
+
+
+def test_scoped_dish_rejects_false_low_sales_premise_and_offers_safe_next_step():
+    entry = _dish_metric_entry()
+    entry["name"] = "卤炸牛肉串"
+    answer = _scoped_dish_metric_answer(
+        entry,
+        window_label="本月",
+        query="卤炸牛肉串销量为什么低",
+        peer_sales_quantities=[80.0, 60.0, 40.0, 20.0],
+    )
+
+    assert "按销量从高到低排第 1" in answer
+    assert "“销量低”的前提不成立" in answer
+    assert "不能按“低销量问题”直接制定动作" in answer
+    assert "继续提高销量" in answer
+
+
+def test_scoped_dish_does_not_guess_low_status_without_comparable_dishes():
+    answer = _scoped_dish_metric_answer(
+        _dish_metric_entry(),
+        window_label="本月",
+        query="米饭本月销量为什么低",
+    )
+
+    assert "可比主菜不足" in answer
+    assert "不能判断“销量低”的前提是否成立" in answer
+
+
 def test_scoped_dish_optimization_contains_actions_and_validation_metrics():
     answer = _scoped_dish_metric_answer(
         _dish_metric_entry(),
@@ -502,6 +547,45 @@ def test_sales_summary_keeps_time_margin_and_profitability(
         assert "已覆盖的销售是赚钱的" in ans.answer_text
     assert any(kpi["title"] == "已覆盖毛利" for kpi in ans.kpis)
     assert any(kpi["title"] == "已覆盖毛利率" for kpi in ans.kpis)
+
+
+def test_best_store_revenue_answer_puts_store_conclusion_first(monkeypatch):
+    async def _fake_finance_summary(pool, factory_id, date_range, top_n_stores=5):
+        return {
+            "total_revenue": 10000.0,
+            "bill_count": 50,
+            "avg_bill_value": 200.0,
+            "day_count": 21,
+            "store_count": 2,
+            "top_stores": [
+                {"store_name": "兄弟土菜馆", "revenue": 7000.0, "bill_count": 30},
+                {"store_name": "有滋有味北外滩店", "revenue": 3000.0, "bill_count": 20},
+            ],
+        }
+
+    async def _fake_store_comparison(pool, factory_id, date_range):
+        return {"stores": [], "weakStores": ["有滋有味北外滩店"]}
+
+    import smartbi.gold.queries as _q
+
+    monkeypatch.setattr(_q, "finance_summary", _fake_finance_summary)
+    monkeypatch.setattr(_q, "store_comparison", _fake_store_comparison)
+
+    answer = asyncio.run(resolve_sales_summary(
+        object(),
+        "RES_TEST",
+        role="restaurant_manager",
+        query="哪个门店营收最好",
+        today=date(2026, 7, 21),
+        date_range=(date(2026, 7, 1), date(2026, 7, 21)),
+        window_label="本月",
+    ))
+
+    assert answer.answer_text.startswith(
+        "**结论：本月（2026-07-01 至 2026-07-21）"
+        "营收最高的是兄弟土菜馆"
+    )
+    assert answer.answer_text.index("兄弟土菜馆") < answer.answer_text.index("经营能看")
 
 
 def test_sales_summary_all_history_locks_margin_to_actual_revenue_scope(monkeypatch):
@@ -1660,6 +1744,94 @@ def test_store_margin_structured_target_missing_is_directed_no_data(monkeypatch)
     assert "没有退化为全店榜" in result.answer_text
     assert result.meta["no_pos_data"] is True
     assert result.charts == []
+
+
+def test_store_sales_overview_uses_llm_metrics_instead_of_forcing_margin(monkeypatch):
+    start, end = date(2026, 7, 1), date(2026, 7, 27)
+    rows = [
+        _store_margin_row(
+            "S-1", "鲜行者打浦桥日月光店", 12680, 236, start, end,
+        ),
+    ]
+    pool, _ = _store_margin_runtime(monkeypatch, {(start, end): rows})
+
+    result = asyncio.run(_r.resolve_store_margin(
+        pool,
+        "RES_TEST",
+        role="restaurant_manager",
+        date_range=(start, end),
+        window_label="本月",
+        query="鲜行者打浦桥日月光店这家店的销售情况 本月",
+        store_name="鲜行者打浦桥日月光店",
+        requested_metrics=("revenue", "orders", "sales_volume"),
+        analysis_action="diagnose",
+    ))
+
+    assert result.title == "门店销售情况（本月）"
+    assert "鲜行者打浦桥日月光店" in result.answer_text
+    assert "营收 ¥12,680.00" in result.answer_text
+    assert "订单 8 单" in result.answer_text
+    assert "菜品销量 236 份" in result.answer_text
+    assert "原因拆解" in result.answer_text
+    assert "毛利率" not in result.answer_text
+
+
+def test_store_dish_ranking_honors_llm_direction_for_colloquial_typo(monkeypatch):
+    start, end = date(2026, 7, 1), date(2026, 7, 27)
+    best = _store_margin_row(
+        "S-1", "鲜行者打浦桥日月光店", 5600, 120, start, end,
+    )
+    best["dish_name"] = "招牌藤椒鸡"
+    best["normalized_name"] = "招牌藤椒鸡"
+    second = _store_margin_row(
+        "S-1", "鲜行者打浦桥日月光店", 3100, 80, start, end,
+    )
+    second["dish_name"] = "卤炸牛肉串"
+    second["normalized_name"] = "卤炸牛肉串"
+    pool, _ = _store_margin_runtime(
+        monkeypatch,
+        {(start, end): [best, second]},
+    )
+
+    result = asyncio.run(_r.resolve_store_margin(
+        pool,
+        "RES_TEST",
+        role="restaurant_manager",
+        date_range=(start, end),
+        window_label="本月",
+        query="鲜行者打浦桥日月光店这家店买的最好的是哪一道菜 本月",
+        store_name="鲜行者打浦桥日月光店",
+        requested_metrics=("sales_volume",),
+        ranking_direction="best",
+        ranking_limit=1,
+    ))
+
+    assert result.meta["dish_ranking"] == "best"
+    assert result.meta["ranking_limit"] == 1
+    assert result.meta["focus_entity"]["name"] == "招牌藤椒鸡"
+    assert "销量 120 份" in result.answer_text
+    assert "卤炸牛肉串" not in result.answer_text
+
+
+def test_store_sales_no_data_names_requested_metrics_not_cost(monkeypatch):
+    start, end = date(2026, 7, 1), date(2026, 7, 27)
+    pool, _ = _store_margin_runtime(monkeypatch, {(start, end): []})
+
+    result = asyncio.run(_r.resolve_store_margin(
+        pool,
+        "RES_TEST",
+        role="restaurant_manager",
+        date_range=(start, end),
+        window_label="本月",
+        query="有滋有味北外滩店的销售情况 本月",
+        store_name="有滋有味北外滩店",
+        requested_metrics=("revenue", "orders", "sales_volume"),
+    ))
+
+    assert result.title == "有滋有味北外滩店销售情况（2026-07-01 至 2026-07-27）"
+    assert "营收、订单和菜品销量" in result.answer_text
+    assert "没有改成全部门店、其他日期或毛利数据" in result.answer_text
+    assert "配方和最近进价" not in result.answer_text
 
 
 def test_store_dish_ranking_no_data_keeps_sales_semantics(monkeypatch):
@@ -3033,6 +3205,12 @@ def test_store_plus_dish_extracts_dish_after_store_strip():
     assert _r.extract_store_mentions(
         "最近7天青花椒南方百联店和青花椒徐汇光启城店的米饭成本"
     ) == ["青花椒南方百联店", "青花椒徐汇光启城店"]
+    assert _r.extract_store_mentions(
+        "鲜行者打浦桥日月光店这家店的销售情况"
+    ) == ["鲜行者打浦桥日月光店"]
+    assert _r.extract_store_mentions(
+        "鲜行者打浦桥日月光店那家店最火的菜是什么"
+    ) == ["鲜行者打浦桥日月光店"]
 
 
 def test_comparative_two_dishes_extracted():
@@ -3124,6 +3302,11 @@ def test_r14_dish_ranking_direction():
     assert _r.dish_ranking_direction("上周哪道菜卖得最差") == "worst"
     assert _r.dish_ranking_direction("哪个菜卖得最好") == "best"
     assert _r.dish_ranking_direction("近30天畅销菜品") == "best"
+    assert _r.dish_ranking_direction("这家店买得最好的是哪道菜") == "best"
+    assert _r.dish_ranking_direction("这家店买的最好的是哪一道菜") == "best"
+    assert _r.dish_ranking_direction("这家店最火的菜是什么") == "best"
+    assert _r.dish_ranking_direction("这家店点得最多的菜是哪道") == "best"
+    assert _r.dish_ranking_direction("这家店最常点的菜是什么") == "best"
     assert _r.dish_ranking_direction("哪家店业绩最好") is None
     assert _r.dish_ranking_direction("各门店销量最高的是哪家") is None
     assert _r.match_restaurant_ops("上周哪道菜卖得最差") == "RESTAURANT_OPS_GROSS_MARGIN"

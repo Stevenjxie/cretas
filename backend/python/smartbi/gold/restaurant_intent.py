@@ -475,6 +475,7 @@ def _plan_requested_intents(
     store_scope: Optional[str],
     analysis_action: str,
     comparison: Optional[str],
+    dish_slot: Optional[str] = None,
 ) -> Tuple[str, ...]:
     """Build a deterministic, deduplicated multi-resolver plan.
 
@@ -486,14 +487,27 @@ def _plan_requested_intents(
     # requested metrics describe what the user cares about, but must not
     # rewrite the LLM-selected capability into a neighbouring single-metric
     # resolver (the former "怎么提高" -> 只报营收 failure).
-    if selected_code in {
+    complete_capability_codes = {
         "RESTAURANT_OPS_CAPABILITIES",
         "RESTAURANT_OPS_OUT_OF_DOMAIN",
         "RESTAURANT_OPS_PLAYBOOK",
         "RESTAURANT_OPS_STORE_DIRECTORY",
-        "RESTAURANT_OPS_BUSINESS_OPTIMIZATION",
         "RESTAURANT_OPS_CHANNEL_MIX",
-    }:
+    }
+    if selected_code in complete_capability_codes:
+        return (selected_code,)
+
+    # Broad owner questions ("这周营收怎么提高", "菜品整体怎么优化") need
+    # the multi-dimensional optimisation skill.  A *named* dish is different:
+    # its premise and metric must first be verified from the dish-grain POS
+    # resolver.  Keeping the LLM's broad BUSINESS_OPTIMIZATION label here made
+    # "卤炸牛肉串本月销量为什么低" run a slow synthesis and, worse, skip the
+    # objective "is it actually low?" check.
+    named_dish = dish_slot or extract_dish_candidate(text)
+    if (
+        selected_code == "RESTAURANT_OPS_BUSINESS_OPTIMIZATION"
+        and not named_dish
+    ):
         return (selected_code,)
 
     # The LLM is the semantic authority, but an explicit action word in the
@@ -1555,6 +1569,7 @@ def _build_spec(
         store_scope,
         analysis_action,
         comparison,
+        llm_dish or deterministic_dish,
     )
     unsupported_requirements = tuple(
         requirement
@@ -3088,6 +3103,38 @@ def _build_t3_prompt(
         '"requested_metrics": [], "analysis_action": "lookup", '
         '"dimensions": ["ingredient"], "comparison": null, "dish": null, "store": null, '
         '"stores": [], "store_scope": null, "confidence": 0.95, '
+        '"clarification_needed": false, "missing_fields": [], '
+        '"clarification_question": null, "clarification_options": []}\n'
+        '示例7: "鲜行者打浦桥日月光店这家店生意咋样" -> '
+        '{"intent": "RESTAURANT_OPS_STORE_MARGIN", "time_range": null, '
+        '"wants_margin": false, "asks_profitability": false, '
+        '"requested_metrics": ["revenue", "orders", "sales_volume"], '
+        '"analysis_action": "lookup", "dimensions": ["store"], "comparison": null, '
+        '"dish": null, "store": "鲜行者打浦桥日月光店", '
+        '"stores": ["鲜行者打浦桥日月光店"], "store_scope": "single", '
+        '"confidence": 0.95, "clarification_needed": true, '
+        '"missing_fields": ["time_range"], '
+        '"clarification_question": "你想看哪个时间范围？", '
+        '"clarification_options": ["本月", "上个月", "最近7天", "最近30天"]}\n'
+        '示例8: "鲜行者打浦桥日月光店买得最好的是哪道菜" -> '
+        '{"intent": "RESTAURANT_OPS_STORE_MARGIN", "time_range": null, '
+        '"wants_margin": false, "asks_profitability": false, '
+        '"requested_metrics": ["sales_volume"], "analysis_action": "lookup", '
+        '"dimensions": ["store", "dish"], "comparison": null, "dish": null, '
+        '"store": "鲜行者打浦桥日月光店", '
+        '"stores": ["鲜行者打浦桥日月光店"], "store_scope": "single", '
+        '"confidence": 0.95, "clarification_needed": true, '
+        '"missing_fields": ["time_range"], '
+        '"clarification_question": "你想看哪个时间范围？", '
+        '"clarification_options": ["本月", "上个月", "最近7天", "最近30天"]}\n'
+        '示例9: "到今天为止有滋有味北外滩店一共卖了多少钱" -> '
+        '{"intent": "RESTAURANT_OPS_STORE_MARGIN", '
+        '"time_range": {"type": "all_history"}, '
+        '"wants_margin": false, "asks_profitability": false, '
+        '"requested_metrics": ["revenue"], "analysis_action": "lookup", '
+        '"dimensions": ["store"], "comparison": null, "dish": null, '
+        '"store": "有滋有味北外滩店", "stores": ["有滋有味北外滩店"], '
+        '"store_scope": "single", "confidence": 0.97, '
         '"clarification_needed": false, "missing_fields": [], '
         '"clarification_question": null, "clarification_options": []}\n'
         '示例2: "情况怎么样" (完全没有可判断的对象/指标) -> '
