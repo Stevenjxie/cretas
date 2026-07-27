@@ -1632,6 +1632,13 @@ def _requests_read_only_ranking(text: str) -> bool:
         "仅看排行",
         "查询排行",
         "只查看排行",
+        "查看分析",
+        "只看分析",
+        "只查看分析",
+        "仅查看分析",
+        "只做分析",
+        "仅做分析",
+        "只分析",
     }:
         return True
     return bool(

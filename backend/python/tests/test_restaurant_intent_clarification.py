@@ -1007,7 +1007,10 @@ async def test_read_action_store_then_view_choice_compiles_dish_ranking():
 
 
 @pytest.mark.asyncio
-async def test_read_action_view_then_store_choice_compiles_dish_ranking():
+@pytest.mark.parametrize("read_choice", ["只看排行", "只查看分析"])
+async def test_read_action_view_then_store_choice_compiles_dish_ranking(
+    read_choice,
+):
     pool = _FakeDbPool(
         is_restaurant=True,
         store_names=["东城店", "西城店"],
@@ -1027,7 +1030,7 @@ async def test_read_action_view_then_store_choice_compiles_dish_ranking():
     ))
     with patch("common.llm_router.call_chain", new=t3):
         second = await parse_restaurant_query(
-            "只看排行",
+            read_choice,
             pool,
             factory_id=factory_id,
             session_key=session_key,
