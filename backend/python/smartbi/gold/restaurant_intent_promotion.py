@@ -50,6 +50,7 @@ flag with a file the human already reviewed. Nothing in this module,
 """
 from __future__ import annotations
 
+import datetime as _dt
 import json
 import logging
 from collections import Counter
@@ -65,6 +66,24 @@ LEDGER_FILE = _DATA / "promoted_restaurant_intent_samples.json"
 # 格式: {"query": "...", "reason": "..."} 的 JSON list, 仅 CLI --apply 之外
 # 人工编辑 (否决和通过一样是人的判断, 不自动写)。
 REJECTED_FILE = _DATA / "rejected_restaurant_intent_samples.json"
+
+# Miss 复盘处理状态 (卡5b 补充, 2026-07-28): `aggregate_misses` 每条是
+# RESTAURANT_OPS_MISS 聚合行 (只读, 来自 capture 表), 复盘时人工标注"这条
+# 打算怎么处理"没地方存 -- 同 REJECTED_FILE 一样是纯人工判断的小体量数据,
+# 走 repo-committed JSON 文件而不是新建 DB 表/migration (本卡任务卡明确
+# 禁止自建 migration; 这个数据量级和访问模式也不需要一张表)。
+# 格式: {normalized_query: {"status": ..., "note": ..., "reviewed_by": ...,
+# "updated_at": ISO8601}}。
+MISS_STATUS_FILE = _DATA / "restaurant_intent_miss_status.json"
+# 允许的处理状态 -- 显式枚举, 不接受任意字符串 (禁止降级/明确原则: 前端传
+# 错值要 400, 不能悄悄存一个前端和后端理解不一致的自由文本)。
+MISS_STATUS_VALUES = frozenset({
+    "unreviewed",   # 默认/未处理 (未显式设置时的隐含状态, 不需要写一条记录)
+    "planned",      # 已排入 resolver/意图目录扩展计划
+    "wontfix",      # 评估后判定不做 (如误触发/低频/超出产品范围)
+    "duplicate",    # 与已有 miss 或已支持意图重复
+    "resolved",     # 已有后续版本覆盖 (resolver 已扩展/晋升表已收录)
+})
 
 # Two-level objective gate thresholds (spec section 5). Row-level filter (a)
 # is always applied (tier=llm, contract_pass=true, served=true -- see the SQL
@@ -739,3 +758,63 @@ def reject_candidate(
         "ledger_size": len(entries),
         "durable": False,
     }
+
+
+# ─── Miss 复盘处理状态 (卡5b 补充契约: POST /misses/status) ─────────────────
+
+def load_miss_status() -> Dict[str, Dict[str, Any]]:
+    """Read `MISS_STATUS_FILE`. Fail-open: missing/corrupt file -> {} (same
+    fail-open convention as `load_promoted_samples`/`load_rejected_queries`)."""
+    try:
+        if MISS_STATUS_FILE.exists():
+            with open(MISS_STATUS_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            if isinstance(data, dict):
+                return {
+                    str(q): v for q, v in data.items()
+                    if isinstance(v, dict) and isinstance(q, str) and q.strip()
+                }
+    except Exception as exc:
+        logger.warning(f"[restaurant-intent-promotion] load miss status failed (ignored): {exc}")
+    return {}
+
+
+def set_miss_status(
+    query: str, status: str, *, note: Optional[str] = None,
+    reviewed_by: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Human-reviewed write for `/misses/status` (卡5 前端补充契约). Same
+    write-discipline as `reject_candidate`: explicit human action, explicit
+    write, never called from a read-only aggregation path.
+
+    `status` must be one of `MISS_STATUS_VALUES` -- rejects (does not
+    silently accept) an unrecognized value so the FE and this ledger never
+    drift into "free text the backend can't group/filter on".
+
+    ⚠️ Same rsync-deploy durability caveat as `REJECTED_FILE`/`LEDGER_FILE`
+    (see module docstring point 1 and `reject_candidate`'s docstring):
+    response includes `durable=False`.
+    """
+    query = (query or "").strip()
+    if not query:
+        return {"ok": False, "reason": "empty_query"}
+    if status not in MISS_STATUS_VALUES:
+        return {"ok": False, "reason": f"invalid_status:{status!r} (允许值: {sorted(MISS_STATUS_VALUES)})"}
+
+    all_status = load_miss_status()
+    entry: Dict[str, Any] = {
+        "status": status,
+        "updated_at": _dt.datetime.utcnow().isoformat() + "Z",
+    }
+    if note:
+        entry["note"] = note
+    if reviewed_by:
+        entry["reviewed_by"] = reviewed_by
+    all_status[query] = entry
+
+    MISS_STATUS_FILE.parent.mkdir(parents=True, exist_ok=True)
+    MISS_STATUS_FILE.write_text(
+        json.dumps(all_status, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    return {"ok": True, "query": query, "status": status, "ledger_path": str(MISS_STATUS_FILE), "durable": False}

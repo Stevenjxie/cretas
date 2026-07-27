@@ -1200,7 +1200,9 @@ app.include_router(
 )
 
 # 卡5b (2026-07-28): AI 飞轮运营台后端 API — 总览看板 / 晋升审核 / Miss 复盘 /
-# 质量与回归 / 蒸馏数据集导出。平台管理员权限 (require_admin)。
+# 质量与回归 / 蒸馏数据集导出。仅 platform_admin (不含 factory_super_admin/
+# permission_admin — 这个模块的所有读端点都是跨租户视图, 只有 platform_admin
+# 天然安全, 见 flywheel.py 模块注释)。
 from smartbi.api import flywheel  # noqa: E402
 app.include_router(
     flywheel.router,

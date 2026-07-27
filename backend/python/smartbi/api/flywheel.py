@@ -1,17 +1,23 @@
 """AI 飞轮运营台后端 API (卡5b) — 挂 `/api/smartbi/flywheel/*`.
 
-实现卡5 (web-admin `/system/ai-flywheel`) 五个页面用的六个契约端点:
+实现卡5 (web-admin `/system/ai-flywheel`) 五个页面用的契约端点 (六个原始
+契约 + 2026-07-28 补的两个卡5 前端补充契约):
 
-  GET  /overview             总览看板聚合 (问答量/档位分布/缓存命中率/晋升命中率/
-                              token 估算/契约失败率/澄清率/👍👎 分布)
-  GET  /candidates            晋升候选队列 (复用 restaurant_intent_promotion.
-                              aggregate_candidates 的目标门控逻辑, 加富契约通过率
-                              /最近真实答案/plan_json)
-  POST /candidates/approve    一键通过 -> 落 `ai_promoted_routes` (卡2 建表)
-  POST /candidates/reject     一键否决 -> 落否决账本 (复用 promo.reject_candidate)
-  GET  /misses                 RESTAURANT_OPS_MISS 聚合 (复用 aggregate_misses)
-  GET  /quality                 契约失败明细 + 👎 关联问答对
-  POST /dataset/export           JSONL 训练对导出 (问句 → sealed plan → 反馈标签)
+  GET  /overview                 总览看板聚合 (问答量/档位分布/缓存命中率/晋升命中率/
+                                  token 估算/契约失败率/澄清率/👍👎 分布)
+  GET  /candidates                晋升候选队列 (复用 restaurant_intent_promotion.
+                                  aggregate_candidates 的目标门控逻辑, 加富契约通过率
+                                  /最近真实答案/plan_json)
+  POST /candidates/approve        一键通过 -> 落 `ai_promoted_routes` (卡2 建表)
+  POST /candidates/reject         一键否决 -> 落否决账本 (复用 promo.reject_candidate)
+  POST /candidates/seed-import    manual_seed 批量导入 (补充契约, 逐条人审入表,
+                                  不在端点内跑 LLM 出计划——见该端点 docstring)
+  GET  /misses                     RESTAURANT_OPS_MISS 聚合 (复用 aggregate_misses),
+                                  附带处理状态 (见 /misses/status)
+  POST /misses/status              miss 复盘处理状态标注 (补充契约, 落
+                                  MISS_STATUS_FILE)
+  GET  /quality                     契约失败明细 + 👎 关联问答对
+  POST /dataset/export               JSONL 训练对导出 (问句 → sealed plan → 反馈标签)
 
 Spec: docs/superpowers/specs/2026-07-28-restaurant-ai-flywheel-reconnect-plan.md
   §P4 (五页面清单) + §1.5 (ai_promoted_routes 表定义) + 卡5/卡5b 分发卡正文。
@@ -21,9 +27,15 @@ migration, 见卡5b 任务卡)。approve 端点对该表的 INSERT/UPSERT 用
 `asyncpg.UndefinedTableError` 兜底 -> 503 + 明确提示, 不是静默假成功 (卡2 未
 merge 时 approve 会 503, 这是预期行为, 不是 bug)。
 
-Auth: 平台管理员权限 (`require_admin`, 复用 Sub-Project C 的共享 admin RBAC —
-`smartbi/canonical/provenance/_admin_auth.py`, 同一套 platform_admin /
-factory_super_admin / permission_admin 三档, 与 web-admin 路由 meta.roles 对齐)。
+Auth: **仅 `platform_admin`**（`_require_platform_admin`，本文件内定义，见其
+docstring）。不是 Sub-Project C 共享的 `require_admin`（那个函数放行
+`platform_admin` / `factory_super_admin` / `permission_admin` 三档 admin-tier
+角色——那个宽度对"调用者传 factory_id、按 ID 校验越权"的端点形状是对的，
+但本文件六个读端点没有 factory_id 参数、`_admin_channel_guc` 无条件把 GUC
+清空成 `''` 看全部租户，若 `factory_super_admin`/`permission_admin`（单工厂
+角色）也能通过，就是跨租户数据泄漏——2026-07-28 审查发现的阻断项，修复
+见下方 `_require_platform_admin`）。与 web-admin 侧路由 `meta.roles:
+['platform_admin']`（卡5 UI 早已限定）对齐，双端一致收窄，不留后门。
 
 ═══════════════════════════════════════════════════════════════════════════
 RLS GUC 用法 (本卡任务卡明确写"终审专查" — 完整推导见
@@ -74,11 +86,54 @@ from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 
 from common.responses import success_response
-from smartbi.canonical.provenance._admin_auth import require_admin
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["AI Flywheel Console"])
+
+
+def _require_platform_admin(request: Request, *, action_name: str) -> None:
+    """卡5b 专用鉴权gate — 只放行 `platform_admin`. 2026-07-28 审查发现的阻断项修复:
+
+    之前直接复用 `smartbi.canonical.provenance._admin_auth.require_admin`,
+    它的 `ADMIN_ROLES` 是三档 admin-tier (`platform_admin` /
+    `factory_super_admin` / `permission_admin`) 都放行 -- 对 Sub-Project C
+    那批"调用者传一个 factory_id 参数, 校验是否越权访问别的工厂"形状的端点
+    是对的 (越权检查在 `require_factory_scope` 里, 按传入的 ID 比对)。
+
+    但本文件六个端点根本不接受 factory_id 参数 -- 它们是运营台的"平台级
+    聚合视图", `_admin_channel_guc`/`aggregate_candidates(factory_id=None)`
+    无条件把 RLS GUC 清空成 `''`, 对 `smart_bi_llm_fallback_log` 这类 FORCE
+    RLS 表等于"看全部租户"。`factory_super_admin`/`permission_admin` 语义上
+    是单工厂角色, 如果被这里放行, 就能看到/导出全部租户的问句、答案、
+    `feedback_comment`(负反馈原文常含运营敏感信息) -- 跨租户泄漏, 不是新
+    风险类别: 与 `smartbi/api/data_quality_queue_admin.py`(Phase B 修复,
+    "之前 require_admin 接受任意 admin tier 导致 F002 admin 能查 R_BEJ
+    data") 同一漏洞形状, 唯一区别是那边端点接受 factory_id 参数、用
+    `role != 'platform_admin' and factory_id 不等` 比对, 而这里的端点没有
+    factory_id 参数可比 -- 干脆直接锁角色, 不给 factory_super_admin/
+    permission_admin 开口子 (这是运营团队/organizer 拍板的选择: 卡5 web-admin
+    路由 `meta.roles` 本就只写了 `['platform_admin']`, 双端一致最简单也最
+    不容易漏改一处再出同款漏洞)。
+
+    `auth_method == 'internal'` (Java -> Python 内部调用) 仍然直接放行 --
+    与 `require_admin` 的既有约定一致, 内部调用不受角色门限制。
+    """
+    role = getattr(request.state, "role", None)
+    auth_method = getattr(request.state, "auth_method", None)
+    if auth_method == "internal":
+        return
+    if role is None:
+        raise HTTPException(status_code=401, detail="未登录或会话已过期")
+    if role != "platform_admin":
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                f"{action_name}仅限平台管理员 (platform_admin) 访问 "
+                f"(当前角色 {role!r} 无权访问 -- 本模块所有读端点跨租户, "
+                f"factory_super_admin/permission_admin 不予放行以防跨租户数据泄漏)"
+            ),
+        )
 
 # ─── domain (spec §7 平台化: 新表新模块一律带 domain, 首发只有 restaurant) ──
 _SUPPORTED_DOMAINS: Dict[str, str] = {
@@ -145,7 +200,7 @@ async def overview(
     domain: str = Query("restaurant"),
     days: int = Query(7, ge=1, le=90),
 ) -> dict:
-    require_admin(request, action_name="AI 飞轮总览看板")
+    _require_platform_admin(request, action_name="AI 飞轮总览看板")
     prefix = _domain_prefix(domain)
     pool = await _get_pool_or_503()
 
@@ -161,7 +216,10 @@ async def overview(
               COUNT(*) FILTER (WHERE (agg_meta->>'clarification_needed') = 'true')   AS clarify_count,
               COUNT(*) FILTER (WHERE (agg_meta->>'tier') = 'llm')                    AS llm_tier_count,
               COUNT(*) FILTER (WHERE (agg_meta->>'tier') = 'cache')                  AS cache_tier_count,
-              COUNT(*) FILTER (WHERE (agg_meta->>'planner_authority') = 'promoted_exact') AS promoted_hit_count,
+              COUNT(*) FILTER (
+                WHERE (agg_meta->>'tier') = 'exact'
+                  AND (agg_meta->>'planner_authority') = 'promoted_exact'
+              )                                                                        AS promoted_hit_count,
               COUNT(*) FILTER (WHERE user_feedback = 1)                              AS thumbs_up,
               COUNT(*) FILTER (WHERE user_feedback = -1)                             AS thumbs_down
             FROM smart_bi_llm_fallback_log
@@ -197,6 +255,17 @@ async def overview(
     def _rate(numer: int, denom: int) -> Optional[float]:
         return round(numer / denom, 4) if denom > 0 else None
 
+    # 2026-07-28 追加修复: `promoted_hit_count`/`promoted_hit_rate` 上面这两个
+    # 字段的数据来源是 capture 表 (`smart_bi_llm_fallback_log.agg_meta`),
+    # **不是** `ai_promoted_routes.hit_count` —— 卡2 终审确认 hit_count 目前
+    # 恒为 0 (卡2 有意不在热路径写它: 读路径上做写 + global 行 UPDATE 需要
+    # 开 RLS 口子, 这个取舍是对的, 不要求卡2 改)。真实的"晋升命中"信号是
+    # 回放路径命中晋升表时打的两个 agg_meta 标记 (`tier='exact'` 且
+    # `planner_authority='promoted_exact'`, 卡2 给的部署核对标记) —— 上面
+    # SQL 的 promoted_hit_count 就是数这个, 是真实数据, 不依赖 hit_count。
+    # `_read_promoted_routes_summary` 里单独返回 `ai_promoted_routes` 表本身
+    # 的 route_count (真实, 表里有多少条晋升配置), 但不再返回 SUM(hit_count)
+    # (恒 0 的假指标, 见该函数 docstring)。
     promoted_routes = await _read_promoted_routes_summary(domain)
 
     return success_response(
@@ -230,16 +299,47 @@ async def overview(
 async def _read_promoted_routes_summary(domain: str) -> Dict[str, Any]:
     """`ai_promoted_routes` (卡2 建表) 的 hit_count 汇总 -- 表可能尚不存在
     (卡2 未 merge), 用 `UndefinedTableError` 兜底而不是让整个 overview 500。
-    显式 `available=False` 让前端知道这不是"晋升表里 0 条", 而是"表还没建"。"""
+    显式 `available=False` 让前端知道这不是"晋升表里 0 条", 而是"表还没建"。
+
+    ⚠️ 2026-07-28 审查发现: 本函数之前完全没设 GUC, 靠"侥幸" —— `overview`
+    调用者收窄到 platform_admin 之前, `factory_super_admin` 也能到这里, 其
+    JWT 常带自己的 factory_id, ambient GUC (连接池 setup 回调的默认值)
+    就会是那个具体工厂, 而不是 `'__internal__'`——SELECT 会悄悄只统计一个
+    工厂的 `ai_promoted_routes` 行, 却仍然返回 `available: True`, 变成"数据
+    不完整但看起来正常"这种最难发现的 bug。现在调用者已锁定 platform_admin
+    (`_require_platform_admin`), 但仍然显式设 GUC, 不依赖调用方角色间接保证:
+    这张表是纯平台级晋升配置 (不是 per-tenant capture 数据), 显式重置为
+    `tenant_ctx.INTERNAL_SENTINEL` ('__internal__') 而不是 `''` —— 空串是
+    `smart_bi_llm_fallback_log` 那类 tenant_select 策略"放行全部租户"的哨兵,
+    `ai_promoted_routes` 语义上不是"多租户行的集合", 用 `__internal__` 这个
+    项目既有的"平台级/内部调用"哨兵更准确 (与 `tenant_ctx.
+    set_pg_connection_tenant` 对无租户上下文请求的默认值一致)。
+
+    ⚠️ 2026-07-28 追加修复 (organizer 转达卡2 终审确认): `ai_promoted_routes.
+    hit_count` 目前**恒为 0** —— 没有任何代码在回放命中晋升表时更新它 (卡2
+    有意不在热路径写: 那是读路径上做写, 且 global 行 UPDATE 需要开一个 RLS
+    写口子, 这个取舍是对的, 不要求卡2 改)。因此本函数**不再返回
+    `SUM(hit_count)`** —— 一个永远是 0 的数字包装成"晋升命中"指标展示出去,
+    等于诚实到毫米原则要防的"看起来正常但是假的"。真实的晋升命中信号见
+    `overview` 顶层的 `promoted_hit_count`/`promoted_hit_rate`
+    (来自 capture 表 `agg_meta.tier='exact'` + `planner_authority=
+    'promoted_exact'` 的真实统计, 不依赖这张表的 hit_count 列)。这里只返回
+    `route_count` (真实 -- 这张表里实际有多少条被人审通过的晋升配置) 和一个
+    `hit_count_instrumented: False` 标记, 让前端/复核者能从响应本身看出
+    hit_count 未接线, 而不是只能从代码注释里才知道。"""
     try:
         from smartbi.config import get_pg_pool
+        from smartbi.tenant_ctx import INTERNAL_SENTINEL
         pool = await get_pg_pool()
         if pool is None:
             return {"available": False, "reason": "pool_unavailable"}
         async with pool.acquire() as conn:
+            await conn.execute(
+                "SELECT set_config('app.factory_id', $1, false)", INTERNAL_SENTINEL
+            )
             row = await conn.fetchrow(
                 """
-                SELECT COUNT(*) AS route_count, COALESCE(SUM(hit_count), 0) AS total_hits
+                SELECT COUNT(*) AS route_count
                   FROM ai_promoted_routes
                  WHERE domain = $1
                 """,
@@ -248,7 +348,7 @@ async def _read_promoted_routes_summary(domain: str) -> Dict[str, Any]:
         return {
             "available": True,
             "route_count": int(row["route_count"] or 0) if row else 0,
-            "total_hits": int(row["total_hits"] or 0) if row else 0,
+            "hit_count_instrumented": False,
         }
     except asyncpg.UndefinedTableError:
         return {"available": False, "reason": "ai_promoted_routes 表不存在（依赖卡2 migration，尚未 merge）"}
@@ -269,7 +369,7 @@ async def list_candidates(
     min_count: int = Query(1, ge=1),
     limit: int = Query(200, ge=1, le=1000),
 ) -> dict:
-    require_admin(request, action_name="AI 飞轮晋升候选队列")
+    _require_platform_admin(request, action_name="AI 飞轮晋升候选队列")
     if domain != "restaurant":
         # aggregate_candidates 的 SQL 目前硬编码 RESTAURANT_OPS_% 前缀
         # (对象门控逻辑本身是 restaurant 专属), 尚不支持其它 domain。
@@ -335,6 +435,40 @@ async def _enrich_candidates(pool, base: List[Dict[str, Any]]) -> List[Dict[str,
     return out
 
 
+async def _insert_promoted_route(
+    conn, *, domain: str, normalized_phrase: str, plan_json: Dict[str, Any],
+    plan_version: str, source: str, scope: str, reviewed_by: Optional[str],
+):
+    """Shared INSERT ... ON CONFLICT DO UPDATE for `ai_promoted_routes`, used
+    by both `/candidates/approve` (source='flywheel') and
+    `/candidates/seed-import` (source='manual_seed'). Caller must have
+    already called `_admin_channel_guc(conn)` on this connection (see
+    `approve_candidate`'s comment for why the admin/global write channel is
+    correct here — approve/seed-import are inherently cross-tenant actions).
+
+    Raises `asyncpg.UndefinedTableError` / `asyncpg.exceptions.
+    InsufficientPrivilegeError` uncaught -- callers translate those to the
+    appropriate HTTP/per-entry response (single-entry `approve_candidate`
+    aborts the whole request; batched `seed_import_candidates` catches per
+    entry so one bad row doesn't sink the whole paste)."""
+    return await conn.fetchrow(
+        """
+        INSERT INTO ai_promoted_routes
+            (domain, normalized_phrase, plan_json, plan_version, source, scope, reviewed_by, hit_count, created_at)
+        VALUES ($1, $2, $3::jsonb, $4, $5, $6, $7, 0, NOW())
+        ON CONFLICT (domain, normalized_phrase) DO UPDATE
+           SET plan_json = EXCLUDED.plan_json,
+               plan_version = EXCLUDED.plan_version,
+               source = EXCLUDED.source,
+               scope = EXCLUDED.scope,
+               reviewed_by = EXCLUDED.reviewed_by
+        RETURNING domain, normalized_phrase, hit_count
+        """,
+        domain, normalized_phrase, _json.dumps(plan_json, ensure_ascii=False, default=str),
+        plan_version, source, scope, reviewed_by,
+    )
+
+
 # ═══════════════════════════════════════════════════════════════════════
 # POST /candidates/approve
 # ═══════════════════════════════════════════════════════════════════════
@@ -352,7 +486,7 @@ class ApproveCandidateRequest(BaseModel):
 
 @router.post("/candidates/approve")
 async def approve_candidate(request: Request, body: ApproveCandidateRequest) -> dict:
-    require_admin(request, action_name="AI 飞轮候选通过")
+    _require_platform_admin(request, action_name="AI 飞轮候选通过")
     _domain_prefix(body.domain)
 
     from smartbi.gold.restaurant_intent import _VALID_CODES, _normalize_exact_phrase
@@ -393,21 +527,36 @@ async def approve_candidate(request: Request, body: ApproveCandidateRequest) -> 
     reviewed_by = _reviewed_by(request)
     try:
         async with pool.acquire() as conn:
-            row = await conn.fetchrow(
-                """
-                INSERT INTO ai_promoted_routes
-                    (domain, normalized_phrase, plan_json, plan_version, source, scope, reviewed_by, hit_count, created_at)
-                VALUES ($1, $2, $3::jsonb, $4, 'flywheel', $5, $6, 0, NOW())
-                ON CONFLICT (domain, normalized_phrase) DO UPDATE
-                   SET plan_json = EXCLUDED.plan_json,
-                       plan_version = EXCLUDED.plan_version,
-                       scope = EXCLUDED.scope,
-                       reviewed_by = EXCLUDED.reviewed_by
-                RETURNING domain, normalized_phrase, hit_count
-                """,
-                body.domain, normalized_phrase, _json.dumps(plan_json, ensure_ascii=False, default=str),
-                plan_version, body.scope, reviewed_by,
-            )
+            # 2026-07-28 审查发现: 这个 acquire() 之前也没显式设 GUC —— 若
+            # ambient GUC (连接池 setup 回调默认值) 恰好是调用者自己的
+            # factory_id (即使调用者现在已锁定 platform_admin, 其 JWT 仍可能
+            # 带一个 factory_id), 而 body.scope 默认是 'global' (不等于那个
+            # factory_id), INSERT 就可能撞上 `ai_promoted_routes` 的 RLS
+            # WITH CHECK (若卡2 建的表带类似 V20260502_05 那种"GUC 为空/未设
+            # 或等于目标行租户列"策略) 而失败, 之前被下面的通用 except
+            # Exception 兜底成语义不清的 500。显式设为 admin 通道 ('', 空串)
+            # ——写 scope='global' 或任意具体 factory_id 都不应受当前调用者
+            # 租户限制 (approve 本身就是跨租户操作: 一个 platform_admin 审核
+            # 通过的问法可以属于任何工厂或全局)。
+            await _admin_channel_guc(conn)
+            try:
+                row = await _insert_promoted_route(
+                    conn, domain=body.domain, normalized_phrase=normalized_phrase,
+                    plan_json=plan_json, plan_version=plan_version, source="flywheel",
+                    scope=body.scope, reviewed_by=reviewed_by,
+                )
+            except asyncpg.exceptions.InsufficientPrivilegeError as exc:
+                # RLS WITH CHECK 违规的标准 asyncpg 映射 (SQLSTATE 42501,
+                # "new row violates row-level security policy") —— 显式 403,
+                # 不要糊进下面的通用 500 分支 (那样调用者分不清"服务器错误"
+                # 还是"这条写入本来就不该被允许")。
+                logger.warning(f"[flywheel] approve_candidate RLS violation: {exc}")
+                raise HTTPException(
+                    status_code=403,
+                    detail=f"写入 ai_promoted_routes 被 RLS 拒绝 (scope={body.scope!r} 与当前租户上下文不匹配): {exc}",
+                )
+    except HTTPException:
+        raise
     except asyncpg.UndefinedTableError:
         raise HTTPException(
             status_code=503,
@@ -441,7 +590,7 @@ class RejectCandidateRequest(BaseModel):
 
 @router.post("/candidates/reject")
 async def reject_candidate(request: Request, body: RejectCandidateRequest) -> dict:
-    require_admin(request, action_name="AI 飞轮候选否决")
+    _require_platform_admin(request, action_name="AI 飞轮候选否决")
     _domain_prefix(body.domain)
 
     from smartbi.gold import restaurant_intent_promotion as promo
@@ -462,6 +611,93 @@ async def reject_candidate(request: Request, body: RejectCandidateRequest) -> di
 
 
 # ═══════════════════════════════════════════════════════════════════════
+# POST /candidates/seed-import (卡5 前端补充契约: manual_seed 批量导入)
+# ═══════════════════════════════════════════════════════════════════════
+#
+# spec §1.5 / §P4 item 2: "manual_seed 来源: 客户提供的常问问题清单 → 离线
+# 批量跑一次 LLM 出计划 → 人审 → 落表"。"离线批量跑 LLM 出计划" 那一步不在
+# 这个端点里发生（不适合同步 HTTP 调用一次性跑几十条 LLM 请求，也不该由这个
+# 端点自己臆造 plan_json——那会违反"禁止降级返回假数据"：没有真实 LLM
+# parse 结果时绝不能自己拼一个假计划充数）。这个端点对应的是流程最后一步
+# "逐条人审入表"：调用方（人工审核完毕后的 web UI，或离线批跑脚本的输出）
+# 为每条问法都带上已经跑出来、已经人审过的 plan_json，本端点只做批量校验
+# + 落 `ai_promoted_routes`（source='manual_seed'，与 approve 的
+# source='flywheel' 区分晋升来源）。逐条独立处理、一条失败不拖累其余条目，
+# 响应里同时报 added/skipped，镜像 `apply_promotions` 的既有设计哲学。
+
+class SeedImportEntry(BaseModel):
+    query: str = Field(..., min_length=1, max_length=500)
+    code: str = Field(..., description="RESTAURANT_OPS_* 意图代码")
+    plan_json: Dict[str, Any] = Field(
+        ..., description="离线批跑 LLM 出的计划 (必填——本端点不臆造计划)"
+    )
+    scope: str = Field("global")
+    plan_version: Optional[str] = Field(None)
+
+
+class SeedImportRequest(BaseModel):
+    domain: str = Field("restaurant")
+    entries: List[SeedImportEntry] = Field(..., min_length=1, max_length=200)
+
+
+@router.post("/candidates/seed-import")
+async def seed_import_candidates(request: Request, body: SeedImportRequest) -> dict:
+    _require_platform_admin(request, action_name="AI 飞轮 manual_seed 批量导入")
+    _domain_prefix(body.domain)
+
+    from smartbi.gold.restaurant_intent import _VALID_CODES, _normalize_exact_phrase
+
+    reviewed_by = _reviewed_by(request)
+    pool = await _get_pool_or_503()
+
+    added: List[Dict[str, Any]] = []
+    skipped: List[Dict[str, Any]] = []
+    for entry in body.entries:
+        query = entry.query.strip()
+        if not query:
+            skipped.append({"query": entry.query, "reason": "empty_query"})
+            continue
+        if entry.code not in _VALID_CODES:
+            skipped.append({"query": query, "reason": f"invalid_code:{entry.code!r}"})
+            continue
+        normalized_phrase = _normalize_exact_phrase(query)
+        plan_version = entry.plan_version or (entry.plan_json.get("plan_version") if isinstance(entry.plan_json, dict) else None) or "1"
+        try:
+            async with pool.acquire() as conn:
+                await _admin_channel_guc(conn)  # 同 approve_candidate: 批量导入是跨租户操作
+                try:
+                    row = await _insert_promoted_route(
+                        conn, domain=body.domain, normalized_phrase=normalized_phrase,
+                        plan_json=entry.plan_json, plan_version=plan_version,
+                        source="manual_seed", scope=entry.scope, reviewed_by=reviewed_by,
+                    )
+                except asyncpg.exceptions.InsufficientPrivilegeError as exc:
+                    skipped.append({"query": query, "reason": f"rls_denied: {exc}"})
+                    continue
+        except asyncpg.UndefinedTableError:
+            # 表不存在是全局性的（不是某一条的问题）——不必逐条重复报同一件事,
+            # 整个请求直接 503，比把 200 条同样的 skipped 塞进响应更清楚。
+            raise HTTPException(
+                status_code=503,
+                detail="ai_promoted_routes 表不存在（依赖卡2 migration，尚未 merge，seed-import 暂不可用）",
+            )
+        except Exception as exc:
+            logger.error(f"[flywheel] seed_import_candidates entry failed (query={query!r}): {exc}")
+            skipped.append({"query": query, "reason": f"insert_failed: {exc}"})
+            continue
+        added.append({
+            "query": query, "code": entry.code, "normalized_phrase": normalized_phrase,
+            "hit_count": int(row["hit_count"] or 0) if row else 0,
+        })
+
+    return success_response(
+        data={"domain": body.domain, "added": added, "skipped": skipped,
+              "added_count": len(added), "skipped_count": len(skipped)},
+        message=f"批量导入完成: {len(added)} 条通过, {len(skipped)} 条跳过",
+    )
+
+
+# ═══════════════════════════════════════════════════════════════════════
 # GET /misses
 # ═══════════════════════════════════════════════════════════════════════
 
@@ -471,7 +707,7 @@ async def list_misses(
     domain: str = Query("restaurant"),
     limit: int = Query(200, ge=1, le=1000),
 ) -> dict:
-    require_admin(request, action_name="AI 飞轮 Miss 复盘")
+    _require_platform_admin(request, action_name="AI 飞轮 Miss 复盘")
     if domain != "restaurant":
         _domain_prefix(domain)
 
@@ -480,9 +716,48 @@ async def list_misses(
     pool = await _get_pool_or_503()
     misses = await promo.aggregate_misses(pool, limit=limit, factory_id=None)
 
+    # 卡5 前端补充契约: 每条 miss 附带处理状态 (默认 'unreviewed' -- 未在
+    # MISS_STATUS_FILE 里出现的问法就是还没被人工标注过)。
+    status_map = promo.load_miss_status()
+    for m in misses:
+        entry = status_map.get(m["query"])
+        m["status"] = entry["status"] if entry else "unreviewed"
+        m["status_note"] = entry.get("note") if entry else None
+        m["status_updated_at"] = entry.get("updated_at") if entry else None
+
     return success_response(
         data={"domain": domain, "count": len(misses), "misses": misses},
         message="Miss 聚合查询完成",
+    )
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# POST /misses/status (卡5 前端补充契约: miss 复盘处理状态标注)
+# ═══════════════════════════════════════════════════════════════════════
+
+class MissStatusRequest(BaseModel):
+    domain: str = Field("restaurant")
+    query: str = Field(..., min_length=1, max_length=500)
+    status: str = Field(..., description=f"允许值: {sorted(['unreviewed', 'planned', 'wontfix', 'duplicate', 'resolved'])}")
+    note: Optional[str] = Field(None, max_length=1000)
+
+
+@router.post("/misses/status")
+async def set_miss_status(request: Request, body: MissStatusRequest) -> dict:
+    _require_platform_admin(request, action_name="AI 飞轮 Miss 状态标注")
+    _domain_prefix(body.domain)
+
+    from smartbi.gold import restaurant_intent_promotion as promo
+
+    result = promo.set_miss_status(
+        body.query, body.status, note=body.note, reviewed_by=_reviewed_by(request),
+    )
+    if not result.get("ok"):
+        raise HTTPException(status_code=400, detail=f"状态标注失败: {result.get('reason', '未知原因')}")
+
+    return success_response(
+        data=result,
+        message="已标注处理状态（rsync 部署前需人工 commit 该文件，见响应 durable=false）",
     )
 
 
@@ -496,7 +771,7 @@ async def quality(
     domain: str = Query("restaurant"),
     limit: int = Query(100, ge=1, le=1000),
 ) -> dict:
-    require_admin(request, action_name="AI 飞轮质量与回归")
+    _require_platform_admin(request, action_name="AI 飞轮质量与回归")
     prefix = _domain_prefix(domain)
     pool = await _get_pool_or_503()
 
@@ -553,7 +828,7 @@ class DatasetExportRequest(BaseModel):
 
 @router.post("/dataset/export")
 async def export_dataset(request: Request, body: DatasetExportRequest) -> dict:
-    require_admin(request, action_name="AI 飞轮蒸馏数据集导出")
+    _require_platform_admin(request, action_name="AI 飞轮蒸馏数据集导出")
     prefix = _domain_prefix(body.domain)
     pool = await _get_pool_or_503()
 
