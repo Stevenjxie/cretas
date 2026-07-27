@@ -1,24 +1,34 @@
 /**
  * AI 飞轮运营台 API — 卡5 (web-admin) / 卡5b (Python 后端) 共用契约。
  *
- * Backend (卡5b, 未就绪时见下方 MOCK 层): Python /api/smartbi/flywheel/*
+ * Backend (卡5b): Python /api/smartbi/flywheel/*
  *   GET  /overview?domain=&days=
  *   GET  /candidates?domain=&status=
- *   POST /candidates/approve   { id, domain, note? }
+ *   POST /candidates/approve   { id, domain, note? }             — ⚠️ ai_promoted_routes 表未就绪时返回
+ *        503 (明确失败, 非假成功), 见 flywheelApi.approveCandidate 调用方必须正确展示该错误
  *   POST /candidates/reject    { id, domain, reason }
- *   POST /candidates/seed-import  { domain, queries: string[] }  (扩展点, 契约卡未列出但页面 2 "manual_seed
- *        批量导入" 需要; 卡5b 落地后如端点不同, 只需改本文件 seedImportCandidates 一处)
+ *   POST /candidates/seed-import  { domain, queries: string[] }  (⚠️ 扩展点 — 卡5b 契约卡 6 端点未列出此项,
+ *        页面 2 "manual_seed 批量导入" 需要, 待卡5b 补齐前真实模式下会 404, 按正常失败展示)
  *   GET  /misses?domain=&status=
- *   POST /misses/status        { id, domain, status }  (扩展点, 页面 3 "标注处理状态" 需要, 契约卡未列出)
+ *   POST /misses/status        { id, domain, status }  (⚠️ 扩展点 — 同上, 待卡5b 补齐前真实模式下会 404)
  *   GET  /quality?domain=&days=
  *   POST /dataset/export       { domain, start_date?, end_date?, contract_pass?, served?, feedback? }
  *
- * ============ MOCK 切换说明 ============
- * `FORCE_MOCK` 常量: true = 无论后端是否就绪, 一律用本文件内 mock 生成器(用于本地/演示/UI 冻结验收)。
- * 默认 FORCE_MOCK=false: 每个函数先尝试真实请求, 若失败(网络错误/404/500, 卡5b 尚未部署时的正常状态)
- * 才回退 mock 并 console.warn 提示。**卡5b 后端上线后不需要改代码** — 请求会自然转为成功。
- * 若要在后端已上线后仍强制看 mock (例如演示脚本), 把 FORCE_MOCK 改 true 即可, 或未来可换成
- * `import.meta.env.VITE_FLYWHEEL_MOCK === 'true'` 环境变量开关。
+ * ============ MOCK 切换说明 (2026-07-28 阻断项修复) ============
+ * 核心原则 (CLAUDE.md #1 「禁止降级处理」): 真实请求失败绝不允许静默回落 mock —
+ * 这是飞轮运营台, 晋升审核是人审闸门, 假数据可能被人工"通过"写进生产 ai_promoted_routes。
+ *
+ * `FORCE_MOCK` 常量 + `FLYWHEEL_MOCK_ACTIVE` 导出常量 = `import.meta.env.DEV && FORCE_MOCK`:
+ * - 只有「显式开关 FORCE_MOCK=true」且「本地 dev 构建 (import.meta.env.DEV)」同时成立才会用 mock。
+ * - `import.meta.env.DEV` 在 `vite build` (生产构建) 下被 Vite 静态替换为 `false`, 整个
+ *   `FLYWHEEL_MOCK_ACTIVE` 表达式常量折叠为 `false`, 所有 mock 分支被打包器判定为死代码 —
+ *   **生产构建下即使有人忘记把 FORCE_MOCK 改回 false, mock 也不会生效**, 这是双重保险而非唯一防线。
+ * - 生产构建里任何真实请求失败(网络错误/404/500/503)就是失败, 直接 reject 给调用方 (页面) 处理,
+ *   不会被本文件吞掉或替换成假数据。
+ * - GET 类 mock: 返回 mock 生成器数据, 页面需用 `FLYWHEEL_MOCK_ACTIVE` 显示醒目 MOCK 标识 (见
+ *   FlywheelHeader.vue), 防止有人把 mock 截图当真实数据汇报。
+ * - 写/导出类 mock (approve/reject/seed-import/misses-status/dataset-export): **不伪装成功**,
+ *   直接 throw 明确错误, 提示"MOCK 模式下不执行真实写入", 调用方按正常失败路径展示。
  */
 import { adminGet, adminPost } from '../request';
 import { PYTHON_SMARTBI_URL } from './common';
@@ -26,6 +36,9 @@ import { PYTHON_SMARTBI_URL } from './common';
 const BASE = `${PYTHON_SMARTBI_URL}/api/smartbi/flywheel`;
 
 const FORCE_MOCK = false;
+
+/** mock 生效的唯一判定 — 页面用它渲染 MOCK 标识; 生产构建下恒为 false (Vite 常量折叠 + 死代码消除)。 */
+export const FLYWHEEL_MOCK_ACTIVE = import.meta.env.DEV && FORCE_MOCK;
 
 // ==================== Types ====================
 
@@ -164,7 +177,7 @@ function mockWindowMetrics(scale: number): FlywheelWindowMetrics {
   };
 }
 
-export function buildMockOverview(domain: string): FlywheelOverview {
+function buildMockOverview(domain: string): FlywheelOverview {
   return {
     domain,
     generated_at: new Date().toISOString(),
@@ -186,7 +199,7 @@ const SAMPLE_QUERIES = [
   '周末和工作日营业额差多少', '哪几个菜最近卖得少了', '本季度净利润率',
 ];
 
-export function buildMockCandidates(domain: string): FlywheelCandidate[] {
+function buildMockCandidates(domain: string): FlywheelCandidate[] {
   return SAMPLE_QUERIES.map((q, i) => ({
     id: `cand-${domain}-${i + 1}`,
     domain,
@@ -211,7 +224,7 @@ export function buildMockCandidates(domain: string): FlywheelCandidate[] {
   }));
 }
 
-export function buildMockMisses(domain: string): FlywheelMiss[] {
+function buildMockMisses(domain: string): FlywheelMiss[] {
   const misses = [
     '隔壁老王家最近怎么样', '帮我订明天的食材', '这个月天气对客流影响多大',
     '竞对门店价格怎么样', '能不能自动生成月报发我邮箱', '客如云的库存和我们对得上吗',
@@ -228,7 +241,7 @@ export function buildMockMisses(domain: string): FlywheelMiss[] {
   }));
 }
 
-export function buildMockQuality(domain: string): FlywheelQuality {
+function buildMockQuality(domain: string): FlywheelQuality {
   const contractFailures: ContractFailureRow[] = Array.from({ length: 6 }).map((_, i) => ({
     id: `cf-${domain}-${i + 1}`,
     ts: new Date(Date.now() - i * 5400000).toISOString(),
@@ -260,7 +273,7 @@ export function buildMockQuality(domain: string): FlywheelQuality {
   return { domain, contract_failures: contractFailures, negative_feedback: negativeFeedback, battery_trend: batteryTrend };
 }
 
-export function buildMockDatasetExport(params: DatasetExportParams): DatasetExportResult {
+function buildMockDatasetExport(params: DatasetExportParams): DatasetExportResult {
   const rows = SAMPLE_QUERIES.slice(0, 8).map((q, i) => ({
     query: q,
     domain: params.domain,
@@ -272,102 +285,81 @@ export function buildMockDatasetExport(params: DatasetExportParams): DatasetExpo
   return { count: rows.length, jsonl: rows.map((r) => JSON.stringify(r)).join('\n') };
 }
 
-// ==================== API (real-first, mock fallback) ====================
+// ==================== API (real-only; mock 只在 FLYWHEEL_MOCK_ACTIVE 下生效, 见文件头注释) ====================
 
-async function withMockFallback<T>(real: () => Promise<T>, mock: () => T, label: string): Promise<T> {
-  if (FORCE_MOCK) return mock();
-  try {
-    return await real();
-  } catch (e) {
-    // 卡5b 后端未就绪期间的预期路径 — 不视为错误, 静默降级到 mock 供 UI 联调/演示。
-    console.warn(`[ai-flywheel] ${label} 真实接口不可用, 回退 mock:`, e instanceof Error ? e.message : e);
-    return mock();
-  }
-}
-
-// _silent: true — 卡5b 后端未就绪期间 404/500 是预期路径 (withMockFallback 会静默降级),
-// 不应该弹全局 sticky error toast 吓用户; 见 src/api/request.ts 的 _silent 拦截器约定。
+// _silent: true — 页面自己按 AlertDashboard.vue 既定约定处理错误态 (本地 error ref + el-alert
+// 常驻横幅 + 自建 sticky ElMessage(duration:0, showClose:true)), 不需要拦截器再弹一次通用 toast。
+// ⚠️ 这不是"静默降级"的 _silent (那是本文件之前的阻断项) — 请求失败仍然 reject, 调用方 (页面
+// load()/操作函数的 catch) 必须显式渲染错误, 不允许吞掉或换成假数据。
 const SILENT = { _silent: true };
 
+function mockWriteBlocked(action: string): never {
+  throw new Error(`MOCK 模式下不执行真实写入 (${action}) — 请连接真实后端 (卡5b) 后再操作`);
+}
+
 export const flywheelApi = {
-  overview: (domain: string, days: number) =>
-    withMockFallback(
-      async () =>
-        (await adminGet<FlywheelOverview>(`${BASE}/overview?domain=${encodeURIComponent(domain)}&days=${days}`, SILENT))
-          .data as FlywheelOverview,
-      () => buildMockOverview(domain),
-      'overview',
-    ),
+  overview: async (domain: string, days: number): Promise<FlywheelOverview> => {
+    if (FLYWHEEL_MOCK_ACTIVE) return buildMockOverview(domain);
+    return (
+      await adminGet<FlywheelOverview>(`${BASE}/overview?domain=${encodeURIComponent(domain)}&days=${days}`, SILENT)
+    ).data as FlywheelOverview;
+  },
 
-  candidates: (domain: string, status?: CandidateStatus) =>
-    withMockFallback(
-      async () =>
-        (
-          await adminGet<FlywheelCandidate[]>(
-            `${BASE}/candidates?domain=${encodeURIComponent(domain)}${status ? '&status=' + status : ''}`,
-            SILENT,
-          )
-        ).data as FlywheelCandidate[],
-      () => buildMockCandidates(domain),
-      'candidates',
-    ),
+  candidates: async (domain: string, status?: CandidateStatus): Promise<FlywheelCandidate[]> => {
+    if (FLYWHEEL_MOCK_ACTIVE) return buildMockCandidates(domain);
+    return (
+      await adminGet<FlywheelCandidate[]>(
+        `${BASE}/candidates?domain=${encodeURIComponent(domain)}${status ? '&status=' + status : ''}`,
+        SILENT,
+      )
+    ).data as FlywheelCandidate[];
+  },
 
-  approveCandidate: (id: string, domain: string, note?: string) =>
-    withMockFallback(
-      async () => (await adminPost<{ id: string }>(`${BASE}/candidates/approve`, { id, domain, note }, SILENT)).data,
-      () => ({ id }),
-      'candidates/approve',
-    ),
+  approveCandidate: async (id: string, domain: string, note?: string) => {
+    if (FLYWHEEL_MOCK_ACTIVE) mockWriteBlocked('晋升候选通过');
+    // ⚠️ 卡5b: ai_promoted_routes 表未就绪时返回 503 (明确失败) — 走正常 reject 路径,
+    // 由调用方 (Candidates.vue handleApprove) 的 catch 展示, 不当作成功处理。
+    return (await adminPost<{ id: string }>(`${BASE}/candidates/approve`, { id, domain, note }, SILENT)).data;
+  },
 
-  rejectCandidate: (id: string, domain: string, reason: string) =>
-    withMockFallback(
-      async () => (await adminPost<{ id: string }>(`${BASE}/candidates/reject`, { id, domain, reason }, SILENT)).data,
-      () => ({ id }),
-      'candidates/reject',
-    ),
+  rejectCandidate: async (id: string, domain: string, reason: string) => {
+    if (FLYWHEEL_MOCK_ACTIVE) mockWriteBlocked('晋升候选否决');
+    return (await adminPost<{ id: string }>(`${BASE}/candidates/reject`, { id, domain, reason }, SILENT)).data;
+  },
 
-  seedImportCandidates: (domain: string, queries: string[]) =>
-    withMockFallback(
-      async () =>
-        (await adminPost<{ imported: number }>(`${BASE}/candidates/seed-import`, { domain, queries }, SILENT))
-          .data as { imported: number },
-      () => ({ imported: queries.length }),
-      'candidates/seed-import',
-    ),
+  // 扩展点 (卡5b 6 端点契约未列出, 待补齐前真实模式下预期 404 — 按正常失败展示, 不是假成功)
+  seedImportCandidates: async (domain: string, queries: string[]) => {
+    if (FLYWHEEL_MOCK_ACTIVE) mockWriteBlocked('manual_seed 批量导入');
+    return (
+      await adminPost<{ imported: number }>(`${BASE}/candidates/seed-import`, { domain, queries }, SILENT)
+    ).data as { imported: number };
+  },
 
-  misses: (domain: string, status?: string) =>
-    withMockFallback(
-      async () =>
-        (
-          await adminGet<FlywheelMiss[]>(
-            `${BASE}/misses?domain=${encodeURIComponent(domain)}${status ? '&status=' + status : ''}`,
-            SILENT,
-          )
-        ).data as FlywheelMiss[],
-      () => buildMockMisses(domain),
-      'misses',
-    ),
+  misses: async (domain: string, status?: string): Promise<FlywheelMiss[]> => {
+    if (FLYWHEEL_MOCK_ACTIVE) return buildMockMisses(domain);
+    return (
+      await adminGet<FlywheelMiss[]>(
+        `${BASE}/misses?domain=${encodeURIComponent(domain)}${status ? '&status=' + status : ''}`,
+        SILENT,
+      )
+    ).data as FlywheelMiss[];
+  },
 
-  updateMissStatus: (id: string, domain: string, status: FlywheelMiss['status']) =>
-    withMockFallback(
-      async () => (await adminPost<{ id: string }>(`${BASE}/misses/status`, { id, domain, status }, SILENT)).data,
-      () => ({ id }),
-      'misses/status',
-    ),
+  // 扩展点 (同上, 待卡5b 补齐前真实模式下预期 404)
+  updateMissStatus: async (id: string, domain: string, status: FlywheelMiss['status']) => {
+    if (FLYWHEEL_MOCK_ACTIVE) mockWriteBlocked('Miss 处理状态更新');
+    return (await adminPost<{ id: string }>(`${BASE}/misses/status`, { id, domain, status }, SILENT)).data;
+  },
 
-  quality: (domain: string, days: number) =>
-    withMockFallback(
-      async () =>
-        (await adminGet<FlywheelQuality>(`${BASE}/quality?domain=${encodeURIComponent(domain)}&days=${days}`, SILENT))
-          .data as FlywheelQuality,
-      () => buildMockQuality(domain),
-      'quality',
-    ),
+  quality: async (domain: string, days: number): Promise<FlywheelQuality> => {
+    if (FLYWHEEL_MOCK_ACTIVE) return buildMockQuality(domain);
+    return (
+      await adminGet<FlywheelQuality>(`${BASE}/quality?domain=${encodeURIComponent(domain)}&days=${days}`, SILENT)
+    ).data as FlywheelQuality;
+  },
 
-  exportDataset: (params: DatasetExportParams) =>
-    withMockFallback(
-      async () => (await adminPost<DatasetExportResult>(`${BASE}/dataset/export`, params, SILENT)).data as DatasetExportResult,
-      () => buildMockDatasetExport(params),
-      'dataset/export',
-    ),
+  exportDataset: async (params: DatasetExportParams): Promise<DatasetExportResult> => {
+    if (FLYWHEEL_MOCK_ACTIVE) mockWriteBlocked('蒸馏数据集导出');
+    return (await adminPost<DatasetExportResult>(`${BASE}/dataset/export`, params, SILENT)).data as DatasetExportResult;
+  },
 };

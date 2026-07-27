@@ -10,6 +10,7 @@ const { domain } = useFlywheelDomain();
 const loading = ref(false);
 const candidates = ref<FlywheelCandidate[]>([]);
 const statusFilter = ref<CandidateStatus>('pending');
+const error = ref('');
 
 const STATUS_TABS: Array<{ key: CandidateStatus; label: string }> = [
   { key: 'pending', label: '待审核' },
@@ -21,10 +22,16 @@ const filtered = computed(() => candidates.value.filter((c) => c.status === stat
 
 async function load() {
   loading.value = true;
+  error.value = '';
   try {
     candidates.value = await flywheelApi.candidates(domain.value);
   } catch (e) {
-    ElMessage.error('加载晋升候选失败: ' + (e instanceof Error ? e.message : String(e)));
+    // 禁止降级处理: 失败就明确失败, candidates 保持空数组 (晋升审核工作台绝不能显示编造的
+    // 候选问法 — 否则人可能对着不存在的问法点"通过", 写进生产 ai_promoted_routes)。
+    const msg = e instanceof Error ? e.message : String(e);
+    error.value = msg;
+    candidates.value = [];
+    ElMessage({ message: `加载晋升候选失败: ${msg}`, type: 'error', duration: 0, showClose: true });
   } finally {
     loading.value = false;
   }
@@ -32,19 +39,29 @@ async function load() {
 
 // ============ 一键通过 ============
 async function handleApprove(row: FlywheelCandidate) {
+  await ElMessage.closeAll();
+  const { ElMessageBox } = await import('element-plus');
   try {
-    await ElMessage.closeAll();
-    const { ElMessageBox } = await import('element-plus');
     await ElMessageBox.confirm(
       `确认将问法「${row.query_text}」的计划晋升入 ai_promoted_routes？晋升后该问法将走确定性直答通道 (不再消耗 LLM 调用)。`,
       '通过晋升候选',
       { confirmButtonText: '确认通过', cancelButtonText: '取消', type: 'success' },
     );
+  } catch {
+    // 用户取消 confirm dialog — 正常退出, 不算错误
+    return;
+  }
+  // ⚠️ 之前的实现把这次 try/catch 和上面的 confirm 合并在一起, 导致 approveCandidate 真实失败
+  // (例如卡5b ai_promoted_routes 表未建好时的 503) 被当成"用户取消"静默吞掉, 界面上什么都不
+  // 提示, row.status 也没变 — 人审员会以为"点了但没反应", 反复点击。分离成独立 try/catch 后,
+  // 真实写入失败会明确展示 (sticky toast), 不会被误判为用户主动取消。
+  try {
     await flywheelApi.approveCandidate(row.id, domain.value);
     row.status = 'approved';
     ElMessage.success(`已通过「${row.query_text}」`);
-  } catch {
-    // 用户取消
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    ElMessage({ message: `晋升写入失败, 「${row.query_text}」未生效: ${msg}`, type: 'error', duration: 0, showClose: true });
   }
 }
 
@@ -83,7 +100,8 @@ async function confirmReject() {
     ElMessage.success(`已否决「${rejectTarget.value.query_text}」`);
     rejectDialogVisible.value = false;
   } catch (e) {
-    ElMessage.error('否决失败: ' + (e instanceof Error ? e.message : String(e)));
+    const msg = e instanceof Error ? e.message : String(e);
+    ElMessage({ message: `否决失败: ${msg}`, type: 'error', duration: 0, showClose: true });
   }
 }
 
@@ -120,7 +138,10 @@ async function submitSeedImport() {
     seedText.value = '';
     load();
   } catch (e) {
-    ElMessage.error('批量导入失败: ' + (e instanceof Error ? e.message : String(e)));
+    // seed-import 是卡5b 契约外扩展点, 待补齐前真实模式下预期 404 — 按正常失败展示,
+    // 不当成功处理 (导入 dialog 不会关闭, 用户能看到明确失败原因)。
+    const msg = e instanceof Error ? e.message : String(e);
+    ElMessage({ message: `批量导入失败: ${msg}`, type: 'error', duration: 0, showClose: true });
   } finally {
     seedImporting.value = false;
   }
@@ -143,6 +164,18 @@ watch(domain, load);
   <div class="page-container">
     <FlywheelHeader v-model:domain="domain" />
 
+    <!-- 禁止降级处理: 加载失败时下面表格是空的 (candidates=[]), 这里明确告知"接口不可用",
+         防止人审员误以为"当前没有候选" (业务空态) 而不是"看不到真实候选" (接口故障)。 -->
+    <el-alert
+      v-if="error"
+      :title="`后端接口不可用: ${error}`"
+      type="error"
+      :closable="false"
+      show-icon
+      class="load-error-alert"
+      data-test="flywheel-candidates-error"
+    />
+
     <el-card shadow="never">
       <template #header>
         <div class="card-header">
@@ -161,7 +194,7 @@ watch(domain, load);
         </div>
       </template>
 
-      <el-table :data="filtered" v-loading="loading" stripe empty-text="暂无候选">
+      <el-table :data="filtered" v-loading="loading" stripe :empty-text="error ? '加载失败, 详见上方提示' : '暂无候选'">
         <el-table-column label="问法" min-width="220">
           <template #default="{ row }">
             <div class="query-cell">
@@ -261,6 +294,9 @@ watch(domain, load);
 <style scoped>
 .page-container {
   padding: 20px;
+}
+.load-error-alert {
+  margin-bottom: 16px;
 }
 .card-header {
   display: flex;

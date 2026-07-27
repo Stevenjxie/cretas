@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { useRoute, useRouter } from 'vue-router';
+import { FLYWHEEL_MOCK_ACTIVE } from '@/api/smartbi/ai-flywheel';
 
 defineProps<{
   domain: string;
@@ -24,6 +25,23 @@ function go(path: string) {
 
 <template>
   <div class="flywheel-header">
+    <!-- MOCK 模式醒目横幅 (阻断项修复): 只在 FLYWHEEL_MOCK_ACTIVE (显式开关+本地 dev 构建双重条件)
+         下出现, 生产构建恒不出现, 防止有人把 mock 截图当真实飞轮数据汇报 / 审核。 -->
+    <el-alert
+      v-if="FLYWHEEL_MOCK_ACTIVE"
+      type="warning"
+      :closable="false"
+      show-icon
+      class="mock-banner"
+      data-test="flywheel-mock-banner"
+    >
+      <template #title>演示数据 / MOCK — 非真实飞轮数据, 未连接卡5b 真实后端</template>
+      <div style="font-size: 12px; line-height: 1.6">
+        当前页面所有指标 / 候选 / Miss / 质量数据均为本地随机生成的演示数据, 晋升通过 / 否决 /
+        数据集导出等写操作在此模式下不会真实生效。仅本地开发构建在显式打开 FORCE_MOCK 开关时出现,
+        生产构建不会展示本横幅。
+      </div>
+    </el-alert>
     <div class="title-row">
       <div class="title-block">
         <h2>AI 飞轮运营台</h2>
@@ -55,6 +73,9 @@ function go(path: string) {
 <style scoped>
 .flywheel-header {
   margin-bottom: 16px;
+}
+.mock-banner {
+  margin-bottom: 12px;
 }
 .title-row {
   display: flex;

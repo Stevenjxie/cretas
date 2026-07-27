@@ -9,6 +9,7 @@ import { flywheelApi, type FlywheelOverview } from '@/api/smartbi/ai-flywheel';
 const { domain } = useFlywheelDomain();
 const loading = ref(false);
 const data = ref<FlywheelOverview | null>(null);
+const error = ref('');
 
 const WINDOWS: Array<{ key: 'today' | 'd7' | 'd30'; label: string }> = [
   { key: 'today', label: '今日' },
@@ -18,10 +19,17 @@ const WINDOWS: Array<{ key: 'today' | 'd7' | 'd30'; label: string }> = [
 
 async function load() {
   loading.value = true;
+  error.value = '';
   try {
     data.value = await flywheelApi.overview(domain.value, 30);
   } catch (e) {
-    ElMessage.error('加载总览看板失败: ' + (e instanceof Error ? e.message : String(e)));
+    // 禁止降级处理 (CLAUDE.md #1): 真实接口失败就明确失败, 不渲染任何数字 —
+    // data 保持 null (上面 v-if="data" 会隐藏所有指标卡), 同时用常驻 el-alert + sticky
+    // toast 双通道告知用户"后端接口不可用", 而不是悄悄换成假数据。
+    const msg = e instanceof Error ? e.message : String(e);
+    error.value = msg;
+    data.value = null;
+    ElMessage({ message: `加载总览看板失败: ${msg}`, type: 'error', duration: 0, showClose: true });
   } finally {
     loading.value = false;
   }
@@ -66,7 +74,18 @@ watch(domain, load);
       <span v-if="data" class="generated-at">数据截至 {{ new Date(data.generated_at).toLocaleString('zh-CN') }}</span>
     </div>
 
-    <el-row :gutter="16" v-loading="loading">
+    <!-- 错误态 (4-位一体: sticky toast 已在 load() 内触发, 这里再显式常驻展示; 不渲染任何假数字) -->
+    <el-alert
+      v-if="error"
+      :title="`后端接口不可用: ${error}`"
+      type="error"
+      :closable="false"
+      show-icon
+      class="load-error-alert"
+      data-test="flywheel-overview-error"
+    />
+
+    <el-row :gutter="16" v-loading="loading" v-if="data || loading">
       <el-col v-for="w in WINDOWS" :key="w.key" :xs="24" :sm="24" :md="8">
         <el-card class="window-card" shadow="hover">
           <template #header>
@@ -117,7 +136,7 @@ watch(domain, load);
       </el-col>
     </el-row>
 
-    <el-card class="section-card" v-loading="loading">
+    <el-card class="section-card" v-loading="loading" v-if="data || loading">
       <template #header>
         <div class="section-header">
           <span>LLM 档位分布 (近 30 日)</span>
@@ -144,6 +163,9 @@ watch(domain, load);
   display: flex;
   align-items: center;
   gap: 12px;
+  margin-bottom: 16px;
+}
+.load-error-alert {
   margin-bottom: 16px;
 }
 .generated-at {

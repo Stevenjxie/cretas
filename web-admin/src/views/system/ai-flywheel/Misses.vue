@@ -10,6 +10,7 @@ const { domain } = useFlywheelDomain();
 const loading = ref(false);
 const misses = ref<FlywheelMiss[]>([]);
 const statusFilter = ref<string>('all');
+const error = ref('');
 
 const STATUS_OPTIONS: Array<{ value: FlywheelMiss['status']; label: string; type: 'info' | 'warning' | 'success' | 'danger' }> = [
   { value: 'open', label: '待处理', type: 'danger' },
@@ -24,10 +25,15 @@ const filtered = computed(() =>
 
 async function load() {
   loading.value = true;
+  error.value = '';
   try {
     misses.value = await flywheelApi.misses(domain.value);
   } catch (e) {
-    ElMessage.error('加载 Miss 复盘失败: ' + (e instanceof Error ? e.message : String(e)));
+    // 禁止降级处理: 失败就明确失败, misses 保持空数组 (不渲染假记录), 常驻错误横幅 + sticky toast。
+    const msg = e instanceof Error ? e.message : String(e);
+    error.value = msg;
+    misses.value = [];
+    ElMessage({ message: `加载 Miss 复盘失败: ${msg}`, type: 'error', duration: 0, showClose: true });
   } finally {
     loading.value = false;
   }
@@ -41,7 +47,8 @@ async function onStatusChange(row: FlywheelMiss, status: FlywheelMiss['status'])
     ElMessage.success(`「${row.query_text}」已标记为「${statusLabel(status)}」`);
   } catch (e) {
     row.status = prev;
-    ElMessage.error('更新状态失败: ' + (e instanceof Error ? e.message : String(e)));
+    const msg = e instanceof Error ? e.message : String(e);
+    ElMessage({ message: `更新状态失败: ${msg}`, type: 'error', duration: 0, showClose: true });
   }
 }
 
@@ -63,6 +70,16 @@ watch(domain, load);
   <div class="page-container">
     <FlywheelHeader v-model:domain="domain" />
 
+    <el-alert
+      v-if="error"
+      :title="`后端接口不可用: ${error}`"
+      type="error"
+      :closable="false"
+      show-icon
+      class="load-error-alert"
+      data-test="flywheel-misses-error"
+    />
+
     <el-card shadow="never">
       <template #header>
         <div class="card-header">
@@ -77,7 +94,7 @@ watch(domain, load);
         </div>
       </template>
 
-      <el-table :data="filtered" v-loading="loading" stripe empty-text="暂无 miss 记录">
+      <el-table :data="filtered" v-loading="loading" stripe :empty-text="error ? '加载失败, 详见上方提示' : '暂无 miss 记录'">
         <el-table-column label="问法" prop="query_text" min-width="220" show-overflow-tooltip />
         <el-table-column label="模板" prop="template_code" width="180" />
         <el-table-column label="出现次数" prop="count" width="100" sortable align="center" />
@@ -107,6 +124,9 @@ watch(domain, load);
 <style scoped>
 .page-container {
   padding: 20px;
+}
+.load-error-alert {
+  margin-bottom: 16px;
 }
 .card-header {
   display: flex;

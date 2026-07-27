@@ -15,6 +15,7 @@ const feedback = ref<'all' | 'up' | 'down'>('all');
 
 const exporting = ref(false);
 const result = ref<DatasetExportResult | null>(null);
+const error = ref('');
 
 const previewLines = computed(() => {
   if (!result.value) return [];
@@ -23,6 +24,7 @@ const previewLines = computed(() => {
 
 async function runExport() {
   exporting.value = true;
+  error.value = '';
   try {
     result.value = await flywheelApi.exportDataset({
       domain: domain.value,
@@ -34,7 +36,12 @@ async function runExport() {
     });
     ElMessage.success(`已生成 ${result.value.count} 条训练对, 可下载 JSONL`);
   } catch (e) {
-    ElMessage.error('导出失败: ' + (e instanceof Error ? e.message : String(e)));
+    // 禁止降级处理: 导出失败就明确失败, result 保持 null (不渲染任何编造的训练对预览/
+    // 下载不了假 JSONL), 常驻错误横幅 + sticky toast。
+    const msg = e instanceof Error ? e.message : String(e);
+    error.value = msg;
+    result.value = null;
+    ElMessage({ message: `导出失败: ${msg}`, type: 'error', duration: 0, showClose: true });
   } finally {
     exporting.value = false;
   }
@@ -109,6 +116,16 @@ function downloadJsonl() {
       </el-form>
     </el-card>
 
+    <el-alert
+      v-if="error"
+      :title="`后端接口不可用: ${error}`"
+      type="error"
+      :closable="false"
+      show-icon
+      class="load-error-alert"
+      data-test="flywheel-dataset-error"
+    />
+
     <el-card v-if="result" shadow="never" class="result-card">
       <template #header>
         <div class="section-header">
@@ -120,7 +137,7 @@ function downloadJsonl() {
       <pre class="jsonl-preview">{{ previewLines.join('\n') }}</pre>
     </el-card>
 
-    <el-empty v-else description="设置筛选条件后点击「生成训练对」查看预览并下载" :image-size="90" />
+    <el-empty v-else-if="!error" description="设置筛选条件后点击「生成训练对」查看预览并下载" :image-size="90" />
   </div>
 </template>
 
@@ -129,6 +146,9 @@ function downloadJsonl() {
   padding: 20px;
 }
 .filter-card {
+  margin-bottom: 16px;
+}
+.load-error-alert {
   margin-bottom: 16px;
 }
 .filter-form :deep(.el-form-item) {

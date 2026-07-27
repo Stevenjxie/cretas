@@ -1286,7 +1286,9 @@ const businessRoutes: RouteRecordRaw[] = [
             meta: { requiresAuth: true, title: 'LLM 用量监控', module: 'system', roles: platformAdminOnlyRoles }
           },
           // 卡5 (2026-07-28 飞轮回接方案 P4 批): 飞轮运营台 — 蒸馏训练的驾驶舱.
-          // 5 个子页面, 平台管理员权限. API 未就绪期间前端走 mock (@/api/smartbi/ai-flywheel.ts).
+          // 5 个子页面, 平台管理员权限. real-only — 真实接口失败就是失败, 不回落假数据
+          // (阻断项修复); mock 仅限 FLYWHEEL_MOCK_ACTIVE 显式开关 + 本地 dev 构建双重条件下生效,
+          // 见 @/api/smartbi/ai-flywheel.ts 文件头。
           {
             path: 'ai-flywheel',
             redirect: '/system/ai-flywheel/overview',

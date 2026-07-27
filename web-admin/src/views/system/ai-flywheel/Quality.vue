@@ -11,6 +11,7 @@ import { flywheelApi, type FlywheelQuality } from '@/api/smartbi/ai-flywheel';
 const { domain } = useFlywheelDomain();
 const loading = ref(false);
 const data = ref<FlywheelQuality | null>(null);
+const error = ref('');
 const days = ref(30);
 
 const chartRef = ref<HTMLDivElement | null>(null);
@@ -18,12 +19,18 @@ let chart: ECharts | null = null;
 
 async function load() {
   loading.value = true;
+  error.value = '';
   try {
     data.value = await flywheelApi.quality(domain.value, days.value);
     await nextTick();
     renderChart();
   } catch (e) {
-    ElMessage.error('加载质量与回归数据失败: ' + (e instanceof Error ? e.message : String(e)));
+    // 禁止降级处理: 失败就明确失败, data 保持 null (契约失败明细/差评列表/趋势图全部留空,
+    // 不渲染任何编造的通过率或失败条目), 常驻错误横幅 + sticky toast。
+    const msg = e instanceof Error ? e.message : String(e);
+    error.value = msg;
+    data.value = null;
+    ElMessage({ message: `加载质量与回归数据失败: ${msg}`, type: 'error', duration: 0, showClose: true });
   } finally {
     loading.value = false;
   }
@@ -88,12 +95,22 @@ const latestPassRate = computed(() => {
       </span>
     </div>
 
-    <el-card class="section-card" v-loading="loading">
+    <el-alert
+      v-if="error"
+      :title="`后端接口不可用: ${error}`"
+      type="error"
+      :closable="false"
+      show-icon
+      class="load-error-alert"
+      data-test="flywheel-quality-error"
+    />
+
+    <el-card class="section-card" v-loading="loading" v-if="data || loading">
       <template #header><span>每日回归电池结果趋势</span></template>
       <div ref="chartRef" class="chart-box"></div>
     </el-card>
 
-    <el-row :gutter="16">
+    <el-row :gutter="16" v-if="data || loading">
       <el-col :xs="24" :md="14">
         <el-card class="section-card" v-loading="loading">
           <template #header>
@@ -152,6 +169,9 @@ const latestPassRate = computed(() => {
 }
 .latest-pass.warn {
   color: #f56c6c;
+}
+.load-error-alert {
+  margin-bottom: 16px;
 }
 .section-card {
   margin-bottom: 16px;
