@@ -112,6 +112,12 @@ public class FormAssistantController {
         @NotBlank(message = "实体类型不能为空")
         private String entityType;
 
+        /**
+         * Wire compatibility only: RN MaterialReceiptAIScreen still sends factory/supplier hints,
+         * but arbitrary client context is intentionally not injected into the prompt. Remove this
+         * field after that RN caller stops sending it and the API compatibility window closes, or
+         * replace it with an entity-specific allowlisted context contract.
+         */
         private Map<String, Object> context;
 
         /** 是否启用深度思考模式 (用于复杂解析场景) */
