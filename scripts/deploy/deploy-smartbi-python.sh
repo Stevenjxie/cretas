@@ -243,7 +243,18 @@ ssh $SERVER "mkdir -p $REMOTE_DIR"
 
 # 3. 同步文件到服务器
 log "INFO" "[3/5] 同步文件到服务器 (rsync 增量传输)..."
-rsync -az --timeout=120 \
+# ⚠️ --delete-after 是必须的 (2026-07-28 加): 没有它, 仓库里被删除/被移走的文件
+# 会**永久残留在服务器上**。餐饮域包重构 (restaurant_* 移入 gold/restaurant/) 之后
+# 实测: 服务器上新包与旧文件并存, 12 个最关键模块各有一份僵尸副本。当时功能没坏
+# (import 全部指向新路径), 但这种残留早晚坑人 —— 改了文件发现没生效, 能卡半天。
+#
+# 安全性已用 `--delete --dry-run` 实测: 删除清单为空, 说明下面这组 exclude 已经
+# 覆盖了服务器上全部"仓库里没有但必须保留"的运行时文件 (venv / .env / 日志 /
+# __pycache__ / 上传的 xlsx·png)。
+# ⛔ 绝不能加 --delete-excluded —— 那会把上面这些运行时文件一起删掉。
+# 用 --delete-after 而不是 --delete: 传输中途失败时不会出现"旧文件已删、新文件没到"
+# 的空窗, 删除只在全部传完之后发生。
+rsync -az --delete-after --timeout=120 \
     --exclude='__pycache__' --exclude='*.pyc' --exclude='.env' \
     --exclude='smartbi.log' --exclude='*.xlsx' --exclude='*.png' \
     --exclude='venv*' --exclude='python-services.log' \
