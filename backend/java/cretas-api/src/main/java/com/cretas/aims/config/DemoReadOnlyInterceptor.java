@@ -47,6 +47,11 @@ public class DemoReadOnlyInterceptor implements HandlerInterceptor {
             "/smart-bi/",    // BI 查询 / 经营驾驶舱 / 分析
             "/ai-intents/",  // AI 意图 chat
             "/ai/",          // AI
+            // 表单助手只把用户的一句话解析成字段值返回给前端预览, 自身不写任何库
+            // (真正建单要用户在表单上确认后走各自的业务 API, 那条路仍受只读锁约束)。
+            // 2026-07-28 实测: 演示租户调 /form-assistant/parse 被这个拦截器 403,
+            // 导致演示账号上填表 AI 完全不可用 —— 是白名单漏了它, 不是它该被拦。
+            "/form-assistant/",
             "/chat",         // chat
             "/analysis",     // 分析
             "/chart-insight", // chart insight read-only POST
