@@ -1,0 +1,5 @@
+# Detector weights are deployment artifacts, not source.
+# Uploaded by scripts/deploy/deploy-smartbi-python.sh; see
+# docs/specs/label-qc-yolo-screening.md for how to rebuild and export them.
+*.onnx
+*.pt
