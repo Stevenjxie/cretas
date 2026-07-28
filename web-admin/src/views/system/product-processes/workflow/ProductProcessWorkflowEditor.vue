@@ -108,6 +108,29 @@
         </template>
       </el-alert>
 
+      <el-alert
+        v-else-if="bomRevisionMismatchProducts.length > 0"
+        class="workflow-bom-alert"
+        data-testid="workflow-bom-revision-alert"
+        type="warning"
+        :closable="false"
+        show-icon
+      >
+        <template #title>
+          当前工艺已更新，{{ bomRevisionMismatchProducts.map((item) => item.name).join('、') }} 的生效 BOM 仍使用旧工艺
+        </template>
+        <template #default>
+          <span>请升级 BOM、补齐新增原料并激活新版本，再发布并启用 Workflow。</span>
+          <el-button
+            link
+            type="primary"
+            @click="openBomDrawer(bomRevisionMismatchProducts[0]?.id)"
+          >
+            在右侧升级 BOM →
+          </el-button>
+        </template>
+      </el-alert>
+
       <div ref="canvasRef" class="canvas-shell" :class="{ 'is-connecting': !!connectingFromKind }" v-loading="loading">
         <!-- #12b: 历史版本预览横幅 (只读, 不会自动保存覆盖草稿) -->
         <div v-if="previewingVersion !== null" class="version-preview-bar" data-testid="version-preview-bar">
@@ -631,6 +654,21 @@ interface BomRecipeItemOption {
 
 interface BomRecipeDetailOption {
   items?: BomRecipeItemOption[];
+  version?: number | null;
+  status?: string | null;
+  workflowRevisionId?: number | null;
+  workflowRevisionHash?: string | null;
+}
+
+interface BomProductTarget {
+  id: string;
+  name: string;
+}
+
+interface ActiveBomRevision {
+  version?: number | null;
+  workflowRevisionId?: number | null;
+  workflowRevisionHash?: string | null;
 }
 
 interface WorkflowIdentity {
@@ -706,7 +744,32 @@ const unitCatalog = ref<UnitCatalogItem[]>([]);
 // #3: 该产品 BOM 原辅料清单 (per-product, 随 productTypeId 变化而重新加载,
 // 与 loadCatalogs 的"全厂字典"缓存粒度不同, 单独一个 ref + 单独一个 loader)。
 const productBomItems = ref<BomRecipeItemOption[]>([]);
-const bomMissingProducts = ref<Array<{ id: string; name: string }>>([]);
+const bomMissingProducts = ref<BomProductTarget[]>([]);
+const activeBomByProduct = ref<Record<string, ActiveBomRevision>>({});
+const bomRevisionMismatchProducts = computed<BomProductTarget[]>(() => {
+  const revisionId = definition.value?.revisionId;
+  const revisionHash = definition.value?.revisionHash;
+  if (revisionId == null && !revisionHash) return [];
+
+  const seen = new Set<string>();
+  return flowNodes.value
+    .filter((node) => node.data?.kind === 'FINISHED_GOOD' && node.data?.skuId)
+    .map((node) => ({
+      id: String(node.data.skuId),
+      name: String(node.data.name || node.data.skuId),
+    }))
+    .filter((target) => {
+      if (seen.has(target.id)) return false;
+      seen.add(target.id);
+      const activeBom = activeBomByProduct.value[target.id];
+      if (!activeBom) return false;
+      const revisionIdMismatch = revisionId != null
+        && activeBom.workflowRevisionId !== revisionId;
+      const revisionHashMismatch = Boolean(revisionHash)
+        && activeBom.workflowRevisionHash !== revisionHash;
+      return revisionIdMismatch || revisionHashMismatch;
+    });
+});
 const bomRawMaterialIdList = computed(() => productBomItems.value.map((item) => item.materialTypeId));
 function usedRawMaterialIdsExcept(nodeId: string): string[] {
   return flowNodes.value
@@ -1396,6 +1459,7 @@ function invalidateLoadedDefinition(invalidatePersistence = true): void {
   processEditVisible.value = false;
   processEditNodeId.value = '';
   bomMissingProducts.value = [];
+  activeBomByProduct.value = {};
   skuBindingTarget.value = null;
   if (invalidatePersistence) {
     createSkuGeneration += 1;
@@ -1462,6 +1526,7 @@ async function loadProductBom(): Promise<void> {
   const ownerId = props.productTypeId;
   productBomItems.value = [];
   bomMissingProducts.value = [];
+  activeBomByProduct.value = {};
   if (!factoryId || !ownerId) return;
   const graphOutputs = flowNodes.value
     .filter((node) => node.data?.kind === 'FINISHED_GOOD' && node.data?.skuId)
@@ -1491,16 +1556,25 @@ async function loadProductBom(): Promise<void> {
       || props.factoryId !== factoryId
       || props.productTypeId !== ownerId) return;
     const allItems: BomRecipeItemOption[] = [];
-    const missing: Array<{ id: string; name: string }> = [];
+    const missing: BomProductTarget[] = [];
+    const activeBomMap: Record<string, ActiveBomRevision> = {};
     responses.forEach(({ target, response }) => {
       const items = response?.success && Array.isArray(response.data?.items)
         ? response.data.items
         : [];
       allItems.push(...items);
       if (items.length === 0) missing.push(target);
+      if (response?.success && response.data) {
+        activeBomMap[target.id] = {
+          version: response.data.version,
+          workflowRevisionId: response.data.workflowRevisionId,
+          workflowRevisionHash: response.data.workflowRevisionHash,
+        };
+      }
     });
     productBomItems.value = allItems;
     bomMissingProducts.value = missing;
+    activeBomByProduct.value = activeBomMap;
   } catch (error) {
     if (generation !== bomLoadGeneration
       || props.factoryId !== factoryId
@@ -2691,6 +2765,11 @@ async function publishWorkflow(): Promise<void> {
   if (dirty.value && !(await saveDraft())) return;
   identity = currentLoadedIdentity();
   if (!identity || !canEdit.value) return;
+  if (bomRevisionMismatchProducts.value.length > 0) {
+    openBomDrawer(bomRevisionMismatchProducts.value[0]?.id);
+    ElMessage.warning('当前生效 BOM 仍使用旧工艺；请在右侧升级并激活新版本后重试');
+    return;
+  }
   if (!definition.value?.lockVersion && definition.value?.lockVersion !== 0) {
     ElMessage.warning('请先保存草稿');
     return;
@@ -2761,7 +2840,15 @@ async function publishWorkflow(): Promise<void> {
       await recoverWorkflowConflict(identity);
       return;
     }
+    if (isWorkflowBomRevisionError(error)) {
+      const target = bomRevisionMismatchProducts.value[0]?.id || identity.productTypeId;
+      openBomDrawer(target);
+      ElMessage.warning('当前生效 BOM 未固定这次工艺修订；请在右侧升级并激活新版本后重试');
+      void loadProductBom();
+      return;
+    }
     console.error('[ProductProcessWorkflow] publish failed', error);
+    ElMessage.error('Workflow 发布失败，请稍后重试');
   } finally {
     if (generation === publishGeneration) {
       publishing.value = false;
@@ -2837,8 +2924,8 @@ async function deactivateWorkflow(): Promise<void> {
   }
 }
 
-function isWorkflowConflict(error: unknown): boolean {
-  if (!error || typeof error !== 'object') return false;
+function workflowErrorCode(error: unknown): string | null {
+  if (!error || typeof error !== 'object') return null;
   const candidate = error as {
     actionHint?: unknown;
     code?: unknown;
@@ -2849,14 +2936,25 @@ function isWorkflowConflict(error: unknown): boolean {
       status?: unknown;
     };
   };
-  if (Number(candidate.status ?? candidate.response?.status) !== 409) return false;
+  if (Number(candidate.status ?? candidate.response?.status) !== 409) return null;
   const responseData = candidate.response?.data;
   const errorCode = candidate.errorCode
     ?? candidate.code
     ?? responseData?.errorCode
     ?? responseData?.code;
+  return typeof errorCode === 'string' ? errorCode : null;
+}
+
+function isWorkflowConflict(error: unknown): boolean {
+  const errorCode = workflowErrorCode(error);
   return errorCode === 'PRODUCT_PROCESS_WORKFLOW_CONFLICT'
     || errorCode === 'OPTIMISTIC_LOCK_CONFLICT';
+}
+
+function isWorkflowBomRevisionError(error: unknown): boolean {
+  const errorCode = workflowErrorCode(error);
+  return errorCode === 'WORKFLOW_ACTIVE_BOM_REVISION_MISMATCH'
+    || errorCode === 'WORKFLOW_ACTIVE_BOM_FAMILY_INCOMPLETE';
 }
 
 async function recoverWorkflowConflict(

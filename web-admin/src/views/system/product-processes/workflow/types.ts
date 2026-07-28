@@ -119,6 +119,8 @@ export interface ProductProcessWorkflowDefinition {
   status: WorkflowStatus;
   version: number;
   lockVersion?: number;
+  revisionId?: number | null;
+  revisionHash?: string | null;
   unitReviewRequired?: boolean;
   nodes: ProductProcessWorkflowNode[];
   edges: ProductProcessWorkflowEdge[];

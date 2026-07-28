@@ -268,6 +268,21 @@ class BomWorkflowRevisionServiceTest {
     }
 
     @Test
+    void publishGateExplainsHowToUpgradeAnActiveBomPinnedToAnOlderRevision() throws Exception {
+        ProductProcessWorkflowRevision revision = revision(oneToOne());
+        when(recipeRepository.findByFactoryIdAndWorkflowRevisionIdAndStatusOrderByProductTypeIdAsc(
+                FACTORY, revision.getId(), BomRecipe.Status.ACTIVE)).thenReturn(List.of());
+
+        BusinessException error = assertThrows(BusinessException.class,
+                () -> service.requireActiveBomPinsRevision(FACTORY, PRODUCT, revision));
+
+        assertEquals("WORKFLOW_ACTIVE_BOM_REVISION_MISMATCH", error.getErrorCode());
+        assertTrue(error.getActionHint().contains("升级到最新工艺"));
+        assertEquals("bom", error.getHintTarget());
+        assertEquals("warning", error.getSeverity());
+    }
+
+    @Test
     void stableInputSlotsRetainEveryConvergingRootAndPortIdentity() throws Exception {
         PinnedWorkflowGraph graph = service.resolvePinnedGraph(FACTORY, recipe(snapshot(twoToOne())));
 

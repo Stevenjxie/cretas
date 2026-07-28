@@ -427,7 +427,9 @@ public class BomWorkflowRevisionService {
                     || output.costAllocationRatio().compareTo(active.getCostAllocationRatio()) != 0) {
                 throw invalid(409, "终端 SKU " + output.productTypeId()
                                 + " 没有固定当前 Workflow 修订的完整 ACTIVE BOM",
-                        "WORKFLOW_ACTIVE_BOM_REVISION_MISMATCH");
+                        "WORKFLOW_ACTIVE_BOM_REVISION_MISMATCH")
+                        .withHint("请在当前页面右侧打开 BOM，升级到最新工艺并激活新版本后重试")
+                        .withHintTarget("bom");
             }
             resolvePinnedGraph(factoryId, active);
         }
@@ -435,7 +437,9 @@ public class BomWorkflowRevisionService {
                 .filter(Objects::nonNull).collect(Collectors.toSet());
         if (requiredOutputs.size() > 1 && (familyIds.size() != 1 || activeRows.size() != requiredOutputs.size())) {
             throw invalid(409, "多产出 Workflow 的 ACTIVE BOM 不属于同一个完整 BOM Family",
-                    "WORKFLOW_ACTIVE_BOM_FAMILY_INCOMPLETE");
+                    "WORKFLOW_ACTIVE_BOM_FAMILY_INCOMPLETE")
+                    .withHint("请在当前页面右侧补齐所有产出 SKU 的 BOM，并激活同一完整版本后重试")
+                    .withHintTarget("bom");
         }
         return activeByProduct.get(requiredOutputs.stream()
                 .filter(output -> output.outputRole() == BomRecipe.OutputRole.MAIN)

@@ -17,13 +17,13 @@ import {
 describe('workflowApi conflict ownership', () => {
   beforeEach(() => vi.clearAllMocks());
 
-  it('declares both workflow semantic conflict codes as editor handled for both mutations', () => {
+  it('keeps save conflicts local and lets the editor own publish-time BOM remediation', () => {
     const definition = { schemaVersion: 1, nodes: [], edges: [] } as unknown as ProductProcessWorkflowDefinition;
 
     saveProductProcessWorkflowDraft('F006', 'PT-A', definition);
     publishProductProcessWorkflow('F006', 'PT-A', 3);
 
-    const expectedConfig = {
+    const saveConfig = {
       _handledErrorCodes: [
         'PRODUCT_PROCESS_WORKFLOW_CONFLICT',
         'OPTIMISTIC_LOCK_CONFLICT',
@@ -32,12 +32,19 @@ describe('workflowApi conflict ownership', () => {
     expect(requestMocks.put).toHaveBeenCalledWith(
       '/F006/product-process-workflows/PT-A/draft',
       definition,
-      expectedConfig,
+      saveConfig,
     );
     expect(requestMocks.post).toHaveBeenCalledWith(
       '/F006/product-process-workflows/PT-A/publish',
       { lockVersion: 3 },
-      expectedConfig,
+      {
+        _handledErrorCodes: [
+          'PRODUCT_PROCESS_WORKFLOW_CONFLICT',
+          'OPTIMISTIC_LOCK_CONFLICT',
+          'WORKFLOW_ACTIVE_BOM_REVISION_MISMATCH',
+          'WORKFLOW_ACTIVE_BOM_FAMILY_INCOMPLETE',
+        ],
+      },
     );
   });
 });
