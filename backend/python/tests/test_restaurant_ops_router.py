@@ -3791,3 +3791,64 @@ def test_traditional_all_store_is_not_mistaken_for_a_store_name():
     from smartbi.gold.restaurant_ops_router import extract_store_mentions
     assert extract_store_mentions("本月全部門店營收多少") == []
     assert extract_store_mentions("本月全部门店营收多少") == []
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 精确日期区间 (spec 持续项, 2026-07-28 专测后补)
+#
+# 专测实拍的原始症状: 「全部门店6月3号到18号的营收」
+#   -> "没有找到名为「3号到18号」的菜品"
+# 确定性层解析不出时间, 菜品抽取就把日期当成了菜名。老板问营收却被告知
+# 查无此菜 —— 比单纯"不支持"更糟, 会让人以为自己菜名打错了。
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _d(y, m, day):
+    from datetime import date
+    return date(y, m, day)
+
+
+def test_absolute_range_parses_common_owner_phrasings():
+    from smartbi.gold.restaurant_ops_router import parse_absolute_date_range as P
+    today = _d(2026, 7, 28)
+    # 同月省略后半月份
+    assert P("全部门店6月3号到18号的营收", today=today)[:2] == (_d(2026, 6, 3), _d(2026, 6, 18))
+    # 日/至 写法
+    assert P("6月3日至6月18日营收多少", today=today)[:2] == (_d(2026, 6, 3), _d(2026, 6, 18))
+    # ISO
+    assert P("2026-06-03到2026-06-18的营收", today=today)[:2] == (_d(2026, 6, 3), _d(2026, 6, 18))
+    # 跨月 + 「从」前缀
+    assert P("从6月3号到7月2号卖了多少", today=today)[:2] == (_d(2026, 6, 3), _d(2026, 7, 2))
+
+
+def test_absolute_range_infers_previous_year_when_future():
+    """无年份且落在未来 -> 指去年 (老板问的是过去, 不是预测)。"""
+    from smartbi.gold.restaurant_ops_router import parse_absolute_date_range as P
+    got = P("12月20号到12月28号的营收", today=_d(2026, 7, 28))
+    assert got[:2] == (_d(2025, 12, 20), _d(2025, 12, 28))
+
+
+def test_absolute_range_fails_closed_on_bad_input():
+    """颠倒/非法一律不匹配 —— 不猜、不交换端点, 让流程照常走澄清。"""
+    from smartbi.gold.restaurant_ops_router import parse_absolute_date_range as P
+    today = _d(2026, 7, 28)
+    assert P("6月18号到6月3号的营收", today=today) is None      # 端点写反
+    assert P("2月30号到3月1号", today=today) is None            # 日期不存在
+    assert P("本月营收多少", today=today) is None               # 根本没有区间
+
+
+def test_absolute_range_drives_the_deterministic_window():
+    from smartbi.gold.restaurant_ops_router import _resolve_sales_date_range as R
+    rng, label = R("全部门店6月3号到18号的营收", today=_d(2026, 7, 28))
+    assert rng == (_d(2026, 6, 3), _d(2026, 6, 18))
+    assert label == "2026-06-03 至 2026-06-18"
+    # 既有相对短语不受影响
+    assert R("本月营收多少", today=_d(2026, 7, 28))[1] == "本月"
+
+
+def test_absolute_range_is_not_swallowed_into_the_dish_slot():
+    """原始症状的回归护栏。"""
+    from smartbi.gold.restaurant_ops_router import extract_dish_candidate as D
+    assert D("全部门店6月3号到18号的营收") is None
+    assert D("全部门店6月3日至6月18日营收多少") is None
+    # 区间与菜名同时出现时, 菜名仍要抽得出来
+    assert D("全部门店6月3号到18号米饭的销量") == "米饭"

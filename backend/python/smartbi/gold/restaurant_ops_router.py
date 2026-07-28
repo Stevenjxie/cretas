@@ -906,6 +906,59 @@ _DISH_LEADING_PRONOUN_RE = re.compile(r"^(?:这个|这道|那个|那道|它|该�
 _DISH_LEADING_QUERY_VERB_RE = re.compile(
     r"^(?:请)?(?:查询|查一下|查看|看一下|看看|统计|汇总)(?:一下)?"
 )
+# ─── 精确日期区间 (spec 持续项「精确日期区间」, 2026-07-28 专测后补) ────────
+# 专测结论: 之前「6月3号到18号」这类问法**完全不支持**, 而且失败得难看 ——
+# 确定性层解析不出时间, 于是菜品抽取把「3号到18号」当成菜名, 回答
+# 「没有找到名为「3号到18号」的菜品」。老板问营收, 系统答查无此菜, 会让人
+# 以为自己菜名打错了。比单纯"不支持"更糟。
+#
+# 覆盖形态: 2026-06-03到2026-06-18 / 6月3号到18号 / 6月3日至6月18日 /
+#           6月3号到7月2号 (跨月) / 从…到… 前缀
+# ⛔ fail-closed: 无年份按今年推断(落在未来则取去年); 起点晚于终点、或日期
+#    本身非法(2月30日) 一律**不匹配**, 让流程照常走澄清 —— 绝不猜、不交换端点。
+_ABS_DATE_RANGE_RE = re.compile(
+    r"(?:从)?"
+    r"(?P<y1>20\d{2})?[-/年]?(?P<m1>1[0-2]|0?[1-9])[-/月](?P<d1>3[01]|[12]\d|0?[1-9])[号日]?"
+    r"\s*(?:到|至|~|～|—|－|-)\s*"
+    r"(?:(?P<y2>20\d{2})[-/年])?(?:(?P<m2>1[0-2]|0?[1-9])[-/月])?(?P<d2>3[01]|[12]\d|0?[1-9])[号日]?"
+)
+
+
+def parse_absolute_date_range(
+    text: Optional[str], *, today: Optional[date] = None
+) -> "Optional[Tuple[date, date, str]]":
+    """从自由文本里解出显式日期区间, 返回 (start, end, 匹配到的原文片段)。
+
+    解不出 / 非法 / 起点晚于终点 一律返回 None (fail-closed)。
+    """
+    if not text:
+        return None
+    match = _ABS_DATE_RANGE_RE.search(text)
+    if not match:
+        return None
+    anchor = today or date.today()
+    g = match.groupdict()
+    m1, d1 = int(g["m1"]), int(g["d1"])
+    m2 = int(g["m2"]) if g.get("m2") else m1          # 「6月3号到18号」省略了后半的月
+    d2 = int(g["d2"])
+    y1 = int(g["y1"]) if g.get("y1") else anchor.year
+    y2 = int(g["y2"]) if g.get("y2") else y1
+    try:
+        start = date(y1, m1, d1)
+        end = date(y2, m2, d2)
+    except ValueError:                                 # 2月30日 之类
+        return None
+    if not g.get("y1") and start > anchor:             # 无年份且落在未来 -> 指去年
+        try:
+            start = start.replace(year=start.year - 1)
+            end = end.replace(year=end.year - 1)
+        except ValueError:
+            return None
+    if start > end:                                    # 端点写反: 不猜, 不交换
+        return None
+    return start, end, match.group(0)
+
+
 _DISH_LEADING_TIME_RE = re.compile(
     r"^(?:今天|今日|昨天|昨日|前天|本周|这周|上上周|上周|本月|这个月|上上个月|上上月|上个月|上月"
     r"|今年|去年|前年|现在|如今|目前"
@@ -949,6 +1002,12 @@ def _extract_dish_candidate_single(text: str) -> "Optional[str]":
     # "卤炸牛肉串本月销量为什么低".  The date parser still receives the
     # untouched original query; this normalization is only for isolating the
     # named dish, so the time phrase cannot be swallowed into the dish slot.
+    # 显式日期区间不是菜名。不剥掉的话「…6月3号到18号的营收」会把
+    # 「3号到18号」当成菜品实体 —— 专测实拍: "没有找到名为「3号到18号」的菜品",
+    # 老板问营收却被告知查无此菜 (spec 持续项「精确日期区间」)。
+    _absolute_span = parse_absolute_date_range(text)
+    if _absolute_span is not None:
+        text = text.replace(_absolute_span[2], "", 1).strip()
     text = _DISH_INLINE_TIME_BEFORE_METRIC_RE.sub("", text, count=1)
     # 复合指标形态更具体, 先试 — 否则单指标懒惰前缀会吞掉「营收和」等垃圾段。
     match = _DISH_MULTI_METRIC_RE.match(text)
@@ -2035,6 +2094,13 @@ def _resolve_sales_date_range(
     """Resolve common owner-facing time phrases for sales summary prompts."""
     text = (query or "").strip()
     anchor = today or date.today()
+
+    # 显式日期区间是最具体的时间信号, 先于一切相对短语判定。
+    # (spec 持续项「精确日期区间」; 解不出/非法一律返回 None 由后续分支接管。)
+    absolute = parse_absolute_date_range(text, today=anchor)
+    if absolute is not None:
+        start, end, _matched = absolute
+        return (start, end), f"{start.isoformat()} 至 {end.isoformat()}"
 
     # “截至目前/到现在” is an explicit cumulative range, not a missing time
     # slot.  A concrete lower bound keeps every downstream resolver on the
