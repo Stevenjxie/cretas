@@ -3840,7 +3840,9 @@ def test_absolute_range_drives_the_deterministic_window():
     from smartbi.gold.restaurant_ops_router import _resolve_sales_date_range as R
     rng, label = R("全部门店6月3号到18号的营收", today=_d(2026, 7, 28))
     assert rng == (_d(2026, 6, 3), _d(2026, 6, 18))
-    assert label == "2026-06-03 至 2026-06-18"
+    # 标签是「指定区间」而非日期串 —— 渲染层会另行补上具体日期,
+    # 标签若也写日期会渲染成「X（X）」重复 (2026-07-28 prod 实拍)。
+    assert label == "指定区间"
     # 既有相对短语不受影响
     assert R("本月营收多少", today=_d(2026, 7, 28))[1] == "本月"
 
