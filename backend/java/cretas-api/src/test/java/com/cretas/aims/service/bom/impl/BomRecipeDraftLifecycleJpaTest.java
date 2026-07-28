@@ -608,6 +608,64 @@ class BomRecipeDraftLifecycleJpaTest {
     }
 
     @Test
+    @DisplayName("Workflow regenerated identities preserve canonical BOM count units against localized ports")
+    void workflowUpgradeRekeysCanonicalCountUnitAgainstLocalizedPort() {
+        ProductType product = saveProduct("REKEY-COUNT-UNIT", "袋", new BigDecimal("400"));
+        BomRecipe draft = service.ensureDraft(product.getFactoryId(), product.getId());
+        BomRecipeItem existing =
+                itemRepository.findByRecipeIdOrderBySortOrderAsc(draft.getId()).getFirst();
+        existing.setUnit("pcs");
+        existing = itemRepository.saveAndFlush(existing);
+        Long existingItemId = existing.getId();
+        String materialTypeId = existing.getMaterialTypeId();
+
+        when(bomWorkflowRevisionService.upgradeToLatestCompatibleDraft(
+                anyString(), org.mockito.ArgumentMatchers.any(BomRecipe.class)))
+                .thenAnswer(invocation -> {
+                    BomRecipe recipe = invocation.getArgument(1);
+                    BomWorkflowRevisionService.WorkflowBinding binding = workflowBinding(recipe);
+                    recipe.setWorkflowDefinitionVersion(2);
+                    recipe.setWorkflowRevisionId(222L);
+                    recipe.setWorkflowRevisionHash("revision-222");
+                    recipe.setTargetTerminalNodeId("terminal:new");
+                    return binding;
+                });
+        when(bomWorkflowRevisionService.resolvePinnedGraph(
+                anyString(), org.mockito.ArgumentMatchers.any(BomRecipe.class)))
+                .thenAnswer(invocation -> {
+                    BomRecipe recipe = invocation.getArgument(1);
+                    return Integer.valueOf(2).equals(recipe.getWorkflowDefinitionVersion())
+                            ? regeneratedInputGraph(recipe, List.of(materialTypeId), "只")
+                            : workflowBinding(recipe).graph();
+                });
+        when(bomWorkflowRevisionService.resolvePinnedTerminalOutputs(
+                anyString(), org.mockito.ArgumentMatchers.any(BomRecipe.class)))
+                .thenAnswer(invocation -> {
+                    BomRecipe recipe = invocation.getArgument(1);
+                    return List.of(new BomWorkflowRevisionService.TerminalOutput(
+                            "terminal:new",
+                            recipe.getProductTypeId(),
+                            "process:new",
+                            "output",
+                            BomRecipe.OutputRole.MAIN,
+                            new BigDecimal("100"),
+                            recipe.getOutputUnit()));
+                });
+
+        service.upgradeWorkflowRevision(product.getFactoryId(), draft.getId());
+
+        assertThat(itemRepository.findById(existingItemId))
+                .hasValueSatisfying(upgraded -> {
+                    assertThat(upgraded.getMaterialTypeId()).isEqualTo(materialTypeId);
+                    assertThat(upgraded.getUnit()).isEqualTo("pcs");
+                    assertThat(upgraded.getWorkflowMaterialNodeId())
+                            .isEqualTo("material:" + materialTypeId);
+                    assertThat(upgraded.getWorkflowInputPortId()).isEqualTo("input:0");
+                    assertThat(upgraded.getWorkflowEdgeId()).isEqualTo("edge:" + materialTypeId);
+                });
+    }
+
+    @Test
     @DisplayName("kg-base SKU still snapshots one base unit instead of its net weight")
     void snapshotsKgBaseSkuAsOneKgUnit() {
         ProductType product = saveStructuredProduct(
@@ -632,6 +690,35 @@ class BomRecipeDraftLifecycleJpaTest {
         assertThat(second.getId()).isEqualTo(first.getId());
         assertThat(recipeRepository.countByFactoryIdAndProductTypeId(
                 product.getFactoryId(), product.getId())).isEqualTo(1);
+    }
+
+    @Test
+    @DisplayName("ensure archives a pre-active orphan draft and clones the exact current ACTIVE version")
+    void ensureArchivesSupersededDraftBeforeCloningCurrentActive() {
+        ProductType product = saveProduct("SUPERSEDED-DRAFT", "袋", new BigDecimal("400"));
+        BomRecipe obsoleteV1 = service.ensureDraft(product.getFactoryId(), product.getId());
+        completeWorkflowSkeleton(obsoleteV1);
+        BomRecipe candidateV2 = service.cloneRecipe(product.getFactoryId(), obsoleteV1.getId());
+        BomRecipe activeV2 =
+                service.activateRecipe(product.getFactoryId(), candidateV2.getId(), 1309L);
+
+        BomRecipe editableV3 = service.ensureDraft(product.getFactoryId(), product.getId());
+
+        assertThat(editableV3.getVersion()).isEqualTo(3);
+        assertThat(editableV3.getStatus()).isEqualTo(BomRecipe.Status.DRAFT);
+        assertThat(editableV3.getWorkflowRevisionId()).isEqualTo(activeV2.getWorkflowRevisionId());
+        assertThat(editableV3.getWorkflowRevisionHash()).isEqualTo(activeV2.getWorkflowRevisionHash());
+        assertThat(editableV3.getNotes()).contains("v2");
+        assertThat(recipeRepository.findById(obsoleteV1.getId()))
+                .hasValueSatisfying(saved -> {
+                    assertThat(saved.getStatus()).isEqualTo(BomRecipe.Status.ARCHIVED);
+                    assertThat(saved.getIsCurrent()).isFalse();
+                });
+        assertThat(recipeRepository.findById(activeV2.getId()))
+                .hasValueSatisfying(saved -> {
+                    assertThat(saved.getStatus()).isEqualTo(BomRecipe.Status.ACTIVE);
+                    assertThat(saved.getIsCurrent()).isTrue();
+                });
     }
 
     @Test
@@ -853,6 +940,11 @@ class BomRecipeDraftLifecycleJpaTest {
 
     private PinnedWorkflowGraph regeneratedInputGraph(
             BomRecipe recipe, List<String> materialTypeIds) {
+        return regeneratedInputGraph(recipe, materialTypeIds, "kg");
+    }
+
+    private PinnedWorkflowGraph regeneratedInputGraph(
+            BomRecipe recipe, List<String> materialTypeIds, String inputUnit) {
         List<ProductProcessWorkflowDTO.Node> nodes = new ArrayList<>();
         List<ProductProcessWorkflowDTO.Edge> edges = new ArrayList<>();
         List<Map<String, Object>> ports = new ArrayList<>();
@@ -871,7 +963,7 @@ class BomRecipeDraftLifecycleJpaTest {
                     "direction", "INPUT",
                     "materialNodeId", materialNodeId,
                     "materialKind", "RAW_MATERIAL",
-                    "unit", "kg",
+                    "unit", inputUnit,
                     "ordinal", index)));
             edges.add(new ProductProcessWorkflowDTO.Edge(
                     "edge:" + materialTypeId,

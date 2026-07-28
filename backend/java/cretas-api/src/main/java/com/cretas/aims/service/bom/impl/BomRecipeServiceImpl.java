@@ -124,6 +124,34 @@ public class BomRecipeServiceImpl implements BomRecipeService {
         List<BomRecipe> drafts = versions.stream()
                 .filter(recipe -> recipe.getStatus() == BomRecipe.Status.DRAFT)
                 .toList();
+        List<BomRecipe> currentActive = versions.stream()
+                .filter(recipe -> recipe.getStatus() == BomRecipe.Status.ACTIVE)
+                .filter(recipe -> Boolean.TRUE.equals(recipe.getIsCurrent()))
+                .toList();
+        if (currentActive.size() > 1) {
+            throw bomError(409,
+                    "该产品存在多个当前生效 BOM，无法安全继续编辑",
+                    "BOM_CURRENT_ACTIVE_AMBIGUOUS",
+                    "请先修复版本状态，确保只有一个 ACTIVE/current 版本",
+                    "bomVersions");
+        }
+        if (currentActive.size() == 1 && !drafts.isEmpty()) {
+            BomRecipe active = currentActive.getFirst();
+            List<BomRecipe> obsoleteDrafts = drafts.stream()
+                    .filter(draft -> isDraftSupersededByActive(draft, active))
+                    .toList();
+            for (BomRecipe obsoleteDraft : obsoleteDrafts) {
+                if (obsoleteDraft.getStatus() == BomRecipe.Status.DRAFT) {
+                    archiveSupersededDraftFamily(factoryId, obsoleteDraft, active);
+                }
+            }
+            if (!obsoleteDrafts.isEmpty()) {
+                recipeRepo.flush();
+                drafts = versions.stream()
+                        .filter(recipe -> recipe.getStatus() == BomRecipe.Status.DRAFT)
+                        .toList();
+            }
+        }
         if (drafts.size() > 1) {
             throw bomError(409,
                     "该产品存在多个 BOM 草稿，无法判断应继续编辑哪一个",
@@ -186,10 +214,6 @@ public class BomRecipeServiceImpl implements BomRecipeService {
             return initializeFamilyAndInputSkeletons(factoryId, draft, binding);
         }
 
-        List<BomRecipe> currentActive = versions.stream()
-                .filter(recipe -> recipe.getStatus() == BomRecipe.Status.ACTIVE)
-                .filter(recipe -> Boolean.TRUE.equals(recipe.getIsCurrent()))
-                .toList();
         if (currentActive.size() != 1) {
             throw bomError(409,
                     "该产品没有唯一的当前生效 BOM，无法安全创建新版本",
@@ -203,6 +227,45 @@ public class BomRecipeServiceImpl implements BomRecipeService {
             return rebindDraftFamilyToExactRevision(factoryId, cloned, workflowRevisionId);
         }
         return cloned;
+    }
+
+    /**
+     * A draft created before the current ACTIVE version became authoritative cannot safely be
+     * resumed: it was cloned from an older production baseline. Archive it (never delete it) so a
+     * new draft can be cloned from the exact current ACTIVE family.
+     */
+    private boolean isDraftSupersededByActive(BomRecipe draft, BomRecipe active) {
+        if (draft.getVersion() != null
+                && active.getVersion() != null
+                && draft.getVersion() <= active.getVersion()) {
+            return true;
+        }
+        return draft.getCreatedAt() != null
+                && active.getActivatedAt() != null
+                && !draft.getCreatedAt().isAfter(active.getActivatedAt());
+    }
+
+    private void archiveSupersededDraftFamily(
+            String factoryId, BomRecipe obsoleteDraft, BomRecipe active) {
+        List<BomRecipe> family = obsoleteDraft.getBomFamilyId() == null
+                ? List.of(obsoleteDraft)
+                : recipeRepo.findByFactoryIdAndBomFamilyIdAndStatusOrderByProductTypeIdAsc(
+                        factoryId, obsoleteDraft.getBomFamilyId(), BomRecipe.Status.DRAFT);
+        for (BomRecipe member : family) {
+            member.setStatus(BomRecipe.Status.ARCHIVED);
+            member.setIsCurrent(false);
+            recipeRepo.save(member);
+        }
+        log.info(
+                "Archived superseded BOM draft family before cloning current ACTIVE: factory={}, "
+                        + "product={}, obsoleteDraft={}, obsoleteVersion={}, active={}, activeVersion={}, members={}",
+                factoryId,
+                obsoleteDraft.getProductTypeId(),
+                obsoleteDraft.getId(),
+                obsoleteDraft.getVersion(),
+                active.getId(),
+                active.getVersion(),
+                family.size());
     }
 
     private BomWorkflowRevisionService.WorkflowBinding bindDraftAuthority(

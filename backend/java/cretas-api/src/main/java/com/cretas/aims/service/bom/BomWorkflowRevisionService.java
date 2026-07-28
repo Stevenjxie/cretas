@@ -25,6 +25,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
+import java.text.Normalizer;
 import java.time.LocalDateTime;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
@@ -34,6 +35,7 @@ import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
@@ -1008,14 +1010,34 @@ public class BomWorkflowRevisionService {
     }
 
     private static String canonicalUnit(String value) {
-        return switch (value.trim().toLowerCase()) {
+        // Workflow snapshots historically store display labels while BOM rows store canonical
+        // codes. Keep immutable snapshots readable by applying the same built-in aliases as the
+        // unit contract before deciding that a material input disappeared during slot re-keying.
+        String normalized = Normalizer.normalize(value, Normalizer.Form.NFKC)
+                .trim()
+                .toLowerCase(Locale.ROOT);
+        return switch (normalized) {
+            case "毫克", "mg" -> "mg";
             case "公斤", "千克", "kg" -> "kg";
             case "克", "g" -> "g";
+            case "斤", "jin" -> "jin";
+            case "吨", "t" -> "t";
             case "毫升", "ml" -> "ml";
             case "升", "l" -> "l";
+            case "件", "个", "只", "pcs" -> "pcs";
+            case "份", "portion" -> "portion";
             case "盒", "box" -> "box";
             case "箱", "case" -> "case";
-            default -> value.trim().toLowerCase();
+            case "袋", "bag" -> "bag";
+            case "包", "pack" -> "pack";
+            case "瓶", "bottle" -> "bottle";
+            case "罐", "can" -> "can";
+            case "筐", "篮", "crate" -> "crate";
+            case "桶", "pail" -> "pail";
+            case "卷", "roll" -> "roll";
+            case "片", "slice" -> "slice";
+            case "项", "item" -> "item";
+            default -> normalized;
         };
     }
 
