@@ -140,6 +140,16 @@ class RestaurantQuerySpec:
     asks_priority: bool = False
     asks_prohibited_actions: bool = False
     asks_export: bool = False
+    # spec §2.1 输出形态偏好。用户**显式**要求的输出形态子集，取值见
+    # ``_OUTPUT_FORMS``；空元组 = 这轮没提要求，由消费端调
+    # :func:`resolve_output_preference` 取租户默认。
+    #
+    # ⛔ 这个槽**不进 plan_hash**，也**不作为确定性快路径的 bail-out 条件** ——
+    # 它是呈现层关注点，不改变要拉哪些数。"本月营收" 和 "本月营收给我表格" 是
+    # 同一个数据计划，进 hash 会把计划缓存/晋升路由按"要不要表格"打碎，
+    # 把 2026-07-28 刚打通的零 token 出口废掉。同理 ``asks_export`` 也不在
+    # hash 里（见 ``_seal_plan`` 的 payload 白名单）。
+    output_preference: Tuple[str, ...] = ()
     # The requested conversational operation is separate from the metric and
     # resolver.  A follow-up may keep the same dish while changing from a
     # lookup to a diagnosis or an optimisation request; carrying the previous
@@ -179,6 +189,83 @@ class RestaurantQuerySpec:
 # One-line capability descriptions for the restaurant semantic compiler.
 # In production's semantic-first mode the LLM must choose from this catalogue
 # before any tool/skill/resolver is allowed to run.
+# ─── 输出形态偏好 (spec §2.1) ──────────────────────────────────────────────
+# 「文字 / 表格 / 图 / 报告文件」是一个**封闭且很小**的词表，用户说法也就那么
+# 十几种。所以这里走确定性关键词，不占 T3 的 prompt 位置：
+#   1. 不动 T3 静态块 = 不打破 DashScope 隐式前缀缓存契约 (见 build 函数注释)。
+#   2. `_build_spec` 每轮对着 query 重算确定性槽 —— 计划缓存/晋升路由命中 (零
+#      token 路径) 时，这轮新说的「给我表格」照样生效；只靠 LLM 抽就丢了。
+#   3. 一分钱 LLM token 都不花。
+# 将来若客户口径注册表 (spec §2.2) 带来更花哨的输出要求，再在 T3 加槽补充，
+# 与这里的确定性结果取并集即可 —— 是加法，不用推翻。
+OUTPUT_FORM_TEXT = "text"
+OUTPUT_FORM_TABLE = "table"
+OUTPUT_FORM_CHART = "chart"
+OUTPUT_FORM_REPORT_FILE = "report_file"
+
+_OUTPUT_FORMS = (
+    OUTPUT_FORM_TEXT,
+    OUTPUT_FORM_TABLE,
+    OUTPUT_FORM_CHART,
+    OUTPUT_FORM_REPORT_FILE,
+)
+
+# 顺序即输出顺序 (table 在 chart 前, 与该客户"文字+表格为主、图表按需"的偏好一致)。
+_OUTPUT_FORM_TOKENS: Tuple[Tuple[str, Tuple[str, ...]], ...] = (
+    (OUTPUT_FORM_TABLE, (
+        "表格", "列个表", "列张表", "做成表", "做张表", "用表", "表形式",
+        "excel", "xlsx",
+    )),
+    (OUTPUT_FORM_CHART, (
+        "画个图", "画图", "画一张图", "图表", "做成图", "柱状图", "折线图",
+        "饼图", "趋势图", "曲线图", "曲线",
+    )),
+    (OUTPUT_FORM_REPORT_FILE, (
+        "生成报告", "报告文件", "出个报告", "出份报告", "导出报告", "月度报告",
+        "pdf", "word",
+    )),
+)
+
+# 租户默认。spec §2.1 记的该客户口径 = 文字 + 表格；图表按需、报告要文件。
+# ⚠️ 现在是全局默认；客户口径注册表 (spec §2.2) 落地后改成按租户查表，
+# 届时 `resolve_output_preference` 的 `tenant_default` 参数就是接线口。
+DEFAULT_OUTPUT_PREFERENCE: Tuple[str, ...] = (OUTPUT_FORM_TEXT, OUTPUT_FORM_TABLE)
+
+
+def _detect_output_preference(text: str) -> Tuple[str, ...]:
+    """抽用户**显式**要的输出形态；空元组 = 没提，交给租户默认。
+
+    显式要了表/图/报告时文字始终保留 —— 老板要的是「图 + 一句结论」，
+    不是拿图把结论换掉。
+    """
+    if not text:
+        return ()
+    lowered = text.lower()
+    forms = [
+        form
+        for form, tokens in _OUTPUT_FORM_TOKENS
+        if any(token in lowered for token in tokens)
+    ]
+    if not forms:
+        return ()
+    return (OUTPUT_FORM_TEXT, *forms)
+
+
+def resolve_output_preference(
+    spec: "RestaurantQuerySpec",
+    tenant_default: Optional[Sequence[str]] = None,
+) -> Tuple[str, ...]:
+    """渲染层入口：这轮到底按什么形态输出。
+
+    显式要求优先；没要求就取租户默认 (缺省 :data:`DEFAULT_OUTPUT_PREFERENCE`)。
+    """
+    if spec.output_preference:
+        return tuple(spec.output_preference)
+    if tenant_default:
+        return tuple(form for form in tenant_default if form in _OUTPUT_FORMS)
+    return DEFAULT_OUTPUT_PREFERENCE
+
+
 _INTENT_DESCRIPTIONS: Dict[str, str] = {
     "RESTAURANT_OPS_CAPABILITIES": "询问餐饮助手能做什么、能分析哪些经营问题",
     "RESTAURANT_OPS_OUT_OF_DOMAIN": "天气、新闻、股票等不属于当前餐饮经营数据的问题",
@@ -1475,6 +1562,11 @@ def _seal_query_plan(spec: RestaurantQuerySpec) -> RestaurantQuerySpec:
         "dish_slot": spec.dish_slot,
         "store_slot": spec.store_slot,
         "resolver_query_seed": spec.resolver_query_seed,
+        # ⛔ 这份 payload 是白名单, 只放**决定拉哪些数**的槽位。
+        # 答案形态类槽位 (asks_priority / asks_export / output_preference) 一律
+        # 不进 —— 它们不改变数据计划, 进来会把计划缓存和晋升路由按呈现形态打碎
+        # (「本月营收」和「本月营收给我表格」会变成两条 hash), 零 token 出口就废了。
+        # 加新槽位前先问: 它变了, 要拉的数会变吗? 不变就别放进来。
     }
     digest = hashlib.sha256(
         json.dumps(
@@ -1773,6 +1865,10 @@ def _build_spec(
     asks_export = any(token in effective_query for token in (
         "导出", "下载", "生成文件", "可导出的字段",
     ))
+    # spec §2.1 输出形态偏好。和上面几个一样在这里算 —— _build_spec 的契约是
+    # "确定性槽位每轮对着 query 重算"，所以计划缓存/晋升路由命中时这一轮新说的
+    # 「给我表格」照样生效；如果只靠 T3 抽，零 token 路径上就丢了。
+    output_preference = _detect_output_preference(effective_query)
     if (
         unsupported_requirements
         and not supported_requested_metrics
@@ -1851,6 +1947,7 @@ def _build_spec(
         asks_priority=asks_priority,
         asks_prohibited_actions=asks_prohibited_actions,
         asks_export=asks_export,
+        output_preference=output_preference,
         analysis_action=analysis_action,
         ranking_direction=ranking_direction,
         ranking_limit=requested_ranking_limit,

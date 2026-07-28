@@ -109,6 +109,11 @@ public class TieredIntentDelegate {
                 if (response.get("query_plan_hash") != null) {
                     result.put("queryPlanHash", response.get("query_plan_hash"));
                 }
+                // spec §2.1 输出形态偏好 (文字/表格/图/报告文件)。Python→Java→前端
+                // 每一跳都是字段白名单转发, 漏接一跳渲染层就拿不到。
+                if (response.get("output_preference") != null) {
+                    result.put("outputPreference", response.get("output_preference"));
+                }
                 if (response.get("executed_resolvers") != null) {
                     result.put("executedResolvers", response.get("executed_resolvers"));
                 }

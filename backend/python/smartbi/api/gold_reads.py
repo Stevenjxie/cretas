@@ -1146,6 +1146,7 @@ async def post_restaurant_tiered_answer(
        "code": str, "contract_pass": bool}
     """
     from smartbi.gold.restaurant.restaurant_intent import (
+        DEFAULT_OUTPUT_PREFERENCE,
         log_intent_miss,
         parse_restaurant_query,
     )
@@ -1272,6 +1273,15 @@ async def post_restaurant_tiered_answer(
             "code": result.get("code"),
             "contract_pass": result.get("contract_pass"),
             "query_plan_hash": result.get("query_plan_hash"),
+            # spec §2.1 输出形态偏好 —— 这一层到 Java 到前端都是**字段白名单转发**,
+            # 不接管道新槽位就到不了渲染层。
+            # ⚠️ 兜底成租户默认而不是 []: 这个字段在线上**永不为空**是契约的一部分。
+            # 一旦某条路径漏设就发个空数组过去, 前端只能自己猜默认, 那就回到了
+            # "web-admin / mobile-rest-ai / RN 各猜一套"的分裂状态。
+            "output_preference": (
+                result.get("output_preference")
+                or list(DEFAULT_OUTPUT_PREFERENCE)
+            ),
             "executed_resolvers": result.get("executed_resolvers") or [],
             "suggested_followups": result.get("suggested_followups") or [],
         }

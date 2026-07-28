@@ -332,6 +332,10 @@ public abstract class GoldBackedRestaurantTool extends AbstractBusinessTool {
             if (response.get("query_plan_hash") != null) {
                 result.put("queryPlanHash", response.get("query_plan_hash"));
             }
+            // spec §2.1 输出形态偏好 —— 与 TieredIntentDelegate 同一条转发链, 两处都要接。
+            if (response.get("output_preference") != null) {
+                result.put("outputPreference", response.get("output_preference"));
+            }
             if (response.get("executed_resolvers") != null) {
                 result.put("executedResolvers", response.get("executed_resolvers"));
             }

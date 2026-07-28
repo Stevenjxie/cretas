@@ -25,6 +25,7 @@ from smartbi.gold.restaurant.restaurant_intent import (
     build_resolver_query,
     log_intent_capture,
     parse_restaurant_query,
+    resolve_output_preference,
     unsupported_requirements_disclosure,
 )
 from smartbi.gold.restaurant.restaurant_ops_router import (
@@ -945,6 +946,11 @@ async def tiered_answer(
             # selected code hid the 7/24 dish-ranking -> sales-summary mismatch.
             "code": planned_results[0][0] if len(planned_results) == 1 else spec.intent,
             "contract_pass": contract_pass,
+            # spec §2.1: 渲染层按它分支 (文字/表格/图/报告文件)。这里给的是**已解析
+            # 好的最终形态** —— 前端不该自己再猜租户默认, 否则 web-admin /
+            # mobile-rest-ai / RN 三处会各猜一套, 客户口径立刻分裂。
+            # 表格不需要后端新数据通道: charts 里 xAxis.data + series[].data 够渲染。
+            "output_preference": list(resolve_output_preference(spec)),
             "query_plan_hash": spec.plan_hash,
             "executed_resolvers": list(executed_codes),
             "structured_context": structured_context,
