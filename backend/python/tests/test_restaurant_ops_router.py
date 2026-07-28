@@ -3752,3 +3752,42 @@ def test_scoped_dish_reasonableness_answers_without_inventing_a_threshold():
     assert "毛利率 80.0%" in answer
     assert "不能判断是否合理" in answer
     assert "不会用主观阈值" in answer
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 繁体输入：确定性词表须与简体等价 (2026-07-28)
+#
+# 实测 bug：「本月全部門店營收多少」被拒答 ——「全部門店」不在简体-only 的
+# 词表里，全店范围识别不出来，resolver 报「门店范围不能由全店或全门店
+# resolver 代答」；同一句简体完全正常。港澳台用户 / 系统语言设繁中 /
+# 从繁体文档复制粘贴都会踩。
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_with_traditional_expands_without_duplicates():
+    from smartbi.gold.restaurant_ops_router import with_traditional
+    out = with_traditional(("全部门店", "各店"))
+    assert "全部门店" in out and "全部門店" in out
+    assert "各店" in out                      # 繁简同形只收一次
+    assert len(out) == len(set(out))
+
+
+def test_generic_store_scope_fragments_cover_traditional():
+    from smartbi.gold.restaurant_ops_router import _GENERIC_STORE_SCOPE_FRAGMENTS
+    assert "全部门店" in _GENERIC_STORE_SCOPE_FRAGMENTS
+    assert "全部門店" in _GENERIC_STORE_SCOPE_FRAGMENTS
+
+
+def test_traditional_all_store_query_matches_simplified_behaviour():
+    """繁简同句必须得到同样的范围与维度判定。"""
+    from smartbi.gold.restaurant_intent import _detect_store_scope, _detect_dimensions
+    simplified = "本月全部门店营收多少"
+    traditional = "本月全部門店營收多少"
+    assert _detect_store_scope(traditional) == _detect_store_scope(simplified) == ("all", ())
+    assert _detect_dimensions(traditional) == _detect_dimensions(simplified)
+
+
+def test_traditional_all_store_is_not_mistaken_for_a_store_name():
+    """「全部門店」是聚合范围, 不是门店实体 —— 误判成店名会让查询整条走偏。"""
+    from smartbi.gold.restaurant_ops_router import extract_store_mentions
+    assert extract_store_mentions("本月全部門店營收多少") == []
+    assert extract_store_mentions("本月全部门店营收多少") == []

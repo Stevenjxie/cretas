@@ -43,6 +43,7 @@ from smartbi.gold.restaurant_ops_router import (
     extract_dish_candidates,
     extract_store_mention,
     extract_store_mentions,
+    with_traditional,
     match_restaurant_ops,
     ranking_exclusions,
     ranking_limit,
@@ -215,9 +216,12 @@ _TIME_SCOPED_INTENTS = frozenset({
 
 # ─── Deterministic slot detectors (shared across all 3 tiers) ─────────────
 
-_STORE_TOKENS = ("门店", "分店", "店铺", "哪家店", "哪个店", "各店")
-_DISH_TOKENS = ("菜品", "菜系", "菜价", "哪道菜", "哪个菜", "单品")
-_INGREDIENT_TOKENS = ("食材", "原料", "配料", "领料", "领用")
+_STORE_TOKENS = with_traditional(
+    ("门店", "分店", "店铺", "哪家店", "哪个店", "各店"))
+_DISH_TOKENS = with_traditional(
+    ("菜品", "菜系", "菜价", "哪道菜", "哪个菜", "单品"))
+_INGREDIENT_TOKENS = with_traditional(
+    ("食材", "原料", "配料", "领料", "领用"))
 _INGREDIENT_COST_METRIC_RE = re.compile(
     r"(?:食材|原材料|原料|配料)(?:的)?"
     r"(?:单份|每份|每一份|一份|单位)?成本(?:率)?"
@@ -268,19 +272,19 @@ def _detect_comparison(text: str) -> Optional[str]:
     return None
 
 
-_ALL_STORE_SCOPE_TOKENS = (
+_ALL_STORE_SCOPE_TOKENS = with_traditional((
     "全部门店", "所有门店", "各门店", "各家店", "每家店",
     "所有店", "全部店", "全店汇总", "连锁整体",
-)
-_STORE_RANK_SCOPE_TOKENS = (
+))
+_STORE_RANK_SCOPE_TOKENS = with_traditional((
     "哪家店", "哪个店", "哪家门店", "哪个门店", "门店排名", "门店排行", "各店排名",
-)
-_STORE_BREAKDOWN_SCOPE_TOKENS = (
+))
+_STORE_BREAKDOWN_SCOPE_TOKENS = with_traditional((
     *_STORE_RANK_SCOPE_TOKENS,
     "各门店", "各家店", "每家店", "各店", "每个店",
     "按门店", "分门店", "逐店", "逐家", "门店之间", "店与店",
     "有没有店", "有无门店", "是否有门店", "哪些门店", "哪些店",
-)
+))
 
 
 def _asks_store_breakdown(text: str) -> bool:
@@ -3746,11 +3750,21 @@ async def _t2_vector_match(pool, query: str) -> Tuple[Optional[str], float, Opti
 
 # ─── T3 LLM tier ────────────────────────────────────────────────────────
 
-# Java's tiered endpoint has a 10 s wall-clock deadline. Keep the complete
-# provider cascade below that deadline, including vector/DB/serialization
-# overhead. Six seconds leave room for at most two full 2.5 s slow candidates
-# plus fast quota/refusal fall-throughs; a long mapper tail must not consume
-# the entire interactive request after deterministic tiers have missed.
+# Java's tiered endpoint allows at least 30 s wall-clock
+# (``GoldFinanceClient.MIN_TIERED_ANSWER_TIMEOUT_MS``); the 6/10 s budgets it
+# used to enforce were deliberately lifted so a valid high-quality semantic
+# plan is never cancelled before its data query completes.
+#
+# So this 6 s cap is NOT a Java-imposed deadline — it is the legacy T3 mapper's
+# own interactive latency contract, kept deliberately tight: a long mapper tail
+# must not consume the entire request after deterministic tiers have missed.
+# Six seconds leave room for at most two full 2.5 s slow candidates plus fast
+# quota/refusal fall-throughs.
+#
+# (2026-07-28 对齐: 此处原注释写"Java 有 10 s deadline", 早已过时 —— 它会让人
+# 误以为 semantic-first 的 12 s 总超时越过了 Java 的线而去"修"一个不存在的 bug。
+# 两个预算彼此独立: 下面的 6 s 管 legacy T3, _SEMANTIC_TOTAL_TIMEOUT_SECONDS
+# 的 12 s 管 semantic-first, 都在 Java 的 30 s 之内。)
 _T3_PROVIDER_TIMEOUT_SECONDS = 2.5
 _T3_TOTAL_TIMEOUT_SECONDS = 6.0
 # Authenticated restaurant chat uses the LLM as its natural-language front
