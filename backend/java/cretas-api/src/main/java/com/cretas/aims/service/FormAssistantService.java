@@ -41,6 +41,7 @@ public class FormAssistantService {
     private final DashScopeVisionClient visionClient;
     private final DashScopeConfig config;
     private final ObjectMapper objectMapper;
+    private final FormPromptRegistry formPromptRegistry;
 
     // ==================== 表单解析 ====================
 
@@ -100,8 +101,27 @@ public class FormAssistantService {
 
     private String buildFormParseSystemPrompt(String entityType, List<Map<String, Object>> formFields) {
         StringBuilder sb = new StringBuilder();
-        sb.append("你是一个食品加工厂的智能表单助手。用户会用自然语言描述要填写的内容，你需要将其解析为表单字段值。\n\n");
-        sb.append("实体类型: ").append(entityType).append("\n\n");
+
+        // 域知识优先取注册表里的专属 prompt (resources/ai/form-prompts/{domain}/{ENTITY}.md)。
+        // 那些 prompt 带着通用版给不出的防呆规则 —— 例如生产计划要求
+        // "SKU 名必须逐字保留、禁止缩写归一化"，因为页面随后要拿这个名字去跟真实
+        // 产品表做唯一匹配，一旦被 AI 缩写成相似品名就会匹配失败或匹配错。
+        // 取不到就回退通用 prompt (新实体没登记时不至于整个不可用)。
+        // 域先写死 factory: 当前 7 个可填实体全是工厂侧; 将来餐饮侧要填表时
+        // 从请求/租户业态推导域再传进来。
+        String domainPrompt = formPromptRegistry.promptFor("factory", entityType).orElse(null);
+        if (domainPrompt != null) {
+            sb.append(domainPrompt).append("\n\n");
+        } else {
+            sb.append("你是一个食品加工厂的智能表单助手。用户会用自然语言描述要填写的内容，你需要将其解析为表单字段值。\n\n");
+            sb.append("实体类型: ").append(entityType).append("\n\n");
+        }
+
+        // 当前日期对**所有**实体都必要 —— 多份 prompt 都写着"日期支持自然语言"
+        // ("今天"/"明天"/"下周一"), 但此前只有生产计划那份告诉了模型今天几号,
+        // 其余几份等于让模型拿训练截止日去猜。统一在这里补上。
+        sb.append("工厂当前日期: ").append(formPromptRegistry.today())
+          .append(" (时区 Asia/Shanghai)。所有相对日期一律按它换算成 YYYY-MM-DD。\n\n");
 
         if (formFields != null && !formFields.isEmpty()) {
             sb.append("表单字段定义:\n");

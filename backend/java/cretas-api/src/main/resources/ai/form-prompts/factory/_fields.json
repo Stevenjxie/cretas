@@ -1,0 +1,196 @@
+{
+  "PRODUCTION_PLAN": [
+    {
+      "key": "productTypeName",
+      "label": "产品名称",
+      "required": true
+    },
+    {
+      "key": "plannedQuantity",
+      "label": "计划数量",
+      "required": true
+    },
+    {
+      "key": "quantityUnit",
+      "label": "数量单位",
+      "required": true
+    },
+    {
+      "key": "plannedDate",
+      "label": "计划日期",
+      "required": true
+    },
+    {
+      "key": "sourceCustomerName",
+      "label": "客户名称",
+      "required": false
+    },
+    {
+      "key": "processName",
+      "label": "工序",
+      "required": false
+    },
+    {
+      "key": "batchDate",
+      "label": "批次日期",
+      "required": false
+    },
+    {
+      "key": "notes",
+      "label": "备注",
+      "required": false
+    }
+  ],
+  "PRODUCT": [
+    {
+      "key": "name",
+      "label": "产品名称",
+      "required": true
+    },
+    {
+      "key": "productCategory",
+      "label": "产品大类",
+      "required": true
+    },
+    {
+      "key": "unit",
+      "label": "单位",
+      "required": true
+    },
+    {
+      "key": "specification",
+      "label": "规格",
+      "required": false
+    },
+    {
+      "key": "relatedCustomer",
+      "label": "关联客户",
+      "required": false
+    },
+    {
+      "key": "notes",
+      "label": "备注",
+      "required": false
+    }
+  ],
+  "PURCHASE_ORDER": [
+    {
+      "key": "supplierName",
+      "label": "供应商",
+      "required": true
+    },
+    {
+      "key": "purchaseType",
+      "label": "采购类型",
+      "required": false
+    },
+    {
+      "key": "expectedDeliveryDate",
+      "label": "期望交货日期",
+      "required": false
+    },
+    {
+      "key": "items",
+      "label": "采购明细",
+      "required": true
+    },
+    {
+      "key": "remark",
+      "label": "备注",
+      "required": false
+    }
+  ],
+  "SALES_ORDER": [
+    {
+      "key": "customerName",
+      "label": "客户",
+      "required": true
+    },
+    {
+      "key": "requiredDeliveryDate",
+      "label": "交货日期",
+      "required": false
+    },
+    {
+      "key": "deliveryAddress",
+      "label": "交货地址",
+      "required": false
+    },
+    {
+      "key": "items",
+      "label": "产品明细",
+      "required": true
+    },
+    {
+      "key": "remark",
+      "label": "备注",
+      "required": false
+    }
+  ],
+  "STOCKTAKING": [
+    {
+      "key": "batchNumber",
+      "label": "批次号",
+      "required": true
+    },
+    {
+      "key": "adjustQuantity",
+      "label": "调整数量",
+      "required": true
+    },
+    {
+      "key": "reason",
+      "label": "调整原因",
+      "required": true
+    }
+  ],
+  "WH_INBOUND": [
+    {
+      "key": "supplierName",
+      "label": "供应商",
+      "required": true
+    },
+    {
+      "key": "receiveDate",
+      "label": "入库日期",
+      "required": true
+    },
+    {
+      "key": "purchaseOrderNumber",
+      "label": "采购订单号",
+      "required": false
+    },
+    {
+      "key": "items",
+      "label": "入库明细",
+      "required": true
+    },
+    {
+      "key": "remark",
+      "label": "备注",
+      "required": false
+    }
+  ],
+  "PROCESS_TASK": [
+    {
+      "key": "productTypeName",
+      "label": "产品名称",
+      "required": true
+    },
+    {
+      "key": "plannedQuantity",
+      "label": "计划数量",
+      "required": true
+    },
+    {
+      "key": "unit",
+      "label": "单位",
+      "required": false
+    },
+    {
+      "key": "notes",
+      "label": "备注",
+      "required": false
+    }
+  ]
+}
