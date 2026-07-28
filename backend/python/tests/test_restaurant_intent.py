@@ -15,8 +15,8 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from smartbi.gold import answer_contract as contract
-from smartbi.gold.restaurant_intent import (
+from smartbi.gold.restaurant import answer_contract as contract
+from smartbi.gold.restaurant.restaurant_intent import (
     RestaurantQuerySpec,
     STORE_SCOPE_CLARIFICATION_QUESTION,
     TIME_CLARIFICATION_QUESTION,
@@ -42,7 +42,7 @@ from smartbi.gold.restaurant_intent import (
     _trusted_context_dish_followup_spec,
     _verbatim_entity,
 )
-from smartbi.gold.restaurant_ops_router import (
+from smartbi.gold.restaurant.restaurant_ops_router import (
     _resolve_sales_date_range,
     _resolve_sales_query_spec,
     extract_store_mention,
@@ -274,8 +274,8 @@ async def test_t1_hit_becomes_hint_and_llm_remains_semantic_authority():
         "confidence": 0.93,
         "clarification_needed": False,
     })
-    with patch("smartbi.gold.restaurant_intent._t2_vector_match", new=AsyncMock(side_effect=AssertionError("T2 must not run"))), \
-         patch("smartbi.gold.restaurant_intent._t3_llm_parse", new=llm):
+    with patch("smartbi.gold.restaurant.restaurant_intent._t2_vector_match", new=AsyncMock(side_effect=AssertionError("T2 must not run"))), \
+         patch("smartbi.gold.restaurant.restaurant_intent._t3_llm_parse", new=llm):
         spec = await parse_restaurant_query(query, pool, factory_id="QHJ01")
 
     assert spec is not None
@@ -305,7 +305,7 @@ async def test_explicit_dish_sales_contract_repairs_live_llm_failure_shape(
         "clarification_question": "请明确想查销量、营收还是毛利。",
     })
     with patch(
-        "smartbi.gold.restaurant_intent._t3_llm_parse",
+        "smartbi.gold.restaurant.restaurant_intent._t3_llm_parse",
         new=llm,
     ):
         spec = await parse_restaurant_query(
@@ -343,7 +343,7 @@ async def test_t1_miss_t2_high_confidence_is_only_llm_hint():
         "smartbi.services.template_embedding_index.cosine_topk",
         new=AsyncMock(return_value=[("RESTAURANT_OPS_SALES_SUMMARY", 0.86, "总体销售情况怎么样")]),
     ) as mock_topk, patch(
-        "smartbi.gold.restaurant_intent._t3_llm_parse", new=llm,
+        "smartbi.gold.restaurant.restaurant_intent._t3_llm_parse", new=llm,
     ):
         spec = await parse_restaurant_query(query, pool, factory_id="QHJ01")
 
@@ -379,7 +379,7 @@ async def test_t2_low_confidence_falls_to_t3_llm_and_ignores_llm_dates():
     fake_llm_result = {"choices": [{"message": {"content": llm_json}}]}
 
     with patch(
-        "smartbi.gold.restaurant_intent.match_restaurant_ops", return_value=None,
+        "smartbi.gold.restaurant.restaurant_intent.match_restaurant_ops", return_value=None,
     ), patch(
         "smartbi.services.template_embedding_index.cosine_topk",
         new=AsyncMock(return_value=[("RESTAURANT_OPS_SALES_SUMMARY", 0.73, "总体经营")]),
@@ -497,7 +497,7 @@ async def test_semantic_first_inherits_typed_dish_slots_before_llm_planning():
     }
 
     with patch(
-        "smartbi.gold.restaurant_intent._t3_llm_parse",
+        "smartbi.gold.restaurant.restaurant_intent._t3_llm_parse",
         new=AsyncMock(return_value=llm_plan),
     ) as mock_parse:
         spec = await parse_restaurant_query(
@@ -554,7 +554,7 @@ async def test_semantic_first_repairs_false_missing_slots_after_llm_planning():
     }
 
     with patch(
-        "smartbi.gold.restaurant_intent._t3_llm_parse",
+        "smartbi.gold.restaurant.restaurant_intent._t3_llm_parse",
         new=AsyncMock(return_value=false_clarification),
     ) as mock_parse:
         spec = await parse_restaurant_query(
@@ -647,9 +647,9 @@ async def test_semantic_planner_outage_fails_closed():
     query = "随便聊聊宇宙"
 
     pool = _restaurant_pool()
-    with patch("smartbi.gold.restaurant_intent.match_restaurant_ops", return_value=None), patch(
-        "smartbi.gold.restaurant_intent._t2_vector_match", new=AsyncMock(return_value=(None, 0.0, None)),
-    ), patch("smartbi.gold.restaurant_intent._t3_llm_parse", new=AsyncMock(return_value=None)):
+    with patch("smartbi.gold.restaurant.restaurant_intent.match_restaurant_ops", return_value=None), patch(
+        "smartbi.gold.restaurant.restaurant_intent._t2_vector_match", new=AsyncMock(return_value=(None, 0.0, None)),
+    ), patch("smartbi.gold.restaurant.restaurant_intent._t3_llm_parse", new=AsyncMock(return_value=None)):
         spec = await parse_restaurant_query(query, pool, factory_id="QHJ01")
 
     assert spec is not None
@@ -662,7 +662,7 @@ async def test_semantic_planner_outage_fails_closed():
 @pytest.mark.asyncio
 async def test_approved_exact_phrase_survives_planner_outage_without_keyword_contains():
     t3 = AsyncMock(side_effect=AssertionError("approved exact phrase must not call T3"))
-    with patch("smartbi.gold.restaurant_intent._t3_llm_parse", new=t3):
+    with patch("smartbi.gold.restaurant.restaurant_intent._t3_llm_parse", new=t3):
         spec = await parse_restaurant_query(
             " 哪个菜卖得好？ ",
             _restaurant_pool(),
@@ -682,7 +682,7 @@ async def test_approved_exact_phrase_survives_planner_outage_without_keyword_con
 async def test_approved_exact_phrase_does_not_authorize_a_longer_contains_query():
     query = "我不是问哪个菜卖得好，我想看库存"
     with patch(
-        "smartbi.gold.restaurant_intent._t3_llm_parse",
+        "smartbi.gold.restaurant.restaurant_intent._t3_llm_parse",
         new=AsyncMock(return_value=None),
     ) as t3:
         spec = await parse_restaurant_query(
@@ -703,7 +703,7 @@ async def test_approved_exact_time_and_store_composition_survives_planner_outage
     t3 = AsyncMock(side_effect=AssertionError(
         "finite exact time/store composition must not call T3"
     ))
-    with patch("smartbi.gold.restaurant_intent._t3_llm_parse", new=t3):
+    with patch("smartbi.gold.restaurant.restaurant_intent._t3_llm_parse", new=t3):
         spec = await parse_restaurant_query(
             "最近7天全部门店哪个菜卖得最好？",
             _restaurant_pool(),
@@ -726,7 +726,7 @@ async def test_explicit_multi_store_dish_ranking_survives_planner_outage():
         "complete explicit store ranking must not call T3"
     ))
 
-    with patch("smartbi.gold.restaurant_intent._t3_llm_parse", new=t3):
+    with patch("smartbi.gold.restaurant.restaurant_intent._t3_llm_parse", new=t3):
         spec = await parse_restaurant_query(
             query,
             _restaurant_pool(),
@@ -757,7 +757,7 @@ async def test_explicit_single_store_dish_ranking_uses_the_same_narrow_guard():
     t3 = AsyncMock(side_effect=AssertionError(
         "complete explicit single-store ranking must not call T3"
     ))
-    with patch("smartbi.gold.restaurant_intent._t3_llm_parse", new=t3):
+    with patch("smartbi.gold.restaurant.restaurant_intent._t3_llm_parse", new=t3):
         spec = await parse_restaurant_query(
             "最近7天青花椒南方百联店哪个菜卖得好",
             _restaurant_pool(),
@@ -780,7 +780,7 @@ async def test_explicit_multi_store_ranking_missing_time_asks_for_time_without_t
     t3 = AsyncMock(side_effect=AssertionError(
         "a single missing time slot must be clarified without T3"
     ))
-    with patch("smartbi.gold.restaurant_intent._t3_llm_parse", new=t3):
+    with patch("smartbi.gold.restaurant.restaurant_intent._t3_llm_parse", new=t3):
         spec = await parse_restaurant_query(
             query,
             _restaurant_pool(),
@@ -815,7 +815,7 @@ async def test_explicit_all_store_ranking_missing_time_asks_without_t3(
     t3 = AsyncMock(side_effect=AssertionError(
         "an all-store dish ranking may not invent a default time window"
     ))
-    with patch("smartbi.gold.restaurant_intent._t3_llm_parse", new=t3):
+    with patch("smartbi.gold.restaurant.restaurant_intent._t3_llm_parse", new=t3):
         spec = await parse_restaurant_query(
             query,
             _restaurant_pool(),
@@ -856,7 +856,7 @@ async def test_explicit_ranking_without_store_or_time_asks_time_before_scope(
     t3 = AsyncMock(side_effect=AssertionError(
         "an explicit sales ranking may not ask which metric the user meant"
     ))
-    with patch("smartbi.gold.restaurant_intent._t3_llm_parse", new=t3):
+    with patch("smartbi.gold.restaurant.restaurant_intent._t3_llm_parse", new=t3):
         spec = await parse_restaurant_query(
             query,
             _restaurant_pool(),
@@ -901,7 +901,7 @@ async def test_all_store_limited_ranking_time_button_keeps_full_plan():
     t3 = AsyncMock(side_effect=AssertionError(
         "the fixed time answer must complete the explicit ranking plan"
     ))
-    with patch("smartbi.gold.restaurant_intent._t3_llm_parse", new=t3):
+    with patch("smartbi.gold.restaurant.restaurant_intent._t3_llm_parse", new=t3):
         first = await parse_restaurant_query(
             "全部门店销量最低的5道菜",
             _restaurant_pool(),
@@ -938,7 +938,7 @@ async def test_all_store_limited_ranking_time_button_keeps_full_plan():
 )
 async def test_incomplete_or_ambiguous_multi_store_ranking_still_uses_t3(query):
     t3 = AsyncMock(return_value=None)
-    with patch("smartbi.gold.restaurant_intent._t3_llm_parse", new=t3):
+    with patch("smartbi.gold.restaurant.restaurant_intent._t3_llm_parse", new=t3):
         spec = await parse_restaurant_query(
             query,
             _restaurant_pool(),
@@ -958,7 +958,7 @@ async def test_trusted_dish_followup_survives_planner_outage():
         "complete trusted dish follow-up must not call T3"
     ))
 
-    with patch("smartbi.gold.restaurant_intent._t3_llm_parse", new=t3):
+    with patch("smartbi.gold.restaurant.restaurant_intent._t3_llm_parse", new=t3):
         spec = await parse_restaurant_query(
             query,
             _restaurant_pool(),
@@ -1033,7 +1033,7 @@ async def test_trusted_named_store_dish_followup_survives_planner_outage(
         "complete trusted named-store follow-up must not call T3"
     ))
 
-    with patch("smartbi.gold.restaurant_intent._t3_llm_parse", new=t3):
+    with patch("smartbi.gold.restaurant.restaurant_intent._t3_llm_parse", new=t3):
         spec = await parse_restaurant_query(
             query,
             _restaurant_pool(),
@@ -1060,7 +1060,7 @@ async def test_trusted_named_store_dish_followup_survives_planner_outage(
 async def test_fully_slotted_named_dish_executes_without_t3():
     query = "最近7天全部门店招牌青花椒味(单人份)的成本和毛利呢？"
     with patch(
-        "smartbi.gold.restaurant_intent._t3_llm_parse",
+        "smartbi.gold.restaurant.restaurant_intent._t3_llm_parse",
         new=AsyncMock(return_value=None),
     ) as t3:
         spec = await parse_restaurant_query(
@@ -1081,7 +1081,7 @@ async def test_fully_slotted_named_dish_executes_without_t3():
 async def test_named_dish_inline_time_diagnosis_executes_without_t3():
     query = "全部门店卤炸牛肉串本月销量为什么低"
     with patch(
-        "smartbi.gold.restaurant_intent._t3_llm_parse",
+        "smartbi.gold.restaurant.restaurant_intent._t3_llm_parse",
         new=AsyncMock(side_effect=AssertionError(
             "fully slotted named-dish diagnosis must not call T3"
         )),
@@ -1107,7 +1107,7 @@ async def test_named_dish_inline_time_diagnosis_executes_without_t3():
 async def test_named_dish_without_time_asks_for_time_without_t3():
     query = "全部门店招牌青花椒味(单人份)的成本和毛利呢？"
     with patch(
-        "smartbi.gold.restaurant_intent._t3_llm_parse",
+        "smartbi.gold.restaurant.restaurant_intent._t3_llm_parse",
         new=AsyncMock(return_value=None),
     ) as t3:
         spec = await parse_restaurant_query(
@@ -1131,7 +1131,7 @@ async def test_named_dish_without_time_asks_for_time_without_t3():
 async def test_trusted_named_dish_optimization_executes_without_t3():
     query = "最近7天全部门店招牌青花椒味(单人份)的成本怎么优化？"
     with patch(
-        "smartbi.gold.restaurant_intent._t3_llm_parse",
+        "smartbi.gold.restaurant.restaurant_intent._t3_llm_parse",
         new=AsyncMock(side_effect=AssertionError("typed optimization must not call T3")),
     ) as t3:
         spec = await parse_restaurant_query(
@@ -2869,7 +2869,7 @@ async def test_complete_financial_overview_survives_planner_outage():
     t3 = AsyncMock(side_effect=AssertionError(
         "complete financial overview must not call T3"
     ))
-    with patch("smartbi.gold.restaurant_intent._t3_llm_parse", new=t3):
+    with patch("smartbi.gold.restaurant.restaurant_intent._t3_llm_parse", new=t3):
         spec = await parse_restaurant_query(
             "最近30天全部门店毛利和营业额分别是多少，并展示计算口径",
             _restaurant_pool(),
@@ -3254,7 +3254,7 @@ async def test_contract_repaired_plan_stays_trusted_through_route_cache():
         "clarification_needed": True,
         "clarification_question": "请明确想查哪类数据。",
     })
-    with patch("smartbi.gold.restaurant_intent._t3_llm_parse", new=llm):
+    with patch("smartbi.gold.restaurant.restaurant_intent._t3_llm_parse", new=llm):
         spec1 = await parse_restaurant_query(
             query, _restaurant_pool(), factory_id="DEMO_REST",
         )
@@ -3335,7 +3335,7 @@ def test_colloquial_numerals_and_half_year_windows():
 def test_uses_relative_window_covers_last_week():
     """Audit fix A-2: 上周 must set relative_window so Phase 2 rule 4
     delegates (Java's resolveWindow does not understand 上周 at all)."""
-    from smartbi.gold.restaurant_ops_router import _uses_relative_sales_window
+    from smartbi.gold.restaurant.restaurant_ops_router import _uses_relative_sales_window
     assert _uses_relative_sales_window("上周营收多少") is True
     assert _uses_relative_sales_window("上星期卖了多少") is True
 

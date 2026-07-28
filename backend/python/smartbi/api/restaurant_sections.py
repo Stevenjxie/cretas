@@ -2628,7 +2628,7 @@ async def _fetch_live_gold_overrides(factory_id: str) -> dict | None:
         if normalized != "DEMO_REST" and not normalized.startswith("RES_"):
             return None
         from smartbi.config import get_pg_pool
-        from smartbi.gold.restaurant_ops_router import (
+        from smartbi.gold.restaurant.restaurant_ops_router import (
             demo_data_factory_for_code,
             resolve_gross_margin,
         )

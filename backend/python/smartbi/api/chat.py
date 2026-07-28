@@ -102,7 +102,7 @@ async def _try_tiered_restaurant_intent(
       {"kind": "answer", "answer_text": str, "charts": list, "kpis": list,
        "title": str, "code": str, "contract_pass": bool, "spec": spec}
     """
-    from smartbi.gold.restaurant_intent_service import tiered_answer
+    from smartbi.gold.restaurant.restaurant_intent_service import tiered_answer
 
     kwargs: Dict[str, Any] = {"session_key": session_key}
     if history:
@@ -1361,14 +1361,14 @@ async def general_analysis(request: GeneralAnalysisRequest, http_request: Reques
         factory_id_hdr = trusted_factory_id
         if query and factory_id_hdr:
             try:
-                from smartbi.gold.restaurant_ops_router import (
+                from smartbi.gold.restaurant.restaurant_ops_router import (
                     demo_data_factory_for_code,
                     extract_store_mention,
                     is_supported_restaurant_ops_code,
                     reconcile_restaurant_ops_code,
                     resolve_by_code,
                 )
-                from smartbi.gold.restaurant_intent import contextualize_restaurant_followup
+                from smartbi.gold.restaurant.restaurant_intent import contextualize_restaurant_followup
                 from smartbi.config import get_pg_pool as _get_pool
                 expected_ops_code = (
                     request.expected_intent
@@ -2179,7 +2179,7 @@ async def general_analysis_stream(request: GeneralAnalysisRequest, http_request:
                     and factory_id_hdr
                     and request.table_type != "restaurant_ops"
                 ):
-                    from smartbi.gold.restaurant_ops_router import (
+                    from smartbi.gold.restaurant.restaurant_ops_router import (
                         demo_data_factory_for_code as _demo_gold_factory_trend,
                         is_supported_restaurant_ops_code as _is_supported_ops_trend,
                         reconcile_restaurant_ops_code as _reconcile_ops_trend,
@@ -2261,7 +2261,7 @@ async def general_analysis_stream(request: GeneralAnalysisRequest, http_request:
                         # "minimal blast radius" guarantee of this pre-check.
                         pool_trend = await _get_pool_trend()
                         if pool_trend:
-                            from smartbi.gold.restaurant_intent import (
+                            from smartbi.gold.restaurant.restaurant_intent import (
                                 parse_restaurant_query as _peek_trend_spec,
                             )
                             _trend_spec = await _peek_trend_spec(
@@ -2427,7 +2427,7 @@ async def general_analysis_stream(request: GeneralAnalysisRequest, http_request:
                 user_q = (request.effective_query or "").strip()
                 factory_id_hdr = trusted_factory_id
                 if user_q and factory_id_hdr:
-                    from smartbi.gold.restaurant_ops_router import (
+                    from smartbi.gold.restaurant.restaurant_ops_router import (
                         demo_data_factory_for_code as _demo_gold_factory_stream,
                         extract_store_mention as _extract_store_mention_stream,
                         is_supported_restaurant_ops_code,
@@ -2450,7 +2450,7 @@ async def general_analysis_stream(request: GeneralAnalysisRequest, http_request:
                             # the user's original sentence.
                             effective_user_q = user_q
                         else:
-                            from smartbi.gold.restaurant_intent import (
+                            from smartbi.gold.restaurant.restaurant_intent import (
                                 contextualize_restaurant_followup,
                             )
                             effective_user_q, _ = contextualize_restaurant_followup(

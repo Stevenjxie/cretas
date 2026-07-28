@@ -452,8 +452,8 @@ async def lifespan(app: FastAPI):
             count_embeddings as _count_restaurant_emb,
             populate_restaurant_ops,
         )
-        from smartbi.gold.restaurant_ops_router import SAMPLE_QUERIES as _RESTAURANT_SAMPLES
-        from smartbi.gold.restaurant_intent_promotion import merge_samples as _merge_restaurant_samples
+        from smartbi.gold.restaurant.restaurant_ops_router import SAMPLE_QUERIES as _RESTAURANT_SAMPLES
+        from smartbi.gold.restaurant.restaurant_intent_promotion import merge_samples as _merge_restaurant_samples
         from smartbi.config import get_pg_pool as _get_pool_restaurant_emb
         _restaurant_emb_pool = await _get_pool_restaurant_emb()
         if _restaurant_emb_pool is not None:
@@ -562,7 +562,7 @@ async def lifespan(app: FastAPI):
             import asyncpg as _asyncpg
             from config import get_settings as _get_settings
             from smartbi.config import get_pg_pool as _get_pg_pool_etl
-            from smartbi.gold.restaurant_ops_etl import run_full_etl_with_retry
+            from smartbi.gold.restaurant.restaurant_ops_etl import run_full_etl_with_retry
 
             async def _run_restaurant_ops_etl_forever():
                 await _asyncio.sleep(30)  # post-audit P1-11: shortened for faster recovery
@@ -763,7 +763,7 @@ async def lifespan(app: FastAPI):
         async def _warmup_heavy_resolvers_once():
             await _asyncio.sleep(30)  # let pool + service settle first
             try:
-                from smartbi.gold.restaurant_ops_router import resolve_by_code
+                from smartbi.gold.restaurant.restaurant_ops_router import resolve_by_code
                 from smartbi.tenant_ctx import set_factory_id
                 pool = await _get_pg_pool_warm()
                 if pool is None:

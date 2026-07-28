@@ -146,8 +146,8 @@ from smartbi.gold.queries import (
     supplier_price_coverage,
     weather_daily,
 )
-from smartbi.gold.restaurant_intent_promotion import classify_question_family
-from smartbi.gold.restaurant_ops_router import (
+from smartbi.gold.restaurant.restaurant_intent_promotion import classify_question_family
+from smartbi.gold.restaurant.restaurant_ops_router import (
     _canonicalize_store_mention,
     demo_data_factory_for_code,
     extract_store_mentions,

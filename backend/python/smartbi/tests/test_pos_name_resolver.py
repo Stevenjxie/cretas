@@ -1,4 +1,4 @@
-"""Tests for smartbi.gold.pos_name_resolver — POS dish-name resolution backfill.
+"""Tests for smartbi.gold.restaurant.pos_name_resolver — POS dish-name resolution backfill.
 
 餐饮 #61 Phase 1. 5-layer resolver: L0 alias-exact, L1 product_types exact,
 L2 normalized match, L3 difflib SequenceMatcher (auto/queue/no-match),
@@ -18,7 +18,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from smartbi.gold import pos_name_resolver as R
+from smartbi.gold.restaurant import pos_name_resolver as R
 
 
 # ─────────────────────────────────────────────────────────────────────

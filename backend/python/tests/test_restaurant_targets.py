@@ -497,13 +497,13 @@ def test_upsert_target_rejects_zero_value():
 # ─── Task 5: AI Gold Tool tests ────────────────────────────────────────────────
 def test_restaurant_target_tool_has_correct_name():
     """Tool name must match the DB intent binding: restaurant_target_achievement."""
-    from smartbi.gold.restaurant_target_tool import RestaurantTargetAchievementTool
+    from smartbi.gold.restaurant.restaurant_target_tool import RestaurantTargetAchievementTool
     tool = RestaurantTargetAchievementTool()
     assert tool.tool_name == "restaurant_target_achievement"
 
 
 def test_restaurant_target_tool_description_contains_context():
     """Description must mention 达成率 to satisfy Rule 2 context requirement."""
-    from smartbi.gold.restaurant_target_tool import RestaurantTargetAchievementTool
+    from smartbi.gold.restaurant.restaurant_target_tool import RestaurantTargetAchievementTool
     tool = RestaurantTargetAchievementTool()
     assert "达成率" in tool.description

@@ -39,7 +39,7 @@ from pydantic import BaseModel, Field
 from smartbi.agent.synthesis_engine import ComprehensiveSynthesisEngine
 from smartbi.config import get_pg_pool
 from smartbi.gold import data_range
-from smartbi.gold.restaurant_ops_router import _resolve_sales_date_range
+from smartbi.gold.restaurant.restaurant_ops_router import _resolve_sales_date_range
 from smartbi.services.chat_session_service import parse_trusted_user_id
 
 logger = logging.getLogger(__name__)

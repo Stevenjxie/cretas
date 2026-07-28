@@ -336,7 +336,7 @@ async def _read_promoted_routes_summary(domain: str) -> Dict[str, Any]:
     hit_count 未接线, 而不是只能从代码注释里才知道。"""
     try:
         from smartbi.config import get_pg_pool
-        from smartbi.gold.restaurant_intent_promotion import list_route_promotions
+        from smartbi.gold.restaurant.restaurant_intent_promotion import list_route_promotions
         pool = await get_pg_pool()
         if pool is None:
             return {"available": False, "reason": "pool_unavailable"}
@@ -371,7 +371,7 @@ async def list_candidates(
         # (对象门控逻辑本身是 restaurant 专属), 尚不支持其它 domain。
         _domain_prefix(domain)  # raises 400 with the standard message
 
-    from smartbi.gold import restaurant_intent_promotion as promo
+    from smartbi.gold.restaurant import restaurant_intent_promotion as promo
 
     pool = await _get_pool_or_503()
     base = await promo.aggregate_candidates(
@@ -484,8 +484,8 @@ async def approve_candidate(request: Request, body: ApproveCandidateRequest) -> 
     _require_platform_admin(request, action_name="AI 飞轮候选通过")
     _domain_prefix(body.domain)
 
-    from smartbi.gold import restaurant_intent_promotion as promo
-    from smartbi.gold.restaurant_intent import _VALID_CODES
+    from smartbi.gold.restaurant import restaurant_intent_promotion as promo
+    from smartbi.gold.restaurant.restaurant_intent import _VALID_CODES
 
     if body.code not in _VALID_CODES:
         raise HTTPException(status_code=400, detail=f"code={body.code!r} 不是有效的 RESTAURANT_OPS_* 代码")
@@ -544,7 +544,7 @@ async def reject_candidate(request: Request, body: RejectCandidateRequest) -> di
     _require_platform_admin(request, action_name="AI 飞轮候选否决")
     _domain_prefix(body.domain)
 
-    from smartbi.gold import restaurant_intent_promotion as promo
+    from smartbi.gold.restaurant import restaurant_intent_promotion as promo
 
     result = promo.reject_candidate(
         body.query, body.reason, rejected_by=_reviewed_by(request),
@@ -599,7 +599,7 @@ async def seed_import_candidates(request: Request, body: SeedImportRequest) -> d
     _require_platform_admin(request, action_name="AI 飞轮 manual_seed 批量导入")
     _domain_prefix(body.domain)
 
-    from smartbi.gold import restaurant_intent_promotion as promo
+    from smartbi.gold.restaurant import restaurant_intent_promotion as promo
 
     pool = await _get_pool_or_503()
     entries = [
@@ -647,7 +647,7 @@ async def list_misses(
     if domain != "restaurant":
         _domain_prefix(domain)
 
-    from smartbi.gold import restaurant_intent_promotion as promo
+    from smartbi.gold.restaurant import restaurant_intent_promotion as promo
 
     pool = await _get_pool_or_503()
     misses = await promo.aggregate_misses(pool, limit=limit, factory_id=None)
@@ -683,7 +683,7 @@ async def set_miss_status(request: Request, body: MissStatusRequest) -> dict:
     _require_platform_admin(request, action_name="AI 飞轮 Miss 状态标注")
     _domain_prefix(body.domain)
 
-    from smartbi.gold import restaurant_intent_promotion as promo
+    from smartbi.gold.restaurant import restaurant_intent_promotion as promo
 
     result = promo.set_miss_status(
         body.query, body.status, note=body.note, reviewed_by=_reviewed_by(request),

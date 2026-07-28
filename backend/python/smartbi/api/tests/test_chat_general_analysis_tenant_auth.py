@@ -9,9 +9,9 @@ from fastapi import HTTPException
 
 import smartbi.api.chat as chat
 import smartbi.config as smartbi_config
-import smartbi.gold.restaurant_ops_router as restaurant_router
+import smartbi.gold.restaurant.restaurant_ops_router as restaurant_router
 import smartbi.services.chat_session_service as chat_session_service
-from smartbi.gold.restaurant_ops_router import OpsAnswer
+from smartbi.gold.restaurant.restaurant_ops_router import OpsAnswer
 
 
 def _http_request(factory_id="DEMO_REST"):

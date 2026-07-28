@@ -14,7 +14,7 @@ import json
 
 import pytest
 
-from smartbi.gold import restaurant_intent_promotion as promo
+from smartbi.gold.restaurant import restaurant_intent_promotion as promo
 
 
 # ─── Fake asyncpg pool/conn doubles (mirrors test_restaurant_intent.py) ────
@@ -353,7 +353,7 @@ async def test_populate_restaurant_ops_merges_ledger(tmp_path, monkeypatch):
     )
     monkeypatch.setattr(promo, "LEDGER_FILE", ledger)
     monkeypatch.setattr(
-        "smartbi.gold.restaurant_ops_router.SAMPLE_QUERIES",
+        "smartbi.gold.restaurant.restaurant_ops_router.SAMPLE_QUERIES",
         {"RESTAURANT_OPS_SALES_SUMMARY": ["老问法"]},
     )
 
@@ -374,7 +374,7 @@ async def test_populate_restaurant_ops_merges_ledger(tmp_path, monkeypatch):
 
 
 # ─── question-family classification (2026-07-08 evidence-based backlog) ─────
-from smartbi.gold.restaurant_intent_promotion import (  # noqa: E402
+from smartbi.gold.restaurant.restaurant_intent_promotion import (  # noqa: E402
     classify_question_family,
     family_breakdown,
 )
@@ -456,7 +456,7 @@ class TestAggregateMisses:
 class TestLogIntentMiss:
     @pytest.mark.asyncio
     async def test_writes_sentinel_code_and_served_false(self, monkeypatch):
-        from smartbi.gold import restaurant_intent as ri
+        from smartbi.gold.restaurant import restaurant_intent as ri
         calls = []
 
         async def _fake_hit(pool, query, factory_id, upload_id, template_code,
@@ -479,7 +479,7 @@ class TestLogIntentMiss:
 
     @pytest.mark.asyncio
     async def test_never_raises(self, monkeypatch):
-        from smartbi.gold import restaurant_intent as ri
+        from smartbi.gold.restaurant import restaurant_intent as ri
         import smartbi.services.llm_fallback_logger as fl
 
         async def _boom(*a, **k):

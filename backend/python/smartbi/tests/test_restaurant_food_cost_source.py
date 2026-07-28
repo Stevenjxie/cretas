@@ -12,7 +12,7 @@ Covers:
 All DB interactions mocked — no real DB needed.
 """
 from __future__ import annotations
-from smartbi.gold.restaurant_ops_etl import _get_latest_real_purchase_prices
+from smartbi.gold.restaurant.restaurant_ops_etl import _get_latest_real_purchase_prices
 
 import asyncio
 import os

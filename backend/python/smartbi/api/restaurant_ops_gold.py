@@ -24,7 +24,7 @@ from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, Query, Request
 
-from smartbi.gold.restaurant_cost_mapping import merge_cost_product_mapping
+from smartbi.gold.restaurant.restaurant_cost_mapping import merge_cost_product_mapping
 from smartbi_compat._rbac_strip import PRICE_VIEW_ROLES, strip_price_for_role
 
 logger = logging.getLogger(__name__)
@@ -105,7 +105,7 @@ async def trigger_etl(
         import asyncpg
         from config import get_settings
         from smartbi.config import get_pg_pool
-        from smartbi.gold.restaurant_ops_etl import run_full_etl
+        from smartbi.gold.restaurant.restaurant_ops_etl import run_full_etl
 
         smartbi_pool = await get_pg_pool()
         if smartbi_pool is None:
@@ -328,7 +328,7 @@ async def gross_margin(request: Request, days: int = Query(30, ge=1, le=365)) ->
         return {"success": False, "message": "missing factory context"}
 
     from smartbi.config import get_pg_pool
-    from smartbi.gold.restaurant_ops_router import resolve_gross_margin
+    from smartbi.gold.restaurant.restaurant_ops_router import resolve_gross_margin
     pool = await get_pg_pool()
     if pool is None:
         return {"success": False, "message": "db pool unavailable"}
@@ -617,7 +617,7 @@ async def store_margin(request: Request, days: int = Query(30, ge=1, le=365)) ->
     if not factory_id:
         return {"success": False, "message": "missing factory context"}
     from smartbi.config import get_pg_pool
-    from smartbi.gold.restaurant_ops_router import resolve_store_margin
+    from smartbi.gold.restaurant.restaurant_ops_router import resolve_store_margin
     pool = await get_pg_pool()
     if pool is None:
         return {"success": False, "message": "db pool unavailable"}
@@ -723,7 +723,7 @@ async def summary(request: Request, days: int = Query(30, ge=1, le=365)) -> Dict
         "total_dish_count": 0,
     }
     try:
-        from smartbi.gold.restaurant_ops_router import resolve_gross_margin
+        from smartbi.gold.restaurant.restaurant_ops_router import resolve_gross_margin
         margin_ans = await resolve_gross_margin(pool, factory_id, days=days, top_n=100)
         if margin_ans.kpis:
             for kpi in margin_ans.kpis:

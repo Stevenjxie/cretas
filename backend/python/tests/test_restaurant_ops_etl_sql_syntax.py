@@ -26,7 +26,7 @@ from __future__ import annotations
 
 import re
 
-import smartbi.gold.restaurant_ops_etl as etl
+import smartbi.gold.restaurant.restaurant_ops_etl as etl
 
 
 def _collect_sql_constants() -> dict[str, str]:

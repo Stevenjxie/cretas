@@ -10,8 +10,8 @@ from fastapi.responses import StreamingResponse
 from fastapi.testclient import TestClient
 
 import smartbi.api.chat as chat_mod
-import smartbi.gold.restaurant_intent as restaurant_intent
-import smartbi.gold.restaurant_intent_service as restaurant_intent_service
+import smartbi.gold.restaurant.restaurant_intent as restaurant_intent
+import smartbi.gold.restaurant.restaurant_intent_service as restaurant_intent_service
 
 
 class _Request:
@@ -237,11 +237,11 @@ async def test_stream_false_policy_executes_without_tenant_fallback_services(
 
     monkeypatch.setattr("smartbi.config.get_pg_pool", _pool)
     monkeypatch.setattr(
-        "smartbi.gold.restaurant_ops_router.match_restaurant_ops",
+        "smartbi.gold.restaurant.restaurant_ops_router.match_restaurant_ops",
         lambda _query: "NOOP_NON_TREND",
     )
     monkeypatch.setattr(
-        "smartbi.gold.restaurant_ops_router.resolve_by_code",
+        "smartbi.gold.restaurant.restaurant_ops_router.resolve_by_code",
         _no_gold,
     )
     monkeypatch.setattr(
@@ -329,7 +329,7 @@ async def test_stream_invalid_trusted_user_disables_both_tiered_clarification_pa
 
     monkeypatch.setattr("smartbi.config.get_pg_pool", _pool)
     monkeypatch.setattr(
-        "smartbi.gold.restaurant_ops_router.match_restaurant_ops",
+        "smartbi.gold.restaurant.restaurant_ops_router.match_restaurant_ops",
         lambda _query: None,
     )
     monkeypatch.setattr(
@@ -384,11 +384,11 @@ async def test_stream_invalid_trusted_user_disables_session_lookup_and_writeback
 
     monkeypatch.setattr("smartbi.config.get_pg_pool", _pool)
     monkeypatch.setattr(
-        "smartbi.gold.restaurant_ops_router.match_restaurant_ops",
+        "smartbi.gold.restaurant.restaurant_ops_router.match_restaurant_ops",
         lambda _query: "RESTAURANT_OPS_REVENUE",
     )
     monkeypatch.setattr(
-        "smartbi.gold.restaurant_ops_router.resolve_by_code",
+        "smartbi.gold.restaurant.restaurant_ops_router.resolve_by_code",
         _gold,
     )
     monkeypatch.setattr(
@@ -436,11 +436,11 @@ async def test_restaurant_trend_uses_query_plan_before_legacy_trend_shortcut(mon
 
     monkeypatch.setattr("smartbi.config.get_pg_pool", _pool)
     monkeypatch.setattr(
-        "smartbi.gold.restaurant_ops_router.reconcile_restaurant_ops_code",
+        "smartbi.gold.restaurant.restaurant_ops_router.reconcile_restaurant_ops_code",
         lambda *_args, **_kwargs: "RESTAURANT_OPS_TREND_ANALYSIS",
     )
     monkeypatch.setattr(
-        "smartbi.gold.restaurant_ops_router.resolve_by_code",
+        "smartbi.gold.restaurant.restaurant_ops_router.resolve_by_code",
         _legacy_resolver,
     )
     monkeypatch.setattr(chat_mod, "_try_tiered_restaurant_intent", _tiered)

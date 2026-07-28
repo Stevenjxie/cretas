@@ -26,9 +26,9 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from smartbi.gold import restaurant_intent as ri
-from smartbi.gold import restaurant_ops_router as ops_router
-from smartbi.gold.restaurant_intent import (
+from smartbi.gold.restaurant import restaurant_intent as ri
+from smartbi.gold.restaurant import restaurant_ops_router as ops_router
+from smartbi.gold.restaurant.restaurant_intent import (
     TRUSTED_PLANNER_AUTHORITIES,
     _build_spec,
     clear_promoted_routes_cache,
@@ -639,7 +639,7 @@ class _WriterPool(_FakePool):
 
 
 async def test_apply_route_promotions_writes_a_global_row_as_internal():
-    from smartbi.gold.restaurant_intent_promotion import apply_route_promotions
+    from smartbi.gold.restaurant.restaurant_intent_promotion import apply_route_promotions
 
     pool = _WriterPool()
     result = await apply_route_promotions(
@@ -664,7 +664,7 @@ async def test_apply_route_promotions_writes_a_global_row_as_internal():
 
 
 async def test_apply_route_promotions_rejects_a_plan_that_cannot_be_replayed():
-    from smartbi.gold.restaurant_intent_promotion import apply_route_promotions
+    from smartbi.gold.restaurant.restaurant_intent_promotion import apply_route_promotions
 
     pool = _WriterPool()
     result = await apply_route_promotions(pool, [
@@ -690,7 +690,7 @@ async def test_apply_route_promotions_rejects_a_plan_that_cannot_be_replayed():
 
 
 async def test_apply_route_promotions_tenant_scope_uses_the_tenant_guc():
-    from smartbi.gold.restaurant_intent_promotion import apply_route_promotions
+    from smartbi.gold.restaurant.restaurant_intent_promotion import apply_route_promotions
 
     pool = _WriterPool()
     await apply_route_promotions(

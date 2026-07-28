@@ -24,16 +24,16 @@ from unittest.mock import AsyncMock
 import pytest
 
 import smartbi.api.gold_reads as gold_reads_mod
-import smartbi.gold.restaurant_intent_service as svc
+import smartbi.gold.restaurant.restaurant_intent_service as svc
 from smartbi.api.gold_reads import TieredIntentAnswerRequest, post_restaurant_tiered_answer
-from smartbi.gold.restaurant_intent import (
+from smartbi.gold.restaurant.restaurant_intent import (
     RestaurantQuerySpec,
     STORE_SCOPE_CLARIFICATION_QUESTION,
     TIME_CLARIFICATION_QUESTION,
     _build_spec,
 )
-from smartbi.gold.restaurant_intent_service import should_delegate, tiered_answer
-from smartbi.gold.restaurant_ops_router import OpsAnswer
+from smartbi.gold.restaurant.restaurant_intent_service import should_delegate, tiered_answer
+from smartbi.gold.restaurant.restaurant_ops_router import OpsAnswer
 
 
 def _spec(**overrides) -> RestaurantQuerySpec:
@@ -1211,7 +1211,7 @@ async def test_endpoint_delegate_false_when_should_delegate_false(monkeypatch):
         confidence=0.70,
     )
     monkeypatch.setattr(
-        "smartbi.gold.restaurant_intent.parse_restaurant_query",
+        "smartbi.gold.restaurant.restaurant_intent.parse_restaurant_query",
         AsyncMock(return_value=spec),
     )
 
@@ -1232,7 +1232,7 @@ async def test_endpoint_delegate_true_answer_shape(monkeypatch):
         relative_window=True, window_label="最近2个月",
     )
     monkeypatch.setattr(
-        "smartbi.gold.restaurant_intent.parse_restaurant_query",
+        "smartbi.gold.restaurant.restaurant_intent.parse_restaurant_query",
         AsyncMock(return_value=spec),
     )
 
@@ -1247,7 +1247,7 @@ async def test_endpoint_delegate_true_answer_shape(monkeypatch):
         "spec": spec,
     }
     monkeypatch.setattr(
-        "smartbi.gold.restaurant_intent_service.tiered_answer",
+        "smartbi.gold.restaurant.restaurant_intent_service.tiered_answer",
         AsyncMock(return_value=tiered_result),
     )
 
@@ -1300,7 +1300,7 @@ async def test_endpoint_delegates_sealed_read_action_choice(monkeypatch):
     assert spec.clarification_needed is False
     assert "下架" not in spec.resolver_query_seed
     monkeypatch.setattr(
-        "smartbi.gold.restaurant_intent.parse_restaurant_query",
+        "smartbi.gold.restaurant.restaurant_intent.parse_restaurant_query",
         AsyncMock(return_value=spec),
     )
     tiered_result = {
@@ -1318,7 +1318,7 @@ async def test_endpoint_delegates_sealed_read_action_choice(monkeypatch):
     }
     tiered_mock = AsyncMock(return_value=tiered_result)
     monkeypatch.setattr(
-        "smartbi.gold.restaurant_intent_service.tiered_answer",
+        "smartbi.gold.restaurant.restaurant_intent_service.tiered_answer",
         tiered_mock,
     )
 
@@ -1374,7 +1374,7 @@ async def test_endpoint_dependent_followup_sends_raw_query_and_history_to_llm(mo
         return spec
 
     monkeypatch.setattr(
-        "smartbi.gold.restaurant_intent.parse_restaurant_query",
+        "smartbi.gold.restaurant.restaurant_intent.parse_restaurant_query",
         _fake_parse,
     )
 
@@ -1394,7 +1394,7 @@ async def test_endpoint_dependent_followup_sends_raw_query_and_history_to_llm(mo
         }
 
     monkeypatch.setattr(
-        "smartbi.gold.restaurant_intent_service.tiered_answer",
+        "smartbi.gold.restaurant.restaurant_intent_service.tiered_answer",
         _fake_tiered,
     )
 
@@ -1437,7 +1437,7 @@ async def test_endpoint_clarification_shape(monkeypatch):
     monkeypatch.setattr(gold_reads_mod, "get_pg_pool", AsyncMock(return_value=object()))
     spec = _spec(clarification_needed=True, clarification_question="您想看哪方面？", intent="")
     monkeypatch.setattr(
-        "smartbi.gold.restaurant_intent.parse_restaurant_query",
+        "smartbi.gold.restaurant.restaurant_intent.parse_restaurant_query",
         AsyncMock(return_value=spec),
     )
     followups = [
@@ -1452,7 +1452,7 @@ async def test_endpoint_clarification_shape(monkeypatch):
     }
     tiered_mock = AsyncMock(return_value=tiered_result)
     monkeypatch.setattr(
-        "smartbi.gold.restaurant_intent_service.tiered_answer",
+        "smartbi.gold.restaurant.restaurant_intent_service.tiered_answer",
         tiered_mock,
     )
 
@@ -1483,7 +1483,7 @@ async def test_llm_clarification_cannot_be_bypassed_by_compound_split(monkeypatc
         AsyncMock(return_value=spec),
     )
 
-    import smartbi.gold.restaurant_agent as restaurant_agent
+    import smartbi.gold.restaurant.restaurant_agent as restaurant_agent
 
     monkeypatch.setattr(
         restaurant_agent,
@@ -1522,11 +1522,11 @@ async def test_endpoint_marks_consumed_pending_clarification_continuation(monkey
         is_clarification_continuation=True,
     )
     monkeypatch.setattr(
-        "smartbi.gold.restaurant_intent.parse_restaurant_query",
+        "smartbi.gold.restaurant.restaurant_intent.parse_restaurant_query",
         AsyncMock(return_value=spec),
     )
     monkeypatch.setattr(
-        "smartbi.gold.restaurant_intent_service.tiered_answer",
+        "smartbi.gold.restaurant.restaurant_intent_service.tiered_answer",
         AsyncMock(return_value={
             "kind": "clarification",
             "answer_text": "你想看哪个时间范围？",
@@ -1558,9 +1558,9 @@ async def test_endpoint_signal_free_query_reaches_semantic_planner(monkeypatch):
     monkeypatch.setattr(gold_reads_mod, "get_factory_id", lambda: "QHJ01")
     monkeypatch.setattr(gold_reads_mod, "get_pg_pool", AsyncMock(return_value=object()))
     parse_mock = AsyncMock(return_value=None)
-    monkeypatch.setattr("smartbi.gold.restaurant_intent.parse_restaurant_query", parse_mock)
+    monkeypatch.setattr("smartbi.gold.restaurant.restaurant_intent.parse_restaurant_query", parse_mock)
     monkeypatch.setattr(
-        "smartbi.gold.restaurant_intent_service.tiered_answer",
+        "smartbi.gold.restaurant.restaurant_intent_service.tiered_answer",
         AsyncMock(return_value=None),
     )
 
@@ -1576,7 +1576,7 @@ async def test_endpoint_forwards_role_and_java_tool_name_to_tiered_answer(monkey
     monkeypatch.setattr(gold_reads_mod, "get_pg_pool", AsyncMock(return_value=object()))
     spec = _spec(intent="RESTAURANT_OPS_STORE_MARGIN", wants_margin=True)
     monkeypatch.setattr(
-        "smartbi.gold.restaurant_intent.parse_restaurant_query",
+        "smartbi.gold.restaurant.restaurant_intent.parse_restaurant_query",
         AsyncMock(return_value=spec),
     )
 
@@ -1599,7 +1599,7 @@ async def test_endpoint_forwards_role_and_java_tool_name_to_tiered_answer(monkey
             "title": "t", "code": spec.intent, "contract_pass": True, "spec": spec,
         }
 
-    monkeypatch.setattr("smartbi.gold.restaurant_intent_service.tiered_answer", _fake_tiered_answer)
+    monkeypatch.setattr("smartbi.gold.restaurant.restaurant_intent_service.tiered_answer", _fake_tiered_answer)
 
     body = TieredIntentAnswerRequest(
         factory_id="QHJ01", query="哪家店最赚钱", java_tool_name="restaurant_store_revenue_rank_gold",
@@ -1618,11 +1618,11 @@ async def test_endpoint_resolver_miss_falls_back_to_delegate_false(monkeypatch):
     monkeypatch.setattr(gold_reads_mod, "get_pg_pool", AsyncMock(return_value=object()))
     spec = _spec(asks_profitability=True, wants_margin=True)
     monkeypatch.setattr(
-        "smartbi.gold.restaurant_intent.parse_restaurant_query",
+        "smartbi.gold.restaurant.restaurant_intent.parse_restaurant_query",
         AsyncMock(return_value=spec),
     )
     monkeypatch.setattr(
-        "smartbi.gold.restaurant_intent_service.tiered_answer",
+        "smartbi.gold.restaurant.restaurant_intent_service.tiered_answer",
         AsyncMock(return_value=None),
     )
 
@@ -1639,7 +1639,7 @@ async def test_endpoint_fail_open_on_internal_exception(monkeypatch):
     async def _boom(*a, **kw):
         raise RuntimeError("boom")
 
-    monkeypatch.setattr("smartbi.gold.restaurant_intent.parse_restaurant_query", _boom)
+    monkeypatch.setattr("smartbi.gold.restaurant.restaurant_intent.parse_restaurant_query", _boom)
 
     body = TieredIntentAnswerRequest(factory_id="QHJ01", query="随便问问")
     result = await post_restaurant_tiered_answer(_fake_request(), body)

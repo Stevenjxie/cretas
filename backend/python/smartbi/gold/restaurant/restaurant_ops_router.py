@@ -622,7 +622,7 @@ def match_restaurant_ops(query: str) -> Optional[str]:
     q = query.strip()
     # Explicit "行业参考做法" requests are the most specific intent of all —
     # they must win before any metric keyword (毛利/损耗/…) grabs the query.
-    from smartbi.gold.restaurant_playbook import PLAYBOOK_CODE, PLAYBOOK_TRIGGERS
+    from smartbi.gold.restaurant.restaurant_playbook import PLAYBOOK_CODE, PLAYBOOK_TRIGGERS
     if any(trigger in q for trigger in PLAYBOOK_TRIGGERS):
         return PLAYBOOK_CODE
     # 能力自述 ("你们能做什么") — 此前落 SYSTEM_HELP 无执行器死胡同 (R14/G4)。
@@ -2670,7 +2670,7 @@ async def resolve_recipe_cost(
         except Exception as e:
             logger.warning(f"[recipe_cost] dish name lookup failed: {e}")
 
-    from smartbi.gold.restaurant_cost_mapping import merge_cost_product_names
+    from smartbi.gold.restaurant.restaurant_cost_mapping import merge_cost_product_names
     name_map = await merge_cost_product_names(
         smartbi_pool,
         factory_id,
@@ -3292,7 +3292,7 @@ async def resolve_gross_margin(
     # seed that originally produced them.  Supplement only unresolved names
     # from SmartBI's tenant-scoped cost-product read model; ambiguous names stay
     # unresolved rather than guessing a COGS key.
-    from smartbi.gold.restaurant_cost_mapping import merge_cost_product_mapping
+    from smartbi.gold.restaurant.restaurant_cost_mapping import merge_cost_product_mapping
     cretas_map = await merge_cost_product_mapping(
         smartbi_pool,
         factory_id,
@@ -4865,7 +4865,7 @@ async def resolve_store_margin(
     except Exception as e:
         logger.warning(f"[store_margin] cretas lookup failed: {e}")
 
-    from smartbi.gold.restaurant_cost_mapping import merge_cost_product_mapping
+    from smartbi.gold.restaurant.restaurant_cost_mapping import merge_cost_product_mapping
     name_to_pk = await merge_cost_product_mapping(
         smartbi_pool,
         factory_id,
@@ -7024,7 +7024,7 @@ async def resolve_staffing_advice(smartbi_pool, factory_id: str) -> OpsAnswer:
     )
 
 
-from smartbi.gold.restaurant_playbook import resolve_playbook as _resolve_playbook
+from smartbi.gold.restaurant.restaurant_playbook import resolve_playbook as _resolve_playbook
 
 async def resolve_channel_mix(
     smartbi_pool, factory_id: str, days: int = 30, *,

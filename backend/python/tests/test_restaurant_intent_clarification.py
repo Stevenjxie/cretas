@@ -27,7 +27,7 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from smartbi.gold.restaurant_intent import (
+from smartbi.gold.restaurant.restaurant_intent import (
     STORE_SCOPE_CLARIFICATION_QUESTION,
     TIME_CLARIFICATION_QUESTION,
     _build_t3_prompt,
@@ -43,7 +43,7 @@ from smartbi.gold.restaurant_intent import (
     clear_tenant_gate_cache,
     parse_restaurant_query,
 )
-from smartbi.gold.restaurant_ops_router import _resolve_sales_date_range, match_restaurant_ops
+from smartbi.gold.restaurant.restaurant_ops_router import _resolve_sales_date_range, match_restaurant_ops
 
 
 @pytest.fixture(autouse=True)
@@ -278,7 +278,7 @@ async def test_semantic_first_store_buttons_only_offer_data_bearing_dish_stores(
     }
 
     with patch(
-        "smartbi.gold.restaurant_intent._t3_llm_parse",
+        "smartbi.gold.restaurant.restaurant_intent._t3_llm_parse",
         new=AsyncMock(return_value=plan),
     ):
         spec = await parse_restaurant_query(
@@ -580,7 +580,7 @@ async def test_explicit_multi_store_ranking_time_button_never_needs_t3():
         "structured ranking and its time continuation must not call T3"
     ))
 
-    with patch("smartbi.gold.restaurant_intent._t3_llm_parse", new=t3):
+    with patch("smartbi.gold.restaurant.restaurant_intent._t3_llm_parse", new=t3):
         first = await parse_restaurant_query(
             original_query,
             pool,
@@ -1446,7 +1446,7 @@ async def test_explicit_period_comparison_survives_store_button_without_t3(
     # when CI crosses a week/month boundary.
     with (
         patch("common.llm_router.call_chain", new=llm),
-        patch("smartbi.gold.restaurant_ops_router.date", new=_FrozenDate),
+        patch("smartbi.gold.restaurant.restaurant_ops_router.date", new=_FrozenDate),
     ):
         first = await parse_restaurant_query(
             original_query,
@@ -1664,7 +1664,7 @@ async def test_semantic_first_dish_time_store_buttons_survive_t3_outage():
     ])
 
     with patch(
-        "smartbi.gold.restaurant_intent._t3_llm_parse",
+        "smartbi.gold.restaurant.restaurant_intent._t3_llm_parse",
         new=planner,
     ):
         first = await parse_restaurant_query(
@@ -1750,7 +1750,7 @@ async def test_reviewed_exact_button_with_extra_instruction_falls_back_fail_clos
     pool = _FakeDbPool(is_restaurant=True)
     t3 = AsyncMock(return_value=None)
 
-    with patch("smartbi.gold.restaurant_intent._t3_llm_parse", new=t3):
+    with patch("smartbi.gold.restaurant.restaurant_intent._t3_llm_parse", new=t3):
         first = await parse_restaurant_query(
             "哪个菜卖得好",
             pool,
@@ -1816,13 +1816,13 @@ async def test_semantic_first_store_choice_is_merged_and_not_asked_twice():
     }
     planner = AsyncMock(side_effect=[first_plan, second_plan])
     with patch(
-        "smartbi.gold.restaurant_intent._t3_llm_parse",
+        "smartbi.gold.restaurant.restaurant_intent._t3_llm_parse",
         new=planner,
     ), patch(
-        "smartbi.gold.restaurant_intent.match_restaurant_ops",
+        "smartbi.gold.restaurant.restaurant_intent.match_restaurant_ops",
         side_effect=AssertionError("keyword matcher must not run before the LLM"),
     ), patch(
-        "smartbi.gold.restaurant_intent._t2_vector_match",
+        "smartbi.gold.restaurant.restaurant_intent._t2_vector_match",
         new=AsyncMock(side_effect=AssertionError("vector matcher must not run before the LLM")),
     ):
         first = await parse_restaurant_query(
@@ -1906,13 +1906,13 @@ async def test_semantic_first_three_turn_metric_time_store_chain_keeps_original_
     planner = AsyncMock(side_effect=[first_plan, second_plan, third_plan])
 
     with patch(
-        "smartbi.gold.restaurant_intent._t3_llm_parse",
+        "smartbi.gold.restaurant.restaurant_intent._t3_llm_parse",
         new=planner,
     ), patch(
-        "smartbi.gold.restaurant_intent.match_restaurant_ops",
+        "smartbi.gold.restaurant.restaurant_intent.match_restaurant_ops",
         side_effect=AssertionError("keyword matcher must remain below semantic planning"),
     ), patch(
-        "smartbi.gold.restaurant_intent._t2_vector_match",
+        "smartbi.gold.restaurant.restaurant_intent._t2_vector_match",
         new=AsyncMock(side_effect=AssertionError("vector matcher must remain below semantic planning")),
     ):
         first = await parse_restaurant_query(
@@ -2012,13 +2012,13 @@ async def test_semantic_first_selects_full_capability_not_keyword_report(
 ):
     pool = _FakeDbPool(is_restaurant=True, store_names=["兄弟土菜馆", "有滋有味总部"])
     with patch(
-        "smartbi.gold.restaurant_intent._t3_llm_parse",
+        "smartbi.gold.restaurant.restaurant_intent._t3_llm_parse",
         new=AsyncMock(return_value=payload),
     ), patch(
-        "smartbi.gold.restaurant_intent.match_restaurant_ops",
+        "smartbi.gold.restaurant.restaurant_intent.match_restaurant_ops",
         side_effect=AssertionError("keyword matcher must be below semantic planning"),
     ), patch(
-        "smartbi.gold.restaurant_intent._t2_vector_match",
+        "smartbi.gold.restaurant.restaurant_intent._t2_vector_match",
         new=AsyncMock(side_effect=AssertionError("vector matcher must be below semantic planning")),
     ):
         spec = await parse_restaurant_query(
@@ -2045,25 +2045,25 @@ async def test_semantic_first_incomplete_llm_contract_fails_closed_without_keywo
         "clarification_needed": False,
     }
     with patch(
-        "smartbi.gold.restaurant_intent._t3_llm_parse",
+        "smartbi.gold.restaurant.restaurant_intent._t3_llm_parse",
         new=AsyncMock(return_value=incomplete),
     ), patch(
-        "smartbi.gold.restaurant_intent.match_restaurant_ops",
+        "smartbi.gold.restaurant.restaurant_intent.match_restaurant_ops",
         side_effect=AssertionError("keyword route must not replace an incomplete LLM contract"),
     ), patch(
-        "smartbi.gold.restaurant_intent._t2_vector_match",
+        "smartbi.gold.restaurant.restaurant_intent._t2_vector_match",
         new=AsyncMock(side_effect=AssertionError("vector route must not replace an incomplete LLM contract")),
     ), patch(
-        "smartbi.gold.restaurant_intent._detect_requested_metrics",
+        "smartbi.gold.restaurant.restaurant_intent._detect_requested_metrics",
         side_effect=AssertionError("keyword metric extraction must not become semantic authority"),
     ), patch(
-        "smartbi.gold.restaurant_intent._detect_dimensions",
+        "smartbi.gold.restaurant.restaurant_intent._detect_dimensions",
         side_effect=AssertionError("keyword dimensions must not become semantic authority"),
     ), patch(
-        "smartbi.gold.restaurant_intent._detect_store_scope",
+        "smartbi.gold.restaurant.restaurant_intent._detect_store_scope",
         side_effect=AssertionError("keyword store scope must not become semantic authority"),
     ), patch(
-        "smartbi.gold.restaurant_intent._detect_analysis_action",
+        "smartbi.gold.restaurant.restaurant_intent._detect_analysis_action",
         side_effect=AssertionError("keyword action must not become semantic authority"),
     ):
         spec = await parse_restaurant_query(
@@ -2185,13 +2185,13 @@ async def test_semantic_first_repairs_complete_llm_store_count_misclassification
     }
 
     with patch(
-        "smartbi.gold.restaurant_intent._t3_llm_parse",
+        "smartbi.gold.restaurant.restaurant_intent._t3_llm_parse",
         new=AsyncMock(return_value=wrong_but_complete_plan),
     ), patch(
-        "smartbi.gold.restaurant_intent.match_restaurant_ops",
+        "smartbi.gold.restaurant.restaurant_intent.match_restaurant_ops",
         side_effect=AssertionError("keyword matcher must remain below the LLM"),
     ), patch(
-        "smartbi.gold.restaurant_intent._t2_vector_match",
+        "smartbi.gold.restaurant.restaurant_intent._t2_vector_match",
         new=AsyncMock(side_effect=AssertionError("vector matcher must remain below the LLM")),
     ):
         spec = await parse_restaurant_query(
@@ -2251,13 +2251,13 @@ async def test_semantic_first_week_comparison_action_keeps_all_slots_after_store
     planner = AsyncMock(side_effect=[first_plan, second_plan])
 
     with patch(
-        "smartbi.gold.restaurant_intent._t3_llm_parse",
+        "smartbi.gold.restaurant.restaurant_intent._t3_llm_parse",
         new=planner,
     ), patch(
-        "smartbi.gold.restaurant_intent.match_restaurant_ops",
+        "smartbi.gold.restaurant.restaurant_intent.match_restaurant_ops",
         side_effect=AssertionError("keyword matcher must remain below semantic planning"),
     ), patch(
-        "smartbi.gold.restaurant_intent._t2_vector_match",
+        "smartbi.gold.restaurant.restaurant_intent._t2_vector_match",
         new=AsyncMock(side_effect=AssertionError("vector matcher must remain below semantic planning")),
     ):
         first = await parse_restaurant_query(

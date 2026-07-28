@@ -5,7 +5,7 @@ Spec: docs/superpowers/specs/2026-07-08-business-concept-registry-direction.md
 
 Structure of the registry: each concept maps to up to four vocabulary
 sources — java_intent (ai_intent_configs.intent_code, Flyway-seeded),
-python_ops (smartbi.gold.restaurant_ops_router.SAMPLE_QUERIES key),
+python_ops (smartbi.gold.restaurant.restaurant_ops_router.SAMPLE_QUERIES key),
 materialized (materialized_analytics template codes), owner_action
 (web-admin restaurantOwnerActionRegistry.ts scenario). Any of these may be
 ``null``/``[]`` — a registered gap is a valid, useful finding (spec §3 A0).
@@ -54,7 +54,7 @@ def _load_registry() -> dict[str, dict[str, Any]]:
 
 
 def _sample_query_codes() -> set[str]:
-    from smartbi.gold.restaurant_ops_router import SAMPLE_QUERIES
+    from smartbi.gold.restaurant.restaurant_ops_router import SAMPLE_QUERIES
 
     return set(SAMPLE_QUERIES.keys())
 
@@ -139,7 +139,7 @@ class TestForwardLinksResolve:
                 continue
             assert code in valid, (
                 f"{concept_id}: python_ops={code!r} not found in "
-                f"smartbi.gold.restaurant_ops_router.SAMPLE_QUERIES — dead link"
+                f"smartbi.gold.restaurant.restaurant_ops_router.SAMPLE_QUERIES — dead link"
             )
 
     def test_materialized_codes_exist_in_template_registry(self):

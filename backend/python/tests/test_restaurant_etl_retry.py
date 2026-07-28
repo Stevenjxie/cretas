@@ -21,12 +21,12 @@ def _make_pool_with_conn(conn):
 @pytest.mark.asyncio
 async def test_etl_retry_succeeds_first_try():
     """First attempt succeeds — no retry, no failure log."""
-    from smartbi.gold.restaurant_ops_etl import run_full_etl_with_retry
+    from smartbi.gold.restaurant.restaurant_ops_etl import run_full_etl_with_retry
 
     cretas_pool = AsyncMock()
     smartbi_pool = AsyncMock()
 
-    with patch('smartbi.gold.restaurant_ops_etl.run_full_etl', new=AsyncMock(return_value={"ok": True})) as mock_etl:
+    with patch('smartbi.gold.restaurant.restaurant_ops_etl.run_full_etl', new=AsyncMock(return_value={"ok": True})) as mock_etl:
         result = await run_full_etl_with_retry(cretas_pool, smartbi_pool, "F001")
 
     assert result["ok"] is True
@@ -36,7 +36,7 @@ async def test_etl_retry_succeeds_first_try():
 @pytest.mark.asyncio
 async def test_etl_retry_succeeds_after_one_failure():
     """First attempt fails, second succeeds — 1 retry, 1 failure log row written."""
-    from smartbi.gold.restaurant_ops_etl import run_full_etl_with_retry
+    from smartbi.gold.restaurant.restaurant_ops_etl import run_full_etl_with_retry
 
     cretas_pool = AsyncMock()
     smartbi_conn = AsyncMock()
@@ -51,7 +51,7 @@ async def test_etl_retry_succeeds_after_one_failure():
             raise RuntimeError("simulated transient")
         return {"ok": True}
 
-    with patch('smartbi.gold.restaurant_ops_etl.run_full_etl', side_effect=flaky):
+    with patch('smartbi.gold.restaurant.restaurant_ops_etl.run_full_etl', side_effect=flaky):
         with patch('asyncio.sleep', new=AsyncMock()):  # skip backoff sleep
             result = await run_full_etl_with_retry(cretas_pool, smartbi_pool, "F001")
 
@@ -63,13 +63,13 @@ async def test_etl_retry_succeeds_after_one_failure():
 @pytest.mark.asyncio
 async def test_etl_retry_fails_all_three():
     """All 3 attempts fail — exception raised + failed_final row written."""
-    from smartbi.gold.restaurant_ops_etl import run_full_etl_with_retry
+    from smartbi.gold.restaurant.restaurant_ops_etl import run_full_etl_with_retry
 
     cretas_pool = AsyncMock()
     smartbi_conn = AsyncMock()
     smartbi_pool = _make_pool_with_conn(smartbi_conn)
 
-    with patch('smartbi.gold.restaurant_ops_etl.run_full_etl',
+    with patch('smartbi.gold.restaurant.restaurant_ops_etl.run_full_etl',
                new=AsyncMock(side_effect=RuntimeError("persistent failure"))):
         with patch('asyncio.sleep', new=AsyncMock()):
             with pytest.raises(RuntimeError, match="persistent failure"):

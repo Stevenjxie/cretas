@@ -23,7 +23,7 @@ from smartbi.gold import (
     supplier_price_coverage,
     top_products,
 )
-from smartbi.gold.restaurant_ops_router import resolve_store_margin
+from smartbi.gold.restaurant.restaurant_ops_router import resolve_store_margin
 from smartbi.gold.triggers import UploadCompleteTrigger
 
 

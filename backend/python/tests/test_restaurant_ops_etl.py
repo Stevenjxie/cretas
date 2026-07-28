@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import inspect
 
-from smartbi.gold import restaurant_ops_etl
+from smartbi.gold.restaurant import restaurant_ops_etl
 
 
 def test_requisition_est_cost_recomputed_even_when_existing_value_is_non_null():

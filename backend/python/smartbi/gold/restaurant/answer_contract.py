@@ -10,7 +10,7 @@ from __future__ import annotations
 import math
 from typing import Any, Dict, List, Optional
 
-from smartbi.gold.restaurant_intent import (
+from smartbi.gold.restaurant.restaurant_intent import (
     RestaurantQuerySpec,
     TRUSTED_PLANNER_AUTHORITIES,
 )

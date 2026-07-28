@@ -30,8 +30,8 @@ from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
 from smartbi.canonical.provenance._admin_auth import require_admin
-from smartbi.gold import pos_name_resolver as resolver
-from smartbi.gold.pos_name_resolver import _pos_dish_surrogate_bigint
+from smartbi.gold.restaurant import pos_name_resolver as resolver
+from smartbi.gold.restaurant.pos_name_resolver import _pos_dish_surrogate_bigint
 
 logger = logging.getLogger(__name__)
 
@@ -316,7 +316,7 @@ async def _rerun_finance_etl(factory_id: str, reason: str) -> None:
     """
     try:
         from smartbi.config import get_pg_pool, get_cretas_pool
-        from smartbi.gold.restaurant_finance_etl import run_full_finance_etl_with_retry
+        from smartbi.gold.restaurant.restaurant_finance_etl import run_full_finance_etl_with_retry
 
         smartbi_pool = await get_pg_pool()
         cretas_pool = await get_cretas_pool()

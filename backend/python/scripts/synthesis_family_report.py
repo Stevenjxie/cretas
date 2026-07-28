@@ -43,7 +43,7 @@ for _p in (str(_PYTHON_ROOT), str(_PYTHON_ROOT / "smartbi")):
     if _p not in sys.path:
         sys.path.insert(0, _p)
 
-from smartbi.gold.restaurant_intent_promotion import (  # noqa: E402
+from smartbi.gold.restaurant.restaurant_intent_promotion import (  # noqa: E402
     classify_question_family,
     family_breakdown,
 )
