@@ -1113,6 +1113,7 @@
                 <button class="suggestion" type="button" data-question="生产计划选择成品时出现多个 Workflow，系统应该怎么匹配？"><span class="suggestion-index">03</span><span>选成品时多个 Workflow 冲突怎么处理？</span></button>
                 <button class="suggestion" type="button" data-question="报工完成后成品为什么还没进主仓？请按节点帮我排查。"><span class="suggestion-index">04</span><span>报工后成品还没进主仓，先查哪里？</span></button>
                 <button class="suggestion" type="button" data-question="原料包装换算、标签人工审核或多产出成本怎么做？"><span class="suggestion-index">05</span><span>原料包装换算、标签人工审核或多产出成本怎么做？</span></button>
+                <button class="suggestion" type="button" data-question="Workflow 和 BOM 都不预设本次投入产出时，正式报工如何选择实际行并分摊多产出成本？"><span class="suggestion-index">06</span><span>实际投入产出与多产出成本怎么报？</span></button>
               </div>
               <p class="welcome-note">也可以上传当前页面截图。助手会读取截图文字后结合操作手册回答，不会替你提交或修改业务数据。</p>
             </div>
@@ -1128,13 +1129,14 @@
                 <button class="suggestion" type="button" data-question="大众点评的数据我们是怎么用的？点评分析能得出什么结论？"><span class="suggestion-index">03</span><span>大众点评的数据我们怎么用？</span></button>
                 <button class="suggestion" type="button" data-question="菜品四象限图怎么读？四个象限分别代表什么，应该采取什么动作？"><span class="suggestion-index">04</span><span>菜品 4 象限图怎么读？</span></button>
                 <button class="suggestion" type="button" data-question="SmartBI 当前 21 个分析维度分别有哪些？连续追问时门店、菜品和时间范围如何保持？"><span class="suggestion-index">05</span><span>21 维证据地图与连续追问范围</span></button>
+                <button class="suggestion" type="button" data-question="AI 飞轮运营台谁能使用？候选晋升和菜品别名为什么都必须人工审核？"><span class="suggestion-index">06</span><span>AI 飞轮与菜品别名怎么治理？</span></button>
               </div>
 
               <button class="learn-launch" id="learn-launch" type="button">
                 <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg>
                 <span>
                   <strong>学习：餐饮分析入门</strong>
-                  <em>6 节小课 · 约 10 分钟 · 从「老板在意什么」讲到「方案怎么给」</em>
+                  <em>7 节小课 · 约 12 分钟 · 从「老板在意什么」讲到「能力怎么治理」</em>
                 </span>
               </button>
               <p class="welcome-note">学习模式为预编排内容，可离线浏览；每课末尾可选择深入提问。</p>
@@ -1145,7 +1147,7 @@
         <section class="learn hidden" id="learn" aria-label="餐饮分析入门课程">
           <div class="learn-card">
             <div class="learn-top">
-              <span class="learn-kicker" id="learn-kicker">第 1 课 / 6</span>
+              <span class="learn-kicker" id="learn-kicker">第 1 课 / 7</span>
               <div class="learn-dots" id="learn-dots" aria-hidden="true"></div>
               <button class="learn-exit" id="learn-exit" type="button">退出学习</button>
             </div>
@@ -1324,6 +1326,20 @@
           asks: [
             { label: '平台分析板块在哪？', question: '平台评价分析在系统哪个板块？能看到什么图表？' },
             { label: '竞对差距怎么看？', question: '和大众点评竞对的差距分析怎么看？雷达图各维度是什么？' }
+          ]
+        },
+        {
+          title: '能力怎么治理：飞轮与人审边界',
+          body: '<p>AI 飞轮运营台是<strong>平台能力治理工具</strong>，不是门店老板的经营分析入口。它位于“系统管理 → AI 飞轮运营台”，只对平台管理员开放；当前只接入餐饮域，“工厂（待接入）”不可选择。</p>' +
+            '<ul><li><strong>五类治理页面</strong>：总览看板、晋升审核工作台、Miss 复盘、质量与回归、蒸馏数据集；</li>' +
+            '<li><strong>候选不自动晋升</strong>：先展示问法、频次、置信度、契约通过率、最近真实答案和计划详情，平台管理员通过后才写入确定性路由；</li>' +
+            '<li><strong>菜品别名不自动合并</strong>：机器初匹配只是 pending，只有 confirmed 映射会影响线上解析，rejected 不生效；门店级确认优先于租户级，没有确认映射就保留原菜名；</li>' +
+            '<li><strong>失败必须真实</strong>：权限、接口或依赖异常时明确报错，不得用演示数据或假成功兜底。</li></ul>' +
+            '<p>网页图表洞察和移动餐饮 AI 共享意图编排后，仍保留原有安全门：咨询只读，操作先预览、再确认。导览助手只解释入口和方法，不替用户计算或分析业务数据。</p>',
+          note: '治理口诀：机器提候选，人工做决定；没有确认映射就保留原名，没有真实成功就明确报错。',
+          asks: [
+            { label: '飞轮谁能用？', question: 'AI 飞轮运营台谁能使用？五个治理页面分别做什么？' },
+            { label: '别名为何要人审？', question: '菜品别名候选的 pending、confirmed、rejected 分别代表什么？' }
           ]
         }
       ];
