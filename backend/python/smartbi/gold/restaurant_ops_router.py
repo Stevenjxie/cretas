@@ -1200,9 +1200,39 @@ _STORE_MENTION_STOPWORDS = frozenset({
     "各店", "所有门店", "全部门店", "门店", "分店", "店铺", "本店", "单店",
     "每家店", "每个店", "一家店", "旗舰店", "连锁店",
 })
-_GENERIC_STORE_SCOPE_FRAGMENTS = frozenset({
-    "全部门店", "所有门店", "各门店", "每家店", "全部店", "所有店", "全店",
+# ─── 繁体输入：确定性词表同时收录繁体变体 ────────────────────────────────
+# 这些词表原本只有简体，繁体输入(港澳台用户 / 系统语言设为繁中 / 从繁体文档
+# 复制粘贴)会整片匹配不上。实测 2026-07-28：
+#   「本月全部门店营收多少」  → 正常
+#   「本月全部門店營收多少」  → “门店范围不能由全店或全门店 resolver 代答”
+# 因为「全部門店」不在 _ALL_STORE_SCOPE_TOKENS 里，全店范围识别不出来，
+# resolver 直接拒答 —— 同一句话只因简繁不同就答不了。
+#
+# 修法是**扩充词表**而不是折叠输入文本：
+#   * 扩词表 → 全部 10 处 `token in text` 使用点自动受益，零调用点改动；
+#   * ⛔ 折叠文本则会波及**实体抽取** —— 门店/菜品名要按原文去库里比对，
+#     把用户输入折叠成简体后，以繁体命名的真实门店反而匹配不上。
+# 故这里只动确定性词表，实体抽取一律不碰原文。
+_SIMPLIFIED_TO_TRADITIONAL = str.maketrans({
+    "与": "與", "个": "個", "价": "價", "体": "體", "单": "單",
+    "总": "總", "无": "無", "汇": "匯", "连": "連", "铺": "鋪",
+    "锁": "鎖", "门": "門", "间": "間", "领": "領",
 })
+
+
+def with_traditional(tokens: Tuple[str, ...]) -> Tuple[str, ...]:
+    """原词表 + 其繁体变体（同形词不重复收录）。"""
+    out = list(tokens)
+    for token in tokens:
+        variant = token.translate(_SIMPLIFIED_TO_TRADITIONAL)
+        if variant != token and variant not in out:
+            out.append(variant)
+    return tuple(out)
+
+
+_GENERIC_STORE_SCOPE_FRAGMENTS = frozenset(with_traditional((
+    "全部门店", "所有门店", "各门店", "每家店", "全部店", "所有店", "全店",
+)))
 _STORE_MENTION_RE = re.compile(r"[一-龥A-Za-z0-9·]{2,24}(?:门店|店)")
 _STORE_REFERENCE_SUFFIX_RE = re.compile(r"(?<=店)(?:这|那|该)家?店$")
 _STORE_MENTION_PREFIX_TRIM = re.compile(
