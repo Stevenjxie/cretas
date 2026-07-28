@@ -102,7 +102,7 @@ describe('useReportVoiceInput', () => {
   it('stopRecording calls stopListening, sends to AI, parses JSON and returns fields', async () => {
     const aiReply = '{"processCategory":"切割","outputQuantity":"100","goodQuantity":"95","defectQuantity":"5"}';
     mock.onPost('/api/mobile/ai/chat').reply(200, {
-      data: { reply: aiReply },
+      data: { content: aiReply },
     });
 
     const { result } = renderHook(() => useReportVoiceInput());
@@ -118,6 +118,17 @@ describe('useReportVoiceInput', () => {
     });
 
     expect(mockSpeechRecognitionService.stopListening).toHaveBeenCalled();
+
+    // 锁请求形状: 后端 GenericChatRequest 只认 messages:[{role,content}]。
+    // 这条断言是 2026-07-29 补的 —— 之前测试只 mock 响应, 请求发的是
+    // {message, systemPrompt} (后端根本没有这两个字段), 于是线上必挂而测试全绿。
+    const sentBody = JSON.parse(mock.history.post[0].data);
+    expect(Array.isArray(sentBody.messages)).toBe(true);
+    expect(sentBody.messages.map((m: any) => m.role)).toEqual(['system', 'user']);
+    expect(sentBody.messages[1].content).toBe('切割 产量100 良品95 不良5');
+    expect(sentBody).not.toHaveProperty('message');
+    expect(sentBody).not.toHaveProperty('systemPrompt');
+
     expect(fields).not.toBeNull();
     expect(fields.processCategory).toBe('切割');
     expect(fields.outputQuantity).toBe('100');
@@ -178,7 +189,7 @@ describe('useReportVoiceInput', () => {
 
   it('stopRecording returns null when AI reply has no valid JSON', async () => {
     mock.onPost('/api/mobile/ai/chat').reply(200, {
-      data: { reply: '无法识别内容' },
+      data: { content: '无法识别内容' },
     });
 
     const { result } = renderHook(() => useReportVoiceInput());
@@ -200,7 +211,7 @@ describe('useReportVoiceInput', () => {
     jest.useFakeTimers();
     const aiReply = '{"processCategory":"包装","outputQuantity":"200"}';
     mock.onPost('/api/mobile/ai/chat').reply(200, {
-      data: { reply: aiReply },
+      data: { content: aiReply },
     });
 
     const { result } = renderHook(() => useReportVoiceInput());
@@ -224,7 +235,7 @@ describe('useReportVoiceInput', () => {
   it('stopRecording only extracts fields that are present in parsed JSON', async () => {
     const aiReply = '{"processCategory":"分拣","outputQuantity":"50"}';
     mock.onPost('/api/mobile/ai/chat').reply(200, {
-      data: { reply: aiReply },
+      data: { content: aiReply },
     });
 
     const { result } = renderHook(() => useReportVoiceInput());
@@ -256,7 +267,7 @@ describe('useReportVoiceInput', () => {
 
   it('stopRecording returns null after cancel was called', async () => {
     mock.onPost('/api/mobile/ai/chat').reply(200, {
-      data: { reply: '{"processCategory":"切割"}' },
+      data: { content: '{"processCategory":"切割"}' },
     });
 
     const { result } = renderHook(() => useReportVoiceInput());

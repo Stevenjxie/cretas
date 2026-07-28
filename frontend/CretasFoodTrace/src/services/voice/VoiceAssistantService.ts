@@ -17,18 +17,24 @@ import {
   AIExtractionResponse,
 } from './types';
 import { DEFAULT_VOICE_ASSISTANT_CONFIG, TTS_RATE_MAP } from './config';
+// calculateTotalScore / generateCompletionSummary / getMissingItems / generateErrorResponse
+// 之前只被已删掉的 generateMockResponse 用（generateErrorResponse 更早就没人用了），
+// 一并从 import 里摘掉；它们在 QualityInspectionAIPrompt 里仍然导出，将来要用再取。
 import {
   QUALITY_INSPECTION_SYSTEM_PROMPT,
   generateStartPrompt,
   generateUserContext,
   parseAIResponse,
-  generateErrorResponse,
-  calculateTotalScore,
   isInspectionComplete,
-  generateCompletionSummary,
-  getMissingItems,
 } from './QualityInspectionAIPrompt';
-import { API_BASE_URL } from '../../constants/config';
+import { apiClient } from '../api/apiClient';
+
+/** 后端 GenericChatResponse 的响应信封 (apiClient 拦截器已解包到 axios 的 response.data)。 */
+interface GenericChatEnvelope {
+  success: boolean;
+  message?: string;
+  data?: { content?: string };
+}
 
 type StatusCallback = (status: VoiceAssistantStatus) => void;
 type MessageCallback = (message: ChatMessage) => void;
@@ -225,133 +231,34 @@ class VoiceAssistantService {
         userText
       );
 
-      // 调用 AI API (使用统一配置的 API_BASE_URL)
-      const response = await fetch(`${API_BASE_URL}/api/mobile/ai/chat`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          messages: [
-            { role: 'system', content: QUALITY_INSPECTION_SYSTEM_PROMPT },
-            { role: 'user', content: userContext },
-          ],
-          temperature: 0.3,
-          maxTokens: 1000,
-        }),
+      // 2026-07-29: 从裸 fetch 改走 apiClient —— 它的拦截器注入 Bearer token 并处理
+      // 401 刷新。原来不带任何凭证也能通, 是因为 /api/mobile/ai/chat 当时压根不校验登录
+      // (JwtAuthInterceptor 只对能解析出 factoryId 的路径做 401)。那个洞已经堵上,
+      // 不带 token 的调用从此 401。
+      const data = await apiClient.post<GenericChatEnvelope>('/api/mobile/ai/chat', {
+        messages: [
+          { role: 'system', content: QUALITY_INSPECTION_SYSTEM_PROMPT },
+          { role: 'user', content: userContext },
+        ],
+        temperature: 0.3,
+        maxTokens: 1000,
       });
 
-      if (!response.ok) {
-        throw new Error(`AI API 错误: ${response.status}`);
-      }
-
-      const data = await response.json();
-
-      if (data.success && data.data?.content) {
+      if (data?.success && data.data?.content) {
         return parseAIResponse(data.data.content);
       }
 
-      throw new Error(data.message || 'AI 响应解析失败');
+      throw new Error(data?.message || 'AI 响应解析失败');
     } catch (error) {
+      // ⛔ 这里曾经 `return this.generateMockResponse(userText)` —— AI 一挂就按关键词
+      // 编出「外观 18 分 / 气味 20 分」之类的质检评分喂回业务流。质检数据造假比功能
+      // 不可用严重得多, 且违反项目「禁止降级处理」原则。现在如实往上抛,
+      // 由 processUserInput 的 catch → handleError 走错误通道让用户看见。
       console.error('AI 调用失败:', error);
-
-      // 返回模拟响应用于测试
-      return this.generateMockResponse(userText);
+      throw error instanceof Error ? error : new Error('AI 服务调用失败');
     }
   }
 
-  /**
-   * 生成模拟 AI 响应（用于测试）
-   */
-  private generateMockResponse(userText: string): AIExtractionResponse {
-    const text = userText.toLowerCase();
-
-    // 简单关键词匹配
-    const response: AIExtractionResponse = {
-      action: 'extract',
-      extractedData: {},
-      missingItems: getMissingItems(this.inspectionData),
-      speechResponse: '',
-      isComplete: false,
-    };
-
-    // 检测外观相关
-    if (text.includes('外观') || text.includes('色泽') || text.includes('形态')) {
-      const scoreMatch = text.match(/(\d+)\s*分/);
-      const score = scoreMatch && scoreMatch[1] ? parseInt(scoreMatch[1], 10) : 18;
-
-      response.extractedData!.appearance = {
-        score: Math.min(20, Math.max(0, score)),
-        notes: ['色泽正常', '形态完整'],
-      };
-      response.speechResponse = `已记录外观${score}分。`;
-    }
-
-    // 检测气味相关
-    if (text.includes('气味') || text.includes('正常') && !text.includes('外观')) {
-      const scoreMatch = text.match(/(\d+)\s*分/);
-      const score = scoreMatch && scoreMatch[1] ? parseInt(scoreMatch[1], 10) : 20;
-
-      response.extractedData!.smell = {
-        score: Math.min(20, Math.max(0, score)),
-        notes: ['正常'],
-      };
-      response.speechResponse += `已记录气味${score}分。`;
-    }
-
-    // 检测规格相关
-    if (text.includes('规格') || text.includes('尺寸') || text.includes('厘米')) {
-      const scoreMatch = text.match(/(\d+)\s*分/);
-      const score = scoreMatch && scoreMatch[1] ? parseInt(scoreMatch[1], 10) : 16;
-
-      response.extractedData!.specification = {
-        score: Math.min(20, Math.max(0, score)),
-        notes: ['符合标准'],
-      };
-      response.speechResponse += `已记录规格${score}分。`;
-    }
-
-    // 检测重量相关
-    if (text.includes('重量') || text.includes('克') || text.includes('kg')) {
-      const scoreMatch = text.match(/(\d+)\s*分/);
-      const score = scoreMatch && scoreMatch[1] ? parseInt(scoreMatch[1], 10) : 19;
-
-      response.extractedData!.weight = {
-        score: Math.min(20, Math.max(0, score)),
-        notes: ['重量合格'],
-      };
-      response.speechResponse += `已记录重量${score}分。`;
-    }
-
-    // 检测包装相关
-    if (text.includes('包装') || text.includes('标签')) {
-      const scoreMatch = text.match(/(\d+)\s*分/);
-      const score = scoreMatch && scoreMatch[1] ? parseInt(scoreMatch[1], 10) : 20;
-
-      response.extractedData!.packaging = {
-        score: Math.min(20, Math.max(0, score)),
-        notes: ['包装完整', '标签清晰'],
-      };
-      response.speechResponse += `已记录包装${score}分。`;
-    }
-
-    // 合并后检查完成状态
-    const mergedData = { ...this.inspectionData, ...response.extractedData };
-    response.missingItems = getMissingItems(mergedData);
-    response.isComplete = response.missingItems.length === 0;
-
-    if (response.isComplete) {
-      const totalScore = calculateTotalScore(mergedData as InspectionData);
-      response.totalScore = totalScore;
-      response.speechResponse = generateCompletionSummary(mergedData as InspectionData);
-    } else if (response.speechResponse) {
-      response.speechResponse += `还需要检查：${response.missingItems.join('、')}。`;
-    } else {
-      response.speechResponse = '抱歉，没有理解您说的内容，请再说一次。';
-    }
-
-    return response;
-  }
 
   /**
    * 合并检验数据
