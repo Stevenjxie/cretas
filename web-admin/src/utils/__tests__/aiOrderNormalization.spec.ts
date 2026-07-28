@@ -1,13 +1,7 @@
 import { describe, expect, it } from 'vitest'
-import { buildAiTemporalContext, normalizeAiOrderDates } from '../aiOrderNormalization'
+import { normalizeAiOrderDates } from '../aiOrderNormalization'
 
 describe('AI order date normalization', () => {
-  it('injects deterministic factory-local today and tomorrow into the prompt', () => {
-    expect(buildAiTemporalContext(new Date('2026-07-16T04:00:00Z'), 'Asia/Singapore')).toContain(
-      'today=2026-07-16; tomorrow=2026-07-17',
-    )
-  })
-
   it('forces purchase expected delivery to tomorrow when the user says 明日交货', () => {
     const result = normalizeAiOrderDates(
       'PURCHASE_ORDER',

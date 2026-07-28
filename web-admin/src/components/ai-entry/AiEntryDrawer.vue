@@ -76,8 +76,9 @@ function backToChat() {
 
 function renderMarkdown(content: string): string {
   try {
-    const cleaned = content.replace(/```json\s*\{[\s\S]*?"action"\s*:\s*"FILL_FORM"[\s\S]*?\}\s*```/g, '').trim();
-    return DOMPurify.sanitize(marked.parse(cleaned) as string);
+    // 2026-07-28: 不再需要剥 ```json {"action":"FILL_FORM"} ``` —— /form-assistant/parse
+    // 把字段值放在 fieldValues 里，气泡文本本来就只有给人看的话。
+    return DOMPurify.sanitize(marked.parse(content) as string);
   } catch {
     return content;
   }
