@@ -3963,7 +3963,12 @@ def _build_t3_prompt(
         '{"type": "relative", "unit": "month", "count": 2} (最近2个月), '
         '{"type": "relative", "unit": "day", "count": 10} (最近10天), '
         '{"type": "named", "value": "today"|"this_week"|"this_month"}, '
-        '{"type": "all_history"}, 或 null (未提及时间)。真实日期由确定性代码计算，不是你的工作。\n'
+        '{"type": "absolute", "start": "YYYY-MM-DD", "end": "YYYY-MM-DD"} '
+        '(⚠️ 仅当用户原话里就写了具体日期区间时照抄，例如「6月3号到18号」'
+        '「2026-06-03到2026-06-18」——这是转录不是计算；年份缺失就按你读到的年份填，'
+        '拿不准就别用这个类型), '
+        '{"type": "all_history"}, 或 null (未提及时间)。'
+        '除 absolute 的照抄外，真实日期一律由确定性代码计算，不是你的工作。\n'
         "2. confidence 是你对 intent 判断的把握程度 (0.0-1.0)。\n"
         "2b. dish/store: 如果问题点名了具体菜品或门店，原样摘抄那个名字 "
         "(必须是问题原文里连续出现的子串，绝不改写、翻译或补全)；没点名就输出 null。"
@@ -4001,6 +4006,9 @@ def _build_t3_prompt(
     )
 
 
+_ISO_DATE_RE = re.compile(r"\d{4}-\d{2}-\d{2}")
+
+
 def _parse_t3_time_range(time_range: Any) -> str:
     """Turn the LLM's structured time_range object back into a phrase that
     `_resolve_sales_date_range` (the SAME deterministic parser T1/T2 use) can
@@ -4023,6 +4031,21 @@ def _parse_t3_time_range(time_range: Any) -> str:
             "this_week": "本周",
             "this_month": "本月",
         }.get(value, "")
+    if kind == "absolute":
+        # 用户原话给了显式区间时，LLM 只负责**转录**。这里把它还原成中文短语，
+        # 交给 `_resolve_sales_date_range` 的绝对区间分支**重新解析** ——
+        # 日期计算与合法性校验仍然只发生在确定性层，LLM 的输出永远不会直接
+        # 变成查询窗口（颠倒/非法的区间会在那边 fail-closed 掉）。
+        start = time_range.get("start")
+        end = time_range.get("end")
+        if (
+            isinstance(start, str)
+            and isinstance(end, str)
+            and _ISO_DATE_RE.fullmatch(start.strip())
+            and _ISO_DATE_RE.fullmatch(end.strip())
+        ):
+            return f"{start.strip()}到{end.strip()}"
+        return ""
     if kind == "all_history":
         return ""
     return ""
