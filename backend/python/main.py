@@ -1159,6 +1159,11 @@ app.include_router(printing_api.router, prefix="/api/printing", tags=["Printing"
 from smartbi.api import gold_reads  # noqa: E402
 app.include_router(gold_reads.router, prefix="/api/smartbi", tags=["Gold Reads"])
 
+# 餐饮月度报告 (spec §3.2, 2026-07-29) — 批量执行已有查询计划 + 模板渲染 + xlsx/pdf
+# 导出。不是新引擎: 每一节都走 restaurant_intent_service.tiered_answer。
+from smartbi.api import restaurant_report as restaurant_report_api  # noqa: E402
+app.include_router(restaurant_report_api.router, prefix="/api/smartbi", tags=["Restaurant Monthly Report"])
+
 # G2 餐饮目标拆分 + 达成率预警 (2026-06-03) — year/month/week/day target cascade
 from smartbi.api import restaurant_targets as restaurant_targets_api  # noqa: E402
 app.include_router(restaurant_targets_api.router, prefix="/api/smartbi", tags=["Restaurant Targets"])
