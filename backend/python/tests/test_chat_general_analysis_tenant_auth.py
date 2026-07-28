@@ -6,7 +6,7 @@ import pytest
 from fastapi import HTTPException
 
 import smartbi.api.chat as chat_mod
-import smartbi.gold.restaurant_intent as restaurant_intent
+import smartbi.gold.restaurant.restaurant_intent as restaurant_intent
 
 
 class _Request:
@@ -223,10 +223,10 @@ async def test_trusted_restaurant_intent_is_preserved_across_java_python_boundar
 
     monkeypatch.setattr("smartbi.config.get_pg_pool", _pool)
     monkeypatch.setattr(
-        "smartbi.gold.restaurant_ops_router.match_restaurant_ops",
+        "smartbi.gold.restaurant.restaurant_ops_router.match_restaurant_ops",
         lambda _query: "RESTAURANT_OPS_TREND_ANALYSIS",
     )
-    monkeypatch.setattr("smartbi.gold.restaurant_ops_router.resolve_by_code", _resolve)
+    monkeypatch.setattr("smartbi.gold.restaurant.restaurant_ops_router.resolve_by_code", _resolve)
 
     response = await chat_mod.general_analysis(
         chat_mod.GeneralAnalysisRequest(
@@ -290,11 +290,11 @@ async def test_untrusted_expected_intent_is_ignored(monkeypatch):
     monkeypatch.setattr(restaurant_intent, "_is_restaurant_tenant", _restaurant_tenant)
     monkeypatch.setattr(restaurant_intent, "_t3_llm_parse", _semantic_plan)
     monkeypatch.setattr(
-        "smartbi.gold.restaurant_ops_router.match_restaurant_ops",
+        "smartbi.gold.restaurant.restaurant_ops_router.match_restaurant_ops",
         lambda _query: "RESTAURANT_OPS_SALES_SUMMARY",
     )
-    monkeypatch.setattr("smartbi.gold.restaurant_ops_router.resolve_by_code", _resolve)
-    monkeypatch.setattr("smartbi.gold.restaurant_intent_service._resolve_tiered", _resolve)
+    monkeypatch.setattr("smartbi.gold.restaurant.restaurant_ops_router.resolve_by_code", _resolve)
+    monkeypatch.setattr("smartbi.gold.restaurant.restaurant_intent_service._resolve_tiered", _resolve)
 
     await chat_mod.general_analysis(
         chat_mod.GeneralAnalysisRequest(
@@ -473,11 +473,11 @@ async def test_general_response_cache_never_crosses_trusted_roles(
 
     monkeypatch.setattr("smartbi.config.get_pg_pool", _pool)
     monkeypatch.setattr(
-        "smartbi.gold.restaurant_ops_router.match_restaurant_ops",
+        "smartbi.gold.restaurant.restaurant_ops_router.match_restaurant_ops",
         lambda _query: "RESTAURANT_OPS_REVENUE",
     )
     monkeypatch.setattr(
-        "smartbi.gold.restaurant_ops_router.resolve_by_code",
+        "smartbi.gold.restaurant.restaurant_ops_router.resolve_by_code",
         _resolve,
     )
 
@@ -570,7 +570,7 @@ async def test_nonstream_invalid_trusted_user_disables_tiered_clarification_sess
 
     monkeypatch.setattr("smartbi.config.get_pg_pool", _pool)
     monkeypatch.setattr(
-        "smartbi.gold.restaurant_ops_router.match_restaurant_ops",
+        "smartbi.gold.restaurant.restaurant_ops_router.match_restaurant_ops",
         lambda _query: None,
     )
     monkeypatch.setattr(chat_mod, "_try_tiered_restaurant_intent", _observe_tiered)

@@ -167,7 +167,7 @@ async def test_rerun_finance_etl_is_fail_soft(monkeypatch):
     monkeypatch.setattr(cfg, "get_pg_pool", AsyncMock(return_value=MagicMock()), raising=False)
     monkeypatch.setattr(cfg, "get_cretas_pool", AsyncMock(return_value=MagicMock()), raising=False)
 
-    import smartbi.gold.restaurant_finance_etl as fe
+    import smartbi.gold.restaurant.restaurant_finance_etl as fe
     monkeypatch.setattr(
         fe, "run_full_finance_etl_with_retry",
         AsyncMock(side_effect=RuntimeError("boom")),

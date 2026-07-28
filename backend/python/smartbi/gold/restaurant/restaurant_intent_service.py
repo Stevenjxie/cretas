@@ -16,8 +16,8 @@ from smartbi.gold.customer_text import (
     sanitize_customer_ai_text,
 )
 
-from smartbi.gold import answer_contract as _contract
-from smartbi.gold.restaurant_intent import (
+from smartbi.gold.restaurant import answer_contract as _contract
+from smartbi.gold.restaurant.restaurant_intent import (
     RestaurantQuerySpec,
     STORE_SCOPE_CLARIFICATION_QUESTION,
     TIME_CLARIFICATION_QUESTION,
@@ -27,7 +27,7 @@ from smartbi.gold.restaurant_intent import (
     parse_restaurant_query,
     unsupported_requirements_disclosure,
 )
-from smartbi.gold.restaurant_ops_router import (
+from smartbi.gold.restaurant.restaurant_ops_router import (
     _resolve_sales_query_spec,
     demo_data_factory_for_code,
     extract_store_mentions,
@@ -424,7 +424,7 @@ def _combine_planned_answers(
     spec: RestaurantQuerySpec,
     results: List[Tuple[str, Any]],
 ) -> Any:
-    from smartbi.gold.restaurant_ops_router import OpsAnswer
+    from smartbi.gold.restaurant.restaurant_ops_router import OpsAnswer
 
     sections: List[str] = []
     charts: List[Dict[str, Any]] = []
@@ -483,7 +483,7 @@ async def _resolve_business_optimization(
     """Use the existing grounded multi-dimension engine for owner actions."""
     from smartbi.agent.synthesis_engine import ComprehensiveSynthesisEngine
     from smartbi.api.synthesis import _resolve_window
-    from smartbi.gold.restaurant_ops_router import OpsAnswer
+    from smartbi.gold.restaurant.restaurant_ops_router import OpsAnswer
 
     start, end = spec.date_range
     if start is None or end is None:
@@ -653,7 +653,7 @@ async def tiered_answer(
         # clarification always wins, so deterministic splitting cannot bypass
         # a question the semantic planner decided it still needs to ask.
         if allow_decompose:
-            from smartbi.gold.restaurant_agent import (
+            from smartbi.gold.restaurant.restaurant_agent import (
                 assemble_compound_answer,
                 decompose_compound_question,
                 is_compound_question,
@@ -694,7 +694,7 @@ async def tiered_answer(
                 or "RESTAURANT_OPS_SALES_SUMMARY" in plan)
             else None
         )
-        from smartbi.gold.restaurant_ops_router import (
+        from smartbi.gold.restaurant.restaurant_ops_router import (
             extract_dish_candidate,
             store_dish_split_dish,
         )
@@ -996,7 +996,7 @@ def should_delegate(
     # Java Gold tools have no per-dish answer path, while the Python
     # gross-margin resolver scopes to the named dish (Sheet 7/22 菜品链).
     if query:
-        from smartbi.gold.restaurant_ops_router import (
+        from smartbi.gold.restaurant.restaurant_ops_router import (
             dish_ranking_direction,
             extract_dish_candidates,
             is_capability_question,
@@ -1007,25 +1007,25 @@ def should_delegate(
         if dish_ranking_direction(query) or is_capability_question(query):
             return True
         # 复合问题 → python 侧 agent 拆解回答 (R28)。
-        from smartbi.gold.restaurant_agent import is_compound_question
+        from smartbi.gold.restaurant.restaurant_agent import is_compound_question
         if is_compound_question(query):
             return True
         # 域外闲聊 (天气/新闻) — 必须由 tiered 给诚实拒答, 落回 Java 会拿到
         # 工厂措辞的通用助手回复 (R20b)。
-        from smartbi.gold.restaurant_ops_router import is_out_of_domain_smalltalk
+        from smartbi.gold.restaurant.restaurant_ops_router import is_out_of_domain_smalltalk
         if is_out_of_domain_smalltalk(query):
             return True
-        from smartbi.gold.restaurant_ops_router import store_dish_split_dish
+        from smartbi.gold.restaurant.restaurant_ops_router import store_dish_split_dish
         if store_dish_split_dish(query):
             return True
         # 盈亏存在性问 ("有没有店在亏损") — 裸「亏损」不在 _profit_intent
         # 词典里, 规则 3 接不住; 存在性正则命中即放行 (R15b)。
-        from smartbi.gold.restaurant_ops_router import _NEGATIVE_MARGIN_EXISTENCE_RE
+        from smartbi.gold.restaurant.restaurant_ops_router import _NEGATIVE_MARGIN_EXISTENCE_RE
         if _NEGATIVE_MARGIN_EXISTENCE_RE.search(query):
             return True
         # 行业参考做法 (playbook) — intent 不在 MARGIN_CAPABLE, 规则 3 不放行;
         # 触发词命中即委托, tiered 层零 DB 直答 (R16b)。
-        from smartbi.gold.restaurant_playbook import PLAYBOOK_TRIGGERS as _PB_TRIGGERS
+        from smartbi.gold.restaurant.restaurant_playbook import PLAYBOOK_TRIGGERS as _PB_TRIGGERS
         if any(t in query for t in _PB_TRIGGERS):
             return True
     if spec is None:
@@ -1072,7 +1072,7 @@ def should_delegate(
     if tier_trusted and not spec.clarification_needed:
         profit_ask = spec.asks_profitability or spec.wants_margin
         if not (profit_ask and spec.intent not in _MARGIN_CAPABLE_INTENTS):
-            from smartbi.gold.restaurant_ops_router import is_supported_restaurant_ops_code
+            from smartbi.gold.restaurant.restaurant_ops_router import is_supported_restaurant_ops_code
             if is_supported_restaurant_ops_code(spec.intent):
                 return True
     return False

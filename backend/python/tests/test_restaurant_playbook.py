@@ -5,9 +5,9 @@ import asyncio
 
 import pytest
 
-import smartbi.gold.restaurant_playbook as pb
-from smartbi.gold.restaurant_intent import RestaurantQuerySpec
-from smartbi.gold.restaurant_ops_router import (
+import smartbi.gold.restaurant.restaurant_playbook as pb
+from smartbi.gold.restaurant.restaurant_intent import RestaurantQuerySpec
+from smartbi.gold.restaurant.restaurant_ops_router import (
     match_restaurant_ops,
     reconcile_restaurant_ops_code,
     resolve_by_code,
@@ -90,7 +90,7 @@ def test_content_has_no_internal_identifiers_or_fabricated_citations():
 @pytest.mark.asyncio
 async def test_tiered_playbook_uses_llm_plan_then_serves_without_db(monkeypatch):
     """LLM-first still executes the curated playbook without touching tenant data."""
-    import smartbi.gold.restaurant_intent_service as svc
+    import smartbi.gold.restaurant.restaurant_intent_service as svc
 
     planner_calls = []
 

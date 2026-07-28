@@ -1145,11 +1145,11 @@ async def post_restaurant_tiered_answer(
       {"delegate": True, "answer_text": str, "charts": [...], "kpis": [...],
        "code": str, "contract_pass": bool}
     """
-    from smartbi.gold.restaurant_intent import (
+    from smartbi.gold.restaurant.restaurant_intent import (
         log_intent_miss,
         parse_restaurant_query,
     )
-    from smartbi.gold.restaurant_intent_service import should_delegate, tiered_answer
+    from smartbi.gold.restaurant.restaurant_intent_service import should_delegate, tiered_answer
     from smartbi.services.chat_session_service import (
         ChatSessionService,
         build_trusted_restaurant_session_key,

@@ -1,4 +1,4 @@
-"""Unit tests for smartbi.gold.restaurant_ops_router.match_restaurant_ops.
+"""Unit tests for smartbi.gold.restaurant.restaurant_ops_router.match_restaurant_ops.
 
 Locks in the keyword routing rules so over-broad keywords don't silently
 slip back in.
@@ -21,7 +21,7 @@ from datetime import date
 
 import pytest
 
-from smartbi.gold.restaurant_ops_router import (
+from smartbi.gold.restaurant.restaurant_ops_router import (
     OpsAnswer,
     SAMPLE_QUERIES,
     _resolve_sales_date_range,
@@ -577,7 +577,7 @@ def test_sales_summary_keeps_time_margin_and_profitability(
         )
 
     import smartbi.gold.queries as _q
-    import smartbi.gold.restaurant_ops_router as _r
+    import smartbi.gold.restaurant.restaurant_ops_router as _r
 
     monkeypatch.setattr(_q, "finance_summary", _fake_finance_summary)
     monkeypatch.setattr(_q, "store_comparison", _fake_store_comparison)
@@ -689,7 +689,7 @@ def test_sales_summary_all_history_locks_margin_to_actual_revenue_scope(monkeypa
         )
 
     import smartbi.gold.queries as _q
-    import smartbi.gold.restaurant_ops_router as _router
+    import smartbi.gold.restaurant.restaurant_ops_router as _router
 
     monkeypatch.setattr(_q, "finance_summary", _fake_finance_summary)
     monkeypatch.setattr(_q, "store_comparison", _fake_store_comparison)
@@ -1138,13 +1138,13 @@ def test_resolve_by_code_legacy_resolver_ignores_role_kwarg(monkeypatch):
 
     async def _fake_wastage(pool, factory_id, days=30, top_n=10):
         called["days"] = days
-        from smartbi.gold.restaurant_ops_router import OpsAnswer
+        from smartbi.gold.restaurant.restaurant_ops_router import OpsAnswer
         return OpsAnswer(
             code="RESTAURANT_OPS_WASTAGE_TOP", title="t",
             answer_text="ok", charts=[], kpis=[], meta={},
         )
 
-    import smartbi.gold.restaurant_ops_router as _r
+    import smartbi.gold.restaurant.restaurant_ops_router as _r
     monkeypatch.setitem(_r._RESOLVERS, "RESTAURANT_OPS_WASTAGE_TOP", _fake_wastage)
 
     # role=... is passed but _fake_wastage has no role param → must be dropped,
@@ -1251,7 +1251,7 @@ def test_store_margin_does_not_match_service_quality():
 # resolve_sales_summary's PRICE_VIEW_ROLES check and returns an honest
 # disclosure (no DB touched) for non-price-view roles.
 
-import smartbi.gold.restaurant_ops_router as _r  # noqa: E402  (module alias for the new RBAC tests)
+import smartbi.gold.restaurant.restaurant_ops_router as _r  # noqa: E402  (module alias for the new RBAC tests)
 
 @pytest.mark.parametrize("denied_role", [None, "", "viewer", "waiter", "cashier"])
 def test_gross_margin_masked_for_non_price_view_role(denied_role):
@@ -1656,7 +1656,7 @@ def test_partial_latest_month_uses_same_day_count_comparison(monkeypatch):
 # --------------------------------------------------------------------------
 # _compute_margin_dragger — 拖毛利归因 (impact = share × rate-gap, not just rate)
 # --------------------------------------------------------------------------
-from smartbi.gold.restaurant_ops_router import _compute_margin_dragger  # noqa: E402
+from smartbi.gold.restaurant.restaurant_ops_router import _compute_margin_dragger  # noqa: E402
 
 
 def _dish(name, revenue, margin_rate):
@@ -3508,7 +3508,7 @@ def test_r20_daypart_and_ood_routes():
 
 
 def test_r22_verbatim_entity_guard():
-    from smartbi.gold.restaurant_intent import _verbatim_entity
+    from smartbi.gold.restaurant.restaurant_intent import _verbatim_entity
     q = "帮我看看水煮鱼这道菜最近表现咋样"
     assert _verbatim_entity("水煮鱼", q) == "水煮鱼"
     assert _verbatim_entity("「水煮鱼」", q) == "水煮鱼"
@@ -3519,18 +3519,18 @@ def test_r22_verbatim_entity_guard():
 
 
 def test_r22_t3_spec_slots_ride_build_spec():
-    from smartbi.gold.restaurant_intent import _build_spec
+    from smartbi.gold.restaurant.restaurant_intent import _build_spec
     spec = _build_spec(
         "RESTAURANT_OPS_GROSS_MARGIN", "帮我看看水煮鱼这道菜最近表现咋样",
         confidence=0.85, tier="llm", llm_dish="水煮鱼")
     assert spec.dish_slot == "水煮鱼" and spec.store_slot is None
-    from smartbi.gold.restaurant_intent_service import should_delegate
+    from smartbi.gold.restaurant.restaurant_intent_service import should_delegate
     assert should_delegate(spec, None, query="帮我看看水煮鱼这道菜最近表现咋样")
 
 
 def test_r22_llm_tier_resolver_backed_delegates():
-    from smartbi.gold.restaurant_intent import _build_spec
-    from smartbi.gold.restaurant_intent_service import should_delegate
+    from smartbi.gold.restaurant.restaurant_intent import _build_spec
+    from smartbi.gold.restaurant.restaurant_intent_service import should_delegate
     spec = _build_spec(
         "RESTAURANT_OPS_WASTAGE_TOP", "浪费情况帮我瞅瞅",
         confidence=0.8, tier="llm")
@@ -3764,7 +3764,7 @@ def test_scoped_dish_reasonableness_answers_without_inventing_a_threshold():
 # ─────────────────────────────────────────────────────────────────────────────
 
 def test_with_traditional_expands_without_duplicates():
-    from smartbi.gold.restaurant_ops_router import with_traditional
+    from smartbi.gold.restaurant.restaurant_ops_router import with_traditional
     out = with_traditional(("全部门店", "各店"))
     assert "全部门店" in out and "全部門店" in out
     assert "各店" in out                      # 繁简同形只收一次
@@ -3772,14 +3772,14 @@ def test_with_traditional_expands_without_duplicates():
 
 
 def test_generic_store_scope_fragments_cover_traditional():
-    from smartbi.gold.restaurant_ops_router import _GENERIC_STORE_SCOPE_FRAGMENTS
+    from smartbi.gold.restaurant.restaurant_ops_router import _GENERIC_STORE_SCOPE_FRAGMENTS
     assert "全部门店" in _GENERIC_STORE_SCOPE_FRAGMENTS
     assert "全部門店" in _GENERIC_STORE_SCOPE_FRAGMENTS
 
 
 def test_traditional_all_store_query_matches_simplified_behaviour():
     """繁简同句必须得到同样的范围与维度判定。"""
-    from smartbi.gold.restaurant_intent import _detect_store_scope, _detect_dimensions
+    from smartbi.gold.restaurant.restaurant_intent import _detect_store_scope, _detect_dimensions
     simplified = "本月全部门店营收多少"
     traditional = "本月全部門店營收多少"
     assert _detect_store_scope(traditional) == _detect_store_scope(simplified) == ("all", ())
@@ -3788,7 +3788,7 @@ def test_traditional_all_store_query_matches_simplified_behaviour():
 
 def test_traditional_all_store_is_not_mistaken_for_a_store_name():
     """「全部門店」是聚合范围, 不是门店实体 —— 误判成店名会让查询整条走偏。"""
-    from smartbi.gold.restaurant_ops_router import extract_store_mentions
+    from smartbi.gold.restaurant.restaurant_ops_router import extract_store_mentions
     assert extract_store_mentions("本月全部門店營收多少") == []
     assert extract_store_mentions("本月全部门店营收多少") == []
 
@@ -3808,7 +3808,7 @@ def _d(y, m, day):
 
 
 def test_absolute_range_parses_common_owner_phrasings():
-    from smartbi.gold.restaurant_ops_router import parse_absolute_date_range as P
+    from smartbi.gold.restaurant.restaurant_ops_router import parse_absolute_date_range as P
     today = _d(2026, 7, 28)
     # 同月省略后半月份
     assert P("全部门店6月3号到18号的营收", today=today)[:2] == (_d(2026, 6, 3), _d(2026, 6, 18))
@@ -3822,14 +3822,14 @@ def test_absolute_range_parses_common_owner_phrasings():
 
 def test_absolute_range_infers_previous_year_when_future():
     """无年份且落在未来 -> 指去年 (老板问的是过去, 不是预测)。"""
-    from smartbi.gold.restaurant_ops_router import parse_absolute_date_range as P
+    from smartbi.gold.restaurant.restaurant_ops_router import parse_absolute_date_range as P
     got = P("12月20号到12月28号的营收", today=_d(2026, 7, 28))
     assert got[:2] == (_d(2025, 12, 20), _d(2025, 12, 28))
 
 
 def test_absolute_range_fails_closed_on_bad_input():
     """颠倒/非法一律不匹配 —— 不猜、不交换端点, 让流程照常走澄清。"""
-    from smartbi.gold.restaurant_ops_router import parse_absolute_date_range as P
+    from smartbi.gold.restaurant.restaurant_ops_router import parse_absolute_date_range as P
     today = _d(2026, 7, 28)
     assert P("6月18号到6月3号的营收", today=today) is None      # 端点写反
     assert P("2月30号到3月1号", today=today) is None            # 日期不存在
@@ -3837,7 +3837,7 @@ def test_absolute_range_fails_closed_on_bad_input():
 
 
 def test_absolute_range_drives_the_deterministic_window():
-    from smartbi.gold.restaurant_ops_router import _resolve_sales_date_range as R
+    from smartbi.gold.restaurant.restaurant_ops_router import _resolve_sales_date_range as R
     rng, label = R("全部门店6月3号到18号的营收", today=_d(2026, 7, 28))
     assert rng == (_d(2026, 6, 3), _d(2026, 6, 18))
     # 标签是「指定区间」而非日期串 —— 渲染层会另行补上具体日期,
@@ -3849,7 +3849,7 @@ def test_absolute_range_drives_the_deterministic_window():
 
 def test_absolute_range_is_not_swallowed_into_the_dish_slot():
     """原始症状的回归护栏。"""
-    from smartbi.gold.restaurant_ops_router import extract_dish_candidate as D
+    from smartbi.gold.restaurant.restaurant_ops_router import extract_dish_candidate as D
     assert D("全部门店6月3号到18号的营收") is None
     assert D("全部门店6月3日至6月18日营收多少") is None
     # 区间与菜名同时出现时, 菜名仍要抽得出来

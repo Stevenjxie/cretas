@@ -229,7 +229,7 @@ def test_etl_default_format_unchanged():
     fake_pool.close = AsyncMock(return_value=None)
 
     with patch(
-        "smartbi.gold.restaurant_ops_etl.run_full_etl",
+        "smartbi.gold.restaurant.restaurant_ops_etl.run_full_etl",
         new_callable=AsyncMock, return_value=fake_stats,
     ), patch(
         "smartbi.config.get_pg_pool", new_callable=AsyncMock, return_value=AsyncMock(),
@@ -264,7 +264,7 @@ def test_etl_llm_format_returns_whitelist():
     fake_pool.close = AsyncMock(return_value=None)
 
     with patch(
-        "smartbi.gold.restaurant_ops_etl.run_full_etl",
+        "smartbi.gold.restaurant.restaurant_ops_etl.run_full_etl",
         new_callable=AsyncMock, return_value=fake_stats,
     ), patch(
         "smartbi.config.get_pg_pool", new_callable=AsyncMock, return_value=AsyncMock(),

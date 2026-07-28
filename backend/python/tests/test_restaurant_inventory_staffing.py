@@ -26,7 +26,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from smartbi.gold.restaurant_ops_router import (
+from smartbi.gold.restaurant.restaurant_ops_router import (
     OpsAnswer,
     SAMPLE_QUERIES,
     match_restaurant_ops,
@@ -277,9 +277,9 @@ async def test_prefilter_allows_t1_hit_query_through(monkeypatch, query: str):
     monkeypatch.setattr(gold_reads_mod, "get_factory_id", lambda: "DEMO_REST")
     monkeypatch.setattr(gold_reads_mod, "get_pg_pool", AsyncMock(return_value=object()))
     parse_mock = AsyncMock(return_value=None)
-    monkeypatch.setattr("smartbi.gold.restaurant_intent.parse_restaurant_query", parse_mock)
+    monkeypatch.setattr("smartbi.gold.restaurant.restaurant_intent.parse_restaurant_query", parse_mock)
     monkeypatch.setattr(
-        "smartbi.gold.restaurant_intent_service.tiered_answer",
+        "smartbi.gold.restaurant.restaurant_intent_service.tiered_answer",
         AsyncMock(return_value=None),
     )
 
@@ -305,7 +305,7 @@ async def test_prefilter_allows_regression_export_capability_clarification(monke
     monkeypatch.setattr(gold_reads_mod, "get_factory_id", lambda: "DEMO_REST")
     monkeypatch.setattr(gold_reads_mod, "get_pg_pool", AsyncMock(return_value=object()))
     parse_mock = AsyncMock(return_value=None)
-    monkeypatch.setattr("smartbi.gold.restaurant_intent.parse_restaurant_query", parse_mock)
+    monkeypatch.setattr("smartbi.gold.restaurant.restaurant_intent.parse_restaurant_query", parse_mock)
 
     body = TieredIntentAnswerRequest(
         factory_id="DEMO_REST",
@@ -325,9 +325,9 @@ async def test_signal_free_query_still_reaches_semantic_planner(monkeypatch):
     monkeypatch.setattr(gold_reads_mod, "get_factory_id", lambda: "DEMO_REST")
     monkeypatch.setattr(gold_reads_mod, "get_pg_pool", AsyncMock(return_value=object()))
     parse_mock = AsyncMock(return_value=None)
-    monkeypatch.setattr("smartbi.gold.restaurant_intent.parse_restaurant_query", parse_mock)
+    monkeypatch.setattr("smartbi.gold.restaurant.restaurant_intent.parse_restaurant_query", parse_mock)
     monkeypatch.setattr(
-        "smartbi.gold.restaurant_intent_service.tiered_answer",
+        "smartbi.gold.restaurant.restaurant_intent_service.tiered_answer",
         AsyncMock(return_value=None),
     )
 

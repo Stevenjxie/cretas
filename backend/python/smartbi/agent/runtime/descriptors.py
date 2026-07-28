@@ -229,7 +229,7 @@ def restaurant_descriptors() -> tuple[ReadToolDescriptor, ...]:
             source_assets=(
                 "agg_restaurant_daily_ops",
                 "agg_restaurant_daily_totals",
-                "smartbi.gold.restaurant_ops_router.resolve_wastage_top",
+                "smartbi.gold.restaurant.restaurant_ops_router.resolve_wastage_top",
             ),
             time_grain="DAY_WINDOW",
             input_schema=schema(
@@ -249,7 +249,7 @@ def restaurant_descriptors() -> tuple[ReadToolDescriptor, ...]:
             source_assets=(
                 "fact_inventory_snapshot",
                 "dim_ingredient_threshold",
-                "smartbi.gold.restaurant_ops_router.resolve_inventory_warning",
+                "smartbi.gold.restaurant.restaurant_ops_router.resolve_inventory_warning",
             ),
             time_grain="LATEST_SNAPSHOT",
             input_schema=schema(
@@ -269,7 +269,7 @@ def restaurant_descriptors() -> tuple[ReadToolDescriptor, ...]:
             source_assets=(
                 "agg_restaurant_daily_ops",
                 "agg_restaurant_daily_totals",
-                "smartbi.gold.restaurant_ops_router.resolve_stock_shortage",
+                "smartbi.gold.restaurant.restaurant_ops_router.resolve_stock_shortage",
             ),
             time_grain="DAY_WINDOW",
             input_schema=schema(

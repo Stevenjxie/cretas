@@ -41,7 +41,7 @@ async def _run(period_month, factory_ids, notify: bool) -> int:
     from smartbi.services.restaurant.value_notifier import maybe_notify_monthly
 
     if factory_ids is None:
-        from smartbi.gold.restaurant_finance_etl import RESTAURANT_FACTORY_BACKFILL_LIST
+        from smartbi.gold.restaurant.restaurant_finance_etl import RESTAURANT_FACTORY_BACKFILL_LIST
         factory_ids = list(RESTAURANT_FACTORY_BACKFILL_LIST)
 
     period = period_month or _default_last_month()

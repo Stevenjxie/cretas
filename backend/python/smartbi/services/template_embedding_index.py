@@ -127,8 +127,8 @@ async def populate_restaurant_ops(pool) -> Dict[str, int]:
     Idempotent (ON CONFLICT DO UPDATE, same as populate_all) -- safe to call
     on every boot.
     """
-    from smartbi.gold.restaurant_ops_router import SAMPLE_QUERIES
-    from smartbi.gold.restaurant_intent_promotion import merge_samples
+    from smartbi.gold.restaurant.restaurant_ops_router import SAMPLE_QUERIES
+    from smartbi.gold.restaurant.restaurant_intent_promotion import merge_samples
 
     code_to_samples = merge_samples(SAMPLE_QUERIES)
     summary = await _embed_and_upsert_samples(

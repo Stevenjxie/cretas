@@ -70,7 +70,7 @@ logger = logging.getLogger("gold_etl_daily_refresh")
 # via patch("scripts.gold_etl_daily_refresh.<name>", ...).
 # ---------------------------------------------------------------------------
 from smartbi.config import get_cretas_pool, get_pg_pool  # noqa: E402
-from smartbi.gold.restaurant_ops_etl import run_full_etl_with_retry as _restaurant_ops_etl  # noqa: E402
+from smartbi.gold.restaurant.restaurant_ops_etl import run_full_etl_with_retry as _restaurant_ops_etl  # noqa: E402
 from smartbi.gold.factory_production_etl import run_factory_etl_with_retry as _factory_production_etl  # noqa: E402
 from smartbi.gold.supplier_price_ingest_etl import run_supplier_price_ingest as _supplier_price_etl  # noqa: E402
 

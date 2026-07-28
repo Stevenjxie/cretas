@@ -31,7 +31,7 @@ from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
-from smartbi.gold.restaurant_ops_router import (
+from smartbi.gold.restaurant.restaurant_ops_router import (
     _is_explicit_sales_period_comparison,
     _profit_intent,
     _resolve_sales_query_spec,

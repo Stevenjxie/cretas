@@ -62,7 +62,7 @@ def default_restaurant_sources() -> RestaurantReadSources:
         store_comparison,
         top_products,
     )
-    from smartbi.gold.restaurant_ops_router import (
+    from smartbi.gold.restaurant.restaurant_ops_router import (
         resolve_inventory_warning,
         resolve_stock_shortage,
         resolve_wastage_top,

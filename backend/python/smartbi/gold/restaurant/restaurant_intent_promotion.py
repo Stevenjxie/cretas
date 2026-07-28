@@ -174,7 +174,7 @@ def merge_samples(base: Optional[Dict[str, List[str]]] = None) -> Dict[str, List
     Base entries keep their original order; ledger-only entries are appended
     sorted (stable diffs, no dependency on ledger file's on-disk order)."""
     if base is None:
-        from smartbi.gold.restaurant_ops_router import SAMPLE_QUERIES
+        from smartbi.gold.restaurant.restaurant_ops_router import SAMPLE_QUERIES
         base = SAMPLE_QUERIES
     ledger = load_promoted_samples()
     merged: Dict[str, List[str]] = {}
@@ -334,7 +334,7 @@ async def aggregate_candidates(
         raw_codes = [c for c in (r["codes"] or []) if c]
         # restaurant_intent._VALID_CODES imported lazily to avoid import-time
         # coupling for callers that only need merge_samples/load_promoted_samples.
-        from smartbi.gold.restaurant_intent import _VALID_CODES
+        from smartbi.gold.restaurant.restaurant_intent import _VALID_CODES
         valid_codes = [c for c in raw_codes if c in _VALID_CODES]
         if not valid_codes:
             continue
@@ -428,7 +428,7 @@ def apply_promotions(entries: List[Dict[str, str]]) -> Dict[str, Any]:
     the CLI to print as a diff summary. Does not write the file at all when
     nothing was added (no gratuitous touch of a file a human will `git diff`
     afterwards)."""
-    from smartbi.gold.restaurant_intent import _VALID_CODES
+    from smartbi.gold.restaurant.restaurant_intent import _VALID_CODES
 
     ledger = load_promoted_samples()
     added: List[Dict[str, str]] = []
@@ -517,7 +517,7 @@ def _plan_rejection_reason(plan: Any, phrase: str) -> Optional[str]:
     """Reject a plan the runtime could not replay, BEFORE it reaches the
     table. Compiling it here is the same check the read path performs, so a
     row that would silently never fire is never written."""
-    from smartbi.gold.restaurant_intent import (
+    from smartbi.gold.restaurant.restaurant_intent import (
         _semantic_spec_from_t3,
         plan_is_replayable,
     )
@@ -556,7 +556,7 @@ async def apply_route_promotions(
     a DB failure: unlike the read path, an apply that did not persist must not
     look like it succeeded.
     """
-    from smartbi.gold.restaurant_intent import (
+    from smartbi.gold.restaurant.restaurant_intent import (
         _VALID_CODES,
         _normalize_exact_phrase,
         clear_promoted_routes_cache,

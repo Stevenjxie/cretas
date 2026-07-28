@@ -1,7 +1,7 @@
 """Guard rails for the compound-question agent (R28)."""
 from __future__ import annotations
 
-from smartbi.gold import restaurant_agent as agent
+from smartbi.gold.restaurant import restaurant_agent as agent
 
 
 def test_compound_heuristic():

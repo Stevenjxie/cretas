@@ -35,7 +35,7 @@ from difflib import SequenceMatcher
 from typing import Any, Dict, List
 
 # Reuse verbatim from restaurant_ops_etl (single source of truth).
-from smartbi.gold.restaurant_ops_etl import _normalize_name, _set_tenant
+from smartbi.gold.restaurant.restaurant_ops_etl import _normalize_name, _set_tenant
 
 logger = logging.getLogger(__name__)
 

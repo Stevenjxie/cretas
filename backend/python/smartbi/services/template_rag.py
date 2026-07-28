@@ -77,7 +77,7 @@ async def hybrid_match(
     # exclude RESTAURANT_OPS_* from the FACTORY-side vector search so a
     # factory query can never vector-match a restaurant-only template. The
     # mirror (restaurant queries scoped to code_prefix='RESTAURANT_OPS_') is
-    # in smartbi.gold.restaurant_intent._t2_vector_match -- together they
+    # in smartbi.gold.restaurant.restaurant_intent._t2_vector_match -- together they
     # give bidirectional business-type isolation.
     candidates = await cosine_topk(
         pool, query, k=3, min_similarity=MIN_USEFUL,

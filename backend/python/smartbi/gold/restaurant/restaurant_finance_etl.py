@@ -56,7 +56,7 @@ from typing import Dict, List, Optional, Tuple
 
 import asyncpg
 
-from smartbi.gold.restaurant_cost_mapping import merge_cost_product_mapping
+from smartbi.gold.restaurant.restaurant_cost_mapping import merge_cost_product_mapping
 
 logger = logging.getLogger(__name__)
 

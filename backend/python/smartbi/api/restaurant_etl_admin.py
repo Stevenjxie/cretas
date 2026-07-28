@@ -136,7 +136,7 @@ async def _run_job(job_id: str, factory_id: str) -> None:
 
     try:
         from smartbi.config import get_pg_pool, get_cretas_pool
-        from smartbi.gold.restaurant_ops_etl import run_full_etl_with_retry
+        from smartbi.gold.restaurant.restaurant_ops_etl import run_full_etl_with_retry
 
         smartbi_pool = await get_pg_pool()
         if smartbi_pool is None:
@@ -188,7 +188,7 @@ async def _run_finance_job(
 
     try:
         from smartbi.config import get_pg_pool, get_cretas_pool
-        from smartbi.gold.restaurant_finance_etl import (
+        from smartbi.gold.restaurant.restaurant_finance_etl import (
             run_full_finance_etl_with_retry,
         )
 
@@ -669,7 +669,7 @@ async def _run_finance_bulk_job(
 
     try:
         from smartbi.config import get_pg_pool, get_cretas_pool
-        from smartbi.gold.restaurant_finance_etl import (
+        from smartbi.gold.restaurant.restaurant_finance_etl import (
             run_full_finance_etl_for_factories,
         )
 
@@ -774,7 +774,7 @@ async def trigger_finance_etl_bulk(
         )
 
     # Resolve factoryIds: None / empty list → default backfill list
-    from smartbi.gold.restaurant_finance_etl import RESTAURANT_FACTORY_BACKFILL_LIST
+    from smartbi.gold.restaurant.restaurant_finance_etl import RESTAURANT_FACTORY_BACKFILL_LIST
     if body.factoryIds:
         factory_ids = [fid.strip() for fid in body.factoryIds if fid and fid.strip()]
         if not factory_ids:

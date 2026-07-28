@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 from pathlib import Path
 
-from smartbi.gold.restaurant_cost_mapping import (
+from smartbi.gold.restaurant.restaurant_cost_mapping import (
     merge_cost_product_mapping,
     merge_cost_product_names,
 )

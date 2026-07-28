@@ -18,7 +18,7 @@ def _make_pool_with_conn(conn):
 
 @pytest.mark.asyncio
 async def test_sync_fact_wastage_passes_operator_and_section(monkeypatch):
-    from smartbi.gold import restaurant_ops_etl as etl
+    from smartbi.gold.restaurant import restaurant_ops_etl as etl
 
     src_rows = [
         {
@@ -82,7 +82,7 @@ async def test_sync_fact_wastage_passes_operator_and_section(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_sync_fact_wastage_empty_returns_zero(monkeypatch):
-    from smartbi.gold import restaurant_ops_etl as etl
+    from smartbi.gold.restaurant import restaurant_ops_etl as etl
 
     cretas_conn = AsyncMock()
     cretas_conn.fetch = AsyncMock(return_value=[])

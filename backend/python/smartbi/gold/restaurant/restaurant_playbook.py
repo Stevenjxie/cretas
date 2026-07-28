@@ -221,7 +221,7 @@ def render_playbook(slug: str) -> Optional[str]:
 async def resolve_playbook(smartbi_pool, factory_id: str, **kwargs):
     """Resolver for RESTAURANT_OPS_PLAYBOOK. Static curated content — no DB
     reads, no tenant data, so it can never leak numbers or cross tenants."""
-    from smartbi.gold.restaurant_ops_router import OpsAnswer
+    from smartbi.gold.restaurant.restaurant_ops_router import OpsAnswer
 
     query = str(kwargs.get("query") or "")
     slug = match_playbook_topic(query) or "__menu__"

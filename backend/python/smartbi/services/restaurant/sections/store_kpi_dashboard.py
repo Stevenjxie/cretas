@@ -77,7 +77,7 @@ async def _kpi_summary(pool, factory_id, date_range):
 
 
 async def _resolve_gross_margin(pool, factory_id, days=30, top_n=10):
-    from smartbi.gold.restaurant_ops_router import resolve_gross_margin
+    from smartbi.gold.restaurant.restaurant_ops_router import resolve_gross_margin
     return await resolve_gross_margin(pool, factory_id, days=days, top_n=top_n)
 
 

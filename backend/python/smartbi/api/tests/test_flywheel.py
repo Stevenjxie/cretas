@@ -320,7 +320,7 @@ async def test_read_promoted_routes_summary_delegates_to_list_route_promotions(m
         captured["domain"] = domain
         return [{"normalized_phrase": "a"}, {"normalized_phrase": "b"}]
 
-    import smartbi.gold.restaurant_intent_promotion as promo
+    import smartbi.gold.restaurant.restaurant_intent_promotion as promo
     monkeypatch.setattr(promo, "list_route_promotions", _fake_list_route_promotions)
 
     import smartbi.config as cfg
@@ -337,7 +337,7 @@ async def test_read_promoted_routes_summary_handles_undefined_table(monkeypatch)
     async def _fake_list_route_promotions(pool, *, domain):
         raise asyncpg.exceptions.UndefinedTableError("nope")
 
-    import smartbi.gold.restaurant_intent_promotion as promo
+    import smartbi.gold.restaurant.restaurant_intent_promotion as promo
     monkeypatch.setattr(promo, "list_route_promotions", _fake_list_route_promotions)
 
     import smartbi.config as cfg
@@ -366,7 +366,7 @@ def test_candidates_calls_aggregate_with_admin_channel(monkeypatch):
              "family": "query", "last_seen": "2026-07-28"},
         ]
 
-    import smartbi.gold.restaurant_intent_promotion as promo
+    import smartbi.gold.restaurant.restaurant_intent_promotion as promo
     monkeypatch.setattr(promo, "aggregate_candidates", _fake_aggregate_candidates)
 
     client = make_client()
@@ -398,7 +398,7 @@ def test_candidates_enrichment_uses_single_batched_query(monkeypatch):
                   "max_confidence": 0.9, "conflict": False, "recommended": True,
                   "family": "query", "last_seen": "2026-07-28"}]
 
-    import smartbi.gold.restaurant_intent_promotion as promo
+    import smartbi.gold.restaurant.restaurant_intent_promotion as promo
     monkeypatch.setattr(promo, "aggregate_candidates", _fake_aggregate_candidates)
 
     client = make_client()
@@ -431,7 +431,7 @@ def test_approve_candidate_delegates_to_apply_route_promotions(monkeypatch):
                 "written": [{"query": entries[0]["query"], "normalized_phrase": "哪个菜卖得好", "intent": entries[0]["code"]}],
                 "skipped": []}
 
-    import smartbi.gold.restaurant_intent_promotion as promo
+    import smartbi.gold.restaurant.restaurant_intent_promotion as promo
     monkeypatch.setattr(promo, "apply_route_promotions", _fake_apply)
     import smartbi.config as cfg
     monkeypatch.setattr(cfg, "get_pg_pool", lambda: _async_ret(object()))
@@ -461,7 +461,7 @@ def test_approve_candidate_passes_through_explicit_plan(monkeypatch):
                 "written": [{"query": entries[0]["query"], "normalized_phrase": "x", "intent": "RESTAURANT_OPS_GROSS_MARGIN"}],
                 "skipped": []}
 
-    import smartbi.gold.restaurant_intent_promotion as promo
+    import smartbi.gold.restaurant.restaurant_intent_promotion as promo
     monkeypatch.setattr(promo, "apply_route_promotions", _fake_apply)
     import smartbi.config as cfg
     monkeypatch.setattr(cfg, "get_pg_pool", lambda: _async_ret(object()))
@@ -480,7 +480,7 @@ def test_approve_candidate_skipped_by_apply_route_promotions_returns_400(monkeyp
         return {"domain": "restaurant", "scope": "global", "source": "flywheel",
                 "written": [], "skipped": [{"query": entries[0]["query"], "reason": "plan_contains_resolved_dates"}]}
 
-    import smartbi.gold.restaurant_intent_promotion as promo
+    import smartbi.gold.restaurant.restaurant_intent_promotion as promo
     monkeypatch.setattr(promo, "apply_route_promotions", _fake_apply)
     import smartbi.config as cfg
     monkeypatch.setattr(cfg, "get_pg_pool", lambda: _async_ret(object()))
@@ -497,7 +497,7 @@ def test_approve_candidate_undefined_table_returns_503(monkeypatch):
     async def _fake_apply(pool, entries, **kwargs):
         raise asyncpg.UndefinedTableError("no table")
 
-    import smartbi.gold.restaurant_intent_promotion as promo
+    import smartbi.gold.restaurant.restaurant_intent_promotion as promo
     monkeypatch.setattr(promo, "apply_route_promotions", _fake_apply)
     import smartbi.config as cfg
     monkeypatch.setattr(cfg, "get_pg_pool", lambda: _async_ret(object()))
@@ -514,7 +514,7 @@ def test_approve_candidate_rls_violation_returns_403_not_500(monkeypatch):
     async def _fake_apply(pool, entries, **kwargs):
         raise asyncpg.exceptions.InsufficientPrivilegeError("new row violates row-level security policy")
 
-    import smartbi.gold.restaurant_intent_promotion as promo
+    import smartbi.gold.restaurant.restaurant_intent_promotion as promo
     monkeypatch.setattr(promo, "apply_route_promotions", _fake_apply)
     import smartbi.config as cfg
     monkeypatch.setattr(cfg, "get_pg_pool", lambda: _async_ret(object()))
@@ -539,7 +539,7 @@ def test_reject_candidate_delegates_to_promo_with_rejected_by(monkeypatch):
         return {"ok": True, "already_rejected": False, "ledger_path": "/x/rejected.json",
                 "ledger_size": 1, "durable": False}
 
-    import smartbi.gold.restaurant_intent_promotion as promo
+    import smartbi.gold.restaurant.restaurant_intent_promotion as promo
     monkeypatch.setattr(promo, "reject_candidate", _fake_reject)
 
     client = make_client(username="reviewer_li")
@@ -564,7 +564,7 @@ def test_seed_import_batches_entries_into_one_apply_route_promotions_call(monkey
             "skipped": [{"query": entries[1]["query"], "reason": "unknown_intent:None"}] if len(entries) > 1 else [],
         }
 
-    import smartbi.gold.restaurant_intent_promotion as promo
+    import smartbi.gold.restaurant.restaurant_intent_promotion as promo
     monkeypatch.setattr(promo, "apply_route_promotions", _fake_apply)
     import smartbi.config as cfg
     monkeypatch.setattr(cfg, "get_pg_pool", lambda: _async_ret(object()))
@@ -595,7 +595,7 @@ def test_seed_import_undefined_table_returns_503(monkeypatch):
     async def _fake_apply(pool, entries, **kwargs):
         raise asyncpg.UndefinedTableError("no table")
 
-    import smartbi.gold.restaurant_intent_promotion as promo
+    import smartbi.gold.restaurant.restaurant_intent_promotion as promo
     monkeypatch.setattr(promo, "apply_route_promotions", _fake_apply)
     import smartbi.config as cfg
     monkeypatch.setattr(cfg, "get_pg_pool", lambda: _async_ret(object()))
@@ -624,7 +624,7 @@ def test_misses_calls_aggregate_misses_with_admin_channel(monkeypatch):
         return [{"query": "帮我建个领料单", "occurrence_count": 3, "reasons": ["prefilter"],
                   "spec_intents": [], "last_seen": "2026-07-28", "family": "write"}]
 
-    import smartbi.gold.restaurant_intent_promotion as promo
+    import smartbi.gold.restaurant.restaurant_intent_promotion as promo
     monkeypatch.setattr(promo, "aggregate_misses", _fake_aggregate_misses)
     monkeypatch.setattr(promo, "load_miss_status", lambda: {})
 
@@ -645,7 +645,7 @@ def test_misses_merges_status_from_ledger(monkeypatch):
         return [{"query": "外卖利润率咋算", "occurrence_count": 2, "reasons": ["should_delegate"],
                   "spec_intents": [], "last_seen": "2026-07-28", "family": "query"}]
 
-    import smartbi.gold.restaurant_intent_promotion as promo
+    import smartbi.gold.restaurant.restaurant_intent_promotion as promo
     monkeypatch.setattr(promo, "aggregate_misses", _fake_aggregate_misses)
     monkeypatch.setattr(promo, "load_miss_status", lambda: {
         "外卖利润率咋算": {"status": "planned", "note": "排入 Q3", "updated_at": "2026-07-28T00:00:00Z"},
@@ -667,7 +667,7 @@ def test_set_miss_status_delegates_to_promo(monkeypatch):
         captured.update(query=query, status=status, note=note, reviewed_by=reviewed_by)
         return {"ok": True, "query": query, "status": status, "ledger_path": "/x/miss_status.json", "durable": False}
 
-    import smartbi.gold.restaurant_intent_promotion as promo
+    import smartbi.gold.restaurant.restaurant_intent_promotion as promo
     monkeypatch.setattr(promo, "set_miss_status", _fake_set_status)
 
     client = make_client(username="reviewer_wang")
@@ -683,7 +683,7 @@ def test_set_miss_status_invalid_status_400(monkeypatch):
     def _fake_set_status(query, status, *, note=None, reviewed_by=None):
         return {"ok": False, "reason": f"invalid_status:{status!r} (允许值: [...])"}
 
-    import smartbi.gold.restaurant_intent_promotion as promo
+    import smartbi.gold.restaurant.restaurant_intent_promotion as promo
     monkeypatch.setattr(promo, "set_miss_status", _fake_set_status)
 
     client = make_client()

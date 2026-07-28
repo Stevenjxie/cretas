@@ -58,7 +58,7 @@ def test_etl_sentinel_is_zero():
     """ETL sentinel must be 0 so any operator Excel upload (>= 1) wins per
     RestaurantFinancialMetricsFetcher.filterToLatestUpload max-upload semantics.
     """
-    from smartbi.gold.restaurant_finance_etl import ETL_UPLOAD_ID_SENTINEL
+    from smartbi.gold.restaurant.restaurant_finance_etl import ETL_UPLOAD_ID_SENTINEL
     assert ETL_UPLOAD_ID_SENTINEL == 0
 
 
@@ -69,7 +69,7 @@ def test_category_labels_match_fetcher_contract():
       - sumRevenueCategory matches contains("收入")
       - FOOD_KEYWORDS = {"食材", "原材料", "食品", "饮料", "酒水", "菜品"}
     """
-    from smartbi.gold.restaurant_finance_etl import (
+    from smartbi.gold.restaurant.restaurant_finance_etl import (
         CATEGORY_COST_POS_RECIPE,
         CATEGORY_COST_WASTAGE,
         CATEGORY_REVENUE,
@@ -83,7 +83,7 @@ def test_default_backfill_days_is_90():
     """Spec §3.3: ongoing cron re-processes last 30 days; one-time backfill
     spans the POS data range. 90 days is a reasonable default for the
     on-demand admin trigger (covers a full quarter)."""
-    from smartbi.gold.restaurant_finance_etl import DEFAULT_BACKFILL_DAYS
+    from smartbi.gold.restaurant.restaurant_finance_etl import DEFAULT_BACKFILL_DAYS
     assert DEFAULT_BACKFILL_DAYS == 90
 
 
@@ -91,7 +91,7 @@ def test_default_backfill_days_is_90():
 
 
 def test_resolve_date_range_both_provided_returns_as_is():
-    from smartbi.gold.restaurant_finance_etl import _resolve_date_range
+    from smartbi.gold.restaurant.restaurant_finance_etl import _resolve_date_range
     s = date(2025, 1, 1)
     e = date(2025, 12, 31)
     rs, re = _resolve_date_range(s, e)
@@ -100,7 +100,7 @@ def test_resolve_date_range_both_provided_returns_as_is():
 
 
 def test_resolve_date_range_defaults_to_last_90_days_when_both_none():
-    from smartbi.gold.restaurant_finance_etl import (
+    from smartbi.gold.restaurant.restaurant_finance_etl import (
         DEFAULT_BACKFILL_DAYS,
         _resolve_date_range,
     )
@@ -111,7 +111,7 @@ def test_resolve_date_range_defaults_to_last_90_days_when_both_none():
 
 
 def test_resolve_date_range_inverted_raises_value_error():
-    from smartbi.gold.restaurant_finance_etl import _resolve_date_range
+    from smartbi.gold.restaurant.restaurant_finance_etl import _resolve_date_range
     with pytest.raises(ValueError, match="end_date.*invalid"):
         _resolve_date_range(date(2025, 12, 1), date(2025, 1, 1))
 
@@ -122,7 +122,7 @@ def test_resolve_date_range_inverted_raises_value_error():
 @pytest.mark.asyncio
 async def test_sync_revenue_upserts_daily_pos_aggregate():
     """3 days of POS data → 3 REVENUE rows upserted with category=营业收入."""
-    from smartbi.gold.restaurant_finance_etl import sync_revenue_from_pos
+    from smartbi.gold.restaurant.restaurant_finance_etl import sync_revenue_from_pos
 
     conn = _make_conn_with_transaction()
     conn.fetch = AsyncMock(return_value=[
@@ -163,7 +163,7 @@ async def test_sync_revenue_upserts_daily_pos_aggregate():
 @pytest.mark.asyncio
 async def test_sync_revenue_zero_rows_when_no_pos_data():
     """Empty POS → return 0, no UPSERT executed."""
-    from smartbi.gold.restaurant_finance_etl import sync_revenue_from_pos
+    from smartbi.gold.restaurant.restaurant_finance_etl import sync_revenue_from_pos
 
     conn = _make_conn_with_transaction()
     conn.fetch = AsyncMock(return_value=[])
@@ -188,7 +188,7 @@ async def test_sync_revenue_zero_rows_when_no_pos_data():
 @pytest.mark.asyncio
 async def test_sync_cost_from_wastage_filters_approved_status():
     """Wastage SQL must filter status='APPROVED'."""
-    from smartbi.gold.restaurant_finance_etl import sync_cost_from_wastage
+    from smartbi.gold.restaurant.restaurant_finance_etl import sync_cost_from_wastage
 
     cretas_conn = AsyncMock()
     cretas_conn.fetch = AsyncMock(return_value=[
@@ -228,7 +228,7 @@ async def test_sync_cost_from_wastage_filters_approved_status():
 @pytest.mark.asyncio
 async def test_sync_cost_from_wastage_empty_returns_zero():
     """No wastage rows → return 0, no UPSERT."""
-    from smartbi.gold.restaurant_finance_etl import sync_cost_from_wastage
+    from smartbi.gold.restaurant.restaurant_finance_etl import sync_cost_from_wastage
 
     cretas_conn = AsyncMock()
     cretas_conn.fetch = AsyncMock(return_value=[])
@@ -260,7 +260,7 @@ async def test_sync_cost_from_pos_recipe_resolves_names_and_computes_daily_cost(
     Expected daily cost: day1 = 6*8 + 5*15 = 48 + 75 = 123
                          day2 = 4*8 = 32
     """
-    from smartbi.gold.restaurant_finance_etl import sync_cost_from_pos_recipe
+    from smartbi.gold.restaurant.restaurant_finance_etl import sync_cost_from_pos_recipe
 
     smartbi_conn = _make_conn_with_transaction()
     # Multi-call fetch: pos_rows then cost_rows
@@ -327,7 +327,7 @@ async def test_sync_cost_from_pos_recipe_unresolved_names_contribute_zero():
 
     Of 2 dishes (A, B), only A resolves → only A's qty * food_cost counted.
     """
-    from smartbi.gold.restaurant_finance_etl import sync_cost_from_pos_recipe
+    from smartbi.gold.restaurant.restaurant_finance_etl import sync_cost_from_pos_recipe
 
     smartbi_conn = _make_conn_with_transaction()
     smartbi_conn.fetch = AsyncMock(side_effect=[
@@ -375,7 +375,7 @@ async def test_sync_cost_from_pos_recipe_unresolved_names_contribute_zero():
 @pytest.mark.asyncio
 async def test_sync_cost_from_pos_recipe_no_pos_items_returns_zeros():
     """All POS items have product_id IS NULL → return 0 count, 0 resolved."""
-    from smartbi.gold.restaurant_finance_etl import sync_cost_from_pos_recipe
+    from smartbi.gold.restaurant.restaurant_finance_etl import sync_cost_from_pos_recipe
 
     smartbi_conn = _make_conn_with_transaction()
     smartbi_conn.fetch = AsyncMock(return_value=[])
@@ -398,7 +398,7 @@ async def test_sync_cost_from_pos_recipe_no_pos_items_returns_zeros():
 @pytest.mark.asyncio
 async def test_run_full_finance_etl_runs_all_three_stages_on_success():
     """Happy path — all 3 stages run, stats counts populated."""
-    from smartbi.gold.restaurant_finance_etl import (
+    from smartbi.gold.restaurant.restaurant_finance_etl import (
         FinanceEtlStats,
         run_full_finance_etl,
     )
@@ -407,13 +407,13 @@ async def test_run_full_finance_etl_runs_all_three_stages_on_success():
     smartbi_pool = AsyncMock()
 
     with patch(
-        "smartbi.gold.restaurant_finance_etl.sync_revenue_from_pos",
+        "smartbi.gold.restaurant.restaurant_finance_etl.sync_revenue_from_pos",
         new=AsyncMock(return_value=365),
     ), patch(
-        "smartbi.gold.restaurant_finance_etl.sync_cost_from_wastage",
+        "smartbi.gold.restaurant.restaurant_finance_etl.sync_cost_from_wastage",
         new=AsyncMock(return_value=6),
     ), patch(
-        "smartbi.gold.restaurant_finance_etl.sync_cost_from_pos_recipe",
+        "smartbi.gold.restaurant.restaurant_finance_etl.sync_cost_from_pos_recipe",
         new=AsyncMock(return_value=(300, 120, 30)),
     ):
         stats = await run_full_finance_etl(
@@ -433,19 +433,19 @@ async def test_run_full_finance_etl_runs_all_three_stages_on_success():
 @pytest.mark.asyncio
 async def test_run_full_finance_etl_stage_failure_isolated():
     """If revenue stage fails, wastage + POS×recipe still run."""
-    from smartbi.gold.restaurant_finance_etl import run_full_finance_etl
+    from smartbi.gold.restaurant.restaurant_finance_etl import run_full_finance_etl
 
     cretas_pool = AsyncMock()
     smartbi_pool = AsyncMock()
 
     with patch(
-        "smartbi.gold.restaurant_finance_etl.sync_revenue_from_pos",
+        "smartbi.gold.restaurant.restaurant_finance_etl.sync_revenue_from_pos",
         new=AsyncMock(side_effect=RuntimeError("boom revenue")),
     ), patch(
-        "smartbi.gold.restaurant_finance_etl.sync_cost_from_wastage",
+        "smartbi.gold.restaurant.restaurant_finance_etl.sync_cost_from_wastage",
         new=AsyncMock(return_value=5),
     ), patch(
-        "smartbi.gold.restaurant_finance_etl.sync_cost_from_pos_recipe",
+        "smartbi.gold.restaurant.restaurant_finance_etl.sync_cost_from_pos_recipe",
         new=AsyncMock(return_value=(10, 5, 0)),
     ):
         stats = await run_full_finance_etl(
@@ -463,7 +463,7 @@ async def test_run_full_finance_etl_stage_failure_isolated():
 @pytest.mark.asyncio
 async def test_run_full_finance_etl_defaults_date_range_when_none():
     """When start/end dates omitted, default = last 90 days."""
-    from smartbi.gold.restaurant_finance_etl import run_full_finance_etl
+    from smartbi.gold.restaurant.restaurant_finance_etl import run_full_finance_etl
 
     cretas_pool = AsyncMock()
     smartbi_pool = AsyncMock()
@@ -474,13 +474,13 @@ async def test_run_full_finance_etl_defaults_date_range_when_none():
         return 0
 
     with patch(
-        "smartbi.gold.restaurant_finance_etl.sync_revenue_from_pos",
+        "smartbi.gold.restaurant.restaurant_finance_etl.sync_revenue_from_pos",
         new=cap_revenue,
     ), patch(
-        "smartbi.gold.restaurant_finance_etl.sync_cost_from_wastage",
+        "smartbi.gold.restaurant.restaurant_finance_etl.sync_cost_from_wastage",
         new=AsyncMock(return_value=0),
     ), patch(
-        "smartbi.gold.restaurant_finance_etl.sync_cost_from_pos_recipe",
+        "smartbi.gold.restaurant.restaurant_finance_etl.sync_cost_from_pos_recipe",
         new=AsyncMock(return_value=(0, 0, 0)),
     ):
         await run_full_finance_etl(cretas_pool, smartbi_pool, "F001")
@@ -496,7 +496,7 @@ async def test_run_full_finance_etl_defaults_date_range_when_none():
 @pytest.mark.asyncio
 async def test_finance_etl_retry_succeeds_first_try():
     """First attempt succeeds → no failure log, no sleep."""
-    from smartbi.gold.restaurant_finance_etl import (
+    from smartbi.gold.restaurant.restaurant_finance_etl import (
         FinanceEtlStats,
         run_full_finance_etl_with_retry,
     )
@@ -505,7 +505,7 @@ async def test_finance_etl_retry_succeeds_first_try():
     smartbi_pool = AsyncMock()
 
     with patch(
-        "smartbi.gold.restaurant_finance_etl.run_full_finance_etl",
+        "smartbi.gold.restaurant.restaurant_finance_etl.run_full_finance_etl",
         new=AsyncMock(return_value=FinanceEtlStats(revenue_upserted=1)),
     ) as mock_etl:
         stats = await run_full_finance_etl_with_retry(
@@ -518,7 +518,7 @@ async def test_finance_etl_retry_succeeds_first_try():
 @pytest.mark.asyncio
 async def test_finance_etl_retry_fails_all_three():
     """Persistent failure → 3 attempts, exception re-raised."""
-    from smartbi.gold.restaurant_finance_etl import (
+    from smartbi.gold.restaurant.restaurant_finance_etl import (
         run_full_finance_etl_with_retry,
     )
 
@@ -527,7 +527,7 @@ async def test_finance_etl_retry_fails_all_three():
     smartbi_pool = _make_pool_with_conn(smartbi_conn)
 
     with patch(
-        "smartbi.gold.restaurant_finance_etl.run_full_finance_etl",
+        "smartbi.gold.restaurant.restaurant_finance_etl.run_full_finance_etl",
         new=AsyncMock(side_effect=RuntimeError("persistent")),
     ):
         with patch("asyncio.sleep", new=AsyncMock()):
@@ -547,7 +547,7 @@ def test_no_python_lint_markers_in_finance_etl_sql():
     """Regression for #539-style bug — Python lint annotation leaked into SQL."""
     import re
 
-    import smartbi.gold.restaurant_finance_etl as etl
+    import smartbi.gold.restaurant.restaurant_finance_etl as etl
 
     lint_marker = re.compile(r"#\s*(noqa|type\s*:|pyright|TODO|FIXME|XXX|HACK)\b")
     for name, value in vars(etl).items():
@@ -559,7 +559,7 @@ def test_no_python_lint_markers_in_finance_etl_sql():
 
 def test_no_pound_chars_in_finance_etl_sql():
     """'#' is not a SQL comment marker. Any '#' in raw SQL is suspicious."""
-    import smartbi.gold.restaurant_finance_etl as etl
+    import smartbi.gold.restaurant.restaurant_finance_etl as etl
 
     for name, value in vars(etl).items():
         if name.endswith("_SQL") and isinstance(value, str):
@@ -570,7 +570,7 @@ def test_no_pound_chars_in_finance_etl_sql():
 
 def test_upsert_sql_contains_required_columns():
     """Sanity check — UPSERT SQL must reference all keys of the unique index."""
-    from smartbi.gold.restaurant_finance_etl import (
+    from smartbi.gold.restaurant.restaurant_finance_etl import (
         _UPSERT_COST_SQL,
         _UPSERT_REVENUE_SQL,
     )
@@ -700,7 +700,7 @@ async def test_finance_etl_trigger_rejects_non_admin():
 def test_restaurant_factory_backfill_list_excludes_f006():
     """Per Q2: F006 has 0 POS data, must NOT be in default backfill list.
     Confirms Sprint 12 scope decision is encoded in the constant."""
-    from smartbi.gold.restaurant_finance_etl import RESTAURANT_FACTORY_BACKFILL_LIST
+    from smartbi.gold.restaurant.restaurant_finance_etl import RESTAURANT_FACTORY_BACKFILL_LIST
     assert "F006" not in RESTAURANT_FACTORY_BACKFILL_LIST
     assert "RES_3101_009" in RESTAURANT_FACTORY_BACKFILL_LIST
     assert "F001" in RESTAURANT_FACTORY_BACKFILL_LIST
@@ -711,7 +711,7 @@ def test_restaurant_factory_backfill_list_excludes_f006():
 
 def test_bulk_stats_aggregation():
     """BulkFinanceEtlStats.total_* properties sum across per_factory entries."""
-    from smartbi.gold.restaurant_finance_etl import (
+    from smartbi.gold.restaurant.restaurant_finance_etl import (
         BulkFinanceEtlStats,
         FinanceEtlStats,
     )
@@ -734,7 +734,7 @@ def test_bulk_stats_aggregation():
 @pytest.mark.asyncio
 async def test_run_full_finance_etl_for_factories_aggregates_success():
     """All factories succeed → succeeded list complete, failed empty."""
-    from smartbi.gold.restaurant_finance_etl import (
+    from smartbi.gold.restaurant.restaurant_finance_etl import (
         FinanceEtlStats,
         run_full_finance_etl_for_factories,
     )
@@ -748,7 +748,7 @@ async def test_run_full_finance_etl_for_factories_aggregates_success():
         )
 
     with patch(
-        "smartbi.gold.restaurant_finance_etl.run_full_finance_etl_with_retry",
+        "smartbi.gold.restaurant.restaurant_finance_etl.run_full_finance_etl_with_retry",
         side_effect=fake_with_retry,
     ):
         bulk = await run_full_finance_etl_for_factories(
@@ -770,7 +770,7 @@ async def test_run_full_finance_etl_for_factories_aggregates_success():
 @pytest.mark.asyncio
 async def test_run_full_finance_etl_for_factories_isolates_failures():
     """One factory crashes — others still complete + failed list captures it."""
-    from smartbi.gold.restaurant_finance_etl import (
+    from smartbi.gold.restaurant.restaurant_finance_etl import (
         FinanceEtlStats,
         run_full_finance_etl_for_factories,
     )
@@ -781,7 +781,7 @@ async def test_run_full_finance_etl_for_factories_isolates_failures():
         return FinanceEtlStats(revenue_upserted=5)
 
     with patch(
-        "smartbi.gold.restaurant_finance_etl.run_full_finance_etl_with_retry",
+        "smartbi.gold.restaurant.restaurant_finance_etl.run_full_finance_etl_with_retry",
         side_effect=fake_with_retry,
     ):
         bulk = await run_full_finance_etl_for_factories(
@@ -800,7 +800,7 @@ async def test_run_full_finance_etl_for_factories_isolates_failures():
 @pytest.mark.asyncio
 async def test_run_full_finance_etl_for_factories_defaults_to_constant_list():
     """factory_ids=None → uses RESTAURANT_FACTORY_BACKFILL_LIST."""
-    from smartbi.gold.restaurant_finance_etl import (
+    from smartbi.gold.restaurant.restaurant_finance_etl import (
         FinanceEtlStats,
         RESTAURANT_FACTORY_BACKFILL_LIST,
         run_full_finance_etl_for_factories,
@@ -813,7 +813,7 @@ async def test_run_full_finance_etl_for_factories_defaults_to_constant_list():
         return FinanceEtlStats()
 
     with patch(
-        "smartbi.gold.restaurant_finance_etl.run_full_finance_etl_with_retry",
+        "smartbi.gold.restaurant.restaurant_finance_etl.run_full_finance_etl_with_retry",
         side_effect=fake_with_retry,
     ):
         bulk = await run_full_finance_etl_for_factories(
@@ -833,7 +833,7 @@ async def test_finance_etl_trigger_bulk_default_list():
     from fastapi.testclient import TestClient
 
     from smartbi.api.restaurant_etl_admin import router
-    from smartbi.gold.restaurant_finance_etl import RESTAURANT_FACTORY_BACKFILL_LIST
+    from smartbi.gold.restaurant.restaurant_finance_etl import RESTAURANT_FACTORY_BACKFILL_LIST
 
     app = FastAPI()
 
@@ -1152,7 +1152,7 @@ async def test_purge_cache_uses_default_base_url_when_env_unset(monkeypatch):
 async def test_bulk_job_purges_only_succeeded_factories(monkeypatch):
     """_run_finance_bulk_job calls cache purge for each succeeded factory only."""
     from smartbi.api import restaurant_etl_admin as mod
-    from smartbi.gold.restaurant_finance_etl import BulkFinanceEtlStats, FinanceEtlStats
+    from smartbi.gold.restaurant.restaurant_finance_etl import BulkFinanceEtlStats, FinanceEtlStats
 
     # Bulk result: 2 succeeded, 1 failed
     bulk = BulkFinanceEtlStats()
@@ -1172,7 +1172,7 @@ async def test_bulk_job_purges_only_succeeded_factories(monkeypatch):
         "smartbi.config.get_cretas_pool", AsyncMock(return_value=MagicMock())
     )
     monkeypatch.setattr(
-        "smartbi.gold.restaurant_finance_etl.run_full_finance_etl_for_factories",
+        "smartbi.gold.restaurant.restaurant_finance_etl.run_full_finance_etl_for_factories",
         AsyncMock(return_value=bulk),
     )
 
@@ -1211,7 +1211,7 @@ async def test_bulk_job_purges_only_succeeded_factories(monkeypatch):
 async def test_bulk_job_purge_failure_does_not_flip_etl_status(monkeypatch):
     """Cache purge failure must NOT mark the ETL job as error."""
     from smartbi.api import restaurant_etl_admin as mod
-    from smartbi.gold.restaurant_finance_etl import BulkFinanceEtlStats, FinanceEtlStats
+    from smartbi.gold.restaurant.restaurant_finance_etl import BulkFinanceEtlStats, FinanceEtlStats
 
     bulk = BulkFinanceEtlStats()
     bulk.per_factory = {"RES_3101_009": FinanceEtlStats(revenue_upserted=365)}
@@ -1225,7 +1225,7 @@ async def test_bulk_job_purge_failure_does_not_flip_etl_status(monkeypatch):
         "smartbi.config.get_cretas_pool", AsyncMock(return_value=MagicMock())
     )
     monkeypatch.setattr(
-        "smartbi.gold.restaurant_finance_etl.run_full_finance_etl_for_factories",
+        "smartbi.gold.restaurant.restaurant_finance_etl.run_full_finance_etl_for_factories",
         AsyncMock(return_value=bulk),
     )
 
