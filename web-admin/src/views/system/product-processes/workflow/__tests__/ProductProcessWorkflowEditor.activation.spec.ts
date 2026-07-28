@@ -5,6 +5,9 @@ import ProductProcessWorkflowEditor from '../ProductProcessWorkflowEditor.vue';
 import type {
   ProductProcessWorkflowActivation,
   ProductProcessWorkflowDefinition,
+  WorkflowBomSyncClassification,
+  WorkflowBomSyncIssue,
+  WorkflowBomSyncPreflight,
 } from '../types';
 
 const apiMocks = vi.hoisted(() => ({
@@ -18,7 +21,8 @@ const apiMocks = vi.hoisted(() => ({
   updateWorkProcessOutputKind: vi.fn(),
   getProductProcessWorkflow: vi.fn(),
   getProductProcessWorkflowActivation: vi.fn(),
-  publishProductProcessWorkflow: vi.fn(),
+  getWorkflowBomSyncPreflight: vi.fn(),
+  publishAndActivateProductProcessWorkflow: vi.fn(),
   saveProductProcessWorkflowDraft: vi.fn(),
   snapshotProductProcessWorkflow: vi.fn(),
   activateProductProcessWorkflow: vi.fn(),
@@ -37,7 +41,8 @@ vi.mock('@/api/processProduction', () => ({
 vi.mock('../workflowApi', () => ({
   getProductProcessWorkflow: apiMocks.getProductProcessWorkflow,
   getProductProcessWorkflowActivation: apiMocks.getProductProcessWorkflowActivation,
-  publishProductProcessWorkflow: apiMocks.publishProductProcessWorkflow,
+  getWorkflowBomSyncPreflight: apiMocks.getWorkflowBomSyncPreflight,
+  publishAndActivateProductProcessWorkflow: apiMocks.publishAndActivateProductProcessWorkflow,
   saveProductProcessWorkflowDraft: apiMocks.saveProductProcessWorkflowDraft,
   snapshotProductProcessWorkflow: apiMocks.snapshotProductProcessWorkflow,
   activateProductProcessWorkflow: apiMocks.activateProductProcessWorkflow,
@@ -98,13 +103,19 @@ describe('ProductProcessWorkflowEditor activation controls', () => {
       data: definition('PT-A', 'DRAFT', 1, 43),
     });
     apiMocks.getProductProcessWorkflowActivation.mockResolvedValue({ success: true, data: null });
-    apiMocks.publishProductProcessWorkflow.mockResolvedValue({
+    apiMocks.getWorkflowBomSyncPreflight.mockResolvedValue({
       success: true,
-      data: definition('PT-A', 'PUBLISHED', 2, 44),
+      data: workflowBomPreflight('READY'),
     });
-    apiMocks.activateProductProcessWorkflow.mockResolvedValue({
+    apiMocks.publishAndActivateProductProcessWorkflow.mockResolvedValue({
       success: true,
-      data: activation('PT-A', 44, 2),
+      data: {
+        workflow: definition('PT-A', 'PUBLISHED', 2, 44),
+        activation: activation('PT-A', 44, 2),
+        bomSync: workflowBomPreflight('READY'),
+        idempotencyKey: 'publish-command-1',
+        replayed: false,
+      },
     });
   });
 
@@ -118,9 +129,9 @@ describe('ProductProcessWorkflowEditor activation controls', () => {
     expect((wrapper.vm as unknown as { unitIssues: unknown[] }).unitIssues).toEqual([]);
     expect((wrapper.vm as unknown as { publishBindingErrors: unknown[] }).publishBindingErrors).toEqual([]);
     expect((wrapper.vm as unknown as { bomMissingProducts: unknown[] }).bomMissingProducts).toEqual([]);
-    expect(apiMocks.publishProductProcessWorkflow).toHaveBeenCalledTimes(1);
-    // 发布成功后自动用发布出的版本 (id 44) 启用, 无需用户再点一次
-    expect(apiMocks.activateProductProcessWorkflow).toHaveBeenCalledWith('F006', 44);
+    expect(apiMocks.publishAndActivateProductProcessWorkflow).toHaveBeenCalledTimes(1);
+    // BOM 同步、Workflow 发布和启用由一个服务端事务完成，前端不再发第二个 activate 请求。
+    expect(apiMocks.activateProductProcessWorkflow).not.toHaveBeenCalled();
     // 单独的「启用版本」按钮已移除
     expect(wrapper.find('[data-testid="activate-workflow"]').exists()).toBe(false);
     // 版本记录浏览按钮存在 (#12b)
@@ -151,7 +162,7 @@ describe('ProductProcessWorkflowEditor activation controls', () => {
     expect(publishButton.attributes('plain')).toBe('true');
 
     await vm.publishWorkflow();
-    expect(apiMocks.publishProductProcessWorkflow).not.toHaveBeenCalled();
+    expect(apiMocks.publishAndActivateProductProcessWorkflow).not.toHaveBeenCalled();
   });
 
   it('keeps publish available for a saved v2 draft while v1 is enabled', async () => {
@@ -174,13 +185,13 @@ describe('ProductProcessWorkflowEditor activation controls', () => {
     expect(vm.publishDisabledReason).toBe('');
     const publishButton = wrapper.get('[data-testid="publish-workflow"]');
     expect(publishButton.attributes('disabled')).toBe('false');
-    expect(publishButton.text()).toBe('发布并启用');
+    expect(publishButton.text()).toBe('自动同步并发布');
     await vm.publishWorkflow();
     await flushPromises();
-    expect(apiMocks.publishProductProcessWorkflow).toHaveBeenCalledTimes(1);
+    expect(apiMocks.publishAndActivateProductProcessWorkflow).toHaveBeenCalledTimes(1);
   });
 
-  it('opens the matching BOM upgrade drawer instead of silently posting an incompatible revision', async () => {
+  it('automatically migrates an older active BOM instead of forcing users into the BOM drawer', async () => {
     const current = definition('PT-A', 'DRAFT', 2, 45);
     current.revisionId = 222;
     current.revisionHash = 'revision-222';
@@ -216,35 +227,65 @@ describe('ProductProcessWorkflowEditor activation controls', () => {
 
     expect(vm.bomRevisionMismatchProducts).toEqual([{ id: 'PT-A', name: 'Finished' }]);
     expect(wrapper.get('[data-testid="workflow-bom-revision-alert"]').text())
-      .toContain('升级 BOM、补齐新增原料并激活新版本');
+      .toContain('无需先进入 BOM 手工升级');
+
+    apiMocks.getWorkflowBomSyncPreflight.mockResolvedValue({
+      success: true,
+      data: workflowBomPreflight('AUTO_MIGRATABLE'),
+    });
+    apiMocks.publishAndActivateProductProcessWorkflow.mockResolvedValue({
+      success: true,
+      data: {
+        workflow: definition('PT-A', 'PUBLISHED', 2, 45),
+        activation: activation('PT-A', 45, 2),
+        bomSync: workflowBomPreflight('AUTO_MIGRATABLE'),
+        idempotencyKey: 'publish-command-migrate',
+        replayed: false,
+      },
+    });
 
     await vm.publishWorkflow();
     await flushPromises();
 
-    expect(apiMocks.publishProductProcessWorkflow).not.toHaveBeenCalled();
-    expect(vm.bomDrawerVisible).toBe(true);
-    expect(vm.bomDrawerProductTypeId).toBe('PT-A');
+    expect(apiMocks.publishAndActivateProductProcessWorkflow).toHaveBeenCalledTimes(1);
+    expect(apiMocks.activateProductProcessWorkflow).not.toHaveBeenCalled();
+    expect(vm.bomDrawerVisible).toBe(false);
   });
 
-  it('handles a publish-time BOM revision 409 even when the preflight metadata looked current', async () => {
-    apiMocks.publishProductProcessWorkflow.mockRejectedValue({
+  it('refreshes preflight without retrying mutation when BOM changes after the first check', async () => {
+    apiMocks.getWorkflowBomSyncPreflight
+      .mockResolvedValueOnce({ success: true, data: workflowBomPreflight('READY') })
+      .mockResolvedValueOnce({
+        success: true,
+        data: workflowBomPreflight('CONFLICT', [{
+          code: 'BOM_WORKFLOW_UPGRADE_UNIT_INCOMPATIBLE',
+          materialTypeId: 'RAW',
+          materialName: 'Raw',
+          processNodeId: 'process-a',
+          field: 'unit',
+          message: 'BOM 单位与目标工艺投入单位不兼容',
+          action: '请统一计量单位',
+        }]),
+      });
+    apiMocks.publishAndActivateProductProcessWorkflow.mockRejectedValue({
       status: 409,
-      code: 'WORKFLOW_ACTIVE_BOM_REVISION_MISMATCH',
+      code: 'WORKFLOW_BOM_SYNC_CONFLICT',
     });
     const wrapper = mountEditor();
     await flushPromises();
     const vm = wrapper.vm as unknown as {
-      bomDrawerVisible: boolean;
-      bomDrawerProductTypeId: string;
+      workflowBomSyncBlocked: boolean;
+      workflowBomSyncIssues: Array<{ code: string }>;
       publishWorkflow: () => Promise<void>;
     };
 
     await vm.publishWorkflow();
     await flushPromises();
 
-    expect(apiMocks.publishProductProcessWorkflow).toHaveBeenCalledTimes(1);
-    expect(vm.bomDrawerVisible).toBe(true);
-    expect(vm.bomDrawerProductTypeId).toBe('PT-A');
+    expect(apiMocks.publishAndActivateProductProcessWorkflow).toHaveBeenCalledTimes(1);
+    expect(apiMocks.getWorkflowBomSyncPreflight).toHaveBeenCalledTimes(2);
+    expect(vm.workflowBomSyncBlocked).toBe(true);
+    expect(vm.workflowBomSyncIssues[0]?.code).toBe('BOM_WORKFLOW_UPGRADE_UNIT_INCOMPATIBLE');
   });
 
   it('prevents a second publish while the confirmation dialog is pending', async () => {
@@ -262,12 +303,12 @@ describe('ProductProcessWorkflowEditor activation controls', () => {
     expect(vm.publishDisabledReason).toContain('正在发布 Workflow');
     await vm.publishWorkflow();
     expect(ElMessageBox.confirm).toHaveBeenCalledTimes(1);
-    expect(apiMocks.publishProductProcessWorkflow).not.toHaveBeenCalled();
+    expect(apiMocks.publishAndActivateProductProcessWorkflow).not.toHaveBeenCalled();
 
     confirmation.resolve('confirm');
     await firstPublish;
     await flushPromises();
-    expect(apiMocks.publishProductProcessWorkflow).toHaveBeenCalledTimes(1);
+    expect(apiMocks.publishAndActivateProductProcessWorkflow).toHaveBeenCalledTimes(1);
   });
 
   it('treats no activation as normal and ignores a stale activation response after product switch', async () => {
@@ -347,6 +388,35 @@ function mountEditor() {
 
 function productOption(id: string, unit = 'kg') {
   return { id, name: id, unit, productCategory: 'FINISHED_GOOD', isActive: true };
+}
+
+function workflowBomPreflight(
+  classification: WorkflowBomSyncClassification,
+  issues: WorkflowBomSyncIssue[] = [],
+): WorkflowBomSyncPreflight {
+  const blocked = classification === 'USER_INPUT_REQUIRED' || classification === 'CONFLICT';
+  return {
+    classification,
+    activeBomVersion: 3,
+    syncDraftVersion: classification === 'AUTO_MIGRATABLE' ? 4 : null,
+    activeBomWorkflowRevisionId: 175,
+    targetWorkflowRevisionId: 222,
+    preservedItems: ['Raw', 'Box'],
+    automaticMappings: classification === 'AUTO_MIGRATABLE'
+      ? [{
+        materialTypeId: 'RAW',
+        materialName: 'Raw',
+        fromNodeId: 'raw:old',
+        toNodeId: 'raw',
+        toProcessNodeId: 'process',
+        toInputPortId: 'in',
+        toEdgeId: 'e1',
+      }]
+      : [],
+    missingItems: classification === 'USER_INPUT_REQUIRED' ? issues : [],
+    conflicts: classification === 'CONFLICT' ? issues : [],
+    canCompleteAutomatically: !blocked,
+  };
 }
 
 function definition(

@@ -135,6 +135,8 @@ class ProductProcessWorkflowPostgresIntegrationTest {
                         new ProductProcessWorkflowValidator(),
                         objectMapper),
                 mock(com.cretas.aims.service.bom.BomWorkflowRevisionService.class),
+                mock(com.cretas.aims.service.bom.WorkflowBomSynchronizationService.class),
+                mock(com.cretas.aims.service.workflow.ProductProcessWorkflowActivationService.class),
                 activationRepository,
                 objectMapper,
                 new ProductProcessWorkflowValidator(),

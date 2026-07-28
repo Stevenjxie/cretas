@@ -6,6 +6,7 @@ import com.cretas.aims.dto.bom.BomFamilyOutputCostingResponse;
 import com.cretas.aims.dto.bom.CreateBomRecipeRequest;
 import com.cretas.aims.dto.bom.UpdateBomFamilyOutputCostingRequest;
 import com.cretas.aims.dto.bom.UpdateBomRecipeRequest;
+import com.cretas.aims.entity.ProductProcessWorkflowRevision;
 import com.cretas.aims.entity.bom.BomRecipe;
 import com.cretas.aims.entity.bom.BomRecipeItem;
 import org.springframework.data.domain.Page;
@@ -42,6 +43,13 @@ public interface BomRecipeService {
 
     /** Explicitly migrate a complete draft family to the current compatible Workflow DRAFT. */
     BomRecipe upgradeWorkflowRevision(String factoryId, String recipeId);
+
+    /** Create/reuse, migrate, and activate the BOM family for the exact Workflow revision. */
+    BomRecipe synchronizeActiveBomToWorkflowRevision(
+            String factoryId,
+            String productTypeId,
+            ProductProcessWorkflowRevision targetRevision,
+            Long operatorId);
 
     /** Read the business-facing output allocation and by-product valuation for a BOM Family. */
     BomFamilyOutputCostingResponse getFamilyOutputCosting(String factoryId, String recipeId);

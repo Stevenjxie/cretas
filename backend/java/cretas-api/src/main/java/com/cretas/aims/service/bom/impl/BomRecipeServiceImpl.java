@@ -10,6 +10,7 @@ import com.cretas.aims.dto.bom.UpdateBomRecipeRequest;
 import com.cretas.aims.dto.bom.UpdateBomFamilyOutputCostingRequest;
 import com.cretas.aims.entity.RawMaterialType;
 import com.cretas.aims.entity.ProductType;
+import com.cretas.aims.entity.ProductProcessWorkflowRevision;
 import com.cretas.aims.entity.bom.BomRecipe;
 import com.cretas.aims.entity.bom.BomRecipeItem;
 import com.cretas.aims.entity.bom.BomSeasoningItem;
@@ -275,6 +276,28 @@ public class BomRecipeServiceImpl implements BomRecipeService {
         }
 
         List<BomRecipe> family = activationFamily(factoryId, recipe);
+        Map<String, Optional<ProductProcessWorkflowRevision>> upgrades = family.stream()
+                .collect(java.util.stream.Collectors.toMap(
+                        BomRecipe::getId,
+                        member -> bomWorkflowRevisionService.findNewerCompatibleDraft(factoryId, member)));
+        if (upgrades.values().stream().anyMatch(Optional::isPresent)) {
+            Set<Long> targetRevisionIds = upgrades.values().stream()
+                    .flatMap(Optional::stream)
+                    .map(ProductProcessWorkflowRevision::getId)
+                    .collect(java.util.stream.Collectors.toSet());
+            if (upgrades.values().stream().anyMatch(Optional::isEmpty)
+                    || targetRevisionIds.size() != 1) {
+                throw bomError(409,
+                        "同一 BOM Family 无法整体迁移到唯一 Workflow 修订",
+                        "BOM_WORKFLOW_FAMILY_UPGRADE_INCONSISTENT",
+                        "请刷新 Workflow 与 BOM Family 后重试",
+                        "workflow");
+            }
+            for (BomRecipe member : family) {
+                bomWorkflowRevisionService.upgradeToLatestCompatibleDraft(factoryId, member);
+            }
+            reconcileUpgradedInputSkeletons(factoryId, family);
+        }
         validateFamilyContracts(factoryId, family);
         validateByProductCreditRules(family);
         recomputeFamilyCosts(recipe);
@@ -396,6 +419,60 @@ public class BomRecipeServiceImpl implements BomRecipeService {
         validateFamilyContracts(factoryId, family);
         recomputeFamilyCosts(editable);
         return recipeRepo.findById(editable.getId()).orElse(editable);
+    }
+
+    @Override
+    @Transactional
+    public BomRecipe synchronizeActiveBomToWorkflowRevision(
+            String factoryId,
+            String productTypeId,
+            ProductProcessWorkflowRevision targetRevision,
+            Long operatorId) {
+        if (targetRevision == null
+                || !factoryId.equals(targetRevision.getFactoryId())
+                || !productTypeId.equals(targetRevision.getProductTypeId())) {
+            throw bomError(409,
+                    "目标 Workflow 修订不属于当前工厂或产品",
+                    "WORKFLOW_REVISION_SCOPE_INVALID",
+                    "请刷新当前产品的 Workflow 草稿后重试",
+                    "workflow");
+        }
+        String mainOutputProductTypeId =
+                bomWorkflowRevisionService.resolveMainOutputProductTypeId(factoryId, targetRevision);
+        BomRecipe active = recipeRepo
+                .findByFactoryIdAndProductTypeIdAndIsCurrentTrueAndStatus(
+                        factoryId, mainOutputProductTypeId, BomRecipe.Status.ACTIVE)
+                .orElseThrow(() -> bomError(409,
+                        "当前产品没有可同步的生效 BOM",
+                        "WORKFLOW_ACTIVE_BOM_REQUIRED",
+                        "请先完成当前产品的 BOM 配置",
+                        "bom"));
+        if (Objects.equals(active.getWorkflowRevisionId(), targetRevision.getId())
+                && Objects.equals(active.getWorkflowRevisionHash(), targetRevision.getRevisionHash())) {
+            bomWorkflowRevisionService.requireActiveBomPinsRevision(
+                    factoryId, productTypeId, targetRevision);
+            return active;
+        }
+
+        // Always clone the exact ACTIVE family. Reusing an arbitrary editable draft could
+        // silently publish a different operator's unfinished BOM changes.
+        BomRecipe syncDraft = cloneRecipe(factoryId, active.getId());
+        if (!Objects.equals(syncDraft.getWorkflowRevisionId(), targetRevision.getId())
+                || !Objects.equals(syncDraft.getWorkflowRevisionHash(), targetRevision.getRevisionHash())) {
+            syncDraft = upgradeWorkflowRevision(factoryId, syncDraft.getId());
+        }
+        if (!Objects.equals(syncDraft.getWorkflowRevisionId(), targetRevision.getId())
+                || !Objects.equals(syncDraft.getWorkflowRevisionHash(), targetRevision.getRevisionHash())) {
+            throw bomError(409,
+                    "BOM 同步目标与当前 Workflow 修订不一致",
+                    "BOM_WORKFLOW_SYNC_TARGET_STALE",
+                    "请刷新 Workflow 后重新执行自动同步",
+                    "workflow");
+        }
+        BomRecipe activated = activateRecipe(factoryId, syncDraft.getId(), operatorId);
+        bomWorkflowRevisionService.requireActiveBomPinsRevision(
+                factoryId, productTypeId, targetRevision);
+        return activated;
     }
 
     @Override
@@ -750,8 +827,10 @@ public class BomRecipeServiceImpl implements BomRecipeService {
         }
 
         Map<String, BomRecipeItem> existingBySlot = new HashMap<>();
+        List<BomRecipeItem> existingItems = new ArrayList<>();
         for (BomRecipe member : family) {
             for (BomRecipeItem item : itemRepo.findByRecipeIdOrderBySortOrderAsc(member.getId())) {
+                existingItems.add(item);
                 if (!hasText(item.getWorkflowMaterialNodeId())
                         || !hasText(item.getWorkflowInputPortId())
                         || !hasText(item.getWorkflowEdgeId())) {
@@ -769,12 +848,53 @@ public class BomRecipeServiceImpl implements BomRecipeService {
         }
 
         Map<String, List<BomRecipeItem>> additionsByOwner = new LinkedHashMap<>();
+        Set<Long> claimedItemIds = new HashSet<>();
         for (InputCostProfile profile : resolveInputCostProfiles(family, slotsByRecipe, main)) {
             BomRecipeItem existing = existingBySlot.get(slotKey(profile.slot()));
+            if (existing == null) {
+                List<BomRecipeItem> ownerMaterialMatches = existingItems.stream()
+                        .filter(item -> !claimedItemIds.contains(item.getId()))
+                        .filter(item -> !"PACKAGING".equals(item.getMaterialCategory()))
+                        .filter(item -> Objects.equals(
+                                item.getRecipeId(), profile.owner().getId()))
+                        .filter(item -> Objects.equals(item.getMaterialTypeId(), profile.slot().materialTypeId()))
+                        .toList();
+                List<BomRecipeItem> materialMatches = ownerMaterialMatches.isEmpty()
+                        ? existingItems.stream()
+                                .filter(item -> !claimedItemIds.contains(item.getId()))
+                                .filter(item -> !"PACKAGING".equals(item.getMaterialCategory()))
+                                .filter(item -> Objects.equals(
+                                        item.getMaterialTypeId(), profile.slot().materialTypeId()))
+                                .toList()
+                        : ownerMaterialMatches;
+                if (materialMatches.size() > 1) {
+                    throw bomError(409,
+                            "原料 " + profile.slot().materialTypeId() + " 存在多条可接管 BOM 明细",
+                            "BOM_WORKFLOW_UPGRADE_MATERIAL_AMBIGUOUS",
+                            "请保留该原料唯一一条主料规则后重试",
+                            "bomItems");
+                }
+                if (materialMatches.size() == 1) {
+                    existing = materialMatches.getFirst();
+                    if (!BomWorkflowRevisionService.unitsCompatible(
+                            existing.getUnit(), profile.slot().unit())) {
+                        throw bomError(409,
+                                "原料 " + existing.getMaterialName() + " 的 BOM 单位与目标工艺投入单位不兼容",
+                                "BOM_WORKFLOW_UPGRADE_UNIT_INCOMPATIBLE",
+                                "请统一该原料的 BOM 计量单位和工艺投入单位后重试",
+                                "bomItems");
+                    }
+                }
+            }
             if (existing != null) {
+                existing.setRecipeId(profile.owner().getId());
+                existing.setWorkflowMaterialNodeId(profile.slot().materialNodeId());
+                existing.setWorkflowInputPortId(profile.slot().inputPortId());
+                existing.setWorkflowEdgeId(profile.slot().edgeId());
                 existing.setCostScope(profile.costScope());
                 existing.setCostScopeKey(profile.costScopeKey());
                 itemRepo.save(existing);
+                claimedItemIds.add(existing.getId());
                 continue;
             }
             List<BomRecipeItem> additions = additionsByOwner.computeIfAbsent(
@@ -789,6 +909,26 @@ public class BomRecipeServiceImpl implements BomRecipeService {
                             + additions.size());
             additions.add(skeleton);
             existingBySlot.put(slotKey(profile.slot()), skeleton);
+        }
+        List<BomRecipeItem> obsoleteBoundItems = existingItems.stream()
+                .filter(item -> !claimedItemIds.contains(item.getId()))
+                .filter(item -> !"PACKAGING".equals(item.getMaterialCategory()))
+                .filter(item -> hasText(item.getWorkflowMaterialNodeId())
+                        || hasText(item.getWorkflowInputPortId())
+                        || hasText(item.getWorkflowEdgeId()))
+                .toList();
+        if (!obsoleteBoundItems.isEmpty()) {
+            String materials = obsoleteBoundItems.stream()
+                    .map(BomRecipeItem::getMaterialName)
+                    .filter(Objects::nonNull)
+                    .distinct()
+                    .limit(6)
+                    .collect(java.util.stream.Collectors.joining("、"));
+            throw bomError(409,
+                    "旧工艺中的原料投入在目标工艺中已不存在：" + materials,
+                    "BOM_WORKFLOW_UPGRADE_OBSOLETE_INPUT",
+                    "请确认是否删除这些原料规则后再重试",
+                    "bomItems");
         }
         for (BomRecipe member : family) {
             List<BomRecipeItem> additions =

@@ -143,6 +143,64 @@ export interface ProductProcessWorkflowActivation {
   lockVersion: number;
 }
 
+export type WorkflowBomSyncClassification =
+  | 'READY'
+  | 'AUTO_MIGRATABLE'
+  | 'USER_INPUT_REQUIRED'
+  | 'CONFLICT';
+
+export interface WorkflowBomAutomaticMapping {
+  materialTypeId: string | null;
+  materialName: string | null;
+  fromNodeId: string | null;
+  toNodeId: string | null;
+  toProcessNodeId: string | null;
+  toInputPortId: string | null;
+  toEdgeId: string | null;
+  ownerRecipeId: string | null;
+  costScope: string | null;
+  costScopeKey: string | null;
+}
+
+export interface WorkflowBomSyncIssue {
+  code: string;
+  materialTypeId: string | null;
+  materialName: string | null;
+  processNodeId: string | null;
+  field: string | null;
+  message: string;
+  action: string | null;
+}
+
+export interface WorkflowBomSyncPreflight {
+  classification: WorkflowBomSyncClassification;
+  activeBomVersion: number | null;
+  syncDraftVersion: number | null;
+  activeBomWorkflowRevisionId: number | null;
+  targetWorkflowRevisionId: number | null;
+  preservedItems: string[];
+  automaticMappings: WorkflowBomAutomaticMapping[];
+  missingItems: WorkflowBomSyncIssue[];
+  conflicts: WorkflowBomSyncIssue[];
+  canCompleteAutomatically: boolean;
+}
+
+export interface WorkflowPublishAndActivateRequest {
+  lockVersion: number;
+  idempotencyKey: string;
+  revisionId: number;
+  revisionHash: string;
+  definitionVersion: number;
+}
+
+export interface WorkflowPublishAndActivateResponse {
+  workflow: ProductProcessWorkflowDefinition;
+  activation: ProductProcessWorkflowActivation;
+  bomSync: WorkflowBomSyncPreflight;
+  idempotencyKey: string;
+  replayed: boolean;
+}
+
 export type WorkflowPatch =
   | { op: 'UPSERT_NODE'; node: ProductProcessWorkflowNode }
   | { op: 'REMOVE_NODE'; nodeId: string }

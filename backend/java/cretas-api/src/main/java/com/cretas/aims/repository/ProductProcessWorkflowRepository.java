@@ -36,6 +36,10 @@ public interface ProductProcessWorkflowRepository extends JpaRepository<ProductP
             String productTypeId,
             ProductProcessWorkflow.Status status);
 
+    Optional<ProductProcessWorkflow> findByFactoryIdAndLastPublishIdempotencyKey(
+            String factoryId,
+            String lastPublishIdempotencyKey);
+
     @Query("""
             select max(workflow.definitionVersion)
               from ProductProcessWorkflow workflow

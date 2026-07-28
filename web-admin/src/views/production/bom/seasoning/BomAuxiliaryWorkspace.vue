@@ -1,7 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
-import { useRouter } from 'vue-router';
 import {
   bomRecipeApi,
   bomSeasoningApi,
@@ -38,7 +37,6 @@ const emit = defineEmits<{
   changed: [];
 }>();
 
-const router = useRouter();
 const workspace = ref<SeasoningWorkspace | null>(null);
 const materials = ref<SeasoningMaterialOption[]>([]);
 const loading = ref(false);
@@ -51,7 +49,6 @@ const dialogBinding = ref<SeasoningBindingView | null>(null);
 const substituteRelations = ref<BomItemSubstituteView[]>([]);
 const substitutesLoaded = ref(false);
 const substituteLoadError = ref('');
-const upgradingWorkflow = ref(false);
 const outputCostingVisible = ref(false);
 const aiImportVisible = ref(false);
 
@@ -68,76 +65,14 @@ const editable = computed(() => Boolean(
   && workspace.value?.editable
   && substitutesLoaded.value,
 ));
-const workflowStatusLabel = computed(() => {
-  const status = workspace.value?.workflowRevisionStatus;
-  if (status === 'ENABLED') return '已启用';
-  if (status === 'PUBLISHED') return '已发布';
-  if (status === 'DRAFT') return '已保存草稿';
-  return status || '已固定';
-});
-const outputRoleLabel = computed(() => ({
-  MAIN: '主产出',
-  CO_PRODUCT: '联产品',
-  BY_PRODUCT: '副产品',
-} as const)[workspace.value?.outputRole || 'MAIN']);
-
-function formatSavedAt(value?: string | null): string {
-  if (!value) return '保存时间未知';
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return value;
-  return new Intl.DateTimeFormat('zh-CN', {
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-    hour12: false,
-  }).format(date);
-}
-
-function openWorkflow() {
-  void router.push({
-    name: 'ProductProcesses',
-    query: {
-      productTypeId: workspace.value?.workflowOwnerProductTypeId || props.productTypeId,
-    },
-  });
-}
-
-async function upgradeWorkflow() {
-  if (!workspace.value?.workflowUpgradeAvailable || upgradingWorkflow.value) return;
-  try {
-    await ElMessageBox.confirm(
-      `系统会保留当前 BOM 和工艺历史，并创建可编辑草稿升级到 Workflow v${workspace.value.workflowUpgradeDefinitionVersion ?? '最新'}。是否继续？`,
-      '升级到最新工艺',
-      {
-        confirmButtonText: '创建升级草稿',
-        cancelButtonText: '暂不升级',
-        type: 'warning',
-      },
-    );
-  } catch {
-    return;
-  }
-  upgradingWorkflow.value = true;
-  try {
-    const response = await bomRecipeApi.upgradeWorkflowRevision(props.factoryId, props.recipeId);
-    if (!response.success || !response.data) {
-      throw new Error(response.message || '工艺升级失败');
-    }
-    ElMessage.success('已创建升级草稿，原 BOM 与历史工艺保持不变');
-    emit('workflow-upgraded', response.data.id);
-  } catch (error: unknown) {
-    ElMessage({
-      message: (error as { message?: string }).message || '工艺升级失败，请按提示返回工艺页面检查未映射项',
-      type: 'error',
-      duration: 0,
-      showClose: true,
-    });
-  } finally {
-    upgradingWorkflow.value = false;
-  }
-}
+const workflowLinkLabel = computed(() => (
+  workspace.value?.workflowUpgradeAvailable ? '待自动同步' : '已自动关联'
+));
+const workflowLinkDescription = computed(() => (
+  workspace.value?.workflowUpgradeAvailable
+    ? '检测到工艺更新，检查并生效时会自动同步，无需在辅料页处理。'
+    : '系统会随当前 SKU 的生效流程自动保持一致。'
+));
 
 async function loadWorkspace() {
   if (!props.factoryId || !props.recipeId) return;
@@ -336,50 +271,20 @@ function usageLabel(usage: { dosagePerKgG: number; basisQuantity?: number | null
       data-testid="bom-workflow-source-card"
     >
       <div class="workflow-source-card__identity">
-        <span class="workflow-source-card__eyebrow">工艺来源</span>
+        <span class="workflow-source-card__eyebrow">工艺关联</span>
         <div class="workflow-source-card__title">
-          <h3>{{ workspace.productName }} · 生产工艺</h3>
-          <el-tag size="small" type="info">Workflow v{{ workspace.workflowDefinitionVersion }}</el-tag>
-          <el-tag size="small" type="success">{{ workflowStatusLabel }}</el-tag>
+          <h3>{{ workflowLinkLabel }}</h3>
+          <el-tag size="small" :type="workspace.workflowUpgradeAvailable ? 'warning' : 'success'">系统自动维护</el-tag>
         </div>
-        <p>系统已根据当前 SKU 自动关联并固定该工艺版本，历史 BOM 不会随新版本自动变化。</p>
-        <div class="workflow-source-card__facts" aria-label="工艺摘要">
-          <span>{{ workspace.workflowRootCount ?? 0 }} 个投入入口</span>
-          <span>{{ workspace.workflowProcessCount ?? processes.length }} 道工序</span>
-          <span>{{ workspace.workflowTargetCount ?? 1 }} 个终端产出</span>
-          <span>保存于 {{ formatSavedAt(workspace.workflowRevisionSavedAt) }}</span>
-          <span v-if="(workspace.workflowTargetCount ?? 1) > 1">
-            {{ outputRoleLabel }} · 成本分摊 {{ workspace.costAllocationRatio ?? 0 }}%
-          </span>
-        </div>
+        <p>{{ workflowLinkDescription }}</p>
       </div>
-      <div class="workflow-source-card__actions">
-        <el-button data-testid="view-workflow" @click="openWorkflow">查看工艺</el-button>
+      <div v-if="canViewPrice && (workspace.workflowTargetCount ?? 1) > 1" class="workflow-source-card__actions">
         <el-button
-          v-if="canViewPrice && (workspace.workflowTargetCount ?? 1) > 1"
           data-testid="open-family-output-costing"
           @click="outputCostingVisible = true"
         >
           产出成本配置
         </el-button>
-        <el-button
-          v-if="canWrite && workspace.workflowUpgradeAvailable"
-          type="primary"
-          :loading="upgradingWorkflow"
-          data-testid="upgrade-workflow"
-          @click="upgradeWorkflow"
-        >
-          升级到最新工艺
-        </el-button>
-      </div>
-      <div
-        v-if="workspace.workflowUpgradeAvailable"
-        class="workflow-source-card__update"
-        role="status"
-        aria-live="polite"
-        data-testid="workflow-update-notice"
-      >
-        发现更新的工艺版本 v{{ workspace.workflowUpgradeDefinitionVersion }}。升级会创建新 BOM 草稿，并按稳定工艺节点迁移现有配置。
       </div>
     </div>
 
@@ -589,11 +494,7 @@ function usageLabel(usage: { dosagePerKgG: number; basisQuantity?: number | null
 .workflow-source-card__title { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
 .workflow-source-card__title h3 { min-width: 0; margin: 0; font-size: 15px; overflow-wrap: anywhere; text-wrap: balance; }
 .workflow-source-card__identity p { margin: 7px 0 0; color: var(--el-text-color-secondary); font-size: 13px; line-height: 1.55; }
-.workflow-source-card__facts { display: flex; flex-wrap: wrap; gap: 6px 18px; margin-top: 10px; color: var(--el-text-color-regular); font-size: 12px; }
-.workflow-source-card__facts span { position: relative; }
-.workflow-source-card__facts span:not(:last-child)::after { position: absolute; right: -10px; color: var(--el-border-color); content: "·"; }
 .workflow-source-card__actions { display: flex; align-items: flex-start; gap: 8px; }
-.workflow-source-card__update { grid-column: 1 / -1; padding-top: 10px; border-top: 1px solid var(--el-color-primary-light-8); color: var(--el-color-warning-dark-2); font-size: 13px; line-height: 1.5; }
 .workspace-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 10px; }
 .workspace-toolbar__right { display: flex; align-items: center; gap: 10px; }
 .workspace-stats { color: var(--el-text-color-secondary); font-size: 12px; }
@@ -620,7 +521,6 @@ function usageLabel(usage: { dosagePerKgG: number; basisQuantity?: number | null
 @media (max-width: 1180px) {
   .workflow-source-card { grid-template-columns: 1fr; }
   .workflow-source-card__actions { width: 100%; }
-  .workflow-source-card__update { grid-column: 1; }
   .process-layout { grid-template-columns: 1fr; }
   .compact-summary { position: static; }
   .compact-summary__list { max-height: none; }

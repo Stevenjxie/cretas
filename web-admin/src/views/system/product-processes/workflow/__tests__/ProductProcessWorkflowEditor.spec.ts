@@ -14,8 +14,10 @@ const apiMocks = vi.hoisted(() => ({
   updateWorkProcess: vi.fn(),
   getProductProcessWorkflow: vi.fn(),
   getProductProcessWorkflowActivation: vi.fn(),
+  getWorkflowBomSyncPreflight: vi.fn(),
   getProductWorkProcesses: vi.fn(),
   publishProductProcessWorkflow: vi.fn(),
+  publishAndActivateProductProcessWorkflow: vi.fn(),
   saveProductProcessWorkflowDraft: vi.fn(),
   snapshotProductProcessWorkflow: vi.fn(),
 }));
@@ -37,7 +39,9 @@ vi.mock('@/api/processProduction', () => ({
 vi.mock('../workflowApi', () => ({
   getProductProcessWorkflow: apiMocks.getProductProcessWorkflow,
   getProductProcessWorkflowActivation: apiMocks.getProductProcessWorkflowActivation,
+  getWorkflowBomSyncPreflight: apiMocks.getWorkflowBomSyncPreflight,
   publishProductProcessWorkflow: apiMocks.publishProductProcessWorkflow,
+  publishAndActivateProductProcessWorkflow: apiMocks.publishAndActivateProductProcessWorkflow,
   saveProductProcessWorkflowDraft: apiMocks.saveProductProcessWorkflowDraft,
   snapshotProductProcessWorkflow: apiMocks.snapshotProductProcessWorkflow,
 }));
@@ -243,6 +247,8 @@ describe('ProductProcessWorkflowEditor process branch integration', () => {
         status: 'DRAFT',
         version: 1,
         lockVersion: 0,
+        revisionId: 71,
+        revisionHash: 'revision-current',
         nodes: [{
           id: 'raw',
           kind: 'RAW_MATERIAL',
@@ -254,6 +260,21 @@ describe('ProductProcessWorkflowEditor process branch integration', () => {
       },
     });
     apiMocks.getProductProcessWorkflowActivation.mockResolvedValue({ success: true, data: null });
+    apiMocks.getWorkflowBomSyncPreflight.mockResolvedValue({
+      success: true,
+      data: {
+        classification: 'READY',
+        activeBomVersion: 1,
+        syncDraftVersion: null,
+        activeBomWorkflowRevisionId: 71,
+        targetWorkflowRevisionId: 71,
+        preservedItems: [],
+        automaticMappings: [],
+        missingItems: [],
+        conflicts: [],
+        canCompleteAutomatically: true,
+      },
+    });
   });
 
   it('adds the process, derived finished output, and both edges in one undo snapshot', async () => {
@@ -316,16 +337,56 @@ describe('ProductProcessWorkflowEditor process branch integration', () => {
     ]));
   });
 
-  it('blocks publish before any write when the finished product has no BOM', async () => {
-    const warning = vi.spyOn(ElMessage, 'warning').mockImplementation(() => undefined);
+  it('blocks the atomic publish when the authoritative preflight reports no active BOM', async () => {
+    apiMocks.saveProductProcessWorkflowDraft.mockImplementation((
+      _factoryId: string,
+      _productTypeId: string,
+      definition: ProductProcessWorkflowDefinition,
+    ) => Promise.resolve({
+      success: true,
+      data: {
+        ...structuredClone(definition),
+        id: 1,
+        lockVersion: 1,
+        revisionId: 72,
+        revisionHash: 'revision-saved',
+      },
+    }));
+    apiMocks.getWorkflowBomSyncPreflight.mockResolvedValue({
+      success: true,
+      data: {
+        classification: 'USER_INPUT_REQUIRED',
+        activeBomVersion: null,
+        syncDraftVersion: null,
+        activeBomWorkflowRevisionId: null,
+        targetWorkflowRevisionId: 72,
+        preservedItems: [],
+        automaticMappings: [],
+        missingItems: [{
+          code: 'WORKFLOW_ACTIVE_BOM_REQUIRED',
+          materialTypeId: null,
+          materialName: null,
+          processNodeId: null,
+          field: 'bom',
+          message: '当前产品没有生效 BOM',
+          action: '请先完成 BOM 配置',
+        }],
+        conflicts: [],
+        canCompleteAutomatically: false,
+      },
+    });
     const vm = await mountEditor();
+    vm.openAddProcess('raw');
+    vm.selectedWorkProcessId = 'WP-PACK';
+    vm.confirmAddProcess();
     expect(vm.bomMissingProducts).toEqual([{ id: 'PT-PIG-400', name: '五香去骨猪蹄 400g' }]);
-    expect(vm.publishDisabledReason).toContain('五香去骨猪蹄 400g 尚未配置原辅料 BOM');
+    expect(vm.publishDisabledReason).toBe('');
 
     await vm.publishWorkflow();
 
-    expect(warning).toHaveBeenCalledWith('请先为所有成品产出配置原辅料 BOM，再发布并启用 Workflow');
-    expect(apiMocks.saveProductProcessWorkflowDraft).not.toHaveBeenCalled();
+    expect(apiMocks.saveProductProcessWorkflowDraft).toHaveBeenCalledTimes(1);
+    expect(apiMocks.getWorkflowBomSyncPreflight).toHaveBeenCalledTimes(1);
+    expect(apiMocks.publishAndActivateProductProcessWorkflow).not.toHaveBeenCalled();
     expect(apiMocks.publishProductProcessWorkflow).not.toHaveBeenCalled();
   });
 

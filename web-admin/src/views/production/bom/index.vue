@@ -23,6 +23,7 @@ import BomAuxiliaryWorkspace from './seasoning/BomAuxiliaryWorkspace.vue'
 import BomCopySuggestionDialog from './BomCopySuggestionDialog.vue'
 import { createBomDraftEnsurer, validateBomActivation } from './bomDraftLifecycle'
 import { buildBomLifecycleUiState, draftEntryLabel } from './bomVersionLifecycleUi'
+import { createBomWorkspaceLoadCoordinator } from './bomWorkspaceLoadCoordinator'
 import type { TableRow } from '@/types/api';
 // 客户张权反馈 (2026-07-02): "辅料 添加剂全混在一起了" — 「添加原辅料」对话框的「关联原料」
 // 下拉需按上方「物料类别」筛选, 归类逻辑复用 procurement/receives/list.vue 同款共享工具。
@@ -46,6 +47,7 @@ const route = useRoute();
 const factoryId = computed(() => authStore.factoryId);
 const canWrite = computed(() => permissionStore.canWrite('production'));
 const canViewPrice = computed(() => permissionStore.canViewPrice);
+const workspaceLoadCoordinator = createBomWorkspaceLoadCoordinator();
 
 // =========================================================================
 // BOM Recipe status panel (DRAFT → ACTIVE 激活)
@@ -125,14 +127,20 @@ function formatFriendlyNumber(value: unknown, maxDecimals = 4): string {
 }
 
 async function loadBomRecipes(preferredRecipeId?: string) {
-  if (!factoryId.value || !selectedProductTypeId.value) {
+  const currentFactoryId = factoryId.value;
+  const productTypeId = selectedProductTypeId.value;
+  if (!currentFactoryId || !productTypeId) {
     bomRecipes.value = [];
     selectedRecipeId.value = '';
     return;
   }
   bomRecipesLoading.value = true;
   try {
-    const res = await bomRecipeApi.listRecipes(factoryId.value, { size: 200 });
+    const res = await workspaceLoadCoordinator.singleFlight(
+      `${currentFactoryId}:${productTypeId}:recipes`,
+      () => bomRecipeApi.getVersionsByProduct(currentFactoryId, productTypeId),
+    );
+    if (selectedProductTypeId.value !== productTypeId) return;
     if (res.success && res.data) {
       // Filter to current product only; backend sorts by updatedAt desc
       const all: BomRecipeSummary[] = Array.isArray(res.data)
@@ -177,10 +185,13 @@ async function loadConfigurationReadiness(recipeId?: string | null): Promise<boo
   configurationReadinessLoading.value = true;
   configurationReadinessError.value = '';
   try {
-    const response = await bomRecipeApi.getProductConfigurationReadiness(
-      currentFactoryId,
-      productTypeId,
-      recipeId,
+    const response = await workspaceLoadCoordinator.singleFlight(
+      `${currentFactoryId}:${productTypeId}:readiness:${recipeId || 'none'}`,
+      () => bomRecipeApi.getProductConfigurationReadiness(
+        currentFactoryId,
+        productTypeId,
+        recipeId,
+      ),
     );
     if (selectedProductTypeId.value !== productTypeId) return false;
     if (!response.success || !response.data) throw new Error(response.message || '产品配置完整性响应为空');
@@ -191,7 +202,17 @@ async function loadConfigurationReadiness(recipeId?: string | null): Promise<boo
     if (selectedProductTypeId.value !== productTypeId) return false;
     configurationReadiness.value = null;
     configurationReadinessLoaded.value = false;
-    configurationReadinessError.value = (error as { message?: string }).message || '产品配置完整性读取失败';
+    const message = (error as { message?: string }).message || '产品配置完整性读取失败';
+    configurationReadinessError.value = message;
+    if (workspaceLoadCoordinator.shouldNotifyOnce(`${currentFactoryId}:${productTypeId}`, error, message)) {
+      ElMessage({
+        message,
+        type: 'error',
+        duration: 0,
+        showClose: true,
+        grouping: true,
+      });
+    }
     return false;
   } finally {
     if (selectedProductTypeId.value === productTypeId) configurationReadinessLoading.value = false;
@@ -301,16 +322,19 @@ async function handleDeleteRecipe(recipe: BomRecipeSummary) {
   }
 }
 
-async function loadHistoricalYield() {
+async function loadHistoricalYield(productTypeId = selectedProductTypeId.value) {
   historicalYieldLoadFailed.value = false;
-  if (!factoryId.value || !selectedProductTypeId.value) {
+  const currentFactoryId = factoryId.value;
+  if (!currentFactoryId || !productTypeId) {
     historicalYield.value = null;
     return;
   }
   try {
-    const response = await bomYieldEstimateApi.getEstimate(factoryId.value, selectedProductTypeId.value, 'RAW');
+    const response = await bomYieldEstimateApi.getEstimate(currentFactoryId, productTypeId, 'RAW');
+    if (selectedProductTypeId.value !== productTypeId) return;
     historicalYield.value = response.success && response.data ? response.data : null;
   } catch {
+    if (selectedProductTypeId.value !== productTypeId) return;
     historicalYield.value = null;
     historicalYieldLoadFailed.value = true;
   }
@@ -400,6 +424,11 @@ async function handleActivateRecipe(recipe: BomRecipeSummary) {
 
 // State
 const loading = ref(false);
+const initialLoading = ref(true);
+const workspaceLoading = ref(false);
+const pageLoading = computed(() => initialLoading.value || workspaceLoading.value);
+let workspaceHydrating = false;
+let bootstrapSelectingProduct = false;
 const changeLogVisible = ref(false)
 const selectedProductTypeId = ref<string>('');
 const bomCopyDialogVisible = ref(false);
@@ -888,40 +917,93 @@ const processCategories = ['通用工序', '分割工序', '包装工序', '质�
 // Overhead categories for dropdown
 const overheadCategories = ['房租', '水电', '燃气', '设备折旧', '后端毛利', '其他'];
 
+async function loadProductWorkspace(productTypeId: string) {
+  if (!factoryId.value || !productTypeId) return;
+  const productKey = `${factoryId.value}:${productTypeId}`;
+  const token = workspaceLoadCoordinator.beginProductLoad(productKey);
+  workspaceHydrating = true;
+  workspaceLoading.value = true;
+  configurationReadiness.value = null;
+  configurationReadinessLoaded.value = false;
+  configurationReadinessError.value = '';
+  bomRecipes.value = [];
+  selectedRecipeId.value = '';
+  bomItems.value = [];
+  laborCosts.value = [];
+  costSummary.value = null;
+  historicalYield.value = null;
+  historicalYieldLoadFailed.value = false;
+
+  try {
+    await Promise.all([
+      loadSelectedProductMeta(productTypeId),
+      loadBomRecipes(),
+    ]);
+    if (!workspaceLoadCoordinator.isCurrent(token)) return;
+
+    const recipeId = selectedRecipeId.value;
+    await Promise.all([
+      loadBomItems(recipeId),
+      loadConfigurationReadiness(recipeId || null),
+      loadLaborCosts(productTypeId),
+      loadCostSummary(productTypeId),
+    ]);
+    if (!workspaceLoadCoordinator.isCurrent(token)) return;
+
+    // 历史良率不是编辑首屏的必要条件，首屏稳定后后台补齐。
+    void loadHistoricalYield(productTypeId);
+  } finally {
+    if (workspaceLoadCoordinator.isCurrent(token)) {
+      workspaceHydrating = false;
+      workspaceLoading.value = false;
+    }
+  }
+}
+
 onMounted(async () => {
   syncCategoryFromRoute();
-  await loadProductTypes(); // 只用来抽取「半成品」列表 (semiFinishedRefCode 下拉)
-  await fetchProductTypeOptions(''); // 主产品下拉默认展示前 N 个成品
   // 防呆 #1236 系列: 从「产品新建」页跳过来带 ?productTypeId= 时直接定位到该产品,
   // 不需要用户在几百条里翻找刚建的 SKU (Rule 1 预先显示边界 / Rule 5 导航直达)。
   const routeProductTypeId = route.query.productTypeId;
   const requestedProductTypeId = props.initialProductTypeId
     || (typeof routeProductTypeId === 'string' ? routeProductTypeId : '');
-  if (requestedProductTypeId) {
-    await selectProductFromRoute(requestedProductTypeId);
-  } else if (productTypes.value.length > 0 && !selectedProductTypeId.value) {
-    selectedProductTypeId.value = productTypes.value[0].id;
+
+  // 编辑弹窗所需的大字典不阻塞首屏；失败仍由各自 loader 给出明确提示。
+  void Promise.allSettled([
+    loadProductTypes(),
+    loadMaterialTypes(),
+    loadOverheadCosts(),
+  ]);
+
+  bootstrapSelectingProduct = true;
+  try {
+    if (requestedProductTypeId) {
+      // URL 已明确产品时先按 id 精确读取，避免先拉默认列表再二次定位。
+      await Promise.all([
+        selectProductFromRoute(requestedProductTypeId),
+        fetchProductTypeOptions(''),
+      ]);
+    } else {
+      await fetchProductTypeOptions('');
+      if (productTypes.value.length > 0 && !selectedProductTypeId.value) {
+        selectedProductTypeId.value = String(productTypes.value[0].id);
+      }
+    }
+    if (selectedProductTypeId.value) {
+      await loadProductWorkspace(selectedProductTypeId.value);
+    }
+  } finally {
+    bootstrapSelectingProduct = false;
+    initialLoading.value = false;
   }
-  await loadMaterialTypes();
-  await loadOverheadCosts();
-  await loadAllLaborCosts();
 });
 
 watch(selectedProductTypeId, async (newVal) => {
+  if (bootstrapSelectingProduct) return;
   if (newVal) {
-    configurationReadiness.value = null;
-    configurationReadinessLoaded.value = false;
-    configurationReadinessError.value = '';
-    await Promise.all([
-      loadSelectedProductMeta(newVal),
-      loadConfigurationReadiness(null),
-    ]);
-    await loadBomRecipes();
-    await loadBomItems();
-    await loadLaborCosts();
-    await loadCostSummary();
-    await loadHistoricalYield();
+    await loadProductWorkspace(newVal);
   } else {
+    workspaceLoadCoordinator.invalidate();
     selectedProductMeta.value = null;
     bomItems.value = [];
     laborCosts.value = [];
@@ -939,7 +1021,7 @@ watch(selectedProductTypeId, async (newVal) => {
 });
 
 watch(selectedRecipeId, async (nextRecipeId, previousRecipeId) => {
-  if (nextRecipeId !== previousRecipeId) {
+  if (!workspaceHydrating && nextRecipeId !== previousRecipeId) {
     await Promise.all([loadBomItems(), loadConfigurationReadiness(nextRecipeId || null)]);
   }
 });
@@ -1034,6 +1116,7 @@ async function selectProductFromRoute(productTypeId: string) {
     const response = await get<TableRow>(`/${factoryId.value}/product-types/${productTypeId}`);
     if (response.success && response.data) {
       const product = response.data;
+      selectedProductMeta.value = product as Record<string, unknown>;
       if (!productTypes.value.some((p) => p.id === product.id)) {
         productTypes.value = [product, ...productTypes.value];
       }
@@ -1058,7 +1141,12 @@ async function loadSelectedProductMeta(productTypeId: string) {
     return;
   }
   try {
+    if (
+      String(selectedProductMeta.value?.id || '') === productTypeId
+      && selectedProductMeta.value
+    ) return;
     const response = await get<Record<string, unknown>>(`/${factoryId.value}/product-types/${productTypeId}`);
+    if (selectedProductTypeId.value !== productTypeId) return;
     selectedProductMeta.value = response.success && response.data ? response.data : null;
   } catch {
     selectedProductMeta.value = null;
@@ -1098,17 +1186,23 @@ function onMaterialLink(materialTypeId: string) {
 }
 
 // ========== BOM Items ==========
-async function loadBomItems() {
-  if (!factoryId.value || !selectedRecipeId.value) {
+async function loadBomItems(recipeId = selectedRecipeId.value) {
+  const currentFactoryId = factoryId.value;
+  const productTypeId = selectedProductTypeId.value;
+  if (!currentFactoryId || !recipeId) {
     bomItems.value = [];
     return;
   }
   loading.value = true;
   try {
-    const [response, substituteResponse] = await Promise.all([
-      bomRecipeApi.getDetail(factoryId.value, selectedRecipeId.value),
-      bomRecipeApi.listSubstitutes(factoryId.value, selectedRecipeId.value),
-    ]);
+    const [response, substituteResponse] = await workspaceLoadCoordinator.singleFlight(
+      `${currentFactoryId}:${productTypeId}:items:${recipeId}`,
+      () => Promise.all([
+        bomRecipeApi.getDetail(currentFactoryId, recipeId),
+        bomRecipeApi.listSubstitutes(currentFactoryId, recipeId),
+      ]),
+    );
+    if (selectedProductTypeId.value !== productTypeId || selectedRecipeId.value !== recipeId) return;
     if (response.success && response.data) {
       const relations = substituteResponse.success && Array.isArray(substituteResponse.data)
         ? substituteResponse.data
@@ -1360,12 +1454,14 @@ async function handleDeleteBomItem(row: TableRow) {
 }
 
 // ========== Labor Costs ==========
-async function loadLaborCosts() {
-  if (!factoryId.value || !selectedProductTypeId.value) return;
+async function loadLaborCosts(productTypeId = selectedProductTypeId.value) {
+  const currentFactoryId = factoryId.value;
+  if (!currentFactoryId || !productTypeId) return;
   try {
-    const response = await get(`/${factoryId.value}/bom/labor`, {
-      params: { productTypeId: selectedProductTypeId.value }
+    const response = await get(`/${currentFactoryId}/bom/labor`, {
+      params: { productTypeId }
     });
+    if (selectedProductTypeId.value !== productTypeId) return;
     if (response.success && response.data) {
       laborCosts.value = response.data;
     }
@@ -1627,10 +1723,12 @@ async function handleDeleteOverheadCost(row: TableRow) {
 }
 
 // ========== Cost Summary ==========
-async function loadCostSummary() {
-  if (!factoryId.value || !selectedProductTypeId.value) return;
+async function loadCostSummary(productTypeId = selectedProductTypeId.value) {
+  const currentFactoryId = factoryId.value;
+  if (!currentFactoryId || !productTypeId) return;
   try {
-    const response = await get<BomCostSummaryView>(`/${factoryId.value}/bom/cost-summary/${selectedProductTypeId.value}`);
+    const response = await get<BomCostSummaryView>(`/${currentFactoryId}/bom/cost-summary/${productTypeId}`);
+    if (selectedProductTypeId.value !== productTypeId) return;
     if (response.success && response.data) {
       costSummary.value = response.data;
     }
@@ -2184,6 +2282,7 @@ watch(adjustDialogVisible, (visible) => {
 <template>
   <CanvasAwareWrapper module-code="bom">
   <div class="bom-page">
+    <div class="bom-page__scroll">
     <!-- BomExpansionService 与本页统一读取当前 ACTIVE/current Recipe。 -->
     <!-- BOM 编辑保存后立即对生产计划生效, 无需再手动同步到转换率配置. -->
     <!-- RPF (MaterialProductConversion) 仅作 fallback (老工厂数据无 BOM 配置时沿用). -->
@@ -2236,6 +2335,38 @@ watch(adjustDialogVisible, (visible) => {
       </div>
     </el-card>
 
+    <section
+      v-if="pageLoading"
+      class="bom-loading-shell"
+      aria-label="正在加载 BOM 配方"
+      aria-busy="true"
+      aria-live="polite"
+      data-testid="bom-workspace-skeleton"
+    >
+      <span class="bom-loading-shell__status">正在加载产品、配方版本与明细…</span>
+      <div class="bom-loading-shell__summary">
+        <div v-for="item in 4" :key="item" class="bom-loading-shell__summary-card">
+          <el-skeleton animated>
+            <template #template>
+              <el-skeleton-item variant="text" style="width: 42%" />
+              <el-skeleton-item variant="h3" style="width: 62%; margin-top: 12px" />
+              <el-skeleton-item variant="text" style="width: 78%; margin-top: 10px" />
+            </template>
+          </el-skeleton>
+        </div>
+      </div>
+      <div class="bom-loading-shell__workspace">
+        <el-card shadow="never" class="bom-loading-shell__table">
+          <el-skeleton :rows="7" animated />
+        </el-card>
+        <div class="bom-loading-shell__aside">
+          <el-card shadow="never"><el-skeleton :rows="4" animated /></el-card>
+          <el-card shadow="never"><el-skeleton :rows="3" animated /></el-card>
+        </div>
+      </div>
+    </section>
+
+    <template v-else>
     <section
       v-if="selectedProductTypeId && selectedRecipe"
       class="bom-lifecycle-card"
@@ -2744,6 +2875,8 @@ watch(adjustDialogVisible, (visible) => {
         </el-card>
       </aside>
     </div>
+    </template>
+    </div>
 
     <footer v-if="selectedRecipeEditable && selectedRecipe" class="bom-draft-bar" aria-label="草稿操作">
       <div>
@@ -3235,13 +3368,68 @@ watch(adjustDialogVisible, (visible) => {
 
 <style lang="scss" scoped>
 .bom-page {
-  padding: 20px;
   height: 100%;
   display: flex;
   flex-direction: column;
-  gap: 14px;
-  overflow: auto;
+  min-height: 0;
+  overflow: hidden;
   background: #f4f7fb;
+}
+
+.bom-page__scroll {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 14px;
+  min-height: 0;
+  padding: 20px;
+  overflow: auto;
+  overscroll-behavior: contain;
+}
+
+.bom-loading-shell {
+  display: grid;
+  gap: 14px;
+}
+
+.bom-loading-shell__status {
+  color: #647a95;
+  font-size: 13px;
+}
+
+.bom-loading-shell__summary {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  overflow: hidden;
+  border: 1px solid #dfe6ef;
+  border-radius: 10px;
+  background: #fff;
+}
+
+.bom-loading-shell__summary-card {
+  min-width: 0;
+  padding: 18px 20px;
+  border-right: 1px solid #dfe6ef;
+}
+
+.bom-loading-shell__summary-card:last-child {
+  border-right: 0;
+}
+
+.bom-loading-shell__workspace {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 280px;
+  align-items: start;
+  gap: 14px;
+}
+
+.bom-loading-shell__table {
+  min-height: 430px;
+}
+
+.bom-loading-shell__aside {
+  display: grid;
+  gap: 14px;
 }
 
 .bom-hero-card,
@@ -3551,13 +3739,13 @@ watch(adjustDialogVisible, (visible) => {
 }
 
 .bom-draft-bar {
-  position: sticky;
-  bottom: 0;
   z-index: 8;
   display: flex;
+  flex: 0 0 auto;
   align-items: center;
   justify-content: space-between;
   gap: 20px;
+  margin: 0 20px 16px;
   padding: 12px 16px;
   border: 1px solid #cfdced;
   border-radius: 10px;
@@ -4025,19 +4213,25 @@ watch(adjustDialogVisible, (visible) => {
 }
 
 @media (max-width: 1180px) {
-  .bom-workspace {
+  .bom-workspace,
+  .bom-loading-shell__workspace {
     grid-template-columns: minmax(0, 1fr);
   }
 
-  .bom-side-stack {
+  .bom-side-stack,
+  .bom-loading-shell__aside {
     position: static;
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
 
 @media (max-width: 820px) {
-  .bom-page {
+  .bom-page__scroll {
     padding: 12px;
+  }
+
+  .bom-draft-bar {
+    margin: 0 12px 12px;
   }
 
   .bom-hero,
@@ -4058,16 +4252,20 @@ watch(adjustDialogVisible, (visible) => {
   }
 
   .bom-summary-grid,
-  .bom-side-stack {
+  .bom-side-stack,
+  .bom-loading-shell__summary,
+  .bom-loading-shell__aside {
     grid-template-columns: minmax(0, 1fr);
   }
 
-  .bom-summary-card {
+  .bom-summary-card,
+  .bom-loading-shell__summary-card {
     border-right: 0;
     border-bottom: 1px solid #dfe6ef;
   }
 
-  .bom-summary-card:last-child {
+  .bom-summary-card:last-child,
+  .bom-loading-shell__summary-card:last-child {
     border-bottom: 0;
   }
 
