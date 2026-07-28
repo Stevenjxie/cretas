@@ -134,6 +134,14 @@ class BomWorkflowRevisionServiceTest {
     }
 
     @Test
+    void localizedCountUnitMatchesCanonicalBomUnitDuringStableSlotRekeying() {
+        assertTrue(BomWorkflowRevisionService.unitsCompatible("pcs", "只"));
+        assertTrue(BomWorkflowRevisionService.unitsCompatible("件", "pcs"));
+        assertTrue(BomWorkflowRevisionService.unitsCompatible("个", "只"));
+        assertFalse(BomWorkflowRevisionService.unitsCompatible("pcs", "袋"));
+    }
+
+    @Test
     void multiOutputProcessScopesAreDerivedFromStableNodePresenceAcrossTerminalSlices() throws Exception {
         BomRecipe recipe = recipe(snapshot(twoToTwo()));
 
