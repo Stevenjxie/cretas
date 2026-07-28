@@ -74,7 +74,13 @@ describe('ProductProcessWorkflowEditor activation controls', () => {
     apiMocks.get.mockImplementation((url: string) => Promise.resolve({
       success: true,
       data: url.includes('/bom/recipes/by-product/')
-        ? { id: 'R-1', items: [{ id: 1, materialTypeId: 'RAW', materialName: 'Raw', unit: 'kg' }] }
+        ? {
+          id: 'R-1',
+          version: 1,
+          workflowRevisionId: 71,
+          workflowRevisionHash: 'revision-current',
+          items: [{ id: 1, materialTypeId: 'RAW', materialName: 'Raw', unit: 'kg' }],
+        }
         : url.endsWith('/product-types/PT-A')
           ? productOption('PT-A')
         : url.includes('/product-types')
@@ -172,6 +178,73 @@ describe('ProductProcessWorkflowEditor activation controls', () => {
     await vm.publishWorkflow();
     await flushPromises();
     expect(apiMocks.publishProductProcessWorkflow).toHaveBeenCalledTimes(1);
+  });
+
+  it('opens the matching BOM upgrade drawer instead of silently posting an incompatible revision', async () => {
+    const current = definition('PT-A', 'DRAFT', 2, 45);
+    current.revisionId = 222;
+    current.revisionHash = 'revision-222';
+    apiMocks.getProductProcessWorkflow.mockResolvedValue({ success: true, data: current });
+    apiMocks.get.mockImplementation((url: string) => Promise.resolve({
+      success: true,
+      data: url.includes('/bom/recipes/by-product/')
+        ? {
+          id: 'BOM-V1',
+          version: 1,
+          status: 'ACTIVE',
+          workflowRevisionId: 175,
+          workflowRevisionHash: 'revision-175',
+          items: [{ materialTypeId: 'RAW', materialName: 'Raw', unit: 'kg' }],
+        }
+        : url.endsWith('/product-types/PT-A')
+          ? productOption('PT-A')
+          : url.includes('/product-types')
+            ? { content: [productOption('PT-A'), productOption('PT-B')] }
+            : url.includes('/raw-material-types')
+              ? [{ id: 'RAW', name: 'Raw', unit: 'kg', category: '原料' }]
+              : [],
+    }));
+
+    const wrapper = mountEditor();
+    await flushPromises();
+    const vm = wrapper.vm as unknown as {
+      bomRevisionMismatchProducts: Array<{ id: string; name: string }>;
+      bomDrawerVisible: boolean;
+      bomDrawerProductTypeId: string;
+      publishWorkflow: () => Promise<void>;
+    };
+
+    expect(vm.bomRevisionMismatchProducts).toEqual([{ id: 'PT-A', name: 'Finished' }]);
+    expect(wrapper.get('[data-testid="workflow-bom-revision-alert"]').text())
+      .toContain('升级 BOM、补齐新增原料并激活新版本');
+
+    await vm.publishWorkflow();
+    await flushPromises();
+
+    expect(apiMocks.publishProductProcessWorkflow).not.toHaveBeenCalled();
+    expect(vm.bomDrawerVisible).toBe(true);
+    expect(vm.bomDrawerProductTypeId).toBe('PT-A');
+  });
+
+  it('handles a publish-time BOM revision 409 even when the preflight metadata looked current', async () => {
+    apiMocks.publishProductProcessWorkflow.mockRejectedValue({
+      status: 409,
+      code: 'WORKFLOW_ACTIVE_BOM_REVISION_MISMATCH',
+    });
+    const wrapper = mountEditor();
+    await flushPromises();
+    const vm = wrapper.vm as unknown as {
+      bomDrawerVisible: boolean;
+      bomDrawerProductTypeId: string;
+      publishWorkflow: () => Promise<void>;
+    };
+
+    await vm.publishWorkflow();
+    await flushPromises();
+
+    expect(apiMocks.publishProductProcessWorkflow).toHaveBeenCalledTimes(1);
+    expect(vm.bomDrawerVisible).toBe(true);
+    expect(vm.bomDrawerProductTypeId).toBe('PT-A');
   });
 
   it('prevents a second publish while the confirmation dialog is pending', async () => {
@@ -290,6 +363,8 @@ function definition(
     status,
     version,
     lockVersion: 0,
+    revisionId: 71,
+    revisionHash: 'revision-current',
     nodes: [{
       id: 'raw',
       kind: 'RAW_MATERIAL',

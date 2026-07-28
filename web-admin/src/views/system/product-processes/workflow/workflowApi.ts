@@ -11,6 +11,14 @@ const workflowConflictConfig = {
   ],
 };
 
+const workflowPublishConfig = {
+  _handledErrorCodes: [
+    ...workflowConflictConfig._handledErrorCodes,
+    'WORKFLOW_ACTIVE_BOM_REVISION_MISMATCH',
+    'WORKFLOW_ACTIVE_BOM_FAMILY_INCOMPLETE',
+  ],
+};
+
 export function getProductProcessWorkflow(factoryId: string, productTypeId: string) {
   return get<ProductProcessWorkflowDefinition | null>(
     `/${factoryId}/product-process-workflows/${productTypeId}`,
@@ -37,7 +45,7 @@ export function publishProductProcessWorkflow(
   return post<ProductProcessWorkflowDefinition>(
     `/${factoryId}/product-process-workflows/${productTypeId}/publish`,
     { lockVersion },
-    workflowConflictConfig,
+    workflowPublishConfig,
   );
 }
 
