@@ -608,7 +608,9 @@ public class ProductProcessWorkflowServiceImpl implements ProductProcessWorkflow
      * incoming business graph against that published row using the revision service's canonical
      * hash. Definition version and viewport are pinned to the published row: version allocation
      * and a late camera pan/zoom are not Workflow business changes, while schema, nodes and edges
-     * remain authoritative.
+     * remain authoritative. Keep this server-side guard after the Web autosave barrier until every
+     * supported client has an equivalent publish generation barrier and late-save telemetry stays
+     * at zero; only then is the no-op compatibility path removable.
      */
     private boolean sameBusinessGraph(
             ProductProcessWorkflow published,

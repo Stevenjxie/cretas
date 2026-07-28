@@ -1965,8 +1965,9 @@ public class IntentExecutionOrchestrator {
         if (delegated.get("queryPlanHash") != null) {
             delegatedData.put("queryPlanHash", delegated.get("queryPlanHash"));
         }
-        // spec §2.1 输出形态偏好 —— 转发链的最后一跳, 前端 (web-admin /
-        // mobile-rest-ai / RN) 按它决定渲染成文字/表格/图/报告文件。
+        // spec §2.1 输出形态偏好 —— 转发链的最后一跳。当前三端尚未消费这个字段，
+        // 先保留后端权威的封闭词表，避免各端落地时各猜默认值；若三端最终明确放弃
+        // output-aware 渲染且契约测试也移除该槽，再删除整条转发链。
         if (delegated.get("outputPreference") != null) {
             delegatedData.put("outputPreference", delegated.get("outputPreference"));
         }

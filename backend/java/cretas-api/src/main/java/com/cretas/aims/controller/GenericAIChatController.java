@@ -38,6 +38,11 @@ import com.cretas.aims.exception.BusinessException;
  *
  * 路径: /api/mobile/ai/chat
  *
+ * <p>This factory-less compatibility endpoint remains because three RN voice flows still call it.
+ * Delete it once those callers have moved to factory-scoped Form Assistant/intent endpoints and
+ * repository search proves no {@code /api/mobile/ai/chat} consumer remains; until then it must stay
+ * behind the global authenticated-prefix gate and per-user rate limit.
+ *
  * @author Cretas Team
  * @version 1.0.0
  * @since 2026-01-08
