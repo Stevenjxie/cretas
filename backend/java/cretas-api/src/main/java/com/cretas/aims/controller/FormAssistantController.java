@@ -1,6 +1,7 @@
 package com.cretas.aims.controller;
 
 import com.cretas.aims.dto.common.ApiResponse;
+import com.cretas.aims.annotation.RateLimit;
 import com.cretas.aims.annotation.RequirePermission;
 import com.cretas.aims.entity.AIQuotaUsage;
 import com.cretas.aims.repository.AIQuotaUsageRepository;
@@ -70,6 +71,31 @@ public class FormAssistantController {
 
     // 每次Schema生成消耗的配额
     private static final int SCHEMA_GENERATE_QUOTA_COST = 1;
+
+    // ==================== 表单解析的权限口径 ====================
+    // 「能建单的人就能让 AI 帮着填」。注解里必须是常量表达式(不能引用 String[] 变量),
+    // 所以下面这组常量在 /parse 和 /parse/stream 两处各展开一次。
+    //
+    // 2026-07-28 web-admin 的 AiEntryDrawer 从 /api/mobile/ai/chat 迁到这里时发现:
+    // 原来的 analytics:read_write 只有 factory_super_admin / platform_admin / dispatcher /
+    // production_manager / finance_manager / department_admin 拿得到 (L1 种子 V20260422_01)。
+    // 而挂着 AI 建单抽屉的 9 个页面, 主力恰恰是 procurement_manager(analytics='-') /
+    // sales_manager(analytics='r') / warehouse_manager(analytics='-') —— 照搬会让
+    // 采购单/销售单/盘点三条线整个 403。
+    //
+    // 改成 hasAnyPermission(OR) 覆盖各建单模块的写权限, 语义 =「这个角色至少能写点什么」,
+    // viewer(全 read) 和 unactivated 仍被挡在外面。这是收紧而不是放松 —— 被替换的
+    // /api/mobile/ai/chat 连权限注解都没有, 路径里也没有 factoryId(JwtAuthInterceptor
+    // 的租户校验对它不生效)。端点本身不读库不写库, 只把自然语言解析成字段值; 真正的越权
+    // 闸门在随后的业务创建接口上。滥用面(LLM 成本)由 @RateLimit + AIQuotaUsage 兜。
+    private static final String P_ANALYTICS = "analytics:read_write";
+    private static final String P_PRODUCTION = "production:write";
+    private static final String P_PROCUREMENT = "procurement:write";
+    private static final String P_SALES = "sales:write";
+    private static final String P_WAREHOUSE = "warehouse:write";
+    private static final String P_INVENTORY = "inventory:write";
+    private static final String P_SYSTEM = "system:write";
+    private static final String P_RESTAURANT = "restaurant:write";
 
     // ==================== DTO定义 ====================
 
@@ -287,7 +313,10 @@ public class FormAssistantController {
      * @param request 解析请求
      * @return 解析后的字段值
      */
-    @RequirePermission({"analytics:read_write"})
+    @RequirePermission({P_ANALYTICS, P_PRODUCTION, P_PROCUREMENT, P_SALES,
+                        P_WAREHOUSE, P_INVENTORY, P_SYSTEM, P_RESTAURANT})
+    @RateLimit(count = 60, period = 60, limitType = RateLimit.LimitType.USER,
+               message = "AI 解析请求过于频繁，请稍后再试")
     @PostMapping("/parse")
     @Operation(summary = "AI表单解析",
                description = "将用户自然语言输入(文本或语音转文字)解析为表单字段值")
@@ -371,7 +400,8 @@ public class FormAssistantController {
      * 立即建立 SSE 连接，完成后一次性返回完整结果
      * 事件: processing → result → done
      */
-    @RequirePermission({"analytics:read_write"})
+    @RequirePermission({P_ANALYTICS, P_PRODUCTION, P_PROCUREMENT, P_SALES,
+                        P_WAREHOUSE, P_INVENTORY, P_SYSTEM, P_RESTAURANT})
     @PostMapping(value = "/parse/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
     @Operation(summary = "流式 AI 表单解析 (SSE)",
                description = "SSE 流式输出。事件: processing, result, done, error")

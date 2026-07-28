@@ -19,9 +19,9 @@ function formatLocalDate(date: Date, timeZone: string, plusDays = 0): string {
   return shifted.toISOString().slice(0, 10)
 }
 
-export function buildAiTemporalContext(now = new Date(), timeZone = 'Asia/Shanghai'): string {
-  return `FACTORY_DATE_CONTEXT: timezone=${timeZone}; today=${formatLocalDate(now, timeZone)}; tomorrow=${formatLocalDate(now, timeZone, 1)}. Resolve relative dates only from this context.`
-}
+// 2026-07-28: buildAiTemporalContext 已删 —— 「工厂当前日期」现在由后端
+// FormAssistantService/FormPromptRegistry 注入 system prompt，前端不再拼时间上下文。
+// 下面这个归一化保留：它是拿到 AI 结果之后的兜底，防模型抄训练期的历史日期。
 
 export function normalizeAiOrderDates(
   entityType: OrderEntityType,

@@ -1,7 +1,21 @@
+/**
+ * AI 对话式建单 —— 各实体的抽屉配置。
+ *
+ * 2026-07-28: systemPrompt 已搬到后端 `resources/ai/form-prompts/factory/{ENTITY}.md`
+ * (FormPromptRegistry + FormPromptRegistryTest 锁死防呆规则)。这里只留「前端要展示的东西」
+ * (文案/示例/教程/预览字段) 和 entityType —— 后端按 entityType 查 prompt。
+ * 搬走的理由见 FormPromptRegistry 的类注释: prompt 跟前端发布走 → 改不动、看不见、会复制。
+ */
+
+/** 字段类型 —— 传给后端当 formFields[].type，让模型知道该返回什么形状。 */
+export type FieldType = 'string' | 'number' | 'array';
+
 export interface FieldDef {
   key: string;
   label: string;
   required?: boolean;
+  /** 省略视作 'string' */
+  type?: FieldType;
 }
 
 export interface TutorialStep {
@@ -11,6 +25,7 @@ export interface TutorialStep {
 }
 
 export interface AiEntryConfig {
+  /** 后端据此查专属 prompt (ai/form-prompts/factory/{entityType}.md) */
   entityType: string;
   title: string;
   placeholder: string;
@@ -18,7 +33,6 @@ export interface AiEntryConfig {
   scopeLabel: string;            // e.g. "仅限生产计划相关操作"
   examples: string[];            // clickable quick-start prompts
   tutorialSteps: TutorialStep[]; // step-by-step guide
-  systemPrompt: string;
   fields: FieldDef[];
 }
 
@@ -26,8 +40,6 @@ export interface ChatMessage {
   role: 'user' | 'assistant';
   content: string;
 }
-
-const currentFactoryDate = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Shanghai' }).format(new Date());
 
 // ======================== Entity Configs ========================
 
@@ -48,41 +60,9 @@ export const PRODUCTION_PLAN_CONFIG: AiEntryConfig = {
     { title: '确认预览', description: '信息收集完毕后会显示预览卡片，核对所有字段是否正确', icon: '3' },
     { title: '填入表单', description: '点击「填入表单」自动打开新建对话框，所有字段已预填，确认后提交', icon: '4' },
   ],
-  systemPrompt: `你是食品工厂的生产计划助手。用户会用自然语言描述生产计划需求，你需要通过对话收集以下字段信息：
-
-必填字段：
-- productTypeName: 产品名称（由工厂决定，你不知道具体清单，需要用户提供）。必须逐字保留用户输入的完整 SKU 名称，包括数字、重量/规格后缀（如 400g、350g）和包装描述；禁止缩写、归一化、删除后缀或改成相似产品
-- plannedQuantity: 计划数量（数字）
-- quantityUnit: 计划数量单位（必须保留用户原始单位，如 kg、g、box、case）
-- plannedDate: 计划日期（YYYY-MM-DD 格式）
-
-可选字段：
-- sourceCustomerName: 客户名称
-- processName: 工序（如"分切"、"包装"）
-- batchDate: 批次日期（YYYY-MM-DD 格式）
-- notes: 备注
-
-️ 重要规则：
-- **不要假设**工厂可生产哪些产品。每个工厂的产品不同（食品厂可能做豆制品、肉制品、烘焙等）。
-- 如果用户问"我们有哪些产品", 实话告诉用户："我无法直接查询工厂产品清单, 请直接告诉我您要生产的产品名称, 系统会根据您输入的名称匹配。"
-- 不要列举编造的产品例子。
-
-交互规则：
-1. 如果用户一次性提供了所有必填信息，直接返回 FILL_FORM
-2. 如果缺少必填字段，礼貌追问（每次只问1-2个问题）
-3. 工厂当前日期是 ${currentFactoryDate}；日期支持自然语言（"明天"、"下周一"等），必须以该日期换算为 YYYY-MM-DD，禁止使用提示词示例中的历史日期
-4. 数量与单位不可拆丢（"500kg"→ plannedQuantity=500 且 quantityUnit="kg"）
-5. productTypeName 必须原样返回用户明确提供的完整文本；不要猜测或返回 productTypeId，页面会用完整名称唯一匹配现有 SKU
-
-当所有必填字段收集完毕后，返回如下格式（用 markdown 代码块包裹）：
-\`\`\`json
-{"action":"FILL_FORM","params":{"productTypeName":"<用户提供的产品名>","plannedQuantity":500,"quantityUnit":"kg","plannedDate":"<按工厂当前日期换算的YYYY-MM-DD>","sourceCustomerName":"<客户名>","processName":"分切","batchDate":"<YYYY-MM-DD>","notes":""}}
-\`\`\`
-
-在返回 JSON 之前，先用一句话总结收集到的信息。`,
   fields: [
     { key: 'productTypeName', label: '产品名称', required: true },
-    { key: 'plannedQuantity', label: '计划数量', required: true },
+    { key: 'plannedQuantity', label: '计划数量', required: true, type: 'number' },
     { key: 'quantityUnit', label: '数量单位', required: true },
     { key: 'plannedDate', label: '计划日期', required: true },
     { key: 'sourceCustomerName', label: '客户名称' },
@@ -109,30 +89,6 @@ export const PRODUCT_CONFIG: AiEntryConfig = {
     { title: '确认预览', description: '信息收集完毕后会显示预览卡片，核对产品信息', icon: '3' },
     { title: '填入表单', description: '点击「填入表单」自动打开新增对话框，确认后提交', icon: '4' },
   ],
-  systemPrompt: `你是食品工厂的产品管理助手。用户会用自然语言描述要添加的产品信息，你需要通过对话收集以下字段：
-
-必填字段：
-- name: 产品名称
-- productCategory: 产品大类，必须是以下之一：FINISHED_PRODUCT(成品)、SEMI_FINISHED(半成品)、RAW_MATERIAL(原料)、PACKAGING(包辅材)、SEASONING(调味品)、CUSTOMER_MATERIAL(客户自带原料加工)、CONTRACT_MANUFACTURING(纯代工)
-- unit: 单位（如 kg、箱、袋、瓶）
-
-可选字段：
-- specification: 规格（如"310g*42袋/箱"）
-- relatedCustomer: 关联客户
-- notes: 备注
-
-交互规则：
-1. 如果用户一次性提供了所有必填信息，直接返回 FILL_FORM
-2. 如果缺少必填字段，礼貌追问
-3. 根据用户描述智能判断 productCategory（如"成品"→FINISHED_PRODUCT、"半成品"→SEMI_FINISHED、"原料"→RAW_MATERIAL）
-4. RAW_MATERIAL、PACKAGING、SEASONING 只能交由原料类型字典维护；本助手仍返回真实类别，由页面阻止误落到 SKU 列表
-
-当所有必填字段收集完毕后，返回如下格式：
-\`\`\`json
-{"action":"FILL_FORM","params":{"name":"<产品名>","productCategory":"FINISHED_PRODUCT","unit":"kg","specification":"310g","relatedCustomer":"","notes":""}}
-\`\`\`
-
-在返回 JSON 之前，先用一句话总结。`,
   fields: [
     { key: 'name', label: '产品名称', required: true },
     { key: 'productCategory', label: '产品大类', required: true },
@@ -160,38 +116,11 @@ export const PURCHASE_ORDER_CONFIG: AiEntryConfig = {
     { title: '确认预览', description: '信息收集完毕后会显示预览卡片，核对供应商和采购明细', icon: '3' },
     { title: '填入表单', description: '点击「填入表单」自动打开新建对话框，确认后提交', icon: '4' },
   ],
-  systemPrompt: `你是食品工厂的采购助手。用户会用自然语言描述采购需求，你需要通过对话收集以下字段：
-
-必填字段：
-- supplierName: 供应商名称
-- items: 采购明细数组，每项包含：
-  - materialName: 原料名称
-  - quantity: 数量（数字）
-  - unit: 单位（默认 kg）
-  - unitPrice: 单价（数字，如未提供可为0）
-
-可选字段：
-- purchaseType: 采购类型 DIRECT(直接采购)/HQ_UNIFIED(总部统采)/URGENT(紧急采购)，默认 DIRECT
-- expectedDeliveryDate: 期望交货日期（YYYY-MM-DD）
-- remark: 备注
-
-交互规则：
-1. 至少需要供应商和一项采购明细
-2. 如果缺少必填信息，礼貌追问
-3. 支持一次添加多项原料（"500kg大豆和200kg小麦"）
-4. 日期支持自然语言转换
-
-当信息收集完毕后，返回如下格式：
-\`\`\`json
-{"action":"FILL_FORM","params":{"supplierName":"XX供应商","purchaseType":"DIRECT","expectedDeliveryDate":"<YYYY-MM-DD>","remark":"","items":[{"materialName":"大豆","quantity":500,"unit":"kg","unitPrice":0}]}}
-\`\`\`
-
-在返回 JSON 之前，先用一句话总结。`,
   fields: [
     { key: 'supplierName', label: '供应商', required: true },
     { key: 'purchaseType', label: '采购类型' },
     { key: 'expectedDeliveryDate', label: '期望交货日期' },
-    { key: 'items', label: '采购明细', required: true },
+    { key: 'items', label: '采购明细', required: true, type: 'array' },
     { key: 'remark', label: '备注' },
   ],
 };
@@ -213,38 +142,11 @@ export const SALES_ORDER_CONFIG: AiEntryConfig = {
     { title: '确认预览', description: '信息收集完毕后会显示预览卡片，核对客户和产品明细', icon: '3' },
     { title: '填入表单', description: '点击「填入表单」自动打开新建对话框，确认后提交', icon: '4' },
   ],
-  systemPrompt: `你是食品工厂的销售助手。用户会用自然语言描述销售需求，你需要通过对话收集以下字段：
-
-必填字段：
-- customerName: 客户名称
-- items: 销售明细数组，每项包含：
-  - productName: 产品名称
-  - quantity: 数量（数字）
-  - unit: 单位（默认 kg）
-  - unitPrice: 单价（数字，如未提供可为0）
-
-可选字段：
-- requiredDeliveryDate: 交货日期（YYYY-MM-DD）
-- deliveryAddress: 交货地址
-- remark: 备注
-
-交互规则：
-1. 至少需要客户和一项产品明细
-2. 如果缺少必填信息，礼貌追问
-3. 支持一次添加多项产品
-4. 日期支持自然语言转换
-
-当信息收集完毕后，返回如下格式：
-\`\`\`json
-{"action":"FILL_FORM","params":{"customerName":"<客户名>","requiredDeliveryDate":"<YYYY-MM-DD>","deliveryAddress":"","remark":"","items":[{"productName":"<产品名>","quantity":1000,"unit":"kg","unitPrice":0}]}}
-\`\`\`
-
-在返回 JSON 之前，先用一句话总结。`,
   fields: [
     { key: 'customerName', label: '客户', required: true },
     { key: 'requiredDeliveryDate', label: '交货日期' },
     { key: 'deliveryAddress', label: '交货地址' },
-    { key: 'items', label: '产品明细', required: true },
+    { key: 'items', label: '产品明细', required: true, type: 'array' },
     { key: 'remark', label: '备注' },
   ],
 };
@@ -267,28 +169,9 @@ export const STOCKTAKING_CONFIG: AiEntryConfig = {
     { title: '确认预览', description: '信息收集完毕后会显示预览卡片，核对调整明细', icon: '3' },
     { title: '填入表单', description: '点击「填入表单」自动打开调整对话框，确认后提交', icon: '4' },
   ],
-  systemPrompt: `你是食品工厂的库存盘点助手。用户会用自然语言描述盘点差异，你需要通过对话收集以下字段：
-
-必填字段：
-- batchNumber: 批次号（如 "PB-20260516-001"、"RM-2026-100"）
-- adjustQuantity: 调整数量（数字，正数=盘盈/增加，负数=盘亏/减少）
-- reason: 调整原因（说明为什么需要调整）
-
-交互规则：
-1. 如果用户一次性提供了所有必填信息，直接返回 FILL_FORM
-2. 如果缺少必填字段，礼貌追问（每次只问1-2个问题）
-3. "盘亏"/"实物少" 等关键词 → 负数；"盘盈"/"多出来" 等关键词 → 正数
-4. 数量支持带单位（"5kg"→5）
-
-当所有必填字段收集完毕后，返回如下格式：
-\`\`\`json
-{"action":"FILL_FORM","params":{"batchNumber":"PB-20260516-001","adjustQuantity":-5,"reason":"实物清点少 5kg"}}
-\`\`\`
-
-在返回 JSON 之前，先用一句话总结。`,
   fields: [
     { key: 'batchNumber', label: '批次号', required: true },
-    { key: 'adjustQuantity', label: '调整数量', required: true },
+    { key: 'adjustQuantity', label: '调整数量', required: true, type: 'number' },
     { key: 'reason', label: '调整原因', required: true },
   ],
 };
@@ -311,37 +194,11 @@ export const WH_INBOUND_CONFIG: AiEntryConfig = {
     { title: '确认预览', description: '信息收集完毕后会显示预览卡片，核对供应商和物料明细', icon: '3' },
     { title: '填入表单', description: '点击「填入表单」自动打开新建对话框，确认后提交', icon: '4' },
   ],
-  systemPrompt: `你是食品工厂的入库助手。用户会用自然语言描述采购入库需求，你需要通过对话收集以下字段：
-
-必填字段：
-- supplierName: 供应商名称
-- receiveDate: 入库日期（YYYY-MM-DD 格式）
-- items: 入库明细数组，每项包含：
-  - materialName: 物料名称
-  - receivedQuantity: 收货数量（数字）
-  - unit: 单位（默认 kg）
-
-可选字段：
-- purchaseOrderNumber: 关联采购订单号（如 "PO-001"）
-- remark: 备注
-
-交互规则：
-1. 至少需要供应商、入库日期和一项物料明细
-2. 如果缺少必填信息，礼貌追问
-3. 支持一次添加多项物料
-4. 日期支持自然语言转换（"今天"→今天的日期；"明天"等）
-
-当信息收集完毕后，返回如下格式：
-\`\`\`json
-{"action":"FILL_FORM","params":{"supplierName":"XX供应商","receiveDate":"2026-05-17","purchaseOrderNumber":"","remark":"","items":[{"materialName":"大豆","receivedQuantity":500,"unit":"kg"}]}}
-\`\`\`
-
-在返回 JSON 之前，先用一句话总结。`,
   fields: [
     { key: 'supplierName', label: '供应商', required: true },
     { key: 'receiveDate', label: '入库日期', required: true },
     { key: 'purchaseOrderNumber', label: '采购订单号' },
-    { key: 'items', label: '入库明细', required: true },
+    { key: 'items', label: '入库明细', required: true, type: 'array' },
     { key: 'remark', label: '备注' },
   ],
 };
@@ -364,36 +221,9 @@ export const PROCESS_TASK_CONFIG: AiEntryConfig = {
     { title: '确认预览', description: '信息收集完毕后会显示预览卡片，核对批次信息', icon: '3' },
     { title: '填入表单', description: '点击「填入表单」自动打开创建对话框，确认后提交', icon: '4' },
   ],
-  systemPrompt: `你是食品工厂的生产批次助手。用户会用自然语言描述生产批次需求，你需要通过对话收集以下字段：
-
-必填字段：
-- productTypeName: 产品名称（由工厂决定，你不知道具体清单，需要用户提供）
-- plannedQuantity: 计划数量（数字）
-
-可选字段：
-- unit: 单位（kg / 箱 / 件 / 吨，默认 kg）
-- notes: 备注
-
-️ 重要规则：
-- **不要假设**工厂可生产哪些产品。每个工厂的产品不同（食品厂可能做肉制品/豆制品/烘焙等）。
-- 如果用户问"我们有哪些产品"或"我们能生产什么", 实话告诉用户："我无法直接查询工厂产品清单, 请直接告诉我您要生产的产品名称, 系统会根据您输入的名称匹配。建议先到 [基础数据→产品管理] 查看完整产品清单。"
-- 不要列举编造的产品例子。
-
-交互规则：
-1. 如果用户一次性提供了所有必填信息，直接返回 FILL_FORM
-2. 如果缺少必填字段，礼貌追问（每次只问1-2个问题）
-3. 数量支持带单位（"500kg"→500，单位填 "kg"）
-4. 批次号无需用户提供（系统自动生成 PB-YYYYMMDD-XXXXX）
-
-当所有必填字段收集完毕后，返回如下格式：
-\`\`\`json
-{"action":"FILL_FORM","params":{"productTypeName":"<用户提供的产品名>","plannedQuantity":500,"unit":"kg","notes":""}}
-\`\`\`
-
-在返回 JSON 之前，先用一句话总结。`,
   fields: [
     { key: 'productTypeName', label: '产品名称', required: true },
-    { key: 'plannedQuantity', label: '计划数量', required: true },
+    { key: 'plannedQuantity', label: '计划数量', required: true, type: 'number' },
     { key: 'unit', label: '单位' },
     { key: 'notes', label: '备注' },
   ],
