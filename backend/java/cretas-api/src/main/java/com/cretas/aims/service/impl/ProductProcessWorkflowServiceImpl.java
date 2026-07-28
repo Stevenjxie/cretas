@@ -97,7 +97,7 @@ public class ProductProcessWorkflowServiceImpl implements ProductProcessWorkflow
         entity.setEdgesJson(writeJson(definition.getEdges()));
         entity.setViewportJson(writeJson(definition.getViewport()));
         entity = repository.saveAndFlush(entity);
-        ProductProcessWorkflowRevision revision = revisionSnapshotService.capture(entity);
+        ProductProcessWorkflowRevision revision = revisionSnapshotService.captureDraft(entity);
         entity.setCurrentRevisionId(revision.getId());
         entity.setCurrentRevisionHash(revision.getRevisionHash());
         ProductProcessWorkflowDTO saved = toDTO(repository.saveAndFlush(entity));
@@ -307,18 +307,13 @@ public class ProductProcessWorkflowServiceImpl implements ProductProcessWorkflow
     }
 
     private ProductProcessWorkflowRevision requireCurrentRevision(ProductProcessWorkflow workflow) {
-        Long revisionId = workflow.getCurrentRevisionId();
-        if (revisionId == null) {
-            ProductProcessWorkflowRevision revision = revisionSnapshotService.capture(workflow);
+        ProductProcessWorkflowRevision revision = revisionSnapshotService.captureDraft(workflow);
+        if (!revision.getId().equals(workflow.getCurrentRevisionId())
+                || !revision.getRevisionHash().equals(workflow.getCurrentRevisionHash())) {
             workflow.setCurrentRevisionId(revision.getId());
             workflow.setCurrentRevisionHash(revision.getRevisionHash());
-            return revision;
         }
-        return revisionRepository.findByIdAndFactoryId(revisionId, workflow.getFactoryId())
-                .filter(revision -> workflow.getId().equals(revision.getWorkflowId()))
-                .filter(revision -> workflow.getProductTypeId().equals(revision.getProductTypeId()))
-                .orElseThrow(() -> new BusinessException(409, "Workflow 当前修订不存在或身份不一致")
-                        .withCode("PRODUCT_PROCESS_WORKFLOW_REVISION_INVALID"));
+        return revision;
     }
 
     private ProductProcessWorkflowDTO toDTOWithUnitWarnings(ProductProcessWorkflow entity) {
