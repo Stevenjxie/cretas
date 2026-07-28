@@ -11,11 +11,15 @@ from food_kb.api.manual_chat import (
     _MATERIAL_PACKAGING_ANSWER,
     _MULTI_OUTPUT_LABEL_QC_ANSWER,
     _RESTAURANT_CONTEXT_SCOPE_ANSWER,
+    _RESTAURANT_FLYWHEEL_GOVERNANCE_ANSWER,
+    _WORKFLOW_ACTUAL_IO_ANSWER,
     _build_scope_prompt,
     _needs_bom_workflow_sequence_guard,
     _needs_material_packaging_guard,
     _needs_multi_output_label_qc_guard,
     _needs_restaurant_context_scope_guard,
+    _needs_restaurant_flywheel_governance_guard,
+    _needs_workflow_actual_io_guard,
     _uses_current_production_sop,
 )
 from food_kb.services.knowledge_retriever import KnowledgeRetriever
@@ -45,7 +49,9 @@ def test_factory_prompt_keeps_restaurant_analysis_out_of_ai_assist():
     assert "ACTIVE BOM 是 Workflow 发布启用的前置门禁" in FACTORY_SYSTEM_PROMPT
     assert "禁止回答“两者无依赖”" in FACTORY_SYSTEM_PROMPT
     assert "原料包装换算在“原料类型字典”" in FACTORY_SYSTEM_PROMPT
-    assert "主产出/联产品成本比例大于 0" in FACTORY_SYSTEM_PROMPT
+    assert "都不配置主产出/联产品/副产品角色" in FACTORY_SYSTEM_PROMPT
+    assert "BOM 至少需要一项主原料" in FACTORY_SYSTEM_PROMPT
+    assert "没有辅料或包材本身不阻止激活" in FACTORY_SYSTEM_PROMPT
     assert "AI 候选无论 0 处还是多处都进入人工审核" in FACTORY_SYSTEM_PROMPT
 
 
@@ -54,6 +60,9 @@ def test_restaurant_prompt_keeps_session_scope_and_evidence_honest():
     assert "固定为 21 个维度" in SYSTEM_PROMPT
     assert "真实、代理、模拟或缺失证据" in SYSTEM_PROMPT
     assert "不得拿演示值冒充真实租户事实" in SYSTEM_PROMPT
+    assert "AI 飞轮运营台只对平台管理员开放" in SYSTEM_PROMPT
+    assert "只有 confirmed 映射影响解析" in SYSTEM_PROMPT
+    assert "禁止模拟数据或假成功" in SYSTEM_PROMPT
 
 
 def test_scope_prompt_distinguishes_depth_and_business_line():
@@ -119,10 +128,26 @@ def test_multi_output_label_qc_questions_keep_two_contracts_separate():
     assert all(
         _needs_multi_output_label_qc_guard(q) for q in equivalent_questions
     )
-    assert "有且仅有一个主产出" in _MULTI_OUTPUT_LABEL_QC_ANSWER
-    assert "全部比例合计必须为 100%" in _MULTI_OUTPUT_LABEL_QC_ANSWER
+    assert "不配置主产出、联产品、副产品" in _MULTI_OUTPUT_LABEL_QC_ANSWER
+    assert "共享投入成本 100% 归该产出" in _MULTI_OUTPUT_LABEL_QC_ANSWER
+    assert "合计必须为 100%" in _MULTI_OUTPUT_LABEL_QC_ANSWER
     assert "所有照片都进入“待我审核”" in _MULTI_OUTPUT_LABEL_QC_ANSWER
     assert "不会自动训练或发布模型" in _MULTI_OUTPUT_LABEL_QC_ANSWER
+
+
+def test_workflow_actual_io_questions_use_the_reviewed_factory_contract():
+    equivalent_questions = (
+        "Workflow 和 BOM 不预设本次投入产出时，正式报工怎么选实际行？",
+        "多产出 Workflow 报工时只有一个实际产出，成本怎么分摊？",
+        "配方固定后，联产实际数量和本次成本比例应该在哪里填写？",
+    )
+    assert all(_needs_workflow_actual_io_guard(q) for q in equivalent_questions)
+    assert not _needs_workflow_actual_io_guard("Workflow 应该怎么发布？")
+    assert "至少提交一项数量大于 0 的实际投入" in _WORKFLOW_ACTUAL_IO_ANSWER
+    assert "未发生项留空" in _WORKFLOW_ACTUAL_IO_ANSWER
+    assert "共享投入成本 100% 归该产出" in _WORKFLOW_ACTUAL_IO_ANSWER
+    assert "合计必须为 100%" in _WORKFLOW_ACTUAL_IO_ANSWER
+    assert "没有辅料或包材本身不阻止激活" in _WORKFLOW_ACTUAL_IO_ANSWER
 
 
 def test_restaurant_followup_scope_questions_use_the_reviewed_contract():
@@ -138,6 +163,31 @@ def test_restaurant_followup_scope_questions_use_the_reviewed_contract():
     assert "“全部门店”保持聚合范围" in _RESTAURANT_CONTEXT_SCOPE_ANSWER
     assert "另一个页面或模块上的筛选不保证自动带入" in (
         _RESTAURANT_CONTEXT_SCOPE_ANSWER
+    )
+
+
+def test_restaurant_flywheel_questions_use_the_reviewed_governance_contract():
+    equivalent_questions = (
+        "AI 飞轮运营台谁能使用，候选可以自动晋升吗？",
+        "菜品别名映射的 pending、confirmed、rejected 怎么审核？",
+        "飞轮的五个治理页面做什么，工厂现在能用吗？",
+    )
+    assert all(
+        _needs_restaurant_flywheel_governance_guard(q)
+        for q in equivalent_questions
+    )
+    assert not _needs_restaurant_flywheel_governance_guard("菜品毛利怎么看？")
+    assert "只对平台管理员开放" in _RESTAURANT_FLYWHEEL_GOVERNANCE_ANSWER
+    assert "“工厂（待接入）”不可选择" in _RESTAURANT_FLYWHEEL_GOVERNANCE_ANSWER
+    assert "不能自动晋升" in _RESTAURANT_FLYWHEEL_GOVERNANCE_ANSWER
+    assert "只有 `confirmed` 映射影响线上解析" in (
+        _RESTAURANT_FLYWHEEL_GOVERNANCE_ANSWER
+    )
+    assert "不能以模拟数据或假成功兜底" in (
+        _RESTAURANT_FLYWHEEL_GOVERNANCE_ANSWER
+    )
+    assert "不会替用户计算或分析业务数据" in (
+        _RESTAURANT_FLYWHEEL_GOVERNANCE_ANSWER
     )
 
 
@@ -203,14 +253,16 @@ def test_latest_f006_sop_is_a_deployable_manual_source():
     assert "已发布 vX" in current_sop
     assert "已启用 vX" in current_sop
     assert "采购包装单位 → 库存基本单位" in current_sop
-    assert "多产出成本分摊合同" in current_sop
-    assert "全部比例合计必须为 100%" in current_sop
+    assert "多产出实际报工与成本分摊合同" in current_sop
+    assert "工序 Cell、Workflow 和 BOM 都不配置主产出" in current_sop
+    assert "没有辅料或包材本身不是阻塞" in current_sop
+    assert "只在本次报工表单要求填写各实际产出的分摊比例" in current_sop
     assert "所有照片都必须进入人工审核" in current_sop
 
     html_path = Path(PROJECT_ROOT) / "docs/manual/F006-production-full-chain-manual-test-sop.html"
     html = html_path.read_text(encoding="utf-8")
     assert required_sequence in html
-    assert "origin/main · SOP sync 2026-07-27" in html
+    assert "origin/main · SOP sync 2026-07-28" in html
     assert "先有完整 Workflow 草稿，再创建 BOM" in html
     assert "页面没有任意切换版本的选择器" in html
     assert "① 投入" in html
@@ -222,7 +274,9 @@ def test_latest_f006_sop_is_a_deployable_manual_source():
     assert "重复创建只得到同一计划" in html
     assert "消耗结算标记、入库状态与库存流水一致" in html
     assert "原料多包装与基本单位库存" in html
-    assert "多产出角色与成本分摊合同" in html
+    assert "Workflow 只声明可能投入/产出，本次事实留到报工" in html
+    assert "BOM 至少配置一项主原料" in html
+    assert "没有辅料或包材本身不阻止激活" in html
     assert "所有照片都会进入人工审核" in html
 
 
@@ -242,10 +296,12 @@ def test_restaurant_registered_sources_match_current_product_contract():
         "restaurant-full-chain-sop.html": (
             "21 个综合分析维度",
             "跨页面或跨模块不会自动继承筛选",
+            "AI 飞轮、菜品别名与人审边界",
         ),
         "restaurant-product-manual.html": (
             "当前 21 维综合分析目录",
             "全部门店是聚合范围",
+            "AI 飞轮运营台与菜品别名治理",
         ),
         "restaurant-metrics-glossary.html": (
             "21 维综合分析证据目录",
@@ -263,7 +319,11 @@ def test_restaurant_registered_sources_match_current_product_contract():
         PROJECT_ROOT / "web-admin/public/aiassist.html"
     ).read_text(encoding="utf-8")
     assert "原料包装换算、标签人工审核或多产出成本怎么做？" in ai_assist
+    assert "实际投入产出与多产出成本怎么报？" in ai_assist
     assert "21 维证据地图与连续追问范围" in ai_assist
+    assert "AI 飞轮与菜品别名怎么治理？" in ai_assist
+    assert "7 节小课 · 约 12 分钟" in ai_assist
+    assert "飞轮与人审边界" in ai_assist
     assert "不做计算" in ai_assist
 
 
@@ -389,9 +449,21 @@ async def test_bom_workflow_publication_answer_never_calls_the_llm(monkeypatch):
             "f006-production-full-chain-sop.md",
         ),
         (
+            "Workflow 和 BOM 不预设本次投入产出时，正式报工怎么选实际行？",
+            "factory",
+            _WORKFLOW_ACTUAL_IO_ANSWER,
+            "f006-production-full-chain-sop.md",
+        ),
+        (
             "门店菜品不同月份继续追问时怎么保持时间范围？",
             "restaurant",
             _RESTAURANT_CONTEXT_SCOPE_ANSWER,
+            "restaurant-full-chain-sop.html",
+        ),
+        (
+            "AI 飞轮运营台谁能使用，菜品别名候选可以自动生效吗？",
+            "restaurant",
+            _RESTAURANT_FLYWHEEL_GOVERNANCE_ANSWER,
             "restaurant-full-chain-sop.html",
         ),
     ],

@@ -121,6 +121,8 @@ _QUERY_EXPANSIONS: Dict[str, str] = {
     "盘点": "盘点 库存盘点 月底盘存 日清",
     "日清": "日清 日清日结 库存对账 盘存校验",
     "招牌菜": "招牌菜 Star 明星菜 高利高销 4 象限",
+    "飞轮": "AI 飞轮 运营台 晋升审核 Miss 复盘 质量回归 蒸馏数据集 人工审核",
+    "别名": "菜品别名 映射 pending confirmed rejected 门店级 租户级 人工审核",
     # 英文术语 (大小写双覆盖通过 _expand_query.lower() 自动实现,无需重复 key)
     "ARPU": "ARPU 客单价 人均消费",
     "GMV": "GMV 营业额 总成交 成交额",
@@ -158,7 +160,7 @@ _BOM_WORKFLOW_SEQUENCE_ANSWER = """\
 **操作步骤：**
 1. 进入生产管理 → 生产配置 → 产品-工序配置，打开目标 SKU 的 Workflow 草稿。
 2. 确认草稿链路完整，所有 Cell 已绑定有效 SKU，终端成品与顶部归属一致，关联工序处于启用状态。
-3. 返回 BOM/配方维护，选择目标 SKU 并创建草稿；核对系统自动关联的“工艺来源”，再配置原料、包材和各工序辅料并激活。
+3. 返回 BOM/配方维护，选择目标 SKU 并创建草稿；核对系统自动关联的“工艺来源”，至少配置一项主原料，辅料和包材按实际需要补充，再激活。
 4. 返回 Workflow，刷新并确认页面引用当前 ACTIVE BOM，且没有单位复核或旧草稿警告，再执行发布并启用。
 
 **验收结果：** BOM 页面没有可任意切换工艺修订的选择器，工艺来源只读；Workflow 页面同时显示“已发布 vX”和“已启用 vX”。若仍失败，按页面列出的具体缺失项逐项修正，不能绕过门禁。"""
@@ -189,10 +191,10 @@ _MULTI_OUTPUT_LABEL_QC_TRIGGERS = frozenset({
 _MULTI_OUTPUT_LABEL_QC_ANSWER = """\
 多产出成本合同和标签人工审核是两个独立步骤，不能把“人工工时”当作标签人工复核。
 
-**多产出 Workflow：**
-1. 一个工序有多个产出时，为每个产出选择“主产出 / 联产品 / 副产品”角色并填写成本分摊比例。
-2. 必须有且仅有一个主产出；主产出和联产品比例都大于 0，副产品比例固定为 0；全部比例合计必须为 100%，否则草稿不能通过结构校验。
-3. 该比例只分配成本，不预设实际产出数量。每个产出的真实数量仍在正式报工的“产出明细”中逐项填写并落账。
+**多产出实际报工：**
+1. Workflow 只列出本工序所有可能产出，不配置主产出、联产品、副产品或某一次报工的静态成本比例。
+2. 正式报工至少提交一项数量大于 0 的实际产出；只发生一个产出时只提交该行，共享投入成本 100% 归该产出，未发生候选保持空白。
+3. 同次发生多个产出且单位可统一时，系统按统一后的实际数量自动计算本次成本分配；量纲不可统一时，只在本次报工填写各实际产出的分摊比例，合计必须为 100%。
 
 **包装标签人工审核：**
 1. 管理员先按真实手机号邀请“质量检验员”，员工本人在手机端设密码；不要由管理员代设或保存密码。
@@ -200,7 +202,19 @@ _MULTI_OUTPUT_LABEL_QC_ANSWER = """\
 3. 人工逐张确认/拒绝 AI 框，漏检时补画人工框，并为每张照片给出结论；全部完成后只提交一次人工审核，结果成为人工真值。
 4. Web 管理端后续可备份、归档并由有权限的技术管理员批准或拒绝训练；批准只允许导出训练数据，不会自动训练或发布模型。
 
-**验收结果：** Workflow 的角色/比例合计与正式报工的实际产出数量可分别回读；标签任务的每张照片、AI 候选、人工框、逐图结论、审核人和时间均可追溯。"""
+**验收结果：** Workflow 与 BOM 没有静态产出角色/比例；正式报工可以回读本次实际产出及其数量或本次比例，未发生候选没有库存和成本行。标签任务的每张照片、AI 候选、人工框、逐图结论、审核人和时间均可追溯。"""
+_WORKFLOW_ACTUAL_IO_ANSWER = """\
+Workflow 和 BOM 都不预设某一次报工的实际选择：Workflow 维护工序拓扑与可能投入/产出，BOM 维护主料、替代料、辅料、包材、用量和成本；生产计划固定两者的精确版本。
+
+**正式报工：**
+1. 实际投入候选只能取 Workflow 当前工序接口、计划固定 BOM 授权主料/替代料和当前仓可用批次的交集，前端不能扩大候选。
+2. 至少提交一项数量大于 0 的实际投入和一项数量大于 0 的实际产出；未发生项留空，不提交伪造的零数量业务行。
+3. 只发生一个产出时，共享投入成本 100% 归该产出；多个产出单位可统一时，按统一后的实际数量自动分配。
+4. 多个产出的单位量纲不能统一时，保留已填数量，并只在本次报工填写各实际产出的分摊比例，合计必须为 100%。
+
+**BOM 边界：** BOM 至少需要一项主原料；辅料和包材按真实业务需要配置，没有辅料或包材本身不阻止激活。工序辅料的投入基准使用对应产出 SKU 的原始单位，支持 kg、g、只、袋或其它非空自定义单位；只有跨单位时才要求明确换算。
+
+**验收结果：** 正式提交后，只为本次发生的投入扣减真实批次，只为本次发生的产出形成库存与成本明细；计划固定的 Workflow revision、输出集合和 BOM revision 保持不变，历史计划、报工和成本快照不被新语义回写。"""
 _RESTAURANT_CONTEXT_SCOPE_ANSWER = """\
 餐饮导览助手只解释用法；真实门店数据比较和连续追问请在 SmartBI 餐饮 AI 中完成。
 
@@ -211,6 +225,21 @@ _RESTAURANT_CONTEXT_SCOPE_ANSWER = """\
 4. 点击“清空对话”会创建新会话并清除旧上下文。另一个页面或模块上的筛选不保证自动带入，因此跨模块继续分析时要重新说明门店、菜品和时间。
 
 例如首问“比较 A 店宫保鸡丁 4–6 月销量”，追问“那成本和毛利呢”可沿用三项范围；若改问“换 B 店看 7 月”，则 B 店和 7 月覆盖旧值。"""
+_RESTAURANT_FLYWHEEL_GOVERNANCE_ANSWER = """\
+AI 飞轮运营台是平台能力治理工具，不是老板或店员的经营分析入口，也不会替用户计算或分析业务数据。
+
+**权限与范围：**
+1. 入口为“系统管理 → AI 飞轮运营台”，只对平台管理员开放。
+2. 当前只接入餐饮域；页面中的“工厂（待接入）”不可选择，不能宣称工厂飞轮已经可用。
+3. 五类治理页面是总览看板、晋升审核工作台、Miss 复盘、质量与回归、蒸馏数据集。
+
+**人工审核边界：**
+1. 晋升候选必须展示问法、频次、置信度、契约通过率、最近真实答案和计划详情；平台管理员确认后才写入确定性晋升路由，不能自动晋升。
+2. 菜品别名机器初匹配只生成 `pending` 候选；只有 `confirmed` 映射影响线上解析，`rejected` 不生效。
+3. 解析时门店级已确认映射优先，再回落租户级；没有已确认映射就保留原菜名，不能自动合并不同菜品。
+4. 权限、接口或依赖表失败时必须明确报错，不能以模拟数据或假成功兜底。
+
+**统一入口边界：** 网页图表洞察和移动餐饮 AI 共享意图编排后，仍沿用当前会话已确认的门店、菜品和时间范围；咨询保持只读，操作继续先预览、再确认。真实经营分析进入 SmartBI 餐饮 AI，导览助手只指向正确板块和方法。"""
 
 
 def _uses_current_production_sop(query: str) -> bool:
@@ -254,6 +283,18 @@ def _needs_multi_output_label_qc_guard(query: str) -> bool:
     )
 
 
+def _needs_workflow_actual_io_guard(query: str) -> bool:
+    """Use the reviewed actual-I/O and per-report cost-allocation contract."""
+    normalized = (query or "").lower()
+    mentions_model = any(term in normalized for term in ("workflow", "bom", "工艺", "配方"))
+    mentions_io = any(term in normalized for term in ("投入", "产出", "多产出", "联产"))
+    mentions_report_fact = any(
+        term in normalized
+        for term in ("报工", "实际", "本次", "选择", "分摊", "成本", "不预设")
+    )
+    return mentions_model and mentions_io and mentions_report_fact
+
+
 def _needs_restaurant_context_scope_guard(query: str) -> bool:
     """Use the reviewed SmartBI session-scope contract for follow-up questions."""
     normalized = (query or "").lower()
@@ -265,6 +306,16 @@ def _needs_restaurant_context_scope_guard(query: str) -> bool:
     return sum(dimensions) >= 2 and any(
         term in normalized for term in ("追问", "上下文", "保持", "沿用", "范围")
     )
+
+
+def _needs_restaurant_flywheel_governance_guard(query: str) -> bool:
+    """Keep flywheel promotion and dish aliases behind restaurant human review."""
+    normalized = (query or "").lower()
+    mentions_flywheel = "飞轮" in normalized or (
+        "晋升" in normalized and any(term in normalized for term in ("候选", "路由", "审核"))
+    )
+    mentions_alias = any(term in normalized for term in ("菜品别名", "别名映射"))
+    return mentions_flywheel or mentions_alias
 
 
 # ---------------------------------------------------------------------------
@@ -296,6 +347,9 @@ _RESTAURANT_KEYWORDS = frozenset([
     # Customer & marketing
     "会员", "复购", "流失", "美团", "饿了么", "点评", "差评", "好评",
     "优惠券", "营销", "拉新", "客流",
+    # Platform governance for the restaurant AI flywheel
+    "AI 飞轮", "飞轮运营台", "晋升审核", "Miss 复盘", "蒸馏数据集",
+    "菜品别名", "别名映射", "pending", "confirmed", "rejected",
     # Compliance & inventory
     "食安", "HACCP", "留样",
     # Multi-store
@@ -466,6 +520,7 @@ SYSTEM_PROMPT = """\
 3b. 【禁止计算与数据分析】你是导览与教学助手，不做数值计算、报表汇总、多行数据分析，也不分析用户粘贴/上传的业务数据（明细表、流水、多条记录）。遇到"帮我算/汇总/分析一下(某批数据)"类请求，回答口径：本助手负责解释板块、图表与分析方法；具体数据分析请在系统内对应分析板块（餐饮版：SmartBI 智能数据分析 AI Query；工厂版：对应报表/分析模块）中提问，并告诉用户该去哪个板块、建议怎么问。例外：下方"诊断型问题处理"允许对用户口述的单个指标值做基准对照判断，这不算数据分析。
 3d. 【餐饮 SmartBI 会话范围】导览助手只能解释以下合同，不得假装已经替用户运行分析：门店、菜品、时间范围只在同一连续会话中保留；用户最新明确写出的条件覆盖对应旧条件；“全部门店”始终是聚合范围，不能写进具体门店槽。缺少必需维度、名称有歧义、周期不可比或成本覆盖不足时必须澄清/降级，不能猜。清空对话会重置会话；另一个页面或模块的筛选不保证自动带入，禁止宣称“跨模块联动锁定”。
 3e. 【餐饮综合分析维度】当前目录固定为 21 个维度：营收与订单、同比环比、多门店比较、真实就餐人数、商场及门前物理客流、菜品销售结构、菜品毛利、堂食/外卖/自提、午晚市与时段、优惠与营销活动、评价与口碑、供应商与采购价格、库存风险、损耗与报损、盘点差异、排班与人效、天气、节假日与调休、商场活动、周边演出与赛事、竞品与商圈。每个维度必须注明真实、代理、模拟或缺失证据；缺数据就写缺失，不得拿演示值冒充真实租户事实，也不得把相关性写成因果。
+3f. 【餐饮 AI 飞轮治理】AI 飞轮运营台只对平台管理员开放，当前只接入餐饮域，“工厂（待接入）”不可选择。晋升候选必须人工通过后才能写入确定性路由；菜品别名机器初匹配只产生 pending，只有 confirmed 映射影响解析，rejected 不生效，门店级确认优先于租户级。接口、权限或依赖失败必须明确报错，禁止模拟数据或假成功。飞轮是治理工具，导览助手不能替用户分析经营数据。
 4. 系统名称统一用「白垩纪 AI Agent」
 5. 不使用 emoji，保持专业简洁
 6. 菜单路径用 → 连接，如: 首页 → 仓储管理 → 入库
@@ -533,10 +588,11 @@ FACTORY_SYSTEM_PROMPT = """\
 - 默认从 MVP 非阻塞最小闭环回答；用户选择中度或全量时再加入拓扑冲突、异常、审批、冲销和治理用例。
 - SKU 定义库存/销售基本单位和成品标准克重；BOM 定义物料及工序辅料；Workflow 定义 Cell 与工序连接和报工单位；实际投入产出在报工中形成。
 - 原料包装换算在“原料类型字典”中紧邻库存基本单位维护，采购/收货/调拨可按包装录入并折合为基本量；库存批次、BOM 可用量和生产领料只用基本单位。绝不能把原料的箱/袋换算指向成品 SKU 管理。
-- 多个原料连接到同一工序表示批次自由选择且至少 1 个，不区分主投入与追加投入，也不要求全部必投。
+- Workflow 只维护工序拓扑和可能投入/产出的稳定接口；主料、替代料、辅料、包材、用量和成本来自计划固定的 BOM。正式报工候选取 Workflow 接口、BOM 授权和当前仓可用批次的交集，至少提交一项正数实际投入和一项正数实际产出；未发生项留空。
+- BOM 至少需要一项主原料；辅料和包材按实际需要配置，没有辅料或包材本身不阻止激活。工序辅料的投入基准使用对应产出 SKU 的原始单位，支持 kg、g、只、袋和其它非空自定义单位，只有跨单位才要求换算。
 - 成品的 1盒=800克由 SKU 继承；Workflow 不另写 1kg=1盒 或 1袋=1盒。
 - 面向用户统一说“投入单位 / 产出单位”，不要使用“端口”这个词。
-- 多产出工序必须有且仅有一个主产出；主产出/联产品成本比例大于 0，副产品比例为 0，总计 100%。比例只用于成本分配，真实产出数量仍在正式报工逐项填写。
+- Workflow、工序 Cell 和 BOM 都不配置主产出/联产品/副产品角色或某一次报工的静态成本比例。单产出时共享投入成本 100% 归该产出；多产出同量纲时按统一后的实际数量自动分配，量纲不可统一时只在本次报工填写合计 100% 的比例。
 - 包装标签拍检是独立质检流程：AI 候选无论 0 处还是多处都进入人工审核；人工逐图确认/拒绝/补框并提交结论后才形成真值。人工审核不等于报工工时，训练批准只允许导出，不会自动训练或发布模型。
 - Workflow 冲突在生产计划选择成品时按终端产出集合解析；完全匹配优先，其次最小超集，同级重叠必须由用户查看工序链预览后选择。
 - BOM 与 Workflow 的兼容验收摘要必须保留“Workflow 完整草稿 → BOM 绑定工序辅料并激活 → Workflow 刷新、发布并启用”。当前页面的展开口径是“Workflow 完整草稿 → 创建 BOM 时自动固定该工艺修订 → 配置并激活 BOM → Workflow 刷新、发布并启用”；普通用户不选择 Workflow 版本，BOM 只读显示工艺来源，工序由目标 SKU 的工艺链生成并锁定。ACTIVE BOM 是 Workflow 发布启用的前置门禁；禁止回答“两者无依赖”“两者无从属关系”或“先发布 Workflow 再激活 BOM”。
@@ -1077,6 +1133,16 @@ async def _prepare_generation(request: ManualChatRequest) -> _PreparedGeneration
         and _needs_multi_output_label_qc_guard(request.question)
     ):
         guard_answer = _MULTI_OUTPUT_LABEL_QC_ANSWER
+    elif (
+        not is_restaurant_request
+        and _needs_workflow_actual_io_guard(request.question)
+    ):
+        guard_answer = _WORKFLOW_ACTUAL_IO_ANSWER
+    elif (
+        is_restaurant_request
+        and _needs_restaurant_flywheel_governance_guard(request.question)
+    ):
+        guard_answer = _RESTAURANT_FLYWHEEL_GOVERNANCE_ANSWER
     elif (
         is_restaurant_request
         and _needs_restaurant_context_scope_guard(request.question)
