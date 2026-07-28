@@ -141,6 +141,33 @@ public class BomItemSubstituteServiceImpl implements BomItemSubstituteService {
         return saveAll(proposed);
     }
 
+    @Override
+    @Transactional
+    public void reassignRecipeItemRelations(
+            String factoryId,
+            String sourceRecipeId,
+            String targetRecipeId,
+            Long parentRecipeItemId) {
+        if (Objects.equals(sourceRecipeId, targetRecipeId)) {
+            return;
+        }
+        lockCloneRecipes(factoryId, sourceRecipeId, targetRecipeId);
+        List<BomItemSubstitute> relations =
+                recipeRelations(factoryId, sourceRecipeId, parentRecipeItemId);
+        if (relations.isEmpty()) {
+            return;
+        }
+        List<BomItemSubstitute> targetRelations =
+                recipeRelations(factoryId, targetRecipeId, parentRecipeItemId);
+        if (!targetRelations.isEmpty()) {
+            throw error(409,
+                    "目标 BOM 已存在该主项的替代关系，不能自动迁移",
+                    "BOM_SUBSTITUTE_REASSIGN_TARGET_CONFLICT");
+        }
+        relations.forEach(relation -> relation.setRecipeId(targetRecipeId));
+        repository.saveAllAndFlush(relations);
+    }
+
     private List<BomItemSubstituteDTO> replace(
             ParentContext parent, List<BomSubstituteInput> requested) {
         List<BomSubstituteInput> inputs = requested == null ? List.of() : requested;

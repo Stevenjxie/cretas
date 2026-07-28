@@ -48,8 +48,14 @@ public class ProductionPlanMapper {
                         ? null : plan.getWorkflowSelectionMode().name())
                 .selectedWorkflowId(plan.getSelectedWorkflowId())
                 .selectedWorkflowVersion(plan.getSelectedWorkflowVersion())
+                .selectedWorkflowRevisionId(plan.getSelectedWorkflowRevisionId())
+                .selectedWorkflowRevisionHash(plan.getSelectedWorkflowRevisionHash())
+                .workflowOutputUnitsByProduct(plan.getWorkflowOutputUnitsByProduct())
                 .selectedBomRecipeId(plan.getSelectedBomRecipeId())
                 .selectedBomVersion(plan.getSelectedBomVersion())
+                .selectedBomFamilyId(plan.getSelectedBomFamilyId())
+                .selectedBomRecipeIdsByProduct(plan.getSelectedBomRecipeIdsByProduct())
+                .selectedBomVersionsByProduct(plan.getSelectedBomVersionsByProduct())
                 .actualQuantity(plan.getActualQuantity())
                 // W-07 fix (Round 9): prefer the real plannedDate column; fall back to
                 // startTime-derived date for legacy rows created before the column was restored.

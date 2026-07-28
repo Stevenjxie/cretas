@@ -3,6 +3,7 @@ package com.cretas.aims.service.workflow;
 import com.cretas.aims.dto.WorkProcessTaskDTO;
 import com.cretas.aims.dto.workflow.ProductionWorkflowRuntimeDTO;
 import com.cretas.aims.entity.ProductProcessWorkflow;
+import com.cretas.aims.entity.ProductProcessWorkflowRevision;
 import com.cretas.aims.entity.ProductProcessWorkflowActivation;
 import com.cretas.aims.entity.ProductionBatch;
 import com.cretas.aims.entity.ProductType;
@@ -12,6 +13,7 @@ import com.cretas.aims.entity.workprocess.WorkProcessTask;
 import com.cretas.aims.repository.FactoryRepository;
 import com.cretas.aims.repository.ProductProcessWorkflowActivationRepository;
 import com.cretas.aims.repository.ProductProcessWorkflowRepository;
+import com.cretas.aims.repository.ProductProcessWorkflowRevisionRepository;
 import com.cretas.aims.repository.ProductTypeRepository;
 import com.cretas.aims.repository.ProductionBatchRepository;
 import com.cretas.aims.repository.workflow.ProductionWorkflowInstanceRepository;
@@ -59,6 +61,7 @@ class ProductProcessWorkflowRuntimeServiceTest {
     @Mock private ProductTypeRepository productTypeRepository;
     @Mock private ProductProcessWorkflowActivationRepository activationRepository;
     @Mock private ProductProcessWorkflowRepository workflowRepository;
+    @Mock private ProductProcessWorkflowRevisionRepository revisionRepository;
     @Mock private ProductionWorkflowInstanceRepository instanceRepository;
     @Mock private WorkProcessTaskRepository taskRepository;
     @Mock private WorkflowTaskPortRepository portRepository;
@@ -78,7 +81,7 @@ class ProductProcessWorkflowRuntimeServiceTest {
                 factoryRepository,
                 batchRepository,
                 productTypeRepository,
-                workflowRepository,
+                revisionRepository,
                 instanceRepository,
                 taskRepository,
                 portRepository,
@@ -118,6 +121,21 @@ class ProductProcessWorkflowRuntimeServiceTest {
                 .map(WorkProcessTaskDTO::getWorkflowNodeId).toList());
         assertTrue(result.orElseThrow().stream()
                 .allMatch(task -> task.getWorkflowInstanceId().equals(501L)));
+    }
+
+    @Test
+    void materializesPinnedRevisionWithoutReadingMutableCurrentWorkflowRow() {
+        givenValidOwnedBatch();
+        givenEnabledPublishedWorkflow();
+        givenFreshRuntimePersistence(true);
+        when(compiler.compile(any())).thenReturn(compiledWorkflow());
+
+        service.materializeIfActive("F006", 901L, "PT-PIG");
+
+        verify(revisionRepository).findByIdAndFactoryId(4403L, "F006");
+        verifyNoInteractions(workflowRepository);
+        assertEquals(44L, savedInstances.getFirst().getWorkflowId());
+        assertEquals(3, savedInstances.getFirst().getDefinitionVersion());
     }
 
     @Test
@@ -335,7 +353,7 @@ class ProductProcessWorkflowRuntimeServiceTest {
                 () -> service.materializeIfActive("F006", 901L, "PT-PIG"));
 
         assertEquals("WORKFLOW_PORT_UNIT_STALE", error.getErrorCode());
-        verify(workflowRepository).lockByIdAndFactoryId(44L, "F006");
+        verify(revisionRepository).findByIdAndFactoryId(4403L, "F006");
         verifyNoInteractions(compiler, taskRepository, portRepository);
     }
 
@@ -500,8 +518,8 @@ class ProductProcessWorkflowRuntimeServiceTest {
         changed.setDefinitionVersion(4);
         when(instanceRepository.findByFactoryIdAndProductionBatchId("F006", 901L))
                 .thenReturn(Optional.empty());
-        when(workflowRepository.lockByIdAndFactoryId(44L, "F006"))
-                .thenReturn(Optional.of(changed));
+        when(revisionRepository.findByIdAndFactoryId(4403L, "F006"))
+                .thenReturn(Optional.of(revision(changed)));
 
         assertThrows(RuntimeException.class,
                 () -> service.materializeIfActive("F006", 901L, "PT-PIG"));
@@ -591,6 +609,13 @@ class ProductProcessWorkflowRuntimeServiceTest {
         batch.setWorkflowSelectionMode(ProductionBatch.WorkflowSelectionMode.WORKFLOW);
         batch.setSelectedWorkflowId(44L);
         batch.setSelectedWorkflowVersion(3);
+        batch.setSelectedWorkflowRevisionId(4403L);
+        batch.setSelectedWorkflowRevisionHash("revision-hash-v3");
+        batch.setSelectedBomFamilyId("family-v3");
+        batch.setSelectedBomRecipeIdsByProduct(java.util.Map.of("PT-PIG", "bom-v3"));
+        batch.setSelectedBomVersionsByProduct(java.util.Map.of("PT-PIG", 3));
+        batch.setWorkflowOutputUnitsByProduct(java.util.Map.of("PT-PIG", "kg"));
+        batch.setTargetFinishedGoodIds(java.util.List.of("PT-PIG"));
         when(batchRepository.findByIdAndFactoryId(901L, "F006"))
                 .thenReturn(Optional.of(batch));
         when(productTypeRepository.findByIdAndFactoryId("PT-PIG", "F006"))
@@ -600,15 +625,15 @@ class ProductProcessWorkflowRuntimeServiceTest {
     private void givenEnabledPublishedWorkflow() {
         when(instanceRepository.findByFactoryIdAndProductionBatchId("F006", 901L))
                 .thenReturn(Optional.empty());
-        when(workflowRepository.lockByIdAndFactoryId(44L, "F006"))
-                .thenReturn(Optional.of(workflow()));
+        when(revisionRepository.findByIdAndFactoryId(4403L, "F006"))
+                .thenReturn(Optional.of(revision(workflow())));
     }
 
     private void givenActivationTarget(ProductProcessWorkflow workflow) {
         when(instanceRepository.findByFactoryIdAndProductionBatchId("F006", 901L))
                 .thenReturn(Optional.empty());
-        when(workflowRepository.lockByIdAndFactoryId(44L, "F006"))
-                .thenReturn(Optional.of(workflow));
+        when(revisionRepository.findByIdAndFactoryId(4403L, "F006"))
+                .thenReturn(Optional.of(revision(workflow)));
     }
 
     private void givenFreshRuntimePersistence(boolean persistPorts) {
@@ -666,6 +691,25 @@ class ProductProcessWorkflowRuntimeServiceTest {
         workflow.setEdgesJson("[]");
         workflow.setViewportJson("{\"x\":0,\"y\":0,\"zoom\":1}");
         return workflow;
+    }
+
+    private ProductProcessWorkflowRevision revision(ProductProcessWorkflow workflow) {
+        ProductProcessWorkflowRevision revision = new ProductProcessWorkflowRevision();
+        revision.setId(4403L);
+        revision.setFactoryId(workflow.getFactoryId());
+        revision.setProductTypeId(workflow.getProductTypeId());
+        revision.setWorkflowId(workflow.getId());
+        revision.setDefinitionVersion(workflow.getDefinitionVersion());
+        revision.setRevisionNumber(3);
+        revision.setRevisionHash("revision-hash-v3");
+        revision.setStatus(workflow.getStatus() == ProductProcessWorkflow.Status.PUBLISHED
+                ? ProductProcessWorkflowRevision.Status.PUBLISHED
+                : ProductProcessWorkflowRevision.Status.DRAFT);
+        revision.setSchemaVersion(workflow.getSchemaVersion());
+        revision.setNodesJson(workflow.getNodesJson());
+        revision.setEdgesJson(workflow.getEdgesJson());
+        revision.setViewportJson(workflow.getViewportJson());
+        return revision;
     }
 
     private CompiledProductProcessWorkflow compiledWorkflow() {

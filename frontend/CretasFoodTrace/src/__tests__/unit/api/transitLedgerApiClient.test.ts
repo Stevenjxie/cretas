@@ -34,7 +34,7 @@ describe('transitLedgerApiClient', () => {
     );
   });
 
-  it('confirms by productionPlanId and sends only receivedQuantity plus note', async () => {
+  it('confirms by productionPlanId and preserves per-output receipt lines', async () => {
     const response = {
       success: true,
       data: { productionPlanId: 'PLAN-1', warehouseReceivedQuantity: 95 },
@@ -42,13 +42,26 @@ describe('transitLedgerApiClient', () => {
     mockedApiClient.post.mockResolvedValue(response);
 
     await expect(transitLedgerApiClient.confirm('PLAN-1', {
-      receivedQuantity: 95,
+      outputLines: [{
+        productTypeId: 'FG-A',
+        batchNumber: 'FG-A-001',
+        receivedQuantity: 8,
+        quantityUnit: 'kg',
+      }],
       note: 'scale checked',
     }, 'F006')).resolves.toBe(response);
 
     expect(mockedApiClient.post).toHaveBeenCalledWith(
       '/api/mobile/F006/warehouse/transit-ledgers/PLAN-1/confirm',
-      { receivedQuantity: 95, note: 'scale checked' },
+      {
+        outputLines: [{
+          productTypeId: 'FG-A',
+          batchNumber: 'FG-A-001',
+          receivedQuantity: 8,
+          quantityUnit: 'kg',
+        }],
+        note: 'scale checked',
+      },
     );
   });
 });

@@ -4,6 +4,15 @@ import { requireFactoryId } from '../../utils/factoryIdHelper';
 export type TransitLedgerDirection = 'FINISHED_GOODS_RECEIPT' | 'RAW_MATERIAL_RECEIPT' | string;
 export type TransitLedgerStatus = 'PENDING_CONFIRMATION' | string;
 
+export interface TransitOutputLine {
+  productTypeId: string;
+  batchNumber: string;
+  reportedQuantity: number;
+  receivedQuantity?: number | null;
+  unit: string;
+  status?: string;
+}
+
 export interface TransitLedgerItem {
   id: string;
   direction: TransitLedgerDirection;
@@ -15,17 +24,24 @@ export interface TransitLedgerItem {
   plannedQuantity?: number;
   reportedQuantity?: number;
   receivedQuantity?: number | null;
-  toleranceQuantity?: number;
-  unit?: string;
+  toleranceQuantity?: number | null;
+  unit?: string | null;
   fromLocation?: string;
   toWarehouseName?: string | null;
   submittedBy?: number | string;
   submittedAt?: string;
   note?: string;
+  outputLines?: TransitOutputLine[];
 }
 
 export interface TransitConfirmPayload {
-  receivedQuantity: number;
+  receivedQuantity?: number | null;
+  outputLines?: Array<{
+    productTypeId: string;
+    batchNumber: string;
+    receivedQuantity: number;
+    quantityUnit: string;
+  }>;
   note?: string;
 }
 
@@ -33,16 +49,17 @@ export interface WarehouseReceiptConfirmResult {
   settlementId?: string;
   productionPlanId: string;
   planNumber?: string;
-  productionReportedQuantity?: number;
-  warehouseReceivedQuantity?: number;
-  varianceQuantity?: number;
-  toleranceQuantity?: number;
-  quantityUnit?: string;
+  productionReportedQuantity?: number | null;
+  warehouseReceivedQuantity?: number | null;
+  varianceQuantity?: number | null;
+  toleranceQuantity?: number | null;
+  quantityUnit?: string | null;
   postingStatus?: string;
   finishedGoodsBatchId?: string;
   transitLedgerId?: string;
   message?: string;
   warnings?: string[];
+  outputLines?: TransitOutputLine[];
 }
 
 export interface ApiEnvelope<T> {

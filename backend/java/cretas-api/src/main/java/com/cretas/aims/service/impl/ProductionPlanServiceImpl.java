@@ -219,6 +219,9 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private ProductionSettlementRepository productionSettlementRepository;
 
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private ProductionSettlementOutputLineRepository productionSettlementOutputLineRepository;
+
     /**
      * BY_STOCK 小结与仓库确认桥接。小结已经完成库存过账，本仓库只读取其会话摘要来补建
      * {@link ProductionSettlement} 元数据，绝不重放小结库存动作。
@@ -346,9 +349,11 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
         return productUnit.trim();
     }
 
-    private String resolvePlannedOutputUnitForProduct(String productTypeId) {
+    private String resolvePlannedOutputUnitForProduct(String factoryId, String productTypeId) {
         String productUnit = productTypeId == null ? null
-                : productTypeRepository.findById(productTypeId).map(ProductType::getUnit).orElse(null);
+                : productTypeRepository.findByIdAndFactoryId(productTypeId, factoryId)
+                        .map(ProductType::getUnit)
+                        .orElse(null);
         return resolvePlannedOutputUnit(productUnit);
     }
 
@@ -361,7 +366,7 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
     private PlanUnitAuthority resolvePlanUnitAuthority(
             String factoryId, String productTypeId, List<String> targetFinishedGoodIds,
             Long selectedWorkflowId, Integer selectedWorkflowVersion) {
-        String productionBaseUnit = resolvePlannedOutputUnitForProduct(productTypeId);
+        String productionBaseUnit = resolvePlannedOutputUnitForProduct(factoryId, productTypeId);
         boolean hasSelectedId = selectedWorkflowId != null;
         boolean hasSelectedVersion = selectedWorkflowVersion != null;
         if (hasSelectedId != hasSelectedVersion) {
@@ -388,7 +393,8 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
                 return new PlanUnitAuthority(productionBaseUnit, value.plannedUnit(),
                         resolveNetWeightGramsForProduct(factoryId, productTypeId),
                         ProductionBatch.WorkflowSelectionMode.WORKFLOW,
-                        value.workflowId(), value.definitionVersion());
+                        value.workflowId(), value.definitionVersion(),
+                        value.revisionId(), value.revisionHash(), value.outputUnitBySku());
             }
         }
         if (productProcessWorkflowRepository != null) {
@@ -404,7 +410,8 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
         }
         return new PlanUnitAuthority(productionBaseUnit, productionBaseUnit,
                 resolveNetWeightGramsForProduct(factoryId, productTypeId),
-                ProductionBatch.WorkflowSelectionMode.LEGACY, null, null);
+                ProductionBatch.WorkflowSelectionMode.LEGACY,
+                null, null, null, null, Map.of());
     }
 
     private BigDecimal resolveNetWeightGramsForProduct(String factoryId, String productTypeId) {
@@ -421,7 +428,20 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
         plan.setWorkflowSelectionMode(authority.mode());
         plan.setSelectedWorkflowId(authority.workflowId());
         plan.setSelectedWorkflowVersion(authority.workflowVersion());
+        plan.setSelectedWorkflowRevisionId(authority.workflowRevisionId());
+        plan.setSelectedWorkflowRevisionHash(authority.workflowRevisionHash());
+        plan.setWorkflowOutputUnitsByProduct(new LinkedHashMap<>(authority.outputUnitsByProduct()));
+        if (authority.mode() == ProductionBatch.WorkflowSelectionMode.WORKFLOW) {
+            plan.setTargetFinishedGoodIds(new ArrayList<>(authority.outputUnitsByProduct().keySet()));
+            applyWorkflowBomAuthority(plan, authority);
+            return;
+        }
+        plan.setSelectedBomFamilyId(null);
+        plan.setSelectedBomRecipeIdsByProduct(new LinkedHashMap<>());
+        plan.setSelectedBomVersionsByProduct(new LinkedHashMap<>());
         if (bomRecipeRepository == null) {
+            plan.setSelectedBomRecipeId(null);
+            plan.setSelectedBomVersion(null);
             return;
         }
         Optional<BomRecipe> activeRecipe = bomRecipeRepository
@@ -443,13 +463,114 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
         });
     }
 
+    private void applyWorkflowBomAuthority(ProductionPlan plan, PlanUnitAuthority authority) {
+        if (bomRecipeRepository == null) {
+            throw new BusinessException(500, "BOM authority service is unavailable")
+                    .withCode("BOM_AUTHORITY_UNAVAILABLE");
+        }
+        if (authority.workflowRevisionId() == null
+                || isBlank(authority.workflowRevisionHash())
+                || authority.outputUnitsByProduct().isEmpty()) {
+            throw new BusinessException(409,
+                    "The selected Workflow does not expose an immutable revision authority")
+                    .withCode("WORKFLOW_REVISION_AUTHORITY_REQUIRED")
+                    .withHint("Publish the exact Workflow revision and activate its BOM family before creating a plan");
+        }
+        PinnedBomAuthority pinnedBom = resolvePinnedBomAuthority(
+                plan.getFactoryId(), authority, authority.outputUnitsByProduct().keySet());
+        plan.setSelectedBomFamilyId(pinnedBom.familyId());
+        plan.setSelectedBomRecipeIdsByProduct(new LinkedHashMap<>(pinnedBom.recipeIdsByProduct()));
+        plan.setSelectedBomVersionsByProduct(new LinkedHashMap<>(pinnedBom.versionsByProduct()));
+        plan.setSelectedBomRecipeId(pinnedBom.compatibilityAnchorRecipeId());
+        plan.setSelectedBomVersion(pinnedBom.compatibilityAnchorVersion());
+    }
+
+    private PinnedBomAuthority resolvePinnedBomAuthority(
+            String factoryId,
+            PlanUnitAuthority authority,
+            Collection<String> terminalProductTypeIds) {
+        List<BomRecipe> candidates = bomRecipeRepository
+                .findByFactoryIdAndWorkflowRevisionIdAndStatusOrderByProductTypeIdAsc(
+                        factoryId, authority.workflowRevisionId(), BomRecipe.Status.ACTIVE)
+                .stream()
+                .filter(recipe -> Objects.equals(authority.workflowId(), recipe.getWorkflowId()))
+                .filter(recipe -> Objects.equals(authority.workflowVersion(), recipe.getWorkflowDefinitionVersion()))
+                .filter(recipe -> Objects.equals(authority.workflowRevisionHash(), recipe.getWorkflowRevisionHash()))
+                .filter(recipe -> !isBlank(recipe.getBomFamilyId()))
+                .toList();
+        Map<String, List<BomRecipe>> byFamily = candidates.stream()
+                .collect(Collectors.groupingBy(BomRecipe::getBomFamilyId,
+                        LinkedHashMap::new, Collectors.toList()));
+        Set<String> terminals = terminalProductTypeIds.stream()
+                .map(this::trimToNull)
+                .filter(Objects::nonNull)
+                .collect(Collectors.toCollection(LinkedHashSet::new));
+        List<PinnedBomAuthority> matches = new ArrayList<>();
+        for (Map.Entry<String, List<BomRecipe>> entry : byFamily.entrySet()) {
+            Map<String, List<BomRecipe>> recipesByProduct = entry.getValue().stream()
+                    .collect(Collectors.groupingBy(BomRecipe::getProductTypeId,
+                            LinkedHashMap::new, Collectors.toList()));
+            if (!recipesByProduct.keySet().equals(terminals)
+                    || !terminals.stream()
+                    .allMatch(sku -> recipesByProduct.getOrDefault(sku, List.of()).size() == 1)) {
+                continue;
+            }
+            Map<String, String> recipeIds = new LinkedHashMap<>();
+            Map<String, Integer> versions = new LinkedHashMap<>();
+            boolean invalid = false;
+            for (String sku : terminals) {
+                BomRecipe recipe = recipesByProduct.get(sku).getFirst();
+                if (isBlank(recipe.getTargetTerminalNodeId())
+                        || recipe.getVersion() == null
+                        || !Boolean.TRUE.equals(recipe.getIsCurrent())) {
+                    invalid = true;
+                    break;
+                }
+                recipeIds.put(sku, recipe.getId());
+                versions.put(sku, recipe.getVersion());
+            }
+            if (invalid) {
+                continue;
+            }
+            BomRecipe anchor = entry.getValue().stream()
+                    .filter(recipe -> Objects.equals(recipe.getId(), recipe.getSharedRecipeId()))
+                    .findFirst()
+                    .orElseGet(() -> recipesByProduct.get(terminals.iterator().next()).getFirst());
+            matches.add(new PinnedBomAuthority(
+                    entry.getKey(), Map.copyOf(recipeIds), Map.copyOf(versions),
+                    anchor.getId(), anchor.getVersion()));
+        }
+        if (matches.size() != 1) {
+            throw new BusinessException(409,
+                    matches.isEmpty()
+                            ? "No active BOM family covers the exact Workflow revision and terminal set"
+                            : "Multiple active BOM families cover the exact Workflow revision and terminal set")
+                    .withCode(matches.isEmpty()
+                            ? "ACTIVE_BOM_FAMILY_REQUIRED"
+                            : "ACTIVE_BOM_FAMILY_AMBIGUOUS")
+                    .withHint("Activate exactly one complete BOM family for this published Workflow revision");
+        }
+        return matches.getFirst();
+    }
+
     private record PlanUnitAuthority(
             String unit,
             String workflowOutputUnit,
             BigDecimal netWeightGrams,
             ProductionBatch.WorkflowSelectionMode mode,
             Long workflowId,
-            Integer workflowVersion) {
+            Integer workflowVersion,
+            Long workflowRevisionId,
+            String workflowRevisionHash,
+            Map<String, String> outputUnitsByProduct) {
+    }
+
+    private record PinnedBomAuthority(
+            String familyId,
+            Map<String, String> recipeIdsByProduct,
+            Map<String, Integer> versionsByProduct,
+            String compatibilityAnchorRecipeId,
+            Integer compatibilityAnchorVersion) {
     }
 
     private boolean sameTargetSelection(List<String> left, List<String> right) {
@@ -1097,7 +1218,7 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
         }
         runConfiguredValidation(factoryId, "CREATE", validationCtx);
         // 验证产品类型是否存在
-        if (!productTypeRepository.existsById(request.getProductTypeId())) {
+        if (!productTypeRepository.existsByIdAndFactoryId(request.getProductTypeId(), factoryId)) {
             throw new ResourceNotFoundException("产品类型不存在");
         }
 
@@ -2009,7 +2130,7 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
                 });
 
         ensureWorkflowSettlementUsesSubmittedReports(factoryId, plan);
-        ProductionSettlementRequest effectiveRequest = request.isConfirm()
+        ProductionSettlementRequest effectiveRequest = isWorkflowPlan(plan) || request.isConfirm()
                 ? deriveConfirmedSettlementRequest(factoryId, planId, request)
                 : request;
 
@@ -2027,7 +2148,9 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
         settlement.setPlanNumber(plan.getPlanNumber());
         settlement.setIdempotencyKey(request.getIdempotencyKey());
         settlement.setPlannedQuantity(zeroIfNull(plan.getPlannedQuantity()));
-        settlement.setActualFinishedQuantity(zeroIfNull(effectiveRequest.getActualFinishedQuantity()));
+        settlement.setActualFinishedQuantity(isWorkflowPlan(plan)
+                ? effectiveRequest.getActualFinishedQuantity()
+                : zeroIfNull(effectiveRequest.getActualFinishedQuantity()));
         settlement.setActualSemiFinishedQuantity(zeroIfNull(effectiveRequest.getActualSemiFinishedQuantity()));
         settlement.setQuantityUnit(resolveSettlementRequestUnit(effectiveRequest));
         settlement.setQuantityVarianceReason(trimToNull(effectiveRequest.getQuantityVarianceReason()));
@@ -2041,6 +2164,7 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
         settlement.setSettledBy(settledBy);
         settlement.setSettledAt(LocalDateTime.now());
         settlement = productionSettlementRepository.save(settlement);
+        persistWorkflowSettlementOutputs(factoryId, plan, settlement, effectiveRequest);
 
         for (ProductionSettlementConsumption line : consumptionLines) {
             line.setSettlementId(settlement.getId());
@@ -2163,9 +2287,7 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
     }
 
     private void ensureWorkflowSettlementUsesSubmittedReports(String factoryId, ProductionPlan plan) {
-        boolean workflowPlan = plan != null && (plan.getSelectedWorkflowId() != null
-                || plan.getWorkflowSelectionMode() == ProductionBatch.WorkflowSelectionMode.WORKFLOW
-                || (plan.getTargetFinishedGoodIds() != null && !plan.getTargetFinishedGoodIds().isEmpty()));
+        boolean workflowPlan = isWorkflowPlan(plan);
         if (!workflowPlan || Boolean.TRUE.equals(plan.getSkipProcessReporting())) {
             return;
         }
@@ -2182,6 +2304,127 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
                     .withHint("请逐道录入并提交后，再核对结单")
                     .withHintTarget("核对结单");
         }
+    }
+
+    private boolean isWorkflowPlan(ProductionPlan plan) {
+        return plan != null
+                && plan.getWorkflowSelectionMode() == ProductionBatch.WorkflowSelectionMode.WORKFLOW;
+    }
+
+    private void persistWorkflowSettlementOutputs(
+            String factoryId,
+            ProductionPlan plan,
+            ProductionSettlement settlement,
+            ProductionSettlementRequest request) {
+        if (!isWorkflowPlan(plan)) {
+            return;
+        }
+        if (productionSettlementOutputLineRepository == null || bomRecipeRepository == null) {
+            throw new BusinessException(500, "Workflow output settlement authority is unavailable")
+                    .withCode("WORKFLOW_OUTPUT_SETTLEMENT_UNAVAILABLE");
+        }
+        Map<String, String> recipeIds = Optional.ofNullable(plan.getSelectedBomRecipeIdsByProduct())
+                .orElseGet(Map::of);
+        Map<String, Integer> recipeVersions = Optional.ofNullable(plan.getSelectedBomVersionsByProduct())
+                .orElseGet(Map::of);
+        Map<String, String> outputUnits = Optional.ofNullable(plan.getWorkflowOutputUnitsByProduct())
+                .orElseGet(Map::of);
+        List<ProductionSettlementRequest.OutputLine> reportedOutputs =
+                Optional.ofNullable(request.getTerminalOutputs()).orElseGet(ArrayList::new);
+        Set<String> reportedSkus = reportedOutputs.stream()
+                .map(ProductionSettlementRequest.OutputLine::getProductTypeId)
+                .map(this::trimToNull)
+                .filter(Objects::nonNull)
+                .collect(Collectors.toCollection(LinkedHashSet::new));
+        if (reportedOutputs.isEmpty() || !reportedSkus.equals(recipeIds.keySet())
+                || !recipeIds.keySet().equals(recipeVersions.keySet())
+                || !recipeIds.keySet().equals(outputUnits.keySet())) {
+            throw new BusinessException(409,
+                    "Submitted terminal outputs do not match the plan's pinned Workflow terminal set")
+                    .withCode("WORKFLOW_OUTPUT_SET_MISMATCH")
+                    .withHint("Submit one or more terminal batches for every pinned output SKU and no other SKU");
+        }
+
+        List<ProductionSettlementOutputLine> lines = new ArrayList<>();
+        for (ProductionSettlementRequest.OutputLine output : reportedOutputs) {
+            String productTypeId = trimToNull(output.getProductTypeId());
+            String batchNumber = trimToNull(output.getBatchNumber());
+            String unit = canonicalReceiptUnit(trimToNull(output.getUnit()));
+            if (productTypeId == null || batchNumber == null || unit == null
+                    || output.getQuantity() == null || output.getQuantity().signum() <= 0) {
+                throw new BusinessException(409, "Workflow terminal output line is incomplete")
+                        .withCode("WORKFLOW_OUTPUT_LINE_INVALID");
+            }
+            String recipeId = trimToNull(recipeIds.get(productTypeId));
+            Integer recipeVersion = recipeVersions.get(productTypeId);
+            if (recipeId == null || recipeVersion == null) {
+                throw new BusinessException(409, "Pinned BOM output recipe authority is incomplete")
+                        .withCode("PINNED_BOM_OUTPUT_RECIPE_INVALID");
+            }
+            BomRecipe recipe = bomRecipeRepository.findById(recipeId)
+                    .filter(candidate -> factoryId.equals(candidate.getFactoryId()))
+                    .filter(candidate -> productTypeId.equals(candidate.getProductTypeId()))
+                    .filter(candidate -> Objects.equals(plan.getSelectedBomFamilyId(), candidate.getBomFamilyId()))
+                    .filter(candidate -> Objects.equals(plan.getSelectedWorkflowRevisionId(),
+                            candidate.getWorkflowRevisionId()))
+                    .filter(candidate -> Objects.equals(plan.getSelectedWorkflowRevisionHash(),
+                            candidate.getWorkflowRevisionHash()))
+                    .filter(candidate -> Objects.equals(recipeVersion, candidate.getVersion()))
+                    .orElseThrow(() -> new BusinessException(409,
+                            "Pinned BOM output recipe no longer matches the plan authority")
+                            .withCode("PINNED_BOM_OUTPUT_RECIPE_INVALID"));
+            String expectedUnit = canonicalReceiptUnit(firstNonBlank(
+                    outputUnits.get(productTypeId), recipe.getOutputUnit()));
+            if (!unit.equals(expectedUnit)) {
+                throw new BusinessException(409,
+                        "Reported output unit does not match the pinned Workflow/BOM output unit")
+                        .withCode("WORKFLOW_OUTPUT_UNIT_MISMATCH")
+                        .withHint("SKU " + productTypeId + ": expected " + expectedUnit + ", received " + unit);
+            }
+            if (isBlank(recipe.getTargetTerminalNodeId()) || recipe.getOutputRole() == null) {
+                throw new BusinessException(409, "Pinned BOM output policy is incomplete")
+                        .withCode("PINNED_BOM_OUTPUT_POLICY_INCOMPLETE");
+            }
+            if (!Objects.equals(recipe.getTargetTerminalNodeId(), trimToNull(output.getMaterialNodeId()))) {
+                throw new BusinessException(409,
+                        "Reported output is not from the pinned Workflow terminal node")
+                        .withCode("WORKFLOW_TERMINAL_NODE_MISMATCH")
+                        .withHint("SKU " + productTypeId + ": expected terminal node "
+                                + recipe.getTargetTerminalNodeId());
+            }
+            if (recipe.getOutputRole() == BomRecipe.OutputRole.BY_PRODUCT) {
+                if (recipe.getByproductNrvUnitPrice() == null
+                        || recipe.getByproductNrvUnitPrice().signum() <= 0) {
+                    throw new BusinessException(409, "By-product NRV price is required")
+                            .withCode("BYPRODUCT_NRV_REQUIRED");
+                }
+            } else if (recipe.getCostAllocationRatio() == null
+                    || recipe.getCostAllocationRatio().signum() <= 0) {
+                throw new BusinessException(409, "Main/co-product cost allocation ratio is required")
+                        .withCode("OUTPUT_COST_ALLOCATION_RATIO_REQUIRED");
+            }
+
+            ProductionSettlementOutputLine line = ProductionSettlementOutputLine.create();
+            line.setFactoryId(factoryId);
+            line.setSettlementId(settlement.getId());
+            line.setProductionPlanId(plan.getId());
+            line.setProductTypeId(productTypeId);
+            line.setReportedBatchNumber(batchNumber);
+            line.setReportedQuantity(requireInventoryQuantityScale(
+                    output.getQuantity(),
+                    "WORKFLOW_OUTPUT_QUANTITY_SCALE_INVALID",
+                    "Workflow 报产数量"));
+            line.setQuantityUnit(unit);
+            line.setBomFamilyId(plan.getSelectedBomFamilyId());
+            line.setBomRecipeId(recipe.getId());
+            line.setBomRecipeVersion(recipe.getVersion());
+            line.setTargetTerminalNodeId(recipe.getTargetTerminalNodeId());
+            line.setOutputRole(recipe.getOutputRole());
+            line.setCostAllocationRatio(recipe.getCostAllocationRatio());
+            line.setByproductNrvUnitPrice(recipe.getByproductNrvUnitPrice());
+            lines.add(line);
+        }
+        productionSettlementOutputLineRepository.saveAll(lines);
     }
 
     // ==================== Phase 2A: 报工→核算自动化 (核对结单预填) ====================
@@ -2362,7 +2605,7 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
                 .thenComparing(r -> r.row().getId(), Comparator.nullsLast(Long::compareTo)));
 
         List<ProductionSettlementRequest.OutputLine> terminalOutputs =
-                deriveTerminalProcessSheetOutputs(parsedRows);
+                deriveTerminalProcessSheetOutputs(factoryId, plan, parsedRows);
         BigDecimal actualFinished = sumCompatibleTerminalOutputs(terminalOutputs);
         long terminalUnitCount = terminalOutputs.stream()
                 .map(ProductionSettlementRequest.OutputLine::getUnit)
@@ -2372,11 +2615,13 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
                 .distinct()
                 .count();
         if (terminalUnitCount > 1) {
-            issues.add(issue("FINISHED_OUTPUT_UNIT_MIXED",
+            issues.add(infoIssue("FINISHED_OUTPUT_UNIT_MIXED",
                     "终端产出包含多个不能直接相加的单位，请按 SKU、批次和单位分别核对。",
                     "terminalOutputs"));
         }
-        if (actualFinished == null || actualFinished.compareTo(BigDecimal.ZERO) <= 0) {
+        if (terminalOutputs.isEmpty()
+                || (terminalUnitCount <= 1
+                        && (actualFinished == null || actualFinished.compareTo(BigDecimal.ZERO) <= 0))) {
             issues.add(issue("FINISHED_OUTPUT_MISSING",
                     "逐道电子表格末道产出量缺失或为 0, 无法自动带入实际成品产量; 请在产出核对处手工填写。",
                     "actualFinishedQuantity"));
@@ -2397,7 +2642,14 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
         }
 
         BigDecimal planned = zeroIfNull(plan.getPlannedQuantity());
-        boolean crossUnit = isCrossUnitPlan(batches);
+        boolean crossUnit = isCrossUnitPlan(batches)
+                || terminalUnitCount > 1
+                || terminalOutputs.stream()
+                        .map(ProductionSettlementRequest.OutputLine::getProductTypeId)
+                        .map(this::trimToNull)
+                        .filter(Objects::nonNull)
+                        .distinct()
+                        .count() > 1;
         String varianceReason = null;
         if (crossUnit) {
             issues.add(infoIssue("QUANTITY_UNIT_CROSS",
@@ -2473,7 +2725,15 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
     }
 
     private List<ProductionSettlementRequest.OutputLine> deriveTerminalProcessSheetOutputs(
+            String factoryId,
+            ProductionPlan plan,
             List<ParsedProcessSheetRow> rows) {
+        Map<String, String> pinnedTerminalNodes = isWorkflowPlan(plan)
+                ? resolvePinnedTerminalNodes(factoryId, plan)
+                : Map.of();
+        if (isWorkflowPlan(plan) && pinnedTerminalNodes.isEmpty()) {
+            return List.of();
+        }
         Set<String> consumedBatchNumbers = rows.stream()
                 .flatMap(r -> Optional.ofNullable(r.request().getUpstreamSources()).orElseGet(ArrayList::new).stream())
                 .map(ProcessSheetRowRequest.UpstreamRef::getSourceBatchNumber)
@@ -2492,6 +2752,13 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
                 continue;
             }
             String productTypeId = trimToNull(req.getProductTypeId());
+            if (isWorkflowPlan(plan)) {
+                String expectedTerminalNodeId = pinnedTerminalNodes.get(productTypeId);
+                if (expectedTerminalNodeId == null
+                        || !expectedTerminalNodeId.equals(trimToNull(req.getMaterialNodeId()))) {
+                    continue;
+                }
+            }
             String unit = firstNonBlank(trimToNull(req.getOutputUnit()), trimToNull(req.getUnit()));
             String key = firstNonBlank(productTypeId, "") + "\u0000" + row.getBatchNumber()
                     + "\u0000" + firstNonBlank(unit, "");
@@ -2502,6 +2769,8 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
                         .batchNumber(row.getBatchNumber())
                         .quantity(output)
                         .unit(unit)
+                        .materialNodeId(trimToNull(req.getMaterialNodeId()))
+                        .workflowPortId(trimToNull(req.getWorkflowPortId()))
                         .build());
             } else {
                 existing.setQuantity(zeroIfNull(existing.getQuantity()).add(output));
@@ -2509,6 +2778,9 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
         }
         if (!outputs.isEmpty()) {
             return new ArrayList<>(outputs.values());
+        }
+        if (isWorkflowPlan(plan)) {
+            return List.of();
         }
 
         Integer maxOrder = rows.stream()
@@ -2527,10 +2799,49 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
                         .batchNumber(trimToNull(parsed.row().getBatchNumber()))
                         .quantity(output)
                         .unit(firstNonBlank(trimToNull(req.getOutputUnit()), trimToNull(req.getUnit())))
+                        .materialNodeId(trimToNull(req.getMaterialNodeId()))
+                        .workflowPortId(trimToNull(req.getWorkflowPortId()))
                         .build());
             }
         }
         return fallback;
+    }
+
+    private Map<String, String> resolvePinnedTerminalNodes(String factoryId, ProductionPlan plan) {
+        if (!isWorkflowPlan(plan) || bomRecipeRepository == null
+                || plan.getSelectedWorkflowRevisionId() == null
+                || isBlank(plan.getSelectedWorkflowRevisionHash())
+                || isBlank(plan.getSelectedBomFamilyId())) {
+            return Map.of();
+        }
+        Map<String, String> recipeIds = Optional.ofNullable(plan.getSelectedBomRecipeIdsByProduct())
+                .orElseGet(Map::of);
+        Map<String, Integer> recipeVersions = Optional.ofNullable(plan.getSelectedBomVersionsByProduct())
+                .orElseGet(Map::of);
+        if (recipeIds.isEmpty() || !recipeIds.keySet().equals(recipeVersions.keySet())) {
+            return Map.of();
+        }
+        Map<String, String> terminals = new LinkedHashMap<>();
+        for (Map.Entry<String, String> entry : recipeIds.entrySet()) {
+            String productTypeId = entry.getKey();
+            Integer expectedVersion = recipeVersions.get(productTypeId);
+            Optional<BomRecipe> recipe = bomRecipeRepository.findById(entry.getValue())
+                    .filter(candidate -> factoryId.equals(candidate.getFactoryId()))
+                    .filter(candidate -> productTypeId.equals(candidate.getProductTypeId()))
+                    .filter(candidate -> Objects.equals(plan.getSelectedBomFamilyId(),
+                            candidate.getBomFamilyId()))
+                    .filter(candidate -> Objects.equals(plan.getSelectedWorkflowRevisionId(),
+                            candidate.getWorkflowRevisionId()))
+                    .filter(candidate -> Objects.equals(plan.getSelectedWorkflowRevisionHash(),
+                            candidate.getWorkflowRevisionHash()))
+                    .filter(candidate -> Objects.equals(expectedVersion, candidate.getVersion()))
+                    .filter(candidate -> !isBlank(candidate.getTargetTerminalNodeId()));
+            if (recipe.isEmpty()) {
+                return Map.of();
+            }
+            terminals.put(productTypeId, recipe.get().getTargetTerminalNodeId());
+        }
+        return terminals;
     }
 
     private BigDecimal sumCompatibleTerminalOutputs(List<ProductionSettlementRequest.OutputLine> outputs) {
@@ -2550,6 +2861,19 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
                 .map(ProductionSettlementRequest.OutputLine::getQuantity)
                 .filter(Objects::nonNull)
                 .reduce(BigDecimal.ZERO, BigDecimal::add);
+    }
+
+    private boolean hasCompletePositiveTerminalOutputs(
+            List<ProductionSettlementRequest.OutputLine> outputs) {
+        return outputs != null
+                && !outputs.isEmpty()
+                && outputs.stream().allMatch(output ->
+                        output != null
+                                && !isBlank(output.getProductTypeId())
+                                && !isBlank(output.getBatchNumber())
+                                && !isBlank(output.getUnit())
+                                && output.getQuantity() != null
+                                && output.getQuantity().signum() > 0);
     }
 
     private String resolveTerminalOutputUnit(List<ProductionSettlementRequest.OutputLine> outputs) {
@@ -2590,38 +2914,44 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
                 .map(r -> r.row().getBatchId())
                 .filter(Objects::nonNull)
                 .collect(Collectors.toSet());
-        Map<String, BigDecimal> qtyByBatchAndProduct = new LinkedHashMap<>();
+        Map<String, BigDecimal> qtyByBatchAndInputSlot = new LinkedHashMap<>();
         Map<String, String> batchIdByKey = new LinkedHashMap<>();
-        Map<String, String> productTypeIdByKey = new LinkedHashMap<>();
+        Map<String, String> workflowMaterialNodeIdByKey = new LinkedHashMap<>();
+        Map<String, String> workflowInputPortIdByKey = new LinkedHashMap<>();
         Map<String, String> reportedUnitByKey = new LinkedHashMap<>();
         for (ParsedProcessSheetRow parsed : rows) {
             List<ProcessSheetRowRequest.RawInput> rawInputs = parsed.request().getRawMaterialInputs();
             if (rawInputs == null) {
                 continue;
             }
-            String productTypeId = trimToNull(parsed.request().getProductTypeId());
-            String reportedUnit = firstNonBlank(
-                    trimToNull(parsed.request().getInputUnit()),
-                    firstNonBlank(trimToNull(parsed.request().getUnit()), "kg"));
             for (ProcessSheetRowRequest.RawInput input : rawInputs) {
                 if (input == null || isBlank(input.getMaterialBatchId())
                         || input.getQuantity() == null || input.getQuantity().compareTo(BigDecimal.ZERO) <= 0) {
                     continue;
                 }
                 String batchId = input.getMaterialBatchId();
-                String key = batchId + "\u0000" + firstNonBlank(productTypeId, "")
+                String materialNodeId = trimToNull(input.getMaterialNodeId());
+                String inputPortId = trimToNull(input.getWorkflowPortId());
+                String reportedUnit = firstNonBlank(
+                        trimToNull(input.getUnit()),
+                        firstNonBlank(trimToNull(parsed.request().getInputUnit()),
+                                firstNonBlank(trimToNull(parsed.request().getUnit()), "kg")));
+                String key = batchId + "\u0000" + firstNonBlank(materialNodeId, "")
+                        + "\u0000" + firstNonBlank(inputPortId, "")
                         + "\u0000" + reportedUnit;
                 batchIdByKey.putIfAbsent(key, batchId);
-                productTypeIdByKey.putIfAbsent(key, productTypeId);
+                workflowMaterialNodeIdByKey.putIfAbsent(key, materialNodeId);
+                workflowInputPortIdByKey.putIfAbsent(key, inputPortId);
                 reportedUnitByKey.putIfAbsent(key, reportedUnit);
-                qtyByBatchAndProduct.merge(key, input.getQuantity(), BigDecimal::add);
+                qtyByBatchAndInputSlot.merge(key, input.getQuantity(), BigDecimal::add);
             }
         }
 
         List<ProductionSettlementRequest.ConsumptionLine> lines = new ArrayList<>();
-        for (Map.Entry<String, BigDecimal> e : qtyByBatchAndProduct.entrySet()) {
+        for (Map.Entry<String, BigDecimal> e : qtyByBatchAndInputSlot.entrySet()) {
             String batchId = batchIdByKey.get(e.getKey());
-            String productTypeId = productTypeIdByKey.get(e.getKey());
+            String workflowMaterialNodeId = workflowMaterialNodeIdByKey.get(e.getKey());
+            String workflowInputPortId = workflowInputPortIdByKey.get(e.getKey());
             String reportedUnit = reportedUnitByKey.get(e.getKey());
             BigDecimal reportedQuantity = e.getValue();
             MaterialBatch batch = materialBatchRepository.findByIdAndFactoryId(batchId, factoryId).orElse(null);
@@ -2673,7 +3003,8 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
             }
             lines.add(ProductionSettlementRequest.ConsumptionLine.builder()
                     .materialBatchId(batchId)
-                    .productTypeId(productTypeId)
+                    .workflowMaterialNodeId(workflowMaterialNodeId)
+                    .workflowInputPortId(workflowInputPortId)
                     .materialTypeId(trimToNull(batch.getMaterialTypeId()))
                     .batchNumber(trimToNull(batch.getBatchNumber()))
                     .quantity(qty)
@@ -3132,6 +3463,27 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
                     .withHintTarget("仓库实收");
         }
 
+        if (isWorkflowPlan(plan)) {
+            ensureWorkflowReceiptAuthority(plan);
+            if (productionSettlementOutputLineRepository == null) {
+                throw new BusinessException(500, "Workflow output receipt service is unavailable")
+                        .withCode("WORKFLOW_RECEIPT_SERVICE_UNAVAILABLE")
+                        .withHint("Verify the production settlement output-line migration and service wiring");
+            }
+            List<ProductionSettlementOutputLine> workflowOutputLines =
+                    productionSettlementOutputLineRepository
+                            .lockByFactoryIdAndSettlementId(factoryId, settlement.getId());
+            if (workflowOutputLines.isEmpty()) {
+                throw new BusinessException(409,
+                        "Workflow settlement has no authoritative terminal output lines")
+                        .withCode("WORKFLOW_RECEIPT_OUTPUT_LINES_REQUIRED")
+                        .withHint("Rebuild the settlement from submitted process reports; the raw/owner SKU will not be received");
+            }
+            validateWorkflowReceiptOutputAuthority(plan, workflowOutputLines);
+            return confirmWorkflowOutputReceipt(
+                    factoryId, plan, settlement, workflowOutputLines, request, receivedBy);
+        }
+
         BigDecimal reported = zeroIfNull(settlement.getActualFinishedQuantity());
         BigDecimal received = zeroIfNull(request.getReceivedQuantity());
         if (received.compareTo(BigDecimal.ZERO) <= 0) {
@@ -3226,6 +3578,308 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
             warnings.add("已同步 " + completedBatchCount + " 个逐道报工成品批次为已完工, 可进入成品出厂核算");
         }
         return toWarehouseReceiptResponse(settlement, settlement.getPostingMessage(), warnings);
+    }
+
+    private void ensureWorkflowReceiptAuthority(ProductionPlan plan) {
+        Map<String, String> recipes = Optional.ofNullable(plan.getSelectedBomRecipeIdsByProduct())
+                .orElseGet(Map::of);
+        Map<String, Integer> versions = Optional.ofNullable(plan.getSelectedBomVersionsByProduct())
+                .orElseGet(Map::of);
+        Map<String, String> units = Optional.ofNullable(plan.getWorkflowOutputUnitsByProduct())
+                .orElseGet(Map::of);
+        Set<String> targets = Optional.ofNullable(plan.getTargetFinishedGoodIds())
+                .orElseGet(ArrayList::new).stream()
+                .map(this::trimToNull)
+                .filter(Objects::nonNull)
+                .collect(Collectors.toCollection(LinkedHashSet::new));
+        boolean incomplete = plan.getSelectedWorkflowRevisionId() == null
+                || isBlank(plan.getSelectedWorkflowRevisionHash())
+                || isBlank(plan.getSelectedBomFamilyId())
+                || recipes.isEmpty()
+                || recipes.values().stream().anyMatch(value -> isBlank(value))
+                || !recipes.keySet().equals(versions.keySet())
+                || versions.values().stream().anyMatch(Objects::isNull)
+                || !recipes.keySet().equals(units.keySet())
+                || units.values().stream().anyMatch(value -> isBlank(value))
+                || !recipes.keySet().equals(targets);
+        if (incomplete) {
+            throw new BusinessException(409,
+                    "Workflow plan does not contain complete immutable receipt authority")
+                    .withCode("WORKFLOW_RECEIPT_AUTHORITY_INCOMPLETE")
+                    .withHint("Create a new plan from a published Workflow revision and its active BOM family; the raw/owner SKU will not be received");
+        }
+    }
+
+    private void validateWorkflowReceiptOutputAuthority(
+            ProductionPlan plan, List<ProductionSettlementOutputLine> lines) {
+        Map<String, String> recipes = plan.getSelectedBomRecipeIdsByProduct();
+        Map<String, Integer> versions = plan.getSelectedBomVersionsByProduct();
+        Map<String, String> units = plan.getWorkflowOutputUnitsByProduct();
+        Set<String> reportedSkus = lines.stream()
+                .map(ProductionSettlementOutputLine::getProductTypeId)
+                .collect(Collectors.toCollection(LinkedHashSet::new));
+        boolean mismatch = !reportedSkus.equals(recipes.keySet())
+                || lines.stream().anyMatch(line ->
+                        !Objects.equals(plan.getSelectedBomFamilyId(), line.getBomFamilyId())
+                                || !Objects.equals(recipes.get(line.getProductTypeId()),
+                                        line.getBomRecipeId())
+                                || !Objects.equals(versions.get(line.getProductTypeId()),
+                                        line.getBomRecipeVersion())
+                                || !Objects.equals(
+                                        canonicalReceiptUnit(units.get(line.getProductTypeId())),
+                                        canonicalReceiptUnit(line.getQuantityUnit())));
+        if (mismatch) {
+            throw new BusinessException(409,
+                    "Workflow settlement output lines do not match the plan's pinned authority")
+                    .withCode("WORKFLOW_RECEIPT_OUTPUT_AUTHORITY_MISMATCH")
+                    .withHint("Rebuild the settlement from the exact submitted reports and pinned BOM family");
+        }
+    }
+
+    private ProductionWarehouseReceiptResponse confirmWorkflowOutputReceipt(
+            String factoryId,
+            ProductionPlan plan,
+            ProductionSettlement settlement,
+            List<ProductionSettlementOutputLine> outputLines,
+            ProductionWarehouseReceiptRequest request,
+            Long receivedBy) {
+        List<ProductionWarehouseReceiptRequest.ReceiptLine> receiptLines =
+                Optional.ofNullable(request.getOutputLines()).orElseGet(ArrayList::new);
+        if (receiptLines.size() != outputLines.size()) {
+            throw new BusinessException(409,
+                    "Warehouse receipt must contain exactly one line for every reported terminal output batch")
+                    .withCode("WORKFLOW_RECEIPT_OUTPUT_SET_MISMATCH");
+        }
+        Map<String, ProductionWarehouseReceiptRequest.ReceiptLine> receiptsByKey = new LinkedHashMap<>();
+        for (ProductionWarehouseReceiptRequest.ReceiptLine receipt : receiptLines) {
+            String key = outputReceiptKey(receipt.getProductTypeId(), receipt.getBatchNumber(),
+                    receipt.getQuantityUnit());
+            if (receiptsByKey.putIfAbsent(key, receipt) != null) {
+                throw new BusinessException(409, "Duplicate Workflow warehouse receipt output line")
+                        .withCode("WORKFLOW_RECEIPT_OUTPUT_DUPLICATE");
+            }
+        }
+
+        Map<String, BigDecimal> receivedByUnit = new LinkedHashMap<>();
+        for (ProductionSettlementOutputLine output : outputLines) {
+            String key = outputReceiptKey(output.getProductTypeId(), output.getReportedBatchNumber(),
+                    output.getQuantityUnit());
+            ProductionWarehouseReceiptRequest.ReceiptLine receipt = receiptsByKey.remove(key);
+            if (receipt == null) {
+                throw new BusinessException(409, "Workflow warehouse receipt output line is missing")
+                        .withCode("WORKFLOW_RECEIPT_OUTPUT_SET_MISMATCH")
+                        .withHint("Missing SKU/batch: " + output.getProductTypeId() + "/"
+                                + output.getReportedBatchNumber());
+            }
+            BigDecimal received = requireInventoryQuantityScale(
+                    receipt.getReceivedQuantity(),
+                    "WORKFLOW_RECEIPT_QUANTITY_SCALE_INVALID",
+                    "Workflow 实收数量");
+            if (received == null || received.signum() <= 0
+                    || received.compareTo(output.getReportedQuantity()) != 0) {
+                throw new BusinessException(409,
+                        "Multi-output receipt currently requires exact per-line receipt quantities")
+                        .withCode("MULTI_OUTPUT_RECEIPT_VARIANCE_REQUIRES_LINE_LEDGER")
+                        .withHint("Reported " + output.getReportedQuantity() + output.getQuantityUnit()
+                                + ", received " + received + output.getQuantityUnit());
+            }
+            output.setReceivedQuantity(received);
+            String canonicalUnit = canonicalReceiptUnit(output.getQuantityUnit());
+            receivedByUnit.merge(canonicalUnit, received, BigDecimal::add);
+        }
+        if (!receiptsByKey.isEmpty()) {
+            throw new BusinessException(409, "Workflow warehouse receipt contains unreported output lines")
+                    .withCode("WORKFLOW_RECEIPT_OUTPUT_SET_MISMATCH");
+        }
+        BigDecimal aggregateReceived = receivedByUnit.size() == 1
+                ? receivedByUnit.values().iterator().next()
+                : null;
+        if (aggregateReceived != null && request.getReceivedQuantity() != null
+                && aggregateReceived.compareTo(request.getReceivedQuantity()) != 0) {
+            throw new BusinessException(409,
+                    "Aggregate warehouse receipt quantity does not equal the output-line total")
+                    .withCode("WORKFLOW_RECEIPT_AGGREGATE_MISMATCH");
+        }
+
+        allocateWorkflowOutputCosts(factoryId, plan.getId(), outputLines);
+        LocalDateTime receivedAt = LocalDateTime.now();
+        for (ProductionSettlementOutputLine output : outputLines) {
+            FinishedGoodsBatch batch = createFinishedGoodsForOutputLine(
+                    plan, settlement, output, receivedBy);
+            output.setFinishedGoodsBatchId(batch.getId());
+            output.setReceiptIdempotencyKey(request.getIdempotencyKey());
+            output.setReceivedBy(receivedBy);
+            output.setReceivedAt(receivedAt);
+            output.setStatus("RECEIVED");
+        }
+        productionSettlementOutputLineRepository.saveAll(outputLines);
+
+        settlement.setWarehouseReceiptIdempotencyKey(request.getIdempotencyKey());
+        settlement.setWarehouseReceivedQuantity(aggregateReceived);
+        settlement.setWarehouseVarianceQuantity(aggregateReceived == null ? null : BigDecimal.ZERO);
+        settlement.setQuantityUnit(receivedByUnit.size() == 1
+                ? receivedByUnit.keySet().iterator().next()
+                : null);
+        settlement.setWarehouseVarianceReason(null);
+        settlement.setWarehouseResponsibilitySide(null);
+        settlement.setWarehouseVarianceNote(trimToNull(request.getVarianceNote()));
+        settlement.setFinishedGoodsBatchId(outputLines.size() == 1
+                ? outputLines.getFirst().getFinishedGoodsBatchId() : null);
+        settlement.setTransitLedgerId(null);
+        settlement.setWarehouseReceivedBy(receivedBy);
+        settlement.setWarehouseReceivedAt(receivedAt);
+        settlement.setPostingStatus("POSTED");
+        settlement.setPostingMessage("Warehouse confirmed every pinned Workflow terminal output line");
+        productionSettlementRepository.save(settlement);
+        int completedBatchCount = markReceiptProductionBatchesCompleted(
+                factoryId, plan.getId(), settlement);
+        List<String> warnings = completedBatchCount > 0
+                ? List.of("Completed " + completedBatchCount + " production batch records")
+                : Collections.emptyList();
+        return toWarehouseReceiptResponse(settlement, settlement.getPostingMessage(), warnings);
+    }
+
+    private String outputReceiptKey(String productTypeId, String batchNumber, String unit) {
+        return firstNonBlank(trimToNull(productTypeId), "") + "\u0000"
+                + firstNonBlank(trimToNull(batchNumber), "") + "\u0000"
+                + firstNonBlank(canonicalReceiptUnit(trimToNull(unit)), "");
+    }
+
+    private BigDecimal requireInventoryQuantityScale(
+            BigDecimal quantity, String errorCode, String label) {
+        if (quantity == null) {
+            return null;
+        }
+        try {
+            return quantity.setScale(4, RoundingMode.UNNECESSARY);
+        } catch (ArithmeticException ex) {
+            throw new BusinessException(409, label + "最多支持 4 位小数")
+                    .withCode(errorCode)
+                    .withHint("请修正数量后重新提交；系统不会对报产或库存数量静默舍入");
+        }
+    }
+
+    private void allocateWorkflowOutputCosts(
+            String factoryId, String planId, List<ProductionSettlementOutputLine> lines) {
+        BigDecimal totalCost = resolvePlanTotalCost(factoryId, planId);
+        if (totalCost == null) {
+            return;
+        }
+        allocateWorkflowOutputCostsFromTotal(totalCost, lines);
+    }
+
+    static void allocateWorkflowOutputCostsFromTotal(
+            BigDecimal totalCost, List<ProductionSettlementOutputLine> lines) {
+        BigDecimal authoritativeTotal = totalCost.setScale(6, RoundingMode.HALF_UP);
+        Map<String, List<ProductionSettlementOutputLine>> byProduct = lines.stream()
+                .collect(Collectors.groupingBy(
+                        ProductionSettlementOutputLine::getProductTypeId,
+                        LinkedHashMap::new,
+                        Collectors.toList()));
+        for (Map.Entry<String, List<ProductionSettlementOutputLine>> entry : byProduct.entrySet()) {
+            ProductionSettlementOutputLine authority = entry.getValue().getFirst();
+            boolean policyMismatch = entry.getValue().stream().anyMatch(line ->
+                    line.getOutputRole() != authority.getOutputRole()
+                            || Objects.compare(line.getCostAllocationRatio(),
+                                    authority.getCostAllocationRatio(),
+                                    Comparator.nullsFirst(BigDecimal::compareTo)) != 0
+                            || Objects.compare(line.getByproductNrvUnitPrice(),
+                                    authority.getByproductNrvUnitPrice(),
+                                    Comparator.nullsFirst(BigDecimal::compareTo)) != 0);
+            if (policyMismatch) {
+                throw new BusinessException(409, "Output batches for one SKU have different BOM cost policies")
+                        .withCode("OUTPUT_COST_POLICY_MISMATCH");
+            }
+        }
+        Map<String, BigDecimal> productCosts = new LinkedHashMap<>();
+        BigDecimal byproductCost = BigDecimal.ZERO.setScale(6, RoundingMode.HALF_UP);
+        for (Map.Entry<String, List<ProductionSettlementOutputLine>> entry : byProduct.entrySet()) {
+            ProductionSettlementOutputLine authority = entry.getValue().getFirst();
+            if (authority.getOutputRole() != BomRecipe.OutputRole.BY_PRODUCT) {
+                continue;
+            }
+            BigDecimal productQuantity = entry.getValue().stream()
+                    .map(ProductionSettlementOutputLine::getReceivedQuantity)
+                    .reduce(BigDecimal.ZERO, BigDecimal::add);
+            BigDecimal productCost = authority.getByproductNrvUnitPrice()
+                    .multiply(productQuantity)
+                    .setScale(6, RoundingMode.HALF_UP);
+            productCosts.put(entry.getKey(), productCost);
+            byproductCost = byproductCost.add(productCost);
+        }
+        if (byproductCost.compareTo(authoritativeTotal) > 0) {
+            throw new BusinessException(409, "By-product NRV allocation exceeds actual plan cost")
+                    .withCode("BYPRODUCT_NRV_EXCEEDS_PLAN_COST");
+        }
+        BigDecimal primaryRatioTotal = byProduct.values().stream()
+                .map(List::getFirst)
+                .filter(line -> line.getOutputRole() != BomRecipe.OutputRole.BY_PRODUCT)
+                .map(ProductionSettlementOutputLine::getCostAllocationRatio)
+                .filter(Objects::nonNull)
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
+        if (primaryRatioTotal.signum() <= 0) {
+            throw new BusinessException(409, "Pinned Workflow output allocation ratios are invalid")
+                    .withCode("OUTPUT_COST_ALLOCATION_RATIO_INVALID");
+        }
+        BigDecimal remaining = authoritativeTotal.subtract(byproductCost);
+        List<Map.Entry<String, List<ProductionSettlementOutputLine>>> primaryProducts =
+                byProduct.entrySet().stream()
+                        .filter(entry -> entry.getValue().getFirst().getOutputRole()
+                                != BomRecipe.OutputRole.BY_PRODUCT)
+                        .toList();
+        BigDecimal primaryAllocated = BigDecimal.ZERO.setScale(6, RoundingMode.HALF_UP);
+        for (int i = 0; i < primaryProducts.size(); i++) {
+            Map.Entry<String, List<ProductionSettlementOutputLine>> entry = primaryProducts.get(i);
+            ProductionSettlementOutputLine authority = entry.getValue().getFirst();
+            BigDecimal productCost = i == primaryProducts.size() - 1
+                    ? remaining.subtract(primaryAllocated)
+                    : remaining.multiply(authority.getCostAllocationRatio())
+                            .divide(primaryRatioTotal, 6, RoundingMode.HALF_UP);
+            productCosts.put(entry.getKey(), productCost);
+            primaryAllocated = primaryAllocated.add(productCost);
+        }
+
+        BigDecimal allocatedTotal = BigDecimal.ZERO.setScale(6, RoundingMode.HALF_UP);
+        for (Map.Entry<String, List<ProductionSettlementOutputLine>> entry : byProduct.entrySet()) {
+            List<ProductionSettlementOutputLine> productLines = entry.getValue();
+            ProductionSettlementOutputLine authority = productLines.getFirst();
+            BigDecimal productQuantity = productLines.stream()
+                    .map(ProductionSettlementOutputLine::getReceivedQuantity)
+                    .reduce(BigDecimal.ZERO, BigDecimal::add);
+            BigDecimal productCost = productCosts.get(entry.getKey());
+            BigDecimal productAllocated = BigDecimal.ZERO.setScale(6, RoundingMode.HALF_UP);
+            for (int i = 0; i < productLines.size(); i++) {
+                ProductionSettlementOutputLine line = productLines.get(i);
+                BigDecimal allocated = i == productLines.size() - 1
+                        ? productCost.subtract(productAllocated)
+                        : productCost.multiply(line.getReceivedQuantity())
+                                .divide(productQuantity, 6, RoundingMode.HALF_UP);
+                line.setAllocatedCost(allocated);
+                line.setUnitCost(allocated.divide(line.getReceivedQuantity(), 6, RoundingMode.HALF_UP));
+                productAllocated = productAllocated.add(allocated);
+                allocatedTotal = allocatedTotal.add(allocated);
+            }
+        }
+        if (allocatedTotal.compareTo(authoritativeTotal) != 0) {
+            throw new IllegalStateException("Workflow output cost allocation does not conserve total cost");
+        }
+    }
+
+    private BigDecimal resolvePlanTotalCost(String factoryId, String planId) {
+        if (orderCostBreakdownService == null) {
+            return null;
+        }
+        try {
+            com.cretas.aims.dto.yield.OrderCostBreakdownDTO breakdown =
+                    orderCostBreakdownService.computeByPlan(factoryId, planId, false);
+            return breakdown != null && breakdown.isHasData()
+                    && breakdown.getTotalCost() != null && breakdown.getTotalCost().signum() > 0
+                    ? breakdown.getTotalCost() : null;
+        } catch (RuntimeException ex) {
+            log.warn("Workflow output cost allocation unavailable for factory={}, plan={}: {}",
+                    factoryId, planId, ex.getMessage());
+            return null;
+        }
     }
 
     private int markReceiptProductionBatchesCompleted(String factoryId, String planId, ProductionSettlement settlement) {
@@ -3340,7 +3994,10 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
 
         BigDecimal finished = zeroIfNull(request.getActualFinishedQuantity());
         BigDecimal semiFinished = zeroIfNull(request.getActualSemiFinishedQuantity());
-        if (finished.add(semiFinished).compareTo(BigDecimal.ZERO) <= 0) {
+        boolean hasWorkflowTerminalOutputs = isWorkflowPlan(plan)
+                && hasCompletePositiveTerminalOutputs(request.getTerminalOutputs());
+        if (!hasWorkflowTerminalOutputs
+                && finished.add(semiFinished).compareTo(BigDecimal.ZERO) <= 0) {
             throw new BusinessException(400, "实际产量必须大于 0")
                     .withHint("请录入实际成品产量或半成品产量")
                     .withHintTarget("实际产量");
@@ -3349,7 +4006,14 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
         BigDecimal planned = zeroIfNull(plan.getPlannedQuantity());
         // A修: 跨单位(份/盒 vs kg)时产量裸比无意义, 跳过超产校验 (prefill 已留 INFO 让人核对).
         boolean crossUnit = isCrossUnitPlan(
-                productionBatchRepository.findByFactoryIdAndProductionPlanId(plan.getFactoryId(), plan.getId()));
+                productionBatchRepository.findByFactoryIdAndProductionPlanId(plan.getFactoryId(), plan.getId()))
+                || (isWorkflowPlan(plan)
+                        && Optional.ofNullable(request.getTerminalOutputs()).orElseGet(ArrayList::new).stream()
+                                .map(ProductionSettlementRequest.OutputLine::getProductTypeId)
+                                .map(this::trimToNull)
+                                .filter(Objects::nonNull)
+                                .distinct()
+                                .count() > 1);
         if (!crossUnit
                 && planned.compareTo(BigDecimal.ZERO) > 0
                 && finished.compareTo(planned) > 0
@@ -3389,13 +4053,19 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
             line.setSourceType(sourceType);
             line.setMaterialBatchId(trimToNull(requestLine.getMaterialBatchId()));
             line.setSemiFinishedInventoryId(requestLine.getSemiFinishedInventoryId());
+            line.setProductTypeId(trimToNull(requestLine.getProductTypeId()));
             line.setMaterialTypeId(trimToNull(requestLine.getMaterialTypeId()));
             line.setBatchNumber(trimToNull(requestLine.getBatchNumber()));
+            line.setWorkflowMaterialNodeId(trimToNull(requestLine.getWorkflowMaterialNodeId()));
+            line.setWorkflowInputPortId(trimToNull(requestLine.getWorkflowInputPortId()));
             line.setQuantity(requestLine.getQuantity());
             line.setUnit(trimToNull(requestLine.getUnit()));
             line.setWarehouseId(trimToNull(requestLine.getWarehouseId()));
             line.setNote(trimToNull(requestLine.getNote()));
             line.setAvailableBefore(resolveAvailableBefore(factoryId, plan, sourceType, requestLine));
+            if (isWorkflowPlan(plan)) {
+                line.setProductTypeId(null);
+            }
             target.add(line);
         }
     }
@@ -3427,7 +4097,7 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
         MaterialBatch batch = materialBatchRepository.findByIdAndFactoryId(line.getMaterialBatchId(), factoryId)
                 .orElseThrow(() -> new BusinessException(404, "原料批次不存在: " + line.getMaterialBatchId())
                         .withHintTarget("实际领用"));
-        ensureMaterialBatchAllowedForSettlement(factoryId, plan, line.getProductTypeId(), batch, "实际领用");
+        ensureMaterialBatchAllowedForSettlement(factoryId, plan, line, batch, "实际领用");
         BigDecimal available = zeroIfNull(batch.getCurrentQuantity());
         Set<Long> currentProcessBatchIds = processSheetRowRepository == null
                 ? Set.of()
@@ -3465,7 +4135,7 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
 
     private void ensureMaterialBatchAllowedForSettlement(String factoryId,
                                                          ProductionPlan plan,
-                                                         String productTypeIdOverride,
+                                                         ProductionSettlementRequest.ConsumptionLine line,
                                                          MaterialBatch batch,
                                                          String hintTarget) {
         if (plan != null) {
@@ -3501,8 +4171,9 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
                     .withHintTarget(hintTarget);
         }
 
+        boolean workflowPlan = isWorkflowPlan(plan);
         BomSettlementEligibility eligibility = resolveBomEligibilityForSettlement(
-                factoryId, plan, productTypeIdOverride);
+                factoryId, plan, workflowPlan ? null : line.getProductTypeId());
         if (!eligibility.restricted()) {
             return;
         }
@@ -3524,6 +4195,104 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
                     .withHint("请按产品 BOM 选择原料批次，避免结单扣错料")
                     .withHintTarget(hintTarget);
         }
+        if (workflowPlan) {
+            validateWorkflowConsumptionInputIdentity(
+                    factoryId, plan, line, batch.getMaterialTypeId(), hintTarget);
+        }
+    }
+
+    private void validateWorkflowConsumptionInputIdentity(String factoryId,
+                                                          ProductionPlan plan,
+                                                          ProductionSettlementRequest.ConsumptionLine line,
+                                                          String materialTypeId,
+                                                          String hintTarget) {
+        String materialNodeId = trimToNull(line.getWorkflowMaterialNodeId());
+        String inputPortId = trimToNull(line.getWorkflowInputPortId());
+        if (materialNodeId == null && inputPortId == null) {
+            // Manual historical compatibility: the family-wide material set is
+            // still enforced above, but no false terminal ownership is invented.
+            return;
+        }
+        if (materialNodeId == null || inputPortId == null) {
+            throw new BusinessException(409, "Workflow 原料领用的物料节点和输入端口必须同时完整")
+                    .withCode("WORKFLOW_INPUT_IDENTITY_INCOMPLETE")
+                    .withHint("请重新提交对应工序报工后再结单")
+                    .withHintTarget(hintTarget);
+        }
+        Map<String, String> pinnedRecipes = Optional.ofNullable(plan.getSelectedBomRecipeIdsByProduct())
+                .orElseGet(Map::of);
+        boolean matched = pinnedRecipes.keySet().stream().anyMatch(productTypeId ->
+                workflowRecipeAllowsInput(factoryId, plan, productTypeId, materialTypeId,
+                        materialNodeId, inputPortId));
+        if (!matched) {
+            throw new BusinessException(409, "原料领用端口不属于计划固定的 Workflow/BOM")
+                    .withCode("WORKFLOW_INPUT_SLOT_NOT_IN_PINNED_BOM")
+                    .withHint("请按当前计划的工艺端口重新报工，不能用其他版本或其他节点的投料")
+                    .withHintTarget(hintTarget);
+        }
+    }
+
+    private boolean workflowRecipeAllowsInput(String factoryId,
+                                              ProductionPlan plan,
+                                              String productTypeId,
+                                              String materialTypeId,
+                                              String materialNodeId,
+                                              String inputPortId) {
+        String recipeId = Optional.ofNullable(plan.getSelectedBomRecipeIdsByProduct())
+                .orElseGet(Map::of).get(productTypeId);
+        Integer version = Optional.ofNullable(plan.getSelectedBomVersionsByProduct())
+                .orElseGet(Map::of).get(productTypeId);
+        if (isBlank(recipeId) || version == null) {
+            return false;
+        }
+        Optional<BomRecipe> recipe = bomRecipeRepository.findById(recipeId)
+                .filter(candidate -> factoryId.equals(candidate.getFactoryId()))
+                .filter(candidate -> productTypeId.equals(candidate.getProductTypeId()))
+                .filter(candidate -> Objects.equals(plan.getSelectedBomFamilyId(),
+                        candidate.getBomFamilyId()))
+                .filter(candidate -> Objects.equals(plan.getSelectedWorkflowRevisionId(),
+                        candidate.getWorkflowRevisionId()))
+                .filter(candidate -> Objects.equals(plan.getSelectedWorkflowRevisionHash(),
+                        candidate.getWorkflowRevisionHash()))
+                .filter(candidate -> Objects.equals(version, candidate.getVersion()));
+        if (recipe.isEmpty()) {
+            return false;
+        }
+        if (bomWorkflowRevisionService != null) {
+            boolean graphContainsInput = com.cretas.aims.service.bom.BomWorkflowRevisionService
+                    .resolveInputSlots(bomWorkflowRevisionService.resolvePinnedGraph(factoryId, recipe.get()))
+                    .stream()
+                    .anyMatch(slot -> materialNodeId.equals(slot.materialNodeId())
+                            && inputPortId.equals(slot.inputPortId()));
+            if (!graphContainsInput) {
+                return false;
+            }
+        }
+        BomRecipe rulesRecipe = recipe.get().getSharedRecipeId() == null
+                || recipe.get().getSharedRecipeId().equals(recipe.get().getId())
+                ? recipe.get()
+                : bomRecipeRepository.findById(recipe.get().getSharedRecipeId())
+                        .filter(candidate -> factoryId.equals(candidate.getFactoryId()))
+                        .orElse(recipe.get());
+        List<BomRecipeItem> eligibleItems = new ArrayList<>(
+                bomRecipeItemRepository.findByRecipeIdOrderBySortOrderAsc(rulesRecipe.getId()).stream()
+                        .filter(item -> !"OUTPUT_EXCLUSIVE".equals(item.getCostScope()))
+                        .toList());
+        if (rulesRecipe.getId().equals(recipe.get().getId())) {
+            eligibleItems.addAll(bomRecipeItemRepository
+                    .findByRecipeIdOrderBySortOrderAsc(recipe.get().getId()).stream()
+                    .filter(item -> "OUTPUT_EXCLUSIVE".equals(item.getCostScope()))
+                    .toList());
+        } else {
+            eligibleItems.addAll(bomRecipeItemRepository
+                    .findByRecipeIdOrderBySortOrderAsc(recipe.get().getId()).stream()
+                    .filter(item -> "OUTPUT_EXCLUSIVE".equals(item.getCostScope()))
+                    .toList());
+        }
+        return eligibleItems.stream().anyMatch(item ->
+                Objects.equals(materialTypeId, item.getMaterialTypeId())
+                        && materialNodeId.equals(item.getWorkflowMaterialNodeId())
+                        && inputPortId.equals(item.getWorkflowInputPortId()));
     }
 
     static void assertMaterialBatchOwnershipMatchesPlan(ProductionPlan plan,
@@ -3565,14 +4334,46 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
             return BomSettlementEligibility.UNRESTRICTED;
         }
 
-        String pinnedRecipeId = plan == null ? null : trimToNull(plan.getSelectedBomRecipeId());
+        boolean workflowPlan = plan != null && plan.getWorkflowSelectionMode()
+                == ProductionBatch.WorkflowSelectionMode.WORKFLOW;
+        Map<String, String> pinnedRecipes = plan == null
+                || plan.getSelectedBomRecipeIdsByProduct() == null
+                ? Map.of() : plan.getSelectedBomRecipeIdsByProduct();
+        if (workflowPlan && (plan.getSelectedWorkflowRevisionId() == null
+                || isBlank(plan.getSelectedBomFamilyId())
+                || pinnedRecipes.isEmpty())) {
+            return new BomSettlementEligibility(true, false, Set.of());
+        }
+        if (workflowPlan && isBlank(productTypeIdOverride) && pinnedRecipes.size() > 1) {
+            Set<String> familyMaterialTypeIds = new LinkedHashSet<>();
+            for (String outputProductTypeId : pinnedRecipes.keySet()) {
+                BomSettlementEligibility outputEligibility = resolveBomEligibilityForSettlement(
+                        factoryId, plan, outputProductTypeId);
+                if (!outputEligibility.bomFound()) {
+                    return new BomSettlementEligibility(true, false, Set.of());
+                }
+                familyMaterialTypeIds.addAll(outputEligibility.materialTypeIds());
+            }
+            return new BomSettlementEligibility(true, true, familyMaterialTypeIds);
+        }
+        String pinnedRecipeId = workflowPlan && !isBlank(productTypeIdOverride)
+                ? trimToNull(pinnedRecipes.get(productTypeIdOverride))
+                : plan == null ? null : trimToNull(plan.getSelectedBomRecipeId());
+        if (workflowPlan && pinnedRecipeId == null) {
+            return new BomSettlementEligibility(true, false, Set.of());
+        }
         Optional<BomRecipe> recipe;
         if (pinnedRecipeId != null) {
-            String planProductTypeId = trimToNull(plan.getProductTypeId());
-            Integer pinnedVersion = plan.getSelectedBomVersion();
+            Integer pinnedVersion = workflowPlan && !isBlank(productTypeIdOverride)
+                    ? Optional.ofNullable(plan.getSelectedBomVersionsByProduct())
+                            .orElseGet(Map::of).get(productTypeIdOverride)
+                    : plan.getSelectedBomVersion();
             recipe = bomRecipeRepository.findById(pinnedRecipeId)
                     .filter(candidate -> factoryId.equals(candidate.getFactoryId()))
-                    .filter(candidate -> Objects.equals(planProductTypeId, trimToNull(candidate.getProductTypeId())))
+                    .filter(candidate -> !workflowPlan
+                            || Objects.equals(plan.getSelectedBomFamilyId(), candidate.getBomFamilyId()))
+                    .filter(candidate -> !workflowPlan
+                            || Objects.equals(plan.getSelectedWorkflowRevisionId(), candidate.getWorkflowRevisionId()))
                     .filter(candidate -> pinnedVersion == null
                             || Objects.equals(pinnedVersion, candidate.getVersion()));
         } else {
@@ -3875,6 +4676,7 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
                 .warehouseVarianceQuantity(settlement.getWarehouseVarianceQuantity())
                 .finishedGoodsBatchId(settlement.getFinishedGoodsBatchId())
                 .transitLedgerId(settlement.getTransitLedgerId())
+                .outputLines(loadOutputLineDtos(settlement))
                 .warnings(warnings != null ? warnings : Collections.emptyList())
                 .createdClearingLedgerIds(settlement.getTransitLedgerId() != null
                         ? List.of(settlement.getTransitLedgerId())
@@ -3916,7 +4718,10 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
                 .map(row -> new ParsedProcessSheetRow(row, parseProcessSheetRowPayload(row, ignoredIssues)))
                 .filter(parsed -> parsed.request() != null)
                 .toList();
-        String recovered = resolveTerminalOutputUnit(deriveTerminalProcessSheetOutputs(parsedRows));
+        ProductionPlan plan = productionPlanRepository.findByIdAndFactoryId(
+                settlement.getProductionPlanId(), settlement.getFactoryId()).orElse(null);
+        String recovered = resolveTerminalOutputUnit(deriveTerminalProcessSheetOutputs(
+                settlement.getFactoryId(), plan, parsedRows));
         if (recovered != null) {
             log.info("只读恢复历史结单成品单位: factoryId={}, planId={}, settlementId={}, quantityUnit={}",
                     settlement.getFactoryId(), settlement.getProductionPlanId(), settlement.getId(), recovered);
@@ -4158,6 +4963,63 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
         return BigDecimal.ZERO;
     }
 
+    private FinishedGoodsBatch createFinishedGoodsForOutputLine(
+            ProductionPlan plan,
+            ProductionSettlement settlement,
+            ProductionSettlementOutputLine output,
+            Long receivedBy) {
+        Optional<FinishedGoodsBatch> existing = finishedGoodsBatchRepository
+                .findByFactoryIdAndBatchNumber(settlement.getFactoryId(),
+                        output.getReportedBatchNumber());
+        if (existing.isPresent()) {
+            FinishedGoodsBatch batch = existing.get();
+            if (!Objects.equals(plan.getId(), batch.getProductionPlanId())
+                    || !Objects.equals(output.getProductTypeId(), batch.getProductTypeId())
+                    || zeroIfNull(batch.getProducedQuantity())
+                            .compareTo(output.getReceivedQuantity()) != 0
+                    || !Objects.equals(canonicalReceiptUnit(batch.getUnit()),
+                            canonicalReceiptUnit(output.getQuantityUnit()))) {
+                throw new BusinessException(409,
+                        "Reported output batch number already belongs to another production output")
+                        .withCode("FINISHED_GOODS_BATCH_CONFLICT");
+            }
+            return batch;
+        }
+
+        ProductType productType = productTypeRepository
+                .findByIdAndFactoryId(output.getProductTypeId(), settlement.getFactoryId())
+                .orElseThrow(() -> new BusinessException(409,
+                        "Workflow output SKU no longer exists: " + output.getProductTypeId())
+                        .withCode("WORKFLOW_OUTPUT_SKU_NOT_FOUND"));
+        FinishedGoodsBatch batch = new FinishedGoodsBatch();
+        batch.setFactoryId(settlement.getFactoryId());
+        batch.setBatchNumber(output.getReportedBatchNumber());
+        batch.setProductTypeId(output.getProductTypeId());
+        batch.setProductName(productType.getName());
+        batch.setProducedQuantity(output.getReceivedQuantity());
+        batch.setShippedQuantity(BigDecimal.ZERO);
+        batch.setReservedQuantity(BigDecimal.ZERO);
+        batch.setUnit(output.getQuantityUnit());
+        batch.setUnitPrice(productType.getUnitPrice());
+        batch.setUnitCost(output.getUnitCost());
+        batch.setProductionDate(LocalDate.now());
+        int shelfLifeDays = productType.getShelfLifeDays() != null
+                ? productType.getShelfLifeDays() : 180;
+        batch.setExpireDate(LocalDate.now().plusDays(shelfLifeDays));
+        batch.setStorageLocation("Workflow terminal output warehouse receipt");
+        batch.setProductionPlanId(plan.getId());
+        batch.setOwnership(plan.getOutputOwnership());
+        batch.setOwnerCustomerId(plan.getOutputOwnership() == InventoryOwnership.CUSTOMER_OWNED
+                ? plan.getCustomerId() : null);
+        batch.setSourceSalesOrderId(plan.getSourceOrderId());
+        batch.setSourceSalesOrderItemId(plan.getSourceOrderItemId());
+        batch.setWarehouseId(warehouseResolver.resolveFinishedGoodsId(settlement.getFactoryId()));
+        batch.setStatus(FinishedGoodsBatch.Status.AVAILABLE);
+        batch.setCreatedBy(receivedBy != null ? receivedBy : 0L);
+        batch.setRemark("Workflow output receipt: " + settlement.getPlanNumber());
+        return finishedGoodsBatchRepository.save(batch);
+    }
+
     private FinishedGoodsBatch createFinishedGoodsFromReceipt(ProductionPlan plan,
                                                               ProductionSettlement settlement,
                                                               BigDecimal received,
@@ -4191,7 +5053,8 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
         }
 
         ProductType productType = finishedProductTypeId != null
-                ? productTypeRepository.findById(finishedProductTypeId).orElse(null)
+                ? productTypeRepository.findByIdAndFactoryId(
+                        finishedProductTypeId, settlement.getFactoryId()).orElse(null)
                 : null;
 
         FinishedGoodsBatch batch = new FinishedGoodsBatch();
@@ -4321,14 +5184,46 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
                 .productionReportedQuantity(settlement.getActualFinishedQuantity())
                 .warehouseReceivedQuantity(settlement.getWarehouseReceivedQuantity())
                 .varianceQuantity(settlement.getWarehouseVarianceQuantity())
-                .toleranceQuantity(receiptTolerance(settlement.getQuantityUnit()))
-                .quantityUnit(firstNonBlank(settlement.getQuantityUnit(), "件"))
+                .toleranceQuantity(settlement.getQuantityUnit() == null
+                        ? null
+                        : receiptTolerance(settlement.getQuantityUnit()))
+                .quantityUnit(settlement.getQuantityUnit())
                 .postingStatus(settlement.getPostingStatus())
                 .finishedGoodsBatchId(settlement.getFinishedGoodsBatchId())
                 .transitLedgerId(settlement.getTransitLedgerId())
+                .outputLines(loadOutputLineDtos(settlement))
                 .message(message)
                 .warnings(warnings != null ? warnings : Collections.emptyList())
                 .build();
+    }
+
+    private List<com.cretas.aims.dto.production.ProductionOutputLineDTO> loadOutputLineDtos(
+            ProductionSettlement settlement) {
+        if (productionSettlementOutputLineRepository == null || settlement == null
+                || isBlank(settlement.getId()) || isBlank(settlement.getFactoryId())) {
+            return Collections.emptyList();
+        }
+        return productionSettlementOutputLineRepository
+                .findByFactoryIdAndSettlementIdOrderByProductTypeIdAscReportedBatchNumberAsc(
+                        settlement.getFactoryId(), settlement.getId())
+                .stream()
+                .map(line -> com.cretas.aims.dto.production.ProductionOutputLineDTO.builder()
+                        .productTypeId(line.getProductTypeId())
+                        .reportedBatchNumber(line.getReportedBatchNumber())
+                        .reportedQuantity(line.getReportedQuantity())
+                        .quantityUnit(line.getQuantityUnit())
+                        .bomFamilyId(line.getBomFamilyId())
+                        .bomRecipeId(line.getBomRecipeId())
+                        .bomRecipeVersion(line.getBomRecipeVersion())
+                        .outputRole(line.getOutputRole() != null ? line.getOutputRole().name() : null)
+                        .costAllocationRatio(line.getCostAllocationRatio())
+                        .allocatedCost(line.getAllocatedCost())
+                        .unitCost(line.getUnitCost())
+                        .receivedQuantity(line.getReceivedQuantity())
+                        .finishedGoodsBatchId(line.getFinishedGoodsBatchId())
+                        .status(line.getStatus())
+                        .build())
+                .toList();
     }
 
     private boolean requiresProductionSettlement(String factoryId) {
@@ -5303,7 +6198,8 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
 
         // 查产品名称
         String productName = "未知产品";
-        Optional<ProductType> ptOpt = productTypeRepository.findById(plan.getProductTypeId());
+        Optional<ProductType> ptOpt = productTypeRepository.findByIdAndFactoryId(
+                plan.getProductTypeId(), factoryId);
         if (ptOpt.isPresent()) {
             productName = ptOpt.get().getName();
         }
@@ -5407,7 +6303,8 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
         if (plan.getProductType() != null) {
             dto.setProductName(plan.getProductType().getName());
         } else {
-            productTypeRepository.findById(plan.getProductTypeId())
+            productTypeRepository.findByIdAndFactoryId(
+                            plan.getProductTypeId(), plan.getFactoryId())
                     .ifPresent(pt -> dto.setProductName(pt.getName()));
         }
         dto.setPlannedQuantity(plan.getPlannedQuantity());
@@ -5472,7 +6369,8 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
         }
 
         // 2. 校验目标产品类型存在
-        com.cretas.aims.entity.ProductType productType = productTypeRepository.findById(productTypeId)
+        com.cretas.aims.entity.ProductType productType =
+                productTypeRepository.findByIdAndFactoryId(productTypeId, factoryId)
                 .orElseThrow(() -> new ResourceNotFoundException("产品类型", "id", productTypeId));
 
         // 3. 生成计划编号

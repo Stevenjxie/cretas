@@ -328,6 +328,30 @@ class BomItemSubstituteServiceImplTest {
         assertEquals(RECIPE, cloned.getRecipeId());
     }
 
+    @Test
+    @DisplayName("Workflow Family owner migration moves substitute relations with the parent item")
+    void reassignsRelationsWithWorkflowOwnedParent() {
+        String sourceRecipe = "recipe-source";
+        when(entityManager.find(BomRecipe.class, sourceRecipe, LockModeType.PESSIMISTIC_WRITE))
+                .thenReturn(recipe(sourceRecipe, BomRecipe.Status.DRAFT));
+        when(entityManager.find(BomRecipe.class, RECIPE, LockModeType.PESSIMISTIC_WRITE))
+                .thenReturn(recipe(RECIPE, BomRecipe.Status.DRAFT));
+        BomItemSubstitute relation = relation(10L, "A", "B");
+        relation.setRecipeId(sourceRecipe);
+        when(repository.findByFactoryIdAndRecipeIdAndParentKindAndParentRecipeItemIdOrderByCreatedAtAsc(
+                FACTORY, sourceRecipe, BomItemSubstitute.ParentKind.RECIPE_ITEM, 10L))
+                .thenReturn(List.of(relation));
+        when(repository.findByFactoryIdAndRecipeIdAndParentKindAndParentRecipeItemIdOrderByCreatedAtAsc(
+                FACTORY, RECIPE, BomItemSubstitute.ParentKind.RECIPE_ITEM, 10L))
+                .thenReturn(List.of());
+
+        service.reassignRecipeItemRelations(
+                FACTORY, sourceRecipe, RECIPE, 10L);
+
+        assertEquals(RECIPE, relation.getRecipeId());
+        verify(repository).saveAllAndFlush(List.of(relation));
+    }
+
     private void stubDraftAndRecipeParent(
             Long id, String materialId, String unit, String category, String packagingRole) {
         stubDraft();

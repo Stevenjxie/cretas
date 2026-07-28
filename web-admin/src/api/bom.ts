@@ -332,9 +332,16 @@ export const bomRecipeApi = {
     payload,
   ),
 
-  /** Idempotently reuse/create the one editable draft for a factory-scoped SKU. */
-  ensureDraft: (factoryId: string, productTypeId: string) =>
-    post<BomRecipeSummary>(`${recipeBase(factoryId)}/ensure-draft`, { productTypeId }),
+  /**
+   * Idempotently reuse/create the one editable draft for a factory-scoped SKU.
+   * Workflow embeds must pass the exact canvas revision so same-SKU multi-output
+   * definitions never fall back to a different active/draft Workflow.
+   */
+  ensureDraft: (factoryId: string, productTypeId: string, workflowRevisionId?: number | null) =>
+    post<BomRecipeSummary>(`${recipeBase(factoryId)}/ensure-draft`, {
+      productTypeId,
+      ...(workflowRevisionId == null ? {} : { workflowRevisionId }),
+    }),
 
   getCurrentByProduct: (factoryId: string, productTypeId: string) =>
     get<BomRecipeSummary>(`${recipeBase(factoryId)}/by-product/${productTypeId}/current`),

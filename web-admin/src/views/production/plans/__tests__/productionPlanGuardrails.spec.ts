@@ -32,11 +32,23 @@ describe('production plan operator guardrails', () => {
 
   it('keeps warehouse receipt units canonical in payload while localizing BY_STOCK receipt truth', () => {
     expect(source).toContain("import { canonicalUnitCode, displayUnit } from '@/utils/unitPricing'");
-    expect(source).toContain('quantityUnit: canonicalUnitCode(res.data.quantityUnit || row.unit || row.quantityUnit)');
+    expect(source).toContain('canonicalUnitCode(res.data.quantityUnit || row.unit || row.quantityUnit)');
     expect(source).toContain('const receiptDisplayUnit = computed(() => displayUnit(receiptUnit.value))');
     expect(source).toContain('{{ receiptReportedQuantity }} {{ receiptDisplayUnit }}');
     expect(source).toContain('本步骤仅确认仓库实收，不会重复创建成品批次');
-    expect(source).toContain('quantityUnit: receiptUnit.value');
+    expect(source).toContain('quantityUnit: receiptHasOutputLines.value ? null : receiptUnit.value');
+  });
+
+  it('confirms Workflow terminal outputs per SKU and preserves exact DAG input identity', () => {
+    expect(source).toContain('本计划包含多个终端产出');
+    expect(source).toContain('不同单位不会相加');
+    expect(source).toContain('v-for="(line, index) in receiptForm.outputLines"');
+    expect(source).toContain('batchNumber: line.reportedBatchNumber');
+    expect(source).toContain(':precision="4"');
+    expect(source).toContain(':step="0.0001"');
+    expect(source).toContain('workflowMaterialNodeId: line.workflowMaterialNodeId || null');
+    expect(source).toContain('workflowInputPortId: line.workflowInputPortId || null');
+    expect(source).not.toContain('选择领用归属 SKU');
   });
 
   it('submits an independent local-date batchDate for sales-derived plans', () => {

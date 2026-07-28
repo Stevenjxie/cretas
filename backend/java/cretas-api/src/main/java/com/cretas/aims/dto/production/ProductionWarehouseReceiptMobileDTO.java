@@ -7,6 +7,8 @@ import lombok.NoArgsConstructor;
 
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
+import java.util.ArrayList;
+import java.util.List;
 
 @Data
 @Builder
@@ -29,4 +31,20 @@ public class ProductionWarehouseReceiptMobileDTO {
     private Long submittedBy;
     private LocalDateTime submittedAt;
     private String note;
+
+    @Builder.Default
+    private List<OutputLine> outputLines = new ArrayList<>();
+
+    @Data
+    @Builder
+    @NoArgsConstructor
+    @AllArgsConstructor
+    public static class OutputLine {
+        private String productTypeId;
+        private String batchNumber;
+        private BigDecimal reportedQuantity;
+        private BigDecimal receivedQuantity;
+        private String unit;
+        private String status;
+    }
 }

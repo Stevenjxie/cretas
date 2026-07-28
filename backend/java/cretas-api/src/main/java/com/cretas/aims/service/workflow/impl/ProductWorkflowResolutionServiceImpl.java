@@ -236,6 +236,7 @@ public class ProductWorkflowResolutionServiceImpl implements ProductWorkflowReso
         }
         return new WorkflowPlanOutputContract(
                 resolved.workflow.getId(), resolved.workflow.getDefinitionVersion(),
+                resolved.workflow.getCurrentRevisionId(), resolved.workflow.getCurrentRevisionHash(),
                 Map.copyOf(selected), plannedUnit);
     }
 

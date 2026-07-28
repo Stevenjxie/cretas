@@ -8,6 +8,7 @@ const router = useRouter();
 const activeTab = ref('materials');
 const props = defineProps<{
   initialProductTypeId?: string;
+  initialWorkflowRevisionId?: number | null;
 }>();
 
 // BOM 是本页默认且最常用的首屏内容，随统一页一次加载，避免“外壳 chunk → BOM chunk”
@@ -47,7 +48,10 @@ watch(() => route.query.tab, syncTabFromQuery);
       </template>
       <el-tabs v-model="activeTab" type="border-card">
         <el-tab-pane label="原辅料配方" name="materials">
-          <BomContent :initial-product-type-id="props.initialProductTypeId" />
+          <BomContent
+            :initial-product-type-id="props.initialProductTypeId"
+            :initial-workflow-revision-id="props.initialWorkflowRevisionId"
+          />
         </el-tab-pane>
         <el-tab-pane label="转换率" name="conversion">
           <ConversionContent />

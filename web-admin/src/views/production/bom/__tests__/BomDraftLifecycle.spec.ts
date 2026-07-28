@@ -38,7 +38,7 @@ describe('BOM draft lifecycle behavior', () => {
     const refresh = vi.fn().mockResolvedValue(undefined);
 
     await expect(createBomDraftEnsurer(api, refresh)('F006', 'SKU-1')).resolves.toBe(draft);
-    expect(api).toHaveBeenCalledWith('F006', 'SKU-1');
+    expect(api).toHaveBeenCalledWith('F006', 'SKU-1', undefined);
     expect(refresh).toHaveBeenCalledWith(draft);
   });
 
@@ -80,6 +80,20 @@ describe('BOM draft lifecycle behavior', () => {
     await Promise.all([first, second]);
     expect(api).toHaveBeenCalledTimes(1);
     expect(refresh).toHaveBeenCalledTimes(1);
+  });
+
+  it('isolates single-flight requests by exact Workflow revision', async () => {
+    const api = vi.fn().mockResolvedValue({ success: true, data: recipe() });
+    const refresh = vi.fn().mockResolvedValue(undefined);
+    const ensure = createBomDraftEnsurer(api, refresh);
+
+    await Promise.all([
+      ensure('F006', 'SKU-1', 101),
+      ensure('F006', 'SKU-1', 102),
+    ]);
+
+    expect(api).toHaveBeenNthCalledWith(1, 'F006', 'SKU-1', 101);
+    expect(api).toHaveBeenNthCalledWith(2, 'F006', 'SKU-1', 102);
   });
 
   it('surfaces the backend business message and does not refresh on failure', async () => {

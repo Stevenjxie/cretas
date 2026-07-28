@@ -38,6 +38,8 @@ import {
 const props = defineProps<{
   /** 嵌入 Workflow 抽屉时显式固定当前目标 SKU；完整页面仍使用路由 query。 */
   initialProductTypeId?: string;
+  /** Workflow 画布打开 BOM 时固定当前精确版本，避免同 SKU 多个流程被错误猜测。 */
+  initialWorkflowRevisionId?: number | null;
 }>();
 
 const authStore = useAuthStore();
@@ -241,7 +243,9 @@ function goWorkflowConfiguration() {
 }
 
 const ensureEditableDraftRequest = createBomDraftEnsurer(
-  (currentFactoryId, productTypeId) => bomRecipeApi.ensureDraft(currentFactoryId, productTypeId),
+  (currentFactoryId, productTypeId, workflowRevisionId) => (
+    bomRecipeApi.ensureDraft(currentFactoryId, productTypeId, workflowRevisionId)
+  ),
   refreshEnsuredDraft,
 );
 
@@ -250,10 +254,28 @@ async function ensureEditableDraft(): Promise<BomRecipeSummary | null> {
     ElMessage.warning('请先选择产品，再编辑 BOM');
     return null;
   }
-  if (!(await ensureBomConfigurable())) return null;
+  // 从 Workflow 画布进入时，画布携带的精确 revision 才是最高权威。
+  // 旧 BOM 的 readiness 可能仍指向上一版流程，因此先让后端按 exact revision
+  // 幂等创建/修复草稿，再对返回的草稿做最终可编辑性检查。
+  const hasExactWorkflowContext = props.initialWorkflowRevisionId != null;
+  if (!hasExactWorkflowContext && !(await ensureBomConfigurable())) return null;
   ensureDraftLoading.value = true;
   try {
-    return await ensureEditableDraftRequest(factoryId.value, selectedProductTypeId.value);
+    const draft = await ensureEditableDraftRequest(
+      factoryId.value,
+      selectedProductTypeId.value,
+      props.initialWorkflowRevisionId,
+    );
+    if (hasExactWorkflowContext && !(await loadConfigurationReadiness(draft.id))) {
+      ElMessage({
+        message: `${workflowFirstGuidance.value}。已按当前 Workflow 刷新草稿，但在配置完整前不会写入明细。`,
+        type: 'warning',
+        duration: 0,
+        showClose: true,
+      });
+      return null;
+    }
+    return draft;
   } catch (error: unknown) {
     ElMessage({
       message: bomCopyErrorMessage(error, '无法创建或加载 BOM 草稿'),
@@ -632,6 +654,11 @@ function bomUnitLabel(unit?: unknown): string {
 
 const bomFormUnitLabel = computed(() => bomUnitLabel(bomForm.value.unit));
 const bomUnitIsCounting = computed(() => isCountingUnit(bomForm.value.unit));
+const bomFormWorkflowBound = computed(() => Boolean(
+  bomForm.value.workflowMaterialNodeId
+  || bomForm.value.workflowInputPortId
+  || bomForm.value.workflowEdgeId,
+));
 function bomLineAmountPreview(row: BomItemRow) {
   if (row.standardQuantity == null) {
     return {
@@ -1169,6 +1196,28 @@ async function loadMaterialTypes() {
 
 function onMaterialLink(materialTypeId: string) {
   if (!materialTypeId) return;
+  if (!isBomEdit.value) {
+    const existingWorkflowSlots = bomItems.value.filter((item) => (
+      String(item.materialTypeId || '') === materialTypeId
+      && isWorkflowBoundItem(item)
+    ));
+    if (existingWorkflowSlots.length === 1) {
+      populateBomFormFromRow(existingWorkflowSlots[0] as TableRow);
+      isBomEdit.value = true;
+      ElMessage.info('该物料已经是 Workflow 投入槽，已切换为更新现有槽；工艺绑定会原样保留。');
+      return;
+    }
+    if (existingWorkflowSlots.length > 1) {
+      bomForm.value.materialTypeId = '';
+      ElMessage({
+        message: '该物料对应多个 Workflow 投入槽，系统不会猜测。请关闭窗口后在明细表中选择要编辑的工艺投入槽。',
+        type: 'warning',
+        duration: 0,
+        showClose: true,
+      });
+      return;
+    }
+  }
   bomForm.value.substituteMaterialTypeIds = [];
   bomForm.value.substituteFactors = {};
   const material = materialTypes.value.find((m: Record<string, unknown>) => m.id === materialTypeId);
@@ -1262,13 +1311,15 @@ async function handleAddBomItem() {
   bomDialogVisible.value = true;
 }
 
-async function handleEditBomItem(row: TableRow) {
-  if (!(await ensureBomConfigurable())) return;
-  if (!selectedRecipe.value || selectedRecipe.value.status !== 'DRAFT') {
-    ElMessage.warning('生效版本不可直接修改，请先克隆为草稿');
-    return;
-  }
-  isBomEdit.value = true;
+function isWorkflowBoundItem(row: TableRow): boolean {
+  return Boolean(
+    String(row.workflowMaterialNodeId || '').trim()
+    || String(row.workflowInputPortId || '').trim()
+    || String(row.workflowEdgeId || '').trim(),
+  );
+}
+
+function populateBomFormFromRow(row: TableRow) {
   bomForm.value = {
     id: row.id,
     productTypeId: row.productTypeId,
@@ -1307,6 +1358,16 @@ async function handleEditBomItem(row: TableRow) {
     semiFinishedRefCode: String(row.semiFinishedRefCode || ''),
     subProductTypeId: String(row.subProductTypeId || ''),
   };
+}
+
+async function handleEditBomItem(row: TableRow) {
+  if (!(await ensureBomConfigurable())) return;
+  if (!selectedRecipe.value || selectedRecipe.value.status !== 'DRAFT') {
+    ElMessage.warning('生效版本不可直接修改，请先克隆为草稿');
+    return;
+  }
+  isBomEdit.value = true;
+  populateBomFormFromRow(row);
   bomDialogVisible.value = true;
 }
 
@@ -1416,6 +1477,10 @@ async function submitBomForm() {
 async function handleDeleteBomItem(row: TableRow) {
   if (!selectedRecipe.value || selectedRecipe.value.status !== 'DRAFT') {
     ElMessage.warning('生效版本不可直接修改，请先克隆为草稿');
+    return;
+  }
+  if (isWorkflowBoundItem(row)) {
+    ElMessage.warning('Workflow 投入槽由工艺自动维护，不能在 BOM 中删除；可编辑用量、可选性和替代料。');
     return;
   }
   try {
@@ -2724,7 +2789,14 @@ watch(adjustDialogVisible, (visible) => {
           <el-table-column v-if="selectedRecipeEditable" label="操作" width="120" fixed="right" align="center">
             <template #default="{ row }">
               <el-button type="primary" link size="small" @click="handleEditBomItem(row)">编辑</el-button>
-              <el-button type="danger" link size="small" @click="handleDeleteBomItem(row)">删除</el-button>
+              <el-tooltip
+                v-if="isWorkflowBoundItem(row)"
+                content="Workflow 投入槽由工艺自动维护，不能在 BOM 中删除"
+                placement="top"
+              >
+                <el-tag type="info" size="small" disable-transitions>工艺槽</el-tag>
+              </el-tooltip>
+              <el-button v-else type="danger" link size="small" @click="handleDeleteBomItem(row)">删除</el-button>
             </template>
           </el-table-column>
         </el-table>
@@ -2932,6 +3004,7 @@ watch(adjustDialogVisible, (visible) => {
           <el-select
             v-model="bomForm.materialTypeId"
             :placeholder="`请选择${bomItemCategoryLabel}`"
+            :disabled="isBomEdit && bomFormWorkflowBound"
             filterable
             style="width: 100%"
             @change="onMaterialLink"
@@ -2943,7 +3016,10 @@ watch(adjustDialogVisible, (visible) => {
               :value="item.id"
             />
           </el-select>
-          <div class="form-tip">列表已按当前页签筛选，所选物料为必填。</div>
+          <div v-if="isBomEdit && bomFormWorkflowBound" class="form-tip">
+            主物料来自 Workflow 投入槽，不可在 BOM 中替换；如需换料，请先修改 Workflow。
+          </div>
+          <div v-else class="form-tip">列表已按当前页签筛选，所选物料为必填。</div>
         </el-form-item>
         <el-alert
           v-if="bomForm.materialCategory !== 'PACKAGING'"
@@ -3739,6 +3815,8 @@ watch(adjustDialogVisible, (visible) => {
 }
 
 .bom-draft-bar {
+  position: sticky;
+  bottom: 0;
   z-index: 8;
   display: flex;
   flex: 0 0 auto;

@@ -34,6 +34,7 @@ describe('BOM loading UX source contract', () => {
     );
     expect(bomSource).toContain('.bom-page__scroll');
     expect(bomSource).toMatch(/\.bom-page\s*\{[\s\S]*?overflow:\s*hidden;/);
+    expect(bomSource).toMatch(/\.bom-draft-bar\s*\{[\s\S]*?position:\s*sticky;[\s\S]*?bottom:\s*0;/);
   });
 
   it('silences the global readiness toast because the product coordinator owns one-error presentation', () => {

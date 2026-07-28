@@ -19,11 +19,15 @@ describe('BOM item unit contract wiring', () => {
 
   it('fails closed before ensure-draft and preserves substitute conversion semantics', () => {
     const source = readFileSync(resolve(process.cwd(), 'src/views/production/bom/index.vue'), 'utf8');
-    const readinessGuard = source.indexOf('if (!(await ensureBomConfigurable())) return null;');
-    const ensureRequest = source.indexOf('return await ensureEditableDraftRequest(');
+    const readinessGuard = source.indexOf(
+      'if (!hasExactWorkflowContext && !(await ensureBomConfigurable())) return null;',
+    );
+    const ensureRequest = source.indexOf('const draft = await ensureEditableDraftRequest(');
 
     expect(readinessGuard).toBeGreaterThan(0);
     expect(ensureRequest).toBeGreaterThan(readinessGuard);
+    expect(source).toContain('const hasExactWorkflowContext = props.initialWorkflowRevisionId != null;');
+    expect(source).toContain('if (hasExactWorkflowContext && !(await loadConfigurationReadiness(draft.id)))');
     expect(source).toContain('data-testid="workflow-first-bom-gate"');
     expect(source).toContain(':disabled="!bomConfigurationAllowed || configurationReadinessLoading"');
     expect(source).toContain('? bomForm.value.substituteFactors[materialTypeId] ?? null');

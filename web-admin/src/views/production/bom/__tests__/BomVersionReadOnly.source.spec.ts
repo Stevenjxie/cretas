@@ -33,6 +33,17 @@ describe('BOM version read-only source contract', () => {
     expect(source).not.toContain(':icon="Delete"');
   });
 
+  it('keeps Workflow-owned input slots editable but not deletable', () => {
+    expect(source).toContain('function isWorkflowBoundItem(row: TableRow)');
+    expect(source).toContain('Workflow 投入槽由工艺自动维护，不能在 BOM 中删除');
+    expect(source).toContain('v-if="isWorkflowBoundItem(row)"');
+    expect(source).toContain('<el-button v-else type="danger"');
+    expect(source).toContain(':disabled="isBomEdit && bomFormWorkflowBound"');
+    expect(source).toContain('主物料来自 Workflow 投入槽，不可在 BOM 中替换');
+    expect(source).toContain('已切换为更新现有槽；工艺绑定会原样保留');
+    expect(source).toContain('该物料对应多个 Workflow 投入槽，系统不会猜测');
+  });
+
   it('defensively blocks stale labor and overhead dialogs after the version changes', () => {
     for (const handler of [
       'handleAddLaborCost',

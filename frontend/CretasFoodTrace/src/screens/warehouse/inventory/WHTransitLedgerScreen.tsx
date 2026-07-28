@@ -6,7 +6,11 @@ import { useNavigation } from '@react-navigation/native';
 
 import { NeoButton, NeoCard, ScreenWrapper, StatusBadge } from '../../../components/ui';
 import { appAlert, AppDialogHost } from '../../../components/ui/AppDialog';
-import { transitLedgerApiClient, TransitLedgerItem } from '../../../services/api/transitLedgerApiClient';
+import {
+  transitLedgerApiClient,
+  TransitLedgerItem,
+  TransitOutputLine,
+} from '../../../services/api/transitLedgerApiClient';
 import { theme } from '../../../theme';
 
 const COPY = {
@@ -23,6 +27,10 @@ const COPY = {
   receivedQty: '\u5b9e\u6536\u6570\u91cf',
   receivedPlaceholder: '\u8bf7\u586b\u5199\u4ed3\u5e93\u590d\u6838\u540e\u7684\u5b9e\u6536\u6570\u91cf',
   receivedHint: '\u63d0\u4ea4\u524d\u6838\u5bf9\u6765\u6e90\u5355\u3001\u62a5\u5de5\u4ea7\u51fa\u548c\u73b0\u573a\u5b9e\u7269\uff1b\u63d0\u4ea4\u540e\u7531\u540e\u7aef\u5199\u5165\u6210\u54c1\u5e93\u5b58\u3002',
+  outputLines: '\u7ec8\u7aef\u4ea7\u51fa\u9010\u884c\u5b9e\u6536',
+  outputLineHint: '\u6bcf\u884c\u5fc5\u987b\u6838\u5bf9 SKU\u3001\u6279\u6b21\u3001\u6570\u91cf\u548c\u5355\u4f4d\uff1b\u4e0d\u540c\u5355\u4f4d\u4e0d\u4f1a\u5408\u5e76\u6210\u603b\u6570\u3002',
+  sku: 'SKU',
+  batch: '\u6279\u6b21',
   note: '\u5907\u6ce8',
   notePlaceholder: '\u53ef\u586b\u5199\u79f0\u91cd\u3001\u590d\u6838\u6216\u73b0\u573a\u8bf4\u660e',
   confirm: '\u786e\u8ba4\u5b9e\u6536',
@@ -33,6 +41,8 @@ const COPY = {
   retry: '\u91cd\u8bd5',
   invalidQtyTitle: '\u8bf7\u586b\u5199\u5b9e\u6536\u6570\u91cf',
   invalidQtyMessage: '\u5b9e\u6536\u6570\u91cf\u5fc5\u987b\u5927\u4e8e 0\uff0c\u4e0d\u5141\u8bb8\u7a7a\u503c\u6216\u8d1f\u6570\u3002',
+  invalidQtyScaleMessage: '\u5b9e\u6536\u6570\u91cf\u6700\u591a\u652f\u6301 4 \u4f4d\u5c0f\u6570\uff0c\u7cfb\u7edf\u4e0d\u4f1a\u81ea\u52a8\u56db\u820d\u4e94\u5165\u3002',
+  invalidLineMessage: '\u8bf7\u9010\u884c\u6838\u5bf9\u5b9e\u6536\u3002\u5f53\u524d\u6bcf\u884c\u5fc5\u987b\u4e0e\u5df2\u63d0\u4ea4\u62a5\u4ea7\u6570\u91cf\u4e00\u81f4\uff1b\u5982\u73b0\u573a\u4e0d\u4e00\u81f4\uff0c\u8bf7\u5148\u8ba9\u751f\u4ea7\u4fee\u6b63\u62a5\u5de5\u3002',
   successTitle: '\u786e\u8ba4\u6210\u529f',
   successMessage: '\u4ed3\u5e93\u5b9e\u6536\u5df2\u63d0\u4ea4\uff0c\u5e93\u5b58\u548c\u7ed3\u5355\u72b6\u6001\u5df2\u7531\u540e\u7aef\u5904\u7406\u3002',
   failedTitle: '\u786e\u8ba4\u5931\u8d25',
@@ -43,11 +53,19 @@ const COPY = {
 
 type QuantityById = Record<string, string>;
 
-function formatQty(value?: number | null, unit?: string): string {
+function formatQty(value?: number | null, unit?: string | null): string {
   if (value == null || Number.isNaN(Number(value))) {
     return '-';
   }
-  return `${Number(value).toLocaleString('zh-CN', { maximumFractionDigits: 3 })}${unit ? ` ${unit}` : ''}`;
+  return `${Number(value).toLocaleString('zh-CN', { maximumFractionDigits: 4 })}${unit ? ` ${unit}` : ''}`;
+}
+
+function hasMoreThanFourFractionDigits(value: string | undefined): boolean {
+  const trimmed = value?.trim();
+  if (!trimmed) return false;
+  const normalized = trimmed.replace(',', '.');
+  const fraction = normalized.split('.')[1] ?? '';
+  return fraction.replace(/0+$/, '').length > 4;
 }
 
 function directionLabel(direction: string): string {
@@ -85,6 +103,10 @@ function messageFromError(error: unknown): string {
   return (error as { message?: string })?.message ?? COPY.failedTitle;
 }
 
+function outputLineKey(itemId: string, line: TransitOutputLine, index: number): string {
+  return `${itemId}::${line.productTypeId}::${line.batchNumber}::${line.unit}::${index}`;
+}
+
 export default function WHTransitLedgerScreen() {
   const navigation = useNavigation();
   const [items, setItems] = useState<TransitLedgerItem[]>([]);
@@ -102,6 +124,18 @@ export default function WHTransitLedgerScreen() {
       if (response.success) {
         const pending = response.data ?? [];
         setItems(pending.filter((item) => item.direction === 'FINISHED_GOODS_RECEIPT'));
+        setReceivedById((previous) => {
+          const next = { ...previous };
+          pending.forEach((item) => {
+            (item.outputLines ?? []).forEach((line, index) => {
+              const key = outputLineKey(item.id, line, index);
+              if (next[key] == null && line.reportedQuantity != null) {
+                next[key] = String(line.reportedQuantity);
+              }
+            });
+          });
+          return next;
+        });
       } else {
         setError(response.message ?? COPY.loadFailed);
       }
@@ -125,8 +159,32 @@ export default function WHTransitLedgerScreen() {
   }, [load]);
 
   const submitConfirm = useCallback(async (item: TransitLedgerItem) => {
+    const outputLines = item.outputLines ?? [];
+    const outputQuantityInputs = outputLines.map((line, index) =>
+      receivedById[outputLineKey(item.id, line, index)]);
+    if (outputQuantityInputs.some(hasMoreThanFourFractionDigits)
+      || (outputLines.length === 0 && hasMoreThanFourFractionDigits(receivedById[item.id]))) {
+      appAlert(COPY.invalidQtyTitle, COPY.invalidQtyScaleMessage);
+      return;
+    }
     const receivedQuantity = parseQuantity(receivedById[item.id]);
-    if (receivedQuantity == null || receivedQuantity <= 0) {
+    const confirmedOutputLines = outputLines.map((line, index) => ({
+      productTypeId: line.productTypeId,
+      batchNumber: line.batchNumber,
+      receivedQuantity: parseQuantity(receivedById[outputLineKey(item.id, line, index)]),
+      quantityUnit: line.unit,
+      reportedQuantity: Number(line.reportedQuantity),
+    }));
+    const invalidOutputLine = confirmedOutputLines.some((line) =>
+      line.receivedQuantity == null
+      || line.receivedQuantity <= 0
+      || line.receivedQuantity !== line.reportedQuantity
+    );
+    if (outputLines.length > 0 && invalidOutputLine) {
+      appAlert(COPY.invalidQtyTitle, COPY.invalidLineMessage);
+      return;
+    }
+    if (outputLines.length === 0 && (receivedQuantity == null || receivedQuantity <= 0)) {
       appAlert(COPY.invalidQtyTitle, COPY.invalidQtyMessage);
       return;
     }
@@ -134,7 +192,11 @@ export default function WHTransitLedgerScreen() {
     setConfirmingId(item.id);
     try {
       const response = await transitLedgerApiClient.confirm(item.id, {
-        receivedQuantity,
+        receivedQuantity: outputLines.length === 0 ? receivedQuantity ?? undefined : undefined,
+        outputLines: confirmedOutputLines.map(({ reportedQuantity: _reportedQuantity, ...line }) => ({
+          ...line,
+          receivedQuantity: line.receivedQuantity as number,
+        })),
         note: noteById[item.id]?.trim() || undefined,
       });
       if (response.success) {
@@ -166,7 +228,14 @@ export default function WHTransitLedgerScreen() {
     const overTolerance = isOverTolerance(item, variance);
     const name = item.productName || item.batchNumber || item.sourceNumber || item.id;
     const confirming = confirmingId === item.id;
-    const canConfirm = receivedQuantity != null && receivedQuantity > 0 && !confirming;
+    const outputLines = item.outputLines ?? [];
+    const lineValuesValid = outputLines.length > 0 && outputLines.every((line, index) => {
+      const value = parseQuantity(receivedById[outputLineKey(item.id, line, index)]);
+      return value != null && value > 0 && value === Number(line.reportedQuantity);
+    });
+    const canConfirm = (outputLines.length > 0
+      ? lineValuesValid
+      : receivedQuantity != null && receivedQuantity > 0) && !confirming;
 
     return (
       <NeoCard style={styles.card} padding="l" variant="elevated" testID={`transit-card-${item.id}`}>
@@ -191,19 +260,48 @@ export default function WHTransitLedgerScreen() {
           </Text>
         </View>
 
-        <TextInput
-          mode="outlined"
-          label={COPY.receivedQty}
-          placeholder={COPY.receivedPlaceholder}
-          keyboardType="decimal-pad"
-          value={receivedById[item.id] ?? ''}
-          onChangeText={(text) => setReceivedById((prev) => ({ ...prev, [item.id]: text }))}
-          style={styles.input}
-          right={<TextInput.Affix text={item.unit || ''} />}
-          testID={`transit-received-${item.id}`}
-        />
-        {!receivedById[item.id] && (
-          <Text style={styles.inputHint}>{COPY.receivedHint}</Text>
+        {outputLines.length > 0 ? (
+          <View style={styles.outputSection}>
+            <Text style={styles.outputSectionTitle}>{COPY.outputLines}</Text>
+            <Text style={styles.inputHint}>{COPY.outputLineHint}</Text>
+            {outputLines.map((line, index) => {
+              const key = outputLineKey(item.id, line, index);
+              return (
+                <View key={key} style={styles.outputLine}>
+                  <Text style={styles.outputIdentity}>
+                    {COPY.sku}: {line.productTypeId}  ·  {COPY.batch}: {line.batchNumber}
+                  </Text>
+                  <TextInput
+                    mode="outlined"
+                    label={`${COPY.receivedQty} / ${formatQty(line.reportedQuantity, line.unit)}`}
+                    keyboardType="decimal-pad"
+                    value={receivedById[key] ?? ''}
+                    onChangeText={(text) => setReceivedById((prev) => ({ ...prev, [key]: text }))}
+                    style={styles.lineInput}
+                    right={<TextInput.Affix text={line.unit || ''} />}
+                    testID={`transit-received-${item.id}-${index}`}
+                  />
+                </View>
+              );
+            })}
+          </View>
+        ) : (
+          <>
+            <TextInput
+              mode="outlined"
+              label={COPY.receivedQty}
+              placeholder={COPY.receivedPlaceholder}
+              keyboardType="decimal-pad"
+              value={receivedById[item.id] ?? ''}
+              onChangeText={(text) => setReceivedById((prev) => ({ ...prev, [item.id]: text }))}
+              style={styles.input}
+              right={<TextInput.Affix text={item.unit || ''} />}
+              testID={`transit-received-${item.id}`}
+            />
+            {!receivedById[item.id] && (
+              <Text style={styles.inputHint}>{COPY.receivedHint}</Text>
+            )}
+          </>
         )}
 
         <TextInput
@@ -245,7 +343,7 @@ export default function WHTransitLedgerScreen() {
   }, [confirmingId, noteById, receivedById, submitConfirm]);
 
   return (
-    <ScreenWrapper edges={['top']} backgroundColor={theme.colors.background}>
+    <ScreenWrapper edges={['top', 'bottom']} backgroundColor={theme.colors.background}>
       <Appbar.Header elevated={false} style={styles.header}>
         <Appbar.BackAction onPress={() => navigation.goBack()} />
         <Appbar.Content title={COPY.title} subtitle={`${pendingCount} ${COPY.pending}`} />
@@ -383,6 +481,29 @@ const styles = StyleSheet.create({
     fontSize: 12,
     lineHeight: 18,
     marginTop: theme.custom.spacing.xs,
+  },
+  outputSection: {
+    marginTop: theme.custom.spacing.l,
+  },
+  outputSectionTitle: {
+    color: theme.colors.text,
+    fontSize: 15,
+    fontWeight: '700',
+  },
+  outputLine: {
+    marginTop: theme.custom.spacing.m,
+    padding: theme.custom.spacing.m,
+    borderRadius: theme.custom.borderRadius.s,
+    backgroundColor: theme.colors.surfaceVariant,
+  },
+  outputIdentity: {
+    color: theme.colors.text,
+    fontSize: 13,
+    fontWeight: '600',
+  },
+  lineInput: {
+    marginTop: theme.custom.spacing.s,
+    minHeight: 56,
   },
   varianceBox: {
     borderRadius: theme.custom.borderRadius.s,

@@ -29,6 +29,12 @@ public interface BomRecipeService {
     /** Reuse the SKU draft, clone current ACTIVE to a draft, or create an empty v1 draft. */
     BomRecipe ensureDraft(String factoryId, String productTypeId);
 
+    /**
+     * Ensure a draft using an exact saved Workflow revision when the caller has that context.
+     * A non-null revision id is authoritative and may not fall back to another Workflow lineage.
+     */
+    BomRecipe ensureDraft(String factoryId, String productTypeId, Long workflowRevisionId);
+
     /** 创建草稿 (status=DRAFT). 自动生成 recipeCode (BOM-YYYYMMDD-NNN). */
     BomRecipe createRecipe(String factoryId, CreateBomRecipeRequest request);
 

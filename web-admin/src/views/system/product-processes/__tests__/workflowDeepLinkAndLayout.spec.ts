@@ -22,10 +22,10 @@ describe('workflow deep link and workspace layout', () => {
     expect(editorSource).toContain('flex: 1; min-height: 0; height: 0; overflow: hidden;');
   });
 
-  it('keeps mode controls and restores the bottom AI compose row', () => {
+  it('keeps mode controls and the bottom AI compose dock', () => {
     expect(editorSource).toContain('data-testid="canvas-floating-tools"');
     expect(editorSource).toContain('id="workflow-ai-composer"');
-    expect(editorSource).toContain('class="workflow-ai-footer"');
+    expect(editorSource).toContain('class="workflow-ai-dock"');
     expect(editorSource).toContain('<WorkProcessAIChatPanel');
     expect(editorSource).toContain('const aiCollapsed = ref(false)');
     expect(editorSource).toContain(':aria-expanded="!aiCollapsed"');

@@ -155,7 +155,8 @@ public class BomRecipeController {
     public ApiResponse<BomRecipe> ensureDraft(
             @PathVariable String factoryId,
             @Valid @RequestBody EnsureBomDraftRequest request) {
-        return ApiResponse.success(recipeService.ensureDraft(factoryId, request.getProductTypeId()));
+        return ApiResponse.success(recipeService.ensureDraft(
+                factoryId, request.getProductTypeId(), request.getWorkflowRevisionId()));
     }
 
     @RequirePermission({"production:read_write", "rd:read_write", "finance:read_write"})

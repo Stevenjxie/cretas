@@ -2,12 +2,14 @@ package com.cretas.aims.service.bom.impl;
 
 import com.cretas.aims.dto.ProductProcessWorkflowDTO;
 import com.cretas.aims.dto.bom.CreateBomRecipeRequest.BomRecipeItemDTO;
+import com.cretas.aims.dto.bom.UpdateBomRecipeRequest;
 import com.cretas.aims.entity.Factory;
 import com.cretas.aims.entity.ProductProcessWorkflowRevision;
 import com.cretas.aims.entity.ProductType;
 import com.cretas.aims.entity.RawMaterialType;
 import com.cretas.aims.entity.bom.BomRecipe;
 import com.cretas.aims.entity.bom.BomRecipeItem;
+import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.repository.FactoryRepository;
 import com.cretas.aims.repository.ProductTypeRepository;
 import com.cretas.aims.repository.RawMaterialTypeRepository;
@@ -55,6 +57,7 @@ import java.util.concurrent.Future;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.Mockito.clearInvocations;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -144,6 +147,12 @@ class BomRecipeDraftLifecycleJpaTest {
                 });
         when(materialUomConverter.isWriteUnitCompatible(anyString(), anyString())).thenReturn(true);
         when(bomWorkflowRevisionService.autoBindUniqueDraft(anyString(), org.mockito.ArgumentMatchers.any(BomRecipe.class)))
+                .thenAnswer(invocation -> workflowBinding(invocation.getArgument(1)));
+        when(bomWorkflowRevisionService.bindExactRevision(
+                anyString(), org.mockito.ArgumentMatchers.any(BomRecipe.class), anyLong()))
+                .thenAnswer(invocation -> workflowBinding(invocation.getArgument(1)));
+        when(bomWorkflowRevisionService.resolveExactBinding(
+                anyString(), org.mockito.ArgumentMatchers.any(BomRecipe.class), anyLong()))
                 .thenAnswer(invocation -> workflowBinding(invocation.getArgument(1)));
         when(bomWorkflowRevisionService.resolvePinnedGraph(anyString(), org.mockito.ArgumentMatchers.any(BomRecipe.class)))
                 .thenAnswer(invocation -> workflowBinding(invocation.getArgument(1)).graph());
@@ -259,8 +268,8 @@ class BomRecipeDraftLifecycleJpaTest {
     }
 
     @Test
-    @DisplayName("editing a generated input changes its main material without losing the stable Workflow slot")
-    void editsSkeletonMainMaterialAndKeepsStableIdentity() {
+    @DisplayName("editing a generated input cannot disguise another material with the old Workflow slot")
+    void rejectsChangingWorkflowSlotMainMaterial() {
         ProductType product = saveProduct("EDIT-SLOT", "盒", new BigDecimal("500"));
         BomRecipe draft = service.ensureDraft(product.getFactoryId(), product.getId());
         BomRecipeItem skeleton =
@@ -279,15 +288,196 @@ class BomRecipeDraftLifecycleJpaTest {
         request.setWorkflowEdgeId(skeleton.getWorkflowEdgeId());
         request.setCostScope(skeleton.getCostScope());
 
-        BomRecipeItem updated =
-                service.updateItem(product.getFactoryId(), skeleton.getId(), request);
+        assertThatThrownBy(() ->
+                service.updateItem(product.getFactoryId(), skeleton.getId(), request))
+                .isInstanceOfSatisfying(BusinessException.class, error ->
+                        assertThat(error.getErrorCode())
+                                .isEqualTo("BOM_WORKFLOW_INPUT_SLOT_MATERIAL_MISMATCH"));
+        assertThat(itemRepository.findById(skeleton.getId()))
+                .hasValueSatisfying(saved ->
+                        assertThat(saved.getMaterialTypeId())
+                                .isEqualTo("RAW-WF-" + product.getId()));
+    }
 
-        assertThat(updated.getMaterialTypeId()).isEqualTo(replacement.getId());
-        assertThat(updated.getMaterialName()).isEqualTo("替代主料");
-        assertThat(updated.getWorkflowMaterialNodeId()).isEqualTo("raw-input");
-        assertThat(updated.getWorkflowInputPortId()).isEqualTo("input");
-        assertThat(updated.getWorkflowEdgeId()).isEqualTo("edge-input");
-        assertThat(updated.getCostScope()).isEqualTo("SHARED");
+    @Test
+    @DisplayName("full payload update merges the Workflow skeleton instead of deleting and recreating it")
+    void fullPayloadUpdateMergesWorkflowSkeleton() {
+        ProductType product = saveProduct("MERGE-SLOT", "盒", new BigDecimal("500"));
+        BomRecipe draft = service.ensureDraft(product.getFactoryId(), product.getId());
+        BomRecipeItem skeleton =
+                itemRepository.findByRecipeIdOrderBySortOrderAsc(draft.getId()).getFirst();
+
+        BomRecipeItemDTO row = new BomRecipeItemDTO();
+        row.setMaterialTypeId(skeleton.getMaterialTypeId());
+        row.setMaterialCategory("RAW");
+        row.setUnit("kg");
+        row.setStandardQuantity(new BigDecimal("2.5"));
+        UpdateBomRecipeRequest request = new UpdateBomRecipeRequest();
+        request.setItems(List.of(row));
+
+        service.updateRecipe(product.getFactoryId(), draft.getId(), request);
+
+        assertThat(itemRepository.findByRecipeIdOrderBySortOrderAsc(draft.getId()))
+                .singleElement()
+                .satisfies(saved -> {
+                    assertThat(saved.getId()).isEqualTo(skeleton.getId());
+                    assertThat(saved.getWorkflowMaterialNodeId()).isEqualTo("raw-input");
+                    assertThat(saved.getWorkflowInputPortId()).isEqualTo("input");
+                    assertThat(saved.getWorkflowEdgeId()).isEqualTo("edge-input");
+                    assertThat(saved.getStandardQuantity()).isEqualByComparingTo("2.5");
+                });
+    }
+
+    @Test
+    @DisplayName("required Workflow input cannot be deleted from a BOM draft")
+    void requiredWorkflowInputCannotBeDeleted() {
+        ProductType product = saveProduct("DELETE-SLOT", "盒", new BigDecimal("500"));
+        BomRecipe draft = service.ensureDraft(product.getFactoryId(), product.getId());
+        BomRecipeItem skeleton =
+                itemRepository.findByRecipeIdOrderBySortOrderAsc(draft.getId()).getFirst();
+
+        assertThatThrownBy(() ->
+                service.deleteItem(product.getFactoryId(), skeleton.getId()))
+                .isInstanceOfSatisfying(BusinessException.class, error ->
+                        assertThat(error.getErrorCode())
+                                .isEqualTo("BOM_WORKFLOW_REQUIRED_INPUT_DELETE_FORBIDDEN"));
+        assertThat(itemRepository.findById(skeleton.getId())).isPresent();
+    }
+
+    @Test
+    @DisplayName("partial Workflow slot identity cannot bypass required input deletion protection")
+    void partialWorkflowIdentityCannotBeDeleted() {
+        ProductType product = saveProduct("DELETE-PARTIAL-SLOT", "盒", new BigDecimal("500"));
+        BomRecipe draft = service.ensureDraft(product.getFactoryId(), product.getId());
+        BomRecipeItem skeleton =
+                itemRepository.findByRecipeIdOrderBySortOrderAsc(draft.getId()).getFirst();
+        skeleton.setWorkflowInputPortId(null);
+        skeleton.setWorkflowEdgeId(null);
+        itemRepository.saveAndFlush(skeleton);
+
+        assertThatThrownBy(() ->
+                service.deleteItem(product.getFactoryId(), skeleton.getId()))
+                .isInstanceOfSatisfying(BusinessException.class, error ->
+                        assertThat(error.getErrorCode())
+                                .isEqualTo("BOM_WORKFLOW_INPUT_SLOT_IDENTITY_INCOMPLETE"));
+        assertThat(itemRepository.findById(skeleton.getId())).isPresent();
+    }
+
+    @Test
+    @DisplayName("zero-tuple RAW row that uniquely matches a pinned slot cannot be deleted")
+    void zeroTupleRequiredWorkflowInputCannotBeDeleted() {
+        ProductType product = saveProduct("DELETE-ZERO-SLOT", "盒", new BigDecimal("500"));
+        BomRecipe draft = service.ensureDraft(product.getFactoryId(), product.getId());
+        BomRecipeItem skeleton =
+                itemRepository.findByRecipeIdOrderBySortOrderAsc(draft.getId()).getFirst();
+        skeleton.setWorkflowMaterialNodeId(null);
+        skeleton.setWorkflowInputPortId(null);
+        skeleton.setWorkflowEdgeId(null);
+        itemRepository.saveAndFlush(skeleton);
+
+        assertThatThrownBy(() ->
+                service.deleteItem(product.getFactoryId(), skeleton.getId()))
+                .isInstanceOfSatisfying(BusinessException.class, error ->
+                        assertThat(error.getErrorCode())
+                                .isEqualTo("BOM_WORKFLOW_REQUIRED_INPUT_DELETE_FORBIDDEN"));
+        assertThat(itemRepository.findById(skeleton.getId())).isPresent();
+    }
+
+    @Test
+    @DisplayName("same-revision ensure repairs a replacement row from its unique deleted predecessor")
+    void sameRevisionEnsureRepairsUniqueDeletedPredecessor() {
+        ProductType product = saveProduct("ENSURE-RECOVER-SLOT", "袋", new BigDecimal("500"));
+        BomRecipe draft = service.ensureDraft(product.getFactoryId(), product.getId());
+        BomRecipeItem predecessor =
+                itemRepository.findByRecipeIdOrderBySortOrderAsc(draft.getId()).getFirst();
+        predecessor.softDelete();
+        itemRepository.saveAndFlush(predecessor);
+
+        BomRecipeItem replacement = BomRecipeItem.builder()
+                .recipeId(draft.getId())
+                .factoryId(product.getFactoryId())
+                .materialTypeId(predecessor.getMaterialTypeId())
+                .materialName(predecessor.getMaterialName())
+                .unit(predecessor.getUnit())
+                .standardQuantity(BigDecimal.ONE)
+                .yieldRate(new BigDecimal("100"))
+                .actualQuantity(BigDecimal.ONE)
+                .unitPrice(BigDecimal.ONE)
+                .priceUnit(predecessor.getUnit())
+                .quantityToPriceFactor(BigDecimal.ONE)
+                .materialCategory("RAW")
+                .sortOrder(0)
+                .isOptional(false)
+                .perPortion(false)
+                .build();
+        replacement = itemRepository.saveAndFlush(replacement);
+
+        BomRecipe reopened =
+                service.ensureDraft(product.getFactoryId(), product.getId(), draft.getWorkflowRevisionId());
+
+        assertThat(reopened.getStatus()).isEqualTo(BomRecipe.Status.DRAFT);
+        assertThat(itemRepository.findById(replacement.getId()))
+                .hasValueSatisfying(saved -> {
+                    assertThat(saved.getWorkflowMaterialNodeId()).isEqualTo("raw-input");
+                    assertThat(saved.getWorkflowInputPortId()).isEqualTo("input");
+                    assertThat(saved.getWorkflowEdgeId()).isEqualTo("edge-input");
+                });
+    }
+
+    @Test
+    @DisplayName("same-revision activation repairs a replacement row from its unique deleted predecessor")
+    void activationRepairsUniqueDeletedPredecessor() {
+        ProductType product = saveProduct("RECOVER-SLOT", "袋", new BigDecimal("500"));
+        BomRecipe draft = service.ensureDraft(product.getFactoryId(), product.getId());
+        BomRecipeItem predecessor =
+                itemRepository.findByRecipeIdOrderBySortOrderAsc(draft.getId()).getFirst();
+        predecessor.softDelete();
+        itemRepository.saveAndFlush(predecessor);
+
+        BomRecipeItem replacement = BomRecipeItem.builder()
+                .recipeId(draft.getId())
+                .factoryId(product.getFactoryId())
+                .materialTypeId(predecessor.getMaterialTypeId())
+                .materialName(predecessor.getMaterialName())
+                .unit(predecessor.getUnit())
+                .standardQuantity(BigDecimal.ONE)
+                .yieldRate(new BigDecimal("100"))
+                .actualQuantity(BigDecimal.ONE)
+                .unitPrice(BigDecimal.ONE)
+                .priceUnit(predecessor.getUnit())
+                .quantityToPriceFactor(BigDecimal.ONE)
+                .materialCategory("RAW")
+                .sortOrder(0)
+                .isOptional(false)
+                .perPortion(false)
+                .build();
+        replacement = itemRepository.saveAndFlush(replacement);
+
+        BomRecipe activated =
+                service.activateRecipe(product.getFactoryId(), draft.getId(), 1309L);
+
+        assertThat(activated.getStatus()).isEqualTo(BomRecipe.Status.ACTIVE);
+        assertThat(itemRepository.findById(replacement.getId()))
+                .hasValueSatisfying(saved -> {
+                    assertThat(saved.getWorkflowMaterialNodeId()).isEqualTo("raw-input");
+                    assertThat(saved.getWorkflowInputPortId()).isEqualTo("input");
+                    assertThat(saved.getWorkflowEdgeId()).isEqualTo("edge-input");
+                });
+    }
+
+    @Test
+    @DisplayName("Workflow canvas exact revision is authoritative when creating the first draft")
+    void exactWorkflowRevisionIsAuthoritative() {
+        ProductType product = saveProduct("EXACT-REV", "盒", new BigDecimal("500"));
+
+        BomRecipe draft =
+                service.ensureDraft(product.getFactoryId(), product.getId(), 100L);
+
+        assertThat(draft.getWorkflowRevisionId()).isEqualTo(100L);
+        verify(bomWorkflowRevisionService).bindExactRevision(
+                product.getFactoryId(), draft, 100L);
+        verify(bomWorkflowRevisionService, org.mockito.Mockito.never())
+                .autoBindUniqueDraft(anyString(), org.mockito.ArgumentMatchers.any(BomRecipe.class));
     }
 
     @Test

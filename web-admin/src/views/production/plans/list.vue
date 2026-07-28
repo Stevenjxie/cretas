@@ -35,6 +35,7 @@ import {
   getProductionDocumentTrace,
 } from '@/api/productionPlan';
 import type {
+  ProductionOutputLine,
   ProductionPlanMaterialAdvisory,
   ProductionSettlementStatus,
   WipInventoryItem,
@@ -1648,6 +1649,8 @@ interface SettlementRawConsumptionForm {
   batchNumber?: string | null;
   unit?: string | null;
   warehouseId?: string | null;
+  workflowMaterialNodeId?: string | null;
+  workflowInputPortId?: string | null;
   quantity: number;
   note: string;
   source?: 'PROCESS_REPORT' | 'MANUAL';
@@ -1762,6 +1765,8 @@ interface SettlementPrefillResponse {
       batchNumber?: string | null;
       unit?: string | null;
       warehouseId?: string | null;
+      workflowMaterialNodeId?: string | null;
+      workflowInputPortId?: string | null;
       quantity?: number | null;
       note?: string | null;
     }> | null;
@@ -2112,6 +2117,8 @@ function buildRawConsumptionPayload() {
       quantity: line.quantity,
       unit: line.unit || materialBatchUnit(batch),
       warehouseId: line.warehouseId || batch?.warehouseId || null,
+      workflowMaterialNodeId: line.workflowMaterialNodeId || null,
+      workflowInputPortId: line.workflowInputPortId || null,
       note: line.note || null,
     };
   });
@@ -2202,6 +2209,12 @@ async function applySettlementPrefill(row: TableRow) {
           batchNumber: line.batchNumber ? String(line.batchNumber) : null,
           unit: line.unit ? String(line.unit) : null,
           warehouseId: line.warehouseId ? String(line.warehouseId) : null,
+          workflowMaterialNodeId: line.workflowMaterialNodeId
+            ? String(line.workflowMaterialNodeId)
+            : null,
+          workflowInputPortId: line.workflowInputPortId
+            ? String(line.workflowInputPortId)
+            : null,
           quantity: qty,
           note: line.note || '自动带入自逐道报工',
           source: 'PROCESS_REPORT',
@@ -2385,6 +2398,7 @@ const receiptSettlement = ref<ProductionSettlementStatus | null>(null);
 const receiptForm = ref({
   receivedQuantity: 0,
   quantityUnit: '',
+  outputLines: [] as Array<ProductionOutputLine & { receivedQuantity: number }>,
   varianceReason: '',
   otherVarianceReason: '',
   responsibilitySide: '',
@@ -2465,6 +2479,7 @@ const receiptPlanNumber = computed(() => {
 const receiptReportedQuantity = computed(() =>
   Number(receiptSettlement.value?.actualFinishedQuantity || 0)
 );
+const receiptHasOutputLines = computed(() => receiptForm.value.outputLines.length > 0);
 const receiptReceivedQuantity = computed(() =>
   Number(receiptForm.value.receivedQuantity || 0)
 );
@@ -2491,6 +2506,17 @@ const receiptNeedsReason = computed(() => {
 });
 const receiptSubmitDisabledReason = computed(() => {
   if (!receiptSettlement.value) return '请先加载生产结单状态';
+  if (receiptHasOutputLines.value) {
+    const invalidIndex = receiptForm.value.outputLines.findIndex((line) => {
+      const received = Number(line.receivedQuantity || 0);
+      const reported = Number(line.reportedQuantity || 0);
+      return received <= 0 || received !== reported;
+    });
+    if (invalidIndex >= 0) {
+      return `第 ${invalidIndex + 1} 行实收必须与生产报产一致；如有差异，请先退回生产修正报工`;
+    }
+    return '';
+  }
   if (!receiptReceivedQuantity.value || receiptReceivedQuantity.value <= 0) return '请输入仓库实际收到数量';
   if (receiptReceivedQuantity.value > receiptReportedQuantity.value) return '仓库实收不能超过生产报产，请先让生产修正结单';
   if (receiptNeedsReason.value && !receiptForm.value.varianceReason) return '超出容差的差异必须选择原因';
@@ -2545,11 +2571,18 @@ async function handleWarehouseReceipt(row: TableRow) {
       return;
     }
     receiptSettlement.value = res.data;
+    const outputLines = (res.data.outputLines || []).map((line) => ({
+      ...line,
+      receivedQuantity: Number(line.receivedQuantity ?? line.reportedQuantity ?? 0),
+    }));
     receiptForm.value = {
-      receivedQuantity: Number(res.data.actualFinishedQuantity || 0),
+      receivedQuantity: outputLines.length ? 0 : Number(res.data.actualFinishedQuantity || 0),
       // API settlement is the quantity contract. Keep canonical payload (box/case/slice)
       // while rendering a localized label in the dialog.
-      quantityUnit: canonicalUnitCode(res.data.quantityUnit || row.unit || row.quantityUnit),
+      quantityUnit: outputLines.length
+        ? ''
+        : canonicalUnitCode(res.data.quantityUnit || row.unit || row.quantityUnit),
+      outputLines,
       varianceReason: '',
       otherVarianceReason: '',
       responsibilitySide: '',
@@ -2576,10 +2609,20 @@ async function submitWarehouseReceipt() {
       : receiptForm.value.varianceReason;
     const res = await confirmProductionWarehouseReceipt(factoryId.value, String(receiptRow.value.id), {
       idempotencyKey: receiptIdempotencyKey.value,
-      receivedQuantity: receiptReceivedQuantity.value,
-      quantityUnit: receiptUnit.value,
-      varianceReason: varianceReason || null,
-      responsibilitySide: receiptNeedsReason.value ? receiptForm.value.responsibilitySide : null,
+      receivedQuantity: receiptHasOutputLines.value ? null : receiptReceivedQuantity.value,
+      quantityUnit: receiptHasOutputLines.value ? null : receiptUnit.value,
+      outputLines: receiptHasOutputLines.value
+        ? receiptForm.value.outputLines.map((line) => ({
+            productTypeId: line.productTypeId,
+            batchNumber: line.reportedBatchNumber,
+            receivedQuantity: Number(line.receivedQuantity),
+            quantityUnit: canonicalUnitCode(line.quantityUnit),
+          }))
+        : undefined,
+      varianceReason: receiptHasOutputLines.value ? null : varianceReason || null,
+      responsibilitySide: receiptHasOutputLines.value
+        ? null
+        : receiptNeedsReason.value ? receiptForm.value.responsibilitySide : null,
       varianceNote: receiptForm.value.varianceNote || null,
     });
     if (res.success) {
@@ -5229,7 +5272,7 @@ function guardProductionPlanAi(params: Record<string, unknown>) {
       append-to-body
     >
       <el-form v-loading="receiptLoading" label-width="124px" class="settlement-form">
-        <div class="settlement-context">
+        <div v-if="!receiptHasOutputLines" class="settlement-context">
           <div>
             <div class="settlement-context-label">计划单号</div>
             <div class="settlement-context-value">{{ receiptPlanNumber || '-' }}</div>
@@ -5249,6 +5292,44 @@ function guardProductionPlanAi(params: Record<string, unknown>) {
         </div>
 
         <el-alert
+          v-if="receiptHasOutputLines"
+          title="本计划包含多个终端产出，仓库按 SKU、批次和各自单位逐行确认；不同单位不会相加。当前如有实收差异，请先退回生产修正报工。"
+          type="info"
+          show-icon
+          :closable="false"
+          style="margin: 12px 0"
+        />
+        <div v-if="receiptHasOutputLines" class="receipt-output-lines">
+          <div
+            v-for="(line, index) in receiptForm.outputLines"
+            :key="`${line.productTypeId}:${line.reportedBatchNumber}`"
+            class="receipt-output-line"
+          >
+            <div class="receipt-output-line__identity">
+              <span>产出 {{ index + 1 }}</span>
+              <strong>{{ line.productTypeId }}</strong>
+              <small>批次 {{ line.reportedBatchNumber }}</small>
+            </div>
+            <div class="receipt-output-line__reported">
+              <span>生产报产</span>
+              <strong>{{ line.reportedQuantity }} {{ displayUnit(line.quantityUnit) }}</strong>
+            </div>
+            <el-form-item label="仓库实收" required class="receipt-output-line__input">
+              <el-input-number
+                v-model="line.receivedQuantity"
+                :min="0"
+                :max="Number(line.reportedQuantity)"
+                :precision="4"
+                :step="0.0001"
+                style="width: 100%"
+              />
+              <span class="receipt-output-line__unit">{{ displayUnit(line.quantityUnit) }}</span>
+            </el-form-item>
+          </div>
+        </div>
+
+        <el-alert
+          v-else
           :title="receiptUsesInterimFinishedGoods
             ? '存货生产小结已生成唯一成品库存；本步骤仅确认仓库实收，不会重复创建成品批次。'
             : '生产结单后不直接入成品库存；仓库确认实收后才入库。实收短少超过容差会生成中转挂账，待责任归属清账。'"
@@ -5258,6 +5339,7 @@ function guardProductionPlanAi(params: Record<string, unknown>) {
           style="margin: 12px 0"
         />
 
+        <template v-if="!receiptHasOutputLines">
         <el-form-item label="仓库实收" required>
           <el-input-number
             v-model="receiptForm.receivedQuantity"
@@ -5339,6 +5421,7 @@ function guardProductionPlanAi(params: Record<string, unknown>) {
             />
           </el-select>
         </el-form-item>
+        </template>
         <el-form-item label="备注">
           <el-input
             v-model="receiptForm.varianceNote"
@@ -6220,6 +6303,64 @@ function guardProductionPlanAi(params: Record<string, unknown>) {
   color: var(--text-color-secondary, #909399);
   font-size: 12px;
   line-height: 1.5;
+}
+
+.receipt-output-lines {
+  display: grid;
+  gap: 12px;
+  margin-bottom: 14px;
+}
+
+.receipt-output-line {
+  display: grid;
+  grid-template-columns: minmax(150px, 1.2fr) minmax(120px, 0.8fr) minmax(220px, 1.4fr);
+  align-items: center;
+  gap: 14px;
+  padding: 14px;
+  border: 1px solid var(--border-color-lighter, #dfe6ef);
+  border-radius: 10px;
+  background: #f8fafc;
+}
+
+.receipt-output-line__identity,
+.receipt-output-line__reported {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 4px;
+
+  span,
+  small {
+    color: var(--text-color-secondary, #909399);
+    font-size: 12px;
+  }
+
+  strong {
+    overflow: hidden;
+    color: var(--text-color-primary, #303133);
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+}
+
+.receipt-output-line__input {
+  margin-bottom: 0;
+
+  :deep(.el-form-item__content) {
+    flex-wrap: nowrap;
+    gap: 8px;
+  }
+}
+
+.receipt-output-line__unit {
+  flex: 0 0 auto;
+  color: var(--text-color-regular, #606266);
+}
+
+@media (max-width: 760px) {
+  .receipt-output-line {
+    grid-template-columns: 1fr;
+  }
 }
 
 .settlement-loss-guide {

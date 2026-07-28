@@ -3,14 +3,14 @@ package com.cretas.aims.service.workflow.impl;
 import com.cretas.aims.dto.ProductProcessWorkflowDTO;
 import com.cretas.aims.dto.WorkProcessTaskDTO;
 import com.cretas.aims.dto.workflow.ProductionWorkflowRuntimeDTO;
-import com.cretas.aims.entity.ProductProcessWorkflow;
+import com.cretas.aims.entity.ProductProcessWorkflowRevision;
 import com.cretas.aims.entity.ProductionBatch;
 import com.cretas.aims.entity.workflow.ProductionWorkflowInstance;
 import com.cretas.aims.entity.workflow.WorkflowTaskPort;
 import com.cretas.aims.entity.workprocess.WorkProcessTask;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.repository.FactoryRepository;
-import com.cretas.aims.repository.ProductProcessWorkflowRepository;
+import com.cretas.aims.repository.ProductProcessWorkflowRevisionRepository;
 import com.cretas.aims.repository.ProductTypeRepository;
 import com.cretas.aims.repository.ProductionBatchRepository;
 import com.cretas.aims.repository.workflow.ProductionWorkflowInstanceRepository;
@@ -46,7 +46,7 @@ public class ProductProcessWorkflowRuntimeServiceImpl
     private final FactoryRepository factoryRepository;
     private final ProductionBatchRepository batchRepository;
     private final ProductTypeRepository productTypeRepository;
-    private final ProductProcessWorkflowRepository workflowRepository;
+    private final ProductProcessWorkflowRevisionRepository revisionRepository;
     private final ProductionWorkflowInstanceRepository instanceRepository;
     private final WorkProcessTaskRepository taskRepository;
     private final WorkflowTaskPortRepository portRepository;
@@ -61,7 +61,7 @@ public class ProductProcessWorkflowRuntimeServiceImpl
             FactoryRepository factoryRepository,
             ProductionBatchRepository batchRepository,
             ProductTypeRepository productTypeRepository,
-            ProductProcessWorkflowRepository workflowRepository,
+            ProductProcessWorkflowRevisionRepository revisionRepository,
             ProductionWorkflowInstanceRepository instanceRepository,
             WorkProcessTaskRepository taskRepository,
             WorkflowTaskPortRepository portRepository,
@@ -73,7 +73,7 @@ public class ProductProcessWorkflowRuntimeServiceImpl
         this.factoryRepository = factoryRepository;
         this.batchRepository = batchRepository;
         this.productTypeRepository = productTypeRepository;
-        this.workflowRepository = workflowRepository;
+        this.revisionRepository = revisionRepository;
         this.instanceRepository = instanceRepository;
         this.taskRepository = taskRepository;
         this.portRepository = portRepository;
@@ -107,19 +107,53 @@ public class ProductProcessWorkflowRuntimeServiceImpl
                 || batch.getSelectedWorkflowVersion() == null) {
             throw conflict(
                     "WORKFLOW_BATCH_SELECTION_INVALID",
-                    "The batch Workflow selection is incomplete");
+                     "The batch Workflow selection is incomplete");
         }
-        ProductProcessWorkflow workflow = workflowRepository
-                .lockByIdAndFactoryId(batch.getSelectedWorkflowId(), factoryId)
-                .filter(candidate -> candidate.getStatus() == ProductProcessWorkflow.Status.PUBLISHED)
+        if (batch.getSelectedWorkflowRevisionId() == null
+                || batch.getSelectedWorkflowRevisionHash() == null
+                || batch.getSelectedWorkflowRevisionHash().isBlank()
+                || batch.getSelectedBomFamilyId() == null
+                || batch.getSelectedBomFamilyId().isBlank()
+                || batch.getSelectedBomRecipeIdsByProduct() == null
+                || batch.getSelectedBomRecipeIdsByProduct().isEmpty()
+                || batch.getSelectedBomVersionsByProduct() == null
+                || !batch.getSelectedBomVersionsByProduct().keySet()
+                        .equals(batch.getSelectedBomRecipeIdsByProduct().keySet())
+                || batch.getWorkflowOutputUnitsByProduct() == null
+                || !batch.getWorkflowOutputUnitsByProduct().keySet()
+                        .equals(batch.getSelectedBomRecipeIdsByProduct().keySet())) {
+            throw conflict(
+                    "WORKFLOW_BATCH_AUTHORITY_INCOMPLETE",
+                    "The batch does not contain the exact Workflow revision and BOM family authority");
+        }
+        List<String> targetFinishedGoodIds = batch.getTargetFinishedGoodIds() == null
+                ? List.of() : batch.getTargetFinishedGoodIds().stream()
+                        .filter(value -> value != null && !value.isBlank())
+                        .distinct()
+                        .toList();
+        if (!targetFinishedGoodIds.isEmpty()
+                && !batch.getSelectedBomRecipeIdsByProduct().keySet()
+                        .equals(new java.util.LinkedHashSet<>(targetFinishedGoodIds))) {
+            throw conflict(
+                    "WORKFLOW_BATCH_TERMINAL_AUTHORITY_INVALID",
+                    "The batch terminal set does not match its pinned BOM output recipes");
+        }
+        ProductProcessWorkflowRevision revision = revisionRepository
+                .findByIdAndFactoryId(batch.getSelectedWorkflowRevisionId(), factoryId)
+                .filter(candidate -> candidate.getStatus()
+                        == ProductProcessWorkflowRevision.Status.PUBLISHED)
+                .filter(candidate -> batch.getSelectedWorkflowId()
+                        .equals(candidate.getWorkflowId()))
                 .filter(candidate -> batch.getSelectedWorkflowVersion()
                         .equals(candidate.getDefinitionVersion()))
+                .filter(candidate -> batch.getSelectedWorkflowRevisionHash()
+                        .equals(candidate.getRevisionHash()))
                 .orElseThrow(() -> conflict(
                         "WORKFLOW_BATCH_SELECTION_TARGET_INVALID",
-                        "The batch no longer references the exact published Workflow version"));
+                        "The batch no longer references its exact immutable published Workflow revision"));
         // 2B.2: 多产出已放开 — 编译产出的全部 OUTPUT 端口都会被持久化 (下方 portsFor 循环),
         // clerk 报工侧按端口分解为 N 个单产出物料化 (原 B1 single-output guard 移除)。
-        ProductProcessWorkflowDTO runtimeDefinition = toDefinition(workflow);
+        ProductProcessWorkflowDTO runtimeDefinition = toDefinition(revision);
         unitValidator.validateForPublish(factoryId, runtimeDefinition);
         CompiledProductProcessWorkflow compiled = compiler.compile(runtimeDefinition);
         ProductionWorkflowInstance instance = instanceRepository.save(
@@ -127,8 +161,8 @@ public class ProductProcessWorkflowRuntimeServiceImpl
                         factoryId,
                         batch.getId(),
                         productTypeId,
-                        workflow.getId(),
-                        workflow.getDefinitionVersion(),
+                        revision.getWorkflowId(),
+                        revision.getDefinitionVersion(),
                         compiled.nodesJson(),
                         compiled.edgesJson(),
                         LocalDateTime.now()));
@@ -235,15 +269,14 @@ public class ProductProcessWorkflowRuntimeServiceImpl
                 .toList();
     }
 
-    private ProductProcessWorkflowDTO toDefinition(ProductProcessWorkflow entity) {
+    private ProductProcessWorkflowDTO toDefinition(ProductProcessWorkflowRevision entity) {
         ProductProcessWorkflowDTO definition = new ProductProcessWorkflowDTO();
-        definition.setId(entity.getId());
+        definition.setId(entity.getWorkflowId());
         definition.setFactoryId(entity.getFactoryId());
         definition.setProductTypeId(entity.getProductTypeId());
         definition.setSchemaVersion(entity.getSchemaVersion());
         definition.setStatus(entity.getStatus().name());
         definition.setVersion(entity.getDefinitionVersion());
-        definition.setLockVersion(entity.getLockVersion());
         try {
             definition.setNodes(objectMapper.readValue(
                     entity.getNodesJson(),

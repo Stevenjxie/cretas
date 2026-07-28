@@ -11,6 +11,7 @@ import com.cretas.aims.entity.bom.BomRecipe;
 import com.cretas.aims.entity.bom.BomRecipeItem;
 import com.cretas.aims.entity.bom.BomVersion;
 import com.cretas.aims.entity.bom.EngineeringChangeNotice;
+import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.repository.RawMaterialTypeRepository;
 import com.cretas.aims.repository.bom.BomRecipeItemRepository;
 import com.cretas.aims.repository.bom.BomRecipeRepository;
@@ -195,6 +196,17 @@ public class BomBatchOperationServiceImpl implements BomBatchOperationService {
 
         for (BomRecipe recipe : recipes) {
             List<BomRecipeItem> items = loadItems(recipe);
+            boolean deletesWorkflowSlot = items.stream()
+                    .filter(item -> req.getMaterialId().equals(item.getMaterialTypeId()))
+                    .anyMatch(this::hasWorkflowIdentity);
+            if (deletesWorkflowSlot) {
+                throw new BusinessException(
+                        409,
+                        "批量删除不能移除 Workflow 必需投入槽")
+                        .withCode("BOM_WORKFLOW_REQUIRED_INPUT_DELETE_FORBIDDEN")
+                        .withHint("请先在 Workflow 中删除对应投入并保存新修订")
+                        .withHintTarget("workflow");
+            }
             List<BomRecipeItem> remaining = items.stream()
                     .filter(i -> !req.getMaterialId().equals(i.getMaterialTypeId()))
                     .toList();
@@ -251,6 +263,14 @@ public class BomBatchOperationServiceImpl implements BomBatchOperationService {
         List<String> warnings = new ArrayList<>();
         String category = req.getMaterialCategory() != null ? req.getMaterialCategory() : "RAW";
         boolean raw = "RAW".equalsIgnoreCase(category);
+        if (raw) {
+            throw new BusinessException(
+                    409,
+                    "批量新增不能创建无 Workflow 投入槽身份的原料行")
+                    .withCode("BOM_WORKFLOW_RAW_INPUT_SLOT_REQUIRED")
+                    .withHint("请从 BOM 工作区的系统投入槽配置主料或替代料")
+                    .withHintTarget("workflow");
+        }
         BigDecimal standardQuantity = raw ? null : req.getStandardQuantity();
         if (!raw && (standardQuantity == null || standardQuantity.compareTo(BigDecimal.ZERO) <= 0)) {
             throw new IllegalArgumentException("非原料 BOM 的每成品用量必须大于 0");
@@ -436,7 +456,18 @@ public class BomBatchOperationServiceImpl implements BomBatchOperationService {
         snap.put("isOptional", item.getIsOptional());
         snap.put("substituteGroup", item.getSubstituteGroup());
         snap.put("remark", item.getRemark());
+        snap.put("workflowMaterialNodeId", item.getWorkflowMaterialNodeId());
+        snap.put("workflowInputPortId", item.getWorkflowInputPortId());
+        snap.put("workflowEdgeId", item.getWorkflowEdgeId());
+        snap.put("costScope", item.getCostScope());
+        snap.put("costScopeKey", item.getCostScopeKey());
         return snap;
+    }
+
+    private boolean hasWorkflowIdentity(BomRecipeItem item) {
+        return item.getWorkflowMaterialNodeId() != null
+                || item.getWorkflowInputPortId() != null
+                || item.getWorkflowEdgeId() != null;
     }
 
     private Map<String, Object> buildBatchImpactScope(String operation, String materialId,
