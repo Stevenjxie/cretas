@@ -1,5 +1,6 @@
 import { flushPromises, shallowMount } from '@vue/test-utils';
 import { ElMessageBox } from 'element-plus';
+import { nextTick } from 'vue';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import ProductProcessWorkflowEditor from '../ProductProcessWorkflowEditor.vue';
 import type {
@@ -80,9 +81,11 @@ describe('ProductProcessWorkflowEditor activation controls', () => {
       success: true,
       data: url.includes('/bom/recipes/by-product/')
         ? {
-          id: 'R-1',
-          version: 1,
-          workflowRevisionId: 71,
+           id: 'R-1',
+           version: 1,
+           workflowId: 44,
+           workflowDefinitionVersion: 1,
+           workflowRevisionId: 71,
           workflowRevisionHash: 'revision-current',
           items: [{ id: 1, materialTypeId: 'RAW', materialName: 'Raw', unit: 'kg' }],
         }
@@ -196,14 +199,20 @@ describe('ProductProcessWorkflowEditor activation controls', () => {
     current.revisionId = 222;
     current.revisionHash = 'revision-222';
     apiMocks.getProductProcessWorkflow.mockResolvedValue({ success: true, data: current });
+    apiMocks.getProductProcessWorkflowActivation.mockResolvedValue({
+      success: true,
+      data: activation('PT-A', 44, 1),
+    });
     apiMocks.get.mockImplementation((url: string) => Promise.resolve({
       success: true,
       data: url.includes('/bom/recipes/by-product/')
         ? {
           id: 'BOM-V1',
-          version: 1,
-          status: 'ACTIVE',
-          workflowRevisionId: 175,
+           version: 1,
+           status: 'ACTIVE',
+           workflowId: 44,
+           workflowDefinitionVersion: 1,
+           workflowRevisionId: 175,
           workflowRevisionHash: 'revision-175',
           items: [{ materialTypeId: 'RAW', materialName: 'Raw', unit: 'kg' }],
         }
@@ -219,15 +228,16 @@ describe('ProductProcessWorkflowEditor activation controls', () => {
     const wrapper = mountEditor();
     await flushPromises();
     const vm = wrapper.vm as unknown as {
-      bomRevisionMismatchProducts: Array<{ id: string; name: string }>;
+      bomProductionMismatchProducts: Array<{ id: string; name: string }>;
       bomDrawerVisible: boolean;
       bomDrawerProductTypeId: string;
       publishWorkflow: () => Promise<void>;
     };
 
-    expect(vm.bomRevisionMismatchProducts).toEqual([{ id: 'PT-A', name: 'Finished' }]);
-    expect(wrapper.get('[data-testid="workflow-bom-revision-alert"]').text())
-      .toContain('无需先进入 BOM 手工升级');
+    expect(vm.bomProductionMismatchProducts).toEqual([]);
+    expect(wrapper.find('[data-testid="workflow-bom-revision-alert"]').exists()).toBe(false);
+    expect(wrapper.get('[data-testid="workflow-draft-production-context"]').attributes('title'))
+      .toContain('生产继续使用已启用 Workflow v1');
 
     apiMocks.getWorkflowBomSyncPreflight.mockResolvedValue({
       success: true,
@@ -253,6 +263,77 @@ describe('ProductProcessWorkflowEditor activation controls', () => {
     expect(apiMocks.publishAndActivateProductProcessWorkflow).toHaveBeenCalledTimes(1);
     expect(apiMocks.activateProductProcessWorkflow).not.toHaveBeenCalled();
     expect(vm.bomDrawerVisible).toBe(false);
+  });
+
+  it('shows a production mismatch only when the active BOM differs from the enabled Workflow', async () => {
+    apiMocks.getProductProcessWorkflow.mockResolvedValue({
+      success: true,
+      data: definition('PT-A', 'DRAFT', 2, 45),
+    });
+    apiMocks.getProductProcessWorkflowActivation.mockResolvedValue({
+      success: true,
+      data: activation('PT-A', 44, 1),
+    });
+    apiMocks.get.mockImplementation((url: string) => Promise.resolve({
+      success: true,
+      data: url.includes('/bom/recipes/by-product/')
+        ? {
+          id: 'BOM-V1',
+          version: 1,
+          status: 'ACTIVE',
+          workflowId: 43,
+          workflowDefinitionVersion: 1,
+          workflowRevisionId: 175,
+          workflowRevisionHash: 'revision-175',
+          items: [{ materialTypeId: 'RAW', materialName: 'Raw', unit: 'kg' }],
+        }
+        : url.endsWith('/product-types/PT-A')
+          ? productOption('PT-A')
+          : url.includes('/product-types')
+            ? { content: [productOption('PT-A'), productOption('PT-B')] }
+            : url.includes('/raw-material-types')
+              ? [{ id: 'RAW', name: 'Raw', unit: 'kg', category: '原料' }]
+              : [],
+    }));
+
+    const wrapper = mountEditor();
+    await flushPromises();
+    const vm = wrapper.vm as unknown as {
+      bomProductionMismatchProducts: Array<{ id: string; name: string }>;
+    };
+
+    expect(vm.bomProductionMismatchProducts).toEqual([{ id: 'PT-A', name: 'Finished' }]);
+    expect(wrapper.find('[data-testid="workflow-bom-revision-alert"]').exists()).toBe(true);
+  });
+
+  it('cancels a pending autosave when publish starts and does not recreate a draft after success', async () => {
+    vi.useFakeTimers();
+    try {
+      const savedDraft = definition('PT-A', 'DRAFT', 1, 43);
+      apiMocks.saveProductProcessWorkflowDraft.mockResolvedValue({
+        success: true,
+        data: savedDraft,
+      });
+      const wrapper = mountEditor();
+      await flushPromises();
+      const vm = wrapper.vm as unknown as {
+        dirty: boolean;
+        publishWorkflow: () => Promise<void>;
+      };
+      vm.dirty = true;
+      await nextTick();
+
+      await vm.publishWorkflow();
+      await flushPromises();
+      expect(apiMocks.saveProductProcessWorkflowDraft).toHaveBeenCalledTimes(1);
+
+      await vi.advanceTimersByTimeAsync(3000);
+      await flushPromises();
+      expect(apiMocks.saveProductProcessWorkflowDraft).toHaveBeenCalledTimes(1);
+      expect(apiMocks.publishAndActivateProductProcessWorkflow).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('refreshes a repaired revision identity after preflight and publishes with the new lock', async () => {
