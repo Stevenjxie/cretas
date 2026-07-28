@@ -16,6 +16,7 @@ Exit code 0 = all pass; 1 = any fail — safe for CI / cron wiring.
 from __future__ import annotations
 
 import argparse
+import calendar as _calendar
 import datetime as _dt
 import json
 import random
@@ -52,7 +53,29 @@ _FORBIDDEN_EVERYWHERE = [
 #
 # 注：若数据刷新中断导致滞后超过一天，周二~日 分支也会失败 —— 那是**真**问题
 # （数据没刷新），本来就该红，不是误报。
-_TODAY_IS_MONDAY = _dt.date.today().weekday() == 0
+_TODAY = _dt.date.today()
+_TODAY_IS_MONDAY = _TODAY.weekday() == 0
+
+
+# ── 相对时间断言必须动态算，不能写死 ──────────────────────────────────
+# 问句问的是「上个月」「上上个月」「去年12月」这类**相对**时间，答案里的具体
+# 年月自然随今天滚动。断言若写死成 "2026-06" / "2026-05-01 至 2026-05-31"，
+# 就只有写它的那个月能过 —— 下个月一到全体误报，跨年更是全挂。
+# （2026-07-28 审查实测：当时有 2 条 8/1 必挂、2 条跨年必挂。）
+# 显式带年份的问句（「2026年3月」「2025年全年」）不在此列，那种写死是对的。
+def _ym(offset_months: int) -> str:
+    """相对本月偏移 N 个月的 'YYYY-MM'。_ym(-1) = 上个月。"""
+    total = _TODAY.year * 12 + (_TODAY.month - 1) + offset_months
+    return f"{total // 12}-{total % 12 + 1:02d}"
+
+
+def _month_span(offset_months: int) -> str:
+    """相对本月偏移 N 个月的整月区间 'YYYY-MM-01 至 YYYY-MM-DD'。"""
+    ym = _ym(offset_months)
+    year, month = int(ym[:4]), int(ym[5:])
+    last_day = _calendar.monthrange(year, month)[1]
+    return f"{ym}-01 至 {ym}-{last_day:02d}"
+
 
 if _TODAY_IS_MONDAY:
     _THIS_WEEK_EMPTY_PERIOD_CASE: Dict[str, Any] = {
@@ -95,7 +118,7 @@ CASES: List[Dict[str, Any]] = [
     {"q": "是否合理", "chain": "dish", "contains": ["「招牌藤椒味(单人份)」"]},
     {"q": "怎么优化", "chain": "dish", "contains": ["「招牌藤椒味(单人份)」"]},
     {"q": "换成上个月呢", "chain": "dish",
-     "contains": ["「招牌藤椒味(单人份)」", "2026-06"]},
+     "contains": ["「招牌藤椒味(单人份)」", _ym(-1)]},
     # ── 真实前端按钮链：具名门店必须来自当前菜品/时间的实际销售范围 ──
     {"q": "米饭的销量是多少", "chain": "dish_named_store",
      "contains": ["哪个时间范围"],
@@ -144,7 +167,7 @@ CASES: List[Dict[str, Any]] = [
     {"q": "今天全部门店营业额多少", "contains": ["今天"]},
     {"q": "全部门店今年比去年增长多少", "contains": ["今年", "去年"]},
     {"q": "全部门店上周和上上周营收对比", "contains": ["上周", "上上周"]},
-    {"q": "本月全部门店订单量如何", "contains": ["单"],
+    {"q": "本月全部门店订单量如何", "contains": ["单", "平均每单"],
      "excludes": ["请检查是否上传"]},
     {"q": "哪个门店营收最好", "chain": "store_rank",
      "contains": ["哪个时间范围"],
@@ -153,15 +176,15 @@ CASES: List[Dict[str, Any]] = [
      "contains": ["结论", "营收最高"]},
     {"q": "最近30天各门店的营收排名", "contains": ["门店"]},
     {"q": "本月全部门店晚上生意怎么样", "contains": ["晚市"]},
-    {"q": "全部门店3月份的营收多少", "contains": ["2026年3月"],
+    {"q": "全部门店3月份的营收多少", "contains": [f"{_TODAY.year}年3月"],
      "excludes": ["没有找到名为"]},
-    {"q": "全部门店去年12月的营收", "contains": ["2025年12月"],
+    {"q": "全部门店去年12月的营收", "contains": [f"{_TODAY.year - 1}年12月"],
      "excludes": ["全部历史"]},
     {"q": "全部门店2026年3月生意怎么样", "contains": ["2026年3月"]},
     {"q": "全部门店最近三个月营收趋势", "contains": ["营收趋势"],
      "excludes": ["全部历史"]},
     {"q": "全部门店上上个月营收多少",
-     "contains": ["2026-05-01 至 2026-05-31"]},
+     "contains": [_month_span(-2)]},
     {"q": "全部门店2025年全年营收多少", "contains": ["2025年"],
      "excludes": ["没有找到名为"]},
     {"q": "日月光店的营收",
@@ -195,7 +218,8 @@ CASES: List[Dict[str, Any]] = [
     {"q": "今天天气怎么样", "contains": ["不会编造"],
      "excludes": ["库存、生产、质检"]},
     {"q": "毛利率低有什么行业参考做法", "contains": ["行业参考做法"]},
-    {"q": "行业参考做法", "contains": ["行业参考做法"]},
+    # 断言不能只写问句本身(原样回显也能过) — 要求真的给出主题清单与用法指引。
+    {"q": "行业参考做法", "contains": ["行业参考做法", "具体主题"]},
     # ── 损耗 / 库存 (Java 工具面) ──
     {"q": "最近损耗怎么样", "contains": ["损耗"]},
     # ── 周初当前周期暂无数据：不泛化补数，主动给可执行的相邻周期 ──
@@ -217,6 +241,50 @@ CASES: List[Dict[str, Any]] = [
      "contains": ["先查看候选菜品", "具体菜名", "只有确认后才会执行"],
      "followup_contains": ["先查看这5道菜"],
      "excludes": ["未找到菜品「最近7天全部门店销量最低的5道」"]},
+
+    # ── 链B 实体切换：换菜品，时间/门店范围继承；再换指标；再换时间 ──
+    # 补于 2026-07-28：原电池只有 dish / dish_named_store / store_rank 三条链，
+    # 「中途换实体」「换完实体再换时间」这两种最常见的老板追问从没被守住。
+    {"q": "本月全部门店米饭卖得怎么样", "chain": "dish_switch",
+     "contains": ["「米饭」", "销量"]},
+    {"q": "那娃娃菜呢", "chain": "dish_switch",
+     "contains": ["「娃娃菜」", "销量"], "excludes": ["「米饭」"]},
+    {"q": "那毛利呢", "chain": "dish_switch",
+     "contains": ["「娃娃菜」", "毛利"], "excludes": ["「米饭」"]},
+    {"q": "换成上个月呢", "chain": "dish_switch",
+     "contains": ["「娃娃菜」", _month_span(-1)], "excludes": ["「米饭」"]},
+
+    # ── 链F 澄清鲁棒性：反问时间时用户先答了门店，补上时间后要两者都记住 ──
+    {"q": "哪个菜卖得好", "chain": "clarify_reorder",
+     "contains": ["哪个时间范围"]},
+    {"q": "青花椒紫荆广场店", "chain": "clarify_reorder",
+     "contains": ["哪个时间范围"]},
+    {"q": "本月", "chain": "clarify_reorder",
+     "contains": ["青花椒紫荆广场店", "销量排行"]},
+
+    # ── 链E 话题跳转：换了话题就**不该**继承上一轮的菜品 ──
+    {"q": "本月全部门店米饭销量", "chain": "topic_jump",
+     "contains": ["「米饭」", "销量"]},
+    {"q": "门店名单给我看看", "chain": "topic_jump",
+     "contains": ["家门店"], "excludes": ["「米饭」", "没有找到"]},
+    {"q": "今天天气怎么样", "chain": "topic_jump",
+     "contains": ["不会编造"], "excludes": ["「米饭」"]},
+
+    # ── 错别字 / 输入噪声：真人打字与语音转写的常见形态 ──
+    # 补于 2026-07-28：电池此前一条错别字用例都没有。以下形态均已实测确认
+    # 当前行为正确，加进来是当回归护栏用，不是提新要求。
+    {"q": "本月全部门店莹收多少",            # 形近字 营→莹
+     "contains": ["总营收"], "excludes": ["我没太看懂"]},
+    {"q": "本月全部门店赢收多少",            # 同音字 营→赢
+     "contains": ["总营收"], "excludes": ["我没太看懂"]},
+    {"q": "本月全部门店营收多少呢？？？",     # 标点噪声
+     "contains": ["总营收"]},
+    {"q": "本月全部门店哪个菜卖的好",        # 语音转写 得→的：要答得出，不能喊看不懂
+     "contains": ["本月"], "excludes": ["我没太看懂", "没有找到"]},
+    {"q": "这月挣了多少",                    # 口语：能听懂意图，只是缺门店范围
+     "contains": ["哪几家门店"]},
+    {"q": "本月全部门店蛙蛙菜的销量",        # 菜名错字：必须明说没找到，不许拿榜单顶包
+     "contains": ["没有找到"], "excludes": ["排行"]},
 ]
 
 
@@ -238,6 +306,71 @@ def _post_json(url: str, payload: Dict[str, Any],
         return json.loads(resp.read().decode("utf-8"))
 
 
+def _looks_transient(flat: str) -> bool:
+    """瞬态故障(蓝绿切换 / LLM 熔断 / 网络抖动)的可识别形态。
+
+    这类失败跟"行为错了"必须区分开: 它不该被记成回归, 更不该在部署门禁上
+    造成假红。判据取自 planner 不可用时的 fail-closed 文案与传输异常。
+    """
+    return any(m in flat for m in (
+        "<TRANSPORT ERROR",
+        "暂时无法把这次选择与上一轮问题合并",
+        "我现在暂时无法完整理解这句话",
+        "请稍后重试",
+    ))
+
+
+def _run_case(base: str, auth: Dict[str, str], sid: str,
+              case: Dict[str, Any]) -> Dict[str, Any]:
+    """跑一条用例, 返回 {problems, flat, followups, elapsed}。不做重试。"""
+    started = time.time()
+    flat_result = ""
+    flat_followups = ""
+    try:
+        payload: Dict[str, Any] = {"userInput": case["q"], "sessionId": sid}
+        if case.get("mode"):
+            payload["mode"] = case["mode"]
+        if case.get("preview_only"):
+            payload["previewOnly"] = True
+        resp = _post_json(
+            f"{base}/api/mobile/{FACTORY_ID}/ai-intents/execute",
+            payload, headers=auth,
+        )
+        response_data = resp.get("data") or {}
+        message = str(response_data.get("message") or "")
+        result_data = response_data.get("resultData") or {}
+        flat_result = json.dumps(response_data, ensure_ascii=False, sort_keys=True)
+        followups = result_data.get("suggestedFollowups") or []
+        flat_followups = " ".join(
+            f"{item.get('label') or ''} {item.get('question') or ''}"
+            for item in followups if isinstance(item, dict)
+        )
+    except Exception as exc:  # noqa: BLE001 — eval must report, not crash
+        message = f"<TRANSPORT ERROR: {exc}>"
+
+    flat = " ".join(message.split())
+    problems: List[str] = []
+    for marker in case.get("contains", []):
+        if marker not in flat:
+            problems.append(f"缺少「{marker}」")
+    for marker in case.get("excludes", []) + _FORBIDDEN_EVERYWHERE:
+        if marker in flat:
+            problems.append(f"不应出现「{marker}」")
+    for marker in case.get("result_contains", []):
+        if marker not in flat_result:
+            problems.append(f"结构化结果缺少「{marker}」")
+    for marker in case.get("followup_contains", []):
+        if marker not in flat_followups:
+            problems.append(f"按钮缺少「{marker}」")
+    for marker in case.get("followup_excludes", []):
+        if marker in flat_followups:
+            problems.append(f"按钮不应出现「{marker}」")
+    return {
+        "problems": problems, "flat": flat,
+        "followups": flat_followups, "elapsed": time.time() - started,
+    }
+
+
 def run_eval(base: str, only: Optional[str] = None) -> int:
     login = _post_json(f"{base}/api/mobile/auth/demo-login?tenant=rest", {})
     token = (login.get("data") or {}).get("token") or (login.get("data") or {}).get("accessToken")
@@ -246,91 +379,86 @@ def run_eval(base: str, only: Optional[str] = None) -> int:
         return 2
     auth = {"Authorization": f"Bearer {token}"}
 
-    chain_sessions: Dict[str, str] = {}
+    # ── 预分组成"执行单元" ────────────────────────────────────────────
+    # 独立用例各成一个单元; 同一 chain 的全部步骤合成一个单元, 因为链是有状态的:
+    # 单独重跑其中一步没有意义(会话里缺前置轮次), 要重试只能整条链换新会话重来。
+    units: List[Any] = []
+    chain_steps: Dict[str, List[Any]] = {}
+    for idx, case in enumerate(CASES, 1):
+        chain = case.get("chain")
+        if not chain:
+            units.append((None, [(idx, case)]))
+        elif chain in chain_steps:
+            chain_steps[chain].append((idx, case))
+        else:
+            chain_steps[chain] = [(idx, case)]
+            units.append((chain, chain_steps[chain]))
+
+    # ⛔ --only 命中链式用例时直接拒绝。
+    # 链是有状态的: 只跑其中一步 = 会话里缺前置轮次, 得到的通过/失败都不可信。
+    # (本守卫补于 2026-07-28 审查: 之前 --only 会静默打断链, 结果误导人。)
+    hit_chains = sorted({
+        case["chain"]
+        for _chain, steps in units
+        for _idx, case in steps
+        if case.get("chain") and only and only in case["q"]
+    })
+    if hit_chains:
+        print(f"FATAL: --only '{only}' 命中链式用例 {hit_chains}; "
+              f"链必须整条跑, 单跑一步会话里缺前置轮次, 结果不可信。")
+        return 2
+
     passed, failed = 0, 0
     failures: List[str] = []
     latencies: List[float] = []
-    for idx, case in enumerate(CASES, 1):
-        q = case["q"]
-        if only and only not in q:
-            continue
-        chain = case.get("chain")
-        sid = chain_sessions.setdefault(chain, _rand_sid(chain)) if chain else _rand_sid("solo")
-        problems: List[str] = []
-        case_started = time.time()
-        flat = ""
-        flat_result = ""
-        flat_followups = ""
-        # 蓝绿切换/熔断窗口会产生瞬态失败 — 失败自动重试一次再定论。
-        for attempt in (1, 2):
-            try:
-                payload = {"userInput": q, "sessionId": sid}
-                if case.get("mode"):
-                    payload["mode"] = case["mode"]
-                if case.get("preview_only"):
-                    payload["previewOnly"] = True
-                resp = _post_json(
-                    f"{base}/api/mobile/{FACTORY_ID}/ai-intents/execute",
-                    payload,
-                    headers=auth,
-                )
-                response_data = resp.get("data") or {}
-                message = str(response_data.get("message") or "")
-                result_data = response_data.get("resultData") or {}
-                flat_result = json.dumps(
-                    response_data,
-                    ensure_ascii=False,
-                    sort_keys=True,
-                )
-                followups = result_data.get("suggestedFollowups") or []
-                flat_followups = " ".join(
-                    f"{item.get('label') or ''} {item.get('question') or ''}"
-                    for item in followups
-                    if isinstance(item, dict)
-                )
-            except Exception as exc:  # noqa: BLE001 — eval must report, not crash
-                message = f"<TRANSPORT ERROR: {exc}>"
-                flat_result = ""
-                flat_followups = ""
-            flat = " ".join(message.split())
-            problems = []
-            for marker in case.get("contains", []):
-                if marker not in flat:
-                    problems.append(f"缺少「{marker}」")
-            for marker in case.get("excludes", []) + _FORBIDDEN_EVERYWHERE:
-                if marker in flat:
-                    problems.append(f"不应出现「{marker}」")
-            for marker in case.get("result_contains", []):
-                if marker not in flat_result:
-                    problems.append(f"结构化结果缺少「{marker}」")
-            for marker in case.get("followup_contains", []):
-                if marker not in flat_followups:
-                    problems.append(f"按钮缺少「{marker}」")
-            for marker in case.get("followup_excludes", []):
-                if marker in flat_followups:
-                    problems.append(f"按钮不应出现「{marker}」")
-            if not problems or chain:
-                break  # 链内不重试 (会污染会话)
-            if attempt == 1:
-                time.sleep(30)  # 蓝绿/熔断窗冷却后再试
-        elapsed = time.time() - case_started
-        latencies.append(elapsed)
+
+    def _report(idx: int, case: Dict[str, Any], outcome: Dict[str, Any]) -> None:
+        nonlocal passed, failed
+        latencies.append(outcome["elapsed"])
+        q, problems = case["q"], outcome["problems"]
         if problems:
             failed += 1
             failures.append(
                 f"[{idx:02d}] {q}\n"
                 f"     {'; '.join(problems)}\n"
-                f"     实际: {flat[:160]}\n"
-                f"     按钮: {flat_followups[:160]}"
+                f"     实际: {outcome['flat'][:160]}\n"
+                f"     按钮: {outcome['followups'][:160]}"
             )
-            print(f"✗ [{idx:02d}] {elapsed:5.1f}s {q} — {'; '.join(problems)}")
+            print(f"✗ [{idx:02d}] {outcome['elapsed']:5.1f}s {q} — {'; '.join(problems)}")
         else:
             passed += 1
-            print(f"✓ [{idx:02d}] {elapsed:5.1f}s {q}")
+            print(f"✓ [{idx:02d}] {outcome['elapsed']:5.1f}s {q}")
+
+    for chain, steps in units:
+        if only and not any(only in c["q"] for _i, c in steps):
+            continue
+        if chain is None:
+            idx, case = steps[0]
+            # 蓝绿切换/熔断窗会产生瞬态失败 — 失败自动重试一次再定论。
+            outcome = _run_case(base, auth, _rand_sid("solo"), case)
+            if outcome["problems"]:
+                time.sleep(30)
+                outcome = _run_case(base, auth, _rand_sid("solo"), case)
+            _report(idx, case, outcome)
+            continue
+
+        # 链: 整条跑; 若失败且形态是瞬态, 换新会话整条重来一次。
+        for attempt in (1, 2):
+            sid = _rand_sid(chain)
+            outcomes = [_run_case(base, auth, sid, case) for _i, case in steps]
+            broken = [o for o in outcomes if o["problems"]]
+            if not broken or attempt == 2 or not any(
+                _looks_transient(o["flat"]) for o in broken
+            ):
+                break
+            print(f"  ↻ 链 {chain} 命中瞬态故障, 换新会话整条重跑…")
+            time.sleep(30)
+        for (idx, case), outcome in zip(steps, outcomes):
+            _report(idx, case, outcome)
 
     if latencies:
         ordered = sorted(latencies)
-        p95 = ordered[max(0, int(len(ordered) * 0.95) - 1)]
+        p95 = ordered[min(len(ordered) - 1, int(len(ordered) * 0.95))]
         print(f"\n耗时: 平均 {sum(latencies)/len(latencies):.1f}s | 中位 "
               f"{ordered[len(ordered)//2]:.1f}s | p95 {p95:.1f}s | 最慢 {ordered[-1]:.1f}s")
     print(f"== {passed} passed, {failed} failed / {passed + failed} run ==")
