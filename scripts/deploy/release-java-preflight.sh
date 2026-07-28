@@ -53,7 +53,16 @@ import_exists() {
     local import_name=$1 part path= class_name= candidate
     IFS='.' read -r -a parts <<< "$import_name"
     for part in "${parts[@]}"; do
-        if [[ "$part" =~ ^[A-Z] ]]; then
+        # ⛔ 必须用 POSIX 字符类 [[:upper:]], 不能写 [A-Z]。
+        # [A-Z] 是**范围**表达式, 按 locale 的 collation 展开: 在 en_US.UTF-8 这类
+        # locale 下排序是 aAbBcC... , 于是 [A-Z] 把小写字母也覆盖进去 —— `com` 这种
+        # 全小写包名段会在第一段就被判成类名, path 为空、class_name="com",
+        # 于是去找 `<main_root>/com.java` 找不到, 报出误导性的
+        #   "ERROR: project import cannot be resolved: com.cretas.aims.xxx.Foo"
+        # 而那个类其实好端端存在。凡是 --tests 选中的测试类里有 com.cretas.* import
+        # 就会中招, 整条发布链在 preflight 阶段直接中止 (2026-07-28 飞轮回接发布实测)。
+        # [[:upper:]] 按 locale 的字符**类别**判定, 只匹配真正的大写字母, 不受 collation 影响。
+        if [[ "$part" =~ ^[[:upper:]] ]]; then
             class_name=$part
             break
         fi
