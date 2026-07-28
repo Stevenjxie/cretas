@@ -129,7 +129,7 @@ public class ProductProcessWorkflowServiceImpl implements ProductProcessWorkflow
     }
 
     @Override
-    @Transactional(readOnly = true)
+    @Transactional
     public WorkflowBomSyncPreflightResponse bomSyncPreflight(
             String factoryId,
             String productTypeId) {
@@ -139,7 +139,13 @@ public class ProductProcessWorkflowServiceImpl implements ProductProcessWorkflow
             workflow = find(factoryId, productTypeId, ProductProcessWorkflow.Status.PUBLISHED);
         }
         ProductProcessWorkflowRevision target = workflow
-                .map(this::readCurrentRevision)
+                .map(row -> {
+                    ProductProcessWorkflowRevision revision = readCurrentRevision(row);
+                    return row.getStatus() == ProductProcessWorkflow.Status.DRAFT
+                            ? bomWorkflowRevisionService.repairCurrentDraftRevisionIfNeeded(
+                                    factoryId, revision)
+                            : revision;
+                })
                 .orElse(null);
         return workflowBomSynchronizationService.preflight(
                 factoryId, productTypeId, target);

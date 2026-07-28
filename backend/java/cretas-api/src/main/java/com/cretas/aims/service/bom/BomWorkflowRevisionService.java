@@ -198,7 +198,8 @@ public class BomWorkflowRevisionService {
      * revision identity. Never rewrite that immutable row: recapture the current
      * draft content and move only the draft pointer to the new valid revision.
      */
-    private ProductProcessWorkflowRevision repairCurrentDraftRevisionIfNeeded(
+    @Transactional
+    public ProductProcessWorkflowRevision repairCurrentDraftRevisionIfNeeded(
             String factoryId, ProductProcessWorkflowRevision revision) {
         if (Objects.equals(revision.getRevisionHash(), revisionSnapshotService.hash(revision))) {
             return revision;

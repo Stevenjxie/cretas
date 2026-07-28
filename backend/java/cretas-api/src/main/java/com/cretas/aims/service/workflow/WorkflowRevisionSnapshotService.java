@@ -12,11 +12,13 @@ import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
+import com.fasterxml.jackson.databind.node.DecimalNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import lombok.RequiredArgsConstructor;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
 
+import java.math.BigDecimal;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
@@ -39,7 +41,14 @@ public class WorkflowRevisionSnapshotService {
         String hash = hash(workflow);
         Optional<ProductProcessWorkflowRevision> existing = revisionRepository
                 .findByWorkflowIdAndRevisionHash(workflow.getId(), hash);
-        if (existing.isPresent()) return existing.get();
+        if (existing.isPresent()) {
+            ProductProcessWorkflowRevision candidate = existing.get();
+            if (sameDefinition(workflow, candidate)
+                    && Objects.equals(candidate.getRevisionHash(), hash(candidate))) {
+                return candidate;
+            }
+            throw invalidStoredRevision(hash, candidate.getId());
+        }
 
         return createRevision(workflow, hash);
     }
@@ -66,7 +75,16 @@ public class WorkflowRevisionSnapshotService {
 
         Optional<ProductProcessWorkflowRevision> matching = revisionRepository
                 .findByWorkflowIdAndRevisionHash(workflow.getId(), hash);
-        if (matching.isPresent()) return matching.get();
+        if (matching.isPresent()) {
+            ProductProcessWorkflowRevision candidate = matching.get();
+            if (sameDefinition(workflow, candidate)
+                    && Objects.equals(candidate.getRevisionHash(), hash(candidate))) {
+                return candidate;
+            }
+            if (current == null || !Objects.equals(current.getId(), candidate.getId())) {
+                throw invalidStoredRevision(hash, candidate.getId());
+            }
+        }
 
         if (current == null || isPinnedByAnyBom(workflow.getFactoryId(), current.getId())) {
             return createRevision(workflow, hash);
@@ -107,8 +125,14 @@ public class WorkflowRevisionSnapshotService {
         try {
             return revisionRepository.saveAndFlush(revision);
         } catch (DataIntegrityViolationException race) {
-            return revisionRepository.findByWorkflowIdAndRevisionHash(workflow.getId(), hash)
+            ProductProcessWorkflowRevision winner = revisionRepository
+                    .findByWorkflowIdAndRevisionHash(workflow.getId(), hash)
                     .orElseThrow(() -> race);
+            if (sameDefinition(workflow, winner)
+                    && Objects.equals(winner.getRevisionHash(), hash(winner))) {
+                return winner;
+            }
+            throw invalidStoredRevision(hash, winner.getId());
         }
     }
 
@@ -184,6 +208,18 @@ public class WorkflowRevisionSnapshotService {
             return storedOrderHash;
         }
 
+        String legacyCanonicalHash = legacyCanonicalHash(
+                revision.getFactoryId(),
+                revision.getProductTypeId(),
+                revision.getDefinitionVersion(),
+                revision.getSchemaVersion(),
+                revision.getNodesJson(),
+                revision.getEdgesJson(),
+                revision.getViewportJson());
+        if (Objects.equals(revision.getRevisionHash(), legacyCanonicalHash)) {
+            return legacyCanonicalHash;
+        }
+
         String canonicalHash = canonicalHash(
                 revision.getFactoryId(),
                 revision.getProductTypeId(),
@@ -213,6 +249,24 @@ public class WorkflowRevisionSnapshotService {
                 canonicalJson(viewport, "viewport"));
     }
 
+    private String legacyCanonicalHash(
+            String factoryId,
+            String productTypeId,
+            Integer definitionVersion,
+            Integer schemaVersion,
+            String nodes,
+            String edges,
+            String viewport) {
+        return rawHash(
+                factoryId,
+                productTypeId,
+                definitionVersion,
+                schemaVersion,
+                legacyCanonicalJson(nodes, "nodes"),
+                legacyCanonicalJson(edges, "edges"),
+                legacyCanonicalJson(viewport, "viewport"));
+    }
+
     private String rawHash(String factoryId, String productTypeId, Integer definitionVersion,
                            Integer schemaVersion, String nodes, String edges, String viewport) {
         String source = factoryId + "\n" + productTypeId + "\n" + definitionVersion + "\n"
@@ -228,11 +282,50 @@ public class WorkflowRevisionSnapshotService {
 
     private String canonicalJson(String json, String field) {
         try {
+            return objectMapper.writeValueAsString(
+                    sortObjectKeysAndNormalizeNumbers(objectMapper.readTree(json)));
+        } catch (JsonProcessingException error) {
+            throw invalidJson(field, error);
+        }
+    }
+
+    private String legacyCanonicalJson(String json, String field) {
+        try {
             return objectMapper.writeValueAsString(sortObjectKeys(objectMapper.readTree(json)));
         } catch (JsonProcessingException error) {
-            throw new BusinessException(500, "Workflow revision " + field + " 数据损坏", error)
-                    .withCode("PRODUCT_PROCESS_WORKFLOW_REVISION_DATA_INVALID");
+            throw invalidJson(field, error);
         }
+    }
+
+    /**
+     * PostgreSQL JSONB and different Jackson paths may represent the same numeric value as
+     * {@code 32}, {@code 32.0}, or {@code 3.2E+1}. A content address must not change across
+     * that persistence round trip, so numbers are normalized by value in addition to sorting
+     * object keys. Array order remains significant because it is part of the Workflow graph.
+     */
+    private JsonNode sortObjectKeysAndNormalizeNumbers(JsonNode node) {
+        if (node == null || node.isNull() || node.isBoolean() || node.isTextual()) {
+            return node;
+        }
+        if (node.isNumber()) {
+            BigDecimal normalized = node.decimalValue().stripTrailingZeros();
+            if (normalized.signum() == 0) {
+                normalized = BigDecimal.ZERO;
+            }
+            return DecimalNode.valueOf(normalized);
+        }
+        if (node.isArray()) {
+            ArrayNode sorted = objectMapper.createArrayNode();
+            node.forEach(child -> sorted.add(sortObjectKeysAndNormalizeNumbers(child)));
+            return sorted;
+        }
+        ObjectNode sorted = objectMapper.createObjectNode();
+        List<String> fields = new ArrayList<>();
+        node.fieldNames().forEachRemaining(fields::add);
+        fields.sort(Comparator.naturalOrder());
+        fields.forEach(field ->
+                sorted.set(field, sortObjectKeysAndNormalizeNumbers(node.get(field))));
+        return sorted;
     }
 
     private JsonNode sortObjectKeys(JsonNode node) {
@@ -259,5 +352,19 @@ public class WorkflowRevisionSnapshotService {
             throw new BusinessException(500, "Workflow revision " + field + " 数据损坏", error)
                     .withCode("PRODUCT_PROCESS_WORKFLOW_REVISION_DATA_INVALID");
         }
+    }
+
+    private BusinessException invalidJson(String field, JsonProcessingException error) {
+        return new BusinessException(
+                500, "Workflow revision " + field + " 数据损坏", error)
+                .withCode("PRODUCT_PROCESS_WORKFLOW_REVISION_DATA_INVALID");
+    }
+
+    private BusinessException invalidStoredRevision(String hash, Long revisionId) {
+        return new BusinessException(409, "Workflow 修订哈希已存在，但其保存内容无法验证")
+                .withCode("PRODUCT_PROCESS_WORKFLOW_REVISION_HASH_COLLISION")
+                .withHint("revisionId=" + revisionId + ", revisionHash=" + hash)
+                .withHintTarget("revision")
+                .withSeverity("warning");
     }
 }

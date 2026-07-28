@@ -34,6 +34,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -248,6 +249,51 @@ class BomWorkflowRevisionServiceTest {
         assertEquals(revision.getId(), binding.revision().getId());
         assertEquals(revision.getId(), draft.getWorkflowRevisionId());
         verify(revisionRepository).saveAndFlush(revision);
+        verify(workflowRepository).saveAndFlush(workflow);
+    }
+
+    @Test
+    void staleCurrentDraftHashCreatesStableReplacementWithoutRewritingOldRevision()
+            throws Exception {
+        ProductProcessWorkflowRevision stale = revision(oneToOne());
+        stale.setRevisionHash("legacy-pre-roundtrip-hash");
+        ProductProcessWorkflow workflow = new ProductProcessWorkflow();
+        workflow.setId(stale.getWorkflowId());
+        workflow.setFactoryId(FACTORY);
+        workflow.setProductTypeId(stale.getProductTypeId());
+        workflow.setStatus(ProductProcessWorkflow.Status.DRAFT);
+        workflow.setDefinitionVersion(stale.getDefinitionVersion());
+        workflow.setSchemaVersion(stale.getSchemaVersion());
+        workflow.setNodesJson(stale.getNodesJson());
+        workflow.setEdgesJson(stale.getEdgesJson());
+        workflow.setViewportJson(stale.getViewportJson());
+        workflow.setCurrentRevisionId(stale.getId());
+        workflow.setCurrentRevisionHash(stale.getRevisionHash());
+        String replacementHash = snapshotService.hash(workflow);
+
+        when(workflowRepository.findByIdAndFactoryId(stale.getWorkflowId(), FACTORY))
+                .thenReturn(Optional.of(workflow));
+        when(revisionRepository.findByWorkflowIdAndRevisionHash(
+                stale.getWorkflowId(), replacementHash)).thenReturn(Optional.empty());
+        when(revisionRepository.findMaxRevisionNumber(stale.getWorkflowId()))
+                .thenReturn(stale.getRevisionNumber());
+        when(revisionRepository.saveAndFlush(any(ProductProcessWorkflowRevision.class)))
+                .thenAnswer(invocation -> {
+                    ProductProcessWorkflowRevision saved = invocation.getArgument(0);
+                    saved.setId(72L);
+                    return saved;
+                });
+        when(workflowRepository.saveAndFlush(workflow)).thenReturn(workflow);
+
+        ProductProcessWorkflowRevision repaired =
+                service.repairCurrentDraftRevisionIfNeeded(FACTORY, stale);
+
+        assertEquals(72L, repaired.getId());
+        assertEquals(replacementHash, repaired.getRevisionHash());
+        assertEquals(replacementHash, snapshotService.hash(repaired));
+        assertEquals(72L, workflow.getCurrentRevisionId());
+        assertEquals(replacementHash, workflow.getCurrentRevisionHash());
+        verify(revisionRepository, never()).saveAndFlush(stale);
         verify(workflowRepository).saveAndFlush(workflow);
     }
 

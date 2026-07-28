@@ -231,7 +231,10 @@ describe('ProductProcessWorkflowEditor activation controls', () => {
 
     apiMocks.getWorkflowBomSyncPreflight.mockResolvedValue({
       success: true,
-      data: workflowBomPreflight('AUTO_MIGRATABLE'),
+      data: {
+        ...workflowBomPreflight('AUTO_MIGRATABLE'),
+        targetWorkflowRevisionId: 222,
+      },
     });
     apiMocks.publishAndActivateProductProcessWorkflow.mockResolvedValue({
       success: true,
@@ -250,6 +253,69 @@ describe('ProductProcessWorkflowEditor activation controls', () => {
     expect(apiMocks.publishAndActivateProductProcessWorkflow).toHaveBeenCalledTimes(1);
     expect(apiMocks.activateProductProcessWorkflow).not.toHaveBeenCalled();
     expect(vm.bomDrawerVisible).toBe(false);
+  });
+
+  it('refreshes a repaired revision identity after preflight and publishes with the new lock', async () => {
+    const stale = definition('PT-A', 'DRAFT', 1, 43);
+    stale.lockVersion = 170;
+    stale.revisionId = 164;
+    stale.revisionHash = 'legacy-roundtrip-hash';
+    const repaired = structuredClone(stale);
+    repaired.lockVersion = 171;
+    repaired.revisionId = 165;
+    repaired.revisionHash = 'numeric-canonical-hash';
+    apiMocks.getProductProcessWorkflow
+      .mockResolvedValueOnce({ success: true, data: stale })
+      .mockResolvedValueOnce({ success: true, data: repaired });
+    apiMocks.getWorkflowBomSyncPreflight.mockResolvedValue({
+      success: true,
+      data: {
+        ...workflowBomPreflight('AUTO_MIGRATABLE'),
+        targetWorkflowRevisionId: 165,
+      },
+    });
+
+    const wrapper = mountEditor();
+    await flushPromises();
+    await (wrapper.vm as unknown as {
+      publishWorkflow: () => Promise<void>;
+    }).publishWorkflow();
+    await flushPromises();
+
+    expect(apiMocks.publishAndActivateProductProcessWorkflow)
+      .toHaveBeenCalledWith('F006', 'PT-A', expect.objectContaining({
+        lockVersion: 171,
+        revisionId: 165,
+        revisionHash: 'numeric-canonical-hash',
+        definitionVersion: 1,
+      }));
+  });
+
+  it('stops publishing when the authoritative graph changes during preflight refresh', async () => {
+    const initial = definition('PT-A', 'DRAFT', 1, 43);
+    initial.lockVersion = 170;
+    initial.revisionId = 164;
+    const changed = structuredClone(initial);
+    changed.lockVersion = 171;
+    changed.revisionId = 165;
+    changed.revisionHash = 'new-content-hash';
+    changed.nodes[1].position.x = 420;
+    apiMocks.getProductProcessWorkflow
+      .mockResolvedValueOnce({ success: true, data: initial })
+      .mockResolvedValueOnce({ success: true, data: changed });
+
+    const wrapper = mountEditor();
+    await flushPromises();
+    const vm = wrapper.vm as unknown as {
+      definition: ProductProcessWorkflowDefinition;
+      publishWorkflow: () => Promise<void>;
+    };
+    await vm.publishWorkflow();
+    await flushPromises();
+
+    expect(apiMocks.publishAndActivateProductProcessWorkflow).not.toHaveBeenCalled();
+    expect(vm.definition.revisionId).toBe(165);
+    expect(vm.definition.nodes[1].position.x).toBe(420);
   });
 
   it('refreshes preflight without retrying mutation when BOM changes after the first check', async () => {
@@ -400,7 +466,7 @@ function workflowBomPreflight(
     activeBomVersion: 3,
     syncDraftVersion: classification === 'AUTO_MIGRATABLE' ? 4 : null,
     activeBomWorkflowRevisionId: 175,
-    targetWorkflowRevisionId: 222,
+    targetWorkflowRevisionId: 71,
     preservedItems: ['Raw', 'Box'],
     automaticMappings: classification === 'AUTO_MIGRATABLE'
       ? [{

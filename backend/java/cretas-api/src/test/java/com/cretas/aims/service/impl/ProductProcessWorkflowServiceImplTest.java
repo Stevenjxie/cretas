@@ -458,6 +458,37 @@ class ProductProcessWorkflowServiceImplTest {
     }
 
     @Test
+    @DisplayName("BOM 同步预检先修复当前坏草稿修订，再以新修订计算映射")
+    void bomSyncPreflightRepairsCurrentDraftRevisionBeforeMapping() throws Exception {
+        ProductProcessWorkflow draft = persistedDraft(validDefinition(), 3L);
+        pinCurrentRevision(draft);
+        stubDraft(draft);
+        var current = currentRevision();
+        var repaired = new com.cretas.aims.entity.ProductProcessWorkflowRevision();
+        repaired.setId(92L);
+        repaired.setFactoryId(FACTORY_ID);
+        repaired.setProductTypeId(PRODUCT_ID);
+        repaired.setWorkflowId(draft.getId());
+        repaired.setRevisionHash("roundtrip-stable");
+        repaired.setDefinitionVersion(1);
+        repaired.setStructurallyComplete(true);
+        WorkflowBomSyncPreflightResponse preflight = automaticPreflight();
+        when(bomWorkflowRevisionService.repairCurrentDraftRevisionIfNeeded(
+                FACTORY_ID, current)).thenReturn(repaired);
+        when(workflowBomSynchronizationService.preflight(
+                FACTORY_ID, PRODUCT_ID, repaired)).thenReturn(preflight);
+
+        WorkflowBomSyncPreflightResponse result =
+                service.bomSyncPreflight(FACTORY_ID, PRODUCT_ID);
+
+        assertEquals(preflight, result);
+        verify(bomWorkflowRevisionService)
+                .repairCurrentDraftRevisionIfNeeded(FACTORY_ID, current);
+        verify(workflowBomSynchronizationService)
+                .preflight(FACTORY_ID, PRODUCT_ID, repaired);
+    }
+
+    @Test
     @DisplayName("自动同步、发布、启用按顺序完成并返回完整结果")
     void publishAndActivateCompletesAtomicHappyPath() throws Exception {
         ProductProcessWorkflow draft = persistedDraft(validDefinition(), 3L);
