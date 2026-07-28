@@ -231,6 +231,7 @@
       </div>
       <nav>
         <a href="#scope">00 · 使用说明</a>
+        <a href="#roles">00R · 12 个关键角色</a>
         <a href="#map">01 · 全链路地图</a>
         <a href="#raw">02 · 原料建档</a>
         <a href="#sku">03 · SKU 建档</a>
@@ -264,7 +265,7 @@
 
     <main>
       <header class="hero" id="scope">
-        <div class="eyebrow">CURRENT MAIN · MANUAL REGRESSION · 2026-07-24</div>
+        <div class="eyebrow">CURRENT MAIN · MANUAL REGRESSION · 2026-07-28</div>
         <h2>从建档，到入库、生产、报工与盘点</h2>
         <p>这是一份可直接照着点击的 F006 手工测试手册。先选生产来源，再选测试深度：MVP 用最少步骤证明链路能跑通；中度闭环增加关键审批和业务异常；全量闭环覆盖治理、质量、冲销与全数据核对。</p>
         <div class="meta-row">
@@ -328,6 +329,29 @@
           <label class="step" data-min-depth="medium"><span class="check"><input type="checkbox" data-key="preflight-2"><span></span></span><span><h4>确认关键角色与审批链</h4><p>准备生产主管、仓管、采购、销售和财务角色；核对采购、报工、调拨、盘点、开票/付款审批规则及全局工时单价。</p><span class="expect">每条审批有人可处理且不能由无权限角色越权；全局时薪来源明确，不在工序主档重复填写。</span></span></label>
           <label class="step" data-min-depth="full"><span class="check"><input type="checkbox" data-key="preflight-3"><span></span></span><span><h4>确认全量治理角色与规则</h4><p>准备质检、BOM/ECN 审批、损耗、退货和冲销所需角色；记录物料价格权限、可见仓库和需要上传凭证的规则。</p><span class="expect">全量分支均有真实入口和责任人；如果当前版本没有某个入口，记录“当前不支持”，不得用后台直改伪造通过。</span></span></label>
         </div>
+      </section>
+
+      <section id="roles">
+        <div class="section-head">
+          <span class="section-no">00R</span>
+          <div class="section-title"><h3>RN App 12 个关键角色</h3><p>一个账号只证明一个岗位：先确认能做什么，再确认不能代谁做</p></div>
+        </div>
+        <div class="callout blue"><strong>最小账号集不是万能账号集</strong>以下 12 个账号覆盖关键管理权限和一线闭环。登录后必须确认工厂为 F006、角色与页面一致；本页不保存密码。<code>rw</code> 仍受单据状态、数据范围和 OA 审批约束，看到入口不等于可以越权提交。</div>
+        <div class="table-wrap"><table><thead><tr><th>岗位 / 账号</th><th>实际 RN 能力</th><th>不可代做</th><th>主要交接</th></tr></thead><tbody>
+          <tr><td><strong>老板 / 工厂超级管理员</strong><br><code>f006_admin</code><br><small>factory_super_admin</small></td><td>全工厂模块 <code>rw</code>；进入工厂管理员首页，可看 AI、报表、SmartBI、管理与系统配置。</td><td>不能把超级管理员当万能代办，绕过采购、收货、质检、付款、报工或 OA 节点。</td><td>只处理跨部门权限、配置和升级异常，处理后交回真实岗位继续。</td></tr>
+          <tr><td><strong>HR</strong><br><code>f006_hr_admin</code><br><small>hr_admin</small></td><td>员工、部门、白名单、考勤、排班、人工成本、绩效和批次人员分配；<code>hr=rw</code>。</td><td>不能创建采购、销售、财务、仓储、质检或生产事实。</td><td>向调度/车间提供人员与班次；薪资异常交财务，生产异常交生产经理。</td></tr>
+          <tr><td><strong>财务经理</strong><br><code>f006_finance_mgr</code><br><small>finance_manager</small></td><td>财务首页、OA 待办、应收应付、发票、成本和有权处理的财务审批；采购/销售/生产依据只读。</td><td>RN 不显示出纳专属“付款”页；不能替出纳付款，也不能修改订单、库存或报工。</td><td>审核采购/销售依据后交出纳付款或继续应收核销；差异退回原业务岗位。</td></tr>
+          <tr><td><strong>出纳</strong><br><code>f006_cashier</code><br><small>cashier</small></td><td>财务导航中额外显示“付款”页；依据已批准任务执行允许的付款并上传/回读凭证。</td><td>不能改采购、销售、收货事实，不能支付未审批、超余额或凭证不全的任务，不能自批自付。</td><td>接财务已批准任务；付款结果、流水与异常交财务经理核销。</td></tr>
+          <tr><td><strong>销售经理</strong><br><code>f006_sales_mgr</code><br><small>sales_manager</small></td><td>客户、销售订单、销售退货、价格表和应收应付概览；<code>sales=rw</code>。</td><td>不能替生产报工、替仓库发货扣库或替财务确认收款。</td><td>有效需求交调度/生产；缺料交采购；发货交仓储；开票收款依据交财务。</td></tr>
+          <tr><td><strong>采购经理</strong><br><code>f006_procurement_mgr</code><br><small>procurement_manager</small></td><td>采购订单/退货、价格、供应商、供应商送货、到货确认和采购异常；<code>procurement=rw</code>。</td><td>供应商到货不等于库存入账；不能替仓管入库、替 QC 判定或替财务付款。</td><td>审批后的到货任务交仓储，品质交 QC，发票/收货/应付依据交财务。</td></tr>
+          <tr><td><strong>调度员</strong><br><code>f006_dispatcher</code><br><small>dispatcher</small></td><td>计划、路线、任务/人员分配、插单重排、预警、车间状态、生产线和工序运行；生产/排程/报工域可写。</td><td>不能替仓储收发、替 QC 判定、替财务审批或替操作员填写现场实际值。</td><td>接销售/生产需求和 HR 人员信息；计划下发车间主管，偏差回收后重排。</td></tr>
+          <tr><td><strong>QC / 质量检验员</strong><br><code>f006_quality_insp</code><br><small>quality_inspector</small></td><td>待检、批次、扫码、表单、语音、拍照、标签人工审核、结果、记录、趋势和报告；<code>quality=rw</code>。</td><td>不能改采购、库存、计划或财务；AI 初筛不能替人工结论，采购/仓储/生产也不能代填 QC 结论。</td><td>来料结论交仓储并同步采购；过程/成品结论交车间和生产经理。</td></tr>
+          <tr><td><strong>仓储主管</strong><br><code>f006_warehouse_mgr</code><br><small>warehouse_manager</small></td><td>仓储首页、入库、出库、库存、批次、调拨和盘点；<code>warehouse=rw</code>、<code>inventory=rw</code>。</td><td>不能创建采购/销售订单、替 QC 判定、替操作员报工或替财务确认金额。</td><td>接到货任务与 QC 结论后入库；向生产领料/调拨；接完工入库；按销售任务发货。</td></tr>
+          <tr><td><strong>生产经理</strong><br><code>f006_production_mgr</code><br><small>production_manager</small></td><td>当前走通用管理导航；生产、销售、排程、工作报工、分析和看板可写，关联模块多为只读。</td><td>宽权限不等于可替车间确认、替操作员填实际值，或在仓储、质量、财务制造事实。</td><td>统筹优先级与主数据；执行交车间/操作员，缺料交采购/仓储，完工交仓储。</td></tr>
+          <tr><td><strong>车间主管</strong><br><code>f006_workshop</code><br><small>workshop_supervisor</small></td><td>车间首页、批次、人员和 AI 对话；生产、质量与工作报工域可写。</td><td>不能替销售、采购、财务或仓储建单，也不能凭估计替操作员填写现场投入产出。</td><td>接调度计划、安排班组；缺料/设备/质量/工时异常分别交仓储采购、设备、QC、HR/生产经理。</td></tr>
+          <tr><td><strong>操作员</strong><br><code>f006_worker1</code><br><small>operator</small></td><td>默认进入“分配给我的工序”，可逐步报工、填写实际投入/产出/工时、查看缺料预警；<code>production=rw</code>、<code>work_report=rw</code>。</td><td>只能操作分配给本人且状态允许的任务；不能改计划、BOM、Workflow、主数据、库存、QC 或财务。</td><td>缺料交车间/仓储，质量交 QC，设备异常交车间；正式报工后由生产跟踪、仓储确认完工入库。</td></tr>
+        </tbody></table></div>
+        <div class="callout warning"><strong>关键交接链</strong>销售需求 → 财审 → 调度/生产计划 → 车间安排 → 操作员报工 → QC 检查 → 仓储入库/发货 → 财务核销；缺料支线为采购 → QC → 仓储，付款支线为财务经理批准 → 出纳执行。任何岗位都不能用老板账号代做来“证明链路通过”。</div>
       </section>
 
       <section id="map">
