@@ -41,6 +41,49 @@ SUMMARY_CHAR_BUDGET = 750
 # keeping prompt size, storage, and injection surface predictable.
 CHAT_SESSION_HISTORY_LIMIT = 20
 
+# ── Layer 2: rolling session-state summary (Jul 29 2026) ──────────────────
+# Layer 1 is the 20 verbatim turns above; that limit is a product decision and
+# is NOT changed by this feature. Layer 2 is a much smaller standing statement
+# of what the session is *about* — which stores, which dishes, which metrics
+# ("口径"), which window, and what has already been concluded.
+#
+# Why a second layer at all: 20 verbatim turns are ~10k characters, so they are
+# expensive to reason over and they silently forget the store named in turn 1
+# once turn 21 arrives. This line stays under 300 characters, so it can ride
+# along on every planner call and it survives turns falling out of the window.
+#
+# Why it is built deterministically and NOT by an LLM: an LLM-written summary
+# would add one paid call per turn, which is precisely the opposite of the
+# flywheel goal ("越用越便宜"). Everything here comes from facts the resolver
+# already wrote into `turns_history[*].context` (see compact_structured_context)
+# plus the tail of the latest answer summary. The length cap is enforced by
+# code — never by asking a model to "be brief".
+SESSION_STATE_SUMMARY_CHAR_BUDGET = 300
+# Per-facet caps keep the rendered line stable no matter how long the session
+# runs: a 40-turn session mentioning 12 stores still renders a bounded prefix.
+_SESSION_STATE_MAX_STORES = 4
+_SESSION_STATE_MAX_DISHES = 3
+_SESSION_STATE_MAX_METRICS = 5
+# Below this many characters a conclusion fragment is not worth rendering; the
+# state facts keep the whole budget instead of ending in a stub.
+_SESSION_STATE_MIN_CONCLUSION_CHARS = 16
+
+_SESSION_STATE_METRIC_LABELS = {
+    "revenue": "营收",
+    "orders": "订单量",
+    "gross_margin": "毛利",
+    "sales_volume": "销量",
+    "recipe_cost": "成本",
+    "wastage": "损耗",
+    "staffing": "人力",
+}
+_SESSION_STATE_ACTION_LABELS = {
+    "lookup": "查数",
+    "compare": "对比",
+    "diagnose": "归因",
+    "optimize": "优化建议",
+}
+
 # Rolling TTL: each turn extends expires_at by this duration.
 TTL_SECONDS = 3600  # 1 hour
 POSTGRES_BIGINT_MAX = 9_223_372_036_854_775_807
@@ -255,6 +298,155 @@ def compact_structured_context(value: Optional[Dict[str, Any]]) -> Optional[Dict
     return compact or None
 
 
+def coerce_turns_history(value: Any) -> list:
+    """Normalize a turns_history value into a list of turn dicts.
+
+    asyncpg's default JSONB codec returns text in production while unit-test
+    fakes hand back an already-decoded list. Both shapes reach this module, and
+    treating JSON text as a sequence would iterate it character by character.
+    """
+    if isinstance(value, (bytes, bytearray)):
+        try:
+            value = value.decode("utf-8")
+        except Exception:
+            return []
+    if isinstance(value, str):
+        try:
+            value = _json.loads(value)
+        except (TypeError, ValueError):
+            return []
+    if not isinstance(value, list):
+        return []
+    return [turn for turn in value if isinstance(turn, dict)]
+
+
+def _append_unique(bucket: list, name: Any, limit: int) -> None:
+    """Append a sanitized entity name once, preserving first-seen order."""
+    if not isinstance(name, str):
+        return
+    cleaned = sanitize_for_storage(name.strip())[:40].strip()
+    if not cleaned or cleaned in bucket or len(bucket) >= limit:
+        return
+    bucket.append(cleaned)
+
+
+def _latest_conclusion(turns: list) -> str:
+    """Take the most recent answer's opening sentence as the standing finding.
+
+    The opening sentence is where this system puts its conclusion ("结论先行"
+    is an explicit product principle), so the head of the latest answer is the
+    highest-value fragment per character.
+    """
+    for turn in reversed(turns):
+        answer = turn.get("a_summary")
+        if not isinstance(answer, str):
+            continue
+        answer = sanitize_for_storage(answer).strip()
+        if not answer:
+            continue
+        # Cut at the first sentence terminator so the fragment reads as a
+        # complete statement rather than a mid-clause stub.
+        for terminator in ("。", "！", "？", "\n"):
+            head, sep, _tail = answer.partition(terminator)
+            if sep and head.strip():
+                answer = head.strip()
+                break
+        return answer
+    return ""
+
+
+def build_session_state_summary(
+    turns_history: Any,
+    budget: int = SESSION_STATE_SUMMARY_CHAR_BUDGET,
+) -> str:
+    """Render the rolling Layer-2 state line for one session.
+
+    Pure and deterministic: same turns in, same string out, no LLM, no clock.
+    Reads only the allowlisted structured facts `compact_structured_context`
+    already wrote, so nothing unvetted can reach the column.
+
+    The output is hard-capped at ``budget`` characters. State facts are laid
+    out first and the conclusion fragment is fitted into whatever budget is
+    left, so a long answer can never push out "which store are we discussing".
+    Returns "" when the session carries no state worth stating.
+    """
+    turns = coerce_turns_history(turns_history)
+    if not turns:
+        return ""
+
+    stores: list = []
+    dishes: list = []
+    metrics: list = []
+    window_label = ""
+    comparison_label = ""
+    action_label = ""
+    for turn in turns:
+        context = turn.get("context")
+        if not isinstance(context, dict):
+            continue
+        for store_name in context.get("store_names") or ():
+            _append_unique(stores, store_name, _SESSION_STATE_MAX_STORES)
+        entity = context.get("focus_entity")
+        if isinstance(entity, dict):
+            if entity.get("type") == "dish":
+                _append_unique(dishes, entity.get("name"), _SESSION_STATE_MAX_DISHES)
+            elif entity.get("type") == "store":
+                _append_unique(stores, entity.get("name"), _SESSION_STATE_MAX_STORES)
+        for metric in context.get("requested_metrics") or ():
+            label = _SESSION_STATE_METRIC_LABELS.get(metric)
+            if label and label not in metrics and len(metrics) < _SESSION_STATE_MAX_METRICS:
+                metrics.append(label)
+        # Window / comparison / action describe the CURRENT reading, not an
+        # accumulation: the latest turn's choice is the one still in force.
+        if isinstance(context.get("window_label"), str) and context["window_label"].strip():
+            window_label = sanitize_for_storage(context["window_label"].strip())[:24]
+        if isinstance(context.get("comparison_label"), str) and context["comparison_label"].strip():
+            comparison_label = sanitize_for_storage(context["comparison_label"].strip())[:24]
+        action_label = _SESSION_STATE_ACTION_LABELS.get(
+            context.get("analysis_action"), action_label
+        )
+
+    parts = [f"已聊 {len(turns)} 轮"]
+    if stores:
+        parts.append("门店: " + "、".join(stores))
+    if dishes:
+        parts.append("菜品: " + "、".join(dishes))
+    if metrics:
+        parts.append("口径: " + "、".join(metrics))
+    if window_label:
+        parts.append("时间窗: " + window_label)
+    if comparison_label:
+        parts.append("对比基准: " + comparison_label)
+    if action_label:
+        parts.append("当前动作: " + action_label)
+
+    # A turn count on its own says nothing the verbatim history does not
+    # already say; only emit a summary once there is real state to carry.
+    if len(parts) == 1:
+        return ""
+
+    facts = "；".join(parts)
+    if len(facts) > budget:
+        return facts[: budget - 1].rstrip() + "…"
+
+    conclusion = _latest_conclusion(turns)
+    if conclusion:
+        prefix = "；已得结论: "
+        remaining = budget - len(facts) - len(prefix)
+        if remaining >= _SESSION_STATE_MIN_CONCLUSION_CHARS:
+            if len(conclusion) > remaining:
+                conclusion = conclusion[: remaining - 1].rstrip() + "…"
+            facts = facts + prefix + conclusion
+
+    # Belt-and-braces: the fragments above are already scrubbed individually,
+    # but this column is re-injected into later prompts, so the value that is
+    # actually persisted passes the injection filter as a whole.
+    summary = sanitize_for_storage(facts)
+    if len(summary) > budget:
+        summary = summary[: budget - 1].rstrip() + "…"
+    return summary
+
+
 class ChatSessionService:
     """Async service for smart_bi_chat_session table."""
 
@@ -268,7 +460,8 @@ class ChatSessionService:
         """Fetch session for (session_id, factory_id, user_id) if not expired.
 
         Returns dict with keys: parent_query, parent_answer_summary,
-        parent_template_code, parent_upload_id, turn_count, turns_history.
+        parent_template_code, parent_upload_id, turn_count, turns_history,
+        session_state_summary.
         Returns None if any identity component is absent/invalid, the exact
         triple does not exist, or the row expired. There is deliberately no
         factory-only or legacy anonymous-row fallback.
@@ -286,7 +479,7 @@ class ChatSessionService:
                     """
                     SELECT parent_query, parent_answer_summary,
                            parent_template_code, parent_upload_id, turn_count,
-                           turns_history
+                           turns_history, session_state_summary
                     FROM smart_bi_chat_session
                     WHERE factory_id = $1
                       AND user_id = $2
@@ -326,6 +519,11 @@ class ChatSessionService:
         Jul 25 2026 v4: turns_history JSONB array stores the latest 20
         (q, a_summary) pairs. Build_context_block uses the bounded array to
         inject full multi-turn context, not just the last parent.
+
+        Jul 29 2026 v5: after the turn is durably written, refreshes the
+        Layer-2 rolling `session_state_summary`. That refresh runs OUTSIDE the
+        turn transaction on purpose — a derived convenience column must never
+        be able to roll back the conversation history it is derived from.
         """
         trusted_user_id = parse_trusted_user_id(user_id)
         if not session_id or not factory_id or trusted_user_id is None:
@@ -343,6 +541,7 @@ class ChatSessionService:
         if safe_context:
             new_turn["context"] = safe_context
         new_turn_json = _json.dumps([new_turn], ensure_ascii=False)
+        wrote_turn = False
         try:
             async with self._pool.acquire() as conn:
                 async with conn.transaction():
@@ -415,8 +614,60 @@ class ChatSessionService:
                         factory_id, trusted_user_id, session_id,
                         CHAT_SESSION_HISTORY_LIMIT,
                     )
+                    wrote_turn = True
         except Exception as e:
             logger.warning(f"[chat-session] upsert failed (non-fatal): {e}")
+
+        if wrote_turn:
+            await self._refresh_state_summary(
+                session_id, factory_id, trusted_user_id,
+            )
+
+    async def _refresh_state_summary(
+        self, session_id: str, factory_id: str, trusted_user_id: int,
+    ) -> Optional[str]:
+        """Recompute and store the Layer-2 rolling state line for this session.
+
+        Derived from the pruned turns_history that was just committed, so the
+        column is a pure function of the retained conversation — replaying the
+        same turns always yields the same line, and there is no accumulator to
+        drift out of sync with the history it claims to describe.
+
+        Returns the stored summary (or None). Failures are logged and swallowed:
+        the turn itself is already durable, and a missing state line degrades to
+        exactly the pre-feature prompt rather than to a wrong answer.
+        """
+        try:
+            async with self._pool.acquire() as conn:
+                # fetchval (not fetchrow) keeps this off the lookup path's
+                # call record — the two reads answer different questions.
+                turns_history = await conn.fetchval(
+                    """
+                    SELECT turns_history
+                    FROM smart_bi_chat_session
+                    WHERE factory_id = $1
+                      AND user_id = $2
+                      AND session_id = $3
+                    """,
+                    factory_id, trusted_user_id, session_id,
+                )
+                summary = build_session_state_summary(turns_history) or None
+                await conn.execute(
+                    """
+                    UPDATE smart_bi_chat_session
+                    SET session_state_summary = $4
+                    WHERE factory_id = $1
+                      AND user_id = $2
+                      AND session_id = $3
+                    """,
+                    factory_id, trusted_user_id, session_id, summary,
+                )
+                return summary
+        except Exception as e:
+            logger.warning(
+                f"[chat-session] state summary refresh failed (non-fatal): {e}"
+            )
+            return None
 
     async def prune_expired(self) -> int:
         """Delete expired sessions. Returns row count."""

@@ -1173,11 +1173,18 @@ async def post_restaurant_tiered_answer(
 
         effective_query = query
         conversation_history = None
+        # 2026-07-29 上下文两层记忆 第二层: the rolling <=300-char session state
+        # line. Layer 1 (the 20 verbatim turns in `conversation_history`) is
+        # unchanged; this rides alongside it, not instead of it.
+        session_state_summary = None
         if body.session_id and trusted_user_id is not None:
             parent = await ChatSessionService(pool).lookup(
                 body.session_id,
                 fid,
                 user_id=trusted_user_id,
+            )
+            session_state_summary = (
+                parent.get("session_state_summary") if parent else None
             )
             conversation_history = (
                 parent.get("turns_history")
@@ -1202,6 +1209,7 @@ async def post_restaurant_tiered_answer(
             history=conversation_history,
             session_key=clarification_session_key,
             semantic_first=True,
+            session_summary=session_state_summary,
         )
         if not should_delegate(spec, body.java_tool_name, query=effective_query):
             asyncio.create_task(log_intent_miss(
