@@ -2100,7 +2100,10 @@ def _resolve_sales_date_range(
     absolute = parse_absolute_date_range(text, today=anchor)
     if absolute is not None:
         start, end, _matched = absolute
-        return (start, end), f"{start.isoformat()} 至 {end.isoformat()}"
+        # 标签用「指定区间」而不是日期串本身: 渲染层会在标签后再补一次具体
+        # 日期 (相对时间是「本月（2026-07-01 至 2026-07-27）」), 标签若也写成
+        # 日期就会渲染出「X（X）」的重复。契约校验只要求答案里含该标签, 满足。
+        return (start, end), "指定区间"
 
     # “截至目前/到现在” is an explicit cumulative range, not a missing time
     # slot.  A concrete lower bound keeps every downstream resolver on the
