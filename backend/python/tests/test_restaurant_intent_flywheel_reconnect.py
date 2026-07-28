@@ -701,3 +701,106 @@ async def test_apply_route_promotions_tenant_scope_uses_the_tenant_guc():
     assert pool.writes[0]["guc"] == "FAC_X"
     assert pool.writes[0]["scope"] == "FAC_X"
     assert pool.writes[0]["source"] == "flywheel"
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 计划缓存: 历史来源的时间窗不入缓存 (2026-07-28 spec 歧义收口, 方案 C)
+#
+# spec §3 的准入三条只要求"上下文继承未改写问句", 但 history (最多 20 轮) 照样
+# 喂给 planner。实体有 _verbatim_entity 兜底, 时间没有 —— 见
+# `_plan_time_slot_came_from_history` 的注释。
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _revenue_plan_with_llm_time() -> dict:
+    """A complete revenue plan whose time window came from the planner
+    (`time_range` set), not from the sentence."""
+    plan = _revenue_plan()
+    plan["time_range"] = {"type": "relative", "unit": "month", "count": 1}
+    return plan
+
+
+async def test_history_supplied_time_window_is_not_cached():
+    """B must not inherit the window A's history produced for a bare sentence."""
+    pool = _FakePool()
+    with patch.object(
+        ri, "_t3_llm_parse", new=AsyncMock(return_value=_revenue_plan_with_llm_time())
+    ) as planner:
+        # A: bare sentence (no time word), but the session carries history, so
+        # the planner fills the window from earlier turns.
+        first = await parse_restaurant_query(
+            "营收多少", pool, factory_id=FACTORY,
+            history=[{"q": "上个月营收多少", "a": "..."}],
+            semantic_first=True,
+        )
+        # B: brand-new session, same bare sentence, no history at all.
+        second = await parse_restaurant_query(
+            "营收多少", pool, factory_id=FACTORY, semantic_first=True,
+        )
+
+    assert planner.call_count == 2, (
+        "a history-derived time window must NOT be cached under the bare "
+        "sentence -- B would silently inherit A's window"
+    )
+    assert first.source_tier == "llm"
+    assert second.source_tier == "llm"
+    assert second.planner_authority != "validated_plan_cache"
+
+
+async def test_sentence_with_its_own_time_word_still_caches_with_history():
+    """The narrow guard must not cost hit rate: when the sentence carries its
+    own time word the deterministic layer parses it, so history is irrelevant
+    and the plan is still cached."""
+    pool = _FakePool()
+    with patch.object(
+        ri, "_t3_llm_parse", new=AsyncMock(return_value=_revenue_plan_with_llm_time())
+    ) as planner:
+        await parse_restaurant_query(
+            "本月营收多少", pool, factory_id=FACTORY,
+            history=[{"q": "上个月营收多少", "a": "..."}],
+            semantic_first=True,
+        )
+        second = await parse_restaurant_query(
+            "本月营收多少", pool, factory_id=FACTORY, semantic_first=True,
+        )
+
+    assert planner.call_count == 1, (
+        "an explicit-time sentence must still cache even on a turn with history"
+    )
+    assert second.source_tier == "plan_cache"
+    assert second.planner_authority == "validated_plan_cache"
+
+
+async def test_history_without_an_llm_time_slot_still_caches():
+    """History alone does not block caching -- only a history-derived TIME slot
+    does. (Guards against anyone "simplifying" this to `not history`.)"""
+    pool = _FakePool()
+    with patch.object(
+        ri, "_t3_llm_parse", new=AsyncMock(return_value=_revenue_plan())
+    ) as planner:
+        await parse_restaurant_query(
+            "本月营收多少", pool, factory_id=FACTORY,
+            history=[{"q": "先看看门店列表", "a": "..."}],
+            semantic_first=True,
+        )
+        second = await parse_restaurant_query(
+            "本月营收多少", pool, factory_id=FACTORY, semantic_first=True,
+        )
+
+    assert planner.call_count == 1, "plain history must not disable the plan cache"
+    assert second.source_tier == "plan_cache"
+
+
+def test_history_time_slot_predicate_is_narrow():
+    """Unit-level truth table for the guard itself."""
+    hist = [{"q": "上个月营收多少", "a": "..."}]
+    llm_time = {"time_range": {"type": "relative", "unit": "month", "count": 1}}
+    no_time = {"time_range": None}
+
+    # blocked: bare sentence + LLM-supplied window + history
+    assert ri._plan_time_slot_came_from_history(llm_time, "营收多少", hist) is True
+    # allowed: no history
+    assert ri._plan_time_slot_came_from_history(llm_time, "营收多少", None) is False
+    # allowed: sentence carries its own time word
+    assert ri._plan_time_slot_came_from_history(llm_time, "本月营收多少", hist) is False
+    # allowed: planner supplied no window
+    assert ri._plan_time_slot_came_from_history(no_time, "营收多少", hist) is False

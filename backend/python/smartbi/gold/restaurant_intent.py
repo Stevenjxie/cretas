@@ -2088,6 +2088,55 @@ def _semantic_plan_cache_get(
     return plan if isinstance(plan, dict) else None
 
 
+def _plan_time_slot_came_from_history(
+    parsed: Dict[str, Any],
+    query: str,
+    history: Optional[Sequence[Any]],
+) -> bool:
+    """True when this plan's time window was supplied by the LLM on a turn that
+    carried conversation history -- i.e. the window may have come from earlier
+    turns rather than from THIS sentence.
+
+    Why this blocks caching (2026-07-28, spec 歧义收口):
+      The plan cache is keyed on `(factory_id, normalized sentence, plan_version)`
+      -- deliberately NOT on the session, so a sentence answered once is answered
+      free for everyone. Admission already requires that context inheritance did
+      not rewrite the utterance (`semantic_query == norm_query`), but `history`
+      (up to 20 turns) is still fed to `_t3_llm_parse`, so the planner can fill a
+      slot from something the sentence never said.
+
+      Entities are safe by construction: `_verbatim_entity` forces dish/store to
+      be literal substrings of the question, so history cannot smuggle one in.
+      TIME is the exposed slot -- `_build_spec` only consults the LLM's
+      `time_phrase` when the deterministic layer parses no window out of the
+      sentence itself (the `"全部历史"` test, mirrored here). Sequence:
+
+        A asks "上个月怎么样" then "营收怎么样"  -> planner sees history, emits
+        time_range=上个月 -> the explicit-time gate is satisfied so no
+        clarification -> plan cached under the bare sentence "营收怎么样"
+        -> B, in a brand-new session, asks "营收怎么样" and silently gets
+        LAST MONTH instead of being asked which window they meant.
+
+      Same sentence, different answer depending on whether whoever asked it
+      first happened to have history. Not caching this variant costs almost no
+      hit rate: sentences that carry their own time word still cache (the
+      deterministic layer parses those, so this returns False), and so do
+      clarification plans -- which is where the bulk of the savings live.
+
+    ⛔ Do NOT "simplify" this to `not history`: that kills caching for every turn
+    after the first in a session, which is most production traffic, and takes the
+    whole token saving with it.
+    """
+    if not history:
+        return False
+    time_phrase = _parse_t3_time_range(parsed.get("time_range"))
+    if not time_phrase:
+        return False
+    # Deterministic layer found no window in the sentence -> the LLM's phrase is
+    # what fills it (same predicate `_build_spec` uses to decide that).
+    return _resolve_sales_date_range(query)[1] == "全部历史"
+
+
 def _semantic_plan_cache_put(
     factory_id: str,
     query: str,
@@ -4687,7 +4736,15 @@ async def parse_restaurant_query(
             available_stores=available_stores,
             suggested_stores=suggested_stores,
         )
-        if zero_token_eligible and plan_is_replayable(semantic_spec):
+        if (
+            zero_token_eligible
+            and plan_is_replayable(semantic_spec)
+            # Never cache a plan whose time window the LLM filled in from
+            # conversation history -- the cache key is the bare sentence, so
+            # that window would leak to everyone else asking it. See
+            # `_plan_time_slot_came_from_history`.
+            and not _plan_time_slot_came_from_history(parsed, norm_query, history)
+        ):
             # Store the RAW planner output, never `semantic_spec`: the sealed
             # spec's date_range is concrete, so replaying it tomorrow would
             # answer today's window. A replay recompiles this same JSON
