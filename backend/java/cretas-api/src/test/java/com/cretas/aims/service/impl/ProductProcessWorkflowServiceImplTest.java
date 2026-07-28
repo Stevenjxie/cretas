@@ -2,6 +2,9 @@ package com.cretas.aims.service.impl;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.cretas.aims.dto.ProductProcessWorkflowDTO;
+import com.cretas.aims.dto.workflow.ProductProcessWorkflowActivationDTO;
+import com.cretas.aims.dto.workflow.WorkflowBomSyncPreflightResponse;
+import com.cretas.aims.dto.workflow.WorkflowPublishAndActivateResponse;
 import com.cretas.aims.entity.ProductProcessWorkflow;
 import com.cretas.aims.entity.ProductType;
 import com.cretas.aims.entity.RawMaterialType;
@@ -17,6 +20,7 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
+import org.mockito.InOrder;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
@@ -30,6 +34,7 @@ import java.util.function.Consumer;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
@@ -37,6 +42,7 @@ import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.lenient;
+import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
@@ -77,6 +83,12 @@ class ProductProcessWorkflowServiceImplTest {
     @Mock
     private com.cretas.aims.service.bom.BomWorkflowRevisionService bomWorkflowRevisionService;
 
+    @Mock
+    private com.cretas.aims.service.bom.WorkflowBomSynchronizationService workflowBomSynchronizationService;
+
+    @Mock
+    private com.cretas.aims.service.workflow.ProductProcessWorkflowActivationService workflowActivationService;
+
     private ProductProcessWorkflowValidator validator;
     private ProductProcessWorkflowServiceImpl service;
 
@@ -86,6 +98,7 @@ class ProductProcessWorkflowServiceImplTest {
         validator = new ProductProcessWorkflowValidator();
         service = new ProductProcessWorkflowServiceImpl(
                 repository, revisionRepository, revisionSnapshotService, bomWorkflowRevisionService,
+                workflowBomSynchronizationService, workflowActivationService,
                 activationRepository,
                 objectMapper, validator, catalogValidator, unitValidator,
                 productTypeRepository, rawMaterialTypeRepository);
@@ -96,6 +109,7 @@ class ProductProcessWorkflowServiceImplTest {
         revision.setProductTypeId(PRODUCT_ID);
         revision.setWorkflowId(1L);
         revision.setRevisionHash("test-revision");
+        revision.setDefinitionVersion(1);
         revision.setStructurallyComplete(true);
         lenient().when(revisionSnapshotService.capture(any())).thenReturn(revision);
         lenient().when(revisionSnapshotService.captureDraft(any())).thenReturn(revision);
@@ -390,18 +404,269 @@ class ProductProcessWorkflowServiceImplTest {
             return saved;
         });
 
-        ProductProcessWorkflowDTO published = service.publish(FACTORY_ID, PRODUCT_ID, 3L);
+        ProductProcessWorkflowDTO published = service.publish(
+                FACTORY_ID, PRODUCT_ID, 3L, 77L);
 
         assertEquals(ProductProcessWorkflow.Status.PUBLISHED.name(), published.getStatus());
         assertFalse(published.getUnitReviewRequired());
         assertFalse(draft.getUnitReviewRequired());
         assertEquals(1, published.getVersion());
         assertEquals(4L, published.getLockVersion());
+        assertEquals("legacy:91:test-revision", draft.getLastPublishIdempotencyKey());
+        assertEquals(91L, draft.getLastPublishRevisionId());
+        assertEquals("test-revision", draft.getLastPublishRevisionHash());
+        assertEquals(1, draft.getLastPublishDefinitionVersion());
         verify(catalogValidator).validateForPublish(eq(FACTORY_ID), eq(PRODUCT_ID), any());
         verify(revisionSnapshotService).captureDraft(draft);
         verify(bomWorkflowRevisionService).requireActiveBomPinsRevision(
                 eq(FACTORY_ID), eq(PRODUCT_ID), any());
+        InOrder order = inOrder(
+                repository, workflowBomSynchronizationService, workflowActivationService);
+        order.verify(repository).lockByFactoryId(FACTORY_ID);
+        order.verify(repository).lockByIdAndFactoryId(draft.getId(), FACTORY_ID);
+        order.verify(workflowBomSynchronizationService)
+                .synchronizeForPublish(eq(FACTORY_ID), eq(PRODUCT_ID), any(), eq(77L));
+        order.verify(repository).saveAndFlush(draft);
+        order.verify(workflowActivationService).activate(FACTORY_ID, draft.getId(), 77L);
         verify(repository).saveAndFlush(draft);
+    }
+
+    @Test
+    @DisplayName("旧发布入口激活失败时异常外抛且不会绕过原子协调顺序")
+    void legacyPublishPropagatesActivationFailureAfterBomSyncAndPublish() throws Exception {
+        ProductProcessWorkflow draft = persistedDraft(validDefinition(), 3L);
+        when(repository.findFirstByFactoryIdAndProductTypeIdAndStatusOrderByDefinitionVersionDesc(
+                FACTORY_ID, PRODUCT_ID, ProductProcessWorkflow.Status.DRAFT))
+                .thenReturn(Optional.of(draft));
+        when(repository.saveAndFlush(any(ProductProcessWorkflow.class)))
+                .thenAnswer(invocation -> invocation.getArgument(0));
+        BusinessException activationFailure = new BusinessException(409, "activation failed")
+                .withCode("WORKFLOW_ACTIVATION_CONFLICT");
+        doThrow(activationFailure).when(workflowActivationService)
+                .activate(FACTORY_ID, draft.getId(), 77L);
+
+        BusinessException error = assertThrows(BusinessException.class,
+                () -> service.publish(FACTORY_ID, PRODUCT_ID, 3L, 77L));
+
+        assertEquals("WORKFLOW_ACTIVATION_CONFLICT", error.getErrorCode());
+        InOrder order = inOrder(
+                workflowBomSynchronizationService, repository, workflowActivationService);
+        order.verify(workflowBomSynchronizationService)
+                .synchronizeForPublish(eq(FACTORY_ID), eq(PRODUCT_ID), any(), eq(77L));
+        order.verify(repository).saveAndFlush(draft);
+        order.verify(workflowActivationService).activate(FACTORY_ID, draft.getId(), 77L);
+    }
+
+    @Test
+    @DisplayName("自动同步、发布、启用按顺序完成并返回完整结果")
+    void publishAndActivateCompletesAtomicHappyPath() throws Exception {
+        ProductProcessWorkflow draft = persistedDraft(validDefinition(), 3L);
+        pinCurrentRevision(draft);
+        stubDraft(draft);
+        WorkflowBomSyncPreflightResponse preflight = automaticPreflight();
+        when(workflowBomSynchronizationService.preflight(
+                FACTORY_ID, PRODUCT_ID, currentRevision())).thenReturn(preflight);
+        when(repository.saveAndFlush(any(ProductProcessWorkflow.class)))
+                .thenAnswer(invocation -> {
+                    ProductProcessWorkflow saved = invocation.getArgument(0);
+                    saved.setLockVersion(4L);
+                    return saved;
+                });
+        ProductProcessWorkflowActivationDTO activation = activation(draft);
+        when(workflowActivationService.activate(FACTORY_ID, draft.getId(), 77L))
+                .thenReturn(activation);
+
+        WorkflowPublishAndActivateResponse result = service.publishAndActivate(
+                FACTORY_ID, PRODUCT_ID, 3L, "request-1",
+                91L, "test-revision", 1, 77L);
+
+        assertNotNull(result.getWorkflow());
+        assertEquals(ProductProcessWorkflow.Status.PUBLISHED.name(), result.getWorkflow().getStatus());
+        assertEquals(activation, result.getActivation());
+        assertEquals(preflight, result.getBomSync());
+        assertFalse(result.isReplayed());
+        assertEquals("request-1", draft.getLastPublishIdempotencyKey());
+        assertEquals(91L, draft.getLastPublishRevisionId());
+        assertEquals("test-revision", draft.getLastPublishRevisionHash());
+        assertEquals(1, draft.getLastPublishDefinitionVersion());
+        InOrder order = inOrder(
+                workflowBomSynchronizationService, repository, workflowActivationService);
+        order.verify(workflowBomSynchronizationService)
+                .synchronizeForPublish(FACTORY_ID, PRODUCT_ID, currentRevision(), 77L);
+        order.verify(repository).saveAndFlush(draft);
+        order.verify(workflowActivationService).activate(FACTORY_ID, draft.getId(), 77L);
+    }
+
+    @Test
+    @DisplayName("预检缺少用户输入时发布启用返回 409 且零 mutation")
+    void publishAndActivateRejectsUserInputRequiredWithoutMutation() throws Exception {
+        assertBlockedPreflightHasNoMutation(
+                WorkflowBomSyncPreflightResponse.Classification.USER_INPUT_REQUIRED,
+                false);
+    }
+
+    @Test
+    @DisplayName("预检存在冲突时发布启用返回 409 且零 mutation")
+    void publishAndActivateRejectsConflictWithoutMutation() throws Exception {
+        assertBlockedPreflightHasNoMutation(
+                WorkflowBomSyncPreflightResponse.Classification.CONFLICT,
+                true);
+    }
+
+    @Test
+    @DisplayName("无草稿时仅在 published revision、BOM 与 activation 精确一致时重放")
+    void publishAndActivateReplaysOnlyExactPublishedState() throws Exception {
+        ProductProcessWorkflow published = persistedDraft(validDefinition(), 4L);
+        published.setStatus(ProductProcessWorkflow.Status.PUBLISHED);
+        pinCurrentRevision(published);
+        bindPublishIdentity(published, "request-replay");
+        when(repository.findByFactoryIdAndLastPublishIdempotencyKey(
+                FACTORY_ID, "request-replay")).thenReturn(Optional.of(published));
+        WorkflowBomSyncPreflightResponse preflight = readyPreflight();
+        when(workflowBomSynchronizationService.preflight(
+                FACTORY_ID, PRODUCT_ID, currentRevision())).thenReturn(preflight);
+        ProductProcessWorkflowActivationDTO activation = activation(published);
+        when(workflowActivationService.get(FACTORY_ID, PRODUCT_ID)).thenReturn(activation);
+
+        WorkflowPublishAndActivateResponse result = service.publishAndActivate(
+                FACTORY_ID, PRODUCT_ID, 3L, "request-replay",
+                91L, "test-revision", 1, 77L);
+
+        assertTrue(result.isReplayed());
+        assertEquals(published.getId(), result.getWorkflow().getId());
+        assertEquals(activation, result.getActivation());
+        verify(workflowActivationService, never()).activate(any(), any(), any());
+        verify(workflowBomSynchronizationService, never())
+                .synchronizeForPublish(any(), any(), any(), any());
+        verify(repository, never()).saveAndFlush(any());
+    }
+
+    @Test
+    @DisplayName("持久幂等身份匹配但 activation 不匹配时拒绝伪重放")
+    void publishAndActivateRejectsUnprovenReplay() throws Exception {
+        ProductProcessWorkflow published = persistedDraft(validDefinition(), 6L);
+        published.setStatus(ProductProcessWorkflow.Status.PUBLISHED);
+        pinCurrentRevision(published);
+        bindPublishIdentity(published, "request-not-replay");
+        when(repository.findByFactoryIdAndLastPublishIdempotencyKey(
+                FACTORY_ID, "request-not-replay")).thenReturn(Optional.of(published));
+        when(workflowBomSynchronizationService.preflight(
+                FACTORY_ID, PRODUCT_ID, currentRevision())).thenReturn(readyPreflight());
+
+        BusinessException error = assertThrows(BusinessException.class,
+                () -> service.publishAndActivate(
+                        FACTORY_ID, PRODUCT_ID, 3L, "request-not-replay",
+                        91L, "test-revision", 1, 77L));
+
+        assertEquals(409, error.getCode());
+        assertEquals("WORKFLOW_PUBLISH_REPLAY_CONFLICT", error.getErrorCode());
+        verify(workflowActivationService, never()).activate(any(), any(), any());
+        verify(workflowActivationService).get(FACTORY_ID, PRODUCT_ID);
+        verify(repository, never()).saveAndFlush(any());
+    }
+
+    @Test
+    @DisplayName("同一幂等键绑定不同 revision 身份时返回 409 且零 mutation")
+    void publishAndActivateRejectsSameKeyWithDifferentIdentity() throws Exception {
+        ProductProcessWorkflow published = persistedDraft(validDefinition(), 4L);
+        published.setStatus(ProductProcessWorkflow.Status.PUBLISHED);
+        pinCurrentRevision(published);
+        bindPublishIdentity(published, "request-bound");
+        when(repository.findByFactoryIdAndLastPublishIdempotencyKey(
+                FACTORY_ID, "request-bound")).thenReturn(Optional.of(published));
+
+        BusinessException error = assertThrows(BusinessException.class,
+                () -> service.publishAndActivate(
+                        FACTORY_ID, PRODUCT_ID, 3L, "request-bound",
+                        90L, "different-revision", 1, 77L));
+
+        assertEquals(409, error.getCode());
+        assertEquals("WORKFLOW_PUBLISH_IDEMPOTENCY_KEY_CONFLICT", error.getErrorCode());
+        verifyNoInteractions(workflowBomSynchronizationService);
+        verifyNoInteractions(workflowActivationService);
+        verify(repository, never()).saveAndFlush(any());
+    }
+
+    @Test
+    @DisplayName("同一已完成 revision 使用不同幂等键时返回 409")
+    void publishAndActivateRejectsDifferentKeyForCompletedIdentity() throws Exception {
+        ProductProcessWorkflow published = persistedDraft(validDefinition(), 4L);
+        published.setStatus(ProductProcessWorkflow.Status.PUBLISHED);
+        pinCurrentRevision(published);
+        bindPublishIdentity(published, "original-request");
+        when(repository.findByFactoryIdAndLastPublishIdempotencyKey(
+                FACTORY_ID, "new-request")).thenReturn(Optional.empty());
+        when(repository.findFirstByFactoryIdAndProductTypeIdAndStatusOrderByDefinitionVersionDesc(
+                FACTORY_ID, PRODUCT_ID, ProductProcessWorkflow.Status.DRAFT))
+                .thenReturn(Optional.empty());
+        when(repository.findFirstByFactoryIdAndProductTypeIdAndStatusOrderByDefinitionVersionDesc(
+                FACTORY_ID, PRODUCT_ID, ProductProcessWorkflow.Status.PUBLISHED))
+                .thenReturn(Optional.of(published));
+
+        BusinessException error = assertThrows(BusinessException.class,
+                () -> service.publishAndActivate(
+                        FACTORY_ID, PRODUCT_ID, 3L, "new-request",
+                        91L, "test-revision", 1, 77L));
+
+        assertEquals(409, error.getCode());
+        assertEquals("WORKFLOW_PUBLISH_IDEMPOTENCY_KEY_MISMATCH", error.getErrorCode());
+        verifyNoInteractions(workflowBomSynchronizationService);
+        verifyNoInteractions(workflowActivationService);
+        verify(repository, never()).saveAndFlush(any());
+    }
+
+    @Test
+    @DisplayName("旧 revision 身份即使 lockVersion 相同也不能误判为重放")
+    void publishAndActivateRejectsStaleRevisionIdentityBeforeReplay() throws Exception {
+        ProductProcessWorkflow published = persistedDraft(validDefinition(), 4L);
+        published.setStatus(ProductProcessWorkflow.Status.PUBLISHED);
+        pinCurrentRevision(published);
+        when(repository.findFirstByFactoryIdAndProductTypeIdAndStatusOrderByDefinitionVersionDesc(
+                FACTORY_ID, PRODUCT_ID, ProductProcessWorkflow.Status.DRAFT))
+                .thenReturn(Optional.empty());
+        when(repository.findFirstByFactoryIdAndProductTypeIdAndStatusOrderByDefinitionVersionDesc(
+                FACTORY_ID, PRODUCT_ID, ProductProcessWorkflow.Status.PUBLISHED))
+                .thenReturn(Optional.of(published));
+
+        BusinessException error = assertThrows(BusinessException.class,
+                () -> service.publishAndActivate(
+                        FACTORY_ID, PRODUCT_ID, 3L, "stale-request-key",
+                        90L, "old-revision", 1, 77L));
+
+        assertEquals(409, error.getCode());
+        assertEquals("WORKFLOW_PUBLISH_REVISION_IDENTITY_CONFLICT", error.getErrorCode());
+        verifyNoInteractions(workflowBomSynchronizationService);
+        verifyNoInteractions(workflowActivationService);
+        verify(repository, never()).saveAndFlush(any());
+    }
+
+    @Test
+    @DisplayName("Workflow 激活失败向外抛出且发生在 BOM 同步和发布保存之后")
+    void publishAndActivatePropagatesActivationFailureAfterPublishSteps() throws Exception {
+        ProductProcessWorkflow draft = persistedDraft(validDefinition(), 3L);
+        pinCurrentRevision(draft);
+        stubDraft(draft);
+        when(workflowBomSynchronizationService.preflight(
+                FACTORY_ID, PRODUCT_ID, currentRevision())).thenReturn(automaticPreflight());
+        when(repository.saveAndFlush(any(ProductProcessWorkflow.class)))
+                .thenAnswer(invocation -> invocation.getArgument(0));
+        BusinessException activationFailure = new BusinessException(409, "activation failed")
+                .withCode("WORKFLOW_ACTIVATION_CONFLICT");
+        doThrow(activationFailure).when(workflowActivationService)
+                .activate(FACTORY_ID, draft.getId(), 77L);
+
+        BusinessException error = assertThrows(BusinessException.class,
+                () -> service.publishAndActivate(
+                        FACTORY_ID, PRODUCT_ID, 3L, "request-fail",
+                        91L, "test-revision", 1, 77L));
+
+        assertEquals("WORKFLOW_ACTIVATION_CONFLICT", error.getErrorCode());
+        InOrder order = inOrder(
+                workflowBomSynchronizationService, repository, workflowActivationService);
+        order.verify(workflowBomSynchronizationService)
+                .synchronizeForPublish(FACTORY_ID, PRODUCT_ID, currentRevision(), 77L);
+        order.verify(repository).saveAndFlush(draft);
+        order.verify(workflowActivationService).activate(FACTORY_ID, draft.getId(), 77L);
     }
 
     @Test
@@ -523,6 +788,7 @@ class ProductProcessWorkflowServiceImplTest {
                         mock(com.cretas.aims.repository.bom.BomRecipeItemRepository.class));
         ProductProcessWorkflowServiceImpl realService = new ProductProcessWorkflowServiceImpl(
                 repository, revisionRepository, revisionSnapshotService, bomWorkflowRevisionService,
+                workflowBomSynchronizationService, workflowActivationService,
                 activationRepository,
                 new ObjectMapper(), validator, realCatalogValidator, unitValidator,
                 productTypeRepository, mock(com.cretas.aims.repository.RawMaterialTypeRepository.class));
@@ -533,6 +799,92 @@ class ProductProcessWorkflowServiceImplTest {
         assertEquals("PRODUCT_PROCESS_WORKFLOW_INVALID", error.getErrorCode());
         assertEquals(ProductProcessWorkflow.Status.DRAFT, draft.getStatus());
         verify(repository, never()).saveAndFlush(any());
+    }
+
+    private void assertBlockedPreflightHasNoMutation(
+            WorkflowBomSyncPreflightResponse.Classification classification,
+            boolean conflict) throws Exception {
+        ProductProcessWorkflow draft = persistedDraft(validDefinition(), 3L);
+        pinCurrentRevision(draft);
+        stubDraft(draft);
+        WorkflowBomSyncPreflightResponse.SyncIssue issue =
+                WorkflowBomSyncPreflightResponse.SyncIssue.builder()
+                        .code(conflict ? "BOM_WORKFLOW_UPGRADE_UNIT_INCOMPATIBLE"
+                                : "BOM_WORKFLOW_INPUT_ITEM_MISSING")
+                        .field(conflict ? "unit" : "materialTypeId")
+                        .message(conflict ? "单位冲突" : "缺少原料")
+                        .action(conflict ? "统一计量单位" : "补充原料配置")
+                        .build();
+        WorkflowBomSyncPreflightResponse preflight =
+                WorkflowBomSyncPreflightResponse.builder()
+                        .classification(classification)
+                        .conflicts(conflict ? List.of(issue) : List.of())
+                        .missingItems(conflict ? List.of() : List.of(issue))
+                        .canCompleteAutomatically(false)
+                        .build();
+        when(workflowBomSynchronizationService.preflight(
+                FACTORY_ID, PRODUCT_ID, currentRevision())).thenReturn(preflight);
+
+        BusinessException error = assertThrows(BusinessException.class,
+                () -> service.publishAndActivate(
+                        FACTORY_ID, PRODUCT_ID, 3L, "request-blocked",
+                        91L, "test-revision", 1, 77L));
+
+        assertEquals(409, error.getCode());
+        assertEquals("WORKFLOW_BOM_SYNC_" + classification.name(), error.getErrorCode());
+        verify(workflowBomSynchronizationService, never())
+                .synchronizeForPublish(any(), any(), any(), any());
+        verifyNoInteractions(workflowActivationService);
+        verify(repository, never()).saveAndFlush(any());
+    }
+
+    private void stubDraft(ProductProcessWorkflow draft) {
+        when(repository.findFirstByFactoryIdAndProductTypeIdAndStatusOrderByDefinitionVersionDesc(
+                FACTORY_ID, PRODUCT_ID, ProductProcessWorkflow.Status.DRAFT))
+                .thenReturn(Optional.of(draft));
+    }
+
+    private void pinCurrentRevision(ProductProcessWorkflow workflow) {
+        workflow.setCurrentRevisionId(91L);
+        workflow.setCurrentRevisionHash("test-revision");
+    }
+
+    private void bindPublishIdentity(
+            ProductProcessWorkflow workflow,
+            String idempotencyKey) {
+        workflow.setLastPublishIdempotencyKey(idempotencyKey);
+        workflow.setLastPublishRevisionId(91L);
+        workflow.setLastPublishRevisionHash("test-revision");
+        workflow.setLastPublishDefinitionVersion(1);
+    }
+
+    private com.cretas.aims.entity.ProductProcessWorkflowRevision currentRevision() {
+        return revisionRepository.findByIdAndFactoryId(91L, FACTORY_ID).orElseThrow();
+    }
+
+    private WorkflowBomSyncPreflightResponse automaticPreflight() {
+        return WorkflowBomSyncPreflightResponse.builder()
+                .classification(WorkflowBomSyncPreflightResponse.Classification.AUTO_MIGRATABLE)
+                .canCompleteAutomatically(true)
+                .build();
+    }
+
+    private WorkflowBomSyncPreflightResponse readyPreflight() {
+        return WorkflowBomSyncPreflightResponse.builder()
+                .classification(WorkflowBomSyncPreflightResponse.Classification.READY)
+                .canCompleteAutomatically(true)
+                .build();
+    }
+
+    private ProductProcessWorkflowActivationDTO activation(ProductProcessWorkflow workflow) {
+        ProductProcessWorkflowActivationDTO dto = new ProductProcessWorkflowActivationDTO();
+        dto.setFactoryId(FACTORY_ID);
+        dto.setProductTypeId(PRODUCT_ID);
+        dto.setActiveWorkflowId(workflow.getId());
+        dto.setActiveDefinitionVersion(workflow.getDefinitionVersion());
+        dto.setEnabled(true);
+        dto.setLockVersion(0L);
+        return dto;
     }
 
     private ProductProcessWorkflowDTO validDefinition() {

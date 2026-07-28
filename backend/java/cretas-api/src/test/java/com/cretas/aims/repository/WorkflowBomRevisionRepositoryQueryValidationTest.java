@@ -3,6 +3,7 @@ package com.cretas.aims.repository;
 import com.cretas.aims.entity.bom.BomRecipe;
 import com.cretas.aims.repository.bom.BomRecipeRepository;
 import com.cretas.aims.repository.bom.BomSeasoningItemRepository;
+import jakarta.persistence.EntityManager;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.autoconfigure.domain.EntityScan;
@@ -25,12 +26,15 @@ class WorkflowBomRevisionRepositoryQueryValidationTest {
     @Autowired ProductProcessWorkflowRevisionRepository revisionRepository;
     @Autowired BomRecipeRepository recipeRepository;
     @Autowired BomSeasoningItemRepository seasoningRepository;
+    @Autowired EntityManager entityManager;
 
     @Test
     void repositoriesBootAndNewDerivedAndLockQueriesParse() {
         assertThat(workflowRepository
                 .findByFactoryIdAndProductTypeIdOrderByDefinitionVersionDesc("F-JPA", "FG-NONE"))
                 .isEmpty();
+        assertThat(workflowRepository.findByFactoryIdAndLastPublishIdempotencyKey(
+                "F-JPA", "missing-publish-key")).isEmpty();
         assertThat(revisionRepository
                 .findByFactoryIdAndProductTypeIdOrderByCreatedAtDesc("F-JPA", "FG-NONE"))
                 .isEmpty();
@@ -60,5 +64,12 @@ class WorkflowBomRevisionRepositoryQueryValidationTest {
                 .findByRecipeIdAndWorkflowProcessNodeIdAndMaterialTypeId(
                         "BOM-NONE", "process-node", "RM-NONE"))
                 .isEmpty();
+
+        var workflowEntity = entityManager.getMetamodel()
+                .entity(com.cretas.aims.entity.ProductProcessWorkflow.class);
+        assertThat(workflowEntity.getAttribute("lastPublishIdempotencyKey")).isNotNull();
+        assertThat(workflowEntity.getAttribute("lastPublishRevisionId")).isNotNull();
+        assertThat(workflowEntity.getAttribute("lastPublishRevisionHash")).isNotNull();
+        assertThat(workflowEntity.getAttribute("lastPublishDefinitionVersion")).isNotNull();
     }
 }

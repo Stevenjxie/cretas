@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref, onMounted, watch, defineAsyncComponent } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
+import BomContent from '@/views/production/bom/index.vue';
 
 const route = useRoute();
 const router = useRouter();
@@ -9,7 +10,8 @@ const props = defineProps<{
   initialProductTypeId?: string;
 }>();
 
-const BomContent = defineAsyncComponent(() => import('@/views/production/bom/index.vue'));
+// BOM 是本页默认且最常用的首屏内容，随统一页一次加载，避免“外壳 chunk → BOM chunk”
+// 两段式等待。低频转换率页签仍保持按需加载。
 const ConversionContent = defineAsyncComponent(() => import('@/views/production/conversions/index.vue'));
 
 /**

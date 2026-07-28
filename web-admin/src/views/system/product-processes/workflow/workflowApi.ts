@@ -2,6 +2,9 @@ import { del, get, post, put } from '@/api/request';
 import type {
   ProductProcessWorkflowActivation,
   ProductProcessWorkflowDefinition,
+  WorkflowBomSyncPreflight,
+  WorkflowPublishAndActivateRequest,
+  WorkflowPublishAndActivateResponse,
 } from './types';
 
 const workflowConflictConfig = {
@@ -16,6 +19,21 @@ const workflowPublishConfig = {
     ...workflowConflictConfig._handledErrorCodes,
     'WORKFLOW_ACTIVE_BOM_REVISION_MISMATCH',
     'WORKFLOW_ACTIVE_BOM_FAMILY_INCOMPLETE',
+    'WORKFLOW_ACTIVE_BOM_REQUIRED',
+    'BOM_WORKFLOW_UPGRADE_SLOT_AMBIGUOUS',
+    'BOM_WORKFLOW_UPGRADE_MATERIAL_AMBIGUOUS',
+    'BOM_WORKFLOW_INPUT_ITEM_MISSING',
+    'BOM_WORKFLOW_UPGRADE_UNIT_INCOMPATIBLE',
+    'PRODUCT_PROCESS_WORKFLOW_DRAFT_MISSING',
+    'PRODUCT_PROCESS_WORKFLOW_REVISION_INCOMPLETE',
+    'WORKFLOW_PUBLISH_IDEMPOTENCY_KEY_REQUIRED',
+    'WORKFLOW_PUBLISH_IDEMPOTENCY_KEY_INVALID',
+    'WORKFLOW_PUBLISH_IDEMPOTENCY_KEY_CONFLICT',
+    'WORKFLOW_PUBLISH_IDEMPOTENCY_KEY_MISMATCH',
+    'WORKFLOW_PUBLISH_REVISION_IDENTITY_CONFLICT',
+    'WORKFLOW_PUBLISH_REPLAY_CONFLICT',
+    'WORKFLOW_BOM_SYNC_USER_INPUT_REQUIRED',
+    'WORKFLOW_BOM_SYNC_CONFLICT',
   ],
 };
 
@@ -45,6 +63,27 @@ export function publishProductProcessWorkflow(
   return post<ProductProcessWorkflowDefinition>(
     `/${factoryId}/product-process-workflows/${productTypeId}/publish`,
     { lockVersion },
+    workflowPublishConfig,
+  );
+}
+
+export function getWorkflowBomSyncPreflight(
+  factoryId: string,
+  productTypeId: string,
+) {
+  return get<WorkflowBomSyncPreflight>(
+    `/${factoryId}/product-process-workflows/${productTypeId}/bom-sync-preflight`,
+  );
+}
+
+export function publishAndActivateProductProcessWorkflow(
+  factoryId: string,
+  productTypeId: string,
+  request: WorkflowPublishAndActivateRequest,
+) {
+  return post<WorkflowPublishAndActivateResponse>(
+    `/${factoryId}/product-process-workflows/${productTypeId}/publish-and-activate`,
+    request,
     workflowPublishConfig,
   );
 }

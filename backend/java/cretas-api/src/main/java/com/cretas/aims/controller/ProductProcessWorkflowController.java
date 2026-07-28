@@ -8,6 +8,9 @@ import com.cretas.aims.dto.ProductProcessWorkflowVersionSummaryDTO;
 import com.cretas.aims.dto.common.ApiResponse;
 import com.cretas.aims.dto.workflow.ProductProcessWorkflowActivationDTO;
 import com.cretas.aims.dto.workflow.WorkflowOutputResolutionDTO;
+import com.cretas.aims.dto.workflow.WorkflowBomSyncPreflightResponse;
+import com.cretas.aims.dto.workflow.WorkflowPublishAndActivateRequest;
+import com.cretas.aims.dto.workflow.WorkflowPublishAndActivateResponse;
 import com.cretas.aims.service.ProductProcessWorkflowService;
 import com.cretas.aims.service.workflow.ProductProcessWorkflowActivationService;
 import com.cretas.aims.service.workflow.ProductWorkflowResolutionService;
@@ -125,12 +128,46 @@ public class ProductProcessWorkflowController {
     @RequireRole({"factory_super_admin", "workshop_supervisor", "department_admin"})
     @PreAuthorize("hasAnyRole('ADMIN', 'MANAGER')")
     @PostMapping("/{productTypeId}/publish")
-    @Operation(summary = "发布 Workflow 图版本；阶段一不投影为生产任务")
+    @Operation(summary = "兼容入口：自动同步 BOM、发布并启用 Workflow")
     public ApiResponse<ProductProcessWorkflowDTO> publish(
             @PathVariable String factoryId,
             @PathVariable String productTypeId,
-            @RequestBody @Valid ProductProcessWorkflowDTO.PublishRequest request) {
-        return ApiResponse.success(service.publish(factoryId, productTypeId, request.getLockVersion()));
+            @RequestBody @Valid ProductProcessWorkflowDTO.PublishRequest body,
+            HttpServletRequest request) {
+        return ApiResponse.success(service.publish(
+                factoryId,
+                productTypeId,
+                body.getLockVersion(),
+                (Long) request.getAttribute("userId")));
+    }
+
+    @GetMapping("/{productTypeId}/bom-sync-preflight")
+    @Operation(summary = "只读检查当前生效 BOM 是否可自动同步到 Workflow 草稿")
+    public ApiResponse<WorkflowBomSyncPreflightResponse> bomSyncPreflight(
+            @PathVariable String factoryId,
+            @PathVariable String productTypeId) {
+        return ApiResponse.success(service.bomSyncPreflight(factoryId, productTypeId));
+    }
+
+    @RequirePermission({"production:read_write"})
+    @RequireRole({"factory_super_admin", "workshop_supervisor", "department_admin"})
+    @PreAuthorize("hasAnyRole('ADMIN', 'MANAGER')")
+    @PostMapping("/{productTypeId}/publish-and-activate")
+    @Operation(summary = "自动同步 BOM、发布并启用当前 Workflow")
+    public ApiResponse<WorkflowPublishAndActivateResponse> publishAndActivate(
+            @PathVariable String factoryId,
+            @PathVariable String productTypeId,
+            @RequestBody @Valid WorkflowPublishAndActivateRequest body,
+            HttpServletRequest request) {
+        return ApiResponse.success(service.publishAndActivate(
+                factoryId,
+                productTypeId,
+                body.getLockVersion(),
+                body.getIdempotencyKey(),
+                body.getRevisionId(),
+                body.getRevisionHash(),
+                body.getDefinitionVersion(),
+                (Long) request.getAttribute("userId")));
     }
 
     @RequirePermission({"production:read_write"})

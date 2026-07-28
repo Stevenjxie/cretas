@@ -268,6 +268,102 @@ class BomWorkflowRevisionServiceTest {
     }
 
     @Test
+    void activeBomLineageWinsOverCompatibleHistoricalDrafts() throws Exception {
+        BomRecipe draft = recipe(null);
+        ProductProcessWorkflowRevision historical = revision(oneToOne());
+        historical.setId(72L);
+        historical.setWorkflowId(42L);
+        ProductProcessWorkflowRevision activeLineage = revision(oneToOne());
+        activeLineage.setId(73L);
+        activeLineage.setWorkflowId(43L);
+        BomRecipe active = recipe(snapshot(oneToOne()));
+        active.setStatus(BomRecipe.Status.ACTIVE);
+        active.setIsCurrent(true);
+        active.setWorkflowId(43L);
+        when(revisionRepository.findCurrentFactoryDraftRevisions(FACTORY))
+                .thenReturn(List.of(historical, activeLineage));
+        when(recipeRepository.findByFactoryIdAndProductTypeIdAndIsCurrentTrueAndStatus(
+                FACTORY, PRODUCT, BomRecipe.Status.ACTIVE)).thenReturn(Optional.of(active));
+        when(recipeRepository.saveAndFlush(draft)).thenReturn(draft);
+
+        BomWorkflowRevisionService.WorkflowBinding selected =
+                service.autoBindUniqueDraft(FACTORY, draft);
+
+        assertEquals(43L, selected.revision().getWorkflowId());
+        assertEquals(73L, draft.getWorkflowRevisionId());
+    }
+
+    @Test
+    void enabledWorkflowLineageWinsWhenThereIsNoActiveBomLineage() throws Exception {
+        BomRecipe draft = recipe(null);
+        ProductProcessWorkflowRevision historical = revision(oneToOne());
+        historical.setId(72L);
+        historical.setWorkflowId(42L);
+        ProductProcessWorkflowRevision enabledLineage = revision(oneToOne());
+        enabledLineage.setId(73L);
+        enabledLineage.setWorkflowId(43L);
+        ProductProcessWorkflowActivation activation = new ProductProcessWorkflowActivation();
+        activation.setFactoryId(FACTORY);
+        activation.setProductTypeId(PRODUCT);
+        activation.setActiveWorkflowId(43L);
+        activation.setEnabled(true);
+        when(revisionRepository.findCurrentFactoryDraftRevisions(FACTORY))
+                .thenReturn(List.of(historical, enabledLineage));
+        when(activationRepository.findByFactoryIdAndProductTypeId(FACTORY, PRODUCT))
+                .thenReturn(Optional.of(activation));
+        when(recipeRepository.saveAndFlush(draft)).thenReturn(draft);
+
+        BomWorkflowRevisionService.WorkflowBinding selected =
+                service.autoBindUniqueDraft(FACTORY, draft);
+
+        assertEquals(43L, selected.revision().getWorkflowId());
+        assertEquals(73L, draft.getWorkflowRevisionId());
+    }
+
+    @Test
+    void regeneratedNodeIdsRemainMigratableWhenMaterialIdentityAndUnitAreUnique() throws Exception {
+        ProductProcessWorkflowDTO oldDefinition = oneToOne();
+        BomRecipe draft = recipe(snapshot(oldDefinition));
+        ProductProcessWorkflowDTO newDefinition = oneToOne();
+        ProductProcessWorkflowDTO.Node raw = newDefinition.getNodes().stream()
+                .filter(node -> "RAW_MATERIAL".equals(node.getKind()))
+                .findFirst().orElseThrow();
+        raw.setId("material:raw:new");
+        ProductProcessWorkflowDTO.Node process = newDefinition.getNodes().stream()
+                .filter(node -> "PROCESS".equals(node.getKind()))
+                .findFirst().orElseThrow();
+        process.setId("process:new");
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> processPorts =
+                (List<Map<String, Object>>) process.getData().get("ports");
+        processPorts.stream()
+                .filter(port -> "INPUT".equals(port.get("direction")))
+                .forEach(port -> port.put("materialNodeId", "material:raw:new"));
+        newDefinition.getEdges().clear();
+        newDefinition.getEdges().add(edge(
+                "edge:new:input", "material:raw:new", "output", "process:new", "in-a"));
+        newDefinition.getEdges().add(edge(
+                "edge:new:output", "process:new", "out", "finished", "input"));
+        ProductProcessWorkflowRevision target = revision(newDefinition);
+        target.setId(222L);
+        target.setWorkflowId(draft.getWorkflowId());
+        target.setRevisionHash(snapshotService.hash(target));
+        when(revisionRepository.findCurrentFactoryDraftRevisions(FACTORY))
+                .thenReturn(List.of(target));
+        when(recipeRepository.saveAndFlush(draft)).thenReturn(draft);
+
+        BomWorkflowRevisionService.WorkflowBinding migrated =
+                service.upgradeToLatestCompatibleDraft(FACTORY, draft);
+
+        assertEquals(222L, migrated.revision().getId());
+        assertEquals("material:raw:new", migrated.graph().rootMaterialTypeIds().isEmpty()
+                ? null
+                : migrated.graph().nodes().stream()
+                .filter(node -> "RAW_MATERIAL".equals(node.getKind()))
+                .findFirst().orElseThrow().getId());
+    }
+
+    @Test
     void publishGateExplainsHowToUpgradeAnActiveBomPinnedToAnOlderRevision() throws Exception {
         ProductProcessWorkflowRevision revision = revision(oneToOne());
         when(recipeRepository.findByFactoryIdAndWorkflowRevisionIdAndStatusOrderByProductTypeIdAsc(

@@ -90,14 +90,15 @@
       <el-alert
         v-if="bomMissingProducts.length > 0"
         class="workflow-bom-alert"
-        type="warning"
+        type="info"
         :closable="false"
         show-icon
       >
         <template #title>
-          {{ bomMissingProducts.map((item) => item.name).join('、') }} 尚未配置原辅料 BOM
+          {{ bomMissingProducts.map((item) => item.name).join('、') }} 暂未读取到生效 BOM
         </template>
         <template #default>
+          <span>此处仅供配置参考；点击“自动同步并发布”后，系统会重新执行权威检查。</span>
           <el-button
             link
             type="primary"
@@ -112,22 +113,47 @@
         v-else-if="bomRevisionMismatchProducts.length > 0"
         class="workflow-bom-alert"
         data-testid="workflow-bom-revision-alert"
-        type="warning"
+        type="info"
         :closable="false"
         show-icon
       >
         <template #title>
-          当前工艺已更新，{{ bomRevisionMismatchProducts.map((item) => item.name).join('、') }} 的生效 BOM 仍使用旧工艺
+          {{ bomRevisionMismatchProducts.map((item) => item.name).join('、') }} 的生效 BOM 仍关联旧工艺
         </template>
         <template #default>
-          <span>请升级 BOM、补齐新增原料并激活新版本，再发布并启用 Workflow。</span>
+          <span>发布时系统会重新检查并自动同步；无需先进入 BOM 手工升级。</span>
           <el-button
             link
             type="primary"
             @click="openBomDrawer(bomRevisionMismatchProducts[0]?.id)"
           >
-            在右侧升级 BOM →
+            查看 BOM →
           </el-button>
+        </template>
+      </el-alert>
+
+      <el-alert
+        v-if="workflowBomSyncPreflight"
+        class="workflow-bom-alert"
+        data-testid="workflow-bom-sync-preflight"
+        :type="workflowBomSyncBlocked ? 'error' : 'success'"
+        :closable="false"
+        show-icon
+        :title="workflowBomSyncStatusTitle(workflowBomSyncPreflight)"
+      >
+        <template v-if="workflowBomSyncBlocked" #default>
+          <ul>
+            <li
+              v-for="issue in workflowBomSyncIssues"
+              :key="[issue.code, issue.materialTypeId, issue.processNodeId, issue.field].join(':')"
+            >
+              {{ issue.materialName ? `${issue.materialName}：` : '' }}{{ issue.message }}
+              <span v-if="issue.action">（{{ issue.action }}）</span>
+            </li>
+          </ul>
+        </template>
+        <template v-else-if="workflowBomSyncPreflight.classification === 'AUTO_MIGRATABLE'" #default>
+          系统将保留已有 BOM 内容，并把可唯一确定的原料入口迁移到当前 Workflow。
         </template>
       </el-alert>
 
@@ -138,7 +164,16 @@
           <el-button size="small" type="primary" @click="restorePreviewAsDraft">恢复为当前草稿</el-button>
           <el-button size="small" @click="exitVersionPreview">退出预览</el-button>
         </div>
-        <el-empty v-if="!productTypeId" description="请先选择产品" :image-size="90" />
+        <div
+          v-if="!productTypeId && catalogLoading"
+          data-testid="workflow-product-loading"
+          aria-busy="true"
+          aria-live="polite"
+        >
+          <el-skeleton :rows="5" animated />
+          <span>正在加载目标产品与 Workflow…</span>
+        </div>
+        <el-empty v-else-if="!productTypeId" description="请先选择产品" :image-size="90" />
         <VueFlow
           v-else
           id="product-process-workflow"
@@ -517,10 +552,18 @@
       destroy-on-close
       @closed="onBomDrawerClosed"
     >
-      <BomUnifiedPanel
-        v-if="bomDrawerVisible"
-        :initial-product-type-id="bomDrawerProductTypeId"
-      />
+      <Suspense>
+        <BomUnifiedPanel
+          v-if="bomDrawerVisible"
+          :initial-product-type-id="bomDrawerProductTypeId"
+        />
+        <template #fallback>
+          <div aria-busy="true" aria-live="polite">
+            <el-skeleton :rows="10" animated />
+            <span>正在加载 BOM / 配方管理…</span>
+          </div>
+        </template>
+      </Suspense>
     </el-drawer>
 
     <!-- #12b: 版本记录抽屉 (只读浏览之前发布过的版本) -->
@@ -544,7 +587,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, defineAsyncComponent, nextTick, onMounted, onUnmounted, ref, watch } from 'vue';
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue';
 import gsap from 'gsap';
 import { prefersReducedMotion } from '@/utils/motion/prefersReducedMotion';
 import {
@@ -591,15 +634,31 @@ import { classifyWorkflowTopology } from './workflowClassification';
 import {
   activateProductProcessWorkflow,
   deactivateProductProcessWorkflow,
+  getWorkflowBomSyncPreflight,
   getProductProcessWorkflow,
   getProductProcessWorkflowActivation,
   getProductProcessWorkflowVersion,
   listProductProcessWorkflowVersions,
-  publishProductProcessWorkflow,
+  publishAndActivateProductProcessWorkflow,
   saveProductProcessWorkflowDraft,
   snapshotProductProcessWorkflow,
   type WorkflowVersionSummary,
 } from './workflowApi';
+import {
+  BomUnifiedPanel,
+  preloadBomUnifiedPanel,
+  scheduleBomUnifiedPanelPreload,
+} from './bomUnifiedPanelLoader';
+import {
+  resolveWorkflowPublishCommand,
+  type WorkflowPublishCommand,
+} from './workflowPublishCommand';
+import {
+  canPublishWorkflowWithBomSync,
+  executeWorkflowPublishMutation,
+  workflowBomSyncBlockingIssues,
+  workflowBomSyncStatusTitle,
+} from './workflowPublishGate';
 import {
   applyWorkflowPatches,
   autoLayoutWorkflow,
@@ -626,6 +685,7 @@ import type {
   ProductProcessWorkflowDefinition,
   ProductProcessWorkflowEdge,
   ProductProcessWorkflowNode,
+  WorkflowBomSyncPreflight,
   WorkflowValidationError,
 } from './types';
 
@@ -702,6 +762,11 @@ const loadedCatalogFactoryId = ref<string | null>(null);
 const saving = ref(false);
 const snapshotting = ref(false);
 const publishing = ref(false);
+const workflowBomSyncPreflight = ref<WorkflowBomSyncPreflight | null>(null);
+const workflowBomSyncIssues = computed(() => (
+  workflowBomSyncBlockingIssues(workflowBomSyncPreflight.value)
+));
+const workflowBomSyncBlocked = computed(() => workflowBomSyncIssues.value.length > 0);
 // 发布确认框显示期间也要锁住动作，避免连续点击叠加多个确认框/发布请求。
 const publishConfirming = ref(false);
 const activationChanging = ref(false);
@@ -728,7 +793,6 @@ let editSeq = 0;
 // #10: BOM 配置抽屉 (右侧滑出, 不跳转页面, 关闭即回工序配置, 避免丢失未保存草稿)
 const bomDrawerVisible = ref(false);
 const bomDrawerProductTypeId = ref('');
-const BomUnifiedPanel = defineAsyncComponent(() => import('@/views/production/bom-unified/index.vue'));
 // #12b: 版本记录浏览 (只读查看之前发布过的版本); previewingVersion 非空时 = 正在预览历史版本
 const versionDrawerVisible = ref(false);
 const versionList = ref<WorkflowVersionSummary[]>([]);
@@ -885,10 +949,13 @@ let catalogGeneration = 0;
 let createSkuGeneration = 0;
 let loadGeneration = 0;
 let bomLoadGeneration = 0;
+let lastBomLoadKey = '';
 let saveGeneration = 0;
 let publishGeneration = 0;
+let previousPublishCommand: WorkflowPublishCommand | null = null;
 let activationLoadGeneration = 0;
 let activationMutationGeneration = 0;
+let cancelBomPanelPreload: (() => void) | null = null;
 
 const productTypeId = computed(() => props.productTypeId);
 const rawOwnerMode = computed(() => props.rawOwnerMode === true);
@@ -926,6 +993,8 @@ const canEdit = computed(() => (
   props.canWrite
   && !loading.value
   && !catalogLoading.value
+  && !publishing.value
+  && !publishConfirming.value
   && previewingVersion.value === null   // #12b 预览历史版本时整个画布只读 (不可拖/存/发布, 防止旧版本被当草稿保存发布)
   && loadedCatalogFactoryId.value === props.factoryId
   && loadedDefinitionIdentity.value?.factoryId === props.factoryId
@@ -938,7 +1007,7 @@ const currentDefinitionIsEnabled = computed(() => (
 ));
 const publishActionCompleted = computed(() => currentDefinitionIsEnabled.value && !dirty.value);
 const publishActionLabel = computed(() => (
-  publishActionCompleted.value ? '已发布并启用' : '发布并启用'
+  publishActionCompleted.value ? '已发布并启用' : '自动同步并发布'
 ));
 const publishDisabledReason = computed(() => {
   if (publishConfirming.value || publishing.value) return '正在发布 Workflow，请勿重复提交';
@@ -958,9 +1027,6 @@ const publishDisabledReason = computed(() => {
   const outputContractError = validateWorkflow(currentDefinition(), 'publish')
     .find((error) => error.code === 'OUTPUT_CONTRACT_INVALID');
   if (outputContractError) return outputContractError.message;
-  if (bomMissingProducts.value.length > 0) {
-    return `${bomMissingProducts.value.map((item) => item.name).join('、')} 尚未配置原辅料 BOM`;
-  }
   return '';
 });
 const aiQuickPrompts = [
@@ -1017,17 +1083,36 @@ onMounted(async () => {
   // #8: GSAP context 作用域化 (吸附脉冲), 卸载时 revert; 键盘删边监听
   gsapCtx = gsap.context(() => {}, canvasRef.value || undefined);
   window.addEventListener('keydown', onEditorKeydown);
-  await loadCatalogs();
-  await Promise.all([loadDefinition(), loadActivation()]);
-  await loadProductBom();
+  await loadEditorWorkspace(true);
 });
 
 onUnmounted(() => {
   window.removeEventListener('keydown', onEditorKeydown);
   if (autoSaveTimer) clearTimeout(autoSaveTimer);
+  cancelBomPanelPreload?.();
+  cancelBomPanelPreload = null;
   gsapCtx?.revert();
   gsapCtx = null;
 });
+
+async function loadEditorWorkspace(loadFactoryCatalogs: boolean): Promise<void> {
+  const catalogPromise = loadFactoryCatalogs || loadedCatalogFactoryId.value !== props.factoryId
+    ? loadCatalogs()
+    : Promise.resolve();
+
+  // 原料 owner 的根节点名称和单位来自原料目录；此模式仍先拿到目录，避免错误回退。
+  if (rawOwnerMode.value) await catalogPromise;
+  await Promise.all([loadDefinition(), loadActivation()]);
+
+  if (loadedDefinitionIdentity.value) {
+    cancelBomPanelPreload?.();
+    cancelBomPanelPreload = scheduleBomUnifiedPanelPreload();
+  }
+
+  // 普通产品的画布定义先出现；完整编辑能力在目录就绪后自动开放。
+  if (!rawOwnerMode.value) await catalogPromise;
+  await loadProductBom();
+}
 
 // #11: 每次操作后防抖 ~2.5s 自动保存 (静默 + 保留撤销栈)。用户停手 2.5s 即存;
 // 连续操作只会在最后一次后触发。服务端失败后不自动重试同一编辑，避免 500 通知风暴；
@@ -1080,10 +1165,11 @@ function openBomDrawer(requestedProductTypeId?: string): void {
     : (targetIds.includes(productTypeId.value)
       ? productTypeId.value
       : (targetIds[0] || productTypeId.value));
+  void preloadBomUnifiedPanel();
   bomDrawerVisible.value = true;
 }
 async function onBomDrawerClosed(): Promise<void> {
-  await loadProductBom();
+  await loadProductBom({ force: true });
 }
 
 // #12b: 版本记录浏览
@@ -1132,15 +1218,9 @@ function restorePreviewAsDraft(): void {
 watch(() => [props.factoryId, props.productTypeId] as const, async (next, previous) => {
   if (next[0] === previous[0] && next[1] === previous[1]) return;
   clearPublishBindingErrors();
+  workflowBomSyncPreflight.value = null;
   previewingVersion.value = null;   // #12b fix: 切产品必退出历史版本预览 (否则横幅粘住 + 新产品自动保存被抑制)
-  if (next[0] !== previous[0]) {
-    await loadCatalogs();
-    await Promise.all([loadDefinition(), loadActivation()]);
-    await loadProductBom();
-    return;
-  }
-  await Promise.all([loadDefinition(), loadActivation()]);
-  await loadProductBom();
+  await loadEditorWorkspace(next[0] !== previous[0]);
 });
 
 async function loadCatalogs(): Promise<void> {
@@ -1443,6 +1523,7 @@ function invalidateLoadedDefinition(invalidatePersistence = true): void {
   loading.value = false;
   loadedDefinitionIdentity.value = null;
   definition.value = null;
+  workflowBomSyncPreflight.value = null;
   unitReviewPending.value = false;
   unitIssues.value = [];
   flowNodes.value = [];
@@ -1520,14 +1601,9 @@ async function loadActivation(): Promise<void> {
  * 本身失败才 console.error + 保持空列表 (picker 会退化成"全部原料一组", 不阻断
  * 编辑器其它功能)。
  */
-async function loadProductBom(): Promise<void> {
-  const generation = ++bomLoadGeneration;
+async function loadProductBom(options: { force?: boolean } = {}): Promise<void> {
   const factoryId = props.factoryId;
   const ownerId = props.productTypeId;
-  productBomItems.value = [];
-  bomMissingProducts.value = [];
-  activeBomByProduct.value = {};
-  if (!factoryId || !ownerId) return;
   const graphOutputs = flowNodes.value
     .filter((node) => node.data?.kind === 'FINISHED_GOOD' && node.data?.skuId)
     .map((node) => ({ id: String(node.data.skuId), name: String(node.data.name || node.data.skuId) }));
@@ -1537,6 +1613,14 @@ async function loadProductBom(): Promise<void> {
     : rawOwnerMode.value ? [] : [{ id: ownerId, name: props.productName || ownerId }];
   const uniqueTargets = targets.filter((target, index, list) =>
     list.findIndex((candidate) => candidate.id === target.id) === index);
+  const loadKey = `${factoryId}:${ownerId}:${uniqueTargets.map((target) => target.id).sort().join(',')}`;
+  if (!options.force && loadKey === lastBomLoadKey) return;
+  lastBomLoadKey = loadKey;
+  const generation = ++bomLoadGeneration;
+  productBomItems.value = [];
+  bomMissingProducts.value = [];
+  activeBomByProduct.value = {};
+  if (!factoryId || !ownerId) return;
   if (uniqueTargets.length === 0) return;
   try {
     const responses = await Promise.all(uniqueTargets.map(async (target) => {
@@ -1682,6 +1766,7 @@ function mutate(action: () => void): void {
   action();
   refreshPortMaterialMetadata();
   editSeq += 1;
+  workflowBomSyncPreflight.value = null;
   dirty.value = true;
   scheduleAutoSave();   // #11: 每次改动都重排防抖 (即使 dirty 已是 true, watch transition 不会触发)
 }
@@ -1692,6 +1777,7 @@ function undo(): void {
   if (!previous) return;
   hydrate(previous);
   editSeq += 1;
+  workflowBomSyncPreflight.value = null;
   dirty.value = true;
   scheduleAutoSave();
 }
@@ -2742,6 +2828,16 @@ async function snapshotWorkflow(): Promise<void> {
   }
 }
 
+function createWorkflowPublishIdempotencyKey(): string {
+  const cryptoApi = globalThis.crypto;
+  if (typeof cryptoApi?.randomUUID === 'function') {
+    return cryptoApi.randomUUID();
+  }
+  const entropy = new Uint32Array(4);
+  cryptoApi?.getRandomValues?.(entropy);
+  return `workflow-${Date.now()}-${Array.from(entropy).join('-')}`;
+}
+
 async function publishWorkflow(): Promise<void> {
   let identity = currentLoadedIdentity();
   if (!identity || !canEdit.value || publishConfirming.value || publishing.value) return;
@@ -2757,19 +2853,10 @@ async function publishWorkflow(): Promise<void> {
     ElMessage.info('当前不是可发布的 Workflow 草稿；请先另存或修改后保存草稿');
     return;
   }
-  if (bomMissingProducts.value.length > 0) {
-    ElMessage.warning('请先为所有成品产出配置原辅料 BOM，再发布并启用 Workflow');
-    return;
-  }
   if (!(await reconcileForPersistence(identity, true))) return;
   if (dirty.value && !(await saveDraft())) return;
   identity = currentLoadedIdentity();
   if (!identity || !canEdit.value) return;
-  if (bomRevisionMismatchProducts.value.length > 0) {
-    openBomDrawer(bomRevisionMismatchProducts.value[0]?.id);
-    ElMessage.warning('当前生效 BOM 仍使用旧工艺；请在右侧升级并激活新版本后重试');
-    return;
-  }
   if (!definition.value?.lockVersion && definition.value?.lockVersion !== 0) {
     ElMessage.warning('请先保存草稿');
     return;
@@ -2783,72 +2870,121 @@ async function publishWorkflow(): Promise<void> {
     return;
   }
   clearPublishBindingErrors();
-  publishConfirming.value = true;
-  try {
-    await ElMessageBox.confirm(
-      '发布后会生成可审计的 Workflow 图版本。当前阶段不会自动改写生产任务或报工链，确认发布？',
-      '发布 Workflow',
-      { type: 'warning', confirmButtonText: '确认发布' },
-    );
-  } catch {
-    return;
-  } finally {
-    publishConfirming.value = false;
-  }
-  if (!isLoadedIdentityCurrent(identity) || !canEdit.value) return;
+  const lockVersion = definition.value.lockVersion;
   const generation = ++publishGeneration;
   publishing.value = true;
   try {
-    const response = await publishProductProcessWorkflow(
+    // 发布前检查必须在最后一次草稿保存之后重新读取；旧的 BOM 展示状态不参与写入门禁。
+    const preflightResponse = await getWorkflowBomSyncPreflight(
       identity.factoryId,
       identity.productTypeId,
-      definition.value.lockVersion,
     );
     if (generation !== publishGeneration || !isLoadedIdentityCurrent(identity)) return;
-    if (!response.success || !response.data) {
-      ElMessage.error(response.message || 'Workflow 发布失败');
+    if (!preflightResponse.success || !preflightResponse.data) {
+      ElMessage.error(preflightResponse.message || 'BOM 与 Workflow 发布前检查失败');
       return;
     }
-    if (!definitionMatchesIdentity(response.data, identity)) return;
-    hydrate(response.data);
+    const freshPreflight = preflightResponse.data;
+    workflowBomSyncPreflight.value = freshPreflight;
+    if (!canPublishWorkflowWithBomSync(freshPreflight)) {
+      ElMessage.warning('发布前检查发现仍需处理的项目；本次未修改 BOM，也未发布 Workflow');
+      return;
+    }
+
+    publishConfirming.value = true;
+    try {
+      const confirmMessage = freshPreflight.classification === 'AUTO_MIGRATABLE'
+        ? '系统将自动创建或复用 BOM 同步草稿、保留已有配方，并与当前 Workflow 一并生效。已有生产计划继续使用原快照。'
+        : 'BOM 与 Workflow 已一致。发布后只影响之后新建的生产计划，已有计划继续使用原快照。';
+      await ElMessageBox.confirm(
+        confirmMessage,
+        '自动同步并发布',
+        { type: 'warning', confirmButtonText: '确认同步并发布' },
+      );
+    } catch {
+      return;
+    } finally {
+      publishConfirming.value = false;
+    }
+    if (generation !== publishGeneration || !isLoadedIdentityCurrent(identity)) return;
+    if (definition.value?.lockVersion !== lockVersion || dirty.value) {
+      ElMessage.warning('确认期间草稿已变化，请重新执行自动同步并发布');
+      return;
+    }
+
+    previousPublishCommand = resolveWorkflowPublishCommand(
+      previousPublishCommand,
+      {
+        factoryId: identity.factoryId,
+        productTypeId: identity.productTypeId,
+        lockVersion,
+        revisionId: definition.value.revisionId ?? null,
+        revisionHash: definition.value.revisionHash ?? null,
+        definitionVersion: definition.value.version,
+      },
+      createWorkflowPublishIdempotencyKey,
+    );
+    const response = await executeWorkflowPublishMutation(
+      freshPreflight,
+      () => publishAndActivateProductProcessWorkflow(
+        identity.factoryId,
+        identity.productTypeId,
+        previousPublishCommand!.request,
+      ),
+    );
+    if (!response) return;
+    if (generation !== publishGeneration || !isLoadedIdentityCurrent(identity)) return;
+    if (!response.success || !response.data) {
+      ElMessage.error(response.message || 'Workflow 自动同步发布失败');
+      return;
+    }
+    workflowBomSyncPreflight.value = response.data.bomSync;
+    if (!canPublishWorkflowWithBomSync(response.data.bomSync)) {
+      ElMessage.warning('服务端重新检查后发现仍需处理的项目；本次未完成发布');
+      return;
+    }
+    const publishedWorkflow = response.data.workflow;
+    const publishedActivation = response.data.activation;
+    if (!publishedWorkflow
+      || !publishedActivation
+      || !definitionMatchesIdentity(publishedWorkflow, identity)
+      || !activationMatchesIdentity(publishedActivation, identity)) {
+      ElMessage.error('自动同步发布返回的数据不完整，页面未切换到新版本');
+      return;
+    }
+    hydrate(publishedWorkflow);
+    activation.value = publishedActivation;
     clearPublishBindingErrors();
     unitReviewPending.value = false;
     dirty.value = false;
-    // #12a: 发布即启用当前版本 (一步完成), 不再需要单独的「启用版本」按钮
-    const publishedId = response.data.id;
-    let activated = false;
-    if (publishedId) {
-      try {
-        const actResp = await activateProductProcessWorkflow(identity.factoryId, publishedId);
-        if (actResp.success && actResp.data && activationMatchesIdentity(actResp.data, identity)) {
-          activation.value = actResp.data;
-          activated = true;
-        }
-      } catch (actErr) {
-        console.error('[ProductProcessWorkflow] publish→activate failed', actErr);
-      }
-    }
-    // #12a fix: 只有真启用成功才说"已启用"; 启用失败如实提示 (别撒谎让用户以为已生效)
-    if (activated) {
-      ElMessage.success('Workflow 版本已发布并启用');
-    } else {
-      ElMessage.warning('Workflow 版本已发布，但自动启用失败——请在版本记录里手动启用');
-    }
+    await loadProductBom({ force: true });
+    ElMessage.success(response.data.replayed
+      ? '已确认上次自动同步发布结果，Workflow 与 BOM 均已生效'
+      : 'Workflow 与 BOM 已自动同步、发布并生效');
   } catch (error) {
     if (generation !== publishGeneration || !isLoadedIdentityCurrent(identity)) return;
     if (isWorkflowConflict(error)) {
       await recoverWorkflowConflict(identity);
       return;
     }
-    if (isWorkflowBomRevisionError(error)) {
-      const target = bomRevisionMismatchProducts.value[0]?.id || identity.productTypeId;
-      openBomDrawer(target);
-      ElMessage.warning('当前生效 BOM 未固定这次工艺修订；请在右侧升级并激活新版本后重试');
-      void loadProductBom();
-      return;
+    if (isWorkflowBomSyncRace(error)) {
+      try {
+        const refreshed = await getWorkflowBomSyncPreflight(
+          identity.factoryId,
+          identity.productTypeId,
+        );
+        if (generation !== publishGeneration || !isLoadedIdentityCurrent(identity)) return;
+        if (refreshed.success && refreshed.data) {
+          workflowBomSyncPreflight.value = refreshed.data;
+          // 最新逐项结果由页面常驻 alert 展示；不叠加第二条瞬时 toast，也绝不自动重试写入。
+          return;
+        }
+      } catch (refreshError) {
+        console.error('[ProductProcessWorkflow] preflight refresh after publish race failed', refreshError);
+      }
     }
-    console.error('[ProductProcessWorkflow] publish failed', error);
-    ElMessage.error('Workflow 发布失败，请稍后重试');
+    console.error('[ProductProcessWorkflow] atomic publish failed', error);
+    ElMessage.error('自动同步发布失败；可以直接重试，系统会复用同一幂等命令');
   } finally {
     if (generation === publishGeneration) {
       publishing.value = false;
@@ -2951,10 +3087,15 @@ function isWorkflowConflict(error: unknown): boolean {
     || errorCode === 'OPTIMISTIC_LOCK_CONFLICT';
 }
 
-function isWorkflowBomRevisionError(error: unknown): boolean {
+function isWorkflowBomSyncRace(error: unknown): boolean {
   const errorCode = workflowErrorCode(error);
-  return errorCode === 'WORKFLOW_ACTIVE_BOM_REVISION_MISMATCH'
-    || errorCode === 'WORKFLOW_ACTIVE_BOM_FAMILY_INCOMPLETE';
+  return Boolean(errorCode && (
+    errorCode.startsWith('WORKFLOW_BOM_SYNC_')
+    || errorCode.startsWith('BOM_WORKFLOW_')
+    || errorCode === 'WORKFLOW_ACTIVE_BOM_REVISION_MISMATCH'
+    || errorCode === 'WORKFLOW_ACTIVE_BOM_FAMILY_INCOMPLETE'
+    || errorCode === 'WORKFLOW_ACTIVE_BOM_REQUIRED'
+  ));
 }
 
 async function recoverWorkflowConflict(

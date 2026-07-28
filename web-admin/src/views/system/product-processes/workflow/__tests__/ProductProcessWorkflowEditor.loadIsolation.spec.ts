@@ -19,6 +19,8 @@ const apiMocks = vi.hoisted(() => ({
   saveProductProcessWorkflowDraft: vi.fn(),
   snapshotProductProcessWorkflow: vi.fn(),
   getProductProcessWorkflowActivation: vi.fn(),
+  getWorkflowBomSyncPreflight: vi.fn(),
+  publishAndActivateProductProcessWorkflow: vi.fn(),
   listProductProcessWorkflowVersions: vi.fn(),
   getProductProcessWorkflowVersion: vi.fn(),
   fitView: vi.fn(),
@@ -41,6 +43,8 @@ vi.mock('@/api/processProduction', () => ({
 vi.mock('../workflowApi', () => ({
   getProductProcessWorkflow: apiMocks.getProductProcessWorkflow,
   getProductProcessWorkflowActivation: apiMocks.getProductProcessWorkflowActivation,
+  getWorkflowBomSyncPreflight: apiMocks.getWorkflowBomSyncPreflight,
+  publishAndActivateProductProcessWorkflow: apiMocks.publishAndActivateProductProcessWorkflow,
   publishProductProcessWorkflow: apiMocks.publishProductProcessWorkflow,
   saveProductProcessWorkflowDraft: apiMocks.saveProductProcessWorkflowDraft,
   snapshotProductProcessWorkflow: apiMocks.snapshotProductProcessWorkflow,
@@ -119,6 +123,21 @@ describe('ProductProcessWorkflowEditor load identity isolation', () => {
     apiMocks.getWorkProcessCategories.mockResolvedValue({ success: true, data: [] });
     apiMocks.getProductWorkProcesses.mockResolvedValue({ success: true, data: [] });
     apiMocks.getProductProcessWorkflowActivation.mockResolvedValue({ success: true, data: null });
+    apiMocks.getWorkflowBomSyncPreflight.mockResolvedValue({
+      success: true,
+      data: {
+        classification: 'READY',
+        activeBomVersion: 1,
+        syncDraftVersion: null,
+        activeBomWorkflowRevisionId: 71,
+        targetWorkflowRevisionId: 71,
+        preservedItems: [],
+        automaticMappings: [],
+        missingItems: [],
+        conflicts: [],
+        canCompleteAutomatically: true,
+      },
+    });
     apiMocks.listProductProcessWorkflowVersions.mockResolvedValue({ success: true, data: [] });
     apiMocks.getProductProcessWorkflowVersion.mockResolvedValue({ success: true, data: null });
     apiMocks.saveProductProcessWorkflowDraft.mockImplementation(
@@ -822,7 +841,7 @@ describe('ProductProcessWorkflowEditor load identity isolation', () => {
       success: true,
       data: publishableDefinition('PT-A'),
     });
-    apiMocks.publishProductProcessWorkflow.mockRejectedValue({
+    apiMocks.publishAndActivateProductProcessWorkflow.mockRejectedValue({
       status: 409,
       code: 'PRODUCT_PROCESS_WORKFLOW_CONFLICT',
     });
@@ -837,7 +856,7 @@ describe('ProductProcessWorkflowEditor load identity isolation', () => {
 
     await vm.publishWorkflow();
 
-    expect(apiMocks.publishProductProcessWorkflow).toHaveBeenCalledTimes(1);
+    expect(apiMocks.publishAndActivateProductProcessWorkflow).toHaveBeenCalledTimes(1);
     expect(writeText).toHaveBeenCalledWith(JSON.stringify(localSnapshot, null, 2));
     expect(vm.currentDefinition()).toEqual(localSnapshot);
     expect(apiMocks.saveProductProcessWorkflowDraft).not.toHaveBeenCalled();
@@ -868,6 +887,8 @@ function definitionFor(productTypeId: string, nodeId = `node:${productTypeId}`):
     status: 'DRAFT',
     version: 1,
     lockVersion: 0,
+    revisionId: 71,
+    revisionHash: 'revision-current',
     nodes: [{
       id: nodeId,
       kind: 'RAW_MATERIAL',
@@ -934,6 +955,8 @@ function publishableDefinition(productTypeId: string): ProductProcessWorkflowDef
     status: 'DRAFT',
     version: 1,
     lockVersion: 0,
+    revisionId: 71,
+    revisionHash: 'revision-current',
     nodes: [{
       id: 'raw',
       kind: 'RAW_MATERIAL',

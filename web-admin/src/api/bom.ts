@@ -281,7 +281,12 @@ export const bomRecipeApi = {
     recipeId?: string | null,
   ) => get<ProductConfigurationReadiness>(
     `/${factoryId}/product-configuration-readiness/${productTypeId}`,
-    { params: recipeId ? { recipeId } : {} },
+    {
+      params: recipeId ? { recipeId } : {},
+      // BOM 页面按产品 single-flight，并按 errorCode 在当前导航内呈现一次。
+      // 关闭全局提示，避免初始化阶段的并发请求重复弹出同一富错误。
+      _silent: true,
+    },
   ),
 
   getProductPackagingSpecs: (factoryId: string, productTypeId: string) =>
@@ -333,6 +338,9 @@ export const bomRecipeApi = {
 
   getCurrentByProduct: (factoryId: string, productTypeId: string) =>
     get<BomRecipeSummary>(`${recipeBase(factoryId)}/by-product/${productTypeId}/current`),
+
+  getVersionsByProduct: (factoryId: string, productTypeId: string) =>
+    get<BomRecipeSummary[]>(`${recipeBase(factoryId)}/by-product/${productTypeId}/versions`),
 
   /**
    * 创建 BOM 配方草稿.

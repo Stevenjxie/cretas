@@ -94,7 +94,7 @@ describe('BomAuxiliaryWorkspace', () => {
 
     const layout = wrapper.get('[data-testid="seasoning-two-column-layout"]');
     expect(wrapper.get('[data-testid="bom-workflow-source-card"]').text())
-      .toContain('2 个投入入口2 道工序1 个终端产出');
+      .toContain('已自动关联系统自动维护');
     expect(layout.get('[data-testid="seasoning-editor-column"]').exists()).toBe(true);
     const compactSummary = layout.get('[data-testid="seasoning-compact-summary"]');
     expect(compactSummary.text()).toContain('辣椒粉');
@@ -265,44 +265,34 @@ describe('BomAuxiliaryWorkspace', () => {
     expect(getFamilyOutputCosting).not.toHaveBeenCalled();
   });
 
-  it('shows an automatic read-only process source and never exposes revision controls', async () => {
+  it('shows one compact automatic process source without a workflow navigation action', async () => {
     const data = workspace('DRAFT');
     data.workflowOwnerProductTypeId = 'WORKFLOW-OWNER';
     const wrapper = mountWorkspace('DRAFT', data);
     await flushPromises();
 
     const source = wrapper.get('[data-testid="bom-workflow-source-card"]');
-    expect(source.text()).toContain('工艺来源');
-    expect(source.text()).toContain('Workflow v2');
-    expect(source.text()).toContain('系统已根据当前 SKU 自动关联并固定该工艺版本');
+    expect(source.text()).toContain('工艺关联');
+    expect(source.text()).toContain('已自动关联');
+    expect(source.text()).toContain('系统会随当前 SKU 的生效流程自动保持一致');
     expect(wrapper.find('[data-testid="workflow-revision-select"]').exists()).toBe(false);
     expect(wrapper.find('[data-testid="pin-workflow-revision"]').exists()).toBe(false);
-
-    await wrapper.get('[data-testid="view-workflow"]').trigger('click');
-    expect(routerPush).toHaveBeenCalledWith({
-      name: 'ProductProcesses',
-      query: { productTypeId: 'WORKFLOW-OWNER' },
-    });
+    expect(wrapper.find('[data-testid="view-workflow"]').exists()).toBe(false);
+    expect(routerPush).not.toHaveBeenCalled();
   });
 
-  it('offers an explicit upgrade that creates a new draft while preserving history', async () => {
+  it('turns a newer workflow into a compact automatic-sync status without a manual upgrade action', async () => {
     const data = workspace('ACTIVE');
     data.workflowUpgradeAvailable = true;
     data.workflowUpgradeDefinitionVersion = 3;
-    upgradeWorkflowRevision.mockResolvedValue({
-      success: true,
-      data: { id: 'R2' },
-    });
-    vi.spyOn(ElMessageBox, 'confirm').mockResolvedValue('confirm');
     const wrapper = mountWorkspace('ACTIVE', data);
     await flushPromises();
 
-    expect(wrapper.get('[data-testid="workflow-update-notice"]').text())
-      .toContain('升级会创建新 BOM 草稿');
-    await wrapper.get('[data-testid="upgrade-workflow"]').trigger('click');
-    await flushPromises();
-    expect(upgradeWorkflowRevision).toHaveBeenCalledWith('F006', 'R1');
-    expect(wrapper.emitted('workflow-upgraded')).toEqual([['R2']]);
+    const source = wrapper.get('[data-testid="bom-workflow-source-card"]');
+    expect(source.text()).toContain('待自动同步');
+    expect(source.text()).toContain('检查并生效时会自动同步');
+    expect(wrapper.find('[data-testid="upgrade-workflow"]').exists()).toBe(false);
+    expect(upgradeWorkflowRevision).not.toHaveBeenCalled();
   });
 
   it('fails closed with one actionable source error when no exact process version is pinned', async () => {

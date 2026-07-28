@@ -71,6 +71,19 @@ public class ProductProcessWorkflow extends BaseEntity {
     @Column(name = "current_revision_hash", length = 64)
     private String currentRevisionHash;
 
+    /** Durable identity of the successfully completed publish-and-activate command. */
+    @Column(name = "last_publish_idempotency_key", length = 128)
+    private String lastPublishIdempotencyKey;
+
+    @Column(name = "last_publish_revision_id")
+    private Long lastPublishRevisionId;
+
+    @Column(name = "last_publish_revision_hash", length = 64)
+    private String lastPublishRevisionHash;
+
+    @Column(name = "last_publish_definition_version")
+    private Integer lastPublishDefinitionVersion;
+
     @Version
     @Column(name = "lock_version", nullable = false)
     private Long lockVersion = 0L;
