@@ -92,7 +92,7 @@ public class ProductProcessWorkflowServiceImpl implements ProductProcessWorkflow
         } else {
             Optional<ProductProcessWorkflow> published = find(
                     factoryId, productTypeId, ProductProcessWorkflow.Status.PUBLISHED);
-            if (published.isPresent() && samePersistedDefinition(published.get(), definition)) {
+            if (published.isPresent() && sameBusinessGraph(published.get(), definition)) {
                 ProductProcessWorkflowDTO unchanged = toDTO(published.get());
                 unchanged.setUnitWarnings(definition.getUnitWarnings());
                 return unchanged;
@@ -605,11 +605,12 @@ public class ProductProcessWorkflowServiceImpl implements ProductProcessWorkflow
 
     /**
      * A delayed autosave may arrive after the only draft has already been published. Compare the
-     * incoming persisted graph against that published row using the revision service's canonical
-     * hash, but pin the candidate to the published definition version so version allocation alone
-     * cannot turn identical content into a new draft.
+     * incoming business graph against that published row using the revision service's canonical
+     * hash. Definition version and viewport are pinned to the published row: version allocation
+     * and a late camera pan/zoom are not Workflow business changes, while schema, nodes and edges
+     * remain authoritative.
      */
-    private boolean samePersistedDefinition(
+    private boolean sameBusinessGraph(
             ProductProcessWorkflow published,
             ProductProcessWorkflowDTO definition) {
         ProductProcessWorkflow candidate = new ProductProcessWorkflow();
@@ -619,7 +620,7 @@ public class ProductProcessWorkflowServiceImpl implements ProductProcessWorkflow
         candidate.setSchemaVersion(definition.getSchemaVersion());
         candidate.setNodesJson(writeJson(definition.getNodes()));
         candidate.setEdgesJson(writeJson(definition.getEdges()));
-        candidate.setViewportJson(writeJson(definition.getViewport()));
+        candidate.setViewportJson(published.getViewportJson());
         return Objects.equals(
                 revisionSnapshotService.hash(published),
                 revisionSnapshotService.hash(candidate));

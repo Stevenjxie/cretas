@@ -259,7 +259,9 @@ class ProductProcessWorkflowServiceImplTest {
     void delayedIdenticalAutosaveAfterPublishIsNoOp() {
         ProductProcessWorkflowDTO request = validDefinition();
         request.setLockVersion(3L);
+        request.setViewport(new ProductProcessWorkflowDTO.Viewport(480D, -320D, 0.65D));
         ProductProcessWorkflow published = entityFrom(request);
+        published.setViewportJson("{\"x\":0,\"y\":0,\"zoom\":1}");
         published.setId(91L);
         published.setStatus(ProductProcessWorkflow.Status.PUBLISHED);
         published.setDefinitionVersion(1);
