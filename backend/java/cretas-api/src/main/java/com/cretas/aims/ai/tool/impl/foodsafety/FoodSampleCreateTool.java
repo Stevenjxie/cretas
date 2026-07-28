@@ -289,4 +289,10 @@ public class FoodSampleCreateTool extends AbstractBusinessTool {
                 batchNumber, productName, sampleQuantity, storageLocation, expireTime, warning);
         return buildSimpleResult(message, data);
     }
+
+    /** spec §8.2 有副作用, 须走 W0 写确认闸 */
+    @Override
+    public AccessMode getAccessMode() {
+        return AccessMode.WRITE;
+    }
 }

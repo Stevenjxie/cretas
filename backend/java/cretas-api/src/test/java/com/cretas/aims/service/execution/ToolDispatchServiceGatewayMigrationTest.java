@@ -65,6 +65,8 @@ class ToolDispatchServiceGatewayMigrationTest {
         tool = mock(ToolExecutor.class);
 
         when(tool.getToolName()).thenReturn("restaurant_dish_list");
+        // spec §8.2: 读工具须显式声明 READ (未声明按 WRITE 是 fail-closed 底线)
+        when(tool.getAccessMode()).thenReturn(ToolExecutor.AccessMode.READ);
         when(tool.getParametersSchema()).thenReturn(Map.of(
                 "type", "object", "properties", Map.of(), "required", java.util.List.of()));
         when(toolRegistry.isToolEnabledForFactory("R-1", "restaurant_dish_list"))

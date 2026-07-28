@@ -117,6 +117,8 @@ class IntentExecutionOrchestratorFactoryPackRouteTest {
         AIIntentConfig intent = intent(
                 "PROCESSING_BATCH_DETAIL", "processing_batch_detail", "批次详情");
         ToolExecutor executor = mock(ToolExecutor.class);
+        // spec §8.2: 读工具须显式声明 READ (未声明按 WRITE 是 fail-closed 底线)
+        when(executor.getAccessMode()).thenReturn(ToolExecutor.AccessMode.READ);
         IntentExecuteResponse executed = IntentExecuteResponse.builder()
                 .intentRecognized(true)
                 .intentCode("PROCESSING_BATCH_DETAIL")
@@ -149,7 +151,7 @@ class IntentExecutionOrchestratorFactoryPackRouteTest {
         verify(harness.toolDispatchService).executeWithTool(
                 any(), anyString(), any(), any(), anyLong(), anyString(), any());
         verify(harness.aiIntentService, never()).recognizeIntentWithConfidence(
-                anyString(), anyString(), anyInt(), anyLong(), anyString(), anyString());
+                anyString(), anyString(), anyInt(), anyLong(), anyString(), anyString(), any(), any());
         verifyNoInteractions(
                 harness.conversationService,
                 harness.restaurantSelector,
@@ -174,7 +176,7 @@ class IntentExecutionOrchestratorFactoryPackRouteTest {
                 .questionType(IntentKnowledgeBase.QuestionType.OPERATIONAL_COMMAND)
                 .build();
         when(harness.aiIntentService.recognizeIntentWithConfidence(
-                "查看批次进度", "F001", 3, 7L, "operator", null)).thenReturn(match);
+                "查看批次进度", "F001", 3, 7L, "operator", null, null, null)).thenReturn(match);
         when(harness.aiIntentService.hasPermission("REPORT_INVENTORY", "operator"))
                 .thenReturn(true);
         when(harness.writeGuardService.isWriteIntent(intent)).thenReturn(false);
@@ -200,7 +202,7 @@ class IntentExecutionOrchestratorFactoryPackRouteTest {
                 .questionType(IntentKnowledgeBase.QuestionType.GENERAL_QUESTION)
                 .build();
         when(harness.aiIntentService.recognizeIntentWithConfidence(
-                "分析生产异常", "F001", 3, 7L, "dispatcher", null)).thenReturn(general);
+                "分析生产异常", "F001", 3, 7L, "dispatcher", null, null, null)).thenReturn(general);
 
         IntentExecuteResponse response = harness.orchestrator.execute(
                 "F001",

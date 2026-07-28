@@ -455,4 +455,10 @@ public class ProductWorkProcessRecommendTool extends AbstractBusinessTool {
             WorkflowCandidate candidate,
             Map<String, WorkProcess> workProcesses) {
     }
+
+    /** spec §8.2 只读查询, 无副作用 */
+    @Override
+    public AccessMode getAccessMode() {
+        return AccessMode.READ;
+    }
 }

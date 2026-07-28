@@ -357,4 +357,10 @@ public class SkillManageTool extends AbstractBusinessTool {
         sb.append("\n💡 说「搜索 关键词」查找特定工具，或「查看工具使用模式」发现可组合的模式");
         return sb.toString();
     }
+
+    /** spec §8.2 有副作用, 须走 W0 写确认闸 */
+    @Override
+    public AccessMode getAccessMode() {
+        return AccessMode.WRITE;
+    }
 }

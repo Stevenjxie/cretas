@@ -23,6 +23,15 @@ public interface ToolExecutor {
 
     enum RiskLevel { LOW, MEDIUM, HIGH, CRITICAL }
 
+    /**
+     * 访问模式 (spec §8.2 读写声明化): 工具对业务数据是只读还是会产生副作用。
+     *
+     * <p>与 {@link ActionType} 的区别: {@code ActionType} 是治理元数据 (7 个值, 默认 READ,
+     * 仅 60/590 个工具覆写), 用于统计与展示; {@code AccessMode} 是<b>安全判定</b>的二值声明,
+     * 默认 {@link #WRITE} (fail-closed), 由 CI 强制全量覆盖。
+     */
+    enum AccessMode { READ, WRITE }
+
     // ==================== Core Methods ====================
 
     /**
@@ -159,6 +168,28 @@ public interface ToolExecutor {
      */
     default RiskLevel getRiskLevel() {
         return RiskLevel.LOW;
+    }
+
+    /**
+     * 访问模式声明 (spec §8.2)。<b>未声明一律按 {@link AccessMode#WRITE} 处理 — fail-closed。</b>
+     *
+     * <p><b>为什么必须 fail-closed</b>: 在本方法之前, "这是不是写操作" 完全由
+     * {@link WriteGuardService#isWriteTool(ToolExecutor)} 的<b>运行时启发式</b>(工具名后缀 +
+     * {@code ActionType})猜出来。启发式漏判的写工具会同时绕过 W0 写确认闸和 demo 租户只读闸 —
+     * 实测漏判 17 个真写工具 (canvas_add_field / dictionary_add / scale_add_device /
+     * page_component_add / restaurant_wastage_record ... 名字里没有任何写动词后缀, 却直接
+     * {@code repository.save(...)}）。把默认值定成 READ 会让每一个漏声明的新工具重蹈覆辙;
+     * 定成 WRITE 时最坏结果只是多一次确认 (over-block 是安全方向)。
+     *
+     * <p><b>声明纪律</b>: 拿不准就留 WRITE。声明为 READ 意味着承诺该工具及其调用的所有下游
+     * service 都不产生持久化副作用。CI ({@code ToolAccessModeDeclarationTest}) 会交叉校验声明与
+     * 启发式: 启发式判 WRITE 而声明 READ → 构建失败 (危险方向); 启发式判 READ 而声明 WRITE →
+     * 允许 (安全方向, 正是上面 17 个漏判工具的修复形态)。
+     *
+     * @return READ = 纯查询, 无副作用; WRITE = 有副作用 (创建/更新/删除/外发/状态流转)
+     */
+    default AccessMode getAccessMode() {
+        return AccessMode.WRITE;
     }
 
     /**

@@ -30,4 +30,10 @@ public class SampleCreateTool extends AbstractBusinessTool {
                 getString(params, "grade"), getString(params, "mainMaterial"), getLong(params, "userId"));
         return buildSimpleResult("样品已创建", Map.of("sampleCode", sample.getSampleCode(), "name", sample.getName()));
     }
+
+    /** spec §8.2 有副作用, 须走 W0 写确认闸 */
+    @Override
+    public AccessMode getAccessMode() {
+        return AccessMode.WRITE;
+    }
 }

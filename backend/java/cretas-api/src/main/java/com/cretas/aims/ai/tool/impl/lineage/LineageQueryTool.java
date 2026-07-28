@@ -254,4 +254,10 @@ public class LineageQueryTool extends AbstractBusinessTool {
         String u = upper(s);
         return u == null || u.isEmpty() ? dflt : u;
     }
+
+    /** spec §8.2 只读查询, 无副作用 */
+    @Override
+    public AccessMode getAccessMode() {
+        return AccessMode.READ;
+    }
 }

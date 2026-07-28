@@ -89,4 +89,10 @@ public class ProcessTaskQueryTool extends AbstractBusinessTool {
     protected String getParameterQuestion(String paramName) {
         return "status".equals(paramName) ? "请问要查看哪种状态的工序任务？" : null;
     }
+
+    /** spec §8.2 只读查询, 无副作用 */
+    @Override
+    public AccessMode getAccessMode() {
+        return AccessMode.READ;
+    }
 }

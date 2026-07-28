@@ -59,12 +59,22 @@ public class WriteGuardService {
     }
 
     public boolean isWriteTool(ToolExecutor tool) {
-        // Confidence-INDEPENDENT like isWriteIntent: getActionType() only maps _create/_update/_delete
-        // name suffixes (AbstractBusinessTool) and defaults everything else to READ — genuinely
-        // destructive tools (material_batch_consume, *_approve, equipment_start, ...)
-        // would otherwise classify as READ and slip the guard. The tool-NAME suffix fallback catches them.
-        // Over-flagging a read tool (extra confirm) is acceptable for a safety net; under-flagging a write is not.
-        return tool != null && (isWriteAction(tool.getActionType()) || hasWriteSuffix(tool.getToolName()));
+        // spec §8.2: the DECLARATION (ToolExecutor.getAccessMode, fail-closed default WRITE) is now
+        // the primary authority; the old name-suffix/ActionType heuristic is kept as a second opinion
+        // that can only ADD writes, never remove them.
+        //
+        // Why keep both: the heuristic under-flags (it missed 39 real write tools — canvas_add_field /
+        // dictionary_add / create_new_intent / update_intent / scale_add_device / inventory_operation /
+        // sales_record_payment ... none of which carry a write verb in the position the suffix list
+        // scans, yet all of them persist), and the declaration can be stale on a tool whose body grew
+        // a write after it was declared READ. OR-ing them means a tool has to be judged read-only by
+        // BOTH to skip the guard. Over-flagging a read tool (extra confirm) is acceptable; under-
+        // flagging a write is not. ToolAccessModeDeclarationTest fails the build if any tool declares
+        // READ while the heuristic says WRITE, so the two cannot silently drift apart.
+        return tool != null
+                && (ToolAccessModes.isWrite(tool)
+                    || isWriteAction(tool.getActionType())
+                    || hasWriteSuffix(tool.getToolName()));
     }
 
     public boolean isWriteIntent(AIIntentConfig intent) {

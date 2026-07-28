@@ -73,4 +73,10 @@ public class WorkProcessTaskSpawnTool extends AbstractBusinessTool {
                 String.format("已为批次 %d 生成 %d 道工序任务", productionBatchId, spawned.size()),
                 spawned);
     }
+
+    /** spec §8.2 有副作用, 须走 W0 写确认闸 */
+    @Override
+    public AccessMode getAccessMode() {
+        return AccessMode.WRITE;
+    }
 }

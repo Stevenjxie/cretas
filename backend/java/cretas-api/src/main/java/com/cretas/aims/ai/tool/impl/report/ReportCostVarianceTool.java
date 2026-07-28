@@ -209,4 +209,10 @@ public class ReportCostVarianceTool extends AbstractBusinessTool {
         );
         return displayNames.getOrDefault(paramName, paramName);
     }
+
+    /** spec §8.2 只读查询, 无副作用 */
+    @Override
+    public AccessMode getAccessMode() {
+        return AccessMode.READ;
+    }
 }

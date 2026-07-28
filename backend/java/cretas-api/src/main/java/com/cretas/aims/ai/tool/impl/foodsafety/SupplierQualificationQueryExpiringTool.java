@@ -163,4 +163,10 @@ public class SupplierQualificationQueryExpiringTool extends AbstractBusinessTool
         row.put("attachmentOssUrl", q.getAttachmentOssUrl());
         return row;
     }
+
+    /** spec §8.2 只读查询, 无副作用 */
+    @Override
+    public AccessMode getAccessMode() {
+        return AccessMode.READ;
+    }
 }

@@ -131,4 +131,10 @@ public class ScheduledTaskCreateTool extends AbstractBusinessTool {
         log.info("[Canvas-Cron Tool] scheduled_task_create: {}", message);
         return buildSimpleResult(message, saved);
     }
+
+    /** spec §8.2 有副作用, 须走 W0 写确认闸 */
+    @Override
+    public AccessMode getAccessMode() {
+        return AccessMode.WRITE;
+    }
 }

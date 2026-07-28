@@ -95,4 +95,10 @@ public class AbacaWeightSummaryTool extends AbstractBusinessTool {
                 factoryId, batchId, totalWeight, boxCount);
         return buildSimpleResult(msg, result);
     }
+
+    /** spec §8.2 只读查询, 无副作用 */
+    @Override
+    public AccessMode getAccessMode() {
+        return AccessMode.READ;
+    }
 }

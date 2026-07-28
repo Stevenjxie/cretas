@@ -120,4 +120,10 @@ public class ProcessTaskAnalysisTool extends AbstractBusinessTool {
     protected String getParameterQuestion(String paramName) {
         return "productionRunId".equals(paramName) ? "请提供生产批次ID，或留空分析所有活跃任务" : null;
     }
+
+    /** spec §8.2 只读查询, 无副作用 */
+    @Override
+    public AccessMode getAccessMode() {
+        return AccessMode.READ;
+    }
 }

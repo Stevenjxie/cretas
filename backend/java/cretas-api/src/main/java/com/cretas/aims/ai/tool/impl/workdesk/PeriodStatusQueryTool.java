@@ -133,4 +133,10 @@ public class PeriodStatusQueryTool extends AbstractBusinessTool {
             case CLOSED -> "CLOSED (期间已关账, 凭证写入被锁)";
         };
     }
+
+    /** spec §8.2 只读查询, 无副作用 */
+    @Override
+    public AccessMode getAccessMode() {
+        return AccessMode.READ;
+    }
 }

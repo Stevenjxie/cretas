@@ -172,4 +172,10 @@ public class BatchTraceByCustomerDateTool extends AbstractBusinessTool {
     private String nameForDisplay(String name) {
         return (name != null && !name.isBlank()) ? name : "该客户";
     }
+
+    /** spec §8.2 只读查询, 无副作用 */
+    @Override
+    public AccessMode getAccessMode() {
+        return AccessMode.READ;
+    }
 }

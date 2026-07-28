@@ -123,4 +123,10 @@ public class OrderQueryTool extends AbstractBusinessTool {
                     .orElseThrow(() -> new ResourceNotFoundException("销售订单不存在: " + idOrNumber));
         }
     }
+
+    /** spec §8.2 只读查询, 无副作用 */
+    @Override
+    public AccessMode getAccessMode() {
+        return AccessMode.READ;
+    }
 }

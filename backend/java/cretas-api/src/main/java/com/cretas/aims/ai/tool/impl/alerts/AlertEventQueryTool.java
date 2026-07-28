@@ -135,4 +135,10 @@ public class AlertEventQueryTool extends AbstractBusinessTool {
                     "status 不合法: " + raw + " (允许 OPEN/ACKNOWLEDGED/RESOLVED/ALL)");
         }
     }
+
+    /** spec §8.2 只读查询, 无副作用 */
+    @Override
+    public AccessMode getAccessMode() {
+        return AccessMode.READ;
+    }
 }

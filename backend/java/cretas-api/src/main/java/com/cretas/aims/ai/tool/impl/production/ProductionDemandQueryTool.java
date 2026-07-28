@@ -263,4 +263,10 @@ public class ProductionDemandQueryTool extends AbstractBusinessTool {
         public int getOrderLineCount() { return orderLineCount; }
         public List<Map<String, Object>> getOrderRefs() { return orderRefs; }
     }
+
+    /** spec §8.2 只读查询, 无副作用 */
+    @Override
+    public AccessMode getAccessMode() {
+        return AccessMode.READ;
+    }
 }

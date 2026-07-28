@@ -104,4 +104,10 @@ public class RuleTestEvaluateTool extends AbstractBusinessTool {
                         : "规则 " + ruleCode + " 条件未命中, 无动作",
                 data);
     }
+
+    /** spec §8.2 只读查询, 无副作用 */
+    @Override
+    public AccessMode getAccessMode() {
+        return AccessMode.READ;
+    }
 }

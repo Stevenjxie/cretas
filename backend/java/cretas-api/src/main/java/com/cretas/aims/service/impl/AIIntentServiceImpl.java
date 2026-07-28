@@ -80,6 +80,12 @@ public class AIIntentServiceImpl implements AIIntentService {
     private IntentResultCache intentResultCache;
 
     /**
+     * spec §8.2 识别层候选过滤器。required=false 以免裸构造的单测被迫提供。
+     */
+    @Autowired(required = false)
+    private com.cretas.aims.service.intent.IntentAccessModeFilter accessModeFilter;
+
+    /**
      * Phase 2B-α (T20): feature flag controlling Python matcher dispatch.
      * Default false — legacy in-process matching only. Toggling true causes
      * {@link #recognizeIntentWithConfidence(String, String, int, Long, String, String)}
@@ -288,6 +294,16 @@ public class AIIntentServiceImpl implements AIIntentService {
     @Override
     public IntentMatchResult recognizeIntentWithConfidence(String userInput, String factoryId, int topN,
                                                             Long userId, String userRole, String sessionId) {
+        return recognizeIntentWithConfidence(userInput, factoryId, topN, userId, userRole, sessionId, null, null);
+    }
+
+    /**
+     * spec §8.2: 8 参版是真正的实现, 6 参版以 mode=null 委派进来 (行为不变)。
+     */
+    @Override
+    public IntentMatchResult recognizeIntentWithConfidence(String userInput, String factoryId, int topN,
+                                                            Long userId, String userRole, String sessionId,
+                                                            String mode, java.util.Set<String> userPermissions) {
         // ===== Phase 2B-α: optional Python matcher branch =====
         // shouldUsePythonMatcher(factoryId) honours both the master flag and
         // the Phase 2B canary whitelist (#73 §1.4) so stage 2/3 can dispatch
@@ -319,7 +335,9 @@ public class AIIntentServiceImpl implements AIIntentService {
                 if (cached != null) {
                     log.debug("IntentResultCache hit for query='{}' factoryId={}", userInput, factoryId);
                     recordStageHit("PYTHON_CACHE_HIT");
-                    return cached;
+                    // 缓存键不含 mode, 存的是未过滤结果 —— 过滤只能发生在返回前, 且必须产出副本,
+                    // 否则咨询 tab 的一次剔除会把缓存对象改掉, 串到操作 tab。
+                    return applyAccessModeFilter(cached, factoryId, mode, userPermissions);
                 }
             } catch (Exception e) {
                 log.warn("IntentResultCache.get failed (ignoring, will hit Python): {}", e.getMessage());
@@ -337,6 +355,11 @@ public class AIIntentServiceImpl implements AIIntentService {
                         .role(role)
                         .businessType(businessType)
                         .history(Collections.emptyList())
+                        // spec §8.2 洞②接线: 这两个字段自 Phase 2B-α 起就存在且有 javadoc
+                        // ("READ=剔除写意图候选 | OPERATE=按 userPermissions 剔除无权限写意图"),
+                        // 但在此之前全仓库没有任何一处给它们赋过值 —— Python 侧目录过滤一直是死的。
+                        .mode(mode)
+                        .userPermissions(userPermissions == null ? null : List.copyOf(userPermissions))
                         .options(PythonIntentMatchRequest.Options.builder()
                                 .enableLlmFallback(Boolean.TRUE)
                                 .timeoutMs(30000)
@@ -353,7 +376,8 @@ public class AIIntentServiceImpl implements AIIntentService {
                                 cachePutEx.getMessage());
                     }
                     recordStageHit("PYTHON_MATCH");
-                    return pyResult;
+                    // 先缓存未过滤结果 (上面), 再对返回值做 mode 过滤 —— 顺序不能反。
+                    return applyAccessModeFilter(pyResult, factoryId, mode, userPermissions);
                 }
                 log.info("Python matcher returned empty for query='{}' — falling back to legacy pipeline",
                         userInput);
@@ -380,7 +404,28 @@ public class AIIntentServiceImpl implements AIIntentService {
         } else {
             recordStageHit("NONE");
         }
-        return legacyResult;
+        // legacy pipeline 也必须过滤: Python 分支默认关闭 (canary 白名单), 绝大多数流量走这里,
+        // 只在 Python 侧过滤等于没接线。
+        return applyAccessModeFilter(legacyResult, factoryId, mode, userPermissions);
+    }
+
+    /**
+     * spec §8.2 消费点①: 识别层候选过滤。filter bean 缺失 (裸构造单测) 时原样返回。
+     */
+    private IntentMatchResult applyAccessModeFilter(IntentMatchResult result, String factoryId,
+                                                    String mode, java.util.Set<String> userPermissions) {
+        if (result == null || mode == null || accessModeFilter == null) {
+            return result;
+        }
+        try {
+            return accessModeFilter.filterForMode(result, factoryId, mode, userPermissions);
+        } catch (Exception e) {
+            // 过滤失败不能"放行" —— 但也不能把整次识别打挂。退回未过滤结果, 由下游执行门
+            // (IntentExecutionOrchestrator 的 READ 拦截 + W0 写确认) 兜底, 并留告警。
+            log.warn("识别层候选过滤失败, 回落未过滤结果 (下游写闸仍生效): mode={}, err={}",
+                    mode, e.getMessage());
+            return result;
+        }
     }
 
     static boolean requiresContextAwareRestaurantRecognition(

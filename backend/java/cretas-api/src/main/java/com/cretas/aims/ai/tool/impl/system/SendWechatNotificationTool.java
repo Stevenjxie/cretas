@@ -76,4 +76,10 @@ public class SendWechatNotificationTool extends AbstractBusinessTool {
                 "error", "企业微信集成尚未实现，发送微信通知功能暂不可用",
                 "code", "SERVICE_NOT_AVAILABLE"));
     }
+
+    /** spec §8.2 只读查询, 无副作用 */
+    @Override
+    public AccessMode getAccessMode() {
+        return AccessMode.READ;
+    }
 }

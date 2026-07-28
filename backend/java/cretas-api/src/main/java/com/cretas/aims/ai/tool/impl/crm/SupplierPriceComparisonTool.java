@@ -62,4 +62,10 @@ public class SupplierPriceComparisonTool extends AbstractBusinessTool {
         result.put("message", "供应商价格对比获取成功，共" + suppliers.size() + "家供应商");
         return result;
     }
+
+    /** spec §8.2 只读查询, 无副作用 */
+    @Override
+    public AccessMode getAccessMode() {
+        return AccessMode.READ;
+    }
 }

@@ -162,4 +162,10 @@ public class HaccpCheckpointReviewTool extends AbstractBusinessTool {
     private String fmt(BigDecimal v) {
         return v == null ? "-" : v.toPlainString();
     }
+
+    /** spec §8.2 只读查询, 无副作用 */
+    @Override
+    public AccessMode getAccessMode() {
+        return AccessMode.READ;
+    }
 }

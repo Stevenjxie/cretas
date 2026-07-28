@@ -92,4 +92,10 @@ public class FinanceRoaTool extends AbstractBusinessTool {
         if (val instanceof Number) return ((Number) val).doubleValue();
         try { return Double.parseDouble(String.valueOf(val)); } catch (Exception e) { return defaultVal; }
     }
+
+    /** spec §8.2 只读查询, 无副作用 */
+    @Override
+    public AccessMode getAccessMode() {
+        return AccessMode.READ;
+    }
 }

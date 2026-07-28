@@ -126,7 +126,7 @@ class SseStreamingServiceTieredFirstTest {
                 .build();
         when(aiIntentService.recognizeIntentWithConfidence(
                 anyString(), eq("DEMO_REST"), org.mockito.ArgumentMatchers.eq(3),
-                any(), anyString(), any()))
+                any(), anyString(), any(), any(), any()))
                 .thenReturn(noMatch);
         IntentExecuteRequest request = IntentExecuteRequest.builder()
                 .userInput("帮我创建一个新活动")
@@ -190,7 +190,7 @@ class SseStreamingServiceTieredFirstTest {
                 .build();
         when(aiIntentService.recognizeIntentWithConfidence(
                 anyString(), eq("DEMO_REST"), org.mockito.ArgumentMatchers.eq(3),
-                any(), anyString(), any()))
+                any(), anyString(), any(), any(), any()))
                 .thenReturn(noMatch);
         IntentExecuteRequest request = IntentExecuteRequest.builder()
                 .userInput("别看订单")

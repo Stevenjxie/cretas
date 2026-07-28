@@ -62,4 +62,10 @@ public class MaterialRequisitionCloseTool extends AbstractBusinessTool {
         FactoryMaterialRequisition mr = service.close(factoryId, id, userId);
         return buildSimpleResult("物料需求单已关单: " + mr.getRequisitionNo() + " (退料已自动计算)", mr);
     }
+
+    /** spec §8.2 有副作用, 须走 W0 写确认闸 */
+    @Override
+    public AccessMode getAccessMode() {
+        return AccessMode.WRITE;
+    }
 }

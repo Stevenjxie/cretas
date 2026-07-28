@@ -204,4 +204,10 @@ public class BatchUpdateTool extends AbstractBusinessTool {
         log.info("批次更新完成 - 批次ID: {}, 更新字段: {}", batchId, updatedFields.keySet());
         return result;
     }
+
+    /** spec §8.2 有副作用, 须走 W0 写确认闸 */
+    @Override
+    public AccessMode getAccessMode() {
+        return AccessMode.WRITE;
+    }
 }

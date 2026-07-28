@@ -81,4 +81,10 @@ public class MaterialRequisitionQueryPendingTool extends AbstractBusinessTool {
                 "找到 " + page.getTotalElements() + " 条 " + status + " 物料需求单",
                 Map.of("status", status, "total", page.getTotalElements(), "list", page.getContent()));
     }
+
+    /** spec §8.2 只读查询, 无副作用 */
+    @Override
+    public AccessMode getAccessMode() {
+        return AccessMode.READ;
+    }
 }

@@ -163,4 +163,10 @@ public class PurchaseOrderCreateTool extends AbstractBusinessTool {
         log.info("采购订单创建完成 - orderId={}, orderNumber={}", created.getId(), created.getOrderNumber());
         return result;
     }
+
+    /** spec §8.2 有副作用, 须走 W0 写确认闸 */
+    @Override
+    public AccessMode getAccessMode() {
+        return AccessMode.WRITE;
+    }
 }

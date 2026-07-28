@@ -57,6 +57,33 @@ public class ToolRbacGuard {
     }
 
     /**
+     * 解析调用者的权限码集合 (spec §8.2 识别层候选过滤用)。
+     *
+     * <p>与 {@link #hasAnyPermission} <b>同源</b> —— 都是 {@code User} →
+     * {@link PermissionService} 的 L2 工厂覆盖 / L1 平台默认 / 硬编码矩阵三层, 这里不新造权限来源,
+     * 只是把"逐码问"换成"取全集"以便一次性收窄候选集。
+     *
+     * <p><b>失败返回 null 而不是空集</b>: 空集会让候选过滤把所有写意图都剔掉, 等于用一次
+     * User 查询失败静默改变用户看到的候选; null 表示"未知, 不按权限过滤", 把判定留给下游真正的
+     * 鉴权门 ({@link com.cretas.aims.service.execution.IntentPermissionGate} / ToolRbacEnforcer)。
+     * 候选过滤是收窄优化, <b>不是</b>授权点 —— 这里放行绝不等于有权限。
+     *
+     * @return 权限码集合; null = 无法解析
+     */
+    public java.util.Set<String> resolveUserPermissions(Map<String, Object> context) {
+        try {
+            User user = loadUser(context);
+            if (user == null) {
+                return null;
+            }
+            return permissionService.getUserPermissions(user);
+        } catch (Exception e) {
+            log.warn("AI 候选过滤权限集解析失败 (跳过权限过滤): {}", e.getMessage());
+            return null;
+        }
+    }
+
+    /**
      * 拒绝时构造一致的提示文案 (4 位一体: 谁的角色 / 缺什么权限 / 怎么办)。
      */
     public String denyMessage(Map<String, Object> context, String action, String... permissionCodes) {

@@ -365,8 +365,11 @@ public class SseStreamingService {
 
             IntentMatchResult matchResult;
             try {
+                // spec §8.2 洞②: 流式路径同样把 tab 模式带进识别层, 否则咨询 tab 走 SSE 时
+                // 候选集里仍然留着写意图 (多意图执行/兜底重排会用到它们)。
                 matchResult = aiIntentService.recognizeIntentWithConfidence(
-                        userInput, factoryId, 3, userId, userRole, request.getSessionId());
+                        userInput, factoryId, 3, userId, userRole, request.getSessionId(),
+                        request.getMode(), null);
             } catch (LlmSchemaValidationException e) {
                 IntentExecuteResponse validationFailureResponse = buildValidationFailureResponse(e);
                 sendSseEvent(emitter, "result", validationFailureResponse);

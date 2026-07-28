@@ -138,4 +138,10 @@ public class ProcessingBatchWorkersTool extends AbstractBusinessTool {
         );
         return displayNames.getOrDefault(paramName, super.getParameterDisplayName(paramName));
     }
+
+    /** spec §8.2 只读查询, 无副作用 */
+    @Override
+    public AccessMode getAccessMode() {
+        return AccessMode.READ;
+    }
 }
