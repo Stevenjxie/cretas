@@ -1587,6 +1587,40 @@ function definitionMatchesIdentity(
     && (!candidate.productTypeId || candidate.productTypeId === identity.productTypeId);
 }
 
+function canonicalizeWorkflowValue(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return value.map((item) => canonicalizeWorkflowValue(item));
+  }
+  if (value !== null && typeof value === 'object') {
+    return Object.keys(value as Record<string, unknown>)
+      .sort()
+      .reduce<Record<string, unknown>>((result, key) => {
+        result[key] = canonicalizeWorkflowValue(
+          (value as Record<string, unknown>)[key],
+        );
+        return result;
+      }, {});
+  }
+  return value;
+}
+
+function samePersistedWorkflowGraph(
+  left: ProductProcessWorkflowDefinition,
+  right: ProductProcessWorkflowDefinition,
+): boolean {
+  return JSON.stringify(canonicalizeWorkflowValue({
+    schemaVersion: left.schemaVersion,
+    nodes: left.nodes,
+    edges: left.edges,
+    viewport: left.viewport,
+  })) === JSON.stringify(canonicalizeWorkflowValue({
+    schemaVersion: right.schemaVersion,
+    nodes: right.nodes,
+    edges: right.edges,
+    viewport: right.viewport,
+  }));
+}
+
 async function loadActivation(): Promise<void> {
   const generation = ++activationLoadGeneration;
   ++activationMutationGeneration;
@@ -2891,7 +2925,10 @@ async function publishWorkflow(): Promise<void> {
     return;
   }
   clearPublishBindingErrors();
-  const lockVersion = definition.value.lockVersion;
+  // definition.value is the last server-confirmed saved envelope. flowNodes may contain
+  // catalog-only display enrichment, so it must not be used to detect an authoritative
+  // server graph change.
+  const definitionBeforePreflight = toPlainWorkflowValue(definition.value);
   const generation = ++publishGeneration;
   publishing.value = true;
   try {
@@ -2909,6 +2946,47 @@ async function publishWorkflow(): Promise<void> {
     workflowBomSyncPreflight.value = freshPreflight;
     if (!canPublishWorkflowWithBomSync(freshPreflight)) {
       ElMessage.warning('发布前检查发现仍需处理的项目；本次未修改 BOM，也未发布 Workflow');
+      return;
+    }
+
+    // 预检允许修复未被任何 BOM 固定的旧草稿修订。修复会产生新的 revision/hash
+    // 并推进 optimistic lock，因此发布命令必须重新读取权威身份。图内容若被其他人
+    // 同时修改，则只加载新内容并停止，绝不能拿旧画布去发布新 revision。
+    const refreshedResponse = await getProductProcessWorkflow(
+      identity.factoryId,
+      identity.productTypeId,
+    );
+    if (generation !== publishGeneration || !isLoadedIdentityCurrent(identity)) return;
+    if (!refreshedResponse.success || !refreshedResponse.data
+      || !definitionMatchesIdentity(refreshedResponse.data, identity)) {
+      ElMessage.error(refreshedResponse.message || 'Workflow 修订身份刷新失败');
+      return;
+    }
+    if (!samePersistedWorkflowGraph(
+      definitionBeforePreflight,
+      refreshedResponse.data,
+    )) {
+      hydrate(refreshedResponse.data);
+      dirty.value = false;
+      ElMessage.warning('预检期间 Workflow 内容已变化，已加载最新草稿，请重新检查后发布');
+      return;
+    }
+    const inputSelectionMigrated = hydrate(refreshedResponse.data);
+    dirty.value = inputSelectionMigrated;
+    if (inputSelectionMigrated) {
+      ElMessage.warning('最新草稿需要补存投入槽身份，请先保存后再发布');
+      return;
+    }
+    if (freshPreflight.targetWorkflowRevisionId !== null
+      && freshPreflight.targetWorkflowRevisionId !== definition.value?.revisionId) {
+      ElMessage.warning('Workflow 修订在预检后再次变化，请重新检查后发布');
+      return;
+    }
+    const lockVersion = definition.value?.lockVersion;
+    if (definition.value?.status !== 'DRAFT'
+      || lockVersion === undefined
+      || lockVersion === null) {
+      ElMessage.warning('Workflow 草稿状态已变化，请重新检查后发布');
       return;
     }
 

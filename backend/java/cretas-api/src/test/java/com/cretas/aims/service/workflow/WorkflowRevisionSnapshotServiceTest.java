@@ -78,6 +78,26 @@ class WorkflowRevisionSnapshotServiceTest {
     }
 
     @Test
+    void canonicalHashSurvivesJsonbNumericRepresentationChanges() {
+        ProductProcessWorkflow typedDtoWrite = workflow(
+                """
+                [{"id":"raw","kind":"RAW_MATERIAL","position":{"x":32.0,"y":112.0},
+                  "data":{"ratio":1.2300,"zero":-0.0}}]
+                """,
+                "[]",
+                "{\"x\":0.0,\"y\":0.0,\"zoom\":1.0}");
+        ProductProcessWorkflow jsonbReadback = workflow(
+                """
+                [{"data":{"zero":0,"ratio":1.23},"position":{"y":112,"x":32},
+                  "kind":"RAW_MATERIAL","id":"raw"}]
+                """,
+                "[]",
+                "{\"zoom\":1,\"y\":0,\"x\":0}");
+
+        assertEquals(service.hash(typedDtoWrite), service.hash(jsonbReadback));
+    }
+
+    @Test
     void unpinnedDraftSaveOverwritesCurrentRevision() {
         ProductProcessWorkflow workflow = workflow(
                 "[{\"id\":\"raw-new\",\"kind\":\"RAW_MATERIAL\",\"position\":{\"x\":2,\"y\":3},\"data\":{}}]",

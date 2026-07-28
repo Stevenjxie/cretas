@@ -22,6 +22,11 @@ describe('ProductProcessWorkflowEditor atomic publish source contract', () => {
     expect(publishBody).toContain('canPublishWorkflowWithBomSync(freshPreflight)');
     expect(publishBody.indexOf('canPublishWorkflowWithBomSync(freshPreflight)'))
       .toBeLessThan(publishBody.indexOf('publishAndActivateProductProcessWorkflow('));
+    expect(publishBody).toContain('const refreshedResponse = await getProductProcessWorkflow(');
+    expect(publishBody.indexOf('const refreshedResponse = await getProductProcessWorkflow('))
+      .toBeGreaterThan(publishBody.indexOf('getWorkflowBomSyncPreflight('));
+    expect(publishBody.indexOf('const refreshedResponse = await getProductProcessWorkflow('))
+      .toBeLessThan(publishBody.indexOf('publishAndActivateProductProcessWorkflow('));
   });
 
   it('does not call the legacy publish endpoint or activate separately inside publishWorkflow', () => {
