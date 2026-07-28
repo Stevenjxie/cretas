@@ -72,10 +72,18 @@ export function useReportVoiceInput(): UseReportVoiceInputReturn {
         return null;
       }
 
-      // Send recognized text to AI for field extraction
+      // Send recognized text to AI for field extraction.
+      // 2026-07-29 修复: 这里原本发 {message, systemPrompt, temperature} 并读
+      // data.reply —— 后端 GenericChatRequest 只认 messages:[{role,content}],
+      // GenericChatResponse 只有 content。请求端 messages 为 null 会让
+      // convertMessages 抛「消息列表不能为空」, 响应端也取不到值 ——
+      // 也就是说这条语音报工链路**从来没通过**, 用户按住说完必然走到「解析失败」。
+      // 单测把 {data:{reply}} 这个后端从未返回过的形状 mock 死了, 所以一直是绿的。
       const aiResponse = await apiClient.post('/api/mobile/ai/chat', {
-        message: result.text,
-        systemPrompt: SYSTEM_PROMPT,
+        messages: [
+          { role: 'system', content: SYSTEM_PROMPT },
+          { role: 'user', content: result.text },
+        ],
         temperature: 0.1,
       });
 
@@ -83,7 +91,7 @@ export function useReportVoiceInput(): UseReportVoiceInputReturn {
 
       const aiData = aiResponse as Record<string, unknown> | undefined;
       const dataObj = (aiData?.data ?? {}) as Record<string, unknown>;
-      const responseText = String(dataObj.reply ?? dataObj.message ?? '');
+      const responseText = String(dataObj.content ?? '');
       // Extract JSON from response
       const jsonMatch = responseText.match(/\{[\s\S]*\}/);
       if (jsonMatch) {

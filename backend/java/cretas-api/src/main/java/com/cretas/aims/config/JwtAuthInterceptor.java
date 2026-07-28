@@ -48,6 +48,29 @@ public class JwtAuthInterceptor implements HandlerInterceptor {
     private static final String INTERNAL_API_SECRET = System.getenv("INTERNAL_API_SECRET") != null
             ? System.getenv("INTERNAL_API_SECRET") : "";
 
+    /**
+     * 无工厂前缀但**必须登录**的路径。
+     *
+     * <p>2026-07-29 发现的洞：本拦截器的 401 检查只在
+     * {@link #extractFactoryIdFromUrl} 能从 URL 里解析出 factoryId 时才跑，
+     * 而那个方法把 {@code ai} / {@code upload} / {@code workflow} / {@code system} 等
+     * 顶层前缀写进了排除名单（它们确实不是 factoryId）。结果这些路径既不做租户校验、
+     * 也**不做登录校验**，直接落到方法末尾的 {@code return true}。
+     *
+     * <p>prod 实测：匿名 {@code POST /api/mobile/ai/chat} 返回真实 LLM 回复 ——
+     * 等于对公网开放了一个计费到自家 DashScope 账号的模型出口，
+     * 限流还会因为拿不到 userId 回落成 per-IP，换 IP 即绕过。
+     *
+     * <p>这里先按端点补最要命的两条；{@code /ai/health} 之类仍由
+     * {@link #isPublicEndpoint} 放行。彻底的修法是把整个拦截器翻成「默认要求登录 +
+     * 白名单放行」，但那要先证明白名单对启动期/激活/分享等匿名流程是完整的，
+     * 单独一轮做。
+     */
+    private static final String[] AUTH_REQUIRED_GLOBAL_PREFIXES = {
+            "/api/mobile/ai/",       // 通用 LLM 通道 (chat / chat/stream)
+            "/api/mobile/upload",    // 文件上传 (唯一调用方 mobileApiClient 走 apiClient, 自带 token)
+    };
+
     @Autowired
     private JwtUtil jwtUtil;
 
@@ -164,6 +187,16 @@ public class JwtAuthInterceptor implements HandlerInterceptor {
             return true;
         }
 
+        // 无工厂前缀但必须登录的路径 (见 AUTH_REQUIRED_GLOBAL_PREFIXES 注释)。
+        // 放在 factoryId 校验之前 —— 这些 URI 本来就取不出 factoryId, 走不到下面那段。
+        if (requiresGlobalAuth(requestUri) && !isPublicEndpoint(requestUri)) {
+            if (userId == null) {
+                log.warn("未认证请求 (无工厂前缀端点): uri={}", requestUri);
+                sendUnauthorizedResponse(response, "未授权，请先登录");
+                return false;
+            }
+        }
+
         String urlFactoryId = extractFactoryIdFromUrl(requestUri);
 
         if (urlFactoryId != null && !isPublicEndpoint(requestUri)) {
@@ -212,9 +245,25 @@ public class JwtAuthInterceptor implements HandlerInterceptor {
     }
 
     /**
+     * 该 URI 是否属于「无工厂前缀但必须登录」的一类。
+     * 包级可见, 便于 {@code JwtAuthInterceptorGlobalAuthTest} 直接断言路径判定。
+     */
+    boolean requiresGlobalAuth(String uri) {
+        if (uri == null) {
+            return false;
+        }
+        for (String prefix : AUTH_REQUIRED_GLOBAL_PREFIXES) {
+            if (uri.startsWith(prefix)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
      * 检查是否为公开端点（不需要权限验证）
      */
-    private boolean isPublicEndpoint(String uri) {
+    boolean isPublicEndpoint(String uri) {
         return uri.equals("/api/mobile/auth/login") ||  // 登录（精确匹配）
                uri.equals("/api/mobile/auth/unified-login") ||  // 统一登录
                uri.equals("/api/mobile/auth/demo-login") ||  // 演示账号免密登录 (路演)
