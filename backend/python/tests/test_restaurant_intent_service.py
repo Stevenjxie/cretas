@@ -1262,6 +1262,9 @@ async def test_endpoint_delegate_true_answer_shape(monkeypatch):
         "kpis": tiered_result["kpis"],
         "code": spec.intent,
         "contract_pass": True,
+        # spec §2.1: 输出形态偏好在线上**永不为空** —— mock 的 tiered_result 没给,
+        # 这一层就兜底成租户默认, 前端因此永远不必自己猜。
+        "output_preference": ["text", "table"],
         "query_plan_hash": None,
         "executed_resolvers": [],
         "suggested_followups": [],

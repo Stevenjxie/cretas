@@ -10,6 +10,7 @@ sync-style helper checks).
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from datetime import date
 from unittest.mock import AsyncMock, patch
 
@@ -28,6 +29,8 @@ from smartbi.gold.restaurant.restaurant_intent import (
     contextualize_restaurant_followup,
     optimization_clarification_question,
     parse_restaurant_query,
+    resolve_output_preference,
+    _seal_query_plan,
     _build_spec,
     _detect_comparison,
     _detect_dimensions,
@@ -3991,3 +3994,65 @@ def test_typed_dish_context_keeps_cost_slot_after_store_choice():
     )
     assert spec.dish_slot == "米饭"
     assert spec.planned_intents == ("RESTAURANT_OPS_GROSS_MARGIN",)
+
+
+# ─── 输出形态偏好 (spec §2.1) ──────────────────────────────────────────────
+
+def _spec_for(query: str):
+    return _build_spec(
+        "RESTAURANT_OPS_SALES_SUMMARY",
+        query,
+        confidence=0.95,
+        tier="llm",
+    )
+
+
+@pytest.mark.parametrize("query,expected", [
+    ("本月全部门店营收多少", ()),                       # 没提 → 交给租户默认
+    ("本月全部门店营收，给我表格", ("text", "table")),
+    ("本月全部门店营收，列个表", ("text", "table")),
+    ("本月营收画个图", ("text", "chart")),
+    ("本月营收做成折线图", ("text", "chart")),
+    ("本月经营生成报告文件", ("text", "report_file")),
+    ("本月营收给我表格，再画个图", ("text", "table", "chart")),
+])
+def test_output_preference_detects_only_explicit_requests(query, expected):
+    assert _spec_for(query).output_preference == expected
+
+
+def test_output_preference_falls_back_to_tenant_default():
+    # 没提要求 → 该客户口径: 文字 + 表格
+    assert resolve_output_preference(_spec_for("本月全部门店营收多少")) == (
+        "text", "table",
+    )
+    # 提了就以用户为准, 不再叠加默认
+    assert resolve_output_preference(_spec_for("本月营收画个图")) == ("text", "chart")
+
+
+def test_output_preference_honours_per_tenant_default_and_drops_junk():
+    spec = _spec_for("本月全部门店营收多少")
+    assert resolve_output_preference(spec, ("text", "chart")) == ("text", "chart")
+    # 注册表里写错的形态不能漏到渲染层
+    assert resolve_output_preference(spec, ("text", "hologram")) == ("text",)
+
+
+def test_output_preference_is_not_part_of_the_sealed_plan_identity():
+    """呈现形态不能进 plan_hash —— 否则计划缓存/晋升路由会按"要不要表格"分叉。
+
+    注意口径: 问句措辞本来就会改 hash (``resolver_query_seed`` 在 seal 白名单里,
+    这是有意的 —— 按钮答案"本月"不能脱离原问题到达 resolver)。这条测试锁的是
+    **这个槽本身不额外贡献 hash 熵**: 同一份 spec 只改 output_preference,
+    重新封板后 hash 必须一模一样。
+    """
+    base = _spec_for("本月全部门店营收多少")
+    assert base.output_preference == ()
+
+    resealed = _seal_query_plan(replace(base, output_preference=("text", "table")))
+
+    assert resealed.output_preference == ("text", "table")
+    assert resealed.plan_hash == base.plan_hash
+
+
+def test_output_preference_keeps_text_alongside_chart():
+    """老板要的是「图 + 一句结论」, 不是拿图把结论换掉。"""
+    assert "text" in _spec_for("本月营收画个图").output_preference

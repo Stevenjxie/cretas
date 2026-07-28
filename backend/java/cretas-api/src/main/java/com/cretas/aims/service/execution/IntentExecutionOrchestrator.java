@@ -1965,6 +1965,11 @@ public class IntentExecutionOrchestrator {
         if (delegated.get("queryPlanHash") != null) {
             delegatedData.put("queryPlanHash", delegated.get("queryPlanHash"));
         }
+        // spec §2.1 输出形态偏好 —— 转发链的最后一跳, 前端 (web-admin /
+        // mobile-rest-ai / RN) 按它决定渲染成文字/表格/图/报告文件。
+        if (delegated.get("outputPreference") != null) {
+            delegatedData.put("outputPreference", delegated.get("outputPreference"));
+        }
         if (delegated.get("executedResolvers") != null) {
             delegatedData.put("executedResolvers", delegated.get("executedResolvers"));
         }
