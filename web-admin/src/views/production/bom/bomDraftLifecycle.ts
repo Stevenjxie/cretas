@@ -9,6 +9,7 @@ export interface BomApiResponse<T> {
 export type EnsureDraftApi = (
   factoryId: string,
   productTypeId: string,
+  workflowRevisionId?: number | null,
 ) => Promise<BomApiResponse<BomRecipeSummary>>;
 
 /**
@@ -21,13 +22,17 @@ export function createBomDraftEnsurer(
 ) {
   const pending = new Map<string, Promise<BomRecipeSummary>>();
 
-  return (factoryId: string, productTypeId: string): Promise<BomRecipeSummary> => {
-    const key = `${factoryId}:${productTypeId}`;
+  return (
+    factoryId: string,
+    productTypeId: string,
+    workflowRevisionId?: number | null,
+  ): Promise<BomRecipeSummary> => {
+    const key = `${factoryId}:${productTypeId}:${workflowRevisionId ?? 'auto'}`;
     const existing = pending.get(key);
     if (existing) return existing;
 
     const request = (async () => {
-      const response = await ensureDraftApi(factoryId, productTypeId);
+      const response = await ensureDraftApi(factoryId, productTypeId, workflowRevisionId);
       if (!response.success || !response.data) {
         throw new Error(response.message || '无法创建或加载 BOM 草稿');
       }

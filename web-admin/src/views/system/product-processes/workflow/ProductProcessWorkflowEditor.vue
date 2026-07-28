@@ -556,6 +556,7 @@
         <BomUnifiedPanel
           v-if="bomDrawerVisible"
           :initial-product-type-id="bomDrawerProductTypeId"
+          :initial-workflow-revision-id="definition?.revisionId"
         />
         <template #fallback>
           <div aria-busy="true" aria-live="polite">
@@ -1141,8 +1142,28 @@ watch(
   () => { void loadProductBom(); },
 );
 
+async function waitForWorkflowSave(timeoutMs = 5000): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+  while (saving.value && Date.now() < deadline) {
+    await new Promise<void>((resolve) => window.setTimeout(resolve, 50));
+  }
+  return !saving.value;
+}
+
 // #10: 打开 BOM 配置抽屉; 关闭时刷新本产品 BOM (原料分组 + 提示随即更新)
-function openBomDrawer(requestedProductTypeId?: string): void {
+async function openBomDrawer(requestedProductTypeId?: string): Promise<void> {
+  if (!(await waitForWorkflowSave())) {
+    ElMessage.warning('Workflow 仍在保存，请稍后再打开 BOM');
+    return;
+  }
+  if (dirty.value && !(await saveDraft())) {
+    ElMessage.warning('当前 Workflow 尚未保存成功，不能用旧版本打开 BOM');
+    return;
+  }
+  if (dirty.value || definition.value?.revisionId == null || !definition.value.revisionHash) {
+    ElMessage.warning('请先保存当前 Workflow，再配置 BOM');
+    return;
+  }
   const errors = validateWorkflow(currentDefinition(), 'publish');
   if (errors.length > 0) {
     const first = errors[0];

@@ -19,13 +19,33 @@ describe('seasoning BOM integration source contract', () => {
     expect(unifiedSource).not.toContain('RecipeContent');
   });
 
-  it('passes the Workflow target SKU into the embedded BOM while keeping the conversion tab', () => {
+  it('passes the Workflow target SKU and exact revision into the embedded BOM while keeping the conversion tab', () => {
     expect(workflowEditorSource).toContain(':initial-product-type-id="bomDrawerProductTypeId"');
+    expect(workflowEditorSource).toContain(':initial-workflow-revision-id="definition?.revisionId"');
+    expect(workflowEditorSource).toContain('async function openBomDrawer');
+    expect(workflowEditorSource).toContain('if (dirty.value && !(await saveDraft()))');
+    expect(workflowEditorSource).toContain('definition.value?.revisionId == null');
+    expect(workflowEditorSource).toContain('当前 Workflow 尚未保存成功，不能用旧版本打开 BOM');
     expect(workflowEditorSource).toContain('openBomDrawer(bomMissingProducts[0]?.id)');
     expect(workflowEditorSource).toContain('targetIds.includes(productTypeId.value)');
     expect(unifiedSource).toContain(':initial-product-type-id="props.initialProductTypeId"');
+    expect(unifiedSource).toContain(':initial-workflow-revision-id="props.initialWorkflowRevisionId"');
     expect(bomSource).toContain('props.initialProductTypeId');
+    expect(bomSource).toContain('props.initialWorkflowRevisionId');
     expect(unifiedSource).toContain('name="conversion"');
+  });
+
+  it('lets an explicit Workflow revision establish the draft before checking that draft readiness', () => {
+    const ensureDraftSource = bomSource.slice(
+      bomSource.indexOf('async function ensureEditableDraft()'),
+      bomSource.indexOf('async function handleEnsureDraftVersion()'),
+    );
+    const exactDraftIndex = ensureDraftSource.indexOf('await ensureEditableDraftRequest(');
+    const exactReadinessIndex = ensureDraftSource.indexOf('await loadConfigurationReadiness(draft.id)');
+
+    expect(ensureDraftSource).toContain('const hasExactWorkflowContext = props.initialWorkflowRevisionId != null');
+    expect(exactDraftIndex).toBeGreaterThan(-1);
+    expect(exactReadinessIndex).toBeGreaterThan(exactDraftIndex);
   });
 
   it('removes the legacy conversion guidance banner without removing conversion management', () => {

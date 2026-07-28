@@ -94,7 +94,7 @@ describe('BomAuxiliaryWorkspace', () => {
 
     const layout = wrapper.get('[data-testid="seasoning-two-column-layout"]');
     expect(wrapper.get('[data-testid="bom-workflow-source-card"]').text())
-      .toContain('已自动关联系统自动维护');
+      .toContain('工艺来源跟随 Workflow v2已固定');
     expect(layout.get('[data-testid="seasoning-editor-column"]').exists()).toBe(true);
     const compactSummary = layout.get('[data-testid="seasoning-compact-summary"]');
     expect(compactSummary.text()).toContain('辣椒粉');
@@ -272,9 +272,10 @@ describe('BomAuxiliaryWorkspace', () => {
     await flushPromises();
 
     const source = wrapper.get('[data-testid="bom-workflow-source-card"]');
-    expect(source.text()).toContain('工艺关联');
-    expect(source.text()).toContain('已自动关联');
-    expect(source.text()).toContain('系统会随当前 SKU 的生效流程自动保持一致');
+    expect(source.text()).toContain('工艺来源');
+    expect(source.text()).toContain('跟随 Workflow v2');
+    expect(source.text()).toContain('已固定');
+    expect(source.text()).not.toContain('查看工艺');
     expect(wrapper.find('[data-testid="workflow-revision-select"]').exists()).toBe(false);
     expect(wrapper.find('[data-testid="pin-workflow-revision"]').exists()).toBe(false);
     expect(wrapper.find('[data-testid="view-workflow"]').exists()).toBe(false);
@@ -289,8 +290,7 @@ describe('BomAuxiliaryWorkspace', () => {
     await flushPromises();
 
     const source = wrapper.get('[data-testid="bom-workflow-source-card"]');
-    expect(source.text()).toContain('待自动同步');
-    expect(source.text()).toContain('检查并生效时会自动同步');
+    expect(source.text()).toContain('待同步');
     expect(wrapper.find('[data-testid="upgrade-workflow"]').exists()).toBe(false);
     expect(upgradeWorkflowRevision).not.toHaveBeenCalled();
   });

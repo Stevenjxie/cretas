@@ -66,12 +66,12 @@ const editable = computed(() => Boolean(
   && substitutesLoaded.value,
 ));
 const workflowLinkLabel = computed(() => (
-  workspace.value?.workflowUpgradeAvailable ? '待自动同步' : '已自动关联'
+  workspace.value?.workflowUpgradeAvailable ? '待同步' : '已固定'
 ));
-const workflowLinkDescription = computed(() => (
-  workspace.value?.workflowUpgradeAvailable
-    ? '检测到工艺更新，检查并生效时会自动同步，无需在辅料页处理。'
-    : '系统会随当前 SKU 的生效流程自动保持一致。'
+const workflowSourceName = computed(() => (
+  workspace.value?.workflowDefinitionVersion == null
+    ? '跟随当前 Workflow'
+    : `跟随 Workflow v${workspace.value.workflowDefinitionVersion}`
 ));
 
 async function loadWorkspace() {
@@ -271,12 +271,11 @@ function usageLabel(usage: { dosagePerKgG: number; basisQuantity?: number | null
       data-testid="bom-workflow-source-card"
     >
       <div class="workflow-source-card__identity">
-        <span class="workflow-source-card__eyebrow">工艺关联</span>
-        <div class="workflow-source-card__title">
-          <h3>{{ workflowLinkLabel }}</h3>
-          <el-tag size="small" :type="workspace.workflowUpgradeAvailable ? 'warning' : 'success'">系统自动维护</el-tag>
-        </div>
-        <p>{{ workflowLinkDescription }}</p>
+        <span>工艺来源</span>
+        <strong>{{ workflowSourceName }}</strong>
+        <el-tag size="small" :type="workspace.workflowUpgradeAvailable ? 'warning' : 'success'">
+          {{ workflowLinkLabel }}
+        </el-tag>
       </div>
       <div v-if="canViewPrice && (workspace.workflowTargetCount ?? 1) > 1" class="workflow-source-card__actions">
         <el-button
@@ -488,13 +487,10 @@ function usageLabel(usage: { dosagePerKgG: number; basisQuantity?: number | null
 <style scoped>
 .auxiliary-workspace { min-height: 180px; }
 .state-alert { margin-bottom: 10px; }
-.workflow-source-card { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 12px 20px; margin-bottom: 12px; padding: 16px 18px; border: 1px solid var(--el-color-primary-light-7); border-left: 4px solid var(--el-color-primary); border-radius: 8px; background: linear-gradient(135deg, var(--el-color-primary-light-9), var(--el-bg-color) 72%); }
-.workflow-source-card__identity { min-width: 0; }
-.workflow-source-card__eyebrow { display: block; margin-bottom: 6px; color: var(--el-color-primary); font-size: 12px; font-weight: 700; letter-spacing: .08em; }
-.workflow-source-card__title { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
-.workflow-source-card__title h3 { min-width: 0; margin: 0; font-size: 15px; overflow-wrap: anywhere; text-wrap: balance; }
-.workflow-source-card__identity p { margin: 7px 0 0; color: var(--el-text-color-secondary); font-size: 13px; line-height: 1.55; }
-.workflow-source-card__actions { display: flex; align-items: flex-start; gap: 8px; }
+.workflow-source-card { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 10px; padding: 8px 12px; border: 1px solid var(--el-border-color-lighter); border-radius: 6px; background: var(--el-fill-color-extra-light); }
+.workflow-source-card__identity { display: flex; min-width: 0; align-items: center; gap: 8px; color: var(--el-text-color-secondary); font-size: 12px; }
+.workflow-source-card__identity strong { color: var(--el-text-color-primary); font-size: 13px; overflow-wrap: anywhere; }
+.workflow-source-card__actions { display: flex; flex: none; align-items: center; }
 .workspace-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 10px; }
 .workspace-toolbar__right { display: flex; align-items: center; gap: 10px; }
 .workspace-stats { color: var(--el-text-color-secondary); font-size: 12px; }
@@ -519,7 +515,7 @@ function usageLabel(usage: { dosagePerKgG: number; basisQuantity?: number | null
 .usage-tag { margin: 2px 4px 2px 0; }
 
 @media (max-width: 1180px) {
-  .workflow-source-card { grid-template-columns: 1fr; }
+  .workflow-source-card { align-items: stretch; flex-direction: column; }
   .workflow-source-card__actions { width: 100%; }
   .process-layout { grid-template-columns: 1fr; }
   .compact-summary { position: static; }
