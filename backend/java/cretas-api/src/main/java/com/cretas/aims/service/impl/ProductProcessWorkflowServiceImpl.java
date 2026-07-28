@@ -90,6 +90,13 @@ public class ProductProcessWorkflowServiceImpl implements ProductProcessWorkflow
             entity = existingDraft.get();
             assertCurrentVersion(definition.getLockVersion(), entity);
         } else {
+            Optional<ProductProcessWorkflow> published = find(
+                    factoryId, productTypeId, ProductProcessWorkflow.Status.PUBLISHED);
+            if (published.isPresent() && samePersistedDefinition(published.get(), definition)) {
+                ProductProcessWorkflowDTO unchanged = toDTO(published.get());
+                unchanged.setUnitWarnings(definition.getUnitWarnings());
+                return unchanged;
+            }
             entity = new ProductProcessWorkflow();
             entity.setFactoryId(factoryId);
             entity.setProductTypeId(productTypeId);
@@ -594,6 +601,28 @@ public class ProductProcessWorkflowServiceImpl implements ProductProcessWorkflow
         ProductProcessWorkflowDTO dto = toDTO(entity);
         dto.setUnitWarnings(unitValidator.validate(entity.getFactoryId(), dto).errors());
         return dto;
+    }
+
+    /**
+     * A delayed autosave may arrive after the only draft has already been published. Compare the
+     * incoming persisted graph against that published row using the revision service's canonical
+     * hash, but pin the candidate to the published definition version so version allocation alone
+     * cannot turn identical content into a new draft.
+     */
+    private boolean samePersistedDefinition(
+            ProductProcessWorkflow published,
+            ProductProcessWorkflowDTO definition) {
+        ProductProcessWorkflow candidate = new ProductProcessWorkflow();
+        candidate.setFactoryId(published.getFactoryId());
+        candidate.setProductTypeId(published.getProductTypeId());
+        candidate.setDefinitionVersion(published.getDefinitionVersion());
+        candidate.setSchemaVersion(definition.getSchemaVersion());
+        candidate.setNodesJson(writeJson(definition.getNodes()));
+        candidate.setEdgesJson(writeJson(definition.getEdges()));
+        candidate.setViewportJson(writeJson(definition.getViewport()));
+        return Objects.equals(
+                revisionSnapshotService.hash(published),
+                revisionSnapshotService.hash(candidate));
     }
 
     private String writeJson(Object value) {

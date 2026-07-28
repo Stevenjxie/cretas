@@ -110,27 +110,37 @@
       </el-alert>
 
       <el-alert
-        v-else-if="bomRevisionMismatchProducts.length > 0"
+        v-else-if="bomProductionMismatchProducts.length > 0"
         class="workflow-bom-alert"
         data-testid="workflow-bom-revision-alert"
-        type="info"
+        type="warning"
         :closable="false"
         show-icon
       >
         <template #title>
-          {{ bomRevisionMismatchProducts.map((item) => item.name).join('、') }} 的生效 BOM 仍关联旧工艺
+          {{ bomProductionMismatchProducts.map((item) => item.name).join('、') }} 的生效 BOM 与当前已启用 Workflow 不一致
         </template>
         <template #default>
-          <span>发布时系统会重新检查并自动同步；无需先进入 BOM 手工升级。</span>
+          <span>发布当前草稿时系统会重新检查并自动同步；已有生产计划继续使用原快照。</span>
           <el-button
             link
             type="primary"
-            @click="openBomDrawer(bomRevisionMismatchProducts[0]?.id)"
+            @click="openBomDrawer(bomProductionMismatchProducts[0]?.id)"
           >
             查看 BOM →
           </el-button>
         </template>
       </el-alert>
+
+      <el-alert
+        v-if="definition?.status === 'DRAFT' && activation?.enabled"
+        class="workflow-bom-alert"
+        data-testid="workflow-draft-production-context"
+        type="info"
+        :closable="false"
+        show-icon
+        :title="`当前编辑草稿 v${definition.version}；生产继续使用已启用 Workflow v${activation.activeDefinitionVersion}`"
+      />
 
       <el-alert
         v-if="workflowBomSyncPreflight"
@@ -154,6 +164,9 @@
         </template>
         <template v-else-if="workflowBomSyncPreflight.classification === 'AUTO_MIGRATABLE'" #default>
           系统将保留已有 BOM 内容，并把可唯一确定的原料入口迁移到当前 Workflow。
+        </template>
+        <template v-else-if="definition?.status === 'DRAFT' && activation?.enabled" #default>
+          本次检查对象为草稿 v{{ definition.version }}；发布前生产仍使用 Workflow v{{ activation.activeDefinitionVersion }}。
         </template>
       </el-alert>
 
@@ -717,6 +730,8 @@ interface BomRecipeDetailOption {
   items?: BomRecipeItemOption[];
   version?: number | null;
   status?: string | null;
+  workflowId?: number | null;
+  workflowDefinitionVersion?: number | null;
   workflowRevisionId?: number | null;
   workflowRevisionHash?: string | null;
 }
@@ -728,6 +743,8 @@ interface BomProductTarget {
 
 interface ActiveBomRevision {
   version?: number | null;
+  workflowId?: number | null;
+  workflowDefinitionVersion?: number | null;
   workflowRevisionId?: number | null;
   workflowRevisionHash?: string | null;
 }
@@ -789,6 +806,8 @@ const selectedEdgeId = ref('');
 const canvasRef = ref<HTMLElement | null>(null);
 let gsapCtx: gsap.Context | null = null;
 let autoSaveTimer: ReturnType<typeof setTimeout> | null = null;
+let autoSaveGeneration = 0;
+let autoSaveBarrierDepth = 0;
 // #11 fix: 每次本地改动 +1; 保存时对比, 若 PUT 往返期间有新改动则不 hydrate 覆盖 (防丢在途编辑)
 let editSeq = 0;
 // #10: BOM 配置抽屉 (右侧滑出, 不跳转页面, 关闭即回工序配置, 避免丢失未保存草稿)
@@ -811,10 +830,14 @@ const unitCatalog = ref<UnitCatalogItem[]>([]);
 const productBomItems = ref<BomRecipeItemOption[]>([]);
 const bomMissingProducts = ref<BomProductTarget[]>([]);
 const activeBomByProduct = ref<Record<string, ActiveBomRevision>>({});
-const bomRevisionMismatchProducts = computed<BomProductTarget[]>(() => {
-  const revisionId = definition.value?.revisionId;
-  const revisionHash = definition.value?.revisionHash;
-  if (revisionId == null && !revisionHash) return [];
+const bomProductionMismatchProducts = computed<BomProductTarget[]>(() => {
+  const activeWorkflowId = activation.value?.enabled
+    ? activation.value.activeWorkflowId
+    : null;
+  const activeDefinitionVersion = activation.value?.enabled
+    ? activation.value.activeDefinitionVersion
+    : null;
+  if (activeWorkflowId == null || activeDefinitionVersion == null) return [];
 
   const seen = new Set<string>();
   return flowNodes.value
@@ -828,11 +851,11 @@ const bomRevisionMismatchProducts = computed<BomProductTarget[]>(() => {
       seen.add(target.id);
       const activeBom = activeBomByProduct.value[target.id];
       if (!activeBom) return false;
-      const revisionIdMismatch = revisionId != null
-        && activeBom.workflowRevisionId !== revisionId;
-      const revisionHashMismatch = Boolean(revisionHash)
-        && activeBom.workflowRevisionHash !== revisionHash;
-      return revisionIdMismatch || revisionHashMismatch;
+      const workflowIdMismatch = activeBom.workflowId != null
+        && activeBom.workflowId !== activeWorkflowId;
+      const definitionVersionMismatch = activeBom.workflowDefinitionVersion != null
+        && activeBom.workflowDefinitionVersion !== activeDefinitionVersion;
+      return workflowIdMismatch || definitionVersionMismatch;
     });
 });
 const bomRawMaterialIdList = computed(() => productBomItems.value.map((item) => item.materialTypeId));
@@ -1004,6 +1027,7 @@ const canEdit = computed(() => (
 const currentDefinitionIsEnabled = computed(() => (
   definition.value?.status === 'PUBLISHED'
   && activation.value?.enabled === true
+  && activation.value.activeWorkflowId === definition.value.id
   && activation.value.activeDefinitionVersion === definition.value.version
 ));
 const publishActionCompleted = computed(() => currentDefinitionIsEnabled.value && !dirty.value);
@@ -1089,7 +1113,7 @@ onMounted(async () => {
 
 onUnmounted(() => {
   window.removeEventListener('keydown', onEditorKeydown);
-  if (autoSaveTimer) clearTimeout(autoSaveTimer);
+  invalidatePendingAutoSave();
   cancelBomPanelPreload?.();
   cancelBomPanelPreload = null;
   gsapCtx?.revert();
@@ -1119,10 +1143,36 @@ async function loadEditorWorkspace(loadFactoryCatalogs: boolean): Promise<void> 
 // 连续操作只会在最后一次后触发。服务端失败后不自动重试同一编辑，避免 500 通知风暴；
 // 用户再次编辑会重新排期，手动“保存草稿”也可立即重试。
 const AUTO_SAVE_DELAY = 2500;
-function scheduleAutoSave(): void {
+function invalidatePendingAutoSave(): void {
   if (autoSaveTimer) clearTimeout(autoSaveTimer);
+  autoSaveTimer = null;
+  autoSaveGeneration += 1;
+}
+
+async function withAutoSaveBarrier(operation: () => Promise<void>): Promise<void> {
+  autoSaveBarrierDepth += 1;
+  invalidatePendingAutoSave();
+  try {
+    await operation();
+  } finally {
+    invalidatePendingAutoSave();
+    autoSaveBarrierDepth -= 1;
+    if (autoSaveBarrierDepth === 0
+      && dirty.value
+      && previewingVersion.value === null
+      && canEdit.value) {
+      scheduleAutoSave();
+    }
+  }
+}
+
+function scheduleAutoSave(): void {
+  if (autoSaveBarrierDepth > 0) return;
+  if (autoSaveTimer) clearTimeout(autoSaveTimer);
+  const scheduledGeneration = autoSaveGeneration;
   autoSaveTimer = setTimeout(async () => {
     autoSaveTimer = null;
+    if (scheduledGeneration !== autoSaveGeneration || autoSaveBarrierDepth > 0) return;
     // 只读预览 / 不可编辑 → 不存也不重排 (退出预览/恢复编辑后由 mutate 重新排)
     if (previewingVersion.value !== null || !canEdit.value) return;
     if (!dirty.value) return;                                 // 没有未保存改动
@@ -1706,6 +1756,8 @@ async function loadProductBom(options: { force?: boolean } = {}): Promise<void> 
       if (response?.success && response.data) {
         activeBomMap[target.id] = {
           version: response.data.version,
+          workflowId: response.data.workflowId,
+          workflowDefinitionVersion: response.data.workflowDefinitionVersion,
           workflowRevisionId: response.data.workflowRevisionId,
           workflowRevisionHash: response.data.workflowRevisionHash,
         };
@@ -2894,7 +2946,7 @@ function createWorkflowPublishIdempotencyKey(): string {
 }
 
 async function publishWorkflow(): Promise<void> {
-  let identity = currentLoadedIdentity();
+  const identity = currentLoadedIdentity();
   if (!identity || !canEdit.value || publishConfirming.value || publishing.value) return;
   if (currentDefinitionIsEnabled.value && !dirty.value) {
     ElMessage.info(`Workflow v${definition.value?.version} 已发布并启用，当前没有待发布变更`);
@@ -2908,6 +2960,15 @@ async function publishWorkflow(): Promise<void> {
     ElMessage.info('当前不是可发布的 Workflow 草稿；请先另存或修改后保存草稿');
     return;
   }
+  await withAutoSaveBarrier(() => publishWorkflowUnderBarrier(identity));
+}
+
+async function publishWorkflowUnderBarrier(initialIdentity: WorkflowIdentity): Promise<void> {
+  if (!(await waitForWorkflowSave())) {
+    ElMessage.warning('Workflow 自动保存仍未完成，请稍后再发布');
+    return;
+  }
+  let identity = initialIdentity;
   if (!(await reconcileForPersistence(identity, true))) return;
   if (dirty.value && !(await saveDraft())) return;
   identity = currentLoadedIdentity();

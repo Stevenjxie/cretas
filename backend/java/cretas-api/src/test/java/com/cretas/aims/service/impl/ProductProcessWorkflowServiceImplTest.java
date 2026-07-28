@@ -255,6 +255,72 @@ class ProductProcessWorkflowServiceImplTest {
     }
 
     @Test
+    @DisplayName("发布后的迟到同图自动保存返回已发布版本且不创建新草稿")
+    void delayedIdenticalAutosaveAfterPublishIsNoOp() {
+        ProductProcessWorkflowDTO request = validDefinition();
+        request.setLockVersion(3L);
+        ProductProcessWorkflow published = entityFrom(request);
+        published.setId(91L);
+        published.setStatus(ProductProcessWorkflow.Status.PUBLISHED);
+        published.setDefinitionVersion(1);
+        published.setLockVersion(4L);
+        pinCurrentRevision(published);
+        when(repository.findFirstByFactoryIdAndProductTypeIdAndStatusOrderByDefinitionVersionDesc(
+                FACTORY_ID, PRODUCT_ID, ProductProcessWorkflow.Status.DRAFT))
+                .thenReturn(Optional.empty());
+        when(repository.findFirstByFactoryIdAndProductTypeIdAndStatusOrderByDefinitionVersionDesc(
+                FACTORY_ID, PRODUCT_ID, ProductProcessWorkflow.Status.PUBLISHED))
+                .thenReturn(Optional.of(published));
+        when(revisionSnapshotService.hash(any(ProductProcessWorkflow.class))).thenReturn("same-graph");
+
+        ProductProcessWorkflowDTO saved = service.saveDraft(FACTORY_ID, PRODUCT_ID, request);
+
+        assertEquals(ProductProcessWorkflow.Status.PUBLISHED.name(), saved.getStatus());
+        assertEquals(1, saved.getVersion());
+        assertEquals(91L, saved.getId());
+        verify(repository, never()).findMaxDefinitionVersion(FACTORY_ID, PRODUCT_ID);
+        verify(repository, never()).saveAndFlush(any(ProductProcessWorkflow.class));
+        verify(revisionSnapshotService, never()).captureDraft(any(ProductProcessWorkflow.class));
+    }
+
+    @Test
+    @DisplayName("发布后真实画布修改仍创建下一版草稿")
+    void changedAutosaveAfterPublishCreatesNextDraft() {
+        ProductProcessWorkflowDTO request = validDefinition();
+        request.setLockVersion(3L);
+        request.getNodes().get(0).getPosition().setX(99D);
+        ProductProcessWorkflow published = entityFrom(validDefinition());
+        published.setId(91L);
+        published.setStatus(ProductProcessWorkflow.Status.PUBLISHED);
+        published.setDefinitionVersion(1);
+        published.setLockVersion(4L);
+        pinCurrentRevision(published);
+        when(repository.findFirstByFactoryIdAndProductTypeIdAndStatusOrderByDefinitionVersionDesc(
+                FACTORY_ID, PRODUCT_ID, ProductProcessWorkflow.Status.DRAFT))
+                .thenReturn(Optional.empty());
+        when(repository.findFirstByFactoryIdAndProductTypeIdAndStatusOrderByDefinitionVersionDesc(
+                FACTORY_ID, PRODUCT_ID, ProductProcessWorkflow.Status.PUBLISHED))
+                .thenReturn(Optional.of(published));
+        when(revisionSnapshotService.hash(any(ProductProcessWorkflow.class)))
+                .thenAnswer(invocation -> invocation.getArgument(0) == published
+                        ? "published-graph" : "changed-graph");
+        when(repository.findMaxDefinitionVersion(FACTORY_ID, PRODUCT_ID)).thenReturn(Optional.of(1));
+        when(repository.saveAndFlush(any(ProductProcessWorkflow.class))).thenAnswer(invocation -> {
+            ProductProcessWorkflow saved = invocation.getArgument(0);
+            saved.setId(92L);
+            saved.setLockVersion(0L);
+            return saved;
+        });
+
+        ProductProcessWorkflowDTO saved = service.saveDraft(FACTORY_ID, PRODUCT_ID, request);
+
+        assertEquals(ProductProcessWorkflow.Status.DRAFT.name(), saved.getStatus());
+        assertEquals(2, saved.getVersion());
+        assertEquals(92L, saved.getId());
+        verify(revisionSnapshotService).captureDraft(any(ProductProcessWorkflow.class));
+    }
+
+    @Test
     @DisplayName("原料 owner 首次保存会创建带创建人的内部锚点")
     void rawOwnerAnchorInheritsCreatedBy() {
         String rawOwnerId = "RMT-RAW-1";
