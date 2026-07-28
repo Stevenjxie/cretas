@@ -58,7 +58,8 @@ class BomWorkflowRevisionServiceTest {
     @BeforeEach
     void setUp() {
         validator = new ProductProcessWorkflowValidator();
-        snapshotService = new WorkflowRevisionSnapshotService(revisionRepository, validator, objectMapper);
+        snapshotService = new WorkflowRevisionSnapshotService(
+                revisionRepository, recipeRepository, validator, objectMapper);
         service = new BomWorkflowRevisionService(recipeRepository, workflowRepository, revisionRepository,
                 activationRepository, validator, catalogValidator, snapshotService, objectMapper);
     }

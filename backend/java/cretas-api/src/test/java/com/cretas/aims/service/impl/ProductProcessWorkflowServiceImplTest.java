@@ -98,6 +98,7 @@ class ProductProcessWorkflowServiceImplTest {
         revision.setRevisionHash("test-revision");
         revision.setStructurallyComplete(true);
         lenient().when(revisionSnapshotService.capture(any())).thenReturn(revision);
+        lenient().when(revisionSnapshotService.captureDraft(any())).thenReturn(revision);
         lenient().when(revisionRepository.findByIdAndFactoryId(91L, FACTORY_ID))
                 .thenReturn(Optional.of(revision));
         ProductType owner = new ProductType();
@@ -182,6 +183,7 @@ class ProductProcessWorkflowServiceImplTest {
         assertFalse(savedNodes.contains("\"portGroups\""));
         assertFalse(savedNodes.contains("\"outputRole\""));
         assertFalse(savedNodes.contains("\"costAllocationRatio\""));
+        verify(revisionSnapshotService).captureDraft(any(ProductProcessWorkflow.class));
         verify(catalogValidator, never()).validateForPublish(any(), any(), any());
     }
 
@@ -396,6 +398,7 @@ class ProductProcessWorkflowServiceImplTest {
         assertEquals(1, published.getVersion());
         assertEquals(4L, published.getLockVersion());
         verify(catalogValidator).validateForPublish(eq(FACTORY_ID), eq(PRODUCT_ID), any());
+        verify(revisionSnapshotService).captureDraft(draft);
         verify(bomWorkflowRevisionService).requireActiveBomPinsRevision(
                 eq(FACTORY_ID), eq(PRODUCT_ID), any());
         verify(repository).saveAndFlush(draft);
