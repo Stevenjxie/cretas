@@ -18,6 +18,7 @@ import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.Map;
 
 /**
  * 生产计划数据传输对象
@@ -64,8 +65,14 @@ public class ProductionPlanDTO {
     private String workflowSelectionMode;
     private Long selectedWorkflowId;
     private Integer selectedWorkflowVersion;
+    private Long selectedWorkflowRevisionId;
+    private String selectedWorkflowRevisionHash;
+    private Map<String, String> workflowOutputUnitsByProduct;
     private String selectedBomRecipeId;
     private Integer selectedBomVersion;
+    private String selectedBomFamilyId;
+    private Map<String, String> selectedBomRecipeIdsByProduct;
+    private Map<String, Integer> selectedBomVersionsByProduct;
 
     @Schema(description = "实际数量")
     private BigDecimal actualQuantity;

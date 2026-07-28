@@ -74,6 +74,10 @@ public class ProductionSettlementRequest {
         private String batchNumber;
         private BigDecimal quantity;
         private String unit;
+        /** Exact Workflow material node that produced this terminal batch. */
+        private String materialNodeId;
+        /** Exact Workflow output port used for the process report. */
+        private String workflowPortId;
     }
 
     @Data
@@ -84,13 +88,17 @@ public class ProductionSettlementRequest {
         private String materialBatchId;
         private Long semiFinishedInventoryId;
         /**
-         * Optional row-level SKU/product type context.
-         * Process-sheet prefill uses this for mixed-SKU plans so BOM validation
-         * is performed against the SKU that actually consumed the material.
+         * Legacy row-level product context. Workflow plans validate the exact
+         * material-node/input-port against the pinned BOM family instead;
+         * intermediate WIP identity must never be treated as a terminal owner.
          */
         private String productTypeId;
         private String materialTypeId;
         private String batchNumber;
+        /** Exact raw-material Cell from the submitted pinned Workflow row. */
+        private String workflowMaterialNodeId;
+        /** Exact consuming-process input port from the submitted pinned Workflow row. */
+        private String workflowInputPortId;
 
         @NotNull(message = "quantity is required")
         @Positive(message = "quantity must be > 0")

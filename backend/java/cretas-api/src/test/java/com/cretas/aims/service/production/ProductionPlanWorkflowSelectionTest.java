@@ -66,14 +66,13 @@ class ProductionPlanWorkflowSelectionTest {
         owner.setId("OWNER");
         owner.setFactoryId("F1");
         owner.setUnit("kg");
-        when(productTypeRepository.findById("OWNER")).thenReturn(Optional.of(owner));
         when(productTypeRepository.findByIdAndFactoryId("OWNER", "F1")).thenReturn(Optional.of(owner));
     }
 
     @Test
     void exactUiSelectionUsesPinnedWorkflowContractInsteadOfResolvingTheCurrentAnchorAgain() {
         WorkflowPlanOutputContract pinned = new WorkflowPlanOutputContract(
-                88L, 3, Map.of("FG-1", "box"), "kg");
+                88L, 3, 903L, "revision-hash-903", Map.of("FG-1", "box"), "kg");
         when(workflowResolutionService.resolvePinnedPlanOutputContract(
                 "F1", "OWNER", 88L, 3, List.of("FG-1"))).thenReturn(pinned);
 
@@ -99,9 +98,9 @@ class ProductionPlanWorkflowSelectionTest {
     }
 
     @Test
-    void legacyActiveBomIsPinnedWithoutReapplyingNewActivationCompletenessRules() {
+    void workflowPlanPinsExactRevisionFamilyAndOutputRecipeInsteadOfOwnerSkuBom() {
         WorkflowPlanOutputContract active = new WorkflowPlanOutputContract(
-                105L, 1, Map.of("OWNER", "kg"), "kg");
+                105L, 1, 501L, "revision-hash-501", Map.of("OWNER", "kg"), "kg");
         when(workflowResolutionService.resolveActivePlanOutputContract(
                 "F1", "OWNER", null)).thenReturn(Optional.of(active));
         BomRecipe recipe = BomRecipe.builder()
@@ -109,11 +108,20 @@ class ProductionPlanWorkflowSelectionTest {
                 .factoryId("F1")
                 .productTypeId("OWNER")
                 .version(1)
+                .workflowId(105L)
+                .workflowDefinitionVersion(1)
+                .workflowRevisionId(501L)
+                .workflowRevisionHash("revision-hash-501")
+                .bomFamilyId("FAMILY-501")
+                .sharedRecipeId("BOM-ACTIVE-V1")
+                .targetTerminalNodeId("terminal-owner")
                 .status(BomRecipe.Status.ACTIVE)
                 .isCurrent(true)
                 .build();
-        when(bomRecipeRepository.findByFactoryIdAndProductTypeIdAndIsCurrentTrueAndStatus(
-                "F1", "OWNER", BomRecipe.Status.ACTIVE)).thenReturn(Optional.of(recipe));
+        when(bomRecipeRepository
+                .findByFactoryIdAndWorkflowRevisionIdAndStatusOrderByProductTypeIdAsc(
+                        "F1", 501L, BomRecipe.Status.ACTIVE))
+                .thenReturn(List.of(recipe));
 
         Object authority = ReflectionTestUtils.invokeMethod(
                 service, "resolvePlanUnitAuthority", "F1", "OWNER", null);
@@ -125,7 +133,11 @@ class ProductionPlanWorkflowSelectionTest {
 
         assertEquals(105L, plan.getSelectedWorkflowId());
         assertEquals(1, plan.getSelectedWorkflowVersion());
+        assertEquals(501L, plan.getSelectedWorkflowRevisionId());
+        assertEquals("revision-hash-501", plan.getSelectedWorkflowRevisionHash());
+        assertEquals("FAMILY-501", plan.getSelectedBomFamilyId());
         assertEquals("BOM-ACTIVE-V1", plan.getSelectedBomRecipeId());
         assertEquals(1, plan.getSelectedBomVersion());
+        assertEquals(Map.of("OWNER", "BOM-ACTIVE-V1"), plan.getSelectedBomRecipeIdsByProduct());
     }
 }

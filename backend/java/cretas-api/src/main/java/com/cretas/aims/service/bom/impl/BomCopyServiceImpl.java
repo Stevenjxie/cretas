@@ -2,6 +2,7 @@ package com.cretas.aims.service.bom.impl;
 
 import com.cretas.aims.dto.bom.BomCopyCandidateDTO;
 import com.cretas.aims.dto.bom.BomCopyToDraftRequest;
+import com.cretas.aims.dto.bom.CreateBomRecipeRequest.BomRecipeItemDTO;
 import com.cretas.aims.entity.ProductType;
 import com.cretas.aims.entity.WorkProcess;
 import com.cretas.aims.entity.bom.BomProcessInjectionConfig;
@@ -17,7 +18,7 @@ import com.cretas.aims.repository.bom.BomRecipeItemRepository;
 import com.cretas.aims.repository.bom.BomRecipeRepository;
 import com.cretas.aims.repository.bom.BomSeasoningItemRepository;
 import com.cretas.aims.service.bom.BomCopyService;
-import com.cretas.aims.service.unit.UnitContractService;
+import com.cretas.aims.service.bom.BomRecipeService;
 import com.cretas.aims.service.workflow.ProductWorkflowResolutionService;
 import com.cretas.aims.service.workflow.WorkflowProcessPath;
 import lombok.RequiredArgsConstructor;
@@ -26,8 +27,6 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
-import java.time.LocalDate;
-import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashSet;
@@ -44,8 +43,6 @@ import java.util.stream.Collectors;
 public class BomCopyServiceImpl implements BomCopyService {
 
     private static final int MAX_VERSIONS_PER_PRODUCT = 10;
-    private static final DateTimeFormatter CODE_DATE_FMT = DateTimeFormatter.ofPattern("yyyyMMdd");
-
     private final BomRecipeRepository recipeRepo;
     private final BomRecipeItemRepository itemRepo;
     private final BomSeasoningItemRepository seasoningRepo;
@@ -53,7 +50,7 @@ public class BomCopyServiceImpl implements BomCopyService {
     private final ProductTypeRepository productTypeRepo;
     private final WorkProcessRepository workProcessRepo;
     private final ProductWorkflowResolutionService workflowResolutionService;
-    private final UnitContractService unitContractService;
+    private final BomRecipeService bomRecipeService;
 
     @Override
     @Transactional(readOnly = true)
@@ -173,43 +170,25 @@ public class BomCopyServiceImpl implements BomCopyService {
             }
         }
 
-        BomRecipe draft = new BomRecipe();
-        draft.setFactoryId(factoryId);
-        draft.setRecipeCode(generateRecipeCode(factoryId));
-        draft.setProductTypeId(target.getId());
-        draft.setProductName(target.getName());
-        Integer maxVersion = recipeRepo.findMaxVersion(factoryId, target.getId());
-        draft.setVersion(maxVersion == null ? 1 : maxVersion + 1);
-        draft.setIsCurrent(false);
-        draft.setOverallYieldRate(null);
-        var canonicalOutputUnit = unitContractService.normalize(factoryId, target.getUnit());
-        if (!canonicalOutputUnit.recognized()) {
-            throw businessError(409, "目标 SKU 基本单位无法识别", "BOM_SKU_UNIT_UNKNOWN");
-        }
-        draft.setOutputQuantityPerUnit(BigDecimal.ONE);
-        draft.setOutputUnit(canonicalOutputUnit.code());
-        draft.setNetContentQuantity(target.getNetContentQuantity() != null
-                ? target.getNetContentQuantity() : target.getGramsPerUnit());
-        draft.setNetContentUnit(target.getNetContentUnit() != null
-                ? target.getNetContentUnit() : (target.getGramsPerUnit() == null ? null : "g"));
-        draft.setStatus(BomRecipe.Status.DRAFT);
-        draft.setSourceType(BomRecipe.SourceType.MANUAL);
+        // Always start from the target SKU's server-owned Workflow skeleton. Copying into a
+        // hand-built, unpinned recipe used to create RAW rows with no stable node/port/edge tuple.
+        BomRecipe draft = bomRecipeService.ensureDraft(factoryId, target.getId());
         draft.setNotes("参考复制自 " + source.getProductName() + " / " + source.getRecipeCode()
                 + " (v" + source.getVersion() + ")，请核对数量后再激活");
         draft = recipeRepo.save(draft);
         String draftId = draft.getId();
 
-        List<BomRecipeItem> copiedItems = selectedItems.stream()
-                .map(item -> copyItem(factoryId, draftId, item)).toList();
-        itemRepo.saveAll(copiedItems);
-        draft.getItems().clear();
-        draft.getItems().addAll(copiedItems);
+        for (BomRecipeItem selectedItem : selectedItems) {
+            // Deliberately omit source Workflow tuple and cost scope. addItem resolves the target
+            // slot by unique material+unit and merges into its skeleton; ambiguity fails closed.
+            bomRecipeService.addItem(factoryId, draftId, copyItemRequest(selectedItem));
+        }
         seasoningRepo.saveAll(seasoningSelections.stream()
                 .map(selection -> copySeasoning(
                         factoryId, draftId, selection.source(), selection.targetStep())).toList());
         processInjectionConfigRepo.saveAll(selectedConfigs.stream()
                 .map(config -> copyInjectionConfig(factoryId, draftId, config)).toList());
-        return recipeRepo.save(draft);
+        return bomRecipeService.getRecipe(factoryId, draftId);
     }
 
     private BomCopyCandidateDTO toCandidate(WorkflowProcessPath targetPath, CandidateContext context,
@@ -282,23 +261,18 @@ public class BomCopyServiceImpl implements BomCopyService {
                 .injectionAmountKg(config.getInjectionAmountKg()).notes(config.getNotes()).build();
     }
 
-    private BomRecipeItem copyItem(String factoryId, String recipeId, BomRecipeItem source) {
-        BomRecipeItem copy = new BomRecipeItem();
-        copy.setRecipeId(recipeId);
-        copy.setFactoryId(factoryId);
+    private BomRecipeItemDTO copyItemRequest(BomRecipeItem source) {
+        BomRecipeItemDTO copy = new BomRecipeItemDTO();
         copy.setMaterialTypeId(source.getMaterialTypeId());
-        copy.setMaterialName(source.getMaterialName());
         copy.setStandardQuantity(source.getStandardQuantity());
-        copy.setYieldRate(source.getYieldRate());
-        copy.setActualQuantity(source.getActualQuantity());
         copy.setUnit(source.getUnit());
-        copy.setUnitPrice(source.getUnitPrice());
-        copy.setTaxRate(source.getTaxRate());
-        copy.setItemCost(source.getItemCost());
         copy.setMaterialCategory(source.getMaterialCategory());
         copy.setSortOrder(source.getSortOrder());
         copy.setIsOptional(source.getIsOptional());
         copy.setSubstituteGroup(source.getSubstituteGroup());
+        copy.setPackagingSpecId(source.getPackagingSpecId());
+        copy.setPackagingRole(source.getPackagingRole());
+        copy.setNaturalQuantity(source.getNaturalQuantity());
         copy.setRemark(source.getRemark());
         copy.setPerPortion(source.getPerPortion());
         copy.setSemiFinishedRefCode(source.getSemiFinishedRefCode());
@@ -487,11 +461,6 @@ public class BomCopyServiceImpl implements BomCopyService {
             selected.add(row);
         }
         return selected;
-    }
-
-    private String generateRecipeCode(String factoryId) {
-        String prefix = "BOM-" + LocalDate.now().format(CODE_DATE_FMT) + "-";
-        return String.format("%s%03d", prefix, recipeRepo.countByRecipeCodePrefix(factoryId, prefix + "%") + 1);
     }
 
     private BusinessException businessError(int status, String message, String code) {

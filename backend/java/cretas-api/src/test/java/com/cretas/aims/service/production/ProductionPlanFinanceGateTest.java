@@ -116,12 +116,13 @@ class ProductionPlanFinanceGateTest {
                 productionLineRepository, userRepository, excelUtil,
                 salesOrderRepository, salesOrderItemRepository);
 
-        when(productTypeRepository.existsById(PRODUCT_TYPE_ID)).thenReturn(true);
+        when(productTypeRepository.existsByIdAndFactoryId(PRODUCT_TYPE_ID, FACTORY_ID)).thenReturn(true);
         ProductType productType = new ProductType();
         productType.setId(PRODUCT_TYPE_ID);
         productType.setFactoryId(FACTORY_ID);
         productType.setUnit("kg");
-        lenient().when(productTypeRepository.findById(PRODUCT_TYPE_ID)).thenReturn(Optional.of(productType));
+        lenient().when(productTypeRepository.findByIdAndFactoryId(PRODUCT_TYPE_ID, FACTORY_ID))
+                .thenReturn(Optional.of(productType));
         lenient().when(productTypeRepository.findByIdAndFactoryId(PRODUCT_TYPE_ID, FACTORY_ID))
                 .thenReturn(Optional.of(productType));
 

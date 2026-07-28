@@ -92,12 +92,36 @@ public class ProductionPlan extends BaseEntity {
     @Column(name = "selected_workflow_version")
     private Integer selectedWorkflowVersion;
 
+    /** Exact immutable Workflow revision used to derive the plan's terminal set and BOM family. */
+    @Column(name = "selected_workflow_revision_id")
+    private Long selectedWorkflowRevisionId;
+
+    @Column(name = "selected_workflow_revision_hash", length = 64)
+    private String selectedWorkflowRevisionHash;
+
+    /** Server-derived terminal reporting units. Clients cannot override this authority snapshot. */
+    @Type(io.hypersistence.utils.hibernate.type.json.JsonBinaryType.class)
+    @Column(name = "workflow_output_units_by_product", columnDefinition = "jsonb")
+    private java.util.Map<String, String> workflowOutputUnitsByProduct = new java.util.LinkedHashMap<>();
+
     /** BOM authority fixed when this plan is created; later BOM edits do not rewrite the plan. */
     @Column(name = "selected_bom_recipe_id", length = 191)
     private String selectedBomRecipeId;
 
     @Column(name = "selected_bom_version")
     private Integer selectedBomVersion;
+
+    /** Whole BOM family pinned for multi-output settlement; never resolved again from current ACTIVE. */
+    @Column(name = "selected_bom_family_id", length = 64)
+    private String selectedBomFamilyId;
+
+    @Type(io.hypersistence.utils.hibernate.type.json.JsonBinaryType.class)
+    @Column(name = "selected_bom_recipe_ids_by_product", columnDefinition = "jsonb")
+    private java.util.Map<String, String> selectedBomRecipeIdsByProduct = new java.util.LinkedHashMap<>();
+
+    @Type(io.hypersistence.utils.hibernate.type.json.JsonBinaryType.class)
+    @Column(name = "selected_bom_versions_by_product", columnDefinition = "jsonb")
+    private java.util.Map<String, Integer> selectedBomVersionsByProduct = new java.util.LinkedHashMap<>();
     @Column(name = "actual_quantity", precision = 10, scale = 2)
     private BigDecimal actualQuantity;
     // W-07 fix (Round 9): restored as nullable column (was commented out - DB didn't have it,

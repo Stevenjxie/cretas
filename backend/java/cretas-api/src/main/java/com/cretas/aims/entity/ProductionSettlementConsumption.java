@@ -53,6 +53,15 @@ public class ProductionSettlementConsumption extends BaseEntity {
     @Column(name = "material_type_id", length = 191)
     private String materialTypeId;
 
+    @Column(name = "product_type_id", length = 191)
+    private String productTypeId;
+
+    @Column(name = "workflow_material_node_id", length = 128)
+    private String workflowMaterialNodeId;
+
+    @Column(name = "workflow_input_port_id", length = 128)
+    private String workflowInputPortId;
+
     @Column(name = "batch_number", length = 100)
     private String batchNumber;
 

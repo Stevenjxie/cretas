@@ -54,7 +54,11 @@ public class ProductionSettlement extends BaseEntity {
     @Column(name = "planned_quantity", nullable = false, precision = 12, scale = 2)
     private BigDecimal plannedQuantity;
 
-    @Column(name = "actual_finished_quantity", nullable = false, precision = 12, scale = 2)
+    /**
+     * Compatibility scalar for single-unit output. Mixed-unit Workflow output is
+     * represented exclusively by production_settlement_output_lines.
+     */
+    @Column(name = "actual_finished_quantity", precision = 12, scale = 2)
     private BigDecimal actualFinishedQuantity;
 
     @Column(name = "actual_semi_finished_quantity", nullable = false, precision = 12, scale = 2)

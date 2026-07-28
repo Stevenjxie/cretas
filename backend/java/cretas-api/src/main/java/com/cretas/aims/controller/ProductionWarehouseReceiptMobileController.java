@@ -9,7 +9,9 @@ import com.cretas.aims.dto.production.ProductionWarehouseReceiptMobileDTO;
 import com.cretas.aims.dto.production.ProductionWarehouseReceiptRequest;
 import com.cretas.aims.dto.production.ProductionWarehouseReceiptResponse;
 import com.cretas.aims.entity.ProductionSettlement;
+import com.cretas.aims.entity.ProductionSettlementOutputLine;
 import com.cretas.aims.exception.BusinessException;
+import com.cretas.aims.repository.ProductionSettlementOutputLineRepository;
 import com.cretas.aims.repository.ProductionSettlementRepository;
 import com.cretas.aims.service.ProductionPlanService;
 import io.swagger.v3.oas.annotations.Operation;
@@ -32,7 +34,9 @@ import java.math.BigDecimal;
 import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.Locale;
+import java.util.Set;
 import java.util.UUID;
+import java.util.stream.Collectors;
 
 @Slf4j
 @RestController
@@ -48,6 +52,7 @@ public class ProductionWarehouseReceiptMobileController {
     private static final String FROM_LOCATION = "\u4e2d\u8f6c/\u8f66\u95f4";
 
     private final ProductionSettlementRepository productionSettlementRepository;
+    private final ProductionSettlementOutputLineRepository productionSettlementOutputLineRepository;
     private final ProductionPlanService productionPlanService;
 
     @GetMapping
@@ -81,6 +86,7 @@ public class ProductionWarehouseReceiptMobileController {
         ProductionWarehouseReceiptRequest request = new ProductionWarehouseReceiptRequest();
         request.setIdempotencyKey(idempotencyKey(factoryId, productionPlanId));
         request.setReceivedQuantity(body.getReceivedQuantity());
+        request.setOutputLines(body.getOutputLines());
         request.setVarianceNote(trimToNull(body.getNote()));
 
         log.info("Mobile warehouse receipt confirm: factoryId={}, planId={}, receivedBy={}",
@@ -92,25 +98,78 @@ public class ProductionWarehouseReceiptMobileController {
 
     private ProductionWarehouseReceiptMobileDTO toMobileDTO(String factoryId, ProductionSettlement settlement) {
         ProductionPlanDTO plan = productionPlanService.getProductionPlanById(factoryId, settlement.getProductionPlanId());
-        String unit = firstNonBlank(settlement.getQuantityUnit(), plan.getProductUnit());
+        List<ProductionSettlementOutputLine> outputLines = productionSettlementOutputLineRepository
+                .findByFactoryIdAndSettlementIdOrderByProductTypeIdAscReportedBatchNumberAsc(
+                        factoryId, settlement.getId());
+        String outputUnit = commonOutputUnit(outputLines);
+        String unit = outputLines.isEmpty()
+                ? firstNonBlank(settlement.getQuantityUnit(), plan.getProductUnit())
+                : outputUnit;
+        String productName = outputLines.isEmpty()
+                ? plan.getProductName()
+                : outputLines.size() == 1
+                        ? outputLines.getFirst().getProductTypeId()
+                        : outputLines.size() + " Workflow outputs";
         return ProductionWarehouseReceiptMobileDTO.builder()
                 .id(settlement.getProductionPlanId())
                 .direction(DIRECTION)
                 .status(RN_PENDING_STATUS)
                 .sourceNumber(firstNonBlank(settlement.getPlanNumber(), plan.getPlanNumber()))
-                .productName(plan.getProductName())
-                .batchNumber(finishedGoodsBatchNumber(settlement))
+                .productName(productName)
+                .batchNumber(outputLines.size() == 1
+                        ? outputLines.getFirst().getReportedBatchNumber()
+                        : outputLines.isEmpty() ? finishedGoodsBatchNumber(settlement) : null)
                 .plannedQuantity(firstNonNull(settlement.getPlannedQuantity(), plan.getPlannedQuantity()))
                 .reportedQuantity(settlement.getActualFinishedQuantity())
                 .receivedQuantity(settlement.getWarehouseReceivedQuantity())
-                .toleranceQuantity(receiptTolerance(unit))
+                .toleranceQuantity(unit == null ? null : receiptTolerance(unit))
                 .unit(unit)
                 .fromLocation(FROM_LOCATION)
                 .toWarehouseName(null)
                 .submittedBy(settlement.getSettledBy())
                 .submittedAt(settlement.getSettledAt())
                 .note(firstNonBlank(settlement.getWarehouseVarianceNote(), settlement.getPostingMessage()))
+                .outputLines(outputLines.stream().map(this::toMobileOutputLine).toList())
                 .build();
+    }
+
+    private ProductionWarehouseReceiptMobileDTO.OutputLine toMobileOutputLine(
+            ProductionSettlementOutputLine line) {
+        return ProductionWarehouseReceiptMobileDTO.OutputLine.builder()
+                .productTypeId(line.getProductTypeId())
+                .batchNumber(line.getReportedBatchNumber())
+                .reportedQuantity(line.getReportedQuantity())
+                .receivedQuantity(line.getReceivedQuantity())
+                .unit(line.getQuantityUnit())
+                .status(line.getStatus())
+                .build();
+    }
+
+    private String commonOutputUnit(List<ProductionSettlementOutputLine> outputLines) {
+        if (outputLines == null || outputLines.isEmpty()) {
+            return null;
+        }
+        Set<String> units = outputLines.stream()
+                .map(ProductionSettlementOutputLine::getQuantityUnit)
+                .map(this::canonicalUnit)
+                .filter(unit -> unit != null)
+                .collect(Collectors.toSet());
+        return units.size() == 1 ? units.iterator().next() : null;
+    }
+
+    private String canonicalUnit(String value) {
+        String normalized = trimToNull(value);
+        if (normalized == null) {
+            return null;
+        }
+        String lower = normalized.toLowerCase(Locale.ROOT);
+        if (Set.of("kg", "\u516c\u65a4", "\u5343\u514b").contains(lower)) {
+            return "kg";
+        }
+        if (Set.of("g", "\u514b").contains(lower)) {
+            return "g";
+        }
+        return lower;
     }
 
     private Long currentUserId() {

@@ -376,6 +376,18 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
         }
         ProductionPlan plan = productionPlanRepository.findByIdAndFactoryId(planId, factoryId)
                 .orElseThrow(() -> new BusinessException(403, "无权访问该计划"));
+        boolean workflowPlan = plan.getWorkflowSelectionMode()
+                == com.cretas.aims.entity.ProductionBatch.WorkflowSelectionMode.WORKFLOW;
+        Map<String, String> pinnedRecipes = Optional
+                .ofNullable(plan.getSelectedBomRecipeIdsByProduct())
+                .orElseGet(Map::of);
+        if (workflowPlan && (plan.getSelectedWorkflowRevisionId() == null
+                || plan.getSelectedBomFamilyId() == null
+                || pinnedRecipes.isEmpty())) {
+            throw new BusinessException(409, "Workflow plan is missing its pinned BOM family authority")
+                    .withCode("PLAN_BOM_AUTHORITY_INCOMPLETE")
+                    .withSeverity("BLOCKING");
+        }
         if (plan.getSelectedBomRecipeId() == null || plan.getSelectedBomRecipeId().isBlank()) {
             return List.of(); // 历史未固定 BOM 的计划不猜测当前版本。
         }
@@ -385,7 +397,9 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
                 .orElseThrow(() -> new BusinessException(409, "计划固定的 BOM 版本不存在")
                         .withCode("PINNED_BOM_NOT_FOUND")
                         .withSeverity("BLOCKING"));
-        List<BomRecipe> pinnedFamily = resolvePinnedBomFamily(recipe);
+        List<BomRecipe> pinnedFamily = workflowPlan
+                ? resolvePinnedBomFamily(plan, pinnedRecipes)
+                : resolvePinnedBomFamily(recipe);
 
         List<ProductionStockAllocationService.AutomaticRequirement> requirements = new ArrayList<>();
         if (producesFinishedGoods) {
@@ -611,6 +625,27 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
                 req.getProductTypeId(),
                 req.getOutputQuantity(),
                 firstNonBlank(req.getOutputUnit(), req.getUnit())));
+    }
+
+    private List<BomRecipe> resolvePinnedBomFamily(
+            ProductionPlan plan, Map<String, String> recipeIdsByProduct) {
+        List<BomRecipe> family = bomRecipeRepository
+                .findByFactoryIdAndBomFamilyIdOrderByProductTypeIdAscVersionDesc(
+                        plan.getFactoryId(), plan.getSelectedBomFamilyId()).stream()
+                .filter(member -> Objects.equals(
+                        plan.getSelectedWorkflowRevisionId(), member.getWorkflowRevisionId()))
+                .filter(member -> Objects.equals(
+                        recipeIdsByProduct.get(member.getProductTypeId()), member.getId()))
+                .filter(member -> Objects.equals(
+                        plan.getSelectedBomVersionsByProduct().get(member.getProductTypeId()),
+                        member.getVersion()))
+                .toList();
+        if (family.size() != recipeIdsByProduct.size()) {
+            throw new BusinessException(409, "Pinned BOM family no longer matches the plan authority snapshot")
+                    .withCode("PINNED_BOM_FAMILY_INVALID")
+                    .withSeverity("BLOCKING");
+        }
+        return family;
     }
 
     private List<BomRecipe> resolvePinnedBomFamily(BomRecipe pinnedRecipe) {

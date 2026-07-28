@@ -6,6 +6,8 @@ import java.util.Map;
 public record WorkflowPlanOutputContract(
         Long workflowId,
         Integer definitionVersion,
+        Long revisionId,
+        String revisionHash,
         Map<String, String> outputUnitBySku,
         String plannedUnit) {
 }

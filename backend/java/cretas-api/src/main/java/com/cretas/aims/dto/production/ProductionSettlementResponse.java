@@ -37,4 +37,7 @@ public class ProductionSettlementResponse {
 
     @Builder.Default
     private List<String> createdInventoryTxnIds = new ArrayList<>();
+
+    @Builder.Default
+    private List<ProductionOutputLineDTO> outputLines = new ArrayList<>();
 }

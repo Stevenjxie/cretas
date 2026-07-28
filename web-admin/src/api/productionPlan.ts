@@ -85,7 +85,7 @@ export interface ProductionSettlementStatus {
   planNumber: string
   status: string
   plannedQuantity: number
-  actualFinishedQuantity: number
+  actualFinishedQuantity: number | null
   actualSemiFinishedQuantity: number
   quantityUnit?: string | null
   postingStatus: string
@@ -95,31 +95,56 @@ export interface ProductionSettlementStatus {
   finishedGoodsBatchId?: string | null
   transitLedgerId?: string | null
   warnings?: string[]
+  outputLines?: ProductionOutputLine[]
+}
+
+export interface ProductionOutputLine {
+  productTypeId: string
+  reportedBatchNumber: string
+  reportedQuantity: number
+  quantityUnit: string
+  bomFamilyId?: string | null
+  bomRecipeId?: string | null
+  bomRecipeVersion?: number | null
+  outputRole?: string | null
+  costAllocationRatio?: number | null
+  allocatedCost?: number | null
+  unitCost?: number | null
+  receivedQuantity?: number | null
+  finishedGoodsBatchId?: string | null
+  status?: string | null
 }
 
 export interface ProductionWarehouseReceiptRequest {
   idempotencyKey: string
-  receivedQuantity: number
+  receivedQuantity?: number | null
   quantityUnit?: string | null
   varianceReason?: string | null
   responsibilitySide?: string | null
   varianceNote?: string | null
+  outputLines?: Array<{
+    productTypeId: string
+    batchNumber: string
+    receivedQuantity: number
+    quantityUnit: string
+  }>
 }
 
 export interface ProductionWarehouseReceiptResponse {
   settlementId: string
   productionPlanId: string
   planNumber: string
-  productionReportedQuantity: number
-  warehouseReceivedQuantity: number
-  varianceQuantity: number
-  toleranceQuantity: number
-  quantityUnit: string
+  productionReportedQuantity: number | null
+  warehouseReceivedQuantity: number | null
+  varianceQuantity: number | null
+  toleranceQuantity: number | null
+  quantityUnit: string | null
   postingStatus: string
   finishedGoodsBatchId?: string | null
   transitLedgerId?: string | null
   message?: string | null
   warnings?: string[]
+  outputLines?: ProductionOutputLine[]
 }
 
 export interface ProductionTransitClearingRequest {

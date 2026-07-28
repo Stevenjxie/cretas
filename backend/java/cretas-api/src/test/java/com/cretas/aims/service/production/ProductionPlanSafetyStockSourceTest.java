@@ -109,12 +109,13 @@ class ProductionPlanSafetyStockSourceTest {
         ReflectionTestUtils.setField(service, "entityManager", entityManager);
 
         // Product type must exist
-        when(productTypeRepository.existsById(PRODUCT_TYPE_ID)).thenReturn(true);
+        when(productTypeRepository.existsByIdAndFactoryId(PRODUCT_TYPE_ID, FACTORY_ID)).thenReturn(true);
         ProductType productType = new ProductType();
         productType.setId(PRODUCT_TYPE_ID);
         productType.setFactoryId(FACTORY_ID);
         productType.setUnit("box");
-        when(productTypeRepository.findById(PRODUCT_TYPE_ID)).thenReturn(Optional.of(productType));
+        when(productTypeRepository.findByIdAndFactoryId(PRODUCT_TYPE_ID, FACTORY_ID))
+                .thenReturn(Optional.of(productType));
 
         // Mapper stub: return a minimal plan entity mirroring sourceOrderId from request
         lenient().when(productionPlanMapper.toEntity(any(CreateProductionPlanRequest.class), any(), any()))
@@ -291,7 +292,7 @@ class ProductionPlanSafetyStockSourceTest {
         assertEquals(existing.getId(), result.getId());
         verify(entityManager).find(Factory.class, FACTORY_ID, LockModeType.PESSIMISTIC_WRITE);
         verify(productionPlanRepository, never()).save(any());
-        verify(productTypeRepository, never()).existsById(any());
+        verify(productTypeRepository, never()).existsByIdAndFactoryId(any(), any());
     }
 
     @Test

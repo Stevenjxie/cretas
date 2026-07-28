@@ -2,6 +2,7 @@ package com.cretas.aims.service.bom;
 
 import com.cretas.aims.dto.bom.BomCopyCandidateDTO;
 import com.cretas.aims.dto.bom.BomCopyToDraftRequest;
+import com.cretas.aims.dto.bom.CreateBomRecipeRequest.BomRecipeItemDTO;
 import com.cretas.aims.entity.ProductType;
 import com.cretas.aims.entity.WorkProcess;
 import com.cretas.aims.entity.bom.BomProcessInjectionConfig;
@@ -16,10 +17,6 @@ import com.cretas.aims.repository.bom.BomRecipeItemRepository;
 import com.cretas.aims.repository.bom.BomRecipeRepository;
 import com.cretas.aims.repository.bom.BomSeasoningItemRepository;
 import com.cretas.aims.service.bom.impl.BomCopyServiceImpl;
-import com.cretas.aims.service.unit.CanonicalUnit;
-import com.cretas.aims.service.unit.UnitContractService;
-import com.cretas.aims.service.unit.UnitDimension;
-import com.cretas.aims.service.unit.UnitNormalizationResult;
 import com.cretas.aims.service.workflow.ProductWorkflowResolutionService;
 import com.cretas.aims.service.workflow.WorkflowProcessPath;
 import org.junit.jupiter.api.BeforeEach;
@@ -63,7 +60,7 @@ class BomCopyServiceImplTest {
     @Mock ProductTypeRepository productTypeRepo;
     @Mock WorkProcessRepository workProcessRepo;
     @Mock ProductWorkflowResolutionService workflowResolutionService;
-    @Mock UnitContractService unitContractService;
+    @Mock BomRecipeService bomRecipeService;
     @InjectMocks BomCopyServiceImpl service;
 
     private ProductType target;
@@ -295,13 +292,11 @@ class BomCopyServiceImplTest {
         assertThat(result.getNetContentUnit()).isEqualTo("g");
         assertThat(result.getNotes()).contains("source-product", "source-recipe", "请核对数量");
 
-        @SuppressWarnings("unchecked")
-        ArgumentCaptor<List<BomRecipeItem>> itemCaptor = ArgumentCaptor.forClass(List.class);
-        verify(itemRepo).saveAll(itemCaptor.capture());
-        assertThat(itemCaptor.getValue()).hasSize(1);
-        assertThat(itemCaptor.getValue().get(0).getMaterialTypeId()).isEqualTo("mat-selected");
-        assertThat(itemCaptor.getValue().get(0).getSubProductTypeId()).isEqualTo("semi-product-1");
-        assertThat(itemCaptor.getValue().get(0).getStandardQuantity()).isEqualByComparingTo("2.5000");
+        ArgumentCaptor<BomRecipeItemDTO> itemCaptor = ArgumentCaptor.forClass(BomRecipeItemDTO.class);
+        verify(bomRecipeService).addItem(eq(FACTORY), eq("new-draft"), itemCaptor.capture());
+        assertThat(itemCaptor.getValue().getMaterialTypeId()).isEqualTo("mat-selected");
+        assertThat(itemCaptor.getValue().getSubProductTypeId()).isEqualTo("semi-product-1");
+        assertThat(itemCaptor.getValue().getStandardQuantity()).isEqualByComparingTo("2.5000");
 
         @SuppressWarnings("unchecked")
         ArgumentCaptor<List<BomSeasoningItem>> seasoningCaptor = ArgumentCaptor.forClass(List.class);
@@ -395,10 +390,21 @@ class BomCopyServiceImplTest {
                 .thenReturn(Optional.of(path(TARGET, "raw-chicken", "p1", "p2")));
         when(workflowResolutionService.resolveProcessPath(FACTORY, SOURCE))
                 .thenReturn(Optional.of(path(SOURCE, "raw-chicken", "p1", "p3")));
-        CanonicalUnit bag = new CanonicalUnit(
-                "bag", UnitDimension.PACKAGE, "bag", BigDecimal.ONE, "袋", 0);
-        when(unitContractService.normalize(FACTORY, target.getUnit()))
-                .thenReturn(new UnitNormalizationResult(target.getUnit(), "bag", bag));
+        BomRecipe targetDraft = new BomRecipe();
+        targetDraft.setId("new-draft");
+        targetDraft.setFactoryId(FACTORY);
+        targetDraft.setProductTypeId(TARGET);
+        targetDraft.setProductName(target.getName());
+        targetDraft.setRecipeCode("new-draft");
+        targetDraft.setVersion(1);
+        targetDraft.setStatus(BomRecipe.Status.DRAFT);
+        targetDraft.setIsCurrent(false);
+        targetDraft.setOutputQuantityPerUnit(BigDecimal.ONE);
+        targetDraft.setOutputUnit("bag");
+        targetDraft.setNetContentQuantity(new BigDecimal("400"));
+        targetDraft.setNetContentUnit("g");
+        when(bomRecipeService.ensureDraft(FACTORY, TARGET)).thenReturn(targetDraft);
+        when(bomRecipeService.getRecipe(FACTORY, "new-draft")).thenReturn(targetDraft);
     }
 
     private BomCopyToDraftRequest request(List<Long> items, List<Long> seasonings, List<Long> params) {

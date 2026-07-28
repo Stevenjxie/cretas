@@ -10,9 +10,11 @@ import com.cretas.aims.dto.production.ProductionWarehouseReceiptMobileDTO;
 import com.cretas.aims.dto.production.ProductionWarehouseReceiptRequest;
 import com.cretas.aims.dto.production.ProductionWarehouseReceiptResponse;
 import com.cretas.aims.entity.ProductionSettlement;
+import com.cretas.aims.entity.ProductionSettlementOutputLine;
 import com.cretas.aims.entity.User;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.repository.ProductionSettlementRepository;
+import com.cretas.aims.repository.ProductionSettlementOutputLineRepository;
 import com.cretas.aims.repository.UserRepository;
 import com.cretas.aims.service.PermissionService;
 import com.cretas.aims.service.ProductionPlanService;
@@ -60,6 +62,8 @@ class ProductionWarehouseReceiptMobileControllerTest {
     @Mock
     private ProductionSettlementRepository settlementRepository;
     @Mock
+    private ProductionSettlementOutputLineRepository outputLineRepository;
+    @Mock
     private ProductionPlanService productionPlanService;
     @Mock
     private PermissionService permissionService;
@@ -75,7 +79,8 @@ class ProductionWarehouseReceiptMobileControllerTest {
     @DisplayName("GET pending confirmations queries only current factory pending warehouse receipts")
     void listTransitLedgers_queriesCurrentFactoryPendingWarehouseReceipts() {
         ProductionWarehouseReceiptMobileController controller =
-                new ProductionWarehouseReceiptMobileController(settlementRepository, productionPlanService);
+                new ProductionWarehouseReceiptMobileController(
+                        settlementRepository, outputLineRepository, productionPlanService);
         ProductionSettlement settlement = pendingSettlement("F006", "PLAN-1", "PP-001");
         when(settlementRepository.findByFactoryIdAndPostingStatusAndDeletedAtIsNull(
                 "F006", "PENDING_WAREHOUSE_RECEIPT")).thenReturn(List.of(settlement));
@@ -112,14 +117,60 @@ class ProductionWarehouseReceiptMobileControllerTest {
     }
 
     @Test
+    @DisplayName("GET mixed-unit Workflow receipt exposes lines without inventing a scalar unit")
+    void listTransitLedgers_mixedWorkflowOutputsRemainLineBased() {
+        ProductionWarehouseReceiptMobileController controller =
+                new ProductionWarehouseReceiptMobileController(
+                        settlementRepository, outputLineRepository, productionPlanService);
+        ProductionSettlement settlement = pendingSettlement("F006", "PLAN-1", "PP-001");
+        settlement.setActualFinishedQuantity(null);
+        settlement.setQuantityUnit(null);
+        when(settlementRepository.findByFactoryIdAndPostingStatusAndDeletedAtIsNull(
+                "F006", "PENDING_WAREHOUSE_RECEIPT")).thenReturn(List.of(settlement));
+        when(productionPlanService.getProductionPlanById("F006", "PLAN-1"))
+                .thenReturn(ProductionPlanDTO.builder()
+                        .id("PLAN-1")
+                        .planNumber("PP-001")
+                        .productName("Raw owner")
+                        .plannedQuantity(new BigDecimal("100.00"))
+                        .productUnit("kg")
+                        .build());
+        when(outputLineRepository
+                .findByFactoryIdAndSettlementIdOrderByProductTypeIdAscReportedBatchNumberAsc(
+                        "F006", "SETTLE-1"))
+                .thenReturn(List.of(
+                        outputLine("FG-A", "FG-A-001", "8", "kg"),
+                        outputLine("FG-B", "FG-B-001", "3", "box")));
+
+        ProductionWarehouseReceiptMobileDTO dto =
+                controller.listTransitLedgers("F006", "PENDING_CONFIRMATION").getData().getFirst();
+
+        assertNull(dto.getReportedQuantity());
+        assertNull(dto.getReceivedQuantity());
+        assertNull(dto.getUnit());
+        assertNull(dto.getToleranceQuantity());
+        assertNull(dto.getBatchNumber());
+        assertEquals(2, dto.getOutputLines().size());
+        assertEquals("FG-A-001", dto.getOutputLines().getFirst().getBatchNumber());
+        assertEquals("box", dto.getOutputLines().get(1).getUnit());
+    }
+
+    @Test
     @DisplayName("POST confirm wraps RN body and delegates to existing warehouse receipt service")
     void confirmTransitLedger_delegatesToExistingConfirmWarehouseReceipt() {
         ProductionWarehouseReceiptMobileController controller =
-                new ProductionWarehouseReceiptMobileController(settlementRepository, productionPlanService);
+                new ProductionWarehouseReceiptMobileController(
+                        settlementRepository, outputLineRepository, productionPlanService);
         setCurrentUser(27L);
         ProductionWarehouseReceiptMobileConfirmRequest body =
                 new ProductionWarehouseReceiptMobileConfirmRequest();
         body.setReceivedQuantity(new BigDecimal("95.00"));
+        body.setOutputLines(List.of(ProductionWarehouseReceiptRequest.ReceiptLine.builder()
+                .productTypeId("PT-1")
+                .batchNumber("FG-PP-001")
+                .receivedQuantity(new BigDecimal("95.00"))
+                .quantityUnit("kg")
+                .build()));
         body.setNote("scale checked");
         ProductionWarehouseReceiptResponse serviceResponse = ProductionWarehouseReceiptResponse.builder()
                 .productionPlanId("PLAN-1")
@@ -140,6 +191,8 @@ class ProductionWarehouseReceiptMobileControllerTest {
         ProductionWarehouseReceiptRequest delegated = requestCaptor.getValue();
         assertTrue(delegated.getIdempotencyKey().startsWith("mobile-wh-receipt:"));
         assertEquals(new BigDecimal("95.00"), delegated.getReceivedQuantity());
+        assertEquals(1, delegated.getOutputLines().size());
+        assertEquals("PT-1", delegated.getOutputLines().getFirst().getProductTypeId());
         assertEquals("scale checked", delegated.getVarianceNote());
         assertNull(delegated.getVarianceReason());
         assertNull(delegated.getResponsibilitySide());
@@ -150,7 +203,8 @@ class ProductionWarehouseReceiptMobileControllerTest {
     @DisplayName("POST confirm over tolerance propagates existing 409 instead of swallowing")
     void confirmTransitLedger_overTolerancePropagatesConflict() {
         ProductionWarehouseReceiptMobileController controller =
-                new ProductionWarehouseReceiptMobileController(settlementRepository, productionPlanService);
+                new ProductionWarehouseReceiptMobileController(
+                        settlementRepository, outputLineRepository, productionPlanService);
         setCurrentUser(27L);
         ProductionWarehouseReceiptMobileConfirmRequest body =
                 new ProductionWarehouseReceiptMobileConfirmRequest();
@@ -179,7 +233,8 @@ class ProductionWarehouseReceiptMobileControllerTest {
     @DisplayName("operator without warehouse:read_write gets 403 before confirm service is called")
     void confirmTransitLedger_operatorWithoutWarehousePermissionGets403() throws Exception {
         ProductionWarehouseReceiptMobileController controller =
-                new ProductionWarehouseReceiptMobileController(settlementRepository, productionPlanService);
+                new ProductionWarehouseReceiptMobileController(
+                        settlementRepository, outputLineRepository, productionPlanService);
         MockMvc mockMvc = MockMvcBuilders.standaloneSetup(controller)
                 .addInterceptors(new PermissionInterceptor(permissionService, userRepository, new ObjectMapper()))
                 .build();
@@ -233,6 +288,20 @@ class ProductionWarehouseReceiptMobileControllerTest {
         settlement.setSettledAt(LocalDateTime.of(2026, 6, 12, 9, 30));
         settlement.setPostingMessage("waiting warehouse receipt");
         return settlement;
+    }
+
+    private ProductionSettlementOutputLine outputLine(
+            String productTypeId, String batchNumber, String quantity, String unit) {
+        ProductionSettlementOutputLine line = ProductionSettlementOutputLine.create();
+        line.setFactoryId("F006");
+        line.setSettlementId("SETTLE-1");
+        line.setProductionPlanId("PLAN-1");
+        line.setProductTypeId(productTypeId);
+        line.setReportedBatchNumber(batchNumber);
+        line.setReportedQuantity(new BigDecimal(quantity));
+        line.setQuantityUnit(unit);
+        line.setStatus("REPORTED");
+        return line;
     }
 
     private void setCurrentUser(Long userId) {

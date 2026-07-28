@@ -29,4 +29,7 @@ public class ProductionWarehouseReceiptResponse {
 
     @Builder.Default
     private List<String> warnings = new ArrayList<>();
+
+    @Builder.Default
+    private List<ProductionOutputLineDTO> outputLines = new ArrayList<>();
 }

@@ -2,15 +2,19 @@ package com.cretas.aims.service.production;
 
 import com.cretas.aims.dto.processentry.ProcessSheetRowRequest;
 import com.cretas.aims.dto.production.ProductionSettlementRequest;
+import com.cretas.aims.dto.production.ProductionSettlementPrefillResponse;
 import com.cretas.aims.dto.production.ProductionSettlementResponse;
 import com.cretas.aims.entity.processentry.ProcessSheetRow;
 import com.cretas.aims.dto.production.ProductionTransitClearingRequest;
 import com.cretas.aims.dto.production.ProductionWarehouseReceiptRequest;
 import com.cretas.aims.dto.production.ProductionWarehouseReceiptResponse;
 import com.cretas.aims.entity.MaterialBatch;
+import com.cretas.aims.entity.ProductType;
 import com.cretas.aims.entity.ProductionPlan;
+import com.cretas.aims.entity.ProductionBatch;
 import com.cretas.aims.entity.ProductionInterimSettlement;
 import com.cretas.aims.entity.ProductionSettlement;
+import com.cretas.aims.entity.ProductionSettlementOutputLine;
 import com.cretas.aims.entity.ProductionTransitLedger;
 import com.cretas.aims.entity.SemiFinishedInventory;
 import com.cretas.aims.entity.bom.BomRecipe;
@@ -33,6 +37,7 @@ import com.cretas.aims.repository.ProductionInterimSettlementRepository;
 import com.cretas.aims.repository.ProductionSettlementConsumptionRepository;
 import com.cretas.aims.repository.ProductionSettlementLaborRepository;
 import com.cretas.aims.repository.ProductionSettlementRepository;
+import com.cretas.aims.repository.ProductionSettlementOutputLineRepository;
 import com.cretas.aims.repository.ProductionTransitLedgerRepository;
 import com.cretas.aims.repository.SemiFinishedInventoryRepository;
 import com.cretas.aims.repository.UserRepository;
@@ -107,6 +112,7 @@ class ProductionPlanSettlementTest {
     @Mock private SalesOrderItemRepository salesOrderItemRepository;
     @Mock private BomService bomService;
     @Mock private ProductionSettlementRepository productionSettlementRepository;
+    @Mock private ProductionSettlementOutputLineRepository productionSettlementOutputLineRepository;
     @Mock private ProductionInterimSettlementRepository productionInterimSettlementRepository;
     @Mock private ProductionSettlementConsumptionRepository productionSettlementConsumptionRepository;
     @Mock private ProductionSettlementLaborRepository productionSettlementLaborRepository;
@@ -138,6 +144,8 @@ class ProductionPlanSettlementTest {
                 productionLineRepository, userRepository, excelUtil,
                 salesOrderRepository, salesOrderItemRepository);
         ReflectionTestUtils.setField(service, "productionSettlementRepository", productionSettlementRepository);
+        ReflectionTestUtils.setField(service, "productionSettlementOutputLineRepository",
+                productionSettlementOutputLineRepository);
         ReflectionTestUtils.setField(service, "productionInterimSettlementRepository", productionInterimSettlementRepository);
         ReflectionTestUtils.setField(service, "productionSettlementConsumptionRepository", productionSettlementConsumptionRepository);
         ReflectionTestUtils.setField(service, "productionSettlementLaborRepository", productionSettlementLaborRepository);
@@ -595,6 +603,132 @@ class ProductionPlanSettlementTest {
     }
 
     @Test
+    @DisplayName("多产出 Workflow 只读 eligibility 汇总整个 pinned BOM family")
+    void getSettlementBomEligibility_multiOutputUnionsEveryPinnedRecipe() {
+        ProductionPlan plan = workflowPlanWithTwoOutputs();
+        when(productionPlanRepository.findByIdAndFactoryId(PLAN_ID, FACTORY_ID))
+                .thenReturn(Optional.of(plan));
+        stubWorkflowPinnedBom("bom-a", "FG-A", "terminal-a", "RM-A");
+        stubWorkflowPinnedBom("bom-b", "FG-B", "terminal-b", "RM-B");
+
+        var response = service.getSettlementBomEligibility(FACTORY_ID, PLAN_ID);
+
+        assertTrue(response.isRestricted());
+        assertTrue(response.isBomFound());
+        assertTrue(response.getMaterialTypeIds().containsAll(List.of("RM-A", "RM-B")));
+    }
+
+    @Test
+    @DisplayName("同 SKU 中间节点不能冒充 pinned Workflow 终端产出")
+    void getSettlementPrefill_sameSkuIntermediateAndTerminal_usesExactTerminalNode() {
+        ProductionPlan plan = workflowPlanWithTwoOutputs();
+        plan.setSelectedBomRecipeIdsByProduct(Map.of("FG-A", "bom-a"));
+        plan.setSelectedBomVersionsByProduct(Map.of("FG-A", 2));
+        plan.setWorkflowOutputUnitsByProduct(Map.of("FG-A", "box"));
+        plan.setTargetFinishedGoodIds(List.of("FG-A"));
+        stubWorkflowPinnedBom("bom-a", "FG-A", "terminal-a", "RM-A");
+
+        ProcessSheetRow intermediate = feedRow("WIP-A", "1", false, false);
+        intermediate.setSubmissionStatus(ProcessSheetRow.SUBMISSION_SUBMITTED);
+        intermediate.setRowPayload("""
+                {"clientRowId":"middle","processCode":"cook","processOrder":1,
+                 "productTypeId":"FG-A","batchNumber":"WIP-A","outputQuantity":99,
+                 "outputUnit":"box","unit":"box","materialNodeId":"middle-a","workflowPortId":"middle-port"}
+                """);
+        ProcessSheetRow terminal = feedRow("FG-A-001", "2", false, false);
+        terminal.setBatchNumber("FG-A-001");
+        terminal.setSubmissionStatus(ProcessSheetRow.SUBMISSION_SUBMITTED);
+        terminal.setRowPayload("""
+                {"clientRowId":"terminal","processCode":"pack","processOrder":2,
+                 "productTypeId":"FG-A","batchNumber":"FG-A-001","outputQuantity":5,
+                 "outputUnit":"box","unit":"box","materialNodeId":"terminal-a","workflowPortId":"terminal-port"}
+                """);
+        when(productionPlanRepository.findByIdAndFactoryId(PLAN_ID, FACTORY_ID))
+                .thenReturn(Optional.of(plan));
+        when(productionBatchRepository.findByFactoryIdAndProductionPlanId(FACTORY_ID, PLAN_ID))
+                .thenReturn(List.of());
+        when(processSheetRowRepository.findByFactoryIdAndPlanId(FACTORY_ID, PLAN_ID))
+                .thenReturn(List.of(intermediate, terminal));
+
+        ProductionSettlementPrefillResponse response =
+                service.getSettlementPrefill(FACTORY_ID, PLAN_ID);
+
+        assertEquals(1, response.getPrefill().getTerminalOutputs().size());
+        assertEquals("FG-A-001", response.getPrefill().getTerminalOutputs().get(0).getBatchNumber());
+        assertEquals(new BigDecimal("5"), response.getPrefill().getActualFinishedQuantity());
+    }
+
+    @Test
+    @DisplayName("多级 DAG 原料按 Workflow 输入槽聚合，同批不同端口不合并")
+    void getSettlementPrefill_multiLevelDagPreservesRawInputSlotIdentity() {
+        ProductionPlan plan = workflowPlanWithTwoOutputs();
+        stubWorkflowPinnedBom("bom-a", "FG-A", "terminal-a", "RM-1");
+        stubWorkflowPinnedBom("bom-b", "FG-B", "terminal-b", "RM-1");
+        MaterialBatch batch = materialBatch();
+        when(materialBatchRepository.findByIdAndFactoryId("MB-1", FACTORY_ID))
+                .thenReturn(Optional.of(batch));
+
+        ProcessSheetRow outputA = feedRow("FG-A-001", "1", false, false);
+        outputA.setSubmissionStatus(ProcessSheetRow.SUBMISSION_SUBMITTED);
+        outputA.setRowPayload("""
+                {"clientRowId":"out-a","processCode":"pack-a","processOrder":2,
+                 "productTypeId":"FG-A","batchNumber":"FG-A-001","outputQuantity":2,
+                 "outputUnit":"box","unit":"box","materialNodeId":"terminal-a","workflowPortId":"terminal-port-a",
+                 "rawMaterialInputs":[{"materialBatchId":"MB-1","quantity":2,"unit":"kg",
+                   "materialNodeId":"raw-node-FG-A","workflowPortId":"raw-port-FG-A"}]}
+                """);
+        ProcessSheetRow outputB = feedRow("FG-B-001", "2", false, false);
+        outputB.setSubmissionStatus(ProcessSheetRow.SUBMISSION_SUBMITTED);
+        outputB.setRowPayload("""
+                {"clientRowId":"out-b","processCode":"pack-b","processOrder":2,
+                 "productTypeId":"FG-B","batchNumber":"FG-B-001","outputQuantity":3,
+                 "outputUnit":"kg","unit":"kg","materialNodeId":"terminal-b","workflowPortId":"terminal-port-b",
+                 "rawMaterialInputs":[{"materialBatchId":"MB-1","quantity":3,"unit":"kg",
+                   "materialNodeId":"raw-node-FG-B","workflowPortId":"raw-port-FG-B"}]}
+                """);
+        when(productionPlanRepository.findByIdAndFactoryId(PLAN_ID, FACTORY_ID))
+                .thenReturn(Optional.of(plan));
+        when(productionBatchRepository.findByFactoryIdAndProductionPlanId(FACTORY_ID, PLAN_ID))
+                .thenReturn(List.of());
+        when(processSheetRowRepository.findByFactoryIdAndPlanId(FACTORY_ID, PLAN_ID))
+                .thenReturn(List.of(outputA, outputB));
+
+        ProductionSettlementPrefillResponse response =
+                service.getSettlementPrefill(FACTORY_ID, PLAN_ID);
+
+        assertEquals(2, response.getPrefill().getRawMaterialConsumptions().size());
+        assertTrue(response.getPrefill().getRawMaterialConsumptions().stream().anyMatch(line ->
+                "raw-node-FG-A".equals(line.getWorkflowMaterialNodeId())
+                        && "raw-port-FG-A".equals(line.getWorkflowInputPortId())
+                        && new BigDecimal("2").equals(line.getQuantity())));
+        assertTrue(response.getPrefill().getRawMaterialConsumptions().stream().anyMatch(line ->
+                "raw-node-FG-B".equals(line.getWorkflowMaterialNodeId())
+                        && "raw-port-FG-B".equals(line.getWorkflowInputPortId())
+                        && new BigDecimal("3").equals(line.getQuantity())));
+        assertEquals(Boolean.TRUE, ReflectionTestUtils.invokeMethod(service,
+                "workflowRecipeAllowsInput", FACTORY_ID, plan, "FG-A", "RM-1",
+                "raw-node-FG-A", "raw-port-FG-A"));
+        assertEquals(Boolean.FALSE, ReflectionTestUtils.invokeMethod(service,
+                "workflowRecipeAllowsInput", FACTORY_ID, plan, "FG-A", "RM-1",
+                "raw-node-FG-A", "wrong-port"));
+    }
+
+    @Test
+    @DisplayName("Workflow 逐产出数量最多四位小数，拒绝静默舍入")
+    void workflowOutputQuantityScale_rejectsSilentRounding() {
+        BigDecimal accepted = ReflectionTestUtils.invokeMethod(service,
+                "requireInventoryQuantityScale", new BigDecimal("0.1234"),
+                "WORKFLOW_OUTPUT_QUANTITY_SCALE_INVALID", "Workflow 报产数量");
+        assertEquals(new BigDecimal("0.1234"), accepted);
+
+        BusinessException ex = assertThrows(BusinessException.class,
+                () -> ReflectionTestUtils.invokeMethod(service,
+                        "requireInventoryQuantityScale", new BigDecimal("0.12345"),
+                        "WORKFLOW_OUTPUT_QUANTITY_SCALE_INVALID", "Workflow 报产数量"));
+        assertEquals("WORKFLOW_OUTPUT_QUANTITY_SCALE_INVALID", ex.getErrorCode());
+    }
+
+    @Test
     @DisplayName("缺失或错配的 pinned BOM 在任何结单写入前 fail-closed")
     void settleProduction_missingPinnedBom_rejectedBeforeAnyWrite() {
         ProductionPlan plan = plan();
@@ -743,6 +877,7 @@ class ProductionPlanSettlementTest {
     @DisplayName("active workflow cannot bypass submitted process reporting through legacy settle payload")
     void settleProduction_activeWorkflow_requiresSubmittedRows() {
         ProductionPlan plan = plan();
+        plan.setWorkflowSelectionMode(ProductionBatch.WorkflowSelectionMode.WORKFLOW);
         plan.setSelectedWorkflowId(99L);
         plan.setSkipProcessReporting(false);
         ProcessSheetRow draft = feedRow("DRAFT-WORKFLOW", "1", false, false);
@@ -766,6 +901,7 @@ class ProductionPlanSettlementTest {
     @DisplayName("仓库确认实收等于报产时生成成品库存且不挂中转账")
     void confirmWarehouseReceipt_exactMatch_postsFinishedGoodsOnly() {
         ProductionPlan plan = plan();
+        plan.setWorkflowSelectionMode(ProductionBatch.WorkflowSelectionMode.LEGACY);
         plan.setOutputOwnership(InventoryOwnership.CUSTOMER_OWNED);
         plan.setCustomerId("CUSTOMER-001");
         plan.setSourceOrderId("SO-001");
@@ -776,7 +912,7 @@ class ProductionPlanSettlementTest {
                 FACTORY_ID, PLAN_ID)).thenReturn(Optional.of(settlement));
         when(finishedGoodsBatchRepository.findByFactoryIdAndBatchNumber(FACTORY_ID, "FG-P-001"))
                 .thenReturn(Optional.empty());
-        when(productTypeRepository.findById("PT-1")).thenReturn(Optional.empty());
+        when(productTypeRepository.findByIdAndFactoryId("PT-1", FACTORY_ID)).thenReturn(Optional.empty());
         when(warehouseResolver.resolveFinishedGoodsId(FACTORY_ID)).thenReturn("WH-FG-ID");
         when(finishedGoodsBatchRepository.save(any(FinishedGoodsBatch.class))).thenAnswer(inv -> {
             FinishedGoodsBatch batch = inv.getArgument(0);
@@ -821,7 +957,7 @@ class ProductionPlanSettlementTest {
                 .thenReturn(List.of(submitted));
         when(finishedGoodsBatchRepository.findByFactoryIdAndBatchNumber(FACTORY_ID, "FG-P-001"))
                 .thenReturn(Optional.empty());
-        when(productTypeRepository.findById("PT-1")).thenReturn(Optional.empty());
+        when(productTypeRepository.findByIdAndFactoryId("PT-1", FACTORY_ID)).thenReturn(Optional.empty());
         when(warehouseResolver.resolveFinishedGoodsId(FACTORY_ID)).thenReturn("WH-FG-ID");
         when(finishedGoodsBatchRepository.save(any(FinishedGoodsBatch.class))).thenAnswer(inv -> {
             FinishedGoodsBatch batch = inv.getArgument(0);
@@ -1010,6 +1146,150 @@ class ProductionPlanSettlementTest {
     }
 
     @Test
+    @DisplayName("Workflow receipt fails closed when immutable plan authority is incomplete")
+    void confirmWarehouseReceipt_workflowAuthorityIncomplete_neverFallsBackToOwnerSku() {
+        ProductionPlan plan = plan();
+        plan.setProductTypeId("RAW-OWNER");
+        plan.setWorkflowSelectionMode(ProductionBatch.WorkflowSelectionMode.WORKFLOW);
+        plan.setSelectedWorkflowId(44L);
+        plan.setSelectedWorkflowVersion(3);
+        ProductionSettlement settlement = settled();
+        when(productionPlanRepository.findByIdAndFactoryId(PLAN_ID, FACTORY_ID))
+                .thenReturn(Optional.of(plan));
+        when(productionSettlementRepository.findByFactoryIdAndProductionPlanIdForUpdate(
+                FACTORY_ID, PLAN_ID)).thenReturn(Optional.of(settlement));
+
+        BusinessException ex = assertThrows(BusinessException.class,
+                () -> service.confirmWarehouseReceipt(
+                        FACTORY_ID, PLAN_ID,
+                        receiptRequest("receipt-workflow-incomplete", "90", "kg", null, null),
+                        11L));
+
+        assertEquals(409, ex.getCode());
+        assertEquals("WORKFLOW_RECEIPT_AUTHORITY_INCOMPLETE", ex.getErrorCode());
+        verify(productionSettlementOutputLineRepository, never())
+                .lockByFactoryIdAndSettlementId(any(), any());
+        verify(finishedGoodsBatchRepository, never()).save(any());
+    }
+
+    @Test
+    @DisplayName("Workflow receipt requires server-derived output lines and never falls back to scalar receipt")
+    void confirmWarehouseReceipt_workflowOutputLinesMissing_neverFallsBackToOwnerSku() {
+        ProductionPlan plan = plan();
+        plan.setProductTypeId("RAW-OWNER");
+        plan.setWorkflowSelectionMode(ProductionBatch.WorkflowSelectionMode.WORKFLOW);
+        plan.setSelectedWorkflowId(44L);
+        plan.setSelectedWorkflowVersion(3);
+        plan.setSelectedWorkflowRevisionId(4403L);
+        plan.setSelectedWorkflowRevisionHash("revision-hash-v3");
+        plan.setSelectedBomFamilyId("family-v3");
+        plan.setSelectedBomRecipeIdsByProduct(Map.of("FG-SKU-A", "bom-a"));
+        plan.setSelectedBomVersionsByProduct(Map.of("FG-SKU-A", 2));
+        plan.setWorkflowOutputUnitsByProduct(Map.of("FG-SKU-A", "kg"));
+        plan.setTargetFinishedGoodIds(List.of("FG-SKU-A"));
+        ProductionSettlement settlement = settled();
+        when(productionPlanRepository.findByIdAndFactoryId(PLAN_ID, FACTORY_ID))
+                .thenReturn(Optional.of(plan));
+        when(productionSettlementRepository.findByFactoryIdAndProductionPlanIdForUpdate(
+                FACTORY_ID, PLAN_ID)).thenReturn(Optional.of(settlement));
+        when(productionSettlementOutputLineRepository.lockByFactoryIdAndSettlementId(
+                FACTORY_ID, settlement.getId())).thenReturn(Collections.emptyList());
+
+        BusinessException ex = assertThrows(BusinessException.class,
+                () -> service.confirmWarehouseReceipt(
+                        FACTORY_ID, PLAN_ID,
+                        receiptRequest("receipt-workflow-no-lines", "90", "kg", null, null),
+                        11L));
+
+        assertEquals(409, ex.getCode());
+        assertEquals("WORKFLOW_RECEIPT_OUTPUT_LINES_REQUIRED", ex.getErrorCode());
+        verify(finishedGoodsBatchRepository, never()).save(any());
+        verify(productionSettlementRepository, never()).save(any());
+    }
+
+    @Test
+    @DisplayName("Mixed-unit Workflow receipt persists only output lines and leaves scalar totals null")
+    void confirmWarehouseReceipt_mixedUnits_neverAddsIncompatibleQuantities() {
+        ProductionPlan plan = plan();
+        plan.setProductTypeId("RAW-OWNER");
+        plan.setWorkflowSelectionMode(ProductionBatch.WorkflowSelectionMode.WORKFLOW);
+        plan.setSelectedWorkflowId(44L);
+        plan.setSelectedWorkflowVersion(3);
+        plan.setSelectedWorkflowRevisionId(4403L);
+        plan.setSelectedWorkflowRevisionHash("revision-hash-v3");
+        plan.setSelectedBomFamilyId("family-v3");
+        plan.setSelectedBomRecipeIdsByProduct(Map.of(
+                "FG-SKU-A", "bom-a",
+                "FG-SKU-B", "bom-b"));
+        plan.setSelectedBomVersionsByProduct(Map.of(
+                "FG-SKU-A", 2,
+                "FG-SKU-B", 2));
+        plan.setWorkflowOutputUnitsByProduct(Map.of(
+                "FG-SKU-A", "kg",
+                "FG-SKU-B", "box"));
+        plan.setTargetFinishedGoodIds(List.of("FG-SKU-A", "FG-SKU-B"));
+
+        ProductionSettlement settlement = settled();
+        settlement.setActualFinishedQuantity(null);
+        settlement.setQuantityUnit(null);
+        ProductionSettlementOutputLine kgLine = workflowOutputLine(
+                settlement, "FG-SKU-A", "FG-A-001", "kg", "bom-a", new BigDecimal("8"));
+        ProductionSettlementOutputLine boxLine = workflowOutputLine(
+                settlement, "FG-SKU-B", "FG-B-001", "box", "bom-b", new BigDecimal("3"));
+
+        when(productionPlanRepository.findByIdAndFactoryId(PLAN_ID, FACTORY_ID))
+                .thenReturn(Optional.of(plan));
+        when(productionSettlementRepository.findByFactoryIdAndProductionPlanIdForUpdate(
+                FACTORY_ID, PLAN_ID)).thenReturn(Optional.of(settlement));
+        when(productionSettlementOutputLineRepository.lockByFactoryIdAndSettlementId(
+                FACTORY_ID, settlement.getId())).thenReturn(List.of(kgLine, boxLine));
+        when(productTypeRepository.findByIdAndFactoryId(any(), eq(FACTORY_ID)))
+                .thenAnswer(invocation -> {
+                    ProductType product = new ProductType();
+                    product.setId(invocation.getArgument(0));
+                    product.setFactoryId(FACTORY_ID);
+                    product.setName(invocation.getArgument(0));
+                    product.setUnit("FG-SKU-A".equals(invocation.getArgument(0)) ? "kg" : "box");
+                    return Optional.of(product);
+                });
+        when(warehouseResolver.resolveFinishedGoodsId(FACTORY_ID)).thenReturn("WH-FG-ID");
+        when(finishedGoodsBatchRepository.save(any(FinishedGoodsBatch.class)))
+                .thenAnswer(invocation -> {
+                    FinishedGoodsBatch batch = invocation.getArgument(0);
+                    batch.setId("fg-" + batch.getProductTypeId());
+                    return batch;
+                });
+        when(productionSettlementRepository.save(any(ProductionSettlement.class)))
+                .thenAnswer(invocation -> invocation.getArgument(0));
+
+        ProductionWarehouseReceiptRequest request = new ProductionWarehouseReceiptRequest();
+        request.setIdempotencyKey("receipt-mixed-units");
+        request.setOutputLines(List.of(
+                ProductionWarehouseReceiptRequest.ReceiptLine.builder()
+                        .productTypeId("FG-SKU-A")
+                        .batchNumber("FG-A-001")
+                        .receivedQuantity(new BigDecimal("8"))
+                        .quantityUnit("kg")
+                        .build(),
+                ProductionWarehouseReceiptRequest.ReceiptLine.builder()
+                        .productTypeId("FG-SKU-B")
+                        .batchNumber("FG-B-001")
+                        .receivedQuantity(new BigDecimal("3"))
+                        .quantityUnit("box")
+                        .build()));
+
+        ProductionWarehouseReceiptResponse response = service.confirmWarehouseReceipt(
+                FACTORY_ID, PLAN_ID, request, 11L);
+
+        assertNull(settlement.getWarehouseReceivedQuantity());
+        assertNull(settlement.getWarehouseVarianceQuantity());
+        assertNull(settlement.getQuantityUnit());
+        assertNull(response.getProductionReportedQuantity());
+        assertNull(response.getWarehouseReceivedQuantity());
+        verify(finishedGoodsBatchRepository, times(2)).save(any(FinishedGoodsBatch.class));
+    }
+
+    @Test
     @DisplayName("🔴 结单族成本传导: 仓库确认实收成品 unitCost = 计划权威生产成本 / 入库量 (非 null)")
     void confirmWarehouseReceipt_propagatesUnitCost() {
         ProductionPlan plan = plan();
@@ -1019,7 +1299,7 @@ class ProductionPlanSettlementTest {
                 FACTORY_ID, PLAN_ID)).thenReturn(Optional.of(settlement));
         when(finishedGoodsBatchRepository.findByFactoryIdAndBatchNumber(FACTORY_ID, "FG-P-001"))
                 .thenReturn(Optional.empty());
-        when(productTypeRepository.findById("PT-1")).thenReturn(Optional.empty());
+        when(productTypeRepository.findByIdAndFactoryId("PT-1", FACTORY_ID)).thenReturn(Optional.empty());
         when(warehouseResolver.resolveFinishedGoodsId(FACTORY_ID)).thenReturn("WH-FG-ID");
         // 权威生产成本 900, 入库 90 → unitCost = 900/90 = 10.0000 (与 SAFETY_STOCK 小结同基准)。
         when(orderCostBreakdownService.computeByPlan(FACTORY_ID, PLAN_ID, false))
@@ -1052,7 +1332,7 @@ class ProductionPlanSettlementTest {
                 FACTORY_ID, PLAN_ID)).thenReturn(Optional.of(settlement));
         when(finishedGoodsBatchRepository.findByFactoryIdAndBatchNumber(FACTORY_ID, "FG-P-001"))
                 .thenReturn(Optional.empty());
-        when(productTypeRepository.findById("PT-1")).thenReturn(Optional.empty());
+        when(productTypeRepository.findByIdAndFactoryId("PT-1", FACTORY_ID)).thenReturn(Optional.empty());
         when(warehouseResolver.resolveFinishedGoodsId(FACTORY_ID)).thenReturn("WH-FG-ID");
         // 权威成本 0 (全部投入未定价 / 无批次) → 诚实 null, 期末 COGS 结转 honest-null 排除。
         when(orderCostBreakdownService.computeByPlan(FACTORY_ID, PLAN_ID, false))
@@ -1082,7 +1362,7 @@ class ProductionPlanSettlementTest {
                 FACTORY_ID, PLAN_ID)).thenReturn(Optional.of(settlement));
         when(finishedGoodsBatchRepository.findByFactoryIdAndBatchNumber(FACTORY_ID, "FG-P-001"))
                 .thenReturn(Optional.empty());
-        when(productTypeRepository.findById("PT-1")).thenReturn(Optional.empty());
+        when(productTypeRepository.findByIdAndFactoryId("PT-1", FACTORY_ID)).thenReturn(Optional.empty());
         when(warehouseResolver.resolveFinishedGoodsId(FACTORY_ID)).thenReturn("WH-FG-ID");
         when(finishedGoodsBatchRepository.save(any(FinishedGoodsBatch.class))).thenAnswer(inv -> {
             FinishedGoodsBatch batch = inv.getArgument(0);
@@ -1278,6 +1558,30 @@ class ProductionPlanSettlementTest {
         return settlement;
     }
 
+    private ProductionSettlementOutputLine workflowOutputLine(
+            ProductionSettlement settlement,
+            String productTypeId,
+            String batchNumber,
+            String unit,
+            String recipeId,
+            BigDecimal quantity) {
+        ProductionSettlementOutputLine line = ProductionSettlementOutputLine.create();
+        line.setFactoryId(FACTORY_ID);
+        line.setSettlementId(settlement.getId());
+        line.setProductionPlanId(PLAN_ID);
+        line.setProductTypeId(productTypeId);
+        line.setReportedBatchNumber(batchNumber);
+        line.setReportedQuantity(quantity);
+        line.setQuantityUnit(unit);
+        line.setBomFamilyId("family-v3");
+        line.setBomRecipeId(recipeId);
+        line.setBomRecipeVersion(2);
+        line.setTargetTerminalNodeId("terminal-" + productTypeId);
+        line.setOutputRole(BomRecipe.OutputRole.MAIN);
+        line.setCostAllocationRatio(BigDecimal.ONE);
+        return line;
+    }
+
     private ProductionWarehouseReceiptRequest receiptRequest(String key, String quantity, String unit,
                                                             String reason, String responsibilitySide) {
         ProductionWarehouseReceiptRequest request = new ProductionWarehouseReceiptRequest();
@@ -1344,6 +1648,56 @@ class ProductionPlanSettlementTest {
                 .recipeId(recipeId)
                 .factoryId(FACTORY_ID)
                 .materialTypeId(materialTypeId)
+                .standardQuantity(BigDecimal.ONE)
+                .unit("kg")
+                .build();
+        when(bomRecipeRepository.findById(recipeId)).thenReturn(Optional.of(recipe));
+        when(bomRecipeItemRepository.findByRecipeIdOrderBySortOrderAsc(recipeId))
+                .thenReturn(List.of(item));
+    }
+
+    private ProductionPlan workflowPlanWithTwoOutputs() {
+        ProductionPlan plan = plan();
+        plan.setProductTypeId("RAW-OWNER");
+        plan.setWorkflowSelectionMode(ProductionBatch.WorkflowSelectionMode.WORKFLOW);
+        plan.setSelectedWorkflowId(44L);
+        plan.setSelectedWorkflowVersion(3);
+        plan.setSelectedWorkflowRevisionId(4403L);
+        plan.setSelectedWorkflowRevisionHash("revision-hash-v3");
+        plan.setSelectedBomFamilyId("family-v3");
+        plan.setSelectedBomRecipeIdsByProduct(Map.of("FG-A", "bom-a", "FG-B", "bom-b"));
+        plan.setSelectedBomVersionsByProduct(Map.of("FG-A", 2, "FG-B", 2));
+        plan.setWorkflowOutputUnitsByProduct(Map.of("FG-A", "box", "FG-B", "kg"));
+        plan.setTargetFinishedGoodIds(List.of("FG-A", "FG-B"));
+        return plan;
+    }
+
+    private void stubWorkflowPinnedBom(String recipeId,
+                                       String productTypeId,
+                                       String terminalNodeId,
+                                       String materialTypeId) {
+        BomRecipe recipe = BomRecipe.builder()
+                .id(recipeId)
+                .factoryId(FACTORY_ID)
+                .recipeCode("BOM-WORKFLOW-" + productTypeId)
+                .productTypeId(productTypeId)
+                .productName(productTypeId)
+                .version(2)
+                .bomFamilyId("family-v3")
+                .workflowRevisionId(4403L)
+                .workflowRevisionHash("revision-hash-v3")
+                .targetTerminalNodeId(terminalNodeId)
+                .outputRole(BomRecipe.OutputRole.MAIN)
+                .costAllocationRatio(BigDecimal.ONE)
+                .outputQuantityPerUnit(BigDecimal.ONE)
+                .outputUnit("FG-B".equals(productTypeId) ? "kg" : "box")
+                .build();
+        BomRecipeItem item = BomRecipeItem.builder()
+                .recipeId(recipeId)
+                .factoryId(FACTORY_ID)
+                .materialTypeId(materialTypeId)
+                .workflowMaterialNodeId("raw-node-" + productTypeId)
+                .workflowInputPortId("raw-port-" + productTypeId)
                 .standardQuantity(BigDecimal.ONE)
                 .unit("kg")
                 .build();

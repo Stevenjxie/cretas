@@ -39,4 +39,14 @@ public interface BomItemSubstituteService {
             String targetRecipeId,
             Map<Long, Long> recipeItemIdMap,
             Map<Long, Long> seasoningItemIdMap);
+
+    /**
+     * Move the version-local substitute relations with a recipe item whose Family owner changed
+     * during deterministic Workflow reconciliation.
+     */
+    void reassignRecipeItemRelations(
+            String factoryId,
+            String sourceRecipeId,
+            String targetRecipeId,
+            Long parentRecipeItemId);
 }

@@ -95,6 +95,44 @@ public class ProductionBatch extends BaseEntity {
     @Generated(event = EventType.INSERT)
     @Column(name = "selected_workflow_version", insertable = false, updatable = false)
     private Integer selectedWorkflowVersion;
+
+    /** Exact revision/hash copied atomically from the production plan by the insert trigger. */
+    @JsonProperty(access = JsonProperty.Access.READ_ONLY)
+    @Generated(event = EventType.INSERT)
+    @Column(name = "selected_workflow_revision_id", insertable = false, updatable = false)
+    private Long selectedWorkflowRevisionId;
+
+    @JsonProperty(access = JsonProperty.Access.READ_ONLY)
+    @Generated(event = EventType.INSERT)
+    @Column(name = "selected_workflow_revision_hash", insertable = false, updatable = false, length = 64)
+    private String selectedWorkflowRevisionHash;
+
+    @JsonProperty(access = JsonProperty.Access.READ_ONLY)
+    @Generated(event = EventType.INSERT)
+    @Column(name = "selected_bom_family_id", insertable = false, updatable = false, length = 64)
+    private String selectedBomFamilyId;
+
+    @JsonProperty(access = JsonProperty.Access.READ_ONLY)
+    @Generated(event = EventType.INSERT)
+    @Type(JsonBinaryType.class)
+    @Column(name = "selected_bom_recipe_ids_by_product", insertable = false, updatable = false, columnDefinition = "jsonb")
+    private Map<String, String> selectedBomRecipeIdsByProduct;
+
+    @Generated(event = EventType.INSERT)
+    @Type(JsonBinaryType.class)
+    @Column(name = "selected_bom_versions_by_product", insertable = false, updatable = false, columnDefinition = "jsonb")
+    private Map<String, Integer> selectedBomVersionsByProduct;
+
+    @Generated(event = EventType.INSERT)
+    @Type(JsonBinaryType.class)
+    @Column(name = "workflow_output_units_by_product", insertable = false, updatable = false, columnDefinition = "jsonb")
+    private Map<String, String> workflowOutputUnitsByProduct;
+
+    @JsonProperty(access = JsonProperty.Access.READ_ONLY)
+    @Generated(event = EventType.INSERT)
+    @Type(JsonBinaryType.class)
+    @Column(name = "target_finished_good_ids", insertable = false, updatable = false, columnDefinition = "jsonb")
+    private java.util.List<String> targetFinishedGoodIds;
      /**
       * 产品名称
       */
