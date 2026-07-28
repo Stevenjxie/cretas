@@ -280,6 +280,54 @@ def test_latest_f006_sop_is_a_deployable_manual_source():
     assert "所有照片都会进入人工审核" in html
 
 
+def test_factory_role_knowledge_covers_the_12_account_operating_boundaries():
+    source_path = (
+        Path(PROJECT_ROOT) / "backend/python/food_kb/data/f006_production_sop.md"
+    )
+    current_sop = source_path.read_text(encoding="utf-8")
+    html_path = (
+        Path(PROJECT_ROOT)
+        / "docs/manual/F006-production-full-chain-manual-test-sop.html"
+    )
+    html = html_path.read_text(encoding="utf-8")
+
+    role_accounts = {
+        "f006_admin": "factory_super_admin",
+        "f006_hr_admin": "hr_admin",
+        "f006_finance_mgr": "finance_manager",
+        "f006_cashier": "cashier",
+        "f006_sales_mgr": "sales_manager",
+        "f006_procurement_mgr": "procurement_manager",
+        "f006_dispatcher": "dispatcher",
+        "f006_quality_insp": "quality_inspector",
+        "f006_warehouse_mgr": "warehouse_manager",
+        "f006_production_mgr": "production_manager",
+        "f006_workshop": "workshop_supervisor",
+        "f006_worker1": "operator",
+    }
+    for account, role_code in role_accounts.items():
+        assert account in current_sop
+        assert role_code in current_sop
+        assert account in html
+        assert role_code in html
+
+    required_boundaries = (
+        "财务经理 RN 不显示出纳专属“付款”页",
+        "采购确认供应商交付不等于库存入账",
+        "QC 结论不能由采购、仓储或生产岗位代填",
+        "生产经理的宽权限不能替代车间主管确认班组执行",
+        "保存草稿不扣库存",
+        "不能只因为老板可见全部菜单就建议用 `f006_admin` 代替真实岗位",
+    )
+    for marker in required_boundaries:
+        assert marker in current_sop
+
+    assert 'id="roles"' in html
+    assert "销售需求 → 财审 → 调度/生产计划" in html
+    assert "财务经理批准 → 出纳执行" in html
+    assert "任何岗位都不能用老板账号代做" in html
+
+
 def test_restaurant_registered_sources_match_current_product_contract():
     restaurant_sources = {
         item["source"]: item
