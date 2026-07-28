@@ -1,5 +1,4 @@
 import type { ChartPayload, DemoLoginResponse, SynthesisResponse } from './types'
-import { parseSseFrame, splitSseFrames } from './sse'
 
 const TOKEN_STORAGE_KEY = 'cretas_rest_ai_token'
 const FACTORY_ID_STORAGE_KEY = 'cretas_rest_ai_factory_id'
@@ -12,21 +11,6 @@ export class RequestTimeoutError extends Error {
     super('分析超时，请重试')
     this.name = 'RequestTimeoutError'
   }
-}
-
-export class StreamEventError extends Error {
-  constructor(message: string) {
-    super(message)
-    this.name = 'StreamEventError'
-  }
-}
-
-export interface SynthesisStreamCallbacks {
-  onStatus?: (text: string) => void
-  onChunk?: (text: string) => void
-  onCharts?: (charts: ChartPayload[]) => void
-  onDone?: (payload: SynthesisResponse) => void
-  onError?: (message: string) => void
 }
 
 function signalWithTimeout(userSignal: AbortSignal | undefined, ms: number): {
@@ -52,42 +36,6 @@ function signalWithTimeout(userSignal: AbortSignal | undefined, ms: number): {
     signal: controller.signal,
     cleanup: () => {
       window.clearTimeout(timer)
-      userSignal?.removeEventListener('abort', abortFromUser)
-    },
-    didTimeout: () => timedOut,
-  }
-}
-
-function signalWithIdleTimeout(userSignal: AbortSignal | undefined, ms: number): {
-  signal: AbortSignal
-  reset: () => void
-  cleanup: () => void
-  didTimeout: () => boolean
-} {
-  const controller = new AbortController()
-  let timedOut = false
-  let timer: number | undefined
-  const abortFromUser = () => controller.abort(userSignal?.reason)
-  const reset = () => {
-    if (timer !== undefined) window.clearTimeout(timer)
-    timer = window.setTimeout(() => {
-      timedOut = true
-      controller.abort()
-    }, ms)
-  }
-
-  if (userSignal?.aborted) {
-    abortFromUser()
-  } else {
-    userSignal?.addEventListener('abort', abortFromUser, { once: true })
-  }
-  reset()
-
-  return {
-    signal: controller.signal,
-    reset,
-    cleanup: () => {
-      if (timer !== undefined) window.clearTimeout(timer)
       userSignal?.removeEventListener('abort', abortFromUser)
     },
     didTimeout: () => timedOut,
@@ -175,29 +123,6 @@ function normalizeCharts(rawCharts: unknown): ChartPayload[] {
   })
 }
 
-function parseJsonPayload(payload: string): unknown {
-  if (!payload) return null
-  try {
-    return JSON.parse(payload)
-  } catch {
-    return null
-  }
-}
-
-function normalizeSynthesisResponse(payload: unknown): SynthesisResponse {
-  const data = unwrapData(payload) as Partial<SynthesisResponse>
-  return {
-    success: data.success,
-    answer: typeof data.answer === 'string' ? data.answer : '',
-    charts: normalizeCharts(data.charts),
-    source: data.source,
-    tokens: data.tokens,
-    plan: data.plan,
-    fact_check: data.fact_check,
-    processingTimeMs: data.processingTimeMs,
-  }
-}
-
 export function getToken(): string {
   return memoryToken
 }
@@ -253,9 +178,9 @@ export async function demoLogin(): Promise<DemoLoginResponse> {
  * same question could get a different (or up to 1h stale-cached) answer
  * than through web-admin's chat.
  *
- * `askSynthesis`/`askSynthesisStream` below remain for a dedicated,
- * fixed comprehensive-analysis / pure chart-data pull — never for free-form
- * Q&A.
+ * Direct Python synthesis helpers are intentionally absent: a future
+ * non-Q&A data pull must use a separately named client with a fixed contract,
+ * rather than reintroducing a second free-form answer path.
  */
 export async function askIntent(
   question: string,
@@ -321,190 +246,6 @@ export async function askIntent(
     source: typeof resultData.source === 'string'
       ? resultData.source
       : typeof nestedData.source === 'string' ? nestedData.source : undefined,
-  }
-}
-
-/**
- * Dedicated comprehensive-synthesis / pure chart-data pull only — direct to
- * Python. Free-form Q&A must use {@link askIntent} (see its doc comment).
- */
-export async function askSynthesis(
-  question: string,
-  sessionId: string,
-  userSignal?: AbortSignal,
-): Promise<SynthesisResponse> {
-  const token = getToken()
-  if (!token) {
-    throw new Error('登录已失效，请重试。')
-  }
-
-  const requestSignal = signalWithTimeout(userSignal, 20_000)
-  let response: Response
-  try {
-    response = await fetch('/api/smartbi/synthesis/comprehensive', {
-      method: 'POST',
-      credentials: 'include',
-      signal: requestSignal.signal,
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${token}`,
-      },
-      body: JSON.stringify({
-        question,
-        session_id: sessionId,
-      }),
-    })
-  } catch (error) {
-    if (requestSignal.didTimeout()) {
-      throw new RequestTimeoutError()
-    }
-    throw error
-  } finally {
-    requestSignal.cleanup()
-  }
-  const payload = await parseJson(response)
-
-  if (!response.ok) {
-    throw new Error(readErrorMessage(payload, '分析失败，请稍后重试。'))
-  }
-
-  const data = unwrapData(payload) as Partial<SynthesisResponse>
-  if (typeof data.answer !== 'string') {
-    throw new Error('后端响应缺少 answer 字段。')
-  }
-
-  return {
-    answer: data.answer,
-    charts: normalizeCharts(data.charts),
-    source: data.source,
-    tokens: data.tokens,
-    plan: data.plan,
-    fact_check: data.fact_check,
-  }
-}
-
-/**
- * Dedicated comprehensive-synthesis / pure chart-data pull only — direct to
- * Python SSE. Free-form Q&A must use {@link askIntent} (see its doc comment).
- */
-export async function askSynthesisStream(
-  question: string,
-  sessionId: string,
-  callbacks: SynthesisStreamCallbacks,
-  userSignal?: AbortSignal,
-): Promise<void> {
-  const token = getToken()
-  if (!token) {
-    throw new Error('登录已失效，请重试。')
-  }
-
-  const requestSignal = signalWithIdleTimeout(userSignal, 20_000)
-  let response: Response
-  try {
-    response = await fetch('/api/smartbi/synthesis/comprehensive-stream', {
-      method: 'POST',
-      credentials: 'include',
-      signal: requestSignal.signal,
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${token}`,
-      },
-      body: JSON.stringify({
-        question,
-        session_id: sessionId,
-      }),
-    })
-  } catch (error) {
-    requestSignal.cleanup()
-    if (requestSignal.didTimeout()) {
-      throw new RequestTimeoutError()
-    }
-    throw error
-  }
-
-  if (!response.ok) {
-    requestSignal.cleanup()
-    const payload = await parseJson(response)
-    const message = readErrorMessage(payload, '流式分析失败，请重试。')
-    callbacks.onError?.(message)
-    throw new Error(message)
-  }
-
-  const reader = response.body?.getReader()
-  if (!reader) {
-    requestSignal.cleanup()
-    throw new Error('当前浏览器不支持流式响应')
-  }
-
-  const decoder = new TextDecoder()
-  let buffer = ''
-  let sawDone = false
-
-  try {
-    while (true) {
-      const { done, value } = await reader.read()
-      if (done) break
-      requestSignal.reset()
-      buffer += decoder.decode(value, { stream: true })
-      const split = splitSseFrames(buffer)
-      buffer = split.rest
-
-      for (const frame of split.frames) {
-        requestSignal.reset()
-        const parsed = parseSseFrame(frame)
-        if (!parsed) continue
-
-        if (parsed.event === 'status') {
-          callbacks.onStatus?.(parsed.data)
-        } else if (parsed.event === 'chunk') {
-          callbacks.onChunk?.(parsed.data)
-        } else if (parsed.event === 'charts') {
-          callbacks.onCharts?.(normalizeCharts(parseJsonPayload(parsed.data)))
-        } else if (parsed.event === 'done') {
-          sawDone = true
-          callbacks.onDone?.(normalizeSynthesisResponse(parseJsonPayload(parsed.data)))
-        } else if (parsed.event === 'error') {
-          const message = parsed.data || '流式分析失败，请重试。'
-          callbacks.onError?.(message)
-          throw new StreamEventError(message)
-        }
-      }
-    }
-
-    const tail = decoder.decode()
-    if (tail) {
-      buffer += tail
-      const split = splitSseFrames(`${buffer}\n\n`)
-      for (const frame of split.frames) {
-        const parsed = parseSseFrame(frame)
-        if (!parsed) continue
-        if (parsed.event === 'status') {
-          callbacks.onStatus?.(parsed.data)
-        } else if (parsed.event === 'chunk') {
-          callbacks.onChunk?.(parsed.data)
-        } else if (parsed.event === 'charts') {
-          callbacks.onCharts?.(normalizeCharts(parseJsonPayload(parsed.data)))
-        } else if (parsed.event === 'done') {
-          sawDone = true
-          callbacks.onDone?.(normalizeSynthesisResponse(parseJsonPayload(parsed.data)))
-        } else if (parsed.event === 'error') {
-          const message = parsed.data || '流式分析失败，请重试。'
-          callbacks.onError?.(message)
-          throw new StreamEventError(message)
-        }
-      }
-    }
-    if (!sawDone) {
-      throw new Error('流式响应未完整结束，请重试。')
-    }
-  } catch (error) {
-    if (requestSignal.didTimeout()) {
-      throw new RequestTimeoutError()
-    }
-    throw error
-  } finally {
-    requestSignal.cleanup()
-    reader.releaseLock()
   }
 }
 

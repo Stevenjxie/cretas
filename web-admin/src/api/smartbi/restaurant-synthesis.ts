@@ -297,9 +297,8 @@ function normalizeStreamDone(payload: unknown): RestaurantSynthesisResult {
 }
 
 /**
- * Streaming variant of {@link askRestaurantSynthesis}: consumes the SSE
- * endpoint `/api/smartbi/synthesis/comprehensive-stream` (the SAME one
- * mobile-rest-ai/src/api.ts `askSynthesisStream` uses) via fetch +
+ * Streaming variant of {@link askRestaurantSynthesis}: consumes the dedicated
+ * SSE endpoint `/api/smartbi/synthesis/comprehensive-stream` via fetch +
  * ReadableStream, emitting status/chunk/charts/done/error callbacks.
  *
  * Auth/base-URL conventions mirror `pythonFetch`: `PYTHON_SMARTBI_URL`
