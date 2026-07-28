@@ -10,7 +10,14 @@
 import { ttsService } from './TextToSpeechService';
 import { speechRecognitionService } from './SpeechRecognitionService';
 import { TTS_RATE_MAP } from './config';
-import { API_BASE_URL } from '../../constants/config';
+import { apiClient } from '../api/apiClient';
+
+/** 后端 GenericChatResponse 的响应信封 (apiClient 拦截器已解包到 axios 的 response.data)。 */
+interface GenericChatEnvelope {
+  success: boolean;
+  message?: string;
+  data?: { content?: string };
+}
 import {
   SKU_CONFIG_SYSTEM_PROMPT,
   buildUserPrompt,
@@ -237,29 +244,21 @@ class SkuConfigVoiceService {
    */
   private async callAI(): Promise<SkuConfigAIResponse | null> {
     try {
-      const response = await fetch(`${API_BASE_URL}/api/mobile/ai/chat`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          messages: this.conversationHistory,
-          temperature: this.config.aiTemperature,
-          maxTokens: this.config.aiMaxTokens,
-        }),
+      // 2026-07-29: 从裸 fetch 改走 apiClient —— 它的拦截器注入 Bearer token 并处理
+      // 401 刷新。原来不带任何凭证也能通, 是因为 /api/mobile/ai/chat 当时压根不校验登录
+      // (JwtAuthInterceptor 只对能解析出 factoryId 的路径做 401)。那个洞已经堵上,
+      // 不带 token 的调用从此 401。
+      const data = await apiClient.post<GenericChatEnvelope>('/api/mobile/ai/chat', {
+        messages: this.conversationHistory,
+        temperature: this.config.aiTemperature,
+        maxTokens: this.config.aiMaxTokens,
       });
 
-      if (!response.ok) {
-        throw new Error(`AI API 错误: ${response.status}`);
-      }
-
-      const data = await response.json();
-
-      if (data.success && data.data?.content) {
+      if (data?.success && data.data?.content) {
         return parseAIResponse(data.data.content);
       }
 
-      throw new Error(data.message || 'AI 响应解析失败');
+      throw new Error(data?.message || 'AI 响应解析失败');
     } catch (error) {
       console.error('AI 调用失败:', error);
 
