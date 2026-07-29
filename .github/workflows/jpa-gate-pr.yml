@@ -9,7 +9,24 @@ name: JPA repository query gate (PR)
 #   - 全量 1119 个测试类要 78 分钟, 而且现在会 OOM 崩掉 (ci.yml 里有单独的堆修复)
 #   - 这道门禁 55 个测试, CI 实测 3 分 07 秒
 #   - 其中【测试执行本身不到 1 秒】(除首个类 31s 的 Spring 上下文启动),
-#     其余全是 javac 编译 5229 个源文件 —— 所以缓存 target/ 是主要加速手段
+#     其余全是 javac 编译 5229 个源文件
+#
+# ⛔ 别再试 target/ 缓存了 —— 2026-07-29 做过四轮实测, 净收益为负:
+#
+#   配置                                              门禁步骤   job 总耗时
+#   无缓存                                            3分05秒    3分34秒
+#   + actions/cache target/                           2分44秒    (缓存未真恢复)
+#   + git-restore-mtime (fetch-depth: 0)              3分00秒    —
+#   + -Dmaven.compiler.useIncrementalCompilation=false 2分33秒   3分47秒
+#
+#   门禁步骤最好能压到 2分33秒, 但 fetch-depth: 0 让 checkout 从 25s 涨到 47s、
+#   装 git-restore-mtime 再花 19s, 【job 总耗时反而从 3分34秒 涨到 3分47秒】。
+#   根因: Maven 在这个项目上拿不到有效增量 —— maven-compiler-plugin 的
+#   useIncrementalCompilation 名不副实(检测到任何改动就全量重编), 关掉它也只省
+#   半分钟, 抵不过为缓存付出的前置开销。
+#
+#   依赖缓存 (setup-java 的 cache: 'maven') 是有效的, 保留。
+#   要再压这 3 分钟, 方向是减少编译量(拆模块)或换更快的 runner, 不是缓存 target/。
 on:
   pull_request:
     paths:
@@ -36,28 +53,7 @@ jobs:
     # 且 Postgres 路径几乎未被验证 —— 单独立项处理, 不在本门禁的范围内。
 
     steps:
-      # fetch-depth: 0 —— git-restore-mtime 需要完整历史才能推出每个文件的最后修改时间。
       - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      # 没有这一步, 缓存 target/ 完全无效 —— 实测过。
-      #
-      # git 不存 mtime, actions/checkout 会把【所有】源文件的 mtime 设成检出时刻。
-      # maven-compiler-plugin 靠 mtime 判断 staleness, 于是恢复回来的 target/classes
-      # 一律"比源码旧" → 全量重编 5229 个文件, 缓存等于白存。
-      # 实测证据: 首次运行(无缓存) 3分05秒, 第二次(缓存 22MB 已命中) 2分44秒 —— 只快
-      # 21 秒, 属噪声, 说明增量编译根本没发生。
-      #
-      # git-restore-mtime 从提交历史把每个文件的 mtime 还原成它最后一次被改动的时间,
-      # 于是只有本 PR 真正改过的文件才比 class 新, Maven 才会只重编那几个。
-      - name: Restore source mtimes from git history
-        run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq git-restore-mtime
-          git restore-mtime --quiet
-          echo "mtime 已还原; 最近改动的 Java 源文件:"
-          find backend/java/cretas-api/src -name '*.java' -newermt '1 hour ago' | head -5
 
       - uses: actions/setup-java@v4
         with:
@@ -66,38 +62,10 @@ jobs:
           cache: 'maven'
           cache-dependency-path: backend/java/cretas-api/pom.xml
 
-      # 编译产物缓存 —— 这是把 3 分钟压下来的关键。
-      #
-      # exact key 里带 github.sha, 所以【永远不会命中】: 门禁只在 Java 源码变了时才跑,
-      # 源码变了 sha 就变。真正起作用的是 restore-keys 前缀匹配 —— 它会恢复最近一次的
-      # target/, 让 maven-compiler-plugin 做增量编译, 只重编改动的那几个文件及其依赖,
-      # 而不是每次从零编 5229 个。
-      #
-      # 权衡: 增量编译可能留下已删除源文件的孤儿 .class。对【门禁】可以接受, 因为
-      # 发布路径走的是 release-jar-manifest.sh 的 `mvn clean package`, 全新编译,
-      # 孤儿类不可能进入制品。真出现因孤儿类导致的假通过, 发布时那次 clean build 会暴露。
-      # 想临时禁用: 把下面这步注释掉即可, 门禁退回 3 分钟但结果不变。
-      - name: Cache compiled classes for incremental build
-        uses: actions/cache@v4
-        with:
-          path: backend/java/cretas-api/target
-          key: jpa-gate-target-${{ runner.os }}-${{ hashFiles('backend/java/cretas-api/pom.xml') }}-${{ github.sha }}
-          restore-keys: |
-            jpa-gate-target-${{ runner.os }}-${{ hashFiles('backend/java/cretas-api/pom.xml') }}-
-            jpa-gate-target-${{ runner.os }}-
-
-      # 让缓存效果可被验证, 而不是靠感觉。命中时 "Compiling N source files" 的 N 应该
-      # 远小于 5229; 没命中时就是全量。这一行输出是判断缓存是否真的生效的唯一直证。
-      - name: Report cache state
-        working-directory: backend/java/cretas-api
+      - name: Report runner resources
         run: |
           echo "CPU cores: $(nproc)"
           free -h | head -2
-          if [ -d target/classes ]; then
-            echo "target/classes 已恢复, 已编译 class 数: $(find target/classes -name '*.class' | wc -l)"
-          else
-            echo "target/classes 不存在 —— 本次为全量编译"
-          fi
 
       - name: JPA repository query startup gate
         working-directory: backend/java/cretas-api
@@ -107,7 +75,6 @@ jobs:
           -Dspring.profiles.active=test
           -Dtest='*RepositoryQueryValidationTest'
           -Dsurefire.failIfNoSpecifiedTests=false
-          -Dmaven.compiler.useIncrementalCompilation=false
 
       - name: Upload surefire reports on failure
         if: failure()
