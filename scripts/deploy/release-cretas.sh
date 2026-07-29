@@ -18,6 +18,13 @@ else
     exit 1
 fi
 
+# 保留原始参数: origin/main 在发布过程中前进时, 用同样的参数重新 exec 自己。
+# 见 recover_from_main_drift —— HEAD 前进后 CHANGED_FILES/JAVA_CHANGED/WEB_CHANGED/
+# 部署选择全都要重算, 重新走一遍入口比就地打补丁可靠得多。
+RELEASE_ORIGINAL_ARGS=("$@")
+DRIFT_ATTEMPT=${CRETAS_RELEASE_DRIFT_ATTEMPT:-0}
+DRIFT_RETRY_BUDGET=${CRETAS_RELEASE_DRIFT_RETRIES:-2}
+
 BASE_SHA=
 TESTS=
 PHASE=all
@@ -231,7 +238,8 @@ write_report() {
         printf '    "web": {"build": "%s", "deploy": "%s", "outcome": "%s", "build_count": %s}\n' "$WEB_BUILD_STATUS" "$WEB_DEPLOY_STATUS" "$WEB_DEPLOY_OUTCOME" "$WEB_BUILD_COUNT"
         printf '  },\n'
         printf '  "staging": {"java": "%s", "seconds": %s},\n' "$JAVA_STAGE_STATUS" "$JAVA_STAGE_SECONDS"
-        printf '  "main_guard": {"status": "%s", "seconds": %s},\n' "$MAIN_GUARD_STATUS" "$MAIN_GUARD_SECONDS"
+        printf '  "main_guard": {"status": "%s", "seconds": %s, "drift_recoveries": %s},\n' \
+            "$MAIN_GUARD_STATUS" "$MAIN_GUARD_SECONDS" "$DRIFT_ATTEMPT"
         printf '  "java_manifest": {"build_commit": "%s", "tree": "%s", "sha256": "%s", "size_bytes": "%s", "maven_wall_seconds": "%s"},\n' \
             "$(json_escape "$java_build_commit")" "$(json_escape "$java_tree")" "$(json_escape "$java_sha")" "$(json_escape "$java_size")" "$(json_escape "$java_maven_seconds")"
         printf '  "web_manifest": {"build_commit": "%s", "tree": "%s", "sha256": "%s", "index_sha256": "%s"},\n' \
@@ -367,6 +375,50 @@ detect_parallel_risk() {
     if printf '%s\n' "$diff_text" | grep -Eqi '^[+-].*(@Query|JPQL|HQL)'; then PARALLEL_REJECTION="Repository query contract changed"; return; fi
 }
 
+# origin/main 在发布期间前进时, 自动前进到新 main 并重新执行, 而不是硬失败。
+#
+# 安全前提 (任一不满足就走原来的硬失败路径, 绝不放宽):
+#   1. 只在需要 exact-main 的阶段做 —— build 阶段本来就允许在 feature 分支上跑。
+#   2. worktree 必须干净 —— 有未提交改动就说明状态不是脚本能安全推进的。
+#   3. 当前 HEAD 必须是新 origin/main 的祖先 —— 否则说明【本次要发布的提交没有进
+#      新 main】, 前进过去会静默丢掉本次发布的内容, 这种情况必须让人来处理。
+#   4. 重试次数有界 (CRETAS_RELEASE_DRIFT_RETRIES, 默认 2), 防止和高频推送方互相追。
+#
+# 安全性与手工重跑等价: 前进后重新执行整个入口, 会重新校验 manifest —— tree 没变
+# 就复用缓存 JAR, 变了就重建。任何情况下都不会用陈旧制品部署, 这正是 main_guard
+# 真正在守的东西。区别只是把「一次失败 + 人工重来」变成「一次数秒的静默抖动」。
+recover_from_main_drift() {
+    local label=$1 origin_sha=$2 dirty=$3
+
+    [ "$PHASE" != build ] || return 1
+    [ "$DRIFT_ATTEMPT" -lt "$DRIFT_RETRY_BUDGET" ] 2>/dev/null || {
+        echo "ERROR: origin/main 已连续前进 $DRIFT_ATTEMPT 次, 超出自动重试预算; 需要人工介入" >&2
+        return 1
+    }
+    [ -z "$dirty" ] || return 1
+
+    # 本次发布的提交必须已经在新 main 里, 否则前进过去等于把它们丢掉。
+    git -C "$PROJECT_ROOT" merge-base --is-ancestor "$HEAD_SHA" "$origin_sha" 2>/dev/null || {
+        echo "ERROR: origin/main 前进到 $origin_sha, 但本次发布的 HEAD=$HEAD_SHA 不是它的祖先" >&2
+        echo "       本次要发布的提交不在新 main 中, 自动前进会静默丢掉它们; 需要人工确认" >&2
+        return 1
+    }
+
+    echo ""
+    echo "⚠️  origin/main 在 $label 期间前进: $HEAD_SHA → $origin_sha"
+    echo "   本次发布的提交已确认在新 main 中; 自动前进并重新执行 (第 $((DRIFT_ATTEMPT + 1))/$DRIFT_RETRY_BUDGET 次)"
+    echo "   制品会按新 main 的 tree 重新校验: tree 未变则复用缓存 JAR, 变了则重建"
+    git -C "$PROJECT_ROOT" checkout --detach --quiet "$origin_sha" || {
+        echo "ERROR: 无法前进到 $origin_sha" >&2
+        return 1
+    }
+    echo ""
+
+    # exec 保留已持有的 fd (含 cretas-release 锁), 不会出现放锁再抢锁的窗口。
+    CRETAS_RELEASE_DRIFT_ATTEMPT=$((DRIFT_ATTEMPT + 1)) \
+        exec bash "$0" "${RELEASE_ORIGINAL_ARGS[@]}"
+}
+
 ensure_exact_main_after_artifacts() {
     local label=${1:-artifact validation}
     local started origin_sha dirty
@@ -377,6 +429,13 @@ ensure_exact_main_after_artifacts() {
     dirty=$(git -C "$PROJECT_ROOT" status --porcelain --untracked-files=normal)
     MAIN_GUARD_SECONDS=$((MAIN_GUARD_SECONDS + $(date +%s) - started))
     if [ "$HEAD_SHA" != "$origin_sha" ]; then
+        # 并发 session 在本次发布期间推了 main。硬失败会让操作者手工确认再重跑一遍,
+        # 而重跑的构建往往几乎免费 (backend tree 没变时命中 JAR 复用, 实测 167s→2s),
+        # 所以那次人工往返换来的信息量很低、摩擦很高。这里改为在严格前提下自动前进
+        # 到新 main 并重新执行整个入口。
+        if recover_from_main_drift "$label" "$origin_sha" "$dirty"; then
+            : # 不会返回 —— recover 成功会 exec 掉当前进程
+        fi
         MAIN_GUARD_STATUS=failed
         echo "ERROR: origin/main moved during $label; refusing stale artifacts before any child deployment (HEAD=$HEAD_SHA origin/main=$origin_sha)" >&2
         return 1
