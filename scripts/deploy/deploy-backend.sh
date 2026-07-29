@@ -703,6 +703,31 @@ persist_remote_sha256_artifact() {
         mv -f '$cache_tmp' '$cache_path'
     " >/dev/null 2>&1
 }
+
+# 缓存按 backend tree SHA 命名, 每个新 tree 就是一个新的 176MB 文件, 而此前没有
+# 任何保留上限 —— 2026-07-29 实测: 5 天积累 61 个 jar / 11G (约 2.1G/天), 把
+# 99G 的盘吃到 94%, 且 61 个全是不同 SHA, 旧的几乎永远不会再命中 (每次部署都是
+# 新代码, 命中只发生在同 tree 重复部署, 如失败重试或 squash 后 tree 未变)。
+# 保留最近 N 个即可覆盖那种复用场景。
+prune_remote_sha256_cache() {
+    local keep="${CRETAS_JAR_CACHE_KEEP:-5}"
+    # 下限 2: 至少留住"当前生产 jar + 上一版", 保证回滚仍能命中缓存
+    [[ "$keep" =~ ^[0-9]+$ ]] && [ "$keep" -ge 2 ] || keep=5
+
+    local removed
+    # 只按 mtime 删 *.jar; 不碰 .<sha>.$$ 临时文件 (可能是并发部署正在写入的)。
+    # 刚 persist 的那个 mtime 最新, 必然在保留区内。
+    removed=$(ssh -o ConnectTimeout=10 "$SERVER" "
+        cd '$REMOTE_JAR_CACHE_DIR' 2>/dev/null || exit 0
+        ls -t *.jar 2>/dev/null | tail -n +\$(($keep + 1)) | while read -r f; do
+            rm -f -- \"\$f\" && echo \"\$f\"
+        done | wc -l
+    " 2>/dev/null) || return 0   # prune 失败绝不能让部署失败
+
+    if [ -n "${removed:-}" ] && [ "$removed" -gt 0 ] 2>/dev/null; then
+        log "INFO" "构建缓存已清理 $removed 个旧 jar (保留最近 $keep 个)"
+    fi
+}
 # END_REMOTE_JAR_CACHE_HELPERS
 
 cleanup() {
@@ -1494,6 +1519,8 @@ deploy_jar() {
     if [ "$WINNER" != "remote-sha256-cache" ]; then
         if persist_remote_sha256_artifact "$LOCAL_SHA256"; then
             echo "   ✓ 已写入远端 SHA-256 制品缓存"
+            # 写入之后再收口, 保证刚写的那个一定在保留区内
+            prune_remote_sha256_cache
         else
             echo "   ⚠️  远端 SHA-256 缓存写入失败；本次部署继续使用已校验上传文件"
         fi
