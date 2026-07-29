@@ -617,12 +617,15 @@ public class ProductionStockAllocationServiceImpl implements ProductionStockAllo
      */
     private String canonicalNativeUnit(String factoryId, String unit) {
         if (unit == null || unit.isBlank()) return null;
+        // 契约认不出时回落字面比较, 但必须先折大小写 ——
+        // KG 与 kg 本就是同一个单位, 字面直比会把它们当成两样东西。
+        // 中文单位不受影响; 拉丁字母写法则不再因大小写失配。
         String trimmed = unit.trim();
         return unitContractService.describe(factoryId, trimmed)
                 .filter(canonical -> canonical.dimension() == UnitDimension.MASS
                         || canonical.dimension() == UnitDimension.VOLUME)
                 .map(com.cretas.aims.service.unit.CanonicalUnit::code)
-                .orElse(trimmed);
+                .orElseGet(() -> trimmed.toLowerCase(java.util.Locale.ROOT));
     }
 
     private boolean isCanonicalMassUnit(String unit) {

@@ -105,6 +105,9 @@ class WorkflowReportingUnitResolverTest {
         assertEquals("件", resolver.canonicalCode("F006", "件"));
         // 科学单位照常归一: 千克/公斤 都是 kg
         assertEquals("kg", resolver.canonicalCode("F006", "千克"));
+        // 契约认不出的写法折大小写后再比 —— Box 与 box 是同一个单位, 不能算两样
+        assertEquals("箱子", resolver.canonicalCode("F006", "箱子"));
+        assertEquals("crate", resolver.canonicalCode("F006", "CRATE"));
     }
 
     @Test
