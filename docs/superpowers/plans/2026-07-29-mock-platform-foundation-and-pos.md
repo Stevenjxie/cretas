@@ -2145,11 +2145,11 @@ class KeruyunAdapter:
 # backend/python/smartbi/ingestion/platforms/writer.py
 """归一化订单 → Silver。
 
-幂等: 挂在部分唯一索引 uq_fact_pos_txn_mock_keruyun
-      (factory_id, source_bill_no) WHERE source_type = 'mock_keruyun' 上。
-      ⚠️ ON CONFLICT 必须带同样的 WHERE 谓词才能命中部分索引。
-      不能用全表唯一索引 —— 该表已有 15 万组历史重复, 加全表唯一索引会失败,
-      进而 ABORT 整个 Python 部署。
+幂等: 用 fact_pos_transaction 上**现成的**唯一约束
+      uq_fact_pos_txn (factory_id, source_type, store_id, source_bill_no)。
+      不新建任何索引 —— 该表 1,382,267 行, 现成约束已够用。
+      ⚠️ ON CONFLICT 的列清单必须与该约束**完全一致**(含 store_id), 否则
+      Postgres 匹配不到约束会直接报错。
 框架保证「先写入、后推进游标」, 崩在中间下轮重拉只会命中冲突, 不会重复计数。
 
 门店映射走 platform_store_map(dim_store 没有 store_code 列)。
@@ -2210,8 +2210,8 @@ async def write_orders(pool, factory_id: str, orders: List[NormalizedOrder]) -> 
                     " gross_amount, discount_amount, net_amount, customer_count, "
                     " item_count, order_type) "
                     "VALUES ($1,$2,'mock_keruyun',$3,$4,$5,$6,$7,$8,$9,$10,$11) "
-                    "ON CONFLICT (factory_id, source_bill_no) "
-                    "WHERE source_type = 'mock_keruyun' DO NOTHING "
+                    "ON CONFLICT (factory_id, source_type, store_id, source_bill_no) "
+                    "DO NOTHING "
                     "RETURNING id",
                     factory_id, store_row["store_id"], order.platform_order_no,
                     order.biz_date, order.placed_at,
