@@ -100,7 +100,10 @@ do
     grep -Fq "$site" "$DEPLOY_SCRIPT" \
         || fail "transfer site not normalized: $site"
 done
-grep -Fq 'rsync -a --timeout=90 "$(ssh_local_path "$jar_path")"' "$STAGE_SCRIPT" \
+# 这条只管【本地路径有没有归一化】, 所以刻意不钉传输 flag —— stage 后来加了
+# -z/--stats 做 delta 种子的可观测性, 钉死 flag 只会让一个无关改动误红。
+# flag 形状由 scripts/tests/test-stage-backend-artifact-delta.sh 单独断言。
+grep -Eq 'rsync .*--timeout=90 "\$\(ssh_local_path "\$jar_path"\)"' "$STAGE_SCRIPT" \
     || fail "stage-backend-artifact.sh still hands a raw local path to rsync"
 
 # 全仓扫描: 任何把本地路径变量交给 rsync/scp 的调用点都必须归一化。新增传输点
