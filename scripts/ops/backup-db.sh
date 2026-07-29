@@ -6,7 +6,10 @@ set -euo pipefail
 
 TIMESTAMP=$(date +%Y%m%d_%H%M%S)
 BACKUP_DIR="${BACKUP_DIR:-/www/wwwroot/cretas/backups}"
-RETENTION_DAYS="${RETENTION_DAYS:-14}"
+# 2 天 (2026-07-29 Steve 拍板, 原 14 天): 每日三库全量约 690MB, 14 天 = 11G,
+# 是 99G 盘的第二大占用。⚠️ 回滚窗口因此只有 2 天 —— 周五出的问题周一才发现时,
+# 每日备份已经没了; 那种情况只能依赖手工迁移前快照 (*.dump, 不受本保留策略清理)。
+RETENTION_DAYS="${RETENTION_DAYS:-2}"
 LOG_PREFIX="[backup $(date '+%Y-%m-%d %H:%M:%S')]"
 
 mkdir -p "$BACKUP_DIR"
