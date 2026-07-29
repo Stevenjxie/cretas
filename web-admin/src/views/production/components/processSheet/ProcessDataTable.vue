@@ -26,6 +26,8 @@ import { put } from '@/api/request';
 import type { ProcessSheetCustomFieldDef } from '@/api/processProduction';
 import { PROCESS_SHEET_CONFIG, GENERIC_FALLBACK_COLS, genClientRowId, type ColDef } from './PROCESS_SHEET_CONFIG';
 import WorkHoursTable from './WorkHoursTable.vue';
+import ProcessOutputTable from './ProcessOutputTable.vue';
+import type { MultiOutputLine, OutputLineView } from './processSheetOutputs';
 import { boxAvailableKg, isCountUnit, countUnitFeedWarning, countUnitLabelSuffix } from '@/utils/feedUnitConversion';
 import {
   displayProcessUnit,
@@ -122,37 +124,8 @@ const emit = defineEmits<{
   (e: 'row-saved', submissionStatus: 'DRAFT' | 'SUBMITTED' | 'LEGACY' | null): void;
 }>();
 
-// -------------------------------------------------------------------------
-// 2B.2 多产出 (fan-out): 一个产出端口条目。产品/端口由 workflow 产出端口固定 (只读, fool-proof
-// Rule 2/3 — 操作员不能自由选产品), 只填数量。batchNumber 保存/重载后填充 (只读展示)。
-// -------------------------------------------------------------------------
-interface MultiOutputLine {
-  workflowPortId: string;
-  /** 端口身份: workflow 物料 Cell 节点 id (随请求发给后端记录)。 */
-  materialNodeId: string;
-  productTypeId: string;
-  /** 只读展示品名; 端口 SKU 已失效时兜底显 productTypeId, 不崩溃。 */
-  materialName: string;
-  unit: string;
-  /** SKU 单位净重；计数型成品缺失时只展示明确错误，不猜重量。 */
-  gramsPerUnit: number | null;
-  finished: boolean;
-  required: boolean;
-  selected: boolean;
-  quantity: number | null;
-  /** 一条产出对应一段开始/结束时间；总工时由这两个值即时计算。 */
-  startTime: string;
-  endTime: string;
-  workerCount: number;
-  /** 副产是该产出的附属事实，单位固定只读。 */
-  byproductQuantity: number | null;
-  byproductUnit: string;
-  byproductUnitPrice: number | null;
-  /** 仅产出维度无法统一时显示并提交，值域 (0, 100]。 */
-  costAllocationRatio: number | null;
-  /** 保存后系统生成的产出批次号 (重载回显); 未保存为 null。 */
-  batchNumber: string | null;
-}
+// 2B.2 多产出 (fan-out) 的行类型已移到 ./processSheetOutputs —— 卡片模式和表格模式共用
+// ProcessOutputTable 子组件, 而 `<script setup>` 里的 interface 不可导出。
 
 interface MaterialInputTotalLine extends Omit<MaterialInputTotal, 'quantity'> {
   materialName: string;
@@ -1559,6 +1532,45 @@ function outputLinePrecision(line: MultiOutputLine): number {
   return line.finished && line.unit.trim().toLowerCase() !== 'kg' && line.unit.trim() !== '千克' ? 0 : 6;
 }
 
+/**
+ * 把一行的产出端口整理成 ProcessOutputTable 要的视图模型。
+ *
+ * 所有派生值都在这里算完 —— 卡片模式和表格模式传同一份进去, 就不可能再像以前那样
+ * 一边有必填标识和出成率说明、另一边没有。
+ */
+function outputViews(row: SheetRow): OutputLineView[] {
+  return row.multiOutputs.map((line) => {
+    const port = portById(line.workflowPortId);
+    const yieldRate = outputLineYield(row, line);
+    return {
+      line,
+      selectorVisible: showPortSelector(port),
+      selectorDisabled: portSelectionDisabled(port),
+      unitLabel: displayProcessUnit(line.unit),
+      byproductUnitLabel: displayProcessUnit(line.byproductUnit),
+      quantityPrecision: outputLinePrecision(line),
+      yieldText: yieldRate == null ? '—' : `${yieldRate.toFixed(2)}%`,
+      blocker: outputLineYieldBlocker(row, line),
+      totalHoursText: outputLineTotalHours(line).toFixed(2),
+      weightHint: line.finished
+        ? (outputLineWeightKg(line) == null
+            ? '未配置单位净重，无法计算成品重量'
+            : `成品重量 ${formattedWeight(outputLineWeightKg(line))}`)
+        : null,
+    };
+  });
+}
+
+/** 本行的投入里有没有真能选的端口 —— 全都没得选时「选用」整列不占位。 */
+function anyInputSelector(row: SheetRow): boolean {
+  return row.materialInputTotals.some((item) => showPortSelector(portById(item.workflowPortId)));
+}
+
+/** 子组件只知道端口 id; 选用状态的联动规则仍然留在这里 (EXACTLY_ONE 互斥等)。 */
+function onOutputPortToggle(row: SheetRow, portId: string, selected: boolean): void {
+  setPortSelected(row, portById(portId), selected);
+}
+
 function fieldPrecision(key: string): number {
   if (!isQidiao.value || (key !== 'actualProd' && key !== 'sample')) return 2;
   const unit = processUnits.value.outputUnit.trim().toLowerCase();
@@ -2819,52 +2831,78 @@ defineExpose({ hasUnsavedRows, refreshSharedInventories });
 
           <!-- 修油: raw-material batch dropdown + out-weight -->
           <template v-if="isXiuYou">
+            <!--
+              投入也按紧凑表格排 (与产出表同一套观感)。原来每条投入是一竖列
+              label/下拉/label/数字堆叠, 多条并排时字段名逐条重复, 正是客户说的「散」。
+            -->
             <template v-if="usesAutoMaterialTotals(row)">
               <div
-                v-for="item in row.materialInputTotals"
-                :key="item.workflowPortId || item.materialTypeId"
-                data-testid="material-input-total"
-                class="sp-card-field"
-                :class="{ 'sp-port-unselected': !item.selected }"
+                class="sp-card-field sp-card-field-full sp-in-table"
+                :class="{ 'sp-in-table--sel': anyInputSelector(row) }"
               >
-                <el-checkbox
-                  v-if="showPortSelector(portById(item.workflowPortId))"
-                  :model-value="item.selected"
-                  :disabled="portSelectionDisabled(portById(item.workflowPortId))"
-                  data-testid="port-selected"
-                  @change="(selected: boolean) => setPortSelected(row, portById(item.workflowPortId), selected)"
-                >选用</el-checkbox>
-                <span class="sp-port-selection-hint">{{ portSelectionSummary(portById(item.workflowPortId)) }}</span>
-                <label class="sp-card-label">本次投入原料</label>
-                <el-select
-                  :model-value="item.materialTypeId"
-                  :disabled="!item.selected"
-                  data-testid="bom-authorized-material-select"
-                  aria-label="选择本次实际投入物料"
-                  placeholder="选择主料或替代料…"
-                  style="width:180px"
-                  size="small"
-                  @change="(materialTypeId: string) => selectMaterialForInput(item, materialTypeId)"
+                <div class="sp-in-head" aria-hidden="true">
+                  <span v-if="anyInputSelector(row)">选用</span>
+                  <span>本次投入原料</span>
+                  <span><i class="sp-required">*</i>投料总量</span>
+                  <span>来源批次</span>
+                </div>
+                <div
+                  v-for="item in row.materialInputTotals"
+                  :key="item.workflowPortId || item.materialTypeId"
+                  data-testid="material-input-total"
+                  class="sp-in-row"
+                  :class="{ 'sp-port-unselected': !item.selected }"
                 >
-                  <el-option
-                    v-for="option in materialOptionsForPort(item.workflowPortId)"
-                    :key="option.value"
-                    :label="option.label"
-                    :value="option.value"
-                  />
-                </el-select>
-                <label class="sp-card-label">投料总量</label>
-                <el-input-number
-                  v-model="item.quantity"
-                  :disabled="!item.selected"
-                  :min="0"
-                  :precision="6"
-                  controls-position="right"
-                  style="width:160px"
-                  size="small"
-                />
-                <span data-testid="input-unit-readonly" class="sp-fixed-unit">{{ displayProcessUnit(item.unit) }}</span>
-                <span style="font-size:11px;color:#909399">来源批次由系统按生产库入库顺序自动分摊</span>
+                  <span v-if="anyInputSelector(row)" class="sp-in-cell">
+                    <el-checkbox
+                      v-if="showPortSelector(portById(item.workflowPortId))"
+                      :model-value="item.selected"
+                      :disabled="portSelectionDisabled(portById(item.workflowPortId))"
+                      data-testid="port-selected"
+                      :aria-label="`选用 ${item.materialName}`"
+                      @change="(selected: boolean) => setPortSelected(row, portById(item.workflowPortId), selected)"
+                    />
+                  </span>
+                  <span class="sp-in-cell">
+                    <el-select
+                      :model-value="item.materialTypeId"
+                      :disabled="!item.selected"
+                      data-testid="bom-authorized-material-select"
+                      aria-label="选择本次实际投入物料"
+                      placeholder="选择主料或替代料…"
+                      style="width:100%"
+                      size="small"
+                      @change="(materialTypeId: string) => selectMaterialForInput(item, materialTypeId)"
+                    >
+                      <el-option
+                        v-for="option in materialOptionsForPort(item.workflowPortId)"
+                        :key="option.value"
+                        :label="option.label"
+                        :value="option.value"
+                      />
+                    </el-select>
+                    <!-- 端口有替代关系时才说明选法; 没得选时这行字和 * 是重复的 -->
+                    <span
+                      v-if="showPortSelector(portById(item.workflowPortId))"
+                      class="sp-port-selection-hint"
+                    >{{ portSelectionSummary(portById(item.workflowPortId)) }}</span>
+                  </span>
+                  <span class="sp-in-cell">
+                    <span class="sp-inline-input" role="group" aria-label="投料总量与单位">
+                      <el-input-number
+                        v-model="item.quantity"
+                        :disabled="!item.selected"
+                        :min="0"
+                        :precision="6"
+                        controls-position="right"
+                        size="small"
+                        :aria-label="`${item.materialName} 投料总量`"
+                      />
+                      <span data-testid="input-unit-readonly" class="sp-fixed-unit">{{ displayProcessUnit(item.unit) }}</span>
+                    </span>
+                  </span>
+                  <span class="sp-in-cell sp-in-note">来源批次由系统按生产库入库顺序自动分摊</span>
+                </div>
               </div>
             </template>
             <template v-else>
@@ -3086,7 +3124,9 @@ defineExpose({ hasUnsavedRows, refreshSharedInventories });
 
           <div class="sp-card-field sp-card-field-full sp-stage-heading">
             <span><b>②</b> 工序执行</span>
-            <small>先填写作业参数，再按实际作业记录开始、结束时间和人数。</small>
+            <!-- 端口模式下开始/结束时间与人数已并进下方产出行, 这里只剩工序参数 -->
+            <small v-if="isPortOutputMode">填写本工序的作业参数；开始、结束时间和人数随每条产出一起录入。</small>
+            <small v-else>先填写作业参数，再按实际作业记录开始、结束时间和人数。</small>
           </div>
           <!-- Generic columns from config (skip special-cased keys) -->
           <template v-for="col in cols" :key="col.key">
@@ -3168,87 +3208,23 @@ defineExpose({ hasUnsavedRows, refreshSharedInventories });
             </div>
           </template>
 
-          <section
-            v-if="isPortOutputMode"
-            class="sp-card-field sp-card-field-full sp-execution-section"
-            aria-label="工序执行时间与人数"
-          >
-            <div class="sp-execution-section-title">作业时间与人数</div>
-            <div
-              v-for="(o, oi) in row.multiOutputs"
-              :key="`execution-${o.workflowPortId || oi}`"
-              data-testid="workflow-execution-line"
-              class="sp-execution-line"
-              :class="{ 'sp-port-unselected': !o.selected }"
-            >
-              <div class="sp-execution-product">
-                <strong>{{ o.materialName }}</strong>
-                <span>{{ o.finished ? '成品' : '半成品' }}</span>
-              </div>
-              <label data-testid="output-start-time">开始时间<el-time-picker v-model="o.startTime" value-format="HH:mm" format="HH:mm" placeholder="选择开始时间…" size="small" /></label>
-              <label data-testid="output-end-time">结束时间<el-time-picker v-model="o.endTime" value-format="HH:mm" format="HH:mm" placeholder="选择结束时间…" size="small" /></label>
-              <label data-testid="output-worker-count">人数<el-input-number v-model="o.workerCount" :min="1" :precision="0" controls-position="right" size="small" /></label>
-              <label>总工时<span class="sp-readonly">{{ outputLineTotalHours(o).toFixed(2) }} h</span></label>
-            </div>
-          </section>
-
           <!-- ============================================================
                2B.2 多产出 (fan-out): N 个产出端口各自只读品名(+成品/半成品标签) + 填数量。
                产品/端口由 workflow 图固定 (fool-proof Rule 2/3 — 不给操作员自由选产品), 始终展开
-               (核心必填录入, 不折叠隐藏)。仅 isMultiOutput (产出端口>1) 时渲染, 单产出工序不受影响。
+               (核心必填录入, 不折叠隐藏)。
+
+               作业时间与人数原本是上面独立的一节, 客户实测反馈布局散 —— 同一个产出品名在一张卡里
+               要出现三次。现已并进产出行, 品名只出现一次; 表格模式共用同一个子组件。
                ============================================================ -->
-          <section v-if="isPortOutputMode" class="sp-card-field sp-card-field-full sp-card-expand-section" aria-label="产出与副产记录">
-            <div class="sp-output-section-title">
-              <span><b>③</b> 产出明细 — {{ row.multiOutputs.length }} 项</span>
-              <span>SKU 与单位由 Workflow 固定，不可选择</span>
-            </div>
-            <div
-              v-for="(o, oi) in row.multiOutputs"
-              :key="o.workflowPortId || oi"
-              data-testid="workflow-output-line"
-              class="sp-output-line"
-              :class="{ 'sp-port-unselected': !o.selected }"
-            >
-              <div class="sp-output-line-head">
-                <el-checkbox
-                  v-if="showPortSelector(portById(o.workflowPortId))"
-                  :model-value="o.selected"
-                  :disabled="portSelectionDisabled(portById(o.workflowPortId))"
-                  data-testid="port-selected"
-                  @change="(selected: boolean) => setPortSelected(row, portById(o.workflowPortId), selected)"
-                >选用</el-checkbox>
-                <strong>{{ o.materialName }}</strong>
-                <el-tag size="small" :type="o.finished ? 'success' : 'warning'">
-                  {{ o.finished ? '成品' : '半成品' }}
-                </el-tag>
-                <span v-if="o.batchNumber" class="sp-readonly sp-batch-num">{{ o.batchNumber }}</span>
-              </div>
-              <div class="sp-output-fields sp-output-primary-fields">
-                <label class="sp-output-key-field" data-testid="output-quantity"><span class="sp-required">*</span>产出数量<span class="sp-inline-input" role="group" aria-label="产出数量与单位"><el-input-number v-model="o.quantity" :min="0" :precision="outputLinePrecision(o)" controls-position="right" size="small" /><span data-testid="output-unit-readonly" class="sp-fixed-unit">{{ displayProcessUnit(o.unit) }}</span></span></label>
-                <label>出成率<span class="sp-readonly">{{ outputLineYield(row, o) == null ? '—' : `${outputLineYield(row, o)!.toFixed(2)}%` }}</span></label>
-                <!--
-                  算不出来时说清楚为什么, 并给一个就地补规格的入口。
-                  只显示「—」会让人以为是系统坏了, 而实际是缺一个可以当场填的数。
-                -->
-                <div v-if="outputLineYieldBlocker(row, o)" class="sp-yield-blocked">
-                  <el-icon><Warning /></el-icon>
-                  <span>{{ outputLineYieldBlocker(row, o) }}</span>
-                  <el-button link type="primary" size="small" @click="openSpecDialog(o)">去设置</el-button>
-                </div>
-              </div>
-              <div class="sp-output-optional">
-                <div class="sp-output-optional-title">按需填写：副产与成本分摊</div>
-                <div class="sp-output-fields sp-output-optional-fields">
-                  <label data-testid="byproduct-quantity">副产数量<span class="sp-inline-input" role="group" aria-label="副产数量与单位"><el-input-number v-model="o.byproductQuantity" :min="0" :precision="6" controls-position="right" size="small" /><span data-testid="byproduct-unit-readonly" class="sp-fixed-unit">{{ displayProcessUnit(o.byproductUnit) }}</span></span></label>
-                  <label data-testid="byproduct-unit-price">副产回收单价<el-input-number v-model="o.byproductUnitPrice" :min="0" :precision="4" controls-position="right" size="small" /></label>
-                  <label v-if="requiresManualCostAllocation(row)" data-testid="cost-allocation-ratio">成本分摊比例(%)<el-input-number v-model="o.costAllocationRatio" :min="0" :max="100" :precision="4" controls-position="right" size="small" /></label>
-                </div>
-              </div>
-              <div v-if="o.finished" class="sp-output-weight-hint">
-                {{ outputLineWeightKg(o) == null ? '未配置单位净重，无法计算成品重量' : `成品重量 ${formattedWeight(outputLineWeightKg(o))}` }}
-              </div>
-            </div>
-          </section>
+          <ProcessOutputTable
+            v-if="isPortOutputMode"
+            class="sp-card-field sp-card-field-full"
+            :views="outputViews(row)"
+            :show-cost-allocation="requiresManualCostAllocation(row)"
+            hint="SKU 与单位由 Workflow 固定，不可选择"
+            @toggle-select="(portId: string, selected: boolean) => onOutputPortToggle(row, portId, selected)"
+            @open-spec="openSpecDialog"
+          />
 
           <!-- Labor expander -->
           <div v-if="!isPortOutputMode" class="sp-card-field sp-card-field-full">
@@ -3895,57 +3871,13 @@ defineExpose({ hasUnsavedRows, refreshSharedInventories });
                 :class="['sp-tr-expand', ri % 2 === 0 ? 'sp-tr-even' : 'sp-tr-odd']">
               <td :colspan="999" class="sp-td-expand">
                 <div class="sp-expand-section">
-                  <div class="sp-stage-heading sp-grid-execution-heading">
-                    <span><b>②</b> 工序执行</span>
-                    <small>先确认时间与人数，再填写实际产出。</small>
-                  </div>
-                  <div
-                    v-for="(o, oi) in row.multiOutputs"
-                    :key="`grid-execution-${o.workflowPortId || oi}`"
-                    data-testid="workflow-execution-line"
-                    class="sp-execution-line sp-grid-execution-line"
-                    :class="{ 'sp-port-unselected': !o.selected }"
-                  >
-                    <div class="sp-execution-product">
-                      <strong>{{ o.materialName }}</strong>
-                      <span>{{ o.finished ? '成品' : '半成品' }}</span>
-                    </div>
-                    <label data-testid="output-start-time">开始时间<el-time-picker v-model="o.startTime" value-format="HH:mm" format="HH:mm" placeholder="选择开始时间…" size="small" /></label>
-                    <label data-testid="output-end-time">结束时间<el-time-picker v-model="o.endTime" value-format="HH:mm" format="HH:mm" placeholder="选择结束时间…" size="small" /></label>
-                    <label data-testid="output-worker-count">人数<el-input-number v-model="o.workerCount" :min="1" :precision="0" controls-position="right" size="small" /></label>
-                    <label>总工时<span class="sp-readonly">{{ outputLineTotalHours(o).toFixed(2) }} h</span></label>
-                  </div>
-                  <div class="sp-output-section-title">
-                    <span><b>③</b> 产出明细 — {{ row.multiOutputs.length }} 项</span>
-                    <span>投入按本报工组只扣减一次；SKU 与单位由 Workflow 固定</span>
-                  </div>
-                  <div
-                    v-for="(o, oi) in row.multiOutputs"
-                    :key="o.workflowPortId || oi"
-                    data-testid="workflow-output-line"
-                    class="sp-output-line"
-                    :class="{ 'sp-port-unselected': !o.selected }"
-                  >
-                    <div class="sp-output-line-head">
-                      <el-checkbox
-                        v-if="showPortSelector(portById(o.workflowPortId))"
-                        :model-value="o.selected"
-                        :disabled="portSelectionDisabled(portById(o.workflowPortId))"
-                        data-testid="port-selected"
-                        @change="(selected: boolean) => setPortSelected(row, portById(o.workflowPortId), selected)"
-                      >选用</el-checkbox>
-                      <strong>{{ o.materialName }}</strong>
-                      <el-tag size="small" :type="o.finished ? 'success' : 'warning'">{{ o.finished ? '成品' : '半成品' }}</el-tag>
-                      <span v-if="o.batchNumber" class="sp-readonly sp-batch-num">{{ o.batchNumber }}</span>
-                    </div>
-                    <div class="sp-output-fields">
-                      <label class="sp-output-key-field" data-testid="output-quantity">产出数量<span class="sp-inline-input"><el-input-number v-model="o.quantity" :min="0" :precision="outputLinePrecision(o)" controls-position="right" size="small" /><span data-testid="output-unit-readonly" class="sp-fixed-unit">{{ displayProcessUnit(o.unit) }}</span></span></label>
-                      <label>出成率<span class="sp-readonly">{{ outputLineYield(row, o) == null ? '—' : `${outputLineYield(row, o)!.toFixed(2)}%` }}</span></label>
-                      <label data-testid="byproduct-quantity">副产数量<span class="sp-inline-input"><el-input-number v-model="o.byproductQuantity" :min="0" :precision="6" controls-position="right" size="small" /><span data-testid="byproduct-unit-readonly" class="sp-fixed-unit">{{ displayProcessUnit(o.byproductUnit) }}</span></span></label>
-                      <label data-testid="byproduct-unit-price">副产回收单价<el-input-number v-model="o.byproductUnitPrice" :min="0" :precision="4" controls-position="right" size="small" /></label>
-                      <label v-if="requiresManualCostAllocation(row)" data-testid="cost-allocation-ratio">成本分摊比例(%)<el-input-number v-model="o.costAllocationRatio" :min="0" :max="100" :precision="4" controls-position="right" size="small" /></label>
-                    </div>
-                  </div>
+                  <ProcessOutputTable
+                    :views="outputViews(row)"
+                    :show-cost-allocation="requiresManualCostAllocation(row)"
+                    hint="投入按本报工组只扣减一次；SKU 与单位由 Workflow 固定"
+                    @toggle-select="(portId: string, selected: boolean) => onOutputPortToggle(row, portId, selected)"
+                    @open-spec="openSpecDialog"
+                  />
                   <div class="sp-card-submit sp-grid-submit">
                     <div class="sp-card-submit-copy">
                       <strong><b>④</b> 确认提交</strong>
@@ -4658,7 +4590,6 @@ defineExpose({ hasUnsavedRows, refreshSharedInventories });
   border-top: 0;
 }
 .sp-stage-heading b,
-.sp-output-section-title b,
 .sp-card-submit-copy b {
   color: #1677ff;
 }
@@ -4667,121 +4598,57 @@ defineExpose({ hasUnsavedRows, refreshSharedInventories });
   font-size: 11px;
   font-weight: 400;
 }
-.sp-execution-section {
-  padding: 12px;
-  border: 1px solid #d9e6f7;
-  border-radius: 6px;
-  background: #f7faff;
-}
-.sp-execution-section-title {
-  margin-bottom: 8px;
-  color: #303133;
-  font-size: 12px;
-  font-weight: 650;
-}
-.sp-execution-line {
-  display: grid;
-  grid-template-columns: minmax(180px, 1.35fr) repeat(4, minmax(120px, 1fr));
-  align-items: end;
-  gap: 10px 12px;
-  padding: 10px 0;
-  border-top: 1px solid #e4ebf5;
-}
-.sp-execution-line:first-of-type {
-  border-top: 0;
-}
-.sp-execution-line > label {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  color: #697586;
-  font-size: 11px;
-  font-weight: 600;
-}
-.sp-execution-line :deep(.el-date-editor),
-.sp-execution-line :deep(.el-input-number) {
-  width: 100%;
-}
-.sp-execution-product {
-  display: flex;
-  flex-direction: column;
-  gap: 3px;
-  align-self: center;
-  min-width: 0;
-  color: #303133;
-  font-size: 12px;
-}
-.sp-execution-product strong {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.sp-execution-product span {
-  color: #909399;
-  font-size: 11px;
-}
-.sp-grid-execution-heading {
-  margin-bottom: 4px;
-  padding-top: 0;
-  border-top: 0;
-}
-.sp-grid-execution-line {
-  margin-bottom: 4px;
-}
-.sp-output-section-title {
-  display: flex;
-  justify-content: space-between;
-  gap: 12px;
-  margin-bottom: 8px;
-  color: #303133;
-  font-size: 12px;
-  font-weight: 600;
-}
-.sp-output-section-title span:last-child {
-  color: #909399;
-  font-weight: 400;
-}
-.sp-output-line {
-  padding: 10px 0;
-  border-top: 1px solid #ebeef5;
-}
+/* 产出块(含作业时间与副产)的样式已随 ProcessOutputTable 子组件迁走 */
 .sp-port-unselected { opacity: 0.58; }
 .sp-port-selection-hint { color: #909399; font-size: 11px; white-space: nowrap; }
-.sp-output-line:first-of-type {
-  border-top: 0;
+
+/*
+  投入紧凑表 (卡片模式)。表格模式的投入本来就在真表格的 td 里, 不需要这一套。
+  列宽与观感对齐 ProcessOutputTable, 免得同一张卡上下两半长得不像一家。
+*/
+.sp-in-table {
+  border: 1px solid #e4e9f2;
+  border-radius: 6px;
+  overflow-x: auto;
+  background: #fff;
 }
-.sp-output-line-head {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin-bottom: 8px;
-  color: #303133;
-  font-size: 12px;
-}
-.sp-output-fields {
+.sp-in-head,
+.sp-in-row {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 8px 12px;
+  grid-template-columns: minmax(180px, 1.6fr) 200px minmax(200px, 1.2fr);
+  align-items: center;
+  gap: 0 10px;
+  min-width: 620px;
 }
-.sp-output-fields > label {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  color: #909399;
+/* 有可选端口时才多出「选用」列 —— 没得选就不占位, 与 showPortSelector 同一条判据 */
+.sp-in-table--sel .sp-in-head,
+.sp-in-table--sel .sp-in-row {
+  grid-template-columns: 56px minmax(180px, 1.6fr) 200px minmax(200px, 1.2fr);
+}
+.sp-in-head {
+  padding: 7px 10px;
+  border-bottom: 1px solid #e4e9f2;
+  background: #f5f7fa;
+  color: #606266;
   font-size: 11px;
   font-weight: 600;
 }
-.sp-output-fields > .sp-output-key-field {
-  color: #1f2937;
+.sp-in-row {
+  padding: 7px 10px;
+  border-top: 1px solid #eef1f6;
+}
+.sp-in-row:first-of-type { border-top: 0; }
+.sp-in-cell {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
   font-size: 12px;
+  color: #303133;
 }
-.sp-output-key-field :deep(.el-input__wrapper) {
-  box-shadow: 0 0 0 1px #7db5ff inset;
-}
-.sp-output-fields :deep(.el-date-editor),
-.sp-output-fields :deep(.el-input-number) {
-  width: 100%;
-}
+.sp-in-cell :deep(.el-select) { min-width: 0; }
+.sp-in-note { color: #909399; font-size: 11px; }
+.sp-required { margin-right: 2px; color: var(--el-color-danger); font-style: normal; font-weight: 700; }
 .sp-inline-input {
   display: flex;
   align-items: center;
@@ -4793,40 +4660,11 @@ defineExpose({ hasUnsavedRows, refreshSharedInventories });
   flex: 1;
   min-width: 0;
 }
-.sp-output-optional {
-  margin-top: 12px;
-  padding-top: 12px;
-  border-top: 1px dashed #dcdfe6;
-}
-.sp-output-optional-title {
-  margin-bottom: 8px;
-  color: #606266;
-  font-size: 11px;
-  font-weight: 600;
-}
-.sp-output-optional-fields {
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-}
-.sp-output-weight-hint {
-  margin-top: 6px;
-  color: #606266;
-  font-size: 11px;
-}
-
-@media (max-width: 1366px) {
-  .sp-execution-line {
-    grid-template-columns: minmax(180px, 1.2fr) repeat(2, minmax(140px, 1fr));
-  }
-  .sp-output-fields {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-}
 @media (max-width: 720px) {
   .sp-card-header,
   .sp-card-submit,
   .sp-port-section-note,
-  .sp-stage-heading,
-  .sp-output-section-title {
+  .sp-stage-heading {
     align-items: flex-start;
     flex-direction: column;
   }
@@ -4837,11 +4675,6 @@ defineExpose({ hasUnsavedRows, refreshSharedInventories });
   .sp-card-field-auto {
     flex: 1 1 100%;
     min-width: 100%;
-  }
-  .sp-output-fields,
-  .sp-output-optional-fields,
-  .sp-execution-line {
-    grid-template-columns: minmax(0, 1fr);
   }
   .sp-card-submit :deep(.el-button) {
     width: 100%;

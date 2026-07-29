@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { mount, flushPromises } from '@vue/test-utils';
 import { nextTick } from 'vue';
@@ -160,6 +162,24 @@ describe('YieldCardTable', () => {
     expect(sortButtons.length).toBeGreaterThan(10);
     expect(sortButtons.some((button) => button.attributes('aria-label')?.includes('连续操作可切换升序和降序'))).toBe(true);
     expect(sortButtons.every((button) => button.attributes('type') === 'button')).toBe(true);
+  });
+
+  it('表头是通栏的，不给每一格套自己的外壳', async () => {
+    getInventoryYieldCard.mockResolvedValue({ data: [] });
+    mount(YieldCardTable, {
+      props: { factoryId: 'F006', planId: 'PLAN-001' },
+      global: { plugins: [ElementPlus], stubs: { teleport: true, transition: false } },
+    });
+    await flushPromises();
+
+    // 客户原话: 每个表头套了独立边框盒子。那个盒子感来自三层叠加 ——
+    // 加深的表头底色、逐格右边框、以及每格一个带 ↕ 的按钮。三层都不要再回来。
+    const source = readFileSync(resolve(__dirname, '../YieldCardTable.vue'), 'utf8');
+    expect(source).not.toContain('--el-table-header-bg-color');
+    expect(source).not.toContain('border-right-color');
+    expect(source).not.toContain('yield-sort-trigger__hint');
+    // 但按钮本身要留着 —— 去掉它就等于把触屏/键盘的排序入口一起去掉了
+    expect(source).toContain(`class: 'yield-sort-trigger'`);
   });
 
   it('explains a genuinely empty plan-wide yield card', async () => {

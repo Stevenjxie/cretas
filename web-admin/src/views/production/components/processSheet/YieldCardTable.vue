@@ -50,6 +50,13 @@ function filterStatus(value: string, row: ProcessSheetInventoryItem): boolean {
   return row.status === value;
 }
 
+/**
+ * 表头仍是一个真按钮 —— 触屏和键盘要有明确的可点区域与名字。
+ *
+ * 但它不再自带任何视觉外壳: 客户反馈「每个表头套了独立边框盒子」, 那个盒子感来自
+ * 加深的表头底色 + 逐格右边框 + 每格一个带 ↕ 的按钮三层叠加。现在按钮完全继承单元格
+ * 的字体与颜色, 排序方向交回 el-table 自己的箭头, 看上去就是生产计划列表那种通栏表头。
+ */
 function sortableHeader({ column }: { column: { label?: string } }) {
   const label = column.label || '本列';
   return h(
@@ -60,10 +67,7 @@ function sortableHeader({ column }: { column: { label?: string } }) {
       'aria-label': `按${label}排序，连续操作可切换升序和降序`,
       title: '点击切换升序和降序',
     },
-    [
-      h('span', label),
-      h('span', { class: 'yield-sort-trigger__hint', 'aria-hidden': 'true' }, '↕'),
-    ],
+    label,
   );
 }
 
@@ -316,22 +320,19 @@ defineExpose({ refresh });
   text-align: right;
 }
 
+/*
+  通栏表头 —— 与生产计划列表 (.business-list-table) 同一套观感。
+  不再覆盖表头底色/字重, 也不再逐格加深右边框: 那三层叠加正是客户说的「独立边框盒子」。
+*/
 .yield-card-table {
-  --el-table-border-color: #dce3ec;
-  --el-table-header-bg-color: #f3f6fa;
-  --el-table-header-text-color: #303846;
-
   :deep(.el-table__header th.el-table__cell) {
     height: 42px;
     padding: 0;
-    font-weight: 650;
-    border-right-color: #d4dce7;
   }
 
   :deep(.el-table__body td.el-table__cell) {
     height: 44px;
     padding: 0;
-    border-right-color: #e0e6ee;
   }
 
   :deep(.el-table__cell .cell) {
@@ -345,15 +346,14 @@ defineExpose({ refresh });
     color: #697586;
   }
 
+  /* 按钮只提供点击热区与无障碍名字, 视觉上完全等同于普通表头文字 */
   :deep(.yield-sort-trigger) {
     display: inline-flex;
     align-items: center;
     justify-content: inherit;
-    gap: 4px;
     min-height: 32px;
     padding: 0;
     border: 0;
-    border-radius: 4px;
     background: transparent;
     color: inherit;
     font: inherit;
@@ -369,12 +369,6 @@ defineExpose({ refresh });
   :deep(.yield-sort-trigger:focus-visible) {
     outline: 2px solid var(--el-color-primary, #409eff);
     outline-offset: 2px;
-  }
-
-  :deep(.yield-sort-trigger__hint) {
-    color: #8a96a6;
-    font-size: 11px;
-    font-weight: 500;
   }
 }
 
