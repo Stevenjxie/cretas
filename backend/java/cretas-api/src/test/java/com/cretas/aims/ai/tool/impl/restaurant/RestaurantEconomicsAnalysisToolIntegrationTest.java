@@ -63,6 +63,17 @@ class RestaurantEconomicsAnalysisToolIntegrationTest {
     private RestaurantShrinkageAnalysisTool shrinkageTool;
     @Mock
     private RestaurantCostRigidityAnalysisTool costRigidityTool;
+    /**
+     * Tiered-delegate gate that now fronts {@code doExecute}. Stubbed to {@code null}
+     * ("Python did not answer") so the Composite runs its own 3-sub-Tool orchestration,
+     * which is what every assertion in this class is about.
+     *
+     * <p>The explicit {@code null} stub is required: Mockito's default answer hands back
+     * an <i>empty Map</i> for {@code Map}-returning methods, which is non-null and would
+     * make {@code doExecute} return that empty map instead of the composed result.
+     */
+    @Mock
+    private TieredIntentDelegate tieredDelegate;
 
     private RestaurantEconomicsAnalysisTool tool;
 
@@ -71,6 +82,12 @@ class RestaurantEconomicsAnalysisToolIntegrationTest {
         tool = new RestaurantEconomicsAnalysisTool(storePnlTool, shrinkageTool, costRigidityTool);
         // AbstractTool.objectMapper is normally @Autowired; inject a real one for the test.
         ReflectionTestUtils.setField(tool, "objectMapper", new ObjectMapper());
+        // @Autowired field on the Tool — without it doExecute NPEs at the delegate gate.
+        ReflectionTestUtils.setField(tool, "tieredDelegate", tieredDelegate);
+        lenient().when(tieredDelegate.tryDelegate(
+                        any(), org.mockito.ArgumentMatchers.anyMap(),
+                        org.mockito.ArgumentMatchers.anyMap(), any()))
+                .thenReturn(null);
 
         // getToolName() is read by the Composite when building synthetic ToolCalls.
         lenient().when(storePnlTool.getToolName()).thenReturn("restaurant_store_pnl_one_pager");

@@ -54,12 +54,51 @@ class RestaurantEconomicsAnalysisToolTest {
     @Mock
     private RestaurantCostRigidityAnalysisTool costRigidityTool;
 
+    /**
+     * Tiered-delegate gate that now fronts {@code doExecute}. Stubbed to {@code null}
+     * ("Python did not answer") in {@link #setUp()} so the Composite runs its own
+     * 3-sub-Tool orchestration, which is what the failure-isolation assertions below
+     * are about; {@link #delegateHit_returnsPythonAnswerVerbatim()} overrides it with a hit.
+     *
+     * <p>The explicit {@code null} stub is required: Mockito's default answer hands back
+     * an <i>empty Map</i> for {@code Map}-returning methods, which is non-null and would
+     * make {@code doExecute} return that empty map instead of the composed result.
+     */
+    @Mock
+    private TieredIntentDelegate tieredDelegate;
+
     private RestaurantEconomicsAnalysisTool tool;
 
     @BeforeEach
     void setUp() throws Exception {
         tool = new RestaurantEconomicsAnalysisTool(storePnlTool, shrinkageTool, costRigidityTool);
         injectField(tool, "objectMapper", objectMapper);
+        // @Autowired field on the Tool — without it doExecute NPEs at the delegate gate.
+        injectField(tool, "tieredDelegate", tieredDelegate);
+        org.mockito.Mockito.lenient().when(tieredDelegate.tryDelegate(
+                        any(), org.mockito.ArgumentMatchers.anyMap(),
+                        org.mockito.ArgumentMatchers.anyMap(), any()))
+                .thenReturn(null);
+    }
+
+    @Test
+    @DisplayName("UT-REA-00: tiered delegate 命中 → 原样返回 Python 答案, 三个子工具不跑")
+    void delegateHit_returnsPythonAnswerVerbatim() throws Exception {
+        Map<String, Object> pythonAnswer = Map.of(
+                "dataAvailable", true,
+                "message", "本月净利率 -3.2%",
+                "tieredDelegate", true);
+        when(tieredDelegate.tryDelegate(
+                org.mockito.ArgumentMatchers.eq(FACTORY_ID),
+                org.mockito.ArgumentMatchers.anyMap(),
+                org.mockito.ArgumentMatchers.anyMap(),
+                org.mockito.ArgumentMatchers.eq("restaurant_economics_analysis")))
+                .thenReturn(pythonAnswer);
+
+        Map<String, Object> result = tool.doExecute(FACTORY_ID, Map.of(), ctx());
+
+        assertThat(result).isEqualTo(pythonAnswer);
+        org.mockito.Mockito.verifyNoInteractions(storePnlTool, shrinkageTool, costRigidityTool);
     }
 
     @Test

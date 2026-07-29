@@ -46,6 +46,19 @@ class RestaurantDishCostQueryToolTest {
     @Mock ProductTypeRepository productTypeRepository;
     @Mock PermissionService permissionService;
     @Mock UserRepository userRepository;
+    /**
+     * Tiered-delegate gate added in front of {@code doExecute} (see
+     * {@link TieredIntentDelegate}).
+     *
+     * <p>It MUST be stubbed to return {@code null} — the "Python did not answer,
+     * run your own flow" signal. Leaving it unstubbed does <b>not</b> work: Mockito's
+     * default answer returns an <i>empty Map</i> for {@code Map}-returning methods,
+     * which is non-null, so {@code doExecute} would return that empty map and every
+     * assertion below would be checking a value the tool never produced.
+     * Stubbing a real payload instead is equally wrong (short-circuits the tool);
+     * the delegate-hit path gets its own dedicated test.
+     */
+    @Mock TieredIntentDelegate tieredDelegate;
 
     private RestaurantDishCostQueryTool tool;
 
@@ -56,6 +69,9 @@ class RestaurantDishCostQueryToolTest {
         ReflectionTestUtils.setField(tool, "productTypeRepository", productTypeRepository);
         ReflectionTestUtils.setField(tool, "permissionService", permissionService);
         ReflectionTestUtils.setField(tool, "userRepository", userRepository);
+        ReflectionTestUtils.setField(tool, "tieredDelegate", tieredDelegate);
+        lenient().when(tieredDelegate.tryDelegate(anyString(), anyMap(), anyMap(), anyString()))
+                .thenReturn(null);
     }
 
     private static ProductType dish(String id, String name) {
@@ -174,13 +190,45 @@ class RestaurantDishCostQueryToolTest {
     }
 
     @Test
+    @DisplayName("tiered delegate 命中 → 直接返回 Python 答案, 不查工厂库")
+    void execute_delegateHit_shortCircuits() throws Exception {
+        Map<String, Object> pythonAnswer = Map.of(
+                "dataAvailable", true,
+                "message", "白卤猪舌 食材成本 ¥12.94",
+                "tieredDelegate", true);
+        when(tieredDelegate.tryDelegate(eq(FID), anyMap(), anyMap(), eq("restaurant_dish_cost_query")))
+                .thenReturn(pythonAnswer);
+
+        Map<String, Object> result = invokeDoExecute(Map.of("productName", "白卤猪舌"), ctx(1L));
+
+        assertEquals(pythonAnswer, result);
+        verifyNoInteractions(productTypeRepository, dishCostCardService);
+    }
+
+    @Test
     @DisplayName("getToolName / getRequiredParameters contract")
     @SuppressWarnings("unchecked")
     void contract() {
         assertEquals("restaurant_dish_cost_query", tool.getToolName());
+        // getRequiredParameters() is intentionally EMPTY: the productName check moved
+        // *behind* the tiered-delegate gate inside doExecute, otherwise a follow-up
+        // like "成本如何" (dish carried by the Python session) would be bounced by the
+        // param validator before the delegate ever ran. The check itself is asserted
+        // by missingProductName_asksForDishName below.
         List<String> required = (List<String>) ReflectionTestUtils.invokeMethod(tool, "getRequiredParameters");
         assertNotNull(required);
-        assertTrue(required.contains("productName"));
+        assertTrue(required.isEmpty(), "productName 校验后移到 doExecute 委派门之后: " + required);
+    }
+
+    @Test
+    @DisplayName("委派未命中 + 无 productName → 反问菜品名 (不抛异常)")
+    void missingProductName_asksForDishName() throws Exception {
+        Map<String, Object> result = invokeDoExecute(new HashMap<>(), ctx(1L));
+
+        String msg = (String) result.get("message");
+        assertNotNull(msg);
+        assertTrue(msg.contains("菜品名称"), "缺 productName 时应反问菜品名: " + msg);
+        verifyNoInteractions(dishCostCardService);
     }
 
     /** Reflective bridge to the protected doExecute. */

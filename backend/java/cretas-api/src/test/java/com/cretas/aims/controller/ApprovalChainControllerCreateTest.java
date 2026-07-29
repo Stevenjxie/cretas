@@ -1,43 +1,36 @@
 package com.cretas.aims.controller;
 
 import com.cretas.aims.dto.approval.CreateApprovalChainConfigRequest;
-import com.cretas.aims.dto.common.ApiResponse;
-import com.cretas.aims.entity.config.ApprovalChainConfig;
 import com.cretas.aims.entity.config.ApprovalChainConfig.DecisionType;
+import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.service.ApprovalChainService;
+import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
-import org.mockito.ArgumentCaptor;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
-import org.mockito.Mockito;
 import org.mockito.junit.jupiter.MockitoExtension;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertNotNull;
-import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
-import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.eq;
-import static org.mockito.Mockito.when;
+import static org.mockito.Mockito.verifyNoInteractions;
 
 /**
- * Rule 17.1 cleanup verification for
- * {@link ApprovalChainController#createConfig} (Issue #384 batch 6 final).
+ * Canvas-cutover guard for {@link ApprovalChainController#createConfig}.
  *
- * <p>Asserts that the Controller correctly:
- * <ol>
- *   <li>Binds {@link CreateApprovalChainConfigRequest} instead of the
- *       {@link ApprovalChainConfig} entity directly (Rule 17.1 anti-pattern fix)</li>
- *   <li>Maps the DTO to the Entity at the controller boundary, leaving
- *       service-owned defaults ({@code requiredApprovers=1}, {@code priority=0},
- *       {@code enabled=true}, {@code version=1}) untouched by the mapper —
- *       single source of truth lives in
- *       {@code ApprovalChainServiceImpl.createConfig}</li>
- *   <li>Service signature unchanged: still receives
- *       {@code (factoryId, ApprovalChainConfig)}</li>
- *   <li>Preserves explicit caller intent for nullable optional fields</li>
- * </ol>
+ * <p><b>History</b>: this class used to verify the Rule 17.1 wire→entity mapper
+ * (Issue #384 batch 6 final) by asserting that {@code POST /approval-chains}
+ * mapped {@link CreateApprovalChainConfigRequest} onto the entity and forwarded
+ * it to {@code ApprovalChainService.createConfig}. That behaviour was removed by
+ * {@code de9d9b9c97 "feat(oa): cut over approvals to canvas runtime" (#1820)}:
+ * legacy approval-chain configs are now <b>read-only</b> and all authoring moved
+ * to the approval canvas runtime (系统设置 → 审批业务). The endpoint is kept only
+ * so old clients get an actionable 410 instead of a 404.
+ *
+ * <p>The mapper assertions were therefore not "failing tests" but tests of a
+ * deleted feature. They are replaced by a cutover guard: re-opening the legacy
+ * write path (accidentally or by revert) must fail this test.
  */
 @ExtendWith(MockitoExtension.class)
 class ApprovalChainControllerCreateTest {
@@ -46,146 +39,57 @@ class ApprovalChainControllerCreateTest {
 
     @InjectMocks ApprovalChainController controller;
 
-    @Test
-    void createConfig_minimumBody_mapperDoesNotOverrideEntityFieldInitializerDefaults() {
-        // Minimum wire body: required fields only.
-        // NO requiredApprovers / priority / enabled (all service-owned defaults).
-        //
-        // Note: ApprovalChainConfig field initializers ({@code requiredApprovers=1,
-        // priority=0, enabled=true, version=1}) DO populate on {@code new
-        // ApprovalChainConfig()} — this is exactly the @Builder.Default leakage
-        // Rule 17.1 isolates from the wire. The DTO mapper MUST NOT overwrite
-        // these fall-through defaults when caller supplies null (otherwise it
-        // would clobber 1→null and force service to re-default on every save,
-        // causing parallel-source-of-truth confusion).
+    private static CreateApprovalChainConfigRequest validRequest() {
         CreateApprovalChainConfigRequest req = new CreateApprovalChainConfigRequest();
         req.setDecisionType(DecisionType.QUALITY_RELEASE);
         req.setName("一级审批 - 质量放行");
         req.setApprovalLevel(1);
         req.setApproverRoles("[\"factory_super_admin\"]");
-
-        ApprovalChainConfig persisted = new ApprovalChainConfig();
-        persisted.setId("config-uuid-001");
-        persisted.setFactoryId("F001");
-        when(approvalChainService.createConfig(eq("F001"), any(ApprovalChainConfig.class)))
-                .thenReturn(persisted);
-
-        ApiResponse<ApprovalChainConfig> resp = controller.createConfig("F001", req);
-
-        ArgumentCaptor<ApprovalChainConfig> captor =
-                ArgumentCaptor.forClass(ApprovalChainConfig.class);
-        Mockito.verify(approvalChainService).createConfig(eq("F001"), captor.capture());
-        ApprovalChainConfig mapped = captor.getValue();
-
-        assertNotNull(resp);
-        assertTrue(Boolean.TRUE.equals(resp.getSuccess()));
-        // Wire-side fields propagated by mapper
-        assertEquals(DecisionType.QUALITY_RELEASE, mapped.getDecisionType());
-        assertEquals("一级审批 - 质量放行", mapped.getName());
-        assertEquals(1, mapped.getApprovalLevel());
-        assertEquals("[\"factory_super_admin\"]", mapped.getApproverRoles());
-        // Mapper sets each field with the wire value (null when absent).
-        // For @Builder.Default fields, the mapper's setXxx(null) call WOULD clobber
-        // the field initializer's value to null — we must verify it does NOT.
-        // Because: c.setRequiredApprovers(r.getRequiredApprovers()) → setter writes
-        // null over the field initializer's 1, but Lombok @Setter accepts null,
-        // so the captured mapped.requiredApprovers ends up null. Then service
-        // re-applies default 1 inside createConfig. Both outcomes are consistent
-        // with Rule 17.1 (service is single source of truth).
-        //
-        // What we MUST verify here: the mapper did not invent any value not on the
-        // wire AND it did not protect against null (which would conflict with the
-        // service's re-default logic).
-        assertNull(mapped.getRequiredApprovers(),
-                "Mapper writes wire-side null, letting service re-apply default 1");
-        assertNull(mapped.getPriority(),
-                "Mapper writes wire-side null, letting service re-apply default 0");
-        assertNull(mapped.getEnabled(),
-                "Mapper writes wire-side null, letting service re-apply default true");
-        // Other optional fields untouched
-        assertNull(mapped.getDescription());
-        assertNull(mapped.getTriggerCondition());
-        assertNull(mapped.getApproverUserIds());
-        assertNull(mapped.getTimeoutMinutes());
-        assertNull(mapped.getEscalationConfigId());
-        assertNull(mapped.getAutoApproveCondition());
-        assertNull(mapped.getAutoRejectCondition());
-        // factoryId is set by service.createConfig from path var, NOT by mapper
-        assertNull(mapped.getFactoryId(),
-                "factoryId is overridden by ApprovalChainServiceImpl.createConfig from path");
-        // id is generated by Hibernate, NOT by mapper
-        assertNull(mapped.getId());
-        // version: mapper does NOT expose `version` field on the DTO (out of scope
-        // for create — auto-incremented on update). The entity field initializer's
-        // value of 1 survives because the mapper never calls setVersion(...).
-        assertEquals(1, mapped.getVersion(),
-                "version field initializer survives mapper (not on DTO surface)");
+        return req;
     }
 
     @Test
-    void createConfig_explicitFields_allPropagatedByMapper() {
-        CreateApprovalChainConfigRequest req = new CreateApprovalChainConfigRequest();
+    @DisplayName("createConfig 已随画布切换下线 → 410 OA_LEGACY_CONFIG_READ_ONLY")
+    void createConfig_legacyWritePathRemoved_throws410() {
+        BusinessException ex = assertThrows(BusinessException.class,
+                () -> controller.createConfig("F001", validRequest()));
+
+        assertEquals(410, ex.getCode(), "legacy 写入路径必须是 410 Gone, 不是 400/404");
+        assertEquals("OA_LEGACY_CONFIG_READ_ONLY", ex.getErrorCode(),
+                "前端按 errorCode 分支引导到审批画布");
+        assertEquals("旧版审批配置已停止编辑", ex.getMessage());
+        assertTrue(ex.getActionHint() != null && ex.getActionHint().contains("审批画布"),
+                "必须给出去画布配置的 actionHint: " + ex.getActionHint());
+    }
+
+    @Test
+    @DisplayName("拒绝发生在服务层之前 — 旧版配置绝不被写库")
+    void createConfig_neverReachesService() {
+        assertThrows(BusinessException.class,
+                () -> controller.createConfig("F001", validRequest()));
+
+        // The whole point of the cutover: no legacy row may be created, so the
+        // controller must fail closed *before* touching the service.
+        verifyNoInteractions(approvalChainService);
+    }
+
+    @Test
+    @DisplayName("合法 body 也一样拒绝 — 不是校验失败, 是能力下线")
+    void createConfig_fullyPopulatedBody_stillRejected() {
+        CreateApprovalChainConfigRequest req = validRequest();
         req.setDecisionType(DecisionType.FORCE_INSERT);
-        req.setName("强制插单 - 二级");
         req.setDescription("跨工序强制插单需要二级审批");
         req.setTriggerCondition("{\"impactLevel\":\"HIGH\"}");
         req.setApprovalLevel(2);
         req.setRequiredApprovers(2);
-        req.setApproverRoles("[\"factory_super_admin\",\"production_manager\"]");
         req.setApproverUserIds("[101,102]");
         req.setTimeoutMinutes(120);
-        req.setEscalationConfigId("escalation-config-001");
-        req.setAutoApproveCondition("{\"autoFlag\":true}");
-        req.setAutoRejectCondition("{\"rejectFlag\":true}");
         req.setPriority(10);
-        req.setEnabled(false);
+        req.setEnabled(true);
 
-        when(approvalChainService.createConfig(eq("F002"), any(ApprovalChainConfig.class)))
-                .thenAnswer(inv -> inv.getArgument(1));
-
-        ApiResponse<ApprovalChainConfig> resp = controller.createConfig("F002", req);
-
-        ArgumentCaptor<ApprovalChainConfig> captor =
-                ArgumentCaptor.forClass(ApprovalChainConfig.class);
-        Mockito.verify(approvalChainService).createConfig(eq("F002"), captor.capture());
-        ApprovalChainConfig mapped = captor.getValue();
-
-        assertNotNull(resp);
-        assertEquals(DecisionType.FORCE_INSERT, mapped.getDecisionType());
-        assertEquals("强制插单 - 二级", mapped.getName());
-        assertEquals("跨工序强制插单需要二级审批", mapped.getDescription());
-        assertEquals("{\"impactLevel\":\"HIGH\"}", mapped.getTriggerCondition());
-        assertEquals(2, mapped.getApprovalLevel());
-        assertEquals(2, mapped.getRequiredApprovers());
-        assertEquals("[\"factory_super_admin\",\"production_manager\"]", mapped.getApproverRoles());
-        assertEquals("[101,102]", mapped.getApproverUserIds());
-        assertEquals(120, mapped.getTimeoutMinutes());
-        assertEquals("escalation-config-001", mapped.getEscalationConfigId());
-        assertEquals("{\"autoFlag\":true}", mapped.getAutoApproveCondition());
-        assertEquals("{\"rejectFlag\":true}", mapped.getAutoRejectCondition());
-        assertEquals(10, mapped.getPriority());
-        // Explicit enabled=false preserved — service-owned default true NOT clobbering
-        assertEquals(false, mapped.getEnabled());
-    }
-
-    @Test
-    void createConfig_responseEnvelope_successTrueDataPresent() {
-        CreateApprovalChainConfigRequest req = new CreateApprovalChainConfigRequest();
-        req.setDecisionType(DecisionType.QUALITY_RELEASE);
-        req.setName("Test");
-        req.setApprovalLevel(1);
-        req.setApproverRoles("[\"factory_super_admin\"]");
-
-        ApprovalChainConfig persisted = new ApprovalChainConfig();
-        persisted.setId("config-uuid-001");
-        when(approvalChainService.createConfig(eq("F001"), any(ApprovalChainConfig.class)))
-                .thenReturn(persisted);
-
-        ApiResponse<ApprovalChainConfig> resp = controller.createConfig("F001", req);
-
-        assertNotNull(resp);
-        assertTrue(Boolean.TRUE.equals(resp.getSuccess()));
-        assertEquals("审批链配置创建成功", resp.getMessage());
-        assertEquals(persisted, resp.getData());
+        BusinessException ex = assertThrows(BusinessException.class,
+                () -> controller.createConfig("F002", req));
+        assertEquals(410, ex.getCode());
+        verifyNoInteractions(approvalChainService);
     }
 }
