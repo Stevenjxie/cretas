@@ -30,8 +30,15 @@ cd ../cretas-<task>
 ```bash
 ./scripts/deploy/publish-main-fastlane.sh \
   --base-sha <ACTIVE 登记的 origin/main SHA> \
-  --confirm YES-DIRECT-MAIN
+  --confirm YES-DIRECT-MAIN \
+  --task-id <本批任务 ID>          # 非 docs 批次必带, 见下
 ```
+
+⚠️ **非 docs 批次必须带 `--task-id <任务ID>`**：ACTIVE 台账常驻 30+ 条他人在飞任务，
+不传 `--task-id` 时门禁要求「全局零未完成任务」，这个条件实际上永远不成立 →
+任何非 docs 直推都会被拒，只能退回 PR。`--task-id` 把门禁收窄成「**你自己这条**已归档」，
+与门禁本意一致（协调者在同一 commit 归档自己的批次），且不放松对自己的要求 ——
+自己那条仍挂 `queued`/`claimed`/`in-progress`/`review`/`blocked` 照样拦。
 
 必须同时满足：clean `codex/*` worktree、HEAD 线性后继于登记 base、最终 commit 已归档 ACTIVE 并释放全部 scope、目标验证通过、推送前 fetch 后 `origin/main` 仍等于 base。脚本只做非 force fast-forward push；任一失败必须回到一次 PR，不得手工强推。高风险文件默认仍要 PR；用户对本次高风险直发明确授权且所需门禁已通过时，才可增加 `--allow-high-risk YES-HIGH-RISK-REVIEWED`。
 
