@@ -2,9 +2,12 @@
 # ============================================================
 # Mall 后端部署脚本 v1.0
 # 与 deploy-backend.sh 相同的 winner 竞速上传模式
-# 用法: ./deploy-mall-backend.sh
+# 用法: ./scripts/deploy/deploy-mall-backend.sh  (路径自解析, 从任意 cwd 调用均可)
 # ============================================================
 set -e
+# pipefail 是刚性要求: Step 1 之外仍有 `md5sum | cut` 等管道, 没有它时管道退出码只取
+# 最后一段, 前段失败被完全吞掉 (本脚本历史上正是这样把 Maven 失败吞成"部署成功")。
+set -o pipefail
 
 # ==================== 配置 ====================
 SERVER="root@139.196.165.140"
@@ -36,17 +39,34 @@ warn()  { echo -e "\033[1;33m[WARN]\033[0m $1"; }
 error() { echo -e "\033[0;31m[ERROR]\033[0m $1"; exit 1; }
 
 # 项目根目录
-PROJECT_ROOT="$(cd "$(dirname "$0")" && pwd)"
+# 本脚本位于 <repo>/scripts/deploy/, 往上两级才是仓库根 —— LOCAL_PROJECT (MallCenter/...)
+# 挂在仓库根下, 之前 PROJECT_ROOT 只取 dirname 得到 scripts/deploy, Step 1 的 cd 必失败。
+# 与 deploy-backend.sh / deploy-web-admin.sh / release-cretas.sh 同一写法。
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 # ssh_local_path: Windows 盘符路径会被 rsync/scp 当成主机名, 传输直接失败。
-# 注意 PROJECT_ROOT 在本脚本里其实是 scripts/deploy 目录, 所以往上两级取仓库根。
-source "$(cd "$(dirname "$0")/../.." && pwd)/scripts/lib/deploy-common.sh"
+source "${PROJECT_ROOT}/scripts/lib/deploy-common.sh"
 LOCAL_PROJECT_ABS="${PROJECT_ROOT}/${LOCAL_PROJECT}"
 
 # ==================== Step 1: Maven 打包 ====================
 info "Step 1/4: Maven 打包..."
-cd "${LOCAL_PROJECT_ABS}"
-JAVA_HOME="${JAVA_HOME_PATH}" ./mvnw.cmd package -DskipTests -pl logistics-admin -am -q 2>&1 | tail -5
+cd "${LOCAL_PROJECT_ABS}" || error "找不到 Mall 工程目录: ${LOCAL_PROJECT_ABS}"
 JAR_PATH="${LOCAL_PROJECT_ABS}/logistics-admin/target/${JAR_NAME}"
+BUILD_LOG="${UPLOAD_STATUS_DIR}/maven-build.log"
+
+# 两处刻意的改动, 都是为了堵"静默部署陈旧 JAR":
+#   1. 不再把 Maven 管进 `tail -5` —— 退出码写进日志文件后显式判定, 且失败时能看到
+#      40 行而不是 5 行上下文 (管道 + tail 会把真正的编译错误挤掉)。
+#   2. 加 `clean` —— 不带 clean 时 target/ 里上一次的 JAR 在编译失败后原地留存,
+#      下面的存在性检查照样通过, 旧代码就被当新版部上去。clean 同时防 incremental
+#      cache 漏掉新增的 Controller/DTO 签名 (deploy-backend.sh R25 同因加固)。
+#      代价是每次全量编译, 对一年跑几次的 Mall 发布是划算的买卖。
+if ! JAVA_HOME="${JAVA_HOME_PATH}" ./mvnw.cmd clean package -DskipTests -pl logistics-admin -am -q >"$BUILD_LOG" 2>&1; then
+    echo "--- Maven 输出 (末 40 行) ---"
+    tail -40 "$BUILD_LOG" 2>/dev/null || true
+    error "Maven 打包失败, 已终止部署 (未上传任何 JAR)"
+fi
+tail -5 "$BUILD_LOG" 2>/dev/null || true
 
 if [ ! -f "$JAR_PATH" ]; then
     error "JAR 未生成: $JAR_PATH"
