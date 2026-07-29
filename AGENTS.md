@@ -8,11 +8,21 @@
 - 路由必须分别给出“能力下限”和“预计执行形态”：短突发任务仅包含一个明确步骤，预计不超过 3 个模型回合且不涉及等待/多阶段/compact；其余自动化、持续排查、多阶段实现、测试/CI/发布等待或预计超过 3 个模型回合的任务均按持续任务处理。
 - 短突发任务中，当前 effort 等于推荐值或高一档均视为匹配；持续任务中，只有当前 effort 等于推荐的“常驻 Effort”才视为匹配。低于能力下限永远不匹配；持续任务使用更高 effort 也不匹配，因为会在多轮上下文中放大 usage。
 - 当前设置匹配时要明确说明“无需切换”，随后直接开始执行；设置不匹配或无法观察时，开始编辑、测试、长时间研究、状态变更或部署前必须要求用户完成切换并确认，确认前只允许路由所需的最小只读检查。
-- 若不匹配是在任务进行中才出现（例如短任务扩展、首次 compact 或关卡结束），不得丢弃正在完成的原子步骤；先保存证据和当前状态，在下一个不会破坏一致性、部署或测试进程的安全停点给出 handoff/切换提示，然后暂停等待。
+- 若不匹配是在任务进行中才出现（例如短任务扩展、首次 compact 或关卡结束），不得丢弃正在完成的原子步骤；先保存证据和当前状态，在下一个不会破坏一致性、部署或测试进程的安全停点给出 handoff/切换提示，然后按下述 Goal-aware 规则暂停或续接。
 - Extra High/XHigh 是阶段性关卡能力，不是“复杂任务全程档位”。只有未解决的架构歧义、安全/权限边界、不可逆迁移、数据一致性裁决或 High 已认真尝试仍未收敛时，才可为一个有明确结束条件的决策阶段升级；进入搜索、实现、测试、PR、CI、部署等待或重复工具循环前必须降回常驻 Effort。
 - “涉及多个模块”“需要设计”“要开 PR”“生产环境”“任务很长”都不能单独成为 Extra High/XHigh 理由。优先依赖范围隔离、测试、预览、真实 JPA Context、发布门禁和回滚降低风险，再选择最低充分 effort。
 - 任务范围、风险、预计回合数或工作阶段发生实质变化时必须重新路由；尤其是短任务扩展为持续任务、首次 compact、启动子代理或从分析转入长时间执行时。重新路由遵守上面的安全停点规则。
 - 如推荐外部 Claude Fable 5，必须在同一回复直接附上针对当前任务写好的、可完整粘贴到 Claude Code 的 Prompt 与回交要求；禁止只给出模型/effort 建议、Prompt 大纲或要求用户另行索取 Prompt。
+
+### Goal-aware Usage and Task Continuation
+
+- 在因 effort、usage、compact 或上下文压力准备暂停前，必须先调用 `get_goal`；只有工具返回未完成的 ACTIVE Goal 才适用本节，不能仅凭 Prompt 中出现 “Goal” 字样推断。
+- 没有 ACTIVE Goal 时沿用普通门禁：在安全停点交付 handoff，等待用户切换 effort 或创建新 task。
+- 有 ACTIVE Goal 时，effort 过度配置、50% usage 提醒、compact 或需要换 task 都不能终止 Goal，也不得要求用户重复确认原 Goal 已覆盖的权限。约 50% usage 只提醒一次并继续；达到约 80% usage、完成第 2 次 compact，或继续下一阶段很可能再次 compact 时，在安全停点自动续接。
+- 自动续接必须创建**全新 task 并自动派发 handoff**，不能 fork 全量历史来制造同等上下文负担，也不能对 calling task 使用不支持的 self-handoff。先调用 `list_projects` 解析当前项目，再把完整 continuation packet 直接作为 `create_thread.prompt` 创建 task；该调用同时创建操作区 task、发送首条 handoff 并启动执行，不要求用户复制粘贴。Git 项目默认使用 worktree，未提交状态使用 `startingState: working-tree`，状态已提交且目标 branch/ref 明确时可使用该 branch/ref。只有用户在 Goal 中明确指定模型或 effort 时才把该设置传给新 task，否则让新 task 启动后按本路由器重新判断。
+- 自动发送给新 task 的 continuation packet 至少包含：原 Goal 的精确 objective 与显式 token budget（如有）、当前完成/未完成项、repository/worktree/branch/HEAD/Base SHA、dirty 状态、修改文件、验证证据、正在等待的外部状态、授权与生产/租户边界、当前阻塞、推荐的下一动作和禁止重做项。新 task 必须先调用 `get_goal`；若未继承 Goal，则按用户本节的预授权用完全相同的 objective 和 budget 调用 `create_goal`，不得扩大范围。
+- `create_thread` 返回 `threadId` 时必须用一次有界 `wait_threads` 确认新 task 已开始或已请求关注；返回 `clientThreadId` 表示 worktree 正在排队创建，可直接作为已派发状态展示。只有取得其中一种确认后，原 task 才可停止并展示 created-task 链接；创建失败、项目状态无法安全复制或存在不可中断的测试/部署/事务时，留在当前 task 继续 Goal，并在下一个安全停点重试。不得把 Goal 标记为 complete/blocked 来模拟 handoff。
+- 自动续接是所有权转移，不是并行扩容：新 task 创建后，原 task 不再继续修改同一 scope；dispatch/ACTIVE owner、scope 锁和运行中进程必须在 continuation packet 中明确交接。Goal 暂停时不得创建或唤醒 continuation task。
 
 This file provides guidance to Codex when working with this repository.
 
