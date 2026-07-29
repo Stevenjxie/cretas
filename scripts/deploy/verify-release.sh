@@ -99,12 +99,33 @@ check_backend() {
     printf 'BACKEND_PORT=%s\n' "$port"
     printf 'BACKEND_UPSTREAM=%s\n' "47.100.235.168:$port"
     printf 'BACKEND_SERVICE=%s\n' "$service"
-    ssh "$BACKEND_HOST" "systemctl is-active '$service'" | grep -qx active
-    ssh "$BACKEND_HOST" "curl -fsS --max-time 10 http://localhost:$port/api/mobile/health" >/dev/null
-    printf 'BACKEND_HEALTH=pass\n'
-
+    # 这三项检查都落在同一台主机上, 但原先分三次 ssh, 每次都要付一次跨境握手
+    # (实测约 3.9s)。合并成一次连接后在远端顺序执行, 用不同退出码区分是哪一项
+    # 失败 —— 比原先 set -e 静默中止更容易定位。
+    local marker_check="" rc=0
     if [[ -n "$BACKEND_MARKER" ]]; then
-        ssh "$BACKEND_HOST" "unzip -p '$DEPLOYED_JAR_PATH' | grep -aFq -- '$BACKEND_MARKER'"
+        marker_check="unzip -p '$DEPLOYED_JAR_PATH' | grep -aFq -- '$BACKEND_MARKER' || exit 12"
+    fi
+
+    ssh "$BACKEND_HOST" "
+        systemctl is-active '$service' | grep -qx active || exit 10
+        curl -fsS --max-time 10 http://localhost:$port/api/mobile/health >/dev/null || exit 11
+        $marker_check
+    " || {
+        rc=$?
+        case "$rc" in
+            10) echo "BACKEND_SERVICE_NOT_ACTIVE=$service" >&2 ;;
+            11) echo "BACKEND_HEALTH=fail" >&2 ;;
+            12) echo "BACKEND_MARKER=fail" >&2 ;;
+            *)  echo "BACKEND_PROBE_FAILED rc=$rc" >&2 ;;
+        esac
+        return "$rc"
+    }
+
+    printf 'BACKEND_HEALTH=pass\n'
+    # 注意: 这里必须用 if 而不是 `[[ ... ]] && printf`。后者在 marker 为空时整条
+    # 语句返回 1, 在 set -e 下会让函数直接失败 —— 一个"没配 marker"就把发布判死。
+    if [[ -n "$BACKEND_MARKER" ]]; then
         printf 'BACKEND_MARKER=pass\n'
     fi
 }
