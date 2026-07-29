@@ -524,6 +524,7 @@ async def lifespan(app: FastAPI):
 
             import httpx as _httpx_p
 
+            from smartbi.api import platform_callback as _platform_callback_mod
             from smartbi.config import get_pg_pool as _get_pool_p
             from smartbi.ingestion.platforms.framework import sync_all
             from smartbi.ingestion.platforms.keruyun import KeruyunAdapter
@@ -551,6 +552,10 @@ async def lifespan(app: FastAPI):
                         # 禁降级: 没配上游地址就别装作在同步, 明确停掉并留下日志。
                         logger.error("[platform-sync] PLATFORM_MOCK_BASE_URL 未配置, 循环不启动")
                         return
+                    # 回调端点验完签就 set 这个 Event, 让本轮等待立刻结束。
+                    # 只在 leader 上注册 —— 拉取循环只在 leader 上跑。
+                    wakeup = _asyncio_p.Event()
+                    _platform_callback_mod.register_wakeup(wakeup)
                     async with _httpx_p.AsyncClient() as client:
                         adapters = [KeruyunAdapter(
                             base_url,
@@ -572,7 +577,15 @@ async def lifespan(app: FastAPI):
                                 # exception() 而非 error(): 这个循环要跑几周,
                                 # 只留一行异常字符串会让排查无从下手。
                                 logger.exception("[platform-sync] 本轮失败")
-                            await _asyncio_p.sleep(interval)
+                            # 等回调或等超时, 谁先到算谁。回调在本轮同步期间到达时
+                            # Event 已是 set 态, 下面这句立刻返回 → 紧接着再拉一轮,
+                            # 所以同步窗口内的通知不会被漏掉。
+                            try:
+                                await _asyncio_p.wait_for(wakeup.wait(), timeout=interval)
+                                wakeup.clear()
+                                logger.info("[platform-sync] 被回调唤醒, 提前拉取")
+                            except (_asyncio_p.TimeoutError, TimeoutError):
+                                pass
                 except _asyncio_p.CancelledError:
                     raise
                 except Exception:

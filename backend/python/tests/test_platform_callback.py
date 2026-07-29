@@ -283,6 +283,95 @@ def test_白名单为空必须喊出来(client, caplog):
     assert len(hits) == 1, "应当只喊一次, 不能每个请求刷屏"
 
 
+# ── 回调 → 唤醒拉取循环 ─────────────────────────────────────────────
+
+def test_合法回调唤醒拉取循环(client):
+    import asyncio
+
+    from smartbi.api import platform_callback
+
+    event = asyncio.Event()
+    platform_callback.register_wakeup(event)
+    try:
+        body = b'{"maxSeq":3}'
+        assert client.post("/api/platform-callback/keruyun", content=body,
+                           headers=_headers(body, nonce="wake-1")).status_code == 200
+        assert event.is_set(), "验签通过的回调必须唤醒拉取循环, 否则回调等于没有"
+    finally:
+        platform_callback.register_wakeup(None)
+
+
+def test_验签失败不唤醒(client):
+    """没鉴权的流量不能驱动我们去打上游 —— 那是一个免费的放大器。"""
+    import asyncio
+
+    from smartbi.api import platform_callback
+
+    event = asyncio.Event()
+    platform_callback.register_wakeup(event)
+    try:
+        body = b"{}"
+        assert client.post("/api/platform-callback/keruyun", content=body,
+                           headers=_headers(body, nonce="wake-2", secret="wrong")
+                           ).status_code == 401
+        assert not event.is_set()
+    finally:
+        platform_callback.register_wakeup(None)
+
+
+def test_未注册唤醒时回调照常成功(client):
+    """follower 进程没有拉取循环, `_WAKEUP` 是 None —— 不能因此 500。"""
+    from smartbi.api import platform_callback
+
+    platform_callback.register_wakeup(None)
+    body = b"{}"
+    assert client.post("/api/platform-callback/keruyun", content=body,
+                       headers=_headers(body, nonce="wake-3")).status_code == 200
+
+
+def test_唤醒让等待提前结束():
+    """循环的等待语义: 谁先到算谁 —— 回调到了就不该等满一个周期。
+
+    直接验 wait_for(event.wait(), timeout=interval) 这个组合, 而不是验
+    main.py 里那段代码本身(它嵌在 lifespan 里没法单独调用)。
+    """
+    import asyncio
+
+    async def scenario():
+        wakeup = asyncio.Event()
+        loop = asyncio.get_running_loop()
+        started = loop.time()
+        loop.call_later(0.05, wakeup.set)          # 模拟 50ms 后来了个回调
+        try:
+            await asyncio.wait_for(wakeup.wait(), timeout=30)   # interval=30s
+            wakeup.clear()
+            woken = True
+        except (asyncio.TimeoutError, TimeoutError):
+            woken = False
+        return woken, loop.time() - started, wakeup.is_set()
+
+    woken, elapsed, still_set = asyncio.run(scenario())
+    assert woken is True
+    assert elapsed < 5, f"应被唤醒而不是等满 30s, 实际等了 {elapsed:.2f}s"
+    assert still_set is False, "clear() 必须复位, 否则下一轮会空转"
+
+
+def test_同步期间到达的回调不丢():
+    """回调在同步进行中到达 → Event 已是 set 态 → 下一次 wait 立刻返回。"""
+    import asyncio
+
+    async def scenario():
+        wakeup = asyncio.Event()
+        wakeup.set()                               # 同步期间就被 set 了
+        loop = asyncio.get_running_loop()
+        started = loop.time()
+        await asyncio.wait_for(wakeup.wait(), timeout=30)
+        wakeup.clear()
+        return loop.time() - started
+
+    assert asyncio.run(scenario()) < 1, "同步窗口内到达的通知不能被漏掉"
+
+
 def test_回调路径在PUBLIC_PATHS里():
     """PUBLIC_PATHS 缺这条 → 外部平台带不了我们的 JWT, 回调永远 401。
 

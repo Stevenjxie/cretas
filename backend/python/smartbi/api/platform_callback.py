@@ -8,6 +8,7 @@
 """
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import hmac
 import logging
@@ -33,6 +34,27 @@ SUPPORTED_PLATFORMS = {"keruyun"}
 # 回调 = 一年 50 万条)。用复合键不削弱防重放: 签名覆盖 timestamp, 换个
 # ts 重放就得重新签名, 拿不到密钥就签不出来。
 _SEEN_NONCES: Set[str] = set()
+
+
+# 拉取循环注册进来的唤醒信号。回调验完签就 set 它, 循环立刻醒来拉一轮,
+# 把延迟从「最多一个轮询周期」压到接近实时; 没有回调时循环仍按周期兜底。
+#
+# ⚠️ 进程内信号, 只有注册过的那个进程能被唤醒。多 worker 部署时回调可能落在
+# follower 上(那里没有拉取循环, `_WAKEUP` 是 None), 这次就唤不醒 —— 兜底轮询
+# 照常工作, 所以最坏退化成「和没有回调一样」, 不会丢数据。要跨进程唤醒得走
+# Redis pub/sub 或 DB 通知, 不在本计划范围。
+_WAKEUP: Optional["asyncio.Event"] = None
+
+
+def register_wakeup(event: Optional["asyncio.Event"]) -> None:
+    """由拉取循环在启动时调用(只在 leader 上)。传 None 表示注销。"""
+    global _WAKEUP
+    _WAKEUP = event
+
+
+def _signal_wakeup() -> None:
+    if _WAKEUP is not None:
+        _WAKEUP.set()
 
 
 class CallbackRejected(RuntimeError):
@@ -181,6 +203,8 @@ async def receive_callback(platform: str, request: Request):
         logger.warning("[callback] 拒绝: %s", exc)
         return _reject(401, str(exc))
 
-    # 只当触发器: 不解析业务数据, 交给拉取循环去拿。
+    # 只当触发器: 不解析业务数据, 唤醒拉取循环让它自己去拿。
+    # 回调丢了也不要紧 —— 循环的周期兜底和它指向同一个幂等写入。
     logger.info("[callback] %s 通知有新数据", platform)
+    _signal_wakeup()
     return {"success": True, "message": "ok", "data": {"platform": platform}}
