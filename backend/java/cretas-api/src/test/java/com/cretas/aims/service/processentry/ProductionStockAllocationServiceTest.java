@@ -12,6 +12,8 @@ import com.cretas.aims.repository.MaterialBatchRepository;
 import com.cretas.aims.repository.ProductionInputAllocationRepository;
 import com.cretas.aims.repository.ProductionPlanRepository;
 import com.cretas.aims.service.factory.WarehouseResolver;
+import com.cretas.aims.service.unit.UnitContractService;
+import com.cretas.aims.service.unit.UnitNormalizationResult;
 import com.cretas.aims.service.processentry.ProductionStockShortageException;
 import com.cretas.aims.service.processentry.impl.ProductionStockAllocationServiceImpl;
 import org.junit.jupiter.api.BeforeEach;
@@ -26,6 +28,7 @@ import java.util.List;
 import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.assertj.core.api.Assertions.tuple;
 import static org.mockito.Mockito.lenient;
@@ -43,12 +46,31 @@ class ProductionStockAllocationServiceTest {
     @Mock
     private WarehouseResolver warehouseResolver;
 
+    @Mock
+    private UnitContractService unitContractService;
+
     private ProductionStockAllocationService service;
 
     @BeforeEach
     void setUp() {
         service = new ProductionStockAllocationServiceImpl(
-                materialBatchRepository, allocationRepository, productionPlanRepository, warehouseResolver);
+                materialBatchRepository, allocationRepository, productionPlanRepository,
+                warehouseResolver, unitContractService);
+        // 模拟全局单位契约: 只/个/件/pcs 同归 pcs; 千克/公斤同归 kg
+        lenient().when(unitContractService.normalize(anyString(), anyString())).thenAnswer(call -> {
+            String raw = call.getArgument(1);
+            String code = switch (raw.trim().toLowerCase(java.util.Locale.ROOT)) {
+                case "kg", "千克", "公斤" -> "kg";
+                case "g", "克" -> "g";
+                case "只", "个", "件", "pcs" -> "pcs";
+                case "袋", "bag" -> "bag";
+                case "盒", "box" -> "box";
+                case "箱", "case" -> "case";
+                case "片", "slice" -> "slice";
+                default -> null;
+            };
+            return new UnitNormalizationResult(raw, code, null);
+        });
         lenient().when(productionPlanRepository.findByIdAndFactoryId("PLAN-1", "F006"))
                 .thenReturn(Optional.of(factorySuppliedPlan()));
     }
@@ -476,7 +498,7 @@ class ProductionStockAllocationServiceTest {
         // 数量不被折算; 本服务的 canonicalNativeUnit 对未登记单位原样返回,
         // 所以分配记录里就是用户配的「只」而不是归一后的 pcs
         assertThat(result).extracting(ProductionStockAllocationService.PlannedAllocation::unit)
-                .containsOnly("只");
+                .containsOnly("pcs");
     }
 
     @Test
@@ -495,7 +517,7 @@ class ProductionStockAllocationServiceTest {
                 .extracting(error -> ((ProductionStockShortageException) error).getShortage())
                 .satisfies(shortage -> {
                     ProductionStockShortageDTO dto = (ProductionStockShortageDTO) shortage;
-                    assertThat(dto.getUnit()).isEqualTo("只");
+                    assertThat(dto.getUnit()).isEqualTo("pcs");
                     assertThat(dto.getShortage()).isEqualByComparingTo("5");
                 });
     }
@@ -521,6 +543,45 @@ class ProductionStockAllocationServiceTest {
                 .containsOnly("kg");
         assertThat(result).extracting(ProductionStockAllocationService.PlannedAllocation::quantity)
                 .containsExactly(new BigDecimal("2"));
+    }
+
+    @Test
+    void synonymCountUnitsMatchAcrossInputAndStock() {
+        // 事故现场: 投料单位「只」、库存批次存的是 pcs。
+        // 旧本地 switch 把它们分别算成 只 / slice, 于是明明有 201 只库存
+        // 却报 "需要 1slice, 可用 0slice"。同义单位必须只有一套 code。
+        ProcessSheetRowRequest.MaterialInputTotal input = countedTotal("RAW-CHICKEN", "201");
+        MaterialBatch pcsBatch = batch("B-PCS", "RAW-CHICKEN", "WKS-1", "300", LocalDate.of(2026, 7, 20));
+        pcsBatch.setQuantityUnit("pcs");
+
+        when(warehouseResolver.resolveWorkshopId("F006")).thenReturn("WKS-1");
+        when(materialBatchRepository.findAvailableBatchesFEFOByWarehouseForUpdate(
+                "F006", "RAW-CHICKEN", "WKS-1"))
+                .thenReturn(List.of(pcsBatch));
+        when(allocationRepository.sumPendingQuantityByMaterialBatchId("F006", "B-PCS"))
+                .thenReturn(BigDecimal.ZERO);
+
+        List<ProductionStockAllocationService.PlannedAllocation> result =
+                service.plan("F006", "PLAN-1", List.of(input));
+
+        assertThat(result).extracting(ProductionStockAllocationService.PlannedAllocation::quantity)
+                .containsExactly(new BigDecimal("201"));
+    }
+
+    @Test
+    void countUnitStillDoesNotEatABagBatch() {
+        // 袋 是另一个单位(一袋几只是另一层换算, 配置里没有), 不能混用
+        ProcessSheetRowRequest.MaterialInputTotal input = countedTotal("RAW-CHICKEN", "5");
+        MaterialBatch bagBatch = batch("B-BAG", "RAW-CHICKEN", "WKS-1", "800", LocalDate.of(2026, 7, 20));
+        bagBatch.setQuantityUnit("袋");
+
+        when(warehouseResolver.resolveWorkshopId("F006")).thenReturn("WKS-1");
+        when(materialBatchRepository.findAvailableBatchesFEFOByWarehouseForUpdate(
+                "F006", "RAW-CHICKEN", "WKS-1"))
+                .thenReturn(List.of(bagBatch));
+
+        assertThatThrownBy(() -> service.plan("F006", "PLAN-1", List.of(input)))
+                .isInstanceOf(ProductionStockShortageException.class);
     }
 
     private static ProcessSheetRowRequest.MaterialInputTotal countedTotal(
