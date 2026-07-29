@@ -69,7 +69,14 @@ public class ProductionStockAllocationServiceImpl implements ProductionStockAllo
         for (ProcessSheetRowRequest.MaterialInputTotal input : materialInputTotals) {
             validateInput(input);
             String materialTypeId = input.getMaterialTypeId().trim();
-            BigDecimal required = reportingQuantityToKg(input.getQuantity(), input.getUnit());
+            // 质量单位自动换算成 kg; 其他量纲(只/件/袋…)按 Workflow 端口声明的单位原样记账。
+            // 强行把计数单位折成 kg 需要一个"每只多少公斤"的口径, 那是配置里没有的东西。
+            String inputUnit = canonicalNativeUnit(normalizeUnit(input.getUnit()));
+            boolean massInput = isCanonicalMassUnit(inputUnit);
+            String allocationUnit = massInput ? KG : inputUnit;
+            BigDecimal required = massInput
+                    ? reportingQuantityToKg(input.getQuantity(), input.getUnit())
+                    : input.getQuantity();
             List<MaterialBatch> batches = batchesByMaterial.computeIfAbsent(
                     materialTypeId,
                     key -> findEligibleBatchesForUpdate(factoryId, plan, key, workshopId));
@@ -79,12 +86,20 @@ public class ProductionStockAllocationServiceImpl implements ProductionStockAllo
             for (MaterialBatch batch : batches) {
                 ProductionInventoryOwnershipGuard.assertMaterialBatchAllowed(
                         plan, batch, "生产报工投料");
+                // 非质量单位不做跨单位折算, 只吃单位一致的批次 —— 与 BOM 自动投料同一口径
+                String batchUnit = canonicalNativeUnit(batch.getQuantityUnit());
+                if (massInput ? !isCanonicalMassUnit(batchUnit)
+                        : !Objects.equals(inputUnit, batchUnit)) {
+                    continue;
+                }
                 BigDecimal available = availableByBatch.computeIfAbsent(batch.getId(), ignored -> {
                     BigDecimal pending = nz(allocationRepository
                             .sumPendingQuantityByMaterialBatchId(factoryId, batch.getId()));
-                    BigDecimal stockKg = storageQuantityToKg(
-                            nz(batch.getCurrentQuantity()), batch.getQuantityUnit(), batch.getBatchNumber());
-                    return stockKg.subtract(pending).max(BigDecimal.ZERO);
+                    BigDecimal stock = massInput
+                            ? storageQuantityToKg(
+                                    nz(batch.getCurrentQuantity()), batch.getQuantityUnit(), batch.getBatchNumber())
+                            : nz(batch.getCurrentQuantity());
+                    return stock.subtract(pending).max(BigDecimal.ZERO);
                 });
                 if (available.signum() <= 0) {
                     continue;
@@ -98,7 +113,7 @@ public class ProductionStockAllocationServiceImpl implements ProductionStockAllo
                             batch.getBatchNumber(),
                             workshopId,
                             take,
-                            KG,
+                            allocationUnit,
                             allocationOrder++,
                             input.getWorkflowPortId(),
                             input.getMaterialNodeId()));
@@ -117,7 +132,7 @@ public class ProductionStockAllocationServiceImpl implements ProductionStockAllo
                         required,
                         availableForInput,
                         remaining,
-                        KG));
+                        allocationUnit));
             }
         }
 
@@ -132,10 +147,23 @@ public class ProductionStockAllocationServiceImpl implements ProductionStockAllo
                     .map(ProductionStockShortageDTO.Item::getShortage)
                     .reduce(BigDecimal.ZERO, BigDecimal::add);
             throw new ProductionStockShortageException(new ProductionStockShortageDTO(
-                    required, available, shortage, KG, List.copyOf(shortageItems)));
+                    required, available, shortage,
+                    aggregateShortageUnit(shortageItems), List.copyOf(shortageItems)));
         }
 
         return List.copyOf(allocations);
+    }
+
+    /**
+     * 汇总口径的单位。多个物料单位不一致时(比如一道工序同时投「只」和 kg), 数值相加本就
+     * 没有物理意义, 汇总单位留空让前端只展示明细行, 而不是随便标一个 kg 让人误读。
+     */
+    private String aggregateShortageUnit(List<ProductionStockShortageDTO.Item> items) {
+        Set<String> units = items.stream()
+                .map(ProductionStockShortageDTO.Item::getUnit)
+                .filter(Objects::nonNull)
+                .collect(Collectors.toCollection(LinkedHashSet::new));
+        return units.size() == 1 ? units.iterator().next() : null;
     }
 
     @Override
@@ -526,10 +554,10 @@ public class ProductionStockAllocationServiceImpl implements ProductionStockAllo
                     .withCode("PRODUCTION_INPUT_QUANTITY_INVALID")
                     .withHintTarget("投料量");
         }
-        if (!isMassStorageUnit(normalizeUnit(input.getUnit()))) {
-            throw new BusinessException(400, "生产投料总量单位必须为可换算的质量单位")
-                    .withCode("PRODUCTION_INPUT_UNIT_INVALID")
-                    .withHint("当前支持 g/kg（含克、千克、公斤），单位由 Workflow 投入端口固定")
+        if (canonicalNativeUnit(normalizeUnit(input.getUnit())) == null) {
+            throw new BusinessException(400, "生产投料总量缺少计量单位")
+                    .withCode("PRODUCTION_INPUT_UNIT_REQUIRED")
+                    .withHint("单位由 Workflow 投入端口固定，请先在工序里配置该物料的报工单位")
                     .withHintTarget("投料单位");
         }
     }

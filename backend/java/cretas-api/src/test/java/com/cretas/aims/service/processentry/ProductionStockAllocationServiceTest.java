@@ -12,6 +12,7 @@ import com.cretas.aims.repository.MaterialBatchRepository;
 import com.cretas.aims.repository.ProductionInputAllocationRepository;
 import com.cretas.aims.repository.ProductionPlanRepository;
 import com.cretas.aims.service.factory.WarehouseResolver;
+import com.cretas.aims.service.processentry.ProductionStockShortageException;
 import com.cretas.aims.service.processentry.impl.ProductionStockAllocationServiceImpl;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -449,6 +450,93 @@ class ProductionStockAllocationServiceTest {
         plan.setSourceOrderItemId("ITEM-1");
         plan.setMaterialSupplyMode(MaterialSupplyMode.CUSTOMER_SUPPLIED);
         return plan;
+    }
+
+    @Test
+    void countedInputAllocatesInItsOwnUnitInsteadOfBeingForcedToKg() {
+        // 整鸡按「只」计 —— 以前 validateInput 直接 400 拒掉, 报工根本提不了
+        ProcessSheetRowRequest.MaterialInputTotal input = countedTotal("RAW-CHICKEN", "201");
+        MaterialBatch first = countedBatch("B1", "RAW-CHICKEN", "WKS-1", "120");
+        MaterialBatch second = countedBatch("B2", "RAW-CHICKEN", "WKS-1", "200");
+
+        when(warehouseResolver.resolveWorkshopId("F006")).thenReturn("WKS-1");
+        when(materialBatchRepository.findAvailableBatchesFEFOByWarehouseForUpdate(
+                "F006", "RAW-CHICKEN", "WKS-1"))
+                .thenReturn(List.of(first, second));
+        when(allocationRepository.sumPendingQuantityByMaterialBatchId("F006", "B1"))
+                .thenReturn(BigDecimal.ZERO);
+        when(allocationRepository.sumPendingQuantityByMaterialBatchId("F006", "B2"))
+                .thenReturn(BigDecimal.ZERO);
+
+        List<ProductionStockAllocationService.PlannedAllocation> result =
+                service.plan("F006", "PLAN-1", List.of(input));
+
+        assertThat(result).extracting(ProductionStockAllocationService.PlannedAllocation::quantity)
+                .containsExactly(new BigDecimal("120"), new BigDecimal("81"));
+        // 数量不被折算; 本服务的 canonicalNativeUnit 对未登记单位原样返回,
+        // 所以分配记录里就是用户配的「只」而不是归一后的 pcs
+        assertThat(result).extracting(ProductionStockAllocationService.PlannedAllocation::unit)
+                .containsOnly("只");
+    }
+
+    @Test
+    void countedInputSkipsBatchesStoredInADifferentUnit() {
+        // 非质量单位不停跨单位折算: kg 库存不能拿来充「只」的投料
+        ProcessSheetRowRequest.MaterialInputTotal input = countedTotal("RAW-CHICKEN", "5");
+        MaterialBatch massBatch = batch("B-KG", "RAW-CHICKEN", "WKS-1", "100", LocalDate.of(2026, 7, 20));
+
+        when(warehouseResolver.resolveWorkshopId("F006")).thenReturn("WKS-1");
+        when(materialBatchRepository.findAvailableBatchesFEFOByWarehouseForUpdate(
+                "F006", "RAW-CHICKEN", "WKS-1"))
+                .thenReturn(List.of(massBatch));
+
+        assertThatThrownBy(() -> service.plan("F006", "PLAN-1", List.of(input)))
+                .isInstanceOf(ProductionStockShortageException.class)
+                .extracting(error -> ((ProductionStockShortageException) error).getShortage())
+                .satisfies(shortage -> {
+                    ProductionStockShortageDTO dto = (ProductionStockShortageDTO) shortage;
+                    assertThat(dto.getUnit()).isEqualTo("只");
+                    assertThat(dto.getShortage()).isEqualByComparingTo("5");
+                });
+    }
+
+    @Test
+    void massInputStillConvertsAndStillRejectsNonMassBatches() {
+        // 原意图不变: 质量单位继续自动折算
+        ProcessSheetRowRequest.MaterialInputTotal input = total("RAW-1", "2");
+        MaterialBatch gramBatch = batch("B1", "RAW-1", "WKS-1", "5000", LocalDate.of(2026, 7, 20));
+        gramBatch.setQuantityUnit("g");
+
+        when(warehouseResolver.resolveWorkshopId("F006")).thenReturn("WKS-1");
+        when(materialBatchRepository.findAvailableBatchesFEFOByWarehouseForUpdate(
+                "F006", "RAW-1", "WKS-1"))
+                .thenReturn(List.of(gramBatch));
+        when(allocationRepository.sumPendingQuantityByMaterialBatchId("F006", "B1"))
+                .thenReturn(BigDecimal.ZERO);
+
+        List<ProductionStockAllocationService.PlannedAllocation> result =
+                service.plan("F006", "PLAN-1", List.of(input));
+
+        assertThat(result).extracting(ProductionStockAllocationService.PlannedAllocation::unit)
+                .containsOnly("kg");
+        assertThat(result).extracting(ProductionStockAllocationService.PlannedAllocation::quantity)
+                .containsExactly(new BigDecimal("2"));
+    }
+
+    private static ProcessSheetRowRequest.MaterialInputTotal countedTotal(
+            String materialTypeId, String quantity) {
+        ProcessSheetRowRequest.MaterialInputTotal input = new ProcessSheetRowRequest.MaterialInputTotal();
+        input.setMaterialTypeId(materialTypeId);
+        input.setQuantity(new BigDecimal(quantity));
+        input.setUnit("只");
+        return input;
+    }
+
+    private static MaterialBatch countedBatch(
+            String id, String materialTypeId, String warehouseId, String quantity) {
+        MaterialBatch batch = batch(id, materialTypeId, warehouseId, quantity, LocalDate.of(2026, 7, 20));
+        batch.setQuantityUnit("只");
+        return batch;
     }
 
     private static ProcessSheetRowRequest.MaterialInputTotal total(String materialTypeId, String quantity) {
