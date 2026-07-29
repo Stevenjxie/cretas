@@ -23,6 +23,17 @@ _SHAPE = {
     "community": (1.0, 1.15, 75),
 }
 
+# 营业时段内的**基础客流**权重（散客/下午茶/备餐期的零星单）。
+#
+# ⚠️ 2026-07-29 实测发现: 只有两个钟形叠加时, 15:00-16:00 的权重小到
+# 被整数量化直接抹成 0 —— 即使把日单量提到 1000 也一样。也就是说本模块
+# 顶部注释承诺的"14:00-17:00 客流走低但不为 0"其实**没有做到**, 那段仍是
+# 人为死区, 只是从"窗口判断造成的"变成了"权重太小造成的"。
+#
+# 加一个营业时段内恒定的基础权重才真正兑现那句话。取 0.06 是因为它相对
+# 晚市峰值(1.8)约 3%, 既能让下午稳定出零星单, 又不会把双峰形状压平。
+_BASELINE_WEIGHT = 0.20
+
 
 def _bell(minute: int, peak: int, width: int) -> float:
     return math.exp(-((minute - peak) ** 2) / (2.0 * width * width))
@@ -35,7 +46,8 @@ def minute_weight(store_format: str, minute_of_day: int) -> float:
     if not (_BUSINESS_WINDOW[0] <= minute_of_day < _BUSINESS_WINDOW[1]):
         return 0.0
     lunch_w, dinner_w, width = _SHAPE[store_format]
-    total = lunch_w * _bell(minute_of_day, _LUNCH_PEAK, width)
+    total = _BASELINE_WEIGHT
+    total += lunch_w * _bell(minute_of_day, _LUNCH_PEAK, width)
     total += dinner_w * _bell(minute_of_day, _DINNER_PEAK, width)
     return total
 

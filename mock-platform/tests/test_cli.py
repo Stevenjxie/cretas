@@ -132,3 +132,20 @@ def test_常驻循环真的会派生后厨():
     assert src.index("generate_orders") < src.index("generate_daily_ops"), (
         "后厨按当天实际消耗推导, 必须排在订单生成之后"
     )
+
+
+def test_非营业时段有心跳日志():
+    """🔴 生成器只在 created>0 时打日志, 非营业时段整夜静默 —— 日志上
+    分不清"没到点"和"循环死了"。healthz 的 generator:running 只证明协程
+    没退出, 证明不了它还在转。
+
+    诚实说明: 这是结构性断言(与 test_常驻循环真的会派生后厨 同类), 挡得住
+    "心跳被删掉", 挡不住"心跳打了但循环卡在某个 await 上"。
+    """
+    import inspect
+
+    from mock_platform.cli import _generate_forever
+
+    src = inspect.getsource(_generate_forever)
+    assert "循环存活" in src, "非营业时段必须有心跳日志"
+    assert "minute % 30" in src, "心跳要低频, 否则刷屏"
