@@ -53,6 +53,9 @@ public class TransferServiceImpl implements TransferService {
 
     private static final Logger log = LoggerFactory.getLogger(TransferServiceImpl.class);
 
+    /** 唯一允许自审批的角色 —— 见 allowsSuperAdminSelfApproval 的说明。 */
+    private static final String SUPER_ADMIN_ROLE = "factory_super_admin";
+
     private final InternalTransferRepository transferRepository;
     private final InternalTransferItemRepository transferItemRepository;
     private final MaterialBatchRepository materialBatchRepository;
@@ -684,10 +687,16 @@ public class TransferServiceImpl implements TransferService {
         if (instance.getStatus() != InstanceStatus.RUNNING) {
             return transfer;
         }
-        if (actorId != null && actorId.equals(instance.getInitiatedBy())) {
+        if (actorId != null && actorId.equals(instance.getInitiatedBy())
+                && !isFactorySuperAdmin(factoryId, actorId, actorRole)) {
             throw new BusinessException(403, "发起人不能审批自己的调拨单")
                     .withCode("TRANSFER_SELF_APPROVAL_FORBIDDEN")
                     .withHint("请由当前 OA 节点授权的其他审批人处理");
+        }
+        if (actorId != null && actorId.equals(instance.getInitiatedBy())) {
+            // 自审批留痕: 少了第二双眼睛, 至少要在日志里留下"谁自己批了自己"
+            log.warn("工厂总监自审批调拨单: factoryId={}, transferId={}, actorId={}, action={}",
+                    factoryId, transferId, actorId, action);
         }
         if (action == HistoryAction.REJECT && (notes == null || notes.isBlank())) {
             throw new BusinessException(422, "驳回调拨单必须填写原因")
@@ -762,13 +771,49 @@ public class TransferServiceImpl implements TransferService {
                     .flatMap(role -> userRepository.findByFactoryIdAndRoleCode(factoryId, role).stream())
                     .anyMatch(user -> Boolean.TRUE.equals(user.getIsActive())
                             && !Objects.equals(user.getId(), initiatorUserId));
-            if (!hasIndependentAssignee) {
+            if (!hasIndependentAssignee
+                    && !allowsSuperAdminSelfApproval(factoryId, roles, initiatorUserId)) {
                 throw new BusinessException(422, "库存调拨 OA 节点没有独立的可用审批人: "
                         + (node.getLabel() == null ? nodeId : node.getLabel()))
                         .withCode("TRANSFER_APPROVER_ASSIGNEE_REQUIRED")
                         .withHint("请为当前工厂配置匹配审批角色的其他有效账号；调拨单仍保持草稿");
             }
         }
+    }
+
+    /**
+     * 工厂总监自审批例外。
+     *
+     * 职责分离(发起人 != 审批人)是默认铁律, 但小工厂常常只有一个 factory_super_admin ——
+     * 审批节点又只认这个角色时, 他发起的调拨永远批不掉, 调拨单会永久卡在草稿。实测某工厂
+     * 因此一个多月没走通过一次调拨。
+     *
+     * 例外只对 factory_super_admin 开, 且必须满足两个条件:
+     *   1. 该节点的 approverRoles 里确实包含 factory_super_admin —— 否则超管就能越过
+     *      "本该由仓管批"的节点, 那是绕过审批而不是解死锁;
+     *   2. 发起人本人就是这个工厂的 factory_super_admin。
+     *
+     * 其它角色一律维持"必须有第二双眼睛"。
+     */
+    private boolean allowsSuperAdminSelfApproval(String factoryId,
+                                                 List<String> approverRoles,
+                                                 Long initiatorUserId) {
+        if (initiatorUserId == null || userRepository == null) return false;
+        if (approverRoles.stream().noneMatch(SUPER_ADMIN_ROLE::equalsIgnoreCase)) return false;
+        return userRepository.findByFactoryIdAndRoleCode(factoryId, SUPER_ADMIN_ROLE).stream()
+                .anyMatch(user -> Boolean.TRUE.equals(user.getIsActive())
+                        && Objects.equals(user.getId(), initiatorUserId));
+    }
+
+    /** 发起人是否为本厂工厂总监 —— 审批动作侧的自审批例外判据。 */
+    private boolean isFactorySuperAdmin(String factoryId, Long userId, String actorRole) {
+        if (userId == null) return false;
+        if (SUPER_ADMIN_ROLE.equalsIgnoreCase(actorRole)) return true;
+        // actorRole 由调用方传入, 可能为空; 以库里的角色为准, 不让缺失的入参把例外吞掉
+        return userRepository != null
+                && userRepository.findByFactoryIdAndRoleCode(factoryId, SUPER_ADMIN_ROLE).stream()
+                .anyMatch(user -> Boolean.TRUE.equals(user.getIsActive())
+                        && Objects.equals(user.getId(), userId));
     }
 
     private void projectWorkflowState(InternalTransfer transfer,
