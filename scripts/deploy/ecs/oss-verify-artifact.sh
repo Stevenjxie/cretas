@@ -46,6 +46,12 @@ case "$prefix" in
   deploy/backend/|codex-network-test/) ;;
   *) echo "error=prefix_not_approved" >&2; exit 2 ;;
 esac
+# Refuse an unpurgeable prefix up front rather than after downloading 168MB.
+# The check is repeated at the delete site as defence in depth.
+if ((purge)) && [[ $prefix != "$ACCEPTANCE_PREFIX" ]]; then
+  echo "error=refusing_to_purge_non_acceptance_prefix" >&2
+  exit 2
+fi
 
 key="${prefix}${tree_sha}/${jar_sha}.jar"
 object="oss://${BUCKET}/${key}"
