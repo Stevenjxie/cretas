@@ -84,6 +84,8 @@ public final class LabelQcDtos {
             String aiModel,
             String promptVersion,
             String analysisError,
+            /** AI 初筛明细原文 JSON；复核台据此渲染盒子/白标/彩标三层框。可为 null。 */
+            String screeningDetail,
             List<AnnotationResponse> annotations
     ) {}
 

@@ -287,6 +287,15 @@ class HybridLabelQcAnalyzer:
             "sourceTiles": [tray.index],
         }
 
+    @staticmethod
+    def _norm_box(box, width: int, height: int) -> List[float]:
+        return [
+            round(max(0.0, min(1.0, box[0] / max(width, 1))), 6),
+            round(max(0.0, min(1.0, box[1] / max(height, 1))), 6),
+            round(max(0.0, min(1.0, box[2] / max(width, 1))), 6),
+            round(max(0.0, min(1.0, box[3] / max(height, 1))), 6),
+        ]
+
     def _screening_payload(self, screening: ScreeningResult) -> Dict[str, Any]:
         """Persisted verbatim so corrections can be tied back to a specific tray."""
         return {
@@ -302,18 +311,25 @@ class HybridLabelQcAnalyzer:
             "trays": [
                 {
                     "index": t.index,
-                    "bbox": [
-                        round(t.box[0] / max(screening.image_width, 1), 6),
-                        round(t.box[1] / max(screening.image_height, 1), 6),
-                        round(t.box[2] / max(screening.image_width, 1), 6),
-                        round(t.box[3] / max(screening.image_height, 1), 6),
-                    ],
+                    "bbox": self._norm_box(t.box, screening.image_width,
+                                           screening.image_height),
                     "trayConfidence": round(t.confidence, 4),
                     "hasWhite": t.has_white,
                     "hasColor": t.has_color,
                     "screenVerdict": t.verdict,
                     "ownLabels": t.own_label_count,
                     "droppedNeighbourLabels": t.dropped_neighbour_labels,
+                    # What the model actually saw, so the review UI can outline
+                    # the tray and the individual stickers separately.
+                    "labels": [
+                        {
+                            "type": "white" if lb.is_white else "color",
+                            "confidence": round(lb.confidence, 4),
+                            "bbox": self._norm_box(lb.box, screening.image_width,
+                                                   screening.image_height),
+                        }
+                        for lb in t.labels
+                    ],
                 }
                 for t in screening.trays
             ],

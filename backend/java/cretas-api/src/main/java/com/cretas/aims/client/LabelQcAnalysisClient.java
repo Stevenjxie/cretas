@@ -165,18 +165,27 @@ public class LabelQcAnalysisClient {
                             bbox.get(3).asDouble()),
                     item.path("evidence").asText("")));
         }
+        // 初筛明细整段存档，不解析成字段：它是模型输出的诊断快照，只在复核台
+        // 整体读出来渲染，随模型迭代自由演进，不应成为 Java 侧的契约。
+        JsonNode screening = data.path("screening");
+        String screeningDetail = screening.isMissingNode() || screening.isNull()
+                ? null
+                : screening.toString();
         return new AnalysisResult(
                 data.path("verdict").asText(),
                 data.path("model").asText("unknown"),
                 data.path("promptVersion").asText("unknown"),
-                candidates);
+                candidates,
+                screeningDetail);
     }
 
     public record AnalysisResult(
             String verdict,
             String model,
             String promptVersion,
-            List<Candidate> candidates
+            List<Candidate> candidates,
+            /** 初筛明细原文；模型未返回时为 null。仅存档与渲染，不解析成字段。 */
+            String screeningDetail
     ) {}
 
     public record Candidate(

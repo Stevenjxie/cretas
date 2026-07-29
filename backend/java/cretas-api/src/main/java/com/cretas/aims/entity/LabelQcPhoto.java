@@ -60,6 +60,13 @@ public class LabelQcPhoto extends BaseEntity {
     @Column(name = "analysis_error", columnDefinition = "TEXT")
     private String analysisError;
 
+    /**
+     * AI 初筛结构化明细 JSON：托盘框 + 每个托盘内识别到的白标/彩标框及置信度。
+     * 供复核台渲染多层标注，不参与任何查询。模型不返回时为 null。
+     */
+    @Column(name = "screening_detail", columnDefinition = "TEXT")
+    private String screeningDetail;
+
     @PrePersist
     void prepare() {
         if (id == null || id.isBlank()) {

@@ -44,6 +44,16 @@ import {
   QualityInspectorStackParamList,
 } from '../../types/qualityInspector';
 import {
+  buildScreeningReferenceBoxes,
+  LABEL_QC_ALL_LAYERS_VISIBLE,
+  LABEL_QC_LAYER_META,
+  LABEL_QC_LAYER_ORDER,
+  LabelQcLayerVisibility,
+  LabelQcScreenLayer,
+  LabelQcScreenReferenceBox,
+  parseScreeningTrays,
+} from './labelQcScreeningLayers';
+import {
   addHumanAnnotation,
   buildLabelQcReviewRequest,
   createLabelQcReviewRequestId,
@@ -84,6 +94,21 @@ const LABEL_COPY: Record<LabelQcLabel, string> = {
   NO_DEFECT: '无异常',
   UNJUDGEABLE: '无法判断',
 };
+
+/**
+ * 已定结论的框按结论上色, 和 web-admin 复核台一致:
+ * 缺白标红 / 缺彩标橙 / 无法判断灰 / 无异常绿。
+ * 尚未判定的框保持"来源色"(AI 橙 / 人工绿), 让"还没处理"一眼可见。
+ */
+const VERDICT_COLORS: Record<LabelQcLabel, string> = {
+  MISSING_WHITE_LABEL: '#E54D42',
+  MISSING_COLOR_LABEL: '#D97706',
+  UNJUDGEABLE: '#6B7280',
+  NO_DEFECT: '#16A36A',
+};
+
+const PENDING_AI_COLOR = '#F5A000';
+const PENDING_HUMAN_COLOR = '#00A883';
 
 const REVIEWABLE_STATUSES = ['NEEDS_REVIEW', 'ANALYSIS_FAILED'];
 const MIN_SCALE = 1;
@@ -188,7 +213,11 @@ function AnnotationBox({
 
   if (!bbox) return null;
 
-  const color = annotation.source === 'AI' ? '#F5A000' : '#00A883';
+  const color = annotation.label
+    ? VERDICT_COLORS[annotation.label]
+    : annotation.source === 'AI'
+      ? PENDING_AI_COLOR
+      : PENDING_HUMAN_COLOR;
   const finalLabel = annotation.label
     ? LABEL_COPY[annotation.label]
     : annotation.source === 'AI'
@@ -236,6 +265,84 @@ function AnnotationBox({
         )}
       </View>
     </GestureDetector>
+  );
+}
+
+/**
+ * AI 初筛参考层。只读、细线、不接触摸事件 —— 它是背景证据, 不能和人工标注框抢
+ * 视觉, 更不能挡住"点空白处补框"的手势。
+ */
+function ReferenceLayer({
+  boxes,
+  surface,
+}: {
+  boxes: LabelQcScreenReferenceBox[];
+  surface: SurfaceSize;
+}) {
+  if (!boxes.length) return null;
+  return (
+    <>
+      {boxes.map((box) => (
+        <View
+          key={box.key}
+          pointerEvents="none"
+          accessibilityLabel={box.caption}
+          style={[
+            styles.referenceBox,
+            box.layer === 'tray' && styles.referenceBoxTray,
+            {
+              left: box.bbox.xMin * surface.width,
+              top: box.bbox.yMin * surface.height,
+              width: (box.bbox.xMax - box.bbox.xMin) * surface.width,
+              height: (box.bbox.yMax - box.bbox.yMin) * surface.height,
+              borderColor: box.color,
+            },
+          ]}
+          testID={`qi-label-qc-reference-${box.key}`}
+        />
+      ))}
+    </>
+  );
+}
+
+/** 手机上没有键盘, 图层开关只能是可点的实体 —— 色点 + 中文名, 关掉即变灰。 */
+function LayerToggleBar({
+  visible,
+  onToggle,
+}: {
+  visible: LabelQcLayerVisibility;
+  onToggle: (layer: LabelQcScreenLayer) => void;
+}) {
+  return (
+    <View style={styles.layerBar} testID="qi-label-qc-layer-bar">
+      <Text style={styles.layerBarTitle}>AI 识别</Text>
+      {LABEL_QC_LAYER_ORDER.map((layer) => {
+        const meta = LABEL_QC_LAYER_META[layer];
+        const on = visible[layer];
+        return (
+          <Pressable
+            key={layer}
+            style={[styles.layerChip, !on && styles.layerChipOff]}
+            onPress={() => onToggle(layer)}
+            accessibilityRole="switch"
+            accessibilityState={{ checked: on }}
+            accessibilityLabel={`${meta.text}标注`}
+            testID={`qi-label-qc-layer-${layer}`}
+          >
+            <View
+              style={[
+                styles.layerDot,
+                { borderColor: meta.color },
+                on && { backgroundColor: meta.color },
+              ]}
+            />
+            <Text style={[styles.layerChipText, !on && styles.layerChipTextOff]}>
+              {meta.text}
+            </Text>
+          </Pressable>
+        );
+      })}
+    </View>
   );
 }
 
@@ -320,6 +427,7 @@ function HumanInlineToolbar({
 function PhotoCanvas({
   photo,
   draft,
+  referenceBoxes,
   selectedKey,
   viewport,
   readOnly,
@@ -333,6 +441,7 @@ function PhotoCanvas({
 }: {
   photo: LabelQcPhoto;
   draft: LabelQcReviewPhotoDraft;
+  referenceBoxes: LabelQcScreenReferenceBox[];
   selectedKey: string | null;
   viewport: Viewport;
   readOnly: boolean;
@@ -538,6 +647,8 @@ function PhotoCanvas({
               <Text style={styles.imageUnavailableText}>照片暂时无法显示</Text>
             </View>
           )}
+          {/* 参考层画在人工标注框之前 —— RN 按渲染顺序叠放, 先画即在下层 */}
+          <ReferenceLayer boxes={referenceBoxes} surface={surface} />
           {draft.annotations
             .filter(
               (annotation) =>
@@ -723,6 +834,9 @@ export default function QILabelQcReviewScreen() {
   const [photoIndex, setPhotoIndex] = useState(0);
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
   const [viewports, setViewports] = useState<Record<string, Viewport>>({});
+  const [visibleLayers, setVisibleLayers] = useState<LabelQcLayerVisibility>(
+    LABEL_QC_ALL_LAYERS_VISIBLE,
+  );
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -772,6 +886,19 @@ export default function QILabelQcReviewScreen() {
   const completedCount = drafts.filter(isPhotoReviewComplete).length;
   const allComplete =
     drafts.length > 0 && completedCount === drafts.length;
+
+  // 图层开关跨照片保持 —— 质检员关掉盒子框是一种看图习惯, 翻到下一张不该被重置
+  const screenTrays = useMemo(
+    () => parseScreeningTrays(photo?.screeningDetail),
+    [photo?.screeningDetail],
+  );
+  const referenceBoxes = useMemo(
+    () => buildScreeningReferenceBoxes(screenTrays, visibleLayers),
+    [screenTrays, visibleLayers],
+  );
+  const toggleLayer = useCallback((layer: LabelQcScreenLayer) => {
+    setVisibleLayers((current) => ({ ...current, [layer]: !current[layer] }));
+  }, []);
 
   const setPhotoDraft = useCallback(
     (
@@ -1021,10 +1148,15 @@ export default function QILabelQcReviewScreen() {
         </Text>
       </View>
 
+      {screenTrays.length > 0 && (
+        <LayerToggleBar visible={visibleLayers} onToggle={toggleLayer} />
+      )}
+
       <View style={styles.canvasWrap}>
         <PhotoCanvas
           photo={photo}
           draft={draft}
+          referenceBoxes={referenceBoxes}
           selectedKey={selectedKey}
           viewport={viewport}
           readOnly={readOnly}
@@ -1256,6 +1388,53 @@ const styles = StyleSheet.create({
     borderRadius: 7,
     backgroundColor: 'rgba(255,255,255,0.06)',
   },
+  // AI 初筛参考层: 1px 细线 + 无填充, 压在人工标注框下面不抢视觉。
+  // 不设 borderRadius —— Android 上圆角会让 dashed 退化成实线, 那样盒子层
+  // 就和标签层看起来一样了, 三层框的意义正在于一眼可分。
+  referenceBox: {
+    position: 'absolute',
+    borderWidth: 1,
+    opacity: 0.9,
+  },
+  referenceBoxTray: {
+    borderStyle: 'dashed',
+    opacity: 0.65,
+  },
+  layerBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 7,
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+    backgroundColor: QI_COLORS.card,
+    borderBottomWidth: 1,
+    borderBottomColor: QI_COLORS.border,
+  },
+  layerBarTitle: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: QI_COLORS.textSecondary,
+  },
+  layerChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    minHeight: 32,
+    paddingHorizontal: 11,
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: QI_COLORS.border,
+    backgroundColor: '#F4F7F6',
+  },
+  layerChipOff: { backgroundColor: '#EAEDEC', opacity: 0.6 },
+  layerDot: {
+    width: 10,
+    height: 10,
+    borderRadius: 5,
+    borderWidth: 2,
+  },
+  layerChipText: { fontSize: 12, fontWeight: '700', color: QI_COLORS.text },
+  layerChipTextOff: { color: QI_COLORS.textSecondary },
   annotationTag: {
     position: 'absolute',
     left: -2,

@@ -166,12 +166,25 @@ async function submitReview(payload: LabelQcReviewRequest) {
       },
     );
     if (response.success) {
+      const finishedId = detail.value.task.id;
       detail.value = response.data;
-      ElMessage.success('人工审核已完成，当前状态为待训练确认');
       reviewDirty.value = false;
       allowDrawerClose.value = true;
-      drawerVisible.value = false;
       await load();
+
+      // 连审：一批做完直接进下一批，不用退回列表再点。审核几十批时这一步
+      // 省掉的往返比看起来多。没有下一批才关抽屉。
+      // 只在“待人工审核”队列里连审；管理/归档模式下保持原来的关闭行为。
+      const next = queueMode.value === 'REVIEW'
+        ? rows.value.find((row) => row.id !== finishedId && row.status === 'NEEDS_REVIEW')
+        : undefined;
+      if (next) {
+        ElMessage.success(`本批已完成，继续下一批：${next.batchNumber}`);
+        await openReview(next);
+      } else {
+        drawerVisible.value = false;
+        ElMessage.success('人工审核已完成，待审队列已清空');
+      }
     }
   } finally {
     submitting.value = false;

@@ -55,6 +55,24 @@ class ScreeningParams:
 
 
 @dataclass
+class DetectedLabel:
+    """A label detected inside a tray, in ORIGINAL image pixel coordinates.
+
+    Kept so the review UI can draw what the model actually saw (white vs colour)
+    rather than only the tray outline -- a reviewer can then tell at a glance
+    which side of the box is missing its sticker.
+    """
+
+    class_id: int
+    confidence: float
+    box: List[float]
+
+    @property
+    def is_white(self) -> bool:
+        return self.class_id == CLASS_WHITE_LABEL
+
+
+@dataclass
 class TrayResult:
     index: int
     box: List[float]
@@ -65,6 +83,7 @@ class TrayResult:
     own_label_count: int = 0
     dropped_neighbour_labels: int = 0
     label_confidences: List[float] = field(default_factory=list)
+    labels: List[DetectedLabel] = field(default_factory=list)
 
     @property
     def is_suspect(self) -> bool:
@@ -93,15 +112,26 @@ def _verdict_for(has_white: bool, has_color: bool) -> str:
     return VERDICT_MISSING_BOTH
 
 
+def _to_source_box(label: Detection, crop_rect: Sequence[float],
+                   crop_shape: Sequence[int]) -> List[float]:
+    """Map a label box from crop pixels back to original-image pixels."""
+    crop_h, crop_w = crop_shape[0], crop_shape[1]
+    sx = (crop_rect[2] - crop_rect[0]) / max(crop_w, 1)
+    sy = (crop_rect[3] - crop_rect[1]) / max(crop_h, 1)
+    return [
+        crop_rect[0] + label.x0 * sx,
+        crop_rect[1] + label.y0 * sy,
+        crop_rect[0] + label.x1 * sx,
+        crop_rect[1] + label.y1 * sy,
+    ]
+
+
 def _owns(tray_box: Sequence[float], label: Detection,
           crop_rect: Sequence[float], crop_shape: Sequence[int]) -> bool:
     """Is this label's centre inside the tray box (not merely inside the crop)?"""
-    crop_h, crop_w = crop_shape[0], crop_shape[1]
-    scale_x = (crop_rect[2] - crop_rect[0]) / max(crop_w, 1)
-    scale_y = (crop_rect[3] - crop_rect[1]) / max(crop_h, 1)
-    cx, cy = label.center
-    src_x = crop_rect[0] + cx * scale_x
-    src_y = crop_rect[1] + cy * scale_y
+    src = _to_source_box(label, crop_rect, crop_shape)
+    src_x = (src[0] + src[2]) / 2
+    src_y = (src[1] + src[3]) / 2
     return (tray_box[0] <= src_x <= tray_box[2]) and (tray_box[1] <= src_y <= tray_box[3])
 
 
@@ -136,12 +166,18 @@ def screen_image(
         labels = models.detect_labels(resized, params.label_conf)
 
         own: List[Detection] = []
+        detected: List[DetectedLabel] = []
         dropped = 0
         for label in labels:
             if params.own_labels_only and not _owns(tray.as_xyxy(), label, rect, resized.shape):
                 dropped += 1
                 continue
             own.append(label)
+            detected.append(DetectedLabel(
+                class_id=label.class_id,
+                confidence=label.confidence,
+                box=_to_source_box(label, rect, resized.shape),
+            ))
 
         has_white = any(d.class_id == CLASS_WHITE_LABEL for d in own)
         has_color = any(d.class_id == CLASS_COLOR_LABEL for d in own)
@@ -155,6 +191,7 @@ def screen_image(
             own_label_count=len(own),
             dropped_neighbour_labels=dropped,
             label_confidences=[round(d.confidence, 4) for d in own],
+            labels=detected,
         ))
 
     return ScreeningResult(trays=results, image_width=width, image_height=height,

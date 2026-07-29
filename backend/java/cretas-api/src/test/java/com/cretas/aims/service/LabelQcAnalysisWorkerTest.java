@@ -94,12 +94,16 @@ class LabelQcAnalysisWorkerTest {
                         LabelQcLabel.MISSING_WHITE_LABEL,
                         0.78,
                         new BoundingBox(0.1, 0.5, 0.4, 0.9),
-                        "tray edge lacks white label")));
+                        "tray edge lacks white label")),
+                "{\"trays\":[{\"index\":0,\"labels\":[{\"type\":\"color\"}]}]}");
 
         worker.saveSuccess(FACTORY_ID, TASK_ID, PHOTO_ID, result);
 
         assertEquals(LabelQcPhotoStatus.ANALYZED, photo.getStatus());
         assertEquals("vision-test", photo.getAiModel());
+        // 初筛明细必须整段落库，复核台靠它画盒子/白标/彩标三层框
+        assertEquals("{\"trays\":[{\"index\":0,\"labels\":[{\"type\":\"color\"}]}]}",
+                photo.getScreeningDetail());
         @SuppressWarnings("unchecked")
         ArgumentCaptor<Iterable<LabelQcAnnotation>> annotations =
                 ArgumentCaptor.forClass(Iterable.class);

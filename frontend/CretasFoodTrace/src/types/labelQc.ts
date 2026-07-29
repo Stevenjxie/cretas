@@ -53,6 +53,11 @@ export interface LabelQcPhoto {
   aiModel?: string;
   promptVersion?: string;
   analysisError?: string;
+  /**
+   * AI 初筛明细原文 (盒子框 + 每盒识别到的白标/彩标)。
+   * 后端整段透传, 前端只解析出来画参考层, 不当作契约字段依赖。
+   */
+  screeningDetail?: string;
   annotations: LabelQcAnnotation[];
 }
 

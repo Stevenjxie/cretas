@@ -197,6 +197,7 @@ public class LabelQcService {
             photo.setStatus(LabelQcPhotoStatus.QUEUED);
             photo.setAiModel(null);
             photo.setPromptVersion(null);
+            photo.setScreeningDetail(null);
             photo.setAnalysisError(null);
         });
         photoRepository.saveAll(photos);
@@ -623,6 +624,7 @@ public class LabelQcService {
                 photo.getAiModel(),
                 photo.getPromptVersion(),
                 photo.getAnalysisError(),
+                photo.getScreeningDetail(),
                 annotations.stream().map(this::toAnnotation).toList());
     }
 

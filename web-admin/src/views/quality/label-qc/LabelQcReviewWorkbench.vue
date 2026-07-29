@@ -452,6 +452,155 @@ function reopenCurrentPhoto(): void {
   choosePreferredItem();
 }
 
+// ---- AI 初筛参考层 ----------------------------------------------------------
+// 模型除了给出"哪盒疑似缺标"的候选，还知道每盒里识别到了哪些标签及其位置。
+// 把这三类画成只读参考层，质检员就能看到"白标在这、彩标在这、缺的位置是空的"，
+// 而不是只看到一个盒子框。参考层不参与人工判定，只是背景信息。
+type ScreenLayer = 'tray' | 'white' | 'color';
+
+type ScreenLabelBox = { type: string; confidence?: number; bbox: number[] };
+type ScreenTray = {
+  index: number;
+  bbox: number[];
+  trayConfidence?: number;
+  screenVerdict?: string;
+  labels?: ScreenLabelBox[];
+};
+
+const LAYER_META: Record<ScreenLayer, { key: string; text: string; color: string }> = {
+  tray: { key: '1', text: '盒子', color: '#2f6fdd' },
+  white: { key: '2', text: '白标', color: '#06b6d4' },
+  color: { key: '3', text: '彩标', color: '#a855f7' },
+};
+
+const visibleLayers = ref<Record<ScreenLayer, boolean>>({
+  tray: true, white: true, color: true,
+});
+
+const screenTrays = computed<ScreenTray[]>(() => {
+  const raw = activePhoto.value?.screeningDetail;
+  if (!raw) return [];
+  try {
+    const parsed = JSON.parse(raw) as { trays?: ScreenTray[] };
+    return Array.isArray(parsed?.trays) ? parsed.trays : [];
+  } catch {
+    // 明细坏了不能拖垮整个复核台，静默降级为"没有参考层"
+    return [];
+  }
+});
+
+const hasScreenDetail = computed(() => screenTrays.value.length > 0);
+
+type RefBox = { key: string; layer: ScreenLayer; style: Record<string, string>; title: string };
+
+const referenceBoxes = computed<RefBox[]>(() => {
+  const out: RefBox[] = [];
+  for (const tray of screenTrays.value) {
+    if (visibleLayers.value.tray && tray.bbox?.length === 4) {
+      out.push({
+        key: `tray-${tray.index}`,
+        layer: 'tray',
+        style: boxStyleFrom(tray.bbox, LAYER_META.tray.color),
+        title: `盒子 #${tray.index + 1}`,
+      });
+    }
+    for (const [i, label] of (tray.labels ?? []).entries()) {
+      const layer: ScreenLayer = label.type === 'white' ? 'white' : 'color';
+      if (!visibleLayers.value[layer] || label.bbox?.length !== 4) continue;
+      out.push({
+        key: `lb-${tray.index}-${i}`,
+        layer,
+        style: boxStyleFrom(label.bbox, LAYER_META[layer].color),
+        title: `${LAYER_META[layer].text} ${label.confidence != null
+          ? Math.round(label.confidence * 100) + '%' : ''}`,
+      });
+    }
+  }
+  return out;
+});
+
+function boxStyleFrom(bbox: number[], color: string): Record<string, string> {
+  const [x0, y0, x1, y1] = bbox;
+  return {
+    left: `${x0 * 100}%`,
+    top: `${y0 * 100}%`,
+    width: `${(x1 - x0) * 100}%`,
+    height: `${(y1 - y0) * 100}%`,
+    borderColor: color,
+  };
+}
+
+function toggleLayer(layer: ScreenLayer): void {
+  visibleLayers.value[layer] = !visibleLayers.value[layer];
+}
+
+// ---- 键盘快捷键 -------------------------------------------------------------
+// 质检员一天要过几百张，鼠标往返右侧按钮是主要耗时。左手键盘 + 右手鼠标点框，
+// 是这类逐张审核界面的标准姿势。
+const SHORTCUTS = [
+  { keys: 'Enter', text: '确认本图结论' },
+  { keys: 'N', text: '整图正常' },
+  { keys: '← / →', text: '上一张 / 下一张' },
+  { keys: '1 / 2 / 3', text: '盒子 / 白标 / 彩标' },
+  { keys: 'Esc', text: '取消选中框' },
+] as const;
+
+function isTypingTarget(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) return false;
+  const tag = target.tagName;
+  return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || target.isContentEditable;
+}
+
+function onShortcutKey(event: KeyboardEvent): void {
+  // 输入框内打字、以及带修饰键的组合，一律不拦截
+  if (isTypingTarget(event.target) || event.ctrlKey || event.metaKey || event.altKey) return;
+  if (!props.canReview) return;
+
+  switch (event.key) {
+    case 'Enter':
+      event.preventDefault();
+      if (activeDraft.value?.reviewed) nextPhoto();
+      else confirmCurrentPhoto();
+      break;
+    case 'n':
+    case 'N':
+      event.preventDefault();
+      void confirmCurrentPhotoNormal();
+      break;
+    case 'ArrowLeft':
+      event.preventDefault();
+      previousPhoto();
+      break;
+    case 'ArrowRight':
+      event.preventDefault();
+      nextPhoto();
+      break;
+    case '1':
+      event.preventDefault();
+      toggleLayer('tray');
+      break;
+    case '2':
+      event.preventDefault();
+      toggleLayer('white');
+      break;
+    case '3':
+      event.preventDefault();
+      toggleLayer('color');
+      break;
+    case 'Escape':
+      if (selectedKey.value) {
+        event.preventDefault();
+        selectedKey.value = null;
+      }
+      break;
+    default:
+      break;
+  }
+}
+
+onMounted(() => window.addEventListener('keydown', onShortcutKey));
+onBeforeUnmount(() => window.removeEventListener('keydown', onShortcutKey));
+
 function previousPhoto(): void {
   if (activePhotoIndex.value > 0) selectPhoto(activePhotoIndex.value - 1);
 }
@@ -588,6 +737,15 @@ onBeforeUnmount(() => resizeObserver?.disconnect());
               alt="待审核包装标签照片"
               draggable="false"
             >
+            <!-- AI 初筛参考层：只读，画在人工标注框下面 -->
+            <div
+              v-for="ref in referenceBoxes"
+              :key="ref.key"
+              class="reference-box"
+              :class="`layer-${ref.layer}`"
+              :style="ref.style"
+              :title="ref.title"
+            />
             <div
               v-for="item in visibleItems"
               :key="item.key"
@@ -774,6 +932,24 @@ onBeforeUnmount(() => resizeObserver?.disconnect());
       <div class="current-state" :class="{ complete: currentPhotoComplete }">
         <span>第 {{ activePhotoIndex + 1 }}/{{ drafts.length }} 张</span>
         <strong>{{ currentPhotoComplete ? '本图已完成' : '本图待结论' }}</strong>
+        <div v-if="canReview" class="shortcut-hints">
+          <span v-for="s in SHORTCUTS" :key="s.keys" class="shortcut">
+            <kbd>{{ s.keys }}</kbd>{{ s.text }}
+          </span>
+        </div>
+        <div v-if="hasScreenDetail" class="layer-toggles">
+          <button
+            v-for="(meta, layer) in LAYER_META"
+            :key="layer"
+            type="button"
+            class="layer-toggle"
+            :class="{ off: !visibleLayers[layer as ScreenLayer] }"
+            :style="{ '--layer-color': meta.color }"
+            @click="toggleLayer(layer as ScreenLayer)"
+          >
+            <i class="dot" /><kbd>{{ meta.key }}</kbd>{{ meta.text }}
+          </button>
+        </div>
       </div>
       <button
         v-if="!allComplete"
@@ -1077,26 +1253,44 @@ button {
   pointer-events: none;
 }
 
+/* AI 初筛参考层：更细、半透明、不可交互，避免和人工标注框抢视觉 */
+.reference-box {
+  position: absolute;
+  z-index: 1;
+  border: 1px solid;
+  border-radius: 3px;
+  pointer-events: none;
+  opacity: .85;
+}
+
+.reference-box.layer-tray {
+  border-style: dashed;
+  opacity: .6;
+}
+
+/* 单层细框：原先是 3px 边框 + 1px 白描边 (选中时再叠 3px 白 + 6px 绿 = 一圈 9px)，
+   在密排的肉盒上糊成一片。改为 2px 单线，选中只加深不加层。 */
 .annotation-box {
   position: absolute;
   z-index: 2;
-  border: 3px solid;
-  border-radius: 7px;
+  border: 2px solid;
+  border-radius: 4px;
   cursor: move;
-  box-shadow: 0 0 0 1px rgba(255, 255, 255, .9);
 }
 
 .annotation-box.pending {
   border-style: dashed;
-  background: rgba(245, 165, 36, .1);
+  background: rgba(245, 165, 36, .08);
 }
 
 .annotation-box.human {
-  background: rgba(47, 111, 221, .12);
+  background: rgba(47, 111, 221, .10);
 }
 
 .annotation-box.selected {
-  box-shadow: 0 0 0 3px rgba(255, 255, 255, .95), 0 0 0 6px rgba(0, 169, 135, .65);
+  border-width: 3px;
+  z-index: 4;
+  filter: drop-shadow(0 0 3px rgba(0, 0, 0, .55));
 }
 
 .box-label {
@@ -1486,6 +1680,72 @@ button:disabled {
   border-top: 1px solid var(--line);
   background: #fffefa;
   box-shadow: 0 -8px 24px rgba(18, 38, 31, .07);
+}
+
+.shortcut-hints {
+  display: flex;
+  gap: 14px;
+  margin-top: 6px;
+  flex-wrap: wrap;
+  justify-content: center;
+}
+
+.shortcut {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+  color: var(--el-text-color-secondary, #8a94a6);
+  white-space: nowrap;
+}
+
+.layer-toggles {
+  display: flex;
+  gap: 8px;
+  margin-top: 6px;
+  justify-content: center;
+}
+
+.layer-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 9px;
+  border: 1px solid var(--el-border-color, #d9dde5);
+  border-radius: 99px;
+  background: var(--el-bg-color, #fff);
+  font-size: 11px;
+  color: var(--el-text-color-regular, #4a5262);
+  cursor: pointer;
+}
+
+.layer-toggle .dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--layer-color);
+}
+
+.layer-toggle.off {
+  opacity: .45;
+}
+
+.layer-toggle.off .dot {
+  background: transparent;
+  border: 1px solid var(--layer-color);
+}
+
+.shortcut kbd,
+.layer-toggle kbd {
+  display: inline-block;
+  min-width: 18px;
+  padding: 1px 6px;
+  border: 1px solid var(--el-border-color, #d9dde5);
+  border-bottom-width: 2px;
+  border-radius: 4px;
+  background: var(--el-fill-color-light, #f4f6f9);
+  font: 600 11px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
+  color: var(--el-text-color-regular, #4a5262);
 }
 
 .review-navigation > button {

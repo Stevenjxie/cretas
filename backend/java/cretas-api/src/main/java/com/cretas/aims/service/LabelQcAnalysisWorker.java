@@ -52,6 +52,7 @@ public class LabelQcAnalysisWorker {
         photo.setStatus(LabelQcPhotoStatus.ANALYZED);
         photo.setAiModel(result.model());
         photo.setPromptVersion(result.promptVersion());
+        photo.setScreeningDetail(result.screeningDetail());
         photo.setAnalysisError(null);
         photoRepository.save(photo);
 
