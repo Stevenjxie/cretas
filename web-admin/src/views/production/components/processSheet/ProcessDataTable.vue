@@ -554,12 +554,30 @@ function portSelectionMode(port?: WorkflowPortDescriptor): PortSelectionMode {
   return port?.selectionGroupMode ?? 'ALL_REQUIRED';
 }
 
+/**
+ * 本端口是否根本没有选择余地。
+ *
+ * 选择组里只有它一个时, “选用”是个假选择 —— 不选就交不了, 选了也没别的可选。
+ * 却要求用户先点一下才能填数量, 白多一步。单投入/单产出是绝大多数工序的常态。
+ */
+function portHasNoAlternative(port?: WorkflowPortDescriptor): boolean {
+  if (!port?.selectionGroupId) return true;
+  const siblings = [...(props.workflowContext?.inputs ?? []), ...outputPorts.value]
+    .filter((candidate) => candidate.selectionGroupId === port.selectionGroupId);
+  return siblings.length <= 1;
+}
+
 function portSelectedByDefault(port?: WorkflowPortDescriptor): boolean {
-  return !port?.selectionGroupId || portSelectionMode(port) === 'ALL_REQUIRED';
+  return portHasNoAlternative(port) || portSelectionMode(port) === 'ALL_REQUIRED';
 }
 
 function portSelectionDisabled(port?: WorkflowPortDescriptor): boolean {
-  return !port?.selectionGroupId || portSelectionMode(port) === 'ALL_REQUIRED';
+  return portHasNoAlternative(port) || portSelectionMode(port) === 'ALL_REQUIRED';
+}
+
+/** 没有选择余地时直接不渲染复选框 —— 一个永远勾上、永远置灰的控件只是噪声。 */
+function showPortSelector(port?: WorkflowPortDescriptor): boolean {
+  return !portSelectionDisabled(port);
 }
 
 function portSelectionSummary(port?: WorkflowPortDescriptor): string {
@@ -2739,6 +2757,7 @@ defineExpose({ hasUnsavedRows, refreshSharedInventories });
                 :class="{ 'sp-port-unselected': !item.selected }"
               >
                 <el-checkbox
+                  v-if="showPortSelector(portById(item.workflowPortId))"
                   :model-value="item.selected"
                   :disabled="portSelectionDisabled(portById(item.workflowPortId))"
                   data-testid="port-selected"
@@ -2921,6 +2940,7 @@ defineExpose({ hasUnsavedRows, refreshSharedInventories });
                    :class="{ 'sp-port-unselected': !src.selected }"
                    style="display:flex;align-items:center;gap:8px;margin-bottom:6px;flex-wrap:wrap">
                 <el-checkbox
+                  v-if="showPortSelector(sourcePort(src))"
                   :model-value="src.selected"
                   :disabled="portSelectionDisabled(sourcePort(src))"
                   data-testid="port-selected"
@@ -3120,6 +3140,7 @@ defineExpose({ hasUnsavedRows, refreshSharedInventories });
             >
               <div class="sp-output-line-head">
                 <el-checkbox
+                  v-if="showPortSelector(portById(o.workflowPortId))"
                   :model-value="o.selected"
                   :disabled="portSelectionDisabled(portById(o.workflowPortId))"
                   data-testid="port-selected"
@@ -3132,7 +3153,7 @@ defineExpose({ hasUnsavedRows, refreshSharedInventories });
                 <span v-if="o.batchNumber" class="sp-readonly sp-batch-num">{{ o.batchNumber }}</span>
               </div>
               <div class="sp-output-fields sp-output-primary-fields">
-                <label class="sp-output-key-field" data-testid="output-quantity">产出数量<span class="sp-inline-input" role="group" aria-label="产出数量与单位"><el-input-number v-model="o.quantity" :min="0" :precision="outputLinePrecision(o)" controls-position="right" size="small" /><span data-testid="output-unit-readonly" class="sp-fixed-unit">{{ displayProcessUnit(o.unit) }}</span></span></label>
+                <label class="sp-output-key-field" data-testid="output-quantity"><span class="sp-required">*</span>产出数量<span class="sp-inline-input" role="group" aria-label="产出数量与单位"><el-input-number v-model="o.quantity" :min="0" :precision="outputLinePrecision(o)" controls-position="right" size="small" /><span data-testid="output-unit-readonly" class="sp-fixed-unit">{{ displayProcessUnit(o.unit) }}</span></span></label>
                 <label>出成率<span class="sp-readonly">{{ outputLineYield(row, o) == null ? '—' : `${outputLineYield(row, o)!.toFixed(2)}%` }}</span></label>
               </div>
               <div class="sp-output-optional">
@@ -3207,14 +3228,26 @@ defineExpose({ hasUnsavedRows, refreshSharedInventories });
             :title="draftSaveDisabledReason(row) || '只保存草稿，不占用生产库库存'"
             @click="handleSave(row, 'draft')"
           >保存草稿</el-button>
-          <el-button
-            type="primary" size="large" :icon="Check"
-            class="sp-submit-primary"
-            :loading="row.saving"
-            :disabled="!!submitDisabledReason(row) || row.saving"
-            :title="submitDisabledReason(row) || '正式报工并由系统自动分摊生产库批次'"
-            @click="handleSave(row, 'submit')"
-          >正式报工</el-button>
+          <!--
+            disabled 元素不触发鼠标事件, 原生 title 弹不出来也没法调速度。
+            用 el-tooltip 包一层 span 才能既显示原因又立刻弹出(show-after=0)。
+          -->
+          <el-tooltip
+            :content="submitDisabledReason(row) || '正式报工并由系统自动分摊生产库批次'"
+            placement="top"
+            :show-after="0"
+            :hide-after="0"
+          >
+            <span class="sp-submit-wrap">
+              <el-button
+                type="primary" size="large" :icon="Check"
+                class="sp-submit-primary"
+                :loading="row.saving"
+                :disabled="!!submitDisabledReason(row) || row.saving"
+                @click="handleSave(row, 'submit')"
+              >正式报工</el-button>
+            </span>
+          </el-tooltip>
         </div>
         <!--
           防呆 Rule 1「预先显示边界」: 提交按钮 disabled 时, 原因必须直接印在按钮旁边。
@@ -3435,6 +3468,7 @@ defineExpose({ hasUnsavedRows, refreshSharedInventories });
                       style="display:flex;align-items:center;gap:4px;margin-bottom:4px"
                     >
                       <el-checkbox
+                        v-if="showPortSelector(portById(item.workflowPortId))"
                         :model-value="item.selected"
                         :disabled="portSelectionDisabled(portById(item.workflowPortId))"
                         data-testid="port-selected"
@@ -3814,6 +3848,7 @@ defineExpose({ hasUnsavedRows, refreshSharedInventories });
                   >
                     <div class="sp-output-line-head">
                       <el-checkbox
+                        v-if="showPortSelector(portById(o.workflowPortId))"
                         :model-value="o.selected"
                         :disabled="portSelectionDisabled(portById(o.workflowPortId))"
                         data-testid="port-selected"
@@ -3891,6 +3926,7 @@ defineExpose({ hasUnsavedRows, refreshSharedInventories });
                        :class="{ 'sp-port-unselected': !src.selected }"
                        style="display:flex;align-items:center;gap:8px;margin-bottom:6px">
                     <el-checkbox
+                      v-if="showPortSelector(sourcePort(src))"
                       :model-value="src.selected"
                       :disabled="portSelectionDisabled(sourcePort(src))"
                       data-testid="port-selected"
@@ -3968,6 +4004,7 @@ defineExpose({ hasUnsavedRows, refreshSharedInventories });
                        :class="{ 'sp-port-unselected': !src.selected }"
                        style="display:flex;align-items:center;gap:8px;margin-bottom:6px">
                     <el-checkbox
+                      v-if="showPortSelector(sourcePort(src))"
                       :model-value="src.selected"
                       :disabled="portSelectionDisabled(sourcePort(src))"
                       data-testid="port-selected"
@@ -4725,4 +4762,14 @@ defineExpose({ hasUnsavedRows, refreshSharedInventories });
   margin-top: 2px;
   flex: none;
 }
+
+/* 必填标识 —— 之前整张表单没有任何"哪些非填不可"的提示 */
+.sp-required {
+  margin-right: 2px;
+  color: var(--el-color-danger);
+  font-weight: 700;
+}
+
+/* tooltip 需要一个非 disabled 的宿主才能接到鼠标事件 */
+.sp-submit-wrap { display: inline-flex; }
 </style>

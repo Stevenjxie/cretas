@@ -140,17 +140,23 @@ describe('ProcessDataTable port selection groups', () => {
     expect(request.outputs?.map((output) => output.workflowPortId)).toEqual(['OUT-1', 'OUT-3']);
   });
 
-  it('keeps legacy ports selected, locked and formally required', async () => {
+  it('keeps legacy ports selected and formally required, without a fake selector', async () => {
     const wrapper = mountTable(context([rawPort(1), rawPort(2)]));
     await addRow(wrapper);
     const inputs = wrapper.findAll('[data-testid="material-input-total"]');
-    expect(inputs.map((line) => line.findComponent({ name: 'ElCheckbox' }).props('disabled'))).toEqual([true, true]);
+    // legacy 端口没有选择组 = 没有选择余地。永远勾上、永远置灰的复选框只是噪声,
+    // 还逼用户先点一下才能填数量 —— 现在直接不渲染。
+    expect(inputs.map((line) => line.findAllComponents({ name: 'ElCheckbox' }).length)).toEqual([0, 0]);
     fillQuantity(inputs[0], 5);
     fillOutputQuantity(wrapper.find('[data-testid="workflow-output-line"]'), 4);
     await flushPromises();
     const submitButton = wrapper.findAll('button').find((button) => button.text().includes('正式报工'))!;
     expect(submitButton.attributes('disabled')).toBeDefined();
-    expect(submitButton.attributes('title')).toContain('原料 2');
+    // 阻塞原因移到 tooltip: disabled 元素不触发鼠标事件, 原生 title 弹不出来
+    const tooltip = wrapper.findAllComponents({ name: 'ElTooltip' })
+      .find((component) => String(component.props('content') ?? '').includes('原料 2'));
+    expect(tooltip).toBeTruthy();
+    expect(tooltip!.props('showAfter')).toBe(0);
   });
 
   it('applies the same selection contract to upstream input lines', async () => {
