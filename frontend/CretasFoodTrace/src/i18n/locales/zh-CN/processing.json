@@ -48,7 +48,8 @@
       "inventoryCheck": "库存盘点",
       "consumptionHistory": "消耗记录",
       "exceptionAlert": "异常预警",
-      "traceability": "产品溯源"
+      "traceability": "产品溯源",
+      "materialRequisitions": "物料需求单"
     },
     "aiAnalysis": {
       "title": "AI智能分析",

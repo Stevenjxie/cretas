@@ -423,6 +423,16 @@ export default function ProcessingDashboard() {
               >
                 {t('dashboard.quickActions.traceability')}
               </Button>
+              {/* 2026-07-30 客户反馈新增: 物料需求单 (只读) — 客户原话"没有物料需求单模块" */}
+              <Button
+                mode="outlined"
+                icon="clipboard-list-outline"
+                onPress={() => navigation.navigate('MaterialRequisitionList')}
+                style={styles.actionButton}
+                testID="quick-action-material-requisitions"
+              >
+                {t('dashboard.quickActions.materialRequisitions')}
+              </Button>
             </View>
           </Card.Content>
         </Card>
