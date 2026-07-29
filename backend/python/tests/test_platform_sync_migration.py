@@ -75,11 +75,51 @@ def test_门店名与模拟端seed逐字一致():
 
 
 def test_支付渠道覆盖模拟端全部支付方式():
-    """fact_pos_payment.channel_id 是 NOT NULL 外键, 渠道没种全会导致
-    writer 在运行期抛"渠道映射失败"。
+    """fact_pos_payment.channel_id 是 NOT NULL 外键, 渠道没种全会让 writer
+    在运行期抛"渠道映射失败", 整批订单写不进来。
+
+    ⚠️ 这条测试必须有**跨文件判别力**: 从模拟端 generator.py 真解析出
+    支付方式集合, 再要求 migration 的映射注释与种子行覆盖它。
+    早先版本只是把四个中文名硬编码在测试里跟 migration 自比对 —— 那样
+    generator.py 新增一种支付方式时测试不会红, 等于没测。
     """
-    for name in ("现金", "微信", "支付宝", "平台代收"):
-        assert f"'{name}'" in SQL, f"缺支付渠道 {name}"
+    gen = (pathlib.Path(__file__).resolve().parents[3]
+           / "mock-platform" / "mock_platform" / "world" / "generator.py")
+    gen_src = gen.read_text(encoding="utf-8")
+
+    block = re.search(r"_PAY_BY_CHANNEL\s*=\s*\{(.*?)\n\}", gen_src, re.S)
+    assert block, "模拟端 generator.py 里找不到 _PAY_BY_CHANNEL"
+    methods = set(re.findall(r'"(\w+)"', block.group(1)))
+    # 键是渠道(dine_in/takeaway/groupon), 值才是支付方式 —— 去掉键
+    methods -= {"dine_in", "takeaway", "groupon"}
+    assert methods, "解析不出任何支付方式, 正则要跟着 generator.py 改"
+
+    # migration 里的 method→中文名映射注释, 是两端唯一的对照表
+    mapping = dict(re.findall(r"(\w+)→(\S+)", SQL))
+    missing = methods - set(mapping)
+    assert not missing, (
+        f"模拟端有支付方式 {sorted(missing)} 未在 migration 的映射注释里声明 —— "
+        f"writer 会在运行期抛'渠道映射失败'"
+    )
+    for method in methods:
+        name = mapping[method]
+        assert f"'{name}'" in SQL, f"支付方式 {method} 对应的渠道 {name!r} 没被种进去"
+
+
+def test_种的渠道数与模拟端支付方式数一致():
+    """防止 migration 多种或少种渠道 —— 两边数量必须对齐。"""
+    gen = (pathlib.Path(__file__).resolve().parents[3]
+           / "mock-platform" / "mock_platform" / "world" / "generator.py")
+    block = re.search(r"_PAY_BY_CHANNEL\s*=\s*\{(.*?)\n\}", gen.read_text(encoding="utf-8"), re.S)
+    methods = set(re.findall(r'"(\w+)"', block.group(1))) - {"dine_in", "takeaway", "groupon"}
+    seeded = re.search(
+        r"INSERT INTO dim_payment_channel[^;]*?VALUES(.*?);", SQL, re.S
+    )
+    assert seeded, "找不到 dim_payment_channel 的种子语句"
+    seeded_rows = re.findall(r"\('MOCK_REST',", seeded.group(1))
+    assert len(seeded_rows) == len(methods), (
+        f"migration 种了 {len(seeded_rows)} 个渠道, 模拟端有 {len(methods)} 种支付方式"
+    )
 
 
 def test_有落地自检不容许静默空租户():
@@ -87,4 +127,6 @@ def test_有落地自检不容许静默空租户():
     migration 里必须有显式行数断言, 不满足就回滚。
     """
     assert "RAISE EXCEPTION" in SQL, "缺少种子落地自检"
-    assert "v_stores <> 10" in SQL or "<> 10" in SQL, "缺少门店行数断言"
+    assert "v_stores <> 10" in SQL, "缺少门店行数断言"
+    assert "v_maps <> 10" in SQL, "缺少门店映射行数断言"
+    assert "v_channels <> 4" in SQL, "缺少支付渠道行数断言"
