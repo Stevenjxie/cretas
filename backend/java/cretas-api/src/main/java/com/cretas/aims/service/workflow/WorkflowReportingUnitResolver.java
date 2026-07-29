@@ -101,11 +101,12 @@ public class WorkflowReportingUnitResolver {
     public String canonicalCode(String factoryId, String reportingUnit) {
         if (reportingUnit == null || reportingUnit.isBlank()) return null;
         String trimmed = reportingUnit.trim();
+        // 同理: 契约认不出的写法折大小写后再当等价码, 避免 KG / kg 被当成两个单位
         return unitContractService.describe(factoryId, trimmed)
                 .filter(unit -> unit.dimension() == UnitDimension.MASS
                         || unit.dimension() == UnitDimension.VOLUME)
                 .map(CanonicalUnit::code)
-                .orElse(trimmed);
+                .orElseGet(() -> trimmed.toLowerCase(java.util.Locale.ROOT));
     }
 
     private String canonical(String factoryId, String rawUnit, String materialKind, String skuId) {
