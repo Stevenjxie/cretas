@@ -1200,15 +1200,73 @@ deploy_jar() {
         " 2>/dev/null || true
     }
 
-    # === Fallback 方法1: rsync 增量传输 ===
+    # 把 --stats 里的 Literal/Matched 提出来打进日志, 并落到 UPLOAD_STATUS_DIR 供回执采集。
+    # 没有这两个数, 上传阶段只能看到"耗时 Xs", 无法区分【种子没种上→全量重传】和
+    # 【种子生效但链路本身慢】—— 2026-07-29 就是靠手工在服务器上跑一次 rsync --stats
+    # 才确认 delta 真的兑现, 这种事不该每次都手工做。
+    report_rsync_delta() {
+        local stats_log=$1 literal matched speedup
+        [ -f "$stats_log" ] || return 0
+        literal=$(sed -nE 's/^Literal data: ([0-9,]+) bytes.*/\1/p' "$stats_log" | head -1)
+        matched=$(sed -nE 's/^Matched data: ([0-9,]+) bytes.*/\1/p' "$stats_log" | head -1)
+        speedup=$(sed -nE 's/.*speedup is ([0-9.]+).*/\1/p' "$stats_log" | head -1)
+        [ -n "$literal" ] || return 0
+        echo "   [rsync] delta: 实传 ${literal} bytes / 复用 ${matched:-0} bytes (speedup ${speedup:-?}×)"
+        {
+            printf 'literal=%s\n' "${literal//,/}"
+            printf 'matched=%s\n' "${matched//,/}"
+            printf 'speedup=%s\n' "${speedup:-0}"
+        } > "$UPLOAD_STATUS_DIR/rsync-delta"
+    }
+
+    # rsync 会把 "C:/..." 里的 "C:" 解析成【主机名】, 于是变成 remote→remote 传输
+    # 直接失败。Git Bash 下同一个路径的 MSYS 形式 (/c/...) 才是 rsync 能用的。
+    #
+    # 默认路径来自 $HOME 和 $(cd .. && pwd), 在 Git Bash 下天然是 MSYS 形式, 所以
+    # 平时不会踩到。但 CRETAS_JAR_CACHE_DIR 之类的环境变量一旦被设成 Windows 风格
+    # 路径就会中招 —— 而且过去是【静默】的: rsync 失败, 竞速里 scp 赢, 操作者只看到
+    # "胜出: scp" 和一次变慢的部署, 没有任何迹象表明主通道其实挂了。
+    # 两个独立模式而不是 [/\\] 字符组: bash glob 的 bracket 表达式对反斜杠的处理
+    # 有歧义, 实测 [A-Za-z]:[/\\]* 连 "C:/..." 都匹配不到 (而 [A-Za-z]:/* 可以)。
+    # 大小写用 [[:alpha:]] / [:upper:] 而非 [A-Za-z] / A-Z 范围 —— 范围表达式按
+    # locale collation 展开, en_US.UTF-8 下会把小写也算进去 (本仓库 preflight
+    # 曾因此假报 import 无法解析)。
+    rsync_local_path() {
+        local p=$1 drive rest
+        case "$p" in
+            [[:alpha:]]:/*|[[:alpha:]]:\\*)
+                drive=$(printf '%s' "${p%%:*}" | tr '[:upper:]' '[:lower:]')
+                rest=${p#*:}
+                rest=${rest#/}
+                rest=${rest#\\}
+                rest=$(printf '%s' "$rest" | tr '\\' '/')
+                printf '/%s/%s\n' "$drive" "$rest"
+                ;;
+            *)
+                printf '%s\n' "$p"
+                ;;
+        esac
+    }
+
+    # === 主通道: rsync 增量传输 ===
     upload_rsync() {
         [ "$HAS_RSYNC" != "true" ] && return 1
         check_winner && return 0
         local TMP_FILE="${JAR_NAME}.rsync"
         local ERR_LOG="$UPLOAD_STATUS_DIR/rsync.err"
+        local STATS_LOG="$UPLOAD_STATUS_DIR/rsync.stats"
+        local SRC
+        SRC=$(rsync_local_path "$JAR_PATH")
+        if [ "$SRC" != "$JAR_PATH" ]; then
+            echo "   [rsync] 源路径已转为 MSYS 形式供 rsync 使用: $JAR_PATH → $SRC"
+        fi
         echo "   [rsync] 开始上传..."
         seed_rsync_delta_basis "$TMP_FILE"
-        if rsync -az --timeout=60 "$JAR_PATH" "$SERVER:$REMOTE_TMP/$TMP_FILE" 2> "$ERR_LOG"; then
+        # --stats: 没有它就只能看到"耗时 Xs", 无法区分【种子没种上导致全量重传】
+        # 和【种子生效但链路本身慢】。Literal/Matched 是判断 delta 是否兑现的唯一直证。
+        if rsync -az --stats --timeout=60 "$SRC" "$SERVER:$REMOTE_TMP/$TMP_FILE" \
+            > "$STATS_LOG" 2> "$ERR_LOG"; then
+            report_rsync_delta "$STATS_LOG"
             if ! check_winner; then
                 verify_and_claim "$TMP_FILE" "rsync"
             fi
@@ -1457,9 +1515,33 @@ deploy_jar() {
         #   2. rsync+compress    — 同上, 高压缩对 jar 收益小但偶尔最快
         #   3. scp (兜底)        — 单 stream SSH, 任何环境都可用 (实测 10.85 MB/s)
         # R2 / OSS / GitHub 默认禁用, 代码保留供紧急 opt-in (ENABLE_R2=1)
-        [ "$HAS_RSYNC" = "true" ] && { upload_rsync & UPLOAD_PIDS+=($!); }
-        [ "$HAS_RSYNC" = "true" ] && { upload_rsync_compress & UPLOAD_PIDS+=($!); }
-        { upload_scp & UPLOAD_PIDS+=($!); }
+        # ⚠️ 三条通道【不再】同时起跑 (2026-07-29):
+        # 竞速的前提是各通道成本相当 —— 都在全量传 168MB, 谁快谁赢。加了 delta 基准
+        # 种子之后这个前提没了: rsync 只需要传 ~20MB (实测 literal 21,396,082 /
+        # matched 154,884,240 / speedup 8.91×), 而 rsync+compress 和 scp 仍各推满
+        # 168MB。三者抢同一条 4 MB/s 上行, rsync 5 秒的活被拖成 20 秒。
+        #   实测: 有基准+竞速 20s → 有基准+独占 8s, 竞速净亏 12 秒。
+        # 所以改成 rsync 先独占, 失败或超时才启动兜底 —— 兜底通道一条没删。
+        RSYNC_SOLO_TIMEOUT="${RSYNC_SOLO_TIMEOUT:-60}"
+        if [ "$HAS_RSYNC" = "true" ]; then
+            echo "   [主通道] rsync 独占运行 (delta 基准已就位; 失败或 ${RSYNC_SOLO_TIMEOUT}s 超时才起兜底)"
+            upload_rsync & UPLOAD_PIDS+=($!)
+            SOLO_WAITED=0
+            while [ ! -f "$UPLOAD_STATUS_DIR/winner" ] \
+                && kill -0 "${UPLOAD_PIDS[0]}" 2>/dev/null \
+                && [ "$SOLO_WAITED" -lt "$RSYNC_SOLO_TIMEOUT" ]; do
+                sleep 1
+                SOLO_WAITED=$((SOLO_WAITED + 1))
+            done
+            if [ ! -f "$UPLOAD_STATUS_DIR/winner" ]; then
+                echo "   [主通道] rsync 未在 ${SOLO_WAITED}s 内完成, 启动兜底通道"
+                upload_rsync_compress & UPLOAD_PIDS+=($!)
+                upload_scp & UPLOAD_PIDS+=($!)
+            fi
+        else
+            echo "   [兜底] rsync 不可用 (${RSYNC_FAIL_REASON:-未检测到}), 直接走 scp"
+            upload_scp & UPLOAD_PIDS+=($!)
+        fi
         # 紧急 rollback 通道 (默认禁用 — Steve 2026-05-28):
         # [ "$HAS_R2" = "true" ] && { upload_r2 & UPLOAD_PIDS+=($!); }                  # 禁用: 改 scp 直传
         # [ "$HAS_OSS" = "true" ] && { upload_oss_accelerate & UPLOAD_PIDS+=($!); }     # 禁用: OSS PUT 收费
