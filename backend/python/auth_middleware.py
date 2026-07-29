@@ -128,9 +128,23 @@ DEMO_WRITE_ALLOW_PREFIXES = (
 # demo tenants (_revenue_report_helpers._log_audit) so the demo path is a genuine
 # read-only compute and an anonymous visitor can't grow the audit table. `/upload`
 # (real ingestion write) is deliberately NOT here and stays blocked. Exact suffix.
+#
+# 2026-07-29 (spec §3.2 卡 C2): 月度报告的 preview/export 是同一类
+# read-analysis POST —— 执行 sealed QuerySpec 批量取数后直接返回 JSON / 文件流,
+# 不落任何业务写。路径里不带租户 id (租户来自 JWT), 本可以走 prefix, 但这里
+# 仍然逐个列出**精确 suffix**: 该 router 未来若新增真写端点 (模板保存 / 订阅
+# 配置), prefix 会把它一并放行, 精确列举则默认 fail-closed —— 与上面 `/upload`
+# 被刻意排除是同一个理由。
+# ⚠️ 已知差异 (与 revenue-report 不完全对等): 报告的每个 section 走
+# `tiered_answer`, 它的 fire-and-forget `log_intent_capture` **没有** demo 跳过
+# (`_log_audit` 有), 所以 demo 出一份 6 节报告会写 6 行 llm_fallback_logger。
+# 这是延长 demo 问答**既有**的捕获行为 (demo 聊天今天每问一句就写一行), 不是
+# 本次新开的口子; 是否给 demo 租户整体关掉捕获另议, 不混进本次改动。
 DEMO_WRITE_ALLOW_SUFFIXES = (
     "/revenue-report/prepare",    # LLM-tool path: metadata + download_url
     "/revenue-report/generate",   # web-UI path: streams xlsx
+    "/monthly-report/preview",    # 月度报告: 执行计划返回 JSON, 不渲染文件
+    "/monthly-report/export",     # 月度报告: 执行计划 + 渲染 xlsx/pdf 文件流
     "/feedback",                  # 👍/👎 反馈是每用户信号数据, demo 也要能提
                                   # (对齐 Java Sprint 11 R2 同款豁免决策)
 )

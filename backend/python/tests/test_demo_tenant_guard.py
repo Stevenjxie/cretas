@@ -153,6 +153,43 @@ def test_demo_token_allows_revenue_report_generate():
     assert app.reached is True
 
 
+def test_demo_token_allows_monthly_report_preview():
+    # spec §3.2 卡 C2: 月度报告 preview 是 read-analysis POST（执行 sealed
+    # QuerySpec 后返回 JSON），不是业务写 —— demo 演示必须能出报告。
+    status, _body, app = _run(
+        "/api/smartbi/restaurant/monthly-report/preview",
+        method="POST",
+        factory_id="DEMO_REST",
+    )
+
+    assert status == 200
+    assert app.reached is True
+
+
+def test_demo_token_allows_monthly_report_export():
+    status, _body, app = _run(
+        "/api/smartbi/restaurant/monthly-report/export",
+        method="POST",
+        factory_id="DEMO_REST",
+    )
+
+    assert status == 200
+    assert app.reached is True
+
+
+def test_demo_token_still_blocks_unlisted_monthly_report_post():
+    # 精确 suffix 而非 prefix 的意义: 该 router 下未来新增的写端点默认仍被拦。
+    status, body, app = _run(
+        "/api/smartbi/restaurant/monthly-report/subscribe",
+        method="POST",
+        factory_id="DEMO_REST",
+    )
+
+    assert app.reached is False
+    assert status == 403
+    assert body["code"] == "DEMO_READ_ONLY"
+
+
 def test_demo_token_still_blocks_revenue_report_upload():
     # /upload is a real ingestion write — must stay blocked even though it shares
     # the /revenue-report/ path segment.
