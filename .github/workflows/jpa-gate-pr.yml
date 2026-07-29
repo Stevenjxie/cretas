@@ -107,6 +107,7 @@ jobs:
           -Dspring.profiles.active=test
           -Dtest='*RepositoryQueryValidationTest'
           -Dsurefire.failIfNoSpecifiedTests=false
+          -Dmaven.compiler.useIncrementalCompilation=false
 
       - name: Upload surefire reports on failure
         if: failure()
