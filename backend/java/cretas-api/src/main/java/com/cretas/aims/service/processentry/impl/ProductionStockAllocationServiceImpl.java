@@ -17,6 +17,7 @@ import com.cretas.aims.service.processentry.ProductionInventoryOwnershipGuard;
 import com.cretas.aims.service.processentry.ProductionStockAllocationService;
 import com.cretas.aims.service.processentry.ProductionStockShortageException;
 import com.cretas.aims.service.unit.UnitContractService;
+import com.cretas.aims.service.unit.UnitDimension;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 
@@ -77,6 +78,7 @@ public class ProductionStockAllocationServiceImpl implements ProductionStockAllo
             // 强行把计数单位折成 kg 需要一个"每只多少公斤"的口径, 那是配置里没有的东西。
             String inputUnit = canonicalNativeUnit(factoryId, normalizeUnit(input.getUnit()));
             boolean massInput = isCanonicalMassUnit(inputUnit);
+            // 非科学单位不归一, 所以匹配值就是用户写的那个字 —— 展示与比较天然一致
             String allocationUnit = massInput ? KG : inputUnit;
             BigDecimal required = massInput
                     ? reportingQuantityToKg(input.getQuantity(), input.getUnit())
@@ -601,10 +603,26 @@ public class ProductionStockAllocationServiceImpl implements ProductionStockAllo
      * 契约认不出来的单位保持原样(小写去空格): 未登记不等于非法, 至少让同样写法的
      * 投料与批次还能对上, 而不是直接判定为 null 把报工整个挡死。
      */
+    /**
+     * 单位归一 —— **只对有真实换算系数的科学单位生效**。
+     *
+     * <p>质量(g/kg)、体积(ml/L)之间存在恒定换算, 归一到等价码是有物理意义的。
+     * 计数与包装单位不同: 只 / 件 / 个 / 袋 / 盒 / 箱 之间没有普适换算 —— 一只不等于
+     * 一件, 一袋几只随物料而变。给它们编一个共同等价码, 等于让系统替工厂断定"两个
+     * 不同的东西是同一个东西"; 工厂以后新建一个「扇」或「提」时, 系统也无从判断该把
+     * 它挂进哪个族。</p>
+     *
+     * <p>所以非科学单位一律按字面比较: 写法相同才是同一个单位。要跨单位投料, 得有
+     * 显式的每物料换算(每袋几只), 而不是靠一张全局别名表猜。</p>
+     */
     private String canonicalNativeUnit(String factoryId, String unit) {
         if (unit == null || unit.isBlank()) return null;
-        String code = unitContractService.normalize(factoryId, unit).code();
-        return code != null ? code : unit.trim().toLowerCase(java.util.Locale.ROOT);
+        String trimmed = unit.trim();
+        return unitContractService.describe(factoryId, trimmed)
+                .filter(canonical -> canonical.dimension() == UnitDimension.MASS
+                        || canonical.dimension() == UnitDimension.VOLUME)
+                .map(com.cretas.aims.service.unit.CanonicalUnit::code)
+                .orElse(trimmed);
     }
 
     private boolean isCanonicalMassUnit(String unit) {
@@ -681,5 +699,6 @@ public class ProductionStockAllocationServiceImpl implements ProductionStockAllo
                 .map(com.cretas.aims.entity.RawMaterialType::getName)
                 .orElse(null);
     }
+
 
 }
