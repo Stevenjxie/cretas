@@ -530,42 +530,64 @@ async def lifespan(app: FastAPI):
             from smartbi.ingestion.platforms.writer import write_orders
 
             async def _sync_platforms_forever():
-                await _asyncio_p.sleep(30)     # 让连接池先起来
-                factory_id = os.getenv("PLATFORM_SYNC_FACTORY_ID", "MOCK_REST")
-                base_url = os.getenv("PLATFORM_MOCK_BASE_URL", "")
-                interval = int(os.getenv("PLATFORM_SYNC_INTERVAL_SECONDS", "60"))
-                if not base_url:
-                    # 禁降级: 没配上游地址就别装作在同步, 明确停掉并留下日志。
-                    logger.error("[platform-sync] PLATFORM_MOCK_BASE_URL 未配置, 循环不启动")
-                    return
-                async with _httpx_p.AsyncClient() as client:
-                    adapters = [KeruyunAdapter(
-                        base_url,
-                        os.getenv("PLATFORM_KERUYUN_APP_KEY", ""),
-                        os.getenv("PLATFORM_KERUYUN_APP_SECRET", ""),
-                        client,
-                    )]
-                    while True:
-                        try:
-                            pool = await _get_pool_p()
-                            results = await sync_all(pool, adapters,
-                                                     factory_id=factory_id,
-                                                     write_orders=write_orders)
-                            logger.info("[platform-sync] %s", results)
-                        except _asyncio_p.CancelledError:
-                            # 关机路径: 必须原样上抛, 吞掉会让 shutdown 挂住。
-                            raise
-                        except Exception as ex:
-                            logger.error(f"[platform-sync] 本轮失败: {ex}")
-                        await _asyncio_p.sleep(interval)
+                # ⚠️ 整个协程体都包在 try 里: while 之前的任何一行抛错
+                # (环境变量解析、adapter 构造) 都会让这个常驻任务无声死掉,
+                # 只在 GC 时留一句 "Task exception was never retrieved",
+                # 而服务照常 200 —— 本计划 Task 5 已经栽过这个跟头一次。
+                try:
+                    await _asyncio_p.sleep(30)     # 让连接池先起来
+                    factory_id = os.getenv("PLATFORM_SYNC_FACTORY_ID", "MOCK_REST")
+                    base_url = os.getenv("PLATFORM_MOCK_BASE_URL", "")
+                    raw_interval = os.getenv("PLATFORM_SYNC_INTERVAL_SECONDS", "60")
+                    try:
+                        interval = int(raw_interval)
+                        if interval <= 0:
+                            raise ValueError(raw_interval)
+                    except ValueError:
+                        logger.error("[platform-sync] PLATFORM_SYNC_INTERVAL_SECONDS=%r 非法, "
+                                     "回退 60s", raw_interval)
+                        interval = 60
+                    if not base_url:
+                        # 禁降级: 没配上游地址就别装作在同步, 明确停掉并留下日志。
+                        logger.error("[platform-sync] PLATFORM_MOCK_BASE_URL 未配置, 循环不启动")
+                        return
+                    async with _httpx_p.AsyncClient() as client:
+                        adapters = [KeruyunAdapter(
+                            base_url,
+                            os.getenv("PLATFORM_KERUYUN_APP_KEY", ""),
+                            os.getenv("PLATFORM_KERUYUN_APP_SECRET", ""),
+                            client,
+                        )]
+                        while True:
+                            try:
+                                pool = await _get_pool_p()
+                                results = await sync_all(pool, adapters,
+                                                         factory_id=factory_id,
+                                                         write_orders=write_orders)
+                                logger.info("[platform-sync] %s", results)
+                            except _asyncio_p.CancelledError:
+                                # 关机路径: 必须原样上抛, 吞掉会让 shutdown 挂住。
+                                raise
+                            except Exception:
+                                # exception() 而非 error(): 这个循环要跑几周,
+                                # 只留一行异常字符串会让排查无从下手。
+                                logger.exception("[platform-sync] 本轮失败")
+                            await _asyncio_p.sleep(interval)
+                except _asyncio_p.CancelledError:
+                    raise
+                except Exception:
+                    logger.exception("[platform-sync] 常驻任务异常退出, 平台同步已停止")
+                    raise
 
             if _is_leader:
                 _platform_sync_task = _asyncio_p.create_task(_sync_platforms_forever())
                 logger.info("[leader] platform sync armed")
             else:
                 logger.info("[follower] platform sync skipped (leader handles)")
-        except Exception as e:
-            logger.warning(f"[startup] platform sync init failed: {e}")
+        except Exception:
+            # 显式开了 PLATFORM_SYNC_ENABLED 却起不来, 是 error 不是 warning ——
+            # warning 级别在这台机器的日志量下等于看不见。
+            logger.exception("[startup] platform sync init failed — 平台同步未启动")
 
     # External restaurant benchmark refresh. Disabled by default because it
     # calls public websites/APIs; enable only after source review and quota setup.
@@ -997,10 +1019,15 @@ async def lifespan(app: FastAPI):
 
     # Shutdown: cancel platform sync task
     if _platform_sync_task is not None:
+        # 本模块顶层没有 import asyncio(各处都是块内 `import asyncio as _asyncio*`),
+        # 这里必须自己拿, 否则关机时 NameError。
+        import asyncio as _asyncio_shutdown
         _platform_sync_task.cancel()
         try:
             await _platform_sync_task
-        except Exception:
+        # CancelledError 自 3.8 起继承 BaseException, 裸 `except Exception` 接不住。
+        # 本块排在关机链最前面, 漏接会把后面所有任务的 cancel 一起跳过。
+        except (Exception, _asyncio_shutdown.CancelledError):
             pass
 
     # Shutdown: cancel narrative_cache pruner task

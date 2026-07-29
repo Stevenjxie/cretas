@@ -43,9 +43,28 @@ class CallbackMisconfigured(RuntimeError):
     """服务端自身配置缺失。是我们的错不是调用方的错 —— 回 500 不回 401。"""
 
 
+_WARNED_NO_ALLOWLIST = False
+
+
 def _allowed_ips() -> Set[str]:
+    """来源白名单。空 = 不做来源校验 —— 这时必须把「层①失效」喊出来。
+
+    ⚠️ 这里读的是 socket 对端地址 (request.client.host)。若服务跑在 nginx
+    后面(47 上就是), 对端永远是 127.0.0.1, 填模拟器的真实公网 IP 会把每一次
+    合法回调都 403 掉。要按真实来源 IP 过滤, 得先配置可信代理并解析
+    X-Forwarded-For —— 本仓当前没有这套设施, 所以部署时要么填代理地址,
+    要么留空并依赖验签(层②③)。
+    """
+    global _WARNED_NO_ALLOWLIST
     raw = os.getenv("PLATFORM_CALLBACK_ALLOWED_IPS", "")
-    return {ip.strip() for ip in raw.split(",") if ip.strip()}
+    allowed = {ip.strip() for ip in raw.split(",") if ip.strip()}
+    if not allowed and not _WARNED_NO_ALLOWLIST:
+        # 只喊一次, 免得每个请求刷屏。不静默是关键: 三层校验只剩两层这件事
+        # 必须在日志里留痕, 不能"没配就当没这层"。
+        logger.warning("[callback] PLATFORM_CALLBACK_ALLOWED_IPS 未配置 —— "
+                       "层① IP 白名单未生效, 当前仅靠验签 + 防重放")
+        _WARNED_NO_ALLOWLIST = True
+    return allowed
 
 
 def _secret() -> str:
@@ -58,9 +77,22 @@ def _secret() -> str:
 
 def verify_signature(body: bytes, timestamp: str, nonce: str,
                      signature: str, secret: str) -> bool:
-    payload = timestamp.encode("ascii") + nonce.encode("ascii") + body
-    expected = hmac.new(secret.encode("utf-8"), payload, hashlib.sha256).hexdigest().lower()
-    return hmac.compare_digest(expected, (signature or "").lower())
+    """验签。任何"根本签不出来"的输入一律判否, 不上抛。
+
+    ⚠️ Starlette 按 latin-1 解 header, 所以外部随手塞一个 0xFF 字节就能让
+    timestamp/nonce 变成非 ASCII 字符串。若不拦:
+      - `.encode("ascii")` 抛 UnicodeEncodeError
+      - `hmac.compare_digest` 对含非 ASCII 的 str 抛 TypeError
+    本端点在公网上且默认不校验来源, 那就是一个谁都能打出来的 500 + traceback。
+    ascii 编码本身不能换成 utf-8 —— 那会和模拟端 build_signature 的字节序列脱钩。
+    """
+    try:
+        payload = timestamp.encode("ascii") + nonce.encode("ascii") + body
+        expected = hmac.new(secret.encode("utf-8"), payload, hashlib.sha256).hexdigest().lower()
+        return hmac.compare_digest(expected, (signature or "").lower())
+    except (UnicodeEncodeError, TypeError):
+        # 非 ASCII 的 timestamp/nonce/signature: 合法调用方永远不会发出这种东西。
+        return False
 
 
 def prune_nonces(pool: Optional[Set[str]] = None, *, now: Optional[int] = None) -> int:

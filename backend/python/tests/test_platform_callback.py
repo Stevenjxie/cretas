@@ -22,14 +22,29 @@ def _sig(body: bytes, ts: str, nonce: str, secret: str = SECRET) -> str:
     return hmac.new(secret.encode(), payload, hashlib.sha256).hexdigest().lower()
 
 
-def test_验签算法与模拟端一致():
+def test_验签算法与模拟端一致(monkeypatch):
+    # syspath_prepend 而非裸 sys.path.insert: 后者会永久污染整个 pytest 会话的
+    # 模块搜索路径, mock-platform/ 将来多一个 main.py/config.py 就会盖掉后端同名模块。
     import pathlib
-    import sys
-    sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[3] / "mock-platform"))
+    monkeypatch.syspath_prepend(
+        str(pathlib.Path(__file__).resolve().parents[3] / "mock-platform"))
     from mock_platform.callback import build_signature
 
     body, ts, nonce = b'{"maxSeq":9}', "1785300000", "abc"
     assert build_signature(body, ts, nonce, SECRET) == _sig(body, ts, nonce)
+
+
+@pytest.mark.parametrize("ts,nonce,sig", [
+    ("\xff", "n", "deadbeef"),      # 非 ASCII timestamp → .encode("ascii") 会炸
+    ("123", "\xff", "deadbeef"),    # 非 ASCII nonce → 同上
+    ("123", "n", "\xff"),           # 非 ASCII signature → compare_digest 抛 TypeError
+])
+def test_非ASCII请求头判否而非抛异常(ts, nonce, sig):
+    """Starlette 按 latin-1 解 header, 塞个 0xFF 字节就能造出非 ASCII 字符串。
+
+    不拦就是一个「谁都能打出来的公网 500 + traceback」—— 本端点默认不校验来源。
+    """
+    assert verify_signature(b"{}", ts, nonce, sig, SECRET) is False
 
 
 def test_正确签名通过():
@@ -96,6 +111,20 @@ def test_nonce池按时间窗修剪():
     assert any(entry.endswith(":n-fresh") for entry in seen)
 
 
+def test_修剪边界_窗口内保留窗口外清除():
+    """把 prune 的比较符钉死: `>` 改成 `>=` 必须变红。
+
+    修剪谓词若比 check_replay 的接受谓词更宽, 就会出现「条目已清掉但时间戳
+    仍被接受」的缝隙 —— 重放检测在那一瞬间形同虚设。
+    """
+    from smartbi.api.platform_callback import TIMESTAMP_WINDOW_SECONDS as W
+
+    now = int(time.time())
+    seen = {f"{now - W}:边界内", f"{now - W - 1}:边界外"}
+    prune_nonces(seen, now=now)
+    assert seen == {f"{now - W}:边界内"}
+
+
 def test_修剪后同ts的nonce仍被拒():
     """修剪不能误伤窗口内条目 —— 否则重放会通过。"""
     now = int(time.time())
@@ -127,6 +156,7 @@ def client(monkeypatch):
     monkeypatch.setenv("PLATFORM_CALLBACK_SECRET", SECRET)
     monkeypatch.setenv("PLATFORM_CALLBACK_ALLOWED_IPS", "")
     platform_callback._SEEN_NONCES.clear()
+    platform_callback._WARNED_NO_ALLOWLIST = False
 
     app = FastAPI()
     app.include_router(platform_callback.router)
@@ -226,6 +256,31 @@ def test_端点_未配密钥500而非放行(client, monkeypatch):
     assert resp.status_code == 500
     assert "PLATFORM_CALLBACK_SECRET" not in resp.json()["message"], \
         "不该把服务端配置细节回显给外部调用方"
+
+
+def test_端点_非ASCII请求头401不500(client):
+    """公网可达 + 默认不校验来源 → 任何未捕获异常都是谁都能打出来的 500。"""
+    body = b"{}"
+    headers = _headers(body, nonce="n-bad")
+    # 必须发原始字节: httpx 不让 str 里带非 ASCII。真实链路上这个字节来自
+    # socket, Starlette 按 latin-1 解成 "\xff" 再交给我们。
+    headers["X-Mock-Signature"] = b"\xff"
+    resp = client.post("/api/platform-callback/keruyun", content=body, headers=headers)
+    assert resp.status_code == 401
+
+
+def test_白名单为空必须喊出来(client, caplog):
+    """禁降级: 层① 失效不能静默 —— 日志里没这句就没人知道只剩两层。"""
+    import logging
+
+    body = b"{}"
+    with caplog.at_level(logging.WARNING, logger="smartbi.api.platform_callback"):
+        client.post("/api/platform-callback/keruyun", content=body,
+                    headers=_headers(body, nonce="warn-1"))
+        client.post("/api/platform-callback/keruyun", content=body,
+                    headers=_headers(body, nonce="warn-2"))
+    hits = [r for r in caplog.records if "PLATFORM_CALLBACK_ALLOWED_IPS" in r.message]
+    assert len(hits) == 1, "应当只喊一次, 不能每个请求刷屏"
 
 
 def test_回调路径在PUBLIC_PATHS里():
