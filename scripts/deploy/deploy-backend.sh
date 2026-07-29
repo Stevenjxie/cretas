@@ -98,9 +98,27 @@ post_switch_probe() {
 
     POST_SWITCH_HTTP=""
     POST_SWITCH_SYSTEMD=""
+    local probe_dir probe_http_pid probe_systemd_pid
     for ((attempt = 1; attempt <= attempts; attempt++)); do
-        POST_SWITCH_HTTP=$(ssh "$gateway" "curl -sk -o /dev/null --max-time 5 -w '%{http_code}' -H 'Host: api.cretaceousfuture.com' https://127.0.0.1/api/mobile/health" 2>/dev/null || true)
-        POST_SWITCH_SYSTEMD=$(ssh "$server" "systemctl is-active $service 2>&1" 2>/dev/null || true)
+        # 两个探针打的是不同主机, 彼此无依赖, 但串行做要付两次跨境握手
+        # (实测 139 约 2.3s / 47 约 3.9s, 每轮 6.2s, 三轮 18.6s 全是握手费)。
+        # 并行后每轮只等较慢的那个。语义一字未改: 仍是 139 本地 curl 127.0.0.1
+        # + 47 本地 systemctl。刻意不合并成"单次 ssh 到 47 再 curl 139 公网"——
+        # 那样会把 47→139 这一跳网络抖动变成健康探针失败, 让 auto-rollback 去
+        # 回滚一个本来健康的部署。
+        probe_dir=$(mktemp -d)
+        ssh "$gateway" "curl -sk -o /dev/null --max-time 5 -w '%{http_code}' -H 'Host: api.cretaceousfuture.com' https://127.0.0.1/api/mobile/health" \
+            >"$probe_dir/http" 2>/dev/null &
+        probe_http_pid=$!
+        ssh "$server" "systemctl is-active $service 2>&1" \
+            >"$probe_dir/systemd" 2>/dev/null &
+        probe_systemd_pid=$!
+        wait "$probe_http_pid" 2>/dev/null || true
+        wait "$probe_systemd_pid" 2>/dev/null || true
+        # 读不到就是空串, 与原先 `|| true` 的失败语义一致 (空 != 200/active -> 不健康)
+        POST_SWITCH_HTTP=$(cat "$probe_dir/http" 2>/dev/null || true)
+        POST_SWITCH_SYSTEMD=$(cat "$probe_dir/systemd" 2>/dev/null || true)
+        rm -rf "$probe_dir"
         if [ "$POST_SWITCH_HTTP" = "200" ] && [ "$POST_SWITCH_SYSTEMD" = "active" ]; then
             return 0
         fi
