@@ -1247,7 +1247,9 @@ public class ProcessingServiceImpl implements ProcessingService {
                 planComparison.put("plannedQuantity", plan.getPlannedQuantity());
                 planComparison.put("actualQuantity", batch.getActualQuantity());
 
-                if (plan.getPlannedQuantity() != null && batch.getActualQuantity() != null) {
+                if (plan.getPlannedQuantity() != null
+                        && plan.getPlannedQuantity().compareTo(BigDecimal.ZERO) > 0
+                        && batch.getActualQuantity() != null) {
                     BigDecimal completionRate = batch.getActualQuantity()
                         .divide(plan.getPlannedQuantity(), 4, RoundingMode.HALF_UP)
                         .multiply(new BigDecimal(100));

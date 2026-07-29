@@ -160,6 +160,7 @@ function handleWorkflowNodeClick(nodeId: string) {
 
 const loading = ref(false);
 const actionLoading = ref(false);
+const entryPreparingPlanId = ref<string | null>(null);
 const tableData = ref<TableRow[]>([]);
 const materialAdvisoryMap = ref<Record<string, ProductionPlanMaterialAdvisory>>({});
 const settlementStatusMap = ref<Record<string, ProductionSettlementStatus>>({});
@@ -1584,6 +1585,9 @@ function isStepwise(row: any): boolean {
 }
 
 async function openProcessEntry(row: any) {
+  const rowId = String(row?.id || '');
+  if (entryPreparingPlanId.value !== null) return;
+  entryPreparingPlanId.value = rowId;
   // raw-centric 多SKU (2026-07-13): workflow 驱动的计划逐道报工需先 materialize 批次
   // (逐道抽屉只读 workflow-config, 无批次 → 返空 → 落回 legacy archetype tab)。
   // 存货生产(SAFETY_STOCK)无「转批次」按钮, 手动/预测虽有但用户也可能直接点逐道录入 →
@@ -1605,8 +1609,13 @@ async function openProcessEntry(row: any) {
   } catch (error) {
     // 无法确认/物化 Workflow 时不能打开 legacy 逐道录入，否则同一计划会混用两套工序单位。
     console.error('[production-plan] Workflow 批次物化失败，阻止逐道录入', error);
-    ElMessage.error('Workflow 批次尚未准备完成，暂不能逐道录入。请修复提示问题后重试。');
+    // 业务/API 错误已由请求拦截器显示具体原因；只有纯网络错误才补充 fallback，避免双 toast。
+    handleCatchError(error, '生产批次准备失败，请检查网络后重试');
     return;
+  } finally {
+    if (entryPreparingPlanId.value === rowId) {
+      entryPreparingPlanId.value = null;
+    }
   }
   entryRow.value = row;
   entryDrawerVisible.value = true;
@@ -3337,9 +3346,8 @@ function getStatusText(status: string) {
   return getPlanStatusText(status);
 }
 
-// 防呆 Rule 1: SAFETY_STOCK(存货生产)等无「计划数量」字段的计划落地为 0/null，
-// 若原样显示裸 "0" 紧邻黄色「未完成」状态标签，操作员会误读成异常/漏填。
-// 明确区分"没有这个字段"(—) 与"真实数量为 0"(理论不会出现于 UI，但同样降级显示避免误读)。
+// 防呆 Rule 1: SAFETY_STOCK(库存生产)没有「计划数量」，后端用 0 表示开放数量。
+// 列表明确显示“按实际报工”，避免操作员把裸 0 / 破折号误读成异常或漏填。
 function formatPlannedQuantity(v: number | null | undefined, unit?: string | null): string {
   if (v == null || v === 0) return '—';
   return unit ? `${v} ${displayUnit(unit)}` : `${v}（单位未配置）`;
@@ -3347,6 +3355,10 @@ function formatPlannedQuantity(v: number | null | undefined, unit?: string | nul
 
 function formatPlanDisplayQuantity(row: TableRow | null | undefined): string {
   if (!row) return '—';
+  if (row.sourceType === 'SAFETY_STOCK'
+      && Number(row.plannedQuantity || 0) <= 0) {
+    return '按实际报工';
+  }
   const sourceQuantity = row.sourceDisplayQuantity as number | null | undefined;
   const sourceUnit = row.sourceDisplayUnit as string | null | undefined;
   if (sourceQuantity != null && sourceQuantity !== 0 && sourceUnit) {
@@ -3953,6 +3965,8 @@ function guardProductionPlanAi(params: Record<string, unknown>) {
                 type="warning"
                 link
                 size="small"
+                :loading="entryPreparingPlanId === String(row.id)"
+                :disabled="entryPreparingPlanId !== null"
                 @click="openProcessEntry(row)"
               >{{ processEntryActionLabel(row) }}</el-button>
               <el-button
