@@ -80,6 +80,7 @@ public class LabelQcAnalysisRecoveryJob {
             photo.setStatus(LabelQcPhotoStatus.QUEUED);
             photo.setAiModel(null);
             photo.setPromptVersion(null);
+            photo.setScreeningDetail(null);
             photo.setAnalysisError(null);
         });
         photoRepository.saveAll(photos);

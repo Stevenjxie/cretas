@@ -56,6 +56,8 @@ export interface LabelQcPhoto {
   aiModel?: string | null;
   promptVersion?: string | null;
   analysisError?: string | null;
+  /** AI 初筛明细原文 JSON：托盘框 + 每盒识别到的白标/彩标框。可能为 null（旧数据或 VL 模式）。 */
+  screeningDetail?: string | null;
   annotations: LabelQcAnnotation[];
 }
 
