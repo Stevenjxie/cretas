@@ -39,22 +39,34 @@ async def _generate_forever() -> None:
     }
     async with httpx.AsyncClient() as client:
         while True:
-            now = datetime.datetime.now()
-            minute = now.hour * 60 + now.minute
-            biz_date = now.date().isoformat()
-            created = 0
-            for store in stores:
-                count = quotas[store["id"]][minute]
-                if count:
-                    created += generate_orders(
-                        conn, store_id=store["id"], biz_date=biz_date,
-                        minute_of_day=minute, count=count, rng=rng,
-                    )
-            if created:
-                row = conn.execute('SELECT MAX(seq) s FROM "order"').fetchone()
-                logger.info("[gen] 第 %s 分钟生成 %d 单, maxSeq=%s", minute, created, row["s"])
-                await notify(client, settings.callback_url,
-                             settings.callback_secret, max_seq=int(row["s"]))
+            try:
+                now = datetime.datetime.now()
+                minute = now.hour * 60 + now.minute
+                biz_date = now.date().isoformat()
+                created = 0
+                for store in stores:
+                    count = quotas[store["id"]][minute]
+                    if not count:
+                        continue
+                    try:
+                        created += generate_orders(
+                            conn, store_id=store["id"], biz_date=biz_date,
+                            minute_of_day=minute, count=count, rng=rng,
+                        )
+                    except Exception:
+                        # 单店失败隔离：不让一家店的问题停掉整个常驻循环。
+                        # 生成器是 daemon，停了就再也不产数据且外部难以察觉。
+                        logger.exception("[gen] 门店 %s 第 %s 分钟生成失败, 跳过",
+                                         store["id"], minute)
+                if created:
+                    row = conn.execute('SELECT MAX(seq) s FROM "order"').fetchone()
+                    logger.info("[gen] 第 %s 分钟生成 %d 单, maxSeq=%s", minute, created, row["s"])
+                    await notify(client, settings.callback_url,
+                                 settings.callback_secret, max_seq=int(row["s"]))
+            except Exception:
+                # 兜住本轮内任何其他意外（含 notify 之外的逻辑），
+                # 保证下一分钟还能继续跑，而不是让整个协程被异常打死。
+                logger.exception("[gen] 本轮异常, 60s 后继续")
             await asyncio.sleep(60)
 
 
@@ -63,7 +75,9 @@ def _cmd_serve(args: argparse.Namespace) -> None:
 
     @app.on_event("startup")
     async def _arm_generator():
-        asyncio.create_task(_generate_forever())
+        # ⚠️ 必须持强引用: event loop 只对 task 持弱引用, 丢弃返回值会让
+        #    生成器随时被 GC 掉, 而 HTTP 面毫无异样 —— 服务"看着健康但不产数据"。
+        app.state.generator_task = asyncio.create_task(_generate_forever())
 
     uvicorn.run(app, host=args.host, port=args.port, log_level="info")
 
@@ -78,6 +92,15 @@ def _cmd_backfill(args: argparse.Namespace) -> None:
     logger.info("[backfill] 造出 %d 单，覆盖过去 %d 天", total, args.days)
 
 
+def _positive_int(raw: str) -> int:
+    """`--days` 校验：0/负数会让 `range(days, 0, -1)` 静默为空，看起来成功但什么都没造。
+    与本项目"禁止降级处理，明确显示错误"的原则相悖，必须在入口挡住。"""
+    value = int(raw)
+    if value <= 0:
+        raise argparse.ArgumentTypeError(f"--days 必须为正整数, 收到 {value}")
+    return value
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(prog="mock_platform")
     sub = parser.add_subparsers(dest="cmd", required=True)
@@ -90,7 +113,7 @@ def main() -> None:
     p_serve.add_argument("--port", type=int, default=9200)
     p_serve.set_defaults(func=_cmd_serve)
     p_back = sub.add_parser("backfill")
-    p_back.add_argument("--days", type=int, required=True)
+    p_back.add_argument("--days", type=_positive_int, required=True)
     p_back.set_defaults(func=_cmd_backfill)
     args = parser.parse_args()
     args.func(args)
