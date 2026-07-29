@@ -1,0 +1,653 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1">
+<meta name="theme-color" content="#0B0B0C">
+<title>天物书岛食集 · 扫码点单</title>
+<style>
+/* ========== tokens ========== */
+:root{
+  --ink:#0B0B0C;
+  --ink-2:#141416;
+  --ink-3:#1C1C1F;
+  --cream:#F2EDE4;
+  --cream-70:rgba(242,237,228,.70);
+  --cream-45:rgba(242,237,228,.45);
+  --cream-28:rgba(242,237,228,.28);
+  --line:rgba(242,237,228,.13);
+  --red:#C0392B;
+  --jade:#7FB069;
+  --serif:"Songti SC","STSong","Noto Serif SC","Source Han Serif SC","Source Han Serif CN",SimSun,serif;
+  --sans:"PingFang SC","HarmonyOS Sans SC","Noto Sans SC","Microsoft YaHei",-apple-system,BlinkMacSystemFont,sans-serif;
+  --pad:20px;
+  --r:14px;
+}
+*{margin:0;padding:0;box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html{-webkit-text-size-adjust:100%}
+body{
+  background:var(--ink);color:var(--cream);font-family:var(--sans);
+  min-height:100vh;overflow-x:hidden;
+  font-feature-settings:"tnum";
+}
+/* 纸感噪点 */
+body::before{
+  content:"";position:fixed;inset:0;pointer-events:none;z-index:9;opacity:.05;
+  background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='140' height='140'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.85' numOctaves='3'/%3E%3C/filter%3E%3Crect width='140' height='140' filter='url(%23n)'/%3E%3C/svg%3E");
+}
+.wrap{max-width:520px;margin:0 auto;position:relative;min-height:100vh}
+img{display:block;max-width:100%}
+button{font:inherit;color:inherit;background:none;border:none;cursor:pointer}
+
+/* ========== screen switching ========== */
+.screen{display:none}
+.screen.on{display:block;animation:fadeIn .32s ease both}
+@keyframes fadeIn{from{opacity:0}to{opacity:1}}
+
+/* ========== 首页 · 品牌头 ========== */
+.masthead{padding:calc(env(safe-area-inset-top) + 26px) var(--pad) 0;position:relative}
+.mast-top{display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:26px}
+.cutlery{width:26px;height:34px;opacity:.85}
+.badge-demo{
+  font-size:10px;letter-spacing:.16em;padding:5px 9px;border:1px solid var(--cream-28);
+  color:var(--cream-45);border-radius:2px
+}
+.brand-name{
+  font-family:var(--serif);font-size:32px;font-weight:600;letter-spacing:.16em;
+  line-height:1.15;margin-bottom:10px
+}
+.brand-tag{
+  font-size:10px;letter-spacing:.34em;color:var(--cream-45);font-weight:500
+}
+.rule{height:1px;background:var(--line);margin:24px 0 0}
+.rule-red{height:2px;width:44px;background:var(--red);margin-top:-1px}
+
+/* ========== 首页 · 桌号 hero ========== */
+.hero{padding:34px var(--pad) 30px;text-align:center;position:relative;overflow:hidden}
+.hero-eyebrow{font-size:11px;letter-spacing:.3em;color:var(--cream-45);margin-bottom:10px}
+.table-no{
+  font-size:82px;font-weight:800;line-height:.92;letter-spacing:.02em;
+  font-family:var(--sans);
+  background:linear-gradient(180deg,var(--cream) 25%,rgba(242,237,228,.62));
+  -webkit-background-clip:text;background-clip:text;color:transparent;
+}
+.table-unit{font-size:13px;letter-spacing:.4em;color:var(--cream-70);margin-top:12px}
+.hero-note{
+  margin-top:18px;font-size:13px;color:var(--cream-70);line-height:1.8;
+  display:inline-flex;align-items:center;gap:8px
+}
+.dot-red{width:5px;height:5px;border-radius:50%;background:var(--red);flex:none}
+.hero-doodle{position:absolute;opacity:.13;pointer-events:none}
+.hero-doodle.l{left:-22px;top:22px;width:120px;transform:rotate(-8deg)}
+.hero-doodle.r{right:-26px;bottom:6px;width:126px;transform:rotate(6deg)}
+
+/* ========== 首页 · 档口栅格 ========== */
+.sec-head{
+  display:flex;align-items:baseline;justify-content:space-between;
+  padding:0 var(--pad);margin:12px 0 16px
+}
+.sec-title{font-family:var(--serif);font-size:17px;letter-spacing:.14em}
+.sec-count{font-size:11px;color:var(--cream-45);letter-spacing:.1em}
+.grid{
+  display:grid;grid-template-columns:1fr 1fr;gap:12px;
+  padding:0 var(--pad) 30px
+}
+.card{
+  background:var(--ink-2);border:1px solid var(--line);border-radius:var(--r);
+  overflow:hidden;text-align:left;display:flex;flex-direction:column;
+  transition:transform .22s cubic-bezier(.2,.7,.3,1),border-color .22s;
+  animation:cardIn .5s cubic-bezier(.2,.7,.3,1) both;
+  will-change:transform
+}
+@keyframes cardIn{from{opacity:0;transform:translateY(16px)}to{opacity:1;transform:none}}
+.card:active{transform:scale(.972)}
+.card.shut{pointer-events:none;border-color:rgba(242,237,228,.08)}
+.card.shut .logo-box img{filter:grayscale(1) brightness(.48) contrast(.9)}
+.card.shut .logo-box::after{
+  content:"";position:absolute;inset:0;background:rgba(11,11,12,.42)
+}
+.card.shut .card-name{color:var(--cream-45)}
+.shut-stamp{
+  position:absolute;z-index:2;left:50%;top:50%;transform:translate(-50%,-50%);
+  border:1px solid var(--cream-45);color:var(--cream);
+  font-size:11px;letter-spacing:.3em;padding:5px 12px 5px 15px;border-radius:2px;
+  background:rgba(11,11,12,.55);white-space:nowrap
+}
+.logo-box{
+  background:#fff;aspect-ratio:16/11;display:flex;align-items:center;justify-content:center;
+  overflow:hidden;position:relative
+}
+.logo-box img{width:100%;height:100%;object-fit:cover}
+.card-body{padding:11px 12px 13px}
+.card-name{
+  font-family:var(--serif);font-size:15px;font-weight:600;letter-spacing:.04em;
+  line-height:1.3;margin-bottom:5px;
+  display:-webkit-box;-webkit-line-clamp:1;-webkit-box-orient:vertical;overflow:hidden
+}
+.card-tag{font-size:11px;color:var(--cream-45);letter-spacing:.05em;margin-bottom:9px;
+  display:-webkit-box;-webkit-line-clamp:1;-webkit-box-orient:vertical;overflow:hidden}
+.status{display:flex;align-items:center;gap:6px;font-size:11px;letter-spacing:.06em}
+.status i{width:5px;height:5px;border-radius:50%;flex:none}
+.status.open{color:var(--jade)} .status.open i{background:var(--jade);box-shadow:0 0 0 3px rgba(127,176,105,.16)}
+.status.closed{color:var(--cream-45)} .status.closed i{background:var(--cream-28)}
+
+/* ========== 首页 · 页脚 ========== */
+.foot{
+  padding:0 var(--pad) calc(env(safe-area-inset-bottom) + 34px);
+  text-align:center;color:var(--cream-28);font-size:11px;line-height:2
+}
+.foot .rule{margin-bottom:18px}
+
+/* ========== 档口页 ========== */
+.stall-bar{
+  position:sticky;top:0;z-index:20;background:rgba(11,11,12,.90);
+  backdrop-filter:saturate(160%) blur(14px);-webkit-backdrop-filter:saturate(160%) blur(14px);
+  border-bottom:1px solid var(--line);
+  padding:calc(env(safe-area-inset-top) + 12px) var(--pad) 12px;
+  display:flex;align-items:center;gap:12px
+}
+.back{width:30px;height:30px;display:flex;align-items:center;justify-content:center;
+  border:1px solid var(--line);border-radius:50%;flex:none;transition:background .2s}
+.back:active{background:var(--ink-3)}
+.stall-title{flex:1;min-width:0}
+.stall-title b{
+  font-family:var(--serif);font-size:16px;font-weight:600;letter-spacing:.06em;
+  display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis
+}
+.stall-title span{font-size:11px;color:var(--cream-45);letter-spacing:.05em}
+.table-pill{
+  flex:none;border:1px solid var(--red);color:var(--cream);
+  padding:5px 11px;border-radius:100px;font-size:12px;letter-spacing:.08em;
+  display:flex;align-items:center;gap:6px;font-weight:600
+}
+.table-pill i{width:5px;height:5px;border-radius:50%;background:var(--red);flex:none}
+
+.pending-note{
+  margin:16px var(--pad) 0;padding:11px 13px;border:1px dashed var(--cream-28);
+  border-radius:10px;font-size:12px;color:var(--cream-45);line-height:1.7
+}
+.dishes{padding:16px var(--pad) 130px;display:flex;flex-direction:column;gap:14px}
+.dish{
+  background:var(--ink-2);border:1px solid var(--line);border-radius:var(--r);overflow:hidden;
+  animation:cardIn .45s cubic-bezier(.2,.7,.3,1) both
+}
+.dish-img{
+  width:100%;aspect-ratio:4/3;object-fit:cover;background:var(--ink-3);
+  transition:transform .3s;cursor:zoom-in
+}
+.dish-img:active{transform:scale(.99)}
+.dish-ph{
+  width:100%;aspect-ratio:4/3;background:
+    repeating-linear-gradient(45deg,var(--ink-3) 0 10px,var(--ink-2) 10px 20px);
+  display:flex;align-items:center;justify-content:center;opacity:.7
+}
+.dish-ph svg{width:52px;opacity:.3}
+.dish-body{padding:13px 14px 15px;display:flex;align-items:flex-end;gap:12px}
+.dish-info{flex:1;min-width:0}
+.dish-name{font-size:15px;font-weight:600;letter-spacing:.02em;line-height:1.45;margin-bottom:5px}
+.dish-desc{font-size:12px;color:var(--cream-45);line-height:1.65;margin-bottom:7px}
+.dish-price{font-size:20px;font-weight:700;color:var(--cream);letter-spacing:.01em;white-space:nowrap}
+.dish-price em{font-style:normal;font-size:11px;color:var(--cream-45);margin-left:2px;font-weight:400}
+
+/* ---- 加减数量 ---- */
+.stepper{display:flex;align-items:center;gap:11px}
+.step-btn{
+  width:30px;height:30px;border-radius:50%;flex:none;
+  display:flex;align-items:center;justify-content:center;
+  transition:transform .15s,background .2s
+}
+.step-btn:active{transform:scale(.88)}
+.step-add{background:var(--red)}
+.step-sub{border:1px solid var(--cream-28);background:transparent}
+.step-n{
+  font-size:16px;font-weight:700;min-width:16px;text-align:center;
+  font-variant-numeric:tabular-nums
+}
+.stepper .step-sub,.stepper .step-n{
+  animation:stepIn .22s cubic-bezier(.2,.7,.3,1) both
+}
+@keyframes stepIn{from{opacity:0;transform:translateX(10px)}to{opacity:1;transform:none}}
+
+/* ---- 购物车条 ---- */
+.cartbar{
+  position:fixed;left:0;right:0;bottom:0;z-index:40;
+  padding:26px var(--pad) calc(env(safe-area-inset-bottom) + 16px);
+  background:linear-gradient(180deg,rgba(11,11,12,0),rgba(11,11,12,.95) 26%);
+  pointer-events:none
+}
+.cartbar-inner{
+  max-width:520px;margin:0 auto;background:var(--ink-2);border:1px solid var(--line);
+  border-radius:var(--r);padding:11px 12px 11px 15px;display:flex;align-items:center;gap:12px;
+  pointer-events:auto;box-shadow:0 8px 30px rgba(0,0,0,.5)
+}
+.cart-icon{position:relative;flex:none;width:38px;height:38px;
+  display:flex;align-items:center;justify-content:center}
+.cart-badge{
+  position:absolute;top:-3px;right:-4px;background:var(--red);color:#fff;
+  min-width:18px;height:18px;border-radius:100px;font-size:11px;font-weight:700;
+  display:flex;align-items:center;justify-content:center;padding:0 5px;
+  animation:stepIn .22s cubic-bezier(.2,.7,.3,1) both
+}
+.cart-sum{flex:1;min-width:0;line-height:1.45}
+.cart-total{font-size:19px;font-weight:700;letter-spacing:.01em}
+.cart-hint{font-size:11px;color:var(--cream-45);letter-spacing:.04em}
+.cart-go{
+  flex:none;background:var(--red);color:#fff;font-size:14px;font-weight:600;
+  letter-spacing:.08em;padding:11px 20px;border-radius:100px;transition:transform .15s
+}
+.cart-go:active{transform:scale(.95)}
+.cart-go[disabled]{background:var(--ink-3);color:var(--cream-28)}
+
+/* ---- 结算确认层 ---- */
+.sheet{
+  position:fixed;inset:0;z-index:55;background:rgba(6,6,7,.75);
+  display:none;align-items:flex-end
+}
+.sheet.on{display:flex;animation:fadeIn .2s ease both}
+.sheet-card{
+  width:100%;max-width:520px;margin:0 auto;background:var(--ink-2);
+  border-top-left-radius:20px;border-top-right-radius:20px;
+  border-top:1px solid var(--line);
+  padding:22px var(--pad) calc(env(safe-area-inset-bottom) + 22px);
+  max-height:82vh;overflow-y:auto;
+  animation:sheetIn .32s cubic-bezier(.2,.7,.3,1) both
+}
+@keyframes sheetIn{from{transform:translateY(100%)}to{transform:none}}
+.sheet-head{display:flex;align-items:baseline;justify-content:space-between;margin-bottom:4px}
+.sheet-head b{font-family:var(--serif);font-size:18px;letter-spacing:.08em}
+.sheet-sub{font-size:12px;color:var(--cream-45);margin-bottom:18px;line-height:1.7}
+.sheet-line{
+  display:flex;align-items:center;gap:12px;padding:11px 0;border-top:1px solid var(--line);
+  font-size:14px
+}
+.sheet-line .n{color:var(--cream-45);font-size:12px;flex:none}
+.sheet-line .t{flex:1;min-width:0}
+.sheet-line .p{flex:none;font-weight:600;font-variant-numeric:tabular-nums}
+.sheet-total{
+  display:flex;align-items:baseline;justify-content:space-between;
+  padding:15px 0 4px;border-top:1px solid var(--cream-28);margin-top:6px
+}
+.sheet-total b{font-size:24px;font-weight:700}
+.sheet-jump{
+  margin-top:18px;padding:14px 15px;border-radius:12px;background:var(--ink-3);
+  font-size:12.5px;line-height:1.85;color:var(--cream-70)
+}
+.sheet-jump b{color:var(--cream)}
+.sheet-btns{display:flex;gap:10px;margin-top:16px}
+.sheet-btns button{flex:1;padding:14px;border-radius:100px;font-size:14px;font-weight:600;letter-spacing:.06em}
+.btn-ghost{border:1px solid var(--cream-28);color:var(--cream-70)}
+.btn-red{background:var(--red);color:#fff}
+.zoom-hint{
+  position:absolute;right:10px;bottom:10px;background:rgba(11,11,12,.62);
+  border-radius:100px;padding:4px 9px;font-size:10px;letter-spacing:.08em;color:var(--cream-70);
+  display:flex;align-items:center;gap:5px;pointer-events:none
+}
+.dish-media{position:relative}
+
+/* ========== 跳转说明条 ========== */
+.jumpbar{
+  position:fixed;left:0;right:0;bottom:0;z-index:30;
+  background:linear-gradient(180deg,rgba(11,11,12,0),rgba(11,11,12,.95) 26%);
+  padding:26px var(--pad) calc(env(safe-area-inset-bottom) + 16px);
+  pointer-events:none
+}
+.jumpbar-inner{
+  max-width:520px;margin:0 auto;background:var(--ink-2);border:1px solid var(--line);
+  border-radius:var(--r);padding:13px 15px;display:flex;align-items:center;gap:12px
+}
+.jumpbar-txt{flex:1;min-width:0;font-size:12px;line-height:1.7;color:var(--cream-70)}
+.jumpbar-txt b{color:var(--cream);font-weight:600}
+.jumpbar-arrow{
+  flex:none;width:34px;height:34px;border-radius:50%;background:var(--red);
+  display:flex;align-items:center;justify-content:center
+}
+
+/* ========== lightbox ========== */
+.lb{
+  position:fixed;inset:0;z-index:60;background:rgba(6,6,7,.96);
+  display:none;align-items:center;justify-content:center;padding:20px;cursor:zoom-out
+}
+.lb.on{display:flex;animation:fadeIn .2s ease both}
+.lb img{max-width:100%;max-height:76vh;border-radius:10px;
+  animation:lbIn .3s cubic-bezier(.2,.7,.3,1) both}
+@keyframes lbIn{from{opacity:0;transform:scale(.94)}to{opacity:1;transform:none}}
+.lb-cap{
+  position:absolute;left:0;right:0;bottom:calc(env(safe-area-inset-bottom) + 28px);
+  text-align:center;font-size:13px;color:var(--cream-70);letter-spacing:.06em;padding:0 24px
+}
+.lb-cap b{display:block;color:var(--cream);font-size:16px;font-weight:600;margin-bottom:6px}
+
+@media (prefers-reduced-motion:reduce){
+  *{animation-duration:.01ms !important;transition-duration:.01ms !important}
+}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<!-- ================= 首页 ================= -->
+<section class="screen on" id="home">
+  <header class="masthead">
+    <div class="mast-top">
+      <svg class="cutlery" viewBox="0 0 26 34" fill="none" stroke="#F2EDE4" stroke-width="1.5" stroke-linecap="round">
+        <path d="M4 2v9M8 2v9M6 11v21M4 2c-1.2 3-1.2 6 0 9M8 2c1.2 3 1.2 6 0 9"/>
+        <path d="M19 2c3 2 4 6 3 10-.4 1.6-1.5 2.4-3 2.4V32"/>
+      </svg>
+      <span class="badge-demo" id="demoBadge" hidden>演示</span>
+    </div>
+    <h1 class="brand-name" id="brandName">天物书岛食集</h1>
+    <div class="brand-tag" id="brandTag">FOOD IS NEW FASHION</div>
+    <div class="rule"></div><div class="rule-red"></div>
+  </header>
+
+  <div class="hero">
+    <!-- 手绘线条：碗筷 + 蒸汽，呼应桌牌的白色手绘覆盖风格 -->
+    <svg class="hero-doodle l" viewBox="0 0 110 92" fill="none" stroke="#F2EDE4" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M14 48h74c-2 20-16 31-37 31S16 68 14 48z"/>
+      <path d="M20 55c4 12 16 19 35 19s31-7 35-19"/>
+      <path d="M40 40c-3-9 0-16 5-21M55 38c-4-11-1-19 5-25M70 41c-3-8-1-14 3-19"/>
+      <path d="M86 34L64 52M92 40L72 56"/>
+    </svg>
+    <svg class="hero-doodle r" viewBox="0 0 110 92" fill="none" stroke="#F2EDE4" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+      <ellipse cx="55" cy="52" rx="40" ry="24"/><ellipse cx="55" cy="52" rx="30" ry="17"/>
+      <path d="M34 30c6-9 14-14 22-13M62 15c9 2 16 8 20 16"/>
+      <path d="M46 50c4-5 10-7 15-4s11 2 16-3"/>
+    </svg>
+    <div class="hero-eyebrow">您 正 在</div>
+    <div class="table-no" id="tableNo">A01</div>
+    <div class="table-unit">桌</div>
+    <div class="hero-note"><span class="dot-red"></span><span>点哪家送哪家 · 直接送到本桌</span></div>
+  </div>
+
+  <div class="sec-head">
+    <div class="sec-title">场内档口</div>
+    <div class="sec-count" id="stallCount"></div>
+  </div>
+  <div class="grid" id="grid"></div>
+
+  <div class="foot">
+    <div class="rule"></div>
+    <div id="footBrand">天物书岛食集 · FOOD IS NEW FASHION</div>
+    <div>各档口独立收款 · 出餐直送本桌</div>
+  </div>
+</section>
+
+<!-- ================= 档口页 ================= -->
+<section class="screen" id="stall">
+  <div class="stall-bar">
+    <button class="back" id="btnBack" aria-label="返回">
+      <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="#F2EDE4" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M10 3L5 8l5 5"/></svg>
+    </button>
+    <div class="stall-title"><b id="sName"></b><span id="sTag"></span></div>
+    <div class="table-pill"><i></i><span id="sTable"></span> 桌</div>
+  </div>
+  <div id="sPending"></div>
+  <div class="dishes" id="dishes"></div>
+  <div class="jumpbar" id="jumpBar">
+    <div class="jumpbar-inner">
+      <div class="jumpbar-txt" id="jumpTxt"></div>
+      <div class="jumpbar-arrow">
+        <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="#fff" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M6 3l5 5-5 5"/></svg>
+      </div>
+    </div>
+  </div>
+
+  <div class="cartbar" id="cartBar" hidden>
+    <div class="cartbar-inner">
+      <div class="cart-icon">
+        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#F2EDE4" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M3 4h2.2l2.3 11.2a1.6 1.6 0 001.6 1.3h8.4a1.6 1.6 0 001.6-1.2L21 8H6"/>
+          <circle cx="10" cy="20" r="1.3"/><circle cx="18" cy="20" r="1.3"/>
+        </svg>
+        <span class="cart-badge" id="cartN">0</span>
+      </div>
+      <div class="cart-sum">
+        <div class="cart-total" id="cartTotal">¥0</div>
+        <div class="cart-hint" id="cartHint">本单由该档口独立收款</div>
+      </div>
+      <button class="cart-go" id="btnCheckout">去结算</button>
+    </div>
+  </div>
+</section>
+
+</div>
+
+<div class="lb" id="lb"><img id="lbImg" alt=""><div class="lb-cap" id="lbCap"></div></div>
+<div class="sheet" id="sheet"><div class="sheet-card" id="sheetCard"></div></div>
+
+<script>
+(function(){
+  'use strict';
+  var CFG = null, TABLE = '', EXPLICIT = false;
+  var STALL = null;      // 当前档口
+  var CART = {};         // 菜品下标 -> 份数（切换档口即清空：一家档口一笔单）
+  var $ = function(id){ return document.getElementById(id); };
+  var esc = function(s){ return String(s == null ? '' : s).replace(/[&<>"']/g, function(c){
+    return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]; }); };
+
+  function readTable(dflt){
+    var m = /[?&]table=([^&#]+)/i.exec(location.search);
+    if (m && m[1]) { EXPLICIT = true; return decodeURIComponent(m[1]).toUpperCase().slice(0, 8); }
+    return dflt || 'A01';
+  }
+
+  /* 跳转链接：优先 urlByTable（一店一桌一码），否则 url 里替换 {table} */
+  function resolveUrl(st, table){
+    if (st.urlByTable && st.urlByTable[table]) return st.urlByTable[table];
+    if (st.url) return st.url.replace(/\{table\}/g, encodeURIComponent(table));
+    return '';
+  }
+
+  function renderHome(){
+    var b = CFG.brand || {};
+    $('brandName').textContent = b.name || '';
+    $('brandTag').textContent = b.tagline || '';
+    $('footBrand').textContent = (b.name || '') + ' · ' + (b.tagline || '');
+    $('tableNo').textContent = TABLE;
+    if (!EXPLICIT) $('demoBadge').hidden = false;
+
+    var list = CFG.stalls || [];
+    var openN = list.filter(function(s){ return s.open !== false; }).length;
+    $('stallCount').textContent = '共 ' + list.length + ' 家 · ' + openN + ' 家营业中';
+
+    $('grid').innerHTML = list.map(function(st, i){
+      var shut = st.open === false;
+      return '<button class="card' + (shut ? ' shut' : '') + '" data-id="' + esc(st.id) + '"' +
+        ' style="animation-delay:' + (i * 45) + 'ms"' + (shut ? ' disabled' : '') + '>' +
+        '<div class="logo-box">' + (shut ? '<span class="shut-stamp">已 打 烊</span>' : '') +
+          '<img src="' + esc(st.logo) + '" alt="' + esc(st.name) + '" loading="lazy"></div>' +
+        '<div class="card-body">' +
+          '<div class="card-name">' + esc(st.name) + '</div>' +
+          '<div class="card-tag">' + esc(st.tag || '') + '</div>' +
+          '<div class="status ' + (shut ? 'closed' : 'open') + '"><i></i>' +
+            (shut ? esc(st.closedNote || '已打烊') : '营业中') + '</div>' +
+        '</div></button>';
+    }).join('');
+  }
+
+  /* ---------- 购物车 ---------- */
+  function priceOf(d){ var n = parseFloat(String(d.price).replace(/[^\d.]/g, '')); return isNaN(n) ? 0 : n; }
+  function cartCount(){ var n = 0; for (var k in CART) n += CART[k]; return n; }
+  function cartTotal(){
+    var t = 0;
+    for (var k in CART) t += priceOf(STALL.dishes[k]) * CART[k];
+    return t;
+  }
+  function money(n){ return '¥' + (Math.round(n * 100) / 100).toString(); }
+
+  function stepperHTML(i){
+    var q = CART[i] || 0;
+    var sub = '<button class="step-btn step-sub" data-act="sub" data-i="' + i + '" aria-label="减少">' +
+      '<svg width="13" height="13" viewBox="0 0 16 16" stroke="#F2EDE4" stroke-width="2" stroke-linecap="round"><path d="M3.5 8h9"/></svg></button>' +
+      '<span class="step-n">' + q + '</span>';
+    var add = '<button class="step-btn step-add" data-act="add" data-i="' + i + '" aria-label="添加">' +
+      '<svg width="14" height="14" viewBox="0 0 16 16" stroke="#fff" stroke-width="2.1" stroke-linecap="round"><path d="M8 3.5v9M3.5 8h9"/></svg></button>';
+    return (q > 0 ? sub : '') + add;
+  }
+
+  function syncCartUI(){
+    var n = cartCount();
+    $('cartBar').hidden = n === 0;
+    $('jumpBar').hidden = n > 0;
+    if (!n) return;
+    $('cartN').textContent = n;
+    $('cartTotal').textContent = money(cartTotal());
+    $('cartHint').textContent = '共 ' + n + ' 份 · ' + STALL.name + ' 独立收款';
+  }
+
+  function bump(i, delta){
+    var q = (CART[i] || 0) + delta;
+    if (q <= 0) delete CART[i]; else CART[i] = q;
+    var box = $('dishes').querySelector('.stepper[data-i="' + i + '"]');
+    if (box) box.innerHTML = stepperHTML(i);
+    syncCartUI();
+  }
+
+  function openSheet(){
+    var lines = Object.keys(CART).map(function(k){
+      var d = STALL.dishes[k];
+      return '<div class="sheet-line"><span class="n">×' + CART[k] + '</span>' +
+        '<span class="t">' + esc(d.name) + '</span>' +
+        '<span class="p">' + money(priceOf(d) * CART[k]) + '</span></div>';
+    }).join('');
+
+    $('sheetCard').innerHTML =
+      '<div class="sheet-head"><b>确认订单</b><span class="sheet-sub" style="margin:0">' +
+        esc(TABLE) + ' 桌</span></div>' +
+      '<div class="sheet-sub">' + esc(STALL.name) + ' · 送至 ' + esc(TABLE) + ' 桌</div>' +
+      lines +
+      '<div class="sheet-total"><span>合计</span><b>' + money(cartTotal()) + '</b></div>' +
+      '<div class="sheet-jump">正式使用时，这一单会带着桌号 <b>' + esc(TABLE) + '</b> 跳转到 ' +
+        '<b>' + esc(STALL.name) + '</b> 的点餐小程序完成支付。<br>' +
+        '货款直接进该档口自己的账户，无需总部代收再分账。</div>' +
+      '<div class="sheet-btns">' +
+        '<button class="btn-ghost" data-act="close">再看看</button>' +
+        '<button class="btn-red" data-act="confirm">确认下单</button>' +
+      '</div>';
+    $('sheet').classList.add('on');
+  }
+
+  function sheetDone(){
+    $('sheetCard').innerHTML =
+      '<div class="sheet-head"><b>演示到此</b></div>' +
+      '<div class="sheet-sub">真实环境下，接下来会发生这些事：</div>' +
+      '<div class="sheet-line"><span class="n">1</span><span class="t">跳转 ' + esc(STALL.name) +
+        ' 点餐小程序，桌号 ' + esc(TABLE) + ' 已带入</span></div>' +
+      '<div class="sheet-line"><span class="n">2</span><span class="t">顾客在该档口页面完成支付</span></div>' +
+      '<div class="sheet-line"><span class="n">3</span><span class="t">货款直接进 ' + esc(STALL.name) +
+        ' 的账户，不经总部</span></div>' +
+      '<div class="sheet-line"><span class="n">4</span><span class="t">该档口出餐，按桌号 ' + esc(TABLE) +
+        ' 送达</span></div>' +
+      '<div class="sheet-line"><span class="n">5</span><span class="t">总部次日按约定比例抽成，只对抽成部分计税</span></div>' +
+      '<div class="sheet-jump">想吃别家？返回首页换一个档口即可，' +
+        '<b>各档口各自一笔单</b>，互不影响。</div>' +
+      '<div class="sheet-btns"><button class="btn-red" data-act="close">知道了</button></div>';
+  }
+
+  function renderStall(id){
+    var st = (CFG.stalls || []).filter(function(s){ return s.id === id; })[0];
+    if (!st) return;
+    STALL = st; CART = {};
+    $('sName').textContent = st.name;
+    $('sTag').textContent = st.tag || '';
+    $('sTable').textContent = TABLE;
+
+    $('sPending').innerHTML = st.menuPending
+      ? '<div class="pending-note">该档口菜单尚未从商家同步，图片与价格为示意。' +
+        '正式上线后由该档口点餐系统实时同步。</div>'
+      : '';
+
+    $('dishes').innerHTML = (st.dishes || []).map(function(d, i){
+      var media = d.img
+        ? '<div class="dish-media"><img class="dish-img" src="' + esc(d.img) + '" alt="' + esc(d.name) + '"' +
+          ' loading="lazy" data-full="' + esc(d.img) + '" data-name="' + esc(d.name) + '"' +
+          ' data-price="' + esc(d.price) + esc(d.suffix || '') + '">' +
+          '<div class="zoom-hint">' +
+          '<svg width="10" height="10" viewBox="0 0 16 16" fill="none" stroke="#F2EDE4" stroke-width="1.6" stroke-linecap="round"><circle cx="7" cy="7" r="4.6"/><path d="M10.4 10.4L14 14M7 5.2v3.6M5.2 7h3.6"/></svg>' +
+          '点图看大图</div></div>'
+        : '<div class="dish-ph"><svg viewBox="0 0 48 40" fill="none" stroke="#F2EDE4" stroke-width="1.6" stroke-linecap="round">' +
+          '<ellipse cx="24" cy="20" rx="17" ry="10"/><path d="M7 20c0 7 7.6 12.5 17 12.5S41 27 41 20"/>' +
+          '<path d="M13 18c4-4.5 10-6.5 14-3s10 2 14-3"/></svg></div>';
+      return '<article class="dish" style="animation-delay:' + Math.min(i * 40, 240) + 'ms">' + media +
+        '<div class="dish-body"><div class="dish-info">' +
+        '<div class="dish-name">' + esc(d.name) + '</div>' +
+        (d.desc ? '<div class="dish-desc">' + esc(d.desc) + '</div>' : '') +
+        '<div class="dish-price">' + esc(d.price) +
+        (d.suffix ? '<em>' + esc(d.suffix) + '</em>' : '') + '</div>' +
+        '</div><div class="stepper" data-i="' + i + '">' + stepperHTML(i) + '</div>' +
+        '</div></article>';
+    }).join('');
+    syncCartUI();
+
+    var url = resolveUrl(st, TABLE);
+    $('jumpTxt').innerHTML = url
+      ? '正在跳转 <b>' + esc(st.name) + '</b> 点餐小程序<br>桌号 <b>' + esc(TABLE) + '</b> 已带入'
+      : '正式使用时此处跳转 <b>' + esc(st.name) + '</b> 的点餐小程序<br>桌号 <b>' + esc(TABLE) + '</b> 自动带入，出餐直送本桌';
+
+    document.documentElement.scrollTop = 0;
+    document.body.scrollTop = 0;
+  }
+
+  function show(which, id){
+    $('home').classList.toggle('on', which === 'home');
+    $('stall').classList.toggle('on', which === 'stall');
+    if (which === 'stall') renderStall(id);
+  }
+
+  function route(){
+    var m = /^#\/stall\/(.+)$/.exec(location.hash);
+    if (m) show('stall', decodeURIComponent(m[1])); else show('home');
+  }
+
+  /* ---- events ---- */
+  $('grid').addEventListener('click', function(e){
+    var card = e.target.closest('.card');
+    if (card && !card.classList.contains('shut')) location.hash = '#/stall/' + encodeURIComponent(card.dataset.id);
+  });
+  $('btnBack').addEventListener('click', function(){
+    if (history.length > 1) history.back(); else location.hash = '';
+  });
+  $('dishes').addEventListener('click', function(e){
+    var btn = e.target.closest('.step-btn');
+    if (btn) { bump(btn.dataset.i, btn.dataset.act === 'add' ? 1 : -1); return; }
+    var img = e.target.closest('.dish-img');
+    if (!img) return;
+    $('lbImg').src = img.dataset.full;
+    $('lbImg').alt = img.dataset.name;
+    $('lbCap').innerHTML = '<b>' + esc(img.dataset.name) + '</b>' + esc(img.dataset.price);
+    $('lb').classList.add('on');
+  });
+  $('btnCheckout').addEventListener('click', openSheet);
+  $('sheet').addEventListener('click', function(e){
+    var act = (e.target.closest('[data-act]') || {}).dataset;
+    if (act && act.act === 'confirm') { sheetDone(); return; }
+    if ((act && act.act === 'close') || e.target === $('sheet')) $('sheet').classList.remove('on');
+  });
+  $('lb').addEventListener('click', function(){ $('lb').classList.remove('on'); });
+  document.addEventListener('keydown', function(e){
+    if (e.key !== 'Escape') return;
+    if ($('lb').classList.contains('on')) $('lb').classList.remove('on');
+    else $('sheet').classList.remove('on');
+  });
+  window.addEventListener('hashchange', route);
+
+  /* ---- boot ---- */
+  fetch('config.json?v=' + Date.now())
+    .then(function(r){ if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
+    .then(function(cfg){
+      CFG = cfg;
+      TABLE = readTable(cfg.defaultTable);
+      document.title = (cfg.brand && cfg.brand.name ? cfg.brand.name : '') + ' · ' + TABLE + ' 桌';
+      renderHome();
+      route();
+    })
+    .catch(function(err){
+      document.getElementById('grid').innerHTML =
+        '<div style="grid-column:1/-1;padding:26px;border:1px dashed rgba(242,237,228,.28);' +
+        'border-radius:14px;color:rgba(242,237,228,.45);font-size:13px;line-height:1.9;text-align:center">' +
+        '菜单配置加载失败<br>' + esc(err.message) + '</div>';
+    });
+})();
+</script>
+</body>
+</html>

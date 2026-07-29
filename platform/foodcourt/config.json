@@ -1,0 +1,180 @@
+{
+  "brand": {
+    "name": "天物书岛食集",
+    "tagline": "FOOD IS NEW FASHION",
+    "note": "扫码点单 · 点哪家送哪家"
+  },
+  "defaultTable": "A01",
+  "_readme": {
+    "跳转链接": "拿到客如云给的各档口链接后，填 url 字段；{table} 会在运行时替换成当前桌号。",
+    "一店一桌一码": "若客如云是每家每桌一个固定链接，则把 url 换成 urlByTable，形如 \"urlByTable\": {\"A01\": \"https://...\", \"A05\": \"https://...\"}，代码两种都认。",
+    "增删档口": "直接增删 stalls 数组元素，首页布局自适应。",
+    "打烊": "open 设为 false，卡片自动置灰且不可点。",
+    "菜品图": "photo 为 true 表示是商家真实菜品图；为 false 时显示品类占位图案，不显示破图。"
+  },
+  "stalls": [
+    {
+      "id": "dongchi",
+      "name": "东池 Plus",
+      "tag": "日式便当",
+      "logo": "assets/logo/dongchi.png",
+      "open": true,
+      "url": "",
+      "menuPending": true,
+      "dishes": [
+        { "name": "招牌照烧鸡腿饭", "price": "¥32", "img": "assets/dish/dongchi-ai-1.jpg" },
+        { "name": "日式炸猪排饭", "price": "¥38", "img": "assets/dish/dongchi-ai-2.jpg" },
+        { "name": "鳗鱼饭", "price": "¥58", "img": "assets/dish/dongchi-ai-3.jpg" },
+        { "name": "亲子丼", "price": "¥30", "img": "assets/dish/dongchi-ai-4.jpg" },
+        { "name": "和风牛肉饭", "price": "¥36", "img": "assets/dish/dongchi-ai-5.jpg" }
+      ]
+    },
+    {
+      "id": "laochengxiang",
+      "name": "老城厢汤包馆",
+      "tag": "汤包 · 点心",
+      "logo": "assets/logo/laochengxiang.png",
+      "open": true,
+      "url": "",
+      "menuPending": true,
+      "dishes": [
+        { "name": "蟹粉小笼", "price": "¥38", "img": "assets/dish/laochengxiang-ai-1.jpg" },
+        { "name": "鲜肉小笼", "price": "¥22", "img": "assets/dish/laochengxiang-ai-2.jpg" },
+        { "name": "灌汤包", "price": "¥26", "img": "assets/dish/laochengxiang-ai-3.jpg" },
+        { "name": "三鲜馄饨", "price": "¥18", "img": "assets/dish/laochengxiang-ai-4.jpg" },
+        { "name": "蟹壳黄", "price": "¥12", "img": "assets/dish/laochengxiang-ai-5.jpg" }
+      ]
+    },
+    {
+      "id": "leizi",
+      "name": "磊子川菜",
+      "tag": "川菜 · 小炒",
+      "logo": "assets/logo/leizi.png",
+      "open": true,
+      "url": "",
+      "menuPending": true,
+      "dishes": [
+        { "name": "水煮牛肉", "price": "¥58", "img": "assets/dish/leizi-ai-1.jpg" },
+        { "name": "麻婆豆腐", "price": "¥28", "img": "assets/dish/leizi-ai-2.jpg" },
+        { "name": "宫保鸡丁", "price": "¥42", "img": "assets/dish/leizi-ai-3.jpg" },
+        { "name": "夫妻肺片", "price": "¥38", "img": "assets/dish/leizi-ai-4.jpg" },
+        { "name": "回锅肉", "price": "¥46", "img": "assets/dish/leizi-ai-5.jpg" },
+        { "name": "辣子鸡", "price": "¥48", "img": "assets/dish/leizi-ai-6.jpg" }
+      ]
+    },
+    {
+      "id": "deibagni",
+      "name": "代巴尼 DEI BAGNI",
+      "tag": "手工窑炉披萨",
+      "logo": "assets/logo/deibagni.png",
+      "open": false,
+      "closedNote": "明日 10:30 营业",
+      "url": "",
+      "menuPending": true,
+      "dishes": [
+        { "name": "玛格丽特披萨", "price": "¥58", "img": "assets/dish/deibagni-ai-1.jpg" },
+        { "name": "帕尔玛火腿披萨", "price": "¥88", "img": "assets/dish/deibagni-ai-2.jpg" },
+        { "name": "四芝士披萨", "price": "¥78", "img": "assets/dish/deibagni-ai-3.jpg" },
+        { "name": "辣香肠披萨", "price": "¥68", "img": "assets/dish/deibagni-ai-4.jpg" }
+      ]
+    },
+    {
+      "id": "haixianmian",
+      "name": "海鲜面 福旺多多",
+      "tag": "海鲜面 · 套餐",
+      "logo": "assets/logo/haixianmian.png",
+      "open": true,
+      "url": "",
+      "dishes": [
+        { "name": "“小网海鲜”与“大鸡排”套餐", "price": "¥42", "suffix": "起", "img": "assets/dish/haixianmian-1.jpg", "desc": "当日小网鲜货现捞现煮，鱼虾贝类样样齐" },
+        { "name": "台州渔民“海鲜粉干”套餐", "price": "¥49", "suffix": "起", "img": "assets/dish/haixianmian-2.jpg" },
+        { "name": "海派“炒年糕”与“刨冰”套餐", "price": "¥52", "img": "assets/dish/haixianmian-3.jpg" },
+        { "name": "“肥鲜黄鱼”搭酸梅汤", "price": "¥56", "img": "assets/dish/haixianmian-4.jpg" },
+        { "name": "乐惠“海鲜小炒”单人套餐", "price": "¥68", "img": "assets/dish/haixianmian-5.jpg" },
+        { "name": "丰盛“海鲜热炒”双人套餐", "price": "¥132", "img": "assets/dish/haixianmian-6.jpg", "desc": "当日小网鲜、性价比高，两人吃饱吃好" },
+        { "name": "肥鲜黄鱼鲜虾面", "price": "¥45", "img": "assets/dish/haixianmian-7.jpg", "desc": "黄鱼肉质细嫩细腻，汤汁奶白鲜醇" }
+      ]
+    },
+    {
+      "id": "ganhaowei",
+      "name": "咁好味",
+      "tag": "粤式烧腊",
+      "logo": "assets/logo/ganhaowei.png",
+      "open": true,
+      "url": "",
+      "dishes": [
+        { "name": "咁好味四宝饭", "price": "¥42", "img": "assets/dish/ganhaowei-1.jpg", "desc": "烧鸭、蜜汁肥叉烧、招牌红肠、咸蛋" },
+        { "name": "三拼饭", "price": "¥38", "suffix": "起", "img": "assets/dish/ganhaowei-2.jpg" },
+        { "name": "烧鸭饭", "price": "¥29", "img": "assets/dish/ganhaowei-3.jpg" },
+        { "name": "烧鸭拼叉烧饭", "price": "¥35", "img": "assets/dish/ganhaowei-4.jpg" },
+        { "name": "烧鸭拼油鸡", "price": "¥35", "img": "assets/dish/ganhaowei-5.jpg" },
+        { "name": "玫瑰油鸡饭", "price": "¥29", "img": "assets/dish/ganhaowei-6.jpg" },
+        { "name": "烧鹅饭", "price": "¥45", "img": "assets/dish/ganhaowei-7.jpg" }
+      ]
+    },
+    {
+      "id": "cintablues",
+      "name": "CINTA BLUES 亲塔屋",
+      "tag": "东南亚菜",
+      "logo": "assets/logo/cintablues.png",
+      "open": true,
+      "url": "",
+      "dishes": [
+        { "name": "马来肉骨茶", "price": "¥62", "img": "assets/dish/cintablues-2.jpg" },
+        { "name": "冬阴功海鲜汤", "price": "¥58", "img": "assets/dish/cintablues-3.jpg" },
+        { "name": "泰式青柠蒸海鲈鱼", "price": "¥78", "img": "assets/dish/cintablues-4.jpg" },
+        { "name": "泰式咖喱蛋香虾", "price": "¥58", "img": "assets/dish/cintablues-5.jpg" },
+        { "name": "越式肉末生菜包", "price": "¥42", "img": "assets/dish/cintablues-6.jpg" },
+        { "name": "椰汁咖喱鸡", "price": "¥52", "img": "assets/dish/cintablues-7.jpg" }
+      ]
+    },
+    {
+      "id": "feiguo",
+      "name": "啡果 FEEGOO",
+      "tag": "冰淇淋 · 特饮",
+      "logo": "assets/logo/feiguo.png",
+      "open": true,
+      "url": "",
+      "dishes": [
+        { "name": "柚子白茶", "price": "¥22", "img": "assets/dish/feiguo-1.jpg" },
+        { "name": "茉莉山竹", "price": "¥22", "img": "assets/dish/feiguo-2.jpg" },
+        { "name": "法国树莓荔枝", "price": "¥22", "img": "assets/dish/feiguo-3.jpg" },
+        { "name": "墨西哥香草", "price": "¥22", "img": "assets/dish/feiguo-4.jpg" },
+        { "name": "开心果冰淇淋", "price": "¥22", "img": "assets/dish/feiguo-5.jpg" },
+        { "name": "巧克力冰淇淋", "price": "¥22", "img": "assets/dish/feiguo-6.jpg" }
+      ]
+    },
+    {
+      "id": "tsingtao",
+      "name": "现打鲜啤",
+      "tag": "青岛啤酒 · 鲜啤直送",
+      "logo": "assets/logo/tsingtao.png",
+      "open": true,
+      "url": "",
+      "dishes": [
+        { "name": "青岛清爽", "price": "¥10", "suffix": "起", "img": "assets/dish/tsingtao-1.jpg" },
+        { "name": "青岛小棕金", "price": "¥8", "img": "assets/dish/tsingtao-2.jpg" },
+        { "name": "青岛白啤瓶装", "price": "¥10", "img": "assets/dish/tsingtao-3.jpg" },
+        { "name": "逸品纯生", "price": "¥15", "img": "assets/dish/tsingtao-5.jpg" },
+        { "name": "青岛纯生瓶装", "price": "¥12", "img": "assets/dish/tsingtao-4.jpg" },
+        { "name": "奥古特 A3", "price": "¥15", "img": "assets/dish/tsingtao-6.jpg" }
+      ]
+    },
+    {
+      "id": "fuji",
+      "name": "福记糖水铺子",
+      "tag": "糖水 · 刨冰",
+      "logo": "assets/logo/fuji.png",
+      "open": true,
+      "url": "",
+      "dishes": [
+        { "name": "爽心刨冰雪泥双人套餐", "price": "¥23", "suffix": "起", "img": "assets/dish/fuji-1.jpg" },
+        { "name": "女神闺蜜双人套餐", "price": "¥39", "img": "assets/dish/fuji-2.jpg" },
+        { "name": "夏日雪花冰双人套餐", "price": "¥37", "img": "assets/dish/fuji-3.jpg" },
+        { "name": "福记大满贯双人套餐", "price": "¥46", "img": "assets/dish/fuji-4.jpg" },
+        { "name": "招牌糖水三人老友记套餐", "price": "¥68", "img": "assets/dish/fuji-5.jpg" },
+        { "name": "福粿多多大满贯", "price": "¥28", "img": "assets/dish/fuji-6.jpg" }
+      ]
+    }
+  ]
+}
