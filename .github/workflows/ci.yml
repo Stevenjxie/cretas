@@ -13,6 +13,14 @@ on:
         required: false
         default: false
         type: boolean
+      target_tests:
+        description: >-
+          Maven test selector the packaged artifact must pass (e.g.
+          ProductionStockAllocationServiceTest). Empty means the artifact
+          carries NO test evidence and cannot be trusted for deployment.
+        required: false
+        default: ''
+        type: string
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -86,19 +94,65 @@ jobs:
       # Produce the deployable JAR before the long full-suite verify. The PR
       # gates and JPA startup gate still authorize merges; this step only makes
       # the exact-main artifact available early so deploy does not rebuild it.
+      # target_tests is passed through the environment, never interpolated into
+      # the shell: a selector is operator-supplied text and ${{ }} inside run:
+      # would be a command-injection sink.
       - name: Package exact-commit deploy artifact
         if: inputs.package_java_artifact
         working-directory: backend/java/cretas-api
-        timeout-minutes: 10
-        run: mvn -B package -Dmaven.test.skip=true -pl .
+        timeout-minutes: 30
+        env:
+          TARGET_TESTS: ${{ inputs.target_tests }}
+        run: |
+          started=$(date +%s)
+          if [ -n "$TARGET_TESTS" ]; then
+            # Tests run BEFORE the artifact exists, so a failing selector means
+            # no artifact rather than an artifact nobody vetted.
+            mvn -B package -Dtest="$TARGET_TESTS" \
+              -Dsurefire.failIfNoSpecifiedTests=false -pl .
+            maven_command="mvn -B package -Dtest=$TARGET_TESTS -pl ."
+          else
+            mvn -B package -Dmaven.test.skip=true -pl .
+            maven_command="mvn -B package -Dmaven.test.skip=true -pl ."
+          fi
+          {
+            echo "MAVEN_WALL_SECONDS=$(( $(date +%s) - started ))"
+            echo "MAVEN_COMMAND=$maven_command"
+          } >> "$GITHUB_ENV"
+
+      # Emit the same key=value manifest that release-jar-manifest.sh produces
+      # locally, so the ECS verifier can decide deployable_trust_verified from
+      # a CI artifact exactly as it does from a locally built one.
       - name: Prepare exact-commit deploy artifact
         if: inputs.package_java_artifact
         working-directory: backend/java/cretas-api/target
+        env:
+          TARGET_TESTS: ${{ inputs.target_tests }}
         run: |
           JAR=cretas-backend-system-1.0.0.jar
           test -f "$JAR"
           sha256sum "$JAR" > "$JAR.sha256"
           printf '%s\n' "$GITHUB_SHA" > "$JAR.commit"
+          backend_tree=$(git -C "$GITHUB_WORKSPACE" rev-parse "HEAD:backend/java/cretas-api")
+          {
+            echo "format=cretas-release-jar-manifest-v1"
+            echo "success=true"
+            echo "build_commit=$GITHUB_SHA"
+            echo "backend_tree=$backend_tree"
+            echo "jar_sha256=$(cut -d ' ' -f 1 < "$JAR.sha256")"
+            echo "jar_path=$JAR"
+            echo "jdk_vendor=$(java -XshowSettings:properties -version 2>&1 |
+              sed -n 's/.*java.vendor = //p' | head -1)"
+            echo "jdk_version=$(java -XshowSettings:properties -version 2>&1 |
+              sed -n 's/.*java.version = //p' | head -1)"
+            echo "maven_command=$MAVEN_COMMAND"
+            echo "target_tests=$TARGET_TESTS"
+            echo "maven_wall_seconds=$MAVEN_WALL_SECONDS"
+            echo "jar_size_bytes=$(stat -c %s "$JAR")"
+            echo "built_by=github-actions"
+          } > release-jar.manifest
+          echo "--- manifest ---"
+          cat release-jar.manifest
       - name: Upload exact-commit deploy artifact
         if: inputs.package_java_artifact
         uses: actions/upload-artifact@v4
@@ -108,6 +162,7 @@ jobs:
             backend/java/cretas-api/target/cretas-backend-system-1.0.0.jar
             backend/java/cretas-api/target/cretas-backend-system-1.0.0.jar.sha256
             backend/java/cretas-api/target/cretas-backend-system-1.0.0.jar.commit
+            backend/java/cretas-api/target/release-jar.manifest
           if-no-files-found: error
           compression-level: 0
           retention-days: 1
