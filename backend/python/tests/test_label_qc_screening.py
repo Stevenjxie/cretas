@@ -167,3 +167,37 @@ def test_screen_image_respects_tray_cap():
     models = _StubModels(trays, [[] for _ in range(80)])
     result = screen_image(image, models, ScreeningParams(max_trays=25, min_crop_px=1))
     assert len(result.trays) == 25
+
+
+# --------------------------------------------------------------- label geometry
+def test_detected_labels_are_mapped_back_to_source_pixels():
+    """The review UI draws these on the ORIGINAL photo, so coordinates must be
+    in source pixels, not crop pixels."""
+    image = np.zeros((1000, 1000, 3), dtype=np.uint8)
+    tray = Detection(200, 200, 600, 400, 0.95, 0)
+    # crop is tray +14% padding, then resized to 640 wide
+    white = Detection(320, 40, 380, 80, 0.9, CLASS_WHITE_LABEL)
+    models = _StubModels([tray], [[white]])
+
+    result = screen_image(image, models, ScreeningParams(own_labels_only=False))
+
+    labels = result.trays[0].labels
+    assert len(labels) == 1
+    box = labels[0].box
+    # must land inside the padded crop region of the source image, not near 320,40
+    assert 150 <= box[0] <= 700, f"x 未映射回原图坐标: {box}"
+    assert 150 <= box[1] <= 500, f"y 未映射回原图坐标: {box}"
+    assert labels[0].is_white is True
+
+
+def test_labels_dropped_by_ownership_are_not_reported():
+    """A neighbour's label must not be drawn on this tray."""
+    image = np.zeros((1000, 1000, 3), dtype=np.uint8)
+    tray = Detection(200, 200, 600, 400, 0.95, 0)
+    far_left = Detection(2, 2, 20, 20, 0.9, CLASS_WHITE_LABEL)   # in padding
+    models = _StubModels([tray], [[far_left]])
+
+    result = screen_image(image, models, ScreeningParams(own_labels_only=True))
+
+    assert result.trays[0].labels == []
+    assert result.trays[0].dropped_neighbour_labels == 1

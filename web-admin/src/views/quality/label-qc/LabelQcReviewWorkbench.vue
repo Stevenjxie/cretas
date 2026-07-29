@@ -176,10 +176,15 @@ function labelText(label?: LabelQcLabel | null): string {
   return label ? LABEL_TEXT[label] : '待确认';
 }
 
+// 颜色约定（车间一眼可辨）：
+//   蓝  = 盒子范围，AI 圈出来但还没定论
+//   红  = 判定为缺标（问题）
+//   绿  = 判定为正常
+//   灰  = 不可判定
 function itemColor(item: LabelQcReviewDraft): string {
-  if (!item.label) return item.source === 'AI' ? '#f5a524' : '#2f6fdd';
+  if (!item.label) return item.source === 'AI' ? '#2f6fdd' : '#7b61ff';
   if (item.label === 'MISSING_WHITE_LABEL') return '#e54d42';
-  if (item.label === 'MISSING_COLOR_LABEL') return '#d97706';
+  if (item.label === 'MISSING_COLOR_LABEL') return '#e54d42';
   if (item.label === 'UNJUDGEABLE') return '#6b7280';
   return '#16a36a';
 }
@@ -451,6 +456,60 @@ function reopenCurrentPhoto(): void {
   setDirty(true);
   choosePreferredItem();
 }
+
+// ---- 键盘快捷键 -------------------------------------------------------------
+// 质检员一天要过几百张，鼠标往返右侧按钮是主要耗时。左手键盘 + 右手鼠标点框，
+// 是这类逐张审核界面的标准姿势。
+const SHORTCUTS = [
+  { keys: 'Enter', text: '确认本图结论' },
+  { keys: 'N', text: '整图正常' },
+  { keys: '← / →', text: '上一张 / 下一张' },
+  { keys: 'Esc', text: '取消选中框' },
+] as const;
+
+function isTypingTarget(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) return false;
+  const tag = target.tagName;
+  return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || target.isContentEditable;
+}
+
+function onShortcutKey(event: KeyboardEvent): void {
+  // 输入框内打字、以及带修饰键的组合，一律不拦截
+  if (isTypingTarget(event.target) || event.ctrlKey || event.metaKey || event.altKey) return;
+  if (!props.canReview) return;
+
+  switch (event.key) {
+    case 'Enter':
+      event.preventDefault();
+      if (activeDraft.value?.reviewed) nextPhoto();
+      else confirmCurrentPhoto();
+      break;
+    case 'n':
+    case 'N':
+      event.preventDefault();
+      void confirmCurrentPhotoNormal();
+      break;
+    case 'ArrowLeft':
+      event.preventDefault();
+      previousPhoto();
+      break;
+    case 'ArrowRight':
+      event.preventDefault();
+      nextPhoto();
+      break;
+    case 'Escape':
+      if (selectedKey.value) {
+        event.preventDefault();
+        selectedKey.value = null;
+      }
+      break;
+    default:
+      break;
+  }
+}
+
+onMounted(() => window.addEventListener('keydown', onShortcutKey));
+onBeforeUnmount(() => window.removeEventListener('keydown', onShortcutKey));
 
 function previousPhoto(): void {
   if (activePhotoIndex.value > 0) selectPhoto(activePhotoIndex.value - 1);
@@ -774,6 +833,11 @@ onBeforeUnmount(() => resizeObserver?.disconnect());
       <div class="current-state" :class="{ complete: currentPhotoComplete }">
         <span>第 {{ activePhotoIndex + 1 }}/{{ drafts.length }} 张</span>
         <strong>{{ currentPhotoComplete ? '本图已完成' : '本图待结论' }}</strong>
+        <div v-if="canReview" class="shortcut-hints">
+          <span v-for="s in SHORTCUTS" :key="s.keys" class="shortcut">
+            <kbd>{{ s.keys }}</kbd>{{ s.text }}
+          </span>
+        </div>
       </div>
       <button
         v-if="!allComplete"
@@ -1486,6 +1550,35 @@ button:disabled {
   border-top: 1px solid var(--line);
   background: #fffefa;
   box-shadow: 0 -8px 24px rgba(18, 38, 31, .07);
+}
+
+.shortcut-hints {
+  display: flex;
+  gap: 14px;
+  margin-top: 6px;
+  flex-wrap: wrap;
+  justify-content: center;
+}
+
+.shortcut {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+  color: var(--el-text-color-secondary, #8a94a6);
+  white-space: nowrap;
+}
+
+.shortcut kbd {
+  display: inline-block;
+  min-width: 18px;
+  padding: 1px 6px;
+  border: 1px solid var(--el-border-color, #d9dde5);
+  border-bottom-width: 2px;
+  border-radius: 4px;
+  background: var(--el-fill-color-light, #f4f6f9);
+  font: 600 11px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
+  color: var(--el-text-color-regular, #4a5262);
 }
 
 .review-navigation > button {
