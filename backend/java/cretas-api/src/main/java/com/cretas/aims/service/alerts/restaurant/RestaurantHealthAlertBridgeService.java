@@ -137,10 +137,10 @@ public class RestaurantHealthAlertBridgeService {
         // 不是"已恢复" —— 不能 auto-resolve 掉既有事件, 否则下一轮成功 sweep 会重建
         // → flap 重复推送。据此在下面 auto-resolve 阶段跳过命中任一前缀的事件。
         //
-        // <p>2026-07-29 (spec §3.1 预警计划化): 由单一布尔旗标泛化为前缀列表, 因为
-        // plan-alert 的失败隔离粒度是**单条规则** —— 一条规则的计划编译/执行/取数
-        // 失败只让 {@code plan_alert:<rule_code>} 自己豁免, 其余规则照常 auto-resolve。
-        // 旧的 {@code supplierAnomalyUnavailable} 布尔仍被读取 (向后兼容: 灰度期间
+        // 2026-07-29 (spec §3.1 预警计划化): 由单一布尔旗标泛化为前缀列表, 因为
+        // plan-alert 的失败隔离粒度是"单条规则" —— 一条规则的计划编译/执行/取数
+        // 失败只让 plan_alert:<rule_code> 自己豁免, 其余规则照常 auto-resolve。
+        // 旧的 supplierAnomalyUnavailable 布尔仍被读取 (向后兼容: 灰度期间
         // 可能有旧版 Python 只发布尔不发列表), 两者取并集。
         Set<String> unavailablePrefixes = new LinkedHashSet<>();
         if (Boolean.TRUE.equals(data.get("supplierAnomalyUnavailable"))) {
