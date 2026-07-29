@@ -37,6 +37,9 @@ error() { echo -e "\033[0;31m[ERROR]\033[0m $1"; exit 1; }
 
 # 项目根目录
 PROJECT_ROOT="$(cd "$(dirname "$0")" && pwd)"
+# ssh_local_path: Windows 盘符路径会被 rsync/scp 当成主机名, 传输直接失败。
+# 注意 PROJECT_ROOT 在本脚本里其实是 scripts/deploy 目录, 所以往上两级取仓库根。
+source "$(cd "$(dirname "$0")/../.." && pwd)/scripts/lib/deploy-common.sh"
 LOCAL_PROJECT_ABS="${PROJECT_ROOT}/${LOCAL_PROJECT}"
 
 # ==================== Step 1: Maven 打包 ====================
@@ -115,7 +118,7 @@ upload_rsync() {
     check_winner && return 0
     local TMP_FILE="${JAR_NAME}.rsync"
     echo "   [rsync] uploading..."
-    if rsync -az --timeout=120 "$JAR_PATH" "$SERVER:$REMOTE_TMP/$TMP_FILE" 2>/dev/null; then
+    if rsync -az --timeout=120 "$(ssh_local_path "$JAR_PATH")" "$SERVER:$REMOTE_TMP/$TMP_FILE" 2>/dev/null; then
         check_winner || verify_and_claim "$TMP_FILE" "rsync"
     else
         check_winner || echo "   [rsync] failed"
@@ -128,7 +131,7 @@ upload_rsync_compress() {
     check_winner && return 0
     local TMP_FILE="${JAR_NAME}.rsync_z"
     echo "   [rsync+z] uploading..."
-    if rsync -az --compress-level=9 --timeout=120 "$JAR_PATH" "$SERVER:$REMOTE_TMP/$TMP_FILE" 2>/dev/null; then
+    if rsync -az --compress-level=9 --timeout=120 "$(ssh_local_path "$JAR_PATH")" "$SERVER:$REMOTE_TMP/$TMP_FILE" 2>/dev/null; then
         check_winner || verify_and_claim "$TMP_FILE" "rsync+z"
     else
         check_winner || echo "   [rsync+z] failed"
@@ -142,7 +145,7 @@ upload_relay() {
     local TMP_FILE="${JAR_NAME}.relay"
     echo "   [relay via 47] uploading to relay..."
     # Step 1: 上传到 47
-    if scp -o ConnectTimeout=10 -o ServerAliveInterval=15 -o ServerAliveCountMax=8 "$JAR_PATH" "$RELAY_SERVER:/tmp/$TMP_FILE" 2>/dev/null; then
+    if scp -o ConnectTimeout=10 -o ServerAliveInterval=15 -o ServerAliveCountMax=8 "$(ssh_local_path "$JAR_PATH")" "$RELAY_SERVER:/tmp/$TMP_FILE" 2>/dev/null; then
         check_winner && return 0
         echo "   [relay via 47] forwarding to 139..."
         # Step 2: 47 → 139 (内网/同区域)

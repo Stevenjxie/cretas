@@ -11,6 +11,8 @@ set -e
 # 配置
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
+# ssh_local_path: Windows 盘符路径会被 rsync/scp 当成主机名, 传输直接失败。
+source "$PROJECT_ROOT/scripts/lib/deploy-common.sh"
 EMBEDDING_DIR="$PROJECT_ROOT/backend/java/embedding-service"
 JAR_NAME="embedding-service-1.0.0.jar"
 VERSION="${1:-embedding-v$(date +%Y%m%d_%H%M%S)}"
@@ -49,11 +51,11 @@ REMOTE_INCOMING="$SERVER_DIR/$JAR_NAME.incoming.$VERSION"
 ssh "$SERVER" "mkdir -p '$SERVER_DIR'"
 if command -v rsync &> /dev/null \
     && rsync --version &> /dev/null \
-    && rsync -az --progress "$JAR_PATH" "$SERVER:$REMOTE_INCOMING"; then
+    && rsync -az --progress "$(ssh_local_path "$JAR_PATH")" "$SERVER:$REMOTE_INCOMING"; then
     TRANSFER_METHOD="rsync"
 else
     echo "   rsync 不可用或上传失败，切换 scp..."
-    scp "$JAR_PATH" "$SERVER:$REMOTE_INCOMING"
+    scp "$(ssh_local_path "$JAR_PATH")" "$SERVER:$REMOTE_INCOMING"
     TRANSFER_METHOD="scp"
 fi
 echo "   Done: $TRANSFER_METHOD 上传完成"

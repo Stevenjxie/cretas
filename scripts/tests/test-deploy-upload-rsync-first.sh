@@ -102,9 +102,35 @@ do
 done
 grep -Fq 'rsync -a --timeout=90 "$(ssh_local_path "$jar_path")"' "$STAGE_SCRIPT" \
     || fail "stage-backend-artifact.sh still hands a raw local path to rsync"
+
+# 全仓扫描: 任何把本地路径变量交给 rsync/scp 的调用点都必须归一化。新增传输点
+# 时忘记归一化, 这条会红 —— 否则又会多出一个"rsync 静默失败, 兜底通道顶上, 只
+# 表现为变慢"的坑, 而那种坑今天已经踩了 4 次。
+while IFS= read -r offender; do
+    [ -n "$offender" ] || continue
+    fail "未归一化的本地路径交给了 rsync/scp: $offender"
+done < <(
+    # 排除两类已知安全的写法:
+    #   - 行内直接包了 ssh_local_path
+    #   - 用 "$SRC" —— 它在上面几行由 SRC=$(ssh_local_path "$JAR_PATH") 赋值,
+    #     该赋值本身由 check_path 之外的独立断言守着(见下方 SRC 断言)。
+    grep -rnE '^[^#]*\b(rsync|scp)\b[^|]*"\$[A-Za-z_][A-Za-z_0-9]*"[[:space:]]+"[^"]*\$(SERVER|GATEWAY|PAGE_GATEWAY|RELAY_SERVER)' \
+        "$ROOT_DIR"/scripts/deploy/*.sh 2>/dev/null \
+        | grep -v 'ssh_local_path' \
+        | grep -v '"\$SRC"' || true
+)
+
+# $SRC 之所以能被上面豁免, 全靠这一行赋值。它没了, 主通道就又在传裸路径。
+grep -Fq 'SRC=$(ssh_local_path "$JAR_PATH")' "$DEPLOY_SCRIPT" \
+    || fail 'primary channel no longer derives $SRC from ssh_local_path'
+
 # 调用了共享函数就必须真的把库 source 进来, 否则运行时是 command not found。
-grep -Fq 'scripts/lib/deploy-common.sh' "$STAGE_SCRIPT" \
-    || fail "stage-backend-artifact.sh calls ssh_local_path without sourcing the shared library"
+# (stage-backend-artifact.sh 当初就漏了这一步, 自测才发现。)
+while IFS= read -r caller; do
+    [ -n "$caller" ] || continue
+    grep -Fq 'deploy-common.sh' "$caller" \
+        || fail "$(basename "$caller") calls ssh_local_path without sourcing the shared library"
+done < <(grep -rl 'ssh_local_path' "$ROOT_DIR"/scripts/deploy/*.sh 2>/dev/null || true)
 
 eval "$(awk '/^ssh_local_path\(\) \{/,/^\}/' "$COMMON_LIB")"
 

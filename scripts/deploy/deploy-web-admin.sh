@@ -488,7 +488,7 @@ fi
 # this script's own heredoc. Per-PID path means each deploy owns its own tarball.
 REMOTE_TAR="/tmp/web-admin-dist.$$.tar.gz"
 log "📤 [3/4] 上传到 $GATEWAY (remote: $REMOTE_TAR)..."
-scp -q "$TMP_TAR" "$GATEWAY:$REMOTE_TAR"
+scp -q "$(ssh_local_path "$TMP_TAR")" "$GATEWAY:$REMOTE_TAR"
 
 # Post-scp verify: defense in depth. If scp ever silently mis-writes (partial
 # transfer, wrong dest, /tmp full), tar xzf fails downstream with confusing
@@ -543,7 +543,7 @@ if [ "$ENV" = "all" ]; then
     log "   ✓ Tarball: $(du -h "$TMP_TAR" | awk '{print $1}')"
 
     log "📤 [prod 2/3] 上传 prod (remote: $REMOTE_TAR)..."
-    scp -q "$TMP_TAR" "$GATEWAY:$REMOTE_TAR"
+    scp -q "$(ssh_local_path "$TMP_TAR")" "$GATEWAY:$REMOTE_TAR"
 
     # Post-scp verify (mirror of test path — same race-fix rationale)
     LOCAL_SIZE=$(stat -c %s "$TMP_TAR" 2>/dev/null || stat -f %z "$TMP_TAR" 2>/dev/null || echo "0")
