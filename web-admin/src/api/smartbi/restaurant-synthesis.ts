@@ -106,6 +106,8 @@ function normalizeOption(raw: Record<string, unknown>): Record<string, unknown> 
     : Object.fromEntries(
         Object.entries(raw).filter(([key]) => !['chartType', 'title', 'type'].includes(key)),
       );
+  // Keep this fallback while any Java/Python chart producer may omit tooltip;
+  // remove it only after every producer accepted by this adapter enforces that contract.
   if (!('tooltip' in candidate)) {
     const chartType = String(raw.chartType || raw.type || 'bar').toLowerCase();
     candidate.tooltip = chartType === 'pie'
@@ -297,9 +299,8 @@ function normalizeStreamDone(payload: unknown): RestaurantSynthesisResult {
 }
 
 /**
- * Streaming variant of {@link askRestaurantSynthesis}: consumes the SSE
- * endpoint `/api/smartbi/synthesis/comprehensive-stream` (the SAME one
- * mobile-rest-ai/src/api.ts `askSynthesisStream` uses) via fetch +
+ * Streaming variant of {@link askRestaurantSynthesis}: consumes the dedicated
+ * SSE endpoint `/api/smartbi/synthesis/comprehensive-stream` via fetch +
  * ReadableStream, emitting status/chunk/charts/done/error callbacks.
  *
  * Auth/base-URL conventions mirror `pythonFetch`: `PYTHON_SMARTBI_URL`
