@@ -2618,75 +2618,27 @@ WantedBy=multi-user.target
 
 - [ ] **Step 2: 写部署脚本**
 
+⚠️ **脚本正文不在这里复制一份** —— 唯一权威是 `scripts/deploy/deploy-mock-platform.sh`。
+2026-07-29 的教训: 计划里嵌一份副本, 修脚本时只同步了 nginx 那一段, 剩下的部分
+(fail-open 的隔离闸、`--exclude "*.db"`、从错误机器发起的公网检查) 全部停在修复前的
+版本, 而计划恰恰是别人/未来的我会照着重放的东西 —— 等于把已经修掉的 bug 又教了一遍。
+
+脚本必须满足的硬约束(审查时按这张表核对, 实现细节看脚本本身):
+
+| # | 约束 | 为什么 |
+|---|---|---|
+| 1 | 隔离闸对 `grep` 的 rc **三分支**(0 拒绝 / 1 通过 / 其它硬失败) | rc=2 是"路径不存在"。写成 `if grep; then 拒绝; fi` 会在路径写错时打印"零命中"却什么都没查 —— 断言没做过的检查即降级 |
+| 2 | 动共享网关**之前**先预检 unit 与 `.env` | 否则一次误跑会留下 mkdir + rsync + 在生产网关 `yum install` + 建 venv 的副作用, 最后才因 unit 不存在失败 |
+| 3 | nginx 的 location 走**自己的 snippet 文件 + 往 `0.default.conf` 幂等插一行 include** | 139 是宝塔 nginx: 没有 `/etc/nginx`, vhost 目录在 **http 层** include, 所以 location 不能单独扔一个文件进去 |
+| 4 | include 锚在**最后一个顶格 `}`**, 找不到就拒绝 | 按行尾插入时, 一个尾随空行(面板存站点就会产生)会把 location 顶到 server 块外 → http 层 location → nginx `[emerg]` → 整台网关起不来 |
+| 5 | `nginx -t` 失败**同时回滚 snippet 与 vhost** | 不回滚的话坏配置留在磁盘上而运行中的 nginx 毫无异样, 直到下次任何人 reload 才炸; 只保护 vhost 的话第二次部署会用 snippet 重演一遍 |
+| 6 | rsync `--exclude "*.db*"` | `db.py` 开了 WAL, `-wal`/`-shm` 不匹配 `*.db` |
+| 7 | 健康判据是 **`generator: running`**, 不是 `status: ok` | `{"status":"ok","generator":"not_armed"}` 也是 ok —— 用它验收会在不产数据的服务上通过 |
+| 8 | 公网路径**从 47 发起**验证 | 47→139 才是实测会 TIMEOUT 的方向; 从开发机 curl 通只证明"互联网某处可达" |
+
 ```bash
-#!/bin/bash
-# scripts/deploy/deploy-mock-platform.sh
-# 把模拟器部署到 139。⚠️ 只上 139，绝不上 47 —— 47 是我们的系统，
-# 模拟器上 47 就破坏了「外部世界」的隔离前提。
-set -eo pipefail
-
-SERVER="root@139.196.165.140"
-REMOTE_DIR="/www/wwwroot/mock-platform/code"
-LOCAL_DIR="mock-platform"
-
-echo "[1/5] 校验隔离铁律..."
-if grep -rEn "smartbi|psycopg|asyncpg|smartbi_prod_db|cretas_prod_db" \
-     "$LOCAL_DIR/mock_platform" --include="*.py"; then
-    echo "错误: 模拟端泄漏了本系统依赖，拒绝部署"
-    exit 1
-fi
-
-echo "[2/5] 本地跑测试..."
-(cd "$LOCAL_DIR" && python -m pytest tests/ -q)
-
-echo "[3/5] 同步代码到 139..."
-ssh "$SERVER" "mkdir -p $REMOTE_DIR"
-rsync -az --delete --timeout=60 \
-    --exclude "__pycache__" --exclude ".pytest_cache" --exclude "*.db" \
-    "$LOCAL_DIR/" "$SERVER:$REMOTE_DIR/"
-
-echo "[4/5] 确保 python3.11 + 安装依赖 + 重启服务..."
-# ⚠️ 139 出厂只有 python3.6 / python3.8, 没有 3.11(实测)。
-#    alinux3-updates 源里有 python3.11-3.11.13-7.0.1.al8, 缺了就装。
-ssh "$SERVER" "command -v python3.11 >/dev/null 2>&1 || yum install -y python3.11"
-ssh "$SERVER" "cd $REMOTE_DIR && \
-    (test -d /www/wwwroot/mock-platform/venv311 || python3.11 -m venv /www/wwwroot/mock-platform/venv311) && \
-    /www/wwwroot/mock-platform/venv311/bin/pip install -q -r requirements.txt && \
-    systemctl restart cretas-mock-platform"
-
-echo "[5/7] 装 nginx 反代 /mock/ ..."
-# ⚠️ 139 是**宝塔** nginx: 没有 /etc/nginx, 配置在 /www/server/nginx/,
-#    vhost 在 /www/server/panel/vhost/nginx/*.conf 且由 nginx.conf 在 **http 层**
-#    include —— 所以 location 不能单独扔一个文件进那个目录(那是 server 上下文)。
-#    正确做法: location 体写进自己的 snippet 文件, 再往接管裸 IP:80 的
-#    0.default.conf 里幂等插一行 include。⛔ 那是共享生产 vhost, 必须
-#    锚在最后一个顶格 } 上 + nginx -t 失败回滚, 详见脚本注释与实现。
-#    (以上每一条都实测过; 早前写 /etc/nginx/conf.d 的版本在 139 上会 cat 失败,
-#     而后面的 `nginx -t && nginx -s reload` 照样 exit 0 => 全绿但零反代。)
-
-echo "[6/6] 健康检查..."
-# ⚠️ 判据必须是 generator=running, 不能只看 status=ok ——
-#    生成器被 GC / 抛异常退出时 healthz 会回 {"status":"degraded","generator":"stopped"},
-#    而 not_armed 那一档也是 status=ok。用 ok 做验收会在死掉的生成器上通过。
-for i in $(seq 1 15); do
-    if ssh "$SERVER" "curl -fsS -m 3 http://localhost:9200/healthz 2>/dev/null" \
-         | grep -q '"generator":"running"'; then
-        echo "✅ 模拟器健康 (生成器在跑)"
-        # 再验一次公网路径, 否则 47 拉不到但本地健康检查照样绿
-        ssh "$SERVER" "curl -fsS -m 5 http://139.196.165.140/mock/healthz" \
-          | grep -q '"generator":"running"' \
-          && { echo "✅ nginx /mock/ 反代通"; exit 0; }
-        echo "❌ 本地 9200 健康但 nginx /mock/ 不通"
-        exit 1
-    fi
-    sleep 2
-done
-echo "❌ 健康检查失败 (generator 未 running)"
-ssh "$SERVER" "curl -s -m 3 http://localhost:9200/healthz; tail -30 /www/wwwroot/mock-platform/mock-platform.log"
-exit 1
+chmod +x scripts/deploy/deploy-mock-platform.sh
 ```
-
-Run: `chmod +x scripts/deploy/deploy-mock-platform.sh`
 
 - [ ] **Step 3: 在 139 上准备环境变量与目录**
 

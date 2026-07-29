@@ -12,7 +12,8 @@
 # 前置条件（brief Step 3 / Step 4 手工做过一次，本脚本不代劳）：
 #   1) 139 上有 /www/wwwroot/mock-platform/.env（含密钥，不进 git）
 #   2) /etc/systemd/system/cretas-mock-platform.service 已装且 daemon-reload 过
-# 这两条在 [0/7] 预检里硬校验 —— 缺了就在动共享网关机之前停下来。
+#   3) 本机能 ssh 到 **139 和 47 两台** —— [7/7] 要从 47 发起公网检查
+# 三条都在 [0/7] 预检里硬校验 —— 缺了就在动共享网关机之前停下来。
 set -euo pipefail
 
 SERVER="root@139.196.165.140"
@@ -34,6 +35,16 @@ echo "[0/7] 预检前置条件（在动共享网关机之前）..."
 # ⚠️ 顺序很要紧: 先查再动。否则一次误跑会留下 mkdir + rsync + 在生产网关上
 #    yum install + 建 venv 的副作用, 最后才在 systemctl restart 上因为
 #    「unit 不存在」失败 —— 半个部署的残留换一个本可以一行查出来的前提。
+# 先单独确认两台都连得上。否则 ssh 自身失败(网络/认证, rc=255)会和「文件不存在」
+# 走同一个分支, 把「连不上主机」误报成「unit 没装」, 让人去 scp 到一台根本够不着的机器。
+for host in "$SERVER" "$PULLER"; do
+    ssh -o ConnectTimeout=15 -o BatchMode=yes "$host" true || {
+        echo "❌ ssh 连不上 $host（网络或认证问题，不是部署内容的问题）"
+        exit 1
+    }
+done
+echo "  ✅ 139 / 47 都连得上"
+
 ssh "$SERVER" "test -f /etc/systemd/system/cretas-mock-platform.service" || {
     echo "❌ 139 上没装 systemd unit。先做 brief Step 4:"
     echo "   scp scripts/systemd/cretas-mock-platform.service $SERVER:/etc/systemd/system/"
@@ -97,7 +108,28 @@ echo "[5/7] 装/校验 nginx /mock/ 反代..."
 #       毫无异样，直到下一次任何人 reload（面板存站点 / 证书续期 / 重启）才炸，
 #       而那时已经和这次部署完全对不上了。
 #    c) 找不到收尾 } 就拒绝动手，不猜。
+#    d) 校验与回滚覆盖**两个**文件。snippet 每次部署都被无条件重写, 且它被运行中的
+#       vhost 引用着 —— 只保护 vhost 的话, 第二次及以后的部署里一个写坏的 snippet
+#       会原样留在磁盘上(那次 include 已存在, 走"跳过"分支, 连备份都不做),
+#       换个文件重演一遍 c) 里那个"下次 reload 才炸"的事故。
 ssh "$SERVER" "set -e
+TS=\$(date +%Y%m%d_%H%M%S)
+SNIP_BAK=\"\"
+if [ -f $NGINX_SNIPPET ]; then
+    SNIP_BAK=$NGINX_SNIPPET.bak.\$TS
+    cp $NGINX_SNIPPET \"\$SNIP_BAK\"
+fi
+VHOST_BAK=\"\"
+
+restore() {
+    [ -n \"\$VHOST_BAK\" ] && cp -f \"\$VHOST_BAK\" $NGINX_VHOST
+    if [ -n \"\$SNIP_BAK\" ]; then
+        cp -f \"\$SNIP_BAK\" $NGINX_SNIPPET
+    else
+        rm -f $NGINX_SNIPPET      # 本来就没有, 回滚就是让它继续不存在
+    fi
+}
+
 cat > $NGINX_SNIPPET <<'NGINX'
 # 餐饮外部平台模拟器（2026-07-29）。模拟器绑 127.0.0.1:9200 不对外，
 # 这里是它唯一的公网出口。proxy_pass 末尾的 / 会剥掉 /mock 前缀：
@@ -114,22 +146,23 @@ NGINX
 if grep -q 'mock-platform-location.conf' $NGINX_VHOST; then
     echo '  include 已存在，跳过'
 else
-    BAK=$NGINX_VHOST.bak.\$(date +%Y%m%d_%H%M%S)
-    cp $NGINX_VHOST \"\$BAK\"
+    VHOST_BAK=$NGINX_VHOST.bak.\$TS
+    cp $NGINX_VHOST \"\$VHOST_BAK\"
     LAST=\$(grep -n '^}' $NGINX_VHOST | tail -1 | cut -d: -f1)
     if [ -z \"\$LAST\" ]; then
         echo '  ❌ 找不到 server 块收尾 }，拒绝改共享 vhost'
+        restore
         exit 1
     fi
     sed -i \"\${LAST}i\\\\    include $NGINX_SNIPPET;\" $NGINX_VHOST
-    if ! nginx -t; then
-        cp -f \"\$BAK\" $NGINX_VHOST
-        echo \"  ❌ nginx -t 失败，已回滚 $NGINX_VHOST（备份 \$BAK）\"
-        exit 1
-    fi
-    echo \"  已插入 include 到第 \$LAST 行前（备份 \$BAK）\"
+    echo \"  已插入 include 到第 \$LAST 行前（备份 \$VHOST_BAK）\"
 fi
-nginx -t
+# 唯一的校验点, 覆盖 snippet 与 vhost 两个文件, 无论走的是哪个分支。
+if ! nginx -t; then
+    restore
+    echo '  ❌ nginx -t 失败，snippet 与 vhost 都已回滚到本次部署前'
+    exit 1
+fi
 # BT 机器上 nginx.service 是 sysv 生成的 unit，systemctl reload 不可靠；
 # nginx -V 显示 --prefix=/www/server/nginx，裸 nginx 命令读的就是对的配置。
 nginx -s reload"
