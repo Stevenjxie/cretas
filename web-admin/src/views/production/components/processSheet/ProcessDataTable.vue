@@ -1561,6 +1561,11 @@ function outputViews(row: SheetRow): OutputLineView[] {
   });
 }
 
+/** 本行的投入里有没有真能选的端口 —— 全都没得选时「选用」整列不占位。 */
+function anyInputSelector(row: SheetRow): boolean {
+  return row.materialInputTotals.some((item) => showPortSelector(portById(item.workflowPortId)));
+}
+
 /** 子组件只知道端口 id; 选用状态的联动规则仍然留在这里 (EXACTLY_ONE 互斥等)。 */
 function onOutputPortToggle(row: SheetRow, portId: string, selected: boolean): void {
   setPortSelected(row, portById(portId), selected);
@@ -2826,52 +2831,78 @@ defineExpose({ hasUnsavedRows, refreshSharedInventories });
 
           <!-- 修油: raw-material batch dropdown + out-weight -->
           <template v-if="isXiuYou">
+            <!--
+              投入也按紧凑表格排 (与产出表同一套观感)。原来每条投入是一竖列
+              label/下拉/label/数字堆叠, 多条并排时字段名逐条重复, 正是客户说的「散」。
+            -->
             <template v-if="usesAutoMaterialTotals(row)">
               <div
-                v-for="item in row.materialInputTotals"
-                :key="item.workflowPortId || item.materialTypeId"
-                data-testid="material-input-total"
-                class="sp-card-field"
-                :class="{ 'sp-port-unselected': !item.selected }"
+                class="sp-card-field sp-card-field-full sp-in-table"
+                :class="{ 'sp-in-table--sel': anyInputSelector(row) }"
               >
-                <el-checkbox
-                  v-if="showPortSelector(portById(item.workflowPortId))"
-                  :model-value="item.selected"
-                  :disabled="portSelectionDisabled(portById(item.workflowPortId))"
-                  data-testid="port-selected"
-                  @change="(selected: boolean) => setPortSelected(row, portById(item.workflowPortId), selected)"
-                >选用</el-checkbox>
-                <span class="sp-port-selection-hint">{{ portSelectionSummary(portById(item.workflowPortId)) }}</span>
-                <label class="sp-card-label">本次投入原料</label>
-                <el-select
-                  :model-value="item.materialTypeId"
-                  :disabled="!item.selected"
-                  data-testid="bom-authorized-material-select"
-                  aria-label="选择本次实际投入物料"
-                  placeholder="选择主料或替代料…"
-                  style="width:180px"
-                  size="small"
-                  @change="(materialTypeId: string) => selectMaterialForInput(item, materialTypeId)"
+                <div class="sp-in-head" aria-hidden="true">
+                  <span v-if="anyInputSelector(row)">选用</span>
+                  <span>本次投入原料</span>
+                  <span><i class="sp-required">*</i>投料总量</span>
+                  <span>来源批次</span>
+                </div>
+                <div
+                  v-for="item in row.materialInputTotals"
+                  :key="item.workflowPortId || item.materialTypeId"
+                  data-testid="material-input-total"
+                  class="sp-in-row"
+                  :class="{ 'sp-port-unselected': !item.selected }"
                 >
-                  <el-option
-                    v-for="option in materialOptionsForPort(item.workflowPortId)"
-                    :key="option.value"
-                    :label="option.label"
-                    :value="option.value"
-                  />
-                </el-select>
-                <label class="sp-card-label">投料总量</label>
-                <el-input-number
-                  v-model="item.quantity"
-                  :disabled="!item.selected"
-                  :min="0"
-                  :precision="6"
-                  controls-position="right"
-                  style="width:160px"
-                  size="small"
-                />
-                <span data-testid="input-unit-readonly" class="sp-fixed-unit">{{ displayProcessUnit(item.unit) }}</span>
-                <span style="font-size:11px;color:#909399">来源批次由系统按生产库入库顺序自动分摊</span>
+                  <span v-if="anyInputSelector(row)" class="sp-in-cell">
+                    <el-checkbox
+                      v-if="showPortSelector(portById(item.workflowPortId))"
+                      :model-value="item.selected"
+                      :disabled="portSelectionDisabled(portById(item.workflowPortId))"
+                      data-testid="port-selected"
+                      :aria-label="`选用 ${item.materialName}`"
+                      @change="(selected: boolean) => setPortSelected(row, portById(item.workflowPortId), selected)"
+                    />
+                  </span>
+                  <span class="sp-in-cell">
+                    <el-select
+                      :model-value="item.materialTypeId"
+                      :disabled="!item.selected"
+                      data-testid="bom-authorized-material-select"
+                      aria-label="选择本次实际投入物料"
+                      placeholder="选择主料或替代料…"
+                      style="width:100%"
+                      size="small"
+                      @change="(materialTypeId: string) => selectMaterialForInput(item, materialTypeId)"
+                    >
+                      <el-option
+                        v-for="option in materialOptionsForPort(item.workflowPortId)"
+                        :key="option.value"
+                        :label="option.label"
+                        :value="option.value"
+                      />
+                    </el-select>
+                    <!-- 端口有替代关系时才说明选法; 没得选时这行字和 * 是重复的 -->
+                    <span
+                      v-if="showPortSelector(portById(item.workflowPortId))"
+                      class="sp-port-selection-hint"
+                    >{{ portSelectionSummary(portById(item.workflowPortId)) }}</span>
+                  </span>
+                  <span class="sp-in-cell">
+                    <span class="sp-inline-input" role="group" aria-label="投料总量与单位">
+                      <el-input-number
+                        v-model="item.quantity"
+                        :disabled="!item.selected"
+                        :min="0"
+                        :precision="6"
+                        controls-position="right"
+                        size="small"
+                        :aria-label="`${item.materialName} 投料总量`"
+                      />
+                      <span data-testid="input-unit-readonly" class="sp-fixed-unit">{{ displayProcessUnit(item.unit) }}</span>
+                    </span>
+                  </span>
+                  <span class="sp-in-cell sp-in-note">来源批次由系统按生产库入库顺序自动分摊</span>
+                </div>
               </div>
             </template>
             <template v-else>
@@ -4570,6 +4601,54 @@ defineExpose({ hasUnsavedRows, refreshSharedInventories });
 /* 产出块(含作业时间与副产)的样式已随 ProcessOutputTable 子组件迁走 */
 .sp-port-unselected { opacity: 0.58; }
 .sp-port-selection-hint { color: #909399; font-size: 11px; white-space: nowrap; }
+
+/*
+  投入紧凑表 (卡片模式)。表格模式的投入本来就在真表格的 td 里, 不需要这一套。
+  列宽与观感对齐 ProcessOutputTable, 免得同一张卡上下两半长得不像一家。
+*/
+.sp-in-table {
+  border: 1px solid #e4e9f2;
+  border-radius: 6px;
+  overflow-x: auto;
+  background: #fff;
+}
+.sp-in-head,
+.sp-in-row {
+  display: grid;
+  grid-template-columns: minmax(180px, 1.6fr) 200px minmax(200px, 1.2fr);
+  align-items: center;
+  gap: 0 10px;
+  min-width: 620px;
+}
+/* 有可选端口时才多出「选用」列 —— 没得选就不占位, 与 showPortSelector 同一条判据 */
+.sp-in-table--sel .sp-in-head,
+.sp-in-table--sel .sp-in-row {
+  grid-template-columns: 56px minmax(180px, 1.6fr) 200px minmax(200px, 1.2fr);
+}
+.sp-in-head {
+  padding: 7px 10px;
+  border-bottom: 1px solid #e4e9f2;
+  background: #f5f7fa;
+  color: #606266;
+  font-size: 11px;
+  font-weight: 600;
+}
+.sp-in-row {
+  padding: 7px 10px;
+  border-top: 1px solid #eef1f6;
+}
+.sp-in-row:first-of-type { border-top: 0; }
+.sp-in-cell {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  font-size: 12px;
+  color: #303133;
+}
+.sp-in-cell :deep(.el-select) { min-width: 0; }
+.sp-in-note { color: #909399; font-size: 11px; }
+.sp-required { margin-right: 2px; color: var(--el-color-danger); font-style: normal; font-weight: 700; }
 .sp-inline-input {
   display: flex;
   align-items: center;
