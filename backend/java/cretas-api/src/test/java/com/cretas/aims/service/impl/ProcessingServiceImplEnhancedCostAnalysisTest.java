@@ -2,6 +2,7 @@ package com.cretas.aims.service.impl;
 
 import com.cretas.aims.entity.MaterialConsumption;
 import com.cretas.aims.entity.ProductionBatch;
+import com.cretas.aims.entity.ProductionPlan;
 import com.cretas.aims.entity.QualityInspection;
 import com.cretas.aims.repository.BatchEquipmentUsageRepository;
 import com.cretas.aims.repository.BatchWorkSessionRepository;
@@ -166,6 +167,31 @@ class ProcessingServiceImplEnhancedCostAnalysisTest {
 
         assertThat(result.get("qualityInspections")).asList().hasSize(1);
         assertThat(result).doesNotContainKey("averagePassRate");
+    }
+
+    @Test
+    @DisplayName("库存生产无计划数量时不计算完成率")
+    void enhancedCost_openQuantityPlan_omitsCompletionRate() {
+        ProductionBatch batch = batch();
+        batch.setProductionPlanId("PLAN-OPEN-QTY");
+        batch.setLaborCost(BigDecimal.ZERO);
+        batch.setOtherCost(BigDecimal.ZERO);
+
+        ProductionPlan plan = new ProductionPlan();
+        plan.setId("PLAN-OPEN-QTY");
+        plan.setPlanNumber("PLAN-OPEN-QTY-001");
+        plan.setPlannedQuantity(BigDecimal.ZERO);
+
+        when(productionBatchRepository.findByIdAndFactoryId(BATCH_ID, FACTORY)).thenReturn(Optional.of(batch));
+        when(productionPlanRepository.findById("PLAN-OPEN-QTY")).thenReturn(Optional.of(plan));
+        when(materialConsumptionRepository.findByProductionBatchId(BATCH_ID)).thenReturn(List.of());
+        when(batchEquipmentUsageRepository.findByBatchId(BATCH_ID)).thenReturn(List.of());
+
+        Map<String, Object> result = service.getEnhancedBatchCostAnalysis(FACTORY, BATCH_ID.toString());
+
+        Map<String, Object> comparison = asMap(result.get("productionPlanComparison"));
+        assertThat(comparison.get("plannedQuantity")).isEqualTo(BigDecimal.ZERO);
+        assertThat(comparison).doesNotContainKey("completionRate");
     }
 
     private ProductionBatch batch() {

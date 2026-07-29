@@ -6180,6 +6180,21 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
                     .withHint("请刷新生产计划列表查看最新状态");
         }
 
+        BigDecimal batchTargetQuantity = plan.getPlannedQuantity() == null
+                ? BigDecimal.ZERO
+                : plan.getPlannedQuantity();
+        if (batchTargetQuantity.compareTo(BigDecimal.ZERO) < 0) {
+            throw new BusinessException(422, "生产计划数量不能为负数")
+                    .withCode("INVALID_PLANNED_QUANTITY")
+                    .withHint("请修正生产计划数量后重试");
+        }
+        if (plan.getSourceType() != PlanSourceType.SAFETY_STOCK
+                && batchTargetQuantity.compareTo(BigDecimal.ZERO) == 0) {
+            throw new BusinessException(422, "非库存生产计划必须填写大于 0 的计划数量")
+                    .withCode("PLANNED_QUANTITY_REQUIRED")
+                    .withHint("库存生产可按实际报工；其他来源请先补充计划数量");
+        }
+
         // Plans pin an exact workflow/version. Activation may move after plan creation;
         // conversion validates the pin itself and never silently resolves a newer graph.
         if (workflowResolutionService != null
@@ -6216,8 +6231,8 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
                 .productionPlanId(plan.getId())
                 .productTypeId(plan.getProductTypeId())
                 .productName(productName)
-                .plannedQuantity(plan.getPlannedQuantity())
-                .quantity(plan.getPlannedQuantity())
+                .plannedQuantity(batchTargetQuantity)
+                .quantity(batchTargetQuantity)
                 .unit(requireProductionUnit(plan.getPlannedUnit(), "生产计划 " + plan.getPlanNumber()))
                 .workflowSelectionMode(plan.getWorkflowSelectionMode())
                 .selectedWorkflowId(plan.getSelectedWorkflowId())

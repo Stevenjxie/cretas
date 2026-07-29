@@ -3,6 +3,7 @@ package com.cretas.aims.service.production;
 import com.cretas.aims.entity.ProductionBatch;
 import com.cretas.aims.entity.ProductionPlan;
 import com.cretas.aims.entity.bom.BomRecipeItem;
+import com.cretas.aims.entity.enums.PlanSourceType;
 import com.cretas.aims.entity.enums.ProductionPlanStatus;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.repository.ConversionRepository;
@@ -106,6 +107,8 @@ class ProductionPlanCreateBatchValidationTest {
         lenient().when(productTypeRepository.findById(PRODUCT_TYPE_ID)).thenReturn(Optional.empty());
         lenient().when(productionBatchRepository.existsByFactoryIdAndBatchNumber(any(), any()))
                 .thenReturn(false);
+        lenient().when(workProcessTaskService.spawnTasks(any(), any(), any(), any(), any(), any()))
+                .thenReturn(Collections.emptyList());
     }
 
     private ProductionPlan pendingPlan(BigDecimal plannedQuantity) {
@@ -117,6 +120,7 @@ class ProductionPlanCreateBatchValidationTest {
         plan.setPlannedQuantity(plannedQuantity);
         plan.setPlannedUnit("kg");
         plan.setStatus(ProductionPlanStatus.PENDING);
+        plan.setSourceType(PlanSourceType.MANUAL);
         return plan;
     }
 
@@ -210,6 +214,43 @@ class ProductionPlanCreateBatchValidationTest {
         assertNotNull(batch);
         verify(productionBatchRepository, times(1)).save(any(ProductionBatch.class));
         assertEquals(ProductionPlanStatus.IN_PROGRESS, plan.getStatus());
+    }
+
+    @Test
+    @DisplayName("库存生产数量为 0 → 按实际报工，允许创建开放数量批次")
+    void createBatch_safetyStockWithoutPlannedQuantity_createsOpenQuantityBatch() {
+        ProductionPlan plan = pendingPlan(BigDecimal.ZERO);
+        plan.setSourceType(PlanSourceType.SAFETY_STOCK);
+        when(productionPlanRepository.findByIdForUpdate(PLAN_ID)).thenReturn(Optional.of(plan));
+        when(productionPlanRepository.save(any(ProductionPlan.class))).thenAnswer(inv -> inv.getArgument(0));
+        when(productionBatchRepository.save(any(ProductionBatch.class)))
+                .thenAnswer(inv -> {
+                    ProductionBatch batch = inv.getArgument(0);
+                    batch.setId(3L);
+                    return batch;
+                });
+
+        ProductionBatch batch = assertDoesNotThrow(
+                () -> service.createBatchFromPlan(FACTORY_ID, PLAN_ID));
+
+        assertEquals(0, batch.getPlannedQuantity().compareTo(BigDecimal.ZERO));
+        assertEquals(0, batch.getQuantity().compareTo(BigDecimal.ZERO));
+        assertEquals(ProductionPlanStatus.IN_PROGRESS, plan.getStatus());
+        verify(productionBatchRepository, times(1)).save(any(ProductionBatch.class));
+    }
+
+    @Test
+    @DisplayName("非库存生产数量为 0 → 拒绝创建批次并给出明确原因")
+    void createBatch_nonSafetyStockWithoutPlannedQuantity_rejected() {
+        ProductionPlan plan = pendingPlan(BigDecimal.ZERO);
+        when(productionPlanRepository.findByIdForUpdate(PLAN_ID)).thenReturn(Optional.of(plan));
+
+        BusinessException ex = assertThrows(BusinessException.class,
+                () -> service.createBatchFromPlan(FACTORY_ID, PLAN_ID));
+
+        assertEquals(422, ex.getCode());
+        assertTrue(ex.getMessage().contains("非库存生产"));
+        verify(productionBatchRepository, never()).save(any(ProductionBatch.class));
     }
 
     @Test

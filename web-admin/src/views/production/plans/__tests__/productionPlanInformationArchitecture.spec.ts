@@ -17,6 +17,8 @@ describe('production plan list information architecture', () => {
     expect(operations).toContain('v-if="canShowProductionActions(row)"');
     expect(operations).toContain('{{ processEntryActionLabel(row) }}');
     expect(operations).toContain('@click="openProcessEntry(row)"');
+    expect(operations).toContain(':loading="entryPreparingPlanId === String(row.id)"');
+    expect(operations).toContain(':disabled="entryPreparingPlanId !== null"');
     expect(operations).toContain('{{ settlementActionLabel(row) }}');
     expect(operations).toContain('@click="handlePrimarySettlementAction(row)"');
     expect(operations).toContain('>档案与核算</el-button>');
@@ -102,6 +104,13 @@ describe('production plan list information architecture', () => {
     expect(source).toContain('v-if="row.sourceType === \'SAFETY_STOCK\'"');
     expect(source).toContain('label="计划成品数量"');
     expect(source).toContain('数量来自销售订单产品行，创建生产计划时不可修改');
+  });
+
+  it('treats inventory production as open quantity and reports one precise entry error', () => {
+    expect(source).toContain("row.sourceType === 'SAFETY_STOCK'");
+    expect(source).toContain("return '按实际报工'");
+    expect(source).toContain("handleCatchError(error, '生产批次准备失败，请检查网络后重试')");
+    expect(source).not.toContain('Workflow 批次尚未准备完成，暂不能逐道录入');
   });
 
   it('offers only inventory production and sales-order production for new plans', () => {

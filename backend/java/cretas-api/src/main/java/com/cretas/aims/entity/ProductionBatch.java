@@ -145,10 +145,13 @@ public class ProductionBatch extends BaseEntity {
     @Column(name = "planned_quantity", precision = 12, scale = 2)
     private BigDecimal plannedQuantity;
      /**
-      * 数量 (数据库NOT NULL字段)
+      * 批次目标数量 (数据库 NOT NULL 字段).
+      *
+      * <p>库存生产允许 0，表示不预设计划产量、按实际报工累计；实际报工数量仍由
+      * 报工 DTO / Service 的正数约束独立校验。负数在任何场景都不合法。</p>
       */
     @NotNull(message = "数量不能为空")
-    @Positive(message = "数量必须大于0")
+    @PositiveOrZero(message = "数量不能为负数")
     @Column(name = "quantity", nullable = false, precision = 10, scale = 2)
     private BigDecimal quantity;
      /**
