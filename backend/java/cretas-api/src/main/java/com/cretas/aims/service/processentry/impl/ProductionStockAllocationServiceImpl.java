@@ -228,11 +228,26 @@ public class ProductionStockAllocationServiceImpl implements ProductionStockAllo
                         .withCode("PRODUCTION_INPUT_BATCH_NOT_IN_WORKSHOP")
                         .withSeverity("BLOCKING");
             }
-            if (!isMassStorageUnit(batch.getQuantityUnit())) {
-                throw new BusinessException(409, "所选投料批次不是 kg 计量，不能直接报工")
-                        .withCode("PRODUCTION_INPUT_BATCH_UNIT_INVALID")
+            // 与自动分摊同一口径: 质量单位折算成 kg, 其余量纲按批次自身单位记账。
+            // 手选批次时数量就是照着这个批次填的, 所以投料单位以批次库存单位为准;
+            // 声明了单位就必须一致 —— 拿「只」的数量去扣一个 kg 批次是无声的错账。
+            String batchUnit = canonicalNativeUnit(factoryId, batch.getQuantityUnit());
+            if (batchUnit == null) {
+                throw new BusinessException(409, "投料批次 " + batch.getBatchNumber() + " 缺少库存单位")
+                        .withCode("PRODUCTION_INPUT_BATCH_UNIT_REQUIRED")
                         .withSeverity("BLOCKING");
             }
+            String declaredUnit = canonicalNativeUnit(factoryId, metadata.getUnit());
+            if (declaredUnit != null && !Objects.equals(declaredUnit, batchUnit)) {
+                throw new BusinessException(409, "投料单位与批次库存单位不一致: 报工按 "
+                        + metadata.getUnit() + ", 批次 " + batch.getBatchNumber()
+                        + " 存的是 " + batch.getQuantityUnit())
+                        .withCode("PRODUCTION_INPUT_BATCH_UNIT_MISMATCH")
+                        .withHint("请改选同单位的批次, 或先在工序里把该物料的报工单位对齐库存单位")
+                        .withSeverity("BLOCKING");
+            }
+            boolean massBatch = isCanonicalMassUnit(batchUnit);
+            String allocationUnit = massBatch ? KG : batchUnit;
             if (metadata.getSkuId() != null && !metadata.getSkuId().isBlank()
                     && !Objects.equals(metadata.getSkuId(), batch.getMaterialTypeId())) {
                 throw new BusinessException(409, "投料批次与物料不匹配")
@@ -241,21 +256,23 @@ public class ProductionStockAllocationServiceImpl implements ProductionStockAllo
             }
             BigDecimal pending = nz(allocationRepository
                     .sumPendingQuantityByMaterialBatchId(factoryId, batchId));
-            BigDecimal available = storageQuantityToKg(
-                    nz(batch.getCurrentQuantity()), batch.getQuantityUnit(), batch.getBatchNumber())
-                    .subtract(pending).max(BigDecimal.ZERO);
+            BigDecimal stock = massBatch
+                    ? storageQuantityToKg(
+                            nz(batch.getCurrentQuantity()), batch.getQuantityUnit(), batch.getBatchNumber())
+                    : nz(batch.getCurrentQuantity());
+            BigDecimal available = stock.subtract(pending).max(BigDecimal.ZERO);
             if (batch.getStatus() != com.cretas.aims.entity.enums.MaterialBatchStatus.AVAILABLE
                     || available.compareTo(required) < 0) {
                 shortageItems.add(new ProductionStockShortageDTO.Item(
                         batch.getMaterialTypeId(), null,
                         metadata.getSourceType() == null ? "RAW_MATERIAL" : metadata.getSourceType(),
                         required, available,
-                        required.subtract(available).max(BigDecimal.ZERO), KG));
+                        required.subtract(available).max(BigDecimal.ZERO), allocationUnit));
                 continue;
             }
             allocations.add(new PlannedAllocation(
                     batch.getMaterialTypeId(), batchId, batch.getBatchNumber(), workshopId,
-                    required, KG, allocationOrder++, metadata.getWorkflowPortId(),
+                    required, allocationUnit, allocationOrder++, metadata.getWorkflowPortId(),
                     metadata.getMaterialNodeId()));
         }
         if (!shortageItems.isEmpty()) {
@@ -266,7 +283,8 @@ public class ProductionStockAllocationServiceImpl implements ProductionStockAllo
             BigDecimal shortage = shortageItems.stream().map(ProductionStockShortageDTO.Item::getShortage)
                     .reduce(BigDecimal.ZERO, BigDecimal::add);
             throw new ProductionStockShortageException(new ProductionStockShortageDTO(
-                    required, available, shortage, KG, List.copyOf(shortageItems)));
+                    required, available, shortage,
+                    aggregateShortageUnit(shortageItems), List.copyOf(shortageItems)));
         }
         return List.copyOf(allocations);
     }
