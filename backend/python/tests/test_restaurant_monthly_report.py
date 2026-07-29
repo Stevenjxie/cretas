@@ -135,6 +135,29 @@ async def test_默认模板的问句是自然语言而不是SQL或metric码():
         assert "RESTAURANT_OPS_" not in section.query
 
 
+@pytest.mark.asyncio
+async def test_默认模板每节都写明门店范围():
+    """报告无人值守跑, 漏写门店范围的问句会走澄清闸 → 整份报告生不成。
+
+    2026-07-29 生产实测: 上线首版 6 节里 5 节漏了范围词, 在 30 家门店的真实
+    租户上一份报告都出不来 (stub 绕过澄清闸所以没测出来)。这条测试挡住回归。
+    """
+    for section in get_template().sections:
+        assert "门店" in section.query, (
+            f"section {section.key!r} 的问句没写门店范围, "
+            f"无人值守执行会撞澄清闸: {section.query!r}"
+        )
+
+
+@pytest.mark.asyncio
+async def test_默认模板不含损耗节():
+    """损耗 resolver 无视请求的时间窗 (问 6 月答"近 30 天"), 放进月度报告
+    会产出标题与内容口径不一致的报告, 而 fail-closed 挡不住这种错误
+    (resolver 确实返回了数据)。resolver 支持显式月份窗口后再加回来。
+    """
+    assert "wastage" not in get_template().section_keys()
+
+
 # ───────────────────────── 2. 数据截至时间必须在 ─────────────────────────
 
 @pytest.mark.asyncio

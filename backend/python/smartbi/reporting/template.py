@@ -47,7 +47,14 @@ class ReportTemplate:
 
 
 # 客户口径的默认月度报告 (7/27 会议 B 40:30 / 46:16「月度报告自动生成+文件下载」)。
-# 顺序 = 老板读报告的顺序: 先总量, 再趋势, 再拆门店/菜品/渠道, 最后是成本损耗。
+# 顺序 = 老板读报告的顺序: 先总量, 再趋势, 再拆门店/渠道, 最后是毛利。
+#
+# ⚠️ 每条问句都必须**显式写出门店范围** (2026-07-29 生产实测):
+# 报告是无人值守跑的, 而意图层对没写范围的问句会走澄清闸
+# (`NEEDS_CLARIFICATION`) —— 没人在旁边回答"你想看哪几家门店", 于是整份报告
+# fail-closed 不生成。上线首版 6 节里有 5 节漏了范围词, 在 30 家门店的真实
+# 租户上**一份报告都出不来**; stub 测试发现不了, 因为 stub 绕过了澄清闸。
+# 改问句时务必先在真实多门店租户上跑一遍再合。
 DEFAULT_MONTHLY_TEMPLATE = ReportTemplate(
     code="RESTAURANT_MONTHLY_DEFAULT",
     title="餐饮月度经营报告",
@@ -55,12 +62,12 @@ DEFAULT_MONTHLY_TEMPLATE = ReportTemplate(
         SectionTemplate(
             key="overview",
             heading="一、经营总览",
-            query="{period}整体经营概览，营收、订单量和客单价分别是多少",
+            query="{period}全部门店整体经营概览，营收、订单量和客单价分别是多少",
         ),
         SectionTemplate(
             key="trend",
             heading="二、营收趋势与环比",
-            query="{period}营收的月度趋势和环比变化",
+            query="{period}全部门店营收的月度趋势和环比变化",
         ),
         SectionTemplate(
             key="store_revenue",
@@ -70,18 +77,29 @@ DEFAULT_MONTHLY_TEMPLATE = ReportTemplate(
         SectionTemplate(
             key="channel_mix",
             heading="四、堂食与外卖结构",
-            query="{period}堂食和外卖的占比",
+            query="{period}全部门店堂食和外卖的占比",
         ),
+        # 「全部门店毛利率」而不是「全部门店(各门店)毛利率对比」: 后者被 Answer
+        # Contract 判为口径覆盖不足直接否决, 前者才落到按门店排名的毛利 resolver
+        # (2026-07-29 对 6 月/7 月各跑 3 次, 6/6 稳定通过)。
         SectionTemplate(
             key="store_margin",
             heading="五、各门店毛利率",
-            query="{period}各门店毛利率对比",
+            query="{period}全部门店毛利率",
         ),
-        SectionTemplate(
-            key="wastage",
-            heading="六、损耗排行",
-            query="{period}损耗最多的食材排行",
-        ),
+        # ⛔ 「六、损耗排行」已摘除 (2026-07-29)。
+        #
+        # 不是问句写法问题, 改不了: 损耗 resolver **完全无视请求的时间窗** ——
+        # 问「2026年6月...损耗排行」, 三种写法返回的都是"近 30 天损耗总览"、
+        # 数字一字不差。放进月度报告 = 标题写着 6 月、内容是近 30 天, 是一份
+        # 看起来完全正常但口径错误的报告。
+        #
+        # 这类错误 fail-closed **挡不住**: 它挡的是"没拿到数据", 而这里
+        # resolver 确实返回了数据, 只是答的是另一个时间窗; 报告层又刻意不解析
+        # 日期 (日期口径的唯一权威在意图层), 于是会原样排版进去。
+        #
+        # 复原条件: 损耗 resolver 支持显式月份窗口后, 把这一节加回来并在真实
+        # 租户上验证「问 6 月答的就是 6 月」。
     ),
 )
 
