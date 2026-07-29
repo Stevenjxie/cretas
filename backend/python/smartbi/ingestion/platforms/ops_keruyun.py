@@ -105,10 +105,9 @@ def _to_requisition(raw: dict) -> NormalizedRequisition:
         ingredient=_ingredient(raw),
         qty_milli=_strict_int(raw["qty"], "requisition.qty"),
         cost_cents=_strict_int(raw["cost"], "requisition.cost"),
-        # status 在 dataclass 上有默认值 "COMPLETED", 但这里**不**用那个默认:
-        # Silver 的 ETL 只统计 COMPLETED, 把一张缺 status 的单默认成 COMPLETED
-        # 等于替平台决定"这单已完成", 凭空把它算进领料成本。默认值是给构造
-        # 对象的人用的, 不是给报文解析用的。
+        # ⚠️ 绝不给 status 兜底。下游 Gold 按它过滤(领料是
+        # APPROVED/SUBMITTED), 替平台编一个状态等于凭空决定这单算不算进成本;
+        # 而编错了不会报错, 只会让 KPI 静默变 0。
         status=_require_text(raw, "status"),
     )
 
@@ -123,6 +122,7 @@ def _to_wastage(raw: dict) -> NormalizedWastage:
         # 损耗类型是损耗分析的主分组轴(变质 / 加工损耗 / 客诉退菜), 缺了这条
         # 记录就只能进"其它", 归因直接失效 —— 必填。
         wastage_type=_require_text(raw, "wastageType"),
+        status=_require_text(raw, "status"),
         qty_milli=_strict_int(raw["qty"], "wastage.qty"),
         cost_cents=_strict_int(raw["cost"], "wastage.cost"),
     )
@@ -135,6 +135,7 @@ def _to_stocktaking(raw: dict) -> NormalizedStocktaking:
         store_code=_require_text(raw, "shopCode"),
         biz_date=_biz_date(raw),
         ingredient=_ingredient(raw),
+        status=_require_text(raw, "status"),
         system_qty_milli=_strict_int(raw["systemQty"], "stocktaking.systemQty"),
         actual_qty_milli=_strict_int(raw["actualQty"], "stocktaking.actualQty"),
         # 盘亏是负数, 这是正常业务形态而不是脏数据 —— 不做非负校验。

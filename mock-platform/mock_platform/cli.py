@@ -19,7 +19,9 @@ from .callback import notify
 from .config import get_settings
 from .db import connect
 from .world.curve import daily_minute_quota
-from .world.generator import backfill, generate_orders
+from .world.generator import (
+    _generate_daily_ops_inner, backfill, generate_daily_ops, generate_orders,
+)
 from .world.seed import seed_world
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -59,6 +61,18 @@ async def _generate_forever() -> None:
                         logger.exception("[gen] 门店 %s 第 %s 分钟生成失败, 跳过",
                                          store["id"], minute)
                 if created:
+                    # 后厨跟着当天销量走: 有新单就重算这些店今天的领料/损耗/盘点。
+                    # 必须排在订单之后 —— 它是按当天实际消耗推的, 顺序反了会
+                    # 按尚未写入的销量算出偏小的数。
+                    # 幂等 UPSERT 且 seq 会推进, 所以每分钟重算一次是安全的,
+                    # 对端也能看到当天数字随营业增长(这正是"实时"的含义)。
+                    for store in stores:
+                        try:
+                            generate_daily_ops(conn, store_id=store["id"],
+                                               biz_date=biz_date, rng=rng)
+                        except Exception:
+                            logger.exception("[gen] 门店 %s 后厨派生失败, 跳过",
+                                             store["id"])
                     row = conn.execute('SELECT MAX(seq) s FROM "order"').fetchone()
                     logger.info("[gen] 第 %s 分钟生成 %d 单, maxSeq=%s", minute, created, row["s"])
                     await notify(client, settings.callback_url,
@@ -92,6 +106,40 @@ def _cmd_backfill(args: argparse.Namespace) -> None:
     logger.info("[backfill] 造出 %d 单，覆盖过去 %d 天", total, args.days)
 
 
+def _cmd_backfill_ops(args: argparse.Namespace) -> None:
+    """只按**已有订单**补后厨数据, 一条订单都不新建。
+
+    为什么需要单独一个命令: `backfill` 会连订单一起造, 而订单的 INSERT 没有
+    ON CONFLICT —— 在已经有数据的库上重跑会把订单**翻倍**, 把营收数字搞脏。
+    线上那个库已经有 6 万单但零后厨数据(后厨是后来才加的), 只能用这条路补。
+
+    幂等: 后厨三张表都是 (biz_date, store_id, ingredient_id[, type]) UPSERT。
+    """
+    settings = get_settings()
+    conn = connect(settings.db_path)
+    seed_world(conn, settings.store_count)   # 补上食材与配方(幂等)
+    pairs = conn.execute(
+        'SELECT DISTINCT store_id, biz_date FROM "order" ORDER BY biz_date, store_id'
+    ).fetchall()
+    if not pairs:
+        # 禁降级: 没有订单就推不出后厨, 说清楚而不是报"成功 0 条"。
+        raise SystemExit("库里没有订单, 无法推导后厨数据 —— 先跑 backfill")
+    rng = random.Random()
+    totals = {"requisition": 0, "wastage": 0, "stocktaking": 0}
+    conn.execute("BEGIN")
+    try:
+        for row in pairs:
+            stats = _generate_daily_ops_inner(
+                conn, store_id=row["store_id"], biz_date=row["biz_date"], rng=rng)
+            for k, v in stats.items():
+                totals[k] += v
+    except Exception:
+        conn.execute("ROLLBACK")
+        raise
+    conn.execute("COMMIT")
+    logger.info("[backfill-ops] 覆盖 %d 个门店日, 产出 %s", len(pairs), totals)
+
+
 def _positive_int(raw: str) -> int:
     """`--days` 校验：0/负数会让 `range(days, 0, -1)` 静默为空，看起来成功但什么都没造。
     与本项目"禁止降级处理，明确显示错误"的原则相悖，必须在入口挡住。"""
@@ -115,6 +163,9 @@ def main() -> None:
     p_back = sub.add_parser("backfill")
     p_back.add_argument("--days", type=_positive_int, required=True)
     p_back.set_defaults(func=_cmd_backfill)
+    # 只补后厨, 不碰订单 —— 已有数据的库上唯一安全的补数方式。
+    p_ops = sub.add_parser("backfill-ops")
+    p_ops.set_defaults(func=_cmd_backfill_ops)
     args = parser.parse_args()
     args.func(args)
 

@@ -10,8 +10,14 @@
   * 列名各表不同, 别串: requisition 是 requested_qty/est_cost,
     wastage 是 quantity/estimated_cost, stocktaking 是
     system_qty/actual_qty/difference_qty/difference_cost。
-  * 🔴 `restaurant_ops_etl` 统计领料时带 `WHERE status = 'COMPLETED'` ——
-    状态写错这一条就被静默过滤掉, 表里有行但 Gold 是 0。
+  * 🔴 各表的 Gold 过滤口径**不一样**(实测 restaurant_ops_etl):
+        领料 `WHERE status IN ('APPROVED','SUBMITTED')`
+        损耗 `WHERE status = 'APPROVED'`
+        盘点 `WHERE status = 'COMPLETED'`
+    线上 status 词表是 APPROVED/DRAFT/REJECTED/SUBMITTED(盘点另有 COMPLETED),
+    且**没有 CHECK 约束** —— 写个不在词表里的值不会报错, 行进得去,
+    闸能开、AI 照答, 但按食材的领料/损耗 KPI 全空。"没数据"看起来就像"是 0",
+    正是禁降级要防的。所以状态一律**原样透传**, 这里一个字都不编。
 
 用量: 归一化模型用「毫单位」整数, Silver 是 numeric(14,4), 这里除 1000。
 金额: 模型用「分」, Silver 是 numeric(14,2), 这里除 100。
@@ -48,6 +54,9 @@ RETURNING ingredient_id
 """
 
 
+# ⚠️ 不写 fact_restaurant_requisition.actual_qty: 真实来源里 requested 与
+# actual 是两个不同字段(领了多少 vs 实到多少), 拿 requested 顶 actual 会让
+# "请领差异"分析恒为 0 —— 与"执行完美"无法区分。平台没给就留 NULL。
 def _qty(milli: int) -> Decimal:
     return (Decimal(milli) / Decimal(1000)).quantize(Decimal("0.0001"))
 
@@ -88,11 +97,10 @@ async def _resolve_ingredient(conn, factory_id: str, ref, cache: dict) -> int:
 _REQUISITION_SQL = """
 INSERT INTO fact_restaurant_requisition
     (factory_id, source_pk, requisition_number, date, ingredient_id,
-     status, requested_qty, actual_qty, unit, est_cost)
-VALUES ($1,$2,$3,$4,$5,$6,$7,$7,$8,$9)
+     status, requested_qty, unit, est_cost)
+VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
 ON CONFLICT (factory_id, source_pk) DO UPDATE SET
     requested_qty = EXCLUDED.requested_qty,
-    actual_qty    = EXCLUDED.actual_qty,
     est_cost      = EXCLUDED.est_cost,
     status        = EXCLUDED.status,
     updated_at    = NOW()
@@ -102,7 +110,7 @@ _WASTAGE_SQL = """
 INSERT INTO fact_restaurant_wastage
     (factory_id, source_pk, wastage_number, date, ingredient_id,
      wastage_type, status, quantity, unit, estimated_cost)
-VALUES ($1,$2,$3,$4,$5,$6,'COMPLETED',$7,$8,$9)
+VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
 ON CONFLICT (factory_id, source_pk) DO UPDATE SET
     quantity       = EXCLUDED.quantity,
     estimated_cost = EXCLUDED.estimated_cost,
@@ -114,7 +122,7 @@ _STOCKTAKING_SQL = """
 INSERT INTO fact_restaurant_stocktaking
     (factory_id, source_pk, stocktaking_number, date, ingredient_id,
      status, system_qty, actual_qty, difference_qty, difference_cost, unit)
-VALUES ($1,$2,$3,$4,$5,'COMPLETED',$6,$7,$8,$9,$10)
+VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
 ON CONFLICT (factory_id, source_pk) DO UPDATE SET
     system_qty      = EXCLUDED.system_qty,
     actual_qty      = EXCLUDED.actual_qty,
@@ -157,13 +165,13 @@ async def write_ops(pool, factory_id: str, kind: str, items: List) -> int:
                 elif kind == "wastage":
                     await conn.execute(
                         _WASTAGE_SQL, factory_id, source_pk, item.doc_no,
-                        item.biz_date, ing_id, item.wastage_type,
+                        item.biz_date, ing_id, item.wastage_type, item.status,
                         _qty(item.qty_milli), unit, _yuan(item.cost_cents),
                     )
                 else:
                     await conn.execute(
                         _STOCKTAKING_SQL, factory_id, source_pk, item.doc_no,
-                        item.biz_date, ing_id,
+                        item.biz_date, ing_id, item.status,
                         _qty(item.system_qty_milli), _qty(item.actual_qty_milli),
                         _qty(item.diff_qty_milli), _yuan(item.diff_cost_cents), unit,
                     )

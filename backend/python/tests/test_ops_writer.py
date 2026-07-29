@@ -21,7 +21,7 @@ def _ref(name="鸡腿肉", category="肉类", unit="kg"):
     return NormalizedIngredientRef(name=name, category=category, unit=unit)
 
 
-def _req(doc="RQ1", name="鸡腿肉", status="COMPLETED"):
+def _req(doc="RQ1", name="鸡腿肉", status="APPROVED"):
     return NormalizedRequisition(
         platform="keruyun", doc_no=doc, store_code="MK01",
         biz_date=datetime.date(2026, 7, 27), ingredient=_ref(name),
@@ -33,7 +33,7 @@ def _waste(doc="WS1", wtype="变质"):
     return NormalizedWastage(
         platform="keruyun", doc_no=doc, store_code="MK01",
         biz_date=datetime.date(2026, 7, 27), ingredient=_ref(),
-        wastage_type=wtype, qty_milli=500, cost_cents=1200,
+        wastage_type=wtype, status="APPROVED", qty_milli=500, cost_cents=1200,
     )
 
 
@@ -41,7 +41,8 @@ def _stock(doc="ST1", system=10000, actual=9700):
     return NormalizedStocktaking(
         platform="keruyun", doc_no=doc, store_code="MK01",
         biz_date=datetime.date(2026, 7, 27), ingredient=_ref(),
-        system_qty_milli=system, actual_qty_milli=actual, diff_cost_cents=-720,
+        status="COMPLETED", system_qty_milli=system,
+        actual_qty_milli=actual, diff_cost_cents=-720,
     )
 
 
@@ -135,14 +136,47 @@ async def test_毫单位换算成四位小数_分换算成元():
 
 
 @pytest.mark.asyncio
-async def test_领料状态原样落库_不改写():
-    """restaurant_ops_etl 统计领料带 WHERE status='COMPLETED'。这里若把
-    平台给的状态改写成 COMPLETED, 等于把一条未完成的领料算进成本。"""
+async def test_三类单据的状态都原样落库_一个字都不编():
+    """🔴 各表 Gold 过滤口径不同(领料 APPROVED/SUBMITTED、损耗 APPROVED、
+    盘点 COMPLETED), 且 status 上**没有 CHECK 约束**。写个不在词表里的值
+    不会报错, 行进得去、闸能开、AI 照答, 但按食材的 KPI 全空 ——
+    "没数据"看起来就像"是 0"。所以一律透传。"""
     conn = _FakeConn()
     await write_ops(_FakePool(conn), FID, "requisition", [_req(status="DRAFT")])
     _, args, _ = next((s, a, t) for s, a, t in conn.executed
                       if "fact_restaurant_requisition" in s)
     assert args[5] == "DRAFT"
+
+    conn2 = _FakeConn()
+    w = NormalizedWastage(
+        platform="keruyun", doc_no="WX", store_code="MK01",
+        biz_date=datetime.date(2026, 7, 27), ingredient=_ref(),
+        wastage_type="变质", status="REJECTED", qty_milli=1, cost_cents=1)
+    await write_ops(_FakePool(conn2), FID, "wastage", [w])
+    _, wargs, _ = next((s, a, t) for s, a, t in conn2.executed
+                       if "fact_restaurant_wastage" in s)
+    assert "REJECTED" in wargs, wargs
+
+    conn3 = _FakeConn()
+    st = NormalizedStocktaking(
+        platform="keruyun", doc_no="SX", store_code="MK01",
+        biz_date=datetime.date(2026, 7, 27), ingredient=_ref(),
+        status="IN_PROGRESS", system_qty_milli=1, actual_qty_milli=1,
+        diff_cost_cents=0)
+    await write_ops(_FakePool(conn3), FID, "stocktaking", [st])
+    _, sargs, _ = next((s, a, t) for s, a, t in conn3.executed
+                       if "fact_restaurant_stocktaking" in s)
+    assert "IN_PROGRESS" in sargs, sargs
+
+
+@pytest.mark.asyncio
+async def test_不写actual_qty_不拿requested顶替():
+    """真实来源里 requested 与 actual 是两个字段(领了多少 vs 实到多少)。
+    拿 requested 顶 actual 会让"请领差异"恒为 0, 与"执行完美"无法区分。"""
+    conn = _FakeConn()
+    await write_ops(_FakePool(conn), FID, "requisition", [_req()])
+    sql = _sql_for(conn, "fact_restaurant_requisition")[0]
+    assert "actual_qty" not in sql, "平台没给就留 NULL, 不编"
 
 
 @pytest.mark.asyncio
@@ -179,7 +213,7 @@ async def test_食材名为空就报错_不塞未知食材():
         platform="keruyun", doc_no="RQ9", store_code="MK01",
         biz_date=datetime.date(2026, 7, 27),
         ingredient=NormalizedIngredientRef(name="  "),
-        qty_milli=1, cost_cents=1,
+        qty_milli=1, cost_cents=1, status="APPROVED",
     )
     with pytest.raises(RuntimeError, match="食材名"):
         await write_ops(_FakePool(conn), FID, "requisition", [bad])
@@ -231,6 +265,6 @@ async def test_盘点差异量由实盘减系统账算出():
                     [_stock(system=10000, actual=9700)])
     _, args, _ = next((s, a, t) for s, a, t in conn.executed
                       if "fact_restaurant_stocktaking" in s)
-    # (factory, source_pk, doc, date, ing, system, actual, diff_qty, diff_cost, unit)
-    assert str(args[5]) == "10.0000" and str(args[6]) == "9.7000"
-    assert str(args[7]) == "-0.3000", "盘亏应当是负数"
+    # (factory, source_pk, doc, date, ing, status, system, actual, diff_qty, diff_cost, unit)
+    assert str(args[6]) == "10.0000" and str(args[7]) == "9.7000"
+    assert str(args[8]) == "-0.3000", "盘亏应当是负数"

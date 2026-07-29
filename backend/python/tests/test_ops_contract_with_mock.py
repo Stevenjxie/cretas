@@ -91,13 +91,25 @@ async def test_模拟端报文能被adapter原样解析(mock_client, kind, cls):
 
 
 @pytest.mark.asyncio
-async def test_领料状态是模拟端真给的_不是adapter默认出来的(mock_client):
-    """adapter 刻意不给 status 兜底（Silver 只统计 COMPLETED，兜底等于凭空
-    造出一条成本）。这条确认模拟端确实在发这个字段。"""
+async def test_三类单据的状态与下游Gold的过滤口径对得上(mock_client):
+    """🔴 这是整条链最容易静默失败的地方。实测 restaurant_ops_etl 的口径：
+        领料 `WHERE status IN ('APPROVED','SUBMITTED')`
+        损耗 `WHERE status = 'APPROVED'`
+        盘点 `WHERE status = 'COMPLETED'`
+    Silver 的 status 列**没有 CHECK 约束**，写个对不上的值不会报错：行进得去、
+    租户闸能开、AI 照常回答，但按食材的领料/损耗 KPI 全是空的 ——
+    「没数据」看起来就像「是 0」。所以这条要跨两侧钉住实际值，
+    而不只是钉「字段存在」。
+    """
     adapter = KeruyunOpsAdapter("http://mock", APP_KEY, APP_SECRET,
                                 _TestClientTransport(mock_client))
-    page = await adapter.fetch_page("requisition", "0", 5)
-    assert all(i.status == "COMPLETED" for i in page.items)
+    for kind, accepted in (("requisition", {"APPROVED", "SUBMITTED"}),
+                           ("wastage", {"APPROVED"}),
+                           ("stocktaking", {"COMPLETED"})):
+        page = await adapter.fetch_page(kind, "0", 50)
+        assert page.items, kind
+        bad = {i.status for i in page.items} - accepted
+        assert not bad, f"{kind}: 状态 {bad} 会被 Gold 过滤掉, KPI 将静默为 0"
 
 
 @pytest.mark.asyncio

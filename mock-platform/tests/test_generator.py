@@ -156,3 +156,37 @@ def test_回填顺带产出供应链(tmp_path):
     for t in ("requisition", "wastage"):
         c = conn.execute(f"SELECT COUNT(*) c FROM {t}").fetchone()["c"]
         assert c > 0, f"{t} 回填后应当有数据"
+
+
+def test_修订会推进seq_对端才看得到(tmp_path):
+    """🔴 分页是 `seq > cursor`。UPSERT 时不推进 seq, 这条改动就永远追不上
+    游标, 对端再也拿不到 —— 「当天营业中反复调用、数字随消耗增长」这个卖点
+    会变成一句空话(审查 I1)。"""
+    from mock_platform.world.generator import generate_daily_ops, generate_orders
+    conn = _seeded(tmp_path)
+    generate_orders(conn, store_id=1, biz_date="2026-07-20", minute_of_day=12 * 60,
+                    count=20, rng=random.Random(1))
+    generate_daily_ops(conn, store_id=1, biz_date="2026-07-20", rng=random.Random(1))
+    before = conn.execute("SELECT MAX(seq) s FROM requisition").fetchone()["s"]
+    # 又卖了一批 → 消耗变大 → 领料量该跟着变, 且 seq 要推进
+    generate_orders(conn, store_id=1, biz_date="2026-07-20", minute_of_day=13 * 60,
+                    count=20, rng=random.Random(2))
+    generate_daily_ops(conn, store_id=1, biz_date="2026-07-20", rng=random.Random(2))
+    after = conn.execute("SELECT MAX(seq) s FROM requisition").fetchone()["s"]
+    assert after > before, "修订必须推进 seq, 否则对端永远看不到这次更新"
+
+
+def test_三类单据的状态与下游Gold口径一致(tmp_path):
+    """🔴 状态写错不会报错, 只会让 Gold 静默为 0(审查 C1)。
+    实测 restaurant_ops_etl: 领料 APPROVED/SUBMITTED、损耗 APPROVED、盘点 COMPLETED。"""
+    from mock_platform.world.generator import generate_daily_ops, generate_orders
+    conn = _seeded(tmp_path)
+    generate_orders(conn, store_id=1, biz_date="2026-07-20", minute_of_day=12 * 60,
+                    count=20, rng=random.Random(1))
+    generate_daily_ops(conn, store_id=1, biz_date="2026-07-20", rng=random.Random(1))
+    for table, accepted in (("requisition", {"APPROVED", "SUBMITTED"}),
+                            ("wastage", {"APPROVED"}),
+                            ("stocktaking", {"COMPLETED"})):
+        got = {r["status"] for r in
+               conn.execute(f"SELECT DISTINCT status FROM {table}").fetchall()}
+        assert got and got <= accepted, f"{table}: {got} 会被 Gold 过滤掉"

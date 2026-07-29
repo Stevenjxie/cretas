@@ -33,9 +33,13 @@ class NormalizedRequisition:
     ingredient: NormalizedIngredientRef
     qty_milli: int
     cost_cents: int
-    # ⚠️ Silver 侧的 ETL 只统计 status='COMPLETED' 的领料单，其它状态会被
-    # 静默过滤掉。平台给什么就带什么，由 writer 决定怎么落。
-    status: str = "COMPLETED"
+    # ⚠️ 下游 Gold 按 status 过滤，写错就**静默为 0**（Silver 有行、AI 照答，
+    # 但按食材的 KPI 全空）。实测各表口径不同：
+    #   领料 WHERE status IN ('APPROVED','SUBMITTED')
+    #   损耗 WHERE status = 'APPROVED'
+    #   盘点 WHERE status = 'COMPLETED'
+    # 所以这里**不给默认值** —— 平台没给就报错，绝不替它编一个。
+    status: str
 
 
 @dataclass(frozen=True)
@@ -46,6 +50,7 @@ class NormalizedWastage:
     biz_date: datetime.date
     ingredient: NormalizedIngredientRef
     wastage_type: str           # 变质 / 加工损耗 / 客诉退菜
+    status: str
     qty_milli: int
     cost_cents: int
 
@@ -57,6 +62,7 @@ class NormalizedStocktaking:
     store_code: str
     biz_date: datetime.date
     ingredient: NormalizedIngredientRef
+    status: str
     system_qty_milli: int
     actual_qty_milli: int
     # 实盘 - 系统账，负数是盘亏。金额同号。

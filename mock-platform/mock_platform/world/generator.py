@@ -45,6 +45,16 @@ _RETURN_RATE = (0.002, 0.008)
 # hash 带 PYTHONHASHSEED 随机化, 跨进程不稳定, 而 doc_no 是 UNIQUE ——
 # 重启一次同一条损耗就会换单据号, 幂等 UPSERT 会撞上别的行的 doc_no。
 _WASTAGE_TYPE_CODE = {"加工损耗": "01", "变质": "02", "客诉退菜": "03"}
+# 单据状态。⚠️ **必须与下游 Gold 的过滤口径对上**, 实测(restaurant_ops_etl):
+#   领料 agg: WHERE status IN ('APPROVED','SUBMITTED')
+#   损耗 agg: WHERE status = 'APPROVED'
+#   盘点 agg: WHERE status = 'COMPLETED'
+# 写错的后果不是报错而是**静默为 0**: Silver 有行、闸能开、AI 照答,
+# 但按食材的领料/损耗 KPI 全空 —— "没数据"看起来就像"是 0"。
+# (2026-07-29 审查抓到: 三张表都写成 COMPLETED, 其中两张会被整个过滤掉。)
+_STATUS_REQUISITION = "APPROVED"
+_STATUS_WASTAGE = "APPROVED"
+_STATUS_STOCKTAKING = "COMPLETED"
 # 盘点周期: 每周一次(按营业日的 ISO 周内第几天定, 保证同一天全店一起盘)。
 _STOCKTAKE_WEEKDAY = 0            # 周一
 _STOCKTAKE_VARIANCE = (-0.03, 0.02)   # 实盘相对系统账的偏差, 略偏亏损
@@ -123,11 +133,15 @@ def _generate_daily_ops_inner(conn, *, store_id: int, biz_date: str,
         req_qty = int(round(used * rng.uniform(*_REQUISITION_OVERAGE)))
         conn.execute(
             "INSERT INTO requisition(doc_no, store_id, ingredient_id, biz_date, "
-            " qty_milli, cost_cents, seq) VALUES (?,?,?,?,?,?,?) "
+            " qty_milli, cost_cents, status, seq) VALUES (?,?,?,?,?,?,?,?) "
             "ON CONFLICT(biz_date, store_id, ingredient_id) DO UPDATE SET "
-            " qty_milli=excluded.qty_milli, cost_cents=excluded.cost_cents",
+            " qty_milli=excluded.qty_milli, cost_cents=excluded.cost_cents, "
+            # seq 也要推进: 分页是 `seq > cursor`, 不推的话这条改动永远
+            # 追不上游标, 对端再也看不到 —— 当天营业中反复调用的修订就白改了。
+            " seq=excluded.seq",
             (f"RQ{biz_date.replace('-', '')}{store_id:02d}{ing_id:03d}",
-             store_id, ing_id, biz_date, req_qty, _cost_of(req_qty, price), req_seq),
+             store_id, ing_id, biz_date, req_qty, _cost_of(req_qty, price),
+             _STATUS_REQUISITION, req_seq),
         )
         req_seq += 1
         stats["requisition"] += 1
@@ -145,13 +159,15 @@ def _generate_daily_ops_inner(conn, *, store_id: int, biz_date: str,
                 continue          # 量太小取整成 0, 就是没有这笔, 不硬造
             conn.execute(
                 "INSERT INTO wastage(doc_no, store_id, ingredient_id, biz_date, "
-                " wastage_type, qty_milli, cost_cents, seq) VALUES (?,?,?,?,?,?,?,?) "
+                " wastage_type, status, qty_milli, cost_cents, seq) "
+                "VALUES (?,?,?,?,?,?,?,?,?) "
                 "ON CONFLICT(biz_date, store_id, ingredient_id, wastage_type) "
                 "DO UPDATE SET qty_milli=excluded.qty_milli, "
-                " cost_cents=excluded.cost_cents",
+                " cost_cents=excluded.cost_cents, seq=excluded.seq",
                 (f"WS{biz_date.replace('-', '')}{store_id:02d}{ing_id:03d}"
                  f"{_WASTAGE_TYPE_CODE[wtype]}",
-                 store_id, ing_id, biz_date, wtype, qty, _cost_of(qty, price), waste_seq),
+                 store_id, ing_id, biz_date, wtype, _STATUS_WASTAGE,
+                 qty, _cost_of(qty, price), waste_seq),
             )
             waste_seq += 1
             stats["wastage"] += 1
@@ -163,15 +179,15 @@ def _generate_daily_ops_inner(conn, *, store_id: int, biz_date: str,
             diff = actual_qty - system_qty
             conn.execute(
                 "INSERT INTO stocktaking(doc_no, store_id, ingredient_id, biz_date, "
-                " system_qty_milli, actual_qty_milli, diff_cost_cents, seq) "
-                "VALUES (?,?,?,?,?,?,?,?) "
+                " system_qty_milli, actual_qty_milli, diff_cost_cents, status, seq) "
+                "VALUES (?,?,?,?,?,?,?,?,?) "
                 "ON CONFLICT(biz_date, store_id, ingredient_id) DO UPDATE SET "
                 " system_qty_milli=excluded.system_qty_milli, "
                 " actual_qty_milli=excluded.actual_qty_milli, "
-                " diff_cost_cents=excluded.diff_cost_cents",
+                " diff_cost_cents=excluded.diff_cost_cents, seq=excluded.seq",
                 (f"ST{biz_date.replace('-', '')}{store_id:02d}{ing_id:03d}",
                  store_id, ing_id, biz_date, system_qty, actual_qty,
-                 _cost_of(diff, price), stock_seq),
+                 _cost_of(diff, price), _STATUS_STOCKTAKING, stock_seq),
             )
             stock_seq += 1
             stats["stocktaking"] += 1

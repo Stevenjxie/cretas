@@ -13,7 +13,9 @@ def _requisition_row(r):
         "docNo": r["doc_no"], "shopCode": r["shop_code"], "bizDate": r["biz_date"],
         "ingredientName": r["ing_name"], "ingredientCategory": r["ing_category"],
         "unit": r["unit"], "qty": r["qty_milli"], "cost": r["cost_cents"],
-        "status": "COMPLETED",
+        # 从库里取, **不硬编码** —— 硬编码的话「状态是平台真给的」这句话
+        # 技术上成立但实际空心, 而下游 Gold 正是按它过滤的。
+        "status": r["status"],
     }
 
 
@@ -22,6 +24,7 @@ def _wastage_row(r):
         "docNo": r["doc_no"], "shopCode": r["shop_code"], "bizDate": r["biz_date"],
         "ingredientName": r["ing_name"], "ingredientCategory": r["ing_category"],
         "unit": r["unit"], "wastageType": r["wastage_type"],
+        "status": r["status"],
         "qty": r["qty_milli"], "cost": r["cost_cents"],
     }
 
@@ -30,7 +33,8 @@ def _stocktaking_row(r):
     return {
         "docNo": r["doc_no"], "shopCode": r["shop_code"], "bizDate": r["biz_date"],
         "ingredientName": r["ing_name"], "ingredientCategory": r["ing_category"],
-        "unit": r["unit"], "systemQty": r["system_qty_milli"],
+        "unit": r["unit"], "status": r["status"],
+        "systemQty": r["system_qty_milli"],
         "actualQty": r["actual_qty_milli"], "diffCost": r["diff_cost_cents"],
     }
 

@@ -56,15 +56,15 @@ def _page(*items, next_cursor=42, has_more=False):
 
 _REQ = {"docNo": "RQ2026072900001", "shopCode": "MK01", "bizDate": "2026-07-29",
         "ingredientName": "牛腩", "ingredientCategory": "肉禽", "unit": "kg",
-        "qty": 12500, "cost": 48800, "status": "COMPLETED"}
+        "qty": 12500, "cost": 48800, "status": "APPROVED"}
 
 _WST = {"docNo": "WS2026072900001", "shopCode": "MK02", "bizDate": "2026-07-29",
         "ingredientName": "生菜", "ingredientCategory": "蔬菜", "unit": "kg",
-        "wastageType": "变质", "qty": 800, "cost": 1200}
+        "wastageType": "变质", "status": "APPROVED", "qty": 800, "cost": 1200}
 
 _STK = {"docNo": "ST2026072900001", "shopCode": "MK03", "bizDate": "2026-07-28",
         "ingredientName": "花椒", "ingredientCategory": "调料", "unit": "kg",
-        "systemQty": 5000, "actualQty": 4200, "diffCost": -3600}
+        "status": "COMPLETED", "systemQty": 5000, "actualQty": 4200, "diffCost": -3600}
 
 _SAMPLE = {"requisition": _REQ, "wastage": _WST, "stocktaking": _STK}
 
@@ -90,7 +90,7 @@ async def test_领料单被正确归一化():
         "牛腩", "肉禽", "kg")
     assert doc.qty_milli == 12500
     assert doc.cost_cents == 48800
-    assert doc.status == "COMPLETED"
+    assert doc.status == "APPROVED"   # 领料的 Gold 口径是 APPROVED/SUBMITTED
 
 
 async def test_损耗单被正确归一化():
@@ -244,6 +244,8 @@ async def test_负的数量与金额直接透传_不做非负校验():
     ("requisition", _REQ, "bizDate"),
     ("requisition", _REQ, "ingredientName"),
     ("requisition", _REQ, "status"),
+    ("wastage", _WST, "status"),
+    ("stocktaking", _STK, "status"),
     ("wastage", _WST, "docNo"),
     ("wastage", _WST, "wastageType"),
     ("stocktaking", _STK, "docNo"),

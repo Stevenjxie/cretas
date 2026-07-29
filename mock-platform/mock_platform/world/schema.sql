@@ -91,6 +91,9 @@ CREATE TABLE IF NOT EXISTS requisition (
     biz_date      TEXT NOT NULL,
     qty_milli     INTEGER NOT NULL CHECK(typeof(qty_milli) = 'integer'),
     cost_cents    INTEGER NOT NULL CHECK(typeof(cost_cents) = 'integer'),
+    -- 单据状态。下游 Gold 按它过滤(领料只统计 APPROVED/SUBMITTED),
+    -- 所以它是**业务数据**不是装饰: 存进来再原样发出去, 不在报文层硬编码。
+    status        TEXT NOT NULL,
     seq           INTEGER NOT NULL CHECK(typeof(seq) = 'integer'),
     UNIQUE (biz_date, store_id, ingredient_id)
 );
@@ -102,6 +105,7 @@ CREATE TABLE IF NOT EXISTS wastage (
     ingredient_id INTEGER NOT NULL REFERENCES ingredient(id),
     biz_date      TEXT NOT NULL,
     wastage_type  TEXT NOT NULL,          -- 变质 / 加工损耗 / 客诉退菜
+    status        TEXT NOT NULL,
     qty_milli     INTEGER NOT NULL CHECK(typeof(qty_milli) = 'integer'),
     cost_cents    INTEGER NOT NULL CHECK(typeof(cost_cents) = 'integer'),
     seq           INTEGER NOT NULL CHECK(typeof(seq) = 'integer'),
@@ -117,6 +121,7 @@ CREATE TABLE IF NOT EXISTS stocktaking (
     system_qty_milli INTEGER NOT NULL CHECK(typeof(system_qty_milli) = 'integer'),
     actual_qty_milli INTEGER NOT NULL CHECK(typeof(actual_qty_milli) = 'integer'),
     diff_cost_cents  INTEGER NOT NULL CHECK(typeof(diff_cost_cents) = 'integer'),
+    status          TEXT NOT NULL,
     seq             INTEGER NOT NULL CHECK(typeof(seq) = 'integer'),
     UNIQUE (biz_date, store_id, ingredient_id)
 );
