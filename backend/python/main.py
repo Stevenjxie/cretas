@@ -90,6 +90,7 @@ from smartbi.api import twodfire_ingest  # noqa: E402  (二维火 POS skeleton, 
 from smartbi.api import sales_preset  # noqa: E402  (Sprint 4 W2 S-REPORTS-PRESETS — top 5 active + 9 Sprint 5 stubs)
 from smartbi.api import upload_status  # noqa: E402  (Phase IIa ops dashboard, 2026-05-14)
 from smartbi.api import restaurant_health_check  # noqa: E402  (G4 AI 经营体检表, 2026-06-03)
+from smartbi.api import platform_callback  # noqa: E402  (外部平台回调, 2026-07-29)
 from smartbi.api.materialized_analytics import router as materialized_analytics_router  # noqa: E402
 from smartbi.capability.api import router as capability_router  # noqa: E402
 
@@ -513,6 +514,58 @@ async def lifespan(app: FastAPI):
                 logger.info("[follower] narrative_cache pruner skipped (leader handles)")
         except Exception as e:
             logger.warning(f"[startup] narrative_cache pruner init failed: {e}")
+
+    # ── 外部平台增量拉取 (2026-07-29) ────────────────────────────────
+    # 只在 leader 上跑: 多 worker 并发拉同一游标会重复写入 + 死锁。
+    _platform_sync_task = None
+    if os.getenv("PLATFORM_SYNC_ENABLED", "").lower() in ("1", "true", "yes"):
+        try:
+            import asyncio as _asyncio_p
+
+            import httpx as _httpx_p
+
+            from smartbi.config import get_pg_pool as _get_pool_p
+            from smartbi.ingestion.platforms.framework import sync_all
+            from smartbi.ingestion.platforms.keruyun import KeruyunAdapter
+            from smartbi.ingestion.platforms.writer import write_orders
+
+            async def _sync_platforms_forever():
+                await _asyncio_p.sleep(30)     # 让连接池先起来
+                factory_id = os.getenv("PLATFORM_SYNC_FACTORY_ID", "MOCK_REST")
+                base_url = os.getenv("PLATFORM_MOCK_BASE_URL", "")
+                interval = int(os.getenv("PLATFORM_SYNC_INTERVAL_SECONDS", "60"))
+                if not base_url:
+                    # 禁降级: 没配上游地址就别装作在同步, 明确停掉并留下日志。
+                    logger.error("[platform-sync] PLATFORM_MOCK_BASE_URL 未配置, 循环不启动")
+                    return
+                async with _httpx_p.AsyncClient() as client:
+                    adapters = [KeruyunAdapter(
+                        base_url,
+                        os.getenv("PLATFORM_KERUYUN_APP_KEY", ""),
+                        os.getenv("PLATFORM_KERUYUN_APP_SECRET", ""),
+                        client,
+                    )]
+                    while True:
+                        try:
+                            pool = await _get_pool_p()
+                            results = await sync_all(pool, adapters,
+                                                     factory_id=factory_id,
+                                                     write_orders=write_orders)
+                            logger.info("[platform-sync] %s", results)
+                        except _asyncio_p.CancelledError:
+                            # 关机路径: 必须原样上抛, 吞掉会让 shutdown 挂住。
+                            raise
+                        except Exception as ex:
+                            logger.error(f"[platform-sync] 本轮失败: {ex}")
+                        await _asyncio_p.sleep(interval)
+
+            if _is_leader:
+                _platform_sync_task = _asyncio_p.create_task(_sync_platforms_forever())
+                logger.info("[leader] platform sync armed")
+            else:
+                logger.info("[follower] platform sync skipped (leader handles)")
+        except Exception as e:
+            logger.warning(f"[startup] platform sync init failed: {e}")
 
     # External restaurant benchmark refresh. Disabled by default because it
     # calls public websites/APIs; enable only after source review and quota setup.
@@ -942,6 +995,14 @@ async def lifespan(app: FastAPI):
 
     yield
 
+    # Shutdown: cancel platform sync task
+    if _platform_sync_task is not None:
+        _platform_sync_task.cancel()
+        try:
+            await _platform_sync_task
+        except Exception:
+            pass
+
     # Shutdown: cancel narrative_cache pruner task
     if _narrative_pruner_task is not None:
         _narrative_pruner_task.cancel()
@@ -1108,6 +1169,8 @@ app.include_router(insight.router, prefix="/api/insight", tags=["Insight"])
 app.include_router(chart.router, prefix="/api/chart", tags=["Chart"])
 app.include_router(analysis.router, prefix="/api/analysis", tags=["Analysis"])
 app.include_router(intent_analysis.router, prefix="/api/analysis", tags=["Intent Analysis"])
+# prefix 已写在 router 自身 (/api/platform-callback), 这里不再叠加。
+app.include_router(platform_callback.router)
 app.include_router(ml.router, prefix="/api/ml", tags=["ML"])
 app.include_router(linucb.router, prefix="/api/linucb", tags=["LinUCB"])
 app.include_router(chat.router, prefix="/api/chat", tags=["Chat"])

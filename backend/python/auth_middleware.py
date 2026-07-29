@@ -44,6 +44,11 @@ PUBLIC_PATHS: Set[str] = {
     "/redoc",
     "/openapi.json",
     "/metrics",  # v4 E (Apr 26 2026): Prometheus scraper endpoint
+    # 外部平台回调: 路径里没有 factoryId, 由端点自身做 IP 白名单 + HMAC 验签
+    # + 时间窗/nonce 防重放三层校验 (smartbi/api/platform_callback.py)。
+    # 走 PUBLIC_PATHS 是因为调用方是外部平台, 没有我们的 JWT —— 但它**不是**无鉴权。
+    # 用精确路径而非前缀: 只放行已支持的平台, 未来加平台必须显式再加一条。
+    "/api/platform-callback/keruyun",
 }
 
 # Path prefixes that do NOT require authentication
