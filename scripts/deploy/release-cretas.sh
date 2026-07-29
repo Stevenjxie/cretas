@@ -294,6 +294,15 @@ build_web() {
 
 stage_backend_artifact() {
     if [ "$STAGE_BACKEND_CONFIRM" != YES-STAGE ]; then
+        # AGENTS.md §11 要求「预期合并后立即部署时」用 --stage-backend 把 JAR 预传到
+        # 服务器不可变缓存, 让部署阶段命中缓存、跳过网络上传。但它是显式 opt-in,
+        # 实际调用里长期没人传 —— 2026-07-29 连查 6 次发布回执, staging 全是
+        # not-requested, 每次都在部署窗口里现传 JAR。这里给一句可见提示, 让遗漏
+        # 在构建结束时就被看到, 而不是等回执事后复盘才发现。
+        if [ "$JAVA_CHANGED" = true ]; then
+            echo "HINT: Java 制品未预热到服务器缓存。若合并后即部署, 重跑本命令并加"
+            echo "      --stage-backend YES-STAGE, 可把 JAR 上传移出部署窗口 (AGENTS.md §11)。"
+        fi
         return 0
     fi
     if [ "$JAVA_CHANGED" != true ]; then

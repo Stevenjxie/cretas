@@ -1175,6 +1175,31 @@ deploy_jar() {
         fi
     }
 
+    # rsync 的 delta 算法只有在【目标端已存在同名文件】时才会跑。上传目标
+    # $REMOTE_TMP/${JAR_NAME}.rsync 虽然是稳定名, 但 verify_and_claim 成功后会
+    # `mv` 走它 —— 下次上传到达时目标位置是空的, delta 没有基准可比, 只能全量
+    # 重传 168MB。
+    #
+    # 而 Spring Boot fat jar 的内嵌依赖 jar 是 STORED 未压缩存放的, 两次构建之间
+    # 逐字节相同。2026-07-29 在服务器上对两次连续发布的 jar 实测:
+    #     Literal data   21,396,028 bytes  (真正变化的, ~20MB)
+    #     Matched data  154,884,240 bytes  (可复用的, ~147MB)
+    #     speedup 8.18×
+    # 也就是说有基准时只需要传 20MB。按实测 4.00 MB/s, 42s 可降到 ~5s。
+    #
+    # 所以上传前用缓存里最近一次的 jar 把目标位置种一个基准。种子失败、缓存为空、
+    # 或基准与本次 jar 差异很大时, rsync 自动退回接近全量的传输 —— 只损失一次
+    # 本地 cp 的时间, 不影响正确性 (rsync 自带 checksum, 之后还有 MD5 校验)。
+    # 只给主通道 rsync 加, 两个 fallback 保持原样, 把改动的爆炸半径压到最小。
+    seed_rsync_delta_basis() {
+        local target=$1
+        ssh -o ConnectTimeout=10 "$SERVER" "
+            newest=\$(ls -t '$REMOTE_JAR_CACHE_DIR'/*.jar 2>/dev/null | head -1)
+            [ -n \"\$newest\" ] || exit 0
+            cp -f \"\$newest\" '$REMOTE_TMP/$target' 2>/dev/null || true
+        " 2>/dev/null || true
+    }
+
     # === Fallback 方法1: rsync 增量传输 ===
     upload_rsync() {
         [ "$HAS_RSYNC" != "true" ] && return 1
@@ -1182,6 +1207,7 @@ deploy_jar() {
         local TMP_FILE="${JAR_NAME}.rsync"
         local ERR_LOG="$UPLOAD_STATUS_DIR/rsync.err"
         echo "   [rsync] 开始上传..."
+        seed_rsync_delta_basis "$TMP_FILE"
         if rsync -az --timeout=60 "$JAR_PATH" "$SERVER:$REMOTE_TMP/$TMP_FILE" 2> "$ERR_LOG"; then
             if ! check_winner; then
                 verify_and_claim "$TMP_FILE" "rsync"
