@@ -137,10 +137,12 @@ dirty worktree, non-linear history, the caller's matching unfinished ACTIVE
 task, and any force-push path. `--task-id` narrows the ACTIVE check to that
 batch so unrelated in-flight work does not block publication; without it the
 legacy gate requires no unfinished task anywhere. The caller must pass the
-exact registered ID and archive that batch in the same commit. The current
-helper rejects a matching unfinished row but does not prove that the supplied
-ID exists in an archive, so a typo or absent ID is not a substitute for the
-coordinator's scope review. High-risk scopes remain PR-only unless the user
+exact registered ID and archive that batch in the same commit. The helper
+rejects both a matching unfinished row and an ID that appears nowhere
+under `docs/dispatch/` (word-boundary match, so a truncated typo like
+`MY-TASK-4` does not pass on the strength of a real `MY-TASK-42`). Existence is
+not correctness: the coordinator still owns archiving the batch and releasing
+its scope in the same commit. High-risk scopes remain PR-only unless the user
 explicitly authorized this exact high-risk direct publication and all required
 deep gates passed; in that case add
 `--allow-high-risk YES-HIGH-RISK-REVIEWED`. Any rejection falls back to one PR.
