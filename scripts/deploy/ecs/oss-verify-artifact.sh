@@ -25,7 +25,7 @@ EOF
   exit 2
 }
 
-prefix= tree_sha= jar_sha= expected_size= manifest= purge=0
+prefix= tree_sha= jar_sha= expected_size= manifest= purge=0 manifest_stdin=0
 while (($#)); do
   case "$1" in
     --prefix) (($# >= 2)) || usage; prefix=$2; shift 2 ;;
@@ -33,10 +33,19 @@ while (($#)); do
     --jar-sha256) (($# >= 2)) || usage; jar_sha=$2; shift 2 ;;
     --size) (($# >= 2)) || usage; expected_size=$2; shift 2 ;;
     --manifest) (($# >= 2)) || usage; manifest=$2; shift 2 ;;
+    --manifest-stdin) manifest_stdin=1; shift ;;
     --purge-acceptance) purge=1; shift ;;
     *) usage ;;
   esac
 done
+
+# A CI artifact's manifest lives inside the downloaded ZIP on the Tokyo host, so
+# it reaches us as bytes rather than a path. Reading it here keeps it off the
+# Windows filesystem entirely.
+manifest_content=
+if ((manifest_stdin)); then
+  manifest_content=$(cat)
+fi
 
 [[ $prefix == */ ]] || prefix="$prefix/"
 [[ $jar_sha =~ ^[0-9a-f]{64}$ ]] || usage
@@ -117,6 +126,14 @@ manifest_field() {
 # Trust is a manifest question, never a transport question.
 trust=false
 trust_reason=no_manifest_supplied
+if ((manifest_stdin)); then
+  if [[ -n $manifest_content ]]; then
+    manifest="$work_dir/release-jar.manifest"
+    printf '%s\n' "$manifest_content" > "$manifest"
+  else
+    trust_reason=manifest_stdin_was_empty
+  fi
+fi
 if [[ -n $manifest ]]; then
   if [[ ! -f $manifest ]]; then
     trust_reason=manifest_not_found

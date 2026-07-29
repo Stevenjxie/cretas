@@ -15,6 +15,9 @@
 # 东京 Lightsail 上传工具（14 条）
 tr -d '\r' < negative-lightsail.sh | ssh <tokyo> 'cat > /tmp/n.sh && bash /tmp/n.sh; rm -f /tmp/n.sh'
 
+# 东京 CI artifact 解包（13 条，含 zip-slip）
+tr -d '\r' < negative-artifact-stage.sh | ssh <tokyo> 'cat > /tmp/n.sh && bash /tmp/n.sh; rm -f /tmp/n.sh'
+
 # 上海 ECS 签名器 + 校验器（11 条）
 tr -d '\r' < negative-ecs.sh | ssh <ecs> 'cat > /tmp/n.sh && bash /tmp/n.sh; rm -f /tmp/n.sh'
 ```
@@ -35,6 +38,7 @@ pwsh -NoProfile -File test-publish-mutex.ps1
 | ECS 签名器 | 未批准前缀 / 穿越前缀 / 大写与短 sha / 非法 tree sha（含 shell 元字符）/ 零 size / 过期超 900s / 拒绝时不泄漏凭证 |
 | ECS 校验器 | 未批准前缀 / 对真实前缀拒绝 purge / 对象不存在 |
 | Windows 编排器 | 大写与短 sha / 未批准前缀 / 穿越前缀 / 非法 tree sha / repo 含 shell 元字符 / 非数字 assetId / 零 size |
+| CI artifact 解包 | jar-name 含路径分隔符 / 绝对路径 / 子目录 / 非 `.jar` 后缀；zip-size 非正；URL 白名单 5 条；空 stdin；**zip-slip**（构造含 `../` 与绝对路径成员的压缩包，断言不写出工作目录、只提取精确成员）|
 | 并发互斥 | 跨进程持锁时拒绝；崩溃留下的遗弃锁能恢复而不是卡死后续发布 |
 
 ## 两个踩过的坑（写测试时踩的，记下来免得重踩）

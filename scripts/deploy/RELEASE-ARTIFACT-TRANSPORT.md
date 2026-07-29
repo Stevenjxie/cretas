@@ -19,10 +19,25 @@ GitHub
 | 位置 | 文件 | 作用 |
 |---|---|---|
 | Windows | `Publish-GitHubArtifactViaLightsailOss.ps1` | 编排器。只发控制命令 |
-| 东京 Lightsail | `/usr/local/sbin/github-cache-put` | GitHub → 缓存（已存在，本次未改） |
+| 东京 Lightsail | `/usr/local/sbin/github-cache-put` | release asset → 缓存（已存在，本次未改） |
+| 东京 Lightsail | `/usr/local/sbin/github-artifact-stage` | CI artifact(zip) → 解包 → 缓存（源码在 `lightsail/`） |
 | 东京 Lightsail | `/usr/local/sbin/oss-put-artifact` | 缓存 → OSS（源码在 `lightsail/`） |
 | 上海 ECS | `/usr/local/sbin/oss-sign-put.py` | 生成短时 PUT 签名（源码在 `ecs/`） |
 | 上海 ECS | `/usr/local/sbin/oss-verify-artifact.sh` | 内网回拉 + 重算哈希（源码在 `ecs/`） |
+
+## 两种制品源
+
+| 源 | 参数 | 形态 | key 用的哈希 |
+|---|---|---|---|
+| Release asset | `-AssetId` | 裸文件 | 事先已知，`-ExpectedSha256` 必填 |
+| CI artifact | `-ArtifactId` | **zip 包装** | **解包后才知道** —— 是 zip 内 JAR 的哈希 |
+
+CI artifact 走 `github-artifact-stage`：下载 zip → 校验 zip size → **按精确成员名**解包
+（不信任 zip 内的路径，防 zip-slip）→ 重算 JAR 的 SHA-256 并与 zip 内自带的 `.sha256`
+交叉核对 → 以 JAR 哈希入缓存 → 顺带取出 `release-jar.manifest`（若有）经 stdin 转交 ECS 校验器。
+
+**一次下载完成**。仓库外的 `fetch-ci-artifact.sh` 是"先下一次探测哈希、再下一次存储"，
+168MB 下两遍；这里不这么做。
 
 服务器上的三个脚本是 `root:root 0750`，从本目录安装，改动前自动做 UTC 时间戳备份。
 
@@ -70,7 +85,20 @@ key 一旦存在就不可覆盖。这个保证由两条实测断言共同支撑�
 
 ---
 
-## 实测数字（2026-07-30，OBS 167,106,178 bytes）
+## 实测数字（2026-07-30，CI artifact 模式，真实 Cretas JAR）
+
+制品来自 run `30472785736`，zip 176,283,672 bytes / 内含 JAR 176,283,021 bytes。
+
+| 段 | 结果 |
+|---|---|
+| GitHub → 东京（含解包） | `cache_status=stored`，`sha_source=archive_and_recomputed` |
+| 东京 → OSS | 7.064s，**23.80 MB/s**，HTTP 200 |
+| OSS → ECS（内网） | 0.608s，**276.5 MB/s** |
+| **Windows 收字节增量** | **522,582 bytes = zip 的 0.30%** |
+| 信任判定 | `transport_verified=true` / `deployable_trust_verified=false`（该制品由旧 ci.yml 产出，无 manifest）|
+| 验收对象残留 | 0 |
+
+## 实测数字（2026-07-30，release asset 模式，OBS 167,106,178 bytes）
 
 | 段 | 结果 |
 |---|---|
