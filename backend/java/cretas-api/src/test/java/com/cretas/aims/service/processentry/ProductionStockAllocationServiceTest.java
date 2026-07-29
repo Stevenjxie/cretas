@@ -367,6 +367,51 @@ class ProductionStockAllocationServiceTest {
     }
 
     @Test
+    void explicitCountedBatchAllocatesInItsOwnUnit() {
+        // 手选批次也要能投非质量单位 —— 旧代码直接 409
+        // "所选投料批次不是 kg 计量, 不能直接报工"
+        MaterialBatch counted = batch("B1", "RAW-CHICKEN", "WKS-1", "300", LocalDate.of(2026, 7, 20));
+        counted.setQuantityUnit("pcs");
+        ProcessSheetRowRequest.RawInput input = new ProcessSheetRowRequest.RawInput();
+        input.setMaterialBatchId("B1");
+        input.setSkuId("RAW-CHICKEN");
+        input.setQuantity(new BigDecimal("201"));
+        input.setUnit("只");
+
+        when(warehouseResolver.resolveWorkshopId("F006")).thenReturn("WKS-1");
+        when(materialBatchRepository.findByIdAndFactoryIdForUpdate("B1", "F006"))
+                .thenReturn(java.util.Optional.of(counted));
+        when(allocationRepository.sumPendingQuantityByMaterialBatchId("F006", "B1"))
+                .thenReturn(BigDecimal.ZERO);
+
+        assertThat(service.planExplicit("F006", "PLAN-1", List.of(input)))
+                .singleElement()
+                .satisfies(allocation -> {
+                    assertThat(allocation.quantity()).isEqualByComparingTo("201");
+                    assertThat(allocation.unit()).isEqualTo("pcs");
+                });
+    }
+
+    @Test
+    void explicitBatchRejectsUnitMismatchInsteadOfSilentlyDeducting() {
+        // 拿「只」的数量去扣一个 kg 批次是无声的错账, 必须拦住
+        MaterialBatch massBatch = batch("B1", "RAW-CHICKEN", "WKS-1", "300", LocalDate.of(2026, 7, 20));
+        ProcessSheetRowRequest.RawInput input = new ProcessSheetRowRequest.RawInput();
+        input.setMaterialBatchId("B1");
+        input.setSkuId("RAW-CHICKEN");
+        input.setQuantity(new BigDecimal("5"));
+        input.setUnit("只");
+
+        when(warehouseResolver.resolveWorkshopId("F006")).thenReturn("WKS-1");
+        when(materialBatchRepository.findByIdAndFactoryIdForUpdate("B1", "F006"))
+                .thenReturn(java.util.Optional.of(massBatch));
+
+        assertThatThrownBy(() -> service.planExplicit("F006", "PLAN-1", List.of(input)))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining("投料单位与批次库存单位不一致");
+    }
+
+    @Test
     void customerSuppliedPlanAllocatesOnlySameCustomerAndSalesOrderStock() {
         ProductionPlan plan = customerSuppliedPlan();
         MaterialBatch customerBatch = batch(
