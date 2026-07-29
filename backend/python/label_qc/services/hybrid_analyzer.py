@@ -1,9 +1,14 @@
 """YOLO screening + VL review.
 
 YOLO screens every tray cheaply and locally; only the trays it flags are sent to
-the vision model for confirmation. This keeps the VL model as the authority on
-what counts as a defect while cutting its call volume by roughly an order of
-magnitude (whole-photo tiling: 8 calls per photo; screening: ~1-2).
+the vision model, cutting VL call volume by roughly an order of magnitude
+(whole-photo tiling: 8 calls per photo; screening: ~1-2).
+
+VL ranks rather than vetoes. Every photo is reviewed by a human regardless, so a
+tray the VL clears is still surfaced as a low-confidence candidate instead of
+being dropped -- trading a little reviewer attention for a lower chance of a
+missed defect. Candidates are ordered by confidence so VL-confirmed defects come
+first and screening-only leftovers sit at the bottom.
 
 Known limitation, accepted deliberately: a tray YOLO fails to flag is never seen
 by the VL reviewer. Screening recall on the 60-photo synthetic set is 90% and is
@@ -307,9 +312,14 @@ class HybridLabelQcAnalyzer:
                 verdict, confidence = review["verdict"], review["confidence"]
                 evidence = review["evidence"] or "视觉复核"
                 if verdict == "CLEAR":
+                    # Every photo is reviewed by a human anyway, so a VL veto is
+                    # not worth trading against a missed defect: keep the tray as
+                    # a low-confidence candidate instead of dropping it.
                     rejected += 1
-                    continue
-                if verdict == "UNJUDGEABLE":
+                    verdict = tray.verdict
+                    confidence = round(min(0.25, max(0.05, 1.0 - confidence)), 4)
+                    evidence = f"初筛可疑，视觉复核认为正常（{evidence}）"
+                elif verdict == "UNJUDGEABLE":
                     # Not a defect claim, but must not be treated as clean.
                     unreviewed += 1
                     verdict, confidence = tray.verdict, min(confidence, 0.4)
@@ -326,6 +336,12 @@ class HybridLabelQcAnalyzer:
                     tray, label, confidence, evidence,
                     screening.image_width, screening.image_height, len(candidates) + 1,
                 ))
+
+        # Highest confidence first so the reviewer sees VL-confirmed defects
+        # before the screening-only leftovers.
+        candidates.sort(key=lambda c: -c["confidence"])
+        for index, candidate in enumerate(candidates, start=1):
+            candidate["candidateId"] = f"ai-{index}"
 
         payload = self._screening_payload(screening)
         payload["reviewed"] = len(reviews)
