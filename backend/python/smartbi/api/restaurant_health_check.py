@@ -253,6 +253,34 @@ async def get_health_check_report(
         supplier_anomaly_unavailable = True
         logger.exception("[health-check] supplier price anomaly append failed for %s", factory_id)
 
+    # ── 5c. spec §3.1 预警计划化: 定时执行的 QuerySpec + 阈值规则 ──────────
+    # 同 5b 的模式 (手工 append 一条非 DiagnosticsEngine 产出的诊断), 但数据源
+    # 是租户自己配置的 relative-time 查询计划 —— 统一原则 R1: 问答/缓存/晋升/
+    # 预警执行同一种 sealed QuerySpec。DiagnosticsEngine 是"对行业 benchmark、
+    # 按月、YAML 标量阈值", 装不下"对自己历史、按周、租户自定阈值"(客户 #6
+    # 周环比异常); 两条计算轨并存, 但**落地端只有一套** —— 都变成这个
+    # diagnoses 列表, 都经 RestaurantHealthAlertBridgeService 成为标准 AlertEvent。
+    #
+    # unavailable 前缀是 F1 旗标的泛化: 规则本次"无法判定"(计划编译失败/执行
+    # 异常/取数被 RBAC 脱敏/对比期无数据)时, 诊断的"缺席"不能被桥接当成"已恢复"
+    # 去 auto-resolve, 否则下一轮成功 sweep 会重建 → flap 重复推送。
+    # 失败隔离粒度是**单条规则**: 一条规则挂掉只让它自己进 unavailable。
+    unavailable_metric_prefixes: list[str] = []
+    if supplier_anomaly_unavailable:
+        unavailable_metric_prefixes.append("supplier_price_anomaly:")
+    try:
+        from smartbi.gold.restaurant.plan_alert import run_plan_alerts
+
+        plan_alert_diags, plan_alert_unavailable = await run_plan_alerts(pool, factory_id)
+        diag_dicts.extend(plan_alert_diags)
+        unavailable_metric_prefixes.extend(plan_alert_unavailable)
+    except Exception:  # noqa: BLE001 — 预警规则失败不拖垮体检报告本身
+        # 整族不可用 (import 失败 / 未预期异常): 我们不知道任何一条 plan_alert
+        # 规则的死活, 让桥接跳过**所有** plan_alert:* 的 auto-resolve。
+        # 字面量而非 import 常量 —— 这个 except 要能接住 import 本身的失败。
+        unavailable_metric_prefixes.append("plan_alert:")
+        logger.exception("[health-check] plan-alert evaluation failed for %s", factory_id)
+
     # counts from the post-adjustment dicts so the F3 severity cap is reflected.
     critical_count = sum(1 for dd in diag_dicts if dd.get("severity") == "critical")
     warning_count = sum(1 for dd in diag_dicts if dd.get("severity") == "warning")
@@ -285,7 +313,14 @@ async def get_health_check_report(
         "diagnoses": diag_dicts,
         # 🔒 F1: True 表示供应商进价异常检测本次失败 (非"无异常") → 桥接不应
         # auto-resolve supplier_price_anomaly:* 事件, 避免 flap 重复推送。
+        # ⚠️ 保留此字段仅为**向后兼容**旧版 Java 桥接; 新字段
+        # unavailableMetricPrefixes 是它的泛化, 新代码只读后者。
         "supplierAnomalyUnavailable": supplier_anomaly_unavailable,
+        # 🔒 F1 泛化 (spec §3.1): 本次"无法判定"的 metricKey 前缀列表。桥接对
+        # 命中任一前缀的 OPEN 事件跳过 auto-resolve —— 缺席 ≠ 恢复。
+        # 含 "supplier_price_anomaly:" (F1 原语义) 与 "plan_alert:<rule_code>"
+        # (逐规则粒度, 一条规则挂掉不连累其它规则)。
+        "unavailableMetricPrefixes": unavailable_metric_prefixes,
     }
 
     # ── 6. cache store ───────────────────────────────────────────

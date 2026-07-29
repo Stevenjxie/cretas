@@ -324,3 +324,114 @@ def test_avg_ticket_estimated_target_caps_severity_and_marks_estimated(client, m
     # capped diagnosis must not count toward criticalCount
     assert data["summary"]["criticalCount"] == 0
     assert data["summary"]["warningCount"] >= 1
+
+
+# ── spec §3.1 卡 C1: plan-alert append + unavailable 前缀泛化 ──────────────
+
+def _ok_pool_and_build(monkeypatch):
+    async def _ok_pool():
+        return object()
+
+    async def _fake_build(self, **kwargs):
+        return _bundle(metrics={}, coverage={"food_cost_ratio": "ok"})
+
+    monkeypatch.setattr(hc, "get_pg_pool", _ok_pool)
+    monkeypatch.setattr(hc.HealthCheckMetricsBuilder, "build", _fake_build)
+
+
+def _get(client):
+    return client.get(
+        "/api/smartbi/restaurant/RES_3101_009/health-check-report",
+        headers={"x-test-factory": "RES_3101_009"},
+    )
+
+
+def test_report_appends_plan_alert_diagnoses(client, monkeypatch):
+    """plan-alert 诊断进**同一个** diagnoses 列表 (不建第二套告警通道)."""
+    _ok_pool_and_build(monkeypatch)
+
+    async def _fake_run(pool, factory_id, **kwargs):
+        return ([{
+            "metricKey": "plan_alert:weekly_revenue_drop",
+            "metricNameZh": "营收环比下滑预警",
+            "severity": "warning",
+            "status": "环比异常",
+            "descriptionZh": "本月对比上月：营收环比变化率 -22.0%（非实时监控）",
+            "estimated": False,
+            "rxActions": [{"actionZh": "核对本月经营动作"}],
+        }], [])
+
+    monkeypatch.setattr(
+        "smartbi.gold.restaurant.plan_alert.run_plan_alerts", _fake_run
+    )
+
+    data = _get(client).json()["data"]
+    keys = {d["metricKey"] for d in data["diagnoses"]}
+    assert "plan_alert:weekly_revenue_drop" in keys
+    # 计入 summary 统计, 与 DiagnosticsEngine 诊断同权
+    assert data["summary"]["warningCount"] >= 1
+    # 规则都判定成功 -> 没有 plan_alert 前缀被豁免。
+    # (supplier_price_anomaly: 会在, 因为假 pool 没有 .acquire — 那是 F1 的
+    #  既有语义, 与本用例无关。)
+    assert not [
+        p for p in data["unavailableMetricPrefixes"] if p.startswith("plan_alert")
+    ]
+
+
+def test_report_propagates_per_rule_unavailable_prefix(client, monkeypatch):
+    """单条规则不可判定 -> 只豁免它自己的 metricKey (auto-resolve flap 防护)."""
+    _ok_pool_and_build(monkeypatch)
+
+    async def _fake_run(pool, factory_id, **kwargs):
+        return ([], ["plan_alert:broken_rule"])
+
+    monkeypatch.setattr(
+        "smartbi.gold.restaurant.plan_alert.run_plan_alerts", _fake_run
+    )
+
+    data = _get(client).json()["data"]
+    prefixes = data["unavailableMetricPrefixes"]
+    # 只有那一条规则被豁免 —— 不是整族 "plan_alert:"
+    assert "plan_alert:broken_rule" in prefixes
+    assert "plan_alert:" not in prefixes
+
+
+def test_report_plan_alert_crash_exempts_whole_family(client, monkeypatch):
+    """plan-alert 整体异常 -> 整族豁免, 且体检报告本身照常返回."""
+    _ok_pool_and_build(monkeypatch)
+
+    async def _boom(pool, factory_id, **kwargs):
+        raise RuntimeError("unexpected")
+
+    monkeypatch.setattr(
+        "smartbi.gold.restaurant.plan_alert.run_plan_alerts", _boom
+    )
+
+    resp = _get(client)
+    assert resp.status_code == 200, "预警失败不能拖垮体检报告"
+    data = resp.json()["data"]
+    assert "plan_alert:" in data["unavailableMetricPrefixes"]
+
+
+def test_report_keeps_legacy_supplier_flag_and_mirrors_it_into_prefixes(
+    client, monkeypatch
+):
+    """旧布尔字段保留 (向后兼容旧版 Java 桥接), 同时镜像进新前缀列表."""
+    _ok_pool_and_build(monkeypatch)
+
+    async def _boom_supplier(pool, factory_id):
+        raise RuntimeError("price_anomaly_ack missing")
+
+    async def _no_rules(pool, factory_id, **kwargs):
+        return ([], [])
+
+    monkeypatch.setattr(
+        "smartbi.gold.price_anomaly.detect_price_anomalies", _boom_supplier
+    )
+    monkeypatch.setattr(
+        "smartbi.gold.restaurant.plan_alert.run_plan_alerts", _no_rules
+    )
+
+    data = _get(client).json()["data"]
+    assert data["supplierAnomalyUnavailable"] is True
+    assert "supplier_price_anomaly:" in data["unavailableMetricPrefixes"]

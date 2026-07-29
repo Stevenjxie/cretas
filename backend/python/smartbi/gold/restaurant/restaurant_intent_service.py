@@ -569,6 +569,8 @@ async def tiered_answer(
     history: Optional[Sequence[Dict[str, Any]]] = None,
     precomputed_spec: Optional[RestaurantQuerySpec] = None,
     allow_decompose: bool = True,
+    include_result_meta: bool = False,
+    capture_source: Optional[str] = None,
 ) -> Optional[Dict[str, Any]]:
     """Execute one contract-checked restaurant query plan.
 
@@ -611,7 +613,27 @@ async def tiered_answer(
     a context-free fresh parse instead of the continuation the first call
     already resolved. When ``None`` (every other caller), this function
     calls ``parse_restaurant_query`` itself exactly as before.
+
+    ``include_result_meta`` (spec §3.1 卡 C1 预警计划化, 2026-07-29): when True
+    the answer dict carries an extra ``result_meta`` key -- the resolver
+    execution receipt (``_execution_receipt``) that ``structured_context`` is
+    already derived from. The scheduled plan-alert runner
+    (``smartbi/gold/restaurant/plan_alert.py``) reads its thresholds from
+    ``result_meta["comparison"]``, which is the one numeric outlet that is
+    stable across requests AND carries the honest ``primary_no_data`` /
+    ``baseline_no_data`` / ``coverage_mismatch`` markers ``kpis`` does not.
+    Default ``False`` keeps the returned dict byte-identical for every
+    existing caller (chat SSE / Java delegate / mobile-rest-ai).
+
+    ``capture_source`` (same change): overrides the fire-and-forget capture
+    tag so a machine-initiated replay is distinguishable from a human question
+    in the flywheel console. ``None`` (every existing caller) keeps the prior
+    behavior -- ``"java_entry_delegate"`` when ``java_tool_name`` is set, else
+    no tag.
     """
+    capture_source = capture_source or (
+        "java_entry_delegate" if java_tool_name else None
+    )
     spec = precomputed_spec
     action_warning: Optional[str] = None
     try:
@@ -896,7 +918,6 @@ async def tiered_answer(
                 "也没有改走相邻指标。请补充具体范围后重试。"
             )
             safe_text = _prepend_action_warning(safe_text, action_warning)
-            capture_source = "java_entry_delegate" if java_tool_name else None
             asyncio.create_task(log_intent_capture(
                 pool, spec, factory_id=factory_id, query=query,
                 answer=safe_text, contract_pass=False, served=False,
@@ -957,9 +978,13 @@ async def tiered_answer(
             "suggested_followups": _suggested_followups(structured_context),
             "spec": spec,
         }
+        if include_result_meta:
+            # spec §3.1: the scheduled plan-alert runner reads its thresholds
+            # from the resolver execution receipt. Opt-in so the SSE/chat
+            # payload shape is unchanged for every existing consumer.
+            result["result_meta"] = result_meta
         if action_warning:
             result["warning"] = action_warning
-        capture_source = "java_entry_delegate" if java_tool_name else None
         asyncio.create_task(log_intent_capture(
             pool, spec, factory_id=factory_id, query=query,
             answer=answer_text, contract_pass=contract_pass, served=True,

@@ -17,6 +17,7 @@ import org.springframework.transaction.annotation.Transactional;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -131,11 +132,28 @@ public class RestaurantHealthAlertBridgeService {
         @SuppressWarnings("unchecked")
         List<Map<String, Object>> diagnoses = (List<Map<String, Object>>) data.getOrDefault("diagnoses", List.of());
 
-        // 🔒 F1 (Fable gate): 供应商进价异常检测本次失败 (非"无异常") 时, Python 置此
-        // 旗标。此时诊断列表里不会有 supplier_price_anomaly:*, 但那是"查不到"不是
-        // "已恢复" —— 不能 auto-resolve 掉既有事件, 否则下一轮成功 sweep 会重建 → flap
-        // 重复推送。据此在下面 auto-resolve 阶段跳过 supplier_price_anomaly:* 前缀。
-        boolean supplierAnomalyUnavailable = Boolean.TRUE.equals(data.get("supplierAnomalyUnavailable"));
+        // 🔒 F1 (Fable gate): 某项检测本次失败 (非"无异常") 时, Python 上报"本次
+        // 无法判定"的 metricKey 前缀。此时诊断列表里不会有对应条目, 但那是"查不到"
+        // 不是"已恢复" —— 不能 auto-resolve 掉既有事件, 否则下一轮成功 sweep 会重建
+        // → flap 重复推送。据此在下面 auto-resolve 阶段跳过命中任一前缀的事件。
+        //
+        // 2026-07-29 (spec §3.1 预警计划化): 由单一布尔旗标泛化为前缀列表, 因为
+        // plan-alert 的失败隔离粒度是"单条规则" —— 一条规则的计划编译/执行/取数
+        // 失败只让 plan_alert:<rule_code> 自己豁免, 其余规则照常 auto-resolve。
+        // 旧的 supplierAnomalyUnavailable 布尔仍被读取 (向后兼容: 灰度期间
+        // 可能有旧版 Python 只发布尔不发列表), 两者取并集。
+        Set<String> unavailablePrefixes = new LinkedHashSet<>();
+        if (Boolean.TRUE.equals(data.get("supplierAnomalyUnavailable"))) {
+            unavailablePrefixes.add("supplier_price_anomaly:");
+        }
+        Object rawPrefixes = data.get("unavailableMetricPrefixes");
+        if (rawPrefixes instanceof List<?> prefixList) {
+            for (Object p : prefixList) {
+                if (p != null && !String.valueOf(p).isBlank()) {
+                    unavailablePrefixes.add(String.valueOf(p));
+                }
+            }
+        }
 
         AlertRule rule = ensureDefaultRule(factoryId);
         result.put("available", true);
@@ -203,8 +221,10 @@ public class RestaurantHealthAlertBridgeService {
             if (beid == null || currentMetricKeys.contains(beid)) {
                 continue;
             }
-            // F1: 供应商异常检测失败时, 缺席 ≠ 恢复 → 不解决 supplier_price_anomaly:*
-            if (supplierAnomalyUnavailable && beid.startsWith("supplier_price_anomaly:")) {
+            // F1: 本次无法判定的指标, 缺席 ≠ 恢复 → 保留既有事件不动。
+            if (isUnavailable(beid, unavailablePrefixes)) {
+                log.debug("[RestaurantHealthAlertBridgeService] factoryId={} 跳过 auto-resolve "
+                        + "(本次无法判定): {}", factoryId, beid);
                 continue;
             }
             alertEngineService.resolve(e.getId(), null); // null = 系统自动清除
@@ -218,6 +238,27 @@ public class RestaurantHealthAlertBridgeService {
         result.put("refreshed", refreshed);
         result.put("resolved", resolved);
         return result;
+    }
+
+    /**
+     * 该 businessEntityId 是否命中"本次无法判定"前缀 — 命中则跳过 auto-resolve.
+     *
+     * <p>前缀匹配而非精确相等, 因为一族指标可能整体不可用 (e.g. {@code "plan_alert:"}
+     * 表示规则表读不到, 我们不知道任何一条规则的死活; {@code "plan_alert:weekly_rev"}
+     * 表示只有那一条规则本次判不了).
+     *
+     * <p>包可见 (非 private) 供单测直接验证前缀语义.
+     */
+    static boolean isUnavailable(String businessEntityId, Set<String> unavailablePrefixes) {
+        if (businessEntityId == null || unavailablePrefixes == null || unavailablePrefixes.isEmpty()) {
+            return false;
+        }
+        for (String prefix : unavailablePrefixes) {
+            if (prefix != null && !prefix.isBlank() && businessEntityId.startsWith(prefix)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private AlertRule ensureDefaultRule(String factoryId) {
