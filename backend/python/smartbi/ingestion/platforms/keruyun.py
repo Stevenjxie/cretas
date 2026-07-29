@@ -128,6 +128,9 @@ class KeruyunAdapter:
                     qty=_i(i["qty"], "items[].qty"),
                     price_cents=_i(i["price"], "items[].price"),
                     amount_cents=_i(i["amount"], "items[].amount"),
+                    # 分类可缺: 老报文没有这个字段, 缺了不该让整页解析失败 ——
+                    # 它只影响菜品维度的分组粒度, 不影响金额与对账。
+                    category=(i.get("dishCategory") or None),
                 )
                 for i in raw.get("items", [])
             ],
