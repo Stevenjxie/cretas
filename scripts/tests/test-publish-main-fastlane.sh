@@ -81,6 +81,38 @@ if run_fastlane "$active_repo" --base-sha "$active_base" --confirm YES-DIRECT-MA
     fail "unfinished ACTIVE task was accepted"
 fi
 
+# Scoped ACTIVE gate. The real ledger permanently carries dozens of unrelated
+# in-flight tasks from other sessions, so the unscoped gate rejects every
+# non-docs publish no matter how clean your own batch is. --task-id narrows the
+# check to the caller's own row.
+scoped_repo=$(create_fixture scoped)
+scoped_base=$(git -C "$scoped_repo" rev-parse origin/main)
+scoped_head=$(git -C "$scoped_repo" rev-parse HEAD)
+printf '# ACTIVE\n\n## In Flight\n\n- `OTHER-TASK-1` - `in-progress` - someone else\n- `OTHER-TASK-2` - `review` - someone else\n\n## Scope Locks\n\n- None.\n' \
+    > "$scoped_repo/docs/dispatch/ACTIVE.md"
+git -C "$scoped_repo" add docs/dispatch/ACTIVE.md
+git -C "$scoped_repo" commit --quiet -m "unrelated tasks in flight"
+scoped_head=$(git -C "$scoped_repo" rev-parse HEAD)
+if run_fastlane "$scoped_repo" --base-sha "$scoped_base" --confirm YES-DIRECT-MAIN >/dev/null 2>&1; then
+    fail "unscoped gate accepted a ledger with unfinished tasks"
+fi
+run_fastlane "$scoped_repo" --base-sha "$scoped_base" --confirm YES-DIRECT-MAIN \
+    --task-id MY-TASK-42 > "$TMP_ROOT/scoped.log"
+[[ "$(git --git-dir="$TMP_ROOT/scoped-remote.git" rev-parse main)" == "$scoped_head" ]] \
+    || fail "--task-id did not publish while unrelated tasks were still in flight"
+
+# ...but the caller's OWN unfinished row must still block.
+mine_repo=$(create_fixture mine)
+mine_base=$(git -C "$mine_repo" rev-parse origin/main)
+printf '# ACTIVE\n\n## In Flight\n\n- `OTHER-TASK-1` - `in-progress` - someone else\n- `MY-TASK-42` - `review` - mine\n\n## Scope Locks\n\n- None.\n' \
+    > "$mine_repo/docs/dispatch/ACTIVE.md"
+git -C "$mine_repo" add docs/dispatch/ACTIVE.md
+git -C "$mine_repo" commit --quiet -m "my task still active"
+if run_fastlane "$mine_repo" --base-sha "$mine_base" --confirm YES-DIRECT-MAIN \
+    --task-id MY-TASK-42 >/dev/null 2>&1; then
+    fail "--task-id accepted a publish while the caller's own task was unfinished"
+fi
+
 stale_repo=$(create_fixture stale)
 stale_base=$(git -C "$stale_repo" rev-parse origin/main)
 git -C "$stale_repo" push --quiet origin HEAD:refs/heads/concurrent-advance

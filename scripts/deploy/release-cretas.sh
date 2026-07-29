@@ -4,6 +4,20 @@ set -euo pipefail
 SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 PROJECT_ROOT=$(cd "$SCRIPT_DIR/../.." && pwd)
 
+# One release at a time per machine. Beyond the deploy window that the component
+# scripts already guard, this protects the SHARED artifact cache
+# (~/.cache/cretas/{java-deploy,web-admin-deploy}/current): two concurrent
+# releases from different worktrees write the same manifest and JAR, so the
+# second one silently deploys artifacts built from the first one's tree.
+# Distinct from the component lock names so the children can still acquire theirs.
+if [ -f "$PROJECT_ROOT/scripts/lib/deploy-common.sh" ]; then
+    source "$PROJECT_ROOT/scripts/lib/deploy-common.sh"
+    acquire_deploy_lock "cretas-release" || exit 1
+else
+    echo "ERROR: missing $PROJECT_ROOT/scripts/lib/deploy-common.sh" >&2
+    exit 1
+fi
+
 BASE_SHA=
 TESTS=
 PHASE=all

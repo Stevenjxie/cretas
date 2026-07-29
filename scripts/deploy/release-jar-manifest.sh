@@ -200,6 +200,59 @@ release_manifest_write() {
     return 0
 }
 
+# Decide whether the cached JAR already IS the artifact this build would produce.
+#
+# backend_tree is the git tree hash of backend/java/cretas-api, i.e. a hash of
+# content, not of history. A rebase, a squash merge, or a commit that only
+# touched web-admin all leave it identical, and the previously built JAR remains
+# exactly correct. Recompiling in that case costs ~3 minutes and buys nothing.
+#
+# Reuse is deliberately conservative and requires ALL of:
+#   - a well-formed manifest recording a successful build
+#   - the recorded target-test selector equals the requested one (otherwise the
+#     cached JAR was gated by a different test set and reuse would skip tests)
+#   - the recorded backend tree equals HEAD's backend tree
+#   - the cached JAR still exists, is a readable archive, and matches its SHA
+# Anything else falls through to a real compile. This mirrors the checks in
+# release_manifest_validate, except it anchors on HEAD instead of origin/main
+# because the build phase legitimately runs on a reviewed feature branch.
+release_manifest_build_reusable() {
+    local repo_root=$1
+    local target_tests=$2
+    local manifest=$3
+    local format success backend_tree jar_sha jar_relative recorded_tests
+    local current_tree manifest_dir jar_path actual_sha
+
+    [ -f "$manifest" ] || return 1
+
+    format=$(release_manifest_field "$manifest" format) || return 1
+    [ "$format" = "$RELEASE_MANIFEST_FORMAT" ] || return 1
+    success=$(release_manifest_field "$manifest" success) || return 1
+    [ "$success" = "true" ] || return 1
+
+    recorded_tests=$(release_manifest_field "$manifest" target_tests) || return 1
+    [ "$recorded_tests" = "$target_tests" ] || return 1
+
+    backend_tree=$(release_manifest_field "$manifest" backend_tree) || return 1
+    [[ "$backend_tree" =~ ^[0-9a-fA-F]{40}$ ]] || return 1
+    current_tree=$(git -C "$repo_root" rev-parse "HEAD:$RELEASE_BACKEND_PATH" 2>/dev/null) || return 1
+    [ "$backend_tree" = "$current_tree" ] || return 1
+
+    jar_relative=$(release_manifest_field "$manifest" jar_path) || return 1
+    [ "$jar_relative" = "$RELEASE_JAR_NAME" ] || return 1
+    jar_sha=$(release_manifest_field "$manifest" jar_sha256) || return 1
+    [[ "$jar_sha" =~ ^[0-9a-fA-F]{64}$ ]] || return 1
+
+    manifest_dir=$(cd "$(dirname "$manifest")" 2>/dev/null && pwd) || return 1
+    jar_path="$manifest_dir/$jar_relative"
+    release_manifest_verify_jar "$jar_path" || return 1
+    actual_sha=$(sha256sum "$jar_path" 2>/dev/null | awk '{print tolower($1)}') || return 1
+    [ "$(printf '%s' "$jar_sha" | tr '[:upper:]' '[:lower:]')" = "$actual_sha" ] || return 1
+
+    RELEASE_MANIFEST_REUSED_TREE=$backend_tree
+    return 0
+}
+
 release_manifest_build() {
     local repo_root=$1
     local target_tests=$2
@@ -212,6 +265,15 @@ release_manifest_build() {
     case "$target_tests" in *$'\n'*|*$'\r'*) return 2 ;; esac
     release_manifest_require_clean_worktree "$repo_root" \
         || { echo "ERROR: manifest build requires a clean worktree" >&2; return 1; }
+
+    if [ -z "${CRETAS_RELEASE_FORCE_JAVA_BUILD:-}" ] \
+        && release_manifest_build_reusable "$repo_root" "$target_tests" "$manifest"; then
+        printf 'Release JAR reused: backend tree %s and target tests unchanged; skipping Maven\n' \
+            "$RELEASE_MANIFEST_REUSED_TREE"
+        printf 'Release manifest: %s\n' "$manifest"
+        printf 'Release build report: %s\n' "${CRETAS_RELEASE_BUILD_REPORT_PATH:-$(dirname "$manifest")/$RELEASE_BUILD_REPORT_NAME}"
+        return 0
+    fi
 
     if [ -n "${CRETAS_MAVEN_WRAPPER:-}" ]; then
         wrapper=$CRETAS_MAVEN_WRAPPER
