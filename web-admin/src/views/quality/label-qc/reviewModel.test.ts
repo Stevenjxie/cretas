@@ -12,6 +12,7 @@ import {
   pointBox,
   resizeBox,
   restoreRejectedAiCandidate,
+  strokeBounds,
   toReviewRequest,
   validateReviewDraft,
 } from './reviewModel';
@@ -157,5 +158,31 @@ describe('label QC review model', () => {
       yMax: 0.9,
     });
     expect(normalizedBox(10, 10, 14, 14, 100, 100)).toBeNull();
+  });
+});
+
+describe('strokeBounds', () => {
+  it('把笔刷半径算进外接矩形', () => {
+    // 质检员涂的是"这块区域", 不是"这条中心线" —— 不加半径框会比涂过的范围小一圈
+    expect(strokeBounds([{ x: 50, y: 50 }], 10)).toEqual({
+      x0: 40, y0: 40, x1: 60, y1: 60,
+    });
+  });
+
+  it('多点笔迹取整体包围盒', () => {
+    expect(strokeBounds([{ x: 30, y: 80 }, { x: 90, y: 20 }, { x: 60, y: 50 }], 5)).toEqual({
+      x0: 25, y0: 15, x1: 95, y1: 85,
+    });
+  });
+
+  it('空笔迹或非法半径返回 null, 不落成一个零面积的框', () => {
+    expect(strokeBounds([], 10)).toBeNull();
+    expect(strokeBounds([{ x: 1, y: 1 }], 0)).toBeNull();
+  });
+
+  it('跳过非有限坐标, 不让一个 NaN 把整个框拉成 NaN', () => {
+    expect(strokeBounds([{ x: 10, y: 10 }, { x: NaN, y: 40 }, { x: 20, y: 20 }], 2)).toEqual({
+      x0: 8, y0: 8, x1: 22, y1: 22,
+    });
   });
 });

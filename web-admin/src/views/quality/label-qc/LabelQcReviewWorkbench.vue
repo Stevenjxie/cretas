@@ -35,10 +35,12 @@ import {
   markPhotoNormal,
   markPhotoReviewed,
   moveBox,
+  normalizedBox,
   pendingItemCount,
   pointBox,
   resizeBox,
   restoreRejectedAiCandidate,
+  strokeBounds,
   toReviewRequest,
   validateReviewDraft,
   type LabelQcPhotoDraft,
@@ -77,7 +79,7 @@ const isDirty = ref(false);
 let resizeObserver: ResizeObserver | null = null;
 
 type PointerInteraction = {
-  type: 'pan' | 'move' | 'resize';
+  type: 'pan' | 'move' | 'resize' | 'draw';
   pointerId: number;
   startX: number;
   startY: number;
@@ -176,12 +178,43 @@ function labelText(label?: LabelQcLabel | null): string {
   return label ? LABEL_TEXT[label] : '待确认';
 }
 
+function labelColor(label: LabelQcLabel): string {
+  if (label === 'MISSING_WHITE_LABEL') return '#e54d42';
+  if (label === 'MISSING_COLOR_LABEL') return '#d97706';
+  if (label === 'UNJUDGEABLE') return '#6b7280';
+  return '#16a36a';
+}
+
 function itemColor(item: LabelQcReviewDraft): string {
   if (!item.label) return item.source === 'AI' ? '#f5a524' : '#2f6fdd';
-  if (item.label === 'MISSING_WHITE_LABEL') return '#e54d42';
-  if (item.label === 'MISSING_COLOR_LABEL') return '#d97706';
-  if (item.label === 'UNJUDGEABLE') return '#6b7280';
-  return '#16a36a';
+  return labelColor(item.label);
+}
+
+/** 预览用的颜色跟着"粘"住的类型走，画之前就知道这一笔会被标成什么 */
+const drawColor = computed(() => (activeLabel.value ? labelColor(activeLabel.value) : '#2f6fdd'));
+
+const draftRectStyle = computed<Record<string, string>>(() => {
+  const rect = draftRect.value;
+  if (!rect) return {};
+  return {
+    left: `${Math.min(rect.x0, rect.x1)}px`,
+    top: `${Math.min(rect.y0, rect.y1)}px`,
+    width: `${Math.abs(rect.x1 - rect.x0)}px`,
+    height: `${Math.abs(rect.y1 - rect.y0)}px`,
+    borderColor: drawColor.value,
+  };
+});
+
+function brushDotStyle(point: { x: number; y: number }): Record<string, string> {
+  const size = brushRadius.value * 2;
+  return {
+    left: `${point.x - brushRadius.value}px`,
+    top: `${point.y - brushRadius.value}px`,
+    width: `${size}px`,
+    height: `${size}px`,
+    borderColor: drawColor.value,
+    backgroundColor: drawColor.value,
+  };
 }
 
 function confidence(value?: number | null): string {
@@ -317,9 +350,37 @@ function addHumanBoxAt(clientX: number, clientY: number): void {
   ElMessage.success('已补一个人工框，请在右侧选择问题类型');
 }
 
+/** 屏幕坐标 → 图片平面内的像素坐标（已含缩放/平移，因为用的是 plane 的实际 rect） */
+function toPlanePoint(clientX: number, clientY: number): { x: number; y: number } | null {
+  const rect = planeRef.value?.getBoundingClientRect();
+  if (!rect || rect.width <= 0 || rect.height <= 0) return null;
+  return { x: clientX - rect.left, y: clientY - rect.top };
+}
+
 function startViewportPointer(event: PointerEvent): void {
-  if (event.button !== 0) return;
+  // 中键始终是平移：画框/涂抹时左键被占用，总得留一条挪画面的路
+  const wantsPan = event.button === 1 || toolMode.value === 'select';
+  if (event.button !== 0 && event.button !== 1) return;
   (event.currentTarget as HTMLElement).setPointerCapture(event.pointerId);
+
+  if (!wantsPan && props.canReview) {
+    const point = toPlanePoint(event.clientX, event.clientY);
+    if (!point) return;
+    if (toolMode.value === 'box') {
+      draftRect.value = { x0: point.x, y0: point.y, x1: point.x, y1: point.y };
+    } else {
+      brushStroke.value = [point];
+    }
+    pointerInteraction.value = {
+      type: 'draw',
+      pointerId: event.pointerId,
+      startX: event.clientX,
+      startY: event.clientY,
+      moved: false,
+    };
+    return;
+  }
+
   pointerInteraction.value = {
     type: 'pan',
     pointerId: event.pointerId,
@@ -354,11 +415,24 @@ function startBoxPointer(
 }
 
 function movePointer(event: PointerEvent): void {
+  if (toolMode.value === 'brush') {
+    cursorPoint.value = toPlanePoint(event.clientX, event.clientY);
+  }
   const interaction = pointerInteraction.value;
   if (!interaction || interaction.pointerId !== event.pointerId) return;
   const deltaX = event.clientX - interaction.startX;
   const deltaY = event.clientY - interaction.startY;
   if (Math.abs(deltaX) + Math.abs(deltaY) > 4) interaction.moved = true;
+  if (interaction.type === 'draw') {
+    const point = toPlanePoint(event.clientX, event.clientY);
+    if (!point) return;
+    if (draftRect.value) {
+      draftRect.value = { ...draftRect.value, x1: point.x, y1: point.y };
+    } else if (brushStroke.value.length) {
+      brushStroke.value = [...brushStroke.value, point];
+    }
+    return;
+  }
   if (interaction.type === 'pan') {
     if (zoom.value > 1 && interaction.startPan) {
       pan.value = {
@@ -379,13 +453,44 @@ function movePointer(event: PointerEvent): void {
   touchPhoto();
 }
 
+/**
+ * 提交一个新的人工框。带着当前"粘"住的类型一起落 —— 画完即定性, 不用再回右侧点一次,
+ * 这正是连续标注提速的关键。没选类型时留空, 走原来的"待确认"流程。
+ */
+function commitHumanBox(bbox: LabelQcBoundingBox | null): void {
+  const draft = activeDraft.value;
+  if (!bbox || !draft || !props.canReview) return;
+  const item = appendHumanBox(draft, bbox, `human-${draft.photoId}-${Date.now()}`);
+  if (activeLabel.value) {
+    item.label = activeLabel.value;
+    selectedKey.value = null;
+  } else {
+    selectedKey.value = item.key;
+  }
+  setDirty(true);
+}
+
 function endPointer(event: PointerEvent): void {
   const interaction = pointerInteraction.value;
   if (!interaction || interaction.pointerId !== event.pointerId) return;
-  if (interaction.type === 'pan' && !interaction.moved) {
+  pointerInteraction.value = null;
+
+  if (interaction.type === 'draw') {
+    const rect = planeRef.value?.getBoundingClientRect();
+    const region = draftRect.value ?? strokeBounds(brushStroke.value, brushRadius.value);
+    draftRect.value = null;
+    brushStroke.value = [];
+    if (!rect || !region) return;
+    // 太小的拖拽多半是误触而不是标注意图, normalizedBox 会返回 null
+    commitHumanBox(
+      normalizedBox(region.x0, region.y0, region.x1, region.y1, rect.width, rect.height),
+    );
+    return;
+  }
+
+  if (interaction.type === 'pan' && !interaction.moved && toolMode.value === 'select') {
     addHumanBoxAt(event.clientX, event.clientY);
   }
-  pointerInteraction.value = null;
 }
 
 function changeZoom(delta: number): void {
@@ -395,6 +500,12 @@ function changeZoom(delta: number): void {
 }
 
 function handleWheel(event: WheelEvent): void {
+  // 画笔模式下滚轮改笔刷大小 —— 调笔刷远比缩放频繁, 缩放还有按钮和双击复位
+  if (toolMode.value === 'brush') {
+    const next = brushRadius.value + (event.deltaY < 0 ? 3 : -3);
+    brushRadius.value = Math.min(BRUSH_MAX, Math.max(BRUSH_MIN, next));
+    return;
+  }
   changeZoom(event.deltaY < 0 ? 0.2 : -0.2);
 }
 
@@ -535,15 +646,61 @@ function toggleLayer(layer: ScreenLayer): void {
 }
 
 // ---- 键盘快捷键 -------------------------------------------------------------
-// 质检员一天要过几百张，鼠标往返右侧按钮是主要耗时。左手键盘 + 右手鼠标点框，
-// 是这类逐张审核界面的标准姿势。
+// ---- 标注工具：键盘定类型，鼠标画位置 --------------------------------------
+// 质检员一天要过几百张，鼠标往返右侧按钮是主要耗时。左手键盘选类型 + 右手鼠标
+// 画位置，是这类逐张标注界面的标准姿势。
+//
+// 工具与类型都是"粘"的：选一次之后连续画都沿用，不用每画一个框回去点一次。
+type ToolMode = 'select' | 'box' | 'brush';
+
+const toolMode = ref<ToolMode>('select');
+const activeLabel = ref<LabelQcLabel | null>(null);
+const brushRadius = ref(26);
+const BRUSH_MIN = 6;
+const BRUSH_MAX = 160;
+
+/** 正在拖的框 / 正在涂的笔迹，都只是预览，松手才落成标注 */
+const draftRect = ref<{ x0: number; y0: number; x1: number; y1: number } | null>(null);
+const brushStroke = ref<{ x: number; y: number }[]>([]);
+const cursorPoint = ref<{ x: number; y: number } | null>(null);
+
+const TOOLS: { mode: ToolMode; key: string; text: string }[] = [
+  { mode: 'select', key: 'V', text: '选择' },
+  { mode: 'box', key: 'R', text: '拉框' },
+  { mode: 'brush', key: 'B', text: '画笔' },
+];
+
+const QUICK_LABELS: { label: LabelQcLabel; key: string; text: string }[] = [
+  { label: 'MISSING_WHITE_LABEL', key: '1', text: '缺白标' },
+  { label: 'MISSING_COLOR_LABEL', key: '2', text: '缺彩标' },
+  { label: 'NO_DEFECT', key: '3', text: '此框正常' },
+  { label: 'UNJUDGEABLE', key: '4', text: '不可判定' },
+];
+
 const SHORTCUTS = [
+  { keys: '1 / 2 / 3 / 4', text: '缺白标 / 缺彩标 / 正常 / 不可判定' },
+  { keys: 'V / R / B', text: '选择 / 拉框 / 画笔' },
+  { keys: '滚轮', text: '画笔模式调笔刷大小，否则缩放' },
   { keys: 'Enter', text: '确认本图结论' },
   { keys: 'N', text: '整图正常' },
   { keys: '← / →', text: '上一张 / 下一张' },
-  { keys: '1 / 2 / 3', text: '盒子 / 白标 / 彩标' },
+  { keys: 'Q / W / E', text: '盒子 / 白标 / 彩标 图层' },
   { keys: 'Esc', text: '取消选中框' },
 ] as const;
+
+function setTool(mode: ToolMode): void {
+  toolMode.value = mode;
+  if (mode !== 'select') selectedKey.value = null;
+}
+
+/**
+ * 按类型键：选中框时立刻定结论并跳下一个待判框；没选中框时只是把类型"粘"住，
+ * 接下来画的框自动带上它。同一个键在两种情形下都符合"我要标这个类型"的直觉。
+ */
+function pickLabel(label: LabelQcLabel): void {
+  activeLabel.value = label;
+  if (selectedItem.value) resolveSelected(label);
+}
 
 function isTypingTarget(target: EventTarget | null): boolean {
   if (!(target instanceof HTMLElement)) return false;
@@ -576,16 +733,45 @@ function onShortcutKey(event: KeyboardEvent): void {
       nextPhoto();
       break;
     case '1':
+    case '2':
+    case '3':
+    case '4': {
+      const quick = QUICK_LABELS[Number(event.key) - 1];
+      if (quick) {
+        event.preventDefault();
+        pickLabel(quick.label);
+      }
+      break;
+    }
+    case 'q':
+    case 'Q':
       event.preventDefault();
       toggleLayer('tray');
       break;
-    case '2':
+    case 'w':
+    case 'W':
       event.preventDefault();
       toggleLayer('white');
       break;
-    case '3':
+    case 'e':
+    case 'E':
       event.preventDefault();
       toggleLayer('color');
+      break;
+    case 'v':
+    case 'V':
+      event.preventDefault();
+      setTool('select');
+      break;
+    case 'r':
+    case 'R':
+      event.preventDefault();
+      setTool('box');
+      break;
+    case 'b':
+    case 'B':
+      event.preventDefault();
+      setTool('brush');
       break;
     case 'Escape':
       if (selectedKey.value) {
@@ -715,18 +901,64 @@ onBeforeUnmount(() => resizeObserver?.disconnect());
           </div>
         </div>
 
+        <div v-if="canReview" class="annotate-bar">
+          <div class="tool-group" role="group" aria-label="标注工具">
+            <button
+              v-for="tool in TOOLS"
+              :key="tool.mode"
+              type="button"
+              class="tool-btn"
+              :class="{ on: toolMode === tool.mode }"
+              :aria-pressed="toolMode === tool.mode"
+              @click="setTool(tool.mode)"
+            >
+              {{ tool.text }}<kbd>{{ tool.key }}</kbd>
+            </button>
+          </div>
+          <span class="bar-sep" />
+          <div class="tool-group" role="group" aria-label="标注类型">
+            <button
+              v-for="quick in QUICK_LABELS"
+              :key="quick.label"
+              type="button"
+              class="tool-btn label-btn"
+              :class="{ on: activeLabel === quick.label }"
+              :style="activeLabel === quick.label
+                ? { backgroundColor: labelColor(quick.label), borderColor: labelColor(quick.label) }
+                : { borderColor: labelColor(quick.label) }"
+              :aria-pressed="activeLabel === quick.label"
+              @click="pickLabel(quick.label)"
+            >
+              {{ quick.text }}<kbd>{{ quick.key }}</kbd>
+            </button>
+          </div>
+          <span v-if="toolMode === 'brush'" class="brush-size">
+            笔刷 {{ brushRadius }}px<em>滚轮调整</em>
+          </span>
+        </div>
+
         <div class="gesture-hint">
           <Aim />
-          <span><strong>点照片空白处补框</strong> · 拖框移动 · 拖右下角缩放 · 滚轮放大照片后拖动画面</span>
+          <span v-if="toolMode === 'box'">
+            <strong>按住左键拖出一个框</strong> · 键盘 1/2/3/4 先选类型，画完即定性 · 中键拖动画面
+          </span>
+          <span v-else-if="toolMode === 'brush'">
+            <strong>按住左键涂抹</strong> · 滚轮调笔刷大小 · 涂过的范围会圈成一个框 · 中键拖动画面
+          </span>
+          <span v-else>
+            <strong>点照片空白处补框</strong> · 拖框移动 · 拖右下角缩放 · 滚轮放大照片后拖动画面
+          </span>
         </div>
 
         <div
           ref="viewportRef"
           class="image-viewport"
+          :class="[`tool-${toolMode}`, { drawing: !!draftRect || !!brushStroke.length }]"
           @pointerdown="startViewportPointer"
           @pointermove="movePointer"
           @pointerup="endPointer"
           @pointercancel="endPointer"
+          @pointerleave="cursorPoint = null"
           @wheel.prevent="handleWheel"
           @dblclick="resetView"
         >
@@ -774,6 +1006,20 @@ onBeforeUnmount(() => resizeObserver?.disconnect());
                 @pointerdown="startBoxPointer($event, item, 'resize')"
               />
             </div>
+
+            <!-- 落笔预览：拉框的橡皮筋 / 涂抹的笔迹 / 笔刷光标，都不接指针事件 -->
+            <div v-if="draftRect" class="draft-rect" :style="draftRectStyle" />
+            <div
+              v-for="(dot, index) in brushStroke"
+              :key="`stroke-${index}`"
+              class="brush-dot"
+              :style="brushDotStyle(dot)"
+            />
+            <div
+              v-if="toolMode === 'brush' && cursorPoint && !brushStroke.length"
+              class="brush-cursor"
+              :style="brushDotStyle(cursorPoint)"
+            />
           </div>
 
           <div v-if="zoom > 1" class="zoom-indicator">已放大 · 拖动空白处移动画面</div>
@@ -1251,6 +1497,91 @@ button {
   width: 100%;
   height: 100%;
   pointer-events: none;
+}
+
+/* ---- 标注工具条 ---- */
+.annotate-bar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--el-border-color-lighter);
+}
+
+.tool-group { display: flex; gap: 6px; }
+
+.bar-sep {
+  width: 1px;
+  height: 18px;
+  background: var(--el-border-color);
+}
+
+.tool-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 28px;
+  padding: 0 10px;
+  border: 1px solid var(--el-border-color);
+  border-radius: 999px;
+  background: var(--el-fill-color-blank);
+  color: var(--el-text-color-primary);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.tool-btn kbd {
+  padding: 0 4px;
+  border-radius: 3px;
+  background: rgba(0, 0, 0, .09);
+  font-size: 10px;
+  font-family: inherit;
+}
+
+.tool-btn.on { background: #2f6fdd; border-color: #2f6fdd; color: #fff; }
+.tool-btn.on kbd { background: rgba(255, 255, 255, .25); }
+.tool-btn.label-btn.on { color: #fff; }
+
+.brush-size {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
+}
+
+.brush-size em { font-style: normal; opacity: .7; }
+
+/* 光标形状直接表达当前工具：十字=画框，无光标=画笔(用自绘的圆代替) */
+.image-viewport.tool-box { cursor: crosshair; }
+.image-viewport.tool-brush { cursor: none; }
+
+/* ---- 落笔预览：一律不接指针事件，否则会截断正在进行的拖拽 ---- */
+.draft-rect {
+  position: absolute;
+  z-index: 5;
+  border: 2px dashed;
+  border-radius: 4px;
+  background: rgba(47, 111, 221, .10);
+  pointer-events: none;
+}
+
+.brush-dot,
+.brush-cursor {
+  position: absolute;
+  z-index: 5;
+  border-radius: 50%;
+  pointer-events: none;
+}
+
+.brush-dot { opacity: .28; }
+
+.brush-cursor {
+  background: transparent !important;
+  border: 2px solid;
+  opacity: .85;
 }
 
 /* AI 初筛参考层：更细、半透明、不可交互，避免和人工标注框抢视觉 */

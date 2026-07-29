@@ -203,6 +203,33 @@ export function normalizedBox(
   };
 }
 
+/**
+ * 涂抹笔迹 → 外接矩形(像素)。笔刷半径要算进去, 否则圈出来的框比实际涂过的范围
+ * 小一圈 —— 质检员涂的是"这块区域", 不是"这条中心线"。
+ *
+ * 下游训练的是检测器(框), 所以笔迹本身不落库: 涂抹只是比精确拖拽更快的圈定方式,
+ * 最终产物和拉框完全一样。
+ */
+export function strokeBounds(
+  stroke: { x: number; y: number }[],
+  radius: number,
+): { x0: number; y0: number; x1: number; y1: number } | null {
+  if (!stroke.length || radius <= 0) return null;
+  let x0 = Infinity;
+  let y0 = Infinity;
+  let x1 = -Infinity;
+  let y1 = -Infinity;
+  for (const point of stroke) {
+    if (!Number.isFinite(point.x) || !Number.isFinite(point.y)) continue;
+    x0 = Math.min(x0, point.x);
+    y0 = Math.min(y0, point.y);
+    x1 = Math.max(x1, point.x);
+    y1 = Math.max(y1, point.y);
+  }
+  if (!Number.isFinite(x0) || !Number.isFinite(y0)) return null;
+  return { x0: x0 - radius, y0: y0 - radius, x1: x1 + radius, y1: y1 + radius };
+}
+
 export function pointBox(
   x: number,
   y: number,
