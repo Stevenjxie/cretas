@@ -247,6 +247,45 @@ async def test_review_order_prefers_both_missing_then_low_confidence(monkeypatch
 
 
 @pytest.mark.asyncio
+async def test_vl_disabled_runs_screening_only_and_grades_confidence(monkeypatch):
+    """VL off: still reports every suspect, graded so the list stays sortable."""
+    single = TrayResult(index=0, box=[0, 0, 50, 50], confidence=0.90,
+                        has_white=False, has_color=True, verdict=VERDICT_MISSING_WHITE)
+    both = TrayResult(index=1, box=[60, 0, 110, 50], confidence=0.90,
+                      has_white=False, has_color=False, verdict="BOTH_MISSING")
+    monkeypatch.setattr(hybrid, "screen_image",
+                        lambda image, models, params: _screening([single, both]))
+
+    async def must_not_be_called(slot, payload, timeout=None):
+        raise AssertionError("VL 关闭时不应调用视觉模型")
+
+    monkeypatch.setattr(hybrid, "call_chain", must_not_be_called)
+    monkeypatch.setenv("LABEL_QC_VL_REVIEW", "0")
+    analyzer = HybridLabelQcAnalyzer(models=_StubModels())
+
+    result = await analyzer.analyze(_image_bytes())
+
+    assert result["screeningMode"] == "yolo-screen-only"
+    assert result["tilesAnalyzed"] == 0
+    assert "screen-only" not in result["model"], "model 字段不应出现内部占位符"
+    # single-missing (0.75*0.9) must outrank both-missing (0.45*0.9)
+    confs = [c["confidence"] for c in result["candidates"]]
+    assert confs == sorted(confs, reverse=True)
+    assert max(confs) == pytest.approx(0.675)
+    assert min(confs) == pytest.approx(0.405)
+    assert all("未启用视觉复核" in c["evidence"] for c in result["candidates"])
+
+
+@pytest.mark.asyncio
+async def test_screen_confidence_scales_with_tray_confidence():
+    high = TrayResult(index=0, box=[0, 0, 1, 1], confidence=0.95,
+                      has_white=False, has_color=True, verdict=VERDICT_MISSING_WHITE)
+    low = TrayResult(index=1, box=[0, 0, 1, 1], confidence=0.61,
+                     has_white=False, has_color=True, verdict=VERDICT_MISSING_WHITE)
+    assert hybrid._screen_confidence(high) > hybrid._screen_confidence(low)
+
+
+@pytest.mark.asyncio
 async def test_concurrency_is_configurable(monkeypatch):
     monkeypatch.setenv("LABEL_QC_REVIEW_CONCURRENCY", "6")
     analyzer = HybridLabelQcAnalyzer(models=_StubModels())
