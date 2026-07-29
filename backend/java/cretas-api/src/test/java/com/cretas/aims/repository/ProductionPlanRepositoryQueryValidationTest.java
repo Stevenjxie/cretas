@@ -96,6 +96,18 @@ class ProductionPlanRepositoryQueryValidationTest {
         // the JSON string "[]" rather than a JSON array. Keep it null here: this gate
         // validates the two repository queries, not that unrelated legacy default.
         plan.setSourceOrderIds(null);
+        // Same treatment for the jsonb Map columns added after 2026-07-26. Their Java
+        // defaults are empty maps, which serialize to "{}"; reading that back under the
+        // H2 test profile fails with
+        //     IllegalArgumentException: The given string value: "{}" cannot be transformed
+        // and took this gate red from 2026-07-28 onward. Production runs real PostgreSQL
+        // where jsonb "{}" round-trips into a Map without complaint — these very columns
+        // shipped in five deploys that day and prod stayed healthy — so this is an H2
+        // compatibility artifact, not a product defect. This gate exists to prove the two
+        // repository queries boot and match; jsonb serialization is not its job.
+        plan.setWorkflowOutputUnitsByProduct(null);
+        plan.setSelectedBomRecipeIdsByProduct(null);
+        plan.setSelectedBomVersionsByProduct(null);
         entityManager.persist(plan);
         entityManager.flush();
         entityManager.clear();
