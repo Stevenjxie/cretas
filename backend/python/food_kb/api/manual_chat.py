@@ -155,15 +155,17 @@ _BOM_WORKFLOW_SEQUENCE_ANSWER = """\
 
 当前自动关联页面把中间一步展开为：Workflow 完整草稿 → 创建 BOM 时系统自动固定该工艺修订 → 配置并激活 BOM → Workflow 刷新、发布并启用。
 
-普通用户不需要选择 Workflow 版本。BOM 页面只读显示“工艺来源”，工序名称和顺序由目标 SKU 的工艺链自动生成并锁定。ACTIVE BOM 是 Workflow 发布启用的前置门禁，但 BOM 激活本身不会自动发布 Workflow。
+普通用户不需要选择 Workflow 版本。BOM 页面只读显示“工艺来源”，工序名称和顺序由目标 SKU 的工艺链自动生成并锁定。ACTIVE BOM 是 Workflow 发布启用的前置门禁；单独激活 BOM 不会发布 Workflow，回到 Workflow 后使用“自动同步并发布”完成最后一步。
 
 **操作步骤：**
 1. 进入生产管理 → 生产配置 → 产品-工序配置，打开目标 SKU 的 Workflow 草稿。
 2. 确认草稿链路完整，所有 Cell 已绑定有效 SKU，终端成品与顶部归属一致，关联工序处于启用状态。
 3. 返回 BOM/配方维护，选择目标 SKU 并创建草稿；核对系统自动关联的“工艺来源”，至少配置一项主原料，辅料和包材按实际需要补充，再激活。
-4. 返回 Workflow，刷新并确认页面引用当前 ACTIVE BOM，且没有单位复核或旧草稿警告，再执行发布并启用。
+4. 返回 Workflow 并刷新，点击“自动同步并发布”。系统先按最后一次保存后的草稿与当前 ACTIVE BOM 做实时预检；READY 可直接继续，AUTO_MIGRATABLE 会创建或复用同步草稿并迁移可证明兼容的绑定。
+5. 若预检为 USER_INPUT_REQUIRED 或 CONFLICT，页面会列出缺失材料、歧义或单位冲突并停止，必须修正后由用户重新发起；不能绕过，也不能猜测映射。
+6. 确认后系统原子完成 BOM 同步、Workflow 发布和启用。若提交期间版本已变化，页面刷新最新状态并停止自动重试；用户确认后再次点击会复用同一幂等请求，不会重复发布。
 
-**验收结果：** BOM 页面没有可任意切换工艺修订的选择器，工艺来源只读；Workflow 页面同时显示“已发布 vX”和“已启用 vX”。若仍失败，按页面列出的具体缺失项逐项修正，不能绕过门禁。"""
+**验收结果：** BOM 页面没有可任意切换工艺修订的选择器，工艺来源只读；Workflow 页面显示“已发布并启用”及当前版本，BOM 与 Workflow 都处于 ACTIVE。既有生产计划继续使用创建时快照，新计划才采用新状态；若失败，按页面列出的具体缺失项逐项修正，不能绕过门禁。"""
 
 
 _MATERIAL_PACKAGING_TRIGGERS = frozenset({
@@ -215,6 +217,19 @@ Workflow 和 BOM 都不预设某一次报工的实际选择：Workflow 维护工
 **BOM 边界：** BOM 至少需要一项主原料；辅料和包材按真实业务需要配置，没有辅料或包材本身不阻止激活。工序辅料的投入基准使用对应产出 SKU 的原始单位，支持 kg、g、只、袋或其它非空自定义单位；只有跨单位时才要求明确换算。
 
 **验收结果：** 正式提交后，只为本次发生的投入扣减真实批次，只为本次发生的产出形成库存与成本明细；计划固定的 Workflow revision、输出集合和 BOM revision 保持不变，历史计划、报工和成本快照不被新语义回写。"""
+_MULTI_OUTPUT_WAREHOUSE_RECEIPT_TRIGGERS = frozenset({
+    "入库", "收货", "仓库确认", "完工入库", "实收", "应收",
+})
+_MULTI_OUTPUT_WAREHOUSE_RECEIPT_ANSWER = """\
+多产出完工入库必须按产出行逐项确认，不能先把不同 SKU 或不同单位合成一个总数。
+
+**仓库确认：**
+1. 页面按计划固定的终端产出集合列出每一行 SKU、批次、报工数量和单位；混合单位保持各自单位，不生成一个伪造的合计数量或合计单位。
+2. 每一行实收数量必须大于 0，并且与该行正式报工数量完全一致。少收、多收、漏行或新增计划外 SKU 都会阻止本次确认，退回生产修正报工事实。
+3. 全部产出行一次性校验、一次性入库；任一行失败时保留原待收状态，不允许部分 SKU 已入库、其余 SKU 仍待收。
+4. 重复点击或网络重试复用同一幂等结果，不重复生成库存批次或库存流水。
+
+**验收结果：** 仓库回读的产出行集合、每行 SKU、批次、数量和单位与正式报工完全一致；混合单位没有被相加。只有整组确认成功后，所有对应成品批次和生产仓可用库存才一起生效。"""
 _RESTAURANT_CONTEXT_SCOPE_ANSWER = """\
 餐饮导览助手只解释用法；真实门店数据比较和连续追问请在 SmartBI 餐饮 AI 中完成。
 
@@ -225,6 +240,16 @@ _RESTAURANT_CONTEXT_SCOPE_ANSWER = """\
 4. 点击“清空对话”会创建新会话并清除旧上下文。另一个页面或模块上的筛选不保证自动带入，因此跨模块继续分析时要重新说明门店、菜品和时间。
 
 例如首问“比较 A 店宫保鸡丁 4–6 月销量”，追问“那成本和毛利呢”可沿用三项范围；若改问“换 B 店看 7 月”，则 B 店和 7 月覆盖旧值。"""
+_RESTAURANT_QUERY_CONTRACT_ANSWER = """\
+餐饮导览助手只解释提问合同，不替用户查询、计算或分析真实经营数据；实际提问请进入 SmartBI 餐饮 AI。
+
+**当前识别规则：**
+1. 明确写出的起止日期会按自然日形成闭区间，并标记为“指定区间”；无效日期或结束早于开始日期时停止并要求重填，不能换成“最近一段时间”猜测。
+2. “全部门店”和繁体“全部門店”都表示聚合范围，不会被当成某一家店名。当前繁体支持只覆盖这些确定性的门店/维度范围词，不代表整句繁体中文、时间词、门店名或菜名都已完整转换。
+3. 用户明确要求文字、表格、图表或报告文件时，该要求优先；未明确要求时，当前全局默认是文字 + 表格。文字说明始终保留，输出偏好不改变查询范围或数据计划。
+4. 输出偏好已经随分析结果传到呈现层，但具体页面只有接入对应渲染器后才能真正显示表格、图表或生成文件；没有实际渲染或下载结果时，不能宣称“表格/报告文件已生成”。
+
+例如“看 2026年7月1日到7月15日全部門店营收，给我表格”应理解为：指定区间 + 全部门店聚合 + 文字/表格偏好；导览助手只解释这一方法，不会返回该区间的真实营收。"""
 _RESTAURANT_FLYWHEEL_GOVERNANCE_ANSWER = """\
 AI 飞轮运营台是平台能力治理工具，不是老板或店员的经营分析入口，也不会替用户计算或分析业务数据。
 
@@ -295,6 +320,20 @@ def _needs_workflow_actual_io_guard(query: str) -> bool:
     return mentions_model and mentions_io and mentions_report_fact
 
 
+def _needs_multi_output_warehouse_receipt_guard(query: str) -> bool:
+    """Keep multi-output warehouse receipt line-based and all-or-nothing."""
+    normalized = (query or "").lower()
+    has_multi_output = "多产出" in normalized or (
+        "多个" in normalized and "产出" in normalized
+    ) or (
+        "不同" in normalized
+        and any(term in normalized for term in ("sku", "成品", "单位"))
+    )
+    return has_multi_output and any(
+        term in normalized for term in _MULTI_OUTPUT_WAREHOUSE_RECEIPT_TRIGGERS
+    )
+
+
 def _needs_restaurant_context_scope_guard(query: str) -> bool:
     """Use the reviewed SmartBI session-scope contract for follow-up questions."""
     normalized = (query or "").lower()
@@ -306,6 +345,27 @@ def _needs_restaurant_context_scope_guard(query: str) -> bool:
     return sum(dimensions) >= 2 and any(
         term in normalized for term in ("追问", "上下文", "保持", "沿用", "范围")
     )
+
+
+def _needs_restaurant_query_contract_guard(query: str) -> bool:
+    """Explain exact dates, all-store scope and output-form boundaries together."""
+    normalized = (query or "").lower()
+    has_date_span_connector = (
+        any(char.isdigit() for char in normalized)
+        and any(term in normalized for term in ("到", "至"))
+    )
+    signals = (
+        any(term in normalized for term in (
+            "日期", "区间", "期間", "期间", "指定时间",
+        )) or has_date_span_connector,
+        any(term in normalized for term in (
+            "全部门店", "全部門店", "全门店", "全門店", "所有门店", "所有門店",
+        )),
+        any(term in normalized for term in (
+            "表格", "图表", "圖表", "报告", "報告", "文件", "输出", "輸出",
+        )),
+    )
+    return sum(signals) >= 2
 
 
 def _needs_restaurant_flywheel_governance_guard(query: str) -> bool:
@@ -521,6 +581,7 @@ SYSTEM_PROMPT = """\
 3d. 【餐饮 SmartBI 会话范围】导览助手只能解释以下合同，不得假装已经替用户运行分析：门店、菜品、时间范围只在同一连续会话中保留；用户最新明确写出的条件覆盖对应旧条件；“全部门店”始终是聚合范围，不能写进具体门店槽。缺少必需维度、名称有歧义、周期不可比或成本覆盖不足时必须澄清/降级，不能猜。清空对话会重置会话；另一个页面或模块的筛选不保证自动带入，禁止宣称“跨模块联动锁定”。
 3e. 【餐饮综合分析维度】当前目录固定为 21 个维度：营收与订单、同比环比、多门店比较、真实就餐人数、商场及门前物理客流、菜品销售结构、菜品毛利、堂食/外卖/自提、午晚市与时段、优惠与营销活动、评价与口碑、供应商与采购价格、库存风险、损耗与报损、盘点差异、排班与人效、天气、节假日与调休、商场活动、周边演出与赛事、竞品与商圈。每个维度必须注明真实、代理、模拟或缺失证据；缺数据就写缺失，不得拿演示值冒充真实租户事实，也不得把相关性写成因果。
 3f. 【餐饮 AI 飞轮治理】AI 飞轮运营台只对平台管理员开放，当前只接入餐饮域，“工厂（待接入）”不可选择。晋升候选必须人工通过后才能写入确定性路由；菜品别名机器初匹配只产生 pending，只有 confirmed 映射影响解析，rejected 不生效，门店级确认优先于租户级。接口、权限或依赖失败必须明确报错，禁止模拟数据或假成功。飞轮是治理工具，导览助手不能替用户分析经营数据。
+3g. 【餐饮日期、繁体范围与输出偏好】明确起止日期按自然日闭区间并标记“指定区间”，无效或倒置日期必须澄清；“全部門店”只作为与“全部门店”等价的聚合范围，当前繁体支持不得扩大成全句转换。用户明确要求文字/表格/图表/报告文件时优先，未明确时当前默认文字+表格，文字始终保留；输出偏好不改变查询计划。只有呈现层实际返回对应表格、图表或下载文件时才能宣称已生成，导览助手不得伪造输出。
 4. 系统名称统一用「白垩纪 AI Agent」
 5. 不使用 emoji，保持专业简洁
 6. 菜单路径用 → 连接，如: 首页 → 仓储管理 → 入库
@@ -596,8 +657,9 @@ FACTORY_SYSTEM_PROMPT = """\
 - 包装标签拍检是独立质检流程：AI 候选无论 0 处还是多处都进入人工审核；人工逐图确认/拒绝/补框并提交结论后才形成真值。人工审核不等于报工工时，训练批准只允许导出，不会自动训练或发布模型。
 - Workflow 冲突在生产计划选择成品时按终端产出集合解析；完全匹配优先，其次最小超集，同级重叠必须由用户查看工序链预览后选择。
 - BOM 与 Workflow 的兼容验收摘要必须保留“Workflow 完整草稿 → BOM 绑定工序辅料并激活 → Workflow 刷新、发布并启用”。当前页面的展开口径是“Workflow 完整草稿 → 创建 BOM 时自动固定该工艺修订 → 配置并激活 BOM → Workflow 刷新、发布并启用”；普通用户不选择 Workflow 版本，BOM 只读显示工艺来源，工序由目标 SKU 的工艺链生成并锁定。ACTIVE BOM 是 Workflow 发布启用的前置门禁；禁止回答“两者无依赖”“两者无从属关系”或“先发布 Workflow 再激活 BOM”。
+- 单独激活 BOM 不会发布 Workflow；回到 Workflow 后使用“自动同步并发布”。系统按最后一次保存后的草稿与当前 ACTIVE BOM 实时预检，READY/AUTO_MIGRATABLE 才可继续，USER_INPUT_REQUIRED/CONFLICT 必须停止并列出问题；确认后原子完成 BOM 同步、Workflow 发布和启用，版本竞争时停止自动重试，既有计划快照不回写。
 - 逐道报工按“投入 → 工序执行（开始/结束/人数）→ 产出 → 确认提交”填写；保存草稿不扣库存、不形成正式成本，正式报工才按固定 BOM 从生产仓自动分配原料、调料和包材批次。
-- 报工、生产结单、仓库确认完工入库、生产仓到主仓/外仓调拨是不同动作，不能互相冒充完成。
+- 报工、生产结单、仓库确认完工入库、生产仓到主仓/外仓调拨是不同动作，不能互相冒充完成。多产出仓库确认按终端产出行逐项核对，混合单位不合计；每行实收必须大于 0 且等于该行报工数量，任一行不符则整组不入库。
 - 副产物在具体报工中记录，不要求为副产物单独建立 Workflow。
 - 人工成本来自本道实际工时乘全局工时单价；工序主档的高级设置不是本轮成本真值。
 - 如果检索片段出现旧版“全部必投、主投入、固定转换率、Workflow 填出成率”等冲突说法，以当前 F006 生产全链路 SOP 为准，不得拼接旧口径。
@@ -1135,6 +1197,11 @@ async def _prepare_generation(request: ManualChatRequest) -> _PreparedGeneration
         guard_answer = _MULTI_OUTPUT_LABEL_QC_ANSWER
     elif (
         not is_restaurant_request
+        and _needs_multi_output_warehouse_receipt_guard(request.question)
+    ):
+        guard_answer = _MULTI_OUTPUT_WAREHOUSE_RECEIPT_ANSWER
+    elif (
+        not is_restaurant_request
         and _needs_workflow_actual_io_guard(request.question)
     ):
         guard_answer = _WORKFLOW_ACTUAL_IO_ANSWER
@@ -1143,6 +1210,11 @@ async def _prepare_generation(request: ManualChatRequest) -> _PreparedGeneration
         and _needs_restaurant_flywheel_governance_guard(request.question)
     ):
         guard_answer = _RESTAURANT_FLYWHEEL_GOVERNANCE_ANSWER
+    elif (
+        is_restaurant_request
+        and _needs_restaurant_query_contract_guard(request.question)
+    ):
+        guard_answer = _RESTAURANT_QUERY_CONTRACT_ANSWER
     elif (
         is_restaurant_request
         and _needs_restaurant_context_scope_guard(request.question)

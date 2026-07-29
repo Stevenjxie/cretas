@@ -265,13 +265,13 @@
 
     <main>
       <header class="hero" id="scope">
-        <div class="eyebrow">CURRENT MAIN · MANUAL REGRESSION · 2026-07-28</div>
+            <div class="eyebrow">CURRENT MAIN · MANUAL REGRESSION · 2026-07-29</div>
         <h2>从建档，到入库、生产、报工与盘点</h2>
         <p>这是一份可直接照着点击的 F006 手工测试手册。先选生产来源，再选测试深度：MVP 用最少步骤证明链路能跑通；中度闭环增加关键审批和业务异常；全量闭环覆盖治理、质量、冲销与全数据核对。</p>
         <div class="meta-row">
           <span class="stamp ok">Workflow / BOM 自动关联、逐道报工：按最新 main 校准</span>
           <span class="stamp">计划幂等、包材扣库、成本与小结：按当前生产逻辑校准</span>
-          <span class="stamp code">origin/main · SOP sync 2026-07-28</span>
+            <span class="stamp code">origin/main · SOP sync 2026-07-29</span>
           <span class="stamp">单文件 · 离线可用 · 可打印</span>
         </div>
         <div class="filter-panel screen-only">
@@ -352,6 +352,7 @@
           <tr><td><strong>操作员</strong><br><code>f006_worker1</code><br><small>operator</small></td><td>默认进入“分配给我的工序”，可逐步报工、填写实际投入/产出/工时、查看缺料预警；<code>production=rw</code>、<code>work_report=rw</code>。</td><td>只能操作分配给本人且状态允许的任务；不能改计划、BOM、Workflow、主数据、库存、QC 或财务。</td><td>缺料交车间/仓储，质量交 QC，设备异常交车间；正式报工后由生产跟踪、仓储确认完工入库。</td></tr>
         </tbody></table></div>
         <div class="callout warning"><strong>关键交接链</strong>销售需求 → 财审 → 调度/生产计划 → 车间安排 → 操作员报工 → QC 检查 → 仓储入库/发货 → 财务核销；缺料支线为采购 → QC → 仓储，付款支线为财务经理批准 → 出纳执行。任何岗位都不能用老板账号代做来“证明链路通过”。</div>
+        <div class="callout blue"><strong>AI 表单入口只生成待确认草稿</strong>当前支持按表单类型解析产品、生产计划、采购单、销售单、盘点、仓库入库和工序任务等字段；必须登录并具备目标页面权限。自然语言只用于回填当前表单，用户仍要逐字段核对并手动提交，助手不会代替审批、报工或库存入账。</div>
       </section>
 
       <section id="map">
@@ -492,7 +493,7 @@
       <section id="bom">
         <div class="section-head"><span class="section-no">05</span><div class="section-title"><h3>创建、按工序配置并激活 BOM / 配方</h3><p>原料、包材、工序辅料和锅序各有不同录入口径；产出规格从 SKU 只读带入</p></div></div>
         <div class="path">生产管理 <b>›</b> 生产配置 <b>›</b> BOM/配方维护</div>
-        <div class="callout warning"><strong>先有完整 Workflow 草稿，再创建 BOM</strong>问答与验收统一摘要为“Workflow 完整草稿 → BOM 绑定工序辅料并激活 → Workflow 刷新、发布并启用”。若目标 SKU 尚无结构完整的 Workflow 草稿，先完成下一节的 Cell / 工序链并保存草稿。返回本页创建 BOM 时，系统自动固定唯一兼容的工艺修订并生成配置骨架；普通用户不选择 Workflow 版本。BOM 至少配置一项主原料；辅料和包材按实际需要添加，没有辅料或包材本身不阻止激活。激活后再回 Workflow 发布并启用。</div>
+        <div class="callout warning"><strong>先有完整 Workflow 草稿，再创建 BOM</strong>问答与验收统一摘要为“Workflow 完整草稿 → BOM 绑定工序辅料并激活 → Workflow 刷新、发布并启用”。若目标 SKU 尚无结构完整的 Workflow 草稿，先完成下一节的 Cell / 工序链并保存草稿。返回本页创建 BOM 时，系统自动固定唯一兼容的工艺修订并生成配置骨架；普通用户不选择 Workflow 版本。BOM 至少配置一项主原料；辅料和包材按实际需要添加，没有辅料或包材本身不阻止激活。单独激活 BOM 不会发布 Workflow，最后回 Workflow 使用“自动同步并发布”。</div>
         <div class="table-wrap"><table><thead><tr><th>区域</th><th>配置对象</th><th>手工输入</th><th>系统继承/计算</th></tr></thead><tbody>
           <tr><td>工艺来源</td><td>目标 SKU 唯一兼容的 Workflow 草稿修订</td><td>无；只可查看工艺或显式升级</td><td>自动固定精确修订和快照；按目标终端反向回溯并锁定工序顺序</td></tr>
           <tr><td>配方头</td><td>当前成品 SKU 的版本</td><td>版本备注</td><td>产品、产出单位、标准克重来自 SKU；出成率来自正式报工历史</td></tr>
@@ -545,7 +546,7 @@
           <label class="step"><span class="check"><input type="checkbox" data-key="wf-1"><span></span></span><span><h4>建立 Cell 链路</h4><p>添加 4 个原料 Cell A/B/C/D → 原料处理工序 → 处理后半成品 Cell → 定量包装工序 → 成品 Cell。每个原料只能在一张 Workflow 中选择一次；重复项应从选择器中消失。</p><span class="expect">无重复原料、无悬空线、每个 Cell 的 SKU 已绑定。</span></span></label>
           <label class="step"><span class="check"><input type="checkbox" data-key="wf-2"><span></span></span><span><h4>核对原料投入自动理解</h4><p>只需把 A/B/C/D 的来源 Cell 连接到“原料处理”工序，不再配置替代组或投入关系。系统自动研判为“批次自由选择（至少1个）”。</p><span class="expect">报工时至少选 1 个原料；之后可由用户选择 1 个、多个或全部，不显示主投入/追加投入。</span></span></label>
           <label class="step"><span class="check"><input type="checkbox" data-key="wf-3"><span></span></span><span><h4>核对单位与产出归属</h4><p>原料和处理后半成品均为 kg，最终成品单位为盒。成品归属 Workflow 的终端产出必须与顶部成品一致；原料归属 Workflow 则以画布上的全部终端成品为真实产出集合。</p><span class="expect">不出现 1袋=1盒 或 1kg=1盒；生产计划匹配看终端集合，不被 Workflow 名称或归属类型误导。</span></span></label>
-          <label class="step"><span class="check"><input type="checkbox" data-key="wf-4"><span></span></span><span><h4>保存完整草稿、创建并激活 BOM 后再发布</h4><p>先点“自动布局”并保存结构完整的 Workflow 草稿，此时不要发布。回到 BOM 选择目标 SKU，确认系统自动固定本修订并生成工序配置骨架；至少配置一项主原料，辅料和包材按实际需要补充，然后激活 BOM，再回本页“发布并启用”。</p><span class="expect">BOM 无手选 Workflow 版本控件；顶部同时显示“已发布 vX”和“已启用 vX”；无未绑定 SKU、缺生效 BOM 或单位复核警告。</span></span></label>
+          <label class="step"><span class="check"><input type="checkbox" data-key="wf-4"><span></span></span><span><h4>保存完整草稿、激活 BOM，再自动同步并发布</h4><p>先点“自动布局”并保存结构完整的 Workflow 草稿，此时不要发布。回到 BOM 选择目标 SKU，确认系统自动固定本修订并生成工序配置骨架；至少配置一项主原料，辅料和包材按实际需要补充，然后激活 BOM。再回本页刷新并点“自动同步并发布”：系统以最后一次保存后的草稿和当前 ACTIVE BOM 做实时预检，READY 可直接继续，AUTO_MIGRATABLE 会创建或复用同步草稿；USER_INPUT_REQUIRED / CONFLICT 会列出缺失、歧义或单位冲突并停止。</p><span class="expect">确认后 BOM 同步、Workflow 发布和启用原子完成，顶部显示“已发布并启用”及当前版本；版本竞争时停止自动重试，用户修正后重试复用幂等请求。既有生产计划继续使用创建时快照，新计划才采用新状态。</span></span></label>
         </div>
       </section>
 
@@ -772,7 +773,7 @@
           <label class="step"><span class="check"><input type="checkbox" data-key="settle-sales-2"><span></span></span><span><h4>提交生产结单</h4><p>提交前再次核对成品单位、数量和订单关联。提交后读取真实状态和提示，不把“生产结单已提交”误判为仓库已经收货。</p><span class="expect">计划进入等待仓库确认入库的状态；此时成品尚不能作为主仓/外仓可用库存，且可回溯销售订单号。</span></span></label>
         </div>
         <div class="steps" style="margin-top:12px">
-          <label class="step"><span class="check"><input type="checkbox" data-key="settle-warehouse-receipt"><span></span></span><span><h4>仓库确认完工入库</h4><p>由仓管从生产计划列表或对应待办进入“确认入库”，核对计划号、成品 SKU、批次、生产日期、应收/实收数量、单位、目标生产仓和差异原因后确认。</p><span class="expect">只有仓库确认成功后，正式成品批次和生产仓可用库存才生效；重复确认不重复入库，少收/拒收必须留差异。</span></span></label>
+          <label class="step"><span class="check"><input type="checkbox" data-key="settle-warehouse-receipt"><span></span></span><span><h4>仓库确认完工入库：多产出逐行确认</h4><p>由仓管从生产计划列表或对应待办进入“确认入库”，核对计划号、目标生产仓，以及每一产出行的成品 SKU、批次、生产日期、正式报工数量、实收数量和单位。混合单位保持各自单位，不能先相加成一个总数；每行实收必须大于 0 且等于该行正式报工数量。</p><span class="expect">全部产出行一次校验、一次入库；少收、多收、漏行或计划外 SKU 会让整组保持待收并退回生产修正，不能部分入库。成功后所有对应批次一起生效；重复确认不重复生成库存流水。</span></span></label>
         </div>
         <div class="callout danger"><strong>不要只看 material batch 的某一个旧字段</strong>以“库存查询页的前后数量 + 正式报工记录 + 小结/结单结果”组成证据。仅保存报工行、仅看到接口 200，均不能证明库存闭环。</div>
       </section>

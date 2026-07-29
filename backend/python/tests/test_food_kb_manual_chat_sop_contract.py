@@ -9,16 +9,20 @@ from food_kb.api.manual_chat import (
     ManualChatRequest,
     SYSTEM_PROMPT,
     _MATERIAL_PACKAGING_ANSWER,
+    _MULTI_OUTPUT_WAREHOUSE_RECEIPT_ANSWER,
     _MULTI_OUTPUT_LABEL_QC_ANSWER,
     _RESTAURANT_CONTEXT_SCOPE_ANSWER,
     _RESTAURANT_FLYWHEEL_GOVERNANCE_ANSWER,
+    _RESTAURANT_QUERY_CONTRACT_ANSWER,
     _WORKFLOW_ACTUAL_IO_ANSWER,
     _build_scope_prompt,
     _needs_bom_workflow_sequence_guard,
     _needs_material_packaging_guard,
     _needs_multi_output_label_qc_guard,
+    _needs_multi_output_warehouse_receipt_guard,
     _needs_restaurant_context_scope_guard,
     _needs_restaurant_flywheel_governance_guard,
+    _needs_restaurant_query_contract_guard,
     _needs_workflow_actual_io_guard,
     _uses_current_production_sop,
 )
@@ -47,6 +51,8 @@ def test_factory_prompt_keeps_restaurant_analysis_out_of_ai_assist():
     assert "普通用户不选择 Workflow 版本" in FACTORY_SYSTEM_PROMPT
     assert "投入 → 工序执行（开始/结束/人数）→ 产出 → 确认提交" in FACTORY_SYSTEM_PROMPT
     assert "ACTIVE BOM 是 Workflow 发布启用的前置门禁" in FACTORY_SYSTEM_PROMPT
+    assert "使用“自动同步并发布”" in FACTORY_SYSTEM_PROMPT
+    assert "每行实收必须大于 0 且等于该行报工数量" in FACTORY_SYSTEM_PROMPT
     assert "禁止回答“两者无依赖”" in FACTORY_SYSTEM_PROMPT
     assert "原料包装换算在“原料类型字典”" in FACTORY_SYSTEM_PROMPT
     assert "都不配置主产出/联产品/副产品角色" in FACTORY_SYSTEM_PROMPT
@@ -63,6 +69,9 @@ def test_restaurant_prompt_keeps_session_scope_and_evidence_honest():
     assert "AI 飞轮运营台只对平台管理员开放" in SYSTEM_PROMPT
     assert "只有 confirmed 映射影响解析" in SYSTEM_PROMPT
     assert "禁止模拟数据或假成功" in SYSTEM_PROMPT
+    assert "明确起止日期按自然日闭区间" in SYSTEM_PROMPT
+    assert "当前繁体支持不得扩大成全句转换" in SYSTEM_PROMPT
+    assert "只有呈现层实际返回对应表格" in SYSTEM_PROMPT
 
 
 def test_scope_prompt_distinguishes_depth_and_business_line():
@@ -99,6 +108,11 @@ def test_bom_workflow_publication_questions_use_the_deterministic_guard():
     assert "普通用户不需要选择 Workflow 版本" in _BOM_WORKFLOW_SEQUENCE_ANSWER
     assert "工艺来源" in _BOM_WORKFLOW_SEQUENCE_ANSWER
     assert "Workflow 刷新、发布并启用" in _BOM_WORKFLOW_SEQUENCE_ANSWER
+    assert "“自动同步并发布”" in _BOM_WORKFLOW_SEQUENCE_ANSWER
+    assert "READY" in _BOM_WORKFLOW_SEQUENCE_ANSWER
+    assert "AUTO_MIGRATABLE" in _BOM_WORKFLOW_SEQUENCE_ANSWER
+    assert "USER_INPUT_REQUIRED" in _BOM_WORKFLOW_SEQUENCE_ANSWER
+    assert "既有生产计划继续使用创建时快照" in _BOM_WORKFLOW_SEQUENCE_ANSWER
     assert "两者无依赖" not in _BOM_WORKFLOW_SEQUENCE_ANSWER
     assert "两者无从属关系" not in _BOM_WORKFLOW_SEQUENCE_ANSWER
     assert "先发布 Workflow" not in _BOM_WORKFLOW_SEQUENCE_ANSWER
@@ -150,6 +164,23 @@ def test_workflow_actual_io_questions_use_the_reviewed_factory_contract():
     assert "没有辅料或包材本身不阻止激活" in _WORKFLOW_ACTUAL_IO_ANSWER
 
 
+def test_multi_output_warehouse_receipt_uses_line_based_atomic_contract():
+    equivalent_questions = (
+        "多产出完工后仓库应该怎样确认入库？",
+        "多个成品和不同单位的报工，仓库收货能不能合成一个总数？",
+        "多产出少收一行时，其他 SKU 能先入库吗？",
+    )
+    assert all(
+        _needs_multi_output_warehouse_receipt_guard(q)
+        for q in equivalent_questions
+    )
+    assert not _needs_multi_output_warehouse_receipt_guard("单个成品怎么入库？")
+    assert "按产出行逐项确认" in _MULTI_OUTPUT_WAREHOUSE_RECEIPT_ANSWER
+    assert "混合单位保持各自单位" in _MULTI_OUTPUT_WAREHOUSE_RECEIPT_ANSWER
+    assert "与该行正式报工数量完全一致" in _MULTI_OUTPUT_WAREHOUSE_RECEIPT_ANSWER
+    assert "不允许部分 SKU 已入库" in _MULTI_OUTPUT_WAREHOUSE_RECEIPT_ANSWER
+
+
 def test_restaurant_followup_scope_questions_use_the_reviewed_contract():
     equivalent_questions = (
         "门店菜品不同月份继续追问时怎么保持时间范围？",
@@ -163,6 +194,28 @@ def test_restaurant_followup_scope_questions_use_the_reviewed_contract():
     assert "“全部门店”保持聚合范围" in _RESTAURANT_CONTEXT_SCOPE_ANSWER
     assert "另一个页面或模块上的筛选不保证自动带入" in (
         _RESTAURANT_CONTEXT_SCOPE_ANSWER
+    )
+
+
+def test_restaurant_exact_range_scope_and_output_use_current_contract():
+    equivalent_questions = (
+        "看 2026年7月1日到7月15日全部門店营收，给我表格",
+        "指定日期区间查看全部门店，输出报告文件时系统怎么理解？",
+        "全部門店的一个期间营收请画图，繁体范围和输出偏好怎么处理？",
+    )
+    assert all(
+        _needs_restaurant_query_contract_guard(q)
+        for q in equivalent_questions
+    )
+    assert not _needs_restaurant_query_contract_guard("菜品毛利怎么看？")
+    assert not _needs_restaurant_query_contract_guard("我想到全部门店看看")
+    assert "标记为“指定区间”" in _RESTAURANT_QUERY_CONTRACT_ANSWER
+    assert "“全部门店”和繁体“全部門店”" in _RESTAURANT_QUERY_CONTRACT_ANSWER
+    assert "不代表整句繁体中文" in _RESTAURANT_QUERY_CONTRACT_ANSWER
+    assert "当前全局默认是文字 + 表格" in _RESTAURANT_QUERY_CONTRACT_ANSWER
+    assert "不能宣称“表格/报告文件已生成”" in _RESTAURANT_QUERY_CONTRACT_ANSWER
+    assert "不替用户查询、计算或分析真实经营数据" in (
+        _RESTAURANT_QUERY_CONTRACT_ANSWER
     )
 
 
@@ -243,6 +296,9 @@ def test_latest_f006_sop_is_a_deployable_manual_source():
     assert required_sequence in current_sop
     assert "ACTIVE BOM 是 Workflow 发布启用的前置门禁" in current_sop
     assert "BOM 激活本身不会自动发布 Workflow" in current_sop
+    assert "自动同步并发布" in current_sop
+    assert "READY" in current_sop
+    assert "AUTO_MIGRATABLE" in current_sop
     assert "系统自动固定唯一、完整且兼容的 Workflow 修订" in current_sop
     assert "普通用户不选择 Workflow 版本" in current_sop
     assert "升级到最新工艺" in current_sop
@@ -250,10 +306,10 @@ def test_latest_f006_sop_is_a_deployable_manual_source():
     assert "包装包材批次" in current_sop
     assert "重复提交同一创建请求只能返回同一张计划" in current_sop
     assert "小结成功后，本轮消耗必须标记已结算" in current_sop
-    assert "已发布 vX" in current_sop
-    assert "已启用 vX" in current_sop
+    assert "已发布并启用" in current_sop
     assert "采购包装单位 → 库存基本单位" in current_sop
     assert "多产出实际报工与成本分摊合同" in current_sop
+    assert "多产出完工入库逐行合同" in current_sop
     assert "工序 Cell、Workflow 和 BOM 都不配置主产出" in current_sop
     assert "没有辅料或包材本身不是阻塞" in current_sop
     assert "只在本次报工表单要求填写各实际产出的分摊比例" in current_sop
@@ -262,7 +318,7 @@ def test_latest_f006_sop_is_a_deployable_manual_source():
     html_path = Path(PROJECT_ROOT) / "docs/manual/F006-production-full-chain-manual-test-sop.html"
     html = html_path.read_text(encoding="utf-8")
     assert required_sequence in html
-    assert "origin/main · SOP sync 2026-07-28" in html
+    assert "origin/main · SOP sync 2026-07-29" in html
     assert "先有完整 Workflow 草稿，再创建 BOM" in html
     assert "页面没有任意切换版本的选择器" in html
     assert "① 投入" in html
@@ -277,6 +333,8 @@ def test_latest_f006_sop_is_a_deployable_manual_source():
     assert "Workflow 只声明可能投入/产出，本次事实留到报工" in html
     assert "BOM 至少配置一项主原料" in html
     assert "没有辅料或包材本身不阻止激活" in html
+    assert "自动同步并发布" in html
+    assert "多产出逐行确认" in html
     assert "所有照片都会进入人工审核" in html
 
 
@@ -344,11 +402,13 @@ def test_restaurant_registered_sources_match_current_product_contract():
         "restaurant-full-chain-sop.html": (
             "21 个综合分析维度",
             "跨页面或跨模块不会自动继承筛选",
+            "指定区间、繁体范围词与输出偏好",
             "AI 飞轮、菜品别名与人审边界",
         ),
         "restaurant-product-manual.html": (
             "当前 21 维综合分析目录",
             "全部门店是聚合范围",
+            "精确日期、范围词与输出偏好",
             "AI 飞轮运营台与菜品别名治理",
         ),
         "restaurant-metrics-glossary.html": (
@@ -368,7 +428,7 @@ def test_restaurant_registered_sources_match_current_product_contract():
     ).read_text(encoding="utf-8")
     assert "原料包装换算、标签人工审核或多产出成本怎么做？" in ai_assist
     assert "实际投入产出与多产出成本怎么报？" in ai_assist
-    assert "21 维证据地图与连续追问范围" in ai_assist
+    assert "指定区间、全部門店与输出形态" in ai_assist
     assert "AI 飞轮与菜品别名怎么治理？" in ai_assist
     assert "7 节小课 · 约 12 分钟" in ai_assist
     assert "飞轮与人审边界" in ai_assist
@@ -503,9 +563,21 @@ async def test_bom_workflow_publication_answer_never_calls_the_llm(monkeypatch):
             "f006-production-full-chain-sop.md",
         ),
         (
+            "多产出完工后仓库应该怎样确认入库？",
+            "factory",
+            _MULTI_OUTPUT_WAREHOUSE_RECEIPT_ANSWER,
+            "f006-production-full-chain-sop.md",
+        ),
+        (
             "门店菜品不同月份继续追问时怎么保持时间范围？",
             "restaurant",
             _RESTAURANT_CONTEXT_SCOPE_ANSWER,
+            "restaurant-full-chain-sop.html",
+        ),
+        (
+            "看 2026年7月1日到7月15日全部門店营收，给我表格",
+            "restaurant",
+            _RESTAURANT_QUERY_CONTRACT_ANSWER,
             "restaurant-full-chain-sop.html",
         ),
         (
