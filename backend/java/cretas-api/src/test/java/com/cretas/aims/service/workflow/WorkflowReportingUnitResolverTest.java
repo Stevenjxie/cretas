@@ -1,10 +1,13 @@
 package com.cretas.aims.service.workflow;
 
 import com.cretas.aims.entity.ProductType;
+import com.cretas.aims.entity.RawMaterialType;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.repository.ProductTypeRepository;
+import com.cretas.aims.repository.RawMaterialTypeRepository;
 import com.cretas.aims.service.unit.CanonicalUnit;
 import com.cretas.aims.service.unit.UnitContractService;
+import com.cretas.aims.service.unit.UnitDimension;
 import com.cretas.aims.service.unit.UnitNormalizationResult;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -20,8 +23,18 @@ import static org.mockito.Mockito.when;
 class WorkflowReportingUnitResolverTest {
 
     private final ProductTypeRepository productTypeRepository = mock(ProductTypeRepository.class);
+    private final RawMaterialTypeRepository rawMaterialTypeRepository =
+            mock(RawMaterialTypeRepository.class);
     private final UnitContractService unitContractService = mock(UnitContractService.class);
     private WorkflowReportingUnitResolver resolver;
+
+    private static UnitDimension dimensionOf(String code) {
+        return switch (code) {
+            case "kg", "g", "千克", "公斤" -> UnitDimension.MASS;
+            case "只", "个" -> UnitDimension.COUNT;
+            default -> UnitDimension.PACKAGE;
+        };
+    }
 
     @BeforeEach
     void setUp() {
@@ -29,13 +42,59 @@ class WorkflowReportingUnitResolverTest {
             String raw = invocation.getArgument(1);
             return new UnitNormalizationResult(raw, raw, mock(CanonicalUnit.class));
         });
-        resolver = new WorkflowReportingUnitResolver(productTypeRepository, unitContractService);
+        when(unitContractService.describe(anyString(), anyString())).thenAnswer(invocation -> {
+            String code = invocation.getArgument(1);
+            return Optional.of(new CanonicalUnit(
+                    code, dimensionOf(code), code, java.math.BigDecimal.ONE, code, 3));
+        });
+        resolver = new WorkflowReportingUnitResolver(
+                productTypeRepository, rawMaterialTypeRepository, unitContractService);
+    }
+
+    private void rawMaterial(String id, String unit) {
+        RawMaterialType material = new RawMaterialType();
+        material.setId(id);
+        material.setFactoryId("F006");
+        material.setUnit(unit);
+        when(rawMaterialTypeRepository.findByIdAndFactoryId(id, "F006"))
+                .thenReturn(Optional.of(material));
+    }
+
+    private void semiFinished(String id, String unit) {
+        ProductType product = new ProductType();
+        product.setId(id);
+        product.setFactoryId("F006");
+        product.setUnit(unit);
+        when(productTypeRepository.findByIdAndFactoryId(id, "F006"))
+                .thenReturn(Optional.of(product));
     }
 
     @Test
-    void rawAndSemiFinishedReportingAlwaysUseKgEvenForLegacyGramMasters() {
+    void massMastersStillCollapseToKgSoTheChainNeverMixesGramsAndKilos() {
+        rawMaterial("RM-1", "g");
+        semiFinished("PT-SEMI", "千克");
+
         assertEquals("kg", resolver.resolve("F006", "RAW_MATERIAL", "RM-1", "g"));
         assertEquals("kg", resolver.resolve("F006", "SEMI_FINISHED", "PT-SEMI", "g"));
+    }
+
+    @Test
+    void countedMastersKeepTheirOwnUnitInsteadOfBeingRewrittenToKg() {
+        // 整鸡按只计 —— 强写 kg 会把端口和物料主单位同时改掉,
+        // 连换算都不会记录(两边都是 kg、系数 1.0), 报工页于是显示 kg。
+        rawMaterial("RM-CHICKEN", "只");
+        semiFinished("PT-WIP", "只");
+
+        assertEquals("只", resolver.resolve("F006", "RAW_MATERIAL", "RM-CHICKEN", "只"));
+        assertEquals("只", resolver.resolve("F006", "SEMI_FINISHED", "PT-WIP", "只"));
+    }
+
+    @Test
+    void unknownRawMaterialFallsBackToTheDeclaredPortUnitNotKg() {
+        when(rawMaterialTypeRepository.findByIdAndFactoryId("RM-GHOST", "F006"))
+                .thenReturn(Optional.empty());
+
+        assertEquals("只", resolver.resolve("F006", "RAW_MATERIAL", "RM-GHOST", "只"));
     }
 
     @Test

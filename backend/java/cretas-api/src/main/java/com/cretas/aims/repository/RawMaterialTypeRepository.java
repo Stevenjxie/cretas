@@ -28,6 +28,9 @@ public interface RawMaterialTypeRepository extends JpaRepository<RawMaterialType
 
     /** Find by the new human-readable code without changing legacy code resolution. */
     Optional<RawMaterialType> findByFactoryIdAndBusinessCodeIgnoreCase(String factoryId, String businessCode);
+
+    /** 按主键取, 但保留工厂隔离 —— 跨租户读原料主数据一律走这条而不是裸 findById。 */
+    Optional<RawMaterialType> findByIdAndFactoryId(String id, String factoryId);
      /**
      * 查找工厂的所有原材料类型
       */

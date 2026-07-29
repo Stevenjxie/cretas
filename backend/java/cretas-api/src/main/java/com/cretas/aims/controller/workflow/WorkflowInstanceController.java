@@ -12,6 +12,7 @@ import com.cretas.aims.entity.inventory.SalesOrder;
 import com.cretas.aims.entity.workflow.ApprovalWorkflowInstance;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.repository.UserRepository;
+import com.cretas.aims.repository.factory.FactoryWarehouseRepository;
 import com.cretas.aims.repository.inventory.PurchaseOrderRepository;
 import com.cretas.aims.repository.inventory.SalesOrderRepository;
 import com.cretas.aims.service.ApprovalWorkflowService;
@@ -96,6 +97,10 @@ public class WorkflowInstanceController {
 
     @Autowired(required = false)
     private OaActionIdempotencyService oaActionIdempotencyService;
+
+    /** Optional — 用于把调拨摘要里的仓库 UUID 换成仓库名。 */
+    @Autowired(required = false)
+    private FactoryWarehouseRepository factoryWarehouseRepository;
 
     /**
      * 查当前用户角色的"我待审"列表.
@@ -197,13 +202,16 @@ public class WorkflowInstanceController {
         // 3c. workflow nodes hydrate (currentNodeLabel) — 缓存按 workflowId
         Map<String, Map<String, ApprovalWorkflowNode>> wfNodesCache = new HashMap<>();
 
+        // 3d. 仓库名 hydrate — 调拨摘要不能把 UUID 甩给审批人
+        Map<String, String> warehouseNameById = loadWarehouseNames(factoryId);
+
         // 4. 构造 final DTO list
         List<WorkflowInstancePendingDTO> dtos = new ArrayList<>();
         for (ApprovalWorkflowInstance inst : instances.getContent()) {
             WorkflowInstancePendingDTO dto = partial.get(inst.getId());
 
             // businessSummary
-            dto.setBusinessSummary(buildBusinessSummary(inst, poById, soById));
+            dto.setBusinessSummary(buildBusinessSummary(inst, poById, soById, warehouseNameById));
 
             // currentNodeId + label
             if (inst.getCurrentNodeIds() != null && !inst.getCurrentNodeIds().isEmpty()) {
@@ -603,6 +611,7 @@ public class WorkflowInstanceController {
         Map<String, Map<String, ApprovalWorkflowNode>> wfNodesCache = new HashMap<>();
 
         // 5. 构造 DTO list
+        Map<String, String> warehouseNameById = loadWarehouseNames(factoryId);
         List<WorkflowInstancePendingDTO> dtos = new ArrayList<>();
         for (ApprovalWorkflowInstance inst : instances) {
             WorkflowInstancePendingDTO dto = WorkflowInstancePendingDTO.builder()
@@ -610,7 +619,7 @@ public class WorkflowInstanceController {
                     .moduleCode(inst.getModuleCode())
                     .businessEntityId(inst.getBusinessEntityId())
                     .initiatedAt(inst.getInitiatedAt())
-                    .businessSummary(buildBusinessSummary(inst, poById, soById))
+                    .businessSummary(buildBusinessSummary(inst, poById, soById, warehouseNameById))
                     .status(inst.getStatus().name())
                     .completedAt(inst.getCompletedAt())
                     .build();
@@ -647,9 +656,37 @@ public class WorkflowInstanceController {
         return dtos;
     }
 
+    /**
+     * 仓库 UUID → 仓库名。查不到时回落显示原值而不是空白 —— 待办列表里一个空的
+     * "→" 比一串 UUID 更难排查。
+     */
+    private String warehouseLabel(Object warehouseId, Map<String, String> warehouseNameById) {
+        if (warehouseId == null) return "-";
+        String id = String.valueOf(warehouseId);
+        String name = warehouseNameById.get(id);
+        return name == null || name.isBlank() ? id : name;
+    }
+
+    /**
+     * 批量取本工厂仓库名, 避免每条待办各查一次。
+     * 仓库数量是工厂级常量(个位数), 一次全量取比按 ID 拼 IN 更简单也更省。
+     */
+    private Map<String, String> loadWarehouseNames(String factoryId) {
+        Map<String, String> byId = new HashMap<>();
+        if (factoryWarehouseRepository == null) return byId;
+        try {
+            factoryWarehouseRepository.findByFactoryIdAndDeletedAtIsNullOrderByCodeAsc(factoryId)
+                    .forEach(warehouse -> byId.put(warehouse.getId(), warehouse.getName()));
+        } catch (Exception e) {
+            log.warn("批量加载仓库名失败，OA 摘要降级为仓库 ID: {}", e.getMessage());
+        }
+        return byId;
+    }
+
     private String buildBusinessSummary(ApprovalWorkflowInstance inst,
                                         Map<String, PurchaseOrder> poById,
-                                        Map<String, SalesOrder> soById) {
+                                        Map<String, SalesOrder> soById,
+                                        Map<String, String> warehouseNameById) {
         String moduleCode = inst.getModuleCode();
         String bizId = inst.getBusinessEntityId();
         if ("PURCHASE_ORDER".equals(moduleCode)) {
@@ -692,9 +729,9 @@ public class WorkflowInstanceController {
                     number == null ? "调拨单 " + bizId : String.valueOf(number));
             if (sourceWarehouse != null || targetWarehouse != null) {
                 sb.append(" (")
-                        .append(sourceWarehouse == null ? "-" : sourceWarehouse)
+                        .append(warehouseLabel(sourceWarehouse, warehouseNameById))
                         .append(" → ")
-                        .append(targetWarehouse == null ? "-" : targetWarehouse)
+                        .append(warehouseLabel(targetWarehouse, warehouseNameById))
                         .append(")");
             }
             return sb.toString();

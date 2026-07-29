@@ -28,7 +28,12 @@ describe('procurement unified OA contract', () => {
     expect(pending).toContain('expectedNodeId: row.currentNodeId');
     expect(pending).toContain('idempotencyKey: `oa-${action.toLowerCase()}-${row.instanceId}-${row.currentNodeId}`');
     expect(pending).toContain("operatingId.value = row.instanceId");
-    expect(pending).toContain("new Set(['PURCHASE_ORDER', 'SALES_ORDER', 'INVENTORY_TRANSFER'])");
-    expect(pending).toContain('value="SALES_ORDER"');
+    // 盘点已接入统一 OA —— 这条断言先前漏同步, 在 main 上就是红的
+    expect(pending).toContain(
+      "new Set(['PURCHASE_ORDER', 'SALES_ORDER', 'INVENTORY_TRANSFER', 'INVENTORY_ADJUSTMENT'])",
+    );
+    // 筛选下拉改为 v-for MODULE_LABELS: 下拉与表格列共用同一份中文名
+    expect(pending).toContain("SALES_ORDER: '销售订单'");
+    expect(pending).toContain('v-for="(label, code) in MODULE_LABELS"');
   });
 });
