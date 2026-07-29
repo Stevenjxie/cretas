@@ -168,7 +168,7 @@ while :; do
         fi
     fi
     if [ -z "$cancelled" ] && [ -z "$alerted" ] && [ -n "$web_rc" ] && [ "$web_rc" -ne 0 ] && [ -z "$java_rc" ]; then
-        if cancel_or_alert "$java_pid" Web Java java_past_ponr "$logs_dir/java.log" "蓝绿切换 + 5 轮切流观察通常 2-4min"; then
+        if cancel_or_alert "$java_pid" Web Java java_past_ponr "$logs_dir/java.log" "蓝绿切换 + 3 轮切流观察通常 2-4min"; then
             cancelled=java
             java_rc=143
         else

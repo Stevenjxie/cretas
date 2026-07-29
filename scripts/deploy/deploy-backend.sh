@@ -1796,17 +1796,28 @@ deploy_jar() {
 
             # 切换后验证 — v5.3: 多次健康 check + auto-rollback
             # 历史事故: 2026-04-24 by47kihv7 部署 corrupt jar (logback ClassNotFound),
-            # 单次 sleep 1 + 1次 verify 不够, jar 可能在 1s 后才 crash. 现在 5 轮
+            # 单次 sleep 1 + 1次 verify 不够, jar 可能在 1s 后才 crash. 故改为多轮
             # 间隔 6s 持续监测, 任何一次 nginx 返非 2xx 就 auto-rollback (切回旧 upstream
-            # + 重启旧 active service).
+            # + 重启旧 active service)。
+            #
+            # 2026-07-30: 5 轮 → 3 轮 (~57s → ~34s)。依据:
+            #   - 本机 166 次部署留档中, 74 次跑到这一步共 370 轮探测, 全部 200/active,
+            #     auto-rollback 一次都没触发过。
+            #   - 它防的那类事故 (corrupt jar / 启动后秒级 crash) 必然在头 30s 暴露,
+            #     3 轮 (~36s 窗口) 完整覆盖; 第 4-5 轮防的是"40-60s 才暴露"的推测场景,
+            #     没有历史证据。
+            #   - 该窗口之外由 health-monitor.sh (cron 每 5min) 接管。⚠️ 但注意两者补救
+            #     动作不同: health-monitor 只会【重启当前 active】, 不会回滚版本 —— 新版本
+            #     自身有问题时重启无用。所以这三轮的 auto-rollback 不能省, 只能缩短。
+            # 间隔 6s 保持不变, 缩短它会削弱对"crash 后 systemd 自动拉起"的辨识力。
             POST_SWITCH_HEALTHY=true
             deploy_timing_begin post_switch_observation "切流后稳定观察"
-            for ROUND in 1 2 3 4 5; do
+            for ROUND in 1 2 3; do
                 sleep 6
                 if post_switch_probe "$GATEWAY" "$SERVER" "$IDLE_SERVICE"; then
-                    echo "   ✓ 切换后健康轮次 $ROUND/5: HTTP=$POST_SWITCH_HTTP systemd=$POST_SWITCH_SYSTEMD"
+                    echo "   ✓ 切换后健康轮次 $ROUND/3: HTTP=$POST_SWITCH_HTTP systemd=$POST_SWITCH_SYSTEMD"
                 else
-                    echo "   ❌ 切换后健康轮次 $ROUND/5 失败: HTTP=${POST_SWITCH_HTTP:-empty} systemd=${POST_SWITCH_SYSTEMD:-empty}"
+                    echo "   ❌ 切换后健康轮次 $ROUND/3 失败: HTTP=${POST_SWITCH_HTTP:-empty} systemd=${POST_SWITCH_SYSTEMD:-empty}"
                     POST_SWITCH_HEALTHY=false
                     break
                 fi
@@ -1835,7 +1846,7 @@ deploy_jar() {
                 exit 1
             fi
             deploy_timing_end post_switch_observation
-            echo "   ✓ 切换后验证全部通过 (5/5 轮 nginx 200 + idle systemd active)"
+            echo "   ✓ 切换后验证全部通过 (3/3 轮 nginx 200 + idle systemd active)"
 
             # [BG 4/4] 停旧 active (5s 优雅等待让现有连接完成)
             echo "   [BG 4/4] 停旧 active ($ACTIVE_COLOR $ACTIVE_SERVICE), 5s 优雅等待..."
