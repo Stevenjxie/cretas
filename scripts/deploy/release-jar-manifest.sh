@@ -31,6 +31,38 @@ release_manifest_field() {
     ' "$manifest"
 }
 
+# Map a surefire -Dtest selector onto the compiler's testIncludes pattern.
+#
+# Why: a release build compiles all 1146 test sources (~40s, measured) purely to
+# run the one class the selector names. javac resolves that class's own
+# dependencies through the source path, so narrowing the include set does not
+# drop helper classes -- verified: a test importing TestDataFactory from another
+# package still got that helper compiled.
+#
+# Deliberately conservative. Anything not provably a single class name maps to
+# "**/*.java", which is exactly the behaviour that existed before. The failure
+# mode of a wrong narrowing is safe by construction: the target class would not
+# be compiled, surefire would find no tests, and the build fails. It cannot
+# yield an artifact that quietly skipped its tests.
+#
+# Multi-class selectors ("A,B") fall back on purpose: <include> holds one
+# pattern, so a comma would be read as part of a single filename.
+release_manifest_test_includes() {
+    local selector=$1
+    local class_name
+
+    case "$selector" in
+        '' | *,* | *'!'* | *.* | */* | *'\'*) printf '%s\n' '**/*.java'; return 0 ;;
+    esac
+
+    class_name=${selector%%#*}
+    case "$class_name" in
+        '' | *[!A-Za-z0-9_'$'*]*) printf '%s\n' '**/*.java'; return 0 ;;
+    esac
+
+    printf '**/%s.java\n' "$class_name"
+}
+
 release_manifest_require_clean_exact_origin_main() {
     local repo_root=$1
     local head_sha origin_sha
@@ -282,13 +314,14 @@ release_manifest_build() {
     else
         wrapper=./mvnw.cmd
     fi
-    command_text="$wrapper clean package -Dtest=$target_tests"
+    test_includes=$(release_manifest_test_includes "$target_tests")
+    command_text="$wrapper clean package -Dtest=$target_tests -Dcretas.testIncludes=$test_includes"
     build_started_at=$(date +%s)
 
     (
         cd "$backend_dir"
         [ ! -f "$wrapper" ] || chmod +x "$wrapper" 2>/dev/null || true
-        "$wrapper" clean package "-Dtest=$target_tests"
+        "$wrapper" clean package "-Dtest=$target_tests" "-Dcretas.testIncludes=$test_includes"
     ) || return 1
     build_wall_seconds=$(( $(date +%s) - build_started_at ))
 

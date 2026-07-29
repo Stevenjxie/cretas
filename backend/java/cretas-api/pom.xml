@@ -24,6 +24,15 @@
         <maven.compiler.target>21</maven.compiler.target>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
         <lombok.version>1.18.36</lombok.version>
+        <!-- Which test sources to compile. Default is everything, i.e. exactly the
+             behaviour from before this property existed. release-jar-manifest.sh narrows
+             it to the targeted test class, so a release build stops spending ~40s
+             compiling 1146 test files just to run one of them. javac still pulls in
+             whatever that class depends on through the source path, so narrowing cannot
+             silently drop a helper class. And if the narrowed set were to miss the target
+             class, surefire finds no tests and the build fails; it never produces an
+             artifact that skipped its tests. -->
+        <cretas.testIncludes>**/*.java</cretas.testIncludes>
     </properties>
 
     <dependencyManagement>
@@ -474,6 +483,16 @@
         </extensions>
 
         <plugins>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-compiler-plugin</artifactId>
+                <configuration>
+                    <testIncludes>
+                        <include>${cretas.testIncludes}</include>
+                    </testIncludes>
+                </configuration>
+            </plugin>
+
             <!-- Protobuf Maven Plugin for gRPC -->
             <plugin>
                 <groupId>org.xolstice.maven.plugins</groupId>
