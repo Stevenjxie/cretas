@@ -1,9 +1,23 @@
-name: JPA repository query gate (PR)
+name: JPA repository query gate (post-merge)
 
-# 这道门禁 AGENTS.md 里一直被描述成「授权合并」的检查, 但实际上从来没接到 PR 上 ——
+# ⚠️ 这是【合并后告警】, 不是【合并前门禁】—— 名字和行为必须对得上, 本仓库已经吃过
+# 一次名不副实的亏(e2e-pr.yml 叫 PR 却是手动触发)。
+#
+# 它【不阻止】坏代码进 main, 只保证坏代码进了 main 之后【立刻有人知道】。
+#
+# 背景: AGENTS.md 一直把这道检查描述成「授权合并」的 PR 门禁, 但它从来没接到 PR 上 ——
 # 全仓 8 个 workflow 里 7 个是 workflow_dispatch, 唯一自动跑的只有 secret-regression。
-# 后果实测过一次: 该门禁 2026-07-28 开始红, 直到 07-29 手动触发 CI 才被发现, 期间合并
-# 照常进行、零信号。本文件把它真正接上。
+# 后果实测过一次: 该检查 2026-07-28 开始红, 直到 07-29 手动触发 CI 才被发现, 期间合并
+# 照常进行、零信号, 红了一天多。
+#
+# 为什么选合并后而不是 PR 门禁 (2026-07-29 Steve 拍板):
+#   触发时耗时 3分34秒 压不下去(见下方四轮实测), 即使 paths 收窄后触发率只有 6.7%,
+#   那 6.7% 仍要让人干等 3 分半。合并后触发把等待降到 0, 代价是从「拦住」退成
+#   「立刻发现」—— 相比现状(红一天多没人知道)仍是巨大改进。
+#   失败时 GitHub 会给推送者发邮件通知, 那是这道告警的信号出口。
+#
+# 如果哪天单次耗时降下来了(拆模块 / 减少编译量), 把 push 换回 pull_request 即可
+# 升级成真门禁, 其余配置不用动。
 #
 # 刻意只跑这一道, 不跑全量套件:
 #   - 全量 1119 个测试类要 78 分钟, 而且现在会 OOM 崩掉 (ci.yml 里有单独的堆修复)
@@ -40,7 +54,8 @@ name: JPA repository query gate (PR)
 # 源文件, 而 javac 是单线程的(mvn -T 只并行模块, 这里是单模块), 换更大 runner 也没用;
 # 缓存 target/ 四轮实测净收益为负(见下方注释)。既然砍不动单次成本, 就砍触发频率。
 on:
-  pull_request:
+  push:
+    branches: [main]
     paths:
       - 'backend/java/cretas-api/src/main/java/**/repository/**'
       - 'backend/java/cretas-api/src/main/java/**/entity/**'
@@ -51,7 +66,9 @@ on:
 
 concurrency:
   group: jpa-gate-${{ github.ref }}
-  cancel-in-progress: true
+  # 合并后触发不做 cancel-in-progress: 每个进 main 的 commit 都该被验一次, 后一次
+  # 合并不应该把前一次的验证取消掉 —— 否则连续合并时中间那些 commit 等于没验。
+  cancel-in-progress: false
 
 jobs:
   jpa-gate:
