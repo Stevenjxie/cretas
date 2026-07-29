@@ -5,6 +5,8 @@ connector 若只看 HTTP 状态码就会把失败当成功，正是要压测的�
 """
 from __future__ import annotations
 
+import hmac
+
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 
@@ -14,6 +16,8 @@ from ._auth import keruyun_sign
 from ._paging import MAX_LIMIT, page_orders
 
 router = APIRouter(prefix="/keruyun/open", tags=["keruyun"])
+
+_SQLITE_INT_MAX = 2 ** 63 - 1
 
 
 def _fail(code: str, message: str) -> JSONResponse:
@@ -25,7 +29,7 @@ async def order_list(request: Request):
     settings = get_settings()
     params = dict(request.query_params)
     expected = keruyun_sign(params, settings.keruyun_app_secret)
-    if params.get("sign", "") != expected:
+    if not hmac.compare_digest(params.get("sign", ""), expected):
         return _fail("AUTH_SIGN_INVALID", "签名校验失败")
     if params.get("appKey") != settings.keruyun_app_key:
         return _fail("AUTH_APPKEY_INVALID", "appKey 无效")
@@ -34,6 +38,11 @@ async def order_list(request: Request):
         limit = int(params.get("limit", "50"))
     except ValueError:
         return _fail("PARAM_INVALID", "cursor / limit 必须是整数")
+    # SQLite 的 INTEGER 是 64 位有符号。Python int 无上限, 不挡住的话
+    # 会一路流到 SQL 绑定处抛 OverflowError → FastAPI 默认 500,
+    # 既破了"恒 200"契约, 响应体也不是平台格式。
+    if cursor < 0 or cursor > _SQLITE_INT_MAX:
+        return _fail("PARAM_INVALID", "cursor 超出取值范围")
     if limit > MAX_LIMIT:
         return _fail("PARAM_LIMIT_TOO_LARGE", f"limit 上限为 {MAX_LIMIT}")
     if limit <= 0:

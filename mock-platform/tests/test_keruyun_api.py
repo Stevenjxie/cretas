@@ -75,6 +75,23 @@ def test_limit超上限被拒(client):
     assert r.json()["code"] == "PARAM_LIMIT_TOO_LARGE"
 
 
+def test_超大cursor不得返回500(client):
+    """恒 200 契约的边界: Python int 无上限, SQLite INTEGER 是 64 位。
+    不挡住会在 SQL 绑定处 OverflowError → FastAPI 默认 500 + 非平台格式响应体。
+    """
+    r = client.get("/keruyun/open/order/list",
+                   params=_signed({"cursor": "9" * 26, "limit": "10"}))
+    assert r.status_code == 200, "任何输入都不该破坏恒 200 契约"
+    assert r.json()["code"] == "PARAM_INVALID"
+
+
+def test_负cursor被拒(client):
+    r = client.get("/keruyun/open/order/list",
+                   params=_signed({"cursor": "-1", "limit": "10"}))
+    assert r.status_code == 200
+    assert r.json()["code"] == "PARAM_INVALID"
+
+
 def test_订单结构含明细与支付(client):
     body = client.get("/keruyun/open/order/list",
                       params=_signed({"cursor": "0", "limit": "1"})).json()
