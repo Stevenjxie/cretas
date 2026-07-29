@@ -60,6 +60,16 @@ async def _generate_forever() -> None:
                         # 生成器是 daemon，停了就再也不产数据且外部难以察觉。
                         logger.exception("[gen] 门店 %s 第 %s 分钟生成失败, 跳过",
                                          store["id"], minute)
+                else:
+                    # 非营业时段(曲线配额为 0)是正常状态, 但生成器**只在
+                    # created>0 时打日志**, 于是整个夜里一行都没有 —— 从日志
+                    # 上分不清"没到点"和"循环死了"。healthz 的 generator:running
+                    # 只能证明协程没退出, 证明不了它还在转。
+                    # 每 30 分钟打一条心跳, 频率低到不刷屏, 又足以在排查时
+                    # 看出循环是活的。
+                    if minute % 30 == 0:
+                        logger.info("[gen] 第 %s 分钟配额为 0(非营业时段), 循环存活",
+                                    minute)
                 if created:
                     # 后厨跟着当天销量走: 有新单就重算这些店今天的领料/损耗/盘点。
                     # 必须排在订单之后 —— 它是按当天实际消耗推的, 顺序反了会
