@@ -1,6 +1,6 @@
 # 服务器运维规范
 
-**最后更新**: 2026-06-07
+**最后更新**: 2026-07-29
 
 ## 服务器架构
 
@@ -199,11 +199,22 @@ ssh root@47.100.235.168 "journalctl -u cretas-backend --since '5 min ago' --no-p
 
 | 部署目标 | 脚本 | 说明 |
 |----------|------|------|
-| Java 后端 | `./scripts/deploy/deploy-backend.sh [--env prod\|test\|all]` | Maven 打包 → rsync 主 (scp 兜底) → 备份 → Blue-Green 部署 → 健康检查 + 防御 ping 另一环境 |
+| Java 后端 | 正常发布用 `./scripts/deploy/release-cretas.sh`；单组件排障保留 `./scripts/deploy/deploy-backend.sh [--env prod\|test\|all]` | 可信 manifest/JAR 复用或单次 Maven fallback → rsync 主 (scp 兜底) → 备份 → Blue-Green 部署 → 健康检查 |
 | Python 服务 | `./scripts/deploy/deploy-smartbi-python.sh [--env prod\|test\|all]` | rsync 增量同步 → 安装依赖 → 重启 → 健康检查 |
-| 全栈部署 | 使用 `/deploy-backend` skill | 根据指令自动选择部署范围 |
+| Java + Web | `./scripts/deploy/release-cretas.sh --phase build|deploy` | 按 Base SHA 选择组件、复用可信制品、串行或受控并行部署并写结构化回执 |
 
 `--env` 默认 `prod`，只更新生产环境。
+
+Java build 入口并非每次都运行 Maven：只有 manifest 格式/成功状态、目标测试选择器、
+当前 backend tree、缓存 JAR 完整性与 SHA-256 四项全部匹配时，才复用缓存并运行零次
+Maven；任一条件失败只回退一次 `mvn clean package -Dtest=<tests>`。
+`CRETAS_RELEASE_FORCE_JAVA_BUILD=1` 可强制真实构建。并行 Java/Web 制品构建会在 fork
+前校验可执行 JDK 且主版本至少 21；任一侧失败会取消另一侧进程组。
+
+部署互斥锁分别是 `cretas-backend-deploy`、`cretas-web-admin-deploy` 与
+`cretas-release`。锁冲突通常意味着真实并发发布；禁止看到 lock 文件就直接 `rm`。
+共享 helper 会自动清除记录 PID 已死亡的 stale lock，人工清理前必须先确认 PID 和
+相关 Maven/Vite/部署子进程均不存活。
 
 ### 双环境部署最佳实践 (Apr 7 2026)
 
