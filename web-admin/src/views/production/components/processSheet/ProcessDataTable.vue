@@ -22,6 +22,7 @@ import {
   type ProductionInputAllocation,
 } from '@/api/processSheet';
 import { listWarehouses, type FactoryWarehouse } from '@/api/factoryWarehouse';
+import { put } from '@/api/request';
 import type { ProcessSheetCustomFieldDef } from '@/api/processProduction';
 import { PROCESS_SHEET_CONFIG, GENERIC_FALLBACK_COLS, genClientRowId, type ColDef } from './PROCESS_SHEET_CONFIG';
 import WorkHoursTable from './WorkHoursTable.vue';
@@ -1311,6 +1312,76 @@ function outputLineYield(row: SheetRow, line: MultiOutputLine): number | null {
   const comparableInput = reportingInputQuantityForUnit(row, line.unit);
   if (comparableInput == null || comparableInput <= 0 || line.quantity == null) return null;
   return Math.round((line.quantity / comparableInput) * 10000) / 100;
+}
+
+/**
+ * 出成率算不出来的原因。
+ *
+ * 同单位工序(只→只、kg→kg)是纯比值, 不需要任何规格。只有投入与产出
+ * 单位不同时才需要桥: 两边各自知道"一个单位多少克", 才能比。
+ * 缺这个桥时绝不能拿两个不同量纲的数相除 —— 那会产出一个看起来很正常、
+ * 实际没有物理意义的百分比。
+ */
+function outputLineYieldBlocker(row: SheetRow, line: MultiOutputLine): string | null {
+  if (outputLineYield(row, line) != null) return null;
+  if (line.quantity == null) return null;
+  // 投入还没录时算不出来只是"还没填", 与单位无关 —— 这时弹"去设置每单位重量"是误导
+  const inputFilled = reportingInputFacts(row).some((fact) => fact.quantity > 0);
+  if (!inputFilled) return null;
+  const inputUnit = displayProcessUnit(processUnits.value.inputUnit);
+  const outputUnit = displayProcessUnit(line.unit);
+  if (!inputUnit || !outputUnit || inputUnit === outputUnit) return null;
+  return `投入按${inputUnit}、产出按${outputUnit}，需要先设置「${line.materialName}」的每${outputUnit}重量才能算出成率`;
+}
+
+// ---- 当场补「每单位重量」----------------------------------------------
+// 跑去产品管理页找到那个 SKU、开完整表单、改一个数、再回来重新填报工 ——
+// 这个往返比要补的那个数本身贵得多。报工时只缺这一个字段, 就就地改掉。
+const specDialog = ref<{
+  visible: boolean;
+  productTypeId: string;
+  materialName: string;
+  unit: string;
+  gramsPerUnit: number | null;
+  saving: boolean;
+}>({ visible: false, productTypeId: '', materialName: '', unit: '', gramsPerUnit: null, saving: false });
+
+function openSpecDialog(line: MultiOutputLine): void {
+  specDialog.value = {
+    visible: true,
+    productTypeId: line.productTypeId,
+    materialName: line.materialName,
+    unit: displayProcessUnit(line.unit),
+    gramsPerUnit: line.gramsPerUnit,
+    saving: false,
+  };
+}
+
+async function saveSpec(): Promise<void> {
+  const draft = specDialog.value;
+  if (!draft.productTypeId) return;
+  if (draft.gramsPerUnit == null || draft.gramsPerUnit <= 0) {
+    ElMessage.warning('请填入大于 0 的每单位重量');
+    return;
+  }
+  draft.saving = true;
+  try {
+    await put(`/${props.factoryId}/product-types/${draft.productTypeId}`, {
+      gramsPerUnit: draft.gramsPerUnit,
+    });
+    // 就地回写所有引用该 SKU 的产出行, 出成率立刻重算, 不用刷页
+    rows.value.forEach((row) => {
+      row.multiOutputs?.forEach((line: MultiOutputLine) => {
+        if (line.productTypeId === draft.productTypeId) line.gramsPerUnit = draft.gramsPerUnit;
+      });
+    });
+    ElMessage.success(`已设置「${draft.materialName}」的每${draft.unit}重量`);
+    draft.visible = false;
+  } catch (error) {
+    ElMessage.error(error instanceof Error ? error.message : '保存失败');
+  } finally {
+    draft.saving = false;
+  }
 }
 
 function outputLineLaborSegments(line: MultiOutputLine): LaborSegment[] | undefined {
@@ -3155,6 +3226,15 @@ defineExpose({ hasUnsavedRows, refreshSharedInventories });
               <div class="sp-output-fields sp-output-primary-fields">
                 <label class="sp-output-key-field" data-testid="output-quantity"><span class="sp-required">*</span>产出数量<span class="sp-inline-input" role="group" aria-label="产出数量与单位"><el-input-number v-model="o.quantity" :min="0" :precision="outputLinePrecision(o)" controls-position="right" size="small" /><span data-testid="output-unit-readonly" class="sp-fixed-unit">{{ displayProcessUnit(o.unit) }}</span></span></label>
                 <label>出成率<span class="sp-readonly">{{ outputLineYield(row, o) == null ? '—' : `${outputLineYield(row, o)!.toFixed(2)}%` }}</span></label>
+                <!--
+                  算不出来时说清楚为什么, 并给一个就地补规格的入口。
+                  只显示「—」会让人以为是系统坏了, 而实际是缺一个可以当场填的数。
+                -->
+                <div v-if="outputLineYieldBlocker(row, o)" class="sp-yield-blocked">
+                  <el-icon><Warning /></el-icon>
+                  <span>{{ outputLineYieldBlocker(row, o) }}</span>
+                  <el-button link type="primary" size="small" @click="openSpecDialog(o)">去设置</el-button>
+                </div>
               </div>
               <div class="sp-output-optional">
                 <div class="sp-output-optional-title">按需填写：副产与成本分摊</div>
@@ -4130,6 +4210,33 @@ defineExpose({ hasUnsavedRows, refreshSharedInventories });
     </el-dialog>
 
   </div>
+
+    <!-- 就地补「每单位重量」: 报工时只缺这一个字段, 不必打开完整产品表单 -->
+    <el-dialog
+      v-model="specDialog.visible"
+      :title="`设置「${specDialog.materialName}」的每${specDialog.unit}重量`"
+      width="420px"
+      append-to-body
+    >
+      <div class="sp-spec-dialog">
+        <p class="sp-spec-hint">
+          投入与产出单位不同时，靠这个重量把两边换算到同一口径才能算出成率。
+          填的是<strong>一{{ specDialog.unit }}的净重（克）</strong>。
+        </p>
+        <el-input-number
+          v-model="specDialog.gramsPerUnit"
+          :min="0"
+          :precision="3"
+          controls-position="right"
+          style="width: 100%"
+        />
+        <span class="sp-spec-suffix">克 / {{ specDialog.unit }}</span>
+      </div>
+      <template #footer>
+        <el-button @click="specDialog.visible = false">取消</el-button>
+        <el-button type="primary" :loading="specDialog.saving" @click="saveSpec">保存并重算</el-button>
+      </template>
+    </el-dialog>
 </template>
 
 <style scoped>
@@ -4772,4 +4879,28 @@ defineExpose({ hasUnsavedRows, refreshSharedInventories });
 
 /* tooltip 需要一个非 disabled 的宿主才能接到鼠标事件 */
 .sp-submit-wrap { display: inline-flex; }
+
+/* 出成率算不出时的说明条 —— 只显示「—」会让人以为系统坏了 */
+.sp-yield-blocked {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-basis: 100%;
+  margin-top: 4px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--el-color-warning-dark-2);
+}
+
+.sp-yield-blocked .el-icon { flex: none; }
+
+.sp-spec-dialog { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.sp-spec-hint {
+  flex-basis: 100%;
+  margin: 0 0 10px;
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--el-text-color-regular);
+}
+.sp-spec-suffix { font-size: 13px; color: var(--el-text-color-secondary); }
 </style>
