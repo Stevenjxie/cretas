@@ -15,6 +15,7 @@ import com.cretas.aims.service.factory.WarehouseResolver;
 import com.cretas.aims.service.processentry.ProductionInventoryOwnershipGuard;
 import com.cretas.aims.service.processentry.ProductionStockAllocationService;
 import com.cretas.aims.service.processentry.ProductionStockShortageException;
+import com.cretas.aims.service.unit.UnitContractService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 
@@ -40,6 +41,7 @@ public class ProductionStockAllocationServiceImpl implements ProductionStockAllo
     private final ProductionInputAllocationRepository allocationRepository;
     private final ProductionPlanRepository productionPlanRepository;
     private final WarehouseResolver warehouseResolver;
+    private final UnitContractService unitContractService;
 
     @Override
     public List<PlannedAllocation> plan(
@@ -67,11 +69,11 @@ public class ProductionStockAllocationServiceImpl implements ProductionStockAllo
         int allocationOrder = 0;
 
         for (ProcessSheetRowRequest.MaterialInputTotal input : materialInputTotals) {
-            validateInput(input);
+            validateInput(factoryId, input);
             String materialTypeId = input.getMaterialTypeId().trim();
             // 质量单位自动换算成 kg; 其他量纲(只/件/袋…)按 Workflow 端口声明的单位原样记账。
             // 强行把计数单位折成 kg 需要一个"每只多少公斤"的口径, 那是配置里没有的东西。
-            String inputUnit = canonicalNativeUnit(normalizeUnit(input.getUnit()));
+            String inputUnit = canonicalNativeUnit(factoryId, normalizeUnit(input.getUnit()));
             boolean massInput = isCanonicalMassUnit(inputUnit);
             String allocationUnit = massInput ? KG : inputUnit;
             BigDecimal required = massInput
@@ -87,7 +89,7 @@ public class ProductionStockAllocationServiceImpl implements ProductionStockAllo
                 ProductionInventoryOwnershipGuard.assertMaterialBatchAllowed(
                         plan, batch, "生产报工投料");
                 // 非质量单位不做跨单位折算, 只吃单位一致的批次 —— 与 BOM 自动投料同一口径
-                String batchUnit = canonicalNativeUnit(batch.getQuantityUnit());
+                String batchUnit = canonicalNativeUnit(factoryId, batch.getQuantityUnit());
                 if (massInput ? !isCanonicalMassUnit(batchUnit)
                         : !Objects.equals(inputUnit, batchUnit)) {
                     continue;
@@ -297,7 +299,7 @@ public class ProductionStockAllocationServiceImpl implements ProductionStockAllo
                         .withCode("AUTOMATIC_MATERIAL_REQUIREMENT_INVALID")
                         .withSeverity("BLOCKING");
             }
-            String requiredUnit = canonicalNativeUnit(requirement.unit());
+            String requiredUnit = canonicalNativeUnit(factoryId, requirement.unit());
             if (requiredUnit == null) {
                 throw new BusinessException(409, "BOM 自动投料缺少计量单位: " + requirement.materialName())
                         .withCode("AUTOMATIC_MATERIAL_UNIT_REQUIRED")
@@ -314,7 +316,7 @@ public class ProductionStockAllocationServiceImpl implements ProductionStockAllo
                     factoryId, plan, requirement.materialTypeId(), workshopId);
             for (MaterialBatch batch : batches) {
                 ProductionInventoryOwnershipGuard.assertMaterialBatchAllowed(plan, batch, "生产报工自动投料");
-                String batchUnit = canonicalNativeUnit(batch.getQuantityUnit());
+                String batchUnit = canonicalNativeUnit(factoryId, batch.getQuantityUnit());
                 if (massRequirement ? !isCanonicalMassUnit(batchUnit)
                         : !Objects.equals(requiredUnit, batchUnit)) {
                     continue;
@@ -544,7 +546,7 @@ public class ProductionStockAllocationServiceImpl implements ProductionStockAllo
                 || Objects.equals(planItemId, batchItemId);
     }
 
-    private void validateInput(ProcessSheetRowRequest.MaterialInputTotal input) {
+    private void validateInput(String factoryId, ProcessSheetRowRequest.MaterialInputTotal input) {
         if (input == null || input.getMaterialTypeId() == null || input.getMaterialTypeId().isBlank()) {
             throw new BusinessException(400, "投料物料不能为空")
                     .withCode("PRODUCTION_INPUT_MATERIAL_REQUIRED");
@@ -554,7 +556,7 @@ public class ProductionStockAllocationServiceImpl implements ProductionStockAllo
                     .withCode("PRODUCTION_INPUT_QUANTITY_INVALID")
                     .withHintTarget("投料量");
         }
-        if (canonicalNativeUnit(normalizeUnit(input.getUnit())) == null) {
+        if (canonicalNativeUnit(factoryId, normalizeUnit(input.getUnit())) == null) {
             throw new BusinessException(400, "生产投料总量缺少计量单位")
                     .withCode("PRODUCTION_INPUT_UNIT_REQUIRED")
                     .withHint("单位由 Workflow 投入端口固定，请先在工序里配置该物料的报工单位")
@@ -566,16 +568,22 @@ public class ProductionStockAllocationServiceImpl implements ProductionStockAllo
         return unit == null || unit.isBlank() ? KG : unit.trim();
     }
 
-    private String canonicalNativeUnit(String unit) {
+    /**
+     * 单位归一 —— 以全局单位契约为准。
+     *
+     * 这里原本是一份本地 switch, 和 {@code UnitContractService} 各归各的:
+     * 契约把 只/个/件/pcs 全归到 {@code pcs}, 本地 switch 却把 pcs/个/片 归到
+     * {@code slice}、把未登记的「只」原样返回。于是同一个物料的投料单位算成 slice、
+     * 库存批次存着「只」, 两个字符串不等 —— 明明有 201 只库存却报 "需要 1slice,
+     * 可用 0slice"。同义单位必须只有一套 code, 否则匹配逻辑再对也没用。
+     *
+     * 契约认不出来的单位保持原样(小写去空格): 未登记不等于非法, 至少让同样写法的
+     * 投料与批次还能对上, 而不是直接判定为 null 把报工整个挡死。
+     */
+    private String canonicalNativeUnit(String factoryId, String unit) {
         if (unit == null || unit.isBlank()) return null;
-        return switch (unit.trim().toLowerCase(java.util.Locale.ROOT)) {
-            case "公斤", "千克", "kg" -> "kg";
-            case "克", "g" -> "g";
-            case "盒", "box" -> "box";
-            case "箱", "case" -> "case";
-            case "片", "slice", "piece", "pcs", "个" -> "slice";
-            default -> unit.trim().toLowerCase(java.util.Locale.ROOT);
-        };
+        String code = unitContractService.normalize(factoryId, unit).code();
+        return code != null ? code : unit.trim().toLowerCase(java.util.Locale.ROOT);
     }
 
     private boolean isCanonicalMassUnit(String unit) {
