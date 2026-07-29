@@ -33,7 +33,10 @@ allowed-tools:
 ```
 
 要点：
-- **构建一次**：Java 目标测试 + 最终 JAR = 同一条 `mvn clean package -Dtest=<tests>` 生命周期（`release-jar-manifest.sh build`）；Web = `release-web-manifest.sh build` 产不可变 `dist.tar.gz` + 可信 manifest。squash 后 commit 不同但 Git tree 相同**可复用制品**，禁止重复构建；任一校验失败只回退一次本地构建。
+- **最多构建一次**：Java 目标测试 + 最终 JAR = 同一条 `mvn clean package -Dtest=<tests>` 生命周期（`release-jar-manifest.sh build`）；Web = `release-web-manifest.sh build` 产不可变 `dist.tar.gz` + 可信 manifest。squash 后 commit 不同但 Git tree 相同**可复用制品**，禁止重复构建；任一校验失败只回退一次本地构建。
+- ⚠️ **`build` 子命令会跳过 Maven 而复用缓存 JAR**，当且仅当三者全部成立：backend tree == `HEAD:backend/java/cretas-api`、目标测试选择器与本次请求完全一致、缓存 JAR 的 SHA256 与 manifest 记录相符。任一不符即回落真实编译。因此**回执里 `"build": "reused"` + `java_build=0` 是正常成功，不是构建未执行**，也不代表跳过了测试 —— 选择器一变必重编。需要无条件重编时用 `CRETAS_RELEASE_FORCE_JAVA_BUILD=1`。
+- ⚠️ **但 deploy 阶段的 `validate` 不比对测试选择器**：它只断言 JAR 匹配当前 origin/main 的 backend tree。选择器由 build 阶段把关，事后审计看 manifest / 回执里的 `target_tests` 字段。单凭一个 `reused` 回执**不能**证明本次传入的选择器与制品一致。
+- **并发互斥**：`release-cretas.sh` 持 `cretas-release`、`deploy-backend.sh` 持 `cretas-backend-deploy`、`deploy-web-admin.sh` 持 `cretas-web-admin-deploy`。遇到「另一个 deploy 进程持有锁」**不要反射性 `rm` 锁文件** —— `acquire_deploy_lock` 已内建 stale-PID 自动清理，还报错说明大概率真有并发进程在跑；先确认 PID 不存活再清理。
 - **默认安全串行**；仅显式传 `--parallel-if-independent YES-INDEPENDENT-SERVICES` 且迁移/Entity/Security/跨端契约等风险检测全部未命中时才并行。`--order backend-first|web-first` 控制串行顺序。
 - **发布证据复用**：入口自动调 `verify-release.sh`（真实 upstream / systemd / 直连健康 / Web 四方哈希）写入结构化回执；回执完整且成功时**不要手工重复同类检查**，只补任务特有断言。单独验证：`./scripts/deploy/verify-release.sh --target backend|web-admin|all --env prod`。
 - **蓝绿槽位**：prod Java 的 `10010` 与 `10020` **交替成为 active**。部署/核对前必须读 `139.196.165.140:/www/server/panel/vhost/nginx/_upstream_cretas.conf`，禁止假设某槽永久停用。
@@ -41,7 +44,7 @@ allowed-tools:
 
 > ⚠️ test 环境已于 2026-07-13 下线（见 server-operations skill）。下文 `--env test` / 10011 相关内容暂留作历史参考；部 prod 后"防御 ping test"的警告可忽略。
 
-**合入通道双轨**（部署前置，详见 `worktree-and-main-only-deploy.md` §2b）：docs/`.claude/`/配置类可走 `publish-main-fastlane.sh` 直推 main（免 PR 往返；分支需 `codex/*` 前缀）；碰 backend/web-admin 代码走 PR（CI JPA 门禁）；AGENTS.md/迁移/Entity/Security/`scripts/deploy/*` 强制 PR。任何通道都必须推上 origin/main 才可部署。
+**合入通道双轨**（部署前置，详见 `worktree-and-main-only-deploy.md` §2b）：docs/`.claude/`/配置类可走 `publish-main-fastlane.sh` 直推 main（免 PR 往返；分支需 `codex/*` 前缀；非 docs 批次须带 `--task-id <本批任务ID>`，否则 ACTIVE 门禁按「全局零未完成任务」判定而恒拒；ID 必须在 `docs/dispatch/` 里真实出现，拼错会被拒而非静默放行）；碰 backend/web-admin 代码走 PR（CI JPA 门禁）；AGENTS.md/迁移/Entity/Security/`scripts/deploy/*` 强制 PR。任何通道都必须推上 origin/main 才可部署。
 
 ---
 

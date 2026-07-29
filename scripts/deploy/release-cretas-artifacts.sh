@@ -10,7 +10,10 @@ usage() {
 Usage: scripts/deploy/release-cretas-artifacts.sh --tests <MavenTestSelector>
 
 Builds trusted Java and Web release artifacts concurrently from one clean,
-reviewed worktree. Java still runs exactly one Maven clean-package lifecycle.
+reviewed worktree. Java runs AT MOST one Maven clean-package lifecycle: it is
+skipped when the cached JAR already matches the backend tree and target-test
+selector. A usable JDK is verified before either build starts, and if one side
+fails the other is cancelled immediately instead of running to completion.
 Run this before merge; after merge validate/reuse both manifests from a clean
 exact origin/main release worktree.
 EOF
