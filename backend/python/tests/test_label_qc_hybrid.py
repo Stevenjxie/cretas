@@ -195,6 +195,67 @@ async def test_contract_fields_present(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_review_cap_limits_vl_calls_but_keeps_all_candidates(monkeypatch):
+    """Beyond the cap the screening verdict stands; nothing is dropped."""
+    trays = [_tray(i, VERDICT_MISSING_WHITE, (i * 20, 0, i * 20 + 50, 50))
+             for i in range(6)]
+    calls = _install(monkeypatch, trays,
+                     [(VERDICT_MISSING_WHITE, 0.9)] * 6)
+    monkeypatch.setenv("LABEL_QC_MAX_REVIEW_TRAYS", "2")
+    analyzer = HybridLabelQcAnalyzer(models=_StubModels())
+
+    result = await analyzer.analyze(_image_bytes())
+
+    assert calls["n"] == 2, "只应复核到上限次数"
+    assert len(result["candidates"]) == 6, "超出上限的托盘不得被丢弃"
+    assert result["screening"]["skippedByCap"] == 4
+    assert result["screening"]["reviewCap"] == 2
+    assert result["tilesAnalyzed"] == 2
+    capped = [c for c in result["candidates"] if "超出本张复核上限" in c["evidence"]]
+    assert len(capped) == 4
+
+
+@pytest.mark.asyncio
+async def test_review_order_prefers_both_missing_then_low_confidence(monkeypatch):
+    """BOTH_MISSING is the likeliest screening artefact, so it gets reviewed first."""
+    low = TrayResult(index=0, box=[0, 0, 50, 50], confidence=0.62,
+                     has_white=True, has_color=False, verdict=VERDICT_MISSING_COLOR)
+    both = TrayResult(index=1, box=[60, 0, 110, 50], confidence=0.95,
+                      has_white=False, has_color=False, verdict="BOTH_MISSING")
+    high = TrayResult(index=2, box=[120, 0, 170, 50], confidence=0.98,
+                      has_white=True, has_color=False, verdict=VERDICT_MISSING_COLOR)
+    reviewed_boxes = []
+
+    monkeypatch.setattr(hybrid, "screen_image",
+                        lambda image, models, params: _screening([low, both, high]))
+
+    async def record(slot, payload, timeout=None):
+        reviewed_boxes.append(len(reviewed_boxes))
+        return _vl_response(VERDICT_MISSING_COLOR, 0.8)
+
+    monkeypatch.setattr(hybrid, "call_chain", record)
+    monkeypatch.setenv("LABEL_QC_MAX_REVIEW_TRAYS", "1")
+    analyzer = HybridLabelQcAnalyzer(models=_StubModels())
+
+    result = await analyzer.analyze(_image_bytes())
+
+    assert len(reviewed_boxes) == 1
+    # the BOTH_MISSING tray must be the one that got the single review slot
+    both_candidates = [c for c in result["candidates"]
+                       if "超出本张复核上限" not in c["evidence"]]
+    assert both_candidates, "BOTH_MISSING 应优先获得复核名额"
+
+
+@pytest.mark.asyncio
+async def test_concurrency_is_configurable(monkeypatch):
+    monkeypatch.setenv("LABEL_QC_REVIEW_CONCURRENCY", "6")
+    analyzer = HybridLabelQcAnalyzer(models=_StubModels())
+    assert analyzer._review_concurrency == 6
+    monkeypatch.setenv("LABEL_QC_REVIEW_CONCURRENCY", "999")
+    assert HybridLabelQcAnalyzer(models=_StubModels())._review_concurrency == 8
+
+
+@pytest.mark.asyncio
 async def test_rejects_oversized_image():
     analyzer = HybridLabelQcAnalyzer(models=_StubModels())
     with pytest.raises(ValueError):

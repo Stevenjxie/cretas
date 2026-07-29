@@ -113,6 +113,20 @@ CPU 单张耗时约 3s（本机 Ryzen 7 5700X，含 18 个托盘的逐一标签�
 | `LABEL_QC_TRAY_CONF` | `0.60` | 托盘检测阈值 |
 | `LABEL_QC_LABEL_CONF` | `0.25` | 标签检测阈值 |
 | `LABEL_QC_ONNX_THREADS` | `2` | onnxruntime 线程数 |
+| `LABEL_QC_REVIEW_CONCURRENCY` | `4` | VL 复核并发（上限 8） |
+| `LABEL_QC_MAX_REVIEW_TRAYS` | `8` | 每张照片最多复核几个托盘（上限 40） |
+
+### 延迟
+
+prod 首次实测 19s（7 个可疑托盘、并发 2 → 4 轮 VL）。分解：YOLO 约 2s
+（tray 233ms + label 103ms × 托盘数），其余全是 VL 往返。
+
+优化：并发 2→4、每张最多复核 8 个托盘，典型 7 可疑托盘从 4 轮降到 2 轮。
+复核顺序按「BOTH_MISSING 优先、托盘置信低优先」——前者最可能是初筛假阳性，
+后者 crop 本身更不可靠，都最需要 VL 把关。
+
+超出上限的托盘**保留初筛判定**（evidence 标注"超出本张复核上限"），不丢弃。
+因为人工必审，上限买的是延迟，不是安全性。
 
 验证端点：`GET /api/label-qc/screening-status` 返回当前实际生效的 analyzer 与模型加载状态。
 
