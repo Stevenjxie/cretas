@@ -23,6 +23,40 @@ class KeruyunBusinessError(RuntimeError):
     """平台返回了非 0 业务码。"""
 
 
+class KeruyunPayloadError(ValueError):
+    """平台报文里的数值不是预期形态。"""
+
+
+def _strict_int(value, field: str) -> int:
+    """严格转整数 —— 带小数的值必须报错, 不许静默截断。
+
+    ⚠️ 裸 `int(128.5)` 会静默给出 128, 不抛异常。金额单位是「分」, 平台若
+    返回小数(JSON 数值天然可以是浮点), 截断后落进 Silver 的就是一笔被无声
+    改写的金额, 财务对账会拿到一个"看起来正常"的错数, 且没有任何留痕。
+    这个文件里其余所有失败路径都显式 raise, 金额转换不能是唯一的例外。
+    """
+    if isinstance(value, bool):
+        raise KeruyunPayloadError(f"{field} 不该是布尔值: {value!r}")
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        if not value.is_integer():
+            raise KeruyunPayloadError(
+                f"{field} 必须是整数分, 收到带小数的 {value!r} —— "
+                f"截断会静默改写金额, 拒绝处理"
+            )
+        return int(value)
+    if isinstance(value, str):
+        text = value.strip()
+        try:
+            return int(text)          # 含小数点的字符串会在这里 ValueError
+        except ValueError:
+            raise KeruyunPayloadError(
+                f"{field} 必须是整数分, 收到 {value!r}"
+            ) from None
+    raise KeruyunPayloadError(f"{field} 类型不支持: {type(value).__name__} {value!r}")
+
+
 def sign(params: dict, app_secret: str) -> str:
     """参数按名字典序拼成 key=value&, 用 app_secret 做 HMAC-SHA256, 取小写 hex。
 
@@ -76,6 +110,7 @@ class KeruyunAdapter:
 
     @staticmethod
     def _to_order(raw: dict) -> NormalizedOrder:
+        _i = _strict_int
         return NormalizedOrder(
             platform=PLATFORM,
             platform_order_no=raw["orderNo"],
@@ -83,19 +118,24 @@ class KeruyunAdapter:
             channel=raw["channel"],
             placed_at=datetime.datetime.fromisoformat(raw["placedAt"]),
             biz_date=datetime.date.fromisoformat(raw["bizDate"]),
-            gross_cents=int(raw["grossAmount"]),
-            discount_cents=int(raw["discountAmount"]),
-            net_cents=int(raw["netAmount"]),
-            guest_count=int(raw.get("guestCount", 1)),
+            gross_cents=_i(raw["grossAmount"], "grossAmount"),
+            discount_cents=_i(raw["discountAmount"], "discountAmount"),
+            net_cents=_i(raw["netAmount"], "netAmount"),
+            guest_count=_i(raw.get("guestCount", 1), "guestCount"),
             items=[
                 NormalizedItem(
-                    dish_name=i["dishName"], qty=int(i["qty"]),
-                    price_cents=int(i["price"]), amount_cents=int(i["amount"]),
+                    dish_name=i["dishName"],
+                    qty=_i(i["qty"], "items[].qty"),
+                    price_cents=_i(i["price"], "items[].price"),
+                    amount_cents=_i(i["amount"], "items[].amount"),
                 )
                 for i in raw.get("items", [])
             ],
             payments=[
-                NormalizedPayment(method=p["method"], amount_cents=int(p["amount"]))
+                NormalizedPayment(
+                    method=p["method"],
+                    amount_cents=_i(p["amount"], "payments[].amount"),
+                )
                 for p in raw.get("payments", [])
             ],
         )

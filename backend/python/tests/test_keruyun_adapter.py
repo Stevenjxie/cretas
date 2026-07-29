@@ -113,6 +113,45 @@ async def test_订单被正确归一化():
 
 
 @pytest.mark.asyncio
+async def test_金额带小数必须报错_不许静默截断():
+    """裸 int(128.5) 静默给 128。金额单位是分, 截断 = 无声改写一笔订单金额,
+    财务对账会拿到"看起来正常"的错数且零留痕。这个文件里其余失败路径都
+    显式 raise, 金额不能是唯一例外。
+    """
+    from smartbi.ingestion.platforms.keruyun import KeruyunPayloadError
+
+    def _payload(gross):
+        return {"code": "0", "data": {"list": [{
+            "orderNo": "X1", "shopCode": "MK01", "channel": "dine_in",
+            "placedAt": "2026-07-29T12:00:00", "bizDate": "2026-07-29",
+            "grossAmount": gross, "discountAmount": 0, "netAmount": 100,
+            "guestCount": 1, "items": [], "payments": [],
+        }], "nextCursor": 1, "hasMore": False}}
+
+    for bad in (128.5, "128.5", "12.0元", None, True):
+        adapter = KeruyunAdapter("http://mock", "k", "s", _FakeClient(_payload(bad)))
+        with pytest.raises(KeruyunPayloadError):
+            await adapter.fetch_page("0", 50)
+
+
+@pytest.mark.asyncio
+async def test_整数形态的浮点与字符串仍被接受():
+    """128.0 和 "128" 是合法的整数分, 不该误伤。"""
+    def _payload(gross):
+        return {"code": "0", "data": {"list": [{
+            "orderNo": "X1", "shopCode": "MK01", "channel": "dine_in",
+            "placedAt": "2026-07-29T12:00:00", "bizDate": "2026-07-29",
+            "grossAmount": gross, "discountAmount": 0, "netAmount": 100,
+            "guestCount": 1, "items": [], "payments": [],
+        }], "nextCursor": 1, "hasMore": False}}
+
+    for good in (128, 128.0, "128", " 128 "):
+        adapter = KeruyunAdapter("http://mock", "k", "s", _FakeClient(_payload(good)))
+        page = await adapter.fetch_page("0", 50)
+        assert page.orders[0].gross_cents == 128
+
+
+@pytest.mark.asyncio
 async def test_请求带上了签名参数():
     adapter = KeruyunAdapter("http://mock", "kk", "ss", _FakeClient(
         {"code": "0", "data": {"list": [], "nextCursor": 0, "hasMore": False}}))
@@ -136,36 +175,53 @@ def _order(no="B1", store_code="MK01", method="wechat"):
 
 
 class _FakeConn:
-    """按 SQL 前缀分派的假连接。rows 决定各查询返回什么。"""
+    """假连接。
 
-    def __init__(self, store_row=None, channel_row=None, txn_row=None):
+    每条语句都连同「当时是否处于事务中」一起记录 —— 否则"必须在事务内"这类
+    断言只能验到执行顺序，验不到事务边界，把 set_config 挪出事务块测试照样绿。
+    `txn_rows` 支持按调用序给不同返回值，用来表达"同一批里一单新增一单已存在"。
+    """
+
+    def __init__(self, store_row=None, channel_row=None, txn_row=None, txn_rows=None):
         self._store_row = store_row
         self._channel_row = channel_row
+        self._txn_rows = list(txn_rows) if txn_rows is not None else None
         self._txn_row = txn_row
-        self.executed = []
+        self.in_transaction = False
+        self.executed = []          # [(sql, args, in_transaction)]
+
+    def _record(self, sql, args):
+        self.executed.append((sql, args, self.in_transaction))
 
     async def execute(self, sql, *args):
-        self.executed.append((sql, args))
+        self._record(sql, args)
         return "INSERT 0 1"
 
     async def fetchrow(self, sql, *args):
-        self.executed.append((sql, args))
-        if "platform_store_map" in sql:
+        self._record(sql, args)
+        # 按表名分派。断言互斥, 防止将来某条 SQL 同时提到两个表名时静默走错分支。
+        hits = [t for t in ("platform_store_map", "dim_payment_channel",
+                            "fact_pos_transaction") if t in sql]
+        assert len(hits) == 1, f"SQL 同时命中多张表, 假连接分派会出错: {hits}"
+        table = hits[0]
+        if table == "platform_store_map":
             return self._store_row
-        if "dim_payment_channel" in sql:
+        if table == "dim_payment_channel":
             return self._channel_row
-        if "fact_pos_transaction" in sql:
-            return self._txn_row
-        raise AssertionError(f"未预期的查询: {sql[:60]}")
+        if self._txn_rows is not None:
+            return self._txn_rows.pop(0)
+        return self._txn_row
 
     def transaction(self):
         conn = self
 
         class _Txn:
             async def __aenter__(self_inner):
+                conn.in_transaction = True
                 return conn
 
             async def __aexit__(self_inner, *exc):
+                conn.in_transaction = False
                 return False
 
         return _Txn()
@@ -217,7 +273,7 @@ async def test_F4_幂等命中不计数也不写明细():
                      txn_row=None)
     n = await write_orders(_FakePool(conn), "MOCK_REST", [_order()])
     assert n == 0
-    assert not any("fact_pos_item" in sql for sql, _ in conn.executed), "已存在的单不该写明细"
+    assert not any("fact_pos_item" in sql for sql, _, _ in conn.executed), "已存在的单不该写明细"
 
 
 @pytest.mark.asyncio
@@ -226,22 +282,51 @@ async def test_正常路径写主表明细支付各一次():
                      txn_row={"id": 99})
     n = await write_orders(_FakePool(conn), "MOCK_REST", [_order()])
     assert n == 1
-    sqls = [sql for sql, _ in conn.executed]
+    sqls = [sql for sql, _, _ in conn.executed]
     assert sum("fact_pos_item" in s for s in sqls) == 1
     assert sum("fact_pos_payment" in s for s in sqls) == 1
 
 
 @pytest.mark.asyncio
 async def test_F7_RLS_必须先设factory_id且在事务内():
+    """set_config(..., true) 是**事务级**的: asyncpg 上不开显式事务从不生效,
+    RLS 会靠连接池残留碰运气。所以既要验它是第一条, 也要验它**在事务里**。
+    """
     conn = _FakeConn(store_row={"store_id": 1}, channel_row={"channel_id": 7},
                      txn_row={"id": 99})
     await write_orders(_FakePool(conn), "MOCK_REST", [_order()])
-    first_sql, first_args = conn.executed[0]
+    first_sql, first_args, first_in_txn = conn.executed[0]
     assert "set_config" in first_sql and "app.factory_id" in first_sql, (
-        "第一条语句必须是 set_config(app.factory_id) —— asyncpg 上它是事务级的, "
-        "不先设 RLS 就靠连接池残留碰运气"
+        "第一条语句必须是 set_config(app.factory_id)"
     )
     assert first_args == ("MOCK_REST",)
+    assert first_in_txn is True, (
+        "set_config 必须在显式事务内 —— 挪到事务外它就从不生效, 而这条测试"
+        "过去只验执行顺序, 挪出去照样绿, 等于没锁住"
+    )
+
+
+@pytest.mark.asyncio
+async def test_所有语句都在同一事务内():
+    """整批一个事务是刻意取舍: 任一笔失败整页回滚, 框架不推进游标, 下轮重拉。"""
+    conn = _FakeConn(store_row={"store_id": 1}, channel_row={"channel_id": 7},
+                     txn_row={"id": 99})
+    await write_orders(_FakePool(conn), "MOCK_REST", [_order()])
+    outside = [sql[:50] for sql, _, in_txn in conn.executed if not in_txn]
+    assert outside == [], f"这些语句跑在事务外: {outside}"
+
+
+@pytest.mark.asyncio
+async def test_批内混合_一单新增一单已存在时计数正确():
+    """幂等命中的单不计入 written, 但不能影响同批其他单。"""
+    conn = _FakeConn(store_row={"store_id": 1}, channel_row={"channel_id": 7},
+                     txn_rows=[{"id": 1}, None])       # 第一单新增, 第二单已存在
+    n = await write_orders(_FakePool(conn), "MOCK_REST",
+                           [_order(no="NEW1"), _order(no="DUP1")])
+    assert n == 1, "只该计新增的那一单"
+    assert sum("fact_pos_item" in sql for sql, _, _ in conn.executed) == 1, (
+        "已存在的单不该重写明细"
+    )
 
 
 @pytest.mark.asyncio
