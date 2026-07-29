@@ -13,6 +13,7 @@ from food_kb.api.manual_chat import (
     _MULTI_OUTPUT_LABEL_QC_ANSWER,
     _RESTAURANT_CONTEXT_SCOPE_ANSWER,
     _RESTAURANT_FLYWHEEL_GOVERNANCE_ANSWER,
+    _RESTAURANT_MONTHLY_REPORT_ANSWER,
     _RESTAURANT_QUERY_CONTRACT_ANSWER,
     _WORKFLOW_ACTUAL_IO_ANSWER,
     _build_scope_prompt,
@@ -22,6 +23,7 @@ from food_kb.api.manual_chat import (
     _needs_multi_output_warehouse_receipt_guard,
     _needs_restaurant_context_scope_guard,
     _needs_restaurant_flywheel_governance_guard,
+    _needs_restaurant_monthly_report_guard,
     _needs_restaurant_query_contract_guard,
     _needs_workflow_actual_io_guard,
     _uses_current_production_sop,
@@ -403,12 +405,14 @@ def test_restaurant_registered_sources_match_current_product_contract():
             "21 个综合分析维度",
             "跨页面或跨模块不会自动继承筛选",
             "指定区间、繁体范围词与输出偏好",
+            "月度经营报告：预览、导出与数据截至时间",
             "AI 飞轮、菜品别名与人审边界",
         ),
         "restaurant-product-manual.html": (
             "当前 21 维综合分析目录",
             "全部门店是聚合范围",
             "精确日期、范围词与输出偏好",
+            "月度经营报告",
             "AI 飞轮运营台与菜品别名治理",
         ),
         "restaurant-metrics-glossary.html": (
@@ -429,6 +433,7 @@ def test_restaurant_registered_sources_match_current_product_contract():
     assert "原料包装换算、标签人工审核或多产出成本怎么做？" in ai_assist
     assert "实际投入产出与多产出成本怎么报？" in ai_assist
     assert "指定区间、全部門店与输出形态" in ai_assist
+    assert "月报预览、导出与截至时间" in ai_assist
     assert "AI 飞轮与菜品别名怎么治理？" in ai_assist
     assert "7 节小课 · 约 12 分钟" in ai_assist
     assert "飞轮与人审边界" in ai_assist
@@ -578,6 +583,12 @@ async def test_bom_workflow_publication_answer_never_calls_the_llm(monkeypatch):
             "看 2026年7月1日到7月15日全部門店营收，给我表格",
             "restaurant",
             _RESTAURANT_QUERY_CONTRACT_ANSWER,
+            "restaurant-full-chain-sop.html",
+        ),
+        (
+            "餐饮月报怎样预览和导出 XLSX 或 PDF，数据截至时间是什么？",
+            "restaurant",
+            _RESTAURANT_MONTHLY_REPORT_ANSWER,
             "restaurant-full-chain-sop.html",
         ),
         (

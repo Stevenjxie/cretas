@@ -1129,7 +1129,8 @@
                 <button class="suggestion" type="button" data-question="大众点评的数据我们是怎么用的？点评分析能得出什么结论？"><span class="suggestion-index">03</span><span>大众点评的数据我们怎么用？</span></button>
                 <button class="suggestion" type="button" data-question="菜品四象限图怎么读？四个象限分别代表什么，应该采取什么动作？"><span class="suggestion-index">04</span><span>菜品 4 象限图怎么读？</span></button>
                 <button class="suggestion" type="button" data-question="看 2026年7月1日到7月15日全部門店营收并要求表格时，系统怎样理解日期、门店范围和输出形态？"><span class="suggestion-index">05</span><span>指定区间、全部門店与输出形态</span></button>
-                <button class="suggestion" type="button" data-question="AI 飞轮运营台谁能使用？候选晋升和菜品别名为什么都必须人工审核？"><span class="suggestion-index">06</span><span>AI 飞轮与菜品别名怎么治理？</span></button>
+                <button class="suggestion" type="button" data-question="餐饮月度经营报告怎样预览并导出 XLSX 或 PDF？数据截至时间和失败规则是什么？"><span class="suggestion-index">06</span><span>月报预览、导出与截至时间</span></button>
+                <button class="suggestion" type="button" data-question="AI 飞轮运营台谁能使用？候选晋升和菜品别名为什么都必须人工审核？"><span class="suggestion-index">07</span><span>AI 飞轮与菜品别名怎么治理？</span></button>
               </div>
 
               <button class="learn-launch" id="learn-launch" type="button">
@@ -1281,7 +1282,8 @@
             '<li><strong>人效与外部环境</strong>：16 排班与人效、17 天气、18 节假日与调休、19 商场活动、20 周边演出与赛事、21 竞品与商圈。</li></ul>' +
             '<p>每一维必须标注 <strong>REAL / PROXY / SIMULATED / MISSING</strong>：真实、代理、模拟或缺失。缺数据就说明缺失，演示值不能冒充客户事实，相关性也不能写成因果。</p>' +
             '<p><strong>连续追问范围：</strong>门店、菜品和时间只在同一会话中沿用；最新明确条件覆盖旧条件，「全部门店」保持聚合范围。清空对话会重置；跨页面或跨模块不会自动继承筛选，继续分析时要重新说明范围。</p>' +
-            '<p><strong>精确日期与输出：</strong>明确起止日期按自然日闭区间并标记「指定区间」；「全部門店」只作为与「全部门店」等价的聚合范围，不能扩大理解为全句繁体转换。用户明确要求文字、表格、图表或报告文件时优先，未明确时默认文字 + 表格；只有页面实际出现对应渲染或下载结果时才能说已经生成。</p>',
+            '<p><strong>精确日期与输出：</strong>明确起止日期按自然日闭区间并标记「指定区间」；「全部門店」只作为与「全部门店」等价的聚合范围，不能扩大理解为全句繁体转换。用户明确要求文字、表格、图表或报告文件时优先，未明确时默认文字 + 表格；识别到报告文件偏好不会在聊天轮次里自动导出。</p>' +
+            '<p><strong>餐饮月报：</strong>服务端可按现有查询计划预览，并导出 XLSX/PDF；报告标注业务数据截至时间和生成时间。任一章节需要澄清、契约失败或没有可信数据时整份拒绝生成，不用 0、上月数或模拟数补齐。只有当前页面真实接入生成动作并返回文件后，才能说报告已经生成。</p>',
           note: '导览助手只解释目录、证据等级和提问方法，不替用户计算或分析实际业务数据；真实分析进入 SmartBI 餐饮 AI。',
           asks: [
             { label: '16 项诊断都有什么？', question: '系统的餐饮诊断引擎都检查哪些指标？超标了会怎样？' },

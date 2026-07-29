@@ -250,6 +250,17 @@ _RESTAURANT_QUERY_CONTRACT_ANSWER = """\
 4. 输出偏好已经随分析结果传到呈现层，但具体页面只有接入对应渲染器后才能真正显示表格、图表或生成文件；没有实际渲染或下载结果时，不能宣称“表格/报告文件已生成”。
 
 例如“看 2026年7月1日到7月15日全部門店营收，给我表格”应理解为：指定区间 + 全部门店聚合 + 文字/表格偏好；导览助手只解释这一方法，不会返回该区间的真实营收。"""
+_RESTAURANT_MONTHLY_REPORT_ANSWER = """\
+餐饮月度经营报告已具备服务端预览与 XLSX/PDF 导出能力，但聊天里识别到“报告文件”偏好不等于文件已经生成。
+
+**当前月报合同：**
+1. 月报按模板批量执行与餐饮问答相同的已封存查询计划，覆盖经营总览、营收趋势与环比、门店营收、堂食/外卖结构、门店毛利率和损耗排行；报告层不另写 SQL、不重算指标。
+2. 周期可指定 `YYYY-MM`；省略时使用业务数据截至日期所在月份，不按今天所在月份猜测。
+3. 报告同时标明业务数据截至时间和报告生成时间；多数据源取各源最新日期中的最早值作为整份报告截至时间，并保留逐源明细。
+4. 任一章节需要澄清、契约未通过、没有可信结论或数据截至时间不可得时，整份报告拒绝生成并列出失败章节；不跳过章节，不用 0、上月数、模拟数或占位文件补齐，表格缺失点留空。
+5. 用户在聊天中要求报告文件时，呈现层应提供“生成月度报告文件”动作，或由定时任务调用月报导出。只有实际返回可下载的 XLSX/PDF 后，才能说文件已生成。
+
+餐饮导览助手只解释入口、口径和失败规则，不替用户运行真实经营分析或生成文件；实际预览和导出应进入已接入月报动作的 SmartBI 餐饮客户端。"""
 _RESTAURANT_FLYWHEEL_GOVERNANCE_ANSWER = """\
 AI 飞轮运营台是平台能力治理工具，不是老板或店员的经营分析入口，也不会替用户计算或分析业务数据。
 
@@ -366,6 +377,23 @@ def _needs_restaurant_query_contract_guard(query: str) -> bool:
         )),
     )
     return sum(signals) >= 2
+
+
+def _needs_restaurant_monthly_report_guard(query: str) -> bool:
+    """Explain the monthly report executor without claiming a client download."""
+    normalized = (query or "").lower()
+    mentions_monthly_report = any(
+        term in normalized
+        for term in ("月度报告", "月报", "经营报告", "monthly report")
+    )
+    mentions_contract = any(
+        term in normalized
+        for term in (
+            "预览", "导出", "xlsx", "pdf", "文件", "截至", "周期",
+            "生成", "失败", "缺失",
+        )
+    )
+    return mentions_monthly_report and mentions_contract
 
 
 def _needs_restaurant_flywheel_governance_guard(query: str) -> bool:
@@ -1210,6 +1238,11 @@ async def _prepare_generation(request: ManualChatRequest) -> _PreparedGeneration
         and _needs_restaurant_flywheel_governance_guard(request.question)
     ):
         guard_answer = _RESTAURANT_FLYWHEEL_GOVERNANCE_ANSWER
+    elif (
+        is_restaurant_request
+        and _needs_restaurant_monthly_report_guard(request.question)
+    ):
+        guard_answer = _RESTAURANT_MONTHLY_REPORT_ANSWER
     elif (
         is_restaurant_request
         and _needs_restaurant_query_contract_guard(request.question)
