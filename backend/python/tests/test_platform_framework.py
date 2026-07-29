@@ -204,6 +204,36 @@ async def test_推进游标失败保持可重拉(monkeypatch):
                             write_orders=_write_orders)
 
 
+@pytest.mark.asyncio
+async def test_adapter返回畸形页也转成PlatformSyncError(monkeypatch):
+    """adapter 返回 None / 缺字段时, 裸 AttributeError 不能绕过统一错误包装 ——
+    绕过去的话 sync_all 那层只 except PlatformSyncError 的分支就接不住,
+    要靠最后的宽兜底才拦得下, 而那时错误信息里已经没有平台/游标上下文了。
+    """
+    from smartbi.ingestion.platforms.framework import PlatformSyncError, sync_platform
+
+    class _Malformed:
+        platform = "broken"
+        async def fetch_page(self, cursor, limit):
+            return None            # 畸形返回
+
+    async def _read(pool, factory_id, platform):
+        return "0"
+
+    async def _write(pool, factory_id, platform, cursor):
+        raise AssertionError("不该推进游标")
+
+    async def _write_orders(pool, factory_id, orders):
+        return 0
+
+    monkeypatch.setattr("smartbi.ingestion.platforms.framework.read_cursor", _read)
+    monkeypatch.setattr("smartbi.ingestion.platforms.framework.write_cursor", _write)
+
+    with pytest.raises(PlatformSyncError, match="拉取失败"):
+        await sync_platform(None, _Malformed(), factory_id="MOCK_REST",
+                            write_orders=_write_orders)
+
+
 # ---------------------------------------------------------------------------
 # cursor_store.py 结构性测试: 锁住 "set_config 必须在 conn.transaction() 内,
 # 且和后续查询同一连接" 这个不变量 —— 本仓踩过的坑 (asyncpg 上 set_config(..., true)

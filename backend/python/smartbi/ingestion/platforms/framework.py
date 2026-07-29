@@ -47,26 +47,31 @@ async def sync_platform(pool, adapter: PlatformAdapter, *, factory_id: str,
     for _ in range(max_pages):
         try:
             page = await adapter.fetch_page(cursor, page_size)
+            # 属性访问也必须在保护范围内: adapter 返回畸形对象时,
+            # 裸的 AttributeError 会绕过 PlatformSyncError 直接冒到 sync_all。
+            orders = page.orders
+            next_cursor = page.next_cursor
+            has_more = page.has_more
         except Exception as exc:  # noqa: BLE001 — 统一成 PlatformSyncError 供上层隔离
             raise PlatformSyncError(
                 f"[{adapter.platform}] 拉取失败 cursor={cursor}: {exc}"
             ) from exc
-        if page.orders:
+        if orders:
             try:
-                written = await write_orders(pool, factory_id, page.orders)
+                written = await write_orders(pool, factory_id, orders)
             except Exception as exc:  # noqa: BLE001
                 raise PlatformSyncError(
                     f"[{adapter.platform}] 写入失败 cursor={cursor}: {exc}"
                 ) from exc
             total += written
-        cursor = page.next_cursor
+        cursor = next_cursor
         try:
             await write_cursor(pool, factory_id, adapter.platform, cursor)
         except Exception as exc:  # noqa: BLE001
             raise PlatformSyncError(
                 f"[{adapter.platform}] 推进游标失败 cursor={cursor}: {exc}"
             ) from exc
-        if not page.has_more:
+        if not has_more:
             break
     else:
         logger.info("[%s] 本轮达到 max_pages=%d, 剩余留给下一轮", adapter.platform, max_pages)
@@ -87,7 +92,9 @@ async def sync_all(pool, adapters, *, factory_id: str, write_orders: WriteOrders
         except PlatformSyncError as exc:
             logger.error("[platform-sync] %s", exc)
             results[adapter.platform] = f"ERROR: {exc}"
-        except Exception as exc:  # noqa: BLE001 — 失败隔离是硬契约, 兜底不放过任何异常
+        except Exception as exc:  # noqa: BLE001
+            # 最后一道防线: 故意没有对应测试 —— 它接的是我们没预料到的异常。
+            # 失败隔离是硬契约, 任何异常都不能打断 for 循环让后面的平台整轮不同步。
             logger.exception("[platform-sync] %s 未预期异常", adapter.platform)
             results[adapter.platform] = f"ERROR: 未预期异常 {exc}"
     return results
