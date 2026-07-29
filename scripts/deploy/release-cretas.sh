@@ -4,6 +4,57 @@ set -euo pipefail
 SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 PROJECT_ROOT=$(cd "$SCRIPT_DIR/../.." && pwd)
 
+# >>> release-match-helpers (extracted verbatim by scripts/tests/test-release-cretas-gate-matching.sh)
+# 发布闸的「不经管道」行匹配。
+#
+# 这些闸以前一律是 `printf '%s\n' "$text" | grep -q PATTERN` 的形状, 在本文件顶部的
+# `set -o pipefail` 下**静默出错**: `grep -q` 一命中就退出并关闭读端, `printf` 被
+# SIGPIPE 打死 (退出码 141), pipefail 于是把整条流水线判为失败, `if` 走 else 分支 ——
+# **命中被报告成没命中, 结论是反的**。输入小于 64KB 管道缓冲时生产者能在 grep 退出前
+# 写完, 所以侥幸正确; 喂给 Repository-query 闸的 backend 全量 diff 常有几 MB, 必错。
+#
+# 失效方向全是「该拒的放行」, 不是报错: JAVA_CHANGED 变 false → 后端改了却跳过部署;
+# PARALLEL_REJECTION 变空 → 契约改了却放行并行部署。所以必须彻底去掉管道。
+#
+# 修法保留 grep 的 ERE 语义 —— 尤其是 ^ / $ 的**逐行**锚定, bash 自己的 [[ =~ ]] 在
+# 多行字符串上只能锚定整串, 无法等价 —— 但改用 here-string 喂入: 没有管道, 也就没有
+# 会被打死的生产者。bash 把 here-string 交给 grep 之前内容已整个写完 (小于管道缓冲
+# 走管道, 否则落临时文件), 任何体积都不会 SIGPIPE。
+#
+# 传入空串时 here-string 与旧的 `printf '%s\n' ""` 一样产生单个空行, 语义不变。
+
+# 任一行匹配 ERE 则返回 0 (大小写敏感)。
+matches_any_line() {
+    local pattern=$1 text=$2
+    grep -Eq -- "$pattern" <<<"$text"
+}
+
+# 任一行匹配 ERE 则返回 0 (大小写不敏感, 等价旧的 grep -Eqi)。
+matches_any_line_ci() {
+    local pattern=$1 text=$2
+    grep -Eqi -- "$pattern" <<<"$text"
+}
+
+# 打印匹配 ERE 的行; 无匹配时输出空并返回 0 (等价旧的 `grep ... || true`)。
+select_matching_lines() {
+    local pattern=$1 text=$2
+    grep -E -- "$pattern" <<<"$text" || true
+}
+
+# 闸的模式集中在此, 便于单测直接引用真实模式而不是抄一份副本。
+# 前两个原先是 BRE (`grep -q`), 模式里只有 ^ 和字面量, BRE/ERE 解释完全一致。
+JAVA_PATH_PATTERN='^backend/java/cretas-api/'
+WEB_PATH_PATTERN='^web-admin/'
+RISK_MIGRATION_PATTERN='/(db/)?migration/|flyway'
+RISK_ENTITY_PATTERN='/entity/|Entity\.java$'
+RISK_REPOSITORY_PATTERN='/repository/|Repository\.java$'
+RISK_SECURITY_PATTERN='/security/|/(auth|authentication|authorization)/|Security|Authentication|Authorization|Jwt'
+RISK_API_CONTRACT_PATTERN='/controller/|/dto/|/request/|/response/|/api/|(Request|Response)\.java$'
+RISK_CONFIG_PATTERN='/config/|(^|/)[^/]*config\.[^/]+$|application[^/]*\.(yml|yaml|properties)$|(^|/)\.env([^/]*)?$'
+RISK_WEB_CONTRACT_PATTERN='^web-admin/.*/(api|types|contracts?)/|^web-admin/.*/services/api/'
+RISK_QUERY_DIFF_PATTERN='^[+-].*(@Query|JPQL|HQL)'
+# <<< release-match-helpers
+
 # One release at a time per machine. Beyond the deploy window that the component
 # scripts already guard, this protects the SHARED artifact cache
 # (~/.cache/cretas/{java-deploy,web-admin-deploy}/current): two concurrent
@@ -106,8 +157,8 @@ if [ "$PHASE" != build ]; then
 fi
 
 CHANGED_FILES=$(git -C "$PROJECT_ROOT" diff --name-only "$BASE_SHA" HEAD --)
-if printf '%s\n' "$CHANGED_FILES" | grep -q '^backend/java/cretas-api/'; then JAVA_CHANGED=true; else JAVA_CHANGED=false; fi
-if printf '%s\n' "$CHANGED_FILES" | grep -q '^web-admin/'; then WEB_CHANGED=true; else WEB_CHANGED=false; fi
+if matches_any_line "$JAVA_PATH_PATTERN" "$CHANGED_FILES"; then JAVA_CHANGED=true; else JAVA_CHANGED=false; fi
+if matches_any_line "$WEB_PATH_PATTERN" "$CHANGED_FILES"; then WEB_CHANGED=true; else WEB_CHANGED=false; fi
 
 if [ "$JAVA_CHANGED" = true ] && [ "$WEB_CHANGED" = true ]; then
     COMPONENTS=both
@@ -362,17 +413,17 @@ run_build_phase() {
 PARALLEL_REJECTION=
 detect_parallel_risk() {
     local backend_changed diff_text
-    backend_changed=$(printf '%s\n' "$CHANGED_FILES" | grep '^backend/java/cretas-api/' || true)
+    backend_changed=$(select_matching_lines "$JAVA_PATH_PATTERN" "$CHANGED_FILES")
     if [ "$ORDER_EXPLICIT" = true ]; then PARALLEL_REJECTION="explicit deployment order requested"; return; fi
-    if printf '%s\n' "$backend_changed" | grep -Eqi '/(db/)?migration/|flyway'; then PARALLEL_REJECTION="Flyway migration files changed"; return; fi
-    if printf '%s\n' "$backend_changed" | grep -Eqi '/entity/|Entity\.java$'; then PARALLEL_REJECTION="Entity files changed"; return; fi
-    if printf '%s\n' "$backend_changed" | grep -Eqi '/repository/|Repository\.java$'; then PARALLEL_REJECTION="Repository files changed"; return; fi
-    if printf '%s\n' "$backend_changed" | grep -Eqi '/security/|/(auth|authentication|authorization)/|Security|Authentication|Authorization|Jwt'; then PARALLEL_REJECTION="security or authentication files changed"; return; fi
-    if printf '%s\n' "$backend_changed" | grep -Eqi '/controller/|/dto/|/request/|/response/|/api/|(Request|Response)\.java$'; then PARALLEL_REJECTION="API contract files changed"; return; fi
-    if printf '%s\n' "$CHANGED_FILES" | grep -Eqi '/config/|(^|/)[^/]*config\.[^/]+$|application[^/]*\.(yml|yaml|properties)$|(^|/)\.env([^/]*)?$'; then PARALLEL_REJECTION="configuration or environment contract files changed"; return; fi
-    if printf '%s\n' "$CHANGED_FILES" | grep -Eqi '^web-admin/.*/(api|types|contracts?)/|^web-admin/.*/services/api/'; then PARALLEL_REJECTION="shared Web API contract files changed"; return; fi
+    if matches_any_line_ci "$RISK_MIGRATION_PATTERN" "$backend_changed"; then PARALLEL_REJECTION="Flyway migration files changed"; return; fi
+    if matches_any_line_ci "$RISK_ENTITY_PATTERN" "$backend_changed"; then PARALLEL_REJECTION="Entity files changed"; return; fi
+    if matches_any_line_ci "$RISK_REPOSITORY_PATTERN" "$backend_changed"; then PARALLEL_REJECTION="Repository files changed"; return; fi
+    if matches_any_line_ci "$RISK_SECURITY_PATTERN" "$backend_changed"; then PARALLEL_REJECTION="security or authentication files changed"; return; fi
+    if matches_any_line_ci "$RISK_API_CONTRACT_PATTERN" "$backend_changed"; then PARALLEL_REJECTION="API contract files changed"; return; fi
+    if matches_any_line_ci "$RISK_CONFIG_PATTERN" "$CHANGED_FILES"; then PARALLEL_REJECTION="configuration or environment contract files changed"; return; fi
+    if matches_any_line_ci "$RISK_WEB_CONTRACT_PATTERN" "$CHANGED_FILES"; then PARALLEL_REJECTION="shared Web API contract files changed"; return; fi
     diff_text=$(git -C "$PROJECT_ROOT" diff -U0 "$BASE_SHA" HEAD -- backend/java/cretas-api 2>/dev/null || true)
-    if printf '%s\n' "$diff_text" | grep -Eqi '^[+-].*(@Query|JPQL|HQL)'; then PARALLEL_REJECTION="Repository query contract changed"; return; fi
+    if matches_any_line_ci "$RISK_QUERY_DIFF_PATTERN" "$diff_text"; then PARALLEL_REJECTION="Repository query contract changed"; return; fi
 }
 
 # origin/main 在发布期间前进时, 自动前进到新 main 并重新执行, 而不是硬失败。

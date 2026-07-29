@@ -144,6 +144,28 @@ EOF
     : >"$CASE_LOG"
 }
 
+# 生成 >= $1 字节的确定性填充文本。倍增而不是逐行 append —— 逐行构造 MB 级字符串
+# 在 bash 里会退化成 O(n^2)。
+make_padding() {
+    local min_bytes=$1 out=${2:-'// deterministic filler line'}
+    while [ "${#out}" -lt "$min_bytes" ]; do out="$out"$'\n'"$out"; done
+    printf '%s' "$out"
+}
+
+# 在 $CASE_REPO 里造出 $1 个中性填充文件并提交, 用来把 `git diff --name-only` 的
+# 输出撑到 64KB 管道缓冲以上。路径刻意不含任何闸关键字, 也不在 backend/web-admin
+# 之下, 且字典序排在 backend/ 之后 —— 这样"命中行在最前、后面还有几十 KB 没写完"
+# 正是旧的 `printf | grep -q` 会翻车的形状。
+commit_padding_files() {
+    local count=$1 dir='docs/filler/neutral-padding-directory-tree'
+    mkdir -p "$CASE_REPO/$dir"
+    seq 1 "$count" \
+        | awk -v d="$dir" '{printf "%s/%04d-neutral-padding-file-name-no-gate-keywords.txt\n", d, $1}' \
+        | (cd "$CASE_REPO" && xargs touch)
+    git -C "$CASE_REPO" add "$dir"
+    git -C "$CASE_REPO" commit -qm 'padding files'
+}
+
 commit_change() {
     local path=$1 text=${2:-change}
     mkdir -p "$(dirname "$CASE_REPO/$path")"
@@ -185,6 +207,24 @@ assert_contains "$CASE_OUTPUT" 'RELEASE_BUILD_MODE=java-only'
 assert_contains "$CASE_LOG" 'MUTEX cretas-release'
 assert_log_count 1 'JAVA_BUILD build --tests StartupTest' "$CASE_LOG"
 assert_log_count 0 'WEB_BUILD' "$CASE_LOG"
+
+# 同样只有 Java 改动, 但变更文件清单超过 64KB 管道缓冲。
+# 这条钉住的是一个静默安全失效: 组件检测原先写作
+#     printf '%s\n' "$CHANGED_FILES" | grep -q '^backend/java/cretas-api/'
+# 在 `set -o pipefail` 下, grep -q 命中即退出关闭读端, printf 死于 SIGPIPE(141),
+# pipefail 把命中判成失败 → JAVA_CHANGED=false → **后端改了却整个跳过 Java 部署**。
+# 清单小于 64KB 时 printf 抢在 grep 退出前写完, 所以只有大清单才暴露。
+setup_repo java_only_over_pipe_buffer
+commit_change backend/java/cretas-api/Service.java
+commit_padding_files 900
+changed_bytes=$(git -C "$CASE_REPO" diff --name-only "$BASE_SHA" HEAD -- | wc -c)
+[ "$changed_bytes" -gt 65536 ] \
+    || fail "变更清单只有 ${changed_bytes}B, 没超过 64KB 管道缓冲, 本用例失去回归价值"
+run_release --phase build --base-sha "$BASE_SHA" --tests StartupTest
+assert_contains "$CASE_OUTPUT" 'DETECTED_JAVA_CHANGED=true'
+assert_contains "$CASE_OUTPUT" 'RELEASE_SELECTION=java'
+assert_contains "$CASE_OUTPUT" 'RELEASE_BUILD_MODE=java-only'
+assert_log_count 1 'JAVA_BUILD build --tests StartupTest' "$CASE_LOG"
 
 # A reviewed Java candidate can pre-stage the immutable JAR before merge. This
 # is not a deployment and must remain exclusive to the build phase.
@@ -298,6 +338,29 @@ publish_head
 run_release --phase deploy --base-sha "$BASE_SHA" --confirm-prod YES-PROD \
     --parallel-if-independent YES-INDEPENDENT-SERVICES
 assert_contains "$CASE_OUTPUT" 'PARALLEL_REJECTED: Repository query contract changed'
+
+# 同一个 @Query 闸, 但喂给它的是 MB 级 backend diff —— 生产上的真实体积。
+# 这是本闸唯一会在真实发布里走到的路径: `git diff -U0 -- backend/java/cretas-api`
+# 常有几 MB, 而旧实现 `printf '%s\n' "$diff_text" | grep -Eqi ...` 在 pipefail 下
+# 必然把命中判成没命中 → Repository 查询契约改了却**静默放行并行部署**。
+setup_repo risk_query_large_diff
+mkdir -p "$CASE_REPO/backend/java/cretas-api/src/main/java/com/cretas/aims/service"
+{
+    printf '@Query("select x from X x")\n'
+    printf '%s\n' "$(make_padding $((2 * 1024 * 1024)))"
+} >"$CASE_REPO/backend/java/cretas-api/src/main/java/com/cretas/aims/service/Search.java"
+git -C "$CASE_REPO" add backend/java/cretas-api/src/main/java/com/cretas/aims/service/Search.java
+git -C "$CASE_REPO" commit -qm 'large backend change carrying a @Query contract edit'
+commit_change web-admin/src/app.ts
+publish_head
+diff_bytes=$(git -C "$CASE_REPO" diff -U0 "$BASE_SHA" HEAD -- backend/java/cretas-api | wc -c)
+[ "$diff_bytes" -gt $((1024 * 1024)) ] \
+    || fail "backend diff 只有 ${diff_bytes}B, 没到 MB 级, 本用例失去回归价值"
+run_release --phase deploy --base-sha "$BASE_SHA" --confirm-prod YES-PROD \
+    --parallel-if-independent YES-INDEPENDENT-SERVICES
+assert_contains "$CASE_OUTPUT" 'PARALLEL_REJECTED: Repository query contract changed'
+assert_contains "$CASE_OUTPUT" 'RELEASE_DEPLOY_MODE=sequential-backend-first'
+assert_log_count 0 'PARALLEL_DEPLOY' "$CASE_LOG"
 
 # Explicit orders are honored and always disable parallel.
 setup_repo web_first
