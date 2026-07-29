@@ -388,3 +388,40 @@ rollback_jar() {
     log "INFO" "回滚完成"
     return 0
 }
+
+# ============================================================================
+# ssh_local_path <path>
+# ----------------------------------------------------------------------------
+# 把 Windows 盘符路径归一化成 MSYS 形式, 供 rsync / scp 使用。
+#
+# rsync 和 scp 都按 "host:path" 语法解析参数, 所以 "C:/Users/x.jar" 里的 "C" 会被
+# 当成【主机名】—— rsync 报 remote→remote 不支持, scp 去连一台叫 "C" 的机器。传输
+# 直接失败。
+#
+# Git Bash 下 $HOME 和 $(cd .. && pwd) 天然给 MSYS 形式 (/c/...), 所以默认路径不会
+# 踩到。但只要有环境变量 (CRETAS_JAR_CACHE_DIR 等) 或外部调用方传进 Windows 风格
+# 路径就会中招 —— 而且过去是【静默】的: 上传竞速里另一条通道会赢, 操作者只看到
+# "胜出: scp" 和一次变慢的部署, 没有任何迹象表明主通道其实死了。
+#
+# 实现注意 (两个坑都实测踩过):
+#   1. 用两个独立模式而不是 [/\\] 字符组 —— bash glob 的 bracket 表达式对反斜杠的
+#      处理有歧义, 实测 [A-Za-z]:[/\\]* 连 "C:/..." 都匹配不到, 而 [A-Za-z]:/* 可以。
+#   2. 用 [[:alpha:]] / [:upper:] 而不是 [A-Za-z] / A-Z 范围 —— 范围表达式按 locale
+#      collation 展开, en_US.UTF-8 下会把小写字母也覆盖进去 (本仓库 release
+#      preflight 曾因此假报 "project import cannot be resolved")。
+ssh_local_path() {
+    local p=$1 drive rest
+    case "$p" in
+        [[:alpha:]]:/*|[[:alpha:]]:\\*)
+            drive=$(printf '%s' "${p%%:*}" | tr '[:upper:]' '[:lower:]')
+            rest=${p#*:}
+            rest=${rest#/}
+            rest=${rest#\\}
+            rest=$(printf '%s' "$rest" | tr '\\' '/')
+            printf '/%s/%s\n' "$drive" "$rest"
+            ;;
+        *)
+            printf '%s\n' "$p"
+            ;;
+    esac
+}

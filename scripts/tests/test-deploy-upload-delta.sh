@@ -36,7 +36,10 @@ seed_call_line=$(grep -Fn 'seed_rsync_delta_basis "$TMP_FILE"' "$DEPLOY_SCRIPT" 
 [ "$(printf '%s\n' "$seed_call_line" | wc -l | tr -d '[:space:]')" = "1" ] \
     || fail "seeding is invoked from more than the primary rsync channel"
 
-rsync_line=$(grep -Fn 'rsync -az --timeout=60 "$JAR_PATH"' "$DEPLOY_SCRIPT" | cut -d: -f1 || true)
+# 主通道命令形状: --stats 是后来为可观测性加的, 源路径改用归一化后的 $SRC
+# (Windows 盘符路径会被 rsync 当成主机名)。这里只锚定"是主通道那条 rsync",
+# 具体 flag 由 test-deploy-upload-rsync-first.sh 各自断言。
+rsync_line=$(grep -Fn 'rsync -az --stats --timeout=60' "$DEPLOY_SCRIPT" | cut -d: -f1 || true)
 [ -n "$rsync_line" ] || fail "primary rsync upload command changed shape"
 [ "$seed_call_line" -lt "$rsync_line" ] \
     || fail "basis is seeded after the rsync that needs it (line $seed_call_line vs $rsync_line)"

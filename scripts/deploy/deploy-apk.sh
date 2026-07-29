@@ -56,6 +56,8 @@ die() { echo "[$(date '+%H:%M:%S')] ❌ $*" >&2; exit 1; }
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
+# ssh_local_path: Windows 盘符路径会被 rsync/scp 当成主机名, 传输直接失败。
+source "$PROJECT_ROOT/scripts/lib/deploy-common.sh"
 ANDROID_DIR="$PROJECT_ROOT/frontend/CretasFoodTrace/android"
 GRADLE_FILE="$ANDROID_DIR/app/build.gradle"
 PAGE_DIR="$PROJECT_ROOT/download-page"
@@ -176,7 +178,7 @@ log "   ✓ 上传 $LATEST_ALIAS"
 if [ "$WITH_SERVER_COPY" = "1" ]; then
   log "📤 [server] 传一份到 $PAGE_GATEWAY:$APK_REMOTE_DIR/ (139 出口慢, 仅作回退)..."
   ssh "$PAGE_GATEWAY" "mkdir -p '$APK_REMOTE_DIR' && chown -R www:www '$PAGE_REMOTE_DIR' 2>/dev/null || true"
-  scp -q "$APK_PATH" "$PAGE_GATEWAY:$APK_REMOTE_DIR/$APK_FILE"
+  scp -q "$(ssh_local_path "$APK_PATH")" "$PAGE_GATEWAY:$APK_REMOTE_DIR/$APK_FILE"
   REMOTE_MD5="$(ssh "$PAGE_GATEWAY" "md5sum '$APK_REMOTE_DIR/$APK_FILE'" | awk '{print $1}')"
   LOCAL_MD5="$(md5sum "$APK_PATH" | awk '{print $1}')"
   [ "$REMOTE_MD5" = "$LOCAL_MD5" ] || die "服务器副本 md5 不匹配 (local=$LOCAL_MD5 remote=$REMOTE_MD5)"
@@ -191,7 +193,7 @@ if [ "$SKIP_PAGE_DEPLOY" = "0" ]; then
   scp -q "$PAGE_DIR"/*.html "$PAGE_GATEWAY:$PAGE_REMOTE_DIR/"
   # 图标 (可选, 存在才传)
   ICON_SRC="$PROJECT_ROOT/frontend/CretasFoodTrace/assets/icon.png"
-  [ -f "$ICON_SRC" ] && scp -q "$ICON_SRC" "$PAGE_GATEWAY:$PAGE_REMOTE_DIR/icon.png" || true
+  [ -f "$ICON_SRC" ] && scp -q "$(ssh_local_path "$ICON_SRC")" "$PAGE_GATEWAY:$PAGE_REMOTE_DIR/icon.png" || true
   ssh "$PAGE_GATEWAY" "chown -R www:www '$PAGE_REMOTE_DIR' 2>/dev/null || true"
   log "   ✓ 下载页已部署"
 fi
