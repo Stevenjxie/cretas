@@ -44,6 +44,21 @@ allowed-tools:
 
 > ⚠️ test 环境已于 2026-07-13 下线（见 server-operations skill）。下文 `--env test` / 10011 相关内容暂留作历史参考；部 prod 后"防御 ping test"的警告可忽略。
 
+**从 GitHub 取制品送上服务器**（≠ 上面的常规发布，别混）：走
+`scripts/deploy/Publish-GitHubArtifactViaLightsailOss.ps1`，链路
+`GitHub → 东京 Lightsail → 上海 OSS → ECS 内网`，制品字节**完全不经过 Windows**
+（实测 168MB 只让本机收 0.30%）。支持 release asset（`-AssetId`）与 CI artifact
+（`-ArtifactId`，zip 在东京解包）。细节见 [`scripts/deploy/RELEASE-ARTIFACT-TRANSPORT.md`](../../../scripts/deploy/RELEASE-ARTIFACT-TRANSPORT.md)。
+
+- ⚠️ **它不加速常规发布**：常规发布的 JAR 是本地 Maven 构建的，根本不从 GitHub 下载，
+  第一跳就接不上；且 rsync delta 实测 9.6×（只传 ~20MB）而 OSS PUT 无 delta 必传全量。
+  它买的是「Windows 退出数据通路 + 制品可追溯」，**不是快**。
+- ⚠️ **传输成功 ≠ 制品可信**：输出里 `transport_verified` 与 `deployable_trust_verified`
+  是两件事，后者只在 manifest 的 tree/测试选择器都对得上时才为 true。
+- 排查用途（要在本机看 CI 测试报告）用 `~/github-cache-tools/fetch-ci-artifact.sh`，
+  那条路终点是本机，**已降级为人工回退**，并发上限 64 + 聚合限速 4 MiB/s
+  —— 曾因 128 路无约束并发打满上行导致全网断流，别再当发布路径用。
+
 **合入通道双轨**（部署前置，详见 `worktree-and-main-only-deploy.md` §2b）：docs/`.claude/`/配置类可走 `publish-main-fastlane.sh` 直推 main（免 PR 往返；分支需 `codex/*` 前缀；非 docs 批次须带 `--task-id <本批任务ID>`，否则 ACTIVE 门禁按「全局零未完成任务」判定而恒拒；ID 必须在 `docs/dispatch/` 里真实出现，拼错会被拒而非静默放行）；碰 backend/web-admin 代码走 PR（CI JPA 门禁）；AGENTS.md/迁移/Entity/Security/`scripts/deploy/*` 强制 PR。任何通道都必须推上 origin/main 才可部署。
 
 ---

@@ -1,0 +1,188 @@
+#!/usr/bin/env bash
+# Stage a GitHub Actions artifact (a ZIP) into the SHA-256 cache as its inner JAR.
+#
+# Release assets are raw files, so github-cache-put can key them by a SHA-256
+# known in advance. A CI artifact cannot work that way: it is a ZIP wrapper, and
+# the key we actually publish under is the SHA-256 of the JAR *inside* it, which
+# is unknowable until the ZIP is opened. The existing fetch-ci-artifact.sh solves
+# that by downloading once to probe the hash and again to store it; this stages
+# in a single download instead.
+#
+# The signed URL arrives on stdin and never enters argv, logs or error messages.
+set -euo pipefail
+set +x
+umask 027
+
+CACHE_DIR=/var/cache/github-artifacts
+LOCK_DIR=/run/lock/github-artifacts
+
+usage() {
+  echo "usage: github-artifact-stage --zip-size <bytes> --jar-name <name>   (signed URL on stdin)" >&2
+  exit 2
+}
+
+zip_size=
+jar_name=
+while (($#)); do
+  case "$1" in
+    --zip-size) (($# >= 2)) || usage; zip_size=$2; shift 2 ;;
+    --jar-name) (($# >= 2)) || usage; jar_name=$2; shift 2 ;;
+    *) usage ;;
+  esac
+done
+
+[[ $zip_size =~ ^[1-9][0-9]*$ ]] || usage
+# A name only: any separator here would be a path-traversal vector into the ZIP.
+[[ $jar_name =~ ^[A-Za-z0-9._-]+\.jar$ ]] || usage
+
+IFS= read -r zip_url || { echo "error=url_missing" >&2; exit 2; }
+[[ -n $zip_url ]] || { echo "error=url_missing" >&2; exit 2; }
+
+# Same allow-list as github-cache-put: the artifact download redirects from
+# api.github.com to Azure blob storage.
+if ! printf '%s' "$zip_url" | python3 -c '
+import ipaddress
+import socket
+import sys
+import urllib.parse
+
+url = sys.stdin.read()
+parsed = urllib.parse.urlsplit(url)
+host = (parsed.hostname or "").lower().rstrip(".")
+allowed = (
+    host in {"github.com", "api.github.com"}
+    or host.endswith(".githubusercontent.com")
+    or host.endswith(".blob.core.windows.net")
+)
+if parsed.scheme != "https" or parsed.username or parsed.password:
+    raise SystemExit(1)
+if parsed.port not in (None, 443) or not allowed:
+    raise SystemExit(1)
+addresses = {r[4][0] for r in socket.getaddrinfo(host, 443, type=socket.SOCK_STREAM)}
+if not addresses:
+    raise SystemExit(1)
+for address in addresses:
+    if not ipaddress.ip_address(address).is_global:
+        raise SystemExit(1)
+'; then
+  unset zip_url
+  echo "error=url_not_allowed" >&2
+  exit 2
+fi
+
+install -d -o root -g www-data -m 0750 "$CACHE_DIR"
+install -d -o root -g root -m 0750 "$LOCK_DIR"
+
+work_dir=$(mktemp -d)
+cleanup() { rm -rf -- "$work_dir"; }
+trap cleanup EXIT INT TERM
+
+escaped_url=${zip_url//\\/\\\\}
+escaped_url=${escaped_url//\"/\\\"}
+started=$(date +%s)
+if ! printf 'url = "%s"\n' "$escaped_url" |
+  curl --config - --location --fail --silent --show-error \
+    --retry 5 --retry-delay 1 --retry-all-errors \
+    --connect-timeout 15 --max-time 600 \
+    --output "$work_dir/artifact.zip" 2>/dev/null; then
+  unset zip_url escaped_url
+  echo "error=download_failed" >&2
+  exit 1
+fi
+unset zip_url escaped_url
+download_seconds=$(($(date +%s) - started))
+
+actual_zip_size=$(stat -c %s "$work_dir/artifact.zip")
+if [[ $actual_zip_size != "$zip_size" ]]; then
+  echo "error=zip_size_mismatch expected=$zip_size actual=$actual_zip_size" >&2
+  exit 1
+fi
+
+# Extract by exact member name only. Never trust ZIP-supplied paths: a crafted
+# archive can otherwise write outside the destination (zip-slip).
+if ! JAR_NAME="$jar_name" WORK="$work_dir" python3 -c '
+import hashlib
+import os
+import sys
+import zipfile
+
+jar_name = os.environ["JAR_NAME"]
+work = os.environ["WORK"]
+wanted = {jar_name, jar_name + ".sha256", jar_name + ".commit", "release-jar.manifest"}
+
+with zipfile.ZipFile(os.path.join(work, "artifact.zip")) as archive:
+    present = {n for n in archive.namelist() if n in wanted}
+    if jar_name not in present:
+        print("error=jar_not_in_archive", file=sys.stderr)
+        raise SystemExit(1)
+    for name in present:
+        # basename() defeats any directory component the archive claims.
+        target = os.path.join(work, os.path.basename(name))
+        with archive.open(name) as source, open(target, "wb") as sink:
+            digest = hashlib.sha256()
+            while True:
+                block = source.read(1024 * 1024)
+                if not block:
+                    break
+                digest.update(block)
+                sink.write(block)
+            if name == jar_name:
+                with open(os.path.join(work, "jar.sha256.computed"), "w") as out:
+                    out.write(digest.hexdigest())
+'; then
+  echo "error=extract_failed" >&2
+  exit 1
+fi
+
+jar_path="$work_dir/$jar_name"
+jar_sha=$(cat "$work_dir/jar.sha256.computed")
+jar_size=$(stat -c %s "$jar_path")
+
+# The archive ships its own .sha256. Cross-check it against what we just
+# computed: agreement means the JAR survived both CI upload and our download.
+if [[ -f "$work_dir/$jar_name.sha256" ]]; then
+  claimed=$(cut -d ' ' -f 1 < "$work_dir/$jar_name.sha256")
+  if [[ $claimed != "$jar_sha" ]]; then
+    echo "error=jar_sha256_disagrees_with_archive_claim" >&2
+    exit 1
+  fi
+  sha_source=archive_and_recomputed
+else
+  sha_source=recomputed_only
+fi
+
+destination="$CACHE_DIR/$jar_sha.bin"
+lock_file="$LOCK_DIR/$jar_sha.lock"
+exec 9>"$lock_file"
+flock 9
+
+cache_status=stored
+if [[ -f $destination ]]; then
+  existing_sha=$(sha256sum "$destination" | cut -d ' ' -f 1)
+  if [[ $existing_sha == "$jar_sha" ]]; then
+    touch "$destination"
+    cache_status=hit
+  else
+    mv -- "$destination" "$CACHE_DIR/.$jar_sha.invalid.$(date -u +%Y%m%dT%H%M%SZ)"
+  fi
+fi
+if [[ $cache_status == stored ]]; then
+  chown root:www-data "$jar_path"
+  chmod 0640 "$jar_path"
+  mv -- "$jar_path" "$destination"
+fi
+
+echo "cache_status=$cache_status"
+echo "jar_sha256=$jar_sha"
+echo "jar_size=$jar_size"
+echo "zip_size=$actual_zip_size"
+echo "download_seconds=$download_seconds"
+echo "sha_source=$sha_source"
+if [[ -f "$work_dir/release-jar.manifest" ]]; then
+  echo "manifest_present=true"
+  echo "manifest_b64=$(base64 -w0 < "$work_dir/release-jar.manifest")"
+else
+  # An artifact built before ci.yml emitted manifests. Say so rather than
+  # letting the caller assume trust can be established.
+  echo "manifest_present=false"
+fi

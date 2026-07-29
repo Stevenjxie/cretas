@@ -1,0 +1,174 @@
+#!/usr/bin/env bash
+# Upload one cached GitHub artifact straight from Tokyo to Shanghai OSS.
+#
+# The presigned PUT URL arrives on stdin and is never allowed into argv, the
+# process list, logs or error messages. The artifact is re-verified (size and
+# SHA-256) immediately before the upload, so a cache file that rotted or was
+# tampered with after github-cache-put stored it cannot reach OSS.
+#
+# Output is a single fixed set of fields; the URL is never among them.
+set -euo pipefail
+set +x
+umask 027
+
+CACHE_DIR=/var/cache/github-artifacts
+CONTENT_TYPE="application/java-archive"
+BUCKET=${CRETAS_RELEASE_OSS_BUCKET:-cretas-media}
+SIGNING_HOST="oss-cn-shanghai.aliyuncs.com"
+CONNECT_TIMEOUT=15
+MAX_TIME=180
+
+usage() {
+  echo "usage: oss-put-artifact --sha256 <hex> --size <bytes>   (PUT URL on stdin)" >&2
+  exit 2
+}
+
+expected_sha=
+expected_size=
+while (($#)); do
+  case "$1" in
+    --sha256)
+      (($# >= 2)) || usage
+      expected_sha=$2
+      shift 2
+      ;;
+    --size)
+      (($# >= 2)) || usage
+      expected_size=$2
+      shift 2
+      ;;
+    *)
+      usage
+      ;;
+  esac
+done
+
+[[ $expected_sha =~ ^[0-9a-f]{64}$ ]] || usage
+[[ $expected_size =~ ^[1-9][0-9]*$ ]] || usage
+
+IFS= read -r put_url || {
+  echo "error=url_missing" >&2
+  exit 2
+}
+[[ -n $put_url ]] || {
+  echo "error=url_missing" >&2
+  exit 2
+}
+
+# Constrain the URL to exactly one bucket host, one approved prefix and HTTPS on
+# 443. A signed URL for anything else is refused before curl ever sees it.
+if ! printf '%s' "$put_url" | BUCKET="$BUCKET" SIGNING_HOST="$SIGNING_HOST" python3 -c '
+import os
+import sys
+import urllib.parse
+
+url = sys.stdin.read()
+parsed = urllib.parse.urlsplit(url)
+host = (parsed.hostname or "").lower().rstrip(".")
+expected_host = "{}.{}".format(os.environ["BUCKET"], os.environ["SIGNING_HOST"]).lower()
+approved_prefixes = ("/deploy/backend/", "/codex-network-test/")
+
+if parsed.scheme != "https" or parsed.username or parsed.password:
+    raise SystemExit(1)
+if parsed.port not in (None, 443):
+    raise SystemExit(1)
+if host != expected_host:
+    raise SystemExit(1)
+if not parsed.path.startswith(approved_prefixes):
+    raise SystemExit(1)
+if ".." in parsed.path:
+    raise SystemExit(1)
+'; then
+  unset put_url
+  echo "error=url_not_allowed" >&2
+  exit 2
+fi
+
+source_file="$CACHE_DIR/$expected_sha.bin"
+[[ -f $source_file ]] || {
+  unset put_url
+  echo "error=cache_miss" >&2
+  exit 1
+}
+
+# Re-verify at the last possible moment rather than trusting the earlier store.
+actual_size=$(stat -c %s "$source_file")
+if [[ $actual_size != "$expected_size" ]]; then
+  unset put_url
+  echo "error=size_mismatch expected=$expected_size actual=$actual_size" >&2
+  exit 1
+fi
+actual_sha=$(sha256sum "$source_file" | cut -d ' ' -f 1)
+if [[ $actual_sha != "$expected_sha" ]]; then
+  unset put_url
+  echo "error=sha256_mismatch" >&2
+  exit 1
+fi
+
+escaped_url=${put_url//\\/\\\\}
+escaped_url=${escaped_url//\"/\\\"}
+status_file=$(mktemp)
+cleanup() { rm -f -- "$status_file"; }
+trap cleanup EXIT INT TERM
+
+started=$(date +%s.%N)
+set +e
+# --retry-all-errors is deliberately NOT used: x-oss-forbid-overwrite makes a
+# replayed PUT return 409 rather than silently double-writing, but retrying real
+# HTTP errors would still turn a refusal into noise. Only connection-level
+# failures are retried.
+printf 'url = "%s"\n' "$escaped_url" |
+  curl \
+    --config - \
+    --request PUT \
+    --upload-file "$source_file" \
+    --header "Content-Type: $CONTENT_TYPE" \
+    --header "x-oss-forbid-overwrite: true" \
+    --silent \
+    --show-error \
+    --retry 2 \
+    --retry-delay 2 \
+    --retry-connrefused \
+    --connect-timeout "$CONNECT_TIMEOUT" \
+    --max-time "$MAX_TIME" \
+    --output /dev/null \
+    --write-out '%{http_code} %{size_upload}' >"$status_file" 2>/dev/null
+curl_rc=$?
+set -e
+unset put_url escaped_url
+finished=$(date +%s.%N)
+
+if ((curl_rc != 0)); then
+  # curl's own message could echo the URL, so report the numeric code only.
+  echo "error=curl_failed rc=$curl_rc" >&2
+  exit 1
+fi
+
+http_status=$(cut -d ' ' -f 1 "$status_file")
+bytes_uploaded=$(cut -d ' ' -f 2 "$status_file")
+elapsed=$(awk -v a="$started" -v b="$finished" 'BEGIN { printf "%.3f", b - a }')
+rate=$(awk -v n="$bytes_uploaded" -v s="$elapsed" \
+  'BEGIN { if (s > 0) printf "%.3f", n / s / 1048576; else printf "0.000" }')
+
+case "$http_status" in
+  200)
+    artifact_status=stored
+    ;;
+  409)
+    # Immutability held: the key already exists. Consistency is decided by the
+    # ECS verifier, not by this transport step.
+    artifact_status=exists
+    ;;
+  *)
+    echo "error=http_status_unexpected http_status=$http_status" >&2
+    exit 1
+    ;;
+esac
+
+echo "http_status=$http_status"
+echo "bytes_uploaded=$bytes_uploaded"
+echo "elapsed_seconds=$elapsed"
+echo "bytes_per_second=$(awk -v n="$bytes_uploaded" -v s="$elapsed" \
+  'BEGIN { if (s > 0) printf "%.0f", n / s; else printf "0" }')"
+echo "megabytes_per_second=$rate"
+echo "artifact_status=$artifact_status"

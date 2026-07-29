@@ -290,6 +290,7 @@ WARN level 日志 + 跳过 Step 3.5。完后立即修 runner 重新部署。
 5. **旧服务器 (139)**: 后端已停用，仅保留 Nginx 反代 + **Showcase 静态站** (www.cretaceousfuture.com)
 6. **Showcase 只部署到 139**: 不要向 47 传 showcase 文件，47 是纯后端服务器
 7. **文件传输: rsync 为主, scp 兜底** (deploy script v5.0, Steve 2026-05-28; 全 SSH-based 谁快谁赢). `rsync` (主, 更长久更快) + `rsync+compress` + `scp` (兜底, 任何环境都能跑, 实测 10.85 MB/s). **R2/OSS/GitHub 默认禁用** (代码保留, `ENABLE_R2=1` 紧急 opt-in). ⚠️ **`SKIP_RSYNC=1` 已于 2026-06-07 从 `~/.bashrc` 移除** —— 旧"rsync 被 RST 永久禁用"结论已过期, 残留的 flag 一直在 forcing scp 兜底; 现 deploy 默认走 rsync 主通道.
+7b. **从 GitHub 取制品是另一条链路, 不走上面的 rsync/scp**: `GitHub → 东京 Lightsail → 上海 OSS → ECS 内网`, 入口 `scripts/deploy/Publish-GitHubArtifactViaLightsailOss.ps1`(release asset 用 `-AssetId`, CI artifact 用 `-ArtifactId`, zip 在东京解包)。制品字节**完全不经过 Windows**(实测 168MB 本机只收 0.30%); 东京→OSS 实测 22.6–23.8 MB/s, OSS→ECS 内网 276–415 MB/s。详见 `scripts/deploy/RELEASE-ARTIFACT-TRANSPORT.md`。⚠️ 它**不加速常规发布**(常规发布的 JAR 是本地 Maven 构建的, 不从 GitHub 下载), 买的是"Windows 退出数据通路 + 制品可追溯"; 且 `transport_verified` ≠ `deployable_trust_verified`。⚠️ 排查用的 `~/github-cache-tools/fetch-ci-artifact.sh` 终点是本机, **已降级为人工回退**(并发上限 64 + 聚合限速 4 MiB/s), 曾因 128 路无约束并发打满上行导致全网断流。
 8. **两套环境共享 JAR + Python 代码**: 部署一次代码后按需重启对应环境. **进程独立**, 默认部 prod 不动 test, 见上方"双环境部署最佳实践".
 9. **修改 systemd 服务文件后**: 必须 `systemctl daemon-reload` 再 `systemctl restart <service>`
 10. **生产环境变量**: 集中在 `.env.prod`，修改后需重启对应服务才生效
