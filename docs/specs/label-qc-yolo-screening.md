@@ -127,7 +127,26 @@ CPU 单张耗时约 3s（本机 Ryzen 7 5700X，含 18 个托盘的逐一标签�
   → 上传到服务器 label_qc/models/
 ```
 
-模型文件不进 git（各约 36 MB），由部署流程上传。
+模型文件不进 git（各约 36 MB）。
+
+### ⛔ 模型必须放在 rsync 范围之外
+
+`deploy-smartbi-python.sh` 用 `rsync -az --delete-after` 同步整个 `backend/python/`，
+且 exclude 列表**不含 `*.onnx`**。若把模型放在 `backend/python/label_qc/models/` 下，
+任何一次从不含模型文件的工作区部署都会**把服务器上的模型删掉**（`--delete-after`
+会删除本地不存在的文件），服务随即静默降级为 VL-only。
+
+因此模型放在同步范围之外，用环境变量指路：
+
+```
+服务器路径:  /www/wwwroot/cretas/models/label-qc/{tray.onnx,label.onnx}
+环境变量:    LABEL_QC_MODEL_DIR=/www/wwwroot/cretas/models/label-qc
+```
+
+这样零脚本改动，且代码仓库的部署不会影响模型。仓库内 `label_qc/models/` 仅保留
+`.gitignore`，供本地开发时放模型用（默认路径仍指向它）。
+
+更新模型 = 上传新文件到该目录 + 重启 Python 服务，不需要发版。
 
 当前模型：
 - `tray.onnx` — YOLO11s，imgsz 960，34 张人工确认照片 / 601 个托盘框
