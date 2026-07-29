@@ -89,6 +89,25 @@ elapsed=$(awk -v a="$started" -v b="$finished" 'BEGIN { printf "%.3f", b - a }')
 rate=$(awk -v n="$local_size" -v s="$elapsed" \
   'BEGIN { if (s > 0) printf "%.3f", n / s / 1048576; else printf "0.000" }')
 
+# Field reader kept semantically identical to release_manifest_field() in
+# scripts/deploy/release-jar-manifest.sh: exact key prefix (not -F=, because
+# target_tests holds a Maven selector that itself contains '='), a duplicate or
+# missing key is an error rather than a silent empty, and a trailing CR is
+# stripped so a CRLF manifest does not poison the comparison.
+manifest_field() {
+  awk -v key="$2" '
+    index($0, key "=") == 1 {
+      count++
+      value = substr($0, length(key) + 2)
+      sub(/\r$/, "", value)
+    }
+    END {
+      if (count != 1) exit 1
+      print value
+    }
+  ' "$1"
+}
+
 # Trust is a manifest question, never a transport question.
 trust=false
 trust_reason=no_manifest_supplied
@@ -96,10 +115,9 @@ if [[ -n $manifest ]]; then
   if [[ ! -f $manifest ]]; then
     trust_reason=manifest_not_found
   else
-    manifest_tree=$(awk -F= '$1 == "backend_tree" { print $2 }' "$manifest" | tr -d '[:space:]')
-    manifest_jar=$(awk -F= '$1 == "jar_sha256" { print $2 }' "$manifest" |
-      tr -d '[:space:]' | tr '[:upper:]' '[:lower:]')
-    manifest_tests=$(awk -F= '$1 == "tests" { print $2 }' "$manifest")
+    manifest_tree=$(manifest_field "$manifest" backend_tree || true)
+    manifest_jar=$(manifest_field "$manifest" jar_sha256 | tr '[:upper:]' '[:lower:]' || true)
+    manifest_tests=$(manifest_field "$manifest" target_tests || true)
     if [[ -z $manifest_tree || -z $manifest_jar ]]; then
       trust_reason=manifest_incomplete
     elif [[ $manifest_jar != "$jar_sha" ]]; then
@@ -122,6 +140,11 @@ echo "sha256=$local_sha"
 echo "transport_verified=true"
 echo "deployable_trust_verified=$trust"
 echo "trust_reason=$trust_reason"
+if [[ $trust == true ]]; then
+  # Quoted: a Maven selector contains spaces and '=', and an auditor needs to
+  # see which test set actually vouched for this artifact.
+  echo "manifest_target_tests='$manifest_tests'"
+fi
 
 if ((purge)); then
   if [[ $prefix != "$ACCEPTANCE_PREFIX" ]]; then
