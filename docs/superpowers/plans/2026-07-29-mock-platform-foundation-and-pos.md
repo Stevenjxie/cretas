@@ -1257,17 +1257,31 @@ git commit -m "feat(mock-platform): CLI serve/backfill + 常驻生成循环 + �
 
 **Interfaces:**
 - Consumes: 无
-- Produces: 表 `platform_sync_cursor(factory_id, platform, cursor_value, updated_at)`，主键 `(factory_id, platform)`；`dim_store` 中 10 行 `MOCK_REST` 门店，code 为 `MK01`..`MK10`
+- Produces:
+  - 表 `platform_sync_cursor(factory_id, platform, cursor_value, updated_at)`，主键 `(factory_id, platform)`
+  - 表 `platform_store_map(factory_id, platform, platform_store_code, store_id)`，主键 `(factory_id, platform, platform_store_code)`
+  - `dim_store` 中 10 行 `MOCK_REST` 门店（按 `name` 唯一，**没有 store_code 列**）
+  - `fact_pos_transaction` 上的**部分唯一索引** `WHERE source_type = 'mock_keruyun'`
 
-- [ ] **Step 1: 先查 dim_store 的实际列结构（不能凭记忆写 INSERT）**
+> ⚠️ **2026-07-29 计划修正（实测推翻了原假设，原文已作废）**
+>
+> 原计划这一节假设 `dim_store` 有 `store_code` 列、`fact_pos_transaction` 有 `transaction_no` 列。**两个都不存在。** 实测结果：
+>
+> 1. `dim_store` 实际列 = `store_id / factory_id / name / brand / city / province / region`，唯一约束 `(factory_id, name)`，**无 store_code**。它被 23 处外键引用，不该为了我们加列 → 改为新建 `platform_store_map` 映射表。这也更正确：不同平台对同一门店有不同 code（美团≠抖音≠POS），映射本来就该按平台建。
+> 2. `fact_pos_transaction` 实际是 `source_type` + `source_bill_no`（均 NOT NULL），且**除主键外无任何唯一约束**。
+> 3. 🔴 该表 `(factory_id, source_type, source_bill_no)` 上**已有 151,978 组重复**（全表 1,382,267 行）。**直接加唯一索引会失败，按 Step 3.5 的设计会 ABORT 整个 Python 部署。** → 只加**部分唯一索引**，谓词限定 `source_type='mock_keruyun'`，初始覆盖 0 行，不可能与历史冲突。
+>
+> 🔴 **查表方法论**：这些老表的 `tenant_isolation` policy **没有** `__internal__` 逃生门（与本计划新建的表相反）。用 `set_config('app.factory_id','__internal__')` 查会得到**假 0 行**，据此会得出「表是空的」「零重复」两个错误结论。查老表必须用真租户 id，或用 `sudo -u postgres psql` 绕 RLS。
+
+- [ ] **Step 1: 复核真实表结构（数据已在本计划修正中给出，此步是确认没被别的 session 改过）**
 
 Run:
 
 ```bash
-ssh root@47.100.235.168 "PW=\$(grep '^SMARTBI_DB_PASSWORD=' /www/wwwroot/cretas/.env.prod | cut -d= -f2- | tr -d '\"'); PGPASSWORD=\"\$PW\" psql -h localhost -U smartbi_user -d smartbi_prod_db -c '\\d dim_store'"
+ssh root@47.100.235.168 "PW=\$(grep '^SMARTBI_DB_PASSWORD=' /www/wwwroot/cretas/.env.prod | cut -d= -f2- | tr -d '\"'); export PGPASSWORD=\"\$PW\"; psql -h localhost -U smartbi_user -d smartbi_prod_db -c '\\d dim_store'; sudo -u postgres psql -d smartbi_prod_db -tAc \"SELECT count(*) FROM (SELECT factory_id, source_type, source_bill_no FROM fact_pos_transaction GROUP BY 1,2,3 HAVING count(*)>1) t;\""
 ```
 
-Expected: 打印 `dim_store` 完整列定义。**把实际列名抄进 Step 2 的 INSERT，不要照搬本计划的假设。** 门店 code 必须是 `MK01`..`MK10`，与模拟端 `seed.py` 的 `_STORES` 一一对应——这个映射是 adapter 定位门店的唯一依据，写错会让所有订单落到错门店。
+Expected：`dim_store` 无 `store_code` 列；重复组数 > 0（写这份计划时是 151978）。**只要重复组数非 0，就绝不能加全表唯一索引。** 若发现结构与上面的修正不符，停下来说明，不要硬写。
 
 - [ ] **Step 2: 写 migration**
 
@@ -1325,8 +1339,107 @@ GRANT SELECT, INSERT, UPDATE, DELETE ON platform_sync_cursor TO smartbi_user;
 COMMENT ON TABLE platform_sync_cursor IS
     '外部平台增量拉取游标. 每租户每平台一行, connector 拉完一页后推进.';
 
--- ⬇️ MOCK_REST 的 10 家门店。列名以 Step 1 查到的 dim_store 实际结构为准。
---    code 固定 MK01..MK10，与模拟端 mock_platform/world/seed.py 的 _STORES 对齐。
+-- ── 平台门店映射 ──────────────────────────────────────────────────────
+-- dim_store 没有 store_code 列(实际列: store_id/factory_id/name/brand/city/
+-- province/region, 唯一约束 (factory_id, name)), 且被 23 处外键引用, 不该为
+-- 我们加列。不同平台对同一门店有不同 code(美团≠抖音≠POS), 按平台建映射更对。
+CREATE TABLE IF NOT EXISTS platform_store_map (
+    factory_id          TEXT   NOT NULL,
+    platform            TEXT   NOT NULL,
+    platform_store_code TEXT   NOT NULL,
+    store_id            BIGINT NOT NULL REFERENCES dim_store(store_id),
+    created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (factory_id, platform, platform_store_code)
+);
+
+ALTER TABLE platform_store_map ENABLE ROW LEVEL SECURITY;
+ALTER TABLE platform_store_map FORCE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS platform_store_map_select ON platform_store_map;
+CREATE POLICY platform_store_map_select ON platform_store_map
+    FOR SELECT USING (
+        factory_id = current_setting('app.factory_id', true)
+        OR current_setting('app.factory_id', true) = '__internal__'
+    );
+
+DROP POLICY IF EXISTS platform_store_map_insert ON platform_store_map;
+CREATE POLICY platform_store_map_insert ON platform_store_map
+    FOR INSERT WITH CHECK (
+        factory_id = current_setting('app.factory_id', true)
+        OR current_setting('app.factory_id', true) = '__internal__'
+    );
+
+DROP POLICY IF EXISTS platform_store_map_update ON platform_store_map;
+CREATE POLICY platform_store_map_update ON platform_store_map
+    FOR UPDATE USING (
+        factory_id = current_setting('app.factory_id', true)
+        OR current_setting('app.factory_id', true) = '__internal__'
+    ) WITH CHECK (
+        factory_id = current_setting('app.factory_id', true)
+        OR current_setting('app.factory_id', true) = '__internal__'
+    );
+
+DROP POLICY IF EXISTS platform_store_map_delete ON platform_store_map;
+CREATE POLICY platform_store_map_delete ON platform_store_map
+    FOR DELETE USING (
+        factory_id = current_setting('app.factory_id', true)
+        OR current_setting('app.factory_id', true) = '__internal__'
+    );
+
+GRANT SELECT, INSERT, UPDATE, DELETE ON platform_store_map TO smartbi_user;
+
+-- ── 幂等索引 ──────────────────────────────────────────────────────────
+-- 🔴 只能是**部分**唯一索引。全表 (factory_id, source_type, source_bill_no)
+--    已有 151,978 组重复(全表 1,382,267 行), 加全表唯一索引会失败 →
+--    按 deploy-smartbi-python.sh Step 3.5 的设计会 ABORT 整个 Python 部署。
+--    谓词限定到我们自己的 source_type, 初始覆盖 0 行, 不可能与历史冲突。
+CREATE UNIQUE INDEX IF NOT EXISTS uq_fact_pos_txn_mock_keruyun
+    ON fact_pos_transaction (factory_id, source_bill_no)
+    WHERE source_type = 'mock_keruyun';
+
+-- ── MOCK_REST 的 10 家门店 + 平台 code 映射 ────────────────────────────
+-- dim_store 按 (factory_id, name) 唯一; name 必须与模拟端
+-- mock_platform/world/seed.py 的 _STORES 第二个字段逐字一致。
+INSERT INTO dim_store (factory_id, name, brand, city, province)
+VALUES
+    ('MOCK_REST', '模拟·打浦桥日月光店',   '模拟餐饮', '上海', '上海'),
+    ('MOCK_REST', '模拟·徐汇美罗城店',     '模拟餐饮', '上海', '上海'),
+    ('MOCK_REST', '模拟·静安嘉里中心店',   '模拟餐饮', '上海', '上海'),
+    ('MOCK_REST', '模拟·陆家嘴正大店',     '模拟餐饮', '上海', '上海'),
+    ('MOCK_REST', '模拟·长宁龙之梦店',     '模拟餐饮', '上海', '上海'),
+    ('MOCK_REST', '模拟·杨浦五角场店',     '模拟餐饮', '上海', '上海'),
+    ('MOCK_REST', '模拟·普陀真如社区店',   '模拟餐饮', '上海', '上海'),
+    ('MOCK_REST', '模拟·闵行莘庄社区店',   '模拟餐饮', '上海', '上海'),
+    ('MOCK_REST', '模拟·宝山大场社区店',   '模拟餐饮', '上海', '上海'),
+    ('MOCK_REST', '模拟·浦东金桥社区店',   '模拟餐饮', '上海', '上海')
+ON CONFLICT (factory_id, name) DO NOTHING;
+
+-- MK01..MK10 → store_id。顺序与 seed.py 的 _STORES 一一对应。
+INSERT INTO platform_store_map (factory_id, platform, platform_store_code, store_id)
+SELECT 'MOCK_REST', 'keruyun', v.code, s.store_id
+FROM (VALUES
+    ('MK01', '模拟·打浦桥日月光店'), ('MK02', '模拟·徐汇美罗城店'),
+    ('MK03', '模拟·静安嘉里中心店'), ('MK04', '模拟·陆家嘴正大店'),
+    ('MK05', '模拟·长宁龙之梦店'),   ('MK06', '模拟·杨浦五角场店'),
+    ('MK07', '模拟·普陀真如社区店'), ('MK08', '模拟·闵行莘庄社区店'),
+    ('MK09', '模拟·宝山大场社区店'), ('MK10', '模拟·浦东金桥社区店')
+) AS v(code, name)
+JOIN dim_store s ON s.factory_id = 'MOCK_REST' AND s.name = v.name
+ON CONFLICT (factory_id, platform, platform_store_code) DO NOTHING;
+
+-- ── 支付渠道 ──────────────────────────────────────────────────────────
+-- fact_pos_payment.channel_id 是 NOT NULL 外键(指向 dim_payment_channel),
+-- 没有 method 文本列。writer 要按 (factory_id, name) 查 channel_id, 所以这里
+-- 必须先把模拟端会产生的 4 种支付方式种进去。
+-- 名字与模拟端 mock_platform/world/generator.py 的 _PAY_BY_CHANNEL 值对应:
+--   cash→现金  wechat→微信  alipay→支付宝  platform→平台代收
+INSERT INTO dim_payment_channel (factory_id, name, category)
+VALUES
+    ('MOCK_REST', '现金',     'cash'),
+    ('MOCK_REST', '微信',     'wallet'),
+    ('MOCK_REST', '支付宝',   'wallet'),
+    ('MOCK_REST', '平台代收', 'platform')
+ON CONFLICT (factory_id, name) DO NOTHING;
 
 COMMIT;
 ```
@@ -1366,6 +1479,37 @@ def test_门店code与模拟端一一对应():
     sql = MIG.read_text(encoding="utf-8")
     codes = set(re.findall(r"\bMK(\d{2})\b", sql))
     assert codes == {f"{i:02d}" for i in range(1, 11)}, "门店 code 必须是 MK01..MK10"
+
+
+def test_唯一索引必须是部分索引():
+    """🔴 防 prod 部署被 ABORT 的那一刀。
+
+    fact_pos_transaction 上 (factory_id, source_type, source_bill_no) 已有
+    151,978 组重复(全表 1,382,267 行)。加全表唯一索引会失败, 而 migration
+    runner 失败 → deploy-smartbi-python.sh Step 3.5 ABORT 整个 Python 部署。
+    只能加谓词限定到自己 source_type 的部分唯一索引。
+    """
+    sql = MIG.read_text(encoding="utf-8")
+    m = re.search(
+        r"CREATE UNIQUE INDEX[^;]*?ON\s+fact_pos_transaction[^;]*?;", sql, re.S | re.I
+    )
+    assert m, "缺少 fact_pos_transaction 上的幂等唯一索引"
+    stmt = m.group(0)
+    assert "WHERE" in stmt.upper(), (
+        "必须是部分唯一索引(带 WHERE source_type=...)。全表唯一索引会因历史重复失败, "
+        "进而 ABORT 整个 Python 部署。"
+    )
+    assert "source_type" in stmt, "WHERE 谓词必须限定 source_type"
+
+
+def test_不得给dim_store加列():
+    """dim_store 被 23 处外键引用, 不为我们这个功能改它的结构。
+
+    门店映射走新建的 platform_store_map, 不走 dim_store 加列。
+    """
+    sql = MIG.read_text(encoding="utf-8").upper()
+    assert "ALTER TABLE DIM_STORE" not in sql, "不许改 dim_store 结构"
+    assert "PLATFORM_STORE_MAP" in sql, "门店映射必须建在 platform_store_map"
 ```
 
 - [ ] **Step 4: 跑测试确认通过**
@@ -1775,11 +1919,15 @@ Run:
 ssh root@47.100.235.168 "PW=\$(grep '^SMARTBI_DB_PASSWORD=' /www/wwwroot/cretas/.env.prod | cut -d= -f2- | tr -d '\"'); export PGPASSWORD=\"\$PW\"; for t in fact_pos_transaction fact_pos_item fact_pos_payment dim_store; do echo \"=== \$t ===\"; psql -h localhost -U smartbi_user -d smartbi_prod_db -c \"\\d \$t\"; done"
 ```
 
-Expected: 打印四张表的完整列定义与主键/唯一约束。**Step 4 的 INSERT 语句必须照这里的真实列名写。** 特别确认三件事：
+> ⚠️ **2026-07-29 计划修正（实测结果，下面的 writer 代码已按此重写）**
+>
+> - `fact_pos_transaction` 实际列：`id / factory_id / upload_id / source_type / source_bill_no / store_id / staff_id / date / time / gross_amount / discount_amount / tax_amount / net_amount / actual_receive / customer_count / avg_per_capita / table_no / order_type / channel_origin / item_count / has_discount / meal_period`。**没有 `transaction_no`**；`source_type` 与 `source_bill_no` 均 NOT NULL。
+> - `fact_pos_item` 靠 **`transaction_id`（bigint FK）** 关联，不是靠单号 + 日期 → writer 必须 `INSERT ... RETURNING id` 拿到主键再写明细。它另有 `product_id`（可空 FK）与 `source_item_raw`（菜名落这里）。
+> - 幂等挂在 Task 6 建的**部分唯一索引** `uq_fact_pos_txn_mock_keruyun (factory_id, source_bill_no) WHERE source_type = 'mock_keruyun'` 上。`ON CONFLICT` 必须带同样的谓词才能命中部分索引。
+> - 门店映射走 Task 6 建的 `platform_store_map`，**不是** `dim_store.store_code`（该列不存在）。
+> - 金额列是 `NUMERIC(18,2)` 元，归一化模型是「分」→ 写入前除 100。
 
-1. `fact_pos_transaction` 的**唯一键**是什么（幂等 `ON CONFLICT` 要挂在它上面）
-2. 金额列是 `NUMERIC(18,2)` 元，所以写入前要把「分」除以 100
-3. `dim_store` 用什么列关联 `store_code`
+Expected: 打印四张表的完整列定义与主键/唯一约束，与上面的修正一致。若不一致（别的 session 改过表），停下来说明，不要硬写。
 
 - [ ] **Step 2: 写 adapter 的失败测试**
 
@@ -1991,14 +2139,21 @@ class KeruyunAdapter:
 
 - [ ] **Step 5: 写 Silver writer**
 
-按 Step 1 查到的真实列名写。骨架如下，`INSERT` 的列清单换成实际的：
+列名已按实测校正（见 Step 1 的计划修正块），照下面写即可：
 
 ```python
 # backend/python/smartbi/ingestion/platforms/writer.py
 """归一化订单 → Silver。
 
-幂等: 以 (factory_id, 平台单号) 为唯一键做 ON CONFLICT DO NOTHING。
+幂等: 用 fact_pos_transaction 上**现成的**唯一约束
+      uq_fact_pos_txn (factory_id, source_type, store_id, source_bill_no)。
+      不新建任何索引 —— 该表 1,382,267 行, 现成约束已够用。
+      ⚠️ ON CONFLICT 的列清单必须与该约束**完全一致**(含 store_id), 否则
+      Postgres 匹配不到约束会直接报错。
 框架保证「先写入、后推进游标」, 崩在中间下轮重拉只会命中冲突, 不会重复计数。
+
+门店映射走 platform_store_map(dim_store 没有 store_code 列)。
+明细靠 transaction_id 外键关联 → 主表 INSERT 必须 RETURNING id。
 
 金额: 归一化模型用「分」, Silver 是 NUMERIC(18,2) 元, 这里除 100。
 """
@@ -2011,6 +2166,15 @@ from typing import List
 from .models import NormalizedOrder
 
 logger = logging.getLogger(__name__)
+
+# 模拟端的支付方式 → dim_payment_channel.name。
+# 两边必须同时改: 这里加一项, V20261101_01 的 dim_payment_channel 种子也要加。
+_CHANNEL_NAME = {
+    "cash": "现金",
+    "wechat": "微信",
+    "alipay": "支付宝",
+    "platform": "平台代收",
+}
 
 
 def _yuan(cents: int) -> Decimal:
@@ -2027,48 +2191,71 @@ async def write_orders(pool, factory_id: str, orders: List[NormalizedOrder]) -> 
             await conn.execute("SELECT set_config('app.factory_id', $1, true)", factory_id)
             for order in orders:
                 store_row = await conn.fetchrow(
-                    # ⬇️ 列名以 Step 1 查到的 dim_store 实际结构为准
-                    "SELECT store_id FROM dim_store "
-                    "WHERE factory_id = $1 AND store_code = $2",
-                    factory_id, order.store_code,
+                    "SELECT store_id FROM platform_store_map "
+                    "WHERE factory_id = $1 AND platform = $2 AND platform_store_code = $3",
+                    factory_id, order.platform, order.store_code,
                 )
                 if store_row is None:
                     # 禁降级: 门店映射不上就报错, 不建「未知门店」也不丢弃
                     raise RuntimeError(
-                        f"门店映射失败: factory={factory_id} store_code={order.store_code} "
-                        f"—— 检查 V20261101_01 的 dim_store 种子是否与模拟端 seed.py 对齐"
+                        f"门店映射失败: factory={factory_id} platform={order.platform} "
+                        f"code={order.store_code} —— 检查 V20261101_01 的 "
+                        f"platform_store_map 种子是否与模拟端 seed.py 的 _STORES 对齐"
                     )
-                # ⬇️ 列名与 ON CONFLICT 目标以 Step 1 查到的 fact_pos_transaction 为准
-                result = await conn.execute(
+                # RETURNING id: 明细表靠 transaction_id 外键关联, 必须拿到主键。
+                # 命中部分唯一索引需要带上同样的 WHERE 谓词。
+                txn_row = await conn.fetchrow(
                     "INSERT INTO fact_pos_transaction "
-                    "(factory_id, store_id, transaction_no, date, time, "
-                    " gross_amount, discount_amount, net_amount, customer_count, item_count) "
-                    "VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) "
-                    "ON CONFLICT (factory_id, transaction_no) DO NOTHING",
+                    "(factory_id, store_id, source_type, source_bill_no, date, time, "
+                    " gross_amount, discount_amount, net_amount, customer_count, "
+                    " item_count, order_type) "
+                    "VALUES ($1,$2,'mock_keruyun',$3,$4,$5,$6,$7,$8,$9,$10,$11) "
+                    "ON CONFLICT (factory_id, source_type, store_id, source_bill_no) "
+                    "DO NOTHING "
+                    "RETURNING id",
                     factory_id, store_row["store_id"], order.platform_order_no,
                     order.biz_date, order.placed_at,
                     _yuan(order.gross_cents), _yuan(order.discount_cents),
                     _yuan(order.net_cents), order.guest_count, len(order.items),
+                    order.channel,
                 )
-                if result.endswith(" 0"):
-                    continue          # 已存在, 明细也不必重写
+                if txn_row is None:
+                    continue          # 已存在(冲突), 明细也不必重写
+                txn_id = txn_row["id"]
                 written += 1
                 for item in order.items:
                     await conn.execute(
                         "INSERT INTO fact_pos_item "
-                        "(factory_id, store_id, transaction_no, date, source_item_raw, "
-                        " qty, unit_price, amount) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)",
-                        factory_id, store_row["store_id"], order.platform_order_no,
-                        order.biz_date, item.dish_name, item.qty,
+                        "(transaction_id, factory_id, source_item_raw, "
+                        " qty, unit_price, amount) VALUES ($1,$2,$3,$4,$5,$6)",
+                        txn_id, factory_id, item.dish_name, item.qty,
                         _yuan(item.price_cents), _yuan(item.amount_cents),
                     )
                 for pay in order.payments:
+                    # fact_pos_payment 没有 method 文本列, 是 NOT NULL 的
+                    # channel_id 外键 → 按 (factory_id, name) 查 dim_payment_channel。
+                    channel_name = _CHANNEL_NAME.get(pay.method)
+                    if channel_name is None:
+                        raise RuntimeError(
+                            f"未知支付方式 {pay.method!r} —— 需在 _CHANNEL_NAME 与 "
+                            f"V20261101_01 的 dim_payment_channel 种子里同时补上"
+                        )
+                    ch_row = await conn.fetchrow(
+                        "SELECT channel_id FROM dim_payment_channel "
+                        "WHERE factory_id = $1 AND name = $2",
+                        factory_id, channel_name,
+                    )
+                    if ch_row is None:
+                        # 禁降级: 渠道查不到就报错, 不建「未知渠道」也不丢弃这笔支付
+                        raise RuntimeError(
+                            f"支付渠道映射失败: factory={factory_id} name={channel_name} "
+                            f"—— 检查 V20261101_01 的 dim_payment_channel 种子"
+                        )
                     await conn.execute(
                         "INSERT INTO fact_pos_payment "
-                        "(factory_id, store_id, transaction_no, date, method, amount) "
-                        "VALUES ($1,$2,$3,$4,$5,$6)",
-                        factory_id, store_row["store_id"], order.platform_order_no,
-                        order.biz_date, pay.method, _yuan(pay.amount_cents),
+                        "(transaction_id, factory_id, channel_id, amount) "
+                        "VALUES ($1,$2,$3,$4)",
+                        txn_id, factory_id, ch_row["channel_id"], _yuan(pay.amount_cents),
                     )
     logger.info("[platform-sync] 写入 %d/%d 笔订单 (factory=%s)",
                 written, len(orders), factory_id)
@@ -2417,7 +2604,9 @@ After=network.target
 Type=simple
 WorkingDirectory=/www/wwwroot/mock-platform/code
 EnvironmentFile=/www/wwwroot/mock-platform/.env
-ExecStart=/www/wwwroot/mock-platform/venv311/bin/python -m mock_platform.cli serve --port 9200
+# ⚠️ 绑 127.0.0.1 不对外: 139 的阿里云安全组(账号 B)只放行 80/443/8086,
+#    47→139 实测 9200/8085/8082 全 TIMEOUT。对外由 139 已有 nginx 从 80 反代 /mock/。
+ExecStart=/www/wwwroot/mock-platform/venv311/bin/python -m mock_platform.cli serve --host 127.0.0.1 --port 9200
 Restart=always
 RestartSec=10
 StandardOutput=append:/www/wwwroot/mock-platform/mock-platform.log
@@ -2429,52 +2618,27 @@ WantedBy=multi-user.target
 
 - [ ] **Step 2: 写部署脚本**
 
+⚠️ **脚本正文不在这里复制一份** —— 唯一权威是 `scripts/deploy/deploy-mock-platform.sh`。
+2026-07-29 的教训: 计划里嵌一份副本, 修脚本时只同步了 nginx 那一段, 剩下的部分
+(fail-open 的隔离闸、`--exclude "*.db"`、从错误机器发起的公网检查) 全部停在修复前的
+版本, 而计划恰恰是别人/未来的我会照着重放的东西 —— 等于把已经修掉的 bug 又教了一遍。
+
+脚本必须满足的硬约束(审查时按这张表核对, 实现细节看脚本本身):
+
+| # | 约束 | 为什么 |
+|---|---|---|
+| 1 | 隔离闸对 `grep` 的 rc **三分支**(0 拒绝 / 1 通过 / 其它硬失败) | rc=2 是"路径不存在"。写成 `if grep; then 拒绝; fi` 会在路径写错时打印"零命中"却什么都没查 —— 断言没做过的检查即降级 |
+| 2 | 动共享网关**之前**先预检 unit 与 `.env` | 否则一次误跑会留下 mkdir + rsync + 在生产网关 `yum install` + 建 venv 的副作用, 最后才因 unit 不存在失败 |
+| 3 | nginx 的 location 走**自己的 snippet 文件 + 往 `0.default.conf` 幂等插一行 include** | 139 是宝塔 nginx: 没有 `/etc/nginx`, vhost 目录在 **http 层** include, 所以 location 不能单独扔一个文件进去 |
+| 4 | include 锚在**最后一个顶格 `}`**, 找不到就拒绝 | 按行尾插入时, 一个尾随空行(面板存站点就会产生)会把 location 顶到 server 块外 → http 层 location → nginx `[emerg]` → 整台网关起不来 |
+| 5 | `nginx -t` 失败**同时回滚 snippet 与 vhost** | 不回滚的话坏配置留在磁盘上而运行中的 nginx 毫无异样, 直到下次任何人 reload 才炸; 只保护 vhost 的话第二次部署会用 snippet 重演一遍 |
+| 6 | rsync `--exclude "*.db*"` | `db.py` 开了 WAL, `-wal`/`-shm` 不匹配 `*.db` |
+| 7 | 健康判据是 **`generator: running`**, 不是 `status: ok` | `{"status":"ok","generator":"not_armed"}` 也是 ok —— 用它验收会在不产数据的服务上通过 |
+| 8 | 公网路径**从 47 发起**验证 | 47→139 才是实测会 TIMEOUT 的方向; 从开发机 curl 通只证明"互联网某处可达" |
+
 ```bash
-#!/bin/bash
-# scripts/deploy/deploy-mock-platform.sh
-# 把模拟器部署到 139。⚠️ 只上 139，绝不上 47 —— 47 是我们的系统，
-# 模拟器上 47 就破坏了「外部世界」的隔离前提。
-set -eo pipefail
-
-SERVER="root@139.196.165.140"
-REMOTE_DIR="/www/wwwroot/mock-platform/code"
-LOCAL_DIR="mock-platform"
-
-echo "[1/5] 校验隔离铁律..."
-if grep -rEn "smartbi|psycopg|asyncpg|smartbi_prod_db|cretas_prod_db" \
-     "$LOCAL_DIR/mock_platform" --include="*.py"; then
-    echo "错误: 模拟端泄漏了本系统依赖，拒绝部署"
-    exit 1
-fi
-
-echo "[2/5] 本地跑测试..."
-(cd "$LOCAL_DIR" && python -m pytest tests/ -q)
-
-echo "[3/5] 同步代码到 139..."
-ssh "$SERVER" "mkdir -p $REMOTE_DIR"
-rsync -az --delete --timeout=60 \
-    --exclude "__pycache__" --exclude ".pytest_cache" --exclude "*.db" \
-    "$LOCAL_DIR/" "$SERVER:$REMOTE_DIR/"
-
-echo "[4/5] 安装依赖 + 重启服务..."
-ssh "$SERVER" "cd $REMOTE_DIR && \
-    (test -d /www/wwwroot/mock-platform/venv311 || python3.11 -m venv /www/wwwroot/mock-platform/venv311) && \
-    /www/wwwroot/mock-platform/venv311/bin/pip install -q -r requirements.txt && \
-    systemctl restart cretas-mock-platform"
-
-echo "[5/5] 健康检查..."
-for i in $(seq 1 15); do
-    if ssh "$SERVER" "curl -fsS -m 3 http://localhost:9200/healthz >/dev/null 2>&1"; then
-        echo "✅ 模拟器健康"
-        exit 0
-    fi
-    sleep 2
-done
-echo "❌ 健康检查失败"
-exit 1
+chmod +x scripts/deploy/deploy-mock-platform.sh
 ```
-
-Run: `chmod +x scripts/deploy/deploy-mock-platform.sh`
 
 - [ ] **Step 3: 在 139 上准备环境变量与目录**
 
@@ -2523,7 +2687,7 @@ Expected: 日志 `[backfill] 造出 60000 单，覆盖过去 30 天`（10 店 ×
 PLATFORM_SYNC_ENABLED=1
 PLATFORM_SYNC_FACTORY_ID=MOCK_REST
 PLATFORM_SYNC_INTERVAL_SECONDS=60
-PLATFORM_MOCK_BASE_URL=http://139.196.165.140:9200
+PLATFORM_MOCK_BASE_URL=http://139.196.165.140/mock
 PLATFORM_KERUYUN_APP_KEY=<Step 3 的值>
 PLATFORM_KERUYUN_APP_SECRET=<Step 3 的值>
 PLATFORM_CALLBACK_SECRET=<Step 3 的 MOCK_CALLBACK_SECRET>
@@ -2579,13 +2743,13 @@ Expected: 返回真实营收数字，且与上一步 `SELECT SUM(net_amount)` �
 在 `.claude/skills/server-operations/SKILL.md` 的「内容分布 — 禁止搞混」表里加一行：
 
 ```markdown
-| **餐饮平台模拟器** | **139** (网关) | `/www/wwwroot/mock-platform/` | `139.196.165.140:9200` |
+| **餐饮平台模拟器** | **139** (网关) | `/www/wwwroot/mock-platform/` | `139.196.165.140/mock/` (nginx 反代 → 127.0.0.1:9200) |
 ```
 
 并在「本地目录 → 服务器路径映射」表加：
 
 ```markdown
-| `mock-platform/` | **139** (旧) | `/www/wwwroot/mock-platform/code/` |
+| `mock-platform/` | **139** (网关) | `/www/wwwroot/mock-platform/code/` |
 ```
 
 - [ ] **Step 11: Commit**
@@ -2604,7 +2768,12 @@ git commit -m "feat(mock-platform): 139 部署脚本 + systemd unit + 运维文�
 1. `cd mock-platform && python -m pytest tests/ -v` 全绿，其中**隔离测试必须过**
 2. `cd backend/python && python -m pytest tests/test_platform_*.py tests/test_keruyun_adapter.py -v` 全绿
 3. 139 上 `systemctl is-active cretas-mock-platform` 为 `active`
-4. `curl http://139.196.165.140:9200/healthz` 返回 `{"status":"ok"}`
+4. **从 47 上**跑 `curl http://139.196.165.140/mock/healthz`，返回里含 `"generator":"running"`
+   - ⚠️ 端口是 **80 的 `/mock/`**，不是 9200：9200 绑 127.0.0.1，且 47→139:9200 实测 TIMEOUT
+   - ⚠️ 判据是 **`generator: running`**，不是 `status: ok`：没挂生成器时那一档也返回
+     `{"status":"ok","generator":"not_armed"}`，用 `status:ok` 会在一个不产数据的服务上通过
+   - ⚠️ 必须**从 47 发起**：从开发机 curl 通只证明"互联网上某处能访问"，
+     证明不了拉取端能访问，而 47→139 恰是实测会出问题的方向
 5. 营业时段内隔 2 分钟查两次 `fact_pos_transaction`，`MOCK_REST` 的行数在增长
 6. 对 `MOCK_REST` 问「本月全部门店营收多少」，返回的数字与 `SELECT SUM(net_amount)` 对得上
 7. 用错误签名调模拟端 API，返回 `AUTH_SIGN_INVALID`（不是 500，也不是放行）
