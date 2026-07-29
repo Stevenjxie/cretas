@@ -1,6 +1,6 @@
 # Model and Effort Matrix
 
-Evidence snapshot: 2026-07-18; **Claude-side tiers refreshed 2026-07-28 (source A)**. Use the live model picker as availability truth. This policy is Cretas-specific and provisional because GPT-5.6 and Fable 5 community experience is still early.
+Evidence snapshot: 2026-07-18; **Claude-side tiers refreshed 2026-07-28 (source A)**; **Cretas local effort calibration refreshed 2026-07-29 (source E)**. Use the live model picker as availability truth. This policy is Cretas-specific and provisional because GPT-5.6 and Fable 5 community experience is still early.
 
 ## Evidence discipline
 
@@ -10,6 +10,7 @@ Use sources in this order:
 2. **B — Independent evaluations:** reproducible benchmarks and disclosed harness comparisons. Useful for relative capability, cost, and latency; not a substitute for Cretas tests.
 3. **C — Community reports:** Reddit and X reports with concrete tasks. Useful for failure modes and workflow ideas; vulnerable to selection bias, launch load, hidden prompts, different plans, and different harnesses.
 4. **D — Inference:** Cretas routing decisions synthesized from A-C. Validate material D-level decisions on the repository before making them defaults.
+5. **E — Local telemetry:** sanitized Codex session metadata, explicit routing recommendations, effort settings, compactions, and task shapes from this repository. Strong for detecting routing habits and context exposure; it cannot prove that a lower-effort counterfactual would have produced identical quality.
 
 Do not turn a single benchmark or anecdote into a universal rule. Model choice must also consider blast radius, reversibility, data sensitivity, verification cost, and whether the task is genuinely parallelizable.
 
@@ -21,6 +22,8 @@ Do not turn a single benchmark or anecdote into a universal rule. Model choice m
 - **Sol Max and Ultra are exception paths.** Independent results show diminishing gains from Extra High to Max, while Ultra adds parallel agents and can consume allowance very quickly. Ultra is an orchestration mode, not merely deeper thinking.
 - **Fable High is the default effort *once Fable is already the right tier*.** Anthropic explicitly recommends High for most work and XHigh only for capability-sensitive workloads. Community feedback broadly agrees; Max and Ultracode are exceptional.
 - **The Claude handoff target is a three-tier ladder, and Fable is no longer its default (2026-07-28, source A).** Claude Code exposes Sonnet 5, Opus 5, and Fable 5. Fable 5 costs **exactly 2x Opus 5** ($10/$50 vs $5/$25 per MTok) and is gated repository-side by `.claude/skills/multi-model-dispatch`: earned-not-predicted (Opus must visibly fail one serious attempt first), three narrow pre-authorized bypasses, and a single-digit-per-session frequency cap. **Default the external-review handoff to Opus 5; escalate to Fable only once that gate has actually fired.** Sending every external review to Fable contradicts the repository gate and spends the scarcest tier first.
+- **Cretas was over-routing sustained work to XHigh (2026-07-29, source E).** In 39 root sessions, 16 were dominated by XHigh, including all 13 automation sessions. Of 13 recoverable explicit recommendations, 8 recommended Extra High, while 4 of those 8 sessions actually ran primarily at High or Medium. “PR,” “multi-module,” “design,” and “production” had become label shortcuts instead of measured complexity.
+- **Standing XHigh is the wrong shape for long campaigns (source E).** The three user-driven XHigh sessions accumulated 331 model turns, 174 compactions, and about 2.72 billion cumulative input-token telemetry. That number includes repeated/cached context and is not a billable-credit total, but it clearly exposes the cost of keeping the highest effort active through implementation, testing, waiting, PR, deployment, and repeated compaction.
 
 ## Choose the model first
 
@@ -40,13 +43,13 @@ When uncertain on a Cretas task, prefer Sol Medium. Do not assume that a smaller
 | Effort | Route | Confidence |
 |---|---|---|
 | Light / Low | Tiny read-only lookups, simple transformations, narrow status summaries, or a tightly sliced task with cheap and obvious failure | B/C |
-| Medium | Daily driver: familiar repository work, clear bugs, routine documentation, scoped implementation, and ordinary verification | A/C |
-| High | Ambiguous bugs, unfamiliar modules, meaningful multi-file implementation, integration work, or stronger persistence and verification | A/C |
-| Extra High | Architecture, cross-module root cause, security/data-consistency review, external-report adjudication, and difficult migration planning | A/B/C |
+| Medium | Daily driver: familiar repository work, clear bugs, routine documentation, scoped implementation, ordinary verification, read-only Git/PR audits, and deterministic automation passes | A/C/E |
+| High | Ambiguous bugs, unfamiliar modules, meaningful multi-file implementation, integration work, sustained campaigns, or production execution with explicit safety and verification gates | A/C/E |
+| Extra High | A bounded checkpoint for one unresolved architecture, security, irreversible-migration, or data-consistency decision after cheaper evidence collection or a serious High attempt did not settle it; downshift after the decision | A/B/C/E |
 | Max | Extra High did not converge, or a costly one-shot decision needs deeper single-agent review and latency is secondary | A/B |
 | Ultra | Explicitly approved work that cleanly decomposes into independent streams and satisfies all dispatch, worktree, scope-lock, WIP, and verification rules | A/C |
 
-Routing note: Artificial Analysis currently reports only a small aggregate intelligence increase from Sol Extra High to Max, alongside a much larger end-to-end latency increase. Treat that as evidence of diminishing returns, not proof that Max never helps. OpenAI describes Ultra as a four-agent parallel mode; early Reddit/X reports repeatedly describe severe allowance consumption. For Cretas code writes, Ultra is normally less appropriate than one coherent Sol agent plus scoped verification.
+Routing note: Artificial Analysis currently reports only a small aggregate intelligence increase from Sol Extra High to Max, alongside a much larger end-to-end latency increase. Treat that as evidence of diminishing returns, not proof that Max never helps. OpenAI describes Ultra as a four-agent parallel mode; early Reddit/X reports repeatedly describe severe allowance consumption. For Cretas code writes, Ultra is normally less appropriate than one coherent Sol agent plus scoped verification. Local telemetry also shows that XHigh should not remain active merely because the task continues through implementation, tests, PR/CI, deployment, or compaction; those phases normally cruise at Medium or High.
 
 ## GPT-5.6 Terra
 
@@ -117,7 +120,7 @@ The routing response must wrap that fully populated prompt in a copyable text co
 | Max | Absolute highest single-agent capability with no practical cost/latency constraint; do not assume it always beats High/XHigh on every task | A/B/C |
 | Ultracode | Claude Code XHigh plus standing permission to launch multiagent workflows; use only for genuinely isolated parallel work, never as a synonym for deeper reasoning | A |
 
-For the Cretas architecture program, prefer **Opus 5 High** for a normal independent review and **Opus 5 XHigh** for the full multi-repository architecture/rebuttal report; use the same effort labels on **Fable 5** only once the earned gate above has fired. Return the report to **Sol Extra High** for repository-grounded adjudication. Escalate to Sol Max only if material contradictions remain unresolved.
+For the Cretas architecture program, prefer **Opus 5 High** for a normal independent review and **Opus 5 XHigh** for the full multi-repository architecture/rebuttal report; use the same effort labels on **Fable 5** only once the earned gate above has fired. Return the report to a **bounded Sol Extra High adjudication checkpoint**, then downshift for repository execution. Escalate to Sol Max only if material contradictions remain unresolved.
 
 Three Claude-side constraints worth knowing when writing the handoff (source A, 2026-07-28): Fable 5 always thinks and cannot have thinking disabled; Fable 5 requires 30-day data retention, so an organization on zero data retention gets a hard failure on every Fable call and Opus 5 is the only viable tier there; and neither model returns its raw chain of thought, so the report you get back is written output, not a reasoning trace.
 
@@ -140,8 +143,15 @@ Require the Fable handoff to contain:
 | Tiny high-volume or mechanical task | Luna Light/Medium |
 | Clear reversible implementation with tests | Sol Medium, or Luna High/Extra High when conserving allowance |
 | Ambiguous bug or unfamiliar cross-module work | Sol High |
-| Complex architecture, security review, data consistency, or migration planning | Sol Extra High |
-| Independent external architecture challenge | **Opus 5 High**; use Opus 5 XHigh for the full multi-project report; the routing reply must include the paste-ready Claude Code prompt, then Sol Extra High adjudication |
+| Read-only PR/Git audit, no-candidate daily integration pass | Sol Medium |
+| Real PR candidate with conflicts, integration risk, or authorized repository mutation | Sol High; the word “PR” alone never raises effort |
+| Routine SOP/RAG or maintenance automation | Sol Medium for read-only/no-op; Sol High for a bounded change plus validation; never standing XHigh |
+| Multi-module work with explicit contracts and target tests | Sol Medium or High according to ambiguity and verification cost, not module count |
+| Production read-only diagnosis | Sol Medium or High according to ambiguity; production naming alone does not require XHigh |
+| Production write or release with established gates and rollback | Sol High cruise effort |
+| Unresolved architecture, security, irreversible migration, or data-consistency decision | Sol Extra High for the named decision checkpoint only, then downshift |
+| Established design-system or multi-screen implementation | Sol Medium or High; “design” and screen count alone do not require XHigh |
+| Independent external architecture challenge | **Opus 5 High**; use Opus 5 XHigh for the full multi-project report; the routing reply must include the paste-ready Claude Code prompt, then a bounded Sol Extra High adjudication checkpoint |
 | Opus 5 already stalled or self-contradicted on that same challenge | Fable 5 High/XHigh as break-glass, per the earned gate in `.claude/skills/multi-model-dispatch` |
 | Alternative exploratory/reviewer pass | Terra Medium, with an explicit reason |
 | Extra High failed on a high-stakes decision | Sol Max |
@@ -175,6 +185,15 @@ Require the Fable handoff to contain:
 - [Reddit Fable effort discussion](https://www.reddit.com/r/ClaudeAI/comments/1ul5fw5/what_fable_5_effort_are_you_using_and_why/) — High/XHigh/Max user trade-offs.
 - [Reddit Fable High/XHigh summary](https://www.reddit.com/r/ClaudeCodeTLDR/comments/1ura3et/tldr_which_reasoning_mode_do_you_use_with_fable_5/) — community favors High for most work and reports overthinking/cost above it; automated summary, therefore low-confidence.
 - X community sampling through public profile mirrors, including [Luna High/XHigh and Sol High routing reports](https://twstalker.com/Puneet_singh_tw), [Sol/Luna value comparisons](https://twstalker.com/Stardddff), and [Ultra usage observations](https://mobile.twstalker.com/novagkwatch). Treat mirrors and self-reports as low-confidence discovery evidence.
+
+### E — Cretas local telemetry
+
+- Rolling window: 2026-07-22 11:39 through 2026-07-29 11:39 Asia/Singapore.
+- Method: a targeted streaming parser inspected 116 local rollout JSONL files (about 2.38 GB), treated the first `session_meta` as authoritative, excluded forked subagent transcripts, and retained 39 root sessions with 851 model turns. Prompt text was sanitized; no credentials or private payloads were retained in this matrix.
+- Actual dominant session effort: 16 XHigh, 18 High, 4 Medium, and 1 unobservable. All 13 recurring automation sessions were XHigh.
+- Recoverable explicit recommendations: 8 Extra High, 4 High, and 1 Medium. Four of the eight Extra High recommendations actually ran primarily at High or Medium, showing that the old labels were not a reliable compatibility rule.
+- Repeated misuse patterns: read-only/no-candidate PR automation at XHigh; routine SOP/RAG maintenance at XHigh; multi-module count treated as complexity; established design work escalated by keyword; and XHigh retained across long implementation, test, wait, PR, and deployment phases.
+- Token totals in this audit are cumulative session telemetry, not credit or billing totals. They are suitable for comparing context exposure and compaction pressure, not for claiming an exact quota-saving percentage.
 
 ## Refresh triggers
 

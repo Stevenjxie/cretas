@@ -1,57 +1,78 @@
 ---
 name: model-effort-router
-description: Advisory Cretas router for selecting an appropriate AI model and reasoning effort when that guidance would materially help the user. Recommendations are optional, appear at most once per task, and never block execution or require switch confirmation.
+description: Duration- and usage-aware Cretas router for selecting the lowest sufficient model and cruise effort, with bounded escalation only at genuinely difficult decision checkpoints.
 ---
 
 # Model Effort Router
 
-Recommend a model and effort only when the choice would materially help the user. Optimize for sufficient capability, not maximum effort by default, and never turn the recommendation into an execution gate.
+Route every new Cretas task on two independent axes: the capability needed for the hardest unresolved decision, and the usage exposure created by the expected number of turns, context growth, tools, agents, waits, and phases. Optimize total task cost, not peak capability per turn.
 
 ## Workflow
 
-1. Decide whether a model or effort suggestion would materially help. Skip the visible recommendation for trivial, familiar, or already well-routed work.
-2. Use only the context already available or a minimal read-only inspection to estimate scope, risk, ambiguity, reversibility, duration, verification burden, and parallelizability.
-3. Read [references/model-matrix.md](references/model-matrix.md) completely.
-4. Select the model family first, then select its effort. Never compensate for the wrong model tier merely by raising effort.
-5. If a visible recommendation is useful, use the compact response format below at most once for the task, then continue execution in the same turn.
-6. If the setting does not match or cannot be observed, state that only as non-blocking advice. Do not ask the user to switch or confirm, and do not delay editing, testing, research, state changes, or deployment that the task otherwise authorizes.
-7. Reassess internally if scope, risk, task type, or required autonomy changes materially. Do not repeat the visible recommendation unless the user explicitly asks.
+1. Read [references/model-matrix.md](references/model-matrix.md) completely.
+2. Use only current context or the minimum read-only inspection needed to score:
+   - decision ambiguity and domain unfamiliarity;
+   - blast radius and reversibility;
+   - strength of deterministic verification and rollback;
+   - expected model turns, context growth, tool calls, waits, compact risk, and agent fan-out;
+   - whether the work is one decision or a multi-phase execution campaign.
+3. Classify the execution shape:
+   - **burst**: one explicit bounded step, no waits or phase transitions, expected to finish within 3 model turns;
+   - **sustained**: automation, monitoring, investigation plus implementation, multi-stage testing/release, expected to exceed 3 model turns, or any credible compact/subagent risk.
+4. Select the model family first. Then choose the **cruise effort** for the majority of the task. Do not compensate for the wrong model family by increasing effort.
+5. If one narrow decision genuinely needs more depth, name a separate **checkpoint effort** and its stopping condition. Never select the checkpoint effort as the standing setting for the later execution loop.
+6. Compare the current setting:
+   - effort below the capability floor is never compatible;
+   - for burst work, the exact cruise effort or one tier higher is compatible;
+   - for sustained work, only the exact cruise effort is compatible; a higher setting is over-provisioned, not “more than sufficient”;
+   - if the setting cannot be observed, say so and follow the repository gate.
+7. Re-route when a burst grows into sustained work, the task enters a materially different risk phase, the first compact occurs, agents are added, or High fails to resolve the named decision.
+8. If a mismatch is discovered mid-task, finish only the current atomic step, preserve evidence and a handoff, then pause at the next safe boundary. Do not interrupt an in-flight test, deploy, transaction, or consistency-sensitive edit.
+9. Give the recommendation once per stable phase. Do not repeat it on every ordinary turn.
 
 ## Hard rules
 
-- Prefer the lowest setting that safely handles the task, while accounting for the cost of a wrong result.
-- A recommendation is advisory only. Never use model or effort mismatch, an unobservable picker, or an unanswered suggestion as a reason to pause or refuse an otherwise authorized task.
-- Do not ask the user to confirm a model or effort switch. The user may ignore the recommendation.
-- Weight blast radius, reversibility, and verification cost at least as heavily as perceived difficulty. A simple auth, payment, migration, or production change can require a stronger route than a hard but isolated refactor.
+- Prefer the lowest setting that safely handles the task as a whole, while accounting for the cost of a wrong result and the number of turns over which the setting will remain active.
+- Higher effort is not automatically compatible. For sustained work, unnecessary effort compounds across every message, tool result, retry, compact, and agent branch.
+- Effort measures reasoning depth for the current phase; it is not a proxy for autonomy, persistence, task length, module count, PR importance, or the number of files.
+- Multiple modules with explicit contracts and strong tests normally need Medium or High, not Extra High. Count interfaces with unresolved semantic ambiguity, not directories.
+- A PR audit is primarily deterministic Git-graph work: use Medium for read-only/no-candidate runs and High when a real candidate requires conflict analysis or an authorized mutation. PR creation alone never justifies Extra High.
+- Routine SOP/RAG synchronization and other recurring automations use Medium for no-op/read-only passes and High for bounded source changes plus validation. Never configure a standing automation to Extra High/XHigh.
+- Production read-only inspection is not automatically high effort. Production writes raise safety gates and verification, but normally use High cruise effort; reserve Extra High for a bounded unresolved security, migration, or data-consistency decision that verification cannot cheaply settle.
+- Design work is routed by ambiguity and consequence, not by the word “design.” Applying an established design system is Medium/High; Extra High requires a foundational cross-product decision with competing constraints and no cheap prototype.
+- Long-running work should normally cruise at Medium or High. Extra High/XHigh must have a named question, a bounded evidence set, and an exit condition; downshift before implementation, testing, PR mechanics, CI waiting, deployment monitoring, or repeated tool loops.
+- Weight blast radius and reversibility together with verification strength. Strong tests, previews, JPA startup gates, dry runs, canaries, blue-green release, backups, and rollback reduce the reasoning effort needed even when operational care remains high.
 - Treat GPT-5.6 Sol Medium as the normal Cretas daily driver, not as a universal answer.
-- Reserve Max for exceptional single-agent depth after Extra High is insufficient or when a high-stakes one-shot decision justifies the additional compute.
+- Reserve Sol High for ambiguous bugs, cross-module implementation, or high-risk execution with clear technical gates. Reserve Extra High for the bounded checkpoint cases above.
+- Reserve Max for a costly one-shot decision only after a serious Extra High attempt failed to converge.
 - Reserve Ultra for genuinely parallelizable work. Ultra does not bypass repository subagent, dispatch, scope-lock, WIP, or verification rules.
 - Do not make Terra the default merely because it is positioned as balanced. Current independent cost curves and early community reports often favor either Sol or Luna; use Terra only when its exploration or diversity role fits.
 - Allow Luna High or Extra High for well-specified, reversible implementation with strong tests. Do not route ambiguous architecture, security, migrations, production changes, or destructive data operations to Luna as lead.
 - Treat Claude models (Sonnet 5 / Opus 5 / Fable 5) as external to Codex and available only through Claude Code. Never imply that Codex can switch to or invoke any of them directly.
 - Default the Claude handoff to **Opus 5**, not Fable 5. Use Claude handoffs primarily for independent architecture research and adversarial reports, and return the report to GPT-5.6 Sol for repository-grounded adjudication.
-- Escalate to Fable 5 only once the repository gate in `.claude/skills/multi-model-dispatch` has actually fired: Opus 5 visibly stalled on one serious attempt, Opus 5 XHigh returned self-contradicting conclusions, or a pre-authorized bypass applies (production incident on the clock / documented same-family precedent / irreversible small-diff final gate). Fable 5 costs 2x Opus 5 and is capped at single-digit uses per session; a task merely looking hard, long-running, or important is a *predicted* escalation and does not qualify.
-- Whenever recommending a Claude handoff (Opus 5 or Fable 5), include a complete, task-specific, paste-ready Claude Code prompt in the same response. Never provide only the model recommendation, an abstract prompt outline, or an offer to write the prompt later.
-- Fill the Claude prompt with the known task and Cretas context. Include the role, objective, repository path and access assumptions, current evidence, read-only or mutation boundary, required sources, deliverables, constraints, selected model and effort, output format, and the handoff packet for GPT-5.6 Sol. Do not leave generic placeholders that the user must complete when the required value is already known.
-- When the current model or effort cannot be observed, note that limitation without asking the user to respond or delaying the task.
-- If the picker differs from the reference, treat the live picker as availability truth; do not invent unsupported combinations.
-- Treat the dated evidence snapshot in the reference as provisional. Re-check official availability and refresh the matrix after a material model, pricing, harness, or effort change.
+- Escalate to Fable 5 only once the repository gate in `.claude/skills/multi-model-dispatch` has actually fired: Opus 5 visibly stalled on one serious attempt, Opus 5 XHigh returned self-contradicting conclusions, or a pre-authorized bypass applies (production incident on the clock / documented same-family precedent / irreversible small-diff final gate).
+- Whenever recommending a Claude handoff, include a complete task-specific paste-ready Claude Code prompt in the same response. Include the role, objective, repository path and access assumptions, current evidence, authority boundary, required sources, deliverables, constraints, selected model/effort, stopping rule, and handoff packet for GPT-5.6 Sol.
+- If the live picker differs from this reference, treat the picker as availability truth. Never invent unsupported combinations.
+- Treat the dated evidence snapshot in the reference as provisional. Refresh it after a material model, pricing, harness, effort, or local outcome change.
 
-## Optional response
+## Required routing response
 
-When a visible recommendation would help, use this compact structure once and continue executing:
+Use this compact format once for each stable phase:
 
 ```text
 任务分类：<daily / implementation / complex-analysis / high-stakes / parallel-research / external-review>
+预计执行形态：<burst / sustained>
+Usage 暴露：<low / medium / high> — <预计回合、compact、工具或代理依据>
 推荐模型：<exact model name>
-推荐 Effort：<exact picker label>
-推荐原因：<one or two concrete sentences>
-是否建议切换：<是 / 否 / 无法观察当前设置>
-执行状态：建议仅供参考，继续执行
-重新路由条件：<material scope or risk changes>
+常驻 Effort：<exact picker label>
+关卡 Effort：<none，或 exact picker label + 仅解决的具体问题 + 退出条件>
+推荐原因：<能力下限与持续成本各一句>
+当前设置判定：<匹配 / 低于能力下限 / 长任务过度配置 / 无法观察>
+执行状态：<按 AGENTS.md gate 继续或等待>
+重新路由条件：<持续度、风险或阶段变化>
 ```
 
-When recommending a Claude handoff as an optional independent review — Opus 5 by default, Fable 5 only once the earned gate above has fired — append the material below only if that handoff would be immediately useful. Continue the current Codex task unless the user explicitly chooses the external handoff:
+When recommending a Claude handoff — Opus 5 by default, Fable 5 only after the earned gate fires — append:
 
 ````text
 Claude Code 操作：打开 Claude Code，选择 <Claude Opus 5 | Claude Fable 5>，Effort <exact effort>
@@ -61,5 +82,3 @@ Claude Code 操作：打开 Claude Code，选择 <Claude Opus 5 | Claude Fable 5
 ```
 回交方式：将完整报告原样交回当前 Codex task，由 GPT-5.6 Sol 结合仓库真值裁决和落地。
 ````
-
-The nested fence above describes the required user-facing layout; render it with valid Markdown fences. Do not make the user ask separately for the prompt.
