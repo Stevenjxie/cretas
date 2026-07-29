@@ -124,6 +124,14 @@ if [[ -f docs/dispatch/ACTIVE.md && "$docs_only" -ne 1 ]]; then
         { print }
     ' docs/dispatch/ACTIVE.md)
     if [[ -n "$TASK_ID" ]]; then
+        # Scoping only means anything if the ID is real. An ID the ledger has
+        # never recorded is a typo, and treating "no matching unfinished row" as
+        # a pass would silently downgrade the gate to a no-op for that publish.
+        # -w, not a bare substring match: a truncated typo like MY-TASK-4 would
+        # otherwise "match" the real MY-TASK-42 and sail straight through.
+        if ! grep -rwqF -- "$TASK_ID" docs/dispatch/ 2>/dev/null; then
+            fail "task $TASK_ID appears nowhere under docs/dispatch/ (ACTIVE or archives); check the ID for a typo"
+        fi
         # Scoped gate. The ledger normally carries dozens of unrelated in-flight
         # tasks owned by other sessions, which makes the unscoped form reject
         # every non-docs publish regardless of the caller's own state. The gate

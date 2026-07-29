@@ -90,8 +90,12 @@ scoped_base=$(git -C "$scoped_repo" rev-parse origin/main)
 scoped_head=$(git -C "$scoped_repo" rev-parse HEAD)
 printf '# ACTIVE\n\n## In Flight\n\n- `OTHER-TASK-1` - `in-progress` - someone else\n- `OTHER-TASK-2` - `review` - someone else\n\n## Scope Locks\n\n- None.\n' \
     > "$scoped_repo/docs/dispatch/ACTIVE.md"
-git -C "$scoped_repo" add docs/dispatch/ACTIVE.md
-git -C "$scoped_repo" commit --quiet -m "unrelated tasks in flight"
+# The caller archives its own row in the same commit — that archive entry is
+# what proves the scoped ID is real rather than a typo.
+mkdir -p "$scoped_repo/docs/dispatch/archive"
+printf '# archive\n\n- `MY-TASK-42` - done\n' > "$scoped_repo/docs/dispatch/archive/2026-07-29.md"
+git -C "$scoped_repo" add docs/dispatch
+git -C "$scoped_repo" commit --quiet -m "unrelated tasks in flight; mine archived"
 scoped_head=$(git -C "$scoped_repo" rev-parse HEAD)
 if run_fastlane "$scoped_repo" --base-sha "$scoped_base" --confirm YES-DIRECT-MAIN >/dev/null 2>&1; then
     fail "unscoped gate accepted a ledger with unfinished tasks"
@@ -100,6 +104,28 @@ run_fastlane "$scoped_repo" --base-sha "$scoped_base" --confirm YES-DIRECT-MAIN 
     --task-id MY-TASK-42 > "$TMP_ROOT/scoped.log"
 [[ "$(git --git-dir="$TMP_ROOT/scoped-remote.git" rev-parse main)" == "$scoped_head" ]] \
     || fail "--task-id did not publish while unrelated tasks were still in flight"
+
+# A typo'd or unknown --task-id must not silently disable the gate. Scoping is
+# "my own row is archived", so an ID the ledger has never heard of means the
+# caller mistyped it, and accepting that would turn the gate into a no-op.
+typo_repo=$(create_fixture typo)
+typo_base=$(git -C "$typo_repo" rev-parse origin/main)
+printf '# ACTIVE\n\n## In Flight\n\n- `OTHER-TASK-1` - `in-progress` - someone else\n\n## Scope Locks\n\n- None.\n' \
+    > "$typo_repo/docs/dispatch/ACTIVE.md"
+mkdir -p "$typo_repo/docs/dispatch/archive"
+printf '# archive\n\n- `MY-TASK-42` - done\n' > "$typo_repo/docs/dispatch/archive/2026-07-29.md"
+git -C "$typo_repo" add docs/dispatch
+git -C "$typo_repo" commit --quiet -m "archive my task"
+if run_fastlane "$typo_repo" --base-sha "$typo_base" --confirm YES-DIRECT-MAIN \
+    --task-id MY-TASK-4 >/dev/null 2>&1; then
+    fail "a --task-id unknown to the ledger silently bypassed the ACTIVE gate"
+fi
+# The correctly spelled, archived ID still publishes.
+typo_head=$(git -C "$typo_repo" rev-parse HEAD)
+run_fastlane "$typo_repo" --base-sha "$typo_base" --confirm YES-DIRECT-MAIN \
+    --task-id MY-TASK-42 > "$TMP_ROOT/typo.log"
+[[ "$(git --git-dir="$TMP_ROOT/typo-remote.git" rev-parse main)" == "$typo_head" ]] \
+    || fail "an archived task ID was rejected"
 
 # ...but the caller's OWN unfinished row must still block.
 mine_repo=$(create_fixture mine)

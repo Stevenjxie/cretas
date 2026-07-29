@@ -305,10 +305,18 @@ Usage:
   ./scripts/deploy/release-jar-manifest.sh build --tests <MavenTestSelector> [--manifest <path>]
   ./scripts/deploy/release-jar-manifest.sh validate [--manifest <path>] [--destination <jar>]
 
-The build entry runs exactly one `mvn clean package -Dtest=<selector>` and writes
-a manifest-backed release JAR. Deploy validation requires a clean HEAD exactly
-equal to origin/main; the recorded build commit may differ when its backend tree
-is identical (for example after a squash merge).
+The build entry runs AT MOST one `mvn clean package -Dtest=<selector>` and writes
+a manifest-backed release JAR. It skips Maven entirely and reuses the cached JAR
+when the recorded backend tree equals HEAD's, the recorded target-test selector
+equals the requested one, and the cached JAR still matches its archived SHA256.
+Any mismatch falls back to a real compile. Set CRETAS_RELEASE_FORCE_JAVA_BUILD=1
+to compile unconditionally.
+
+Deploy validation requires a clean HEAD exactly equal to origin/main; the
+recorded build commit may differ when its backend tree is identical (for example
+after a squash merge). Note that validation asserts the JAR matches the CURRENT
+origin/main backend tree, not that any particular test selector was used — the
+selector is enforced at build time and reported in the manifest's target_tests.
 EOF
 }
 

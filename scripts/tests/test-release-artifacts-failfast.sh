@@ -33,6 +33,31 @@ grep -Fq 'JAVA_HOME' "$TMP_ROOT/jdk.log" \
 bash "$JAVA_PREFLIGHT" --repo-root "$ROOT_DIR" --tests "$TARGET_TESTS" >/dev/null 2>&1 \
     || fail "preflight rejected the current, working JDK"
 
+# ------------------------------------------------------------ locale hardening
+# The import resolver classifies a package segment as a class name by testing
+# for a leading capital. A `[A-Z]` RANGE is collation-dependent: under
+# en_US.UTF-8 it also matches lowercase, so `com` in `com.cretas.aims.Foo` is
+# read as the class name and every such import is falsely reported unresolvable.
+# That turned any release whose selector imports project classes into a preflight
+# rejection unless the operator remembered LC_ALL=C.
+locale_probe="$ROOT_DIR/backend/java/cretas-api/src/test/java"
+# `grep | head` would kill grep with SIGPIPE and trip pipefail; collect then slice.
+locale_test_file=$(grep -rl '^import com\.cretas\.aims\.' "$locale_probe" --include=*.java 2>/dev/null || true)
+locale_test_file=${locale_test_file%%$'\n'*}
+[ -n "$locale_test_file" ] \
+    || fail "no test class with project imports available to exercise the locale path"
+locale_test_class=$(basename "$locale_test_file" .java)
+
+for probe_locale in en_US.UTF-8 C; do
+    if ! LC_ALL="$probe_locale" LANG="$probe_locale" bash "$JAVA_PREFLIGHT" \
+        --repo-root "$ROOT_DIR" --tests "$locale_test_class" >"$TMP_ROOT/locale.log" 2>&1; then
+        fail "preflight failed under $probe_locale: $(head -2 "$TMP_ROOT/locale.log")"
+    fi
+    if grep -Fq 'cannot be resolved' "$TMP_ROOT/locale.log"; then
+        fail "preflight falsely reported an unresolvable import under $probe_locale: $(grep -F 'cannot be resolved' "$TMP_ROOT/locale.log" | head -1)"
+    fi
+done
+
 # ---------------------------------------------------------------- fixture setup
 # Each case gets a fresh clean git repo with stubbed child builders, so the
 # orchestration contract is tested without invoking Maven or Vite.

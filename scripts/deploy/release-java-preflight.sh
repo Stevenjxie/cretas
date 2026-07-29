@@ -11,8 +11,11 @@ usage() {
 Usage: scripts/deploy/release-java-preflight.sh --tests <MavenTestSelector> [--repo-root PATH]
 
 Fast, read-only preflight for a release Maven selector. It validates literal
-target test classes and their project imports before the single final Maven
-clean-package lifecycle. It does not replace compilation or Mockito runtime
+target test classes and their project imports, and verifies a usable JDK 21+,
+before the final Maven clean-package lifecycle (which itself is skipped when the
+cached JAR is still valid). Checking the JDK here means a missing JAVA_HOME fails
+in seconds rather than one second into the parallel build, after the Web side has
+already burned a full compile. It does not replace compilation or Mockito runtime
 validation.
 EOF
 }
