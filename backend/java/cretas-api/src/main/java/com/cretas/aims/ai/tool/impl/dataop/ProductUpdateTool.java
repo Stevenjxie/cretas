@@ -231,4 +231,10 @@ public class ProductUpdateTool extends AbstractBusinessTool {
         log.info("产品类型更新完成 - 产品ID: {}, 更新字段: {}", productTypeId, updatedFields.keySet());
         return result;
     }
+
+    /** spec §8.2 有副作用, 须走 W0 写确认闸 */
+    @Override
+    public AccessMode getAccessMode() {
+        return AccessMode.WRITE;
+    }
 }

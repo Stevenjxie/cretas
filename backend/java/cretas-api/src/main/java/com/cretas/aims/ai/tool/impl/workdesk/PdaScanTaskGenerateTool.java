@@ -201,4 +201,10 @@ public class PdaScanTaskGenerateTool extends AbstractBusinessTool {
     private static BigDecimal nonNull(BigDecimal v) {
         return v != null ? v : BigDecimal.ZERO;
     }
+
+    /** spec §8.2 有副作用, 须走 W0 写确认闸 */
+    @Override
+    public AccessMode getAccessMode() {
+        return AccessMode.WRITE;
+    }
 }

@@ -303,4 +303,10 @@ public class MaterialBatchQueryTool extends AbstractBusinessTool {
         log.info("日期过滤: {} 条 -> {} 条", batches.size(), filtered.size());
         return filtered;
     }
+
+    /** spec §8.2 只读查询, 无副作用 */
+    @Override
+    public AccessMode getAccessMode() {
+        return AccessMode.READ;
+    }
 }

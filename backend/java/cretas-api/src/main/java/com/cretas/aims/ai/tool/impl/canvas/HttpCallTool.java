@@ -93,4 +93,10 @@ public class HttpCallTool extends AbstractBusinessTool {
             throw new RuntimeException("HTTP 调用失败: " + e.getMessage(), e);
         }
     }
+
+    /** spec §8.2 有副作用, 须走 W0 写确认闸 */
+    @Override
+    public AccessMode getAccessMode() {
+        return AccessMode.WRITE;
+    }
 }

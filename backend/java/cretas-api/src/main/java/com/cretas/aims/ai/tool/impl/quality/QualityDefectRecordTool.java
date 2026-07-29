@@ -146,4 +146,10 @@ public class QualityDefectRecordTool extends AbstractBusinessTool {
                 || "quality_inspector".equals(userRole)
                 || "quality_manager".equals(userRole);
     }
+
+    /** spec §8.2 有副作用, 须走 W0 写确认闸 */
+    @Override
+    public AccessMode getAccessMode() {
+        return AccessMode.WRITE;
+    }
 }

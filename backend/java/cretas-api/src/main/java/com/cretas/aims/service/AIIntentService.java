@@ -114,6 +114,28 @@ public interface AIIntentService {
     IntentMatchResult recognizeIntentWithConfidence(String userInput, String factoryId, int topN,
                                                     Long userId, String userRole, String sessionId);
 
+    /**
+     * 识别用户输入的意图（读写分块版, spec §8.2 识别层候选过滤）。
+     *
+     * <p>在 6 参版基础上把咨询/操作 tab 的模式带进<b>识别层</b>: 既下发给 Python matcher
+     * (填充 {@code PythonIntentMatchRequest.mode} / {@code userPermissions} 两个此前
+     * 从未被赋值的目录过滤字段), 也在 Java 本地对候选集做同样的剔除, 使得无论走 Python 分支
+     * 还是 legacy pipeline, {@code mode=READ} 下写意图都不会留在候选集里。
+     *
+     * <p>注意本方法<b>不做鉴权</b> —— {@code userPermissions} 只用于收窄候选,
+     * 真正的授权仍在 IntentPermissionGate / ToolRbacEnforcer。
+     *
+     * @param mode            {@code "READ"} = 咨询 tab (剔除全部写意图候选);
+     *                        {@code "OPERATE"} = 操作 tab (按 userPermissions 剔除无权限写意图);
+     *                        null / 其它值 = 不过滤 (与 6 参版行为一致)
+     * @param userPermissions 调用者权限码集合 (module:action); null = 不按权限过滤
+     */
+    default IntentMatchResult recognizeIntentWithConfidence(String userInput, String factoryId, int topN,
+                                                            Long userId, String userRole, String sessionId,
+                                                            String mode, java.util.Set<String> userPermissions) {
+        return recognizeIntentWithConfidence(userInput, factoryId, topN, userId, userRole, sessionId);
+    }
+
     // ==================== 多意图识别 ====================
 
     /**

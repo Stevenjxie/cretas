@@ -131,4 +131,10 @@ public class ExpenseRequestQueryTool extends AbstractBusinessTool {
                 r.getExpenseDate(), r.getStatus().name());
     }
 
+
+    /** spec §8.2 只读查询, 无副作用 */
+    @Override
+    public AccessMode getAccessMode() {
+        return AccessMode.READ;
+    }
 }

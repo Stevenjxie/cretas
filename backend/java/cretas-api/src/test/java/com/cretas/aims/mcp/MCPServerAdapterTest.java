@@ -91,6 +91,8 @@ class MCPServerAdapterTest {
         ToolExecutor tool = mock(ToolExecutor.class);
         when(tool.getToolName()).thenReturn("material_batch_query");
         when(tool.getActionType()).thenReturn(ToolExecutor.ActionType.READ);
+        // spec §8.2: 读工具须显式声明 READ (未声明按 WRITE 是 fail-closed 底线)
+        when(tool.getAccessMode()).thenReturn(ToolExecutor.AccessMode.READ);
         when(tool.execute(any(ToolCall.class), anyMap())).thenReturn("{\"success\":true}");
         when(registry.getExecutor("material_batch_query")).thenReturn(Optional.of(tool));
         when(registry.isToolEnabledForFactory(FACTORY_ID, "material_batch_query")).thenReturn(true);
@@ -154,6 +156,8 @@ class MCPServerAdapterTest {
         when(readTool.getDescription()).thenReturn("query");
         when(readTool.getParametersSchema()).thenReturn(Map.of());
         when(readTool.getActionType()).thenReturn(ToolExecutor.ActionType.READ);
+        // spec §8.2: 读工具须显式声明 READ (未声明按 WRITE 是 fail-closed 底线)
+        when(readTool.getAccessMode()).thenReturn(ToolExecutor.AccessMode.READ);
         when(writeTool.getToolName()).thenReturn("material_batch_delete");
         when(writeTool.getActionType()).thenReturn(ToolExecutor.ActionType.DELETE);
         when(registry.getAllToolNames()).thenReturn(List.of(
@@ -181,6 +185,8 @@ class MCPServerAdapterTest {
         ToolExecutor tool = mock(ToolExecutor.class);
         when(tool.getToolName()).thenReturn("material_batch_query");
         when(tool.getActionType()).thenReturn(ToolExecutor.ActionType.READ);
+        // spec §8.2: 读工具须显式声明 READ (未声明按 WRITE 是 fail-closed 底线)
+        when(tool.getAccessMode()).thenReturn(ToolExecutor.AccessMode.READ);
         when(registry.getExecutor("material_batch_query")).thenReturn(Optional.of(tool));
         when(registry.isToolEnabledForFactory(FACTORY_ID, "material_batch_query")).thenReturn(true);
 

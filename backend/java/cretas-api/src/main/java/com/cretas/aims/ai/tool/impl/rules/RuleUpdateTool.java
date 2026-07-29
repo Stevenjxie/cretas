@@ -152,4 +152,10 @@ public class RuleUpdateTool extends AbstractBusinessTool {
         data.put("changes", changes);
         return buildSimpleResult("规则 " + ruleCode + " 更新成功", data);
     }
+
+    /** spec §8.2 有副作用, 须走 W0 写确认闸 */
+    @Override
+    public AccessMode getAccessMode() {
+        return AccessMode.WRITE;
+    }
 }

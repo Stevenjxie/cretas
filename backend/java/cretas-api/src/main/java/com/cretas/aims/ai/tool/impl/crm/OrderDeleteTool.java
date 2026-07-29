@@ -108,4 +108,10 @@ public class OrderDeleteTool extends AbstractBusinessTool {
     protected String getParameterDisplayName(String paramName) {
         return "orderId".equals(paramName) ? "销售订单ID" : super.getParameterDisplayName(paramName);
     }
+
+    /** spec §8.2 有副作用, 须走 W0 写确认闸 */
+    @Override
+    public AccessMode getAccessMode() {
+        return AccessMode.WRITE;
+    }
 }

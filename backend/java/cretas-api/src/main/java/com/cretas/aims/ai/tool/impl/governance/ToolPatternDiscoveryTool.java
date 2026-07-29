@@ -338,4 +338,10 @@ public class ToolPatternDiscoveryTool extends AbstractBusinessTool {
         sb.append("💡 如需创建推荐的 Skill，请说「创建skill 推荐名称」或「把 工具A 和 工具B 组合成skill」");
         return sb.toString();
     }
+
+    /** spec §8.2 有副作用, 须走 W0 写确认闸 */
+    @Override
+    public AccessMode getAccessMode() {
+        return AccessMode.WRITE;
+    }
 }

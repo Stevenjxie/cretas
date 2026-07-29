@@ -25,6 +25,8 @@ class WriteGuardServiceTest {
         assertTrue(guard.isWriteTool(writeTool));
         ToolExecutor readTool = Mockito.mock(ToolExecutor.class);
         Mockito.when(readTool.getActionType()).thenReturn(ToolExecutor.ActionType.READ);
+        // spec §8.2: 声明层必须显式说 READ, 否则 fail-closed 默认 WRITE 会先一步判写
+        Mockito.when(readTool.getAccessMode()).thenReturn(ToolExecutor.AccessMode.READ);
         assertFalse(guard.isWriteTool(readTool));
     }
 
@@ -82,10 +84,17 @@ class WriteGuardServiceTest {
         assertFalse(guard.isWriteTool(toolNamed("report_dashboard_overview", ToolExecutor.ActionType.READ)));
     }
 
+    /**
+     * spec §8.2: 这些用例考的是<b>名称启发式</b>本身, 所以桩工具一律显式声明 READ, 把声明这一层
+     * 中立掉 —— 否则 Mockito 桩的 {@code getAccessMode()} 返回 null, 会被 fail-closed 判成 WRITE,
+     * 每个用例都变成在考声明而不是在考启发式。"不声明即 WRITE" 由
+     * {@code ToolAccessModeDeclarationTest#undeclaredToolIsTreatedAsWrite} 专门覆盖。
+     */
     private static ToolExecutor toolNamed(String name, ToolExecutor.ActionType actionType) {
         ToolExecutor tool = Mockito.mock(ToolExecutor.class);
         Mockito.when(tool.getToolName()).thenReturn(name);
         Mockito.when(tool.getActionType()).thenReturn(actionType);
+        Mockito.when(tool.getAccessMode()).thenReturn(ToolExecutor.AccessMode.READ);
         return tool;
     }
 

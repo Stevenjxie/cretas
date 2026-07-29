@@ -170,4 +170,10 @@ public class TransferCreateTool extends AbstractBusinessTool {
         log.info("调拨单创建完成 - transferId={}, transferNumber={}", created.getId(), created.getTransferNumber());
         return result;
     }
+
+    /** spec §8.2 有副作用, 须走 W0 写确认闸 */
+    @Override
+    public AccessMode getAccessMode() {
+        return AccessMode.WRITE;
+    }
 }

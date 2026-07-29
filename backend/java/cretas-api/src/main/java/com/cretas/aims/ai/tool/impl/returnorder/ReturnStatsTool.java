@@ -47,4 +47,10 @@ public class ReturnStatsTool extends AbstractBusinessTool {
         result.put("message", "退货统计查询成功");
         return result;
     }
+
+    /** spec §8.2 只读查询, 无副作用 */
+    @Override
+    public AccessMode getAccessMode() {
+        return AccessMode.READ;
+    }
 }

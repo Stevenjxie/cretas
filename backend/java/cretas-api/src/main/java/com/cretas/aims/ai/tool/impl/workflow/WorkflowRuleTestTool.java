@@ -110,4 +110,10 @@ public class WorkflowRuleTestTool extends AbstractBusinessTool {
 
         return buildSimpleResult(result ? "规则命中" : "规则未命中", data);
     }
+
+    /** spec §8.2 只读查询, 无副作用 */
+    @Override
+    public AccessMode getAccessMode() {
+        return AccessMode.READ;
+    }
 }

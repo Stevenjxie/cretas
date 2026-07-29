@@ -87,4 +87,10 @@ public class CustomerCreateTool extends AbstractBusinessTool {
         result.put("message", "客户创建成功: " + customer.getName());
         return result;
     }
+
+    /** spec §8.2 有副作用, 须走 W0 写确认闸 */
+    @Override
+    public AccessMode getAccessMode() {
+        return AccessMode.WRITE;
+    }
 }

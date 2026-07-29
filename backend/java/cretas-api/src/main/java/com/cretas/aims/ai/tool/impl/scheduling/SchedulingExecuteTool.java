@@ -90,4 +90,10 @@ public class SchedulingExecuteTool extends AbstractBusinessTool {
         );
         return displayNames.getOrDefault(paramName, paramName);
     }
+
+    /** spec §8.2 有副作用, 须走 W0 写确认闸 */
+    @Override
+    public AccessMode getAccessMode() {
+        return AccessMode.WRITE;
+    }
 }

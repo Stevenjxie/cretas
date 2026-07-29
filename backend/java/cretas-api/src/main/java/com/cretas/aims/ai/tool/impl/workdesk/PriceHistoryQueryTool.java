@@ -250,4 +250,10 @@ public class PriceHistoryQueryTool extends AbstractBusinessTool {
             return totalAmount.divide(totalQty, 4, RoundingMode.HALF_UP);
         }
     }
+
+    /** spec §8.2 只读查询, 无副作用 */
+    @Override
+    public AccessMode getAccessMode() {
+        return AccessMode.READ;
+    }
 }

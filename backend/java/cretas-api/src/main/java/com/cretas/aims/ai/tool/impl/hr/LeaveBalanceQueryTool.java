@@ -114,4 +114,10 @@ public class LeaveBalanceQueryTool extends AbstractBusinessTool {
         return buildSimpleResult(msg.toString(), rows);
     }
 
+
+    /** spec §8.2 只读查询, 无副作用 */
+    @Override
+    public AccessMode getAccessMode() {
+        return AccessMode.READ;
+    }
 }

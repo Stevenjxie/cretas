@@ -141,4 +141,10 @@ public class OpportunityFunnelStatsTool extends AbstractBusinessTool {
                 totalValue.setScale(2, RoundingMode.HALF_UP));
         return buildSimpleResult(message, data);
     }
+
+    /** spec §8.2 只读查询, 无副作用 */
+    @Override
+    public AccessMode getAccessMode() {
+        return AccessMode.READ;
+    }
 }

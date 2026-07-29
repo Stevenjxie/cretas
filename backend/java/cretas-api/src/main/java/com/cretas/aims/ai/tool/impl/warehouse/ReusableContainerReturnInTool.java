@@ -74,4 +74,10 @@ public class ReusableContainerReturnInTool extends AbstractBusinessTool {
                 customerId, customerName, remark);
         return buildSimpleResult(customerName + " 归还 " + quantity + " 个周转框入库", tx);
     }
+
+    /** spec §8.2 有副作用, 须走 W0 写确认闸 */
+    @Override
+    public AccessMode getAccessMode() {
+        return AccessMode.WRITE;
+    }
 }

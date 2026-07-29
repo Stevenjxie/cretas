@@ -761,4 +761,10 @@ public class SopParseDocumentTool extends AbstractBusinessTool {
         public String getParseMethod() { return parseMethod; }
         public void setParseMethod(String parseMethod) { this.parseMethod = parseMethod; }
     }
+
+    /** spec §8.2 只读查询, 无副作用 */
+    @Override
+    public AccessMode getAccessMode() {
+        return AccessMode.READ;
+    }
 }

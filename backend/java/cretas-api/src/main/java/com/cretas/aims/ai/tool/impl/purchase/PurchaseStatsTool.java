@@ -47,4 +47,10 @@ public class PurchaseStatsTool extends AbstractBusinessTool {
         result.put("message", "采购统计查询成功");
         return result;
     }
+
+    /** spec §8.2 只读查询, 无副作用 */
+    @Override
+    public AccessMode getAccessMode() {
+        return AccessMode.READ;
+    }
 }

@@ -132,4 +132,10 @@ public class RuleCreateTool extends AbstractBusinessTool {
         data.put("enabled", saved.getEnabled());
         return buildSimpleResult("规则创建成功 — " + ruleName + " (" + ruleCode + ")", data);
     }
+
+    /** spec §8.2 有副作用, 须走 W0 写确认闸 */
+    @Override
+    public AccessMode getAccessMode() {
+        return AccessMode.WRITE;
+    }
 }

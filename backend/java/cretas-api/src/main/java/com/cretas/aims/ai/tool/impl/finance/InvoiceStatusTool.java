@@ -124,4 +124,10 @@ public class InvoiceStatusTool extends AbstractBusinessTool {
         m.put("createdAt", r.getCreatedAt() != null ? r.getCreatedAt().toString() : null);
         return m;
     }
+
+    /** spec §8.2 只读查询, 无副作用 */
+    @Override
+    public AccessMode getAccessMode() {
+        return AccessMode.READ;
+    }
 }

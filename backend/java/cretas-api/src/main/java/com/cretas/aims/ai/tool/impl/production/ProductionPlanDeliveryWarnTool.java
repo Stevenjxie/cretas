@@ -192,4 +192,10 @@ public class ProductionPlanDeliveryWarnTool extends AbstractBusinessTool {
         row.put("warnLevel", w.getWarnLevel());
         return row;
     }
+
+    /** spec §8.2 只读查询, 无副作用 */
+    @Override
+    public AccessMode getAccessMode() {
+        return AccessMode.READ;
+    }
 }

@@ -115,4 +115,10 @@ public class ScheduledTaskToggleTool extends AbstractBusinessTool {
                     .withHint("请联系任务所属工厂管理员处理");
         }
     }
+
+    /** spec §8.2 有副作用, 须走 W0 写确认闸 */
+    @Override
+    public AccessMode getAccessMode() {
+        return AccessMode.WRITE;
+    }
 }

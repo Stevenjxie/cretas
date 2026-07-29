@@ -252,4 +252,10 @@ public class WorkProcessCatalogTool extends AbstractBusinessTool {
     private String normalize(String value) {
         return value == null ? "" : value.trim();
     }
+
+    /** spec §8.2 有副作用, 须走 W0 写确认闸 */
+    @Override
+    public AccessMode getAccessMode() {
+        return AccessMode.WRITE;
+    }
 }

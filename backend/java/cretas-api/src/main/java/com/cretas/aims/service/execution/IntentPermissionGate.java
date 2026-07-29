@@ -68,6 +68,19 @@ public class IntentPermissionGate {
     }
 
     /**
+     * 取调用者的权限码全集, 供识别层候选过滤 (spec §8.2, OPERATE tab 剔除无权限写意图)。
+     * 与 {@link #check} 同源 ({@link ToolRbacGuard} → PermissionService 三层矩阵)。
+     *
+     * @return 权限码集合; null = 无法解析 (调用方应跳过权限过滤, 交给真正的鉴权门)
+     */
+    public java.util.Set<String> resolveUserPermissions(Long userId) {
+        if (userId == null || rbacGuard == null) {
+            return null;
+        }
+        return rbacGuard.resolveUserPermissions(Map.of("userId", userId));
+    }
+
+    /**
      * 判定结果。{@code requiredPermission} 仅在按权限码拒绝时非 null。
      */
     public record PermissionCheck(Result result, String requiredPermission) {

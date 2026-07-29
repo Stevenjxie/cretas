@@ -263,6 +263,12 @@ class ToolDispatchServiceExecutionContextSecurityTest {
             this.objectMapper = objectMapper;
         }
 
+        /** spec §8.2: 只读查询工具, 未声明会被 fail-closed 判成写并卡在确认闸。 */
+        @Override
+        public AccessMode getAccessMode() {
+            return AccessMode.READ;
+        }
+
         @Override
         public String getToolName() {
             return "security_context_query";

@@ -101,4 +101,10 @@ public class CanvasSetApsWeightTool extends AbstractBusinessTool {
         resp.put("adjustmentId", result != null ? result.toString() : null);
         return buildSimpleResult("APS 策略权重已调整", resp);
     }
+
+    /** spec §8.2 有副作用, 须走 W0 写确认闸 */
+    @Override
+    public AccessMode getAccessMode() {
+        return AccessMode.WRITE;
+    }
 }

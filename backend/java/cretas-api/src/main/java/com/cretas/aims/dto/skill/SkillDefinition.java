@@ -124,6 +124,16 @@ public class SkillDefinition {
     private String requiredPermission;
 
     /**
+     * 显式访问模式声明 (spec §8.2), 取值 "READ" / "WRITE"; null = 不声明, 完全按编排推导。
+     *
+     * <p><b>这个字段不是最终答案</b> —— 有效访问模式 =
+     * {@code max(显式声明, 编排的全部 Tool 的最大值)}。声明只能<b>抬高</b>不能<b>压低</b>:
+     * 一个编排了写 Tool 的 Skill 声明成 READ 也仍然是 WRITE。见
+     * {@link com.cretas.aims.ai.tool.ToolAccessModes#resolveSkill}。
+     */
+    private String accessMode;
+
+    /**
      * DAG执行图 (P0: 条件分支 + 错误恢复)
      * 定义工具执行的依赖关系和条件分支
      * 当非空时，覆盖 tools 列表的顺序执行模式

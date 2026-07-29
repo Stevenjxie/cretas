@@ -444,4 +444,10 @@ public class SopAnalyzeComplexityTool extends AbstractBusinessTool {
         public int getEstimatedMinutes() { return estimatedMinutes; }
         public void setEstimatedMinutes(int estimatedMinutes) { this.estimatedMinutes = estimatedMinutes; }
     }
+
+    /** spec §8.2 只读查询, 无副作用 */
+    @Override
+    public AccessMode getAccessMode() {
+        return AccessMode.READ;
+    }
 }

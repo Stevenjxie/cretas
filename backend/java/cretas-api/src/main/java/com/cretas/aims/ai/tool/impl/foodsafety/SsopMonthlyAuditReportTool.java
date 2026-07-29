@@ -216,4 +216,10 @@ public class SsopMonthlyAuditReportTool extends AbstractBusinessTool {
                         : "⚠️ 完成率不达标 (< 95%), 建议改进");
         return buildSimpleResult(message, data);
     }
+
+    /** spec §8.2 只读查询, 无副作用 */
+    @Override
+    public AccessMode getAccessMode() {
+        return AccessMode.READ;
+    }
 }

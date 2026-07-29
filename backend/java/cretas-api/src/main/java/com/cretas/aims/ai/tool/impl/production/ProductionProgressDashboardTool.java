@@ -67,4 +67,10 @@ public class ProductionProgressDashboardTool extends AbstractBusinessTool {
         Object summary = data.get("summary");
         return buildSimpleResult("生产进度看板 " + data.get("date"), data);
     }
+
+    /** spec §8.2 只读查询, 无副作用 */
+    @Override
+    public AccessMode getAccessMode() {
+        return AccessMode.READ;
+    }
 }

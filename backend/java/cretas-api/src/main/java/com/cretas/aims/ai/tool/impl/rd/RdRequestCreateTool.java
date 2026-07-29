@@ -29,4 +29,10 @@ public class RdRequestCreateTool extends AbstractBusinessTool {
                 getString(params, "urgency"), getLong(params, "userId"));
         return buildSimpleResult("研发需求已创建", Map.of("requestNumber", req.getRequestNumber(), "status", req.getStatus()));
     }
+
+    /** spec §8.2 有副作用, 须走 W0 写确认闸 */
+    @Override
+    public AccessMode getAccessMode() {
+        return AccessMode.WRITE;
+    }
 }

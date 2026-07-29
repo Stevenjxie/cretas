@@ -53,4 +53,10 @@ public class OrderTodayTool extends AbstractBusinessTool {
                 "source", "sales_orders",
                 "message", "查询到 " + orders.size() + " 个今日销售订单");
     }
+
+    /** spec §8.2 只读查询, 无副作用 */
+    @Override
+    public AccessMode getAccessMode() {
+        return AccessMode.READ;
+    }
 }

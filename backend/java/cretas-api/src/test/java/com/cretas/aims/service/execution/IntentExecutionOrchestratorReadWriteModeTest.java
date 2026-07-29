@@ -199,6 +199,8 @@ class IntentExecutionOrchestratorReadWriteModeTest {
                 .thenReturn(Optional.of(intent));
         when(rbacGuard.hasAnyPermission(any(), eq("inventory:read"))).thenReturn(true);
         ToolExecutor tool = mock(ToolExecutor.class);
+        // spec §8.2: 读工具须显式声明 READ (未声明按 WRITE 是 fail-closed 底线)
+        when(tool.getAccessMode()).thenReturn(ToolExecutor.AccessMode.READ);
         when(toolRegistry.getExecutor("material_batch_query")).thenReturn(Optional.of(tool));
         when(dispatchService.executeWithTool(eq(tool), eq(FACTORY), any(), eq(intent), eq(USER), eq(ROLE), eq(null)))
                 .thenReturn(IntentExecuteResponse.builder()
@@ -221,6 +223,8 @@ class IntentExecutionOrchestratorReadWriteModeTest {
                 .thenReturn(Optional.of(intent));
         when(aiIntentService.hasPermission("MATERIAL_BATCH_QUERY", ROLE)).thenReturn(true);
         ToolExecutor tool = mock(ToolExecutor.class);
+        // spec §8.2: 读工具须显式声明 READ (未声明按 WRITE 是 fail-closed 底线)
+        when(tool.getAccessMode()).thenReturn(ToolExecutor.AccessMode.READ);
         when(toolRegistry.getExecutor("material_batch_query")).thenReturn(Optional.of(tool));
         when(dispatchService.executeWithTool(eq(tool), eq(FACTORY), any(), eq(intent), eq(USER), eq(ROLE), eq(null)))
                 .thenReturn(IntentExecuteResponse.builder()

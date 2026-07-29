@@ -49,4 +49,10 @@ public class PurchaseFinanceApproveTool extends AbstractBusinessTool {
             return buildSimpleResult("采购订单财务审核已驳回", Map.of("orderNumber", order.getOrderNumber(), "status", order.getStatus().name()));
         }
     }
+
+    /** spec §8.2 有副作用, 须走 W0 写确认闸 */
+    @Override
+    public AccessMode getAccessMode() {
+        return AccessMode.WRITE;
+    }
 }

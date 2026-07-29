@@ -78,4 +78,10 @@ public class ReusableContainerLossTool extends AbstractBusinessTool {
         return buildSimpleResult("已登记 " + customerName + " 丢失 " + quantity + " 个, 赔偿 "
                 + compensation, tx);
     }
+
+    /** spec §8.2 有副作用, 须走 W0 写确认闸 */
+    @Override
+    public AccessMode getAccessMode() {
+        return AccessMode.WRITE;
+    }
 }

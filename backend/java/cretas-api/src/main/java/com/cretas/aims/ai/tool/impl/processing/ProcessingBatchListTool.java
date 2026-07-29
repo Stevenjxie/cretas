@@ -195,4 +195,10 @@ public class ProcessingBatchListTool extends AbstractBusinessTool {
     public boolean requiresPermission() {
         return false; // 查询类工具不需要特殊权限
     }
+
+    /** spec §8.2 只读查询, 无副作用 */
+    @Override
+    public AccessMode getAccessMode() {
+        return AccessMode.READ;
+    }
 }

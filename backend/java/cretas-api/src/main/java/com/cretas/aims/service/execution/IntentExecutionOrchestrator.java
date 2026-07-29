@@ -8,6 +8,7 @@ import com.cretas.aims.ai.dto.ChatCompletionResponse;
 import com.cretas.aims.ai.dto.ChatMessage;
 import com.cretas.aims.ai.tool.ToolExecutor;
 import com.cretas.aims.ai.tool.ToolRegistry;
+import com.cretas.aims.service.intent.IntentAccessModeFilter;
 import com.cretas.aims.ai.tool.gateway.AuthenticatedToolPrincipalFactory;
 import com.cretas.aims.ai.tool.gateway.ConfirmationProof;
 import com.cretas.aims.ai.tool.gateway.ExecutionPrincipal;
@@ -210,6 +211,11 @@ public class IntentExecutionOrchestrator {
     // INCLUDING via forceExecute=true (multi-intent / conversation-continuation hard-set true).
     @Autowired
     private com.cretas.aims.ai.tool.WriteGuardService writeGuardService;
+
+    // spec §8.2 消费点①: 识别层候选过滤 + 声明优先的写意图判定 (绑定 Tool 的 getAccessMode
+    // 声明 → 意图启发式)。required=false: 裸构造的单测不提供时回落纯 writeGuardService 判定。
+    @Autowired(required = false)
+    private IntentAccessModeFilter intentAccessModeFilter;
 
     // C1 clarification business-type filter (restaurant-chat-qa): resolve the factory's business
     // domain + each candidate intent's business_type so the NEED_CLARIFICATION choice list never
@@ -676,8 +682,12 @@ public class IntentExecutionOrchestrator {
 
         if (matchResult == null) {
             try {
+                // spec §8.2 洞②: 把 tab 模式带进识别层, 让写意图在咨询 tab 根本不进候选集,
+                // 而不是靠下面 #4.4 的"识别后拦"。bestMatch 仍会保留写意图, 那是有意的 ——
+                // 拦截卡需要它来渲染"请切换到【操作】页"的导航。
                 matchResult = aiIntentService.recognizeIntentWithConfidence(
-                        request.getUserInput(), factoryId, 3, userId, userRole, request.getSessionId());
+                        request.getUserInput(), factoryId, 3, userId, userRole, request.getSessionId(),
+                        request.getMode(), resolveUserPermissionsForFiltering(request.getMode(), userId));
             } catch (LlmSchemaValidationException e) {
                 log.warn("LLM Schema 验证失败: type={}, message={}", e.getFailureType(), e.getMessage());
                 return buildValidationFailureResponse(factoryId, request.getUserInput(), e);
@@ -763,7 +773,7 @@ public class IntentExecutionOrchestrator {
 
         // P1 读写分块 §4.4: 咨询 tab (mode=READ) 强制只读 — 写意图不进审批/slot-filling/执行,
         // 返回跳转提示卡 (防呆 Rule 5: dead-end 改导航)。
-        if ("READ".equalsIgnoreCase(request.getMode()) && writeGuardService.isWriteIntent(intent)) {
+        if ("READ".equalsIgnoreCase(request.getMode()) && isWriteIntentDeclarationAware(intent)) {
             return buildReadModeWriteBlockedResponse(intent);
         }
 
@@ -990,7 +1000,7 @@ public class IntentExecutionOrchestrator {
 
         // P1 读写分块 §4.4: 咨询 tab (mode=READ) 兜底 — 显式意图/短语短路路径命中写意图同样拦截,
         // 先于 W0 写确认门 (READ 模式下不该出现确认卡, 只给跳转提示)。
-        if ("READ".equalsIgnoreCase(request.getMode()) && writeGuardService.isWriteIntent(intent)) {
+        if ("READ".equalsIgnoreCase(request.getMode()) && isWriteIntentDeclarationAware(intent)) {
             return buildReadModeWriteBlockedResponse(intent);
         }
 
@@ -2397,6 +2407,47 @@ public class IntentExecutionOrchestrator {
             }
         }
         response.setAiMode(write ? "WRITE" : "READ");
+    }
+
+    /**
+     * spec §8.2 消费点②: 咨询 tab 的写拦截从"纯启发式"改成"声明优先 + 启发式兜底"。
+     *
+     * <p>纯 {@code writeGuardService.isWriteIntent} 只看意图的 sensitivityLevel 和 intentCode
+     * 后缀, 对绑定了写 Tool 但意图码看不出写意味的组合无能为力 —— 实测有 39 个工具属于这种
+     * (canvas_add_field / dictionary_add / create_new_intent / update_intent / scale_add_device
+     * ...), 它们绑定的意图在咨询 tab 下会被直接放行执行。改走
+     * {@link IntentAccessModeFilter#isWriteIntent(AIIntentConfig)} 后, 绑定 Tool 的
+     * {@code getAccessMode()} 声明成为第一判据, 原启发式保留为第二判据 (任一判写即拦)。
+     */
+    private boolean isWriteIntentDeclarationAware(AIIntentConfig intent) {
+        if (intentAccessModeFilter != null) {
+            try {
+                return intentAccessModeFilter.isWriteIntent(intent);
+            } catch (Exception e) {
+                log.warn("声明式写判定异常, 回落启发式: intentCode={}, err={}",
+                        intent != null ? intent.getIntentCode() : null, e.getMessage());
+            }
+        }
+        return writeGuardService.isWriteIntent(intent);
+    }
+
+    /**
+     * spec §8.2: 只在 OPERATE tab 才解析权限全集 —— READ tab 的过滤规则是"写意图一律剔除",
+     * 与权限无关, 不必为它多打一次 User 查询; mode 为空 (旧调用方 / 非双 tab 入口) 同样不查。
+     *
+     * @return 权限码集合; null = 不按权限过滤 (真正的鉴权在 checkIntentPermission / ToolRbacEnforcer)
+     */
+    private java.util.Set<String> resolveUserPermissionsForFiltering(String mode, Long userId) {
+        if (userId == null || intentPermissionGate == null
+                || !IntentAccessModeFilter.MODE_OPERATE.equalsIgnoreCase(mode)) {
+            return null;
+        }
+        try {
+            return intentPermissionGate.resolveUserPermissions(userId);
+        } catch (Exception e) {
+            log.warn("候选过滤权限集解析失败, 跳过权限过滤: userId={}, err={}", userId, e.getMessage());
+            return null;
+        }
     }
 
     /**

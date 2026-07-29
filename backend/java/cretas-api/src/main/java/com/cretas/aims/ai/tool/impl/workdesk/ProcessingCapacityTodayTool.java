@@ -152,4 +152,10 @@ public class ProcessingCapacityTodayTool extends AbstractBusinessTool {
         if (addend == null) return sum;
         return sum.add(addend);
     }
+
+    /** spec §8.2 只读查询, 无副作用 */
+    @Override
+    public AccessMode getAccessMode() {
+        return AccessMode.READ;
+    }
 }

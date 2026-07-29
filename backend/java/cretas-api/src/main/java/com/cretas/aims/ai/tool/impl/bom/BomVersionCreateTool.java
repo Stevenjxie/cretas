@@ -73,4 +73,10 @@ public class BomVersionCreateTool extends AbstractBusinessTool {
                 factoryId, bomRecipeId, draft.getId(), draft.getVersionNumber());
         return buildSimpleResult("BomVersion DRAFT v" + draft.getVersionNumber() + " 已创建", draft);
     }
+
+    /** spec §8.2 有副作用, 须走 W0 写确认闸 */
+    @Override
+    public AccessMode getAccessMode() {
+        return AccessMode.WRITE;
+    }
 }

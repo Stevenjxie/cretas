@@ -171,4 +171,10 @@ public class ScaleDeviceDetailTool extends AbstractBusinessTool {
 
         return buildSimpleResult("设备详情查询成功", deviceDetail);
     }
+
+    /** spec §8.2 只读查询, 无副作用 */
+    @Override
+    public AccessMode getAccessMode() {
+        return AccessMode.READ;
+    }
 }

@@ -625,4 +625,10 @@ public class ProcurementOrderCreateTool extends AbstractBusinessTool {
             return sumAmount.divide(sumQty, 4, RoundingMode.HALF_UP);
         }
     }
+
+    /** spec §8.2 有副作用, 须走 W0 写确认闸 */
+    @Override
+    public AccessMode getAccessMode() {
+        return AccessMode.WRITE;
+    }
 }

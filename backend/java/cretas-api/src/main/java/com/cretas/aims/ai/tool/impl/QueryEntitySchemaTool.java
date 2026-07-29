@@ -209,4 +209,10 @@ public class QueryEntitySchemaTool extends AbstractTool {
     public boolean requiresPermission() {
         return false;
     }
+
+    /** spec §8.2 只读查询, 无副作用 */
+    @Override
+    public AccessMode getAccessMode() {
+        return AccessMode.READ;
+    }
 }

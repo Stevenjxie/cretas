@@ -393,4 +393,10 @@ public class AdditiveBomComplianceCheckTool extends AbstractBusinessTool {
 
         return null;  // 非添加剂 (普通原料)
     }
+
+    /** spec §8.2 只读查询, 无副作用 */
+    @Override
+    public AccessMode getAccessMode() {
+        return AccessMode.READ;
+    }
 }

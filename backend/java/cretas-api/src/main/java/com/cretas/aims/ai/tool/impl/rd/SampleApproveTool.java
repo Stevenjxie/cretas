@@ -33,4 +33,10 @@ public class SampleApproveTool extends AbstractBusinessTool {
             return buildSimpleResult("样品已驳回", Map.of("sampleCode", sample.getSampleCode(), "status", sample.getStatus()));
         }
     }
+
+    /** spec §8.2 有副作用, 须走 W0 写确认闸 */
+    @Override
+    public AccessMode getAccessMode() {
+        return AccessMode.WRITE;
+    }
 }

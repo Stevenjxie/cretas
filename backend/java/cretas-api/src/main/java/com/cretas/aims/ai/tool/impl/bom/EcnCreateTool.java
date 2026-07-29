@@ -95,4 +95,10 @@ public class EcnCreateTool extends AbstractBusinessTool {
                 ecn.getId(), ecn.getEcnNumber(), reason);
         return buildSimpleResult("ECN " + ecn.getEcnNumber() + " DRAFT 已创建", ecn);
     }
+
+    /** spec §8.2 有副作用, 须走 W0 写确认闸 */
+    @Override
+    public AccessMode getAccessMode() {
+        return AccessMode.WRITE;
+    }
 }

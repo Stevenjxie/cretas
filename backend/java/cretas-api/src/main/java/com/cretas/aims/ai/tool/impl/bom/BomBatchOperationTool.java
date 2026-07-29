@@ -158,4 +158,10 @@ public class BomBatchOperationTool extends AbstractBusinessTool {
         return buildSimpleResult("批量 " + operation + " 完成: "
                 + result.getAffectedRecipeIds().size() + " BOM 影响, ECN " + result.getEcnNumber(), result);
     }
+
+    /** spec §8.2 有副作用, 须走 W0 写确认闸 */
+    @Override
+    public AccessMode getAccessMode() {
+        return AccessMode.WRITE;
+    }
 }

@@ -127,4 +127,10 @@ public class WagePolicyQueryTool extends AbstractBusinessTool {
             case MIXED -> "混合 (按时+按件)";
         };
     }
+
+    /** spec §8.2 只读查询, 无副作用 */
+    @Override
+    public AccessMode getAccessMode() {
+        return AccessMode.READ;
+    }
 }

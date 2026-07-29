@@ -86,4 +86,10 @@ public class BomRecipeQueryTool extends AbstractBusinessTool {
                 factoryId, recipe.getId(), recipe.getProductTypeId());
         return buildSimpleResult("查询成功", recipe);
     }
+
+    /** spec §8.2 只读查询, 无副作用 */
+    @Override
+    public AccessMode getAccessMode() {
+        return AccessMode.READ;
+    }
 }

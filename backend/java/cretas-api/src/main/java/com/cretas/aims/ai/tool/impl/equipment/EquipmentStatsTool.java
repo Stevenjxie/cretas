@@ -233,4 +233,10 @@ public class EquipmentStatsTool extends AbstractBusinessTool {
         // 无必需参数，无需显示名称
         return super.getParameterDisplayName(paramName);
     }
+
+    /** spec §8.2 只读查询, 无副作用 */
+    @Override
+    public AccessMode getAccessMode() {
+        return AccessMode.READ;
+    }
 }

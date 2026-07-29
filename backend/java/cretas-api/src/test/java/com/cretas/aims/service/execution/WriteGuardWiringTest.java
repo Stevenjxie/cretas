@@ -407,6 +407,9 @@ class WriteGuardWiringTest {
     void siteF_llmFallback_readToolNotBlocked() {
         ToolExecutor llmSelectedReadTool = mock(ToolExecutor.class);
         when(llmSelectedReadTool.getActionType()).thenReturn(ToolExecutor.ActionType.READ);
+        // spec §8.2: 读工具必须显式声明 READ —— 未声明按 WRITE 是新的安全底线, 见
+        // ToolAccessModeDeclarationTest#undeclaredToolIsTreatedAsWrite
+        when(llmSelectedReadTool.getAccessMode()).thenReturn(ToolExecutor.AccessMode.READ);
 
         // Same predicate; a READ tool must fall through (isWriteTool == false).
         boolean wouldBlock = writeGuard.isWriteTool(llmSelectedReadTool)

@@ -179,4 +179,10 @@ public class PeriodReopenTool extends AbstractBusinessTool {
             throw new IllegalArgumentException("reason 必填 — audit log 永久留存");
         }
     }
+
+    /** spec §8.2 有副作用, 须走 W0 写确认闸 */
+    @Override
+    public AccessMode getAccessMode() {
+        return AccessMode.WRITE;
+    }
 }

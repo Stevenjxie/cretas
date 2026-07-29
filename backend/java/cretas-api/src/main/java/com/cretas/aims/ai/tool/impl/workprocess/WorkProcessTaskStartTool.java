@@ -65,4 +65,10 @@ public class WorkProcessTaskStartTool extends AbstractBusinessTool {
                 String.format("工序任务 %d 已开始 (状态 → IN_PROGRESS)", taskId),
                 result);
     }
+
+    /** spec §8.2 有副作用, 须走 W0 写确认闸 */
+    @Override
+    public AccessMode getAccessMode() {
+        return AccessMode.WRITE;
+    }
 }

@@ -221,4 +221,10 @@ public class MaterialTodayReceivingQueryTool extends AbstractBusinessTool {
     private static int clamp(int v, int lo, int hi) {
         return Math.max(lo, Math.min(hi, v));
     }
+
+    /** spec §8.2 只读查询, 无副作用 */
+    @Override
+    public AccessMode getAccessMode() {
+        return AccessMode.READ;
+    }
 }

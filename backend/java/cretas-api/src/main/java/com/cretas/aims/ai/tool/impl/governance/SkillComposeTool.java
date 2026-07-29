@@ -232,4 +232,10 @@ public class SkillComposeTool extends AbstractBusinessTool {
             return buildSimpleResult("创建失败: " + e.getMessage(), null);
         }
     }
+
+    /** spec §8.2 有副作用, 须走 W0 写确认闸 */
+    @Override
+    public AccessMode getAccessMode() {
+        return AccessMode.WRITE;
+    }
 }

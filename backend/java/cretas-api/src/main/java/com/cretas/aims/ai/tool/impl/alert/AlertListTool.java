@@ -163,4 +163,10 @@ public class AlertListTool extends AbstractBusinessTool {
         }
         return filtered;
     }
+
+    /** spec §8.2 只读查询, 无副作用 */
+    @Override
+    public AccessMode getAccessMode() {
+        return AccessMode.READ;
+    }
 }
