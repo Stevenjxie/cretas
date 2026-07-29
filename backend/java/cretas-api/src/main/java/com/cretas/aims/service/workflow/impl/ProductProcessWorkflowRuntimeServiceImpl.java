@@ -311,8 +311,10 @@ public class ProductProcessWorkflowRuntimeServiceImpl
         port.setMaterialNodeId(compiled.materialNodeId());
         port.setMaterialKind(compiled.materialKind());
         port.setSkuId(compiled.skuId());
+        // unit = 用户在工序/SKU 里配的写法(报工页照此显示);
+        // unit_code = 契约规范码(判等价用)。两者是同一个单位的两种写法。
         port.setUnit(compiled.unit());
-        port.setUnitCode(compiled.unit());
+        port.setUnitCode(canonicalUnitCode(factoryId, compiled.unit()));
         if ("FINISHED_GOOD".equals(compiled.materialKind())) {
             port.setNetWeightGramsSnapshot(productTypeRepository
                     .findByIdAndFactoryId(compiled.skuId(), factoryId)
@@ -482,4 +484,16 @@ public class ProductProcessWorkflowRuntimeServiceImpl
             BigDecimal storedFactor,
             BigDecimal portToPrimaryFactor) {
     }
+
+    /**
+     * 端口规范码。{@code unit} 列存用户在工序/SKU 里配的写法(报工页照此显示),
+     * {@code unit_code} 列存契约规范码(判等价用) —— 同一个单位的两种写法。
+     * 契约不认识的单位原样落码, 不硬塞一个看起来像模像样的替代值。
+     */
+    private String canonicalUnitCode(String factoryId, String reportingUnit) {
+        if (reportingUnit == null || reportingUnit.isBlank()) return reportingUnit;
+        var normalized = unitContractService.normalize(factoryId, reportingUnit);
+        return normalized.recognized() ? normalized.code() : reportingUnit.trim();
+    }
+
 }
