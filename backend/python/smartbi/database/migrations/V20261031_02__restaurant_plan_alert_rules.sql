@@ -81,7 +81,13 @@ CREATE TABLE IF NOT EXISTS restaurant_plan_alert_rules (
     -- 与 _plan_rejection_reason 的 'plan_contains_resolved_dates' 同义, DB 层
     -- 兜底: sealed spec 的具体日期永远不该被存下来.
     CONSTRAINT chk_plan_alert_rules_plan_no_dates
-        CHECK (NOT (plan_json ? 'date_range'))
+        CHECK (NOT (plan_json ? 'date_range')),
+    -- planner 契约里 time_range 的 'absolute' 类型带 start/end 具体 ISO 日期
+    -- (见 _parse_t3_time_range 的 absolute 分支). 交互问答里那是合法的 —— 用户
+    -- 就问了那个区间; 但**定时**预警存了它, 明天照样对着同一个死窗口发预警,
+    -- 永远不会前进. 相对/命名时间才有意义.
+    CONSTRAINT chk_plan_alert_rules_time_not_absolute
+        CHECK (COALESCE(plan_json->'time_range'->>'type', '') <> 'absolute')
 );
 
 -- 热读路径: "这个租户在这个计划契约版本下所有启用的规则".

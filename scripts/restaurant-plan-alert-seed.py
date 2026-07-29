@@ -15,15 +15,35 @@
             "rule_code": "monthly_revenue_drop",
             "rule_name": "营收环比下滑预警",
             "query_text": "这个月营收比上个月怎么样",
-            "code": "RESTAURANT_OPS_SALES_SUMMARY",
+            "plan": {
+              "intent": "RESTAURANT_OPS_SALES_SUMMARY",
+              "time_range": {"type": "named", "value": "this_month"},
+              "wants_margin": false, "asks_profitability": false,
+              "requested_metrics": ["revenue"], "analysis_action": "compare",
+              "dimensions": [], "dish": null, "store": null, "stores": [],
+              "store_scope": "all", "confidence": 1.0,
+              "clarification_needed": false, "missing_fields": [],
+              "clarification_question": null, "clarification_options": []
+            },
             "metric_path": "comparison.revenue_change_pct",
             "threshold_op": "lt",
             "threshold_value": -15,
             "severity": "warning"
           }
         ]
-      给 "code" 时自动生成最小完整计划 (default_seed_plan); 也可以直接给
-      "plan" = 完整 planner 计划 JSON。
+      给 "code" 而不给 "plan" 时自动生成最小完整计划 (default_seed_plan), 但那
+      份计划 time_range 是 null —— 对**定时**预警意味着窗口待澄清, 编译会被拒。
+      所以预警规则实际上都要显式给 "plan"。
+
+      ⚠️ time_range 必须是**对象**, 不是字符串。合法形态只有三种:
+        {"type": "named",    "value": "today" | "this_week" | "this_month"}
+        {"type": "relative", "unit": "day"|"week"|"month", "count": N}
+        {"type": "all_history"}
+      写成 "time_range": "这个月" (字符串) 会让整份计划不满足 planner 契约,
+      编译出 llm_contract_incomplete 从而被拒收 —— CLI 会告诉你, 但错因不直观,
+      所以照抄上面的对象写法。
+      ⛔ "absolute" 类型 (带 start/end 具体日期) 对定时预警是禁止的: 存下来
+      每天都对着同一个死窗口重复告警, 窗口永远不前进。
 
   python scripts/restaurant-plan-alert-seed.py --disable monthly_revenue_drop --factory-id RES_...
   python scripts/restaurant-plan-alert-seed.py --enable  monthly_revenue_drop --factory-id RES_...

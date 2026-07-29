@@ -320,6 +320,16 @@ def compile_rule_spec(rule: Dict[str, Any]):
         raise RuleUnavailable(
             f"P1 预警只支持 {sorted(_SUPPORTED_INTENTS)}，该规则是 {intent!r}"
         )
+    # 定时预警绝不能钉在绝对区间上: `_parse_t3_time_range` 的 'absolute' 分支
+    # 带 start/end 具体 ISO 日期, 存下来就等于每天对着同一个死窗口重复发预警,
+    # 窗口永远不前进。交互问答里 absolute 是合法的 (用户就问了那个区间),
+    # 定时执行里不是。DB 侧 chk_plan_alert_rules_time_not_absolute 是同一道闸。
+    time_range = plan.get("time_range")
+    if isinstance(time_range, dict) and time_range.get("type") == "absolute":
+        raise RuleUnavailable(
+            "规则计划使用了绝对时间区间，定时预警必须用相对/命名时间"
+            "（否则每天都对同一个固定窗口重复告警）"
+        )
     spec = _replay_plan_spec(
         plan,
         str(rule.get("query_text") or ""),

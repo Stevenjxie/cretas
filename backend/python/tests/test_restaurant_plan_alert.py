@@ -549,3 +549,165 @@ def test_seed_cli_rejects_bad_entries(mutation, fragment):
     row, reason = cli._validate(entry, "RES_TEST")
     assert row is None, f"应当拒收: {mutation}"
     assert fragment in reason
+
+
+# ══════════════════════════════════════════════════════════════════════
+# F. 端到端: 真 compile_rule_spec + 真 tiered_answer + 真 resolver
+# ══════════════════════════════════════════════════════════════════════
+
+# 唯一被 planner 契约接受的 time_range 形态是**对象**。写成字符串 "这个月"
+# 会让整份计划编译成 llm_contract_incomplete 从而不可回放 —— 这不是理论,
+# 是本测试第一版真踩到的。
+_E2E_PLAN = {
+    "intent": "RESTAURANT_OPS_SALES_SUMMARY",
+    "time_range": {"type": "named", "value": "this_month"},
+    "wants_margin": False,
+    "asks_profitability": False,
+    "requested_metrics": ["revenue"],
+    "analysis_action": "compare",
+    "dimensions": [],
+    "dish": None,
+    "store": None,
+    "stores": [],
+    "store_scope": "all",
+    "confidence": 1.0,
+    "clarification_needed": False,
+    "missing_fields": [],
+    "clarification_question": None,
+    "clarification_options": [],
+}
+
+
+def test_compile_rule_spec_accepts_relative_plan_and_is_replayable():
+    """真编译: 关系型 time_range 的计划必须编出 promoted_exact 权威."""
+    from smartbi.gold.restaurant.plan_alert import compile_rule_spec
+    from smartbi.gold.restaurant.restaurant_intent import (
+        TRUSTED_PLANNER_AUTHORITIES,
+    )
+
+    spec = compile_rule_spec(_rule(plan_json=dict(_E2E_PLAN)))
+    assert spec.intent == "RESTAURANT_OPS_SALES_SUMMARY"
+    assert spec.planner_authority in TRUSTED_PLANNER_AUTHORITIES
+    assert spec.plan_hash, "sealed plan 必须有 plan_hash"
+    assert spec.clarification_needed is False
+
+
+def test_compile_rule_spec_rejects_absolute_time_range():
+    """定时预警钉死在绝对区间 = 每天对同一个死窗口重复告警."""
+    from smartbi.gold.restaurant.plan_alert import compile_rule_spec
+
+    plan = dict(_E2E_PLAN)
+    plan["time_range"] = {"type": "absolute", "start": "2026-07-01", "end": "2026-07-20"}
+    with pytest.raises(RuleUnavailable) as exc:
+        compile_rule_spec(_rule(plan_json=plan))
+    assert "绝对时间区间" in exc.value.reason
+
+
+def test_seed_cli_rejects_absolute_time_range():
+    cli = _load_seed_cli()
+    entry = dict(_GOOD_ENTRY)
+    entry.pop("code")
+    plan = dict(_E2E_PLAN)
+    plan["time_range"] = {"type": "absolute", "start": "2026-07-01", "end": "2026-07-20"}
+    entry["plan"] = plan
+    row, reason = cli._validate(entry, "RES_TEST")
+    assert row is None
+    assert "绝对时间区间" in reason
+
+
+def test_end_to_end_rule_fires_through_real_execution_chain(monkeypatch):
+    """整链: 存储计划 -> 重编译 -> tiered_answer -> resolver -> 阈值 -> 诊断.
+
+    只把最外层的 DB 取数 (finance_summary / store_comparison) 换成假实现;
+    计划编译、执行契约、resolver 逻辑、meta.comparison 计算、阈值判定全部是
+    真代码。这是 P1 唯一能在无餐饮种子库的机器上做到的最深验证。
+    """
+    import smartbi.gold.queries as _q
+    import smartbi.gold.restaurant.plan_alert as _pa
+    import smartbi.gold.restaurant.restaurant_intent_service as _svc
+    import smartbi.gold.restaurant.restaurant_ops_router as _r
+
+    seen: List[Any] = []
+
+    async def _fake_finance_summary(pool, factory_id, date_range, top_n_stores=5):
+        # 主窗口总是比基线窗口晚; 用相对先后判定, 不依赖真实"今天"。
+        seen.append(date_range)
+        is_baseline = any(
+            d[0] and date_range[0] and d[0] > date_range[0] for d in seen
+        )
+        if is_baseline:
+            return {"total_revenue": 10000.0, "bill_count": 100,
+                    "avg_bill_value": 100.0, "day_count": 20,
+                    "store_count": 2, "top_stores": []}
+        return {"total_revenue": 7000.0, "bill_count": 70,
+                "avg_bill_value": 100.0, "day_count": 20,
+                "store_count": 2, "top_stores": []}
+
+    async def _fake_store_comparison(pool, factory_id, date_range):
+        return {"stores": [], "weakStores": []}
+
+    async def _fake_store_margin(pool, factory_id, days=30, top_n=5, *,
+                                 role=None, date_range=None):
+        return OpsAnswer(code="RESTAURANT_OPS_STORE_MARGIN", title="t",
+                         answer_text="ok", charts=[], kpis=[], meta={})
+
+    async def _no_capture(*a, **k):
+        return None
+
+    async def _fake_load(pool, factory_id, *, domain="restaurant"):
+        return [_rule(plan_json=dict(_E2E_PLAN),
+                      rule_code="monthly_revenue_drop",
+                      threshold_op="lt", threshold_value=-15.0)]
+
+    monkeypatch.setattr(_q, "finance_summary", _fake_finance_summary)
+    monkeypatch.setattr(_q, "store_comparison", _fake_store_comparison)
+    monkeypatch.setattr(_r, "resolve_store_margin", _fake_store_margin)
+    monkeypatch.setattr(_svc, "log_intent_capture", _no_capture)
+    monkeypatch.setattr(_pa, "load_plan_alert_rules", _fake_load)
+
+    diagnoses, unavailable = asyncio.run(run_plan_alerts(object(), "RES_TEST"))
+
+    assert unavailable == [], f"整链不该有不可判定: {unavailable}"
+    assert len(diagnoses) == 1, "7000 vs 10000 = -30%, 低于阈值 -15% 应当触发"
+    d = diagnoses[0]
+    assert d["metricKey"] == f"{METRIC_KEY_PREFIX}monthly_revenue_drop"
+    assert d["severity"] == "warning"
+    assert "-30.0%" in d["descriptionZh"]
+    assert "非实时监控" in d["descriptionZh"]
+
+
+def test_end_to_end_rule_stays_quiet_when_within_threshold(monkeypatch):
+    """整链反向: 阈值未触发 -> 无诊断且无 unavailable (缺席即恢复)."""
+    import smartbi.gold.queries as _q
+    import smartbi.gold.restaurant.plan_alert as _pa
+    import smartbi.gold.restaurant.restaurant_intent_service as _svc
+    import smartbi.gold.restaurant.restaurant_ops_router as _r
+
+    async def _flat_finance_summary(pool, factory_id, date_range, top_n_stores=5):
+        return {"total_revenue": 10000.0, "bill_count": 100,
+                "avg_bill_value": 100.0, "day_count": 20,
+                "store_count": 2, "top_stores": []}
+
+    async def _fake_store_comparison(pool, factory_id, date_range):
+        return {"stores": [], "weakStores": []}
+
+    async def _fake_store_margin(pool, factory_id, days=30, top_n=5, *,
+                                 role=None, date_range=None):
+        return OpsAnswer(code="RESTAURANT_OPS_STORE_MARGIN", title="t",
+                         answer_text="ok", charts=[], kpis=[], meta={})
+
+    async def _no_capture(*a, **k):
+        return None
+
+    async def _fake_load(pool, factory_id, *, domain="restaurant"):
+        return [_rule(plan_json=dict(_E2E_PLAN), rule_code="flat")]
+
+    monkeypatch.setattr(_q, "finance_summary", _flat_finance_summary)
+    monkeypatch.setattr(_q, "store_comparison", _fake_store_comparison)
+    monkeypatch.setattr(_r, "resolve_store_margin", _fake_store_margin)
+    monkeypatch.setattr(_svc, "log_intent_capture", _no_capture)
+    monkeypatch.setattr(_pa, "load_plan_alert_rules", _fake_load)
+
+    diagnoses, unavailable = asyncio.run(run_plan_alerts(object(), "RES_TEST"))
+    assert diagnoses == []
+    assert unavailable == []
