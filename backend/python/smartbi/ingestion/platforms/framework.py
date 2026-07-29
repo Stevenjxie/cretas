@@ -98,3 +98,72 @@ async def sync_all(pool, adapters, *, factory_id: str, write_orders: WriteOrders
             logger.exception("[platform-sync] %s 未预期异常", adapter.platform)
             results[adapter.platform] = f"ERROR: 未预期异常 {exc}"
     return results
+
+
+# ── 后厨供应链拉取 (2026-07-29) ──────────────────────────────────────
+# 与订单同一套「先写入、后推进游标」的纪律, 但三类单据各有独立游标:
+# 游标表的 platform 列是自由字符串, 用 "keruyun:requisition" 这样分键。
+# 合用一个游标的话, 三类数据的进度会互相顶掉 —— 拉完领料把游标推到 100,
+# 损耗就从 100 开始, 前 100 条损耗永远拉不到。
+
+OPS_KINDS = ("requisition", "wastage", "stocktaking")
+
+
+async def sync_ops_kind(pool, adapter, *, factory_id: str, kind: str,
+                        write_ops, max_pages: int = 20,
+                        page_size: int = DEFAULT_PAGE_SIZE) -> int:
+    """拉一轮某一类后厨单据。返回写入条数。"""
+    cursor_key = f"{adapter.platform}:{kind}"
+    try:
+        cursor = await read_cursor(pool, factory_id, cursor_key)
+    except Exception as exc:  # noqa: BLE001
+        raise PlatformSyncError(f"[{cursor_key}] 读游标失败: {exc}") from exc
+    total = 0
+    for _ in range(max_pages):
+        try:
+            page = await adapter.fetch_page(kind, cursor, page_size)
+            # 属性访问也在保护范围内(同 sync_platform): 畸形返回时裸的
+            # AttributeError 会绕过 PlatformSyncError 冒到上层, 破坏失败隔离。
+            items = page.items
+            next_cursor = page.next_cursor
+            has_more = page.has_more
+        except Exception as exc:  # noqa: BLE001
+            raise PlatformSyncError(
+                f"[{cursor_key}] 拉取失败 cursor={cursor}: {exc}") from exc
+        if items:
+            try:
+                total += await write_ops(pool, factory_id, kind, items)
+            except Exception as exc:  # noqa: BLE001
+                raise PlatformSyncError(
+                    f"[{cursor_key}] 写入失败 cursor={cursor}: {exc}") from exc
+        cursor = next_cursor
+        try:
+            await write_cursor(pool, factory_id, cursor_key, cursor)
+        except Exception as exc:  # noqa: BLE001
+            raise PlatformSyncError(
+                f"[{cursor_key}] 推进游标失败 cursor={cursor}: {exc}") from exc
+        if not has_more:
+            break
+    else:
+        logger.info("[%s] 本轮达到 max_pages=%d, 剩余留给下一轮", cursor_key, max_pages)
+    return total
+
+
+async def sync_ops_all(pool, adapter, *, factory_id: str, write_ops) -> dict:
+    """三类单据逐个同步。**失败隔离**: 一类抛错不影响其余两类。
+
+    与 sync_all 同样的理由 —— 盘点接口挂了不该顺带让领料也停更。
+    """
+    results: dict = {}
+    for kind in OPS_KINDS:
+        try:
+            results[kind] = await sync_ops_kind(
+                pool, adapter, factory_id=factory_id, kind=kind, write_ops=write_ops)
+        except PlatformSyncError as exc:
+            logger.error("[platform-sync] %s", exc)
+            results[kind] = f"ERROR: {exc}"
+        except Exception as exc:  # noqa: BLE001
+            # 最后一道防线, 同 sync_all: 失败隔离是硬契约。
+            logger.exception("[platform-sync] %s 未预期异常", kind)
+            results[kind] = f"ERROR: 未预期异常 {exc}"
+    return results
