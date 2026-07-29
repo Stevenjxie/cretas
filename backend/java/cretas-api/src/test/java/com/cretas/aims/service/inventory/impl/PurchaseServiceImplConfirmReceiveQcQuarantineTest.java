@@ -6,6 +6,7 @@ import com.cretas.aims.entity.enums.MaterialBatchStatus;
 import com.cretas.aims.entity.inventory.PurchaseReceiveItem;
 import com.cretas.aims.entity.inventory.PurchaseReceiveRecord;
 import com.cretas.aims.entity.enums.PurchaseReceiveStatus;
+import com.cretas.aims.repository.AttachmentRepository;
 import com.cretas.aims.repository.MaterialBatchRepository;
 import com.cretas.aims.repository.RawMaterialTypeRepository;
 import com.cretas.aims.repository.SupplierRepository;
@@ -31,6 +32,7 @@ import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.when;
 import static org.mockito.Mockito.verify;
 
@@ -55,6 +57,7 @@ class PurchaseServiceImplConfirmReceiveQcQuarantineTest {
     @Mock private ApplicationEventPublisher applicationEventPublisher;
     @Mock private MaterialBatchService materialBatchService;
     @Mock private WarehouseResolver warehouseResolver;
+    @Mock private AttachmentRepository attachmentRepository;
 
     private PurchaseServiceImpl service;
 
@@ -77,11 +80,22 @@ class PurchaseServiceImplConfirmReceiveQcQuarantineTest {
                 applicationEventPublisher,
                 materialBatchService);
         ReflectionTestUtils.setField(service, "warehouseResolver", warehouseResolver);
+        // PR #1577 起 confirmReceive 前置「收货凭证门」: attachmentRepository 为 null 直接 503
+        // (fail-closed, 无凭证服务不写库存), 有服务但零附件则 409。本用例验证的是 QC/差异逻辑,
+        // 所以把门开着 — 门本身另有 PurchaseServiceImplConfirmReceiveOverReceiveTest 专门覆盖。
+        ReflectionTestUtils.setField(service, "attachmentRepository", attachmentRepository);
+        lenient().when(attachmentRepository.countByFactoryIdAndEntityTypeAndEntityId(
+                FACTORY, com.cretas.aims.entity.Attachment.EntityType.PURCHASE_RECEIPT, RECEIVE_ID))
+                .thenReturn(1L);
     }
 
     private MaterialBatch confirmWithQcResult(String qcResult) {
         PurchaseReceiveRecord record = draftRecord(qcResult);
-        when(receiveRecordRepository.findById(RECEIVE_ID)).thenReturn(Optional.of(record));
+        // PR #1577 起 confirmReceive 改用 findByIdAndFactoryIdForUpdate(receiveId, factoryId):
+        // 租户过滤下沉进 SQL 并同时取 PESSIMISTIC_WRITE 锁 (堵并发重复确认), 取代旧的
+        // findById + 手工 factoryId 比对。租户隔离只增不减, 这里只是 mock 没跟上换掉的 finder。
+        when(receiveRecordRepository.findByIdAndFactoryIdForUpdate(RECEIVE_ID, FACTORY))
+                .thenReturn(Optional.of(record));
         when(materialTypeRepository.findById(MATERIAL_ID)).thenReturn(Optional.of(rawMaterial()));
         when(materialBatchRepository.save(any(MaterialBatch.class))).thenAnswer(inv -> {
             MaterialBatch batch = inv.getArgument(0);

@@ -18,6 +18,8 @@ import com.cretas.aims.repository.inventory.SalesOrderRepository;
 import com.cretas.aims.service.factory.WarehouseResolver;
 import com.cretas.aims.service.finance.ArApService;
 import com.cretas.aims.service.inventory.impl.SalesServiceImpl;
+import com.cretas.aims.entity.enums.MaterialSupplyMode;
+import com.cretas.aims.entity.enums.SalesProcessingMode;
 import jakarta.persistence.EntityManager;
 import jakarta.persistence.Query;
 import org.junit.jupiter.api.BeforeEach;
@@ -190,6 +192,11 @@ class SalesServiceImplCreateTaxAmountTest {
                 .thenReturn(Optional.of(stubProductType2("叮咚牛腱")));
 
         CreateSalesOrderRequest req = new CreateSalesOrderRequest();
+        // PR #1588 起 processingMode/materialSupplyMode 是必填业务契约 (DTO 上有 @NotNull,
+        // service 层 validateSupplyContract 再兜一道)。本测试直调 service 绕过 bean validation,
+        // 因此 fixture 必须显式给出这两项 — 普通销售 + 工厂供料是最常见组合。
+        req.setProcessingMode(SalesProcessingMode.STANDARD_SALE);
+        req.setMaterialSupplyMode(MaterialSupplyMode.FACTORY_SUPPLIED);
         req.setCustomerId(CUSTOMER_ID);
         // 行1: 继承 13% — qty 100 × 10.00 = 1000.00 → tax 130.00
         CreateSalesOrderRequest.SalesOrderItemDTO i1 = new CreateSalesOrderRequest.SalesOrderItemDTO();
@@ -235,6 +242,11 @@ class SalesServiceImplCreateTaxAmountTest {
         when(salesOrderItemRepository.findBySalesOrderId("SO-UPD-001")).thenReturn(List.of());
 
         UpdateSalesOrderRequest req = new UpdateSalesOrderRequest();
+        // PR #1588 起 processingMode/materialSupplyMode 是必填业务契约 (DTO 上有 @NotNull,
+        // service 层 validateSupplyContract 再兜一道)。本测试直调 service 绕过 bean validation,
+        // 因此 fixture 必须显式给出这两项 — 普通销售 + 工厂供料是最常见组合。
+        req.setProcessingMode(SalesProcessingMode.STANDARD_SALE);
+        req.setMaterialSupplyMode(MaterialSupplyMode.FACTORY_SUPPLIED);
         CreateSalesOrderRequest.SalesOrderItemDTO item = new CreateSalesOrderRequest.SalesOrderItemDTO();
         item.setProductTypeId(PRODUCT_TYPE_ID);
         item.setProductName("叮咚卤猪舌");
@@ -255,6 +267,11 @@ class SalesServiceImplCreateTaxAmountTest {
 
     private CreateSalesOrderRequest buildRequest(BigDecimal unitPrice, BigDecimal itemTaxRate) {
         CreateSalesOrderRequest req = new CreateSalesOrderRequest();
+        // PR #1588 起 processingMode/materialSupplyMode 是必填业务契约 (DTO 上有 @NotNull,
+        // service 层 validateSupplyContract 再兜一道)。本测试直调 service 绕过 bean validation,
+        // 因此 fixture 必须显式给出这两项 — 普通销售 + 工厂供料是最常见组合。
+        req.setProcessingMode(SalesProcessingMode.STANDARD_SALE);
+        req.setMaterialSupplyMode(MaterialSupplyMode.FACTORY_SUPPLIED);
         req.setCustomerId(CUSTOMER_ID);
         CreateSalesOrderRequest.SalesOrderItemDTO item = new CreateSalesOrderRequest.SalesOrderItemDTO();
         item.setProductTypeId(PRODUCT_TYPE_ID);

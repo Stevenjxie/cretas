@@ -7,6 +7,7 @@ import com.cretas.aims.entity.inventory.PurchaseOrder;
 import com.cretas.aims.entity.inventory.PurchaseOrderItem;
 import com.cretas.aims.entity.inventory.PurchaseReceiveItem;
 import com.cretas.aims.entity.inventory.PurchaseReceiveRecord;
+import com.cretas.aims.repository.AttachmentRepository;
 import com.cretas.aims.repository.MaterialBatchRepository;
 import com.cretas.aims.repository.RawMaterialTypeRepository;
 import com.cretas.aims.repository.SupplierRepository;
@@ -63,6 +64,7 @@ class PurchaseServiceImplReceiveVarianceNotifyTest {
     @Mock private ApplicationEventPublisher applicationEventPublisher;
     @Mock private MaterialBatchService materialBatchService;
     @Mock private WarehouseResolver warehouseResolver;
+    @Mock private AttachmentRepository attachmentRepository;
     @Mock private NotificationService notificationService;
 
     private PurchaseServiceImpl service;
@@ -90,6 +92,13 @@ class PurchaseServiceImplReceiveVarianceNotifyTest {
         ReflectionTestUtils.setField(service, "overReceiveRate", new BigDecimal("0.30"));
         ReflectionTestUtils.setField(service, "warehouseResolver", warehouseResolver);
         ReflectionTestUtils.setField(service, "notificationService", notificationService);
+        // PR #1577 起 confirmReceive 前置「收货凭证门」: attachmentRepository 为 null 直接 503
+        // (fail-closed, 无凭证服务不写库存), 有服务但零附件则 409。本用例验证的是 QC/差异逻辑,
+        // 所以把门开着 — 门本身另有 PurchaseServiceImplConfirmReceiveOverReceiveTest 专门覆盖。
+        ReflectionTestUtils.setField(service, "attachmentRepository", attachmentRepository);
+        lenient().when(attachmentRepository.countByFactoryIdAndEntityTypeAndEntityId(
+                FACTORY, com.cretas.aims.entity.Attachment.EntityType.PURCHASE_RECEIPT, RECEIVE_ID))
+                .thenReturn(1L);
     }
 
     // ==================== 测试用例 ====================
@@ -168,7 +177,11 @@ class PurchaseServiceImplReceiveVarianceNotifyTest {
     private void stubConfirmFlow(BigDecimal ordered, BigDecimal received) {
         // 1. 入库单 (DRAFT)
         PurchaseReceiveRecord record = buildReceiveRecord(received);
-        when(receiveRecordRepository.findById(RECEIVE_ID)).thenReturn(Optional.of(record));
+        // PR #1577 起 confirmReceive 改用 findByIdAndFactoryIdForUpdate(receiveId, factoryId):
+        // 租户过滤下沉进 SQL 并同时取 PESSIMISTIC_WRITE 锁 (堵并发重复确认), 取代旧的
+        // findById + 手工 factoryId 比对。租户隔离只增不减, 这里只是 mock 没跟上换掉的 finder。
+        when(receiveRecordRepository.findByIdAndFactoryIdForUpdate(RECEIVE_ID, FACTORY))
+                .thenReturn(Optional.of(record));
 
         // 2. 原料类型 (createMaterialBatchFromReceiveItem 需要)
         RawMaterialType material = new RawMaterialType();
@@ -195,6 +208,10 @@ class PurchaseServiceImplReceiveVarianceNotifyTest {
         po.setOrderNumber("PO-20260615-001");
         po.setCreatedBy(PURCHASER_ID);
         when(purchaseOrderRepository.findById(PO_ID)).thenReturn(Optional.of(po));
+        // confirmReceive 的超收 fail-fast 分支另走租户内 + 悲观锁的 finder (PR #1577)。
+        // 后续的 notifyPurchaserOnReceiveVariance 等仍用裸 findById, 所以两个 stub 都要留。
+        when(purchaseOrderRepository.findByIdAndFactoryIdForUpdate(PO_ID, FACTORY))
+                .thenReturn(Optional.of(po));
 
         // 6. 采购订单行 (notifyPurchaserOnReceiveVariance + SP6 exception block 需要)
         PurchaseOrderItem poItem = new PurchaseOrderItem();

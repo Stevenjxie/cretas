@@ -19,6 +19,8 @@ import com.cretas.aims.repository.inventory.SalesOrderRepository;
 import com.cretas.aims.service.factory.WarehouseResolver;
 import com.cretas.aims.service.finance.ArApService;
 import com.cretas.aims.service.inventory.impl.SalesServiceImpl;
+import com.cretas.aims.entity.enums.MaterialSupplyMode;
+import com.cretas.aims.entity.enums.SalesProcessingMode;
 import jakarta.persistence.EntityManager;
 import jakarta.persistence.Query;
 import org.junit.jupiter.api.BeforeEach;
@@ -123,6 +125,11 @@ class SalesServiceImplSourceWarehouseContractTest {
     @DisplayName("create then GET retains canonical box, WH-LOG and no packaging spec")
     void createAndGetRoundTripRetainsSourceWarehouseAndUnitContract() {
         CreateSalesOrderRequest request = new CreateSalesOrderRequest();
+        // PR #1588 起 processingMode/materialSupplyMode 是必填业务契约 (DTO 上有 @NotNull,
+        // service 层 validateSupplyContract 再兜一道)。本测试直调 service 绕过 bean validation,
+        // 因此 fixture 必须显式给出这两项 — 普通销售 + 工厂供料是最常见组合。
+        request.setProcessingMode(SalesProcessingMode.STANDARD_SALE);
+        request.setMaterialSupplyMode(MaterialSupplyMode.FACTORY_SUPPLIED);
         request.setCustomerId("CUSTOMER-1");
         CreateSalesOrderRequest.SalesOrderItemDTO line = new CreateSalesOrderRequest.SalesOrderItemDTO();
         line.setProductTypeId(PRODUCT_ID);

@@ -139,6 +139,13 @@ class InterimSettleReversalResettleIntegrationTest {
         plan.setIsLocked(false);
         plan.setSkipProcessReporting(false);
         plan.setSourceOrderIds(null); // H2: 避免 jsonb "[]" 读回 quirk (prod Postgres 原生 jsonb 不受影响)
+        // 2026-07-26 之后新增的三个 jsonb Map 列同理: Java 默认空 Map → 序列化成 "{}",
+        // H2 profile 读回抛 IllegalArgumentException: The given string value: "{}" cannot be
+        // transformed。prod 用真 PostgreSQL,jsonb "{}" 往返 Map 完全正常 → 这是 H2 兼容性
+        // 差异,不是产品缺陷。本测试验证中间结算冲正/重算,不负责 jsonb 序列化。
+        plan.setWorkflowOutputUnitsByProduct(null);
+        plan.setSelectedBomRecipeIdsByProduct(null);
+        plan.setSelectedBomVersionsByProduct(null);
         planRepo.saveAndFlush(plan);
 
         // 一条已物化的成品道 (batchId 非空 → 参与结算; finished=true, productWeight 8kg → 产 FG)。
