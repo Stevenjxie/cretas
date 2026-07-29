@@ -113,6 +113,34 @@ async def test_订单被正确归一化():
 
 
 @pytest.mark.asyncio
+async def test_菜品分类被带过来():
+    payload = {"code": "0", "data": {"list": [{
+        "orderNo": "B1", "shopCode": "MK01", "channel": "dine_in",
+        "placedAt": "2026-07-29T12:05:00", "bizDate": "2026-07-29",
+        "grossAmount": 1, "discountAmount": 0, "netAmount": 1, "guestCount": 1,
+        "items": [{"dishName": "藤椒鸡", "dishCategory": "热菜",
+                   "qty": 1, "price": 1, "amount": 1}],
+        "payments": [],
+    }], "nextCursor": 1, "hasMore": False}}
+    page = await KeruyunAdapter("http://m", "k", "s", _FakeClient(payload)).fetch_page("0", 50)
+    assert page.orders[0].items[0].category == "热菜"
+
+
+@pytest.mark.asyncio
+async def test_菜品分类缺失不炸_整页仍可解析():
+    """老报文没有 dishCategory。它只影响菜品分组粒度, 不该让整页解析失败。"""
+    payload = {"code": "0", "data": {"list": [{
+        "orderNo": "B1", "shopCode": "MK01", "channel": "dine_in",
+        "placedAt": "2026-07-29T12:05:00", "bizDate": "2026-07-29",
+        "grossAmount": 1, "discountAmount": 0, "netAmount": 1, "guestCount": 1,
+        "items": [{"dishName": "藤椒鸡", "qty": 1, "price": 1, "amount": 1}],
+        "payments": [],
+    }], "nextCursor": 1, "hasMore": False}}
+    page = await KeruyunAdapter("http://m", "k", "s", _FakeClient(payload)).fetch_page("0", 50)
+    assert page.orders[0].items[0].category is None
+
+
+@pytest.mark.asyncio
 async def test_金额带小数必须报错_不许静默截断():
     """裸 int(128.5) 静默给 128。金额单位是分, 截断 = 无声改写一笔订单金额,
     财务对账会拿到"看起来正常"的错数且零留痕。这个文件里其余失败路径都
@@ -163,13 +191,16 @@ async def test_请求带上了签名参数():
 
 # ───────────────────────── writer 失败路径 ─────────────────────────
 
-def _order(no="B1", store_code="MK01", method="wechat"):
+def _order(no="B1", store_code="MK01", method="wechat", items=None):
     return NormalizedOrder(
         platform="keruyun", platform_order_no=no, store_code=store_code,
         channel="dine_in", placed_at=datetime.datetime(2026, 7, 29, 12, 0),
         biz_date=datetime.date(2026, 7, 29), gross_cents=1000,
         discount_cents=0, net_cents=1000, guest_count=2,
-        items=[NormalizedItem(dish_name="米饭", qty=1, price_cents=1000, amount_cents=1000)],
+        items=items if items is not None else [
+            NormalizedItem(dish_name="米饭", qty=1, price_cents=1000,
+                           amount_cents=1000, category="主食")
+        ],
         payments=[NormalizedPayment(method=method, amount_cents=1000)],
     )
 
@@ -189,6 +220,10 @@ class _FakeConn:
         self._txn_row = txn_row
         self.in_transaction = False
         self.executed = []          # [(sql, args, in_transaction)]
+        # dim_product UPSERT 每次发一个新 id, 这样测试能看出"同名菜是不是
+        # 只解析了一次"——发固定值的话缓存失效根本测不出来。
+        self._next_product_id = 900
+        self.product_upserts = []   # [(name, normalized_name, category)]
 
     def _record(self, sql, args):
         self.executed.append((sql, args, self.in_transaction))
@@ -196,6 +231,14 @@ class _FakeConn:
     async def execute(self, sql, *args):
         self._record(sql, args)
         return "INSERT 0 1"
+
+    async def fetchval(self, sql, *args):
+        self._record(sql, args)
+        assert "dim_product" in sql, f"假连接的 fetchval 只认 dim_product: {sql[:80]}"
+        # args = (factory_id, name, normalized_name, category)
+        self.product_upserts.append((args[1], args[2], args[3]))
+        self._next_product_id += 1
+        return self._next_product_id
 
     async def fetchrow(self, sql, *args):
         self._record(sql, args)
@@ -285,6 +328,100 @@ async def test_正常路径写主表明细支付各一次():
     sqls = [sql for sql, _, _ in conn.executed]
     assert sum("fact_pos_item" in s for s in sqls) == 1
     assert sum("fact_pos_payment" in s for s in sqls) == 1
+
+
+# ── 菜品维度 (product_id) ───────────────────────────────────────────
+# 背景: 2026-07-29 上线后实测发现 fact_pos_item.product_id 全是 NULL
+# (241276 行非空 0), 于是 agg_product 物化出来 0 行, 餐饮 AI 的语义规划器
+# 直接弃权(tiered-answer 返回 delegate:false)。菜品维度是餐饮分析的主轴。
+
+@pytest.mark.asyncio
+async def test_明细写入带上了product_id():
+    conn = _FakeConn(store_row={"store_id": 1}, channel_row={"channel_id": 7},
+                     txn_row={"id": 99})
+    await write_orders(_FakePool(conn), "MOCK_REST", [_order()])
+    item_sql, item_args, _ = next(
+        (s, a, t) for s, a, t in conn.executed if "fact_pos_item" in s)
+    assert "product_id" in item_sql, "明细 INSERT 必须写 product_id"
+    # args = (txn_id, factory_id, product_id, source_item_raw, qty, unit_price, amount)
+    assert item_args[2] == 901, "product_id 应当来自 dim_product UPSERT 的返回值"
+    assert item_args[3] == "米饭", "source_item_raw 仍保留原始菜名"
+
+
+@pytest.mark.asyncio
+async def test_菜品维度按归一化名UPSERT并带上分类():
+    conn = _FakeConn(store_row={"store_id": 1}, channel_row={"channel_id": 7},
+                     txn_row={"id": 99})
+    await write_orders(_FakePool(conn), "MOCK_REST", [_order()])
+    assert conn.product_upserts == [("米饭", "米饭", "主食")]
+    upsert_sql = next(s for s, _, _ in conn.executed if "dim_product" in s)
+    assert "ON CONFLICT (factory_id, normalized_name)" in upsert_sql, (
+        "必须挂在 dim_product 现成的唯一约束上, 否则并发下会插出重复菜品"
+    )
+
+
+@pytest.mark.asyncio
+async def test_菜名归一化后再匹配_全角空格与标点不算新菜():
+    """normalize_for_dim 是仓库既有的维度匹配口径, 这里必须复用而不是自创。"""
+    conn = _FakeConn(store_row={"store_id": 1}, channel_row={"channel_id": 7},
+                     txn_row={"id": 99})
+    await write_orders(_FakePool(conn), "MOCK_REST", [_order(items=[
+        NormalizedItem(dish_name="水煮牛肉", qty=1, price_cents=1, amount_cents=1),
+        NormalizedItem(dish_name="水煮·牛肉 ", qty=1, price_cents=1, amount_cents=1),
+    ])])
+    # 两条明细, 但归一化后同名 → 只 UPSERT 一次
+    assert len(conn.product_upserts) == 1, conn.product_upserts
+    assert conn.product_upserts[0][1] == "水煮牛肉"
+
+
+@pytest.mark.asyncio
+async def test_同批重复菜只解析一次_但不同菜各解析一次():
+    conn = _FakeConn(store_row={"store_id": 1}, channel_row={"channel_id": 7},
+                     txn_rows=[{"id": 1}, {"id": 2}])
+    o1 = _order(no="B1", items=[
+        NormalizedItem(dish_name="米饭", qty=1, price_cents=1, amount_cents=1)])
+    o2 = _order(no="B2", items=[
+        NormalizedItem(dish_name="米饭", qty=1, price_cents=1, amount_cents=1),
+        NormalizedItem(dish_name="藤椒鸡", qty=1, price_cents=1, amount_cents=1)])
+    await write_orders(_FakePool(conn), "MOCK_REST", [o1, o2])
+    names = [n for n, _, _ in conn.product_upserts]
+    assert names == ["米饭", "藤椒鸡"], f"跨订单的同名菜应命中缓存: {names}"
+
+
+@pytest.mark.asyncio
+async def test_菜品缓存不跨批次():
+    """缓存做成模块级会跨租户串 product_id, 也会发陈旧值。"""
+    def _fresh():
+        return _FakeConn(store_row={"store_id": 1}, channel_row={"channel_id": 7},
+                         txn_row={"id": 99})
+    c1 = _fresh()
+    await write_orders(_FakePool(c1), "MOCK_REST", [_order()])
+    c2 = _fresh()
+    await write_orders(_FakePool(c2), "MOCK_REST", [_order(no="B2")])
+    assert len(c2.product_upserts) == 1, "新一批必须重新解析, 不能吃上一批的缓存"
+
+
+@pytest.mark.asyncio
+async def test_菜名为空就报错_不塞未知菜品():
+    """禁降级: 建个"未知菜品"会让菜品分析里多出一坨假聚合。"""
+    conn = _FakeConn(store_row={"store_id": 1}, channel_row={"channel_id": 7},
+                     txn_row={"id": 99})
+    bad = _order(items=[
+        NormalizedItem(dish_name="  ", qty=1, price_cents=1, amount_cents=1)])
+    with pytest.raises(RuntimeError, match="菜名"):
+        await write_orders(_FakePool(conn), "MOCK_REST", [bad])
+
+
+@pytest.mark.asyncio
+async def test_菜品UPSERT也在事务内且在set_config之后():
+    """dim_product 的 RLS 没有 __internal__ 逃生门, GUC 没设就会被策略挡住。"""
+    conn = _FakeConn(store_row={"store_id": 1}, channel_row={"channel_id": 7},
+                     txn_row={"id": 99})
+    await write_orders(_FakePool(conn), "MOCK_REST", [_order()])
+    idx_cfg = next(i for i, (s, _, _) in enumerate(conn.executed) if "set_config" in s)
+    idx_prod = next(i for i, (s, _, _) in enumerate(conn.executed) if "dim_product" in s)
+    assert idx_cfg < idx_prod, "set_config 必须排在 dim_product UPSERT 之前"
+    assert conn.executed[idx_prod][2] is True, "dim_product UPSERT 必须在事务内"
 
 
 @pytest.mark.asyncio

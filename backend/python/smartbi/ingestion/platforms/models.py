@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import datetime
 from dataclasses import dataclass, field
-from typing import List
+from typing import List, Optional
 
 
 @dataclass(frozen=True)
@@ -16,6 +16,9 @@ class NormalizedItem:
     qty: int
     price_cents: int
     amount_cents: int
+    # 菜品分类(热菜/凉菜/主食...)。可空: 不是每个平台都给, 给了就落到
+    # dim_product.category 供菜品维度分组用。
+    category: Optional[str] = None
 
 
 @dataclass(frozen=True)

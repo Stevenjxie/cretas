@@ -16,7 +16,10 @@ def page_orders(conn, *, since_seq: int, limit: int):
     orders = []
     for r in rows:
         items = conn.execute(
-            "SELECT d.name, oi.qty, oi.price_cents, oi.amount_cents "
+            # category 也一并给出: 真实平台(客如云/美团)的订单明细都带菜品分类,
+            # 下游要靠它把菜品维度分组(热菜/凉菜/主食...)。不给的话对端只能拿到
+            # 一个光秃秃的菜名, 菜品分析就只剩名字。
+            "SELECT d.name, d.category, oi.qty, oi.price_cents, oi.amount_cents "
             "FROM order_item oi JOIN dish d ON d.id = oi.dish_id WHERE oi.order_id = ?",
             (r["id"],),
         ).fetchall()
@@ -34,7 +37,8 @@ def page_orders(conn, *, since_seq: int, limit: int):
             "netAmount": r["net_cents"],
             "guestCount": r["guest_count"],
             "items": [
-                {"dishName": i["name"], "qty": i["qty"],
+                {"dishName": i["name"], "dishCategory": i["category"],
+                 "qty": i["qty"],
                  "price": i["price_cents"], "amount": i["amount_cents"]}
                 for i in items
             ],

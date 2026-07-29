@@ -100,3 +100,15 @@ def test_订单结构含明细与支付(client):
                           "grossAmount", "discountAmount", "netAmount", "items", "payments"}
     assert order["items"] and order["payments"]
     assert sum(i["amount"] for i in order["items"]) == order["grossAmount"]
+
+
+def test_明细带菜品分类(client):
+    """真实平台的订单明细都带分类。不给的话对端只能拿到光秃秃的菜名,
+    菜品维度就没有分组可言(2026-07-29 实测: 少了它 agg_product 直接是 0 行)。"""
+    body = client.get("/keruyun/open/order/list",
+                      params=_signed({"cursor": "0", "limit": "5"})).json()
+    items = [i for o in body["data"]["list"] for i in o["items"]]
+    assert items, "种子数据应当有明细"
+    assert all("dishCategory" in i for i in items), "每条明细都要有 dishCategory"
+    # 种子里的分类就是这几类, 全空说明 JOIN 没取到列
+    assert any(i["dishCategory"] for i in items)
