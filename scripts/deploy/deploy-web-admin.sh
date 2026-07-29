@@ -148,6 +148,11 @@ if [ -f "$PROJECT_ROOT/scripts/deploy/release-web-manifest.sh" ]; then
 else
     echo "❌ 未找到 $PROJECT_ROOT/scripts/deploy/release-web-manifest.sh"; exit 1
 fi
+
+# 防止多个 chat/terminal 同时部署 web-admin。原子目录交换 (.staging → mv) 不是跨进程
+# 原子的: 两个并发部署会互相踩 .staging 和 .bak.TS, 后写的 dist 静默覆盖先写的。
+# 锁定到进程退出自动释放; 与 deploy-backend 用不同锁名, 二者可并行。
+acquire_deploy_lock "cretas-web-admin-deploy" || exit 1
 # 注: source 引入 common 的 log() (双参数 LEVEL msg); 本脚本下方重新定义单参数 log() 覆盖之.
 # check_git_sync 在覆盖前调用, 用的是 common log; 之后的 log "..." 用本脚本单参数版.
 

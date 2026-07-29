@@ -19,6 +19,9 @@ make_fixture() {
     cp "$WEB_MANIFEST_SCRIPT" "$fixture/scripts/deploy/release-web-manifest.sh"
     cat > "$fixture/scripts/lib/deploy-common.sh" <<'COMMON'
 check_git_sync() { :; }
+# The Web deploy takes its own mutex so two sessions cannot interleave a dist
+# swap. Record it rather than taking a machine-global flock in a test fixture.
+acquire_deploy_lock() { printf 'DEPLOY_LOCK %s\n' "${1:-}" >>"${MOCK_LOCK_LOG:-/dev/null}"; return 0; }
 COMMON
     printf '{"name":"fixture","lockfileVersion":3,"packages":{}}\n' > "$fixture/web-admin/package-lock.json"
 cat > "$fixture/mock-bin/npm" <<'MOCK_NPM'

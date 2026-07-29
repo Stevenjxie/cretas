@@ -29,6 +29,49 @@ done
 [ -n "$TESTS" ] || { echo "ERROR: --tests requires a Maven test selector" >&2; exit 2; }
 [ -d "$REPO_ROOT/backend/java/cretas-api/src/test/java" ] || { echo "ERROR: Java test source directory is unavailable" >&2; exit 1; }
 
+# Fail on a missing JDK here, in the read-only preflight, rather than one second
+# into the parallel artifact build. `mvnw.cmd` requires JAVA_HOME outright and
+# dies with a bare "JAVA_HOME not found" that says nothing about the release;
+# meanwhile the Web build keeps compiling for another 60-110s before anyone
+# learns the release is already dead.
+require_release_jdk() {
+    local java_cmd= raw_version major
+
+    if [ -n "${JAVA_HOME:-}" ]; then
+        if [ -x "$JAVA_HOME/bin/java" ]; then
+            java_cmd="$JAVA_HOME/bin/java"
+        elif [ -x "$JAVA_HOME/bin/java.exe" ]; then
+            java_cmd="$JAVA_HOME/bin/java.exe"
+        else
+            echo "ERROR: JAVA_HOME is set but has no runnable bin/java: $JAVA_HOME" >&2
+            return 1
+        fi
+    elif [[ "${OSTYPE:-}" == darwin* || "${OSTYPE:-}" == linux* ]] && command -v java >/dev/null 2>&1; then
+        # The POSIX mvnw falls back to java on PATH; mvnw.cmd never does.
+        java_cmd=java
+    else
+        echo "ERROR: JAVA_HOME is unset and no usable JDK was found; the Maven wrapper cannot run" >&2
+        echo "       Set JAVA_HOME to a JDK 21 installation before releasing." >&2
+        return 1
+    fi
+
+    raw_version=$("$java_cmd" -version 2>&1 | sed -nE '1s/.*version "([0-9]+)(\.[0-9]+)*.*/\1/p')
+    case "$raw_version" in
+        ''|*[!0-9]*)
+            echo "ERROR: could not determine the Java version from $java_cmd" >&2
+            return 1
+            ;;
+    esac
+    major=$raw_version
+    [ "$major" -ge 21 ] 2>/dev/null || {
+        echo "ERROR: release requires JDK 21 or newer, found $major from $java_cmd" >&2
+        return 1
+    }
+    return 0
+}
+
+require_release_jdk || exit 1
+
 test_root="$REPO_ROOT/backend/java/cretas-api/src/test/java"
 main_root="$REPO_ROOT/backend/java/cretas-api/src/main/java"
 IFS=',' read -r -a selectors <<< "$TESTS"

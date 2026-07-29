@@ -36,6 +36,8 @@ git diff origin/main...HEAD --stat   # 应只有你的文件, 没有 sister 的 
 | 变更类型 | 通道 |
 |---|---|
 | docs / `.claude/`(skills/rules) / 配置类, 零 CI 相关 | **fastlane 直推 main**: `./scripts/deploy/publish-main-fastlane.sh --base-sha <起点SHA> --confirm YES-DIRECT-MAIN`(先 `--dry-run` 预检)。脚本门禁: fast-forward only / 禁 force push / 推前 re-fetch 证明 origin/main 未前进。⚠️ 分支名硬性要求 `codex/*` 前缀 — Claude 侧统一用 `codex/claude-<task>` |
+
+⚠️ **非 docs 批次必须带 `--task-id <任务ID>`**: ACTIVE 台账常驻 30+ 条他人在飞任务, 不传 `--task-id` 时门禁要求「全局零未完成任务」, 这个条件实际上永远不成立 → 任何非 docs 直推都会被拒。`--task-id` 把门禁收窄成「**你自己这条**已归档」, 与门禁本意一致(协调者在同一 commit 归档自己的批次), 不会放松对自己的要求 — 自己那条还挂着 `in-progress`/`review` 照样拦。
 | 碰 backend / web-admin 代码 | **PR** — CI `JPA repository query startup gate` 挂在 PR 上; PR 号是台账/memory 的引用锚点 |
 | AGENTS.md / workflows / `scripts/deploy/*` / db 迁移 / entity / repository / security | **强制 PR** — fastlane 将这些列为高风险路径自动拒绝(除非 owner 显式 `YES-HIGH-RISK-REVIEWED` 覆盖, 默认不用) |
 

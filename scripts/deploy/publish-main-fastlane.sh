@@ -6,17 +6,24 @@ REMOTE="origin"
 BASE_SHA=""
 CONFIRM=""
 HIGH_RISK_CONFIRM=""
+TASK_ID=""
 DRY_RUN=0
 
 usage() {
     cat <<'EOF'
 Usage: publish-main-fastlane.sh --base-sha <sha> --confirm YES-DIRECT-MAIN
-       [--remote origin] [--allow-high-risk YES-HIGH-RISK-REVIEWED] [--dry-run]
+       [--remote origin] [--task-id <ID>]
+       [--allow-high-risk YES-HIGH-RISK-REVIEWED] [--dry-run]
 
 Fast-forward a reviewed codex/* branch directly to main without a PR. The
 command never force-pushes. Production deployment remains a separate step.
 Docs-only batches (docs/, .claude/, *.md; not touching docs/dispatch/) skip
 the ACTIVE ledger gate; high-risk path gating always applies.
+
+--task-id scopes the ACTIVE gate to one batch: the named task must no longer
+be unfinished, while unrelated in-flight tasks owned by other sessions are
+ignored. Without it the gate requires an entirely empty in-flight section,
+which in practice never holds.
 EOF
 }
 
@@ -45,6 +52,11 @@ while [[ $# -gt 0 ]]; do
         --allow-high-risk)
             [[ $# -ge 2 ]] || fail "--allow-high-risk requires a value"
             HIGH_RISK_CONFIRM="$2"
+            shift 2
+            ;;
+        --task-id)
+            [[ $# -ge 2 ]] || fail "--task-id requires a value"
+            TASK_ID="$2"
             shift 2
             ;;
         --dry-run)
@@ -111,8 +123,18 @@ if [[ -f docs/dispatch/ACTIVE.md && "$docs_only" -ne 1 ]]; then
         /^## Scope / { exit }
         { print }
     ' docs/dispatch/ACTIVE.md)
-    if grep -Eq '`(queued|claimed|in-progress|review|blocked)`' <<<"$in_flight"; then
-        fail "ACTIVE still contains unfinished tasks; archive and release scope locks in the same commit"
+    if [[ -n "$TASK_ID" ]]; then
+        # Scoped gate. The ledger normally carries dozens of unrelated in-flight
+        # tasks owned by other sessions, which makes the unscoped form reject
+        # every non-docs publish regardless of the caller's own state. The gate
+        # exists so a coordinator archives ITS OWN batch in the same commit, so
+        # check exactly that: the caller's row must no longer be unfinished.
+        if grep -F -- "$TASK_ID" <<<"$in_flight" \
+            | grep -Eq '`(queued|claimed|in-progress|review|blocked)`'; then
+            fail "task $TASK_ID is still unfinished in ACTIVE; archive it in the same commit"
+        fi
+    elif grep -Eq '`(queued|claimed|in-progress|review|blocked)`' <<<"$in_flight"; then
+        fail "ACTIVE still contains unfinished tasks; archive and release scope locks in the same commit (pass --task-id <ID> to scope this gate to your own batch)"
     fi
 fi
 

@@ -87,6 +87,44 @@ grep -Eq '"maven_wall_seconds": [0-9]+' "$BUILD_REPORT" \
     || fail "JSON build report did not record Maven wall time"
 python -m json.tool "$BUILD_REPORT" >/dev/null \
     || fail "JSON build report is not valid JSON"
+# Build-phase reuse. backend_tree is a content hash, so a rebase, a squash, or a
+# web-only commit leaves it identical and the cached JAR is already the exact
+# artifact this build would produce. Recompiling it is pure waste.
+# Capture to a file rather than piping into `grep -q`: under `pipefail` a
+# short-circuiting grep closes the pipe and the producer dies on EPIPE, which
+# would report a false failure here.
+REUSE_OUT="$TMP_ROOT/reuse.out"
+MVN_LOG="$MVN_LOG" CRETAS_MAVEN_WRAPPER="$FAKE_MVN" \
+    "$FIXTURE_HELPER" build --tests "$TARGET_TESTS" --manifest "$MANIFEST" >"$REUSE_OUT"
+grep -Fq 'Release JAR reused' "$REUSE_OUT" \
+    || fail "unchanged backend tree did not report a reused JAR"
+[ "$(wc -l < "$MVN_LOG" | tr -d '[:space:]')" = "1" ] \
+    || fail "unchanged backend tree recompiled instead of reusing the cached JAR"
+
+# A different target-test selector must never reuse: the cached JAR was verified
+# by a different test set, so reusing it would silently skip the new tests.
+MVN_LOG="$MVN_LOG" CRETAS_MAVEN_WRAPPER="$FAKE_MVN" \
+    "$FIXTURE_HELPER" build --tests "$TARGET_TESTS,ExtraGateTest" --manifest "$MANIFEST"
+[ "$(wc -l < "$MVN_LOG" | tr -d '[:space:]')" = "2" ] \
+    || fail "changed target-test selector reused a JAR built from a different test set"
+
+# An explicit override must always force the compile back on.
+CRETAS_RELEASE_FORCE_JAVA_BUILD=1 MVN_LOG="$MVN_LOG" CRETAS_MAVEN_WRAPPER="$FAKE_MVN" \
+    "$FIXTURE_HELPER" build --tests "$TARGET_TESTS,ExtraGateTest" --manifest "$MANIFEST"
+[ "$(wc -l < "$MVN_LOG" | tr -d '[:space:]')" = "3" ] \
+    || fail "CRETAS_RELEASE_FORCE_JAVA_BUILD did not force a rebuild"
+
+# A corrupt cached JAR must fall back to a real compile, never to a bad reuse.
+printf 'not a jar\n' > "$(dirname "$MANIFEST")/$RELEASE_JAR_NAME"
+MVN_LOG="$MVN_LOG" CRETAS_MAVEN_WRAPPER="$FAKE_MVN" \
+    "$FIXTURE_HELPER" build --tests "$TARGET_TESTS,ExtraGateTest" --manifest "$MANIFEST"
+[ "$(wc -l < "$MVN_LOG" | tr -d '[:space:]')" = "4" ] \
+    || fail "corrupt cached JAR was reused instead of rebuilt"
+
+# Restore the manifest to the original selector for the validation contracts below.
+CRETAS_RELEASE_FORCE_JAVA_BUILD=1 MVN_LOG="$MVN_LOG" CRETAS_MAVEN_WRAPPER="$FAKE_MVN" \
+    "$FIXTURE_HELPER" build --tests "$TARGET_TESTS" --manifest "$MANIFEST"
+
 git -C "$FIXTURE_REPO" update-ref refs/remotes/origin/main "$BUILD_COMMIT"
 release_manifest_validate "$MANIFEST" "$FIXTURE_REPO" "$DESTINATION" \
     || fail "valid same-commit manifest was rejected"

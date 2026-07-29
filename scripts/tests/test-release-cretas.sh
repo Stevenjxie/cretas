@@ -32,8 +32,18 @@ setup_repo() {
     CASE_LOG="$CASE_ROOT/calls.log"
     CASE_REPORT="$CASE_ROOT/report.json"
     CASE_OUTPUT="$CASE_ROOT/output.log"
-    mkdir -p "$CASE_REPO/scripts/deploy" "$CASE_REPO/backend/java/cretas-api" "$CASE_REPO/web-admin" "$CASE_HOME"
+    mkdir -p "$CASE_REPO/scripts/deploy" "$CASE_REPO/scripts/lib" "$CASE_REPO/backend/java/cretas-api" "$CASE_REPO/web-admin" "$CASE_HOME"
     cp "$SOURCE_SCRIPT" "$CASE_REPO/scripts/deploy/release-cretas.sh"
+
+    # The orchestrator takes the release-wide mutex from the shared lib. Record
+    # the acquisition instead of taking a real machine-global flock, so the
+    # fixture neither contends with a concurrent real release nor with itself.
+    cat >"$CASE_REPO/scripts/lib/deploy-common.sh" <<'EOF'
+#!/usr/bin/env bash
+# Token deliberately avoids the substring "DEPLOY": other cases assert that it
+# never appears when no component deployment should have run.
+acquire_deploy_lock() { printf 'MUTEX %s\n' "${1:-}" >>"$MOCK_CALL_LOG"; return 0; }
+EOF
     printf 'java baseline\n' >"$CASE_REPO/backend/java/cretas-api/baseline.txt"
     printf 'web baseline\n' >"$CASE_REPO/web-admin/baseline.txt"
 
@@ -170,6 +180,9 @@ commit_change backend/java/cretas-api/Service.java
 run_release --phase build --base-sha "$BASE_SHA" --tests StartupTest
 assert_contains "$CASE_OUTPUT" 'DETECTED_JAVA_CHANGED=true'
 assert_contains "$CASE_OUTPUT" 'RELEASE_BUILD_MODE=java-only'
+# The release-wide mutex must be taken before any build or deploy work: two
+# concurrent releases otherwise clobber the shared artifact cache.
+assert_contains "$CASE_LOG" 'MUTEX cretas-release'
 assert_log_count 1 'JAVA_BUILD build --tests StartupTest' "$CASE_LOG"
 assert_log_count 0 'WEB_BUILD' "$CASE_LOG"
 
