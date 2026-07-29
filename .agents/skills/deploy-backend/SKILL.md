@@ -48,6 +48,15 @@ safe-sequential by default and never infers API compatibility from Git diff.
 The final `no-op` versus `deployed` state must come from the Java/Web child
 deployment receipts, not from the detected source diff. A manifest fallback
 build must also appear in `build_mode` and component timing/count fields.
+During the deploy phase,
+`components.java.build: "reused"` with
+`timings_seconds.java_build: 0` and `build_count: 0` is a normal successful
+manifest reuse, not a missing build. It means this invocation ran no Maven and
+claimed an already trusted JAR. Build-command reuse requires an exact
+`target_tests` match; deploy-phase manifest validation currently preserves the
+recorded non-empty selector but does not compare it with the current
+`release-cretas.sh --tests` argument, so inspect the manifest's `target_tests`
+before claiming that the current selector was revalidated.
 Parallel deployment is allowed only with
 `--parallel-if-independent YES-INDEPENDENT-SERVICES` and only when its
 migration, Entity, Repository/query, Security/Auth, Controller/DTO/API, config
@@ -60,16 +69,21 @@ troubleshooting entries. They retain all blue-green, atomic-swap, health,
 rollback, no-op, stale-chunk, and hash gates; do not duplicate those mechanics
 in a normal Agent release flow.
 
-## Build Once
+## Build Once Or Reuse
 
 Every release/deployment starts from a clean exact `origin/main` worktree:
 require an empty `git status --porcelain` and `HEAD == origin/main` before
 artifact reuse, fallback build, or deployment. A trusted candidate JAR may be
 built earlier in the clean reviewed source worktree and reused after squash
-merge when the backend tree remains identical. Build once for one backend Git
-tree:
+merge when the backend tree remains identical. For one backend Git tree and
+target-test selector, run zero or one Maven lifecycle:
 
-- In the clean reviewed source worktree, run `./scripts/deploy/release-jar-manifest.sh build --tests '<tests>'`. This executes one `mvn clean package -Dtest=<tests>` lifecycle, creates the final JAR, and writes its manifest. Do not run the target tests separately and then package again.
+- In the clean reviewed source worktree, run `./scripts/deploy/release-jar-manifest.sh build --tests '<tests>'`. It either runs one `mvn clean package -Dtest=<tests>` lifecycle and writes the final JAR/manifest, or reuses the cached JAR and runs Maven zero times when all four build-time conditions hold:
+  1. The manifest is well formed, uses the current format, and records `success=true`.
+  2. Its recorded `target_tests` exactly equals the requested selector.
+  3. Its recorded `backend_tree` equals the current `HEAD:backend/java/cretas-api` tree.
+  4. The named cached JAR exists, is a readable archive, and its SHA-256 matches the manifest.
+  Any miss falls through to the one real clean-package lifecycle. Set `CRETAS_RELEASE_FORCE_JAVA_BUILD=1` to force that lifecycle even when reuse is valid. Do not run target tests separately and then package again.
 - When deployment is expected immediately after merge, use the unified candidate build with `--stage-backend YES-STAGE`; it uploads the verified JAR to the immutable server-side SHA-256 cache before merge. Staging never installs the JAR, restarts a service, or changes upstream. The exact `origin/main` deployment still revalidates the manifest/tree and claims the cached bytes only after SHA-256, MD5 and JAR integrity checks.
 - A successful release build must generate a trusted manifest recording at least the build commit, exact `backend/java/cretas-api` Git tree, JAR SHA-256, and the information needed to check JAR integrity. A recent mtime or filename is not provenance.
 - `SKIP_BUILD=1`, local cache reuse, or Artifact reuse is allowed only after validating all of the following: the manifest build commit resolves in Git; that commit's `backend/java/cretas-api` tree equals both the manifest tree and the current `origin/main` backend tree; SHA-256 matches; the JAR passes an integrity check; and the current exact `origin/main` worktree is clean. A squash merge may change the commit while preserving the backend tree; matching backend trees are reusable in that case.
@@ -114,15 +128,23 @@ then run:
 ```bash
 ./scripts/deploy/publish-main-fastlane.sh \
   --base-sha <registered-origin-main-sha> \
+  --task-id <registered-task-id> \
   --confirm YES-DIRECT-MAIN
 ```
 
 The helper fetches immediately before publication, rejects a stale base,
-dirty worktree, non-linear history, unfinished ACTIVE task, and any force-push
-path. High-risk scopes remain PR-only unless the user explicitly authorized
-this exact high-risk direct publication and all required deep gates passed; in
-that case add `--allow-high-risk YES-HIGH-RISK-REVIEWED`. Any rejection falls
-back to one PR. Publishing to `main` never authorizes production deployment.
+dirty worktree, non-linear history, the caller's matching unfinished ACTIVE
+task, and any force-push path. `--task-id` narrows the ACTIVE check to that
+batch so unrelated in-flight work does not block publication; without it the
+legacy gate requires no unfinished task anywhere. The caller must pass the
+exact registered ID and archive that batch in the same commit. The current
+helper rejects a matching unfinished row but does not prove that the supplied
+ID exists in an archive, so a typo or absent ID is not a substitute for the
+coordinator's scope review. High-risk scopes remain PR-only unless the user
+explicitly authorized this exact high-risk direct publication and all required
+deep gates passed; in that case add
+`--allow-high-risk YES-HIGH-RISK-REVIEWED`. Any rejection falls back to one PR.
+Publishing to `main` never authorizes production deployment.
 
 ## Java Blue-Green Deploy
 
@@ -196,10 +218,35 @@ may overlap:
 ./scripts/deploy/release-cretas-artifacts.sh --tests '<MavenTestSelector>'
 ```
 
-It runs the non-Maven Java selector/import preflight first, then launches the
-single Java `clean package` lifecycle and the single Web build concurrently.
-The preflight catches missing target test classes and unresolved project
-imports; it does not replace Maven compilation or Mockito runtime validation.
+Before forking either child, it runs the read-only Java preflight: resolve a
+runnable JDK from `JAVA_HOME` (or PATH where the POSIX wrapper supports it),
+require Java major version 21 or newer, then validate explicit target test
+classes and project imports. Missing or unusable Java therefore fails with a
+release-specific JDK diagnostic before Maven/Web starts.
+
+After preflight, it launches the Java artifact path and the single Web build
+concurrently. Java runs zero Maven lifecycles when the four build-reuse
+conditions hold, otherwise one `clean package` lifecycle. If either side
+fails, the wrapper immediately cancels the sibling process group, reaching
+Maven/Vite descendants instead of serially waiting for the doomed build to
+finish. The preflight and reuse gates do not replace Maven compilation or
+Mockito runtime validation when a real Java build is required.
+
+## Deployment Mutexes
+
+The three deployment entry points intentionally use different local mutexes:
+
+- `deploy-backend.sh`: `cretas-backend-deploy`
+- `deploy-web-admin.sh`: `cretas-web-admin-deploy`
+- `release-cretas.sh`: `cretas-release`
+
+Distinct names let the unified orchestrator hold its outer shared-cache lock
+while its component children acquire their own locks. If a command reports
+that another deploy process holds a lock, do not reflexively remove the lock
+file. `acquire_deploy_lock` already removes a stale file whose recorded PID is
+dead. Read the PID, check it with `kill -0`/`ps` (or `Get-Process` on Windows),
+and inspect active release/deploy commands. Manually clear a lock only after
+confirming that no holder or deployment descendant is alive.
 
 Production deployment may overlap only after merge, only from clean exact
 `origin/main`, and only when the caller explicitly confirms that frontend and
