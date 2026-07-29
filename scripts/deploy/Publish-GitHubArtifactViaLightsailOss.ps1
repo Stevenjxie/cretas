@@ -173,9 +173,11 @@ $ecsOptions = @('-o', 'BatchMode=yes', '-o', 'StrictHostKeyChecking=yes', '-o', 
 
 try {
     Write-Host 'step=auth'
-    $authProcess = Start-Process -FilePath 'gh' -ArgumentList @('auth', 'status') `
-        -NoNewWindow -Wait -PassThru
-    if ($authProcess.ExitCode -ne 0) { throw 'gh auth status failed; run gh auth login.' }
+    # Status only. gh prints a masked token, but a masked secret is still a
+    # secret shape in a transcript, so the whole stream is discarded and only
+    # the exit code is consulted.
+    & gh auth status *> $null
+    if ($LASTEXITCODE -ne 0) { throw 'gh auth status failed; run gh auth login.' }
 
     Write-Host 'step=asset_metadata'
     $assetJson = & gh api "repos/$Repository/releases/assets/$AssetId" `
