@@ -2,6 +2,7 @@ package com.cretas.aims.service.impl;
 
 import com.cretas.aims.dto.material.RawMaterialTypeDTO;
 import com.cretas.aims.entity.RawMaterialType;
+import com.cretas.aims.entity.material.MaterialCodeSegment;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.repository.ConversionRepository;
 import com.cretas.aims.repository.MaterialBatchRepository;
@@ -74,65 +75,141 @@ class RawMaterialTypeSp8Test {
         return m;
     }
 
+    /**
+     * NOTE: {@code isActive} must be set explicitly — Lombok {@code @Builder.Default}
+     * strips the field initializer, so {@code new MaterialCodeSegment()} leaves it null
+     * and {@code requireSegment} would reject the node as inactive.
+     */
+    private static MaterialCodeSegment segment(short level, String code, String parentCode, String label) {
+        MaterialCodeSegment s = new MaterialCodeSegment();
+        s.setFactoryId(FACTORY_ID);
+        s.setLevel(level);
+        s.setSegmentCode(code);
+        s.setParentCode(parentCode);
+        s.setSegmentLabel(label);
+        s.setIsActive(true);
+        return s;
+    }
+
+    /**
+     * Stub the full L1→L2→L3 dictionary chain for {@code 0010010001} (肉类 / 猪头 / 猪舌).
+     *
+     * <p>Since {@code 1f6e63b6bf "fix(material): enforce hierarchical 16-digit codes"},
+     * create/update no longer probe {@code countByFactoryIdAndLevel} to decide whether
+     * the 16-digit scheme is on — the scheme is unconditional and the service instead
+     * walks the parent chain via {@code findByFactoryIdAndSegmentCode}. Tests that used
+     * to stub the old dictionary-enabled counter must stub this chain instead.
+     */
+    private void stubSegmentChain() {
+        when(materialCodeSegmentRepository.findByFactoryIdAndSegmentCode(FACTORY_ID, "0010010001"))
+                .thenReturn(Optional.of(segment((short) 3, "0010010001", "001001", "猪舌")));
+        when(materialCodeSegmentRepository.findByFactoryIdAndSegmentCode(FACTORY_ID, "001001"))
+                .thenReturn(Optional.of(segment((short) 2, "001001", "001", "猪头")));
+        when(materialCodeSegmentRepository.findByFactoryIdAndSegmentCode(FACTORY_ID, "001"))
+                .thenReturn(Optional.of(segment((short) 1, "001", null, "肉类")));
+    }
+
+    /** L3 row lock taken before the sequence scan (create + backfill-on-update). */
+    private void stubSegmentLock() {
+        when(materialCodeSegmentRepository.lockByFactoryIdAndSegmentCode(FACTORY_ID, "0010010001"))
+                .thenReturn(Optional.of(segment((short) 3, "0010010001", "001001", "猪舌")));
+    }
+
     // ─────────────────────────────────────────────────────────────
     // 1. primaryCode auto-extract from code prefix
     // ─────────────────────────────────────────────────────────────
 
+    /**
+     * primaryCode 来源.
+     *
+     * <p>Originally these tests asserted the SP8 rule "primaryCode = code 前3位, DTO
+     * 传值优先". {@code 1f6e63b6bf "fix(material): enforce hierarchical 16-digit codes"}
+     * (and its follow-ups #1392 / #1545) replaced that with a single source of truth:
+     * primaryCode is <b>always</b> the validated L1 ancestor's segmentCode, and any
+     * wire-supplied {@code code}/{@code primaryCode} is ignored (create) or refused
+     * (update). Assertions realigned to that contract.
+     */
     @Nested
-    @DisplayName("primaryCode 自动提取")
-    class PrimaryCodeAutoExtract {
+    @DisplayName("primaryCode 由 L1 分段派生")
+    class PrimaryCodeDerivedFromSegment {
 
         @Test
-        @DisplayName("DTO 不传 primaryCode, code >= 3 位 → 自动提取前3位")
-        void noPrimaryCodeInDto_autoExtractsFromCode() {
-            when(materialTypeRepository.existsByFactoryIdAndCode(FACTORY_ID, "RL001")).thenReturn(false);
+        @DisplayName("create: primaryCode 取自 L1 分段, 手工 code 被忽略并改为生成的16位码")
+        void create_primaryCodeComesFromL1Segment_manualCodeIgnored() {
+            stubSegmentChain();
+            stubSegmentLock();
+            when(materialTypeRepository.findCodesByFactoryIdAndSegmentPrefix(FACTORY_ID, "0010010001"))
+                    .thenReturn(Collections.emptyList());
+            when(materialTypeRepository.existsByFactoryIdAndCode(FACTORY_ID, "0010010001000001"))
+                    .thenReturn(false);
 
             ArgumentCaptor<RawMaterialType> captor = ArgumentCaptor.forClass(RawMaterialType.class);
-            RawMaterialType saved = savedMaterial("M1", "RL001", "RL0");
-            when(materialTypeRepository.save(captor.capture())).thenReturn(saved);
+            when(materialTypeRepository.save(captor.capture())).thenAnswer(inv -> inv.getArgument(0));
 
             RawMaterialTypeDTO dto = RawMaterialTypeDTO.builder()
-                    .code("RL001")
+                    .code("RL001")          // legacy flat code on the wire — must NOT survive
                     .name("猪舌")
                     .unit("kg")
                     .category("肉类")
+                    .segmentCode("0010010001")
                     .primaryCode(null)
                     .build();
 
             service.createMaterialType(FACTORY_ID, dto);
 
             RawMaterialType entity = captor.getValue();
-            assertEquals("RL0", entity.getPrimaryCode(),
-                    "未传 primaryCode 时应从 code 前3位自动提取");
+            assertEquals("001", entity.getPrimaryCode(), "primaryCode 必须来自 L1 分段");
+            assertEquals("0010010001000001", entity.getCode(), "手工 code 被生成的16位码替换");
         }
 
         @Test
-        @DisplayName("DTO 传 primaryCode → 优先使用 DTO 的值")
-        void primaryCodeInDto_usesProvidedValue() {
-            when(materialTypeRepository.existsByFactoryIdAndCode(FACTORY_ID, "0010010001000001")).thenReturn(false);
+        @DisplayName("create: DTO 传 primaryCode 也不采信 — L1 分段是唯一真源")
+        void create_dtoPrimaryCodeIgnored_l1IsSingleSourceOfTruth() {
+            stubSegmentChain();
+            stubSegmentLock();
+            when(materialTypeRepository.findCodesByFactoryIdAndSegmentPrefix(FACTORY_ID, "0010010001"))
+                    .thenReturn(Collections.emptyList());
+            when(materialTypeRepository.existsByFactoryIdAndCode(FACTORY_ID, "0010010001000001"))
+                    .thenReturn(false);
 
             ArgumentCaptor<RawMaterialType> captor = ArgumentCaptor.forClass(RawMaterialType.class);
-            RawMaterialType saved = savedMaterial("M2", "0010010001000001", "001");
-            when(materialTypeRepository.save(captor.capture())).thenReturn(saved);
+            when(materialTypeRepository.save(captor.capture())).thenAnswer(inv -> inv.getArgument(0));
 
             RawMaterialTypeDTO dto = RawMaterialTypeDTO.builder()
-                    .code("0010010001000001")
                     .name("猪舌")
                     .unit("kg")
                     .category("肉类")
-                    .primaryCode("001")
+                    .segmentCode("0010010001")
+                    .primaryCode("999")     // wire value — must be overridden by L1
                     .build();
 
             service.createMaterialType(FACTORY_ID, dto);
 
-            RawMaterialType entity = captor.getValue();
-            assertEquals("001", entity.getPrimaryCode(), "应优先使用 DTO 传入的 primaryCode");
+            assertEquals("001", captor.getValue().getPrimaryCode(),
+                    "DTO 的 primaryCode 不应覆盖 L1 派生值");
+        }
+
+        @Test
+        @DisplayName("create: 未选分段 → 400 拒绝 (不再回落扁平编码)")
+        void create_withoutSegmentCode_rejected() {
+            RawMaterialTypeDTO dto = RawMaterialTypeDTO.builder()
+                    .code("RL001")
+                    .name("猪舌")
+                    .unit("kg")
+                    .category("肉类")
+                    .build();
+
+            BusinessException ex = assertThrows(BusinessException.class,
+                    () -> service.createMaterialType(FACTORY_ID, dto));
+            assertEquals(400, ex.getCode());
+            assertTrue(ex.getMessage().contains("必须选择有效的L3十位编码"), ex.getMessage());
+            verify(materialTypeRepository, never()).save(any(RawMaterialType.class));
         }
 
         @Test
         @DisplayName("convertToDTO 正确 map primaryCode")
         void convertToDTO_mapsPrimaryCode() {
-            RawMaterialType m = savedMaterial("M3", "001RL001", "001");
+            RawMaterialType m = savedMaterial("M3", "0010010001000001", "001");
             when(materialTypeRepository.findByFactoryIdAndIsActive(FACTORY_ID, true))
                     .thenReturn(List.of(m));
 
@@ -142,10 +219,11 @@ class RawMaterialTypeSp8Test {
         }
 
         @Test
-        @DisplayName("update: primaryCode 传 null → 不覆盖已有值 (null-guard)")
-        void update_nullPrimaryCode_doesNotOverwriteExisting() {
-            RawMaterialType existing = savedMaterial("M4", "RL001", "001");
+        @DisplayName("update: 分段由已有16位码前10位推断, DTO 的 primaryCode 被忽略")
+        void update_primaryCodeReDerivedFromExistingCode_dtoValueIgnored() {
+            RawMaterialType existing = savedMaterial("M4", "0010010001000001", "001");
             when(materialTypeRepository.findById("M4")).thenReturn(Optional.of(existing));
+            stubSegmentChain();
 
             ArgumentCaptor<RawMaterialType> captor = ArgumentCaptor.forClass(RawMaterialType.class);
             when(materialTypeRepository.save(captor.capture())).thenAnswer(inv -> inv.getArgument(0));
@@ -153,34 +231,34 @@ class RawMaterialTypeSp8Test {
             RawMaterialTypeDTO updateDto = RawMaterialTypeDTO.builder()
                     .name("猪舌更名")
                     .unit("kg")
-                    .primaryCode(null)  // null — should NOT overwrite
+                    .primaryCode("002")   // wire value — must NOT win over the L1 ancestor
                     .build();
 
             service.updateMaterialType(FACTORY_ID, "M4", updateDto);
 
             RawMaterialType saved = captor.getValue();
-            assertEquals("001", saved.getPrimaryCode(), "null primaryCode update 不应覆盖已有值");
+            assertEquals("001", saved.getPrimaryCode(), "primaryCode 恒等于 L1 分段, 不接受手工改写");
+            assertEquals("0010010001000001", saved.getCode(), "已是16位码 → 不重新生成");
         }
 
         @Test
-        @DisplayName("update: primaryCode 传新值 → 更新")
-        void update_nonNullPrimaryCode_updatesValue() {
-            RawMaterialType existing = savedMaterial("M5", "RL001", "001");
+        @DisplayName("update: 手工改 16 位 code → 400 拒绝")
+        void update_manualCodeChange_rejected() {
+            RawMaterialType existing = savedMaterial("M5", "0010010001000001", "001");
             when(materialTypeRepository.findById("M5")).thenReturn(Optional.of(existing));
-
-            ArgumentCaptor<RawMaterialType> captor = ArgumentCaptor.forClass(RawMaterialType.class);
-            when(materialTypeRepository.save(captor.capture())).thenAnswer(inv -> inv.getArgument(0));
+            stubSegmentChain();
 
             RawMaterialTypeDTO updateDto = RawMaterialTypeDTO.builder()
+                    .code("0010010001000009")
                     .name("猪舌")
                     .unit("kg")
-                    .primaryCode("002")  // new value
                     .build();
 
-            service.updateMaterialType(FACTORY_ID, "M5", updateDto);
-
-            RawMaterialType saved = captor.getValue();
-            assertEquals("002", saved.getPrimaryCode(), "非 null primaryCode 应更新");
+            BusinessException ex = assertThrows(BusinessException.class,
+                    () -> service.updateMaterialType(FACTORY_ID, "M5", updateDto));
+            assertEquals(400, ex.getCode());
+            assertTrue(ex.getMessage().contains("16位原料编码不可手工修改"), ex.getMessage());
+            verify(materialTypeRepository, never()).save(any(RawMaterialType.class));
         }
     }
 
@@ -188,15 +266,25 @@ class RawMaterialTypeSp8Test {
     // 2. 16-digit code generator
     // ─────────────────────────────────────────────────────────────
 
+    /**
+     * 16位编码生成器.
+     *
+     * <p>These tests used to stub {@code countByFactoryIdAndLevel} as a "工厂是否启用分段
+     * 字典" switch, because the 3-arg {@code generateNextCode} once fell back to the SP4
+     * flat scheme when no dictionary existed. {@code 1f6e63b6bf "fix(material): enforce
+     * hierarchical 16-digit codes"} deleted that switch — the 16-digit scheme is now
+     * unconditional and an invalid segmentCode is always rejected. The dictionary stubs
+     * therefore became dead ({@code UnnecessaryStubbingException}) and the fallback
+     * expectation became wrong; both are corrected here rather than papered over with
+     * {@code lenient()}.
+     */
     @Nested
     @DisplayName("16位编码生成器")
     class SixteenDigitCodeGen {
 
         @Test
-        @DisplayName("工厂有字典 + segmentCode 10位 + 无已有16位码 → 000001 序号")
-        void hasDictionary_noExistingCode_generates000001() {
-            when(materialCodeSegmentRepository.countByFactoryIdAndLevel(FACTORY_ID, (short) 1))
-                    .thenReturn(3L);
+        @DisplayName("segmentCode 10位 + 无已有16位码 → 000001 序号")
+        void noExistingCode_generates000001() {
             when(materialTypeRepository.findCodesByFactoryIdAndSegmentPrefix(FACTORY_ID, "0010010001"))
                     .thenReturn(Collections.emptyList());
 
@@ -207,8 +295,6 @@ class RawMaterialTypeSp8Test {
         @Test
         @DisplayName("已有码 0010010001000005 → 生成 0010010001000006")
         void existingCode000005_generates000006() {
-            when(materialCodeSegmentRepository.countByFactoryIdAndLevel(FACTORY_ID, (short) 1))
-                    .thenReturn(3L);
             when(materialTypeRepository.findCodesByFactoryIdAndSegmentPrefix(FACTORY_ID, "0010010001"))
                     .thenReturn(List.of("0010010001000003", "0010010001000005", "0010010001000001"));
 
@@ -217,36 +303,30 @@ class RawMaterialTypeSp8Test {
         }
 
         @Test
-        @DisplayName("无字典 → fallback SP4 扁平方案")
-        void noDictionary_fallbackToFlat() {
-            when(materialCodeSegmentRepository.countByFactoryIdAndLevel(FACTORY_ID, (short) 1))
-                    .thenReturn(0L);
+        @DisplayName("2-arg 遗留扁平生成器仍可用 (previewMaterialCode(factoryId, category) 走这条)")
+        void legacyTwoArgGenerator_stillFlat() {
             when(materialTypeRepository.findCodesByFactoryIdAndCodePrefix(FACTORY_ID, "RL"))
                     .thenReturn(Collections.emptyList());
 
-            String code = service.generateNextCode(FACTORY_ID, "肉类", "0010010001");
-            assertEquals("RL001", code);
+            // The 3-arg overload no longer falls back to this; only the 2-arg legacy
+            // entry point (previewMaterialCode without a segment) still produces RL001.
+            assertEquals("RL001", service.generateNextCode(FACTORY_ID, "肉类"));
         }
 
         @Test
-        @DisplayName("工厂启用分段字典 + segmentCode 缺失 -> 400 拒绝")
-        void dictionaryEnabled_nullSegmentCode_rejects() {
-            when(materialCodeSegmentRepository.countByFactoryIdAndLevel(FACTORY_ID, (short) 1))
-                    .thenReturn(3L);
-
+        @DisplayName("segmentCode 缺失 -> 400 拒绝 (无条件, 不再看工厂是否配字典)")
+        void nullSegmentCode_rejects() {
             BusinessException ex = assertThrows(BusinessException.class,
                     () -> service.generateNextCode(FACTORY_ID, "肉类", null));
             assertEquals(400, ex.getCode());
             assertTrue(ex.getMessage().contains("本工厂启用 16 位编码"));
             assertTrue(ex.getMessage().contains("请用分段选择器生成"));
+            verifyNoInteractions(materialCodeSegmentRepository);
         }
 
         @Test
-        @DisplayName("工厂启用分段字典 + segmentCode 非10位 -> 400 拒绝")
-        void dictionaryEnabled_shortSegmentCode_rejects() {
-            when(materialCodeSegmentRepository.countByFactoryIdAndLevel(FACTORY_ID, (short) 1))
-                    .thenReturn(3L);
-
+        @DisplayName("segmentCode 非10位 -> 400 拒绝")
+        void shortSegmentCode_rejects() {
             BusinessException ex = assertThrows(BusinessException.class,
                     () -> service.generateNextCode(FACTORY_ID, "肉类", "001001"));
             assertEquals(400, ex.getCode());
@@ -257,8 +337,8 @@ class RawMaterialTypeSp8Test {
         @Test
         @DisplayName("createMaterialType 传 segmentCode → 走16位路径生成 code")
         void createMaterialType_withSegmentCode_generates16DigitCode() {
-            when(materialCodeSegmentRepository.countByFactoryIdAndLevel(FACTORY_ID, (short) 1))
-                    .thenReturn(3L);
+            stubSegmentChain();
+            stubSegmentLock();
             when(materialTypeRepository.findCodesByFactoryIdAndSegmentPrefix(FACTORY_ID, "0010010001"))
                     .thenReturn(Collections.emptyList());
             when(materialTypeRepository.existsByFactoryIdAndCode(FACTORY_ID, "0010010001000001"))
@@ -283,11 +363,8 @@ class RawMaterialTypeSp8Test {
         }
 
         @Test
-        @DisplayName("工厂启用分段字典 + 手工传入非16位 code -> 400 拒绝")
-        void createMaterialType_dictionaryEnabled_manualFlatCodeRejected() {
-            when(materialCodeSegmentRepository.countByFactoryIdAndLevel(FACTORY_ID, (short) 1))
-                    .thenReturn(3L);
-
+        @DisplayName("createMaterialType 只传扁平 code / 不选分段 -> 400 拒绝")
+        void createMaterialType_manualFlatCodeRejected() {
             RawMaterialTypeDTO dto = RawMaterialTypeDTO.builder()
                     .code("RL001")
                     .name("猪舌")
@@ -298,8 +375,10 @@ class RawMaterialTypeSp8Test {
             BusinessException ex = assertThrows(BusinessException.class,
                     () -> service.createMaterialType(FACTORY_ID, dto));
             assertEquals(400, ex.getCode());
-            assertTrue(ex.getMessage().contains("本工厂启用 16 位编码"));
-            assertTrue(ex.getMessage().contains("请用分段选择器生成"));
+            // Message moved from strict16CodeException to invalidSegment when the
+            // dictionary probe was removed: create now fails at the segment-chain
+            // validation instead of at the code generator.
+            assertTrue(ex.getMessage().contains("必须选择有效的L3十位编码"), ex.getMessage());
             verify(materialTypeRepository, never()).save(any(RawMaterialType.class));
         }
     }
@@ -312,11 +391,12 @@ class RawMaterialTypeSp8Test {
     @DisplayName("previewMaterialCode(factoryId, category, segmentCode)")
     class PreviewMaterialCodeWithSegment {
 
+        // Same 1f6e63b6bf change as SixteenDigitCodeGen: the "工厂是否启用分段字典" probe
+        // (countByFactoryIdAndLevel) is gone from this path, so stubbing it was dead code.
+
         @Test
-        @DisplayName("segmentCode 10位 + 字典已配置 + 无已有码 → 16位 000001")
-        void segmentCode10Digit_hasDictionary_returns16Digit() {
-            when(materialCodeSegmentRepository.countByFactoryIdAndLevel(FACTORY_ID, (short) 1))
-                    .thenReturn(3L);
+        @DisplayName("segmentCode 10位 + 无已有码 → 16位 000001")
+        void segmentCode10Digit_returns16Digit() {
             when(materialTypeRepository.findCodesByFactoryIdAndSegmentPrefix(FACTORY_ID, "0010010001"))
                     .thenReturn(java.util.Collections.emptyList());
 
@@ -325,22 +405,16 @@ class RawMaterialTypeSp8Test {
         }
 
         @Test
-        @DisplayName("segmentCode null + 工厂启用字典 -> 400 拒绝")
-        void nullSegmentCode_dictionaryEnabledRejects() {
-            when(materialCodeSegmentRepository.countByFactoryIdAndLevel(FACTORY_ID, (short) 1))
-                    .thenReturn(3L);
-
+        @DisplayName("segmentCode null -> 400 拒绝")
+        void nullSegmentCode_rejects() {
             BusinessException ex = assertThrows(BusinessException.class,
                     () -> service.previewMaterialCode(FACTORY_ID, "肉类", null));
             assertEquals(400, ex.getCode());
         }
 
         @Test
-        @DisplayName("segmentCode 非10位 + 工厂启用字典 -> 400 拒绝")
-        void shortSegmentCode_dictionaryEnabledRejects() {
-            when(materialCodeSegmentRepository.countByFactoryIdAndLevel(FACTORY_ID, (short) 1))
-                    .thenReturn(3L);
-
+        @DisplayName("segmentCode 非10位 -> 400 拒绝")
+        void shortSegmentCode_rejects() {
             BusinessException ex = assertThrows(BusinessException.class,
                     () -> service.previewMaterialCode(FACTORY_ID, "包材", "001001"));
             assertEquals(400, ex.getCode());
