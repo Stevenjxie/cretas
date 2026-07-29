@@ -151,7 +151,7 @@ Require the Fable handoff to contain:
 | Production write or release with established gates and rollback | Sol High cruise effort |
 | Unresolved architecture, security, irreversible migration, or data-consistency decision | Sol Extra High for the named decision checkpoint only, then downshift |
 | Established design-system or multi-screen implementation | Sol Medium or High; “design” and screen count alone do not require XHigh |
-| ACTIVE Goal approaching context/compact limit | Keep the lowest sufficient Medium/High cruise effort; warn once near 50%, then auto-create a fresh continuation task near 80% or after the second compact; never keep XHigh merely to avoid handoff |
+| Any sustained Cretas task approaching context/compact limit | Keep the lowest sufficient Medium/High cruise effort; warn once near 50%, then auto-create and dispatch a fresh continuation task near 80% or after the second compact. Goal is not required; never keep XHigh merely to avoid handoff |
 | Independent external architecture challenge | **Opus 5 High**; use Opus 5 XHigh for the full multi-project report; the routing reply must include the paste-ready Claude Code prompt, then a bounded Sol Extra High adjudication checkpoint |
 | Opus 5 already stalled or self-contradicted on that same challenge | Fable 5 High/XHigh as break-glass, per the earned gate in `.claude/skills/multi-model-dispatch` |
 | Alternative exploratory/reviewer pass | Terra Medium, with an explicit reason |
