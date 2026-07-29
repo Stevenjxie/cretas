@@ -54,7 +54,7 @@ from label_qc.services.yolo_detector import (
 
 logger = logging.getLogger(__name__)
 
-SCREENING_VERSION = "yolo-screen-v1+vl-review"
+SCREENING_VERSION = "yolo-screen-v1"
 REVIEW_PROMPT_VERSION = "label-tray-review-v1"
 # Reviews are independent single-tray calls, so they parallelise cleanly. The
 # whole-photo tiling path uses 2 for 8 tiles (4 rounds); 4 here keeps a similar
@@ -118,6 +118,19 @@ def _env_int(name: str, default: int, low: int, high: int) -> int:
         return max(low, min(high, int(os.getenv(name, ""))))
     except (TypeError, ValueError):
         return default
+
+
+def _screen_confidence(tray: TrayResult) -> float:
+    """Confidence for a tray the VL never judged.
+
+    Without a VL verdict a flat 0.5 would leave the reviewer with an unsortable
+    list. Grade it from what screening does know:
+      - the tray detector's own confidence scales the whole thing;
+      - BOTH_MISSING is the likeliest screening artefact (a bad crop loses both
+        labels at once), so it is discounted relative to a single missing label.
+    """
+    base = 0.45 if tray.verdict == VERDICT_MISSING_BOTH else 0.75
+    return round(max(0.05, min(0.9, base * max(tray.confidence, 0.0))), 4)
 
 
 def _encode(image: np.ndarray) -> str:
@@ -331,13 +344,19 @@ class HybridLabelQcAnalyzer:
         for tray, review, model_name in reviews:
             models_used.add(model_name)
             if review is None:
-                # Either the review failed, or this tray was past the per-photo
-                # review cap. Either way keep the screening verdict rather than
-                # silently clearing a suspect tray.
+                # No VL verdict: review disabled, past the per-photo cap, or the
+                # call failed. Keep the screening verdict rather than silently
+                # clearing a suspect tray, and grade confidence from what the
+                # screener itself knows so a reviewer can still sort the list.
                 unreviewed += 1
-                verdict, confidence = tray.verdict, 0.5
-                evidence = ("初筛判定，超出本张复核上限" if model_name == "screen-only"
-                            else "初筛判定，视觉复核未完成")
+                verdict = tray.verdict
+                confidence = _screen_confidence(tray)
+                if not self._review_enabled:
+                    evidence = f"初筛判定（未启用视觉复核，托盘置信 {tray.confidence:.2f}）"
+                elif model_name == "screen-only":
+                    evidence = f"初筛判定（超出本张复核上限，托盘置信 {tray.confidence:.2f}）"
+                else:
+                    evidence = f"初筛判定（视觉复核未完成，托盘置信 {tray.confidence:.2f}）"
             else:
                 verdict, confidence = review["verdict"], review["confidence"]
                 evidence = review["evidence"] or "视觉复核"
@@ -385,7 +404,7 @@ class HybridLabelQcAnalyzer:
         return {
             "verdict": "SUSPECTED" if candidates else "NO_DEFECT_FOUND",
             "candidates": candidates,
-            "model": ",".join(sorted(models_used)),
+            "model": ",".join(sorted(m for m in models_used if m != "screen-only")),
             "promptVersion": REVIEW_PROMPT_VERSION,
             "imageWidth": screening.image_width,
             "imageHeight": screening.image_height,
