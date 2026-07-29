@@ -6,7 +6,7 @@ from fastapi.testclient import TestClient
 from mock_platform.api._auth import keruyun_sign
 from mock_platform.api.app import create_app
 from mock_platform.db import connect
-from mock_platform.world.generator import generate_orders
+from mock_platform.world.generator import generate_daily_ops, generate_orders
 from mock_platform.world.seed import seed_world
 
 APP_KEY = "mock-key"
@@ -26,6 +26,34 @@ def client(tmp_path, monkeypatch):
     seed_world(conn, store_count=10)
     generate_orders(conn, store_id=1, biz_date="2026-07-29",
                     minute_of_day=12 * 60, count=25, rng=random.Random(11))
+    # 后厨事件按当天实际销量派生, 所以必须在订单之后跑。
+    generate_daily_ops(conn, store_id=1, biz_date="2026-07-29", rng=random.Random(11))
+    conn.close()
+    yield TestClient(create_app())
+    get_settings.cache_clear()
+
+
+@pytest.fixture()
+def client_monday(tmp_path, monkeypatch):
+    """带**周一**数据的客户端。
+
+    盘点是每周一次、只在周一产生的。主 fixture 用的 2026-07-29 是周三,
+    盘点端点在那儿永远是空的 —— 那不是端点坏了, 是没到盘点日。
+    单开一个 fixture 而不是往主 fixture 里加订单: 那会把既有的
+    `test_游标分页不重不漏`(硬断言 25 单) 撞坏。
+    """
+    db = str(tmp_path / "mon.db")
+    monkeypatch.setenv("MOCK_DB_PATH", db)
+    monkeypatch.setenv("MOCK_KERUYUN_APP_KEY", APP_KEY)
+    monkeypatch.setenv("MOCK_KERUYUN_APP_SECRET", APP_SECRET)
+    monkeypatch.setenv("MOCK_CALLBACK_SECRET", "cb")
+    from mock_platform.config import get_settings
+    get_settings.cache_clear()
+    conn = connect(db)
+    seed_world(conn, store_count=10)
+    generate_orders(conn, store_id=1, biz_date="2026-07-27",   # 周一
+                    minute_of_day=12 * 60, count=15, rng=random.Random(12))
+    generate_daily_ops(conn, store_id=1, biz_date="2026-07-27", rng=random.Random(12))
     conn.close()
     yield TestClient(create_app())
     get_settings.cache_clear()
@@ -112,3 +140,63 @@ def test_明细带菜品分类(client):
     assert all("dishCategory" in i for i in items), "每条明细都要有 dishCategory"
     # 种子里的分类就是这几类, 全空说明 JOIN 没取到列
     assert any(i["dishCategory"] for i in items)
+
+
+# ── 后厨供应链端点 ──────────────────────────────────────────────────
+
+@pytest.mark.parametrize("path,must_have", [
+    ("/keruyun/open/stock/requisition/list",
+     {"docNo", "shopCode", "bizDate", "ingredientName", "unit", "qty", "cost", "status"}),
+    ("/keruyun/open/stock/wastage/list",
+     {"docNo", "shopCode", "bizDate", "ingredientName", "wastageType", "qty", "cost"}),
+    ("/keruyun/open/stock/stocktaking/list",
+     {"docNo", "shopCode", "bizDate", "ingredientName", "systemQty", "actualQty", "diffCost"}),
+])
+def test_供应链端点返回约定字段(client_monday, path, must_have):
+    # 用周一那份数据: 三类单据当天都有(盘点只在周一)。
+    body = client_monday.get(path, params=_signed({"cursor": "0", "limit": "5"})).json()
+    assert body["code"] == "0", body
+    items = body["data"]["list"]
+    assert items, f"{path} 应当有数据"
+    assert set(items[0]) >= must_have, set(items[0])
+
+
+def test_盘点端点在非盘点日为空而不是报错(client):
+    """主 fixture 是周三。没到盘点日就是没有单据 —— 空列表 + code=0,
+    不是错误。把"没数据"当异常会让上游误判平台故障。"""
+    body = client.get("/keruyun/open/stock/stocktaking/list",
+                      params=_signed({"cursor": "0", "limit": "5"})).json()
+    assert body["code"] == "0"
+    assert body["data"]["list"] == []
+    assert body["data"]["hasMore"] is False
+
+
+@pytest.mark.parametrize("path", [
+    "/keruyun/open/stock/requisition/list",
+    "/keruyun/open/stock/wastage/list",
+    "/keruyun/open/stock/stocktaking/list",
+])
+def test_供应链端点同样验签(client, path):
+    """三个端点是抽出来共用鉴权的 —— 这条钉住抽取没有漏掉哪一个。"""
+    body = client.get(path, params={"appKey": "x", "timestamp": "1",
+                                    "cursor": "0", "limit": "1", "sign": "bad"}).json()
+    assert body["code"] == "AUTH_SIGN_INVALID"
+
+
+def test_供应链游标不重不漏(client):
+    p1 = client.get("/keruyun/open/stock/requisition/list",
+                    params=_signed({"cursor": "0", "limit": "3"})).json()["data"]
+    p2 = client.get("/keruyun/open/stock/requisition/list",
+                    params=_signed({"cursor": str(p1["nextCursor"]), "limit": "3"})
+                    ).json()["data"]
+    ids1 = {i["docNo"] for i in p1["list"]}
+    ids2 = {i["docNo"] for i in p2["list"]}
+    assert ids1 and ids2
+    assert not (ids1 & ids2), "两页不该有重叠"
+
+
+def test_订单端点抽取鉴权后没坏(client):
+    """把鉴权抽成公共函数时最容易顺手改坏原有端点。"""
+    body = client.get("/keruyun/open/order/list",
+                      params=_signed({"cursor": "0", "limit": "1"})).json()
+    assert body["code"] == "0" and body["data"]["list"]
