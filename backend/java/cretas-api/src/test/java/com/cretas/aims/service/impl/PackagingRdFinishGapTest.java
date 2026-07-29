@@ -4,6 +4,7 @@ import com.cretas.aims.dto.common.PageRequest;
 import com.cretas.aims.dto.common.PageResponse;
 import com.cretas.aims.dto.material.RawMaterialTypeDTO;
 import com.cretas.aims.entity.RawMaterialType;
+import com.cretas.aims.entity.material.MaterialCodeSegment;
 import com.cretas.aims.repository.MaterialBatchRepository;
 import com.cretas.aims.repository.MaterialPackagingHierarchyRepository;
 import com.cretas.aims.repository.RawMaterialTypeRepository;
@@ -44,6 +45,11 @@ import static org.mockito.Mockito.*;
 class PackagingRdFinishGapTest {
 
     private static final String FACTORY = "F-TEST-GAP";
+    private static final String L1_PACKAGING = "002";
+    private static final String L2_PACKAGING = "002001";
+    private static final String L3_PACKAGING = "0020010001";
+    /** 16 位码 = L3 前缀 + 6 位流水; 字典里没有已存在的码时从 000001 起。 */
+    private static final String GENERATED_CODE = L3_PACKAGING + "000001";
 
     @Mock private RawMaterialTypeRepository repo;
     @Mock private MaterialBatchRepository batchRepo;
@@ -84,6 +90,35 @@ class PackagingRdFinishGapTest {
         r.setPage(page);
         r.setSize(size);
         return r;
+    }
+
+    /**
+     * PR #1545/#1547 起 createMaterialType 强制走分段字典: 必须给 10 位 L3 segmentCode, 且
+     * 16 位编码由 L3 前缀 + 6 位流水自动生成 (DTO 里手填的 code 会被覆盖), category 与
+     * primaryCode 一律取自 L1 节点。这里把一条「包材」链 stub 齐, 让 P7/P8 能继续验证它们
+     * 真正关心的 associatedCustomerId 往返。
+     */
+    private void stubPackagingChain() {
+        stubSegment(L3_PACKAGING, (short) 3, L2_PACKAGING, "吸塑盒");
+        stubSegment(L2_PACKAGING, (short) 2, L1_PACKAGING, "塑料包装");
+        stubSegment(L1_PACKAGING, (short) 1, null, "包材");
+    }
+
+    private void stubSegment(String code, short level, String parent, String label) {
+        MaterialCodeSegment node = MaterialCodeSegment.builder()
+                .factoryId(FACTORY)
+                .segmentCode(code)
+                .level(level)
+                .parentCode(parent)
+                .segmentLabel(label)
+                .isActive(true)
+                .build();
+        when(codeSegRepo.findByFactoryIdAndSegmentCode(FACTORY, code))
+                .thenReturn(java.util.Optional.of(node));
+        if (level == 3) {
+            lenient().when(codeSegRepo.lockByFactoryIdAndSegmentCode(FACTORY, code))
+                    .thenReturn(java.util.Optional.of(node));
+        }
     }
 
     /** Access private convertToDTO via reflection. */
@@ -137,14 +172,18 @@ class PackagingRdFinishGapTest {
         @Test
         @DisplayName("associatedCustomerId 在 createMaterialType 时被持久化")
         void create_persistsAssociatedCustomerId() {
+            stubPackagingChain();
+
             RawMaterialTypeDTO dto = new RawMaterialTypeDTO();
             dto.setName("吸塑盒");
             dto.setCategory("包材");
             dto.setUnit("个");
-            dto.setCode("BC-SAVE-01");
+            dto.setSegmentCode(L3_PACKAGING);
+            // 包材必须带含税采购参考价 (validateRequiredPricing), 与本用例无关但属必填。
+            dto.setTaxIncludedUnitPrice(new BigDecimal("1.20"));
             dto.setAssociatedCustomerId("CUST-ALPHA");
 
-            when(repo.existsByFactoryIdAndCode(FACTORY, "BC-SAVE-01")).thenReturn(false);
+            when(repo.existsByFactoryIdAndCode(FACTORY, GENERATED_CODE)).thenReturn(false);
             when(repo.save(any())).thenAnswer(inv -> {
                 RawMaterialType saved = inv.getArgument(0);
                 saved.setId("new-id");
@@ -240,14 +279,17 @@ class PackagingRdFinishGapTest {
         @Test
         @DisplayName("service.createMaterialType 接受包材 DTO 含 associatedCustomerId — 正常持久化")
         void createPackagingMaterial_noServiceLevelException() {
+            stubPackagingChain();
+
             RawMaterialTypeDTO dto = new RawMaterialTypeDTO();
             dto.setName("吸塑盒");
             dto.setCategory("包材");
             dto.setUnit("个");
-            dto.setCode("BC-P7-001");
+            dto.setSegmentCode(L3_PACKAGING);
+            dto.setTaxIncludedUnitPrice(new BigDecimal("1.20"));
             dto.setAssociatedCustomerId("CUST-P7");
 
-            when(repo.existsByFactoryIdAndCode(FACTORY, "BC-P7-001")).thenReturn(false);
+            when(repo.existsByFactoryIdAndCode(FACTORY, GENERATED_CODE)).thenReturn(false);
             when(repo.save(any())).thenAnswer(inv -> {
                 RawMaterialType saved = inv.getArgument(0);
                 saved.setId("p7-saved-id");

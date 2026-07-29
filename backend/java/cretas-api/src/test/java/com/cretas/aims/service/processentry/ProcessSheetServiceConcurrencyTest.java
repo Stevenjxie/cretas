@@ -190,6 +190,16 @@ class ProcessSheetServiceConcurrencyTest {
             // Null out JSONB List fields to avoid H2 storing "[]" which hypersistence cannot
             // round-trip in a new Hibernate session (H2 JSONB + JsonBinaryType limitation).
             plan.setSourceOrderIds(null);
+            // Same H2 artifact for the jsonb Map columns added after 2026-07-26. Their Java
+            // defaults are empty maps, which serialize to "{}"; reading that back under the
+            // H2 test profile fails with
+            //     IllegalArgumentException: The given string value: "{}" cannot be transformed
+            // Production runs real PostgreSQL where jsonb "{}" round-trips into a Map without
+            // complaint, so this is an H2 compatibility artifact, not a product defect. This
+            // test validates process-sheet concurrency control; jsonb serialization is not its job.
+            plan.setWorkflowOutputUnitsByProduct(null);
+            plan.setSelectedBomRecipeIdsByProduct(null);
+            plan.setSelectedBomVersionsByProduct(null);
             planRepo.saveAndFlush(plan);
 
             rawBatchId = "CONC-MB-" + uid;
