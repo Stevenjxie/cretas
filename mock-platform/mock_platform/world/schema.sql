@@ -55,5 +55,79 @@ CREATE TABLE IF NOT EXISTS payment (
     amount_cents INTEGER NOT NULL CHECK(typeof(amount_cents) = 'integer')
 );
 
+-- ── 后厨供应链 (2026-07-29) ─────────────────────────────────────────
+-- 一家真实门店一天不只有前厅卖东西: 还要领食材、扔掉坏的、隔几天盘一次库。
+-- 这几张表让模拟器把后厨那摊也演出来, 领料量从"当天真卖了哪些菜"× 配方推出来,
+-- 不是凭空造数。
+--
+-- 用量单位: qty_milli = 实际用量 × 1000 的整数(千分之一单位)。与金额用"分"
+-- 同一个理由 —— SQLite 弱类型下浮点会静默混进整数列, 且浮点累加会让对账假性不平。
+-- 下游 Silver 的 numeric(14,4) 能无损接住毫单位。
+
+CREATE TABLE IF NOT EXISTS ingredient (
+    id               INTEGER PRIMARY KEY,
+    name             TEXT NOT NULL UNIQUE,
+    category         TEXT NOT NULL,          -- 肉类 / 水产 / 蔬菜 / 米面 / 调料 / 干货
+    unit             TEXT NOT NULL,          -- kg / L / 个
+    unit_price_cents INTEGER NOT NULL CHECK(typeof(unit_price_cents) = 'integer'),
+    shelf_life_days  INTEGER NOT NULL CHECK(typeof(shelf_life_days) = 'integer'),
+    storage_type     TEXT NOT NULL           -- 冷藏 / 冷冻 / 常温
+);
+
+CREATE TABLE IF NOT EXISTS recipe (
+    dish_id       INTEGER NOT NULL REFERENCES dish(id),
+    ingredient_id INTEGER NOT NULL REFERENCES ingredient(id),
+    qty_milli     INTEGER NOT NULL CHECK(typeof(qty_milli) = 'integer'),  -- 每份用量 ×1000
+    PRIMARY KEY (dish_id, ingredient_id)
+);
+
+-- 领料/损耗/盘点三类事件。seq 与订单一样是全局单调游标, 供拉取端分页。
+-- 一天一店一食材一条领料, 所以 (biz_date, store_id, ingredient_id) 唯一。
+CREATE TABLE IF NOT EXISTS requisition (
+    id            INTEGER PRIMARY KEY,
+    doc_no        TEXT NOT NULL UNIQUE,
+    store_id      INTEGER NOT NULL REFERENCES store(id),
+    ingredient_id INTEGER NOT NULL REFERENCES ingredient(id),
+    biz_date      TEXT NOT NULL,
+    qty_milli     INTEGER NOT NULL CHECK(typeof(qty_milli) = 'integer'),
+    cost_cents    INTEGER NOT NULL CHECK(typeof(cost_cents) = 'integer'),
+    -- 单据状态。下游 Gold 按它过滤(领料只统计 APPROVED/SUBMITTED),
+    -- 所以它是**业务数据**不是装饰: 存进来再原样发出去, 不在报文层硬编码。
+    status        TEXT NOT NULL,
+    seq           INTEGER NOT NULL CHECK(typeof(seq) = 'integer'),
+    UNIQUE (biz_date, store_id, ingredient_id)
+);
+
+CREATE TABLE IF NOT EXISTS wastage (
+    id            INTEGER PRIMARY KEY,
+    doc_no        TEXT NOT NULL UNIQUE,
+    store_id      INTEGER NOT NULL REFERENCES store(id),
+    ingredient_id INTEGER NOT NULL REFERENCES ingredient(id),
+    biz_date      TEXT NOT NULL,
+    wastage_type  TEXT NOT NULL,          -- 变质 / 加工损耗 / 客诉退菜
+    status        TEXT NOT NULL,
+    qty_milli     INTEGER NOT NULL CHECK(typeof(qty_milli) = 'integer'),
+    cost_cents    INTEGER NOT NULL CHECK(typeof(cost_cents) = 'integer'),
+    seq           INTEGER NOT NULL CHECK(typeof(seq) = 'integer'),
+    UNIQUE (biz_date, store_id, ingredient_id, wastage_type)
+);
+
+CREATE TABLE IF NOT EXISTS stocktaking (
+    id              INTEGER PRIMARY KEY,
+    doc_no          TEXT NOT NULL UNIQUE,
+    store_id        INTEGER NOT NULL REFERENCES store(id),
+    ingredient_id   INTEGER NOT NULL REFERENCES ingredient(id),
+    biz_date        TEXT NOT NULL,
+    system_qty_milli INTEGER NOT NULL CHECK(typeof(system_qty_milli) = 'integer'),
+    actual_qty_milli INTEGER NOT NULL CHECK(typeof(actual_qty_milli) = 'integer'),
+    diff_cost_cents  INTEGER NOT NULL CHECK(typeof(diff_cost_cents) = 'integer'),
+    status          TEXT NOT NULL,
+    seq             INTEGER NOT NULL CHECK(typeof(seq) = 'integer'),
+    UNIQUE (biz_date, store_id, ingredient_id)
+);
+
 CREATE UNIQUE INDEX IF NOT EXISTS idx_order_seq ON "order"(seq);
 CREATE INDEX IF NOT EXISTS idx_order_store_date ON "order"(store_id, biz_date);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_requisition_seq ON requisition(seq);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_wastage_seq ON wastage(seq);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_stocktaking_seq ON stocktaking(seq);

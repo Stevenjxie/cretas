@@ -323,3 +323,92 @@ async def test_写游标的set_config必须在同一事务内(monkeypatch):
     )
     assert "set_config" in conn.calls[0][1]
     assert "platform_sync_cursor" in conn.calls[1][1]
+
+
+# ── 后厨供应链拉取 ──────────────────────────────────────────────────
+
+class _FakeOpsAdapter:
+    platform = "keruyun"
+
+    def __init__(self, pages_by_kind, fail_kinds=()):
+        self._pages = {k: list(v) for k, v in pages_by_kind.items()}
+        self._fail = set(fail_kinds)
+        self.calls = []
+
+    async def fetch_page(self, kind, cursor, limit):
+        self.calls.append((kind, cursor))
+        if kind in self._fail:
+            raise RuntimeError(f"{kind} 接口挂了")
+        return self._pages[kind].pop(0)
+
+
+class _OpsPage:
+    def __init__(self, items, next_cursor, has_more):
+        self.items = items
+        self.next_cursor = next_cursor
+        self.has_more = has_more
+
+
+@pytest.mark.asyncio
+async def test_ops三类各走各的游标键():
+    """合用一个游标的话三类进度互相顶掉 —— 拉完领料把游标推到 100,
+    损耗就从 100 开始, 前 100 条损耗永远拉不到。"""
+    from smartbi.ingestion.platforms.framework import sync_ops_all
+    cursors = {}
+
+    async def _read(pool, fid, key):
+        return cursors.get(key, "0")
+
+    async def _write(pool, fid, key, val):
+        cursors[key] = val
+
+    async def _write_ops(pool, fid, kind, items):
+        return len(items)
+
+    adapter = _FakeOpsAdapter({
+        k: [_OpsPage([object()], f"{i+1}00", False)]
+        for i, k in enumerate(("requisition", "wastage", "stocktaking"))
+    })
+    import smartbi.ingestion.platforms.framework as fw
+    orig_r, orig_w = fw.read_cursor, fw.write_cursor
+    fw.read_cursor, fw.write_cursor = _read, _write
+    try:
+        res = await sync_ops_all(None, adapter, factory_id="F", write_ops=_write_ops)
+    finally:
+        fw.read_cursor, fw.write_cursor = orig_r, orig_w
+    assert res == {"requisition": 1, "wastage": 1, "stocktaking": 1}
+    assert set(cursors) == {"keruyun:requisition", "keruyun:wastage",
+                            "keruyun:stocktaking"}
+    # 三类都从各自的 0 起步, 没有互相顶
+    assert [c for _, c in adapter.calls] == ["0", "0", "0"]
+
+
+@pytest.mark.asyncio
+async def test_ops一类挂了不影响其余两类():
+    """盘点接口挂了不该顺带让领料停更。"""
+    from smartbi.ingestion.platforms.framework import sync_ops_all
+
+    async def _noop_read(pool, fid, key):
+        return "0"
+
+    async def _noop_write(pool, fid, key, val):
+        return None
+
+    async def _write_ops(pool, fid, kind, items):
+        return len(items)
+
+    adapter = _FakeOpsAdapter(
+        {"requisition": [_OpsPage([object()], "1", False)],
+         "wastage": [_OpsPage([object()], "1", False)],
+         "stocktaking": []},
+        fail_kinds=("stocktaking",),
+    )
+    import smartbi.ingestion.platforms.framework as fw
+    orig_r, orig_w = fw.read_cursor, fw.write_cursor
+    fw.read_cursor, fw.write_cursor = _noop_read, _noop_write
+    try:
+        res = await sync_ops_all(None, adapter, factory_id="F", write_ops=_write_ops)
+    finally:
+        fw.read_cursor, fw.write_cursor = orig_r, orig_w
+    assert res["requisition"] == 1 and res["wastage"] == 1
+    assert str(res["stocktaking"]).startswith("ERROR"), res

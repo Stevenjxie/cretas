@@ -56,3 +56,79 @@ def test_backfill拒绝负days():
         capture_output=True, text=True,
     )
     assert r.returncode != 0, "--days 负数必须报错退出, 不能静默空跑"
+
+
+def test_backfill_ops_只补后厨不新建订单(tmp_path, monkeypatch):
+    """🔴 线上那个库已有 6 万单但零后厨数据。重跑 `backfill` 会把订单**翻倍**
+    (订单 INSERT 没有 ON CONFLICT), 把刚修好的营收数字重新搞脏 ——
+    所以必须有一条只补后厨的路(审查 C2)。"""
+    import argparse
+    import random
+
+    from mock_platform.config import get_settings
+    from mock_platform.db import connect
+    from mock_platform.world.generator import generate_orders
+    from mock_platform.world.seed import seed_world
+    from mock_platform.cli import _cmd_backfill_ops
+
+    db = str(tmp_path / "ops_only.db")
+    monkeypatch.setenv("MOCK_DB_PATH", db)
+    monkeypatch.setenv("MOCK_KERUYUN_APP_KEY", "k")
+    monkeypatch.setenv("MOCK_KERUYUN_APP_SECRET", "s")
+    monkeypatch.setenv("MOCK_CALLBACK_SECRET", "c")
+    get_settings.cache_clear()
+    conn = connect(db)
+    seed_world(conn, store_count=2)
+    generate_orders(conn, store_id=1, biz_date="2026-07-20", minute_of_day=12 * 60,
+                    count=25, rng=random.Random(3))
+    orders_before = conn.execute('SELECT COUNT(*) c FROM "order"').fetchone()["c"]
+    conn.close()
+
+    _cmd_backfill_ops(argparse.Namespace())
+    get_settings.cache_clear()
+
+    conn = connect(db)
+    assert conn.execute('SELECT COUNT(*) c FROM "order"').fetchone()["c"] == orders_before, \
+        "只补后厨, 一条订单都不该新建"
+    assert conn.execute("SELECT COUNT(*) c FROM requisition").fetchone()["c"] > 0
+    conn.close()
+
+
+def test_backfill_ops_没有订单就明确报错(tmp_path, monkeypatch):
+    """禁降级: 没订单推不出后厨, 要说清楚而不是报「成功 0 条」。"""
+    import argparse
+
+    import pytest as _pytest
+
+    from mock_platform.config import get_settings
+    from mock_platform.cli import _cmd_backfill_ops
+
+    monkeypatch.setenv("MOCK_DB_PATH", str(tmp_path / "empty.db"))
+    monkeypatch.setenv("MOCK_KERUYUN_APP_KEY", "k")
+    monkeypatch.setenv("MOCK_KERUYUN_APP_SECRET", "s")
+    monkeypatch.setenv("MOCK_CALLBACK_SECRET", "c")
+    get_settings.cache_clear()
+    with _pytest.raises(SystemExit, match="没有订单"):
+        _cmd_backfill_ops(argparse.Namespace())
+    get_settings.cache_clear()
+
+
+def test_常驻循环真的会派生后厨():
+    """🔴 审查 C2: 之前 `_generate_forever` 只调 generate_orders, 后厨代码
+    写好了但常驻进程从不执行 —— 部署上去后厨永远 0 行, 整条链的前提落空。
+    这是**读代码**才发现的, 所有单测都是绿的。
+
+    诚实说明: 这是结构性断言, 只能挡住"调用被删掉", 挡不住"调用了但参数错"。
+    真正的端到端证据是 test_ops_contract_with_mock 那条跨两侧的拉取测试。
+    """
+    import inspect
+
+    from mock_platform.cli import _generate_forever
+
+    src = inspect.getsource(_generate_forever)
+    assert "generate_daily_ops" in src, (
+        "常驻循环必须派生后厨, 否则线上后厨数据永远是 0"
+    )
+    assert src.index("generate_orders") < src.index("generate_daily_ops"), (
+        "后厨按当天实际消耗推导, 必须排在订单生成之后"
+    )

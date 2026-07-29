@@ -2692,7 +2692,19 @@ PLATFORM_KERUYUN_APP_KEY=<Step 3 的值>
 PLATFORM_KERUYUN_APP_SECRET=<Step 3 的值>
 PLATFORM_CALLBACK_SECRET=<Step 3 的 MOCK_CALLBACK_SECRET>
 PLATFORM_CALLBACK_ALLOWED_IPS=139.196.165.140
+PLATFORM_GOLD_REFRESH_ENABLED=1
+PLATFORM_GOLD_PRODUCT_INTERVAL_SECONDS=600
 ```
+
+**Gold 增量刷新那两个变量**（拉取循环每轮拉完 Silver 就刷 Gold，问答链路读的是 Gold）：
+
+| 变量 | 默认 | 说明 |
+|---|---|---|
+| `PLATFORM_GOLD_REFRESH_ENABLED` | `1`（**默认开**） | 关掉只停 Gold 刷新、不影响拉取。留给「Gold 刷新把库压垮了但数据不能停拉」这种场景。取值 `1`/`true`/`yes` 为开，其余为关；关掉时启动日志会打一条 warning。 |
+| `PLATFORM_GOLD_PRODUCT_INTERVAL_SECONDS` | `600` | `agg_product` 的最小间隔秒数。**不要调到跟拉取周期一个量级** —— 它一次重算**整月**（不是只算今天），线上实测表统计陈旧时超过 20 分钟（planner 估 1 行、实际 243k 行、走了 nested loop）。非法值（非正整数）会记 error 并回退 600。 |
+
+分档是刻意的：`agg_daily` / `agg_channel` 每轮都刷但**只刷当天**（秒级），`agg_product` 走慢档。
+两者都只在 leader、且 `PLATFORM_SYNC_ENABLED=1` 时才有意义 —— 它们跑在同一个常驻拉取循环里。
 
 然后按本仓规范从 `main` 部署（migration 由 Step 3.5 自动 apply）：
 

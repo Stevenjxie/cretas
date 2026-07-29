@@ -526,8 +526,19 @@ async def lifespan(app: FastAPI):
 
             from smartbi.api import platform_callback as _platform_callback_mod
             from smartbi.config import get_pg_pool as _get_pool_p
-            from smartbi.ingestion.platforms.framework import sync_all
+            from smartbi.gold.live_refresh import (
+                SlowCadence as _SlowCadence_p,
+                gold_refresh_enabled as _gold_enabled_p,
+                product_interval_from_env as _gold_product_interval_p,
+                refresh_gold_incremental as _refresh_gold_p,
+            )
+            from smartbi.gold.restaurant.restaurant_ops_etl import (
+                materialize_gold_daily_ops as _materialize_ops_gold_p,
+            )
+            from smartbi.ingestion.platforms.framework import sync_all, sync_ops_all
             from smartbi.ingestion.platforms.keruyun import KeruyunAdapter
+            from smartbi.ingestion.platforms.ops_keruyun import KeruyunOpsAdapter
+            from smartbi.ingestion.platforms.ops_writer import write_ops
             from smartbi.ingestion.platforms.writer import write_orders
 
             async def _sync_platforms_forever():
@@ -552,18 +563,34 @@ async def lifespan(app: FastAPI):
                         # 禁降级: 没配上游地址就别装作在同步, 明确停掉并留下日志。
                         logger.error("[platform-sync] PLATFORM_MOCK_BASE_URL 未配置, 循环不启动")
                         return
+                    # Gold 刷新: 拉进 Silver 的数不刷进 Gold, 问答链路就一直读旧快照
+                    # (线上实测差过 ¥58,813 / 170 单)。便宜的每轮刷, 贵的走慢档 ——
+                    # agg_product 一次重算整月, 统计陈旧时实测 >20 分钟。
+                    gold_enabled = _gold_enabled_p()
+                    gold_cadence = _SlowCadence_p(_gold_product_interval_p())
+                    if gold_enabled:
+                        logger.info("[platform-sync] Gold 增量刷新已开: agg_daily/agg_channel "
+                                    "每轮(仅当天), agg_product 每 %ds(整月)",
+                                    int(gold_cadence.interval_seconds))
+                    else:
+                        # 显式关掉不是 bug, 但必须留痕 —— 否则「AI 数不对」会被查成别的。
+                        logger.warning("[platform-sync] PLATFORM_GOLD_REFRESH_ENABLED 已关闭, "
+                                       "Gold 只能靠夜间 ETL/回填脚本刷新")
                     # 回调端点验完签就 set 这个 Event, 让本轮等待立刻结束。
                     # 只在 leader 上注册 —— 拉取循环只在 leader 上跑。
                     wakeup = _asyncio_p.Event()
                     _platform_callback_mod.register_wakeup(wakeup)
                     try:
                         async with _httpx_p.AsyncClient() as client:
+                            _app_key = os.getenv("PLATFORM_KERUYUN_APP_KEY", "")
+                            _app_secret = os.getenv("PLATFORM_KERUYUN_APP_SECRET", "")
                             adapters = [KeruyunAdapter(
-                                base_url,
-                                os.getenv("PLATFORM_KERUYUN_APP_KEY", ""),
-                                os.getenv("PLATFORM_KERUYUN_APP_SECRET", ""),
-                                client,
+                                base_url, _app_key, _app_secret, client,
                             )]
+                            # 后厨供应链走同一套凭证与 HTTP 客户端, 只是不同接口。
+                            ops_adapter = KeruyunOpsAdapter(
+                                base_url, _app_key, _app_secret, client,
+                            )
                             while True:
                                 try:
                                     pool = await _get_pool_p()
@@ -571,6 +598,45 @@ async def lifespan(app: FastAPI):
                                                              factory_id=factory_id,
                                                              write_orders=write_orders)
                                     logger.info("[platform-sync] %s", results)
+                                    # ── 后厨供应链 ──────────────────────
+                                    # 单独一层 try: 后厨拉挂了不该连累订单 ——
+                                    # 订单停更是丢营收数据, 后厨旧了只是成本
+                                    # 分析旧。两者不该绑在一起失败。
+                                    try:
+                                        ops = await sync_ops_all(
+                                            pool, ops_adapter,
+                                            factory_id=factory_id, write_ops=write_ops)
+                                        logger.info("[platform-sync] ops %s", ops)
+                                        if any(isinstance(v, int) and v > 0
+                                               for v in ops.values()):
+                                            # 只在真写进东西时才重算 —— 这个
+                                            # 物化是全量重算(不是增量), 每轮空跑
+                                            # 纯属浪费。
+                                            ops_gold = await _materialize_ops_gold_p(
+                                                pool, factory_id)
+                                            logger.info(
+                                                "[platform-sync] ops gold %s", ops_gold)
+                                    except _asyncio_p.CancelledError:
+                                        raise
+                                    except Exception:
+                                        logger.exception(
+                                            "[platform-sync] 后厨同步失败, 订单侧继续")
+
+                                    if gold_enabled:
+                                        # 单独一层 try: Gold 刷不动**不能**连累拉取 ——
+                                        # 拉取停了是丢数据, Gold 旧了只是答案旧。
+                                        try:
+                                            gold = await _refresh_gold_p(
+                                                pool, factory_id, cadence=gold_cadence,
+                                            )
+                                            logger.info("[platform-sync] gold %s", gold)
+                                        except _asyncio_p.CancelledError:
+                                            raise
+                                        except Exception:
+                                            logger.exception(
+                                                "[platform-sync] Gold 刷新失败, 拉取继续 —— "
+                                                "问答链路会读到上一轮快照"
+                                            )
                                 except _asyncio_p.CancelledError:
                                     # 关机路径: 必须原样上抛, 吞掉会让 shutdown 挂住。
                                     raise

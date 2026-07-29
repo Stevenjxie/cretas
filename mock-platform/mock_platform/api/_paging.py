@@ -4,6 +4,70 @@ from __future__ import annotations
 MAX_LIMIT = 200
 
 
+# 后厨供应链三类单据的分页。三张表形状不同, 但游标语义与订单完全一致
+# (全局单调 seq, 不重不漏), 所以共用一个按表配置的实现, 不各抄一份。
+#
+# 每项: (表名, 行 → 报文 dict 的映射函数)
+def _requisition_row(r):
+    return {
+        "docNo": r["doc_no"], "shopCode": r["shop_code"], "bizDate": r["biz_date"],
+        "ingredientName": r["ing_name"], "ingredientCategory": r["ing_category"],
+        "unit": r["unit"], "qty": r["qty_milli"], "cost": r["cost_cents"],
+        # 从库里取, **不硬编码** —— 硬编码的话「状态是平台真给的」这句话
+        # 技术上成立但实际空心, 而下游 Gold 正是按它过滤的。
+        "status": r["status"],
+    }
+
+
+def _wastage_row(r):
+    return {
+        "docNo": r["doc_no"], "shopCode": r["shop_code"], "bizDate": r["biz_date"],
+        "ingredientName": r["ing_name"], "ingredientCategory": r["ing_category"],
+        "unit": r["unit"], "wastageType": r["wastage_type"],
+        "status": r["status"],
+        "qty": r["qty_milli"], "cost": r["cost_cents"],
+    }
+
+
+def _stocktaking_row(r):
+    return {
+        "docNo": r["doc_no"], "shopCode": r["shop_code"], "bizDate": r["biz_date"],
+        "ingredientName": r["ing_name"], "ingredientCategory": r["ing_category"],
+        "unit": r["unit"], "status": r["status"],
+        "systemQty": r["system_qty_milli"],
+        "actualQty": r["actual_qty_milli"], "diffCost": r["diff_cost_cents"],
+    }
+
+
+OPS_KINDS = {
+    "requisition": ("requisition", _requisition_row),
+    "wastage": ("wastage", _wastage_row),
+    "stocktaking": ("stocktaking", _stocktaking_row),
+}
+
+
+def page_ops(conn, kind: str, *, since_seq: int, limit: int):
+    """按 seq 游标翻某一类供应链单据。kind 必须是 OPS_KINDS 的键。
+
+    ⚠️ 表名来自 OPS_KINDS 这张本模块常量表, 不是调用方传进来的原始串 ——
+    路由层已按白名单校验过 kind, 这里再取一次常量, 避免表名拼接成注入面。
+    """
+    table, to_payload = OPS_KINDS[kind]
+    rows = conn.execute(
+        f"SELECT t.*, s.code AS shop_code, i.name AS ing_name, "
+        f"       i.category AS ing_category, i.unit AS unit "
+        f"  FROM {table} t "
+        f"  JOIN store s ON s.id = t.store_id "
+        f"  JOIN ingredient i ON i.id = t.ingredient_id "
+        f" WHERE t.seq > ? ORDER BY t.seq LIMIT ?",
+        (since_seq, limit + 1),
+    ).fetchall()
+    has_more = len(rows) > limit
+    rows = rows[:limit]
+    next_cursor = rows[-1]["seq"] if rows else since_seq
+    return [to_payload(r) for r in rows], int(next_cursor), has_more
+
+
 def page_orders(conn, *, since_seq: int, limit: int):
     rows = conn.execute(
         'SELECT o.*, s.code AS shop_code FROM "order" o '
