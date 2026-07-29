@@ -153,7 +153,8 @@ class ProductionStockAllocationServiceTest {
         first.setBatchNumber("PKG-BOX-B1");
         first.setUnitPrice(new BigDecimal("0.40"));
         MaterialBatch second = batch("BOX-2", "PKG-BOX", "WKS-1", "10", LocalDate.of(2026, 9, 1));
-        second.setQuantityUnit("box");
+        // 非科学单位按字面比 —— 两个批次都必须写「盒」才会被同一笔需求吃到
+        second.setQuantityUnit("盒");
         second.setBatchNumber("PKG-BOX-B2");
         second.setUnitPrice(new BigDecimal("0.50"));
 
@@ -178,7 +179,8 @@ class ProductionStockAllocationServiceTest {
         assertThat(result).extracting(ProductionStockAllocationService.PlannedAllocation::quantity)
                 .containsExactly(new BigDecimal("5"), new BigDecimal("5"));
         assertThat(result).allSatisfy(allocation -> {
-            assertThat(allocation.unit()).isEqualTo("box");
+            // 需求写的是「盒」, 展示就该是「盒」; box 只是内部等价码
+            assertThat(allocation.unit()).isEqualTo("盒");
             assertThat(allocation.sourceType()).isEqualTo("PACKAGING");
             assertThat(allocation.automatic()).isTrue();
         });
@@ -186,7 +188,7 @@ class ProductionStockAllocationServiceTest {
                 .containsExactly(new BigDecimal("2.00"), new BigDecimal("2.50"));
         assertThat(service.toRawInputs(result)).allSatisfy(input -> {
             assertThat(input.getSourceType()).isEqualTo("PACKAGING");
-            assertThat(input.getUnit()).isEqualTo("box");
+            assertThat(input.getUnit()).isEqualTo("盒");
             assertThat(input.getAutomatic()).isTrue();
         });
     }
@@ -247,7 +249,7 @@ class ProductionStockAllocationServiceTest {
                         assertThat(item.getShortage()).isEqualByComparingTo("0.25");
                     });
                     assertThat(error.getMessage())
-                            .contains("1.25case", "短缺明细：外箱（包材）", "缺少 0.25case");
+                            .contains("1.25箱", "短缺明细：外箱（包材）", "缺少 0.25箱");
                 });
     }
 
@@ -273,8 +275,8 @@ class ProductionStockAllocationServiceTest {
                     assertThat(error.getMessage())
                             .doesNotContain("0mixed")
                             .contains(
-                                    "800g包装盒（包材）：需要 10box，可用 0box，缺少 10box",
-                                    "外箱（包材）：需要 1.25case，可用 0case，缺少 1.25case");
+                                    "800g包装盒（包材）：需要 10盒，可用 0盒，缺少 10盒",
+                                    "外箱（包材）：需要 1.25箱，可用 0箱，缺少 1.25箱");
                     assertThat(error.getShortage().getItems())
                             .extracting(
                                     ProductionStockShortageDTO.Item::getMaterialName,
@@ -375,7 +377,7 @@ class ProductionStockAllocationServiceTest {
         // 手选批次也要能投非质量单位 —— 旧代码直接 409
         // "所选投料批次不是 kg 计量, 不能直接报工"
         MaterialBatch counted = batch("B1", "RAW-CHICKEN", "WKS-1", "300", LocalDate.of(2026, 7, 20));
-        counted.setQuantityUnit("pcs");
+        counted.setQuantityUnit("只");
         ProcessSheetRowRequest.RawInput input = new ProcessSheetRowRequest.RawInput();
         input.setMaterialBatchId("B1");
         input.setSkuId("RAW-CHICKEN");
@@ -392,7 +394,7 @@ class ProductionStockAllocationServiceTest {
                 .singleElement()
                 .satisfies(allocation -> {
                     assertThat(allocation.quantity()).isEqualByComparingTo("201");
-                    assertThat(allocation.unit()).isEqualTo("pcs");
+                    assertThat(allocation.unit()).isEqualTo("只");
                 });
     }
 
@@ -547,7 +549,7 @@ class ProductionStockAllocationServiceTest {
         // 数量不被折算; 本服务的 canonicalNativeUnit 对未登记单位原样返回,
         // 所以分配记录里就是用户配的「只」而不是归一后的 pcs
         assertThat(result).extracting(ProductionStockAllocationService.PlannedAllocation::unit)
-                .containsOnly("pcs");
+                .containsOnly("只");
     }
 
     @Test
@@ -566,7 +568,7 @@ class ProductionStockAllocationServiceTest {
                 .extracting(error -> ((ProductionStockShortageException) error).getShortage())
                 .satisfies(shortage -> {
                     ProductionStockShortageDTO dto = (ProductionStockShortageDTO) shortage;
-                    assertThat(dto.getUnit()).isEqualTo("pcs");
+                    assertThat(dto.getUnit()).isEqualTo("只");
                     assertThat(dto.getShortage()).isEqualByComparingTo("5");
                 });
     }
@@ -595,13 +597,13 @@ class ProductionStockAllocationServiceTest {
     }
 
     @Test
-    void synonymCountUnitsMatchAcrossInputAndStock() {
+    void countUnitsMatchOnTheLiteralWritingNotAnAliasFamily() {
         // 事故现场: 投料单位「只」、库存批次存的是 pcs。
         // 旧本地 switch 把它们分别算成 只 / slice, 于是明明有 201 只库存
         // 却报 "需要 1slice, 可用 0slice"。同义单位必须只有一套 code。
         ProcessSheetRowRequest.MaterialInputTotal input = countedTotal("RAW-CHICKEN", "201");
         MaterialBatch pcsBatch = batch("B-PCS", "RAW-CHICKEN", "WKS-1", "300", LocalDate.of(2026, 7, 20));
-        pcsBatch.setQuantityUnit("pcs");
+        pcsBatch.setQuantityUnit("只");
 
         when(warehouseResolver.resolveWorkshopId("F006")).thenReturn("WKS-1");
         when(materialBatchRepository.findAvailableBatchesFEFOByWarehouseForUpdate(

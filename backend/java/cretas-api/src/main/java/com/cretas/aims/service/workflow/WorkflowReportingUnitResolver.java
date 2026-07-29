@@ -5,6 +5,7 @@ import com.cretas.aims.entity.RawMaterialType;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.repository.ProductTypeRepository;
 import com.cretas.aims.repository.RawMaterialTypeRepository;
+import com.cretas.aims.service.unit.CanonicalUnit;
 import com.cretas.aims.service.unit.UnitContractService;
 import com.cretas.aims.service.unit.UnitDimension;
 import lombok.RequiredArgsConstructor;
@@ -89,13 +90,22 @@ public class WorkflowReportingUnitResolver {
     }
 
     /**
-     * 端口的规范码 —— 落在 {@code unit_code} 列，供需要判等价的场景使用。
-     * 与 {@link #resolve} 返回的显示单位是同一个单位的两种写法。
+     * 端口的等价码 —— **只有科学单位才有**。
+     *
+     * <p>质量与体积之间存在恒定换算，归一到等价码有物理意义。计数与包装单位没有：
+     * 只 / 件 / 袋 / 盒 之间不存在普适换算，硬编一个共同等价码等于让系统替工厂断定
+     * 两个不同的东西相同；工厂新建单位时也无从判断该挂进哪个族。</p>
+     *
+     * <p>因此非科学单位的等价码就是它自己 —— 写法相同才是同一个单位。</p>
      */
     public String canonicalCode(String factoryId, String reportingUnit) {
         if (reportingUnit == null || reportingUnit.isBlank()) return null;
-        var normalized = unitContractService.normalize(factoryId, reportingUnit);
-        return normalized.recognized() ? normalized.code() : reportingUnit.trim();
+        String trimmed = reportingUnit.trim();
+        return unitContractService.describe(factoryId, trimmed)
+                .filter(unit -> unit.dimension() == UnitDimension.MASS
+                        || unit.dimension() == UnitDimension.VOLUME)
+                .map(CanonicalUnit::code)
+                .orElse(trimmed);
     }
 
     private String canonical(String factoryId, String rawUnit, String materialKind, String skuId) {

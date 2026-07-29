@@ -50,8 +50,13 @@ class WorkflowReportingUnitResolverTest {
         });
         when(unitContractService.describe(anyString(), anyString())).thenAnswer(invocation -> {
             String code = invocation.getArgument(1);
+            String canonical = switch (code) {
+                case "千克", "公斤" -> "kg";
+                case "克" -> "g";
+                default -> code;
+            };
             return Optional.of(new CanonicalUnit(
-                    code, dimensionOf(code), code, java.math.BigDecimal.ONE, code, 3));
+                    canonical, dimensionOf(code), canonical, java.math.BigDecimal.ONE, canonical, 3));
         });
         resolver = new WorkflowReportingUnitResolver(
                 productTypeRepository, rawMaterialTypeRepository, unitContractService);
@@ -93,11 +98,13 @@ class WorkflowReportingUnitResolverTest {
 
         assertEquals("只", resolver.resolve("F006", "RAW_MATERIAL", "RM-CHICKEN", "只"));
         assertEquals("只", resolver.resolve("F006", "SEMI_FINISHED", "PT-WIP", "只"));
-        // 契约把 只/个/件 归为 pcs(规范名「件」)。拿它当端口单位存下来,
-        // 用户配的「只」到报工页就变「件」, 看起来像系统改了他的配置。
-        // 等价性由匹配环节负责, 显示环节不改写它。
-        assertEquals("pcs", resolver.canonicalCode("F006", "只"));
-        assertEquals("pcs", resolver.canonicalCode("F006", "件"));
+        // 等价码只对有真实换算系数的科学单位成立。只/件 之间没有普适换算 ——
+        // 一只不等于一件, 硬编一个共同等价码等于让系统替工厂断定两个不同的东西相同,
+        // 工厂新建单位时也无从判断该挂进哪个族。非科学单位的等价码就是它自己。
+        assertEquals("只", resolver.canonicalCode("F006", "只"));
+        assertEquals("件", resolver.canonicalCode("F006", "件"));
+        // 科学单位照常归一: 千克/公斤 都是 kg
+        assertEquals("kg", resolver.canonicalCode("F006", "千克"));
     }
 
     @Test
