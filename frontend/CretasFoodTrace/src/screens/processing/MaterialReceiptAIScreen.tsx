@@ -121,7 +121,7 @@ export default function MaterialReceiptAIScreen() {
   }, [user?.factoryId]);
 
   // 加载供应商列表并更新Schema
-  const loadSuppliers = useCallback(async (baseSchema: FormSchema) => {
+  const loadSuppliers = useCallback(async () => {
     try {
       setLoadingSuppliers(true);
       const response = await supplierApiClient.getActiveSuppliers(user?.factoryId);
@@ -165,11 +165,20 @@ export default function MaterialReceiptAIScreen() {
   }, [loadDynamicSchema]);
 
   // Schema加载完成后加载供应商
+  //
+  // 🔴 2026-07-30 修复死循环: 之前这里把 dynamicSchema 放进依赖数组,
+  // 而 loadSuppliers 成功后会 setDynamicSchema(prev => ({...prev, ...})) 产生新的对象引用,
+  // 触发本 effect 重新执行 → 再次 setDynamicSchema → 无限重复调用 /suppliers/active,
+  // 页面卡在"加载供应商列表..."永不进入表单 (客户反馈的"白屏"/只能清后台重进)。
+  // loadSuppliers 内部只用 setState 的函数式更新，不读取传入的 schema 参数，
+  // 因此这里不需要也不应该依赖 dynamicSchema —— 只在 loadingSchema 由 true 变 false 的
+  // 那一次触发即可。
   useEffect(() => {
     if (!loadingSchema) {
-      loadSuppliers(dynamicSchema);
+      loadSuppliers();
     }
-  }, [loadingSchema, loadSuppliers, dynamicSchema]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- dynamicSchema 故意排除, 见上方注释
+  }, [loadingSchema, loadSuppliers]);
 
   // 初始值
   const initialValues: Partial<MaterialBatchFormData> = {
