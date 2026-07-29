@@ -36,7 +36,28 @@ jobs:
     # 且 Postgres 路径几乎未被验证 —— 单独立项处理, 不在本门禁的范围内。
 
     steps:
+      # fetch-depth: 0 —— git-restore-mtime 需要完整历史才能推出每个文件的最后修改时间。
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # 没有这一步, 缓存 target/ 完全无效 —— 实测过。
+      #
+      # git 不存 mtime, actions/checkout 会把【所有】源文件的 mtime 设成检出时刻。
+      # maven-compiler-plugin 靠 mtime 判断 staleness, 于是恢复回来的 target/classes
+      # 一律"比源码旧" → 全量重编 5229 个文件, 缓存等于白存。
+      # 实测证据: 首次运行(无缓存) 3分05秒, 第二次(缓存 22MB 已命中) 2分44秒 —— 只快
+      # 21 秒, 属噪声, 说明增量编译根本没发生。
+      #
+      # git-restore-mtime 从提交历史把每个文件的 mtime 还原成它最后一次被改动的时间,
+      # 于是只有本 PR 真正改过的文件才比 class 新, Maven 才会只重编那几个。
+      - name: Restore source mtimes from git history
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq git-restore-mtime
+          git restore-mtime --quiet
+          echo "mtime 已还原; 最近改动的 Java 源文件:"
+          find backend/java/cretas-api/src -name '*.java' -newermt '1 hour ago' | head -5
 
       - uses: actions/setup-java@v4
         with:
