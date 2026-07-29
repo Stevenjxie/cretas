@@ -100,7 +100,7 @@ function reportingUnitPrice(row: ProcessSheetInventoryItem): number | null | und
 
 function fmtDate(v: string | null | undefined): string {
   if (!v) return '—';
-  // 后端已是 ISO "YYYY-MM-DD" (LocalDate); 兼容偶发 datetime 字符串只取日期部分。
+  // 保留 datetime 截断以兼容旧/异常响应；待接口契约测试及历史数据都保证 LocalDate 后删除。
   return v.slice(0, 10);
 }
 
