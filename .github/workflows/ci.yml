@@ -111,12 +111,44 @@ jobs:
           if-no-files-found: error
           compression-level: 0
           retention-days: 1
+      # 堆该给多少不该靠猜。把 runner 的真实规格打出来, 第一次运行就能确认 4g
+      # 是否留了足够余量给 Postgres 服务容器和 Maven 自身。
+      - name: Report runner resources
+        if: inputs.full_audit
+        run: |
+          echo "CPU cores: $(nproc)"
+          free -h
+          df -h / | tail -1
+
       - name: Maven compile and test
         if: inputs.full_audit
         working-directory: backend/java/cretas-api
         # Keep the complete suite after artifact upload. It reuses the package
         # output already in target/ and remains visible as a separate CI gate.
-        run: mvn -B verify -Dspring.profiles.active=test -pl .
+        #
+        # 2026-07-29: 这一步连续三次以 `Java heap space` 失败 (每次烧掉 ~78 分钟),
+        # 也就是【全量套件从来没跑完过一次】—— 那 1119 个测试类的实际保护力是未知数,
+        # 不是"通过了"。根因不是测试有 bug:
+        #   - 全仓没有任何 -Xmx / MAVEN_OPTS 设置, JVM 用默认堆
+        #   - surefire 没配 forkCount/reuseForks → 默认 forkCount=1, reuseForks=true
+        #     即 1119 个测试类全挤在同一个 forked JVM 里, 中途从不重启
+        #   - 其中 110 个是 @SpringBootTest(36) / @DataJpaTest(74), 每个缓存一份
+        #     Spring 上下文, TestContext 框架默认最多缓存 32 份且不主动驱逐
+        # 先显式给堆, 目的是【拿到一个能跑完的真实基线】—— 在此之前"全量要多久"
+        # 和"有多少真失败"两个问题都没有可信答案, 任何并行化/拆 job 的讨论都建立
+        # 在假数字上。跑通后再按真实基线决定要不要 forkCount 并行或更大的 runner。
+        #
+        # 分配依据: MAVEN_OPTS 只管 Maven 自身 (不跑测试, 1g 足够); -DargLine 管
+        # surefire fork 出来的那个 JVM —— 测试真正跑的地方, OOM 就发生在这里。
+        # argLine 覆盖会【替换】pom 里的 <argLine>, 所以把原有两个 flag 原样带上
+        # (确认过没有 jacoco 之类靠 @{argLine} 注入的插件, 覆盖是安全的)。
+        # 加 HeapDumpOnOutOfMemoryError: 万一 4g 仍然不够, 下次就有 dump 可查,
+        # 不用再靠猜。
+        env:
+          MAVEN_OPTS: -Xmx1g
+        run: >-
+          mvn -B verify -Dspring.profiles.active=test -pl .
+          -DargLine="-Xmx4g -XX:+EnableDynamicAgentLoading -Xshare:off -XX:+HeapDumpOnOutOfMemoryError -XX:HeapDumpPath=/tmp/surefire-oom.hprof"
       - name: Upload test results
         if: failure()
         uses: actions/upload-artifact@v4

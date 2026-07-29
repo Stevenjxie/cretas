@@ -1219,34 +1219,6 @@ deploy_jar() {
         } > "$UPLOAD_STATUS_DIR/rsync-delta"
     }
 
-    # rsync 会把 "C:/..." 里的 "C:" 解析成【主机名】, 于是变成 remote→remote 传输
-    # 直接失败。Git Bash 下同一个路径的 MSYS 形式 (/c/...) 才是 rsync 能用的。
-    #
-    # 默认路径来自 $HOME 和 $(cd .. && pwd), 在 Git Bash 下天然是 MSYS 形式, 所以
-    # 平时不会踩到。但 CRETAS_JAR_CACHE_DIR 之类的环境变量一旦被设成 Windows 风格
-    # 路径就会中招 —— 而且过去是【静默】的: rsync 失败, 竞速里 scp 赢, 操作者只看到
-    # "胜出: scp" 和一次变慢的部署, 没有任何迹象表明主通道其实挂了。
-    # 两个独立模式而不是 [/\\] 字符组: bash glob 的 bracket 表达式对反斜杠的处理
-    # 有歧义, 实测 [A-Za-z]:[/\\]* 连 "C:/..." 都匹配不到 (而 [A-Za-z]:/* 可以)。
-    # 大小写用 [[:alpha:]] / [:upper:] 而非 [A-Za-z] / A-Z 范围 —— 范围表达式按
-    # locale collation 展开, en_US.UTF-8 下会把小写也算进去 (本仓库 preflight
-    # 曾因此假报 import 无法解析)。
-    rsync_local_path() {
-        local p=$1 drive rest
-        case "$p" in
-            [[:alpha:]]:/*|[[:alpha:]]:\\*)
-                drive=$(printf '%s' "${p%%:*}" | tr '[:upper:]' '[:lower:]')
-                rest=${p#*:}
-                rest=${rest#/}
-                rest=${rest#\\}
-                rest=$(printf '%s' "$rest" | tr '\\' '/')
-                printf '/%s/%s\n' "$drive" "$rest"
-                ;;
-            *)
-                printf '%s\n' "$p"
-                ;;
-        esac
-    }
 
     # === 主通道: rsync 增量传输 ===
     upload_rsync() {
@@ -1256,7 +1228,7 @@ deploy_jar() {
         local ERR_LOG="$UPLOAD_STATUS_DIR/rsync.err"
         local STATS_LOG="$UPLOAD_STATUS_DIR/rsync.stats"
         local SRC
-        SRC=$(rsync_local_path "$JAR_PATH")
+        SRC=$(ssh_local_path "$JAR_PATH")
         if [ "$SRC" != "$JAR_PATH" ]; then
             echo "   [rsync] 源路径已转为 MSYS 形式供 rsync 使用: $JAR_PATH → $SRC"
         fi
@@ -1286,7 +1258,7 @@ deploy_jar() {
         local TMP_FILE="${JAR_NAME}.rsync_z"
         local ERR_LOG="$UPLOAD_STATUS_DIR/rsync_z.err"
         echo "   [rsync+compress] 开始压缩上传..."
-        if rsync -az --compress-level=9 --timeout=60 "$JAR_PATH" "$SERVER:$REMOTE_TMP/$TMP_FILE" 2> "$ERR_LOG"; then
+        if rsync -az --compress-level=9 --timeout=60 "$(ssh_local_path "$JAR_PATH")" "$SERVER:$REMOTE_TMP/$TMP_FILE" 2> "$ERR_LOG"; then
             if ! check_winner; then
                 verify_and_claim "$TMP_FILE" "rsync+compress"
             fi
@@ -1308,7 +1280,7 @@ deploy_jar() {
         local TMP_FILE="${JAR_NAME}.scp"
         local ERR_LOG="$UPLOAD_STATUS_DIR/scp.err"
         echo "   [scp] 开始 SSH 直传..."
-        if scp -o ConnectTimeout=10 -o ServerAliveInterval=30 "$JAR_PATH" "$SERVER:$REMOTE_TMP/$TMP_FILE" 2> "$ERR_LOG"; then
+        if scp -o ConnectTimeout=10 -o ServerAliveInterval=30 "$(ssh_local_path "$JAR_PATH")" "$SERVER:$REMOTE_TMP/$TMP_FILE" 2> "$ERR_LOG"; then
             if ! check_winner; then
                 verify_and_claim "$TMP_FILE" "scp"
             fi

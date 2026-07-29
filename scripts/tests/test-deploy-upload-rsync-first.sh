@@ -84,12 +84,34 @@ grep -Fq '[ -n "$literal" ] || return 0' <<<"$reporter" \
 # ---------------------------------------------- 3. Windows 路径归一化 (行为测试)
 # 第一版写成 [A-Za-z]:[/\\]* , 实测【连 "C:/..." 都匹配不到】—— bash glob 的
 # bracket 表达式对反斜杠有歧义。所以这里必须实测转换结果, 只查"函数存在"没有意义。
-eval "$(awk '/rsync_local_path\(\) \{/,/^    \}/' "$DEPLOY_SCRIPT")"
+COMMON_LIB="$ROOT_DIR/scripts/lib/deploy-common.sh"
+STAGE_SCRIPT="$ROOT_DIR/scripts/deploy/stage-backend-artifact.sh"
+
+# 归一化必须住在共享库里, 而不是某个脚本的私有副本 —— 传输点不止一处。
+grep -Fq 'ssh_local_path()' "$COMMON_LIB" \
+    || fail "ssh_local_path is not in the shared library; each transfer site would need its own copy"
+
+# 每一个把【本地路径】交给 rsync/scp 的调用点都必须归一化。少一个就留一个静默失败点。
+for site in \
+    'rsync -az --stats --timeout=60 "$SRC"' \
+    'rsync -az --compress-level=9 --timeout=60 "$(ssh_local_path "$JAR_PATH")"' \
+    'scp -o ConnectTimeout=10 -o ServerAliveInterval=30 "$(ssh_local_path "$JAR_PATH")"'
+do
+    grep -Fq "$site" "$DEPLOY_SCRIPT" \
+        || fail "transfer site not normalized: $site"
+done
+grep -Fq 'rsync -a --timeout=90 "$(ssh_local_path "$jar_path")"' "$STAGE_SCRIPT" \
+    || fail "stage-backend-artifact.sh still hands a raw local path to rsync"
+# 调用了共享函数就必须真的把库 source 进来, 否则运行时是 command not found。
+grep -Fq 'scripts/lib/deploy-common.sh' "$STAGE_SCRIPT" \
+    || fail "stage-backend-artifact.sh calls ssh_local_path without sourcing the shared library"
+
+eval "$(awk '/^ssh_local_path\(\) \{/,/^\}/' "$COMMON_LIB")"
 
 check_path() {
     local input=$1 expected=$2 got
-    got=$(rsync_local_path "$input")
-    [ "$got" = "$expected" ] || fail "rsync_local_path '$input' → '$got', 期望 '$expected'"
+    got=$(ssh_local_path "$input")
+    [ "$got" = "$expected" ] || fail "ssh_local_path '$input' → '$got', 期望 '$expected'"
 }
 
 check_path 'C:/Users/Steve/x.jar'          '/c/Users/Steve/x.jar'

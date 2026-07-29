@@ -4,6 +4,8 @@ set -euo pipefail
 SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 PROJECT_ROOT=$(cd "$SCRIPT_DIR/../.." && pwd)
 source "$SCRIPT_DIR/release-jar-manifest.sh"
+# ssh_local_path: Windows 盘符路径会被 rsync/scp 当成主机名, 传输直接失败。
+source "$PROJECT_ROOT/scripts/lib/deploy-common.sh"
 
 SERVER=${CRETAS_BACKEND_SERVER:-root@47.100.235.168}
 REMOTE_CACHE_DIR=${CRETAS_REMOTE_JAR_CACHE_DIR:-/www/wwwroot/cretas/release-cache/sha256}
@@ -65,7 +67,7 @@ fi
 
 remote_tmp="$REMOTE_CACHE_DIR/.${jar_sha}.$$"
 ssh -o ConnectTimeout=10 "$SERVER" "mkdir -p '$REMOTE_CACHE_DIR' && chmod 700 '$REMOTE_CACHE_DIR'"
-rsync -a --timeout=90 "$jar_path" "$SERVER:$remote_tmp"
+rsync -a --timeout=90 "$(ssh_local_path "$jar_path")" "$SERVER:$remote_tmp"
 ssh -o ConnectTimeout=10 "$SERVER" "
     set -eu
     actual=\$(sha256sum '$remote_tmp' | awk '{print \$1}')
