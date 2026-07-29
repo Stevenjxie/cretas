@@ -60,6 +60,49 @@ if [[ "$PYPI_INDEX_URL" != "https://mirrors.aliyun.com/pypi/simple" &&
     exit 1
 fi
 
+# >>> smartbi-rsync-helpers
+# rsync 输出可读性修复 (2026-07-29)。
+#
+# 原先每处传输都是 `rsync ... 2>&1 | tail -5`。rsync 的关键错误几乎总在**开头**:
+#   rsync: connection unexpectedly closed (0 bytes received so far)
+#   rsync: change_dir "/xxx" failed: No such file or directory (2)
+#   Permission denied (publickey,password).
+# 后面跟的是重试噪音和 `rsync error: ... (code N) at io.c(...)` 这种只给行号的尾巴。
+# `tail -5` 正好把有信息量的头部砍掉 —— 退出码靠 pipefail 保住了, 所以现象是
+# 「知道失败, 但看不出为什么失败」。
+#
+# 这里把输出落盘, 失败时**先打印头部**, 再补尾部 (两端都留, 中间省略), 并且全程
+# 不经管道 —— 管道 + pipefail 本身就是本次要清掉的另一类静默失效来源。
+RSYNC_LOG_HEAD_LINES="${RSYNC_LOG_HEAD_LINES:-10}"
+RSYNC_LOG_TAIL_LINES="${RSYNC_LOG_TAIL_LINES:-5}"
+
+# run_rsync <人类可读标签> <rsync 参数...>
+# 成功: 打印末尾若干行 (与旧的 `| tail -5` 观感一致, -az 无 -v 时通常为空)。
+# 失败: 打印头部 (+ 需要时补尾部) 到 stderr, 并原样返回 rsync 的退出码。
+run_rsync() {
+    local label=$1
+    shift
+    local out_log status=0 total
+    out_log="$(mktemp "${TMPDIR:-/tmp}/smartbi-rsync.XXXXXX")"
+    rsync "$@" >"$out_log" 2>&1 || status=$?
+    total="$(wc -l <"$out_log")"
+    total="${total//[[:space:]]/}"
+    if [ "$status" -ne 0 ]; then
+        echo "[rsync] ✗ $label 失败 (exit $status)。输出头部 (rsync 的真正错误在这里):" >&2
+        head -n "$RSYNC_LOG_HEAD_LINES" "$out_log" >&2
+        if [ "${total:-0}" -gt $((RSYNC_LOG_HEAD_LINES + RSYNC_LOG_TAIL_LINES)) ]; then
+            echo "[rsync] ... (共 $total 行, 中间省略) ..." >&2
+            tail -n "$RSYNC_LOG_TAIL_LINES" "$out_log" >&2
+        fi
+        rm -f -- "$out_log"
+        return "$status"
+    fi
+    tail -n "$RSYNC_LOG_TAIL_LINES" "$out_log"
+    rm -f -- "$out_log"
+    return 0
+}
+# <<< smartbi-rsync-helpers
+
 # 参数解析
 DEPLOY_ENV="prod"
 MIGRATION_TARGET=""
@@ -196,12 +239,12 @@ sync_migration_release_bundle() {
     prepare_remote_migration_bundle
     # The SHA-scoped narrow directories plus --delete make the remote input set
     # byte-for-byte derived from this exact main, never a union with stale SQL.
-    rsync -az --delete --timeout=60 \
+    run_rsync "migration SQL bundle" -az --delete --timeout=60 \
         "$PROJECT_ROOT/backend/python/smartbi/database/migrations/" \
-        "$SERVER:$REMOTE_MIGRATION_DIR/" 2>&1 | tail -5
-    rsync -az --delete --timeout=60 \
+        "$SERVER:$REMOTE_MIGRATION_DIR/"
+    run_rsync "migration runner scripts" -az --delete --timeout=60 \
         "$PROJECT_ROOT/scripts/migrations/" \
-        "$SERVER:$REMOTE_MIGRATION_SCRIPT_DIR/" 2>&1 | tail -5
+        "$SERVER:$REMOTE_MIGRATION_SCRIPT_DIR/"
     ssh "$SERVER" "chmod +x \
         '$REMOTE_MIGRATION_SCRIPT_DIR/apply-smartbi-migrations.sh' \
         '$REMOTE_MIGRATION_SCRIPT_DIR/backfill-applied.sh' \
@@ -239,7 +282,7 @@ fi
 
 # 2. 创建远程目录
 log "INFO" "[2/5] 创建远程目录..."
-ssh $SERVER "mkdir -p $REMOTE_DIR"
+ssh "$SERVER" "mkdir -p $REMOTE_DIR"
 
 # 3. 同步文件到服务器
 log "INFO" "[3/5] 同步文件到服务器 (rsync 增量传输)..."
@@ -254,23 +297,27 @@ log "INFO" "[3/5] 同步文件到服务器 (rsync 增量传输)..."
 # ⛔ 绝不能加 --delete-excluded —— 那会把上面这些运行时文件一起删掉。
 # 用 --delete-after 而不是 --delete: 传输中途失败时不会出现"旧文件已删、新文件没到"
 # 的空窗, 删除只在全部传完之后发生。
-rsync -az --delete-after --timeout=120 \
+#
+# 路径加引号 (2026-07-29): 原先 `$LOCAL_DIR/ $SERVER:$REMOTE_DIR/` 裸写, 一旦
+# 任一路径含空格就会被拆成多个 rsync 参数, 静默传到错误的目标目录。当前取值
+# 不含空格所以没出过事, 但这是纯粹的运气, 不是设计。
+run_rsync "backend/python 应用代码" -az --delete-after --timeout=120 \
     --exclude='__pycache__' --exclude='*.pyc' --exclude='.env' \
     --exclude='smartbi.log' --exclude='*.xlsx' --exclude='*.png' \
     --exclude='venv*' --exclude='python-services.log' \
     --exclude='python-prod.log' --exclude='python-test.log' \
-    $LOCAL_DIR/ $SERVER:$REMOTE_DIR/
+    "$LOCAL_DIR/" "$SERVER:$REMOTE_DIR/"
 
 # 3b. 同步 ops scripts 到 /www/wwwroot/cretas/scripts/ (task #23 — 2026-05-07).
 # Earlier: deploy script only synced backend/python/, leaving t6-dryrun-compare.sh
 # and baseline-java-metrics.sh stale on server until manual scp. Now any change
 # to scripts/t6-* or scripts/baseline-* gets synced as part of the standard deploy.
 log "INFO" "[3b/5] 同步 ops scripts (T6 dryrun + Java baseline)..."
-rsync -az --timeout=60 \
+run_rsync "ops scripts (T6 dryrun + Java baseline)" -az --timeout=60 \
     "$PROJECT_ROOT/scripts/t6-dryrun-compare.sh" \
     "$PROJECT_ROOT/scripts/baseline-java-metrics.sh" \
     "$PROJECT_ROOT/scripts/phase2a/t6-in-scope-endpoints.txt" \
-    "$SERVER:/www/wwwroot/cretas/scripts/" 2>&1 | tail -5
+    "$SERVER:/www/wwwroot/cretas/scripts/"
 ssh "$SERVER" "chmod +x /www/wwwroot/cretas/scripts/t6-dryrun-compare.sh /www/wwwroot/cretas/scripts/baseline-java-metrics.sh"
 
 # 3c. 同步 多域学习 毕业 CLI 到 code/scripts/ (2026-06-01 — self-learn promote loop).
@@ -282,19 +329,19 @@ ssh "$SERVER" "chmod +x /www/wwwroot/cretas/scripts/t6-dryrun-compare.sh /www/ww
 # (generalized multi-domain). Remove the stale old CLI from the server too.
 log "INFO" "[3c/5] 同步 多域学习 毕业 CLI..."
 ssh "$SERVER" "mkdir -p /www/wwwroot/cretas/code/scripts && rm -f /www/wwwroot/cretas/code/scripts/promote_field_mappings.py"
-rsync -az --timeout=60 \
+run_rsync "多域学习毕业 CLI" -az --timeout=60 \
     "$PROJECT_ROOT/scripts/promote_learnings.py" \
-    "$SERVER:/www/wwwroot/cretas/code/scripts/" 2>&1 | tail -5
+    "$SERVER:/www/wwwroot/cretas/code/scripts/"
 
 # 3d. Keep active cron consumers on the same atomically selected runtime as
 # the production service. Host-local crontab entries continue to own schedule
 # and secrets; only the tracked scripts are synchronized.
 log "INFO" "[3d/5] 同步 Python 定时任务入口..."
 ssh "$SERVER" "mkdir -p /www/wwwroot/cretas/code/scripts/cron"
-rsync -az --timeout=60 \
+run_rsync "Python 定时任务入口" -az --timeout=60 \
     "$PROJECT_ROOT/scripts/cron/restaurant-ai-eval.sh" \
     "$PROJECT_ROOT/scripts/cron/refresh-demo-rest.sh" \
-    "$SERVER:/www/wwwroot/cretas/code/scripts/cron/" 2>&1 | tail -5
+    "$SERVER:/www/wwwroot/cretas/code/scripts/cron/"
 ssh "$SERVER" "chmod +x \
     /www/wwwroot/cretas/code/scripts/cron/restaurant-ai-eval.sh \
     /www/wwwroot/cretas/code/scripts/cron/refresh-demo-rest.sh"
@@ -453,7 +500,11 @@ if [ -L "$current_link" ]; then
     target="$(readlink -f "$current_link")"
 else
     exec_start="$(systemctl show cretas-python -p ExecStart --value)"
-    runtime_python="$(printf '%s\n' "$exec_start" | grep -oE "${remote_dir}/venv[[:alnum:]_-]+/bin/python" | head -n 1 || true)"
+    # here-string 而不是 `printf | grep | head`: 管道里 head 读满一行就退出并关掉读端,
+    # grep/printf 死于 SIGPIPE, 在 `set -o pipefail` 下把整条流水线判为失败。
+    # `grep -m 1` 自己就在首个命中行停下, 再截第一行 = 旧的 `| head -n 1` 语义。
+    runtime_python="$(grep -m 1 -oE -- "${remote_dir}/venv[[:alnum:]_-]+/bin/python" <<<"$exec_start" || true)"
+    runtime_python="${runtime_python%%$'\n'*}"
     if [ -z "$runtime_python" ]; then
         echo "[ERROR] unable to determine current production Python runtime" >&2
         exit 1
@@ -565,7 +616,12 @@ install_if_changed \
 
 systemctl daemon-reload
 for unit in cretas-python cretas-gold-etl-refresh cretas-corpus-refresh; do
-    if ! systemctl show "$unit" -p ExecStart --value | grep -Fq '/venv-current/bin/python'; then
+    # 先落变量再 here-string 喂给 grep: 旧的 `systemctl show ... | grep -Fq` 在
+    # `set -o pipefail` 下, grep -q 一命中就退出 → systemctl 死于 SIGPIPE(141) →
+    # 整条流水线判失败 → **命中被报告成没命中**, 方向是"该拒的放行"的反面: 这里是
+    # 契约明明满足却误判为不满足。systemctl 本身失败仍然照旧中止 (赋值 + set -e)。
+    unit_exec_start="$(systemctl show "$unit" -p ExecStart --value)"
+    if ! grep -Fq -- '/venv-current/bin/python' <<<"$unit_exec_start"; then
         echo "[ERROR] $unit did not load the venv-current runtime contract" >&2
         exit 1
     fi
@@ -680,10 +736,13 @@ restart_prod_via_systemd() {
 verify_prod_business_health() {
     ssh "$SERVER" bash -s <<'BUSINESS_HEALTH'
 set -euo pipefail
+# here-string 而不是 `printf | grep -Fq`: grep -q 命中即退出并关闭读端, printf 死于
+# SIGPIPE(141), pipefail 把命中判成失败 —— 健康检查会在响应体变大时开始误报不健康,
+# 进而触发不该发生的生产回滚。响应体现在 < 64KB 管道缓冲纯属侥幸。
 health_body="$(curl -fsS --max-time 10 http://127.0.0.1:8083/health)"
-printf '%s' "$health_body" | grep -Fq '"postgres":"connected"'
+grep -Fq -- '"postgres":"connected"' <<<"$health_body"
 classifier_body="$(curl -fsS --max-time 20 http://127.0.0.1:8083/api/classifier/health)"
-printf '%s' "$classifier_body" | grep -Fq '"model_available":true'
+grep -Fq -- '"model_available":true' <<<"$classifier_body"
 BUSINESS_HEALTH
 }
 
@@ -772,15 +831,20 @@ current_link="$remote_dir/venv-current"
 systemctl is-active --quiet cretas-python
 [ "$(systemctl show cretas-python -p NRestarts --value)" = "0" ]
 
+# 以下所有匹配都改用 here-string 喂 grep, 不再经管道 —— 见 BUSINESS_HEALTH 处的说明。
+# 这段是发布的最后一道闸: 误判为"契约不满足"会直接触发生产回滚, 所以必须消除
+# 「输入一变大就翻转答案」这种体积依赖。
 health_body="$(curl -fsS --max-time 10 http://127.0.0.1:8083/health)"
-printf '%s' "$health_body" | grep -Fq '"postgres":"connected"'
+grep -Fq -- '"postgres":"connected"' <<<"$health_body"
 classifier_body="$(curl -fsS --max-time 20 http://127.0.0.1:8083/api/classifier/health)"
-printf '%s' "$classifier_body" | grep -Fq '"model_available":true'
+grep -Fq -- '"model_available":true' <<<"$classifier_body"
 
 pid="$(systemctl show cretas-python -p MainPID --value)"
-tr '\0' ' ' <"/proc/$pid/cmdline" | grep -Fq '/venv-current/bin/python'
+main_cmdline="$(tr '\0' ' ' <"/proc/$pid/cmdline")"
+grep -Fq -- '/venv-current/bin/python' <<<"$main_cmdline"
 for unit in cretas-python cretas-gold-etl-refresh cretas-corpus-refresh; do
-    systemctl show "$unit" -p ExecStart --value | grep -Fq '/venv-current/bin/python'
+    unit_exec_start="$(systemctl show "$unit" -p ExecStart --value)"
+    grep -Fq -- '/venv-current/bin/python' <<<"$unit_exec_start"
 done
 grep -Fq 'venv-current/bin/activate' \
     /www/wwwroot/cretas/code/scripts/cron/restaurant-ai-eval.sh
