@@ -37,7 +37,12 @@ async def sync_platform(pool, adapter: PlatformAdapter, *, factory_id: str,
     每页「先写入、后推进游标」: 写入是幂等的(平台单号唯一键), 崩在中间下轮重拉
     只会命中冲突不会重复计数; 反过来先推进游标就会漏数据。
     """
-    cursor = await read_cursor(pool, factory_id, adapter.platform)
+    try:
+        cursor = await read_cursor(pool, factory_id, adapter.platform)
+    except Exception as exc:  # noqa: BLE001 — 统一成 PlatformSyncError 供上层隔离
+        raise PlatformSyncError(
+            f"[{adapter.platform}] 读游标失败: {exc}"
+        ) from exc
     total = 0
     for _ in range(max_pages):
         try:
@@ -55,7 +60,12 @@ async def sync_platform(pool, adapter: PlatformAdapter, *, factory_id: str,
                 ) from exc
             total += written
         cursor = page.next_cursor
-        await write_cursor(pool, factory_id, adapter.platform, cursor)
+        try:
+            await write_cursor(pool, factory_id, adapter.platform, cursor)
+        except Exception as exc:  # noqa: BLE001
+            raise PlatformSyncError(
+                f"[{adapter.platform}] 推进游标失败 cursor={cursor}: {exc}"
+            ) from exc
         if not page.has_more:
             break
     else:
@@ -77,4 +87,7 @@ async def sync_all(pool, adapters, *, factory_id: str, write_orders: WriteOrders
         except PlatformSyncError as exc:
             logger.error("[platform-sync] %s", exc)
             results[adapter.platform] = f"ERROR: {exc}"
+        except Exception as exc:  # noqa: BLE001 — 失败隔离是硬契约, 兜底不放过任何异常
+            logger.exception("[platform-sync] %s 未预期异常", adapter.platform)
+            results[adapter.platform] = f"ERROR: 未预期异常 {exc}"
     return results
