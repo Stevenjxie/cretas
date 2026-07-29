@@ -2654,19 +2654,15 @@ ssh "$SERVER" "cd $REMOTE_DIR && \
     /www/wwwroot/mock-platform/venv311/bin/pip install -q -r requirements.txt && \
     systemctl restart cretas-mock-platform"
 
-echo "[5/6] 装 nginx 反代 /mock/ ..."
-# ⚠️ 模拟器绑 127.0.0.1:9200 不对外(见 systemd unit 注释)。139 的阿里云安全组
-#    只放行 80/443/8086, 自开端口一律 TIMEOUT, 所以对外出口只能是已有的 nginx:80。
-#    proxy_pass 末尾带 / => /mock/keruyun/... 转成 /keruyun/...(剥掉前缀)。
-ssh "$SERVER" "cat > /etc/nginx/conf.d/mock-platform.conf <<'NGINX'
-location /mock/ {
-    proxy_pass http://127.0.0.1:9200/;
-    proxy_set_header Host \$host;
-    proxy_set_header X-Real-IP \$remote_addr;
-    proxy_read_timeout 60s;
-}
-NGINX
-nginx -t && nginx -s reload"
+echo "[5/7] 装 nginx 反代 /mock/ ..."
+# ⚠️ 139 是**宝塔** nginx: 没有 /etc/nginx, 配置在 /www/server/nginx/,
+#    vhost 在 /www/server/panel/vhost/nginx/*.conf 且由 nginx.conf 在 **http 层**
+#    include —— 所以 location 不能单独扔一个文件进那个目录(那是 server 上下文)。
+#    正确做法: location 体写进自己的 snippet 文件, 再往接管裸 IP:80 的
+#    0.default.conf 里幂等插一行 include。⛔ 那是共享生产 vhost, 必须
+#    锚在最后一个顶格 } 上 + nginx -t 失败回滚, 详见脚本注释与实现。
+#    (以上每一条都实测过; 早前写 /etc/nginx/conf.d 的版本在 139 上会 cat 失败,
+#     而后面的 `nginx -t && nginx -s reload` 照样 exit 0 => 全绿但零反代。)
 
 echo "[6/6] 健康检查..."
 # ⚠️ 判据必须是 generator=running, 不能只看 status=ok ——
@@ -2795,13 +2791,13 @@ Expected: 返回真实营收数字，且与上一步 `SELECT SUM(net_amount)` �
 在 `.claude/skills/server-operations/SKILL.md` 的「内容分布 — 禁止搞混」表里加一行：
 
 ```markdown
-| **餐饮平台模拟器** | **139** (网关) | `/www/wwwroot/mock-platform/` | `139.196.165.140:9200` |
+| **餐饮平台模拟器** | **139** (网关) | `/www/wwwroot/mock-platform/` | `139.196.165.140/mock/` (nginx 反代 → 127.0.0.1:9200) |
 ```
 
 并在「本地目录 → 服务器路径映射」表加：
 
 ```markdown
-| `mock-platform/` | **139** (旧) | `/www/wwwroot/mock-platform/code/` |
+| `mock-platform/` | **139** (网关) | `/www/wwwroot/mock-platform/code/` |
 ```
 
 - [ ] **Step 11: Commit**
@@ -2820,7 +2816,12 @@ git commit -m "feat(mock-platform): 139 部署脚本 + systemd unit + 运维文�
 1. `cd mock-platform && python -m pytest tests/ -v` 全绿，其中**隔离测试必须过**
 2. `cd backend/python && python -m pytest tests/test_platform_*.py tests/test_keruyun_adapter.py -v` 全绿
 3. 139 上 `systemctl is-active cretas-mock-platform` 为 `active`
-4. `curl http://139.196.165.140:9200/healthz` 返回 `{"status":"ok"}`
+4. **从 47 上**跑 `curl http://139.196.165.140/mock/healthz`，返回里含 `"generator":"running"`
+   - ⚠️ 端口是 **80 的 `/mock/`**，不是 9200：9200 绑 127.0.0.1，且 47→139:9200 实测 TIMEOUT
+   - ⚠️ 判据是 **`generator: running`**，不是 `status: ok`：没挂生成器时那一档也返回
+     `{"status":"ok","generator":"not_armed"}`，用 `status:ok` 会在一个不产数据的服务上通过
+   - ⚠️ 必须**从 47 发起**：从开发机 curl 通只证明"互联网上某处能访问"，
+     证明不了拉取端能访问，而 47→139 恰是实测会出问题的方向
 5. 营业时段内隔 2 分钟查两次 `fact_pos_transaction`，`MOCK_REST` 的行数在增长
 6. 对 `MOCK_REST` 问「本月全部门店营收多少」，返回的数字与 `SELECT SUM(net_amount)` 对得上
 7. 用错误签名调模拟端 API，返回 `AUTH_SIGN_INVALID`（不是 500，也不是放行）

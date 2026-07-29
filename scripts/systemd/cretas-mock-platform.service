@@ -11,6 +11,9 @@ EnvironmentFile=/www/wwwroot/mock-platform/.env
 #    也不通。对外出口只能是 139 已有的 nginx:80, 由它反代 /mock/ 到这里。
 #    改成 0.0.0.0 不会让外部多通一个端口, 只会白白把服务暴露给同机其它进程。
 ExecStart=/www/wwwroot/mock-platform/venv311/bin/python -m mock_platform.cli serve --host 127.0.0.1 --port 9200
+# append: 让 stdout 变成普通文件, Python 会按块缓冲 —— 服务刚起来时
+# tail 日志会是空的, 正好赶上排查最需要它的时候。
+Environment=PYTHONUNBUFFERED=1
 Restart=always
 RestartSec=10
 StandardOutput=append:/www/wwwroot/mock-platform/mock-platform.log
