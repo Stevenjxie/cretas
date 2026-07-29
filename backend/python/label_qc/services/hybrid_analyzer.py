@@ -56,7 +56,13 @@ logger = logging.getLogger(__name__)
 
 SCREENING_VERSION = "yolo-screen-v1+vl-review"
 REVIEW_PROMPT_VERSION = "label-tray-review-v1"
-MAX_CONCURRENT_REVIEWS = 2
+# Reviews are independent single-tray calls, so they parallelise cleanly. The
+# whole-photo tiling path uses 2 for 8 tiles (4 rounds); 4 here keeps a similar
+# peak load while halving the rounds for a typical 7-suspect photo.
+DEFAULT_CONCURRENT_REVIEWS = 4
+# Cap VL work per photo. Beyond this the screening verdict stands on its own --
+# a human reviews every photo anyway, so extra VL calls buy ordering, not safety.
+DEFAULT_MAX_REVIEW_TRAYS = 8
 REVIEW_TIMEOUT_SECONDS = 30.0
 REVIEW_CROP_WIDTH = 768
 REVIEW_PAD_RATIO = 0.25
@@ -103,6 +109,13 @@ def _env_flag(name: str, default: bool) -> bool:
 def _env_float(name: str, default: float) -> float:
     try:
         return float(os.getenv(name, ""))
+    except (TypeError, ValueError):
+        return default
+
+
+def _env_int(name: str, default: int, low: int, high: int) -> int:
+    try:
+        return max(low, min(high, int(os.getenv(name, ""))))
     except (TypeError, ValueError):
         return default
 
@@ -167,6 +180,12 @@ class HybridLabelQcAnalyzer:
             label_conf=_env_float("LABEL_QC_LABEL_CONF", 0.25),
         )
         self._review_enabled = _env_flag("LABEL_QC_VL_REVIEW", True)
+        self._review_concurrency = _env_int(
+            "LABEL_QC_REVIEW_CONCURRENCY", DEFAULT_CONCURRENT_REVIEWS, 1, 8
+        )
+        self._max_review_trays = _env_int(
+            "LABEL_QC_MAX_REVIEW_TRAYS", DEFAULT_MAX_REVIEW_TRAYS, 1, 40
+        )
 
     # ------------------------------------------------------------------ VL review
     async def _review_tray(
@@ -287,14 +306,23 @@ class HybridLabelQcAnalyzer:
         screening = await asyncio.to_thread(screen_image, image, self._models, self._params)
         suspects = screening.suspects
 
+        # Review the least certain trays first, and cap how many go to the VL:
+        # BOTH_MISSING is the most likely screening artefact, and a low tray
+        # confidence means the crop itself is shakier.
+        ordered = sorted(
+            suspects,
+            key=lambda t: (t.verdict != VERDICT_MISSING_BOTH, t.confidence),
+        )
+        to_review = ordered[: self._max_review_trays] if self._review_enabled else []
+        screen_only = [t for t in suspects if t not in to_review]
+
         reviews: List[Tuple[TrayResult, Optional[Dict[str, Any]], str]] = []
-        if suspects and self._review_enabled:
-            semaphore = asyncio.Semaphore(MAX_CONCURRENT_REVIEWS)
+        if to_review:
+            semaphore = asyncio.Semaphore(self._review_concurrency)
             reviews = list(await asyncio.gather(
-                *(self._review_tray(image, tray, semaphore) for tray in suspects)
+                *(self._review_tray(image, tray, semaphore) for tray in to_review)
             ))
-        else:
-            reviews = [(tray, None, "screen-only") for tray in suspects]
+        reviews += [(tray, None, "screen-only") for tray in screen_only]
 
         candidates: List[Dict[str, Any]] = []
         models_used = {f"yolo:{SCREENING_VERSION}"}
@@ -303,11 +331,13 @@ class HybridLabelQcAnalyzer:
         for tray, review, model_name in reviews:
             models_used.add(model_name)
             if review is None:
-                # Review unavailable: keep the screening verdict rather than
+                # Either the review failed, or this tray was past the per-photo
+                # review cap. Either way keep the screening verdict rather than
                 # silently clearing a suspect tray.
                 unreviewed += 1
                 verdict, confidence = tray.verdict, 0.5
-                evidence = "初筛判定，视觉复核未完成"
+                evidence = ("初筛判定，超出本张复核上限" if model_name == "screen-only"
+                            else "初筛判定，视觉复核未完成")
             else:
                 verdict, confidence = review["verdict"], review["confidence"]
                 evidence = review["evidence"] or "视觉复核"
@@ -344,10 +374,13 @@ class HybridLabelQcAnalyzer:
             candidate["candidateId"] = f"ai-{index}"
 
         payload = self._screening_payload(screening)
-        payload["reviewed"] = len(reviews)
+        payload["reviewed"] = len(to_review)
         payload["confirmedByVl"] = confirmed
         payload["rejectedByVl"] = rejected
         payload["unreviewed"] = unreviewed
+        payload["reviewCap"] = self._max_review_trays
+        payload["reviewConcurrency"] = self._review_concurrency
+        payload["skippedByCap"] = len(screen_only)
 
         return {
             "verdict": "SUSPECTED" if candidates else "NO_DEFECT_FOUND",
@@ -358,7 +391,7 @@ class HybridLabelQcAnalyzer:
             "imageHeight": screening.image_height,
             # Kept for contract compatibility: downstream reads this as "how many
             # model calls backed this result".
-            "tilesAnalyzed": len(reviews),
+            "tilesAnalyzed": len(to_review),
             "screeningMode": "yolo-screen+vl-review" if self._review_enabled else "yolo-screen-only",
             "screening": payload,
         }
