@@ -87,12 +87,16 @@ describe('ProcessDataTable workflow port reporting rows', () => {
       expect(outputLine.findComponent({ name: 'ElSelect' }).exists()).toBe(false);
       expect(outputLine.text()).toContain('副产回收单价');
     }
+    // 作业时间已并进产出行, 字段名由表头统一给出; 每个控件必须自带 aria-label ——
+    // 否则表格化之后屏幕阅读器只会念到一串没有名字的输入框。
     for (const executionLine of wrapper.findAll('[data-testid="workflow-execution-line"]')) {
-      expect(executionLine.text()).toContain('开始时间');
-      expect(executionLine.text()).toContain('结束时间');
-      expect(executionLine.text()).toContain('人数');
-      expect(executionLine.text()).toContain('总工时');
+      const labels = executionLine.findAll('[aria-label]').map((node) => node.attributes('aria-label'));
+      expect(labels.some((label) => label?.endsWith('开始时间'))).toBe(true);
+      expect(labels.some((label) => label?.endsWith('结束时间'))).toBe(true);
+      expect(labels.some((label) => label?.endsWith('人数'))).toBe(true);
+      expect(executionLine.text()).toContain('h');
     }
+    expect(wrapper.text()).toContain('总工时');
   });
 
   it('submits production date, two input totals and per-output time/byproduct payload without a cartesian matrix', async () => {

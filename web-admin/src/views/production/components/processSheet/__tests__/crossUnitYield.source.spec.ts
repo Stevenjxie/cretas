@@ -17,12 +17,21 @@ const source = readFileSync(
   'utf8',
 );
 
+/** 产出块已抽成共享子组件 (卡片/表格两种视图共用), 说明条与「去设置」按钮落在这里。 */
+const outputTableSource = readFileSync(
+  resolve(process.cwd(), 'src/views/production/components/processSheet/ProcessOutputTable.vue'),
+  'utf8',
+);
+
 describe('cross-unit yield contract', () => {
   it('算不出出成率时说明原因，而不是只留一个「—」', () => {
     expect(source).toContain('function outputLineYieldBlocker');
     // 文案要点名物料与两端单位，让人知道该去补哪一个
     expect(source).toContain('需要先设置「${line.materialName}」的每${outputUnit}重量');
-    expect(source).toContain('outputLineYieldBlocker(row, o)');
+    // 父组件把结果算进视图模型, 子组件负责显示 —— 两种视图因此不可能只有一边有说明条
+    expect(source).toContain('blocker: outputLineYieldBlocker(row, line),');
+    expect(outputTableSource).toContain('v-if="view.blocker"');
+    expect(outputTableSource).toContain('{{ view.blocker }}');
   });
 
   it('同单位不提示 —— 只有两端单位不同才需要重量桥', () => {
@@ -35,7 +44,9 @@ describe('cross-unit yield contract', () => {
   });
 
   it('「去设置」就地弹窗，只改每单位重量这一个字段', () => {
-    expect(source).toContain('@click="openSpecDialog(o)"');
+    // 按钮在子组件里, 事件冒到父组件打开弹窗 —— 两段都要在, 少一段入口就断了
+    expect(outputTableSource).toContain(`emit('open-spec', view.line)`);
+    expect(source).toContain('@open-spec="openSpecDialog"');
     expect(source).toContain('v-model="specDialog.visible"');
     // 只提交 gramsPerUnit，不带整份产品表单
     expect(source).toContain('gramsPerUnit: draft.gramsPerUnit,');
