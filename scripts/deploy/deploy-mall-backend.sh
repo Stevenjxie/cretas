@@ -2,7 +2,7 @@
 # ============================================================
 # Mall 后端部署脚本 v1.0
 # 与 deploy-backend.sh 相同的 winner 竞速上传模式
-# 用法: ./deploy-mall-backend.sh
+# 用法: ./scripts/deploy/deploy-mall-backend.sh  (路径自解析, 从任意 cwd 调用均可)
 # ============================================================
 set -e
 # pipefail 是刚性要求: Step 1 之外仍有 `md5sum | cut` 等管道, 没有它时管道退出码只取
