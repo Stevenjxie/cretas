@@ -24,6 +24,7 @@ description: cretas 服务器运维规范(47.100.235.168 主服务器 + 139.196.
 | **Web-Admin 前端** | **139** (网关) | `/www/wwwroot/web-admin/` | `139.196.165.140:8086` |
 | **Showcase 展示站** | **139** (网关) | `/www/wwwroot/showcase/cretaceousfuture/` | `www.cretaceousfuture.com` |
 | Nginx 网关 | **139** (网关) | 宝塔 Nginx | API→47, Python→47 |
+| **餐饮平台模拟器** | **139** (网关) | `/www/wwwroot/mock-platform/` | `139.196.165.140/mock/` |
 
 **关键规则**: Showcase 相关文件（HTML、截图、CSS）只部署到 **139**，不要传到 47。
 
@@ -35,6 +36,13 @@ description: cretas 服务器运维规范(47.100.235.168 主服务器 + 139.196.
 | `backend/java/cretas-api/` | **47** (新) | `/www/wwwroot/cretas/` |
 | `backend/python/` | **47** (新) | `/www/wwwroot/cretas/code/backend/python/` |
 | `web-admin/` | **139** (网关) | `/www/wwwroot/web-admin/` |
+| `mock-platform/` | **139** (网关) | `/www/wwwroot/mock-platform/code/` |
+
+**餐饮平台模拟器 (2026-07-29)**: 假 POS 开放平台，**只上 139，绝不上 47** —— 它扮演「外部世界」，
+放到 47 就破坏了隔离前提。绑 `127.0.0.1:9200` 不对外，由 139 已有 nginx 从 80 反代 `/mock/`
+（139 的阿里云安全组只放行 80/443/8086，自开端口从 47 打过去一律 TIMEOUT）。
+部署：`./scripts/deploy/deploy-mock-platform.sh`；服务名 `cretas-mock-platform`。
+健康判据用 `generator: running`，**不能只看 `status: ok`** —— 生成器没挂时那一档也是 ok。
 
 **`platform/` 目录说明**: 包含 www.cretaceousfuture.com 网站的全部内容 — 主站页面 + showcase 演示子页 (factorybi-example, client-request-example, restaurantbi-example)。
 

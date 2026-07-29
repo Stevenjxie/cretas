@@ -2604,7 +2604,9 @@ After=network.target
 Type=simple
 WorkingDirectory=/www/wwwroot/mock-platform/code
 EnvironmentFile=/www/wwwroot/mock-platform/.env
-ExecStart=/www/wwwroot/mock-platform/venv311/bin/python -m mock_platform.cli serve --port 9200
+# ⚠️ 绑 127.0.0.1 不对外: 139 的阿里云安全组(账号 B)只放行 80/443/8086,
+#    47→139 实测 9200/8085/8082 全 TIMEOUT。对外由 139 已有 nginx 从 80 反代 /mock/。
+ExecStart=/www/wwwroot/mock-platform/venv311/bin/python -m mock_platform.cli serve --host 127.0.0.1 --port 9200
 Restart=always
 RestartSec=10
 StandardOutput=append:/www/wwwroot/mock-platform/mock-platform.log
@@ -2652,15 +2654,39 @@ ssh "$SERVER" "cd $REMOTE_DIR && \
     /www/wwwroot/mock-platform/venv311/bin/pip install -q -r requirements.txt && \
     systemctl restart cretas-mock-platform"
 
-echo "[5/5] 健康检查..."
+echo "[5/6] 装 nginx 反代 /mock/ ..."
+# ⚠️ 模拟器绑 127.0.0.1:9200 不对外(见 systemd unit 注释)。139 的阿里云安全组
+#    只放行 80/443/8086, 自开端口一律 TIMEOUT, 所以对外出口只能是已有的 nginx:80。
+#    proxy_pass 末尾带 / => /mock/keruyun/... 转成 /keruyun/...(剥掉前缀)。
+ssh "$SERVER" "cat > /etc/nginx/conf.d/mock-platform.conf <<'NGINX'
+location /mock/ {
+    proxy_pass http://127.0.0.1:9200/;
+    proxy_set_header Host \$host;
+    proxy_set_header X-Real-IP \$remote_addr;
+    proxy_read_timeout 60s;
+}
+NGINX
+nginx -t && nginx -s reload"
+
+echo "[6/6] 健康检查..."
+# ⚠️ 判据必须是 generator=running, 不能只看 status=ok ——
+#    生成器被 GC / 抛异常退出时 healthz 会回 {"status":"degraded","generator":"stopped"},
+#    而 not_armed 那一档也是 status=ok。用 ok 做验收会在死掉的生成器上通过。
 for i in $(seq 1 15); do
-    if ssh "$SERVER" "curl -fsS -m 3 http://localhost:9200/healthz >/dev/null 2>&1"; then
-        echo "✅ 模拟器健康"
-        exit 0
+    if ssh "$SERVER" "curl -fsS -m 3 http://localhost:9200/healthz 2>/dev/null" \
+         | grep -q '"generator":"running"'; then
+        echo "✅ 模拟器健康 (生成器在跑)"
+        # 再验一次公网路径, 否则 47 拉不到但本地健康检查照样绿
+        ssh "$SERVER" "curl -fsS -m 5 http://139.196.165.140/mock/healthz" \
+          | grep -q '"generator":"running"' \
+          && { echo "✅ nginx /mock/ 反代通"; exit 0; }
+        echo "❌ 本地 9200 健康但 nginx /mock/ 不通"
+        exit 1
     fi
     sleep 2
 done
-echo "❌ 健康检查失败"
+echo "❌ 健康检查失败 (generator 未 running)"
+ssh "$SERVER" "curl -s -m 3 http://localhost:9200/healthz; tail -30 /www/wwwroot/mock-platform/mock-platform.log"
 exit 1
 ```
 
@@ -2713,7 +2739,7 @@ Expected: 日志 `[backfill] 造出 60000 单，覆盖过去 30 天`（10 店 ×
 PLATFORM_SYNC_ENABLED=1
 PLATFORM_SYNC_FACTORY_ID=MOCK_REST
 PLATFORM_SYNC_INTERVAL_SECONDS=60
-PLATFORM_MOCK_BASE_URL=http://139.196.165.140:9200
+PLATFORM_MOCK_BASE_URL=http://139.196.165.140/mock
 PLATFORM_KERUYUN_APP_KEY=<Step 3 的值>
 PLATFORM_KERUYUN_APP_SECRET=<Step 3 的值>
 PLATFORM_CALLBACK_SECRET=<Step 3 的 MOCK_CALLBACK_SECRET>
