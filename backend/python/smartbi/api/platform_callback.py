@@ -53,8 +53,15 @@ def register_wakeup(event: Optional["asyncio.Event"]) -> None:
 
 
 def _signal_wakeup() -> None:
-    if _WAKEUP is not None:
+    if _WAKEUP is None:
+        return
+    try:
         _WAKEUP.set()
+    except Exception:
+        # 唤醒是「锦上添花」: 走到这里请求已经验签通过、nonce 也消费了,
+        # 再把它翻成 500 只会让上游以为回调失败而重试(重试还会撞重放判定)。
+        # 周期轮询本来就是兜底, 唤醒失败最坏就是退回到轮询的延迟。
+        logger.warning("[callback] 唤醒拉取循环失败, 本次回落到周期轮询", exc_info=True)
 
 
 class CallbackRejected(RuntimeError):

@@ -556,36 +556,42 @@ async def lifespan(app: FastAPI):
                     # 只在 leader 上注册 —— 拉取循环只在 leader 上跑。
                     wakeup = _asyncio_p.Event()
                     _platform_callback_mod.register_wakeup(wakeup)
-                    async with _httpx_p.AsyncClient() as client:
-                        adapters = [KeruyunAdapter(
-                            base_url,
-                            os.getenv("PLATFORM_KERUYUN_APP_KEY", ""),
-                            os.getenv("PLATFORM_KERUYUN_APP_SECRET", ""),
-                            client,
-                        )]
-                        while True:
-                            try:
-                                pool = await _get_pool_p()
-                                results = await sync_all(pool, adapters,
-                                                         factory_id=factory_id,
-                                                         write_orders=write_orders)
-                                logger.info("[platform-sync] %s", results)
-                            except _asyncio_p.CancelledError:
-                                # 关机路径: 必须原样上抛, 吞掉会让 shutdown 挂住。
-                                raise
-                            except Exception:
-                                # exception() 而非 error(): 这个循环要跑几周,
-                                # 只留一行异常字符串会让排查无从下手。
-                                logger.exception("[platform-sync] 本轮失败")
-                            # 等回调或等超时, 谁先到算谁。回调在本轮同步期间到达时
-                            # Event 已是 set 态, 下面这句立刻返回 → 紧接着再拉一轮,
-                            # 所以同步窗口内的通知不会被漏掉。
-                            try:
-                                await _asyncio_p.wait_for(wakeup.wait(), timeout=interval)
-                                wakeup.clear()
-                                logger.info("[platform-sync] 被回调唤醒, 提前拉取")
-                            except (_asyncio_p.TimeoutError, TimeoutError):
-                                pass
+                    try:
+                        async with _httpx_p.AsyncClient() as client:
+                            adapters = [KeruyunAdapter(
+                                base_url,
+                                os.getenv("PLATFORM_KERUYUN_APP_KEY", ""),
+                                os.getenv("PLATFORM_KERUYUN_APP_SECRET", ""),
+                                client,
+                            )]
+                            while True:
+                                try:
+                                    pool = await _get_pool_p()
+                                    results = await sync_all(pool, adapters,
+                                                             factory_id=factory_id,
+                                                             write_orders=write_orders)
+                                    logger.info("[platform-sync] %s", results)
+                                except _asyncio_p.CancelledError:
+                                    # 关机路径: 必须原样上抛, 吞掉会让 shutdown 挂住。
+                                    raise
+                                except Exception:
+                                    # exception() 而非 error(): 这个循环要跑几周,
+                                    # 只留一行异常字符串会让排查无从下手。
+                                    logger.exception("[platform-sync] 本轮失败")
+                                # 等回调或等超时, 谁先到算谁。回调在本轮同步期间到达
+                                # 时 Event 已是 set 态, 下面这句立刻返回 → 紧接着再拉
+                                # 一轮, 所以同步窗口内的通知不会被漏掉。
+                                try:
+                                    await _asyncio_p.wait_for(wakeup.wait(), timeout=interval)
+                                    wakeup.clear()
+                                    logger.info("[platform-sync] 被回调唤醒, 提前拉取")
+                                except (_asyncio_p.TimeoutError, TimeoutError):
+                                    pass
+                    finally:
+                        # 循环退出(含异常/取消)必须注销, 否则 _WAKEUP 还指着一个
+                        # 没人在等的 Event —— 回调会继续返回 200 假装"已通知",
+                        # 实际没有任何东西在听, 而这恰恰是最需要暴露的故障。
+                        _platform_callback_mod.register_wakeup(None)
                 except _asyncio_p.CancelledError:
                     raise
                 except Exception:
