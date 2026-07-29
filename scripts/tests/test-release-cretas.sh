@@ -328,20 +328,43 @@ assert_contains "$CASE_OUTPUT" 'Java manifest invalid; using the one permitted b
 assert_log_count 1 'JAVA_BUILD build --tests StartupTest' "$CASE_LOG"
 assert_log_count 2 'JAVA_VALIDATE' "$CASE_LOG"
 
-# If origin/main moves while a fallback artifact is being built, the unified
-# gate must stop before either child deployment.
+# origin/main 在制品校验/回退构建期间前进, 且本次发布的提交【已在】新 main 里:
+# 自动前进到新 main 并重新执行, 而不是硬失败让人重跑。安全性不变 —— 重新执行会
+# 按新 main 的 tree 重新校验 manifest, 绝不会用陈旧制品部署。
 setup_repo fallback_main_drift
 commit_change web-admin/src/app.ts
 publish_head
 tree=$(git -C "$CASE_REPO" rev-parse HEAD^{tree})
+# 父节点是 HEAD → 本次发布的提交在新 main 里 → 满足自动前进的祖先前提。
 MOCK_DRIFT_SHA=$(printf 'fixture drift\n' | git -C "$CASE_REPO" commit-tree "$tree" -p HEAD)
 git -C "$CASE_REPO" push -q origin "$MOCK_DRIFT_SHA:refs/heads/drift-fixture"
+MOCK_WEB_VALIDATE_FAILS=1 MOCK_ADVANCE_MAIN_ON_WEB_BUILD=1 \
+    MOCK_DRIFT_SHA="$MOCK_DRIFT_SHA" \
+    run_release --phase deploy --base-sha "$BASE_SHA" --confirm-prod YES-PROD \
+    || fail 'release did not recover from a drift whose new main contains the release commits'
+assert_contains "$CASE_OUTPUT" 'origin/main 在 artifact validation/fallback build 期间前进'
+assert_contains "$CASE_OUTPUT" '本次发布的提交已确认在新 main 中'
+# 恢复不是"忽略": 必须真的部署到前进后的 main, 且回执要留下漂移次数。
+[ "$(git -C "$CASE_REPO" rev-parse HEAD)" = "$MOCK_DRIFT_SHA" ] \
+    || fail 'recovery did not advance the release worktree to the new origin/main'
+assert_contains "$CASE_REPORT" '"drift_recoveries": 1'
+
+# 同样是漂移, 但新 main 与本次发布的提交【分叉】(不含本次提交): 必须硬失败。
+# 少了这条前提, 自动前进会静默丢掉本次要发布的内容, 部署"成功"却发了别人的东西。
+setup_repo divergent_main_drift
+commit_change web-admin/src/app.ts
+publish_head
+divergent_parent=$(git -C "$CASE_REPO" rev-parse HEAD~1)
+divergent_tree=$(git -C "$CASE_REPO" rev-parse "$divergent_parent^{tree}")
+MOCK_DRIFT_SHA=$(printf 'divergent drift\n' \
+    | git -C "$CASE_REPO" commit-tree "$divergent_tree" -p "$divergent_parent")
+git -C "$CASE_REPO" push -q origin "$MOCK_DRIFT_SHA:refs/heads/divergent-fixture"
 if MOCK_WEB_VALIDATE_FAILS=1 MOCK_ADVANCE_MAIN_ON_WEB_BUILD=1 \
     MOCK_DRIFT_SHA="$MOCK_DRIFT_SHA" \
     run_release --phase deploy --base-sha "$BASE_SHA" --confirm-prod YES-PROD; then
-    fail 'release accepted origin/main drift after fallback build'
+    fail 'release auto-advanced onto a main that does not contain the release commits'
 fi
-assert_contains "$CASE_OUTPUT" 'origin/main moved during artifact validation/fallback build'
+assert_contains "$CASE_OUTPUT" '不是它的祖先'
 assert_log_count 0 'JAVA_DEPLOY' "$CASE_LOG"
 assert_log_count 0 'WEB_DEPLOY' "$CASE_LOG"
 assert_contains "$CASE_REPORT" '"main_guard": {"status": "failed"'
