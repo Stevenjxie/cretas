@@ -24,6 +24,161 @@ def _next_seq(conn: sqlite3.Connection) -> int:
     return int(row["s"])
 
 
+def _next_ops_seq(conn: sqlite3.Connection, table: str) -> int:
+    """三张供应链表各有自己的游标序列。表名由本模块的常量拼, 不来自外部输入。"""
+    row = conn.execute(f"SELECT COALESCE(MAX(seq), 0) + 1 AS s FROM {table}").fetchone()
+    return int(row["s"])
+
+
+# 领料溢出系数: 门店按预估订货, 总会比实际吃掉的多一点。
+_REQUISITION_OVERAGE = (1.04, 1.14)
+# 加工损耗率: 择菜、切配、边角料 —— 每天都有, 与用量成正比。
+_PREP_LOSS_RATE = (0.015, 0.040)
+# 变质率: 只发生在短保食材上, 而且不是每天都有。
+_SPOILAGE_RATE = (0.010, 0.035)
+_SPOILAGE_SHELF_LIFE_MAX = 5      # 保质期 ≤5 天的算短保
+_SPOILAGE_CHANCE = 0.35
+# 客诉退菜: 少见, 量也小。
+_RETURN_CHANCE = 0.15
+_RETURN_RATE = (0.002, 0.008)
+# 损耗类型 → 单据号里的固定编码。**不能用 hash(wtype)**: Python 的字符串
+# hash 带 PYTHONHASHSEED 随机化, 跨进程不稳定, 而 doc_no 是 UNIQUE ——
+# 重启一次同一条损耗就会换单据号, 幂等 UPSERT 会撞上别的行的 doc_no。
+_WASTAGE_TYPE_CODE = {"加工损耗": "01", "变质": "02", "客诉退菜": "03"}
+# 盘点周期: 每周一次(按营业日的 ISO 周内第几天定, 保证同一天全店一起盘)。
+_STOCKTAKE_WEEKDAY = 0            # 周一
+_STOCKTAKE_VARIANCE = (-0.03, 0.02)   # 实盘相对系统账的偏差, 略偏亏损
+
+
+def _consumption_by_ingredient(conn, *, store_id: int, biz_date: str):
+    """当天该店真实卖出的菜 × 配方 = 各食材实际消耗(毫单位)。
+
+    这是整个供应链数据的锚: 领料/损耗/盘点全都从它派生, 所以模拟出来的
+    后厨数字和前厅销量是自洽的 —— 卖得多的日子领得多, 卖鱼多的店鱼消耗大。
+    凭空造随机数就没有这个性质, 一分析就露馅。
+    """
+    return conn.execute(
+        "SELECT r.ingredient_id, i.unit_price_cents, i.shelf_life_days, "
+        "       SUM(oi.qty * r.qty_milli) AS used_milli "
+        "  FROM \"order\" o "
+        "  JOIN order_item oi ON oi.order_id = o.id "
+        "  JOIN recipe r ON r.dish_id = oi.dish_id "
+        "  JOIN ingredient i ON i.id = r.ingredient_id "
+        " WHERE o.store_id = ? AND o.biz_date = ? "
+        " GROUP BY r.ingredient_id",
+        (store_id, biz_date),
+    ).fetchall()
+
+
+def _cost_of(qty_milli: int, unit_price_cents: int) -> int:
+    """毫单位用量 × 单价 → 分。四舍五入到整数分, 不留浮点。"""
+    return int(round(qty_milli * unit_price_cents / 1000))
+
+
+def generate_daily_ops(conn, *, store_id: int, biz_date: str,
+                       rng: random.Random) -> dict:
+    """按当天实际消耗派生该店的领料/损耗/盘点。返回各类新建/更新条数。
+
+    幂等: 三张表都有 (biz_date, store_id, ingredient_id[, type]) 唯一约束,
+    重复调用是 UPSERT 而不是翻倍。这一点是刻意的 —— 当天营业还在继续时
+    可以反复调用, 数字随消耗增长, 供应链数据因此也是"实时"的。
+    """
+    owns_txn = not conn.in_transaction
+    if owns_txn:
+        conn.execute("BEGIN")
+    try:
+        stats = _generate_daily_ops_inner(
+            conn, store_id=store_id, biz_date=biz_date, rng=rng)
+    except Exception:
+        if owns_txn:
+            conn.execute("ROLLBACK")
+        raise
+    if owns_txn:
+        conn.execute("COMMIT")
+    return stats
+
+
+def _generate_daily_ops_inner(conn, *, store_id: int, biz_date: str,
+                              rng: random.Random) -> dict:
+    rows = _consumption_by_ingredient(conn, store_id=store_id, biz_date=biz_date)
+    stats = {"requisition": 0, "wastage": 0, "stocktaking": 0}
+    if not rows:
+        # 那天那家店没卖东西(例如未来日期或还没开始生成) —— 没有消耗就没有
+        # 领料, 这是事实而不是异常, 不造数。
+        return stats
+
+    req_seq = _next_ops_seq(conn, "requisition")
+    waste_seq = _next_ops_seq(conn, "wastage")
+    stock_seq = _next_ops_seq(conn, "stocktaking")
+    is_stocktake_day = (
+        datetime.date.fromisoformat(biz_date).weekday() == _STOCKTAKE_WEEKDAY
+    )
+
+    for r in rows:
+        ing_id = r["ingredient_id"]
+        used = int(r["used_milli"])
+        price = int(r["unit_price_cents"])
+
+        # ── 领料: 消耗 × 溢出 ──────────────────────────────────
+        req_qty = int(round(used * rng.uniform(*_REQUISITION_OVERAGE)))
+        conn.execute(
+            "INSERT INTO requisition(doc_no, store_id, ingredient_id, biz_date, "
+            " qty_milli, cost_cents, seq) VALUES (?,?,?,?,?,?,?) "
+            "ON CONFLICT(biz_date, store_id, ingredient_id) DO UPDATE SET "
+            " qty_milli=excluded.qty_milli, cost_cents=excluded.cost_cents",
+            (f"RQ{biz_date.replace('-', '')}{store_id:02d}{ing_id:03d}",
+             store_id, ing_id, biz_date, req_qty, _cost_of(req_qty, price), req_seq),
+        )
+        req_seq += 1
+        stats["requisition"] += 1
+
+        # ── 损耗: 加工损耗每天都有; 变质只在短保食材上偶发; 退菜少见 ──
+        losses = [("加工损耗", rng.uniform(*_PREP_LOSS_RATE))]
+        if (int(r["shelf_life_days"]) <= _SPOILAGE_SHELF_LIFE_MAX
+                and rng.random() < _SPOILAGE_CHANCE):
+            losses.append(("变质", rng.uniform(*_SPOILAGE_RATE)))
+        if rng.random() < _RETURN_CHANCE:
+            losses.append(("客诉退菜", rng.uniform(*_RETURN_RATE)))
+        for wtype, rate in losses:
+            qty = int(round(used * rate))
+            if qty <= 0:
+                continue          # 量太小取整成 0, 就是没有这笔, 不硬造
+            conn.execute(
+                "INSERT INTO wastage(doc_no, store_id, ingredient_id, biz_date, "
+                " wastage_type, qty_milli, cost_cents, seq) VALUES (?,?,?,?,?,?,?,?) "
+                "ON CONFLICT(biz_date, store_id, ingredient_id, wastage_type) "
+                "DO UPDATE SET qty_milli=excluded.qty_milli, "
+                " cost_cents=excluded.cost_cents",
+                (f"WS{biz_date.replace('-', '')}{store_id:02d}{ing_id:03d}"
+                 f"{_WASTAGE_TYPE_CODE[wtype]}",
+                 store_id, ing_id, biz_date, wtype, qty, _cost_of(qty, price), waste_seq),
+            )
+            waste_seq += 1
+            stats["wastage"] += 1
+
+        # ── 盘点: 每周一次, 实盘 vs 系统账 ──────────────────────
+        if is_stocktake_day:
+            system_qty = req_qty
+            actual_qty = int(round(system_qty * (1 + rng.uniform(*_STOCKTAKE_VARIANCE))))
+            diff = actual_qty - system_qty
+            conn.execute(
+                "INSERT INTO stocktaking(doc_no, store_id, ingredient_id, biz_date, "
+                " system_qty_milli, actual_qty_milli, diff_cost_cents, seq) "
+                "VALUES (?,?,?,?,?,?,?,?) "
+                "ON CONFLICT(biz_date, store_id, ingredient_id) DO UPDATE SET "
+                " system_qty_milli=excluded.system_qty_milli, "
+                " actual_qty_milli=excluded.actual_qty_milli, "
+                " diff_cost_cents=excluded.diff_cost_cents",
+                (f"ST{biz_date.replace('-', '')}{store_id:02d}{ing_id:03d}",
+                 store_id, ing_id, biz_date, system_qty, actual_qty,
+                 _cost_of(diff, price), stock_seq),
+            )
+            stock_seq += 1
+            stats["stocktaking"] += 1
+
+    return stats
+
+
 def generate_orders(conn, *, store_id: int, biz_date: str,
                     minute_of_day: int, count: int, rng: random.Random) -> int:
     """在指定门店/营业日/分钟生成 count 笔订单。返回实际新建数。
@@ -130,6 +285,10 @@ def backfill(conn, *, days: int, orders_per_store: int,
                             conn, store_id=store["id"], biz_date=biz_date,
                             minute_of_day=minute, count=count, rng=rng,
                         )
+                # 当天订单齐了才派生后厨: 领料/损耗是按当天实际消耗算的,
+                # 顺序反了会按空销量算出全 0 的供应链数据。
+                _generate_daily_ops_inner(
+                    conn, store_id=store["id"], biz_date=biz_date, rng=rng)
     except Exception:
         conn.execute("ROLLBACK")
         raise

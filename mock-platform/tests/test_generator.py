@@ -72,3 +72,87 @@ def test_回填在事务里跑_不是逐条自动提交(tmp_path):
     assert elapsed < 30, (
         f"回填 2000 单耗时 {elapsed:.1f}s —— 太慢, 说明没跑在显式事务里"
     )
+
+
+# ── 后厨供应链派生 ──────────────────────────────────────────────────
+
+def _seeded(tmp_path):
+    from mock_platform.db import connect
+    from mock_platform.world.seed import seed_world
+    conn = connect(str(tmp_path / "ops.db"))
+    seed_world(conn, store_count=2)
+    return conn
+
+
+def test_没有销量就不造供应链数据(tmp_path):
+    """禁降级: 那天没卖东西就是没有领料, 不是造 0 也不是造随机数。"""
+    from mock_platform.world.generator import generate_daily_ops
+    conn = _seeded(tmp_path)
+    stats = generate_daily_ops(conn, store_id=1, biz_date="2026-07-20",
+                               rng=random.Random(1))
+    assert stats == {"requisition": 0, "wastage": 0, "stocktaking": 0}
+    assert conn.execute("SELECT COUNT(*) c FROM requisition").fetchone()["c"] == 0
+
+
+def test_领料量与当天真实消耗对得上(tmp_path):
+    """领料 = 当天卖出的菜 × 配方 × 溢出系数。这条锚断了, 后厨数据就成了
+    与前厅无关的随机数, 一分析就露馅。"""
+    from mock_platform.world.generator import generate_daily_ops, generate_orders
+    conn = _seeded(tmp_path)
+    generate_orders(conn, store_id=1, biz_date="2026-07-20", minute_of_day=12 * 60,
+                    count=40, rng=random.Random(7))
+    generate_daily_ops(conn, store_id=1, biz_date="2026-07-20", rng=random.Random(7))
+    rows = conn.execute(
+        "SELECT r.ingredient_id, r.qty_milli AS req, "
+        "       (SELECT SUM(oi.qty * rc.qty_milli) FROM \"order\" o "
+        "          JOIN order_item oi ON oi.order_id = o.id "
+        "          JOIN recipe rc ON rc.dish_id = oi.dish_id "
+        "         WHERE o.store_id = 1 AND o.biz_date = '2026-07-20' "
+        "           AND rc.ingredient_id = r.ingredient_id) AS used "
+        "  FROM requisition r WHERE r.biz_date = '2026-07-20'"
+    ).fetchall()
+    assert rows, "有销量就该有领料"
+    for r in rows:
+        # 溢出系数 1.04~1.14, 留一点取整余地
+        assert r["used"] < r["req"] <= r["used"] * 1.15 + 1, dict(r)
+
+
+def test_供应链幂等_重复跑不翻倍也不改条数(tmp_path):
+    from mock_platform.world.generator import generate_daily_ops, generate_orders
+    conn = _seeded(tmp_path)
+    generate_orders(conn, store_id=1, biz_date="2026-07-20", minute_of_day=12 * 60,
+                    count=30, rng=random.Random(3))
+    generate_daily_ops(conn, store_id=1, biz_date="2026-07-20", rng=random.Random(3))
+    n1 = conn.execute("SELECT COUNT(*) c FROM requisition").fetchone()["c"]
+    generate_daily_ops(conn, store_id=1, biz_date="2026-07-20", rng=random.Random(9))
+    assert conn.execute("SELECT COUNT(*) c FROM requisition").fetchone()["c"] == n1
+
+
+def test_损耗单据号确定_不随进程hash变化(tmp_path):
+    """doc_no 是 UNIQUE。用 hash(wtype) 生成会因 PYTHONHASHSEED 随机化,
+    重启后同一条损耗换单据号, 幂等 UPSERT 会撞上别的行。"""
+    from mock_platform.world.generator import _WASTAGE_TYPE_CODE
+    assert set(_WASTAGE_TYPE_CODE) == {"加工损耗", "变质", "客诉退菜"}
+    assert len(set(_WASTAGE_TYPE_CODE.values())) == 3
+
+
+def test_盘点只在周一发生(tmp_path):
+    from mock_platform.world.generator import generate_daily_ops, generate_orders
+    conn = _seeded(tmp_path)
+    for d in ("2026-07-20", "2026-07-21"):    # 20 是周一, 21 是周二
+        generate_orders(conn, store_id=1, biz_date=d, minute_of_day=12 * 60,
+                        count=20, rng=random.Random(5))
+        generate_daily_ops(conn, store_id=1, biz_date=d, rng=random.Random(5))
+    dates = [r["biz_date"] for r in
+             conn.execute("SELECT DISTINCT biz_date FROM stocktaking").fetchall()]
+    assert dates == ["2026-07-20"], f"盘点日期不对: {dates}"
+
+
+def test_回填顺带产出供应链(tmp_path):
+    from mock_platform.world.generator import backfill
+    conn = _seeded(tmp_path)
+    backfill(conn, days=3, orders_per_store=20,
+             today=datetime.date(2026, 7, 23), rng=random.Random(11))
+    for t in ("requisition", "wastage"):
+        c = conn.execute(f"SELECT COUNT(*) c FROM {t}").fetchone()["c"]
+        assert c > 0, f"{t} 回填后应当有数据"
