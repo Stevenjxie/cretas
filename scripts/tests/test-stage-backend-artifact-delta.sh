@@ -151,7 +151,10 @@ empty_log="$TMP_ROOT/empty.log"
 : > "$empty_log"
 out=$(report_rsync_delta "$empty_log") || fail "empty stats log made reporting fail"
 [ -z "$out" ] || fail "empty stats log still printed a delta line: $out"
-out=$(report_rsync_delta "$TMP_ROOT/does-not-exist.log") || fail "missing stats log made reporting fail"
-[ -z "$out" ] || fail "missing stats log still printed a delta line: $out"
+# 2>&1: 少了 `[ -f ]` 前置守卫时行为几乎一样 (解析为空 → 提前 return), 唯一可观测差别
+# 是 sed 会往 stderr 喷 "can't read ...", 把噪音混进 stage 日志。不捕获 stderr 的话
+# 这条断言杀不掉那个变异 (变异测试实测漏网)。
+out=$(report_rsync_delta "$TMP_ROOT/does-not-exist.log" 2>&1) || fail "missing stats log made reporting fail"
+[ -z "$out" ] || fail "missing stats log still produced output: $out"
 
 echo "PASS: stage-backend-artifact rsync delta basis seeding + --stats observability"
