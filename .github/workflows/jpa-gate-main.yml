@@ -1,0 +1,117 @@
+name: JPA repository query gate (post-merge)
+
+# ⚠️ 这是【合并后告警】, 不是【合并前门禁】—— 名字和行为必须对得上, 本仓库已经吃过
+# 一次名不副实的亏(e2e-pr.yml 叫 PR 却是手动触发)。
+#
+# 它【不阻止】坏代码进 main, 只保证坏代码进了 main 之后【立刻有人知道】。
+#
+# 背景: AGENTS.md 一直把这道检查描述成「授权合并」的 PR 门禁, 但它从来没接到 PR 上 ——
+# 全仓 8 个 workflow 里 7 个是 workflow_dispatch, 唯一自动跑的只有 secret-regression。
+# 后果实测过一次: 该检查 2026-07-28 开始红, 直到 07-29 手动触发 CI 才被发现, 期间合并
+# 照常进行、零信号, 红了一天多。
+#
+# 为什么选合并后而不是 PR 门禁 (2026-07-29 Steve 拍板):
+#   触发时耗时 3分34秒 压不下去(见下方四轮实测), 即使 paths 收窄后触发率只有 6.7%,
+#   那 6.7% 仍要让人干等 3 分半。合并后触发把等待降到 0, 代价是从「拦住」退成
+#   「立刻发现」—— 相比现状(红一天多没人知道)仍是巨大改进。
+#   失败时 GitHub 会给推送者发邮件通知, 那是这道告警的信号出口。
+#
+# 如果哪天单次耗时降下来了(拆模块 / 减少编译量), 把 push 换回 pull_request 即可
+# 升级成真门禁, 其余配置不用动。
+#
+# 刻意只跑这一道, 不跑全量套件:
+#   - 全量 1119 个测试类要 78 分钟, 而且现在会 OOM 崩掉 (ci.yml 里有单独的堆修复)
+#   - 这道门禁 55 个测试, CI 实测 3 分 07 秒
+#   - 其中【测试执行本身不到 1 秒】(除首个类 31s 的 Spring 上下文启动),
+#     其余全是 javac 编译 5229 个源文件
+#
+# ⛔ 别再试 target/ 缓存了 —— 2026-07-29 做过四轮实测, 净收益为负:
+#
+#   配置                                              门禁步骤   job 总耗时
+#   无缓存                                            3分05秒    3分34秒
+#   + actions/cache target/                           2分44秒    (缓存未真恢复)
+#   + git-restore-mtime (fetch-depth: 0)              3分00秒    —
+#   + -Dmaven.compiler.useIncrementalCompilation=false 2分33秒   3分47秒
+#
+#   门禁步骤最好能压到 2分33秒, 但 fetch-depth: 0 让 checkout 从 25s 涨到 47s、
+#   装 git-restore-mtime 再花 19s, 【job 总耗时反而从 3分34秒 涨到 3分47秒】。
+#   根因: Maven 在这个项目上拿不到有效增量 —— maven-compiler-plugin 的
+#   useIncrementalCompilation 名不副实(检测到任何改动就全量重编), 关掉它也只省
+#   半分钟, 抵不过为缓存付出的前置开销。
+#
+#   依赖缓存 (setup-java 的 cache: 'maven') 是有效的, 保留。
+#   要再压这 3 分钟, 方向是减少编译量(拆模块)或换更快的 runner, 不是缓存 target/。
+# paths 刻意收窄到这道门禁真正保护的东西 —— 它验的是 repository 查询能否启动,
+# 改 controller / service / AI 工具不该让人等它。
+#
+# 收窄的依据是实测频率, 不是感觉。对最近 60 个 commit 统计:
+#     backend/java/cretas-api/src/**            → 触发 21 次 (35%)
+#     repository / entity / 本门禁的测试类       → 触发  4 次 (6.7%)
+# 少 5 倍。而且 2026-07-28 那次真实回归(ProductionPlan 加 jsonb Map 列导致门禁变红)
+# 的 commit 正好碰了 entity/ProductionPlan.java —— 收窄后【仍然拦得住】它。
+#
+# 之所以走这条路: 单次耗时压不下去。实测 3分34秒 里 3分05秒 是 javac 编译 5229 个
+# 源文件, 而 javac 是单线程的(mvn -T 只并行模块, 这里是单模块), 换更大 runner 也没用;
+# 缓存 target/ 四轮实测净收益为负(见下方注释)。既然砍不动单次成本, 就砍触发频率。
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'backend/java/cretas-api/src/main/java/**/repository/**'
+      - 'backend/java/cretas-api/src/main/java/**/entity/**'
+      - 'backend/java/cretas-api/src/test/java/**/*RepositoryQueryValidationTest.java'
+      - 'backend/java/cretas-api/src/main/resources/db/**'
+      - 'backend/java/cretas-api/pom.xml'
+  workflow_dispatch:
+
+concurrency:
+  group: jpa-gate-${{ github.ref }}
+  # 合并后触发不做 cancel-in-progress: 每个进 main 的 commit 都该被验一次, 后一次
+  # 合并不应该把前一次的验证取消掉 —— 否则连续合并时中间那些 commit 等于没验。
+  cancel-in-progress: false
+
+jobs:
+  jpa-gate:
+    name: JPA repository query startup gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    # 不起 Postgres 服务容器: 这些 *RepositoryQueryValidationTest 全部标注
+    # @ActiveProfiles("test") (33/33 实测), 走的是 H2 内存库。类注解优先级高于
+    # spring.profiles.active 系统属性, 所以起容器纯属白等 ~20s。
+    #
+    # ⚠️ 已知债务: 这道号称验证 JPA 查询的门禁, 验的不是生产用的数据库。仓库里已有
+    # application-pg-test.properties 但零使用, 切过去要改 33 个类的 @ActiveProfiles
+    # 且 Postgres 路径几乎未被验证 —— 单独立项处理, 不在本门禁的范围内。
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '21'
+          cache: 'maven'
+          cache-dependency-path: backend/java/cretas-api/pom.xml
+
+      - name: Report runner resources
+        run: |
+          echo "CPU cores: $(nproc)"
+          free -h | head -2
+
+      - name: JPA repository query startup gate
+        working-directory: backend/java/cretas-api
+        timeout-minutes: 15
+        run: >-
+          mvn -B test
+          -Dspring.profiles.active=test
+          -Dtest='*RepositoryQueryValidationTest'
+          -Dsurefire.failIfNoSpecifiedTests=false
+
+      - name: Upload surefire reports on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: jpa-gate-surefire-reports
+          path: backend/java/cretas-api/target/surefire-reports/
+          retention-days: 7
