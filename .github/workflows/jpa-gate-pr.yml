@@ -27,10 +27,25 @@ name: JPA repository query gate (PR)
 #
 #   依赖缓存 (setup-java 的 cache: 'maven') 是有效的, 保留。
 #   要再压这 3 分钟, 方向是减少编译量(拆模块)或换更快的 runner, 不是缓存 target/。
+# paths 刻意收窄到这道门禁真正保护的东西 —— 它验的是 repository 查询能否启动,
+# 改 controller / service / AI 工具不该让人等它。
+#
+# 收窄的依据是实测频率, 不是感觉。对最近 60 个 commit 统计:
+#     backend/java/cretas-api/src/**            → 触发 21 次 (35%)
+#     repository / entity / 本门禁的测试类       → 触发  4 次 (6.7%)
+# 少 5 倍。而且 2026-07-28 那次真实回归(ProductionPlan 加 jsonb Map 列导致门禁变红)
+# 的 commit 正好碰了 entity/ProductionPlan.java —— 收窄后【仍然拦得住】它。
+#
+# 之所以走这条路: 单次耗时压不下去。实测 3分34秒 里 3分05秒 是 javac 编译 5229 个
+# 源文件, 而 javac 是单线程的(mvn -T 只并行模块, 这里是单模块), 换更大 runner 也没用;
+# 缓存 target/ 四轮实测净收益为负(见下方注释)。既然砍不动单次成本, 就砍触发频率。
 on:
   pull_request:
     paths:
-      - 'backend/java/cretas-api/src/**'
+      - 'backend/java/cretas-api/src/main/java/**/repository/**'
+      - 'backend/java/cretas-api/src/main/java/**/entity/**'
+      - 'backend/java/cretas-api/src/test/java/**/*RepositoryQueryValidationTest.java'
+      - 'backend/java/cretas-api/src/main/resources/db/**'
       - 'backend/java/cretas-api/pom.xml'
   workflow_dispatch:
 
