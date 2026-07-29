@@ -108,7 +108,7 @@ async def test_vl_rejection_is_kept_as_low_confidence_not_dropped(monkeypatch):
     assert len(result["candidates"]) == 1, "VL 否决的候选不应被丢弃"
     candidate = result["candidates"][0]
     assert candidate["confidence"] <= 0.25
-    assert "视觉复核认为正常" in candidate["evidence"]
+    assert candidate["evidence"].startswith("AI 识别："), "面向质检员的文案必须统一为 AI 口径"
     assert result["screening"]["rejectedByVl"] == 1
 
 
@@ -142,7 +142,9 @@ async def test_review_failure_keeps_screening_verdict(monkeypatch):
     result = await analyzer.analyze(_image_bytes())
 
     assert len(result["candidates"]) == 1, "复核失败不得把可疑托盘判为正常"
-    assert "视觉复核未完成" in result["candidates"][0]["evidence"]
+    evidence = result["candidates"][0]["evidence"]
+    assert evidence.startswith("AI 识别："), "复核失败也不得向质检员暴露内部实现"
+    assert "未识别到白色" in evidence, "应说明具体缺什么标签"
     assert result["screening"]["unreviewed"] == 1
 
 
@@ -211,7 +213,7 @@ async def test_review_cap_limits_vl_calls_but_keeps_all_candidates(monkeypatch):
     assert result["screening"]["skippedByCap"] == 4
     assert result["screening"]["reviewCap"] == 2
     assert result["tilesAnalyzed"] == 2
-    capped = [c for c in result["candidates"] if "超出本张复核上限" in c["evidence"]]
+    capped = [c for c in result["candidates"] if c["evidence"].startswith("AI 识别：")]
     assert len(capped) == 4
 
 
@@ -241,8 +243,7 @@ async def test_review_order_prefers_both_missing_then_low_confidence(monkeypatch
 
     assert len(reviewed_boxes) == 1
     # the BOTH_MISSING tray must be the one that got the single review slot
-    both_candidates = [c for c in result["candidates"]
-                       if "超出本张复核上限" not in c["evidence"]]
+    both_candidates = [c for c in result["candidates"] if c["evidence"]]
     assert both_candidates, "BOTH_MISSING 应优先获得复核名额"
 
 
@@ -273,7 +274,9 @@ async def test_vl_disabled_runs_screening_only_and_grades_confidence(monkeypatch
     assert confs == sorted(confs, reverse=True)
     assert max(confs) == pytest.approx(0.675)
     assert min(confs) == pytest.approx(0.405)
-    assert all("未启用视觉复核" in c["evidence"] for c in result["candidates"])
+    assert all(c["evidence"].startswith("AI 识别：") for c in result["candidates"]), "不得暴露内部实现"
+    assert not any("初筛" in c["evidence"] or "复核上限" in c["evidence"] or "YOLO" in c["evidence"].upper()
+                   for c in result["candidates"]), "文案不得出现内部术语"
 
 
 @pytest.mark.asyncio

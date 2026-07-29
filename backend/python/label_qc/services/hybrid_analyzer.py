@@ -120,6 +120,32 @@ def _env_int(name: str, default: int, low: int, high: int) -> int:
         return default
 
 
+def _screen_evidence(tray: TrayResult) -> str:
+    """Reviewer-facing explanation.
+
+    This string is rendered verbatim in the review workbench, so it must read as
+    an AI finding, not as internal plumbing. State what was and was not found on
+    the tray -- screening actually knows both, which is more than the VL path
+    could reliably say.
+    """
+    if tray.verdict == VERDICT_MISSING_WHITE:
+        detail = "已识别到彩色品牌标签，未识别到白色称重/条码标签"
+    elif tray.verdict == VERDICT_MISSING_COLOR:
+        detail = "已识别到白色称重/条码标签，未识别到彩色品牌标签"
+    elif tray.verdict == VERDICT_MISSING_BOTH:
+        detail = "未识别到白色称重/条码标签，也未识别到彩色品牌标签"
+    else:
+        detail = "标签识别异常"
+
+    if tray.confidence >= 0.85:
+        hint = "该盒定位清晰，建议优先核对"
+    elif tray.confidence >= 0.70:
+        hint = "建议人工核对"
+    else:
+        hint = "该盒成像不够清晰，请人工确认"
+    return f"AI 识别：{detail}。{hint}。"
+
+
 def _screen_confidence(tray: TrayResult) -> float:
     """Confidence for a tray the VL never judged.
 
@@ -351,12 +377,11 @@ class HybridLabelQcAnalyzer:
                 unreviewed += 1
                 verdict = tray.verdict
                 confidence = _screen_confidence(tray)
-                if not self._review_enabled:
-                    evidence = f"初筛判定（未启用视觉复核，托盘置信 {tray.confidence:.2f}）"
-                elif model_name == "screen-only":
-                    evidence = f"初筛判定（超出本张复核上限，托盘置信 {tray.confidence:.2f}）"
-                else:
-                    evidence = f"初筛判定（视觉复核未完成，托盘置信 {tray.confidence:.2f}）"
+                # Reviewer-facing text stays uniform ("AI 识别：…") regardless of
+                # which internal path produced it; the distinction between
+                # disabled / capped / failed review is kept in `screening` for
+                # diagnostics, not surfaced to the shop floor.
+                evidence = _screen_evidence(tray)
             else:
                 verdict, confidence = review["verdict"], review["confidence"]
                 evidence = review["evidence"] or "视觉复核"
@@ -367,7 +392,7 @@ class HybridLabelQcAnalyzer:
                     rejected += 1
                     verdict = tray.verdict
                     confidence = round(min(0.25, max(0.05, 1.0 - confidence)), 4)
-                    evidence = f"初筛可疑，视觉复核认为正常（{evidence}）"
+                    evidence = f"AI 识别：该盒标签疑似缺失，但复核后判断可能正常（{evidence}）。请人工确认。"
                 elif verdict == "UNJUDGEABLE":
                     # Not a defect claim, but must not be treated as clean.
                     unreviewed += 1
