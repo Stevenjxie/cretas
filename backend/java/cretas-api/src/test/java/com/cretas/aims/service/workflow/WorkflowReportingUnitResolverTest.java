@@ -40,7 +40,13 @@ class WorkflowReportingUnitResolverTest {
     void setUp() {
         when(unitContractService.normalize(anyString(), anyString())).thenAnswer(invocation -> {
             String raw = invocation.getArgument(1);
-            return new UnitNormalizationResult(raw, raw, mock(CanonicalUnit.class));
+            // 契约的真实行为: 只/个/件 同归 pcs; 千克/公斤 同归 kg
+            String code = switch (raw.trim()) {
+                case "只", "个", "件", "pcs" -> "pcs";
+                case "千克", "公斤", "kg" -> "kg";
+                default -> raw;
+            };
+            return new UnitNormalizationResult(raw, code, mock(CanonicalUnit.class));
         });
         when(unitContractService.describe(anyString(), anyString())).thenAnswer(invocation -> {
             String code = invocation.getArgument(1);
@@ -87,6 +93,11 @@ class WorkflowReportingUnitResolverTest {
 
         assertEquals("只", resolver.resolve("F006", "RAW_MATERIAL", "RM-CHICKEN", "只"));
         assertEquals("只", resolver.resolve("F006", "SEMI_FINISHED", "PT-WIP", "只"));
+        // 契约把 只/个/件 归为 pcs(规范名「件」)。拿它当端口单位存下来,
+        // 用户配的「只」到报工页就变「件」, 看起来像系统改了他的配置。
+        // 等价性由匹配环节负责, 显示环节不改写它。
+        assertEquals("pcs", resolver.canonicalCode("F006", "只"));
+        assertEquals("pcs", resolver.canonicalCode("F006", "件"));
     }
 
     @Test

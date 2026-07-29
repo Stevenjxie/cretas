@@ -9,6 +9,7 @@ import com.cretas.aims.entity.ProductionPlan;
 import com.cretas.aims.entity.enums.MaterialSupplyMode;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.repository.MaterialBatchRepository;
+import com.cretas.aims.repository.RawMaterialTypeRepository;
 import com.cretas.aims.repository.ProductionInputAllocationRepository;
 import com.cretas.aims.repository.ProductionPlanRepository;
 import com.cretas.aims.service.factory.WarehouseResolver;
@@ -42,6 +43,7 @@ public class ProductionStockAllocationServiceImpl implements ProductionStockAllo
     private final ProductionPlanRepository productionPlanRepository;
     private final WarehouseResolver warehouseResolver;
     private final UnitContractService unitContractService;
+    private final RawMaterialTypeRepository rawMaterialTypeRepository;
 
     @Override
     public List<PlannedAllocation> plan(
@@ -129,7 +131,7 @@ public class ProductionStockAllocationServiceImpl implements ProductionStockAllo
             if (remaining.signum() > 0) {
                 shortageItems.add(new ProductionStockShortageDTO.Item(
                         materialTypeId,
-                        null,
+                        materialName(factoryId, materialTypeId),
                         "RAW_MATERIAL",
                         required,
                         availableForInput,
@@ -264,7 +266,8 @@ public class ProductionStockAllocationServiceImpl implements ProductionStockAllo
             if (batch.getStatus() != com.cretas.aims.entity.enums.MaterialBatchStatus.AVAILABLE
                     || available.compareTo(required) < 0) {
                 shortageItems.add(new ProductionStockShortageDTO.Item(
-                        batch.getMaterialTypeId(), null,
+                        batch.getMaterialTypeId(),
+                        materialName(factoryId, batch.getMaterialTypeId()),
                         metadata.getSourceType() == null ? "RAW_MATERIAL" : metadata.getSourceType(),
                         required, available,
                         required.subtract(available).max(BigDecimal.ZERO), allocationUnit));
@@ -664,4 +667,19 @@ public class ProductionStockAllocationServiceImpl implements ProductionStockAllo
     private BigDecimal nz(BigDecimal value) {
         return value == null ? BigDecimal.ZERO : value;
     }
+
+    /**
+     * 缺料明细里的物料名。
+     *
+     * 这个字段 DTO 里一直有, 但三处构造全传的 null —— 于是缺料提示只会说"投料量不足",
+     * 不说是哪个物料。客户因此把生产仓里另一个同类物料(元益漫黄油鸡)当成了工序要投的
+     * 温氏黄油鸡, 跑去仓库比对才发现根本是两样东西。名字必须报出来。
+     */
+    private String materialName(String factoryId, String materialTypeId) {
+        if (materialTypeId == null || materialTypeId.isBlank()) return null;
+        return rawMaterialTypeRepository.findByIdAndFactoryId(materialTypeId, factoryId)
+                .map(com.cretas.aims.entity.RawMaterialType::getName)
+                .orElse(null);
+    }
+
 }

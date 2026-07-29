@@ -69,15 +69,33 @@ public class WorkflowReportingUnitResolver {
     }
 
     /**
-     * 质量单位一律归一到 kg（g / 千克 / 公斤 → kg），其余量纲保留物料自身单位。
-     * 量纲判不出来时保留原单位：宁可原样透传，也不要再猜一次。
+     * 质量单位一律归一到 kg（g / 千克 / 公斤 → kg），其余量纲**原样保留用户配的写法**。
+     *
+     * <p>这里刻意不返回契约规范码。单位契约把 只 / 个 / 件 / pcs 视作同一个计数单位
+     * {@code pcs}，规范名是「件」—— 拿它当端口单位存下来，用户在工序里配的「只」
+     * 到了报工页就变成「件」，看起来像是系统改了他的配置。等价性由匹配环节负责
+     * （分配服务对投料与批次单位各做一次 normalize），显示环节不需要也不应该改写它。</p>
+     *
+     * <p>质量单位是例外：g / 千克 / 公斤 统一成 kg，免得同一条链上半段记 g、下半段记
+     * 千克。这一条是既有约定，保持不变。</p>
      */
     private String massAwareUnit(String factoryId, String materialKind, String skuId, String rawUnit) {
+        // canonical 仍然要跑：它负责校验这个单位是否被契约认识，不认识就 fail closed
         String code = canonical(factoryId, rawUnit, materialKind, skuId);
-        return unitContractService.describe(factoryId, code)
+        boolean mass = unitContractService.describe(factoryId, code)
                 .filter(unit -> unit.dimension() == UnitDimension.MASS)
-                .map(unit -> MASS_REPORTING_UNIT)
-                .orElse(code);
+                .isPresent();
+        return mass ? MASS_REPORTING_UNIT : rawUnit.trim();
+    }
+
+    /**
+     * 端口的规范码 —— 落在 {@code unit_code} 列，供需要判等价的场景使用。
+     * 与 {@link #resolve} 返回的显示单位是同一个单位的两种写法。
+     */
+    public String canonicalCode(String factoryId, String reportingUnit) {
+        if (reportingUnit == null || reportingUnit.isBlank()) return null;
+        var normalized = unitContractService.normalize(factoryId, reportingUnit);
+        return normalized.recognized() ? normalized.code() : reportingUnit.trim();
     }
 
     private String canonical(String factoryId, String rawUnit, String materialKind, String skuId) {

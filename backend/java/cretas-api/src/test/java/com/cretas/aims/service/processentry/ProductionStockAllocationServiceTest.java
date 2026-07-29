@@ -11,6 +11,7 @@ import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.repository.MaterialBatchRepository;
 import com.cretas.aims.repository.ProductionInputAllocationRepository;
 import com.cretas.aims.repository.ProductionPlanRepository;
+import com.cretas.aims.repository.RawMaterialTypeRepository;
 import com.cretas.aims.service.factory.WarehouseResolver;
 import com.cretas.aims.service.unit.UnitContractService;
 import com.cretas.aims.service.unit.UnitNormalizationResult;
@@ -49,13 +50,16 @@ class ProductionStockAllocationServiceTest {
     @Mock
     private UnitContractService unitContractService;
 
+    @Mock
+    private RawMaterialTypeRepository rawMaterialTypeRepository;
+
     private ProductionStockAllocationService service;
 
     @BeforeEach
     void setUp() {
         service = new ProductionStockAllocationServiceImpl(
                 materialBatchRepository, allocationRepository, productionPlanRepository,
-                warehouseResolver, unitContractService);
+                warehouseResolver, unitContractService, rawMaterialTypeRepository);
         // 模拟全局单位契约: 只/个/件/pcs 同归 pcs; 千克/公斤同归 kg
         lenient().when(unitContractService.normalize(anyString(), anyString())).thenAnswer(call -> {
             String raw = call.getArgument(1);
@@ -627,6 +631,36 @@ class ProductionStockAllocationServiceTest {
 
         assertThatThrownBy(() -> service.plan("F006", "PLAN-1", List.of(input)))
                 .isInstanceOf(ProductionStockShortageException.class);
+    }
+
+    @Test
+    void shortageNamesTheMaterialSoAWrongOneIsObvious() {
+        // 客户把生产仓里另一个同类物料当成了工序要投的那个,
+        // 因为缺料提示只说"投料量不足"不说是谁 —— materialName 字段一直传 null。
+        com.cretas.aims.entity.RawMaterialType material = new com.cretas.aims.entity.RawMaterialType();
+        material.setId("RAW-CHICKEN");
+        material.setName("温氏黄油鸡");
+        when(rawMaterialTypeRepository.findByIdAndFactoryId("RAW-CHICKEN", "F006"))
+                .thenReturn(java.util.Optional.of(material));
+
+        ProcessSheetRowRequest.MaterialInputTotal input = countedTotal("RAW-CHICKEN", "1");
+        when(warehouseResolver.resolveWorkshopId("F006")).thenReturn("WKS-1");
+        when(materialBatchRepository.findAvailableBatchesFEFOByWarehouseForUpdate(
+                "F006", "RAW-CHICKEN", "WKS-1"))
+                .thenReturn(List.of());
+
+        assertThatThrownBy(() -> service.plan("F006", "PLAN-1", List.of(input)))
+                .isInstanceOf(ProductionStockShortageException.class)
+                .extracting(error -> ((ProductionStockShortageException) error).getShortage())
+                .satisfies(shortage -> {
+                    ProductionStockShortageDTO dto = (ProductionStockShortageDTO) shortage;
+                    assertThat(dto.getItems()).singleElement()
+                            .satisfies(item -> {
+                                assertThat(item.getMaterialName()).isEqualTo("温氏黄油鸡");
+                                // 一个批次都没有 → 可用为 0, 前端据此说"没有可投批次"
+                                assertThat(item.getAvailable()).isEqualByComparingTo("0");
+                            });
+                });
     }
 
     private static ProcessSheetRowRequest.MaterialInputTotal countedTotal(
