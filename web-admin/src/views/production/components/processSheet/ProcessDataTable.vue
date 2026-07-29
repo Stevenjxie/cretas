@@ -3188,6 +3188,16 @@ defineExpose({ hasUnsavedRows, refreshSharedInventories });
             @click="handleSave(row, 'submit')"
           >正式报工</el-button>
         </div>
+        <!--
+          防呆 Rule 1「预先显示边界」: 提交按钮 disabled 时, 原因必须直接印在按钮旁边。
+          原来只有两条路给出原因 —— :title 原生提示, 以及 handleSave 里的 sticky 报错。
+          但 disabled 元素不触发鼠标事件, title 多数浏览器不显示; click 也进不去 handleSave,
+          那条报错永远弹不出来。用户看到的就是一个灰按钮、点了没反应、悬停也没提示。
+        -->
+        <div v-if="submitDisabledReason(row)" class="sp-blocked-hint" role="status">
+          <el-icon><Warning /></el-icon>
+          <span>还不能正式报工：{{ submitDisabledReason(row) }}</span>
+        </div>
       </div><!-- /v-for cards -->
 
       <!-- Add row button (card mode) -->
@@ -4666,5 +4676,25 @@ defineExpose({ hasUnsavedRows, refreshSharedInventories });
     min-height: 40px;
     margin-left: 0;
   }
+}
+
+/* 提交被挡时的原因条 —— 防呆 Rule 1: 边界预先显示, 不靠 tooltip 或点击后报错 */
+.sp-blocked-hint {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  margin-top: 8px;
+  padding: 8px 10px;
+  border-radius: 4px;
+  border-left: 3px solid var(--el-color-warning);
+  background: var(--el-color-warning-light-9);
+  color: var(--el-color-warning-dark-2);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.sp-blocked-hint .el-icon {
+  margin-top: 2px;
+  flex: none;
 }
 </style>

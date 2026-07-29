@@ -5,6 +5,19 @@ import { ElMessage, ElMessageBox } from 'element-plus';
 import { get, post } from '@/api/request';
 import { useAuthStore } from '@/store/modules/auth';
 import { enumLabel } from '@/utils/enumDisplay';
+
+/**
+ * 业务类型中文名 —— 筛选下拉和表格列共用同一份。
+ * 之前下拉里写死了四个中文名, 表格列却走 enumLabel 的通用字典(只有 PO/SO),
+ * 于是调拨待办在列表里显示成「未知状态（INVENTORY_TRANSFER）」——
+ * 同一个页面对同一个编码给出两种说法。
+ */
+const MODULE_LABELS: Record<string, string> = {
+  PURCHASE_ORDER: '采购订单',
+  SALES_ORDER: '销售订单',
+  INVENTORY_TRANSFER: '库存调拨',
+  INVENTORY_ADJUSTMENT: '库存盘点',
+};
 import { handleCatchError } from '@/utils/errorToast';
 import { formatDateTime } from '@/utils/dateFormat';
 
@@ -144,10 +157,12 @@ onMounted(async () => {
             <p>这里只显示当前账号有权处理的本工厂待办。</p>
           </div>
           <el-select v-model="moduleCode" clearable placeholder="全部业务类型" style="width: 190px" @change="page = 1; loadPending()">
-            <el-option label="采购订单" value="PURCHASE_ORDER" />
-            <el-option label="销售订单" value="SALES_ORDER" />
-            <el-option label="库存调拨" value="INVENTORY_TRANSFER" />
-            <el-option label="库存盘点" value="INVENTORY_ADJUSTMENT" />
+            <el-option
+              v-for="(label, code) in MODULE_LABELS"
+              :key="code"
+              :label="label"
+              :value="code"
+            />
           </el-select>
         </div>
       </template>
@@ -161,10 +176,10 @@ onMounted(async () => {
         empty-text="暂无待您审批的任务"
       >
         <el-table-column label="业务类型" width="120">
-          <template #default="{ row }">{{ enumLabel(row.moduleCode) }}</template>
+          <template #default="{ row }">{{ enumLabel(row.moduleCode, MODULE_LABELS) }}</template>
         </el-table-column>
-        <el-table-column prop="businessSummary" label="业务单据" min-width="260" />
-        <el-table-column prop="currentNodeLabel" label="当前节点" min-width="150" />
+        <el-table-column prop="businessSummary" label="业务单据" min-width="260" show-overflow-tooltip />
+        <el-table-column prop="currentNodeLabel" label="当前节点" min-width="150" show-overflow-tooltip />
         <el-table-column label="授权角色" min-width="180">
           <template #default="{ row }">{{ row.approverRoles?.map((role: string) => enumLabel(role)).join('、') || '-' }}</template>
         </el-table-column>
@@ -172,7 +187,12 @@ onMounted(async () => {
         <el-table-column label="提交时间" min-width="180">
           <template #default="{ row }">{{ formatDateTime(row.initiatedAt) }}</template>
         </el-table-column>
-        <el-table-column label="操作" width="170" fixed="right">
+        <!--
+          操作列不再 fixed: fixed 列在 Element Plus 里是独立浮层, 宽度与主表分别计算,
+          内容一换行两边就对不齐(实测调拨待办的表头与内容错位)。本表 7 列合计约 1190px,
+          常规屏幕不横向滚动, 钉住操作列换不来什么, 却把对齐搞坏了。
+        -->
+        <el-table-column label="操作" width="170">
           <template #default="{ row }">
             <template v-if="canAct(row)">
               <el-button link type="primary" :loading="operatingId === row.instanceId" @click="act(row, 'APPROVE')">通过</el-button>
