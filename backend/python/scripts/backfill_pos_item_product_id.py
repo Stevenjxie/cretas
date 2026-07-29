@@ -2,21 +2,45 @@
 
 背景 (2026-07-29): 平台 connector 的 writer 早期只把菜名写进
 `source_item_raw`，`product_id` 一直是 NULL。后果不是少一列而已 ——
-`agg_product` / `agg_discount` 的物化 SQL 带 `WHERE product_id IS NOT NULL`，
-于是菜品维度整个物化出 0 行，餐饮 AI 的语义规划器直接弃权
-（tiered-answer 返回 `delegate:false`）。菜品是餐饮分析的主轴，缺了它
-问答层等于不可用。
+`agg_product` 的物化 SQL 带 `WHERE product_id IS NOT NULL`（见
+`gold/materializer.py`），于是菜品维度整个物化出 0 行，餐饮 AI 的语义
+规划器直接弃权（tiered-answer 返回 `delegate:false`）。菜品是餐饮分析的
+主轴，缺了它问答层等于不可用。
+
+⚠️ `agg_discount` **不在**此列：它读 `fact_pos_discount`，与 product_id 无关，
+   而平台 writer 根本不写那张表 —— 修完这里 `agg_discount` 仍是 0 行，
+   那是另一回事，别顺着这条线找。
 
 writer 已修好，新订单会带 product_id；这个脚本补历史行。
 
 做法：按 `source_item_raw` 去重 → `dim_product` UPSERT（沿用
-`canonical/dim_resolver.py` 的 SQL 形状，归一化用仓库既有的
-`normalize_for_dim`，保证与其它通道的匹配口径一致）→ 批量 UPDATE 回填。
+`canonical/dim_resolver.py` 的 SQL 形状，归一化用 `normalize_for_dim`）
+→ 批量 UPDATE 回填。
+
+⚠️ 关于归一化口径：`normalize_for_dim` 是 migration
+   `2026_04_28_silver_dimensions.sql` 给 `normalized_name` 写明的**意图**，
+   但**当前另一条通道并没有照做** —— `canonical/normalizer.py` 调的是
+   `resolve_product(item.name, item.name)`，把原名原样当归一化名（那里留着
+   TODO）。所以同一租户若同时被两条通道喂数据，`水煮·牛肉` 会裂成两行
+   dim_product，菜品排行里对半分。MOCK_REST 目前只有这一条通道、且 10 个
+   种子菜名不含标点，两个函数结果相同，所以是潜在问题不是现网问题。
+   收敛应该往 `normalize_for_dim` 这边走（那是 migration 的原意），列为后续。
 
 **category 留空**：历史行只存了菜名，分类无从得知。不猜也不填「未分类」
 （禁降级）。后续新订单流过来时 writer 的
-`category = COALESCE(EXCLUDED.category, dim_product.category)` 会把分类补上，
-所以这里留 NULL 是会自愈的，不是永久空洞。
+`category = COALESCE(EXCLUDED.category, dim_product.category)` 会把分类补上。
+
+⚠️ 但这个自愈**有前提**：分类是模拟端 `_paging.py` 新加的 `dishCategory` 字段
+   带过来的。**139 上的模拟器没重新部署的话**，报文里就没有这个字段，
+   writer 每次都送 `category=NULL`，`COALESCE` 是空操作，
+   `dim_product.category` 会永远是 NULL —— 不是会自愈，是永远空。
+
+**部署顺序（有先后依赖，别颠倒）**：
+    1. 先部 139 模拟器（`scripts/deploy/deploy-mock-platform.sh`）—— 让报文带上 dishCategory
+    2. 再部 47 Python（`deploy-smartbi-python.sh`）—— 让 writer 开始写 product_id
+    3. 最后跑本脚本回填历史
+   顺序反了的话：先跑回填，旧 writer 还在每 60s 往表里追加 product_id IS NULL
+   的新行，脚本报一个漂亮的 rows_updated 而表几分钟后又脏了。
 
 用法：
     cd backend/python
@@ -81,9 +105,12 @@ async def backfill_one_factory(pool, factory_id: str, dry_run: bool) -> dict:
                 "SELECT set_config('app.factory_id', $1, true)", factory_id)
 
             rows = await conn.fetch(
+                # ORDER BY: 多个原始拼写归一化到同一个菜时, 谁先来谁的写法就成了
+                # dim_product.name(展示名)。不排序的话每次跑可能落到不同变体上。
                 "SELECT DISTINCT source_item_raw FROM fact_pos_item "
                 "WHERE factory_id = $1 AND product_id IS NULL "
-                "  AND source_item_raw IS NOT NULL AND btrim(source_item_raw) <> ''",
+                "  AND source_item_raw IS NOT NULL AND btrim(source_item_raw) <> '' "
+                "ORDER BY 1",
                 factory_id,
             )
             raw_names: List[str] = [r["source_item_raw"] for r in rows]
@@ -101,6 +128,13 @@ async def backfill_one_factory(pool, factory_id: str, dry_run: bool) -> dict:
                     else:
                         pid = await conn.fetchval(
                             _PRODUCT_UPSERT_SQL, factory_id, raw.strip(), normalized)
+                        if pid is None:
+                            # RETURNING 没给出行 —— 真发生了就说明 UPSERT 语义
+                            # 不是我们以为的那样。放行的话会把 NULL 写回
+                            # product_id, 正好复现本次要修的 bug。
+                            raise RuntimeError(
+                                f"dim_product UPSERT 没有返回 product_id: "
+                                f"factory={factory_id} name={raw!r}")
                     normalized_cache[normalized] = pid
                 name_to_pid[raw] = pid
 
@@ -131,12 +165,28 @@ async def backfill_one_factory(pool, factory_id: str, dry_run: bool) -> dict:
                 factory_id, [p[0] for p in pairs], [p[1] for p in pairs],
             )
 
+            # 后置校验: 只报"我写了多少行"是不够的 —— 那正是本次要修的 bug
+            # 的同一类毛病(报告做了什么, 不报告目标有没有达成)。这里直接问
+            # "还剩多少行没有 product_id", 把 SELECT 阶段就被过滤掉的
+            # (source_item_raw 为 NULL / 空白) 也一并算进来。
+            remaining = await conn.fetchval(
+                "SELECT count(*) FROM fact_pos_item "
+                "WHERE factory_id = $1 AND product_id IS NULL",
+                factory_id,
+            )
+
     if skipped:
         logger.warning("%s: %d 个菜名归一化后为空，未回填（需人工看）：%s",
                        factory_id, len(skipped), skipped[:5])
-    logger.info("%s: %d 个去重菜品，回填 %d 行", factory_id, len(normalized_cache), updated)
+    logger.info("%s: %d 个去重菜品，回填 %d 行，剩余未解析 %d 行",
+                factory_id, len(normalized_cache), updated, remaining)
+    if remaining:
+        # 不当成成功。要么是归一化后为空的那些，要么是回填期间拉取循环又写了
+        # 新行（那说明部署顺序错了：writer 还没更新就先跑了回填）。
+        logger.warning("%s: 仍有 %d 行 product_id IS NULL —— 检查部署顺序"
+                       "（先 139 模拟器 → 再 47 Python → 最后回填）", factory_id, remaining)
     return {"factory_id": factory_id, "distinct_dishes": len(normalized_cache),
-            "rows_updated": updated, "skipped": len(skipped)}
+            "rows_updated": updated, "skipped": len(skipped), "remaining_null": remaining}
 
 
 async def _main() -> None:

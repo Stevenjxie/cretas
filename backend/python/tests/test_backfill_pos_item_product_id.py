@@ -41,9 +41,12 @@ def test_菜名中间的空格不会被吃掉_是两个不同的菜():
     （`_WS_RE.sub(" ", out).strip()`）。所以「水煮 牛肉」与「水煮牛肉」
     在这套口径下是两道菜。
 
-    这是仓库共用的维度匹配口径（Excel 上传通道、实体消解都用它），
-    这里只钉住行为、**不**在本脚本里另造一套 —— 两套口径会让同一道菜
-    在不同通道解析成不同的 product_id，比重复菜品更难查。
+    这里只钉住行为、**不**在本脚本里另造一套归一化。
+    ⚠️ 但别误以为「全仓都已经用它写 normalized_name」——实际上
+    `canonical/normalizer.py` 现在传的是 `resolve_product(name, name)`，
+    把原名原样当归一化名（那里留着 TODO）。`normalize_for_dim` 是
+    migration `2026_04_28_silver_dimensions.sql` 写明的**意图**，收敛
+    应该往这边走，但今天还没收敛完。详见本脚本 docstring。
     """
     mapping, _ = plan_backfill(["水煮牛肉", "水煮　牛肉"])
     assert len(set(mapping.values())) == 2

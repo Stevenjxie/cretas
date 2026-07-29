@@ -19,6 +19,13 @@ Silver 是 NUMERIC(18,2) 元, 这里除 100。
    (每轮重试且游标不前进)。选择保留: 门店映射来自 migration 且覆盖全部
    10 家店, 真出现失配说明配置错了, 本就该卡住而不是静默跳过。
    将来若要放宽, 必须是"隔离到死信表 + 显式告警", 不能是静默 skip。
+
+   🔴 2026-07-29 加菜品维度后, 这个取舍的爆炸半径变大了, 上面那条理由**不
+   完全适用**: 门店/支付渠道是有限且由 migration 定死的闭集合, 菜名不是 ——
+   它是外部平台来的自由文本。一道名字里只有标点的菜(normalize_for_dim 会把
+   它整个吃空)就能让这一页永远卡住, 而且**后面所有数据都再也进不来**。
+   这不是"配置错了本就该卡住", 是上游数据脏。死信表那条路从"将来可以做"
+   变成了本模块最该优先补的事。
 """
 from __future__ import annotations
 
@@ -160,6 +167,13 @@ async def _resolve_product(conn, factory_id: str, item, cache: dict) -> int:
     product_id = await conn.fetchval(
         _PRODUCT_UPSERT_SQL, factory_id, name, normalized, item.category,
     )
+    if product_id is None:
+        # RETURNING 没给出行。真发生了说明 UPSERT 语义不是我们以为的那样
+        # (比如有人把 DO UPDATE 改成 DO NOTHING —— 那时 RETURNING 不返回行)。
+        # 放行就会把 NULL 写回 product_id, 正好复现本函数存在的理由。
+        raise RuntimeError(
+            f"dim_product UPSERT 没有返回 product_id: factory={factory_id} name={name!r}"
+        )
     cache[normalized] = product_id
     return product_id
 
