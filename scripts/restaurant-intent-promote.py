@@ -26,7 +26,7 @@
   python scripts/restaurant-intent-promote.py --apply-ledger reviewed.json
       旧行为: 只写 backend/python/smartbi/data/promoted_restaurant_intent_samples.json
       (向量索引的样例语料, 不是执行授权), 不连库。两者用途不同, 见
-      smartbi/gold/restaurant_intent_promotion.py 模块 docstring。
+      smartbi/gold/restaurant/restaurant_intent_promotion.py 模块 docstring。
 
 绝不静默自动毕业: 没有 --apply 就永远不写任何东西；--apply 只接受人已经审过的
 JSON 文件，脚本本身不会替你"自动通过"任何候选。
@@ -57,7 +57,7 @@ sys.path.insert(0, str(_BACKEND_PY))
 # only resolvable with backend/python/smartbi on sys.path (mirrors promote_learnings.py).
 sys.path.insert(0, str(_BACKEND_PY / "smartbi"))
 
-from smartbi.gold.restaurant_intent_promotion import (  # noqa: E402
+from smartbi.gold.restaurant.restaurant_intent_promotion import (  # noqa: E402
     aggregate_candidates,
     aggregate_misses,
     apply_promotions,
