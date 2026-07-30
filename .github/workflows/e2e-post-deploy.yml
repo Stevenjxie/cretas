@@ -67,7 +67,7 @@ jobs:
           distribution: 'temurin'
           java-version: '21'
           cache: 'maven'
-          cache-dependency-path: backend/java/**/pom.xml
+          cache-dependency-path: backend/java/cretas-api/pom.xml
 
       - uses: actions/setup-node@v4
         with:
@@ -87,16 +87,6 @@ jobs:
         run: npx playwright install --with-deps chromium
 
       # ── Backend startup ──────────────────────────────────────────────────────
-      # See e2e-pr.yml: spring-boot:run cannot use -am (it would run the goal on
-      # the library modules, which have no main class), so the two library
-      # modules go into the runner's ephemeral ~/.m2 first.
-      - name: Install backend library modules
-        working-directory: backend/java
-        # 排除式而不是列举式: 列举法在加了 cretas-model / cretas-platform 之后忘了同步,
-        # spring-boot:run 直接报 Could not find artifact。排除两个可部署应用, 其余库模块
-        # 全装, 以后再加模块不用改这里。
-        run: mvn -B -q install -pl '!cretas-api,!cretas-logistics-app' -DskipTests
-
       - name: Start Java backend (background)
         working-directory: backend/java/cretas-api
         run: |

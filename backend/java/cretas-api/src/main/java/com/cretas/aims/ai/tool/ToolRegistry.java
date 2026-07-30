@@ -26,7 +26,7 @@ import java.util.stream.Collectors;
  */
 @Slf4j
 @Component
-public class ToolRegistry implements com.cretas.aims.service.config.ToolCatalogPort {
+public class ToolRegistry {
 
     /**
      * 工具执行器映射表: toolName -> ToolExecutor

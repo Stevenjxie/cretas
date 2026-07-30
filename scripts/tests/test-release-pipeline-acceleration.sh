@@ -40,12 +40,7 @@ if ! (( package_line < artifact_upload_line && artifact_upload_line < full_verif
     echo "FAIL: exact-main JAR must upload before the long full Maven verify" >&2
     exit 1
 fi
-# Was 'run: mvn -B package -Dmaven.test.skip=true -pl .' and had been failing on
-# origin/main since the step became a multi-line `run: |` block - no line carries
-# the "run: " prefix any more. Re-anchored on the command itself, now the reactor
-# form: the no-tests path must still skip tests and must build the application
-# module together with cretas-common / cretas-logistics.
-assert_contains "$CI_WORKFLOW" 'mvn -B -f ../pom.xml package -pl cretas-api -am -Dmaven.test.skip=true'
+assert_contains "$CI_WORKFLOW" 'run: mvn -B package -Dmaven.test.skip=true -pl .'
 
 backend_line=$(line_number "$E2E_WORKFLOW" 'name: Start Java backend (background)')
 web_deps_line=$(line_number "$E2E_WORKFLOW" 'name: Install web-admin deps')

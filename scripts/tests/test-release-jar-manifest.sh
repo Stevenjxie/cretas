@@ -64,36 +64,12 @@ MVN_LOG="$MVN_LOG" CRETAS_MAVEN_WRAPPER="$FAKE_MVN" \
 
 [ "$(wc -l < "$MVN_LOG" | tr -d '[:space:]')" = "1" ] \
     || fail "one release invoked Maven more than once"
-# Asserted fragment by fragment rather than as one exact line. The exact-line
-# form was already failing on origin/main before the module split, because the
-# narrowed test-source compile added -Dcretas.testIncludes to the real command
-# and nobody updated the literal here. Fragments keep the contract (one
-# invocation that does clean package AND gates on the target tests) while
-# surviving the addition of further flags.
-grep -Fq "clean package" "$MVN_LOG" \
+grep -Fxq "clean package -Dtest=$TARGET_TESTS" "$MVN_LOG" \
     || fail "single Maven invocation did not combine clean package and target tests"
-grep -Fq -- "-Dtest=$TARGET_TESTS" "$MVN_LOG" \
-    || fail "single Maven invocation did not combine clean package and target tests"
-grep -Fq -- "-Dcretas.testIncludes=" "$MVN_LOG" \
-    || fail "release build did not narrow the compiled test sources"
-# The reactor flags: the build must produce the application module inside the
-# backend/java reactor, or cretas-common / cretas-logistics never get built and
-# the fat JAR is missing the domains.
-grep -Fq -- "-f $RELEASE_REACTOR_POM" "$MVN_LOG" \
-    || fail "release build did not run against the backend reactor POM"
-grep -Fq -- "-pl $RELEASE_APP_MODULE -am" "$MVN_LOG" \
-    || fail "release build did not select the application module with its dependencies"
 grep -Fxq "target_tests=$TARGET_TESTS" "$MANIFEST" \
     || fail "manifest did not record actual target tests"
-# Compared against what Maven was actually handed, not against a second copy of
-# the expected flags. The hardcoded form here had the same drift as above (it
-# predates -Dcretas.testIncludes), and a copy has to be edited every time a flag
-# is added - which is exactly when "the manifest records the real command" most
-# needs checking. MVN_LOG holds the fake wrapper's "$*".
-recorded_command=$(sed -n 's/^maven_command=//p' "$MANIFEST")
-expected_command="$FAKE_MVN $(cat "$MVN_LOG")"
-[ "$recorded_command" = "$expected_command" ] || fail \
-    "manifest did not record the actual Maven command (recorded '$recorded_command', invoked '$expected_command')"
+grep -Fxq "maven_command=$FAKE_MVN clean package -Dtest=$TARGET_TESTS" "$MANIFEST" \
+    || fail "manifest did not record the actual Maven command"
 grep -Fq 'jdk_vendor=' "$MANIFEST" || fail "manifest missing JDK vendor"
 grep -Fq 'jdk_version=' "$MANIFEST" || fail "manifest missing JDK version"
 grep -Fxq 'success=true' "$MANIFEST" || fail "manifest missing success=true"
@@ -186,11 +162,8 @@ if release_manifest_validate "$MANIFEST" "$FIXTURE_REPO" "$DESTINATION"; then
 fi
 grep -Fq 'build_local_jar "clean package"' "$DEPLOY_SCRIPT" \
     || fail "missing manifest has no clean-package fallback"
-# Counts run_mvn call sites, not the exact argument string: the contract being
-# protected is "at most one Maven invocation per attempt", which must survive
-# adding flags to that one call (the reactor now needs -f/-pl/-am).
 [ "$(awk '/^    build_local_jar\(\) \{/{copy=1} copy{print} copy && /^    \}/{exit}' "$DEPLOY_SCRIPT" \
-    | grep -Ec '^\s*run_mvn ')" = "1" ] \
+    | grep -Fc 'run_mvn $goals')" = "1" ] \
     || fail "deploy local builder can invoke Maven more than once per attempt"
 if grep -Fq 'run_mvn package ||' "$DEPLOY_SCRIPT"; then
     fail "deploy retains an implicit second package compile after clean-package failure"
