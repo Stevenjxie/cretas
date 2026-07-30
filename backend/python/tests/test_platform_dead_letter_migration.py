@@ -81,6 +81,30 @@ def test_不删行而是标记已处理():
     assert "resolved_at" in SQL
 
 
+def test_必须授权给应用账号():
+    """建表不授权 = 死信表静默失效。
+
+    2026-07-30 实测踩过: V20261101_03 只建表没 GRANT, 库里 default ACL 只给读
+    (`{smartbi_user=r/postgres}`), 应用 INSERT 直接 permission denied → 隔离写
+    必然失败 → 抛错 → 游标停住 → 退回「卡住」的老行为, 死信表等于没生效。
+
+    🔴 只有以 **smartbi_user 身份**才验得出来 —— 超级用户 postgres 绕过权限,
+    拿它验一切正常(我第一轮 prod 验证就是这么漏过去的)。
+    """
+    grants = "".join(
+        f.read_text(encoding="utf-8")
+        for f in sorted(MIG.parent.glob("V20261101_*.sql"))
+    )
+    assert re.search(
+        r"GRANT[^;]*INSERT[^;]*ON\s+platform_ingest_dead_letter\s+TO\s+smartbi_user",
+        grants, re.I | re.S,
+    ), "死信表没有授权给 smartbi_user —— 应用写不进去, 死信表静默失效"
+    assert re.search(
+        r"GRANT[^;]*SEQUENCE\s+platform_ingest_dead_letter_id_seq\s+TO\s+smartbi_user",
+        grants, re.I | re.S,
+    ), "BIGSERIAL 的 sequence 没授权 —— INSERT 仍会 permission denied"
+
+
 def test_不在既有大表上加索引():
     """本 migration 只应动新表。在 fact_pos_* 上建索引会锁表。"""
     for stmt in re.findall(r"CREATE INDEX.*?;", SQL, re.S | re.I):
