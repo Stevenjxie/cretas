@@ -84,6 +84,15 @@
             <artifactId>spring-boot-starter-validation</artifactId>
         </dependency>
 
+        <!-- 迁移引擎属于运行时层: 每个可部署服务都要能把自己的 schema 建起来。
+             第一次独立启动时它不在 classpath 上, Spring 的 Flyway 自动配置直接没激活,
+             spring.flyway.* 被静默忽略, 表由 Hibernate ddl-auto=update 建了出来 ——
+             看起来一切正常, 实际上迁移一条都没跑。放在这里让每个服务默认就有。 -->
+        <dependency>
+            <groupId>org.flywaydb</groupId>
+            <artifactId>flyway-core</artifactId>
+        </dependency>
+
         <!-- TokenBlacklistService 用 Caffeine 做本地过期缓存 -->
         <dependency>
             <groupId>com.github.ben-manes.caffeine</groupId>
