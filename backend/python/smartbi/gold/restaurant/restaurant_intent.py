@@ -506,6 +506,15 @@ _COST_PERIODIC_REPORT_RE = re.compile(
 )
 
 
+# 领料域名词 + 花钱语义 → 领料成本。名词取自 _KITCHEN_OPS_NOUNS 的领料子集
+# (损耗/盘点/库存 各有自己的指标, 不在此列), 金额词刻意穷举而不用泛化的「多少」——
+# 「领料最多的是哪些食材」是数量问题, 今天就能答, 不该被硬塞一个成本指标。
+_REQUISITION_SPEND_RE = re.compile(
+    r"(?:领料|领用|采购|进货)(?:的)?[^。？?！!，,]{0,6}?"
+    r"(?:花了多少|花掉多少|花费|开销|支出|成本|金额|多少钱)"
+)
+
+
 def _detect_requested_metrics(text: str) -> Tuple[str, ...]:
     detected_items: List[str] = []
     for metric, tokens in _REQUEST_METRIC_RULES:
@@ -558,6 +567,22 @@ def _detect_requested_metrics(text: str) -> Tuple[str, ...]:
         detected = tuple(metric for metric in detected if metric != "sales_volume")
         if "revenue" not in detected:
             detected = (*detected, "revenue")
+    # 采购/领料 + 花钱 = 领料成本, 不是销量, 也不是菜品成本。
+    #
+    # 这是 2026-07-30「领料成本 ≠ 菜品成本」那次修复**缺失的另一半**: 由
+    # _KITCHEN_OPS_NOUNS 生成的负向 lookbehind 已经能拦住「采购成本」被算成
+    # recipe_cost, 但**没有任何规则把它算成领料成本** —— 本表里压根没有
+    # requisition 指标, 于是这类问句的指标只能由 LLM 随手填。
+    #
+    # prod 实测(MOCK_REST): 「采购花了多少钱」被填成 sales_volume →
+    # planned_intents=[SALES_SUMMARY] → 与 planner 的 REQUISITION_TREND 冲突 →
+    # fail-closed 拒答; 而「领料花了多少钱」「采购金额是多少」同一天能答出
+    # ¥6,060,743.28。**同一个问题换个说法就时灵时不灵, 因为没人给确定性口径。**
+    # 已实验证伪"这是词汇表问题": 给「领料」喂同样的 sales_volume 槽位, 它一样挂。
+    if _REQUISITION_SPEND_RE.search(text):
+        detected = tuple(metric for metric in detected if metric != "sales_volume")
+        if "requisition_cost" not in detected:
+            detected = (*detected, "requisition_cost")
     return detected
 
 
