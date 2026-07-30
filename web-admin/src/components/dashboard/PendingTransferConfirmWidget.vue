@@ -48,11 +48,15 @@ function warehouseName(id?: string | null): string {
 }
 
 async function loadWarehouses(): Promise<void> {
+  // 路径是 /{factoryId}/factory/warehouses —— 少写 /factory 会让首页弹
+  // 「请求的接口不存在 (GET /LIUSHANMEN/warehouses)」(2026-07-30 实测踩过)。
+  // _silent: 首页可选 widget 自身失败绝不能弹全局 toast 打扰用户 (全局拦截器默认会弹)。
   try {
-    const resp = await get<Array<{ id: string; name: string }>>(`/${factoryId.value}/warehouses`);
-    if (resp.success && Array.isArray(resp.data)) {
+    const res = await get<Array<{ id: string; name: string }>>(
+      `/${factoryId.value}/factory/warehouses`, { _silent: true });
+    if (res.success && Array.isArray(res.data)) {
       const map: Record<string, string> = {};
-      for (const w of resp.data) map[w.id] = w.name;
+      for (const w of res.data) map[w.id] = w.name;
       warehouseNames.value = map;
     }
   } catch {
@@ -66,7 +70,8 @@ async function load(): Promise<void> {
   loadError.value = '';
   try {
     const resp = await get<{ content?: TransferRow[] } | TransferRow[]>(
-      `/${factoryId.value}/transfers`, { params: { status: 'APPROVED', page: 1, size: 50 } });
+      `/${factoryId.value}/transfers`,
+      { params: { status: 'APPROVED', page: 1, size: 50 }, _silent: true });
     if (resp.success && resp.data) {
       const list = Array.isArray(resp.data) ? resp.data : (resp.data.content || []);
       // 只留同厂调拨: 跨厂 APPROVED 的下一步是发运/签收, 不是确认入库, 混在一起会误导。
