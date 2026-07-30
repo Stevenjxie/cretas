@@ -31,6 +31,7 @@ from smartbi.gold.restaurant.restaurant_intent import (
 from smartbi.gold.restaurant.restaurant_ops_router import (
     _resolve_sales_query_spec,
     demo_data_factory_for_code,
+    dish_catalogue_scope,
     extract_store_mentions,
     resolve_by_code as _resolve_tiered,
 )
@@ -638,14 +639,17 @@ async def tiered_answer(
     action_warning: Optional[str] = None
     try:
         if spec is None:
-            spec = await parse_restaurant_query(
-                query,
-                pool,
-                factory_id=factory_id,
-                history=history,
-                session_key=session_key,
-                semantic_first=True,
-            )
+            # 菜单目录裁决「这句话里有没有菜」, 必须在规划之前就位 ——
+            # 否则「本月人力成本是多少」会把「人力」当菜名并规划出一个菜品意图。
+            async with dish_catalogue_scope(pool, factory_id):
+                spec = await parse_restaurant_query(
+                    query,
+                    pool,
+                    factory_id=factory_id,
+                    history=history,
+                    session_key=session_key,
+                    semantic_first=True,
+                )
         if spec is None:
             return None
         action_warning = _read_only_action_warning_for_spec(query, spec)

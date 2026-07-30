@@ -24,6 +24,9 @@ import inspect
 import logging
 import math
 import re
+import time
+from contextlib import asynccontextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass
 from datetime import date, timedelta
 from typing import Any, Dict, List, Optional, Sequence, Tuple
@@ -991,6 +994,127 @@ _RESOLVER_QUERY_HINT_RE = re.compile(
 )
 
 
+# ─────────────────────────────────────────────────────────────────────
+# 菜单目录 —— 「这句话里有没有菜」的唯一裁决者
+# ─────────────────────────────────────────────────────────────────────
+#
+# 菜名抽取本来是**残差式**的: 剥掉时间/门店/指标后剩下的就当菜名。它预设了
+# 「这句话里一定有个菜」, 于是「本月人力成本是多少」里的「人力」被当成菜,
+# 答案变成「没有找到名为『人力』的菜品」。靠黑名单堵要穷举「所有不是菜的
+# 名词」—— 无界集合, 每补一轮词下一个没列到的名词立刻把口子重新捅开。
+#
+# 仓库本来就写着正确原则 (restaurant_intent.py: 「真伪由下游 resolver 对
+# dim_product/dim_store 验证 —— LLM 只提名, 不裁决」), 而且校验确实存在
+# (dish_not_found / dish_mention_ambiguous)。问题是**裁决发生在路由已经锁定
+# 之后** —— 它只能说「查无此菜」, 没法说「所以这根本不是菜品问题, 改道」。
+#
+# 这里把裁决权前移: 候选词先对租户真实菜单验证, 命中才算菜名。黑名单翻转成
+# 白名单, 而白名单是菜单本身 —— 有限、权威、自维护(上新菜自动生效)。
+#
+# ⚠️ 失败一律**开放**(退回历史行为), 绝不收紧: 目录没加载 / 加载失败 / 租户
+# 菜单为空(尚未同步) 时, 收紧会把该租户的菜品问答整片判死, 那比误读更糟。
+_DISH_CATALOGUE: ContextVar[Optional[frozenset]] = ContextVar(
+    "restaurant_dish_catalogue", default=None,
+)
+_DISH_CATALOGUE_CACHE: Dict[str, Tuple[float, frozenset]] = {}
+_DISH_CATALOGUE_TTL_SECONDS = 300.0
+
+
+def set_dish_catalogue(names: Optional[frozenset]):
+    """绑定本次解析的菜单词表, 返回 reset token (务必 try/finally 复位)。"""
+    return _DISH_CATALOGUE.set(names or None)
+
+
+def reset_dish_catalogue(token) -> None:
+    _DISH_CATALOGUE.reset(token)
+
+
+def current_dish_catalogue() -> Optional[frozenset]:
+    return _DISH_CATALOGUE.get()
+
+
+async def load_dish_catalogue(pool, factory_id: str) -> Optional[frozenset]:
+    """租户全部菜名 (name + normalized_name + POS 别名), 带 TTL 缓存。
+
+    取 dim_product 全量而不是「窗口内有销量的菜」—— 后者会把本月没卖的真菜
+    判成非菜。失败返回 None = 目录不可用 = 调用方退回历史行为。
+    """
+    now = time.time()
+    cached = _DISH_CATALOGUE_CACHE.get(factory_id)
+    if cached and now - cached[0] < _DISH_CATALOGUE_TTL_SECONDS:
+        return cached[1] or None
+    try:
+        async with pool.acquire() as conn:
+            await conn.execute(
+                "SELECT set_config('app.factory_id', $1, false)", factory_id,
+            )
+            rows = await conn.fetch(
+                """
+                SELECT name, normalized_name FROM dim_product WHERE factory_id = $1
+                UNION
+                SELECT pos_name, pos_name FROM dim_product_alias WHERE factory_id = $1
+                """,
+                factory_id,
+            )
+    except Exception:  # noqa: BLE001 - 目录不可用绝不能挡住问答
+        logger.warning("[dish-catalogue] load failed for %s", factory_id, exc_info=True)
+        return None
+    names = frozenset(
+        str(value).strip()
+        for row in rows
+        for value in (row["name"], row["normalized_name"])
+        if value and str(value).strip()
+    )
+    _DISH_CATALOGUE_CACHE[factory_id] = (now, names)
+    return names or None
+
+
+@asynccontextmanager
+async def dish_catalogue_scope(pool, factory_id: str):
+    """在本次解析期间绑定该租户的菜单目录。
+
+    contextvar 是 task 级的, 不复位会泄漏到同一 task 的后续代码 —— 一旦那里
+    是另一个租户, 就会拿错菜单去裁决。故一律 try/finally 复位。
+    """
+    token = set_dish_catalogue(await load_dish_catalogue(pool, factory_id))
+    try:
+        yield
+    finally:
+        reset_dish_catalogue(token)
+
+
+def catalogue_has_no_dish_mention(text: str) -> bool:
+    """目录已加载, 且整句话里**没有出现任何真实菜名** → True。
+
+    给指标检测用: 「本月人力成本是多少」既没点到菜, 裸「成本」就不该被当成
+    菜品成本需求。目录不可用时恒为 False —— 行为与历史完全一致。
+    """
+    names = _DISH_CATALOGUE.get()
+    if not names or not text:
+        return False
+    compact = re.sub(r"\s+", "", text)
+    return not any(len(name) >= 2 and name in compact for name in names)
+
+
+def _catalogue_says_not_a_dish(candidate: str) -> bool:
+    """目录已加载且候选词**不是**菜 → True (据此否决)。
+
+    匹配语义与 ``_match_dish_rows`` 一致: 精确 / 候选是菜名子串 (用户常说
+    半个菜名) / 菜名是候选子串。语义不一致会造出新的错配面。
+    """
+    names = _DISH_CATALOGUE.get()
+    if not names or not candidate:
+        return False  # 目录不可用 → 不否决
+    if candidate in names:
+        return False
+    for name in names:
+        if candidate in name:
+            return False
+        if len(name) >= 2 and name in candidate:
+            return False
+    return True
+
+
 # 后厨域名词 —— 它们是**别的域的对象**, 既不是菜名, 也不是菜品成本。
 # 「食材损耗成本」「领料成本」里的「成本」修饰的是这些名词而不是菜品:
 #   - 判成 recipe_cost 会多规划一个菜品类意图 (2026-07-30 prod 实拍噪音
@@ -1060,7 +1184,11 @@ def _extract_dish_candidate_single(text: str) -> "Optional[str]":
         "过去", "最近", "个月", "季度", "一年", "继续追问",
     ) + _KITCHEN_OPS_NOUNS):
         return None
-    return candidate[:60]
+    candidate = candidate[:60]
+    # 最后一道: 菜单说了算。黑名单只能拦住有人想到过的词, 目录能拦住全部。
+    if _catalogue_says_not_a_dish(candidate):
+        return None
+    return candidate
 
 
 def extract_dish_candidate(query: "Optional[str]") -> "Optional[str]":
@@ -1190,7 +1318,11 @@ def extract_dish_candidates(query: "Optional[str]") -> list:
                 count=1,
             ).strip()
             cand = _DISH_LEADING_PRONOUN_RE.sub("", cand).strip("的， ,")
-            if len(cand) >= 2 and cand not in _DISH_GENERIC_TOKENS:
+            if (
+                len(cand) >= 2
+                and cand not in _DISH_GENERIC_TOKENS
+                and not _catalogue_says_not_a_dish(cand)
+            ):
                 out.append(cand[:60])
         if len(out) == 2:
             return out
@@ -1225,6 +1357,7 @@ def extract_dish_candidates(query: "Optional[str]") -> list:
                     "排行", "整体", "全部",
                     "销量", "营收", "销售额", "毛利", "成本", "客单",
                 ))
+                and not _catalogue_says_not_a_dish(cand)
             ):
                 multi.append(cand[:60])
         if len(multi) >= 2:
