@@ -41,6 +41,7 @@
         <module>cretas-model</module>
         <module>cretas-platform</module>
         <module>cretas-logistics</module>
+        <module>cretas-logistics-app</module>
         <module>cretas-api</module>
     </modules>
 </project>
