@@ -27,28 +27,41 @@ Environment=POSTGRES_USER=smartbi_user
 WorkingDirectory=/www/wwwroot/cretas/code/backend/python
 Environment=PYTHONPATH=/www/wwwroot/cretas/code/backend/python:/www/wwwroot/cretas/code/backend/python/smartbi
 
-# --fail-under 15 (共 19 条): **必须设**, 否则这个 timer 只是每天默默写一行日志,
+# 三个租户覆盖**不是可选项**: 2026-07-31 一天内两次「换个租户就整体降级」——
+# #2045(堂食外卖 resolver 只认中文枚举, 换租户占比一条都不出)、
+# #2060(餐饮租户闸拿后厨数据决定 POS 类问题能不能答, 整个租户静默关闭)。
+# 只跑一个租户的话这两个都逮不到。三个租户刻意选成不同形态:
+#   MOCK_REST     数据最全 → 参考租户, 能力分看它
+#   R_GML_DEMO    有 POS 无后厨、且只有 1 天数据 → 大量「无数据」是**正确行为**
+#   RES_3101_009  有 POS 无后厨、数据横跨 576 天
+#
+# --fail-under 15 (参考租户 19 条): **必须设**, 否则这个 timer 只是每天默默写一行日志,
 # 出了问题没有任何人知道 —— 定时的价值就在于「变红」这个信号本身。
 #
 # 15 这个数是留了余量的: 2026-07-30 实测基线 18/19(唯一那条是经营诊断被叙事接地
 # 闸拦下, 依赖当次 LLM 措辞、天然会抖)。给 3 条的抖动空间, 真崩(整类 resolver
 # 挂掉 / 租户变暗 / 某次改动打翻路由)一定会跌破。
 # 调高会变吵, 调低会漏 —— 改之前先看几天真实分布再决定。
+#
+# ⚠️ --fail-under **只对参考租户生效**。其余租户数据丰度不同(实测
+# R_GML_DEMO 15/19, RES_3101_009 18/19), 套同一个门槛只会天天误报; 它们由脚本
+# 里的「整个变暗」判据兜底 —— 一条都答不出来才算挂, 那正是 #2060 的形态。
 # 用 `-m scripts.…` 与既有的 cretas-gold-etl-refresh 保持一致。
 # ⚠️ 脚本必须住在 backend/python/scripts/ —— 仓库根的 scripts/ **不会**被
 #    deploy-smartbi-python.sh 同步到服务器。放错地方时这个 unit 会一直
 #    file-not-found(2026-07-31 挂 timer 时就是这么发现的)。
 ExecStart=/www/wwwroot/cretas/code/backend/python/venv-current/bin/python -u \
     -m scripts.restaurant_capability_audit \
-    --factory MOCK_REST --role restaurant_manager --fail-under 15
+    --factory MOCK_REST,R_GML_DEMO,RES_3101_009 \
+    --role restaurant_manager --fail-under 15
 
 # 落 journal: `journalctl -u cretas-restaurant-audit -n 60` 看最近一次全文。
 StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=cretas-restaurant-audit
 
-# 审计只读 + 调 LLM, 单次约 40 秒; 给足余量但别让它卡住整晚。
-TimeoutStartSec=600
+# 审计只读 + 调 LLM。三个租户 × 19 条实测约 2 分钟; 给足余量但别卡住整晚。
+TimeoutStartSec=900
 
 [Install]
 WantedBy=multi-user.target

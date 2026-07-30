@@ -144,21 +144,19 @@ async def _run_case(pool, fid: str, role: str, question: str) -> Dict[str, Any]:
     return out
 
 
-async def main_async(args: argparse.Namespace) -> int:
-    from smartbi.config import get_pg_pool
+async def _audit_one(pool, factory: str, role: str, verbose: bool) -> Dict[str, Any]:
+    """跑完一个租户, 返回该租户的判定计数。"""
     from smartbi.tenant_ctx import set_factory_id
 
-    set_factory_id(args.factory)  # ← 不设的话 RLS 会造出一堆假缺陷, 见文件头
-    pool = await get_pg_pool()
-
-    print(f"factory={args.factory}  role={args.role}  "
-          f"cases={len(CASES)}+{len(CLARIFY_CASES)}")
-    print("序列: dish_catalogue_scope → parse_restaurant_query(semantic_first)"
-          " → should_delegate → tiered_answer\n", flush=True)
+    set_factory_id(factory)  # ← 不设的话 RLS 会造出一堆假缺陷, 见文件头
+    print("", flush=True)
+    print("=" * 68, flush=True)
+    print(f"  factory={factory}  role={role}", flush=True)
+    print("=" * 68, flush=True)
 
     rows: List[Dict[str, Any]] = []
     for family, question, expected in CASES:
-        result = await _run_case(pool, args.factory, args.role, question)
+        result = await _run_case(pool, factory, role, question)
         verdict, note = classify(expected, result["intent"], result["kind"])
         rows.append({"family": family, "q": question, "verdict": verdict,
                      "note": note, **result})
@@ -169,11 +167,11 @@ async def main_async(args: argparse.Namespace) -> int:
             print(f"    ⚠️ {note}", flush=True)
         if result["error"]:
             print(f"    ERROR {result['error']}", flush=True)
-        if args.verbose and result["answer"]:
+        if verbose and result["answer"]:
             print(f"    → {_short(result['answer'], 110)}", flush=True)
 
     for family, question in CLARIFY_CASES:
-        result = await _run_case(pool, args.factory, args.role, question)
+        result = await _run_case(pool, factory, role, question)
         good = result["kind"] == "clarification"
         rows.append({"family": family, "q": question,
                      "verdict": "OK" if good else "SHOULD_CLARIFY",
@@ -187,21 +185,66 @@ async def main_async(args: argparse.Namespace) -> int:
     for row in rows:
         counts[row["verdict"]] = counts.get(row["verdict"], 0) + 1
     ok = counts.get("OK", 0)
-    total = len(rows)
-    print("\n" + "=" * 68)
-    print("  " + "  ".join(f"{k}={v}" for k, v in sorted(counts.items())))
-    print(f"  OK {ok}/{total}")
+    # 「整个变暗」= 一条都没答出来。这是 2026-07-31 修掉的那个回归的形态
+    # (餐饮租户闸判错 → 每个问题 0.0 秒返回 None), 与「数据少所以答不出内容」
+    # 是两回事 —— 后者仍然会正常走完链路并如实说无数据。
+    went_dark = ok == 0
+    print(f"  " + "  ".join(f"{k}={v}" for k, v in sorted(counts.items())))
+    print(f"  OK {ok}/{len(rows)}" + ("   ⛔ 整个变暗" if went_dark else ""))
     wrong = [r for r in rows if r["verdict"] == "WRONG_INTENT"]
     if wrong:
-        print("\n  ⚠️ 答错轴(最危险: 看起来像正常答案, 答的却不是你问的):")
+        print("  ⚠️ 答错轴(最危险: 看起来像正常答案, 答的却不是你问的):")
         for row in wrong:
             print(f"     {row['q'][:34]} — {row['note']}")
+    return {"factory": factory, "ok": ok, "total": len(rows),
+            "counts": counts, "went_dark": went_dark,
+            "wrong": len(wrong)}
+
+
+async def main_async(args: argparse.Namespace) -> int:
+    from smartbi.config import get_pg_pool
+
+    factories = [f.strip() for f in args.factory.split(",") if f.strip()]
+    pool = await get_pg_pool()
+    print(f"租户: {', '.join(factories)}   role={args.role}   "
+          f"cases={len(CASES)}+{len(CLARIFY_CASES)}/租户")
+    print("序列: dish_catalogue_scope → parse_restaurant_query(semantic_first)"
+          " → should_delegate → tiered_answer", flush=True)
+
+    summaries = [
+        await _audit_one(pool, factory, args.role, args.verbose)
+        for factory in factories
+    ]
+
+    print("")
+    print("=" * 68)
+    print("  汇总")
+    for item in summaries:
+        flags = []
+        if item["went_dark"]:
+            flags.append("⛔整个变暗")
+        if item["wrong"]:
+            flags.append(f"⚠️答错轴×{item['wrong']}")
+        print(f"    {item['factory']:<16} OK {item['ok']}/{item['total']}"
+              + ("   " + " ".join(flags) if flags else ""))
     print("=" * 68)
 
-    if args.fail_under is not None and ok < args.fail_under:
-        print(f"\nFAIL: OK {ok} < --fail-under {args.fail_under}")
-        return 1
-    return 0
+    failed = False
+    # ① 参考租户(第一个, 数据最全)看**能力分**。
+    reference = summaries[0]
+    if args.fail_under is not None and reference["ok"] < args.fail_under:
+        print(f"FAIL: 参考租户 {reference['factory']} OK {reference['ok']} "
+              f"< --fail-under {args.fail_under}")
+        failed = True
+    # ② 其余租户看**有没有整个变暗** —— 它们数据丰度不同, 大量「无数据」是
+    #    正确行为(resolver 如实说没有), 用同一个 OK 门槛只会天天误报。真正
+    #    要抓的是「一条都答不出来」, 那是租户闸/路由挂了的形态。
+    for item in summaries:
+        if item["went_dark"]:
+            print(f"FAIL: {item['factory']} 一条都没答出来 —— 整个变暗"
+                  f"(2026-07-31 修过一次这种回归)")
+            failed = True
+    return 1 if failed else 0
 
 
 def main() -> int:
@@ -219,7 +262,16 @@ def main() -> int:
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    parser.add_argument("--factory", default=os.environ.get("AUDIT_FACTORY_ID", "MOCK_REST"))
+    parser.add_argument(
+        "--factory",
+        default=os.environ.get("AUDIT_FACTORY_ID", "MOCK_REST"),
+        help=(
+            "逗号分隔的租户列表。第一个是参考租户(数据最全), --fail-under 只对它生效; "
+            "其余租户只查「有没有整个变暗」—— 它们数据丰度不同, 大量「无数据」是正确行为。"
+            "多租户覆盖不是可选项: 2026-07-31 一天内两次「换个租户就整体降级」"
+            "(#2045 堂食外卖只认中文枚举 / #2060 餐饮租户闸用错判据)。"
+        ),
+    )
     # PRICE_VIEW_ROLES 不含 owner —— 填错角色金额全脱敏, 评估会假性变差。
     parser.add_argument("--role", default=os.environ.get("AUDIT_ROLE", "restaurant_manager"))
     parser.add_argument("--verbose", action="store_true", help="打印答案正文")
