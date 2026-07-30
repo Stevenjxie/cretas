@@ -195,20 +195,27 @@ COUNT_LINE=$(printf '%s\n' "$CI_BLOCK" | grep -n 'JAVA_BUILD_COUNT=\$((JAVA_BUIL
 [ "$CI_RETURN_LINE" -lt "$COUNT_LINE" ] \
     || fail "CI 成功路径排在 JAVA_BUILD_COUNT 递增之后, 会白吃掉一次 Maven 回退预算"
 
-# ---- both 路径刻意不用 CI 制品, 且必须在台账里说明原因 ----
-# 实测两次(同树同机): Java160/Web150 → 并行163s vs 串行188s(慢25s); Java142/Web80 → 并行
-# 144s vs 串行约135s(快9s)。Web 在 80s↔150s 波动, 串行是赚还是亏随运行摆动 —— 不接受方向
-# 不定的改动。正解是让取制品与 Web 真并行(取制品 55~69s 完全落在 Web 耗时内), 那是另一件事。
-# java-only 路径没这个问题: Java 就是关键路径, 实测总 56s vs 本地 160~290s。
-contains "$RELEASE_SCRIPT" 'try_ci_artifact() {'
-contains "$RELEASE_SCRIPT" 'skipped:both-needs-parallel-fetch'
-# 只能挂在 java-only 那一条路径上; both 分支不得调用它(否则又串行回去)
-[ "$(grep -c 'if try_ci_artifact; then' "$RELEASE_SCRIPT")" = "1" ]     || fail "try_ci_artifact 的调用点数量不对 (应只在 java-only 路径上恰好 1 处)"
-BOTH_BLOCK=$(awk '/^        both\)/,/^            ;;/' "$RELEASE_SCRIPT")
-printf '%s' "$BOTH_BLOCK" | grep -q 'try_ci_artifact'     && fail "both 分支调用了 try_ci_artifact —— 实测串行化会让这条常态路径慢 25s"
-printf '%s' "$BOTH_BLOCK" | grep -q 'BUILD_MODE=parallel-artifacts'     || fail "both 分支不再走 parallel-artifacts"
-# 没触发也要有原因进报告, 否则"没触发"和"触发了但没用上"在台账里长得一样
-contains "$RELEASE_SCRIPT" '"ci_artifact": {"status": "%s"'
+# ---- both 路径: 取制品与 Web 构建必须【并行】, 不得串行 ----
+# 实测串行收益方向不定: Java160/Web150 → 并行163s vs 串行188s(慢25s); Java142/Web80 →
+# 并行144s vs 串行约135s(快9s)。Web 在 80s↔150s 摆动, 方向不定的改动不该进发布路径。
+# 并行则稳定: 取制品 55~69s 完全落在 Web 耗时内, 总时长 max(取制品,Web) < max(Java,Web)。
+contains "$RELEASE_SCRIPT" 'run_ci_fetch_parallel_web() {'
+contains "$RELEASE_SCRIPT" 'BUILD_MODE=ci-artifact-parallel-web'
+# 必须先做 ~2s 廉价探测: 探测不过就直接本地并行构建, 不能白等一趟跨境传输
+contains "$RELEASE_SCRIPT" '--probe-only'
+contains "$CI_SCRIPT" 'CI_ARTIFACT_PROBE_OK'
+contains "$CI_SCRIPT" 'if ((PROBE_ONLY)); then'
+# 探测通过≠一定能用(选择器覆盖/attestation 要等制品送到), 所以必须有晚失败回退且要吵
+contains "$RELEASE_SCRIPT" 'BUILD_MODE=ci-artifact-late-failure-java-fallback'
+contains "$RELEASE_SCRIPT" 'Web 已构建, 现串行补建 Java'
+# 两个后台任务必须各写各的日志, 不能同时 cat(duration_run 会 cat, 交错成乱码)
+contains "$RELEASE_SCRIPT" 'fetch_state="$RUN_LOG_DIR/ci-fetch.state"'
+contains "$RELEASE_SCRIPT" 'unavailable:fetch-state-missing'
+# 并行路径里 Web 构建后必须仍然 validate, 否则跳过了 parallel-artifacts 原有的校验
+BOTH_BLOCK=$(awk '/^run_ci_fetch_parallel_web\(\) \{/,/^\}/' "$RELEASE_SCRIPT")
+printf '%s' "$BOTH_BLOCK" | grep -q 'release-web-manifest.sh" validate'     || fail "并行路径构建 Web 后没有 validate"
+# 状态文件缺失必须当失败, 不能猜
+printf '%s' "$BOTH_BLOCK" | grep -q 'CI_ARTIFACT_STATUS=unavailable:fetch-state-missing'     || fail "fetch 状态文件缺失时没有 fail-closed"
 
 # ---- 测试选择器判据必须是集合包含, 不能是字符串相等 ----
 # CI push 构建用通配 (*RepositoryQueryValidationTest, 本仓库实测 33 个类), 而
