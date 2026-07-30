@@ -41,14 +41,15 @@ const createVisible = ref(false);
 const creating = ref(false);
 const createFormRef = ref<FormInstance>();
 const createForm = reactive<SupplierSavePayload>({
-  name: '', contactPerson: '', phone: '', address: '', email: '', bankAccount: '', taxNumber: '', notes: '',
+  name: '', shortName: '', contactPerson: '', phone: '', address: '', email: '', bankAccount: '', taxNumber: '', notes: '',
 });
 
 const filteredData = computed(() => allData.value.filter((supplier) => {
   if (filterStatus.value && supplierStatus(supplier) !== filterStatus.value) return false;
   const keyword = searchKeyword.value.trim().toLowerCase();
   if (!keyword) return true;
-  return [supplier.name, supplier.supplierCode, supplier.code, supplier.contactPerson]
+  // 简称必须参与过滤 —— 客户要简称就是为了打简称找供应商
+  return [supplier.name, supplier.shortName, supplier.supplierCode, supplier.code, supplier.contactPerson]
     .some((value) => String(value ?? '').toLowerCase().includes(keyword));
 }));
 const tableData = computed(() => {
@@ -76,8 +77,10 @@ function resetFilters(): void {
 }
 
 function openCreate(): void {
+  // 必须逐字段重置(含 shortName): 漏一个字段, 重开弹窗就带着上次的残留值,
+  // 而简称是工厂内唯一的 —— 残留会直接撞 409。
   Object.assign(createForm, {
-    name: '', contactPerson: '', phone: '', address: '', email: '', bankAccount: '', taxNumber: '', notes: '',
+    name: '', shortName: '', contactPerson: '', phone: '', address: '', email: '', bankAccount: '', taxNumber: '', notes: '',
   });
   createVisible.value = true;
 }
@@ -157,7 +160,7 @@ async function handleDownloadTemplate(): Promise<void> {
       <div class="search-bar">
         <el-input
           v-model="searchKeyword"
-          placeholder="搜索供应商名称/编号/联系人"
+          placeholder="搜索供应商名称/简称/编号/联系人"
           :prefix-icon="Search"
           clearable
           @keyup.enter="pagination.page = 1"
@@ -176,6 +179,9 @@ async function handleDownloadTemplate(): Promise<void> {
         </el-table-column>
         <el-table-column label="供应商名称" min-width="220" show-overflow-tooltip>
           <template #default="{ row }">
+            <el-tag v-if="row.shortName" type="primary" size="small" effect="plain" class="short-name-tag">
+              {{ row.shortName }}
+            </el-tag>
             <span>{{ row.name }}</span>
             <el-tag v-if="!supplierProfileComplete(row)" type="warning" size="small" effect="plain" class="incomplete-tag">
               资料不完整
@@ -231,6 +237,10 @@ async function handleDownloadTemplate(): Promise<void> {
       <el-alert title="供应商名称、联系人、联系电话和地址为必填项" type="info" :closable="false" show-icon />
       <el-form ref="createFormRef" :model="createForm" :rules="supplierFormRules" label-width="110px" class="create-form">
         <el-form-item label="供应商名称" prop="name"><el-input v-model="createForm.name" maxlength="200" /></el-form-item>
+        <el-form-item label="简称" prop="shortName">
+          <el-input v-model="createForm.shortName" maxlength="50" show-word-limit placeholder="选填，下拉里优先显示，例如「飞熊」" />
+          <div class="field-hint">留空时下拉显示全称。同一工厂内简称不能重复。</div>
+        </el-form-item>
         <el-form-item label="联系人" prop="contactPerson"><el-input v-model="createForm.contactPerson" maxlength="100" /></el-form-item>
         <el-form-item label="联系电话" prop="phone"><el-input v-model="createForm.phone" placeholder="大陆手机号或带区号座机，可含分机" maxlength="40" /></el-form-item>
         <el-form-item label="地址" prop="address"><el-input v-model="createForm.address" type="textarea" maxlength="500" show-word-limit /></el-form-item>
@@ -269,6 +279,8 @@ async function handleDownloadTemplate(): Promise<void> {
 .search-bar .el-select { width: 150px; }
 .supplier-table { width: 100%; }
 .incomplete-tag { margin-left: 8px; }
+.short-name-tag { margin-right: 8px; }
+.field-hint { font-size: 12px; color: var(--el-text-color-secondary); line-height: 1.6; }
 .pagination-wrapper { display: flex; justify-content: flex-end; padding-top: 16px; }
 .create-form { margin-top: 16px; }
 @media (max-width: 1100px) {

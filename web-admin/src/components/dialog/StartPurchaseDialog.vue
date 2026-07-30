@@ -56,6 +56,9 @@ interface PurchaseSuggestionResponse {
 interface SupplierOption {
   id: string;
   name: string;
+  /** 后端算好的展示名 = 简称 ?? 全称。 */
+  displayName?: string | null;
+  shortName?: string | null;
   supplierCode?: string | null;
 }
 
@@ -123,6 +126,17 @@ const editableItems = ref<EditableItem[]>([]);
 const supplierId = ref('');
 const suppliers = ref<SupplierOption[]>([]);
 const suppliersLoading = ref(false);
+
+/**
+ * 下拉标签: 有简称就「简称（全称）」, 否则退回原来的「全称 (编码)」。
+ * 客户 (六膳门 / 刘山门) 提简称就是因为全称在下拉里太长认不出来;
+ * 但全称仍要显示, 否则新来的采购员认不出简称对应哪家。
+ */
+function supplierOptionLabel(supplier: SupplierOption): string {
+  const short = (supplier.shortName ?? '').trim();
+  if (short) return `${short}（${supplier.name}）`;
+  return supplier.supplierCode ? `${supplier.name} (${supplier.supplierCode})` : supplier.name;
+}
 const packagingByMaterial = ref<Record<string, MaterialPackagingHierarchy>>({});
 const factoryToday = () =>
   new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Shanghai' }).format(new Date());
@@ -623,7 +637,7 @@ function handleClose() {
             <el-option
               v-for="supplier in suppliers"
               :key="supplier.id"
-              :label="supplier.supplierCode ? `${supplier.name} (${supplier.supplierCode})` : supplier.name"
+              :label="supplierOptionLabel(supplier)"
               :value="supplier.id"
             />
           </el-select>

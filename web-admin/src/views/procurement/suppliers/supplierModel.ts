@@ -31,10 +31,26 @@ export function supplierProfileComplete(supplier: Partial<SupplierRecord>): bool
   );
 }
 
+export const SUPPLIER_SHORT_NAME_MAX_LENGTH = 50;
+
+/**
+ * 下拉/列表统一显示名。后端 SupplierDTO.displayName 已经算好，这里优先用它；
+ * 只有拿不到 displayName 的老投影（Canvas 之外的少数裸接口）才在前端回退。
+ */
+export function supplierDisplayName(
+  supplier: Pick<SupplierRecord, 'displayName' | 'shortName' | 'name'>,
+): string {
+  return normalizeText(supplier.displayName)
+    || normalizeText(supplier.shortName)
+    || normalizeText(supplier.name);
+}
+
 export function normalizeSupplierPayload(input: SupplierSavePayload): SupplierSavePayload {
   return {
     ...input,
     name: normalizeText(input.name),
+    // 简称允许清空：空串会被后端 trim 成 null，正是"删掉简称"的语义。
+    shortName: normalizeText(input.shortName),
     contactPerson: normalizeText(input.contactPerson),
     phone: normalizeText(input.phone),
     address: normalizeText(input.address),
@@ -57,6 +73,18 @@ function requiredRule(label: string): FormItemRule {
 
 export const supplierFormRules: Record<string, FormItemRule[]> = {
   name: [requiredRule('供应商名称')],
+  shortName: [
+    {
+      validator: (_rule, value, callback) => {
+        if (normalizeText(value).length > SUPPLIER_SHORT_NAME_MAX_LENGTH) {
+          callback(new Error(`简称不超过 ${SUPPLIER_SHORT_NAME_MAX_LENGTH} 字`));
+          return;
+        }
+        callback();
+      },
+      trigger: ['blur', 'change'],
+    },
+  ],
   contactPerson: [requiredRule('联系人')],
   phone: [
     requiredRule('联系电话'),
