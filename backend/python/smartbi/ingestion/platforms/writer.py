@@ -14,10 +14,13 @@
 金额: 归一化模型用「分」(整数, 避免浮点累加让跨平台对账假性不平),
 Silver 是 NUMERIC(18,2) 元, 这里除 100。
 
-⚠️ 整批一个事务(刻意取舍, 非疏漏): 任一笔失败则整页回滚, 框架不推进游标,
-   下轮重拉。好处是禁降级; 代价是一笔**永久性**坏订单会让该页永远卡住
-   (每轮重试且游标不前进)。选择保留: 门店映射来自 migration 且覆盖全部
-   10 家店, 真出现失配说明配置错了, 本就该卡住而不是静默跳过。
+⚠️ 失败语义(2026-07-30 修订): 先做**写前只读校验**, 把「重试多少次都不会好」
+   的永久坏单据(门店映射查不到/菜名归一化后为空/支付方式未知)隔离到
+   platform_ingest_dead_letter 并**显式告警**, 其余照常整批一个事务写入。
+   这样一条坏记录不再让该类数据永远卡在同一页。
+   **瞬时**故障(DB 抖动/连接断)仍然抛异常让游标停住重试 —— 那才是对的。
+   ⚠️ 顺序不可调换: 隔离先落库(独立事务), 成功之后才写事实表; 隔离写失败一律
+   抛错。隔离没落库却推进游标 = 把坏记录连同它那一页之后的一切悄悄丢掉。
    将来若要放宽, 必须是"隔离到死信表 + 显式告警", 不能是静默 skip。
 
    🔴 2026-07-29 加菜品维度后, 这个取舍的爆炸半径变大了, 上面那条理由**不
@@ -29,9 +32,10 @@ Silver 是 NUMERIC(18,2) 元, 这里除 100。
 """
 from __future__ import annotations
 
+import json
 import logging
 from decimal import Decimal
-from typing import List
+from typing import List, Optional
 
 from smartbi.canonical.entity_resolution.agents.deterministic import normalize_for_dim
 
@@ -70,18 +74,114 @@ def _yuan(cents: int) -> Decimal:
     return (Decimal(cents) / Decimal(100)).quantize(Decimal("0.01"))
 
 
+_DEAD_LETTER_UPSERT_SQL = (
+    "INSERT INTO platform_ingest_dead_letter "
+    "(factory_id, platform, kind, source_ref, payload, reason) "
+    "VALUES ($1,$2,$3,$4,$5::jsonb,$6) "
+    "ON CONFLICT (factory_id, platform, kind, source_ref) DO UPDATE SET "
+    "  last_seen_at = NOW(), seen_count = platform_ingest_dead_letter.seen_count + 1, "
+    "  reason = EXCLUDED.reason, payload = EXCLUDED.payload"
+)
+
+
+async def _permanent_defect(conn, factory_id: str, order: NormalizedOrder) -> Optional[str]:
+    """这条单据是不是**永久性**坏? 是就返回人能看懂的原因, 否则 None。
+
+    只做**只读**判定, 且必须在开写事务之前跑 —— 跑在写事务里的话, 事实表回滚
+    会把隔离记录一起回滚, 于是既没写成也没隔离成, 下轮原样再来。
+
+    只认「重试多少次都不会好」的那几类。DB 抖动、连接断这类**瞬时**故障不在
+    此列: 它们照旧抛异常让游标停住重试, 那才是对的。
+    """
+    row = await conn.fetchrow(
+        "SELECT store_id FROM platform_store_map "
+        "WHERE factory_id = $1 AND platform = $2 AND platform_store_code = $3",
+        factory_id, order.platform, order.store_code,
+    )
+    if row is None:
+        return (f"门店映射查不到: platform={order.platform} "
+                f"code={order.store_code!r}")
+    for item in order.items:
+        name = (item.dish_name or "").strip()
+        if not name:
+            return "明细缺 dishName(菜名为空)"
+        if not normalize_for_dim(name):
+            return f"菜名归一化后为空(纯标点?): {name!r}"
+    for pay in order.payments:
+        if _CHANNEL_NAME.get(pay.method) is None:
+            return f"支付方式未知: {pay.method!r}"
+        chan = await conn.fetchrow(
+            "SELECT channel_id FROM dim_payment_channel "
+            "WHERE factory_id = $1 AND name = $2",
+            factory_id, _CHANNEL_NAME[pay.method],
+        )
+        if chan is None:
+            return f"支付渠道查不到: name={_CHANNEL_NAME[pay.method]!r}"
+    return None
+
+
+def _order_payload(order: NormalizedOrder) -> str:
+    """原始报文快照 —— 供人工核对与修好后重放。"""
+    return json.dumps({
+        "platform_order_no": order.platform_order_no,
+        "store_code": order.store_code,
+        "channel": order.channel,
+        "biz_date": order.biz_date.isoformat(),
+        "gross_cents": order.gross_cents,
+        "net_cents": order.net_cents,
+        "items": [{"dish_name": i.dish_name, "qty": i.qty,
+                   "amount_cents": i.amount_cents} for i in order.items],
+        "payments": [{"method": p.method, "amount_cents": p.amount_cents}
+                     for p in order.payments],
+    }, ensure_ascii=False)
+
+
 async def write_orders(pool, factory_id: str, orders: List[NormalizedOrder]) -> int:
     """写一批订单到 Silver。返回实际新增的订单数(已存在的不计)。
 
-    失败路径一律抛异常 —— 框架据此保持游标不动, 下轮重拉。
+    **永久性**坏单据被隔离到 platform_ingest_dead_letter 并显式告警, 其余照常
+    写 —— 这样游标能推进, 一条坏记录不再让那类数据永远停在同一页。
+    瞬时故障仍然抛异常让游标停住重试。
+
+    ⚠️ 顺序不可调换: 隔离**先**落库(独立事务), 成功之后才写事实表。隔离写失败
+    一律抛错 —— 隔离没落库却推进游标, 等于把坏记录连同它那一页之后的一切悄悄
+    丢掉, 那比现在卡住严重得多。
     """
     if not orders:
         return 0
     written = 0
+    # ① 写前校验(只读)。GUC 是事务级的, 只读查询也要在事务里才有 RLS 上下文。
+    good: List[NormalizedOrder] = []
+    bad: List[tuple] = []
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            await conn.execute("SELECT set_config('app.factory_id', $1, true)", factory_id)
+            for order in orders:
+                reason = await _permanent_defect(conn, factory_id, order)
+                (bad.append((order, reason)) if reason else good.append(order))
+
+        # ② 隔离坏单据 —— 独立事务, 失败即抛(游标不推进, 绝不丢数据)。
+        if bad:
+            async with conn.transaction():
+                await conn.execute(
+                    "SELECT set_config('app.factory_id', $1, true)", factory_id)
+                for order, reason in bad:
+                    await conn.execute(
+                        _DEAD_LETTER_UPSERT_SQL, factory_id, order.platform, "order",
+                        order.platform_order_no, _order_payload(order), reason,
+                    )
+            # 禁降级: 隔离了就必须显式告警, 不能悄悄少几条。
+            logger.error(
+                "[platform-sync][DEAD-LETTER] factory=%s 隔离 %d/%d 笔永久坏单据, "
+                "游标继续推进。明细见 platform_ingest_dead_letter。首条原因: %s",
+                factory_id, len(bad), len(orders), bad[0][1],
+            )
+        if not good:
+            return 0
+        orders = good
     # 每批一份菜品缓存: 同一批里重复出现的菜只解析一次。刻意不做成模块级 ——
     # 那会跨租户串 product_id, 也会在 dim_product 被外部改动后发陈旧值。
-    product_cache: dict = {}
-    async with pool.acquire() as conn:
+        product_cache: dict = {}
         # set_config(..., true) 是**事务级**的: asyncpg 上不开显式事务从不生效,
         # RLS 会靠连接池残留碰运气。这层 transaction 不能省。
         async with conn.transaction():

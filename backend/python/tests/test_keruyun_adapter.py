@@ -288,25 +288,37 @@ class _FakePool:
 
 
 @pytest.mark.asyncio
-async def test_F1_门店映射查不到就报错_不建未知门店也不丢弃():
-    pool = _FakePool(_FakeConn(store_row=None))
-    with pytest.raises(RuntimeError, match="门店映射失败"):
-        await write_orders(pool, "MOCK_REST", [_order()])
+async def test_F1_门店映射查不到就隔离_不建未知门店也不丢弃():
+    """2026-07-30 契约修订: 从「抛错卡住游标」改成「隔离到死信表 + 显式告警」。
+
+    本意没变 —— 既不建"未知门店", 也不静默丢弃。变的只是: 一条坏单据不再让
+    该类数据永远卡在同一页(见 V20261101_03 与 writer 头注)。
+    """
+    conn = _FakeConn(store_row=None)
+    written = await write_orders(_FakePool(conn), "MOCK_REST", [_order()])
+    assert written == 0, "查不到门店的单据被写进了事实表"
+    assert [e for e in conn.executed if "platform_ingest_dead_letter" in e[0]], "既没写也没隔离 —— 那就是静默丢弃"
 
 
 @pytest.mark.asyncio
-async def test_F2_支付渠道查不到就报错():
+async def test_F2_支付渠道查不到就隔离():
     conn = _FakeConn(store_row={"store_id": 1}, channel_row=None, txn_row={"id": 99})
-    with pytest.raises(RuntimeError, match="支付渠道映射失败"):
-        await write_orders(_FakePool(conn), "MOCK_REST", [_order()])
+    written = await write_orders(_FakePool(conn), "MOCK_REST", [_order()])
+    assert written == 0
+    assert [e for e in conn.executed if "platform_ingest_dead_letter" in e[0]], "支付渠道查不到的单据没被隔离"
 
 
 @pytest.mark.asyncio
-async def test_F3_未知支付方式就报错_并提示两处都要补():
+async def test_F3_未知支付方式就隔离_原因写清是哪种():
     conn = _FakeConn(store_row={"store_id": 1}, channel_row={"channel_id": 7},
                      txn_row={"id": 99})
-    with pytest.raises(RuntimeError, match="未知支付方式"):
-        await write_orders(_FakePool(conn), "MOCK_REST", [_order(method="meituan_wallet")])
+    written = await write_orders(_FakePool(conn), "MOCK_REST",
+                                 [_order(method="meituan_wallet")])
+    assert written == 0
+    rows = [e for e in conn.executed if "platform_ingest_dead_letter" in e[0]]
+    assert rows, "未知支付方式的单据没被隔离"
+    # 原因必须点名是哪种支付方式, 否则运维还得自己去翻报文
+    assert any("meituan_wallet" in str(a) for a in rows[0][1]), rows[0][1]
 
 
 @pytest.mark.asyncio
@@ -402,14 +414,19 @@ async def test_菜品缓存不跨批次():
 
 
 @pytest.mark.asyncio
-async def test_菜名为空就报错_不塞未知菜品():
-    """禁降级: 建个"未知菜品"会让菜品分析里多出一坨假聚合。"""
+async def test_菜名为空就隔离_不塞未知菜品():
+    """禁降级: 建个"未知菜品"会让菜品分析里多出一坨假聚合。
+
+    契约修订后仍然**不建**未知菜品, 只是改成隔离而非卡住整页。
+    """
     conn = _FakeConn(store_row={"store_id": 1}, channel_row={"channel_id": 7},
                      txn_row={"id": 99})
     bad = _order(items=[
         NormalizedItem(dish_name="  ", qty=1, price_cents=1, amount_cents=1)])
-    with pytest.raises(RuntimeError, match="菜名"):
-        await write_orders(_FakePool(conn), "MOCK_REST", [bad])
+    written = await write_orders(_FakePool(conn), "MOCK_REST", [bad])
+    assert written == 0
+    assert not conn.product_upserts, "空菜名仍然建了 dim_product —— 假聚合会回来"
+    assert [e for e in conn.executed if "platform_ingest_dead_letter" in e[0]], "空菜名单据没被隔离"
 
 
 @pytest.mark.asyncio
