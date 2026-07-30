@@ -42,12 +42,14 @@ def test_sql_constants_discovered():
     """Sanity check — bail out loudly if the constants were renamed."""
     sql_constants = _collect_sql_constants()
     assert sql_constants, "no _AGG_*_SQL constants found in restaurant_ops_etl"
-    # The 7 known templates as of #539
+    # The 7 known templates as of #539, plus _AGG_WASTAGE_COST_SQL (the
+    # per-ingredient money axis behind "损耗金额排名").
     expected = {
         "_AGG_PRODUCT_COST_SQL",
         "_AGG_REQUISITION_QTY_SQL",
         "_AGG_REQUISITION_COST_SQL",
         "_AGG_WASTAGE_QTY_SQL",
+        "_AGG_WASTAGE_COST_SQL",
         "_AGG_WASTAGE_COST_BY_TYPE_SQL",
         "_AGG_STOCK_SHORTAGE_SQL",
         "_AGG_DAILY_TOTALS_SQL",

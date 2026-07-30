@@ -64,8 +64,12 @@ class ContractProbeConnection:
                     "bill_count": 2,
                 }
             ]
-        if "kpi_kind = 'wastage_qty'" in sql:
-            return [{"name": "猪肉", "category": "肉", "unit": "kg", "qty": 2.0}]
+        if "kpi_kind IN ('wastage_qty', 'wastage_cost')" in sql:
+            # The per-ingredient ranking returns both axes now (money and
+            # quantity) so a cost-worded question can rank by cost.
+            return [
+                {"name": "猪肉", "category": "肉", "unit": "kg", "qty": 2.0, "cost": 20.0}
+            ]
         if "kpi_kind = 'wastage_cost_by_type'" in sql:
             return [{"type": "EXPIRED", "cost": 20.0}]
         if "kpi_kind = 'stocktaking_shortage_qty'" in sql:
@@ -164,7 +168,10 @@ def test_actual_gold_callable_signatures_match_all_ten_adapters():
         "order_type_breakdown": ("pool", "factory_id", "date_range"),
         "meal_period_breakdown": ("pool", "factory_id", "date_range"),
         "discount_summary": ("pool", "factory_id", "date_range", "top_n"),
-        "resolve_wastage_top": ("smartbi_pool", "factory_id", "days", "top_n"),
+        # ``query`` is optional and trailing: the agent runtime calls this tool
+        # with structured params and no free text, so it keeps the historical
+        # quantity ranking. Only the NL router passes a question through.
+        "resolve_wastage_top": ("smartbi_pool", "factory_id", "days", "top_n", "query"),
         "resolve_inventory_warning": ("smartbi_pool", "factory_id", "top_n"),
         "resolve_stock_shortage": ("smartbi_pool", "factory_id", "days", "top_n"),
         "review_summary": ("pool", "factory_id"),
