@@ -270,6 +270,9 @@ def _structured_context(
             if isinstance(result_meta.get("excluded_entities"), list)
             else list(spec.excluded_entities)
         ),
+        # 换范围按钮要按它查 resolver 支不支持 store 粒度
+        # (见 _store_scope_switch_followups)。
+        "intent": spec.intent,
         "store_scope": spec.store_scope,
         "store_names": list(spec.store_slots),
         # 换范围按钮要拿它列可选门店(见 _store_scope_switch_followups)。
@@ -324,6 +327,15 @@ def _store_scope_switch_followups(context: Dict[str, Any]) -> List[Dict[str, str
     """
     scope = context.get("store_scope")
     if not isinstance(scope, str) or scope in ("", "single"):
+        return []
+    # 🔴 只有当前 resolver **真能按门店拆**时才给这个按钮。
+    # 2026-07-31 实测: 损耗答案上给出「只看某某店…」, 点下去回来
+    # 「查询维度超出计划 resolver 的能力范围」—— WASTAGE_TOP 只服务 ingredient
+    # 粒度, 按门店拆它本来就不支持。按钮发的问句格式对了也没用, **它提供的是一个
+    # 系统答不了的问题**。判据复用 `_RESOLVER_DIMENSIONS`(下游拒答用的同一张表),
+    # 不另造口径 —— 两处一漂, 表现就又是「按钮点了报错」。
+    intent = context.get("intent") or ""
+    if "store" not in _RESOLVER_DIMENSIONS.get(intent, frozenset()):
         return []
     current = {
         name for name in (context.get("store_names") or [])

@@ -84,31 +84,32 @@ from smartbi.gold.restaurant.restaurant_intent_service import _suggested_followu
 
 def test_named_scope_offers_all_stores_and_other_stores():
     got = _suggested_followups({
+        # SALES_SUMMARY 服务 store 粒度 —— 本例测的是问句拼装, 能力闸另有用例。
+        "intent": "RESTAURANT_OPS_SALES_SUMMARY",
         "store_scope": "multiple",
         "store_names": ["A店"],
         "store_options": ["A店", "B店", "C店"],
-        "question_seed": "A店最近30天损耗最高的食材",
+        "question_seed": "A店最近30天营收",
     })
     questions = [item["question"] for item in got]
-    assert "全部门店最近30天损耗最高的食材" in questions
-    assert "B店最近30天损耗最高的食材" in questions, questions
+    assert "全部门店最近30天营收" in questions
+    assert "B店最近30天营收" in questions, questions
     # 原问句开头的店名必须被剥掉, 否则拼成「B店A店最近30天…」
     assert not any("A店" in q and q.startswith("B店") for q in questions), questions
 
 
 def test_all_scope_offers_drilling_into_single_stores():
     got = _suggested_followups({
+        "intent": "RESTAURANT_OPS_SALES_SUMMARY",
         "store_scope": "all",
         "store_names": [],
         "store_options": ["A店", "B店", "C店", "D店"],
-        "question_seed": "全部门店最近30天损耗最高的食材",
+        "question_seed": "全部门店最近30天营收",
     })
     questions = [item["question"] for item in got]
     assert not any(q == "全部门店" for q in questions), "已经是全部门店了"
     assert questions[:3] == [
-        "A店最近30天损耗最高的食材",
-        "B店最近30天损耗最高的食材",
-        "C店最近30天损耗最高的食材",
+        "A店最近30天营收", "B店最近30天营收", "C店最近30天营收",
     ], questions
 
 
@@ -139,3 +140,36 @@ def test_followups_are_capped_and_deduped():
     questions = [item["question"] for item in got]
     assert len(got) <= 4
     assert len(questions) == len(set(questions))
+
+
+# ── 能力闸: 只在 resolver 真能按门店拆时才给换范围按钮 ──────────────────────
+# 2026-07-31 prod 实测: 损耗答案上给出「只看某某店…」, 点下去回来
+# 「查询维度超出计划 resolver 的能力范围」—— WASTAGE_TOP 只服务 ingredient 粒度。
+# 问句格式修对了也没用, **按钮提供的是一个系统答不了的问题**。
+
+def test_no_scope_buttons_when_the_resolver_cannot_split_by_store():
+    assert _suggested_followups({
+        "intent": "RESTAURANT_OPS_WASTAGE_TOP",   # 只服务 ingredient
+        "store_scope": "all",
+        "store_options": ["A店", "B店"],
+        "question_seed": "全部门店最近30天损耗金额最高的食材",
+    }) == []
+
+
+def test_scope_buttons_appear_for_a_store_capable_resolver():
+    got = _suggested_followups({
+        "intent": "RESTAURANT_OPS_SALES_SUMMARY",  # 服务 store
+        "store_scope": "all",
+        "store_options": ["A店", "B店"],
+        "question_seed": "全部门店最近30天营收",
+    })
+    assert [x["question"] for x in got] == ["A店最近30天营收", "B店最近30天营收"]
+
+
+def test_capability_check_reuses_the_downstream_table():
+    """判据必须复用 `_RESOLVER_DIMENSIONS` —— 另造一份口径, 两处一漂就又是
+    「按钮点了报错」。"""
+    from smartbi.gold.restaurant.restaurant_intent_service import _RESOLVER_DIMENSIONS
+
+    assert "store" not in _RESOLVER_DIMENSIONS["RESTAURANT_OPS_WASTAGE_TOP"]
+    assert "store" in _RESOLVER_DIMENSIONS["RESTAURANT_OPS_SALES_SUMMARY"]
