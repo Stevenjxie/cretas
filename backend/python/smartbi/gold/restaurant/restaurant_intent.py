@@ -1854,11 +1854,44 @@ def _build_spec(
         planner_authority
         or ("llm" if tier == "llm" else "deterministic_guard")
     )
+    # 🔴 目标 resolver 必须真能服务这个计划的维度, 否则不许覆盖 planner 的判断。
+    #
+    # 2026-07-30 prod 实测(MOCK_REST): 「全部门店最近30天采购花了多少钱」
+    #   contract-repair resolver REQUISITION_TREND -> SALES_SUMMARY
+    #       metrics=('sales_volume',) dimensions=('ingredient',)
+    #   → 「本次没有执行分析：查询维度超出计划 resolver 的能力范围」
+    # LLM 本来是**对的**(REQUISITION_TREND 正是 ingredient 粒度, 同类问法
+    # 「领料花了多少钱」「采购金额是多少」都能正常答), 但指标槽编译出单个
+    # SALES_SUMMARY 就把它覆盖掉了 —— 而 SALES_SUMMARY 只服务 store 粒度,
+    # 于是下游为「维度不兼容」拒答, 那个不兼容正是这次覆盖自己引入的。
+    #
+    # 复用 _RESOLVER_DIMENSIONS(下游拒答用的同一张表), 不另造第二份口径 ——
+    # 否则两处判定会漂, 而漂的表现恰好就是这种"自己造成再自己拒答"。
+    # 函数内 import: restaurant_intent_service 在模块级 import 本模块, 顶层
+    # import 会成环; 调用期两个模块都已加载, 安全。
+    repair_candidate = planned_intents[0] if len(planned_intents) == 1 else ""
+    repair_target_serves_dimensions = True
+    if repair_candidate and dimensions:
+        from smartbi.gold.restaurant.restaurant_intent_service import (
+            _RESOLVER_DIMENSIONS,
+        )
+        repair_target_serves_dimensions = set(dimensions).issubset(
+            _RESOLVER_DIMENSIONS.get(repair_candidate, frozenset())
+        )
+        if not repair_target_serves_dimensions:
+            logger.warning(
+                "[restaurant-intent] contract-repair SKIPPED %s -> %s: 目标 resolver "
+                "只服务 %s, 服务不了本计划的 %s —— 保留 planner 的判断",
+                code, repair_candidate,
+                sorted(_RESOLVER_DIMENSIONS.get(repair_candidate, frozenset())),
+                list(dimensions),
+            )
     if (
         len(planned_intents) == 1
         and (not code or code not in planned_intents)
         and supported_requested_metrics
         and (bool(code) or bool(explicit_requested_metrics))
+        and repair_target_serves_dimensions
         and all(
             metric in _CONTRACT_REPAIRABLE_METRICS
             for metric in supported_requested_metrics
