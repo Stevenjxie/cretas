@@ -60,6 +60,15 @@
             <version>${project.version}</version>
         </dependency>
 
+        <!-- Shared persistence model: the JPA entities and enums every business
+             line is written in terms of. 496 files, measured as the bottom layer
+             of a 793-file shared core. -->
+        <dependency>
+            <groupId>com.cretas</groupId>
+            <artifactId>cretas-model</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+
         <!-- Logistics domain. Nothing in this module references it at compile
              time (measured: 0 inbound references), so it is here only so Spring
              can component-scan com.cretas.aims.logistics and so the domain ships

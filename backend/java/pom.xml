@@ -38,6 +38,7 @@
 
     <modules>
         <module>cretas-common</module>
+        <module>cretas-model</module>
         <module>cretas-logistics</module>
         <module>cretas-api</module>
     </modules>
