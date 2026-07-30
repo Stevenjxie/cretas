@@ -271,7 +271,7 @@
         <div class="meta-row">
           <span class="stamp ok">Workflow / BOM 自动关联、逐道报工：按最新 main 校准</span>
           <span class="stamp">计划幂等、包材扣库、成本与小结：按当前生产逻辑校准</span>
-            <span class="stamp code">origin/main · SOP sync 2026-07-29</span>
+          <span class="stamp code">origin/main · SOP sync 2026-07-30</span>
           <span class="stamp">单文件 · 离线可用 · 可打印</span>
         </div>
         <div class="filter-panel screen-only">
@@ -693,7 +693,7 @@
           <label class="step"><span class="check"><input type="checkbox" data-key="warehouse-feed-1"><span></span></span><span><h4>按计划生成物料需求单</h4><p>选择生产计划生成需求单，核对 BOM 展开的原料、辅料、包材和需求单位。生产仓若缺配置，立即停止，不得默认到任意仓。</p><span class="expect">需求单显示真实仓库路由和全部物料类别；无 BOM 时明确报错。</span></span></label>
           <label class="step"><span class="check"><input type="checkbox" data-key="warehouse-feed-2"><span></span></span><span><h4>仓管备料并确认实际拣货</h4><p>状态从“待备料”进入“备料中”；仓管逐行核对需求量和实际拣货量，批次默认按 FEFO，也可在允许时指定批次。</p><span class="expect">库存不足直接提示缺口，不能领成负数；实际拣货量与后续调拨发出量一致。</span></span></label>
           <label class="step"><span class="check"><input type="checkbox" data-key="warehouse-feed-3"><span></span></span><span><h4>调拨并由生产仓签收</h4><p>调出仓确认发运，生产仓按实物逐行确认签收；核对单号、源仓→目标仓、批次、数量和单位。发出与实收不一致时建立差异记录。</p><span class="expect">状态到“已签收”；调出仓减少、生产仓增加，工厂总库存不因同厂调拨凭空变化。</span></span></label>
-          <label class="step"><span class="check"><input type="checkbox" data-key="warehouse-feed-4"><span></span></span><span><h4>独立调拨走完整审批状态机</h4><p>手动仓间调拨依次完成 DRAFT → 提交申请 → 审批通过 → 确认发运 → 确认签收 → 确认入库。申请人、审批人、发运人、签收人按权限分工。</p><span class="expect">任一步不能越级；源仓库存不足时“确认发运”禁用；驳回/取消必须选择原因。</span></span></label>
+          <label class="step"><span class="check"><input type="checkbox" data-key="warehouse-feed-4"><span></span></span><span><h4>独立调拨走完整审批状态机</h4><p>手动仓间调拨依次完成 DRAFT → 提交申请 → 审批通过 → 确认发运 → 确认签收 → 确认入库。申请人、审批人、发运人、签收人按权限分工。默认发起人不得自批；只有当前 OA 节点明确授权 <code>factory_super_admin</code>、且发起人本人是本厂启用状态的该角色时，才允许自审批解除单总监死锁并留审计日志。</p><span class="expect">节点授权仓管或其他角色时超级管理员仍不得越权；其余步骤不能越级。源仓库存不足时“确认发运”禁用；驳回/取消必须选择原因。</span></span></label>
           <label class="step"><span class="check"><input type="checkbox" data-key="warehouse-feed-5"><span></span></span><span><h4>报工前做生产仓双边复核</h4><p>仓管在分仓库存查询记录生产仓批次；生产人员在逐道录入下拉中核对同一批次和可用量。</p><span class="expect">仓库账、需求/调拨单、报工选择器三处的物料、批次、单位和可用量一致。</span></span></label>
         </div>
       </section>
@@ -720,7 +720,8 @@
           <label class="step" data-min-depth="medium"><span class="check"><input type="checkbox" data-key="report-7"><span></span></span><span><h4>R07 · 填齐条件字段、损耗、留样和报工证据</h4><p>按页面实际出现的字段录入损耗量、留样量、异常原因、备注及多段人员工时；需要凭证时上传现场照片或附件。未出现的条件字段不伪造，也不为了测试把高级设置硬塞进工序主档。</p><span class="expect">总工时按报工记录汇总；留样不超过实际产量；损耗、备注和附件随本条报工可回看，且不会被重复计入库存或成本。</span></span></label>
           <label class="step" data-min-depth="full"><span class="check"><input type="checkbox" data-key="report-8"><span></span></span><span><h4>R08 · 触发需要审批的正式报工</h4><p>用满足审批规则的数量、金额或异常条件正式提交，记录提交人、提交时间和审批实例；分别做一次通过、一次驳回后修正重提。</p><span class="expect">待审批记录不能提前成为最终库存、工资或成本事实；驳回保留原因，修正重提形成新审批轨迹；通过只落账一次。</span></span></label>
           <label class="step"><span class="check"><input type="checkbox" data-key="report-9"><span></span></span><span><h4>R09 · 双出成率总览表头排序与筛选</h4><p>展开计划级双出成率总览，逐列核对表头与数据列边界。点击带 ↕ 的表头切换升/降序，再用 Tab 聚焦后按 Enter 或 Space；工序和状态使用表头漏斗筛选。</p><span class="expect">表头与内容线对线；鼠标和键盘排序结果一致、焦点可见；筛选后列宽和行对齐不跳动。</span></span></label>
-          <label class="step"><span class="check"><input type="checkbox" data-key="label-qc-review"><span></span></span><span><h4>R10 · 包装标签拍检与人工审核</h4><p>管理员按真实手机号邀请质量检验员，由员工本人设置密码。质检员填写 SKU、批次号和生产日期并提交 1–6 张标签照片；AI 只提供候选框，所有照片都会进入人工审核。审核人逐图确认/拒绝、漏检补框并给出结论，全部完成后只提交一次。</p><span class="expect">AI 为 0 候选也不能直接判合格；照片、AI 候选、人工框、逐图结论、审核人和时间均可追溯。训练批准只允许导出数据，不会自动训练或发布模型。</span></span></label>
+          <label class="step"><span class="check"><input type="checkbox" data-key="report-unit-contract"><span></span></span><span><h4>R10 · 配置报工单位、单选自动选中与跨单位成品率</h4><p>分别验证唯一投入/产出和多候选场景。页面按配置单位显示：kg/g 只在同量纲内换算，盒、袋、只按字面量匹配；手工批次也不得强制转 kg。再用 kg 投入、盒产出验证跨量纲成品率，在产出行补填每盒克重。</p><span class="expect">唯一候选自动选中，多候选必须人工选；必填与阻塞原因在当前行内。单位不兼容时明确指出物料和两侧单位并停止；未填每单位重量时成品率显示不可比，补填后才按重量口径重算。</span></span></label>
+          <label class="step"><span class="check"><input type="checkbox" data-key="label-qc-review"><span></span></span><span><h4>R11 · 包装标签拍检与三层人工复核</h4><p>管理员按真实手机号邀请质量检验员，由员工本人设置密码。质检员填写 SKU、批次号和生产日期并提交 1–6 张标签照片；AI 只提供初筛，所有照片都会进入人工审核。复核台逐图显示盒子、白标、彩标三层参考框和图例；审核人用“选择”确认/拒绝已有候选，漏检时切换白标画笔或彩标画笔拖拽补框，画错可撤销或删除后重画，全部完成后只提交一次。</p><span class="expect">AI 为 0 候选也不能直接判合格；三层框只帮助定位，不自动形成结论。照片、参考框、人工框、逐图结论、审核人和时间均可追溯。训练批准只允许导出数据，不会自动训练或发布模型。</span></span></label>
         </div>
         <h4 data-min-depth="full" style="margin:22px 0 10px;font-size:17px">报错与冲突等价类（逐项故意触发）</h4>
         <div class="table-wrap" data-min-depth="full"><table><thead><tr><th>编号</th><th>触发方式</th><th>必须出现的结果</th></tr></thead><tbody>
