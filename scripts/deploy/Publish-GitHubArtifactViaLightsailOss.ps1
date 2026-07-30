@@ -362,23 +362,27 @@ try {
     $verifyCommand = "/usr/local/sbin/oss-verify-artifact.sh --prefix $normalizedPrefix " +
     "--tree-sha $TreeSha --jar-sha256 $jarSha256 --size $jarSize"
     if ($ManifestPath) { $verifyCommand += " --manifest $ManifestPath" }
-    if ($manifestB64) { $verifyCommand += ' --manifest-stdin' }
     if ($PurgeAcceptanceObject) { $verifyCommand += ' --purge-acceptance' }
     if ($StageToCache) { $verifyCommand += ' --stage-to-cache' }
-    # The Sigstore bundle is public by design (it is in a public transparency log),
-    # so it goes on the command line rather than competing with the manifest for the
-    # secret stdin channel. This orchestrator is not trusted to judge it -- it only
-    # relays it to the ECS, which verifies against its own pinned trusted root.
-    if ($attestationB64) { $verifyCommand += " --attestation-b64 $attestationB64" }
     if ($SourceDigest) { $verifyCommand += " --source-digest $SourceDigest" }
 
     if ($manifestB64) {
-        # The manifest came out of the ZIP on Tokyo and is piped straight to the
-        # ECS, so it never touches the Windows filesystem.
-        $manifestText = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($manifestB64))
+        # manifest 与 Sigstore bundle 一起走 stdin: 两行 base64, 第 1 行 manifest, 第 2 行
+        # bundle(可空)。base64 字母表不含换行, 所以行分隔不可能与内容冲突。
+        #
+        # 为什么不把 bundle 放命令行(第一版就是那样写的, 错了): bundle 约 14KB。实测同一条
+        # 14,111 字符的远端命令, 经 Windows OpenSSH (C:\Windows\System32\OpenSSH\ssh.exe)
+        # 完整送达, 而经 Git-for-Windows 的 ssh.exe 尾部被截断 —— 排在最后的
+        # --source-digest 静默消失, ECS 只报 source_digest_not_supplied, 看起来像"调用方
+        # 忘了传 pin"。而从 bash 起的 pwsh 继承 MSYS 的 PATH, 命中的正是被截断那个,
+        # 也就是 release-cretas.sh 的真实路径。stdin 没有长度与引用问题。
+        #
+        # 这个编排器不被信任去裁决 bundle, 它只搬运; ECS 用自己钉住的 trusted root 验签。
+        $verifyCommand += ' --payload-stdin'
+        $payload = $manifestB64 + "`n" + $attestationB64
         $verify = Invoke-RemoteWithSecretStdin -SshTarget $EcsHost -SshOptions $ecsOptions `
-            -RemoteCommand $verifyCommand -Secret $manifestText
-        $manifestText = $null
+            -RemoteCommand $verifyCommand -Secret $payload
+        $payload = $null
     }
     else {
         $verify = Invoke-Remote -SshTarget $EcsHost -SshOptions $ecsOptions -RemoteCommand $verifyCommand

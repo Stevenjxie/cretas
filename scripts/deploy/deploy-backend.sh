@@ -748,6 +748,71 @@ prune_remote_sha256_cache() {
 }
 # END_REMOTE_JAR_CACHE_HELPERS
 
+# BEGIN_REMOTE_ARTIFACT_DESCRIPTOR_HELPERS
+# 一份 CI 构建的制品已经被 provenance 验过、并且已经躺在服务器的 sha256 缓存里 —— 此时
+# 本机没有 jar 字节, 也不需要有。描述符提供 claim 所需的两个摘要与大小。
+#
+# 这不是"少验了几项", 而是把验证挪到了字节真正会运行的那台机器上:
+#   - ECS 的 oss-verify-artifact.sh 重算过 sha256、验过 Sigstore 签名(绑定 workflow + commit)、
+#     并跑过 logback 嵌套 jar 完整性预检
+#   - claim_remote_sha256_artifact 装之前还要再过一遍 sha256 + md5 + unzip -tqq
+# 相比之下, 旧路径检查的是一份随后要被上传的本地副本。
+
+# 严格判定用 release_manifest_is_lower_hex (定义在 release-jar-manifest.sh, 本脚本已 source):
+# 不用 [0-9a-f] 区间, 因为 en_US.UTF-8 下 bash 的 [[ =~ ]] 区间按 collation 展开会匹配大写。
+#
+# 为什么要严格而不是就地转小写: 描述符是 release-ci-artifact.sh 机器写出来的, 那边只产小写。
+# 出现大写说明这份描述符被手改过或生成错了, 那本身就是该拦下来的信号。
+load_remote_artifact_descriptor() {
+    local descriptor="$1"
+    local format build_commit backend_tree jar_sha jar_md5 jar_size tests attested
+    local current_tree built_tree
+
+    [ -f "$descriptor" ] || { echo "   ❌ 远端制品描述符不存在: $descriptor" >&2; return 1; }
+
+    format=$(release_manifest_field "$descriptor" format) || return 1
+    [ "$format" = "cretas-remote-artifact-v1" ] || { echo "   ❌ 描述符格式不认识: $format" >&2; return 1; }
+    attested=$(release_manifest_field "$descriptor" attested) || return 1
+    [ "$attested" = "true" ] || { echo "   ❌ 描述符未标记 attested" >&2; return 1; }
+
+    build_commit=$(release_manifest_field "$descriptor" build_commit) || return 1
+    backend_tree=$(release_manifest_field "$descriptor" backend_tree) || return 1
+    jar_sha=$(release_manifest_field "$descriptor" jar_sha256) || return 1
+    jar_md5=$(release_manifest_field "$descriptor" jar_md5) || return 1
+    jar_size=$(release_manifest_field "$descriptor" jar_size_bytes) || return 1
+    tests=$(release_manifest_field "$descriptor" target_tests) || return 1
+
+    release_manifest_is_lower_hex "$build_commit" 40 || { echo "   ❌ build_commit 非 40 位小写 hex" >&2; return 1; }
+    release_manifest_is_lower_hex "$backend_tree" 40 || { echo "   ❌ backend_tree 非 40 位小写 hex" >&2; return 1; }
+    release_manifest_is_lower_hex "$jar_sha" 64 || { echo "   ❌ jar_sha256 非 64 位小写 hex" >&2; return 1; }
+    release_manifest_is_lower_hex "$jar_md5" 32 || { echo "   ❌ jar_md5 非 32 位小写 hex" >&2; return 1; }
+    case "$jar_size" in
+        ''|*[!0123456789]*|0*) echo "   ❌ jar_size_bytes 格式错" >&2; return 1 ;;
+    esac
+    [ -n "$tests" ] || { echo "   ❌ 描述符没有测试选择器" >&2; return 1; }
+
+    # 与 release_manifest_validate 同样的两跳内容等价检查: 描述符声称的 tree 必须既等于
+    # 当前 origin/main 的 backend tree, 也等于那个 build_commit 自己的 —— 后者防的是
+    # 一份描述符把任意 commit 的制品贴上当前 tree 的标签。
+    current_tree=$(git -C "$PROJECT_ROOT" rev-parse "origin/main:$RELEASE_BACKEND_PATH" 2>/dev/null) || return 1
+    [ "$backend_tree" = "$current_tree" ] \
+        || { echo "   ❌ 描述符 backend_tree 与 origin/main 不符" >&2; return 1; }
+    git -C "$PROJECT_ROOT" cat-file -e "${build_commit}^{commit}" 2>/dev/null \
+        || { echo "   ❌ build_commit 在本地不存在" >&2; return 1; }
+    built_tree=$(git -C "$PROJECT_ROOT" rev-parse "${build_commit}:$RELEASE_BACKEND_PATH" 2>/dev/null) || return 1
+    [ "$built_tree" = "$current_tree" ] \
+        || { echo "   ❌ build_commit 的 backend tree 与 origin/main 不符" >&2; return 1; }
+
+    REMOTE_ARTIFACT_BUILD_COMMIT=$build_commit
+    REMOTE_ARTIFACT_BACKEND_TREE=$backend_tree
+    REMOTE_ARTIFACT_JAR_SHA256=$jar_sha
+    REMOTE_ARTIFACT_JAR_MD5=$jar_md5
+    REMOTE_ARTIFACT_JAR_SIZE=$jar_size
+    REMOTE_ARTIFACT_TARGET_TESTS=$tests
+    return 0
+}
+# END_REMOTE_ARTIFACT_DESCRIPTOR_HELPERS
+
 cleanup() {
     local exit_code=$?
     terminate_build_race_tasks
@@ -1035,7 +1100,21 @@ deploy_jar() {
     JAR_TARGET="backend/java/cretas-api/target/$JAR_NAME"
     LOCAL_SOURCE_CACHE_REUSED=false
     LOCAL_MAVEN_BUILD_COMPLETED=false
-    if reuse_local_source_artifact_cache "$JAR_TARGET"; then
+    REMOTE_ARTIFACT_ONLY=false
+    if [ -n "${CRETAS_REMOTE_ARTIFACT_DESCRIPTOR:-}" ]; then
+        # 描述符只由 release-ci-artifact.sh 在东京链路跑成功、且 ECS 报了
+        # deployable_trust_verified=true 之后写出。校验不过就硬失败, 不回退本地构建 ——
+        # 与下面 CRETAS_REQUIRE_TRUSTED_ARTIFACT 那条同样的立场: 发布入口已经做过一次
+        # 选择, 子部署不该偷偷改成另一件事。
+        if ! load_remote_artifact_descriptor "$CRETAS_REMOTE_ARTIFACT_DESCRIPTOR"; then
+            echo "❌ 远端制品描述符校验失败；拒绝继续（不静默回退本地构建）"
+            exit 1
+        fi
+        REMOTE_ARTIFACT_ONLY=true
+        echo "📦 [1/4] 复用已验证的 CI 制品，跳过本地构建（制品字节不经过本机）"
+        echo "   commit=$REMOTE_ARTIFACT_BUILD_COMMIT tree=$REMOTE_ARTIFACT_BACKEND_TREE"
+        echo "   把关测试=$REMOTE_ARTIFACT_TARGET_TESTS"
+    elif reuse_local_source_artifact_cache "$JAR_TARGET"; then
         LOCAL_SOURCE_CACHE_REUSED=true
         echo "📦 [1/4] 后端源码未变化，跳过 Maven 打包"
     elif [ "${CRETAS_REQUIRE_TRUSTED_ARTIFACT:-0}" = "1" ]; then
@@ -1081,19 +1160,30 @@ deploy_jar() {
     fi
 
     JAR_PATH="$JAR_TARGET"
-    if [ ! -f "$JAR_PATH" ]; then
-        echo "❌ JAR 文件不存在: $JAR_PATH"
-        exit 1
+    if [ "$REMOTE_ARTIFACT_ONLY" = "true" ]; then
+        # 本机没有 jar 字节, 也不需要有。两个摘要来自描述符, 而它们的来源是 ECS 侧对
+        # 真实字节的重算 + Sigstore 验签; 下面 claim 装之前还会再核一遍 sha256+md5+unzip。
+        LOCAL_MD5=$REMOTE_ARTIFACT_JAR_MD5
+        LOCAL_SHA256=$REMOTE_ARTIFACT_JAR_SHA256
+        JAR_SIZE_BYTES=$REMOTE_ARTIFACT_JAR_SIZE
+        JAR_SIZE="$(awk -v b="$JAR_SIZE_BYTES" 'BEGIN{printf "%.1fM", b/1048576}')"
+        log "INFO" "远端制品: $JAR_NAME ($JAR_SIZE, ${JAR_SIZE_BYTES} bytes)"
+        echo "   ✓ MD5: $LOCAL_MD5 (来自已验证的远端制品)"
+    else
+        if [ ! -f "$JAR_PATH" ]; then
+            echo "❌ JAR 文件不存在: $JAR_PATH"
+            exit 1
+        fi
+
+        JAR_SIZE=$(get_file_size_human "$JAR_PATH")
+        JAR_SIZE_BYTES=$(get_file_size_bytes "$JAR_PATH")
+        log "INFO" "打包完成: $JAR_NAME ($JAR_SIZE, ${JAR_SIZE_BYTES} bytes)"
+
+        # 计算本地 MD5 checksum
+        LOCAL_MD5=$(md5sum "$JAR_PATH" | cut -d' ' -f1)
+        LOCAL_SHA256=$(sha256sum "$JAR_PATH" | awk '{print tolower($1)}')
+        echo "   ✓ MD5: $LOCAL_MD5"
     fi
-
-    JAR_SIZE=$(get_file_size_human "$JAR_PATH")
-    JAR_SIZE_BYTES=$(get_file_size_bytes "$JAR_PATH")
-    log "INFO" "打包完成: $JAR_NAME ($JAR_SIZE, ${JAR_SIZE_BYTES} bytes)"
-
-    # 计算本地 MD5 checksum
-    LOCAL_MD5=$(md5sum "$JAR_PATH" | cut -d' ' -f1)
-    LOCAL_SHA256=$(sha256sum "$JAR_PATH" | awk '{print tolower($1)}')
-    echo "   ✓ MD5: $LOCAL_MD5"
 
     # ----- 1b. Jar 完整性预检 (防 corrupt jar 上线) -----
     # 历史事故 2026-04-24: maven 增量编译偶发产生 corrupt fat jar — 缺
@@ -1101,35 +1191,42 @@ deploy_jar() {
     # 任何 exception 触发 logback rendering 都 cascade ClassNotFound, 服务
     # crashloop 但 nginx 健康检查可能仍 200 (短暂窗口). 本地预检挡在最早,
     # 早于上传 152M jar 到 R2 + 服务器部署.
-    INTEGRITY_OK=true
-    LOGBACK_NESTED=$(unzip -l "$JAR_PATH" 2>/dev/null | grep -oE 'BOOT-INF/lib/logback-classic-[0-9.]+\.jar' | head -1)
-    if [ -z "$LOGBACK_NESTED" ]; then
-        echo "❌ Jar 完整性预检失败: 缺 logback-classic-*.jar"
-        INTEGRITY_OK=false
+    if [ "$REMOTE_ARTIFACT_ONLY" = "true" ]; then
+        # 同一项检查已在 ECS 侧对【将要运行的那份字节】做完 (oss-verify-artifact.sh 的
+        # jar_integrity_verified), 而且它是 staging 的前置闸 —— 不通过就不会有缓存条目可
+        # claim, 所以这里没有可跳过的窗口。检查对象比本地副本更贴近真实。
+        echo "   ✓ Jar 完整性预检: 已在 ECS 侧对目标字节完成 (staging 前置闸)"
     else
-        # 解 nested jar 验证 ThrowableProxy.class 存在
-        TMPDIR_INT=$(mktemp -d)
-        if unzip -j -q -o "$JAR_PATH" "$LOGBACK_NESTED" -d "$TMPDIR_INT" 2>/dev/null; then
-            NESTED_BASENAME=$(basename "$LOGBACK_NESTED")
-            if ! unzip -l "$TMPDIR_INT/$NESTED_BASENAME" 2>/dev/null | grep -q 'ch/qos/logback/classic/spi/ThrowableProxy.class'; then
-                echo "❌ Jar 完整性预检失败: logback nested jar 缺 ThrowableProxy.class"
+        INTEGRITY_OK=true
+        LOGBACK_NESTED=$(unzip -l "$JAR_PATH" 2>/dev/null | grep -oE 'BOOT-INF/lib/logback-classic-[0-9.]+\.jar' | head -1)
+        if [ -z "$LOGBACK_NESTED" ]; then
+            echo "❌ Jar 完整性预检失败: 缺 logback-classic-*.jar"
+            INTEGRITY_OK=false
+        else
+            # 解 nested jar 验证 ThrowableProxy.class 存在
+            TMPDIR_INT=$(mktemp -d)
+            if unzip -j -q -o "$JAR_PATH" "$LOGBACK_NESTED" -d "$TMPDIR_INT" 2>/dev/null; then
+                NESTED_BASENAME=$(basename "$LOGBACK_NESTED")
+                if ! unzip -l "$TMPDIR_INT/$NESTED_BASENAME" 2>/dev/null | grep -q 'ch/qos/logback/classic/spi/ThrowableProxy.class'; then
+                    echo "❌ Jar 完整性预检失败: logback nested jar 缺 ThrowableProxy.class"
+                    INTEGRITY_OK=false
+                fi
+            else
+                echo "❌ Jar 完整性预检失败: 无法解 logback nested jar"
                 INTEGRITY_OK=false
             fi
-        else
-            echo "❌ Jar 完整性预检失败: 无法解 logback nested jar"
-            INTEGRITY_OK=false
+            rm -rf "$TMPDIR_INT"
         fi
-        rm -rf "$TMPDIR_INT"
-    fi
-    if [ "$INTEGRITY_OK" = "true" ]; then
-        echo "   ✓ Jar 完整性预检通过 ($LOGBACK_NESTED 含 ThrowableProxy)"
-    else
-        echo "   建议: cd backend/java/cretas-api && mvn clean package, 或 mvn dependency:purge-local-repository -DreResolve=false"
-        cd ../../..
-        exit 1
-    fi
-    if [ "$LOCAL_SOURCE_CACHE_REUSED" != "true" ]; then
-        store_local_source_artifact_cache "$JAR_PATH"
+        if [ "$INTEGRITY_OK" = "true" ]; then
+            echo "   ✓ Jar 完整性预检通过 ($LOGBACK_NESTED 含 ThrowableProxy)"
+        else
+            echo "   建议: cd backend/java/cretas-api && mvn clean package, 或 mvn dependency:purge-local-repository -DreResolve=false"
+            cd ../../..
+            exit 1
+        fi
+        if [ "$LOCAL_SOURCE_CACHE_REUSED" != "true" ]; then
+            store_local_source_artifact_cache "$JAR_PATH"
+        fi
     fi
     deploy_timing_end build
 
@@ -1166,6 +1263,14 @@ deploy_jar() {
     if claim_remote_sha256_artifact "$LOCAL_SHA256" "$LOCAL_MD5"; then
         echo "remote-sha256-cache" > "$UPLOAD_STATUS_DIR/winner"
         echo "   [remote-sha256-cache] 命中已预热可信 JAR，跳过网络上传"
+    elif [ "$REMOTE_ARTIFACT_ONLY" = "true" ]; then
+        # 远端路径下本机没有 jar 可传, 后面每一种上传方法都无从谈起。缓存没命中意味着
+        # 预置那步和这步之间状态变了(缓存被 prune / 文件被换 / md5 不符)。明确失败, 不留
+        # 一个"以为上传成功了其实什么都没发生"的窗口。
+        echo "❌ 远端制品未在服务器缓存命中，且本机无 JAR 可上传" >&2
+        echo "   期望文件: $REMOTE_JAR_CACHE_DIR/$LOCAL_SHA256.jar" >&2
+        echo "   排查: 重跑 release-ci-artifact.sh 重新预置，或去掉 CRETAS_REMOTE_ARTIFACT_DESCRIPTOR 回本地构建" >&2
+        exit 1
     fi
 
     # 远程 MD5 验证 + rename 为标准名
