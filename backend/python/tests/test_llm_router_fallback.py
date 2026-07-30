@@ -678,3 +678,119 @@ def test_ark_models_carry_a_dated_callable_id():
             f"ark/{model} has no dated suffix — probably a console display name, "
             f"which Ark 404s. Take ids from GET /api/v3/models."
         )
+
+
+# ── ark: measured-viable set, thinking translation, provider diversity ──────
+
+# 2026-07-30 measured: content 5/5 on the real T3 prompt AND every call inside the
+# 5s-per-provider budget, with thinking disabled.
+_ARK_VIABLE = {
+    "doubao-seed-2-0-mini-260428",
+    "deepseek-v4-flash-260425",
+    "doubao-seed-2-1-pro-260628",
+    "glm-5-2-260617",
+    "deepseek-v4-pro-260425",
+}
+
+# Reachable and content-correct but OVER the per-provider budget (5.1 / 5.6 / 6.1s),
+# so a correct answer arrives after the caller has already given up.
+_ARK_TOO_SLOW = {
+    "doubao-seed-2-0-pro-260215",
+    "doubao-seed-2-1-turbo-260628",
+    "doubao-seed-2-0-lite-260428",
+}
+
+# In GET /api/v3/models with no Shutdown status, yet 404 on call: the endpoint lists
+# PLATFORM models, not this account's entitled set. Never treat it as entitlement.
+_ARK_NOT_ENTITLED = {
+    "glm-4-5-air-20250728",
+    "qwen3-32b-20250429",
+    "qwen3-14b-20250429",
+    "qwen2-5-72b-20240919",
+    "doubao-smart-router-250928",
+    "doubao-seed-evolving",
+}
+
+
+def test_ark_registry_is_exactly_the_measured_viable_set():
+    registered = {m for (a, m) in llm_router._SAFE_MODELS if a == "ark"}
+    assert registered == _ARK_VIABLE, (
+        "ark registry drifted from the measured set; re-measure before editing "
+        f"(missing={_ARK_VIABLE - registered}, extra={registered - _ARK_VIABLE})"
+    )
+
+
+def test_ark_models_over_the_latency_budget_are_not_reachable():
+    """Content correctness is not sufficient: T3 allows 5s per provider, so a model
+    answering at 5.6s only burns the cascade budget for the ones behind it."""
+    for slot, chain in llm_router.SLOT_MODELS.items():
+        for account, model in chain:
+            assert not (account == "ark" and model in _ARK_TOO_SLOW), (
+                f"{slot.value}: ark/{model} measured over the per-provider budget"
+            )
+
+
+def test_ark_models_the_account_cannot_call_are_not_registered():
+    for model in _ARK_NOT_ENTITLED:
+        assert ("ark", model) not in llm_router._SAFE_MODELS, (
+            f"ark/{model} returns 404 for this account — being listed by "
+            f"GET /api/v3/models is not entitlement"
+        )
+
+
+def test_ark_gets_arks_own_thinking_switch_not_dashscopes():
+    out = llm_router._apply_slot_params(
+        SLOT.REVIEW, "ark", "doubao-seed-2-0-mini-260428",
+        {"model": "doubao-seed-2-0-mini-260428"},
+    )
+    assert out["thinking"] == {"type": "disabled"}
+    assert "enable_thinking" not in out, "enable_thinking is a DashScope param"
+
+
+def test_ark_keeps_thinking_on_a_slot_that_wants_reasoning():
+    """REASONING must not have its reasoning switched off."""
+    out = llm_router._apply_slot_params(
+        SLOT.REASONING, "ark", "deepseek-v4-pro-260425",
+        {"model": "deepseek-v4-pro-260425"},
+    )
+    assert "thinking" not in out
+
+
+def test_thinking_switch_is_ark_scoped():
+    out = llm_router._apply_slot_params(
+        SLOT.REVIEW, "tencent", "hy-mt2-pro", {"model": "hy-mt2-pro"},
+    )
+    assert "thinking" not in out
+
+
+def test_non_aliyun_floor_interleaves_two_independent_providers():
+    """The floor exists for "Aliyun is entirely gone". If its first entries were all
+    one provider, that provider's own outage empties it again — so the head must
+    alternate, and two different providers must appear in the first three slots."""
+    floor = [
+        (a, m) for (a, m) in llm_router._TEXT_TAIL
+        if a not in llm_router._ALIYUN_ACCOUNTS
+    ]
+    assert len(floor) >= 4, floor
+    head_accounts = [a for a, _m in floor[:3]]
+    assert len(set(head_accounts)) >= 2, (
+        f"floor head is single-provider ({head_accounts}) — one outage empties it"
+    )
+
+
+def test_floor_is_ordered_fastest_first():
+    """Pins the ordering decision: the two sub-2s entries lead, because the caller's
+    total cascade budget is 12s and a slow head starves everything behind it."""
+    floor = [
+        (a, m) for (a, m) in llm_router._TEXT_TAIL
+        if a not in llm_router._ALIYUN_ACCOUNTS
+    ]
+    assert floor[0] == ("tencent", "hy-mt2-pro"), floor[0]
+    assert floor[1] == ("ark", "doubao-seed-2-0-mini-260428"), floor[1]
+    # The two known-over-budget entries must be last among the non-Aliyun block.
+    slow = {("tencent", "qwen3.5-plus"), ("tencent", "minimax-m2.7")}
+    positions = [i for i, pair in enumerate(floor) if pair in slow]
+    fast_positions = [i for i, pair in enumerate(floor) if pair not in slow]
+    assert min(positions) > max(
+        p for p in fast_positions if floor[p][0] in ("tencent", "ark")
+    ), f"over-budget entries are not last: {floor}"
