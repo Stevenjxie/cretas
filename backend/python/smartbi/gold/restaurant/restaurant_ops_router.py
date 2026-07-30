@@ -23,6 +23,7 @@ from __future__ import annotations
 import inspect
 import logging
 import math
+import os
 import re
 import time
 from contextlib import asynccontextmanager
@@ -1038,7 +1039,16 @@ async def load_dish_catalogue(pool, factory_id: str) -> Optional[frozenset]:
 
     取 dim_product 全量而不是「窗口内有销量的菜」—— 后者会把本月没卖的真菜
     判成非菜。失败返回 None = 目录不可用 = 调用方退回历史行为。
+
+    ⛔ 2026-07-30 默认**关闭**。#2009 修好加载(此前 dim_product_alias 缺表导致
+    整条查询失败, 目录闸实际从未生效)之后, 闸第一次真正启用, 随即在 prod 观察到
+    **整条损耗路线退化成澄清**, 且 `slot=mapper`(T3 规划器)自那时起一次都没再被
+    调用 —— 说明闸生效后有路径在调 LLM 之前就短路了, 根因未查清。
+    返回 None 即回到「目录不可用」分支, 与闸上线前逐字一致(这条 fail-open 属性
+    正是当初设计时钉住的)。查清后置 RESTAURANT_DISH_CATALOGUE_GATE=1 再开。
     """
+    if os.environ.get("RESTAURANT_DISH_CATALOGUE_GATE", "0") != "1":
+        return None
     now = time.time()
     cached = _DISH_CATALOGUE_CACHE.get(factory_id)
     if cached and now - cached[0] < _DISH_CATALOGUE_TTL_SECONDS:
