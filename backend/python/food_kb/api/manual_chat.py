@@ -146,6 +146,7 @@ _PRODUCTION_SOP_KEYWORDS = frozenset({
     "半成品", "成品", "单位", "克重", "锅序", "替代", "联产", "副产", "拓扑",
     "生产计划", "存货生产", "销售订单", "报工", "结单", "小结", "停产", "成本",
     "入库", "出库", "库存", "仓库", "调拨", "采购", "盘点", "审批", "冲销",
+    "标签", "拍检", "复核台", "白标", "彩标", "质检", "画笔", "拉框",
 })
 _BOM_WORKFLOW_SEQUENCE_TRIGGERS = frozenset({
     "激活", "发布", "启用", "顺序", "前置", "依赖", "为什么还不能",
@@ -205,6 +206,27 @@ _MULTI_OUTPUT_LABEL_QC_ANSWER = """\
 4. Web 管理端后续可备份、归档并由有权限的技术管理员批准或拒绝训练；批准只允许导出训练数据，不会自动训练或发布模型。
 
 **验收结果：** Workflow 与 BOM 没有静态产出角色/比例；正式报工可以回读本次实际产出及其数量或本次比例，未发生候选没有库存和成本行。标签任务的每张照片、AI 候选、人工框、逐图结论、审核人和时间均可追溯。"""
+_REPORTING_UNIT_YIELD_ANSWER = """\
+报工页必须按 Workflow/物料配置的报工单位显示和提交，不能把所有投入强制换成 kg，也不能把“盒、袋、只”等计数或包装单位偷偷折成重量。
+
+**当前报工合同：**
+1. 只有一个可选投入或产出时页面自动选中；有多个候选时必须由操作员选择。必填项和阻塞原因在当前行内显示，不能让用户提交后才猜哪里缺数据。
+2. 质量单位只在同量纲内做科学换算，例如 kg 与 g；计数/包装单位按字面量匹配，忽略大小写但不建立“盒=袋”或“箱=kg”的隐式关系。报工单位与库存单位不兼容时必须阻止提交并指出具体物料、报工单位和库存单位。
+3. 手工批次和已有库存批次都遵守同一单位合同；袋、盒、只等非质量单位可以按其配置单位投入，不要求先换成 kg。
+4. 投入与产出同量纲时，成品率可按统一单位后的投入与产出计算。不同量纲时不能直接相除；页面应说明“需补充每单位成品重量”，操作员在产出行填写每盒/每袋/每只多少克后才重算重量口径成品率。
+5. 产出表保留每行 SKU、物料名、数量和配置单位；宽表头支持横向查看，不能用一个无单位总数覆盖多种产出。
+
+**验收结果：** 页面显示的单位、提交 payload、库存扣减和回读单位一致；跨单位时展示所用的“每单位重量”，未补充则明确显示成品率不可比，不得给出伪造百分比。"""
+_LABEL_QC_REVIEW_ANSWER = """\
+标签质检复核台按“盒子 → 白标 → 彩标”三层参考框帮助人工定位，但 AI 仍只是初筛，不能替代人工结论。
+
+**复核步骤：**
+1. 进入质量检验员的标签待审任务，逐张打开照片；页面同时展示盒子参考框、白标框和彩标框，并给出图例，避免把不同层级误当成同一个缺陷框。
+2. 用“选择”工具点选已有候选并确认或拒绝；发现漏检时切换白标画笔或彩标画笔，在原图上拖拽补框。补错可以撤销或删除后重画。
+3. 每张照片都必须给出合格、缺白标、缺彩标或无法判断等人工结论；AI 为 0 候选也必须人工检查，不能直接判合格。
+4. 全部照片完成后只提交一次人工审核。盒子/标签参考框、人工框、逐图结论、审核人和时间都要回读可追溯。
+
+**边界：** 三层参考框只服务复核定位，不自动改变人工结论；训练批准只导出已审核数据，不会自动训练或发布模型。"""
 _WORKFLOW_ACTUAL_IO_ANSWER = """\
 Workflow 和 BOM 都不预设某一次报工的实际选择：Workflow 维护工序拓扑与可能投入/产出，BOM 维护主料、替代料、辅料、包材、用量和成本；生产计划固定两者的精确版本。
 
@@ -254,13 +276,36 @@ _RESTAURANT_MONTHLY_REPORT_ANSWER = """\
 餐饮月度经营报告已具备服务端预览与 XLSX/PDF 导出能力，但聊天里识别到“报告文件”偏好不等于文件已经生成。
 
 **当前月报合同：**
-1. 月报按模板批量执行与餐饮问答相同的已封存查询计划，覆盖经营总览、营收趋势与环比、门店营收、堂食/外卖结构、门店毛利率和损耗排行；报告层不另写 SQL、不重算指标。
+1. 月报按模板批量执行与餐饮问答相同的已封存查询计划，当前固定为 5 节：经营总览、营收趋势与环比、各门店营收、堂食/外卖结构、各门店毛利率；每一节都显式使用“全部门店”范围。报告层不另写 SQL、不重算指标。
 2. 周期可指定 `YYYY-MM`；省略时使用业务数据截至日期所在月份，不按今天所在月份猜测。
 3. 报告同时标明业务数据截至时间和报告生成时间；多数据源取各源最新日期中的最早值作为整份报告截至时间，并保留逐源明细。
 4. 任一章节需要澄清、契约未通过、没有可信结论或数据截至时间不可得时，整份报告拒绝生成并列出失败章节；不跳过章节，不用 0、上月数、模拟数或占位文件补齐，表格缺失点留空。
 5. 用户在聊天中要求报告文件时，呈现层应提供“生成月度报告文件”动作，或由定时任务调用月报导出。只有实际返回可下载的 XLSX/PDF 后，才能说文件已生成。
 
+**损耗边界：** 当前损耗查询仍是“近 30 天”口径，不能可靠服从指定月份，所以已经从月报模板摘除；不得把近 30 天损耗伪装成某月损耗排行。等损耗 resolver 支持明确月份窗口并通过真实租户验证后才能恢复。
+
 餐饮导览助手只解释入口、口径和失败规则，不替用户运行真实经营分析或生成文件；实际预览和导出应进入已接入月报动作的 SmartBI 餐饮客户端。"""
+_RESTAURANT_PLAN_ALERT_ANSWER = """\
+餐饮计划预警不是另一套计算引擎，也不是按行业默认值实时猜测；它把租户已配置的相对时间查询计划定时重新编译成与交互问答同一种 sealed QuerySpec，再对执行回执中的可比较指标应用阈值。
+
+**当前合同：**
+1. 当前 P1 只支持餐饮销售汇总的环比预警；规则包含查询计划、比较指标、阈值运算符、阈值和严重级别。
+2. 每轮按当天日期重新解析“本周/上周”等相对时间，执行与问答、缓存和晋升路由相同的查询与 Answer Contract，不另写一条统计 SQL。
+3. 触发后进入既有餐饮体检诊断列表，并由统一 AlertEvent 桥接；没有第二套告警中心。
+4. 无数据、比较期缺失、覆盖不一致、RBAC 脱敏、计划不可回放或执行失败都表示“本次无法判定”，不能当成正常，也不能自动关闭既有 OPEN 告警。单条规则失败只隔离该规则。
+
+餐饮导览助手只解释预警方法和入口，不替用户创建规则、运行真实数据分析或判断某门店是否已触发。"""
+_RESTAURANT_PLATFORM_SYNC_ANSWER = """\
+当前平台直连是服务端受控 connector，不是已经交付给门店用户的“设置 → POS 对接”自助页面。导览助手不能要求用户在页面里填写 API 密钥，也不能承诺所有 POS/外卖品牌都已接入。
+
+**当前已实现边界：**
+1. 已实现客如云风格的增量订单拉取与回调入口；服务器通过受控环境配置租户、门店映射和凭证，游标与幂等键保证重试不重复写订单。
+2. POS 订单与菜品行进入 Silver；菜品按租户归一到产品维度，门店映射缺失、payload 不合法或平台业务错误时明确失败，不把数据写到猜测的门店。
+3. 领料、损耗、盘点等后厨供应链 connector 目前按工厂租户汇总写入，现有结构不保留门店身份，所以不能据此宣称支持门店级供应链分析。
+4. 平台同步默认每 60 秒拉取一次；当天营收/渠道 Gold 每轮增量刷新，菜品月聚合默认每 600 秒刷新。夜间 03:30 ETL 仍负责完整回补，因此“已接入”不等于所有看板绝对实时。
+5. 模拟平台只用于测试和演示；模拟订单、模拟门店和 mock 服务状态都不能作为真实客户已连接或真实经营数据的证据。
+
+**用户路径：** 未开通正式 connector 时继续通过 SmartBI → Excel 上传导入 POS 导出文件；正式直连由受控部署配置和运行时健康证据确认，不在导览聊天中代配凭证。"""
 _RESTAURANT_FLYWHEEL_GOVERNANCE_ANSWER = """\
 AI 飞轮运营台是平台能力治理工具，不是老板或店员的经营分析入口，也不会替用户计算或分析业务数据。
 
@@ -317,6 +362,34 @@ def _needs_multi_output_label_qc_guard(query: str) -> bool:
     return has_multi_output and any(
         term in normalized for term in _MULTI_OUTPUT_LABEL_QC_TRIGGERS
     )
+
+
+def _needs_reporting_unit_yield_guard(query: str) -> bool:
+    """Keep reporting-unit matching and cross-unit yield fail-closed."""
+    normalized = (query or "").lower()
+    mentions_reporting = any(
+        term in normalized
+        for term in ("报工", "投入", "产出", "成品率", "出成率")
+    )
+    mentions_units = any(
+        term in normalized
+        for term in (
+            "单位", "kg", "千克", "克", "盒", "袋", "只",
+            "跨单位", "每单位重量", "每盒", "每袋",
+        )
+    )
+    return mentions_reporting and mentions_units
+
+
+def _needs_label_qc_review_guard(query: str) -> bool:
+    """Explain the three-layer label review workbench without AI overclaim."""
+    normalized = (query or "").lower()
+    mentions_label = any(term in normalized for term in ("标签", "白标", "彩标"))
+    mentions_review = any(
+        term in normalized
+        for term in ("质检", "复核", "审核", "复核台", "参考框", "画笔", "拉框", "补框")
+    )
+    return mentions_label and mentions_review
 
 
 def _needs_workflow_actual_io_guard(query: str) -> bool:
@@ -394,6 +467,42 @@ def _needs_restaurant_monthly_report_guard(query: str) -> bool:
         )
     )
     return mentions_monthly_report and mentions_contract
+
+
+def _needs_restaurant_plan_alert_guard(query: str) -> bool:
+    """Explain planned alerts as sealed QuerySpec replay plus threshold."""
+    normalized = (query or "").lower()
+    mentions_alert = any(
+        term in normalized for term in ("计划预警", "经营预警", "预警", "告警")
+    )
+    mentions_contract = any(
+        term in normalized
+        for term in (
+            "queryspec", "查询计划", "阈值", "环比", "定时",
+            "无法判定", "自动关闭", "恢复",
+        )
+    )
+    return mentions_alert and mentions_contract
+
+
+def _needs_restaurant_platform_sync_guard(query: str) -> bool:
+    """Keep deployed connector, Excel fallback and mock data boundaries explicit."""
+    normalized = (query or "").lower()
+    mentions_platform = any(
+        term in normalized
+        for term in (
+            "pos", "客如云", "平台同步", "平台直连", "自动同步",
+            "connector", "供应链同步",
+        )
+    )
+    mentions_contract = any(
+        term in normalized
+        for term in (
+            "接入", "配置", "同步", "刷新", "实时", "门店", "菜品",
+            "游标", "模拟", "mock", "excel",
+        )
+    )
+    return mentions_platform and mentions_contract
 
 
 def _needs_restaurant_flywheel_governance_guard(query: str) -> bool:
@@ -609,7 +718,9 @@ SYSTEM_PROMPT = """\
 3d. 【餐饮 SmartBI 会话范围】导览助手只能解释以下合同，不得假装已经替用户运行分析：门店、菜品、时间范围只在同一连续会话中保留；用户最新明确写出的条件覆盖对应旧条件；“全部门店”始终是聚合范围，不能写进具体门店槽。缺少必需维度、名称有歧义、周期不可比或成本覆盖不足时必须澄清/降级，不能猜。清空对话会重置会话；另一个页面或模块的筛选不保证自动带入，禁止宣称“跨模块联动锁定”。
 3e. 【餐饮综合分析维度】当前目录固定为 21 个维度：营收与订单、同比环比、多门店比较、真实就餐人数、商场及门前物理客流、菜品销售结构、菜品毛利、堂食/外卖/自提、午晚市与时段、优惠与营销活动、评价与口碑、供应商与采购价格、库存风险、损耗与报损、盘点差异、排班与人效、天气、节假日与调休、商场活动、周边演出与赛事、竞品与商圈。每个维度必须注明真实、代理、模拟或缺失证据；缺数据就写缺失，不得拿演示值冒充真实租户事实，也不得把相关性写成因果。
 3f. 【餐饮 AI 飞轮治理】AI 飞轮运营台只对平台管理员开放，当前只接入餐饮域，“工厂（待接入）”不可选择。晋升候选必须人工通过后才能写入确定性路由；菜品别名机器初匹配只产生 pending，只有 confirmed 映射影响解析，rejected 不生效，门店级确认优先于租户级。接口、权限或依赖失败必须明确报错，禁止模拟数据或假成功。飞轮是治理工具，导览助手不能替用户分析经营数据。
-3g. 【餐饮日期、繁体范围与输出偏好】明确起止日期按自然日闭区间并标记“指定区间”，无效或倒置日期必须澄清；“全部門店”只作为与“全部门店”等价的聚合范围，当前繁体支持不得扩大成全句转换。用户明确要求文字/表格/图表/报告文件时优先，未明确时当前默认文字+表格，文字始终保留；输出偏好不改变查询计划。只有呈现层实际返回对应表格、图表或下载文件时才能宣称已生成，导览助手不得伪造输出。
+3g. 【餐饮月报与预警】当前月报固定 5 节且每节显式使用全部门店范围；损耗查询仍是近 30 天口径，已从指定月份月报摘除。计划预警是同一 sealed QuerySpec 的定时回放加阈值，不是第二套统计引擎；无数据或执行失败表示无法判定，不能当成正常或自动关闭既有告警。
+3h. 【平台同步边界】当前客如云风格 connector 由服务端受控配置，不得编造门店自助“POS 对接”设置页、已支持品牌或实时性承诺。模拟平台只用于测试；未开通正式 connector 时，引导用户通过 SmartBI → Excel 上传导入 POS 导出文件。
+3i. 【餐饮日期、繁体范围与输出偏好】明确起止日期按自然日闭区间并标记“指定区间”，无效或倒置日期必须澄清；“全部門店”只作为与“全部门店”等价的聚合范围，当前繁体支持不得扩大成全句转换。用户明确要求文字/表格/图表/报告文件时优先，未明确时当前默认文字+表格，文字始终保留；输出偏好不改变查询计划。只有呈现层实际返回对应表格、图表或下载文件时才能宣称已生成，导览助手不得伪造输出。
 4. 系统名称统一用「白垩纪 AI Agent」
 5. 不使用 emoji，保持专业简洁
 6. 菜单路径用 → 连接，如: 首页 → 仓储管理 → 入库
@@ -683,6 +794,8 @@ FACTORY_SYSTEM_PROMPT = """\
 - 面向用户统一说“投入单位 / 产出单位”，不要使用“端口”这个词。
 - Workflow、工序 Cell 和 BOM 都不配置主产出/联产品/副产品角色或某一次报工的静态成本比例。单产出时共享投入成本 100% 归该产出；多产出同量纲时按统一后的实际数量自动分配，量纲不可统一时只在本次报工填写合计 100% 的比例。
 - 包装标签拍检是独立质检流程：AI 候选无论 0 处还是多处都进入人工审核；人工逐图确认/拒绝/补框并提交结论后才形成真值。人工审核不等于报工工时，训练批准只允许导出，不会自动训练或发布模型。
+- 标签复核台按盒子、白标、彩标三层参考框显示，并提供选择、白标画笔和彩标画笔；这些框只帮助人工定位，不自动形成结论。
+- 报工页面按配置单位显示和提交。kg/g 等同量纲可科学换算；盒、袋、只等计数/包装单位按字面量匹配且不得暗中折重。跨量纲成品率必须先补充每单位重量，否则明确不可比，不能输出伪造百分比。
 - Workflow 冲突在生产计划选择成品时按终端产出集合解析；完全匹配优先，其次最小超集，同级重叠必须由用户查看工序链预览后选择。
 - BOM 与 Workflow 的兼容验收摘要必须保留“Workflow 完整草稿 → BOM 绑定工序辅料并激活 → Workflow 刷新、发布并启用”。当前页面的展开口径是“Workflow 完整草稿 → 创建 BOM 时自动固定该工艺修订 → 配置并激活 BOM → Workflow 刷新、发布并启用”；普通用户不选择 Workflow 版本，BOM 只读显示工艺来源，工序由目标 SKU 的工艺链生成并锁定。ACTIVE BOM 是 Workflow 发布启用的前置门禁；禁止回答“两者无依赖”“两者无从属关系”或“先发布 Workflow 再激活 BOM”。
 - 单独激活 BOM 不会发布 Workflow；回到 Workflow 后使用“自动同步并发布”。系统按最后一次保存后的草稿与当前 ACTIVE BOM 实时预检，READY/AUTO_MIGRATABLE 才可继续，USER_INPUT_REQUIRED/CONFLICT 必须停止并列出问题；确认后原子完成 BOM 同步、Workflow 发布和启用，版本竞争时停止自动重试，既有计划快照不回写。
@@ -1110,15 +1223,8 @@ async def _prepare_generation(request: ManualChatRequest) -> _PreparedGeneration
         )
         if source_names and not results:
             logger.warning(
-                "Current factory SOP returned no chunks; falling back to the "
-                "broader factory manual corpus"
-            )
-            results = await retriever.retrieve(
-                query=expanded_question,
-                categories=["operation_manual"],
-                subcategories=subcategories,
-                top_k=8,
-                similarity_threshold=0.40,
+                "Current factory SOP returned no chunks; keeping the reviewed "
+                "source boundary instead of mixing legacy factory manuals"
             )
     except Exception as e:
         logger.error(f"Retrieval failed: {e}")
@@ -1225,9 +1331,19 @@ async def _prepare_generation(request: ManualChatRequest) -> _PreparedGeneration
         guard_answer = _MULTI_OUTPUT_LABEL_QC_ANSWER
     elif (
         not is_restaurant_request
+        and _needs_label_qc_review_guard(request.question)
+    ):
+        guard_answer = _LABEL_QC_REVIEW_ANSWER
+    elif (
+        not is_restaurant_request
         and _needs_multi_output_warehouse_receipt_guard(request.question)
     ):
         guard_answer = _MULTI_OUTPUT_WAREHOUSE_RECEIPT_ANSWER
+    elif (
+        not is_restaurant_request
+        and _needs_reporting_unit_yield_guard(request.question)
+    ):
+        guard_answer = _REPORTING_UNIT_YIELD_ANSWER
     elif (
         not is_restaurant_request
         and _needs_workflow_actual_io_guard(request.question)
@@ -1243,6 +1359,16 @@ async def _prepare_generation(request: ManualChatRequest) -> _PreparedGeneration
         and _needs_restaurant_monthly_report_guard(request.question)
     ):
         guard_answer = _RESTAURANT_MONTHLY_REPORT_ANSWER
+    elif (
+        is_restaurant_request
+        and _needs_restaurant_plan_alert_guard(request.question)
+    ):
+        guard_answer = _RESTAURANT_PLAN_ALERT_ANSWER
+    elif (
+        is_restaurant_request
+        and _needs_restaurant_platform_sync_guard(request.question)
+    ):
+        guard_answer = _RESTAURANT_PLATFORM_SYNC_ANSWER
     elif (
         is_restaurant_request
         and _needs_restaurant_query_contract_guard(request.question)
