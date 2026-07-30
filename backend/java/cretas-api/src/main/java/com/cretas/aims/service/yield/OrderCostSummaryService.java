@@ -66,6 +66,10 @@ public class OrderCostSummaryService {
                     .packagingCost(cb.getPackagingCost())
                     .totalCost(cb.getTotalCost())
                     .perBoxCost(cb.getPerBoxCost())
+                    .knownCostSubtotal(cb.getKnownCostSubtotal())
+                    .knownPerBoxCost(cb.getKnownPerBoxCost())
+                    .calculationStatus(cb.getCalculationStatus())
+                    .missingCostItems(cb.getMissingCostItems())
                     .build());
         }
         return rows;

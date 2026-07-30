@@ -7,6 +7,7 @@ import lombok.NoArgsConstructor;
 
 import java.math.BigDecimal;
 import java.time.LocalDate;
+import java.util.List;
 
 /**
  * 成本汇总页一行 = 一张订单 (对标客户 M67 Excel「汇总页」按订单/按天多行视图)。
@@ -42,4 +43,19 @@ public class OrderCostSummaryRowDTO {
     private BigDecimal packagingCost;
     private BigDecimal totalCost;
     private BigDecimal perBoxCost;
+    /**
+     * 已知成本合计 — 成本项没采集齐时 {@link #totalCost} 依约为 null (不伪造完整成本),
+     * 但页面仍要给客户一个"填了的都算进去"的数 (2026-07-30 Steve 拍板: 不强制填写)。
+     * 必须与 {@link #calculationStatus}/{@link #missingCostItems} 一起展示, 否则会被误读成完整成本。
+     */
+    private BigDecimal knownCostSubtotal;
+    /** 已知成本合计 ÷ 产出数量; 口径同 {@link #knownCostSubtotal}。 */
+    private BigDecimal knownPerBoxCost;
+    /** COMPLETE = 成本已采集齐; PARTIAL = 尚缺 {@link #missingCostItems} 列出的项。 */
+    private String calculationStatus;
+    /**
+     * 尚缺的成本项 (如 EQUIPMENT_COST / OTHER_COST / LABOR_RATE_OR_TIME:process-2)。
+     * 页面据此告诉客户"差什么"—— 在此之前客户只看到一个"—", 无从判断是自己少录了还是系统坏了。
+     */
+    private List<String> missingCostItems;
 }

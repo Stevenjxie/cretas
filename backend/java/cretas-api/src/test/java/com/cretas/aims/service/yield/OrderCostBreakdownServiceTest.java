@@ -731,6 +731,44 @@ class OrderCostBreakdownServiceTest {
         assertThat(dto.getNetTotalCost()).isNull();
     }
 
+    /**
+     * 2026-07-30 Steve 拍板: 设备/其他成本不强制填写, 填了就算进去 —— 成本汇总页需要一个
+     * "已填的都算上"的数, 否则线上 F006 5/5 订单的总成本永远是"—" (设备/其他从没录过)。
+     *
+     * <p>🔴 但这个数<b>只能是新字段</b>: {@code totalCost} 仍喂成品入库 unitCost / COGS / 毛利
+     * ({@code ProductionPlanServiceImpl} 成本传导), 让不完整的数流进去 = 系统性低估成本、虚增毛利。
+     */
+    @Test
+    void partialCost_keepsKnownSubtotalForDisplayButLeavesTotalCostNull() {
+        stubPinnedF006Audit(pinnedBomSnapshot(false));
+
+        OrderCostBreakdownDTO dto = service.compute(F, ORDER, false);
+
+        assertThat(dto.isCostComplete()).isFalse();
+        assertThat(dto.getKnownCostSubtotal())
+                .as("成本不完整时展示口径仍要给出已知合计 (填了的都算进去)")
+                .isNotNull()
+                .isEqualByComparingTo(dto.getRawMaterialCost()
+                        .add(dto.getLaborCost())
+                        .add(dto.getSeasoningCost())
+                        .add(dto.getPackagingCost()));
+        assertThat(dto.getKnownPerBoxCost()).as("单位已知成本同口径").isNotNull();
+        assertThat(dto.getTotalCost())
+                .as("🔴 完整口径不得被已知合计顶替 —— 它是 COGS/毛利的来源")
+                .isNull();
+        assertThat(dto.getPerBoxCost()).isNull();
+    }
+
+    @Test
+    void maskedPrice_alsoHidesKnownSubtotal() {
+        stubPinnedF006Audit(pinnedBomSnapshot(false));
+
+        OrderCostBreakdownDTO dto = service.compute(F, ORDER, true);
+
+        assertThat(dto.getKnownCostSubtotal()).as("已知合计也是金额, 脱敏必须一并隐藏").isNull();
+        assertThat(dto.getKnownPerBoxCost()).isNull();
+    }
+
     @Test
     void computeByPlan_keepsM07AndM09CostLedgersIsolated() {
         ProductionBatch m07 = batch(707L, "5");

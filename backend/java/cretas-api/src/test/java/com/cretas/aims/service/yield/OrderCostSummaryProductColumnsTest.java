@@ -14,6 +14,7 @@ import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
+import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.util.List;
 import java.util.Optional;
@@ -78,6 +79,25 @@ class OrderCostSummaryProductColumnsTest {
         when(orderCostBreakdownService.compute(eq(FACTORY), eq(ORDER_ID), eq(false))).thenReturn(cb);
     }
 
+    /** 成本未采集齐的订单 (线上 F006 5/5 全是这形态: 设备/其他成本从没录过)。 */
+    private void givenPartialCostBreakdown() {
+        OrderCostBreakdownDTO cb = OrderCostBreakdownDTO.builder()
+                .orderId(ORDER_ID)
+                .hasData(true)
+                .productSku(PRODUCT_TYPE_ID)
+                .boxCount(5)
+                .rawMaterialCost(new BigDecimal("56.00"))
+                .laborCost(new BigDecimal("102.66"))
+                .totalCost(null)                                   // 不完整 → 依约 null
+                .perBoxCost(null)
+                .knownCostSubtotal(new BigDecimal("158.66"))       // 已填的都算进去
+                .knownPerBoxCost(new BigDecimal("31.73"))
+                .calculationStatus("PARTIAL")
+                .missingCostItems(List.of("EQUIPMENT_COST", "OTHER_COST"))
+                .build();
+        when(orderCostBreakdownService.compute(eq(FACTORY), eq(ORDER_ID), eq(false))).thenReturn(cb);
+    }
+
     private OrderCostSummaryRowDTO firstRow() {
         List<OrderCostSummaryRowDTO> rows = service.summarize(
                 FACTORY, LocalDate.of(2026, 6, 30), LocalDate.of(2026, 7, 30), false);
@@ -124,6 +144,34 @@ class OrderCostSummaryProductColumnsTest {
 
         assertNull(row.getSkuCode(), "跨产品订单不得伪造 SKU");
         assertNull(row.getProductName(), "跨产品订单不得挑一个产品名冒充整张订单");
+    }
+
+    @Test
+    @DisplayName("成本没采集齐时给出已知合计, 同时带上 PARTIAL 与缺项清单")
+    void partialCost_shouldExposeKnownSubtotalWithMissingItems() {
+        givenPartialCostBreakdown();
+        when(productTypeRepository.findByIdAndFactoryId(PRODUCT_TYPE_ID, FACTORY)).thenReturn(Optional.empty());
+
+        OrderCostSummaryRowDTO row = firstRow();
+
+        assertEquals(0, new BigDecimal("158.66").compareTo(row.getKnownCostSubtotal()),
+                "已填的成本项必须算进已知合计 (2026-07-30 Steve 拍板: 不强制填写, 填了就算)");
+        assertEquals("PARTIAL", row.getCalculationStatus());
+        assertEquals(List.of("EQUIPMENT_COST", "OTHER_COST"), row.getMissingCostItems(),
+                "必须告诉客户差哪几项, 否则他只看到一个数字无从判断完不完整");
+    }
+
+    @Test
+    @DisplayName("🔴 已知合计不得顶替 totalCost —— 后者喂 COGS/毛利, 不完整就必须保持 null")
+    void partialCost_mustNotLeakIntoTotalCost() {
+        givenPartialCostBreakdown();
+        when(productTypeRepository.findByIdAndFactoryId(PRODUCT_TYPE_ID, FACTORY)).thenReturn(Optional.empty());
+
+        OrderCostSummaryRowDTO row = firstRow();
+
+        assertNull(row.getTotalCost(),
+                "totalCost 是成品入库 unitCost / COGS / 毛利的口径, 用不完整的数会系统性低估成本、虚增毛利");
+        assertNull(row.getPerBoxCost(), "perBoxCost 同属完整口径");
     }
 
     @Test
