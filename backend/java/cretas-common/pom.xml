@@ -94,6 +94,23 @@
 
     <build>
         <plugins>
+            <!-- A release build runs `-pl cretas-api -am -Dtest=<selector>`, and
+                 -Dtest applies to every module in the reactor. This module has no
+                 tests, so surefire would abort the whole release with "No tests
+                 matching pattern". Tolerated HERE ONLY, in plugin configuration
+                 rather than via -Dsurefire.failIfNoSpecifiedTests=false on the
+                 command line: the application module must keep failing when a
+                 selector matches nothing, or a typo'd selector would yield an
+                 artifact no test ever gated. Not skipTests either - tests added
+                 to this module later must still run. -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-surefire-plugin</artifactId>
+                <configuration>
+                    <failIfNoSpecifiedTests>false</failIfNoSpecifiedTests>
+                </configuration>
+            </plugin>
+
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-compiler-plugin</artifactId>

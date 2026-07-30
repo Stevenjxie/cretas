@@ -117,6 +117,19 @@
 
     <build>
         <plugins>
+            <!-- See cretas-common: -Dtest from a release build reaches every
+                 reactor module, and this module's tests still live in
+                 cretas-api/src/test for now. Tolerated here only; the
+                 application module keeps the strict behaviour that makes a
+                 selector matching nothing a build failure. -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-surefire-plugin</artifactId>
+                <configuration>
+                    <failIfNoSpecifiedTests>false</failIfNoSpecifiedTests>
+                </configuration>
+            </plugin>
+
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-compiler-plugin</artifactId>
