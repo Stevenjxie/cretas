@@ -21,7 +21,8 @@
       <el-table-column prop="orderNumber" label="订单号" min-width="150" />
       <el-table-column prop="orderDate" label="下单日期" width="120" />
       <el-table-column prop="productName" label="产品" min-width="160"><template #default="{ row }">{{ row.productName || '—' }}</template></el-table-column>
-      <el-table-column prop="skuCode" label="SKU" min-width="130"><template #default="{ row }">{{ row.skuCode || row.productTypeId || '—' }}</template></el-table-column>
+      <!-- productTypeId 是 UUID, 兜底展示它等于给操作员看一串乱码, 不如照实显示"—" -->
+      <el-table-column prop="skuCode" label="SKU" min-width="130"><template #default="{ row }">{{ row.skuCode || '—' }}</template></el-table-column>
       <el-table-column label="SKU产出" width="120" align="right"><template #default="{ row }">{{ skuOutput(row) }}</template></el-table-column>
       <el-table-column label="整批出成率" width="110" align="right">
         <template #default="{ row }"><span :class="yieldClass(row.overallYieldRate)">{{ row.overallYieldRate == null ? '—' : (row.overallYieldRate * 100).toFixed(1) + '%' }}</span></template>

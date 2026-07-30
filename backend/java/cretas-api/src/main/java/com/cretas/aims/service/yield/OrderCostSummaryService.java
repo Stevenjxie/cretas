@@ -3,7 +3,9 @@ package com.cretas.aims.service.yield;
 import com.cretas.aims.dto.yield.OrderCostBreakdownDTO;
 import com.cretas.aims.dto.yield.OrderCostSummaryRowDTO;
 import com.cretas.aims.dto.yield.OrderYieldSummaryDTO;
+import com.cretas.aims.entity.ProductType;
 import com.cretas.aims.entity.inventory.SalesOrder;
+import com.cretas.aims.repository.ProductTypeRepository;
 import com.cretas.aims.repository.inventory.SalesOrderRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -26,6 +28,7 @@ public class OrderCostSummaryService {
     private final SalesOrderRepository salesOrderRepository;
     private final OrderCostBreakdownService orderCostBreakdownService;
     private final YieldReportService yieldReportService;
+    private final ProductTypeRepository productTypeRepository;
 
     /** 单次汇总最多 200 张订单, 防止区间过大拖垮 (超出在日志告警, 不静默截断)。 */
     private static final int MAX_ORDERS = 200;
@@ -47,10 +50,14 @@ public class OrderCostSummaryService {
                 continue;   // 该订单无生产批次 → 不进汇总 (诚实, 不造 0 行)
             }
             OrderYieldSummaryDTO ys = yieldReportService.getOrderYieldSummary(factoryId, so.getId());
+            ProductType product = resolveProduct(factoryId, cb.getProductSku());
             rows.add(OrderCostSummaryRowDTO.builder()
                     .orderId(so.getId())
                     .orderNumber(so.getOrderNumber())
                     .orderDate(so.getOrderDate())
+                    .productName(product != null && product.getName() != null && !product.getName().isBlank()
+                            ? product.getName() : cb.getProductName())
+                    .skuCode(product == null ? null : product.getCode())
                     .boxCount(cb.getBoxCount())
                     .overallYieldRate(ys != null ? ys.getOverallYieldRate() : null)
                     .rawMaterialCost(cb.getRawMaterialCost())
@@ -62,5 +69,19 @@ public class OrderCostSummaryService {
                     .build());
         }
         return rows;
+    }
+
+    /**
+     * 解析成品主数据。{@code cb.getProductSku()} 实为 {@code product_type_id} (UUID), 这里换成
+     * 操作员看得懂的 code + name。
+     *
+     * <p>订单跨多个产品时 compute() 已经返回 null (uniqueOrNull), 这里也就查不到 —— 保持"—",
+     * 不挑一个产品冒充整张订单。
+     */
+    private ProductType resolveProduct(String factoryId, String productTypeId) {
+        if (productTypeRepository == null || productTypeId == null || productTypeId.isBlank()) {
+            return null;
+        }
+        return productTypeRepository.findByIdAndFactoryId(productTypeId, factoryId).orElse(null);
     }
 }
