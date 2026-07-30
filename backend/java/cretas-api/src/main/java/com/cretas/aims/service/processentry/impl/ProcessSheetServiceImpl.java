@@ -3658,6 +3658,18 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
         }
         if (req.getRawMaterialInputs() != null) {
             for (ProcessSheetRowRequest.RawInput input : req.getRawMaterialInputs()) {
+                // 计划固定 BOM 的包材/工序调料由 submitRow 自动分摊后塞进 rawMaterialInputs
+                // (buildAutomaticBomRequirements → setRawMaterialInputs), 它们<b>不是 Workflow 投入端口</b>,
+                // 天生没有 workflowPortId。若放进端口校验, resolveInputPort 会在"本工序只有一个投入端口"时
+                // 把包材兜底到那个端口, 再拿包材 SKU 去比该端口白名单 → 必然抛
+                // WORKFLOW_ROW_INPUT_SKU_NOT_AUTHORIZED。
+                //
+                // 线上实证 (F006 SOP-20260730-01, 2026-07-30): 成品工序「定量包装」只有 1 个半成品投入端口,
+                // BOM 含封膜/成品盒/外箱 3 个包材 → 每次正式报工必炸, 且报错指向"投入主料", 与真因无关。
+                // 半成品工序不受影响, 因为只有产出成品的工序才会触发包材自动分摊。
+                if (Boolean.TRUE.equals(input.getAutomatic())) {
+                    continue;
+                }
                 com.cretas.aims.dto.workflow.WorkflowClerkSheetConfigDTO.PortDescriptor port =
                         resolveInputPort(byId, ports, input.getWorkflowPortId());
                 String selectedSkuId = resolveAllowedInputSku(port, input.getSkuId());
