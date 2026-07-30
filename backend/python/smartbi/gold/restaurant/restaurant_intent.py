@@ -3967,6 +3967,42 @@ async def _is_restaurant_tenant(pool, factory_id: str) -> bool:
         # to another router.
         raise
     is_restaurant = row is not None
+    if not is_restaurant:
+        # 判否之前先分清两种「否」: 真的不是餐饮租户, 还是**该能用却没物化**。
+        #
+        # 2026-07-31 实测(prod): R_GML_DEMO 有 16,213 笔 POS 流水、132 家门店,
+        # 但 agg_restaurant_daily_totals 一行都没有 → 每个问题 0.0 秒返回 None,
+        # 日志里连一个字都没有(grep 该 factory_id: 0 命中)。餐饮 AI 对它
+        # **100% 不可用而且完全无声**, 没人会发现, 直到客户来问「为什么没反应」。
+        #
+        # ⛔ 不放行: 没有 Gold 汇总, resolver 只会返回空数据 —— 那是把「没反应」
+        # 换成「一本正经地答 0」, 更糟。这里只负责让它**可见**。
+        # 只在判否那一次多查一条(结果照旧进缓存), 不给每个请求加 SQL。
+        try:
+            async with pool.acquire() as conn:
+                async with conn.transaction():
+                    await conn.execute(
+                        "SELECT set_config('app.factory_id', $1, true)",
+                        factory_id,
+                    )
+                    has_pos = await conn.fetchrow(
+                        "SELECT 1 FROM fact_pos_transaction"
+                        " WHERE factory_id = $1 LIMIT 1",
+                        factory_id,
+                    )
+            if has_pos is not None:
+                logger.warning(
+                    "[restaurant-intent] tenant %s 有 POS 流水但 "
+                    "agg_restaurant_daily_totals 为空 —— 餐饮 AI 对它完全不可用"
+                    "(每个问题都会静默返回 None)。需要为该租户跑一次 Gold 物化; "
+                    "在那之前放行只会让 resolver 一本正经地答 0。",
+                    factory_id,
+                )
+        except Exception as exc:  # noqa: BLE001 — 诊断用, 失败不能影响主判定
+            logger.debug(
+                "[restaurant-intent] dark-tenant probe failed for %s: %s",
+                factory_id, exc,
+            )
     _RESTAURANT_TENANT_CACHE[factory_id] = is_restaurant
     return is_restaurant
 

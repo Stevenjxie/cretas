@@ -1575,7 +1575,14 @@ async def test_store_scope_reply_complete_new_comparison_replaces_old_periods():
     assert second.clarification_needed is False
     assert second.planner_authority == "explicit_comparison_slots"
     assert second.window_label == "本月"
-    assert second.comparison_label == "上个月同期"
+    # 「同期」= to-date 对比(本月只过了一部分, 所以拿上个月同样的天数比)。
+    # 当月**最后一天**时本月已经完整, 「本月 vs 上个月」就是整月对比, 标签
+    # 正确地不带「同期」—— 这条断言原本写死 "上个月同期", 于是**每个月的最后
+    # 一天必红**(2026-07-31 实测撞上)。断言改成随日历走, 语义不变。
+    import calendar as _calendar
+    _today = date.today()
+    _is_month_end = _today.day == _calendar.monthrange(_today.year, _today.month)[1]
+    assert second.comparison_label == ("上个月" if _is_month_end else "上个月同期")
     assert second.store_scope == "all"
     assert second.comparison_range != (None, None)
     llm.assert_not_awaited()
