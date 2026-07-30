@@ -24,6 +24,8 @@ public class SupplierDTO {
     private String factoryId;
     private String supplierCode;
     private String name;
+    /** 供应商简称（可空）。下拉/列表优先显示它, 为空时回退全称 —— 见 getDisplayName()。 */
+    private String shortName;
     private String contactPerson;
     private String phone;
     private String email;
@@ -73,5 +75,16 @@ public class SupplierDTO {
     @JsonProperty("code")
     public String getCode() {
         return supplierCode;
+    }
+
+    /**
+     * 下拉/列表统一显示名: 有简称用简称, 否则回退全称。
+     *
+     * <p>放在后端而不是各前端各拼一次 —— 供应商下拉散落在 web-admin 6 处、RN 2 处、
+     * AI Tool 1 处, 靠约定同步必然漂移。
+     */
+    @JsonProperty("displayName")
+    public String getDisplayName() {
+        return shortName != null && !shortName.isBlank() ? shortName : name;
     }
 }

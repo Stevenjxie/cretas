@@ -52,6 +52,21 @@ public class Supplier extends BaseEntity {
     private String supplierCode;
     @Column(name = "name", nullable = false)
     private String name;
+
+    /**
+     * 供应商简称（客户反馈 F006 / LIUSHANMEN: 下拉里全称太长, 认不出来）。
+     * 可空; 为空时前端回退显示全称。工厂内不区分大小写唯一
+     * （V20261029_34 的 uq_suppliers_short_name 部分唯一索引强制）——
+     * 两家简称一样就等于没解决「好认」。
+     */
+    @Column(name = "short_name", length = 50)
+    private String shortName;
+
+    /**
+     * ⚠️ 历史双写字段。prod 实测 60 行里只有 6 行用它（且与 contactPerson 从不
+     * 同时有值）, 唯一生产读点是 PurchaseOrderPdfServiceImpl 的 coalesce 兜底。
+     * 多联系人上线后主联系人镜像写的是 contactPerson, 这里保持原样不动。
+     */
     @Column(name = "contact_name", length = 100)
     private String contactName;
     @Column(name = "contact_person", length = 100)

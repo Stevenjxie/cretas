@@ -32,6 +32,10 @@ public class CreateSupplierRequest {
     @Size(max = 200, message = "供应商名称长度不能超过200个字符")
     private String name;
 
+    @Schema(description = "供应商简称（可选，下拉里优先显示；工厂内不区分大小写唯一）")
+    @Size(max = 50, message = "供应商简称长度不能超过50个字符")
+    private String shortName;
+
     @Schema(description = "联系人")
     @NotBlank(message = "联系人不能为空")
     @Size(max = 100, message = "联系人长度不能超过100个字符")

@@ -79,7 +79,8 @@ public class SupplierServiceImpl implements SupplierService {
             "supplierName", request.getName() != null ? request.getName() : "",
             "phoneNumber", request.getPhone() != null ? request.getPhone() : ""));
         log.info("创建供应商: factoryId={}, name={}", factoryId, request.getName());
-        ensureNoDuplicateProfile(factoryId, request.getName(), request.getTaxNumber(), null);
+        ensureNoDuplicateProfile(factoryId, request.getName(), request.getTaxNumber(),
+                request.getShortName(), null);
         if (request.getSupplierCode() != null
                 && supplierRepository.existsByFactoryIdAndSupplierCode(factoryId, request.getSupplierCode())) {
             throw new BusinessException(409, "供应商编码已存在")
@@ -126,8 +127,11 @@ public class SupplierServiceImpl implements SupplierService {
             throw new org.springframework.orm.ObjectOptimisticLockingFailureException(
                 Supplier.class, supplierId);
         }
+        String mergedShortName = request.isShortNamePresent()
+                ? request.getShortName() : supplier.getShortName();
         ensureNoDuplicateProfile(factoryId, mergedName,
-                request.getTaxNumber() != null ? request.getTaxNumber() : supplier.getTaxNumber(), supplierId);
+                request.getTaxNumber() != null ? request.getTaxNumber() : supplier.getTaxNumber(),
+                mergedShortName, supplierId);
         // 更新供应商信息
         supplierMapper.updateEntity(supplier, request);
         supplier = supplierRepository.save(supplier);
@@ -272,6 +276,7 @@ public class SupplierServiceImpl implements SupplierService {
     private static void normalizeCreateRequest(CreateSupplierRequest request) {
         request.setSupplierCode(com.cretas.aims.service.supplier.SupplierProfileValidator.trimToNull(request.getSupplierCode()));
         request.setName(com.cretas.aims.service.supplier.SupplierProfileValidator.trimToNull(request.getName()));
+        request.setShortName(com.cretas.aims.service.supplier.SupplierProfileValidator.trimToNull(request.getShortName()));
         request.setContactPerson(com.cretas.aims.service.supplier.SupplierProfileValidator.trimToNull(request.getContactPerson()));
         request.setPhone(com.cretas.aims.service.supplier.SupplierProfileValidator.trimToNull(request.getPhone()));
         request.setAddress(com.cretas.aims.service.supplier.SupplierProfileValidator.trimToNull(request.getAddress()));
@@ -284,6 +289,11 @@ public class SupplierServiceImpl implements SupplierService {
 
     private static void normalizeUpdateRequest(UpdateSupplierRequest request) {
         if (request.getName() != null) request.setName(request.getName().trim());
+        // 只在字段真的出现在请求体里时归一化 —— 无条件调 setShortName 会把
+        // shortNamePresent 标记打成 true, 让"没传简称"被误判成"要清空简称"。
+        if (request.isShortNamePresent()) {
+            request.setShortName(com.cretas.aims.service.supplier.SupplierProfileValidator.trimToNull(request.getShortName()));
+        }
         if (request.getContactPerson() != null) request.setContactPerson(request.getContactPerson().trim());
         if (request.getPhone() != null) request.setPhone(request.getPhone().trim());
         if (request.getAddress() != null) request.setAddress(request.getAddress().trim());
@@ -294,9 +304,11 @@ public class SupplierServiceImpl implements SupplierService {
         if (request.getNotes() != null) request.setNotes(com.cretas.aims.service.supplier.SupplierProfileValidator.trimToNull(request.getNotes()));
     }
 
-    private void ensureNoDuplicateProfile(String factoryId, String name, String taxNumber, String excludedId) {
+    private void ensureNoDuplicateProfile(String factoryId, String name, String taxNumber,
+                                          String shortName, String excludedId) {
         String normalizedName = normalizeIdentity(name);
         String normalizedTax = normalizeIdentity(taxNumber);
+        String normalizedShortName = normalizeIdentity(shortName);
         for (Supplier existing : supplierRepository.findByFactoryId(factoryId)) {
             if (Objects.equals(existing.getId(), excludedId)) continue;
             if (normalizedName != null && normalizedName.equals(normalizeIdentity(existing.getName()))) {
@@ -308,6 +320,15 @@ public class SupplierServiceImpl implements SupplierService {
                 throw new BusinessException(409, "供应商税号已存在")
                         .withHint("同一工厂内非空税号必须唯一")
                         .withHintTarget("taxNumber");
+            }
+            // 简称重复 = 下拉里两条一模一样, 正好是客户要简称想解决的问题。
+            // 这里给可读的 409; DB 侧 uq_suppliers_short_name 部分唯一索引兜底。
+            if (normalizedShortName != null
+                    && normalizedShortName.equals(normalizeIdentity(existing.getShortName()))) {
+                throw new BusinessException(409,
+                        "简称「" + shortName + "」已被供应商「" + existing.getName() + "」占用")
+                        .withHint("请换一个简称，两家简称一样下拉里还是分不出来")
+                        .withHintTarget("shortName");
             }
         }
     }
