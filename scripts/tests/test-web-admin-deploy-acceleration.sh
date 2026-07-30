@@ -17,7 +17,18 @@ make_fixture() {
     mkdir -p "$fixture/scripts/deploy" "$fixture/scripts/lib" "$fixture/web-admin" "$fixture/mock-bin"
     cp "$DEPLOY_SCRIPT" "$fixture/scripts/deploy/deploy-web-admin.sh"
     cp "$WEB_MANIFEST_SCRIPT" "$fixture/scripts/deploy/release-web-manifest.sh"
-    printf 'check_git_sync() { :; }\n' > "$fixture/scripts/lib/deploy-common.sh"
+    # ⚠️ 这里必须打全 deploy-web-admin.sh 会用到的 deploy-common.sh 函数。
+    # 漏一个的表现极其难查: 被测脚本报 "xxx: command not found" 退非 0, 而调用它的子 shell
+    # 是 `( ... ) > log 2>&1`, 于是【连 set -x 的 trace 都被重定向进日志】, 外层只在 set -e
+    # 下静默退出 —— 整个测试 exit 1 且【零输出】。本测试就这么红了一段时间: 部署锁
+    # (acquire_deploy_lock) 是后加的, 姊妹测试 test-deploy-web-admin-preflight.sh 打了桩,
+    # 这里漏了。
+    cat > "$fixture/scripts/lib/deploy-common.sh" <<'COMMON'
+check_git_sync() { :; }
+# Web 部署自己拿一把互斥锁, 免得两个 session 交错做 dist 交换。fixture 里记录一下就够,
+# 不真去拿机器级 flock。
+acquire_deploy_lock() { printf 'DEPLOY_LOCK %s\n' "${1:-}" >>"${MOCK_LOCK_LOG:-/dev/null}"; return 0; }
+COMMON
     printf '{"name":"fixture","lockfileVersion":3,"packages":{}}\n' > "$fixture/web-admin/package-lock.json"
 cat > "$fixture/mock-bin/npm" <<'MOCK_NPM'
 #!/usr/bin/env bash
