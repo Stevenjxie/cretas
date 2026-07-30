@@ -764,6 +764,27 @@ ON CONFLICT (factory_id, date, kpi_kind, dim_value_id, dim_value_str) DO UPDATE 
     version = agg_restaurant_daily_ops.version + 1, computed_at = NOW()
 """
 
+# Wastage cost per ingredient per day. Mirrors _AGG_WASTAGE_QTY_SQL exactly
+# except for the summed column, so the two axes always cover the same rows and
+# a ranking can switch between them without changing which ingredients appear.
+# Needed because _AGG_WASTAGE_COST_BY_TYPE_SQL below aggregates money by
+# wastage_type only -- there was no per-ingredient money axis, so
+# "损耗金额排名" (an advertised sample query) could only be answered by quantity.
+_AGG_WASTAGE_COST_SQL = """
+INSERT INTO agg_restaurant_daily_ops (
+    factory_id, date, kpi_kind, dim_value_id, dim_value_str, value_num,
+    version, computed_at
+)
+SELECT factory_id, date, 'wastage_cost',
+       COALESCE(ingredient_id, 0), '', SUM(COALESCE(estimated_cost, 0))::NUMERIC(18,4),
+       1, NOW()
+  FROM fact_restaurant_wastage WHERE factory_id = $1::varchar AND status = 'APPROVED'
+ GROUP BY factory_id, date, ingredient_id
+ON CONFLICT (factory_id, date, kpi_kind, dim_value_id, dim_value_str) DO UPDATE SET
+    value_num = EXCLUDED.value_num,
+    version = agg_restaurant_daily_ops.version + 1, computed_at = NOW()
+"""
+
 # Wastage cost by type (string dim, not ingredient). Use dim_value_str.
 _AGG_WASTAGE_COST_BY_TYPE_SQL = """
 INSERT INTO agg_restaurant_daily_ops (
@@ -871,9 +892,11 @@ async def materialize_gold_daily_ops(
             r5 = await conn.execute(_AGG_STOCK_SHORTAGE_SQL, factory_id)
             r6 = await conn.execute(_AGG_DAILY_TOTALS_SQL, factory_id)
             r7 = await conn.execute(_AGG_PRODUCT_COST_SQL, factory_id)
+            r8 = await conn.execute(_AGG_WASTAGE_COST_SQL, factory_id)
             stats["requisition_qty"] = int(r1.split()[-1]) if r1 else 0
             stats["requisition_cost"] = int(r2.split()[-1]) if r2 else 0
             stats["wastage_qty"] = int(r3.split()[-1]) if r3 else 0
+            stats["wastage_cost"] = int(r8.split()[-1]) if r8 else 0
             stats["wastage_cost_by_type"] = int(r4.split()[-1]) if r4 else 0
             stats["stock_shortage"] = int(r5.split()[-1]) if r5 else 0
             stats["daily_totals"] = int(r6.split()[-1]) if r6 else 0
