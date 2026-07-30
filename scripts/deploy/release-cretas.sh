@@ -136,6 +136,14 @@ while [ "$#" -gt 0 ]; do
     esac
 done
 
+# Web 侧的取回是在 release-web-manifest.sh 的 web_release_build 里预热的(三条通向 web 构建的
+# 路径都落到那个函数, 插在调用方必漏)。它只认环境变量, 所以 --prefer-ci-artifact 这个【命令行】
+# 形式必须在这里补一次导出, 否则人手传 flag 时 Java 生效而 Web 不生效 —— 又是一个"只在某条
+# 路径生效"的半吊子开关。
+if [ "$PREFER_CI_ARTIFACT" = "true" ]; then
+    export CRETAS_RELEASE_PREFER_CI_ARTIFACT=1
+fi
+
 [ -n "$BASE_SHA" ] || { echo "ERROR: --base-sha is required" >&2; exit 2; }
 case "$PHASE" in build|deploy|all) ;; *) echo "ERROR: --phase must be build, deploy, or all" >&2; exit 2 ;; esac
 case "$ORDER" in backend-first|web-first) ;; *) echo "ERROR: --order must be backend-first or web-first" >&2; exit 2 ;; esac
