@@ -3,6 +3,7 @@ import { flushPromises, mount } from '@vue/test-utils';
 import ElementPlus, { ElMessageBox } from 'element-plus';
 
 const getAvailableRawBatches = vi.fn();
+const getInputAvailability = vi.fn();
 const listWarehouses = vi.fn();
 const submitRow = vi.fn();
 
@@ -15,6 +16,7 @@ vi.mock('@/api/processSheet', async () => {
     deleteRow: vi.fn(),
     getRowHistory: vi.fn().mockResolvedValue({ success: true, data: [] }),
     getAvailableRawBatches: (...args: unknown[]) => getAvailableRawBatches(...args),
+    getInputAvailability: (...args: unknown[]) => getInputAvailability(...args),
     getSemiFinishedInventory: vi.fn().mockResolvedValue({ success: true, data: [] }),
     getFinishedGoodsInventory: vi.fn().mockResolvedValue({ success: true, data: [] }),
   };
@@ -72,17 +74,19 @@ async function addRow(wrapper: ReturnType<typeof mountTable>) {
 }
 
 /**
- * 投入行可用库存 —— 前端自算版**已于 2026-07-31 撤下**(客户实测与后端打架:
- * 行内显示「可用 10kg」而提交时后端说「可用 0kg」)。详见同目录
- * inputAvailableStock.source.spec.ts 头注释里的三条口径差异。
+ * 投入行「生产仓可用」的**行为**契约 —— 显示的必须是后端 `input-availability` 返回的那个数。
  *
- * 这组挂载测试现在守的是: **喂进真实批次, 界面也不许凭它自己算出一个数来**。
- * 后端只读接口接上之后, 这里再改写成断言"显示的是后端返回的那个数"。
+ * 这组测试守的是历史上真出过的那次事故: 前端自己按批次汇总, 界面「可用 10kg」而提交时后端
+ * 「可用 0kg」。所以每个用例都刻意**喂一批会让前端算出别的数的批次**, 再断言界面上出现的
+ * 是后端那个数 —— 只断言"显示了个数"是不够的, 自算版同样能显示出个数来。
+ *
+ * 源码结构侧 (那套自算代码有没有被捡回来) 在同目录 `inputAvailableStock.source.spec.ts`。
  */
-describe('投入行可用库存: 前端自算版已撤下', () => {
+describe('投入行「生产仓可用」: 显示后端权威值', () => {
   beforeEach(() => {
     listWarehouses.mockReset();
     getAvailableRawBatches.mockReset();
+    getInputAvailability.mockReset();
     submitRow.mockReset();
     submitRow.mockResolvedValue({
       success: true,
@@ -94,9 +98,11 @@ describe('投入行可用库存: 前端自算版已撤下', () => {
       data: [{ id: 'WH-WKS-1', code: 'WH-WKS', name: '生产仓', type: 'WORKSHOP', isActive: true }],
     });
     getAvailableRawBatches.mockResolvedValue({ success: true, data: [] });
+    getInputAvailability.mockResolvedValue({ success: true, data: [] });
   });
 
-  it('即使批次拉到了, 也不渲染任何可用量提示', async () => {
+  /** 前端若还在自算, 按这批批次会得出 12.5kg —— 恰好是"看着很对"的那种错数字。 */
+  function feedMisleadingBatches() {
     getAvailableRawBatches.mockResolvedValue({
       success: true,
       data: [
@@ -104,20 +110,109 @@ describe('投入行可用库存: 前端自算版已撤下', () => {
         batch({ id: 'B-2', batchNumber: 'MT-2', currentQuantity: 500, quantityUnit: 'g', unit: 'g' }),
       ],
     });
+  }
+
+  it('显示后端的 3kg, 而不是照批次自算出来的 12.5kg', async () => {
+    feedMisleadingBatches();
+    getInputAvailability.mockResolvedValue({
+      success: true,
+      data: [{ workflowPortId: 'IN-BEEF', materialTypeId: 'RAW-BEEF', available: 3, unit: 'kg', elsewhere: [] }],
+    });
+    const wrapper = mountTable();
+    await addRow(wrapper);
+
+    expect(wrapper.find('[data-testid="input-available-stock"]').text()).toBe('3kg');
+    // 自算版的答案一次都不许出现在页面上
+    expect(wrapper.text()).not.toContain('12.5');
+  });
+
+  it('请求带上端口身份 (workflowPortId + 物料 + 单位), 否则后端按什么算', async () => {
+    const wrapper = mountTable();
+    await addRow(wrapper);
+
+    expect(getInputAvailability).toHaveBeenCalled();
+    const [factoryId, planId, ports] = getInputAvailability.mock.calls[0];
+    expect(factoryId).toBe('F006');
+    expect(planId).toBe('PLAN-1');
+    expect(ports).toEqual([{ workflowPortId: 'IN-BEEF', materialTypeId: 'RAW-BEEF', unit: 'kg' }]);
+  });
+
+  it('可用 0 时标红, 并说清料在哪 —— 「真没货」和「有货但没调过来」得分得开', async () => {
+    feedMisleadingBatches();
+    getInputAvailability.mockResolvedValue({
+      success: true,
+      data: [{
+        workflowPortId: 'IN-BEEF', materialTypeId: 'RAW-BEEF', available: 0, unit: 'kg',
+        elsewhere: [{ warehouseName: '主仓', quantity: 200, unit: 'kg' }],
+      }],
+    });
+    const wrapper = mountTable();
+    await addRow(wrapper);
+
+    const stock = wrapper.find('[data-testid="input-available-stock"]');
+    expect(stock.text()).toBe('0kg');
+    expect(stock.classes()).toContain('sp-in-stock-zero');
+    expect(wrapper.find('[data-testid="input-elsewhere-stock"]').text())
+      .toBe('主仓另有 200kg，待调拨入生产仓');
+  });
+
+  it('后端没这个端口的数 → 什么都不显示, 不猜也不留占位', async () => {
+    feedMisleadingBatches();
+    getInputAvailability.mockResolvedValue({ success: true, data: [] });
     const wrapper = mountTable();
     await addRow(wrapper);
 
     expect(wrapper.find('[data-testid="input-available-stock"]').exists()).toBe(false);
-    // 这些正是撤下前会渲染出来的数字 —— 12.5kg 恰好也是"看着很对"的那种错数字
-    expect(wrapper.text()).not.toContain('可用 12.5');
-    expect(wrapper.text()).not.toContain('单位不同');
+    expect(wrapper.find('[data-testid="input-elsewhere-stock"]').exists()).toBe(false);
+    expect(wrapper.text()).not.toContain('12.5');
   });
 
-  it('填多少都不再被前端标红 (判据错了, 标红也是错的)', async () => {
-    getAvailableRawBatches.mockResolvedValue({
+  it('接口挂了 → 同样什么都不显示 (禁降级: 不回落到前端自算)', async () => {
+    feedMisleadingBatches();
+    getInputAvailability.mockRejectedValue(new Error('boom'));
+    const wrapper = mountTable();
+    await addRow(wrapper);
+
+    expect(wrapper.find('[data-testid="input-available-stock"]').exists()).toBe(false);
+    expect(wrapper.text()).not.toContain('12.5');
+  });
+
+  it('刷新拿不到时不留旧值 —— 旧值就是过期库存, 比不显示更糟', async () => {
+    feedMisleadingBatches();
+    getInputAvailability.mockResolvedValue({
       success: true,
-      data: [batch({ id: 'B-1', currentQuantity: 1, quantityUnit: 'kg', unit: 'kg' })],
+      data: [{ workflowPortId: 'IN-BEEF', materialTypeId: 'RAW-BEEF', available: 3, unit: 'kg', elsewhere: [] }],
     });
+    const wrapper = mountTable();
+    await addRow(wrapper);
+    expect(wrapper.find('[data-testid="input-available-stock"]').text()).toBe('3kg');
+
+    const refresh = async () => {
+      // 另一个 tab 保存后父组件会调这个方法重拉三类共享余量
+      (wrapper.vm as unknown as { refreshSharedInventories: () => void }).refreshSharedInventories();
+      await flushPromises();
+    };
+
+    // ① 后端答了但不认账
+    getInputAvailability.mockResolvedValue({ success: false, data: null, message: 'nope' });
+    await refresh();
+    expect(wrapper.find('[data-testid="input-available-stock"]').exists()).toBe(false);
+
+    // ② 直接抛 —— catch 分支同样不许把上一次的 3kg 留在屏幕上
+    getInputAvailability.mockResolvedValue({
+      success: true,
+      data: [{ workflowPortId: 'IN-BEEF', materialTypeId: 'RAW-BEEF', available: 3, unit: 'kg', elsewhere: [] }],
+    });
+    await refresh();
+    expect(wrapper.find('[data-testid="input-available-stock"]').text()).toBe('3kg');
+
+    getInputAvailability.mockRejectedValue(new Error('boom'));
+    await refresh();
+    expect(wrapper.find('[data-testid="input-available-stock"]').exists()).toBe(false);
+  });
+
+  it('填多少都不再被前端标红 (判据是自算值, 判据错了标红也是错的)', async () => {
+    feedMisleadingBatches();
     const wrapper = mountTable();
     await addRow(wrapper);
 
@@ -128,10 +223,14 @@ describe('投入行可用库存: 前端自算版已撤下', () => {
     expect(wrapper.find('.sp-in-stock-over').exists()).toBe(false);
   });
 
-  it('提交路径没有被这次撤下影响 —— 仍由后端 fail-closed 兜底', async () => {
+  it('提交路径不受影响 —— 超领仍由后端 fail-closed 兜底', async () => {
     getAvailableRawBatches.mockResolvedValue({
       success: true,
       data: [batch({ id: 'B-1', currentQuantity: 1, quantityUnit: 'kg', unit: 'kg' })],
+    });
+    getInputAvailability.mockResolvedValue({
+      success: true,
+      data: [{ workflowPortId: 'IN-BEEF', materialTypeId: 'RAW-BEEF', available: 1, unit: 'kg', elsewhere: [] }],
     });
     const wrapper = mountTable();
     await addRow(wrapper);

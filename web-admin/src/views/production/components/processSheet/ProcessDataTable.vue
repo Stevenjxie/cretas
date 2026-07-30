@@ -41,7 +41,6 @@ import type {
 } from './processSheetInputs';
 import { boxAvailableKg, isCountUnit, countUnitFeedWarning, countUnitLabelSuffix } from '@/utils/feedUnitConversion';
 import {
-  convertQuantityToUnit,
   displayProcessUnit,
   formatFeedPlaceholder,
   formatProcessOutput,
@@ -457,76 +456,25 @@ type InputPortRef = {
   unit?: string | null;
 };
 
-type InputStock = {
-  /** 端口单位口径下可直接比较的可用量 (仅含单位字面相同、或质量可换算的批次)。 */
-  available: number;
-  /** 端口单位 (原始值; 展示前走 displayProcessUnit)。 */
-  unit: string;
-  /** 同物料但单位无法确定性换算的批次, 按单位汇总 —— 披露, 不计入 available。 */
-  incomparable: Array<{ unit: string; quantity: number }>;
-};
-
-/**
- * 该投入端口在可领用仓里的可用量。rawBatchOptions 已按 consumableWarehouseIds
- * (原料仓/物流仓 + 生产仓) 过滤, 这里按物料类型 + **端口单位口径**汇总。
- *
- * 客户 2026-07-30: 填完点「正式报工」才被告知「需要 1只, 可用 0只, 缺少 1只」——
- * 防呆 Rule 1 要求「预先显示边界, 不要事后报错」, 所以把可用量摆进录入行。
- *
- * 🔴 刻意不把不同单位的批次数量直接相加: 单位换算只对质量单位成立 (#1976 —— 计数/包装
- * 单位按字面比较, 一只 ≠ 一件), 相加会得出一个偏大且看着权威的可用量, 恰好是「界面有货、
- * 报工说可用 0」那一类错。换不了的批次单独披露, 让 available 只往保守方向偏。
- */
-function inputStock(item: InputPortRef): InputStock {
-  const targetId = item.materialTypeId
-    || portById(item.workflowPortId ?? undefined)?.skuId
-    || null;
-  const unit = item.unit ?? '';
-  if (!targetId || !unit) return { available: 0, unit, incomparable: [] };
-
-  let available = 0;
-  const others = new Map<string, number>();
-  for (const batch of rawBatchOptions.value) {
-    if (batch.materialTypeId !== targetId) continue;
-    const qty = rawBatchAvailable(batch);
-    if (!(qty > 0)) continue;
-    // 两侧走同一套显示归一后再比较。item.unit 来自 workflowPortDisplayUnit(port), **已经**是
-    // 显示形式 (pcs → 件); 若拿批次的原始 quantityUnit 去字面比, 同一个单位会被判成「不同」,
-    // 显示出「可用 0件 · 另有 12件 未计入」这种自相矛盾的文案。
-    // 归一只到显示层为止: 「只」不在别名表里, 仍不会和「件」合并 (#1976 一只≠一件)。
-    const rawUnit = batch.quantityUnit || batch.unit || '';
-    const batchUnit = displayProcessUnit(rawUnit) || rawUnit;
-    const converted = convertQuantityToUnit(qty, batchUnit, unit);
-    if (converted != null) {
-      available += converted;
-    } else {
-      const label = batchUnit || '单位未填';
-      others.set(label, (others.get(label) ?? 0) + qty);
-    }
-  }
-  return {
-    available,
-    unit,
-    incomparable: [...others].map(([u, quantity]) => ({ unit: u, quantity })),
-  };
-}
-
 /** 去掉浮点换算带来的尾随 0 (500g→0.5kg 不要显示 0.500000)。 */
 function fmtStockQty(value: number): string {
   return String(Number(value.toFixed(6)));
 }
 
 /**
- * 录入行上的「可用 X 单位」文案; 有换不了的批次时一并披露, 不假装数字是全量。
- *
- * rawBatchOptions 是异步加载的 (初值 []), 加载期间必须什么都不显示 —— 否则首帧会闪一下
- * 「可用 0只」, 而那正是这次要消除的误导信息。
- */
-/**
  * 后端算好的「生产仓可用量」，按 workflowPortId 索引 (2026-07-31)。
  *
- * 前端**不再自己算**：后端口径含三样这里拿不到的东西 —— 只认那一个生产仓、要扣掉其它草稿行
- * 已占用的量、还要过客供料归属守卫。上一版自算出「可用 10kg」而提交时后端说 0，就是这么来的。
+ * 前端**不再自己算**。上一版自算出「可用 10kg」而提交时后端说「可用 0kg」，根因不是参数调错，
+ * 是 `ProductionStockAllocationServiceImpl.plan()` 的口径含三样前端结构上拿不到的东西：
+ *
+ *   1. `warehouseResolver.resolveWorkshopId()` —— 只认**那一个**生产仓；
+ *      前端 `pickConsumableWarehouseIds` 汇总的是原料仓 + 物流仓 + 生产仓。
+ *   2. `allocationRepository.sumPendingQuantityByMaterialBatchId()` —— 扣掉**其它草稿行已占用**
+ *      的量；前端完全没有这个概念。
+ *   3. `ProductionInventoryOwnershipGuard` —— 客供料 / 归属别的订单的批次在仓里，但本计划不能用。
+ *
+ * 少任何一样，算出来的都是个**偏大且看着权威**的数 —— 比不显示更糟，仓管员会照着它排活。
+ * 服务端对应的只读口径是 `ProductionStockAllocationService.availability()`，与 plan() 同一段核心。
  */
 const portAvailability = ref<Map<string, PortAvailability>>(new Map());
 const availabilityLoading = ref(false);
@@ -3763,6 +3711,11 @@ defineExpose({ hasUnsavedRows, refreshSharedInventories });
             <template v-if="isXiuYou">
               <th class="sp-th">{{ workflowRawInputs.length ? '投料物料' : '原料批次' }}</th>
               <th class="sp-th sp-th-num">{{ workflowRawInputs.length ? '投料总量' : firstProcessInputLabel }}</th>
+              <!-- 「生产仓可用」独立成列 —— 条件必须与下面 tbody 的第三个 <td> 严格互为镜像:
+                   tbody 用的是 usesAutoMaterialTotals(row) (行级, 含 !row.legacyExplicitRawInput),
+                   thead 是表级只能用 workflowRawInputs.length, 所以 legacy 行补一个空 <td> 占位。
+                   缺了这一格, 从这列往后**整行都会错位一格** (卡片模板已有表头, 表格模板漏过一次)。 -->
+              <th v-if="workflowRawInputs.length" class="sp-th">生产仓可用</th>
             </template>
 
             <!-- 单来源上游 (含去舌苔 —— 原来是重复的第二份分支, 表头完全一样) -->
@@ -3993,6 +3946,10 @@ defineExpose({ hasUnsavedRows, refreshSharedInventories });
                     controls-position="right"
                     style="width:110px" size="small" />
                 </td>
+                <!-- 「生产仓可用」占位: 同一张表里 legacyExplicitRawInput 行与自动投料行会混排,
+                     表头那一列是表级 (workflowRawInputs.length) 出的, 这里不补就少一格 → 错位。
+                     legacy 行按批次自选来源, 生产仓可用量对它没有意义, 所以留空而不是显示 0。 -->
+                <td v-if="workflowRawInputs.length" class="sp-td"></td>
                 </template>
               </template>
 
@@ -4898,18 +4855,21 @@ defineExpose({ hasUnsavedRows, refreshSharedInventories });
   overflow-x: auto;
   background: #fff;
 }
+/* 列数必须与 sp-in-head / sp-in-row 的 sp-in-cell 个数逐一对齐:
+   本次投入原料 / 投料总量 / 生产仓可用 / 来源批次 = 4 列。少一列 grid 会开隐式行,
+   把最后一格甩到下一行 —— 表头和数据看着就对不上了 (2026-07-31 加「生产仓可用」时漏改过一次)。 */
 .sp-in-head,
 .sp-in-row {
   display: grid;
-  grid-template-columns: minmax(180px, 1.6fr) 200px minmax(200px, 1.2fr);
+  grid-template-columns: minmax(180px, 1.6fr) 200px minmax(140px, 0.9fr) minmax(200px, 1.2fr);
   align-items: center;
   gap: 0 10px;
-  min-width: 620px;
+  min-width: 760px;
 }
 /* 有可选端口时才多出「选用」列 —— 没得选就不占位, 与 showPortSelector 同一条判据 */
 .sp-in-table--sel .sp-in-head,
 .sp-in-table--sel .sp-in-row {
-  grid-template-columns: 56px minmax(180px, 1.6fr) 200px minmax(200px, 1.2fr);
+  grid-template-columns: 56px minmax(180px, 1.6fr) 200px minmax(140px, 0.9fr) minmax(200px, 1.2fr);
 }
 .sp-in-head {
   padding: 7px 10px;
