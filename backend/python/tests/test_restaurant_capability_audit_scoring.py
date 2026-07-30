@@ -15,9 +15,12 @@ from pathlib import Path
 
 import pytest
 
+# 脚本住在 backend/python/scripts/ 而不是仓库根的 scripts/audit/ ——
+# **只有前者会被 deploy-smartbi-python.sh 同步到服务器**, 而它要挂 systemd timer
+# 定时跑。放在 scripts/audit/ 时它在服务器上根本不存在(2026-07-31 挂 timer 时发现)。
 _SCRIPT = (
-    Path(__file__).resolve().parents[3]
-    / "scripts" / "audit" / "restaurant_capability_audit.py"
+    Path(__file__).resolve().parents[1]
+    / "scripts" / "restaurant_capability_audit.py"
 )
 _spec = importlib.util.spec_from_file_location("_cap_audit", _SCRIPT)
 assert _spec and _spec.loader, f"audit script not found at {_SCRIPT}"

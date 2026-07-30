@@ -1,0 +1,54 @@
+[Unit]
+Description=Cretas 餐饮 AI 端到端能力审计 (每日一次, 跌破阈值即标记 failed)
+Documentation=https://github.com/Stevenjxie/cretas/blob/main/scripts/audit/restaurant_capability_audit.py
+After=network-online.target cretas-python.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=root
+
+# -------------------------------------------------------------------------
+# 环境需要**两半**, 缺一不可 (2026-07-30 一晚踩三次的教训, 见审计脚本文件头):
+#   .env.prod            → LLM_* 各家 key (审计要真调 T3)
+#   下面的 Environment=  → POSTGRES_* 连接参数
+#
+# ⚠️ POSTGRES_* **不在 .env.prod 里** —— cretas-python.service 是用
+#    Environment= 直接写死的, 只有密码来自 .env.prod。照抄它, 别想当然。
+#    (`systemctl cat cretas-python` 可核对)
+# -------------------------------------------------------------------------
+EnvironmentFile=/www/wwwroot/cretas/.env.prod
+Environment=POSTGRES_ENABLED=true
+Environment=POSTGRES_HOST=localhost
+Environment=POSTGRES_PORT=5432
+Environment=POSTGRES_DB=smartbi_prod_db
+Environment=POSTGRES_USER=smartbi_user
+
+WorkingDirectory=/www/wwwroot/cretas/code/backend/python
+Environment=PYTHONPATH=/www/wwwroot/cretas/code/backend/python:/www/wwwroot/cretas/code/backend/python/smartbi
+
+# --fail-under 15 (共 19 条): **必须设**, 否则这个 timer 只是每天默默写一行日志,
+# 出了问题没有任何人知道 —— 定时的价值就在于「变红」这个信号本身。
+#
+# 15 这个数是留了余量的: 2026-07-30 实测基线 18/19(唯一那条是经营诊断被叙事接地
+# 闸拦下, 依赖当次 LLM 措辞、天然会抖)。给 3 条的抖动空间, 真崩(整类 resolver
+# 挂掉 / 租户变暗 / 某次改动打翻路由)一定会跌破。
+# 调高会变吵, 调低会漏 —— 改之前先看几天真实分布再决定。
+# 用 `-m scripts.…` 与既有的 cretas-gold-etl-refresh 保持一致。
+# ⚠️ 脚本必须住在 backend/python/scripts/ —— 仓库根的 scripts/ **不会**被
+#    deploy-smartbi-python.sh 同步到服务器。放错地方时这个 unit 会一直
+#    file-not-found(2026-07-31 挂 timer 时就是这么发现的)。
+ExecStart=/www/wwwroot/cretas/code/backend/python/venv-current/bin/python -u \
+    -m scripts.restaurant_capability_audit \
+    --factory MOCK_REST --role restaurant_manager --fail-under 15
+
+# 落 journal: `journalctl -u cretas-restaurant-audit -n 60` 看最近一次全文。
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=cretas-restaurant-audit
+
+# 审计只读 + 调 LLM, 单次约 40 秒; 给足余量但别让它卡住整晚。
+TimeoutStartSec=600
+
+[Install]
+WantedBy=multi-user.target
