@@ -65,5 +65,3 @@ public class CretasBackendApplication {
         };
     }
 }
-
-// ci push-trigger verification 20260730T063027Z
