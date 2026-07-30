@@ -165,13 +165,50 @@ release_manifest_is_lower_hex "$JAR_SHA" 64 || fail jar_sha_malformed
 release_manifest_is_lower_hex "$JAR_MD5" 32 || fail jar_md5_malformed
 case "$STAGED" in stored|hit) ;; *) fail "not_staged(staged=$STAGED)" ;; esac
 
-# 测试选择器必须逐字相等。CI 的 push 构建默认只跑 *RepositoryQueryValidationTest, 发布方要
-# 求别的选择器时这份制品就【不能】用 —— 复用它等于跳过了你要求的那组测试。
+# 判据是【集合包含】而不是字符串相等: CI 实际跑过的测试类集合必须【涵盖】发布方要求的那组。
+#
+# 为什么不能用字符串相等(第一版就是, 错了): CI 的 push 构建用 `*RepositoryQueryValidationTest`
+# (本仓库实测匹配 33 个类), 而 release-java-preflight.sh 【刻意拒绝通配】—— 它要把每个选择器
+# 映射到真实测试文件并验证 import 可解析, 通配没法映射。两个约束都是对的, 但字符串相等让它们
+# 永远配不上: 经 release-cretas.sh 这条路, 那份制品一次都用不了。
+#
+# 集合包含才是这件事的本来含义: 「这份制品被至少你要求的那组测试把关过」。
+#   要求 ⊆ CI 跑过  → 可用
+#   要求 ⊄ CI 跑过  → 不可用(有你要的测试 CI 没跑)
+#
+# 展开在【本地 HEAD 的测试源】上做。这一步的正确性依赖前面已经通过的 backend_tree 相等检查 ——
+# tree 相同意味着测试源逐字节相同, 所以在这里展开与在制品那个 commit 上展开是同一个集合。
 CI_TESTS=$(sed -n "s/^manifest_target_tests='\(.*\)'$/\1/p" "$transport_log" | head -1)
 [ -n "$CI_TESTS" ] || fail manifest_target_tests_absent
-if [ "$CI_TESTS" != "$TESTS" ]; then
-    fail "test_selector_mismatch(ci='$CI_TESTS' requested='$TESTS')"
+
+# 把 Maven -Dtest 选择器展开成类名集合。逗号分隔; 去掉 `#method` 后缀; 类名里的 * / ? 交给
+# find -name 当 glob 处理。
+expand_test_selector() {
+    local selector=$1 part class
+    local -a parts=()
+    IFS=',' read -r -a parts <<< "$selector"
+    for part in "${parts[@]}"; do
+        class=${part%%#*}
+        # 去空白; 空段(如 "A,,B")直接跳过
+        class=${class//[[:space:]]/}
+        [ -n "$class" ] || continue
+        find "$PROJECT_ROOT/backend/java" -path '*/src/test/*' -name "${class}.java" 2>/dev/null \
+            | sed 's|.*/||; s|\.java$||'
+    done | grep -v '^$' | LC_ALL=C sort -u
+}
+
+REQUESTED_SET=$(expand_test_selector "$TESTS")
+CI_SET=$(expand_test_selector "$CI_TESTS")
+# 展开为空一律拒绝: 一个匹配不到任何测试类的选择器无法证明任何事, 而"空集是任何集合的子集"
+# 会让它静默通过。
+[ -n "$REQUESTED_SET" ] || fail "requested_selector_matches_no_test_class(requested='$TESTS')"
+[ -n "$CI_SET" ] || fail "ci_selector_matches_no_test_class(ci='$CI_TESTS')"
+
+MISSING=$(LC_ALL=C comm -23 <(printf '%s\n' "$REQUESTED_SET") <(printf '%s\n' "$CI_SET"))
+if [ -n "$MISSING" ]; then
+    fail "ci_selector_does_not_cover_requested(missing=$(printf '%s' "$MISSING" | tr '\n' ',' | sed 's/,$//'))"
 fi
+echo "CI_ARTIFACT_TEST_COVERAGE requested=$(printf '%s\n' "$REQUESTED_SET" | grep -c .) ci_ran=$(printf '%s\n' "$CI_SET" | grep -c .) ci_selector='$CI_TESTS'"
 
 JAR_SIZE=$(field oss_to_ecs_bytes) || fail size_field_unreadable
 case "$JAR_SIZE" in ''|*[!0123456789]*|0*) fail size_malformed ;; esac
