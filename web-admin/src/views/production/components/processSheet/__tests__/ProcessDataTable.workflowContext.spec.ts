@@ -137,10 +137,25 @@ async function clickAddRow(wrapper: ReturnType<typeof mountChaoshuiTable>) {
   await flushPromises();
 }
 
+/**
+ * 选中来源批次。
+ *
+ * 客户 2026-07-30 之后, 候选批次只有一条时界面直接显示批次文案、根本不渲染下拉
+ * (「只有一个批次时自动选中, 不要让用户多点一次」)。这些用例只有一个上游批次, 所以走的正是
+ * 那条路径 —— 断言改成「要么有下拉可以选, 要么已经自动选中并把批次显示出来」, 意图不变:
+ * 这一行的来源批次必须落到 compositeKey 指的那一批。
+ */
 async function selectUpstreamSource(wrapper: ReturnType<typeof mountChaoshuiTable>, compositeKey: string) {
   const select = wrapper.findComponent({ name: 'ElSelect' });
-  if (!select.exists()) throw new Error('找不到来源批次下拉 (ElSelect)');
-  select.vm.$emit('change', compositeKey);
+  if (select.exists()) {
+    select.vm.$emit('change', compositeKey);
+    await flushPromises();
+    return;
+  }
+  const fixed = wrapper.find('[data-testid="upstream-batch-fixed"]');
+  if (!fixed.exists()) throw new Error('既没有来源批次下拉, 也没有自动选中的批次');
+  const batchNumber = compositeKey.slice(compositeKey.indexOf('::') + 2);
+  expect(fixed.text()).toContain(batchNumber);
   await flushPromises();
 }
 

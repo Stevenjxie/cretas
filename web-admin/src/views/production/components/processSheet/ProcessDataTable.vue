@@ -27,7 +27,14 @@ import type { ProcessSheetCustomFieldDef } from '@/api/processProduction';
 import { PROCESS_SHEET_CONFIG, GENERIC_FALLBACK_COLS, genClientRowId, type ColDef } from './PROCESS_SHEET_CONFIG';
 import WorkHoursTable from './WorkHoursTable.vue';
 import ProcessOutputTable from './ProcessOutputTable.vue';
+import ProcessInputSourceTable from './ProcessInputSourceTable.vue';
 import type { MultiOutputLine, OutputLineView } from './processSheetOutputs';
+import type {
+  InputSourceLineView,
+  SelectableUpstreamRef,
+  UpstreamBatchOption,
+  UpstreamBatchOptionGroup,
+} from './processSheetInputs';
 import { boxAvailableKg, isCountUnit, countUnitFeedWarning, countUnitLabelSuffix } from '@/utils/feedUnitConversion';
 import {
   convertQuantityToUnit,
@@ -134,9 +141,8 @@ interface MaterialInputTotalLine extends Omit<MaterialInputTotal, 'quantity'> {
   selected: boolean;
 }
 
-interface SelectableUpstreamRef extends UpstreamRef {
-  selected: boolean;
-}
+// SelectableUpstreamRef 已随 ./processSheetInputs 迁走 —— 卡片模式和表格模式共用
+// ProcessInputSourceTable 子组件, 而 `<script setup>` 里的 interface 不可导出。
 
 // -------------------------------------------------------------------------
 // Internal row type
@@ -2726,6 +2732,185 @@ function onSingleUpstreamSelect(row: SheetRow, key: string | null | undefined) {
   row.upstreamBatch = key.slice(sep + 2);
 }
 
+// -------------------------------------------------------------------------
+// 投入来源的「唯一候选批次自动选中」+ 行式视图模型 (客户 2026-07-30)
+//
+// 客户口径: 「多批次才给勾选框; 只有单个批次时自动选中, 不要让用户多点一次」。判据与
+// showPortSelector (「端口没有替代关系就不给勾选框」) 完全一致 —— 只有一个候选时,
+// 那个下拉是一次假选择: 不选交不了, 选了也没别的可选。
+//
+// ⚠️ 自动的只有「选哪一批」。**数量一律由操作员实填**, 不自动带出 —— 投入不一定等于上一道
+// 产出 (损耗 / 只用一部分 / 补料), 以实填为准, 账实差异由盘点纠正 (Steve 2026-07-30 拍板)。
+// -------------------------------------------------------------------------
+
+function wipCandidate(item: ProcessSheetInventoryItem): UpstreamBatchOption {
+  return {
+    kind: 'wip', batchNumber: item.batchNumber, value: srcKey(SRC_WIP, item.batchNumber),
+    label: wipLabel(item), disabled: item.remaining <= 0,
+  };
+}
+
+function sfiCandidate(item: SemiFinishedStockItem): UpstreamBatchOption {
+  return {
+    kind: 'sfi', batchNumber: item.intermediateBatchNo, value: srcKey(SRC_SFI, item.intermediateBatchNo),
+    label: sfiLabel(item), disabled: sfiAvailable(item) <= 0,
+  };
+}
+
+function fgCandidate(item: FinishedGoodsStockItem): UpstreamBatchOption {
+  return {
+    kind: 'fg', batchNumber: item.batchNumber, value: srcKey(SRC_FG, item.batchNumber),
+    label: fgLabel(item), disabled: fgAvailable(item) <= 0,
+  };
+}
+
+/**
+ * 本来源行的**全部**候选批次。
+ *
+ * 刻意不走 wipOptionsDisplay / sfiOptionsDisplay / fgOptionsDisplay —— 那三个带搜索词过滤
+ * 且 SFI/FG 只取最近 30 条。拿它们判「是不是只有一条」, 操作员在下拉里打个字就会把候选打成
+ * 一条, 于是自动选中一个他并没有挑的批次。
+ */
+function allUpstreamCandidates(src: UpstreamRef): UpstreamBatchOption[] {
+  return [
+    ...props.upstreamItems.filter((item) => sourceMatchesSku(item.productTypeId, src)).map(wipCandidate),
+    ...sfiOptions.value.filter((item) => sourceMatchesSku(item.productTypeId, src)).map(sfiCandidate),
+    ...fgOptions.value.filter((item) => sourceMatchesSku(item.productTypeId, src)).map(fgCandidate),
+  ];
+}
+
+/** 单上游道的全部候选批次 (单上游下拉不按端口 SKU 二次过滤, 与模板列出的三组一致)。 */
+function allSingleUpstreamCandidates(): UpstreamBatchOption[] {
+  return [
+    ...props.upstreamItems.map(wipCandidate),
+    ...sfiOptions.value.map(sfiCandidate),
+    ...fgOptions.value.map(fgCandidate),
+  ];
+}
+
+/** 真能选的候选只有一条时返回它; 否则 null。余量为 0 的批次本来就选不了, 不算候选。 */
+function soleSelectableCandidate(candidates: UpstreamBatchOption[]): UpstreamBatchOption | null {
+  const selectable = candidates.filter((candidate) => !candidate.disabled);
+  return selectable.length === 1 ? selectable[0] : null;
+}
+
+/**
+ * 这一行的「选哪一批」是不是已经没有取舍余地。
+ *
+ * 端口本身还在替代关系里、且操作员还没勾「选用」时不算 —— 那时该做的决定是「用哪个端口」,
+ * 替他把批次定下来等于替他做了那个决定。他勾上之后, 这一行就只剩「哪一批」这一个问题了。
+ */
+function upstreamBatchIsForegoneChoice(src: SelectableUpstreamRef, index: number): boolean {
+  return !showPortSelector(sourcePort(src, index)) || src.selected;
+}
+
+/**
+ * 把「唯一候选批次」写进还没选批次的投入行。
+ *
+ * ⚠️ 走的是**操作员手点时的同一条路径** (onUpstreamSelect / onSingleUpstreamSelect), 不另写一遍
+ * 赋值。自动选中要做的事就是「替他点那一下」, 多一分少一分都是新的语义分叉 —— 少一分尤其危险:
+ * 成品混锅道的来源选择本来就带着「把该批次可用量结转为投入量」的既有契约, 绕开它会静默提交
+ * inputQuantity=0。
+ *
+ * 三条不动手的情况:
+ *  - 库存还在拉取: 加载中途 WIP 恰好只有一条会被误判成唯一候选, 而 SFI/FG 到位后其实有好几条
+ *    (与 inputStockText 的 rawBatchLoading 守卫同一个道理)。
+ *  - 端口有替代关系 (showPortSelector): 那是「用哪个端口」的取舍, 得操作员自己勾, 不是「哪一批」。
+ *  - 行已只读/已提交/已小结。
+ */
+function autoSelectSoleUpstreamBatches(): void {
+  if (sfiLoading.value || fgLoading.value) return;
+  for (const row of rows.value) {
+    if (row.interimSettledAt != null || isReadOnlyRow(row) || row.submissionStatus === 'SUBMITTED') continue;
+    if (isMultiSource.value) {
+      row.upstreamSources.forEach((src, index) => {
+        if (src.sourceBatchNumber || !upstreamBatchIsForegoneChoice(src, index)) return;
+        const sole = soleSelectableCandidate(allUpstreamCandidates(src));
+        if (sole) onUpstreamSelect(src, sole.value);
+      });
+      continue;
+    }
+    if (!isSingleSource.value || row.upstreamBatch) continue;
+    const sole = soleSelectableCandidate(allSingleUpstreamCandidates());
+    if (sole) onSingleUpstreamSelect(row, sole.value);
+  }
+}
+
+/** 单上游道: 唯一候选批次 (有第二个候选时 null → 照常给下拉)。 */
+function soleSingleUpstreamCandidate(): UpstreamBatchOption | null {
+  if (sfiLoading.value || fgLoading.value) return null;
+  return soleSelectableCandidate(allSingleUpstreamCandidates());
+}
+
+function upstreamOptionGroups(src: UpstreamRef): UpstreamBatchOptionGroup[] {
+  const groups: UpstreamBatchOptionGroup[] = [];
+  const wip = wipOptionsForSource(src).map(wipCandidate);
+  if (wip.length) groups.push({ label: '本计划在制半成品', options: wip });
+  const sfi = sfiOptionsForSource(src).map(sfiCandidate);
+  if (sfi.length) groups.push({ label: sfiGroupLabel.value, options: sfi });
+  const fg = fgOptionsForSource(src).map(fgCandidate);
+  if (fg.length) groups.push({ label: fgGroupLabel.value, options: fg });
+  return groups;
+}
+
+/**
+ * 把一行的投入来源整理成 ProcessInputSourceTable 要的视图模型。
+ *
+ * 所有派生值都在这里算完 —— 卡片模式和表格模式传同一份进去, 就不可能再像以前那样
+ * 三份实现各长各的。
+ */
+function inputSourceViews(row: SheetRow): InputSourceLineView[] {
+  return row.upstreamSources.map((source, index) => {
+    const port = sourcePort(source, index);
+    const unit = sourcePortUnit(source);
+    // 只有在 autoSelectSoleUpstreamBatches 真的会替他选中时才隐藏下拉 —— 否则会出现
+    // 「界面上没有下拉, 模型里也没有批次」这种交不了又不知道为什么的死局。
+    const sole = upstreamBatchIsForegoneChoice(source, index)
+      ? soleSelectableCandidate(allUpstreamCandidates(source))
+      : null;
+    return {
+      source,
+      index,
+      materialName: sourcePortName(source),
+      selectorVisible: showPortSelector(port),
+      selectorDisabled: portSelectionDisabled(port),
+      unitLabel: displayProcessUnit(unit),
+      quantityPlaceholder: formatFeedPlaceholder(unit),
+      selectKey: srcSelectKey(source),
+      soleBatchLabel: sole?.label ?? null,
+      // 唯一候选时不必再算下拉分组 —— 那个下拉根本不渲染。
+      optionGroups: sole ? [] : upstreamOptionGroups(source),
+      remainingText: srcRemainingLabel(source),
+      canAddSameMaterial: Boolean(source.workflowPortId) && !sole,
+      canClear: !sole || !source.workflowPortId,
+    };
+  });
+}
+
+function onInputSourceToggle(row: SheetRow, index: number, selected: boolean): void {
+  const src = row.upstreamSources[index];
+  if (!src) return;
+  setPortSelected(row, sourcePort(src, index), selected);
+  // 勾上之后这一行就只剩「哪一批」这一个问题, 唯一候选可以直接落下去。
+  autoSelectSoleUpstreamBatches();
+}
+
+function onInputSourceBatchSelect(row: SheetRow, index: number, key: string): void {
+  const src = row.upstreamSources[index];
+  if (src) onUpstreamSelect(src, key);
+}
+
+function onInputSourceRemove(row: SheetRow, index: number): void {
+  removeUpstreamSource(row, index);
+  // 清空后本行可能又只剩唯一候选 —— 立刻补回, 免得界面显示批次而模型里是空的。
+  autoSelectSoleUpstreamBatches();
+}
+
+function onInputSourceAdd(row: SheetRow, template?: SelectableUpstreamRef): void {
+  addUpstreamSource(row, template);
+  autoSelectSoleUpstreamBatches();
+}
+
 /** 来源批余量提示文字 (兼顾 in-plan 在制 WIP 与常驻 SFI / 成品FG)。 */
 function srcRemainingLabel(src: UpstreamRef): string {
   const wip = props.upstreamItems.find((b) => b.batchNumber === src.sourceBatchNumber);
@@ -2774,6 +2959,22 @@ watch(
     fgLoading.value = false;
     if (showFg.value) void loadFgOptions();
   },
+  { immediate: true },
+);
+
+// 库存到位 / 新增行 / 重新 hydrate 之后, 把唯一候选批次补进还没选批次的投入行。
+// getter 返回新数组 → 任一依赖变化都会重跑; 回调只写嵌套字段, 不改 rows 长度/身份, 不会自触发。
+watch(
+  () => [
+    rows.value,
+    rows.value.length,
+    props.upstreamItems,
+    sfiOptions.value,
+    fgOptions.value,
+    sfiLoading.value,
+    fgLoading.value,
+  ] as const,
+  () => autoSelectSoleUpstreamBatches(),
   { immediate: true },
 );
 
@@ -3116,11 +3317,26 @@ defineExpose({ hasUnsavedRows, refreshSharedInventories });
             </template>
           </template>
 
-          <!-- 单来源上游: 含半成品库存(SFI)/成品库存(FG)选项 -->
-          <template v-else-if="isSingleSource && !isQuSheTou">
+          <!--
+            单来源上游 (焯水/滚揉/去舌苔/定量包装): 含半成品库存(SFI)/成品库存(FG)选项。
+            去舌苔原来单独写了一份一模一样的分支, 已合并 —— 两份的差别只有 isQidiao 的投入量块,
+            而那块本来就带 v-if, 留两份纯粹是等着漂移。
+          -->
+          <template v-else-if="isSingleSource">
             <div class="sp-card-field">
               <label class="sp-card-label">{{ sourceTitle }}</label>
+              <!--
+                唯一候选批次: 直接显示批次, 不给下拉 (客户 2026-07-30「只有一个批次时自动选中,
+                不要让用户多点一次」)。表格模板有同一块, 改动需同步。
+              -->
+              <span
+                v-if="soleSingleUpstreamCandidate()"
+                data-testid="upstream-batch-fixed"
+                class="sp-fixed-batch"
+                :title="soleSingleUpstreamCandidate()!.label"
+              >{{ soleSingleUpstreamCandidate()!.label }}</span>
               <el-select
+                v-else
                 :model-value="singleUpstreamSelectKey(row)"
                 @change="(v: string) => onSingleUpstreamSelect(row, v)"
                 :placeholder="sourcePickerPlaceholder"
@@ -3128,6 +3344,7 @@ defineExpose({ hasUnsavedRows, refreshSharedInventories });
                 :filter-method="onBatchSelectFilter"
                 @visible-change="onBatchSelectVisibleChange"
                 :loading="sfiLoading"
+                :aria-label="sourceTitle"
                 style="width:100%" size="small">
                 <el-option-group v-if="wipOptionsDisplay.length" label="本计划在制半成品">
                   <el-option
@@ -3161,6 +3378,7 @@ defineExpose({ hasUnsavedRows, refreshSharedInventories });
                 :min="0" :precision="3" :controls="false"
                 :placeholder="String(resolvedFinishedInputKg(row) ?? '')"
                 data-testid="finished-input-kg"
+                aria-label="本次投入量 (kg)"
                 style="width:100%" size="small" />
               <div v-if="finishedInputOverAvailableHint(row)" class="sp-input-warn">
                 {{ finishedInputOverAvailableHint(row) }}
@@ -3168,44 +3386,6 @@ defineExpose({ hasUnsavedRows, refreshSharedInventories });
               <div v-else-if="row.finishedInputKg == null" class="sp-input-hint">
                 留空 = 按所选批次可用量 {{ resolvedFinishedInputKg(row) ?? '—' }}kg 计
               </div>
-            </div>
-          </template>
-
-          <!-- 去舌苔: single upstream dropdown — 含半成品库存(SFI)选项 -->
-          <template v-else-if="isSingleSource && isQuSheTou">
-            <div class="sp-card-field">
-              <label class="sp-card-label">{{ sourceTitle }}</label>
-              <el-select
-                :model-value="singleUpstreamSelectKey(row)"
-                @change="(v: string) => onSingleUpstreamSelect(row, v)"
-                :placeholder="sourcePickerPlaceholder"
-                filterable clearable
-                :filter-method="onBatchSelectFilter"
-                @visible-change="onBatchSelectVisibleChange"
-                :loading="sfiLoading"
-                style="width:100%" size="small">
-                <el-option-group v-if="wipOptionsDisplay.length" label="本计划在制半成品">
-                  <el-option
-                    v-for="item in wipOptionsDisplay" :key="item.batchNumber"
-                    :label="wipLabel(item)"
-                    :value="srcKey(SRC_WIP, item.batchNumber)"
-                    :disabled="item.remaining <= 0" />
-                </el-option-group>
-                <el-option-group v-if="sfiOptionsDisplay.length" :label="sfiGroupLabel">
-                  <el-option
-                    v-for="s in sfiOptionsDisplay" :key="'sfi-' + s.intermediateBatchNo"
-                    :label="sfiLabel(s)"
-                    :value="srcKey(SRC_SFI, s.intermediateBatchNo)"
-                    :disabled="sfiAvailable(s) <= 0" />
-                </el-option-group>
-                <el-option-group v-if="fgOptionsDisplay.length" :label="fgGroupLabel">
-                  <el-option
-                    v-for="f in fgOptionsDisplay" :key="'fg-' + f.batchNumber"
-                    :label="fgLabel(f)"
-                    :value="srcKey(SRC_FG, f.batchNumber)"
-                    :disabled="fgAvailable(f) <= 0" />
-                </el-option-group>
-              </el-select>
             </div>
           </template>
 
@@ -3218,71 +3398,27 @@ defineExpose({ hasUnsavedRows, refreshSharedInventories });
                 {{ formatSourceFeedSummary(row.upstreamSources.length, row.upstreamSources.reduce((s, x) => s + (x.feedQuantityKg || 0), 0), processUnits.inputUnit) }}
               </el-button>
             </div>
-            <!-- Mix expanded inline -->
-            <div v-if="row.mixExpanded" class="sp-card-field sp-card-field-full sp-card-expand-section">
-              <div style="margin-bottom:6px;display:flex;align-items:center;gap:8px">
-                <span style="font-size:12px;font-weight:600;color:#303133">{{ sourceTitle }}</span>
-                <el-button v-if="workflowUpstreamInputs.length === 0" size="small" :icon="Plus" @click="addUpstreamSource(row)">+ 来源批</el-button>
-              </div>
-              <div v-for="(src, si) in row.upstreamSources" :key="`${src.workflowPortId || 'legacy'}-${si}`"
-              data-testid="upstream-source-line"
-                   :class="{ 'sp-port-unselected': !src.selected }"
-                   style="display:flex;align-items:center;gap:8px;margin-bottom:6px;flex-wrap:wrap">
-                <el-checkbox
-                  v-if="showPortSelector(sourcePort(src))"
-                  :model-value="src.selected"
-                  :disabled="portSelectionDisabled(sourcePort(src))"
-                  data-testid="port-selected"
-                  @change="(selected: boolean) => setPortSelected(row, sourcePort(src), selected)"
-                >选用</el-checkbox>
-                <span data-testid="input-port-name" class="sp-fixed-port-name">{{ sourcePortName(src) }}</span>
-                <el-select
-                  :model-value="srcSelectKey(src)"
-                  @change="(v: string) => onUpstreamSelect(src, v)"
-                  :placeholder="sourcePickerPlaceholder" filterable clearable
-                  :filter-method="onBatchSelectFilter"
-                  @visible-change="onBatchSelectVisibleChange"
-                  :loading="sfiLoading"
-                  style="width:220px" size="small">
-                  <el-option-group label="本计划在制半成品">
-                    <el-option
-                      v-for="item in wipOptionsForSource(src)" :key="item.batchNumber"
-                      :label="wipLabel(item)"
-                      :value="srcKey(SRC_WIP, item.batchNumber)"
-                      :disabled="item.remaining <= 0" />
-                  </el-option-group>
-                  <el-option-group v-if="sfiOptionsForSource(src).length" :label="sfiGroupLabel">
-                    <el-option
-                      v-for="s in sfiOptionsForSource(src)" :key="'sfi-' + s.intermediateBatchNo"
-                      :label="sfiLabel(s)"
-                      :value="srcKey(SRC_SFI, s.intermediateBatchNo)"
-                      :disabled="sfiAvailable(s) <= 0" />
-                  </el-option-group>
-                  <el-option-group v-if="fgOptionsForSource(src).length" :label="fgGroupLabel">
-                    <el-option
-                      v-for="f in fgOptionsForSource(src)" :key="'fg-' + f.batchNumber"
-                      :label="fgLabel(f)"
-                      :value="srcKey(SRC_FG, f.batchNumber)"
-                      :disabled="fgAvailable(f) <= 0" />
-                  </el-option-group>
-                </el-select>
-                <el-input-number
-                  v-model="src.feedQuantityKg"
-                  :min="0" :precision="2"
-                  :placeholder="formatFeedPlaceholder(sourcePortUnit(src))"
-                  controls-position="right"
-                  size="small" style="width:120px" />
-                <span data-testid="input-unit-readonly" class="sp-fixed-unit">{{ sourcePortUnit(src) }}</span>
-                <span v-if="src.sourceBatchNumber" style="font-size:11px;color:#909399">
-                  {{ srcRemainingLabel(src) }}
-                </span>
-                <el-button link type="danger" :icon="Delete" @click="removeUpstreamSource(row, si)" />
-                <el-button v-if="src.workflowPortId" link type="primary" :icon="Plus" @click="addUpstreamSource(row, src)">同物料再加批次</el-button>
-              </div>
-              <div v-if="row.upstreamSources.length === 0" style="color:#909399;font-size:12px;margin:4px 0">
-                暂无来源批，点击 + 来源批 添加
-              </div>
-            </div>
+            <!--
+              Mix expanded inline —— 行式投入表, 与产出表同一套观感。
+              表格模式共用同一个子组件 (原来三份 flex 行实现已合一)。
+            -->
+            <ProcessInputSourceTable
+              v-if="row.mixExpanded"
+              class="sp-card-field sp-card-field-full sp-card-expand-section"
+              :views="inputSourceViews(row)"
+              hint="批次由 Workflow 端口收敛；数量按实际投入填写"
+              :loading="sfiLoading"
+              :show-add-source="workflowUpstreamInputs.length === 0"
+              add-source-label="+ 来源批"
+              :batch-placeholder="sourcePickerPlaceholder"
+              @toggle-select="(index: number, selected: boolean) => onInputSourceToggle(row, index, selected)"
+              @select-batch="(index: number, key: string) => onInputSourceBatchSelect(row, index, key)"
+              @remove="(index: number) => onInputSourceRemove(row, index)"
+              @add-same-material="(index: number) => onInputSourceAdd(row, row.upstreamSources[index])"
+              @add-source="() => onInputSourceAdd(row)"
+              @filter-batches="onBatchSelectFilter"
+              @batch-picker-visible="onBatchSelectVisibleChange"
+            />
           </template>
 
           <div
@@ -3539,13 +3675,8 @@ defineExpose({ hasUnsavedRows, refreshSharedInventories });
               <th class="sp-th sp-th-num">{{ workflowRawInputs.length ? '投料总量' : firstProcessInputLabel }}</th>
             </template>
 
-            <!-- 单来源上游 -->
-            <template v-else-if="isSingleSource && !isQuSheTou">
-              <th class="sp-th">{{ sourceTitle }}</th>
-            </template>
-
-            <!-- 去舌苔单来源上游 -->
-            <template v-else-if="isSingleSource && isQuSheTou">
+            <!-- 单来源上游 (含去舌苔 —— 原来是重复的第二份分支, 表头完全一样) -->
+            <template v-else-if="isSingleSource">
               <th class="sp-th">{{ sourceTitle }}</th>
             </template>
 
@@ -3766,10 +3897,19 @@ defineExpose({ hasUnsavedRows, refreshSharedInventories });
                 </template>
               </template>
 
-              <!-- ---- 单来源上游 dropdown — 含半成品库存(SFI)/成品库存(FG) ---- -->
-              <template v-else-if="isSingleSource && !isQuSheTou">
+              <!-- ---- 单来源上游 dropdown — 含半成品库存(SFI)/成品库存(FG) ----
+                   去舌苔原来是一模一样的第二份分支, 已合并 (差别只有带 v-if 的 isQidiao 投入量块)。 -->
+              <template v-else-if="isSingleSource">
                 <td class="sp-td">
+                  <!-- 唯一候选批次直接显示, 不给下拉 (卡片模板有同一块, 改动需同步)。 -->
+                  <span
+                    v-if="soleSingleUpstreamCandidate()"
+                    data-testid="upstream-batch-fixed"
+                    class="sp-fixed-batch"
+                    :title="soleSingleUpstreamCandidate()!.label"
+                  >{{ soleSingleUpstreamCandidate()!.label }}</span>
                   <el-select
+                    v-else
                     :model-value="singleUpstreamSelectKey(row)"
                     @change="(v: string) => onSingleUpstreamSelect(row, v)"
                     :placeholder="sourcePickerPlaceholder"
@@ -3777,6 +3917,7 @@ defineExpose({ hasUnsavedRows, refreshSharedInventories });
                     :filter-method="onBatchSelectFilter"
                     @visible-change="onBatchSelectVisibleChange"
                     :loading="sfiLoading"
+                    :aria-label="sourceTitle"
                     style="width:200px" size="small">
                     <el-option-group v-if="wipOptionsDisplay.length" label="本计划在制半成品">
                       <el-option
@@ -3809,6 +3950,7 @@ defineExpose({ hasUnsavedRows, refreshSharedInventories });
                       :min="0" :precision="3" :controls="false"
                       :placeholder="String(resolvedFinishedInputKg(row) ?? '')"
                       data-testid="finished-input-kg"
+                      aria-label="本次投入量 (kg)"
                       style="width:96px" size="small" />
                     <span class="sp-inline-input-label">kg</span>
                   </div>
@@ -3818,44 +3960,6 @@ defineExpose({ hasUnsavedRows, refreshSharedInventories });
                   <div v-else-if="isQidiao && row.finishedInputKg == null" class="sp-input-hint">
                     留空 = 按所选批次可用量 {{ resolvedFinishedInputKg(row) ?? '—' }}kg 计
                   </div>
-                </td>
-              </template>
-
-              <!-- ---- 去舌苔: single upstream dropdown — 含半成品库存(SFI) ---- -->
-              <template v-else-if="isSingleSource && isQuSheTou">
-                <td class="sp-td">
-                  <el-select
-                    :model-value="singleUpstreamSelectKey(row)"
-                    @change="(v: string) => onSingleUpstreamSelect(row, v)"
-                    :placeholder="sourcePickerPlaceholder"
-                    filterable clearable
-                    :filter-method="onBatchSelectFilter"
-                    @visible-change="onBatchSelectVisibleChange"
-                    :loading="sfiLoading"
-                    style="width:200px" size="small">
-                    <el-option-group v-if="wipOptionsDisplay.length" label="本计划在制半成品">
-                      <el-option
-                        v-for="item in wipOptionsDisplay"
-                        :key="item.batchNumber"
-                        :label="wipLabel(item)"
-                        :value="srcKey(SRC_WIP, item.batchNumber)"
-                        :disabled="item.remaining <= 0" />
-                    </el-option-group>
-                    <el-option-group v-if="sfiOptionsDisplay.length" :label="sfiGroupLabel">
-                      <el-option
-                        v-for="s in sfiOptionsDisplay" :key="'sfi-' + s.intermediateBatchNo"
-                        :label="sfiLabel(s)"
-                        :value="srcKey(SRC_SFI, s.intermediateBatchNo)"
-                        :disabled="sfiAvailable(s) <= 0" />
-                    </el-option-group>
-                    <el-option-group v-if="fgOptionsDisplay.length" :label="fgGroupLabel">
-                      <el-option
-                        v-for="f in fgOptionsDisplay" :key="'fg-' + f.batchNumber"
-                        :label="fgLabel(f)"
-                        :value="srcKey(SRC_FG, f.batchNumber)"
-                        :disabled="fgAvailable(f) <= 0" />
-                    </el-option-group>
-                  </el-select>
                 </td>
               </template>
 
@@ -4110,156 +4214,32 @@ defineExpose({ hasUnsavedRows, refreshSharedInventories });
             </tr>
 
             <!-- ============================================================
-                 熟制: 混锅来源 + 锅数 expander row
+                 混锅来源 expander row (熟制 / 气调 SP-G G3b)
+
+                 原来熟制与气调各写了一份**一模一样**的实现, 只有 v-if 上的 isQidiao 不同 ——
+                 加上卡片模式那份, 同一块 UI 在这个文件里有三份。现在三份都走
+                 ProcessInputSourceTable 子组件, 只剩一份实现。
                  ============================================================ -->
-            <tr v-if="isMultiSource && !isQidiao && row.mixExpanded" :key="row.clientRowId + '-mix'"
+            <tr v-if="isMultiSource && row.mixExpanded" :key="row.clientRowId + '-mix'"
                 :class="['sp-tr-expand', ri % 2 === 0 ? 'sp-tr-even' : 'sp-tr-odd']">
               <td :colspan="999" class="sp-td-expand">
                 <div class="sp-expand-section">
-                  <div class="sp-expand-title">
-                      {{ sourceTitle }} — {{ row.batchNumber || '(未保存行)' }}
-                    <el-button v-if="workflowUpstreamInputs.length === 0" size="small" :icon="Plus" style="margin-left:8px" @click="addUpstreamSource(row)">
-                      + 来源批
-                    </el-button>
-                  </div>
-
-                  <!-- Multi-source rows -->
-                  <div v-for="(src, si) in row.upstreamSources" :key="`${src.workflowPortId || 'legacy'}-${si}`"
-                       data-testid="upstream-source-line"
-                       :class="{ 'sp-port-unselected': !src.selected }"
-                       style="display:flex;align-items:center;gap:8px;margin-bottom:6px">
-                    <el-checkbox
-                      v-if="showPortSelector(sourcePort(src))"
-                      :model-value="src.selected"
-                      :disabled="portSelectionDisabled(sourcePort(src))"
-                      data-testid="port-selected"
-                      @change="(selected: boolean) => setPortSelected(row, sourcePort(src), selected)"
-                    >选用</el-checkbox>
-                    <span data-testid="input-port-name" class="sp-fixed-port-name">{{ sourcePortName(src) }}</span>
-                    <el-select
-                      :model-value="srcSelectKey(src)"
-                      @change="(v: string) => onUpstreamSelect(src, v)"
-                        :placeholder="sourcePickerPlaceholder" filterable clearable
-                      :filter-method="onBatchSelectFilter"
-                      @visible-change="onBatchSelectVisibleChange"
-                      :loading="sfiLoading"
-                      style="width:220px" size="small">
-                      <el-option-group label="本计划在制半成品">
-                        <el-option
-                          v-for="item in wipOptionsForSource(src)" :key="item.batchNumber"
-                          :label="wipLabel(item)"
-                          :value="srcKey(SRC_WIP, item.batchNumber)"
-                          :disabled="item.remaining <= 0" />
-                      </el-option-group>
-                      <el-option-group v-if="sfiOptionsForSource(src).length" :label="sfiGroupLabel">
-                        <el-option
-                          v-for="s in sfiOptionsForSource(src)" :key="'sfi-' + s.intermediateBatchNo"
-                          :label="sfiLabel(s)"
-                          :value="srcKey(SRC_SFI, s.intermediateBatchNo)"
-                          :disabled="sfiAvailable(s) <= 0" />
-                      </el-option-group>
-                      <el-option-group v-if="fgOptionsForSource(src).length" :label="fgGroupLabel">
-                        <el-option
-                          v-for="f in fgOptionsForSource(src)" :key="'fg-' + f.batchNumber"
-                          :label="fgLabel(f)"
-                          :value="srcKey(SRC_FG, f.batchNumber)"
-                          :disabled="fgAvailable(f) <= 0" />
-                      </el-option-group>
-                    </el-select>
-                    <el-input-number
-                      v-model="src.feedQuantityKg"
-                      :min="0" :precision="2"
-                      :placeholder="formatFeedPlaceholder(sourcePortUnit(src))"
-                      controls-position="right"
-                      size="small" style="width:120px" />
-                    <span data-testid="input-unit-readonly" class="sp-fixed-unit">{{ sourcePortUnit(src) }}</span>
-                    <span v-if="src.sourceBatchNumber" style="font-size:11px;color:#909399">
-                      {{ srcRemainingLabel(src) }}
-                    </span>
-                    <el-button link type="danger" :icon="Delete" @click="removeUpstreamSource(row, si)" />
-                    <el-button v-if="src.workflowPortId" link type="primary" :icon="Plus" @click="addUpstreamSource(row, src)">同物料再加批次</el-button>
-                  </div>
-                  <div v-if="row.upstreamSources.length === 0" style="color:#909399;font-size:12px;margin:4px 0">
-                    暂无来源批，点击 + 来源批 添加
-                  </div>
-
-                </div>
-              </td>
-            </tr>
-
-            <!-- ============================================================
-                 气调: 混锅来源 expander row (SP-G G3b)
-                 ============================================================ -->
-            <tr v-if="isMultiSource && isQidiao && row.mixExpanded" :key="row.clientRowId + '-mix'"
-                :class="['sp-tr-expand', ri % 2 === 0 ? 'sp-tr-even' : 'sp-tr-odd']">
-              <td :colspan="999" class="sp-td-expand">
-                <div class="sp-expand-section">
-                  <div class="sp-expand-title">
-                      {{ sourceTitle }} — {{ row.batchNumber || '(未保存行)' }}
-                    <el-button v-if="workflowUpstreamInputs.length === 0" size="small" :icon="Plus" style="margin-left:8px" @click="addUpstreamSource(row)">
-                      + 来源批
-                    </el-button>
-                  </div>
-
-                  <!-- Multi-source rows -->
-                  <div v-for="(src, si) in row.upstreamSources" :key="`${src.workflowPortId || 'legacy'}-${si}`"
-                       data-testid="upstream-source-line"
-                       :class="{ 'sp-port-unselected': !src.selected }"
-                       style="display:flex;align-items:center;gap:8px;margin-bottom:6px">
-                    <el-checkbox
-                      v-if="showPortSelector(sourcePort(src))"
-                      :model-value="src.selected"
-                      :disabled="portSelectionDisabled(sourcePort(src))"
-                      data-testid="port-selected"
-                      @change="(selected: boolean) => setPortSelected(row, sourcePort(src), selected)"
-                    >选用</el-checkbox>
-                    <span data-testid="input-port-name" class="sp-fixed-port-name">{{ sourcePortName(src) }}</span>
-                    <el-select
-                      :model-value="srcSelectKey(src)"
-                      @change="(v: string) => onUpstreamSelect(src, v)"
-                        :placeholder="sourcePickerPlaceholder" filterable clearable
-                      :filter-method="onBatchSelectFilter"
-                      @visible-change="onBatchSelectVisibleChange"
-                      :loading="sfiLoading"
-                      style="width:220px" size="small">
-                      <el-option-group label="本计划在制半成品">
-                        <el-option
-                          v-for="item in wipOptionsForSource(src)" :key="item.batchNumber"
-                          :label="wipLabel(item)"
-                          :value="srcKey(SRC_WIP, item.batchNumber)"
-                          :disabled="item.remaining <= 0" />
-                      </el-option-group>
-                      <el-option-group v-if="sfiOptionsForSource(src).length" :label="sfiGroupLabel">
-                        <el-option
-                          v-for="s in sfiOptionsForSource(src)" :key="'sfi-' + s.intermediateBatchNo"
-                          :label="sfiLabel(s)"
-                          :value="srcKey(SRC_SFI, s.intermediateBatchNo)"
-                          :disabled="sfiAvailable(s) <= 0" />
-                      </el-option-group>
-                      <el-option-group v-if="fgOptionsForSource(src).length" :label="fgGroupLabel">
-                        <el-option
-                          v-for="f in fgOptionsForSource(src)" :key="'fg-' + f.batchNumber"
-                          :label="fgLabel(f)"
-                          :value="srcKey(SRC_FG, f.batchNumber)"
-                          :disabled="fgAvailable(f) <= 0" />
-                      </el-option-group>
-                    </el-select>
-                    <el-input-number
-                      v-model="src.feedQuantityKg"
-                      :min="0" :precision="2"
-                      :placeholder="formatFeedPlaceholder(sourcePortUnit(src))"
-                      controls-position="right"
-                      size="small" style="width:120px" />
-                    <span data-testid="input-unit-readonly" class="sp-fixed-unit">{{ sourcePortUnit(src) }}</span>
-                    <span v-if="src.sourceBatchNumber" style="font-size:11px;color:#909399">
-                      {{ srcRemainingLabel(src) }}
-                    </span>
-                    <el-button link type="danger" :icon="Delete" @click="removeUpstreamSource(row, si)" />
-                    <el-button v-if="src.workflowPortId" link type="primary" :icon="Plus" @click="addUpstreamSource(row, src)">同物料再加批次</el-button>
-                  </div>
-                  <div v-if="row.upstreamSources.length === 0" style="color:#909399;font-size:12px;margin:4px 0">
-                    暂无来源批，点击 + 来源批 添加
-                  </div>
+                  <div class="sp-expand-title">{{ sourceTitle }} — {{ row.batchNumber || '(未保存行)' }}</div>
+                  <ProcessInputSourceTable
+                    :views="inputSourceViews(row)"
+                    hint="批次由 Workflow 端口收敛；数量按实际投入填写"
+                    :loading="sfiLoading"
+                    :show-add-source="workflowUpstreamInputs.length === 0"
+                    add-source-label="+ 来源批"
+                    :batch-placeholder="sourcePickerPlaceholder"
+                    @toggle-select="(index: number, selected: boolean) => onInputSourceToggle(row, index, selected)"
+                    @select-batch="(index: number, key: string) => onInputSourceBatchSelect(row, index, key)"
+                    @remove="(index: number) => onInputSourceRemove(row, index)"
+                    @add-same-material="(index: number) => onInputSourceAdd(row, row.upstreamSources[index])"
+                    @add-source="() => onInputSourceAdd(row)"
+                    @filter-batches="onBatchSelectFilter"
+                    @batch-picker-visible="onBatchSelectVisibleChange"
+                  />
                 </div>
               </td>
             </tr>
@@ -4932,6 +4912,17 @@ defineExpose({ hasUnsavedRows, refreshSharedInventories });
 .sp-spec-suffix { font-size: 13px; color: var(--el-text-color-secondary); }
 /* 无替代料时物料名以文本呈现, 视觉重量对齐同列的 el-select (2026-07-30) */
 .sp-fixed-material { display: inline-block; padding: 1px 0; font-weight: 600; line-height: 1.5; }
+/* 唯一候选批次: 显示批次文案代替下拉 (卡片/表格两套模板共用同一个类) */
+.sp-fixed-batch {
+  display: inline-block;
+  max-width: 100%;
+  overflow: hidden;
+  padding: 1px 0;
+  font-weight: 600;
+  line-height: 1.5;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 /* 成品工序手填投入量 (2026-07-30) */
 .sp-inline-input-kg { display: flex; align-items: center; gap: 4px; margin-top: 4px; }
 .sp-inline-input-label { font-size: 12px; color: var(--el-text-color-secondary); white-space: nowrap; }

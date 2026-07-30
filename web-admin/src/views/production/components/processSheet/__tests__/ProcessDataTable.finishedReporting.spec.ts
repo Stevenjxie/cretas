@@ -89,6 +89,30 @@ function setPrimaryOutput(wrapper: ReturnType<typeof mountTable>, quantity: numb
     .findComponent({ name: 'ElInputNumber' }).vm.$emit('update:model-value', quantity);
 }
 
+/**
+ * 定下这一行的来源批次。
+ *
+ * 客户 2026-07-30 之后, 可选批次只有一条时界面不再渲染下拉, 父组件已经替操作员按同一条路径
+ * (onUpstreamSelect / onSingleUpstreamSelect) 选好了 ——「只有一个批次时自动选中, 不要让用户
+ * 多点一次」。断言因此改成「要么点得到下拉, 要么已经自动选中并把批次显示出来」, 用例原本要证明
+ * 的事 (这一行最终用的是哪一批、投入量怎么算) 一个没少。
+ */
+async function pickUpstreamBatch(
+  scope: ReturnType<typeof mountTable> | ReturnType<ReturnType<typeof mountTable>['find']>,
+  compositeKey: string,
+) {
+  const select = scope.findComponent({ name: 'ElSelect' });
+  if (select.exists()) {
+    select.vm.$emit('change', compositeKey);
+    await flushPromises();
+    return;
+  }
+  const fixed = scope.find('[data-testid="upstream-batch-fixed"]');
+  if (!fixed.exists()) throw new Error('既没有来源批次下拉, 也没有自动选中的批次');
+  expect(fixed.text()).toContain(compositeKey.slice(compositeKey.indexOf('::') + 2));
+  await flushPromises();
+}
+
 describe('ProcessDataTable finished-goods reporting contract', () => {
   beforeEach(() => {
     vi.restoreAllMocks();
@@ -167,7 +191,7 @@ describe('ProcessDataTable finished-goods reporting contract', () => {
     await flushPromises();
     await addRow(wrapper);
 
-    wrapper.findComponent({ name: 'ElSelect' }).vm.$emit('change', 'wip::WIP-UPSTREAM-1');
+    await pickUpstreamBatch(wrapper, 'wip::WIP-UPSTREAM-1');
     setPrimaryOutput(wrapper, 50);
     await flushPromises();
 
@@ -196,7 +220,7 @@ describe('ProcessDataTable finished-goods reporting contract', () => {
       await addRow(wrapper);
       await wrapper.find('[data-testid="upstream-sources-toggle"] button').trigger('click');
       const sourceLine = wrapper.find('[data-testid="upstream-source-line"]');
-      sourceLine.findComponent({ name: 'ElSelect' }).vm.$emit('change', 'wip::CLK-W-20260720-9232');
+      await pickUpstreamBatch(sourceLine, 'wip::CLK-W-20260720-9232');
       setPrimaryOutput(wrapper, 5);
       await flushPromises();
 
@@ -233,7 +257,7 @@ describe('ProcessDataTable finished-goods reporting contract', () => {
     await addRow(wrapper);
     await wrapper.find('[data-testid="upstream-sources-toggle"] button').trigger('click');
     const sourceLine = wrapper.find('[data-testid="upstream-source-line"]');
-    sourceLine.findComponent({ name: 'ElSelect' }).vm.$emit('change', 'sfi::SFI-PUBLIC-1');
+    await pickUpstreamBatch(sourceLine, 'sfi::SFI-PUBLIC-1');
     setPrimaryOutput(wrapper, 5);
     await flushPromises();
 
@@ -250,11 +274,17 @@ describe('ProcessDataTable finished-goods reporting contract', () => {
   });
 
   it('fails closed instead of submitting zero when the selected upstream stock cannot be resolved', async () => {
-    const wrapper = mountTable();
+    // 两个可选批次 → 界面照常给下拉 (唯一候选才自动选中), 才能模拟「选了一个已经不在库里的批次」。
+    const wrapper = mountTable(workflowContext, [
+      ...availableUpstream,
+      { batchNumber: 'WIP-AVAILABLE-2', produced: 8, used: 0, remaining: 8, status: 'ACTIVE', unit: 'kg', productTypeName: '羊排熟制半成品' },
+    ]);
     await flushPromises();
     await addRow(wrapper);
 
-    wrapper.findComponent({ name: 'ElSelect' }).vm.$emit('change', 'wip::STALE-BATCH');
+    const picker = wrapper.findComponent({ name: 'ElSelect' });
+    expect(picker.exists()).toBe(true);
+    picker.vm.$emit('change', 'wip::STALE-BATCH');
     setPrimaryOutput(wrapper, 50);
     await flushPromises();
 

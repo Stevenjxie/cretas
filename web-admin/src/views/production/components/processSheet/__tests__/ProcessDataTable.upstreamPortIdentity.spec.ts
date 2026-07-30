@@ -100,8 +100,10 @@ describe('ProcessDataTable workflow upstream port identity', () => {
     expect(sources).toHaveLength(2);
     expect(sources.map((line) => line.find('[data-testid="input-port-name"]').text())).toEqual(['前处理鸡肉', '调味半成品']);
     expect(sources.map((line) => line.find('[data-testid="input-unit-readonly"]').text())).toEqual(['kg', 'g']);
-    expect(sources[0].text()).toContain('同物料再加批次');
-    expect(sources[1].text()).toContain('同物料再加批次');
+    // 行式布局后「同物料再加批次」是图标按钮 (一行放不下两个带字按钮), 契约从可见文案改成
+    // 无障碍名 —— 保住的意图不变: 每个 workflow 上游端口都能再加一个同物料批次。
+    expect(sources.map((line) => line.find('button[aria-label^="为"]').attributes('aria-label')))
+      .toEqual(['为 前处理鸡肉 再加一个来源批次', '为 调味半成品 再加一个来源批次']);
 
     const request = await fillAndSubmit(wrapper);
     expect(request.outputs).toBeUndefined();
