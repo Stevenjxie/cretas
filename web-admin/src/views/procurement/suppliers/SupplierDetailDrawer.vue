@@ -9,7 +9,12 @@
     <template #header>
       <div class="drawer-header">
         <div>
-          <div class="drawer-title">{{ detail?.name || supplier?.name || '供应商详情' }}</div>
+          <div class="drawer-title">
+            <el-tag v-if="detail?.shortName" type="primary" size="small" effect="plain" class="short-name-tag">
+              {{ detail.shortName }}
+            </el-tag>
+            {{ detail?.name || supplier?.name || '供应商详情' }}
+          </div>
           <div class="drawer-meta">
             {{ detail?.supplierCode || detail?.code || '-' }}
             <el-tag :type="isActive ? 'success' : 'info'" size="small">{{ isActive ? '合作中' : '暂停合作' }}</el-tag>
@@ -45,6 +50,10 @@
             class="profile-form"
           >
             <el-form-item label="供应商名称" prop="name"><el-input v-model="form.name" maxlength="200" /></el-form-item>
+            <el-form-item label="简称" prop="shortName">
+              <el-input v-model="form.shortName" maxlength="50" show-word-limit placeholder="选填，下拉里优先显示，例如「飞熊」" />
+              <div class="field-hint">留空时下拉显示全称。同一工厂内简称不能重复。</div>
+            </el-form-item>
             <el-form-item label="联系人" prop="contactPerson"><el-input v-model="form.contactPerson" maxlength="100" /></el-form-item>
             <el-form-item label="联系电话" prop="phone"><el-input v-model="form.phone" maxlength="40" /></el-form-item>
             <el-form-item label="地址" prop="address"><el-input v-model="form.address" type="textarea" maxlength="500" show-word-limit /></el-form-item>
@@ -59,6 +68,7 @@
           </el-form>
           <el-descriptions v-else :column="2" border class="profile-descriptions">
             <el-descriptions-item label="供应商名称">{{ detail.name || '资料不完整' }}</el-descriptions-item>
+            <el-descriptions-item label="简称">{{ detail.shortName || '未设置（下拉里显示全称）' }}</el-descriptions-item>
             <el-descriptions-item label="联系人">{{ detail.contactPerson || '资料不完整' }}</el-descriptions-item>
             <el-descriptions-item label="联系电话">{{ detail.phone || detail.contactPhone || '资料不完整' }}</el-descriptions-item>
             <el-descriptions-item label="邮箱">{{ detail.email || '-' }}</el-descriptions-item>
@@ -67,6 +77,17 @@
             <el-descriptions-item label="税号">{{ detail.taxNumber || detail.taxId || '-' }}</el-descriptions-item>
             <el-descriptions-item label="备注" :span="2">{{ detail.notes || '-' }}</el-descriptions-item>
           </el-descriptions>
+        </el-tab-pane>
+
+        <el-tab-pane label="联系人/地址/账户" name="collections">
+          <SupplierProfileCollections
+            v-if="detail"
+            :factory-id="factoryId"
+            :supplier-id="detail.id"
+            :supplier-name="detail.name"
+            :can-write="canWrite && isActive"
+            @changed="onCollectionsChanged"
+          />
         </el-tab-pane>
 
         <el-tab-pane label="供应原料" name="materials">
@@ -258,6 +279,7 @@ import { computed, reactive, ref, watch } from 'vue';
 import { ElMessage, ElMessageBox, type FormInstance } from 'element-plus';
 import { get } from '@/api/request';
 import UnitSelect from '@/components/common/UnitSelect.vue';
+import SupplierProfileCollections from './SupplierProfileCollections.vue';
 import {
   getSupplier,
   listSupplierMaterials,
@@ -278,7 +300,10 @@ import {
   type SupplierSavePayload,
 } from '@/api/supplierManagement';
 import { displayUnit } from '@/utils/unitPricing';
-import { supplierFormRules, supplierProfileComplete, supplierStatus, normalizeSupplierPayload } from './supplierModel';
+import {
+  supplierFormRules, supplierProfileComplete, supplierStatus, normalizeSupplierPayload,
+  showShortNameWarning,
+} from './supplierModel';
 import { toSupplierHistoryViewRow, type SupplierHistoryApiRow, type SupplierHistoryViewRow } from './supplierHistory';
 
 const props = defineProps<{
@@ -317,7 +342,7 @@ const specForm = reactive<SupplierPurchaseSpecPayload>({
 const formRef = ref<FormInstance>();
 const originalForm = ref('');
 const form = reactive<SupplierSavePayload>({
-  name: '', contactPerson: '', phone: '', address: '', email: '', bankAccount: '', taxNumber: '', notes: '',
+  name: '', shortName: '', contactPerson: '', phone: '', address: '', email: '', bankAccount: '', taxNumber: '', notes: '',
 });
 
 const isActive = computed(() => detail.value ? supplierStatus(detail.value) === 'ACTIVE' : false);
@@ -330,6 +355,17 @@ watch(() => props.modelValue, (open) => {
   }
   if (!open) resetState();
 });
+
+/**
+ * 子档（联系人/地址/账户）变动后必须重拉主档 —— 主记录会镜像回 suppliers 的
+ * 联系人/电话/邮箱/地址/开户行/账号, 不重拉的话「基本资料」页签仍显示旧值,
+ * 用户会以为没保存成功。
+ */
+async function onCollectionsChanged(): Promise<void> {
+  if (!detail.value) return;
+  detail.value = await getSupplier(props.factoryId, detail.value.id);
+  emit('changed');
+}
 
 async function loadDetail(): Promise<void> {
   if (!props.supplier?.id) return;
@@ -352,6 +388,7 @@ function fillForm(): void {
   if (!detail.value) return;
   Object.assign(form, {
     name: detail.value.name ?? '',
+    shortName: detail.value.shortName ?? '',
     contactPerson: detail.value.contactPerson ?? '',
     phone: detail.value.phone || detail.value.contactPhone || '',
     address: detail.value.address ?? '',
@@ -378,6 +415,8 @@ async function saveProfile(): Promise<void> {
     detail.value = await updateSupplier(props.factoryId, detail.value.id, normalizeSupplierPayload(form));
     editing.value = false;
     ElMessage.success('供应商资料已更新');
+    // 简称重名只提示不拦 (Steve 2026-07-30): 保存已成功, 故 warning 而非 error; 但要 sticky。
+    showShortNameWarning(detail.value?.shortNameWarning);
     emit('changed');
   } finally {
     saving.value = false;

@@ -49,11 +49,17 @@ public interface SupplierRepository extends JpaRepository<Supplier, String> {
      */
     @Query("SELECT s FROM Supplier s WHERE s.factoryId = :factoryId " +
            "AND (s.name LIKE CONCAT('%', :keyword, '%') ESCAPE '\\' " +
+           "OR s.shortName LIKE CONCAT('%', :keyword, '%') ESCAPE '\\' " +
            "OR s.supplierCode LIKE CONCAT(:keyword, '%') ESCAPE '\\')")
     List<Supplier> searchByName(@Param("factoryId") String factoryId, @Param("keyword") String keyword);
 
+    /**
+     * ⚠️ shortName 必须在这里参与匹配 —— 客户要简称就是为了在下拉里打简称找供应商,
+     * 只加列不加搜索条件等于功能没上线。
+     */
     @Query("SELECT s FROM Supplier s WHERE s.factoryId = :factoryId " +
            "AND (s.name LIKE CONCAT('%', :keyword, '%') ESCAPE '\\' " +
+           "OR s.shortName LIKE CONCAT('%', :keyword, '%') ESCAPE '\\' " +
            "OR s.supplierCode LIKE CONCAT(:keyword, '%') ESCAPE '\\' " +
            "OR s.contactPerson LIKE CONCAT('%', :keyword, '%') ESCAPE '\\')")
     Page<Supplier> searchByNamePaged(@Param("factoryId") String factoryId,
@@ -65,6 +71,7 @@ public interface SupplierRepository extends JpaRepository<Supplier, String> {
 
     @Query("SELECT s FROM Supplier s WHERE s.factoryId = :factoryId AND s.isActive = true " +
            "AND (s.name LIKE CONCAT('%', :keyword, '%') ESCAPE '\\' " +
+           "OR s.shortName LIKE CONCAT('%', :keyword, '%') ESCAPE '\\' " +
            "OR s.supplierCode LIKE CONCAT(:keyword, '%') ESCAPE '\\' " +
            "OR s.contactPerson LIKE CONCAT('%', :keyword, '%') ESCAPE '\\')")
     Page<Supplier> searchActiveByNamePaged(@Param("factoryId") String factoryId,

@@ -24,6 +24,8 @@ public class SupplierDTO {
     private String factoryId;
     private String supplierCode;
     private String name;
+    /** 供应商简称（可空）。下拉/列表优先显示它, 为空时回退全称 —— 见 getDisplayName()。 */
+    private String shortName;
     private String contactPerson;
     private String phone;
     private String email;
@@ -62,6 +64,14 @@ public class SupplierDTO {
     /** Optimistic lock version — FE must send back on PUT to detect concurrent edits (409 Conflict on mismatch) */
     private Long version;
 
+    /**
+     * 简称与同工厂另一家重复时的**非阻断**提示 (Steve 2026-07-30 拍板: 只提示不拦)。
+     *
+     * <p>只在 create/update 的响应里出现, 查询时恒为 null —— 它描述的是"你刚才这次保存",
+     * 不是供应商的属性。名称/税号重复仍是 409 (那会算错账), 简称重复只是下拉里不好认。</p>
+     */
+    private String shortNameWarning;
+
     // ===================================================================
     // 前端字段别名（兼容前端）
     // ===================================================================
@@ -73,5 +83,16 @@ public class SupplierDTO {
     @JsonProperty("code")
     public String getCode() {
         return supplierCode;
+    }
+
+    /**
+     * 下拉/列表统一显示名: 有简称用简称, 否则回退全称。
+     *
+     * <p>放在后端而不是各前端各拼一次 —— 供应商下拉散落在 web-admin 6 处、RN 2 处、
+     * AI Tool 1 处, 靠约定同步必然漂移。
+     */
+    @JsonProperty("displayName")
+    public String getDisplayName() {
+        return shortName != null && !shortName.isBlank() ? shortName : name;
     }
 }

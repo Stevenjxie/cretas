@@ -80,6 +80,8 @@ public class SupplierServiceImpl implements SupplierService {
             "phoneNumber", request.getPhone() != null ? request.getPhone() : ""));
         log.info("创建供应商: factoryId={}, name={}", factoryId, request.getName());
         ensureNoDuplicateProfile(factoryId, request.getName(), request.getTaxNumber(), null);
+        // 简称碰撞只提示不拦, 所以必须在**任何**抛异常的检查之后、保存之前算好, 保存成功再带回去。
+        String shortNameWarning = detectShortNameCollision(factoryId, request.getShortName(), null);
         if (request.getSupplierCode() != null
                 && supplierRepository.existsByFactoryIdAndSupplierCode(factoryId, request.getSupplierCode())) {
             throw new BusinessException(409, "供应商编码已存在")
@@ -100,7 +102,9 @@ public class SupplierServiceImpl implements SupplierService {
         // 保存供应商
         supplier = supplierRepository.save(supplier);
         log.info("供应商创建成功: id={}, code={}", supplier.getId(), supplier.getSupplierCode());
-        return supplierMapper.toDTO(supplier);
+        SupplierDTO created = supplierMapper.toDTO(supplier);
+        created.setShortNameWarning(shortNameWarning);
+        return created;
     }
     @Override
     @Transactional
@@ -126,13 +130,19 @@ public class SupplierServiceImpl implements SupplierService {
             throw new org.springframework.orm.ObjectOptimisticLockingFailureException(
                 Supplier.class, supplierId);
         }
+        String mergedShortName = request.isShortNamePresent()
+                ? request.getShortName() : supplier.getShortName();
         ensureNoDuplicateProfile(factoryId, mergedName,
-                request.getTaxNumber() != null ? request.getTaxNumber() : supplier.getTaxNumber(), supplierId);
+                request.getTaxNumber() != null ? request.getTaxNumber() : supplier.getTaxNumber(),
+                supplierId);
+        String shortNameWarning = detectShortNameCollision(factoryId, mergedShortName, supplierId);
         // 更新供应商信息
         supplierMapper.updateEntity(supplier, request);
         supplier = supplierRepository.save(supplier);
         log.info("供应商更新成功: id={}", supplier.getId());
-        return supplierMapper.toDTO(supplier);
+        SupplierDTO dto = supplierMapper.toDTO(supplier);
+        dto.setShortNameWarning(shortNameWarning);
+        return dto;
     }
     @Override
     @Transactional
@@ -272,6 +282,7 @@ public class SupplierServiceImpl implements SupplierService {
     private static void normalizeCreateRequest(CreateSupplierRequest request) {
         request.setSupplierCode(com.cretas.aims.service.supplier.SupplierProfileValidator.trimToNull(request.getSupplierCode()));
         request.setName(com.cretas.aims.service.supplier.SupplierProfileValidator.trimToNull(request.getName()));
+        request.setShortName(com.cretas.aims.service.supplier.SupplierProfileValidator.trimToNull(request.getShortName()));
         request.setContactPerson(com.cretas.aims.service.supplier.SupplierProfileValidator.trimToNull(request.getContactPerson()));
         request.setPhone(com.cretas.aims.service.supplier.SupplierProfileValidator.trimToNull(request.getPhone()));
         request.setAddress(com.cretas.aims.service.supplier.SupplierProfileValidator.trimToNull(request.getAddress()));
@@ -284,6 +295,11 @@ public class SupplierServiceImpl implements SupplierService {
 
     private static void normalizeUpdateRequest(UpdateSupplierRequest request) {
         if (request.getName() != null) request.setName(request.getName().trim());
+        // 只在字段真的出现在请求体里时归一化 —— 无条件调 setShortName 会把
+        // shortNamePresent 标记打成 true, 让"没传简称"被误判成"要清空简称"。
+        if (request.isShortNamePresent()) {
+            request.setShortName(com.cretas.aims.service.supplier.SupplierProfileValidator.trimToNull(request.getShortName()));
+        }
         if (request.getContactPerson() != null) request.setContactPerson(request.getContactPerson().trim());
         if (request.getPhone() != null) request.setPhone(request.getPhone().trim());
         if (request.getAddress() != null) request.setAddress(request.getAddress().trim());
@@ -294,7 +310,9 @@ public class SupplierServiceImpl implements SupplierService {
         if (request.getNotes() != null) request.setNotes(com.cretas.aims.service.supplier.SupplierProfileValidator.trimToNull(request.getNotes()));
     }
 
-    private void ensureNoDuplicateProfile(String factoryId, String name, String taxNumber, String excludedId) {
+    /** 名称/税号重复会算错账 → 409 阻断。简称不在此列, 见 {@link #detectShortNameCollision}。 */
+    private void ensureNoDuplicateProfile(String factoryId, String name, String taxNumber,
+                                          String excludedId) {
         String normalizedName = normalizeIdentity(name);
         String normalizedTax = normalizeIdentity(taxNumber);
         for (Supplier existing : supplierRepository.findByFactoryId(factoryId)) {
@@ -310,6 +328,30 @@ public class SupplierServiceImpl implements SupplierService {
                         .withHintTarget("taxNumber");
             }
         }
+    }
+
+    /**
+     * 简称碰撞检测 —— **只提示不拦** (Steve 2026-07-30 拍板)。
+     *
+     * <p>名称/税号重复会算错账 (对错供应商、抵错税), 所以是 409; 简称重复只是下拉里不好认,
+     * 不影响任何一笔金额或库存, 属于"提醒用户"而非"阻止用户"的量级。</p>
+     *
+     * <p>⚠️ 改成 advisory 时 DB 侧的唯一索引必须一并去掉 (见 V20261029_34) —— 只删这里的
+     * 409 而留着索引, 拦截照旧发生, 只是从可读的 409 退化成 DataIntegrityViolation 500。</p>
+     *
+     * @return 提示文案; 无碰撞返回 null
+     */
+    private String detectShortNameCollision(String factoryId, String shortName, String excludedId) {
+        String normalized = normalizeIdentity(shortName);
+        if (normalized == null) return null;
+        for (Supplier existing : supplierRepository.findByFactoryId(factoryId)) {
+            if (Objects.equals(existing.getId(), excludedId)) continue;
+            if (normalized.equals(normalizeIdentity(existing.getShortName()))) {
+                return "简称「" + shortName + "」与供应商「" + existing.getName()
+                        + "」重复，下拉里会分不出来，建议换一个（已按你填的保存）";
+            }
+        }
+        return null;
     }
 
     private static String normalizeIdentity(String value) {

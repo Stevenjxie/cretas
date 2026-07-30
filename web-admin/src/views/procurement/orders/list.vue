@@ -1207,7 +1207,13 @@ function handleAiFill(params: TableRow) {
             style="width: 100%"
             @change="onSupplierChange"
           >
-            <el-option v-for="s in suppliers" :key="s.id" :label="s.name" :value="s.id" />
+            <!-- 简称优先: 全称太长时下拉认不出来, 这是客户提简称的原始诉求 -->
+            <el-option
+              v-for="s in suppliers"
+              :key="s.id"
+              :label="s.shortName ? `${s.shortName}（${s.name}）` : s.name"
+              :value="s.id"
+            />
           </el-select>
           <UpstreamMissingHint
             v-if="suppliers.length === 0"

@@ -29,6 +29,7 @@ public class SupplierMapper {
                 .factoryId(supplier.getFactoryId())
                 .supplierCode(supplier.getSupplierCode())
                 .name(supplier.getName())
+                .shortName(supplier.getShortName())
                 .contactPerson(supplier.getContactPerson())
                 .phone(supplier.getPhone())
                 .email(supplier.getEmail())
@@ -77,6 +78,7 @@ public class SupplierMapper {
         supplier.setSupplierCode(supplierCode);
         supplier.setCode(supplierCode);  // 设置code字段，使用相同的supplierCode
         supplier.setName(request.getName());
+        supplier.setShortName(request.getShortName());
         supplier.setContactPerson(request.getContactPerson());
         supplier.setPhone(request.getPhone());
         supplier.setEmail(request.getEmail());
@@ -106,6 +108,11 @@ public class SupplierMapper {
     public void updateEntity(Supplier supplier, UpdateSupplierRequest request) {
         if (request.getName() != null) {
             supplier.setName(request.getName());
+        }
+        // 简称: 传空串即"清空简称"(normalizeUpdateRequest 已把空串 trim 成 null),
+        // 所以这里用 hasShortName 标记而不是 != null —— 否则用户永远删不掉已填的简称。
+        if (request.isShortNamePresent()) {
+            supplier.setShortName(request.getShortName());
         }
         if (request.getContactPerson() != null) {
             supplier.setContactPerson(request.getContactPerson());

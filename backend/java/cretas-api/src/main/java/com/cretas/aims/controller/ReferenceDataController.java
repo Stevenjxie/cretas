@@ -201,6 +201,11 @@ public class ReferenceDataController {
                     Map<String, Object> m = new LinkedHashMap<>();
                     m.put("id", s.getId());
                     m.put("name", s.getName());
+                    // 简称 + displayName: Canvas ReferenceSelector 的供应商下拉走这个投影,
+                    // 不带上简称的话「下拉里好认」在所有动态表单上都不生效。
+                    m.put("shortName", s.getShortName());
+                    m.put("displayName", s.getShortName() != null && !s.getShortName().isBlank()
+                            ? s.getShortName() : s.getName());
                     m.put("supplierCode", s.getSupplierCode());
                     m.put("contactPerson", s.getContactPerson());
                     return m;
@@ -301,6 +306,11 @@ public class ReferenceDataController {
                     Map<String, Object> m = new LinkedHashMap<>();
                     m.put("id", s.getId());
                     m.put("name", s.getName());
+                    // 简称 + displayName: Canvas ReferenceSelector 的供应商下拉走这个投影,
+                    // 不带上简称的话「下拉里好认」在所有动态表单上都不生效。
+                    m.put("shortName", s.getShortName());
+                    m.put("displayName", s.getShortName() != null && !s.getShortName().isBlank()
+                            ? s.getShortName() : s.getName());
                     m.put("supplierCode", s.getSupplierCode());
                     m.put("contactPerson", s.getContactPerson());
                     return m;

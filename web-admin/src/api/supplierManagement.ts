@@ -11,6 +11,15 @@ export interface SupplierRecord {
   supplierCode?: string;
   code?: string;
   name: string;
+  /** 供应商简称（可空）。**不做唯一约束** —— 重名只提示不拦（Steve 2026-07-30 拍板）。 */
+  shortName?: string | null;
+  /**
+   * 简称与同工厂另一家重复时的非阻断提示。
+   * 只在 create/update 的响应里出现，查询恒为 null —— 它说的是"你刚才这次保存"。
+   */
+  shortNameWarning?: string | null;
+  /** 后端算好的展示名 = 简称 ?? 全称。下拉/列表一律用它，别在前端各拼一次。 */
+  displayName?: string | null;
   contactPerson?: string | null;
   phone?: string | null;
   contactPhone?: string | null;
@@ -35,6 +44,7 @@ export interface SupplierRecord {
 
 export interface SupplierSavePayload {
   name: string;
+  shortName?: string;
   contactPerson: string;
   phone: string;
   address: string;
@@ -48,6 +58,77 @@ export interface SupplierSavePayload {
 export interface SupplierPage {
   content: SupplierRecord[];
   totalElements?: number;
+}
+
+// ─────────────────── 多联系人 / 多地址 / 多银行账户 ───────────────────
+
+export type SupplierContactType =
+  'OWNER' | 'SALES' | 'FINANCE' | 'LOGISTICS' | 'AFTER_SALES' | 'OTHER';
+
+export type SupplierAddressType =
+  'BUSINESS' | 'SHIPPING' | 'BILLING' | 'WAREHOUSE' | 'OTHER';
+
+/** 与后端 SupplierContactType 枚举一一对应；改一边必须改另一边。 */
+export const SUPPLIER_CONTACT_TYPE_OPTIONS: Array<{ value: SupplierContactType; label: string }> = [
+  { value: 'OWNER', label: '负责人' },
+  { value: 'SALES', label: '业务对接' },
+  { value: 'FINANCE', label: '财务对账' },
+  { value: 'LOGISTICS', label: '送货/物流' },
+  { value: 'AFTER_SALES', label: '售后' },
+  { value: 'OTHER', label: '其他' },
+];
+
+/** 与后端 SupplierAddressType 枚举一一对应。 */
+export const SUPPLIER_ADDRESS_TYPE_OPTIONS: Array<{ value: SupplierAddressType; label: string }> = [
+  { value: 'BUSINESS', label: '注册/办公地址' },
+  { value: 'SHIPPING', label: '发货地址' },
+  { value: 'BILLING', label: '开票地址' },
+  { value: 'WAREHOUSE', label: '仓库地址' },
+  { value: 'OTHER', label: '其他' },
+];
+
+export interface SupplierContact {
+  id?: string | null;
+  supplierId?: string | null;
+  name: string;
+  contactType?: SupplierContactType | null;
+  contactTypeLabel?: string | null;
+  phone?: string | null;
+  email?: string | null;
+  position?: string | null;
+  isPrimary?: boolean | null;
+  sortOrder?: number | null;
+  notes?: string | null;
+  version?: number | null;
+}
+
+export interface SupplierAddress {
+  id?: string | null;
+  supplierId?: string | null;
+  label?: string | null;
+  addressType?: SupplierAddressType | null;
+  addressTypeLabel?: string | null;
+  address: string;
+  contactName?: string | null;
+  contactPhone?: string | null;
+  isPrimary?: boolean | null;
+  sortOrder?: number | null;
+  notes?: string | null;
+  version?: number | null;
+}
+
+export interface SupplierBankAccount {
+  id?: string | null;
+  supplierId?: string | null;
+  accountName?: string | null;
+  bankName: string;
+  branchName?: string | null;
+  accountNumber: string;
+  currency?: string | null;
+  isPrimary?: boolean | null;
+  sortOrder?: number | null;
+  notes?: string | null;
+  version?: number | null;
 }
 
 export interface SupplierImportMapping {
@@ -212,6 +293,82 @@ export async function updateSupplierStatus(
     { isActive: active, reason: reason.trim(), version: supplier.version },
   );
   return response.data;
+}
+
+// ─────────────────── 多联系人 / 多地址 / 多银行账户 API ───────────────────
+// 写接口一律返回「保存后的完整列表」—— 主标记是后端重算的（第一条自动置主、
+// 删主自动顺位提升），前端拿单条回包自己 patch 数组必然与后端不一致。
+
+export async function listSupplierContacts(
+  factoryId: string, supplierId: string,
+): Promise<SupplierContact[]> {
+  const response = await request.get<SupplierContact[]>(
+    `/${factoryId}/suppliers/${supplierId}/contacts`);
+  return response.data ?? [];
+}
+
+export async function saveSupplierContact(
+  factoryId: string, supplierId: string, payload: SupplierContact,
+): Promise<SupplierContact[]> {
+  const response = await request.post<SupplierContact[]>(
+    `/${factoryId}/suppliers/${supplierId}/contacts`, payload);
+  return response.data ?? [];
+}
+
+export async function deleteSupplierContact(
+  factoryId: string, supplierId: string, contactId: string,
+): Promise<SupplierContact[]> {
+  const response = await request.delete<SupplierContact[]>(
+    `/${factoryId}/suppliers/${supplierId}/contacts/${contactId}`);
+  return response.data ?? [];
+}
+
+export async function listSupplierAddresses(
+  factoryId: string, supplierId: string,
+): Promise<SupplierAddress[]> {
+  const response = await request.get<SupplierAddress[]>(
+    `/${factoryId}/suppliers/${supplierId}/addresses`);
+  return response.data ?? [];
+}
+
+export async function saveSupplierAddress(
+  factoryId: string, supplierId: string, payload: SupplierAddress,
+): Promise<SupplierAddress[]> {
+  const response = await request.post<SupplierAddress[]>(
+    `/${factoryId}/suppliers/${supplierId}/addresses`, payload);
+  return response.data ?? [];
+}
+
+export async function deleteSupplierAddress(
+  factoryId: string, supplierId: string, addressId: string,
+): Promise<SupplierAddress[]> {
+  const response = await request.delete<SupplierAddress[]>(
+    `/${factoryId}/suppliers/${supplierId}/addresses/${addressId}`);
+  return response.data ?? [];
+}
+
+export async function listSupplierBankAccounts(
+  factoryId: string, supplierId: string,
+): Promise<SupplierBankAccount[]> {
+  const response = await request.get<SupplierBankAccount[]>(
+    `/${factoryId}/suppliers/${supplierId}/bank-accounts`);
+  return response.data ?? [];
+}
+
+export async function saveSupplierBankAccount(
+  factoryId: string, supplierId: string, payload: SupplierBankAccount,
+): Promise<SupplierBankAccount[]> {
+  const response = await request.post<SupplierBankAccount[]>(
+    `/${factoryId}/suppliers/${supplierId}/bank-accounts`, payload);
+  return response.data ?? [];
+}
+
+export async function deleteSupplierBankAccount(
+  factoryId: string, supplierId: string, bankAccountId: string,
+): Promise<SupplierBankAccount[]> {
+  const response = await request.delete<SupplierBankAccount[]>(
+    `/${factoryId}/suppliers/${supplierId}/bank-accounts/${bankAccountId}`);
+  return response.data ?? [];
 }
 
 export async function downloadSupplierTemplate(factoryId: string): Promise<void> {
