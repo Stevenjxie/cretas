@@ -11,8 +11,13 @@ export interface SupplierRecord {
   supplierCode?: string;
   code?: string;
   name: string;
-  /** 供应商简称（可空）。工厂内不区分大小写唯一。 */
+  /** 供应商简称（可空）。**不做唯一约束** —— 重名只提示不拦（Steve 2026-07-30 拍板）。 */
   shortName?: string | null;
+  /**
+   * 简称与同工厂另一家重复时的非阻断提示。
+   * 只在 create/update 的响应里出现，查询恒为 null —— 它说的是"你刚才这次保存"。
+   */
+  shortNameWarning?: string | null;
   /** 后端算好的展示名 = 简称 ?? 全称。下拉/列表一律用它，别在前端各拼一次。 */
   displayName?: string | null;
   contactPerson?: string | null;

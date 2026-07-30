@@ -45,6 +45,22 @@ export function supplierDisplayName(
     || normalizeText(supplier.name);
 }
 
+/**
+ * 简称重名提示 —— **只提示不拦** (Steve 2026-07-30 拍板)。
+ *
+ * 名称/税号重复会算错账 (对错供应商、抵错税) 所以后端 409 阻断; 简称重复只是下拉里不好认,
+ * 不影响任何一笔金额或库存, 于是保存照常成功、只提醒一句。
+ *
+ * 用 warning 而非 error: 保存**已经成功了**, 报红会让用户以为没存上。
+ * 但仍 sticky (`duration: 0` + `showClose`) —— 一闪而过的提示等于没提示, 用户不会回去改简称。
+ */
+export async function showShortNameWarning(warning: string | null | undefined): Promise<void> {
+  const text = normalizeText(warning);
+  if (!text) return;
+  const { ElMessage } = await import('element-plus');
+  ElMessage({ message: text, type: 'warning', duration: 0, showClose: true });
+}
+
 export function normalizeSupplierPayload(input: SupplierSavePayload): SupplierSavePayload {
   return {
     ...input,

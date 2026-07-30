@@ -64,6 +64,14 @@ public class SupplierDTO {
     /** Optimistic lock version — FE must send back on PUT to detect concurrent edits (409 Conflict on mismatch) */
     private Long version;
 
+    /**
+     * 简称与同工厂另一家重复时的**非阻断**提示 (Steve 2026-07-30 拍板: 只提示不拦)。
+     *
+     * <p>只在 create/update 的响应里出现, 查询时恒为 null —— 它描述的是"你刚才这次保存",
+     * 不是供应商的属性。名称/税号重复仍是 409 (那会算错账), 简称重复只是下拉里不好认。</p>
+     */
+    private String shortNameWarning;
+
     // ===================================================================
     // 前端字段别名（兼容前端）
     // ===================================================================

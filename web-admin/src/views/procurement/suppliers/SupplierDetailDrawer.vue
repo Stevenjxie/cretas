@@ -300,7 +300,10 @@ import {
   type SupplierSavePayload,
 } from '@/api/supplierManagement';
 import { displayUnit } from '@/utils/unitPricing';
-import { supplierFormRules, supplierProfileComplete, supplierStatus, normalizeSupplierPayload } from './supplierModel';
+import {
+  supplierFormRules, supplierProfileComplete, supplierStatus, normalizeSupplierPayload,
+  showShortNameWarning,
+} from './supplierModel';
 import { toSupplierHistoryViewRow, type SupplierHistoryApiRow, type SupplierHistoryViewRow } from './supplierHistory';
 
 const props = defineProps<{
@@ -412,6 +415,8 @@ async function saveProfile(): Promise<void> {
     detail.value = await updateSupplier(props.factoryId, detail.value.id, normalizeSupplierPayload(form));
     editing.value = false;
     ElMessage.success('供应商资料已更新');
+    // 简称重名只提示不拦 (Steve 2026-07-30): 保存已成功, 故 warning 而非 error; 但要 sticky。
+    showShortNameWarning(detail.value?.shortNameWarning);
     emit('changed');
   } finally {
     saving.value = false;

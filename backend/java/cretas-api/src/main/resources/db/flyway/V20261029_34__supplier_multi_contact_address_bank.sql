@@ -41,9 +41,18 @@ BEGIN
         COMMENT ON COLUMN suppliers.short_name
             IS '供应商简称 (客户反馈: 下拉里好认)。可空; 为空时 UI 回退显示全称。工厂内不区分大小写唯一 —— 两家简称一样等于没解决"好认"。';
 
-        -- 简称在工厂内唯一 (忽略大小写)。NULL 不参与 —— 存量 60 行回填后全是 NULL,
-        -- 所以本索引在 prod 建立时必然无冲突 (已 BEGIN/ROLLBACK 干跑验证)。
-        CREATE UNIQUE INDEX IF NOT EXISTS uq_suppliers_short_name
+        -- ⚠️ 简称**刻意不做唯一约束** (Steve 2026-07-30 拍板: 只提示不拦)。
+        --
+        -- 初版建过 uq_suppliers_short_name 部分唯一索引 + 服务层 409。改成 advisory 后
+        -- 这里必须一并去掉 —— 只删服务层的 409 而留着 DB 索引, 结果是拦截照旧发生,
+        -- 只是从可读的 409 变成一条 DataIntegrityViolation 500, 比原来更糟。
+        --
+        -- 重名简称只在下拉里不好认, 不会算错任何账 —— 属于"提醒用户"而非"阻止用户"的量级。
+        -- 检测仍在 (SupplierServiceImpl#detectShortNameCollision), 通过
+        -- SupplierDTO.shortNameWarning 提示, 不阻断保存。
+        --
+        -- 仍建普通索引: 简称是下拉搜索字段, 且碰撞检测要按 (factory_id, lower(short_name)) 查。
+        CREATE INDEX IF NOT EXISTS idx_suppliers_short_name
             ON suppliers(factory_id, lower(short_name))
             WHERE deleted_at IS NULL AND short_name IS NOT NULL;
     END IF;

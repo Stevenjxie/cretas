@@ -37,10 +37,26 @@ describe('supplier short name reaches every place the customer looks', () => {
   });
 
   it('is cleared when the create dialog is reopened', () => {
-    // 简称工厂内唯一 —— 漏 reset 会带着上次输入重开, 直接撞 409「简称已被占用」
+    // 漏 reset 会带着上次输入重开, 于是每建一家都顶着同一个简称 —— 现在不会被 409 拦住了
+    // (Steve 2026-07-30 改成只提示不拦), 反而更需要 reset: 拦不住就会真的存进去一堆重名。
     const openCreate = listSource.slice(listSource.indexOf('function openCreate'));
     expect(openCreate.slice(0, openCreate.indexOf('createVisible.value = true')))
       .toContain("shortName: ''");
+  });
+
+  it('surfaces the duplicate-short-name warning without blocking the save', () => {
+    // Steve 2026-07-30 拍板「只提示不拦」: 名称/税号重复会算错账所以 409, 简称重复只是下拉里
+    // 不好认。三处必须同时成立, 缺一处这个决定就退化 —— 后端不抛 (有 Java 侧测试守)、
+    // migration 不留唯一索引 (同上)、提示真的展示出来 (这条)。
+    expect(listSource).toContain('showShortNameWarning(created?.shortNameWarning)');
+    expect(drawerSource).toContain('showShortNameWarning(detail.value?.shortNameWarning)');
+
+    const model = readFileSync(resolve(suppliersDir, 'supplierModel.ts'), 'utf8');
+    // warning 而非 error: 保存**已经成功**, 报红会让用户以为没存上
+    expect(model).toContain("type: 'warning'");
+    // 但必须 sticky —— 一闪而过等于没提示, 用户不会回去改简称
+    expect(model).toContain('duration: 0');
+    expect(model).toContain('showClose: true');
   });
 
   it('tells the user the search box also matches the short name', () => {
