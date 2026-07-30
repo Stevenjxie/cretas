@@ -2,9 +2,30 @@ import { describe, expect, it } from 'vitest';
 import { presentStockShortage } from '../processStockShortage';
 
 describe('presentStockShortage', () => {
-  it('localizes backend units and keeps the original message for diagnosis', () => {
-    const raw = '当前只能保存草稿，生产库中投料量不足。短缺明细：包装盒（包材）：需要 2box，可用 0box，缺少 2box；标签（包材）：需要 1.25slice，可用 1slice，缺少 0.25slice，请联系仓管补料';
-    const view = presentStockShortage(raw);
+  it('localizes the structured backend payload and keeps the original message for diagnosis', () => {
+    const raw = '后端可自由调整这段展示文案，请联系仓管补料';
+    const view = presentStockShortage(raw, {
+      items: [
+        {
+          materialTypeId: 'PKG-BOX',
+          materialName: '包装盒',
+          sourceType: 'PACKAGING',
+          required: 2,
+          available: 0,
+          shortage: 2,
+          unit: 'box',
+        },
+        {
+          materialTypeId: 'PKG-LABEL',
+          materialName: '标签',
+          sourceType: 'PACKAGING',
+          required: 1.25,
+          available: 1,
+          shortage: 0.25,
+          unit: 'slice',
+        },
+      ],
+    });
 
     expect(view.items).toEqual([
       {
@@ -25,7 +46,7 @@ describe('presentStockShortage', () => {
   });
 
   it('does not invent material or quantity when the backend message has no detail list', () => {
-    const raw = '当前只能保存草稿，生产库中投料量不足，请联系仓管补料';
+    const raw = '当前只能保存草稿，生产库中投料量不足。短缺明细：文案看起来像结构化数据，请联系仓管补料';
     const view = presentStockShortage(raw);
 
     expect(view.items).toEqual([]);

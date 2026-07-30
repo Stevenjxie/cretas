@@ -239,7 +239,13 @@ request.interceptors.response.use(
             hintTarget: rich.hintTarget,
           });
         }
-        return Promise.reject(new ApiError(data.message, rich.errorCode || data.code));
+        return Promise.reject(new ApiError(
+          data.message,
+          rich.errorCode || data.code,
+          undefined,
+          rich.actionHint,
+          data.data,
+        ));
       }
       return data;
     }
@@ -532,6 +538,7 @@ request.interceptors.response.use(
       rich.errorCode || error.response?.data?.code,
       status,
       rich.actionHint || null,
+      error.response?.data?.data,
     ));
   }
 );

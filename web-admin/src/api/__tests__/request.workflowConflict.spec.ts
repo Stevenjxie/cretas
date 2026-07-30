@@ -22,14 +22,21 @@ describe('request workflow conflict ownership', () => {
   });
 
   it('suppresses the global surface only for an editor-owned workflow conflict and preserves its errorCode', async () => {
+    const payload = { items: [{ materialTypeId: 'RAW-1', shortage: 3, unit: 'kg' }] };
     const promise = request.put('/F006/product-process-workflows/PT-A/draft', {}, {
       _handledErrorCodes: ['PRODUCT_PROCESS_WORKFLOW_CONFLICT'],
-      adapter: rejectingAdapter(409, 'PRODUCT_PROCESS_WORKFLOW_CONFLICT', 'reload or copy'),
+      adapter: rejectingAdapter(
+        409,
+        'PRODUCT_PROCESS_WORKFLOW_CONFLICT',
+        'reload or copy',
+        payload,
+      ),
     } as never);
 
     await expect(promise).rejects.toEqual(expect.objectContaining<ApiError>({
       code: 'PRODUCT_PROCESS_WORKFLOW_CONFLICT',
       status: 409,
+      data: payload,
     }));
     await flushAsyncImports();
 
@@ -77,6 +84,7 @@ function rejectingAdapter(
   status: number,
   errorCode: string,
   actionHint: string,
+  payload?: unknown,
 ): AxiosAdapter {
   return async (config) => {
     const response: AxiosResponse = {
@@ -91,6 +99,7 @@ function rejectingAdapter(
         message: `Request failed with ${errorCode}`,
         actionHint,
         severity: 'warning',
+        data: payload,
       },
     };
     throw new AxiosError('Request failed', 'ERR_BAD_REQUEST', config, undefined, response);

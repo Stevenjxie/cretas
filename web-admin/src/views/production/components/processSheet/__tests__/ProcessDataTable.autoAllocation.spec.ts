@@ -114,6 +114,29 @@ describe('ProcessDataTable production-store automatic allocation', () => {
       '当前只能保存草稿，生产库中投料量不足。短缺明细：800g包装盒（包材）：需要 2box，可用 0box，缺少 2box；标签（包材）：需要 1.25slice，可用 1slice，缺少 0.25slice，请联系仓管补料',
       'PRODUCTION_STOCK_SHORTAGE',
       409,
+      null,
+      {
+        items: [
+          {
+            materialTypeId: 'PKG-BOX',
+            materialName: '800g包装盒',
+            sourceType: 'PACKAGING',
+            required: 2,
+            available: 0,
+            shortage: 2,
+            unit: 'box',
+          },
+          {
+            materialTypeId: 'PKG-LABEL',
+            materialName: '标签',
+            sourceType: 'PACKAGING',
+            required: 1.25,
+            available: 1,
+            shortage: 0.25,
+            unit: 'slice',
+          },
+        ],
+      },
     ));
     const wrapper = mountTable();
     await flushPromises();
