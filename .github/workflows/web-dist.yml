@@ -71,7 +71,14 @@ jobs:
           # 打完立刻自检: gzip 完整 + index.html 在 + 至少一个 asset + index 引用的资源都在包里。
           # 不自检的话, 一个坏包会一路送到发布方手里才暴露。
           gzip -t "$archive"
-          tar -tzf "$archive" | grep -Eq '^(\./)?index\.html$'
+          # ⚠️ 不要写 `tar -tzf ... | grep -q`。grep -q 一命中就退出并关掉读端, tar 被 SIGPIPE
+          # 打死(exit 141), 而本步是 `set -o pipefail` → 整条流水线判失败, 报出来是
+          # "tar: stdout: write error"。实测就这么挂过一次(run 30549826240), 而且这正是
+          # release-cretas.sh 顶部 matches_any_line 那段长注释警告的同一个坑。
+          # 落地成文件再匹配, 没有管道也就没有会被打死的生产者 —— 与
+          # web_release_verify_archive 的做法一致(它也是先写 listing 再 grep)。
+          tar -tzf "$archive" > /tmp/archive-listing.txt
+          grep -Eq '^(\./)?index\.html$' /tmp/archive-listing.txt
           asset_count=$(find dist/assets -type f | wc -l | tr -d ' ')
           test "$asset_count" -gt 0
 

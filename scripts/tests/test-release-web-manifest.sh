@@ -256,6 +256,16 @@ if [ -f "$WEB_WORKFLOW" ]; then
     # CI 侧必须自检包(不然坏包一路送到发布方手里才暴露)
     grep -Fq 'gzip -t "$archive"' "$WEB_WORKFLOW" \
         || fail "CI does not self-check the archive it produces"
+    # ⚠️ 自检里不许出现 `tar ... | grep -q`。grep -q 一命中就关掉读端, tar 被 SIGPIPE 打死,
+    # 而那一步是 set -o pipefail → 整条流水线判失败, 报出来是 "tar: stdout: write error"。
+    # 实测挂过一次(run 30549826240)。这与 release-cretas.sh 顶部 matches_any_line 警告的是同
+    # 一个坑, 那里的修法也是"去掉管道"。注意本机(MSYS)复现不出来 —— 管道缓冲行为不同, 所以
+    # 只能靠这条断言拦, 不能靠本地跑一遍。
+    if grep -qE 'tar -t[a-z]*f "\$archive" *\| *grep' "$WEB_WORKFLOW"; then
+        fail "CI pipes tar into grep; grep -q closes the pipe and pipefail turns SIGPIPE into failure"
+    fi
+    grep -Fq 'tar -tzf "$archive" > /tmp/archive-listing.txt' "$WEB_WORKFLOW" \
+        || fail "CI archive listing is not materialised to a file before matching"
     # 必须签 provenance, 且 subject 是 tar.gz 而不是目录
     grep -Fq 'attest-build-provenance' "$WEB_WORKFLOW" \
         || fail "CI web dist is not attested"
