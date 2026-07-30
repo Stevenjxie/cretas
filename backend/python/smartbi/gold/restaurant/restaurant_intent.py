@@ -3968,15 +3968,22 @@ async def _is_restaurant_tenant(pool, factory_id: str) -> bool:
         raise
     is_restaurant = row is not None
     if not is_restaurant:
-        # 判否之前先分清两种「否」: 真的不是餐饮租户, 还是**该能用却没物化**。
+        # 🔴 `agg_restaurant_daily_totals` **只由后厨事实表驱动**(领料 /
+        # 损耗 / 盘点), 与 POS 流水无关。拿它当「是不是餐饮租户」的唯一判据,
+        # 等于**用后厨数据的有无, 去决定 POS 类问题能不能回答** —— 判据选错了对象。
         #
-        # 2026-07-31 实测(prod): R_GML_DEMO 有 16,213 笔 POS 流水、132 家门店,
-        # 但 agg_restaurant_daily_totals 一行都没有 → 每个问题 0.0 秒返回 None,
-        # 日志里连一个字都没有(grep 该 factory_id: 0 命中)。餐饮 AI 对它
-        # **100% 不可用而且完全无声**, 没人会发现, 直到客户来问「为什么没反应」。
+        # 2026-07-31 实测(prod): R_GML_DEMO 有 **16,213 笔 POS 流水、132 家门店**,
+        # 后厨三张事实表全 0 行 → totals 为空 → 闸判否 → 每个问题 0.0 秒返回
+        # None, 日志里一个字都没有。而它的营收 / 菜品销量 / 门店对比 / 堂食外卖
+        # **本来完全答得了**。
         #
-        # ⛔ 不放行: 没有 Gold 汇总, resolver 只会返回空数据 —— 那是把「没反应」
-        # 换成「一本正经地答 0」, 更糟。这里只负责让它**可见**。
+        # 对照组印证这不是能力差别: RES_3101_009 同样没有后厨数据(损耗/领料都
+        # 答 0), 只是历史上偶然攒下 8 行 totals, 于是闸放行、POS 类问题答得好好的。
+        # 两个租户的差别只是「有没有偶然攒下几行」。
+        #
+        # 所以改成: **POS 流水 or 后厨数据, 有其一即算餐饮租户**。
+        # 放宽是安全的 —— 每个 resolver 自己 fail-closed(没数据就如实说没数据,
+        # RES_3101_009 今天实测就是这个行为), 闸只决定「要不要进这条问答链」。
         # 只在判否那一次多查一条(结果照旧进缓存), 不给每个请求加 SQL。
         try:
             async with pool.acquire() as conn:
@@ -3991,11 +3998,12 @@ async def _is_restaurant_tenant(pool, factory_id: str) -> bool:
                         factory_id,
                     )
             if has_pos is not None:
-                logger.warning(
-                    "[restaurant-intent] tenant %s 有 POS 流水但 "
-                    "agg_restaurant_daily_totals 为空 —— 餐饮 AI 对它完全不可用"
-                    "(每个问题都会静默返回 None)。需要为该租户跑一次 Gold 物化; "
-                    "在那之前放行只会让 resolver 一本正经地答 0。",
+                is_restaurant = True
+                logger.info(
+                    "[restaurant-intent] tenant %s 按 POS 流水判为餐饮租户"
+                    "(后厨聚合 agg_restaurant_daily_totals 为空 —— 该租户没有"
+                    "领料/损耗/盘点数据)。营收/菜品/门店类问题可正常回答; "
+                    "后厨类问题会如实答「无记录」。",
                     factory_id,
                 )
         except Exception as exc:  # noqa: BLE001 — 诊断用, 失败不能影响主判定
