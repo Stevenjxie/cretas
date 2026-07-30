@@ -1,0 +1,72 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+delete_cache=false
+purge_nginx=false
+for argument in "$@"; do
+  case "$argument" in
+    --delete-cache) delete_cache=true ;;
+    --purge-nginx) purge_nginx=true ;;
+    *)
+      echo "usage: github-artifact-cache-rollback [--delete-cache] [--purge-nginx]" >&2
+      exit 2
+      ;;
+  esac
+done
+
+if [[ $EUID -ne 0 ]]; then
+  echo "error=must_run_as_root" >&2
+  exit 2
+fi
+
+backup=$(< /var/backups/github-artifact-cache/LATEST)
+[[ -d $backup ]] || {
+  echo "error=backup_not_found" >&2
+  exit 1
+}
+
+systemctl disable --now github-artifact-cache-clean.timer 2>/dev/null || true
+systemctl stop nginx 2>/dev/null || true
+ufw --force delete allow in on wg0 to any port 18081 proto tcp >/dev/null 2>&1 || true
+
+[[ ! -L /etc/nginx/sites-enabled/github-artifact-cache ]] ||
+  unlink /etc/nginx/sites-enabled/github-artifact-cache
+[[ ! -f /etc/nginx/sites-available/github-artifact-cache ]] ||
+  unlink /etc/nginx/sites-available/github-artifact-cache
+[[ ! -f /etc/systemd/system/nginx.service.d/wg0.conf ]] ||
+  unlink /etc/systemd/system/nginx.service.d/wg0.conf
+[[ ! -f /etc/systemd/system/github-artifact-cache-clean.service ]] ||
+  unlink /etc/systemd/system/github-artifact-cache-clean.service
+[[ ! -f /etc/systemd/system/github-artifact-cache-clean.timer ]] ||
+  unlink /etc/systemd/system/github-artifact-cache-clean.timer
+[[ ! -f /usr/local/sbin/github-cache-put ]] ||
+  unlink /usr/local/sbin/github-cache-put
+[[ ! -f /usr/local/sbin/github-cache-clean ]] ||
+  unlink /usr/local/sbin/github-cache-clean
+
+if [[ -d $backup/nginx.before ]]; then
+  cp -a "$backup/nginx.before/." /etc/nginx/
+  nginx -t
+  systemctl enable --now nginx
+else
+  systemctl disable nginx 2>/dev/null || true
+fi
+
+if $delete_cache && [[ -d /var/cache/github-artifacts ]]; then
+  find /var/cache/github-artifacts -type f -exec unlink {} \;
+  rmdir /var/cache/github-artifacts
+fi
+
+if $purge_nginx && [[ $(< "$backup/nginx-state.txt") == absent ]]; then
+  env DEBIAN_FRONTEND=noninteractive apt-get purge -y nginx nginx-common
+fi
+
+systemctl daemon-reload
+systemctl reset-failed nginx 2>/dev/null || true
+
+if ss -ltn | grep -Eq '(^|:)18081([[:space:]]|$)'; then
+  echo "error=port_18081_still_listening" >&2
+  exit 1
+fi
+
+echo "rollback=complete backup=$backup cache_deleted=$delete_cache nginx_purged=$purge_nginx"
