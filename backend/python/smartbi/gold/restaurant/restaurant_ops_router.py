@@ -1212,7 +1212,13 @@ def _extract_dish_candidate_single(text: str) -> "Optional[str]":
         return None
     if any(tok in candidate for tok in (
         "排行", "排名", "趋势", "对比", "分析", "整体", "全部",
-        "情况", "如何", "怎么", "多少", "？", "?", "营收", "营业额",
+        # 疑问词: 「怎么/多少/如何」本来就在, 但漏了「哪」「什么」——
+        # 2026-07-30 prod 实拍「哪个菜最赚钱」被 _DISH_PROFIT_RE 捕成菜名
+        # 「哪个菜最」, 用户答完澄清后收到「没有找到名为「哪个菜最」的菜品」。
+        # 下面 _catalogue_says_not_a_dish 那道「菜单说了算」在这里够不到:
+        # dish_catalogue_scope 只包住 parse_restaurant_query, 解析器在作用域外
+        # 运行, 目录没加载就 fail-open。所以这道守卫不能依赖目录。
+        "情况", "如何", "怎么", "多少", "哪", "什么", "？", "?", "营收", "营业额",
         "销售", "销量", "毛利", "成本", "盈利", "赚钱", "利润",
         "过去", "最近", "个月", "季度", "一年", "继续追问",
     ) + _KITCHEN_OPS_NOUNS):

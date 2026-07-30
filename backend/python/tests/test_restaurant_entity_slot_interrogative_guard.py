@@ -71,3 +71,40 @@ def test_hallucination_guard_still_applies():
 def test_existing_placeholder_blacklist_still_applies():
     assert ri._verbatim_entity("这道菜", "这道菜卖了多少") is None
     assert ri._verbatim_entity("哪家店", "哪家店毛利最好") is None
+
+
+# ── the deterministic extractor, which is the path that actually fired ───────
+# _verbatim_entity guards the LLM slot; 「哪个菜最」 came from the regex
+# _DISH_PROFIT_RE in restaurant_ops_router instead, so the first fix did not
+# reach it (prod re-test after deploy still reproduced). The catalogue gate
+# below it cannot help either: dish_catalogue_scope wraps only
+# parse_restaurant_query, while the resolver runs outside it and the gate is
+# fail-open when the catalogue is not loaded.
+
+from smartbi.gold.restaurant.restaurant_ops_router import extract_dish_candidate
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        "哪个菜最赚钱",
+        "哪道菜最赚钱",
+        "哪些菜盈利",
+        "什么菜最赚钱",
+        "全部门店最近30天哪个菜最赚钱",
+    ],
+)
+def test_deterministic_extractor_rejects_interrogatives(query):
+    got = extract_dish_candidate(query)
+    assert got is None, f"{query!r} → dish candidate {got!r}; that becomes 「查无此菜」"
+
+
+@pytest.mark.parametrize(
+    "query, dish",
+    [
+        ("米饭赚钱吗", "米饭"),
+        ("水煮牛肉赚钱吗", "水煮牛肉"),
+    ],
+)
+def test_deterministic_extractor_still_finds_real_dishes(query, dish):
+    assert extract_dish_candidate(query) == dish
