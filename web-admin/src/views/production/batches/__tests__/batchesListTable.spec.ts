@@ -112,6 +112,35 @@ describe('生产批次列表 — 表头与列宽', () => {
     expect(source).toContain(`class: 'batch-sort-trigger'`);
   });
 
+  it('生产计划归组行整行加粗，而不只加粗第一格标题', async () => {
+    apiGet.mockResolvedValue({
+      success: true,
+      data: {
+        content: [{
+          id: 'WIP-1',
+          batchNumber: 'WIP-20260731-01',
+          batchType: 'CLERK_WIP',
+          sourcePlanId: 'PLAN-1',
+          sourcePlanNumber: 'PP-20260731-01',
+          productTypeName: '卤猪蹄',
+          plannedQuantity: 100,
+          actualQuantity: 90,
+          status: 'COMPLETED',
+        }],
+        totalElements: 1,
+      },
+    });
+
+    const wrapper = mountList();
+    await flushPromises();
+
+    expect(wrapper.find('tr.plan-group-row').exists()).toBe(true);
+    const source = readFileSync(resolve(__dirname, '../list.vue'), 'utf8');
+    expect(source).toContain(':row-class-name="batchRowClassName"');
+    expect(source).toContain('tr.plan-group-row > td.el-table__cell .cell');
+    expect(source).toContain('font-weight: 600');
+  });
+
   // ── B. 列宽记忆 ───────────────────────────────────────────────────
 
   it('没存过时每一列都保持改造前的默认宽度', async () => {

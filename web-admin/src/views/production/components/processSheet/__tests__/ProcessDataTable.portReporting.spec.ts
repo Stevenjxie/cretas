@@ -76,6 +76,8 @@ describe('ProcessDataTable workflow port reporting rows', () => {
 
     expect(wrapper.findAll('[data-testid="material-input-total"]')).toHaveLength(2);
     expect(wrapper.findAll('[data-testid="workflow-output-line"]')).toHaveLength(2);
+    expect(wrapper.findAll('[data-testid="output-specification"]').map((item) => item.text()))
+      .toEqual(['350g/袋', '400g/袋']);
     expect(wrapper.findAll('[data-testid="workflow-execution-line"]')).toHaveLength(2);
     expect(wrapper.find('[data-testid="production-date"]').exists()).toBe(true);
     expect(wrapper.findAll('[data-testid="input-unit-readonly"]').map((item) => item.text())).toEqual(['kg', 'kg']);
@@ -181,6 +183,7 @@ describe('ProcessDataTable workflow port reporting rows', () => {
     };
     const wrapper = mountTable(mixedContext);
     await addRow(wrapper);
+    expect(wrapper.findAll('[data-testid="output-specification"]')).toHaveLength(0);
     wrapper.find('[data-testid="material-input-total"]').findComponent({ name: 'ElInputNumber' }).vm.$emit('update:model-value', 10);
     const outputs = wrapper.findAll('[data-testid="workflow-output-line"]');
     outputs[0].find('[data-testid="output-quantity"]').findComponent({ name: 'ElInputNumber' }).vm.$emit('update:model-value', 8);

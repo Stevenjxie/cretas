@@ -111,7 +111,7 @@ describe('ProcessDataTable production-store automatic allocation', () => {
 
   it('keeps the row editable and shows the backend shortage message after submit is rejected', async () => {
     submitRow.mockRejectedValue(new ApiError(
-      '当前只能保存草稿，生产库中投料量不足，请联系仓管补料',
+      '当前只能保存草稿，生产库中投料量不足。短缺明细：800g包装盒（包材）：需要 2box，可用 0box，缺少 2box；标签（包材）：需要 1.25slice，可用 1slice，缺少 0.25slice，请联系仓管补料',
       'PRODUCTION_STOCK_SHORTAGE',
       409,
     ));
@@ -127,7 +127,14 @@ describe('ProcessDataTable production-store automatic allocation', () => {
     await wrapper.findAll('button').find((item) => item.text().includes('正式报工'))!.trigger('click');
     await flushPromises();
 
-    expect(wrapper.text()).toContain('当前只能保存草稿，生产库中投料量不足，请联系仓管补料');
+    expect(wrapper.findAll('[data-testid="stock-shortage-alert"]')).toHaveLength(1);
+    const shortage = wrapper.find('[data-testid="stock-shortage-alert"]');
+    expect(shortage.text()).toContain('生产库投料不足，本行只能保存草稿');
+    expect(shortage.text()).toContain('800g包装盒（包材）');
+    expect(shortage.text()).toContain('缺 2 盒');
+    expect(shortage.text()).toContain('标签（包材）');
+    expect(shortage.text()).toContain('缺 0.25 片');
+    expect(shortage.text()).toContain('去哪补：联系仓管补料');
     expect(wrapper.text()).toContain('保存草稿');
   });
 

@@ -33,6 +33,10 @@ type BatchTableRow = TableRow & {
   sourceProcessCode?: string | null;
 };
 
+function batchRowClassName({ row }: { row: BatchTableRow }): string {
+  return row.isSyntheticPlanGroup ? 'plan-group-row' : '';
+}
+
 function rowActionsFor(row: TableRow) {
   // #751: 删除 dropdown 中的 'view-detail' (页面已有独立"查看" button, 避免重复 button 跳同页)
   // fool-proof-design Rule 5: 'edit'/'lock' 没有真实后端能力 (无批次编辑表单/接口,
@@ -529,6 +533,7 @@ function getStatusText(status: string) {
         border
         table-layout="fixed"
         class="batch-data-table"
+        :row-class-name="batchRowClassName"
         style="width: 100%"
         @header-dragend="handleHeaderDragend"
       >
@@ -861,6 +866,10 @@ function getStatusText(status: string) {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+:deep(.el-table__body tr.plan-group-row > td.el-table__cell .cell) {
+  font-weight: 600;
 }
 
 .pagination-wrapper {

@@ -80,8 +80,7 @@ public class SupplierServiceImpl implements SupplierService {
             "phoneNumber", request.getPhone() != null ? request.getPhone() : ""));
         log.info("创建供应商: factoryId={}, name={}", factoryId, request.getName());
         ensureNoDuplicateProfile(factoryId, request.getName(), request.getTaxNumber(), null);
-        // 简称碰撞只提示不拦, 所以必须在**任何**抛异常的检查之后、保存之前算好, 保存成功再带回去。
-        String shortNameWarning = detectShortNameCollision(factoryId, request.getShortName(), null);
+        ensureNoShortNameCollision(factoryId, request.getShortName(), null);
         if (request.getSupplierCode() != null
                 && supplierRepository.existsByFactoryIdAndSupplierCode(factoryId, request.getSupplierCode())) {
             throw new BusinessException(409, "供应商编码已存在")
@@ -102,9 +101,7 @@ public class SupplierServiceImpl implements SupplierService {
         // 保存供应商
         supplier = supplierRepository.save(supplier);
         log.info("供应商创建成功: id={}, code={}", supplier.getId(), supplier.getSupplierCode());
-        SupplierDTO created = supplierMapper.toDTO(supplier);
-        created.setShortNameWarning(shortNameWarning);
-        return created;
+        return supplierMapper.toDTO(supplier);
     }
     @Override
     @Transactional
@@ -135,14 +132,12 @@ public class SupplierServiceImpl implements SupplierService {
         ensureNoDuplicateProfile(factoryId, mergedName,
                 request.getTaxNumber() != null ? request.getTaxNumber() : supplier.getTaxNumber(),
                 supplierId);
-        String shortNameWarning = detectShortNameCollision(factoryId, mergedShortName, supplierId);
+        ensureNoShortNameCollision(factoryId, mergedShortName, supplierId);
         // 更新供应商信息
         supplierMapper.updateEntity(supplier, request);
         supplier = supplierRepository.save(supplier);
         log.info("供应商更新成功: id={}", supplier.getId());
-        SupplierDTO dto = supplierMapper.toDTO(supplier);
-        dto.setShortNameWarning(shortNameWarning);
-        return dto;
+        return supplierMapper.toDTO(supplier);
     }
     @Override
     @Transactional
@@ -310,7 +305,7 @@ public class SupplierServiceImpl implements SupplierService {
         if (request.getNotes() != null) request.setNotes(com.cretas.aims.service.supplier.SupplierProfileValidator.trimToNull(request.getNotes()));
     }
 
-    /** 名称/税号重复会算错账 → 409 阻断。简称不在此列, 见 {@link #detectShortNameCollision}。 */
+    /** 名称/税号重复会算错账 → 409 阻断。 */
     private void ensureNoDuplicateProfile(String factoryId, String name, String taxNumber,
                                           String excludedId) {
         String normalizedName = normalizeIdentity(name);
@@ -331,32 +326,32 @@ public class SupplierServiceImpl implements SupplierService {
     }
 
     /**
-     * 简称碰撞检测 —— **只提示不拦** (Steve 2026-07-30 拍板)。
-     *
-     * <p>名称/税号重复会算错账 (对错供应商、抵错税), 所以是 409; 简称重复只是下拉里不好认,
-     * 不影响任何一笔金额或库存, 属于"提醒用户"而非"阻止用户"的量级。</p>
-     *
-     * <p>⚠️ 改成 advisory 时 DB 侧的唯一索引必须一并去掉 (见 V20261029_34) —— 只删这里的
-     * 409 而留着索引, 拦截照旧发生, 只是从可读的 409 退化成 DataIntegrityViolation 500。</p>
-     *
-     * @return 提示文案; 无碰撞返回 null
+     * 简称用于人工辨认供应商，同一工厂内碰撞会让用户选错对象，因此保存前返回可行动的 409。
+     * 数据库部分唯一索引负责并发写入的最后一道防线。
      */
-    private String detectShortNameCollision(String factoryId, String shortName, String excludedId) {
-        String normalized = normalizeIdentity(shortName);
-        if (normalized == null) return null;
+    private void ensureNoShortNameCollision(String factoryId, String shortName, String excludedId) {
+        String normalized = normalizeShortName(shortName);
+        if (normalized == null) return;
         for (Supplier existing : supplierRepository.findByFactoryId(factoryId)) {
             if (Objects.equals(existing.getId(), excludedId)) continue;
-            if (normalized.equals(normalizeIdentity(existing.getShortName()))) {
-                return "简称「" + shortName + "」与供应商「" + existing.getName()
-                        + "」重复，下拉里会分不出来，建议换一个（已按你填的保存）";
+            if (normalized.equals(normalizeShortName(existing.getShortName()))) {
+                throw new BusinessException(409, "供应商简称已存在")
+                        .withHint("简称「" + shortName.trim() + "」已被供应商「"
+                                + existing.getName() + "」使用，请修改简称后再保存")
+                        .withHintTarget("shortName");
             }
         }
-        return null;
     }
 
     private static String normalizeIdentity(String value) {
         String trimmed = com.cretas.aims.service.supplier.SupplierProfileValidator.trimToNull(value);
         return trimmed == null ? null : trimmed.replaceAll("\\s+", "").toLowerCase(Locale.ROOT);
+    }
+
+    /** 与 uq_suppliers_short_name 的 lower(short_name) 口径一致；请求入库前已统一 trim。 */
+    private static String normalizeShortName(String value) {
+        String trimmed = com.cretas.aims.service.supplier.SupplierProfileValidator.trimToNull(value);
+        return trimmed == null ? null : trimmed.toLowerCase(Locale.ROOT);
     }
     @Override
     @Transactional

@@ -61,6 +61,8 @@ export interface OutputLineView {
   totalHoursText: string;
   /** 仅成品显示; 缺单位净重时是明确的错误说明而不是猜的重量。 */
   weightHint: string | null;
+  /** Workflow 已配置单位净重时显示的规格，如 800g/盒；缺数据时不猜。 */
+  specLabel: string | null;
 }
 
 /** 产出表的列宽契约。选用列只在真有可选端口时占位, 否则整列不存在。 */
