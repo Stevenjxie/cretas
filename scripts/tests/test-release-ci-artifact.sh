@@ -256,6 +256,20 @@ backend_path=$(sed -n 's/^RELEASE_BACKEND_PATH="\(.*\)"$/\1/p' \
 grep -Fq -- "- '$backend_path/**'" "$CI_YML" \
     || fail "ci.yml 的 push paths 未覆盖整个 $backend_path/** —— 存在改树却不触发 CI 的 commit"
 
+# ---- --prefer-ci-artifact 默认开, 且必须有一个显式关闭出口 ----
+# 2026-07-31 Steve 拍板翻成默认开: 默认关的时候整条 CI 制品链路对日常发布形同不存在
+# (标准发布命令不带这个 flag), 实测 234s vs 405s。
+contains "$RELEASE_SCRIPT" 'CRETAS_RELEASE_PREFER_CI_ARTIFACT:-1'
+if grep -Fq -- 'CRETAS_RELEASE_PREFER_CI_ARTIFACT:-0}" = "1"' "$RELEASE_SCRIPT"; then
+    fail "--prefer-ci-artifact 退回了默认关 —— 那等于把整条 CI 制品链路从日常发布上摘掉"
+fi
+# 默认开就必须留可逆出口, 否则出问题时只能改脚本
+contains "$RELEASE_SCRIPT" '--no-prefer-ci-artifact)'
+# 关掉时必须【显式导出 0】: 只导出 1 的话, --no-prefer-ci-artifact 配上环境里已有的 =1
+# 会变成 Java 侧关而 Web 侧开 —— 又一个"只在一半路径生效"的半吊子开关。
+contains "$RELEASE_SCRIPT" 'export CRETAS_RELEASE_PREFER_CI_ARTIFACT=0'
+contains "$RELEASE_SCRIPT" 'export CRETAS_RELEASE_PREFER_CI_ARTIFACT=1'
+
 # 反向: 仍然不许把 web-admin 塞进来。on.push.paths 是 workflow 级的, 加进来会让
 # java-build-test 被纯前端改动触发, 白跑 4~5 分钟(web 有自己的 web-dist.yml)。
 if grep -Eq "^[[:space:]]*-[[:space:]]*'?web-admin/" "$CI_YML"; then

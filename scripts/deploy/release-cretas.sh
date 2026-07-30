@@ -84,8 +84,19 @@ PARALLEL_CONFIRM=
 ORDER=backend-first
 ORDER_EXPLICIT=false
 STAGE_BACKEND_CONFIRM=
-# 显式开关, 默认关。env 形式给自动化用, --prefer-ci-artifact 给人手用。
-if [ "${CRETAS_RELEASE_PREFER_CI_ARTIFACT:-0}" = "1" ]; then
+# 默认【开】(2026-07-31 Steve 拍板)。
+#
+# 为什么翻过来: 默认关的时候, 整条 CI 制品链路(Java 制品 + 预热 + Web dist 取回)对日常发布
+# 【形同不存在】—— 因为标准发布命令不带这个 flag。实测同为「java+web 都改」的两次真实
+# prod 发布: 带开关 234s, 不带 405s。
+#
+# 默认开的代价是【探测那几秒】: 取不到 CI 制品就自动回退本地构建, Java 探测约 2s、
+# Web 查制品约 4s, 出现在一次 400s 量级的发布里可以忽略。而且回退是【有声】的
+# (CI_ARTIFACT_UNAVAILABLE reason=... / WEB_CI_ARTIFACT=fallback), 不会把"其实重编了一遍"
+# 混成"用了 CI 制品"。
+#
+# 关掉: `--no-prefer-ci-artifact` 或 `CRETAS_RELEASE_PREFER_CI_ARTIFACT=0`。
+if [ "${CRETAS_RELEASE_PREFER_CI_ARTIFACT:-1}" = "1" ]; then
     PREFER_CI_ARTIFACT=true
 else
     PREFER_CI_ARTIFACT=false
@@ -102,10 +113,11 @@ Usage:
     [--phase build|deploy|all] \
     [--order backend-first|web-first] \
     [--stage-backend YES-STAGE] \
-    [--prefer-ci-artifact] \
+    [--no-prefer-ci-artifact] \
     [--parallel-if-independent YES-INDEPENDENT-SERVICES]
 
---prefer-ci-artifact (默认关闭): build 阶段先试着复用一份 CI 已构建、provenance 已验证的
+--prefer-ci-artifact (【默认开启】; 关掉用 --no-prefer-ci-artifact 或
+CRETAS_RELEASE_PREFER_CI_ARTIFACT=0): build 阶段先复用一份 CI 已构建、provenance 已验证的
 制品, 顶替本地 clean package。制品字节走 GitHub → 东京 → OSS → ECS, 一次都不经过本机, 直接
 落进 deploy-backend.sh 的服务器端 sha256 缓存。任何一环不满足(制品不存在 / 测试选择器不同 /
 签名验不过)都会明确说明并照旧本地构建 —— 不会静默降级。
@@ -131,6 +143,7 @@ while [ "$#" -gt 0 ]; do
         --order) ORDER=${2:-}; ORDER_EXPLICIT=true; shift 2 ;;
         --stage-backend) STAGE_BACKEND_CONFIRM=${2:-}; shift 2 ;;
         --prefer-ci-artifact) PREFER_CI_ARTIFACT=true; shift ;;
+        --no-prefer-ci-artifact) PREFER_CI_ARTIFACT=false; shift ;;
         -h|--help) usage; exit 0 ;;
         *) echo "ERROR: unknown option: $1" >&2; usage >&2; exit 2 ;;
     esac
@@ -140,8 +153,13 @@ done
 # 路径都落到那个函数, 插在调用方必漏)。它只认环境变量, 所以 --prefer-ci-artifact 这个【命令行】
 # 形式必须在这里补一次导出, 否则人手传 flag 时 Java 生效而 Web 不生效 —— 又是一个"只在某条
 # 路径生效"的半吊子开关。
+# 两个方向都显式导出。只导出 1 的话, `--no-prefer-ci-artifact` 配上环境里已有的
+# CRETAS_RELEASE_PREFER_CI_ARTIFACT=1, 会变成 Java 侧关掉而 Web 侧照样开 —— 又一个
+# "只在一半路径生效"的半吊子开关。决定只在这里做一次, 下游一律读这个导出值。
 if [ "$PREFER_CI_ARTIFACT" = "true" ]; then
     export CRETAS_RELEASE_PREFER_CI_ARTIFACT=1
+else
+    export CRETAS_RELEASE_PREFER_CI_ARTIFACT=0
 fi
 
 [ -n "$BASE_SHA" ] || { echo "ERROR: --base-sha is required" >&2; exit 2; }
