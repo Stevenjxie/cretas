@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 const harness = vi.hoisted(() => ({
   route: null as any,
+  push: vi.fn(),
   get: vi.fn(),
   post: vi.fn(),
 }));
@@ -16,7 +17,9 @@ vi.mock('vue-router', async () => {
       instanceId: 'sales-instance',
     } as Record<string, string | undefined>,
   });
-  return { useRoute: () => harness.route };
+  // pending.vue 2026-07-30 起还用 useRouter(): 调拨审批通过后要引导回单据点「确认入库」
+  // (客户「审核后 库存没有过来」)。mock 需同步补上, 否则组件挂载即报 No "useRouter" export。
+  return { useRoute: () => harness.route, useRouter: () => ({ push: harness.push }) };
 });
 
 vi.mock('@/api/request', () => ({

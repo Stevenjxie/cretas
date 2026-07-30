@@ -15,6 +15,7 @@ import { computed, defineAsyncComponent, defineComponent, h } from 'vue';
 import { useAuthStore } from '@/store/modules/auth';
 import { getDashboardComponent } from '@/components/dashboard';
 import PendingApprovalsWidget from '@/components/dashboard/PendingApprovalsWidget.vue';
+import PendingTransferConfirmWidget from '@/components/dashboard/PendingTransferConfirmWidget.vue';
 
 const authStore = useAuthStore();
 
@@ -54,6 +55,9 @@ const CurrentDashboard = computed(() => {
     <!-- issue #20: 我待审 widget — Phase 1 final closure for ADR-001 AC-3.
          自动隐藏 (v-if total=0), 对无待审用户无干扰. -->
     <PendingApprovalsWidget />
+    <!-- 客户 2026-07-30「审核后 库存没有过来」: 同厂调拨审批通过后还差一次「确认入库」库存才动,
+         客户不知道这一步, 单子一卡就是几周。首页主动摆出来 (仅仓储角色/超管可见, 无待办自动隐藏)。 -->
+    <PendingTransferConfirmWidget />
     <component :is="CurrentDashboard" />
   </div>
 </template>
