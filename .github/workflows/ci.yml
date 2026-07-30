@@ -46,6 +46,14 @@ jobs:
       ${{ github.event_name == 'push' || inputs.full_audit || inputs.package_java_artifact }}
     runs-on: ubuntu-latest
 
+    # attestations/id-token 是签制品 provenance 所必需的; 其余保持最小。
+    # 显式声明会【替换】掉仓库默认权限, 所以这里列全: 本 job 只有 checkout 需要
+    # contents:read, upload-artifact 走 ACTIONS_RUNTIME_TOKEN 不吃 GITHUB_TOKEN 权限。
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+
     # PostgreSQL service container — enables PG-required IT classes (e.g.
     # FactoryConfigServiceImplReorderIT) to run against real PostgreSQL
     # instead of being skipped due to H2 fallback failing on PG-specific
@@ -166,6 +174,41 @@ jobs:
           } > release-jar.manifest
           echo "--- manifest ---"
           cat release-jar.manifest
+      # ---- provenance ----
+      # 上面那份 manifest 能证明【内部自洽】, 但证明不了【出处】: 它和 JAR 装在同一
+      # 个 ZIP 里, 任何能造出这个 ZIP 的人都能自己写一份"测试通过了"。所以 ECS 侧的
+      # deployable_trust_verified 在拿到可信签名之前一直是 false —— 这是设计, 不是缺陷。
+      #
+      # 这一步补上那个签名。subject 刻意是 JAR 而不是 ZIP: JAR 才是最终装到服务器上
+      # 跑的东西, 而 ZIP 只是运输包装, 中途会被东京拆掉。
+      - name: Attest deploy artifact provenance
+        id: attest
+        if: ${{ github.event_name == 'push' || inputs.package_java_artifact }}
+        uses: actions/attest-build-provenance@v4
+        with:
+          subject-path: backend/java/cretas-api/target/cretas-backend-system-1.0.0.jar
+
+      # 把签名 bundle 放进制品 ZIP 一起下发。
+      #
+      # 这样做安全, 而且是关键的一环: bundle 已经被签过, 中途改一个字节验签就挂, 所以
+      # 它可以走任何不可信通路(包括东京中继)。代价是 ECS 侧【完全不需要访问 GitHub】
+      # 就能验 provenance —— 上海到 GitHub 实测 0.001 MB/s, 指望 ECS 现取 bundle 是不
+      # 现实的。
+      #
+      # ⚠️ trusted root 绝不能也这么下发。信任根必须走独立通路并钉在 ECS 上, 否则就是
+      # 把"验证者"和"被验证者"装进同一个包 —— 犯的正是上面那个 unsigned manifest 的错。
+      - name: Ship attestation bundle with the artifact
+        if: ${{ github.event_name == 'push' || inputs.package_java_artifact }}
+        env:
+          BUNDLE_PATH: ${{ steps.attest.outputs.bundle-path }}
+        run: |
+          test -n "$BUNDLE_PATH"
+          test -s "$BUNDLE_PATH"
+          cp -- "$BUNDLE_PATH" \
+            backend/java/cretas-api/target/release-jar.attestation.jsonl
+          echo "attestation bundle bytes: $(stat -c %s \
+            backend/java/cretas-api/target/release-jar.attestation.jsonl)"
+
       - name: Upload exact-commit deploy artifact
         if: ${{ github.event_name == 'push' || inputs.package_java_artifact }}
         uses: actions/upload-artifact@v4
@@ -176,6 +219,7 @@ jobs:
             backend/java/cretas-api/target/cretas-backend-system-1.0.0.jar.sha256
             backend/java/cretas-api/target/cretas-backend-system-1.0.0.jar.commit
             backend/java/cretas-api/target/release-jar.manifest
+            backend/java/cretas-api/target/release-jar.attestation.jsonl
           if-no-files-found: error
           compression-level: 0
           retention-days: 1
