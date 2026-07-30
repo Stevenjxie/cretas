@@ -696,11 +696,21 @@ SLOT_MODELS: Dict[SLOT, List[Tuple[str, str]]] = {
     # 05-17/preview Max 强制 enable_thinking=true，与 REVIEW 的低延迟
     # enable_thinking=false 契约冲突；改用 A/C 06-08（实测均兼容）并以
     # 三账户 Plus 收尾，避免每次稳定 400 后才 fallback。
+    # 2026-07-30: Max/Plus 六个组合**每天下午必然全部 403 耗尽**(07-27 起稳定
+    # 40-57 次/天), 之后 REVIEW 落到 deepseek-v3.2 —— 它给出的餐饮 T3 计划
+    # **内容完全正确**(intent/metrics/dimensions/store_scope 全对), 但
+    # `confidence` 返回 **-1.0**(不认这个字段)。餐饮 T3 的闸是
+    # `confidence < _T3_MIN_CONFIDENCE(0.6) → clarification`, 于是一个 100%
+    # 正确的计划被判成「我还缺一个关键信息」, 整条餐饮问答天天下午退化。
+    # 实测同一问句: deepseek-v3.2 → confidence=-1.0; qwen3.7-flash → 0.95,
+    # 计划内容两者一致。故把仍有额度的 flash 插在 deepseek **之前** ——
+    # Max/Plus 有额度时链路不变(它们仍排在最前), 只改耗尽后的落点。
     SLOT.REVIEW: _dedup_chain([
         ("aliyun_a", "qwen3.7-max-2026-06-08"),
         ("aliyun_c", "qwen3.7-max-2026-06-08"),
         ("aliyun_c", "qwen3.7-plus"), ("aliyun_b", "qwen3.7-plus"),
         ("aliyun_a", "qwen3.7-plus"),
+        ("aliyun_c", "qwen3.7-flash"), ("aliyun_b", "qwen3.7-flash"),
         ("aliyun_c", "deepseek-v3.2"), ("aliyun_c", "glm-5.2"),
     ] + _TEXT_TAIL),
 }

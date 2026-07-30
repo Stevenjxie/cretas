@@ -4525,6 +4525,19 @@ def _semantic_spec_from_t3(
         clarification_question = None
         clarification_options = ()
     if not code or confidence < _T3_MIN_CONFIDENCE:
+        # 2026-07-30: 区分「模型说不准」和「模型压根不报置信度」。REVIEW 链在
+        # Max/Plus 额度耗尽后落到 deepseek-v3.2, 它给出的计划内容完全正确却把
+        # confidence 填成 -1.0 → 被这道闸判成澄清, 而且**没有任何日志**, 整条
+        # 餐饮问答天天下午静默退化, 排查时看起来完全像代码回归。
+        # 负值不是「低置信度」, 是模型没有履行契约 —— 单独记一条, 让下次一眼可查。
+        if code and confidence < 0:
+            logger.warning(
+                "[restaurant-intent] T3 returned a complete plan with an invalid "
+                "confidence %r (intent=%s) -- treating as clarification. The model "
+                "likely does not emit the confidence field; check which provider "
+                "the REVIEW chain fell through to.",
+                confidence, code,
+            )
         clarification_needed = True
     if explicit_store_directory:
         clarification_needed = False
