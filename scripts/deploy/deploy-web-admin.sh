@@ -255,6 +255,34 @@ web_deploy_on_exit() {
 }
 trap web_deploy_on_exit EXIT
 
+# index.html 引用的 entry chunk 必须真的取得到。
+#
+# 为什么四方哈希 + 站点根 200 盖不住这件事: 四方哈希比的是 index.html 本身, 四个观测点看到
+# 同一个坏 index.html 时它【照样 pass】; 站点根 200 也只证明 index.html 能被服务。若原子交换
+# 装进的 index.html 引用了一个不存在的 chunk(半截解压/错 archive/旧 chunk 保留窗口错配),
+# 两项全通过而所有用户白屏。
+#
+# 这正是 LOCAL_ENTRY_HASH 当初要防的事 —— 但它此前只被赋值和判空, 全脚本【没有任何消费者】,
+# 那句"跳过 post-deploy 内容验证"描述的是一项从未实现过的验证。
+verify_entry_chunk_reachable() {
+    local base_url=$1 entry_url entry_code
+    if [ -z "$LOCAL_ENTRY_HASH" ]; then
+        printf 'WEB_ENTRY_CHUNK=unavailable\n' >&2
+        log "⚠️  无 entry chunk 可验(提取阶段已告警)"
+        return 0
+    fi
+    entry_url="${base_url%/}/$LOCAL_ENTRY_HASH"
+    entry_code=$(curl -s -o /dev/null -w "%{http_code}" "$entry_url" || echo "000")
+    log "   entry chunk HTTP $entry_code ($LOCAL_ENTRY_HASH)"
+    if [ "$entry_code" = "200" ]; then
+        printf 'WEB_ENTRY_CHUNK=pass\n'
+        return 0
+    fi
+    printf 'WEB_ENTRY_CHUNK=failed\n' >&2
+    log "❌ index.html 引用的 entry chunk 取不到 (HTTP $entry_code) —— 拒绝把本次发布标记为成功"
+    return 1
+}
+
 verify_prod_web_four_way() {
     WEB_HASH_LOCAL=${WEB_RELEASE_INDEX_SHA256:-}
     WEB_HASH_SERVER=$(ssh "$GATEWAY" "sha256sum '/www/wwwroot/web-admin/index.html' 2>/dev/null | awk '{print \$1}'" | tr -d '\r\n')
@@ -426,9 +454,14 @@ web_release_extract_index "$WEB_ARCHIVE_PATH" "$TMP_INDEX" || {
     log "❌ 无法从可信 Web archive 提取 index.html"
     exit 1
 }
-LOCAL_ENTRY_HASH=$(grep -oP 'assets/index-[A-Za-z0-9_-]+\.js' "$TMP_INDEX" | head -1)
+# ⚠️ 这里【不能】用 grep -P。release-cretas.sh 必须以 LC_ALL=C 运行(否则 Java preflight 里
+# 的 [A-Z] 按 collation 展开会匹配小写, 假报 "import 无法解析"), 而 GNU grep 在 C locale 下
+# 直接拒绝 -P: "supports only unibyte and UTF-8 locales" → 提取【恒为空】。于是走统一入口
+# 发布时这一项每次都被跳过, 而且只打一行 warning, 看起来像"偶发无法提取"。
+# POSIX 字符类 + -E 在 C 与 en_US.UTF-8 下行为一致, 同时避开区间按 collation 展开那个坑。
+LOCAL_ENTRY_HASH=$(grep -oE 'assets/index-[[:alnum:]_-]+\.js' "$TMP_INDEX" | head -1)
 if [ -z "$LOCAL_ENTRY_HASH" ]; then
-    log "⚠️  无法提取本地 dist 的 entry chunk, 跳过 post-deploy 内容验证"
+    log "⚠️  无法从 index.html 提取 entry chunk —— post-deploy 内容验证【无法执行】"
 fi
 
 ASSET_COUNT="$WEB_RELEASE_ASSET_COUNT"
@@ -524,6 +557,7 @@ if [ "$HTTP_CODE" != "200" ]; then
     log "⚠️  验证失败 (HTTP $HTTP_CODE),请手动检查"
     exit 1
 fi
+verify_entry_chunk_reachable "$VERIFY_URL"
 if [ "$ENV" = "prod" ]; then
     verify_prod_web_four_way
 fi
