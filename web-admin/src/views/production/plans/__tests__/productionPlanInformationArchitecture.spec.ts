@@ -113,6 +113,17 @@ describe('production plan list information architecture', () => {
     expect(source).not.toContain('Workflow 批次尚未准备完成，暂不能逐道录入');
   });
 
+  it('shows the production type and never presents stock production as a fixed quantity', () => {
+    expect(source).toContain('label="生产类型"');
+    expect(source).toContain('{{ productionPlanTypeLabel(row) }}');
+    expect(source).toContain("productionPlanType(row) === 'ORDER'");
+    const formatterStart = source.indexOf('function formatPlanDisplayQuantity');
+    const formatter = source.slice(formatterStart, source.indexOf('// raw-centric', formatterStart));
+    expect(formatter).toContain("if (row.sourceType === 'SAFETY_STOCK')");
+    expect(formatter).toContain("return '按实际报工'");
+    expect(formatter).not.toContain('plannedQuantity || 0');
+  });
+
   it('offers only inventory production and sales-order production for new plans', () => {
     const sourceTypeStart = source.indexOf('<el-radio-group v-model="planForm.sourceType"');
     const sourceTypeEnd = source.indexOf('</el-radio-group>', sourceTypeStart);

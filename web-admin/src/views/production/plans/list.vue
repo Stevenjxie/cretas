@@ -105,6 +105,7 @@ import {
   plannedQuantityRequired,
 } from './productionPlanQuantity';
 import { finishedGoodPlanOptions } from './productionPlanProductOptions';
+import { productionPlanType, productionPlanTypeLabel } from './productionPlanType';
 
 const router = useRouter();
 const route = useRoute();
@@ -3355,8 +3356,7 @@ function formatPlannedQuantity(v: number | null | undefined, unit?: string | nul
 
 function formatPlanDisplayQuantity(row: TableRow | null | undefined): string {
   if (!row) return '—';
-  if (row.sourceType === 'SAFETY_STOCK'
-      && Number(row.plannedQuantity || 0) <= 0) {
+  if (row.sourceType === 'SAFETY_STOCK') {
     return '按实际报工';
   }
   const sourceQuantity = row.sourceDisplayQuantity as number | null | undefined;
@@ -3801,6 +3801,14 @@ function guardProductionPlanAi(params: Record<string, unknown>) {
           :sort-method="(a: TableRow, b: TableRow) => compareNullableNumber(a.plannedQuantity, b.plannedQuantity)"
         >
           <template #default="{ row }">{{ formatPlanDisplayQuantity(row) }}</template>
+        </el-table-column>
+        <el-table-column label="生产类型" width="110" align="center">
+          <template #default="{ row }">
+            <el-tag
+              size="small"
+              :type="productionPlanType(row) === 'ORDER' ? 'primary' : 'info'"
+            >{{ productionPlanTypeLabel(row) }}</el-tag>
+          </template>
         </el-table-column>
         <el-table-column
           v-if="isProductionColumnVisible('actualQuantity')"

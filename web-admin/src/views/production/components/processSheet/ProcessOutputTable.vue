@@ -92,6 +92,11 @@ function gridStyle(): Record<string, string> {
 
           <span class="sp-io-cell sp-io-product">
             <strong>{{ view.line.materialName }}</strong>
+            <span
+              v-if="view.specLabel"
+              data-testid="output-specification"
+              class="sp-output-spec"
+            >{{ view.specLabel }}</span>
             <el-tag size="small" :type="view.line.finished ? 'success' : 'warning'">
               {{ view.line.finished ? '成品' : '半成品' }}
             </el-tag>
@@ -278,6 +283,7 @@ function gridStyle(): Record<string, string> {
 
 .sp-io-product { flex-wrap: wrap; }
 .sp-io-product strong { font-size: 13px; }
+.sp-output-spec { color: #606266; font-size: 12px; }
 .sp-batch-num { color: #909399; font-size: 11px; }
 
 /*

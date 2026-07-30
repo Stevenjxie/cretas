@@ -176,10 +176,13 @@ describe('YieldCardTable', () => {
     // 加深的表头底色、逐格右边框、以及每格一个带 ↕ 的按钮。三层都不要再回来。
     const source = readFileSync(resolve(__dirname, '../YieldCardTable.vue'), 'utf8');
     expect(source).not.toContain('--el-table-header-bg-color');
-    expect(source).not.toContain('border-right-color');
+    expect(source).toContain('border-right: 0');
+    expect(source).toContain('background: transparent');
     expect(source).not.toContain('yield-sort-trigger__hint');
     // 但按钮本身要留着 —— 去掉它就等于把触屏/键盘的排序入口一起去掉了
     expect(source).toContain(`class: 'yield-sort-trigger'`);
+    expect(source).toContain('appearance: none');
+    expect(source).toContain('box-shadow: none');
   });
 
   it('explains a genuinely empty plan-wide yield card', async () => {

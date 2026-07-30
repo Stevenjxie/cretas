@@ -371,6 +371,8 @@ defineExpose({ refresh });
   :deep(.el-table__header th.el-table__cell) {
     height: 42px;
     padding: 0;
+    border-right: 0;
+    background: transparent;
   }
 
   :deep(.el-table__body td.el-table__cell) {
@@ -397,7 +399,10 @@ defineExpose({ refresh });
     min-height: 32px;
     padding: 0;
     border: 0;
+    border-radius: 0;
     background: transparent;
+    box-shadow: none;
+    appearance: none;
     color: inherit;
     font: inherit;
     font-weight: inherit;

@@ -28,6 +28,8 @@ import { PROCESS_SHEET_CONFIG, GENERIC_FALLBACK_COLS, genClientRowId, type ColDe
 import WorkHoursTable from './WorkHoursTable.vue';
 import ProcessOutputTable from './ProcessOutputTable.vue';
 import ProcessInputSourceTable from './ProcessInputSourceTable.vue';
+import ProcessStockShortageAlert from './ProcessStockShortageAlert.vue';
+import { presentStockShortage, type StockShortagePresentation } from './processStockShortage';
 import type { MultiOutputLine, OutputLineView } from './processSheetOutputs';
 import type {
   InputSourceLineView,
@@ -156,6 +158,7 @@ interface SheetRow {
   /** 历史行保存时的真实产出单位；仅用于只读显示换算，不改写 payload。 */
   persistedOutputUnit: string;
   blockingMessage: string | null;
+  stockShortage: StockShortagePresentation | null;
   /** 正式报工后由后端返回的实际批次扣料结果，供操作员即时核对包材/调料数量与成本。 */
   inputAllocations: ProductionInputAllocation[];
   /** 已小结时间 (ISO-8601); null = 未小结，可编辑 */
@@ -783,6 +786,7 @@ function blankRow(): SheetRow {
     materialized: false,
     persistedOutputUnit: processUnits.value.outputUnit,
     blockingMessage: null,
+    stockShortage: null,
     inputAllocations: [],
     interimSettledAt: null,
     saving: false,
@@ -1691,6 +1695,9 @@ function outputViews(row: SheetRow): OutputLineView[] {
       yieldText: yieldRate == null ? '—' : `${yieldRate.toFixed(2)}%`,
       blocker: outputLineYieldBlocker(row, line),
       totalHoursText: outputLineTotalHours(line).toFixed(2),
+      specLabel: line.finished && line.gramsPerUnit != null && line.gramsPerUnit > 0
+        ? `${Number(line.gramsPerUnit.toFixed(3))}g/${displayProcessUnit(line.unit)}`
+        : null,
       weightHint: line.finished
         ? (outputLineWeightKg(line) == null
             ? '未配置单位净重，无法计算成品重量'
@@ -2196,35 +2203,12 @@ function formalSubmitSummary(row: SheetRow): string {
   ].join('\n');
 }
 
-/**
- * 缺料提示 —— 必须说清楚是哪个物料, 并区分「不够」和「一个批次都没有」。
- *
- * 原来只说"生产库中投料量不足, 请联系仓管补料" —— 听起来像有料但不够。
- * 实测客户因此把生产仓里另一个同类物料当成了工序要投的那个, 跑去仓库比对
- * 才发现是两样东西。可用为 0 时特别点出"没有可投批次", 而不是含糊地说不足。
- */
-function shortageMessage(error: unknown): string | null {
-  const detail = (error as { data?: { items?: unknown[] } } | null)?.data;
-  const items = Array.isArray(detail?.items) ? detail.items : [];
-  if (!items.length) return null;
-  const lines = items.map((raw) => {
-    const item = raw as {
-      materialName?: string; materialTypeId?: string;
-      required?: number; available?: number; unit?: string;
-    };
-    const name = item.materialName || item.materialTypeId || '未知物料';
-    const unit = item.unit ?? '';
-    const available = Number(item.available ?? 0);
-    return available <= 0
-      ? `「${name}」在生产仓没有可投的批次（需要 ${item.required}${unit}）`
-      : `「${name}」不足：需要 ${item.required}${unit}，可用 ${item.available}${unit}`;
-  });
-  return `当前只能保存草稿 — ${lines.join('；')}。`
-    + '请确认工序配的物料与生产仓实际库存是否一致, 或联系仓管调料。';
-}
-
 async function handleSave(row: SheetRow, action: 'draft' | 'submit') {
   if (row.saving) return;
+  if (action === 'submit') {
+    row.blockingMessage = null;
+    row.stockShortage = null;
+  }
   const reason = action === 'draft' ? draftSaveDisabledReason(row) : submitDisabledReason(row);
   if (reason) {
     if (action === 'submit') row.blockingMessage = reason;
@@ -2247,7 +2231,6 @@ async function handleSave(row: SheetRow, action: 'draft' | 'submit') {
     }
   }
   row.saving = true;
-  if (action === 'submit') row.blockingMessage = null;
   try {
     const req = buildRequest(row);
     const resp = action === 'draft'
@@ -2276,9 +2259,10 @@ async function handleSave(row: SheetRow, action: 'draft' | 'submit') {
     const msg = e instanceof Error ? e.message : (action === 'draft' ? '草稿保存失败' : '正式报工失败');
     const code = typeof e === 'object' && e != null && 'code' in e ? String((e as { code?: unknown }).code ?? '') : '';
     if (action === 'submit' && code === 'PRODUCTION_STOCK_SHORTAGE') {
-      row.blockingMessage = shortageMessage(e) || msg
-        || '当前只能保存草稿，生产库中投料量不足，请联系仓管补料';
-      ElMessage({ message: row.blockingMessage, type: 'error', duration: 0, showClose: true });
+      row.blockingMessage = null;
+      row.stockShortage = presentStockShortage(
+        msg || '当前只能保存草稿，生产库中投料量不足，请联系仓管补料',
+      );
       return;
     }
     // 并发双提交/慢响应重试: 行已被首个请求保存成功(后端 409 + 回滚 loser), 幂等当成功处理,
@@ -3161,6 +3145,12 @@ defineExpose({ hasUnsavedRows, refreshSharedInventories });
             style="margin-left:4px" />
         </div>
 
+        <ProcessStockShortageAlert
+          v-if="row.stockShortage"
+          data-testid="stock-shortage-alert"
+          :presentation="row.stockShortage"
+          style="margin:8px 12px 0"
+        />
         <el-alert
           v-if="row.blockingMessage"
           :title="row.blockingMessage"
@@ -3535,6 +3525,7 @@ defineExpose({ hasUnsavedRows, refreshSharedInventories });
                ============================================================ -->
           <ProcessOutputTable
             v-if="isPortOutputMode"
+            data-testid="process-output-table"
             class="sp-card-field sp-card-field-full"
             :views="outputViews(row)"
             :show-cost-allocation="requiresManualCostAllocation(row)"
@@ -4123,9 +4114,24 @@ defineExpose({ hasUnsavedRows, refreshSharedInventories });
               </td>
             </tr>
 
-            <tr v-if="row.blockingMessage" :key="row.clientRowId + '-blocking'" class="sp-tr-expand">
+            <tr
+              v-if="row.stockShortage || row.blockingMessage"
+              :key="row.clientRowId + '-blocking'"
+              class="sp-tr-expand"
+            >
               <td :colspan="999" class="sp-td-expand">
-                <el-alert :title="row.blockingMessage" type="error" :closable="false" show-icon />
+                <ProcessStockShortageAlert
+                  v-if="row.stockShortage"
+                  data-testid="stock-shortage-alert"
+                  :presentation="row.stockShortage"
+                />
+                <el-alert
+                  v-if="row.blockingMessage"
+                  :title="row.blockingMessage"
+                  type="error"
+                  :closable="false"
+                  show-icon
+                />
               </td>
             </tr>
 
@@ -4168,6 +4174,7 @@ defineExpose({ hasUnsavedRows, refreshSharedInventories });
               <td :colspan="999" class="sp-td-expand">
                 <div class="sp-expand-section">
                   <ProcessOutputTable
+                    data-testid="process-output-table"
                     :views="outputViews(row)"
                     :show-cost-allocation="requiresManualCostAllocation(row)"
                     hint="投入按本报工组只扣减一次；SKU 与单位由 Workflow 固定"

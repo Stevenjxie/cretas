@@ -26,6 +26,16 @@ describe('process reporting information architecture', () => {
     // 产出块只有一份实现, 卡片模式与表格模式都用它 —— 两边曾经漂移过 (表格模式漏了必填标识
     // 和跨单位出成率说明), 这条断言防止再分叉。
     expect(source.match(/<ProcessOutputTable/g)).toHaveLength(2);
+    expect(source.match(/data-testid="process-output-table"/g)).toHaveLength(2);
+    expect(source.match(/:views="outputViews\(row\)"/g)).toHaveLength(2);
+    expect(source.match(/data-testid="stock-shortage-alert"/g)).toHaveLength(2);
+    expect(source.match(/:presentation="row\.stockShortage"/g)).toHaveLength(2);
+    const shortageBranch = source.slice(
+      source.indexOf("code === 'PRODUCTION_STOCK_SHORTAGE'"),
+      source.indexOf('// 并发双提交'),
+    );
+    expect(shortageBranch).toContain('presentStockShortage');
+    expect(shortageBranch).not.toContain('ElMessage(');
 
     const startTime = outputTableSource.indexOf('data-testid="output-start-time"');
     const outputQuantity = outputTableSource.indexOf('data-testid="output-quantity"');

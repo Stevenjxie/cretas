@@ -17,7 +17,6 @@ import SupplierDetailDrawer from './SupplierDetailDrawer.vue';
 import SupplierImportDialog from './SupplierImportDialog.vue';
 import {
   normalizeSupplierPayload,
-  showShortNameWarning,
   supplierFormRules,
   supplierProfileComplete,
   supplierStatus,
@@ -93,9 +92,6 @@ async function submitCreate(): Promise<void> {
   try {
     const created = await createSupplier(factoryId.value, normalizeSupplierPayload(createForm));
     ElMessage.success('供应商已创建');
-    // 简称重名只提示不拦 (Steve 2026-07-30): 已经保存成功了, 所以是 warning 不是 error,
-    // 但要 sticky —— 一闪而过的提示等于没提示, 用户永远不会去改那个简称。
-    showShortNameWarning(created?.shortNameWarning);
     createVisible.value = false;
     await loadData();
   } finally {
