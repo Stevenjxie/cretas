@@ -4,15 +4,21 @@ import { describe, expect, it } from 'vitest';
 import {
   COMMON_ENUM_LABELS,
   FINISHED_GOODS_BATCH_STATUS_LABELS,
+  INTERNAL_TRANSFER_STATUS_LABELS,
   MATERIAL_REQUISITION_STATUS_LABELS,
+  PAYMENT_REQUEST_STATUS_LABELS,
   PRODUCTION_BATCH_STATUS_LABELS,
+  PRODUCTION_PLAN_STATUS_LABELS,
   PRODUCTION_SETTLEMENT_POSTING_STATUS_LABELS,
+  PURCHASE_INVOICE_RECONCILE_STATUS_LABELS,
   PURCHASE_ORDER_STATUS_LABELS,
   PURCHASE_RECEIVE_STATUS_LABELS,
+  RETURN_ORDER_STATUS_LABELS,
   ROLE_LABELS,
   SALES_DELIVERY_STATUS_LABELS,
   SALES_ORDER_STATUS_LABELS,
   TRACE_STATUS_LABELS_BY_DOCUMENT_TYPE,
+  TRANSFER_DIFF_STATUS_LABELS,
   enumLabel,
   traceStatusLabel,
 } from '../enumDisplay';
@@ -87,6 +93,27 @@ const ENUM_CASES: Array<{
     constants: () => nestedEnumConstants(readJava('entity/factory/FactoryMaterialRequisition.java'), 'Status'),
     map: MATERIAL_REQUISITION_STATUS_LABELS,
   },
+  // ↓ 2026-07-30: 单据追踪扩到销售/采购/调拨后新增的四个枚举 (同样对着 Java 源文件断言)
+  {
+    label: 'ProductionPlanStatus',
+    constants: () => topLevelEnumConstants(readJava('entity/enums/ProductionPlanStatus.java'), 'ProductionPlanStatus'),
+    map: PRODUCTION_PLAN_STATUS_LABELS,
+  },
+  {
+    label: 'TransferStatus',
+    constants: () => topLevelEnumConstants(readJava('entity/enums/TransferStatus.java'), 'TransferStatus'),
+    map: INTERNAL_TRANSFER_STATUS_LABELS,
+  },
+  {
+    label: 'ReturnOrderStatus',
+    constants: () => topLevelEnumConstants(readJava('entity/enums/ReturnOrderStatus.java'), 'ReturnOrderStatus'),
+    map: RETURN_ORDER_STATUS_LABELS,
+  },
+  {
+    label: 'PaymentRequestStatus',
+    constants: () => topLevelEnumConstants(readJava('entity/enums/PaymentRequestStatus.java'), 'PaymentRequestStatus'),
+    map: PAYMENT_REQUEST_STATUS_LABELS,
+  },
 ];
 
 describe('枚举中文覆盖 (对着 Java 源文件断言)', () => {
@@ -101,12 +128,25 @@ describe('枚举中文覆盖 (对着 Java 源文件断言)', () => {
   });
 
   it('单据追踪抽屉的每种 documentType 都配了状态表', () => {
-    // key 必须与后端 ProductionDocumentTraceService.document(type, …) 的字面量一致
-    const backend = readJava('service/production/ProductionDocumentTraceService.java');
-    const types = [...backend.matchAll(/document\(\s*"([A-Z_]+)"/g)].map((m) => m[1]);
+    // key 必须与后端两个 trace service 的 document(type, …) 字面量一致。
+    // 2026-07-30 起追踪扩到销售/采购/调拨, 第二个 service 也必须纳入门禁, 否则新单据类型
+    // 加了没补中文这条测试照样绿。
+    const sources = [
+      readJava('service/production/ProductionDocumentTraceService.java'),
+      readJava('service/trace/BusinessDocumentTraceService.java'),
+    ];
+    const types = sources.flatMap(
+      (backend) => [...backend.matchAll(/document\(\s*"([A-Z_]+)"/g)].map((m) => m[1]),
+    );
     expect(types.length, 'documentType 一个都没解析出来').toBeGreaterThan(3);
+    // 锚点自身的类型也要有状态表 (抽屉顶部那行也渲染中文)
+    const anchorTypes = sources.flatMap(
+      (backend) => [...backend.matchAll(/anchorType\("([A-Z_]+)"\)/g)].map((m) => m[1]),
+    );
+    expect(anchorTypes.length, 'anchorType 一个都没解析出来').toBeGreaterThan(2);
 
-    const unmapped = [...new Set(types)].filter((t) => !TRACE_STATUS_LABELS_BY_DOCUMENT_TYPE[t]);
+    const unmapped = [...new Set([...types, ...anchorTypes])]
+      .filter((t) => !TRACE_STATUS_LABELS_BY_DOCUMENT_TYPE[t]);
     expect(unmapped, `这些单据类型没有状态表, 会退回全局表并可能显示错的中文: ${unmapped.join(', ')}`)
       .toEqual([]);
   });
@@ -121,6 +161,31 @@ describe('枚举中文覆盖 (对着 Java 源文件断言)', () => {
     for (const code of ['AVAILABLE', 'DEFECTIVE', 'DEPLETED']) {
       expect(FINISHED_GOODS_BATCH_STATUS_LABELS[code], `成品批次状态缺 ${code}`).toBeTruthy();
     }
+    // transfer_diff_records.status —— 实体默认值 "PENDING" + TransferDiffServiceImpl 的两个 setStatus
+    const diff = readJava('entity/inventory/TransferDiffRecord.java');
+    expect(diff).toContain('private String status = "PENDING"');
+    for (const code of ['PENDING', 'RESOLVED']) {
+      expect(TRANSFER_DIFF_STATUS_LABELS[code], `调拨差异状态缺 ${code}`).toBeTruthy();
+    }
+    // purchase_invoices.reconcile_status —— 取值写在实体的行内注释里
+    const invoice = readJava('entity/inventory/PurchaseInvoice.java');
+    expect(invoice).toContain('PENDING / MATCHED / MISMATCHED');
+    for (const code of ['PENDING', 'MATCHED', 'MISMATCHED']) {
+      expect(PURCHASE_INVOICE_RECONCILE_STATUS_LABELS[code], `采购发票对账状态缺 ${code}`).toBeTruthy();
+    }
+  });
+
+  it('同码在新加的单据里也没有被全局表压平', () => {
+    // PENDING: 付款申请是「待财务初审」, 采购发票是「待对账」, 全局表是「待处理」
+    expect(traceStatusLabel('PAYMENT_REQUEST', 'PENDING')).toBe('待财务初审');
+    expect(traceStatusLabel('PURCHASE_INVOICE', 'PENDING')).toBe('待对账');
+    expect(enumLabel('PENDING')).toBe('待处理');
+    // FINANCE_APPROVED: 退货单是「财务已审」, 全局表是「财务已审核」
+    expect(traceStatusLabel('SALES_RETURN', 'FINANCE_APPROVED')).toBe('财务已审');
+    // PREPARED 只在生产计划里出现且是「草稿」—— 全局表根本没有这个码
+    expect(traceStatusLabel('PRODUCTION_PLAN', 'PREPARED')).toBe('草稿');
+    // 调拨的 RECEIVED 是「已签收」
+    expect(traceStatusLabel('INTERNAL_TRANSFER', 'RECEIVED')).toBe('已签收');
   });
 
   it('客户实际撞到的那个码在生产批次语境下是「生产中」不是「进行中」', () => {

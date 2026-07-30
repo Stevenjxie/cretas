@@ -55,4 +55,15 @@ public interface ReturnOrderRepository extends JpaRepository<ReturnOrder, String
 
     @Query("SELECT COUNT(r) FROM ReturnOrder r WHERE r.factoryId = :factoryId AND r.returnDate = :date")
     long countByFactoryIdAndDate(@Param("factoryId") String factoryId, @Param("date") LocalDate date);
+
+    /**
+     * 单据追踪 — 按源单反查退货单。
+     *
+     * <p>{@code sourceOrderId} 的指向由 {@code returnType} 决定 (见
+     * {@code ReturnOrderServiceImpl}: SALES_RETURN → SalesOrder, PURCHASE_RETURN → PurchaseOrder),
+     * 所以两个条件必须同时给, 只按 sourceOrderId 查会把两种源单的 ID 空间混在一起。
+     * factoryId 前置保证租户隔离。
+     */
+    java.util.List<ReturnOrder> findByFactoryIdAndReturnTypeAndSourceOrderIdOrderByCreatedAtDesc(
+            String factoryId, ReturnType returnType, String sourceOrderId);
 }

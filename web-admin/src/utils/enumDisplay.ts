@@ -186,21 +186,94 @@ export const FINISHED_GOODS_BATCH_STATUS_LABELS: Record<string, string> = {
   DEPLETED: '已耗尽',
 };
 
+/** `ProductionPlanStatus` —— 注意 PREPARED 在生产计划语境是「草稿」不是「已准备」。 */
+export const PRODUCTION_PLAN_STATUS_LABELS: Record<string, string> = {
+  PLANNED: '已计划',
+  PREPARED: '草稿',
+  PENDING: '待处理',
+  IN_PROGRESS: '进行中',
+  COMPLETED: '已完成',
+  CANCELLED: '已取消',
+  PAUSED: '暂停',
+  PENDING_APPROVAL: '待审批',
+};
+
+/** `TransferStatus` —— 调拨语境下 REJECTED 是「已驳回」(申请被拒), RECEIVED 是「已签收」。 */
+export const INTERNAL_TRANSFER_STATUS_LABELS: Record<string, string> = {
+  DRAFT: '草稿',
+  REQUESTED: '已申请',
+  APPROVED: '已审批',
+  REJECTED: '已驳回',
+  SHIPPED: '已发货',
+  RECEIVED: '已签收',
+  CONFIRMED: '已确认',
+  CANCELLED: '已取消',
+  REVERSED: '已冲销',
+};
+
+/**
+ * `TransferDiffRecord.status` —— String 列不是枚举, 取值来自后端
+ * `TransferDiffServiceImpl.setStatus("…")` 全量 grep + 实体默认值。
+ */
+export const TRANSFER_DIFF_STATUS_LABELS: Record<string, string> = {
+  PENDING: '待处理',
+  RESOLVED: '已处理',
+};
+
+/**
+ * `PurchaseInvoice.reconcileStatus` —— String 列, 取值来自实体注释 + 后端 setter grep。
+ * 注意这是**对账**状态不是审批状态, PENDING 是「待对账」不是「待处理」。
+ */
+export const PURCHASE_INVOICE_RECONCILE_STATUS_LABELS: Record<string, string> = {
+  PENDING: '待对账',
+  MATCHED: '对账一致',
+  MISMATCHED: '对账不符',
+};
+
+/** `PaymentRequestStatus` —— PENDING 在付款申请语境是「待财务初审」。 */
+export const PAYMENT_REQUEST_STATUS_LABELS: Record<string, string> = {
+  PENDING: '待财务初审',
+  FINANCE_REVIEW: '财务审核中',
+  APPROVED: '已批准（待付款）',
+  PAID: '已付款',
+  REJECTED: '已拒绝',
+  CANCELLED: '已撤回',
+};
+
+/** `ReturnOrderStatus` —— FINANCE_APPROVED 在退货语境是「财务已审」。 */
+export const RETURN_ORDER_STATUS_LABELS: Record<string, string> = {
+  DRAFT: '草稿',
+  SUBMITTED: '已提交',
+  APPROVED: '已审批',
+  FINANCE_APPROVED: '财务已审',
+  REJECTED: '已驳回',
+  PROCESSING: '处理中',
+  COMPLETED: '已完成',
+};
+
 /**
  * 单据追踪抽屉: documentType → 该单据的状态表。
  *
  * 抽屉本来就知道自己在渲染哪种单据, 所以能精确选表, 不必忍受全局表的同码歧义。
- * key 与后端 `ProductionDocumentTraceService.document(type, …)` 传入的字面量一一对应。
+ * key 与后端 `ProductionDocumentTraceService.document(type, …)` 与
+ * `BusinessDocumentTraceService.document(type, …)` 传入的字面量一一对应。
  */
 export const TRACE_STATUS_LABELS_BY_DOCUMENT_TYPE: Record<string, Record<string, string>> = {
   SALES_ORDER: SALES_ORDER_STATUS_LABELS,
   PURCHASE_ORDER: PURCHASE_ORDER_STATUS_LABELS,
   PURCHASE_RECEIPT: PURCHASE_RECEIVE_STATUS_LABELS,
   MATERIAL_REQUISITION: MATERIAL_REQUISITION_STATUS_LABELS,
+  PRODUCTION_PLAN: PRODUCTION_PLAN_STATUS_LABELS,
   PRODUCTION_BATCH: PRODUCTION_BATCH_STATUS_LABELS,
   PRODUCTION_SETTLEMENT: PRODUCTION_SETTLEMENT_POSTING_STATUS_LABELS,
   FINISHED_GOODS_BATCH: FINISHED_GOODS_BATCH_STATUS_LABELS,
   SALES_DELIVERY: SALES_DELIVERY_STATUS_LABELS,
+  SALES_RETURN: RETURN_ORDER_STATUS_LABELS,
+  PURCHASE_RETURN: RETURN_ORDER_STATUS_LABELS,
+  PURCHASE_INVOICE: PURCHASE_INVOICE_RECONCILE_STATUS_LABELS,
+  PAYMENT_REQUEST: PAYMENT_REQUEST_STATUS_LABELS,
+  INTERNAL_TRANSFER: INTERNAL_TRANSFER_STATUS_LABELS,
+  TRANSFER_DIFF: TRANSFER_DIFF_STATUS_LABELS,
 };
 
 /** 按单据类型取状态中文; 未知单据类型退回全局表 (不臆造)。 */

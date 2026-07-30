@@ -7,6 +7,8 @@ import { useBusinessMode } from '@/composables/useBusinessMode';
 import { get, post, put } from '@/api/request';
 import OrderItemsEditor, { type OrderItemRow } from './components/OrderItemsEditor.vue';
 import UpstreamMissingHint from '@/components/common/UpstreamMissingHint.vue';
+import DocumentTraceDrawer from '@/components/DocumentTraceDrawer.vue';
+import { getSalesOrderDocumentTrace } from '@/api/documentTrace';
 import { useCreateAndReturn } from '@/composables/useCreateAndReturn';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { ArrowLeft } from '@element-plus/icons-vue';
@@ -61,6 +63,15 @@ const loading = ref(false);
 const submitting = ref(false);
 const notFound = ref(false);
 const order = ref<TableRow | null>(null);
+
+// 客户 2026-07-30: 单据上看不到上下游、也没有「返回原单」——「严重影响工作效率」
+const documentTraceVisible = ref(false);
+function loadDocumentTrace() {
+  const fid = factoryId.value;
+  // 禁止降级: 没有工厂上下文就明确报错, 不用空串去调接口拿一个看不懂的 400
+  if (!fid) return Promise.reject(new Error('当前账号未绑定工厂，无法查询单据追踪'));
+  return getSalesOrderDocumentTrace(fid, orderId.value);
+}
 const approvalProgress = ref<SalesOrderApprovalProgress | null>(null);
 const deliveries = ref<TableRow[]>([]);
 const associatedProductionPlans = ref<TableRow[]>([]);
@@ -1477,6 +1488,7 @@ async function handleQuickPayFull() {
           <div class="header-left">
             <el-button :icon="ArrowLeft" @click="router.push('/sales/orders')">返回</el-button>
             <span class="page-title">{{ label('salesOrder') }}详情</span>
+            <el-button v-if="order" plain @click="documentTraceVisible = true">单据追溯</el-button>
             <el-tag v-if="order" :type="(statusMap[order.status]?.type) || 'info'" size="large">
               {{ statusMap[order.status]?.text || order.status }}
             </el-tag>
@@ -2445,6 +2457,13 @@ async function handleQuickPayFull() {
         <el-button type="primary" :loading="editItemsSaving" @click="saveEditItems">保存</el-button>
       </template>
     </el-dialog>
+
+    <DocumentTraceDrawer
+      v-model="documentTraceVisible"
+      title="销售订单单据追踪"
+      anchor-label="销售订单"
+      :fetcher="loadDocumentTrace"
+    />
   </div>
 </template>
 
