@@ -710,8 +710,16 @@ SLOT_MODELS: Dict[SLOT, List[Tuple[str, str]]] = {
         ("aliyun_c", "qwen3.7-max-2026-06-08"),
         ("aliyun_c", "qwen3.7-plus"), ("aliyun_b", "qwen3.7-plus"),
         ("aliyun_a", "qwen3.7-plus"),
+        # 2026-07-30 实测(scripts 见 PR 描述): 对餐饮 T3 真实 prompt 逐模型打分,
+        # 判据是「答对 intent 且 confidence >= 0.6」而不是「能否调通」。
+        # 下面六个全部实测 ✅(conf 0.95-0.98); deepseek-v3.2 答对但 conf=-1.0。
+        # ⛔ deepseek-v3.2 必须排在**所有已验证模型之后** —— 它返回 HTTP 200,
+        # 路由器视为成功、**不会继续 fallback**, 只是内容被置信度闸毙掉。放在
+        # 前面等于一颗毒丸: flash 一耗尽就卡死在它身上, 后面的好模型永远够不着。
         ("aliyun_c", "qwen3.7-flash"), ("aliyun_b", "qwen3.7-flash"),
-        ("aliyun_c", "deepseek-v3.2"), ("aliyun_c", "glm-5.2"),
+        ("aliyun_c", "glm-5.2"), ("aliyun_c", "qwen3-max-preview"),
+        ("aliyun_c", "glm-5.1"), ("aliyun_c", "deepseek-v3.1"),
+        ("aliyun_c", "deepseek-v3.2"),
     ] + _TEXT_TAIL),
 }
 
