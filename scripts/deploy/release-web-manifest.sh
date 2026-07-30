@@ -345,6 +345,65 @@ web_release_ensure_dependencies() {
     printf '%s\n' "$lock_hash" > "$manifest_tmp" && mv -f "$manifest_tmp" "$dependency_manifest"
 }
 
+# 缓存里那份 archive 是否就是本次构建会产出的东西。
+#
+# web_tree 是 web-admin 的 git tree 哈希, 即【内容】哈希而非历史哈希: rebase、squash merge、
+# 或者只改了后端的 commit 都会让它保持不变, 那份已构建的 dist 仍然完全正确。重建一次实测 86s
+# (npm ci 20s + vite build 66s), 而产出逐字节相同 —— 白花的。
+#
+# 与 Java 侧 release_manifest_build_reusable 对齐, 包括【锚在 HEAD 而不是 origin/main】:
+# 构建阶段合法地跑在已 review 的候选分支上。web_release_validate_cached 锚 origin/main 是因为
+# 它服务的是部署阶段, 两者不能混。
+#
+# package-lock.json 就在 web-admin/ 里, 所以 tree 相同已经涵盖"依赖没变", 不必另查
+# package_lock_sha256。node/npm 版本刻意也不查: 产物由源码 + 锁文件决定, 而 archive 的
+# sha256 会被逐字节核对 —— 真正的保证在那一步, 不在版本字符串上。
+#
+# 复用刻意保守, 以下全部满足才算; 任何一条不满足就落回真实构建。
+web_release_build_reusable() {
+    local repo_root=$1
+    local manifest=$2
+    local current_tree cached_manifest cached_dir format success cached_tree
+    local archive_name archive_sha archive_path actual_sha cached_commit built_tree
+
+    current_tree=$(git -C "$repo_root" rev-parse "HEAD:$WEB_RELEASE_SOURCE_PATH" 2>/dev/null) || return 1
+    cached_manifest=$(web_release_tree_manifest "$manifest" "$current_tree") || return 1
+    [ -f "$cached_manifest" ] || return 1
+
+    format=$(web_release_manifest_field "$cached_manifest" format) || return 1
+    [ "$format" = "$WEB_RELEASE_MANIFEST_FORMAT" ] || return 1
+    success=$(web_release_manifest_field "$cached_manifest" success) || return 1
+    [ "$success" = "true" ] || return 1
+    cached_tree=$(web_release_manifest_field "$cached_manifest" web_tree) || return 1
+    [ "$cached_tree" = "$current_tree" ] || return 1
+
+    # build_commit 必须在本仓库解析得出, 且它的 web 树等于当前树。
+    #
+    # 为什么这条不能省: web_release_validate(部署阶段)会做同样的检查。少了它, 构建阶段会
+    # 愉快地复用一份 provenance 链验不通的 archive, 然后在 validate 那里挂 —— 失败出现在离
+    # 原因很远的地方。实测撞到过: 缓存里那份的 build_commit 来自一个已被删除的临时 clone,
+    # build 报"复用成功"2s 返回, validate 随后 exit 1 且【一个字都不打】。
+    # 判据: 构建期该拒绝的, 就是部署期会拒绝的那一套。
+    cached_commit=$(web_release_manifest_field "$cached_manifest" build_commit) || return 1
+    [[ "$cached_commit" =~ ^[0-9a-fA-F]{40}$ ]] || return 1
+    git -C "$repo_root" cat-file -e "${cached_commit}^{commit}" 2>/dev/null || return 1
+    built_tree=$(git -C "$repo_root" rev-parse "${cached_commit}:$WEB_RELEASE_SOURCE_PATH" 2>/dev/null) || return 1
+    [ "$built_tree" = "$current_tree" ] || return 1
+
+    archive_name=$(web_release_manifest_field "$cached_manifest" archive_path) || return 1
+    [ "$archive_name" = "$WEB_RELEASE_ARCHIVE_NAME" ] || return 1
+    archive_sha=$(web_release_manifest_field "$cached_manifest" archive_sha256) || return 1
+    cached_dir=$(cd "$(dirname "$cached_manifest")" 2>/dev/null && pwd) || return 1
+    archive_path="$cached_dir/$archive_name"
+    [ -f "$archive_path" ] || return 1
+    actual_sha=$(web_release_sha256_file "$archive_path") || return 1
+    [ "$actual_sha" = "$archive_sha" ] || return 1
+
+    web_release_promote_cached_tree "$cached_manifest" "$manifest" || return 1
+    WEB_RELEASE_REUSED_TREE=$current_tree
+    return 0
+}
+
 web_release_build() {
     local repo_root=$1
     local manifest=$2
@@ -352,6 +411,14 @@ web_release_build() {
 
     web_release_require_clean_worktree "$repo_root" \
         || { echo "ERROR: Web manifest build requires a clean worktree" >&2; return 1; }
+    if [ -z "${CRETAS_RELEASE_FORCE_WEB_BUILD:-}" ] \
+        && web_release_build_reusable "$repo_root" "$manifest"; then
+        printf 'Web release dist reused: web-admin tree %s unchanged; skipping npm ci + vite build\n' \
+            "$WEB_RELEASE_REUSED_TREE"
+        printf 'Web release manifest: %s\n' "$manifest"
+        printf 'Web release archive: %s\n' "$(dirname "$manifest")/$WEB_RELEASE_ARCHIVE_NAME"
+        return 0
+    fi
     web_release_ensure_dependencies "$repo_root" \
         || { echo "ERROR: Web dependency restore failed" >&2; return 1; }
     rm -rf "$dist_dir"
