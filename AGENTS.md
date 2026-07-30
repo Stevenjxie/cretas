@@ -95,6 +95,13 @@ uvicorn main:app --port 8083     # 启动服务
 # 或使用 `deploy-backend` skill
 ```
 
+**发布输出里这两条是预期的，不是异常**（2026-07-30 起）：
+
+- `Compiling 1 source file` — 测试编译只编 `--tests` 命中的类（原先编全部 1146 个测试源，耗 41.4s 只为跑一个类）。不传 `-Dcretas.testIncludes` 时仍是全编，即旧行为。若命中不到目标类，surefire 找不到测试会**直接失败**，不会产出跳过测试的制品。
+- `切换后健康轮次 1/3` — 切流后稳定观察由 5 轮改为 3 轮（覆盖 ~36s）。**auto-rollback 未改动**：任一轮非 200/active 仍会切回旧 upstream 并从备份恢复 jar。
+
+**从 GitHub 取制品送上服务器**是另一条链路，不是上面的常规发布：`scripts/deploy/Publish-GitHubArtifactViaLightsailOss.ps1`（`GitHub → 东京 Lightsail → 上海 OSS → ECS 内网`，制品字节完全不经过本机）。⚠️ 它**不加速常规发布** —— 常规发布的 jar 是本地 Maven 构建的，压根不从 GitHub 下载；且输出里 `transport_verified` 与 `deployable_trust_verified` 是两件事，后者只在 manifest 的 tree 与测试选择器都对得上时才为 true。详见 `scripts/deploy/RELEASE-ARTIFACT-TRANSPORT.md`。
+
 ---
 
 ## Server Operations

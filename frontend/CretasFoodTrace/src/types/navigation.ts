@@ -117,11 +117,24 @@ export type ProcessingStackParamList = {
     supplierName: string;
   };
 
+  // 2026-07-30 客户反馈新增: 物料需求单 (只读) —— 客户原话"没有物料需求单模块"。
+  // 后端+web-admin 早有完整读写工作流，RN 端此前从未实现界面；本次只做只读查看，
+  // 详见 materialRequisitionApiClient.ts 顶部注释与交接报告的工作量评估。
+  MaterialRequisitionList: undefined;
+  MaterialRequisitionDetail: { requisitionId: string };
+
   // Phase 3 P2: 质检统计分析
   QualityAnalytics: undefined;
 
   // Phase 3 P2: 库存盘点
   InventoryCheck: undefined;
+  // 2026-07-30 客户反馈修复: InventoryCheck 复用仓库模块的 WHInventoryCheckScreen,
+  // 该屏发起盘点成功后会 navigate("StocktakeEntry", ...) —— 这条路由之前在本
+  // ParamList 里完全没注册, 生产角色一旦从"生产"Tab 发起盘点就会撞
+  // "not handled by any navigator" 而卡死 (无法进入录入/提交)。
+  StocktakeEntry: { stocktakeId: string };
+  WHStocktakeList: undefined;
+  WHStocktakeDetail: { stocktakeId: string };
 
   // Phase 3 P2: 异常预警
   ExceptionAlert: undefined;
@@ -755,6 +768,9 @@ export type WHInventoryStackParamList = {
   StocktakeEntry: { stocktakeId: string };
   WastageReport: { batchId?: string };
   TransferReceive: { transferId: string };
+  // 2026-07-30 客户反馈修复: 盘点记录列表 + 只读详情 (F006 warehouse_mgr "无途径查看今日提交记录")
+  WHStocktakeList: undefined;
+  WHStocktakeDetail: { stocktakeId: string };
 };
 
 export type WHProfileStackParamList = {
@@ -772,6 +788,11 @@ export type WHProfileStackParamList = {
   WHConversionAnalysis: undefined;
   Feedback: undefined;
   Membership: undefined;
+  // 2026-07-30 客户反馈修复: 盘点记录列表 + 只读详情
+  // (StocktakeEntry 一并注册: 列表页对未完成盘点的"续录"跳转需要落在同一个 stack 内)
+  WHStocktakeList: undefined;
+  WHStocktakeDetail: { stocktakeId: string };
+  StocktakeEntry: { stocktakeId: string };
 };
 
 // Warehouse Manager 屏幕Props

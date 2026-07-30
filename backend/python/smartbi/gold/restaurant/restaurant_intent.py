@@ -32,6 +32,7 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from smartbi.gold.restaurant.restaurant_ops_router import (
+    _KITCHEN_OPS_NOUNS,
     _is_explicit_sales_period_comparison,
     _profit_intent,
     _resolve_sales_query_spec,
@@ -482,6 +483,19 @@ _UNSUPPORTED_REQUIREMENT_LABELS = {
 }
 
 
+# 「成本」紧跟在后厨域名词后面时, 修饰的是那个域而不是菜品 ——
+# 「食材损耗成本」问的是损耗花了多少钱, 不是菜品成本。判成 recipe_cost 有
+# 两个实际代价 (2026-07-30 prod 实拍): planned_intents 多一个菜品类意图,
+# 答案里多出一段「没有找到名为「食材损耗」的菜品」; 契约也随之要求答案覆盖
+# 菜品成本。名词表与菜名拒绝表同源, 见 _KITCHEN_OPS_NOUNS。
+# 每个名词都是 2 字, 定宽 lookbehind 合法。
+_OPS_BOUND_COST_GUARD = "".join(f"(?<!{noun})" for noun in _KITCHEN_OPS_NOUNS)
+_BARE_COST_RE = re.compile(_OPS_BOUND_COST_GUARD + r"成本(?![日周月季年])")
+_COST_PERIODIC_REPORT_RE = re.compile(
+    _OPS_BOUND_COST_GUARD + r"成本(?:日|周|月|季|年)报"
+)
+
+
 def _detect_requested_metrics(text: str) -> Tuple[str, ...]:
     detected_items: List[str] = []
     for metric, tokens in _REQUEST_METRIC_RULES:
@@ -493,8 +507,8 @@ def _detect_requested_metrics(text: str) -> Tuple[str, ...]:
             # unless ``本`` is immediately starting a calendar-period word.
             has_metric = any(token in text for token in tokens if token != "成本")
             has_metric = has_metric or bool(
-                re.search(r"成本(?![日周月季年])", text)
-                or re.search(r"成本(?:日|周|月|季|年)报", text)
+                _BARE_COST_RE.search(text)
+                or _COST_PERIODIC_REPORT_RE.search(text)
             )
         else:
             has_metric = any(token in text for token in tokens)

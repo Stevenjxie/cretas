@@ -27,6 +27,9 @@ import WHTransitLedgerScreen from "../../screens/warehouse/inventory/WHTransitLe
 import StocktakeEntryScreen from "../../screens/warehouse/inventory/StocktakeEntryScreen";
 import WastageReportScreen from "../../screens/warehouse/inventory/WastageReportScreen";
 import TransferReceiveScreen from "../../screens/warehouse/inventory/TransferReceiveScreen";
+// 2026-07-30 客户反馈修复: 盘点记录列表 + 只读详情
+import WHStocktakeListScreen from "../../screens/warehouse/inventory/WHStocktakeListScreen";
+import WHStocktakeDetailScreen from "../../screens/warehouse/inventory/WHStocktakeDetailScreen";
 
 const Stack = createNativeStackNavigator<WHInventoryStackParamList>();
 
@@ -149,6 +152,20 @@ export function WHInventoryStackNavigator() {
         name="TransferReceive"
         component={TransferReceiveScreen}
         options={{ title: "调拨接收" }}
+      />
+
+      {/* 2026-07-30: 盘点记录列表（今日/历史提交记录）*/}
+      <Stack.Screen
+        name="WHStocktakeList"
+        component={WHStocktakeListScreen}
+        options={{ title: "盘点记录" }}
+      />
+
+      {/* 2026-07-30: 盘点记录只读详情 */}
+      <Stack.Screen
+        name="WHStocktakeDetail"
+        component={WHStocktakeDetailScreen}
+        options={{ title: "盘点详情" }}
       />
     </Stack.Navigator>
   );

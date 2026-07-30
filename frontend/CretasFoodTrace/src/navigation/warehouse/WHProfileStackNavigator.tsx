@@ -20,6 +20,10 @@ import WHAlertListScreen from "../../screens/warehouse/shared/WHAlertListScreen"
 import WHAlertHandleScreen from "../../screens/warehouse/shared/WHAlertHandleScreen";
 import WHRecallManageScreen from "../../screens/warehouse/shared/WHRecallManageScreen";
 import WHConversionAnalysisScreen from "../../screens/warehouse/shared/WHConversionAnalysisScreen";
+// 2026-07-30 客户反馈修复: 盘点记录列表 + 只读详情
+import WHStocktakeListScreen from "../../screens/warehouse/inventory/WHStocktakeListScreen";
+import WHStocktakeDetailScreen from "../../screens/warehouse/inventory/WHStocktakeDetailScreen";
+import StocktakeEntryScreen from "../../screens/warehouse/inventory/StocktakeEntryScreen";
 
 // 复用现有Profile页面
 import FeedbackScreen from "../../screens/profile/FeedbackScreen";
@@ -65,11 +69,34 @@ export function WHProfileStackNavigator() {
         options={{ title: "出入库统计" }}
       />
 
-      {/* 盘点记录 */}
+      {/* 发起盘点 (选仓库 → 生成新盘点任务) */}
       <Stack.Screen
         name="WHInventoryCheck"
         component={WHInventoryCheckScreen}
+        options={{ title: "发起盘点" }}
+      />
+
+      {/* 2026-07-30: 盘点记录列表 —— "常用功能 > 盘点记录" 菜单项的真正目的地
+          (之前一直误跳到上面的 WHInventoryCheck "发起盘点", 客户反馈"无途径查看
+          今日提交记录"正是这个文案/跳转不符导致的) */}
+      <Stack.Screen
+        name="WHStocktakeList"
+        component={WHStocktakeListScreen}
         options={{ title: "盘点记录" }}
+      />
+
+      {/* 2026-07-30: 盘点记录只读详情 */}
+      <Stack.Screen
+        name="WHStocktakeDetail"
+        component={WHStocktakeDetailScreen}
+        options={{ title: "盘点详情" }}
+      />
+
+      {/* 2026-07-30: 未完成盘点续录 (从盘点记录列表跳入) */}
+      <Stack.Screen
+        name="StocktakeEntry"
+        component={StocktakeEntryScreen}
+        options={{ title: "盘点录入" }}
       />
 
       {/* 过期处理 */}

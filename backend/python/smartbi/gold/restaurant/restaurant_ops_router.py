@@ -991,6 +991,21 @@ _RESOLVER_QUERY_HINT_RE = re.compile(
 )
 
 
+# 后厨域名词 —— 它们是**别的域的对象**, 既不是菜名, 也不是菜品成本。
+# 「食材损耗成本」「领料成本」里的「成本」修饰的是这些名词而不是菜品:
+#   - 判成 recipe_cost 会多规划一个菜品类意图 (2026-07-30 prod 实拍噪音
+#     「没有找到名为「食材损耗」的菜品」, 见 _detect_requested_metrics);
+#   - 当成菜名则会把那个意图限域到一个不存在的菜。
+# 下面的拒绝表原本只有**指标词**(成本/毛利/销量)和**通用菜品词**(菜/菜品/
+# 单品), 而「成本」已被 _DISH_QUERY_RE 当指标后缀吃掉, 剩下的「食材损耗」
+# 一个拒绝词都不含, 于是被当成菜名。
+# 只收**不可能出现在菜名里**的词 ——「食材」不在表内, 因为「食材成本」是
+# 真的菜品成本问法。
+_KITCHEN_OPS_NOUNS = (
+    "损耗", "报损", "浪费", "领料", "出库", "入库", "盘点", "库存", "进货", "采购",
+)
+
+
 def _extract_dish_candidate_single(text: str) -> "Optional[str]":
     # build_resolver_query 会在整句尾部空格拼接窗口标签/盈亏词
     # ("…那X呢 最近30天") — 先剥掉, 否则省略句「…呢」锚定失配,
@@ -1043,7 +1058,7 @@ def _extract_dish_candidate_single(text: str) -> "Optional[str]":
         "情况", "如何", "怎么", "多少", "？", "?", "营收", "营业额",
         "销售", "销量", "毛利", "成本", "盈利", "赚钱", "利润",
         "过去", "最近", "个月", "季度", "一年", "继续追问",
-    )):
+    ) + _KITCHEN_OPS_NOUNS):
         return None
     return candidate[:60]
 
@@ -2450,22 +2465,59 @@ def _resolve_sales_query_spec(query: Optional[str], *, today: Optional[date] = N
     )
 
 
+# Money wording that makes a wastage ranking a *cost* ranking rather than a
+# quantity one. Both axes exist per ingredient in Gold (wastage_qty /
+# wastage_cost); picking the wrong one silently names the wrong ingredient,
+# because the cheap high-volume item and the expensive low-volume item are
+# different rows (300kg of 土豆 vs 12kg of 三文鱼).
+_WASTAGE_COST_AXIS_TOKENS = (
+    "金额", "成本", "钱", "损失多少", "花了多少", "价值", "元",
+)
+
+_WASTAGE_RANK_AXES = {
+    # axis -> (ORDER BY expression, label, whether the axis is money)
+    "cost": ("cost", "按金额", True),
+    "qty": ("qty", "按数量", False),
+}
+
+
+def _wastage_rank_axis(query: str) -> str:
+    """Which axis the question asked to rank by. Defaults to quantity."""
+    if query and any(tok in query for tok in _WASTAGE_COST_AXIS_TOKENS):
+        return "cost"
+    return "qty"
+
+
 async def resolve_wastage_top(
     smartbi_pool, factory_id: str, days: int = 30, top_n: int = 10,
+    query: str = "",
 ) -> OpsAnswer:
-    """Top N wastage ingredients + wastage type breakdown, last N days."""
+    """Top N wastage ingredients + wastage type breakdown, last N days.
+
+    Ranks by cost when the question asks about money, otherwise by quantity.
+    Both numbers are always shown so the ranking is self-explanatory.
+    """
+    rank_axis = _wastage_rank_axis(query)
+    order_expr, axis_label, axis_is_money = _WASTAGE_RANK_AXES[rank_axis]
     async with smartbi_pool.acquire() as conn:
         await conn.execute("SELECT set_config('app.factory_id', $1, false)", factory_id)
+        # Both KPI kinds come from the same APPROVED wastage rows with the same
+        # GROUP BY, so conditional aggregation cannot change which ingredients
+        # appear -- only the order. order_expr is from _WASTAGE_RANK_AXES, never
+        # from user text.
         top_rows = await conn.fetch(
-            """
+            f"""
             SELECT i.name, i.category, i.unit,
-                   SUM(a.value_num)::float AS qty
+                   SUM(CASE WHEN a.kpi_kind = 'wastage_qty'
+                            THEN a.value_num ELSE 0 END)::float AS qty,
+                   SUM(CASE WHEN a.kpi_kind = 'wastage_cost'
+                            THEN a.value_num ELSE 0 END)::float AS cost
               FROM agg_restaurant_daily_ops a
               JOIN dim_ingredient i ON a.dim_value_id = i.ingredient_id
-             WHERE a.factory_id = $1 AND a.kpi_kind = 'wastage_qty'
+             WHERE a.factory_id = $1 AND a.kpi_kind IN ('wastage_qty', 'wastage_cost')
                AND a.date >= CURRENT_DATE - ($2::int)
              GROUP BY i.name, i.category, i.unit
-             ORDER BY qty DESC NULLS LAST
+             ORDER BY {order_expr} DESC NULLS LAST
              LIMIT $3
             """,
             factory_id, days, top_n,
@@ -2496,8 +2548,29 @@ async def resolve_wastage_top(
         "EXPIRED": "过期", "DAMAGED": "破损", "SPOILED": "变质",
         "PROCESSING": "加工损耗", "OTHER": "其他",
     }
+    # The per-ingredient money KPI only exists after materialize_gold_daily_ops
+    # has run for this tenant. Before that every row reads 0.00, and a cost
+    # ranking would be a confident ordering of zeros. The totals table is
+    # computed straight from Silver, so real money there plus an all-zero
+    # breakdown here pinpoints the gap -- say so instead of ranking zeros.
+    cost_axis_unavailable = bool(
+        axis_is_money
+        and top_rows
+        and not any(float(r["cost"] or 0.0) for r in top_rows)
+        and float(total["total_cost"] or 0.0) > 0
+    )
+
+    def _row_metrics(row) -> str:
+        """Both axes on every line, leading with the one that set the order."""
+        money = f"¥{row['cost']:,.2f}"
+        amount = f"{row['qty']:.2f} {row['unit'] or ''}".strip()
+        if axis_is_money:
+            return f"{money}（{amount}）"
+        return f"{amount}（{money}）"
+
     top_list_text = "\n".join([
-        f"{i+1}. {'**' + r['name'] + '**' if i == 0 else r['name']} ({r['category'] or '—'}): {r['qty']:.2f} {r['unit'] or ''}"
+        f"{i+1}. {'**' + r['name'] + '**' if i == 0 else r['name']} "
+        f"({r['category'] or '—'}): {_row_metrics(r)}"
         for i, r in enumerate(top_rows)
     ]) or "(近 %d 天无损耗记录)" % days
 
@@ -2506,11 +2579,36 @@ async def resolve_wastage_top(
         for r in type_rows[:5]
     ]) or "无数据"
 
+    # Cost wording is what the money question was asking for; keep the quantity
+    # heading untouched so the historical (and far more common) qty answer text
+    # does not drift.
+    top_heading = (
+        f"损耗成本前 {len(top_rows)} 名（{axis_label}）"
+        if axis_is_money
+        else f"损耗食材前 {len(top_rows)} 名（{axis_label}）"
+    )
+    totals_line = (
+        f"- 总损耗 {total['total_count']} 次, 损耗成本 **¥{total['total_cost']:,.2f}**, "
+        f"损耗量 {total['total_qty']:.2f} 单位"
+        if axis_is_money
+        else f"- 总损耗 {total['total_count']} 次, {total['total_qty']:.2f} 单位, "
+             f"损失 **¥{total['total_cost']:.2f}**"
+    )
+
+    if cost_axis_unavailable:
+        top_block = (
+            "按食材的损耗成本明细**暂无**（该指标尚未生成），"
+            "因此这里不给出食材金额排名，也不用数量排名顶替。"
+            "上面的损耗总成本与类型分布来自完整台账，可以直接用。"
+        )
+    else:
+        top_block = f"{top_heading}:\n\n{top_list_text}"
+
     answer = (
         f"近 {days} 天损耗总览:\n"
-        f"- 总损耗 {total['total_count']} 次, {total['total_qty']:.2f} 单位, 损失 **¥{total['total_cost']:.2f}**\n"
+        f"{totals_line}\n"
         f"- 损耗类型分布: {type_summary}\n\n"
-        f"损耗食材前 {len(top_rows)} 名（按数量）:\n\n{top_list_text}\n\n"
+        f"{top_block}\n\n"
         f"建议动作:\n"
         f"1. 先把损耗金额最高的类型拆到门店和班次，确认是保存、加工还是报损登记问题。\n"
         f"2. 对损耗靠前的食材设一周复盘线，超过日均用量或报损阈值时要求后厨说明原因。\n"
@@ -2518,12 +2616,16 @@ async def resolve_wastage_top(
     )
 
     charts = []
-    if top_rows:
+    if top_rows and not cost_axis_unavailable:
         charts.append({
             "chartType": "bar",
-            "title": f"近{days}天损耗食材前 {len(top_rows)} 名",
+            "title": f"近{days}天{top_heading}",
             "xAxis": {"data": [r["name"] for r in top_rows]},
-            "series": [{"name": "损耗量", "type": "bar", "data": [r["qty"] for r in top_rows]}],
+            "series": [{
+                "name": "损耗成本" if axis_is_money else "损耗量",
+                "type": "bar",
+                "data": [r["cost"] if axis_is_money else r["qty"] for r in top_rows],
+            }],
         })
     if type_rows:
         charts.append({
@@ -2544,11 +2646,17 @@ async def resolve_wastage_top(
             {"title": "损耗次数", "value": total["total_count"], "rawValue": total["total_count"]},
             {"title": "损耗量", "value": f"{total['total_qty']:.1f}", "rawValue": total["total_qty"]},
             {"title": "损耗金额", "value": f"¥{total['total_cost']:.2f}", "rawValue": total["total_cost"]},
-            {"title": "损耗最多食材", "value": top_rows[0]["name"] if top_rows else "—", "rawValue": 0},
+            {
+                "title": "损耗成本最高食材" if axis_is_money else "损耗最多食材",
+                "value": top_rows[0]["name"] if top_rows else "—",
+                "rawValue": 0,
+            },
         ],
         meta={
             "window_days": days,
             "top_n": top_n,
+            "rank_axis": rank_axis,
+            "cost_axis_unavailable": cost_axis_unavailable,
             "total_qty": float(total["total_qty"] or 0.0),
             "total_cost": float(total["total_cost"] or 0.0),
             "total_count": int(total["total_count"] or 0),

@@ -16,6 +16,9 @@ import MaterialBatchManagementScreen from '../screens/processing/MaterialBatchMa
 import MaterialReceiptScreen from '../screens/processing/MaterialReceiptScreen';
 import MaterialReceiptAIScreen from '../screens/processing/MaterialReceiptAIScreen';
 import MaterialBatchSuccessScreen from '../screens/processing/MaterialBatchSuccessScreen';
+// 2026-07-30 客户反馈新增: 物料需求单 (只读)
+import MaterialRequisitionListScreen from '../screens/processing/MaterialRequisitionListScreen';
+import MaterialRequisitionDetailScreen from '../screens/processing/MaterialRequisitionDetailScreen';
 
 // AI智能分析页面 - Phase 3
 import AIReportListScreen from '../screens/processing/AIReportListScreen';
@@ -50,6 +53,10 @@ import EquipmentDetailScreen from '../screens/processing/EquipmentDetailScreen';
 
 // Phase 3 P2 - 库存盘点 (使用仓库模块的实现)
 import WHInventoryCheckScreen from '../screens/warehouse/inventory/WHInventoryCheckScreen';
+// 2026-07-30 客户反馈修复: 发起盘点成功后的续录/提交 + 记录列表/详情 (见下方 Stack.Screen 注释)
+import StocktakeEntryScreen from '../screens/warehouse/inventory/StocktakeEntryScreen';
+import WHStocktakeListScreen from '../screens/warehouse/inventory/WHStocktakeListScreen';
+import WHStocktakeDetailScreen from '../screens/warehouse/inventory/WHStocktakeDetailScreen';
 
 // Phase 3 P2 - 异常预警
 import ExceptionAlertScreen from '../screens/alerts/ExceptionAlertScreen';
@@ -181,6 +188,16 @@ export function ProcessingStackNavigator() {
         component={MaterialBatchSuccessScreen}
       />
 
+      {/* 2026-07-30 客户反馈新增: 物料需求单 (只读) */}
+      <Stack.Screen
+        name="MaterialRequisitionList"
+        component={MaterialRequisitionListScreen}
+      />
+      <Stack.Screen
+        name="MaterialRequisitionDetail"
+        component={MaterialRequisitionDetailScreen}
+      />
+
       {/* AI智能分析 - Phase 3新增 */}
       <Stack.Screen
         name="AIReportList"
@@ -233,6 +250,22 @@ export function ProcessingStackNavigator() {
       <Stack.Screen
         name="InventoryCheck"
         component={WHInventoryCheckScreen}
+      />
+
+      {/* 2026-07-30 客户反馈修复: 发起盘点成功后的续录/提交屏 + 记录列表/详情 —
+          之前完全没注册, 生产角色从本 Tab 发起盘点会在 navigate("StocktakeEntry")
+          处卡死 (crash/dead-end)，永远进不了提交审核 */}
+      <Stack.Screen
+        name="StocktakeEntry"
+        component={StocktakeEntryScreen}
+      />
+      <Stack.Screen
+        name="WHStocktakeList"
+        component={WHStocktakeListScreen}
+      />
+      <Stack.Screen
+        name="WHStocktakeDetail"
+        component={WHStocktakeDetailScreen}
       />
 
       {/* Phase 3 P2 - 异常预警系统 */}

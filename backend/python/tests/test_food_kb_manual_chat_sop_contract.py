@@ -9,21 +9,29 @@ from food_kb.api.manual_chat import (
     ManualChatRequest,
     SYSTEM_PROMPT,
     _MATERIAL_PACKAGING_ANSWER,
+    _LABEL_QC_REVIEW_ANSWER,
     _MULTI_OUTPUT_WAREHOUSE_RECEIPT_ANSWER,
     _MULTI_OUTPUT_LABEL_QC_ANSWER,
+    _REPORTING_UNIT_YIELD_ANSWER,
     _RESTAURANT_CONTEXT_SCOPE_ANSWER,
     _RESTAURANT_FLYWHEEL_GOVERNANCE_ANSWER,
     _RESTAURANT_MONTHLY_REPORT_ANSWER,
+    _RESTAURANT_PLAN_ALERT_ANSWER,
+    _RESTAURANT_PLATFORM_SYNC_ANSWER,
     _RESTAURANT_QUERY_CONTRACT_ANSWER,
     _WORKFLOW_ACTUAL_IO_ANSWER,
     _build_scope_prompt,
     _needs_bom_workflow_sequence_guard,
     _needs_material_packaging_guard,
+    _needs_label_qc_review_guard,
     _needs_multi_output_label_qc_guard,
     _needs_multi_output_warehouse_receipt_guard,
+    _needs_reporting_unit_yield_guard,
     _needs_restaurant_context_scope_guard,
     _needs_restaurant_flywheel_governance_guard,
     _needs_restaurant_monthly_report_guard,
+    _needs_restaurant_plan_alert_guard,
+    _needs_restaurant_platform_sync_guard,
     _needs_restaurant_query_contract_guard,
     _needs_workflow_actual_io_guard,
     _uses_current_production_sop,
@@ -61,6 +69,8 @@ def test_factory_prompt_keeps_restaurant_analysis_out_of_ai_assist():
     assert "BOM 至少需要一项主原料" in FACTORY_SYSTEM_PROMPT
     assert "没有辅料或包材本身不阻止激活" in FACTORY_SYSTEM_PROMPT
     assert "AI 候选无论 0 处还是多处都进入人工审核" in FACTORY_SYSTEM_PROMPT
+    assert "盒子、白标、彩标三层参考框" in FACTORY_SYSTEM_PROMPT
+    assert "跨量纲成品率必须先补充每单位重量" in FACTORY_SYSTEM_PROMPT
 
 
 def test_restaurant_prompt_keeps_session_scope_and_evidence_honest():
@@ -74,6 +84,9 @@ def test_restaurant_prompt_keeps_session_scope_and_evidence_honest():
     assert "明确起止日期按自然日闭区间" in SYSTEM_PROMPT
     assert "当前繁体支持不得扩大成全句转换" in SYSTEM_PROMPT
     assert "只有呈现层实际返回对应表格" in SYSTEM_PROMPT
+    assert "当前月报固定 5 节" in SYSTEM_PROMPT
+    assert "计划预警是同一 sealed QuerySpec" in SYSTEM_PROMPT
+    assert "客如云风格 connector" in SYSTEM_PROMPT
 
 
 def test_scope_prompt_distinguishes_depth_and_business_line():
@@ -149,6 +162,36 @@ def test_multi_output_label_qc_questions_keep_two_contracts_separate():
     assert "合计必须为 100%" in _MULTI_OUTPUT_LABEL_QC_ANSWER
     assert "所有照片都进入“待我审核”" in _MULTI_OUTPUT_LABEL_QC_ANSWER
     assert "不会自动训练或发布模型" in _MULTI_OUTPUT_LABEL_QC_ANSWER
+
+
+def test_reporting_unit_and_cross_unit_yield_use_the_reviewed_contract():
+    equivalent_questions = (
+        "报工投入是 kg、产出是盒时成品率怎么计算？",
+        "袋和盒这些报工单位能自动换算吗？",
+        "跨单位出成率为什么要填写每单位重量？",
+    )
+    assert all(_needs_reporting_unit_yield_guard(q) for q in equivalent_questions)
+    assert not _needs_reporting_unit_yield_guard("Workflow 怎么发布？")
+    assert "计数/包装单位按字面量匹配" in _REPORTING_UNIT_YIELD_ANSWER
+    assert "手工批次和已有库存批次都遵守同一单位合同" in (
+        _REPORTING_UNIT_YIELD_ANSWER
+    )
+    assert "需补充每单位成品重量" in _REPORTING_UNIT_YIELD_ANSWER
+    assert "不得给出伪造百分比" in _REPORTING_UNIT_YIELD_ANSWER
+
+
+def test_label_qc_workbench_uses_three_reference_layers_and_human_tools():
+    equivalent_questions = (
+        "标签质检复核台的盒子白标彩标参考框怎么用？",
+        "标签 AI 漏检时用什么画笔补框？",
+        "彩标审核能不能让 AI 自动给结论？",
+    )
+    assert all(_needs_label_qc_review_guard(q) for q in equivalent_questions)
+    assert not _needs_label_qc_review_guard("普通批次质检在哪里？")
+    assert "盒子 → 白标 → 彩标" in _LABEL_QC_REVIEW_ANSWER
+    assert "白标画笔或彩标画笔" in _LABEL_QC_REVIEW_ANSWER
+    assert "AI 为 0 候选也必须人工检查" in _LABEL_QC_REVIEW_ANSWER
+    assert "不会自动训练或发布模型" in _LABEL_QC_REVIEW_ANSWER
 
 
 def test_workflow_actual_io_questions_use_the_reviewed_factory_contract():
@@ -246,6 +289,45 @@ def test_restaurant_flywheel_questions_use_the_reviewed_governance_contract():
     )
 
 
+def test_restaurant_monthly_report_matches_the_current_five_section_template():
+    assert "当前固定为 5 节" in _RESTAURANT_MONTHLY_REPORT_ANSWER
+    assert "每一节都显式使用“全部门店”范围" in _RESTAURANT_MONTHLY_REPORT_ANSWER
+    assert "已经从月报模板摘除" in _RESTAURANT_MONTHLY_REPORT_ANSWER
+    assert "损耗排行；" not in _RESTAURANT_MONTHLY_REPORT_ANSWER
+
+
+def test_restaurant_plan_alert_questions_use_queryspec_fail_closed_contract():
+    equivalent_questions = (
+        "餐饮计划预警怎样复用 QuerySpec 和阈值？",
+        "经营告警定时执行失败会自动关闭吗？",
+        "环比预警查询计划没有数据时怎样判定？",
+    )
+    assert all(_needs_restaurant_plan_alert_guard(q) for q in equivalent_questions)
+    assert not _needs_restaurant_plan_alert_guard("今天有告警吗？")
+    assert "同一种 sealed QuerySpec" in _RESTAURANT_PLAN_ALERT_ANSWER
+    assert "当前 P1 只支持餐饮销售汇总的环比预警" in (
+        _RESTAURANT_PLAN_ALERT_ANSWER
+    )
+    assert "本次无法判定" in _RESTAURANT_PLAN_ALERT_ANSWER
+    assert "不能自动关闭既有 OPEN 告警" in _RESTAURANT_PLAN_ALERT_ANSWER
+
+
+def test_restaurant_platform_sync_questions_keep_runtime_and_mock_boundaries():
+    equivalent_questions = (
+        "客如云 POS 怎么接入并自动同步？",
+        "平台同步和 Gold 刷新是实时的吗？",
+        "POS 模拟平台的数据能当真实门店数据吗？",
+    )
+    assert all(_needs_restaurant_platform_sync_guard(q) for q in equivalent_questions)
+    assert not _needs_restaurant_platform_sync_guard("外卖毛利怎么算？")
+    assert "不是已经交付给门店用户的“设置 → POS 对接”自助页面" in (
+        _RESTAURANT_PLATFORM_SYNC_ANSWER
+    )
+    assert "默认每 60 秒拉取一次" in _RESTAURANT_PLATFORM_SYNC_ANSWER
+    assert "菜品月聚合默认每 600 秒刷新" in _RESTAURANT_PLATFORM_SYNC_ANSWER
+    assert "模拟平台只用于测试和演示" in _RESTAURANT_PLATFORM_SYNC_ANSWER
+
+
 def test_retriever_source_allow_list_is_bound_as_a_sql_parameter():
     retriever = KnowledgeRetriever()
     sql, params = retriever._build_vector_query(
@@ -316,11 +398,15 @@ def test_latest_f006_sop_is_a_deployable_manual_source():
     assert "没有辅料或包材本身不是阻塞" in current_sop
     assert "只在本次报工表单要求填写各实际产出的分摊比例" in current_sop
     assert "所有照片都必须进入人工审核" in current_sop
+    assert "盒子、白标和彩标三层参考框" in current_sop
+    assert "kg/g 等质量单位只在同量纲内科学换算" in current_sop
+    assert "每单位成品重量" in current_sop
+    assert "当前 OA 节点明确只授权 `factory_super_admin`" in current_sop
 
     html_path = Path(PROJECT_ROOT) / "docs/manual/F006-production-full-chain-manual-test-sop.html"
     html = html_path.read_text(encoding="utf-8")
     assert required_sequence in html
-    assert "origin/main · SOP sync 2026-07-29" in html
+    assert "origin/main · SOP sync 2026-07-30" in html
     assert "先有完整 Workflow 草稿，再创建 BOM" in html
     assert "页面没有任意切换版本的选择器" in html
     assert "① 投入" in html
@@ -338,6 +424,9 @@ def test_latest_f006_sop_is_a_deployable_manual_source():
     assert "自动同步并发布" in html
     assert "多产出逐行确认" in html
     assert "所有照片都会进入人工审核" in html
+    assert "盒子、白标、彩标三层参考框" in html
+    assert "跨单位成品率" in html
+    assert "单总监死锁" in html
 
 
 def test_factory_role_knowledge_covers_the_12_account_operating_boundaries():
@@ -407,6 +496,8 @@ def test_restaurant_registered_sources_match_current_product_contract():
             "指定区间、繁体范围词与输出偏好",
             "月度经营报告：预览、导出与数据截至时间",
             "AI 飞轮、菜品别名与人审边界",
+            "计划预警：同一 QuerySpec 定时回放",
+            "平台 connector、Gold 刷新与模拟数据边界",
         ),
         "restaurant-product-manual.html": (
             "当前 21 维综合分析目录",
@@ -414,6 +505,8 @@ def test_restaurant_registered_sources_match_current_product_contract():
             "精确日期、范围词与输出偏好",
             "月度经营报告",
             "AI 飞轮运营台与菜品别名治理",
+            "计划预警",
+            "当前代码已验证的是客如云风格 connector",
         ),
         "restaurant-metrics-glossary.html": (
             "21 维综合分析证据目录",
@@ -430,11 +523,12 @@ def test_restaurant_registered_sources_match_current_product_contract():
     ai_assist = (
         PROJECT_ROOT / "web-admin/public/aiassist.html"
     ).read_text(encoding="utf-8")
-    assert "原料包装换算、标签人工审核或多产出成本怎么做？" in ai_assist
-    assert "实际投入产出与多产出成本怎么报？" in ai_assist
+    assert "三层参考框与标签人工复核" in ai_assist
+    assert "报工单位与跨单位成品率" in ai_assist
     assert "指定区间、全部門店与输出形态" in ai_assist
     assert "月报预览、导出与截至时间" in ai_assist
     assert "AI 飞轮与菜品别名怎么治理？" in ai_assist
+    assert "计划预警与平台同步边界" in ai_assist
     assert "7 节小课 · 约 12 分钟" in ai_assist
     assert "飞轮与人审边界" in ai_assist
     assert "不做计算" in ai_assist
@@ -510,6 +604,45 @@ async def test_factory_chat_passes_scope_to_llm_and_does_not_delay_for_related(
 
 
 @pytest.mark.asyncio
+async def test_factory_current_sop_miss_does_not_fall_back_to_legacy_sources(
+    monkeypatch,
+):
+    captured_calls = []
+
+    class FakeRetriever:
+        def is_ready(self):
+            return True
+
+        async def retrieve(self, **kwargs):
+            captured_calls.append(kwargs)
+            return []
+
+    async def fake_call_chain(slot, payload, timeout):
+        return {"choices": [{"message": {"content": "当前手册未检索到相关内容。"}}]}
+
+    monkeypatch.setattr(
+        manual_chat_module,
+        "get_knowledge_retriever",
+        lambda: FakeRetriever(),
+    )
+    monkeypatch.setattr("common.llm_router.call_chain", fake_call_chain)
+    manual_chat_module._answer_cache.clear()
+
+    response = await manual_chat_module.manual_chat(
+        ManualChatRequest(
+            question="标签质检复核台的三层参考框怎么用？",
+            category="factory",
+        )
+    )
+
+    assert len(captured_calls) == 1
+    assert captured_calls[0]["source_names"] == [
+        "f006-production-full-chain-sop.md"
+    ]
+    assert response["sources"] == []
+
+
+@pytest.mark.asyncio
 async def test_bom_workflow_publication_answer_never_calls_the_llm(monkeypatch):
     class FakeDoc:
         title = "F006 生产全链路测试 SOP - BOM 与 Workflow 的自动关联顺序"
@@ -574,6 +707,18 @@ async def test_bom_workflow_publication_answer_never_calls_the_llm(monkeypatch):
             "f006-production-full-chain-sop.md",
         ),
         (
+            "报工投入是 kg、产出是盒时成品率怎么计算？",
+            "factory",
+            _REPORTING_UNIT_YIELD_ANSWER,
+            "f006-production-full-chain-sop.md",
+        ),
+        (
+            "标签质检复核台的盒子白标彩标参考框怎么用？",
+            "factory",
+            _LABEL_QC_REVIEW_ANSWER,
+            "f006-production-full-chain-sop.md",
+        ),
+        (
             "门店菜品不同月份继续追问时怎么保持时间范围？",
             "restaurant",
             _RESTAURANT_CONTEXT_SCOPE_ANSWER,
@@ -596,6 +741,18 @@ async def test_bom_workflow_publication_answer_never_calls_the_llm(monkeypatch):
             "restaurant",
             _RESTAURANT_FLYWHEEL_GOVERNANCE_ANSWER,
             "restaurant-full-chain-sop.html",
+        ),
+        (
+            "餐饮计划预警怎样复用 QuerySpec 和阈值？",
+            "restaurant",
+            _RESTAURANT_PLAN_ALERT_ANSWER,
+            "restaurant-full-chain-sop.html",
+        ),
+        (
+            "客如云 POS 怎么接入并自动同步？",
+            "restaurant",
+            _RESTAURANT_PLATFORM_SYNC_ANSWER,
+            "restaurant-product-manual.html",
         ),
     ],
 )
