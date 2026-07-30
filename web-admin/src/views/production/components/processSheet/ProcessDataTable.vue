@@ -2262,6 +2262,9 @@ async function handleSave(row: SheetRow, action: 'draft' | 'submit') {
       row.blockingMessage = null;
       row.stockShortage = presentStockShortage(
         msg || '当前只能保存草稿，生产库中投料量不足，请联系仓管补料',
+        typeof e === 'object' && e != null && 'data' in e
+          ? (e as { data?: unknown }).data
+          : undefined,
       );
       return;
     }
