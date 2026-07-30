@@ -836,8 +836,15 @@ validate_or_build_both() {
         return 0
     fi
     if [ "$PREFER_CI_ARTIFACT" = "true" ]; then
-        echo "CI_ARTIFACT=$(sed -n 's/^CI_ARTIFACT_UNAVAILABLE reason=/unavailable:/p' \
-            "$RUN_LOG_DIR/java-ci-probe-deploy.log" 2>/dev/null | tail -1) (探测未通过, 直接本地并行构建)" >&2
+        # 🔴 必须【写回 CI_ARTIFACT_STATUS】, 不能只打印。
+        # 它的初值是 disabled, 只打印不赋值的话回执里会写 "ci_artifact": "disabled" ——
+        # 而实际是"开着、探测了、没命中"。这两件事该采取的行动完全不同(前者去开开关,
+        # 后者去等 CI 或跑预热), 回执分不出来就等于把这条链的真实状态藏了。
+        # 2026-07-31 一次真实发布就是这么误报的; --phase all 那边一直是对的, 照它写。
+        CI_ARTIFACT_STATUS=$(sed -n 's/^CI_ARTIFACT_UNAVAILABLE reason=/unavailable:/p' \
+            "$RUN_LOG_DIR/java-ci-probe-deploy.log" 2>/dev/null | tail -1)
+        [ -n "$CI_ARTIFACT_STATUS" ] || CI_ARTIFACT_STATUS=unavailable:probe-failed
+        echo "CI_ARTIFACT=$CI_ARTIFACT_STATUS (探测未通过, 直接本地并行构建)" >&2
     fi
     build_both_fallback_parallel
 }

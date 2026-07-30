@@ -335,6 +335,11 @@ assert_contains "$CASE_REPORT" '"build_mode": "java+web-fallback"'
 assert_log_count 1 'ARTIFACTS' "$CASE_LOG"
 assert_log_count 0 'JAVA_BUILD build' "$CASE_LOG"
 assert_log_count 0 'WEB_BUILD build' "$CASE_LOG"
+# 🔴 回执必须说清是「开着但没命中」而不是「没开」。
+# CI_ARTIFACT_STATUS 初值就是 disabled, 探测失败时只打印不赋值的话, 回执会写 disabled ——
+# 而这两件事该采取的行动完全不同(去开开关 vs 去等 CI/跑预热)。2026-07-31 一次真实发布
+# 就是这么误报的。
+assert_contains "$CASE_REPORT" '"status": "unavailable:mock_no_artifact"'
 
 # 同样两边都要建, 但这次 CI 制品可用 —— 那就该是「取制品 ∥ 建 Web」, 而不是
 # 先花 61s 取完再花 63s 建 Web。同样用结构代理: 并行那条路径自己会说明。
