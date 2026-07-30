@@ -398,12 +398,32 @@ public class TransferServiceImpl implements TransferService {
         }
     }
 
+    /**
+     * 单位归一 —— 口径必须与报工侧 {@code ProductionStockAllocationServiceImpl#canonicalNativeUnit}
+     * 完全一致, 否则同一批货在两边算成两个单位。
+     *
+     * <p><b>只对质量/体积归一。</b> #1976 (2026-07-29)「等价码只对科学单位成立, 计数/包装单位按
+     * 字面比较」已在报工侧确立此口径: 只/件/个/袋/盒/箱 之间没有普适换算, 一只不等于一件,
+     * 给它们编共同等价码等于让系统替工厂断定"两个不同的东西是同一个东西"。
+     *
+     * <p>调拨此前漏跟这条决定, 仍把 {@code normalize().code()} 一路用到计数单位上 ——
+     * 契约别名表 {@code alias("pcs","pcs","件","个","只")} 于是把用户选的「只」写成 {@code pcs}
+     * 存进调拨明细, 再由 createTargetInventory 写进目标批次。
+     *
+     * <p>线上后果 (LIUSHANMEN 2026-07-30): 生产仓 TRF-MT-20260730-2631 存着 501 {@code pcs},
+     * 物料主档与其余批次都是「只」。库存页因本地化显示成「501 只」看不出异常, 报工分摊却按字面
+     * 比较 —— {@code "只".equals("pcs")} 为 false, 整批被跳过 → 「需要 1只, 可用 0只, 缺少 1只,
+     * 请联系仓管补料」。仓管看着有货, 报工的人说没货, 谁也说服不了谁。
+     */
     private String canonicalTransferUnit(String factoryId, String unit) {
         String value = trimToNull(unit);
         if (value == null) return "";
         if (unitContractService == null) return value;
-        var normalized = unitContractService.normalize(factoryId, value);
-        return normalized.recognized() ? normalized.code() : value;
+        return unitContractService.describe(factoryId, value)
+                .filter(canonical -> canonical.dimension() == com.cretas.aims.service.unit.UnitDimension.MASS
+                        || canonical.dimension() == com.cretas.aims.service.unit.UnitDimension.VOLUME)
+                .map(com.cretas.aims.service.unit.CanonicalUnit::code)
+                .orElseGet(() -> value.toLowerCase(java.util.Locale.ROOT));
     }
 
     private void normalizeRawTransferPackaging(
