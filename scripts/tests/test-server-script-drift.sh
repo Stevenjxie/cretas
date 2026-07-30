@@ -7,6 +7,9 @@ set -euo pipefail
 
 ROOT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
 TOOL="$ROOT_DIR/scripts/deploy/check-server-script-drift.sh"
+INSTALLER="$ROOT_DIR/scripts/deploy/install-server-scripts.sh"
+LIB="$ROOT_DIR/scripts/lib/server-script-common.sh"
+INVENTORY="$ROOT_DIR/scripts/deploy/server-script-inventory.conf"
 
 fail() { echo "FAIL: $*" >&2; exit 1; }
 
@@ -22,13 +25,28 @@ assert_exit() {
 }
 
 [ -x "$TOOL" ] || fail "$TOOL 不存在或不可执行"
-bash -n "$TOOL" || fail "语法错误"
+[ -x "$INSTALLER" ] || fail "$INSTALLER 不存在或不可执行"
+[ -s "$LIB" ] || fail "$LIB 不存在"
+[ -s "$INVENTORY" ] || fail "$INVENTORY 不存在"
+for f in "$TOOL" "$INSTALLER" "$LIB"; do bash -n "$f" || fail "语法错误: $f"; done
+
+# ---- 0. 清单与公共逻辑必须是单一来源 ----
+# 检查器与安装器各存一份就等于又造了一个漂移源, 而它们存在的理由正是消除漂移。
+for f in "$TOOL" "$INSTALLER"; do
+    assert_contains "$f" 'scripts/lib/server-script-common.sh'
+    assert_contains "$f" 'server-script-inventory.conf'
+done
+# 公共函数只能在 lib 里定义一次
+for fn in server_script_remote_fetch server_script_host_opts server_script_norm_sha; do
+    n=$(grep -c "^$fn()" "$LIB" "$TOOL" "$INSTALLER" 2>/dev/null | awk -F: '{s+=$2} END{print s+0}')
+    [ "$n" = "1" ] || fail "$fn 定义了 $n 次 (应恰好 1 次, 在 lib 里)"
+done
 
 # ---- 1. ssh 必须带 -n ----
 # 主循环是 `while read ... <<< "$INVENTORY"`。不带 -n 的 ssh 会从同一个 stdin 读走
 # 清单剩余全部行, 循环只跑第一条就结束, 然后打印「✅ 一致」并 exit 0。第一版实测
 # 就是这样只查了 11 条里的 1 条。这条断言是那个 bug 的回归闸。
-assert_contains "$TOOL" "printf '%s\\n' -n -o BatchMode=yes"
+assert_contains "$LIB" "printf '%s\\n' -n -o BatchMode=yes"
 
 # ---- 2. 「查不出来」与「查出来是坏的」必须是不同退出码 ----
 assert_contains "$TOOL" 'n_unreadable > 0'
@@ -51,8 +69,8 @@ assert_exit 2 bash "$TOOL" --host nosuchhost
 
 # ---- 5. 远端探测必须自带字节数核对 ----
 # 「ssh 成功但 sudo 失败给了空内容」不能冒充一份干净的对比结果。
-assert_contains "$TOOL" 'size_mismatch_declared'
-assert_contains "$TOOL" "printf 'PRESENT %s"
+assert_contains "$LIB" 'size_mismatch_declared'
+assert_contains "$LIB" "printf 'PRESENT %s"
 
 # ---- 6. 清单完整性: 每个仓库跟踪的服务器脚本都必须在清单里登记 ----
 # 这条不需要 ssh, 是这个测试里唯一能防"仓库侧新增脚本却忘了登记"的闸。
@@ -60,7 +78,7 @@ assert_contains "$TOOL" "printf 'PRESENT %s"
 missing_registration=""
 while IFS= read -r tracked; do
     base=$(basename "$tracked")
-    grep -Fq "|$tracked|" "$TOOL" || missing_registration="$missing_registration $base"
+    grep -Fq "|$tracked|" "$INVENTORY" || missing_registration="$missing_registration $base"
 done < <(
     cd "$ROOT_DIR" && git ls-files 'scripts/deploy/lightsail/*' 'scripts/deploy/ecs/*'
 )
@@ -69,6 +87,24 @@ done < <(
 
 # ---- 7. 结构性噪音必须被忽略 ----
 # 安装备份 (.bak.<ts>) 与 __pycache__ 是正常产物, 不是漂移。ECS 上现有 5 个 .bak。
-assert_contains "$TOOL" '*.bak.*|__pycache__|.*'
+assert_contains "$LIB" '*.bak.*|__pycache__|.*'
+
+# ---- 8. 安装器: 拒绝覆盖漂移是最重要的一道闸 ----
+# 2026-07-30 事故: 有人在 ECS 上加固了信任模型却从未提交, 另一个 session 用仓库版本覆盖装上去,
+# 把 deployable_trust_verified 改回 true —— 等于重新装回一个漏洞。默认必须拒绝。
+assert_contains "$INSTALLER" 'REFUSED_DRIFT'
+assert_contains "$INSTALLER" 'if ((!ACCEPT_DRIFT)); then'
+assert_contains "$INSTALLER" '服务器更严格 → 把加固取回仓库'
+# 默认 dry-run: 没有 --confirm 就不许写
+assert_contains "$INSTALLER" 'YES-INSTALL'
+assert_contains "$INSTALLER" 'dry-run: 未写入任何东西'
+# 覆盖前必须备份, 且沿用人工惯例的 .bak.<UTC时间戳>
+assert_contains "$INSTALLER" 'cp -p '"'"'$remote'"'"' '"'"'$remote.bak.$TS'"'"''
+# 装完必须自证落地 —— 装了却不确认, 正是这套工具要消除的那种脱节
+assert_contains "$INSTALLER" 'check-server-script-drift.sh'
+assert_contains "$INSTALLER" '装完但漂移检查未通过'
+assert_exit 2 bash "$INSTALLER" --confirm NOPE
+assert_exit 2 bash "$INSTALLER" --nonexistent-flag
+assert_exit 2 bash "$INSTALLER" --only
 
 echo "PASS: test-server-script-drift.sh"

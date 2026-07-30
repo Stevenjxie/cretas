@@ -55,114 +55,25 @@ while (($#)); do
 done
 
 # ==================== 清单 ====================
-# HOST|REMOTE_PATH|REPO_PATH|NOTE
-# REPO_PATH 为 '-' 表示 IGNORE —— 刻意声明而非静默跳过, 这样"为什么不检查它"是可
-# 审阅的。IGNORE 的都是东京出口/VPN 自身的运维脚本, 不属于 cretas 发布链路。
-INVENTORY=$(cat <<'EOF'
-tokyo|/usr/local/sbin/github-artifact-stage|scripts/deploy/lightsail/github-artifact-stage|GitHub 制品下载+解包
-tokyo|/usr/local/sbin/oss-put-artifact|scripts/deploy/lightsail/oss-put-artifact|签名 URL 上传到上海 OSS
-tokyo|/usr/local/sbin/github-cache-put|scripts/deploy/lightsail/github-cache-put|东京侧 GitHub 制品缓存写入
-tokyo|/usr/local/sbin/github-cache-clean|scripts/deploy/lightsail/github-cache-clean|缓存 LRU 驱逐
-tokyo|/usr/local/sbin/github-artifact-cache-rollback|scripts/deploy/lightsail/github-artifact-cache-rollback|缓存设施回滚
-tokyo|/usr/local/sbin/install-tokyo-usage-meter|-|东京 VPN 流量计, 非发布链路
-tokyo|/usr/local/sbin/test-amnezia-openvpn-netns|-|VPN netns 自测, 非发布链路
-tokyo|/usr/local/sbin/tokyo-openvpn-firewall|-|VPN 防火墙, 非发布链路
-tokyo|/usr/local/sbin/tokyo-vpn-usage-collector|-|VPN 流量采集, 非发布链路
-ecs|/usr/local/sbin/oss-sign-put.py|scripts/deploy/ecs/oss-sign-put.py|OSS 签名 URL 生成
-ecs|/usr/local/sbin/oss-verify-artifact.sh|scripts/deploy/ecs/oss-verify-artifact.sh|ECS 侧下载+校验+落缓存
-EOF
-)
+# 单一来源在 server-script-inventory.conf —— install-server-scripts.sh 读的是同一个文件。
+# 两个工具各存一份清单就等于又造了一个漂移源, 而它们存在的理由正是消除漂移。
+# 清单单一来源: server-script-inventory.conf。连接/读取/比较的实现单一来源:
+# scripts/lib/server-script-common.sh —— install-server-scripts.sh 读的是同两份。
+# 两个工具各存一份就等于又造了一个漂移源, 而它们存在的理由正是消除漂移。
+# shellcheck source=scripts/lib/server-script-common.sh
+. "$REPO_ROOT/scripts/lib/server-script-common.sh"
 
-# 结构性忽略: 安装时的备份、Python 缓存、隐藏文件。这些不是"漂移", 是正常产物。
-is_structural_noise() {
-    case "$1" in
-        *.bak.*|__pycache__|.*) return 0 ;;
-        *) return 1 ;;
-    esac
-}
+INVENTORY=$(server_script_load_inventory "$REPO_ROOT/scripts/deploy/server-script-inventory.conf") || exit 2
 
-host_ssh_target() {
-    case "$1" in
-        tokyo) printf 'ubuntu@10.66.66.1' ;;
-        ecs)   printf 'root@47.100.235.168' ;;
-        *) return 1 ;;
-    esac
-}
-
-host_ssh_opts() {
-    # 一律带上 BatchMode/ConnectTimeout, 顺带保证数组非空 —— 空数组展开在旧 bash
-    # 的 `set -u` 下会直接报错。
-    #
-    # `-n` 不是可选项: 主循环是 `while read ... <<< "$INVENTORY"`, 不带 -n 的 ssh
-    # 会从同一个 stdin 读走清单剩余全部行, 循环只跑第一条就结束 —— 实测第一版就这样
-    # 只查了 11 条里的 1 条, 然后打印「✅ 一致」并 exit 0。
-    printf '%s\n' -n -o BatchMode=yes -o ConnectTimeout=10
-    case "$1" in
-        # 东京走 Steve 钉在本地出口的私网地址 + 专用 key
-        tokyo) printf '%s\n' -i "$HOME/.ssh/ai-egress-tokyo-windows_ed25519" -o IdentitiesOnly=yes ;;
-        ecs)   ;;
-        *) return 1 ;;
-    esac
-}
-
-# 东京的 /usr/local/sbin 文件是 root:root 0750, ubuntu 读不了 —— 必须 sudo -n。
-# 目录本身是 0755, 所以 `[ -f ]` / `stat` 不需要提权, 只有 cat 需要。
-host_needs_sudo() {
-    case "$1" in
-        tokyo) return 0 ;;
-        *) return 1 ;;
-    esac
-}
+is_structural_noise() { server_script_is_structural_noise "$@"; }
+host_ssh_target()     { server_script_host_target "$@"; }
+host_ssh_opts()       { server_script_host_opts "$@"; }
+host_needs_sudo()     { server_script_host_needs_sudo "$@"; }
+remote_fetch()        { server_script_remote_fetch "$@"; }
+norm_sha()            { server_script_norm_sha "$@"; }
 
 WORK_DIR=$(mktemp -d)
 trap 'rm -rf "$WORK_DIR"' EXIT
-
-# 把远端文件抓到 $1, 并把状态写到 stdout 的一行: PRESENT|ABSENT|UNREADABLE:<原因>
-#
-# 关键防呆: 远端先 printf 一行 `PRESENT <字节数>`, 再 cat 内容。本地拿到后核对实收
-# 字节数与声明字节数。这样"静默截断"和"ssh 成功但 sudo 失败给了空内容"都无法冒充
-# 一份干净的对比结果 —— handoff 记录的四次栽跟头全是空结果被当成正常结果。
-remote_fetch() {
-    local host="$1" path="$2" body="$3"
-    local target rc header declared actual raw
-    local -a opts=()
-
-    [[ $path =~ ^/[A-Za-z0-9._/-]+$ ]] || { printf 'UNREADABLE:unsafe_path\n'; return; }
-    target=$(host_ssh_target "$host") || { printf 'UNREADABLE:unknown_host\n'; return; }
-    mapfile -t opts < <(host_ssh_opts "$host")
-
-    local catcmd="cat -- '$path'"
-    if host_needs_sudo "$host"; then
-        catcmd="sudo -n cat -- '$path'"
-    fi
-    local inner="if [ -f '$path' ]; then printf 'PRESENT %s\\n' \"\$(stat -c %s '$path')\"; $catcmd; else printf 'ABSENT 0\\n'; fi"
-
-    raw="$body.raw"
-    ssh "${opts[@]}" "$target" "$inner" > "$raw" 2> "$body.err"
-    rc=$?
-    if ((rc != 0)); then
-        printf 'UNREADABLE:ssh_exit_%s\n' "$rc"
-        return
-    fi
-
-    header=$(head -n 1 "$raw")
-    tail -n +2 "$raw" > "$body"
-    case "$header" in
-        ABSENT*) printf 'ABSENT\n'; return ;;
-        PRESENT*) ;;
-        *) printf 'UNREADABLE:bad_protocol_header\n'; return ;;
-    esac
-
-    declared=${header#PRESENT }
-    actual=$(wc -c < "$body" | tr -d ' ')
-    if [[ ! $declared =~ ^[0-9]+$ ]] || [ "$declared" != "$actual" ]; then
-        printf 'UNREADABLE:size_mismatch_declared_%s_got_%s\n' "$declared" "$actual"
-        return
-    fi
-    printf 'PRESENT\n'
-}
-
-norm_sha() { tr -d '\r' < "$1" | sha256sum | cut -d ' ' -f 1; }
 
 # ==================== 主循环 ====================
 declare -a ROWS=()
