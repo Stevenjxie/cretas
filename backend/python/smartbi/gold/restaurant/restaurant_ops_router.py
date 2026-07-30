@@ -1034,20 +1034,29 @@ def current_dish_catalogue() -> Optional[frozenset]:
     return _DISH_CATALOGUE.get()
 
 
+def dish_catalogue_state() -> Dict[str, int]:
+    """运维探针: {factory_id: 已缓存菜名条数}。空 dict = 闸没在生效。"""
+    return {fid: len(names) for fid, (_ts, names) in _DISH_CATALOGUE_CACHE.items()}
+
+
 async def load_dish_catalogue(pool, factory_id: str) -> Optional[frozenset]:
     """租户全部菜名 (name + normalized_name + POS 别名), 带 TTL 缓存。
 
     取 dim_product 全量而不是「窗口内有销量的菜」—— 后者会把本月没卖的真菜
     判成非菜。失败返回 None = 目录不可用 = 调用方退回历史行为。
 
-    ⛔ 2026-07-30 默认**关闭**。#2009 修好加载(此前 dim_product_alias 缺表导致
-    整条查询失败, 目录闸实际从未生效)之后, 闸第一次真正启用, 随即在 prod 观察到
-    **整条损耗路线退化成澄清**, 且 `slot=mapper`(T3 规划器)自那时起一次都没再被
-    调用 —— 说明闸生效后有路径在调 LLM 之前就短路了, 根因未查清。
-    返回 None 即回到「目录不可用」分支, 与闸上线前逐字一致(这条 fail-open 属性
-    正是当初设计时钉住的)。查清后置 RESTAURANT_DISH_CATALOGUE_GATE=1 再开。
+    2026-07-30 开关史: 一度默认关闭, 因为闸第一次真正生效后 prod 的损耗路线同时
+    退化成澄清, 当时怀疑是闸。**后来查清与闸无关** —— 真因是 REVIEW 链在
+    Max/Plus 额度耗尽后落到 deepseek-v3.2, 它给出的计划内容完全正确却把
+    confidence 填成 -1.0, 被 `confidence < 0.6 → clarification` 判死(PR#2015)。
+    该根因修复后重新默认开启; `RESTAURANT_DISH_CATALOGUE_GATE=0` 仍可随时关。
+
+    加载成功会打一条 INFO(含菜名条数) —— 这是**「闸确实在生效」的正向证据**。
+    此前 dim_product_alias 缺表导致加载恒失败、闸实际从未生效, 而 fail-open 让
+    它看起来一切正常, 我据此误报过「已上线并验证」。fail-open 的功能必须能拿到
+    正向证据, 光看「没报错 + 症状消失」不算。
     """
-    if os.environ.get("RESTAURANT_DISH_CATALOGUE_GATE", "0") != "1":
+    if os.environ.get("RESTAURANT_DISH_CATALOGUE_GATE", "1") != "1":
         return None
     now = time.time()
     cached = _DISH_CATALOGUE_CACHE.get(factory_id)
@@ -1086,6 +1095,10 @@ async def load_dish_catalogue(pool, factory_id: str) -> Optional[frozenset]:
         if value and str(value).strip()
     )
     _DISH_CATALOGUE_CACHE[factory_id] = (now, names)
+    # 正向证据: 没有这条 INFO 就说明闸没在生效(见 docstring)。
+    logger.info(
+        "[dish-catalogue] loaded %d dish names for %s", len(names), factory_id,
+    )
     return names or None
 
 
