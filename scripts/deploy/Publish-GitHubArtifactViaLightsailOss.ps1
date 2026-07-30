@@ -38,7 +38,11 @@ param(
     [Parameter(Mandatory = $true)][string]$DestinationPrefix,
     [string]$JarName = 'cretas-backend-system-1.0.0.jar',
     [string]$ManifestPath,
-    [switch]$PurgeAcceptanceObject
+    [switch]$PurgeAcceptanceObject,
+    # Publish the verified jar into the server-side SHA-256 cache, where
+    # deploy-backend.sh's claim_remote_sha256_artifact will find it and skip the
+    # upload race entirely. Refused for the acceptance prefix by the verifier.
+    [switch]$StageToCache
 )
 
 Set-StrictMode -Version Latest
@@ -325,7 +329,9 @@ try {
 
         Write-Host 'step=upload'
         $upload = Invoke-RemoteWithSecretStdin -SshTarget $LightsailHost -SshOptions $lightsailOptions `
-            -RemoteCommand "sudo -n /usr/local/sbin/oss-put-artifact --sha256 $jarSha256 --size $jarSize" `
+            -RemoteCommand ("sudo -n /usr/local/sbin/oss-put-artifact " +
+                "--prefix $normalizedPrefix --tree-sha $TreeSha " +
+                "--sha256 $jarSha256 --size $jarSize") `
             -Secret $putUrl
         $putUrl = $null
         if ($upload.ExitCode -ne 0) { throw "oss-put-artifact failed: $($upload.StdErr.Trim())" }
@@ -339,6 +345,7 @@ try {
     if ($ManifestPath) { $verifyCommand += " --manifest $ManifestPath" }
     if ($manifestB64) { $verifyCommand += ' --manifest-stdin' }
     if ($PurgeAcceptanceObject) { $verifyCommand += ' --purge-acceptance' }
+    if ($StageToCache) { $verifyCommand += ' --stage-to-cache' }
 
     if ($manifestB64) {
         # The manifest came out of the ZIP on Tokyo and is piped straight to the

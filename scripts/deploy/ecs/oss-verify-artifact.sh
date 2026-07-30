@@ -21,11 +21,12 @@ usage() {
   cat >&2 <<'EOF'
 usage: oss-verify-artifact.sh --prefix <p> --tree-sha <sha> --jar-sha256 <hex> \
                               --size <bytes> [--manifest <path>] [--purge-acceptance]
+                              [--stage-to-cache]
 EOF
   exit 2
 }
 
-prefix= tree_sha= jar_sha= expected_size= manifest= purge=0 manifest_stdin=0
+prefix= tree_sha= jar_sha= expected_size= manifest= purge=0 manifest_stdin=0 stage=0
 while (($#)); do
   case "$1" in
     --prefix) (($# >= 2)) || usage; prefix=$2; shift 2 ;;
@@ -35,6 +36,7 @@ while (($#)); do
     --manifest) (($# >= 2)) || usage; manifest=$2; shift 2 ;;
     --manifest-stdin) manifest_stdin=1; shift ;;
     --purge-acceptance) purge=1; shift ;;
+    --stage-to-cache) stage=1; shift ;;
     *) usage ;;
   esac
 done
@@ -59,6 +61,13 @@ esac
 # The check is repeated at the delete site as defence in depth.
 if ((purge)) && [[ $prefix != "$ACCEPTANCE_PREFIX" ]]; then
   echo "error=refusing_to_purge_non_acceptance_prefix" >&2
+  exit 2
+fi
+# Staging puts the jar where deploy-backend.sh's claim_remote_sha256_artifact will
+# pick it up and install it. An acceptance-prefix object is a throwaway test
+# object; letting one land there would make a test artifact deployable.
+if ((stage)) && [[ $prefix == "$ACCEPTANCE_PREFIX" ]]; then
+  echo "error=refusing_to_stage_acceptance_object_into_deploy_cache" >&2
   exit 2
 fi
 
@@ -167,6 +176,27 @@ if [[ $trust == true ]]; then
   # Quoted: a Maven selector contains spaces and '=', and an auditor needs to
   # see which test set actually vouched for this artifact.
   echo "manifest_target_tests='$manifest_tests'"
+fi
+
+if ((stage)); then
+  # Only reached after: remote size matched, download re-hashed to the expected
+  # SHA-256, and (when a manifest was supplied) the manifest agreed on tree and
+  # test selector. deploy-backend.sh independently re-verifies sha256+md5+unzip
+  # before installing, so a corrupted entry here cannot reach production.
+  cache_dir="${CRETAS_REMOTE_JAR_CACHE_DIR:-/www/wwwroot/cretas/release-cache/sha256}"
+  cache_path="$cache_dir/$jar_sha.jar"
+  install -d -m 700 "$cache_dir"
+  if [[ -f $cache_path ]]      && [[ "$(sha256sum "$cache_path" | cut -d ' ' -f 1)" == "$jar_sha" ]]; then
+    echo "staged_to_cache=hit"
+  else
+    # write-then-rename so a concurrent claim never sees a partial file
+    tmp="$cache_dir/.$jar_sha.$$"
+    cp -- "$work_dir/artifact.jar" "$tmp"
+    chmod 444 "$tmp"
+    mv -f -- "$tmp" "$cache_path"
+    echo "staged_to_cache=stored"
+  fi
+  echo "cache_path=$cache_path"
 fi
 
 if ((purge)); then
