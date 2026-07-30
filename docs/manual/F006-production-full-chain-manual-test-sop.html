@@ -506,8 +506,8 @@
           <label class="step"><span class="check"><input type="checkbox" data-key="bom-1"><span></span></span><span><h4>B01 · 选择 SKU 并自动关联工艺来源</h4><p>确认“黄油鸡成品 800g”已有唯一、结构完整的 Workflow 草稿，再选择该 SKU 创建 BOM 草稿。核对页面带出的基本单位“盒”、标准克重 800g 和只读“工艺来源”。</p><span class="expect">系统在同一次创建中固定精确 Workflow 修订；页面没有任意切换版本的选择器。找不到、找到多个或终端不明确时，在写入前明确阻止。</span></span></label>
           <label class="step"><span class="check"><input type="checkbox" data-key="bom-2"><span></span></span><span><h4>B02 · 添加原料 RAW</h4><p>打开“原料”页签逐行添加黄油鸡原料。选择物料后核对计量单位由主档带入；本轮普通原料不填写固定出成率，按需填写备注。高级选项只有真实业务需要时才使用。</p><span class="expect">原料筛选只出现原料类；同量纲单位可明确选择，单位不兼容时提示回主档核对。</span></span></label>
           <label class="step"><span class="check"><input type="checkbox" data-key="bom-3"><span></span></span><span><h4>B03 · 按实际需要添加包材 PACKAGING</h4><p>真实使用成品盒/袋、封膜或外箱时才切换“包材”页签添加。填写每 1 个成品基本单位所需包材量；例如 1盒用 1 个盒，8盒共用 1 箱时每产品用量填 0.125。没有包材的产品保持空白。</p><span class="expect">已添加包材的单位来自主档，数量按成品基本单位推算，不把 800g 标准克重当包材数量；没有包材本身不阻止激活。</span></span></label>
-          <label class="step"><span class="check"><input type="checkbox" data-key="bom-4"><span></span></span><span><h4>B04 · 创建配方头草稿并核对 DAG 骨架</h4><p>至少已有 1 行主原料后点“创建配方”，选择空白创建或复制同源规则；填写版本备注并创建草稿。</p><span class="expect">配方头显示产品、盒、800克/盒均只读；工艺来源只读；目标 SKU 的共享祖先和专属工序按拓扑顺序出现，兄弟终端专属分支不混入。</span></span></label>
-          <label class="step"><span class="check"><input type="checkbox" data-key="bom-5"><span></span></span><span><h4>B05 · 按实际需要配置工序辅料</h4><p>真实存在调料或添加剂时，切换“辅料 → 工序编排”，打开当前 BOM 草稿，按系统生成的顺序展开对应工序并点“添加工序调料”。投入基准使用该工序产出 SKU 的原始单位：kg 显示每 1kg，g 可兼容每 1000g，只、袋、bag 或其它非空单位按每 1 原单位填写；只有跨单位换算时才补明确换算关系。</p><span class="expect">工序名称和顺序由 DAG 锁定，不能手选 Workflow 或改工序；同一辅料可用于多道工序但各自独立；无辅料时允许留空，已添加辅料缺价时持续显示可操作提示，不伪造 0 元完整成本。</span></span></label>
+          <label class="step"><span class="check"><input type="checkbox" data-key="bom-4"><span></span></span><span><h4>B04 · 创建配方头草稿并核对工序骨架</h4><p>至少已有 1 行主原料后点“创建配方”，选择空白创建或复制同源规则；填写版本备注并创建草稿。</p><span class="expect">配方头显示产品、盒、800克/盒均只读；工艺来源只读；目标 SKU 的共享祖先和专属工序按拓扑顺序出现，兄弟终端专属分支不混入。</span></span></label>
+          <label class="step"><span class="check"><input type="checkbox" data-key="bom-5"><span></span></span><span><h4>B05 · 按实际需要配置工序辅料</h4><p>真实存在调料或添加剂时，切换“辅料 → 工序编排”，打开当前 BOM 草稿，按系统生成的顺序展开对应工序并点“添加工序调料”。投入基准使用该工序产出 SKU 的原始单位：kg 显示每 1kg，g 可兼容每 1000g，只、袋、bag 或其它非空单位按每 1 原单位填写；只有跨单位换算时才补明确换算关系。</p><span class="expect">工序名称和顺序由系统按工序链路锁定，不能手选 Workflow 或改工序；同一辅料可用于多道工序但各自独立；无辅料时允许留空，已添加辅料缺价时持续显示可操作提示，不伪造 0 元完整成本。</span></span></label>
           <label class="step"><span class="check"><input type="checkbox" data-key="bom-6"><span></span></span><span><h4>B06 · 配置锅序规则（仅需要的辅料）</h4><p>对需要首锅/续锅差异的辅料打开“按锅序计算”：第一锅固定 100%，填写“后续锅占第一锅”的百分比。没有锅序差异的辅料保持关闭。</p><span class="expect">辅料汇总显示“首锅100% · 后续X%”；报工页面只有 BOM 对本道显式开启锅序时才出现锅数，系统按投入量等分每锅 kg。</span></span></label>
           <label class="step"><span class="check"><input type="checkbox" data-key="bom-7"><span></span></span><span><h4>B07 · 核对辅料汇总、成本与异常</h4><p>切换“辅料汇总”，逐项核对同一辅料在哪些工序使用、g/kg、锅序、自动单价和是否计成本；返回原料/包材页核对成本预览。</p><span class="expect">无重复计成本；历史普通辅料若提示“待绑定工序/可能重复计成本”，保留并记录，不能自动迁移或删除。</span></span></label>
           <label class="step"><span class="check"><input type="checkbox" data-key="bom-8"><span></span></span><span><h4>B08 · 激活版本并做版本防错</h4><p>确认至少一项主原料和全部实际需要的辅料/包材后点“激活”。页面应明确区分“正在编辑草稿”“当前生效，内容已锁定”和“历史版本，仅供查看”。修改已生效版本时点“克隆为新版本修改”；若已有草稿则进入该草稿继续。</p><span class="expect">同一 SKU 只有一个 ACTIVE；ACTIVE 与历史版本不可直接编辑。激活只影响之后新建计划，旧生产计划继续使用原 BOM/Workflow 快照。</span></span></label>
@@ -522,7 +522,7 @@
           <tr><td>物料未关联、包材用量≤0、单位不兼容</td><td>指出具体行；不能创建或激活</td></tr>
           <tr><td>辅料没有移动平均价</td><td>表单保留，阻止保存并提供“去配置价格/重新读取价格”</td></tr>
           <tr><td>生效版本直接编辑</td><td>只读；必须克隆为新版本</td></tr>
-          <tr><td>无兼容 Workflow、存在多个候选、终端不唯一或 DAG 不完整</td><td>创建 BOM 前阻止并给出可操作原因；不得按名称或最新时间猜测</td></tr>
+          <tr><td>无兼容 Workflow、存在多个候选、终端不唯一或工序链路不完整</td><td>创建 BOM 前阻止并给出可操作原因；不得按名称或最新时间猜测</td></tr>
           <tr><td>新工艺删除节点、单位不兼容或映射有歧义</td><td>升级停止并列出冲突；不得让旧 BOM 自动漂移</td></tr>
           <tr><td>两人同时修改同一辅料版本</td><td>409 冲突后重新加载，不能覆盖他人更改</td></tr>
           <tr><td>锅数不是大于等于 1 的整数</td><td>报工阶段阻止；BOM 未开启锅序时不显示锅数字段</td></tr>
@@ -541,8 +541,8 @@
         </tbody></table></div>
         <div class="callout blue"><strong>Workflow 只声明可能投入/产出，本次事实留到报工</strong>工序 Cell 不再配置主产出、联产品、副产品或静态成本比例；主料、替代料、辅料、包材、用量和成本来自计划固定 BOM。正式报工只提交本次实际发生且数量大于 0 的投入和产出：单产出时共享投入成本 100% 归该产出；多产出同量纲时按统一后的实际数量自动分配；量纲不可统一时只在本次报工填写合计 100% 的比例。</div>
         <div class="steps" style="margin-top:12px">
-          <label class="step"><span class="check"><input type="checkbox" data-key="wf-owner-product"><span></span></span><span><h4>选择“成品归属”建立本产品主路线</h4><p>顶部归属对象选择“黄油鸡成品800g”。成品归属模式用于该成品自己的主工艺；最终成品 Cell 必须与顶部归属一致。</p><span class="expect">顶部显示成品名称；最终产出 SKU 被锁定或在不一致时明确阻止发布。</span></span></label>
-          <label class="step" data-min-depth="medium"><span class="check"><input type="checkbox" data-key="wf-owner-raw"><span></span></span><span><h4>另建“原料归属”分流/联产路线</h4><p>顶部归属对象改选真实原料，例如拓扑原料 R4；从该原料 Cell 出发连接工序与多个成品 Cell。原料归属不是伪造一个产品 SKU，也不会把其中一个终端成品当作唯一归属。</p><span class="expect">归属标签为原料；终端可包含多个成品；生产计划仍按真实终端产出集合匹配，而不是按顶部归属抢优先级。</span></span></label>
+          <label class="step"><span class="check"><input type="checkbox" data-key="wf-owner-product"><span></span></span><span><h4>选择“成品归属”建立本产品主路线</h4><p>在页面顶部的「归属对象」下拉框选择“黄油鸡成品800g”。成品归属模式用于该成品自己的主工艺；最终成品 Cell 必须与顶部归属一致。</p><span class="expect">顶部显示成品名称；最终产出 SKU 被锁定或在不一致时明确阻止发布。</span></span></label>
+          <label class="step" data-min-depth="medium"><span class="check"><input type="checkbox" data-key="wf-owner-raw"><span></span></span><span><h4>另建“原料归属”分流/联产路线</h4><p>在页面顶部的「归属对象」下拉框改选真实原料，例如拓扑原料 R4；从该原料 Cell 出发连接工序与多个成品 Cell。原料归属不是伪造一个产品 SKU，也不会把其中一个终端成品当作唯一归属。</p><span class="expect">归属标签为原料；终端可包含多个成品；生产计划仍按真实终端产出集合匹配，而不是按顶部归属抢优先级。</span></span></label>
           <label class="step"><span class="check"><input type="checkbox" data-key="wf-1"><span></span></span><span><h4>建立 Cell 链路</h4><p>添加 4 个原料 Cell A/B/C/D → 原料处理工序 → 处理后半成品 Cell → 定量包装工序 → 成品 Cell。每个原料只能在一张 Workflow 中选择一次；重复项应从选择器中消失。</p><span class="expect">无重复原料、无悬空线、每个 Cell 的 SKU 已绑定。</span></span></label>
           <label class="step"><span class="check"><input type="checkbox" data-key="wf-2"><span></span></span><span><h4>核对原料投入自动理解</h4><p>只需把 A/B/C/D 的来源 Cell 连接到“原料处理”工序，不再配置替代组或投入关系。系统自动研判为“批次自由选择（至少1个）”。</p><span class="expect">报工时至少选 1 个原料；之后可由用户选择 1 个、多个或全部，不显示主投入/追加投入。</span></span></label>
           <label class="step"><span class="check"><input type="checkbox" data-key="wf-3"><span></span></span><span><h4>核对单位与产出归属</h4><p>原料和处理后半成品均为 kg，最终成品单位为盒。成品归属 Workflow 的终端产出必须与顶部成品一致；原料归属 Workflow 则以画布上的全部终端成品为真实产出集合。</p><span class="expect">不出现 1袋=1盒 或 1kg=1盒；生产计划匹配看终端集合，不被 Workflow 名称或归属类型误导。</span></span></label>
@@ -868,7 +868,7 @@
           <tr><td>所选深度</td><td>MVP 完成正常链；中度额外完成关键审批/常见分支；全量额外完成异常、治理和分析，且高层自动包含低层</td><td>深度按钮 + 当前可见步骤进度</td></tr>
           <tr><td>租户隔离</td><td>所有创建、查询、审批对象均为 F006</td><td>页面工厂标识 / 对象详情</td></tr>
           <tr><td>SKU 单位</td><td>半成品 kg；成品盒；1盒=800g；1箱=8盒</td><td>SKU 编辑页截图</td></tr>
-          <tr><td>BOM / 配方</td><td>创建时自动固定唯一完整 Workflow 草稿修订；工艺来源只读、DAG 工序锁定；原料、每成品包材用量、按具体工序辅料、可选锅序和 ACTIVE 版本均完整</td><td>工艺来源卡片 + BOM 配方头 + 三类明细 + 辅料汇总 + 版本状态</td></tr>
+          <tr><td>BOM / 配方</td><td>创建时自动固定唯一完整 Workflow 草稿修订；工艺来源只读、工序顺序锁定；原料、每成品包材用量、按具体工序辅料、可选锅序和 ACTIVE 版本均完整</td><td>工艺来源卡片 + BOM 配方头 + 三类明细 + 辅料汇总 + 版本状态</td></tr>
           <tr><td>人工计价口径</td><td>工序主档不填预估工时/标准时薪；全局工时单价已核对；实际工时只在逐道报工填写</td><td>成本设置 + 工序主档 + 报工行</td></tr>
           <tr><td>Workflow 单位</td><td>kg→kg、kg→盒，仅表达单位流向，不预设出成数量</td><td>Workflow Cell 图</td></tr>
           <tr><td>原料投入选择</td><td>系统自动要求至少选 1 个；用户可选择 1 个、多个或全部；重复原料不可再次加入</td><td>Workflow Cell 图 + 逐道录入截图</td></tr>
