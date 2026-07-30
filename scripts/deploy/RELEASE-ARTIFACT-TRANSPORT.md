@@ -58,16 +58,87 @@ scripts\deploy\Publish-GitHubArtifactViaLightsailOss.ps1 `
 
 ## ⚠️ 传输成功 ≠ 制品可信
 
-这两件事被**刻意分开**，脚本不会替你合并：
+这几件事被**刻意分开**，脚本不会替你合并：
 
 ```
-transport_verified=true          字节完整送达并重算哈希通过
-deployable_trust_verified=false  没有 manifest 佐证「哪棵树 + 哪组测试」
+transport_verified=true            字节完整送达并重算哈希通过
+manifest_consistency_verified=…    manifest 内部自洽 (tree / jar_sha256 / 测试选择器)
+attestation_verified=…             Sigstore 签名验过, 且 workflow + commit 都对得上
+deployable_trust_verified=…        以上后两项同时为 true 才为 true
 ```
 
-`deployable_trust_verified` 只有在传入 `--manifest` 且 manifest 的 `backend_tree` /
-`jar_sha256` / `tests` 三项都对得上时才为 `true`。**不传 manifest 就永远是 false** ——
-一次字节完美的传输并不能证明这个 JAR 来自被 review 的树、跑过目标测试集合。
+**为什么 manifest 自己不够**：`release-jar.manifest` 和 JAR 装在同一个 ZIP 里。任何能造出
+这个 ZIP 的人都能自己写一份「测试通过了」。所以它只能证明内部自洽，证明不了出处，
+`trust_reason` 会明说 `manifest_consistent_but_unauthenticated`。
+
+**签名补上了出处**。CI 用 `actions/attest-build-provenance` 对 **JAR**（不是 ZIP —— ZIP 只是
+运输包装，中途会被东京拆掉）签 SLSA provenance。ECS 侧验：
+
+```bash
+gh attestation verify <jar> \
+  --bundle <随制品下发的 bundle> \
+  --custom-trusted-root /etc/cretas/sigstore-trusted-root.jsonl \
+  --repo Stevenjxie/cretas \
+  --signer-workflow Stevenjxie/cretas/.github/workflows/ci.yml \
+  --source-digest <要部署的那个 commit> \
+  --deny-self-hosted-runners
+```
+
+于是**贵重的那句话**成立：`ci.yml` 在打包**之前**跑测试选择器，所以「存在一份 commit X 的
+已签名制品」本身就意味着 X 上那组测试过了 —— 这个论断传输路径上**没有任何一方能伪造**。
+vouching 权从一个搭便车的文本文件，转移到了「那个 commit 上的 workflow 定义」。
+
+**信任基里有谁**：只有 GitHub Actions 与 ECS 上钉住的那个信任根。Windows 编排器、东京中继、
+OSS **都不在**里面 —— 它们只搬运 bundle，改一个字节验签就挂。这是相对旧链路的实质变化：
+旧链路里客户端的 `jar_sha256` **取自东京的 stdout**，等于东京说什么就是什么。
+
+⚠️ **trusted root 绝不能随制品下发**。信任根必须走独立通路并钉在 ECS 上，否则就是把
+「验证者」和「被验证者」装进同一个包，犯的正是上面 unsigned manifest 同一个错。装法：
+
+```bash
+# 未认证即可用; ECS 到 api.github.com 实测 0.28s
+gh attestation trusted-root > /etc/cretas/sigstore-trusted-root.jsonl   # 34,634 bytes
+```
+
+`--stage-to-cache` 现在要求 `deployable_trust_verified=true`。它写入的正是
+`claim_remote_sha256_artifact` 取 jar 的那个目录，落在那里的东西就是生产候选品；
+「字节完整送到了」和「来自我们 CI、且是我们要部署的那个 commit」是两回事。
+
+### 实测的信任判定矩阵（2026-07-30，真实制品，非推断）
+
+制品 = run `30524013751` / commit `fd731af6f3642823f15c3b0e5e3f27114f83df59` /
+jar `22b2fc750b29…`。bundle 11,194 bytes。
+
+| # | 场景 | 结果 |
+|---|---|---|
+| 1 | 常规离线验签 | `exit 0` ✅ |
+| 2 | **死代理强制断网**（`HTTPS_PROXY=http://127.0.0.1:1`）| `exit 0` ✅ 证明真离线 |
+| 3 | 错的 `--source-digest` | `exit 1` — `expected SourceRepositoryDigest to be 0000…, got fd731af…` |
+| 4 | 错的 `--signer-workflow`（指向 e2e-pr.yml）| `exit 1` |
+| 5 | 错的 `--repo` | `exit 1` |
+| 6 | 信任根文件不存在 | `exit 1` — 不回退网络默认根 |
+| 7 | **篡改 jar 一个字节**（sha 22b2fc75→196a2bf7）| `exit 1` |
+| 8a | **篡改 bundle 的 payload**（改 subject digest）| `exit 1` |
+| 8b | **篡改签名** | `exit 1` |
+| 9 | 空 bundle | `exit 1` |
+
+签名绑定的 subject 是 `{"name":"cretas-backend-system-1.0.0.jar","digest":{"sha256":"22b2fc750b29…"}}`
+—— 按名字 + 摘要绑定，不是按 ZIP。
+
+⚠️ 一个失败的测试写法留在这里当反面教材：最初的「篡改 bundle」用字符串替换十六进制
+`22b2fc750b29`，但 bundle 里的 digest 在 base64 的 DSSE payload 内，**替换根本没生效**，
+于是验签通过、看起来像「篡改也能过」的重大缺陷。实际是测试无效。要改必须改
+`.dsseEnvelope.payload` 解码后的 `subject[0].digest.sha256` 再重新编码。
+
+### 字节可复现是做不到的（别再试着靠钉 JDK 统一）
+
+`pom.xml` 没有设 `project.build.outputTimestamp`，JAR 内嵌构建时间戳，所以**同一棵树两次
+构建的 sha256 本来就不一样**，与 JDK vendor / 补丁版本是否对齐无关。实测同一棵树
+`7053da8bf39e`：本地 Azul 21.0.10 → `7f8015bb…`，CI(zulu 21.0.12) → `22b2fc75…`，
+更早一次 CI → `c8dfc1b5…`。
+
+这就是为什么快路径**按 commit 认制品**而不是按字节比对：provenance 回答「这些字节来自哪」，
+它不需要两边产出相同的字节。
 
 ## 不可变性（已实测，非推断）
 

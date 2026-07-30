@@ -108,7 +108,16 @@ import zipfile
 
 jar_name = os.environ["JAR_NAME"]
 work = os.environ["WORK"]
-wanted = {jar_name, jar_name + ".sha256", jar_name + ".commit", "release-jar.manifest"}
+wanted = {
+    jar_name,
+    jar_name + ".sha256",
+    jar_name + ".commit",
+    "release-jar.manifest",
+    # Sigstore provenance bundle. Unlike the other three it is signed, so it can
+    # ride through this untrusted relay and still be worth something on the far
+    # side -- that is the whole point of shipping it inside the ZIP.
+    "release-jar.attestation.jsonl",
+}
 
 with zipfile.ZipFile(os.path.join(work, "artifact.zip")) as archive:
     present = {n for n in archive.namelist() if n in wanted}
@@ -185,4 +194,13 @@ else
   # An artifact built before ci.yml emitted manifests. Say so rather than
   # letting the caller assume trust can be established.
   echo "manifest_present=false"
+fi
+# This host is explicitly NOT trusted to judge the attestation -- it only carries
+# it. Verification happens on the ECS that will actually run the JAR, against a
+# trusted root pinned there. Tampering here just makes verification fail closed.
+if [[ -f "$work_dir/release-jar.attestation.jsonl" ]]; then
+  echo "attestation_present=true"
+  echo "attestation_b64=$(base64 -w0 < "$work_dir/release-jar.attestation.jsonl")"
+else
+  echo "attestation_present=false"
 fi
