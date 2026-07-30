@@ -411,6 +411,24 @@ web_release_build() {
 
     web_release_require_clean_worktree "$repo_root" \
         || { echo "ERROR: Web manifest build requires a clean worktree" >&2; return 1; }
+
+    # CI 制品优先(显式 opt-in): 只把 by-tree 缓存【预热】, 命不命中仍由下面那个
+    # web_release_build_reusable 判 —— 取回脚本不绕过任何一道闸, 只是把 dist 的来源从
+    # 本机 vite build 换成 CI 已构建、provenance 已验签的那一份。
+    #
+    # ⚠️ 为什么插在这个函数里, 而不是 release-cretas.sh 的某个分支:
+    # 通向 web 构建的路径有三条 —— build_web / run_ci_fetch_parallel_web /
+    # release-cretas-artifacts.sh —— 而它们【都】落到这里。插在调用方就必然漏掉几条,
+    # #2031 正是这么让 --prefer-ci-artifact "只在 java-only 路径生效"、功能形同不存在的。
+    #
+    # 失败一律不阻断(这是纯优化), 但取回脚本会把 reason 打到 stderr:
+    # 静默回退会让"这条链其实从没生效"长期无人发现。
+    if [ "${CRETAS_RELEASE_PREFER_CI_ARTIFACT:-0}" = "1" ] \
+        && [ -z "${CRETAS_RELEASE_FORCE_WEB_BUILD:-}" ]; then
+        "$(dirname "${BASH_SOURCE[0]}")/release-web-ci-artifact.sh" \
+            || echo "WEB_CI_ARTIFACT=fallback — 取回未成功, 本次走本地构建" >&2
+    fi
+
     if [ -z "${CRETAS_RELEASE_FORCE_WEB_BUILD:-}" ] \
         && web_release_build_reusable "$repo_root" "$manifest"; then
         printf 'Web release dist reused: web-admin tree %s unchanged; skipping npm ci + vite build\n' \
