@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  convertQuantityToUnit,
   formatFeedPlaceholder,
   formatPlannedOutput,
   formatProcessOutput,
@@ -141,5 +142,44 @@ describe('processSheetUnits', () => {
     expect(formatProcessOutput(400, 'bag')).toBe('产出 400.00 袋');
     expect(formatSourceFeedSummary(2, 200, 'each')).toBe('2批 · 200.0件');
     expect(formatFeedPlaceholder('each')).toBe('投料件');
+  });
+});
+
+/**
+ * convertQuantityToUnit 支撑报工投入行的「可用库存」汇总 (防呆 Rule 1)。
+ *
+ * 口径必须与 #1976 (2026-07-29) 一致: **等价码只对科学单位成立, 计数/包装单位按字面比较**
+ * (一只 ≠ 一件)。跨单位相加会得出偏大且看着权威的可用量, 就是 2026-07-30 客户
+ * 「生产仓有货, 报工说可用 0」那一类错。
+ */
+describe('convertQuantityToUnit (投入可用量汇总口径)', () => {
+  it('passes through when the unit is literally the same (case/空白 不敏感)', () => {
+    expect(convertQuantityToUnit(12, '只', '只')).toBe(12);
+    expect(convertQuantityToUnit(12, ' KG ', 'kg')).toBe(12);
+  });
+
+  it('converts within mass units only', () => {
+    expect(convertQuantityToUnit(2, 'kg', 'g')).toBe(2000);
+    expect(convertQuantityToUnit(500, 'g', 'kg')).toBe(0.5);
+    expect(convertQuantityToUnit(1, '千克', '克')).toBe(1000);
+  });
+
+  it('refuses to convert between counting units even when 显示别名 merges them', () => {
+    // displayProcessUnit 把 pcs / each / piece 全映射成「件」——那是**显示**别名。
+    // 若拿它当换算依据, 后端会拒的两个单位会被算成同一个, 可用量偏大。
+    expect(displayProcessUnit('pcs')).toBe('件');
+    expect(convertQuantityToUnit(5, 'pcs', '件')).toBeNull();
+    expect(convertQuantityToUnit(5, '只', '件')).toBeNull();
+    expect(convertQuantityToUnit(5, '箱', '盒')).toBeNull();
+  });
+
+  it('refuses to bridge counting units and mass (每单位重量桥 已拍板暂不做)', () => {
+    expect(convertQuantityToUnit(5, '只', 'kg')).toBeNull();
+    expect(convertQuantityToUnit(5, 'kg', '只')).toBeNull();
+  });
+
+  it('returns null for blank units instead of guessing kg', () => {
+    expect(convertQuantityToUnit(5, null, 'kg')).toBeNull();
+    expect(convertQuantityToUnit(5, 'kg', '  ')).toBeNull();
   });
 });

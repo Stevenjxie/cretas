@@ -86,6 +86,35 @@ function massQuantityInGrams(quantity: number, unit: string): number | null {
   return null;
 }
 
+/**
+ * 把 quantity 从 fromUnit 换算到 toUnit; **无法确定性换算时返回 null** (不臆造)。
+ *
+ * 规则与后端一致 (#1976, 2026-07-29 定): **等价码只对科学单位成立, 计数/包装单位按字面
+ * 比较** —— 「一只 ≠ 一件」, 所以只有质量单位 (g/kg/克/千克) 之间换算, 其余单位仅在字面
+ * 相同时视为同一单位。
+ *
+ * 🔴 不要拿 `displayProcessUnit` / `DISPLAY_UNIT_ALIASES` 做这件事: 那张表是**显示**别名
+ * (pcs / each / piece 全映射成「件」), 用它比较会把后端会拒的两个单位算成同一个, 于是汇总
+ * 出一个偏大、看着权威的「可用量」—— 正是 2026-07-30「界面有货、报工说可用 0」那一类错。
+ *
+ * 「每单位重量」桥 (计数单位 ↔ 质量) 已由 Steve 拍板暂不做, 前端也拿不到 gramsPerUnit,
+ * 故此处一律不跨维度换算。
+ */
+export function convertQuantityToUnit(
+  quantity: number,
+  fromUnit: string | null | undefined,
+  toUnit: string | null | undefined,
+): number | null {
+  const from = nonBlank(fromUnit);
+  const to = nonBlank(toUnit);
+  if (!from || !to) return null;
+  if (from.trim().toLowerCase() === to.trim().toLowerCase()) return quantity;
+  const grams = massQuantityInGrams(quantity, from);
+  const gramsPerTargetUnit = massQuantityInGrams(1, to);
+  if (grams == null || gramsPerTargetUnit == null) return null;
+  return grams / gramsPerTargetUnit;
+}
+
 export function resolveProcessSheetUnits(config: UnitConfig): ProcessSheetUnits {
   const inputUnit = nonBlank(config.unitOverride) ?? nonBlank(config.defaultUnit);
   if (!inputUnit) throw new Error('legacy 工序投入单位未配置');
