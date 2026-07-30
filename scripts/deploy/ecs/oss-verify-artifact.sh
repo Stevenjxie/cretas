@@ -4,9 +4,18 @@
 #
 # This step exists because transport success is not trust. A byte-perfect
 # delivery still proves nothing about whether the JAR was built from a reviewed
-# tree and passed the target test selector. Those are decided by the release
-# manifest, not by this script, so unless a manifest vouches for the artifact we
-# report deployable_trust_verified=false and say so out loud.
+# tree and passed the target test selector.
+#
+# Trust is established by a Sigstore provenance attestation (signed by GitHub
+# Actions, verified here against a trusted root pinned on this host) plus the
+# release manifest that names the test selector. Without a verified attestation we
+# report deployable_trust_verified=false and say so out loud -- an unsigned
+# manifest rides inside the same ZIP as the JAR, so on its own it lets any
+# producer mint its own "tests passed" statement.
+#
+# Nothing in the transport path (Windows orchestrator, Tokyo relay, OSS) is
+# trusted to judge provenance. They only carry the bundle; tampering with it makes
+# verification fail closed here.
 set -euo pipefail
 set +x
 umask 027
@@ -22,11 +31,23 @@ usage() {
 usage: oss-verify-artifact.sh --prefix <p> --tree-sha <sha> --jar-sha256 <hex> \
                               --size <bytes> [--manifest <path>] [--purge-acceptance]
                               [--stage-to-cache]
+                              [--attestation-b64 <base64>] [--source-digest <commit>]
 EOF
   exit 2
 }
 
+# Where the Sigstore trusted root is pinned. It must NOT arrive with the artifact:
+# shipping the trust root alongside the thing it verifies is exactly the mistake
+# the unsigned manifest makes. Provision it out of band with
+#   gh attestation trusted-root > /etc/cretas/sigstore-trusted-root.jsonl
+# (works unauthenticated; ECS reaches api.github.com in ~0.28s, measured).
+TRUSTED_ROOT=${CRETAS_ATTEST_TRUSTED_ROOT:-/etc/cretas/sigstore-trusted-root.jsonl}
+ATTEST_REPO=${CRETAS_ATTEST_REPO:-Stevenjxie/cretas}
+ATTEST_SIGNER_WORKFLOW=${CRETAS_ATTEST_SIGNER_WORKFLOW:-Stevenjxie/cretas/.github/workflows/ci.yml}
+GH_BIN=${CRETAS_GH_BIN:-/usr/bin/gh}
+
 prefix= tree_sha= jar_sha= expected_size= manifest= purge=0 manifest_stdin=0 stage=0
+attestation_b64= source_digest=
 while (($#)); do
   case "$1" in
     --prefix) (($# >= 2)) || usage; prefix=$2; shift 2 ;;
@@ -37,6 +58,11 @@ while (($#)); do
     --manifest-stdin) manifest_stdin=1; shift ;;
     --purge-acceptance) purge=1; shift ;;
     --stage-to-cache) stage=1; shift ;;
+    # A Sigstore bundle is public by design -- it is published to a public
+    # transparency log -- so unlike the signed PUT URL it is not a secret and does
+    # not need the stdin channel. stdin is already taken by the manifest.
+    --attestation-b64) (($# >= 2)) || usage; attestation_b64=$2; shift 2 ;;
+    --source-digest) (($# >= 2)) || usage; source_digest=$2; shift 2 ;;
     *) usage ;;
   esac
 done
@@ -53,6 +79,13 @@ fi
 [[ $jar_sha =~ ^[0-9a-f]{64}$ ]] || usage
 [[ $tree_sha =~ ^[0-9a-f]{7,40}$ ]] || usage
 [[ $expected_size =~ ^[1-9][0-9]*$ ]] || usage
+# A malformed pin must be a usage error, never a silently dropped constraint.
+if [[ -n $source_digest ]]; then
+  [[ $source_digest =~ ^[0-9a-f]{40}$ ]] || usage
+fi
+if [[ -n $attestation_b64 ]]; then
+  [[ $attestation_b64 =~ ^[A-Za-z0-9+/=]+$ ]] || usage
+fi
 case "$prefix" in
   deploy/backend/|codex-network-test/) ;;
   *) echo "error=prefix_not_approved" >&2; exit 2 ;;
@@ -169,6 +202,71 @@ if [[ -n $manifest ]]; then
   fi
 fi
 
+# ---- provenance ----
+# This is the signature the trust=false comment above was waiting for.
+#
+# What the attestation actually proves: these exact JAR bytes were produced by
+# ATTEST_SIGNER_WORKFLOW in ATTEST_REPO, from source commit --source-digest. That
+# makes the *workflow definition at that commit* the vouching authority instead of
+# a text file that rode along in the same ZIP. ci.yml runs the test selector
+# BEFORE packaging, so an attested artifact for commit X implies those tests
+# passed at X -- which is a claim nobody in the transport path can forge.
+#
+# Everything here fails closed. A missing bundle, a missing trusted root, an
+# unverifiable signature, a bundle for a different commit or a different workflow
+# all leave attest_verified=false. There is deliberately no network fallback: if
+# the pinned root is absent we refuse rather than quietly reaching for Sigstore's
+# public-good default, because "verified against something we found at runtime"
+# is not the same claim as "verified against the root we pinned".
+attest_verified=false
+attest_reason=no_attestation_supplied
+if [[ -n $attestation_b64 ]]; then
+  bundle="$work_dir/attestation.jsonl"
+  if ! printf '%s' "$attestation_b64" | base64 -d > "$bundle" 2>/dev/null || [[ ! -s $bundle ]]; then
+    attest_reason=attestation_b64_undecodable
+  elif [[ ! -x $GH_BIN ]]; then
+    attest_reason=gh_not_installed
+  elif [[ ! -s $TRUSTED_ROOT ]]; then
+    attest_reason=trusted_root_missing
+  elif [[ -z $source_digest ]]; then
+    # Without the commit pin an attestation for ANY commit of this repo would
+    # satisfy verification, including an older one whose tests differed.
+    attest_reason=source_digest_not_supplied
+  else
+    attest_args=(
+      attestation verify "$work_dir/artifact.jar"
+      --bundle "$bundle"
+      --custom-trusted-root "$TRUSTED_ROOT"
+      --repo "$ATTEST_REPO"
+      --signer-workflow "$ATTEST_SIGNER_WORKFLOW"
+      --source-digest "$source_digest"
+      --deny-self-hosted-runners
+    )
+    if attest_output=$("$GH_BIN" "${attest_args[@]}" 2>&1); then
+      attest_verified=true
+      attest_reason=attestation_verified
+    else
+      attest_reason=attestation_verify_failed
+      # One line, no bundle contents: enough to tell a missing root from a real
+      # signature failure without dumping a certificate chain into the log.
+      printf 'attestation_verify_stderr=%s\n' \
+        "$(printf '%s' "$attest_output" | tr '\n' ' ' | cut -c1-200)" >&2
+    fi
+  fi
+fi
+
+# Trust needs both halves and says so: the attestation authenticates the bytes and
+# their origin, the manifest is what names the test selector an auditor will ask
+# about. A missing manifest is deliberately NOT tolerated even with a good
+# signature -- CI emits both, so one showing up without the other is a signal, not
+# a degraded-but-acceptable state.
+if [[ $attest_verified == true && $manifest_consistency == true ]]; then
+  trust=true
+  trust_reason=attested_and_manifest_consistent
+elif [[ $attest_verified == true ]]; then
+  trust_reason="attested_but_$trust_reason"
+fi
+
 echo "oss_to_ecs_bytes=$local_size"
 echo "oss_to_ecs_seconds=$elapsed"
 echo "oss_to_ecs_megabytes_per_second=$rate"
@@ -176,6 +274,8 @@ echo "sha256=$local_sha"
 echo "transport_verified=true"
 echo "deployable_trust_verified=$trust"
 echo "manifest_consistency_verified=$manifest_consistency"
+echo "attestation_verified=$attest_verified"
+echo "attestation_reason=$attest_reason"
 echo "trust_reason=$trust_reason"
 if [[ $manifest_consistency == true ]]; then
   # Quoted: a Maven selector contains spaces and '=', and an auditor needs to
@@ -184,15 +284,21 @@ if [[ $manifest_consistency == true ]]; then
 fi
 
 if ((stage)); then
-  # Gated on transport integrity only: remote size matched and the download
-  # re-hashed to the expected SHA-256.
+  # Now gated on deployable_trust_verified, not just transport.
   #
-  # Deliberately NOT gated on deployable_trust_verified. That stays false by
-  # design here -- an unsigned manifest riding inside the same ZIP as the JAR
-  # proves consistency, not provenance -- so gating on it would make this flag
-  # permanently dead. Staging therefore asserts byte identity, nothing more, and
-  # deploy-backend.sh re-verifies sha256+md5+unzip before installing. Provenance
-  # remains an open question decided elsewhere, not silently answered here.
+  # The previous version deliberately gated on transport alone, and that was the
+  # right call at the time: deployable_trust_verified was false by design, so
+  # gating on it would have made staging permanently dead. That premise is gone --
+  # a verified attestation can now make it true -- so the exception goes with it.
+  #
+  # Why this matters: staging writes into the path claim_remote_sha256_artifact
+  # installs from. Anything landing there is a candidate for production. Requiring
+  # provenance here is the difference between "these bytes arrived intact" and
+  # "these bytes came from our CI at the commit we intend to deploy".
+  if [[ $trust != true ]]; then
+    echo "error=refusing_to_stage_untrusted_artifact trust_reason=$trust_reason" >&2
+    exit 1
+  fi
   cache_dir="${CRETAS_REMOTE_JAR_CACHE_DIR:-/www/wwwroot/cretas/release-cache/sha256}"
   cache_path="$cache_dir/$jar_sha.jar"
   install -d -m 700 "$cache_dir"

@@ -42,7 +42,14 @@ param(
     # Publish the verified jar into the server-side SHA-256 cache, where
     # deploy-backend.sh's claim_remote_sha256_artifact will find it and skip the
     # upload race entirely. Refused for the acceptance prefix by the verifier.
-    [switch]$StageToCache
+    # Requires deployable_trust_verified=true, so in practice it needs SourceDigest
+    # plus an artifact that carried an attestation bundle.
+    [switch]$StageToCache,
+    # Full 40-hex commit the caller intends to deploy. The ECS pins the
+    # attestation's source digest to this, so an attestation for some *other*
+    # commit of this same repo cannot vouch for these bytes. Without it the ECS
+    # refuses to mark the artifact trusted.
+    [string]$SourceDigest
 )
 
 Set-StrictMode -Version Latest
@@ -87,6 +94,12 @@ else {
 }
 if ($TreeSha -cnotmatch '^[0-9a-f]{7,40}$') {
     throw 'TreeSha must be a lowercase hex Git SHA.'
+}
+# Full length only. A short SHA would still be accepted by `gh attestation verify`
+# as a prefix in some paths, and a commit pin that can match more than one commit
+# is not a pin. Same lesson as the fastlane --base-sha incident.
+if ($SourceDigest -and $SourceDigest -cnotmatch '^[0-9a-f]{40}$') {
+    throw 'SourceDigest must be a full 40-character lowercase hex commit SHA.'
 }
 if ($Repository -notmatch '^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$') {
     throw 'Repository must be <owner>/<name> with no shell metacharacters.'
@@ -210,6 +223,10 @@ try {
     if ($LASTEXITCODE -ne 0) { throw 'gh auth status failed; run gh auth login.' }
 
     $manifestB64 = $null
+    # Set-StrictMode makes an uninitialised read a hard error, and the release-asset
+    # branch never assigns these.
+    $attestationB64 = $null
+    $attestationPresent = 'false'
 
     if ($useArtifact) {
         Write-Host 'step=artifact_metadata'
@@ -272,6 +289,8 @@ try {
         $shaSource = Get-Field -Text $stage.StdOut -Name 'sha_source'
         $manifestPresent = Get-Field -Text $stage.StdOut -Name 'manifest_present'
         if ($manifestPresent -eq 'true') { $manifestB64 = Get-Field -Text $stage.StdOut -Name 'manifest_b64' }
+        $attestationPresent = Get-Field -Text $stage.StdOut -Name 'attestation_present'
+        if ($attestationPresent -eq 'true') { $attestationB64 = Get-Field -Text $stage.StdOut -Name 'attestation_b64' }
         if ($jarSha256 -cnotmatch '^[0-9a-f]{64}$') { throw 'Staging returned no usable JAR SHA-256.' }
         # Optional assertions: if the caller stated what it expects, the ZIP must agree.
         if ($ExpectedSha256 -and $jarSha256 -cne $ExpectedSha256) {
@@ -346,6 +365,12 @@ try {
     if ($manifestB64) { $verifyCommand += ' --manifest-stdin' }
     if ($PurgeAcceptanceObject) { $verifyCommand += ' --purge-acceptance' }
     if ($StageToCache) { $verifyCommand += ' --stage-to-cache' }
+    # The Sigstore bundle is public by design (it is in a public transparency log),
+    # so it goes on the command line rather than competing with the manifest for the
+    # secret stdin channel. This orchestrator is not trusted to judge it -- it only
+    # relays it to the ECS, which verifies against its own pinned trusted root.
+    if ($attestationB64) { $verifyCommand += " --attestation-b64 $attestationB64" }
+    if ($SourceDigest) { $verifyCommand += " --source-digest $SourceDigest" }
 
     if ($manifestB64) {
         # The manifest came out of the ZIP on Tokyo and is piped straight to the

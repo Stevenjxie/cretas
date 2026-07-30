@@ -36,6 +36,21 @@ expect "purge on real prefix refused" refusing_to_purge_non_acceptance_prefix \
   $VERIFY --prefix deploy/backend/ --tree-sha $TREE --jar-sha256 $SHA --size 100 --purge-acceptance
 expect "absent object"       oss_stat_failed      $VERIFY --prefix codex-network-test/ --tree-sha $TREE --jar-sha256 $SHA --size 100
 
+echo "== verifier: provenance argument discipline =="
+# These fire during argument validation, before any 168MB download, so they need no
+# object in OSS. The deeper attestation paths (undecodable bundle, missing trusted
+# root, refusing to stage an unattested jar) only become reachable after a real
+# download and are exercised against a real artifact instead -- see
+# RELEASE-ARTIFACT-TRANSPORT.md.
+expect "bundle with shell metachars" usage \
+  $VERIFY --prefix codex-network-test/ --tree-sha $TREE --jar-sha256 $SHA --size 100 --attestation-b64 'YWJj;rm -rf /'
+expect "short source digest refused" usage \
+  $VERIFY --prefix codex-network-test/ --tree-sha $TREE --jar-sha256 $SHA --size 100 --source-digest abc1234
+expect "uppercase source digest refused" usage \
+  $VERIFY --prefix codex-network-test/ --tree-sha $TREE --jar-sha256 $SHA --size 100 --source-digest 05FC3BA1397FAF12DB80D333B6A42AFDB9F6A828
+expect "attestation flag needs a value" usage \
+  $VERIFY --prefix codex-network-test/ --tree-sha $TREE --jar-sha256 $SHA --size 100 --attestation-b64
+
 echo "== signer must not leak on refusal =="
 out=$($SIGN --prefix deploy/evil/ --tree-sha $TREE --jar-sha256 $SHA --size 100 2>&1)
 if printf '%s' "$out" | grep -qiE 'Signature=|OSSAccessKeyId=|accessKeySecret'; then
