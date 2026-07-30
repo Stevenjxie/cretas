@@ -620,5 +620,40 @@
     <!-- Maven Profiles for Platform-Specific Builds -->
     <!-- ========================================== -->
     <profiles>
+        <!-- ./mvnw package -Dfast  —— 本地改一行代码时用, 实测 140s -> 39s。
+             ⛔ 不要用它产出要部署的 JAR。
+
+             maven-compiler-plugin 的 useIncrementalCompilation=true (默认) 语义
+             是反直觉的: 「只要检测到任何变化, 就重编整个模块」。实测 touch 一个
+             controller 会重编全部 3472 个源文件 (140s)。设成 false 是把新旧判断
+             交回 javac 自己按时间戳做, 于是只编那 1 个 (39s, 且剩下的 39s 主要是
+             Maven 启动与打 168MB fat jar, 不是编译)。
+
+             代价: javac 只看「.java 比 .class 新」, 不看谁依赖谁。改了方法签名
+             而调用方没被重编 -> 构建绿灯, 运行时 NoSuchMethodError。这正是本仓库
+             最忌讳的「静默出旧代码」, 所以做成显式 opt-in 而不是默认值。
+
+             产出部署制品的路径不受影响, 已逐条核对:
+               release-jar-manifest.sh  clean package  -> clean 清空 target, 全量
+               ci.yml                   package        -> runner 的 target 本来就空
+               deploy-backend.sh        package        -> 仅 SKIP_CLEAN=1 时, 本就
+                                                          标注为增量模式 -->
+        <profile>
+            <id>fast</id>
+            <activation>
+                <property><name>fast</name></property>
+            </activation>
+            <build>
+                <plugins>
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-compiler-plugin</artifactId>
+                        <configuration>
+                            <useIncrementalCompilation>false</useIncrementalCompilation>
+                        </configuration>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
     </profiles>
 </project>
