@@ -43,7 +43,7 @@ import os
 import time
 from enum import Enum
 from threading import Lock
-from typing import Any, AsyncIterator, Dict, List, Optional, Tuple
+from typing import Any, AsyncIterator, Callable, Dict, List, Optional, Tuple
 
 import httpx
 
@@ -196,25 +196,70 @@ _SAFE_MODELS: Dict[Tuple[str, str], Optional[datetime.date]] = {
     ("aliyun_c", "kimi-k2.7-code"): _d(2026, 9, 14),       # thinking-only
 
     # ── tencent (m00t) TokenHub trial — 用完即停 safe, no DashScope expiry (None).
-    ("tencent", "deepseek-v4-pro"): None,
-    ("tencent", "deepseek-v4-flash"): None,
-    ("tencent", "glm-5.1"): None,
-    ("tencent", "qwen3.5-flash"): None,
-    ("tencent", "kimi-k2.6"): None,
-    ("tencent", "minimax-m2.7"): None,
-    # 2026-07-30 实测新增: TokenHub 的 deepseek-v3.2 与 aliyun 同名模型**行为不同**
-    # (aliyun_c 的 confidence 恒 -1.0, TokenHub 的给 0.98) —— 同名不同服务不能互推。
-    # 计费安全: 该账号后付费未开启, 额度耗尽直接 402 拒绝而非计费(实测 v4-pro/
-    # v4-flash 均返回 401008 "free trial quota exhausted ... postpaid not enabled"),
-    # 与本表 tencent 段「用完即停 safe」的前提一致。
-    # ⚠️ 2026-07-30: /v1/models 报 status="pre-offline" —— 平台正在下线它。
-    # 现在能用(实测 conf 0.98)但**不可依赖**, 已排在 minimax-m2.7 之后, 下线后
-    # 自动 fallback。真正的独立地板要靠 minimax-m2.7(online) + 去控制台给
-    # deepseek-v4-pro / glm-5.2 / kimi-k3 这些 status=online 但 402 的模型领额度。
-    ("tencent", "deepseek-v3.2"): None,
+    #
+    # 计费安全前提(不变): 该账号后付费未开启, 额度耗尽直接 402 拒绝而非计费
+    # (实测报文 401008 "free trial quota exhausted ... postpaid billing is not
+    # enabled")。所以整段用 None(不过期), 靠"用完即停"兜住 billing。
+    #
+    # 🔴 2026-07-30 晚, 按**控制台的服务 ID + 余量两列**核对了整张表(此前一直靠 402
+    # 反推, 得出了"额度没领"的错误结论)。判据只有控制台的「状态 + 余量」——
+    # `/v1/models` 的 status 只说模型在不在线, 与有没有额度是两件事。
+    #
+    # ⛔ 余额 0 / 已停止 —— 保留登记但**不得进任何 chain**(调它只会白烧一次请求,
+    # 然后把该 (account,model) 塞进 6h quota-skip 缓存):
+    ("tencent", "deepseek-v4-flash"): None,   # 控制台: 已停止, 余 0 / 1M
+    ("tencent", "glm-5.1"): None,             # 控制台: 已停止, 余 0 / 500k
+    ("tencent", "qwen3.5-flash"): None,       # 控制台: 已停止, 余 0 / 1M
+    #
+    # ✅ 2026-07-30 实测可用(餐饮 T3 真实 prompt, 5 个不同问句全过,
+    #    生产原始 payload max_tokens=500 —— 即无需放宽任何参数):
+    ("tencent", "hy-mt2-pro"): None,               # 余 1M, 1.3-1.5s, 最快最稳
+    ("tencent", "deepseek-v3.1-terminus"): None,   # 余 500k, 2.2-2.6s, RPM 500
+    ("tencent", "qwen3.5-plus"): None,             # 余 998k, 3.5-5.7s
+    #
+    # ⚠️ 只在放宽 max_tokens 后可用: TokenHub 忽略 enable_thinking=false, 500 token
+    # 全烧在 reasoning_content 上, content 返回空。见 _TOKENHUB_MIN_MAX_TOKENS。
+    ("tencent", "minimax-m2.7"): None,        # 余 908k
+    #
+    # ⚠️ 需要 temperature=1(TokenHub 的按模型采样约束), 见 _TOKENHUB_FORCED_TEMPERATURE。
+    ("tencent", "kimi-k2.6"): None,           # 余 393k
+    #
+    # 控制台 ID 是 deepseek-v4-pro-202606(余 1M); 旧代码写的 `deepseek-v4-pro` 不存在,
+    # 所以它的 402 一直被误读成"额度没领"。⚠️ 实测在餐饮 T3 prompt 上两档 max_tokens
+    # 都不可用(500 截断 / 1600 转 thinking 后 content 空), 故只留给允许 thinking 的
+    # REASONING 槽, 不进 REVIEW。
+    ("tencent", "deepseek-v4-pro-202606"): None,
+    # TokenHub 的 deepseek-v3.2 与 aliyun 同名模型**行为不同**(aliyun_c 的 confidence
+    # 恒 -1.0, TokenHub 的给 0.98) —— 同名不同服务不能互推。
+    # ⚠️ /v1/models 报 status="pre-offline"(控制台也标"模型待下线") —— 现在能用但
+    # **不可依赖**, 已排在已验证模型之后, 下线后自动 fallback。
+    ("tencent", "deepseek-v3.2"): None,       # 余 486k
     # ── zhipu (uUgu) — model-specific GLM pool, 用完即停 safe (None).
     ("zhipu", "glm-4.5-air"): None,
     ("zhipu", "glm-4.6v"): None,  # VL
+    # ── ark (Volcengine 火山方舟) — 每模型 50 万免费额度, 与 DashScope/TokenHub
+    # 完全独立。⛔ 计费前提是账号级的「安心体验模式」开启(超额自动暂停, 不计费),
+    # Steve 2026-07-30 确认开启; 关掉的话这一段必须全部退出 chain。详见
+    # _provider_config 里 "ark" 的注释。
+    #
+    # 只登记 2026-07-30 实测**两条判据都过**的五个: 餐饮 T3 真实 prompt 5 个问句
+    # 全对(conf>=0.6) **且** 每次调用都在 T3 的 5s/provider 预算内。
+    # 🔴 两条判据缺一不可: 开着 thinking 时这批模型内容照样 5/5, 但延迟 8-66s
+    # —— 对 T3 等于超时。关掉 thinking(见 _ARK_DISABLE_THINKING)后掉到 1.2-5s。
+    ("ark", "doubao-seed-2-0-mini-260428"): None,   # 1.2/1.7/2.1s  最快
+    ("ark", "deepseek-v4-flash-260425"): None,      # 2.1/2.4/2.5s
+    ("ark", "doubao-seed-2-1-pro-260628"): None,    # 2.6/2.8/2.8s
+    ("ark", "glm-5-2-260617"): None,                # 3.0/3.5/4.8s
+    ("ark", "deepseek-v4-pro-260425"): None,        # 3.8/4.7/4.9s  临界但够
+    # ⛔ 实测**不登记**(别再加回来):
+    #   doubao-seed-2-0-pro-260215    5/5 但 max 5.1s —— 超 5s 预算
+    #   doubao-seed-2-1-turbo-260628  5/5 但 max 5.6s
+    #   doubao-seed-2-0-lite-260428   4/5 且 max 6.1s —— 内容和延迟双不合格
+    #   glm-4-5-air / qwen3-32b / qwen3-14b / qwen2-5-72b / doubao-smart-router
+    #     → 全部 404 InvalidEndpointOrModel.NotFound。它们**在 /api/v3/models
+    #       列表里且没有 status=Shutdown**, 但本账号没开通 —— 那个接口列的是
+    #       平台全量模型, **不是账号的可调清单**。别拿它当开通凭据。
+    #   doubao-seed-evolving          控制台显示"未开通"
 }
 
 # Thinking-only models (cannot disable thinking → always reason → slow). Confined to
@@ -244,7 +289,10 @@ _MINIMAL_SAFE_SET: frozenset = frozenset({
     ("aliyun_c", "qwen-plus-latest"),
     ("aliyun_c", "qwen3.6-flash-2026-04-16"),  # 07-23 实测: 替换额度耗尽的 qwen3.5-flash
     ("aliyun_c", "deepseek-v3.1"), ("aliyun_c", "qwen3-vl-plus-2025-12-19"),
-    ("tencent", "qwen3.5-flash"), ("zhipu", "glm-4.5-air"),  # text floor
+    # text floor. 2026-07-30: 原本钉的是 tencent/qwen3.5-flash, 而控制台显示它
+    # **已停止且余额 0** —— 也就是说"注册表过期时退守的最小安全集"里的非阿里云地板
+    # 指向一个死模型, fail-safe 会 fail 成没有地板。换成实测 5/5 通过的 hy-mt2-pro。
+    ("tencent", "hy-mt2-pro"), ("zhipu", "glm-4.5-air"),
     ("zhipu", "glm-4.6v"),                    # VL floor (never expires)
 })
 
@@ -620,18 +668,47 @@ _TEXT_TAIL: List[Tuple[str, str]] = [
     ("aliyun_c", "glm-5.1"), ("aliyun_c", "qwen3.5-flash"),
     ("aliyun_c", "deepseek-v3.1"), ("aliyun_c", "qwen3.7-max-2026-06-08"),
     ("aliyun_c", "glm-5.2"),
-    # non-DashScope floor (independent of aliyun expiries)
-    # non-DashScope floor 的**实际可用**入口 (2026-07-30 逐模型实测):
-    #   minimax-m2.7     ✅ conf 0.95-0.97, 传不传 temperature 都行
-    #   deepseek-v3.2    ✅ conf 0.98 (需 temperature=0; 不传时输出非合法 JSON)
-    #   kimi-k2.6        ❌ temperature=0 → 400 "only 1 is allowed"; 不传 temp 则
-    #                       输出非合法 JSON —— 两条路都不通, 留着仅供无 JSON 契约
-    #                       的槽位(CHAT/INSIGHTS)兜底, 不再排在前面
-    #   qwen3.5-flash    ❌ 402 额度耗尽
-    # 此前这一段三个条目**全部不可用**, 也就是说 _TEXT_TAIL 声称的
-    # 「independent of aliyun expiries」地板实际是空的。
-    ("tencent", "minimax-m2.7"), ("tencent", "deepseek-v3.2"),
-    ("tencent", "qwen3.5-flash"), ("tencent", "kimi-k2.6"), ("zhipu", "glm-4.5-air"),
+    # ── non-DashScope floor (independent of aliyun expiries) ──────────────
+    # 2026-07-30 晚重测(控制台 ID + 餐饮 T3 真实 prompt + 5 个不同问句)。
+    #
+    # 🔴 排序判据是**两条**, 不只是"答得对": 餐饮 T3 给每个 provider
+    # _SEMANTIC_PROVIDER_TIMEOUT_SECONDS = 5.0s, 整条链
+    # _SEMANTIC_TOTAL_TIMEOUT_SECONDS = 12.0s。一个 30 秒答对的模型对这条路径
+    # 等于超时, 毫无价值 —— 而且它还会吃掉总预算, 让后面的模型够不到。
+    # 所以按「进得了 5s 预算 + 延迟从小到大」排, 不按额度大小排。
+    #
+    #   hy-mt2-pro              ✅ 5/5, 1.3-1.5s, 余 1M   ← 唯一稳稳够快的, 排头
+    #   deepseek-v3.1-terminus  ✅ 5/5, 2.2-2.6s, 余 500k
+    #   deepseek-v3.2           ✅ 5/5, 2.3-2.8s, 余 486k ⚠️ 控制台标"待下线";
+    #                              仍排在 qwen3.5-plus 前, 因为它快得多, 而真下线
+    #                              后是一次**廉价**的 4xx 直接 fallback。
+    #   qwen3.5-plus            ⚠️ 5/5 但 3.5-5.7s —— **会碰到/超过 5s 上限**,
+    #                              排在快的后面, 当它前面两个都挂了才轮到。
+    #   minimax-m2.7            ⚠️ 要 max_tokens>=1600 才有 content, 而抬了之后
+    #                              实测 26.7s —— 对 T3 **永远等不到**。留在这里
+    #                              只对预算更宽的槽位(CHAT/INSIGHTS)有意义。
+    #   glm-5.2                 ❌ 4/5 —— 换成菜品问句就转 thinking 返回空。
+    #                              单问句测会误判它可用; 放进链路 = 新毒丸。
+    # ⛔ 已移除: qwen3.5-flash / glm-5.1 / deepseek-v4-flash(控制台已停止 + 余额 0),
+    #    kimi-k2.6(temperature 约束未验证前不排进来)。
+    # 之前这一段的条目**全部不可用**, 也就是说 _TEXT_TAIL 声称的
+    # 「independent of aliyun expiries」地板实际是空的 —— 现在它是实的。
+    #
+    # 两个 provider **交错**排列, 不是 tencent 整段再 ark 整段: 地板的意义是
+    # "阿里云全挂了还能答", 如果前几位全是同一个 provider, 那个 provider 一出问题
+    # (key 失效 / 账号被停 / 平台故障)地板就又空了。交错之后要连续两家都挂才穿透。
+    # 括号里是实测 med 延迟(5s/provider 预算)。
+    ("tencent", "hy-mt2-pro"),                   # 1.4s
+    ("ark", "doubao-seed-2-0-mini-260428"),      # 1.7s
+    ("tencent", "deepseek-v3.1-terminus"),       # 2.4s
+    ("ark", "deepseek-v4-flash-260425"),         # 2.4s
+    ("tencent", "deepseek-v3.2"),                # 2.6s ⚠️ 待下线
+    ("ark", "doubao-seed-2-1-pro-260628"),       # 2.8s
+    ("ark", "glm-5-2-260617"),                   # 3.5s
+    ("ark", "deepseek-v4-pro-260425"),           # 4.7s 临界
+    ("tencent", "qwen3.5-plus"),                 # 5.7s max, 会超 5s
+    ("tencent", "minimax-m2.7"),                 # 26.7s, T3 等不到; 宽预算槽位可用
+    ("zhipu", "glm-4.5-air"),
 ]
 
 # VL-only chain — vision models only (no _TEXT_TAIL). aliyun_a has NO confirmed-ON VL
@@ -657,7 +734,9 @@ SLOT_MODELS: Dict[SLOT, List[Tuple[str, str]]] = {
         ("aliyun_a", "qwen3.6-flash"), ("aliyun_b", "qwen3.6-flash-2026-04-16"),
         ("aliyun_b", "qwen-flash"), ("aliyun_b", "qwen-turbo"),
         ("aliyun_c", "qwen3.5-flash"), ("aliyun_c", "qwen3.6-flash-2026-04-16"),
-        ("aliyun_c", "qwen-plus-latest"), ("tencent", "qwen3.5-flash"),
+        # 2026-07-30: tencent/qwen3.5-flash 控制台已停止且余额 0, 换成实测 5/5 的
+        # hy-mt2-pro(余 1M, 1.3-1.5s) —— 这一条是本槽唯一的非阿里云出口。
+        ("aliyun_c", "qwen-plus-latest"), ("tencent", "hy-mt2-pro"),
     ] + _TEXT_TAIL),
     # INSIGHTS — 长经营分析优先 Plus（质量/时延平衡），Max 仅作深尾。
     # 2026-07-26 用户逐账户截图确认 A/B/C 的 Plus 与指定版本均有大额免费额度，
@@ -684,7 +763,9 @@ SLOT_MODELS: Dict[SLOT, List[Tuple[str, str]]] = {
         ("aliyun_c", "qwen3.7-flash"), ("aliyun_b", "qwen3.7-flash"),
         ("aliyun_b", "qwen3.6-flash-2026-04-16"), ("aliyun_b", "qwen-turbo"),
         ("aliyun_c", "qwen3.5-flash"), ("aliyun_c", "qwen3-coder-flash"),
-        ("aliyun_b", "qwen3-coder-flash"), ("tencent", "qwen3.5-flash"),
+        # 2026-07-30: 同上, qwen3.5-flash 余额 0 → hy-mt2-pro(在 T3 的 JSON 契约
+        # prompt 上实测 5/5, 故 JSON 能力有据)。
+        ("aliyun_b", "qwen3-coder-flash"), ("tencent", "hy-mt2-pro"),
     ] + _TEXT_TAIL),
     # MAPPER — 字段映射 JSON (thinking off + json_object) → fast text models.
     # 2026-07-26 用户控制台截图确认 B/C 的 versioned Flash 与 alias 均有
@@ -706,7 +787,10 @@ SLOT_MODELS: Dict[SLOT, List[Tuple[str, str]]] = {
     # REASONING — 深度 (thinking on / thinking-only OK) → deepseek/MoE reasoners.
     SLOT.REASONING: _dedup_chain([
         ("aliyun_c", "deepseek-v3.1"), ("aliyun_b", "deepseek-v3.2"),
-        ("aliyun_c", "deepseek-v3.2"), ("tencent", "deepseek-v4-pro"),
+        # 控制台服务 ID 是 deepseek-v4-pro-202606; 旧代码写的 `deepseek-v4-pro`
+        # 在 TokenHub 上不存在, 所以它恒 402 —— 那个 402 一直被误读成"额度没领",
+        # 实际是模型名错。真实余量 999978/1M, 几乎没动过。
+        ("aliyun_c", "deepseek-v3.2"), ("tencent", "deepseek-v4-pro-202606"),
         ("aliyun_c", "qwen3-235b-a22b-thinking-2507"), ("aliyun_b", "qwen3.5-397b-a17b"),
         ("aliyun_c", "deepseek-r1"),
     ] + _TEXT_TAIL),
@@ -732,15 +816,27 @@ SLOT_MODELS: Dict[SLOT, List[Tuple[str, str]]] = {
         ("aliyun_a", "qwen3.7-plus"),
         # 2026-07-30 实测(scripts 见 PR 描述): 对餐饮 T3 真实 prompt 逐模型打分,
         # 判据是「答对 intent 且 confidence >= 0.6」而不是「能否调通」。
-        # 下面六个全部实测 ✅(conf 0.95-0.98); deepseek-v3.2 答对但 conf=-1.0。
-        # ⛔ deepseek-v3.2 必须排在**所有已验证模型之后** —— 它返回 HTTP 200,
-        # 路由器视为成功、**不会继续 fallback**, 只是内容被置信度闸毙掉。放在
-        # 前面等于一颗毒丸: flash 一耗尽就卡死在它身上, 后面的好模型永远够不着。
+        # 下面六个全部实测 ✅(conf 0.95-0.98)。
         ("aliyun_c", "qwen3.7-flash"), ("aliyun_b", "qwen3.7-flash"),
         ("aliyun_c", "glm-5.2"), ("aliyun_c", "qwen3-max-preview"),
         ("aliyun_c", "glm-5.1"), ("aliyun_c", "deepseek-v3.1"),
+    ] + _TEXT_TAIL + [
+        # ⛔ aliyun_c/deepseek-v3.2 必须排在**整条链最后**, _TEXT_TAIL 之后。
+        #
+        # 它答对 intent 但 confidence 恒负(-1.0 / -0.95 实测), 而 confidence<0.6
+        # 是餐饮 T3 的澄清闸 —— 也就是"内容对、契约不合规"。路由器看到 HTTP 200
+        # 就算成功、**不再 fallback**, 于是它成了一颗毒丸。
+        #
+        # 2026-07-30 早先只把它压到"已验证的 aliyun 模型之后", 但那时它仍在
+        # _TEXT_TAIL **之前** —— 阿里云每天下午一耗尽, 链路就停在它身上,
+        # 腾讯那层非阿里云地板**结构上永远够不到**, 等于不存在。放到最后之后,
+        # 阿里云耗尽 → 走腾讯地板 → 全挂了才落到它(那时它至少还能给个澄清)。
+        #
+        # 顺带: `_t3_llm_parse` 现在给 call_chain 传 content_validator, 负 confidence
+        # 会被判为无效并继续 fallback。两道措施是冗余的, 故意的 —— 排序保证"够得到",
+        # validator 保证"就算排序又漂了也不会被它吞掉"。
         ("aliyun_c", "deepseek-v3.2"),
-    ] + _TEXT_TAIL),
+    ]),
 }
 
 
@@ -786,11 +882,49 @@ def _payload_mentions_json(payload: Dict[str, Any]) -> bool:
     return False
 
 
+# ── TokenHub per-model payload constraints (2026-07-30, measured with prod keys).
+#
+# These are provider-enforced rules the OpenAI-compatible schema cannot express, so
+# they have to live here — `_normalize_payload_for_provider` was a passthrough and
+# never knew tencent existed, which is why the models below were 100% unusable
+# rather than merely slow.
+
+# TokenHub rejects any temperature but 1 for the kimi family:
+#   HTTP 400 400001 "invalid temperature: only 1 is allowed for this model".
+# Keyed by model and applied ONLY on tencent — the same kimi on DashScope takes
+# temperature=0 fine, so this is a service constraint, not a model constraint.
+_TOKENHUB_FORCED_TEMPERATURE: Dict[str, float] = {
+    "kimi-k3": 1.0,
+    "kimi-k2.6": 1.0,
+    "kimi-k2.5": 1.0,
+}
+
+# TokenHub IGNORES enable_thinking=false on these, so they spend the entire
+# allowance on `reasoning_content` and return an EMPTY `content` — the router then
+# logs "output invalid (empty)" and falls back, i.e. they look broken when they are
+# merely starved. Measured at max_tokens=500: finish_reason='length',
+# completion_tokens_details.reasoning_tokens=500, content=''.
+# 1600 is what made minimax answer in the probe; it is a FLOOR, never a cap.
+_TOKENHUB_MIN_MAX_TOKENS: Dict[str, int] = {
+    "minimax-m2.7": 1600,
+    "minimax-m2.5": 1600,
+}
+
+# Ark expresses "do not think" with its OWN field — `thinking: {"type": "disabled"}`
+# — not DashScope's `enable_thinking`. This is not a micro-optimisation: with
+# thinking left on, Ark answers the T3 prompt CORRECTLY (5/5) but in 8-66s, which
+# is a timeout against the caller's 5s-per-provider budget. Switching it off took
+# the same models to 1.2-5.0s and made five of them viable. Measured 2026-07-30 on
+# all 8 reachable Ark models — none rejected the field.
+_ARK_DISABLE_THINKING: Dict[str, Any] = {"type": "disabled"}
+
+
 def _apply_slot_params(slot: SLOT, account: str, model: str,
                        payload: Dict[str, Any]) -> Dict[str, Any]:
     """Apply the SLOT's param profile to a per-call payload (model already set).
     Returns a new dict. Provider-aware: enable_thinking is a DashScope param → only
-    for aliyun + hybrid (non-thinking-only) models."""
+    for aliyun + hybrid (non-thinking-only) models; TokenHub adds its own per-model
+    sampling constraints (see the two maps above)."""
     prof = _SLOT_PARAMS.get(slot) or {}
     p = {**payload}
     is_aliyun = account in _ALIYUN_ACCOUNTS
@@ -807,6 +941,23 @@ def _apply_slot_params(slot: SLOT, account: str, model: str,
         p["temperature"] = prof["temperature"]
     if "seed" in prof and is_aliyun:
         p.setdefault("seed", prof["seed"])
+    # Ark: translate the slot's thinking intent into Ark's own field. Only when the
+    # profile actually asks for thinking off — a slot that wants reasoning (REASONING)
+    # must keep it.
+    if account == "ark" and prof.get("enable_thinking") is False:
+        p["thinking"] = dict(_ARK_DISABLE_THINKING)
+    # TokenHub constraints last: they are hard provider requirements, so they must
+    # win over both the caller's payload and the slot profile (violating them is a
+    # guaranteed 400 / empty response, not a quality trade-off).
+    if account == "tencent":
+        forced_temp = _TOKENHUB_FORCED_TEMPERATURE.get(model)
+        if forced_temp is not None:
+            p["temperature"] = forced_temp
+        floor = _TOKENHUB_MIN_MAX_TOKENS.get(model)
+        if floor is not None:
+            current = p.get("max_tokens")
+            if not isinstance(current, int) or current < floor:
+                p["max_tokens"] = floor
     return p
 
 
@@ -887,6 +1038,29 @@ def _provider_config(account: str) -> Tuple[str, str]:
         "zhipu": (
             os.getenv("LLM_ZHIPU_BASE_URL", "https://open.bigmodel.cn/api/paas/v4"),
             os.getenv("LLM_ZHIPU_API_KEY", ""),
+        ),
+        # ark (Volcengine 火山方舟, 2026-07-30): OpenAI-compatible, ~36 ACTIVE text
+        # models each holding an untouched 500k free inference grant — a provider
+        # fully independent of both DashScope and TokenHub.
+        #
+        # ⛔ Billing premise is DIFFERENT from tencent and must be restated here,
+        # because getting it wrong is exactly the silent-billing failure this whole
+        # registry exists to prevent: Ark bills post-paid after the free grant
+        # UNLESS 安心体验模式 is on, in which case (per the official rule) 「仅消耗
+        # 免费额度，超出免费额度时服务将自动暂停，不会产生额外费用」. Steve confirmed
+        # it is ON for this account on 2026-07-30 — that confirmation, not the
+        # console's per-model badge, is what makes these entries admissible.
+        # If it is ever switched off, every ark entry must leave the chains.
+        #
+        # 🔴 Model ids MUST come from GET /api/v3/models, never from the console's
+        # display name: `doubao-seed-1.6` returns 404
+        # InvalidEndpointOrModel.NotFound while the callable id is
+        # `doubao-seed-1-6-251015`. Same trap as TokenHub's deepseek-v4-pro vs
+        # deepseek-v4-pro-202606. The list also carries a `status` field
+        # (Shutdown / Retiring / active) — prefer active, Retiring is a countdown.
+        "ark": (
+            os.getenv("LLM_ARK_BASE_URL", "https://ark.cn-beijing.volces.com/api/v3"),
+            os.getenv("LLM_ARK_API_KEY", ""),
         ),
     }
     return mapping.get(account, ("", ""))
@@ -1023,9 +1197,20 @@ async def call_chain(
     chain: Optional[List[str]] = None,
     timeout: float = 30.0,
     total_timeout: Optional[float] = None,
+    content_validator: Optional[Callable[[str], Optional[str]]] = None,
 ) -> Dict[str, Any]:
     """
     Call LLM via provider chain with automatic fallback on 403 FreeTierOnly / 429.
+
+    ``content_validator`` (2026-07-30) closes the poison-pill hole: return a short
+    reason string to REJECT this candidate's output and continue the cascade, or
+    None to accept. `_validate_output` can only judge slot-generic shape (empty /
+    bad JSON / too short); it cannot know that a syntactically perfect plan carries
+    an out-of-contract field. Restaurant T3 hit exactly that — aliyun_c/deepseek-v3.2
+    answers correctly with confidence=-1.0, the router counted it as success, and
+    every healthy model behind it became unreachable. The caller owns its contract,
+    so the caller supplies the predicate. A raising predicate is treated as
+    "reject this candidate", never propagated to the user.
 
     Per-call timeout: 30s default (Apr 28 2026 optimization, was 120s).
     Worst-case full 4-provider cascade = 120s. qwen-plus typical 15-30s, so
@@ -1144,7 +1329,15 @@ async def call_chain(
                 # Layer 4 — outcome validation: a 2xx with empty / garbage / invalid-
                 # JSON body is NOT success. Fall to the next chain entry instead of
                 # handing garbage to the caller (do NOT record CB success on bad output).
-                invalid = _validate_output(slot, _extract_content(body_json))
+                content = _extract_content(body_json)
+                invalid = _validate_output(slot, content)
+                if not invalid and content_validator is not None:
+                    try:
+                        invalid = content_validator(content)
+                    except Exception as exc:  # noqa: BLE001
+                        # A buggy caller predicate must not turn a working provider
+                        # cascade into a 500 — degrade to "this candidate is no good".
+                        invalid = f"validator_error_{type(exc).__name__}"
                 if invalid:
                     logger.warning(
                         f"[llm_router] slot={slot.value} {account}/{model} output "

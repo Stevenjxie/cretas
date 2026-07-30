@@ -4585,6 +4585,53 @@ def _semantic_spec_from_t3(
     )
 
 
+def _t3_contract_violation(content: str) -> Optional[str]:
+    """Router content gate: reject a T3 answer that BREAKS the plan contract, so the
+    provider cascade continues instead of stopping at it.
+
+    Only contract breaches count — the model failing to emit `confidence` at all, or
+    emitting a negative value. Those mean "this provider does not implement the
+    contract", and another provider will.
+
+    ⛔ A genuinely LOW confidence (0 <= conf < _T3_MIN_CONFIDENCE) is NOT a breach:
+    the model is honestly saying it is unsure, and the caller turns that into a
+    clarification question. Retrying it on other providers would burn the whole
+    chain to launder an answer the model correctly flagged as uncertain.
+
+    Why this exists: aliyun_c/deepseek-v3.2 returns a fully correct plan with
+    confidence=-1.0. HTTP 200 + parseable JSON, so neither the router's own
+    validation nor the caller could tell it apart from success — the cascade stopped
+    there and every healthy model behind it was unreachable (measured 2026-07-30:
+    restaurant Q&A degraded every afternoon once the Aliyun quota ran out).
+    """
+    text = (content or "").strip()
+    if text.startswith("```"):
+        text = text.strip("`")
+        if text[:4].lower() == "json":
+            text = text[4:]
+        text = text.strip()
+    try:
+        parsed = json.loads(text)
+    except Exception:
+        # Shape problems are the router's job (_validate_output) and the caller's
+        # fail-closed path; do not double-reject here.
+        return None
+    if not isinstance(parsed, dict):
+        return None
+    if not parsed.get("intent"):
+        return None
+    raw = parsed.get("confidence")
+    if raw is None:
+        return "t3_confidence_missing"
+    try:
+        conf = float(raw)
+    except (TypeError, ValueError):
+        return "t3_confidence_not_numeric"
+    if conf < 0:
+        return "t3_confidence_negative"
+    return None
+
+
 async def _t3_llm_parse(
     query: str,
     *,
@@ -4639,6 +4686,7 @@ async def _t3_llm_parse(
                 payload,
                 timeout=provider_timeout,
                 total_timeout=total_timeout,
+                content_validator=_t3_contract_violation,
             )
         content = (result["choices"][0]["message"]["content"] or "").strip()
         if content.startswith("```"):
