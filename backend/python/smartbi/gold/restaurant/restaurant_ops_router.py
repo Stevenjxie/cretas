@@ -7449,6 +7449,14 @@ async def resolve_by_code(
 
     ctx_token = set_factory_id(factory_id)
     try:
-        return await resolver(smartbi_pool, factory_id, **filtered)
+        # 同一棵调用树里也绑菜单目录: resolver 内部还会自己抽菜名
+        # (resolve_gross_margin 的 extract_dish_candidates), 没有目录就退回
+        # 残差式启发法, 把「人力」这类名词当菜名。规划闸只护住走 parse 的入口;
+        # 按 code 直接分发的路径(Java 传 intentCode / 内部重放 / 以后的新入口)
+        # 绕开规划, 必须在这里补上。
+        # 用 factory_id(=数据租户, demo 会重映射)而不是请求租户 —— 菜名就在
+        # 那个租户的 dim_product 里, 与上面钉 tenant 的口径一致。
+        async with dish_catalogue_scope(smartbi_pool, factory_id):
+            return await resolver(smartbi_pool, factory_id, **filtered)
     finally:
         reset_factory_id(ctx_token)
