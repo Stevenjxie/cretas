@@ -1,0 +1,160 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  cretas-platform - the runtime floor every independently deployed service needs.
+
+  Compile-time coupling said logistics was already free (outbound 9, inbound 0),
+  but nothing that boots on its own can run on that alone: it still needs the
+  pieces the monolith provides once for everybody. Seeding with exactly those -
+  the interceptor chain, the price-sensitivity plumbing, the datasource, the
+  global error handler, JWT/cookie auth - and taking the transitive closure gives
+  103 classes, of which 50 were already in cretas-model and 8 in cretas-common.
+  This module is the remaining 36.
+
+  36 is the number that matters for "each business line deploys on its own": the
+  runtime floor is small. What lives here:
+
+    interceptor chain   JwtAuth / Permission / ModuleEnabled / RequireRole /
+                        DemoReadOnly + WebMvcConfig that registers them
+    auth                JwtUtil, CookieAuthHelper, TokenBlacklistService
+    tenancy + gating    PermissionService, UserModuleAccessService,
+                        FactoryConfigService, ProductionModuleRegistry and the
+                        six repositories they read
+    errors              GlobalExceptionHandler
+    data                PrimaryDataSourceConfig
+    dynamic fields      DDLExecutor, DynamicFieldService
+
+  The generic contracts that came out of the same closure (PageResponse,
+  ErrorCode, RequireRole, the five common exceptions) went to cretas-common
+  instead - they are declarations, not runtime behaviour.
+
+  Deliberately NOT here: the application main class. Each deployable service
+  brings its own, which is what makes more than one of them possible.
+-->
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0
+         https://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>org.springframework.boot</groupId>
+        <artifactId>spring-boot-starter-parent</artifactId>
+        <version>3.2.12</version>
+        <relativePath/>
+    </parent>
+
+    <groupId>com.cretas</groupId>
+    <artifactId>cretas-platform</artifactId>
+    <version>1.0.0</version>
+    <name>Cretas Platform - Runtime Floor</name>
+    <description>鉴权、权限、租户与模块开关、全局异常、数据源 —— 任何独立服务都要自带的运行时层</description>
+
+    <properties>
+        <java.version>21</java.version>
+        <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+        <lombok.version>1.18.36</lombok.version>
+    </properties>
+
+    <dependencies>
+        <dependency>
+            <groupId>com.cretas</groupId>
+            <artifactId>cretas-common</artifactId>
+            <version>1.0.0</version>
+        </dependency>
+        <dependency>
+            <groupId>com.cretas</groupId>
+            <artifactId>cretas-model</artifactId>
+            <version>1.0.0</version>
+        </dependency>
+
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-web</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-data-jpa</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-security</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-validation</artifactId>
+        </dependency>
+
+        <!-- TokenBlacklistService 用 Caffeine 做本地过期缓存 -->
+        <dependency>
+            <groupId>com.github.ben-manes.caffeine</groupId>
+            <artifactId>caffeine</artifactId>
+            <version>3.1.8</version>
+        </dependency>
+
+        <!-- JwtUtil -->
+        <dependency>
+            <groupId>io.jsonwebtoken</groupId>
+            <artifactId>jjwt-api</artifactId>
+            <version>0.11.5</version>
+        </dependency>
+        <dependency>
+            <groupId>io.jsonwebtoken</groupId>
+            <artifactId>jjwt-impl</artifactId>
+            <version>0.11.5</version>
+            <scope>runtime</scope>
+        </dependency>
+        <dependency>
+            <groupId>io.jsonwebtoken</groupId>
+            <artifactId>jjwt-jackson</artifactId>
+            <version>0.11.5</version>
+            <scope>runtime</scope>
+        </dependency>
+
+        <!-- @Schema on the shared DTOs -->
+        <dependency>
+            <groupId>org.springdoc</groupId>
+            <artifactId>springdoc-openapi-starter-webmvc-ui</artifactId>
+            <version>2.3.0</version>
+        </dependency>
+
+        <dependency>
+            <groupId>org.projectlombok</groupId>
+            <artifactId>lombok</artifactId>
+            <version>${lombok.version}</version>
+            <optional>true</optional>
+        </dependency>
+    </dependencies>
+
+    <build>
+        <plugins>
+            <!-- See cretas-common: a release -Dtest selector reaches every module. -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-surefire-plugin</artifactId>
+                <configuration>
+                    <failIfNoSpecifiedTests>false</failIfNoSpecifiedTests>
+                </configuration>
+            </plugin>
+
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-compiler-plugin</artifactId>
+                <version>3.11.0</version>
+                <configuration>
+                    <source>21</source>
+                    <target>21</target>
+                    <release>21</release>
+                    <encoding>UTF-8</encoding>
+                    <parameters>true</parameters>
+                    <annotationProcessorPaths>
+                        <path>
+                            <groupId>org.projectlombok</groupId>
+                            <artifactId>lombok</artifactId>
+                            <version>${lombok.version}</version>
+                        </path>
+                    </annotationProcessorPaths>
+                </configuration>
+            </plugin>
+        </plugins>
+    </build>
+</project>

@@ -69,6 +69,16 @@
             <version>${project.version}</version>
         </dependency>
 
+        <!-- Runtime floor: interceptor chain, auth, tenancy/module gating, global
+             error handling, datasource. 36 files, measured as the closure of what
+             a service needs to boot at all. Any future standalone service depends
+             on this same module. -->
+        <dependency>
+            <groupId>com.cretas</groupId>
+            <artifactId>cretas-platform</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+
         <!-- Logistics domain. Nothing in this module references it at compile
              time (measured: 0 inbound references), so it is here only so Spring
              can component-scan com.cretas.aims.logistics and so the domain ships
