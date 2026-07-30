@@ -257,6 +257,43 @@ attestation 是按制品自己的 commit 验、且要求该 commit 的 `backend_
 1. `test-web-admin-deploy-acceleration` 的失败表现是 **exit 1 且零输出**，极难查 —— 被测脚本报 `command not found` 退非 0，而调用它的是 `( … ) > log 2>&1`，**连 `set -x` 的 trace 都被重定向进日志**，外层只在 `set -e` 下静默退出。已在桩处写明这个陷阱。
 2. 修陈旧断言时，期望值要**从被测脚本自己的函数推导**，而不是把当前字符串抄一份 —— 抄下来的话，规则一变它又会变成新的陈旧红测。
 
+### 8. ✅ `--prefer-ci-artifact` 已改为**默认开启**（2026-07-31 Steve 拍板）
+
+默认关的时候，整条 CI 制品链路（Java 制品 + 预热 + Web dist 取回）对日常发布**形同不存在** —— 因为标准发布命令不带这个 flag。实测同为「java+web 都改」的两次真实 prod 发布：带开关 **234s**，不带 **405s**。
+
+代价是探测那几秒（Java ~2s / Web ~4s），取不到就自动回退本地构建，且回退**有声**。
+可逆：`--no-prefer-ci-artifact` 或 `CRETAS_RELEASE_PREFER_CI_ARTIFACT=0`。
+
+🔴 关掉时必须**显式导出 0** 而不是「不导出」—— 否则 `--no-` 配上环境里已有的 `=1` 会变成 Java 侧关而 Web 侧照样开，又一个「只在一半路径生效」的半吊子开关。
+
+### 9. ✅ `--stage-backend YES-STAGE` 已实测（最后一条未验路径关闭）
+
+```
+rsync delta: literal=21,567,629 bytes  matched=154,791,680 bytes  speedup=8.84x
+Backend artifact staged without deployment: SHA-256=f1d963cb… elapsed=20s
+RELEASE_DEPLOY_MODE=none
+```
+
+176MB 的 jar 只有 **21.5MB 真上网线**，预传 **20s**。服务器上 sha256 逐字节吻合，活跃槽不受影响。
+🔴 验证前提：必须挑一个让 `JAVA_CHANGED=true` 的 `--base-sha`，否则它直接 `not-needed`，验的是空气（同 §四.1 那条判据）。
+⚠️ 它服务的是**本地构建**那条路 —— CI 制品路径本来就直接落 ECS 缓存，没有本地 jar 可传。两者是互补不是重复。
+
+### 10. ⬜ `--phase deploy` 的串行回退（**设计已定，刻意未实施**）
+
+同样「两边都得真构建」，走的 phase 不同差 ~63s：
+
+| phase | 路径 | build |
+|---|---|---|
+| `--phase all` | `parallel-artifacts` | ≈ max(Java, Web) |
+| `--phase deploy` | 逐组件串行回退 `record_fallback_build` | Java + Web **相加** |
+
+而「合并后立刻发布」（commit→部署启动窗口中位 43s，CI 要 ~4 分钟）**恰恰**就是两边都得本地构建的场景，所以这条路比看上去常走。
+
+**设计（已核实可行）**：把 `validate_or_build_{java,web}_once` 各拆成 `*_artifact_ready` / `*_fallback_build` 两半；`both` 先问两边，只有**两边都要建**时才走并行。并行复用既有的 `release-cretas-artifacts.sh` —— 它是**子进程**、输出从日志解析，**不需要跨子 shell 传状态**（后台子 shell 传不回变量是这个仓库栽过的地方）。Java 仍先试 CI 制品，命中就只剩 Web、并行没意义。
+⚠️ 别漏：`BUILD_SECONDS=$((JAVA_BUILD_SECONDS + WEB_BUILD_SECONDS))` 那行在并行后会**把时间算重**，需要按是否并行分支。
+
+**为什么没在本轮做**：改的是 prod 发布路径，唯一回归网是 `test-release-cretas.sh`（473s/轮，至少两轮才敢说验过）。收益 ~63s，风险是发布链本身 —— 值得一个有验证预算的新 session，不值得在长 session 尾巴上硬凑。
+
 ---
 
 ## 五、下一步怎么做（按收益排序）
@@ -267,6 +304,7 @@ attestation 是按制品自己的 commit 验、且要求该 commit 的 `backend_
 | 2 | ~~**push 后预热 Java 制品**~~ | 见下（**兑现有前提**） | 否 | ✅ **机制已做**，见 §四.5 |
 | 3 | ~~真实 prod 部署验证~~ | ~~唯一没跑过的部分~~ | 是 | ✅ **已完成**，见 §四.1 |
 | 4 | 路1 rolldown | 见下方修正 | 是 | 🛑 **Steve 已拍板押后** |
+| 7 | **`--phase deploy` 串行回退改并行** | ~63s（合并后立刻发布时常命中） | 否 | ⬜ **设计已定待做**，见 §四.10 |
 | 5 | ~~补 `#2012` 的 paths 漏洞~~ | 13% 的 backend commit 取不到制品 | 否 | ✅ **已完成**，见 §四.6 |
 | 6 | ~~3 个既有红测 + 1 个超时套件~~ | 让测试能当闸 | 否 | ✅ **已完成**，见 §四.7 |
 
