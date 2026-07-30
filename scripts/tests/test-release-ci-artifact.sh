@@ -183,7 +183,7 @@ done
 [ "$(grep -c 'CRETAS_REMOTE_ARTIFACT_DESCRIPTOR="$CI_ARTIFACT_DESCRIPTOR"' "$RELEASE_SCRIPT")" = "2" ] \
     || fail "描述符没有传给全部两条 Java 部署通道"
 # 回退必须吵, 且原因要进台账
-contains "$RELEASE_SCRIPT" '回退本地 clean package'
+contains "$RELEASE_SCRIPT" '回退本地构建'
 contains "$RELEASE_SCRIPT" '"ci_artifact": {"status": "%s"'
 # CI 路径不得消耗 Maven 回退预算
 CI_BLOCK=$(awk '/^build_java\(\) \{/,/^\}/' "$RELEASE_SCRIPT")
@@ -195,14 +195,39 @@ COUNT_LINE=$(printf '%s\n' "$CI_BLOCK" | grep -n 'JAVA_BUILD_COUNT=\$((JAVA_BUIL
 [ "$CI_RETURN_LINE" -lt "$COUNT_LINE" ] \
     || fail "CI 成功路径排在 JAVA_BUILD_COUNT 递增之后, 会白吃掉一次 Maven 回退预算"
 
+# ---- both 路径刻意不用 CI 制品, 且必须在台账里说明原因 ----
+# 实测两次(同树同机): Java160/Web150 → 并行163s vs 串行188s(慢25s); Java142/Web80 → 并行
+# 144s vs 串行约135s(快9s)。Web 在 80s↔150s 波动, 串行是赚还是亏随运行摆动 —— 不接受方向
+# 不定的改动。正解是让取制品与 Web 真并行(取制品 55~69s 完全落在 Web 耗时内), 那是另一件事。
+# java-only 路径没这个问题: Java 就是关键路径, 实测总 56s vs 本地 160~290s。
+contains "$RELEASE_SCRIPT" 'try_ci_artifact() {'
+contains "$RELEASE_SCRIPT" 'skipped:both-needs-parallel-fetch'
+# 只能挂在 java-only 那一条路径上; both 分支不得调用它(否则又串行回去)
+[ "$(grep -c 'if try_ci_artifact; then' "$RELEASE_SCRIPT")" = "1" ]     || fail "try_ci_artifact 的调用点数量不对 (应只在 java-only 路径上恰好 1 处)"
+BOTH_BLOCK=$(awk '/^        both\)/,/^            ;;/' "$RELEASE_SCRIPT")
+printf '%s' "$BOTH_BLOCK" | grep -q 'try_ci_artifact'     && fail "both 分支调用了 try_ci_artifact —— 实测串行化会让这条常态路径慢 25s"
+printf '%s' "$BOTH_BLOCK" | grep -q 'BUILD_MODE=parallel-artifacts'     || fail "both 分支不再走 parallel-artifacts"
+# 没触发也要有原因进报告, 否则"没触发"和"触发了但没用上"在台账里长得一样
+contains "$RELEASE_SCRIPT" '"ci_artifact": {"status": "%s"'
+
+# ---- 测试选择器判据必须是集合包含, 不能是字符串相等 ----
+# CI push 构建用通配 (*RepositoryQueryValidationTest, 本仓库实测 33 个类), 而
+# release-java-preflight.sh 刻意拒绝通配 —— 字符串相等会让两者永远配不上, 功能形同不存在。
+contains "$CI_SCRIPT" 'expand_test_selector'
+contains "$CI_SCRIPT" 'ci_selector_does_not_cover_requested'
+contains "$CI_SCRIPT" 'requested_selector_matches_no_test_class'
+contains "$CI_SCRIPT" 'ci_selector_matches_no_test_class'
+if grep -Fq 'if [ "$CI_TESTS" != "$TESTS" ]; then' "$CI_SCRIPT"; then
+    fail "选择器判据退回了字符串相等 —— 经 release-cretas.sh 会永远配不上"
+fi
+
 # release-ci-artifact.sh 自己绝不回退, 只以非零退出交给调用方决定
 contains "$CI_SCRIPT" 'CI_ARTIFACT_UNAVAILABLE reason='
 # 只看非注释行: 注释里提到 "clean package" 是在解释它替代了什么, 不是调用。
 if grep -vE '^[[:space:]]*#' "$CI_SCRIPT" | grep -Eq '(^|[^-[:alnum:]])mvnw?([[:space:]]|$)|clean package'; then
     fail "release-ci-artifact.sh 不应自己跑 Maven"
 fi
-# 必须逐字比对测试选择器 —— CI push 构建默认只跑一个类
-contains "$CI_SCRIPT" 'test_selector_mismatch'
+# 选择器判据见下方「集合包含」断言组 (旧的 test_selector_mismatch 已被取代)
 # 必须要求 attestation, 不能只看 transport
 contains "$CI_SCRIPT" 'not_attested'
 contains "$CI_SCRIPT" 'not_trusted'

@@ -342,6 +342,43 @@ printf 'DETECTED_JAVA_CHANGED=%s\n' "$JAVA_CHANGED"
 printf 'DETECTED_WEB_CHANGED=%s\n' "$WEB_CHANGED"
 printf 'RELEASE_SELECTION=%s\n' "$COMPONENTS"
 
+# 试着用一份 CI 已构建、provenance 已验证的制品顶替本地 Maven。成功返 0 并留下描述符。
+#
+# 单独一个函数, 因为有两条构建路径都要用它: COMPONENTS=java 走 build_java, 而
+# COMPONENTS=both 走并行的 release-cretas-artifacts.sh —— 后者是常态(改动通常同时碰 Java 与
+# Web)。第一版只挂在 build_java 上, 于是典型发布里这个功能【一次都不会触发】, 报告里
+# ci_artifact.status 恒为 disabled。实测撞到过, 正是"机制存在但从未被用"那个模式。
+#
+# 不递增 JAVA_BUILD_COUNT: 那个计数的语义是"至多一次 Maven 生命周期"。CI 路径一次 Maven 都
+# 没跑, 提前把预算花掉会让后面真需要回退时被自己的闸挡住。
+try_ci_artifact() {
+    [ "$PREFER_CI_ARTIFACT" = "true" ] || return 1
+    [ -n "$TESTS" ] || return 1
+
+    if duration_run CI_ARTIFACT_SECONDS "$RUN_LOG_DIR/java-ci-artifact.log" \
+        "$SCRIPT_DIR/release-ci-artifact.sh" --tests "$TESTS"; then
+        CI_ARTIFACT_DESCRIPTOR=$(sed -n 's/^CI_ARTIFACT_DESCRIPTOR=//p' \
+            "$RUN_LOG_DIR/java-ci-artifact.log" | tail -1)
+        if [ -n "$CI_ARTIFACT_DESCRIPTOR" ] && [ -f "$CI_ARTIFACT_DESCRIPTOR" ]; then
+            CI_ARTIFACT_STATUS=used
+            echo "CI_ARTIFACT=used descriptor=$CI_ARTIFACT_DESCRIPTOR seconds=$CI_ARTIFACT_SECONDS"
+            return 0
+        fi
+        # 脚本退出 0 却没留下可用描述符 —— 当失败处理, 不当"大概行吧"。
+        CI_ARTIFACT_STATUS=unusable-descriptor
+        CI_ARTIFACT_DESCRIPTOR=
+    else
+        CI_ARTIFACT_STATUS=$(sed -n 's/^CI_ARTIFACT_UNAVAILABLE reason=/unavailable:/p' \
+            "$RUN_LOG_DIR/java-ci-artifact.log" | tail -1)
+        [ -n "$CI_ARTIFACT_STATUS" ] || CI_ARTIFACT_STATUS=unavailable:unknown
+        CI_ARTIFACT_DESCRIPTOR=
+    fi
+    # 回退是安全的(就是原来的行为), 但必须吵。静默回退会让"用了 CI 制品"和"其实重编了一遍"
+    # 变成同一条日志。
+    echo "CI_ARTIFACT=$CI_ARTIFACT_STATUS — 回退本地构建" >&2
+    return 1
+}
+
 build_java() {
     if [ "$JAVA_BUILD_COUNT" -ge 1 ]; then
         echo "ERROR: Java release build fallback already consumed; refusing a second Maven lifecycle" >&2
@@ -350,35 +387,9 @@ build_java() {
     [ -n "$TESTS" ] || { echo "ERROR: Java build requires --tests '<MavenTestSelector>'" >&2; return 2; }
     "$SCRIPT_DIR/release-java-preflight.sh" --repo-root "$PROJECT_ROOT" --tests "$TESTS"
 
-    # ---- CI 制品优先 ----
-    # 刻意放在 preflight 之后: 那一步校验的是发布意图(选择器存在、import 可解析), 与制品
-    # 从哪来无关, 两条路都该过。
-    #
-    # 不递增 JAVA_BUILD_COUNT: 那个计数的语义是"至多一次 Maven 生命周期"。CI 路径一次
-    # Maven 都没跑, 提前把预算花掉会让后面真需要回退时被自己的闸挡住。
-    if [ "$PREFER_CI_ARTIFACT" = "true" ]; then
-        if duration_run CI_ARTIFACT_SECONDS "$RUN_LOG_DIR/java-ci-artifact.log" \
-            "$SCRIPT_DIR/release-ci-artifact.sh" --tests "$TESTS"; then
-            CI_ARTIFACT_DESCRIPTOR=$(sed -n 's/^CI_ARTIFACT_DESCRIPTOR=//p' \
-                "$RUN_LOG_DIR/java-ci-artifact.log" | tail -1)
-            if [ -n "$CI_ARTIFACT_DESCRIPTOR" ] && [ -f "$CI_ARTIFACT_DESCRIPTOR" ]; then
-                CI_ARTIFACT_STATUS=used
-                JAVA_BUILD_STATUS=success-ci-artifact
-                echo "CI_ARTIFACT=used descriptor=$CI_ARTIFACT_DESCRIPTOR seconds=$CI_ARTIFACT_SECONDS"
-                return 0
-            fi
-            # 脚本退出 0 却没留下可用描述符 —— 当失败处理, 不当"大概行吧"。
-            CI_ARTIFACT_STATUS=unusable-descriptor
-            CI_ARTIFACT_DESCRIPTOR=
-        else
-            CI_ARTIFACT_STATUS=$(sed -n 's/^CI_ARTIFACT_UNAVAILABLE reason=/unavailable:/p' \
-                "$RUN_LOG_DIR/java-ci-artifact.log" | tail -1)
-            [ -n "$CI_ARTIFACT_STATUS" ] || CI_ARTIFACT_STATUS=unavailable:unknown
-            CI_ARTIFACT_DESCRIPTOR=
-        fi
-        # 回退是安全的(就是原来的行为), 但必须吵。静默回退会让"用了 CI 制品"和"其实重编了
-        # 一遍"变成同一条日志。
-        echo "CI_ARTIFACT=$CI_ARTIFACT_STATUS — 回退本地 clean package" >&2
+    if try_ci_artifact; then
+        JAVA_BUILD_STATUS=success-ci-artifact
+        return 0
     fi
 
     JAVA_BUILD_COUNT=$((JAVA_BUILD_COUNT + 1))
@@ -438,6 +449,27 @@ run_build_phase() {
     case "$COMPONENTS" in
         both)
             [ -n "$TESTS" ] || { echo "ERROR: Java build requires --tests '<MavenTestSelector>'" >&2; return 2; }
+            # Java + Web 都要构建时【暂不用 CI 制品】—— 因为串行化的收益取决于 Web 构建耗时,
+            # 而实测那个数字波动很大, 单靠串行不能保证不倒退。
+            #
+            # 实测两次(同一棵树, 同一台机, parallel-artifacts):
+            #   Java 160s / Web 150s → 并行总 163s;  串行(取制品 69s + Web)总 188s → 慢 25s
+            #   Java 142s / Web  80s → 并行总 144s;  串行(取制品 55s + Web)约 135s  → 快 9s
+            # Web 在 80s↔150s 之间波动, 所以"串行是赚还是亏"随运行摆动。不接受一个方向不定的改动。
+            #
+            # 正解是让【取制品与 Web 构建真并行】: 取制品 55~69s 完全落在 Web 的耗时内, 总时长
+            # 变成 max(取制品, Web) ≈ Web, 相对现在的 max(Java, Web) 稳定省下 Java 那一段。
+            # 那需要把两个后台任务的变量经文件回传, 与本次改动是两件事, 不在这里硬塞。
+            #
+            # COMPONENTS=java 那条路径没有这个问题: Java 就是关键路径本身, 实测总时长
+            # 56s vs 本地构建 160~290s。
+            #
+            # 附带好处("把 JAR 上传移出部署窗口")在 both 场景已有 --stage-backend YES-STAGE
+            # 专门解决, 不必靠这条路径。
+            if [ "$PREFER_CI_ARTIFACT" = "true" ]; then
+                CI_ARTIFACT_STATUS=skipped:both-needs-parallel-fetch
+                echo "CI_ARTIFACT=$CI_ARTIFACT_STATUS (串行取制品的收益随 Web 构建耗时摆动; 需先做成与 Web 并行)"
+            fi
             BUILD_MODE=parallel-artifacts
             JAVA_BUILD_COUNT=1
             WEB_BUILD_COUNT=1
