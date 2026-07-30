@@ -1,0 +1,42 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+CACHE_DIR=/var/cache/github-artifacts
+LOCK_DIR=/run/lock/github-artifacts
+MAX_BYTES=$((20 * 1024 * 1024 * 1024))
+TARGET_BYTES=$((18 * 1024 * 1024 * 1024))
+
+[[ -d $CACHE_DIR ]] || exit 0
+install -d -o root -g root -m 0750 "$LOCK_DIR"
+
+exec 8>"$LOCK_DIR/cleanup.lock"
+flock -n 8 || exit 0
+
+current=$(du -sb "$CACHE_DIR" | cut -f 1)
+((current <= MAX_BYTES)) && exit 0
+
+while IFS=' ' read -r _mtime path; do
+  ((current <= TARGET_BYTES)) && break
+  filename=${path##*/}
+  sha=${filename%.bin}
+  [[ $sha =~ ^[0-9a-f]{64}$ ]] || continue
+
+  exec {object_lock}>"$LOCK_DIR/$sha.lock"
+  if flock -n "$object_lock"; then
+    if [[ -f $path ]]; then
+      size=$(stat -c %s "$path")
+      unlink "$path"
+      current=$((current - size))
+      echo "cache_evicted=$sha bytes=$size"
+    fi
+  fi
+  exec {object_lock}>&-
+done < <(
+  find "$CACHE_DIR" -maxdepth 1 -type f \
+    -regextype posix-extended \
+    -regex '.*/[0-9a-f]{64}\.bin' \
+    -printf '%T@ %p\n' |
+    sort -n
+)
+
+echo "cache_bytes=$current"

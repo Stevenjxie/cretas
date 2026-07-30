@@ -1,0 +1,152 @@
+#!/usr/bin/env bash
+set -euo pipefail
+set +x
+umask 027
+
+CACHE_DIR=/var/cache/github-artifacts
+LOCK_DIR=/run/lock/github-artifacts
+CLEAN_COMMAND=/usr/local/sbin/github-cache-clean
+
+usage() {
+  echo "usage: github-cache-put --sha256 <hex> --size <bytes>" >&2
+  exit 2
+}
+
+expected_sha=
+expected_size=
+while (($#)); do
+  case "$1" in
+    --sha256)
+      (($# >= 2)) || usage
+      expected_sha=$2
+      shift 2
+      ;;
+    --size)
+      (($# >= 2)) || usage
+      expected_size=$2
+      shift 2
+      ;;
+    *)
+      usage
+      ;;
+  esac
+done
+
+[[ $expected_sha =~ ^[0-9a-f]{64}$ ]] || usage
+[[ $expected_size =~ ^[1-9][0-9]*$ ]] || usage
+
+IFS= read -r asset_url || {
+  echo "error=url_missing" >&2
+  exit 2
+}
+[[ -n $asset_url ]] || {
+  echo "error=url_missing" >&2
+  exit 2
+}
+
+# Permit only known GitHub download families, require globally routable DNS
+# answers, and never print the URL.
+if ! printf '%s' "$asset_url" | python3 -c '
+import ipaddress
+import socket
+import sys
+import urllib.parse
+
+url = sys.stdin.read()
+parsed = urllib.parse.urlsplit(url)
+host = (parsed.hostname or "").lower().rstrip(".")
+allowed = (
+    host in {"github.com", "api.github.com"}
+    or host.endswith(".githubusercontent.com")
+    or host.endswith(".blob.core.windows.net")
+)
+if parsed.scheme != "https" or parsed.username or parsed.password:
+    raise SystemExit(1)
+if parsed.port not in (None, 443) or not allowed:
+    raise SystemExit(1)
+addresses = {
+    result[4][0]
+    for result in socket.getaddrinfo(host, 443, type=socket.SOCK_STREAM)
+}
+if not addresses:
+    raise SystemExit(1)
+for address in addresses:
+    if not ipaddress.ip_address(address).is_global:
+        raise SystemExit(1)
+'; then
+  unset asset_url
+  echo "error=url_not_allowed" >&2
+  exit 2
+fi
+
+install -d -o root -g www-data -m 0750 "$CACHE_DIR"
+install -d -o root -g root -m 0750 "$LOCK_DIR"
+
+destination="$CACHE_DIR/$expected_sha.bin"
+lock_file="$LOCK_DIR/$expected_sha.lock"
+exec 9>"$lock_file"
+flock 9
+
+if [[ -f $destination ]]; then
+  actual_size=$(stat -c %s "$destination")
+  actual_sha=$(sha256sum "$destination" | cut -d ' ' -f 1)
+  if [[ $actual_size == "$expected_size" && $actual_sha == "$expected_sha" ]]; then
+    touch "$destination"
+    unset asset_url
+    echo "cache_status=hit bytes=$actual_size sha256=$actual_sha"
+    exit 0
+  fi
+  quarantine="$CACHE_DIR/.$expected_sha.invalid.$(date -u +%Y%m%dT%H%M%SZ)"
+  mv -- "$destination" "$quarantine"
+fi
+
+temporary=$(mktemp "$CACHE_DIR/.$expected_sha.partial.XXXXXX")
+cleanup() {
+  if [[ -n ${temporary:-} && -e $temporary ]]; then
+    unlink "$temporary"
+  fi
+}
+trap cleanup EXIT INT TERM
+
+escaped_url=${asset_url//\\/\\\\}
+escaped_url=${escaped_url//\"/\\\"}
+started=$(date +%s)
+if ! printf 'url = "%s"\n' "$escaped_url" |
+  curl \
+    --config - \
+    --location \
+    --fail \
+    --silent \
+    --show-error \
+    --retry 8 \
+    --retry-delay 1 \
+    --retry-all-errors \
+    --connect-timeout 15 \
+    --max-time 600 \
+    --output "$temporary"; then
+  unset asset_url escaped_url
+  echo "error=download_failed" >&2
+  exit 1
+fi
+unset asset_url escaped_url
+
+actual_size=$(stat -c %s "$temporary")
+if [[ $actual_size != "$expected_size" ]]; then
+  echo "error=size_mismatch expected=$expected_size actual=$actual_size" >&2
+  exit 1
+fi
+
+actual_sha=$(sha256sum "$temporary" | cut -d ' ' -f 1)
+if [[ $actual_sha != "$expected_sha" ]]; then
+  echo "error=sha256_mismatch" >&2
+  exit 1
+fi
+
+chown root:www-data "$temporary"
+chmod 0640 "$temporary"
+mv -- "$temporary" "$destination"
+temporary=
+elapsed=$(($(date +%s) - started))
+
+"$CLEAN_COMMAND"
+echo "cache_status=stored bytes=$actual_size seconds=$elapsed sha256=$actual_sha"
