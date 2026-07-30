@@ -125,9 +125,41 @@ async def test_capture_passes_chat_qa_source_and_factory(monkeypatch):
     kw = rec.calls[0]
     assert kw["source"] == "chat_qa"
     assert kw["task_type"] == "qa"
-    assert kw["input_text"] == "本月营收如何"
+    # input_text 是**自包含**的语料样本, 不是裸问句 —— 见 4d32f971e1
+    # (P0-1「修 chat_qa input_text 幻觉缺陷」): 裸问句配一段带数字的答案,
+    # 等于教未来的模型「看到这种问题就编一个数」。所以它必须带上来源标记,
+    # 有数据依据时还要带上依据本身(下一个测试钉这一半)。
+    assert kw["input_text"] == "chat_qa|general_analysis|query:本月营收如何"
     assert kw["teacher_output"] == "本月营收稳健，建议..."
     assert kw["factory_id"] == "RES_3101_009"
+
+
+async def test_capture_embeds_data_context_so_the_pair_is_self_contained(monkeypatch):
+    """有数据依据时必须**连依据一起存**。
+
+    这才是 P0-1 那次修复的目的: (input_text → teacher_output) 这一对要能让人
+    (或模型)只看这一对就明白答案是从哪些数算出来的。少了 data_context, 语料
+    看起来仍然"有格式", 但依据没了 —— 退化得很安静, 所以单独钉一条。
+    """
+    rec = _RecordingPersist()
+    monkeypatch.setattr(
+        "smartbi.services.distillation_capture.persist_distillation_sample", rec
+    )
+
+    async def _ok_pool():
+        return object()
+
+    monkeypatch.setattr("smartbi.config.get_pg_pool", _ok_pool)
+
+    await chat_mod._capture_qa_distillation(
+        "本月营收如何",
+        "本月营收 ¥1.2M，建议...",
+        _FakeRequest("RES_3101_009"),
+        data_context="revenue=¥1.2M, orders=531",
+    )
+    input_text = rec.calls[0]["input_text"]
+    assert "query:本月营收如何" in input_text
+    assert "data_context:revenue=¥1.2M, orders=531" in input_text
 
 
 async def test_capture_tolerates_request_without_state(monkeypatch):
