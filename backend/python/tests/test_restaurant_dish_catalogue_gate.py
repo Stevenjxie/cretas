@@ -133,6 +133,90 @@ async def test_catalogue_load_failure_fails_open():
     assert await R.load_dish_catalogue(_BoomPool(), "F_BOOM") is None
 
 
+# ── resolver 分发期同样要绑目录 ──────────────────────────────────────
+#
+# #2007 只在两个 parse 调用点绑了目录, resolver 的分发在 scope 之外 ——
+# resolve_gross_margin 内部还会自己 extract_dish_candidates(query), 那里拿不到
+# 目录就退回残差式抽取。规划阶段已经不给非菜品问句选菜品 resolver 了, 所以当前
+# 不出故障; 但任何直接按 code 调 resolver 的路径(Java 传 intentCode、内部重放、
+# 以后新增的入口)都会绕开规划闸, 口子仍在。
+# resolve_by_code 是唯一的分发收口点, 而且已经在那里钉租户 contextvar 了。
+
+
+class _CatalogueProbePool:
+    """acquire() 返回一份固定菜单。"""
+
+    def __init__(self, names=("米饭", "娃娃菜")):
+        self._names = names
+
+    def acquire(self):
+        names = self._names
+
+        class _Conn:
+            async def execute(self, *a):
+                return "SELECT 1"
+
+            async def fetch(self, sql, *a):
+                return [{"name": n, "normalized_name": n} for n in names]
+
+        class _Ctx:
+            async def __aenter__(self):
+                return _Conn()
+
+            async def __aexit__(self, *exc):
+                return False
+
+        return _Ctx()
+
+
+@pytest.mark.asyncio
+async def test_resolve_by_code_binds_catalogue_for_the_resolver(monkeypatch):
+    seen = {}
+
+    async def _probe(pool, factory_id, **kwargs):
+        seen["catalogue"] = R.current_dish_catalogue()
+        return "ok"
+
+    monkeypatch.setitem(R._RESOLVERS, "RESTAURANT_OPS_WASTAGE_TOP", _probe)
+    R._DISH_CATALOGUE_CACHE.pop("F_PROBE", None)
+
+    result = await R.resolve_by_code(
+        "RESTAURANT_OPS_WASTAGE_TOP", _CatalogueProbePool(), "F_PROBE",
+    )
+
+    assert result == "ok"
+    assert seen["catalogue"] == frozenset({"米饭", "娃娃菜"}), (
+        "resolver 在分发期没拿到菜单目录, 内部菜名抽取会退回残差式启发法"
+    )
+    # 分发结束必须复位, 否则泄漏到同一 task 的后续代码(可能是另一个租户)。
+    assert R.current_dish_catalogue() is None
+    R._DISH_CATALOGUE_CACHE.pop("F_PROBE", None)
+
+
+@pytest.mark.asyncio
+async def test_resolve_by_code_still_dispatches_when_catalogue_unavailable(monkeypatch):
+    """目录加载失败不能挡住分发 —— 失败一律开放。"""
+    seen = {}
+
+    async def _probe(pool, factory_id, **kwargs):
+        seen["catalogue"] = R.current_dish_catalogue()
+        return "ok"
+
+    class _BoomPool:
+        def acquire(self):
+            raise RuntimeError("db down")
+
+    monkeypatch.setitem(R._RESOLVERS, "RESTAURANT_OPS_WASTAGE_TOP", _probe)
+    R._DISH_CATALOGUE_CACHE.pop("F_BOOM2", None)
+
+    result = await R.resolve_by_code(
+        "RESTAURANT_OPS_WASTAGE_TOP", _BoomPool(), "F_BOOM2",
+    )
+
+    assert result == "ok"
+    assert seen["catalogue"] is None
+
+
 @pytest.mark.asyncio
 async def test_catalogue_load_reads_names_and_aliases():
     class _Conn:
