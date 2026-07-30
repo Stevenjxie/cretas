@@ -46,7 +46,11 @@ public class BusinessDocumentTraceController {
     }
 
     @GetMapping("/purchase/orders/{orderId}/document-trace")
-    @RequirePermission({"procurement:read_write", "procurement:read"})
+    // 必须与 PurchaseController#getOrder (采购单**详情**) 逐字相同 —— 追踪抽屉就开在那张详情页里,
+    // 权限比它窄就会出现「页面打得开、抽屉一开就 403」。详情页多出的 warehouse:* 是有理由的:
+    // 仓库员选中待收货采购单后, RN 的 WHReceiptCreateScreen 用它拉明细预填收货行。
+    // ⚠️ 别照 PurchaseController#listOrders (行 113) 抄 —— 那是**列表**接口, 只有 procurement:*。
+    @RequirePermission({"procurement:read_write", "procurement:read", "warehouse:read_write", "warehouse:read"})
     @Operation(summary = "采购订单关联单据追踪")
     public ApiResponse<BusinessDocumentTraceResponse> tracePurchaseOrder(
             @PathVariable @NotBlank String factoryId,
