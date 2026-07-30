@@ -612,3 +612,69 @@ async def test_a_raising_content_validator_does_not_kill_the_request(monkeypatch
         content_validator=explodes_once,
     )
     assert result == second
+
+
+# ════════════════════════════════════════════════════════════════════════
+# ark (Volcengine 火山方舟) — provider wiring + the billing premise it rests on.
+#
+# Ark differs from every other provider in the registry on the ONE axis this
+# registry exists to protect: it bills post-paid after the free grant unless
+# 安心体验模式 is on. So the invariant tests below are not ceremony — an ark
+# entry reachable from a chain while that mode is off is a live money leak the
+# router cannot detect (it cannot tell a paid 200 from a free one).
+# ════════════════════════════════════════════════════════════════════════
+
+def test_ark_provider_config_reads_its_own_env(monkeypatch):
+    monkeypatch.setenv("LLM_ARK_API_KEY", "ark_key_fake")
+    monkeypatch.delenv("LLM_ARK_BASE_URL", raising=False)
+    base, key = llm_router._provider_config("ark")
+    assert key == "ark_key_fake"
+    assert base == "https://ark.cn-beijing.volces.com/api/v3"
+
+
+def test_ark_base_url_is_overridable(monkeypatch):
+    monkeypatch.setenv("LLM_ARK_API_KEY", "ark_key_fake")
+    monkeypatch.setenv("LLM_ARK_BASE_URL", "https://ark.example/api/v3")
+    base, _ = llm_router._provider_config("ark")
+    assert base == "https://ark.example/api/v3"
+
+
+def test_ark_without_a_key_is_unreachable(monkeypatch):
+    """No key → call_chain skips it. Keeps an un-provisioned environment (CI, a
+    dev box) from turning ark entries into hard failures."""
+    monkeypatch.delenv("LLM_ARK_API_KEY", raising=False)
+    _base, key = llm_router._provider_config("ark")
+    assert not key
+
+
+def test_every_ark_chain_entry_is_registered():
+    """Duplicates the global invariant on purpose, scoped to ark, so a failure
+    names the provider whose billing premise is conditional."""
+    for slot, chain in llm_router.SLOT_MODELS.items():
+        for account, model in chain:
+            if account != "ark":
+                continue
+            assert (account, model) in llm_router._SAFE_MODELS, (
+                f"{slot.value}: ark/{model} not registered — with 安心体验模式 off "
+                f"an unregistered ark call bills silently"
+            )
+
+
+def test_ark_models_carry_a_dated_callable_id():
+    """Ark rejects the console display name: `doubao-seed-1.6` → 404
+    InvalidEndpointOrModel.NotFound, while `doubao-seed-1-6-251015` works. Every
+    registered ark id must therefore end in a date-ish suffix, which is what
+    GET /api/v3/models returns.
+
+    Exception: `doubao-seed-evolving` is an undated id that genuinely exists —
+    but the console shows it 未开通 for this account, so it must not be
+    registered at all, and this test doubles as that check.
+    """
+    import re
+    for account, model in llm_router._SAFE_MODELS:
+        if account != "ark":
+            continue
+        assert re.search(r"-\d{6,8}$", model), (
+            f"ark/{model} has no dated suffix — probably a console display name, "
+            f"which Ark 404s. Take ids from GET /api/v3/models."
+        )

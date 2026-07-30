@@ -978,6 +978,29 @@ def _provider_config(account: str) -> Tuple[str, str]:
             os.getenv("LLM_ZHIPU_BASE_URL", "https://open.bigmodel.cn/api/paas/v4"),
             os.getenv("LLM_ZHIPU_API_KEY", ""),
         ),
+        # ark (Volcengine 火山方舟, 2026-07-30): OpenAI-compatible, ~36 ACTIVE text
+        # models each holding an untouched 500k free inference grant — a provider
+        # fully independent of both DashScope and TokenHub.
+        #
+        # ⛔ Billing premise is DIFFERENT from tencent and must be restated here,
+        # because getting it wrong is exactly the silent-billing failure this whole
+        # registry exists to prevent: Ark bills post-paid after the free grant
+        # UNLESS 安心体验模式 is on, in which case (per the official rule) 「仅消耗
+        # 免费额度，超出免费额度时服务将自动暂停，不会产生额外费用」. Steve confirmed
+        # it is ON for this account on 2026-07-30 — that confirmation, not the
+        # console's per-model badge, is what makes these entries admissible.
+        # If it is ever switched off, every ark entry must leave the chains.
+        #
+        # 🔴 Model ids MUST come from GET /api/v3/models, never from the console's
+        # display name: `doubao-seed-1.6` returns 404
+        # InvalidEndpointOrModel.NotFound while the callable id is
+        # `doubao-seed-1-6-251015`. Same trap as TokenHub's deepseek-v4-pro vs
+        # deepseek-v4-pro-202606. The list also carries a `status` field
+        # (Shutdown / Retiring / active) — prefer active, Retiring is a countdown.
+        "ark": (
+            os.getenv("LLM_ARK_BASE_URL", "https://ark.cn-beijing.volces.com/api/v3"),
+            os.getenv("LLM_ARK_API_KEY", ""),
+        ),
     }
     return mapping.get(account, ("", ""))
 
