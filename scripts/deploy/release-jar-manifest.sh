@@ -14,6 +14,21 @@ release_manifest_default_path() {
     printf '%s/current/%s\n' "$(release_manifest_cache_root)" "$RELEASE_MANIFEST_NAME"
 }
 
+# 小写 hex 的严格判定, 刻意不用 [0-9a-f] 这类区间。
+#
+# 本仓库栽过一次: en_US.UTF-8 下 bash 的 [[ =~ ]] 区间按 collation 展开, [A-Z] 会匹配小写、
+# [0-9a-f] 会匹配大写 —— release-cretas.sh 的 preflight 因此假报过 "import 无法解析", 之后
+# 靠 LC_ALL=C 绕开。这里不依赖调用方设了什么 locale: 枚举字符不含区间, 任何 locale 下行为一致。
+release_manifest_is_lower_hex() {
+    local value="$1" want_len="$2"
+
+    [ "${#value}" = "$want_len" ] || return 1
+    case "$value" in
+        *[!0123456789abcdef]*) return 1 ;;
+    esac
+    return 0
+}
+
 release_manifest_field() {
     local manifest=$1
     local key=$2

@@ -84,6 +84,12 @@ PARALLEL_CONFIRM=
 ORDER=backend-first
 ORDER_EXPLICIT=false
 STAGE_BACKEND_CONFIRM=
+# 显式开关, 默认关。env 形式给自动化用, --prefer-ci-artifact 给人手用。
+if [ "${CRETAS_RELEASE_PREFER_CI_ARTIFACT:-0}" = "1" ]; then
+    PREFER_CI_ARTIFACT=true
+else
+    PREFER_CI_ARTIFACT=false
+fi
 FALLBACK_MAIN_GUARD_SECONDS=${CRETAS_RELEASE_FALLBACK_MAIN_GUARD_SECONDS:-8}
 
 usage() {
@@ -96,7 +102,13 @@ Usage:
     [--phase build|deploy|all] \
     [--order backend-first|web-first] \
     [--stage-backend YES-STAGE] \
+    [--prefer-ci-artifact] \
     [--parallel-if-independent YES-INDEPENDENT-SERVICES]
+
+--prefer-ci-artifact (默认关闭): build 阶段先试着复用一份 CI 已构建、provenance 已验证的
+制品, 顶替本地 clean package。制品字节走 GitHub → 东京 → OSS → ECS, 一次都不经过本机, 直接
+落进 deploy-backend.sh 的服务器端 sha256 缓存。任何一环不满足(制品不存在 / 测试选择器不同 /
+签名验不过)都会明确说明并照旧本地构建 —— 不会静默降级。
 
 The normal Cretas release entry. It detects Java/Web changes relative to the
 registered Base SHA, builds each trusted artifact at most once, and delegates
@@ -118,6 +130,7 @@ while [ "$#" -gt 0 ]; do
         --parallel-if-independent) PARALLEL_CONFIRM=${2:-}; shift 2 ;;
         --order) ORDER=${2:-}; ORDER_EXPLICIT=true; shift 2 ;;
         --stage-backend) STAGE_BACKEND_CONFIRM=${2:-}; shift 2 ;;
+        --prefer-ci-artifact) PREFER_CI_ARTIFACT=true; shift ;;
         -h|--help) usage; exit 0 ;;
         *) echo "ERROR: unknown option: $1" >&2; usage >&2; exit 2 ;;
     esac
@@ -197,6 +210,11 @@ JAVA_BUILD_COUNT=0
 WEB_BUILD_COUNT=0
 JAVA_STAGE_STATUS=not-requested
 JAVA_STAGE_SECONDS=0
+# CI 制品优先: 默认关闭。开启后 build 阶段先试着用一份 provenance 已验证的 CI 制品顶替
+# 本地 clean package(实测本地 ~125s: javac 110s + 打包 15s)。取不到就照旧本地构建。
+CI_ARTIFACT_STATUS=disabled
+CI_ARTIFACT_SECONDS=0
+CI_ARTIFACT_DESCRIPTOR=
 MAIN_GUARD_STATUS=not-needed
 MAIN_GUARD_SECONDS=0
 FALLBACK_GUARD_COMPLETED=false
@@ -289,6 +307,11 @@ write_report() {
         printf '    "web": {"build": "%s", "deploy": "%s", "outcome": "%s", "build_count": %s}\n' "$WEB_BUILD_STATUS" "$WEB_DEPLOY_STATUS" "$WEB_DEPLOY_OUTCOME" "$WEB_BUILD_COUNT"
         printf '  },\n'
         printf '  "staging": {"java": "%s", "seconds": %s},\n' "$JAVA_STAGE_STATUS" "$JAVA_STAGE_SECONDS"
+        # 「这次到底用没用 CI 制品」必须落在台账里。unavailable:<reason> 会带上原因, 否则
+        # 一次静默回退与一次真复用在报告里长得一模一样。
+        printf '  "ci_artifact": {"status": "%s", "seconds": %s, "descriptor": "%s"},\n' \
+            "$(json_escape "$CI_ARTIFACT_STATUS")" "$CI_ARTIFACT_SECONDS" \
+            "$(json_escape "$CI_ARTIFACT_DESCRIPTOR")"
         printf '  "main_guard": {"status": "%s", "seconds": %s, "drift_recoveries": %s},\n' \
             "$MAIN_GUARD_STATUS" "$MAIN_GUARD_SECONDS" "$DRIFT_ATTEMPT"
         printf '  "java_manifest": {"build_commit": "%s", "tree": "%s", "sha256": "%s", "size_bytes": "%s", "maven_wall_seconds": "%s"},\n' \
@@ -325,8 +348,40 @@ build_java() {
         return 1
     fi
     [ -n "$TESTS" ] || { echo "ERROR: Java build requires --tests '<MavenTestSelector>'" >&2; return 2; }
-    JAVA_BUILD_COUNT=$((JAVA_BUILD_COUNT + 1))
     "$SCRIPT_DIR/release-java-preflight.sh" --repo-root "$PROJECT_ROOT" --tests "$TESTS"
+
+    # ---- CI 制品优先 ----
+    # 刻意放在 preflight 之后: 那一步校验的是发布意图(选择器存在、import 可解析), 与制品
+    # 从哪来无关, 两条路都该过。
+    #
+    # 不递增 JAVA_BUILD_COUNT: 那个计数的语义是"至多一次 Maven 生命周期"。CI 路径一次
+    # Maven 都没跑, 提前把预算花掉会让后面真需要回退时被自己的闸挡住。
+    if [ "$PREFER_CI_ARTIFACT" = "true" ]; then
+        if duration_run CI_ARTIFACT_SECONDS "$RUN_LOG_DIR/java-ci-artifact.log" \
+            "$SCRIPT_DIR/release-ci-artifact.sh" --tests "$TESTS"; then
+            CI_ARTIFACT_DESCRIPTOR=$(sed -n 's/^CI_ARTIFACT_DESCRIPTOR=//p' \
+                "$RUN_LOG_DIR/java-ci-artifact.log" | tail -1)
+            if [ -n "$CI_ARTIFACT_DESCRIPTOR" ] && [ -f "$CI_ARTIFACT_DESCRIPTOR" ]; then
+                CI_ARTIFACT_STATUS=used
+                JAVA_BUILD_STATUS=success-ci-artifact
+                echo "CI_ARTIFACT=used descriptor=$CI_ARTIFACT_DESCRIPTOR seconds=$CI_ARTIFACT_SECONDS"
+                return 0
+            fi
+            # 脚本退出 0 却没留下可用描述符 —— 当失败处理, 不当"大概行吧"。
+            CI_ARTIFACT_STATUS=unusable-descriptor
+            CI_ARTIFACT_DESCRIPTOR=
+        else
+            CI_ARTIFACT_STATUS=$(sed -n 's/^CI_ARTIFACT_UNAVAILABLE reason=/unavailable:/p' \
+                "$RUN_LOG_DIR/java-ci-artifact.log" | tail -1)
+            [ -n "$CI_ARTIFACT_STATUS" ] || CI_ARTIFACT_STATUS=unavailable:unknown
+            CI_ARTIFACT_DESCRIPTOR=
+        fi
+        # 回退是安全的(就是原来的行为), 但必须吵。静默回退会让"用了 CI 制品"和"其实重编了
+        # 一遍"变成同一条日志。
+        echo "CI_ARTIFACT=$CI_ARTIFACT_STATUS — 回退本地 clean package" >&2
+    fi
+
+    JAVA_BUILD_COUNT=$((JAVA_BUILD_COUNT + 1))
     if duration_run JAVA_BUILD_SECONDS "$RUN_LOG_DIR/java-build.log" \
         "$SCRIPT_DIR/release-jar-manifest.sh" build --tests "$TESTS"; then
         JAVA_BUILD_STATUS=success
@@ -525,6 +580,15 @@ guard_exact_main_before_fallback() {
 }
 
 validate_or_build_java_once() {
+    # --phase all 时 build 阶段可能已经用 CI 制品拿到了描述符。那份描述符就是本次发布的
+    # 制品凭据: 没有本地 manifest 可验(它压根不存在), 也不该再跑一遍跨境链路。
+    if [ "$CI_ARTIFACT_STATUS" = used ] && [ -n "$CI_ARTIFACT_DESCRIPTOR" ] \
+        && [ -f "$CI_ARTIFACT_DESCRIPTOR" ]; then
+        echo "Java 制品: 复用本阶段已验证的 CI 制品 ($CI_ARTIFACT_DESCRIPTOR)"
+        return 0
+    fi
+    # 本地 manifest 优先于 CI 制品: 本地已经构建好的话复用成本是 0, 而 CI 路径还要走一趟
+    # 跨境传输。只有本地不可用时才往下走。
     if "$SCRIPT_DIR/release-jar-manifest.sh" validate >"$RUN_LOG_DIR/java-manifest-validate.log" 2>&1; then
         cat "$RUN_LOG_DIR/java-manifest-validate.log"
         [ "$JAVA_BUILD_STATUS" = not-selected ] && JAVA_BUILD_STATUS=reused
@@ -535,6 +599,12 @@ validate_or_build_java_once() {
     echo "WARN: Java manifest invalid; using the one permitted build fallback" >&2
     build_java
     record_fallback_build java
+    # CI 制品路径没有本地 manifest/jar 可验。它的凭据是描述符, 而描述符的 backend_tree 与
+    # build_commit 会在 deploy-backend.sh 里按与 release_manifest_validate 相同的两跳规则
+    # 再验一次 —— 校验没被绕过, 只是换了个执行点。
+    if [ "$CI_ARTIFACT_STATUS" = used ]; then
+        return 0
+    fi
     "$SCRIPT_DIR/release-jar-manifest.sh" validate
 }
 
@@ -556,6 +626,7 @@ deploy_java() {
     local child_report="$RUN_LOG_DIR/java-deploy-report.json"
     if duration_run JAVA_DEPLOY_SECONDS "$RUN_LOG_DIR/java-deploy.log" \
         env CRETAS_REQUIRE_TRUSTED_ARTIFACT=1 \
+        CRETAS_REMOTE_ARTIFACT_DESCRIPTOR="$CI_ARTIFACT_DESCRIPTOR" \
         CRETAS_DEPLOY_REPORT_PATH="$child_report" \
         "$SCRIPT_DIR/deploy-backend.sh" --env prod; then
         JAVA_DEPLOY_STATUS=success
@@ -612,6 +683,7 @@ run_parallel_deploy() {
     DEPLOY_MODE=parallel
     if duration_run DEPLOY_SECONDS "$RUN_LOG_DIR/parallel-deploy.log" \
         env CRETAS_REQUIRE_TRUSTED_ARTIFACT=1 \
+        CRETAS_REMOTE_ARTIFACT_DESCRIPTOR="$CI_ARTIFACT_DESCRIPTOR" \
         CRETAS_DEPLOY_REPORT_PATH="$RUN_LOG_DIR/java-deploy-report.json" \
         CRETAS_WEB_DEPLOY_REPORT_PATH="$RUN_LOG_DIR/web-deploy-report.json" \
         "$SCRIPT_DIR/deploy-cretas-parallel.sh" \

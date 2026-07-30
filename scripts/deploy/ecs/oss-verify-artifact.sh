@@ -32,6 +32,10 @@ usage: oss-verify-artifact.sh --prefix <p> --tree-sha <sha> --jar-sha256 <hex> \
                               --size <bytes> [--manifest <path>] [--purge-acceptance]
                               [--stage-to-cache]
                               [--attestation-b64 <base64>] [--source-digest <commit>]
+                              [--payload-stdin]
+
+  --payload-stdin  stdin 读两行 base64: 第 1 行 manifest, 第 2 行 attestation bundle(可空)。
+                   自动化路径用这个, 别用 --attestation-b64 (14KB 参数会被 MSYS ssh 截断)。
 EOF
   exit 2
 }
@@ -47,7 +51,8 @@ ATTEST_SIGNER_WORKFLOW=${CRETAS_ATTEST_SIGNER_WORKFLOW:-Stevenjxie/cretas/.githu
 GH_BIN=${CRETAS_GH_BIN:-/usr/bin/gh}
 
 prefix= tree_sha= jar_sha= expected_size= manifest= purge=0 manifest_stdin=0 stage=0
-attestation_b64= source_digest=
+attestation_b64= source_digest= payload_stdin=0
+payload_manifest_b64= payload_attestation_b64=
 while (($#)); do
   case "$1" in
     --prefix) (($# >= 2)) || usage; prefix=$2; shift 2 ;;
@@ -58,10 +63,10 @@ while (($#)); do
     --manifest-stdin) manifest_stdin=1; shift ;;
     --purge-acceptance) purge=1; shift ;;
     --stage-to-cache) stage=1; shift ;;
-    # A Sigstore bundle is public by design -- it is published to a public
-    # transparency log -- so unlike the signed PUT URL it is not a secret and does
-    # not need the stdin channel. stdin is already taken by the manifest.
+    # 自动化路径请用 --payload-stdin。--attestation-b64 保留给人工排查(直接在 ECS 上跑),
+    # 因为它受命令行长度/引用规则影响 —— 见文件头那段 MSYS ssh 截断的实测。
     --attestation-b64) (($# >= 2)) || usage; attestation_b64=$2; shift 2 ;;
+    --payload-stdin) payload_stdin=1; shift ;;
     --source-digest) (($# >= 2)) || usage; source_digest=$2; shift 2 ;;
     *) usage ;;
   esac
@@ -70,8 +75,32 @@ done
 # A CI artifact's manifest lives inside the downloaded ZIP on the Tokyo host, so
 # it reaches us as bytes rather than a path. Reading it here keeps it off the
 # Windows filesystem entirely.
+#
+# --payload-stdin 是自动化路径用的形式: 两行 base64, 第一行 manifest, 第二行 attestation
+# bundle(允许为空)。base64 字母表不含换行, 所以两行分隔不可能与内容冲突, 不需要自造分隔符。
+#
+# 为什么不走命令行: bundle 约 14KB, 而 --attestation-b64 那种形式在 MSYS 的
+# /usr/bin/ssh.exe 下会被截断 —— 实测同一条 14,111 字符的命令, Windows OpenSSH
+# (C:\Windows\System32\OpenSSH\ssh.exe) 送达完整, Git-for-Windows 的 ssh.exe 把尾部截掉,
+# 于是最后一个参数 --source-digest 静默消失, ECS 报 source_digest_not_supplied。
+# 从 bash 起的 pwsh 继承 MSYS 的 PATH, 命中的正是坏的那个 —— 也就是真实发布路径。
 manifest_content=
-if ((manifest_stdin)); then
+if ((payload_stdin)); then
+  IFS= read -r payload_manifest_b64 || payload_manifest_b64=
+  IFS= read -r payload_attestation_b64 || payload_attestation_b64=
+  payload_manifest_b64=${payload_manifest_b64%$'\r'}
+  payload_attestation_b64=${payload_attestation_b64%$'\r'}
+  if [[ -n $payload_manifest_b64 ]]; then
+    manifest_content=$(printf '%s' "$payload_manifest_b64" | base64 -d 2>/dev/null) || {
+      echo "error=payload_manifest_undecodable" >&2
+      exit 2
+    }
+  fi
+  if [[ -n $payload_attestation_b64 ]]; then
+    attestation_b64=$payload_attestation_b64
+  fi
+  manifest_stdin=1
+elif ((manifest_stdin)); then
   manifest_content=$(cat)
 fi
 
@@ -271,6 +300,9 @@ echo "oss_to_ecs_bytes=$local_size"
 echo "oss_to_ecs_seconds=$elapsed"
 echo "oss_to_ecs_megabytes_per_second=$rate"
 echo "sha256=$local_sha"
+# deploy-backend.sh's claim_remote_sha256_artifact gates on sha256 AND md5. When the
+# deploy has no local JAR to hash it needs both from here.
+echo "md5=$(md5sum "$work_dir/artifact.jar" | cut -d ' ' -f 1)"
 echo "transport_verified=true"
 echo "deployable_trust_verified=$trust"
 echo "manifest_consistency_verified=$manifest_consistency"
@@ -299,6 +331,37 @@ if ((stage)); then
     echo "error=refusing_to_stage_untrusted_artifact trust_reason=$trust_reason" >&2
     exit 1
   fi
+
+  # Fat-JAR integrity, checked on the host that will actually run these bytes.
+  #
+  # 2026-04-24 事故: maven 增量编译偶发产生 corrupt fat jar — 缺
+  # ch.qos.logback.classic.spi.ThrowableProxy。Spring Boot 起来后任何 exception 触发
+  # logback rendering 都 cascade ClassNotFound, 服务 crashloop 而 nginx 健康检查在短暂
+  # 窗口里可能仍返 200。
+  #
+  # deploy-backend.sh 一直在本地做这个检查。当部署改为不再拉本地 jar 时, 那个检查会
+  # 随之消失 —— 所以搬到这里。搬过来不是等价替换而是更强: 检查对象从"一份随后要被上传的
+  # 本地副本"变成"真正会被装上去运行的那份字节"。unzip -tqq 只校验外层 CRC, 抓不到
+  # 嵌套 jar 内缺 class 这一类。
+  nested=$(unzip -l "$work_dir/artifact.jar" 2>/dev/null |
+    grep -oE 'BOOT-INF/lib/logback-classic-[0-9.]+\.jar' | head -1)
+  if [[ -z $nested ]]; then
+    echo "error=jar_integrity_missing_logback_nested_jar" >&2
+    exit 1
+  fi
+  probe_dir="$work_dir/nested"
+  mkdir -p "$probe_dir"
+  if ! unzip -j -q -o "$work_dir/artifact.jar" "$nested" -d "$probe_dir" 2>/dev/null; then
+    echo "error=jar_integrity_nested_jar_unreadable nested=$nested" >&2
+    exit 1
+  fi
+  if ! unzip -l "$probe_dir/$(basename "$nested")" 2>/dev/null |
+    grep -q 'ch/qos/logback/classic/spi/ThrowableProxy.class'; then
+    echo "error=jar_integrity_missing_throwable_proxy nested=$nested" >&2
+    exit 1
+  fi
+  echo "jar_integrity_verified=true nested=$nested"
+
   cache_dir="${CRETAS_REMOTE_JAR_CACHE_DIR:-/www/wwwroot/cretas/release-cache/sha256}"
   cache_path="$cache_dir/$jar_sha.jar"
   install -d -m 700 "$cache_dir"
