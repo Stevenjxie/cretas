@@ -244,6 +244,10 @@ CI_ARTIFACT_DESCRIPTOR=
 MAIN_GUARD_STATUS=not-needed
 MAIN_GUARD_SECONDS=0
 FALLBACK_GUARD_COMPLETED=false
+# 两边的回退构建是不是并行做的。只影响【工时怎么记】: 串行要相加, 并行不能相加。
+# FALLBACK_PARALLEL_SECONDS 先给 0 —— 脚本是 set -u, 引用未赋值变量会直接炸。
+FALLBACK_BUILD_PARALLEL=false
+FALLBACK_PARALLEL_SECONDS=0
 BACKEND_UPSTREAM=
 BACKEND_SLOT=
 BACKEND_PORT=
@@ -720,7 +724,11 @@ guard_exact_main_before_fallback() {
     FALLBACK_GUARD_COMPLETED=true
 }
 
-validate_or_build_java_once() {
+# 「Java 侧不需要回退构建」时返回 0。
+# 拆成 ready / fallback 两半, 是为了让 both 能【先问两边、再决定要不要并行】——
+# 原先 both 是 `validate_or_build_java_once; validate_or_build_web_once`, 两边都要真构建时
+# 时间是相加的(实测 Java 171s + Web 63s = 234s), 而 --phase all 那条早就并行了。
+java_artifact_ready() {
     # --phase all 时 build 阶段可能已经用 CI 制品拿到了描述符。那份描述符就是本次发布的
     # 制品凭据: 没有本地 manifest 可验(它压根不存在), 也不该再跑一遍跨境链路。
     if [ "$CI_ARTIFACT_STATUS" = used ] && [ -n "$CI_ARTIFACT_DESCRIPTOR" ] \
@@ -736,6 +744,10 @@ validate_or_build_java_once() {
         return 0
     fi
     cat "$RUN_LOG_DIR/java-manifest-validate.log" >&2
+    return 1
+}
+
+java_fallback_build() {
     guard_exact_main_before_fallback
     echo "WARN: Java manifest invalid; using the one permitted build fallback" >&2
     build_java
@@ -749,17 +761,119 @@ validate_or_build_java_once() {
     "$SCRIPT_DIR/release-jar-manifest.sh" validate
 }
 
-validate_or_build_web_once() {
+web_artifact_ready() {
     if "$SCRIPT_DIR/release-web-manifest.sh" validate >"$RUN_LOG_DIR/web-manifest-validate.log" 2>&1; then
         cat "$RUN_LOG_DIR/web-manifest-validate.log"
         [ "$WEB_BUILD_STATUS" = not-selected ] && WEB_BUILD_STATUS=reused
         return 0
     fi
     cat "$RUN_LOG_DIR/web-manifest-validate.log" >&2
+    return 1
+}
+
+web_fallback_build() {
     guard_exact_main_before_fallback
     echo "WARN: Web manifest invalid; using the one permitted build fallback" >&2
     build_web
     record_fallback_build web
+    "$SCRIPT_DIR/release-web-manifest.sh" validate
+}
+
+# 单组件入口保持原语义(ready 不成立就回退构建), 供 java) / web) 两个 case 用。
+validate_or_build_java_once() { java_artifact_ready || java_fallback_build; }
+validate_or_build_web_once() { web_artifact_ready || web_fallback_build; }
+
+# both: 先问两边, 只有【两边都要真构建】时才值得并行。
+validate_or_build_both() {
+    local java_ready=false web_ready=false
+
+    if java_artifact_ready; then java_ready=true; fi
+    if web_artifact_ready; then web_ready=true; fi
+
+    if [ "$java_ready" = true ] && [ "$web_ready" = true ]; then
+        return 0
+    fi
+    # 只有一边要建 —— 并行没有意义, 也不该把另一边拖进并行构建器。
+    if [ "$java_ready" = true ]; then
+        web_fallback_build
+        return 0
+    fi
+    if [ "$web_ready" = true ]; then
+        java_fallback_build
+        return 0
+    fi
+
+    # 两边都要建。Java 仍然【先试 CI 制品】—— 命中的话就只剩 Web 要建, 并行同样没意义,
+    # 而且能省掉一整趟本地 Maven。
+    guard_exact_main_before_fallback
+    echo "WARN: Java 与 Web manifest 均不可用; 使用各自唯一一次回退构建" >&2
+
+    # 与 --phase all 走【完全同一套编排】(#2032), 这才是这次改动的本意: 两条 phase 的
+    # 性能特征拉齐, 而不是 deploy 这条永远慢一截。
+    #   先 ~2s 廉价探测 → 探测过才承诺「取制品 ∥ 建 Web」(≈max(61,63))
+    #                  → 探测不过直接本地并行构建 (≈max(171,63)), 一秒不浪费
+    # 探测【只】保证候选存在(选择器覆盖与 attestation 要等制品送到才能判), 所以下面必须
+    # 留晚失败回退 —— 这一条与 --phase all 那边的理由逐字相同。
+    local fallback_started=$(date +%s)
+    if [ "$PREFER_CI_ARTIFACT" = "true" ] && [ -n "$TESTS" ] \
+        && "$SCRIPT_DIR/release-ci-artifact.sh" --tests "$TESTS" --probe-only \
+            >"$RUN_LOG_DIR/java-ci-probe-deploy.log" 2>&1; then
+        cat "$RUN_LOG_DIR/java-ci-probe-deploy.log"
+        if run_ci_fetch_parallel_web; then
+            record_fallback_build java
+            record_fallback_build web
+            FALLBACK_BUILD_PARALLEL=true
+            FALLBACK_PARALLEL_SECONDS=$(( $(date +%s) - fallback_started ))
+            return 0
+        fi
+        # 晚失败: Web 已经建好了, 但没拿到可信制品 —— 只剩 Java 一件事, 此时并行没有意义。
+        # 明确说出代价, 别让它看起来像正常路径。
+        echo "CI_ARTIFACT=$CI_ARTIFACT_STATUS — Web 已构建, 现串行补建 Java(本次比并行取制品慢)" >&2
+        record_fallback_build web
+        java_fallback_build
+        FALLBACK_BUILD_PARALLEL=true
+        FALLBACK_PARALLEL_SECONDS=$(( $(date +%s) - fallback_started ))
+        return 0
+    fi
+    if [ "$PREFER_CI_ARTIFACT" = "true" ]; then
+        echo "CI_ARTIFACT=$(sed -n 's/^CI_ARTIFACT_UNAVAILABLE reason=/unavailable:/p' \
+            "$RUN_LOG_DIR/java-ci-probe-deploy.log" 2>/dev/null | tail -1) (探测未通过, 直接本地并行构建)" >&2
+    fi
+    build_both_fallback_parallel
+}
+
+# 两边都得本地构建时, 复用构建阶段那个并行构建器。
+#
+# ⚠️ 为什么不是把两个 *_fallback_build 丢进后台子 shell: 它们要往父进程回写
+# BUILD_MODE / *_BUILD_STATUS / *_BUILD_SECONDS / *_BUILD_COUNT 等一堆状态, 而后台子 shell
+# 传不回来 —— 那条路要靠 kv 状态文件 marshalling, 是这个仓库栽过的地方。
+# release-cretas-artifacts.sh 是【子进程】, 输出从日志解析, 状态全程留在父进程里。
+build_both_fallback_parallel() {
+    if [ "$JAVA_BUILD_COUNT" -ge 1 ] || [ "$WEB_BUILD_COUNT" -ge 1 ]; then
+        echo "ERROR: build fallback already consumed; refusing another build lifecycle" >&2
+        return 1
+    fi
+    [ -n "$TESTS" ] || { echo "ERROR: parallel fallback build requires --tests '<MavenTestSelector>'" >&2; return 2; }
+    "$SCRIPT_DIR/release-java-preflight.sh" --repo-root "$PROJECT_ROOT" --tests "$TESTS"
+
+    JAVA_BUILD_COUNT=1
+    WEB_BUILD_COUNT=1
+    if duration_run FALLBACK_PARALLEL_SECONDS "$RUN_LOG_DIR/artifacts-fallback-build.log" \
+        "$SCRIPT_DIR/release-cretas-artifacts.sh" --tests "$TESTS"; then
+        JAVA_BUILD_STATUS=success; WEB_BUILD_STATUS=success
+        JAVA_BUILD_SECONDS=$(sed -n 's/^JAVA_BUILD_WALL_SECONDS=//p' "$RUN_LOG_DIR/artifacts-fallback-build.log" | tail -1)
+        WEB_BUILD_SECONDS=$(sed -n 's/^WEB_BUILD_WALL_SECONDS=//p' "$RUN_LOG_DIR/artifacts-fallback-build.log" | tail -1)
+        JAVA_BUILD_SECONDS=${JAVA_BUILD_SECONDS:-$FALLBACK_PARALLEL_SECONDS}
+        WEB_BUILD_SECONDS=${WEB_BUILD_SECONDS:-$FALLBACK_PARALLEL_SECONDS}
+    else
+        JAVA_BUILD_STATUS=failed; WEB_BUILD_STATUS=failed
+        return 1
+    fi
+    FALLBACK_BUILD_PARALLEL=true
+    record_fallback_build java
+    record_fallback_build web
+    # 两边都要按各自那套再验一次 —— 与串行路径的收尾完全相同, 并行只改了"谁先谁后"。
+    "$SCRIPT_DIR/release-jar-manifest.sh" validate
     "$SCRIPT_DIR/release-web-manifest.sh" validate
 }
 
@@ -890,11 +1004,20 @@ run_deploy_phase() {
     case "$selected" in
         java) validate_or_build_java_once ;;
         web) validate_or_build_web_once ;;
-        both) validate_or_build_java_once; validate_or_build_web_once ;;
+        both) validate_or_build_both ;;
     esac
     ensure_exact_main_after_artifacts "artifact validation/fallback build"
     case "$BUILD_MODE" in
-        *fallback) BUILD_SECONDS=$((JAVA_BUILD_SECONDS + WEB_BUILD_SECONDS)) ;;
+        # 🔴 并行做的两边【不能】相加, 否则回执里的 build_total 会凭空翻倍 ——
+        # 那正是先前 --phase deploy 的 234s(=171+63) 与 --phase all 的 ~171s 差别的来源,
+        # 现在两边都并行了, 记账也得跟着改, 不然"优化生效了"在回执上看不出来。
+        *fallback)
+            if [ "$FALLBACK_BUILD_PARALLEL" = true ]; then
+                BUILD_SECONDS=$FALLBACK_PARALLEL_SECONDS
+            else
+                BUILD_SECONDS=$((JAVA_BUILD_SECONDS + WEB_BUILD_SECONDS))
+            fi
+            ;;
     esac
 
     if [ "$selected" = both ]; then

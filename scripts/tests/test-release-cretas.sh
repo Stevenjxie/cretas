@@ -143,6 +143,31 @@ EOF
 printf 'VERIFY %s\n' "$*" >>"$MOCK_CALL_LOG"
 printf 'BACKEND_SLOT=green\nBACKEND_PORT=10020\nBACKEND_UPSTREAM=47.100.235.168:10020\nBACKEND_SERVICE=cretas-backend-green\nBACKEND_HEALTH=pass\nWEB_HTTP=200\n'
 EOF
+    # release-ci-artifact.sh 必须打桩。
+    # 🔴 它此前【没有桩】: --prefer-ci-artifact 默认关的时候没人走到它, 所以看不出来。
+    # 改成默认开(#2061)之后, 每个用例都会调它 —— 而 fixture 里没有这个文件, 于是靠
+    # 「命令不存在 → 非 0 → 回退本地构建」在偶然地工作。那等于 CI 制品这条路在测试里
+    # 零覆盖, 而且是被一个巧合兜住的。显式打桩, 并让"有没有可用制品"变成可控输入。
+    cat >"$CASE_REPO/scripts/deploy/release-ci-artifact.sh" <<'EOF'
+#!/usr/bin/env bash
+probe=0
+for a in "$@"; do [ "$a" = --probe-only ] && probe=1; done
+if [ "${MOCK_CI_ARTIFACT:-unavailable}" != available ]; then
+    printf 'CI_ARTIFACT_PROBE probe=%s result=unavailable\n' "$probe" >>"$MOCK_CALL_LOG"
+    echo "CI_ARTIFACT_UNAVAILABLE reason=mock_no_artifact" >&2
+    exit 1
+fi
+if [ "$probe" = 1 ]; then
+    printf 'CI_ARTIFACT_PROBE probe=1 result=ok\n' >>"$MOCK_CALL_LOG"
+    echo "CI_ARTIFACT_PROBE_OK id=1 commit=mockcommit"
+    exit 0
+fi
+printf 'CI_ARTIFACT_FETCH\n' >>"$MOCK_CALL_LOG"
+descriptor="$MOCK_COUNTER_ROOT/release-jar.remote"
+printf 'format=cretas-remote-artifact-v1\nbackend_tree=mock\n' >"$descriptor"
+echo "CI_ARTIFACT_DESCRIPTOR=$descriptor"
+echo "CI_ARTIFACT_READY commit=mockcommit jar_sha256=mock staged=stored"
+EOF
     chmod +x "$CASE_REPO/scripts/deploy/"*.sh
     git -C "$CASE_REPO" init -q -b main
     git -C "$CASE_REPO" config user.email fixture@example.com
@@ -288,6 +313,42 @@ assert_log_count 0 'JAVA_BUILD build' "$CASE_LOG"
 assert_log_count 1 'WEB_BUILD build' "$CASE_LOG"
 assert_contains "$CASE_REPORT" '"build_mode": "web-fallback"'
 assert_contains "$CASE_REPORT" '"web": {"build": "success", "deploy": "success", "outcome": "deployed", "build_count": 1}'
+
+# 🔴 两边 manifest 都失效时, 两次回退构建【不能串行】。
+#
+# 这条以前没有任何用例: 套件里只有单边 fallback(上面那个 web-fallback), 所以
+# 「--phase deploy 两边都要建时是相加」这件事一直没被盯住 —— 实测 Java 171s + Web 63s
+# = 234s, 而 --phase all 那条早就并行(~171s)。同一件事因走的 phase 不同差 63s。
+#
+# 断言用【结构代理】而不是计时: 走没走并行构建器是可观察的, 而 fixture 里量不出真并行。
+setup_repo both_fallback_parallel
+commit_change backend/java/cretas-api/Service.java
+commit_change web-admin/src/app.ts
+publish_head
+MOCK_JAVA_VALIDATE_FAILS=1 MOCK_WEB_VALIDATE_FAILS=1 \
+run_release --phase deploy --base-sha "$BASE_SHA" --tests StartupTest --confirm-prod YES-PROD
+assert_contains "$CASE_OUTPUT" 'RELEASE_BUILD_MODE=java+web-fallback'
+assert_contains "$CASE_REPORT" '"build_mode": "java+web-fallback"'
+# 必须走并行构建器, 而不是各建各的。两个桩输出可区分:
+#   并行构建器 → 'ARTIFACTS ...' + 裸 'JAVA_BUILD' / 'WEB_BUILD'
+#   单独构建   → 'JAVA_BUILD build ...' / 'WEB_BUILD build ...'
+assert_log_count 1 'ARTIFACTS' "$CASE_LOG"
+assert_log_count 0 'JAVA_BUILD build' "$CASE_LOG"
+assert_log_count 0 'WEB_BUILD build' "$CASE_LOG"
+
+# 同样两边都要建, 但这次 CI 制品可用 —— 那就该是「取制品 ∥ 建 Web」, 而不是
+# 先花 61s 取完再花 63s 建 Web。同样用结构代理: 并行那条路径自己会说明。
+setup_repo both_fallback_ci_parallel
+commit_change backend/java/cretas-api/Service.java
+commit_change web-admin/src/app.ts
+publish_head
+MOCK_JAVA_VALIDATE_FAILS=1 MOCK_WEB_VALIDATE_FAILS=1 MOCK_CI_ARTIFACT=available \
+run_release --phase deploy --base-sha "$BASE_SHA" --tests StartupTest --confirm-prod YES-PROD
+assert_contains "$CASE_OUTPUT" '与 Web 构建并行'
+assert_log_count 1 'CI_ARTIFACT_FETCH' "$CASE_LOG"
+# Java 走了 CI 制品就不该再跑一遍本地 Maven
+assert_log_count 0 'JAVA_BUILD build' "$CASE_LOG"
+assert_log_count 0 'ARTIFACTS' "$CASE_LOG"
 
 # A changed component may still be a verified production no-op when identical
 # bytes are already live; final status follows the child receipt, not the diff.
