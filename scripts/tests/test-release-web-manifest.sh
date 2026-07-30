@@ -165,4 +165,70 @@ if grep -q 'web_release_hash_tree' "$MANIFEST_HELPER"; then
     fail "slow per-file hash tree helper was reintroduced"
 fi
 
-echo "PASS: Web archive manifest validates provenance, same-tree squash reuse, one-file hash, clean state, and archive integrity"
+# ---- 构建期复用 (web_release_build_reusable) ----
+# Java 侧一直有 release_manifest_build_reusable, Web 侧没有 —— 于是每次构建都无条件
+# npm ci + vite build。实测那是 86s (npm ci 20s + vite build 66s) 而产出逐字节相同。
+IFS='|' read -r repo manifest dist < <(make_repo build-reuse)
+write_candidate "$repo" "$manifest" "$dist"
+WEB_RELEASE_REUSED_TREE=
+web_release_build_reusable "$repo" "$manifest" \
+    || fail "same web tree should be reusable at build time"
+[ -n "$WEB_RELEASE_REUSED_TREE" ] || fail "build reuse did not export the reused tree"
+[ "$WEB_RELEASE_REUSED_TREE" = "$(git -C "$repo" rev-parse "HEAD:$WEB_RELEASE_SOURCE_PATH")" ] \
+    || fail "build reuse exported the wrong tree"
+# 复用完成后 current/ 必须仍然是一份可通过校验的制品 —— 否则构建"成功"了但发布下一步会挂,
+# 而那种失败会出现在离构建很远的地方。
+expect_valid "$manifest" "$repo" "reused-at-build-time manifest"
+
+# 🔴 锚点差异必须钉住: 构建期复用锚 HEAD, 部署期的 web_release_validate_cached 锚 origin/main。
+# 构建阶段合法地跑在已 review 的候选分支上, 那时 origin/main 还没前进 —— 锚错了会让复用永远
+# 不命中(或者更糟, 命中别的树)。这里把 origin/main 停在旧 commit, HEAD 前进但 web 树不变,
+# 复用仍应命中。
+git -C "$repo" update-ref refs/remotes/origin/main "$(git -C "$repo" rev-parse HEAD)"
+printf 'backend only\n' >> "$repo/README.md"
+git -C "$repo" add README.md
+git -C "$repo" commit -qm "commit outside web tree"
+web_release_build_reusable "$repo" "$manifest" \
+    || fail "build reuse must anchor on HEAD, not origin/main"
+
+# web 树真的变了 → 必须不命中(否则会拿旧 dist 当新代码发出去)
+printf 'export const marker = "two";\n' > "$repo/web-admin/source.ts"
+git -C "$repo" add web-admin/source.ts
+git -C "$repo" commit -qm "change web tree"
+if web_release_build_reusable "$repo" "$manifest"; then
+    fail "changed web tree must not be reusable"
+fi
+
+# archive 被改一个字节 → sha256 不符必须拒绝
+IFS='|' read -r repo manifest dist < <(make_repo build-reuse-tamper)
+write_candidate "$repo" "$manifest" "$dist"
+tree=$(git -C "$repo" rev-parse "HEAD:$WEB_RELEASE_SOURCE_PATH")
+cached_dir="$(dirname "$(dirname "$manifest")")/by-tree/$tree"
+printf 'X' | dd of="$cached_dir/$WEB_RELEASE_ARCHIVE_NAME" bs=1 seek=100 conv=notrunc status=none 2>/dev/null
+if web_release_build_reusable "$repo" "$manifest"; then
+    fail "tampered cached archive must not be reusable"
+fi
+
+# success=false → 必须拒绝
+IFS='|' read -r repo manifest dist < <(make_repo build-reuse-failed)
+write_candidate "$repo" "$manifest" "$dist"
+tree=$(git -C "$repo" rev-parse "HEAD:$WEB_RELEASE_SOURCE_PATH")
+cached_dir="$(dirname "$(dirname "$manifest")")/by-tree/$tree"
+sed -i 's/^success=true$/success=false/' "$cached_dir/$WEB_RELEASE_MANIFEST_NAME"
+if web_release_build_reusable "$repo" "$manifest"; then
+    fail "manifest with success=false must not be reusable"
+fi
+
+# 接线断言: build 必须在 ensure_dependencies 之前查复用, 否则 npm ci 已经付掉了
+BUILD_FN=$(awk '/^web_release_build\(\) \{/,/^\}/' "$MANIFEST_HELPER")
+reuse_line=$(printf '%s\n' "$BUILD_FN" | grep -n 'web_release_build_reusable' | head -1 | cut -d: -f1)
+deps_line=$(printf '%s\n' "$BUILD_FN" | grep -n 'web_release_ensure_dependencies' | head -1 | cut -d: -f1)
+[ -n "$reuse_line" ] || fail "web_release_build does not consult the build-time reuse check"
+[ -n "$deps_line" ] || fail "could not locate ensure_dependencies in web_release_build"
+[ "$reuse_line" -lt "$deps_line" ] \
+    || fail "reuse check runs after ensure_dependencies; npm ci would already be paid"
+# 逃生开关与 Java 侧对齐
+grep -Fq 'CRETAS_RELEASE_FORCE_WEB_BUILD' "$MANIFEST_HELPER" \
+    || fail "missing CRETAS_RELEASE_FORCE_WEB_BUILD escape hatch"
+
+echo "PASS: Web archive manifest validates provenance, same-tree squash reuse, build-time reuse, one-file hash, clean state, and archive integrity"
