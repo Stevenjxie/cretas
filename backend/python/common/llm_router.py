@@ -207,6 +207,10 @@ _SAFE_MODELS: Dict[Tuple[str, str], Optional[datetime.date]] = {
     # 计费安全: 该账号后付费未开启, 额度耗尽直接 402 拒绝而非计费(实测 v4-pro/
     # v4-flash 均返回 401008 "free trial quota exhausted ... postpaid not enabled"),
     # 与本表 tencent 段「用完即停 safe」的前提一致。
+    # ⚠️ 2026-07-30: /v1/models 报 status="pre-offline" —— 平台正在下线它。
+    # 现在能用(实测 conf 0.98)但**不可依赖**, 已排在 minimax-m2.7 之后, 下线后
+    # 自动 fallback。真正的独立地板要靠 minimax-m2.7(online) + 去控制台给
+    # deepseek-v4-pro / glm-5.2 / kimi-k3 这些 status=online 但 402 的模型领额度。
     ("tencent", "deepseek-v3.2"): None,
     # ── zhipu (uUgu) — model-specific GLM pool, 用完即停 safe (None).
     ("zhipu", "glm-4.5-air"): None,
