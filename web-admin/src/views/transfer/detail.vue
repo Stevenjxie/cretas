@@ -11,6 +11,8 @@ import { formatAmount } from '@/utils/tableFormatters';
 import { displayUnit } from '@/utils/unitPricing';
 import { handleCatchError } from '@/utils/errorToast';
 import NotFoundEmpty from '@/components/common/NotFoundEmpty.vue';
+import DocumentTraceDrawer from '@/components/DocumentTraceDrawer.vue';
+import { getTransferDocumentTrace } from '@/api/documentTrace';
 import type { TableRow } from '@/types/api';
 import { listWarehouses } from '@/api/factoryWarehouse';
 
@@ -29,6 +31,16 @@ const submitting = ref(false);
 const transfer = ref<TableRow | null>(null);
 const notFound = ref(false);
 const notFoundMessage = ref('');
+
+// 客户 2026-07-30: 单据上看不到上下游、也没有「返回原单」——「严重影响工作效率」
+// 调拨单的「原单」= internal_transfers.production_plan_id 指向的生产计划 (手工调拨没有, 属正常)
+const documentTraceVisible = ref(false);
+function loadDocumentTrace() {
+  const fid = factoryId.value;
+  // 禁止降级: 没有工厂上下文就明确报错, 不用空串去调接口拿一个看不懂的 400
+  if (!fid) return Promise.reject(new Error('当前账号未绑定工厂，无法查询单据追踪'));
+  return getTransferDocumentTrace(fid, transferId.value);
+}
 
 // 取消原因；审批通过/驳回只允许在统一 OA 审批中心处理。
 const TRANSFER_REJECT_REASONS = [
@@ -457,6 +469,7 @@ async function submitDecide() {
           <div class="header-left">
             <el-button :icon="ArrowLeft" @click="router.push('/transfer/list')">返回</el-button>
             <span class="page-title">{{ label('transfer') }}详情</span>
+            <el-button v-if="transfer" plain @click="documentTraceVisible = true">单据追溯</el-button>
             <el-tag v-if="transfer" :type="(statusMap[transfer.status]?.type) || 'info'" size="large">
               {{ statusMap[transfer.status]?.text || transfer.status }}
             </el-tag>
@@ -690,6 +703,13 @@ async function submitDecide() {
         </template>
       </template>
     </el-card>
+
+    <DocumentTraceDrawer
+      v-model="documentTraceVisible"
+      title="调拨单单据追踪"
+      anchor-label="调拨单"
+      :fetcher="loadDocumentTrace"
+    />
   </div>
 
   <!-- 差异处理 Dialog -->

@@ -10,6 +10,8 @@ import { ArrowLeft, Download, Edit, InfoFilled } from '@element-plus/icons-vue';
 import { handleCatchError } from '@/utils/errorToast';
 import { formatAmount } from '@/utils/tableFormatters';
 import NotFoundEmpty from '@/components/common/NotFoundEmpty.vue';
+import DocumentTraceDrawer from '@/components/DocumentTraceDrawer.vue';
+import { getPurchaseOrderDocumentTrace } from '@/api/documentTrace';
 import AttachmentList from '@/components/attachment/AttachmentList.vue';
 import AttachmentDropZone from '@/components/attachment/AttachmentDropZone.vue';
 import type { TableRow } from '@/types/api';
@@ -33,6 +35,16 @@ const notFound = ref(false);
 const notFoundMessage = ref('');
 const receives = ref<TableRow[]>([]);
 const attachmentRefreshKey = ref(0);
+
+// 客户 2026-07-30: 单据上看不到上下游、也没有「返回原单」——「严重影响工作效率」
+// 采购单的「原单」= purchase_orders.sales_order_id 指向的销售订单 (直采单没有, 属正常)
+const documentTraceVisible = ref(false);
+function loadDocumentTrace() {
+  const fid = factoryId.value;
+  // 禁止降级: 没有工厂上下文就明确报错, 不用空串去调接口拿一个看不懂的 400
+  if (!fid) return Promise.reject(new Error('当前账号未绑定工厂，无法查询单据追踪'));
+  return getPurchaseOrderDocumentTrace(fid, orderId.value);
+}
 
 interface ApprovalProgress {
   hasInstance: boolean;
@@ -300,6 +312,7 @@ async function handleDownloadPdf(externalVersion: boolean) {
           <div class="header-left">
             <el-button :icon="ArrowLeft" @click="router.push('/procurement/orders')">返回</el-button>
             <span class="page-title">{{ label('purchaseOrder') }}详情</span>
+            <el-button v-if="order" plain @click="documentTraceVisible = true">单据追溯</el-button>
             <el-tag v-if="order" :type="(statusMap[order.status]?.type) || 'info'" size="large">
               {{ statusMap[order.status]?.text || enumLabel(order.status) }}
             </el-tag>
@@ -495,6 +508,12 @@ async function handleDownloadPdf(externalVersion: boolean) {
       </template>
     </el-card>
 
+    <DocumentTraceDrawer
+      v-model="documentTraceVisible"
+      title="采购订单单据追踪"
+      anchor-label="采购订单"
+      :fetcher="loadDocumentTrace"
+    />
   </div>
 </template>
 
