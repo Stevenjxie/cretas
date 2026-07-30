@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted, computed } from 'vue';
+import { ref, onMounted, computed, h } from 'vue';
 import { useRouter } from 'vue-router';
 import { useAuthStore } from '@/store/modules/auth';
 import { usePermissionStore } from '@/store/modules/permission';
@@ -14,6 +14,7 @@ import { computeRowActions } from '@/composables/useRowActions';
 import { safePrint } from '@/api/printApi';
 import AiEntryDrawer from '@/components/ai-entry/AiEntryDrawer.vue';
 import { PROCESS_TASK_CONFIG } from '@/components/ai-entry/types';
+import { useTableColumnWidth } from '@/composables/useTableColumnWidth';
 
 const router = useRouter();
 
@@ -179,6 +180,47 @@ const displayTableData = computed<BatchTableRow[]>(() => {
   }
 
   return result;
+});
+
+/**
+ * 排序表头 —— 与出成率总览 (YieldCardTable) 同一套做法, per PR #1991。
+ *
+ * el-table 自带的 `sortable` 只渲染一对没有名字的箭头, 屏幕阅读器读到的是
+ * 「一串没名字的控件」。这里换成一个真按钮, 自带 aria-label 说明按哪一列排;
+ * 视觉上完全继承单元格字体与颜色, 不额外套壳 (客户原话:「每个表头套了独立边框盒子」)。
+ */
+function sortableHeader({ column }: { column: { label?: string } }) {
+  const label = column.label || '本列';
+  return h(
+    'button',
+    {
+      type: 'button',
+      class: 'batch-sort-trigger',
+      'aria-label': `按${label}排序，连续操作可切换升序和降序`,
+      title: '点击切换升序和降序',
+    },
+    label,
+  );
+}
+
+/**
+ * 列宽记忆 (客户 Sheet Row 13: 调好的列宽刷新就没了)。
+ * defaults 即这张表原本写死的宽度 —— 没拖过时渲染结果与以前一致;
+ * `计划/批次号` 与 `产品类型` 用 min-width 自适应, 刻意不入 defaults。
+ */
+const BATCH_LIST_DEFAULT_COLUMN_WIDTHS = {
+  plannedQuantity: 120,
+  actualQuantity: 120,
+  sourceProcess: 160,
+  status: 120,
+  supervisorName: 120,
+  createdAt: 190,
+} as const;
+
+const { columnWidth, handleHeaderDragend, resetColumnWidths, hasStoredColumnWidths } = useTableColumnWidth({
+  pageKey: 'production.batches.list',
+  scope: factoryId,
+  defaults: BATCH_LIST_DEFAULT_COLUMN_WIDTHS,
 });
 
 type TableSortRow = Record<string, unknown>;
@@ -438,6 +480,10 @@ function getStatusText(status: string) {
             <span class="data-count">共 {{ pagination.total }} 条记录</span>
           </div>
           <div class="header-right">
+            <!-- 列宽已被记住时才出现 —— 拖乱了要有一条明确的退路 (fool-proof Rule 5) -->
+            <el-button v-if="hasStoredColumnWidths" link type="primary" @click="resetColumnWidths">
+              恢复默认列宽
+            </el-button>
             <el-button v-if="canWrite" type="success" :icon="ChatDotRound" @click="openAiCreate">
               AI 创建批次
             </el-button>
@@ -484,8 +530,17 @@ function getStatusText(status: string) {
         table-layout="fixed"
         class="batch-data-table"
         style="width: 100%"
+        @header-dragend="handleHeaderDragend"
       >
-        <el-table-column prop="batchNumber" label="计划/批次号" min-width="280" sortable show-overflow-tooltip>
+        <el-table-column
+          prop="batchNumber"
+          label="计划/批次号"
+          min-width="280"
+          :width="columnWidth('batchNumber')"
+          sortable
+          :render-header="sortableHeader"
+          show-overflow-tooltip
+        >
           <template #default="{ row }">
             <div v-if="row.isSyntheticPlanGroup" class="plan-group-cell">
               <span class="plan-group-title">生产计划 {{ row.sourcePlanNumber || row.sourcePlanId || '-' }}</span>
@@ -498,6 +553,7 @@ function getStatusText(status: string) {
           prop="productTypeName"
           label="产品类型"
           min-width="260"
+          :width="columnWidth('productTypeName')"
           show-overflow-tooltip
           :filters="productFilters"
           :filter-method="(value: string, row: BatchTableRow) => productNameOf(row) === value"
@@ -510,22 +566,25 @@ function getStatusText(status: string) {
         <el-table-column
           prop="plannedQuantity"
           label="计划数量"
-          width="120"
+          :width="columnWidth('plannedQuantity')"
           align="right"
           sortable
+          :render-header="sortableHeader"
           :sort-method="(a: TableSortRow, b: TableSortRow) => compareNullableNumber(a, b, 'plannedQuantity')"
         />
         <el-table-column
           prop="actualQuantity"
           label="实际数量"
-          width="120"
+          :width="columnWidth('actualQuantity')"
           align="right"
           sortable
+          :render-header="sortableHeader"
           :sort-method="(a: TableSortRow, b: TableSortRow) => compareNullableNumber(a, b, 'actualQuantity')"
         />
         <el-table-column
           label="来源工序"
-          width="160"
+          column-key="sourceProcess"
+          :width="columnWidth('sourceProcess')"
           align="center"
           :filters="sourceProcessFilters"
           :filter-method="(value: string, row: BatchTableRow) => sourceProcessOf(row) === value"
@@ -541,7 +600,7 @@ function getStatusText(status: string) {
         <el-table-column
           prop="status"
           label="状态"
-          width="120"
+          :width="columnWidth('status')"
           align="center"
           :filters="statusFilters"
           :filter-method="(value: string, row: BatchTableRow) => String(row.status || '').toUpperCase() === value"
@@ -558,7 +617,7 @@ function getStatusText(status: string) {
         <el-table-column
           prop="supervisorName"
           label="负责人"
-          width="120"
+          :width="columnWidth('supervisorName')"
           :filters="supervisorFilters"
           :filter-method="(value: string, row: BatchTableRow) => String(row.supervisorName || '-') === value"
         >
@@ -567,8 +626,9 @@ function getStatusText(status: string) {
         <el-table-column
           prop="createdAt"
           label="创建时间"
-          width="190"
+          :width="columnWidth('createdAt')"
           sortable
+          :render-header="sortableHeader"
           :sort-method="(a: TableSortRow, b: TableSortRow) => compareNullableDate(a, b, 'createdAt')"
           :formatter="formatDateTimeCell"
         />
@@ -732,23 +792,24 @@ function getStatusText(status: string) {
   flex: 1;
 }
 
+/*
+  通栏表头 —— 与出成率总览 (YieldCardTable, PR #1991) 同一套观感。
+  客户原话「每个表头套了独立边框盒子」: 盒子感来自 加深的表头底色 + 逐格加深的右边框
+  + 每格一个自带外壳的控件, 三层叠加。三层都不再覆盖 (交回 el-table 默认),
+  排序入口保留为无外壳的 .batch-sort-trigger。
+*/
 .batch-data-table {
   --el-table-border-color: #dce3ec;
-  --el-table-header-bg-color: #f3f6fa;
-  --el-table-header-text-color: #303846;
   --el-table-row-hover-bg-color: #f6faff;
 
   :deep(.el-table__header th.el-table__cell) {
     height: 46px;
     padding: 0;
-    font-weight: 650;
-    border-right-color: #d4dce7;
   }
 
   :deep(.el-table__body td.el-table__cell) {
     height: 54px;
     padding: 0;
-    border-right-color: #e0e6ee;
   }
 
   :deep(.el-table__cell .cell) {
@@ -759,6 +820,31 @@ function getStatusText(status: string) {
   :deep(.el-table__column-filter-trigger) {
     margin-left: 6px;
     color: #697586;
+  }
+
+  /* 按钮只提供点击热区与无障碍名字, 视觉上完全等同于普通表头文字 */
+  :deep(.batch-sort-trigger) {
+    display: inline-flex;
+    align-items: center;
+    justify-content: inherit;
+    min-height: 32px;
+    padding: 0;
+    border: 0;
+    background: transparent;
+    color: inherit;
+    font: inherit;
+    font-weight: inherit;
+    cursor: pointer;
+    touch-action: manipulation;
+  }
+
+  :deep(.batch-sort-trigger:hover) {
+    color: var(--el-color-primary, #409eff);
+  }
+
+  :deep(.batch-sort-trigger:focus-visible) {
+    outline: 2px solid var(--el-color-primary, #409eff);
+    outline-offset: 2px;
   }
 }
 
