@@ -4256,14 +4256,33 @@ def _parse_t3_time_range(time_range: Any) -> str:
     return ""
 
 
+# 疑问词是**有限封闭集合**, 所以这是结构判据, 不是又一份黑名单。
+#
+# 2026-07-30 prod 实测(生产的两轮链路, 带 session_key + session_summary):
+#   turn1 「哪个菜最赚钱」 → 澄清: 你想看哪个时间范围？
+#   turn2 「最近30天」     → **没有找到名为「哪个菜最」的菜品**
+# 「哪个菜最」是原文子串, 所以反幻觉守卫放行; 下面那份占位符黑名单里又没有它。
+# 靠往黑名单里加词堵不住 —— 那要求穷举「所有不是菜的名词」, 是无界集合(本仓库
+# 在 restaurant_ops_router 的注释里已经吃过这个亏)。带疑问词的片段**永远不可能
+# 是专名**, 按这一条拒绝, 集合是封闭的。
+#
+# ⚠️ 与「菜名不存在」是两回事: 「红烧肉卖了多少」而菜单上没有红烧肉, 仍然应该
+# 答「查无此菜」—— 那是用户真的当名字用了。这里拒的是用户根本没当名字用的词。
+_INTERROGATIVE_MARKERS: Tuple[str, ...] = (
+    "哪", "什么", "多少", "怎么", "为什么", "是否", "有没有",
+)
+
+
 def _verbatim_entity(value: Any, query: str) -> Optional[str]:
     """Accept an LLM entity slot ONLY when it is a verbatim substring of the
     user's question (anti-hallucination: the LLM nominates, it never invents).
-    Generic placeholders are rejected — they are not names."""
+    Generic placeholders and question fragments are rejected — they are not names."""
     if not isinstance(value, str):
         return None
     cand = value.strip().strip("「」\"'")
     if not (2 <= len(cand) <= 40) or cand not in query:
+        return None
+    if any(marker in cand for marker in _INTERROGATIVE_MARKERS):
         return None
     if cand in (
         "这道菜", "那道菜", "这个菜", "菜品",
