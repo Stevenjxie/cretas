@@ -239,4 +239,27 @@ fi
 contains "$CI_SCRIPT" 'not_attested'
 contains "$CI_SCRIPT" 'not_trusted'
 
+# ---- ci.yml 的 push paths 必须覆盖【整个】 backend_tree 路径 ----
+# 需要成立的不变量: 「那棵树变了 ⟺ CI 被触发」。paths 比 RELEASE_BACKEND_PATH 窄, 就会有
+# 一类 commit 改变了 backend_tree 却没有对应制品 —— 那个 commit 上永远取不到匹配制品,
+# 发布只能回退本地构建。实测这个洞命中过 13% 的 backend commit(全是纯测试改动)。
+#
+# 而且不只是效率: 制品的 vouching 是「ci.yml 在打包之前跑过那组测试」, 测试源就在这棵树里。
+# 测试改了却复用旧制品 = 拿旧测试的结论给新测试背书。
+CI_YML="$ROOT_DIR/.github/workflows/ci.yml"
+[ -f "$CI_YML" ] || fail "找不到 ci.yml"
+# shellcheck source=scripts/deploy/release-jar-manifest.sh
+backend_path=$(sed -n 's/^RELEASE_BACKEND_PATH="\(.*\)"$/\1/p' \
+    "$ROOT_DIR/scripts/deploy/release-jar-manifest.sh" | head -1)
+[ -n "$backend_path" ] || fail "取不到 RELEASE_BACKEND_PATH"
+# ⚠️ 必须 `--`: 模式以 '-' 开头, 否则 grep 当成选项报 "unknown option"(踩过)。
+grep -Fq -- "- '$backend_path/**'" "$CI_YML" \
+    || fail "ci.yml 的 push paths 未覆盖整个 $backend_path/** —— 存在改树却不触发 CI 的 commit"
+
+# 反向: 仍然不许把 web-admin 塞进来。on.push.paths 是 workflow 级的, 加进来会让
+# java-build-test 被纯前端改动触发, 白跑 4~5 分钟(web 有自己的 web-dist.yml)。
+if grep -Eq "^[[:space:]]*-[[:space:]]*'?web-admin/" "$CI_YML"; then
+    fail "web-admin 被加进了 ci.yml 的 push paths —— 会触发无意义的 Java 构建"
+fi
+
 echo "PASS: test-release-ci-artifact.sh"
