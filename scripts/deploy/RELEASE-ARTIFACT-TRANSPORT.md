@@ -44,8 +44,26 @@ CI artifact 走 `github-artifact-stage`：下载 zip → 校验 zip size → **�
 **一次下载完成**。仓库外的 `fetch-ci-artifact.sh` 是"先下一次探测哈希、再下一次存储"，
 168MB 下两遍；这里不这么做。
 
-服务器上这些脚本是 `root:root 0750`，从本目录安装，改动前自动做 UTC 时间戳备份
+服务器上这些脚本是 `root:root 0750`，用下面的安装器从本目录安装，改动前自动做 UTC 时间戳备份
 （`<name>.bak.<UTC时间戳>`，ECS 上现有 5 个）。
+
+### 安装（唯一可重复入口）
+
+```bash
+./scripts/deploy/install-server-scripts.sh                       # dry-run, 默认不写
+./scripts/deploy/install-server-scripts.sh --host ecs --only oss-verify-artifact.sh \
+    --confirm YES-INSTALL
+```
+
+清单与连接逻辑都是单一来源：`server-script-inventory.conf` + `scripts/lib/server-script-common.sh`
+（漂移检查器读的是同两份 —— 各存一份就等于又造一个漂移源）。
+
+⛔ **默认拒绝覆盖已漂移的文件。** 服务器上有而仓库没有的内容，默认假定是「仓库落后」而不是
+「服务器脏」。要覆盖必须显式 `--accept-overwrite-drift`，而正确做法通常是先把服务器加固取回
+仓库。这条闸就是 2026-07-30 事故的直接产物。
+
+覆盖前自动备份为 `<name>.bak.<UTC时间戳>`（沿用此前手工的惯例），装完自动跑漂移检查自证落地
+—— 它不返 0，安装脚本就不返 0。
 
 ### 漂移检查（改完服务器脚本必跑）
 
