@@ -1202,15 +1202,19 @@ async def post_restaurant_tiered_answer(
             fid, trusted_user_id, body.session_id,
         )
 
-        spec = await parse_restaurant_query(
-            effective_query,
-            pool,
-            factory_id=fid,
-            history=conversation_history,
-            session_key=clarification_session_key,
-            semantic_first=True,
-            session_summary=session_state_summary,
-        )
+        # 菜单目录裁决「这句话里有没有菜」, 必须在规划之前就位。
+        from smartbi.gold.restaurant.restaurant_ops_router import dish_catalogue_scope
+
+        async with dish_catalogue_scope(pool, fid):
+            spec = await parse_restaurant_query(
+                effective_query,
+                pool,
+                factory_id=fid,
+                history=conversation_history,
+                session_key=clarification_session_key,
+                semantic_first=True,
+                session_summary=session_state_summary,
+            )
         if not should_delegate(spec, body.java_tool_name, query=effective_query):
             asyncio.create_task(log_intent_miss(
                 pool, factory_id=fid, query=effective_query,

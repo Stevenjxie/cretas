@@ -33,6 +33,7 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from smartbi.gold.restaurant.restaurant_ops_router import (
     _KITCHEN_OPS_NOUNS,
+    catalogue_has_no_dish_mention as _catalogue_has_no_dish_mention,
     _is_explicit_sales_period_comparison,
     _profit_intent,
     _resolve_sales_query_spec,
@@ -489,6 +490,15 @@ _UNSUPPORTED_REQUIREMENT_LABELS = {
 # 答案里多出一段「没有找到名为「食材损耗」的菜品」; 契约也随之要求答案覆盖
 # 菜品成本。名词表与菜名拒绝表同源, 见 _KITCHEN_OPS_NOUNS。
 # 每个名词都是 2 字, 定宽 lookbehind 合法。
+# 「菜」的字面指示词 —— 句子里没有真菜名时, 靠它们说明问的确实是菜品成本。
+# 「本月哪个菜的成本最高」既没点名具体菜, 也不含 菜品成本/食材成本 这类完整
+# 词组, 只能靠这里认出来。集合刻意小而封闭 (都是「菜品/条目」义), 与黑名单
+# 那种要穷举「所有不是菜的名词」的无界集合是两回事。
+_DISH_SCOPE_HINTS = (
+    "菜品", "单品", "哪个菜", "哪些菜", "什么菜", "哪道菜", "每道菜", "菜的",
+    "配方", "做法", "出品",
+)
+
 _OPS_BOUND_COST_GUARD = "".join(f"(?<!{noun})" for noun in _KITCHEN_OPS_NOUNS)
 _BARE_COST_RE = re.compile(_OPS_BOUND_COST_GUARD + r"成本(?![日周月季年])")
 _COST_PERIODIC_REPORT_RE = re.compile(
@@ -506,10 +516,19 @@ def _detect_requested_metrics(text: str) -> Tuple[str, ...]:
             # Longer cost phrases remain exact; the generic word is accepted
             # unless ``本`` is immediately starting a calendar-period word.
             has_metric = any(token in text for token in tokens if token != "成本")
-            has_metric = has_metric or bool(
+            bare_cost = bool(
                 _BARE_COST_RE.search(text)
                 or _COST_PERIODIC_REPORT_RE.search(text)
             )
+            # 裸「成本」是偏正复合词的中心语, 语义取决于前面那个名词:
+            # 「人力成本」「房租成本」「包装成本」都不是菜品成本。菜单目录
+            # 一加载, 就由它裁决 —— 句子里既没有真菜名、也没有「菜品/单品/
+            # 哪个菜」这类指示词时, 裸「成本」不再算菜品成本需求。
+            # 目录不可用时 _catalogue_has_no_dish_mention 恒为 False,
+            # 行为与历史完全一致。
+            if bare_cost and _catalogue_has_no_dish_mention(text):
+                bare_cost = any(hint in text for hint in _DISH_SCOPE_HINTS)
+            has_metric = has_metric or bare_cost
         else:
             has_metric = any(token in text for token in tokens)
         if has_metric:
