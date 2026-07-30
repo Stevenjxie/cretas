@@ -86,7 +86,7 @@ import {
 import type { ProductionDocumentTrace, ProductionTraceDocument } from '@/types/productionDocumentTrace';
 import { productionPlanAiGuard, findUniqueProductByName } from '@/utils/aiEntryGuards';
 import { canonicalUnitCode, displayUnit } from '@/utils/unitPricing';
-import { enumLabel } from '@/utils/enumDisplay';
+import { enumLabel, traceStatusLabel } from '@/utils/enumDisplay';
 import {
   cancellationAudit,
   formatPlanActualQuantity,
@@ -4245,7 +4245,10 @@ function guardProductionPlanAi(params: Record<string, unknown>) {
                 <div class="trace-document-number">{{ document.documentNumber || document.documentId }}</div>
                 <div class="trace-document-meta">
                   <span>{{ document.relation || '-' }}</span>
-                  <el-tag v-if="document.status" size="small" type="info">{{ enumLabel(document.status) }}</el-tag>
+                  <!-- 按单据类型选状态表: 同一个码在不同单据含义不同 (REJECTED 收货是「已退回」,
+                       FINANCE_APPROVED 销售是「已批准」采购是「已审核」), 全局表必然有一半显示错。
+                       客户 2026-07-30 在这里看到的「未知状态（IN_PROGRESS）」= 生产批次的「生产中」。 -->
+                  <el-tag v-if="document.status" size="small" type="info">{{ traceStatusLabel(document.documentType, document.status) }}</el-tag>
                 </div>
               </el-card>
             </el-timeline-item>
