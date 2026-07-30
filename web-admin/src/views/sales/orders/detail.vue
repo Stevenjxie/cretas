@@ -111,6 +111,12 @@ function goWarehouseReceiving() {
 }
 
 const deliveryDialogVisible = ref(false);
+/**
+ * 刚建出来的发货单号 —— 切到「发货记录」后把那一行高亮, 让人一眼找到。
+ *
+ * 只在本次创建后有值; 重新加载页面就没有了 —— 它描述的是"你刚才那一下", 不是单据属性。
+ */
+const highlightedDeliveryNumber = ref('');
 const deliveryIdempotencyKey = ref('');
 const deliveryForm = ref<{ deliveryAddress: string; logisticsCompany: string; items: TableRow[] }>({
   deliveryAddress: '', logisticsCompany: '', items: [],
@@ -788,12 +794,24 @@ async function handleCreateDelivery() {
       items: filteredItems,
     });
     if (res.success) {
-      ElMessage.success('发货单创建成功');
+      // 客户 2026-07-31:「点击生成发货单以后……但是发货单在哪里看」——
+      // 建完停在「订单详情」tab, 单子是建出来了但人看不到, 得自己去点「发货记录」。
+      // 直接切过去并把新建那条高亮, 让"建好了"这件事**看得见**。
+      const createdNumber = (res.data as { deliveryNumber?: string } | null)?.deliveryNumber || '';
+      ElMessage.success(createdNumber ? `发货单 ${createdNumber} 已创建` : '发货单创建成功');
       deliveryDialogVisible.value = false;
+      activeTab.value = 'delivery';
+      highlightedDeliveryNumber.value = createdNumber;
       loadOrder(); loadDeliveries();
     } else { ElMessage.error(res.message || '创建失败，请重试'); }
   } catch (e) { handleCatchError(e, '创建失败，请检查网络'); }
   finally { submitting.value = false; }
+}
+
+/** 刚建出来的那一行加高亮; 其余行不动。 */
+function deliveryRowClass({ row }: { row: TableRow }): string {
+  const number = String((row as { deliveryNumber?: string }).deliveryNumber || '');
+  return number && number === highlightedDeliveryNumber.value ? 'just-created-row' : '';
 }
 
 function openShipmentDialog(parent: TableRow) {
@@ -1915,7 +1933,13 @@ async function handleQuickPayFull() {
               </el-tooltip>
             </div>
 
-            <el-table :data="deliveries" border stripe style="margin-top: 12px">
+            <el-table
+              :data="deliveries"
+              border
+              stripe
+              style="margin-top: 12px"
+              :row-class-name="deliveryRowClass"
+            >
               <el-table-column label="层级" width="90">
                 <template #default="{ row }">
                   <el-tag :type="row.recordRole === 'MASTER' ? 'primary' : 'info'" size="small">
@@ -2555,5 +2579,9 @@ async function handleQuickPayFull() {
 }
 :deep(.over-limit-input .el-input__wrapper) {
   box-shadow: 0 0 0 1px #f56c6c inset;
+}
+/* 刚创建的发货单行 —— 建完自动切到本 tab 后, 让人一眼找到是哪一条 (客户 2026-07-31) */
+:deep(.just-created-row > td) {
+  background: var(--el-color-primary-light-9) !important;
 }
 </style>

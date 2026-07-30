@@ -247,14 +247,19 @@ async function openDocumentTrace(row: TableRow) {
   }
 }
 
-function openTraceDocument(document: ProductionTraceDocument) {
-  const target = documentTraceTarget(document);
-  if (!target) {
-    ElMessage.info(`${traceDocumentLabel(document.documentType)}已记录在当前计划中，无独立详情页`);
-    return;
-  }
-  documentTraceVisible.value = false;
-  void router.push(target);
+/**
+ * 就地展开, **不跳页** (客户 2026-07-31:「最多只是把单据信息放出来, 不会做跳转」)。
+ *
+ * 原本是 router.push 跳到别的模块, 生产计划这一屏就没了, 想看下一条得从头再来。
+ * 与 components/DocumentTraceDrawer.vue 同一口径 —— 那边是销售/采购/调拨三处共用的抽屉,
+ * 这一份是生产计划自己的; 两边行为必须一致, 否则同一个功能在不同页面表现不同。
+ */
+const expandedTraceKey = ref('');
+const traceDocumentKey = (d: ProductionTraceDocument) => `${d.documentType}-${d.documentId}`;
+
+function toggleTraceDocument(document: ProductionTraceDocument) {
+  const key = traceDocumentKey(document);
+  expandedTraceKey.value = expandedTraceKey.value === key ? '' : key;
 }
 
 function traceDirectionLabel(direction?: string) {
@@ -4242,13 +4247,26 @@ function guardProductionPlanAi(params: Record<string, unknown>) {
               :timestamp="document.occurredAt || undefined"
               placement="top"
             >
-              <el-card shadow="never" class="trace-document-card">
+              <el-card
+                shadow="never"
+                class="trace-document-card"
+                :class="{ 'is-selected': traceDocumentKey(document) === expandedTraceKey }"
+                data-testid="trace-document-card"
+                @click="toggleTraceDocument(document)"
+              >
                 <div class="trace-document-header">
                   <div>
                     <el-tag size="small" effect="plain">{{ traceDirectionLabel(document.direction) }}</el-tag>
                     <strong>{{ traceDocumentLabel(document.documentType) }}</strong>
                   </div>
-                  <el-button type="primary" link @click="openTraceDocument(document)">前往单据</el-button>
+                  <!-- 不跳页, 就地展开 (客户 2026-07-31); 与共用的 DocumentTraceDrawer 同口径 -->
+                  <el-button
+                    type="primary"
+                    link
+                    data-testid="trace-detail-toggle"
+                    :aria-expanded="traceDocumentKey(document) === expandedTraceKey"
+                    @click.stop="toggleTraceDocument(document)"
+                  >{{ traceDocumentKey(document) === expandedTraceKey ? '收起' : '查看详情' }}</el-button>
                 </div>
                 <div class="trace-document-number">{{ document.documentNumber || document.documentId }}</div>
                 <div class="trace-document-meta">
@@ -4258,6 +4276,23 @@ function guardProductionPlanAi(params: Record<string, unknown>) {
                        客户 2026-07-30 在这里看到的「未知状态（IN_PROGRESS）」= 生产批次的「生产中」。 -->
                   <el-tag v-if="document.status" size="small" type="info">{{ traceStatusLabel(document.documentType, document.status) }}</el-tag>
                 </div>
+                <el-descriptions
+                  v-if="traceDocumentKey(document) === expandedTraceKey"
+                  class="trace-document-detail"
+                  data-testid="trace-detail-panel"
+                  :column="1"
+                  border
+                  size="small"
+                >
+                  <el-descriptions-item v-if="document.occurredAt" label="发生时间">
+                    {{ document.occurredAt }}
+                  </el-descriptions-item>
+                  <el-descriptions-item
+                    v-for="field in document.details || []"
+                    :key="field.label"
+                    :label="field.label"
+                  >{{ field.value }}</el-descriptions-item>
+                </el-descriptions>
               </el-card>
             </el-timeline-item>
           </el-timeline>

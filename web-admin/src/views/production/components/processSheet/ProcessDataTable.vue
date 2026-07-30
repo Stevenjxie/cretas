@@ -20,6 +20,8 @@ import {
   type MaterialInputTotal,
   type ProcessSheetByproduct,
   type ProductionInputAllocation,
+  getInputAvailability,
+  type PortAvailability,
 } from '@/api/processSheet';
 import { listWarehouses, type FactoryWarehouse } from '@/api/factoryWarehouse';
 import { put } from '@/api/request';
@@ -158,6 +160,12 @@ interface SheetRow {
   /** 历史行保存时的真实产出单位；仅用于只读显示换算，不改写 payload。 */
   persistedOutputUnit: string;
   blockingMessage: string | null;
+  /**
+   * 上一次成功保存时这一行的内容快照 (buildRequest 的 JSON)。null = 从未存过。
+   *
+   * 关窗口该不该拦, 判据是**内容有没有变**, 不是 rowStatus —— 见 rowIsDirty。
+   */
+  savedSnapshot: string | null;
   stockShortage: StockShortagePresentation | null;
   /** 正式报工后由后端返回的实际批次扣料结果，供操作员即时核对包材/调料数量与成本。 */
   inputAllocations: ProductionInputAllocation[];
@@ -514,35 +522,74 @@ function fmtStockQty(value: number): string {
  * rawBatchOptions 是异步加载的 (初值 []), 加载期间必须什么都不显示 —— 否则首帧会闪一下
  * 「可用 0只」, 而那正是这次要消除的误导信息。
  */
-function inputStockText(item: InputPortRef): string {
-  // 🔴 2026-07-31 撤下: 这里原本显示前端自算的「可用 X」, 客户实测与后端打架 ——
-  // 行内显示「可用 10kg」而提交时后端说「需要 1kg, 可用 0kg」。
-  //
-  // 不是参数调错, 是**前端结构上算不出这个数**。后端 ProductionStockAllocationServiceImpl.plan()
-  // 的可投量口径含三样前端拿不到的东西:
-  //   1. warehouseResolver.resolveWorkshopId() —— 只认那**一个**生产仓, 而前端汇总的是
-  //      原料仓 + 物流仓 + 生产仓 (pickConsumableWarehouseIds);
-  //   2. allocationRepository.sumPendingQuantityByMaterialBatchId() —— 扣掉**其它草稿行已占用**的量;
-  //   3. ProductionInventoryOwnershipGuard —— 客供料/归属别的订单的批次在仓里但本计划不能用。
-  //
-  // 少任何一样, 前端算出来的都是个偏大且看着权威的数 —— 比不显示更糟, 仓管员会照着它排活。
-  // 正解是后端出只读接口复用同一段代码, 前端只显示 (进行中)。在那之前**宁可不显示**。
-  void item;
-  return '';
+/**
+ * 后端算好的「生产仓可用量」，按 workflowPortId 索引 (2026-07-31)。
+ *
+ * 前端**不再自己算**：后端口径含三样这里拿不到的东西 —— 只认那一个生产仓、要扣掉其它草稿行
+ * 已占用的量、还要过客供料归属守卫。上一版自算出「可用 10kg」而提交时后端说 0，就是这么来的。
+ */
+const portAvailability = ref<Map<string, PortAvailability>>(new Map());
+const availabilityLoading = ref(false);
+
+async function loadInputAvailability() {
+  const ports = workflowRawInputs.value
+    .map((p) => ({
+      workflowPortId: p.workflowPortId ?? null,
+      materialTypeId: p.skuId ?? '',
+      unit: workflowPortDisplayUnit(p) || processUnits.value.inputUnit,
+    }))
+    .filter((p) => !!p.materialTypeId);
+  if (!isXiuYou.value || !props.factoryId || !props.planId || ports.length === 0) {
+    portAvailability.value = new Map();
+    return;
+  }
+  availabilityLoading.value = true;
+  try {
+    const resp = await getInputAvailability(props.factoryId, props.planId, ports);
+    // 禁降级: 拿不到就清空 (界面回到"不显示"), 绝不拿上一次的数字顶上去 —— 那会显示过期库存
+    const next = new Map<string, PortAvailability>();
+    if (resp.success && Array.isArray(resp.data)) {
+      for (const item of resp.data) {
+        if (item.workflowPortId) next.set(item.workflowPortId, item);
+      }
+    }
+    portAvailability.value = next;
+  } catch {
+    // 这是渲染辅助信息, 失败不该打断报工 —— 静默回到"不显示", 提交仍由后端 fail-closed 兜底
+    portAvailability.value = new Map();
+  } finally {
+    availabilityLoading.value = false;
+  }
+}
+
+/** 生产仓可用量文案; 拿不到就返回空串 (什么都不显示, 不猜)。 */
+function workshopStockText(item: InputPortRef): string {
+  const a = item.workflowPortId ? portAvailability.value.get(item.workflowPortId) : null;
+  if (!a) return '';
+  return `${fmtStockQty(a.available)}${displayProcessUnit(a.unit)}`;
 }
 
 /**
- * 已填投料量是否确定超出可用量。
+ * 同物料在别的仓的存量 —— 把「真没货」和「有货但没调过来」分开。
  *
- * 只有在**没有**无法换算的同物料批次时才敢下判定 —— 否则 available 是个下限, 拿它拦截
- * 就是假阳性 (本文件历史上已因缓存过期造成过一次假阳性拦截, 见 refreshSharedInventories
- * 上方注释)。这一路只提示不拦, 最终仍由后端 fail-closed 兜底。
+ * 刘山门实测: 生产仓里一条原料都没有 (全是 WIP 半成品), 原料都在主仓。只报「可用 0」
+ * 用户会以为系统坏了; 说清"料在哪"他才知道该找谁。
+ *
+ * 🔴 刻意**不给「去调拨」按钮**: 调拨是仓管的活 (Steve 2026-07-31), 报工的人点了大概率 403,
+ * 给一个点不动的按钮比不给更糟。
  */
-function inputExceedsAvailable(item: InputPortRef & { quantity?: number | null; selected?: boolean }): boolean {
-  // 与 inputStockText 一并撤下 (2026-07-31): 判据来自同一个算错的可用量, 标红也是错的。
-  // 前端标红「超出」而后端其实还够 (或反过来), 只会让人更不知道该信谁。
-  void item;
-  return false;
+function elsewhereStockText(item: InputPortRef): string {
+  const a = item.workflowPortId ? portAvailability.value.get(item.workflowPortId) : null;
+  if (!a || !a.elsewhere?.length) return '';
+  const detail = a.elsewhere
+    .map((e) => `${e.warehouseName}另有 ${fmtStockQty(e.quantity)}${displayProcessUnit(e.unit)}`)
+    .join('、');
+  return `${detail}，待调拨入生产仓`;
+}
+
+function workshopStockIsZero(item: InputPortRef): boolean {
+  const a = item.workflowPortId ? portAvailability.value.get(item.workflowPortId) : null;
+  return !!a && !(a.available > 0);
 }
 
 function rawBatchLabel(batch: RawMaterialBatchOption): string {
@@ -782,6 +829,7 @@ function blankRow(): SheetRow {
     clientRowId: genClientRowId(props.processCode),
     batchNumber: null,
     rowStatus: 'UNSAVED',
+    savedSnapshot: null,
     submissionStatus: null,
     materialized: false,
     persistedOutputUnit: processUnits.value.outputUnit,
@@ -1053,6 +1101,9 @@ function hydrateRow(view: ProcessSheetRowView): SheetRow {
       }
     }
   }
+  // 从服务端载入的行按定义就是"已存"的 —— 快照必须在这里落, 否则 rowIsDirty 会拿它去和
+  // 一张空行比, 于是**一打开就被判成有未保存内容**, 正是本次要消灭的那种假拦截。
+  row.savedSnapshot = rowContentKey(row);
   return row;
 }
 
@@ -2248,6 +2299,10 @@ async function handleSave(row: SheetRow, action: 'draft' | 'submit') {
     }
     row.submissionStatus = result?.submissionStatus ?? (action === 'submit' ? 'SUBMITTED' : 'DRAFT');
     row.rowStatus = action === 'submit' && result?.materialized ? 'SAVED' : 'DRAFT';
+    // 存进去了 —— 记下这一刻的内容, 之后「关窗口该不该拦」按它比对 (见 rowIsDirty)。
+    // 必须在上面那些回填 (batchNumber / multiOutputs / submissionStatus) **之后**取,
+    // 否则快照少了后端刚给回来的字段, 下一帧就会被判成"又改过了"。
+    row.savedSnapshot = rowContentKey(row);
     row.inputAllocations = action === 'submit' ? (result?.inputAllocations ?? []) : [];
     if (result?.warnings?.length) {
       ElMessage({ message: `${action === 'draft' ? '草稿已保存' : '正式报工成功'}(含提示): ` + result.warnings.join('; '), type: 'warning', duration: 0, showClose: true });
@@ -2932,7 +2987,7 @@ watch(
     consumableWarehouseIds.value = [];
     rawBatchLoadSeq++;
     rawBatchLoading.value = false;
-    if (isXiuYou.value) void loadRawBatches();
+    if (isXiuYou.value) { void loadRawBatches(); void loadInputAvailability(); }
     // 混锅工序 (熟制/气调) + 单上游道 (焯水/滚揉/去舌苔) 加载常驻半成品库存供 SFI 投料下拉
     sfiOptions.value = [];
     sfiLoadSeq++;
@@ -2969,7 +3024,42 @@ watch(
 // rowStatus === 'UNSAVED' 只在用户主动「+新增」加了一行且还没保存成功时出现
 // (初始加载/hydrate 来的行是 SAVED/DRAFT, 空表不会自动插一行占位)，可直接当
 // "本工序有未保存草稿行" 的信号，供父组件(ProcessSheet → list.vue 抽屉)聚合。
-const hasUnsavedRows = computed(() => rows.value.some((r) => r.rowStatus === 'UNSAVED'));
+/**
+ * 这一行有没有「关掉就会丢」的内容。
+ *
+ * 客户 2026-07-31: 点了「保存草稿」, 关窗口还问「有未保存内容, 确认关闭?」。
+ *
+ * 🔴 旧判据 `rowStatus === 'UNSAVED'` 两个方向都错:
+ *   - 点了「新增行」但一个字没填 → 判成脏。**没有任何东西可丢**, 却天天拦人 ——
+ *     拦多了用户就学会闭眼点「确认关闭」, 这条提醒等于作废。
+ *   - 保存之后又改了内容 → **不判脏**。因为 rowStatus 只会 UNSAVED → DRAFT/SAVED,
+ *     没有任何地方把它改回去。真正会丢的编辑反而没被保护。
+ *
+ * 正确判据是**内容有没有变**: 拿这一行现在的内容和上次存进去的比。
+ * 复用 buildRequest —— 它本来就是"这一行要发给后端的东西", 正是"用户填了什么"的定义,
+ * 不必另外维护一份字段清单 (那份清单一定会跟 buildRequest 漂移)。
+ */
+function rowContentKey(row: SheetRow): string | null {
+  try {
+    return JSON.stringify(buildRequest(row));
+  } catch {
+    // buildRequest 依赖若干上下文, 行刚建出来时可能还算不出。
+    // 这时不冒充"干净" —— 返回 null 交给下面按旧口径保守处理。
+    return null;
+  }
+}
+
+function rowIsDirty(row: SheetRow): boolean {
+  if (row.submissionStatus === 'SUBMITTED' || isReadOnlyRow(row)) return false;
+  const now = rowContentKey(row);
+  if (now === null) return row.rowStatus === 'UNSAVED';   // 算不出就退回旧口径, 宁可多问一次
+  if (row.savedSnapshot !== null) return now !== row.savedSnapshot;
+  // 从未保存过: 只有当它和一张全新空行不一样时才算脏 (= 用户确实填了东西)
+  const blank = rowContentKey({ ...blankRow(), clientRowId: row.clientRowId });
+  return blank === null ? true : now !== blank;
+}
+
+const hasUnsavedRows = computed(() => rows.value.some(rowIsDirty));
 
 // -------------------------------------------------------------------------
 // Bug 1 修复 (fix/process-entry-cache-and-blend-cost, F006 现场走查): 半成品(SFI)/成品(FG)/
@@ -2987,7 +3077,7 @@ const hasUnsavedRows = computed(() => rows.value.some((r) => r.rowStatus === 'UN
 // 重新拉取三类共享余量 (不清空现有值, 避免刷新期间下拉短暂清空/跳动), 消除跨 tab 假阳性拦截。
 // -------------------------------------------------------------------------
 function refreshSharedInventories() {
-  if (isXiuYou.value) void loadRawBatches();
+  if (isXiuYou.value) { void loadRawBatches(); void loadInputAvailability(); }
   if (showSfi.value) void loadSfiOptions();
   if (showFg.value) void loadFgOptions();
 }
@@ -3202,6 +3292,7 @@ defineExpose({ hasUnsavedRows, refreshSharedInventories });
                   <span v-if="anyInputSelector(row)">选用</span>
                   <span>本次投入原料</span>
                   <span><i class="sp-required">*</i>投料总量</span>
+                  <span>生产仓可用</span>
                   <span>来源批次</span>
                 </div>
                 <div
@@ -3247,14 +3338,21 @@ defineExpose({ hasUnsavedRows, refreshSharedInventories });
                       />
                       <span data-testid="input-unit-readonly" class="sp-fixed-unit">{{ displayProcessUnit(item.unit) }}</span>
                     </span>
-                    <!-- 防呆 Rule 1: 可用量摆在录入行, 不让用户填完点「正式报工」才被告知「可用 0」。
-                         表格模板有同一块, 改动需同步 (该文件历史上出现过两套模板漂移)。 -->
+                  </span>
+                  <!-- 生产仓可用量: 后端权威值, 独立成列 (客户 2026-07-31 要求不要和来源批次挤一起)。
+                       表格模板有同一块, 改动需同步 (该文件历史上出现过两套模板漂移)。 -->
+                  <span class="sp-in-cell">
                     <span
-                      v-if="inputStockText(item)"
+                      v-if="workshopStockText(item)"
                       data-testid="input-available-stock"
                       class="sp-in-stock"
-                      :class="{ 'sp-in-stock-over': inputExceedsAvailable(item) }"
-                    >{{ inputStockText(item) }}</span>
+                      :class="{ 'sp-in-stock-zero': workshopStockIsZero(item) }"
+                    >{{ workshopStockText(item) }}</span>
+                    <span
+                      v-if="elsewhereStockText(item)"
+                      data-testid="input-elsewhere-stock"
+                      class="sp-in-elsewhere"
+                    >{{ elsewhereStockText(item) }}</span>
                   </span>
                   <span class="sp-in-cell sp-in-note">来源批次由系统按生产库入库顺序自动分摊</span>
                 </div>
@@ -3830,13 +3928,22 @@ defineExpose({ hasUnsavedRows, refreshSharedInventories });
                         size="small"
                       />
                       <span data-testid="input-unit-readonly" class="sp-fixed-unit">{{ displayProcessUnit(item.unit) }}</span>
-                      <!-- 防呆 Rule 1 — 卡片模板有同一块, 改动需同步。 -->
+                    </div>
+                  </td>
+                  <!-- 生产仓可用量独立成列 —— 卡片模板有同一块, 改动需同步。 -->
+                  <td class="sp-td">
+                    <div v-for="item in row.materialInputTotals" :key="item.workflowPortId || item.materialTypeId">
                       <span
-                        v-if="inputStockText(item)"
+                        v-if="workshopStockText(item)"
                         data-testid="input-available-stock"
                         class="sp-in-stock"
-                        :class="{ 'sp-in-stock-over': inputExceedsAvailable(item) }"
-                      >{{ inputStockText(item) }}</span>
+                        :class="{ 'sp-in-stock-zero': workshopStockIsZero(item) }"
+                      >{{ workshopStockText(item) }}</span>
+                      <span
+                        v-if="elsewhereStockText(item)"
+                        data-testid="input-elsewhere-stock"
+                        class="sp-in-elsewhere"
+                      >{{ elsewhereStockText(item) }}</span>
                     </div>
                   </td>
                 </template>
@@ -4829,7 +4936,9 @@ defineExpose({ hasUnsavedRows, refreshSharedInventories });
 .sp-in-note { color: #909399; font-size: 11px; }
 /* 投入行的可用量提示 (防呆 Rule 1, 2026-07-30) */
 .sp-in-stock { color: var(--el-text-color-secondary); font-size: 11px; white-space: nowrap; }
-.sp-in-stock-over { color: var(--el-color-danger); font-weight: 600; }
+.sp-in-stock-zero { color: var(--el-color-danger); font-weight: 600; }
+/* 「主仓另有 200只, 待调拨入生产仓」—— 把「真没货」和「有货但没调过来」分开 (2026-07-31) */
+.sp-in-elsewhere { display: block; margin-top: 2px; font-size: 11px; color: var(--el-color-warning); line-height: 1.4; }
 .sp-required { margin-right: 2px; color: var(--el-color-danger); font-style: normal; font-weight: 700; }
 .sp-inline-input {
   display: flex;

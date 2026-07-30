@@ -20,6 +20,7 @@ import com.cretas.aims.service.unit.UnitContractService;
 import com.cretas.aims.service.unit.UnitDimension;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
 import java.util.ArrayList;
@@ -536,6 +537,117 @@ public class ProductionStockAllocationServiceImpl implements ProductionStockAllo
                 .orElseThrow(() -> new BusinessException(409, "生产计划不存在或不属于当前工厂")
                         .withCode("PRODUCTION_PLAN_NOT_FOUND")
                         .withSeverity("BLOCKING"));
+    }
+
+    /**
+     * 只读可投量 —— 与 {@link #plan} 同一段口径, 只是不加锁、不写库。
+     *
+     * <p>逐条对齐 plan(): 同一个 {@code resolveWorkshopId} 生产仓 / 同一套
+     * {@code canonicalNativeUnit} 单位归一 (质量折 kg, 计数按字面) / 同样减去
+     * {@code sumPendingQuantityByMaterialBatchId} 待占用 / 同样过
+     * {@code ProductionInventoryOwnershipGuard}。任何一处走偏, 界面又会和提交打架。</p>
+     */
+    @Override
+    @Transactional(readOnly = true)
+    public List<PortAvailability> availability(
+            String factoryId, String planId,
+            List<ProcessSheetRowRequest.MaterialInputTotal> ports) {
+        if (ports == null || ports.isEmpty()) {
+            return List.of();
+        }
+        ProductionPlan plan = requirePlan(factoryId, planId);
+        String workshopId = warehouseResolver.resolveWorkshopId(factoryId);
+        // 生产仓没配 = 一条都投不了。这里**不抛异常** (只是渲染用), 返回 0 + 别处存量,
+        // 让界面照常显示"生产仓 0, 主仓另有 X"; 真正的拦截仍由 plan() 在提交时给出。
+        List<PortAvailability> out = new ArrayList<>();
+        for (ProcessSheetRowRequest.MaterialInputTotal port : ports) {
+            String materialTypeId = port.getMaterialTypeId() == null ? null : port.getMaterialTypeId().trim();
+            if (materialTypeId == null || materialTypeId.isEmpty()) {
+                continue;
+            }
+            String inputUnit = canonicalNativeUnit(factoryId, normalizeUnit(port.getUnit()));
+            boolean massInput = isCanonicalMassUnit(inputUnit);
+
+            BigDecimal available = BigDecimal.ZERO;
+            if (workshopId != null && !workshopId.isBlank()) {
+                for (MaterialBatch batch : findEligibleBatches(factoryId, plan, materialTypeId, workshopId)) {
+                    if (!ownershipAllows(plan, batch)) {
+                        continue;
+                    }
+                    if (!unitMatches(factoryId, batch, inputUnit, massInput)) {
+                        continue;
+                    }
+                    available = available.add(batchAvailable(factoryId, batch, massInput));
+                }
+            }
+
+            // 同物料在别的仓 —— 「有货但没调过来」和「真没货」必须分得开
+            Map<String, BigDecimal> byWarehouse = new LinkedHashMap<>();
+            for (MaterialBatch batch : materialBatchRepository.findAvailableBatchesFEFO(factoryId, materialTypeId)) {
+                if (Objects.equals(batch.getWarehouseId(), workshopId)) {
+                    continue;
+                }
+                if (!ownershipAllows(plan, batch) || !unitMatches(factoryId, batch, inputUnit, massInput)) {
+                    continue;
+                }
+                String name = warehouseResolver.displayName(factoryId, batch.getWarehouseId());
+                if (name == null || name.isBlank()) {
+                    continue;   // 说不出在哪个仓就不提 —— 「别处还有」但答不上"哪儿"等于没说
+                }
+                byWarehouse.merge(name, batchAvailable(factoryId, batch, massInput), BigDecimal::add);
+            }
+            List<ElsewhereStock> elsewhere = byWarehouse.entrySet().stream()
+                    .filter(e -> e.getValue().signum() > 0)
+                    .map(e -> new ElsewhereStock(e.getKey(), e.getValue(),
+                            massInput ? KG : inputUnit))
+                    .toList();
+
+            out.add(new PortAvailability(port.getWorkflowPortId(), materialTypeId,
+                    available, massInput ? KG : inputUnit, elsewhere));
+        }
+        return out;
+    }
+
+    /** plan() 用带锁的那个; 这里是同一条件的非锁定版 (渲染路径不该锁行)。 */
+    private List<MaterialBatch> findEligibleBatches(String factoryId, ProductionPlan plan,
+                                                    String materialTypeId, String warehouseId) {
+        if (plan.getMaterialSupplyMode() != MaterialSupplyMode.CUSTOMER_SUPPLIED) {
+            return materialBatchRepository.findAvailableBatchesFEFOByWarehouse(
+                    factoryId, materialTypeId, warehouseId);
+        }
+        return materialBatchRepository
+                .findAvailableCustomerSuppliedBatchesFEFOByWarehouse(
+                        factoryId, materialTypeId, warehouseId,
+                        plan.getCustomerId(), plan.getSourceOrderId())
+                .stream()
+                .filter(batch -> isCompatibleSalesOrderItem(plan, batch))
+                .toList();
+    }
+
+    /** 归属守卫在 plan() 里是抛异常; 渲染路径只需要"能不能用"这个布尔。 */
+    private boolean ownershipAllows(ProductionPlan plan, MaterialBatch batch) {
+        try {
+            ProductionInventoryOwnershipGuard.assertMaterialBatchAllowed(plan, batch, "生产报工投料");
+            return true;
+        } catch (RuntimeException ignored) {
+            return false;
+        }
+    }
+
+    /** 与 plan() 逐字同一条件: 质量维度互认, 其余按字面。 */
+    private boolean unitMatches(String factoryId, MaterialBatch batch, String inputUnit, boolean massInput) {
+        String batchUnit = canonicalNativeUnit(factoryId, batch.getQuantityUnit());
+        return massInput ? isCanonicalMassUnit(batchUnit) : Objects.equals(inputUnit, batchUnit);
+    }
+
+    /** 与 plan() 同一算法: 库存减去待占用, 不小于 0。 */
+    private BigDecimal batchAvailable(String factoryId, MaterialBatch batch, boolean massInput) {
+        BigDecimal pending = nz(allocationRepository
+                .sumPendingQuantityByMaterialBatchId(factoryId, batch.getId()));
+        BigDecimal stock = massInput
+                ? storageQuantityToKg(nz(batch.getCurrentQuantity()), batch.getQuantityUnit(), batch.getBatchNumber())
+                : nz(batch.getCurrentQuantity());
+        return stock.subtract(pending).max(BigDecimal.ZERO);
     }
 
     private List<MaterialBatch> findEligibleBatchesForUpdate(String factoryId,
