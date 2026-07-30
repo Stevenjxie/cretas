@@ -21,6 +21,19 @@ on:
         required: false
         default: ''
         type: string
+  # Build the deployable artifact as soon as backend source lands, so the
+  # compile happens while the change is being reviewed rather than inside the
+  # deploy window. Scoped to backend main sources only: docs/test-only commits
+  # must not trigger a 168MB build. full_audit stays manual -- the whole suite
+  # takes over an hour and is not what this trigger is for.
+  push:
+    branches:
+      - main
+      - 'codex/**'
+    paths:
+      - 'backend/java/cretas-api/src/main/**'
+      - 'backend/java/cretas-api/pom.xml'
+      - 'backend/java/cretas-api/lib/**'
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -30,7 +43,7 @@ jobs:
   # ---- Java Backend: Build + Test ----
   java-build-test:
     if: >-
-      ${{ inputs.full_audit || inputs.package_java_artifact }}
+      ${{ github.event_name == 'push' || inputs.full_audit || inputs.package_java_artifact }}
     runs-on: ubuntu-latest
 
     # PostgreSQL service container — enables PG-required IT classes (e.g.
@@ -57,7 +70,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-java@v4
         with:
-          distribution: 'temurin'
+          distribution: 'zulu'
           java-version: '21'
           cache: 'maven'
           cache-dependency-path: backend/java/cretas-api/pom.xml
@@ -98,11 +111,11 @@ jobs:
       # the shell: a selector is operator-supplied text and ${{ }} inside run:
       # would be a command-injection sink.
       - name: Package exact-commit deploy artifact
-        if: inputs.package_java_artifact
+        if: ${{ github.event_name == 'push' || inputs.package_java_artifact }}
         working-directory: backend/java/cretas-api
         timeout-minutes: 30
         env:
-          TARGET_TESTS: ${{ inputs.target_tests }}
+          TARGET_TESTS: ${{ inputs.target_tests || (github.event_name == 'push' && '*RepositoryQueryValidationTest' || '') }}
         run: |
           started=$(date +%s)
           if [ -n "$TARGET_TESTS" ]; then
@@ -124,10 +137,10 @@ jobs:
       # locally, so the ECS verifier can decide deployable_trust_verified from
       # a CI artifact exactly as it does from a locally built one.
       - name: Prepare exact-commit deploy artifact
-        if: inputs.package_java_artifact
+        if: ${{ github.event_name == 'push' || inputs.package_java_artifact }}
         working-directory: backend/java/cretas-api/target
         env:
-          TARGET_TESTS: ${{ inputs.target_tests }}
+          TARGET_TESTS: ${{ inputs.target_tests || (github.event_name == 'push' && '*RepositoryQueryValidationTest' || '') }}
         run: |
           JAR=cretas-backend-system-1.0.0.jar
           test -f "$JAR"
@@ -154,7 +167,7 @@ jobs:
           echo "--- manifest ---"
           cat release-jar.manifest
       - name: Upload exact-commit deploy artifact
-        if: inputs.package_java_artifact
+        if: ${{ github.event_name == 'push' || inputs.package_java_artifact }}
         uses: actions/upload-artifact@v4
         with:
           name: cretas-java-${{ github.sha }}
