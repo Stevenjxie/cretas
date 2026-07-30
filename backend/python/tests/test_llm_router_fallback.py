@@ -419,3 +419,196 @@ async def test_call_chain_total_timeout_caps_the_whole_provider_cascade(monkeypa
         )
 
     assert time.monotonic() - started < 0.8
+
+
+# ════════════════════════════════════════════════════════════════════════
+# 2026-07-30 evening — non-Aliyun floor: reachability, live TokenHub IDs,
+# per-model payload constraints, and the caller-supplied content gate.
+#
+# What these lock down (all measured against prod keys on the real
+# restaurant-T3 prompt, 5 diverse questions, production max_tokens=500):
+#   * The floor was UNREACHABLE, not merely thin: aliyun_c/deepseek-v3.2
+#     answers with confidence -0.95, which is a 200 as far as the router is
+#     concerned, so the cascade stopped there and never reached _TEXT_TAIL.
+#   * Three TokenHub IDs in the chain are dead (console: 已停止 / 余额 0) and
+#     three live ones holding ~2.5M free tokens were never wired.
+#   * TokenHub enforces per-model sampling rules the OpenAI-compatible schema
+#     cannot express, and the router's normalizer was a passthrough.
+# ════════════════════════════════════════════════════════════════════════
+
+# Console scrape 2026-07-30 (状态=已停止, 免费额度余量=0). Calling these can only
+# burn a request and then park the (account,model) in the 6h quota-skip cache.
+_TOKENHUB_EXHAUSTED = {
+    ("tencent", "qwen3.5-flash"),
+    ("tencent", "glm-5.1"),
+    ("tencent", "deepseek-v4-flash"),
+}
+
+# 5/5 on the real T3 prompt at production max_tokens=500.
+_TOKENHUB_VERIFIED = {
+    ("tencent", "hy-mt2-pro"),
+    ("tencent", "deepseek-v3.1-terminus"),
+    ("tencent", "qwen3.5-plus"),
+}
+
+
+def test_no_chain_calls_a_zero_balance_tokenhub_model():
+    """Dead TokenHub IDs must not sit in any chain."""
+    offenders = [
+        (slot.value, account, model)
+        for slot, chain in llm_router.SLOT_MODELS.items()
+        for account, model in chain
+        if (account, model) in _TOKENHUB_EXHAUSTED
+    ]
+    assert not offenders, f"zero-balance TokenHub models still in chains: {offenders}"
+
+
+def test_verified_tokenhub_models_are_registered_and_in_the_text_tail():
+    for pair in _TOKENHUB_VERIFIED:
+        assert pair in llm_router._SAFE_MODELS, (
+            f"{pair} not registered -> _refuse_reason blocks it"
+        )
+        assert pair in llm_router._TEXT_TAIL, (
+            f"{pair} missing from the non-DashScope floor"
+        )
+
+
+def test_negative_confidence_pill_sits_after_the_non_aliyun_floor_in_review():
+    """REVIEW must reach the TokenHub floor before the negative-confidence model.
+
+    aliyun_c/deepseek-v3.2 returns a correct plan with confidence -0.95. The
+    router sees HTTP 200 and stops, so anything ordered after it is dead code
+    once the Aliyun quota is gone -- which is every afternoon.
+    """
+    chain = llm_router.SLOT_MODELS[SLOT.REVIEW]
+    pill = chain.index(("aliyun_c", "deepseek-v3.2"))
+    floor_positions = [chain.index(p) for p in _TOKENHUB_VERIFIED if p in chain]
+    assert floor_positions, "REVIEW cannot reach any verified TokenHub model"
+    assert pill > max(floor_positions), (
+        f"negative-confidence model at {pill} precedes the TokenHub floor at "
+        f"{sorted(floor_positions)} -> floor unreachable"
+    )
+
+
+def test_tokenhub_kimi_is_forced_to_temperature_one():
+    """TokenHub rejects any temperature but 1 for the kimi family (HTTP 400
+    'invalid temperature: only 1 is allowed for this model')."""
+    out = llm_router._apply_slot_params(
+        SLOT.REVIEW, "tencent", "kimi-k2.6", {"model": "kimi-k2.6", "temperature": 0},
+    )
+    assert out["temperature"] == 1
+
+
+def test_forced_temperature_is_tokenhub_scoped_not_model_name_scoped():
+    """The constraint belongs to TokenHub, not to the model name -- the same kimi
+    on DashScope accepts temperature=0 and must keep it."""
+    out = llm_router._apply_slot_params(
+        SLOT.REVIEW, "aliyun_c", "kimi-k2.6", {"model": "kimi-k2.6", "temperature": 0},
+    )
+    assert out["temperature"] == 0
+
+
+def test_tokenhub_thinking_models_get_a_max_tokens_floor():
+    """These ignore enable_thinking=false and spend the whole allowance on
+    reasoning_content, returning EMPTY content at max_tokens=500 (measured:
+    finish_reason='length', reasoning_tokens=500). Raising the ceiling is what
+    makes them answer at all."""
+    out = llm_router._apply_slot_params(
+        SLOT.REVIEW, "tencent", "minimax-m2.7",
+        {"model": "minimax-m2.7", "max_tokens": 500},
+    )
+    assert out["max_tokens"] >= 1600
+
+
+def test_max_tokens_floor_never_lowers_a_callers_larger_budget():
+    out = llm_router._apply_slot_params(
+        SLOT.REVIEW, "tencent", "minimax-m2.7",
+        {"model": "minimax-m2.7", "max_tokens": 4000},
+    )
+    assert out["max_tokens"] == 4000
+
+
+def test_max_tokens_floor_does_not_touch_models_without_the_problem():
+    out = llm_router._apply_slot_params(
+        SLOT.REVIEW, "tencent", "hy-mt2-pro",
+        {"model": "hy-mt2-pro", "max_tokens": 500},
+    )
+    assert out["max_tokens"] == 500
+
+
+@pytest.mark.asyncio
+async def test_call_chain_content_validator_rejects_a_200_and_falls_through(monkeypatch):
+    """A caller-supplied content gate must make the cascade continue.
+
+    This is the poison-pill fix: `_validate_output` cannot know that a
+    syntactically fine JSON plan carries an out-of-contract confidence, so the
+    caller that owns the contract supplies the predicate.
+    """
+    _patch_keys(monkeypatch)
+    monkeypatch.setattr(llm_router, "_today", lambda: datetime.date(2026, 7, 10))
+    pill = {"choices": [{"message": {"content": '{"intent":"X","confidence":-1.0}'}}]}
+    good = {"choices": [{"message": {"content": '{"intent":"X","confidence":0.95}'}}]}
+    client = _ScriptedClient({
+        "aliyun_a": _fake_response(200, json_payload=pill),
+        "aliyun_b": _fake_response(200, json_payload=good),
+    })
+    monkeypatch.setattr(llm_router, "get_llm_http_client", lambda: client)
+
+    def reject_negative_confidence(content):
+        import json as _json
+        try:
+            conf = float(_json.loads(content).get("confidence"))
+        except Exception:
+            return "unparseable"
+        return "negative_confidence" if conf < 0 else None
+
+    result = await call_chain(
+        SLOT.CHAT,
+        {"messages": [{"role": "user", "content": "hi"}]},
+        content_validator=reject_negative_confidence,
+    )
+    assert result == good
+    assert len(client.call_log) >= 2
+
+
+@pytest.mark.asyncio
+async def test_call_chain_without_a_content_validator_keeps_the_first_200(monkeypatch):
+    """No validator -> unchanged behavior (the gate is opt-in per caller)."""
+    _patch_keys(monkeypatch)
+    monkeypatch.setattr(llm_router, "_today", lambda: datetime.date(2026, 7, 10))
+    pill = {"choices": [{"message": {"content": '{"intent":"X","confidence":-1.0}'}}]}
+    client = _ScriptedClient({
+        "aliyun_a": _fake_response(200, json_payload=pill),
+    })
+    monkeypatch.setattr(llm_router, "get_llm_http_client", lambda: client)
+    result = await call_chain(SLOT.CHAT, {"messages": [{"role": "user", "content": "hi"}]})
+    assert result == pill
+
+
+@pytest.mark.asyncio
+async def test_a_raising_content_validator_does_not_kill_the_request(monkeypatch):
+    """A buggy predicate must degrade to 'reject this candidate', never to a
+    500 for the user."""
+    _patch_keys(monkeypatch)
+    monkeypatch.setattr(llm_router, "_today", lambda: datetime.date(2026, 7, 10))
+    first = {"choices": [{"message": {"content": "text one"}}]}
+    second = {"choices": [{"message": {"content": "text two"}}]}
+    client = _ScriptedClient({
+        "aliyun_a": _fake_response(200, json_payload=first),
+        "aliyun_b": _fake_response(200, json_payload=second),
+    })
+    monkeypatch.setattr(llm_router, "get_llm_http_client", lambda: client)
+    calls = {"n": 0}
+
+    def explodes_once(content):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise ValueError("boom")
+        return None
+
+    result = await call_chain(
+        SLOT.CHAT,
+        {"messages": [{"role": "user", "content": "hi"}]},
+        content_validator=explodes_once,
+    )
+    assert result == second
