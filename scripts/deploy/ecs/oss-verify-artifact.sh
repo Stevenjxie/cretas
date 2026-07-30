@@ -21,11 +21,12 @@ usage() {
   cat >&2 <<'EOF'
 usage: oss-verify-artifact.sh --prefix <p> --tree-sha <sha> --jar-sha256 <hex> \
                               --size <bytes> [--manifest <path>] [--purge-acceptance]
+                              [--stage-to-cache]
 EOF
   exit 2
 }
 
-prefix= tree_sha= jar_sha= expected_size= manifest= purge=0 manifest_stdin=0
+prefix= tree_sha= jar_sha= expected_size= manifest= purge=0 manifest_stdin=0 stage=0
 while (($#)); do
   case "$1" in
     --prefix) (($# >= 2)) || usage; prefix=$2; shift 2 ;;
@@ -35,6 +36,7 @@ while (($#)); do
     --manifest) (($# >= 2)) || usage; manifest=$2; shift 2 ;;
     --manifest-stdin) manifest_stdin=1; shift ;;
     --purge-acceptance) purge=1; shift ;;
+    --stage-to-cache) stage=1; shift ;;
     *) usage ;;
   esac
 done
@@ -59,6 +61,13 @@ esac
 # The check is repeated at the delete site as defence in depth.
 if ((purge)) && [[ $prefix != "$ACCEPTANCE_PREFIX" ]]; then
   echo "error=refusing_to_purge_non_acceptance_prefix" >&2
+  exit 2
+fi
+# Staging puts the jar where deploy-backend.sh's claim_remote_sha256_artifact will
+# find and install it. An acceptance-prefix object is a throwaway network-test
+# object; letting one land there would make a test artifact installable.
+if ((stage)) && [[ $prefix == "$ACCEPTANCE_PREFIX" ]]; then
+  echo "error=refusing_to_stage_acceptance_object_into_deploy_cache" >&2
   exit 2
 fi
 
@@ -123,8 +132,12 @@ manifest_field() {
   ' "$1"
 }
 
-# Trust is a manifest question, never a transport question.
+# An unsigned manifest can prove internal consistency, but not provenance. It
+# travels inside the same ZIP as the JAR, so accepting it as a trust root would
+# let any producer mint its own "tests passed" statement. Until a trusted
+# signature/attestation is verified, deployable trust must remain false.
 trust=false
+manifest_consistency=false
 trust_reason=no_manifest_supplied
 if ((manifest_stdin)); then
   if [[ -n $manifest_content ]]; then
@@ -150,8 +163,8 @@ if [[ -n $manifest ]]; then
     elif [[ -z $manifest_tests ]]; then
       trust_reason=manifest_has_no_test_selector
     else
-      trust=true
-      trust_reason=manifest_matches_tree_and_tests
+      manifest_consistency=true
+      trust_reason=manifest_consistent_but_unauthenticated
     fi
   fi
 fi
@@ -162,11 +175,37 @@ echo "oss_to_ecs_megabytes_per_second=$rate"
 echo "sha256=$local_sha"
 echo "transport_verified=true"
 echo "deployable_trust_verified=$trust"
+echo "manifest_consistency_verified=$manifest_consistency"
 echo "trust_reason=$trust_reason"
-if [[ $trust == true ]]; then
+if [[ $manifest_consistency == true ]]; then
   # Quoted: a Maven selector contains spaces and '=', and an auditor needs to
   # see which test set actually vouched for this artifact.
   echo "manifest_target_tests='$manifest_tests'"
+fi
+
+if ((stage)); then
+  # Gated on transport integrity only: remote size matched and the download
+  # re-hashed to the expected SHA-256.
+  #
+  # Deliberately NOT gated on deployable_trust_verified. That stays false by
+  # design here -- an unsigned manifest riding inside the same ZIP as the JAR
+  # proves consistency, not provenance -- so gating on it would make this flag
+  # permanently dead. Staging therefore asserts byte identity, nothing more, and
+  # deploy-backend.sh re-verifies sha256+md5+unzip before installing. Provenance
+  # remains an open question decided elsewhere, not silently answered here.
+  cache_dir="${CRETAS_REMOTE_JAR_CACHE_DIR:-/www/wwwroot/cretas/release-cache/sha256}"
+  cache_path="$cache_dir/$jar_sha.jar"
+  install -d -m 700 "$cache_dir"
+  if [[ -f $cache_path ]]      && [[ "$(sha256sum "$cache_path" | cut -d ' ' -f 1)" == "$jar_sha" ]]; then
+    echo "staged_to_cache=hit"
+  else
+    tmp="$cache_dir/.$jar_sha.$$"
+    cp -- "$work_dir/artifact.jar" "$tmp"
+    chmod 444 "$tmp"
+    mv -f -- "$tmp" "$cache_path"
+    echo "staged_to_cache=stored"
+  fi
+  echo "cache_path=$cache_path"
 fi
 
 if ((purge)); then

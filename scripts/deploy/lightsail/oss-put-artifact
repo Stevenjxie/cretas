@@ -19,14 +19,27 @@ CONNECT_TIMEOUT=15
 MAX_TIME=180
 
 usage() {
-  echo "usage: oss-put-artifact --sha256 <hex> --size <bytes>   (PUT URL on stdin)" >&2
+  echo "usage: oss-put-artifact --prefix <approved-prefix> --tree-sha <sha> \\" >&2
+  echo "                        --sha256 <hex> --size <bytes>   (PUT URL on stdin)" >&2
   exit 2
 }
 
 expected_sha=
 expected_size=
+prefix=
+tree_sha=
 while (($#)); do
   case "$1" in
+    --prefix)
+      (($# >= 2)) || usage
+      prefix=$2
+      shift 2
+      ;;
+    --tree-sha)
+      (($# >= 2)) || usage
+      tree_sha=$2
+      shift 2
+      ;;
     --sha256)
       (($# >= 2)) || usage
       expected_sha=$2
@@ -45,6 +58,13 @@ done
 
 [[ $expected_sha =~ ^[0-9a-f]{64}$ ]] || usage
 [[ $expected_size =~ ^[1-9][0-9]*$ ]] || usage
+[[ $tree_sha =~ ^[0-9a-f]{7,40}$ ]] || usage
+[[ $prefix == */ ]] || prefix="$prefix/"
+case "$prefix" in
+  deploy/backend/|codex-network-test/) ;;
+  *) echo "error=prefix_not_approved" >&2; exit 2 ;;
+esac
+expected_path="/${prefix}${tree_sha}/${expected_sha}.jar"
 
 IFS= read -r put_url || {
   echo "error=url_missing" >&2
@@ -57,7 +77,9 @@ IFS= read -r put_url || {
 
 # Constrain the URL to exactly one bucket host, one approved prefix and HTTPS on
 # 443. A signed URL for anything else is refused before curl ever sees it.
-if ! printf '%s' "$put_url" | BUCKET="$BUCKET" SIGNING_HOST="$SIGNING_HOST" python3 -c '
+if ! printf '%s' "$put_url" |
+  BUCKET="$BUCKET" SIGNING_HOST="$SIGNING_HOST" EXPECTED_PATH="$expected_path" \
+  python3 -c '
 import os
 import sys
 import urllib.parse
@@ -66,7 +88,7 @@ url = sys.stdin.read()
 parsed = urllib.parse.urlsplit(url)
 host = (parsed.hostname or "").lower().rstrip(".")
 expected_host = "{}.{}".format(os.environ["BUCKET"], os.environ["SIGNING_HOST"]).lower()
-approved_prefixes = ("/deploy/backend/", "/codex-network-test/")
+expected_path = os.environ["EXPECTED_PATH"]
 
 if parsed.scheme != "https" or parsed.username or parsed.password:
     raise SystemExit(1)
@@ -74,15 +96,14 @@ if parsed.port not in (None, 443):
     raise SystemExit(1)
 if host != expected_host:
     raise SystemExit(1)
-if not parsed.path.startswith(approved_prefixes):
-    raise SystemExit(1)
-if ".." in parsed.path:
+if urllib.parse.unquote(parsed.path) != expected_path:
     raise SystemExit(1)
 '; then
   unset put_url
   echo "error=url_not_allowed" >&2
   exit 2
 fi
+unset expected_path
 
 source_file="$CACHE_DIR/$expected_sha.bin"
 [[ -f $source_file ]] || {
