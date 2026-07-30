@@ -8,7 +8,11 @@
 ## 一、一句话现状
 
 **构建阶段从 144–163s 压到了 86s。** 再往下需要两件不需要决策的工程活（Java 预热、Web 取回），做完约 **~5s**。
-**部署阶段一次都没测过** —— 构建阶段清零后，发布时间将几乎全部由部署阶段决定，而那部分没有数据。
+
+> **2026-07-30 23:09 更新（Steve 拍板后执行）**：~~部署阶段一次都没测过~~ →
+> **已跑完一次真实 prod 全量发布，`REMOTE_ARTIFACT_ONLY` 端到端跑通到蓝绿切流。**
+> 总时长 **234s**（此前同类全量 400–463s）。详见 §四.1。
+> 同一次发布顺带暴露一个真缺陷，已修并合入（**#2050**），见 §四.4。
 
 ---
 
@@ -75,19 +79,44 @@
 
 ## 四、卡在哪 —— 三处，性质不同
 
-### 1. 🔴 部署那半从未真跑（唯一碰生产的部分）
+### 1. ✅ 部署那半已跑通（2026-07-30 23:09，Steve 授权后执行）
 
-`deploy-backend.sh` 的 `REMOTE_ARTIFACT_ONLY` 分支**一次都没在真实部署里执行过**。
+~~`deploy-backend.sh` 的 `REMOTE_ARTIFACT_ONLY` 分支一次都没在真实部署里执行过。~~
+**已执行。** 命令：
 
-已验证的只是**接口层**：
-- `load_remote_artifact_descriptor` 接受描述符 ✓
-- `claim_remote_sha256_artifact` 用其两个摘要命中服务器缓存（sha256 + md5 + `unzip -tqq` 三项都过）✓
-- ECS 侧 `deployable_trust_verified=true` / `attestation_verified=true` / `jar_integrity_verified=true` ✓
+```bash
+LC_ALL=C JAVA_HOME="C:/Program Files/Zulu/zulu-21" \
+./scripts/deploy/release-cretas.sh --phase all \
+  --base-sha 9162b60701851509cae868766fbb09ea4c8314be \
+  --tests 'FactoryStocktakeAndDeliveryRepositoryQueryValidationTest,InventoryOwnershipRepositoryQueryValidationTest' \
+  --prefer-ci-artifact --confirm-prod YES-PROD
+```
 
-**没验证的**：跳过本地 jar 检查 → 一路到蓝绿切流的完整过程。
+🔴 **`--base-sha` 的选法是这次验证能成立的关键**：上次部署的 head 是 `9d9fce2655`，而 Java 源码自
+`05cf9f0b02` 起**未变**（`backend_tree` 恒为 `51b31baa65`）→ 用它当 base 会判 `java:false`、走 web-only，
+**这条路径根本不会被执行**。改用 `9162b60701`（早于 #2033）才让 `java:true` 成立。
 
-**卡在**：需要 owner 点头跑一次真实 prod 部署。建议先
-`--phase build --prefer-ci-artifact --stage-backend YES-STAGE`（不装不重启不切流），再单独决定 deploy。
+同时这也让本次验证**风险最低**：部署的 Java 源码树与 prod 正在跑的**完全相同**，
+功能上是空转、路径上是实战；`V20261029_33` 那条 Flyway 早已应用，重放是 no-op。
+
+**实测结果**：
+
+| 项 | 值 |
+|---|---|
+| `RELEASE_BUILD_MODE` | `ci-artifact-parallel-web` |
+| `RELEASE_JAVA_STATUS` | `build:success-ci-artifact,deploy:success` |
+| `ci_artifact` | `used`，**71s**（与 Web 构建并行） |
+| `java_build` / `build_count` | **0s / 0** —— 一次 Maven 生命周期都没跑 |
+| 蓝绿切流 | 10020 → **10010(blue)**，`BACKEND_HEALTH=pass` |
+| Web 四方哈希 | local == server == gateway == public_https ✅ |
+| **总时长** | **234s**（此前同类全量 400–463s） |
+
+**独立核验**（没有只信回执）：139 网关 `_upstream_cretas.conf` 实际写着
+`server 47.100.235.168:10010;  # ACTIVE=10010 (switched 2026-07-30)`；47 上 10010 → HTTP 200、
+10020 → 000（旧槽已停）；`cretas-backend` active。
+
+⚠️ **仍未验的一项**：`--stage-backend YES-STAGE` 预热路径（本次是 `not-requested`）。
+发布日志里那条 HINT 就是提示这个。
 
 ### 2. Web 取回没接（收益最大且不需决策）
 
@@ -118,18 +147,55 @@ Java 那条 Tokyo→OSS→ECS 链路对 web **不适用**。
 ⛔ 无论哪种，**上线前必须跑 web E2E** —— 换打包器产物字节必然不同、chunk 组成也变了，构建成功 ≠ 应用还能用。
 ⚠️ **el-icons 拆不拆对速度没影响**（28.37 vs 25.68，噪声内），纯粹是体积/首屏取舍。
 
+### 4. ✅ 那次 prod 发布顺带暴露的真缺陷（已修，#2050 = `e37e136191`）
+
+发布日志里出现：
+
+```
+grep: -P supports only unibyte and UTF-8 locales
+⚠️  无法提取本地 dist 的 entry chunk, 跳过 post-deploy 内容验证
+```
+
+**两件套在一起的事**：
+
+1. `release-cretas.sh` **必须**以 `LC_ALL=C` 运行（否则 Java preflight 的 `[A-Z]` 按 collation
+   展开匹配小写、假报「import 无法解析」），而 GNU grep 在 C locale 下**直接拒绝 `-P`** →
+   `deploy-web-admin.sh` 那句 `grep -oP` 提取 entry chunk **恒为空**。
+   两个子脚本的 locale 要求互相矛盾，而冲突表现为「少做一项验证」不是报错。
+2. **更根本**：`LOCAL_ENTRY_HASH` 全脚本只有「赋值 / 判空 / 告警」三行，**没有任何消费者** ——
+   那句「跳过 post-deploy 内容验证」描述的是一项**从未实现过**的验证。
+   locale 那个 bug 只是让告警每次都触发，才把它暴露出来。
+
+**为什么这缺口有实际后果**：四方哈希比的是 `index.html` **本身**，四个观测点看到同一个坏
+index.html 时**照样 pass**；站点根 200 也只证明 index.html 能被服务。若原子交换装进的
+index.html 引用了一个取不到的 chunk，**两项全通过而所有用户白屏**。
+而交换逻辑本身就在做「旧 assets 2932 → 新 752 + 2208 个保留期内旧 chunk 延续」。
+
+**已修**：提取改 `grep -oE` + POSIX 字符类（两种 locale 一致）；新增
+`verify_entry_chunk_reachable()` 并**真的调用**它；新增 `scripts/tests/test-deploy-web-admin-entry-chunk.sh`
+（7 项断言 + 静态禁 `grep -P` + 断言调用点存在防退回死代码）。变异检验双向过：
+退回 `-oP` 变红、**只删调用点保留函数体**也变红。
+
+🔴 **这条属于本仓库那个系统性问题的又一例**：「文档/消息描述的机制 ≠ 实际运行的机制，
+而且没有任何东西在检查这种脱节」。上一份交接（`HANDOFF-2026-07-29`）就把它列为最高回报方向。
+
 ---
 
 ## 五、下一步怎么做（按收益排序）
 
-| # | 事项 | 收益 | 需决策 |
-|---|---|---|---|
-| 1 | **push 后预热 Java 制品** | 55s → ~2-3s | 否 |
-| 2 | **Web 取回脚本** | 86s → ~5s | 否 |
-| 3 | 真实 prod 部署验证 | 唯一没跑过的部分 | **是** |
-| 4 | 路1 rolldown | 只有 1+2 做完后才有意义 | **是** |
-| 5 | 补 `#2012` 的 paths 漏洞 | 见下 | 否 |
-| 6 | 3 个既有红测 + 1 个超时套件 | 让测试能当闸 | 否 |
+| # | 事项 | 收益 | 需决策 | 状态 |
+|---|---|---|---|---|
+| 1 | **Web 取回脚本** | 86s → ~5s | 否 | ⬜ 待做（现在的最高收益项） |
+| 2 | **push 后预热 Java 制品** | 55s → ~2-3s | 否 | ⬜ 待做 |
+| 3 | ~~真实 prod 部署验证~~ | ~~唯一没跑过的部分~~ | 是 | ✅ **已完成**，见 §四.1 |
+| 4 | 路1 rolldown | 见下方修正 | 是 | 🛑 **Steve 已拍板押后** |
+| 5 | 补 `#2012` 的 paths 漏洞 | 见下 | 否 | ⬜ 待做 |
+| 6 | 3 个既有红测 + 1 个超时套件 | 让测试能当闸 | 否 | ⬜ 待做 |
+
+🛑 **关于 #4（2026-07-30 Steve 拍板押后）**：原文说「只有 1+2 做完后才有意义」，更准确的说法是
+**取回脚本一落地，rolldown 的价值就大幅缩水** —— 构建走缓存约 5s，rolldown 省的那 25s
+只在**缓存未命中**时兑现。而它的代价是 `el-icons` +68% 和一轮必跑的 web E2E。
+**先拿到真实未命中率再定**，别为不确定收益提前付确定代价。
 
 **关于 #1**：55s 之所以存在，只因为**运输是在发布那一刻才由本机发起的**。制品在 push 后几分钟就躺在
 GitHub 上了。`release-ci-artifact.sh` 已经能完成「取回 + 验签 + 落进服务器缓存」——
@@ -184,6 +250,15 @@ bundle ~14KB，远端命令 14,111 字符：
 `grep -q` 一命中就关读端 → tar 被 SIGPIPE(141) → pipefail 判整步失败，报 `tar: stdout: write error`。
 **`release-cretas.sh` 顶部 `matches_any_line` 那段长注释就是讲这个坑的**，我在同一个仓库里还是踩了。
 ⚠️ **本机(MSYS)复现不出来**（造到 174KB listing 仍通过，管道缓冲行为与 Linux 不同）→ 只能靠断言禁写法。
+
+### 🔴 `grep -P` 与 `LC_ALL=C` 不共存（2026-07-30 新增，已加断言）
+
+`release-cretas.sh` **必须** `LC_ALL=C`，而 GNU grep 在 C locale 下拒绝 `-P`。
+**任何被统一入口调用到的脚本都不许用 `grep -P`** —— 失败表现是提取恒为空、只打一行 warning。
+已加静态断言：`scripts/tests/test-deploy-web-admin-entry-chunk.sh`。
+
+写正则时用 POSIX 字符类（`[[:alnum:]]`/`[[:upper:]]`）而不是区间（`[A-Za-z]`/`[A-Z]`）——
+后者在 `en_US.UTF-8` 下按 collation 展开，这是同一个坑的另一面。
 
 ### 🔴 其它反复踩的
 
