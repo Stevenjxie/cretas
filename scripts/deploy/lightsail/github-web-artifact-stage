@@ -1,0 +1,220 @@
+#!/usr/bin/env bash
+# Stage a GitHub Actions *web dist* artifact (a ZIP) into the SHA-256 cache as its
+# inner tar.gz.
+#
+# This is the web counterpart of github-artifact-stage. The two are deliberately
+# separate scripts rather than one parameterised one: github-artifact-stage is now
+# load-bearing on the production Java release path, and widening it to take an
+# arbitrary member set would put that path at risk for no gain here. The one thing
+# that MUST NOT drift between them is the URL allow-list below -- it is copied
+# verbatim, and scripts/tests/test-release-web-ci-artifact.sh asserts the two
+# copies stay byte-identical.
+#
+# Why a Tokyo-side extract step is needed at all (same reason as the JAR one):
+# the key we publish under is the SHA-256 of the tar.gz *inside* the ZIP, which is
+# unknowable until the ZIP is opened, so github-cache-put cannot be used directly.
+#
+# Unlike the JAR flow this does NOT continue to OSS/ECS. The web deploy scp's the
+# dist from the operator's machine to the 139 gateway, so the bytes have to land
+# locally; the caller fetches them over the WireGuard-only cache endpoint.
+#
+# The signed URL arrives on stdin and never enters argv, logs or error messages.
+set -euo pipefail
+set +x
+umask 027
+
+CACHE_DIR=/var/cache/github-artifacts
+LOCK_DIR=/run/lock/github-artifacts
+
+ARCHIVE_NAME=release-web-dist.tar.gz
+MANIFEST_NAME=release-web.manifest
+ATTESTATION_NAME=release-web-dist.attestation.jsonl
+
+usage() {
+  echo "usage: github-web-artifact-stage --zip-size <bytes>   (signed URL on stdin)" >&2
+  exit 2
+}
+
+zip_size=
+while (($#)); do
+  case "$1" in
+    --zip-size) (($# >= 2)) || usage; zip_size=$2; shift 2 ;;
+    *) usage ;;
+  esac
+done
+
+[[ $zip_size =~ ^[1-9][0-9]*$ ]] || usage
+
+IFS= read -r zip_url || { echo "error=url_missing" >&2; exit 2; }
+[[ -n $zip_url ]] || { echo "error=url_missing" >&2; exit 2; }
+
+# Same allow-list as github-cache-put: the artifact download redirects from
+# api.github.com to Azure blob storage.
+if ! printf '%s' "$zip_url" | python3 -c '
+import ipaddress
+import socket
+import sys
+import urllib.parse
+
+url = sys.stdin.read()
+parsed = urllib.parse.urlsplit(url)
+host = (parsed.hostname or "").lower().rstrip(".")
+allowed = (
+    host in {"github.com", "api.github.com"}
+    or host.endswith(".githubusercontent.com")
+    or host.endswith(".blob.core.windows.net")
+)
+if parsed.scheme != "https" or parsed.username or parsed.password:
+    raise SystemExit(1)
+if parsed.port not in (None, 443) or not allowed:
+    raise SystemExit(1)
+addresses = {r[4][0] for r in socket.getaddrinfo(host, 443, type=socket.SOCK_STREAM)}
+if not addresses:
+    raise SystemExit(1)
+for address in addresses:
+    if not ipaddress.ip_address(address).is_global:
+        raise SystemExit(1)
+'; then
+  unset zip_url
+  echo "error=url_not_allowed" >&2
+  exit 2
+fi
+
+install -d -o root -g www-data -m 0750 "$CACHE_DIR"
+install -d -o root -g root -m 0750 "$LOCK_DIR"
+
+work_dir=$(mktemp -d)
+cleanup() { rm -rf -- "$work_dir"; }
+trap cleanup EXIT INT TERM
+
+escaped_url=${zip_url//\\/\\\\}
+escaped_url=${escaped_url//\"/\\\"}
+started=$(date +%s)
+if ! printf 'url = "%s"\n' "$escaped_url" |
+  curl --config - --location --fail --silent --show-error \
+    --retry 5 --retry-delay 1 --retry-all-errors \
+    --connect-timeout 15 --max-time 600 \
+    --output "$work_dir/artifact.zip" 2>/dev/null; then
+  unset zip_url escaped_url
+  echo "error=download_failed" >&2
+  exit 1
+fi
+unset zip_url escaped_url
+download_seconds=$(($(date +%s) - started))
+
+actual_zip_size=$(stat -c %s "$work_dir/artifact.zip")
+if [[ $actual_zip_size != "$zip_size" ]]; then
+  echo "error=zip_size_mismatch expected=$zip_size actual=$actual_zip_size" >&2
+  exit 1
+fi
+
+# Extract by exact member name only. Never trust ZIP-supplied paths: a crafted
+# archive can otherwise write outside the destination (zip-slip).
+if ! ARCHIVE_NAME="$ARCHIVE_NAME" MANIFEST_NAME="$MANIFEST_NAME" \
+     ATTESTATION_NAME="$ATTESTATION_NAME" WORK="$work_dir" python3 -c '
+import hashlib
+import os
+import sys
+import zipfile
+
+archive_name = os.environ["ARCHIVE_NAME"]
+work = os.environ["WORK"]
+wanted = {
+    archive_name,
+    os.environ["MANIFEST_NAME"],
+    # Sigstore provenance bundle. Unlike the manifest it is signed, so it can ride
+    # through this untrusted relay and still be worth something on the far side --
+    # that is the whole point of shipping it inside the ZIP.
+    os.environ["ATTESTATION_NAME"],
+}
+
+with zipfile.ZipFile(os.path.join(work, "artifact.zip")) as archive:
+    present = {n for n in archive.namelist() if n in wanted}
+    if archive_name not in present:
+        print("error=archive_not_in_zip", file=sys.stderr)
+        raise SystemExit(1)
+    for name in present:
+        # basename() defeats any directory component the archive claims.
+        target = os.path.join(work, os.path.basename(name))
+        with archive.open(name) as source, open(target, "wb") as sink:
+            digest = hashlib.sha256()
+            while True:
+                block = source.read(1024 * 1024)
+                if not block:
+                    break
+                digest.update(block)
+                sink.write(block)
+            if name == archive_name:
+                with open(os.path.join(work, "archive.sha256.computed"), "w") as out:
+                    out.write(digest.hexdigest())
+'; then
+  echo "error=extract_failed" >&2
+  exit 1
+fi
+
+archive_path="$work_dir/$ARCHIVE_NAME"
+archive_sha=$(cat "$work_dir/archive.sha256.computed")
+archive_size=$(stat -c %s "$archive_path")
+
+# gzip integrity is cheap here and turns "the relay handed you 8MB of garbage"
+# into a named failure instead of a tar error much later on the operator's machine.
+if ! gzip -t "$archive_path" 2>/dev/null; then
+  echo "error=archive_not_valid_gzip" >&2
+  exit 1
+fi
+
+# The manifest ships its own archive_sha256. Cross-check it against what we just
+# computed: agreement means the tar.gz survived both CI upload and our download.
+# (This host is NOT trusted to judge that agreement -- the caller re-checks both
+# against the bytes it actually receives. Catching it here just fails earlier.)
+sha_source=recomputed_only
+if [[ -f "$work_dir/$MANIFEST_NAME" ]]; then
+  claimed=$(sed -n 's/^archive_sha256=//p' "$work_dir/$MANIFEST_NAME" | head -1)
+  if [[ -n $claimed && $claimed != "$archive_sha" ]]; then
+    echo "error=archive_sha256_disagrees_with_manifest_claim" >&2
+    exit 1
+  fi
+  [[ -n $claimed ]] && sha_source=manifest_and_recomputed
+fi
+
+destination="$CACHE_DIR/$archive_sha.bin"
+lock_file="$LOCK_DIR/$archive_sha.lock"
+exec 9>"$lock_file"
+flock 9
+
+cache_status=stored
+if [[ -f $destination ]]; then
+  existing_sha=$(sha256sum "$destination" | cut -d ' ' -f 1)
+  if [[ $existing_sha == "$archive_sha" ]]; then
+    touch "$destination"
+    cache_status=hit
+  else
+    mv -- "$destination" "$CACHE_DIR/.$archive_sha.invalid.$(date -u +%Y%m%dT%H%M%SZ)"
+  fi
+fi
+if [[ $cache_status == stored ]]; then
+  chown root:www-data "$archive_path"
+  chmod 0640 "$archive_path"
+  mv -- "$archive_path" "$destination"
+fi
+
+echo "cache_status=$cache_status"
+echo "archive_sha256=$archive_sha"
+echo "archive_size=$archive_size"
+echo "zip_size=$actual_zip_size"
+echo "download_seconds=$download_seconds"
+echo "sha_source=$sha_source"
+if [[ -f "$work_dir/$MANIFEST_NAME" ]]; then
+  echo "manifest_present=true"
+  echo "manifest_b64=$(base64 -w0 < "$work_dir/$MANIFEST_NAME")"
+else
+  # An artifact built before web-dist.yml emitted manifests. Say so rather than
+  # letting the caller assume the cache entry can be trusted.
+  echo "manifest_present=false"
+fi
+if [[ -f "$work_dir/$ATTESTATION_NAME" ]]; then
+  echo "attestation_present=true"
+  echo "attestation_b64=$(base64 -w0 < "$work_dir/$ATTESTATION_NAME")"
+else
+  echo "attestation_present=false"
+fi
