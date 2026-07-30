@@ -117,11 +117,21 @@ export function WHInventoryCheckScreen() {
       }
       navigation.navigate("StocktakeEntry", { stocktakeId: res.data.id });
     } catch (err) {
-      const e = err as { response?: { data?: { message?: string } } };
-      // 防呆: 原样显示后端 message（月底约束 / 重复发起等业务规则）
+      const e = err as { response?: { status?: number; data?: { message?: string } } };
+      const message = e.response?.data?.message ?? "请检查网络后重试";
+      // 防呆 Rule 5: "该仓库本月已有进行中的盘点任务" 是最常见的 409 —— 之前只弹一个
+      // 报错就结束，用户不知道那条"进行中"的盘点在哪，只能反复点"发起盘点"再次撞
+      // 409。改为附加"查看盘点记录"按钮，直接跳列表页找到并续录那条任务。
+      const isDuplicate = e.response?.status === 409 || message.includes("已有进行中");
       appAlert(
         "无法发起盘点",
-        e.response?.data?.message ?? "请检查网络后重试",
+        message,
+        isDuplicate
+          ? [
+              { text: "知道了", style: "cancel" },
+              { text: "查看盘点记录", onPress: () => navigation.navigate("WHStocktakeList") },
+            ]
+          : undefined,
       );
     } finally {
       setInitiating(false);

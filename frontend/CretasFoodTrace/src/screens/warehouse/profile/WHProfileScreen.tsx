@@ -145,7 +145,10 @@ export function WHProfileScreen() {
           key: "check-record",
           label: t('profile.menu.checkRecord'),
           icon: "clipboard-check-outline",
-          screen: "WHInventoryCheck",
+          // 2026-07-30 客户反馈修复: 菜单文案是"盘点记录"，之前却跳到"发起盘点"
+          // (WHInventoryCheck) 表单 —— 用户找不到今日已提交的盘点记录。
+          // 改跳新的记录列表页；"发起盘点"仍可从列表页右上角 + 号进入。
+          screen: "WHStocktakeList",
         },
         {
           key: "expire-handle",

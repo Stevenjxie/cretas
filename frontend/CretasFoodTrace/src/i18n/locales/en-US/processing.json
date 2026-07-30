@@ -48,7 +48,8 @@
       "inventoryCheck": "Inventory Check",
       "consumptionHistory": "Consumption History",
       "exceptionAlert": "Exception Alert",
-      "traceability": "Product Traceability"
+      "traceability": "Product Traceability",
+      "materialRequisitions": "Material Requisitions"
     },
     "aiAnalysis": {
       "title": "AI Analysis",
