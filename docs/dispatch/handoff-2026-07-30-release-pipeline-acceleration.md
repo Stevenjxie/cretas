@@ -118,17 +118,37 @@ LC_ALL=C JAVA_HOME="C:/Program Files/Zulu/zulu-21" \
 ⚠️ **仍未验的一项**：`--stage-backend YES-STAGE` 预热路径（本次是 `not-requested`）。
 发布日志里那条 HINT 就是提示这个。
 
-### 2. Web 取回没接（收益最大且不需决策）
+### 2. ✅ Web 取回已接上（2026-07-30 深夜）
 
-CI 已产出 dist 并**验证消费端接受**（构建期 + 部署期两道都过，attestation 正 1 负 3 全对），
-但**没有东西去取**。
+~~CI 已产出 dist 但没有东西去取。~~ **链已接通。**
 
-🔴 **设计被一次实测改了**：直连 GitHub 到本机 **0.05 MB/s** → 8.6MB 要 161s，**比本地构建还慢**。
-而 web 部署是**从本机 `scp` 到 139 网关**（`deploy-web-admin.sh:486`，不是 ECS），所以 dist **必须落到本机** ——
-Java 那条 Tokyo→OSS→ECS 链路对 web **不适用**。
+- `scripts/deploy/release-web-ci-artifact.sh`（本机）+ `scripts/deploy/lightsail/github-web-artifact-stage`（东京，已装并自证 `MATCH=6 DRIFTED=0`）
+- 接线点在 `release-web-manifest.sh` 的 `web_release_build` 里 —— 通向 web 构建的**三条**路径
+  （`build_web` / `run_ci_fetch_parallel_web` / `release-cretas-artifacts.sh`）都落到那个函数。
+  🔴 插在调用方就必然漏掉几条，**#2031 正是这么让 `--prefer-ci-artifact` 只在 java-only 路径生效、功能形同不存在的**。
+- 取回**只预热 by-tree 缓存**，命不命中仍由既有的 `web_release_build_reusable` 判 —— 不绕过任何一道闸。
+- `--prefer-ci-artifact` 现在两侧都生效（命令行形式补了一次 `export`）。
 
-**要做**：一个**纳入版本管理**的 Tokyo→本机取回脚本（8.6MB 在既有 4 MiB/s 限速下约 2–3s）。
-现有 `~/github-cache-tools/fetch-from-cache.sh` **未跟踪且已降级为人工回退**，发布脚本不该依赖它。
+**实测**（制品 `8764812178`，commit `0c29384cfe`，web_tree `5e0d2f8227`）：
+
+| 段 | 实测 |
+|---|---|
+| 端到端接线后总耗时 | **22s**（冷 Tokyo 缓存时 31s） |
+| ├ `gh api` 列制品 | 2.2s |
+| ├ 取签名 URL | 1.4s |
+| ├ 东京 stage | 3.4s |
+| ├ 缓存端点取 8.69MB | **2–9s**（波动大，取决于东京侧页缓存） |
+| └ `web_release_build_reusable` 命中 | 1.5s |
+| 对比：本地 `npm ci` + `vite build` | **86s** |
+
+🔴 **原估的「取回 3s + 复用 2s ≈ 5s」偏乐观，实测 ~22s。** 差在 GitHub API 那两跳（3.6s）
+和东京 stage（3.4s）当初没算进去。净省仍有 **~64s**。
+
+🛑 **并行分片取回实测零收益，别加**：单流 6.1s / 4 路 6.4s / 8 路 6.1s。
+瓶颈是东京隧道带宽本身，不是单连接窗口 —— 与「本机上行并行不叠加」是同一个物理原因。
+这条把交接原先「禁止把 128 路分片当默认」从政策变成了**实测依据**。
+
+⚠️ 现有 `~/github-cache-tools/fetch-from-cache.sh` 仍未跟踪、仍是人工回退，发布链**不依赖**它。
 
 ### 3. 路1 rolldown-vite 等 owner 三选一
 
@@ -185,7 +205,7 @@ index.html 引用了一个取不到的 chunk，**两项全通过而所有用户�
 
 | # | 事项 | 收益 | 需决策 | 状态 |
 |---|---|---|---|---|
-| 1 | **Web 取回脚本** | 86s → ~5s | 否 | ⬜ 待做（现在的最高收益项） |
+| 1 | ~~**Web 取回脚本**~~ | **86s → ~22s**（实测，非 ~5s） | 否 | ✅ **已完成**，见 §四.2 |
 | 2 | **push 后预热 Java 制品** | 55s → ~2-3s | 否 | ⬜ 待做 |
 | 3 | ~~真实 prod 部署验证~~ | ~~唯一没跑过的部分~~ | 是 | ✅ **已完成**，见 §四.1 |
 | 4 | 路1 rolldown | 见下方修正 | 是 | 🛑 **Steve 已拍板押后** |
