@@ -76,40 +76,7 @@ require_release_jdk() {
 require_release_jdk || exit 1
 
 test_root="$REPO_ROOT/backend/java/cretas-api/src/test/java"
-# 测试里的 com.cretas.aims.* import 可能落在任何一个后端模块里, 所以这里必须是【全部模块】。
-# 少列一个, preflight 就会把合法的选择器判成 "project import cannot be resolved"。
-#
-# 从聚合 pom 的 <module> 列表推导, 不再硬编码。
-#
-# Why: 硬编码过一次, 然后就漂了。2026-07-30 拆模块(#2011)新增了 cretas-model /
-# cretas-platform / cretas-logistics-app 三个模块, 而这里还写着三个旧的 —— 实测在纯
-# origin/main 上, 3 个选择器里 2 个直接失败(Factory 现在住在 cretas-model), 也就是
-# release-cretas.sh --phase build 对多数选择器都用不了。按 pom 推导之后, 下次加模块自动跟上。
-#
-# 读不到就【硬失败】而不是退回一份可能已经过期的硬编码列表: preflight 不知道模块边界就
-# 做不了它该做的事, 而一份过期列表恰好会以"合法选择器被拒"的形式表现出来 —— 那正是这次
-# 的症状。
-aggregator_pom="$REPO_ROOT/backend/java/pom.xml"
-if [ ! -f "$aggregator_pom" ]; then
-    echo "ERROR: aggregator pom not found: $aggregator_pom" >&2
-    exit 1
-fi
-# `|| true`: 本脚本是 set -euo pipefail, 而 grep 无匹配返回 1 —— 带 pipefail 会让整个赋值
-# 失败, 脚本在下面那句明确的错误消息之前就【静默退出】。实测过: 一个没有 <module> 的 pom
-# 会让 preflight 一个字都不打就走人。让 grep 不致命, 由下面的空值检查负责吵。
-main_roots=$(
-    { grep -oE '<module>[^<]+</module>' "$aggregator_pom" || true; } \
-        | sed -e 's|<module>||' -e 's|</module>||' \
-        | while IFS= read -r module_name; do
-            [ -n "$module_name" ] || continue
-            candidate="$REPO_ROOT/backend/java/$module_name/src/main/java"
-            [ -d "$candidate" ] && printf '%s\n' "$candidate"
-        done
-)
-if [ -z "$main_roots" ]; then
-    echo "ERROR: no backend module main source roots resolved from $aggregator_pom" >&2
-    exit 1
-fi
+main_root="$REPO_ROOT/backend/java/cretas-api/src/main/java"
 IFS=',' read -r -a selectors <<< "$TESTS"
 test_files=()
 
@@ -129,7 +96,7 @@ selector_to_file() {
 }
 
 import_exists() {
-    local import_name=$1 part path= class_name= candidate main_root
+    local import_name=$1 part path= class_name= candidate
     IFS='.' read -r -a parts <<< "$import_name"
     for part in "${parts[@]}"; do
         # ⛔ 必须用 POSIX 字符类 [[:upper:]], 不能写 [A-Z]。
@@ -148,11 +115,8 @@ import_exists() {
         path+="/$part"
     done
     [ -n "$class_name" ] || return 0
-    while IFS= read -r main_root; do
-        [ -n "$main_root" ] || continue
-        candidate="$main_root$path/$class_name.java"
-        [ -f "$candidate" ] && return 0
-    done <<< "$main_roots"
+    candidate="$main_root$path/$class_name.java"
+    [ -f "$candidate" ] && return 0
     candidate="$test_root$path/$class_name.java"
     [ -f "$candidate" ] && return 0
     echo "ERROR: project import cannot be resolved: $import_name" >&2

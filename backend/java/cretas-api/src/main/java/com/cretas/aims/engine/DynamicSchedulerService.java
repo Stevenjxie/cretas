@@ -28,7 +28,7 @@ import java.util.concurrent.ScheduledFuture;
 @Slf4j
 @Component
 @RequiredArgsConstructor
-public class DynamicSchedulerService implements com.cretas.aims.service.config.SchedulerReloadPort {
+public class DynamicSchedulerService {
 
     private final FactorySchedulerConfigRepository schedulerRepo;
     private final ToolRegistry toolRegistry;
