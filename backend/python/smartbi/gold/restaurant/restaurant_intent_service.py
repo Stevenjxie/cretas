@@ -274,6 +274,11 @@ def _structured_context(
         "store_names": list(spec.store_slots),
         # 换范围按钮要拿它列可选门店(见 _store_scope_switch_followups)。
         "store_options": list(spec.store_options),
+        # 换范围按钮必须发**完整问句**而不是裸范围词 —— 2026-07-31 实测: 只发
+        # 「模拟·徐汇美罗城店」回来的是「查询维度超出计划 resolver 的能力范围」,
+        # 按钮等于哑弹。同一条答案里能用的「看本月」之所以能用, 正是因为它带的
+        # 是完整问句。
+        "question_seed": str(getattr(spec, "resolver_query_seed", "") or ""),
         "compare_stores": spec.compare_stores,
     }
 
@@ -285,6 +290,25 @@ def _clarification_structured_context(spec: RestaurantQuerySpec) -> Dict[str, An
         dish_mention=spec.dish_slot,
         store_mention=spec.store_slot,
     )
+
+
+def _strip_store_scope(seed: str, store_names: Sequence[str] = ()) -> str:
+    """把问句开头已有的门店范围剥掉, 免得拼成「全部门店模拟·X店最近30天…」。
+
+    只剥**开头**的完整范围词/店名; 绝不在句中乱删, 那会改变问题本身
+    (「哪家店」这种词出现在句中是问题的一部分)。
+    """
+    text = (seed or "").strip()
+    prefixes = ["全部门店", "所有门店", "全部店", "各门店"]
+    # 长的先试, 免得短店名把长店名截断成半截。
+    prefixes += sorted(
+        (name.strip() for name in store_names if name and name.strip()),
+        key=len, reverse=True,
+    )
+    for prefix in prefixes:
+        if text.startswith(prefix):
+            return text[len(prefix):].strip()
+    return text
 
 
 def _store_scope_switch_followups(context: Dict[str, Any]) -> List[Dict[str, str]]:
@@ -305,14 +329,29 @@ def _store_scope_switch_followups(context: Dict[str, Any]) -> List[Dict[str, str
         name for name in (context.get("store_names") or [])
         if isinstance(name, str)
     }
+    # 🔴 按钮发的必须是**能独立成立的问句**。裸范围词点下去, 下一轮没有待答澄清
+    # 可以承接它, 于是被当成一个新问题 —— 2026-07-31 实测回来的是「查询维度超出
+    # 计划 resolver 的能力范围」。所以把范围拼回这一轮的问句上。
+    seed = _strip_store_scope(
+        str(context.get("question_seed") or ""),
+        # 换店时上一轮问句开头可能是某个具体店名, 也要剥掉, 否则拼出
+        # 「模拟·徐汇美罗城店模拟·静安嘉里中心店最近30天…」。
+        store_names=[
+            name for name in (context.get("store_options") or [])
+            if isinstance(name, str)
+        ],
+    )
+    if not seed:
+        # 没有可拼的问句就不给按钮 —— 宁可不给, 也不给一个点了会出错的。
+        return []
     options: List[Dict[str, str]] = []
     if scope != "all":
-        options.append({"label": "看全部门店", "question": "全部门店"})
+        options.append({"label": "看全部门店", "question": f"全部门店{seed}"})
     for name in context.get("store_options") or []:
         if len(options) >= 3:
             break
         if isinstance(name, str) and name.strip() and name not in current:
-            options.append({"label": f"只看{name[:10]}", "question": name})
+            options.append({"label": f"只看{name[:10]}", "question": f"{name}{seed}"})
     return options
 
 

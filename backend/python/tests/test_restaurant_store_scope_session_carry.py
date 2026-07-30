@@ -76,16 +76,24 @@ def test_latest_turn_wins():
 from smartbi.gold.restaurant.restaurant_intent_service import _suggested_followups
 
 
+# ⚠️ 下面两条 2026-07-31 **改过契约**: 原本断言 question 是裸范围词(如 "B店")。
+# prod 实测那是**哑弹** —— 点下去下一轮没有待答澄清可以承接它, 于是被当成一个新
+# 问题, 回来「本次没有执行分析：查询维度超出计划 resolver 的能力范围」。同一条
+# 答案里能用的「看本月」之所以能用, 正是因为它带的是完整问句。
+# 现在断言的是「必须能独立成立」。
+
 def test_named_scope_offers_all_stores_and_other_stores():
     got = _suggested_followups({
         "store_scope": "multiple",
         "store_names": ["A店"],
         "store_options": ["A店", "B店", "C店"],
+        "question_seed": "A店最近30天损耗最高的食材",
     })
     questions = [item["question"] for item in got]
-    assert "全部门店" in questions
-    assert "B店" in questions
-    assert "A店" not in questions, "当前已选的门店不该再作为切换项"
+    assert "全部门店最近30天损耗最高的食材" in questions
+    assert "B店最近30天损耗最高的食材" in questions, questions
+    # 原问句开头的店名必须被剥掉, 否则拼成「B店A店最近30天…」
+    assert not any("A店" in q and q.startswith("B店") for q in questions), questions
 
 
 def test_all_scope_offers_drilling_into_single_stores():
@@ -93,10 +101,22 @@ def test_all_scope_offers_drilling_into_single_stores():
         "store_scope": "all",
         "store_names": [],
         "store_options": ["A店", "B店", "C店", "D店"],
+        "question_seed": "全部门店最近30天损耗最高的食材",
     })
     questions = [item["question"] for item in got]
-    assert "全部门店" not in questions, "已经是全部门店了, 再给这个按钮是噪音"
-    assert questions[:3] == ["A店", "B店", "C店"]
+    assert not any(q == "全部门店" for q in questions), "已经是全部门店了"
+    assert questions[:3] == [
+        "A店最近30天损耗最高的食材",
+        "B店最近30天损耗最高的食材",
+        "C店最近30天损耗最高的食材",
+    ], questions
+
+
+def test_no_question_seed_means_no_buttons():
+    """拼不出完整问句就不给按钮 —— 宁可不给, 也不给一个点了会出错的。"""
+    assert _suggested_followups({
+        "store_scope": "all", "store_options": ["A店", "B店"],
+    }) == []
 
 
 def test_single_store_tenant_gets_no_scope_buttons():
