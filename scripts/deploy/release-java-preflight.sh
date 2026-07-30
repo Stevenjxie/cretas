@@ -76,14 +76,40 @@ require_release_jdk() {
 require_release_jdk || exit 1
 
 test_root="$REPO_ROOT/backend/java/cretas-api/src/test/java"
-# All three backend modules, because a com.cretas.aims.* import in a test can
-# now resolve into cretas-common (BaseEntity, ApiResponse, BusinessException,
-# RequirePermission, SecurityUtils, ExcelUtil ...) or cretas-logistics. Keeping
-# only cretas-api here would make preflight reject valid selectors as
-# "project import cannot be resolved".
-main_roots="$REPO_ROOT/backend/java/cretas-api/src/main/java
-$REPO_ROOT/backend/java/cretas-common/src/main/java
-$REPO_ROOT/backend/java/cretas-logistics/src/main/java"
+# 测试里的 com.cretas.aims.* import 可能落在任何一个后端模块里, 所以这里必须是【全部模块】。
+# 少列一个, preflight 就会把合法的选择器判成 "project import cannot be resolved"。
+#
+# 从聚合 pom 的 <module> 列表推导, 不再硬编码。
+#
+# Why: 硬编码过一次, 然后就漂了。2026-07-30 拆模块(#2011)新增了 cretas-model /
+# cretas-platform / cretas-logistics-app 三个模块, 而这里还写着三个旧的 —— 实测在纯
+# origin/main 上, 3 个选择器里 2 个直接失败(Factory 现在住在 cretas-model), 也就是
+# release-cretas.sh --phase build 对多数选择器都用不了。按 pom 推导之后, 下次加模块自动跟上。
+#
+# 读不到就【硬失败】而不是退回一份可能已经过期的硬编码列表: preflight 不知道模块边界就
+# 做不了它该做的事, 而一份过期列表恰好会以"合法选择器被拒"的形式表现出来 —— 那正是这次
+# 的症状。
+aggregator_pom="$REPO_ROOT/backend/java/pom.xml"
+if [ ! -f "$aggregator_pom" ]; then
+    echo "ERROR: aggregator pom not found: $aggregator_pom" >&2
+    exit 1
+fi
+# `|| true`: 本脚本是 set -euo pipefail, 而 grep 无匹配返回 1 —— 带 pipefail 会让整个赋值
+# 失败, 脚本在下面那句明确的错误消息之前就【静默退出】。实测过: 一个没有 <module> 的 pom
+# 会让 preflight 一个字都不打就走人。让 grep 不致命, 由下面的空值检查负责吵。
+main_roots=$(
+    { grep -oE '<module>[^<]+</module>' "$aggregator_pom" || true; } \
+        | sed -e 's|<module>||' -e 's|</module>||' \
+        | while IFS= read -r module_name; do
+            [ -n "$module_name" ] || continue
+            candidate="$REPO_ROOT/backend/java/$module_name/src/main/java"
+            [ -d "$candidate" ] && printf '%s\n' "$candidate"
+        done
+)
+if [ -z "$main_roots" ]; then
+    echo "ERROR: no backend module main source roots resolved from $aggregator_pom" >&2
+    exit 1
+fi
 IFS=',' read -r -a selectors <<< "$TESTS"
 test_files=()
 
