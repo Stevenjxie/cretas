@@ -229,6 +229,34 @@ attestation 是按制品自己的 commit 验、且要求该 commit 的 `backend_
 **验证**：`scripts/tests/test-release-ci-artifact-prewarm.sh`，9 项断言，真临时 git 仓库 + 真选择器展开，只 stub 出网的 `gh`/`pwsh`/`ssh`。五个否定条件各一条独立用例，**变异检验确认每一条都承重**。
 真实环境实测：ECS 上上次发布留下的 jar 仍在且字节数精确吻合，而当前 `origin/main` 的 `backend_tree` 与那份描述符不同 → **短路正确地不命中**。
 
+### 6. ✅ `#2012` 的 paths 漏洞已补
+
+`ci.yml` 的 push `paths` 收敛成 `backend/java/cretas-api/**`，让 **「backend_tree 变 ⟺ CI 触发」** 这个不变量真正成立。
+
+**实测频率**：最近 120 个 main commit 中 **23 个碰 `cretas-api`，其中 3 个（13%）命中这个洞**，全是纯测试改动。
+
+原注释写「test-only commits must not trigger a build」—— 这条判断是错的：制品的 vouching 是「`ci.yml` 在打包**之前**跑过那组测试」，而**测试源就在这棵树里**。测试改了却复用旧制品，等于拿旧测试的结论给新测试背书。
+
+⚠️ 这个洞一直是 **fail-closed** 的（取不到匹配制品就回退本地构建，从不会用错制品）。补它是为了效率与 vouching 语义，**不是修正确性**。
+
+`test-release-ci-artifact.sh` 加两条断言：paths 必须覆盖整个 `RELEASE_BACKEND_PATH`；`web-admin` 仍不许进来。两个方向的变异都验过。
+
+### 7. ✅ 四个「既有红测」已处理 —— 三个陈旧、**一个是超时误判**
+
+逐个查过来历，**没有一个是产品缺陷，产品代码零改动**。
+
+| 测试 | 真相 |
+|---|---|
+| `test-web-admin-deploy-acceleration` | **陈旧桩**：`deploy-web-admin.sh:155` 调 `acquire_deploy_lock`（后加的部署锁），fixture 的 `deploy-common.sh` 桩只有 `check_git_sync`。姊妹测试已经桩了它，这个漏了 |
+| `test-release-jar-manifest` | **两条陈旧断言**：#1995 给 Maven 加了 `-Dcretas.testIncludes`，命令行全等断言与 manifest 记录断言都还按旧命令写 |
+| `test-release-pipeline-acceleration` | **陈旧断言**：钉的是 `run: mvn -B package -Dmaven.test.skip=true`（单行形式），而 #2013 之后打包分两支、带测试的是主支 —— 它钉的是被刻意废弃的行为 |
+| `test-release-cretas` | 🔴 **不是红测，是超时误判**。实测 **473s**，恰好压在常用的 480s 超时线上 → 时而通过时而被杀。用 900s 跑是 **exit 0** |
+
+🔴 **两条值得记的**：
+
+1. `test-web-admin-deploy-acceleration` 的失败表现是 **exit 1 且零输出**，极难查 —— 被测脚本报 `command not found` 退非 0，而调用它的是 `( … ) > log 2>&1`，**连 `set -x` 的 trace 都被重定向进日志**，外层只在 `set -e` 下静默退出。已在桩处写明这个陷阱。
+2. 修陈旧断言时，期望值要**从被测脚本自己的函数推导**，而不是把当前字符串抄一份 —— 抄下来的话，规则一变它又会变成新的陈旧红测。
+
 ---
 
 ## 五、下一步怎么做（按收益排序）
@@ -239,8 +267,8 @@ attestation 是按制品自己的 commit 验、且要求该 commit 的 `backend_
 | 2 | ~~**push 后预热 Java 制品**~~ | 见下（**兑现有前提**） | 否 | ✅ **机制已做**，见 §四.5 |
 | 3 | ~~真实 prod 部署验证~~ | ~~唯一没跑过的部分~~ | 是 | ✅ **已完成**，见 §四.1 |
 | 4 | 路1 rolldown | 见下方修正 | 是 | 🛑 **Steve 已拍板押后** |
-| 5 | 补 `#2012` 的 paths 漏洞 | 见下 | 否 | ⬜ 待做 |
-| 6 | 3 个既有红测 + 1 个超时套件 | 让测试能当闸 | 否 | ⬜ 待做 |
+| 5 | ~~补 `#2012` 的 paths 漏洞~~ | 13% 的 backend commit 取不到制品 | 否 | ✅ **已完成**，见 §四.6 |
+| 6 | ~~3 个既有红测 + 1 个超时套件~~ | 让测试能当闸 | 否 | ✅ **已完成**，见 §四.7 |
 
 🛑 **关于 #4（2026-07-30 Steve 拍板押后）**：原文说「只有 1+2 做完后才有意义」，更准确的说法是
 **取回脚本一落地，rolldown 的价值就大幅缩水** —— 构建走缓存约 5s，rolldown 省的那 25s

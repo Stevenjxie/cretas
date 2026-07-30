@@ -64,12 +64,22 @@ MVN_LOG="$MVN_LOG" CRETAS_MAVEN_WRAPPER="$FAKE_MVN" \
 
 [ "$(wc -l < "$MVN_LOG" | tr -d '[:space:]')" = "1" ] \
     || fail "one release invoked Maven more than once"
-grep -Fxq "clean package -Dtest=$TARGET_TESTS" "$MVN_LOG" \
-    || fail "single Maven invocation did not combine clean package and target tests"
+# 期望值从【被测脚本自己那个函数】推导, 而不是把当前字符串抄一份 —— 抄下来的话, 收窄规则
+# 一变这条断言就又会变成陈旧红测(它上一次红就是因为 #1995 加了 -Dcretas.testIncludes
+# 而这里还在按旧命令行做全等比对)。
+#
+# 仍然用全等(-Fxq)而不是"包含": 全等能挡住偷偷多塞一个 Maven 参数, 那正是这条断言要守的
+# 「一次调用干完 clean package + 目标测试 + 测试编译收窄」这个约束。
+EXPECTED_INCLUDES=$(release_manifest_test_includes "$TARGET_TESTS")
+[ -n "$EXPECTED_INCLUDES" ] || fail "release_manifest_test_includes 返回空"
+grep -Fxq "clean package -Dtest=$TARGET_TESTS -Dcretas.testIncludes=$EXPECTED_INCLUDES" "$MVN_LOG" \
+    || fail "single Maven invocation did not combine clean package, target tests and the test-compile narrowing (got: $(cat "$MVN_LOG"))"
 grep -Fxq "target_tests=$TARGET_TESTS" "$MANIFEST" \
     || fail "manifest did not record actual target tests"
-grep -Fxq "maven_command=$FAKE_MVN clean package -Dtest=$TARGET_TESTS" "$MANIFEST" \
-    || fail "manifest did not record the actual Maven command"
+# manifest 记的必须是【真正跑过的那条】命令行 —— 少记一个参数, manifest 就在为一次它没
+# 描述准确的构建背书。同样按被测函数推导期望值。
+grep -Fxq "maven_command=$FAKE_MVN clean package -Dtest=$TARGET_TESTS -Dcretas.testIncludes=$EXPECTED_INCLUDES" "$MANIFEST" \
+    || fail "manifest did not record the actual Maven command (got: $(grep -F 'maven_command=' "$MANIFEST" || true))"
 grep -Fq 'jdk_vendor=' "$MANIFEST" || fail "manifest missing JDK vendor"
 grep -Fq 'jdk_version=' "$MANIFEST" || fail "manifest missing JDK version"
 grep -Fxq 'success=true' "$MANIFEST" || fail "manifest missing success=true"

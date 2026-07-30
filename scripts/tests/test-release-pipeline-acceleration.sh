@@ -40,7 +40,18 @@ if ! (( package_line < artifact_upload_line && artifact_upload_line < full_verif
     echo "FAIL: exact-main JAR must upload before the long full Maven verify" >&2
     exit 1
 fi
-assert_contains "$CI_WORKFLOW" 'run: mvn -B package -Dmaven.test.skip=true -pl .'
+# 这条原先钉的是单行 `run: mvn -B package -Dmaven.test.skip=true -pl .`。
+# #2013 之后打包步骤改成多行 `run: |` 且分两支: 给了选择器就【先跑测试再打包】(测试失败
+# 就没有制品, 而不是产出一份没人把关过的制品), 没给才退回 skip。旧断言钉的是一个被刻意
+# 废弃的行为, 所以它一直红着 —— 换成当前那个更强的契约。
+#
+# 不去 grep 注释文本(那太脆), 而是断言两支都在、且【带测试的那支是主支】。
+tested_package_line=$(line_number "$CI_WORKFLOW" 'mvn -B package -Dtest="$TARGET_TESTS"')
+skip_package_line=$(line_number "$CI_WORKFLOW" 'mvn -B package -Dmaven.test.skip=true -pl .')
+if ! (( tested_package_line < skip_package_line )); then
+    echo "FAIL: 带测试的打包必须是主支, -Dmaven.test.skip 只能是没给选择器时的兜底" >&2
+    exit 1
+fi
 
 backend_line=$(line_number "$E2E_WORKFLOW" 'name: Start Java backend (background)')
 web_deps_line=$(line_number "$E2E_WORKFLOW" 'name: Install web-admin deps')

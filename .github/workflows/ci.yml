@@ -23,17 +23,28 @@ on:
         type: string
   # Build the deployable artifact as soon as backend source lands, so the
   # compile happens while the change is being reviewed rather than inside the
-  # deploy window. Scoped to backend main sources only: docs/test-only commits
-  # must not trigger a 168MB build. full_audit stays manual -- the whole suite
-  # takes over an hour and is not what this trigger is for.
+  # deploy window. full_audit stays manual -- the whole suite takes over an hour
+  # and is not what this trigger is for.
+  #
+  # ⚠️ paths 必须覆盖【整个】 RELEASE_BACKEND_PATH (= backend/java/cretas-api),
+  # 因为消费端认制品靠的是 `git rev-parse <sha>:backend/java/cretas-api` 这棵树。
+  # 需要成立的不变量是: 【那棵树变了 ⟺ CI 被触发】。
+  #
+  # 原先只列 src/main + pom + lib, 于是 src/test/** 或 lombok.config 之类的改动会
+  # 改变 backend_tree 却不触发构建 → 那个 commit 上【永远】取不到匹配的制品, 发布只能
+  # 回退本地 Maven 构建。实测最近 120 个 main commit 中有 23 个碰 cretas-api, 其中 3 个
+  # (13%) 命中这个洞, 全是纯测试改动。
+  #
+  # 这不只是效率问题: 制品的 vouching 是「ci.yml 在打包【之前】跑过那组测试」, 而测试源
+  # 属于这棵树。测试改了却复用旧制品, 等于拿旧测试的结论给新测试背书。所以测试改动
+  # 【应该】重建制品 —— 原先注释里"test-only commits must not trigger a build"这条
+  # 判断是错的。
   push:
     branches:
       - main
       - 'codex/**'
     paths:
-      - 'backend/java/cretas-api/src/main/**'
-      - 'backend/java/cretas-api/pom.xml'
-      - 'backend/java/cretas-api/lib/**'
+      - 'backend/java/cretas-api/**'
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
