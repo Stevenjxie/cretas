@@ -67,7 +67,7 @@ jobs:
           distribution: 'temurin'
           java-version: '21'
           cache: 'maven'
-          cache-dependency-path: backend/java/cretas-api/pom.xml
+          cache-dependency-path: backend/java/**/pom.xml
 
       - uses: actions/setup-node@v4
         with:
@@ -87,6 +87,13 @@ jobs:
         run: npx playwright install --with-deps chromium
 
       # ── Backend startup ──────────────────────────────────────────────────────
+      # See e2e-pr.yml: spring-boot:run cannot use -am (it would run the goal on
+      # the library modules, which have no main class), so the two library
+      # modules go into the runner's ephemeral ~/.m2 first.
+      - name: Install backend library modules
+        working-directory: backend/java
+        run: mvn -B -q install -pl cretas-common,cretas-logistics -DskipTests
+
       - name: Start Java backend (background)
         working-directory: backend/java/cretas-api
         run: |

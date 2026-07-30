@@ -3,6 +3,19 @@
 RELEASE_MANIFEST_FORMAT="cretas-release-jar-manifest-v1"
 RELEASE_BACKEND_PATH="backend/java/cretas-api"
 RELEASE_JAR_NAME="cretas-backend-system-1.0.0.jar"
+# Since the backend was split into Maven modules, backend/java holds
+# cretas-common and cretas-logistics next to cretas-api, and all three are
+# packaged into the one fat JAR. The immutable-JAR cache key must therefore
+# hash backend/java. Hashing only cretas-api would let a change confined to
+# cretas-logistics reuse a JAR built before that change existed - a silently
+# stale deploy, which is the one failure mode this cache must never have.
+RELEASE_BACKEND_TREE_PATH="backend/java"
+# Maven reactor entry, relative to RELEASE_BACKEND_PATH. Builds still run from
+# inside cretas-api so every existing path reference keeps working; -pl/-am pull
+# the two library modules into the same reactor and the fat JAR still lands in
+# cretas-api/target.
+RELEASE_REACTOR_POM="../pom.xml"
+RELEASE_APP_MODULE="cretas-api"
 RELEASE_MANIFEST_NAME="release-jar.manifest"
 RELEASE_BUILD_REPORT_NAME="release-jar.report.json"
 
@@ -117,10 +130,10 @@ release_manifest_validate() {
     [ -n "$jdk_vendor" ] && [ -n "$jdk_version" ] || return 1
     [ -n "$maven_command" ] && [ -n "$target_tests" ] || return 1
 
-    current_tree=$(git -C "$repo_root" rev-parse "origin/main:$RELEASE_BACKEND_PATH" 2>/dev/null) || return 1
+    current_tree=$(git -C "$repo_root" rev-parse "origin/main:$RELEASE_BACKEND_TREE_PATH" 2>/dev/null) || return 1
     [ "$backend_tree" = "$current_tree" ] || return 1
     git -C "$repo_root" cat-file -e "${build_commit}^{commit}" 2>/dev/null || return 1
-    built_tree=$(git -C "$repo_root" rev-parse "${build_commit}:$RELEASE_BACKEND_PATH" 2>/dev/null) || return 1
+    built_tree=$(git -C "$repo_root" rev-parse "${build_commit}:$RELEASE_BACKEND_TREE_PATH" 2>/dev/null) || return 1
     [ "$built_tree" = "$current_tree" ] || return 1
 
     manifest_dir=$(cd "$(dirname "$manifest")" 2>/dev/null && pwd) || return 1
@@ -181,7 +194,7 @@ release_manifest_write() {
     case "$build_wall_seconds" in ''|*[!0-9]*) return 1 ;; esac
 
     build_commit=$(git -C "$repo_root" rev-parse HEAD 2>/dev/null) || return 1
-    backend_tree=$(git -C "$repo_root" rev-parse "HEAD:$RELEASE_BACKEND_PATH" 2>/dev/null) || return 1
+    backend_tree=$(git -C "$repo_root" rev-parse "HEAD:$RELEASE_BACKEND_TREE_PATH" 2>/dev/null) || return 1
     jdk_vendor=$(release_manifest_java_property java.vendor) || return 1
     jdk_version=$(release_manifest_java_property java.version) || return 1
     [ -n "$jdk_vendor" ] && [ -n "$jdk_version" ] || return 1
@@ -267,7 +280,7 @@ release_manifest_build_reusable() {
 
     backend_tree=$(release_manifest_field "$manifest" backend_tree) || return 1
     [[ "$backend_tree" =~ ^[0-9a-fA-F]{40}$ ]] || return 1
-    current_tree=$(git -C "$repo_root" rev-parse "HEAD:$RELEASE_BACKEND_PATH" 2>/dev/null) || return 1
+    current_tree=$(git -C "$repo_root" rev-parse "HEAD:$RELEASE_BACKEND_TREE_PATH" 2>/dev/null) || return 1
     [ "$backend_tree" = "$current_tree" ] || return 1
 
     jar_relative=$(release_manifest_field "$manifest" jar_path) || return 1
@@ -315,13 +328,14 @@ release_manifest_build() {
         wrapper=./mvnw.cmd
     fi
     test_includes=$(release_manifest_test_includes "$target_tests")
-    command_text="$wrapper clean package -Dtest=$target_tests -Dcretas.testIncludes=$test_includes"
+    command_text="$wrapper -f $RELEASE_REACTOR_POM clean package -pl $RELEASE_APP_MODULE -am -Dtest=$target_tests -Dcretas.testIncludes=$test_includes"
     build_started_at=$(date +%s)
 
     (
         cd "$backend_dir"
         [ ! -f "$wrapper" ] || chmod +x "$wrapper" 2>/dev/null || true
-        "$wrapper" clean package "-Dtest=$target_tests" "-Dcretas.testIncludes=$test_includes"
+        "$wrapper" -f "$RELEASE_REACTOR_POM" clean package -pl "$RELEASE_APP_MODULE" -am \
+            "-Dtest=$target_tests" "-Dcretas.testIncludes=$test_includes"
     ) || return 1
     build_wall_seconds=$(( $(date +%s) - build_started_at ))
 

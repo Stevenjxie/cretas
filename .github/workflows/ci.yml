@@ -60,7 +60,9 @@ jobs:
           distribution: 'temurin'
           java-version: '21'
           cache: 'maven'
-          cache-dependency-path: backend/java/cretas-api/pom.xml
+          # Every backend POM, not just the application's: the dependency cache
+          # key must change when cretas-common or cretas-logistics changes deps.
+          cache-dependency-path: backend/java/**/pom.xml
 
       # Bootstrap IT database matching application-r10-it.properties:
       # cretas_r10_it_test owned by cretas_user. Schema is auto-applied
@@ -86,7 +88,8 @@ jobs:
         working-directory: backend/java/cretas-api
         timeout-minutes: 15
         run: >-
-          mvn -B test
+          mvn -B -f ../pom.xml test
+          -pl cretas-api -am
           -Dspring.profiles.active=test
           -Dtest='*RepositoryQueryValidationTest'
           -Dsurefire.failIfNoSpecifiedTests=false
@@ -105,15 +108,18 @@ jobs:
           TARGET_TESTS: ${{ inputs.target_tests }}
         run: |
           started=$(date +%s)
+          # -f ../pom.xml puts the reactor root at backend/java so -pl/-am also
+          # build cretas-common and cretas-logistics; the JAR still lands in
+          # cretas-api/target, which the next step reads.
           if [ -n "$TARGET_TESTS" ]; then
             # Tests run BEFORE the artifact exists, so a failing selector means
             # no artifact rather than an artifact nobody vetted.
-            mvn -B package -Dtest="$TARGET_TESTS" \
-              -Dsurefire.failIfNoSpecifiedTests=false -pl .
-            maven_command="mvn -B package -Dtest=$TARGET_TESTS -pl ."
+            mvn -B -f ../pom.xml package -pl cretas-api -am -Dtest="$TARGET_TESTS" \
+              -Dsurefire.failIfNoSpecifiedTests=false
+            maven_command="mvn -B -f ../pom.xml package -pl cretas-api -am -Dtest=$TARGET_TESTS"
           else
-            mvn -B package -Dmaven.test.skip=true -pl .
-            maven_command="mvn -B package -Dmaven.test.skip=true -pl ."
+            mvn -B -f ../pom.xml package -pl cretas-api -am -Dmaven.test.skip=true
+            maven_command="mvn -B -f ../pom.xml package -pl cretas-api -am -Dmaven.test.skip=true"
           fi
           {
             echo "MAVEN_WALL_SECONDS=$(( $(date +%s) - started ))"
@@ -133,7 +139,10 @@ jobs:
           test -f "$JAR"
           sha256sum "$JAR" > "$JAR.sha256"
           printf '%s\n' "$GITHUB_SHA" > "$JAR.commit"
-          backend_tree=$(git -C "$GITHUB_WORKSPACE" rev-parse "HEAD:backend/java/cretas-api")
+          # Must hash the same path as RELEASE_BACKEND_TREE_PATH in
+          # release-jar-manifest.sh, or the local validator rejects this
+          # manifest (or worse, trusts a JAR whose modules it never hashed).
+          backend_tree=$(git -C "$GITHUB_WORKSPACE" rev-parse "HEAD:backend/java")
           {
             echo "format=cretas-release-jar-manifest-v1"
             echo "success=true"
@@ -202,7 +211,7 @@ jobs:
         env:
           MAVEN_OPTS: -Xmx1g
         run: >-
-          mvn -B verify -Dspring.profiles.active=test -pl .
+          mvn -B -f ../pom.xml verify -pl cretas-api -am -Dspring.profiles.active=test
           -DargLine="-Xmx4g -XX:+EnableDynamicAgentLoading -Xshare:off -XX:+HeapDumpOnOutOfMemoryError -XX:HeapDumpPath=/tmp/surefire-oom.hprof"
       - name: Upload test results
         if: failure()

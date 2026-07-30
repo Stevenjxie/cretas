@@ -49,6 +49,28 @@
     </dependencyManagement>
 
     <dependencies>
+        <!-- ==== Cretas backend modules (see ../pom.xml for the reactor) ==== -->
+
+        <!-- Platform contracts: exception/entity bases, ApiResponse, permission
+             annotations, SecurityUtils, ExcelUtil. Compile-scoped because most
+             of this module's 3943 sources reference them. -->
+        <dependency>
+            <groupId>com.cretas</groupId>
+            <artifactId>cretas-common</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+
+        <!-- Logistics domain. Nothing in this module references it at compile
+             time (measured: 0 inbound references), so it is here only so Spring
+             can component-scan com.cretas.aims.logistics and so the domain ships
+             inside the fat JAR. That zero is what makes deploying logistics
+             separately a real option later. -->
+        <dependency>
+            <groupId>com.cretas</groupId>
+            <artifactId>cretas-logistics</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+
         <!-- Spring Boot Web Starter -->
         <dependency>
             <groupId>org.springframework.boot</groupId>

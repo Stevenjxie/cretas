@@ -43,7 +43,10 @@ select_matching_lines() {
 
 # 闸的模式集中在此, 便于单测直接引用真实模式而不是抄一份副本。
 # 前两个原先是 BRE (`grep -q`), 模式里只有 ^ 和字面量, BRE/ERE 解释完全一致。
-JAVA_PATH_PATTERN='^backend/java/cretas-api/'
+# backend/java/, not backend/java/cretas-api/: cretas-common and
+# cretas-logistics are separate Maven modules packaged into the same fat JAR, so
+# a change confined to either still needs a Java build and deploy.
+JAVA_PATH_PATTERN='^backend/java/'
 WEB_PATH_PATTERN='^web-admin/'
 RISK_MIGRATION_PATTERN='/(db/)?migration/|flyway'
 RISK_ENTITY_PATTERN='/entity/|Entity\.java$'

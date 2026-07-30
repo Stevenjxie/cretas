@@ -395,7 +395,7 @@ write_deploy_json_report() {
     total=$((now - DEPLOY_SCRIPT_STARTED_AT))
     if [ "$exit_code" -eq 0 ]; then result=SUCCESS; else result=FAILED; fi
     commit=$(git -C "$PROJECT_ROOT" rev-parse HEAD 2>/dev/null || true)
-    backend_tree=$(git -C "$PROJECT_ROOT" rev-parse "HEAD:$RELEASE_BACKEND_PATH" 2>/dev/null || true)
+    backend_tree=$(git -C "$PROJECT_ROOT" rev-parse "HEAD:$RELEASE_BACKEND_TREE_PATH" 2>/dev/null || true)
     mkdir -p "$(dirname "$DEPLOY_REPORT_PATH")" || return 1
     report_tmp="${DEPLOY_REPORT_PATH}.tmp.$$"
 
@@ -610,7 +610,11 @@ run_first_success_build_race() {
 
 # BEGIN_BACKEND_SOURCE_CACHE_HELPERS
 backend_source_tree_fingerprint() {
-    git -C "$PROJECT_ROOT" rev-parse "HEAD:backend/java/cretas-api" 2>/dev/null
+    # backend/java, not backend/java/cretas-api: cretas-common and
+    # cretas-logistics are packaged into the same fat JAR, so a change confined
+    # to either must invalidate this cache. Narrowing it to cretas-api would
+    # serve a JAR that predates the change and report success.
+    git -C "$PROJECT_ROOT" rev-parse "HEAD:$RELEASE_BACKEND_TREE_PATH" 2>/dev/null
 }
 
 reuse_local_source_artifact_cache() {
@@ -874,8 +878,12 @@ deploy_jar() {
     build_local_jar() {
         local goals="$1"
         (
+            # Stays inside cretas-api on purpose (the wrapper and every path
+            # reference live here); -f ../pom.xml makes the reactor root the
+            # backend/java aggregator so -pl/-am also build cretas-common and
+            # cretas-logistics. The fat JAR still lands in cretas-api/target.
             cd backend/java/cretas-api || return 1
-            run_mvn $goals
+            run_mvn -f "$RELEASE_REACTOR_POM" $goals -pl "$RELEASE_APP_MODULE" -am
         )
     }
 

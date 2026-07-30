@@ -92,7 +92,7 @@ jobs:
           distribution: 'temurin'
           java-version: '21'
           cache: 'maven'
-          cache-dependency-path: backend/java/cretas-api/pom.xml
+          cache-dependency-path: backend/java/**/pom.xml
 
       - name: Report runner resources
         run: |
@@ -103,7 +103,8 @@ jobs:
         working-directory: backend/java/cretas-api
         timeout-minutes: 15
         run: >-
-          mvn -B test
+          mvn -B -f ../pom.xml test
+          -pl cretas-api -am
           -Dspring.profiles.active=test
           -Dtest='*RepositoryQueryValidationTest'
           -Dsurefire.failIfNoSpecifiedTests=false

@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Cretas backend reactor (aggregator only).
+
+  Phase 0 of the domain modularization: it exists so `cretas-common` and
+  `cretas-logistics` can be built as real Maven modules alongside the
+  application, without moving the application itself.
+
+  Deliberately a PURE aggregator, not a parent: `cretas-api/pom.xml` keeps
+  spring-boot-starter-parent as its parent and its own dependency list, so
+  this file adds a reactor and changes nothing about how the application is
+  configured or where its artifact lands. Maven orders the reactor from the
+  inter-module dependencies, which does not require a parent relationship.
+
+  Build entry stays inside cretas-api so every existing path reference keeps
+  working (41 script/workflow references point at cretas-api/src, 19 at
+  cretas-api/target, 18 at cretas-api/pom.xml):
+
+      cd backend/java/cretas-api
+      ./mvnw.cmd -f ../pom.xml clean package -pl cretas-api -am
+
+  `-pl cretas-api -am` builds cretas-common and cretas-logistics first, then
+  the application; the fat JAR is still written to
+  backend/java/cretas-api/target/cretas-backend-system-1.0.0.jar.
+-->
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0
+         https://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <groupId>com.cretas</groupId>
+    <artifactId>cretas-backend-reactor</artifactId>
+    <version>1.0.0</version>
+    <packaging>pom</packaging>
+    <name>Cretas Backend Reactor</name>
+    <description>白垩纪食品溯源系统后端 - 多模块聚合器</description>
+
+    <modules>
+        <module>cretas-common</module>
+        <module>cretas-logistics</module>
+        <module>cretas-api</module>
+    </modules>
+</project>
