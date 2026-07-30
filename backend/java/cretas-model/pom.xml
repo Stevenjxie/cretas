@@ -1,0 +1,134 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  cretas-model - the shared persistence model.
+
+  Phase 2, batch 1. Measured rather than guessed: taking each business domain's
+  outbound closure and counting how many domains need each file gives a shared
+  core of 793 files. That is too large to move in one reviewable step, so this
+  is its bottom layer - the JPA entities and enums that everything else is
+  written in terms of.
+
+  Scope rule: entities and enums with no domain segment in their package, i.e.
+  the ones more than one business line reads. Domain-owned entities
+  (entity.restaurant.*, entity.finance.* ...) deliberately stay behind and will
+  travel with their own domain module.
+
+  The layer is very nearly closed already: of 498 candidates, only 15 references
+  pointed outside, and 40 of those were one annotation (security.PriceSensitive,
+  now in cretas-common). Six entities reference DTOs or services - inverted
+  layering - and are left in cretas-api rather than dragging a service layer in
+  here:
+      entity.intent.IntentPreviewToken            -> ai.tool.gateway.ToolExecutionMode
+      entity.WorkProcessGovernanceAudit           -> dto.WorkProcessDTO
+      entity.inventory.SalesOrder                 -> dto.sales.ExtraFeeItem
+      entity.inventory.SalesOrderShortageReport   -> dto.orchestration.*, service.shortage.dto.*
+      entity.bom.BomRecipeItem                    -> service.shared.CostRollupUtil
+      entity.tool.ToolEmbedding                   -> util.VectorUtils
+  Straightening those six out is a follow-up; each is a single reference.
+
+  Package names are unchanged, so no import anywhere had to move. This does NOT
+  make the build faster on its own - the application still holds every service,
+  controller and repository, and common -> model -> app is a serial chain. The
+  speedup arrives when domains become sibling modules that build in parallel,
+  which is exactly what this layer unblocks.
+-->
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0
+         https://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>org.springframework.boot</groupId>
+        <artifactId>spring-boot-starter-parent</artifactId>
+        <version>3.2.12</version>
+        <relativePath/>
+    </parent>
+
+    <groupId>com.cretas</groupId>
+    <artifactId>cretas-model</artifactId>
+    <version>1.0.0</version>
+    <name>Cretas Model - Shared Persistence Layer</name>
+    <description>跨业务共享的 JPA 实体、枚举与转换器</description>
+
+    <properties>
+        <java.version>21</java.version>
+        <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+        <lombok.version>1.18.36</lombok.version>
+    </properties>
+
+    <dependencies>
+        <dependency>
+            <groupId>com.cretas</groupId>
+            <artifactId>cretas-common</artifactId>
+            <version>1.0.0</version>
+        </dependency>
+
+        <!-- jakarta.persistence, Hibernate annotations, spring-data auditing -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-data-jpa</artifactId>
+        </dependency>
+
+        <!-- JSONB column types on PostgreSQL (Hibernate 6.3) -->
+        <dependency>
+            <groupId>io.hypersistence</groupId>
+            <artifactId>hypersistence-utils-hibernate-63</artifactId>
+            <version>3.7.3</version>
+        </dependency>
+
+        <!-- converters serialise embedded payloads with Jackson -->
+        <dependency>
+            <groupId>com.fasterxml.jackson.core</groupId>
+            <artifactId>jackson-databind</artifactId>
+        </dependency>
+
+        <!-- @Schema on entity fields -->
+        <dependency>
+            <groupId>org.springdoc</groupId>
+            <artifactId>springdoc-openapi-starter-webmvc-ui</artifactId>
+            <version>2.3.0</version>
+        </dependency>
+
+        <dependency>
+            <groupId>org.projectlombok</groupId>
+            <artifactId>lombok</artifactId>
+            <version>${lombok.version}</version>
+            <optional>true</optional>
+        </dependency>
+    </dependencies>
+
+    <build>
+        <plugins>
+            <!-- See cretas-common: a release build's -Dtest selector reaches every
+                 reactor module, and this one has no tests of its own yet. -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-surefire-plugin</artifactId>
+                <configuration>
+                    <failIfNoSpecifiedTests>false</failIfNoSpecifiedTests>
+                </configuration>
+            </plugin>
+
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-compiler-plugin</artifactId>
+                <version>3.11.0</version>
+                <configuration>
+                    <source>21</source>
+                    <target>21</target>
+                    <release>21</release>
+                    <encoding>UTF-8</encoding>
+                    <parameters>true</parameters>
+                    <annotationProcessorPaths>
+                        <path>
+                            <groupId>org.projectlombok</groupId>
+                            <artifactId>lombok</artifactId>
+                            <version>${lombok.version}</version>
+                        </path>
+                    </annotationProcessorPaths>
+                </configuration>
+            </plugin>
+        </plugins>
+    </build>
+</project>

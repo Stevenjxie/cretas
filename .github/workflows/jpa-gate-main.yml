@@ -57,11 +57,15 @@ on:
   push:
     branches: [main]
     paths:
-      - 'backend/java/cretas-api/src/main/java/**/repository/**'
-      - 'backend/java/cretas-api/src/main/java/**/entity/**'
+      # backend/java/*/ 而不是只有 cretas-api/: entity 与 repository 现在也住在
+      # cretas-common (BaseEntity) 与 cretas-logistics (Vehicle / VehicleRepository /
+      # Logistics*) 里。只列 cretas-api 会让改这些模块的 commit 静默绕过启动门禁。
+      - 'backend/java/*/src/main/java/**/repository/**'
+      - 'backend/java/*/src/main/java/**/entity/**'
       - 'backend/java/cretas-api/src/test/java/**/*RepositoryQueryValidationTest.java'
       - 'backend/java/cretas-api/src/main/resources/db/**'
-      - 'backend/java/cretas-api/pom.xml'
+      - 'backend/java/*/pom.xml'
+      - 'backend/java/pom.xml'
   workflow_dispatch:
 
 concurrency:
@@ -92,7 +96,7 @@ jobs:
           distribution: 'temurin'
           java-version: '21'
           cache: 'maven'
-          cache-dependency-path: backend/java/cretas-api/pom.xml
+          cache-dependency-path: backend/java/**/pom.xml
 
       - name: Report runner resources
         run: |
@@ -103,7 +107,8 @@ jobs:
         working-directory: backend/java/cretas-api
         timeout-minutes: 15
         run: >-
-          mvn -B test
+          mvn -B -f ../pom.xml test
+          -pl cretas-api -am
           -Dspring.profiles.active=test
           -Dtest='*RepositoryQueryValidationTest'
           -Dsurefire.failIfNoSpecifiedTests=false

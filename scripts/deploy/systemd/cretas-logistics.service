@@ -1,0 +1,40 @@
+# Cretas 物流业务线独立服务。
+#
+# 与单体(cretas-backend-green)完全不重叠: 单元名 / 端口 10031 / 工作目录
+# /www/wwwroot/cretas-logistics / 自己的 JAR。共用的只有 .env.prod(为了不再复制一份
+# 密钥)与同一个 PostgreSQL 实例。
+#
+# 刻意 ddl-auto=none + Flyway 只看 db/flyway-logistics: 那 12 个迁移在 cretas_prod_db
+# 的历史里已全部 success, 所以本服务启动时 Flyway 是空操作, 不写这个库。
+[Unit]
+Description=Cretas Logistics Service (port 10031)
+After=network.target postgresql.service
+StartLimitIntervalSec=120
+StartLimitBurst=3
+
+[Service]
+Type=simple
+SuccessExitStatus=143
+User=root
+WorkingDirectory=/www/wwwroot/cretas-logistics
+
+EnvironmentFile=/www/wwwroot/cretas/.env.prod
+Environment=DDL_AUTO=none
+Environment=DB_POOL_MAX=5
+
+ExecStart=/usr/bin/java \
+  -Xms256m -Xmx1024m \
+  -XX:MaxMetaspaceSize=384m \
+  -XX:+ExitOnOutOfMemoryError \
+  -XX:+UseG1GC \
+  -jar cretas-logistics-service-1.0.0.jar \
+  --spring.profiles.active=pg \
+  --server.port=10031
+
+Restart=on-failure
+RestartSec=10
+StandardOutput=append:/www/wwwroot/cretas-logistics/service.log
+StandardError=append:/www/wwwroot/cretas-logistics/service.log
+
+[Install]
+WantedBy=multi-user.target

@@ -71,11 +71,23 @@ jobs:
           distribution: 'temurin'
           java-version: '21'
           cache: 'maven'
-          cache-dependency-path: backend/java/cretas-api/pom.xml
+          cache-dependency-path: backend/java/**/pom.xml
 
       # ── Backend startup ──────────────────────────────────────────────────────
       # Start Maven/Spring before Node setup so dependency installation and the
       # Playwright browser download overlap the slow Java bootstrap/migrations.
+      # spring-boot:run resolves cretas-common and cretas-logistics from the
+      # local repository, and a direct-goal invocation cannot use -am: Maven
+      # would run spring-boot:run on the library modules too, which have no main
+      # class. So install those two first (~15s). This writes to the runner's
+      # ephemeral ~/.m2, never a shared one.
+      - name: Install backend library modules
+        working-directory: backend/java
+        # 排除式而不是列举式: 列举法在加了 cretas-model / cretas-platform 之后忘了同步,
+        # spring-boot:run 直接报 Could not find artifact。排除两个可部署应用, 其余库模块
+        # 全装, 以后再加模块不用改这里。
+        run: mvn -B -q install -pl '!cretas-api,!cretas-logistics-app' -DskipTests
+
       - name: Start Java backend (background)
         working-directory: backend/java/cretas-api
         run: |

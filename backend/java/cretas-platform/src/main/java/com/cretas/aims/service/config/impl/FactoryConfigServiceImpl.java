@@ -42,7 +42,9 @@ public class FactoryConfigServiceImpl implements FactoryConfigService {
 
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     @org.springframework.context.annotation.Lazy
-    private com.cretas.aims.ai.tool.ToolRegistry toolRegistry;
+    // 原先内联持有 com.cretas.aims.ai.tool.ToolRegistry。整个 AI 工具注册表不属于平台
+    // 运行时层(物流服务不需要 AI 工具, 却仍需按工厂开关模块), 故倒置为 ToolCatalogPort。
+    private com.cretas.aims.service.config.ToolCatalogPort toolRegistry;
 
     @org.springframework.beans.factory.annotation.Autowired
     private DDLExecutor ddlExecutor;
@@ -55,9 +57,13 @@ public class FactoryConfigServiceImpl implements FactoryConfigService {
 
     // Round 6 Fix CHECK-1: publishConfig must reload scheduler or new cron won't take effect
     // until JVM restart. Optional to avoid circular dep during bean init.
+    // 原先内联持有 com.cretas.aims.engine.DynamicSchedulerService(全限定名, 无 import)。
+    // 那个类牵出 ai.tool.ToolExecutor / ToolRegistry, 不属于平台运行时层, 故倒置为
+    // SchedulerReloadPort: 平台只声明需要什么, 实现留在应用侧。
+    // 仍是 required=false + 调用前判空, 无实现时行为与改动前一致。
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     @org.springframework.context.annotation.Lazy
-    private com.cretas.aims.engine.DynamicSchedulerService dynamicSchedulerService;
+    private com.cretas.aims.service.config.SchedulerReloadPort dynamicSchedulerService;
 
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private UserMenuPermissionRepository userMenuPermRepo;

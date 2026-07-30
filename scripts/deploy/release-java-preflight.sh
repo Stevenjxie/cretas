@@ -76,7 +76,14 @@ require_release_jdk() {
 require_release_jdk || exit 1
 
 test_root="$REPO_ROOT/backend/java/cretas-api/src/test/java"
-main_root="$REPO_ROOT/backend/java/cretas-api/src/main/java"
+# All three backend modules, because a com.cretas.aims.* import in a test can
+# now resolve into cretas-common (BaseEntity, ApiResponse, BusinessException,
+# RequirePermission, SecurityUtils, ExcelUtil ...) or cretas-logistics. Keeping
+# only cretas-api here would make preflight reject valid selectors as
+# "project import cannot be resolved".
+main_roots="$REPO_ROOT/backend/java/cretas-api/src/main/java
+$REPO_ROOT/backend/java/cretas-common/src/main/java
+$REPO_ROOT/backend/java/cretas-logistics/src/main/java"
 IFS=',' read -r -a selectors <<< "$TESTS"
 test_files=()
 
@@ -96,7 +103,7 @@ selector_to_file() {
 }
 
 import_exists() {
-    local import_name=$1 part path= class_name= candidate
+    local import_name=$1 part path= class_name= candidate main_root
     IFS='.' read -r -a parts <<< "$import_name"
     for part in "${parts[@]}"; do
         # ⛔ 必须用 POSIX 字符类 [[:upper:]], 不能写 [A-Z]。
@@ -115,8 +122,11 @@ import_exists() {
         path+="/$part"
     done
     [ -n "$class_name" ] || return 0
-    candidate="$main_root$path/$class_name.java"
-    [ -f "$candidate" ] && return 0
+    while IFS= read -r main_root; do
+        [ -n "$main_root" ] || continue
+        candidate="$main_root$path/$class_name.java"
+        [ -f "$candidate" ] && return 0
+    done <<< "$main_roots"
     candidate="$test_root$path/$class_name.java"
     [ -f "$candidate" ] && return 0
     echo "ERROR: project import cannot be resolved: $import_name" >&2

@@ -42,7 +42,7 @@ backend_tree=$(release_manifest_field "$MANIFEST" backend_tree)
 jar_sha=$(release_manifest_field "$MANIFEST" jar_sha256 | tr '[:upper:]' '[:lower:]')
 jar_relative=$(release_manifest_field "$MANIFEST" jar_path)
 head_commit=$(git -C "$PROJECT_ROOT" rev-parse HEAD)
-head_tree=$(git -C "$PROJECT_ROOT" rev-parse "HEAD:$RELEASE_BACKEND_PATH")
+head_tree=$(git -C "$PROJECT_ROOT" rev-parse "HEAD:$RELEASE_BACKEND_TREE_PATH")
 
 [ "$build_commit" = "$head_commit" ] \
     || { echo "ERROR: manifest build commit is not the current reviewed HEAD" >&2; exit 1; }
