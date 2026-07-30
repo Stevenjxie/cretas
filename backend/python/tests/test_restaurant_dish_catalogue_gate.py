@@ -28,6 +28,13 @@ _MENU = frozenset({
 })
 
 
+@pytest.fixture(autouse=True)
+def _enable_catalogue_gate(monkeypatch):
+    """目录闸 2026-07-30 起默认关闭(见 load_dish_catalogue 的 kill switch);
+    这些用例测的就是闸本身, 显式打开。"""
+    monkeypatch.setenv("RESTAURANT_DISH_CATALOGUE_GATE", "1")
+
+
 @pytest.fixture
 def menu():
     token = set_dish_catalogue(_MENU)
