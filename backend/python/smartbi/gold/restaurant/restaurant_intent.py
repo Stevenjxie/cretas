@@ -2215,6 +2215,31 @@ def _approved_exact_route(query: str) -> Optional[str]:
 #      zero-token hit" and the planner runs exactly as before.
 _PLAN_VERSION = "restaurant-query-plan-v2"
 
+
+def _routing_rules_fingerprint() -> str:
+    """把「路由语义」摘成 8 位指纹, 并进计划缓存键。
+
+    🔴 为什么不靠手动 bump `_PLAN_VERSION`: 它的注释说「未来契约修订不会重放旧
+    计划」—— 但那要**有人记得改**。2026-07-31 实测: #2043 改了指标编译规则
+    (「采购花了多少钱」→ requisition_cost), 部署几小时后 RES_3101_009 上这句
+    仍被路由成 RECIPE_COST, `source_tier=plan_cache` —— **重放的是修复前编译
+    的计划**。我自己就是那个忘了 bump 的人。
+
+    改成从规则表本身算指纹后, **改规则即失效**, 不需要任何纪律:
+      _REQUEST_METRIC_RULES  指标怎么从问句编译出来(#2043 改的正是它)
+      _INTENT_DESCRIPTIONS   有哪些 resolver、各自负责什么
+      _REQUISITION_SPEND_RE  领料花费的确定性口径
+
+    代价是这三张表一改, 全部缓存计划失效、下一轮问答重新走 LLM —— 那正是**期望
+    行为**: 规则变了, 旧计划本来就不该再用。
+    """
+    material = "\x1f".join((
+        repr(_REQUEST_METRIC_RULES),
+        repr(sorted(_INTENT_DESCRIPTIONS)),
+        _REQUISITION_SPEND_RE.pattern,
+    ))
+    return hashlib.sha256(material.encode("utf-8")).hexdigest()[:8]
+
 # Authorities `_semantic_spec_from_t3` may return for a plan that is safe to
 # replay.  `llm_contract_incomplete` (the model's answer did not satisfy the
 # execution contract) and `llm_trusted_context_repair` (derived from session
@@ -2248,8 +2273,14 @@ def _semantic_plan_cache_key(factory_id: str, query: str) -> Tuple[str, str, str
     `plan_version` is part of the key so a future contract revision cannot
     replay plans compiled against the previous one, and `factory_id` is part
     of it so no plan ever crosses a tenant boundary.
+
+    2026-07-31: 版本里再拼上**路由规则指纹**。光有手写版本号不够 —— 它要有人
+    记得改, 而 #2043 改了指标编译规则后没人改, 结果部署几小时后仍在重放修复前
+    的计划(实测 RES_3101_009 的「采购花了多少钱」→ RECIPE_COST,
+    source_tier=plan_cache)。见 `_routing_rules_fingerprint`。
     """
-    return (factory_id, _normalize_exact_phrase(query), _PLAN_VERSION)
+    version = f"{_PLAN_VERSION}#{_routing_rules_fingerprint()}"
+    return (factory_id, _normalize_exact_phrase(query), version)
 
 
 def _semantic_plan_cache_get(
