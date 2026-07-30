@@ -184,7 +184,11 @@ describe('ProcessDataTable port selection groups', () => {
     await addRow(wrapper);
     const sources = wrapper.findAll('[data-testid="upstream-source-line"]');
     await selectLine(sources[1]);
-    sources[1].findComponent({ name: 'ElSelect' }).vm.$emit('change', 'wip::UP-B');
+    // 勾上「选用」之后这个端口只剩一个可用批次 (UP-B), 界面直接显示批次不再给下拉 ——
+    // 客户 2026-07-30「只有一个批次时自动选中, 不要让用户多点一次」。
+    // 意图不变: 勾了 UP-2 这一路, 提交的就必须是 UP-B。
+    expect(sources[1].find('[data-testid="upstream-batch-fixed"]').text()).toContain('UP-B');
+    expect(sources[1].findComponent({ name: 'ElSelect' }).exists()).toBe(false);
     sources[1].findComponent({ name: 'ElInputNumber' }).vm.$emit('update:model-value', 6);
     fillOutputQuantity(wrapper.find('[data-testid="workflow-output-line"]'), 5);
     await flushPromises();
