@@ -52,6 +52,32 @@ else
     export EXPO_PUBLIC_ENV="test"
 fi
 
+# --- step timing (pure instrumentation; no behaviour change) -------------------
+# 目的: 这条链有两段聚合耗时看不穿 —— expo export 之后到打包之前, 以及打包之后到
+# 生效之前。没有分步数字就只能靠猜哪里该并行。这里只记时间, 不改任何顺序或逻辑。
+STEP_T0="$(date +%s)"
+STEP_LAST="$STEP_T0"
+STEP_LOG=()
+
+mark_step() {
+    local now delta
+    now="$(date +%s)"
+    delta=$(( now - STEP_LAST ))
+    STEP_LOG+=("$(printf '%-44s %5ds' "$1" "$delta")")
+    STEP_LAST="$now"
+}
+
+print_step_summary() {
+    echo ""
+    echo "[push-bundle] ---- step timings ----"
+    local line
+    for line in "${STEP_LOG[@]}"; do
+        echo "[push-bundle]   $line"
+    done
+    printf '[push-bundle]   %-44s %5ds
+' "TOTAL" "$(( $(date +%s) - STEP_T0 ))"
+}
+
 # --- read the effective runtime version --------------------------------------
 
 APP_DIR="frontend/CretasFoodTrace"
@@ -78,6 +104,8 @@ TIMESTAMP="$(date +%s%3N)"
 TARGET="updates/${RUNTIME_VERSION}/${CHANNEL}/${TIMESTAMP}"
 TARGET_TMP="updates/${RUNTIME_VERSION}/${CHANNEL}/${TIMESTAMP}.tmp"
 
+mark_step "0  read runtimeVersion (expo config #1)"
+
 echo "[push-bundle] runtimeVersion=$RUNTIME_VERSION channel=$CHANNEL platform=$PLATFORM timestamp=$TIMESTAMP"
 
 # --- 1. expo export -----------------------------------------------------------
@@ -89,6 +117,8 @@ echo "[push-bundle] 1/6 npx expo export --clear --platform $PLATFORM"
     npx expo export --clear --platform "$PLATFORM"
 )
 
+mark_step "1  expo export --clear"
+
 # --- 2. expoConfig.json (expo export does not auto-emit; spec §7.1) ----------
 
 echo "[push-bundle] 2/6 npx expo config --json > dist/expoConfig.json"
@@ -97,11 +127,15 @@ echo "[push-bundle] 2/6 npx expo config --json > dist/expoConfig.json"
     npx expo config --json > dist/expoConfig.json
 )
 
+mark_step "2  expo config #2 -> expoConfig.json"
+
 # 2.5 Normalize Windows backslash asset paths in metadata.json. `expo export`
 # on Windows emits `assets\\<hash>`; the Linux OTA server treats backslash as a
 # literal filename char → FileNotFoundError → "Bundle metadata corrupted" 500.
 echo "[push-bundle] 2.5 normalizing metadata.json path separators (Windows safe)"
 "${PYTHON:-python}" "$SCRIPT_DIR/_fix_meta_slashes.py" frontend/CretasFoodTrace/dist/metadata.json
+
+mark_step "2.5 normalize metadata.json paths"
 
 # Sanity: expected files must exist.
 for f in frontend/CretasFoodTrace/dist/metadata.json frontend/CretasFoodTrace/dist/expoConfig.json; do
@@ -117,8 +151,12 @@ TARBALL="/tmp/ota-bundle-${TIMESTAMP}.tar.gz"
 echo "[push-bundle] 3/6 packaging $TARBALL"
 tar -czf "$TARBALL" -C frontend/CretasFoodTrace/dist .
 
+mark_step "3  tar -czf local tarball"
+
 echo "[push-bundle] 4/6 uploading staging bundle to $SERVER:$SERVER_BUNDLE_ROOT/$TARGET_TMP"
 scp -q "$TARBALL" "$SERVER:/tmp/"
+
+mark_step "4a scp tarball -> server"
 
 # Extract into a hidden staging directory. The manifest server only reads
 # numeric final directories, so clients cannot observe this update until the
@@ -130,6 +168,8 @@ tar -xzf "/tmp/ota-bundle-${TIMESTAMP}.tar.gz" -C "${SERVER_BUNDLE_ROOT}/${TARGE
 rm "/tmp/ota-bundle-${TIMESTAMP}.tar.gz"
 REMOTE_EOF
 rm "$TARBALL"
+
+mark_step "4b ssh extract into .tmp staging"
 
 cleanup_remote_staging() {
     ssh "$SERVER" "rm -rf '${SERVER_BUNDLE_ROOT}/${TARGET_TMP}'" >/dev/null 2>&1 || true
@@ -144,9 +184,13 @@ OSS_DEST="$(ota_upload_bundle_to_oss \
     "$TIMESTAMP")"
 echo "[push-bundle]   CDN objects ready: $OSS_DEST"
 
+mark_step "5  gzip + mirror to OSS/CDN"
+
 echo "[push-bundle] 5.5/6 atomically promoting staged bundle"
 ssh "$SERVER" "mv '${SERVER_BUNDLE_ROOT}/${TARGET_TMP}' '${SERVER_BUNDLE_ROOT}/${TARGET}'"
 trap - ERR
+
+mark_step "5.5 atomic promote"
 
 # --- 6. register via admin API ------------------------------------------------
 
@@ -165,7 +209,11 @@ if [[ "$HTTP_CODE" != "200" ]]; then
     exit 4
 fi
 
+mark_step "6  register via admin API"
+
 echo "[push-bundle] ✓ bundle live: rv=$RUNTIME_VERSION channel=$CHANNEL ts=$TIMESTAMP"
 echo "[push-bundle]   verify: curl -H 'expo-protocol-version: 1' -H 'expo-platform: $PLATFORM' \\"
 echo "                       -H 'expo-runtime-version: $RUNTIME_VERSION' \\"
 echo "                       -H 'expo-channel-name: $CHANNEL' $SERVER_API/api/ota/manifest"
+
+print_step_summary
