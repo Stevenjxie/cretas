@@ -1163,6 +1163,38 @@ _KITCHEN_OPS_NOUNS = (
 )
 
 
+# order_type 的落库形态按租户不同 —— DEMO_REST 是中文, MOCK_REST 是英文码。
+# 归一到展示口径, 否则「堂食/外卖」两条主行取不到、占比与 KPI 全空,
+# 老板看到的是裸 `dine_in` / `takeaway`(2026-07-30 prod 实拍)。
+_ORDER_TYPE_BUCKETS: Dict[str, str] = {
+    "堂食": "堂食", "堂吃": "堂食", "店内": "堂食",
+    "dine_in": "堂食", "dinein": "堂食", "dine-in": "堂食",
+    "eat_in": "堂食", "eatin": "堂食",
+    "外卖": "外卖", "外送": "外卖",
+    "takeaway": "外卖", "take_away": "外卖", "take-away": "外卖",
+    "takeout": "外卖", "take_out": "外卖", "take-out": "外卖",
+    "delivery": "外卖", "waimai": "外卖",
+    # 第三类渠道: 既不是堂食也不是外卖, 保留成自己的桶, 但给中文标签 ——
+    # 归到任一边都会让占比说谎。
+    "团购": "团购", "groupon": "团购", "group_buy": "团购", "groupbuy": "团购",
+    "自提": "自提", "pickup": "自提", "self_pickup": "自提", "selfpickup": "自提",
+}
+
+
+def _normalize_order_type(raw: "Optional[str]") -> "Optional[str]":
+    """把 order_type 归一到展示桶; 未标注返回 None, 未知码**原样返回**。
+
+    ⛔ 未知码不能丢: 丢了占比就会说谎(分母少了那部分单量), 而如实列出至少让人
+    看得见有个没认出来的渠道。这与「未标注渠道」是两回事 —— 后者本就单独披露。
+    """
+    if not isinstance(raw, str):
+        return None
+    token = raw.strip()
+    if not token:
+        return None
+    return _ORDER_TYPE_BUCKETS.get(token.lower(), token)
+
+
 def _extract_dish_candidate_single(text: str) -> "Optional[str]":
     # build_resolver_query 会在整句尾部空格拼接窗口标签/盈亏词
     # ("…那X呢 最近30天") — 先剥掉, 否则省略句「…呢」锚定失配,
@@ -7313,6 +7345,11 @@ async def resolve_channel_mix(
 ) -> OpsAnswer:
     """堂食 vs 外卖 渠道拆分 (R31 — Java 工具面吸收第一枪)。
 
+    ⚠️ order_type 的落库形态**按租户不同**: 本函数最初照 DEMO_REST 写(中文值),
+    而 MOCK_REST 落的是 dine_in / takeaway / groupon。不归一的话
+    `for name in ("堂食","外卖")` 两次都取不到 —— 2026-07-30 prod 实拍: 占比、
+    KPI 一条没出, 兜底循环把裸英文码直接甩给老板。见 _normalize_order_type。
+
     此前「外卖占了几成」依赖 Java restaurant_order_type_mix_gold, 误路由
     事故两次 (描述窃取/LLM 抖动)。fact_pos_transaction.order_type 在
     DEMO_REST 全史覆盖, python 直算; 未标注渠道的单量如实披露不摊派。
@@ -7348,8 +7385,29 @@ async def resolve_channel_mix(
             """,
             factory_id, days, exact_start, exact_end,
         )
-    typed = {r["order_type"]: r for r in rows if r["order_type"]}
-    untyped_bills = sum(int(r["bills"]) for r in rows if not r["order_type"])
+    # order_type 先归一再聚合: 同一个渠道可能以中文或英文码落库(本函数最初照
+    # DEMO_REST 的中文值写, MOCK_REST 落的是 dine_in/takeaway/groupon), 归一之后
+    # 两个来源合并计数, 而不是各算各的。
+    typed: Dict[str, Dict[str, Any]] = {}
+    untyped_bills = 0
+    for row in rows:
+        bucket = _normalize_order_type(row["order_type"])
+        if bucket is None:
+            untyped_bills += int(row["bills"])
+            continue
+        existing = typed.get(bucket)
+        if existing is None:
+            typed[bucket] = {
+                "bills": int(row["bills"]),
+                "revenue": float(row["revenue"] or 0.0),
+                "window_start": row["window_start"],
+                "window_end": row["window_end"],
+            }
+        else:
+            existing["bills"] += int(row["bills"])
+            existing["revenue"] += float(row["revenue"] or 0.0)
+            existing["window_start"] = min(existing["window_start"], row["window_start"])
+            existing["window_end"] = max(existing["window_end"], row["window_end"])
     if not typed:
         requested = (
             _range_text(exact_start, exact_end)
