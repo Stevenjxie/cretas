@@ -3754,12 +3754,51 @@ async def _load_relevant_store_options(
     )
 
 
+def _inherited_store_scope(
+    history: Any,
+) -> Optional[Tuple[str, Tuple[str, ...]]]:
+    """会话里最近一次已确定的门店范围, 没有就返回 None。
+
+    2026-07-30 Steve 拍板「同一个 chat 串钩之前的选择」。不另起状态表 —— 生产
+    已经把上一轮的 `structured_context` 传进 planner(gold_reads.py 的
+    `conversation_history[].context`), 而它本来就带 `store_scope`/`store_names`。
+
+    ⛔ 拿不准就返回 None(照旧发问)。history 是外部传进来的(JSONB / 前端),
+    结构不对时退化成"不继承", 绝不能把整条问答打挂 —— 也绝不能猜一个范围,
+    那会让答案**悄悄换口径**, 比多问一句糟得多。
+    """
+    if not isinstance(history, (list, tuple)):
+        return None
+    for turn in reversed(history):
+        if not isinstance(turn, dict):
+            continue
+        context = turn.get("context") or turn.get("structured_context")
+        if not isinstance(context, dict):
+            continue
+        scope = context.get("store_scope")
+        if not isinstance(scope, str) or not scope.strip():
+            continue
+        raw_names = context.get("store_names")
+        names = tuple(
+            name.strip() for name in raw_names
+            if isinstance(name, str) and name.strip()
+        ) if isinstance(raw_names, (list, tuple)) else ()
+        return scope.strip(), names
+    return None
+
+
 async def _apply_store_scope_guard(
     pool,
     factory_id: str,
     spec: Optional[RestaurantQuerySpec],
+    history: Any = None,
 ) -> Optional[RestaurantQuerySpec]:
-    """Ask multi-store tenants for scope; infer the sole store when unambiguous."""
+    """Ask multi-store tenants for scope; infer the sole store when unambiguous.
+
+    `history` (2026-07-30): 同一个会话里已经选过范围就串钩它, 不再重问 ——
+    多店租户此前几乎每问都要先答一次「哪几家门店」。本轮问句自己带了范围时
+    以本轮为准(下面 `spec.store_scope` 的短路), 历史只在**本轮没说**时补位。
+    """
     if (
         spec is None
         or spec.clarification_needed
@@ -3800,6 +3839,27 @@ async def _apply_store_scope_guard(
         # No dimension rows means the tenant cardinality is unknown, not one.
         # Preserve the sealed plan without inventing a single-store fact.
         return spec
+
+    # 同一会话里已经选过范围 → 串钩它, 不再重问。本轮自己带了范围的话上面
+    # `spec.store_scope` 已经短路返回, 走不到这里, 所以历史只在本轮没说时补位。
+    # 只认历史里**真实存在过**的门店名: 门店可能被改名/停用, 拿一个已经不在
+    # dim_store 里的名字继续查, 会安静地算出一个空口径。
+    inherited = _inherited_store_scope(history)
+    if inherited is not None:
+        scope, inherited_names = inherited
+        kept = tuple(name for name in inherited_names if name in names)
+        if scope == "all" or kept:
+            logger.info(
+                "[restaurant-intent] store scope inherited from session: %s%s",
+                scope, f" {list(kept)}" if kept else "",
+            )
+            return _seal_query_plan(replace(
+                spec,
+                store_scope=scope,
+                store_slots=kept,
+                store_options=names,
+            ))
+
     return _seal_query_plan(replace(
         spec,
         clarification_needed=True,
@@ -4882,7 +4942,9 @@ async def parse_restaurant_query(
                         store_options=relevant_stores,
                         plan_hash="",
                     ))
-            continued = await _apply_store_scope_guard(pool, factory_id, continued)
+            continued = await _apply_store_scope_guard(
+                pool, factory_id, continued, history,
+            )
             if (
                 continued is not None
                 and continued.clarification_needed
@@ -5023,6 +5085,7 @@ async def parse_restaurant_query(
                     pool,
                     factory_id,
                     replay_spec,
+                    history,
                 )
                 await _maybe_register_pending(
                     pool,
@@ -5068,6 +5131,7 @@ async def parse_restaurant_query(
                         pool,
                         factory_id,
                         replay_spec,
+                        history,
                     )
                     await _maybe_register_pending(
                         pool,
@@ -5163,6 +5227,7 @@ async def parse_restaurant_query(
             pool,
             factory_id,
             semantic_spec,
+            history,
         )
         await _maybe_register_pending(
             pool,
@@ -5262,6 +5327,7 @@ async def parse_restaurant_query(
             pool,
             factory_id,
             promoted_spec,
+            history,
         )
         await _maybe_register_pending(
             pool,
@@ -5278,6 +5344,7 @@ async def parse_restaurant_query(
             pool,
             factory_id,
             explicit_ranking_spec,
+            history,
         )
         await _maybe_register_pending(
             pool,
@@ -5294,6 +5361,7 @@ async def parse_restaurant_query(
             pool,
             factory_id,
             explicit_comparison_spec,
+            history,
         )
         await _maybe_register_pending(
             pool,
@@ -5311,6 +5379,7 @@ async def parse_restaurant_query(
                 pool,
                 factory_id,
                 trusted_spec,
+                history,
             )
             if not trusted_spec.clarification_needed:
                 return trusted_spec
@@ -5328,6 +5397,7 @@ async def parse_restaurant_query(
             pool,
             factory_id,
             explicit_spec,
+            history,
         )
         await _maybe_register_pending(
             pool,
@@ -5357,7 +5427,9 @@ async def parse_restaurant_query(
             planner_authority="validated_plan_cache",
             require_explicit_time=True,
         )
-        cached_spec = await _apply_store_scope_guard(pool, factory_id, cached_spec)
+        cached_spec = await _apply_store_scope_guard(
+            pool, factory_id, cached_spec, history,
+        )
         await _maybe_register_pending(pool, norm_query, cached_spec, factory_id, session_key)
         return cached_spec
 
@@ -5456,6 +5528,7 @@ async def parse_restaurant_query(
             pool,
             factory_id,
             successful_spec,
+            history,
         )
         await _maybe_register_pending(
             pool, norm_query, successful_spec, factory_id, session_key,

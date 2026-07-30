@@ -272,6 +272,8 @@ def _structured_context(
         ),
         "store_scope": spec.store_scope,
         "store_names": list(spec.store_slots),
+        # 换范围按钮要拿它列可选门店(见 _store_scope_switch_followups)。
+        "store_options": list(spec.store_options),
         "compare_stores": spec.compare_stores,
     }
 
@@ -285,7 +287,36 @@ def _clarification_structured_context(spec: RestaurantQuerySpec) -> Dict[str, An
     )
 
 
-def _suggested_followups(context: Dict[str, Any]) -> List[Dict[str, str]]:
+def _store_scope_switch_followups(context: Dict[str, Any]) -> List[Dict[str, str]]:
+    """答案末尾的「换门店范围」按钮。
+
+    2026-07-30: 门店范围现在会在同一个会话里串钩上一轮的选择(见
+    `_inherited_store_scope`), 所以用户不再被反复追问 —— 代价是范围变成了隐式的。
+    这几个按钮就是那个代价的解药: 让「我这次想看别的范围」有一个显式出口, 否则
+    用户得自己想到要在问句里写门店名。
+
+    只在**真的有得换**时出现: 单店租户(store_scope="single")没有第二个选择,
+    给它按钮纯属噪音。
+    """
+    scope = context.get("store_scope")
+    if not isinstance(scope, str) or scope in ("", "single"):
+        return []
+    current = {
+        name for name in (context.get("store_names") or [])
+        if isinstance(name, str)
+    }
+    options: List[Dict[str, str]] = []
+    if scope != "all":
+        options.append({"label": "看全部门店", "question": "全部门店"})
+    for name in context.get("store_options") or []:
+        if len(options) >= 3:
+            break
+        if isinstance(name, str) and name.strip() and name not in current:
+            options.append({"label": f"只看{name[:10]}", "question": name})
+    return options
+
+
+def _topic_followups(context: Dict[str, Any]) -> List[Dict[str, str]]:
     topic_kind = context.get("topic_kind")
     if topic_kind in ("dish_ranking", "store_ranking"):
         noun = "哪个菜卖得最好" if topic_kind == "dish_ranking" else "哪家店业绩最好"
@@ -320,6 +351,25 @@ def _suggested_followups(context: Dict[str, Any]) -> List[Dict[str, str]]:
         for metric, label, question in candidates
         if metric not in current_metrics
     ][:2]
+
+
+def _suggested_followups(context: Dict[str, Any]) -> List[Dict[str, str]]:
+    """答案末尾的按钮 = 话题相关的追问 + 换门店范围。
+
+    换范围排在后面: 用户多数时候是想接着往下问, 换范围是少数动作 —— 但它必须
+    **存在**, 因为门店范围现在会隐式串钩上一轮(见 restaurant_intent
+    `_inherited_store_scope`), 没有出口的话用户只能自己想到在问句里写门店名。
+    按 question 去重, 免得两边给出同一个按钮。
+    """
+    combined: List[Dict[str, str]] = []
+    seen = set()
+    for item in (*_topic_followups(context), *_store_scope_switch_followups(context)):
+        question = item.get("question")
+        if not question or question in seen:
+            continue
+        seen.add(question)
+        combined.append(item)
+    return combined[:4]
 
 
 def _clarification_followups(spec: RestaurantQuerySpec) -> List[Dict[str, str]]:
