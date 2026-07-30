@@ -88,16 +88,29 @@ async def test_tenant_with_gold_is_a_restaurant_tenant():
 
 
 @pytest.mark.asyncio
-async def test_tenant_with_pos_data_but_no_gold_is_reported_loudly(caplog):
-    """这就是 R_GML_DEMO 的形态 —— 必须留下能 grep 的痕迹。"""
+async def test_pos_only_tenant_is_a_restaurant_tenant(caplog):
+    """R_GML_DEMO 的形态: 有 POS 流水、没有后厨数据。
+
+    ⚠️ 这条断言 2026-07-31 **反转过**(原本断言 False)。改的不是测试口径, 是
+    发现判据本身选错了对象: `agg_restaurant_daily_totals` 只由后厨事实表
+    (领料/损耗/盘点)驱动, 与 POS 无关 —— 拿它决定 POS 类问题能不能回答是错的。
+    R_GML_DEMO 有 16,213 笔流水、132 家门店, 营收/菜品/门店/渠道问题本来完全
+    答得了, 却因为没上传后厨数据被整个关掉。
+    原测试守的「必须留下能 grep 的痕迹」保留了(下面仍断言日志带 factory_id)。
+    """
     conn = _Conn(has_gold=False, has_pos=True)
-    with caplog.at_level(logging.WARNING):
+    with caplog.at_level(logging.INFO):
         result = await ri._is_restaurant_tenant(_Pool(conn), "R_GML_DEMO")
-    # 行为不变: 没有 Gold 就是不能用, 放行只会一本正经地答 0。
-    assert result is False
-    text = caplog.text
-    assert "R_GML_DEMO" in text, "告警里必须带 factory_id, 否则没法定位是哪个租户"
-    assert "gold" in text.lower() or "物化" in text or "汇总" in text
+    assert result is True
+    assert "R_GML_DEMO" in caplog.text, "日志必须带 factory_id, 否则没法定位租户"
+
+
+@pytest.mark.asyncio
+async def test_kitchen_ops_tenant_still_passes_without_the_extra_probe():
+    """有后厨聚合的租户走原来那条路, 不受本次放宽影响。"""
+    conn = _Conn(has_gold=True, has_pos=False)
+    assert await ri._is_restaurant_tenant(_Pool(conn), "DEMO_REST") is True
+    assert "silver" not in conn.queried_tables
 
 
 @pytest.mark.asyncio
