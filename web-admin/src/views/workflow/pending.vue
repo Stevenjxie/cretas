@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue';
-import { useRoute } from 'vue-router';
+import { useRoute, useRouter } from 'vue-router';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { get, post } from '@/api/request';
 import { useAuthStore } from '@/store/modules/auth';
@@ -35,6 +35,7 @@ interface PendingApproval {
 
 const authStore = useAuthStore();
 const route = useRoute();
+const router = useRouter();
 const factoryId = computed(() => authStore.factoryId);
 const loading = ref(false);
 const operatingId = ref('');
@@ -134,6 +135,21 @@ async function act(row: PendingApproval, action: 'APPROVE' | 'REJECT') {
     if (!res.success) throw new Error(res.message || '审批操作失败');
     ElMessage.success(action === 'APPROVE' ? '审批已通过' : '审批已驳回');
     await loadPending();
+    // 客户 2026-07-30「审核后 库存没有过来」: 调拨审批通过 ≠ 库存过账, 还要回单据点一次
+    // 「确认调拨入库」。批完人停在 OA 列表, 这里不导航就是 dead-end (防呆 Rule 5) ——
+    // 实测客户 3 张单卡在 APPROVED, 最早一张卡了 6 周。
+    if (action === 'APPROVE' && row.moduleCode === 'INVENTORY_TRANSFER' && row.businessEntityId) {
+      try {
+        await ElMessageBox.confirm(
+          '审批通过后库存还没有过账。需要回到调拨单点一次「确认调拨入库」，调出仓才会扣减、调入仓才会收到货。',
+          '还差最后一步：确认入库',
+          { confirmButtonText: '去确认入库', cancelButtonText: '稍后处理', type: 'warning' },
+        );
+        router.push(`/transfer/${row.businessEntityId}`);
+      } catch {
+        // 选择"稍后处理": 不跳转; 单据列表与首页待办仍会持续提示。
+      }
+    }
   } catch (error) {
     handleCatchError(error, '审批操作失败');
   } finally {

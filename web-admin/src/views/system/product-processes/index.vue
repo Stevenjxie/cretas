@@ -1143,9 +1143,13 @@ async function saveCustomFieldConfig() {
         <div class="toolbar-left">
           <h2 style="margin: 0">Workflow 配置</h2>
           <el-tag type="info">{{ factoryId }}</el-tag>
+          <!-- SOP 全程称这个下拉框为「归属对象」(成品归属主路线 / 原料归属分流路线), 但界面上原本
+               只有 placeholder 没有标签, 照 SOP 操作的人根本找不到它 (客户 2026-07-28 反馈
+               「找不到成品归属」). 补一个与 SOP 同词的可见标签, 让文档和界面对得上. -->
+          <span class="toolbar-field-label">归属对象</span>
           <el-select
             v-model="selectedProductId"
-            placeholder="选择关联的原料或成品（支持拼音首字母搜索）"
+            placeholder="选择本条工艺属于哪个成品或原料（支持拼音首字母搜索）"
             filterable
             style="width: 360px"
             :loading="productsLoading"
@@ -1574,6 +1578,7 @@ async function saveCustomFieldConfig() {
 .page-container { padding: 20px; }
 .toolbar { display: flex; justify-content: space-between; align-items: center; }
 .toolbar-left { display: flex; align-items: center; gap: 12px; }
+.toolbar-field-label { color: #606266; font-size: 14px; white-space: nowrap; }
 .toolbar-right { display: flex; align-items: center; gap: 8px; }
 .workflow-mode-hint { margin: 0 6px 0 4px; color: #909399; cursor: pointer; vertical-align: middle; }
 .workflow-mode-hint:hover, .workflow-mode-hint:focus { color: #409eff; outline: none; }

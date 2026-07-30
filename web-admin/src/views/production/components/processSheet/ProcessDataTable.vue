@@ -170,6 +170,13 @@ interface SheetRow {
   /** 焯水: single upstream WIP batch number (WIP batchNumber 或 SFI intermediateBatchNo) */
   upstreamBatch: string;
   /**
+   * 成品工序操作员手填的实际投入量 (kg)。null = 未填, 沿用所选上游批次可用量。
+   *
+   * <p>2026-07-30 Steve 拍板: 实际投入不一定等于上一道产出 (损耗/只用一部分/补料),
+   * 必须留给操作员填; 以实填为准, 填错由盘点纠正 —— 所以只提示不硬拦。
+   */
+  finishedInputKg: number | null;
+  /**
    * 焯水/滚揉/去舌苔 单上游: 所选来源是否为常驻半成品库存 (SFI)。
    * true → upstreamBatch 指向 SemiFinishedInventory.intermediateBatchNo, buildPayload 写
    * upstreamSources[0].semiFinished=true → 后端走 ③=F 纯 SFI 路径 (SAVED_SFI, 小结 SFI in/out)。
@@ -685,6 +692,7 @@ function blankRow(): SheetRow {
     })),
     legacyExplicitRawInput: false,
     upstreamBatch: '',
+    finishedInputKg: null,
     upstreamSemiFinished: false,
     upstreamFinishedGoods: false,
     upstreamSources: initWorkflowUpstreamSources(),
@@ -873,6 +881,8 @@ function hydrateRow(view: ProcessSheetRowView): SheetRow {
       row.upstreamBatch = p.upstreamSources?.[0]?.sourceBatchNumber ?? '';
       row.upstreamSemiFinished = p.upstreamSources?.[0]?.semiFinished ?? false;
       row.upstreamFinishedGoods = p.upstreamSources?.[0]?.finishedGoods ?? false;
+      // 手填投入量必须回填, 否则重开草稿会退回"按批次可用量"而悄悄改掉已录的投入。
+      row.finishedInputKg = p.upstreamSources?.[0]?.feedQuantityKg ?? null;
     }
     // 成品报工只恢复两项事实；入库、剩余和重量始终重新派生，禁止把历史手填字段当真值。
     row.fields['actualProd'] = p.outputQuantity ?? null;
@@ -1157,7 +1167,7 @@ function singleSourceUsage(row: SheetRow): number {
   if (isSingleUpstream.value) return (row.fields['before'] as number) ?? 0;
   if (isQuSheTou.value) return calcReverseInput(row) ?? 0;
   if (isShuZhi.value || isGenericUpstream.value) return (row.fields['input'] as number) ?? 0;
-  if (isQidiao.value) return resolvedFinishedInputKg(row) ?? 0;
+  if (isQidiao.value) return effectiveFinishedInputKg(row) ?? 0;
   return 0;
 }
 
@@ -1193,6 +1203,25 @@ function resolvedFinishedInputKg(row: SheetRow): number | null {
   return source ? sourceAvailableKg(source.remaining, source.unit) : null;
 }
 
+/**
+ * 成品工序本次实际投入量: 操作员填了就以填的为准, 没填则沿用所选上游批次的可用量。
+ * (2026-07-30 Steve 拍板: 投入不一定等于上一道产出, 以实填为准, 填错走盘点纠正。)
+ */
+function effectiveFinishedInputKg(row: SheetRow): number | null {
+  if (row.finishedInputKg != null && row.finishedInputKg > 0) return row.finishedInputKg;
+  return resolvedFinishedInputKg(row);
+}
+
+/** 实填超过所选批次可用量时的提示文案; null = 无需提示。只提示不阻断。 */
+function finishedInputOverAvailableHint(row: SheetRow): string | null {
+  if (!isQidiao.value || isMultiSource.value) return null;
+  const entered = row.finishedInputKg;
+  if (entered == null || entered <= 0) return null;
+  const available = resolvedFinishedInputKg(row);
+  if (available == null || entered <= available) return null;
+  return `填写的投入 ${entered}kg 超过所选批次可用量 ${available}kg；如确实多投请核对批次，账实差异由盘点纠正。`;
+}
+
 function formalSubmitBlockedReason(row: SheetRow): string | null {
   if (props.upstreamSubmissionReady === false) {
     return props.upstreamSubmissionMessage
@@ -1207,7 +1236,7 @@ function formalSubmitBlockedReason(row: SheetRow): string | null {
     if (Math.abs(totalRatio - 100) > 0.01) return `成本分摊比例合计必须为 100%，当前为 ${Number(totalRatio.toFixed(4))}%`;
   }
   if (!isQidiao.value || isMultiSource.value) return null;
-  const inputKg = resolvedFinishedInputKg(row);
+  const inputKg = effectiveFinishedInputKg(row);
   if (inputKg != null && inputKg > 0) return null;
   return '无法从所选上游库存确定实际投入量，请刷新库存或重新选择上游批次后再正式报工';
 }
@@ -1906,10 +1935,10 @@ function buildRequest(row: SheetRow): ProcessSheetRowRequest & Record<string, un
     base.outputQuantity = (row.fields['output'] as number) ?? 0;
   } else if (isQidiao.value) {
     const actualProd = finishedActualQuantity(row) ?? 0;
-    const inputKg = resolvedFinishedInputKg(row);
+    const inputKg = effectiveFinishedInputKg(row);
     base.upstreamSources = [{
       sourceBatchNumber: row.upstreamBatch,
-      // 操作员不重复填写“使用重量”；由所选上游库存的实时可用量自动带入。
+      // 操作员可直接填本次实际投入量; 未填时沿用所选上游库存的实时可用量。
       // 正式报工前 formalSubmitBlockedReason 会保证这里绝不以 0/null 提交。
       feedQuantityKg: inputKg ?? 0,
       semiFinished: row.upstreamSemiFinished,
@@ -2331,9 +2360,30 @@ function wipLabel(item: ProcessSheetInventoryItem): string {
   return parts.join(' | ');
 }
 
+/**
+ * 上游端口白名单: 后端 resolveAllowedInputSku 只接受这些 SKU, 别的批次选了必被 409 拒绝
+ * (客户 2026-07-30 反馈: 下拉里混进 22 个别的产品的半成品批次, 且都显示为「半成品: 半成品」)。
+ * 空集 = 端口未声明白名单 → 不过滤 (务实: 不因缺契约信息而清空可选项)。
+ */
+const upstreamAllowedSkuIds = computed<string[]>(() => {
+  const ids = new Set<string>();
+  for (const port of workflowUpstreamInputs.value) {
+    for (const id of port.allowedSkuIds || []) if (id) ids.add(id);
+    if (port.skuId) ids.add(port.skuId);
+  }
+  return [...ids];
+});
+
+function sfiMatchesUpstreamPort(item: SemiFinishedStockItem): boolean {
+  const allowed = upstreamAllowedSkuIds.value;
+  if (allowed.length === 0) return true;
+  return item.productTypeId != null && allowed.includes(item.productTypeId);
+}
+
 /** ② 半成品库存选项标签: "半成品: {品名} | {批号} | {生产日期} | 余{available}{unit} | {成本}"。 */
 function sfiLabel(item: SemiFinishedStockItem): string {
-  const name = item.productTypeName || item.processName || '半成品';
+  // productTypeName 缺失时退到 processName 会让一屏全是「半成品」无法分辨 —— 至少给出批号可辨识。
+  const name = item.productTypeName || item.processName || `未命名半成品(${item.intermediateBatchNo})`;
   const unit = item.unit || 'kg';
   // 盒装半成品作 kg 道投料来源时展示折算 (余 N 盒 ≈ M kg) 或缺克重警告 (防呆 pre-display)。
   const conv = countUnitLabelSuffix(item.unit, item.gramsPerUnit, sfiAvailable(item));
@@ -2390,7 +2440,7 @@ async function loadSfiOptions() {
     const resp = await getSemiFinishedInventory(props.factoryId, filter);
     if (seq !== sfiLoadSeq) return;
     const all = Array.isArray(resp.data) ? resp.data : [];
-    sfiOptions.value = all.filter((s) => sfiAvailable(s) > 0);
+    sfiOptions.value = all.filter((s) => sfiAvailable(s) > 0).filter(sfiMatchesUpstreamPort);
   } catch (err) {
     if (seq !== sfiLoadSeq) return;
     sfiOptions.value = [];
@@ -2988,6 +3038,23 @@ defineExpose({ hasUnsavedRows, refreshSharedInventories });
                     :disabled="fgAvailable(f) <= 0" />
                 </el-option-group>
               </el-select>
+            </div>
+            <!-- 成品工序: 实际投入量可手填 (2026-07-30 Steve 拍板: 投入不一定等于上一道产出).
+                 未填时沿用所选批次可用量; 超量只提示不阻断, 账实差异由盘点纠正. -->
+            <div v-if="isQidiao" class="sp-card-field">
+              <label class="sp-card-label">本次投入量 (kg)</label>
+              <el-input-number
+                v-model="row.finishedInputKg"
+                :min="0" :precision="3" :controls="false"
+                :placeholder="String(resolvedFinishedInputKg(row) ?? '')"
+                data-testid="finished-input-kg"
+                style="width:100%" size="small" />
+              <div v-if="finishedInputOverAvailableHint(row)" class="sp-input-warn">
+                {{ finishedInputOverAvailableHint(row) }}
+              </div>
+              <div v-else-if="row.finishedInputKg == null" class="sp-input-hint">
+                留空 = 按所选批次可用量 {{ resolvedFinishedInputKg(row) ?? '—' }}kg 计
+              </div>
             </div>
           </template>
 
@@ -3627,6 +3694,23 @@ defineExpose({ hasUnsavedRows, refreshSharedInventories });
                         :disabled="fgAvailable(f) <= 0" />
                     </el-option-group>
                   </el-select>
+                  <!-- 成品工序: 实际投入量可手填, 与下拉同格避免新增列错位 (卡片模板有同一块, 改动需同步). -->
+                  <div v-if="isQidiao" class="sp-inline-input-kg">
+                    <span class="sp-inline-input-label">投入</span>
+                    <el-input-number
+                      v-model="row.finishedInputKg"
+                      :min="0" :precision="3" :controls="false"
+                      :placeholder="String(resolvedFinishedInputKg(row) ?? '')"
+                      data-testid="finished-input-kg"
+                      style="width:96px" size="small" />
+                    <span class="sp-inline-input-label">kg</span>
+                  </div>
+                  <div v-if="isQidiao && finishedInputOverAvailableHint(row)" class="sp-input-warn">
+                    {{ finishedInputOverAvailableHint(row) }}
+                  </div>
+                  <div v-else-if="isQidiao && row.finishedInputKg == null" class="sp-input-hint">
+                    留空 = 按所选批次可用量 {{ resolvedFinishedInputKg(row) ?? '—' }}kg 计
+                  </div>
                 </td>
               </template>
 
@@ -4736,4 +4820,9 @@ defineExpose({ hasUnsavedRows, refreshSharedInventories });
   color: var(--el-text-color-regular);
 }
 .sp-spec-suffix { font-size: 13px; color: var(--el-text-color-secondary); }
+/* 成品工序手填投入量 (2026-07-30) */
+.sp-inline-input-kg { display: flex; align-items: center; gap: 4px; margin-top: 4px; }
+.sp-inline-input-label { font-size: 12px; color: var(--el-text-color-secondary); white-space: nowrap; }
+.sp-input-hint { font-size: 12px; color: var(--el-text-color-secondary); margin-top: 2px; line-height: 1.4; }
+.sp-input-warn { font-size: 12px; color: var(--el-color-warning); margin-top: 2px; line-height: 1.4; }
 </style>

@@ -5,6 +5,7 @@ import com.cretas.aims.entity.bom.BomRecipeItem;
 import com.cretas.aims.entity.factory.FactoryMaterialRequisition;
 import com.cretas.aims.entity.factory.FactoryWarehouse;
 import com.cretas.aims.entity.factory.FactoryWarehouse.WarehouseType;
+import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.repository.MaterialBatchRepository;
 import com.cretas.aims.repository.MaterialConsumptionRepository;
 import com.cretas.aims.repository.ProductionPlanRepository;
@@ -29,9 +30,12 @@ import java.util.List;
 import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.lenient;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -179,6 +183,37 @@ class FactoryMaterialRequisitionGenerateFromPlanTest {
         assertEquals(1, mr.getItems().size());
         assertEquals(0, new BigDecimal("100000").compareTo(mr.getItems().get(0).getRequiredQty()));
         assertEquals("g", mr.getItems().get(0).getUnit());
+    }
+
+    /**
+     * 追踪码 2CC05928 (客户 2026-07-29 14:45 按 SOP 路线 B 生成物料需求单失败) 回归测试.
+     *
+     * <p>BOM 行允许只登记"配方资格"不填 standardQuantity (线上 143 行里 69 行如此),
+     * 此时 {@code calculateActualQuantity()} 返回 null, 旧代码 {@code plannedQty.multiply(null)}
+     * 抛 NPE → 用户只看到"系统处理异常，请稍后重试"且无从知道是哪一味原料缺配置.
+     */
+    @Test
+    @DisplayName("追踪码 2CC05928: BOM 未填标准用量 → 409 指名原料, 而不是 NPE 系统异常")
+    void generateFromPlan_bomWithoutStandardQuantity_shouldRejectWithActionableMessage() {
+        BomRecipeItem noQtyBom = new BomRecipeItem();
+        noQtyBom.setId(3L);
+        noQtyBom.setMaterialTypeId("MAT-NOQTY");
+        noQtyBom.setMaterialName("SOP-20260727-01-黄油鸡-原料A");
+        noQtyBom.setStandardQuantity(null);   // 客户线上真实数据形态
+        noQtyBom.setUnit("kg");
+        noQtyBom.setMaterialCategory("RAW");
+        when(bomItemRepository.findCurrentByProduct(FACTORY_ID, PRODUCT_TYPE_ID))
+                .thenReturn(List.of(noQtyBom));
+        lenient().when(warehouseResolver.resolvePurchaseInboundWh(FACTORY_ID)).thenReturn(WH_RAW);
+
+        BusinessException ex = assertThrows(BusinessException.class,
+                () -> service.generateFromPlan(FACTORY_ID, PLAN_ID, 1L),
+                "BOM 缺标准用量应显式拦下, 而不是 NPE");
+
+        assertEquals(Integer.valueOf(409), ex.getCode(), "应为业务冲突而非 500 系统异常");
+        assertTrue(ex.getMessage().contains("SOP-20260727-01-黄油鸡-原料A"),
+                "错误信息必须指名是哪一味原料缺配置, 实际: " + ex.getMessage());
+        verify(repository, never()).save(any());
     }
 
     private FactoryWarehouse warehouse(String id, WarehouseType type) {

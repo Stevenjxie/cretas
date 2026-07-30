@@ -848,7 +848,9 @@ async function submitForApproval(row: TableRow) {
   try {
     const res = await post(`/${factoryId.value}/stocktakes/${row.id}/submit`, {});
     if (res.success) {
-      ElMessage({ message: '已提交 OA 审批', type: 'success', duration: 3000 });
+      // 未配置盘点审批流的工厂会直接通过, 后端 message 会如实说明是"已提交审批"还是"已直接通过";
+      // 前端不能一律报"已提交 OA 审批", 否则操作员会去审批中心空等一张不存在的单子.
+      ElMessage({ message: res.message || '已提交 OA 审批', type: 'success', duration: 3000 });
       const workflowInstanceId = String(res.data?.workflowInstanceId || '');
       await loadData();
       if (workflowInstanceId) {

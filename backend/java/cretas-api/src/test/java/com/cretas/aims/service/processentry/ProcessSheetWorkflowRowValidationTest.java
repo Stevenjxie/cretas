@@ -409,6 +409,69 @@ class ProcessSheetWorkflowRowValidationTest {
         assertEquals("WORKFLOW_ROW_INPUT_SKU_NOT_AUTHORIZED", error.getErrorCode());
     }
 
+    /**
+     * 客户反馈 (2026-07-30, F006 SOP-20260730-01 成品工序「定量包装」): 正式报工恒报
+     * 「本次投入不属于计划固定 BOM 允许的主料或替代料」, 刷新页面无效.
+     *
+     * <p>根因: 产出成品的工序会由 {@code buildAutomaticBomRequirements} 把固定 BOM 的包材/工序调料
+     * 自动分摊后写进 {@code rawMaterialInputs} (automatic=true)。这些行<b>不是 Workflow 投入端口</b>,
+     * 天生没有 workflowPortId; 而该工序只有 1 个投入端口时, {@code resolveInputPort} 会把它们兜底到
+     * 那个唯一端口, 再拿包材 SKU 去比端口白名单 → 必然 409, 且报错指向"投入主料", 与真因无关。
+     *
+     * <p>半成品工序不受影响: 只有产出成品的工序才触发包材自动分摊 —— 这解释了为什么客户的
+     * 工序1 (原料处理) 能正常报工、工序2 (定量包装) 每次必炸。
+     */
+    @Test
+    @DisplayName("BOM 自动分摊的包材/调料不参与 Workflow 端口校验 (单投入端口成品工序必炸回归)")
+    void automaticBomAllocations_areNotValidatedAsWorkflowPorts() throws Throwable {
+        PortDescriptor input = groupedPort("in-semi", "SEMI-A", "AT_LEAST_ONE", 1, 1, false);
+        PortDescriptor output = ungroupedOutput("out-a", "PT-A");
+        ProcessDescriptor descriptor = ProcessDescriptor.builder()
+                .processOrder(9)
+                .inputs(List.of(input))          // ← 成品工序常见形态: 只有一个上游半成品投入端口
+                .output(output)
+                .outputs(List.of(output))
+                .build();
+        WorkflowClerkSheetService svc = workflowService(descriptor);
+
+        ProcessSheetRowRequest req = multiRequest(9, outputLine("out-a", "PT-A"));
+        req.setMaterialInputTotals(List.of(materialInput("in-semi", "SEMI-A")));
+
+        ProcessSheetRowRequest.RawInput packaging = new ProcessSheetRowRequest.RawInput();
+        packaging.setMaterialBatchId("MB-PKG-1");
+        packaging.setQuantity(new java.math.BigDecimal("1"));
+        packaging.setSkuId("RMT-PACKAGING-BOX");   // 包材 SKU, 不在该端口白名单里
+        packaging.setSourceType("PACKAGING");
+        packaging.setAutomatic(true);              // ← 由固定 BOM 自动分摊, 非操作员填写
+        packaging.setWorkflowPortId(null);         // ← 本来就不是 workflow 端口
+        req.setRawMaterialInputs(List.of(packaging));
+
+        assertDoesNotThrow(() -> invokeSubmission(newImpl(svc), req),
+                "BOM 自动分摊的包材不得被当成 Workflow 投入端口来校验");
+    }
+
+    @Test
+    @DisplayName("操作员手填的投入仍然要过端口白名单 (不能借 automatic 绕过)")
+    void manualRawInput_stillValidatedAgainstPortWhitelist() throws Throwable {
+        PortDescriptor input = groupedPort("in-semi", "SEMI-A", "AT_LEAST_ONE", 1, 1, false);
+        PortDescriptor output = ungroupedOutput("out-a", "PT-A");
+        ProcessDescriptor descriptor = ProcessDescriptor.builder()
+                .processOrder(9).inputs(List.of(input)).output(output).outputs(List.of(output)).build();
+
+        ProcessSheetRowRequest req = multiRequest(9, outputLine("out-a", "PT-A"));
+        ProcessSheetRowRequest.RawInput manual = new ProcessSheetRowRequest.RawInput();
+        manual.setMaterialBatchId("MB-X");
+        manual.setQuantity(new java.math.BigDecimal("1"));
+        manual.setSkuId("RAW-OTHER");              // 不在白名单
+        manual.setAutomatic(false);                // 操作员填的
+        req.setRawMaterialInputs(List.of(manual));
+
+        BusinessException error = assertThrows(BusinessException.class,
+                () -> invokeSubmission(newImpl(workflowService(descriptor)), req));
+        assertEquals("WORKFLOW_ROW_INPUT_SKU_NOT_AUTHORIZED", error.getErrorCode(),
+                "手填投入越过 BOM 白名单仍必须拦下");
+    }
+
     @Test
     @DisplayName("OPTIONAL 多产出正式报工只统计正数量已选端口")
     void optionalMultiOutput_onlyPositiveSelectionCounts() throws Throwable {

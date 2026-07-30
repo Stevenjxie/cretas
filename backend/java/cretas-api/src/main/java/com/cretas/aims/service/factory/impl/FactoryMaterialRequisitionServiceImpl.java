@@ -215,7 +215,19 @@ public class FactoryMaterialRequisitionServiceImpl implements FactoryMaterialReq
             item.setMaterialCategory(category);
             item.setBomRecipeItemId(bom.getId());
             // required_qty = planned_quantity * actual_quantity (按出成率调整), 单位 = BOM unit (e.g. g)
+            // BOM 行允许只登记"配方资格"而不填参考用量 (standardQuantity=null, 见 BomRecipeItem#computeItemCost
+            // 注释). 这类行算不出需求量 —— 不能当 0 处理 (会生成一张"需要 0 kg"的领料单, 车间照单领料就短料),
+            // 必须显式拦下并指明是哪一味原料缺配置.
             BigDecimal perUnit = bom.calculateActualQuantity();
+            if (perUnit == null) {
+                String matName = resolveLiveMaterialName(bom.getMaterialTypeId(), bom.getMaterialName());
+                throw new BusinessException(409,
+                        String.format("原料「%s」未配置 BOM 用量，无法计算物料需求量，请先补充配方用量", matName))
+                        .withCode("MATERIAL_BOM_QUANTITY_UNCONFIGURED")
+                        .withHint("请前往「生产管理 → BOM成本管理」为该原料填写标准用量")
+                        .withHintTarget(bom.getMaterialTypeId())
+                        .withSeverity("BLOCKING");
+            }
             BigDecimal requiredBom = plannedQty.multiply(perUnit);
             String bomUnit = bom.getUnit();
 

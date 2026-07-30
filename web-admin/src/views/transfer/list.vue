@@ -50,6 +50,16 @@ const pagination = ref({ page: 1, size: 10, total: 0 });
 const summaryRequest = computed<ListSummaryRequest>(() => ({ filterConditions: {} }));
 const { summary: footerSummary, loading: footerLoading } = useListSummary('internalTransfer', summaryRequest);
 
+/**
+ * 同厂调拨 APPROVED = 审批过了但库存还没动, 必须再点一次「确认调拨入库」才扣源仓/建目标仓批次
+ * (TransferServiceImpl#confirmTransfer 的 intraFactory 分支)。跨厂还要走发运→签收, 不在此列。
+ * 客户 2026-07-30 反馈「审核后 库存没有过来」, 实测 3 张单卡在 APPROVED 最早一张 6 周。
+ */
+function awaitingInboundConfirm(row: Record<string, unknown>): boolean {
+  if (String(row.status) !== 'APPROVED') return false;
+  return String(row.sourceFactoryId || '') === String(row.targetFactoryId || '');
+}
+
 const statusMap: Record<string, { text: string; type: string }> = {
   DRAFT: { text: '草稿', type: 'info' },
   REQUESTED: { text: '已申请', type: 'warning' },
@@ -476,16 +486,24 @@ function isOutbound(row: TableRow) { return row.sourceFactoryId === factoryId.va
         <el-table-column v-if="canViewPrice" prop="totalAmount" label="金额" width="120" align="right">
           <template #default="{ row }">{{ formatAmount(row.totalAmount) }}</template>
         </el-table-column>
-        <el-table-column prop="status" label="状态" width="100" align="center">
+        <el-table-column prop="status" label="状态" width="132" align="center">
           <template #default="{ row }">
             <el-tag :type="(statusMap[row.status]?.type) || 'info'" size="small">
               {{ statusMap[row.status]?.text || row.status }}
             </el-tag>
+            <!-- 客户 2026-07-30「审核后 库存没有过来」: 「已批准」在客户眼里等于办完了, 但同厂调拨
+                 还要点一次「确认调拨入库」库存才动。只显示状态词 = 看不出还有事要做 (防呆 Rule 5)。 -->
+            <div v-if="awaitingInboundConfirm(row)" class="tf-await-confirm">待确认入库</div>
           </template>
         </el-table-column>
         <el-table-column label="操作" width="180" fixed="right" align="center">
           <template #default="{ row }">
             <el-button type="primary" link size="small" @click="goDetail(row.id)">详情</el-button>
+            <el-button
+              v-if="awaitingInboundConfirm(row)"
+              type="success" link size="small"
+              @click="goDetail(row.id)"
+            >去确认入库</el-button>
             <el-button
               v-if="canWrite && row.status === 'DRAFT'"
               type="warning"
@@ -771,4 +789,8 @@ function isOutbound(row: TableRow) { return row.sourceFactoryId === factoryId.va
   :deep(.el-input-number) { flex: 1; min-width: 0; }
 }
 .unit-chip { flex: 0 0 36px; text-align: center; color: #606266; font-weight: 600; }
+.tf-await-confirm {
+  margin-top: 3px; font-size: 12px; line-height: 1.3;
+  color: var(--el-color-warning); font-weight: 600; white-space: nowrap;
+}
 </style>

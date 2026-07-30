@@ -20,6 +20,7 @@ import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Sort;
 import org.springframework.web.bind.annotation.*;
 
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -116,7 +117,19 @@ public class StocktakeController {
         Long userId = extractUserId(request);
         log.info("SP7: 提交盘点审批 stocktakeId={}", stocktakeId);
         String workflowInstanceId = stocktakeService.submitForApproval(stocktakeId, factoryId, userId);
-        return ApiResponse.success("盘点任务已提交 OA 审批", Map.of("workflowInstanceId", workflowInstanceId));
+        // 工厂未配置 INVENTORY_ADJUSTMENT 审批流时, submitForApproval 走直接通过分支, 不产生 OA 实例
+        // → workflowInstanceId 为 null. Map.of 不接受 null 值, 旧写法在这里抛 NPE, 用户看到"系统处理异常",
+        // 但盘点其实已经保存生效 (事务在 service 层已提交) —— 假失败比真失败更危险, 故这里必须容 null,
+        // 并把真实结果 (是进了审批, 还是已直接通过) 如实告诉前端.
+        Map<String, String> payload = new LinkedHashMap<>();
+        boolean submittedToOa = workflowInstanceId != null && !workflowInstanceId.isBlank();
+        if (submittedToOa) {
+            payload.put("workflowInstanceId", workflowInstanceId);
+        }
+        payload.put("approvalRequired", String.valueOf(submittedToOa));
+        return ApiResponse.success(
+                submittedToOa ? "盘点任务已提交 OA 审批" : "本工厂未配置盘点审批流，盘点任务已直接通过",
+                payload);
     }
 
     @PostMapping("/{stocktakeId}/approve")

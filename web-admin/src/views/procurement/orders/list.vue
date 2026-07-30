@@ -511,6 +511,14 @@ onMounted(() => {
   if (editId) void openEditDialog(editId);
   window.addEventListener('beforeunload', handleBeforeUnload);
 });
+
+// 点「编辑」时用户已经在 /procurement/orders 上, router.push 只改 query 不换路由 → Vue 复用同一个
+// 组件实例, onMounted 不会二次执行. 旧代码只在 onMounted 读一次 route.query.edit, 于是地址栏多出
+// ?edit=xxx 而编辑弹窗永远不打开 —— 即客户反馈的「点击后仅会在域名后新增字符且无响应」.
+watch(() => route.query.edit, (value) => {
+  const editId = String(value || '');
+  if (editId) void openEditDialog(editId);
+});
 onBeforeUnmount(() => { window.removeEventListener('beforeunload', handleBeforeUnload); });
 
 async function loadData() {
@@ -750,7 +758,17 @@ async function openEditDialog(orderId: string) {
   resetForm();
   await Promise.all([loadSuppliers(), loadMaterials(), loadSalesOrders()]);
   const response = await get<TableRow>(`/${factoryId.value}/purchase/orders/${orderId}`);
-  if (!response.success || !response.data) return;
+  if (!response.success || !response.data) {
+    // 静默 return 会让用户第二次看到「点了没反应」, 且地址栏已经变了 —— 读不到单子必须说清楚.
+    ElMessage({
+      message: response.message || '采购单读取失败，无法进入编辑',
+      type: 'error',
+      duration: 0,
+      showClose: true,
+    });
+    await clearEditQuery();
+    return;
+  }
   const order = response.data;
   if (String(order.status) !== 'DRAFT') {
     ElMessage.warning('仅草稿采购单允许编辑');

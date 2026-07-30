@@ -13,7 +13,11 @@ const editorSource = readFileSync(
 
 describe('product-process unified Workflow entry', () => {
   it('uses one searchable anchor selector and removes user-selectable owner modes', () => {
-    expect(source).toContain('选择关联的原料或成品（支持拼音首字母搜索）');
+    // 契约是"单一可搜索的归属选择器", 不是某一句具体文案. 2026-07-30 按客户反馈
+    // (SOP 说「成品归属」但界面无标签, 操作员找不到) 给它补了可见标签并改写了 placeholder,
+    // 断言随之改写而非删除: 仍然只有一个选择器, 仍然可拼音搜索.
+    expect(source).toContain('归属对象');
+    expect(source).toContain('选择本条工艺属于哪个成品或原料（支持拼音首字母搜索）');
     expect(source).toContain('无需选择模式，发布时由画布自动识别');
     expect(source).not.toContain('<el-radio-button label="FINISHED">');
     expect(source).not.toContain('<el-radio-button label="RAW">');

@@ -468,6 +468,10 @@ public class OrderCostBreakdownService {
                 .laborDetails(laborDetails)
                 .totalCost(total)
                 .perBoxCost(perBox)
+                // 已知成本合计: 与 totalCost 同一算式, 但 costComplete=false 时不被清空
+                // (2026-07-30 Steve 拍板: 设备/其他成本不强制填写, 填了就算进去)。
+                .knownCostSubtotal(total)
+                .knownPerBoxCost(perBox)
                 .byproductCredit(byproductCredit)
                 .netTotalCost(netTotal)
                 .netPerBoxCost(netPerBox)
@@ -1131,6 +1135,8 @@ public class OrderCostBreakdownService {
         dto.setSemiFeedCost(null);
         dto.setTotalCost(null);
         dto.setPerBoxCost(null);
+        dto.setKnownCostSubtotal(null);    // 脱敏一律清空: 展示口径也是金额
+        dto.setKnownPerBoxCost(null);
         dto.setByproductCredit(null);
         dto.setNetTotalCost(null);
         dto.setNetPerBoxCost(null);

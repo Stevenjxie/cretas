@@ -315,8 +315,13 @@ public class ListSummaryServiceImpl implements ListSummaryService {
 
         String keyword = filter.get("keyword") == null ? null : String.valueOf(filter.get("keyword")).trim();
         if (keyword != null && !keyword.isBlank()) {
-            sql.append(" AND (LOWER(p.plan_number) LIKE LOWER(CONCAT('%', :keyword, '%'))")
-                    .append(" OR LOWER(pt.name) LIKE LOWER(CONCAT('%', :keyword, '%')))");
+            // CAST(... AS text) 不可省: 这是 native SQL, :keyword 只出现在 CONCAT 里, 而 CONCAT 是
+            // variadic "any" —— PostgreSQL 推不出占位符类型, 直接报
+            // 「could not determine data type of parameter $2」(SQLGrammarException)。
+            // 现象: 生产计划列表只要用了搜索框, 底部汇总条就整条挂掉弹「数据服务暂时不可用」。
+            // JPQL @Query 里同样写法没事 (Hibernate 从实体元模型知道类型), 只有 native 才需要显式 CAST。
+            sql.append(" AND (LOWER(p.plan_number) LIKE LOWER(CONCAT('%', CAST(:keyword AS text), '%'))")
+                    .append(" OR LOWER(pt.name) LIKE LOWER(CONCAT('%', CAST(:keyword AS text), '%')))");
         }
 
         String status = filter.get("status") == null ? null : String.valueOf(filter.get("status")).trim();

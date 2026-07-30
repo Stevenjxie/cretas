@@ -55,7 +55,12 @@ class ListSummaryServiceImplProductionPlanTest {
                 .contains("LOWER(pt.name)")
                 .contains("UPPER(p.status) = UPPER(:status)")
                 .contains("GROUP BY")
-                .contains("WHEN '盒' THEN 'box'");
+                .contains("WHEN '盒' THEN 'box'")
+                // 2026-07-30 线上事故: :keyword 只出现在 CONCAT 里 (variadic "any"),
+                // PostgreSQL 推不出类型 → 「could not determine data type of parameter $2」,
+                // 生产计划列表一用搜索框底部汇总条就整条挂掉。native SQL 必须显式 CAST。
+                .contains("CONCAT('%', CAST(:keyword AS text), '%')")
+                .doesNotContain("CONCAT('%', :keyword, '%')");
         verify(query).setParameter("fid", "F006");
         verify(query).setParameter("keyword", "PLAN-1784523993145");
         verify(query).setParameter("status", "COMPLETED");

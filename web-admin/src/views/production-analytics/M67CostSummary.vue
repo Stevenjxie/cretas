@@ -21,7 +21,8 @@
       <el-table-column prop="orderNumber" label="订单号" min-width="150" />
       <el-table-column prop="orderDate" label="下单日期" width="120" />
       <el-table-column prop="productName" label="产品" min-width="160"><template #default="{ row }">{{ row.productName || '—' }}</template></el-table-column>
-      <el-table-column prop="skuCode" label="SKU" min-width="130"><template #default="{ row }">{{ row.skuCode || row.productTypeId || '—' }}</template></el-table-column>
+      <!-- productTypeId 是 UUID, 兜底展示它等于给操作员看一串乱码, 不如照实显示"—" -->
+      <el-table-column prop="skuCode" label="SKU" min-width="130"><template #default="{ row }">{{ row.skuCode || '—' }}</template></el-table-column>
       <el-table-column label="SKU产出" width="120" align="right"><template #default="{ row }">{{ skuOutput(row) }}</template></el-table-column>
       <el-table-column label="整批出成率" width="110" align="right">
         <template #default="{ row }"><span :class="yieldClass(row.overallYieldRate)">{{ row.overallYieldRate == null ? '—' : (row.overallYieldRate * 100).toFixed(1) + '%' }}</span></template>
@@ -30,7 +31,21 @@
       <el-table-column label="人工" width="100" align="right"><template #default="{ row }">{{ money(row.laborCost) }}</template></el-table-column>
       <el-table-column label="调料" width="100" align="right"><template #default="{ row }">{{ money(row.seasoningCost) }}</template></el-table-column>
       <el-table-column label="包装" width="100" align="right"><template #default="{ row }">{{ money(row.packagingCost) }}</template></el-table-column>
-      <el-table-column prop="totalCost" label="总成本" width="120" align="right"><template #default="{ row }"><b>{{ money(row.totalCost) }}</b></template></el-table-column>
+      <!-- 成本项没采集齐时 totalCost 依约为 null (不伪造完整成本), 但仍把「已填的都算进去」的
+           已知合计显示出来, 并挂上"待补"标记说明差什么 —— 否则一个光秃秃的数会被当成完整成本。 -->
+      <el-table-column prop="totalCost" label="总成本" width="150" align="right">
+        <template #default="{ row }">
+          <b>{{ money(row.totalCost ?? row.knownCostSubtotal) }}</b>
+          <el-tooltip v-if="row.totalCost == null && row.knownCostSubtotal != null" placement="top">
+            <template #content>
+              <div>此金额只含已录入的成本项，尚未包含：</div>
+              <div v-for="label in missingCostLabels(row)" :key="label">· {{ label }}</div>
+              <div>补录后总成本会自动变完整。</div>
+            </template>
+            <el-tag type="warning" size="small" effect="plain" class="cost-partial-tag">待补</el-tag>
+          </el-tooltip>
+        </template>
+      </el-table-column>
       <el-table-column label="元/kg" width="110" align="right"><template #default="{ row }">{{ perKg(row) }}</template></el-table-column>
       <el-table-column label="元/SKU单位" width="140" align="right"><template #default="{ row }">{{ perSkuUnit(row) }}</template></el-table-column>
     </el-table>
@@ -51,6 +66,8 @@ interface Row {
   skuUnit?: string; skuQuantity?: number; outputQuantity?: number; boxCount?: number; overallYieldRate?: number;
   rawMaterialCost?: number; laborCost?: number; seasoningCost?: number; packagingCost?: number; totalCost?: number;
   costPerKg?: number; perKgCost?: number; costPerSkuUnit?: number; perSkuUnitCost?: number; perBoxCost?: number;
+  knownCostSubtotal?: number; knownPerBoxCost?: number;
+  calculationStatus?: string; missingCostItems?: string[];
 }
 const authStore = useAuthStore();
 const factoryId = computed(() => authStore.factoryId);
@@ -78,15 +95,35 @@ const skuOutput = (row: Row) => {
 const perKg = (row: Row) => money(row.costPerKg ?? row.perKgCost);
 const perSkuUnit = (row: Row) => {
   const unit = skuUnit(row);
-  const value = row.costPerSkuUnit ?? row.perSkuUnitCost ?? row.perBoxCost;
+  // 与「总成本」同口径: 完整值优先, 没有就用已知合计的单位成本 (行上已有"待补"标记说明不完整)。
+  const value = row.costPerSkuUnit ?? row.perSkuUnitCost ?? row.perBoxCost ?? row.knownPerBoxCost;
   return value == null || !unit ? '—' : `${money(value)}/${displayUnit(unit)}`;
+};
+
+/** 把后端 missingCostItems 的机器码翻成一线看得懂的中文 (冒号后是定位信息, 去掉)。 */
+const MISSING_COST_LABELS: Record<string, string> = {
+  EQUIPMENT_COST: '设备成本',
+  OTHER_COST: '其他成本',
+  LABOR_RATE_OR_TIME: '人工工时或费率',
+  PINNED_BOM_SNAPSHOT_MISSING: 'BOM 配方快照',
+  SEMI_FINISHED_OR_FINISHED_FEED_PRICE: '半成品/成品投料单价',
+};
+const missingCostLabels = (row: Row): string[] => {
+  const codes = (row.missingCostItems || []).map((item) => String(item).split(':')[0]);
+  return [...new Set(codes)].map((code) => MISSING_COST_LABELS[code] || code);
 };
 const yieldClass = (y?: number | null) => (y == null ? '' : (y * 100 < 50 ? 'y-low' : (y * 100 > 130 ? 'y-high' : 'y-ok')));
 
 function summary({ columns, data }: { columns: Array<{ property?: string }>; data: Row[] }) {
   return columns.map((column, index) => {
     if (index === 0) return '合计';
-    if (column.property === 'totalCost') return money(data.reduce((sum, row) => sum + (row.totalCost || 0), 0));
+    // 与行内口径一致: 行显示已知合计, 合计就不能只加 totalCost (否则行有数、合计 ¥0.00 自相矛盾)。
+    // 只要有任一行不完整, 合计也标"含待补"。
+    if (column.property === 'totalCost') {
+      const total = data.reduce((sum, row) => sum + (row.totalCost ?? row.knownCostSubtotal ?? 0), 0);
+      const anyPartial = data.some((row) => row.totalCost == null && row.knownCostSubtotal != null);
+      return anyPartial ? `${money(total)}（含待补）` : money(total);
+    }
     return '';
   });
 }
@@ -120,4 +157,5 @@ onMounted(load);
 .mb { margin-bottom: 16px; }
 .y-ok { color: #67c23a; } .y-low { color: #f56c6c; font-weight: 600; } .y-high { color: #e6a23c; }
 .wide-table :deep(.el-scrollbar__bar.is-horizontal) { opacity: 1; }
+.cost-partial-tag { margin-left: 6px; cursor: help; }
 </style>

@@ -31,7 +31,13 @@ describe('inventory transfer unified OA contract', () => {
 
   it('makes inventory transfer actionable and navigable in personal OA', () => {
     expect(pending).toContain("'INVENTORY_TRANSFER'");
-    expect(pending).toContain('label="库存调拨" value="INVENTORY_TRANSFER"');
+    // 契约是「库存调拨可作为 OA 待办的业务类型筛选项」, 不是"必须写成一行硬编码 el-option"。
+    // #1681 (2026-07-23) 原本硬编码了 label="库存调拨" value="INVENTORY_TRANSFER";
+    // #1966 (2026-07-29) 把四个选项重构成 v-for MODULE_LABELS —— 功能没变, 但字面量没了,
+    // 本断言自那天起一直红。断言随之改写而非删除: 只要 MODULE_LABELS 里有这条、
+    // 且下拉是从 MODULE_LABELS 渲染的, 选项就真实存在。
+    expect(pending).toMatch(/INVENTORY_TRANSFER:\s*'库存调拨'/);
+    expect(pending).toContain('v-for="(label, code) in MODULE_LABELS"');
     expect(myCreated).toContain("row.moduleCode === 'INVENTORY_TRANSFER'");
     expect(myCreated).toContain('router.push(`/transfer/${row.businessEntityId}`)');
   });

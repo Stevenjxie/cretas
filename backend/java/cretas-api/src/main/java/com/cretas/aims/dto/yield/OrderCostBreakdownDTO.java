@@ -72,6 +72,22 @@ public class OrderCostBreakdownDTO {
     private BigDecimal semiFeedCost;
     private BigDecimal totalCost;
     private BigDecimal perBoxCost;
+    /**
+     * 已知成本合计 = 当前已采集到的各成本桶之和, {@link #costComplete}=false 时<b>也照常给值</b>
+     * (2026-07-30 Steve 拍板: 设备/其他成本不强制填写, 填了就算进去)。
+     *
+     * <p>⚠️ 与 {@link #totalCost} 的分工必须守住:
+     * <ul>
+     *   <li>{@link #totalCost} = <b>完整</b>成本, 缺任一项即 null。成品入库 unitCost / COGS / 毛利
+     *       只认它 —— 用不完整的数写这些账会系统性低估成本、虚增毛利。</li>
+     *   <li>本字段 = <b>展示用</b>的已知合计, 永远伴随 {@link #calculationStatus} 与
+     *       {@link #missingCostItems} 一起呈现, 让读数的人知道它不含什么。</li>
+     * </ul>
+     * 脱敏时置 null。
+     */
+    private BigDecimal knownCostSubtotal;
+    /** 已知成本合计 ÷ 产出盒数; 口径同 {@link #knownCostSubtotal} (不完整也给值)。 */
+    private BigDecimal knownPerBoxCost;
 
     // ---- 副产回收 (肥油/料头等可变现副产物; masked 时为 null) ----
     /** 副产回收价值 = Σ 各道报工副产物(quantity×单价); 无单价的副产物按 0 (诚实, 不臆造). */
