@@ -29,6 +29,7 @@ PUBLISH_PS1="$SCRIPT_DIR/Publish-GitHubArtifactViaLightsailOss.ps1"
 
 TESTS=""
 DESCRIPTOR=""
+PROBE_ONLY=0
 MAX_CANDIDATES=${CRETAS_CI_ARTIFACT_MAX_CANDIDATES:-20}
 
 usage() {
@@ -38,6 +39,9 @@ usage: release-ci-artifact.sh --tests <MavenTestSelector> [--descriptor <path>]
   --tests       发布要求的测试选择器。CI 制品的 manifest 必须记录【完全相同】的选择器,
                 否则这份制品是被另一组测试把关的, 复用它等于跳过了你要求的那组测试。
   --descriptor  描述符写到哪 (默认 <jar cache>/current/release-jar.remote)
+  --probe-only  只判断「有没有一份 backend_tree 匹配的候选制品」就退出, 不做任何传输。
+                约 2s。给调用方一个廉价的前置判断: 探测不过就直接走本地构建, 一秒不浪费;
+                探测过了才值得承诺「取制品与其它构建并行」这种安排。
 EOF
     exit 2
 }
@@ -46,6 +50,7 @@ while (($#)); do
     case "$1" in
         --tests) (($# >= 2)) || usage; TESTS=$2; shift 2 ;;
         --descriptor) (($# >= 2)) || usage; DESCRIPTOR=$2; shift 2 ;;
+        --probe-only) PROBE_ONLY=1; shift ;;
         -h|--help) usage ;;
         *) echo "ERROR: unknown argument: $1" >&2; usage ;;
     esac
@@ -124,6 +129,14 @@ done <<< "$candidates"
 [ -n "$ARTIFACT_COMMIT" ] || fail no_artifact_commit
 
 echo "CI_ARTIFACT_CANDIDATE id=$ARTIFACT_ID commit=$ARTIFACT_COMMIT backend_tree=$CURRENT_TREE"
+
+# --probe-only 到此为止。刻意【只】保证「存在 backend_tree 匹配的候选」——
+# 选择器覆盖与 attestation 都要等制品真的送到才能判, 探测不做也不假装做。
+# 所以探测通过≠一定能用, 调用方必须为「晚失败」留好回退路径。
+if ((PROBE_ONLY)); then
+    echo "CI_ARTIFACT_PROBE_OK id=$ARTIFACT_ID commit=$ARTIFACT_COMMIT"
+    exit 0
+fi
 
 # ---- 3. 跑传输链路; 制品字节不经过本机 ----
 ps1_win=$(cygpath -w "$PUBLISH_PS1" 2>/dev/null || printf '%s' "$PUBLISH_PS1")

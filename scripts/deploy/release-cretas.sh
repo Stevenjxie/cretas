@@ -379,6 +379,74 @@ try_ci_artifact() {
     return 1
 }
 
+# 取 CI 制品 与 构建 Web 并行跑。成功返 0(此时 Java 侧由描述符承担), 失败返 1(Web 已建好)。
+#
+# 后台子 shell 里的变量赋值传不回父进程, 所以两边各写一个 kv 状态文件, 父进程 wait 后回读。
+# 两个后台任务都【不】直接输出 —— duration_run 会 cat 日志, 两个同时 cat 会交错成乱码;
+# 改为各写各的日志, 父进程按顺序输出。
+run_ci_fetch_parallel_web() {
+    local fetch_state="$RUN_LOG_DIR/ci-fetch.state"
+    local web_state="$RUN_LOG_DIR/web-build.state"
+    local fetch_pid web_pid fetch_rc web_rc
+    rm -f "$fetch_state" "$web_state"
+
+    # 父进程先把两个计数占掉: 子 shell 里的递增回不来, 而这两个"至多一次"的预算必须真实反映
+    # 已经发生的事(Web 确实构建了; Java 侧要么用制品要么走 build_java 自己的闸)。
+    WEB_BUILD_COUNT=1
+
+    (
+        if try_ci_artifact > "$RUN_LOG_DIR/java-ci-artifact-outer.log" 2>&1; then
+            printf 'status=%s\nseconds=%s\ndescriptor=%s\n' \
+                "$CI_ARTIFACT_STATUS" "${CI_ARTIFACT_SECONDS:-0}" "$CI_ARTIFACT_DESCRIPTOR" > "$fetch_state"
+        else
+            printf 'status=%s\nseconds=%s\ndescriptor=\n' \
+                "${CI_ARTIFACT_STATUS:-unavailable:unknown}" "${CI_ARTIFACT_SECONDS:-0}" > "$fetch_state"
+        fi
+    ) &
+    fetch_pid=$!
+    (
+        if "$SCRIPT_DIR/release-web-manifest.sh" build > "$RUN_LOG_DIR/web-build.log" 2>&1; then
+            printf 'status=success\n' > "$web_state"
+        else
+            printf 'status=failed\n' > "$web_state"
+        fi
+    ) &
+    web_pid=$!
+
+    local web_started=$SECONDS
+    wait "$fetch_pid"; fetch_rc=$?
+    wait "$web_pid";   web_rc=$?
+    WEB_BUILD_SECONDS=$(( SECONDS - web_started ))
+
+    [ -s "$RUN_LOG_DIR/java-ci-artifact-outer.log" ] && cat "$RUN_LOG_DIR/java-ci-artifact-outer.log"
+    [ -s "$RUN_LOG_DIR/web-build.log" ] && cat "$RUN_LOG_DIR/web-build.log"
+
+    # 回读 fetch 状态。状态文件缺失一律当失败 —— 不猜。
+    CI_ARTIFACT_STATUS=$(sed -n 's/^status=//p' "$fetch_state" 2>/dev/null | tail -1)
+    CI_ARTIFACT_SECONDS=$(sed -n 's/^seconds=//p' "$fetch_state" 2>/dev/null | tail -1)
+    CI_ARTIFACT_DESCRIPTOR=$(sed -n 's/^descriptor=//p' "$fetch_state" 2>/dev/null | tail -1)
+    [ -n "$CI_ARTIFACT_STATUS" ] || CI_ARTIFACT_STATUS=unavailable:fetch-state-missing
+    [[ "${CI_ARTIFACT_SECONDS:-}" =~ ^[0-9]+$ ]] || CI_ARTIFACT_SECONDS=0
+
+    if [ "$(sed -n 's/^status=//p' "$web_state" 2>/dev/null | tail -1)" = success ]; then
+        WEB_BUILD_STATUS=success
+    else
+        WEB_BUILD_STATUS=failed
+        echo "ERROR: Web 构建失败 (并行取制品期间)" >&2
+        return 1
+    fi
+    "$SCRIPT_DIR/release-web-manifest.sh" validate || { WEB_BUILD_STATUS=failed; return 1; }
+
+    if ((fetch_rc == 0)) && [ "$CI_ARTIFACT_STATUS" = used ] \
+        && [ -n "$CI_ARTIFACT_DESCRIPTOR" ] && [ -f "$CI_ARTIFACT_DESCRIPTOR" ]; then
+        JAVA_BUILD_STATUS=success-ci-artifact
+        echo "CI_ARTIFACT=used descriptor=$CI_ARTIFACT_DESCRIPTOR seconds=$CI_ARTIFACT_SECONDS (与 Web 构建并行)"
+        return 0
+    fi
+    CI_ARTIFACT_DESCRIPTOR=
+    return 1
+}
+
 build_java() {
     if [ "$JAVA_BUILD_COUNT" -ge 1 ]; then
         echo "ERROR: Java release build fallback already consumed; refusing a second Maven lifecycle" >&2
@@ -449,26 +517,41 @@ run_build_phase() {
     case "$COMPONENTS" in
         both)
             [ -n "$TESTS" ] || { echo "ERROR: Java build requires --tests '<MavenTestSelector>'" >&2; return 2; }
-            # Java + Web 都要构建时【暂不用 CI 制品】—— 因为串行化的收益取决于 Web 构建耗时,
-            # 而实测那个数字波动很大, 单靠串行不能保证不倒退。
+            # Java + Web 都要构建时, 把【取 CI 制品】与【构建 Web】真并行, 总时长从
+            # max(Java, Web) 降到 max(取制品, Web) —— 取制品实测 55~69s, 完全落在 Web 的耗时内。
             #
-            # 实测两次(同一棵树, 同一台机, parallel-artifacts):
-            #   Java 160s / Web 150s → 并行总 163s;  串行(取制品 69s + Web)总 188s → 慢 25s
-            #   Java 142s / Web  80s → 并行总 144s;  串行(取制品 55s + Web)约 135s  → 快 9s
-            # Web 在 80s↔150s 之间波动, 所以"串行是赚还是亏"随运行摆动。不接受一个方向不定的改动。
+            # ⚠️ 串行版本(先取制品再构建 Web)刻意【没有】采用: 实测收益方向不定 ——
+            #   Java 160s / Web 150s → 并行 163s vs 串行 188s (慢 25s)
+            #   Java 142s / Web  80s → 并行 144s vs 串行约 135s (快 9s)
+            # Web 在 80s↔150s 之间摆动, 一个方向不定的改动不该进发布路径。
             #
-            # 正解是让【取制品与 Web 构建真并行】: 取制品 55~69s 完全落在 Web 的耗时内, 总时长
-            # 变成 max(取制品, Web) ≈ Web, 相对现在的 max(Java, Web) 稳定省下 Java 那一段。
-            # 那需要把两个后台任务的变量经文件回传, 与本次改动是两件事, 不在这里硬塞。
-            #
-            # COMPONENTS=java 那条路径没有这个问题: Java 就是关键路径本身, 实测总时长
-            # 56s vs 本地构建 160~290s。
-            #
-            # 附带好处("把 JAR 上传移出部署窗口")在 both 场景已有 --stage-backend YES-STAGE
-            # 专门解决, 不必靠这条路径。
+            # 先用 --probe-only 做一次 ~2s 的廉价探测。这一步很关键: 探测不过就直接走
+            # parallel-artifacts, 一秒不浪费; 只有探测过了才值得承诺"只构建 Web"这种安排。
+            # 探测【只】保证存在 backend_tree 匹配的候选 —— 选择器覆盖与 attestation 要等制品
+            # 真的送到才能判, 所以下面必须为「晚失败」留好回退路径。
+            if [ "$PREFER_CI_ARTIFACT" = "true" ] \
+                && "$SCRIPT_DIR/release-ci-artifact.sh" --tests "$TESTS" --probe-only \
+                    > "$RUN_LOG_DIR/java-ci-probe.log" 2>&1; then
+                cat "$RUN_LOG_DIR/java-ci-probe.log"
+                "$SCRIPT_DIR/release-java-preflight.sh" --repo-root "$PROJECT_ROOT" --tests "$TESTS"
+                if run_ci_fetch_parallel_web; then
+                    BUILD_MODE=ci-artifact-parallel-web
+                    BUILD_SECONDS=$(( $(date +%s) - started ))
+                    return 0
+                fi
+                # 晚失败: Web 已经建好了, 但没拿到可信制品 —— 只能补建 Java, 这次是串行的。
+                # 明确说出代价, 不让它看起来像正常路径。
+                echo "CI_ARTIFACT=$CI_ARTIFACT_STATUS — Web 已构建, 现串行补建 Java(本次比 parallel-artifacts 慢)" >&2
+                BUILD_MODE=ci-artifact-late-failure-java-fallback
+                build_java || return 1
+                BUILD_SECONDS=$(( $(date +%s) - started ))
+                return 0
+            fi
             if [ "$PREFER_CI_ARTIFACT" = "true" ]; then
-                CI_ARTIFACT_STATUS=skipped:both-needs-parallel-fetch
-                echo "CI_ARTIFACT=$CI_ARTIFACT_STATUS (串行取制品的收益随 Web 构建耗时摆动; 需先做成与 Web 并行)"
+                CI_ARTIFACT_STATUS=$(sed -n 's/^CI_ARTIFACT_UNAVAILABLE reason=/unavailable:/p' \
+                    "$RUN_LOG_DIR/java-ci-probe.log" 2>/dev/null | tail -1)
+                [ -n "$CI_ARTIFACT_STATUS" ] || CI_ARTIFACT_STATUS=unavailable:probe-failed
+                echo "CI_ARTIFACT=$CI_ARTIFACT_STATUS (探测未通过, 直接走本地并行构建)" >&2
             fi
             BUILD_MODE=parallel-artifacts
             JAVA_BUILD_COUNT=1
