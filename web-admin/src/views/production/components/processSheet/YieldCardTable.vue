@@ -12,11 +12,39 @@
 import { computed, h, ref, watch } from 'vue';
 import { getInventoryYieldCard, type ProcessSheetInventoryItem } from '@/api/processSheet';
 import { normalizeMassQuantityForReporting } from '@/utils/processSheetUnits';
+import { useTableColumnWidth } from '@/composables/useTableColumnWidth';
 
 const props = defineProps<{
   factoryId: string;
   planId: string;
 }>();
+
+/**
+ * 列宽记忆 (客户 Sheet Row 13: 调好的列宽刷新就没了)。
+ * defaults 就是这张表原本写死的宽度 —— 用户没拖过时渲染结果与以前逐像素一致;
+ * min-width 那几列刻意不入 defaults, 让 `min-width` 继续管自适应。
+ */
+const YIELD_CARD_DEFAULT_COLUMN_WIDTHS = {
+  processOrder: 58,
+  processDate: 118,
+  feedQuantity: 110,
+  sourceConsumedRatio: 110,
+  inheritedRawEquivalentQuantity: 132,
+  produced: 100,
+  used: 100,
+  remaining: 100,
+  rowTotalCost: 116,
+  unitPrice: 105,
+  stepYieldRate: 132,
+  cumulativeYieldRate: 122,
+  status: 100,
+} as const;
+
+const { columnWidth, handleHeaderDragend, resetColumnWidths, hasStoredColumnWidths } = useTableColumnWidth({
+  pageKey: 'production.processSheet.yieldCard',
+  scope: () => props.factoryId,
+  defaults: YIELD_CARD_DEFAULT_COLUMN_WIDTHS,
+});
 
 const rows = ref<ProcessSheetInventoryItem[]>([]);
 const loading = ref(false);
@@ -189,7 +217,15 @@ defineExpose({ refresh });
     </el-alert>
   </div>
   <div v-if="rows.length > 0" class="yield-card-scroll-hint">
-    点击表头可升/降序，漏斗可筛选；表格可左右滑动查看完整字段 →
+    点击表头可升/降序，漏斗可筛选；拖动表头分隔线可调列宽（自动记住）；表格可左右滑动查看完整字段 →
+    <el-button
+      v-if="hasStoredColumnWidths"
+      link
+      type="primary"
+      size="small"
+      class="yield-card-reset-widths"
+      @click="resetColumnWidths"
+    >恢复默认列宽</el-button>
   </div>
   <el-table
     :data="rows"
@@ -202,9 +238,10 @@ defineExpose({ refresh });
     empty-text="暂无半成品库存记录"
     style="width: 100%"
     :row-class-name="() => ''"
+    @header-dragend="handleHeaderDragend"
   >
-    <el-table-column prop="processOrder" label="序" width="58" align="center" sortable :render-header="sortableHeader" />
-    <el-table-column prop="processDate" label="流程日期" width="118" align="center" sortable :render-header="sortableHeader">
+    <el-table-column prop="processOrder" label="序" :width="columnWidth('processOrder')" align="center" sortable :render-header="sortableHeader" />
+    <el-table-column prop="processDate" label="流程日期" :width="columnWidth('processDate')" align="center" sortable :render-header="sortableHeader">
       <template #default="{ row }">
         {{ fmtDate(row.processDate) }}
       </template>
@@ -213,6 +250,7 @@ defineExpose({ refresh });
       prop="processName"
       label="工序"
       min-width="180"
+      :width="columnWidth('processName')"
       show-overflow-tooltip
       sortable
       :render-header="sortableHeader"
@@ -223,62 +261,62 @@ defineExpose({ refresh });
         {{ row.processName || '—' }}
       </template>
     </el-table-column>
-    <el-table-column prop="batchNumber" label="批次号" min-width="230" show-overflow-tooltip sortable :render-header="sortableHeader" />
-    <el-table-column prop="sourceBatchNumber" label="来源批次" min-width="210" show-overflow-tooltip sortable :render-header="sortableHeader">
+    <el-table-column prop="batchNumber" label="批次号" min-width="230" :width="columnWidth('batchNumber')" show-overflow-tooltip sortable :render-header="sortableHeader" />
+    <el-table-column prop="sourceBatchNumber" label="来源批次" min-width="210" :width="columnWidth('sourceBatchNumber')" show-overflow-tooltip sortable :render-header="sortableHeader">
       <template #default="{ row }">
         {{ row.sourceBatchNumber || '—' }}
       </template>
     </el-table-column>
-    <el-table-column prop="feedQuantity" label="领用(kg)" width="110" align="right" sortable :render-header="sortableHeader">
+    <el-table-column prop="feedQuantity" label="领用(kg)" :width="columnWidth('feedQuantity')" align="right" sortable :render-header="sortableHeader">
       <template #default="{ row }">
         {{ fmtQty(row.feedQuantity) }}
       </template>
     </el-table-column>
-    <el-table-column prop="sourceConsumedRatio" label="领用占比" width="110" align="right" sortable :render-header="sortableHeader">
+    <el-table-column prop="sourceConsumedRatio" label="领用占比" :width="columnWidth('sourceConsumedRatio')" align="right" sortable :render-header="sortableHeader">
       <template #default="{ row }">
         {{ fmtRate(row.sourceConsumedRatio) }}
       </template>
     </el-table-column>
-    <el-table-column prop="inheritedRawEquivalentQuantity" label="继承原料(kg)" width="132" align="right" sortable :render-header="sortableHeader">
+    <el-table-column prop="inheritedRawEquivalentQuantity" label="继承原料(kg)" :width="columnWidth('inheritedRawEquivalentQuantity')" align="right" sortable :render-header="sortableHeader">
       <template #default="{ row }">
         {{ fmtQty(row.inheritedRawEquivalentQuantity, 2) }}
       </template>
     </el-table-column>
-    <el-table-column prop="produced" label="产出" width="100" align="right" sortable :render-header="sortableHeader">
+    <el-table-column prop="produced" label="产出" :width="columnWidth('produced')" align="right" sortable :render-header="sortableHeader">
       <template #default="{ row }">
         {{ reportingQuantity(row, 'produced') }}
       </template>
     </el-table-column>
-    <el-table-column prop="used" label="已用" width="100" align="right" sortable :render-header="sortableHeader">
+    <el-table-column prop="used" label="已用" :width="columnWidth('used')" align="right" sortable :render-header="sortableHeader">
       <template #default="{ row }">
         {{ reportingQuantity(row, 'used') }}
       </template>
     </el-table-column>
-    <el-table-column prop="remaining" label="剩余" width="100" align="right" sortable :render-header="sortableHeader">
+    <el-table-column prop="remaining" label="剩余" :width="columnWidth('remaining')" align="right" sortable :render-header="sortableHeader">
       <template #default="{ row }">
         <span :style="{ color: (row.remaining ?? 0) <= 0 ? '#f56c6c' : '#67c23a' }">
           {{ reportingQuantity(row, 'remaining') }}
         </span>
       </template>
     </el-table-column>
-    <el-table-column prop="rowTotalCost" label="分摊成本" width="116" align="right" sortable :render-header="sortableHeader">
+    <el-table-column prop="rowTotalCost" label="分摊成本" :width="columnWidth('rowTotalCost')" align="right" sortable :render-header="sortableHeader">
       <template #default="{ row }">
         {{ fmtMoney(row.rowTotalCost) }}
       </template>
     </el-table-column>
-    <el-table-column prop="unitPrice" label="单价(¥)" width="105" align="right" sortable :render-header="sortableHeader">
+    <el-table-column prop="unitPrice" label="单价(¥)" :width="columnWidth('unitPrice')" align="right" sortable :render-header="sortableHeader">
       <template #default="{ row }">
         {{ fmtPrice(reportingUnitPrice(row)) }}
       </template>
     </el-table-column>
-    <el-table-column prop="stepYieldRate" label="对上工序出成" width="132" align="right" sortable :render-header="sortableHeader">
+    <el-table-column prop="stepYieldRate" label="对上工序出成" :width="columnWidth('stepYieldRate')" align="right" sortable :render-header="sortableHeader">
       <template #default="{ row }">
         <span :style="{ color: rateColor(row.stepYieldRate), fontWeight: 'bold' }">
           {{ fmtRate(row.stepYieldRate) }}
         </span>
       </template>
     </el-table-column>
-    <el-table-column prop="cumulativeYieldRate" label="对原料累计" width="122" align="right" sortable :render-header="sortableHeader">
+    <el-table-column prop="cumulativeYieldRate" label="对原料累计" :width="columnWidth('cumulativeYieldRate')" align="right" sortable :render-header="sortableHeader">
       <template #default="{ row }">
         <span :style="{ color: rateColor(row.cumulativeYieldRate) }">
           {{ fmtRate(row.cumulativeYieldRate) }}
@@ -288,7 +326,7 @@ defineExpose({ refresh });
     <el-table-column
       prop="status"
       label="状态"
-      width="100"
+      :width="columnWidth('status')"
       align="center"
       :filters="statusFilters"
       :filter-method="filterStatus"
@@ -318,6 +356,11 @@ defineExpose({ refresh });
   color: var(--el-text-color-secondary, #909399);
   font-size: 12px;
   text-align: right;
+}
+
+.yield-card-reset-widths {
+  margin-left: 8px;
+  vertical-align: baseline;
 }
 
 /*
