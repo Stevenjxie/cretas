@@ -224,7 +224,12 @@ async def test_catalogue_load_reads_names_and_aliases():
             return "SELECT 1"
 
         async def fetch(self, sql, *a):
-            assert "dim_product" in sql and "dim_product_alias" in sql
+            # 主目录与别名**分两条查** —— 别名表并非每个库都有, 合成一条
+            # UNION 时它的 UndefinedTableError 会拖垮整个目录 (2026-07-30
+            # prod 实拍, 见 test_restaurant_catalogue_and_cache_fixes)。
+            assert "dim_product" in sql
+            if "dim_product_alias" in sql:
+                return []
             return [
                 {"name": "米饭", "normalized_name": "米饭"},
                 {"name": "招牌藤椒味", "normalized_name": "招牌藤椒味(单人份)"},

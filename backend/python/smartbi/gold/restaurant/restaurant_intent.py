@@ -2275,10 +2275,25 @@ def _semantic_plan_cache_put(
     factory_id: str,
     query: str,
     parsed: Dict[str, Any],
+    *,
+    spec: Optional["RestaurantQuerySpec"] = None,
 ) -> None:
     """Store the raw planner output. Serialising here both isolates the entry
     from later mutation and proves the plan is JSON -- a plan that cannot be
-    round-tripped is simply not cached."""
+    round-tripped is simply not cached.
+
+    A plan that asks for clarification is never cached. 2026-07-30 prod: a
+    transient planner hiccup compiled "本月全部门店食材损耗成本是多少" into a
+    clarification, which was then replayed from this cache for the full 6h TTL
+    -- zero-token, high-confidence, and wrong every single time (3/3 on retry,
+    so it read exactly like a code regression). A clarification means "this
+    round did not get enough information"; that is the state of ONE attempt,
+    not a stable plan for the sentence. Recomputing it is cheap, so caching it
+    buys nothing and freezes an outage into six hours of deterministic
+    wrong answers.
+    """
+    if spec is not None and spec.clarification_needed:
+        return
     try:
         payload = json.dumps(parsed, ensure_ascii=False, sort_keys=True)
     except (TypeError, ValueError):
@@ -4955,7 +4970,9 @@ async def parse_restaurant_query(
             # spec's date_range is concrete, so replaying it tomorrow would
             # answer today's window. A replay recompiles this same JSON
             # against the day it is served.
-            _semantic_plan_cache_put(factory_id, norm_query, parsed)
+            _semantic_plan_cache_put(
+                factory_id, norm_query, parsed, spec=semantic_spec,
+            )
         if (
             trusted_followup_spec is not None
             and semantic_spec.planner_authority != "llm_contract_incomplete"

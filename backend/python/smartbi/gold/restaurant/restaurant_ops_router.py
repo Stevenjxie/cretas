@@ -1043,19 +1043,29 @@ async def load_dish_catalogue(pool, factory_id: str) -> Optional[frozenset]:
     cached = _DISH_CATALOGUE_CACHE.get(factory_id)
     if cached and now - cached[0] < _DISH_CATALOGUE_TTL_SECONDS:
         return cached[1] or None
+    # dim_product 与别名表**分两条查**, 不能 UNION 在一条 SQL 里:
+    # dim_product_alias 并非每个库都有(prod smartbi_prod_db 实测不存在), 合成
+    # 一条时它的 UndefinedTableError 会让整条查询失败 → 目录返回 None →
+    # 闸静默失效。别名只是锦上添花, 缺了不该拖垮主目录。
     try:
         async with pool.acquire() as conn:
             await conn.execute(
                 "SELECT set_config('app.factory_id', $1, false)", factory_id,
             )
             rows = await conn.fetch(
-                """
-                SELECT name, normalized_name FROM dim_product WHERE factory_id = $1
-                UNION
-                SELECT pos_name, pos_name FROM dim_product_alias WHERE factory_id = $1
-                """,
+                "SELECT name, normalized_name FROM dim_product WHERE factory_id = $1",
                 factory_id,
             )
+            try:
+                rows = list(rows) + list(await conn.fetch(
+                    "SELECT pos_name AS name, pos_name AS normalized_name "
+                    "FROM dim_product_alias WHERE factory_id = $1",
+                    factory_id,
+                ))
+            except Exception:  # noqa: BLE001 - 别名表可选
+                logger.debug(
+                    "[dish-catalogue] alias table unavailable for %s", factory_id,
+                )
     except Exception:  # noqa: BLE001 - 目录不可用绝不能挡住问答
         logger.warning("[dish-catalogue] load failed for %s", factory_id, exc_info=True)
         return None
