@@ -202,6 +202,12 @@ _SAFE_MODELS: Dict[Tuple[str, str], Optional[datetime.date]] = {
     ("tencent", "qwen3.5-flash"): None,
     ("tencent", "kimi-k2.6"): None,
     ("tencent", "minimax-m2.7"): None,
+    # 2026-07-30 实测新增: TokenHub 的 deepseek-v3.2 与 aliyun 同名模型**行为不同**
+    # (aliyun_c 的 confidence 恒 -1.0, TokenHub 的给 0.98) —— 同名不同服务不能互推。
+    # 计费安全: 该账号后付费未开启, 额度耗尽直接 402 拒绝而非计费(实测 v4-pro/
+    # v4-flash 均返回 401008 "free trial quota exhausted ... postpaid not enabled"),
+    # 与本表 tencent 段「用完即停 safe」的前提一致。
+    ("tencent", "deepseek-v3.2"): None,
     # ── zhipu (uUgu) — model-specific GLM pool, 用完即停 safe (None).
     ("zhipu", "glm-4.5-air"): None,
     ("zhipu", "glm-4.6v"): None,  # VL
@@ -611,6 +617,16 @@ _TEXT_TAIL: List[Tuple[str, str]] = [
     ("aliyun_c", "deepseek-v3.1"), ("aliyun_c", "qwen3.7-max-2026-06-08"),
     ("aliyun_c", "glm-5.2"),
     # non-DashScope floor (independent of aliyun expiries)
+    # non-DashScope floor 的**实际可用**入口 (2026-07-30 逐模型实测):
+    #   minimax-m2.7     ✅ conf 0.95-0.97, 传不传 temperature 都行
+    #   deepseek-v3.2    ✅ conf 0.98 (需 temperature=0; 不传时输出非合法 JSON)
+    #   kimi-k2.6        ❌ temperature=0 → 400 "only 1 is allowed"; 不传 temp 则
+    #                       输出非合法 JSON —— 两条路都不通, 留着仅供无 JSON 契约
+    #                       的槽位(CHAT/INSIGHTS)兜底, 不再排在前面
+    #   qwen3.5-flash    ❌ 402 额度耗尽
+    # 此前这一段三个条目**全部不可用**, 也就是说 _TEXT_TAIL 声称的
+    # 「independent of aliyun expiries」地板实际是空的。
+    ("tencent", "minimax-m2.7"), ("tencent", "deepseek-v3.2"),
     ("tencent", "qwen3.5-flash"), ("tencent", "kimi-k2.6"), ("zhipu", "glm-4.5-air"),
 ]
 
