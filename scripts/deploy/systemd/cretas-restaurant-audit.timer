@@ -1,0 +1,22 @@
+[Unit]
+Description=每日触发餐饮 AI 能力审计 (04:10 CST)
+Documentation=https://github.com/Stevenjxie/cretas/blob/main/scripts/audit/restaurant_capability_audit.py
+
+[Timer]
+# 04:10 CST — 时点是**挑过**的, 不是随手填:
+#   * 排在 03:30 的 cretas-gold-etl-refresh **之后** —— 审计读 Gold, 跑在物化
+#     之前会把「数据还没算」误判成「AI 答不出来」。
+#   * 排在**上午**而不是下午 —— 2026-07-30 实测阿里云 Max/Plus 免费额度
+#     每天下午必然 403 耗尽; 那时跑, 审计会一路落到兜底链, 量到的是兜底质量
+#     而不是主链质量, 而且每天都在烧本就紧张的额度。
+#   * 避开 02:00(周日 corpus_refresh + Java 批同步)。
+OnCalendar=*-*-* 04:10:00
+
+# 服务器如果跨过了这个时点才启动, 开机后补跑一次。
+Persistent=true
+
+# 与其它定时任务错开, 别在整点齐发。
+RandomizedDelaySec=300
+
+[Install]
+WantedBy=timers.target
