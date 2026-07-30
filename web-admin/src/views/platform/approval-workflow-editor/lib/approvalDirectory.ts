@@ -2,6 +2,7 @@ import type {
   ApprovalRoleDirectoryItem,
   ApprovalUserDirectoryItem,
 } from '@/api/approvalWorkflow'
+import { ROLE_LABELS } from '@/utils/enumDisplay'
 
 export interface DirectoryOption {
   value: string
@@ -10,32 +11,13 @@ export interface DirectoryOption {
   description?: string
 }
 
-const FALLBACK_ROLE_LABELS: Record<string, string> = {
-  platform_admin: '平台管理员',
-  factory_super_admin: '工厂总管理员',
-  factory_admin: '工厂管理员',
-  permission_admin: '权限管理员',
-  department_admin: '部门管理员',
-  procurement_manager: '采购主管',
-  sales_manager: '销售主管',
-  production_manager: '生产主管',
-  dispatcher: '生产调度员',
-  workshop_supervisor: '车间主管',
-  quality_manager: '质量主管',
-  quality_inspector: '质检员',
-  warehouse_manager: '仓储主管',
-  warehouse_worker: '仓管员',
-  finance_manager: '财务主管',
-  hr_admin: '人事管理员',
-  restaurant_manager: '餐厅经理',
-  team_leader: '班组长',
-  group_leader: '组长',
-  operator: '操作员',
-  viewer: '只读人员',
-}
-
 export function friendlyRoleLabel(roleCode: string): string {
-  return FALLBACK_ROLE_LABELS[roleCode] ?? '历史审批角色'
+  // 角色中文的单一来源是 utils/enumDisplay 的 ROLE_LABELS —— 这里原本自带一份 21 条的
+  // 副本, 而仓库里另有 3 份写法不同的角色表 (`warehouse_worker` 有「仓库工人」/「仓库员」/
+  // 「仓管员」三种)。共享表直接沿用了本文件的措辞, 所以此处渲染结果不变。
+  // 未登记的码仍返回「历史审批角色」—— 这是本页特有语义 (保留只为读旧配置), 不能退到
+  // enumLabel 的「未知状态（…）」。
+  return ROLE_LABELS[roleCode] ?? '历史审批角色'
 }
 
 export function buildRoleOptions(
