@@ -19,11 +19,16 @@ GitHub
 | 位置 | 文件 | 作用 |
 |---|---|---|
 | Windows | `Publish-GitHubArtifactViaLightsailOss.ps1` | 编排器。只发控制命令 |
-| 东京 Lightsail | `/usr/local/sbin/github-cache-put` | release asset → 缓存（已存在，本次未改） |
+| 东京 Lightsail | `/usr/local/sbin/github-cache-put` | release asset → 缓存（源码在 `lightsail/`） |
+| 东京 Lightsail | `/usr/local/sbin/github-cache-clean` | 缓存 LRU 驱逐，20G 上限降到 18G（源码在 `lightsail/`） |
+| 东京 Lightsail | `/usr/local/sbin/github-artifact-cache-rollback` | 缓存设施回滚（源码在 `lightsail/`） |
 | 东京 Lightsail | `/usr/local/sbin/github-artifact-stage` | CI artifact(zip) → 解包 → 缓存（源码在 `lightsail/`） |
 | 东京 Lightsail | `/usr/local/sbin/oss-put-artifact` | 缓存 → OSS（源码在 `lightsail/`） |
 | 上海 ECS | `/usr/local/sbin/oss-sign-put.py` | 生成短时 PUT 签名（源码在 `ecs/`） |
 | 上海 ECS | `/usr/local/sbin/oss-verify-artifact.sh` | 内网回拉 + 重算哈希（源码在 `ecs/`） |
+
+后三个东京脚本在 2026-07-30 之前**从未纳入版本管理** —— 服务器上跑着，仓库里没有。
+现已取回（按服务器原始字节，非重写）。`check-server-script-drift.sh` 就是防这件事复发的。
 
 ## 两种制品源
 
@@ -39,7 +44,28 @@ CI artifact 走 `github-artifact-stage`：下载 zip → 校验 zip size → **�
 **一次下载完成**。仓库外的 `fetch-ci-artifact.sh` 是"先下一次探测哈希、再下一次存储"，
 168MB 下两遍；这里不这么做。
 
-服务器上的三个脚本是 `root:root 0750`，从本目录安装，改动前自动做 UTC 时间戳备份。
+服务器上这些脚本是 `root:root 0750`，从本目录安装，改动前自动做 UTC 时间戳备份
+（`<name>.bak.<UTC时间戳>`，ECS 上现有 5 个）。
+
+### 漂移检查（改完服务器脚本必跑）
+
+```bash
+./scripts/deploy/check-server-script-drift.sh          # 全量
+./scripts/deploy/check-server-script-drift.sh --diff   # DRIFTED 时看具体差异
+```
+
+对比服务器**实际安装**的版本与仓库版本，输出 `MATCH` / `DRIFTED` / `MISSING_IN_REPO` /
+`MISSING_ON_SERVER` / `UNREADABLE`。退出码 `0`=一致，`1`=有不一致，`2`=**查不出来**
+（ssh/sudo 失败等）—— 后两者刻意分开：「查不出来」既不等于一致也不等于漂移。
+
+⚠️ **服务器更严格时以服务器为准**：`DRIFTED` 的修法通常是把服务器加固取回仓库，而不是
+用仓库版本覆盖服务器。2026-07-30 就栽过一次 —— 有人在 ECS 上加固了
+`oss-verify-artifact.sh` 的信任模型却从未提交，另一个 session 基于仓库版本改完装上去，
+把 `deployable_trust_verified` 改回了 `true`，等于重新装回一个漏洞，而跑出来的那个
+`true` 还被当成「链路打通」的证据。
+
+它要两台跨境 ssh，**不挂在发布热路径上**，不省任何部署时间。它省的是"文档描述的机制
+与实际运行的机制脱节，而且没有任何东西在检查这种脱节"。
 
 ## 用法
 
