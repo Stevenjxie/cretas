@@ -1,0 +1,140 @@
+name: Web dist artifact (push)
+
+# 在 web-admin 落地时就把可发布的 dist 产出来, 让发布窗口不必再等一次 vite build。
+#
+# 为什么单独一个 workflow 而不是塞进 ci.yml: `on.push.paths` 是 workflow 级的。往 ci.yml 的
+# paths 里加 web-admin/** 会让 java-build-test 也被纯前端改动触发, 白跑 4~5 分钟的 Java 构建
+# (它的 if 是 `github.event_name == 'push' || ...`)。分开就没有这个耦合。
+#
+# 产出的 tar.gz + manifest 与 scripts/deploy/release-web-manifest.sh 的 web_release_write
+# 【逐字段同格式】, 这样客户端取回后可以直接放进 ~/.cache/cretas/web-admin-deploy/by-tree/<tree>/,
+# 由 web_release_build_reusable 命中(实测命中 2s, 本地真实构建 86s)。
+#
+# ⚠️ 字段格式改动必须两边同步: release-web-manifest.sh 的 web_release_validate 会逐项校验,
+# 少一个字段或格式不符会在【部署阶段】失败, 离原因很远。
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+      - 'codex/**'
+    paths:
+      - 'web-admin/**'
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  web-dist:
+    runs-on: ubuntu-latest
+
+    # attestations/id-token 是签 provenance 所必需的; 其余最小。
+    # 显式声明会【替换】仓库默认权限, 所以列全: 只有 checkout 需要 contents:read,
+    # upload-artifact 走 ACTIONS_RUNTIME_TOKEN 不吃 GITHUB_TOKEN 权限。
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: web-admin/package-lock.json
+
+      - name: Install dependencies
+        working-directory: web-admin
+        run: npm ci --legacy-peer-deps --no-audit --no-fund
+
+      - name: Build
+        working-directory: web-admin
+        run: npm run build
+
+      # 与 web_release_write 完全一致的打包与字段。刻意不复用那个 shell 函数: 它同时要做
+      # 本地缓存目录的 staging/promote, 在 CI 里没有意义, 硬套反而要传一堆无用路径。
+      # 代价是两边必须同步 —— 上面文件头那条警告就是为此。
+      - name: Package dist exactly like web_release_write
+        id: pack
+        working-directory: web-admin
+        run: |
+          set -euo pipefail
+          test -s dist/index.html
+          test -d dist/assets
+
+          archive=release-web-dist.tar.gz
+          tar czf "$archive" -C dist .
+
+          # 打完立刻自检: gzip 完整 + index.html 在 + 至少一个 asset + index 引用的资源都在包里。
+          # 不自检的话, 一个坏包会一路送到发布方手里才暴露。
+          gzip -t "$archive"
+          tar -tzf "$archive" | grep -Eq '^(\./)?index\.html$'
+          asset_count=$(find dist/assets -type f | wc -l | tr -d ' ')
+          test "$asset_count" -gt 0
+
+          archive_sha=$(sha256sum "$archive" | awk '{print tolower($1)}')
+          index_sha=$(sha256sum dist/index.html | awk '{print tolower($1)}')
+          lock_sha=$(sha256sum package-lock.json | awk '{print tolower($1)}')
+          web_tree=$(git -C "$GITHUB_WORKSPACE" rev-parse "HEAD:web-admin")
+
+          {
+            echo "format=cretas-release-web-manifest-v2"
+            echo "success=true"
+            echo "build_commit=$GITHUB_SHA"
+            echo "web_tree=$web_tree"
+            echo "archive_path=$archive"
+            echo "archive_sha256=$archive_sha"
+            echo "index_sha256=$index_sha"
+            echo "asset_count=$asset_count"
+            echo "package_lock_sha256=$lock_sha"
+            echo "node_version=$(node --version)"
+            echo "npm_version=$(npm --version)"
+            echo "build_command=npm run build"
+          } > release-web.manifest
+
+          echo "web_tree=$web_tree" >> "$GITHUB_OUTPUT"
+          echo "archive_sha=$archive_sha" >> "$GITHUB_OUTPUT"
+          echo "--- manifest ---"
+          cat release-web.manifest
+          ls -l "$archive"
+
+      # provenance。与 JAR 同一个理由: manifest 和 archive 装在同一个包里, 任何能造出这个包的
+      # 人都能自己写一份"这是从哪棵树构建的"。签名让 vouching 权落到「那个 commit 上的
+      # workflow 定义」, 传输路径上没有一方能伪造。
+      #
+      # subject 是 tar.gz 而不是 dist 目录: tar.gz 才是最终被搬运和校验的那个字节序列。
+      - name: Attest dist archive provenance
+        id: attest
+        uses: actions/attest-build-provenance@v4
+        with:
+          subject-path: web-admin/release-web-dist.tar.gz
+
+      # bundle 已签名, 可安全走任何不可信通路 —— 放进制品一起下发, 取回方就不必额外访问 GitHub。
+      # ⚠️ trusted root 绝不随制品下发(那是把验证者和被验证者装同一个包)。
+      - name: Ship attestation bundle with the artifact
+        working-directory: web-admin
+        env:
+          BUNDLE_PATH: ${{ steps.attest.outputs.bundle-path }}
+        run: |
+          set -euo pipefail
+          test -n "$BUNDLE_PATH"
+          test -s "$BUNDLE_PATH"
+          cp -- "$BUNDLE_PATH" release-web-dist.attestation.jsonl
+          echo "attestation bundle bytes: $(stat -c %s release-web-dist.attestation.jsonl)"
+
+      - name: Upload web dist artifact
+        uses: actions/upload-artifact@v4
+        with:
+          # 名字带 commit, 取回方靠它 + workflow_run.head_sha 双向核对
+          name: cretas-web-${{ github.sha }}
+          path: |
+            web-admin/release-web-dist.tar.gz
+            web-admin/release-web.manifest
+            web-admin/release-web-dist.attestation.jsonl
+          if-no-files-found: error
+          # tar.gz 已经是压缩的, 再压一遍纯浪费 CPU
+          compression-level: 0
+          retention-days: 3

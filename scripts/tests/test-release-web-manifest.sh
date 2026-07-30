@@ -231,4 +231,41 @@ deps_line=$(printf '%s\n' "$BUILD_FN" | grep -n 'web_release_ensure_dependencies
 grep -Fq 'CRETAS_RELEASE_FORCE_WEB_BUILD' "$MANIFEST_HELPER" \
     || fail "missing CRETAS_RELEASE_FORCE_WEB_BUILD escape hatch"
 
-echo "PASS: Web archive manifest validates provenance, same-tree squash reuse, build-time reuse, one-file hash, clean state, and archive integrity"
+# ---- CI 产出的 manifest 必须与 web_release_write 逐字段同格式 ----
+# CI (.github/workflows/web-dist.yml) 自己写 manifest 而不复用这个 shell 函数(那个函数还要做
+# 本地缓存的 staging/promote, 在 CI 里没有意义)。代价是两边会漂 —— 而漂的后果是取回的 archive
+# 在【部署阶段】被 web_release_validate 拒掉, 离原因很远。这条断言就是那道闸。
+WEB_WORKFLOW="$ROOT_DIR/.github/workflows/web-dist.yml"
+if [ -f "$WEB_WORKFLOW" ]; then
+    # shell 侧: web_release_write 里 printf 'xxx=%s\n' / printf 'xxx=true\n' 的字段名
+    shell_fields=$(awk '/^web_release_write\(\) \{/,/^\}/' "$MANIFEST_HELPER" \
+        | grep -oE "printf '[a-z_]+=" | sed "s/printf '//; s/=$//" | LC_ALL=C sort -u)
+    # CI 侧: echo "xxx=..." 的字段名 (只取 manifest 那一段, 别把 GITHUB_OUTPUT 的算进来)
+    ci_fields=$(awk '/> release-web\.manifest/{exit} /echo "format=/{inside=1} inside' "$WEB_WORKFLOW" \
+        | grep -oE 'echo "[a-z_]+=' | sed 's/echo "//; s/=$//' | LC_ALL=C sort -u)
+    [ -n "$shell_fields" ] || fail "could not extract manifest fields from web_release_write"
+    [ -n "$ci_fields" ] || fail "could not extract manifest fields from web-dist.yml"
+    if [ "$shell_fields" != "$ci_fields" ]; then
+        echo "shell-only:" >&2; comm -23 <(printf '%s\n' "$shell_fields") <(printf '%s\n' "$ci_fields") >&2
+        echo "ci-only:" >&2;    comm -13 <(printf '%s\n' "$shell_fields") <(printf '%s\n' "$ci_fields") >&2
+        fail "CI manifest fields drifted from web_release_write"
+    fi
+    # 打包方式也必须一致: web_release_validate 要求 index.html 在 ./ 或 顶层
+    grep -Fq 'tar czf "$archive" -C dist .' "$WEB_WORKFLOW" \
+        || fail "CI does not tar the dist the same way web_release_write does"
+    # CI 侧必须自检包(不然坏包一路送到发布方手里才暴露)
+    grep -Fq 'gzip -t "$archive"' "$WEB_WORKFLOW" \
+        || fail "CI does not self-check the archive it produces"
+    # 必须签 provenance, 且 subject 是 tar.gz 而不是目录
+    grep -Fq 'attest-build-provenance' "$WEB_WORKFLOW" \
+        || fail "CI web dist is not attested"
+    grep -Fq 'subject-path: web-admin/release-web-dist.tar.gz' "$WEB_WORKFLOW" \
+        || fail "attestation subject must be the tar.gz that actually gets carried"
+    # 不能把 web-admin 加进 ci.yml 的 push paths —— 那会让 java-build-test 被纯前端改动触发
+    CI_WORKFLOW="$ROOT_DIR/.github/workflows/ci.yml"
+    if [ -f "$CI_WORKFLOW" ] && grep -qE "^\s+- 'web-admin/\*\*'" "$CI_WORKFLOW"; then
+        fail "web-admin was added to ci.yml push paths; that triggers a pointless Java build"
+    fi
+fi
+
+echo "PASS: Web archive manifest validates provenance, same-tree squash reuse, build-time reuse, CI manifest parity, one-file hash, clean state, and archive integrity"
