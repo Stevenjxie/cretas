@@ -30,6 +30,7 @@ import ProcessOutputTable from './ProcessOutputTable.vue';
 import type { MultiOutputLine, OutputLineView } from './processSheetOutputs';
 import { boxAvailableKg, isCountUnit, countUnitFeedWarning, countUnitLabelSuffix } from '@/utils/feedUnitConversion';
 import {
+  convertQuantityToUnit,
   displayProcessUnit,
   formatFeedPlaceholder,
   formatProcessOutput,
@@ -433,6 +434,107 @@ function rawBatchAvailable(batch: RawMaterialBatchOption): number {
   return Number(batch.currentQuantity ?? batch.quantity ?? 0) || 0;
 }
 
+type InputPortRef = {
+  workflowPortId?: string | null;
+  materialTypeId?: string | null;
+  unit?: string | null;
+};
+
+type InputStock = {
+  /** 端口单位口径下可直接比较的可用量 (仅含单位字面相同、或质量可换算的批次)。 */
+  available: number;
+  /** 端口单位 (原始值; 展示前走 displayProcessUnit)。 */
+  unit: string;
+  /** 同物料但单位无法确定性换算的批次, 按单位汇总 —— 披露, 不计入 available。 */
+  incomparable: Array<{ unit: string; quantity: number }>;
+};
+
+/**
+ * 该投入端口在可领用仓里的可用量。rawBatchOptions 已按 consumableWarehouseIds
+ * (原料仓/物流仓 + 生产仓) 过滤, 这里按物料类型 + **端口单位口径**汇总。
+ *
+ * 客户 2026-07-30: 填完点「正式报工」才被告知「需要 1只, 可用 0只, 缺少 1只」——
+ * 防呆 Rule 1 要求「预先显示边界, 不要事后报错」, 所以把可用量摆进录入行。
+ *
+ * 🔴 刻意不把不同单位的批次数量直接相加: 单位换算只对质量单位成立 (#1976 —— 计数/包装
+ * 单位按字面比较, 一只 ≠ 一件), 相加会得出一个偏大且看着权威的可用量, 恰好是「界面有货、
+ * 报工说可用 0」那一类错。换不了的批次单独披露, 让 available 只往保守方向偏。
+ */
+function inputStock(item: InputPortRef): InputStock {
+  const targetId = item.materialTypeId
+    || portById(item.workflowPortId ?? undefined)?.skuId
+    || null;
+  const unit = item.unit ?? '';
+  if (!targetId || !unit) return { available: 0, unit, incomparable: [] };
+
+  let available = 0;
+  const others = new Map<string, number>();
+  for (const batch of rawBatchOptions.value) {
+    if (batch.materialTypeId !== targetId) continue;
+    const qty = rawBatchAvailable(batch);
+    if (!(qty > 0)) continue;
+    // 两侧走同一套显示归一后再比较。item.unit 来自 workflowPortDisplayUnit(port), **已经**是
+    // 显示形式 (pcs → 件); 若拿批次的原始 quantityUnit 去字面比, 同一个单位会被判成「不同」,
+    // 显示出「可用 0件 · 另有 12件 未计入」这种自相矛盾的文案。
+    // 归一只到显示层为止: 「只」不在别名表里, 仍不会和「件」合并 (#1976 一只≠一件)。
+    const rawUnit = batch.quantityUnit || batch.unit || '';
+    const batchUnit = displayProcessUnit(rawUnit) || rawUnit;
+    const converted = convertQuantityToUnit(qty, batchUnit, unit);
+    if (converted != null) {
+      available += converted;
+    } else {
+      const label = batchUnit || '单位未填';
+      others.set(label, (others.get(label) ?? 0) + qty);
+    }
+  }
+  return {
+    available,
+    unit,
+    incomparable: [...others].map(([u, quantity]) => ({ unit: u, quantity })),
+  };
+}
+
+/** 去掉浮点换算带来的尾随 0 (500g→0.5kg 不要显示 0.500000)。 */
+function fmtStockQty(value: number): string {
+  return String(Number(value.toFixed(6)));
+}
+
+/**
+ * 录入行上的「可用 X 单位」文案; 有换不了的批次时一并披露, 不假装数字是全量。
+ *
+ * rawBatchOptions 是异步加载的 (初值 []), 加载期间必须什么都不显示 —— 否则首帧会闪一下
+ * 「可用 0只」, 而那正是这次要消除的误导信息。
+ */
+function inputStockText(item: InputPortRef): string {
+  if (rawBatchLoading.value) return '';
+  const stock = inputStock(item);
+  if (!stock.unit) return '';
+  let text = `可用 ${fmtStockQty(stock.available)}${displayProcessUnit(stock.unit)}`;
+  if (stock.incomparable.length) {
+    const detail = stock.incomparable
+      .map((o) => `${fmtStockQty(o.quantity)}${o.unit}`)
+      .join(' / ');
+    text += ` · 另有 ${detail} 单位不同, 未计入`;
+  }
+  return text;
+}
+
+/**
+ * 已填投料量是否确定超出可用量。
+ *
+ * 只有在**没有**无法换算的同物料批次时才敢下判定 —— 否则 available 是个下限, 拿它拦截
+ * 就是假阳性 (本文件历史上已因缓存过期造成过一次假阳性拦截, 见 refreshSharedInventories
+ * 上方注释)。这一路只提示不拦, 最终仍由后端 fail-closed 兜底。
+ */
+function inputExceedsAvailable(item: InputPortRef & { quantity?: number | null; selected?: boolean }): boolean {
+  if (!item.selected || rawBatchLoading.value) return false;
+  const need = Number(item.quantity ?? 0);
+  if (!(need > 0)) return false;
+  const stock = inputStock(item);
+  if (!stock.unit || stock.incomparable.length) return false;
+  return need > stock.available;
+}
+
 function rawBatchLabel(batch: RawMaterialBatchOption): string {
   const name = batch.materialName || batch.materialTypeName || '原料';
   const qty = rawBatchAvailable(batch);
@@ -593,6 +695,7 @@ function materialOptionsForPort(portId?: string): Array<{ value: string; label: 
     }];
   });
 }
+
 
 function selectMaterialForInput(item: MaterialInputTotalLine, materialTypeId: string): void {
   const option = materialOptionsForPort(item.workflowPortId)
@@ -1717,6 +1820,19 @@ function rowCompletenessReason(row: SheetRow): string | null {
     if (usesAutoMaterialTotals(row)) {
       const missing = row.materialInputTotals.find((item) => item.selected && (item.quantity == null || item.quantity <= 0));
       if (missing) return `请填写「${missing.materialName}」的投料总量`;
+      // ⚠️ 超领**刻意只提示不阻断** —— 提示在录入行 (inputStockText, 超出时标红), 不进本函数。
+      //
+      // 防呆 Rule 1 的核心是「预先显示边界」, 这一点由录入行的「可用 X 单位」满足: 客户不会再
+      // 像 2026-07-30 那样填完点「正式报工」才被后端告知「需要 1只, 可用 0只」。
+      //
+      // 但不能升级成 disable 保存, 因为 rawBatchOptions 为空**不等于**真的没货:
+      //   · ensureConsumableWarehouseIds() 取不到仓库列表时 loadRawBatches 直接置 [] 并 return;
+      //   · workflow 模式还按 wfRawTypeIds 客户端过滤 (raw-centric「影子锚点」那套), skuId
+      //     对不上就整批过滤空。
+      // 任一情况下硬闸会让报工**彻底提交不了**, 对仓管员来说比「后端告诉你缺料」更糟 —— 而且
+      // 本文件已因缓存过期造成过一次假阳性拦截 (见 refreshSharedInventories 上方注释)。
+      // 与 finishedInputOverAvailableHint (成品工序投入量) 同口径: Steve 拍板「以实填为准,
+      // 账实差异由盘点纠正」。最终仍由后端 fail-closed (ProductionStockShortageException) 兜底。
     } else {
       if (!row.rawBatchId) return '请选择原料批次';
       if (row.rawBatchQty == null) return '请填写出库重量';
@@ -2914,23 +3030,12 @@ defineExpose({ hasUnsavedRows, refreshSharedInventories });
                     />
                   </span>
                   <span class="sp-in-cell">
-                    <el-select
-                      :model-value="item.materialTypeId"
-                      :disabled="!item.selected"
-                      data-testid="bom-authorized-material-select"
-                      aria-label="选择本次实际投入物料"
-                      placeholder="选择主料或替代料…"
-                      style="width:100%"
-                      size="small"
-                      @change="(materialTypeId: string) => selectMaterialForInput(item, materialTypeId)"
-                    >
-                      <el-option
-                        v-for="option in materialOptionsForPort(item.workflowPortId)"
-                        :key="option.value"
-                        :label="option.label"
-                        :value="option.value"
-                      />
-                    </el-select>
+                    <!-- 品名直接显示, 不给下拉: 主料/替代料的取舍由左侧「选用」勾选决定,
+                         每个候选各占一行 —— 再套一层下拉是重复操作
+                         (客户 2026-07-30:「都选用了 本次投入原料就不用下拉了」「替代料就是选用的」)。 -->
+                    <span data-testid="bom-authorized-material-fixed" class="sp-fixed-material">
+                      {{ item.materialName || item.materialTypeId }}
+                    </span>
                     <!-- 端口有替代关系时才说明选法; 没得选时这行字和 * 是重复的 -->
                     <span
                       v-if="showPortSelector(portById(item.workflowPortId))"
@@ -2950,6 +3055,14 @@ defineExpose({ hasUnsavedRows, refreshSharedInventories });
                       />
                       <span data-testid="input-unit-readonly" class="sp-fixed-unit">{{ displayProcessUnit(item.unit) }}</span>
                     </span>
+                    <!-- 防呆 Rule 1: 可用量摆在录入行, 不让用户填完点「正式报工」才被告知「可用 0」。
+                         表格模板有同一块, 改动需同步 (该文件历史上出现过两套模板漂移)。 -->
+                    <span
+                      v-if="inputStockText(item)"
+                      data-testid="input-available-stock"
+                      class="sp-in-stock"
+                      :class="{ 'sp-in-stock-over': inputExceedsAvailable(item) }"
+                    >{{ inputStockText(item) }}</span>
                   </span>
                   <span class="sp-in-cell sp-in-note">来源批次由系统按生产库入库顺序自动分摊</span>
                 </div>
@@ -3563,23 +3676,10 @@ defineExpose({ hasUnsavedRows, refreshSharedInventories });
                 <template v-if="usesAutoMaterialTotals(row)">
                   <td class="sp-td">
                     <div v-for="item in row.materialInputTotals" :key="item.workflowPortId || item.materialTypeId">
-                      <el-select
-                        :model-value="item.materialTypeId"
-                        :disabled="!item.selected"
-                        data-testid="bom-authorized-material-select"
-                        aria-label="选择本次实际投入物料"
-                        placeholder="选择主料或替代料…"
-                        style="width:180px"
-                        size="small"
-                        @change="(materialTypeId: string) => selectMaterialForInput(item, materialTypeId)"
-                      >
-                        <el-option
-                          v-for="option in materialOptionsForPort(item.workflowPortId)"
-                          :key="option.value"
-                          :label="option.label"
-                          :value="option.value"
-                        />
-                      </el-select>
+                      <!-- 卡片模板有同一块, 改动需同步 (该文件历史上出现过两套模板漂移)。 -->
+                      <span data-testid="bom-authorized-material-fixed" class="sp-fixed-material">
+                        {{ item.materialName || item.materialTypeId }}
+                      </span>
                     </div>
                   </td>
                   <td class="sp-td sp-td-num">
@@ -3607,6 +3707,13 @@ defineExpose({ hasUnsavedRows, refreshSharedInventories });
                         size="small"
                       />
                       <span data-testid="input-unit-readonly" class="sp-fixed-unit">{{ displayProcessUnit(item.unit) }}</span>
+                      <!-- 防呆 Rule 1 — 卡片模板有同一块, 改动需同步。 -->
+                      <span
+                        v-if="inputStockText(item)"
+                        data-testid="input-available-stock"
+                        class="sp-in-stock"
+                        :class="{ 'sp-in-stock-over': inputExceedsAvailable(item) }"
+                      >{{ inputStockText(item) }}</span>
                     </div>
                   </td>
                 </template>
@@ -4732,6 +4839,9 @@ defineExpose({ hasUnsavedRows, refreshSharedInventories });
 }
 .sp-in-cell :deep(.el-select) { min-width: 0; }
 .sp-in-note { color: #909399; font-size: 11px; }
+/* 投入行的可用量提示 (防呆 Rule 1, 2026-07-30) */
+.sp-in-stock { color: var(--el-text-color-secondary); font-size: 11px; white-space: nowrap; }
+.sp-in-stock-over { color: var(--el-color-danger); font-weight: 600; }
 .sp-required { margin-right: 2px; color: var(--el-color-danger); font-style: normal; font-weight: 700; }
 .sp-inline-input {
   display: flex;
@@ -4820,6 +4930,8 @@ defineExpose({ hasUnsavedRows, refreshSharedInventories });
   color: var(--el-text-color-regular);
 }
 .sp-spec-suffix { font-size: 13px; color: var(--el-text-color-secondary); }
+/* 无替代料时物料名以文本呈现, 视觉重量对齐同列的 el-select (2026-07-30) */
+.sp-fixed-material { display: inline-block; padding: 1px 0; font-weight: 600; line-height: 1.5; }
 /* 成品工序手填投入量 (2026-07-30) */
 .sp-inline-input-kg { display: flex; align-items: center; gap: 4px; margin-top: 4px; }
 .sp-inline-input-label { font-size: 12px; color: var(--el-text-color-secondary); white-space: nowrap; }
