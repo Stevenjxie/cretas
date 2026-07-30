@@ -512,17 +512,20 @@ function fmtStockQty(value: number): string {
  * 「可用 0只」, 而那正是这次要消除的误导信息。
  */
 function inputStockText(item: InputPortRef): string {
-  if (rawBatchLoading.value) return '';
-  const stock = inputStock(item);
-  if (!stock.unit) return '';
-  let text = `可用 ${fmtStockQty(stock.available)}${displayProcessUnit(stock.unit)}`;
-  if (stock.incomparable.length) {
-    const detail = stock.incomparable
-      .map((o) => `${fmtStockQty(o.quantity)}${o.unit}`)
-      .join(' / ');
-    text += ` · 另有 ${detail} 单位不同, 未计入`;
-  }
-  return text;
+  // 🔴 2026-07-31 撤下: 这里原本显示前端自算的「可用 X」, 客户实测与后端打架 ——
+  // 行内显示「可用 10kg」而提交时后端说「需要 1kg, 可用 0kg」。
+  //
+  // 不是参数调错, 是**前端结构上算不出这个数**。后端 ProductionStockAllocationServiceImpl.plan()
+  // 的可投量口径含三样前端拿不到的东西:
+  //   1. warehouseResolver.resolveWorkshopId() —— 只认那**一个**生产仓, 而前端汇总的是
+  //      原料仓 + 物流仓 + 生产仓 (pickConsumableWarehouseIds);
+  //   2. allocationRepository.sumPendingQuantityByMaterialBatchId() —— 扣掉**其它草稿行已占用**的量;
+  //   3. ProductionInventoryOwnershipGuard —— 客供料/归属别的订单的批次在仓里但本计划不能用。
+  //
+  // 少任何一样, 前端算出来的都是个偏大且看着权威的数 —— 比不显示更糟, 仓管员会照着它排活。
+  // 正解是后端出只读接口复用同一段代码, 前端只显示 (进行中)。在那之前**宁可不显示**。
+  void item;
+  return '';
 }
 
 /**
@@ -533,12 +536,10 @@ function inputStockText(item: InputPortRef): string {
  * 上方注释)。这一路只提示不拦, 最终仍由后端 fail-closed 兜底。
  */
 function inputExceedsAvailable(item: InputPortRef & { quantity?: number | null; selected?: boolean }): boolean {
-  if (!item.selected || rawBatchLoading.value) return false;
-  const need = Number(item.quantity ?? 0);
-  if (!(need > 0)) return false;
-  const stock = inputStock(item);
-  if (!stock.unit || stock.incomparable.length) return false;
-  return need > stock.available;
+  // 与 inputStockText 一并撤下 (2026-07-31): 判据来自同一个算错的可用量, 标红也是错的。
+  // 前端标红「超出」而后端其实还够 (或反过来), 只会让人更不知道该信谁。
+  void item;
+  return false;
 }
 
 function rawBatchLabel(batch: RawMaterialBatchOption): string {

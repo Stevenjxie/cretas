@@ -5,72 +5,55 @@ import { describe, expect, it } from 'vitest';
 const source = readFileSync(resolve(__dirname, '..', 'ProcessDataTable.vue'), 'utf8');
 
 /**
- * 客户 2026-07-30 反馈 (刘山门 / F006 报工):
- *  - 「生产仓有货, 报工却说可用 0只」—— 填完点「正式报工」才被后端告知
- *    「需要 1只, 可用 0只, 缺少 1只」(ProductionStockShortageException)
- *  - 「都选用了, 本次投入原料就不用下拉了」「替代料就是选用的」
+ * 投入行的「可用库存」提示 —— **前端自算的那一版已于 2026-07-31 撤下**。
  *
- * 原料投入端口原本**完全没有**库存边界: upstreamWarning() 只覆盖 isSingleSource /
- * isMultiSource, rowCompletenessReason 在 usesAutoMaterialTotals 分支只检查「填了没」。
- * 防呆 Rule 1 要求预先显示边界, 所以把可用量摆进录入行并在超领时拦住保存。
+ * 起因: 客户 2026-07-30 反馈「填完点正式报工才被告知可用 0只」, 于是加了行内可用量提示。
+ * 2026-07-31 客户实测发现它**与后端打架**: 行内显示「可用 10kg」, 提交时后端说
+ * 「需要 1kg, 可用 0kg, 缺少 1kg」。
+ *
+ * 🔴 根因不是参数调错, 是**前端结构上算不出这个数**。后端
+ * `ProductionStockAllocationServiceImpl.plan()` 的可投量口径含三样前端拿不到的东西:
+ *
+ *   1. `warehouseResolver.resolveWorkshopId()` —— 只认那**一个**生产仓;
+ *      前端 `pickConsumableWarehouseIds` 汇总的是原料仓 + 物流仓 + 生产仓。
+ *   2. `allocationRepository.sumPendingQuantityByMaterialBatchId()` —— 扣掉**其它草稿行
+ *      已占用**的量; 前端完全没有这个概念。
+ *   3. `ProductionInventoryOwnershipGuard` —— 客供料 / 归属别的订单的批次在仓里,
+ *      但本计划不能用。
+ *
+ * 少任何一样, 算出来的都是个**偏大且看着权威**的数 —— 比不显示更糟, 仓管员会照着它排活。
+ *
+ * 所以这组测试现在守的不是「显示得对」, 而是**「不许再让前端自己算这个数」**。
+ * 正解是后端出只读接口复用同一段代码, 前端只负责显示。
  */
-describe('原料投入行的可用库存 (客户 2026-07-30)', () => {
-  it('renders the available stock in BOTH card and table templates (两套模板早已漂移过)', () => {
-    const occurrences = source.match(/data-testid="input-available-stock"/g) || [];
-    expect(occurrences.length).toBe(2);
+describe('投入行可用库存: 前端自算版已撤下 (客户 2026-07-31)', () => {
+  it('不再渲染任何前端自算的「可用 X」文案', () => {
+    // 撤下前是 `可用 ${fmtStockQty(stock.available)}${displayProcessUnit(stock.unit)}`
+    expect(source).not.toMatch(/`可用 \$\{/);
+    expect(source).not.toContain('单位不同, 未计入');
   });
 
-  it('shows the fixed material name instead of a redundant dropdown, in BOTH templates', () => {
+  it('inputStockText 直接返回空串, 并写明为什么不能自算', () => {
+    expect(source).toMatch(/function inputStockText[\s\S]{0,1600}?return '';/);
+    // 注释里必须留下三条口径差异, 否则后人只会看到"返回空串"而以为是漏写
+    expect(source).toContain('resolveWorkshopId');
+    expect(source).toContain('sumPendingQuantityByMaterialBatchId');
+    expect(source).toContain('ProductionInventoryOwnershipGuard');
+  });
+
+  it('也不再按那个数标红 —— 判据错了, 标红同样是错的', () => {
+    expect(source).toMatch(/function inputExceedsAvailable[\s\S]{0,600}?return false;/);
+    // 撤下前的判据
+    expect(source).not.toContain('need > stock.available');
+  });
+
+  it('物料名仍是固定文本, 没有多余下拉 (这一条客户是满意的, 别顺手改回去)', () => {
     const fixed = source.match(/data-testid="bom-authorized-material-fixed"/g) || [];
-    expect(fixed.length).toBe(2);
-    // 旧的每行物料下拉已移除 (选用勾选已经表达了主料/替代料的取舍)
+    expect(fixed.length).toBe(2); // 卡片 + 表格两套模板
     expect(source).not.toContain('data-testid="bom-authorized-material-select"');
   });
 
-  it('sums availability in the PORT unit and never adds up incomparable units', () => {
-    expect(source).toContain('function inputStock');
-    // 必须走 convertQuantityToUnit (质量可换算, 计数/包装按字面) —— 不能裸相加
-    expect(source).toContain('convertQuantityToUnit(qty, batchUnit, unit)');
-    // 回归防线: v1 曾是对全部同物料批次无视单位的 reduce 求和
-    expect(source).not.toMatch(/\.reduce\(\(sum, batch\) => sum \+ rawBatchAvailable\(batch\), 0\)/);
-  });
-
-  it('normalises BOTH sides the same way before comparing units', () => {
-    // item.unit 来自 workflowPortDisplayUnit(port) —— 已是显示形式 (pcs → 件)。
-    // 拿批次原始 quantityUnit 去字面比会得到「可用 0件 · 另有 12件 未计入」这种自相矛盾文案。
-    expect(source).toContain('const batchUnit = displayProcessUnit(rawUnit) || rawUnit;');
-  });
-
-  it('discloses same-material batches whose unit cannot be converted, instead of dropping them silently', () => {
-    expect(source).toContain('incomparable');
-    expect(source).toContain('单位不同, 未计入');
-  });
-
-  it('shows nothing (and blocks nothing) while the batch list is still loading', () => {
-    // rawBatchOptions 初值 [] 且异步加载 → 首帧会闪「可用 0只」, 正是要消除的误导信息;
-    // 同理加载期不得拦保存。
-    expect(source).toMatch(/if \(rawBatchLoading\.value\) return '';/);
-    expect(source).toMatch(/if \(!item\.selected \|\| rawBatchLoading\.value\) return false;/);
-  });
-
-  it('stands down from blocking when availability is only a lower bound', () => {
-    // 有换不了的单位 → available 只是下限, 拿它拦截就是假阳性 (本文件已因缓存过期踩过一次)
-    expect(source).toMatch(/if \(!stock\.unit \|\| stock\.incomparable\.length\) return false;/);
-  });
-
-  it('warns without ever disabling the save (空批次列表 ≠ 真的没货)', () => {
-    // 硬闸的失败模式是「彻底提交不了」: loadRawBatches 在取不到仓库列表、或 workflow
-    // 原料类型客户端过滤对不上时都会静默置 []。对仓管员来说那比「后端告诉你缺料」更糟,
-    // 而且本文件已因缓存过期造成过一次假阳性拦截。
-    expect(source).toContain('超领**刻意只提示不阻断**');
-    // rowCompletenessReason 里不得出现超领分支 (它的返回值会 disable 保存/正式报工)
-    expect(source).not.toContain('inputExceedsAvailable(item));');
-    expect(source).not.toContain('超出可领用库存');
-    // 只标红, 不禁用
-    expect(source).toContain("'sp-in-stock-over': inputExceedsAvailable(item)");
-  });
-
-  it('keeps 成品工序投入量 advisory too — same ruling, same reason', () => {
+  it('保留 成品工序投入量 的 advisory 语义 (与本次撤下无关, 别连坐)', () => {
     expect(source).toContain('function finishedInputOverAvailableHint');
     expect(source).toContain('账实差异由盘点纠正');
   });
