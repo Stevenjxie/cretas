@@ -1567,6 +1567,14 @@ _CONTRACT_REPAIRABLE_METRICS = frozenset({
     "revenue",
     "orders",
     "staffing",
+    # 2026-07-31 补入。`requisition_cost` 由 `_REQUISITION_SPEND_RE` **事后注入**,
+    # 不在 `_REQUEST_METRIC_RULES` 里 —— 于是逐条过 rules 补这张白名单时看不见它,
+    # 一直漏着。后果: 「采购花了多少钱」的指标被确定性地定对了, 但 LLM 规划的
+    # resolver 与它冲突时 contract-repair 拒绝介入, 错的 resolver 一路走到答案。
+    # 同一问句已在三个场合漂到三个不同的 intent(SALES_SUMMARY / RECIPE_COST /
+    # STORE_MARGIN) —— 不是词汇表问题, 是修复通道没接上。
+    # 它是唯一由 REQUISITION_TREND 声明的指标, 修复目标无歧义(有用例钉住)。
+    "requisition_cost",
 })
 
 
