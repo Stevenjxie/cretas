@@ -3229,6 +3229,21 @@ async def resolve_gross_margin(
         and requested_metric_set.issubset({"sales_volume"})
         and resolved_ranking_direction
     )
+    # 🔴 「毛利最低的菜品有哪些」曾被答成「卖得最差的菜」。
+    #
+    # 下面 R14 那个按销量直排的分支 (见「不涉及成本, 不需要毛利覆盖」那段注释) 是为
+    # 「哪道菜卖得最好/最差」写的, 但它的进入条件只看**有没有排序方向**。而
+    # 「毛利最低」同样解析出 ranking_direction='worst', 于是毛利问题掉进了销量分支,
+    # 产出一份完全不含毛利的销量榜 —— 排序口径整个换掉了, 而措辞读起来毫无破绽。
+    #
+    # 拦住它的是答案契约 (margin_value / margin_integrity / request_coverage 三项缺失
+    # → 降级成澄清), 也就是说**用户看到的是「答不出来」而不是一个错的答案** ——
+    # 契约做对了事, 但根因在这里。
+    #
+    # 判据只看**要的是哪个指标**, 不看方向词: 用户点名要毛利/利润, 就不能拿销量榜充数。
+    margin_ranking_requested = bool(
+        requested_metric_set & {"gross_margin", "net_profit"}
+    )
     from smartbi_compat._rbac_strip import PRICE_VIEW_ROLES
     can_view_prices = bool(role) and role in PRICE_VIEW_ROLES
     if not can_view_prices and not quantity_only_ranking:
@@ -3542,7 +3557,11 @@ async def resolve_gross_margin(
     # 销量直接排; 不涉及成本, 不需要毛利覆盖。
     resolved_ranking_direction = (
         resolved_ranking_direction
-        if not dish_scope_row and len(dish_candidates) < 2 else None
+        if not dish_scope_row
+        and len(dish_candidates) < 2
+        # 见函数开头 margin_ranking_requested 的说明: 要毛利就不能走这条销量榜。
+        and not margin_ranking_requested
+        else None
     )
     if resolved_ranking_direction:
         requested_rank_limit = (

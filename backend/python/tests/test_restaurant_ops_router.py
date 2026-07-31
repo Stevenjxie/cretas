@@ -2945,6 +2945,43 @@ def test_generic_sales_ranking_executes_sealed_descending_plan_not_margin_report
     assert "米饭(单人份)" not in result.answer_text
 
 
+def test_margin_ranking_does_not_execute_sales_volume_ranking():
+    """「毛利最低的菜品有哪些」不得被答成「卖得最差的菜」。
+
+    上面那条用例锁的是反方向 (要销量不得给毛利报告); 这条锁的是它的对偶,
+    此前**只有前者有用例**, 后者一直漏着。
+
+    R14 那个按销量直排的分支 (「不涉及成本, 不需要毛利覆盖」) 是为
+    「哪道菜卖得最好/最差」写的, 但进入条件只看**有没有排序方向** ——
+    而「毛利最低」同样解析出 ranking_direction='worst', 于是毛利问题掉进销量分支,
+    产出一份完全不含毛利的销量榜, 措辞却读起来毫无破绽。
+
+    prod 实测 (MOCK_REST, 2026-07-31): 问「毛利最低的菜品」拿回的是
+    「菜品销量排行（卖得最差前 5）」。当时挡住它的是答案契约
+    (margin_value / margin_integrity / request_coverage 三项缺失 → 降级成澄清),
+    所以用户看到的是「答不出来」而不是一个错的答案 —— 契约做对了事, 但根因在
+    resolver。契约是最后一道网, 不该拿它当这条路径的正确性保证。
+    """
+    result = asyncio.run(_r.resolve_gross_margin(
+        _gross_margin_pool(_dish_rows()),
+        "RES_TEST",
+        role="restaurant_manager",
+        query="全部门店最近30天毛利最低的菜品有哪些",
+        requested_metrics=("gross_margin",),
+        analysis_action="lookup",
+        ranking_direction="worst",
+        ranking_limit=5,
+    ))
+
+    # 不能是销量榜
+    assert "菜品销量排行" not in (result.title or "")
+    assert "销量排行" not in result.answer_text
+    assert result.meta.get("dish_ranking") is None
+    # 必须走真·毛利路径: 出毛利口径, 且带口径自检 (契约 margin_integrity 要它)
+    assert "毛利" in result.answer_text
+    assert result.meta.get("marginInvariantPass") is True
+
+
 def test_generic_sales_ranking_no_data_does_not_fall_back_to_margin_wording():
     result = asyncio.run(_r.resolve_gross_margin(
         _gross_margin_pool([]),
