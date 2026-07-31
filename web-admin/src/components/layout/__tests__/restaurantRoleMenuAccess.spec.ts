@@ -1,5 +1,14 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
+import { createPinia, setActivePinia } from 'pinia';
 import { menuConfig, type MenuItem } from '../menuConfig';
+import { usePermissionStore } from '@/store/modules/permission';
+
+const permissionApiMocks = vi.hoisted(() => ({
+  getPlatformPermissions: vi.fn().mockResolvedValue([]),
+  getFactoryOverride: vi.fn().mockResolvedValue({}),
+  getUserModuleAccess: vi.fn().mockResolvedValue([]),
+}));
+vi.mock('@/api/permissionApi', () => permissionApiMocks);
 
 /**
  * 三个餐饮角色能不能在侧栏看见「餐饮运营」。
@@ -36,11 +45,21 @@ function findByPath(items: MenuItem[], path: string): MenuItem | undefined {
   return undefined;
 }
 
-/** 复刻 AppSidebar.canSeeMenuItem 里 roles 那一段的判据。 */
+/**
+ * 复刻 AppSidebar.canSeeMenuItem 的**完整**判据 —— roles 白名单 **且** 模块权限。
+ *
+ * ⚠️ 第一版只复刻了 roles 那一半，于是当一个页面改成「靠 module 拦而不写 roles」时，
+ * 测试会误报「厨师长能看到价格页」——**而实际拦得好好的**。
+ * 权限有两个承载点，测试也必须两个都算，否则它测的是自己的想象。
+ */
 function roleAllowed(item: MenuItem | undefined, role: string): boolean {
   if (!item) return false;
-  if (!item.roles || item.roles.length === 0) return true;
-  return item.roles.includes(role);
+  setActivePinia(createPinia());
+  const store = usePermissionStore();
+  store.setRole(role, 'R001', 'RESTAURANT', '1309');
+  const canAccess = store.canAccess(item.module);
+  if (!item.roles || item.roles.length === 0) return canAccess;
+  return item.roles.includes(role) && canAccess;
 }
 
 describe('餐饮角色的菜单可见性', () => {
