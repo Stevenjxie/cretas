@@ -300,31 +300,35 @@ const rawMenuConfig: MenuItem[] = [
     // (业态自适应, 不重复造); 菜品四象限+毛利合并为 菜品分析双tab; 点评口碑保留显性入口。
     // spec: 2026-06-01-restaurant-web-admin-ia-redesign-design.md v2。
     path: '/restaurant', title: '餐饮运营', icon: 'KnifeFork', module: 'dashboard',
-    roles: ['factory_super_admin', 'platform_admin', 'permission_admin', 'restaurant_manager', 'warehouse_manager', 'procurement_manager', 'finance_manager', 'sales_manager'],
+    // 2026-07-31: 补上 owner / purchaser / chef。`roles` 是**允许式白名单**
+    // (AppSidebar.canSeeMenuItem: 写了就一票否决), 此前这三个角色即使模块权限
+    // 给对了也看不见餐饮组 —— 权限有两个承载点, #2082/#2083 只改了矩阵那一个。
+    roles: ['factory_super_admin', 'platform_admin', 'permission_admin', 'restaurant_manager', 'restaurant_owner', 'restaurant_purchaser', 'restaurant_chef', 'warehouse_manager', 'procurement_manager', 'finance_manager', 'sales_manager'],
     hideForFactoryTypes: ['FACTORY'],
     children: [
       // -- 深度分析 (Gold 读层) --
       // 店长经营 KPI 看板 (single-store MVP 2026-06-04): 6 KPI 一屏 + 健康灯, 店长高频入口。
       { path: '/restaurant/analytics/role-kpi', title: '经营看板', icon: '', module: 'analytics', groupLabel: '深度分析',
-        roles: ['factory_super_admin', 'platform_admin', 'permission_admin', 'restaurant_manager', 'finance_manager', 'sales_manager'] },
+        roles: ['factory_super_admin', 'platform_admin', 'permission_admin', 'restaurant_manager', 'restaurant_owner', 'finance_manager', 'sales_manager'] },
       { path: '/restaurant/analytics/dishes', title: '菜品分析', icon: '', module: 'restaurant' },
       { path: '/restaurant/price-anomaly', title: '价格异常预警', icon: '', module: 'restaurant',
-        roles: ['factory_super_admin', 'platform_admin', 'permission_admin', 'restaurant_manager'] },
+        // ⛔ 刻意不给 restaurant_chef: 它不在 PRICE_VIEW_ROLES, 报货领料不需要看采购价
+        roles: ['factory_super_admin', 'platform_admin', 'permission_admin', 'restaurant_manager', 'restaurant_owner', 'restaurant_purchaser'] },
       { path: '/restaurant/analytics/stores', title: '门店对比', icon: '', module: 'restaurant' },
       { path: '/restaurant/analytics/platform', title: '平台分析', icon: 'ChatDotRound', module: 'restaurant' },
       // -- 日常录入 (写侧) — 配方置顶 (喂养分析层成本) --
       { path: '/restaurant/recipes', title: '配方管理', icon: '', module: 'restaurant', groupLabel: '日常录入' },
       { path: '/restaurant/supplier-delivery', title: '供应商进货录入', icon: '', module: 'dashboard',
-        roles: ['factory_super_admin', 'platform_admin', 'permission_admin', 'restaurant_manager', 'warehouse_manager', 'procurement_manager'] },
+        roles: ['factory_super_admin', 'platform_admin', 'permission_admin', 'restaurant_manager', 'restaurant_owner', 'restaurant_purchaser', 'restaurant_chef', 'warehouse_manager', 'procurement_manager'] },
       { path: '/procurement/requisitions/my', title: '厨师长报货/采购计划', icon: '', module: 'procurement',
-        roles: ['factory_super_admin', 'platform_admin', 'permission_admin', 'restaurant_manager', 'warehouse_manager', 'procurement_manager'] },
+        roles: ['factory_super_admin', 'platform_admin', 'permission_admin', 'restaurant_manager', 'restaurant_owner', 'restaurant_purchaser', 'restaurant_chef', 'warehouse_manager', 'procurement_manager'] },
       { path: '/restaurant/requisitions', title: '领料管理', icon: '', module: 'restaurant' },
       { path: '/restaurant/wastage', title: '损耗管理', icon: '', module: 'restaurant' },
       { path: '/restaurant/stocktaking', title: '盘点管理', icon: '', module: 'restaurant' },
       { path: '/restaurant/supplier-reconciliation', title: '供应商月对账', icon: '', module: 'finance',
-        roles: ['factory_super_admin', 'platform_admin', 'permission_admin', 'restaurant_manager', 'finance_manager'] },
+        roles: ['factory_super_admin', 'platform_admin', 'permission_admin', 'restaurant_manager', 'restaurant_owner', 'restaurant_purchaser', 'finance_manager'] },
       { path: '/restaurant/cost-attribution', title: '成本归因', icon: '', module: 'finance',
-        roles: ['factory_super_admin', 'platform_admin', 'permission_admin', 'restaurant_manager', 'finance_manager'] },
+        roles: ['factory_super_admin', 'platform_admin', 'permission_admin', 'restaurant_manager', 'restaurant_owner', 'finance_manager'] },
       // -- 数据与系统 (admin) --
       { path: '/restaurant/data-completeness', title: '数据完整度', icon: '', module: 'restaurant', groupLabel: '数据与系统' },
       { path: '/restaurant/admin/etl-status', title: 'ETL 状态', icon: '', module: 'restaurant',
