@@ -143,6 +143,8 @@ const form = ref({
   code: '', // 仅编辑模式显示, 创建时不传 (后端生成)
   name: '',
   category: '',
+  // 副产标记: 与 category 正交 —— 副产仍保留材质分类, 因此能被别的 workflow 当投入投料
+  isByproduct: false,
   unit: 'kg',
   storageType: '',
   shelfLifeDays: null as number | null,
@@ -836,6 +838,7 @@ function openCreate() {
     code: '',
     name: '',
     category: '',
+    isByproduct: false,
     unit: 'kg',
     storageType: storageTypeOptions.value[0]?.enumLabel || '',
     shelfLifeDays: null,
@@ -870,6 +873,8 @@ async function openEdit(row: TableRow) {
     code: String(row.code || ''),
     name: String(row.name || ''),
     category: String(row.category || ''),
+    // 编辑时保留既有副产标记 —— 漏了这行会让编辑一次就把标记悄悄抹掉
+    isByproduct: row.isByproduct === true || row.isByproduct === 'true',
     unit: String(row.unit || 'kg'),
     storageType: String(row.storageType || ''),
     shelfLifeDays: row.shelfLifeDays as number | null ?? null,
@@ -1413,6 +1418,16 @@ function handleSizeChange(size: number) {
             />
           </el-select>
           <div class="field-hint">与 16 位物料编码字典的 L1 类族保持一致</div>
+        </el-form-item>
+
+        <!-- 副产是「来历」不是「材质」: 打了标记的物料仍保留其类别(如原料), 因此既能被排除出
+             采购/补货建议, 又能被别的 workflow 当原料投入 —— 后者正是副产进原料字典的初衷。 -->
+        <el-form-item label="副产">
+          <el-switch v-model="form.isByproduct" active-text="这是副产（生产产出，无采购来源）" />
+          <div class="field-hint">
+            勾选后：不出现在采购下拉与补货建议；可在 BOM 配方内容的「副产」页签被声明；
+            报工产出落生产仓。它的类别仍按上方材质填写，不影响被当作原料投入。
+          </div>
         </el-form-item>
 
         <!-- 单位统一入口：搜索不到时可现场创建，重复时直接选择已有单位 -->

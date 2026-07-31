@@ -104,6 +104,11 @@ public class BomExpansionService {
             if (ri.getMaterialTypeId() == null) {
                 continue;
             }
+            // 副产行是**产出声明**不是投入 —— 展开成领料需求等于让人去领一个本该由生产产出的东西。
+            // 与 recomputeFamilyCosts 的排除同一条判据 (BomRecipeItem.isByproductCategory)。
+            if (BomRecipeItem.isByproductCategory(ri.getMaterialCategory())) {
+                continue;
+            }
             BigDecimal actualPerUnit = ri.getActualQuantity();
             if (actualPerUnit == null) {
                 actualPerUnit = ri.calculateActualQuantity();

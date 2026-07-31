@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   BOM_CATEGORY_TABS,
   bomTabAddButtonLabel,
+  bomTabAllowsMaterial,
   bomTabBigCategories,
   bomTabItemLabel,
   isBomCategoryTab,
@@ -32,10 +33,14 @@ describe('BOM 配方内容页签', () => {
   });
 
   describe('normalizeRecipeMaterialCategory', () => {
-    it('英文码与中文写法都要认出副产', () => {
+    /**
+     * BOM 明细行的 material_category 是**英文码**(DB 的 chk_bri_category 只放行
+     * RAW/AUXILIARY/PACKAGING/BYPRODUCT), 不存在中文「副产」的行。
+     * 中文「副产」曾经是**物料**的 category, 那条契约 2026-07-31 已被标记取代。
+     */
+    it('副产行认英文码, 大小写都行', () => {
       expect(normalizeRecipeMaterialCategory('BYPRODUCT')).toBe('BYPRODUCT');
       expect(normalizeRecipeMaterialCategory('byproduct')).toBe('BYPRODUCT');
-      expect(normalizeRecipeMaterialCategory('副产')).toBe('BYPRODUCT');
     });
 
     it('既有三类的口径不能被第四类挤掉', () => {
@@ -89,8 +94,9 @@ describe('BOM 配方内容页签', () => {
       expect(matchBomCategory({ materialCategory: '包材' }, 'PACKAGING')).toBe(true);
     });
 
-    it('中文「副产」写法也认 —— 与后端英文码并存时不至于两边对不上', () => {
-      expect(matchBomCategory({ materialCategory: '副产' }, 'BYPRODUCT')).toBe(true);
+    it('中文「副产」不是 BOM 行的类别写法, 不该被当成副产行', () => {
+      // 物料的中文「副产」category 已随标记改造废止; BOM 行只用英文码。
+      expect(matchBomCategory({ materialCategory: '副产' }, 'BYPRODUCT')).toBe(false);
     });
 
     it('每一行有且只有一个归属页签 (不重不漏)', () => {
@@ -101,22 +107,42 @@ describe('BOM 配方内容页签', () => {
     });
   });
 
-  describe('bomTabBigCategories —— 物料下拉按页签过滤', () => {
-    it('副产页签只放行原料字典里显式打标 副产 的 SKU', () => {
-      expect(bomTabBigCategories('BYPRODUCT')).toEqual(['副产']);
-    });
-
-    it('既有三档的放行集合不变', () => {
+  describe('物料下拉按页签过滤', () => {
+    it('材质三档的放行集合不变', () => {
       expect(bomTabBigCategories('RAW')).toEqual(['原料']);
       expect(bomTabBigCategories('AUXILIARY')).toEqual(['辅料', '调料']);
       expect(bomTabBigCategories('PACKAGING')).toEqual(['包材']);
     });
 
-    it('四个页签都必须有放行集合 —— 漏一个就是「选了永远筛出 0 条」', () => {
-      for (const tab of BOM_CATEGORY_TABS) {
-        expect(bomTabBigCategories(tab as BomCategoryTab).length,
-          `${tab} 没有放行的大类`).toBeGreaterThan(0);
-      }
+    describe('bomTabAllowsMaterial —— 副产看标记, 其余看材质', () => {
+      const byproduct = { isByproduct: true };
+      const ordinary = { isByproduct: false };
+
+      it('副产页签只放行打了标记的物料, 材质是什么都行', () => {
+        expect(bomTabAllowsMaterial('BYPRODUCT', byproduct, '原料')).toBe(true);
+        expect(bomTabAllowsMaterial('BYPRODUCT', byproduct, '其他')).toBe(true);
+        expect(bomTabAllowsMaterial('BYPRODUCT', ordinary, '原料')).toBe(false);
+      });
+
+      /**
+       * 🔴 本次改造的核心: 副产 SKU **照样出现在原料页签**。
+       * 旧的 category='副产' 做法把它挡在原料页签外, 等于堵死
+       * 「副产以后能当原料被别的 workflow 投入」——那正是副产放进原料字典的初衷。
+       */
+      it('副产 SKU 仍能在原料页签被选到 (能当投入)', () => {
+        expect(bomTabAllowsMaterial('RAW', byproduct, '原料')).toBe(true);
+      });
+
+      it('材质档不因标记而改变放行', () => {
+        expect(bomTabAllowsMaterial('PACKAGING', ordinary, '包材')).toBe(true);
+        expect(bomTabAllowsMaterial('PACKAGING', ordinary, '原料')).toBe(false);
+        expect(bomTabAllowsMaterial('AUXILIARY', ordinary, '调料')).toBe(true);
+      });
+
+      it('"其他"桶只在原料档兜底, 不因筛选彻底消失', () => {
+        expect(bomTabAllowsMaterial('RAW', ordinary, '其他')).toBe(true);
+        expect(bomTabAllowsMaterial('PACKAGING', ordinary, '其他')).toBe(false);
+      });
     });
   });
 

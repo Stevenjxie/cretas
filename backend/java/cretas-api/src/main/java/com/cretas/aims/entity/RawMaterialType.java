@@ -173,6 +173,22 @@ public class RawMaterialType extends BaseEntity {
     private String category;
 
     /**
+     * 是否副产：生产产出物而非采购物。
+     *
+     * <p>🔴 与 {@link #category} <b>正交</b>。副产描述的是「来历」(生产出来的、没有采购来源)，
+     * 而 category / L1-L3 是「材质」分类树。肥油的材质是油脂，来历是副产 —— 两件事。</p>
+     *
+     * <p>之所以不做成 {@code category='副产'}(2026-07-31 走前端验收时推翻的做法)：
+     * 那样副产 SKU 在 BOM「原料」页签里选不到，而「副产以后能当原料被别的 workflow 投入」
+     * 正是把副产放进原料字典的初衷。用标记则同一个 SKU 既是副产又仍是原料。</p>
+     *
+     * <p>true 的效果：排除出采购下拉与补货建议；可在 BOM 配方内容第四类被声明；
+     * 报工产出落生产仓。</p>
+     */
+    @Column(name = "is_byproduct", nullable = false)
+    private Boolean isByproduct = Boolean.FALSE;
+
+    /**
      * 计量单位
      * <p>原材料的计量单位，默认为 kg</p>
      * <p>示例：kg、g、箱、包、桶</p>

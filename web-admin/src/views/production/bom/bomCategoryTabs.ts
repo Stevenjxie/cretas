@@ -1,4 +1,5 @@
-import { BYPRODUCT_CATEGORY, type BigCategory } from '@/utils/materialCategory';
+import { type BigCategory } from '@/utils/materialCategory';
+import { isByproductMaterial, type ByproductFlagged } from '@/utils/byproductMaterial';
 
 /**
  * BOM「配方内容」的页签类别。
@@ -35,7 +36,7 @@ export function isBomCategoryTab(value: unknown): value is BomCategoryTab {
 export function normalizeRecipeMaterialCategory(value: unknown): BomCategoryTab {
   const category = String(value ?? '').trim().toUpperCase();
   const rawText = String(value ?? '').trim();
-  if (category === 'BYPRODUCT' || rawText === BYPRODUCT_CATEGORY) return 'BYPRODUCT';
+  if (category === 'BYPRODUCT') return 'BYPRODUCT';
   if (category === 'PACKAGING' || rawText === '包材') return 'PACKAGING';
   if (category === 'AUXILIARY' || rawText === '辅料' || rawText === '调味料') return 'AUXILIARY';
   return 'RAW';
@@ -48,7 +49,7 @@ export function matchBomCategory(
 ): boolean {
   const rawText = String(row.materialCategory ?? row.category ?? '').trim();
   const code = rawText.toUpperCase();
-  if (tab === 'BYPRODUCT') return code === 'BYPRODUCT' || rawText === BYPRODUCT_CATEGORY;
+  if (tab === 'BYPRODUCT') return code === 'BYPRODUCT';
   if (tab === 'PACKAGING') return code === 'PACKAGING' || rawText === '包材';
   if (tab === 'AUXILIARY') {
     return code === 'AUXILIARY' || rawText === '辅料' || rawText === '调味料';
@@ -59,16 +60,39 @@ export function matchBomCategory(
 }
 
 /**
- * 「关联原料」下拉按当前页签放行哪些物料大类。
+ * 「关联原料」下拉按当前页签放行哪些物料**大类**(材质)。
  *
  * AUXILIARY 同时放行 辅料 + 调料 两个桶 (二者本来就是"非原料非包材的配方成分")。
- * BYPRODUCT 只放行显式打标的「副产」—— 副产 SKU 建在原料字典里但与采购属性隔离 (Task 1)。
+ *
+ * ⚠️ BYPRODUCT 不在这里 —— 副产是**标记**不是材质, 按大类筛不出来。
+ * 副产页签走 {@link bomTabAllowsMaterial} 的标记判定。
  */
-export function bomTabBigCategories(tab: BomCategoryTab): BigCategory[] {
-  if (tab === 'BYPRODUCT') return [BYPRODUCT_CATEGORY];
+export function bomTabBigCategories(tab: Exclude<BomCategoryTab, 'BYPRODUCT'>): BigCategory[] {
   if (tab === 'PACKAGING') return ['包材'];
   if (tab === 'AUXILIARY') return ['辅料', '调料'];
   return ['原料'];
+}
+
+/**
+ * 「关联原料」下拉: 这个物料能不能出现在该页签下。
+ *
+ * 🔴 两条不同的判据, 不要混:
+ * - 副产页签: 只看**标记** (`isByproduct`) —— 材质是什么都行, 肥油是原料、碎骨可能是别的。
+ * - 其余页签: 只看**材质**大类。副产 SKU **照样出现在原料页签**里 —— 这正是
+ *   「副产以后能当原料被别的 workflow 投入」这个目标的落点, 旧的 category='副产'
+ *   做法把它挡在了原料页签外面。
+ *
+ * @param bigCategory 该物料的材质大类 (调用方用 bigCategoryOf 算好传进来)
+ */
+export function bomTabAllowsMaterial(
+  tab: BomCategoryTab,
+  material: ByproductFlagged | null | undefined,
+  bigCategory: BigCategory,
+): boolean {
+  if (tab === 'BYPRODUCT') return isByproductMaterial(material);
+  // "其他"桶只在 RAW 档下兜底展示 (未归类物料默认按原料处理, 不因筛选彻底消失于任一档)
+  if (bigCategory === '其他') return tab === 'RAW';
+  return bomTabBigCategories(tab).includes(bigCategory);
 }
 
 /** 「添加X」按钮文案 (辅料页签不显示该按钮, 走工序辅料工作台)。 */
