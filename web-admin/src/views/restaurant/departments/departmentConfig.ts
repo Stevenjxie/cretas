@@ -37,6 +37,19 @@ export interface DeptEmptyState {
   actionPath: string;
 }
 
+/**
+ * ③ 趋势图。`endpoint` 里的 `{days}` 会被当前窗口替换。
+ * 两种返回形状都存在于现有 Gold 接口，用 `shape` 指明，不做运行时猜测。
+ */
+export interface DeptTrend {
+  title: string;
+  unit: string;
+  money?: boolean;
+  /** 'ops-kpi' → {success,data:[{date,value}]}；'revenue-points' → {points:[{date,revenue}]} */
+  shape: 'ops-kpi' | 'revenue-points';
+  endpoint: string;
+}
+
 export interface DeptConfig {
   key: DeptKey;
   title: string;
@@ -51,6 +64,8 @@ export interface DeptConfig {
    */
   source: 'ops-summary' | 'kpi-summary' | null;
   kpis: DeptKpi[];
+  /** ③ 趋势图；无则不渲染该区（人事） */
+  trend?: DeptTrend;
   /** ④ 排行明细的取值路径与列定义；无则不渲染该区 */
   ranking?: {
     title: string;
@@ -81,6 +96,13 @@ export const DEPARTMENTS: Record<DeptKey, DeptConfig> = {
       { label: '盘亏总量', path: 'totals.total_shortage' },
       { label: '有数据天数', path: 'totals.active_days', hint: '窗口内实际有记录的天数' },
     ],
+    trend: {
+      title: '损耗金额趋势',
+      unit: '元',
+      money: true,
+      shape: 'ops-kpi',
+      endpoint: '/api/smartbi/gold/restaurant-ops/daily-trend?kpi_kind=wastage_cost&days={days}',
+    },
     ranking: {
       title: '领用成本前列食材',
       path: 'top_ingredients',
@@ -116,6 +138,13 @@ export const DEPARTMENTS: Record<DeptKey, DeptConfig> = {
       { label: '客流', path: 'customers' },
       { label: '门店数', path: 'stores' },
     ],
+    trend: {
+      title: '营收趋势',
+      unit: '元',
+      money: true,
+      shape: 'revenue-points',
+      endpoint: '/api/smartbi/gold/daily-trend',
+    },
     entries: [
       { title: '菜品分析', path: '/restaurant/analytics/dishes' },
       { title: '门店对比', path: '/restaurant/analytics/stores' },
@@ -145,6 +174,13 @@ export const DEPARTMENTS: Record<DeptKey, DeptConfig> = {
         hint: '有配方成本可算毛利的菜品数',
       },
     ],
+    trend: {
+      title: '食材成本趋势',
+      unit: '元',
+      money: true,
+      shape: 'ops-kpi',
+      endpoint: '/api/smartbi/gold/restaurant-ops/daily-trend?kpi_kind=requisition_cost&days={days}',
+    },
     entries: [
       { title: '成本归因', path: '/restaurant/cost-attribution' },
       { title: '供应商月对账', path: '/restaurant/supplier-reconciliation' },
