@@ -134,3 +134,43 @@ describe('部门路由', () => {
     }
   });
 });
+
+/**
+ * 端点前缀 —— Python 侧**两个 router 的挂载方式不同**，这一点只看前端代码看不出来：
+ *
+ *   main.py: include_router(restaurant_ops_gold.router, prefix="/api/smartbi")
+ *            而 restaurant_ops_gold 自己 APIRouter(tags=...) **没有 prefix**
+ *            → 真实路径 /api/smartbi/restaurant-ops/...
+ *
+ *   main.py: include_router(gold_reads.router, prefix="/api/smartbi")
+ *            而 gold_reads 自己 APIRouter(prefix="/gold")
+ *            → 真实路径 /api/smartbi/gold/...
+ *
+ * 我第一版给 restaurant-ops 也写了 `/gold`，结果四个部门页全部 404 ——
+ * 页面只显示「加载失败」，单测全绿，**只有真打开页面才看得见**。
+ */
+describe('部门数据源的端点前缀', () => {
+  const collect = (): string[] => {
+    const out: string[] = [];
+    for (const key of DEPARTMENT_ORDER) {
+      const t = DEPARTMENTS[key].trend;
+      if (t) out.push(t.endpoint);
+    }
+    return out;
+  };
+
+  it('restaurant-ops 系列不带 /gold（那个 router 没有 prefix）', () => {
+    for (const ep of collect()) {
+      if (!ep.includes('restaurant-ops')) continue;
+      expect(ep, `${ep} 多了 /gold —— 会 404`).not.toContain('/gold/restaurant-ops');
+      expect(ep).toContain('/api/smartbi/restaurant-ops/');
+    }
+  });
+
+  it('gold_reads 系列必须带 /gold（那个 router 有 prefix）', () => {
+    for (const ep of collect()) {
+      if (ep.includes('restaurant-ops')) continue;
+      expect(ep, `${ep} 缺 /gold —— 会 404`).toContain('/api/smartbi/gold/');
+    }
+  });
+});

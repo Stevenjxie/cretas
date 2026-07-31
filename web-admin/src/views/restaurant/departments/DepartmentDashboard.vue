@@ -41,7 +41,7 @@ const canViewPrice = computed(() => permission.canViewPrice);
 function endpointFor(days: number): string | null {
   const factoryId = getFactoryId();
   if (config.value.source === 'ops-summary') {
-    return `/api/smartbi/gold/restaurant-ops/summary?factory_id=${factoryId}&days=${days}`;
+    return `/api/smartbi/restaurant-ops/summary?factory_id=${factoryId}&days=${days}`;
   }
   if (config.value.source === 'kpi-summary') {
     return `/api/smartbi/gold/kpi-summary?factory_id=${factoryId}`;
