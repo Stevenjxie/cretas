@@ -2658,6 +2658,14 @@ public class BomRecipeServiceImpl implements BomRecipeService {
         for (BomRecipe owner : targets) {
             for (BomRecipeItem item :
                     itemRepo.findByRecipeIdOrderBySortOrderAsc(owner.getId())) {
+                // 副产行是**产出声明**不是投入 —— 不进成本池。
+                // 不跳过会有两种错法: ① 副产 SKU 没有采购价 (Task 1 刻意隔开采购属性) →
+                // itemCost 为 null → markFamilyCostIncomplete → 整个 family 标准成本被清空;
+                // ② 万一它恰好有价, 反而**抬高**主产品成本 —— 方向是反的, 副产本该抵扣。
+                // 抵扣发生在盘点 (按盘点实际重量 × 确认单价), 不在这里。
+                if (BomRecipeItem.isByproductCategory(item.getMaterialCategory())) {
+                    continue;
+                }
                 BigDecimal cost = nestedBomCostService.isNestedComponent(item)
                         ? nestedBomCostService.resolveItemCost(owner.getFactoryId(), item)
                         : item.computeItemCost();

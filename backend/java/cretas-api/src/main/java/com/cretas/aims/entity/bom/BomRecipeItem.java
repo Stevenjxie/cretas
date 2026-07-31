@@ -98,7 +98,21 @@ public class BomRecipeItem extends BaseEntity {
     @Column(name = "item_cost", precision = 15, scale = 4)
     private BigDecimal itemCost;
 
-    /** RAW / AUXILIARY / PACKAGING. */
+    /**
+     * 副产声明行的类别值 —— 与 RAW / AUXILIARY / PACKAGING 三个**投入**类别并列的第四类,
+     * 但语义相反: 它记的是这个配方**产出**哪个副产 SKU、预计产出多少。
+     *
+     * <p>唯一入口, 不要再在别处写字面量 "BYPRODUCT" —— 本仓 2026-07-31 一天内修过五处
+     * 「同一件事多套实现」, 不再开第六处。DB 侧白名单见 V20261029_37。</p>
+     */
+    public static final String CATEGORY_BYPRODUCT = "BYPRODUCT";
+
+    /** 判定这一行是不是副产声明 (产出), 而非投入。 */
+    public static boolean isByproductCategory(String materialCategory) {
+        return CATEGORY_BYPRODUCT.equalsIgnoreCase(materialCategory);
+    }
+
+    /** RAW / AUXILIARY / PACKAGING = 投入; BYPRODUCT = 产出的副产声明 (见 CATEGORY_BYPRODUCT). */
     @Column(name = "material_category", nullable = false, length = 32)
     @Builder.Default
     private String materialCategory = "RAW";
