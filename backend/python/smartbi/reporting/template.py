@@ -1,5 +1,8 @@
 """报告模板 = 一串自然语言问句 + 排版顺序。
 
+章节按**部门**组织(市场 → 财务 → 运营), 与四部门驾驶舱同一套划分; 老板读报告的
+顺序仍然是先总量、再拆解、最后到后厨成本。
+
 这是「报告不是新引擎」最直白的证据: 模板里**没有 SQL、没有 metric 名、没有
 resolver code**，只有客户自己会问的中文问句。报告跑起来跟一个人坐在聊天框里
 按顺序问这 N 个问题、把答案抄进 Word 完全等价 —— 因此:
@@ -59,6 +62,7 @@ DEFAULT_MONTHLY_TEMPLATE = ReportTemplate(
     code="RESTAURANT_MONTHLY_DEFAULT",
     title="餐饮月度经营报告",
     sections=(
+        # ── 市场 ────────────────────────────────────────────────────
         SectionTemplate(
             key="overview",
             heading="一、经营总览",
@@ -79,6 +83,8 @@ DEFAULT_MONTHLY_TEMPLATE = ReportTemplate(
             heading="四、堂食与外卖结构",
             query="{period}全部门店堂食和外卖的占比",
         ),
+
+        # ── 财务 ────────────────────────────────────────────────────
         # 「全部门店毛利率」而不是「全部门店(各门店)毛利率对比」: 后者被 Answer
         # Contract 判为口径覆盖不足直接否决, 前者才落到按门店排名的毛利 resolver
         # (2026-07-29 对 6 月/7 月各跑 3 次, 6/6 稳定通过)。
@@ -87,23 +93,44 @@ DEFAULT_MONTHLY_TEMPLATE = ReportTemplate(
             heading="五、各门店毛利率",
             query="{period}全部门店毛利率",
         ),
-        # ⛔ 「六、损耗排行」已摘除 (2026-07-29), 阻塞原因已于 2026-07-31 解除。
+        SectionTemplate(
+            key="recipe_cost",
+            heading="六、菜品食材成本",
+            query="{period}全部门店哪些菜的食材成本最高",
+        ),
+
+        # ── 运营 ────────────────────────────────────────────────────
+        # ✅ 损耗一节 2026-07-29 曾被摘除, 2026-07-31 恢复。
         #
-        # 当初摘除的原因: 损耗 resolver 无视请求的时间窗 —— 问「2026年6月...
-        # 损耗排行」返回的是"近 30 天损耗总览"。放进月度报告 = 标题写着 6 月、
+        # 当初摘除的原因: 损耗 resolver 无视请求的时间窗 —— 问「2026年6月…损耗排行」
+        # 返回的是"近 30 天损耗总览", 数字一字不差。放进月度报告 = 标题写着 6 月、
         # 内容是近 30 天, 是一份看起来完全正常但口径错误的报告。
         #
-        # 这类错误 fail-closed **挡不住**: 它挡的是"没拿到数据", 而这里
-        # resolver 确实返回了数据, 只是答的是另一个时间窗; 报告层又刻意不解析
-        # 日期 (日期口径的唯一权威在意图层), 于是会原样排版进去。
-        #
-        # 2026-07-31: `resolve_wastage_top` 已支持 `date_range`/`window_label`,
-        # 请求的起止日期真正进 SQL, 答案标题也带上具体日期。**复原条件已满足**,
-        # 剩下的一步是把这一节加回来并在真实租户上验证「问 6 月答的就是 6 月」
-        # —— 刻意分开做: 恢复报告章节要连同排版和 Answer Contract 一起验,
-        # 不搭在 resolver 修复里顺手合入。
+        # PR #2076 让 resolve_wastage_top 真正按请求的窗口取数并在标题里带上具体
+        # 日期; #2081 对领料与盘点做了同样的事。三节的问句都在真实租户上验过。
+        SectionTemplate(
+            key="wastage",
+            heading="七、损耗排行",
+            query="{period}全部门店损耗金额最高的食材是哪几个",
+        ),
+        SectionTemplate(
+            key="requisition",
+            heading="八、领料用量",
+            query="{period}全部门店领料最多的是哪些食材",
+        ),
+        SectionTemplate(
+            key="stocktaking",
+            heading="九、盘点差异",
+            query="{period}全部门店哪些食材经常盘亏",
+        ),
+
+        # ── 人事 ────────────────────────────────────────────────────
+        # ⛔ 暂无章节。`fact_staffing_daypart` 全表 0 行(所有租户), 人效根本算不出来
+        # —— 放一节进去只会得到「还没有配置各时段的人效数据」, 那不是报告内容。
+        # 复原条件: 各时段在岗人数与目标人效配置到位后, 加一节并在真实租户上验证。
     ),
 )
+
 
 _TEMPLATES: Dict[str, ReportTemplate] = {
     DEFAULT_MONTHLY_TEMPLATE.code: DEFAULT_MONTHLY_TEMPLATE,

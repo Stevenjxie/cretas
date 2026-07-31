@@ -150,12 +150,36 @@ async def test_默认模板每节都写明门店范围():
 
 
 @pytest.mark.asyncio
-async def test_默认模板不含损耗节():
-    """损耗 resolver 无视请求的时间窗 (问 6 月答"近 30 天"), 放进月度报告
-    会产出标题与内容口径不一致的报告, 而 fail-closed 挡不住这种错误
-    (resolver 确实返回了数据)。resolver 支持显式月份窗口后再加回来。
+async def test_默认模板含后厨三节():
+    """2026-07-31 恢复。原断言是「不得含 wastage」——
+
+    当初摘除的理由: 损耗 resolver 无视请求的时间窗(问 6 月答"近 30 天"), 放进月度
+    报告会产出标题与内容口径不一致的报告, 而 fail-closed 挡不住(resolver 确实返回
+    了数据)。PR #2076 / #2081 让损耗/领料/盘点三个 resolver 真正按请求窗口取数。
+
+    🔴 拆这条封之前在真实租户上用**报告自己的问句形态**验过(不是"上个月"那种写法,
+    那是另一条日期解析路径):
+
+        2026年6月 损耗 ¥10,071.77 / 领料 ¥297,156.78 / 盘亏 34.42
+        2026年7月 损耗 ¥251,405.78 / 领料 ¥6,690,746.59 / 盘亏 155.05
+
+    换月份换答案, 且标题里带具体起止日期。
     """
-    assert "wastage" not in get_template().section_keys()
+    keys = get_template().section_keys()
+    for key in ("wastage", "requisition", "stocktaking"):
+        assert key in keys, f"{key} 节应已恢复"
+
+
+@pytest.mark.asyncio
+async def test_默认模板不含人事节():
+    """人事**没有任何事实数据**(`fact_staffing_daypart` 全表 0 行, 所有租户)。
+
+    放一节进去只会得到「还没有配置各时段的人效数据」—— 那不是报告内容, 是缺数据
+    的告白。与损耗那次不同: 损耗是"答了但答错窗口", 人事是"根本答不出",
+    fail-closed 挡得住, 但读者拿到的是一份少一节的报告而不是错报告。
+    """
+    keys = get_template().section_keys()
+    assert not any("staff" in k or "hr" in k for k in keys)
 
 
 # ───────────────────────── 2. 数据截至时间必须在 ─────────────────────────
