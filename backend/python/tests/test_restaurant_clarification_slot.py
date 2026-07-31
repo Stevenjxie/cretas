@@ -132,3 +132,26 @@ def test_time_branch_rejects_a_non_time_answer():
     assert R._approved_exact_continuation_route(
         "哪个菜卖得好", "全部门店", R.TIME_CLARIFICATION_QUESTION,
     ) is None
+
+
+def test_nothing_reads_the_slot_field_directly_yet():
+    """⛔ 判据一律走 `_slot_of_clarification(...)`, 不许直接读 `spec.missing_slot`。
+
+    2026-08-01 踩到的坑: continuation 的 spec 是从**上一轮持久化的字符串**重建的,
+    那时还没有 missing_slot 字段, 所以它是 None —— 而 clarification_question
+    确实是时间问句。我一度把两处判据改成直接读字段, 对继承来的 spec 行为就变了,
+    而 6088 条用例**一条都没抓到**(那两处本来就没有行为覆盖)。
+
+    在「设置端把槽位持久化进会话状态」之前, 字段只是给未来用的脚手架, **不是判据**。
+    等持久化做了, 再把这条连同 _slot_of_clarification 一起改。
+
+    这与 #2076(签名没声明就静默丢弃)、2026-08-01 RBAC 泄露(声明了却做不到)
+    是同一族: **声明存在 ≠ 运行时拿得到**。
+    """
+    src = inspect.getsource(R)
+    code = "\n".join(l for l in src.split("\n") if not l.strip().startswith("#"))
+    direct_reads = re.findall(r"\bspec\.missing_slot\b", code)
+    assert not direct_reads, (
+        f"有 {len(direct_reads)} 处直接读 spec.missing_slot。\n"
+        "继承来的 spec 上它是 None —— 走 _slot_of_clarification(spec.clarification_question)。"
+    )

@@ -3143,7 +3143,7 @@ def _explicit_store_dish_ranking_spec(
             missing_time
             and (
                 not spec.clarification_needed
-                or spec.missing_slot != "time"
+                or _slot_of_clarification(spec.clarification_question) != "time"
             )
         )
         or (not missing_time and spec.clarification_needed)
@@ -3232,7 +3232,7 @@ def _explicit_named_dish_metric_spec(
             missing_time
             and (
                 not spec.clarification_needed
-                or spec.missing_slot != "time"
+                or _slot_of_clarification(spec.clarification_question) != "time"
             )
         )
         or (not missing_time and spec.clarification_needed)
