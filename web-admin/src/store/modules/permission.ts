@@ -172,22 +172,40 @@ const PERMISSION_MATRIX: Record<string, ModulePermissions> = {
   },
 
   // 餐饮管理
+  // ⚠️ 下面三个餐饮角色的**模块权限唯一权威**是
+  //    backend/java/.../service/impl/PermissionServiceImpl.java 里的
+  //    restaurantOwnerPerms / restaurantChefPerms / restaurantPurchaserPerms。
+  //    这份是镜像 —— 改那边必须同步改这里, 有对齐用例钉住
+  //    (permission.restaurant-departments.spec.ts 的 JAVA_AUTHORITY)。
+  //    部门四键是前端独有的细分, Java 侧只有一个 restaurant。
+
   // 餐饮老板：四个部门全权
   restaurant_owner: {
-    dashboard: 'rw', production: '-', warehouse: '-', quality: '-',
-    procurement: 'r', sales: '-', hr: '-', equipment: '-',
-    finance: 'r', system: '-', analytics: 'r', scheduling: '-',
+    dashboard: 'rw', production: '-', warehouse: 'rw', quality: '-',
+    procurement: 'rw', sales: '-', hr: '-', equipment: '-',
+    finance: 'rw', system: '-', analytics: 'rw', scheduling: '-',
     restaurant: 'rw',
     restaurantOps: 'rw', restaurantMarketing: 'rw',
     restaurantHr: 'rw', restaurantFinance: 'rw',
     rd: '-'
   },
 
-  // 餐饮采购：管后厨供应链，财务只读（价格异常审批要对比价格）
+  // 厨师长：报货 / 领料 / 验收入库 —— 后厨那一摊, 不碰营销与财务
+  restaurant_chef: {
+    dashboard: 'r', production: '-', warehouse: 'rw', quality: '-',
+    procurement: 'r', sales: '-', hr: '-', equipment: '-',
+    finance: '-', system: '-', analytics: 'r', scheduling: '-',
+    restaurant: 'rw',
+    restaurantOps: 'rw', restaurantMarketing: '-',
+    restaurantHr: '-', restaurantFinance: '-',
+    rd: '-'
+  },
+
+  // 餐饮采购：请购 + 采购全链路；财务只读(看采购金额, 不做财务审核)
   restaurant_purchaser: {
-    dashboard: 'r', production: '-', warehouse: '-', quality: '-',
+    dashboard: 'r', production: '-', warehouse: 'r', quality: '-',
     procurement: 'rw', sales: '-', hr: '-', equipment: '-',
-    finance: '-', system: '-', analytics: '-', scheduling: '-',
+    finance: 'r', system: '-', analytics: 'r', scheduling: '-',
     restaurant: 'rw',
     restaurantOps: 'rw', restaurantMarketing: '-',
     restaurantHr: '-', restaurantFinance: 'r',
