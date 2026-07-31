@@ -88,6 +88,49 @@ class ByproductBatchMaterializerTest {
         assertThat(created.get(0).getMaterialTypeId()).isEqualTo("MT-FEIYOU");
     }
 
+    /**
+     * 🔴 web-admin 逐工序录入把副产名字**写死成「副产」**
+     * ({@code ProcessDataTable.vue}: {@code byproducts = [{ name: '副产', ... }]}),
+     * 操作员没有地方选"这是哪个副产 SKU"。只按名称匹配的话, 走 web 报工的副产
+     * <b>永远落不了库</b> —— 2026-08-01 走查时就卡在这。
+     *
+     * <p>该 SKU 只声明了一条副产时, 归属是<b>确定的</b>, 归它。</p>
+     */
+    @Test
+    void genericPlaceholderNameIsAttributedWhenExactlyOneDeclaration() {
+        stubEnv(List.of(declaration("验收-副产-肥油", "MT-FEIYOU")), "WH-WORKSHOP");
+
+        List<MaterialBatch> created = materializer.materialize(
+                FACTORY, PRODUCT, REPORT, List.of(reported("副产", "36", "kg", "8")));
+
+        assertThat(created).hasSize(1);
+        assertThat(created.get(0).getMaterialTypeId()).isEqualTo("MT-FEIYOU");
+    }
+
+    /** 声明 2 条以上 → 通用占位归属不确定, 诚实跳过, 不猜。 */
+    @Test
+    void genericPlaceholderIsSkippedWhenMultipleDeclarations() {
+        stubEnv(List.of(declaration("肥油", "MT-FEIYOU"), declaration("碎肉", "MT-SUIROU")),
+                "WH-WORKSHOP");
+
+        assertThat(materializer.materialize(
+                FACTORY, PRODUCT, REPORT, List.of(reported("副产", "36", "kg", null)))).isEmpty();
+        verify(materialBatchRepository, never()).save(any(MaterialBatch.class));
+    }
+
+    /**
+     * 🔴 报工填了**具体**名字却匹配不上时, 不因为"只有一条声明"就算到它头上 ——
+     * 那是把一个明确说了是别的东西的产出记到别人账上。
+     */
+    @Test
+    void specificUnmatchedNameIsNotAttributedEvenWithASingleDeclaration() {
+        stubEnv(List.of(declaration("肥油", "MT-FEIYOU")), "WH-WORKSHOP");
+
+        assertThat(materializer.materialize(
+                FACTORY, PRODUCT, REPORT, List.of(reported("料头", "5", "kg", null)))).isEmpty();
+        verify(materialBatchRepository, never()).save(any(MaterialBatch.class));
+    }
+
     /** 没有生产仓就不落库 —— 禁降级: 不随便找个仓塞进去。 */
     @Test
     void missingWorkshopWarehouseMeansNoBatch() {
