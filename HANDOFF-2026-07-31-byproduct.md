@@ -134,7 +134,7 @@ Task 4 取基线时，基线轮报「0 失败」而我这边 1 失败。差点�
 - 前端**只做格式化，不算钱** —— 金额由后端 `ByproductCreditService.creditOf` 算
 - `null`（未确认）与 `0`（确认为 0）**必须分得开**，显示「未抵扣」vs「0.00」
 
-### Task 7（⛔ 只出报告，必须停下来问 Steve）
+### Task 7（⛔ 只出报告，必须停下来问 Steve；⛔ 开始前先要 `ultrathink`，见「模型与 effort」一节）
 - 会动 **BOM 标准成本**（成本口径红线）
 - 报告要回答三件：①两侧单价有没有同一副产取值不同 ②迁移后哪些 BOM 标准成本会变、变多少 ③要不要保留每配方的覆盖位
 - **一并调研** `work_processes.expected_byproducts`（4 个工序在用）与本设计的关系 —— 这是 spec 里唯一没排进任务的一项
@@ -206,6 +206,33 @@ DB migration / 权限 RLS 多租户 / **成本财务口径** / 资金路径 / �
 - commit 用 `git commit -m "..." -- <具体文件>`（`--` 限定范围，防并发 session 文件被吞）
 - **变异检验是必须的**，且要变**调用点**不只是函数体
 - ⚠️ `ProcessDataTable.vue` 有卡片/表格两套模板，改一处必 grep 第二处
+
+---
+
+## 模型与 effort（按 `.claude/skills/multi-model-dispatch` 的规则定的）
+
+| | |
+|---|---|
+| 模型 | **Opus 5** |
+| 会话默认 effort | **high** |
+| Task 7 那一轮 | **需要 `ultrathink`** —— 见下，**你要主动提醒 Steve** |
+
+**为什么是 high 不是 xhigh**（三条都是路由规则里写死的）：
+
+1. Task 5/6 是「已框清 brief 的执行」—— 计划里含完整代码，属转录+接线。规则第 221 行：*Opus 5 的 low/medium 强得反常，例行活别默认蹲 high*，xhigh 在这两个任务上主要买延迟。
+2. 🔴 **决定性**：这个项目走 SDD，每个任务至少派一次复审子代理。规则第 239 行明确警告 —— *这条铁律不会自动成立：子代理默认**继承会话 effort**（Agent 工具调用没有 effort 参数），所以编排者蹲在 `xhigh` 时 fan 出去的 workers 也是 xhigh* —— 正是 `cost = agents × effort` 的乘法炸配额。
+3. 唯一的难点 Task 7 有专门处方，规则第 253 行：*Opus 单个难点 | Opus | **high + `ultrathink` 点该轮** | inline*。
+
+### 🔴 到 Task 7 时你必须主动开口要 `ultrathink`
+
+**`ultrathink` 是用户在消息里打的关键词，你自己加不了** —— 模型不能自行提升推理档位。所以：
+
+> **走到 Task 7 之前，停下来，明确对 Steve 说一句：**
+> 「Task 7 要判『两套副产单价来源怎么并』并且碰成本口径红线，按路由规则这一轮该上 `ultrathink`。请你在下一条消息里带上 `ultrathink` 这个词，我再开始。」
+
+不要默默用 high 硬做 Task 7 —— 它要同时权衡：BOM 标准成本 vs 订单实际成本两个不同成本对象、15 条存量报工副产、4 个已声明 `expected_byproducts` 的工序、以及迁移会不会改变已出过的成本数字。这是本项目唯一一处真需要深想的地方。
+
+**什么时候才升 xhigh**：Task 7 用 `ultrathink` 跑出来**两版结论互相打架**时再升。再往上是派 `fable` subagent 单点定夺，**别停在 Opus 继续烧 effort**（规则第 34 行）。
 
 ---
 
