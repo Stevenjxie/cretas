@@ -48,7 +48,15 @@ _OPS_PATTERNS: List[Tuple[str, List[List[str]]]] = [
     (
         "RESTAURANT_OPS_STOCK_SHORTAGE",
         [["盘点", "盘亏", "盘损", "库存差异", "账实差"],
-         ["哪个", "哪些", "最多", "前", "top", "TOP", "排名", "频率", "经常"]],
+         # 🔴 "多少" 是 2026-07-31 补的, 修的是一处【与损耗规则的不对称】: 上面
+         # WASTAGE_TOP 的 group-2 一直有 "多少"(「损耗了多少」确定性命中), 这里没有,
+         # 于是「盘点亏了多少」两条规则都不命中 → 落到 LLM → 抖。实测抖出来的样子是:
+         # planner 本来选对了 STOCK_SHORTAGE, 但 LLM 把 metrics 填成 ('wastage',),
+         # contract-repair 就忠实地按那个指标把 resolver 改写成 WASTAGE_TOP,
+         # 于是「盘点亏了多少」被答成损耗榜。同一句话在别的轮次是对的(每日 timer 三轮
+         # 全 OK), 所以它不是稳定缺陷而是【确定性覆盖的缺口】, 补上就不再看 LLM 脸色。
+         # 不会过宽: group-1 已要求出现「盘点/盘亏/盘损/库存差异/账实差」这类专有词。
+         ["哪个", "哪些", "最多", "前", "top", "TOP", "排名", "频率", "经常", "多少"]],
     ),
     # Per-store margin (MUST come BEFORE dish-level gross_margin):
     # "哪家店赚钱" = store scope, not dish scope. Group-1 = store scope,

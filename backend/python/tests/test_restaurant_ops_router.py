@@ -3891,3 +3891,31 @@ def test_absolute_range_is_not_swallowed_into_the_dish_slot():
     assert D("全部门店6月3日至6月18日营收多少") is None
     # 区间与菜名同时出现时, 菜名仍要抽得出来
     assert D("全部门店6月3号到18号米饭的销量") == "米饭"
+
+
+def test_stocktaking_howmuch_is_deterministic_not_llm_dependent():
+    """「盘点亏了多少」必须确定性命中 STOCK_SHORTAGE, 不能落到 LLM 去抖。
+
+    2026-07-31 prod 审计实拍: planner 本来选对了 STOCK_SHORTAGE, 但 LLM 把 metrics
+    填成 ('wastage',), contract-repair 就忠实地按那个指标把 resolver 改写成
+    WASTAGE_TOP —— 「盘点亏了多少」被答成损耗榜。同一句话在每日 timer 的三轮里都是对的,
+    所以它不是稳定缺陷, 是【确定性覆盖的缺口】: WASTAGE_TOP 的 group-2 一直有 "多少",
+    而 STOCK_SHORTAGE 的没有。补齐这个不对称, 它就不再看 LLM 脸色。
+    """
+    from smartbi.gold.restaurant.restaurant_ops_router import _OPS_PATTERNS
+
+    def first_match(query: str):
+        for code, groups in _OPS_PATTERNS:
+            if all(any(kw in query for kw in group) for group in groups):
+                return code
+        return None
+
+    assert first_match("全部门店最近30天盘点亏了多少") == "RESTAURANT_OPS_STOCK_SHORTAGE"
+    assert first_match("本月盘亏了多少") == "RESTAURANT_OPS_STOCK_SHORTAGE"
+
+    # 对照: 损耗那条不受影响, 仍归损耗
+    assert first_match("全部门店最近30天损耗了多少") == "RESTAURANT_OPS_WASTAGE_TOP"
+
+    # 反向: "多少" 不能把无关问句吸进盘点 —— group-1 仍要求盘点类专有词
+    assert first_match("本月营收多少") != "RESTAURANT_OPS_STOCK_SHORTAGE"
+    assert first_match("这个月卖了多少钱") != "RESTAURANT_OPS_STOCK_SHORTAGE"
