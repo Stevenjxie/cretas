@@ -165,6 +165,91 @@ class ProcessSheetBomFamilyRequirementsTest {
                         org.assertj.core.groups.Tuple.tuple("SPICE", new BigDecimal("0.2")));
     }
 
+    /**
+     * 客户 2026-07-31 现场: 「成品报工单位与计划固定 BOM 的产出单位不一致 —— 报工单位 袋, BOM 单位 bag」。
+     *
+     * 🔴 袋 和 bag **本来就是同一个单位** —— 权威表 {@code UnitContractServiceImpl.systemAliases()}
+     * 里写着 {@code alias("bag", "bag", "袋")}。BOM 保存那侧 (BomRecipeServiceImpl) 用的正是权威的
+     * {@code areEquivalent()}, 所以这份 BOM 存得进去; 偏偏成品报工这条走了私有的硬编码 switch,
+     * 只认 kg/g/盒/箱/片 五组, 两边都落到 default 原样返回 → 字面不等 → 409 BLOCKING。
+     *
+     * 判据是「按系统自己的别名表, 这两个单位是不是同一个」, 不是「字面一不一样」。
+     */
+    @Test
+    void chineseAndEnglishSpellingsOfTheSameUnitAreNotAMismatch() throws Throwable {
+        BomRecipe recipe = recipe("BOM-A", "SKU-A", "bag");   // 库里存的是英文码
+        stubPinnedFamily(recipe);
+        when(itemRepository.findByRecipeIdOrderBySortOrderAsc("BOM-A"))
+                .thenReturn(List.of(packaging("PACK-A", "内袋", "袋", "1")));
+
+        ProcessSheetRowRequest request = new ProcessSheetRowRequest();
+        request.setOutputs(List.of(output("SKU-A", "袋", "2")));   // 报工填的是中文
+
+        List<ProductionStockAllocationService.AutomaticRequirement> result =
+                requirements(request);
+
+        assertThat(result).singleElement().satisfies(requirement -> {
+            assertEquals("PACK-A", requirement.materialTypeId());
+            assertThat(requirement.quantity()).isEqualByComparingTo("2");
+        });
+    }
+
+    /** 反过来也一样 —— BOM 存中文、报工报英文码, 同样不该拦。 */
+    @Test
+    void theSameHoldsWhenTheBomStoresChineseAndReportingSendsTheCode() throws Throwable {
+        BomRecipe recipe = recipe("BOM-A", "SKU-A", "袋");
+        stubPinnedFamily(recipe);
+        when(itemRepository.findByRecipeIdOrderBySortOrderAsc("BOM-A"))
+                .thenReturn(List.of(packaging("PACK-A", "内袋", "袋", "1")));
+
+        ProcessSheetRowRequest request = new ProcessSheetRowRequest();
+        request.setOutputs(List.of(output("SKU-A", "bag", "2")));
+
+        assertThat(requirements(request)).singleElement().satisfies(requirement ->
+                assertEquals("PACK-A", requirement.materialTypeId()));
+    }
+
+    /**
+     * 🔴 同一个私有 switch 还有**反方向**的错, 一并钉住: 它把 片/slice/piece/pcs/个 全映射成
+     * "slice", 而权威表里 个→pcs、片→slice 是**两个不同单位** —— 于是「个」报工能冒充「片」的 BOM
+     * 混过去。误拦 (上面两条) 和漏拦 (这条) 出自同一个根因: 没用系统自己的别名表。
+     */
+    @Test
+    void genuinelyDifferentUnitsStillFailClosed() {
+        BomRecipe recipe = recipe("BOM-A", "SKU-A", "片");
+        stubPinnedFamily(recipe);
+
+        ProcessSheetRowRequest request = new ProcessSheetRowRequest();
+        request.setOutputs(List.of(output("SKU-A", "个", "2")));
+
+        BusinessException error = assertThrows(
+                BusinessException.class, () -> requirements(request));
+
+        assertEquals("BOM_OUTPUT_UNIT_MISMATCH", error.getErrorCode());
+    }
+
+    /**
+     * 单位没填仍然要挡住。
+     *
+     * <p>⚠️ 这条不是顺手加的: 复用的 {@code configuredUnitsEquivalent} 对「supplied 为空」
+     * 是**当等价放行**的 (工序配置那条允许省略单位)。成品报工不能沿用那个宽松语义 ——
+     * 没填就是不知道报的是什么, 放行等于让 BOM 用量按一个来历不明的数去折算。
+     * 换实现时如果忘了这层守卫, 就会从「误拦」一路滑到「什么都不拦」。</p>
+     */
+    @Test
+    void aMissingReportedUnitStillFailsClosed() {
+        BomRecipe recipe = recipe("BOM-A", "SKU-A", "袋");
+        stubPinnedFamily(recipe);
+
+        ProcessSheetRowRequest request = new ProcessSheetRowRequest();
+        request.setOutputs(List.of(output("SKU-A", "  ", "2")));
+
+        BusinessException error = assertThrows(
+                BusinessException.class, () -> requirements(request));
+
+        assertEquals("BOM_OUTPUT_UNIT_MISMATCH", error.getErrorCode());
+    }
+
     private void stubPinnedFamily(BomRecipe... recipes) {
         ProductionPlan plan = new ProductionPlan();
         plan.setId("PLAN-1");
