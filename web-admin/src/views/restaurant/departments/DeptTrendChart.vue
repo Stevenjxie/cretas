@@ -10,7 +10,6 @@
  */
 import { computed, onMounted, onUnmounted, ref, watch, nextTick } from 'vue';
 import echarts from '@/utils/echarts';
-import type { ECharts } from 'echarts';
 import { trendTakeaway, type TrendPoint } from './trendTakeaway';
 
 const props = defineProps<{
@@ -25,7 +24,10 @@ const props = defineProps<{
 }>();
 
 const el = ref<HTMLDivElement | null>(null);
-let chart: ECharts | null = null;
+// 类型从 @/utils/echarts 的 init 反推 —— 直接 import type { ECharts } from 'echarts'
+// 拿的是**全量包**的类型, 与本仓按需引入的 echarts/core 结构不同(私有 _ssr 各自声明),
+// vue-tsc 会报 TS2322。同款正确写法见 MaterializedAnalysisCard.vue。
+let chart: ReturnType<typeof echarts.init> | null = null;
 let ro: ResizeObserver | null = null;
 
 const periodText = computed(() => {
