@@ -108,9 +108,12 @@ def test_all_scope_offers_drilling_into_single_stores():
     })
     questions = [item["question"] for item in got]
     assert not any(q == "全部门店" for q in questions), "已经是全部门店了"
-    assert questions[:3] == [
-        "A店最近30天营收", "B店最近30天营收", "C店最近30天营收",
-    ], questions
+    # 2026-07-31: 同一条答案上现在还有换时间按钮(排在换门店前面), 所以这里只挑
+    # 门店那几颗看 —— 断言整个列表会把「换时间按钮存不存在」偷偷绑进这条用例。
+    # C店 被总盖 4 挤掉(2 颗换时间 + 2 颗换门店), 这是预期的取舍。
+    store_questions = [q for q in questions if q.endswith("最近30天营收")
+                       and not q.startswith("全部门店")]
+    assert store_questions == ["A店最近30天营收", "B店最近30天营收"], questions
 
 
 def test_no_question_seed_means_no_buttons():
@@ -148,12 +151,15 @@ def test_followups_are_capped_and_deduped():
 # 问句格式修对了也没用, **按钮提供的是一个系统答不了的问题**。
 
 def test_no_scope_buttons_when_the_resolver_cannot_split_by_store():
-    assert _suggested_followups({
+    got = _suggested_followups({
         "intent": "RESTAURANT_OPS_WASTAGE_TOP",   # 只服务 ingredient
         "store_scope": "all",
         "store_options": ["A店", "B店"],
         "question_seed": "全部门店最近30天损耗金额最高的食材",
-    }) == []
+    })
+    # 2026-07-31: WASTAGE_TOP 现在会拿到**换时间**按钮(它自 PR#2076 起真按请求的
+    # 窗口取数), 所以整体不再是空列表 —— 这条用例要的是「没有换**门店**按钮」。
+    assert not any("A店" in x["question"] or "B店" in x["question"] for x in got), got
 
 
 def test_scope_buttons_appear_for_a_store_capable_resolver():
@@ -163,7 +169,11 @@ def test_scope_buttons_appear_for_a_store_capable_resolver():
         "store_options": ["A店", "B店"],
         "question_seed": "全部门店最近30天营收",
     })
-    assert [x["question"] for x in got] == ["A店最近30天营收", "B店最近30天营收"]
+    questions = [x["question"] for x in got]
+    # 同上: 只挑门店那几颗, 别把换时间按钮绑进这条用例。
+    assert [q for q in questions if q.startswith(("A店", "B店"))] == [
+        "A店最近30天营收", "B店最近30天营收",
+    ], questions
 
 
 def test_capability_check_reuses_the_downstream_table():

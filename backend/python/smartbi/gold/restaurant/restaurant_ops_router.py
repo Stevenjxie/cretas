@@ -7534,6 +7534,29 @@ def is_supported_restaurant_ops_code(code: Optional[str]) -> bool:
     return isinstance(code, str) and code in _RESOLVERS
 
 
+def resolver_supports_explicit_window(code: Optional[str]) -> bool:
+    """这个 intent 的 resolver 会不会真正按**请求的时间窗**取数。
+
+    判据就是 ``resolve_by_code`` 过滤 kwargs 用的那一条: 它只把 resolver 签名里
+    声明过的参数传下去, 没声明的**静默丢弃** —— 不报错, 只是悄悄退回
+    ``CURRENT_DATE - days`` 的滚动窗口。所以「签名里有没有 date_range」既决定
+    窗口能不能传到, 也就决定了「换时间范围」按钮的承诺成不成立; 两者复用同一个
+    机制, 不可能漂。
+
+    ⛔ 不要改用 ``_RESOLVER_DIMENSIONS['time']``: 那张表里的 time 是「能不能**按**
+    时间拆」(把结果按时间分组), 与「能不能**换**时间窗」无关, 实测两个方向都判错
+    —— WASTAGE_TOP 没有 time 却真能换窗口(误拒), STAFFING_ADVICE 有 time 却拿不到
+    date_range(误放, 更危险)。
+
+    这是**必要条件而非充分条件**: 声明了不等于用对了。充分性由各 resolver 自己的
+    测试保证(见 tests/test_restaurant_wastage_window.py)。
+    """
+    resolver = _RESOLVERS.get(code or "")
+    if resolver is None:
+        return False
+    return "date_range" in inspect.signature(resolver).parameters
+
+
 async def resolve_by_code(
     code: str, smartbi_pool, factory_id: str, **kwargs
 ) -> Optional[OpsAnswer]:
