@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue';
+import { displayUnit } from '@/utils/unitPricing';
 import { useAuthStore } from '@/store/modules/auth';
 import { usePermissionStore } from '@/store/modules/permission';
 import { get, post } from '@/api/request';
@@ -479,7 +480,7 @@ function getStatusText(status: string) {
         </el-table-column>
         <el-table-column label="单位" width="80" align="center">
           <template #default="{ row }">
-            {{ row.quantityUnit || row.unit || '-' }}
+            {{ displayUnit(row.quantityUnit || row.unit) || '-' }}
           </template>
         </el-table-column>
         <el-table-column prop="storageLocation" label="存储位置" width="130" show-overflow-tooltip />
@@ -638,11 +639,11 @@ function getStatusText(status: string) {
         </div>
         <div class="detail-item">
           <span class="detail-label">入库数量</span>
-          <span class="detail-value">{{ detailData.receiptQuantity ?? detailData.inboundQuantity ?? '-' }} {{ detailData.quantityUnit || detailData.unit || '' }}</span>
+          <span class="detail-value">{{ detailData.receiptQuantity ?? detailData.inboundQuantity ?? '-' }} {{ displayUnit(detailData.quantityUnit || detailData.unit) }}</span>
         </div>
         <div class="detail-item">
           <span class="detail-label">当前数量</span>
-          <span class="detail-value">{{ detailData.currentQuantity ?? detailData.quantity ?? '-' }} {{ detailData.quantityUnit || detailData.unit || '' }}</span>
+          <span class="detail-value">{{ detailData.currentQuantity ?? detailData.quantity ?? '-' }} {{ displayUnit(detailData.quantityUnit || detailData.unit) }}</span>
         </div>
         <div class="detail-item">
           <span class="detail-label">已用数量</span>

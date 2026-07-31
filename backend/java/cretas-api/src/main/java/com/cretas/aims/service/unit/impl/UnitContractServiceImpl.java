@@ -934,6 +934,56 @@ public class UnitContractServiceImpl implements UnitContractService {
     }
 
     /**
+     * <b>跨语言</b>归一 —— 只把「同一个单位的英文码与中文名」折成一个,
+     * <b>绝不合并不同的中文计量单位</b>。
+     *
+     * <p>🔴 与 {@link #canonicalCodeOrRaw} 的区别, 以及为什么必须有这个区别:</p>
+     *
+     * <p>权威别名表里 {@code alias("pcs", "pcs", "件", "个", "只")} —— 件/个/只 都归 pcs。
+     * 但 <b>#1976 明确规定「一只 ≠ 一件」</b>: 计数单位按字面区分, 一只鸡不是一件包材。
+     * 既有做法见 {@code ProductionStockAllocationServiceImpl#canonicalNativeUnit} ——
+     * 它只对 MASS/VOLUME 折别名, 其余一律回落字面比较, 正是为了守住这条。</p>
+     *
+     * <p>而客户 2026-07-31 撞到的是<b>另一件事</b>: 「袋」与「bag」是<b>同一个单位的两种写法</b>
+     * (中文名 vs 英文码), 被判成不同 → 误拦。这两件必须分开处理:</p>
+     *
+     * <ul>
+     *   <li><b>可换算维度</b> (MASS / VOLUME / LENGTH): 全部别名折成规范码 ——
+     *       千克/公斤/kg 本就是一个单位, 且真的能换算。</li>
+     *   <li><b>计数 / 包装维度</b> (COUNT / PACKAGE): <b>只</b>折「规范码 ↔ 该单位的中文名」
+     *       ({@code CanonicalUnit#displayName}), 其余别名保持字面。
+     *       于是 袋≡bag、盒≡box、件≡pcs, 而 <b>只≠件、个≠件</b> —— #1976 得以保住。</li>
+     * </ul>
+     *
+     * <p>凡是拿结果做<b>相等判定 / 去重</b>的地方都该用这个, 而不是
+     * {@link #canonicalCodeOrRaw} (后者会把 只/个/件 并成一个)。</p>
+     */
+    public static String crossLanguageCode(String rawUnit) {
+        if (rawUnit == null) {
+            return null;
+        }
+        String trimmed = rawUnit.trim();
+        if (DISTINCT_COUNT_LABELS.contains(trimmed)) {
+            return trimmed;
+        }
+        CanonicalUnit builtIn = systemUnitFor(key(trimmed));
+        return builtIn != null ? builtIn.code() : trimmed.toLowerCase(Locale.ROOT);
+    }
+
+    /**
+     * <b>#1976 的例外名单</b>: 权威表把 件/个/只 都并进 {@code pcs} (为了换算与展示),
+     * 但业务上<b>一只 ≠ 一件</b> —— 一只鸡不是一件包材, 拿「只」去顶「件」过闸是错的。
+     *
+     * <p>写成<b>显式名单</b>而不是靠某条通用规则的副作用: 早先试过「只折 码↔中文名」,
+     * 结果把「框」和「筐」也拆开了 —— 那俩只是同一个词的两种写法, 拆开正是本次要修的那类误拦。
+     * 真正需要区分的就这两个字, 列出来最清楚, 也最不容易误伤别的单位。</p>
+     *
+     * <p>「件」<b>不在</b>名单里 —— 它就是 {@code pcs} 的中文名, 件≡pcs 是对的;
+     * 名单只挡住 只/个 各自独立。</p>
+     */
+    private static final Set<String> DISTINCT_COUNT_LABELS = Set.of("只", "个");
+
+    /**
      * 是不是「按个数论」的单位 (量纲 {@link UnitDimension#COUNT} 或 {@link UnitDimension#PACKAGE})。
      *
      * <p>用于投料折算判定: 计数单位与 kg 口径不同, 必须经 gramsPerUnit 折算, 不能直接当 kg 用。

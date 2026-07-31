@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted } from 'vue';
+import { displayProcessUnit } from '@/utils/processSheetUnits';
 import { useAuthStore } from '@/store/modules/auth';
 import { usePermissionStore } from '@/store/modules/permission';
 import { ElMessage, ElMessageBox } from 'element-plus';
@@ -281,6 +282,7 @@ function taskDisplayId(row: ApprovalItem) {
   return row.processTaskId || row.workProcessTaskId || '-';
 }
 
+// 单位必须走展示映射: 库里存的是规范码, 原样插值会把 box / bag 摆给用户看。
 function textValue(value: unknown) {
   if (value === null || value === undefined || String(value).trim() === '') return '-';
   return String(value);
@@ -289,7 +291,8 @@ function textValue(value: unknown) {
 function segmentQty(seg: Record<string, unknown>, qtyKey: string, unitKey: string) {
   const qty = seg[qtyKey];
   if (qty === null || qty === undefined || String(qty).trim() === '') return '-';
-  return `${formatQty(Number(qty))} ${textValue(seg[unitKey]) === '-' ? '' : textValue(seg[unitKey])}`.trim();
+  const unit = textValue(seg[unitKey]);
+  return `${formatQty(Number(qty))} ${unit === '-' ? '' : displayProcessUnit(String(unit))}`.trim();
 }
 
 function hasProcessDetail(row: ApprovalItem) {
@@ -446,7 +449,7 @@ function evidenceImageIndex(urls: string[], url: string): number {
                         effect="plain"
                         class="custom-field-tag"
                       >
-                        副产物 {{ textValue(bp.name) }}: {{ formatQty(Number(bp.quantity)) }} {{ textValue(bp.unit) }}
+                        副产物 {{ textValue(bp.name) }}: {{ formatQty(Number(bp.quantity)) }} {{ displayProcessUnit(bp.unit) }}
                       </el-tag>
                     </div>
                     <div class="custom-field-tags">

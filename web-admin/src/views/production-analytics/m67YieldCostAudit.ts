@@ -1,4 +1,5 @@
 import { canonicalUnitCode, displayUnit } from '@/utils/unitPricing';
+import { sameUnit } from '@/utils/unitPricing';
 
 export type NumericValue = number | string | null | undefined;
 
@@ -83,7 +84,7 @@ export function calculateYieldRate(input: YieldConversionInput): number | null {
 
   const inputUnit = canonicalUnitCode(input.inputUnit);
   const outputUnit = canonicalUnitCode(input.outputUnit);
-  if (inputUnit && inputUnit === outputUnit) return outputQuantity / inputQuantity;
+  if (inputUnit && sameUnit(inputUnit, outputUnit)) return outputQuantity / inputQuantity;
 
   const inputKg = quantityInKilograms(inputQuantity, input.inputUnit, input.inputGramsPerUnit);
   const outputKg = quantityInKilograms(outputQuantity, input.outputUnit, input.outputGramsPerUnit);

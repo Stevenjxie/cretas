@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, watch } from 'vue';
+import { displayUnit } from '@/utils/unitPricing';
 import { useAuthStore } from '@/store/modules/auth';
 import { Search, Refresh } from '@element-plus/icons-vue';
 import { ElMessage } from 'element-plus';
@@ -122,7 +123,7 @@ const resolvedCount = computed(() => allLedgers.value.filter((r) => r.status ===
 // ────────────────────────────────────────────────────────────────────────────
 function formatQty(qty: number | null | undefined, unit: string | null) {
   if (qty == null) return '—';
-  return unit ? `${qty} ${unit}` : String(qty);
+  return unit ? `${qty} ${displayUnit(unit)}` : String(qty);
 }
 
 function formatDateTime(dt: string | null | undefined) {

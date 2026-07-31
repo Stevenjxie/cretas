@@ -565,7 +565,7 @@ public class BomSeasoningWorkspaceServiceImpl implements BomSeasoningWorkspaceSe
      */
     private String canonicalWorkflowUnit(String rawUnit) {
         if (rawUnit == null || rawUnit.isBlank()) return null;
-        return com.cretas.aims.service.unit.impl.UnitContractServiceImpl.canonicalCodeOrRaw(rawUnit);
+        return com.cretas.aims.service.unit.impl.UnitContractServiceImpl.crossLanguageCode(rawUnit);
     }
 
     private void populatePinnedRevisionSummary(

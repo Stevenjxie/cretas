@@ -378,6 +378,7 @@
 
 <script setup lang="ts">
 import { ref, computed, onMounted, onBeforeUnmount, nextTick } from 'vue';
+import { sameUnit } from '@/utils/unitPricing';
 import { DocumentCopy, Refresh } from '@element-plus/icons-vue';
 import { ElMessage } from 'element-plus';
 import { useRoute } from 'vue-router';
@@ -1032,9 +1033,9 @@ const auditYieldRows = computed(() => groupedSteps.value.map((step) => {
     processName: step.processName,
     input: formatAuditQuantity(step.totalInput, step.inputUnit),
     output: formatAuditQuantity(step.totalOutput, step.outputUnit),
-    convertedOutput: outputKg == null || step.inputUnit === step.outputUnit ? '' : `${outputKg.toFixed(4)} kg`,
+    convertedOutput: outputKg == null || sameUnit(step.inputUnit, step.outputUnit) ? '' : `${outputKg.toFixed(4)} kg`,
     rate,
-    formula: `${formatAuditQuantity(step.totalOutput, step.outputUnit)}${outputKg != null && step.inputUnit !== step.outputUnit ? ` = ${outputKg.toFixed(4)} kg` : ''} ÷ ${formatAuditQuantity(step.totalInput, step.inputUnit)}`,
+    formula: `${formatAuditQuantity(step.totalOutput, step.outputUnit)}${outputKg != null && !sameUnit(step.inputUnit, step.outputUnit) ? ` = ${outputKg.toFixed(4)} kg` : ''} ÷ ${formatAuditQuantity(step.totalInput, step.inputUnit)}`,
   };
 }));
 const auditCopyText = computed(() => {

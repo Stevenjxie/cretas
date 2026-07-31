@@ -84,7 +84,7 @@
           </el-table-column>
           <el-table-column label="扣量" prop="quantity" width="110">
             <template #default="{ row }">
-              {{ row.quantity }} {{ row.quantityUnit }}
+              {{ row.quantity }} {{ displayUnit(row.quantityUnit) }}
             </template>
           </el-table-column>
           <!-- @PriceSensitive: unitPrice/totalAmount 无价格权限时返回 null -->
@@ -216,7 +216,7 @@
           </el-table-column>
           <el-table-column label="扣量" width="110">
             <template #default="{ row }">
-              {{ row.quantity }} {{ row.quantityUnit }}
+              {{ row.quantity }} {{ displayUnit(row.quantityUnit) }}
             </template>
           </el-table-column>
           <el-table-column label="单价" prop="unitPrice" width="100">
@@ -343,6 +343,7 @@
 
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
+import { displayUnit } from '@/utils/unitPricing';
 import { ElMessage } from 'element-plus'
 import type { FormInstance, FormRules } from 'element-plus'
 import { get, post } from '@/api/request'

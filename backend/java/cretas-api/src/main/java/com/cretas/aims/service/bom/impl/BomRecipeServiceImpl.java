@@ -416,9 +416,35 @@ public class BomRecipeServiceImpl implements BomRecipeService {
         return family.stream().filter(member -> member.getId().equals(recipeId)).findFirst().orElse(recipe);
     }
 
+    /**
+     * 副产品成本抵扣三条校验 —— 只对<b>用户真标的</b>副产品生效。
+     *
+     * <p>🔴 客户 2026-07-31 现场: 一对多 workflow(成品C + 成品D, <b>两个都是正经成品</b>)
+     * 生成 BOM 后点「检查并生效」, 被这里拦下要求填「单位可变现净值」。</p>
+     *
+     * <p>根因: 「实际产出语义」下 {@code BomWorkflowRevisionService} 会按顺序<b>自动</b>编号
+     * ({@code terminalIndex == 0 ? "MAIN" : "BY_PRODUCT"}), 那段代码自己注明这只是
+     * 「compatibility-only storage metadata, <b>not authored or shown to users</b>」——
+     * 于是第 2 个产出被无声标成副产品, 然后这里拿它当真, 要求一个用户从没被问过、
+     * 界面上也找不到的字段。</p>
+     *
+     * <p>为什么可以直接豁免而不必先定成本口径: <b>真正的成本分摊不在 BOM 阶段</b> ——
+     * 在报工时按「用户填的比例 / 重量 / 数量」分({@code ProcessSheetServiceImpl} 多产出分摊),
+     * 那段<b>从头到尾没读过 {@code outputRole}</b>; {@code getOutputRole()} 的消费者也只在
+     * BOM 域内部。所以这个占位标签不影响任何成本计算, 唯独会把用户拦在门外。</p>
+     *
+     * <p>⚠️ 副产的正式模型(标注副产 → 原料字典建 SKU → 落生产仓记重量 → <b>盘点时</b>标注
+     * 与主产品的关联并按副产价值抵扣, 算抵扣后成本与利润)是 Steve 2026-07-31 定的方向,
+     * <b>另行立项</b>。注意抵扣发生在<b>盘点</b>且以关联为前提, 不是 BOM 生效前填死一个 NRV ——
+     * 所以这里不该为了「以后要抵扣」保留一道生效前的必填。</p>
+     */
     private void validateByProductCreditRules(List<BomRecipe> family) {
         for (BomRecipe member : family) {
             if (member.getOutputRole() != BomRecipe.OutputRole.BY_PRODUCT) continue;
+            if (bomWorkflowRevisionService.targetProducedUnderActualIoSemantics(
+                    member.getFactoryId(), member)) {
+                continue;
+            }
             if (member.getCostAllocationRatio() == null
                     || member.getCostAllocationRatio().compareTo(BigDecimal.ZERO) != 0) {
                 throw bomError(409,

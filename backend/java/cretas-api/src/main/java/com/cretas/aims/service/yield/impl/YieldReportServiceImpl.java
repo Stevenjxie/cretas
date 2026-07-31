@@ -1981,16 +1981,19 @@ public class YieldReportServiceImpl implements YieldReportService {
                 .divide(BigDecimal.valueOf(1000), 4, RoundingMode.HALF_UP);
     }
 
-    private String normalizeUnit(String unit) {
+    /**
+     * 出成率换算的单位归一 —— 走权威表的<b>跨语言</b>归一, 不再自己维护一张 5 组的私有表。
+     *
+     * <p>原表只认 kg/g/盒/箱/片, 于是「袋」与「bag」被判成两种单位 → {@code convertQuantity}
+     * 返回 null → 累计出成率算不出, 前端显示<b>「跨单位不可比, 需配产品标准克重」</b> ——
+     * 而这两个本就是同一个单位, 用户照着去配标准克重也修不好, 提示反而把人引去做无用功。</p>
+     *
+     * <p>用 {@code crossLanguageCode} 而非 {@code canonicalCodeOrRaw}: 后者会把 只/个/件
+     * 并成 pcs, 违反 #1976「一只 ≠ 一件」。</p>
+     */
+    private static String normalizeUnit(String unit) {
         if (unit == null || unit.isBlank()) return null;
-        return switch (unit.trim().toLowerCase()) {
-            case "kg", "kilogram", "kilograms", "千克", "公斤" -> "kg";
-            case "g", "gram", "grams", "克" -> "g";
-            case "box", "boxes", "盒" -> "box";
-            case "case", "cases", "箱" -> "case";
-            case "slice", "slices", "片" -> "slice";
-            default -> unit.trim().toLowerCase();
-        };
+        return com.cretas.aims.service.unit.impl.UnitContractServiceImpl.crossLanguageCode(unit);
     }
 
     private record YieldUnitConversion(String countUnit, BigDecimal gramsPerUnit,

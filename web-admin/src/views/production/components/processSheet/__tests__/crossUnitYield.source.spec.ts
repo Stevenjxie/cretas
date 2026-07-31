@@ -35,7 +35,13 @@ describe('cross-unit yield contract', () => {
   });
 
   it('同单位不提示 —— 只有两端单位不同才需要重量桥', () => {
-    expect(source).toContain('if (!inputUnit || !outputUnit || inputUnit === outputUnit) return null;');
+    // 2026-07-31: 判据从字面 `===` 改成 sameUnit()。
+    // 🔴 字面比较会把「袋」和 bag 判成两端单位不同 → 误提示「需要重量桥」, 而它们本就是同一个单位,
+    //    配了桥也没用。sameUnit 认中英两种写法, 但仍不合并 只/个/件 (#1976 一只 ≠ 一件)。
+    expect(source).toContain('if (!inputUnit || !outputUnit || sameUnit(inputUnit, outputUnit)) return null;');
+    expect(source, 'sameUnit 必须来自统一实现, 不许本地再写一份').toContain(
+      "import { sameUnit } from '@/utils/unitPricing';",
+    );
   });
 
   it('投入还没录时不提示 —— 那是「还没填完」不是单位问题', () => {
