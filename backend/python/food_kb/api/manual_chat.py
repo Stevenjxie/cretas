@@ -252,6 +252,32 @@ _MULTI_OUTPUT_WAREHOUSE_RECEIPT_ANSWER = """\
 4. 重复点击或网络重试复用同一幂等结果，不重复生成库存批次或库存流水。
 
 **验收结果：** 仓库回读的产出行集合、每行 SKU、批次、数量和单位与正式报工完全一致；混合单位没有被相加。只有整组确认成功后，所有对应成品批次和生产仓可用库存才一起生效。"""
+_FACTORY_RN_READONLY_ANSWER = """\
+手机端把查看、续录和正式业务写入分开，不能因为看到了记录或需求单就把它当成写入口。
+
+**盘点记录：**
+1. “盘点记录”进入今日和历史任务列表，详情页只读展示盘点单及明细，不会误跳到“发起盘点”。
+2. 未完成任务可以从记录列表继续进入盘点录入；提交后仍须按既有盘点审批与“应用差异”边界生效。
+3. 记录入口本身不能新建盘点，也不能绕过审批直接改库存。
+
+**物料需求单：**
+1. 生产工作台提供只读列表和详情，可查看需求单号、生产计划、状态，以及每项物料的需求、已备料、已签收、已消耗、损耗和退料数量。
+2. RN 不能在该入口生成需求单，也不能执行备料、调拨、签收、关单或取消；这些动作仍由有对应权限的管理后台完成。
+
+**AI 智能入库：** schema 完成后只加载一次供应商候选并进入表单，可辅助填写入库草稿，但不会替用户提交、审批或增加库存。持续卡在“加载供应商列表”属于异常，应重试或上报。"""
+_FACTORY_REPORTING_SOURCE_SHORTAGE_ANSWER = """\
+逐道报工的投入来源按实际批次逐行提交，库存短缺以服务端校验为唯一真值。
+
+**来源选择与显示：**
+1. 多来源工序至少选择一个投入来源；可以选一个、多个或全部，未选择的来源不能扣库存。
+2. 页面按“一个来源一行”展示物料、批次、单位和数量。只有一个确定批次时系统自动选中并锁定；有多个候选时必须由操作员选择，前端不能猜。
+3. 必填标记与阻塞原因显示在对应行内，正式报工只提交本次实际发生且数量为正的投入。
+
+**服务端短缺：**
+1. 可用库存和短缺数量以服务端校验为准；前端不自行计算另一套“可用库存”。
+2. 服务端返回结构化短缺明细时，页面逐项显示“需多少、可用多少、缺多少”并提示联系仓管补料。
+3. 短缺时本行只能保存草稿；正式报工必须整体失败，不能扣一部分库存或让其它投入部分成功。
+4. 若服务端没有结构化明细，页面保留原始错误，不猜物料、批次或数量。"""
 _RESTAURANT_CONTEXT_SCOPE_ANSWER = """\
 餐饮导览助手只解释用法；真实门店数据比较和连续追问请在 SmartBI 餐饮 AI 中完成。
 
@@ -321,6 +347,42 @@ AI 飞轮运营台是平台能力治理工具，不是老板或店员的经营�
 4. 权限、接口或依赖表失败时必须明确报错，不能以模拟数据或假成功兜底。
 
 **统一入口边界：** 网页图表洞察和移动餐饮 AI 共享意图编排后，仍沿用当前会话已确认的门店、菜品和时间范围；咨询保持只读，操作继续先预览、再确认。真实经营分析进入 SmartBI 餐饮 AI，导览助手只指向正确板块和方法。"""
+_RESTAURANT_METRIC_ENTITY_ANSWER = """\
+餐饮导览助手只解释当前指标与实体合同；真实租户数据的排序、计算和图表请进入 SmartBI 餐饮 AI。
+
+**指标路由：**
+1. “损耗金额、损耗成本、损失多少钱最高”按食材 `wastage_cost` 排序，并同时展示损耗数量；普通“损耗最多”默认按 `wastage_qty`。
+2. 若只有损耗金额总额、食材金额轴尚未生成，必须明确回答“当前不能给食材金额排名”，不能拿数量顺序冒充金额排名。
+3. “采购/领料花了多少钱”走后厨领料成本 `requisition_cost`，不能误路由到配方成本、菜品成本或理论单菜毛利。
+4. 堂食/外卖拆分同时识别中文渠道值与 POS 的 `order_type` 代码，不能因源值是英文代码就返回空占比。
+
+**实体裁决：** 候选菜名、规范名和已确认 POS 别名必须在当前租户菜单目录内核对。“损耗成本、人工成本、采购花费”等业务词和“哪个、多少、怎么”等疑问片段不是菜名或门店名；目录不可用时保留兼容行为，但不能跨租户借菜单。"""
+_RESTAURANT_DATA_AVAILABILITY_ANSWER = """\
+有 POS 流水或后厨事实任一类，就可以进入餐饮问答；缺少另一类数据时只限制对应问题，不能让整条餐饮 AI 静默不可用。
+
+1. 只有 POS 流水时，可以回答营收、订单、菜品销售、门店和堂食/外卖渠道问题。
+2. 领料、损耗、盘点等后厨问题应明确回答当前无记录或缺少事实来源，不能按 0 计算，也不能从 POS 流水推造后厨数据。
+3. 反过来只有后厨事实时，可以回答已接入的领料、损耗或盘点问题；没有 POS 时不能编造营收、菜品销量或渠道结构。
+4. 缺失维度、比较期、门店粒度或未物化指标都要显式说明；0 只代表真实查询得到的 0，不能代表未接入或缺失。"""
+_RESTAURANT_GUIDE_BOUNDARY_ANSWER = """\
+餐饮导览助手不能替用户计算门店毛利、损耗或分析上传的业务数据；它只说明入口、指标口径和提问方法。
+
+**正确入口与问法：**
+1. 进入 SmartBI 餐饮 AI，明确门店、时间范围和所需指标，再让真实分析链查询当前租户数据。
+2. 毛利先问期间总毛利率；可信食材成本口径是“期初库存 + 本期采购 − 期末库存”。单菜毛利只能作为依赖配方覆盖率和采购价新鲜度的理论参考，不能宣称是每道菜的精确真实毛利。
+3. 损耗要先区分数量与金额：数量用 `wastage_qty`，金额用 `wastage_cost`；金额轴未生成时不能拿数量排名替代。
+4. 若缺少盘点、领料或损耗事实，应说明缺失并指引补齐对应数据，不能用 0、模拟数或助手自行计算的数字补齐。
+
+导览助手可以把用户带到正确板块并给出上述问法，但不会返回或代算该门店的真实经营结果。"""
+_RESTAURANT_SCOPE_ACTION_ANSWER = """\
+“看全部门店 / 只看某店”不是所有餐饮回答都会出现的通用按钮。
+
+只有同时满足以下条件才提供范围追问：
+1. 当前 resolver 真正支持门店维度；
+2. 当前租户存在其它可用范围；
+3. 系统能把目标范围与原问题拼成一个完整、可独立执行的问句。
+
+损耗等当前不能按门店拆分的 resolver 不显示范围按钮。裸店名、裸“全部门店”或只有范围词而没有完整业务问题，也不能作为可执行追问。用户要换范围时，应在 SmartBI 餐饮 AI 中提交完整问题；导览助手只解释这一规则，不替用户运行分析。"""
 
 
 def _uses_current_production_sop(query: str) -> bool:
@@ -418,6 +480,32 @@ def _needs_multi_output_warehouse_receipt_guard(query: str) -> bool:
     )
 
 
+def _needs_factory_rn_readonly_guard(query: str) -> bool:
+    """Keep RN record/detail entry points separate from business writes."""
+    normalized = (query or "").lower()
+    rn_signals = sum(
+        term in normalized
+        for term in ("盘点记录", "物料需求单", "智能入库")
+    )
+    return rn_signals >= 2 or (
+        rn_signals >= 1
+        and any(term in normalized for term in ("手机", "rn", "只读", "能做什么"))
+    )
+
+
+def _needs_factory_reporting_source_shortage_guard(query: str) -> bool:
+    """Explain per-source reporting rows and server-authoritative shortages."""
+    normalized = (query or "").lower()
+    mentions_reporting = any(term in normalized for term in ("报工", "投入"))
+    mentions_sources = any(
+        term in normalized for term in ("来源", "批次", "选择", "一行")
+    )
+    mentions_shortage = any(
+        term in normalized for term in ("短缺", "缺料", "可用库存", "库存不足")
+    )
+    return mentions_reporting and mentions_sources and mentions_shortage
+
+
 def _needs_restaurant_context_scope_guard(query: str) -> bool:
     """Use the reviewed SmartBI session-scope contract for follow-up questions."""
     normalized = (query or "").lower()
@@ -513,6 +601,58 @@ def _needs_restaurant_flywheel_governance_guard(query: str) -> bool:
     )
     mentions_alias = any(term in normalized for term in ("菜品别名", "别名映射"))
     return mentions_flywheel or mentions_alias
+
+
+def _needs_restaurant_metric_entity_guard(query: str) -> bool:
+    """Keep amount/quantity axes, requisition cost and menu entities distinct."""
+    normalized = (query or "").lower()
+    wastage_amount = any(
+        term in normalized for term in ("损耗金额", "损耗成本", "损失多少钱")
+    ) and any(term in normalized for term in ("排序", "最高", "排名", "金额轴"))
+    requisition_cost = any(
+        term in normalized for term in ("领料花了多少钱", "领料成本", "requisition_cost")
+    )
+    menu_entity = any(term in normalized for term in ("菜单目录", "菜名裁决", "菜品别名")) and any(
+        term in normalized for term in ("业务词", "疑问", "跨租户", "当成菜名")
+    )
+    return wastage_amount or requisition_cost or menu_entity
+
+
+def _needs_restaurant_data_availability_guard(query: str) -> bool:
+    """Describe POS-only/kitchen-only eligibility without treating missing as zero."""
+    normalized = (query or "").lower()
+    pos_only = (
+        any(term in normalized for term in ("只有 pos", "仅有 pos", "只有pos", "pos 流水"))
+        and any(term in normalized for term in ("领料", "损耗", "盘点", "后厨", "按 0", "当 0"))
+    )
+    kitchen_only = (
+        any(term in normalized for term in ("只有后厨", "仅有后厨"))
+        and any(term in normalized for term in ("pos", "营收", "菜品销量", "渠道"))
+    )
+    return pos_only or kitchen_only
+
+
+def _needs_restaurant_guide_boundary_guard(query: str) -> bool:
+    """Keep the guide educational and route real analysis to SmartBI."""
+    normalized = (query or "").lower()
+    mentions_guide = any(term in normalized for term in ("导览助手", "操作助手"))
+    mentions_analysis = any(
+        term in normalized
+        for term in ("计算", "分析", "代算", "替我算", "毛利", "损耗", "业务数据")
+    )
+    return mentions_guide and mentions_analysis
+
+
+def _needs_restaurant_scope_action_guard(query: str) -> bool:
+    """Only advertise store-scope actions when a resolver can execute them."""
+    normalized = (query or "").lower()
+    mentions_action = "按钮" in normalized or any(
+        term in normalized for term in ("看全部门店", "只看某店", "换范围")
+    )
+    mentions_scope = any(
+        term in normalized for term in ("门店", "resolver", "损耗", "范围")
+    )
+    return mentions_action and mentions_scope
 
 
 # ---------------------------------------------------------------------------
@@ -721,6 +861,9 @@ SYSTEM_PROMPT = """\
 3g. 【餐饮月报与预警】当前月报固定 5 节且每节显式使用全部门店范围；损耗查询仍是近 30 天口径，已从指定月份月报摘除。计划预警是同一 sealed QuerySpec 的定时回放加阈值，不是第二套统计引擎；无数据或执行失败表示无法判定，不能当成正常或自动关闭既有告警。
 3h. 【平台同步边界】当前客如云风格 connector 由服务端受控配置，不得编造门店自助“POS 对接”设置页、已支持品牌或实时性承诺。模拟平台只用于测试；未开通正式 connector 时，引导用户通过 SmartBI → Excel 上传导入 POS 导出文件。
 3i. 【餐饮日期、繁体范围与输出偏好】明确起止日期按自然日闭区间并标记“指定区间”，无效或倒置日期必须澄清；“全部門店”只作为与“全部门店”等价的聚合范围，当前繁体支持不得扩大成全句转换。用户明确要求文字/表格/图表/报告文件时优先，未明确时当前默认文字+表格，文字始终保留；输出偏好不改变查询计划。只有呈现层实际返回对应表格、图表或下载文件时才能宣称已生成，导览助手不得伪造输出。
+3j. 【餐饮指标与实体合同】损耗金额按 `wastage_cost` 排序并展示数量，普通损耗最多按 `wastage_qty`；食材金额轴未物化时拒绝金额排名，不得拿数量冒充。领料花费走 `requisition_cost`，堂食/外卖兼容 POS `order_type`；菜名与别名只在当前租户菜单目录裁决，业务词和疑问片段不得当成菜名或门店。
+3k. 【数据可用与范围动作】POS 流水或后厨事实任一类即可进入餐饮问答，缺少另一类时对应问题回答无记录，不能用 0 补齐。只有 resolver 真支持门店维度、存在其它范围且能生成完整独立问句时才提供换范围按钮；损耗等不支持门店拆分的 resolver 不提供误导按钮。
+3l. 【导览助手边界】导览助手不替用户计算毛利、损耗或分析业务数据，只解释板块、口径和提问方法，并把真实分析指向 SmartBI 餐饮 AI。
 4. 系统名称统一用「白垩纪 AI Agent」
 5. 不使用 emoji，保持专业简洁
 6. 菜单路径用 → 连接，如: 首页 → 仓储管理 → 入库
@@ -1350,10 +1493,40 @@ async def _prepare_generation(request: ManualChatRequest) -> _PreparedGeneration
     ):
         guard_answer = _WORKFLOW_ACTUAL_IO_ANSWER
     elif (
+        not is_restaurant_request
+        and _needs_factory_rn_readonly_guard(request.question)
+    ):
+        guard_answer = _FACTORY_RN_READONLY_ANSWER
+    elif (
+        not is_restaurant_request
+        and _needs_factory_reporting_source_shortage_guard(request.question)
+    ):
+        guard_answer = _FACTORY_REPORTING_SOURCE_SHORTAGE_ANSWER
+    elif (
         is_restaurant_request
         and _needs_restaurant_flywheel_governance_guard(request.question)
     ):
         guard_answer = _RESTAURANT_FLYWHEEL_GOVERNANCE_ANSWER
+    elif (
+        is_restaurant_request
+        and _needs_restaurant_guide_boundary_guard(request.question)
+    ):
+        guard_answer = _RESTAURANT_GUIDE_BOUNDARY_ANSWER
+    elif (
+        is_restaurant_request
+        and _needs_restaurant_data_availability_guard(request.question)
+    ):
+        guard_answer = _RESTAURANT_DATA_AVAILABILITY_ANSWER
+    elif (
+        is_restaurant_request
+        and _needs_restaurant_metric_entity_guard(request.question)
+    ):
+        guard_answer = _RESTAURANT_METRIC_ENTITY_ANSWER
+    elif (
+        is_restaurant_request
+        and _needs_restaurant_scope_action_guard(request.question)
+    ):
+        guard_answer = _RESTAURANT_SCOPE_ACTION_ANSWER
     elif (
         is_restaurant_request
         and _needs_restaurant_monthly_report_guard(request.question)
