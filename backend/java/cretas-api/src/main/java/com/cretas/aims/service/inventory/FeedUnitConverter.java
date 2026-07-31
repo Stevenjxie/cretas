@@ -24,14 +24,31 @@ public final class FeedUnitConverter {
     private static final int BOX_SCALE = 2;
 
     /**
-     * 计数单位判定 — 与前端 {@code ProcessDataTable.isCountUnit} 同口径 (盒/个/件/只)。
+     * 计数单位判定 — 与前端 {@code utils/feedUnitConversion.ts#isCountUnit} 同口径。
      * 计数单位库存 (气调成品常按盒计) 与本道 kg 投料口径不同, 需经 gramsPerUnit 折算。
+     *
+     * <p>🔴 <b>先问权威表的量纲</b> ({@code COUNT} / {@code PACKAGE} 即计数单位), 再退回原来的
+     * 中文子串判定。原实现<b>只匹配中文字符</b>, 于是 {@code bag / box / pack / pcs / bottle / can}
+     * 这些<b>英文码一律判为 false → 被当成质量单位走 kg 数学</b> —— 客户 2026-07-31 那个 SKU 的
+     * 单位存的正是 {@code bag}。这类错<b>不报错</b>, 只是算出来的数不对, 比 409 拦截更难发现。</p>
+     *
+     * <p>两段式是<b>刻意</b>的, 不是保险起见:</p>
+     * <ul>
+     *   <li>权威表按 code/别名<b>精确</b>查, 认得 24 组系统单位的中英两种写法;</li>
+     *   <li>中文子串那段是<b>模糊</b>匹配, 认得「盒(500g)」「大盒」这类复合标签 —— 权威表查不到。
+     *       两段取<b>或</b>, 所以改动前判为计数单位的, 改动后一定还是计数单位 (只增不减)。</li>
+     * </ul>
+     *
+     * <p>⚠️ 因此本次<b>新增</b>被判为计数单位的有: 全部英文码, 以及中文的 箱/框/筐/桶/卷/片/项。
+     * 它们此前被当成质量单位直接按 kg 透传; 之后要求 gramsPerUnit, 缺了会走上面的「诚实 null」
+     * 而<b>不再</b>静默按 kg 算。那正是期望行为 —— 但确实会让一部分原来"悄悄算完"的数据开始报错。</p>
      */
     public static boolean isCountUnit(String unit) {
         if (unit == null) {
             return false;
         }
-        return unit.contains("盒") || unit.contains("袋") || unit.contains("包")
+        return com.cretas.aims.service.unit.impl.UnitContractServiceImpl.isBuiltInCountingUnit(unit)
+                || unit.contains("盒") || unit.contains("袋") || unit.contains("包")
                 || unit.contains("个") || unit.contains("件") || unit.contains("只")
                 || unit.contains("份") || unit.contains("瓶") || unit.contains("罐");
     }

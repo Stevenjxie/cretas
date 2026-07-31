@@ -27,6 +27,36 @@ describe('feedUnitConversion — 盒⇄kg 折算 (逐道投料防呆)', () => {
       expect(isCountUnit(null)).toBe(false);
       expect(isCountUnit(undefined)).toBe(false);
     });
+
+    /**
+     * 🔴 原判据是一条只匹配中文的正则, 于是**英文码全被当成质量单位走 kg 数学**。
+     * 客户 2026-07-31 那个 SKU 的单位存的正是 `bag` —— 这类错**不报错**, 只是数不对。
+     */
+    it('英文规范码同样是计数单位 (原来全判成 false → 按 kg 直投)', () => {
+      for (const code of ['bag', 'box', 'case', 'pack', 'bottle', 'can',
+        'pcs', 'portion', 'crate', 'pail', 'roll', 'slice', 'item']) {
+        expect(isCountUnit(code), `${code} 应是计数单位`).toBe(true);
+      }
+      // 大小写/空格不该影响判定 (库里存过 'Bag' 这种)
+      expect(isCountUnit(' Bag ')).toBe(true);
+    });
+
+    it('中文里原来漏掉的那几个', () => {
+      for (const label of ['箱', '框', '筐', '桶', '卷', '片', '项']) {
+        expect(isCountUnit(label), `${label} 应是计数单位`).toBe(true);
+      }
+    });
+
+    it('复合标签仍走模糊匹配 (权威表查不到, 但确实是计数单位)', () => {
+      expect(isCountUnit('盒(500g)')).toBe(true);
+      expect(isCountUnit('大盒')).toBe(true);
+    });
+
+    it('质量/体积单位不因这次放宽而被误判成计数', () => {
+      for (const label of ['g', 'mg', 't', 'jin', '克', '吨', '斤', 'ml', 'l', '毫升', '升']) {
+        expect(isCountUnit(label), `${label} 不该要求 gramsPerUnit`).toBe(false);
+      }
+    });
   });
 
   describe('hasValidGrams', () => {

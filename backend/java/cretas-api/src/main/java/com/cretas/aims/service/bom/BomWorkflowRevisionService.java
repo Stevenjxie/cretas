@@ -1009,36 +1009,21 @@ public class BomWorkflowRevisionService {
         return canonicalUnit(left).equals(canonicalUnit(right));
     }
 
+    /**
+     * Workflow snapshots historically store display labels while BOM rows store canonical codes,
+     * so both sides go through the unit contract before deciding that a material input disappeared
+     * during slot re-keying.
+     *
+     * <p>⚠️ 这里原来是**手抄的一份** 21 组别名表。抄出来的表会漂，而且已经漂了:
+     * 权威表里 {@code crate} 的别名是「框、筐」，抄本写的是「筐、篮」——「框」在抄本里落 default
+     * 成了它自己，「篮」则是抄本独有。改成直接问权威表，从此不会再漂。</p>
+     *
+     * <p>NFKC 归一保留: 快照里出现过全角/兼容字符, 权威表的 key 是半角的。</p>
+     */
     private static String canonicalUnit(String value) {
-        // Workflow snapshots historically store display labels while BOM rows store canonical
-        // codes. Keep immutable snapshots readable by applying the same built-in aliases as the
-        // unit contract before deciding that a material input disappeared during slot re-keying.
-        String normalized = Normalizer.normalize(value, Normalizer.Form.NFKC)
-                .trim()
-                .toLowerCase(Locale.ROOT);
-        return switch (normalized) {
-            case "毫克", "mg" -> "mg";
-            case "公斤", "千克", "kg" -> "kg";
-            case "克", "g" -> "g";
-            case "斤", "jin" -> "jin";
-            case "吨", "t" -> "t";
-            case "毫升", "ml" -> "ml";
-            case "升", "l" -> "l";
-            case "件", "个", "只", "pcs" -> "pcs";
-            case "份", "portion" -> "portion";
-            case "盒", "box" -> "box";
-            case "箱", "case" -> "case";
-            case "袋", "bag" -> "bag";
-            case "包", "pack" -> "pack";
-            case "瓶", "bottle" -> "bottle";
-            case "罐", "can" -> "can";
-            case "筐", "篮", "crate" -> "crate";
-            case "桶", "pail" -> "pail";
-            case "卷", "roll" -> "roll";
-            case "片", "slice" -> "slice";
-            case "项", "item" -> "item";
-            default -> normalized;
-        };
+        // NFKC 先做: 快照里出现过全角/兼容字符, 权威表的 key 是半角的。
+        String normalized = Normalizer.normalize(value, Normalizer.Form.NFKC);
+        return com.cretas.aims.service.unit.impl.UnitContractServiceImpl.canonicalCodeOrRaw(normalized);
     }
 
     private static BigDecimal decimal(Object value) {
