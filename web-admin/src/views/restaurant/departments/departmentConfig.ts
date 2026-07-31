@@ -59,7 +59,7 @@ export interface DeptConfig {
   accent: string;
   /**
    * 数据源。null = 该部门尚无可用数据源，页面走 emptyState。
-   *  - 'ops-summary'  → /api/smartbi/gold/restaurant-ops/summary（含 totals 与 margin）
+   *  - 'ops-summary'  → /api/smartbi/restaurant-ops/summary（含 totals 与 margin）
    *  - 'kpi-summary'  → /api/smartbi/gold/kpi-summary
    */
   source: 'ops-summary' | 'kpi-summary' | null;
@@ -101,7 +101,7 @@ export const DEPARTMENTS: Record<DeptKey, DeptConfig> = {
       unit: '元',
       money: true,
       shape: 'ops-kpi',
-      endpoint: '/api/smartbi/gold/restaurant-ops/daily-trend?kpi_kind=wastage_cost&days={days}',
+      endpoint: '/api/smartbi/restaurant-ops/daily-trend?kpi_kind=wastage_cost&days={days}',
     },
     ranking: {
       title: '领用成本前列食材',
@@ -179,7 +179,7 @@ export const DEPARTMENTS: Record<DeptKey, DeptConfig> = {
       unit: '元',
       money: true,
       shape: 'ops-kpi',
-      endpoint: '/api/smartbi/gold/restaurant-ops/daily-trend?kpi_kind=requisition_cost&days={days}',
+      endpoint: '/api/smartbi/restaurant-ops/daily-trend?kpi_kind=requisition_cost&days={days}',
     },
     entries: [
       { title: '成本归因', path: '/restaurant/cost-attribution' },
