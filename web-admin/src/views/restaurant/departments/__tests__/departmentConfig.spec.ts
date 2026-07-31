@@ -213,3 +213,34 @@ describe('取值路径必须 camelCase', () => {
     expect(bad, bad.join('\n')).toEqual([]);
   });
 });
+
+/**
+ * 页头的期间选择器必须**真的**传到后端。
+ *
+ * 两类端点收窗口的方式不同，而且**默认行为相反**：
+ *
+ *   /api/smartbi/restaurant-ops/*  收 `days`；不传则默认 30
+ *   /api/smartbi/gold/*            收 `start_date`/`end_date`；**不传 = 全部历史**
+ *
+ * 第一版我给 gold 系列漏传日期，页头写着「最近 30 天」而图表画的是 576 天全量 ——
+ * 期间选择器做出了页面兑现不了的承诺，**且不报错**。
+ * 这与同一天在 AI resolver 侧修过三次（#2076 / #2081）的是同一类缺陷。
+ */
+describe('期间选择器必须落到请求上', () => {
+  it('gold 系列的趋势端点不能自带 days（那个参数它不认）', () => {
+    for (const key of DEPARTMENT_ORDER) {
+      const t = DEPARTMENTS[key].trend;
+      if (!t || t.shape !== 'revenue-points') continue;
+      expect(t.endpoint, `${key}: gold 端点不认 days, 必须靠 start_date/end_date`)
+        .not.toContain('days');
+    }
+  });
+
+  it('restaurant-ops 系列的趋势端点必须带 {days} 占位', () => {
+    for (const key of DEPARTMENT_ORDER) {
+      const t = DEPARTMENTS[key].trend;
+      if (!t || t.shape !== 'ops-kpi') continue;
+      expect(t.endpoint, `${key}: 少了 {days}, 窗口切换不会生效`).toContain('{days}');
+    }
+  });
+});
