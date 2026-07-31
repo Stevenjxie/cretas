@@ -306,6 +306,13 @@ const rawMenuConfig: MenuItem[] = [
     roles: ['factory_super_admin', 'platform_admin', 'permission_admin', 'restaurant_manager', 'restaurant_owner', 'restaurant_purchaser', 'restaurant_chef', 'warehouse_manager', 'procurement_manager', 'finance_manager', 'sales_manager'],
     hideForFactoryTypes: ['FACTORY'],
     children: [
+      // -- 部门驾驶舱 (2026-07-31) --
+      // 不写 roles: 由 module 权限门控即可(四个部门键各自决定谁能看见), 再叠一层
+      // 角色白名单只会变成第二处要同步的地方 —— 那正是 #2084 修的那个坑。
+      { path: '/restaurant/ops', title: '运营', icon: 'Bowl', module: 'restaurantOps', groupLabel: '部门驾驶舱' },
+      { path: '/restaurant/marketing', title: '市场', icon: 'TrendCharts', module: 'restaurantMarketing' },
+      { path: '/restaurant/hr', title: '人事', icon: 'User', module: 'restaurantHr' },
+      { path: '/restaurant/finance', title: '财务', icon: 'Money', module: 'restaurantFinance' },
       // -- 深度分析 (Gold 读层) --
       // 店长经营 KPI 看板 (single-store MVP 2026-06-04): 6 KPI 一屏 + 健康灯, 店长高频入口。
       { path: '/restaurant/analytics/role-kpi', title: '经营看板', icon: '', module: 'analytics', groupLabel: '深度分析',
