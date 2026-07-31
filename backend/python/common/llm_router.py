@@ -40,6 +40,7 @@ import json
 import datetime
 import logging
 import os
+import tempfile
 import time
 from enum import Enum
 from threading import Lock
@@ -449,15 +450,102 @@ def get_cb_stats() -> Dict[str, Any]:
 # at the chain head and are tried first after each TTL re-probe / monthly reset —
 # they're only skipped while *known* exhausted, not demoted out of the chain.
 _QUOTA_EXHAUSTED_UNTIL: Dict[str, float] = {}   # "account/model" → unix ts to skip until
+_QUOTA_STRIKES: Dict[str, int] = {}             # "account/model" → 连续撞到次数
 _QUOTA_LOCK = Lock()
-QUOTA_SKIP_TTL = 6 * 3600.0    # 6h: re-probe ~4×/day to catch monthly free-quota reset
+QUOTA_SKIP_TTL = 6 * 3600.0        # 6h: re-probe ~4×/day to catch monthly free-quota reset
+QUOTA_SKIP_TTL_MAX = 24 * 3600.0   # 退避上限 —— 每天仍至少试探一次, 接得住月度重置
+
+# 2026-08-01: 上面那套 6h TTL 只活在**单个进程的内存**里, 于是 prod 日志
+# (07-25~08-01, 7 天) 显示:
+#     真发请求撞到的 403 : 608 次 ≈ 87/天
+#     记忆命中的跳过     : 8283 次 (0 成本 —— 缓存本身是有效的)
+#     成功               : 5496 次
+# 单个模型 aliyun_c/qwen3.7-max 被撞 70 次 = 10 次/天, 而 6h TTL 的设计预期是
+# 4 次/天。多出来的约 60% 来自**每次部署重启清零** + **每个独立进程各撞一遍**
+# (每日审计脚本 / eval / 一次性探针都从空白开始)。
+#
+# 代价不是钱(403 不计费), 是**延迟**: 重启后第一批请求要串行吃掉 7 个 403 往返,
+# 而餐饮 T3 整条链的预算只有 _SEMANTIC_TOTAL_TIMEOUT_SECONDS = 12s —— 撞掉的
+# 预算会让后面的好模型够不到, 表现为答案掉到更差的兜底档而不是"慢一点"。
+#
+# 两条改动:
+#   1. 把这份记忆落到磁盘, 启动时载入 → 重启和跨进程不再重新发现;
+#   2. 连续撞到就把窗口翻倍 (6h → 12h → 24h 封顶), 成功即归零。
+#
+# ⛔ 刻意**不做永久拉黑**: 免费额度是**月度重置**的, 上面 435-449 行的整段设计
+# 就是为了接住那次重置。永久拉黑 = 额度回来了模型也永远不再启用, 而清除它的
+# 唯一途径变成重启 —— 那正是我们刚刚在消除的东西。
+#
+# ⛔ 状态文件**不能**落在 backend/python 里: 部署用
+# `rsync -az --delete-after`(deploy-smartbi-python.sh:304) 同步这棵树, 而
+# exclude 列表里没有它 —— 每次部署都会把它删掉, 持久化白做。
+# 也刻意**不**去 rsync 那边加一条 exclude: 那会让「文件放哪」由两处代码共同决定,
+# 改了这里而忘了那里就静默失效。放到代码树之外, 单一真值。
+# 落 tempdir: 跨进程共享 + 跨重启存活 + 不进任何同步/构建产物; 重启机器被清掉也
+# 只是退回今天的行为(重新发现一次), 不会更糟。
+_QUOTA_STATE_PATH = os.environ.get(
+    "LLM_QUOTA_STATE_PATH",
+    os.path.join(tempfile.gettempdir(), "cretas-llm-quota-state.json"),
+)
+
+
+def _quota_skip_seconds_for(cb_key: str) -> float:
+    """当前这一次该跳过多久 —— 按连续撞到次数退避, 封顶 QUOTA_SKIP_TTL_MAX。"""
+    strikes = max(1, _QUOTA_STRIKES.get(cb_key, 1))
+    return min(QUOTA_SKIP_TTL * (2 ** (strikes - 1)), QUOTA_SKIP_TTL_MAX)
+
+
+def _quota_save_state() -> None:
+    """原子落盘。⚠️ 在调用主路径上 —— 任何异常都必须吞掉, 降级成纯内存行为。"""
+    try:
+        payload = {
+            "version": 1,
+            "entries": {
+                k: {"until": v, "strikes": _QUOTA_STRIKES.get(k, 1)}
+                for k, v in _QUOTA_EXHAUSTED_UNTIL.items()
+            },
+        }
+        tmp = f"{_QUOTA_STATE_PATH}.tmp{os.getpid()}"
+        try:
+            with open(tmp, "w", encoding="utf-8") as fh:
+                json.dump(payload, fh)
+            os.replace(tmp, _QUOTA_STATE_PATH)  # 原子: 并发进程最多互相覆盖, 不会读到半个文件
+        except Exception:  # noqa: BLE001
+            # os.replace 失败时 tmp 会残留, 每次失败每个 pid 留一个 —— 变异检验
+            # (把 os.replace 改成 no-op) 时在工作区里真的看到了残留文件。清掉。
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
+            raise
+    except Exception:  # noqa: BLE001 — 持久化失败绝不能拖垮路由
+        pass
+
+
+def _quota_load_state() -> None:
+    """启动时载入。取磁盘与内存里**更晚**的那个 until, 避免并发进程互相回退。"""
+    try:
+        with open(_QUOTA_STATE_PATH, encoding="utf-8") as fh:
+            payload = json.load(fh)
+        now = time.time()
+        for key, rec in (payload.get("entries") or {}).items():
+            until = float(rec.get("until") or 0.0)
+            if until <= now:
+                continue                       # 过期的不载入, 让它自然获得一次 re-probe
+            if until > _QUOTA_EXHAUSTED_UNTIL.get(key, 0.0):
+                _QUOTA_EXHAUSTED_UNTIL[key] = until
+                _QUOTA_STRIKES[key] = int(rec.get("strikes") or 1)
+    except FileNotFoundError:
+        pass
+    except Exception:  # noqa: BLE001 — 文件损坏/权限问题都只降级, 不抛
+        pass
 
 
 def _quota_should_skip(cb_key: str) -> bool:
-    """True if this (account,model) returned a quota signal within QUOTA_SKIP_TTL.
+    """True if this (account,model) returned a quota signal within its skip window.
 
-    Auto-clears the mark once the TTL elapses so the model gets one re-probe; if
-    that probe is still quota-exhausted it is re-marked for another TTL window.
+    Auto-clears the mark once the window elapses so the model gets one re-probe; if
+    that probe is still quota-exhausted it is re-marked for a **longer** window.
     """
     with _QUOTA_LOCK:
         until = _QUOTA_EXHAUSTED_UNTIL.get(cb_key, 0.0)
@@ -465,21 +553,31 @@ def _quota_should_skip(cb_key: str) -> bool:
             return False
         if time.time() < until:
             return True
-        # TTL elapsed — clear and allow a re-probe
+        # 窗口到期 — 清掉标记放行一次 re-probe。strikes 保留: 若这次探针仍然 403,
+        # 说明它确实还没恢复, 下一个窗口应该更长而不是退回 6h。
         del _QUOTA_EXHAUSTED_UNTIL[cb_key]
         return False
 
 
 def _quota_record_exhausted(cb_key: str) -> None:
-    """Mark this (account,model) as quota-exhausted for QUOTA_SKIP_TTL seconds."""
+    """Mark this (account,model) as quota-exhausted, with escalating backoff."""
     with _QUOTA_LOCK:
-        _QUOTA_EXHAUSTED_UNTIL[cb_key] = time.time() + QUOTA_SKIP_TTL
+        _QUOTA_STRIKES[cb_key] = _QUOTA_STRIKES.get(cb_key, 0) + 1
+        _QUOTA_EXHAUSTED_UNTIL[cb_key] = time.time() + _quota_skip_seconds_for(cb_key)
+        _quota_save_state()
 
 
 def _quota_record_success(cb_key: str) -> None:
-    """Clear the quota-exhausted mark on a clean success (quota came back)."""
+    """Clear the quota-exhausted mark on a clean success (quota came back).
+
+    连 strikes 一起清零 —— 额度回来了就该立刻回到最短窗口, 否则一次抖动会把一个
+    好模型长期压在 24h 退避里。
+    """
     with _QUOTA_LOCK:
-        _QUOTA_EXHAUSTED_UNTIL.pop(cb_key, None)
+        had = _QUOTA_EXHAUSTED_UNTIL.pop(cb_key, None)
+        had_strikes = _QUOTA_STRIKES.pop(cb_key, None)
+        if had is not None or had_strikes is not None:
+            _quota_save_state()
 
 
 def get_quota_skip_stats() -> Dict[str, Any]:
@@ -488,8 +586,15 @@ def get_quota_skip_stats() -> Dict[str, Any]:
         now = time.time()
         return {
             "skipped": {k: round(v - now, 1) for k, v in _QUOTA_EXHAUSTED_UNTIL.items() if v > now},
+            "strikes": dict(_QUOTA_STRIKES),
             "ttl_seconds": QUOTA_SKIP_TTL,
+            "ttl_max_seconds": QUOTA_SKIP_TTL_MAX,
+            "state_path": _QUOTA_STATE_PATH,
         }
+
+
+# 启动即载入 —— 不接这一行, 持久化就只写不读, 等于没做。
+_quota_load_state()
 
 
 class SLOT(str, Enum):
