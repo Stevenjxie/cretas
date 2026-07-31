@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref, reactive, computed, onMounted, watch } from 'vue';
+import { displayUnit } from '@/utils/unitPricing';
 import { useRouter } from 'vue-router';
 import { useAuthStore } from '@/store/modules/auth';
 import { usePermissionStore } from '@/store/modules/permission';
@@ -546,7 +547,7 @@ async function handleGenerateLabel(row: TableRow) {
                 <el-table-column prop="supplierName" label="供应商" min-width="140" show-overflow-tooltip />
                 <el-table-column label="数量" width="120" align="right">
                   <template #default="{ row: b }">
-                    {{ b.quantity ?? b.currentQuantity ?? b.receiptQuantity ?? '-' }} {{ b.quantityUnit || b.unit || '' }}
+                    {{ b.quantity ?? b.currentQuantity ?? b.receiptQuantity ?? '-' }} {{ displayUnit(b.quantityUnit || b.unit) }}
                   </template>
                 </el-table-column>
                 <el-table-column label="状态" width="100" align="center">
@@ -603,7 +604,7 @@ async function handleGenerateLabel(row: TableRow) {
         <!-- T159-A foldable #1: 显示批次实际称重/入库单位 (quantityUnit), 非主数据 unit
              Steve反馈: "改批次单位列表不变" — row.unit=主数据unit(箱/kg等), row.quantityUnit=实际入库单位 -->
         <el-table-column label="单位" width="80" align="center">
-          <template #default="{ row }">{{ row.quantityUnit || row.unit || '-' }}</template>
+          <template #default="{ row }">{{ displayUnit(row.quantityUnit || row.unit) || '-' }}</template>
         </el-table-column>
         <el-table-column label="箱数" width="90" align="right">
           <template #default="{ row }">

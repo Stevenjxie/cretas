@@ -8,6 +8,16 @@ export type PricingLine = {
   convertedPricingQuantity?: number | string | null;
 };
 
+/**
+ * ⛔ **不要为了让展示变中文而往这里加条目**。
+ *
+ * `canonicalUnitCode` 读的是这张表, 而它不只用于展示 —— 还参与**构造 API 请求体**
+ * (如单位换算接口的 fromUnit/toUnit)。2026-07-31 曾往这里加 `'斤' -> 'jin'`, 结果
+ * `SeasoningBindingDialog` 发给后端的 `fromUnit` 从「斤」变成了「jin」, 被既有测试当场拦下。
+ *
+ * 要让某个规范码显示成中文, 加到下面的 {@link UNIT_LABELS} 即可 —— 那张表是纯展示,
+ * 且中文写法本来就会原样透传 (查不到 label 就返回自身)。
+ */
 const UNIT_ALIASES: Record<string, string> = {
   kg: 'kg', '千克': 'kg', '公斤': 'kg',
   g: 'g', '克': 'g',
@@ -20,8 +30,29 @@ const UNIT_ALIASES: Record<string, string> = {
   ml: 'mL', '毫升': 'mL',
 };
 
+/**
+ * 规范码 → 展示文案。
+ *
+ * 🔴 规则 (Steve 2026-07-31 拍板):
+ * - **可换算的国际单位** (kg/g/mg/L/mL/mm/cm/m/km) 保留英文码 —— 它们真的参与换算,
+ *   用户也认这套写法。
+ * - **计数 / 包装单位** (box/bag/pcs/case/slice/pack/bottle/can/crate/pail/roll/portion/item)
+ *   **一律不得以英文码示人** —— 它们不参与任何换算, 码只是个内部标识, 对用户没有意义。
+ *   `斤`/`吨` 同理: `jin`/`t` 对用户是天书。
+ *
+ * 缺一条就会漏出英文码 (`displayUnit` 查不到 label 时原样返回)。同目录
+ * `__tests__/unitDisplayContract.spec.ts` 直接读后端权威表比对, 后端加了单位这里没加就会红。
+ */
 const UNIT_LABELS: Record<string, string> = {
-  kg: 'kg', g: 'g', box: '盒', case: '箱', slice: '片', bag: '袋', pcs: '只', portion: '份', L: 'L', mL: 'mL',
+  // 可换算国际单位 —— 保持英文
+  mg: 'mg', g: 'g', kg: 'kg', L: 'L', mL: 'mL',
+  mm: 'mm', cm: 'cm', m: 'm', km: 'km',
+  // 中文计量单位 —— 英文码对用户无意义
+  jin: '斤', t: '吨',
+  // 计数 / 包装 —— 一律中文
+  pcs: '只', portion: '份', slice: '片', item: '项',
+  box: '盒', case: '箱', bag: '袋', pack: '包', bottle: '瓶',
+  can: '罐', crate: '框', pail: '桶', roll: '卷',
 };
 
 export function canonicalUnitCode(value: unknown): string {

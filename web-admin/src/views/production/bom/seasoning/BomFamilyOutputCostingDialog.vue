@@ -1,6 +1,9 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue';
 import { ElMessage } from 'element-plus';
+// 单位必须走展示映射: 库里存的是规范码 (BomRecipeServiceImpl 保存时写 outputUnit.code()),
+// 原样插值会把 box / bag 这类英文码直接摆给用户看。
+import { displayUnit } from '@/utils/unitPricing';
 import {
   bomRecipeApi,
   type BomFamilyOutputCosting,
@@ -166,7 +169,7 @@ watch(
         <el-table-column label="基准产出" width="130" align="right">
           <template #default="{ row }">
             {{ row.outputQuantity == null ? '—' : quantityFormatter.format(row.outputQuantity) }}
-            {{ row.outputUnit || '' }}
+            {{ displayUnit(row.outputUnit) }}
           </template>
         </el-table-column>
         <el-table-column label="共享成本分摊" width="130" align="right">
@@ -212,7 +215,7 @@ watch(
               <dt>基准产出</dt>
               <dd>
                 {{ row.outputQuantity == null ? '—' : quantityFormatter.format(row.outputQuantity) }}
-                {{ row.outputUnit || '' }}
+                {{ displayUnit(row.outputUnit) }}
               </dd>
             </div>
             <div>

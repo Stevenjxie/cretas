@@ -563,7 +563,7 @@ const displayEquipmentCost = computed(() => closedLoopCost.value?.equipmentCost 
 const displayOtherCost = computed(() => closedLoopCost.value?.otherCost ?? batch.value?.otherCost);
 const displayTotalCost = computed(() => closedLoopCost.value?.totalCost ?? batch.value?.totalCost);
 const displayUnitCost = computed(() => closedLoopCost.value?.perBoxCost ?? batch.value?.unitCost);
-const displayCostUnit = computed(() => batch.value?.unit || displayActualUnit.value || '');
+const displayCostUnit = computed(() => displayProcessUnit(batch.value?.unit || displayActualUnit.value));
 const unitCostDisplay = computed(() => {
   if (closedLoopCost.value) return formatCost(displayUnitCost.value);
   return isCrossUnit.value ? '跨单位不可比' : formatCost(batch.value?.unitCost);
@@ -739,7 +739,7 @@ function goToReversalList() {
         <div class="kpi-card">
           <div class="kpi-label">计划数量</div>
           <div class="kpi-value">{{ formatNum(batch.plannedQuantity) }}</div>
-          <div class="kpi-unit">{{ batch.unit || '' }}</div>
+          <div class="kpi-unit">{{ displayProcessUnit(batch.unit) }}</div>
         </div>
         <div class="kpi-card">
           <div class="kpi-label">实际产量</div>
@@ -813,12 +813,12 @@ function goToReversalList() {
             <span class="section-title">产量与质量</span>
           </template>
           <el-descriptions :column="2" border>
-            <el-descriptions-item label="计划数量">{{ formatNum(batch.plannedQuantity) }} {{ batch.unit }}</el-descriptions-item>
-            <el-descriptions-item label="实际产量">{{ formatNum(batch.actualQuantity) }} {{ batch.unit }}</el-descriptions-item>
-            <el-descriptions-item label="良品数量">{{ formatNum(batch.goodQuantity) }} {{ batch.unit }}</el-descriptions-item>
+            <el-descriptions-item label="计划数量">{{ formatNum(batch.plannedQuantity) }} {{ displayProcessUnit(batch.unit) }}</el-descriptions-item>
+            <el-descriptions-item label="实际产量">{{ formatNum(batch.actualQuantity) }} {{ displayProcessUnit(batch.unit) }}</el-descriptions-item>
+            <el-descriptions-item label="良品数量">{{ formatNum(batch.goodQuantity) }} {{ displayProcessUnit(batch.unit) }}</el-descriptions-item>
             <el-descriptions-item label="不良品数量">
               <span :class="{ 'text-danger': batch.defectQuantity > 0 }">
-                {{ formatNum(batch.defectQuantity) }} {{ batch.unit }}
+                {{ formatNum(batch.defectQuantity) }} {{ displayProcessUnit(batch.unit) }}
               </span>
             </el-descriptions-item>
             <el-descriptions-item label="良品率">
@@ -1057,9 +1057,9 @@ function goToReversalList() {
                     <!-- 损耗 / 留样: 数量 null → "—" (非 0) -->
                     <div class="trad-item">
                       <span class="trad-label">损耗</span>
-                      <span class="trad-value">{{ fmtDash(row.wasteQuantity, row.outputUnit || '') }}</span>
+                      <span class="trad-value">{{ fmtDash(row.wasteQuantity, displayProcessUnit(row.outputUnit)) }}</span>
                       <span class="trad-label" style="margin-left: 24px">留样</span>
-                      <span class="trad-value">{{ fmtDash(row.sampleRetainQuantity, row.outputUnit || '') }}</span>
+                      <span class="trad-value">{{ fmtDash(row.sampleRetainQuantity, displayProcessUnit(row.outputUnit)) }}</span>
                     </div>
                   </template>
                   <span v-else class="trad-empty">本道无补充明细 (证据照片 / 工时段 / 副产物 / 损耗 / 留样)</span>
@@ -1160,13 +1160,13 @@ function goToReversalList() {
               </template>
             </el-table-column>
             <el-table-column label="过程处理" width="120" align="right">
-              <template #default="{ row }">{{ fmtDash(row.processedQuantity, row.processedUnit || '') }}</template>
+              <template #default="{ row }">{{ fmtDash(row.processedQuantity, displayProcessUnit(row.processedUnit)) }}</template>
             </el-table-column>
             <el-table-column label="阶段产出" width="120" align="right">
-              <template #default="{ row }">{{ fmtDash(row.stageOutputQuantity, row.stageOutputUnit || '') }}</template>
+              <template #default="{ row }">{{ fmtDash(row.stageOutputQuantity, displayProcessUnit(row.stageOutputUnit)) }}</template>
             </el-table-column>
             <el-table-column label="过程损耗" width="120" align="right">
-              <template #default="{ row }">{{ fmtDash(row.segmentWasteQuantity, row.segmentWasteUnit || '') }}</template>
+              <template #default="{ row }">{{ fmtDash(row.segmentWasteQuantity, displayProcessUnit(row.segmentWasteUnit)) }}</template>
             </el-table-column>
             <!-- A.6 逐道成本: 人工/材料/小计. null (未配工价 / 无原料单价) → "—" (非 ¥0). canViewPrice 门控. -->
             <el-table-column v-if="canViewPrice" label="人工成本" width="120" align="right">
@@ -1189,8 +1189,8 @@ function goToReversalList() {
           </div>
           <!-- 适配单元5 (F006 传统报工): 批次级 总损耗 / 总留样 汇总. null (未记录) → "—" (非 0). -->
           <div v-if="hasBatchTraditionalSummary" class="yield-trad-summary">
-            <span class="trad-summary-item">总损耗 {{ fmtDash(yieldData.totalWaste, yieldData.lastStepOutputUnit || '') }}</span>
-            <span class="trad-summary-item">总留样 {{ fmtDash(yieldData.totalSampleRetain, yieldData.lastStepOutputUnit || '') }}</span>
+            <span class="trad-summary-item">总损耗 {{ fmtDash(yieldData.totalWaste, displayProcessUnit(yieldData.lastStepOutputUnit)) }}</span>
+            <span class="trad-summary-item">总留样 {{ fmtDash(yieldData.totalSampleRetain, displayProcessUnit(yieldData.lastStepOutputUnit)) }}</span>
           </div>
           <!-- A.6 整批逐道成本汇总: 总人工/总材料/总成本. null (无法计算) → "—" (非 ¥0). canViewPrice 门控. -->
           <div v-if="canViewPrice" class="yield-cost-summary">
@@ -1265,15 +1265,15 @@ function goToReversalList() {
               <template #default="{ row }">{{ row.intermediateBatchNo || '-' }}</template>
             </el-table-column>
             <el-table-column label="产出" width="120" align="right">
-              <template #default="{ row }">{{ formatNum(row.producedQuantity) }} {{ row.unit || '' }}</template>
+              <template #default="{ row }">{{ formatNum(row.producedQuantity) }} {{ displayProcessUnit(row.unit) }}</template>
             </el-table-column>
             <el-table-column label="已领" width="120" align="right">
-              <template #default="{ row }">{{ formatNum(row.consumedQuantity) }} {{ row.unit || '' }}</template>
+              <template #default="{ row }">{{ formatNum(row.consumedQuantity) }} {{ displayProcessUnit(row.unit) }}</template>
             </el-table-column>
             <el-table-column label="余额" width="120" align="right">
               <template #default="{ row }">
                 <span :class="{ 'text-warning': Number(row.availableQuantity) > 0 }">
-                  {{ formatNum(row.availableQuantity) }} {{ row.unit || '' }}
+                  {{ formatNum(row.availableQuantity) }} {{ displayProcessUnit(row.unit) }}
                 </span>
               </template>
             </el-table-column>
@@ -1316,7 +1316,7 @@ function goToReversalList() {
               <template #default="{ row }">{{ formatNum(row.quantity) }}</template>
             </el-table-column>
             <el-table-column prop="unit" label="单位" width="80" align="center">
-              <template #default="{ row }">{{ row.unit || '-' }}</template>
+              <template #default="{ row }">{{ displayProcessUnit(row.unit) || '-' }}</template>
             </el-table-column>
             <el-table-column v-if="canViewPrice" prop="unitPrice" label="单价" width="110" align="right">
               <template #default="{ row }">{{ formatCost(row.unitPrice) }}</template>
@@ -1376,7 +1376,7 @@ function goToReversalList() {
               </div>
               <!-- 实际产出 (已完工时显示) -->
               <div v-if="task.status === 'COMPLETED' && task.actualQuantity != null" class="task-output">
-                产出 {{ formatNum(task.actualQuantity) }} {{ task.outputUnit || task.plannedUnit || '' }}
+                产出 {{ formatNum(task.actualQuantity) }} {{ displayProcessUnit(task.outputUnit || task.plannedUnit) }}
               </div>
               <!-- 箭头 -->
               <div class="task-arrow">›</div>
@@ -1470,7 +1470,7 @@ function goToReversalList() {
           </el-descriptions-item>
           <el-descriptions-item label="实际产出">
             <template v-if="selectedTask.status === 'COMPLETED' && selectedTask.actualQuantity != null">
-              {{ formatNum(selectedTask.actualQuantity) }} {{ selectedTask.outputUnit || selectedTask.plannedUnit || '' }}
+              {{ formatNum(selectedTask.actualQuantity) }} {{ displayProcessUnit(selectedTask.outputUnit || selectedTask.plannedUnit) }}
             </template>
             <span v-else-if="selectedTask.status === 'COMPLETED'">—</span>
             <span v-else class="text-warning">待报工</span>
@@ -1587,7 +1587,7 @@ function goToReversalList() {
         <template #default>
           <div style="font-size:13px;color:#606266;line-height:1.6;margin-top:4px">
             产品: <strong>{{ batch?.productName || batch?.productType || '—' }}</strong><br>
-            计划数量: <strong>{{ batch?.plannedQuantity != null ? batch.plannedQuantity + ' ' + (batch.unit || '') : '—' }}</strong><br>
+            计划数量: <strong>{{ batch?.plannedQuantity != null ? batch.plannedQuantity + ' ' + displayProcessUnit(batch.unit) : '—' }}</strong><br>
             当前状态: <strong>{{ batch ? getStatusText(batch.status) : '—' }}</strong>
           </div>
         </template>
