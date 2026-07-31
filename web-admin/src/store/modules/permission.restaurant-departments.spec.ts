@@ -1,0 +1,127 @@
+import { describe, expect, it, beforeEach, vi } from 'vitest';
+import { createPinia, setActivePinia } from 'pinia';
+import { usePermissionStore } from './permission';
+
+/**
+ * 餐饮板块拆成运营/市场/人事/财务四个部门后的权限。
+ *
+ * 拆之前 `restaurant` 是**一个**权限单元 —— 能进餐饮就四个部门全能进，运营主管
+ * 照样看得到财务毛利。这组用例钉住拆开后的边界。
+ *
+ * 一并钉住两个**线上缺陷**（2026-07-31 实测）：
+ *
+ *  1. `restaurant_owner` / `restaurant_purchaser` 是 Java `FactoryUserRole` 里的
+ *     有效角色，也在 Java `PermissionServiceImpl.PRICE_VIEW_ROLES` 里，但
+ *     **web-admin 的 PERMISSION_MATRIX 里根本没有它们** → 登录后落到 unactivated
+ *     默认（全 '-'），什么都看不见。
+ *  2. 前端 PRICE_VIEW_ROLES 注释写着 "Mirrors backend"，实际**已经漂了**：
+ *     Java 12 个角色，前端 10 个，少的正好是上面那两个 → 后端把价格值发过来了，
+ *     前端却把整列藏掉。
+ */
+
+const permissionApiMocks = vi.hoisted(() => ({
+  getPlatformPermissions: vi.fn(),
+  getFactoryOverride: vi.fn(),
+  getUserModuleAccess: vi.fn(),
+}));
+
+vi.mock('@/api/permissionApi', () => permissionApiMocks);
+
+const DEPTS = [
+  'restaurantOps',
+  'restaurantMarketing',
+  'restaurantHr',
+  'restaurantFinance',
+] as const;
+
+function storeAs(role: string, factoryType = 'RESTAURANT') {
+  const store = usePermissionStore();
+  store.setRole(role, 'R001', factoryType, '1309');
+  return store;
+}
+
+describe('餐饮四部门权限', () => {
+  beforeEach(() => {
+    setActivePinia(createPinia());
+    permissionApiMocks.getPlatformPermissions.mockReset().mockResolvedValue([]);
+    permissionApiMocks.getFactoryOverride.mockReset().mockResolvedValue({});
+    permissionApiMocks.getUserModuleAccess.mockReset().mockResolvedValue([]);
+  });
+
+  // ── 缺陷 1：两个角色此前完全进不来 ────────────────────────────────
+
+  it('restaurant_owner 四个部门全可进', () => {
+    const store = storeAs('restaurant_owner');
+    for (const dept of DEPTS) {
+      expect(store.canAccess(dept), `${dept} 应可进`).toBe(true);
+    }
+  });
+
+  it('restaurant_purchaser 只进运营与财务', () => {
+    const store = storeAs('restaurant_purchaser');
+    expect(store.canAccess('restaurantOps')).toBe(true);
+    expect(store.canAccess('restaurantFinance')).toBe(true);
+    expect(store.canAccess('restaurantMarketing')).toBe(false);
+    expect(store.canAccess('restaurantHr')).toBe(false);
+  });
+
+  it('采购在运营可写，在财务只读', () => {
+    const store = storeAs('restaurant_purchaser');
+    expect(store.canWrite('restaurantOps')).toBe(true);
+    expect(store.canWrite('restaurantFinance')).toBe(false);
+  });
+
+  // ── 缺陷 2：前端 PRICE_VIEW_ROLES 与 Java 权威表漂了 ──────────────
+
+  it('餐饮老板与采购能看价格（与 Java PRICE_VIEW_ROLES 对齐）', () => {
+    expect(storeAs('restaurant_owner').canViewPrice).toBe(true);
+    expect(storeAs('restaurant_purchaser').canViewPrice).toBe(true);
+  });
+
+  // ── 部门边界 ──────────────────────────────────────────────────
+
+  it('店长人事可写、财务只读', () => {
+    const store = storeAs('restaurant_manager');
+    expect(store.canWrite('restaurantHr')).toBe(true);
+    expect(store.canWrite('restaurantFinance')).toBe(false);
+    expect(store.canAccess('restaurantFinance')).toBe(true);
+  });
+
+  it('finance_manager 只进财务，取代 ROLE_PATH_WHITELIST 硬编码', () => {
+    const store = storeAs('finance_manager');
+    expect(store.canAccess('restaurantFinance')).toBe(true);
+    expect(store.canAccess('restaurantOps')).toBe(false);
+    expect(store.canAccess('restaurantMarketing')).toBe(false);
+    expect(store.canAccess('restaurantHr')).toBe(false);
+  });
+
+  // ── 财务部门额外要求价格权限 ────────────────────────────────────
+
+  it('无价格权限的角色进不了财务部门，其余三个照常', () => {
+    // viewer 不在 PRICE_VIEW_ROLES —— 让它进财务页会满屏「—」, 看着像功能坏了
+    const store = storeAs('viewer');
+    expect(store.canViewPrice).toBe(false);
+    expect(store.canAccess('restaurantFinance')).toBe(false);
+    expect(store.canAccess('restaurantOps')).toBe(true);
+    expect(store.canAccess('restaurantMarketing')).toBe(true);
+    expect(store.canAccess('restaurantHr')).toBe(true);
+  });
+
+  // ── 工厂类型过滤仍是天花板 ──────────────────────────────────────
+
+  it('FACTORY 类型工厂关掉餐饮时，四个部门一起关', () => {
+    const store = storeAs('restaurant_owner', 'FACTORY');
+    for (const dept of DEPTS) {
+      expect(store.canAccess(dept), `${dept} 应被工厂类型关掉`).toBe(false);
+    }
+  });
+
+  // ── 非餐饮角色不受影响 ──────────────────────────────────────────
+
+  it('工厂角色四个部门都进不去', () => {
+    const store = storeAs('production_manager');
+    for (const dept of DEPTS) {
+      expect(store.canAccess(dept), `${dept} 不该对工厂角色开放`).toBe(false);
+    }
+  });
+});

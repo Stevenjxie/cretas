@@ -38,9 +38,44 @@ interface ModulePermissions {
   system: PermissionLevel;
   analytics: PermissionLevel;
   scheduling: PermissionLevel;
+  /**
+   * 餐饮板块的**整体准入上限**。
+   *
+   * 2026-07-31 餐饮拆成运营/市场/人事/财务四个部门后，它不再直接对应某个页面，
+   * 而是四个部门的天花板：`restaurant: '-'` 一定关掉全部四个（工厂类型过滤
+   * `FACTORY_TYPE_MODULE_FILTER` 正是这么用的）。每个部门可以比它更严，不能更宽。
+   */
   restaurant: PermissionLevel;
+  /**
+   * 四个部门的细分权限。省略即跟随 `restaurant`。
+   *
+   * 有意做成可选：绝大多数工厂角色 `restaurant: '-'`，四个部门自然全关，不必逐行
+   * 写四遍；只有真正要区分部门的餐饮角色才显式声明。DB 驱动的权限（dbPermissions）
+   * 目前也不下发这四个键，跟随上限是正确的回退。
+   */
+  restaurantOps?: PermissionLevel;
+  restaurantMarketing?: PermissionLevel;
+  restaurantHr?: PermissionLevel;
+  restaurantFinance?: PermissionLevel;
   rd: PermissionLevel;
 }
+
+/** 权限强弱：rw > r > w > -。用于把部门权限压到 `restaurant` 上限之下。 */
+const PERMISSION_RANK: Record<PermissionLevel, number> = {
+  'rw': 3, 'r': 2, 'w': 1, '-': 0,
+};
+
+function weakerOf(a: PermissionLevel, b: PermissionLevel): PermissionLevel {
+  return PERMISSION_RANK[a] <= PERMISSION_RANK[b] ? a : b;
+}
+
+/** 四个部门的 module 名，供解析与菜单标注共用，避免两处各写一份。 */
+export const RESTAURANT_DEPARTMENT_MODULES = [
+  'restaurantOps',
+  'restaurantMarketing',
+  'restaurantHr',
+  'restaurantFinance',
+] as const;
 
 const PERMISSION_MATRIX: Record<string, ModulePermissions> = {
   // Level 0 - 工厂总监 (最高权限，全模块读写)
@@ -119,7 +154,12 @@ const PERMISSION_MATRIX: Record<string, ModulePermissions> = {
   finance_manager: {
     dashboard: 'r', production: 'r', warehouse: '-', quality: '-',
     procurement: 'r', sales: 'r', hr: '-', equipment: '-',
-    finance: 'rw', system: '-', analytics: 'rw', scheduling: '-', restaurant: '-',
+    finance: 'rw', system: '-', analytics: 'rw', scheduling: '-',
+    // 餐饮侧只看财务口径的页(供应商对账 / 成本归因)。此前是在 router/guards.ts 的
+    // ROLE_PATH_WHITELIST 里硬编码那两条路径, 现由权限模型表达, 那个补丁已删。
+    restaurant: 'r',
+    restaurantOps: '-', restaurantMarketing: '-',
+    restaurantHr: '-', restaurantFinance: 'r',
     rd: 'r'  // 定价参考 (analytics rw 对齐后端 SmartBI 完整权限)
   },
   // 出纳 (D9 #675/#678): 付款申请 APPROVED→PAID 执行者。路由守卫先查 module 后查 roles,
@@ -132,10 +172,37 @@ const PERMISSION_MATRIX: Record<string, ModulePermissions> = {
   },
 
   // 餐饮管理
+  // 餐饮老板：四个部门全权
+  restaurant_owner: {
+    dashboard: 'rw', production: '-', warehouse: '-', quality: '-',
+    procurement: 'r', sales: '-', hr: '-', equipment: '-',
+    finance: 'r', system: '-', analytics: 'r', scheduling: '-',
+    restaurant: 'rw',
+    restaurantOps: 'rw', restaurantMarketing: 'rw',
+    restaurantHr: 'rw', restaurantFinance: 'rw',
+    rd: '-'
+  },
+
+  // 餐饮采购：管后厨供应链，财务只读（价格异常审批要对比价格）
+  restaurant_purchaser: {
+    dashboard: 'r', production: '-', warehouse: '-', quality: '-',
+    procurement: 'rw', sales: '-', hr: '-', equipment: '-',
+    finance: '-', system: '-', analytics: '-', scheduling: '-',
+    restaurant: 'rw',
+    restaurantOps: 'rw', restaurantMarketing: '-',
+    restaurantHr: '-', restaurantFinance: 'r',
+    rd: '-'
+  },
+
   restaurant_manager: {
     dashboard: 'r', production: '-', warehouse: '-', quality: '-',
     procurement: 'r', sales: '-', hr: '-', equipment: '-',
-    finance: 'r', system: '-', analytics: 'r', scheduling: '-', restaurant: 'rw', rd: '-'
+    finance: 'r', system: '-', analytics: 'r', scheduling: '-',
+    restaurant: 'rw',
+    // 店长要排班, 人事可写; 财务口径由老板/财务经理定, 店长只读
+    restaurantOps: 'rw', restaurantMarketing: 'rw',
+    restaurantHr: 'rw', restaurantFinance: 'r',
+    rd: '-'
   },
 
   // Level 20 - 车间管理 (只看计划，执行在批次/报工模块)
@@ -188,7 +255,12 @@ const PERMISSION_MATRIX: Record<string, ModulePermissions> = {
   viewer: {
     dashboard: 'r', production: 'r', warehouse: 'r', quality: 'r',
     procurement: 'r', sales: 'r', hr: 'r', equipment: 'r',
-    finance: 'r', system: '-', analytics: 'r', scheduling: 'r', restaurant: 'r',
+    finance: 'r', system: '-', analytics: 'r', scheduling: 'r',
+    restaurant: 'r',
+    // 财务部门整页都是金额, 而 viewer 不在 PRICE_VIEW_ROLES —— 进去看满屏「—」
+    // 像功能坏了。价格闸也会拦, 这里显式写出来是为了读代码时一眼看见。
+    restaurantOps: 'r', restaurantMarketing: 'r',
+    restaurantHr: 'r', restaurantFinance: '-',
     rd: 'r'
   },
 
@@ -260,6 +332,11 @@ const PRICE_VIEW_ROLES: ReadonlySet<string> = new Set([
   'dispatcher',
   'production_manager',
   'restaurant_manager',
+  // 2026-07-31 补齐: Java PermissionServiceImpl.PRICE_VIEW_ROLES 里有这两个
+  // (源码注释「餐饮老板/采购需查看采购价格」), 而前端这份漏了 —— 后端把价格值发
+  // 过来, 前端却把整列藏掉。这份是镜像, 改 Java 那边必须同步改这里。
+  'restaurant_owner',
+  'restaurant_purchaser',
   'permission_admin',
   'department_admin',
 ]);
@@ -433,6 +510,26 @@ export const usePermissionStore = defineStore('permission', () => {
         }
       }
     }
+
+    // 餐饮四部门的最终权限在这里一次算完, 下游(permissionLevelFor / canAccess /
+    // canWrite / 菜单过滤)拿到的就是结果, 不必各自知道「上限 + 细分」这套规则 ——
+    // 规则散到多个消费点就一定会漂。
+    //
+    //   最终 = min(restaurant 上限, 该部门声明值 ?? 上限)
+    //
+    // 这样两件事自动成立: 工厂类型过滤把 restaurant 打成 '-' 时四个部门一起关;
+    // 没声明部门的角色(绝大多数工厂角色)跟随上限。
+    const ceiling = rolePerms.restaurant ?? '-';
+    for (const dept of RESTAURANT_DEPARTMENT_MODULES) {
+      const declared = rolePerms[dept] ?? ceiling;
+      rolePerms[dept] = weakerOf(ceiling, declared);
+    }
+    // 财务部门整页都是金额。不在 PRICE_VIEW_ROLES 的角色进去只会看到满屏「—」,
+    // 那看起来像功能坏了而不像权限不足 —— 所以直接不给进, 菜单里也就不出现。
+    if (!PRICE_VIEW_ROLES.has(currentRole.value)) {
+      rolePerms.restaurantFinance = '-';
+    }
+
     return rolePerms;
   });
 

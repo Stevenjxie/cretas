@@ -37,6 +37,11 @@ const ROLE_PATH_WHITELIST: Record<string, string[]> = {
     '/smart-bi/query',
     '/smart-bi/query-templates',
     '/smart-bi/analysis',
+    // 餐饮侧的财务口径页。2026-07-31 餐饮拆四部门后, finance_manager 在权限矩阵
+    // 里有 `restaurantFinance: 'r'` —— 但那是**模块**闸, 本表是**路径**闸, 两者
+    // 串联(见下方 beforeEach: 先过路径白名单再查模块权限)。
+    // ⛔ 删掉这两行会让 finance_manager 直接吃 403, 即使模块权限是通的。
+    //    要改访问范围, 两处都得改。
     '/restaurant/supplier-reconciliation',
     '/restaurant/cost-attribution',
     '/403',
