@@ -5,6 +5,7 @@ import com.cretas.aims.dto.processentry.ProcessSheetRowResult;
 import com.cretas.aims.dto.workflow.WorkflowClerkSheetConfigDTO;
 import com.cretas.aims.exception.GlobalExceptionHandler;
 import com.cretas.aims.service.processentry.ProcessSheetService;
+import com.cretas.aims.service.processentry.ProductionStockAllocationService;
 import com.cretas.aims.service.workflow.WorkflowClerkSheetService;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.BeforeEach;
@@ -50,6 +51,10 @@ class ProcessSheetControllerTest {
     @Mock
     private WorkflowClerkSheetService workflowClerkSheetService;
 
+    /** 只读可投量 (input-availability) 用; 本类的用例不走那条路径, 给个 mock 满足构造即可。 */
+    @Mock
+    private ProductionStockAllocationService stockAllocationService;
+
     private MockMvc mockMvc;
     private ObjectMapper objectMapper;
 
@@ -73,7 +78,7 @@ class ProcessSheetControllerTest {
         validator.afterPropertiesSet();
 
         mockMvc = MockMvcBuilders
-                .standaloneSetup(new ProcessSheetController(service, workflowClerkSheetService))
+                .standaloneSetup(new ProcessSheetController(service, workflowClerkSheetService, stockAllocationService))
                 .setControllerAdvice(new GlobalExceptionHandler())
                 .setValidator(validator)
                 .build();

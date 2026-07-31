@@ -437,6 +437,40 @@ export function getInventory(
  *
  * processOrder (可选): 同 getInventory — role-mode 下隔离同 archetype 多工序的行; 不传则后端 code-only 回退.
  */
+/** 同物料在**非生产仓**的存量 —— 用于「主仓另有 200 只，待调拨入生产仓」。 */
+export interface ElsewhereStock {
+  warehouseName: string;
+  quantity: number;
+  unit: string;
+}
+
+/** 一个投入端口在生产仓的可投量（后端权威值）。 */
+export interface PortAvailability {
+  workflowPortId: string | null;
+  materialTypeId: string;
+  available: number;
+  unit: string;
+  elsewhere: ElsewhereStock[];
+}
+
+/**
+ * 报工投入端口在**生产仓**的当前可投量。
+ *
+ * 🔴 必须用后端这个值，不要在前端自己算。客户 2026-07-31 实测：前端自算显示「可用 10kg」，
+ * 提交时后端说「可用 0kg」。后端口径含三样前端拿不到的东西——只认那一个生产仓、要扣掉其它
+ * 草稿行已占用的量、还要过客供料归属守卫。少任何一样算出来的都偏大，而一个偏大且看着权威的
+ * 数字比不显示更糟。
+ *
+ * 用 POST 是因为要带一批端口（materialTypeId + unit + workflowPortId），不是写操作。
+ */
+export function getInputAvailability(
+  factoryId: string,
+  planId: string,
+  ports: Array<{ workflowPortId?: string | null; materialTypeId: string; unit: string }>,
+): Promise<ApiResponse<PortAvailability[]>> {
+  return post<PortAvailability[]>(`${sheetBase(factoryId, planId)}/input-availability`, ports);
+}
+
 export function getRows(
   factoryId: string,
   planId: string,

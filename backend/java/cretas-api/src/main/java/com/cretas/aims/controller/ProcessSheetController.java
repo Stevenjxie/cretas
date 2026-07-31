@@ -5,6 +5,7 @@ import com.cretas.aims.dto.common.ApiResponse;
 import com.cretas.aims.dto.processentry.ProcessSheetInventoryItem;
 import com.cretas.aims.dto.processentry.ProcessSheetRowHistoryView;
 import com.cretas.aims.dto.processentry.ProcessSheetRowRequest;
+import com.cretas.aims.service.processentry.ProductionStockAllocationService;
 import com.cretas.aims.dto.processentry.ProcessSheetRowResult;
 import com.cretas.aims.dto.processentry.ProcessSheetRowView;
 import com.cretas.aims.dto.processentry.ProductionStockShortageDTO;
@@ -32,6 +33,7 @@ public class ProcessSheetController {
 
     private final ProcessSheetService service;
     private final WorkflowClerkSheetService workflowClerkSheetService;
+    private final ProductionStockAllocationService stockAllocationService;
 
     @RequirePermission({"production:read_write"})
     @PostMapping("/row")
@@ -98,6 +100,28 @@ public class ProcessSheetController {
      * <p>processOrder (可选): SP-F role-mode fix —— role-mode 下多道普通工序共享同一 archetype
      * process_code (如 'chaoshui'), 传 processOrder (链内唯一) 隔离各道库存; 不传则 code-only 回退。
      */
+    /**
+     * 报工投入端口在**生产仓**的当前可投量 (只读, 供录入行显示边界)。
+     *
+     * <p>客户 2026-07-31: 界面显示「可用 10kg」而提交时后端说「可用 0kg」。根因是前端自己算了
+     * 一遍, 而后端口径含三样它拿不到的东西 —— 只认一个生产仓、要扣其它草稿行已占用的量、
+     * 还要过客供料归属守卫。所以这里由后端返回权威值, 前端只负责显示。</p>
+     *
+     * <p>响应里的 {@code elsewhere} 是同物料在别的仓的存量, 用来把**「真没货」和「有货但没调
+     * 过来」**分开 —— 刘山门实测生产仓里一条原料都没有 (全是 WIP), 原料都在主仓。</p>
+     *
+     * <p>权限与同 Controller 其它只读接口一致 ({@code production:read}) —— 能打开这个报工屏,
+     * 就该看得到自己要填的那几个数。</p>
+     */
+    @RequirePermission({"production:read"})
+    @PostMapping("/input-availability")
+    public ApiResponse<List<ProductionStockAllocationService.PortAvailability>> getInputAvailability(
+            @PathVariable @NotBlank String factoryId,
+            @PathVariable @NotBlank String planId,
+            @RequestBody List<ProcessSheetRowRequest.MaterialInputTotal> ports) {
+        return ApiResponse.success(stockAllocationService.availability(factoryId, planId, ports));
+    }
+
     @RequirePermission({"production:read"})
     @GetMapping("/inventory")
     public ApiResponse<List<ProcessSheetInventoryItem>> getInventory(

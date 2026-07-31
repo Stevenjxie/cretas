@@ -132,7 +132,46 @@ public class ProductionDocumentTraceService {
                 .direction(direction)
                 .relation(relation)
                 .occurredAt(occurredAt)
+                .details(detailsOf(entity))
                 .build();
+    }
+
+    /**
+     * 从**已经读出来的**实体上摘几个关键字段, 供前端就地展开 (客户 2026-07-31: 追踪里看详情不跳页)。
+     *
+     * <p>与 {@code BusinessDocumentTraceService#detailsOf} 同一口径: 只放"看一眼就能确认是不是
+     * 这张单"的字段; 拿不到的**直接不放**(空标签会让用户以为"这张单没有客户", 而事实是没填);
+     * 没列到的类型返回空列表, 前端只显示链路本身的字段并说明原因。</p>
+     */
+    private List<ProductionDocumentTraceResponse.Field> detailsOf(BaseEntity entity) {
+        List<ProductionDocumentTraceResponse.Field> out = new ArrayList<>();
+        if (entity instanceof SalesOrder so) {
+            put(out, "客户", so.getCustomerName());
+            put(out, "下单日期", text(so.getOrderDate()));
+            put(out, "订单金额", money(so.getTotalAmount()));
+        } else if (entity instanceof PurchaseOrder po) {
+            put(out, "供应商", po.getSupplierName());
+            put(out, "下单日期", text(po.getOrderDate()));
+            put(out, "订单金额", money(po.getTotalAmount()));
+        } else if (entity instanceof FactoryMaterialRequisition req) {
+            put(out, "领料单号", req.getRequisitionNo());
+        }
+        return out;
+    }
+
+    private void put(List<ProductionDocumentTraceResponse.Field> out, String label, String value) {
+        if (value == null || value.isBlank()) {
+            return;
+        }
+        out.add(ProductionDocumentTraceResponse.Field.builder().label(label).value(value.trim()).build());
+    }
+
+    private String text(Object value) {
+        return value == null ? null : String.valueOf(value);
+    }
+
+    private String money(java.math.BigDecimal value) {
+        return value == null ? null : "¥" + value.setScale(2, java.math.RoundingMode.HALF_UP).toPlainString();
     }
 
     private String asText(Object value) {

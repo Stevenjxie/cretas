@@ -29,11 +29,15 @@ class ProcessSheetSubmissionControllerContractTest {
     @Mock
     private WorkflowClerkSheetService workflowClerkSheetService;
 
+    /** 只读可投量 (input-availability) 用; 本类只验草稿/提交两条路径, 给个 mock 满足构造即可。 */
+    @Mock
+    private ProductionStockAllocationService stockAllocationService;
+
     private ProcessSheetController controller;
 
     @BeforeEach
     void setUp() {
-        controller = new ProcessSheetController(service, workflowClerkSheetService);
+        controller = new ProcessSheetController(service, workflowClerkSheetService, stockAllocationService);
     }
 
     @Test
