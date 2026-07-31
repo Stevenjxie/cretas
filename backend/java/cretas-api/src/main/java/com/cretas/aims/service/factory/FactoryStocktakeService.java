@@ -2,6 +2,7 @@ package com.cretas.aims.service.factory;
 
 import com.cretas.aims.dto.factory.CreateStocktakeRequest;
 import com.cretas.aims.dto.factory.StocktakeDiffPreviewDTO;
+import com.cretas.aims.dto.factory.ByproductCreditDTO;
 import com.cretas.aims.dto.factory.StocktakeDTO;
 import com.cretas.aims.dto.factory.StocktakeItemUpdateDTO;
 import com.cretas.aims.entity.factory.FactoryStocktake;
@@ -160,4 +161,35 @@ public interface FactoryStocktakeService {
      * @param stocktakeId 盘点任务 ID
      */
     void executeAdjustment(String stocktakeId);
+
+    /**
+     * 盘点单上的副产批次列表（「副产价值确认」区）。
+     *
+     * <p>只返回 {@code byproduct_source_report_id IS NOT NULL} 的批次 —— 那条链由 Task 4
+     * 在报工时写入。抵扣额由 {@code ByproductCreditService} 算好返回，前端只做格式化。</p>
+     *
+     * @param stocktakeId 盘点任务 ID
+     * @param factoryId   工厂 ID（多租户校验）
+     * @return 副产批次列表；没有副产时返回空列表，<b>不是错误</b>
+     */
+    List<ByproductCreditDTO> listByproductCredits(String stocktakeId, String factoryId);
+
+    /**
+     * 确认一条副产批次的单价（盘点时人工拍板）。
+     *
+     * <p>🔴 单价<b>允许为 0</b> —— 那是「确认这批不值钱」这个真实结论，与「没确认」(null)
+     * 是两回事。但<b>不允许为负</b>，负单价会变成凭空增加主产品成本。</p>
+     *
+     * <p>🔴 只能确认<b>本盘点单里的副产批次</b>：批次要属于该工厂、要是副产批次、
+     * 且要出现在这张盘点单的明细里。三条任一不满足都拒绝（fail-closed）。</p>
+     *
+     * @param stocktakeId 盘点任务 ID
+     * @param factoryId   工厂 ID
+     * @param batchId     副产批次 ID
+     * @param unitPrice   确认单价（可为 0，不可为负，不可为 null）
+     * @param userId      确认人
+     * @return 确认后的该行（含重算过的抵扣额）
+     */
+    ByproductCreditDTO confirmByproductPrice(String stocktakeId, String factoryId,
+            String batchId, java.math.BigDecimal unitPrice, Long userId);
 }

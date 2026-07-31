@@ -1,6 +1,7 @@
 package com.cretas.aims.controller;
 
 import com.cretas.aims.dto.common.ApiResponse;
+import com.cretas.aims.dto.factory.ByproductCreditDTO;
 import com.cretas.aims.dto.factory.CreateStocktakeRequest;
 import com.cretas.aims.dto.factory.StocktakeDiffPreviewDTO;
 import com.cretas.aims.dto.factory.StocktakeDTO;
@@ -93,6 +94,36 @@ public class StocktakeController {
             @PathVariable @Parameter(description = "盘点任务ID") String stocktakeId) {
         StocktakeDTO result = stocktakeService.getDetail(stocktakeId, factoryId);
         return ApiResponse.success(result);
+    }
+
+    @GetMapping("/{stocktakeId}/byproduct-credits")
+    @Operation(summary = "查询本次盘点的副产批次与抵扣额",
+            description = "只返回 byproduct_source_report_id 非空的批次；抵扣额由后端算好，前端只做格式化")
+    public ApiResponse<List<ByproductCreditDTO>> listByproductCredits(
+            @PathVariable @Parameter(description = "工厂ID") String factoryId,
+            @PathVariable @Parameter(description = "盘点任务ID") String stocktakeId) {
+        return ApiResponse.success(stocktakeService.listByproductCredits(stocktakeId, factoryId));
+    }
+
+    @PostMapping("/{stocktakeId}/byproduct-credits/{batchId}/confirm-price")
+    @Operation(summary = "确认副产单价",
+            description = "单价可为 0（确认这批不值钱），不可为负；抵扣额 = 盘点重量 × 确认单价")
+    public ApiResponse<ByproductCreditDTO> confirmByproductPrice(
+            @PathVariable @Parameter(description = "工厂ID") String factoryId,
+            @PathVariable @Parameter(description = "盘点任务ID") String stocktakeId,
+            @PathVariable @Parameter(description = "副产批次ID") String batchId,
+            @RequestBody ConfirmByproductPriceRequest body,
+            HttpServletRequest request) {
+        Long userId = extractUserId(request);
+        ByproductCreditDTO result = stocktakeService.confirmByproductPrice(
+                stocktakeId, factoryId, batchId, body == null ? null : body.getUnitPrice(), userId);
+        return ApiResponse.success("副产单价已确认", result);
+    }
+
+    /** 确认副产单价的请求体。单价<b>不给默认值</b> —— null 会被服务层明确拒绝，不当成 0。 */
+    @lombok.Data
+    public static class ConfirmByproductPriceRequest {
+        private java.math.BigDecimal unitPrice;
     }
 
     @PutMapping("/{stocktakeId}/items")

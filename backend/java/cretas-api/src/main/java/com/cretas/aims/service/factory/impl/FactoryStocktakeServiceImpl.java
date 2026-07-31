@@ -1,5 +1,6 @@
 package com.cretas.aims.service.factory.impl;
 
+import com.cretas.aims.dto.factory.ByproductCreditDTO;
 import com.cretas.aims.dto.factory.CreateStocktakeRequest;
 import com.cretas.aims.dto.factory.StocktakeDiffPreviewDTO;
 import com.cretas.aims.dto.factory.StocktakeDTO;
@@ -27,6 +28,7 @@ import com.cretas.aims.repository.factory.FactoryStocktakeItemRepository;
 import com.cretas.aims.repository.factory.FactoryStocktakeRepository;
 import com.cretas.aims.service.alerts.InventoryLowStockEventPublisher;
 import com.cretas.aims.service.factory.FactoryStocktakeService;
+import com.cretas.aims.service.inventory.ByproductCreditService;
 import com.cretas.aims.service.voucher.VoucherService;
 import com.cretas.aims.service.workflow.WorkflowEngineService;
 import lombok.RequiredArgsConstructor;
@@ -1220,6 +1222,95 @@ public class FactoryStocktakeServiceImpl implements FactoryStocktakeService {
                     "盘点任务已于 " + stocktake.getAppliedAt() + " 生效，无法修改")
                     .withCode("ALREADY_APPLIED");
         }
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public List<ByproductCreditDTO> listByproductCredits(String stocktakeId, String factoryId) {
+        findAndValidate(stocktakeId, factoryId);
+        List<FactoryStocktakeItem> items = stocktakeItemRepo.findByStocktakeId(stocktakeId);
+        List<ByproductCreditDTO> result = new ArrayList<>();
+        for (FactoryStocktakeItem item : items) {
+            MaterialBatch batch = materialBatchRepo
+                    .findByIdAndFactoryId(item.getMaterialBatchId(), factoryId).orElse(null);
+            // 只挑副产批次 —— byproductSourceReportId 非 null 是唯一判据 (Task 2/4 定的)
+            if (batch == null || batch.getByproductSourceReportId() == null) continue;
+            result.add(toByproductCredit(batch, item.getActualQty()));
+        }
+        return result;
+    }
+
+    @Override
+    @Transactional
+    public ByproductCreditDTO confirmByproductPrice(String stocktakeId, String factoryId,
+            String batchId, BigDecimal unitPrice, Long userId) {
+        FactoryStocktake stocktake = findAndValidate(stocktakeId, factoryId);
+        // 已过账的盘点单不再让人改单价 —— 抵扣额已经进过成本, 改了会和已出的数字对不上。
+        if (stocktake.getStatus() == FactoryStocktake.Status.APPLIED) {
+            throw new BusinessException(409, "盘点单已过账，不能再修改副产单价");
+        }
+        // 禁降级: null 不是「确认为 0」, 必须由调用方明确给值
+        if (unitPrice == null) {
+            throw new BusinessException(400, "请填写副产单价；未确认请不要提交");
+        }
+        // 0 允许 (「确认这批不值钱」是真实结论); 负数不允许 —— 那会凭空抬高主产品成本
+        if (unitPrice.compareTo(BigDecimal.ZERO) < 0) {
+            throw new BusinessException(400, "副产单价不能为负");
+        }
+        // fail-closed 三连: 属于本工厂 / 是副产批次 / 在这张盘点单里
+        FactoryStocktakeItem item = stocktakeItemRepo.findByStocktakeId(stocktakeId).stream()
+                .filter(row -> batchId.equals(row.getMaterialBatchId()))
+                .findFirst()
+                .orElseThrow(() -> new BusinessException(404, "该批次不在本次盘点范围内"));
+        MaterialBatch batch = materialBatchRepo.findByIdAndFactoryId(batchId, factoryId)
+                .orElseThrow(() -> new BusinessException(404, "副产批次不存在或不属于当前工厂"));
+        if (batch.getByproductSourceReportId() == null) {
+            throw new BusinessException(400, "该批次不是副产批次，不能确认副产单价");
+        }
+
+        batch.setByproductUnitPrice(unitPrice);
+        batch.setByproductPriceConfirmedAt(LocalDateTime.now());
+        batch.setByproductPriceConfirmedBy(userId);
+        materialBatchRepo.save(batch);
+        log.info("副产单价已确认 stocktakeId={} batchId={} unitPrice={} by={}",
+                stocktakeId, batchId, unitPrice, userId);
+        return toByproductCredit(batch, item.getActualQty());
+    }
+
+    /**
+     * 组装一行副产抵扣。
+     *
+     * <p>🔴 抵扣额走 {@code ByproductCreditService.creditOf} 这个<b>唯一入口</b>, 基数是
+     * <b>盘点重量</b>而非报工重量 —— 盘点以实物为准 (Steve 2026-07-31)。任一入参为 null
+     * 时它返回 null 而不是 0, 这里原样透传, 不臆造。</p>
+     */
+    private ByproductCreditDTO toByproductCredit(MaterialBatch batch, BigDecimal stocktakeQty) {
+        BigDecimal reported = batch.getReceiptQuantity();
+        BigDecimal difference = (stocktakeQty == null || reported == null)
+                ? null
+                : stocktakeQty.subtract(reported);
+        boolean confirmed = batch.getByproductUnitPrice() != null
+                && batch.getByproductPriceConfirmedAt() != null;
+        return ByproductCreditDTO.builder()
+                .batchId(batch.getId())
+                .batchNumber(batch.getBatchNumber())
+                .materialTypeId(batch.getMaterialTypeId())
+                // 查不到就是 null —— 不拿 id 冒充名称
+                .materialName(rawMaterialTypeRepo.findById(batch.getMaterialTypeId())
+                        .map(RawMaterialType::getName).orElse(null))
+                .unit(batch.getQuantityUnit())
+                .sourceReportId(batch.getByproductSourceReportId())
+                .reportedQuantity(reported)
+                .stocktakeQuantity(stocktakeQty)
+                .differenceQuantity(difference)
+                .unitPrice(batch.getByproductUnitPrice())
+                .priceConfirmedAt(batch.getByproductPriceConfirmedAt())
+                .priceConfirmedBy(batch.getByproductPriceConfirmedBy())
+                // 未确认时不参与抵扣: 有价无时间 = 参考价, creditOf 只认已确认的价
+                .credit(ByproductCreditService.creditOf(
+                        stocktakeQty, confirmed ? batch.getByproductUnitPrice() : null))
+                .creditStatus(confirmed ? "CONFIRMED" : "PENDING")
+                .build();
     }
 
     private String generateStocktakeNo(String factoryId) {
