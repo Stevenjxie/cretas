@@ -82,6 +82,18 @@ public class BomItemSubstituteServiceImpl implements BomItemSubstituteService {
             Long parentRecipeItemId,
             List<BomSubstituteInput> substitutes) {
         lockDraftRecipe(factoryId, recipeId);
+        // 🔴 「什么都不要求 + 本来也没有」= 真正的无操作, 不该走父项类别校验。
+        // 起因(2026-08-01 prod 走查): addItem 对每一行都无条件调这里(空列表也调), 而副产行的
+        // 父项被 ownedRecipeItem 的 fail-closed 白名单拒 → 整条明细保存失败, 报「BOM 主项类型
+        // 不支持替代关系」。为一个不做任何事的操作去校验父项, 制造的是假阻塞。
+        // ⛔ 注意只豁免**空且无存量**这一种: 副产 + 非空替代料仍然照旧拒绝(见
+        //    rejectsSubstitutesOnByproductDeclaration), 那条 fail-closed 规则不变。
+        if ((substitutes == null || substitutes.isEmpty())
+                && repository.findByFactoryIdAndRecipeIdAndParentKindAndParentRecipeItemIdOrderByCreatedAtAsc(
+                        factoryId, recipeId,
+                        BomItemSubstitute.ParentKind.RECIPE_ITEM, parentRecipeItemId).isEmpty()) {
+            return List.of();
+        }
         ParentContext parent = ownedRecipeItem(factoryId, recipeId, parentRecipeItemId, true);
         return replace(parent, substitutes);
     }
