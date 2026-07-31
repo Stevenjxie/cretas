@@ -26,11 +26,26 @@ allowed-tools:
   --base-sha '<dispatch 登记的 Base SHA>' --tests '<Maven 测试选择器>' \
   --stage-backend YES-STAGE
 
-# ② 合并后（强制 clean HEAD == origin/main）：自动检测 Java/Web 变更范围，
-#    复用 manifest / tree cache，部署或安全 no-op，输出统一 JSON 回执
+# ② 合并后【先预热】——把 CI 制品的跨境运输挪出发布窗口。丢后台不用管，
+#    它会等到 CI 产出为止（Java 制品约 4 分钟，web-dist 约 84s）。
+./scripts/deploy/prewarm-main-artifact.sh --tests '<同 ③ 的选择器>' --wait 420
+
+# ③ 看到 PREWARM=done / already-warm 后再发布（强制 clean HEAD == origin/main）：
+#    自动检测 Java/Web 变更范围，复用 manifest / tree cache / CI 制品，
+#    部署或安全 no-op，输出统一 JSON 回执
 ./scripts/deploy/release-cretas.sh --phase deploy \
   --base-sha '<Base SHA>' --tests '<tests>' --confirm-prod YES-PROD
 ```
+
+### 为什么②不能省（两个实测理由）
+
+**理由一：构建段 204s → 25s。** `--prefer-ci-artifact` 已是默认开，但**合并后立刻发布时 CI 还没建完**，探测必然落空、回退本地构建。实测同一棵树：预热后 Java `build_count=0`（零次 Maven）∥ Web 19s = **25s**；不预热则 Java 201s ∥ Web 90s = **204s**。
+
+**理由二：躲开「构建白做」那类失败。** 发布脚本在构建完成后会再确认 HEAD 仍等于 `origin/main`，不等就中止（拒绝把基于旧 main 的产物部上去，这是对的）。而 main 上相邻合并间隔中位数约 15 分钟、**有相当比例 ≤4 分钟**——正好是一次 fallback 构建的时长。实测两次真实失败（2026-07-30 19:45 / 07-31 15:30）都是这个形状：构建 166s/227s 全部成功，然后因为构建期间别的 session 合了 PR 而**整个作废**。构建压到 25s，这个窗口同比例缩小约 8 倍。
+
+⚠️ 两处 `--tests` 用同一个选择器（或预热用更窄的）——判据是**集合包含**，预热传的必须 ⊆ CI 跑过的那组。
+⚠️ 预热要求 clean 且恰好等于 `origin/main`；在候选分支上会 fail-closed（`head_not_clean_origin_main`），这是对的。
+⚠️ **本机刚构建过这棵树时预热看不出效果**：`validate` 直接命中本地 manifest（本地复用成本 0），连探测都不做。预热的价值在「本机没建过这棵树」时体现——也就是**你合并别人的 PR 之后**。
 
 要点：
 - **最多构建一次**：Java 目标测试 + 最终 JAR = 同一条 `mvn clean package -Dtest=<tests>` 生命周期（`release-jar-manifest.sh build`）；Web = `release-web-manifest.sh build` 产不可变 `dist.tar.gz` + 可信 manifest。squash 后 commit 不同但 Git tree 相同**可复用制品**，禁止重复构建；任一校验失败只回退一次本地构建。

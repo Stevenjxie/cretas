@@ -328,6 +328,12 @@ describe('cell-audit.vue (Sub-Project C Day 26)', () => {
   // test the banner Chinese text could drift unverified, or the v-if
   // could break in a refactor.
 
+  // ⏱️ 显式 20s 超时: 本用例要挂载 500 行历史再整棵序列化 (`wrapper.html()`),
+  // 单独跑约 2.0s, 而同文件其它用例都在 4~143ms —— 它本来就贴着 vitest 默认 5s 跑。
+  // 整套跑起来多 worker 抢 CPU 就会越过 5s, 报一个含糊的 `Error: STACK_TRACE_ERROR`
+  // (看不出是超时), 表现为「同一份代码这次绿下次红」。
+  // 500 行是这个场景本身 (后端 HISTORY_LIMIT=500 截断), 不是可以随手调小的测试数据,
+  // 所以给时间而不是缩数据。
   it('renders truncated banner when API reports truncated history', async () => {
     mockPythonFetch.mockResolvedValueOnce({
       current: makeRow(),
@@ -343,7 +349,7 @@ describe('cell-audit.vue (Sub-Project C Day 26)', () => {
     const html = wrapper.html();
     expect(html).toContain('仅显示最近 500 条');
     expect(html).toContain('完整历史请联系运维');
-  });
+  }, 20_000);
 
   it('does NOT render truncated banner when API truncated is false (or absent)', async () => {
     mockPythonFetch.mockResolvedValueOnce({

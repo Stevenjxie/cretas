@@ -86,6 +86,50 @@ class BomItemSubstituteServiceImplTest {
                 .containsExactly(false, true);
     }
 
+    /**
+     * 加 BYPRODUCT 第四类 (V20261029_37) 后, 副产行**不能**配替代物料 ——
+     * 替代的是「投入什么」, 而副产行是产出声明。
+     *
+     * <p>🔴 这条不需要新写拦截: {@code ownedRecipeItem} 的父项类别白名单
+     * {@code Set.of("RAW","AUXILIARY","PACKAGING")} 是 fail-closed 的, 天然把
+     * BYPRODUCT 挡在外面, 且给的是能看懂的 400 而不是
+     * {@code bom_item_substitutes.chk_bis_material_category} 的 500。
+     * 本测试是**钉住**这个既有行为 —— 哪天有人把白名单改成黑名单或加上 BYPRODUCT, 这里会红。
+     * (写这条时我一度在 buildRelations 里另加了一道同义拦截, 被这个测试当场证明是死代码,
+     * 已删 —— 本仓 07-31 刚连修五处「同一件事多套实现」, 不再开第六处。)</p>
+     */
+    @Test
+    @DisplayName("BYPRODUCT parent is refused substitutes by the existing fail-closed whitelist")
+    void rejectsSubstitutesOnByproductDeclaration() {
+        // 刻意不走 stubDraftAndRecipeParent: 类别白名单在父物料查询**之前**就抛,
+        // 用那个 helper 会留下未使用的 stub (Mockito 严格模式判 UnnecessaryStubbing)。
+        // 这本身就是证据 —— 它证明拦截确实发生在很早, 没走到后面的物料/单位逻辑。
+        stubDraft();
+        when(entityManager.find(BomRecipeItem.class, 10L, LockModeType.PESSIMISTIC_WRITE))
+                .thenReturn(recipeItem(10L, "A", "kg", BomRecipeItem.CATEGORY_BYPRODUCT, null));
+
+        BusinessException rejected = assertThrows(BusinessException.class,
+                () -> service.replaceForRecipeItem(
+                        FACTORY, RECIPE, 10L, List.of(new BomSubstituteInput("B", null))));
+
+        assertThat(rejected.getMessage()).isEqualTo("BOM 主项类型不支持替代关系");
+    }
+
+    @Test
+    @DisplayName("positive control: a RAW parent accepts the very same substitute payload")
+    void rawParentAcceptsTheSamePayloadTheByproductParentRefused() {
+        // 阳性对照 —— 证明上一条拦的是「副产」这个条件本身, 不是我把整条路径都堵死了。
+        stubDraftAndRecipeParent(10L, "A", "kg", "RAW", null);
+        when(materialRepository.findById("B"))
+                .thenReturn(Optional.of(material("B", "替代B", "kg", "001", FACTORY, true)));
+        when(repository.findByFactoryIdAndRecipeIdOrderByCreatedAtAsc(FACTORY, RECIPE))
+                .thenReturn(List.of());
+
+        assertThat(service.replaceForRecipeItem(
+                FACTORY, RECIPE, 10L, List.of(new BomSubstituteInput("B", null))))
+                .hasSize(1);
+    }
+
     @Test
     @DisplayName("same parent rejects self substitution and duplicate candidates")
     void rejectsSelfAndDuplicate() {

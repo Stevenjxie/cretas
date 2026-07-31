@@ -60,6 +60,24 @@ pytestmark = [
 JWT_SECRET = "phase-2c-tier-1-pilot-test-secret"
 
 
+@pytest.fixture(autouse=True)
+def _jwt_env(monkeypatch):
+    """Force JWT_SECRET to this file's value for the duration of each test.
+
+    模块顶部的 ``os.environ.setdefault`` 只在**本文件先跑**时生效: 只要另一个 pilot
+    文件先被导入并设了自己的 secret, setdefault 就什么也不做, 而本文件仍用自己的
+    字面量签名 → 应用侧 (`smartbi_compat.auth._get_secret`, 调用时才读 env) 用另一个
+    secret 验签 → 全部 401。
+
+    2026-07-31 python 门禁首次真跑全量时, 6 个 pilot 文件同时以 `assert 401 == 200` /
+    `Invalid token: Signature verification failed` 暴露 —— 此前 ci.yml 那步
+    `pytest ... || true` 一直把它吞掉。test_analysis_department_pilot /
+    test_analysis_drilldown_pilot 本来就有这个 fixture, 是其余几份漏了。
+    """
+    monkeypatch.setenv("JWT_SECRET", JWT_SECRET)
+    yield
+
+
 def _make_token(
     *,
     user_id: int = 22,
