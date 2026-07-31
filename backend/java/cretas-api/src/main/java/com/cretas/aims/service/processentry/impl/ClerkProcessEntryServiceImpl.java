@@ -102,6 +102,13 @@ public class ClerkProcessEntryServiceImpl implements ClerkProcessEntryService {
     private final ProductionPlanRepository planRepository;
     /** headed-audit 修复 (2026-07-03): 批次创建时解析产品名称. null-tolerant (测试 @InjectMocks 未注入时 skip). */
     private final ProductTypeRepository productTypeRepository;
+
+    /**
+     * 副产落生产仓的接线点。字段注入 (required=false) 不改构造器, 与本类既有依赖装配方式一致。
+     * 未注入时不落库 = 本次接线前的行为(报工只记副产, 不进 material_batches)。
+     */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.cretas.aims.service.processentry.ByproductBatchMaterializer byproductBatchMaterializer;
     /**
      * F3: 逐工序自定义字段 schema 校验 —— chain 路径 (recordChain) 复用与 sheet 路径同一诚实-400 契约。
      * null-tolerant (测试 @InjectMocks 未注入时 skip 校验; 校验只在 step.customFields 非空时触发, 极少查库)。
@@ -350,7 +357,7 @@ public class ClerkProcessEntryServiceImpl implements ClerkProcessEntryService {
             // 经 StepYieldDTO.byproducts/sampleRetainQuantity/packagingDetail 读取，
             // 进而 OrderCostBreakdownService.computeByBatch 消费包装明细成本分桶。
             if (hasAuxFields(st)) {
-                writeYieldAuxReport(ctx.getFactoryId(), batch.getId(), st, ctx.getUserId());
+                writeYieldAuxReport(ctx.getFactoryId(), batch.getId(), st, ctx.getUserId(), ctx.getProductTypeId());
             }
 
             // 追踪产出量 (取最后一道有产出的 step)
@@ -463,7 +470,7 @@ public class ClerkProcessEntryServiceImpl implements ClerkProcessEntryService {
 
             // SP-G G3a: 重物化也写副产物/留样/包装明细 (镜像 materializeBatch)。
             if (hasAuxFields(st)) {
-                writeYieldAuxReport(ctx.getFactoryId(), existingBatchId, st, ctx.getUserId());
+                writeYieldAuxReport(ctx.getFactoryId(), existingBatchId, st, ctx.getUserId(), ctx.getProductTypeId());
             }
 
             if (st.getOutputQuantity() != null && st.getOutputQuantity().signum() > 0) {
@@ -886,7 +893,7 @@ public class ClerkProcessEntryServiceImpl implements ClerkProcessEntryService {
      * 若将来需要继承，应在 SP-G 后续子项中为 ClerkProcessEntryService 引入 ProductWorkProcess 查找。
      */
     private void writeYieldAuxReport(String factoryId, Long productionBatchId,
-                                     StepEntry st, Long operatorId) {
+                                     StepEntry st, Long operatorId, String productTypeId) {
         ProductionReport report = new ProductionReport();
         report.setFactoryId(factoryId);
         report.setBatchId(productionBatchId);
@@ -908,6 +915,15 @@ public class ClerkProcessEntryServiceImpl implements ClerkProcessEntryService {
             report.setPackagingDetail(st.getPackagingDetail());
         }
         reportRepo.save(report);
+        // 🔴 副产落**生产仓**: 只把名字/重量记在报工里是不够的 —— 不落 material_batches 的话
+        // 盘点看不到它, 抵扣就永远没有输入。buildByproductBatch 早写好了但一直没人调
+        // (2026-08-01 走查发现, prod 895 条批次里 BYPRODUCT 0 条), 这里是它的接线点。
+        // 匹配不上 BOM 声明的副产会被跳过而不是拦住报工, 理由见 materializer 类注释。
+        if (byproductBatchMaterializer != null && report.getByproducts() != null
+                && !report.getByproducts().isEmpty()) {
+            byproductBatchMaterializer.materialize(
+                    factoryId, productTypeId, report.getId(), report.getByproducts());
+        }
     }
 
     /**
