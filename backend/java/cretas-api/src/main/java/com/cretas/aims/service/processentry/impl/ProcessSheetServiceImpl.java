@@ -1818,6 +1818,42 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
         return com.cretas.aims.service.unit.impl.UnitContractServiceImpl.crossLanguageCode(unit);
     }
 
+    /** 副产来源标记 —— 与 WIP 的 {@code PRODUCTION_BATCH} 并列, 不复用它。 */
+    public static final String SOURCE_DOC_TYPE_BYPRODUCT = "BYPRODUCT";
+
+    /**
+     * 把一条报工副产物化成<b>生产仓</b>里的原料批次。
+     *
+     * <p>去向是生产仓不是原料仓 —— 它是生产出来的, 不是采购入库的 (Steve 2026-07-31)。
+     * 落库后就是一条普通原料批次, 能被别的 Workflow 正常投入。走 {@code material_batches}
+     * 与 WIP 半成品同一条路: prod 实测 {@code source_doc_type='PRODUCTION_BATCH'} 的 255 条里
+     * 249 条 {@code material_type_id} 指向原料字典, 副产与它是同类东西。</p>
+     *
+     * <p>🔴 <b>不写单价</b>: 单价在盘点时确认。报工时没人知道这批副产值多少,
+     * 此处写任何值都是臆造 —— 包括写 0 (那会被读成「这批副产不值钱」)。</p>
+     */
+    public static MaterialBatch buildByproductBatch(
+            String factoryId, String materialTypeId, BigDecimal quantity,
+            String unit, String workshopId, Long sourceReportId) {
+        // 字段口径照抄「领料落生产仓」那处 (FactoryMaterialRequisitionServiceImpl):
+        // 同样是往生产仓建新批次, receiptQuantity 是入库量, used/reserved 显式置 0 而非留 null。
+        MaterialBatch batch = new MaterialBatch();
+        batch.setId(java.util.UUID.randomUUID().toString());
+        batch.setFactoryId(factoryId);
+        batch.setMaterialTypeId(materialTypeId);
+        batch.setWarehouseId(workshopId);
+        batch.setSourceDocType(SOURCE_DOC_TYPE_BYPRODUCT);
+        batch.setReceiptQuantity(quantity);
+        batch.setUsedQuantity(BigDecimal.ZERO);
+        batch.setReservedQuantity(BigDecimal.ZERO);
+        batch.setQuantityUnit(unit);
+        batch.setReceiptDate(java.time.LocalDate.now());
+        batch.setStatus(com.cretas.aims.entity.enums.MaterialBatchStatus.AVAILABLE);
+        batch.setByproductSourceReportId(sourceReportId);
+        // ⛔ 刻意不设 unitPrice / byproductUnitPrice —— 单价在盘点确认。
+        return batch;
+    }
+
     private static List<BigDecimal> allocateMoney(BigDecimal total, List<BigDecimal> ratios) {
         if (total == null) {
             return java.util.Collections.nCopies(ratios.size(), null);
