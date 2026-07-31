@@ -123,6 +123,22 @@ class RestaurantQuerySpec:
     source_tier: str
     clarification_needed: bool = False
     clarification_question: Optional[str] = None
+    # 反问缺的是**哪个槽位** —— "time" / "store" / None(其它/未分类)。
+    #
+    # 为什么要这个字段: 在它之前, 管线拿**问题字符串本身**当类型系统用 ——
+    # 全仓有 10 处 `clarification_question == TIME_CLARIFICATION_QUESTION` /
+    # `== STORE_SCOPE_CLARIFICATION_QUESTION` 的身份比较在做分支。
+    #
+    # 后果是结构性的: 一轮只能携带**一个**缺失槽位。时间闸先跑并设
+    # clarification_needed, 门店闸开头就 `or spec.clarification_needed → return`,
+    # 于是 2026-08-01 实测「最近生意咋样」要**三轮**才拿到答案(问门店→问时间→答),
+    # 口语类问句在两个租户上都是 0/6。
+    # 想合成一句「门店和时间都告诉我」的追问, 那个新字符串会同时匹配不上上述 10 处
+    # 判断, **静默穿过全部** —— 所以那不是加个问句的事, 得先把身份判据换成结构化的。
+    #
+    # 本字段是那一步的地基: 现在与字符串**严格同步**(有用例钉住), 行为零变化;
+    # 之后把 10 处身份比较逐个换成读它, 合并追问才做得成。
+    missing_slot: Optional[str] = None
     # Explicit primary/baseline windows are first-class immutable plan slots.
     # Resolver execution must not have to rediscover them from a later
     # clarification answer such as "全部门店".
@@ -1739,6 +1755,7 @@ def _build_spec(
     deterministic detectors stay authoritative when they fire, and the
     supplements ride the routing cache so a cache hit rebuilds the exact
     same spec as the original T3 parse (dates still recomputed fresh)."""
+    missing_slot: Optional[str] = None   # 与 clarification_question 同步的槽位标记
     # T3 time text only supplements wording the deterministic parser cannot
     # already resolve.  Continuations such as "原问题 本月" already contain
     # the clicked option; appending the same label again would make the sealed
@@ -2041,6 +2058,7 @@ def _build_spec(
         # truthful and must not keep the valid plan from executing.
         clarification_needed = False
         clarification_question = None
+        missing_slot = None
         effective_planner_authority = (
             f"{effective_planner_authority}_contract_repair"
         )
@@ -2090,6 +2108,7 @@ def _build_spec(
         # query (including a trusted inherited window) authorizes execution.
         clarification_needed = True
         clarification_question = TIME_CLARIFICATION_QUESTION
+        missing_slot = "time"
         # The LLM may have proposed choices for a different missing slot
         # (typically stores) before this deterministic time gate ran.  Once the
         # executable contract decides that time is the next required slot, its
@@ -2127,6 +2146,7 @@ def _build_spec(
         source_tier=tier,
         clarification_needed=clarification_needed,
         clarification_question=clarification_question,
+        missing_slot=missing_slot,
         comparison_range=sales_spec.comparison_range,
         comparison_label=sales_spec.comparison_label,
         is_clarification_continuation=is_continuation,
@@ -3993,6 +4013,7 @@ async def _apply_store_scope_guard(
         spec,
         clarification_needed=True,
         clarification_question=STORE_SCOPE_CLARIFICATION_QUESTION,
+        missing_slot="store",
         store_options=names,
         clarification_options=("全部门店", *names[:3]),
     ))
