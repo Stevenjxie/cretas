@@ -116,6 +116,56 @@ describe('餐饮四部门权限', () => {
     }
   });
 
+  // ── 厨师长 ────────────────────────────────────────────────────
+
+  it('restaurant_chef 只进运营，且看不到价格', () => {
+    const store = storeAs('restaurant_chef');
+    expect(store.canWrite('restaurantOps')).toBe(true);
+    expect(store.canAccess('restaurantMarketing')).toBe(false);
+    expect(store.canAccess('restaurantHr')).toBe(false);
+    expect(store.canAccess('restaurantFinance')).toBe(false);
+    // Java PRICE_VIEW_ROLES 不含厨师长 —— 报货领料不需要看采购价
+    expect(store.canViewPrice).toBe(false);
+  });
+
+  // ── 与 Java 权威表逐格对齐 ──────────────────────────────────────
+  //
+  // 这三行的**唯一权威**是 backend/java/.../PermissionServiceImpl.java 里的
+  // restaurantOwnerPerms / restaurantChefPerms / restaurantPurchaserPerms。
+  // 前端这份是镜像，2026-07-31 第一版就漂了 7 处（都比后端更严，表现是"某个菜单
+  // 莫名没有"而不是报错，极难发现）。改 Java 那边必须同步改这里。
+
+  const JAVA_AUTHORITY: Record<string, Record<string, string>> = {
+    // PermissionServiceImpl.java: restaurantOwnerPerms
+    restaurant_owner: {
+      dashboard: 'rw', restaurant: 'rw', procurement: 'rw',
+      finance: 'rw', warehouse: 'rw', analytics: 'rw',
+    },
+    // PermissionServiceImpl.java: restaurantChefPerms（报货/领料 + 验收入库）
+    restaurant_chef: {
+      dashboard: 'r', restaurant: 'rw', warehouse: 'rw',
+      procurement: 'r', analytics: 'r',
+    },
+    // PermissionServiceImpl.java: restaurantPurchaserPerms（请购 + 采购全链路）
+    restaurant_purchaser: {
+      dashboard: 'r', restaurant: 'rw', procurement: 'rw',
+      warehouse: 'r', finance: 'r', analytics: 'r',
+    },
+  };
+
+  for (const [role, expected] of Object.entries(JAVA_AUTHORITY)) {
+    it(`${role} 的模块权限与 Java 权威表一致`, () => {
+      // 用 HEADQUARTERS（FACTORY_TYPE_MODULE_FILTER 里不做限制）比**角色原始权限**。
+      // 用 RESTAURANT 会被工厂类型过滤盖掉 warehouse —— 餐饮工厂本来就不显示
+      // 「仓储管理」模块(食材库存在 /restaurant/stocktaking)，那是另一层、且是对的。
+      // 这里要钉的是「前端镜像有没有照抄 Java」，不是「最终生效值」。
+      const store = storeAs(role, 'HEADQUARTERS');
+      for (const [mod, level] of Object.entries(expected)) {
+        expect(store.getPermissionLevel(mod), `${role}.${mod}`).toBe(level);
+      }
+    });
+  }
+
   // ── 非餐饮角色不受影响 ──────────────────────────────────────────
 
   it('工厂角色四个部门都进不去', () => {
