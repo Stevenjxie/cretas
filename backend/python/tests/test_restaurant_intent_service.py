@@ -2076,9 +2076,17 @@ async def test_tiered_answer_returns_typed_focus_entity_and_followups(monkeypatc
     assert result["executed_resolvers"] == ["RESTAURANT_OPS_GROSS_MARGIN"]
     assert result["structured_context"]["focus_entity"]["id"] == "dish-42"
     assert result["structured_context"]["topic_kind"] == "dish_ranking"
+    # ⚠️ 2026-07-31 **改过契约**: 原本断言的是
+    #     {"label": "看本月",   "question": "本月哪个菜卖得最好？"}
+    #     {"label": "看上个月", "question": "上个月哪个菜卖得最好？"}
+    # 那是 `_topic_followups` 里写死的泛问句 —— 问「上个月毛利最低的三道菜」点
+    # 「看本月」会变成问「本月哪个菜卖得最好？」, 换了窗口也**换了问题**, 而标签
+    # 读起来是「同一个问题、换个月」。该分支已删, 时间按钮统一走
+    # `_time_window_switch_followups`(复用原问句 + 能力闸)。
+    # 该分支原本还会 return 掉后面的 focus_entity 候选, 删掉后这两颗才露出来。
     assert result["suggested_followups"] == [
-        {"label": "看本月", "question": "本月哪个菜卖得最好？"},
-        {"label": "看上个月", "question": "上个月哪个菜卖得最好？"},
+        {"label": "看菜品成本", "question": "这个菜的成本呢？"},
+        {"label": "看菜品毛利", "question": "这个菜的毛利率呢？"},
     ]
 
 
