@@ -2695,13 +2695,30 @@ def _wastage_rank_axis(query: str) -> str:
 async def resolve_wastage_top(
     smartbi_pool, factory_id: str, days: int = 30, top_n: int = 10,
     query: str = "",
+    date_range: Optional[Tuple[Optional[date], Optional[date]]] = None,
+    window_label: Optional[str] = None,
 ) -> OpsAnswer:
-    """Top N wastage ingredients + wastage type breakdown, last N days.
+    """Top N wastage ingredients + wastage type breakdown for the asked window.
 
     Ranks by cost when the question asks about money, otherwise by quantity.
     Both numbers are always shown so the ranking is self-explanatory.
+
+    ``date_range`` must be declared here even though the SQL could be written
+    against ``days`` alone: ``resolve_by_code`` filters kwargs down to each
+    resolver's signature, so a parameter that is not declared is dropped
+    **silently**. That is exactly how this resolver spent its life answering a
+    rolling window — the planner computed 2026-06-01..2026-06-30 for 「上个月」,
+    ``_resolver_kwargs`` reduced it to ``days=30``, and the range never arrived.
+    The answer then read 「近 30 天」 over July numbers while the user had asked
+    about June. Callers that pass only ``days`` keep the rolling behaviour.
     """
     rank_axis = _wastage_rank_axis(query)
+    window_start = date_range[0] if date_range else None
+    window_end = date_range[1] if date_range else None
+    if (window_start is None) != (window_end is None):
+        # Half a range would silently fall back to the rolling window on the
+        # missing side — the same "looks answered, wrong window" failure.
+        raise ValueError("date_range must include both start and end")
     order_expr, axis_label, axis_is_money = _WASTAGE_RANK_AXES[rank_axis]
     async with smartbi_pool.acquire() as conn:
         await conn.execute("SELECT set_config('app.factory_id', $1, false)", factory_id)
@@ -2719,23 +2736,25 @@ async def resolve_wastage_top(
               FROM agg_restaurant_daily_ops a
               JOIN dim_ingredient i ON a.dim_value_id = i.ingredient_id
              WHERE a.factory_id = $1 AND a.kpi_kind IN ('wastage_qty', 'wastage_cost')
-               AND a.date >= CURRENT_DATE - ($2::int)
+               AND a.date >= COALESCE($4::date, CURRENT_DATE - ($2::int))
+               AND ($5::date IS NULL OR a.date <= $5::date)
              GROUP BY i.name, i.category, i.unit
              ORDER BY {order_expr} DESC NULLS LAST
              LIMIT $3
             """,
-            factory_id, days, top_n,
+            factory_id, days, top_n, window_start, window_end,
         )
         type_rows = await conn.fetch(
             """
             SELECT a.dim_value_str AS type, SUM(a.value_num)::float AS cost
               FROM agg_restaurant_daily_ops a
              WHERE a.factory_id = $1 AND a.kpi_kind = 'wastage_cost_by_type'
-               AND a.date >= CURRENT_DATE - ($2::int)
+               AND a.date >= COALESCE($3::date, CURRENT_DATE - ($2::int))
+               AND ($4::date IS NULL OR a.date <= $4::date)
              GROUP BY a.dim_value_str
              ORDER BY cost DESC NULLS LAST
             """,
-            factory_id, days,
+            factory_id, days, window_start, window_end,
         )
         total = await conn.fetchrow(
             """
@@ -2743,10 +2762,23 @@ async def resolve_wastage_top(
                    COALESCE(SUM(wastage_cost_total), 0)::float AS total_cost,
                    COALESCE(SUM(wastage_count), 0)::int AS total_count
               FROM agg_restaurant_daily_totals
-             WHERE factory_id = $1 AND date >= CURRENT_DATE - ($2::int)
+             WHERE factory_id = $1
+               AND date >= COALESCE($3::date, CURRENT_DATE - ($2::int))
+               AND ($4::date IS NULL OR date <= $4::date)
             """,
-            factory_id, days,
+            factory_id, days, window_start, window_end,
         )
+
+    # How the window gets named in every heading below. With an explicit range
+    # the concrete dates are always shown alongside the label, so the reader can
+    # audit the window instead of trusting the wording -- a bare 「上个月」 is
+    # exactly as unfalsifiable as the 「近 30 天」 it replaces.
+    if window_start and window_end:
+        window_text = f"{_date_text(window_start)} 至 {_date_text(window_end)}"
+        if window_label and window_label not in window_text:
+            window_text = f"{window_label}（{window_text}）"
+    else:
+        window_text = f"近 {days} 天"
 
     type_name_map = {
         "EXPIRED": "过期", "DAMAGED": "破损", "SPOILED": "变质",
@@ -2776,7 +2808,7 @@ async def resolve_wastage_top(
         f"{i+1}. {'**' + r['name'] + '**' if i == 0 else r['name']} "
         f"({r['category'] or '—'}): {_row_metrics(r)}"
         for i, r in enumerate(top_rows)
-    ]) or "(近 %d 天无损耗记录)" % days
+    ]) or f"({window_text}无损耗记录)"
 
     type_summary = "、".join([
         f"{type_name_map.get(r['type'], r['type'])} ¥{r['cost']:.2f}"
@@ -2809,7 +2841,7 @@ async def resolve_wastage_top(
         top_block = f"{top_heading}:\n\n{top_list_text}"
 
     answer = (
-        f"近 {days} 天损耗总览:\n"
+        f"{window_text}损耗总览:\n"
         f"{totals_line}\n"
         f"- 损耗类型分布: {type_summary}\n\n"
         f"{top_block}\n\n"
@@ -2823,7 +2855,7 @@ async def resolve_wastage_top(
     if top_rows and not cost_axis_unavailable:
         charts.append({
             "chartType": "bar",
-            "title": f"近{days}天{top_heading}",
+            "title": f"{window_text}{top_heading}",
             "xAxis": {"data": [r["name"] for r in top_rows]},
             "series": [{
                 "name": "损耗成本" if axis_is_money else "损耗量",
@@ -2843,7 +2875,7 @@ async def resolve_wastage_top(
 
     return OpsAnswer(
         code="RESTAURANT_OPS_WASTAGE_TOP",
-        title=f"近{days}天损耗分析",
+        title=f"{window_text}损耗分析",
         answer_text=answer,
         charts=charts,
         kpis=[
@@ -2858,6 +2890,13 @@ async def resolve_wastage_top(
         ],
         meta={
             "window_days": days,
+            # The window actually queried, not the one requested: the daily
+            # audit compares these against the asked range, which is the only
+            # way a silent reversion to a rolling window shows up as a failure
+            # rather than as a plausible-looking answer.
+            "window_start": _date_text(window_start) if window_start else None,
+            "window_end": _date_text(window_end) if window_end else None,
+            "window_label": window_label,
             "top_n": top_n,
             "rank_axis": rank_axis,
             "cost_axis_unavailable": cost_axis_unavailable,
