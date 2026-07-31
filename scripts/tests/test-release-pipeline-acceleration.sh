@@ -76,6 +76,14 @@ assert_contains "$DEPLOY_SKILL" 'Never trigger or wait for an Artifact during a 
 assert_contains "$DEPLOY_SKILL" '--stage-backend YES-STAGE'
 assert_contains "$DEPLOY_SKILL" 'Candidate archives are also keyed by the exact `web-admin` Git tree.'
 assert_contains "$AGENTS_FILE" '--stage-backend YES-STAGE'
+
+# 合并后先预热这一步必须【三处都有】: AGENTS.md(Codex 的固定上下文) + 两份 deploy skill。
+# 🔴 .agents/ 与 .claude/ 两份 SKILL.md 是【各自独立跟踪的副本, 且早已内容分叉】——
+# 只改一份的话, 另一个 agent 永远看不到这一步。这正是本仓库反复出问题的
+# 「同一件事由多处承载, 只改一处静默失效」那一类。
+assert_contains "$AGENTS_FILE" 'prewarm-main-artifact.sh'
+assert_contains "$DEPLOY_SKILL" 'prewarm-main-artifact.sh'
+assert_contains "$ROOT_DIR/.claude/skills/deploy-backend/SKILL.md" 'prewarm-main-artifact.sh'
 assert_contains "$AGENTS_FILE" '按 `web-admin` Git tree 保留可恢复缓存'
 assert_contains "$RELEASE_ORCHESTRATOR" '--stage-backend YES-STAGE'
 assert_contains "$RELEASE_ORCHESTRATOR" 'ensure_exact_main_after_artifacts "artifact validation/fallback build"'
