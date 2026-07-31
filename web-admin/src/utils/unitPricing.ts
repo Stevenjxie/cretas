@@ -63,7 +63,22 @@ export function canonicalUnitCode(value: unknown): string {
   return UNIT_ALIASES[raw.toLowerCase()] || UNIT_ALIASES[raw] || raw;
 }
 
+/**
+ * 件/个/只 三个中文计数标签都归一到 `pcs`, 但它们**互相不能替换**
+ * (见下面 {@link DISTINCT_COUNT_LABELS}: 一只鸡不是一件包材)。所以展示时
+ * 必须把用户原本填的那个标签原样还回去 —— 走一遍 `pcs` 再取 `UNIT_LABELS`
+ * 会把三个都渲染成同一个字。
+ *
+ * 🔴 #1672 (2026-07-23) 把 `UNIT_LABELS.pcs` 从「件」改成「只」以对齐系统单位表的
+ * `unitName`, 于是**用户填「件」的产品在界面上显示成「只」**。
+ * `__tests__/productSpecification.spec.ts` 当天就红了, 但 vitest 当时不在任何
+ * push 门禁里 (`vue-build-check` 挂 `if: inputs.full_audit`), 一直没人看见。
+ */
+const RAW_COUNT_LABELS = new Set(['只', '个', '件']);
+
 export function displayUnit(value: unknown): string {
+  const raw = String(value ?? '').trim();
+  if (RAW_COUNT_LABELS.has(raw)) return raw;
   const code = canonicalUnitCode(value);
   return UNIT_LABELS[code] || code;
 }

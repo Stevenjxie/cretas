@@ -421,6 +421,7 @@ function patchPhase(operation: WorkflowPatch['op']): number {
 function isPathCompatibleWithNodeKind(kind: ProductProcessNodeKind, path: string): boolean {
   if (kind === 'PROCESS') {
     return path === 'ports'
+      || path === 'portGroups'
       || path === 'conversionRule'
       || path.startsWith('conversionRule.')
       || path === 'reportingRequired';
@@ -447,8 +448,15 @@ const portKeys = new Set([
   'id', 'direction', 'materialNodeId', 'materialName', 'skuId', 'materialKind', 'unit',
   'conversionRefId', 'conversionVersion', 'ordinal',
 ]);
+/**
+ * 🔴 这张表和下面的 {@link isAllowedFieldValue} 是**同一道闸的两个承载点** ——
+ * 只加一处等于没加: 路径没进这张表会在 `sanitizeWorkflowPatch` 里被拒,
+ * 值没进那个函数会在 `isAllowedFieldValue` 里被拒, 两种都报同一句
+ * 「Workflow patch batch contains an invalid member」, 分不出是哪一层。
+ * 加字段路径时**两处一起加**, 并补一条能真正落库的正例用例。
+ */
 const fieldPaths = new Set([
-  'name', 'skuId', 'skuCode', 'specification', 'ports', 'conversionRule',
+  'name', 'skuId', 'skuCode', 'specification', 'ports', 'portGroups', 'conversionRule',
   'conversionRule.mode', 'conversionRule.expression', 'reportingRequired',
 ]);
 
@@ -618,6 +626,7 @@ function isAllowedFieldValue(path: string, value: unknown): boolean {
   if (path === 'conversionRule.mode') return typeof value === 'string' && conversionModes.has(value);
   if (path === 'conversionRule') return isConversionRule(value);
   if (path === 'ports') return Array.isArray(value) && value.every(isProcessPort);
+  if (path === 'portGroups') return Array.isArray(value) && value.every(isProcessPortGroup);
   return false;
 }
 

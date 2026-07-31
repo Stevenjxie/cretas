@@ -9,10 +9,14 @@ Scoring rules:
   - Keyword + vector both agree on the same template → return template (strong)
   - Keyword returns X and vector top is different → prefer keyword
     (deterministic, existing production behavior; vector is additive)
-  - Only vector match with similarity ≥ 0.85 → return the vector template
-  - Vector max similarity 0.70-0.85 → return None + optional hint
+  - Only vector match with similarity ≥ HIGH_CONFIDENCE → return the vector template
+  - Vector max similarity in [MIN_USEFUL, HIGH_CONFIDENCE) → return None + optional hint
     (caller may pass to LLM with "可能是问 X 类问题" hint)
-  - Nothing ≥ 0.70 → return None (pure LLM fallback)
+  - Nothing ≥ MIN_USEFUL → return None (pure LLM fallback)
+
+  ⚠️ 这里**不要再写死数字**: 阈值调过两次 (0.85 → 0.80 → 0.78, 见下方 tuning history),
+  而这段注释和 `hybrid_match` 里那句都还停在 0.85, 把 `test_vector_only_ambiguous`
+  写错成拿 0.78 当模糊样本 —— 阈值降到 0.78 后那条用例就一直红着。
 
 The router is best-effort: any failure returns None and the caller
 falls through to LLM. Never raises.
@@ -132,7 +136,7 @@ async def hybrid_match(
             via="vector_only",
         )
 
-    # 0.70 ≤ sim < 0.85: ambiguous. Return None; caller goes to LLM. We log
+    # MIN_USEFUL ≤ sim < HIGH_CONFIDENCE: ambiguous. Return None; caller goes to LLM. We log
     # so we can tune the threshold based on real miss/hit rates later.
     logger.info(
         f"[hybrid-rag] ambiguous: top={top_code} sim={top_sim:.3f} below threshold, "
