@@ -406,9 +406,19 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
             for (FinishedBomOutput reportedOutput : finishedBomOutputs(req)) {
                 BomRecipe outputRecipe = resolvePinnedOutputRecipe(
                         pinnedFamily, reportedOutput.productTypeId());
-                String reportedUnit = canonicalBomUnit(reportedOutput.unit());
-                String bomOutputUnit = canonicalBomUnit(outputRecipe.getOutputUnit());
-                if (!Objects.equals(reportedUnit, bomOutputUnit)) {
+                // 判据是「按系统自己的别名表, 这两个是不是同一个单位」, 不是字面一不一样。
+                // 客户 2026-07-31 现场被拦: 报工「袋」/ BOM「bag」—— 权威表里
+                // UnitContractServiceImpl.systemAliases() 写着 alias("bag","bag","袋"), 本就同一个单位。
+                // 走的是本类已有的 configuredUnitsEquivalent (内置权威表 + 租户自定义别名),
+                // 与 BomRecipeServiceImpl 保存 BOM 时用的 areEquivalent 同一套口径 —— 存得进去的
+                // BOM, 报工就不该拦。此处**不要**再用 canonicalBomUnit 那种私有别名表 (见其注释)。
+                String reportedUnit = reportedOutput.unit();
+                String bomOutputUnit = outputRecipe.getOutputUnit();
+                // ⚠️ configuredUnitsEquivalent 把「没填」当等价放行 (工序配置那条允许省略);
+                // 成品报工不能沿用那个宽松语义 —— 单位没填就是不知道报的是什么, 必须挡住。
+                boolean unitMissing = reportedUnit == null || reportedUnit.isBlank()
+                        || bomOutputUnit == null || bomOutputUnit.isBlank();
+                if (unitMissing || !configuredUnitsEquivalent(factoryId, reportedUnit, bomOutputUnit)) {
                     throw new BusinessException(409, "成品报工单位与计划固定 BOM 的产出单位不一致")
                             .withCode("BOM_OUTPUT_UNIT_MISMATCH")
                             .withHint("SKU " + reportedOutput.productTypeId()
@@ -697,6 +707,19 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
         };
     }
 
+    /**
+     * ⛔ 仅供 {@link #reportingMassToKg} 判断 kg/g 用。<b>不要拿它比较两个单位是否相同</b> ——
+     * 用 {@link #configuredUnitsEquivalent} 或 {@code UnitContractService#areEquivalent}。
+     *
+     * <p>这是一张私有的、只覆盖 5 组的别名表, 与系统权威表
+     * {@code UnitContractServiceImpl.systemAliases()} (24 组) 不同步, 且两个方向都会出错:</p>
+     * <ul>
+     *   <li><b>误拦</b> —— 表里没有的单位原样返回, 于是「袋」≠「bag」, 而权威表里它们是同一个。
+     *       客户 2026-07-31 现场就是被这条拦住的 (成品报工单位与 BOM 产出单位不一致)。</li>
+     *   <li><b>漏拦</b> —— 这里把 片/slice/piece/pcs/个 全折成 "slice", 而权威表里
+     *       个→pcs、片→slice 是<b>两个不同单位</b>, 于是「个」能冒充「片」混过去。</li>
+     * </ul>
+     */
     private String canonicalBomUnit(String unit) {
         if (unit == null || unit.isBlank()) return null;
         return switch (unit.trim().toLowerCase(java.util.Locale.ROOT)) {
