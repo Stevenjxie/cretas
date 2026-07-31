@@ -76,6 +76,46 @@ class UnitAliasAuthorityContractTest {
                     .isNotEqualTo(UnitContractServiceImpl.canonicalCodeOrRaw(right));
         }
 
+        /**
+         * 🔴 权威别名表里 {@code alias("pcs","pcs","件","个","只")} —— 三个中文都归 pcs。
+         * 但 <b>#1976 规定「一只 ≠ 一件」</b>: 计数单位按字面区分, 一只鸡不是一件包材。
+         *
+         * <p>所以做<b>相等判定</b>的地方必须用 {@code crossLanguageCode} 而不是
+         * {@code canonicalCodeOrRaw} —— 前者只折「英文码 ↔ 该单位的中文名」,
+         * 于是 袋≡bag 修好了, 而 只≠件 保住了。</p>
+         *
+         * <p>2026-07-31 我自己在 #2077/#2079 用错了后者, 等于悄悄放宽了这条; 本组用例就是防它再发生。</p>
+         */
+        @ParameterizedTest(name = "{0} 与 {1} 是同一单位的中英两种写法")
+        @CsvSource({"袋, bag", "盒, box", "箱, case", "包, pack", "瓶, bottle", "罐, can",
+                    "桶, pail", "卷, roll", "片, slice", "份, portion", "项, item",
+                    "件, pcs", "框, crate",
+                    // 可换算维度照旧全折 (千克/公斤/kg 真的是一个单位)
+                    "千克, kg", "公斤, kg", "克, g", "斤, jin", "吨, t", "升, l", "毫升, ml"})
+        void crossLanguageSpellingsCollapse(String chinese, String code) {
+            assertThat(UnitContractServiceImpl.crossLanguageCode(chinese))
+                    .isEqualTo(UnitContractServiceImpl.crossLanguageCode(code));
+        }
+
+        @ParameterizedTest(name = "{0} 与 {1} 仍是两种单位 (#1976)")
+        @CsvSource({"只, 件", "个, 件", "只, 个", "只, pcs", "个, pcs"})
+        void differentChineseCountingUnitsAreNotMerged(String left, String right) {
+            assertThat(UnitContractServiceImpl.crossLanguageCode(left))
+                    .as("#1976: 计数单位按字面区分, 一只 ≠ 一件 —— 合并会让「只」冒充「件」过闸")
+                    .isNotEqualTo(UnitContractServiceImpl.crossLanguageCode(right));
+        }
+
+        @Test
+        @DisplayName("canonicalCodeOrRaw 会合并 只/件 —— 记录这个差别, 相等判定别用它")
+        void canonicalCodeOrRawIsTheLooserOne() {
+            // 这不是缺陷, 是分工: canonicalCodeOrRaw 用于「归一成展示/存储用的码」,
+            // crossLanguageCode 用于「判两个单位是不是同一个」。用错了就会踩 #1976。
+            assertThat(UnitContractServiceImpl.canonicalCodeOrRaw("只"))
+                    .isEqualTo(UnitContractServiceImpl.canonicalCodeOrRaw("件"));
+            assertThat(UnitContractServiceImpl.crossLanguageCode("只"))
+                    .isNotEqualTo(UnitContractServiceImpl.crossLanguageCode("件"));
+        }
+
         @Test
         @DisplayName("表里没有的单位不猜, 原样小写返回 (不折成'最像'的那个)")
         void unknownUnitsAreLeftAlone() {
@@ -98,14 +138,22 @@ class UnitAliasAuthorityContractTest {
             method.setAccessible(true);
             for (String unit : new String[]{"袋", "bag", "件", "个", "pcs", "箱", "框", "筐", "kg", "公斤", "未知单位"}) {
                 assertThat(method.invoke(null, unit))
-                        .as("结单单位归一必须与权威表一致: %s", unit)
-                        .isEqualTo(UnitContractServiceImpl.canonicalCodeOrRaw(unit));
+                        .as("结单单位归一必须与权威表的**跨语言**归一一致 (不是 canonicalCodeOrRaw ——"
+                                + " 后者会把 只/个/件 并成 pcs, 违反 #1976): %s", unit)
+                        .isEqualTo(UnitContractServiceImpl.crossLanguageCode(unit));
             }
         }
 
-        /** Workflow 快照比对: 判断某个投入是不是「在 slot re-keying 时消失了」。 */
+        /**
+         * Workflow 快照比对: 判断某个投入是不是「在 slot re-keying 时消失了」。
+         *
+         * <p>⚠️ 这一处<b>刻意</b>连 只/个/件 一起认 —— 与结单闸不同。既有用例
+         * {@code BomWorkflowRevisionServiceTest#localizedCountUnitMatchesCanonicalBomUnitDuringStableSlotRekeying}
+         * 明确断言 {@code unitsCompatible("pcs","只")} 为 true。#1976「一只 ≠ 一件」管的是
+         * 数量/库存换算, 不管槽位匹配, 两者别混。</p>
+         */
         @ParameterizedTest
-        @CsvSource({"袋, bag", "件, 个", "框, 筐", "公斤, kg"})
+        @CsvSource({"袋, bag", "件, pcs", "框, 筐", "公斤, kg", "只, pcs", "个, 只"})
         void bomWorkflowRevisionSameUnitUsesAuthority(String left, String right) throws Exception {
             Method sameUnit = BomWorkflowRevisionService.class
                     .getDeclaredMethod("sameUnit", String.class, String.class);
@@ -113,6 +161,37 @@ class UnitAliasAuthorityContractTest {
             assertThat((boolean) sameUnit.invoke(null, left, right))
                     .as("%s 与 %s 是同一个单位, 不该被判成投入消失了", left, right)
                     .isTrue();
+        }
+
+        /**
+         * 这三处 2026-07-31 之前各自维护私有表 (报工 2 组 / 出成率 5 组 / 订单成本 5 组,
+         * 后两张<b>逐字相同</b>)。都用 crossLanguageCode —— 它们的结果参与数量换算与
+         * 成本分摊维度分组, 必须守住 #1976「一只 ≠ 一件」。
+         */
+        @ParameterizedTest(name = "{0}#{1} 委托到 crossLanguageCode")
+        @CsvSource({
+                "com.cretas.aims.service.processentry.impl.ProcessSheetServiceImpl, normalizeReportingUnit",
+                "com.cretas.aims.service.yield.impl.YieldReportServiceImpl, normalizeUnit",
+                "com.cretas.aims.service.yield.OrderCostBreakdownService, normalizeUnit",
+        })
+        void quantityPathsDelegateToCrossLanguageCode(String className, String methodName) throws Exception {
+            Method method = Class.forName(className).getDeclaredMethod(methodName, String.class);
+            method.setAccessible(true);
+            for (String unit : new String[]{"袋", "bag", "盒", "box", "件", "pcs", "只", "个",
+                                            "框", "筐", "kg", "公斤", "克", "未知单位"}) {
+                assertThat(method.invoke(null, unit))
+                        .as("%s#%s 必须与权威表的跨语言归一一致: %s", className, methodName, unit)
+                        .isEqualTo(UnitContractServiceImpl.crossLanguageCode(unit));
+            }
+        }
+
+        @Test
+        @DisplayName("报工侧 null 仍返回空串 (调用方按 \"kg\".equals 判, 且空串要参与 distinct)")
+        void reportingUnitKeepsEmptyStringForNull() throws Exception {
+            Method method = Class.forName("com.cretas.aims.service.processentry.impl.ProcessSheetServiceImpl")
+                    .getDeclaredMethod("normalizeReportingUnit", String.class);
+            method.setAccessible(true);
+            assertThat(method.invoke(null, (Object) null)).isEqualTo("");
         }
 
         @Test

@@ -4937,7 +4937,7 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
      * 的两段式写法 (built-in 优先，再落 {@code UnitContractService#areEquivalent})。</p>
      */
     private static String canonicalReceiptUnit(String unit) {
-        return com.cretas.aims.service.unit.impl.UnitContractServiceImpl.canonicalCodeOrRaw(unit);
+        return com.cretas.aims.service.unit.impl.UnitContractServiceImpl.crossLanguageCode(unit);
     }
 
     private BusinessException invalidInterimFinishedGoods(String detail) {

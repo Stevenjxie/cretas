@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref, onMounted, computed } from 'vue';
+import { sameUnit } from '@/utils/unitPricing';
 import { useRoute, useRouter } from 'vue-router';
 import { useAuthStore } from '@/store/modules/auth';
 import { usePermissionStore } from '@/store/modules/permission';
@@ -322,7 +323,9 @@ const cumulativeDisplay = computed(() => {
   if (r != null) return formatPercent(r * 100);
   const inU = yd?.firstStepInputUnit;
   const outU = yd?.lastStepOutputUnit;
-  if (inU != null && outU != null && inU !== outU) {
+  // 用 sameUnit 而非字面比较: 「袋」与 bag 是同一个单位, 字面比较会误报「跨单位不可比」,
+  // 而那句提示会把人引去配标准克重 —— 配了也没用, 因为根本不需要换算。
+  if (inU != null && outU != null && !sameUnit(inU, outU)) {
     return '跨单位不可比, 需配产品标准克重';
   }
   return '—';

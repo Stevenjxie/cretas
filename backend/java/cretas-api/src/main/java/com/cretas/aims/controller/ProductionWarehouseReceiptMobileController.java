@@ -165,7 +165,7 @@ public class ProductionWarehouseReceiptMobileController {
      */
     private String canonicalUnit(String value) {
         return com.cretas.aims.service.unit.impl.UnitContractServiceImpl
-                .canonicalCodeOrRaw(trimToNull(value));
+                .crossLanguageCode(trimToNull(value));
     }
 
     private Long currentUserId() {

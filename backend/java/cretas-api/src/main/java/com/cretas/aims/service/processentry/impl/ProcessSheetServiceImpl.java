@@ -1800,12 +1800,22 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
         return null;
     }
 
+    /**
+     * 报工投入/产出的单位归一 —— 走权威表的<b>跨语言</b>归一。
+     *
+     * <p>原来只有 2 组 (千克/公斤→kg、克→g), 连 盒/box 都不认。而它被用在<b>去重判定</b>上:
+     * 多产出成本分摊那处 {@code units.size() != 1} 会<b>抛 400</b>
+     * 「不同计量维度的多产出必须填写成本分摊比例」—— 一个端口写「袋」另一个写「bag」就会误报。</p>
+     *
+     * <p>用 {@code crossLanguageCode} 而非 {@code canonicalCodeOrRaw}: 后者会把 只/个/件
+     * 并成 pcs, 违反 #1976「一只 ≠ 一件」; 成本分摊维度更不能把它们当成同一种。</p>
+     *
+     * <p>⚠️ null 仍返回 <b>空串</b>而不是 null —— 调用方按 {@code "kg".equals(unit)} 判, 且
+     * 空串会参与 distinct 计数, 改成 null 会连带改掉多产出的分组行为。</p>
+     */
     private static String normalizeReportingUnit(String unit) {
         if (unit == null) return "";
-        String normalized = unit.trim().toLowerCase(java.util.Locale.ROOT);
-        if ("千克".equals(normalized) || "公斤".equals(normalized)) return "kg";
-        if ("克".equals(normalized)) return "g";
-        return normalized;
+        return com.cretas.aims.service.unit.impl.UnitContractServiceImpl.crossLanguageCode(unit);
     }
 
     private static List<BigDecimal> allocateMoney(BigDecimal total, List<BigDecimal> ratios) {

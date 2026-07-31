@@ -1023,6 +1023,13 @@ public class BomWorkflowRevisionService {
     private static String canonicalUnit(String value) {
         // NFKC 先做: 快照里出现过全角/兼容字符, 权威表的 key 是半角的。
         String normalized = Normalizer.normalize(value, Normalizer.Form.NFKC);
+        // ⚠️ 这一处**刻意**用 canonicalCodeOrRaw (把 件/个/只 一并折成 pcs), 而不是
+        // crossLanguageCode。快照 slot re-keying 判的是「这个投入槽位还在不在」, 本就要认
+        // 本地化写法 —— 见 BomWorkflowRevisionServiceTest
+        // #localizedCountUnitMatchesCanonicalBomUnitDuringStableSlotRekeying:
+        //     unitsCompatible("pcs","只") / ("个","只") 都断言为 true。
+        // #1976「一只 ≠ 一件」管的是**数量/库存换算**(见 ProductionStockAllocationServiceImpl),
+        // 不管槽位匹配; 两者别混。
         return com.cretas.aims.service.unit.impl.UnitContractServiceImpl.canonicalCodeOrRaw(normalized);
     }
 

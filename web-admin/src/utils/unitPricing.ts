@@ -68,6 +68,34 @@ export function displayUnit(value: unknown): string {
   return UNIT_LABELS[code] || code;
 }
 
+/**
+ * #1976 例外名单 —— 与后端 `UnitContractServiceImpl.DISTINCT_COUNT_LABELS` 同源。
+ * 权威表把 件/个/只 都并进 pcs, 但业务上**一只 ≠ 一件**(一只鸡不是一件包材)。
+ * 「件」不在名单里: 它就是 pcs 的中文名, 件≡pcs 是对的。
+ */
+const DISTINCT_COUNT_LABELS = new Set(['只', '个']);
+
+/**
+ * 判两个单位<b>是不是同一个</b> —— 中英写法互认, 但不合并 只/个/件。
+ *
+ * 🔴 为什么不能直接 `a === b`: 库里同一个单位有中英两种写法 (后端保存写规范码, 人工录入常是中文),
+ * 字面比较会把「袋」和 `bag` 判成两种单位。2026-07-31 客户就是这么被拦住的; 前端还另有几处
+ * 因此显示「跨单位不可比, 需配产品标准克重」——**而那个提示会把人引去做无用功**, 因为两个
+ * 单位本来就是同一个, 配了标准克重也没用。
+ *
+ * 与后端 `UnitContractServiceImpl.crossLanguageCode` 逐条对应, 改一边要改另一边。
+ */
+export function sameUnit(left: unknown, right: unknown): boolean {
+  const norm = (value: unknown) => {
+    const raw = String(value ?? '').trim();
+    if (!raw) return '';
+    return DISTINCT_COUNT_LABELS.has(raw) ? raw : canonicalUnitCode(raw);
+  };
+  const l = norm(left);
+  const r = norm(right);
+  return l !== '' && l === r;
+}
+
 export function formatPriceUnit(value: unknown): string {
   const code = canonicalUnitCode(value);
   return code ? `元/${displayUnit(code)}` : '计价单位未配置';

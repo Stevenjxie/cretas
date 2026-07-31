@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref, computed, watch } from 'vue';
+import { sameUnit } from '@/utils/unitPricing';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { Plus, Delete, Check, Warning, ArrowDown, ArrowRight, Clock, Loading, QuestionFilled } from '@element-plus/icons-vue';
 import {
@@ -1445,7 +1446,7 @@ function outputLineYieldBlocker(row: SheetRow, line: MultiOutputLine): string | 
   if (!inputFilled) return null;
   const inputUnit = displayProcessUnit(processUnits.value.inputUnit);
   const outputUnit = displayProcessUnit(line.unit);
-  if (!inputUnit || !outputUnit || inputUnit === outputUnit) return null;
+  if (!inputUnit || !outputUnit || sameUnit(inputUnit, outputUnit)) return null;
   return `投入按${inputUnit}、产出按${outputUnit}，需要先设置「${line.materialName}」的每${outputUnit}重量才能算出成率`;
 }
 
