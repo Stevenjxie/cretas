@@ -87,9 +87,9 @@ public class CreateBomRecipeRequest {
         @PositiveOrZero
         private BigDecimal taxRate;
 
-        @Schema(description = "物料分类: RAW/AUXILIARY/PACKAGING, 默认 RAW")
-        @Pattern(regexp = "^(RAW|AUXILIARY|PACKAGING)$",
-                 message = "物料分类必须是 RAW/AUXILIARY/PACKAGING 之一")
+        @Schema(description = "物料分类: RAW/AUXILIARY/PACKAGING 为投入, BYPRODUCT 为产出声明; 默认 RAW")
+        @Pattern(regexp = "^(RAW|AUXILIARY|PACKAGING|BYPRODUCT)$",
+                 message = "物料分类必须是 RAW/AUXILIARY/PACKAGING/BYPRODUCT 之一")
         private String materialCategory;
 
         @Schema(description = "排序", defaultValue = "0")
