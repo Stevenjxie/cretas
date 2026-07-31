@@ -38,13 +38,31 @@ const WINDOW_OPTIONS = [
 
 const canViewPrice = computed(() => permission.canViewPrice);
 
+/**
+ * 把「最近 N 天」化成具体起止日期。
+ *
+ * 🔴 gold_reads 的端点(kpi-summary / daily-trend)**不接 days**, 只接
+ * start_date / end_date, 而且**省略即全部历史**。第一版我没传, 结果页头写着
+ * 「最近 30 天」而图表画的是 576 天全量 —— 期间选择器做出了页面兑现不了的承诺,
+ * 且不报错。这正是同一天在 AI resolver 侧修过三次的那一类缺陷。
+ */
+function windowRange(days: number): { start: string; end: string } {
+  const end = new Date();
+  const start = new Date(end.getTime() - (days - 1) * 86400000);
+  const iso = (d: Date) => d.toISOString().slice(0, 10);
+  return { start: iso(start), end: iso(end) };
+}
+
 function endpointFor(days: number): string | null {
   const factoryId = getFactoryId();
   if (config.value.source === 'ops-summary') {
+    // 这个 router 收 days(滚动窗口), 与页头口径一致
     return `/api/smartbi/restaurant-ops/summary?factory_id=${factoryId}&days=${days}`;
   }
   if (config.value.source === 'kpi-summary') {
-    return `/api/smartbi/gold/kpi-summary?factory_id=${factoryId}`;
+    const { start, end } = windowRange(days);
+    return `/api/smartbi/gold/kpi-summary?factory_id=${factoryId}`
+      + `&start_date=${start}&end_date=${end}`;
   }
   return null;
 }
@@ -91,8 +109,13 @@ async function loadTrend() {
   trendLoading.value = true;
   try {
     const factoryId = getFactoryId();
-    const url = t.endpoint.replace('{days}', String(windowDays.value))
+    let url = t.endpoint.replace('{days}', String(windowDays.value))
       + (t.endpoint.includes('?') ? '&' : '?') + `factory_id=${factoryId}`;
+    if (t.shape === 'revenue-points') {
+      // 同上: 这一类端点省略日期 = 全部历史, 必须显式传
+      const { start, end } = windowRange(windowDays.value);
+      url += `&start_date=${start}&end_date=${end}`;
+    }
     const res = await pythonFetch(url, { timeoutMs: 60000 }) as Record<string, unknown>;
     if (t.shape === 'ops-kpi') {
       const rows = (res?.data ?? []) as { date: string; value: number }[];
