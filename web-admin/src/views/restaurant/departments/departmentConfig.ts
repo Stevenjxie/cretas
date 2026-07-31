@@ -15,7 +15,14 @@ export type DeptKey = 'ops' | 'marketing' | 'hr' | 'finance';
 /** KPI 的取值路径与格式。`money: true` 的项在无价格权限时显示「—」。 */
 export interface DeptKpi {
   label: string;
-  /** 取值路径，相对于接口返回的 data。例: 'totals.total_wastage_cost' */
+  /**
+   * 取值路径，相对于接口返回的 data。例: 'totals.totalWastageCost'
+   *
+   * 🔴 **必须写 camelCase**：`pythonFetch` 出口有 `transformKeys()`，把后端的
+   * snake_case 全部转成 camelCase。照抄后端字段名(total_wastage_cost)取不到值，
+   * 而 `pickPath` 取不到只返回 undefined → KPI 显示「—」，**不报错**。
+   * 单测和类型检查都发现不了，只有打开页面才看得见。
+   */
   path: string;
   money?: boolean;
   /** 比率：后端给 0~1 或 0~100，统一按 `rate01` 标注哪种 */
@@ -90,11 +97,11 @@ export const DEPARTMENTS: Record<DeptKey, DeptConfig> = {
     accent: '#0F7B8A',
     source: 'ops-summary',
     kpis: [
-      { label: '损耗金额', path: 'totals.total_wastage_cost', money: true },
-      { label: '损耗次数', path: 'totals.total_wastage' },
-      { label: '领料成本', path: 'totals.total_req_cost', money: true },
-      { label: '盘亏总量', path: 'totals.total_shortage' },
-      { label: '有数据天数', path: 'totals.active_days', hint: '窗口内实际有记录的天数' },
+      { label: '损耗金额', path: 'totals.totalWastageCost', money: true },
+      { label: '损耗次数', path: 'totals.totalWastage' },
+      { label: '领料成本', path: 'totals.totalReqCost', money: true },
+      { label: '盘亏总量', path: 'totals.totalShortage' },
+      { label: '有数据天数', path: 'totals.activeDays', hint: '窗口内实际有记录的天数' },
     ],
     trend: {
       title: '损耗金额趋势',
@@ -105,7 +112,7 @@ export const DEPARTMENTS: Record<DeptKey, DeptConfig> = {
     },
     ranking: {
       title: '领用成本前列食材',
-      path: 'top_ingredients',
+      path: 'top5Ingredients',
       nameKey: 'name',
       categoryKey: 'category',
       valueKey: 'cost',
@@ -133,10 +140,10 @@ export const DEPARTMENTS: Record<DeptKey, DeptConfig> = {
     source: 'kpi-summary',
     kpis: [
       { label: '营收', path: 'revenue', money: true },
-      { label: '订单数', path: 'bills' },
-      { label: '菜品件数', path: 'items' },
-      { label: '客流', path: 'customers' },
-      { label: '门店数', path: 'stores' },
+      { label: '订单数', path: 'billCount' },
+      { label: '菜品件数', path: 'itemCount' },
+      { label: '客流', path: 'customerCount' },
+      { label: '门店数', path: 'storeCount' },
     ],
     trend: {
       title: '营收趋势',
@@ -165,12 +172,12 @@ export const DEPARTMENTS: Record<DeptKey, DeptConfig> = {
     // 与运营同一个接口：那一次调用同时返回 totals(后厨) 与 margin(毛利)
     source: 'ops-summary',
     kpis: [
-      { label: '毛利率', path: 'margin.avg_margin_rate', percent: true, rate01: true },
-      { label: 'POS 营收', path: 'margin.total_pos_revenue', money: true },
-      { label: '毛利额', path: 'margin.total_gross_profit', money: true },
+      { label: '毛利率', path: 'margin.avgMarginRate', percent: true, rate01: true },
+      { label: 'POS 营收', path: 'margin.totalPosRevenue', money: true },
+      { label: '毛利额', path: 'margin.totalGrossProfit', money: true },
       {
         label: '已核成本菜品',
-        path: 'margin.dish_count_with_cost',
+        path: 'margin.dishCountWithCost',
         hint: '有配方成本可算毛利的菜品数',
       },
     ],
