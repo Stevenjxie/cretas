@@ -62,6 +62,12 @@ CASES: Tuple[Tuple[str, str, Tuple[str, ...]], ...] = (
     ("dish", "全部门店最近30天卖得最好的几个菜是哪些", ("GROSS_MARGIN",)),
     ("dish", "全部门店最近30天米饭卖了多少", ("GROSS_MARGIN",)),
     ("dish", "全部门店最近30天哪些菜的食材成本最高", ("RECIPE_COST",)),
+    # 2026-07-31 #2098: 「毛利最低的菜品」曾掉进按销量直排的分支(那分支的进入条件只看
+    # 有没有排序方向, 而「毛利最低」同样解析出 ranking_direction='worst'), 产出一份
+    # **完全不含毛利**的销量榜。答案契约拦住了它(margin_value/margin_integrity/
+    # request_coverage 三项缺失 → 降级成澄清), 所以用户看到的是「答不出来」而不是错答案 ——
+    # 但那是契约在兜底, 根因在 router。这条用例盯的就是它别再退回去。
+    ("dish", "全部门店最近30天毛利最低的菜品有哪些", ("GROSS_MARGIN",)),
     ("store", "全部门店最近30天哪家店毛利最好", ("STORE_MARGIN",)),
     ("store", "我一共有几家店", ("STORE_DIRECTORY",)),
     ("stock", "全部门店最近30天盘点亏了多少", ("STOCK_SHORTAGE",)),
