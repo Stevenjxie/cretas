@@ -7605,6 +7605,109 @@ async def resolve_channel_mix(
     )
 
 
+# ── 涉钱答案的角色闸 (2026-08-01) ─────────────────────────────────────────
+#
+# 2026-08-01 prod 实拍(MOCK_REST, 同一问句只换角色):
+#   哪家店毛利最好      STORE_MARGIN       老板 ¥34,959,425 / 后厨 看不到  <- 有门
+#   损耗金额最高的食材  WASTAGE_TOP        老板 ¥278,254.85 / 后厨 ¥278,254.85
+#   采购花了多少钱      REQUISITION_TREND  老板 ¥7,094,935  / 后厨 ¥7,094,935
+#   盘点亏了多少        STOCK_SHORTAGE     老板 ¥5,836.21   / 后厨 ¥5,836.21
+#
+# 对照组(STORE_MARGIN)证明脱敏机制本身没坏 —— 它在声明了的地方精确生效、在没声明
+# 的地方精确失效。根因是**机制**: resolve_by_code 按签名过滤 kwargs, 没声明 `role`
+# 的 resolver 拿不到它(它自己的 docstring 就写着 "legacy resolvers silently
+# ignore role")。与 #2076 丢 date_range 同一个机制, 那次答错时间窗, 这次是钱不脱敏。
+#
+# 于是 RBAC 成了**逐个 resolver 自愿加入, 而「没加入」没有任何东西会发现**:
+# 9 个涉钱 resolver 里 5 个加了、4 个没加。
+#
+# 修法不是给那 4 个各补一个参数(下一个新 resolver 会再犯), 而是:
+#   1. 把「这个 intent 的答案里有没有钱」变成**一张显式的表**;
+#   2. 闸放在 resolve_by_code 里、**查库之前**短路 —— 不是查完再擦文本
+#      (擦文本随时会漏掉一种新的金额写法, 而且数据已经被取出来了);
+#   3. 用例 test_every_resolver_is_classified 让新增 resolver **必须**分类, 否则红。
+#
+# 各 resolver 内既有的 PRICE_VIEW_ROLES 判断**保留**: agent runtime 的适配器会
+# 绕过 resolve_by_code 直接调它们, 那条路径仍需自我保护。两处都是「拦」, 方向一致,
+# 不会分叉。
+# 全部**可能吐出金额**的 intent。这张表是唯一的登记处, 完整性由
+# test_every_resolver_is_classified 强制 —— 新增 resolver 不分类就红。
+_MONEY_BEARING_INTENTS: frozenset = frozenset({
+    "RESTAURANT_OPS_SALES_SUMMARY",
+    "RESTAURANT_OPS_TREND_ANALYSIS",
+    "RESTAURANT_OPS_GROSS_MARGIN",
+    "RESTAURANT_OPS_STORE_MARGIN",
+    "RESTAURANT_OPS_CHANNEL_MIX",
+    "RESTAURANT_OPS_RECIPE_COST",
+    "RESTAURANT_OPS_REQUISITION_TREND",
+    "RESTAURANT_OPS_WASTAGE_TOP",
+    "RESTAURANT_OPS_STOCK_SHORTAGE",
+})
+
+# 其中**答案有非金额内核**的: resolver 自己就地脱敏(打星/置 None/换量视角),
+# 无权限角色仍然拿得到趋势形状、单量对比这些不涉钱的信息。这类正常分发,
+# 中央闸不拦 —— 拦了就是把本来能给的能力也一起拿走。
+#
+# ⛔ 结构不变量(test_self_masking_resolvers_can_actually_see_the_role):
+#    声明在这里的 resolver **签名里必须有 `role`**。没有 role 就根本收不到角色
+#    (resolve_by_code 按签名过滤 kwargs, 见其 docstring "legacy resolvers
+#    silently ignore role"), 也就不可能脱敏 —— 那正是 2026-08-01 泄露的形态:
+#    声明了「我自己会处理」而实际上处理不了。
+_MONEY_SELF_MASKING_INTENTS: frozenset = frozenset({
+    "RESTAURANT_OPS_SALES_SUMMARY",
+    "RESTAURANT_OPS_TREND_ANALYSIS",
+    "RESTAURANT_OPS_GROSS_MARGIN",
+    "RESTAURANT_OPS_STORE_MARGIN",
+    "RESTAURANT_OPS_CHANNEL_MIX",
+})
+
+# 剩下这些**整个答案就是钱**(领料总额/盘亏金额/损耗金额/菜品成本), 没有可保留的
+# 非金额内核 → 中央拦截, 并给出**数量视角**的替代问法。
+# 📌 记账(本次不做): 更好的答案是让这几个 resolver 在无权限时**直接答数量版**
+#    而不是让用户再问一遍 —— 数据都在(损耗/领料/盘点的 qty 列一直物化着)。
+#    那是能力增强, 与本次的安全修复分开做。
+_MONEY_GATE_ALTERNATIVES: Dict[str, str] = {
+    "RESTAURANT_OPS_RECIPE_COST": "问「哪些菜卖得最好」看销量排名",
+    "RESTAURANT_OPS_REQUISITION_TREND": "问「领料最多的是哪些食材」看用量排名",
+    "RESTAURANT_OPS_WASTAGE_TOP": "问「损耗量最大的食材是哪些」看数量排名",
+    "RESTAURANT_OPS_STOCK_SHORTAGE": "问「盘点差异最大的食材是哪些」看数量排名",
+}
+
+_NO_MONEY_INTENTS: frozenset = frozenset({
+    "RESTAURANT_OPS_PLAYBOOK",           # 方法论文本, 无数据
+    "RESTAURANT_OPS_CAPABILITIES",       # 能力说明
+    "RESTAURANT_OPS_OUT_OF_DOMAIN",      # 域外拒答
+    "RESTAURANT_OPS_STORE_DIRECTORY",    # 门店名录/家数
+    "RESTAURANT_OPS_INVENTORY_WARNING",  # 库存水位, 函数注释已写明不读价格
+    "RESTAURANT_OPS_STAFFING_ADVICE",    # 排班人效, 函数注释已写明不读价格
+})
+
+
+def _money_masked_answer(code: str) -> "OpsAnswer":
+    """无价格权限时的统一回答 —— 说清为什么, 并给出能走的路。"""
+    alternative = _MONEY_GATE_ALTERNATIVES.get(code) or "找管理员开通价格查看权限"
+    return OpsAnswer(
+        code=code,
+        title="需要价格查看权限",
+        answer_text=(
+            "这个问题的答案包含金额（成本/营收/毛利），属于价格查看权限，"
+            "当前角色不能查看。\n"
+            f"可以换个不涉及金额的问法：{alternative}；"
+            "如需金额数据请联系管理员开通价格查看权限。"
+        ),
+        charts=[],
+        kpis=[],
+        meta={"rbac_masked": True, "masked_reason": "price_view_permission"},
+    )
+
+
+def _role_may_see_money(role: Optional[str]) -> bool:
+    """缺省 role 一律按无权限处理 —— fail-closed。"""
+    from smartbi_compat._rbac_strip import PRICE_VIEW_ROLES
+
+    return bool(role) and role in PRICE_VIEW_ROLES
+
+
 _RESOLVERS = {
     "RESTAURANT_OPS_PLAYBOOK": _resolve_playbook,
     "RESTAURANT_OPS_CAPABILITIES": resolve_capabilities,
@@ -7666,6 +7769,17 @@ async def resolve_by_code(
     resolver = _RESOLVERS.get(code)
     if resolver is None:
         return None
+    # 涉钱答案的角色闸 —— 必须在**取数之前**短路。放到查完再擦文本有两个问题:
+    # 数据已经被取出来了, 而且擦文本随时会漏掉一种新的金额写法。
+    # 缺省 role 按无权限处理(fail-closed): 内部调用/老客户端不该因为"没传"而拿到金额。
+    # 只拦「整个答案就是钱」的那几个; 声明自己就地脱敏的正常分发, 免得把非金额
+    # 内核(趋势形状/单量对比)也一起拿走 —— 那是能力回退不是安全加强。
+    if (
+        code in _MONEY_BEARING_INTENTS
+        and code not in _MONEY_SELF_MASKING_INTENTS
+        and not _role_may_see_money(kwargs.get("role"))
+    ):
+        return _money_masked_answer(code)
     query_text = kwargs.get("query") or ""
     if (
         code in _DATE_BACKREF_CODES
