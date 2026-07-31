@@ -1,5 +1,5 @@
-import { flushPromises, shallowMount } from '@vue/test-utils';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { flushPromises, shallowMount, type VueWrapper } from '@vue/test-utils';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import ProductProcessWorkflowEditor from '../ProductProcessWorkflowEditor.vue';
 import type { ProductProcessWorkflowDefinition } from '../types';
@@ -165,6 +165,19 @@ const SKU_OPTIONS: SkuOption[] = [
   { id: 'SKU-RAW', name: 'Raw input', unit: 'kg', productCategory: 'RAW_MATERIAL' },
   { id: 'SKU-UNKNOWN', name: 'Unknown category', unit: 'kg', productCategory: 'MYSTERY' },
 ];
+
+// 挂载出来的实例必须卸载 —— 编辑器把「取消防抖 autosave」挂在 onUnmounted 上
+// (scheduleAutoSave 排的是 AUTO_SAVE_DELAY=2500ms 的定时器, 只有 invalidatePendingAutoSave 会清)。
+// 不卸载 = 每个实例留一个活定时器: 实测本文件跑完时残留 67 个定时器, 其中 26 个是 2500ms 的
+// autosave。它们在测试文件结束后才触发, 落进 vitest 环境拆卸窗口时会 console.error, 而日志要
+// 经 onUserConsoleLog RPC 回主进程 —— 通道正在关闭就报
+// `EnvironmentTeardownError: Closing rpc while "onUserConsoleLog" was pending`,
+// 表现是**单测全过但 npm test exit 1**, 且只在整套跑时偶发(单跑文件结束得早, 定时器随环境一起丢弃)。
+const mountedWrappers: VueWrapper[] = [];
+
+afterEach(() => {
+  while (mountedWrappers.length) mountedWrappers.pop()?.unmount();
+});
 
 describe('ProductProcessWorkflowEditor process branch integration', () => {
   beforeEach(() => {
@@ -886,7 +899,7 @@ describe('ProductProcessWorkflowEditor process branch integration', () => {
 });
 
 async function mountEditor(rawOwnerMode = false): Promise<EditorVm> {
-  const wrapper = shallowMount(ProductProcessWorkflowEditor, {
+  const wrapper: VueWrapper = shallowMount(ProductProcessWorkflowEditor, {
     props: {
       factoryId: 'F006',
       productTypeId: 'PT-PIG-400',
@@ -895,6 +908,7 @@ async function mountEditor(rawOwnerMode = false): Promise<EditorVm> {
       rawOwnerMode,
     },
   });
+  mountedWrappers.push(wrapper);
   await flushPromises();
   return wrapper.vm as unknown as EditorVm;
 }
