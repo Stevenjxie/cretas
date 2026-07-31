@@ -11,6 +11,8 @@ import type { TableRow } from '@/types/api';
 import { warehouseTypeBadge } from '@/utils/warehouse';
 import { BIG_CATEGORY_OPTIONS, filterOptionsByBigCategory, type BigCategory } from '@/utils/materialCategory';
 import { buildStocktakeItemUpdates } from './stocktakeItemUpdates';
+// 副产抵扣只做展示格式化 —— 金额由后端 ByproductCreditService 算, 前端不重算 (见 byproductCredit.ts)
+import { creditStatus, formatCredit, formatCreditUnitPrice } from './byproductCredit';
 import {
   countDisplayUnit,
   countUncountedRows,
@@ -715,11 +717,85 @@ const countStocktakeId = ref('');
 const countStocktakeNo = ref('');
 const countUncounted = computed(() => countUncountedRows(countItems.value));
 
+// ── 副产价值确认 ──────────────────────────────────────────────────────────
+// 副产批次在盘点时确认单价, 抵扣额 = 盘点重量 × 确认单价 (Steve 2026-07-31: 盘点以实物为准)。
+// 🔴 金额一律取后端返回值, 这里不做任何乘法 —— 前端再算一遍就是本仓第六处「同一件事多套实现」。
+interface ByproductCreditRow {
+  batchId: string;
+  batchNumber: string;
+  materialName: string | null;
+  unit: string;
+  reportedQuantity: number | null;
+  stocktakeQuantity: number | null;
+  differenceQuantity: number | null;
+  unitPrice: number | null;
+  priceConfirmedAt: string | null;
+  credit: number | null;
+  creditStatus: string;
+  /** 输入框的待确认值, 不参与展示计算 */
+  draftUnitPrice: number | null;
+}
+const byproductCredits = ref<ByproductCreditRow[]>([]);
+const byproductLoading = ref(false);
+
+async function loadByproductCredits(stocktakeId: string) {
+  byproductLoading.value = true;
+  try {
+    const res = await get(`/${factoryId.value}/stocktakes/${stocktakeId}/byproduct-credits`);
+    byproductCredits.value = ((res.success && res.data) || []).map((row: TableRow) => ({
+      batchId: String(row.batchId || ''),
+      batchNumber: String(row.batchNumber || row.batchId || ''),
+      materialName: row.materialName == null ? null : String(row.materialName),
+      unit: String(row.unit || ''),
+      reportedQuantity: row.reportedQuantity == null ? null : Number(row.reportedQuantity),
+      stocktakeQuantity: row.stocktakeQuantity == null ? null : Number(row.stocktakeQuantity),
+      differenceQuantity: row.differenceQuantity == null ? null : Number(row.differenceQuantity),
+      unitPrice: row.unitPrice == null ? null : Number(row.unitPrice),
+      priceConfirmedAt: row.priceConfirmedAt == null ? null : String(row.priceConfirmedAt),
+      credit: row.credit == null ? null : Number(row.credit),
+      creditStatus: String(row.creditStatus || 'PENDING'),
+      // 预填已确认的单价; 未确认时留空, 不拿 0 占位 (0 是「确认不值钱」这个真实结论)
+      draftUnitPrice: row.unitPrice == null ? null : Number(row.unitPrice),
+    }));
+  } catch (e) {
+    ElMessage({ message: String((e as Error).message || '副产批次加载失败'), type: 'error', duration: 0, showClose: true });
+  } finally {
+    byproductLoading.value = false;
+  }
+}
+
+async function confirmByproductPrice(row: ByproductCreditRow) {
+  if (row.draftUnitPrice == null) {
+    ElMessage.warning('请先填写单价；确认为 0 请显式填 0');
+    return;
+  }
+  byproductLoading.value = true;
+  try {
+    const res = await post(
+      `/${factoryId.value}/stocktakes/${countStocktakeId.value}/byproduct-credits/${row.batchId}/confirm-price`,
+      { unitPrice: row.draftUnitPrice },
+    );
+    if (res.success) {
+      ElMessage.success('副产单价已确认');
+      await loadByproductCredits(countStocktakeId.value);
+    } else {
+      // 原样展示后端 message, sticky
+      ElMessage({ message: res.message || '确认失败', type: 'error', duration: 0, showClose: true });
+    }
+  } catch (e) {
+    ElMessage({ message: String((e as Error).message || '确认失败'), type: 'error', duration: 0, showClose: true });
+  } finally {
+    byproductLoading.value = false;
+  }
+}
+
 async function openCountDialog(row: TableRow): Promise<boolean> {
   countStocktakeId.value = String(row.id);
   countStocktakeNo.value = String(row.stocktakeNo || row.id);
   countLoading.value = true;
   countDialogVisible.value = true;
+  byproductCredits.value = [];
+  void loadByproductCredits(String(row.id));
   try {
     const res = await get(`/${factoryId.value}/stocktakes/${row.id}`);
     if (res.success && res.data) {
@@ -1636,6 +1712,76 @@ onMounted(async () => {
           </template>
         </el-table-column>
       </el-table>
+      <!-- ── 副产价值确认 ── 只在本次盘点确实盘到副产批次时出现, 没有就整块不显示 -->
+      <div v-if="byproductCredits.length > 0" class="byproduct-credit-section" data-testid="byproduct-credit-section">
+        <div class="byproduct-credit-header">
+          <span class="table-title">副产价值确认</span>
+          <el-text type="info" size="small">
+            抵扣额 = 盘点重量 × 确认单价，由后端计算；未确认单价的副产不参与抵扣。
+          </el-text>
+        </div>
+        <el-table v-loading="byproductLoading" :data="byproductCredits" size="small" border>
+          <el-table-column label="副产" min-width="170">
+            <template #default="{ row }">
+              <div class="identity-primary">{{ row.materialName || '（物料档案已删除）' }}</div>
+              <div class="identity-secondary">{{ row.batchNumber }}</div>
+            </template>
+          </el-table-column>
+          <el-table-column label="报工重量" width="120" align="right">
+            <template #default="{ row }">
+              <span v-if="row.reportedQuantity != null">
+                {{ row.reportedQuantity }}{{ countDisplayUnit(row.unit) }}
+              </span>
+              <span v-else style="color: #c0c4cc">—</span>
+            </template>
+          </el-table-column>
+          <el-table-column label="盘点重量（差异）" width="180" align="right">
+            <template #default="{ row }">
+              <span v-if="row.stocktakeQuantity != null">
+                {{ row.stocktakeQuantity }}{{ countDisplayUnit(row.unit) }}
+                <span v-if="row.differenceQuantity != null"
+                      :style="{ color: row.differenceQuantity < 0 ? '#f56c6c' : row.differenceQuantity > 0 ? '#67c23a' : '' }">
+                  （{{ row.differenceQuantity > 0 ? '+' : '' }}{{ row.differenceQuantity }}）
+                </span>
+              </span>
+              <span v-else style="color: #c0c4cc">未盘点</span>
+            </template>
+          </el-table-column>
+          <el-table-column label="确认单价" width="210">
+            <template #default="{ row }">
+              <div class="count-input-cell">
+                <el-input-number
+                  v-model="row.draftUnitPrice"
+                  :min="0"
+                  :precision="4"
+                  size="small"
+                  style="width: 120px"
+                  placeholder="未确认"
+                  :aria-label="`${row.materialName || row.batchNumber} 副产单价`"
+                />
+                <el-button link type="primary" size="small" @click="confirmByproductPrice(row)">确认</el-button>
+              </div>
+              <div class="identity-secondary">当前：{{ formatCreditUnitPrice(row.unitPrice) }}</div>
+            </template>
+          </el-table-column>
+          <el-table-column label="抵扣额" width="120" align="right">
+            <template #default="{ row }">
+              <span :style="{ color: row.credit == null ? '#c0c4cc' : '' }">{{ formatCredit(row.credit) }}</span>
+            </template>
+          </el-table-column>
+          <el-table-column label="状态" width="100" align="center">
+            <template #default="{ row }">
+              <el-tag
+                :type="creditStatus(row.unitPrice, row.priceConfirmedAt) === 'CONFIRMED' ? 'success' : 'info'"
+                size="small"
+                disable-transitions
+              >
+                {{ creditStatus(row.unitPrice, row.priceConfirmedAt) === 'CONFIRMED' ? '已确认' : '待确认' }}
+              </el-tag>
+            </template>
+          </el-table-column>
+        </el-table>
+      </div>
       <template #footer>
         <el-button @click="countDialogVisible = false">取消</el-button>
         <el-button type="primary" :loading="countLoading" @click="saveCountItems">保存暂存</el-button>
@@ -1790,6 +1936,19 @@ onMounted(async () => {
 .unit-suffix {
   color: var(--el-text-color-regular);
   min-width: 24px;
+}
+.byproduct-credit-section {
+  margin-top: 20px;
+}
+.byproduct-credit-header {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  margin-bottom: 8px;
+}
+.byproduct-credit-header .table-title {
+  color: var(--el-text-color-primary);
+  font-weight: 600;
 }
 .bulk-confirm-trigger {
   display: inline-flex;
