@@ -59,6 +59,24 @@ STORE_SCOPE_CLARIFICATION_QUESTION = (
     "多家门店会按同一时间和指标自动比较。"
 )
 
+def _slot_of_clarification(question: Optional[str]) -> Optional[str]:
+    """把**上一轮持久化下来的反问字符串**映射回槽位 —— 唯一的边界转换点。
+
+    为什么需要它: continuation 类函数拿到的是会话状态里存的**字符串**(老会话里
+    没有 missing_slot 字段), 所以这一层还得认字符串。但认字符串的地方必须**只有
+    这一处** —— 改动前有 8 个决策点各自比较字符串, 合成一句「门店和时间一起告诉我」
+    的追问会同时匹配不上全部 8 处并**静默穿过**。
+
+    收敛到这里之后, 合成追问只需要让这个函数返回一个复合槽位(如 "store+time"),
+    调用方按槽位分支即可。
+    """
+    if question == TIME_CLARIFICATION_QUESTION:
+        return "time"
+    if question == STORE_SCOPE_CLARIFICATION_QUESTION:
+        return "store"
+    return None
+
+
 TRUSTED_PLANNER_AUTHORITIES = frozenset({
     "llm",
     "validated_plan_cache",
@@ -123,6 +141,22 @@ class RestaurantQuerySpec:
     source_tier: str
     clarification_needed: bool = False
     clarification_question: Optional[str] = None
+    # 反问缺的是**哪个槽位** —— "time" / "store" / None(其它/未分类)。
+    #
+    # 为什么要这个字段: 在它之前, 管线拿**问题字符串本身**当类型系统用 ——
+    # 全仓有 10 处 `clarification_question == TIME_CLARIFICATION_QUESTION` /
+    # `== STORE_SCOPE_CLARIFICATION_QUESTION` 的身份比较在做分支。
+    #
+    # 后果是结构性的: 一轮只能携带**一个**缺失槽位。时间闸先跑并设
+    # clarification_needed, 门店闸开头就 `or spec.clarification_needed → return`,
+    # 于是 2026-08-01 实测「最近生意咋样」要**三轮**才拿到答案(问门店→问时间→答),
+    # 口语类问句在两个租户上都是 0/6。
+    # 想合成一句「门店和时间都告诉我」的追问, 那个新字符串会同时匹配不上上述 10 处
+    # 判断, **静默穿过全部** —— 所以那不是加个问句的事, 得先把身份判据换成结构化的。
+    #
+    # 本字段是那一步的地基: 现在与字符串**严格同步**(有用例钉住), 行为零变化;
+    # 之后把 10 处身份比较逐个换成读它, 合并追问才做得成。
+    missing_slot: Optional[str] = None
     # Explicit primary/baseline windows are first-class immutable plan slots.
     # Resolver execution must not have to rediscover them from a later
     # clarification answer such as "全部门店".
@@ -1739,6 +1773,7 @@ def _build_spec(
     deterministic detectors stay authoritative when they fire, and the
     supplements ride the routing cache so a cache hit rebuilds the exact
     same spec as the original T3 parse (dates still recomputed fresh)."""
+    missing_slot: Optional[str] = None   # 与 clarification_question 同步的槽位标记
     # T3 time text only supplements wording the deterministic parser cannot
     # already resolve.  Continuations such as "原问题 本月" already contain
     # the clicked option; appending the same label again would make the sealed
@@ -2041,6 +2076,7 @@ def _build_spec(
         # truthful and must not keep the valid plan from executing.
         clarification_needed = False
         clarification_question = None
+        missing_slot = None
         effective_planner_authority = (
             f"{effective_planner_authority}_contract_repair"
         )
@@ -2090,6 +2126,7 @@ def _build_spec(
         # query (including a trusted inherited window) authorizes execution.
         clarification_needed = True
         clarification_question = TIME_CLARIFICATION_QUESTION
+        missing_slot = "time"
         # The LLM may have proposed choices for a different missing slot
         # (typically stores) before this deterministic time gate ran.  Once the
         # executable contract decides that time is the next required slot, its
@@ -2127,6 +2164,7 @@ def _build_spec(
         source_tier=tier,
         clarification_needed=clarification_needed,
         clarification_question=clarification_question,
+        missing_slot=missing_slot,
         comparison_range=sales_spec.comparison_range,
         comparison_label=sales_spec.comparison_label,
         is_clarification_continuation=is_continuation,
@@ -3105,7 +3143,7 @@ def _explicit_store_dish_ranking_spec(
             missing_time
             and (
                 not spec.clarification_needed
-                or spec.clarification_question != TIME_CLARIFICATION_QUESTION
+                or _slot_of_clarification(spec.clarification_question) != "time"
             )
         )
         or (not missing_time and spec.clarification_needed)
@@ -3194,7 +3232,7 @@ def _explicit_named_dish_metric_spec(
             missing_time
             and (
                 not spec.clarification_needed
-                or spec.clarification_question != TIME_CLARIFICATION_QUESTION
+                or _slot_of_clarification(spec.clarification_question) != "time"
             )
         )
         or (not missing_time and spec.clarification_needed)
@@ -3468,7 +3506,7 @@ def _approved_exact_continuation_route(
     matched_code, inherited_time, inherited_store = matched
 
     answer_normalized = _normalize_exact_phrase(answer)
-    if clarification_question == TIME_CLARIFICATION_QUESTION:
+    if _slot_of_clarification(clarification_question) == "time":
         if inherited_time:
             return None
         if answer_normalized in {
@@ -3479,7 +3517,7 @@ def _approved_exact_continuation_route(
         return None
 
     if (
-        clarification_question != STORE_SCOPE_CLARIFICATION_QUESTION
+        _slot_of_clarification(clarification_question) != "store"
         or not inherited_time
         or inherited_store
     ):
@@ -3524,13 +3562,13 @@ def _trusted_named_dish_button_continuation(
         return None
 
     answer_normalized = _normalize_exact_phrase(answer)
-    if clarification_question == TIME_CLARIFICATION_QUESTION:
+    if _slot_of_clarification(clarification_question) == "time":
         if base.window_label != "全部历史" or answer_normalized not in {
             _normalize_exact_phrase(window)
             for window in _APPROVED_TIME_ANSWERS
         }:
             return None
-    elif clarification_question == STORE_SCOPE_CLARIFICATION_QUESTION:
+    elif _slot_of_clarification(clarification_question) == "store":
         if base.window_label == "全部历史" or base.store_scope:
             return None
         if answer_normalized != _normalize_exact_phrase("全部门店"):
@@ -3560,7 +3598,7 @@ def _trusted_named_dish_button_continuation(
     ):
         return None
     if (
-        clarification_question == STORE_SCOPE_CLARIFICATION_QUESTION
+        _slot_of_clarification(clarification_question) == "store"
         and candidate.store_scope not in {"all", "single"}
     ):
         return None
@@ -3993,6 +4031,7 @@ async def _apply_store_scope_guard(
         spec,
         clarification_needed=True,
         clarification_question=STORE_SCOPE_CLARIFICATION_QUESTION,
+        missing_slot="store",
         store_options=names,
         clarification_options=("全部门店", *names[:3]),
     ))
@@ -5882,7 +5921,7 @@ async def _parse_continuation(
         and pending_named_dish_spec.requested_metrics
     ):
         if (
-            clarification_question == STORE_SCOPE_CLARIFICATION_QUESTION
+            _slot_of_clarification(clarification_question) == "store"
             and _is_pure_store_scope_answer(query)
         ):
             # Store-scope buttons are syntactically trailing answers, while
@@ -5955,7 +5994,7 @@ async def _parse_continuation(
             return explicit_spec
 
     if (
-        clarification_question == STORE_SCOPE_CLARIFICATION_QUESTION
+        _slot_of_clarification(clarification_question) == "store"
         and _is_explicit_sales_period_comparison(original_query)
     ):
         original_sales_spec = _resolve_sales_query_spec(original_query)
@@ -6005,7 +6044,7 @@ async def _parse_continuation(
             )
 
     if (
-        clarification_question == STORE_SCOPE_CLARIFICATION_QUESTION
+        _slot_of_clarification(clarification_question) == "store"
         and _is_pure_store_scope_answer(query)
     ):
         explicit_comparison_spec = _explicit_sales_period_comparison_spec(
