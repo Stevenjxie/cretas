@@ -402,11 +402,16 @@ def test_latest_f006_sop_is_a_deployable_manual_source():
     assert "kg/g 等质量单位只在同量纲内科学换算" in current_sop
     assert "每单位成品重量" in current_sop
     assert "当前 OA 节点明确只授权 `factory_super_admin`" in current_sop
+    assert "RN 当前可用入口与只读边界" in current_sop
+    assert "一个来源一行" in current_sop
+    assert "可用库存和短缺数量以服务端校验为准" in current_sop
+    assert "供应商可维护简称，以及多联系人、多地址和银行账户" in current_sop
+    assert "单据追踪" in current_sop
 
     html_path = Path(PROJECT_ROOT) / "docs/manual/F006-production-full-chain-manual-test-sop.html"
     html = html_path.read_text(encoding="utf-8")
     assert required_sequence in html
-    assert "origin/main · SOP sync 2026-07-30" in html
+    assert "origin/main · SOP sync 2026-07-31" in html
     assert "先有完整 Workflow 草稿，再创建 BOM" in html
     assert "页面没有任意切换版本的选择器" in html
     assert "① 投入" in html
@@ -427,6 +432,10 @@ def test_latest_f006_sop_is_a_deployable_manual_source():
     assert "盒子、白标、彩标三层参考框" in html
     assert "跨单位成品率" in html
     assert "单总监死锁" in html
+    assert "RN 新入口仍按真实职责分开" in html
+    assert "一个来源一行" in current_sop
+    assert "需多少、可用多少、缺多少" in html
+    assert "RN 查看今日/历史盘点并续录" in html
 
 
 def test_factory_role_knowledge_covers_the_12_account_operating_boundaries():
@@ -498,6 +507,9 @@ def test_restaurant_registered_sources_match_current_product_contract():
             "AI 飞轮、菜品别名与人审边界",
             "计划预警：同一 QuerySpec 定时回放",
             "平台 connector、Gold 刷新与模拟数据边界",
+            "指标选择、菜单目录与路由防漂移",
+            "数据可用门槛与叙事接地",
+            "永久坏单据写入租户隔离的死信记录",
         ),
         "restaurant-product-manual.html": (
             "当前 21 维综合分析目录",
@@ -507,10 +519,16 @@ def test_restaurant_registered_sources_match_current_product_contract():
             "AI 飞轮运营台与菜品别名治理",
             "计划预警",
             "当前代码已验证的是客如云风格 connector",
+            "当前指标与实体合同",
+            "达到卡死阈值的永久坏单据进入租户隔离死信",
+            "不是门店管理员在页面自助填写密钥",
         ),
         "restaurant-metrics-glossary.html": (
             "21 维综合分析证据目录",
             "REAL / PROXY / SIMULATED / MISSING",
+            "当前餐饮问答的指标与接地合同",
+            "wastage_cost",
+            "requisition_cost",
         ),
     }
     for source_name, markers in expected_markers.items():
@@ -529,6 +547,10 @@ def test_restaurant_registered_sources_match_current_product_contract():
     assert "月报预览、导出与截至时间" in ai_assist
     assert "AI 飞轮与菜品别名怎么治理？" in ai_assist
     assert "计划预警与平台同步边界" in ai_assist
+    assert "RN 入库、盘点与需求单边界" in ai_assist
+    assert "投入来源、缺料与单据追踪" in ai_assist
+    assert "指标口径与菜单目录裁决" in ai_assist
+    assert "门店范围继承与可用切换" in ai_assist
     assert "7 节小课 · 约 12 分钟" in ai_assist
     assert "飞轮与人审边界" in ai_assist
     assert "不做计算" in ai_assist
