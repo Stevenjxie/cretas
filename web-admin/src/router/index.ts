@@ -1723,6 +1723,38 @@ const businessRoutes: RouteRecordRaw[] = [
         redirect: '/restaurant/requisitions',
         meta: { requiresAuth: true, title: '餐饮运营', icon: 'Bowl', module: 'restaurant' },
         children: [
+          // 四部门驾驶舱 (2026-07-31)。四条共用一个组件, 差异在
+          // views/restaurant/departments/departmentConfig.ts。
+          // meta.module 用四个部门权限键 —— guards 的模块闸据此放行, 没权限的
+          // 部门直接 403 且菜单里也不出现。
+          {
+            path: 'ops',
+            name: 'RestaurantDeptOps',
+            component: () => import('@/views/restaurant/departments/DepartmentDashboard.vue'),
+            props: { dept: 'ops' },
+            meta: { requiresAuth: true, title: '运营', module: 'restaurantOps' }
+          },
+          {
+            path: 'marketing',
+            name: 'RestaurantDeptMarketing',
+            component: () => import('@/views/restaurant/departments/DepartmentDashboard.vue'),
+            props: { dept: 'marketing' },
+            meta: { requiresAuth: true, title: '市场', module: 'restaurantMarketing' }
+          },
+          {
+            path: 'hr',
+            name: 'RestaurantDeptHr',
+            component: () => import('@/views/restaurant/departments/DepartmentDashboard.vue'),
+            props: { dept: 'hr' },
+            meta: { requiresAuth: true, title: '人事', module: 'restaurantHr' }
+          },
+          {
+            path: 'finance',
+            name: 'RestaurantDeptFinance',
+            component: () => import('@/views/restaurant/departments/DepartmentDashboard.vue'),
+            props: { dept: 'finance' },
+            meta: { requiresAuth: true, title: '财务', module: 'restaurantFinance' }
+          },
           {
             path: 'requisitions',
             name: 'RestaurantRequisitions',
