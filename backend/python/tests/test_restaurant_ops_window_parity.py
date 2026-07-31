@@ -86,16 +86,20 @@ _TREND_ROWS = [
     {"date": date(2026, 6, 2), "qty": 98.0, "cost": 3100.0},
 ]
 _ING_ROWS = [
+    # shortage_cost 是 2026-08-01 起 resolve_stock_shortage 的排序键与主展示值
+    # (金额是唯一能跨食材比较的维度)。这里三文鱼金额高于土豆而数量低于土豆 ——
+    # 刻意让两种口径给出**相反**的名次, 免得排序错了还能碰巧通过。
     {"name": "三文鱼", "category": "水产", "unit": "kg", "qty": 88.0,
-     "cost": 4200.0, "shortage_qty": 12.5},
+     "cost": 4200.0, "shortage_qty": 12.5, "shortage_cost": 875.0},
     {"name": "土豆", "category": "蔬菜", "unit": "kg", "qty": 300.0,
-     "cost": 180.0, "shortage_qty": 40.0},
+     "cost": 180.0, "shortage_qty": 40.0, "shortage_cost": 120.0},
 ]
 # 两个 resolver 的合计查询返回不同的列名, fake 得同时供上, 否则 KeyError 会被
 # 误读成产品缺陷(第一轮就栽在这里)。
 _TOTALS = {
-    # resolve_stock_shortage 的 totals
+    # resolve_stock_shortage 的 totals (金额两列自 2026-08-01 起是答案主句)
     "shortage": 52.5, "surplus": 8.0, "count": 12,
+    "shortage_cost": 995.0, "surplus_cost": 60.0,
     # 通用/领料侧
     "total_qty": 218.0, "total_cost": 7300.0, "total_count": 25,
 }
@@ -223,3 +227,31 @@ def test_operations_department_is_now_fully_window_aware():
     ]
     missing = [c for c in ops_codes if not resolver_supports_explicit_window(c)]
     assert not missing, f"运营部门仍有 resolver 拿不到请求的时间窗: {missing}"
+
+
+@pytest.mark.asyncio
+async def test_stock_shortage_answers_in_money_and_ranks_by_it():
+    """「盘点亏了多少」的主句必须是金额, 且排名按金额。
+
+    数量不能跨食材相加 —— 实测 DEMO_REST 的盘亏是 41.45kg + 45.00L, 旧实现把它们
+    加成一个不带单位的 "86.45" 当总量播出去。金额是唯一能跨食材相加的维度。
+
+    夹具里三文鱼金额高(¥875)而数量低(12.5), 土豆金额低(¥120)而数量高(40.0) ——
+    两种口径名次**相反**, 所以排序若退回按数量, 这条会红而不是碰巧通过。
+    """
+    conn = _conn()
+    answer = await resolve_stock_shortage(
+        _RecordingPool(conn), "MOCK_REST", days=30, top_n=10,
+    )
+    text = answer.answer_text
+
+    # 主句给金额, 且不再播那个把 kg 和 L 加在一起的数量总计
+    assert "盘亏金额 **¥995.00**" in text, text
+    assert "盘亏总量" not in text, text
+
+    # 逐项: 金额在前, 数量仍给但必须带单位(那里它有意义)
+    assert "¥875.00" in text, text
+    assert "12.50 kg" in text, text
+
+    # 名次按金额 —— 三文鱼(¥875) 必须排在 土豆(¥120) 前面
+    assert text.index("三文鱼") < text.index("土豆"), text

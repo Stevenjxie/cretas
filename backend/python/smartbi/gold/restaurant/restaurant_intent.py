@@ -448,6 +448,12 @@ _REQUEST_METRIC_RULES: Tuple[Tuple[str, Tuple[str, ...]], ...] = (
     ("table_turnover", ("翻台率", "翻台")),
     ("recipe_cost", ("菜品成本", "食材成本", "配方成本", "单品成本", "成本")),
     ("wastage", ("食材损耗", "损耗", "浪费", "报损", "腐坏", "过期")),
+    # 盘点差异 (账实差)。必须排在 gross_margin 前面 —— 后者收了「亏损/亏本/亏钱」,
+    # 「盘点亏损多少」会同时命中两个指标, 下面有专门的压制 (跟 net_profit 压 gross_margin 同形)。
+    ("stocktaking_shortage", (
+        "盘点", "盘亏", "盘盈", "盘点差异", "盘点亏损",
+        "账实差", "账实差异", "账实不符",
+    )),
     ("sales_volume", (
         "菜品销量", "销量", "销售量", "卖得好", "卖得最好", "最好卖",
         "销量最高", "最受欢迎", "卖得慢", "卖了多少", "卖出",
@@ -543,6 +549,13 @@ def _detect_requested_metrics(text: str) -> Tuple[str, ...]:
         if has_metric:
             detected_items.append(metric)
     detected = tuple(detected_items)
+    # 盘点语境下的「亏」是账实差, 不是毛利为负。「盘点亏损多少」同时命中
+    # stocktaking_shortage(盘点) 和 gross_margin(亏损) —— 两个 intent 会一起排进
+    # planned_intents, 用户问一件事拿回两份答案。用户明确提了毛利/利润本身才保留。
+    if "stocktaking_shortage" in detected and not any(
+        token in text for token in ("毛利", "利润", "盈利", "赚钱")
+    ):
+        detected = tuple(metric for metric in detected if metric != "gross_margin")
     rejects_gross_substitution = any(token in text for token in (
         "不要用毛利", "不能用毛利", "不用毛利", "不拿毛利", "毛利替代",
     ))
@@ -802,6 +815,11 @@ def _plan_requested_intents(
             )
         elif metric == "wastage":
             code = "RESTAURANT_OPS_WASTAGE_TOP"
+        elif metric == "stocktaking_shortage":
+            # 该指标唯一由 STOCK_SHORTAGE 声明, 无歧义。少了这条分支, 指标进了
+            # 准入表也没用 —— 规划结果会原样回显 LLM 选的 code(见上面 requisition_cost
+            # 那条注释: 回显自己会让 contract-repair 的触发条件永远为假)。
+            code = "RESTAURANT_OPS_STOCK_SHORTAGE"
         elif metric == "requisition_cost":
             # 2026-07-31 补入。这条分支链此前不认识 requisition_cost —— 于是
             # 「采购花了多少钱」的规划结果是**原样回显 LLM 选的 code**, 而
@@ -1582,7 +1600,10 @@ _DEFAULT_METRICS_BY_CODE: Dict[str, Tuple[str, ...]] = {
     "RESTAURANT_OPS_BUSINESS_OPTIMIZATION": (),
     "RESTAURANT_OPS_CHANNEL_MIX": ("channel_mix",),
     "RESTAURANT_OPS_WASTAGE_TOP": ("wastage_qty", "wastage_cost"),
-    "RESTAURANT_OPS_STOCK_SHORTAGE": ("shortage_qty",),
+    # 金额在前: 「盘点亏了多少」问的是钱, 而且金额是唯一能跨食材相加的维度
+    # (数量把 kg 和 L 直接相加, 实测 DEMO_REST 是 41.45kg + 45.00L = "86.45")。
+    # 与 WASTAGE_TOP / REQUISITION_TREND 的 qty+cost 双声明拉齐。
+    "RESTAURANT_OPS_STOCK_SHORTAGE": ("shortage_cost", "shortage_qty"),
     "RESTAURANT_OPS_RECIPE_COST": ("food_cost",),
     "RESTAURANT_OPS_REQUISITION_TREND": ("requisition_qty", "requisition_cost"),
     "RESTAURANT_OPS_GROSS_MARGIN": ("gross_profit", "gross_margin"),
