@@ -1,0 +1,86 @@
+name: Python Gate
+
+# 见 web-admin-gate.yml 顶部的「为什么是独立 workflow」。python 这边多两个坑:
+#
+# 1. ci.yml 的 `python-lint-test` 里那步是 `pytest ... || true` —— 就算 job 真跑了,
+#    pytest 失败也不可能让它变红。本 workflow 不加 `|| true`。
+#
+# 2. ci.yml 只收 `tests/`, 而仓里有 186 个测试文件在 `tests/` 之外, 其中 37 个是
+#    `smartbi/services/restaurant` —— 正是这一周一直在发布的那块代码, 一次都没被 CI 跑过。
+#
+# 2026-07-31 逐目录实测 (本机 py3.11), 决定下面这份路径清单:
+#   ota/tests                                10 文件  116 passed
+#   efficiency_recognition/tests              1 文件    5 passed
+#   smartbi/agent|api|external_benchmarks|ingestion/tests  12 文件  293 passed
+#   smartbi/services/**                       41 文件  ~590 passed / 3 failed
+#   smartbi/gold/tests                        10 文件  109 passed / 35 failed(见下)
+#   smartbi/tests                             75 文件  —— 刻意排除, 见下
+#
+# ⛔ 排除 `smartbi/tests/`: 那 75 个是 legacy 独立脚本 (test_e2e_quick /
+#    test_full_e2e_with_save 之类), 要活服务才能跑; 其中
+#    `test_e2e_performance_monitor.py` 会关掉 stderr 把**整个 pytest 进程搞崩**
+#    (`ValueError: I/O operation on closed file` / `lost sys.stderr`),
+#    一个文件就能让整轮测量归零。要纳入得先单独 triage, 不该挡住这次上闸。
+#
+# ⚠️ `smartbi/gold/tests` 本机 35 failed 全是同一句
+#    `RuntimeError: There is no current event loop in thread 'MainThread'` ——
+#    本机 py3.11 + pytest 9 的 asyncio 行为, 而这里跑的是 **py3.10**。
+#    首次 CI 跑绿即证明是本机环境差异; 若在 CI 也红, 就把这一行摘掉并单独立项,
+#    不要为了让闸变绿而给它加 `|| true` —— 那正是本 workflow 要根治的东西。
+#
+# 🔴 刻意**不跑 flake8**: ci.yml 那步 `flake8 --max-line-length=120 ... .` 目前有
+#    299 条违规 (189 条 E501 等), 07-30 那次 python-lint-test 就是它挂的。
+#    那是另一笔独立的债, 捆进来会让这道闸从第一天起就挡所有人。要清是另一个 PR。
+
+on:
+  push:
+    branches:
+      - main
+      - 'codex/**'
+    paths:
+      - 'backend/python/**'
+      - '.github/workflows/python-gate.yml'
+  pull_request:
+    paths:
+      - 'backend/python/**'
+      - '.github/workflows/python-gate.yml'
+
+concurrency:
+  group: python-gate-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  pytest:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend/python
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+          cache: 'pip'
+          cache-dependency-path: backend/python/requirements.txt
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip
+          pip install --use-deprecated=legacy-resolver -r requirements.txt || pip install -r requirements.txt
+          pip install pytest pytest-asyncio pytest-timeout
+      - name: Run pytest
+        # 没有 `|| true` —— 红就是红, 这是本 workflow 的全部意义。
+        run: |
+          pytest \
+            tests/ \
+            ota/tests \
+            efficiency_recognition/tests \
+            smartbi/agent/tests \
+            smartbi/api/tests \
+            smartbi/external_benchmarks/tests \
+            smartbi/gold/tests \
+            smartbi/ingestion/tests \
+            smartbi/services \
+            --timeout=60 \
+            --ignore=tests/test_data_accuracy.py \
+            -k "not e2e and not integration" \
+            --tb=short
