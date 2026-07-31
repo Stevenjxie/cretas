@@ -313,30 +313,37 @@ const rawMenuConfig: MenuItem[] = [
       { path: '/restaurant/marketing', title: '市场', icon: 'TrendCharts', module: 'restaurantMarketing' },
       { path: '/restaurant/hr', title: '人事', icon: 'User', module: 'restaurantHr' },
       { path: '/restaurant/finance', title: '财务', icon: 'Money', module: 'restaurantFinance' },
-      // -- 深度分析 (Gold 读层) --
-      // 店长经营 KPI 看板 (single-store MVP 2026-06-04): 6 KPI 一屏 + 健康灯, 店长高频入口。
-      { path: '/restaurant/analytics/role-kpi', title: '经营看板', icon: '', module: 'analytics', groupLabel: '深度分析',
-        roles: ['factory_super_admin', 'platform_admin', 'permission_admin', 'restaurant_manager', 'restaurant_owner', 'finance_manager', 'sales_manager'] },
-      { path: '/restaurant/analytics/dishes', title: '菜品分析', icon: '', module: 'restaurant' },
-      { path: '/restaurant/price-anomaly', title: '价格异常预警', icon: '', module: 'restaurant',
-        // ⛔ 刻意不给 restaurant_chef: 它不在 PRICE_VIEW_ROLES, 报货领料不需要看采购价
-        roles: ['factory_super_admin', 'platform_admin', 'permission_admin', 'restaurant_manager', 'restaurant_owner', 'restaurant_purchaser'] },
-      { path: '/restaurant/analytics/stores', title: '门店对比', icon: '', module: 'restaurant' },
-      { path: '/restaurant/analytics/platform', title: '平台分析', icon: 'ChatDotRound', module: 'restaurant' },
-      // -- 日常录入 (写侧) — 配方置顶 (喂养分析层成本) --
-      { path: '/restaurant/recipes', title: '配方管理', icon: '', module: 'restaurant', groupLabel: '日常录入' },
+      // ── 运营 ────────────────────────────────────────────────────
+      // 后厨供应链: 领料 / 损耗 / 盘点 / 配方
+      { path: '/restaurant/requisitions', title: '领料管理', icon: '', module: 'restaurantOps', groupLabel: '运营' },
+      { path: '/restaurant/wastage', title: '损耗管理', icon: '', module: 'restaurantOps' },
+      { path: '/restaurant/stocktaking', title: '盘点管理', icon: '', module: 'restaurantOps' },
+      { path: '/restaurant/recipes', title: '配方管理', icon: '', module: 'restaurantOps' },
+      // ⚠️ 下面两项**刻意不改 module**: 它们跨工厂/餐饮两侧使用
+      // (warehouse_manager / procurement_manager 也在用, 而这些角色 restaurant='-')。
+      // 改成 restaurantOps 会断掉他们的访问 —— 本轮只归组, 标签留待单独评估。
       { path: '/restaurant/supplier-delivery', title: '供应商进货录入', icon: '', module: 'dashboard',
         roles: ['factory_super_admin', 'platform_admin', 'permission_admin', 'restaurant_manager', 'restaurant_owner', 'restaurant_purchaser', 'restaurant_chef', 'warehouse_manager', 'procurement_manager'] },
       { path: '/procurement/requisitions/my', title: '厨师长报货/采购计划', icon: '', module: 'procurement',
         roles: ['factory_super_admin', 'platform_admin', 'permission_admin', 'restaurant_manager', 'restaurant_owner', 'restaurant_purchaser', 'restaurant_chef', 'warehouse_manager', 'procurement_manager'] },
-      { path: '/restaurant/requisitions', title: '领料管理', icon: '', module: 'restaurant' },
-      { path: '/restaurant/wastage', title: '损耗管理', icon: '', module: 'restaurant' },
-      { path: '/restaurant/stocktaking', title: '盘点管理', icon: '', module: 'restaurant' },
-      { path: '/restaurant/supplier-reconciliation', title: '供应商月对账', icon: '', module: 'finance',
-        roles: ['factory_super_admin', 'platform_admin', 'permission_admin', 'restaurant_manager', 'restaurant_owner', 'restaurant_purchaser', 'finance_manager'] },
-      { path: '/restaurant/cost-attribution', title: '成本归因', icon: '', module: 'finance',
-        roles: ['factory_super_admin', 'platform_admin', 'permission_admin', 'restaurant_manager', 'restaurant_owner', 'finance_manager'] },
-      // -- 数据与系统 (admin) --
+
+      // ── 市场 ────────────────────────────────────────────────────
+      // 经营看板归市场: 6 KPI 里日营收/客单价/订单数三项是营收侧, 占多数。
+      { path: '/restaurant/analytics/role-kpi', title: '经营看板', icon: '', module: 'restaurantMarketing', groupLabel: '市场' },
+      { path: '/restaurant/analytics/dishes', title: '菜品分析', icon: '', module: 'restaurantMarketing' },
+      { path: '/restaurant/analytics/stores', title: '门店对比', icon: '', module: 'restaurantMarketing' },
+      { path: '/restaurant/analytics/platform', title: '平台分析', icon: 'ChatDotRound', module: 'restaurantMarketing' },
+
+      // ── 财务 ────────────────────────────────────────────────────
+      // 三项都是金额口径, 而 restaurantFinance 的准入本身就要求 PRICE_VIEW_ROLES,
+      // 所以不必再逐项写 roles 白名单 —— 少一处要同步的地方。
+      { path: '/restaurant/cost-attribution', title: '成本归因', icon: '', module: 'restaurantFinance', groupLabel: '财务' },
+      { path: '/restaurant/supplier-reconciliation', title: '供应商月对账', icon: '', module: 'restaurantFinance' },
+      { path: '/restaurant/price-anomaly', title: '价格异常预警', icon: '', module: 'restaurantFinance' },
+
+      // ── 数据与系统 ──────────────────────────────────────────────
+      // 跨部门的数据基础设施, 不归属任何业务部门 —— 归进某一个部门会让其余三个
+      // 部门的分析师找不到它。
       { path: '/restaurant/data-completeness', title: '数据完整度', icon: '', module: 'restaurant', groupLabel: '数据与系统' },
       { path: '/restaurant/admin/etl-status', title: 'ETL 状态', icon: '', module: 'restaurant',
         roles: ['factory_super_admin', 'platform_admin', 'permission_admin'] },

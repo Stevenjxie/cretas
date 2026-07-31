@@ -1759,25 +1759,25 @@ const businessRoutes: RouteRecordRaw[] = [
             path: 'requisitions',
             name: 'RestaurantRequisitions',
             component: () => import('@/views/restaurant/requisitions/list.vue'),
-            meta: { requiresAuth: true, title: '领料管理', module: 'restaurant' }
+            meta: { requiresAuth: true, title: '领料管理', module: 'restaurantOps' }
           },
           {
             path: 'wastage',
             name: 'RestaurantWastage',
             component: () => import('@/views/restaurant/wastage/list.vue'),
-            meta: { requiresAuth: true, title: '损耗管理', module: 'restaurant' }
+            meta: { requiresAuth: true, title: '损耗管理', module: 'restaurantOps' }
           },
           {
             path: 'recipes',
             name: 'RestaurantRecipes',
             component: () => import('@/views/restaurant/recipes/list.vue'),
-            meta: { requiresAuth: true, title: '配方管理', module: 'restaurant' }
+            meta: { requiresAuth: true, title: '配方管理', module: 'restaurantOps' }
           },
           {
             path: 'stocktaking',
             name: 'RestaurantStocktaking',
             component: () => import('@/views/restaurant/stocktaking/list.vue'),
-            meta: { requiresAuth: true, title: '盘点管理', module: 'restaurant' }
+            meta: { requiresAuth: true, title: '盘点管理', module: 'restaurantOps' }
           },
           {
             // #59 Phase 2: 营销员月度阶梯提成汇总 (复购业绩跨档)
@@ -1799,14 +1799,14 @@ const businessRoutes: RouteRecordRaw[] = [
             path: 'analytics/role-kpi',
             name: 'RestaurantRoleKpiDashboard',
             component: () => import('@/views/restaurant/analytics/role-kpi-dashboard.vue'),
-            meta: { requiresAuth: true, title: '经营看板', module: 'analytics' }
+            meta: { requiresAuth: true, title: '经营看板', module: 'restaurantMarketing' }
           },
           {
             // IA v2: 菜品分析双tab (整合 菜品四象限 + 菜品毛利)
             path: 'analytics/dishes',
             name: 'RestaurantDishes',
             component: () => import('@/views/restaurant/analytics/dishes.vue'),
-            meta: { requiresAuth: true, title: '菜品分析', module: 'restaurant' }
+            meta: { requiresAuth: true, title: '菜品分析', module: 'restaurantMarketing' }
           },
           {
             // G2 (2026-06-03): 目标拆分 + 达成率预警 — 年/月/周/日四级目标录入
@@ -1820,7 +1820,7 @@ const businessRoutes: RouteRecordRaw[] = [
             path: 'analytics/platform',
             name: 'RestaurantPlatform',
             component: () => import('@/views/restaurant/analytics/platform.vue'),
-            meta: { requiresAuth: true, title: '平台分析', module: 'restaurant' }
+            meta: { requiresAuth: true, title: '平台分析', module: 'restaurantMarketing' }
           },
           {
             // IA v2: 旧四象限 → 菜品分析 quadrant tab (保留 query)
@@ -1832,7 +1832,7 @@ const businessRoutes: RouteRecordRaw[] = [
             path: 'analytics/stores',
             name: 'RestaurantStoreComparison',
             component: () => import('@/views/restaurant/analytics/store-comparison.vue'),
-            meta: { requiresAuth: true, title: '门店对比', module: 'restaurant' }
+            meta: { requiresAuth: true, title: '门店对比', module: 'restaurantMarketing' }
           },
           {
             // IA v2: 旧点评页 → 平台口碑 (保留 query)
@@ -1898,7 +1898,7 @@ const businessRoutes: RouteRecordRaw[] = [
             meta: {
               requiresAuth: true,
               title: '供应商月对账',
-              module: 'finance',
+              module: 'restaurantFinance',
               roles: ['factory_super_admin', 'platform_admin', 'permission_admin', 'restaurant_manager', 'finance_manager']
             },
           },
@@ -1909,7 +1909,7 @@ const businessRoutes: RouteRecordRaw[] = [
             meta: {
               requiresAuth: true,
               title: '成本归因',
-              module: 'finance',
+              module: 'restaurantFinance',
               roles: ['factory_super_admin', 'platform_admin', 'permission_admin', 'restaurant_manager', 'finance_manager']
             },
           },
@@ -1944,7 +1944,7 @@ const businessRoutes: RouteRecordRaw[] = [
             meta: {
               requiresAuth: true,
               title: '价格异常预警',
-              module: 'restaurant',
+              module: 'restaurantFinance',
               roles: ['factory_super_admin', 'platform_admin', 'permission_admin', 'restaurant_manager'],
             },
           }
