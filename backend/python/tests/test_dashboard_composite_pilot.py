@@ -689,6 +689,18 @@ from fastapi.testclient import TestClient as _TestClient  # noqa: E402
 
 
 _JWT_SECRET_FOR_TESTS = "phase-2b-3-dashboard-test-secret"
+
+
+@pytest.fixture(autouse=True)
+def _jwt_env(monkeypatch):
+    """Force JWT_SECRET to this file's value for the duration of each test.
+
+    见 test_config_thresholds_pilot.py 同名 fixture 的说明: 顶部 setdefault 只在
+    本文件先跑时生效, 否则签名/验签用的是两个不同的 secret → 全部 401。
+    2026-07-31 python 门禁首次真跑全量时暴露, 此前被 `pytest ... || true` 吞掉。
+    """
+    monkeypatch.setenv("JWT_SECRET", _JWT_SECRET_FOR_TESTS)
+    yield
 _JWT_ALGORITHM = "HS256"
 
 
