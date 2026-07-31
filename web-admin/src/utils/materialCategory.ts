@@ -1,5 +1,5 @@
 /**
- * 物料大类归类 (原料/辅料/调料/包材/其他)
+ * 物料大类归类 (原料/辅料/调料/包材/其他/副产)
  *
  * 客户张权反馈 (2026-07-02): 物料下拉太乱 (原料/辅料/调料/包材混在一起, 面酱/白醋/牛腩排/黄油…),
  * 加"先选大类再选物料"两级筛选。首次在 procurement/receives/list.vue 落地, 提取为共用工具供
@@ -15,6 +15,11 @@
  *
  * "添加剂" 归入"辅料"桶 (客户特别提到辅料/添加剂混在一起, 两者业务上都属"非主料的配方成分",
  * 且 system_enums 目前没有独立的"添加剂"大类筛选项, 归并可避免下拉再多分一档增加认知负担).
+ *
+ * 🔴 「副产」**不是**这里的第 5 个桶。它是物料上的标记 (`isByproduct`), 与材质分类**正交** ——
+ * 见 utils/byproductMaterial.ts。2026-07-31 上午一度把它做成 category='副产', 当天走前端
+ * 验收时被推翻: 那样副产 SKU 在 BOM「原料」页签里选不到, 而「副产以后能当原料被别的
+ * workflow 投入」正是把副产放进原料字典的初衷。肥油的材质是原料, 来历是副产, 两件事。
  */
 export type BigCategory = '原料' | '辅料' | '调料' | '包材' | '其他';
 
@@ -36,7 +41,8 @@ export const SEASONING_CATEGORY_VALUES = new Set(['调料', '调味料', '调味
 export const PACKAGING_CATEGORY_VALUES = new Set(['包材', 'packaging', 'PACKAGING']);
 
 /**
- * 把物料的自由文本 category 字段归类到 4 大业务类别之一 (未识别归"其他")。
+ * 把物料的 category 字段归类到 4 大业务类别之一 (未识别归"其他")。
+ * 「副产」不在这里 —— 它是标记不是材质, 判定走 utils/byproductMaterial.ts#isByproductMaterial。
  */
 export function bigCategoryOf(category: string | null | undefined): BigCategory {
   const c = (category || '').trim();

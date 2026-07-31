@@ -55,6 +55,24 @@ public class WarehouseResolver {
                         .withHint("请联系运维检查 factory_warehouses 表是否有该工厂的双仓 seed"));
     }
 
+    /**
+     * warehouse_id → 仓库中文名 (「主仓」「生产仓」…), 供界面说清"料在哪个仓"。
+     *
+     * <p>诚实-null: 查不到 / 已软删 / 名字为空一律返回 null —— 调用方据此**不提**这个仓,
+     * 而不是渲染出「(未知仓)另有 200 只」那种说了等于没说的提示。</p>
+     */
+    public String displayName(String factoryId, String warehouseId) {
+        if (factoryId == null || warehouseId == null || warehouseId.isBlank()) {
+            return null;
+        }
+        return factoryWarehouseRepository.findById(warehouseId)
+                .filter(wh -> factoryId.equals(wh.getFactoryId()))
+                .filter(wh -> wh.getDeletedAt() == null)
+                .map(FactoryWarehouse::getName)
+                .filter(name -> name != null && !name.isBlank())
+                .orElse(null);
+    }
+
     /** 物流仓 (WH-LOG) id — 销售出货、原料持久库存默认仓。有配置覆盖则优先用配置。 */
     public String resolveLogisticsId(String factoryId) {
         return resolveConfiguredWarehouseId(factoryId, WarehouseDefaultPurpose.LOGISTICS_DEFAULT)

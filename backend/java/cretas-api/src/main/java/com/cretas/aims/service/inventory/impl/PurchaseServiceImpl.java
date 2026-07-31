@@ -2510,6 +2510,9 @@ public class PurchaseServiceImpl implements PurchaseService {
                 boolean expandedAny = false;
                 for (BomRecipeItem ri : recipeItems) {
                     if (ri.getMaterialTypeId() == null) continue;
+                    // 副产行是**产出声明**不是投入 —— 展开成采购需求等于建议去买一个本该由生产
+                    // 产出的东西。与 recomputeFamilyCosts / BomExpansionService 同一条判据。
+                    if (BomRecipeItem.isByproductCategory(ri.getMaterialCategory())) continue;
                     // actualQuantity 已按出成率折算 (写库时算或运行时算), 是"每单位产品需要的原料量".
                     // 若持久值为空 (旧 recipe 未回填), 用 calculateActualQuantity() 实时折算 (同 entity 公式).
                     BigDecimal actualQtyPerUnit = ri.getActualQuantity();

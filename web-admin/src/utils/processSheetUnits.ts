@@ -30,10 +30,29 @@ type LabelColumn = { key: string; label: string };
 
 const INPUT_KEYS = new Set(['outWeight', 'feedWeight', 'before', 'input', 'remain']);
 const OUTPUT_KEYS = new Set(['output', 'after', 'storage', 'sample', 'remainBox', 'claim', 'actualProd']);
+/**
+ * 展示映射 —— 规则见 `utils/unitPricing.ts` 的 UNIT_LABELS 注释 (Steve 2026-07-31 拍板):
+ * 可换算的国际单位保留英文码, **计数 / 包装单位一律不得以英文码示人**。
+ *
+ * 🔴 少一条就漏英文: `displayProcessUnit` 查不到就原样返回。原表缺 pack / can / crate /
+ * pail / roll / item, 而库里这些码是后端保存时自己写进去的 (规范码), 不是脏数据。
+ * 同目录 `__tests__/unitDisplayContract.spec.ts` 直接读后端权威表比对, 后端加单位这里没加就红。
+ */
 const DISPLAY_UNIT_ALIASES: Record<string, string> = {
-  box: '盒', case: '箱', slice: '片', bag: '袋', pcs: '件', each: '件', piece: '件', portion: '份', bottle: '瓶',
+  // 计数 / 包装 —— 一律中文
+  box: '盒', case: '箱', slice: '片', bag: '袋', pcs: '件', each: '件', piece: '件',
+  portion: '份', bottle: '瓶', pack: '包', can: '罐', crate: '框', pail: '桶',
+  roll: '卷', item: '项',
   '盒': '盒', '箱': '箱', '片': '片', '袋': '袋', '件': '件', '份': '份', '瓶': '瓶',
+  '包': '包', '罐': '罐', '框': '框', '筐': '框', '桶': '桶', '卷': '卷', '项': '项',
+  // ⛔ 刻意**不**把「只」「个」并进「件」: #1976 —— 计数单位按字面区分, 一只 ≠ 一件。
+  //    本次改动的目标是「英文码不示人」, 不是合并中文计量单位; 合并会改掉一条既有业务判据
+  //    (ProcessDataTable 里那句「归一只到显示层为止, 「只」不会和「件」合并」正是这条)。
+  // 中文计量单位 —— 英文码对用户无意义
+  jin: '斤', '斤': '斤', t: '吨', '吨': '吨',
+  // 可换算国际单位 —— 保持英文
   g: 'g', '克': 'g', kg: 'kg', '千克': 'kg', '公斤': 'kg',
+  mg: 'mg', '毫克': 'mg', ml: 'mL', '毫升': 'mL', l: 'L', '升': 'L',
 };
 
 function nonBlank(value: string | null | undefined): string | undefined {

@@ -416,9 +416,35 @@ public class BomRecipeServiceImpl implements BomRecipeService {
         return family.stream().filter(member -> member.getId().equals(recipeId)).findFirst().orElse(recipe);
     }
 
+    /**
+     * 副产品成本抵扣三条校验 —— 只对<b>用户真标的</b>副产品生效。
+     *
+     * <p>🔴 客户 2026-07-31 现场: 一对多 workflow(成品C + 成品D, <b>两个都是正经成品</b>)
+     * 生成 BOM 后点「检查并生效」, 被这里拦下要求填「单位可变现净值」。</p>
+     *
+     * <p>根因: 「实际产出语义」下 {@code BomWorkflowRevisionService} 会按顺序<b>自动</b>编号
+     * ({@code terminalIndex == 0 ? "MAIN" : "BY_PRODUCT"}), 那段代码自己注明这只是
+     * 「compatibility-only storage metadata, <b>not authored or shown to users</b>」——
+     * 于是第 2 个产出被无声标成副产品, 然后这里拿它当真, 要求一个用户从没被问过、
+     * 界面上也找不到的字段。</p>
+     *
+     * <p>为什么可以直接豁免而不必先定成本口径: <b>真正的成本分摊不在 BOM 阶段</b> ——
+     * 在报工时按「用户填的比例 / 重量 / 数量」分({@code ProcessSheetServiceImpl} 多产出分摊),
+     * 那段<b>从头到尾没读过 {@code outputRole}</b>; {@code getOutputRole()} 的消费者也只在
+     * BOM 域内部。所以这个占位标签不影响任何成本计算, 唯独会把用户拦在门外。</p>
+     *
+     * <p>⚠️ 副产的正式模型(标注副产 → 原料字典建 SKU → 落生产仓记重量 → <b>盘点时</b>标注
+     * 与主产品的关联并按副产价值抵扣, 算抵扣后成本与利润)是 Steve 2026-07-31 定的方向,
+     * <b>另行立项</b>。注意抵扣发生在<b>盘点</b>且以关联为前提, 不是 BOM 生效前填死一个 NRV ——
+     * 所以这里不该为了「以后要抵扣」保留一道生效前的必填。</p>
+     */
     private void validateByProductCreditRules(List<BomRecipe> family) {
         for (BomRecipe member : family) {
             if (member.getOutputRole() != BomRecipe.OutputRole.BY_PRODUCT) continue;
+            if (bomWorkflowRevisionService.targetProducedUnderActualIoSemantics(
+                    member.getFactoryId(), member)) {
+                continue;
+            }
             if (member.getCostAllocationRatio() == null
                     || member.getCostAllocationRatio().compareTo(BigDecimal.ZERO) != 0) {
                 throw bomError(409,
@@ -713,9 +739,13 @@ public class BomRecipeServiceImpl implements BomRecipeService {
                     "请刷新页面后重新填写，不能新增、遗漏或替换产出",
                     "outputs");
         }
+        // 与生效闸、成本重算用**同一条判据**: 自动编号出来的 BY_PRODUCT 是占位值, 不是用户标的
+        // 副产品。少了这一处, 用户就会在这个弹窗里被要求给一个「正经成品」填单位可变现净值 ——
+        // 正是 #2080 在生效闸上修掉的那种「被要求填一个从没被问过的字段」。
+        Set<String> creditingByproducts = creditingByproductIds(family);
         for (BomRecipe member : family) {
             BigDecimal nrv = requested.get(member.getId()).getByproductNrvUnitPrice();
-            if (member.getOutputRole() == BomRecipe.OutputRole.BY_PRODUCT) {
+            if (creditingByproducts.contains(member.getId())) {
                 if (nrv == null || nrv.compareTo(BigDecimal.ZERO) <= 0) {
                     throw bomError(400,
                             "副产品单位可变现净值必须大于 0",
@@ -2626,12 +2656,21 @@ public class BomRecipeServiceImpl implements BomRecipeService {
      */
     private void recomputeFamilyCosts(BomRecipe changed) {
         List<BomRecipe> targets = familyForStatus(changed);
+        Set<String> creditingByproducts = creditingByproductIds(targets);
         Map<String, List<BomRecipe>> poolTargets = new LinkedHashMap<>();
         Map<String, BigDecimal> poolCosts = new LinkedHashMap<>();
 
         for (BomRecipe owner : targets) {
             for (BomRecipeItem item :
                     itemRepo.findByRecipeIdOrderBySortOrderAsc(owner.getId())) {
+                // 副产行是**产出声明**不是投入 —— 不进成本池。
+                // 不跳过会有两种错法: ① 副产 SKU 没有采购价 (Task 1 刻意隔开采购属性) →
+                // itemCost 为 null → markFamilyCostIncomplete → 整个 family 标准成本被清空;
+                // ② 万一它恰好有价, 反而**抬高**主产品成本 —— 方向是反的, 副产本该抵扣。
+                // 抵扣发生在盘点 (按盘点实际重量 × 确认单价), 不在这里。
+                if (BomRecipeItem.isByproductCategory(item.getMaterialCategory())) {
+                    continue;
+                }
                 BigDecimal cost = nestedBomCostService.isNestedComponent(item)
                         ? nestedBomCostService.resolveItemCost(owner.getFactoryId(), item)
                         : item.computeItemCost();
@@ -2665,11 +2704,11 @@ public class BomRecipeServiceImpl implements BomRecipeService {
         for (Map.Entry<String, BigDecimal> pool : poolCosts.entrySet()) {
             List<BomRecipe> members = poolTargets.get(pool.getKey());
             List<BomRecipe> costingOutputs = members.stream()
-                    .filter(member -> member.getOutputRole() != BomRecipe.OutputRole.BY_PRODUCT)
+                    .filter(member -> !creditingByproducts.contains(member.getId()))
                     .toList();
             if (!costingOutputs.isEmpty()) continue;
             List<BomRecipe> byproducts = members.stream()
-                    .filter(member -> member.getOutputRole() == BomRecipe.OutputRole.BY_PRODUCT)
+                    .filter(member -> creditingByproducts.contains(member.getId()))
                     .toList();
             if (byproducts.isEmpty()) continue;
             Map<String, BigDecimal> weights = new LinkedHashMap<>();
@@ -2697,7 +2736,7 @@ public class BomRecipeServiceImpl implements BomRecipeService {
 
         Map<String, BigDecimal> adjustedPoolCosts = new LinkedHashMap<>(poolCosts);
         for (BomRecipe byproduct : targets.stream()
-                .filter(member -> member.getOutputRole() == BomRecipe.OutputRole.BY_PRODUCT)
+                .filter(member -> creditingByproducts.contains(member.getId()))
                 .toList()) {
             BigDecimal grossNrv = byproductGrossNrv(byproduct);
             if (grossNrv == null) {
@@ -2710,7 +2749,7 @@ public class BomRecipeServiceImpl implements BomRecipeService {
                     .filter(entry -> entry.getValue().stream()
                             .anyMatch(member -> member.getId().equals(byproduct.getId())))
                     .filter(entry -> entry.getValue().stream()
-                            .anyMatch(member -> member.getOutputRole() != BomRecipe.OutputRole.BY_PRODUCT))
+                            .anyMatch(member -> !creditingByproducts.contains(member.getId())))
                     .map(Map.Entry::getKey)
                     .toList();
             if (netCredit.signum() != 0 && eligiblePools.isEmpty()) {
@@ -2753,7 +2792,7 @@ public class BomRecipeServiceImpl implements BomRecipeService {
                         LinkedHashMap::new));
         for (Map.Entry<String, BigDecimal> pool : adjustedPoolCosts.entrySet()) {
             List<BomRecipe> costingOutputs = poolTargets.get(pool.getKey()).stream()
-                    .filter(member -> member.getOutputRole() != BomRecipe.OutputRole.BY_PRODUCT)
+                    .filter(member -> !creditingByproducts.contains(member.getId()))
                     .toList();
             if (costingOutputs.isEmpty()) continue;
             BigDecimal ratioTotal = costingOutputs.stream()
@@ -2774,7 +2813,7 @@ public class BomRecipeServiceImpl implements BomRecipeService {
             }
         }
         for (BomRecipe byproduct : targets.stream()
-                .filter(member -> member.getOutputRole() == BomRecipe.OutputRole.BY_PRODUCT)
+                .filter(member -> creditingByproducts.contains(member.getId()))
                 .toList()) {
             materialCosts.put(byproduct.getId(), byproductGrossNrv(byproduct));
         }
@@ -2783,7 +2822,7 @@ public class BomRecipeServiceImpl implements BomRecipeService {
             BigDecimal materialCost = materialCosts.get(target.getId())
                     .setScale(4, RoundingMode.HALF_UP);
             target.setTotalMaterialCost(materialCost);
-            BigDecimal allocation = target.getOutputRole() == BomRecipe.OutputRole.BY_PRODUCT
+            BigDecimal allocation = creditingByproducts.contains(target.getId())
                     ? BigDecimal.ZERO
                     : costingRatio(target).divide(new BigDecimal("100"), 8, RoundingMode.HALF_UP);
             BigDecimal allocatedLabor = valueOrZero(target.getTotalLaborCost()).multiply(allocation);
@@ -2860,6 +2899,37 @@ public class BomRecipeServiceImpl implements BomRecipeService {
         if (owner == null) return false;
         return resolveCostTargets(scope, scopeKey, owner, family, packaging).stream()
                 .anyMatch(member -> member.getId().equals(target.getId()));
+    }
+
+    /**
+     * family 里<b>真正按副产品计价</b>的成员 id —— 只认<b>用户真标的</b>副产品。
+     *
+     * <p>🔴 与 {@link #validateByProductCreditRules} 用<b>同一条判据</b>。#2080 给那道生效闸
+     * 加了 ACTUAL_IO 豁免(自动编号出来的 {@code BY_PRODUCT} 是占位值, 不是用户标的副产品),
+     * 却漏了这里 —— {@code targetProducedUnderActualIoSemantics} 此前在本类中只被调用过那一处。
+     * 结果是生效闸放行了, 成本这边仍拿占位值当真: 缺 NRV → {@code byproductGrossNrv} 返 null
+     * → {@code markFamilyCostIncomplete} 把 <b>family 全体</b>成本置 NULL, 且没有任何提示。
+     * 而线上 61 行 {@code byproduct_nrv_unit_price} 全是 NULL(2026-07-31 实测), 也就是说
+     * 每个一对多 workflow 的标准成本都会被静默清空。</p>
+     *
+     * <p>豁免后这些产出按 workflow 快照里<b>已经声明的</b>分摊比例计价(未授权时就是自动编号
+     * 给的 {@code 100 / 0}) —— <b>不发明新的成本口径</b>, 用户在 workflow 里真填了比例会走
+     * 授权路径覆盖它。</p>
+     *
+     * <p>⚠️ 一次算好缓存成 Set: {@code targetProducedUnderActualIoSemantics} 要读 workflow
+     * revision 并解析快照, 而下面有 7 处判定, 逐处调用会把一次成本重算放大成 7 次快照解析。</p>
+     */
+    private Set<String> creditingByproductIds(List<BomRecipe> targets) {
+        Set<String> ids = new LinkedHashSet<>();
+        for (BomRecipe target : targets) {
+            if (target.getOutputRole() != BomRecipe.OutputRole.BY_PRODUCT) continue;
+            if (bomWorkflowRevisionService.targetProducedUnderActualIoSemantics(
+                    target.getFactoryId(), target)) {
+                continue;
+            }
+            ids.add(target.getId());
+        }
+        return ids;
     }
 
     private BigDecimal byproductGrossNrv(BomRecipe recipe) {

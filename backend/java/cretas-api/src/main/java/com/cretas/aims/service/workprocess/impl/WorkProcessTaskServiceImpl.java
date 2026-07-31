@@ -61,6 +61,18 @@ public class WorkProcessTaskServiceImpl implements WorkProcessTaskService {
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private com.cretas.aims.repository.ProductionPlanRepository productionPlanRepository;
 
+    /**
+     * 预期副产声明的唯一入口 (BOM 第四类优先, 工序上的历史自由文本声明回落)。
+     *
+     * <p>沿用上面那条同样的 field 注入 (required=false) 理由: 避免改动构造器打断既有单测装配 ——
+     * 本仓 2026-07-31 刚因 {@code ProcessSheetController} 新增第三个构造参数, 两个既有测试仍按
+     * 两参构造, testCompile 失败导致整个 java-build-test 挂掉、那条分支根本产不出 jar。</p>
+     *
+     * <p>不注入时回落 {@code definition.getExpectedByproducts()} = 本次改动前的行为。</p>
+     */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.cretas.aims.service.bom.ByproductDeclarationResolver byproductDeclarationResolver;
+
     // ==================== T142: batch assignedToName helper ====================
 
     /**
@@ -677,7 +689,13 @@ public class WorkProcessTaskServiceImpl implements WorkProcessTaskService {
             dto.setStandardYieldMin(definition.getStandardYieldMin());
             dto.setStandardYieldMax(definition.getStandardYieldMax());
             dto.setOutputUnit(definition.getOutputUnit());  // P0-2: 末道折份/盒
-            dto.setExpectedByproducts(definition.getExpectedByproducts());  // 防呆 Rule 3: OUTPUT 阶段预填
+            // 防呆 Rule 3: OUTPUT 阶段预填。副产声明线上有两处(工序自由文本 / BOM 第四类 SKU),
+            // 优先级定死在 ByproductDeclarationResolver 里, 不在这里再判一次。
+            dto.setExpectedByproducts(byproductDeclarationResolver == null
+                    ? definition.getExpectedByproducts()
+                    : byproductDeclarationResolver.resolve(
+                            task.getFactoryId(), task.getProductTypeId(),
+                            definition.getExpectedByproducts()));
         } else {
             // 免工序报工模式哨兵任务无 WorkProcess 定义 → 用友好报工名 (list/getById 路径也生效);
             // 标准出成/副产物预填留 null (诚实, 哨兵无标准)。非哨兵 workProcessId → null (不变)。

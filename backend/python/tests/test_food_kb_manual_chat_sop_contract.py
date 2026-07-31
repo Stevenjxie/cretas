@@ -8,31 +8,43 @@ from food_kb.api.manual_chat import (
     FACTORY_SYSTEM_PROMPT,
     ManualChatRequest,
     SYSTEM_PROMPT,
+    _FACTORY_REPORTING_SOURCE_SHORTAGE_ANSWER,
+    _FACTORY_RN_READONLY_ANSWER,
     _MATERIAL_PACKAGING_ANSWER,
     _LABEL_QC_REVIEW_ANSWER,
     _MULTI_OUTPUT_WAREHOUSE_RECEIPT_ANSWER,
     _MULTI_OUTPUT_LABEL_QC_ANSWER,
     _REPORTING_UNIT_YIELD_ANSWER,
     _RESTAURANT_CONTEXT_SCOPE_ANSWER,
+    _RESTAURANT_DATA_AVAILABILITY_ANSWER,
     _RESTAURANT_FLYWHEEL_GOVERNANCE_ANSWER,
+    _RESTAURANT_GUIDE_BOUNDARY_ANSWER,
+    _RESTAURANT_METRIC_ENTITY_ANSWER,
     _RESTAURANT_MONTHLY_REPORT_ANSWER,
     _RESTAURANT_PLAN_ALERT_ANSWER,
     _RESTAURANT_PLATFORM_SYNC_ANSWER,
     _RESTAURANT_QUERY_CONTRACT_ANSWER,
+    _RESTAURANT_SCOPE_ACTION_ANSWER,
     _WORKFLOW_ACTUAL_IO_ANSWER,
     _build_scope_prompt,
     _needs_bom_workflow_sequence_guard,
+    _needs_factory_reporting_source_shortage_guard,
+    _needs_factory_rn_readonly_guard,
     _needs_material_packaging_guard,
     _needs_label_qc_review_guard,
     _needs_multi_output_label_qc_guard,
     _needs_multi_output_warehouse_receipt_guard,
     _needs_reporting_unit_yield_guard,
     _needs_restaurant_context_scope_guard,
+    _needs_restaurant_data_availability_guard,
     _needs_restaurant_flywheel_governance_guard,
+    _needs_restaurant_guide_boundary_guard,
+    _needs_restaurant_metric_entity_guard,
     _needs_restaurant_monthly_report_guard,
     _needs_restaurant_plan_alert_guard,
     _needs_restaurant_platform_sync_guard,
     _needs_restaurant_query_contract_guard,
+    _needs_restaurant_scope_action_guard,
     _needs_workflow_actual_io_guard,
     _uses_current_production_sop,
 )
@@ -87,6 +99,9 @@ def test_restaurant_prompt_keeps_session_scope_and_evidence_honest():
     assert "当前月报固定 5 节" in SYSTEM_PROMPT
     assert "计划预警是同一 sealed QuerySpec" in SYSTEM_PROMPT
     assert "客如云风格 connector" in SYSTEM_PROMPT
+    assert "损耗金额按 `wastage_cost` 排序" in SYSTEM_PROMPT
+    assert "POS 流水或后厨事实任一类即可进入餐饮问答" in SYSTEM_PROMPT
+    assert "导览助手不替用户计算毛利、损耗" in SYSTEM_PROMPT
 
 
 def test_scope_prompt_distinguishes_depth_and_business_line():
@@ -226,6 +241,40 @@ def test_multi_output_warehouse_receipt_uses_line_based_atomic_contract():
     assert "不允许部分 SKU 已入库" in _MULTI_OUTPUT_WAREHOUSE_RECEIPT_ANSWER
 
 
+def test_factory_rn_readonly_questions_use_current_mobile_boundaries():
+    equivalent_questions = (
+        "在手机端，盘点记录和物料需求单各能做什么？",
+        "RN 盘点记录能发起盘点吗，物料需求单可以签收吗？",
+        "手机里的智能入库、盘点记录和物料需求单哪些只是辅助或只读？",
+    )
+    assert all(_needs_factory_rn_readonly_guard(q) for q in equivalent_questions)
+    assert not _needs_factory_rn_readonly_guard("Web 后台怎么创建生产计划？")
+    assert "未完成任务可以从记录列表继续进入盘点录入" in (
+        _FACTORY_RN_READONLY_ANSWER
+    )
+    assert "RN 不能在该入口生成需求单" in _FACTORY_RN_READONLY_ANSWER
+    assert "不会替用户提交、审批或增加库存" in _FACTORY_RN_READONLY_ANSWER
+
+
+def test_factory_reporting_source_shortage_uses_server_authoritative_contract():
+    equivalent_questions = (
+        "逐道报工投入来源怎样选，服务端发现物料短缺怎么办？",
+        "报工选多个批次来源时库存不足会显示什么？",
+        "投入来源一行一批次，缺料时能不能部分报工？",
+    )
+    assert all(
+        _needs_factory_reporting_source_shortage_guard(q)
+        for q in equivalent_questions
+    )
+    assert not _needs_factory_reporting_source_shortage_guard("库存不足怎么办？")
+    assert "可以选一个、多个或全部" in _FACTORY_REPORTING_SOURCE_SHORTAGE_ANSWER
+    assert "一个来源一行" in _FACTORY_REPORTING_SOURCE_SHORTAGE_ANSWER
+    assert "需多少、可用多少、缺多少" in _FACTORY_REPORTING_SOURCE_SHORTAGE_ANSWER
+    assert "不能扣一部分库存或让其它投入部分成功" in (
+        _FACTORY_REPORTING_SOURCE_SHORTAGE_ANSWER
+    )
+
+
 def test_restaurant_followup_scope_questions_use_the_reviewed_contract():
     equivalent_questions = (
         "门店菜品不同月份继续追问时怎么保持时间范围？",
@@ -240,6 +289,63 @@ def test_restaurant_followup_scope_questions_use_the_reviewed_contract():
     assert "另一个页面或模块上的筛选不保证自动带入" in (
         _RESTAURANT_CONTEXT_SCOPE_ANSWER
     )
+
+
+def test_restaurant_metric_and_entity_questions_use_current_axes():
+    equivalent_questions = (
+        "损耗金额最高的食材按什么排序，金额轴没有时怎么办？",
+        "领料花了多少钱应该走菜品成本还是 requisition_cost？",
+        "菜单目录如何避免把业务词和疑问片段当成菜名？",
+    )
+    assert all(_needs_restaurant_metric_entity_guard(q) for q in equivalent_questions)
+    assert not _needs_restaurant_metric_entity_guard("损耗怎么管理？")
+    assert "按食材 `wastage_cost` 排序" in _RESTAURANT_METRIC_ENTITY_ANSWER
+    assert "不能拿数量顺序冒充金额排名" in _RESTAURANT_METRIC_ENTITY_ANSWER
+    assert "走后厨领料成本 `requisition_cost`" in _RESTAURANT_METRIC_ENTITY_ANSWER
+    assert "当前租户菜单目录内核对" in _RESTAURANT_METRIC_ENTITY_ANSWER
+
+
+def test_restaurant_data_availability_never_turns_missing_into_zero():
+    equivalent_questions = (
+        "只有 POS 流水，没有领料损耗盘点时能回答什么，会按 0 算吗？",
+        "仅有 POS 时后厨事实缺失是不是都返回 0？",
+        "只有后厨事实没有 POS 时能编造营收和渠道吗？",
+    )
+    assert all(
+        _needs_restaurant_data_availability_guard(q)
+        for q in equivalent_questions
+    )
+    assert "可以回答营收、订单、菜品销售、门店" in (
+        _RESTAURANT_DATA_AVAILABILITY_ANSWER
+    )
+    assert "不能按 0 计算" in _RESTAURANT_DATA_AVAILABILITY_ANSWER
+    assert "0 只代表真实查询得到的 0" in _RESTAURANT_DATA_AVAILABILITY_ANSWER
+
+
+def test_restaurant_guide_never_calculates_business_data():
+    equivalent_questions = (
+        "餐饮导览助手能替我计算门店毛利和损耗吗？",
+        "操作助手可以分析我上传的业务数据吗？",
+        "导览助手不代算时应把真实分析带到哪里？",
+    )
+    assert all(_needs_restaurant_guide_boundary_guard(q) for q in equivalent_questions)
+    assert "不能替用户计算门店毛利、损耗" in _RESTAURANT_GUIDE_BOUNDARY_ANSWER
+    assert "进入 SmartBI 餐饮 AI" in _RESTAURANT_GUIDE_BOUNDARY_ANSWER
+    assert "不会返回或代算该门店的真实经营结果" in (
+        _RESTAURANT_GUIDE_BOUNDARY_ANSWER
+    )
+
+
+def test_restaurant_scope_actions_require_executable_store_questions():
+    equivalent_questions = (
+        "什么时候给看全部门店或只看某店的按钮？",
+        "损耗问题也会显示换范围按钮吗？",
+        "resolver 不支持门店维度时还能切换范围吗？",
+    )
+    assert all(_needs_restaurant_scope_action_guard(q) for q in equivalent_questions)
+    assert "当前 resolver 真正支持门店维度" in _RESTAURANT_SCOPE_ACTION_ANSWER
+    assert "损耗等当前不能按门店拆分" in _RESTAURANT_SCOPE_ACTION_ANSWER
+    assert "完整、可独立执行的问句" in _RESTAURANT_SCOPE_ACTION_ANSWER
 
 
 def test_restaurant_exact_range_scope_and_output_use_current_contract():
@@ -402,11 +508,16 @@ def test_latest_f006_sop_is_a_deployable_manual_source():
     assert "kg/g 等质量单位只在同量纲内科学换算" in current_sop
     assert "每单位成品重量" in current_sop
     assert "当前 OA 节点明确只授权 `factory_super_admin`" in current_sop
+    assert "RN 当前可用入口与只读边界" in current_sop
+    assert "一个来源一行" in current_sop
+    assert "可用库存和短缺数量以服务端校验为准" in current_sop
+    assert "供应商可维护简称，以及多联系人、多地址和银行账户" in current_sop
+    assert "单据追踪" in current_sop
 
     html_path = Path(PROJECT_ROOT) / "docs/manual/F006-production-full-chain-manual-test-sop.html"
     html = html_path.read_text(encoding="utf-8")
     assert required_sequence in html
-    assert "origin/main · SOP sync 2026-07-30" in html
+    assert "origin/main · SOP sync 2026-07-31" in html
     assert "先有完整 Workflow 草稿，再创建 BOM" in html
     assert "页面没有任意切换版本的选择器" in html
     assert "① 投入" in html
@@ -427,6 +538,10 @@ def test_latest_f006_sop_is_a_deployable_manual_source():
     assert "盒子、白标、彩标三层参考框" in html
     assert "跨单位成品率" in html
     assert "单总监死锁" in html
+    assert "RN 新入口仍按真实职责分开" in html
+    assert "一个来源一行" in current_sop
+    assert "需多少、可用多少、缺多少" in html
+    assert "RN 查看今日/历史盘点并续录" in html
 
 
 def test_factory_role_knowledge_covers_the_12_account_operating_boundaries():
@@ -498,6 +613,9 @@ def test_restaurant_registered_sources_match_current_product_contract():
             "AI 飞轮、菜品别名与人审边界",
             "计划预警：同一 QuerySpec 定时回放",
             "平台 connector、Gold 刷新与模拟数据边界",
+            "指标选择、菜单目录与路由防漂移",
+            "数据可用门槛与叙事接地",
+            "永久坏单据写入租户隔离的死信记录",
         ),
         "restaurant-product-manual.html": (
             "当前 21 维综合分析目录",
@@ -507,10 +625,16 @@ def test_restaurant_registered_sources_match_current_product_contract():
             "AI 飞轮运营台与菜品别名治理",
             "计划预警",
             "当前代码已验证的是客如云风格 connector",
+            "当前指标与实体合同",
+            "达到卡死阈值的永久坏单据进入租户隔离死信",
+            "不是门店管理员在页面自助填写密钥",
         ),
         "restaurant-metrics-glossary.html": (
             "21 维综合分析证据目录",
             "REAL / PROXY / SIMULATED / MISSING",
+            "当前餐饮问答的指标与接地合同",
+            "wastage_cost",
+            "requisition_cost",
         ),
     }
     for source_name, markers in expected_markers.items():
@@ -529,6 +653,10 @@ def test_restaurant_registered_sources_match_current_product_contract():
     assert "月报预览、导出与截至时间" in ai_assist
     assert "AI 飞轮与菜品别名怎么治理？" in ai_assist
     assert "计划预警与平台同步边界" in ai_assist
+    assert "RN 入库、盘点与需求单边界" in ai_assist
+    assert "投入来源、缺料与单据追踪" in ai_assist
+    assert "指标口径与菜单目录裁决" in ai_assist
+    assert "门店范围继承与可用切换" in ai_assist
     assert "7 节小课 · 约 12 分钟" in ai_assist
     assert "飞轮与人审边界" in ai_assist
     assert "不做计算" in ai_assist
@@ -719,6 +847,18 @@ async def test_bom_workflow_publication_answer_never_calls_the_llm(monkeypatch):
             "f006-production-full-chain-sop.md",
         ),
         (
+            "手机里的盘点记录和物料需求单各能做什么？",
+            "factory",
+            _FACTORY_RN_READONLY_ANSWER,
+            "f006-production-full-chain-sop.md",
+        ),
+        (
+            "逐道报工投入来源怎样选，服务端发现物料短缺怎么办？",
+            "factory",
+            _FACTORY_REPORTING_SOURCE_SHORTAGE_ANSWER,
+            "f006-production-full-chain-sop.md",
+        ),
+        (
             "门店菜品不同月份继续追问时怎么保持时间范围？",
             "restaurant",
             _RESTAURANT_CONTEXT_SCOPE_ANSWER,
@@ -753,6 +893,30 @@ async def test_bom_workflow_publication_answer_never_calls_the_llm(monkeypatch):
             "restaurant",
             _RESTAURANT_PLATFORM_SYNC_ANSWER,
             "restaurant-product-manual.html",
+        ),
+        (
+            "损耗金额最高的食材按什么排序，金额轴没有时怎么办？",
+            "restaurant",
+            _RESTAURANT_METRIC_ENTITY_ANSWER,
+            "restaurant-metrics-glossary.html",
+        ),
+        (
+            "只有 POS 流水，没有领料损耗盘点时能回答什么，会按 0 算吗？",
+            "restaurant",
+            _RESTAURANT_DATA_AVAILABILITY_ANSWER,
+            "restaurant-full-chain-sop.html",
+        ),
+        (
+            "餐饮导览助手能替我计算门店毛利和损耗吗？",
+            "restaurant",
+            _RESTAURANT_GUIDE_BOUNDARY_ANSWER,
+            "restaurant-full-chain-sop.html",
+        ),
+        (
+            "损耗问题也会显示换范围按钮吗？",
+            "restaurant",
+            _RESTAURANT_SCOPE_ACTION_ANSWER,
+            "restaurant-full-chain-sop.html",
         ),
     ],
 )

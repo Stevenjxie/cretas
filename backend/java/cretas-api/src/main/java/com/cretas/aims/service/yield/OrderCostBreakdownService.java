@@ -1017,16 +1017,19 @@ public class OrderCostBreakdownService {
         return left != null && right != null && Objects.equals(normalizeUnit(left), normalizeUnit(right));
     }
 
+    /**
+     * 订单成本拆分的单位归一 —— 走权威表的<b>跨语言</b>归一。
+     *
+     * <p>原表与 {@code YieldReportServiceImpl.normalizeUnit} 是<b>逐字相同的两份拷贝</b>,
+     * 都只认 5 组。判错时 {@code sameUnit} 返回 false → {@code toPinnedKilograms} 返回 null
+     * → 该行成本在 M67 页显示<b>「未归集」</b> (不会算出错数, 但也拿不到)。</p>
+     *
+     * <p>用 {@code crossLanguageCode} 而非 {@code canonicalCodeOrRaw}: 后者会把 只/个/件
+     * 并成 pcs, 违反 #1976「一只 ≠ 一件」。</p>
+     */
     private static String normalizeUnit(String unit) {
         if (unit == null || unit.isBlank()) return null;
-        return switch (unit.trim().toLowerCase()) {
-            case "kg", "kilogram", "kilograms", "千克", "公斤" -> "kg";
-            case "g", "gram", "grams", "克" -> "g";
-            case "box", "boxes", "盒" -> "box";
-            case "case", "cases", "箱" -> "case";
-            case "slice", "slices", "片" -> "slice";
-            default -> unit.trim().toLowerCase();
-        };
+        return com.cretas.aims.service.unit.impl.UnitContractServiceImpl.crossLanguageCode(unit);
     }
 
     private static Integer durationMinutes(String start, String end) {

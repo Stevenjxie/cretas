@@ -671,6 +671,31 @@ _SEMANTIC_STORE_SCOPES = frozenset({"all", "single", "multiple"})
 _SEMANTIC_METRICS = frozenset(metric for metric, _ in _REQUEST_METRIC_RULES)
 
 
+def _repair_backed_by_user_wording(
+    query: str, repair_metrics: Sequence[str]
+) -> bool:
+    """覆盖 planner 已给出的 resolver, 是否有【用户措辞】支撑。
+
+    contract-repair 的正当性来源是"模型的 resolver 标签与用户自己措辞里的
+    metric/object 槽位矛盾"。若驱动这次覆盖的指标压根不是从用户措辞编译出来的
+    (纯粹是模型填的槽), 那就不是"措辞与标签矛盾", 而是拿模型的一个猜测去推翻
+    模型的另一个判断 —— 没有任何一方更可信, 不该覆盖。
+
+    2026-07-31 prod 实拍: 「全部门店最近30天盘点亏了多少」
+      contract-repair resolver STOCK_SHORTAGE -> WASTAGE_TOP metrics=('wastage',)
+    而该问句经 _detect_requested_metrics 编译出的指标是**空的** —— 那个 wastage
+    完全来自 LLM, planner 本来是对的。
+
+    ⚠️ 刻意【不】复用 explicit_requested_metrics: 它只在
+    `llm_semantics_authoritative and allow_explicit_slot_repair` 都为真时才计算,
+    那两个标志回答的是"要不要让确定性词压过模型槽位", 与"用户到底说没说这个指标"
+    是两件事。
+    """
+    if not repair_metrics:
+        return False
+    return bool(set(_detect_requested_metrics(query)) & set(repair_metrics))
+
+
 def _validated_semantic_tuple(value: Any, allowed: frozenset[str]) -> Optional[Tuple[str, ...]]:
     """Validate an LLM list without silently turning a malformed value into data."""
     if value is None:
@@ -777,6 +802,15 @@ def _plan_requested_intents(
             )
         elif metric == "wastage":
             code = "RESTAURANT_OPS_WASTAGE_TOP"
+        elif metric == "requisition_cost":
+            # 2026-07-31 补入。这条分支链此前不认识 requisition_cost —— 于是
+            # 「采购花了多少钱」的规划结果是**原样回显 LLM 选的 code**, 而
+            # contract-repair 的触发条件之一是 `code not in planned_intents`,
+            # 回显自己让这个条件永远为假, **修复通道从来没被走到过**。
+            # 后果: 同一问句在四个场合漂到四个不同的 intent
+            # (sales_volume / RECIPE_COST / STORE_MARGIN / 又一次 RECIPE_COST)。
+            # 该指标唯一由 REQUISITION_TREND 声明, 无歧义。
+            code = "RESTAURANT_OPS_REQUISITION_TREND"
         elif metric == "sales_volume":
             if "store" in dimensions and "dish" in dimensions:
                 code = (
@@ -1567,6 +1601,14 @@ _CONTRACT_REPAIRABLE_METRICS = frozenset({
     "revenue",
     "orders",
     "staffing",
+    # 2026-07-31 补入。`requisition_cost` 由 `_REQUISITION_SPEND_RE` **事后注入**,
+    # 不在 `_REQUEST_METRIC_RULES` 里 —— 于是逐条过 rules 补这张白名单时看不见它,
+    # 一直漏着。后果: 「采购花了多少钱」的指标被确定性地定对了, 但 LLM 规划的
+    # resolver 与它冲突时 contract-repair 拒绝介入, 错的 resolver 一路走到答案。
+    # 同一问句已在三个场合漂到三个不同的 intent(SALES_SUMMARY / RECIPE_COST /
+    # STORE_MARGIN) —— 不是词汇表问题, 是修复通道没接上。
+    # 它是唯一由 REQUISITION_TREND 声明的指标, 修复目标无歧义(有用例钉住)。
+    "requisition_cost",
 })
 
 
@@ -1915,7 +1957,42 @@ def _build_spec(
         len(planned_intents) == 1
         and (not code or code not in planned_intents)
         and supported_requested_metrics
+        # 🔴 覆盖 planner 已经给出的 resolver, 必须由【用户措辞编译出的指标】驱动。
+        #
+        # 下面那段注释写着本次覆盖的全部正当性来源: "its raw resolver label is not
+        # executable when it contradicts the metric/object slots in **the user's own
+        # wording**"。但原条件是 `bool(code) or bool(explicit_requested_metrics)` ——
+        # 只要 planner 给了 resolver 就成立, 于是一个**纯粹由 LLM 编出来的指标槽**
+        # 也能否决 planner 自己的判断。那不是"用户措辞与模型标签矛盾", 而是拿模型的
+        # 一个猜测去推翻模型的另一个判断, 没有任何一方更可信。
+        #
+        # 2026-07-31 prod 实拍(MOCK_REST): 「全部门店最近30天盘点亏了多少」
+        #   contract-repair resolver RESTAURANT_OPS_STOCK_SHORTAGE -> WASTAGE_TOP
+        #       metrics=('wastage',)
+        # 而该问句经 _detect_requested_metrics 编译出的指标是**空的**(表里没有盘点类
+        # 指标, 且「亏了」不在 gross_margin 的 token 里) —— 那个 wastage 完全来自 LLM。
+        # planner 本来是对的, 被自己的另一半推翻了。
+        #
+        # 反过来, planner 没给 resolver 时(code 为空)用 LLM 指标编译出一个来是正当的:
+        # 那不是覆盖任何判断, 是唯一的执行入口。所以条件写成"要么有用户措辞证据,
+        # 要么根本没有可覆盖的对象"。
+        #
+        # ⚠️ 这里【不能】直接用 explicit_requested_metrics: 它只在
+        # `llm_semantics_authoritative and allow_explicit_slot_repair` 都为真时才计算,
+        # 那两个标志回答的是"要不要让确定性词压过模型槽位", 而本 guard 要问的是
+        # "用户到底说没说这个指标" —— 两件事。用前者会把"标志没开"误判成"用户没说",
+        # 第一版就是这么写的, 一次跑挂 23 个正当用例(它们大多没设那两个标志)。
+        #
+        # ⚠️ 下面这条是【追加】不是替换 —— 原条件必须原样保留。
+        # 第一版我把它替换成了 `... or not code`, 结果在「planner 没给 resolver 且无
+        # 用户指标」这一格里从 False 变成 True, **反而让 repair 在原本不该触发的地方
+        # 触发**(实测挂了 chart/regression 那条: 本该 clarification_needed=True 却出了
+        # 一个计划)。这个 guard 的作用只能是【更严】, 任何时候都不该放宽。
         and (bool(code) or bool(explicit_requested_metrics))
+        and (
+            not code
+            or _repair_backed_by_user_wording(effective_query, supported_requested_metrics)
+        )
         and repair_target_serves_dimensions
         and all(
             metric in _CONTRACT_REPAIRABLE_METRICS

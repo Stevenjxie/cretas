@@ -483,6 +483,52 @@ public class BomWorkflowRevisionService {
                         "BOM_WORKFLOW_MAIN_OUTPUT_REQUIRED"));
     }
 
+    /**
+     * 该配方钉住的那个产出, 其<b>生产工序</b>是不是「实际产出语义」({@code ACTUAL_IO})。
+     *
+     * <p>🔴 为什么需要问这个: {@link #resolveTerminalOutputs} 在 ACTUAL_IO 下会按顺序<b>自动</b>
+     * 给产出编号 —— {@code terminalIndex == 0 ? "MAIN" : "BY_PRODUCT"}, 并在那里注明这只是
+     * 「compatibility-only storage metadata, <b>not authored or shown to users</b>」。
+     * 也就是说这种模式下的 {@code BY_PRODUCT} <b>不是用户标的副产品</b>, 只是个占位值。</p>
+     *
+     * <p>客户 2026-07-31 现场: 一对多 workflow(两个都是正经成品)生成 BOM 后点「检查并生效」,
+     * 被 {@code BomRecipeServiceImpl#validateByProductCreditRules} 拦下要求填
+     * 「单位可变现净值」—— 一个他从没被问过、界面上也找不到的字段。</p>
+     *
+     * <p>⚠️ 认不出时返回 {@code false}(= 当作用户真标的副产品, 保持原校验), 这是保守方向:
+     * 宁可多校验, 不可把真副产品放过去。</p>
+     */
+    @Transactional(readOnly = true)
+    public boolean targetProducedUnderActualIoSemantics(String factoryId, BomRecipe recipe) {
+        if (recipe == null || recipe.getWorkflowRevisionId() == null
+                || recipe.getTargetTerminalNodeId() == null
+                || recipe.getTargetTerminalNodeId().isBlank()) {
+            return false;
+        }
+        return revisionRepository.findByIdAndFactoryId(recipe.getWorkflowRevisionId(), factoryId)
+                .map(revision -> {
+                    try {
+                        ProductProcessWorkflowDTO definition = revisionSnapshotService.definition(revision);
+                        String producerNodeId = resolveTerminalOutputs(definition).stream()
+                                .filter(output -> recipe.getTargetTerminalNodeId()
+                                        .equals(output.terminalNodeId()))
+                                .map(TerminalOutput::producerProcessNodeId)
+                                .findFirst()
+                                .orElse(null);
+                        if (producerNodeId == null || definition.getNodes() == null) {
+                            return false;
+                        }
+                        return definition.getNodes().stream()
+                                .filter(node -> producerNodeId.equals(node.getId()))
+                                .anyMatch(WorkflowActualIoSemantics::enabled);
+                    } catch (RuntimeException ignored) {
+                        // 快照解析不出来时不猜 —— 保持原有校验
+                        return false;
+                    }
+                })
+                .orElse(false);
+    }
+
     @Transactional(readOnly = true)
     public List<TerminalOutput> resolveTerminalOutputsForRevision(
             String factoryId,
@@ -1009,36 +1055,28 @@ public class BomWorkflowRevisionService {
         return canonicalUnit(left).equals(canonicalUnit(right));
     }
 
+    /**
+     * Workflow snapshots historically store display labels while BOM rows store canonical codes,
+     * so both sides go through the unit contract before deciding that a material input disappeared
+     * during slot re-keying.
+     *
+     * <p>⚠️ 这里原来是**手抄的一份** 21 组别名表。抄出来的表会漂，而且已经漂了:
+     * 权威表里 {@code crate} 的别名是「框、筐」，抄本写的是「筐、篮」——「框」在抄本里落 default
+     * 成了它自己，「篮」则是抄本独有。改成直接问权威表，从此不会再漂。</p>
+     *
+     * <p>NFKC 归一保留: 快照里出现过全角/兼容字符, 权威表的 key 是半角的。</p>
+     */
     private static String canonicalUnit(String value) {
-        // Workflow snapshots historically store display labels while BOM rows store canonical
-        // codes. Keep immutable snapshots readable by applying the same built-in aliases as the
-        // unit contract before deciding that a material input disappeared during slot re-keying.
-        String normalized = Normalizer.normalize(value, Normalizer.Form.NFKC)
-                .trim()
-                .toLowerCase(Locale.ROOT);
-        return switch (normalized) {
-            case "毫克", "mg" -> "mg";
-            case "公斤", "千克", "kg" -> "kg";
-            case "克", "g" -> "g";
-            case "斤", "jin" -> "jin";
-            case "吨", "t" -> "t";
-            case "毫升", "ml" -> "ml";
-            case "升", "l" -> "l";
-            case "件", "个", "只", "pcs" -> "pcs";
-            case "份", "portion" -> "portion";
-            case "盒", "box" -> "box";
-            case "箱", "case" -> "case";
-            case "袋", "bag" -> "bag";
-            case "包", "pack" -> "pack";
-            case "瓶", "bottle" -> "bottle";
-            case "罐", "can" -> "can";
-            case "筐", "篮", "crate" -> "crate";
-            case "桶", "pail" -> "pail";
-            case "卷", "roll" -> "roll";
-            case "片", "slice" -> "slice";
-            case "项", "item" -> "item";
-            default -> normalized;
-        };
+        // NFKC 先做: 快照里出现过全角/兼容字符, 权威表的 key 是半角的。
+        String normalized = Normalizer.normalize(value, Normalizer.Form.NFKC);
+        // ⚠️ 这一处**刻意**用 canonicalCodeOrRaw (把 件/个/只 一并折成 pcs), 而不是
+        // crossLanguageCode。快照 slot re-keying 判的是「这个投入槽位还在不在」, 本就要认
+        // 本地化写法 —— 见 BomWorkflowRevisionServiceTest
+        // #localizedCountUnitMatchesCanonicalBomUnitDuringStableSlotRekeying:
+        //     unitsCompatible("pcs","只") / ("个","只") 都断言为 true。
+        // #1976「一只 ≠ 一件」管的是**数量/库存换算**(见 ProductionStockAllocationServiceImpl),
+        // 不管槽位匹配; 两者别混。
+        return com.cretas.aims.service.unit.impl.UnitContractServiceImpl.canonicalCodeOrRaw(normalized);
     }
 
     private static BigDecimal decimal(Object value) {

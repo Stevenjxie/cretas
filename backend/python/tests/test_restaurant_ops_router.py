@@ -2945,6 +2945,43 @@ def test_generic_sales_ranking_executes_sealed_descending_plan_not_margin_report
     assert "米饭(单人份)" not in result.answer_text
 
 
+def test_margin_ranking_does_not_execute_sales_volume_ranking():
+    """「毛利最低的菜品有哪些」不得被答成「卖得最差的菜」。
+
+    上面那条用例锁的是反方向 (要销量不得给毛利报告); 这条锁的是它的对偶,
+    此前**只有前者有用例**, 后者一直漏着。
+
+    R14 那个按销量直排的分支 (「不涉及成本, 不需要毛利覆盖」) 是为
+    「哪道菜卖得最好/最差」写的, 但进入条件只看**有没有排序方向** ——
+    而「毛利最低」同样解析出 ranking_direction='worst', 于是毛利问题掉进销量分支,
+    产出一份完全不含毛利的销量榜, 措辞却读起来毫无破绽。
+
+    prod 实测 (MOCK_REST, 2026-07-31): 问「毛利最低的菜品」拿回的是
+    「菜品销量排行（卖得最差前 5）」。当时挡住它的是答案契约
+    (margin_value / margin_integrity / request_coverage 三项缺失 → 降级成澄清),
+    所以用户看到的是「答不出来」而不是一个错的答案 —— 契约做对了事, 但根因在
+    resolver。契约是最后一道网, 不该拿它当这条路径的正确性保证。
+    """
+    result = asyncio.run(_r.resolve_gross_margin(
+        _gross_margin_pool(_dish_rows()),
+        "RES_TEST",
+        role="restaurant_manager",
+        query="全部门店最近30天毛利最低的菜品有哪些",
+        requested_metrics=("gross_margin",),
+        analysis_action="lookup",
+        ranking_direction="worst",
+        ranking_limit=5,
+    ))
+
+    # 不能是销量榜
+    assert "菜品销量排行" not in (result.title or "")
+    assert "销量排行" not in result.answer_text
+    assert result.meta.get("dish_ranking") is None
+    # 必须走真·毛利路径: 出毛利口径, 且带口径自检 (契约 margin_integrity 要它)
+    assert "毛利" in result.answer_text
+    assert result.meta.get("marginInvariantPass") is True
+
+
 def test_generic_sales_ranking_no_data_does_not_fall_back_to_margin_wording():
     result = asyncio.run(_r.resolve_gross_margin(
         _gross_margin_pool([]),
@@ -3854,3 +3891,31 @@ def test_absolute_range_is_not_swallowed_into_the_dish_slot():
     assert D("全部门店6月3日至6月18日营收多少") is None
     # 区间与菜名同时出现时, 菜名仍要抽得出来
     assert D("全部门店6月3号到18号米饭的销量") == "米饭"
+
+
+def test_stocktaking_howmuch_is_deterministic_not_llm_dependent():
+    """「盘点亏了多少」必须确定性命中 STOCK_SHORTAGE, 不能落到 LLM 去抖。
+
+    2026-07-31 prod 审计实拍: planner 本来选对了 STOCK_SHORTAGE, 但 LLM 把 metrics
+    填成 ('wastage',), contract-repair 就忠实地按那个指标把 resolver 改写成
+    WASTAGE_TOP —— 「盘点亏了多少」被答成损耗榜。同一句话在每日 timer 的三轮里都是对的,
+    所以它不是稳定缺陷, 是【确定性覆盖的缺口】: WASTAGE_TOP 的 group-2 一直有 "多少",
+    而 STOCK_SHORTAGE 的没有。补齐这个不对称, 它就不再看 LLM 脸色。
+    """
+    from smartbi.gold.restaurant.restaurant_ops_router import _OPS_PATTERNS
+
+    def first_match(query: str):
+        for code, groups in _OPS_PATTERNS:
+            if all(any(kw in query for kw in group) for group in groups):
+                return code
+        return None
+
+    assert first_match("全部门店最近30天盘点亏了多少") == "RESTAURANT_OPS_STOCK_SHORTAGE"
+    assert first_match("本月盘亏了多少") == "RESTAURANT_OPS_STOCK_SHORTAGE"
+
+    # 对照: 损耗那条不受影响, 仍归损耗
+    assert first_match("全部门店最近30天损耗了多少") == "RESTAURANT_OPS_WASTAGE_TOP"
+
+    # 反向: "多少" 不能把无关问句吸进盘点 —— group-1 仍要求盘点类专有词
+    assert first_match("本月营收多少") != "RESTAURANT_OPS_STOCK_SHORTAGE"
+    assert first_match("这个月卖了多少钱") != "RESTAURANT_OPS_STOCK_SHORTAGE"

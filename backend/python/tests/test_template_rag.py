@@ -57,14 +57,42 @@ async def test_vector_only_high_confidence_returns_vector():
 
 @pytest.mark.asyncio
 async def test_vector_only_ambiguous_returns_none():
-    """0.70 ≤ sim < 0.85 with no keyword match → None (LLM fallback)."""
+    """MIN_USEFUL ≤ sim < HIGH_CONFIDENCE with no keyword match → None (LLM fallback).
+
+    ⚠️ 用例原本硬编码 0.78 当「模糊区」样本, 因为写的时候 HIGH_CONFIDENCE 是 0.85。
+    Apr 26 2026 (v4 B2-A) 按 923 条 prod 模糊未命中日志把阈值降到 **0.78**,
+    于是 0.78 变成「命中」而不是「模糊」—— 用例从那天起一直红着, 而 python 套件
+    既不在 push 门禁里 (`python-lint-test` 挂 `if: inputs.full_audit`),
+    那一步又以 `|| true` 结尾, 所以没人看见。
+
+    改成从常量本身取样本, 阈值再调这条用例也不会假红。
+    """
+    ambiguous_sim = (MIN_USEFUL + HIGH_CONFIDENCE) / 2
+    assert MIN_USEFUL <= ambiguous_sim < HIGH_CONFIDENCE
     pool = AsyncMock()
     with patch(
         "smartbi.services.template_rag.cosine_topk",
-        new=AsyncMock(return_value=[("dish_sales_top_n", 0.78, "菜品销量")]),
+        new=AsyncMock(return_value=[("dish_sales_top_n", ambiguous_sim, "菜品销量")]),
     ):
         r = await hybrid_match(pool, "卖得咋样", keyword_code=None)
     assert r is None
+
+
+@pytest.mark.asyncio
+async def test_vector_only_at_high_confidence_boundary_serves_template():
+    """恰好等于 HIGH_CONFIDENCE 要服务模板 —— 边界是闭区间 (`>=`)。
+
+    上面那条用例正是因为「模糊区样本」悄悄变成了边界值才红的, 这里把边界本身钉死。
+    """
+    pool = AsyncMock()
+    with patch(
+        "smartbi.services.template_rag.cosine_topk",
+        new=AsyncMock(return_value=[("dish_sales_top_n", HIGH_CONFIDENCE, "菜品销量")]),
+    ):
+        r = await hybrid_match(pool, "卖得咋样", keyword_code=None)
+    assert r is not None
+    assert r.via == "vector_only"
+    assert r.template_code == "dish_sales_top_n"
 
 
 @pytest.mark.asyncio

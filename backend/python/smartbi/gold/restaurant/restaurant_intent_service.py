@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from smartbi.gold.customer_text import (
@@ -34,6 +35,7 @@ from smartbi.gold.restaurant.restaurant_ops_router import (
     dish_catalogue_scope,
     extract_store_mentions,
     resolve_by_code as _resolve_tiered,
+    resolver_supports_explicit_window,
 )
 
 logger = logging.getLogger(__name__)
@@ -295,11 +297,17 @@ def _clarification_structured_context(spec: RestaurantQuerySpec) -> Dict[str, An
     )
 
 
-def _strip_store_scope(seed: str, store_names: Sequence[str] = ()) -> str:
-    """把问句开头已有的门店范围剥掉, 免得拼成「全部门店模拟·X店最近30天…」。
+def _split_store_scope(
+    seed: str, store_names: Sequence[str] = (),
+) -> Tuple[str, str]:
+    """把问句开头已有的门店范围切下来 → ``(前缀, 余下)``, 前缀可能是空串。
 
-    只剥**开头**的完整范围词/店名; 绝不在句中乱删, 那会改变问题本身
+    只切**开头**的完整范围词/店名; 绝不在句中乱删, 那会改变问题本身
     (「哪家店」这种词出现在句中是问题的一部分)。
+
+    换门店按钮只要「余下」(见 `_strip_store_scope`); 换**时间**按钮要把前缀原样
+    拼回去, 否则「全部门店上个月…」点一下会退化成「本月…」—— 悄悄把范围从全部
+    门店换成了会话继承的那个, 用户只想换时间。
     """
     text = (seed or "").strip()
     prefixes = ["全部门店", "所有门店", "全部店", "各门店"]
@@ -310,8 +318,90 @@ def _strip_store_scope(seed: str, store_names: Sequence[str] = ()) -> str:
     )
     for prefix in prefixes:
         if text.startswith(prefix):
-            return text[len(prefix):].strip()
-    return text
+            return prefix, text[len(prefix):].strip()
+    return "", text
+
+
+def _strip_store_scope(seed: str, store_names: Sequence[str] = ()) -> str:
+    """`_split_store_scope` 的余下那一半 (换门店按钮用)。"""
+    return _split_store_scope(seed, store_names)[1]
+
+
+# 换时间按钮给出的候选窗口。与 `_clarification_followups` 的时间澄清选项**同源**
+# —— 两处一漂, 用户就会在澄清里看到一组窗口、在按钮上看到另一组。
+_SWITCHABLE_WINDOWS: Tuple[str, ...] = ("本月", "上个月", "最近7天", "最近30天")
+
+# 问句开头可能出现的时间说法。只用于**剥离**, 比 `_SWITCHABLE_WINDOWS` 宽:
+# 用户会写「这个月」「上周」, 而按钮只回给规范说法。长的排前面, 免得
+# 「最近7天」被「最近7」之类的短前缀截半 (排序在下面统一做)。
+_STRIPPABLE_TIME_PREFIXES: Tuple[str, ...] = _SWITCHABLE_WINDOWS + (
+    "这个月", "本周", "上周", "本季度", "上季度", "今天", "昨天", "前天",
+    "今年", "去年", "最近三十天", "最近七天", "最近30日", "最近7日",
+)
+
+# 绝对月份/日期写法: 「2026年6月」「2026年6月份」。
+_ABSOLUTE_TIME_PREFIX_RE = re.compile(r"^\d{4}年\d{1,2}月份?")
+
+
+def _split_time_scope(seed: str) -> Tuple[str, str]:
+    """把问句开头的时间说法切下来 → ``(前缀, 余下)``, 前缀可能是空串。
+
+    与 `_split_store_scope` 同一条纪律: 只动**开头**。句中的时间词是问题的一部分
+    (「六月比七月高多少」里的月份不能碰)。
+    """
+    text = (seed or "").strip()
+    match = _ABSOLUTE_TIME_PREFIX_RE.match(text)
+    if match:
+        return match.group(0), text[match.end():].strip()
+    for prefix in sorted(_STRIPPABLE_TIME_PREFIXES, key=len, reverse=True):
+        if text.startswith(prefix):
+            return prefix, text[len(prefix):].strip()
+    return "", text
+
+
+def _time_window_switch_followups(context: Dict[str, Any]) -> List[Dict[str, str]]:
+    """答案末尾的「换时间范围」按钮。
+
+    门店范围已有显式出口(`_store_scope_switch_followups`), 时间范围没有 —— 用户
+    想「同一个问题看上个月」只能自己重新打一遍问句。
+
+    🔴 只在 resolver **真的会按请求的窗口取数**时才给。判据是签名里有没有
+    `date_range`, 即 `resolve_by_code` 过滤 kwargs 用的同一条 —— 见
+    `resolver_supports_explicit_window` 里为什么不能用 `_RESOLVER_DIMENSIONS['time']`。
+    给一个拿不到窗口的 resolver 配按钮, 点下去会「看起来有反应、其实答的是另一个
+    时间窗」, 比按钮报错更隐蔽。
+    """
+    if not resolver_supports_explicit_window(context.get("intent")):
+        return []
+    seed = str(context.get("question_seed") or "")
+    if not seed.strip():
+        # 拼不出完整问句就不给按钮 —— 与换范围按钮同一条纪律。
+        return []
+    store_prefix, remainder = _split_store_scope(
+        seed,
+        store_names=[
+            name for name in (context.get("store_options") or [])
+            if isinstance(name, str)
+        ],
+    )
+    current_window, body = _split_time_scope(remainder)
+    if not body:
+        # 整句就是一个时间词, 换掉之后什么都不剩。
+        return []
+    # 当前窗口不再给一遍。两个来源都要排除: 规划层的 window_label, 以及问句里
+    # 实际写着的那个 —— 后者在 window_label 缺失时是唯一线索。
+    already = {
+        str(context.get("window_label") or "").strip(),
+        current_window.strip(),
+    }
+    return [
+        {
+            "label": f"看{window}",
+            "question": f"{store_prefix}{window}{body}",
+        }
+        for window in _SWITCHABLE_WINDOWS
+        if window not in already
+    ][:2]
 
 
 def _store_scope_switch_followups(context: Dict[str, Any]) -> List[Dict[str, str]]:
@@ -368,20 +458,14 @@ def _store_scope_switch_followups(context: Dict[str, Any]) -> List[Dict[str, str
 
 
 def _topic_followups(context: Dict[str, Any]) -> List[Dict[str, str]]:
-    topic_kind = context.get("topic_kind")
-    if topic_kind in ("dish_ranking", "store_ranking"):
-        noun = "哪个菜卖得最好" if topic_kind == "dish_ranking" else "哪家店业绩最好"
-        current_window = str(context.get("window_label") or "")
-        windows = ["本月", "上个月", "最近30天"]
-        alternatives = [window for window in windows if window != current_window][:2]
-        return [
-            {
-                "label": f"看{window}",
-                "question": f"{window}{noun}？",
-            }
-            for window in alternatives
-        ]
-
+    # ⛔ 这里原本有一个 dish_ranking / store_ranking 的时间按钮分支, 2026-07-31
+    # 删除。它发的是**写死的泛问句**(「本月哪个菜卖得最好？」): 问「上个月毛利最低
+    # 的三道菜」点「看本月」, 回来的是一个**换了问题**的答案, 而标签读起来是
+    # 「同一个问题、换个月」。时间按钮现在统一走 `_time_window_switch_followups`
+    # (复用原问句 + 能力闸), 只有一条路径。
+    #
+    # 覆盖面不减: 这两类话题由 GROSS_MARGIN / STORE_MARGIN / SALES_SUMMARY 承接,
+    # 三个都声明了 date_range, 都会拿到时间按钮。
     focus = context.get("focus_entity")
     if not isinstance(focus, dict) or not focus.get("name"):
         return []
@@ -414,7 +498,11 @@ def _suggested_followups(context: Dict[str, Any]) -> List[Dict[str, str]]:
     """
     combined: List[Dict[str, str]] = []
     seen = set()
-    for item in (*_topic_followups(context), *_store_scope_switch_followups(context)):
+    for item in (
+        *_topic_followups(context),
+        *_time_window_switch_followups(context),
+        *_store_scope_switch_followups(context),
+    ):
         question = item.get("question")
         if not question or question in seen:
             continue

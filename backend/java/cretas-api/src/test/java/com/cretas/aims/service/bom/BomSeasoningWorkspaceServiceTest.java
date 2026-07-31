@@ -350,7 +350,17 @@ class BomSeasoningWorkspaceServiceTest {
 
         var process = response.getProcesses().getFirst();
         assertEquals(BigDecimal.ONE, process.getStandardBasisQuantity());
-        assertEquals("袋", process.getStandardBasisUnit());
+        // 2026-07-31: 期望值从「袋」改为规范码 "bag"。
+        //
+        // 旧期望**编码的是缺陷本身**: 当时这里用一张只有 7 组的私有别名表, 「盒」在表里 → 归一成
+        // "box" (上一个用例断言的正是 "box"), 而「袋」不在表里 → 原样留着。同一个字段一会儿是
+        // 英文码一会儿是中文, 取决于那张表恰好收没收 —— 而这正是客户 2026-07-31 撞到的那类错。
+        // 改成走权威表后全部是规范码, 与上一个用例的 "box" 一致。
+        //
+        // ⚠️ 不是把中文单位换成英文给用户看: 前端 businessUnitLabel → displayUnit →
+        // UNIT_LABELS['bag'] = 「袋」, 界面显示不变。这个字段同时还喂端口单位冲突检测,
+        // 那里必须是规范码, 否则「袋」和「bag」会被数成两种单位。
+        assertEquals("bag", process.getStandardBasisUnit());
         assertTrue(process.isStandardUsageSupported());
     }
 

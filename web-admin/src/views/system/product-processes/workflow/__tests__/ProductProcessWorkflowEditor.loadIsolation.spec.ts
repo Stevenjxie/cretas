@@ -823,7 +823,14 @@ describe('ProductProcessWorkflowEditor load identity isolation', () => {
 
     const savePromise = vm.saveDraft();
     await flushPromises();
-    expect(apiMocks.getProductProcessWorkflow).toHaveBeenCalledTimes(2);
+    // 🔴 不能断言「恰好 2 次」: 编辑器有 2.5s 防抖自动保存 (AUTO_SAVE_DELAY),
+    // 上面 onViewportChangeEnd 已把 dirty 置为 true。整套跑起来机器一忙, 本用例
+    // 耗时越过 2.5s, autosave 就会再存一次 → 同样撞 409 → 冲突恢复再拉一次,
+    // 计数变成 3。这条断言只是脚手架 (确认冲突确实触发了重载), 用例真正要证的
+    // 是下面两条「切到 PT-B 后 stale 的 PT-A 响应不会覆盖它」。
+    //
+    // 表现: 单独跑此文件 10/10 绿, 跟全套一起跑偶发红 —— 与机器负载相关而与代码无关。
+    expect(apiMocks.getProductProcessWorkflow.mock.calls.length).toBeGreaterThanOrEqual(2);
 
     await wrapper.setProps({ productTypeId: 'PT-B', productName: 'Product B' });
     await flushPromises();

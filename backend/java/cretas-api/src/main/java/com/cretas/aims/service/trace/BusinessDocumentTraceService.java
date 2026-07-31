@@ -6,6 +6,8 @@ import com.cretas.aims.entity.ProductionPlan;
 import com.cretas.aims.entity.enums.ReturnType;
 import com.cretas.aims.entity.inventory.InternalTransfer;
 import com.cretas.aims.entity.inventory.PurchaseOrder;
+import com.cretas.aims.entity.inventory.PurchaseReceiveRecord;
+import com.cretas.aims.entity.inventory.SalesDeliveryRecord;
 import com.cretas.aims.entity.inventory.SalesOrder;
 import com.cretas.aims.exception.ResourceNotFoundException;
 import com.cretas.aims.repository.ProductionPlanRepository;
@@ -253,7 +255,78 @@ public class BusinessDocumentTraceService {
                 .direction(direction)
                 .relation(relation)
                 .occurredAt(occurredAt)
+                .details(detailsOf(entity))
                 .build();
+    }
+
+    /**
+     * 从**已经读出来的**实体上摘几个关键字段, 供前端就地展开 (客户 2026-07-31: 追踪里看详情不跳页)。
+     *
+     * <p>只在这一个地方按类型分派 —— 12 个 {@code document(...)} 调用点一个都不用改。</p>
+     *
+     * <p>字段口径: 只放**看一眼就能确认"是不是这张单"**的东西 (对方是谁 / 什么时候 / 多少钱),
+     * 不做完整详情页的替代品。金额与日期在这里格式化成字符串, 前端不再猜类型。</p>
+     *
+     * <p>🔴 拿不到的字段**直接不放**, 不塞 "—" 占位 —— 占位符会让前端渲染出一行空标签,
+     * 用户以为"这张单没有客户", 而事实是"这个字段没填"。少一行比多一行假信息好。</p>
+     *
+     * <p>没列到的单据类型返回空列表, 前端只显示链路本身已有的字段并说明原因。刻意不 fallback
+     * 到反射遍历: 那会把内部字段名 (乃至价格/成本) 无差别吐给所有角色。</p>
+     */
+    private List<BusinessDocumentTraceResponse.Field> detailsOf(BaseEntity entity) {
+        List<BusinessDocumentTraceResponse.Field> out = new ArrayList<>();
+        if (entity instanceof SalesOrder so) {
+            put(out, "客户", so.getCustomerName());
+            put(out, "下单日期", text(so.getOrderDate()));
+            put(out, "订单金额", money(so.getTotalAmount()));
+            put(out, "收货地址", so.getDeliveryAddress());
+            put(out, "备注", so.getRemark());
+        } else if (entity instanceof PurchaseOrder po) {
+            put(out, "供应商", po.getSupplierName());
+            put(out, "下单日期", text(po.getOrderDate()));
+            put(out, "预计到货", text(po.getExpectedDeliveryDate()));
+            put(out, "订单金额", money(po.getTotalAmount()));
+            put(out, "备注", po.getRemark());
+        } else if (entity instanceof PurchaseReceiveRecord rcv) {
+            put(out, "供应商", rcv.getSupplierName());
+            put(out, "收货日期", text(rcv.getReceiveDate()));
+            put(out, "收货金额", money(rcv.getTotalAmount()));
+            put(out, "备注", rcv.getRemark());
+        } else if (entity instanceof SalesDeliveryRecord dlv) {
+            put(out, "客户", dlv.getCustomerName());
+            put(out, "发货日期", text(dlv.getDeliveryDate()));
+            put(out, "发货金额", money(dlv.getTotalAmount()));
+            put(out, "收货地址", dlv.getDeliveryAddress());
+            put(out, "备注", dlv.getRemark());
+        } else if (entity instanceof ProductionPlan pp) {
+            put(out, "计划数量", text(pp.getPlannedQuantity()));
+            put(out, "实际数量", text(pp.getActualQuantity()));
+            put(out, "计划日期", text(pp.getPlannedDate()));
+            put(out, "批次日期", text(pp.getBatchDate()));
+        } else if (entity instanceof InternalTransfer it) {
+            put(out, "调拨类型", asText(it.getTransferType()));
+            put(out, "调出工厂", it.getSourceFactoryId());
+            put(out, "调入工厂", it.getTargetFactoryId());
+            put(out, "备注", it.getRemark());
+        }
+        return out;
+    }
+
+    /** 空白一律跳过 —— 见 detailsOf 的注释: 少一行好过一行假信息。 */
+    private void put(List<BusinessDocumentTraceResponse.Field> out, String label, String value) {
+        if (value == null || value.isBlank()) {
+            return;
+        }
+        out.add(BusinessDocumentTraceResponse.Field.builder().label(label).value(value.trim()).build());
+    }
+
+    private String text(Object value) {
+        return value == null ? null : String.valueOf(value);
+    }
+
+    /** 金额统一两位小数 + ¥, 免得前端对着 BigDecimal 的科学计数法再猜一次。 */
+    private String money(java.math.BigDecimal value) {
+        return value == null ? null : "¥" + value.setScale(2, java.math.RoundingMode.HALF_UP).toPlainString();
     }
 
     /** {@code source_order_ids @> '["<id>"]'} 的右操作数; 走 JSON 字符串转义避免注入。 */

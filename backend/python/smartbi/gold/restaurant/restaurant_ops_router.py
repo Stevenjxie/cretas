@@ -48,7 +48,15 @@ _OPS_PATTERNS: List[Tuple[str, List[List[str]]]] = [
     (
         "RESTAURANT_OPS_STOCK_SHORTAGE",
         [["盘点", "盘亏", "盘损", "库存差异", "账实差"],
-         ["哪个", "哪些", "最多", "前", "top", "TOP", "排名", "频率", "经常"]],
+         # 🔴 "多少" 是 2026-07-31 补的, 修的是一处【与损耗规则的不对称】: 上面
+         # WASTAGE_TOP 的 group-2 一直有 "多少"(「损耗了多少」确定性命中), 这里没有,
+         # 于是「盘点亏了多少」两条规则都不命中 → 落到 LLM → 抖。实测抖出来的样子是:
+         # planner 本来选对了 STOCK_SHORTAGE, 但 LLM 把 metrics 填成 ('wastage',),
+         # contract-repair 就忠实地按那个指标把 resolver 改写成 WASTAGE_TOP,
+         # 于是「盘点亏了多少」被答成损耗榜。同一句话在别的轮次是对的(每日 timer 三轮
+         # 全 OK), 所以它不是稳定缺陷而是【确定性覆盖的缺口】, 补上就不再看 LLM 脸色。
+         # 不会过宽: group-1 已要求出现「盘点/盘亏/盘损/库存差异/账实差」这类专有词。
+         ["哪个", "哪些", "最多", "前", "top", "TOP", "排名", "频率", "经常", "多少"]],
     ),
     # Per-store margin (MUST come BEFORE dish-level gross_margin):
     # "哪家店赚钱" = store scope, not dish scope. Group-1 = store scope,
@@ -1642,6 +1650,34 @@ def _actual_window_text(start_date: Any, end_date: Any, requested_days: int) -> 
     return f"最近 {requested_days} 天"
 
 
+def _explicit_window(
+    date_range: Optional[Tuple[Optional[date], Optional[date]]],
+    window_label: Optional[str],
+    days: int,
+) -> Tuple[Optional[date], Optional[date], str]:
+    """把 ``date_range``/``window_label`` 化成 ``(起, 止, 显示文案)``。
+
+    唯一入口。三个 resolver(损耗/领料/盘点)都要「按请求的窗口取数并如实标注」,
+    各写一份必然漂 —— 今天已经因为「同一件事有五套私有实现」栽过一次(PR #2079)。
+
+    显示文案在有显式区间时**总是带上具体日期**:「上个月（2026-06-01 至 2026-06-30）」。
+    裸标签和它取代的「近 30 天」一样不可证伪, 读者没法核对口径。
+    没有区间时退回滚动窗口的说法, 与只传 ``days`` 的老调用方保持一致。
+    """
+    start = date_range[0] if date_range else None
+    end = date_range[1] if date_range else None
+    if (start is None) != (end is None):
+        # 半个区间会让缺的那一侧悄悄退回滚动窗 —— 同样是「看着答了、答的是别的窗口」。
+        raise ValueError("date_range must include both start and end")
+    if start and end:
+        text = f"{_date_text(start)} 至 {_date_text(end)}"
+        if window_label and window_label not in text:
+            text = f"{window_label}（{text}）"
+    else:
+        text = f"近 {days} 天"
+    return start, end, text
+
+
 def _format_sales_quantity(value: Any) -> str:
     """Format POS quantities without turning a positive sale into zero."""
     quantity = float(value or 0)
@@ -2695,13 +2731,27 @@ def _wastage_rank_axis(query: str) -> str:
 async def resolve_wastage_top(
     smartbi_pool, factory_id: str, days: int = 30, top_n: int = 10,
     query: str = "",
+    date_range: Optional[Tuple[Optional[date], Optional[date]]] = None,
+    window_label: Optional[str] = None,
 ) -> OpsAnswer:
-    """Top N wastage ingredients + wastage type breakdown, last N days.
+    """Top N wastage ingredients + wastage type breakdown for the asked window.
 
     Ranks by cost when the question asks about money, otherwise by quantity.
     Both numbers are always shown so the ranking is self-explanatory.
+
+    ``date_range`` must be declared here even though the SQL could be written
+    against ``days`` alone: ``resolve_by_code`` filters kwargs down to each
+    resolver's signature, so a parameter that is not declared is dropped
+    **silently**. That is exactly how this resolver spent its life answering a
+    rolling window — the planner computed 2026-06-01..2026-06-30 for 「上个月」,
+    ``_resolver_kwargs`` reduced it to ``days=30``, and the range never arrived.
+    The answer then read 「近 30 天」 over July numbers while the user had asked
+    about June. Callers that pass only ``days`` keep the rolling behaviour.
     """
     rank_axis = _wastage_rank_axis(query)
+    window_start, window_end, window_text = _explicit_window(
+        date_range, window_label, days,
+    )
     order_expr, axis_label, axis_is_money = _WASTAGE_RANK_AXES[rank_axis]
     async with smartbi_pool.acquire() as conn:
         await conn.execute("SELECT set_config('app.factory_id', $1, false)", factory_id)
@@ -2719,23 +2769,25 @@ async def resolve_wastage_top(
               FROM agg_restaurant_daily_ops a
               JOIN dim_ingredient i ON a.dim_value_id = i.ingredient_id
              WHERE a.factory_id = $1 AND a.kpi_kind IN ('wastage_qty', 'wastage_cost')
-               AND a.date >= CURRENT_DATE - ($2::int)
+               AND a.date >= COALESCE($4::date, CURRENT_DATE - ($2::int))
+               AND ($5::date IS NULL OR a.date <= $5::date)
              GROUP BY i.name, i.category, i.unit
              ORDER BY {order_expr} DESC NULLS LAST
              LIMIT $3
             """,
-            factory_id, days, top_n,
+            factory_id, days, top_n, window_start, window_end,
         )
         type_rows = await conn.fetch(
             """
             SELECT a.dim_value_str AS type, SUM(a.value_num)::float AS cost
               FROM agg_restaurant_daily_ops a
              WHERE a.factory_id = $1 AND a.kpi_kind = 'wastage_cost_by_type'
-               AND a.date >= CURRENT_DATE - ($2::int)
+               AND a.date >= COALESCE($3::date, CURRENT_DATE - ($2::int))
+               AND ($4::date IS NULL OR a.date <= $4::date)
              GROUP BY a.dim_value_str
              ORDER BY cost DESC NULLS LAST
             """,
-            factory_id, days,
+            factory_id, days, window_start, window_end,
         )
         total = await conn.fetchrow(
             """
@@ -2743,9 +2795,11 @@ async def resolve_wastage_top(
                    COALESCE(SUM(wastage_cost_total), 0)::float AS total_cost,
                    COALESCE(SUM(wastage_count), 0)::int AS total_count
               FROM agg_restaurant_daily_totals
-             WHERE factory_id = $1 AND date >= CURRENT_DATE - ($2::int)
+             WHERE factory_id = $1
+               AND date >= COALESCE($3::date, CURRENT_DATE - ($2::int))
+               AND ($4::date IS NULL OR date <= $4::date)
             """,
-            factory_id, days,
+            factory_id, days, window_start, window_end,
         )
 
     type_name_map = {
@@ -2776,7 +2830,7 @@ async def resolve_wastage_top(
         f"{i+1}. {'**' + r['name'] + '**' if i == 0 else r['name']} "
         f"({r['category'] or '—'}): {_row_metrics(r)}"
         for i, r in enumerate(top_rows)
-    ]) or "(近 %d 天无损耗记录)" % days
+    ]) or f"({window_text}无损耗记录)"
 
     type_summary = "、".join([
         f"{type_name_map.get(r['type'], r['type'])} ¥{r['cost']:.2f}"
@@ -2809,7 +2863,7 @@ async def resolve_wastage_top(
         top_block = f"{top_heading}:\n\n{top_list_text}"
 
     answer = (
-        f"近 {days} 天损耗总览:\n"
+        f"{window_text}损耗总览:\n"
         f"{totals_line}\n"
         f"- 损耗类型分布: {type_summary}\n\n"
         f"{top_block}\n\n"
@@ -2823,7 +2877,7 @@ async def resolve_wastage_top(
     if top_rows and not cost_axis_unavailable:
         charts.append({
             "chartType": "bar",
-            "title": f"近{days}天{top_heading}",
+            "title": f"{window_text}{top_heading}",
             "xAxis": {"data": [r["name"] for r in top_rows]},
             "series": [{
                 "name": "损耗成本" if axis_is_money else "损耗量",
@@ -2843,7 +2897,7 @@ async def resolve_wastage_top(
 
     return OpsAnswer(
         code="RESTAURANT_OPS_WASTAGE_TOP",
-        title=f"近{days}天损耗分析",
+        title=f"{window_text}损耗分析",
         answer_text=answer,
         charts=charts,
         kpis=[
@@ -2858,6 +2912,13 @@ async def resolve_wastage_top(
         ],
         meta={
             "window_days": days,
+            # The window actually queried, not the one requested: the daily
+            # audit compares these against the asked range, which is the only
+            # way a silent reversion to a rolling window shows up as a failure
+            # rather than as a plausible-looking answer.
+            "window_start": _date_text(window_start) if window_start else None,
+            "window_end": _date_text(window_end) if window_end else None,
+            "window_label": window_label,
             "top_n": top_n,
             "rank_axis": rank_axis,
             "cost_axis_unavailable": cost_axis_unavailable,
@@ -2870,8 +2931,18 @@ async def resolve_wastage_top(
 
 async def resolve_stock_shortage(
     smartbi_pool, factory_id: str, days: int = 30, top_n: int = 10,
+    date_range: Optional[Tuple[Optional[date], Optional[date]]] = None,
+    window_label: Optional[str] = None,
 ) -> OpsAnswer:
-    """Top N stocktaking shortage ingredients, last N days."""
+    """Top N stocktaking shortage ingredients for the window that was asked for.
+
+    ``date_range`` must be declared: undeclared kwargs are dropped **silently**
+    by ``resolve_by_code``, which is how this resolver answered 「上个月盘点差异」
+    with a window ending today — see `_explicit_window` and PR #2076.
+    """
+    window_start, window_end, window_text = _explicit_window(
+        date_range, window_label, days,
+    )
     async with smartbi_pool.acquire() as conn:
         await conn.execute("SELECT set_config('app.factory_id', $1, false)", factory_id)
         rows = await conn.fetch(
@@ -2881,13 +2952,14 @@ async def resolve_stock_shortage(
               FROM agg_restaurant_daily_ops a
               JOIN dim_ingredient i ON a.dim_value_id = i.ingredient_id
              WHERE a.factory_id = $1 AND a.kpi_kind = 'stocktaking_shortage_qty'
-               AND a.date >= CURRENT_DATE - ($2::int)
+               AND a.date >= COALESCE($4::date, CURRENT_DATE - ($2::int))
+               AND ($5::date IS NULL OR a.date <= $5::date)
              GROUP BY i.name, i.category, i.unit
              HAVING SUM(a.value_num) > 0
              ORDER BY shortage_qty DESC NULLS LAST
              LIMIT $3
             """,
-            factory_id, days, top_n,
+            factory_id, days, top_n, window_start, window_end,
         )
         total = await conn.fetchrow(
             """
@@ -2895,18 +2967,20 @@ async def resolve_stock_shortage(
                    COALESCE(SUM(stocktaking_surplus_total), 0)::float AS surplus,
                    COALESCE(SUM(stocktaking_count), 0)::int AS count
               FROM agg_restaurant_daily_totals
-             WHERE factory_id = $1 AND date >= CURRENT_DATE - ($2::int)
+             WHERE factory_id = $1
+               AND date >= COALESCE($3::date, CURRENT_DATE - ($2::int))
+               AND ($4::date IS NULL OR date <= $4::date)
             """,
-            factory_id, days,
+            factory_id, days, window_start, window_end,
         )
 
     top_text = "\n".join([
         f"{i+1}. {'**' + r['name'] + '**' if i == 0 else r['name']} ({r['category'] or '—'}): 盘亏 {r['shortage_qty']:.2f} {r['unit'] or ''}"
         for i, r in enumerate(rows)
-    ]) or f"(近 {days} 天无盘亏记录)"
+    ]) or f"({window_text}无盘亏记录)"
 
     answer = (
-        f"近 {days} 天盘点总览:\n"
+        f"{window_text}盘点总览:\n"
         f"- 盘点 {total['count']} 次, 盘亏总量 **{total['shortage']:.2f}**, 盘盈总量 {total['surplus']:.2f}\n\n"
         f"盘亏食材前 {len(rows)} 名:\n\n{top_text}\n\n"
         f"建议动作:\n"
@@ -2918,14 +2992,14 @@ async def resolve_stock_shortage(
     if rows:
         charts.append({
             "chartType": "bar",
-            "title": f"近{days}天盘亏食材前 {len(rows)} 名",
+            "title": f"{window_text}盘亏食材前 {len(rows)} 名",
             "xAxis": {"data": [r["name"] for r in rows]},
             "series": [{"name": "盘亏量", "type": "bar", "data": [r["shortage_qty"] for r in rows]}],
         })
 
     return OpsAnswer(
         code="RESTAURANT_OPS_STOCK_SHORTAGE",
-        title=f"近{days}天盘点差异分析",
+        title=f"{window_text}盘点差异分析",
         answer_text=answer,
         charts=charts,
         kpis=[
@@ -2934,7 +3008,12 @@ async def resolve_stock_shortage(
             {"title": "盘盈总量", "value": f"{total['surplus']:.1f}", "rawValue": total["surplus"]},
             {"title": "盘亏最多食材", "value": rows[0]["name"] if rows else "—", "rawValue": 0},
         ],
-        meta={"window_days": days, "top_n": top_n},
+        meta={
+            "window_days": days, "top_n": top_n,
+            "window_start": _date_text(window_start) if window_start else None,
+            "window_end": _date_text(window_end) if window_end else None,
+            "window_label": window_label,
+        },
     )
 
 
@@ -3024,8 +3103,20 @@ async def resolve_recipe_cost(
 
 async def resolve_requisition_trend(
     smartbi_pool, factory_id: str, days: int = 30, top_n: int = 10,
+    date_range: Optional[Tuple[Optional[date], Optional[date]]] = None,
+    window_label: Optional[str] = None,
 ) -> OpsAnswer:
-    """Requisition trend + Top N ingredients by qty, last N days."""
+    """Requisition trend + Top N ingredients for the window that was asked for.
+
+    ``date_range`` must be declared here: ``resolve_by_code`` filters kwargs down
+    to each resolver's signature, so an undeclared parameter is dropped
+    **silently** and the SQL quietly falls back to a window ending today. That is
+    how this resolver answered 「上个月领料趋势」 with July numbers under a
+    「近 30 天」 heading — the same defect PR #2076 fixed for wastage.
+    """
+    window_start, window_end, window_text = _explicit_window(
+        date_range, window_label, days,
+    )
     async with smartbi_pool.acquire() as conn:
         await conn.execute("SELECT set_config('app.factory_id', $1, false)", factory_id)
         trend = await conn.fetch(
@@ -3033,10 +3124,12 @@ async def resolve_requisition_trend(
             SELECT date, requisition_qty_total::float AS qty,
                    requisition_cost_total::float AS cost
               FROM agg_restaurant_daily_totals
-             WHERE factory_id = $1 AND date >= CURRENT_DATE - ($2::int)
+             WHERE factory_id = $1
+               AND date >= COALESCE($3::date, CURRENT_DATE - ($2::int))
+               AND ($4::date IS NULL OR date <= $4::date)
              ORDER BY date
             """,
-            factory_id, days,
+            factory_id, days, window_start, window_end,
         )
         top = await conn.fetch(
             """
@@ -3045,12 +3138,13 @@ async def resolve_requisition_trend(
               FROM agg_restaurant_daily_ops a
               JOIN dim_ingredient i ON a.dim_value_id = i.ingredient_id
              WHERE a.factory_id = $1 AND a.kpi_kind = 'requisition_qty'
-               AND a.date >= CURRENT_DATE - ($2::int)
+               AND a.date >= COALESCE($4::date, CURRENT_DATE - ($2::int))
+               AND ($5::date IS NULL OR a.date <= $5::date)
              GROUP BY i.name, i.category, i.unit
              ORDER BY qty DESC NULLS LAST
              LIMIT $3
             """,
-            factory_id, days, top_n,
+            factory_id, days, top_n, window_start, window_end,
         )
 
     total_qty = sum(r["qty"] or 0 for r in trend)
@@ -3058,10 +3152,10 @@ async def resolve_requisition_trend(
     top_text = "\n".join([
         f"{i+1}. {'**' + r['name'] + '**' if i == 0 else r['name']} ({r['category'] or '—'}): {r['qty']:.2f} {r['unit'] or ''}"
         for i, r in enumerate(top)
-    ]) or "(近 %d 天无领料记录)" % days
+    ]) or f"({window_text}无领料记录)"
 
     answer = (
-        f"近 {days} 天领料总览:\n"
+        f"{window_text}领料总览:\n"
         f"- 总量 {total_qty:.2f} 单位, 估算成本 **¥{total_cost:.2f}**, {len(trend)} 天有活动\n\n"
         f"领用食材前 {len(top)} 名:\n\n{top_text}\n\n"
         f"建议动作:\n"
@@ -3071,7 +3165,7 @@ async def resolve_requisition_trend(
     )
     charts = [{
         "chartType": "line",
-        "title": f"近{days}天领料数量趋势",
+        "title": f"{window_text}领料数量趋势",
         "xAxis": {"data": [r["date"].isoformat() for r in trend]},
         "series": [{"name": "领料量", "type": "line", "data": [r["qty"] for r in trend]}],
     }]
@@ -3085,7 +3179,7 @@ async def resolve_requisition_trend(
 
     return OpsAnswer(
         code="RESTAURANT_OPS_REQUISITION_TREND",
-        title=f"近{days}天领料趋势与食材前 {top_n} 名",
+        title=f"{window_text}领料趋势与食材前 {top_n} 名",
         answer_text=answer,
         charts=charts,
         kpis=[
@@ -3094,7 +3188,12 @@ async def resolve_requisition_trend(
             {"title": "活动天数", "value": len(trend), "rawValue": len(trend)},
             {"title": "领用最多食材", "value": top[0]["name"] if top else "—", "rawValue": 0},
         ],
-        meta={"window_days": days, "top_n": top_n},
+        meta={
+            "window_days": days, "top_n": top_n,
+            "window_start": _date_text(window_start) if window_start else None,
+            "window_end": _date_text(window_end) if window_end else None,
+            "window_label": window_label,
+        },
     )
 
 
@@ -3137,6 +3236,21 @@ async def resolve_gross_margin(
         requested_metric_set
         and requested_metric_set.issubset({"sales_volume"})
         and resolved_ranking_direction
+    )
+    # 🔴 「毛利最低的菜品有哪些」曾被答成「卖得最差的菜」。
+    #
+    # 下面 R14 那个按销量直排的分支 (见「不涉及成本, 不需要毛利覆盖」那段注释) 是为
+    # 「哪道菜卖得最好/最差」写的, 但它的进入条件只看**有没有排序方向**。而
+    # 「毛利最低」同样解析出 ranking_direction='worst', 于是毛利问题掉进了销量分支,
+    # 产出一份完全不含毛利的销量榜 —— 排序口径整个换掉了, 而措辞读起来毫无破绽。
+    #
+    # 拦住它的是答案契约 (margin_value / margin_integrity / request_coverage 三项缺失
+    # → 降级成澄清), 也就是说**用户看到的是「答不出来」而不是一个错的答案** ——
+    # 契约做对了事, 但根因在这里。
+    #
+    # 判据只看**要的是哪个指标**, 不看方向词: 用户点名要毛利/利润, 就不能拿销量榜充数。
+    margin_ranking_requested = bool(
+        requested_metric_set & {"gross_margin", "net_profit"}
     )
     from smartbi_compat._rbac_strip import PRICE_VIEW_ROLES
     can_view_prices = bool(role) and role in PRICE_VIEW_ROLES
@@ -3451,7 +3565,11 @@ async def resolve_gross_margin(
     # 销量直接排; 不涉及成本, 不需要毛利覆盖。
     resolved_ranking_direction = (
         resolved_ranking_direction
-        if not dish_scope_row and len(dish_candidates) < 2 else None
+        if not dish_scope_row
+        and len(dish_candidates) < 2
+        # 见函数开头 margin_ranking_requested 的说明: 要毛利就不能走这条销量榜。
+        and not margin_ranking_requested
+        else None
     )
     if resolved_ranking_direction:
         requested_rank_limit = (
@@ -7493,6 +7611,29 @@ _RESOLVERS = {
 def is_supported_restaurant_ops_code(code: Optional[str]) -> bool:
     """Return whether an internal caller supplied a known restaurant intent."""
     return isinstance(code, str) and code in _RESOLVERS
+
+
+def resolver_supports_explicit_window(code: Optional[str]) -> bool:
+    """这个 intent 的 resolver 会不会真正按**请求的时间窗**取数。
+
+    判据就是 ``resolve_by_code`` 过滤 kwargs 用的那一条: 它只把 resolver 签名里
+    声明过的参数传下去, 没声明的**静默丢弃** —— 不报错, 只是悄悄退回
+    ``CURRENT_DATE - days`` 的滚动窗口。所以「签名里有没有 date_range」既决定
+    窗口能不能传到, 也就决定了「换时间范围」按钮的承诺成不成立; 两者复用同一个
+    机制, 不可能漂。
+
+    ⛔ 不要改用 ``_RESOLVER_DIMENSIONS['time']``: 那张表里的 time 是「能不能**按**
+    时间拆」(把结果按时间分组), 与「能不能**换**时间窗」无关, 实测两个方向都判错
+    —— WASTAGE_TOP 没有 time 却真能换窗口(误拒), STAFFING_ADVICE 有 time 却拿不到
+    date_range(误放, 更危险)。
+
+    这是**必要条件而非充分条件**: 声明了不等于用对了。充分性由各 resolver 自己的
+    测试保证(见 tests/test_restaurant_wastage_window.py)。
+    """
+    resolver = _RESOLVERS.get(code or "")
+    if resolver is None:
+        return False
+    return "date_range" in inspect.signature(resolver).parameters
 
 
 async def resolve_by_code(

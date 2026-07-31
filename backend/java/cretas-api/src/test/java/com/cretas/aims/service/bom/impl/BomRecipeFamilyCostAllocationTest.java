@@ -28,6 +28,7 @@ import java.util.List;
 import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
@@ -209,6 +210,36 @@ class BomRecipeFamilyCostAllocationTest {
         assertThat(error.getErrorCode()).isEqualTo("BOM_FAMILY_ALLOCATION_INVALID");
     }
 
+    /**
+     * 🔴 客户 2026-07-31 现场: 一对多 workflow(成品C + 成品D, <b>两个都是正经成品</b>)
+     * 生成 BOM 后点「检查并生效」, 被拦下要求填「单位可变现净值」。
+     *
+     * <p>根因: 「实际产出语义」下 {@code BomWorkflowRevisionService} 按顺序<b>自动</b>编号
+     * ({@code terminalIndex == 0 ? "MAIN" : "BY_PRODUCT"}), 那段代码自己注明这只是
+     * 「compatibility-only storage metadata, not authored or shown to users」——
+     * 第 2 个产出被无声标成副产品, 而这道校验拿它当真, 要一个用户从没被问过的字段。</p>
+     */
+    @Test
+    void activationSkipsNrvWhenTheByProductLabelWasAutoAssignedByActualIoSemantics() {
+        BomRecipe main = outputContract(
+                "RECIPE-A", "FG-MAIN", "TERM-MAIN", BomRecipe.OutputRole.MAIN, "100");
+        BomRecipe autoLabelled = outputContract(
+                "RECIPE-B", "FG-SECOND", "TERM-SECOND", BomRecipe.OutputRole.BY_PRODUCT, "0");
+        autoLabelled.setOutputQuantityPerUnit(BigDecimal.ONE);
+        // 这个产出的生产工序是「实际产出语义」→ BY_PRODUCT 只是占位, 不是用户标的
+        when(bomWorkflowRevisionService.targetProducedUnderActualIoSemantics(
+                autoLabelled.getFactoryId(), autoLabelled)).thenReturn(true);
+
+        assertThatCode(() -> ReflectionTestUtils.invokeMethod(
+                service, "validateByProductCreditRules", List.of(main, autoLabelled)))
+                .as("自动编号出来的 BY_PRODUCT 不该要求填可变现净值")
+                .doesNotThrowAnyException();
+    }
+
+    /**
+     * 反向: 用户<b>真标</b>的副产品(非实际产出语义)仍然要求填 NRV —— 别把豁免开成全局。
+     * 副产的正式模型(盘点时标注关联并抵扣)另行立项, 在那之前这条不放松。
+     */
     @Test
     void activationRejectsByProductWithoutNrv() {
         BomRecipe main = outputContract(

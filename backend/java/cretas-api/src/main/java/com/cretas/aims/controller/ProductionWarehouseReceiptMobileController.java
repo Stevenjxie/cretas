@@ -157,19 +157,15 @@ public class ProductionWarehouseReceiptMobileController {
         return units.size() == 1 ? units.iterator().next() : null;
     }
 
+    /**
+     * \u8d70\u7cfb\u7edf\u6743\u5a01\u522b\u540d\u8868\u3002\u539f\u6765\u53ea\u8ba4 kg/\u516c\u65a4/\u5343\u514b \u548c g/\u514b \u4e24\u7ec4\uff0c\u800c\u5b83\u5582\u7684\u662f
+     * {@link #commonOutputUnit} \u7684\u53bb\u91cd\u96c6\u5408 \u2014\u2014 \u540c\u4e00\u4e2a\u5355\u4f4d\u7684\u4e24\u79cd\u5199\u6cd5 (\u300c\u888b\u300d/\u300cbag\u300d\u3001
+     * \u300c\u4ef6\u300d/\u300c\u4e2a\u300d) \u4f1a\u88ab\u6570\u6210\u4e24\u79cd\uff0c\u4e8e\u662f {@code units.size() == 1} \u4e0d\u6210\u7acb\uff0c
+     * \u300c\u5171\u540c\u5355\u4f4d\u300d\u88ab\u5224\u6210\u6ca1\u6709\u3002\u4e0e 2026-07-31 \u62a5\u5de5/\u7ed3\u5355\u90a3\u4e24\u5904\u540c\u4e00\u4e2a\u6839\u56e0\u3002
+     */
     private String canonicalUnit(String value) {
-        String normalized = trimToNull(value);
-        if (normalized == null) {
-            return null;
-        }
-        String lower = normalized.toLowerCase(Locale.ROOT);
-        if (Set.of("kg", "\u516c\u65a4", "\u5343\u514b").contains(lower)) {
-            return "kg";
-        }
-        if (Set.of("g", "\u514b").contains(lower)) {
-            return "g";
-        }
-        return lower;
+        return com.cretas.aims.service.unit.impl.UnitContractServiceImpl
+                .crossLanguageCode(trimToNull(value));
     }
 
     private Long currentUserId() {

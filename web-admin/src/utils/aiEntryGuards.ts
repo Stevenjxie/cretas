@@ -1,4 +1,4 @@
-import { canonicalUnitCode } from './unitPricing';
+import { canonicalUnitCode, displayUnit, sameUnit } from './unitPricing';
 
 export type AiProductCandidate = {
   id?: unknown;
@@ -54,8 +54,9 @@ export function productionPlanAiGuard(
   const massConvertible = MASS_UNITS.has(requestedUnit) && MASS_UNITS.has(skuUnit);
   const skuHasWeightBridge = Number(product.gramsPerUnit) > 0
     && (MASS_UNITS.has(requestedUnit) || MASS_UNITS.has(skuUnit));
-  if (requestedUnit !== skuUnit && !massConvertible && !skuHasWeightBridge) {
-    return `AI 数量单位为 ${requestedUnit}，但 SKU 单位为 ${skuUnit}。请按 SKU 单位重新描述数量。`;
+  if (!sameUnit(requestedUnit, skuUnit) && !massConvertible && !skuHasWeightBridge) {
+    // 提示里必须用中文: skuUnit 是规范码, 直接插值会显示「SKU 单位为 bag」(Steve 2026-07-31)
+    return `AI 数量单位为 ${displayUnit(requestedUnit)}，但 SKU 单位为 ${displayUnit(skuUnit)}。请按 SKU 单位重新描述数量。`;
   }
   return null;
 }

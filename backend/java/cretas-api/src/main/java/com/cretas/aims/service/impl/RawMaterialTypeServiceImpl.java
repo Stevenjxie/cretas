@@ -172,6 +172,8 @@ public class RawMaterialTypeServiceImpl implements RawMaterialTypeService {
         }
         materialType.setName(dto.getName());
         materialType.setCategory(materialCategory);
+        // 副产标记与 category 正交; 禁降级: null 当 false, 不猜
+        materialType.setIsByproduct(Boolean.TRUE.equals(dto.getIsByproduct()));
         materialType.setUnit(dto.getUnit());
         materialType.setStorageType(packaging ? null : dto.getStorageType());
         materialType.setShelfLifeDays(dto.getShelfLifeDays());
@@ -799,6 +801,7 @@ public class RawMaterialTypeServiceImpl implements RawMaterialTypeService {
                 .businessCode(materialType.getBusinessCode())
                 .name(materialType.getName())
                 .category(materialType.getCategory())
+                .isByproduct(Boolean.TRUE.equals(materialType.getIsByproduct()))
                 .unit(materialType.getUnit())
                 .materialReferencePrice(materialType.getUnitPrice())
                 .materialReferencePriceUnit(materialType.getUnit())

@@ -28,6 +28,17 @@ import type { TableRow } from '@/types/api';
 // 客户张权反馈 (2026-07-02): "辅料 添加剂全混在一起了" — 「添加原辅料」对话框的「关联原料」
 // 下拉需按上方「物料类别」筛选, 归类逻辑复用 procurement/receives/list.vue 同款共享工具。
 import { bigCategoryOf, type BigCategory } from '@/utils/materialCategory';
+// 配方内容的四个页签(含第四类「副产」)判定统一走这里 —— 见 bomCategoryTabs.ts 头注释:
+// 「加了新的一类, 但承载它的某一处没跟上」是本仓最高频 bug, 散在 SFC 里的 if/else 钉不住。
+import {
+  bomTabAddButtonLabel,
+  bomTabAllowsMaterial,
+  bomTabItemLabel,
+  isBomCategoryTab,
+  matchBomCategory,
+  normalizeRecipeMaterialCategory,
+  type BomCategoryTab,
+} from './bomCategoryTabs';
 import {
   canonicalUnitCode,
   displayUnit,
@@ -736,37 +747,20 @@ async function confirmBomUnitCompatibility(): Promise<boolean> {
   return false;
 }
 
-function normalizeRecipeMaterialCategory(value: unknown): 'RAW' | 'AUXILIARY' | 'PACKAGING' {
-  const category = String(value || '').toUpperCase();
-  if (category === 'PACKAGING' || category === '包材') return 'PACKAGING';
-  if (category === 'AUXILIARY' || category === '辅料' || category === '调味料') return 'AUXILIARY';
-  return 'RAW';
-}
-
-// 客户张权反馈 (2026-07-02): 「添加原辅料」对话框的「物料类别」只有 RAW/AUXILIARY/PACKAGING 三档
-// (对应 原料/辅料/包材), 没有独立的"调料"档。AUXILIARY 沿用 normalizeRecipeMaterialCategory 的口径
-// (把"调味料"也算进 AUXILIARY), 所以映射到物料主数据大类时, 辅料档同时放行"辅料"+"调料"两个
-// bigCategoryOf 桶 (二者本来就是"非原料非包材的配方成分", 不细分不会让物料消失于筛选结果)。
-const MATERIAL_CATEGORY_TO_BIG_CATEGORIES: Record<'RAW' | 'AUXILIARY' | 'PACKAGING', BigCategory[]> = {
-  RAW: ['原料'],
-  AUXILIARY: ['辅料', '调料'],
-  PACKAGING: ['包材'],
-};
 
 // 「关联原料」下拉按当前选中的「物料类别」筛选 materialTypes, 避免几十项混杂 (客户反馈的
 // 吸塑盒/乳酸链球菌素/玉米淀粉/透明气调膜 混在一起的问题)。未识别类别("其他"桶)的物料
 // 不因未选中的类别而永久消失 — 只在其对应类别被选中时才不出现，这里按设计保守处理:
 // "其他" 桶物料只在没有更精确归类时才会出现，为了不"藏"数据 (fool-proof-design Rule 5 宁缺勿藏)，
-// 三个类别里找不到归属的物料仍归入 RAW 档展示 (与 normalizeRecipeMaterialCategory 默认落 RAW 一致)。
+// 找不到归属的物料仍归入 RAW 档展示 (与 normalizeRecipeMaterialCategory 默认落 RAW 一致)。
+// 各页签放行规则见 bomTabAllowsMaterial (副产档看标记, 其余档看材质大类)。
 const filteredMaterialTypesForBomForm = computed<TableRow[]>(() => {
   const matCat = normalizeRecipeMaterialCategory(bomForm.value.materialCategory);
-  const allowed = new Set<BigCategory>(MATERIAL_CATEGORY_TO_BIG_CATEGORIES[matCat]);
-  return materialTypes.value.filter((m) => {
-    const big = bigCategoryOf(m.category as string | undefined);
-    // "其他"桶只在 RAW 档下兜底展示 (未归类物料默认按原料处理, 不因筛选彻底消失于任一档).
-    if (big === '其他') return matCat === 'RAW';
-    return allowed.has(big);
-  });
+  // 判据收敛在 bomTabAllowsMaterial: 副产页签看**标记**, 其余页签看**材质**大类。
+  // 🔴 副产 SKU 照样出现在原料页签 —— 「副产以后能当原料被别的 workflow 投入」的落点。
+  return materialTypes.value.filter((m) => bomTabAllowsMaterial(
+    matCat, m as { isByproduct?: unknown }, bigCategoryOf(m.category as string | undefined),
+  ));
 });
 
 function packagingClassificationKey(material: Record<string, unknown> | undefined): string {
@@ -783,6 +777,10 @@ const substituteCandidates = computed<TableRow[]>(() => {
   const candidates = filteredMaterialTypesForBomForm.value.filter(
     (item) => item.id !== bomForm.value.materialTypeId,
   );
+  // 副产是产出声明, 没有「替代料」这回事 —— 替代的是投入什么, 不是产出什么。
+  // 后端 BomItemSubstituteServiceImpl 的父项类别白名单本来就 fail-closed 拒它,
+  // 这里不给选是为了别让用户白填一遍再吃 400。
+  if (bomForm.value.materialCategory === 'BYPRODUCT') return [];
   if (bomForm.value.materialCategory !== 'PACKAGING') return candidates;
   const selectedKey = packagingClassificationKey(selectedMaterialRecord());
   if (!selectedKey) return [];
@@ -822,11 +820,9 @@ function validateSubstituteInputs(): boolean {
   return true;
 }
 
-const bomItemCategoryLabel = computed(() => {
-  if (bomForm.value.materialCategory === 'PACKAGING') return '包材';
-  if (bomForm.value.materialCategory === 'AUXILIARY') return '工序辅料';
-  return '原料';
-});
+const bomItemCategoryLabel = computed(
+  () => bomTabItemLabel(normalizeRecipeMaterialCategory(bomForm.value.materialCategory)),
+);
 
 function packagingUsagePerOutput(row: BomItemRow): string {
   const outputUnit = displayUnit(skuBaseUnit.value);
@@ -1421,6 +1417,16 @@ async function submitBomForm() {
     // 原料/辅料只建立配方资格关系；实际投料由计划和正式报工记录。
     bomForm.value.standardQuantity = null;
     bomForm.value.yieldRate = null;
+  } else if (bomForm.value.materialCategory === 'BYPRODUCT') {
+    // 副产填的是**预计产出量**, 不是包材用量 —— 用于报工时预填与偏差提示。
+    // 走 standardQuantity 而不是 naturalQuantity: naturalQuantity 是包装层级的兼容字段,
+    // 后端 applyPackagingLevel 对非包材行会把它连同 packagingRole 一起置空。
+    const expectedOutput = Number(bomForm.value.standardQuantity);
+    if (!Number.isFinite(expectedOutput) || expectedOutput <= 0) {
+      ElMessage.warning('请填写大于 0 的预计产出量');
+      return;
+    }
+    bomForm.value.standardQuantity = expectedOutput;
   } else {
     const naturalQuantity = Number(bomForm.value.naturalQuantity);
     if (!Number.isFinite(naturalQuantity) || naturalQuantity <= 0) {
@@ -1489,7 +1495,10 @@ async function handleDeleteBomItem(row: TableRow) {
     const relationNotice = substituteCount > 0 ? `，并同时移除 ${substituteCount} 个替代料关系` : '';
     await ElMessageBox.confirm(
       `确定从当前 BOM 草稿中删除『${materialName}』${relationNotice}吗？仅删除当前草稿明细，不会删除物料档案、库存或历史已激活 BOM。`,
-      row.materialCategory === 'PACKAGING' ? '删除包材' : row.materialCategory === 'AUXILIARY' ? '删除辅料' : '删除原料',
+      // 逐字保留既有三档文案 (辅料这里一直叫「辅料」而不是弹窗里的「工序辅料」), 只补第四档。
+      row.materialCategory === 'BYPRODUCT' ? '删除副产'
+        : row.materialCategory === 'PACKAGING' ? '删除包材'
+          : row.materialCategory === 'AUXILIARY' ? '删除辅料' : '删除原料',
       { type: 'warning', confirmButtonText: '删除', cancelButtonText: '取消' },
     );
     const response = await bomRecipeApi.removeItem(factoryId.value, Number(row.id));
@@ -1878,25 +1887,20 @@ const groupedBomItems = computed(() => {
 
 const hasMultipleCategories = computed(() => groupedBomItems.value.length > 1);
 
-// P0-14: Tab filtering by materialCategory (RAW/AUXILIARY/PACKAGING)
-const activeCategoryTab = ref<'RAW' | 'AUXILIARY' | 'PACKAGING'>('RAW');
+// P0-14: Tab filtering by materialCategory (RAW/AUXILIARY/PACKAGING/BYPRODUCT)
+// 前三类是投入, BYPRODUCT 是产出声明 —— 判定统一走 ./bomCategoryTabs
+const activeCategoryTab = ref<BomCategoryTab>('RAW');
 function syncCategoryFromRoute() {
   const category = String(route.query.category || '').toUpperCase();
-  if (category === 'RAW' || category === 'AUXILIARY' || category === 'PACKAGING') {
+  if (isBomCategoryTab(category)) {
     activeCategoryTab.value = category;
   }
 }
 watch(() => route.query.category, syncCategoryFromRoute);
-function matchCategory(row: TableRow, code: 'RAW' | 'AUXILIARY' | 'PACKAGING') {
-  const c = String(row.materialCategory || row.category || '').toUpperCase();
-  if (code === 'RAW') return c === 'RAW' || c === '原材料' || c === '' || c === '其他';
-  if (code === 'AUXILIARY') return c === 'AUXILIARY' || c === '辅料' || c === '调味料';
-  if (code === 'PACKAGING') return c === 'PACKAGING' || c === '包材';
-  return false;
-}
-const rawItems = computed(() => bomItems.value.filter((i: TableRow) => matchCategory(i, 'RAW')));
-const auxiliaryItems = computed(() => bomItems.value.filter((i: TableRow) => matchCategory(i, 'AUXILIARY')));
-const packagingItems = computed(() => bomItems.value.filter((i: TableRow) => matchCategory(i, 'PACKAGING')));
+const rawItems = computed(() => bomItems.value.filter((i: TableRow) => matchBomCategory(i, 'RAW')));
+const auxiliaryItems = computed(() => bomItems.value.filter((i: TableRow) => matchBomCategory(i, 'AUXILIARY')));
+const packagingItems = computed(() => bomItems.value.filter((i: TableRow) => matchBomCategory(i, 'PACKAGING')));
+const byproductItems = computed(() => bomItems.value.filter((i: TableRow) => matchBomCategory(i, 'BYPRODUCT')));
 const activationChecklist = computed(() => [
   {
     label: '至少配置 1 项原料',
@@ -1918,10 +1922,19 @@ const activationChecklist = computed(() => [
     note: '未配置也可以生效',
     passed: true,
   },
+  {
+    label: '副产 可选，不作为生效前提',
+    note: '副产是产出声明，价值在盘点时确认',
+    passed: true,
+  },
 ]);
+// 🔴 刻意不写「除前三类之外一律 X」的兜底 —— 原来的写法是「除 RAW/AUXILIARY 之外一律
+// packagingItems」, 直接加第四个页签会让副产页签**若无其事地列出全部包材**(不报错、不空白)。
+// 现在每个页签显式对应自己的集合, 漏一个会 TS 报 not all code paths return。
 const currentTabItems = computed(() => {
   if (activeCategoryTab.value === 'RAW') return rawItems.value;
   if (activeCategoryTab.value === 'AUXILIARY') return auxiliaryItems.value;
+  if (activeCategoryTab.value === 'BYPRODUCT') return byproductItems.value;
   return packagingItems.value;
 });
 
@@ -2657,7 +2670,7 @@ watch(adjustDialogVisible, (visible) => {
                     :disabled="!bomConfigurationAllowed || configurationReadinessLoading"
                     data-testid="add-bom-item"
                     @click="handleAddBomItem"
-                  >{{ activeCategoryTab === 'PACKAGING' ? '添加包材' : '添加原料' }}</el-button>
+                  >{{ bomTabAddButtonLabel(activeCategoryTab) }}</el-button>
                 </span>
               </el-tooltip>
               <el-button size="small" @click="exportToExcel('material')">导出</el-button>
@@ -2682,6 +2695,7 @@ watch(adjustDialogVisible, (visible) => {
           <el-tab-pane name="RAW" :label="`原料（${rawItems.length}）`" />
           <el-tab-pane name="AUXILIARY" :label="`辅料（${auxiliaryItems.length}）· 可选`" />
           <el-tab-pane name="PACKAGING" :label="`包材（${packagingItems.length}）· 可选`" />
+          <el-tab-pane name="BYPRODUCT" :label="`副产（${byproductItems.length}）· 可选`" />
         </el-tabs>
 
         <div class="bom-content-context" :class="{ 'is-editable': selectedRecipeEditable }">
@@ -2760,9 +2774,18 @@ watch(adjustDialogVisible, (visible) => {
               <span v-else class="text-secondary">—</span>
             </template>
           </el-table-column>
-          <el-table-column label="替代物料" min-width="150" show-overflow-tooltip>
+          <!-- 副产是产出声明, 没有替代料 (替代的是投入什么, 不是产出什么) -->
+          <el-table-column v-if="activeCategoryTab !== 'BYPRODUCT'" label="替代物料" min-width="150" show-overflow-tooltip>
             <template #default="{ row }">
               <span :class="{ 'text-secondary': !row.substituteDetails?.length }">{{ substituteSummary(row) }}</span>
+            </template>
+          </el-table-column>
+          <el-table-column v-if="activeCategoryTab === 'BYPRODUCT'" label="预计产出" min-width="160">
+            <template #default="{ row }">
+              <span v-if="row.standardQuantity != null">
+                {{ formatFriendlyNumber(row.standardQuantity) }}{{ displayUnit(row.unit) }}
+              </span>
+              <span v-else class="text-secondary">未填预计产出</span>
             </template>
           </el-table-column>
           <el-table-column v-if="activeCategoryTab === 'PACKAGING'" label="每 1 份成品用量" min-width="210">
@@ -2773,12 +2796,14 @@ watch(adjustDialogVisible, (visible) => {
           <el-table-column prop="unit" :label="activeCategoryTab === 'PACKAGING' ? '档案单位' : '计量单位'" width="90" align="center">
             <template #default="{ row }">{{ displayUnit(row.unit) }}</template>
           </el-table-column>
-          <el-table-column v-if="canViewPrice" prop="unitPrice" label="自动单价" width="100" align="right">
+          <!-- 副产没有采购价, 也不进成本池 (后端 recomputeFamilyCosts 显式跳过) —— 展示单价/小计
+               会让人误以为它计入了成本。它的价值在**盘点**时确认, 用于抵扣主产品成本。 -->
+          <el-table-column v-if="canViewPrice && activeCategoryTab !== 'BYPRODUCT'" prop="unitPrice" label="自动单价" width="100" align="right">
             <template #default="{ row }">
               {{ formatFriendlyNumber(row.unitPrice, 4) }} {{ formatPriceUnit(row.priceUnit) }}
             </template>
           </el-table-column>
-          <el-table-column v-if="canViewPrice" label="小计" width="150" align="right">
+          <el-table-column v-if="canViewPrice && activeCategoryTab !== 'BYPRODUCT'" label="小计" width="150" align="right">
             <template #default="{ row }">
               <span v-if="bomLineAmountPreview(row).amount != null">
                 {{ formatFriendlyNumber(bomLineAmountPreview(row).amount, 4) }} 元
@@ -2800,7 +2825,8 @@ watch(adjustDialogVisible, (visible) => {
             </template>
           </el-table-column>
         </el-table>
-        <div v-if="canViewPrice && activeCategoryTab !== 'AUXILIARY'" class="table-footer">
+        <!-- 副产页签不显示「原料成本合计」—— 那是投入侧的合计, 副产行不在其中 -->
+        <div v-if="canViewPrice && activeCategoryTab !== 'AUXILIARY' && activeCategoryTab !== 'BYPRODUCT'" class="table-footer">
           <span class="total-label">{{ hasPendingActualMaterialUsage ? '成本归集状态:' : '原料成本合计:' }}</span>
           <span v-if="hasPendingActualMaterialUsage" class="total-value">实际原料用量待生产报工</span>
           <span v-else class="total-value">{{ formatFriendlyNumber(estimatedMaterialCost, 2) }} {{ costDisplayUnit }}</span>
@@ -3022,13 +3048,36 @@ watch(adjustDialogVisible, (visible) => {
           <div v-else class="form-tip">列表已按当前页签筛选，所选物料为必填。</div>
         </el-form-item>
         <el-alert
-          v-if="bomForm.materialCategory !== 'PACKAGING'"
+          v-if="bomForm.materialCategory !== 'PACKAGING' && bomForm.materialCategory !== 'BYPRODUCT'"
           type="info"
           :closable="false"
           show-icon
           title="原料与辅料在 BOM 中维护配方资格；本批计划投入和实际消耗由生产计划与正式报工记录。"
           style="margin-bottom: 12px;"
         />
+        <el-alert
+          v-if="bomForm.materialCategory === 'BYPRODUCT'"
+          type="info"
+          :closable="false"
+          show-icon
+          title="副产是产出声明，不计入配方成本，也不作为生效前提；它的价值在盘点时确认并抵扣主产品成本。"
+          style="margin-bottom: 12px;"
+        />
+        <el-form-item v-if="bomForm.materialCategory === 'BYPRODUCT'" label="预计产出量" required>
+          <div style="display: flex; align-items: center; gap: 8px; width: 100%;">
+            <el-input-number
+              v-model="bomForm.standardQuantity"
+              :min="0.000001"
+              :precision="4"
+              :step="0.01"
+              style="flex: 1;"
+            />
+            <span class="unit-suffix">{{ bomFormUnitLabel }}</span>
+          </div>
+          <div class="form-tip">
+            每生产 1{{ displayUnit(skuBaseUnit) }}成品预计产出多少该副产。报工时按此预填，实际重量以报工为准。
+          </div>
+        </el-form-item>
         <el-form-item v-if="bomForm.materialCategory === 'PACKAGING'" label="每 1 份成品使用量" required>
           <div style="display: flex; align-items: center; gap: 8px; width: 100%;">
             <el-input-number
@@ -3060,7 +3109,8 @@ watch(adjustDialogVisible, (visible) => {
             单位从物料字典自动带入；如不正确，请先修改物料档案。
           </div>
         </el-form-item>
-        <el-form-item label="替代物料（可选）">
+        <!-- 副产是产出声明, 没有替代料 —— 后端父项类别白名单也 fail-closed 拒它 -->
+        <el-form-item v-if="bomForm.materialCategory !== 'BYPRODUCT'" label="替代物料（可选）">
           <el-select
             v-model="bomForm.substituteMaterialTypeIds"
             multiple

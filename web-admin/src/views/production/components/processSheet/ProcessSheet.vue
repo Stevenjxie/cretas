@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref, computed, watch } from 'vue';
+import { displayProcessUnit } from '@/utils/processSheetUnits';
 import {
   getInventory, getRows, getWorkflowSheetConfig,
   type ProcessSheetInventoryItem, type ProcessSheetRowView, type WorkflowProcessDescriptor,
@@ -619,7 +620,7 @@ defineExpose({ hasUnsavedRows });
             </div>
             <div>
               <span>投入单位：{{ proc.inputUnit }}</span>
-              <span>产出单位：{{ proc.outputUnit || proc.inputUnit }}</span>
+              <span>产出单位：{{ displayProcessUnit(proc.outputUnit || proc.inputUnit) }}</span>
             </div>
           </section>
           <section class="process-flow-strip" :aria-label="`${proc.label} 投入到产出流程`">

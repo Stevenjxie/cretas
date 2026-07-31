@@ -80,6 +80,29 @@ class BomExpansionServiceTest {
         assertEquals("BOM_ACTIVE_RECIPE_REQUIRED", error.getErrorCode());
     }
 
+    /**
+     * 🔴 副产行是**产出声明**, 不能展开成领料需求 —— 那等于让人去领一个本该由生产产出的东西。
+     *
+     * <p>2026-07-31 走前端验收后补: BOM 第四类「副产」上线(V20261029_37 放开了
+     * chk_bri_category)后, 这里若不排除, 一条「预计产出 36kg 肥油」会变成 36kg 的领料需求。
+     * 同形缺陷在 PurchaseServiceImpl.expandSoItemsInto 也有一份(变成采购需求), 已一并修。</p>
+     */
+    @Test
+    void byproductRowIsNotExpandedIntoAMaterialRequirement() {
+        BomRecipeItem input = recipeItem("MAT-PORK", "猪蹄", "200", "80", "g");
+        BomRecipeItem byproduct = recipeItem("MAT-FEIYOU", "肥油", "36", "100", "kg");
+        byproduct.setMaterialCategory(BomRecipeItem.CATEGORY_BYPRODUCT);
+        when(bomRecipeItemRepository.findCurrentByProduct("F006", "PT-HOOF"))
+                .thenReturn(List.of(input, byproduct));
+
+        List<MaterialRequirement> requirements = service.expandBOM(
+                "F006", "PT-HOOF", new BigDecimal("10"));
+
+        // 阳性对照: 同一次展开里, 真正的投入行照常出现 —— 证明不是整条路径被堵死
+        assertEquals(1, requirements.size());
+        assertEquals("MAT-PORK", requirements.get(0).getMaterialTypeId());
+    }
+
     private BomRecipeItem recipeItem(
             String materialTypeId, String materialName, String quantity, String yieldRate, String unit) {
         BomRecipeItem item = new BomRecipeItem();

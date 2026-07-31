@@ -164,9 +164,39 @@ public class MaterialBatch extends BaseEntity {
     @Column(name = "inbound_type", length = 30)
     private InboundType inboundType;
 
-    /** 发起单类型 (P0-17): PURCHASE_RECEIVE / MATERIAL_REQUISITION_RETURN / SALES_RETURN / MANUAL_ADJUST */
+    /** 发起单类型 (P0-17): PURCHASE_RECEIVE / MATERIAL_REQUISITION_RETURN / SALES_RETURN / MANUAL_ADJUST / BYPRODUCT */
     @Column(name = "source_doc_type", length = 32)
     private String sourceDocType;
+
+    /**
+     * 副产来源报工 ID; <b>非 null 即表示这是一条副产批次</b>。
+     *
+     * <p>副产走这张表与 WIP 半成品同一条路 —— prod 实测 {@code source_doc_type='PRODUCTION_BATCH'}
+     * 的 255 条里 249 条 {@code material_type_id} 指向原料字典。副产与 WIP 是同类东西
+     * (产出物 + 可再投入)，另起炉灶会变成第二套「产出物字典」。</p>
+     */
+    @Column(name = "byproduct_source_report_id")
+    private Long byproductSourceReportId;
+
+    /**
+     * 副产单价(元/单位)，<b>盘点时</b>确认。
+     *
+     * <p>🔴 null = 未确认，不参与抵扣、展示为「未抵扣」。<b>不要在报工时写这个字段</b> ——
+     * 那时候没人知道这批副产值多少，写任何值都是臆造。确认为 0 是另一回事，那是真实的确认结果。</p>
+     */
+    @Column(name = "byproduct_unit_price", precision = 15, scale = 4)
+    private java.math.BigDecimal byproductUnitPrice;
+
+    /**
+     * 副产单价确认时间。与单价<b>一起</b>判定是否已确认 ——
+     * 有价无时间 = BOM 带过来的参考价，还没人拍板，不算确认。
+     */
+    @Column(name = "byproduct_price_confirmed_at")
+    private java.time.LocalDateTime byproductPriceConfirmedAt;
+
+    /** 确认副产单价的用户 ID。 */
+    @Column(name = "byproduct_price_confirmed_by")
+    private Long byproductPriceConfirmedBy;
 
     /** 发起单ID (P0-17) */
     @Column(name = "source_doc_id", length = 64)

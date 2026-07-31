@@ -406,9 +406,19 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
             for (FinishedBomOutput reportedOutput : finishedBomOutputs(req)) {
                 BomRecipe outputRecipe = resolvePinnedOutputRecipe(
                         pinnedFamily, reportedOutput.productTypeId());
-                String reportedUnit = canonicalBomUnit(reportedOutput.unit());
-                String bomOutputUnit = canonicalBomUnit(outputRecipe.getOutputUnit());
-                if (!Objects.equals(reportedUnit, bomOutputUnit)) {
+                // 判据是「按系统自己的别名表, 这两个是不是同一个单位」, 不是字面一不一样。
+                // 客户 2026-07-31 现场被拦: 报工「袋」/ BOM「bag」—— 权威表里
+                // UnitContractServiceImpl.systemAliases() 写着 alias("bag","bag","袋"), 本就同一个单位。
+                // 走的是本类已有的 configuredUnitsEquivalent (内置权威表 + 租户自定义别名),
+                // 与 BomRecipeServiceImpl 保存 BOM 时用的 areEquivalent 同一套口径 —— 存得进去的
+                // BOM, 报工就不该拦。此处**不要**再用 canonicalBomUnit 那种私有别名表 (见其注释)。
+                String reportedUnit = reportedOutput.unit();
+                String bomOutputUnit = outputRecipe.getOutputUnit();
+                // ⚠️ configuredUnitsEquivalent 把「没填」当等价放行 (工序配置那条允许省略);
+                // 成品报工不能沿用那个宽松语义 —— 单位没填就是不知道报的是什么, 必须挡住。
+                boolean unitMissing = reportedUnit == null || reportedUnit.isBlank()
+                        || bomOutputUnit == null || bomOutputUnit.isBlank();
+                if (unitMissing || !configuredUnitsEquivalent(factoryId, reportedUnit, bomOutputUnit)) {
                     throw new BusinessException(409, "成品报工单位与计划固定 BOM 的产出单位不一致")
                             .withCode("BOM_OUTPUT_UNIT_MISMATCH")
                             .withHint("SKU " + reportedOutput.productTypeId()
@@ -697,6 +707,19 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
         };
     }
 
+    /**
+     * ⛔ 仅供 {@link #reportingMassToKg} 判断 kg/g 用。<b>不要拿它比较两个单位是否相同</b> ——
+     * 用 {@link #configuredUnitsEquivalent} 或 {@code UnitContractService#areEquivalent}。
+     *
+     * <p>这是一张私有的、只覆盖 5 组的别名表, 与系统权威表
+     * {@code UnitContractServiceImpl.systemAliases()} (24 组) 不同步, 且两个方向都会出错:</p>
+     * <ul>
+     *   <li><b>误拦</b> —— 表里没有的单位原样返回, 于是「袋」≠「bag」, 而权威表里它们是同一个。
+     *       客户 2026-07-31 现场就是被这条拦住的 (成品报工单位与 BOM 产出单位不一致)。</li>
+     *   <li><b>漏拦</b> —— 这里把 片/slice/piece/pcs/个 全折成 "slice", 而权威表里
+     *       个→pcs、片→slice 是<b>两个不同单位</b>, 于是「个」能冒充「片」混过去。</li>
+     * </ul>
+     */
     private String canonicalBomUnit(String unit) {
         if (unit == null || unit.isBlank()) return null;
         return switch (unit.trim().toLowerCase(java.util.Locale.ROOT)) {
@@ -1777,12 +1800,58 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
         return null;
     }
 
+    /**
+     * 报工投入/产出的单位归一 —— 走权威表的<b>跨语言</b>归一。
+     *
+     * <p>原来只有 2 组 (千克/公斤→kg、克→g), 连 盒/box 都不认。而它被用在<b>去重判定</b>上:
+     * 多产出成本分摊那处 {@code units.size() != 1} 会<b>抛 400</b>
+     * 「不同计量维度的多产出必须填写成本分摊比例」—— 一个端口写「袋」另一个写「bag」就会误报。</p>
+     *
+     * <p>用 {@code crossLanguageCode} 而非 {@code canonicalCodeOrRaw}: 后者会把 只/个/件
+     * 并成 pcs, 违反 #1976「一只 ≠ 一件」; 成本分摊维度更不能把它们当成同一种。</p>
+     *
+     * <p>⚠️ null 仍返回 <b>空串</b>而不是 null —— 调用方按 {@code "kg".equals(unit)} 判, 且
+     * 空串会参与 distinct 计数, 改成 null 会连带改掉多产出的分组行为。</p>
+     */
     private static String normalizeReportingUnit(String unit) {
         if (unit == null) return "";
-        String normalized = unit.trim().toLowerCase(java.util.Locale.ROOT);
-        if ("千克".equals(normalized) || "公斤".equals(normalized)) return "kg";
-        if ("克".equals(normalized)) return "g";
-        return normalized;
+        return com.cretas.aims.service.unit.impl.UnitContractServiceImpl.crossLanguageCode(unit);
+    }
+
+    /** 副产来源标记 —— 与 WIP 的 {@code PRODUCTION_BATCH} 并列, 不复用它。 */
+    public static final String SOURCE_DOC_TYPE_BYPRODUCT = "BYPRODUCT";
+
+    /**
+     * 把一条报工副产物化成<b>生产仓</b>里的原料批次。
+     *
+     * <p>去向是生产仓不是原料仓 —— 它是生产出来的, 不是采购入库的 (Steve 2026-07-31)。
+     * 落库后就是一条普通原料批次, 能被别的 Workflow 正常投入。走 {@code material_batches}
+     * 与 WIP 半成品同一条路: prod 实测 {@code source_doc_type='PRODUCTION_BATCH'} 的 255 条里
+     * 249 条 {@code material_type_id} 指向原料字典, 副产与它是同类东西。</p>
+     *
+     * <p>🔴 <b>不写单价</b>: 单价在盘点时确认。报工时没人知道这批副产值多少,
+     * 此处写任何值都是臆造 —— 包括写 0 (那会被读成「这批副产不值钱」)。</p>
+     */
+    public static MaterialBatch buildByproductBatch(
+            String factoryId, String materialTypeId, BigDecimal quantity,
+            String unit, String workshopId, Long sourceReportId) {
+        // 字段口径照抄「领料落生产仓」那处 (FactoryMaterialRequisitionServiceImpl):
+        // 同样是往生产仓建新批次, receiptQuantity 是入库量, used/reserved 显式置 0 而非留 null。
+        MaterialBatch batch = new MaterialBatch();
+        batch.setId(java.util.UUID.randomUUID().toString());
+        batch.setFactoryId(factoryId);
+        batch.setMaterialTypeId(materialTypeId);
+        batch.setWarehouseId(workshopId);
+        batch.setSourceDocType(SOURCE_DOC_TYPE_BYPRODUCT);
+        batch.setReceiptQuantity(quantity);
+        batch.setUsedQuantity(BigDecimal.ZERO);
+        batch.setReservedQuantity(BigDecimal.ZERO);
+        batch.setQuantityUnit(unit);
+        batch.setReceiptDate(java.time.LocalDate.now());
+        batch.setStatus(com.cretas.aims.entity.enums.MaterialBatchStatus.AVAILABLE);
+        batch.setByproductSourceReportId(sourceReportId);
+        // ⛔ 刻意不设 unitPrice / byproductUnitPrice —— 单价在盘点确认。
+        return batch;
     }
 
     private static List<BigDecimal> allocateMoney(BigDecimal total, List<BigDecimal> ratios) {

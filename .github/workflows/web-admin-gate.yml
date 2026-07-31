@@ -1,0 +1,52 @@
+name: Web Admin Gate
+
+# 为什么是独立 workflow 而不是给 ci.yml 的 vue-build-check 松绑:
+#
+# ci.yml 的 `on.push` 带着 `paths: backend/java/cretas-api/**` —— 那是为 Java 制品
+# 不变量「那棵树变了 ⟺ CI 被触发」精心写的, 不该为了跑前端测试去动它。
+# 只把 vue-build-check 的 `if` 改成 push 也没用: 纯前端改动**根本不会触发 ci.yml**,
+# 于是同一道闸有三个承载点 (job 的 if / workflow 的 paths / 步骤里的 `|| true`),
+# 只改一个等于没改。
+#
+# 背景 (2026-07-31): vitest 此前只在 `workflow_dispatch` 且 full_audit=true 时才跑,
+# 近期每一次 push 记录里 vue-build-check 都是 skipped。最后一次真正执行是 07-30,
+# 结果是 failure, 而那次 run 被 cancel 了没人追。于是两个真缺陷在红里躺了 8 天:
+#   - 用户填的单位「件」被显示成「只」 (#1672 起)
+#   - 工序端口分组的合法 patch 全被拒 (#1406 的功能正路走不通)
+# 两个都是被现有用例当场抓到的 —— 缺的不是用例, 是没人断言绿。
+
+on:
+  push:
+    branches:
+      - main
+      - 'codex/**'
+    paths:
+      - 'web-admin/**'
+      - '.github/workflows/web-admin-gate.yml'
+  pull_request:
+    paths:
+      - 'web-admin/**'
+      - '.github/workflows/web-admin-gate.yml'
+
+concurrency:
+  group: web-admin-gate-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  vitest:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web-admin
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: web-admin/package-lock.json
+      - run: npm ci --legacy-peer-deps
+      # 只跑单测。build / vue-tsc 仍留在 ci.yml 的 full_audit 里 ——
+      # 本 workflow 的目的是让「套件绿」重新成为可信信号, 不是把整轮审计搬到每次 push。
+      - name: Vitest unit tests
+        run: npm test
