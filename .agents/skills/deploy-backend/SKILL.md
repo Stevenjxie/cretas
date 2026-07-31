@@ -33,13 +33,40 @@ registered in `docs/dispatch/ACTIVE.md`:
   --tests '<MavenTestSelector>' \
   --stage-backend YES-STAGE
 
+# Post-merge, BEFORE releasing: prewarm the CI artifact. Idempotent and safe to
+# background; it waits until CI has produced the artifact (Java ~4 min, web-dist ~84s).
+./scripts/deploy/prewarm-main-artifact.sh \
+  --tests '<same MavenTestSelector>' \
+  --wait 420
+
 # Post-merge production release from clean exact origin/main
+# (only after PREWARM=done / PREWARM=already-warm)
 ./scripts/deploy/release-cretas.sh \
   --phase deploy \
   --base-sha '<registered Base SHA>' \
   --tests '<MavenTestSelector>' \
   --confirm-prod YES-PROD
 ```
+
+Do not skip the prewarm step. `--prefer-ci-artifact` defaults to ON, but releasing
+immediately after a merge always probes before CI has produced the artifact, so it
+falls back to a local build. Two measured consequences:
+
+1. **Build phase 204s -> 25s.** Same tree, measured: prewarmed gives Java
+   `build_count=0` (no Maven at all) in parallel with a 19s Web fetch = 25s;
+   without prewarm it is Java 201s in parallel with Web 90s = 204s.
+2. **It avoids the "build thrown away" failure class.** After the build the
+   orchestrator re-confirms HEAD still equals `origin/main` and aborts otherwise
+   (refusing to deploy artifacts built from a stale main -- that is correct). Merges
+   on main are frequently only a few minutes apart, which is exactly the length of a
+   fallback build. Two real releases failed this way (2026-07-30 19:45, 2026-07-31
+   15:30): both builds succeeded (166s / 227s) and were discarded because another
+   session merged mid-build. A 25s build shrinks that window ~8x.
+
+Use the same selector for both commands (or a narrower one for the prewarm): the
+criterion is set containment -- what you request must be a subset of what CI ran.
+The prewarm requires clean exact `origin/main` and fails closed on a candidate
+branch (`head_not_clean_origin_main`), which is intended.
 
 It detects `backend/java/cretas-api` and `web-admin` changes, selects the
 component builds/deployments or verified no-op, validates both trusted
