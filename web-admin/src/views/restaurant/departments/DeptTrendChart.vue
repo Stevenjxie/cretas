@@ -10,7 +10,6 @@
  */
 import { computed, onMounted, onUnmounted, ref, watch, nextTick } from 'vue';
 import echarts from '@/utils/echarts';
-import type { ECharts } from 'echarts';
 import { trendTakeaway, type TrendPoint } from './trendTakeaway';
 
 const props = defineProps<{
@@ -25,7 +24,11 @@ const props = defineProps<{
 }>();
 
 const el = ref<HTMLDivElement | null>(null);
-let chart: ECharts | null = null;
+// `@/utils/echarts` 是共享实例, 它的 init 返回 echarts/types/dist/shared 的 EChartsType,
+// 与 `import type { ECharts } from 'echarts'` 是两套独立声明(私有属性 _ssr 不兼容)。
+// 仓里其余图表用 `as unknown as ECharts` 硬转绕过; 这里取 MaterializedAnalysisCard 的
+// 写法, 直接从实例推导, 不需要类型断言。
+let chart: ReturnType<typeof echarts.init> | null = null;
 let ro: ResizeObserver | null = null;
 
 const periodText = computed(() => {
