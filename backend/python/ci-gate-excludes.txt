@@ -1,0 +1,67 @@
+# python-gate.yml 的排除清单 —— 这是**欠账台账**, 不是垃圾桶。
+#
+# 规则: 每一条都必须带原因。想加一条进来, 先问「这是环境缺件, 还是测试/代码真的坏了」。
+# ⛔ 不允许用 `|| true` 让门禁变绿 —— ci.yml 的 `python-lint-test` 就是那么做的,
+#    结果是这些问题在 CI 里躺了几个月没人看见 (2026-07-31 首次真跑才全部暴露)。
+#
+# 清一条就从这里删一条, 门禁自动开始守它。
+#
+# 基线 (2026-07-31, run 30626419366, py3.10 ubuntu-latest):
+#   6136 passed / 153 failed / 149 errors —— 问题集中在 41 个文件。
+#   其中 6 个已在本 PR 修好 (JWT secret 顺序依赖, 同一指纹扫出来的), 余下 35 个列在下面。
+
+# ── ① 需要 PostgreSQL (22 个) ────────────────────────────────────────────────
+# 全部 `OSError: Connect call failed 127.0.0.1:5432`。它们是**真·集成测试**,
+# 但没打 `integration` marker, 所以 `-k "not integration"` 筛不掉。
+# 两条出路 (都不在本 PR 范围): 给 workflow 加 postgres service container,
+# 或给这些文件补上 `@pytest.mark.integration`。补 marker 更便宜, 且让本地也能跳过。
+tests/golden/f001_qhj/test_regression.py
+tests/test_agent_budget_tracker.py
+tests/test_agent_invalidate_on_upload_hook.py
+tests/test_agent_narrative_cache.py
+tests/test_agent_orchestrator.py
+tests/test_backfill_silver.py
+tests/test_dim_resolver.py
+tests/test_factory_provenance_config.py
+tests/test_field_registry.py
+tests/test_gold_aggregations.py
+tests/test_gold_analysis_results_batch.py
+tests/test_gold_materializer.py
+tests/test_gold_pipeline.py
+tests/test_gold_triggers.py
+tests/test_provenance_audit.py
+tests/test_rls_isolation.py
+tests/test_silver_cost.py
+tests/test_silver_dimensions.py
+tests/test_silver_facts.py
+tests/test_silver_normalizer.py
+tests/test_tenant_ctx_plumbing.py
+tests/test_top_products_provenance.py
+
+# ── ② event loop 取法过时 (5 个) ─────────────────────────────────────────────
+# 全部 `RuntimeError: There is no current event loop in thread 'MainThread'`。
+# ⚠️ 我本机 (py3.11) 见到它时判断成「本机 py 版本差异, CI 的 py3.10 应该没事」——
+#    **这个判断被 CI 证伪了**: py3.10 上同样 192 次。是真问题, 不是环境差异。
+#    成因是新版 pytest-asyncio 不再提供隐式 event loop; 要改这几个文件取 loop 的写法。
+smartbi/gold/tests/test_clean_display_name.py
+smartbi/gold/tests/test_gold_reads_restaurant.py
+smartbi/gold/tests/test_review_connected_contract.py
+smartbi/services/restaurant/tests/test_health_check_metrics.py
+smartbi/services/restaurant/tests/test_health_check_void_rate.py
+
+# ── ③ 断言失败, 需逐个 triage (7 个) ─────────────────────────────────────────
+# 这一组最值得先看 —— 断言失败意味着「测试说的和代码做的不一致」, 可能是过期测试,
+# 也可能是**没人看见的真缺陷** (本 PR 已经这样捞出两个: 件→只 / portGroups 全被拒)。
+smartbi/services/materialized_analytics/tests/test_llm_materializer.py   # 'router:INSIGHTS' != 'qwen3-max'
+smartbi/services/materialized_analytics/tests/test_query_router.py       # 'top_n_by_dim' != 'dish_sales_top_n'
+smartbi/services/restaurant/tests/test_batch_regression_golden.py        # golden 快照不一致
+tests/agent_runtime/test_real_gold_contracts.py                          # daily_trend 断言
+tests/test_price_strip_kpi_pilot.py                                      # RbacForbiddenException role=warehouse
+tests/test_smartbi_api.py                                                # httpx.ConnectError (要活服务)
+tests/test_store_kpi_dashboard.py                                        # 'skipped' != 'ok'
+
+# ── ④ 缺可选依赖 pyarrow (1 个) ──────────────────────────────────────────────
+# `ImportError: pyarrow is required for converting a pandas dataframe to Polars`。
+# 最便宜的解法是给 workflow 的 pip 装一行 pyarrow; 没做是因为要先确认生产环境
+# 是否也依赖它 —— 若生产不装 pyarrow, 那这条代码路径在线上本来就是坏的, 那是另一个问题。
+smartbi/services/materialized_analytics/templates/test_reviews_sentiment_live.py

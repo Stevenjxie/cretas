@@ -23,8 +23,19 @@ describe('production document trace navigation', () => {
     expect(traceDocumentLabel('FINISHED_GOODS_BATCH')).toBe('成品批次');
   });
 
+  /**
+   * 入口在 #1662 (2026-07-23 「simplify plan row actions」) 改过: 行内的
+   * 「追溯与核算」下拉 → 「档案与核算」弹窗, 追溯挪进弹窗的「计划档案」页签。
+   * 那个 PR 改了旁边的 productionPlanInformationArchitecture.spec.ts, 漏了这一份,
+   * 于是这条用例从那天起一直红着 —— 而 vitest 当时不在任何 push 门禁里, 没人看见。
+   *
+   * 断言的是**入口可达**而不是某一段 markup 的字面写法: 行内有「档案与核算」入口,
+   * 弹窗里有「查看单据追溯」按钮, 且它确实接到 openDocumentTrace 上。
+   */
   it('exposes the trace from each ordinary production-plan row', () => {
-    expect(pageSource).toContain('<el-dropdown-item command="trace">单据追溯</el-dropdown-item>');
+    expect(pageSource).toContain('档案与核算');
+    expect(pageSource).toContain('@click="openArchiveTrace"');
+    expect(pageSource).toContain('查看单据追溯');
     expect(pageSource).toContain("if (command === 'trace')");
     expect(pageSource).toContain('void openDocumentTrace(row)');
     expect(pageSource).toContain('生产计划单据追踪');

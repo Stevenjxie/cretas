@@ -61,6 +61,24 @@ pytestmark = [
 JWT_SECRET = "phase-2b3-write-ops-pilot-test-secret"
 
 
+@pytest.fixture(autouse=True)
+def _jwt_env(monkeypatch):
+    """Force JWT_SECRET to our value for the duration of each test —
+    survives import-order collisions with sister pilot files that set their
+    own secret at module load.
+
+    没有这个 fixture 时, 模块顶部的 ``os.environ.setdefault`` 只在**本文件先跑**
+    的情况下生效: 只要 test_analysis_department_pilot / test_analysis_drilldown_pilot
+    之一先被导入, JWT_SECRET 已经是它们的值, setdefault 什么也不做, 而下面的
+    ``_make_token`` 仍用本文件的字面量签名 → 应用侧用另一个 secret 验签 → 全部 401。
+    两个兄弟文件本来就有这个 fixture, 只有本文件漏了。
+
+    表现: 单独跑 22 passed, 跟着别的文件跑 17 failed —— 结果取决于选了哪些文件。
+    """
+    monkeypatch.setenv("JWT_SECRET", JWT_SECRET)
+    yield
+
+
 def _make_token(
     *,
     user_id: int = 22,
