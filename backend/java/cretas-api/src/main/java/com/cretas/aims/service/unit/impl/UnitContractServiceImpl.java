@@ -909,6 +909,43 @@ public class UnitContractServiceImpl implements UnitContractService {
         return key(rawUnit);
     }
 
+    /**
+     * 归一到内置规范码; 表里没有的原样返回 (trim + 小写)。
+     *
+     * <p>🔴 <b>存在的理由</b>: 2026-07-31 之前, 至少五个地方各自手写了一张单位别名 switch
+     * (报工 BOM 校验 / 结单实收 / Workflow 快照比对 / 辅料工作台 / 移动端实收), 覆盖 2~21 组不等,
+     * 而这张权威表有 24 组。后果两个方向都有 —— 表里没有的单位原样返回, 于是「袋」≠「bag」被误拦
+     * (客户现场); 有的抄本又把 个/片 折成同一个, 让本该拦的混过去。</p>
+     *
+     * <p>所以它们现在<b>全部调这一个函数</b>。要加单位改 {@link #systemAliases()} 一处即可,
+     * 不需要再去找那五张表 —— <b>找不全正是上一轮的失败方式</b>。</p>
+     *
+     * <p>⚠️ 只覆盖<b>内置</b> 24 组; <b>租户自定义别名</b>需要 factoryId, 走实例方法
+     * {@link #normalize(String, String)} / {@link #areEquivalent(String, String, String)}。
+     * 静态调用点拿不到 factoryId, 这是已知边界, 不是新增缺口。</p>
+     */
+    public static String canonicalCodeOrRaw(String rawUnit) {
+        if (rawUnit == null) {
+            return null;
+        }
+        String trimmed = rawUnit.trim();
+        CanonicalUnit builtIn = systemUnitFor(key(trimmed));
+        return builtIn != null ? builtIn.code() : trimmed.toLowerCase(Locale.ROOT);
+    }
+
+    /**
+     * 是不是「按个数论」的单位 (量纲 {@link UnitDimension#COUNT} 或 {@link UnitDimension#PACKAGE})。
+     *
+     * <p>用于投料折算判定: 计数单位与 kg 口径不同, 必须经 gramsPerUnit 折算, 不能直接当 kg 用。
+     * 内置表不认识的单位返回 {@code false} —— 调用方自行决定要不要再退回自己的模糊匹配。</p>
+     */
+    public static boolean isBuiltInCountingUnit(String rawUnit) {
+        CanonicalUnit builtIn = rawUnit == null ? null : systemUnitFor(key(rawUnit.trim()));
+        return builtIn != null
+                && (builtIn.dimension() == UnitDimension.COUNT
+                        || builtIn.dimension() == UnitDimension.PACKAGE);
+    }
+
     private static void alias(Map<String, String> aliases, String code, String... values) {
         for (String value : values) {
             aliases.put(key(value), code);

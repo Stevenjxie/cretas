@@ -558,18 +558,14 @@ public class BomSeasoningWorkspaceServiceImpl implements BomSeasoningWorkspaceSe
         };
     }
 
+    /**
+     * 走系统权威别名表。原来是一张只有 7 组的私有 switch (无 袋/bag、无 件/个/只)，
+     * 结果喂给 {@code addCanonicalUnit} 去重时，同一个单位的两种写法会被当成两种单位
+     * —— 「这道工序有几种单位」就会数多。与 2026-07-31 报工/结单那两处同一个根因。
+     */
     private String canonicalWorkflowUnit(String rawUnit) {
         if (rawUnit == null || rawUnit.isBlank()) return null;
-        return switch (rawUnit.trim().toLowerCase(Locale.ROOT)) {
-            case "公斤", "千克", "kg" -> "kg";
-            case "克", "g" -> "g";
-            case "盒", "box" -> "box";
-            case "箱", "case" -> "case";
-            case "片", "slice" -> "slice";
-            case "毫升", "ml" -> "ml";
-            case "升", "l" -> "l";
-            default -> rawUnit.trim();
-        };
+        return com.cretas.aims.service.unit.impl.UnitContractServiceImpl.canonicalCodeOrRaw(rawUnit);
     }
 
     private void populatePinnedRevisionSummary(

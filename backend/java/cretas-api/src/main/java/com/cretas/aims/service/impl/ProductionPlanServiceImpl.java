@@ -2611,7 +2611,7 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
                 .map(ProductionSettlementRequest.OutputLine::getUnit)
                 .map(this::trimToNull)
                 .filter(Objects::nonNull)
-                .map(this::canonicalReceiptUnit)
+                .map(ProductionPlanServiceImpl::canonicalReceiptUnit)
                 .distinct()
                 .count();
         if (terminalUnitCount > 1) {
@@ -2852,7 +2852,7 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
                 .map(ProductionSettlementRequest.OutputLine::getUnit)
                 .map(this::trimToNull)
                 .filter(Objects::nonNull)
-                .map(this::canonicalReceiptUnit)
+                .map(ProductionPlanServiceImpl::canonicalReceiptUnit)
                 .collect(Collectors.toSet());
         if (units.size() > 1) {
             return null;
@@ -2884,7 +2884,7 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
                 .map(ProductionSettlementRequest.OutputLine::getUnit)
                 .map(this::trimToNull)
                 .filter(Objects::nonNull)
-                .map(this::canonicalReceiptUnit)
+                .map(ProductionPlanServiceImpl::canonicalReceiptUnit)
                 .filter(Objects::nonNull)
                 .collect(Collectors.toSet());
         return units.size() == 1 ? units.iterator().next() : null;
@@ -4917,18 +4917,27 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
         return batch;
     }
 
-    private String canonicalReceiptUnit(String unit) {
-        if (unit == null) {
-            return null;
-        }
-        return switch (unit.trim().toLowerCase(Locale.ROOT)) {
-            case "盒", "box" -> "box";
-            case "箱", "case" -> "case";
-            case "片", "slice" -> "slice";
-            case "公斤", "千克", "kg" -> "kg";
-            case "克", "g" -> "g";
-            default -> unit.trim().toLowerCase(Locale.ROOT);
-        };
+    /**
+     * 结单/实收侧的单位归一 —— <b>走系统权威别名表</b>，不再自己维护一份。
+     *
+     * <p>原来是一张只有 5 组 (盒/箱/片/公斤/克) 的私有 switch，两个 blocking 门
+     * ({@code WORKFLOW_OUTPUT_UNIT_MISMATCH} / {@code PRODUCTION_SETTLEMENT_OUTPUT_UNIT_MISMATCH})
+     * 直接拿它的结果做 equals。后果和 2026-07-31 客户在报工那侧撞到的是同一个:</p>
+     * <ul>
+     *   <li><b>误拦</b> —— 表里没有的单位原样返回，于是「袋」≠「bag」，而权威表里
+     *       {@code alias("bag","bag","袋")} 本就是同一个单位。报工那道 (#2077) 修好后，
+     *       客户下一步结单会撞上这一道。</li>
+     *   <li><b>还漏了同义中文</b> —— 权威表里 件/个/只 都是 {@code pcs}，这里三个各自原样返回，
+     *       一个端口写「个」另一个写「件」同样会被判成不一致。</li>
+     * </ul>
+     *
+     * <p>⚠️ 已知边界: 这里用的是 <b>built-in</b> 表 (24 组系统单位)，不含<b>租户自定义别名</b>
+     * —— 与改动前一致，不是新增的缺口。要覆盖租户别名得把 factoryId 串进这 13 个调用点，
+     * 那是另一件事；真要做请一并参考 {@code ProcessSheetServiceImpl#configuredUnitsEquivalent}
+     * 的两段式写法 (built-in 优先，再落 {@code UnitContractService#areEquivalent})。</p>
+     */
+    private static String canonicalReceiptUnit(String unit) {
+        return com.cretas.aims.service.unit.impl.UnitContractServiceImpl.canonicalCodeOrRaw(unit);
     }
 
     private BusinessException invalidInterimFinishedGoods(String detail) {

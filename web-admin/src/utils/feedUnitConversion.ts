@@ -9,9 +9,35 @@
  * 后端对应: FeedUnitConverter (盒 = kg × 1000 / gramsPerUnit) + consumeForFeedStrict / consumeClerkSemiStrict。
  */
 
-/** 计数单位判定，与后端 FeedUnitConverter.isCountUnit 保持同口径。 */
+/**
+ * 计数单位的规范码 (COUNT + PACKAGE 两个量纲), 与后端
+ * UnitContractServiceImpl.systemUnits() 的 dimension 一一对应。
+ *
+ * 🔴 原来的判定只有一条中文正则 `/盒|袋|包|个|件|只|份|瓶|罐/` —— `bag`/`box`/`pcs` 这些
+ * **英文码一律判 false → 被当成质量单位走 kg 数学**。客户 2026-07-31 那个 SKU 的单位存的
+ * 正是 `bag`。这类错**不报错**, 只是算出来的数不对, 比被 409 拦住更难发现。
+ */
+const COUNT_UNIT_CODES = new Set([
+  // COUNT
+  'pcs', '件', '个', '只', 'portion', '份', 'slice', '片', 'item', '项',
+  // PACKAGE
+  'box', '盒', 'case', '箱', 'bag', '袋', 'pack', '包', 'bottle', '瓶',
+  'can', '罐', 'crate', '框', '筐', 'pail', '桶', 'roll', '卷',
+]);
+
+/**
+ * 计数单位判定，与后端 FeedUnitConverter.isCountUnit 保持同口径。
+ *
+ * 两段式与后端逐条对应: 先按规范码/别名**精确**查, 再退回原来的中文子串**模糊**匹配
+ * (认得「盒(500g)」「大盒」这类复合标签)。取**或** → 改动前判为计数单位的, 改动后一定还是。
+ *
+ * ⚠️ 本次新增被判为计数单位的: 全部英文码 + 中文的 箱/框/筐/桶/卷/片/项。它们此前按 kg 透传,
+ * 之后要求 gramsPerUnit, 缺了会走「诚实拦截」而不再静默按 kg 算 —— 那正是期望行为。
+ */
 export function isCountUnit(unit: string | null | undefined): boolean {
-  return !!unit && /盒|袋|包|个|件|只|份|瓶|罐/.test(unit);
+  if (!unit) return false;
+  const normalized = unit.trim().toLowerCase();
+  return COUNT_UNIT_CODES.has(normalized) || /盒|袋|包|个|件|只|份|瓶|罐/.test(unit);
 }
 
 /** 每盒克重是否有效 (>0)。诚实: null/0/负 → 无法折算。 */
