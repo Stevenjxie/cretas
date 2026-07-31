@@ -244,3 +244,43 @@ describe('期间选择器必须落到请求上', () => {
     }
   });
 });
+
+/**
+ * 「算不出来」不能显示成 0。
+ *
+ * 后端算不出毛利时返回的是 **0** 而不是 null。照原样渲染就成了「毛利率 0.0%」——
+ * 读起来是「毛利率真的是零」，实际是「一道可算毛利的菜都没有」。
+ * 线上 DEMO_REST 实测 `dish_count_with_cost = 0`，页面当时就显示 0.0% / ¥0 / ¥0。
+ *
+ * 这是本项目反复出问题的那一类（拿 0 冒充没有数据），所以钉住。
+ */
+describe('依赖前提的 KPI 必须声明依据', () => {
+  it('毛利相关 KPI 都挂了 basisPath', () => {
+    const margin = DEPARTMENTS.finance.kpis.filter((k) => k.path.startsWith('margin.'));
+    expect(margin.length).toBeGreaterThan(0);
+    for (const k of margin) {
+      // 「已核成本菜品」本身就是那个依据，它显示 0 是正确的
+      if (k.path === 'margin.dishCountWithCost') continue;
+      expect(k.basisPath, `${k.label} 缺 basisPath, 算不出来时会显示成 0`).toBeTruthy();
+    }
+  });
+
+  it('至少一条 basisHint 说明了为什么算不出来', () => {
+    const hints = DEPARTMENTS.finance.kpis.filter((k) => k.basisHint);
+    expect(hints.length).toBeGreaterThan(0);
+    for (const k of hints) {
+      // 必须解释原因，不能只说「无数据」
+      expect(k.basisHint!.length).toBeGreaterThan(10);
+      expect(k.basisHint, '要写明不是 0').toContain('不是 0');
+    }
+  });
+
+  it('basisPath 指向的字段本身也在 KPI 里 —— 用户能看见依据的值', () => {
+    const paths = new Set(DEPARTMENTS.finance.kpis.map((k) => k.path));
+    for (const k of DEPARTMENTS.finance.kpis) {
+      if (!k.basisPath) continue;
+      expect(paths.has(k.basisPath), `${k.basisPath} 没有作为 KPI 展示, 用户看不到依据`)
+        .toBe(true);
+    }
+  });
+});

@@ -138,7 +138,18 @@ watch(() => [props.dept, windowDays.value], () => {
   loadTrend();
 }, { immediate: true });
 
-function formatKpi(kpi: { path: string; money?: boolean; percent?: boolean; rate01?: boolean }) {
+/** 依据不成立（如「可算毛利的菜品数」为 0）时，该 KPI 无从计算。 */
+function kpiUnavailable(kpi: { basisPath?: string }): boolean {
+  if (!kpi.basisPath) return false;
+  const basis = pickPath(payload.value, kpi.basisPath);
+  return !basis;
+}
+
+function formatKpi(kpi: {
+  path: string; money?: boolean; percent?: boolean; rate01?: boolean; basisPath?: string;
+}) {
+  // 算不出来就显示「—」, 不能让后端的 0 变成「毛利率 0.0%」那种假的精确
+  if (kpiUnavailable(kpi)) return '—';
   if (kpi.money && !canViewPrice.value) return '—';
   const raw = pickPath(payload.value, kpi.path);
   if (raw === undefined || raw === null) return '—';
@@ -148,6 +159,15 @@ function formatKpi(kpi: { path: string; money?: boolean; percent?: boolean; rate
   if (kpi.money) return `¥${num.toLocaleString('zh-CN', { maximumFractionDigits: 2 })}`;
   return num.toLocaleString('zh-CN', { maximumFractionDigits: 2 });
 }
+
+/** 因依据缺失而无法计算的 KPI 的解释文案（去重后展示在 KPI 带下方）。 */
+const basisNotes = computed(() => {
+  const notes = new Set<string>();
+  for (const kpi of config.value.kpis) {
+    if (kpi.basisHint && kpiUnavailable(kpi)) notes.add(kpi.basisHint);
+  }
+  return [...notes];
+});
 
 const rankingRows = computed(() => {
   const r = config.value.ranking;
@@ -240,10 +260,16 @@ function ask(question: string) {
                 <span class="stat-hint">ⓘ</span>
               </el-tooltip>
             </span>
-            <span class="stat-value" :class="{ masked: kpi.money && !canViewPrice }">
+            <span
+              class="stat-value"
+              :class="{ masked: (kpi.money && !canViewPrice) || kpiUnavailable(kpi) }"
+            >
               {{ formatKpi(kpi) }}
             </span>
           </div>
+        </div>
+        <div v-if="basisNotes.length" class="basis-notes">
+          <div v-for="note in basisNotes" :key="note">{{ note }}</div>
         </div>
       </el-card>
 
@@ -355,6 +381,12 @@ function ask(question: string) {
   &.masked { color: var(--el-text-color-secondary); font-weight: 500; }
 }
 
+.basis-notes {
+  margin-top: 12px;
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
+  display: flex; flex-direction: column; gap: 4px;
+}
 .card-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }
 .card-title { font-size: 15px; font-weight: 600; }
 

@@ -29,6 +29,16 @@ export interface DeptKpi {
   percent?: boolean;
   rate01?: boolean;
   hint?: string;
+  /**
+   * 「这个指标算不算得出来」的依据路径。该值为 0 / 缺失时，本 KPI 显示「—」而不是 0。
+   *
+   * 🔴 为什么需要：后端算不出来时返回的是 **0**，不是 null。毛利率照原样渲染就成了
+   * 「0.0%」—— 读起来是「毛利率真的是零」，而实际是「一道可算毛利的菜都没有」。
+   * 拿 0 冒充「没有数据」是本项目反复出问题的那一类，这里挡住。
+   */
+  basisPath?: string;
+  /** 依据不成立时给用户的解释，显示在 KPI 带下方 */
+  basisHint?: string;
 }
 
 export interface DeptEntry {
@@ -172,9 +182,21 @@ export const DEPARTMENTS: Record<DeptKey, DeptConfig> = {
     // 与运营同一个接口：那一次调用同时返回 totals(后厨) 与 margin(毛利)
     source: 'ops-summary',
     kpis: [
-      { label: '毛利率', path: 'margin.avgMarginRate', percent: true, rate01: true },
-      { label: 'POS 营收', path: 'margin.totalPosRevenue', money: true },
-      { label: '毛利额', path: 'margin.totalGrossProfit', money: true },
+      // 三项都以「有可算毛利的菜品」为前提。dishCountWithCost=0 时后端返回 0,
+      // 直接渲染会变成「毛利率 0.0%」—— 那是假的精确。
+      {
+        label: '毛利率', path: 'margin.avgMarginRate', percent: true, rate01: true,
+        basisPath: 'margin.dishCountWithCost',
+        basisHint: '还没有可算毛利的菜品 —— 需要 POS 菜名与配方成本对上，毛利率与毛利额因此无法计算（不是 0）',
+      },
+      {
+        label: 'POS 营收', path: 'margin.totalPosRevenue', money: true,
+        basisPath: 'margin.dishCountWithCost',
+      },
+      {
+        label: '毛利额', path: 'margin.totalGrossProfit', money: true,
+        basisPath: 'margin.dishCountWithCost',
+      },
       {
         label: '已核成本菜品',
         path: 'margin.dishCountWithCost',
