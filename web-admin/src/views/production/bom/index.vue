@@ -32,7 +32,7 @@ import { bigCategoryOf, type BigCategory } from '@/utils/materialCategory';
 // 「加了新的一类, 但承载它的某一处没跟上」是本仓最高频 bug, 散在 SFC 里的 if/else 钉不住。
 import {
   bomTabAddButtonLabel,
-  bomTabBigCategories,
+  bomTabAllowsMaterial,
   bomTabItemLabel,
   isBomCategoryTab,
   matchBomCategory,
@@ -753,16 +753,14 @@ async function confirmBomUnitCompatibility(): Promise<boolean> {
 // 不因未选中的类别而永久消失 — 只在其对应类别被选中时才不出现，这里按设计保守处理:
 // "其他" 桶物料只在没有更精确归类时才会出现，为了不"藏"数据 (fool-proof-design Rule 5 宁缺勿藏)，
 // 找不到归属的物料仍归入 RAW 档展示 (与 normalizeRecipeMaterialCategory 默认落 RAW 一致)。
-// 各页签放行哪些大类见 bomTabBigCategories (副产档只放行显式打标的「副产」)。
+// 各页签放行规则见 bomTabAllowsMaterial (副产档看标记, 其余档看材质大类)。
 const filteredMaterialTypesForBomForm = computed<TableRow[]>(() => {
   const matCat = normalizeRecipeMaterialCategory(bomForm.value.materialCategory);
-  const allowed = new Set<BigCategory>(bomTabBigCategories(matCat));
-  return materialTypes.value.filter((m) => {
-    const big = bigCategoryOf(m.category as string | undefined);
-    // "其他"桶只在 RAW 档下兜底展示 (未归类物料默认按原料处理, 不因筛选彻底消失于任一档).
-    if (big === '其他') return matCat === 'RAW';
-    return allowed.has(big);
-  });
+  // 判据收敛在 bomTabAllowsMaterial: 副产页签看**标记**, 其余页签看**材质**大类。
+  // 🔴 副产 SKU 照样出现在原料页签 —— 「副产以后能当原料被别的 workflow 投入」的落点。
+  return materialTypes.value.filter((m) => bomTabAllowsMaterial(
+    matCat, m as { isByproduct?: unknown }, bigCategoryOf(m.category as string | undefined),
+  ));
 });
 
 function packagingClassificationKey(material: Record<string, unknown> | undefined): string {
