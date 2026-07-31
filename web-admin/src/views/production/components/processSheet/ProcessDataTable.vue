@@ -3849,6 +3849,26 @@ defineExpose({ hasUnsavedRows, refreshSharedInventories });
                 </el-tooltip>
               </td>
 
+              <!-- 生产日期 ——
+                   🔴 这一格此前**只有 <th> 没有 <td>**(表头 3712 行), 于是从「投料物料」起整行
+                   左移一格: 用户在「生产日期」列看到的是原料名、在「投料物料」列看到的是数量框。
+                   更糟的是它同时把流程堵死 —— canSubmitRow 要求 productionDate
+                   (「请选择生产日期」), 而唯一能填它的控件只存在于**卡片模板**(3210 行)与
+                   **已小结只读行**(3783 行), 表格模式下压根填不了 → 投料数量框永远 disabled,
+                   「正式报工」永远点不亮。2026-08-01 走查时在 prod 撞到。
+                   ⚠️ 卡片/表格两套模板本来就容易漂 (本文件多处注释都在提醒), 这里是又一例。 -->
+              <td v-if="isPortOutputMode" data-testid="production-date" class="sp-td sp-td-date">
+                <el-date-picker
+                  v-model="row.productionDate"
+                  type="date"
+                  value-format="YYYY-MM-DD"
+                  placeholder="选择日期"
+                  style="width:130px"
+                  size="small"
+                  :disabled="row.submissionStatus === 'SUBMITTED'"
+                />
+              </td>
+
               <!-- ---- 修油: raw-material batch dropdown ---- -->
               <template v-if="isXiuYou">
                 <template v-if="usesAutoMaterialTotals(row)">
