@@ -24,7 +24,7 @@
 ## File Structure
 
 **后端**
-- `backend/java/cretas-api/src/main/resources/db/migration/V20261101_01__byproduct_sku_and_credit.sql` — 新建。加 `raw_material_types` 副产标记、`material_batches` 副产来源、副产批次单价确认列
+- `backend/java/cretas-api/src/main/resources/db/flyway/V20261029_36__byproduct_sku_and_credit.sql` — 新建。加 `raw_material_types` 副产标记、`material_batches` 副产来源、副产批次单价确认列
 - `.../entity/MaterialBatch.java` — 修改。加副产单价确认字段
 - `.../entity/RawMaterialType.java` — 不改（用既有 `category` 字段承载「副产」大类）
 - `.../service/processentry/impl/ProcessSheetServiceImpl.java` — 修改。报工副产行落 `material_batches`
@@ -122,7 +122,7 @@ git commit -m "feat(byproduct): 原料字典加「副产」大类, 与采购属�
 ### Task 2: DB migration —— 副产批次与单价确认列
 
 **Files:**
-- Create: `backend/java/cretas-api/src/main/resources/db/migration/V20261101_01__byproduct_sku_and_credit.sql`
+- Create: `backend/java/cretas-api/src/main/resources/db/flyway/V20261029_36__byproduct_sku_and_credit.sql`
 - Test: `backend/java/cretas-api/src/test/java/com/cretas/aims/migration/ByproductCreditMigrationContractTest.java`
 
 **Interfaces:**
@@ -141,8 +141,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 class ByproductCreditMigrationContractTest {
 
-    private static final Path SQL = Path.of("src", "main", "resources", "db", "migration",
-            "V20261101_01__byproduct_sku_and_credit.sql");
+    private static final Path SQL = Path.of("src", "main", "resources", "db", "flyway",
+            "V20261029_36__byproduct_sku_and_credit.sql");
 
     @Test
     void migrationAddsByproductColumnsAndIsIdempotent() throws Exception {
@@ -171,7 +171,7 @@ Expected: FAIL —— 文件不存在
 - [ ] **Step 3: 写 migration**
 
 ```sql
--- 副产 SKU 化与盘点抵扣 (2026-11-01)
+-- 副产 SKU 化与盘点抵扣 (2026-07-31)
 -- 副产落 material_batches 与 WIP 半成品同一条路 (prod 已有 249 条 PRODUCTION_BATCH 先例)。
 -- 单价刻意允许 NULL: 未在盘点确认前不臆造 0 —— 0 会被当成"这批副产不值钱"。
 ALTER TABLE material_batches
@@ -196,8 +196,8 @@ Expected: PASS
 - [ ] **Step 5: 提交**
 
 ```bash
-git add backend/java/cretas-api/src/main/resources/db/migration/V20261101_01__byproduct_sku_and_credit.sql backend/java/cretas-api/src/test/java/com/cretas/aims/migration/ByproductCreditMigrationContractTest.java
-git commit -m "feat(byproduct): migration 加副产批次来源与单价确认列" -- backend/java/cretas-api/src/main/resources/db/migration/V20261101_01__byproduct_sku_and_credit.sql backend/java/cretas-api/src/test/java/com/cretas/aims/migration/ByproductCreditMigrationContractTest.java
+git add backend/java/cretas-api/src/main/resources/db/flyway/V20261029_36__byproduct_sku_and_credit.sql backend/java/cretas-api/src/test/java/com/cretas/aims/migration/ByproductCreditMigrationContractTest.java
+git commit -m "feat(byproduct): migration 加副产批次来源与单价确认列" -- backend/java/cretas-api/src/main/resources/db/flyway/V20261029_36__byproduct_sku_and_credit.sql backend/java/cretas-api/src/test/java/com/cretas/aims/migration/ByproductCreditMigrationContractTest.java
 ```
 
 ---
