@@ -16,6 +16,8 @@ import { ElMessage } from 'element-plus';
 import { pythonFetch, getFactoryId } from '@/api/smartbi/common';
 import { usePermissionStore } from '@/store/modules/permission';
 import { DEPARTMENTS, pickPath, type DeptKey } from './departmentConfig';
+import DeptTrendChart from './DeptTrendChart.vue';
+import type { TrendPoint } from './trendTakeaway';
 
 const props = defineProps<{ dept: DeptKey }>();
 
@@ -74,7 +76,44 @@ async function load() {
   }
 }
 
-watch(() => [props.dept, windowDays.value], load, { immediate: true });
+// ── ③ 趋势 ────────────────────────────────────────────────────────
+const trendPoints = ref<TrendPoint[]>([]);
+const trendLoading = ref(false);
+
+/** 无价格权限时不取金额曲线 —— 画一条全 0 的线比不画更误导。 */
+const trendMasked = computed(() =>
+  Boolean(config.value.trend?.money) && !canViewPrice.value);
+
+async function loadTrend() {
+  const t = config.value.trend;
+  trendPoints.value = [];
+  if (!t || trendMasked.value) return;
+  trendLoading.value = true;
+  try {
+    const factoryId = getFactoryId();
+    const url = t.endpoint.replace('{days}', String(windowDays.value))
+      + (t.endpoint.includes('?') ? '&' : '?') + `factory_id=${factoryId}`;
+    const res = await pythonFetch(url, { timeoutMs: 60000 }) as Record<string, unknown>;
+    if (t.shape === 'ops-kpi') {
+      const rows = (res?.data ?? []) as { date: string; value: number }[];
+      trendPoints.value = rows.map((r) => ({ date: String(r.date), value: Number(r.value ?? 0) }));
+    } else {
+      const rows = (res?.points ?? []) as { date: string; revenue: number }[];
+      trendPoints.value = rows.map((r) => ({ date: String(r.date), value: Number(r.revenue ?? 0) }));
+    }
+  } catch (e) {
+    // 趋势取不到不该拖垮整页 —— KPI 与排行仍然有用。图表区自己显示"没有数据"。
+    console.error('[dept-dashboard] trend load failed:', e);
+    trendPoints.value = [];
+  } finally {
+    trendLoading.value = false;
+  }
+}
+
+watch(() => [props.dept, windowDays.value], () => {
+  load();
+  loadTrend();
+}, { immediate: true });
 
 function formatKpi(kpi: { path: string; money?: boolean; percent?: boolean; rate01?: boolean }) {
   if (kpi.money && !canViewPrice.value) return '—';
@@ -183,6 +222,19 @@ function ask(question: string) {
             </span>
           </div>
         </div>
+      </el-card>
+
+      <!-- ③ 趋势 -->
+      <el-card v-if="config.trend" shadow="never" class="dept-card">
+        <DeptTrendChart
+          :title="config.trend.title"
+          :unit="config.trend.unit"
+          :money="config.trend.money"
+          :points="trendPoints"
+          :loading="trendLoading"
+          :masked="trendMasked"
+          :color="config.accent"
+        />
       </el-card>
 
       <!-- ④ 排行明细 -->
