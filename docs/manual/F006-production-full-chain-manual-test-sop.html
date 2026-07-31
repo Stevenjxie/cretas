@@ -271,7 +271,7 @@
         <div class="meta-row">
           <span class="stamp ok">Workflow / BOM 自动关联、逐道报工：按最新 main 校准</span>
           <span class="stamp">计划幂等、包材扣库、成本与小结：按当前生产逻辑校准</span>
-          <span class="stamp code">origin/main · SOP sync 2026-07-30</span>
+          <span class="stamp code">origin/main · SOP sync 2026-07-31</span>
           <span class="stamp">单文件 · 离线可用 · 可打印</span>
         </div>
         <div class="filter-panel screen-only">
@@ -353,6 +353,7 @@
         </tbody></table></div>
         <div class="callout warning"><strong>关键交接链</strong>销售需求 → 财审 → 调度/生产计划 → 车间安排 → 操作员报工 → QC 检查 → 仓储入库/发货 → 财务核销；缺料支线为采购 → QC → 仓储，付款支线为财务经理批准 → 出纳执行。任何岗位都不能用老板账号代做来“证明链路通过”。</div>
         <div class="callout blue"><strong>AI 表单入口只生成待确认草稿</strong>当前支持按表单类型解析产品、生产计划、采购单、销售单、盘点、仓库入库和工序任务等字段；必须登录并具备目标页面权限。自然语言只用于回填当前表单，用户仍要逐字段核对并手动提交，助手不会代替审批、报工或库存入账。</div>
+        <div class="callout blue"><strong>RN 新入口仍按真实职责分开</strong>AI 智能入库加载 schema 后只取一次供应商候选并进入表单，不能一直停在“加载供应商列表”；“盘点记录”进入今日/历史列表和只读详情，未完成任务可续录；生产工作台的“物料需求单”只读展示需求、备料、签收、消耗、损耗和退料，生成、备料、调拨、签收与关单仍在有权限的管理后台完成。</div>
       </section>
 
       <section id="map">
@@ -645,7 +646,7 @@
         <div class="steps">
           <label class="step"><span class="check"><input type="checkbox" data-key="stock-1"><span></span></span><span><h4>来源类型选“存货生产”</h4><p>“生产成品”可多选。选择一个成品时应匹配其 Workflow；选择多个时，系统优先完全匹配，没有完全匹配才选最小联产超集。</p><span class="expect">页面显示“本计划已固定工序路线”、拓扑类型、版本和终端产出。</span></span></label>
           <label class="step"><span class="check"><input type="checkbox" data-key="stock-2"><span></span></span><span><h4>处理路线歧义</h4><p>同一匹配层存在多个 Workflow，或所选产品会带出额外联产品时，点“选择生产工序路线”；鼠标悬停“悬浮查看 Cell 图”确认中间工序和连接方式。</p><span class="expect">不能仅靠 Workflow 名字判断；必须确认工序 Cell 图和完整产出集合。</span></span></label>
-          <label class="step"><span class="check"><input type="checkbox" data-key="stock-3"><span></span></span><span><h4>填写计划信息并验证幂等创建</h4><p>Workflow 驱动的存货生产需要填写大于 0 的计划基准量；报工模式应锁定为“逐道报工”。填写计划日期、预计完成日、人员/主管和备注。点击创建后不要反复操作；可用网络重试或重复提交同一请求验证幂等。</p><span class="expect">按钮处理中禁用；重复请求只返回同一张计划、一个计划号。来源标签为“存货生产”，可见“逐道录入 / 小结 / 停产”，不显示“生成调拨单”。</span></span></label>
+          <label class="step"><span class="check"><input type="checkbox" data-key="stock-3"><span></span></span><span><h4>填写计划信息并验证幂等创建</h4><p>Workflow 驱动的存货生产需要填写大于 0 的计划基准量；报工模式应锁定为“逐道报工”。填写计划日期、预计完成日、人员/主管和备注。点击创建后不要反复操作；可用网络重试或重复提交同一请求验证幂等。</p><span class="expect">按钮处理中禁用；重复请求只返回同一张计划、一个计划号。列表“生产类型”显示“库存生产”，计划数量展示“按实际报工”；可见“逐道录入 / 小结 / 停产”，不显示“生成调拨单”。</span></span></label>
         </div>
       </section>
 
@@ -658,7 +659,7 @@
           <label class="step"><span class="check"><input type="checkbox" data-key="sales-2"><span></span></span><span><h4>提交审批判定</h4><p>订单创建后点“提交审批判定”。系统按配置自动分流：可能自动通过，也可能进入财务审核。以页面最终状态为准。</p><span class="expect">订单不再是草稿；达到可排产/已财务审核状态。若待财审，先完成财务审核。</span></span></label>
           <label class="step"><span class="check"><input type="checkbox" data-key="sales-3"><span></span></span><span><h4>从订单创建生产计划</h4><p>若系统已自动创建计划，直接打开；否则点订单行的“创建生产计划”，或进入生产计划新建页，来源选“销售订单”并选择该订单。</p><span class="expect">订单客户和产品行自动带出，不能手填另一套产品。</span></span></label>
           <label class="step"><span class="check"><input type="checkbox" data-key="sales-4"><span></span></span><span><h4>选择订单产品行并确认路线</h4><p>产品行默认全选，可取消不生产的行；每保留一行各建一张生产计划，产品/数量来自订单行。多订单合并时，追加订单必须已财务审核。</p><span class="expect">计划数量等于订单行数量；Workflow 路线、版本与目标成品一致。歧义时必须显式选择并预览 Cell 图。</span></span></label>
-          <label class="step"><span class="check"><input type="checkbox" data-key="sales-5"><span></span></span><span><h4>创建计划并检查幂等与操作入口</h4><p>Workflow 驱动时逐道报工应被锁定。订单生产有明确计划量，可按 BOM 生成调拨单；缺料是预警，不应静默换成其它料。对同一订单行重复点击或重试创建。</p><span class="expect">同一订单行只形成一张计划，重复请求回显既有计划并提供查看入口；计划能追溯订单号，可见“逐道录入 / 核对结单”。</span></span></label>
+          <label class="step"><span class="check"><input type="checkbox" data-key="sales-5"><span></span></span><span><h4>创建计划并检查幂等与操作入口</h4><p>Workflow 驱动时逐道报工应被锁定。订单生产有明确计划量，可按 BOM 生成调拨单；缺料是预警，不应静默换成其它料。对同一订单行重复点击或重试创建。</p><span class="expect">同一订单行只形成一张计划，重复请求回显既有计划并提供查看入口；列表“生产类型”显示“订单生产”并保留订单计划量，计划能追溯订单号，可见“逐道录入 / 核对结单”。</span></span></label>
           <label class="step" data-min-depth="full"><span class="check"><input type="checkbox" data-key="sales-6"><span></span></span><span><h4>验证多销售订单合并生产</h4><p>再创建一张已审批销售订单，包含相同成品和不同成品。新建生产计划时追加第二张订单：相同 SKU 需求可归并到对应计划，不同 SKU 仍按产品行分别形成计划。</p><span class="expect">计划详情保留全部来源订单号；相同 SKU 不漏量、不重复建；不同 SKU 不被强行塞进不覆盖它的 Workflow。</span></span></label>
         </div>
       </section>
@@ -670,7 +671,7 @@
         <div class="path">销售订单详情 <b>›</b> 查看缺料 <b>›</b> 采购管理 <b>›</b> 采购订单 / 财务待审采购单 / 采购入库</div>
         <div class="callout warning"><strong>当前真实边界</strong>销售订单中的“转采购”不会自动生成采购单；系统会引导到订单详情。采购员须在“采购订单”手动新建，并选择“关联销售订单”。如果页面静默生成了无供应商、无单价或无销售单关联的采购数据，判失败。</div>
         <div class="steps">
-          <label class="step"><span class="check"><input type="checkbox" data-key="purchase-1"><span></span></span><span><h4>确认供应商与价格前置</h4><p>在“供应商管理 / 价格表管理”确认本轮原料、辅料、包材存在可用供应商和计价单位；价格未知时不得伪造 0 元为真实采购价。</p><span class="expect">采购订单的供应商、物料和计价单位下拉有真实选项；无权限看价时显示脱敏，不显示假 0。</span></span></label>
+          <label class="step"><span class="check"><input type="checkbox" data-key="purchase-1"><span></span></span><span><h4>确认供应商与价格前置</h4><p>在“供应商管理 / 价格表管理”确认本轮原料、辅料、包材存在可用供应商和计价单位；供应商档案可维护简称、多联系人、多地址和银行账户。价格未知时不得伪造 0 元为真实采购价。</p><span class="expect">采购订单的供应商、物料和计价单位下拉有真实选项；供应商扩展资料回读正确且不等于已采购、收货或付款；无权限看价时显示脱敏，不显示假 0。</span></span></label>
           <label class="step"><span class="check"><input type="checkbox" data-key="purchase-2"><span></span></span><span><h4>手动创建并关联销售订单</h4><p>新建采购订单，选择供应商、预计到货日和关联销售订单；逐行添加缺口原料/辅料/包材，填写采购数量、数量单位、单价、计价单位和税率。</p><span class="expect">采购单详情和销售订单“关联采购订单”页签都能互相追溯；每行数量大于 0，税率在 0–100。</span></span></label>
           <label class="step"><span class="check"><input type="checkbox" data-key="purchase-3"><span></span></span><span><h4>提交采购审批</h4><p>提交采购单；需要财审时由“财务管理 → 待审采购单”或“采购管理 → 财务待审采购单”审核，采购员不能替财务完成审批。</p><span class="expect">驳回时保留原因并回到可修正状态；通过后状态可继续收货，审批人与时间可追溯。</span></span></label>
           <label class="step"><span class="check"><input type="checkbox" data-key="purchase-4"><span></span></span><span><h4>创建并确认采购入库</h4><p>到“采购入库”新建，选择采购单后系统带入待收物料，默认实收=待收；仓管核对实际数量、目标仓、厂号/产地和质检结果，上传收货照片/附件，先创建 DRAFT，再点“确认入库”。</p><span class="expect">确认后才生成原料批次并增加目标仓库存；部分到货保留待收量；单次到货超过允许上限时被阻止；照片可在详情回看。</span></span></label>
@@ -689,12 +690,14 @@
           <tr><td>无计划临时领料、仓库互调</td><td>WAREHOUSE_TO_WAREHOUSE 调拨单</td><td>调出仓、调入仓、物料、现有库存、数量、批次</td><td>已确认</td></tr>
           <tr><td>生产后余料退回</td><td>物料需求单关单退料 / 退料记录</td><td>发出−实用−损耗=退回；原批次/成本延续</td><td>已关单</td></tr>
         </tbody></table></div>
+        <div class="callout blue"><strong>单据追踪只展示关系，不代替状态动作</strong>销售单、采购单、生产计划和调拨单详情可打开“单据追踪”，查看上下游节点并返回原单；追踪页不替用户提交审批、发运、签收或确认库存。调拨数量按物料/批次规范单位校验，状态应显示“待对方确认”等中文业务口径。</div>
         <div class="steps" style="margin-top:12px">
           <label class="step"><span class="check"><input type="checkbox" data-key="warehouse-feed-1"><span></span></span><span><h4>按计划生成物料需求单</h4><p>选择生产计划生成需求单，核对 BOM 展开的原料、辅料、包材和需求单位。生产仓若缺配置，立即停止，不得默认到任意仓。</p><span class="expect">需求单显示真实仓库路由和全部物料类别；无 BOM 时明确报错。</span></span></label>
           <label class="step"><span class="check"><input type="checkbox" data-key="warehouse-feed-2"><span></span></span><span><h4>仓管备料并确认实际拣货</h4><p>状态从“待备料”进入“备料中”；仓管逐行核对需求量和实际拣货量，批次默认按 FEFO，也可在允许时指定批次。</p><span class="expect">库存不足直接提示缺口，不能领成负数；实际拣货量与后续调拨发出量一致。</span></span></label>
           <label class="step"><span class="check"><input type="checkbox" data-key="warehouse-feed-3"><span></span></span><span><h4>调拨并由生产仓签收</h4><p>调出仓确认发运，生产仓按实物逐行确认签收；核对单号、源仓→目标仓、批次、数量和单位。发出与实收不一致时建立差异记录。</p><span class="expect">状态到“已签收”；调出仓减少、生产仓增加，工厂总库存不因同厂调拨凭空变化。</span></span></label>
           <label class="step"><span class="check"><input type="checkbox" data-key="warehouse-feed-4"><span></span></span><span><h4>独立调拨走完整审批状态机</h4><p>手动仓间调拨依次完成 DRAFT → 提交申请 → 审批通过 → 确认发运 → 确认签收 → 确认入库。申请人、审批人、发运人、签收人按权限分工。默认发起人不得自批；只有当前 OA 节点明确授权 <code>factory_super_admin</code>、且发起人本人是本厂启用状态的该角色时，才允许自审批解除单总监死锁并留审计日志。</p><span class="expect">节点授权仓管或其他角色时超级管理员仍不得越权；其余步骤不能越级。源仓库存不足时“确认发运”禁用；驳回/取消必须选择原因。</span></span></label>
           <label class="step"><span class="check"><input type="checkbox" data-key="warehouse-feed-5"><span></span></span><span><h4>报工前做生产仓双边复核</h4><p>仓管在分仓库存查询记录生产仓批次；生产人员在逐道录入下拉中核对同一批次和可用量。</p><span class="expect">仓库账、需求/调拨单、报工选择器三处的物料、批次、单位和可用量一致。</span></span></label>
+          <label class="step"><span class="check"><input type="checkbox" data-key="warehouse-feed-6"><span></span></span><span><h4>核对 RN 物料需求单只读回读</h4><p>在生产工作台打开“物料需求单”，进入列表和详情，核对需求单号、计划、状态及各物料的需求、已备料、已签收、已消耗、损耗和退料。</p><span class="expect">页面没有生成、备料、调拨、签收、关单或取消按钮；写操作继续由对应管理后台和岗位完成。</span></span></label>
         </div>
       </section>
 
@@ -703,7 +706,7 @@
         <div class="path">生产管理 <b>›</b> 生产计划 <b>›</b> 目标计划行 <b>›</b> 逐道录入</div>
         <div class="table-wrap"><table><thead><tr><th>每道工序录入组</th><th>手工输入</th><th>系统固定/自动</th><th>提交前核对</th></tr></thead><tbody>
           <tr><td>报工组</td><td>生产日期</td><td>计划、Workflow 版本、工序顺序</td><td>日期存在，路线未失效</td></tr>
-          <tr><td>① 投入</td><td>选择实际来源批次、每项投入量</td><td>可选物料、SKU、单位和生产仓可用量</td><td>至少选 1 项；批次身份完整；不能超可用量</td></tr>
+          <tr><td>① 投入</td><td>按来源行选择实际批次、填写每项投入量</td><td>可选物料、SKU、单位；唯一候选批次自动选中</td><td>至少选 1 项；多候选人工选；不能超服务端可用量</td></tr>
           <tr><td>② 工序执行</td><td>开始时间、结束时间、人数，或多段工时</td><td>总工时自动计算；时薪来自全局成本设置（未配置时按系统默认 ¥26/工时）</td><td>开始/结束成对；人数大于 0</td></tr>
           <tr><td>③ 产出明细</td><td>每项产出数量</td><td>产出 SKU/单位来自 Workflow；成品净重来自 SKU</td><td>选中项数量大于 0；数量与只读单位紧邻</td></tr>
           <tr><td>副产/分摊</td><td>副产数量、回收单价；必要时成本分摊比例</td><td>副产单位随产出行；可统一计量时自动分摊</td><td>混合计量维度时每项比例大于 0，合计 100%</td></tr>
@@ -711,7 +714,7 @@
         </tbody></table></div>
         <div class="steps">
           <label class="step"><span class="check"><input type="checkbox" data-key="report-1"><span></span></span><span><h4>R01 · 第一工序按四阶段正常报工</h4><p>新增报工行并填写生产日期。先在①投入选择实际原料批次和数量；再到②工序执行填写开始/结束时间和人数；然后在③产出明细填写产出数量；最后到④确认提交。</p><span class="expect">投入、时间人数、产出不会散落混排；数量与单位成组。正式提交前列出库存与成本影响，成功后状态为“已正式报工”。</span></span></label>
-          <label class="step"><span class="check"><input type="checkbox" data-key="report-2"><span></span></span><span><h4>R02 · 库存不足与占用冲突</h4><p>先把某原料投入量填成大于生产仓可用量，再尝试保存草稿和正式报工；另开一行占用同批次后重复验证。</p><span class="expect">页面明确指出批次及缺口；正式报工不能扣成负数。若草稿允许保存，也不得形成正式库存扣减或成本。</span></span></label>
+          <label class="step"><span class="check"><input type="checkbox" data-key="report-2"><span></span></span><span><h4>R02 · 库存不足与占用冲突</h4><p>先把某原料投入量填成大于生产仓可用量，再尝试保存草稿和正式报工；另开一行占用同批次后重复验证。</p><span class="expect">可用量以服务端为准，页面逐项显示“需多少、可用多少、缺多少”和“联系仓管补料”；正式报工不能扣成负数。本行最多保存草稿，不形成正式库存扣减或成本；没有明细时保留原始错误而不猜数量。</span></span></label>
           <label class="step"><span class="check"><input type="checkbox" data-key="report-3"><span></span></span><span><h4>R03 · 后续包装工序、单位与包材自动分配</h4><p>上游正式报工后，下游选择该计划已产出的半成品批次。包装工序投入按 kg、产出按盒；按四阶段填写时间、人数和产出盒数，再正式报工。</p><span class="expect">上游未正式报工时下游不能正式提交；成品 800g/盒来自 SKU；系统按固定 BOM 从生产仓 FEFO 分配盒、膜、外箱等包材并回显批次、数量、实际单价和成本。</span></span></label>
           <label class="step"><span class="check"><input type="checkbox" data-key="report-seasoning"><span></span></span><span><h4>R03A · 调料按固定工序自动分配</h4><p>选择 BOM 已配置调料的熟制/调味工序，填写锅数（仅开启锅序时）、实际投入、工序执行和产出，再正式报工。</p><span class="expect">只读取当前 BOM 该工序的调料；按生产仓 FEFO 分配实际批次并扣库，成本进入调料桶且不跨工序重复。库存不足时整次失败；缺价时保持成本未知，不伪造 0 元。</span></span></label>
           <label class="step"><span class="check"><input type="checkbox" data-key="report-4"><span></span></span><span><h4>R04 · 多产出、联产与副产</h4><p>对 1→多或多→多工序，先在②工序执行区填写各选中产出的开始/结束时间和人数，再到③产出明细填写各产出数量。若本次实际产生肥油等副产，再填写“副产数量、回收单价”；副产不预建工序、不画 Workflow Cell。</p><span class="expect">正式联产品各自生成可入库批次；时间人数与产出数量分区清晰；报工副产只形成成本回收明细，不生成 SKU 批次。</span></span></label>
@@ -859,6 +862,7 @@
           <label class="step"><span class="check"><input type="checkbox" data-key="count-3"><span></span></span><span><h4>录入实盘数量并保存暂存</h4><p>只录入实际盘过的行；无差异时填系统数量，有差异时填真实数量并写备注。点“保存暂存”。</p><span class="expect">提示“盘点数量已保存（暂存，批准后生效）”；库存此时不变。</span></span></label>
           <label class="step"><span class="check"><input type="checkbox" data-key="count-4"><span></span></span><span><h4>提交审批并完成审批</h4><p>列表点“提交审批”，审批人查看系统库存、实盘数量、差异和备注，再点“确认审批通过”。</p><span class="expect">状态为“已审批”，出现“应用差异”；库存仍未调整。</span></span></label>
           <label class="step"><span class="check"><input type="checkbox" data-key="count-5"><span></span></span><span><h4>应用盘点差异</h4><p>点击“应用差异”，确认不可撤销提示。完成后回到库存查询重新搜索。</p><span class="expect">状态为“已应用”；库存等于实盘数量，差异只应用一次。</span></span></label>
+          <label class="step"><span class="check"><input type="checkbox" data-key="count-rn"><span></span></span><span><h4>RN 查看今日/历史盘点并续录</h4><p>从仓储“常用功能 → 盘点记录”进入列表，打开已提交任务查看只读详情；对未完成任务进入“盘点录入”继续填写并提交。</p><span class="expect">“盘点记录”不再误跳到“发起盘点”；只读详情没有应用差异等越权写入口，库存仍只在审批后由管理端应用差异时改变。</span></span></label>
         </div>
       </section>
 
