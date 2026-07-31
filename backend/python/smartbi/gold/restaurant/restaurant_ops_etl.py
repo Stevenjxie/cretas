@@ -820,6 +820,27 @@ ON CONFLICT (factory_id, date, kpi_kind, dim_value_id, dim_value_str) DO UPDATE 
     version = agg_restaurant_daily_ops.version + 1, computed_at = NOW()
 """
 
+# Stocktaking shortage **cost** per ingredient — 金额口径, 与上面的 qty 行成对。
+# 与 _AGG_STOCK_SHORTAGE_SQL 逐字同条件 (含 status='COMPLETED'), 只把被聚合的列
+# 从 difference_qty 换成 ABS(difference_cost) —— ABS 的理由见该文件同名注释与
+# migration V20261101_05。
+_AGG_STOCK_SHORTAGE_COST_SQL = """
+INSERT INTO agg_restaurant_daily_ops (
+    factory_id, date, kpi_kind, dim_value_id, dim_value_str, value_num,
+    version, computed_at
+)
+SELECT factory_id, date, 'stocktaking_shortage_cost',
+       COALESCE(ingredient_id, 0), '',
+       SUM(CASE WHEN difference_qty < 0 THEN ABS(COALESCE(difference_cost, 0)) ELSE 0 END)::NUMERIC(18,4),
+       1, NOW()
+  FROM fact_restaurant_stocktaking
+ WHERE factory_id = $1::varchar AND status = 'COMPLETED'
+ GROUP BY factory_id, date, ingredient_id
+ON CONFLICT (factory_id, date, kpi_kind, dim_value_id, dim_value_str) DO UPDATE SET
+    value_num = EXCLUDED.value_num,
+    version = agg_restaurant_daily_ops.version + 1, computed_at = NOW()
+"""
+
 # Daily totals scalar table — single row per (factory, date).
 _AGG_DAILY_TOTALS_SQL = """
 INSERT INTO agg_restaurant_daily_totals (
@@ -827,12 +848,14 @@ INSERT INTO agg_restaurant_daily_totals (
     requisition_count, requisition_qty_total, requisition_cost_total,
     wastage_count, wastage_qty_total, wastage_cost_total,
     stocktaking_count, stocktaking_shortage_total, stocktaking_surplus_total,
+    stocktaking_shortage_cost, stocktaking_surplus_cost,
     version, computed_at
 )
 SELECT $1::varchar AS factory_id, d.date,
        COALESCE(req.cnt, 0), COALESCE(req.qty, 0), COALESCE(req.cost, 0),
        COALESCE(w.cnt, 0), COALESCE(w.qty, 0), COALESCE(w.cost, 0),
        COALESCE(s.cnt, 0), COALESCE(s.shortage, 0), COALESCE(s.surplus, 0),
+       COALESCE(s.shortage_cost, 0), COALESCE(s.surplus_cost, 0),
        1, NOW()
   FROM (
     SELECT DISTINCT date FROM fact_restaurant_requisition WHERE factory_id = $1::varchar
@@ -858,7 +881,16 @@ SELECT $1::varchar AS factory_id, d.date,
   LEFT JOIN (
     SELECT date, COUNT(*) AS cnt,
            SUM(CASE WHEN difference_qty < 0 THEN -difference_qty ELSE 0 END) AS shortage,
-           SUM(CASE WHEN difference_qty > 0 THEN difference_qty ELSE 0 END)  AS surplus
+           SUM(CASE WHEN difference_qty > 0 THEN difference_qty ELSE 0 END)  AS surplus,
+           -- ABS 是实测需要而不是防御性写法 —— difference_cost 的符号在写入侧
+           -- 就不统一 (源库 DEMO_REST/F002/RES_3101_009 盘亏行为正, R_XMX_CHAIN
+           -- 为负, 模拟器产出的 MOCK_REST 650 行全负)。直接 SUM 会让 MOCK_REST
+           -- 这个每日能力审计的参考租户答出「盘亏 -6999.04」, 而 DEMO_REST 上
+           -- 看着完全正常。Java 侧同样靠 ABS 兜, 见 StocktakingRecordRepository
+           -- 第 64 行。(此处不用半角冒号 —— test_no_lone_colons_in_agg_sql_constants
+           --  会把 SQL 常量里的孤立冒号当成 PG 语法风险, 它分不清是否在注释里。)
+           SUM(CASE WHEN difference_qty < 0 THEN ABS(COALESCE(difference_cost, 0)) ELSE 0 END) AS shortage_cost,
+           SUM(CASE WHEN difference_qty > 0 THEN ABS(COALESCE(difference_cost, 0)) ELSE 0 END) AS surplus_cost
       FROM fact_restaurant_stocktaking WHERE factory_id = $1::varchar
      GROUP BY date
   ) s ON s.date = d.date
@@ -872,6 +904,8 @@ ON CONFLICT (factory_id, date) DO UPDATE SET
     stocktaking_count = EXCLUDED.stocktaking_count,
     stocktaking_shortage_total = EXCLUDED.stocktaking_shortage_total,
     stocktaking_surplus_total = EXCLUDED.stocktaking_surplus_total,
+    stocktaking_shortage_cost = EXCLUDED.stocktaking_shortage_cost,
+    stocktaking_surplus_cost = EXCLUDED.stocktaking_surplus_cost,
     version = agg_restaurant_daily_totals.version + 1,
     computed_at = NOW()
 """
@@ -890,6 +924,7 @@ async def materialize_gold_daily_ops(
             r3 = await conn.execute(_AGG_WASTAGE_QTY_SQL, factory_id)
             r4 = await conn.execute(_AGG_WASTAGE_COST_BY_TYPE_SQL, factory_id)
             r5 = await conn.execute(_AGG_STOCK_SHORTAGE_SQL, factory_id)
+            r9 = await conn.execute(_AGG_STOCK_SHORTAGE_COST_SQL, factory_id)
             r6 = await conn.execute(_AGG_DAILY_TOTALS_SQL, factory_id)
             r7 = await conn.execute(_AGG_PRODUCT_COST_SQL, factory_id)
             r8 = await conn.execute(_AGG_WASTAGE_COST_SQL, factory_id)
@@ -899,6 +934,7 @@ async def materialize_gold_daily_ops(
             stats["wastage_cost"] = int(r8.split()[-1]) if r8 else 0
             stats["wastage_cost_by_type"] = int(r4.split()[-1]) if r4 else 0
             stats["stock_shortage"] = int(r5.split()[-1]) if r5 else 0
+            stats["stock_shortage_cost"] = int(r9.split()[-1]) if r9 else 0
             stats["daily_totals"] = int(r6.split()[-1]) if r6 else 0
             stats["product_cost"] = int(r7.split()[-1]) if r7 else 0
     logger.info("[etl] materialized gold for %s: %s", factory_id, stats)

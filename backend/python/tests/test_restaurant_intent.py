@@ -4178,10 +4178,16 @@ def test_llm_only_metric_cannot_override_a_resolver_the_planner_already_chose():
     → 盘点问题被答成损耗榜。而该问句经 _detect_requested_metrics 编译出的指标是
     **空的**(表里没有盘点类指标, 「亏了」也不在 gross_margin 的 token 里), 那个
     wastage 完全来自 LLM —— planner 本来是对的。
+
+    ⚠️ 2026-08-01 换夹具: 上面那句 prod 实拍问句**现在能编译出 stocktaking_shortage 了**
+    (盘点类指标已补入 _REQUEST_METRIC_RULES), 于是它不再是「编译不出指标」的合法夹具 ——
+    本用例守的是 guard 本身, 不是那一个问句。原问句的归属由
+    test_stocktaking_loss_question_compiles_a_metric_instead_of_asking_back 接管。
+    这里换成一句**仍然**编译不出任何指标的问话, 前提才立得住。
     """
     from smartbi.gold.restaurant.restaurant_intent import _detect_requested_metrics
 
-    query = "全部门店最近30天盘点亏了多少"
+    query = "全部门店最近30天表现怎么样"
     # 前提: 用户措辞里确实编译不出任何指标 —— 这条断言塌了, 下面的用例就失去意义。
     assert _detect_requested_metrics(query) == ()
 
@@ -4221,3 +4227,52 @@ def test_user_written_metric_still_repairs_a_contradicting_llm_label():
 
     assert spec.intent == "RESTAURANT_OPS_GROSS_MARGIN"
     assert spec.planner_authority == "llm_contract_repair"
+
+
+# ── 盘点类指标 (2026-08-01) ────────────────────────────────────────────────
+# 「盘点亏了多少」此前编译不出**任何**指标: `_REQUEST_METRIC_RULES` 里没有盘点词条。
+# #2103 给 contract-repair 装上「覆盖 planner 已选 resolver 必须由用户措辞支撑」的闸
+# 之后, 这个问句连被 repair 翻案的机会都没有了 -> 落到 CLARIFY 反问。
+# 缺的从来不是能力 —— resolve_stock_shortage 一直答得出来, 缺的是措辞编译不出指标。
+#
+# 三条用例分别钉住三层, 因为 #2094 的教训是「只改准入 = 给一扇没有门的墙配钥匙」:
+#   ① _REQUEST_METRIC_RULES        措辞 -> 指标
+#   ② 规划分支链 (_plan_requested_intents)  指标 -> intent
+#   ③ _DEFAULT_METRICS_BY_CODE     intent -> 指标集(金额口径必须在列)
+
+def test_stocktaking_loss_question_compiles_a_metric_instead_of_asking_back():
+    # 用的就是 2026-07-31 prod 实拍那句原话 —— 它此前被 contract-repair 改答成损耗榜,
+    # #2103 堵住 repair 之后改为反问, 两次都不是它该有的答案。
+    spec = _build_spec(
+        "RESTAURANT_OPS_STOCK_SHORTAGE",
+        "全部门店最近30天盘点亏了多少",
+        confidence=1.0,
+        tier="test",
+    )
+
+    assert spec.requested_metrics == ("stocktaking_shortage",)
+    assert spec.planned_intents == ("RESTAURANT_OPS_STOCK_SHORTAGE",)
+    assert spec.clarification_needed is False
+
+
+def test_stocktaking_wording_plans_the_stock_shortage_intent_on_its_own():
+    """②: 指标进了准入表还不够 —— 规划分支链不认识它就会原样回显 LLM 的 code。"""
+    spec = _build_spec(
+        "RESTAURANT_OPS_WASTAGE_TOP",  # LLM 选到了损耗轴
+        "上个月盘亏了多少",
+        confidence=1.0,
+        tier="test",
+    )
+
+    assert "stocktaking_shortage" in spec.requested_metrics
+    assert "RESTAURANT_OPS_STOCK_SHORTAGE" in spec.planned_intents
+
+
+def test_stock_shortage_declares_the_money_metric_like_wastage_does():
+    """③: 损耗/领料都同时声明 qty+cost, 只有盘点单挂 qty —— 金额口径要能被声明出来。"""
+    from smartbi.gold.restaurant.restaurant_intent import _DEFAULT_METRICS_BY_CODE
+
+    assert _DEFAULT_METRICS_BY_CODE["RESTAURANT_OPS_STOCK_SHORTAGE"] == (
+        "shortage_cost",
+        "shortage_qty",
+    )

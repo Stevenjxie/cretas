@@ -2947,16 +2947,26 @@ async def resolve_stock_shortage(
         await conn.execute("SELECT set_config('app.factory_id', $1, false)", factory_id)
         rows = await conn.fetch(
             """
+            -- 按**金额**排名: 数量不能跨食材比较, 更不能相加 (实测 DEMO_REST
+            -- 是 41.45kg + 45.00L)。数量仍逐项带单位显示, 那里它是有意义的。
             SELECT i.name, i.category, i.unit,
-                   SUM(a.value_num)::float AS shortage_qty
+                   SUM(a.value_num) FILTER (
+                       WHERE a.kpi_kind = 'stocktaking_shortage_qty'
+                   )::float AS shortage_qty,
+                   SUM(a.value_num) FILTER (
+                       WHERE a.kpi_kind = 'stocktaking_shortage_cost'
+                   )::float AS shortage_cost
               FROM agg_restaurant_daily_ops a
               JOIN dim_ingredient i ON a.dim_value_id = i.ingredient_id
-             WHERE a.factory_id = $1 AND a.kpi_kind = 'stocktaking_shortage_qty'
+             WHERE a.factory_id = $1
+               AND a.kpi_kind IN ('stocktaking_shortage_qty', 'stocktaking_shortage_cost')
                AND a.date >= COALESCE($4::date, CURRENT_DATE - ($2::int))
                AND ($5::date IS NULL OR a.date <= $5::date)
              GROUP BY i.name, i.category, i.unit
-             HAVING SUM(a.value_num) > 0
-             ORDER BY shortage_qty DESC NULLS LAST
+             HAVING SUM(a.value_num) FILTER (
+                        WHERE a.kpi_kind = 'stocktaking_shortage_qty'
+                    ) > 0
+             ORDER BY shortage_cost DESC NULLS LAST, shortage_qty DESC NULLS LAST
              LIMIT $3
             """,
             factory_id, days, top_n, window_start, window_end,
@@ -2965,6 +2975,8 @@ async def resolve_stock_shortage(
             """
             SELECT COALESCE(SUM(stocktaking_shortage_total), 0)::float AS shortage,
                    COALESCE(SUM(stocktaking_surplus_total), 0)::float AS surplus,
+                   COALESCE(SUM(stocktaking_shortage_cost), 0)::float AS shortage_cost,
+                   COALESCE(SUM(stocktaking_surplus_cost), 0)::float AS surplus_cost,
                    COALESCE(SUM(stocktaking_count), 0)::int AS count
               FROM agg_restaurant_daily_totals
              WHERE factory_id = $1
@@ -2975,14 +2987,18 @@ async def resolve_stock_shortage(
         )
 
     top_text = "\n".join([
-        f"{i+1}. {'**' + r['name'] + '**' if i == 0 else r['name']} ({r['category'] or '—'}): 盘亏 {r['shortage_qty']:.2f} {r['unit'] or ''}"
+        f"{i+1}. {'**' + r['name'] + '**' if i == 0 else r['name']} ({r['category'] or '—'}): "
+        f"盘亏 ¥{r['shortage_cost'] or 0:.2f}({r['shortage_qty'] or 0:.2f} {r['unit'] or ''})"
         for i, r in enumerate(rows)
     ]) or f"({window_text}无盘亏记录)"
 
+    # 金额是唯一能跨食材相加的维度 —— 数量总计会把 kg 和 L 加到一起(实测
+    # DEMO_REST 41.45kg + 45.00L), 所以总计只给金额, 数量只逐项给且必带单位。
     answer = (
         f"{window_text}盘点总览:\n"
-        f"- 盘点 {total['count']} 次, 盘亏总量 **{total['shortage']:.2f}**, 盘盈总量 {total['surplus']:.2f}\n\n"
-        f"盘亏食材前 {len(rows)} 名:\n\n{top_text}\n\n"
+        f"- 盘点 {total['count']} 次, 盘亏金额 **¥{total['shortage_cost']:.2f}**, "
+        f"盘盈金额 ¥{total['surplus_cost']:.2f}\n\n"
+        f"盘亏食材前 {len(rows)} 名(按金额):\n\n{top_text}\n\n"
         f"建议动作:\n"
         f"1. 对盘亏最高的食材先核查领料单、报损单和实际库存照片，找出未登记消耗。\n"
         f"2. 把连续盘亏食材纳入每日闭店抽盘，连续两天异常就回溯到班组和菜品。\n"
