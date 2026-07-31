@@ -99,12 +99,36 @@ public class ByproductBatchMaterializer {
         return created;
     }
 
-    /** 按名称匹配 BOM 声明；两边都 trim 后比较，认不出就返回 null（不做模糊猜测）。 */
+    /**
+     * 报工侧的<b>通用占位名</b>。web-admin 逐工序录入的副产列把名字写死成这个
+     * ({@code ProcessDataTable.vue}: {@code byproducts = [{ name: '副产', ... }]}),
+     * 操作员没有地方选"这是哪个副产 SKU"。
+     */
+    private static final String GENERIC_BYPRODUCT_NAME = "副产";
+
+    /**
+     * 把一条报工副产对上 BOM 声明。
+     *
+     * <p>两条判据, 按优先级:</p>
+     * <ol>
+     *   <li><b>名称精确匹配</b> —— RN 等能填具体名字的入口走这条。</li>
+     *   <li><b>通用占位 + 该 SKU 只声明了一条副产</b> → 归它。web-admin 的副产列名字写死成
+     *       「副产」, 不给这条路的话它<b>永远匹配不上、永远落不了库</b>(2026-08-01 走查发现)。
+     *       只声明一条时归属是<b>确定的</b>, 不存在归错。</li>
+     * </ol>
+     *
+     * <p>🔴 <b>刻意不做的</b>: 报工填了具体名字(如「料头」)却匹配不上时, <b>不</b>因为"只有一条声明"
+     * 就算到那条头上 —— 那是把一个明确说了是别的东西的产出记到别人账上。声明 2 条以上时同理:
+     * 归属不确定就诚实跳过, 不猜。</p>
+     */
     private Map<String, Object> matchDeclaration(List<Map<String, Object>> declarations, String name) {
         for (Map<String, Object> declaration : declarations) {
             if (name.equals(text(declaration.get("name")))) {
                 return declaration;
             }
+        }
+        if (GENERIC_BYPRODUCT_NAME.equals(name) && declarations.size() == 1) {
+            return declarations.get(0);
         }
         return null;
     }
