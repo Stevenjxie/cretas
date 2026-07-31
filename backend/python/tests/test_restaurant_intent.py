@@ -4161,3 +4161,63 @@ async def test_parse_restaurant_query_forwards_session_summary_to_the_planner():
     assert list(llm.await_args.kwargs["history"]) == [
         {"q": "万达店本月营收多少", "a_summary": "营收 128.4 万元。"}
     ]
+
+
+def test_llm_only_metric_cannot_override_a_resolver_the_planner_already_chose():
+    """纯粹由 LLM 填出来的指标, 不许覆盖 planner 已经选好的 resolver。
+
+    contract-repair 的正当性来源写在它自己的注释里: "its raw resolver label is not
+    executable when it contradicts the metric/object slots in **the user's own
+    wording**"。所以驱动覆盖的那个指标必须能从用户措辞里编译出来; 如果编译不出来,
+    那就不是"措辞与标签矛盾", 而是拿模型的一个猜测去推翻模型的另一个判断。
+
+    2026-07-31 prod 实拍(MOCK_REST):
+      「全部门店最近30天盘点亏了多少」
+      contract-repair resolver RESTAURANT_OPS_STOCK_SHORTAGE -> WASTAGE_TOP
+          metrics=('wastage',)
+    → 盘点问题被答成损耗榜。而该问句经 _detect_requested_metrics 编译出的指标是
+    **空的**(表里没有盘点类指标, 「亏了」也不在 gross_margin 的 token 里), 那个
+    wastage 完全来自 LLM —— planner 本来是对的。
+    """
+    from smartbi.gold.restaurant.restaurant_intent import _detect_requested_metrics
+
+    query = "全部门店最近30天盘点亏了多少"
+    # 前提: 用户措辞里确实编译不出任何指标 —— 这条断言塌了, 下面的用例就失去意义。
+    assert _detect_requested_metrics(query) == ()
+
+    spec = _build_spec(
+        "RESTAURANT_OPS_STOCK_SHORTAGE",
+        query,
+        confidence=0.95,
+        tier="llm",
+        llm_requested_metrics=("wastage",),
+        llm_dimensions=("ingredient",),
+        planner_authority="llm",
+    )
+
+    # planner 的判断必须保住, 不能被 LLM 自己填的 wastage 改写成损耗榜
+    assert spec.intent == "RESTAURANT_OPS_STOCK_SHORTAGE"
+    assert spec.planner_authority != "llm_contract_repair"
+
+
+def test_user_written_metric_still_repairs_a_contradicting_llm_label():
+    """反向对照: 指标确实写在用户措辞里时, contract-repair 照常工作。
+
+    上面那条 guard 只能【更严】, 不能把正当的 repair 也挡掉 —— 这条盯的就是它。
+    """
+    from smartbi.gold.restaurant.restaurant_intent import _detect_requested_metrics
+
+    query = "哪个菜卖得好"
+    assert "sales_volume" in _detect_requested_metrics(query)
+
+    spec = _build_spec(
+        "RESTAURANT_OPS_SALES_SUMMARY",
+        query,
+        confidence=0.95,
+        tier="llm",
+        clarification_needed=True,
+        clarification_question="您是指销量最高、营收最高，还是毛利最高的菜品？",
+    )
+
+    assert spec.intent == "RESTAURANT_OPS_GROSS_MARGIN"
+    assert spec.planner_authority == "llm_contract_repair"
