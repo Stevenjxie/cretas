@@ -16,7 +16,7 @@
  * "添加剂" 归入"辅料"桶 (客户特别提到辅料/添加剂混在一起, 两者业务上都属"非主料的配方成分",
  * 且 system_enums 目前没有独立的"添加剂"大类筛选项, 归并可避免下拉再多分一档增加认知负担).
  */
-export type BigCategory = '原料' | '辅料' | '调料' | '包材' | '其他';
+export type BigCategory = '原料' | '辅料' | '调料' | '包材' | '其他' | '副产';
 
 export const BIG_CATEGORY_OPTIONS: { label: string; value: BigCategory | '' }[] = [
   { label: '全部', value: '' },
@@ -25,6 +25,7 @@ export const BIG_CATEGORY_OPTIONS: { label: string; value: BigCategory | '' }[] 
   { label: '调料', value: '调料' },
   { label: '包材', value: '包材' },
   { label: '其他', value: '其他' },
+  { label: '副产', value: '副产' },
 ];
 
 export const RAW_CATEGORY_VALUES = new Set([
@@ -57,4 +58,15 @@ export function filterOptionsByBigCategory<T extends { category?: string | null 
 ): T[] {
   if (!bigCategory) return options;
   return options.filter((m) => bigCategoryOf(m.category) === bigCategory);
+}
+
+/**
+ * 副产大类 —— 副产 SKU 放在原料字典里(与 WIP 半成品同一条路, prod 已有 249 条先例),
+ * 但它**没有采购来源**: unitPrice / taxIncludedUnitPrice / movingAvgPrice / minStock
+ * 这些采购属性对它全是空的。用大类把它与「买来的原料」隔开, 避免出现在采购下拉与补货建议。
+ */
+export const BYPRODUCT_CATEGORY = '副产' as const;
+
+export function isByproductCategory(category: string | null | undefined): boolean {
+  return typeof category === 'string' && category.trim() === BYPRODUCT_CATEGORY;
 }
