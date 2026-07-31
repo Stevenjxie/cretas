@@ -59,6 +59,24 @@ STORE_SCOPE_CLARIFICATION_QUESTION = (
     "多家门店会按同一时间和指标自动比较。"
 )
 
+def _slot_of_clarification(question: Optional[str]) -> Optional[str]:
+    """把**上一轮持久化下来的反问字符串**映射回槽位 —— 唯一的边界转换点。
+
+    为什么需要它: continuation 类函数拿到的是会话状态里存的**字符串**(老会话里
+    没有 missing_slot 字段), 所以这一层还得认字符串。但认字符串的地方必须**只有
+    这一处** —— 改动前有 8 个决策点各自比较字符串, 合成一句「门店和时间一起告诉我」
+    的追问会同时匹配不上全部 8 处并**静默穿过**。
+
+    收敛到这里之后, 合成追问只需要让这个函数返回一个复合槽位(如 "store+time"),
+    调用方按槽位分支即可。
+    """
+    if question == TIME_CLARIFICATION_QUESTION:
+        return "time"
+    if question == STORE_SCOPE_CLARIFICATION_QUESTION:
+        return "store"
+    return None
+
+
 TRUSTED_PLANNER_AUTHORITIES = frozenset({
     "llm",
     "validated_plan_cache",
@@ -3125,7 +3143,7 @@ def _explicit_store_dish_ranking_spec(
             missing_time
             and (
                 not spec.clarification_needed
-                or spec.clarification_question != TIME_CLARIFICATION_QUESTION
+                or spec.missing_slot != "time"
             )
         )
         or (not missing_time and spec.clarification_needed)
@@ -3214,7 +3232,7 @@ def _explicit_named_dish_metric_spec(
             missing_time
             and (
                 not spec.clarification_needed
-                or spec.clarification_question != TIME_CLARIFICATION_QUESTION
+                or spec.missing_slot != "time"
             )
         )
         or (not missing_time and spec.clarification_needed)
@@ -3488,7 +3506,7 @@ def _approved_exact_continuation_route(
     matched_code, inherited_time, inherited_store = matched
 
     answer_normalized = _normalize_exact_phrase(answer)
-    if clarification_question == TIME_CLARIFICATION_QUESTION:
+    if _slot_of_clarification(clarification_question) == "time":
         if inherited_time:
             return None
         if answer_normalized in {
@@ -3499,7 +3517,7 @@ def _approved_exact_continuation_route(
         return None
 
     if (
-        clarification_question != STORE_SCOPE_CLARIFICATION_QUESTION
+        _slot_of_clarification(clarification_question) != "store"
         or not inherited_time
         or inherited_store
     ):
@@ -3544,13 +3562,13 @@ def _trusted_named_dish_button_continuation(
         return None
 
     answer_normalized = _normalize_exact_phrase(answer)
-    if clarification_question == TIME_CLARIFICATION_QUESTION:
+    if _slot_of_clarification(clarification_question) == "time":
         if base.window_label != "全部历史" or answer_normalized not in {
             _normalize_exact_phrase(window)
             for window in _APPROVED_TIME_ANSWERS
         }:
             return None
-    elif clarification_question == STORE_SCOPE_CLARIFICATION_QUESTION:
+    elif _slot_of_clarification(clarification_question) == "store":
         if base.window_label == "全部历史" or base.store_scope:
             return None
         if answer_normalized != _normalize_exact_phrase("全部门店"):
@@ -3580,7 +3598,7 @@ def _trusted_named_dish_button_continuation(
     ):
         return None
     if (
-        clarification_question == STORE_SCOPE_CLARIFICATION_QUESTION
+        _slot_of_clarification(clarification_question) == "store"
         and candidate.store_scope not in {"all", "single"}
     ):
         return None
@@ -5903,7 +5921,7 @@ async def _parse_continuation(
         and pending_named_dish_spec.requested_metrics
     ):
         if (
-            clarification_question == STORE_SCOPE_CLARIFICATION_QUESTION
+            _slot_of_clarification(clarification_question) == "store"
             and _is_pure_store_scope_answer(query)
         ):
             # Store-scope buttons are syntactically trailing answers, while
@@ -5976,7 +5994,7 @@ async def _parse_continuation(
             return explicit_spec
 
     if (
-        clarification_question == STORE_SCOPE_CLARIFICATION_QUESTION
+        _slot_of_clarification(clarification_question) == "store"
         and _is_explicit_sales_period_comparison(original_query)
     ):
         original_sales_spec = _resolve_sales_query_spec(original_query)
@@ -6026,7 +6044,7 @@ async def _parse_continuation(
             )
 
     if (
-        clarification_question == STORE_SCOPE_CLARIFICATION_QUESTION
+        _slot_of_clarification(clarification_question) == "store"
         and _is_pure_store_scope_answer(query)
     ):
         explicit_comparison_spec = _explicit_sales_period_comparison_spec(

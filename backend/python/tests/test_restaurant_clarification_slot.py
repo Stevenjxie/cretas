@@ -59,22 +59,76 @@ def test_spec_carries_the_slot_field():
 def test_string_identity_comparisons_are_counted():
     """把「还剩多少处靠字符串做判据」变成一个会说话的数字。
 
-    基线是 **11 处出现**(分布在 10 行里 —— 有一行含两处比较)。
-    ⚠️ 按**出现次数**而不是行数: `grep -c` 数的是行, 会漏掉同一行里的第二处,
-    我第一次就是这么数成 10 的。守卫测试的基线必须精确到它真正要防的粒度。
+    基线现在是 **0** —— 10 处散落的比较已全部收敛:
+        2 处读 `spec.clarification_question` → 改读 `spec.missing_slot`
+        8 处读**函数参数**(上一轮持久化的字符串, 老会话没有新字段)
+            → 改读 `_slot_of_clarification(...)`, 字符串知识只剩那一个边界函数
 
-    这条**不是**要求马上清零 —— 是让每次替换都有据可查, 且防止有人在换掉一部分
-    之后又新增身份比较(那会让两套判据并存, 正是「一个闸由多处承载」的成因)。
-    数字下降时改这里, 上升就红。
+    ⚠️ 两个计数陷阱, 我都踩过:
+      1. 按**出现次数**不是行数 —— `grep -c` 数行会漏掉同一行里的第二处(数成 10);
+      2. 必须**排除注释** —— 上一版把我自己写在文档注释里的示例也数了进去(虚高成 11)。
+    守卫测试的基线必须精确到它真正要防的粒度, 否则它自己就是个假信号。
+
+    这条防的是「换掉一部分之后又新增身份比较」—— 两套判据并存时, 合成追问会
+    静默穿过其中一套, 正是「一个闸由多处承载」的成因。
     """
     src = inspect.getsource(R)
+    code = "\n".join(l for l in src.split("\n") if not l.strip().startswith("#"))
     identity_checks = re.findall(
         r"clarification_question\s*[!=]=\s*"
         r"(?:TIME_CLARIFICATION_QUESTION|STORE_SCOPE_CLARIFICATION_QUESTION)",
-        src,
+        code,
     )
-    assert len(identity_checks) <= 11, (
-        f"靠反问字符串做判据的地方涨到了 {len(identity_checks)} 处(基线 11)。\n"
-        "新增判断请读 spec.missing_slot, 别再比字符串 —— 两套判据并存时, "
-        "合成追问会静默穿过其中一套。"
+    assert not identity_checks, (
+        f"又出现了 {len(identity_checks)} 处直接比较反问字符串的判据(基线 0)。\n"
+        "读 spec.missing_slot; 只拿得到字符串时(continuation 的持久化状态)走 "
+        "_slot_of_clarification() —— 字符串知识必须只有那一处。"
     )
+
+
+def test_the_boundary_converter_is_the_only_place_that_knows_the_strings():
+    """边界函数必须存在且真的在做映射 —— 它是合成追问唯一要改的地方。"""
+    assert hasattr(R, "_slot_of_clarification"), "边界转换函数不见了"
+    assert R._slot_of_clarification(R.TIME_CLARIFICATION_QUESTION) == "time"
+    assert R._slot_of_clarification(R.STORE_SCOPE_CLARIFICATION_QUESTION) == "store"
+    assert R._slot_of_clarification(None) is None
+    assert R._slot_of_clarification("随便一句别的话") is None
+
+
+# ── 被替换的 continuation 分支必须有行为覆盖 ─────────────────────────────
+#
+# ⚠️ 加这一节的原因: 把 10 处字符串判据换成读槽位之后, 我跑了变异检验
+# (边界函数改成恒返回 None) —— **312 条既有 intent 用例里只有 1 条红**, 而且那条
+# 还是本文件自己的。也就是说那 8 处 continuation 分支**根本没有行为覆盖**:
+# 「6083 passed」证明的是导入和类型没坏, **不能证明这几处换对了**。
+#
+# 这正是本仓反复记的那条 ——「套件绿经常什么都没证明」, 这次落在我自己的重构上。
+
+def test_time_button_continuation_still_routes_after_the_refactor():
+    """时间按钮分支: 上一轮问的是时间, 本轮答一个时间按钮 → 路由回原 intent。"""
+    query = "哪个菜卖得好"
+    assert R._approved_exact_shape(query) is not None, "夹具失效: 该问句不再是已批准路由"
+
+    routed = R._approved_exact_continuation_route(
+        query, "最近30天", R.TIME_CLARIFICATION_QUESTION,
+    )
+    assert routed == "RESTAURANT_OPS_GROSS_MARGIN", routed
+
+
+def test_continuation_declines_when_there_was_no_clarification():
+    """没有上一轮反问时不许路由 —— 边界函数返回 None 的那条路。"""
+    assert R._approved_exact_continuation_route("哪个菜卖得好", "最近30天", None) is None
+
+
+def test_continuation_declines_for_an_unknown_clarification_string():
+    """老会话/别处存下来的任意字符串不能被当成时间或门店反问。"""
+    assert R._approved_exact_continuation_route(
+        "哪个菜卖得好", "最近30天", "随便一句别的反问",
+    ) is None
+
+
+def test_time_branch_rejects_a_non_time_answer():
+    """分支选对了还不够 —— 时间反问下只接受四个时间按钮。"""
+    assert R._approved_exact_continuation_route(
+        "哪个菜卖得好", "全部门店", R.TIME_CLARIFICATION_QUESTION,
+    ) is None
