@@ -50,10 +50,14 @@
 
 | 已有能力 | 载体 | 线上数据 |
 |---|---|---|
-| 工序**预先声明**预期副产 | `work_processes.expected_byproducts` | **4 个工序已声明** |
-| 报工**录副产**（名/量/单位/单价） | `production_reports.byproducts` | **15 条已录**，如 `{"name":"肥油","unit":"kg","quantity":36,"unitPrice":8}` |
+| 工序**预先声明**预期副产 | `work_processes.expected_byproducts` | **4 个工序已声明**（2 个在真实工厂 F006）<br>⚠️ 但**声明了没人读** —— RN 报工屏 `YieldStepReportScreen` 零引用 |
+| 报工**录副产**（名/量/单位/单价） | `production_reports.byproducts` | **15 条已录**，⚠️ **全部在 `DEMO_FACTORY`**，非真实工厂数据 |
 | 副产成本冲减（含上游 WIP 链传播） | `OrderCostBreakdownService.upstreamByproductCredit` | 在用 |
-| BOM 侧 NRV 抵扣 | `bom_recipes.byproduct_nrv_unit_price` + `recomputeFamilyCosts` | 在用 |
+| BOM 侧 NRV 抵扣 | `bom_recipes.byproduct_nrv_unit_price` + `recomputeFamilyCosts` | 🔴 **有实现、线上 0 行使用**（本表原写「在用」是错的） |
+
+> 🔴 **2026-07-31 Task 7 实测更正**：本表上一版把后两行写成「在用」，据此推出「两套单价要合并」——
+> 这个前提不成立。BOM 侧 `byproduct_nrv_unit_price` 61 行**全是 NULL**。
+> 取证与后果详见 `docs/dispatch/2026-07-31-byproduct-price-source-audit.md`。
 
 **真正缺的只有四样**：① 副产是自由文本 name 不是 SKU → 不能被当原料再投入 ② 不落 `material_batches` → 盘点盘不到 ③ 单价在报工时填（要挪到盘点）④ 单价有两个权威来源。
 

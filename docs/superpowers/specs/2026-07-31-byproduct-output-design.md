@@ -14,9 +14,9 @@
 | 已有能力 | 载体 | 线上数据 |
 |---|---|---|
 | 工序**预先声明**预期副产 | `work_processes.expected_byproducts` | **4 个工序已声明** |
-| 报工**录副产**（名/量/单位/单价） | `production_reports.byproducts` | **15 条已录**，如 `{"name":"肥油","unit":"kg","quantity":36,"unitPrice":8}` |
+| 报工**录副产**（名/量/单位/单价） | `production_reports.byproducts` | **15 条已录**，如 `{"name":"肥油","unit":"kg","quantity":36,"unitPrice":8}`<br>⚠️ **全部在 `DEMO_FACTORY`**，非真实工厂数据（2026-07-31 Task 7 实测；真实工厂 F006 共 13 条报工，0 条带副产） |
 | 副产**成本冲减**（含上游 WIP 链传播） | `OrderCostBreakdownService.upstreamByproductCredit` | 在用 |
-| BOM 侧 **NRV 抵扣** | `bom_recipes.byproduct_nrv_unit_price` + `recomputeFamilyCosts` | 在用（卡住客户的就是它的**时机**） |
+| BOM 侧 **NRV 抵扣** | `bom_recipes.byproduct_nrv_unit_price` + `recomputeFamilyCosts` | 🔴 **有实现、有录入界面、线上 0 行使用**<br>（2026-07-31 Task 7 实测：`bom_recipes` 61 行，`byproduct_nrv_unit_price` **有值 0 行**。初稿此处写「在用」是错的 —— 正是这句话让 Task 7 去追一个并不存在的「两套单价合并」。详见 `docs/dispatch/2026-07-31-byproduct-price-source-audit.md`） |
 
 ### 1.1 真正缺的四样
 
@@ -35,6 +35,13 @@
 | `OrderCostBreakdownService` | **订单级单盒实际成本**（沿实际消耗边回溯） | 报工 `byproducts[].unitPrice` |
 
 问题在于**同一个副产的单价维护在两处**，会各说各话。
+
+> 🔴 **2026-07-31 Task 7 实测修正**：这个「两处」在线上**并不成立** —— BOM 侧
+> `byproduct_nrv_unit_price` **0 行有值**，只有报工侧在用。所以不存在「跨两侧取值不同」，
+> 也没有任何既有 BOM 标准成本会因收敛而改变（没有值可迁移）。
+> 真正存在的分歧在**报工侧内部**：同一个「料头」在 3 条记录里填了 5 / 3 / 3，
+> 另有 2 条根本没填单价 —— 这反而印证了「单价收敛到 SKU、确认挪到盘点」是对的。
+> 完整取证见 `docs/dispatch/2026-07-31-byproduct-price-source-audit.md`。
 
 **并法（Steve 2026-07-31 拍板「并成一套」，以报工侧为准）：**
 
