@@ -68,3 +68,43 @@ class TestRequisitionSpendStaysDeterministic:
                 ambiguous.append(f"{metric} → {[o.replace('RESTAURANT_OPS_', '') for o in owners]}")
         # 已知多归属的先记录在案; 新增指标不许再引入歧义
         assert len(ambiguous) <= 4, "可修复集里出现了新的多归属指标:\n" + "\n".join(ambiguous)
+
+
+class TestPlannerKnowsRequisitionCost:
+    """真根因: 「指标 → resolver」的规划表不认识 `requisition_cost`。
+
+    第一次修(把它加进 `_CONTRACT_REPAIRABLE_METRICS`)**没生效** —— prod 复跑后
+    这条问句从 STORE_MARGIN 漂成了 RECIPE_COST, 第四个不同的错 intent。
+
+    原因: `_plan_requested_intents` 的 `for metric in requested_metrics` 分支链
+    只覆盖 recipe_cost / wastage / sales_volume / gross_margin / revenue+orders,
+    碰到 `requisition_cost` 一条规则都不匹配 → 返回**空**或原样回显 LLM 选的 code。
+    而 contract-repair 的触发条件之一是 `code not in planned_intents` ——
+    回显自己, 这个条件永远为假, **修复通道从来没被走到过**。
+
+    🔴 教训: 「把指标加进可修复白名单」只是准入, 真正决定修成什么的是规划表。
+    只改前者等于给一扇没有门的墙配了钥匙。
+    """
+
+    def test_规划表能把领料成本指到领料趋势(self):
+        from smartbi.gold.restaurant.restaurant_intent import _plan_requested_intents
+
+        planned = _plan_requested_intents(
+            "全部门店最近30天采购花了多少钱", "", ("requisition_cost",), (),
+            "all", "lookup", None, None,
+        )
+        assert planned == ("RESTAURANT_OPS_REQUISITION_TREND",), planned
+
+    def test_LLM选错时规划表不跟着错(self):
+        """给一个明显不相干的 code, 规划表仍应按指标指到领料趋势 ——
+
+        否则 contract-repair 的 `code not in planned_intents` 永远为假。
+        """
+        from smartbi.gold.restaurant.restaurant_intent import _plan_requested_intents
+
+        for wrong in ("RESTAURANT_OPS_RECIPE_COST", "RESTAURANT_OPS_STORE_MARGIN"):
+            planned = _plan_requested_intents(
+                "全部门店最近30天采购花了多少钱", wrong, ("requisition_cost",), (),
+                "all", "lookup", None, None,
+            )
+            assert planned == ("RESTAURANT_OPS_REQUISITION_TREND",), (wrong, planned)

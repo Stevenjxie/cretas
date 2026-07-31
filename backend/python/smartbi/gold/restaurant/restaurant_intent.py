@@ -777,6 +777,15 @@ def _plan_requested_intents(
             )
         elif metric == "wastage":
             code = "RESTAURANT_OPS_WASTAGE_TOP"
+        elif metric == "requisition_cost":
+            # 2026-07-31 补入。这条分支链此前不认识 requisition_cost —— 于是
+            # 「采购花了多少钱」的规划结果是**原样回显 LLM 选的 code**, 而
+            # contract-repair 的触发条件之一是 `code not in planned_intents`,
+            # 回显自己让这个条件永远为假, **修复通道从来没被走到过**。
+            # 后果: 同一问句在四个场合漂到四个不同的 intent
+            # (sales_volume / RECIPE_COST / STORE_MARGIN / 又一次 RECIPE_COST)。
+            # 该指标唯一由 REQUISITION_TREND 声明, 无歧义。
+            code = "RESTAURANT_OPS_REQUISITION_TREND"
         elif metric == "sales_volume":
             if "store" in dimensions and "dish" in dimensions:
                 code = (
