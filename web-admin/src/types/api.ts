@@ -66,6 +66,8 @@ export interface PageRequest {
 export class ApiError extends Error {
   code?: string;
   status?: number;
+  /** Structured `ApiResponse.data` returned with a failed request. */
+  data?: unknown;
   /**
    * R24 P2 audit follow-up: marker that distinguishes business 409s
    * (BusinessException(409).withHint(actionHint)) from vanilla optimistic-lock
@@ -77,12 +79,19 @@ export class ApiError extends Error {
    */
   actionHint?: string | null;
 
-  constructor(message: string, code?: string, status?: number, actionHint?: string | null) {
+  constructor(
+    message: string,
+    code?: string,
+    status?: number,
+    actionHint?: string | null,
+    data?: unknown,
+  ) {
     super(message);
     this.name = 'ApiError';
     this.code = code;
     this.status = status;
     this.actionHint = actionHint ?? null;
+    this.data = data;
   }
 }
 
