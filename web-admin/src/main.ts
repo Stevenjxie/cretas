@@ -66,6 +66,14 @@ async function bootstrap() {
     console.warn('[cretas] ElMessage.error monkey-patch failed:', e);
   }
 
+  // 2.4 修 el-input-number 的 aria-disabled 陈旧 (EP 只在 onMounted 写一次, 升级到
+  // 2.14.3 仍如此)。不修则 :disabled 挂载后翻 false 时读屏仍报「已禁用」, 且
+  // Playwright 据此拒绝一切 click/fill。同 ElMessage 补丁的取舍: 一处覆盖全仓
+  // 436 个 el-input-number (其中 32 处 :disabled 动态), 不逐处改。
+  // 详见 plugins/ariaDisabledSync.ts + 同名单测里的阳性对照。
+  const ariaDisabledSync = await import('./plugins/ariaDisabledSync');
+  app.use(ariaDisabledSync.default);
+
   // 2.5 注册全局拼音首字母搜索指令 (v-pinyin)。当前在实测环境下探测私有 el-plus
   // 内部结构会静默降级 (见 directives/pinyin.ts 头部说明 + 单测)，本轮实际业务
   // select 改走同文件导出的 usePinyinFilter composable，此处仍注册以便未来
