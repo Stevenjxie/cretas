@@ -1149,9 +1149,14 @@ def test_resolve_by_code_legacy_resolver_ignores_role_kwarg(monkeypatch):
 
     # role=... is passed but _fake_wastage has no role param → must be dropped,
     # NOT raise TypeError.
+    #
+    # 2026-08-01: 角色从 "operator" 换成有价格权限的角色。WASTAGE_TOP 的答案整个是
+    # 金额, 中央 RBAC 闸会在分发**之前**短路无权限角色 —— 用 operator 的话根本走不到
+    # _fake_wastage, 这条就不再测「kwargs 按签名过滤」了。旧的那个组合(无权限角色
+    # 问涉钱 intent)现在的正确行为由 test_restaurant_money_rbac.py 覆盖。
     ans = asyncio.run(
         resolve_by_code(
-            "RESTAURANT_OPS_WASTAGE_TOP", object(), "RES_TEST", role="operator",
+            "RESTAURANT_OPS_WASTAGE_TOP", object(), "RES_TEST", role="restaurant_owner",
         )
     )
     assert ans is not None and ans.answer_text == "ok"

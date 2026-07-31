@@ -188,7 +188,10 @@ async def test_resolve_by_code_binds_catalogue_for_the_resolver(monkeypatch):
     R._DISH_CATALOGUE_CACHE.pop("F_PROBE", None)
 
     result = await R.resolve_by_code(
+        # role 是 2026-08-01 补的: WASTAGE_TOP 的答案整个是金额, 中央 RBAC 闸会在
+        # 分发**之前**短路无权限角色。本用例测的是目录绑定不是 RBAC, 所以给权限。
         "RESTAURANT_OPS_WASTAGE_TOP", _CatalogueProbePool(), "F_PROBE",
+        role="restaurant_owner",
     )
 
     assert result == "ok"
@@ -218,6 +221,7 @@ async def test_resolve_by_code_still_dispatches_when_catalogue_unavailable(monke
 
     result = await R.resolve_by_code(
         "RESTAURANT_OPS_WASTAGE_TOP", _BoomPool(), "F_BOOM2",
+        role="restaurant_owner",   # 同上: 本用例测的不是 RBAC
     )
 
     assert result == "ok"
