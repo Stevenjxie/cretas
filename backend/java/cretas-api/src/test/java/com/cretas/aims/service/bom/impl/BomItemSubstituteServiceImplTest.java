@@ -115,6 +115,29 @@ class BomItemSubstituteServiceImplTest {
         assertThat(rejected.getMessage()).isEqualTo("BOM 主项类型不支持替代关系");
     }
 
+    /**
+     * 🔴 空替代料列表对副产行必须是**无操作**, 不能因为父项类别就把整条明细保存打回。
+     *
+     * <p>起因(2026-08-01 prod 走查): BomRecipeServiceImpl.addItem 对每一行都无条件调
+     * replaceForRecipeItem(空列表也调), 于是保存副产行时报「BOM 主项类型不支持替代关系」——
+     * 明细根本存不进去。为一个不做任何事的操作去校验父项, 制造的是假阻塞。</p>
+     *
+     * <p>⛔ 与上一条并列看: 副产 + **非空**替代料仍然拒绝。豁免的只有「空且无存量」。</p>
+     */
+    @Test
+    @DisplayName("empty substitute list on a BYPRODUCT parent is a no-op, not a rejection")
+    void emptySubstituteListOnByproductParentIsANoOp() {
+        when(repository.findByFactoryIdAndRecipeIdAndParentKindAndParentRecipeItemIdOrderByCreatedAtAsc(
+                FACTORY, RECIPE, BomItemSubstitute.ParentKind.RECIPE_ITEM, 10L))
+                .thenReturn(List.of());
+        stubDraft();
+
+        assertThat(service.replaceForRecipeItem(FACTORY, RECIPE, 10L, List.of())).isEmpty();
+
+        // 无操作就不该去碰父项 —— 连查都不用查
+        verify(entityManager, never()).find(eq(BomRecipeItem.class), eq(10L), any(LockModeType.class));
+    }
+
     @Test
     @DisplayName("positive control: a RAW parent accepts the very same substitute payload")
     void rawParentAcceptsTheSamePayloadTheByproductParentRefused() {
