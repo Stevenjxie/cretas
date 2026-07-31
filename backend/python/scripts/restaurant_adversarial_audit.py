@@ -138,8 +138,17 @@ async def _run_one(pool, fid: str, role: str, question: str) -> Dict[str, Any]:
     return await _run_case(pool, fid, role, question)
 
 
-def _classify(case: Case, out: Dict[str, Any], default_role: str) -> Tuple[bool, str]:
-    """返回 (是否通过, 失败分类)。分类要能直接指向修法, 不能只说"失败"。"""
+def _classify(case: Case, out: Dict[str, Any], default_role: str
+              ) -> Tuple[Optional[bool], str]:
+    """返回 (通过?, 分类)。
+
+    通过? 三态:
+        True  —— 真答出来了, 能力被验证到
+        False —— 失败
+        None  —— 「诚实说没数据」: 没胡编, 但**这一条没有验证到任何能力**,
+                 单独计数, 不许并进通过率(否则空租户会全绿)
+    分类要能直接指向修法, 不能只说"失败"。
+    """
     family, question, expect, role = case
     role = role or default_role
     intent = (out.get("intent") or "").strip()
@@ -168,11 +177,17 @@ def _classify(case: Case, out: Dict[str, Any], default_role: str) -> Tuple[bool,
             return True, ""
         return False, "歧义未反问: 缺上下文却直接给了答案"
 
-    # 「诚实说没数据」是**正确行为**, 不是失败 —— 项目硬规则是禁止降级处理:
-    # 宁可说「今天没有数据, 没有用其他日期替代」也不能拿别的窗口糊弄。
-    # 第一版判据把这类算成失败, 制造了假阳性; 判据错了, 通过率就是错的。
+    # 「诚实说没数据」是**正确行为**(项目硬规则禁止降级处理), 但它**不等于**
+    # 「这个问句工作正常」—— 它只证明了没有胡编。
+    #
+    # ⛔ 这两件事必须分开计数, 否则**空租户上这份审计会全绿**:
+    #    2026-08-01 实测 MOCK_REST 的营收类问句全部走这条路(最近30天没有 POS 流水),
+    #    第一版判据把它们算成「同义-营收 3/3」, 看起来这个维度很稳 ——
+    #    实际上一条都没有真的答出营收。
+    #    第一版还反过来把它们算成**失败**(假阳性), 两次都错在同一处: 把
+    #    「没胡编」和「有能力」混成了一个格子。
     if _HONEST_NO_DATA_RE.search(answer):
-        return True, ""
+        return None, "无数据(诚实, 但未验证到能力)"
 
     # 其余: 要真答出来
     if kind == "clarification":
@@ -209,6 +224,7 @@ async def main_async(args: argparse.Namespace) -> int:
     families: Dict[str, List[int]] = {}
     failures: List[Tuple[Case, str, str]] = []
     passed = 0
+    no_data = 0
     try:
         for case in CASES:
             family, question, _expect, role = case
@@ -216,14 +232,17 @@ async def main_async(args: argparse.Namespace) -> int:
             started = time.time()
             out = await _run_one(pool, args.factory, effective_role, question)
             ok, reason = _classify(case, out, args.role)
-            families.setdefault(family, [0, 0])
-            families[family][1] += 1
-            if ok:
+            families.setdefault(family, [0, 0, 0])   # [通过, 无数据, 总数]
+            families[family][2] += 1
+            if ok is None:
+                no_data += 1
+                families[family][1] += 1
+            elif ok:
                 passed += 1
                 families[family][0] += 1
             else:
                 failures.append((case, reason, (out.get("answer") or "")[:110]))
-            mark = "✅" if ok else "❌"
+            mark = "✅" if ok else ("➖" if ok is None else "❌")
             print(f"{mark} [{family:10}] {question[:34]:34} "
                   f"{(out.get('intent') or '-')[:20]:20} {time.time()-started:.1f}s"
                   f"{'' if ok else '  ' + reason}")
@@ -231,12 +250,21 @@ async def main_async(args: argparse.Namespace) -> int:
         await pool.close()
 
     total = len(CASES)
+    verified = total - no_data          # 真正被验证到的用例数
     print("\n" + "=" * 78)
-    print(f"通过 {passed}/{total} = {passed/total*100:.1f}%   租户={args.factory}")
+    print(f"租户={args.factory}")
+    print(f"  通过   {passed}/{verified} = "
+          f"{(passed/verified*100 if verified else 0):.1f}%   (只算验证得到的)")
+    print(f"  无数据 {no_data}/{total}  —— 诚实说没数据, 没胡编, 但**没验证到能力**")
+    if no_data > total * 0.25:
+        print(f"  ⚠️ 无数据占比 {no_data/total*100:.0f}% 偏高 —— "
+              f"换个有数据的租户跑, 否则这份结果说明不了多少问题")
     print("-" * 78)
-    for fam, (ok_n, all_n) in sorted(families.items()):
-        flag = "" if ok_n == all_n else "   ← 有失败"
-        print(f"  {fam:12} {ok_n}/{all_n}{flag}")
+    for fam, (ok_n, nd_n, all_n) in sorted(families.items()):
+        bits = f"{ok_n}/{all_n - nd_n}" if all_n > nd_n else "—"
+        nd = f"  (无数据 {nd_n})" if nd_n else ""
+        flag = "" if ok_n == all_n - nd_n else "   ← 有失败"
+        print(f"  {fam:12} {bits}{nd}{flag}")
     if failures:
         print("-" * 78)
         print("失败明细 (按分类):")
