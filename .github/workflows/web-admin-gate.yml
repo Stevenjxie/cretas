@@ -50,3 +50,17 @@ jobs:
       # 本 workflow 的目的是让「套件绿」重新成为可信信号, 不是把整轮审计搬到每次 push。
       - name: Vitest unit tests
         run: npm test
+
+      # 2026-08-01 加入。此前「web-admin 有没有被检查」由**三处**决定:
+      #   ci.yml 的 full_audit (workflow_dispatch 手动) / 本 workflow (只跑 vitest) /
+      #   typecheck 无人负责。于是 #2086 带着一条 TS2322 进了 main 并躺了一整天,
+      #   是偶然跑了一次 vue-tsc 才发现的 —— 与 #2097 修的是同一个形状, 只是高一层。
+      #
+      # 加进来的前提是它在目标环境**已经是绿的**(上闸前实测 origin/main
+      # 30029ea43e: exit 0 无输出), 否则是把「不可信的绿」换成「挡所有人的红」。
+      #
+      # 只加 typecheck 不加 `npm run build`: 前者约 40s 且能抓到真缺陷; 后者是
+      # 打包耗时更长, 而 web-dist.yml 已经在每次 web-admin push 上真的构建一次,
+      # 构建坏了那边会红 —— 再加一遍是重复承载。
+      - name: Type check (vue-tsc)
+        run: npx vue-tsc -b --force
