@@ -174,3 +174,42 @@ describe('部门数据源的端点前缀', () => {
     }
   });
 });
+
+/**
+ * 取值路径必须是 camelCase。
+ *
+ * `pythonFetch` 出口有 `transformKeys()`，把后端返回的 snake_case 全部转成
+ * camelCase。照抄后端字段名（`total_wastage_cost`）会取不到值，而 `pickPath`
+ * 取不到只返回 `undefined` → KPI 渲染成「—」，**不抛错、不报警**。
+ *
+ * 2026-07-31 实际后果：四个部门页的 KPI 带与排行表全是空的，而趋势图正常
+ * （趋势只用 `date` / `value` 两个单词字段，camelCase 转换对它没有影响）——
+ * 这个"一半正常一半空"的形态极具迷惑性。单测全绿、类型检查全绿，
+ * **只有打开页面才看得见**。
+ */
+describe('取值路径必须 camelCase', () => {
+  it('KPI 路径不含下划线', () => {
+    const bad: string[] = [];
+    for (const key of DEPARTMENT_ORDER) {
+      for (const kpi of DEPARTMENTS[key].kpis) {
+        if (kpi.path.includes('_')) bad.push(`${key}.${kpi.label}: ${kpi.path}`);
+      }
+    }
+    expect(bad, `这些路径照抄了后端 snake_case, 取不到值:\n${bad.join('\n')}`).toEqual([]);
+  });
+
+  it('排行表的路径与字段名不含下划线', () => {
+    const bad: string[] = [];
+    for (const key of DEPARTMENT_ORDER) {
+      const r = DEPARTMENTS[key].ranking;
+      if (!r) continue;
+      for (const [label, v] of Object.entries({
+        path: r.path, nameKey: r.nameKey, valueKey: r.valueKey,
+        categoryKey: r.categoryKey ?? '',
+      })) {
+        if (v.includes('_')) bad.push(`${key}.${label}: ${v}`);
+      }
+    }
+    expect(bad, bad.join('\n')).toEqual([]);
+  });
+});
