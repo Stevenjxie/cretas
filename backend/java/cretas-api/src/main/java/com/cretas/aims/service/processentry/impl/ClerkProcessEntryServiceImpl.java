@@ -630,7 +630,26 @@ public class ClerkProcessEntryServiceImpl implements ClerkProcessEntryService {
                         && !candidate.getLaborSegments().isEmpty())
                 .reduce((left, right) -> right)
                 .orElse(null);
-        if (step == null) return;
+        if (step == null) {
+            // 🔴 2026-08-02: 没有工时段时也要把**生产日期**落下来。
+            //
+            // 此前直接 return → batch.start_time 保持 null → 下游工序选上游批次时显示
+            // 「无生产日期」(prod 实测: CLK-W-20260802-14936 当天刚报的工却显示无日期)。
+            // 而报工行**明明带着 processDate** —— 逐道录入默认「工时稍后补录」是常态,
+            // 于是常态路径反而丢掉了已知的日期。
+            //
+            // ⛔ 只落日期不编小时: 用 atStartOfDay(), 不拿 now() 冒充实际开工时刻 ——
+            //    工时补录后 applyProductionWindow 会用真实时段覆盖它。
+            LocalDate fallbackDate = steps.stream()
+                    .map(StepEntry::getProcessDate)
+                    .filter(java.util.Objects::nonNull)
+                    .reduce((left, right) -> right)
+                    .orElse(null);
+            if (fallbackDate != null && batch.getStartTime() == null) {
+                batch.setStartTime(fallbackDate.atStartOfDay());
+            }
+            return;
+        }
         LocalDate date = step.getProcessDate() != null ? step.getProcessDate() : LocalDate.now();
         LocalDateTime earliest = null;
         LocalDateTime latest = null;
