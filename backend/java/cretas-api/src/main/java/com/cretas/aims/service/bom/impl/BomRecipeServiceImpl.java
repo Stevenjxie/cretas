@@ -1022,6 +1022,31 @@ public class BomRecipeServiceImpl implements BomRecipeService {
         return recipeRepo.findById(requested.getId()).orElse(requested);
     }
 
+    /**
+     * 这个 Workflow 投入槽是不是<b>已经被别的行占着</b>（那一行带完整槽身份）。
+     *
+     * <p>占着 → 待删的这一行只是同物料的<b>重复行</b>，删掉不会让必需投入消失，应当允许删除。
+     * 没被占 → 它确实是该槽在 BOM 里的唯一代表，删掉会让投入凭空消失，继续拦。
+     */
+    private boolean slotOccupiedByAnotherItem(
+            BomRecipe recipe,
+            BomRecipeItem candidate,
+            BomWorkflowRevisionService.InputSlot slot) {
+        for (BomRecipe member : familyForStatus(recipe)) {
+            for (BomRecipeItem other : itemRepo.findByRecipeIdOrderBySortOrderAsc(member.getId())) {
+                if (other.getDeletedAt() != null || Objects.equals(other.getId(), candidate.getId())) {
+                    continue;
+                }
+                if (Objects.equals(other.getWorkflowMaterialNodeId(), slot.materialNodeId())
+                        && Objects.equals(other.getWorkflowInputPortId(), slot.inputPortId())
+                        && Objects.equals(other.getWorkflowEdgeId(), slot.edgeId())) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
     private String slotKey(BomWorkflowRevisionService.InputSlot slot) {
         return slot.materialNodeId() + "\u0000"
                 + slot.inputPortId() + "\u0000" + slot.edgeId();
@@ -1805,7 +1830,14 @@ public class BomRecipeServiceImpl implements BomRecipeService {
                     BomWorkflowRevisionService.resolveInputSlots(
                             bomWorkflowRevisionService.resolvePinnedGraph(factoryId, member))) {
                 if (Objects.equals(slot.materialTypeId(), item.getMaterialTypeId())
-                        && BomWorkflowRevisionService.unitsCompatible(slot.unit(), item.getUnit())) {
+                        && BomWorkflowRevisionService.unitsCompatible(slot.unit(), item.getUnit())
+                        // 🔴 该槽已被另一行「带身份地」占着时, 本行就不是它的代表, 而是**重复行** ——
+                        // 这道闸的本意(见方法 Javadoc)是「它还唯一代表着一个必需投入时不许删」,
+                        // 但从来没检查过槽有没有被占。于是历史遗留的重复行**永远删不掉**:
+                        // 系统自己造出来的行, 它又不让你删, 用户在界面上没有任何出路。
+                        // (2026-08-01 六膳门实测: BOM 里三个辅料各有两行, 带端口那行用量为空
+                        //  卡住领料, 而没端口的那行删不了。)
+                        && !slotOccupiedByAnotherItem(recipe, item, slot)) {
                     matches.putIfAbsent(slotKey(slot), slot);
                 }
             }
