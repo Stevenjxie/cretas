@@ -862,7 +862,11 @@ SELECT $1::varchar AS factory_id, d.date,
     UNION
     SELECT DISTINCT date FROM fact_restaurant_wastage WHERE factory_id = $1::varchar
     UNION
-    SELECT DISTINCT date FROM fact_restaurant_stocktaking WHERE factory_id = $1::varchar
+      -- status 过滤是 2026-08-01 补的 —— 按食材的两条聚合(_AGG_STOCK_SHORTAGE_SQL /
+      -- _AGG_STOCK_SHORTAGE_COST_SQL)一直过滤 COMPLETED, 只有本表不过滤 ——
+      -- 于是「总量」和「Top N 之和」天然对不上, 且未完成/已取消的盘点单被算成损失
+      -- prod 实测 R_XMX_CHAIN 的盘亏总量 1.50 全部来自一张未完成单(COMPLETED 侧为 0)
+    SELECT DISTINCT date FROM fact_restaurant_stocktaking WHERE factory_id = $1::varchar AND status = 'COMPLETED'
   ) d
   LEFT JOIN (
     SELECT date, COUNT(*) AS cnt,
@@ -891,7 +895,15 @@ SELECT $1::varchar AS factory_id, d.date,
            --  会把 SQL 常量里的孤立冒号当成 PG 语法风险, 它分不清是否在注释里。)
            SUM(CASE WHEN difference_qty < 0 THEN ABS(COALESCE(difference_cost, 0)) ELSE 0 END) AS shortage_cost,
            SUM(CASE WHEN difference_qty > 0 THEN ABS(COALESCE(difference_cost, 0)) ELSE 0 END) AS surplus_cost
-      FROM fact_restaurant_stocktaking WHERE factory_id = $1::varchar
+      -- status 过滤这里也必须有 —— 上面的日期清单加了而这里没加时, 只能剔掉
+      -- 「当天一张 COMPLETED 都没有」的日期; **混合日期**(当天既有已完成又有未完成)
+      -- 会通过日期清单, 然后在这里把未完成单一起算进去, 与 migration
+      -- V20261101_07 的 `WHERE status = 'COMPLETED'` 口径不一致 ——
+      -- 表现就是那条 migration 自己警告的「跑完 ETL 数字自己变了」。
+      -- prod 实测 F002 在 2026-03-04 / 2026-04-21 各有 1 张 COMPLETED + 1 张非
+      -- COMPLETED, stocktaking_count 会分叉(migration 写 1, ETL 写 2)。
+      FROM fact_restaurant_stocktaking
+     WHERE factory_id = $1::varchar AND status = 'COMPLETED'
      GROUP BY date
   ) s ON s.date = d.date
 ON CONFLICT (factory_id, date) DO UPDATE SET

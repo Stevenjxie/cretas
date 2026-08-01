@@ -20,6 +20,7 @@ import {
   type PermissionLevel as ApiPermissionLevel,
 } from '@/api/permissionApi';
 import { PRODUCTION_MODULE_REGISTRY, resolveModuleRegistryItem } from '@/config/moduleRegistry';
+import { DEPARTMENTS, DEPARTMENT_ORDER } from '@/views/restaurant/departments/departmentConfig';
 
 // 权限矩阵 - 定义每个角色对每个模块的权限
 type PermissionLevel = 'rw' | 'r' | 'w' | '-';
@@ -69,13 +70,21 @@ function weakerOf(a: PermissionLevel, b: PermissionLevel): PermissionLevel {
   return PERMISSION_RANK[a] <= PERMISSION_RANK[b] ? a : b;
 }
 
-/** 四个部门的 module 名，供解析与菜单标注共用，避免两处各写一份。 */
-export const RESTAURANT_DEPARTMENT_MODULES = [
-  'restaurantOps',
-  'restaurantMarketing',
-  'restaurantHr',
-  'restaurantFinance',
-] as const;
+/**
+ * 四个部门的 module 名 —— **从驾驶舱权威表派生**，不再另写一份。
+ *
+ * 2026-08-01: 上一版这里手写了四个字符串，注释写着「避免两处各写一份」，但实际
+ * 全仓有**四处**各自维护这份清单（本文件 / menuConfig.ts / router/index.ts /
+ * departments/departmentConfig.ts）。加第五个部门要改四处，漏一处的表现是
+ * 「看得见点进去 403」或「菜单没有敲 URL 能进」——**两种都不报错**，正是 #2082
+ * 一天返工四次的成因。
+ *
+ * departmentConfig.DEPARTMENTS 信息最全（key / module / 标题 / KPI / 页面入口），
+ * 所以它是权威；这里派生。菜单与路由由契约测试钉住不许漂。
+ */
+export const RESTAURANT_DEPARTMENT_MODULES = DEPARTMENT_ORDER.map(
+  (key) => DEPARTMENTS[key].module,
+) as readonly string[];
 
 const PERMISSION_MATRIX: Record<string, ModulePermissions> = {
   // Level 0 - 工厂总监 (最高权限，全模块读写)
