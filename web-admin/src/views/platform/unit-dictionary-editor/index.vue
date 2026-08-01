@@ -37,12 +37,15 @@ const factoryId = computed(() => authStore.factoryId);
 const canWrite = computed(() => permissionStore.canWrite('system'));
 
 // 单位分类选项
+// label 带举例后缀是给**下拉选择**用的(帮用户判断该选哪个);
+// short 是给**表格列**用的 —— 每行都印一遍「数量 (件/箱/筐/盒/袋/桶)」会让整列变成
+// 同一句话, 反而看不出这行是什么分类 (2026-08-02 prod 实测就是这样)。
 const CATEGORY_OPTIONS = [
-  { value: 'WEIGHT', label: '重量 (kg/g/t)' },
-  { value: 'VOLUME', label: '体积 (L/mL)' },
-  { value: 'COUNT', label: '数量 (件/箱/筐/盒/袋/桶)' },
-  { value: 'LENGTH', label: '长度 (m/cm)' },
-  { value: 'TEMPERATURE', label: '温度 (℃/℉)' },
+  { value: 'WEIGHT', label: '重量 (kg/g/t)', short: '重量' },
+  { value: 'VOLUME', label: '体积 (L/mL)', short: '体积' },
+  { value: 'COUNT', label: '数量 (件/箱/筐/盒/袋/桶)', short: '数量' },
+  { value: 'LENGTH', label: '长度 (m/cm)', short: '长度' },
+  { value: 'TEMPERATURE', label: '温度 (℃/℉)', short: '温度' },
 ] as const;
 
 // 状态
@@ -182,8 +185,21 @@ async function handleSubmit() {
   }
 }
 
+/** 下拉/表单用: 带举例后缀。 */
 function getCategoryLabel(category?: string) {
   return CATEGORY_OPTIONS.find(c => c.value === category)?.label || category || '-';
+}
+
+/**
+ * 表格列用: 只要分类短名。
+ *
+ * <p>此前表格直接用 getCategoryLabel, 于是每一行都显示
+ * 「数量 (件/箱/筐/盒/袋/桶)」—— 括号里的举例是给下拉选择用的,
+ * 印在表格里只会把整列变成同一句话。
+ * ⛔ 认不出的分类回落原值(不编造, 与 enumLabel 同口径)。
+ */
+function getCategoryShort(category?: string) {
+  return CATEGORY_OPTIONS.find(c => c.value === category)?.short || category || '-';
 }
 </script>
 
@@ -235,7 +251,7 @@ function getCategoryLabel(category?: string) {
         </el-table-column>
         <el-table-column label="分类" width="130">
           <template #default="{ row }">
-            <el-tag size="small" type="info">{{ getCategoryLabel(row.category) }}</el-tag>
+            <el-tag size="small" type="info">{{ getCategoryShort(row.category) }}</el-tag>
           </template>
         </el-table-column>
         <el-table-column prop="baseUnit" label="基础单位" width="100" align="center">
