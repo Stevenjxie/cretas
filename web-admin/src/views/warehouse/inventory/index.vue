@@ -340,7 +340,7 @@ async function handleExport() {
     const url = window.URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `库存盘点报告_${new Date().toISOString().slice(0, 10)}.xlsx`;
+    a.download = `库存批次报告_${new Date().toISOString().slice(0, 10)}.xlsx`;
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
@@ -398,12 +398,18 @@ function getStatusText(status: string) {
       @node-click="handleWorkflowNodeClick"
       @ai-trigger="handleWorkflowAITrigger"
     />
+    <!--
+      ⚠️ 这个消歧组件本身曾经标错: here-name 写的是「盘点管理」, 而本页路由标题是
+      「库存批次查询」、调的接口是 /material-batches —— 一个专门用来防止用户混淆
+      相似功能的提示, 自己把自己说成了另一个功能。真正的盘点页在
+      /warehouse/stocktakes「盘点与期初库存」, 那才是本页最容易被混淆的兄弟。
+    -->
     <ConceptDisambiguationAlert
-      here-name="盘点管理"
-      here="清点仓库实际库存与系统数对比，发现差异（盘盈 / 盘亏，不搬动物料）"
-      other-name="仓储管理 → 调拨单"
-      other="把物料从一个工厂/仓库搬到另一个工厂/仓库（实际搬动物料）"
-      other-path="/transfer/list"
+      here-name="库存批次查询"
+      here="按批次查看当前库存：每个批次剩多少、在哪个仓、状态与效期（只看不动料）"
+      other-name="仓储管理 → 盘点与期初库存"
+      other="清点仓库实物与系统数对比，处理盘盈 / 盘亏，或录入期初库存"
+      other-path="/warehouse/stocktakes"
     />
     <!-- 统计卡片 -->
     <div class="statistics-row">
@@ -437,7 +443,7 @@ function getStatusText(status: string) {
       <template #header>
         <div class="card-header">
           <div class="header-left">
-            <span class="page-title">库存盘点</span>
+            <span class="page-title">库存批次查询</span>
             <span class="data-count">共 {{ pagination.total }} 条记录</span>
           </div>
           <div class="header-right">
