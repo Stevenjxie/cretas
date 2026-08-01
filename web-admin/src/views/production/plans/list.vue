@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, nextTick, watch } from 'vue';
 import { useRouter, useRoute } from 'vue-router';
+import { pickRawWarehouse } from './rawWarehousePicker';
 import UpstreamMissingHint from '@/components/common/UpstreamMissingHint.vue';
 import { useCreateAndReturn } from '@/composables/useCreateAndReturn';
 import { useAuthStore } from '@/store/modules/auth';
@@ -2049,8 +2050,10 @@ async function ensureRawWarehouseId(): Promise<string | null> {
     return null;
   }
   const warehouses = res.data.filter(isFactoryWarehouseOption);
-  const raw = warehouses.find((w) => w.code === 'WH-LOG')
-    ?? warehouses.find((w) => w.type === 'RAW' || w.type === 'LOGISTICS');
+  // 按**类型**取仓, 不按编码 —— WH-LOG 是某些工厂给外仓起的编码, 编码是命名习惯、
+  // 类型才是契约。原实现编码优先, 让「既有外仓又有原料仓」的工厂去外仓找原料批次,
+  // 永远找不到, 然后提示「请先完成仓库入库」——而用户已经入过库了。见 rawWarehousePicker。
+  const raw = pickRawWarehouse(warehouses);
   if (!raw) {
     ElMessage({ message: '未找到原料仓/物流仓，不能核对生产原料领用', type: 'error', duration: 0, showClose: true });
     return null;
