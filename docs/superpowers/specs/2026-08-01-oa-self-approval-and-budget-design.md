@@ -34,15 +34,49 @@ if (actorId != null && actorId.equals(instance.getInitiatedBy())) {
 **叠加结果**：唯一授权审批人 = 发起人 = 1638，而代码要求两者不同 → 该单在 OA 里**永远批不过去**，
 且提示指向一个**不存在的人**。
 
-🔴 **关键发现：这个闸有三处承载，其中一处已经修过但没同步。**
+🔴 **关键发现：这个闸有六处承载（不是三处），其中一处已修过但没同步。**
 
-| 文件 | 行 | 现状 |
-|---|---|---|
-| `PurchaseServiceImpl.java` | 679 | ✅ **已有例外** `&& !isExplicitCurrentNodeApprover(factoryId, instance, actorId)` |
-| `SalesServiceImpl.java` | 1125 | ❌ 无例外 |
-| `TransferServiceImpl.java` | 687 | ❌ 无例外 |
+| # | 位置 | error code | 现状 | 本 spec 是否改 |
+|---|---|---|---|---|
+| 1 | `PurchaseServiceImpl:683` | `PURCHASE_SELF_APPROVAL_FORBIDDEN` | ⚠️ 只有**点名**例外 | ✅ 改（补 admin 那半） |
+| 2 | `SalesServiceImpl:1127` | `SALES_SELF_APPROVAL_FORBIDDEN` | ❌ **两个都没有** | ✅ 改 |
+| 3 | `TransferServiceImpl:713` | `TRANSFER_SELF_APPROVAL_FORBIDDEN` | ⚠️ 只有 **admin** 例外 | ✅ 改（补点名那半） |
 
-`isExplicitCurrentNodeApprover` 是 `PurchaseServiceImpl` 的 **private** 方法（852 行），全仓仅此一份 —— 所以另两处
+🔴 **三处不是「一处修过、两处没修」，而是「各自长出了不同的半个例外」**（实现时才发现，
+初稿 spec 把调拨误记为「无例外」）：
+
+```java
+// 采购: 只认「节点显式点名」
+&& !isExplicitCurrentNodeApprover(factoryId, instance, actorId)
+// 调拨: 只认「工厂超管」
+&& !isFactorySuperAdmin(factoryId, actorId, actorRole)
+// 销售: 无条件禁止
+```
+
+而 Steve 拍板的「点名 **或** admin」**恰好是这两半的并集** —— 不是发明新语义，是把已经各自存在
+的两半合起来。两个私有方法都移进 `SelfApprovalPolicy`。
+
+⚠️ 采纳调拨那半时保留它更严谨的三个细节（采购那半没有）：`equalsIgnoreCase`、
+**`actorRole` 为空时回落查库**（「不让缺失的入参把例外吞掉」）、只认 `isActive` 账号。
+
+📌 **旁证**：`TransferSuperAdminSelfApprovalTest` 的类注释记着调拨那半的由来 ——
+「小工厂常常只有一个 factory_super_admin，审批节点又只认这个角色时，他发起的调拨永远批不掉
+—— **实测某工厂因此一个多月没走通过一次调拨审批，调拨单全部卡在草稿**」。
+**同一个病在调拨单上已经发生并被治过，如今在销售单上原样重演**（六膳门 `SO-20260801-0001`）。
+| 4 | `FactoryStocktakeServiceImpl:402` | `STOCKTAKE_SELF_APPROVAL_FORBIDDEN` | ⚠️ 语义不同 | ❌ **不动** |
+| 5 | `FactoryStocktakeServiceImpl:902` | `STOCKTAKE_SELF_APPROVAL_FORBIDDEN` | ⚠️ 同文件第二处 | ❌ **不动** |
+| 6 | `ReportReversalServiceImpl:406` | `SELF_APPROVAL_FORBIDDEN` | 🔒 撤回冲销 | ❌ **不动** |
+
+⚠️ **方法论教训（本次实际踩到）**：第一轮用 `grep "发起人不能审批"` 只找到 1–3，
+漏掉盘点两处 —— 因为盘点的文案是「发起人**、盘点录入人或提交人**不能审批自己」，中间插了字。
+**按措辞 grep 会漏，按 error code 后缀 `SELF_APPROVAL_FORBIDDEN` 才找全。**
+
+**为什么 4/5/6 不动**（这是有意差异化，不是漏改）：
+- 盘点两处：HTTP **409 而非 403**；**仅当存在盘盈/盘亏时**才拦；判据含**录入人、提交人**而不只发起人。
+  这是「有金额差异才需要双人复核」的业务设计，与「单人工厂批不了自己的单」是两回事。
+- 冲销那处：撤回冲销属红线，本轮只记录不修。
+
+`isExplicitCurrentNodeApprover` 是 `PurchaseServiceImpl` 的 **private** 方法（852 行），全仓仅此一份 —— 所以 2、3
 无法复用，只能各自复制或干脆没有。这正是本仓反复出现的「一个闸多处承载，改一处静默失效」。
 
 ### 问题 2：审批内容看不懂
@@ -179,6 +213,7 @@ public boolean allowsSelfApproval(String factoryId,
 | # | 测试 | 防的是 |
 |---|---|---|
 | T1 | **横跨三处的自审语义一致性测试** —— 参数化 销售/采购/调拨，断言「点名可自审」「admin 可自审」「既非点名又非 admin 则 403」**三处结果相同** | 「一个闸多处承载」再漂（本仓有前科：采购已修而另两处没跟） |
+| T1b | **承载点清点契约** —— 扫源码断言 `SELF_APPROVAL_FORBIDDEN` 恰好出现在**已知的 6 处**；新增第 7 处而未登记则失败，并在断言消息里写明「新增自审校验点必须先决定它属于『统一语义』还是『独立业务语义』」 | 下一个人再加一处而无人知道；也锁住 4/5/6「刻意不动」的决定 |
 | T2 | `SelfApprovalPolicy` 单测：点名命中 / 角色命中 / 两者都不中 / instance 无 currentNode | 例外逻辑本身 |
 | T3 🔒 | BUDGET APPROVE → 期间 `CLOSED` 且 `createForPeriod` 被调用一次 | 关账链路真接上了 |
 | T4 🔒 | BUDGET REJECT → 期间回 `OPEN`；重复 REJECT 幂等不报错 | 驳回语义 |

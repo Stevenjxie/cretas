@@ -3,9 +3,12 @@ package com.cretas.aims.service.workflow;
 import com.cretas.aims.entity.config.ApprovalWorkflow;
 import com.cretas.aims.entity.config.ApprovalWorkflowNode;
 import com.cretas.aims.entity.workflow.ApprovalWorkflowInstance;
+import com.cretas.aims.repository.UserRepository;
 import com.cretas.aims.service.ApprovalWorkflowService;
 import org.springframework.lang.Nullable;
 import org.springframework.stereotype.Component;
+
+import java.util.Objects;
 
 /**
  * 「发起人能否审批自己的单」的唯一判定处。
@@ -42,8 +45,13 @@ public class SelfApprovalPolicy {
     @Nullable
     private final ApprovalWorkflowService approvalWorkflowService;
 
-    public SelfApprovalPolicy(@Nullable ApprovalWorkflowService approvalWorkflowService) {
+    @Nullable
+    private final UserRepository userRepository;
+
+    public SelfApprovalPolicy(@Nullable ApprovalWorkflowService approvalWorkflowService,
+                              @Nullable UserRepository userRepository) {
         this.approvalWorkflowService = approvalWorkflowService;
+        this.userRepository = userRepository;
     }
 
     /**
@@ -54,10 +62,33 @@ public class SelfApprovalPolicy {
                                       ApprovalWorkflowInstance instance,
                                       Long actorId,
                                       String actorRole) {
-        if (FACTORY_SUPER_ADMIN.equals(actorRole)) {
+        return isFactorySuperAdmin(factoryId, actorId, actorRole)
+                || isExplicitCurrentNodeApprover(factoryId, instance, actorId);
+    }
+
+    /**
+     * 发起人是否为本厂工厂总监 —— 自审批例外判据之一。
+     *
+     * <p>实现取自 {@code TransferServiceImpl#isFactorySuperAdmin}(调拨单原有的那半例外)。
+     * 注意两个细节, 都是有意为之:
+     * <ul>
+     *   <li>用 {@code equalsIgnoreCase} 而非 {@code equals};</li>
+     *   <li>{@code actorRole} 为空时<b>回落查库</b> —— 该入参由调用方传入, 可能缺失,
+     *       以库里的角色为准, 不让缺失的入参把例外吞掉。</li>
+     * </ul>
+     * 并且只认 {@code isActive} 的账号。
+     */
+    private boolean isFactorySuperAdmin(String factoryId, Long userId, String actorRole) {
+        if (userId == null) {
+            return false;
+        }
+        if (FACTORY_SUPER_ADMIN.equalsIgnoreCase(actorRole)) {
             return true;
         }
-        return isExplicitCurrentNodeApprover(factoryId, instance, actorId);
+        return userRepository != null
+                && userRepository.findByFactoryIdAndRoleCode(factoryId, FACTORY_SUPER_ADMIN).stream()
+                .anyMatch(user -> Boolean.TRUE.equals(user.getIsActive())
+                        && Objects.equals(user.getId(), userId));
     }
 
     /**

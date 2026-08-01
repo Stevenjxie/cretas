@@ -31,6 +31,7 @@ import com.cretas.aims.entity.workflow.ApprovalHistory.HistoryAction;
 import com.cretas.aims.entity.workflow.ApprovalWorkflowInstance;
 import com.cretas.aims.entity.workflow.ApprovalWorkflowInstance.InstanceStatus;
 import com.cretas.aims.service.ApprovalWorkflowService;
+import com.cretas.aims.service.workflow.SelfApprovalPolicy;
 import com.cretas.aims.service.workflow.WorkflowEngineService;
 import com.cretas.aims.repository.MaterialBatchRepository;
 import com.cretas.aims.repository.AttachmentRepository;
@@ -232,6 +233,14 @@ public class PurchaseServiceImpl implements PurchaseService {
     /** Phase 1 B.6 — 用于查询 active workflow 的 graph 节点 (notifyNextStage 需要). */
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private ApprovalWorkflowService approvalWorkflowService;
+
+    /**
+     * 「发起人能否审批自己的单」的唯一判定处。此前本类持有一份私有的
+     * {@code isExplicitCurrentNodeApprover}, 因为是 private, 销售单与调拨单复用不了,
+     * 于是同一条规则各处各行为。已提取到 {@link SelfApprovalPolicy}, 三处共用。
+     */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private SelfApprovalPolicy selfApprovalPolicy;
 
     /** Sprint 6 W2-B: 数据权限解析器 (optional). */
     @org.springframework.beans.factory.annotation.Autowired(required = false)
@@ -678,7 +687,8 @@ public class PurchaseServiceImpl implements PurchaseService {
         }
         if (actorId != null
                 && actorId.equals(instance.getInitiatedBy())
-                && !isExplicitCurrentNodeApprover(factoryId, instance, actorId)) {
+                && (selfApprovalPolicy == null
+                    || !selfApprovalPolicy.allowsSelfApproval(factoryId, instance, actorId, actorRole))) {
             throw new BusinessException(403, "发起人不能审批自己的采购单")
                     .withCode("PURCHASE_SELF_APPROVAL_FORBIDDEN")
                     .withHint("请由当前 OA 节点授权的其他审批人处理，或在 Canvas 中明确将发起人配置为该节点审批人");
@@ -842,54 +852,6 @@ public class PurchaseServiceImpl implements PurchaseService {
                         .withHint("请为当前工厂配置匹配审批角色的有效账号；采购单仍保持草稿");
             }
         }
-    }
-
-    /**
-     * A workflow may intentionally name the initiator as the approver for a single-user factory.
-     * Role membership alone is not enough to bypass separation of duties: the active node must
-     * explicitly contain the actor in {@code approverUserIds}.
-     */
-    private boolean isExplicitCurrentNodeApprover(
-            String factoryId,
-            ApprovalWorkflowInstance instance,
-            Long actorId) {
-        if (approvalWorkflowService == null
-                || instance.getCurrentNodeIds() == null
-                || instance.getCurrentNodeIds().isEmpty()) {
-            return false;
-        }
-        ApprovalWorkflow workflow = approvalWorkflowService
-                .getById(factoryId, instance.getWorkflowId())
-                .orElse(null);
-        if (workflow == null) {
-            return false;
-        }
-        String currentNodeId = instance.getCurrentNodeIds().get(0);
-        ApprovalWorkflowNode currentNode = approvalWorkflowService
-                .deserializeNodes(workflow.getNodesJson()).stream()
-                .filter(node -> currentNodeId.equals(node.getId()))
-                .findFirst()
-                .orElse(null);
-        if (currentNode == null
-                || !"approval".equalsIgnoreCase(currentNode.getType())
-                || currentNode.getConfig() == null) {
-            return false;
-        }
-        Object configuredApprovers = currentNode.getConfig().get("approverUserIds");
-        if (!(configuredApprovers instanceof Iterable<?> approvers)) {
-            return false;
-        }
-        for (Object configuredApprover : approvers) {
-            if (configuredApprover instanceof Number number
-                    && actorId.equals(number.longValue())) {
-                return true;
-            }
-            if (configuredApprover != null
-                    && actorId.toString().equals(String.valueOf(configuredApprover).trim())) {
-                return true;
-            }
-        }
-        return false;
     }
 
     private void projectWorkflowState(PurchaseOrder order,

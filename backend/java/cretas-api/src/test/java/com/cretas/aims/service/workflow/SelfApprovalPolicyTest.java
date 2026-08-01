@@ -2,7 +2,9 @@ package com.cretas.aims.service.workflow;
 
 import com.cretas.aims.entity.config.ApprovalWorkflow;
 import com.cretas.aims.entity.config.ApprovalWorkflowNode;
+import com.cretas.aims.entity.User;
 import com.cretas.aims.entity.workflow.ApprovalWorkflowInstance;
+import com.cretas.aims.repository.UserRepository;
 import com.cretas.aims.service.ApprovalWorkflowService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -28,12 +30,16 @@ import static org.mockito.Mockito.when;
 class SelfApprovalPolicyTest {
 
     private ApprovalWorkflowService approvalWorkflowService;
+    private UserRepository userRepository;
     private SelfApprovalPolicy policy;
 
     @BeforeEach
     void setUp() {
         approvalWorkflowService = mock(ApprovalWorkflowService.class);
-        policy = new SelfApprovalPolicy(approvalWorkflowService);
+        userRepository = mock(UserRepository.class);
+        when(userRepository.findByFactoryIdAndRoleCode(anyString(), anyString()))
+                .thenReturn(List.of());
+        policy = new SelfApprovalPolicy(approvalWorkflowService, userRepository);
     }
 
     private ApprovalWorkflowInstance instanceAtNode(String nodeId) {
@@ -124,18 +130,81 @@ class SelfApprovalPolicyTest {
     @Test
     @DisplayName("超管判定不依赖工作流服务 —— 服务缺席时仍放行超管")
     void superAdminDecisionDoesNotNeedWorkflowService() {
-        SelfApprovalPolicy noServicePolicy = new SelfApprovalPolicy(null);
+        SelfApprovalPolicy noServicePolicy = new SelfApprovalPolicy(null, userRepository);
         assertThat(noServicePolicy.allowsSelfApproval(
                 "LIUSHANMEN", instanceAtNode("admin_approval"), 1638L, "factory_super_admin"))
                 .isTrue();
     }
 
     @Test
-    @DisplayName("服务缺席且非超管时保守拒绝")
-    void missingWorkflowServiceFallsBackToRejection() {
-        SelfApprovalPolicy noServicePolicy = new SelfApprovalPolicy(null);
+    @DisplayName("两个服务都缺席且非超管时保守拒绝")
+    void missingCollaboratorsFallBackToRejection() {
+        SelfApprovalPolicy noServicePolicy = new SelfApprovalPolicy(null, null);
         assertThat(noServicePolicy.allowsSelfApproval(
                 "LIUSHANMEN", instanceAtNode("admin_approval"), 1638L, "sales_manager"))
+                .isFalse();
+    }
+
+    @Test
+    @DisplayName("角色码大小写不同也认 —— 沿用调拨单原有的 equalsIgnoreCase")
+    void roleCodeIsCaseInsensitive() {
+        givenNodeApprovers("admin_approval", List.of(9999));
+        assertThat(policy.allowsSelfApproval(
+                "LIUSHANMEN", instanceAtNode("admin_approval"), 1638L, "FACTORY_SUPER_ADMIN"))
+                .isTrue();
+    }
+
+    @Test
+    @DisplayName("actorRole 缺失时回落查库, 不让缺失的入参把例外吞掉")
+    void missingActorRoleFallsBackToDatabase() {
+        givenNodeApprovers("admin_approval", List.of(9999));
+        User superAdmin = new User();
+        superAdmin.setId(1638L);
+        superAdmin.setIsActive(true);
+        when(userRepository.findByFactoryIdAndRoleCode("LIUSHANMEN", "factory_super_admin"))
+                .thenReturn(List.of(superAdmin));
+
+        assertThat(policy.allowsSelfApproval(
+                "LIUSHANMEN", instanceAtNode("admin_approval"), 1638L, null))
+                .isTrue();
+    }
+
+    @Test
+    @DisplayName("非超管且 actorRole 缺失时查库也找不到 —— 不放行")
+    void nonSuperAdminWithMissingRoleIsRejected() {
+        givenNodeApprovers("admin_approval", List.of(9999));
+        User superAdmin = new User();
+        superAdmin.setId(1638L);
+        superAdmin.setIsActive(true);
+        when(userRepository.findByFactoryIdAndRoleCode("LIUSHANMEN", "factory_super_admin"))
+                .thenReturn(List.of(superAdmin));
+
+        assertThat(policy.allowsSelfApproval(
+                "LIUSHANMEN", instanceAtNode("admin_approval"), 2001L, null))
+                .isFalse();
+    }
+
+    @Test
+    @DisplayName("匿名 actor 永远不被当作超管")
+    void anonymousActorIsNeverSuperAdmin() {
+        givenNodeApprovers("admin_approval", List.of(1638));
+        assertThat(policy.allowsSelfApproval(
+                "LIUSHANMEN", instanceAtNode("admin_approval"), null, "factory_super_admin"))
+                .isFalse();
+    }
+
+    @Test
+    @DisplayName("库里的超管账号已停用则不放行")
+    void inactiveSuperAdminIsNotHonoured() {
+        givenNodeApprovers("admin_approval", List.of(9999));
+        User disabled = new User();
+        disabled.setId(1638L);
+        disabled.setIsActive(false);
+        when(userRepository.findByFactoryIdAndRoleCode("LIUSHANMEN", "factory_super_admin"))
+                .thenReturn(List.of(disabled));
+
+        assertThat(policy.allowsSelfApproval(
+                "LIUSHANMEN", instanceAtNode("admin_approval"), 1638L, null))
                 .isFalse();
     }
 }
