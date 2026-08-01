@@ -6238,10 +6238,11 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
             //   看到 IN_PROGRESS 就必须 409, 不许建出第二个批次」。放行会在第一笔事务尚未提交
             //   批次时重新打开这个洞 —— 拿 UX 死锁换并发重复批次是亏的。
             //
-            //   真正的根在 startProduction: 它持锁、只放行 PENDING、然后置 IN_PROGRESS
-            //   **却不建批次**, 于是 workflow 计划可以合法地进入「开工了但没有批次」这个状态,
-            //   而报工与结单都需要批次 → PC 端死锁。修那里才是治本, 但那条路被广泛使用,
-            //   要单独一轮带并发用例做。本轮只把「已有批次」的重复调用变成幂等。
+            //   根因已在 2026-08-02 收敛: startProduction 现在持锁调用 materializeBatchForPlan,
+            //   新请求不会再生成「IN_PROGRESS 且无批次」。这里仍保留 fail-closed 分支, 只接住
+            //   V20261029_46 迁移前的存量或库外漂移; 不能自动补建, 否则会重开 R6 双批次并发洞。
+            //   删除条件: V20261029_46 已覆盖全部环境, 且连续一个发布周期的审计/遥测确认
+            //   IN_PROGRESS+无批次为 0 后, 可删专用提示并折叠为普通状态冲突。
             if (plan.getStatus() == ProductionPlanStatus.IN_PROGRESS) {
                 // 「开工了但没有批次」—— 报工与结单都需要批次, 这个计划在 PC 端走不下去了。
                 // 说清楚处境比丢一句「只有待处理的计划可以转为批次」有用得多。
