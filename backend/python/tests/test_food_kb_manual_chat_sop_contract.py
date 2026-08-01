@@ -27,6 +27,7 @@ from food_kb.api.manual_chat import (
     _RESTAURANT_PLATFORM_SYNC_ANSWER,
     _RESTAURANT_QUERY_CONTRACT_ANSWER,
     _RESTAURANT_SCOPE_ACTION_ANSWER,
+    _RESTAURANT_SINGLE_DISH_MARGIN_ANSWER,
     _WORKFLOW_ACTUAL_IO_ANSWER,
     _build_scope_prompt,
     _needs_bom_workflow_sequence_guard,
@@ -49,6 +50,7 @@ from food_kb.api.manual_chat import (
     _needs_restaurant_platform_sync_guard,
     _needs_restaurant_query_contract_guard,
     _needs_restaurant_scope_action_guard,
+    _needs_restaurant_single_dish_margin_guard,
     _needs_workflow_actual_io_guard,
     _uses_current_production_sop,
 )
@@ -340,6 +342,34 @@ def test_restaurant_guide_never_calculates_business_data():
     assert "进入 SmartBI 餐饮 AI" in _RESTAURANT_GUIDE_BOUNDARY_ANSWER
     assert "不会返回或代算该门店的真实经营结果" in (
         _RESTAURANT_GUIDE_BOUNDARY_ANSWER
+    )
+
+
+def test_restaurant_single_dish_margin_uses_the_fixed_capability_boundary():
+    equivalent_questions = (
+        "中餐能不能自动精确算出每一道菜的真实毛利？",
+        "每道菜的毛利能自动实时算准吗？",
+        "单菜毛利是不是系统精确算出的真实值？",
+    )
+    assert all(
+        _needs_restaurant_single_dish_margin_guard(question)
+        for question in equivalent_questions
+    )
+    assert not _needs_restaurant_single_dish_margin_guard("期间总毛利率怎么看？")
+    assert "单菜精确毛利算不准" in _RESTAURANT_SINGLE_DISH_MARGIN_ANSWER
+    assert "不能自动或实时算出每一道菜的真实毛利" in (
+        _RESTAURANT_SINGLE_DISH_MARGIN_ANSWER
+    )
+    assert "理论参考" in _RESTAURANT_SINGLE_DISH_MARGIN_ANSWER
+    assert "配方覆盖率与采购价新鲜度" in _RESTAURANT_SINGLE_DISH_MARGIN_ANSWER
+    assert "可信第一口径是期间总毛利率" in (
+        _RESTAURANT_SINGLE_DISH_MARGIN_ANSWER
+    )
+    assert "期初库存 + 本期采购 − 期末库存" in (
+        _RESTAURANT_SINGLE_DISH_MARGIN_ANSWER
+    )
+    assert "不替用户计算或分析真实经营数据" in (
+        _RESTAURANT_SINGLE_DISH_MARGIN_ANSWER
     )
 
 
@@ -912,6 +942,12 @@ async def test_bom_workflow_publication_answer_never_calls_the_llm(monkeypatch):
             "门店菜品不同月份继续追问时怎么保持时间范围？",
             "restaurant",
             _RESTAURANT_CONTEXT_SCOPE_ANSWER,
+            "restaurant-full-chain-sop.html",
+        ),
+        (
+            "中餐能不能自动精确算出每一道菜的真实毛利？",
+            "restaurant",
+            _RESTAURANT_SINGLE_DISH_MARGIN_ANSWER,
             "restaurant-full-chain-sop.html",
         ),
         (

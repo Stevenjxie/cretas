@@ -297,6 +297,14 @@ _FACTORY_BYPRODUCT_LIFECYCLE_ANSWER = """\
 3. 金额由后端统一计算，前端只展示结果，不能自行再算一套。
 
 **验收结果：** 副产批次位于生产仓，能回读物料 SKU、来源报工、实际数量和单位；盘点确认前后“未抵扣”与 0.00 可区分；采购和普通投入选择器不会把副产当作待采购投入。"""
+_RESTAURANT_SINGLE_DISH_MARGIN_ANSWER = """\
+中餐的单菜精确毛利算不准，也不能自动或实时算出每一道菜的真实毛利。
+
+1. 中餐存在手勺下料、共用食材和损耗难分摊等现实情况，配方也很难长期完整、准确，所以单菜值只能是理论参考；它是否有参考意义，取决于配方覆盖率与采购价新鲜度。
+2. 可信第一口径是期间总毛利率。食材成本按“期初库存 + 本期采购 − 期末库存”倒算，再用“（营业额 − 食材成本）÷ 营业额”计算总毛利率。这个口径依赖进货与盘点准确，不依赖每道菜都有完整配方。
+3. 菜品平均毛利率和菜品四象限中的毛利轴可以用于相对比较，但不是每道菜的精确财务结果；配方覆盖不足时，应先补齐销量靠前菜品的配方。
+
+餐饮导览助手只说明以上口径并指向 SmartBI 餐饮 AI，不替用户计算或分析真实经营数据。"""
 _RESTAURANT_CONTEXT_SCOPE_ANSWER = """\
 餐饮导览助手只解释用法；真实门店数据比较和连续追问请在 SmartBI 餐饮 AI 中完成。
 
@@ -666,6 +674,31 @@ def _needs_restaurant_metric_entity_guard(query: str) -> bool:
         term in normalized for term in ("业务词", "疑问", "跨租户", "当成菜名")
     )
     return wastage_amount or requisition_cost or menu_entity
+
+
+def _needs_restaurant_single_dish_margin_guard(query: str) -> bool:
+    """Keep single-dish margin claims on the reviewed capability boundary."""
+    normalized = (query or "").lower()
+    mentions_margin = "毛利" in normalized
+    mentions_single_dish_precision = any(
+        term in normalized
+        for term in (
+            "精确",
+            "精准",
+            "每一道菜",
+            "每道菜",
+            "每个菜",
+            "单菜",
+            "真实毛利",
+            "自动算",
+            "实时算",
+            "算准",
+            "算出",
+            "算得出",
+            "算不出",
+        )
+    )
+    return mentions_margin and mentions_single_dish_precision
 
 
 def _needs_restaurant_data_availability_guard(query: str) -> bool:
@@ -1574,6 +1607,11 @@ async def _prepare_generation(request: ManualChatRequest) -> _PreparedGeneration
         and _needs_factory_byproduct_lifecycle_guard(request.question)
     ):
         guard_answer = _FACTORY_BYPRODUCT_LIFECYCLE_ANSWER
+    elif (
+        is_restaurant_request
+        and _needs_restaurant_single_dish_margin_guard(request.question)
+    ):
+        guard_answer = _RESTAURANT_SINGLE_DISH_MARGIN_ANSWER
     elif (
         is_restaurant_request
         and _needs_restaurant_flywheel_governance_guard(request.question)
