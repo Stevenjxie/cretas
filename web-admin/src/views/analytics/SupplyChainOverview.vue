@@ -346,7 +346,15 @@ function getStatusText(status: string): string {
         </el-col>
         <el-col :xs="12" :sm="8" :md="4">
           <el-card class="stat-card consume" shadow="hover">
-            <div class="stat-value">{{ formatNumber(summary.consumedQuantity, 0) }}</div>
+            <!--
+              🔴 2026-08-02: 「领用数量」「成品数量」是**重量**不是计数
+              (见上方 loadData: consumedQuantity = Σ plannedQuantity,
+               finishedGoods = Σ actualQuantity, 都是批次的数量字段)。
+              此前和「入库批次」「生产批次」一样用 decimals=0, 于是 127.5kg 显示成 128 ——
+              这不是"约等于", 是把 0.5kg 凭空吃掉了。
+              ⛔ 计数类的两张卡(入库批次/生产批次)仍保持 0 位小数 —— 那两个本来就是整数个。
+            -->
+            <div class="stat-value">{{ formatNumber(summary.consumedQuantity, 2) }}<span class="stat-unit">kg</span></div>
             <div class="stat-label">领用数量</div>
           </el-card>
         </el-col>
@@ -358,7 +366,7 @@ function getStatusText(status: string): string {
         </el-col>
         <el-col :xs="12" :sm="8" :md="4">
           <el-card class="stat-card finished" shadow="hover">
-            <div class="stat-value">{{ formatNumber(summary.finishedGoods, 0) }}</div>
+            <div class="stat-value">{{ formatNumber(summary.finishedGoods, 2) }}<span class="stat-unit">kg</span></div>
             <div class="stat-label">成品数量</div>
           </el-card>
         </el-col>
@@ -592,6 +600,14 @@ function getStatusText(status: string): string {
     font-weight: 700;
     line-height: 1.2;
     font-variant-numeric: tabular-nums;
+  }
+
+  /* 重量类卡片的单位后缀 —— 比数字小一号, 不抢读数 */
+  .stat-unit {
+    font-size: 13px;
+    font-weight: 500;
+    margin-left: 2px;
+    opacity: 0.75;
   }
 
   .stat-label {
