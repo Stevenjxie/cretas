@@ -1,3 +1,4 @@
 # Dispatch 完成记录 — 2026-08-02
 
 - `AUDIT-SUPPLY-CHAIN-UNIT-CONTRACT-20260802` — `review` — Owner: `/root` — Base SHA: `e7157ff1991701a7c8ac213119e61af8c6dbe522` — 当天跨层审计发现进销存总览把 `ProductionBatch.plannedQuantity/actualQuantity` 跨单位相加后硬贴 `kg`。现改为读取后端 `unit` 真值：同单位才保留小数汇总，多单位、缺单位或无效值明确拒绝伪汇总；生产批次明细同时展示原数量与单位。目标 Vitest 2 文件 10 测试、`vue-tsc -b --force`、Vite build（4544 modules）与 `git diff --check` 均通过。`npm ci` 报既有 3 moderate / 14 high / 1 critical advisories，未改依赖或 lockfile。Scope 已释放；仅纳入每日集成 PR，不合并、不部署、生产零写。
+- `AUDIT-PROCESSING-SOURCE-COMPAT-COMMENT-20260802` — `review` — Owner: `/root` — Base SHA: `e7157ff1991701a7c8ac213119e61af8c6dbe522` — comment-only 收口：把 `createBatchFromPlan` 中已过时的“startProduction 待另轮修复”改为当前已收敛事实，并明确存量 fail-closed 分支须等 V20261029_46 全环境应用且连续一个发布周期零命中后才能删除；给 `ProcessingServiceImpl` optional source-name repository 注入补“测试迁共享 builder 后改回 final 构造器依赖”的删除条件。`git diff --check` 与 comment-only diff 审查通过，运行逻辑零变化。Scope 已释放；只更新当天 daily PR，不合并、不部署、生产零写。
