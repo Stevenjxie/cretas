@@ -14,3 +14,9 @@
 - 回滚点：静态页 `/www/backup/cretas-sop/20260801T012540Z-826c6dd8`、`/www/backup/cretas-sop/20260801T015438Z-29807b00`；RAG 源 `/www/backup/cretas-rag-sources/20260801T012540Z-826c6dd8`、`/www/backup/cretas-rag-sources/20260801T015438Z-29807b00`。
 - 生产 ERP 业务写入：0。允许的生产变更仅为三张静态页中实际变化的目标、Python 发布和发生语义变化 source 的原子 RAG 重建。
 - Scope 锁已释放；worktree 与分支按规则保留，未执行清理。
+
+### 归档后 main 并发变化
+
+- 归档 PR 合入前，PR #2130 已先进入 `origin/main@79f9cdad499e6884cc848ac68b435893d5e93625`，新增 BOM 缺失定位文案和 `sheet/张` 单位；这不改变上述已发布批次的验收结论。
+- 生产只读核对显示 active Java 尚未包含该版本，Flyway 42/43 无记录且 `sheet` 名录计数为 0，因此不能把未部署能力提前写入线上工厂 SOP/RAG。
+- 后续同步已转入独立任务 `SOP-FACTORY-2130-RUNTIME-GATE-20260801` 并重新锁定工厂 SOP 范围；餐饮线保持已闭环。
