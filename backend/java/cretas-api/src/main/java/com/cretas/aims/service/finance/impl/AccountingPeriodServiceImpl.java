@@ -2,6 +2,7 @@ package com.cretas.aims.service.finance.impl;
 
 import com.cretas.aims.entity.finance.AccountingPeriod;
 import com.cretas.aims.entity.workflow.ApprovalWorkflowInstance;
+import com.cretas.aims.entity.workflow.ApprovalHistory.HistoryAction;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.exception.PeriodClosedException;
 import com.cretas.aims.repository.finance.AccountingPeriodRepository;
@@ -309,6 +310,44 @@ public class AccountingPeriodServiceImpl implements AccountingPeriodService {
             log.warn("[SP11] D1 inventory snapshot FAILED (fail-soft, 结账不受影响): factoryId={} periodId={} error={}",
                     factoryId, accountingPeriodId, e.getMessage(), e);
         }
+    }
+
+    /**
+     * 统一 OA 动作入口。🔒 APPROVE 走关账链路, 见接口 javadoc。
+     *
+     * <p>此前 BUDGET 的 OA 实例是「孤儿」: {@code requestClose} 启动它, 但批不批都不影响
+     * 期间状态, 待办里只能看不能点。本方法把它接上。
+     */
+    @Override
+    @Transactional
+    public AccountingPeriod applyWorkflowAction(String factoryId, String periodId, Long actorId,
+                                                HistoryAction action, String notes) {
+        AccountingPeriod period = repo.findById(periodId)
+                .filter(p -> p.getFactoryId() != null && p.getFactoryId().equals(factoryId))
+                .orElseThrow(() -> new BusinessException(404, "会计期间不存在: " + periodId));
+
+        if (action == HistoryAction.APPROVE) {
+            // 复用既有关账链路(含 InventoryLedgerSnapshotService 快照), 不另写一套。
+            return confirmClose(factoryId, period.getYear(), period.getMonth(), actorId);
+        }
+
+        // REJECT: 撤销本次 requestClose, 期间重新开放, 由财务改完再发起。
+        if (period.getStatus() == AccountingPeriod.Status.OPEN) {
+            log.debug("[AccountingPeriod] REJECT 幂等命中 (already OPEN): {}/{}-{}",
+                    factoryId, period.getYear(), period.getMonth());
+            return period;
+        }
+        if (period.getStatus() != AccountingPeriod.Status.PENDING_CLOSE) {
+            // 已 CLOSED / LOCKED 不能被一次驳回掀翻 —— 反结账走 reopenPeriod 专门通道。
+            throw new BusinessException(409, String.format(
+                    "%d-%02d 期间状态=%s, 仅 PENDING_CLOSE 可驳回",
+                    period.getYear(), period.getMonth(), period.getStatus()));
+        }
+        period.setStatus(AccountingPeriod.Status.OPEN);
+        AccountingPeriod saved = repo.save(period);
+        log.info("[AccountingPeriod] REJECT → OPEN {}-{}-{} by user={} notes={}",
+                factoryId, period.getYear(), period.getMonth(), actorId, notes);
+        return saved;
     }
 
     private void validateInput(String factoryId, Integer year, Integer month) {

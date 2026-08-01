@@ -87,4 +87,21 @@ public interface AccountingPeriodService {
      * 否则 silently pass. 用于 VoucherService 写操作 gate.
      */
     void assertOpen(String factoryId, Integer year, Integer month);
+
+    /**
+     * 统一 OA 动作入口 —— 供 {@code WorkflowInstanceController} 的 BUDGET 分支调用。
+     *
+     * <p>🔒 <b>APPROVE 会执行月度关账</b>: 复用既有 {@link #confirmClose}, 期间转 CLOSED、
+     * 触发库存台账快照、凭证进入 20 天调整窗口(逾期硬锁)。不另写一套状态机。
+     *
+     * <p>REJECT 把期间退回 {@code OPEN}, 即撤销本次 {@code requestClose} —— 与「驳回必须
+     * 填写原因」配套(原因就是让财务去改什么)。已是 OPEN 时幂等返回; 已 CLOSED 时拒绝,
+     * 反结账要走 {@link #reopenPeriod} 专门通道, 不能被一次驳回掀翻。
+     *
+     * @param periodId 会计期间 id, 即 OA 实例的 businessEntityId
+     * @return 变更后的期间
+     */
+    AccountingPeriod applyWorkflowAction(String factoryId, String periodId, Long actorId,
+                                         com.cretas.aims.entity.workflow.ApprovalHistory.HistoryAction action,
+                                         String notes);
 }
