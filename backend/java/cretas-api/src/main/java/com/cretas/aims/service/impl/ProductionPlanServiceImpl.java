@@ -2011,9 +2011,18 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
         //     先有已提交的逐道报工行) —— 让人白填一遍, 比直接挡住更费事;
         //   - 「补建批次」: createBatchFromPlan 也只放行 PENDING, 同样 409。
         // 用户只能作废重建。
-        // 触发它的是**最自然的点击顺序**: 先「开工」再「逐道录入」——
-        // 前端(plans/list.vue openProcessEntry)只在 status===PENDING 时才自动补建批次,
-        // 把「状态已 IN_PROGRESS」当成了「已经有批次」的证据。
+        // 谁在调 /start (2026-08-02 更正 —— #2173 里我把触发端写错成了 PC):
+        //   ✅ RN 手机端 ProductionPlanManagementScreen 的「开始生产」按钮
+        //      (handleStartProduction → productionPlanApiClient.startProduction, 带二次确认弹窗);
+        //   ✅ AI 工具 PlanUpdateTool (把状态改成 IN_PROGRESS 时);
+        //   ❌ web-admin **不调** —— plans/list.vue 里的 handleStart 是死代码,
+        //      定义了但模板从未引用 (2026-08-02 grep 实证: 全文件只出现 1 次, 即定义处)。
+        //
+        // 所以真实场景是**跨端**的, 比同端误操作更难察觉:
+        // 车间主管在手机上点「开始生产」(完全正常的动作) → 计划 IN_PROGRESS 但没有批次
+        // → 回到 PC, 文员发现这个计划**什么都做不了**。而 PC 前端
+        // (plans/list.vue openProcessEntry) 只在 status===PENDING 时才自动补建批次 ——
+        // 它把「状态已 IN_PROGRESS」当成了「已经有批次」的证据, 于是跳过补建。
         // prod 实测 7 个计划卡在这里(F001 6 个最早到 2026-03-12, 六膳门 1 个)。
         //
         // 修法是让两个「开工」入口收敛到同一实现(materializeBatchForPlan), 而不是在
