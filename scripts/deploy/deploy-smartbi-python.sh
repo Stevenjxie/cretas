@@ -327,10 +327,18 @@ ssh "$SERVER" "chmod +x /www/wwwroot/cretas/scripts/t6-dryrun-compare.sh /www/ww
 # had no file on the server — the promote leg of the loop was un-runnable.
 # v2 (2026-06-01): renamed promote_field_mappings.py -> promote_learnings.py
 # (generalized multi-domain). Remove the stale old CLI from the server too.
-log "INFO" "[3c/5] 同步 多域学习 毕业 CLI..."
+# v3 (2026-08-01): 同一个病复发了一次。餐饮飞轮的
+# `restaurant-intent-promote.py` 是后加的, 加它的 cron wrapper 时进了 3d 的白名单,
+# 但**它本身没进这里的白名单** —— 服务器上那份冻在 Jul 23, 每天报
+# `ModuleNotFoundError: smartbi.gold.restaurant_intent_promotion`(域包重构漏改,
+# 修复 #1957 早已在 main), 飞轮日报连续 5 天零产出。
+# wrapper 第 80 行还写着「不存在 (需 scp 同步)」—— 把「要手工同步」写进注释,
+# 等于把它变成一条没人执行的纪律。所以下面 3c2 把它变成部署时的硬检查。
+log "INFO" "[3c/5] 同步 学习毕业 CLI (多域 + 餐饮飞轮)..."
 ssh "$SERVER" "mkdir -p /www/wwwroot/cretas/code/scripts && rm -f /www/wwwroot/cretas/code/scripts/promote_field_mappings.py"
-run_rsync "多域学习毕业 CLI" -az --timeout=60 \
+run_rsync "学习毕业 CLI" -az --timeout=60 \
     "$PROJECT_ROOT/scripts/promote_learnings.py" \
+    "$PROJECT_ROOT/scripts/restaurant-intent-promote.py" \
     "$SERVER:/www/wwwroot/cretas/code/scripts/"
 
 # 3d. Keep active cron consumers on the same atomically selected runtime as
@@ -345,6 +353,48 @@ run_rsync "Python 定时任务入口" -az --timeout=60 \
 ssh "$SERVER" "chmod +x \
     /www/wwwroot/cretas/code/scripts/cron/restaurant-ai-eval.sh \
     /www/wwwroot/cretas/code/scripts/cron/refresh-demo-rest.sh"
+
+# 3c2. 闭合 3c/3d 的白名单缺口 (2026-08-01).
+#
+# 3c 和 3d 都是**逐文件的白名单**。cron wrapper 进了 3d, 而它调用的 CLI 要单独记得
+# 加进 3c —— 这条纪律已经漏过两次(promote_learnings.py 一次、
+# restaurant-intent-promote.py 一次, 后者让飞轮日报静默坏了 5 天)。
+#
+# 漏掉时的症状特别不显眼: wrapper 是新的、能跑、退出码还是 0(它对飞轮日报是
+# best-effort `|| true`), 只有日志深处一行 traceback。**部署侧没有任何东西会发现**。
+#
+# 这里不再依赖「记得加」: 从刚同步上去的 cron wrapper 里反查它引用的每个
+# `scripts/*.py`, 逐个确认服务器上真的有。缺哪个就让部署失败并直接点名。
+log "INFO" "[3c2/5] 校验 cron 入口引用的 CLI 都已落到服务器..."
+# 只认**相对 $CODEDIR 解析**的引用。wrapper 里还有
+# `python smartbi/scripts/seed_demo_rest_ops.py` 这种以 backend/python 为基准的,
+# 那个走 3/5 段的整目录 rsync, 本来就同步 —— 拿 code/scripts/ 去找它会假报缺失
+# (写这段时第一版正则就是这么错的, 跑一遍才发现)。
+# 因此要求 scripts/ 前面是行首/空白/引号/`=`, 或者显式的 $CODEDIR/。
+_cron_referenced_clis="$(
+    cat "$PROJECT_ROOT/scripts/cron/restaurant-ai-eval.sh" \
+        "$PROJECT_ROOT/scripts/cron/refresh-demo-rest.sh" 2>/dev/null \
+    | grep -oE '(\$CODEDIR/|[[:space:]"'"'"'=])scripts/[A-Za-z0-9_.-]+\.py' \
+    | sed -E 's#^(\$CODEDIR/|.)##' | sort -u
+)"
+if [ -z "$_cron_referenced_clis" ]; then
+    log "INFO" "  cron 入口没有引用任何 .py CLI，跳过。"
+else
+    _missing_clis=""
+    for _cli in $_cron_referenced_clis; do
+        if ssh "$SERVER" "test -f /www/wwwroot/cretas/code/$_cli"; then
+            log "INFO" "  ✓ code/$_cli"
+        else
+            _missing_clis="$_missing_clis $_cli"
+        fi
+    done
+    if [ -n "$_missing_clis" ]; then
+        log "ERROR" "cron 入口引用了这些 CLI，但服务器上不存在:$_missing_clis"
+        log "ERROR" "  → 它们没进本脚本 3c 段的 rsync 白名单。把文件加进 3c 再重跑。"
+        log "ERROR" "  → (症状会是: 定时任务照跑、退出码 0，只有日志里一行 ModuleNotFound/找不到文件)"
+        exit 1
+    fi
+fi
 
 # 3.5. Apply pending smartbi migrations (per spec 2026-05-07-smartbi-migration-runner-spec.md).
 # Trigger: task #30 — 8 个 data fabric C 系列 migrations 当初部署漏跑 prod, T6.2 4h 才发现.
