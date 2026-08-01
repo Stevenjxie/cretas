@@ -24,7 +24,7 @@ from smartbi.services.restaurant.health_check_metrics import (
 
 
 def _run(coro):
-    return asyncio.get_event_loop().run_until_complete(coro)
+    return asyncio.run(coro)
 
 
 # ── fake asyncpg pool/conn harness (routes fetchrow by SQL substring) ──
