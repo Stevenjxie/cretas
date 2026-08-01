@@ -6201,11 +6201,25 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
                 log.info("计划 {} 已有 {} 个批次, 直接复用 (幂等)", planId, existingBatches.size());
                 return existingBatches.get(0);
             }
-            if (plan.getStatus() != ProductionPlanStatus.IN_PROGRESS) {
-                throw new BusinessException(409, "只有待处理或已开工的计划可以转为批次")
-                        .withHint("该计划已结束或已取消; 请刷新生产计划列表查看最新状态");
+            // ⛔ 刻意**不**放行「IN_PROGRESS 且没有批次」去补建批次:
+            //   R6 并发守卫(ProductionPlanCancelConcurrencyTest)要求「并发第二个 create-batch
+            //   看到 IN_PROGRESS 就必须 409, 不许建出第二个批次」。放行会在第一笔事务尚未提交
+            //   批次时重新打开这个洞 —— 拿 UX 死锁换并发重复批次是亏的。
+            //
+            //   真正的根在 startProduction: 它持锁、只放行 PENDING、然后置 IN_PROGRESS
+            //   **却不建批次**, 于是 workflow 计划可以合法地进入「开工了但没有批次」这个状态,
+            //   而报工与结单都需要批次 → PC 端死锁。修那里才是治本, 但那条路被广泛使用,
+            //   要单独一轮带并发用例做。本轮只把「已有批次」的重复调用变成幂等。
+            if (plan.getStatus() == ProductionPlanStatus.IN_PROGRESS) {
+                // 「开工了但没有批次」—— 报工与结单都需要批次, 这个计划在 PC 端走不下去了。
+                // 说清楚处境比丢一句「只有待处理的计划可以转为批次」有用得多。
+                throw new BusinessException(409, "该计划已开工但没有生产批次，无法报工或结单")
+                        .withHint("请用 APP 对该计划逐道报工（会自动建批次）；"
+                                + "若现场不用 APP，请取消该计划后重新创建并直接点「逐道录入」")
+                        .withHintTarget("productionPlan");
             }
-            log.info("计划 {} 已开工但没有批次, 补建批次以解开报工死锁", planId);
+            throw new BusinessException(409, "只有待处理的计划可以转为批次")
+                    .withHint("请刷新生产计划列表查看最新状态");
         }
 
         BigDecimal batchTargetQuantity = plan.getPlannedQuantity() == null

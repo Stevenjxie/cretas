@@ -114,9 +114,20 @@ class ProductionPlanCreateBatchAfterStartTest {
         }
     }
 
+    /**
+     * ⛔ 反向断言: IN_PROGRESS 且<b>没有</b>批次时必须<b>仍然拦住</b>。
+     *
+     * <p>放行看起来能解开「开工后报不了工」的死锁, 但会重新打开 R6 并发洞
+     * ({@code ProductionPlanCancelConcurrencyTest}: 并发第二个 create-batch 看到
+     * IN_PROGRESS 必须 409, 不许建出第二个批次)——第一笔事务尚未提交批次时,
+     * 第二笔就会看到「IN_PROGRESS + 无批次」而建出第二个。
+     *
+     * <p>拿 UX 死锁换并发重复批次是亏的。真正的根在 {@code startProduction}:
+     * 它让 workflow 计划合法地进入「开工了但没有批次」这个状态, 那里才是要修的地方。
+     */
     @Test
-    @DisplayName("🔴 IN_PROGRESS 且没有批次 → 必须放行 (这正是死锁的那条)")
-    void allowsBatchCreationForStartedPlanWithoutBatch() throws Exception {
+    @DisplayName("⛔ IN_PROGRESS 且无批次 → 仍然拦住 (保住 R6 并发守卫, 不拿它换 UX)")
+    void stillRefusesStartedPlanWithoutBatch() throws Exception {
         ProductionPlanRepository planRepo = mock(ProductionPlanRepository.class);
         ProductionBatchRepository batchRepo = mock(ProductionBatchRepository.class);
         when(planRepo.findByIdForUpdate(PLAN_ID))
@@ -127,12 +138,18 @@ class ProductionPlanCreateBatchAfterStartTest {
         Throwable thrown = catchThrowable(() ->
                 newService(planRepo, batchRepo).createBatchFromPlan(FACTORY, PLAN_ID));
 
-        // 反射构造的 service 后续依赖(产品仓库等)为 null, 会在状态守卫**之后**炸 ——
-        // 本用例只断言「不是被状态守卫拦下的」: 拦下时消息含「转为批次」。
-        if (thrown instanceof BusinessException businessException) {
-            assertThat(businessException.getMessage())
-                    .as("IN_PROGRESS 且无批次时被状态守卫拦下 = 死锁没修好")
-                    .doesNotContain("转为批次");
-        }
+        assertThat(thrown)
+                .as("放行会让并发第二个请求建出第二个批次 (R6)")
+                .isInstanceOf(BusinessException.class);
+        // 拦住的同时要把处境说清楚 —— 原文案「只有待处理的计划可以转为批次」
+        // 对「开工了但没批次」这个处境毫无帮助, 用户不知道下一步该干什么。
+        BusinessException be = (BusinessException) thrown;
+        assertThat(be.getMessage())
+                .as("要说清楚是「开工了但没有批次」, 而不是泛泛的状态不对")
+                .contains("已开工")
+                .contains("没有生产批次");
+        assertThat(be.getActionHint())
+                .as("必须给出下一步 —— 否则用户只知道被拦住了")
+                .contains("APP");
     }
 }
