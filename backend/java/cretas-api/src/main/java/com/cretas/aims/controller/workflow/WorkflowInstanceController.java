@@ -19,6 +19,7 @@ import com.cretas.aims.service.ApprovalWorkflowService;
 import com.cretas.aims.service.MobileService;
 import com.cretas.aims.service.workflow.WorkflowEngineService;
 import com.cretas.aims.service.workflow.OaActionIdempotencyService;
+import com.cretas.aims.service.workflow.OaModuleLabelResolver;
 import com.cretas.aims.service.inventory.PurchaseService;
 import com.cretas.aims.service.inventory.SalesService;
 import com.cretas.aims.service.inventory.TransferService;
@@ -87,6 +88,10 @@ public class WorkflowInstanceController {
     private final SalesService salesService;
     private final TransferService transferService;
     private final FactoryStocktakeService stocktakeService;
+
+    /** 业务类型中文名解析 — 权威表在 DecisionTypeMetadataRegistry, 前端不再维护第二份。 */
+    @Autowired(required = false)
+    private OaModuleLabelResolver oaModuleLabelResolver;
 
     /** Optional — 用于 hydrate PURCHASE_ORDER businessSummary. */
     @Autowired(required = false)
@@ -235,7 +240,16 @@ public class WorkflowInstanceController {
                 }
             }
 
+            // 业务类型中文名 — 解析不出时留 null 由前端兜底, 后端不编造
+            if (oaModuleLabelResolver != null) {
+                dto.setModuleLabel(oaModuleLabelResolver.resolve(
+                        inst.getModuleCode(), inst.getContextJson()));
+            }
+
             // initiated by
+            // 判据用 initiatedBy 而非 username 是否为空: 用户被删同样会让 username 为空,
+            // 那种情况该显示「—」, 不是「系统自动发起」。
+            dto.setSystemInitiated(inst.getInitiatedBy() == null);
             if (inst.getInitiatedBy() != null) {
                 dto.setInitiatedByUsername(usernameById.get(inst.getInitiatedBy()));
             }

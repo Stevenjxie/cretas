@@ -66,4 +66,25 @@ public class WorkflowInstancePendingDTO {
 
     @Schema(description = "当前节点授权角色")
     private List<String> approverRoles;
+
+    /**
+     * 业务类型中文名, 取自权威表 {@code DecisionTypeMetadataRegistry}。
+     *
+     * <p>前端曾自行维护一份 4 个码的 MODULE_LABELS, 其余 20 多个码全落「未知状态（X）」兜底
+     * (客户截图里的「未知状态（BUDGET）」即此)。改由后端按权威表下发, 前端不再维护第二份。
+     * 解析不出来时为 null, 由前端兜底 —— 后端不编造。
+     */
+    @Schema(description = "业务类型中文名 (取自权威表; 解析不出时为 null, 前端兜底)",
+            example = "会计期间结账")
+    private String moduleLabel;
+
+    /**
+     * 该实例是否由系统流程发起(无人类申请人)。
+     *
+     * <p>判据是 {@code initiatedBy == null}, <b>不是</b> username 为空 —— 用户被删同样会让
+     * username 为空, 那种情况该显示「—」而非「系统自动发起」。
+     * 客户截图里申请人空白的那条是凌晨 2 点定时任务发起的月度会计期间结账审批。
+     */
+    @Schema(description = "是否系统自动发起 (无人类申请人)", example = "true")
+    private boolean systemInitiated;
 }
