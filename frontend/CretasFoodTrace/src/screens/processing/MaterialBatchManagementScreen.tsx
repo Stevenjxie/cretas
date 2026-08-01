@@ -25,6 +25,7 @@ import * as Sharing from 'expo-sharing';
 import { APP_CONFIG, API_BASE_URL } from '../../constants/config';
 import { handleError, getErrorMsg } from '../../utils/errorHandler';
 import { logger } from '../../utils/logger';
+import { getUserPermissions, hasPermission } from '../../types/auth';
 
 // 创建MaterialBatchManagement专用logger
 const materialBatchLogger = logger.createContextLogger('MaterialBatchManagement');
@@ -44,6 +45,10 @@ const materialBatchLogger = logger.createContextLogger('MaterialBatchManagement'
 export default function MaterialBatchManagementScreen() {
   const navigation = useNavigation();
   const { user } = useAuthStore();
+  const userPermissions = getUserPermissions(user);
+  const canManageInventory = hasPermission(user, 'warehouse:write')
+    || userPermissions.includes('warehouse:read_write')
+    || userPermissions.includes('inventory:read_write');
 
   const [batches, setBatches] = useState<MaterialBatch[]>([]);
   const [loading, setLoading] = useState(true);
@@ -487,7 +492,16 @@ export default function MaterialBatchManagementScreen() {
         </Card>
 
         {/* Handle Expired Batches Button */}
-        {filterTab === 'expired' && batches.length > 0 && (
+        {!canManageInventory && (
+          <Card style={styles.readOnlyNotice}>
+            <Card.Content>
+              <Text style={styles.readOnlyNoticeTitle}>原材料库存为只读</Text>
+              <Text style={styles.readOnlyNoticeText}>批次编辑、删除和入库请交由仓库角色处理。</Text>
+            </Card.Content>
+          </Card>
+        )}
+
+        {canManageInventory && filterTab === 'expired' && batches.length > 0 && (
           <Card style={styles.actionCard}>
             <Card.Content>
               <Text variant="bodyMedium" style={styles.actionDescription}>
@@ -685,7 +699,7 @@ export default function MaterialBatchManagementScreen() {
                     </View>
 
                     {/* P3-库存: Edit/Delete Actions (简化版) */}
-                    <View style={styles.actionButtons}>
+                    {canManageInventory && <View style={styles.actionButtons}>
                       <IconButton
                         icon="pencil"
                         size={20}
@@ -699,7 +713,7 @@ export default function MaterialBatchManagementScreen() {
                         style={styles.actionIcon}
                         iconColor="#F44336"
                       />
-                    </View>
+                    </View>}
                   </View>
 
                   {/* Quantity Info */}
@@ -772,7 +786,7 @@ export default function MaterialBatchManagementScreen() {
                   </View>
 
                   {/* Fresh to Frozen Conversion - P1-006 */}
-                  {expiryWarning && (expiryWarning.level === 'critical' || expiryWarning.level === 'urgent') && (
+                  {canManageInventory && expiryWarning && (expiryWarning.level === 'critical' || expiryWarning.level === 'urgent') && (
                     <View style={styles.conversionSection}>
                       <Button
                         mode="outlined"
@@ -802,7 +816,7 @@ export default function MaterialBatchManagementScreen() {
                   )}
 
                   {/* Undo Frozen - P1-007 */}
-                  {batch.status === 'frozen' && (
+                  {canManageInventory && batch.status === 'frozen' && (
                     <View style={styles.conversionSection}>
                       <Button
                         mode="outlined"
@@ -890,12 +904,14 @@ export default function MaterialBatchManagementScreen() {
       </Portal>
 
       {/* P3-库存: FAB for Creating New Material Batch - 跳转到AI智能入库页面 */}
-      <FAB
-        icon="robot"
-        style={styles.fab}
-        onPress={() => navigation.navigate('MaterialReceiptAI' as never)}
-        label="AI智能入库"
-      />
+      {canManageInventory && (
+        <FAB
+          icon="robot"
+          style={styles.fab}
+          onPress={() => navigation.navigate('MaterialReceiptAI' as never)}
+          label="AI智能入库"
+        />
+      )}
     </View>
   );
 }
@@ -919,6 +935,19 @@ const styles = StyleSheet.create({
   statsCard: {
     margin: 16,
     marginBottom: 8,
+  },
+  readOnlyNotice: {
+    marginHorizontal: 16,
+    marginBottom: 8,
+    backgroundColor: '#E3F2FD',
+  },
+  readOnlyNoticeTitle: {
+    color: '#0D47A1',
+    fontWeight: '700',
+    marginBottom: 4,
+  },
+  readOnlyNoticeText: {
+    color: '#1565C0',
   },
   statsRow: {
     flexDirection: 'row',

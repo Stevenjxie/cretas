@@ -46,13 +46,22 @@ public class WorkReportingServiceImpl {
     public WorkReportResponse submitReport(String factoryId, Long workerId, WorkReportSubmitRequest request) {
         log.info("提交报工: factoryId={}, workerId={}, type={}", factoryId, workerId, request.getReportType());
 
+        // 工厂 App 的两类报工字段不同：产量报工不强制工时，工时报工不虚构产量。
+        String reportType = request.getReportType();
+        if (!"PROGRESS".equals(reportType) && !"HOURS".equals(reportType)) {
+            throw new BusinessException(400, "不支持的报工类型: " + reportType)
+                    .withHint("请选择产量报工(PROGRESS)或工时报工(HOURS)").withHintTarget("reportType");
+        }
+
         // P0-15: 报工模式差异化校验
         ReportMode mode = request.getReportMode() != null ? request.getReportMode() : ReportMode.MODE_1;
-        if (request.getOutputQuantity() == null) {
-            throw new BusinessException(400, "产量(outputQuantity)必填")
-                    .withHint("请输入本次报工产量").withHintTarget("outputQuantity");
+        if ("PROGRESS".equals(reportType)
+                && (request.getOutputQuantity() == null || request.getOutputQuantity().signum() <= 0)) {
+            throw new BusinessException(400, "产量(outputQuantity)必填且>0")
+                    .withHint("请输入大于 0 的本次报工产量").withHintTarget("outputQuantity");
         }
-        if (request.getTotalWorkMinutes() == null || request.getTotalWorkMinutes() <= 0) {
+        if ("HOURS".equals(reportType)
+                && (request.getTotalWorkMinutes() == null || request.getTotalWorkMinutes() <= 0)) {
             throw new BusinessException(400, "耗时(totalWorkMinutes)必填且>0")
                     .withHint("请输入大于 0 的本次报工耗时(分钟)").withHintTarget("totalWorkMinutes");
         }

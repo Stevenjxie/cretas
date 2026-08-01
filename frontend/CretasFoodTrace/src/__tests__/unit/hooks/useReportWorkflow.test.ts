@@ -223,7 +223,11 @@ describe('useReportWorkflow', () => {
 
     it('网络错误应保存草稿并显示Alert', async () => {
       mockedApiClient.getSchema.mockResolvedValueOnce(mockSchemaResponse);
-      mockedApiClient.submitReport.mockRejectedValueOnce(new Error('网络连接失败'));
+      mockedApiClient.submitReport.mockRejectedValueOnce({
+        code: 'ERR_NETWORK',
+        request: {},
+        message: '网络连接失败',
+      });
 
       const { result } = renderHook(() => useReportWorkflow('PROGRESS'));
 
@@ -246,7 +250,43 @@ describe('useReportWorkflow', () => {
       const drafts = useDraftReportStore.getState().drafts;
       expect(drafts).toHaveLength(1);
       expect(drafts[0]?.factoryId).toBe('F001');
-      expect(Alert.alert).toHaveBeenCalledWith('提交失败', '网络连接失败');
+      expect(Alert.alert).toHaveBeenCalledWith('提交失败', '网络连接失败\n已保存为草稿');
+    });
+
+    it('业务校验错误不应保存草稿，并应展示后端原因和下一步', async () => {
+      mockedApiClient.getSchema.mockResolvedValueOnce(mockSchemaResponse);
+      mockedApiClient.submitReport.mockRejectedValueOnce({
+        message: 'Request failed with status code 400',
+        response: {
+          status: 400,
+          data: {
+            message: '产量(outputQuantity)必填',
+            actionHint: '请输入本次完成的产量后重试',
+          },
+        },
+      });
+
+      const { result } = renderHook(() => useReportWorkflow('PROGRESS'));
+
+      await waitFor(() => {
+        expect(result.current.loading).toBe(false);
+      });
+
+      let submitResult: unknown;
+      await act(async () => {
+        submitResult = await result.current.submitReport({
+          reportType: 'PROGRESS',
+          reportDate: '2026-02-13',
+          processCategory: '切割',
+        });
+      });
+
+      expect(submitResult).toBeNull();
+      expect(useDraftReportStore.getState().drafts).toHaveLength(0);
+      expect(Alert.alert).toHaveBeenCalledWith(
+        '提交失败',
+        '产量(outputQuantity)必填\n请输入本次完成的产量后重试'
+      );
     });
 
     it('用户未登录应显示错误Alert并返回null', async () => {

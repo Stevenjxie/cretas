@@ -33,6 +33,7 @@ import { MaterialBatchSelector, SelectedBatch, AvailableBatch } from '../../comp
 import { MaterialBatch } from '../../services/api/materialBatchApiClient';
 import { handleError, getErrorMsg } from '../../utils/errorHandler';
 import { logger } from '../../utils/logger';
+import { canCreateProductionPlan } from '../../utils/productionPlanPermissions';
 
 // 创建ProductionPlanManagement专用logger
 const productionPlanLogger = logger.createContextLogger('ProductionPlanManagement');
@@ -81,7 +82,7 @@ export default function ProductionPlanManagementScreen() {
   const isReadOnly = userType === 'platform';
 
   // 可以创建生产计划的角色
-  const canCreatePlan = ['factory_super_admin', 'department_admin'].includes(roleCode) && !isReadOnly;
+  const canCreatePlan = canCreateProductionPlan(roleCode, isReadOnly);
 
   // 调试日志
   productionPlanLogger.debug('权限检查', {
@@ -962,14 +963,14 @@ export default function ProductionPlanManagementScreen() {
                 )}
 
                 {!isReadOnly && plan.status?.toLowerCase() === 'completed' && (
-                  <Button
-                    mode="contained"
-                    icon="truck-delivery"
-                    onPress={() => Alert.alert('提示', '记录出货功能')}
-                    style={styles.actionButton}
-                  >
-                    记录出货
-                  </Button>
+                  <Card style={styles.completedGuidanceCard} testID={`plan-completed-guidance-${plan.id}`}>
+                    <Card.Content>
+                      <Text style={styles.completedGuidanceTitle}>生产已完成</Text>
+                      <Text style={styles.completedGuidanceText}>
+                        发货请由销售订单创建发货单，再由仓库确认；这里不会直接登记出货。
+                      </Text>
+                    </Card.Content>
+                  </Card>
                 )}
 
                 {/* 平台管理员只读提示 */}
@@ -1351,7 +1352,9 @@ export default function ProductionPlanManagementScreen() {
 
               <Text style={styles.completeInfoLabel}>产品类型:</Text>
               <Text style={styles.completeInfoValue}>
-                {completingPlan.productType?.name || completingPlan.productTypeId}
+                {completingPlan.productType?.name
+                  || productTypes.find((product) => product.id === completingPlan.productTypeId)?.name
+                  || completingPlan.productTypeId}
               </Text>
 
               <Text style={styles.completeInfoLabel}>计划产量:</Text>
@@ -1575,6 +1578,19 @@ const styles = StyleSheet.create({
   },
   actionButton: {
     marginTop: 8,
+  },
+  completedGuidanceCard: {
+    marginTop: 8,
+    backgroundColor: '#E8F5E9',
+  },
+  completedGuidanceTitle: {
+    color: '#1B5E20',
+    fontWeight: '700',
+    marginBottom: 4,
+  },
+  completedGuidanceText: {
+    color: '#2E7D32',
+    lineHeight: 20,
   },
   actionRow: {
     flexDirection: 'row',
