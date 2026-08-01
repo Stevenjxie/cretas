@@ -49,7 +49,11 @@ CASES: Tuple[Tuple[str, str, Tuple[str, ...]], ...] = (
     ("财务", "全部门店最近30天毛利最低的菜品有哪些", ("GROSS_MARGIN",)),
     ("财务", "全部门店最近30天采购花了多少钱", ("REQUISITION_TREND",)),
 
-    # ── 人事: 目前无事实数据, 预期答不出 —— 但必须**如实说**而不是编 ──
+    # ── 人事 ──────────────────────────────────────────────────────
+    # 2026-08-01 补上人效配置后「哪个时段人手不够」已能实质作答(日均订单取自
+    # 真实 POS, 在岗人数/目标人效是配置)。「上个月人效怎么样」仍答不出 ——
+    # LLM 会问「你想查看哪家门店」, 而 resolve_staffing_advice 收不到 store_id,
+    # 与「问时间范围」是同一族缺陷(向用户要一个 resolver 消费不了的槽位), 未修。
     ("人事", "哪个时段人手不够", ("STAFFING_ADVICE",)),
     ("人事", "上个月人效怎么样", ("STAFFING_ADVICE",)),
 )
@@ -88,18 +92,39 @@ _ADVICE_SPLIT_RE = re.compile(r"建议动作[:：]|\n建议[:：]")
 
 
 def is_substantive(answer: str) -> bool:
-    """答案里是否真有排名行或多个非零金额(而不仅仅是诚实地说没有数据)。"""
+    """答案里是否真有内容(而不仅仅是诚实地说没有数据)。
+
+    三种「有内容」的形态, 缺一不可 —— 判据自己漏掉一种就会误判成空壳:
+      1. 排名行  `1. 罗氏虾 …`
+      2. 多个非零金额  `¥21,280,945`
+      3. **多条带数字的要点行**  `- 午市: 日均 1315 单, 95 人在岗, 人效 13.8/人`
+
+    ⚠️ 第 3 种是 2026-08-01 补的, 补之前排班建议被误判成空壳 —— 它既没有编号榜单
+    也没有金额(单位是「单/人」不是钱), 但它明明给出了 4 个时段的真实数据与可执行
+    建议。**这是本判据第三次假阴性**(前两次: 建议段的 1./2./3. 被当成榜单;
+    `¥21,280,945` 无小数位被当成没金额)。凡是「写个判据自动判」, 都要拿几条已知
+    答案对一遍再信它。
+    """
     if not answer.strip():
         return False
     body = _ADVICE_SPLIT_RE.split(answer)[0]
     if _ZERO_RESULT_RE.search(body):
         return False
-    ranked = len(re.findall(r"(?m)^\s*\d+\.\s", body))
+    if len(re.findall(r"(?m)^\s*\d+\.\s", body)) > 0:
+        return True
     amounts = [
         m for m in re.findall(r"¥\s*([\d,]+(?:\.\d+)?)", body)
         if float(m.replace(",", "")) > 0
     ]
-    return ranked > 0 or len(amounts) >= 2
+    if len(amounts) >= 2:
+        return True
+    # 非金额的数据要点: 至少两行, 每行至少两个数 —— 一行一个数多半是叙述而非数据。
+    data_bullets = [
+        ln for ln in body.splitlines()
+        if ln.strip().startswith(("-", "·", "•"))
+        and len(re.findall(r"\d[\d,]*(?:\.\d+)?", ln)) >= 2
+    ]
+    return len(data_bullets) >= 2
 
 
 async def _run_case(pool, fid: str, role: str, question: str) -> Dict[str, Any]:
