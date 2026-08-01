@@ -71,7 +71,7 @@ jobs:
         # 没有 `|| true` —— 红就是红, 这是本 workflow 的全部意义。
         #
         # 排除清单在 `ci-gate-excludes.txt`, 每条带原因, 清一条删一条。
-        # 放文件而不是堆在这里, 是为了让「还欠多少」一眼可数 (当前 35 个文件),
+        # 放文件而不是堆在这里, 是为了让「还欠多少」一眼可数 (当前 29 个文件),
         # 而不是变成 YAML 里一长串没人读的 --ignore。
         run: |
           EXCLUDES=$(grep -vE '^\s*#|^\s*$' ci-gate-excludes.txt \

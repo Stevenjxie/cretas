@@ -81,7 +81,7 @@ class TestOrderTypeMix:
 
     def _run(self, rows):
         pool = _FakePool(rows)
-        return asyncio.get_event_loop().run_until_complete(
+        return asyncio.run(
             order_type_mix(pool, "RES_3101_009", (date(2025, 1, 1), date(2025, 12, 31)))
         )
 
@@ -135,7 +135,7 @@ class TestOrderTypeMix:
             {"amt": Decimal("0.00"), "bills": 50, "order_type": "澶栧崠"},
         ]
         pool = _FakePool(rows, row={"revenue": Decimal("30000.00"), "bills": 150})
-        result = asyncio.get_event_loop().run_until_complete(
+        result = asyncio.run(
             order_type_mix(pool, "RES_3101_009", (date(2025, 1, 1), date(2025, 12, 31)))
         )
 
@@ -179,7 +179,7 @@ class TestStaffRanking:
 
     def _run(self, rows, top_n=5):
         pool = _FakePool(rows)
-        return asyncio.get_event_loop().run_until_complete(
+        return asyncio.run(
             staff_ranking(pool, "RES_3101_009", (date(2025, 1, 1), date(2025, 12, 31)), top_n=top_n)
         )
 
@@ -260,7 +260,7 @@ class TestTopProductsOrderParam:
 
     def _run(self, order="desc"):
         pool = _FakePool(self._BASE_ROWS)
-        asyncio.get_event_loop().run_until_complete(
+        asyncio.run(
             top_products(
                 pool, "F001",
                 (date(2025, 1, 1), date(2025, 12, 31)),
@@ -304,7 +304,7 @@ class TestTopProductsOrderParam:
     def test_top_products_result_shape_unchanged(self):
         """Adding order param should not break existing response shape."""
         pool = _FakePool(self._BASE_ROWS)
-        result = asyncio.get_event_loop().run_until_complete(
+        result = asyncio.run(
             top_products(pool, "F001", (date(2025, 1, 1), date(2025, 12, 31)), top_n=10)
         )
         assert "top_products" in result
