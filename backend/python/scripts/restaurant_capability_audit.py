@@ -150,6 +150,29 @@ async def _run_case(pool, fid: str, role: str, question: str) -> Dict[str, Any]:
     return out
 
 
+async def _pos_freshness(pool, factory: str):
+    """(最新交易日, 距今天数, 近30天交易笔数) —— 查不到就返回 None。
+
+    只读、单条聚合, 失败不许影响审计本身(审计的价值在于跑完, 不在于这个横幅)。
+    """
+    try:
+        async with pool.acquire() as conn:
+            await conn.execute(
+                "SELECT set_config('app.factory_id', $1, false)", factory)
+            row = await conn.fetchrow(
+                "SELECT MAX(date) AS mx,"
+                "       (CURRENT_DATE - MAX(date)) AS days,"
+                "       COUNT(*) FILTER (WHERE date >= CURRENT_DATE - 30) AS tx30"
+                "  FROM fact_pos_transaction WHERE factory_id = $1",
+                factory,
+            )
+    except Exception:  # noqa: BLE001
+        return None
+    if row is None or row["mx"] is None:
+        return None
+    return row["mx"], int(row["days"] or 0), int(row["tx30"] or 0)
+
+
 async def _audit_one(pool, factory: str, role: str, verbose: bool) -> Dict[str, Any]:
     """跑完一个租户, 返回该租户的判定计数。"""
     from smartbi.tenant_ctx import set_factory_id
@@ -159,6 +182,33 @@ async def _audit_one(pool, factory: str, role: str, verbose: bool) -> Dict[str, 
     print("=" * 68, flush=True)
     print(f"  factory={factory}  role={role}", flush=True)
     print("=" * 68, flush=True)
+
+    # 数据新鲜度横幅 (2026-08-01)。
+    #
+    # 本文件通篇在防「审计造出假缺陷」。这里补上最后一种: **拿一个数据陈旧的租户
+    # 跑, 分数会低, 而低分的原因是没数据、不是不会答**。
+    #
+    # 2026-08-01 实测 R_GML_DEMO(桂满陇) 13/20, 8 条全是 CLARIFY。逐条看正文,
+    # 每一条都是**教科书式的正确行为**:
+    #   「最近30天没有可用的营收和订单数据。**没有用全部历史或其他日期替代**。」
+    # 它的 POS 止于 2026-01-15(198 天前), 近 30 天 0 笔 —— 「答不出」是诚实拒答。
+    # 我自己差点把这 8 条当缺陷去查, 所以把判据做成横幅印在跑之前。
+    #
+    # ⛔ 刻意**不改 verdict、不改 --fail-under**: 改计分口径会让历史分数不可比
+    # (同 `is_substantive` 那次的取舍)。这里只多印几行字, 不动任何判定。
+    fresh = await _pos_freshness(pool, factory)
+    if fresh is not None:
+        mx, days, tx30 = fresh
+        if tx30 == 0:
+            print(f"  ⚠️ 该租户 POS 数据止于 {mx}({days} 天前), 近 30 天 0 笔交易。",
+                  flush=True)
+            print("     用例问的多是「最近30天」→ 会**诚实拒答**(明说没拿其他日期替代)。",
+                  flush=True)
+            print("     ⛔ 本轮分数**不代表能力**, 别拿它当缺陷去查。",
+                  flush=True)
+        elif days > 7:
+            print(f"  ℹ️ 该租户 POS 最新到 {mx}({days} 天前), 近 30 天 {tx30} 笔。",
+                  flush=True)
 
     rows: List[Dict[str, Any]] = []
     for family, question, expected in CASES:
