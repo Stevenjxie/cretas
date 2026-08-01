@@ -43,6 +43,7 @@ public final class UnitDisplayNames {
             Map.entry("pail", "桶"),
             Map.entry("roll", "卷"),
             Map.entry("slice", "片"),
+            Map.entry("sheet", "张"),
             Map.entry("tray", "托盘"),
             Map.entry("plate", "板"),
             Map.entry("item", "项"));

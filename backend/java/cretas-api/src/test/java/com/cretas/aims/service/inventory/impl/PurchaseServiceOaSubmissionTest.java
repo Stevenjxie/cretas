@@ -24,6 +24,7 @@ import com.cretas.aims.repository.inventory.PurchaseReceiveRecordRepository;
 import com.cretas.aims.service.MaterialBatchService;
 import com.cretas.aims.service.ApprovalWorkflowService;
 import com.cretas.aims.service.unit.CanonicalUnit;
+import com.cretas.aims.service.workflow.SelfApprovalPolicy;
 import com.cretas.aims.service.unit.UnitContractService;
 import com.cretas.aims.service.unit.UnitDimension;
 import com.cretas.aims.service.unit.UnitNormalizationResult;
@@ -80,6 +81,10 @@ class PurchaseServiceOaSubmissionTest {
         ReflectionTestUtils.setField(service, "workflowEngine", workflowEngine);
         ReflectionTestUtils.setField(service, "approvalWorkflowService", approvalWorkflowService);
         ReflectionTestUtils.setField(service, "userRepository", userRepository);
+        // 自审例外已从本类的私有方法提取到 SelfApprovalPolicy(销售/采购/调拨共用),
+        // 用同一批 mock 构造真实策略, 行为与提取前等价。
+        ReflectionTestUtils.setField(service, "selfApprovalPolicy",
+                new SelfApprovalPolicy(approvalWorkflowService, userRepository));
         ReflectionTestUtils.setField(service, "self", service);
 
         order = new PurchaseOrder();

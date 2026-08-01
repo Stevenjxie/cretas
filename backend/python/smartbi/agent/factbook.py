@@ -112,8 +112,34 @@ def _pct1(v: Any) -> Optional[float]:
         return None
 
 
+def _ingredient_note(item: Any) -> str:
+    """「配方登记 N 种食材」后缀 —— 让读的人自己判断这条毛利率可不可信。
+
+    单份成本只算配方里**已登记**的食材; 没登记的辅料/调料/损耗不在里面, 所以毛利率
+    是上限。只登记 1-3 种料的菜, 其毛利率必然虚高。
+
+    ⚠️ 2026-08-01 订正: 原注释举「RES_3101_009 的 85.1%」为例是**归错了路径** ——
+    本机制的数据源是 `restaurant_sku_forms`(实测只有 DEMO_REST 有数据), 那个 85.1%
+    来自 `resolve_gross_margin`。举一个本路径根本取不到的例子会误导下一个读的人。
+
+    ⛔ 刻意只报事实不改数: 没有权威实际成本时补一个"估算成本"等于伪造财务数据。
+    """
+    if not isinstance(item, dict):
+        return ""
+    n = item.get("ingredient_count")
+    if not isinstance(n, int) or n <= 0:
+        return ""
+    flag = "，登记过少" if n <= 3 else ""
+    return f"（配方登记 {n} 种食材{flag}）"
+
+
 def _has_reliable_dish_margin(dm: Any) -> bool:
-    """Only trust dish margin emitted by the deterministic Gold producer."""
+    """Only trust dish margin emitted by the deterministic Gold producer.
+
+    ⚠️ ``cost_basis_complete`` 的名字会骗人: 它是「这批事实来自确定性 Gold 生产者」
+    的**信任标记**, 对「配方有没有把料列全」一无所知 (见 gold.queries 同名键的注释)。
+    真正的覆盖度信号是 ``ingredient_count`` / ``ingredient_count_min``。
+    """
     return isinstance(dm, dict) and dm.get("cost_basis_complete") is True
 
 
@@ -427,6 +453,23 @@ class FactBook:
         if not (top_items or low_items):
             return
         lines.append("## 单品毛利（restaurant_sku_forms：售价 - 单份成本）")
+        # 🔴 口径必须写明: 单份成本 = **配方里已登记食材**之和。配方没登记的辅料、
+        # 调料、损耗都不在里面, 所以这里的毛利率是**上限**, 不是真实毛利率。
+        # (数据源是 restaurant_sku_forms —— 与 resolve_gross_margin 走的
+        #  agg_restaurant_product_cost 是两条独立路径, 别把两边的数混着引用。)
+        # ⛔ 不去猜一个"真实成本"补上 —— 没有权威实际成本时编一个等于伪造财务数据;
+        #    把「登记了几种料」摆出来, 让读的人自己判断这个数可不可信。
+        lines.append(
+            "- ⚠️ 口径：单份成本 = 配方**已登记食材**之和；未登记的辅料/调料/损耗不计入，"
+            "因此下列毛利率是上限而非真实毛利率。判断可信度请看每道菜登记的食材数。"
+        )
+        ic_min = dm.get("ingredient_count_min")
+        ic_median = dm.get("ingredient_count_median")
+        if ic_min is not None and ic_median is not None:
+            lines.append(
+                f"- 配方登记食材数：最少 {ic_min} 种，中位数 {ic_median} 种"
+                f"{'（登记过少，毛利率明显偏高）' if ic_min <= 3 else ''}"
+            )
         if top_items:
             lines.append("- 高毛利菜品：")
             for i, item in enumerate(top_items[:5], 1):
@@ -434,6 +477,7 @@ class FactBook:
                     f"  {i}. {item.get('dish_name')}：售价 ¥{_money(item.get('selling_price'))}，"
                     f"单份成本 ¥{_money(item.get('unit_cost'))}，毛利 ¥{_money(item.get('gross_profit'))}，"
                     f"毛利率 {item.get('gross_margin_pct')}%"
+                    f"{_ingredient_note(item)}"
                 )
             ingredients = top_items[0].get("ingredients") or []
             if ingredients:
@@ -449,6 +493,7 @@ class FactBook:
                     f"  {i}. {item.get('dish_name')}：售价 ¥{_money(item.get('selling_price'))}，"
                     f"单份成本 ¥{_money(item.get('unit_cost'))}，毛利 ¥{_money(item.get('gross_profit'))}，"
                     f"毛利率 {item.get('gross_margin_pct')}%"
+                    f"{_ingredient_note(item)}"
                 )
         lines.append("")
 

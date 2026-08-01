@@ -121,6 +121,11 @@ class _Pool:
 
 
 class _OrderTypeConn:
+    async def execute(self, *args, **kwargs):
+        # gold/queries.tenant_conn 会在借到连接后 set_config 租户上下文。
+        # 假连接必须支持它 —— 不支持等于建模了一条永远不设租户的连接,
+        # 而那正是 2026-08-01 修掉的那个非确定性返空缺陷本身。
+        return None
     async def fetch(self, sql: str, *params):
         assert "agg_daily_order_type_meal" in sql
         assert "GROUP BY order_type" in sql
@@ -134,6 +139,11 @@ class _OrderTypeConn:
 
 
 class _MealPeriodConn:
+    async def execute(self, *args, **kwargs):
+        # gold/queries.tenant_conn 会在借到连接后 set_config 租户上下文。
+        # 假连接必须支持它 —— 不支持等于建模了一条永远不设租户的连接,
+        # 而那正是 2026-08-01 修掉的那个非确定性返空缺陷本身。
+        return None
     async def fetch(self, sql: str, *params):
         assert "agg_daily_order_type_meal" in sql
         assert "GROUP BY meal_period" in sql
@@ -150,6 +160,11 @@ class _DiscountConn:
     (a WHOLE month) — the scaled composition must reconcile to 500, proving the
     total comes from agg_daily, not agg_discount (C1/I1)."""
 
+    async def execute(self, *args, **kwargs):
+        # gold/queries.tenant_conn 会在借到连接后 set_config 租户上下文。
+        # 假连接必须支持它 —— 不支持等于建模了一条永远不设租户的连接,
+        # 而那正是 2026-08-01 修掉的那个非确定性返空缺陷本身。
+        return None
     async def fetchrow(self, sql: str, *params):
         assert "agg_daily" in sql
         assert "SUM(discount_amount)" in sql  # C1: total from discount_amount
@@ -168,6 +183,11 @@ class _DiscountConn:
 class _DiscountConnNoRevenue:
     """Discounts exist but agg_daily has no revenue in range → honest None share."""
 
+    async def execute(self, *args, **kwargs):
+        # gold/queries.tenant_conn 会在借到连接后 set_config 租户上下文。
+        # 假连接必须支持它 —— 不支持等于建模了一条永远不设租户的连接,
+        # 而那正是 2026-08-01 修掉的那个非确定性返空缺陷本身。
+        return None
     async def fetchrow(self, sql: str, *params):
         return {"discount": Decimal("100.00"), "revenue": Decimal("0")}
 
@@ -179,6 +199,11 @@ class _ServiceModeMissingMoneyEstimableConn:
     """order_type_meal money columns missing (0) but bills present; agg_daily
     HAS revenue → honest-null estimate path (C2)."""
 
+    async def execute(self, *args, **kwargs):
+        # gold/queries.tenant_conn 会在借到连接后 set_config 租户上下文。
+        # 假连接必须支持它 —— 不支持等于建模了一条永远不设租户的连接,
+        # 而那正是 2026-08-01 修掉的那个非确定性返空缺陷本身。
+        return None
     async def fetch(self, sql: str, *params):
         assert "agg_daily_order_type_meal" in sql
         return [
@@ -195,6 +220,11 @@ class _ServiceModeMissingMoneyNonEstimableConn:
     """order_type_meal money missing AND agg_daily also has no revenue → no
     basis; 客单价 stays None, never a confident ¥0 (C2)."""
 
+    async def execute(self, *args, **kwargs):
+        # gold/queries.tenant_conn 会在借到连接后 set_config 租户上下文。
+        # 假连接必须支持它 —— 不支持等于建模了一条永远不设租户的连接,
+        # 而那正是 2026-08-01 修掉的那个非确定性返空缺陷本身。
+        return None
     async def fetch(self, sql: str, *params):
         return [{"grp": "堂食", "revenue": Decimal("0"), "bill_count": 60}]
 

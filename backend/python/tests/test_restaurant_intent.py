@@ -4276,3 +4276,65 @@ def test_stock_shortage_declares_the_money_metric_like_wastage_does():
         "shortage_cost",
         "shortage_qty",
     )
+
+
+def test_business_performance_wording_compiles_to_revenue_metric():
+    """「业绩」必须编译出 revenue —— 否则 contract-repair 通道对它永不触发。
+
+    2026-08-01 prod 实拍(四部门审计, 市场部门): 「最近30天哪家店业绩最好」两个租户
+    都答不出, 落到澄清「我识别到的问题对象与准备执行的分析范围不一致」。逐层取证:
+
+        t1 关键词       → RESTAURANT_OPS_SALES_SUMMARY
+        planned_intents → ('RESTAURANT_OPS_SALES_SUMMARY',)
+        LLM 选的 code   → RESTAURANT_OPS_STORE_MARGIN     ← 不在计划里
+        _detect_requested_metrics("…业绩最好") → ()        ← 根因在这
+
+    `code not in planned_intents` 本该由 contract-repair 修掉, 但它要求
+    `_repair_backed_by_user_wording` 为真, 而该函数拿 `_detect_requested_metrics`
+    的结果与修复指标求交集 —— 「业绩」不在 `_REQUEST_METRIC_RULES` 里, 交集为空,
+    **修复通道拒绝介入**, LLM 错的 resolver 一路走到澄清。
+
+    对照句「哪家门店营收最高」只因把「业绩」换成「营收」就能答(实测
+    planner_authority='llm_contract_repair'), 证明差别只在这一个词。
+
+    这与表里 `requisition_cost` 那条注释是同一形状: 指标编译不出来 →
+    修复条件永远为假 → 同一问句在不同轮次漂到不同 intent。
+
+    ⛔ 只收「业绩」, **刻意不收「生意」**: 第一版两个一起加当场打挂 4 条既有用例,
+    全部由「生意」引起(它会把 asks_profitability / STAFFING_ADVICE 一并吸走)。
+    最后一段反向断言把这条决定钉住。
+    """
+    from smartbi.gold.restaurant.restaurant_intent import (
+        _detect_requested_metrics,
+        _repair_backed_by_user_wording,
+    )
+
+    for query in (
+        "最近30天哪家店业绩最好",
+        "上个月哪家店业绩最好",
+        "哪家门店业绩最好",
+    ):
+        assert "revenue" in _detect_requested_metrics(query), f"{query} 编译不出 revenue"
+        assert _repair_backed_by_user_wording(query, ("revenue", "sales_volume")), (
+            f"{query} 拿不到用户措辞背书 → contract-repair 会拒绝介入"
+        )
+
+    # 对照: 原本就能编译的说法不受影响
+    for query, expected in (
+        ("最近30天哪家门店营收最高", "revenue"),
+        ("最近30天哪家店营业额最好", "revenue"),
+        ("全部门店最近30天损耗金额最高的食材是哪几个", "wastage"),
+        ("全部门店最近30天哪些菜的食材成本最高", "recipe_cost"),
+    ):
+        assert expected in _detect_requested_metrics(query), f"{query} 回归: 丢了 {expected}"
+
+    # 反向: 别把「业绩」泛化到与营收无关的排班问句上
+    assert "revenue" not in _detect_requested_metrics("哪个时段人手不够")
+    assert "staffing" in _detect_requested_metrics("哪个时段人手不够")
+
+    # ⛔ 「生意」刻意不收 —— 它是泛化经营词, 收了会吸走盈利/排班类问句。
+    #    这条守着那个决定: 若有人日后顺手把「生意」加进 revenue, 这里会红,
+    #    并且那 4 条既有用例也会一起红。
+    assert "revenue" not in _detect_requested_metrics("生意有起色没，划算不划算"), (
+        "「生意」不该编译成 revenue —— 它会把 asks_profitability / STAFFING_ADVICE 一并吸走"
+    )

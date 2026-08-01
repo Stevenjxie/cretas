@@ -50,9 +50,17 @@ const UNIT_LABELS: Record<string, string> = {
   // 中文计量单位 —— 英文码对用户无意义
   jin: '斤', t: '吨',
   // 计数 / 包装 —— 一律中文
-  pcs: '只', portion: '份', slice: '片', item: '项',
+  // 🔴 pcs 展示成「件」而不是「只」(2026-08-01 定案, 推翻 #1672 的对齐方向):
+  //   本文件的 DISTINCT_COUNT_LABELS 与后端 UnitContractServiceImpl 同源, 都是 {只, 个} ——
+  //   两侧都把「件」排除在外, 即两侧都认定 **件 ≡ pcs**。把 pcs 渲染成「只」等于断言
+  //   只 ≡ pcs, 与这条同源规则**直接矛盾**(`sameUnit('pcs', displayUnit('pcs'))` 曾经是 false,
+  //   一个单位不等于它自己的展示标签)。Java 侧 UnitDisplayNames 也是「件」。
+  //   ⚠️ 用户手填的 只/个/件 由 RAW_COUNT_LABELS 原样保留, 不受本行影响 ——
+  //   本行只决定**裸规范码 pcs** 显示成什么。
+  pcs: '件', portion: '份', slice: '片', item: '项',
   box: '盒', case: '箱', bag: '袋', pack: '包', bottle: '瓶',
   can: '罐', crate: '框', pail: '桶', roll: '卷',
+  tray: '托盘', plate: '板',
 };
 
 export function canonicalUnitCode(value: unknown): string {
@@ -79,6 +87,11 @@ const RAW_COUNT_LABELS = new Set(['只', '个', '件']);
 export function displayUnit(value: unknown): string {
   const raw = String(value ?? '').trim();
   if (RAW_COUNT_LABELS.has(raw)) return raw;
+  // 🔴 遗留复合写法 `pcs:只` **自带用户当初填的那个标签**, 与 RAW_COUNT_LABELS 同理原样保留。
+  // 不保留的话, 2026-08-01 把 UNIT_LABELS.pcs 从「只」改成「件」会顺带把这些历史数据
+  // 从「只」翻成「件」—— 那正是 #1672 造成、#2097 修掉的那类「用户填的标签被改写」缺陷。
+  const legacyCountComposite = raw.match(/^pcs:(只|个|件)$/i);
+  if (legacyCountComposite) return legacyCountComposite[1];
   const code = canonicalUnitCode(value);
   return UNIT_LABELS[code] || code;
 }

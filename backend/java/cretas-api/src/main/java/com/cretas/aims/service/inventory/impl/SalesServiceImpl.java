@@ -49,6 +49,7 @@ import com.cretas.aims.service.product.ProductPackagingSpecService;
 import com.cretas.aims.service.sales.SalesFinishedGoodsOwnershipGuard;
 import com.cretas.aims.service.rules.annotation.RuleEvaluate;
 import com.cretas.aims.service.workflow.ApprovalWorkflowExecutor;
+import com.cretas.aims.service.workflow.SelfApprovalPolicy;
 import com.cretas.aims.service.workflow.WorkflowEngineService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -250,6 +251,13 @@ public class SalesServiceImpl implements SalesService {
     /** N9: persisted workflow engine for factories that published SALES_ORDER_APPROVAL workflows. */
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private WorkflowEngineService workflowEngine;
+
+    /**
+     * 「发起人能否审批自己的单」的唯一判定处 —— 与采购单、调拨单共用同一份语义。
+     * 此前本处无条件禁止自审, 而采购单有私有例外, 同一条规则两种行为。
+     */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private SelfApprovalPolicy selfApprovalPolicy;
 
     /** Legacy in-memory executor retained for compatibility with older partial deployments. */
     @org.springframework.beans.factory.annotation.Autowired(required = false)
@@ -1122,10 +1130,13 @@ public class SalesServiceImpl implements SalesService {
         if (instance.getStatus() != InstanceStatus.RUNNING) {
             return order;
         }
-        if (actorId != null && actorId.equals(instance.getInitiatedBy())) {
+        if (actorId != null
+                && actorId.equals(instance.getInitiatedBy())
+                && (selfApprovalPolicy == null
+                    || !selfApprovalPolicy.allowsSelfApproval(factoryId, instance, actorId, actorRole))) {
             throw new BusinessException(403, "发起人不能审批自己的销售订单")
                     .withCode("SALES_SELF_APPROVAL_FORBIDDEN")
-                    .withHint("请由当前 OA 节点授权的其他审批人处理");
+                    .withHint("请由当前 OA 节点授权的其他审批人处理，或在 Canvas 中明确将发起人配置为该节点审批人");
         }
         if (action == HistoryAction.REJECT && (notes == null || notes.isBlank())) {
             throw new BusinessException(422, "驳回销售订单必须填写原因")

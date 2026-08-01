@@ -172,7 +172,7 @@ class TestChannelBreakdownCleansNames:
 
     def _run(self, rows):
         pool = _FakePool(rows)
-        return asyncio.get_event_loop().run_until_complete(
+        return asyncio.run(
             channel_breakdown(
                 pool, "RES_3101_009", (date(2025, 1, 1), date(2025, 12, 31))
             )
@@ -215,7 +215,7 @@ class TestDiscountBreakdownCleansNames:
 
     def _run(self, rows):
         pool = _FakePool(rows)
-        return asyncio.get_event_loop().run_until_complete(
+        return asyncio.run(
             discount_breakdown(
                 pool, "RES_3101_009", (date(2025, 1, 1), date(2025, 12, 31))
             )
@@ -237,7 +237,7 @@ class TestOrderTypeMixCleansNames:
 
     def _run(self, rows):
         pool = _FakePool(rows)
-        return asyncio.get_event_loop().run_until_complete(
+        return asyncio.run(
             order_type_mix(
                 pool, "RES_3101_009", (date(2025, 1, 1), date(2025, 12, 31))
             )

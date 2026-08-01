@@ -78,4 +78,36 @@ class MissingCountUnitSeedMigrationTest {
                     .isEqualTo(SEEDED_NAMES[i]);
         }
     }
+
+    @Test
+    @DisplayName("V20261029_42: 「张」同时补进名录和权威别名表 —— 只补一处兜底那层仍不认")
+    void seedsSheetUnitInBothPlaces() throws Exception {
+        Path migration = Paths.get(
+                "src/main/resources/db/flyway/V20261029_42__drop_dangling_bom_and_seed_sheet_unit.sql");
+        assertThat(Files.exists(migration)).isTrue();
+        String sql = Files.readString(migration, StandardCharsets.UTF_8);
+        assertThat(sql).contains("'sheet'").contains("'张'").contains("INVENTORY_QUANTITY");
+        assertThat(sql).containsIgnoringCase("NOT EXISTS");
+
+        // 权威别名表那一半 (只改名录的话, normalize() 的兜底层仍认不出「张」)
+        Path aliases = Paths.get(
+                "src/main/java/com/cretas/aims/service/unit/impl/UnitContractServiceImpl.java");
+        assertThat(Files.readString(aliases, StandardCharsets.UTF_8))
+                .as("权威别名表必须同步补 sheet")
+                .contains("alias(aliases, \"sheet\", \"sheet\", \"张\")");
+
+        // 展示层那一半
+        assertThat(UnitDisplayNames.display("sheet")).isEqualTo("张");
+    }
+
+    @Test
+    @DisplayName("V20261029_42: 悬空 BOM 用软删 + NOT EXISTS 判据, 不是写死 id 硬删")
+    void dropsDanglingBomBySoftDeleteWithGuard() throws Exception {
+        String sql = Files.readString(Paths.get(
+                "src/main/resources/db/flyway/V20261029_42__drop_dangling_bom_and_seed_sheet_unit.sql"),
+                StandardCharsets.UTF_8);
+        assertThat(sql).contains("deleted_at = now()");
+        assertThat(sql).doesNotContain("DELETE FROM bom_recipes");
+        assertThat(sql).contains("NOT EXISTS").contains("product_types");
+    }
 }

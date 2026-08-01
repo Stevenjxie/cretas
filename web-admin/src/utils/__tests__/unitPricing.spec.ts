@@ -35,19 +35,30 @@ describe('unitPricing', () => {
   });
 
   /**
-   * ⚠️ **已知未决口径**, 钉在这里防止它再次静默漂移。
+   * ✅ **口径已定案 (2026-08-01)**: 裸规范码 `pcs` 展示成「件」。
    *
-   * 裸规范码 `pcs` 目前展示成「只」(#1672 对齐系统单位表的 `unitName`), 但同文件的
-   * `sameUnit` 把「只」列进 DISTINCT_COUNT_LABELS = 「只」不是 `pcs` ——
-   * 于是 `sameUnit('pcs', displayUnit('pcs')) === false`: **一个单位不等于它自己的展示标签**。
-   * 上面那条不变式因此不能覆盖裸码。
+   * 判据不是偏好, 是**两侧同源规则自己给出的**: 前端 `DISTINCT_COUNT_LABELS` 与后端
+   * `UnitContractServiceImpl.DISTINCT_COUNT_LABELS` 都是 `{只, 个}` —— 两边都把「件」
+   * 排除在外, 即两边都认定 **件 ≡ pcs**。所以把 pcs 渲染成「只」等于断言 只 ≡ pcs,
+   * 与该规则直接矛盾(旧行为下 `sameUnit('pcs', displayUnit('pcs'))` 是 **false**,
+   * 一个单位不等于它自己的展示标签)。Java 侧 `UnitDisplayNames` 同样是「件」。
    *
-   * 按本文件注释的说法 (「件」就是 pcs 的中文名) 应该显示「件」; 按系统单位表应该显示「只」。
-   * 这是产品口径问题, 需要 Steve 拍板后再改, 改的时候把这条用例一起改掉。
+   * 这条现在钉的是**不变式**而不是当前值: 展示标签必须与它自己的规范码互认。
    */
-  it('裸 pcs 的展示口径未决 —— 当前显示「只」, 且与 sameUnit 自相矛盾', () => {
-    expect(displayUnit('pcs')).toBe('只');
-    expect(sameUnit('pcs', displayUnit('pcs'))).toBe(false);
+  it('裸 pcs 展示成「件」, 且不再与 sameUnit 自相矛盾', () => {
+    expect(displayUnit('pcs')).toBe('件');
+    expect(sameUnit('pcs', displayUnit('pcs'))).toBe(true);
+  });
+
+  /**
+   * 🔴 用户手填的 只/个/件 必须**原样保留** —— 这是 #1672 造成、#2097 修掉的线上缺陷
+   * (用户填「件」的产品界面上显示成「只」)。上面改 `UNIT_LABELS.pcs` 只影响裸码,
+   * 绝不能把这条一起带翻。
+   */
+  it('用户手填的 只/个/件 原样保留, 不被 pcs 口径影响', () => {
+    expect(displayUnit('只')).toBe('只');
+    expect(displayUnit('个')).toBe('个');
+    expect(displayUnit('件')).toBe('件');
   });
 
   it('normalizes canonical aliases without changing the price value', () => {
@@ -63,8 +74,10 @@ describe('unitPricing', () => {
     expect(displayUnit('g')).toBe('g');
     expect(displayUnit('kg')).toBe('kg');
     expect(canonicalUnitCode('pcs:只')).toBe('pcs');
+    // 遗留复合写法自带用户填的标签, 必须原样保留(不受 pcs 口径变更影响)
     expect(displayUnit('pcs:只')).toBe('只');
-    expect(displayUnit('pcs')).toBe('只');
+    // 裸规范码走 2026-08-01 定案的「件」
+    expect(displayUnit('pcs')).toBe('件');
     expect(formatPriceUnit('box')).toBe('元/盒');
     expect(formatPriceUnit('case')).toBe('元/箱');
     expect(formatPriceUnit('slice')).toBe('元/片');

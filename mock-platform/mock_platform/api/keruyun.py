@@ -13,7 +13,7 @@ from fastapi.responses import JSONResponse
 from ..config import get_settings
 from ..db import connect
 from ._auth import keruyun_sign
-from ._paging import MAX_LIMIT, page_ops, page_orders
+from ._paging import MAX_LIMIT, page_menu, page_ops, page_orders
 
 router = APIRouter(prefix="/keruyun/open", tags=["keruyun"])
 
@@ -107,3 +107,36 @@ async def wastage_list(request: Request):
 @router.get("/stock/stocktaking/list")
 async def stocktaking_list(request: Request):
     return await _ops_list(request, "stocktaking")
+
+
+# ── 菜单主数据 (2026-08-01) ─────────────────────────────────────────
+# 与上面三条同一个形状, 只是游标走主键而非 seq(主数据不是流水)。
+# 存在的理由见 _paging.py 的段注释: 数据这边一直都有, 缺的是取走它的接口。
+
+async def _menu_list(request: Request, kind: str) -> JSONResponse:
+    parsed, failure = _authorize_and_page_params(dict(request.query_params))
+    if failure is not None:
+        return failure
+    cursor, limit = parsed
+    conn = connect(get_settings().db_path)
+    try:
+        items, next_cursor, has_more = page_menu(
+            conn, kind, since_id=cursor, limit=limit)
+    finally:
+        conn.close()
+    return _ok(items, next_cursor, has_more)
+
+
+@router.get("/menu/dish/list")
+async def dish_list(request: Request):
+    return await _menu_list(request, "dish")
+
+
+@router.get("/menu/ingredient/list")
+async def ingredient_list(request: Request):
+    return await _menu_list(request, "ingredient")
+
+
+@router.get("/menu/recipe/list")
+async def recipe_list(request: Request):
+    return await _menu_list(request, "recipe")

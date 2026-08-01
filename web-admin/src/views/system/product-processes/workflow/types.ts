@@ -68,7 +68,6 @@ export interface ProcessNodeData extends Record<string, unknown> {
   /** Optional for legacy workflow JSON. Missing groups mean every port is required. */
   portGroups?: ProcessPortGroup[];
   /** Read-only BOM-derived input requirements; absence means the BOM contract is not configured. */
-  inputRequirementGroups?: ProcessPortGroup[];
   conversionRule: {
     mode: ConversionMode;
     expression?: string | null;

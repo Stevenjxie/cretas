@@ -550,8 +550,6 @@ function isProcessNodeData(value: Record<string, unknown>): value is ProcessNode
     && value.ports.every(isProcessPort)
     && (value.portGroups === undefined
       || (Array.isArray(value.portGroups) && value.portGroups.every(isProcessPortGroup)))
-    && (value.inputRequirementGroups === undefined
-      || (Array.isArray(value.inputRequirementGroups) && value.inputRequirementGroups.every(isProcessPortGroup)))
     && isConversionRule(value.conversionRule)
     && typeof value.reportingRequired === 'boolean'
     && optionalNullableString(value.processCategory)
