@@ -1983,14 +1983,12 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
                     .withHint("请刷新生产计划列表查看最新状态");
         }
 
-        runConfiguredValidation(factoryId, "START", java.util.Map.of("planId", planId));
-
-        // N1 (2026-06-12): 开工无条件化。原料不足只记录预警, 不再阻断开工;
-        // 领料/实际消耗在报工或结单时按现场填写。
-        validateMaterialStockSufficient(factoryId, plan);
-
         // SP2 二次加工: 开始生产时扣减 WIP 半成品库存
         // 注: 在事务内执行, 扣减失败直接抛出异常回滚整个 startProduction (fail-closed, 无 fail-soft)
+        // ⛔ 刻意留在这里而不下沉到 createBatchFromPlan: 逐工序录入(ClerkProcessEntryServiceImpl)
+        //    走的是「前端先调 /create-batch, 再由 materializeBatch 按 edges 精确扣半成品」这条路,
+        //    把扣减挪进 createBatchFromPlan 会让同一 SECONDARY 计划被扣两次(幽灵超扣)。
+        //    详见 ClerkProcessEntryServiceImpl 里 "不调用 startProduction" 那段注释。
         if ("SECONDARY".equals(plan.getPlanSourceType()) && plan.getSecondarySourceWipId() != null) {
             if (wipInventoryService == null) {
                 throw new BusinessException(500, "二次加工服务未初始化, 无法扣减半成品库存");
@@ -2003,9 +2001,34 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
             log.info("SP2 二次加工 WIP 扣减完成: planId={}, wipId={}", planId, plan.getSecondarySourceWipId());
         }
 
-        plan.setStatus(ProductionPlanStatus.IN_PROGRESS);
-        plan.setStartTime(LocalDateTime.now());
-        plan = productionPlanRepository.save(plan);
+        // 🔴 2026-08-02: 「开工」必须同时把批次建出来。
+        //
+        // 此前 startProduction 只翻状态不建批次, 而报工与结单都需要批次 → 计划进入
+        // 「已开工但没有生产批次」这个死状态, 三条路全走不通(2026-08-02 prod 真机逐条点过):
+        //   - 「继续录入/逐道录入」: 当场弹「该计划已开工但没有生产批次」, 进不去;
+        //   - 「核对结单」: 弹窗**能打开也能填**, 填完点提交才被
+        //     ensureWorkflowSettlementUsesSubmittedReports 以 409 拒掉(workflow 计划必须
+        //     先有已提交的逐道报工行) —— 让人白填一遍, 比直接挡住更费事;
+        //   - 「补建批次」: createBatchFromPlan 也只放行 PENDING, 同样 409。
+        // 用户只能作废重建。
+        // 触发它的是**最自然的点击顺序**: 先「开工」再「逐道录入」——
+        // 前端(plans/list.vue openProcessEntry)只在 status===PENDING 时才自动补建批次,
+        // 把「状态已 IN_PROGRESS」当成了「已经有批次」的证据。
+        // prod 实测 7 个计划卡在这里(F001 6 个最早到 2026-03-12, 六膳门 1 个)。
+        //
+        // 修法是让两个「开工」入口收敛到同一实现(materializeBatchForPlan), 而不是在
+        // createBatchFromPlan 那边放宽状态门 —— 后者会重新打开 R6 并发洞(第一笔事务未提交
+        // 批次时, 第二笔看到「IN_PROGRESS 且无批次」会建出第二个批次)。
+        // 并发安全由本方法上面那把悲观写锁 + PENDING 状态门保证: 第二个请求拿锁后看到
+        // IN_PROGRESS 就 409, 走不到这里。
+        //
+        // ⚠️ 副作用(有意): 开工现在继承了转批次的前置校验(单位缺失 422 / 数量非法 422 /
+        //    workflow pin 不覆盖产出 / 工序任务服务不可用 500)。这些计划以前「能开工」,
+        //    但开完就是死的 —— 当场报错并给出可执行提示, 比事后卡死好。
+        //    prod 实测 36 个 PENDING 计划全部有单位与数量, 现网无计划因此受阻。
+        ProductionBatch createdBatch = materializeBatchForPlan(factoryId, plan);
+        log.info("开工已建批次: planId={}, batchId={}, batchNumber={}",
+                planId, createdBatch.getId(), createdBatch.getBatchNumber());
 
         if (applicationEventPublisher != null) {
             try {
@@ -6221,6 +6244,27 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
             throw new BusinessException(409, "只有待处理的计划可以转为批次")
                     .withHint("请刷新生产计划列表查看最新状态");
         }
+
+        return materializeBatchForPlan(factoryId, plan);
+    }
+
+    /**
+     * 把一个<b>已经取到悲观写锁、已确认可开工</b>的计划物化成生产批次。
+     *
+     * <p>「开工」在系统里有两个入口 —— {@link #startProduction} 与 {@link #createBatchFromPlan} ——
+     * 它们各自做过一半的事: 前者只翻状态不建批次, 后者建批次但不扣 SECONDARY 的 WIP。
+     * 于是先点「开工」的计划会卡进「已开工但没有生产批次」, 报工/结单/补建三条路全堵死
+     * (prod 实测 7 个)。这个方法是两者收敛后的<b>唯一</b>批次物化实现。
+     *
+     * <p>⛔ 刻意接收<b>已锁定的 plan 实体</b>而不是 planId: 若让 startProduction 去调
+     * {@link #createBatchFromPlan}, 就会在同一事务里第二次 {@code findByIdForUpdate} ——
+     * 对同事务是重入(无害), 但多一次 SELECT ... FOR UPDATE 往返, 且会破坏 R6 并发用例里
+     * 「取锁至多一次」的断言。锁与状态门留在各自入口, 这里只管物化。
+     *
+     * @param plan 调用方必须已经完成: 悲观写锁 + 工厂归属校验 + 状态门(PENDING)
+     */
+    private ProductionBatch materializeBatchForPlan(String factoryId, ProductionPlan plan) {
+        String planId = plan.getId();
 
         BigDecimal batchTargetQuantity = plan.getPlannedQuantity() == null
                 ? BigDecimal.ZERO
