@@ -3308,6 +3308,25 @@ function canPrintPlanDocuments(status: string) {
   return ['PENDING', 'CONFIRMED', 'APPROVED', 'IN_PROGRESS', 'COMPLETED'].includes(String(status || '').toUpperCase());
 }
 
+/**
+ * 这一行现在是不是「等着仓库确认入库」。
+ *
+ * <p>判据复用 nextStepText 里已有的 postingStatus，不新造一套 —— 那正是
+ * 「同一个闸多个承载点」的成因。两档都要放行：
+ *   · PENDING_WAREHOUSE_RECEIPT — 结单后待入库；
+ *   · PENDING_CLEARING          — 有差异挂在中转仓，同一个弹窗处理清账。
+ *
+ * <p>2026-08-02: 此前模板根本没有这个按钮（handleWarehouseReceipt 是死代码），
+ * 计划结单后「下一步」写着「仓库确认入库」，界面上却无处可点。
+ */
+function needsWarehouseReceipt(row: TableRow): boolean {
+  if (String(row.status || '').toUpperCase() !== 'COMPLETED') return false;
+  const settlement = getSettlementStatus(row);
+  if (!settlement) return false;
+  return settlement.postingStatus === 'PENDING_WAREHOUSE_RECEIPT'
+    || settlement.postingStatus === 'PENDING_CLEARING';
+}
+
 function nextStepText(row: TableRow) {
   const status = String(row.status || '').toUpperCase();
   if (status === 'COMPLETED') {
@@ -4002,6 +4021,24 @@ function guardProductionPlanAi(params: Record<string, unknown>) {
                   : actionLoading"
                 @click="handlePrimarySettlementAction(row)"
               >{{ settlementActionLabel(row) }}</el-button>
+              <!--
+                🔴 2026-08-02: 补回「仓库确认入库」入口。
+                handleWarehouseReceipt 与整个 receiptDialog 一直都在, 但**模板从未引用它** ——
+                和 handleStart 同一种死代码形状。后果是链条最后一段彻底走不通:
+                计划结单后「下一步」明写「仓库确认入库」(见 nextStepText), 而界面上
+                没有任何地方能做这件事 → 成品批次永远生不出来 → 销售单永远发不了货。
+                2026-08-02 prod 实测: 后端 /warehouse-receipt 完全正常(空 body 返 400 校验而非 404),
+                手工调 API 立刻 postingStatus=POSTED 并生成成品批次 —— 缺的只是这个按钮。
+                判据复用既有的 postingStatus, 不新造一套。
+              -->
+              <el-button
+                v-if="needsWarehouseReceipt(row)"
+                type="warning"
+                link
+                size="small"
+                :loading="receiptLoading && String(receiptRow?.id) === String(row.id)"
+                @click="handleWarehouseReceipt(row)"
+              >仓库确认入库</el-button>
               <el-button
                 type="primary"
                 link
