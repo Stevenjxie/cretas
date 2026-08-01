@@ -660,6 +660,11 @@ def match_restaurant_ops(query: str) -> Optional[str]:
     # 店×菜拆分问 ("哪家店的米饭卖得最好") — 店×菜粒度直答 (R18)。
     if store_dish_split_dish(q):
         return "RESTAURANT_OPS_STORE_MARGIN"
+    # 全店聚合下的菜品毛利榜 ("全部门店…毛利最低的菜品") — 「全部门店」是范围不是
+    # 门店榜。必须在下面的模式循环之前, 因为 STORE_MARGIN 的 group-1 含「门店」
+    # 且排在 GROSS_MARGIN 之前, 进了循环就已经被抓走 (2026-08-01)。
+    if _all_store_scope_dish_margin(q):
+        return "RESTAURANT_OPS_GROSS_MARGIN"
     # 单日营收问 ("昨天卖了多少钱") — Java DAILY_REVENUE 工具默认锚今天,
     # 把单日问偷换成 今天vs昨天 比较 (R15/G7)。
     if (
@@ -1539,6 +1544,49 @@ _STORE_MENTION_PREFIX_TRIM = re.compile(
     r"|请|帮我|帮忙|查一下|查查|查询|查|看看|看一下|看|分析一下|分析"
     r"|对比|比较|了解|统计|计算|那|这|把|给|在|的|是|说说|讲讲)+"
 )
+
+
+# 「全部门店…毛利最低的菜品」= 全店聚合范围下的**菜品**毛利榜, 不是门店榜。
+#
+# 2026-08-01: STORE_MARGIN 的 group-1 含「门店」且排在 GROSS_MARGIN 之前, 于是任何
+# 带「全部门店」的菜品毛利问句都先被它抓走。但「全部门店」只是**聚合范围**, 不是把
+# 问题变成门店榜 —— 这正是 dish_ranking_direction 的 docstring 早就写下的原则
+# (「Store words are scope, not a competing metric」), 销量侧一直如此, 毛利侧漏了。
+#
+# 守卫刻意保守: 只在「全店聚合 + 菜品维度 + 毛利指标」三者同时成立, 且**既没点名具体
+# 门店、也没在问门店榜**时才改判。三类必须留给 STORE_MARGIN 的情形逐条排除:
+#   - 门店榜        「哪家店毛利最好」「门店毛利排行」
+#   - 点名具体门店  「东城店毛利最低的菜品」—— ⚠️ store_dish_split_dish 对这句返回
+#                   None(实测), 不会提前拦下, 所以必须在这里自己排除
+#   - 各门店拆分    「各门店毛利对比」
+_ALL_STORE_AGG_DISH_MARGIN_DISH_TOKENS = ("菜品", "菜系", "菜价", "哪道菜", "道菜")
+_ALL_STORE_AGG_DISH_MARGIN_METRIC_TOKENS = ("毛利", "毛利率", "净赚", "赚钱", "挣钱", "利润")
+# 出现这些 = 用户要按门店看, 不是要菜品榜
+_ALL_STORE_AGG_DISH_MARGIN_STORE_RANK_TOKENS = frozenset(with_traditional((
+    "哪家", "各门店", "每家店", "各店", "分店", "门店对比", "门店排行", "门店排名",
+)))
+
+
+def _all_store_scope_dish_margin(query: "Optional[str]") -> bool:
+    """全店聚合范围下的菜品毛利榜 → True(应判 GROSS_MARGIN 而非 STORE_MARGIN)。"""
+    if not query:
+        return False
+    q = query.strip()
+    if not any(frag in q for frag in _GENERIC_STORE_SCOPE_FRAGMENTS):
+        return False
+    if not any(tok in q for tok in _ALL_STORE_AGG_DISH_MARGIN_DISH_TOKENS):
+        return False
+    if not any(tok in q for tok in _ALL_STORE_AGG_DISH_MARGIN_METRIC_TOKENS):
+        return False
+    if any(tok in q for tok in _ALL_STORE_AGG_DISH_MARGIN_STORE_RANK_TOKENS):
+        return False
+    # 摘掉泛指范围词后若仍残留门店名, 说明点名了具体门店 → 店×菜粒度, 不改判。
+    stripped = q
+    for frag in _GENERIC_STORE_SCOPE_FRAGMENTS:
+        stripped = stripped.replace(frag, "")
+    if _STORE_MENTION_RE.search(stripped):
+        return False
+    return True
 
 
 _DEMO_GOLD_TENANT = "RES_3101_009"

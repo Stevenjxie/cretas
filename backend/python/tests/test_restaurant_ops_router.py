@@ -4063,3 +4063,66 @@ def test_worst_list_is_ascending_and_does_not_overlap_best_list():
 
     # ② 12 道菜 ≥ 2×5, 两榜必须无交集
     assert not (set(worst) & set(best)), f"两榜重叠: {set(worst) & set(best)}"
+
+
+def test_all_store_scope_does_not_erase_dish_dimension_for_margin():
+    """「全部门店…毛利最低的菜品」是**菜品**毛利榜, 不是门店榜。
+
+    2026-08-01 实测: match_restaurant_ops 对审计原句返回 STORE_MARGIN —— 因为
+    STORE_MARGIN 的 group-1 含「门店」且排在 GROSS_MARGIN 之前, 而「全部门店」
+    只是**聚合范围**, 不是把问题变成门店榜。这个 0.95 的候选提示会带偏 T3 planner,
+    是 scripts/restaurant_department_audit.py 那条一直「报错轴或假绿」的原因。
+
+    同一条原则销量侧早就实现了 —— dish_ranking_direction 的 docstring 写着
+    「Store words are scope, not a competing metric」, 「全部门店销量最高的5道菜」
+    一直判 GROSS_MARGIN。**毛利侧只是漏了这道守卫**, 本用例补的是这个不对称。
+
+    ⛔ 三类必须不变: 门店榜(哪家店/门店排行) / 点名具体门店(店×菜粒度) /
+       各门店拆分 —— 它们仍归 STORE_MARGIN。
+    """
+    from smartbi.gold.restaurant.restaurant_ops_router import match_restaurant_ops
+
+    G = "RESTAURANT_OPS_GROSS_MARGIN"
+    S = "RESTAURANT_OPS_STORE_MARGIN"
+
+    # ① 全店聚合 + 菜品维度 + 毛利 → 菜品毛利榜
+    assert match_restaurant_ops("全部门店最近30天毛利最低的菜品有哪些") == G
+    assert match_restaurant_ops("所有门店毛利最高的菜品") == G
+    assert match_restaurant_ops("全店利润最低的菜品有哪些") == G
+
+    # ② 无门店词的原形不受影响
+    assert match_restaurant_ops("毛利最低的菜品") == G
+    assert match_restaurant_ops("哪道菜毛利最高") == G
+
+    # ③ 真·门店榜 —— 不能被顺手改判
+    assert match_restaurant_ops("哪家店毛利最好") == S
+    assert match_restaurant_ops("全部门店最近30天哪家店毛利最好") == S
+    assert match_restaurant_ops("门店毛利排行") == S
+
+    # ④ 点名具体门店 = 店×菜粒度, 仍归 STORE_MARGIN
+    #    (注意 store_dish_split_dish 对这两句返回 None, 不会提前拦下 ——
+    #     所以守卫必须自己排除"点名了具体店"这种情况)
+    assert match_restaurant_ops("东城店毛利最低的菜品") == S
+    assert match_restaurant_ops("青花椒南方百联店毛利最低的菜品") == S
+
+    # ⑤ 各门店拆分 = 要按店看, 仍归 STORE_MARGIN
+    assert match_restaurant_ops("各门店毛利对比") == S
+
+
+def test_margin_and_volume_ranking_treat_store_scope_the_same_way():
+    """跨承载点: 同一句式换指标(销量↔毛利), 全店聚合都不得吃掉菜品维度。
+
+    这条是**对称性**判据 —— 销量侧由 dish_ranking_direction 承载, 毛利侧由
+    _all_store_scope_dish_margin 承载, 两个不同的承载点实现同一条原则。
+    只改一处而另一处漂掉时, 这条会红。
+    """
+    from smartbi.gold.restaurant.restaurant_ops_router import match_restaurant_ops
+
+    G = "RESTAURANT_OPS_GROSS_MARGIN"
+    for query in (
+        "全部门店最近30天卖得最好的菜品",   # 销量侧
+        "全部门店最近30天毛利最高的菜品",   # 毛利侧
+        "所有门店卖得最差的菜品",
+        "所有门店毛利最低的菜品",
+    ):
+        assert match_restaurant_ops(query) == G, f"{query} 被全店范围吃掉了菜品维度"
