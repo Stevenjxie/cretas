@@ -895,6 +895,8 @@ public class UnitContractServiceImpl implements UnitContractService {
         alias(aliases, "roll", "roll", "卷");
         alias(aliases, "slice", "slice", "片");
         alias(aliases, "sheet", "sheet", "张");
+        alias(aliases, "tray", "tray", "托盘");
+        alias(aliases, "plate", "plate", "板");
         alias(aliases, "item", "item", "项");
         return Map.copyOf(aliases);
     }

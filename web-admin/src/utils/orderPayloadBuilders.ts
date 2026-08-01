@@ -12,22 +12,6 @@ export interface BomSalesOrderChild {
   unitPrice: number | string
 }
 
-export interface BomPurchaseOrderParent {
-  supplierId: string
-  purchaseType: string
-  expectedDate: string
-  remark: string
-}
-
-export interface BomPurchaseOrderChild {
-  materialId: string
-  materialName: string
-  quantity: number | string
-  unit: string
-  unitPrice: number | string
-  taxRate?: number | string | null
-}
-
 export function buildBomSalesOrderPayload(parent: BomSalesOrderParent, children: BomSalesOrderChild[]) {
   return {
     customerId: parent.customerId,
@@ -45,31 +29,5 @@ export function buildBomSalesOrderPayload(parent: BomSalesOrderParent, children:
       unitPrice: Number(child.unitPrice) || 0,
     })),
     customFields: {},
-  }
-}
-
-function normalizePurchaseType(value: string): string {
-  return value === 'HQ_UNIFIED' || value === 'URGENT' ? value : 'DIRECT'
-}
-
-export function buildBomPurchaseOrderPayload(
-  parent: BomPurchaseOrderParent,
-  children: BomPurchaseOrderChild[],
-  orderDate: string,
-) {
-  return {
-    supplierId: parent.supplierId || null,
-    purchaseType: normalizePurchaseType(parent.purchaseType),
-    orderDate,
-    expectedDeliveryDate: parent.expectedDate || null,
-    remark: parent.remark || '',
-    items: children.map((child) => ({
-      materialTypeId: child.materialId,
-      materialName: child.materialName,
-      quantity: Number(child.quantity) || 0,
-      unit: child.unit || 'kg',
-      unitPrice: Number(child.unitPrice) || 0,
-      taxRate: child.taxRate == null || child.taxRate === '' ? null : Number(child.taxRate),
-    })),
   }
 }

@@ -27,6 +27,8 @@ import org.springframework.data.domain.Sort;
 import org.springframework.cache.annotation.CacheEvict;
 import org.springframework.cache.annotation.Cacheable;
 import org.springframework.cache.annotation.Caching;
+import jakarta.persistence.EntityManager;
+import jakarta.persistence.PersistenceContext;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -57,6 +59,9 @@ public class ProductTypeServiceImpl implements ProductTypeService {
     private final WorkflowUnitReviewService workflowUnitReviewService;
     private final ProductSpecificationConversionSyncService specificationConversionSyncService;
     private final ProductPackagingSpecService productPackagingSpecService;
+
+    @PersistenceContext
+    private EntityManager entityManager;
 
     // Manual constructor (Lombok @RequiredArgsConstructor not working)
     @org.springframework.beans.factory.annotation.Autowired
@@ -456,13 +461,49 @@ public class ProductTypeServiceImpl implements ProductTypeService {
                     .withHint("当前产品类型不属于该工厂, 无法操作");
         }
 
-        // TODO: 检查是否有关联的生产计划
-        // if (productType.getProductionPlans() != null && !productType.getProductionPlans().isEmpty()) {
-        //     throw new BusinessException("产品类型有关联的生产计划，无法删除");
-        // }
+        // 🔴 删之前必须查引用 —— 原来这里只有一条从没实现的 TODO。
+        //
+        // `product_types` 是**硬删**, 而数据库外键只保护了 6 张表
+        // (combo_items / material_batches / material_product_conversions /
+        //  production_plans / sales_delivery_items / material_product_conversions),
+        // **`sales_order_items` 和 `bom_recipes` 没有外键** —— 于是:
+        //   删 SKU 不被拦 → 销售订单明细留着一个死 product_type_id, 页面看着一切正常
+        //   → 直到用户建发货单, `sales_delivery_items` 那条外键才拒绝插入,
+        //     报「关联资源「product_types」不存在」。
+        // 2026-08-01 六膳门 SO-20260709-0001「干式熟成鸡（半只）」就是这么卡住的:
+        // 订单已财务审批, 却永远发不出货, 而且报错完全看不出是哪个产品被删了。
+        //
+        // 所以在没有外键的那两张表上补应用层的闸, 且提示要说清**去哪看**。
+        assertNotReferenced(productType, "sales_order_items", "销售订单", "/sales/orders");
+        assertNotReferenced(productType, "bom_recipes", "BOM 配方", "/production/bom");
 
         productTypeRepository.delete(productType);
         log.info("产品类型删除成功: id={}", id);
+    }
+
+    /**
+     * 数据库外键没覆盖到的引用检查 —— 有引用就拒绝删除, 并把用户指到能处理的模块。
+     *
+     * <p>为什么不靠外键: `sales_order_items` / `bom_recipes` 上没有指向 product_types 的外键,
+     * 硬删因此畅通无阻, 引用变成悬空; 而 `sales_delivery_items` **有**外键, 于是问题延迟到
+     * 发货那一步才爆, 且错误里只有表名没有产品名。宁可在删除时拦住, 也不要让单据烂在半路。</p>
+     */
+    private void assertNotReferenced(
+            ProductType productType, String table, String moduleName, String route) {
+        Number count = (Number) entityManager
+                .createNativeQuery("SELECT count(*) FROM " + table
+                        + " WHERE product_type_id = :pid AND deleted_at IS NULL")
+                .setParameter("pid", productType.getId())
+                .getSingleResult();
+        if (count != null && count.longValue() > 0) {
+            throw new BusinessException(409,
+                    "无法删除产品「" + productType.getName() + "」: 它还被 " + count.longValue()
+                            + " 条「" + moduleName + "」引用")
+                    .withCode("PRODUCT_TYPE_IN_USE")
+                    .withHint("请先到「" + moduleName + "」处理这些单据(作废或改用其它产品)后再删除")
+                    .withHintTarget(route)
+                    .withSeverity("BLOCKING");
+        }
     }
 
     @Override

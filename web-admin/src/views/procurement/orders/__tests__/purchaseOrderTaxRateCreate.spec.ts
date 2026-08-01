@@ -24,9 +24,10 @@ describe('procurement order tax rate create entry', () => {
    * `submitBomPurchaseOrder` 流程从本页删掉了, 且没有搬到别的页面 ——
    * 这两条从那天起断言的是**不存在的代码**, 一直红着没人看见。
    *
-   * ⚠️ 副作用: `@/utils/orderPayloadBuilders` 的 `buildBomPurchaseOrderPayload`
-   * 现在没有任何生产代码调用, 只剩它自己的单测在给它「覆盖率」。要么接回去,
-   * 要么删掉 —— 别让一个没人调用的函数看起来是被测过的。
+   * ✅ 2026-08-01 结案: `buildBomPurchaseOrderPayload` 连同它唯一的调用方一起**已删除**
+   * (含 `normalizePurchaseType` 与两个 BomPurchaseOrder* 接口, 以及那条只服务于它的单测)。
+   * 选删不选接回: 调用方 #1557 删掉后没搬去任何页面, 即这个功能本身已经不在了 ——
+   * 留着一个零调用函数 + 它自己的单测, 只会让覆盖率看起来是真的。
    */
   it('sends taxRate on normal create payload items without fake defaults', () => {
     expect(listSource).toContain('taxRate: normalizeTaxRateForPayload(i.taxRate)');
