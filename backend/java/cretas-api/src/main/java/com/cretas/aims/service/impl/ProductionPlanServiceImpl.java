@@ -6184,7 +6184,40 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
             throw new BusinessException(403, "无权操作该生产计划")
                     .withHint("当前生产计划不属于该工厂, 无法操作");
         }
+        // 🔴 原来只允许 PENDING, 于是「开始生产」之后的计划**永远补不了批次** ——
+        // 而 workflow 模式的计划没有批次就报不了工, 也结不了单, PC 端彻底死锁:
+        //   1. 点「开始生产」→ status=IN_PROGRESS, 但**不建批次**
+        //   2. 点「逐道录入」→ 前端只在 PENDING 时自动建批次, 这里被跳过 → 抽屉空白
+        //   3. 点「核对结单」→ 409「workflow 计划必须先完成并正式提交逐道报工」
+        // 三条路全走不通, 且全是正常 UI 操作。2026-08-01 六膳门 prod 实测撞到。
+        //
+        // 放开 IN_PROGRESS **但只在还没有批次时** —— 已有批次仍然拦住, 防重复转批次。
         if (plan.getStatus() != ProductionPlanStatus.PENDING) {
+            List<ProductionBatch> existingBatches =
+                    productionBatchRepository.findByFactoryIdAndProductionPlanId(factoryId, planId);
+            if (!existingBatches.isEmpty()) {
+                // 幂等: 已经转过批次就把既有批次还回去, 不报错 —— 调用方(逐道录入抽屉)
+                // 每次打开都会调一次, 报 409 只会变成一个每次都弹的无用提示。
+                log.info("计划 {} 已有 {} 个批次, 直接复用 (幂等)", planId, existingBatches.size());
+                return existingBatches.get(0);
+            }
+            // ⛔ 刻意**不**放行「IN_PROGRESS 且没有批次」去补建批次:
+            //   R6 并发守卫(ProductionPlanCancelConcurrencyTest)要求「并发第二个 create-batch
+            //   看到 IN_PROGRESS 就必须 409, 不许建出第二个批次」。放行会在第一笔事务尚未提交
+            //   批次时重新打开这个洞 —— 拿 UX 死锁换并发重复批次是亏的。
+            //
+            //   真正的根在 startProduction: 它持锁、只放行 PENDING、然后置 IN_PROGRESS
+            //   **却不建批次**, 于是 workflow 计划可以合法地进入「开工了但没有批次」这个状态,
+            //   而报工与结单都需要批次 → PC 端死锁。修那里才是治本, 但那条路被广泛使用,
+            //   要单独一轮带并发用例做。本轮只把「已有批次」的重复调用变成幂等。
+            if (plan.getStatus() == ProductionPlanStatus.IN_PROGRESS) {
+                // 「开工了但没有批次」—— 报工与结单都需要批次, 这个计划在 PC 端走不下去了。
+                // 说清楚处境比丢一句「只有待处理的计划可以转为批次」有用得多。
+                throw new BusinessException(409, "该计划已开工但没有生产批次，无法报工或结单")
+                        .withHint("请用 APP 对该计划逐道报工（会自动建批次）；"
+                                + "若现场不用 APP，请取消该计划后重新创建并直接点「逐道录入」")
+                        .withHintTarget("productionPlan");
+            }
             throw new BusinessException(409, "只有待处理的计划可以转为批次")
                     .withHint("请刷新生产计划列表查看最新状态");
         }

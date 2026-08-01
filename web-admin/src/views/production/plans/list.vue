@@ -1601,11 +1601,18 @@ async function openProcessEntry(row: any) {
   // 这里对「PENDING + 产品有 active workflow」的计划自动 create-batch, 使逐道抽屉直接出全工序。
   // 非 workflow 或已转批次(IN_PROGRESS)计划不受影响 (跳过, 保持原行为)。
   try {
-    const isPending = String(row?.status || '').toUpperCase() === 'PENDING';
-    if (row?.id && row?.productTypeId && isPending && factoryId.value) {
+    // ⚠️ 这里以前只认 PENDING, 注释写着「已转批次(IN_PROGRESS)计划跳过」——
+    //   但 `/start`(开始生产) 会把状态置成 IN_PROGRESS **而不建批次**,
+    //   于是「开始生产 → 逐道录入」的计划批次永远建不出来, 抽屉空白且结单也被拒, 彻底卡死。
+    //   IN_PROGRESS ≠ 已转批次。后端 create-batch 已改为「IN_PROGRESS 且尚未有批次」才补建,
+    //   已有批次的仍返回 409, 所以这里放行是安全的。
+    const planStatus = String(row?.status || '').toUpperCase();
+    const needsBatch = planStatus === 'PENDING' || planStatus === 'IN_PROGRESS';
+    if (row?.id && row?.productTypeId && needsBatch && factoryId.value) {
       const act = await get<{ enabled?: boolean } | null>(
         `/${factoryId.value}/product-process-workflows/${row.productTypeId}/activation`);
       if (act.success && act.data && act.data.enabled === true) {
+        // 后端幂等: 已有批次时直接返回既有批次(不报错), 所以这里每次调用都是安全的。
         const br = await post(`/${factoryId.value}/production-plans/${row.id}/create-batch`);
         if (br.success) {
           row.status = 'IN_PROGRESS';
