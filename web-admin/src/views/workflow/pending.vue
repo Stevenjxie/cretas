@@ -12,6 +12,14 @@ import { enumLabel } from '@/utils/enumDisplay';
  * 于是调拨待办在列表里显示成「未知状态（INVENTORY_TRANSFER）」——
  * 同一个页面对同一个编码给出两种说法。
  */
+/**
+ * ⚠️ 这不是事实来源, 只是后端没下发 moduleLabel 时的离线兜底。
+ *
+ * 权威表在后端 `DecisionTypeMetadataRegistry`(30+ 个 moduleCode, 各带 chineseName),
+ * 已通过待办 DTO 的 `moduleLabel` 字段下发。**不要在这里加新码** ——
+ * 这份表历史上只覆盖了权威表的 4 个, 另外 20 多个码全部渲染成「未知状态（X）」,
+ * 客户截图里的「未知状态（BUDGET）」就是这么来的。加在这里只会再漂一次。
+ */
 const MODULE_LABELS: Record<string, string> = {
   PURCHASE_ORDER: '采购订单',
   SALES_ORDER: '销售订单',
@@ -31,6 +39,10 @@ interface PendingApproval {
   approverRoles?: string[];
   initiatedAt?: string;
   initiatedByUsername?: string;
+  /** 业务类型中文名, 后端按权威表下发; 解析不出时为空, 由 MODULE_LABELS 兜底。 */
+  moduleLabel?: string;
+  /** 由定时任务等系统流程发起, 没有人类申请人 (后端判据: initiatedBy == null)。 */
+  systemInitiated?: boolean;
 }
 
 const authStore = useAuthStore();
@@ -191,15 +203,27 @@ onMounted(async () => {
         stripe
         empty-text="暂无待您审批的任务"
       >
+        <!-- 权威表在后端, moduleLabel 由 DTO 下发; MODULE_LABELS 仅兜底 (见其定义处注释) -->
         <el-table-column label="业务类型" width="120">
-          <template #default="{ row }">{{ enumLabel(row.moduleCode, MODULE_LABELS) }}</template>
+          <template #default="{ row }">{{ row.moduleLabel || enumLabel(row.moduleCode, MODULE_LABELS) }}</template>
         </el-table-column>
         <el-table-column prop="businessSummary" label="业务单据" min-width="260" show-overflow-tooltip />
         <el-table-column prop="currentNodeLabel" label="当前节点" min-width="150" show-overflow-tooltip />
         <el-table-column label="授权角色" min-width="180">
           <template #default="{ row }">{{ row.approverRoles?.map((role: string) => enumLabel(role)).join('、') || '-' }}</template>
         </el-table-column>
-        <el-table-column prop="initiatedByUsername" label="申请人" width="130" />
+        <!--
+          申请人为空有两种成因, 不能混为一谈:
+            systemInitiated=true  → 定时任务等系统流程发起, 本来就没有人 (如月度会计期间结账)
+            username 查不到       → 用户已删, 该显示「—」
+          后端的判据是 initiatedBy == null, 不是 username 是否为空。
+        -->
+        <el-table-column label="申请人" width="130">
+          <template #default="{ row }">
+            <span v-if="row.systemInitiated" class="system-initiator">系统自动发起</span>
+            <span v-else>{{ row.initiatedByUsername || '—' }}</span>
+          </template>
+        </el-table-column>
         <el-table-column label="提交时间" min-width="180">
           <template #default="{ row }">{{ formatDateTime(row.initiatedAt) }}</template>
         </el-table-column>
@@ -235,6 +259,8 @@ onMounted(async () => {
 
 <style scoped>
 .approval-center-page { padding: 20px; }
+/* 系统发起没有人类申请人, 弱化处理以免被当成某个真实用户名 */
+.system-initiator { color: var(--el-text-color-secondary); }
 .header { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
 .header h2 { margin: 0 0 6px; }
 .header p { margin: 0; color: var(--el-text-color-secondary); }
