@@ -200,3 +200,81 @@ def test_订单端点抽取鉴权后没坏(client):
     body = client.get("/keruyun/open/order/list",
                       params=_signed({"cursor": "0", "limit": "1"})).json()
     assert body["code"] == "0" and body["data"]["list"]
+
+
+# ── 菜单主数据端点 (2026-08-01) ──────────────────────────────────────
+
+def _drain(client, path):
+    """把一个端点翻到底, 返回全部条目。顺带证明游标契约与订单端点一致。"""
+    items, cursor, pages = [], "0", 0
+    while True:
+        r = client.get(path, params=_signed({"cursor": cursor, "limit": "5"}))
+        assert r.status_code == 200
+        body = r.json()
+        assert body["code"] == "0", body
+        data = body["data"]
+        items.extend(data["list"])
+        cursor = str(data["nextCursor"])
+        pages += 1
+        if not data["hasMore"]:
+            break
+        assert pages < 50, "游标没有推进, 翻页停不下来"
+    return items
+
+
+def test_菜单三端点鉴权与订单端点一致(client):
+    for path in ("/keruyun/open/menu/dish/list",
+                 "/keruyun/open/menu/ingredient/list",
+                 "/keruyun/open/menu/recipe/list"):
+        p = _signed({"cursor": "0", "limit": "10"})
+        p["sign"] = "deadbeef"
+        r = client.get(path, params=p)
+        assert r.status_code == 200                     # 平台风格恒 200
+        assert r.json()["code"] == "AUTH_SIGN_INVALID", path
+
+
+def test_菜品端点给出成本(client):
+    """成本是这三个端点存在的唯一理由 —— 不给 cost, 对端仍然算不出毛利。"""
+    dishes = _drain(client, "/keruyun/open/menu/dish/list")
+    assert len(dishes) == 10
+    codes = [d["dishCode"] for d in dishes]
+    assert codes == sorted(codes), "游标应按主键单调"
+    assert len(set(codes)) == 10, "dishCode 必须唯一"
+    for d in dishes:
+        assert d["cost"] > 0, d
+        assert d["price"] > d["cost"], f"售价应高于成本: {d}"
+        assert d["dishName"]
+    # 与 seed 脚本约定的键形态一致 —— 不一致会让 connector 写出第二套 source_pk
+    assert dishes[0]["dishCode"] == "mp_dish_001"
+
+
+def test_食材端点给出单价(client):
+    ingredients = _drain(client, "/keruyun/open/menu/ingredient/list")
+    assert len(ingredients) == 13
+    for i in ingredients:
+        assert i["unitPrice"] > 0, i
+        assert i["unit"] in {"kg", "L"}, i
+    assert ingredients[0]["ingredientCode"] == "mp_ingr_001"
+
+
+def test_配方端点可与菜品食材对上(client):
+    """配方行的两个 code 必须都能在另外两个端点里找到, 否则导进去就是悬空行。"""
+    dishes = {d["dishCode"] for d in _drain(client, "/keruyun/open/menu/dish/list")}
+    ingredients = {i["ingredientCode"]
+                   for i in _drain(client, "/keruyun/open/menu/ingredient/list")}
+    recipe = _drain(client, "/keruyun/open/menu/recipe/list")
+
+    assert len(recipe) == 22
+    for line in recipe:
+        assert line["dishCode"] in dishes, f"配方指向不存在的菜: {line}"
+        assert line["ingredientCode"] in ingredients, f"配方指向不存在的食材: {line}"
+        assert line["qty"] > 0, line
+    # 每道菜至少一条配方 —— 少一道就意味着那道菜永远算不出成本
+    covered = {line["dishCode"] for line in recipe}
+    assert covered == dishes, f"这些菜没有配方: {dishes - covered}"
+
+
+def test_limit_超上限被拒(client):
+    r = client.get("/keruyun/open/menu/dish/list",
+                   params=_signed({"cursor": "0", "limit": "999"}))
+    assert r.json()["code"] == "PARAM_LIMIT_TOO_LARGE"
