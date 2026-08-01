@@ -17,13 +17,13 @@ import lombok.RequiredArgsConstructor;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
-import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -75,16 +75,52 @@ public class ShortageAnalysisServiceImpl implements ShortageAnalysisService {
                 ThresholdKeys.SHORTAGE_DEFAULT_PRODUCTION_LEAD_DAYS, FALLBACK_PRODUCTION_LEAD_DAYS);
     }
 
+    /**
+     * doomed-tx 修复 (2026-08-01, incident: SO-20260801-0001 财审通过后, 日志打印
+     * "[ShortageReport] async snapshot" / "analyze failed" 但 sales_order_shortage_report
+     * 建表以来 0 行, 连 FAILED 占位行都没有).
+     *
+     * <p>根因(prod 全栈追出, 非猜测): {@link #aggregateBomNeeds} 内部调
+     * {@code bomExpansionService.expandBOM}, 该方法自身 {@code @Transactional(readOnly=true)},
+     * propagation 默认 REQUIRED —— 在旧代码里会 JOIN 调用方
+     * {@code SalesOrderShortageReportListener.onSalesOrderFinanceApproved} 的
+     * {@code @Transactional(REQUIRES_NEW)} 联动事务。产品无已激活 BOM 配方时 expandBOM 抛
+     * {@code BusinessException}("产品尚无已激活的新版 BOM 配方"), Spring tx 拦截器在 expandBOM
+     * 自己的 AOP 边界上就把"共享事务"标记 rollback-only —— 即使 listener 外层 try/catch 把异常
+     * 吞掉、接着调用 {@code persistFailedPlaceholder} 想写一条 FAILED 占位行, 该 save 仍在同一
+     * 已被标记的事务里, listener 方法正常返回后 commit 时抛 UnexpectedRollbackException, 整个联动
+     * 事务(含刚 save 的 FAILED 占位行)被回滚 —— prod 日志显示"analyze failed"却查无此行, 正是
+     * 这个机制(与 SupplyChainOrchestrator 里 onMaterialReceived/onBatchCompleted 2026-06-12
+     * "第4次复发"的 doomed-tx 是同一套 Spring AOP 机制, 只是这次触发点是 REQUIRES_NEW 内部
+     * 而非 REQUIRES_NEW 外层)。
+     *
+     * <p>本方法独立开 propagation=REQUIRES_NEW: 它挂起调用方事务, 在自己的物理事务里跑;
+     * expandBOM 抛异常时只标记/回滚这个独立子事务, 调用方(listener)的联动事务不受牵连,
+     * listener 的 catch 块 + persistFailedPlaceholder 才能在健康的事务里真正落库。
+     * 返回值 {@link ShortageReport} 是纯 DTO(非 JPA 受管实体), 跨事务边界返回没有
+     * 脱管(detached)风险。
+     */
     @Override
-    @Transactional(readOnly = true)
+    @Transactional(propagation = Propagation.REQUIRES_NEW, readOnly = true)
     public ShortageReport analyzeForSalesOrder(String factoryId, String salesOrderId) {
         log.info("[ShortageAnalysis] analyze: factoryId={}, salesOrderId={}", factoryId, salesOrderId);
 
         // ① FG 库存匹配 (InventoryMatchingService 内部已校验 SO 存在 + 抛 BusinessException)
         StockCheckResult fgResult = inventoryMatchingService.checkAvailability(factoryId, salesOrderId);
+        // 2026-08-01 incident 关联修复 (防御性, 非本次 prod 76/77 失败的主因 — 主因另有其人,
+        // 是 LineItemMatch.isFullySatisfied() 计算 getter 被 Jackson 当属性序列化却无 setter
+        // 可反序列化回去, 见 com.cretas.aims.dto.orchestration.LineItemMatch 类注释及本 PR
+        // 描述; 该文件不在本次允许改动范围, 未修): 这里及下方原先的 Collections.emptyList()
+        // 一旦被赋给 SalesOrderShortageReport 的 JSONB 列, Hibernate 每次 save() 前 dirty-check
+        // 用的 deepCopy(hypersistence-utils ObjectMapperWrapper.clone) 会用"运行时 class"反
+        // 序列化回原类型 —— Collections.emptyList() 的运行时类型是 JDK 包私有单例
+        // java.util.Collections$EmptyList, 理论上 Jackson 造不出这个类的实例; 实测中这条尚
+        // 未在 prod 堆栈里单独命中过(可能被 bug 2 更早触发抢先掩盖), 但作为已知的 Jackson/
+        // Hibernate JSONB 反序列化风险点一并修掉, 改用 new ArrayList<>()(公开可反序列化类),
+        // 语义不变, 没有下行风险。
         List<LineItemMatch> fgLineItems = fgResult.getLineItems() != null
                 ? fgResult.getLineItems()
-                : Collections.emptyList();
+                : new ArrayList<>();
 
         // ② 对每个 FG 缺口展开 BOM
         List<MaterialRequirement> aggregatedRequirements = aggregateBomNeeds(factoryId, fgLineItems);
@@ -96,7 +132,7 @@ public class ShortageAnalysisServiceImpl implements ShortageAnalysisService {
 
         List<MaterialShortfall> shortages = materialResult.getShortfalls() != null
                 ? materialResult.getShortfalls()
-                : Collections.emptyList();
+                : new ArrayList<>();
 
         boolean fully = fgResult.isAllSatisfied() && materialResult.isAllSatisfied();
 
@@ -116,7 +152,7 @@ public class ShortageAnalysisServiceImpl implements ShortageAnalysisService {
     @Override
     public List<ProcurementSuggestion> suggestProcurement(String factoryId, ShortageReport report) {
         if (report == null || report.getMaterialShortages() == null || report.getMaterialShortages().isEmpty()) {
-            return Collections.emptyList();
+            return new ArrayList<>();
         }
 
         // Day 2 MVP: 仅根据短缺量出建议。Day 3 接入 Track C MaterialPriceComparisonDTO + 供应商历史。
@@ -135,7 +171,7 @@ public class ShortageAnalysisServiceImpl implements ShortageAnalysisService {
     public List<ProductionPlanSuggestion> suggestProduction(String factoryId, ShortageReport report) {
         if (report == null || report.getFinishedGoodsLineItems() == null
                 || report.getFinishedGoodsLineItems().isEmpty()) {
-            return Collections.emptyList();
+            return new ArrayList<>();
         }
 
         // Day 2 MVP: 默认 lead time 7 天 (Canvas Phase A 可配置), workProcess 留空 (Day 3 接入 Track D2)。
@@ -151,8 +187,8 @@ public class ShortageAnalysisServiceImpl implements ShortageAnalysisService {
                     .productId(lim.getProductTypeId())
                     .productName(lim.getProductTypeName())
                     .plannedQty(lim.getShortfallQuantity())
-                    .workProcessIds(Collections.emptyList())
-                    .workProcessNames(Collections.emptyList())
+                    .workProcessIds(new ArrayList<>())
+                    .workProcessNames(new ArrayList<>())
                     .startDate(start)
                     .endDate(end)
                     .build());
@@ -204,8 +240,8 @@ public class ShortageAnalysisServiceImpl implements ShortageAnalysisService {
     private MaterialCheckResult emptyMaterialCheckResult() {
         MaterialCheckResult result = new MaterialCheckResult();
         result.setAllSatisfied(true);
-        result.setShortfalls(Collections.emptyList());
-        result.setAllocations(Collections.emptyList());
+        result.setShortfalls(new ArrayList<>());
+        result.setAllocations(new ArrayList<>());
         return result;
     }
 
