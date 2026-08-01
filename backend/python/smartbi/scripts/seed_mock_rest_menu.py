@@ -311,11 +311,15 @@ async def _run(apply: bool) -> int:
     etl = await materialize_gold_daily_ops(pool, FACTORY_ID)
     logger.info("ETL 重算 Gold: %s", etl)
     async with pool.acquire() as conn:
-        await conn.execute("SELECT set_config('app.factory_id', $1, true)", FACTORY_ID)
-        n = await conn.fetchval(
-            "SELECT count(*) FROM agg_restaurant_product_cost WHERE factory_id = $1",
-            FACTORY_ID,
-        )
+        # ⚠️ set_config(..., is_local=true) 只在**事务内**有效。第一版把它和 count
+        # 分成两条事务外语句, GUC 当场失效 → RLS 把行全藏起来 → 报「0 行」而实际
+        # 已经写进去 10 行。查 Gold 表恒返回 0 且长得就像没数据, 正是这个坑。
+        async with conn.transaction():
+            await conn.execute("SELECT set_config('app.factory_id', $1, true)", FACTORY_ID)
+            n = await conn.fetchval(
+                "SELECT count(*) FROM agg_restaurant_product_cost WHERE factory_id = $1",
+                FACTORY_ID,
+            )
     logger.info("agg_restaurant_product_cost 现有 %s 行 (seed 前为 0)", n)
     return 0
 
