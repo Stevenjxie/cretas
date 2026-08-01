@@ -250,7 +250,8 @@ def test_菜品端点给出成本(client):
 
 def test_食材端点给出单价(client):
     ingredients = _drain(client, "/keruyun/open/menu/ingredient/list")
-    assert len(ingredients) == 13
+    # 13 主料 + 12 配菜调料 (2026-08-01 补全配方时加的)
+    assert len(ingredients) == 25
     for i in ingredients:
         assert i["unitPrice"] > 0, i
         assert i["unit"] in {"kg", "L"}, i
@@ -264,7 +265,9 @@ def test_配方端点可与菜品食材对上(client):
                    for i in _drain(client, "/keruyun/open/menu/ingredient/list")}
     recipe = _drain(client, "/keruyun/open/menu/recipe/list")
 
-    assert len(recipe) == 22
+    # 22 → 72: 原配方每道菜只列 2-4 种主料, 补齐配菜/调料/油之后
+    # 食材成本率才从 19% 升到 32.3%(落在餐饮正常区间)
+    assert len(recipe) == 72
     for line in recipe:
         assert line["dishCode"] in dishes, f"配方指向不存在的菜: {line}"
         assert line["ingredientCode"] in ingredients, f"配方指向不存在的食材: {line}"

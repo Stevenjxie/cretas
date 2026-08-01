@@ -77,9 +77,8 @@ def page_ops(conn, kind: str, *, since_seq: int, limit: int):
 # 四个问题里三个答成「毛利前 0 名」。数据在这边一直都有(dish.cost_cents /
 # ingredient.unit_price_cents / recipe 22 条), 只是没有接口能把它取走。
 #
-# ⚠️ **code 必须与 seed 脚本 (`smartbi/scripts/seed_mock_rest_menu.py`) 用的
-#    键完全一致** (`mp_dish_001` / `mp_ingr_001`), 否则 connector 导入时会与
-#    首次 seed 的行错开成两套 product_source_pk, 成本表凭空多出一倍的行。
+# ⚠️ **这两个 code 是对外契约, 一旦发布就不能改形态** (`mp_dish_001` /
+#    `mp_ingr_001`)。下游拿它们当幂等键, 换一种拼法会让同一批菜出现两套行。
 
 def dish_code(dish_id: int) -> str:
     return f"mp_dish_{int(dish_id):03d}"
