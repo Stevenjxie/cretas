@@ -15,6 +15,7 @@ class UnitDisplayNamesTest {
             "box,盒",
             "bag,袋",
             "slice,片",
+            "sheet,张",
             "roll,卷",
             "pcs,件",
             "case,箱",

@@ -15,7 +15,6 @@ import com.cretas.aims.entity.bom.BomRecipe;
 import com.cretas.aims.entity.bom.BomRecipeItem;
 import com.cretas.aims.entity.bom.BomSeasoningItem;
 import com.cretas.aims.exception.BusinessException;
-import com.cretas.aims.exception.EntityNotFoundException;
 import com.cretas.aims.repository.RawMaterialTypeRepository;
 import com.cretas.aims.repository.ProductTypeRepository;
 import com.cretas.aims.repository.bom.BomRecipeItemRepository;
@@ -1493,7 +1492,12 @@ public class BomRecipeServiceImpl implements BomRecipeService {
 
     private ProductType loadProductForUpdate(String factoryId, String productTypeId) {
         return productTypeRepo.findByIdAndFactoryIdForUpdate(productTypeId, factoryId)
-                .orElseThrow(() -> new EntityNotFoundException("产品不存在: " + productTypeId));
+                .orElseThrow(() -> bomError(404,
+                        "产品不存在或不属于当前工厂，无法继续操作该 BOM",
+                        "BOM_PRODUCT_MISSING",
+                        "请到「生产配置 → SKU 管理」确认该产品是否仍存在；若产品已废弃，请删除对应的 BOM 版本。产品ID: "
+                                + productTypeId,
+                        "productTypeId"));
     }
 
     private void validateProductOutputMetadata(ProductType product) {
@@ -1715,7 +1719,12 @@ public class BomRecipeServiceImpl implements BomRecipeService {
     @Transactional
     public BomRecipeItem updateItem(String factoryId, Long itemId, BomRecipeItemDTO dto) {
         BomRecipeItem item = itemRepo.findById(itemId)
-                .orElseThrow(() -> new EntityNotFoundException("BomRecipeItem 不存在: id=" + itemId));
+                .orElseThrow(() -> bomError(404,
+                        "这条 BOM 明细行不存在，可能已被其他人删除",
+                        "BOM_ITEM_MISSING",
+                        "请刷新页面后重试；若仍失败，到「生产配置 → BOM/配方维护」重新打开该配方核对明细。明细行ID: "
+                                + itemId,
+                        "bomItems"));
         if (!factoryId.equals(item.getFactoryId())) {
             throw new IllegalArgumentException("配方项不属于该工厂");
         }
@@ -1741,7 +1750,12 @@ public class BomRecipeServiceImpl implements BomRecipeService {
     @Transactional
     public void deleteItem(String factoryId, Long itemId) {
         BomRecipeItem item = itemRepo.findById(itemId)
-                .orElseThrow(() -> new EntityNotFoundException("BomRecipeItem 不存在: id=" + itemId));
+                .orElseThrow(() -> bomError(404,
+                        "这条 BOM 明细行不存在，可能已被其他人删除",
+                        "BOM_ITEM_MISSING",
+                        "请刷新页面后重试；若仍失败，到「生产配置 → BOM/配方维护」重新打开该配方核对明细。明细行ID: "
+                                + itemId,
+                        "bomItems"));
         if (!factoryId.equals(item.getFactoryId())) {
             throw new IllegalArgumentException("配方项不属于该工厂");
         }
@@ -2050,7 +2064,12 @@ public class BomRecipeServiceImpl implements BomRecipeService {
 
     private BomRecipe loadRecipe(String factoryId, String recipeId) {
         BomRecipe recipe = recipeRepo.findById(recipeId)
-                .orElseThrow(() -> new EntityNotFoundException("BomRecipe 不存在: id=" + recipeId));
+                .orElseThrow(() -> bomError(404,
+                        "这个 BOM 配方不存在，可能已被删除",
+                        "BOM_RECIPE_MISSING",
+                        "请到「生产配置 → BOM/配方维护」确认该配方是否仍在，列表刷新后重试。配方ID: "
+                                + recipeId,
+                        "bomRecipe"));
         if (!factoryId.equals(recipe.getFactoryId())) {
             throw new IllegalArgumentException("配方不属于该工厂");
         }
