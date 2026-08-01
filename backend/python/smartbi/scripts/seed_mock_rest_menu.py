@@ -47,9 +47,8 @@ MOCK_REST 的工厂名就是「模拟平台餐饮租户 (假 POS 数据接入验
     line_cost_i = qty_i × unit_price_i / Σ(qty × unit_price) × dish_cost
 
 ⚠️ 代价是 `line_cost ≠ standard_qty × unit_price`。这是**有意的**, 不是 bug:
-主料行承担了主料以外的成本。识别方式是 `source_pk` 前缀 `mp_rec_` 与
-`dim_ingredient.cost_source='mock_platform'`(食材单价本身是**未缩放的真值**,
-被缩放的只有配方行的 line_cost)。想改回逐行自洽, 就得先在 139 把配方补成
+主料行承担了主料以外的成本。食材单价本身是**未缩放的真值**
+(`dim_ingredient.cost_source='mock_platform'`), 被缩放的只有配方行的 line_cost。想改回逐行自洽, 就得先在 139 把配方补成
 完整 BOM —— 见交接 `handoff-2026-08-01d`。
 
 ## 用法
@@ -67,9 +66,9 @@ import argparse
 import asyncio
 import logging
 import sys
-from decimal import Decimal, ROUND_HALF_UP
+from decimal import Decimal
 from pathlib import Path
-from typing import Dict, List, Tuple
+from typing import Dict, Tuple
 
 _PYTHON_ROOT = Path(__file__).resolve().parent.parent.parent
 for _p in (str(_PYTHON_ROOT), str(_PYTHON_ROOT / "smartbi")):
@@ -127,147 +126,69 @@ _RECIPE: Tuple[Tuple[int, int, int], ...] = (
     (10, 7, 22), (10, 13, 8),
 )
 
-_Q4 = Decimal("0.0001")
-
 
 def _dish_source_pk(dish_id: int) -> str:
     """菜品在成本域的稳定主键。与 139 世界模型的 dish.id 一一对应。"""
     return f"mp_dish_{dish_id:03d}"
 
 
-def _recipe_source_pk(dish_id: int, ingredient_id: int) -> str:
-    return f"mp_rec_{dish_id:03d}_{ingredient_id:03d}"
+def _ingredient_code(ingredient_id: int) -> str:
+    """与 139 `/menu/ingredient/list` 的 ingredientCode 逐字一致。"""
+    return f"mp_ingr_{ingredient_id:03d}"
 
 
-def compute_recipe_lines() -> List[Dict[str, object]]:
-    """把快照编译成待写入的配方行, line_cost 按占比摊到 dish.cost_cents。
+def snapshot_as_normalized():
+    """把快照转成与 connector 完全相同的归一化对象。
 
-    分摊后逐菜求和必须**恰好**等于 dish.cost_cents —— 舍入残差补到该菜金额
-    最大的一行上, 否则 10 道菜累计能漂出几分钱, 而毛利是拿它逐行减出来的。
+    🔴 **本脚本不再自己实现分摊、幂等键或写库** —— 全部委托 `menu_writer`,
+    与 connector 共用同一条路径。各写一份的话, 首次 seed 与后续 connector 导入
+    会算出不同的 line_cost、写出不同的 source_pk; 后者更凶险: 同一批菜会存在
+    **两套配方行**, 食材成本直接翻倍, 而两套行看起来都合法。
+    (2026-08-01 写 connector 时抓到 —— 当时 prod 已被本脚本早期版本写入 22 行
+     旧键 `mp_rec_001_001`, 靠 `write_menu` 的剪除步骤清掉。)
     """
-    ingr_by_id = {i[0]: i for i in _INGREDIENTS}
-    dish_by_id = {d[0]: d for d in _DISHES}
-    by_dish: Dict[int, List[Tuple[int, int]]] = {}
-    for dish_id, ingredient_id, qty_milli in _RECIPE:
-        by_dish.setdefault(dish_id, []).append((ingredient_id, qty_milli))
+    from smartbi.ingestion.platforms.menu_models import (
+        NormalizedDish, NormalizedIngredient, NormalizedRecipeLine,
+    )
+    P = "keruyun"
+    dishes = [
+        NormalizedDish(platform=P, dish_code=_dish_source_pk(d),
+                       name=n, category=c, price_cents=p, cost_cents=cost)
+        for d, n, c, p, cost in _DISHES
+    ]
+    ingredients = [
+        NormalizedIngredient(platform=P, ingredient_code=_ingredient_code(i),
+                             name=n, category=c, unit=u, unit_price_cents=up)
+        for i, n, c, u, up in _INGREDIENTS
+    ]
+    recipe = [
+        NormalizedRecipeLine(platform=P, dish_code=_dish_source_pk(d),
+                             ingredient_code=_ingredient_code(i), qty_milli=q)
+        for d, i, q in _RECIPE
+    ]
+    return dishes, ingredients, recipe
 
-    out: List[Dict[str, object]] = []
-    for dish_id, lines in sorted(by_dish.items()):
-        dish = dish_by_id[dish_id]
-        target = Decimal(dish[4]) / Decimal(100)          # 元
-        raw: List[Tuple[int, int, Decimal]] = []
-        for ingredient_id, qty_milli in lines:
-            unit_price = Decimal(ingr_by_id[ingredient_id][4]) / Decimal(100)
-            qty = Decimal(qty_milli) / Decimal(1000)
-            raw.append((ingredient_id, qty_milli, qty * unit_price))
-        total_raw = sum(r[2] for r in raw)
-        if total_raw <= 0:
-            raise ValueError(f"dish {dish_id} 配方原始成本为 0, 无法分摊")
 
-        scaled: List[Decimal] = [
-            (r[2] / total_raw * target).quantize(_Q4, rounding=ROUND_HALF_UP)
-            for r in raw
-        ]
-        drift = target.quantize(_Q4) - sum(scaled)
-        if drift != 0:                       # 残差补到金额最大的一行
-            biggest = max(range(len(scaled)), key=lambda i: scaled[i])
-            scaled[biggest] += drift
-
-        main_idx = max(range(len(raw)), key=lambda i: raw[i][2])
-        for idx, (ingredient_id, qty_milli, _) in enumerate(raw):
-            out.append({
-                "source_pk": _recipe_source_pk(dish_id, ingredient_id),
-                "product_source_pk": _dish_source_pk(dish_id),
-                "mp_ingredient_id": ingredient_id,
-                "standard_qty": Decimal(qty_milli) / Decimal(1000),
-                "unit": ingr_by_id[ingredient_id][3],
-                "is_main_ingredient": idx == main_idx,
-                "line_cost": scaled[idx],
-            })
-    return out
+def compute_recipe_lines():
+    """干跑预览用: 返回分摊后的配方行(与实际写入的完全一致)。"""
+    from smartbi.ingestion.platforms.menu_writer import allocate_line_costs
+    dishes, ingredients, recipe = snapshot_as_normalized()
+    return allocate_line_costs(
+        {d.dish_code: d.cost_cents for d in dishes},
+        {i.ingredient_code: i.unit_price_cents for i in ingredients},
+        [(r.dish_code, r.ingredient_code, r.qty_milli) for r in recipe],
+    )
 
 
 async def _seed(conn) -> Dict[str, int]:
-    stats: Dict[str, int] = {}
-    await conn.execute("SELECT set_config('app.factory_id', $1, true)", FACTORY_ID)
+    """写库全部委托 menu_writer.write_menu —— 与 connector 同一条路径。
 
-    # ── 1. 食材单价 ────────────────────────────────────────────────────
-    # 按**名字**匹配而不是按 id 偏移: 两边 id 恰好同序是巧合, 不是契约。
-    names = [i[1] for i in _INGREDIENTS]
-    rows = await conn.fetch(
-        "SELECT ingredient_id, name FROM dim_ingredient "
-        " WHERE factory_id = $1 AND name = ANY($2::varchar[])",
-        FACTORY_ID, names,
-    )
-    ingr_id_by_name = {r["name"]: r["ingredient_id"] for r in rows}
-    missing = [n for n in names if n not in ingr_id_by_name]
-    if missing:
-        # 禁降级: 少一个食材就意味着配方会挂空, 与其写一半不如整批不写。
-        raise RuntimeError(f"dim_ingredient 缺少这些食材, 拒绝部分写入: {missing}")
-
-    updated = 0
-    for _mid, name, _cat, unit, price_cents in _INGREDIENTS:
-        r = await conn.execute(
-            "UPDATE dim_ingredient SET unit_price = $3, unit = COALESCE(unit, $4),"
-            "       cost_source = 'mock_platform', updated_at = NOW()"
-            " WHERE factory_id = $1 AND name = $2",
-            FACTORY_ID, name, Decimal(price_cents) / Decimal(100), unit,
-        )
-        updated += int(r.split()[-1]) if r else 0
-    stats["dim_ingredient_unit_price"] = updated
-
-    # ── 2. 菜名 → product_source_pk 映射 ───────────────────────────────
-    # 这张表是 SmartBI 侧的等价映射, 走它就**不必写 Java 库的 product_types**。
-    cost_product = 0
-    for dish_id, name, _cat, _price, _cost in _DISHES:
-        r = await conn.execute(
-            """
-            INSERT INTO dim_restaurant_cost_product
-                   (factory_id, product_source_pk, product_name, normalized_name,
-                    source, is_active)
-            VALUES ($1, $2, $3, $3, 'mock_platform', TRUE)
-            ON CONFLICT (factory_id, product_source_pk) DO UPDATE SET
-                product_name    = EXCLUDED.product_name,
-                normalized_name = EXCLUDED.normalized_name,
-                source          = EXCLUDED.source,
-                is_active       = TRUE,
-                updated_at      = NOW()
-            """,
-            FACTORY_ID, _dish_source_pk(dish_id), name,
-        )
-        cost_product += int(r.split()[-1]) if r else 0
-    stats["dim_restaurant_cost_product"] = cost_product
-
-    # ── 3. 配方行 ──────────────────────────────────────────────────────
-    lines = compute_recipe_lines()
-    written = 0
-    for ln in lines:
-        r = await conn.execute(
-            """
-            INSERT INTO fact_restaurant_recipe_line
-                   (factory_id, source_pk, product_id, product_source_pk,
-                    ingredient_id, standard_qty, unit, is_main_ingredient,
-                    line_cost, is_active, created_at, updated_at)
-            VALUES ($1, $2, 0, $3, $4, $5, $6, $7, $8, TRUE, NOW(), NOW())
-            ON CONFLICT (factory_id, source_pk) DO UPDATE SET
-                product_source_pk  = EXCLUDED.product_source_pk,
-                ingredient_id      = EXCLUDED.ingredient_id,
-                standard_qty       = EXCLUDED.standard_qty,
-                unit               = EXCLUDED.unit,
-                is_main_ingredient = EXCLUDED.is_main_ingredient,
-                line_cost          = EXCLUDED.line_cost,
-                is_active          = TRUE,
-                updated_at         = NOW()
-            """,
-            FACTORY_ID, ln["source_pk"], ln["product_source_pk"],
-            ingr_id_by_name[
-                next(i[1] for i in _INGREDIENTS if i[0] == ln["mp_ingredient_id"])
-            ],
-            ln["standard_qty"], ln["unit"], ln["is_main_ingredient"], ln["line_cost"],
-        )
-        written += int(r.split()[-1]) if r else 0
-    stats["fact_restaurant_recipe_line"] = written
-    return stats
+    包括它的**剪除步骤**: 早期版本用过 `mp_rec_001_001` 这套幂等键, 不剪的话
+    新旧两套会同时留在库里, 食材成本翻倍。
+    """
+    from smartbi.ingestion.platforms.menu_writer import write_menu
+    dishes, ingredients, recipe = snapshot_as_normalized()
+    return await write_menu(conn, FACTORY_ID, dishes, ingredients, recipe)
 
 
 async def _run(apply: bool) -> int:
@@ -277,9 +198,7 @@ async def _run(apply: bool) -> int:
     lines = compute_recipe_lines()
     per_dish: Dict[str, Decimal] = {}
     for ln in lines:
-        per_dish[str(ln["product_source_pk"])] = (
-            per_dish.get(str(ln["product_source_pk"]), Decimal(0)) + Decimal(str(ln["line_cost"]))
-        )
+        per_dish[ln.dish_code] = per_dish.get(ln.dish_code, Decimal(0)) + ln.line_cost
     logger.info("将写入 %d 条配方行, 覆盖 %d 道菜:", len(lines), len(per_dish))
     for dish_id, name, _c, price_cents, cost_cents in _DISHES:
         pk = _dish_source_pk(dish_id)
