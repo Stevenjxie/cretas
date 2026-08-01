@@ -94,6 +94,7 @@ def test_factory_prompt_keeps_restaurant_analysis_out_of_ai_assist():
 
 def test_restaurant_prompt_keeps_session_scope_and_evidence_honest():
     assert "另一个页面或模块的筛选不保证自动带入" in SYSTEM_PROMPT
+    assert "门店和时间都缺少时一次问全" in SYSTEM_PROMPT
     assert "固定为 21 个维度" in SYSTEM_PROMPT
     assert "真实、代理、模拟或缺失证据" in SYSTEM_PROMPT
     assert "不得拿演示值冒充真实租户事实" in SYSTEM_PROMPT
@@ -298,6 +299,10 @@ def test_restaurant_followup_scope_questions_use_the_reviewed_contract():
     assert "另一个页面或模块上的筛选不保证自动带入" in (
         _RESTAURANT_CONTEXT_SCOPE_ANSWER
     )
+    assert "门店和时间都缺少时，系统会一次问全" in (
+        _RESTAURANT_CONTEXT_SCOPE_ANSWER
+    )
+    assert "全部门店 最近30天" in _RESTAURANT_CONTEXT_SCOPE_ANSWER
 
 
 def test_restaurant_metric_and_entity_questions_use_current_axes():
@@ -682,6 +687,7 @@ def test_restaurant_registered_sources_match_current_product_contract():
         "restaurant-full-chain-sop.html": (
             "21 个综合分析维度",
             "跨页面或跨模块不会自动继承筛选",
+            "门店和时间都缺少时，系统会一次问全",
             "指定区间、繁体范围词与输出偏好",
             "月度经营报告：预览、导出与数据截至时间",
             "AI 飞轮、菜品别名与人审边界",
@@ -694,6 +700,7 @@ def test_restaurant_registered_sources_match_current_product_contract():
         "restaurant-product-manual.html": (
             "当前 21 维综合分析目录",
             "全部门店是聚合范围",
+            "门店和时间都缺少时一次问全",
             "精确日期、范围词与输出偏好",
             "月度经营报告",
             "AI 飞轮运营台与菜品别名治理",
@@ -730,7 +737,7 @@ def test_restaurant_registered_sources_match_current_product_contract():
     assert "RN 入库、盘点与需求单边界" in ai_assist
     assert "投入来源、缺料与单据追踪" in ai_assist
     assert "指标口径与菜单目录裁决" in ai_assist
-    assert "门店范围继承与可用切换" in ai_assist
+    assert "门店范围继承与一次问全" in ai_assist
     assert "7 节小课 · 约 12 分钟" in ai_assist
     assert "飞轮与人审边界" in ai_assist
     assert "不做计算" in ai_assist
