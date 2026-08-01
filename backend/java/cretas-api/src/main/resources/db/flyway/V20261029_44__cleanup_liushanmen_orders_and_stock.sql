@@ -10,8 +10,18 @@
 --   unit_of_measurements     —— 单位逻辑(且六膳门没有工厂私有单位, 全走系统级 '*')
 --   factory_warehouses(7)    —— 仓库主数据, 不是订单也不是库存, 留着重建才有地方放
 --
+-- ## ⛔⛔ 追加保留: 在办审批的那张销售订单 (Steve 2026-08-01:「审批的内容留一下, 其他的全部清楚」)
+--   SO-20260801-0001  id=1e3c67f0-5692-420d-a7ff-458cc5be7b48  酱鸭腿 130 × ¥15.50 = ¥2015.00 (胖东来)
+--   status=PENDING_FINANCE_REVIEW; OA 实例 6a6374ed-5e28-47d2-9bd2-9f175a09999f 仍 RUNNING @ admin_approval。
+--   连同它的 sales_order_items(id=733) 一起保留。
+--
+--   🔴 这里**写死 id 而不是按状态动态选行**是刻意的: 若按「有 RUNNING 审批实例」来选,
+--   一旦这张单在本迁移部署前被批下去(状态转走 / 实例转 APPROVED), 谓词就会翻面把它删掉 ——
+--   而 Steve 要的是「这张单留着」, 与它批没批完无关。写死 id 在任何时刻都是确定的。
+--   (approval_workflow_instances 本迁移完全不碰, 所以审批实例天然保留, 不会悬空。)
+--
 -- ## 删除清单 (全部软删, 逐 id 记台账)
---   sales_orders 2 (+ items 2)
+--   sales_orders 1 (+ items 1)   ← 只剩 SO-20260709-0001; 它正是 §3 那张挂着死 SKU、建不了发货单的
 --   purchase_orders 6 (+ items 6)
 --   material_batches 27          ← 库存批次
 --   finished_goods_batches 2     ← 成品批次
@@ -43,11 +53,13 @@ INSERT INTO backup_lsm_cleanup_20260801 (object_type, object_id)
 SELECT 'v44:sales_order_items', i.id FROM sales_order_items i
 JOIN sales_orders o ON o.id = i.sales_order_id
 WHERE o.factory_id = 'LIUSHANMEN' AND i.deleted_at IS NULL
+  AND o.id <> '1e3c67f0-5692-420d-a7ff-458cc5be7b48'   -- 保留在办审批单 SO-20260801-0001
 ON CONFLICT DO NOTHING;
 
 INSERT INTO backup_lsm_cleanup_20260801 (object_type, object_id)
 SELECT 'v44:sales_orders', id FROM sales_orders
 WHERE factory_id = 'LIUSHANMEN' AND deleted_at IS NULL
+  AND id <> '1e3c67f0-5692-420d-a7ff-458cc5be7b48'     -- 保留在办审批单 SO-20260801-0001
 ON CONFLICT DO NOTHING;
 
 INSERT INTO backup_lsm_cleanup_20260801 (object_type, object_id)
@@ -85,10 +97,12 @@ ON CONFLICT DO NOTHING;
 -- ---------- 软删 (子表先于主表) ----------
 UPDATE sales_order_items i SET deleted_at = now(), updated_at = now()
 FROM sales_orders o
-WHERE o.id = i.sales_order_id AND o.factory_id = 'LIUSHANMEN' AND i.deleted_at IS NULL;
+WHERE o.id = i.sales_order_id AND o.factory_id = 'LIUSHANMEN' AND i.deleted_at IS NULL
+  AND o.id <> '1e3c67f0-5692-420d-a7ff-458cc5be7b48';  -- 保留在办审批单 SO-20260801-0001
 
 UPDATE sales_orders SET deleted_at = now(), updated_at = now()
-WHERE factory_id = 'LIUSHANMEN' AND deleted_at IS NULL;
+WHERE factory_id = 'LIUSHANMEN' AND deleted_at IS NULL
+  AND id <> '1e3c67f0-5692-420d-a7ff-458cc5be7b48';    -- 保留在办审批单 SO-20260801-0001
 
 UPDATE purchase_order_items i SET deleted_at = now(), updated_at = now()
 FROM purchase_orders o
