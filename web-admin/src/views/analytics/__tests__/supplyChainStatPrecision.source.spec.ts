@@ -3,7 +3,7 @@ import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 /**
- * 进销存总览的统计卡：<b>计数取整、重量不取整</b>。
+ * 进销存总览的统计卡：<b>计数取整、同单位数量保留精度、不同单位不硬加</b>。
  *
  * <h2>2026-08-02 prod 实测</h2>
  *
@@ -17,8 +17,8 @@ import { describe, expect, it } from 'vitest';
  * <ul>
  *   <li><b>计数</b>：入库批次 = {@code totalElements}、生产批次 = {@code totalElements}
  *       —— 本来就是整数个，0 位小数正确；</li>
- *   <li><b>重量</b>：领用数量 = Σ{@code plannedQuantity}、成品数量 = Σ{@code actualQuantity}
- *       —— 是 kg，取整就是丢数。</li>
+ *   <li><b>数量</b>：领用数量 = Σ{@code plannedQuantity}、成品数量 = Σ{@code actualQuantity}
+ *       —— 必须同时读取每个批次的 {@code unit}；只有同单位才可求和。</li>
  * </ul>
  *
  * <p>⛔ 改之前先确认口径（本 spec 存在的理由）：如果照着「显示成整数就补小数」一刀切，
@@ -44,22 +44,22 @@ describe('进销存总览统计卡的精度', () => {
         }
     });
 
-    it('阳性对照: 重量类卡片确实是「求和数量字段」而非计数', () => {
+    it('阳性对照: 数量类卡片通过单位保护 helper 汇总', () => {
         const c = code(source);
-        expect(c).toContain('summary.value.consumedQuantity = productionBatchList.value.reduce');
-        expect(c).toContain('(b.plannedQuantity || 0)');
-        expect(c).toContain('summary.value.finishedGoods = productionBatchList.value.reduce');
-        expect(c).toContain('(b.actualQuantity || 0)');
+        expect(c).toContain('summary.value.consumedQuantity = summarizeQuantity');
+        expect(c).toContain('(batch) => batch.plannedQuantity');
+        expect(c).toContain('summary.value.finishedGoods = summarizeQuantity');
+        expect(c).toContain('(batch) => batch.actualQuantity');
     });
 
     it('🔴 重量类卡片不许取整 —— 127.5kg 显示成 128 是丢数不是四舍五入', () => {
         const c = code(source);
         expect(c, '领用数量是 Σ plannedQuantity(kg), 取整会丢数')
-            .toContain('formatNumber(summary.consumedQuantity, 2)');
+            .toContain('formatNumber(summary.consumedQuantity.value, 2)');
         expect(c, '成品数量是 Σ actualQuantity(kg), 取整会丢数')
-            .toContain('formatNumber(summary.finishedGoods, 2)');
-        expect(c).not.toContain('formatNumber(summary.finishedGoods, 0)');
-        expect(c).not.toContain('formatNumber(summary.consumedQuantity, 0)');
+            .toContain('formatNumber(summary.finishedGoods.value, 2)');
+        expect(c).not.toContain('formatNumber(summary.finishedGoods.value, 0)');
+        expect(c).not.toContain('formatNumber(summary.consumedQuantity.value, 0)');
     });
 
     it('⛔ 计数类卡片仍保持 0 位小数 —— 「8.00 个批次」比取整更糟', () => {
@@ -70,9 +70,17 @@ describe('进销存总览统计卡的精度', () => {
             .toContain('formatNumber(summary.productionBatches, 0)');
     });
 
-    it('重量卡片标出单位, 免得 127.50 被当成件数', () => {
+    it('数量卡片显示后端单位且不硬编码 kg', () => {
         const c = code(source);
-        const matches = c.match(/class="stat-unit">kg<\/span>/g) ?? [];
-        expect(matches.length, '两张重量卡都要标 kg').toBe(2);
+        expect(c).toContain('summary.consumedQuantity.unit');
+        expect(c).toContain('summary.finishedGoods.unit');
+        expect(c).not.toContain('class="stat-unit">kg</span>');
+    });
+
+    it('多单位或缺单位时明确阻止汇总，并保留下方逐批次单位', () => {
+        const c = code(source);
+        expect(c).toContain("metric.reason === 'mixed-units'");
+        expect(c).toContain("metric.reason === 'missing-unit'");
+        expect(c).toContain("row.unit ? ` ${row.unit}` : ''");
     });
 });
