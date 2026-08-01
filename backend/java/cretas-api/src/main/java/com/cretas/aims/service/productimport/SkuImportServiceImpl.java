@@ -15,6 +15,7 @@ import com.cretas.aims.service.unit.ProductSpecificationConversionSyncService;
 import com.cretas.aims.service.unit.UnitContractService;
 import com.cretas.aims.service.unit.UnitNormalizationResult;
 import com.cretas.aims.service.unit.UnitDimension;
+import com.cretas.aims.service.unit.impl.UnitContractServiceImpl;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
@@ -76,7 +77,9 @@ public class SkuImportServiceImpl implements SkuImportService {
     private static final int MAX_ROWS = 2000;
     private static final int MAX_TOKENS = 500;
     private static final Pattern SAFE_FACTORY_ID = Pattern.compile("[A-Za-z0-9_-]{1,64}");
-    private static final Set<String> COUNT_UNITS = Set.of("盒", "袋", "件", "只", "瓶", "罐", "包", "桶", "箱", "个");
+    // 「按件计数」由权威表的量纲说了算 —— 曾经是一张硬编码的中文集合,
+    // 漏了 张/片/卷/框/托盘/板/项/份, 且英文码一个都不认(box/bag 会被判成非计数),
+    // 于是「按件计数的成品必须填标准克重」这道校验对它们静默失效。
 
     private final ProductTypeRepository productTypeRepository;
     private final ObjectMapper objectMapper;
@@ -242,7 +245,7 @@ public class SkuImportServiceImpl implements SkuImportService {
                     String code = normalizeCode(value(row, columns.get("SKU编号"), formatter));
                     String name = normalizeText(value(row, columns.get("SKU名称"), formatter));
                     String unit = normalizeUnit(value(row, columns.get("基本单位"), formatter));
-                    boolean countLikeUnit = COUNT_UNITS.contains(unit);
+                    boolean countLikeUnit = UnitContractServiceImpl.isBuiltInCountingUnit(unit);
                     if (isExampleMarker(marker)) {
                         previewRows.add(previewRow(sheetName, displayRow, SHEET_CATEGORIES.get(sheetName), code, name,
                                 unit, null, null, value(row, columns.get("图片文件名"), formatter), null,
@@ -579,15 +582,28 @@ public class SkuImportServiceImpl implements SkuImportService {
         return normalizeText(value).replaceAll("\\s+", "").toUpperCase(Locale.ROOT);
     }
 
+    /**
+     * 单位归一 —— 委托权威表，<b>不要在这里写 switch</b>。
+     *
+     * <p>此前这里是一张私有别名表，与单 SKU 写入路径
+     * ({@code RawMaterialTypeServiceImpl#normalizeInventoryUnit} 折成英文码)
+     * <b>方向相反</b>（它折成中文），两股力互相撤销 —— 这正是「migration 刷干净、
+     * 下次导入又漂回去」的根因，光写 migration 治不好。
+     *
+     * <p>🔴 而且那张表会<b>改错单位</b>：{@code case "box","case","carton" -> "箱"}
+     * 把 {@code box} 并进了「箱」，而权威表与名录里 {@code box}=盒、{@code case}=箱
+     * 是两个不同单位。导入一个 {@code box} 的 SKU 会被静默存成「箱」。
+     *
+     * <p>用 {@code crossLanguageCode} 而非 {@code canonicalCodeOrRaw}：前者只把
+     * 「同一单位的英文码与中文名」折成一个，<b>绝不合并不同的中文计量单位</b> ——
+     * 只/个 保持独立（#1976：一只鸡不是一件包材）。
+     */
     static String normalizeUnit(String value) {
-        String unit = normalizeText(value).toLowerCase(Locale.ROOT);
-        return switch (unit) {
-            case "公斤", "千克", "kgs", "kilogram", "kilograms" -> "kg";
-            case "克", "gram", "grams" -> "g";
-            case "pcs", "pc", "piece", "pieces", "个" -> "件";
-            case "box", "case", "carton" -> "箱";
-            default -> unit;
-        };
+        String unit = normalizeText(value);
+        if (unit.isEmpty()) {
+            return unit;
+        }
+        return UnitContractServiceImpl.crossLanguageCode(unit);
     }
 
     private static boolean isExampleMarker(String value) {

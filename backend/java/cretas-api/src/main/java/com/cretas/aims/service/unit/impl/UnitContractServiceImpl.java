@@ -845,6 +845,17 @@ public class UnitContractServiceImpl implements UnitContractService {
         add(units, "roll", UnitDimension.PACKAGE, "roll", null, "卷", 0);
         add(units, "slice", UnitDimension.COUNT, "slice", null, "片", 0);
         add(units, "item", UnitDimension.COUNT, "item", null, "项", 0);
+        // 🔴 这三个此前只在 systemAliases() 里有别名, 却从没在这里定义 ——
+        // systemUnitFor() 查到别名 sheet 再查定义得到 null, 整体返回 null。
+        // 后果静默且双向: crossLanguageCode("张") 原样返回「张」(中英写法被当成两个单位,
+        // 有库存也匹配不上), isBuiltInCountingUnit("sheet") 返回 false
+        // (「按件计数的成品必须填标准克重」对它失效)。
+        // prod 实测 raw_material_types 里「张」6 行在用。量纲取值与名录
+        // unit_of_measurements 的同族单位一致 (托盘/板是容器 → PACKAGE)。
+        // 契约: UnitAuthorityConsistencyTest 扫源码钉住「别名承诺的码必须有定义」。
+        add(units, "sheet", UnitDimension.COUNT, "sheet", null, "张", 0);
+        add(units, "tray", UnitDimension.PACKAGE, "tray", null, "托盘", 0);
+        add(units, "plate", UnitDimension.PACKAGE, "plate", null, "板", 0);
         return Map.copyOf(units);
     }
 
