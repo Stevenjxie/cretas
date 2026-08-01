@@ -95,3 +95,40 @@ def test_排班建议不被门店澄清拦下():
     from smartbi.gold.restaurant.restaurant_intent import _STORE_SCOPE_FREE_INTENTS
 
     assert "RESTAURANT_OPS_STAFFING_ADVICE" in _STORE_SCOPE_FREE_INTENTS
+
+
+# ── 第三条: LLM 自由发挥的澄清同样要被挡住 ──────────────────────────
+
+def test_接不住范围的intent不得携带任何澄清():
+    """resolver 只收 (pool, factory_id) 时, **任何**澄清都该被丢弃。
+
+    2026-08-01 实测: 修掉 `_TIME_SCOPED_INTENTS` 与 `_STORE_SCOPE_FREE_INTENTS`
+    两条路径之后, 「上个月人效怎么样」仍有约 1/8 的概率答不出, 正文是
+
+        你想查看哪家门店的人效情况？
+
+    ⚠️ 这句**不是** `STORE_SCOPE_CLARIFICATION_QUESTION` 的措辞 —— 是 **LLM 自己**
+    决定要问门店。而 `_slots_of_clarification` 只认三个已知常量, LLM 自由发挥的
+    问句返回空集, 于是前两条守卫都拦不住它。
+
+    ⚠️ 复现必须**一个进程只调一次**: 计划缓存是进程内的, 同进程第二次就命中缓存
+    (auth=validated_plan_cache), 冷路径行为被完全掩盖。我第一版探针多调了一次
+    `parse_restaurant_query`, 把缓存写热, 于是 12/12 全过 —— 探针自己藏了缺陷。
+
+    判据: 凡 resolver 签名只有 (pool, factory_id) 的 intent, `_NO_SCOPE_INTENTS`
+    必须收录它 —— 那是 `_build_spec` 用来丢弃无用澄清的白名单。
+    """
+    import inspect
+
+    from smartbi.gold.restaurant.restaurant_intent import _NO_SCOPE_INTENTS
+    from smartbi.gold.restaurant.restaurant_ops_router import _RESOLVERS
+
+    expected = {
+        code for code, fn in _RESOLVERS.items()
+        if len(inspect.signature(fn).parameters) <= 2
+    }
+    missing = sorted(expected - set(_NO_SCOPE_INTENTS))
+    assert not missing, (
+        f"这些 resolver 只收 (pool, factory_id), 接不住任何澄清, 却不在 "
+        f"_NO_SCOPE_INTENTS 里 —— LLM 一旦自由发挥出一句澄清就会把它们卡死: {missing}"
+    )

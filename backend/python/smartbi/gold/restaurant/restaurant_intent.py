@@ -2192,6 +2192,18 @@ def _build_spec(
             "最近7天",
             "最近30天",
         )
+    if code in _NO_SCOPE_INTENTS and clarification_needed:
+        # 该 resolver 接不住任何澄清 —— 问了也白问, 用户答完拿到的是同一个答案。
+        # 反过来不问就能直接作答, 所以这里丢弃澄清而不是放行。
+        logger.info(
+            "[restaurant-intent] 丢弃对 %s 的澄清(resolver 接不住范围): %r",
+            code, (clarification_question or "")[:60],
+        )
+        clarification_needed = False
+        clarification_question = None
+        missing_slot = None
+        clarification_options = ()
+
     if planner_authority in {
         "tenant_gate_unavailable",
         "llm_unavailable",
@@ -3861,6 +3873,24 @@ _STORE_SCOPE_FREE_INTENTS = frozenset({
     # 触发, 而「人效」的指标由 LLM 填 —— 填成 orders/revenue 那轮才拦得住。
     # 所以不是稳定缺陷而是**确定性覆盖的缺口**, 由
     # `test_time_scoped_intents_contract.py` 按 resolver 签名静态守住。
+    "RESTAURANT_OPS_STAFFING_ADVICE",
+})
+
+
+# resolver 签名只有 (pool, factory_id) 的 intent —— 它**接不住任何澄清**:
+# 没有 date_range、没有 store_id, 用户回答什么都不会改变答案。
+#
+# 2026-08-01: 修掉 `_TIME_SCOPED_INTENTS` 与 `_STORE_SCOPE_FREE_INTENTS` 两条路径后,
+# 「上个月人效怎么样」仍有约 1/8 概率答不出, 正文是「你想查看哪家门店的人效情况？」——
+# 那句**不是** STORE_SCOPE_CLARIFICATION_QUESTION 的措辞, 是 **LLM 自己**决定要问门店。
+# `_slots_of_clarification` 只认三个已知常量, LLM 自由发挥的问句返回空集, 前两条
+# 守卫都拦不住。所以这里按「resolver 到底接不接得住」兜底, 而不是继续按问句措辞猜。
+#
+# ⚠️ 复现必须**一个进程只调一次**: 计划缓存是进程内的, 同进程第二次就命中缓存,
+#    冷路径行为被完全掩盖(实测同进程 12/12 全过, 每进程一次才 1/8 复现)。
+#
+# `test_time_scoped_intents_contract.py` 按 resolver 签名静态守住这张表的完整性。
+_NO_SCOPE_INTENTS = frozenset({
     "RESTAURANT_OPS_STAFFING_ADVICE",
 })
 
