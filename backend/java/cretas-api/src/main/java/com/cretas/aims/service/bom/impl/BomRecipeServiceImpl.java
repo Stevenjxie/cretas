@@ -2133,9 +2133,21 @@ public class BomRecipeServiceImpl implements BomRecipeService {
                     .filter(item -> Objects.equals(
                             item.getWorkflowEdgeId(), dto.getWorkflowEdgeId()))
                     .toList();
-        } else if (identityCount == 0
-                && "RAW".equalsIgnoreCase(
-                        dto.getMaterialCategory() == null ? "RAW" : dto.getMaterialCategory())) {
+        } else if (identityCount == 0 && !isOutputCategory(dto.getMaterialCategory())) {
+            // 🔴 这里以前额外要求 materialCategory 必须是 RAW, 于是 AUXILIARY / PACKAGING 的行
+            // 匹配不到骨架 → 新建一行, 而骨架行因带 workflow 身份被保留 → **同一物料两行并存**,
+            // 骨架那行 standard_quantity 为空。
+            //
+            // 根因是**两套分类被当成了同一个东西**: Workflow 的 materialKind 说的是「这个格子里
+            // 放的是什么料」(调料在 Workflow 里就是 RAW_MATERIAL), BOM 的 materialCategory 说的是
+            // 「这一行在配方里算哪类成本」(同一个调料该记 AUXILIARY)。拿业务成本分类当骨架身份
+            // 判据, 所有非 RAW 的投入行必然重复。身份应当只看 物料 + 单位兼容性。
+            //
+            // 用户侧表现: 保存成功、界面正常, 直到**领料**才被拦「未配置 BOM 用量」——
+            // 而他明明填过; 界面上那行是好的, 坏的是另一行影子记录。
+            // prod 实测 (六膳门 BOM-20260801-001): 提交 4 行落库 7 行, 三个 AUXILIARY 各多一空行。
+            //
+            // ⛔ 仍然排除产出类 (BYPRODUCT): 骨架来自**投入端口**, 产出行不该绑到投入槽上。
             matches = existingItems.stream()
                     .filter(item -> !claimed.contains(item.getId()))
                     .filter(this::hasCompleteWorkflowIdentity)
@@ -2578,6 +2590,17 @@ public class BomRecipeServiceImpl implements BomRecipeService {
         dto.setWorkflowEdgeId(profile.slot().edgeId());
         dto.setCostScope(profile.costScope());
         dto.setCostScopeKey(profile.costScopeKey());
+    }
+
+    /**
+     * 该 BOM 行是不是<b>产出</b>类。
+     *
+     * <p>Workflow 骨架行来自<b>投入端口</b>, 所以产出类的行不该去认领投入槽。
+     * 其余分类 (RAW / AUXILIARY / PACKAGING / 未填) 都是投入, 一律参与骨架匹配 ——
+     * 「这一行算哪类成本」与「它占哪个投入槽」是两件事。
+     */
+    private boolean isOutputCategory(String materialCategory) {
+        return "BYPRODUCT".equalsIgnoreCase(materialCategory);
     }
 
     private int stableFieldCount(BomRecipeItemDTO dto) {

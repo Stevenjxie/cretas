@@ -227,10 +227,23 @@ public class ProductionStockAllocationServiceImpl implements ProductionStockAllo
             BigDecimal required = entry.getValue();
             MaterialBatch batch = lockedByBatch.get(batchId);
             ProcessSheetRowRequest.RawInput metadata = metadataByBatch.get(batchId);
-            if (!Objects.equals(workshopId, batch.getWarehouseId())
-                    || "PRODUCTION_BATCH".equals(batch.getSourceDocType())) {
-                throw new BusinessException(409, "所选批次不在可投料的生产库中")
+            // 两个成因此前合并成一句「不在可投料的生产库中」且**不带 actionHint** ——
+            // 报工现场只知道被拦, 不知道下一步该干什么。分开说, 各给动作。
+            if ("PRODUCTION_BATCH".equals(batch.getSourceDocType())) {
+                throw new BusinessException(409,
+                        "批次 " + batch.getBatchNumber() + " 是生产产出批次，不能再作为投料")
+                        .withCode("PRODUCTION_INPUT_BATCH_IS_OUTPUT")
+                        .withHint("请改选采购入库或领料进入生产仓的原料批次；"
+                                + "产出批次若要再加工，需先建下一道工序的生产计划")
+                        .withHintTarget("rawMaterialInputs")
+                        .withSeverity("BLOCKING");
+            }
+            if (!Objects.equals(workshopId, batch.getWarehouseId())) {
+                throw new BusinessException(409,
+                        "批次 " + batch.getBatchNumber() + " 还在原料仓，尚未领到生产仓，不能投料")
                         .withCode("PRODUCTION_INPUT_BATCH_NOT_IN_WORKSHOP")
+                        .withHint("请先前往「生产管理 → 领料」把该批次从原料仓领到生产仓，再来报工")
+                        .withHintTarget("rawMaterialInputs")
                         .withSeverity("BLOCKING");
             }
             // 与自动分摊同一口径: 质量单位折算成 kg, 其余量纲按批次自身单位记账。

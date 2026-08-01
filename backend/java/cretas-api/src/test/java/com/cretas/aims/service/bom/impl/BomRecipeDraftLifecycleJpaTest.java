@@ -1,6 +1,7 @@
 package com.cretas.aims.service.bom.impl;
 
 import com.cretas.aims.dto.ProductProcessWorkflowDTO;
+import com.cretas.aims.dto.bom.CreateBomRecipeRequest;
 import com.cretas.aims.dto.bom.CreateBomRecipeRequest.BomRecipeItemDTO;
 import com.cretas.aims.dto.bom.UpdateBomRecipeRequest;
 import com.cretas.aims.entity.Factory;
@@ -1049,4 +1050,95 @@ class BomRecipeDraftLifecycleJpaTest {
             default -> raw;
         };
     }
+
+    /**
+     * 一次 createRecipe 不许为同一个物料写出两行。
+     *
+     * <p><b>事故形态</b>: createRecipe 先按 Workflow 投入端口建"骨架行", 再把调用方提交的行
+     * merge 进去。但骨架匹配只在两种情况下发生 —— 调用方带齐 3 个 workflow 身份字段, 或者
+     * <b>一个都没带且 materialCategory 是 RAW</b>。其余一律新建一行, 而骨架行因为带 workflow
+     * 身份会被保留 → <b>同一物料两行并存</b>, 骨架那行 standard_quantity 为空。
+     *
+     * <p>🔴 <b>根因是两套分类被当成了同一个东西</b>: Workflow 里的 {@code materialKind}
+     * (RAW_MATERIAL / SEMI_FINISHED …) 说的是"这个格子里放的是什么料", BOM 里的
+     * {@code materialCategory} (RAW / AUXILIARY / PACKAGING / BYPRODUCT) 说的是"这一行在
+     * 配方里算哪类成本"。调料在 Workflow 里就是 RAW_MATERIAL, 在 BOM 里却该记 AUXILIARY ——
+     * 拿业务分类当骨架身份判据, 于是所有非 RAW 的行全部重复。
+     *
+     * <p><b>用户看到的是什么</b>: 保存成功、界面正常, 直到<b>领料</b>那一步才被拦
+     * 「原料未配置 BOM 用量，请先补充配方用量」—— 而他明明填过。界面上那行是好的,
+     * 坏的是另一行影子记录, 他会在那儿反复填、反复失败。
+     *
+     * <p>prod 实测 (六膳门酱鸭腿 BOM-20260801-001): 提交 4 行落库 7 行,
+     * 三个 AUXILIARY 各多一行空用量, 时间戳显示 7 行全在同一次调用的 53ms 内写完。
+     */
+    @Test
+    @DisplayName("AUXILIARY 行也要并进 Workflow 骨架 —— 否则一次创建写出两行, 其中一行用量为空")
+    void mergesNonRawCategoryRowIntoWorkflowSkeleton() {
+        ProductType product = saveProduct("AUX-MERGE", "盒", new BigDecimal("500"));
+        String skeletonMaterialId = "RAW-WF-" + product.getId();
+
+        CreateBomRecipeRequest request = new CreateBomRecipeRequest();
+        request.setProductTypeId(product.getId());
+        BomRecipeItemDTO auxiliary = new BomRecipeItemDTO();
+        auxiliary.setMaterialTypeId(skeletonMaterialId);
+        auxiliary.setStandardQuantity(new BigDecimal("0.06"));
+        auxiliary.setUnit("kg");
+        auxiliary.setMaterialCategory("AUXILIARY");
+        request.setItems(List.of(auxiliary));
+
+        service.createRecipe(product.getFactoryId(), request);
+        String recipeId = recipeRepository.findAll().stream()
+                .filter(r -> product.getId().equals(r.getProductTypeId()))
+                .map(BomRecipe::getId)
+                .findFirst()
+                .orElseThrow();
+
+        List<BomRecipeItem> alive = itemRepository
+                .findByRecipeIdOrderBySortOrderAsc(recipeId).stream()
+                .filter(item -> item.getDeletedAt() == null)
+                .toList();
+
+        assertThat(alive.size())
+                .as("同一物料写出两行 = 领料时会撞上用量为空的那行, 而用户界面上看到自己填过了")
+                .isEqualTo(1);
+        assertThat(alive.get(0).getStandardQuantity())
+                .as("并进骨架后必须带上调用方填的用量")
+                .isEqualByComparingTo("0.06");
+        assertThat(alive.get(0).getWorkflowInputPortId())
+                .as("并进的是骨架行, 所以 workflow 身份要保留")
+                .isEqualTo("input");
+    }
+
+    /** 阳性对照: RAW 分类本来就能并 —— 证明上面那条红的原因是分类, 不是别的。 */
+    @Test
+    @DisplayName("对照: RAW 分类一直都能并进骨架 (差别只在 materialCategory)")
+    void rawCategoryAlreadyMergesIntoSkeleton() {
+        ProductType product = saveProduct("RAW-MERGE", "盒", new BigDecimal("500"));
+        String skeletonMaterialId = "RAW-WF-" + product.getId();
+
+        CreateBomRecipeRequest request = new CreateBomRecipeRequest();
+        request.setProductTypeId(product.getId());
+        BomRecipeItemDTO raw = new BomRecipeItemDTO();
+        raw.setMaterialTypeId(skeletonMaterialId);
+        raw.setStandardQuantity(new BigDecimal("1.25"));
+        raw.setUnit("kg");
+        raw.setMaterialCategory("RAW");
+        request.setItems(List.of(raw));
+
+        service.createRecipe(product.getFactoryId(), request);
+        String recipeId = recipeRepository.findAll().stream()
+                .filter(r -> product.getId().equals(r.getProductTypeId()))
+                .map(BomRecipe::getId)
+                .findFirst()
+                .orElseThrow();
+
+        List<BomRecipeItem> alive = itemRepository
+                .findByRecipeIdOrderBySortOrderAsc(recipeId).stream()
+                .filter(item -> item.getDeletedAt() == null)
+                .toList();
+        assertThat(alive.size()).isEqualTo(1);
+        assertThat(alive.get(0).getStandardQuantity()).isEqualByComparingTo("1.25");
+    }
+
 }
