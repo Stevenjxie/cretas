@@ -72,6 +72,7 @@ public class GlobalExceptionHandler {
         Map.entry("bom_recipes",                new FkModuleMeta("BOM 配方",     "/production/bom", null)),
         // 仓储
         Map.entry("raw_material_types",         new FkModuleMeta("原料类型字典", "/warehouse/material-types", null)),
+        Map.entry("product_types",              new FkModuleMeta("SKU 管理",     "/system/products", null)),
         // 采购
         Map.entry("suppliers",                  new FkModuleMeta("供应商管理",   "/procurement/suppliers", null)),
         Map.entry("inquiry_quote_supplier_prices", new FkModuleMeta("核价供应商报价", "/procurement/inquiry-quotes", "inquiryQuoteId")),
@@ -626,9 +627,19 @@ public class GlobalExceptionHandler {
                 actionHint = "请确认所引用的关联数据已存在再重试";
                 if (mTarget.find()) {
                     String target = mTarget.group(1);
-                    message = "新建失败: 关联资源「" + target + "」不存在";
-                    actionHint = "请确认「" + target + "」已存在再重试";
-                    hintTarget = target;
+                    // 优先翻成中文模块名 + 指路; 没映射才回落裸表名(原行为)。
+                    // 裸表名对用户是天书 —— 2026-08-01 六膳门建发货单撞到的就是
+                    // 「关联资源「product_types」不存在」, 用户无从知道该去哪修。
+                    FkModuleMeta meta = FK_MODULE_MAP.get(target);
+                    if (meta != null) {
+                        message = "新建失败: 引用的「" + meta.moduleName() + "」数据不存在";
+                        actionHint = "请到「" + meta.moduleName() + "」确认该数据是否已被删除，补建后再重试";
+                        hintTarget = meta.targetRoute();
+                    } else {
+                        message = "新建失败: 关联资源「" + target + "」不存在";
+                        actionHint = "请确认「" + target + "」已存在再重试";
+                        hintTarget = target;
+                    }
                 }
             } else if ("PUT".equalsIgnoreCase(method) || "PATCH".equalsIgnoreCase(method)) {
                 // UPDATE: 引用的资源在并发删除后失效
@@ -636,9 +647,16 @@ public class GlobalExceptionHandler {
                 actionHint = "请刷新页面后重新选择有效的关联数据";
                 if (mTarget.find()) {
                     String target = mTarget.group(1);
-                    message = "更新失败: 关联资源「" + target + "」已失效";
-                    actionHint = "请刷新页面后重新选择「" + target + "」";
-                    hintTarget = target;
+                    FkModuleMeta meta = FK_MODULE_MAP.get(target);
+                    if (meta != null) {
+                        message = "更新失败: 引用的「" + meta.moduleName() + "」数据已失效";
+                        actionHint = "请刷新页面后重新选择；若该数据已被删除，请到「" + meta.moduleName() + "」补建";
+                        hintTarget = meta.targetRoute();
+                    } else {
+                        message = "更新失败: 关联资源「" + target + "」已失效";
+                        actionHint = "请刷新页面后重新选择「" + target + "」";
+                        hintTarget = target;
+                    }
                 }
             } else {
                 // DELETE / 其他: 引用阻删场景
