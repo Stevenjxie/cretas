@@ -33,6 +33,11 @@ class _Conn:
     def __init__(self, totals: dict) -> None:
         self._totals = totals
 
+    async def execute(self, *args, **kwargs):
+        # gold/queries.tenant_conn 会在借到连接后 set_config 租户上下文。
+        # 假连接必须支持它 —— 不支持等于建模了一条永远不设租户的连接,
+        # 而那正是 2026-08-01 修掉的那个非确定性返空缺陷本身。
+        return None
     async def fetchrow(self, sql: str, *params):
         assert "LEFT JOIN agg_daily_cost c USING (factory_id, date, store_id)" in sql
         assert "SUM(c.material_cost)" in sql
@@ -45,6 +50,11 @@ class _Conn:
 
 
 class _DishConn:
+    async def execute(self, *args, **kwargs):
+        # gold/queries.tenant_conn 会在借到连接后 set_config 租户上下文。
+        # 假连接必须支持它 —— 不支持等于建模了一条永远不设租户的连接,
+        # 而那正是 2026-08-01 修掉的那个非确定性返空缺陷本身。
+        return None
     async def fetch(self, sql: str, *params):
         assert "restaurant_sku_forms" in sql
         assert "餐巾纸" in sql
