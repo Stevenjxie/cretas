@@ -862,7 +862,11 @@ SELECT $1::varchar AS factory_id, d.date,
     UNION
     SELECT DISTINCT date FROM fact_restaurant_wastage WHERE factory_id = $1::varchar
     UNION
-    SELECT DISTINCT date FROM fact_restaurant_stocktaking WHERE factory_id = $1::varchar
+      -- status 过滤是 2026-08-01 补的 —— 按食材的两条聚合(_AGG_STOCK_SHORTAGE_SQL /
+      -- _AGG_STOCK_SHORTAGE_COST_SQL)一直过滤 COMPLETED, 只有本表不过滤 ——
+      -- 于是「总量」和「Top N 之和」天然对不上, 且未完成/已取消的盘点单被算成损失
+      -- prod 实测 R_XMX_CHAIN 的盘亏总量 1.50 全部来自一张未完成单(COMPLETED 侧为 0)
+    SELECT DISTINCT date FROM fact_restaurant_stocktaking WHERE factory_id = $1::varchar AND status = 'COMPLETED'
   ) d
   LEFT JOIN (
     SELECT date, COUNT(*) AS cnt,
