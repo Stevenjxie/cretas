@@ -1983,6 +1983,13 @@ function buildRequest(row: SheetRow): ProcessSheetRowRequest & Record<string, un
     clientRowId: row.clientRowId,
     processCode: props.processCode,
     processOrder: props.processOrder,
+    // 2026-08-02: 把真实工序名一起报上去。
+    // 此前不带 → row_payload 里 processName 是 null → 「双出成率总览」的「工序」列
+    // 回落到 ProcessSheet.vue 的 `工序${processOrder}`, prod 实测显示「工序1/工序2/工序3」,
+    // 而同一个抽屉的 tab 上明明写着真名(出料/缓化、熟制、装箱)。
+    // ⛔ 不能用 processCode 顶替 —— 那是内部 archetype 码(xiuyou/chaoshui/...), 多对一,
+    //    正是 #2174 修掉的那种「拿标识符当名字」。processLabel 才是真名(见 props 注释)。
+    processName: props.processLabel || undefined,
     productTypeId: wfOutput?.skuId || props.productTypeId,
     batchNumber: row.batchNumber ?? undefined,
     // ⭐ 气调成品批 (legacy archetype heuristic) — overridden below by the workflow port when present.
