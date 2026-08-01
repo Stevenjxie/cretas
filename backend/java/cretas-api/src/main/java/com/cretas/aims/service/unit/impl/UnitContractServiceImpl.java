@@ -883,8 +883,8 @@ public class UnitContractServiceImpl implements UnitContractService {
     private static Map<String, String> systemAliases() {
         Map<String, String> aliases = new LinkedHashMap<>();
         alias(aliases, "mg", "mg", "毫克");
-        alias(aliases, "g", "g", "克");
-        alias(aliases, "kg", "kg", "公斤", "千克");
+        alias(aliases, "g", "g", "克", "gram", "grams");
+        alias(aliases, "kg", "kg", "公斤", "千克", "kgs", "kilogram", "kilograms");
         alias(aliases, "jin", "jin", "斤");
         alias(aliases, "t", "t", "吨");
         alias(aliases, "ml", "ml", "毫升");
@@ -893,10 +893,12 @@ public class UnitContractServiceImpl implements UnitContractService {
         alias(aliases, "cm", "cm", "厘米", "公分", "centimeter", "centimeters");
         alias(aliases, "m", "m", "米", "公尺", "meter", "meters", "metre", "metres");
         alias(aliases, "km", "km", "千米", "公里", "kilometer", "kilometers", "kilometre", "kilometres");
-        alias(aliases, "pcs", "pcs", "件", "个", "只");
+        // pc / piece / pieces / carton 来自 SkuImportServiceImpl 那张私有别名表 ——
+        // 收敛时把知识并进权威表, 而不是随表一起删掉。
+        alias(aliases, "pcs", "pcs", "件", "个", "只", "pc", "piece", "pieces");
         alias(aliases, "portion", "portion", "份");
         alias(aliases, "box", "box", "盒");
-        alias(aliases, "case", "case", "箱");
+        alias(aliases, "case", "case", "箱", "carton");
         alias(aliases, "bag", "bag", "袋");
         alias(aliases, "pack", "pack", "包");
         alias(aliases, "bottle", "bottle", "瓶");

@@ -12,16 +12,20 @@ import static org.assertj.core.api.Assertions.assertThat;
 /**
  * Excel 批量导入的单位归一必须走权威表。
  *
- * <p><b>为什么单独钉这条路</b>：SKU 的单位有四条写入路径，此前只有「单个 SKU 建/改」
- * 一条归一，导入这条自己写了一张私有别名表，而且方向相反 —— 它把计数单位折成<b>中文</b>，
- * 单 SKU 路径折成<b>英文码</b>。两股力互相撤销，所以数据永远收敛不了；
- * 光写 migration 刷数据会被下一次导入原样漂回去。
- *
- * <p>🔴 <b>更要命的是那张私有表会改错单位</b>：它写着
+ * <p>🔴 <b>此前这里是一张私有别名表，会改错单位</b>：它写着
  * {@code case "box", "case", "carton" -> "箱"}，把 {@code box} 并进了「箱」。
  * 而权威表里 {@code box}=盒、{@code case}=箱 是<b>两个不同的单位</b>
  * （名录 {@code unit_of_measurements} 亦然）。于是用 Excel 导入一个单位写
- * {@code box} 的 SKU，落库会变成「箱」—— 盒变箱，静默改错，与规范化方向无关。
+ * {@code box} 的 SKU，落库会变成「箱」—— <b>盒变箱，静默改错</b>。
+ *
+ * <p>同一张表还把「个」折成「件」，正是 #1976 明确要拆开的那种合并
+ * （一只鸡不是一件包材）。
+ *
+ * <p>⛔ <b>输出仍是中文展示名，不是英文码</b>。本方法的结果会流进
+ * {@code buildSpecification} 拼出的<b>规格串</b>（{@code 200g/盒 50盒/箱}），那是给
+ * 用户看的 —— 返回码会让规格串变成 {@code 200g/box 50box/case}，正是
+ * {@code V20261029_32} 开头写的「用户从来不认识 pcs」那个病。
+ * 存储层要不要统一成英文码是另一件事，得连展示层一起改，不在本轮。
  *
  * <p>判据分两层：真值表（行为）+ 源码扫描（防止再长出第八张私有表）。
  */
@@ -34,51 +38,58 @@ class SkuImportUnitCanonicalizationTest {
     class BoxIsNotCase {
 
         @Test
-        @DisplayName("box 归一后仍是 box —— 不能变成 case/箱")
+        @DisplayName("box 归一后是「盒」—— 不能变成「箱」")
         void boxStaysBox() {
             String actual = SkuImportServiceImpl.normalizeUnit("box");
             assertThat(actual)
                     .as("私有表把 box 并进「箱」, 导入一个 box 的 SKU 会被静默改成 case")
                     .isNotEqualTo("箱")
-                    .isNotEqualTo("case")
-                    .isEqualTo("box");
+                    .isEqualTo("盒");
         }
 
         @Test
-        @DisplayName("盒 归一成 box, 箱 归一成 case —— 两条各回各家")
+        @DisplayName("盒 与 箱 各回各家, 不互相顶替")
         void chineseNamesMapToTheirOwnCodes() {
-            assertThat(SkuImportServiceImpl.normalizeUnit("盒")).isEqualTo("box");
-            assertThat(SkuImportServiceImpl.normalizeUnit("箱")).isEqualTo("case");
+            assertThat(SkuImportServiceImpl.normalizeUnit("盒")).isEqualTo("盒");
+            assertThat(SkuImportServiceImpl.normalizeUnit("箱")).isEqualTo("箱");
         }
 
         @Test
         @DisplayName("carton 属于 case 一族, 但不能因此把 box 也拖过去")
         void cartonMapsToCaseWithoutDraggingBox() {
-            // carton 不在权威别名表里 —— 认不出就原样小写返回, 而不是猜一个。
-            // 关键是它不能让 box 跟着变成 case。
-            assertThat(SkuImportServiceImpl.normalizeUnit("box")).isEqualTo("box");
+            // carton 原本只活在私有表里, 收敛时已并进权威表 alias("case", ..., "carton")。
+            assertThat(SkuImportServiceImpl.normalizeUnit("carton")).isEqualTo("箱");
+            assertThat(SkuImportServiceImpl.normalizeUnit("case")).isEqualTo("箱");
+            // 关键: 它不能让 box 跟着变成箱。
+            assertThat(SkuImportServiceImpl.normalizeUnit("box")).isEqualTo("盒");
         }
     }
 
     @Nested
-    @DisplayName("与单 SKU 写入路径同向 —— 折成英文码")
-    class SameDirectionAsSingleSkuPath {
+    @DisplayName("英文码折成中文展示名 —— 输出要能直接进规格串给用户看")
+    class FoldsToChineseDisplayName {
 
         @Test
-        @DisplayName("中文名折成英文码")
-        void chineseFoldsToCode() {
-            assertThat(SkuImportServiceImpl.normalizeUnit("袋")).isEqualTo("bag");
-            assertThat(SkuImportServiceImpl.normalizeUnit("瓶")).isEqualTo("bottle");
-            assertThat(SkuImportServiceImpl.normalizeUnit("片")).isEqualTo("slice");
-            assertThat(SkuImportServiceImpl.normalizeUnit("张")).isEqualTo("sheet");
+        @DisplayName("英文码折成中文名 (规格串是给用户看的, 不能出现 box/case)")
+        void codesFoldToChinese() {
+            assertThat(SkuImportServiceImpl.normalizeUnit("bag")).isEqualTo("袋");
+            assertThat(SkuImportServiceImpl.normalizeUnit("bottle")).isEqualTo("瓶");
+            assertThat(SkuImportServiceImpl.normalizeUnit("slice")).isEqualTo("片");
+            // sheet 此前在权威表里只有别名没有定义, 折不动
+            assertThat(SkuImportServiceImpl.normalizeUnit("sheet")).isEqualTo("张");
+            assertThat(SkuImportServiceImpl.normalizeUnit("张")).isEqualTo("张");
         }
 
         @Test
-        @DisplayName("科学计量单位的中文/复数写法折成符号")
+        @DisplayName("科学计量单位折成符号 —— 秤上单据上都这么写, 不翻中文")
         void scientificAliasesFoldToSymbol() {
             assertThat(SkuImportServiceImpl.normalizeUnit("公斤")).isEqualTo("kg");
             assertThat(SkuImportServiceImpl.normalizeUnit("千克")).isEqualTo("kg");
             assertThat(SkuImportServiceImpl.normalizeUnit("克")).isEqualTo("g");
+            // kgs / kilogram(s) / gram(s) 原本只活在私有表里, 已并进权威表
+            assertThat(SkuImportServiceImpl.normalizeUnit("kgs")).isEqualTo("kg");
+            assertThat(SkuImportServiceImpl.normalizeUnit("kilograms")).isEqualTo("kg");
+            assertThat(SkuImportServiceImpl.normalizeUnit("grams")).isEqualTo("g");
         }
 
         @Test
@@ -87,9 +98,12 @@ class SkuImportUnitCanonicalizationTest {
             assertThat(SkuImportServiceImpl.normalizeUnit("只"))
                     .as("并进 pcs 会让「只」去顶「件」过闸")
                     .isEqualTo("只");
-            assertThat(SkuImportServiceImpl.normalizeUnit("个")).isEqualTo("个");
-            // 对照: 件 本身是 pcs 的中文名, 折过去是对的
-            assertThat(SkuImportServiceImpl.normalizeUnit("件")).isEqualTo("pcs");
+            assertThat(SkuImportServiceImpl.normalizeUnit("个"))
+                    .as("私有表把「个」折成「件」, 正是 #1976 要拆开的那种合并")
+                    .isEqualTo("个");
+            // 对照: 件 是 pcs 的中文名, 原地不动
+            assertThat(SkuImportServiceImpl.normalizeUnit("件")).isEqualTo("件");
+            assertThat(SkuImportServiceImpl.normalizeUnit("pc")).isEqualTo("件");
         }
 
         @Test

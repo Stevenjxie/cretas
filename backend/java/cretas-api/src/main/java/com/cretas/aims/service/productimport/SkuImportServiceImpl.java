@@ -15,6 +15,7 @@ import com.cretas.aims.service.unit.ProductSpecificationConversionSyncService;
 import com.cretas.aims.service.unit.UnitContractService;
 import com.cretas.aims.service.unit.UnitNormalizationResult;
 import com.cretas.aims.service.unit.UnitDimension;
+import com.cretas.aims.service.unit.UnitDisplayNames;
 import com.cretas.aims.service.unit.impl.UnitContractServiceImpl;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -597,13 +598,19 @@ public class SkuImportServiceImpl implements SkuImportService {
      * <p>用 {@code crossLanguageCode} 而非 {@code canonicalCodeOrRaw}：前者只把
      * 「同一单位的英文码与中文名」折成一个，<b>绝不合并不同的中文计量单位</b> ——
      * 只/个 保持独立（#1976：一只鸡不是一件包材）。
+     *
+     * <p>⛔ <b>输出保持中文展示名，不是英文码</b>。本方法的结果会流进
+     * {@code buildSpecification} 拼出的<b>规格串</b>（如 {@code 200g/盒 50盒/箱}），
+     * 那是给用户看的。直接返回码会让规格串变成 {@code 200g/box 50box/case} ——
+     * 正是 {@code V20261029_32} 开头写的「用户从来不认识 pcs」那个病。
+     * 存储层要不要统一成英文码是另一件事，得连展示层一起改，不在这里。
      */
     static String normalizeUnit(String value) {
         String unit = normalizeText(value);
         if (unit.isEmpty()) {
             return unit;
         }
-        return UnitContractServiceImpl.crossLanguageCode(unit);
+        return UnitDisplayNames.display(UnitContractServiceImpl.crossLanguageCode(unit));
     }
 
     private static boolean isExampleMarker(String value) {

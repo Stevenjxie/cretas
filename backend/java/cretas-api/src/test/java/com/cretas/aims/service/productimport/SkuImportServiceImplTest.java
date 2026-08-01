@@ -211,10 +211,14 @@ class SkuImportServiceImplTest {
 
     @Test
     void packagingAliasesNormalizeAndSameUnitWithDifferentFactorIsAllowed() throws Exception {
-        assertThat(SkuImportServiceImpl.normalizeUnit(" box ")).isEqualTo("箱");
+        // ⚠️ 前两条期望值改过, 因为旧期望编码的正是缺陷本身:
+        //   box → 箱: 权威表与名录里 box=盒、case=箱 是两个不同单位, 归到一起等于把盒改成箱
+        //   个  → 件: #1976 明确「一只鸡不是一件包材」, 个/只 刻意不并进 pcs
+        // 详见 SkuImportUnitCanonicalizationTest。
+        assertThat(SkuImportServiceImpl.normalizeUnit(" box ")).isEqualTo("盒");
         assertThat(SkuImportServiceImpl.normalizeUnit("case")).isEqualTo("箱");
         assertThat(SkuImportServiceImpl.normalizeUnit("carton")).isEqualTo("箱");
-        assertThat(SkuImportServiceImpl.normalizeUnit("个")).isEqualTo("件");
+        assertThat(SkuImportServiceImpl.normalizeUnit("个")).isEqualTo("个");
 
         MockMultipartFile base = validWorkbook("FG-006", "重复包装", "盒");
         byte[] changed;
@@ -222,7 +226,9 @@ class SkuImportServiceImplTest {
              ByteArrayOutputStream out = new ByteArrayOutputStream()) {
             var row = workbook.getSheet("成品").getRow(1);
             row.getCell(6).setCellValue("12");
-            row.getCell(7).setCellValue("box");
+            // ⚠️ 原本填的是 "box" —— 那是在拿「box 等于箱」当前提, 而 box=盒、case=箱 是两个单位。
+            // 本用例的意图是「别名归一后视为同一单位」, 换成真正属于箱一族的 carton, 意图不变。
+            row.getCell(7).setCellValue("carton");
             row.getCell(8).setCellValue("24");
             row.getCell(11).setCellValue("200g/盒 12盒/箱 2.4kg/箱 24盒/箱 4.8kg/箱");
             workbook.write(out);
@@ -246,7 +252,8 @@ class SkuImportServiceImplTest {
              ByteArrayOutputStream out = new ByteArrayOutputStream()) {
             var row = workbook.getSheet("成品").getRow(1);
             row.getCell(6).setCellValue("12");
-            row.getCell(7).setCellValue("box");
+            // 同上: 用 carton (箱的别名) 而不是 box (盒), 才是「完全重复的包装」
+            row.getCell(7).setCellValue("carton");
             row.getCell(8).setCellValue("12");
             workbook.write(out);
             changed = out.toByteArray();
