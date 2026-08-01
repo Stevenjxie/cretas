@@ -22,14 +22,23 @@
   · 回滚只需删掉 `source_pk` 以 `qhj_est_aux_` 开头的行, 不碰别的
   · `dim_ingredient.cost_source = 'estimated'` 再标一层
 
-## 估算方法
+## 估算方法: 按**全局比例**放大, 保留客户数据里已有的相对差异
 
-目标食材成本率 **30%**(休闲正餐常见 28-35% 的中位)。逐菜:
+⛔ **刻意不用「逐菜拉到同一个目标成本率」。** 那样做 105 道菜的毛利率会全部变成
+一模一样的 70.0%, 「毛利最低的菜品」这个问题**直接失去意义** —— 所有菜一样高。
+(第一版就是这么写的, 实测毛利榜前 10 名里 8 个显示 70.0%, 一眼假。)
 
-    补足额 = max(0, 目标成本率 × 该菜实际均价 − 当前主料成本)
+改成先算出**一个**放大系数, 让营收加权食材成本率落到目标:
 
-只补不减 —— 已经达到或超过目标的菜不动(它们的主料录得比较全)。
-明显异常的菜(主料成本 > 售价)**跳过并列出**, 那是既有脏数据, 不该被估算掩盖。
+    系数 = 目标加权成本率 / 当前加权成本率        (实测 30% / 14.9% ≈ 2.0)
+    该菜估算行 = 该菜主料成本 × (系数 − 1)
+
+这样只引入**一个**假设而不是 105 个编造的数, 且每道菜的相对高低完全保留 ——
+主料录得全的菜成本率仍然高, 录得少的仍然低, 毛利榜依然有区分度。
+
+边界: 主料成本已 ≥ 目标率的菜不动; 放大后超过售价 55% 的封顶(没有正常菜品
+超过这个数); 明显异常的菜(主料成本 > 售价)**跳过并列出**, 那是既有脏数据,
+不该被估算掩盖。
 
 ## 用法
 
@@ -66,30 +75,49 @@ logger = logging.getLogger("seed_qhj_estimated_aux_cost")
 FACTORY_ID = "RES_3101_009"
 AUX_INGREDIENT_NAME = "其他辅料(估算)"
 TARGET_FOOD_COST_RATE = Decimal("0.30")
+# 放大后单菜食材成本率的封顶 —— 正常菜品不会超过这个数, 超了多半是主料本身录错。
+_MAX_FOOD_COST_RATE = Decimal("0.55")
 _Q4 = Decimal("0.0001")
 
 # 逐菜: 主料成本 / 实际均价 / 该菜的 product_source_pk
 _DISH_SQL = """
 WITH sold AS (
     SELECT p.normalized_name,
-           SUM(i.amount)::numeric / NULLIF(SUM(i.qty), 0) AS avg_price
+           SUM(i.amount)::numeric / NULLIF(SUM(i.qty), 0) AS avg_price,
+           SUM(i.qty)::numeric                            AS qty
       FROM fact_pos_item i
       JOIN dim_product p ON p.product_id = i.product_id
-     WHERE i.factory_id = $1 AND p.factory_id = $1
+      JOIN fact_pos_transaction t ON t.id = i.transaction_id
+     -- 🔴 必须与毛利问答的窗口同口径(近 30 天)。统计全部历史会让加权系数按另一套
+     -- 销售结构算出来 —— 实测落点 76.5% 而不是瞄的 70%, 差在这里而不是参数。
+     WHERE i.factory_id = $1 AND p.factory_id = $1 AND t.factory_id = $1
+       AND t.date >= CURRENT_DATE - 30
      GROUP BY 1
     HAVING SUM(i.qty) > 0
+),
+main_cost AS (
+    -- 🔴 只算**客户自己的主料行**, 显式排除本脚本写的估算行。
+    -- 读 agg_restaurant_product_cost.food_cost 是**自引用**: 那里已经包含上一轮
+    -- 写进去的估算行, 于是第二次跑会测出「已达标」并把估算行全剪掉, 数据弹回原状。
+    -- (2026-08-01 实测踩到: 第二次跑报「当前 30.9% 已达标」, pruned 105 行。)
+    SELECT product_source_pk, SUM(line_cost)::numeric AS cost
+      FROM fact_restaurant_recipe_line
+     WHERE factory_id = $1
+       AND is_active = TRUE
+       AND source_pk NOT LIKE 'qhj_est_aux_%'
+     GROUP BY product_source_pk
 )
-SELECT c.product_source_pk,
+SELECT mc.product_source_pk,
        m.normalized_name           AS dish,
-       c.food_cost::numeric        AS main_cost,
-       s.avg_price::numeric        AS avg_price
-  FROM agg_restaurant_product_cost c
+       mc.cost                     AS main_cost,
+       s.avg_price::numeric        AS avg_price,
+       s.qty::numeric              AS qty
+  FROM main_cost mc
   JOIN dim_restaurant_cost_product m
-    ON m.factory_id = c.factory_id AND m.product_source_pk = c.product_source_pk
+    ON m.factory_id = $1 AND m.product_source_pk = mc.product_source_pk
   JOIN sold s ON s.normalized_name = m.normalized_name
- WHERE c.factory_id = $1 AND c.food_cost > 0
+ WHERE mc.cost > 0
 """
-
 
 async def _ensure_aux_ingredient(conn) -> int:
     """取(或建)那条「其他辅料(估算)」食材, 返回 ingredient_id。
@@ -123,26 +151,47 @@ async def _ensure_aux_ingredient(conn) -> int:
 async def _plan(conn):
     await conn.execute("SELECT set_config('app.factory_id', $1, true)", FACTORY_ID)
     rows = await conn.fetch(_DISH_SQL, FACTORY_ID)
-    topped, skipped_anomaly, already_ok = [], [], []
+
+    # 第一遍: 剔除异常后算**当前营收加权食材成本率**, 据此定唯一的放大系数。
+    clean, skipped_anomaly = [], []
     for r in rows:
         main = Decimal(str(r["main_cost"]))
         price = Decimal(str(r["avg_price"]))
-        if price <= 0 or main > price:
-            # 主料成本高于售价 = 既有脏数据(实测有 1 道 15 倍)。
+        qty = Decimal(str(r["qty"] or 0))
+        if price <= 0 or qty <= 0 or main > price:
+            # 主料成本高于售价 = 既有脏数据(实测「米饭」主料 ¥166.20 / 均价 ¥11.00)。
             # estimated 行不该被用来掩盖它 —— 列出来让人去查。
             skipped_anomaly.append((r["dish"], main, price))
             continue
-        target = (price * TARGET_FOOD_COST_RATE).quantize(_Q4, rounding=ROUND_HALF_UP)
-        gap = target - main
+        clean.append((r, main, price, qty))
+
+    cost_w = sum(m * q for _r, m, _p, q in clean)
+    rev_w = sum(p * q for _r, _m, p, q in clean)
+    current_rate = (cost_w / rev_w) if rev_w > 0 else Decimal(0)
+    if current_rate <= 0:
+        raise RuntimeError("当前加权食材成本率算不出来, 拒绝估算")
+    factor = TARGET_FOOD_COST_RATE / current_rate
+
+    # 第二遍: 逐菜按同一系数放大, 保留相对差异。
+    topped, already_ok, capped = [], [], []
+    for r, main, price, _qty in clean:
+        if main / price >= TARGET_FOOD_COST_RATE:
+            already_ok.append(r["dish"])          # 主料录得全的, 不动
+            continue
+        target_cost = main * factor
+        ceiling = price * _MAX_FOOD_COST_RATE
+        if target_cost > ceiling:
+            target_cost = ceiling
+            capped.append(r["dish"])
+        gap = (target_cost - main).quantize(_Q4, rounding=ROUND_HALF_UP)
         if gap <= 0:
             already_ok.append(r["dish"])
             continue
         topped.append({
             "product_source_pk": r["product_source_pk"],
-            "dish": r["dish"],
-            "main": main, "price": price, "gap": gap,
+            "dish": r["dish"], "main": main, "price": price, "gap": gap,
         })
-    return topped, skipped_anomaly, already_ok
+    return topped, skipped_anomaly, already_ok, current_rate, factor, capped
 
 
 async def _apply(conn, topped) -> Dict[str, int]:
@@ -186,9 +235,10 @@ async def _run(apply: bool) -> int:
         tx = conn.transaction()
         await tx.start()
         try:
-            topped, anomalies, already_ok = await _plan(conn)
+            topped, anomalies, already_ok, cur_rate, factor, capped = await _plan(conn)
             tot_gap = sum(t["gap"] for t in topped)
-            logger.info("目标食材成本率 %.0f%%", float(TARGET_FOOD_COST_RATE * 100))
+            logger.info("当前营收加权食材成本率 %.1f%% → 目标 %.0f%% (放大系数 %.3f)",
+                        float(cur_rate * 100), float(TARGET_FOOD_COST_RATE * 100), float(factor))
             logger.info("  需要补估算行 : %d 道菜, 合计补足 ¥%s", len(topped), tot_gap)
             logger.info("  主料已达标   : %d 道菜(不动)", len(already_ok))
             logger.info("  异常跳过     : %d 道菜(主料成本 > 售价, 属既有脏数据)",
