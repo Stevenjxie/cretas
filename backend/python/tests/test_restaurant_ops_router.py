@@ -3924,3 +3924,142 @@ def test_stocktaking_howmuch_is_deterministic_not_llm_dependent():
     # 反向: "多少" 不能把无关问句吸进盘点 —— group-1 仍要求盘点类专有词
     assert first_match("本月营收多少") != "RESTAURANT_OPS_STOCK_SHORTAGE"
     assert first_match("这个月卖了多少钱") != "RESTAURANT_OPS_STOCK_SHORTAGE"
+
+
+def test_sample_queries_never_route_to_a_different_code():
+    """SAMPLE_QUERIES 里的每条样例, 关键词匹配器要么判给它自己登记的 code, 要么没意见。
+
+    ⛔ 唯独不能判给**另一个** code —— 那说明这份表和真正决定路由的那段代码
+    互相矛盾, 而矛盾不会报错, 只会让 RAG 与推荐词往错误的 code 上引。
+
+    2026-08-01 建立本用例时全表 62 条实测: 只有「毛利最低的菜品」一条分叉
+    (登记 RECIPE_COST / 实际判 GROSS_MARGIN) —— 那正是本轮要定方向的 条目2。
+    另有 5 条实际返回 None, 是**良性**的: 关键词层没意见就把问题交给
+    T2 向量层 / T3 LLM planner, 属设计内的回落, 因此本用例只禁「判给别人」。
+    """
+    from smartbi.gold.restaurant.restaurant_ops_router import (
+        SAMPLE_QUERIES,
+        match_restaurant_ops,
+    )
+
+    diverged = []
+    for code, samples in SAMPLE_QUERIES.items():
+        for sample in samples:
+            actual = match_restaurant_ops(sample)
+            if actual is not None and actual != code:
+                diverged.append(f"{sample!r}: 登记={code} 实际={actual}")
+
+    assert not diverged, "样例登记的 code 与关键词匹配器分叉:\n  " + "\n  ".join(diverged)
+
+
+def test_margin_lowest_dish_belongs_to_gross_margin_not_recipe_cost():
+    """条目2 定向: 「毛利最低的菜品」归 GROSS_MARGIN。
+
+    三个机制一致指向 GROSS_MARGIN: 关键词匹配器 / LLM planner 的
+    metric=gross_margin 分支 / scripts/restaurant_department_audit.py 的期望。
+    而 RECIPE_COST 的 group-1 要求出现 食材成本|配方成本|菜品成本|食材费用,
+    「毛利最低的菜品」一个都不含 —— 它**从来就匹配不到** RECIPE_COST,
+    留在那份样例表里纯属 "毛利 moved to gross_margin" 那次改动的残留。
+    """
+    from smartbi.gold.restaurant.restaurant_ops_router import (
+        SAMPLE_QUERIES,
+        match_restaurant_ops,
+    )
+
+    assert match_restaurant_ops("毛利最低的菜品") == "RESTAURANT_OPS_GROSS_MARGIN"
+    assert "毛利最低的菜品" in SAMPLE_QUERIES["RESTAURANT_OPS_GROSS_MARGIN"]
+    assert "毛利最低的菜品" not in SAMPLE_QUERIES["RESTAURANT_OPS_RECIPE_COST"]
+
+    # 对照: 真正的食材成本问句仍归 RECIPE_COST, 别把方向定过头
+    assert match_restaurant_ops("食材成本最高的菜是哪些") == "RESTAURANT_OPS_RECIPE_COST"
+    assert (
+        match_restaurant_ops("全部门店最近30天哪些菜的食材成本最高")
+        == "RESTAURANT_OPS_RECIPE_COST"
+    )
+
+
+def _rank_row(pid, name, qty, revenue):
+    return {
+        "product_id": pid,
+        "dish_name": name,
+        "normalized_name": name,
+        "category": "主菜",
+        "sub_category": "单品",
+        "total_qty": float(qty),
+        "total_revenue": float(revenue),
+        "bills": 1,
+        "window_start": date(2026, 7, 1),
+        "window_end": date(2026, 7, 25),
+    }
+
+
+# 条目4 的两条「疑似缺陷」现象, 各配一条静态判据。
+#
+# 交接原文 (标着 [未验]): 「最差前 5」里第 5 名(76,773)比第 1-4 名(约 63k)都高,
+# 且同一道菜同时出现在「卖得最好」榜里。
+#
+# 实测结论: **排序键与 limit 的取法是对的, 这两条现象都不是缺陷**。
+#   - SQL (`FROM fact_pos_item ... GROUP BY p.product_id`) **没有 LIMIT**,
+#     取回窗口内全部菜品; `ORDER BY total_revenue DESC` 只是取数顺序,
+#     Python 侧随后按 total_qty 重排并**在排序之后**才切片。
+#   - 「第 5 名比前 4 名高」正是升序该有的样子 —— 最差榜第 5 名本来就是这 5 个里最大的。
+#   - 两榜重叠只在「可排菜品数 < 2×limit」时发生, 而答案里已如实披露
+#     「仅统计窗口内有销售记录的 N 道菜品」。
+
+
+def test_worst_ranking_takes_sort_key_and_limit_in_the_right_order():
+    """最差榜必须是【全量按销量升序后再切片】, 不是【先按营收截断再升序】。
+
+    夹具刻意让营收与销量**反相关**: 5 道高营收菜同时是高销量菜, 7 道低营收菜
+    才是真正的销量最差。于是——
+      - 正确实现: 最差前 5 = 销量 1..5 的低营收菜。
+      - 若 SQL 先按营收 DESC LIMIT 截断: 最差前 5 会变成销量 500+ 的高营收菜,
+        **正好复现交接里「最差榜上却是大数字」那个现象**。
+    两者答案完全不同, 所以这条用例真的能分辨。
+    """
+    rows = [_rank_row(100 + i, f"高营收菜{i}", 500 + i, 9000 + i * 100) for i in range(5)]
+    rows += [_rank_row(200 + i, f"低营收菜{i}", i + 1, 100 + i * 10) for i in range(7)]
+
+    result = asyncio.run(_r.resolve_gross_margin(
+        _gross_margin_pool(rows),
+        "RES_TEST",
+        role="restaurant_manager",
+        query="本月哪道菜卖得最差",
+    ))
+
+    text = result.answer_text
+    assert "菜品销量排行（卖得最差前 5）" in text
+    # 真正的销量最差 5 道全部在榜
+    for i in range(5):
+        assert f"低营收菜{i}" in text, f"低营收菜{i} 应在最差榜内"
+    # 高销量高营收的菜一道都不能出现在最差榜
+    for i in range(5):
+        assert f"高营收菜{i}" not in text, "最差榜混进了高销量菜 = 先截断后排序"
+
+
+def test_worst_list_is_ascending_and_does_not_overlap_best_list():
+    """① 最差榜内部按销量升序(所以第 5 名最大, 不是缺陷); ② 菜品够多时两榜不重叠。"""
+    import re
+
+    rows = [_rank_row(300 + i, f"菜{i:02d}", (i + 1) * 10, (i + 1) * 100) for i in range(12)]
+
+    def ranked_names(query):
+        result = asyncio.run(_r.resolve_gross_margin(
+            _gross_margin_pool(rows), "RES_TEST",
+            role="restaurant_manager", query=query,
+        ))
+        return [
+            line.split("—")[0].split(".", 1)[1].strip().replace("*", "")
+            for line in result.answer_text.splitlines()
+            if re.match(r"^\d+\.\s", line)
+        ]
+
+    worst = ranked_names("本月哪道菜卖得最差")
+    best = ranked_names("本月哪道菜卖得最好")
+
+    # ① 升序: 最差榜第 1 名销量最小, 第 5 名最大 —— 交接说的「第5名比前4名高」是正常的
+    assert worst == ["菜00", "菜01", "菜02", "菜03", "菜04"]
+    assert best == ["菜11", "菜10", "菜09", "菜08", "菜07"]
+
+    # ② 12 道菜 ≥ 2×5, 两榜必须无交集
+    assert not (set(worst) & set(best)), f"两榜重叠: {set(worst) & set(best)}"

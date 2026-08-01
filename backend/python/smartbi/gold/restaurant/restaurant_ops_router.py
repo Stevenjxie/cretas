@@ -190,7 +190,13 @@ SAMPLE_QUERIES: Dict[str, List[str]] = {
     "RESTAURANT_OPS_RECIPE_COST": [
         "食材成本最高的菜是哪些",
         "配方成本前 10 名",
-        "毛利最低的菜品",
+        # 2026-08-01: 「毛利最低的菜品」从这里移到 GROSS_MARGIN。它是本表里**唯一**
+        # 一条「关键词匹配器把它判给另一个 code」的样例 (实测 62 条样例, 只此 1 条
+        # 分叉; 另外 5 条不一致都是 None = 关键词无意见, 属良性回落)。
+        # 它是**过期残留**而非设计选择 —— 上面 RECIPE_COST 的模式注释自己写着
+        # 「食材成本 only — 毛利 moved to gross_margin」, 组1 要求出现
+        # 食材成本/配方成本/菜品成本/食材费用, 「毛利最低的菜品」一个都不含,
+        # 所以 RECIPE_COST 本来就永远匹配不到它, 留在这里只会污染 RAG 与推荐词。
         "哪道菜食材费用最贵",
         "菜品成本排行",
         "食材占销售额比重最高的菜",
@@ -214,6 +220,11 @@ SAMPLE_QUERIES: Dict[str, List[str]] = {
         "菜品毛利对比",
         "利润最高的菜品",
         "售价减去食材成本最多的菜",
+        # 2026-08-01: 自 RECIPE_COST 移入 (见那边注释)。三个机制一致指向这里 ——
+        # 关键词匹配器实测判 GROSS_MARGIN、LLM planner 的 metric=gross_margin
+        # 分支也落 GROSS_MARGIN、scripts/restaurant_department_audit.py 期望
+        # GROSS_MARGIN。同时补一条「最低」方向的样例, 让 RAG 见过降序以外的问法。
+        "毛利最低的菜品",
     ],
     "RESTAURANT_OPS_STORE_MARGIN": [
         "哪家店最赚钱",
