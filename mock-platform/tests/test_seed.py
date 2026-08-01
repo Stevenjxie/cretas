@@ -83,7 +83,7 @@ def test_供应链种子幂等(tmp_path):
     n1 = conn.execute("SELECT COUNT(*) c FROM recipe").fetchone()["c"]
     seed_world(conn, store_count=10)
     assert conn.execute("SELECT COUNT(*) c FROM recipe").fetchone()["c"] == n1
-    assert conn.execute("SELECT COUNT(*) c FROM ingredient").fetchone()["c"] == 13
+    assert conn.execute("SELECT COUNT(*) c FROM ingredient").fetchone()["c"] == 25
 
 
 def test_配方引用不存在的菜就报错():

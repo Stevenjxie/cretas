@@ -13,18 +13,25 @@
 `merge_cost_product_mapping` 提供了 SmartBI 侧的等价映射(已有 7 个租户在用)。
 走它就不必跨库写别人的表。
 
-🔴 **成本口径以「菜品自报成本」为权威, 不是逐行相加。**
-平台给的配方通常只列主料(实测 MOCK_REST 每道菜 2-4 种), 不是完整 BOM ——
-没有配菜、调料、损耗。直接按 qty×单价 相加得到的食材成本率只有 19%, 毛利率会
-显示 81%, 技术上答得出来但不真实。因此 line_cost 按各行原始占比摊到菜品自报
-成本, 把主料以外的部分显式分摊进去。详见 `allocate_line_costs`。
+🔴 **食材成本 = 配方逐行 qty × 单价, 不取菜品自报成本。**
+`dish.cost_cents` 是平台侧的**全成本**(含人工水电), 而本表要的是**食材**成本 ——
+两者不是一回事。2026-08-01 之前平台给的配方每道菜只列 2-4 种主料且用量偏小,
+算出的食材成本率只有 19%(毛利率 81%), 于是一度改成「按占比摊到 dish.cost_cents」
+来补偿。那个补偿是**语义错的**: 它把人工水电摊进了 `food_cost`, 成本率变成 42%
+——那是全成本率不是食材成本率。
+
+根治在上游: 平台把配方补完整(主料用量重估 + 补齐配菜/调料/油, 22→72 行)之后,
+逐行相加本身就落在 32.3%(毛利率 67.7%), 正是休闲餐饮的正常区间。所以这里直接
+`line_cost = qty × unit_price`, 三个事实(用量/单价/line_cost)完全自洽, 不再有
+「line_cost ≠ 用量×单价」那个疙瘩。
+
 """
 from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
 from decimal import Decimal, ROUND_HALF_UP
-from typing import Dict, Iterable, List, Mapping, Sequence, Tuple
+from typing import Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -40,57 +47,47 @@ class AllocatedLine:
     is_main_ingredient: bool
 
 
-def allocate_line_costs(
-    dish_cost_cents: Mapping[str, int],
+def compute_line_costs(
     ingredient_unit_price_cents: Mapping[str, int],
     recipe: Iterable[Tuple[str, str, int]],
+    known_dishes: Optional[Iterable[str]] = None,
 ) -> List[AllocatedLine]:
-    """把配方行的 line_cost 按原始占比摊到菜品自报成本。
+    """逐行算食材成本: `line_cost = qty(千分之一) / 1000 × 单价(分) / 100`。
 
-    这是**菜品成本口径的唯一实现** —— `smartbi/scripts/seed_mock_rest_menu.py`
+    这是**食材成本口径的唯一实现** —— `smartbi/scripts/seed_mock_rest_menu.py`
     也 import 它。两处各写一份的话, 首次 seed 与后续 connector 导入会算出不同的
     line_cost, 而症状是「成本表数字每次同步都变一点」, 没人看得出是口径分叉。
 
-    分摊后逐菜求和必须**恰好**等于菜品自报成本: 舍入残差补到该菜金额最大的一行,
-    否则十几道菜累计能漂出几分钱, 而毛利正是拿它逐行减出来的。
+    ⛔ 悬空引用**硬失败**而不是跳过: 配方指向不存在的菜/食材, 写进去就是永远算不出
+    成本的行, 而表现只是「毛利榜少了一道菜」—— 没人会察觉。
     """
+    known = set(known_dishes) if known_dishes is not None else None
     by_dish: Dict[str, List[Tuple[str, int]]] = {}
     for dish_code, ingredient_code, qty_milli in recipe:
+        if known is not None and dish_code not in known:
+            raise ValueError(f"配方指向未知菜品 {dish_code!r}")
         by_dish.setdefault(dish_code, []).append((ingredient_code, qty_milli))
 
     out: List[AllocatedLine] = []
     for dish_code in sorted(by_dish):
-        if dish_code not in dish_cost_cents:
-            # 禁降级: 配方指向一道不存在的菜, 写进去就是永远算不出成本的悬空行。
-            raise ValueError(f"配方指向未知菜品 {dish_code!r}")
-        target = Decimal(dish_cost_cents[dish_code]) / Decimal(100)
-        raw: List[Tuple[str, int, Decimal]] = []
+        rows: List[Tuple[str, int, Decimal]] = []
         for ingredient_code, qty_milli in by_dish[dish_code]:
             if ingredient_code not in ingredient_unit_price_cents:
                 raise ValueError(f"配方指向未知食材 {ingredient_code!r}")
             unit_price = Decimal(ingredient_unit_price_cents[ingredient_code]) / Decimal(100)
-            raw.append((ingredient_code, qty_milli,
-                        Decimal(qty_milli) / Decimal(1000) * unit_price))
-        total_raw = sum(r[2] for r in raw)
-        if total_raw <= 0:
-            raise ValueError(f"菜品 {dish_code} 的配方原始成本为 0, 无法分摊")
-
-        scaled = [
-            (r[2] / total_raw * target).quantize(_Q4, rounding=ROUND_HALF_UP)
-            for r in raw
-        ]
-        drift = target.quantize(_Q4) - sum(scaled)
-        if drift != 0:
-            biggest = max(range(len(scaled)), key=lambda i: scaled[i])
-            scaled[biggest] += drift
-
-        main_idx = max(range(len(raw)), key=lambda i: raw[i][2])
-        for idx, (ingredient_code, qty_milli, _) in enumerate(raw):
+            cost = (Decimal(qty_milli) / Decimal(1000) * unit_price).quantize(
+                _Q4, rounding=ROUND_HALF_UP)
+            rows.append((ingredient_code, qty_milli, cost))
+        if sum(r[2] for r in rows) <= 0:
+            # 全 0 的配方会让这道菜显示 100% 毛利, 比没有配方更糟。
+            raise ValueError(f"菜品 {dish_code} 的配方食材成本为 0")
+        main_idx = max(range(len(rows)), key=lambda i: rows[i][2])
+        for idx, (ingredient_code, qty_milli, cost) in enumerate(rows):
             out.append(AllocatedLine(
                 dish_code=dish_code,
                 ingredient_code=ingredient_code,
                 qty_milli=qty_milli,
-                line_cost=scaled[idx],
+                line_cost=cost,
                 is_main_ingredient=idx == main_idx,
             ))
     return out
@@ -164,10 +161,10 @@ async def write_menu(
     stats["dim_restaurant_cost_product"] = mapped
 
     # ── 3. 配方行(分摊后的 line_cost) ─────────────────────────────────
-    allocated = allocate_line_costs(
-        {d.dish_code: d.cost_cents for d in dishes},
+    allocated = compute_line_costs(
         {i.ingredient_code: i.unit_price_cents for i in ingredients},
         [(r.dish_code, r.ingredient_code, r.qty_milli) for r in recipe_lines],
+        known_dishes=[d.dish_code for d in dishes],
     )
     unit_by_code = {i.ingredient_code: i.unit for i in ingredients}
     written = 0
@@ -246,6 +243,6 @@ async def sync_menu(pool, adapter, factory_id: str) -> Dict[str, int]:
 
 
 __all__ = [
-    "allocate_line_costs", "recipe_source_pk", "write_menu", "sync_menu",
+    "compute_line_costs", "recipe_source_pk", "write_menu", "sync_menu",
     "AllocatedLine",
 ]
