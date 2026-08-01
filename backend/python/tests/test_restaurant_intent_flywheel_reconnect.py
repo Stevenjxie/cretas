@@ -352,7 +352,7 @@ async def test_promoted_route_still_enforces_the_deterministic_time_gate():
     assert planner.call_count == 0
     assert spec.clarification_needed is True
     assert spec.window_label == "全部历史"
-    assert "本月" in spec.clarification_options
+    assert any("本月" in o for o in spec.clarification_options)
 
 
 async def test_promoted_route_never_matches_a_substring():
