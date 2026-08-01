@@ -2314,11 +2314,33 @@ public class ProcessingServiceImpl implements ProcessingService {
         return analysis;
     }
     // 辅助方法
+    /**
+     * 质检员显示名。
+     *
+     * <p>解析不出(用户已删/ID 为空)时返回 {@code null} —— <b>不编造</b>「未知」之类的假名字,
+     * 由前端回落显示 ID。「诚实-null」比「假装有名字」好: 前者用户知道要去查 ID,
+     * 后者会让人以为系统真的记录了这么一个人。
+     */
+    private String resolveInspectorName(Long inspectorId) {
+        if (inspectorId == null) {
+            return null;
+        }
+        return userRepository.findById(inspectorId)
+                .map(com.cretas.aims.entity.User::getFullName)
+                .filter(name -> name != null && !name.isBlank())
+                .orElse(null);
+    }
+
     private Map<String, Object> convertInspectionToMap(QualityInspection inspection) {
         Map<String, Object> map = new HashMap<>();
         map.put("id", inspection.getId());
         map.put("productionBatchId", inspection.getProductionBatchId());
         map.put("inspectorId", inspection.getInspectorId());
+        // 质检记录列表把 inspectorId 这个**数字主键**直接摆给用户看(列名就叫「质检员ID」)。
+        // 同一个文件里 buildQualityDetails 早就有解析姓名的写法(userRepository.findById →
+        // getFullName), 只是列表这处没用 —— 又是「一处做对、另一处漏了」。
+        // 解析不出时**不编造**: 留 null, 由前端回落显示 ID(总比显示空白强, 也不假装有名字)。
+        map.put("inspectorName", resolveInspectorName(inspection.getInspectorId()));
         map.put("inspectionDate", inspection.getInspectionDate());
         map.put("sampleSize", inspection.getSampleSize());
         map.put("passCount", inspection.getPassCount());

@@ -332,7 +332,16 @@ function showDetail(row: TableRow) {
         </el-table-column>
         <el-table-column prop="notes" label="批次/备注" min-width="180" show-overflow-tooltip />
         <el-table-column prop="sampleSize" label="抽样数" width="90" align="center" />
-        <el-table-column prop="inspectorId" label="质检员ID" width="100" align="center" />
+        <!--
+          原来这一列叫「质检员ID」且直接显示数字主键 —— 给用户看数据库标识。
+          后端已补 inspectorName(解析不出时为 null, 不编造假名字), 这里优先显示姓名,
+          回落到 ID 时带上「#」前缀, 让人一眼看出这是编号不是名字。
+        -->
+        <el-table-column label="质检员" width="120" align="center">
+          <template #default="{ row }">
+            {{ row.inspectorName || (row.inspectorId != null ? `#${row.inspectorId}` : '-') }}
+          </template>
+        </el-table-column>
         <el-table-column prop="result" label="检测结果" width="100" align="center">
           <template #default="{ row }">
             <el-tag :type="isPassResult(row.result) ? 'success' : (row.result === 'CONDITIONAL' ? 'warning' : 'danger')" size="small">
@@ -448,7 +457,9 @@ function showDetail(row: TableRow) {
         <el-descriptions-item label="质检编号">{{ detailData.id ? detailData.id.substring(0, 8).toUpperCase() : '-' }}</el-descriptions-item>
         <el-descriptions-item label="批次/备注">{{ detailData.notes || '-' }}</el-descriptions-item>
         <el-descriptions-item label="抽样数">{{ detailData.sampleSize ?? '-' }}</el-descriptions-item>
-        <el-descriptions-item label="质检员ID">{{ detailData.inspectorId ?? '-' }}</el-descriptions-item>
+        <el-descriptions-item label="质检员">
+          {{ detailData.inspectorName || (detailData.inspectorId != null ? `#${detailData.inspectorId}` : '-') }}
+        </el-descriptions-item>
         <el-descriptions-item label="检测结果">
           <el-tag :type="isPassResult(detailData.result) ? 'success' : (detailData.result === 'CONDITIONAL' ? 'warning' : 'danger')" size="small">
             {{ getResultLabel(detailData.result) }}
