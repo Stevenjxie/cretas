@@ -56,6 +56,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.anyLong;
@@ -1139,6 +1140,78 @@ class BomRecipeDraftLifecycleJpaTest {
                 .toList();
         assertThat(alive.size()).isEqualTo(1);
         assertThat(alive.get(0).getStandardQuantity()).isEqualByComparingTo("1.25");
+    }
+
+
+    private BomRecipeItem insertLegacyDuplicate(BomRecipe draft, BomRecipeItem skeleton, String factoryId) {
+        BomRecipeItem duplicate = new BomRecipeItem();
+        duplicate.setRecipeId(draft.getId());
+        duplicate.setFactoryId(factoryId);
+        duplicate.setMaterialTypeId(skeleton.getMaterialTypeId());
+        duplicate.setMaterialName(skeleton.getMaterialName());
+        duplicate.setUnit(skeleton.getUnit());
+        duplicate.setStandardQuantity(new BigDecimal("1.25"));
+        duplicate.setMaterialCategory("AUXILIARY");
+        duplicate.setSortOrder(99);
+        return itemRepository.saveAndFlush(duplicate);
+    }
+
+    /**
+     * 槽已被别的行占着时, 同物料的重复行必须删得掉。
+     *
+     * <p>删除闸的本意(见 {@code assertNotRequiredWorkflowInputByMaterial} 的 Javadoc)是
+     * 「这一行还<b>唯一代表</b>着一个必需投入时不许删」, 但它从来没检查过那个槽是不是
+     * <b>已经被另一行带身份地占着</b>。于是历史遗留的重复行永远删不掉 ——
+     * <b>系统自己造出来的行, 它又不让你删</b>, 用户在界面上没有任何出路。
+     *
+     * <p>2026-08-01 六膳门实测: BOM 里三个辅料各有两行, 带端口那行用量为空卡住领料,
+     * 而没端口的那行删不了, 整条生产链断在这里。
+     */
+    @Test
+    @DisplayName("槽已被占时重复行可删 —— 否则历史脏数据永远清不掉")
+    void deletesDuplicateRowWhenSlotAlreadyOccupied() {
+        ProductType product = saveProduct("DUP-DEL", "盒", new BigDecimal("500"));
+        BomRecipe draft = service.ensureDraft(product.getFactoryId(), product.getId());
+        BomRecipeItem skeleton =
+                itemRepository.findByRecipeIdOrderBySortOrderAsc(draft.getId()).getFirst();
+        // 阳性对照: 骨架行确实带着完整槽身份, 否则本用例测的不是要测的东西
+        assertThat(skeleton.getWorkflowInputPortId()).isNotBlank();
+
+        Long duplicateId = insertLegacyDuplicate(draft, skeleton, product.getFactoryId()).getId();
+
+        assertThatCode(() -> service.deleteItem(product.getFactoryId(), duplicateId))
+                .as("槽已被骨架行占着, 这一行只是重复行, 删掉不会让必需投入消失")
+                .doesNotThrowAnyException();
+
+        List<BomRecipeItem> alive = itemRepository
+                .findByRecipeIdOrderBySortOrderAsc(draft.getId()).stream()
+                .filter(i -> i.getDeletedAt() == null)
+                .toList();
+        assertThat(alive.size()).isEqualTo(1);
+        assertThat(alive.get(0).getWorkflowInputPortId())
+                .as("留下的必须是占着槽的那行, 不能把骨架删了留重复行")
+                .isNotBlank();
+    }
+
+    /** 反向断言: 槽没人占时仍然要拦 —— 那一行是该投入在 BOM 里的唯一代表, 删了投入就凭空消失。 */
+    @Test
+    @DisplayName("反向: 槽无人占据时仍拦住删除 —— 不能把必需投入删没")
+    void stillRefusesDeleteWhenSlotIsNotOccupied() {
+        ProductType product = saveProduct("SOLE-DEL", "盒", new BigDecimal("500"));
+        BomRecipe draft = service.ensureDraft(product.getFactoryId(), product.getId());
+        BomRecipeItem skeleton =
+                itemRepository.findByRecipeIdOrderBySortOrderAsc(draft.getId()).getFirst();
+
+        // 抹掉骨架行的槽身份 —— 模拟「旧界面把生成的骨架换成了一条无绑定行」, 此时槽无人占据
+        skeleton.setWorkflowMaterialNodeId(null);
+        skeleton.setWorkflowInputPortId(null);
+        skeleton.setWorkflowEdgeId(null);
+        Long soleId = itemRepository.saveAndFlush(skeleton).getId();
+
+        assertThatThrownBy(() -> service.deleteItem(product.getFactoryId(), soleId))
+                .as("它是该必需投入在 BOM 里的唯一代表, 删了投入就没了 —— 这道闸必须继续拦")
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining("必需投入槽");
     }
 
 }
