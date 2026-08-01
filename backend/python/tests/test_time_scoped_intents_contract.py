@@ -47,3 +47,51 @@ def test_需要时间范围的intent其resolver必须真的接受时间():
 def test_排班建议不在需要时间范围的名单里():
     """守住这次的具体修复 —— 它读的是配置表, 没有时间维度可言。"""
     assert "RESTAURANT_OPS_STAFFING_ADVICE" not in _TIME_SCOPED_INTENTS
+
+
+# ── 门店范围: 同一族的第二条 ────────────────────────────────────────
+
+def test_接不住任何范围的resolver不得被门店澄清拦下():
+    """签名只有 (pool, factory_id) 的 resolver, 任何澄清它都接不住。
+
+    2026-08-01 实测: 「上个月人效怎么样」被 `_apply_store_scope_guard` 拦下来问
+    「你想查看哪家门店的人效情况？」, 而 `resolve_staffing_advice(pool, factory_id)`
+    **一个门店参数都没有** —— 用户选了哪家店都不会改变答案。
+
+    ⚠️ 它**时灵时不灵**: 守卫是靠 `requested_metrics ∩ {sales_volume, gross_margin,
+    revenue, orders}` 触发的, 而「人效」的指标由 LLM 填 —— 填成 orders 那轮才拦。
+    所以这不是稳定缺陷而是**确定性覆盖的缺口**, 只能靠静态判据守。
+
+    ⛔ 判据刻意**只管「只有两个参数」这一类**, 不推广到「签名里没有 store_id」——
+    `GROSS_MARGIN` / `SALES_SUMMARY` 也没有 store_id 形参, 但它们收 `query` /
+    `date_range`, 门店范围经别的机制生效, 是**有意**被门店澄清拦下的。
+    把判据写宽会把这两个正当的也报出来。
+    """
+    import inspect
+
+    from smartbi.gold.restaurant.restaurant_intent import (
+        _STORE_SCOPE_FREE_INTENTS,
+        _TIME_SCOPED_INTENTS,
+    )
+    from smartbi.gold.restaurant.restaurant_ops_router import _RESOLVERS
+
+    offenders = []
+    for code, resolver in sorted(_RESOLVERS.items()):
+        params = list(inspect.signature(resolver).parameters)
+        if len(params) > 2:
+            continue                       # 收得到别的东西, 不在本判据范围
+        if code not in _STORE_SCOPE_FREE_INTENTS:
+            offenders.append(f"{code} → {resolver.__name__}{tuple(params)} 不在 FREE 名单")
+        if code in _TIME_SCOPED_INTENTS:
+            offenders.append(f"{code} → {resolver.__name__}{tuple(params)} 却在 TIME_SCOPED")
+    assert not offenders, (
+        "这些 resolver 只收 (pool, factory_id), 接不住任何澄清, 却会被拦下来问范围 ——\n"
+        "用户答了也不会改变答案:\n  " + "\n  ".join(offenders)
+    )
+
+
+def test_排班建议不被门店澄清拦下():
+    """守住这次的具体修复。"""
+    from smartbi.gold.restaurant.restaurant_intent import _STORE_SCOPE_FREE_INTENTS
+
+    assert "RESTAURANT_OPS_STAFFING_ADVICE" in _STORE_SCOPE_FREE_INTENTS
