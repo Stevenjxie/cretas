@@ -29,6 +29,7 @@ import com.cretas.aims.service.factory.WarehouseResolver;
 import com.cretas.aims.service.inventory.TransferDiffService;
 import com.cretas.aims.service.inventory.TransferService;
 import com.cretas.aims.service.unit.UnitContractService;
+import com.cretas.aims.service.workflow.SelfApprovalPolicy;
 import com.cretas.aims.service.workflow.WorkflowEngineService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -101,6 +102,13 @@ public class TransferServiceImpl implements TransferService {
     /** 调拨提交及审批只使用统一 OA 实例，不在调拨详情维护第二套审批状态机。 */
     @Autowired(required = false)
     private WorkflowEngineService workflowEngine;
+
+    /**
+     * 「发起人能否审批自己的单」的唯一判定处 —— 与销售单、采购单共用同一份语义。
+     * 此前本处无条件禁止自审, 而采购单有私有例外, 同一条规则两种行为。
+     */
+    @Autowired(required = false)
+    private SelfApprovalPolicy selfApprovalPolicy;
 
     @Autowired(required = false)
     private ApprovalWorkflowService approvalWorkflowService;
@@ -708,10 +716,11 @@ public class TransferServiceImpl implements TransferService {
             return transfer;
         }
         if (actorId != null && actorId.equals(instance.getInitiatedBy())
-                && !isFactorySuperAdmin(factoryId, actorId, actorRole)) {
+                && (selfApprovalPolicy == null
+                    || !selfApprovalPolicy.allowsSelfApproval(factoryId, instance, actorId, actorRole))) {
             throw new BusinessException(403, "发起人不能审批自己的调拨单")
                     .withCode("TRANSFER_SELF_APPROVAL_FORBIDDEN")
-                    .withHint("请由当前 OA 节点授权的其他审批人处理");
+                    .withHint("请由当前 OA 节点授权的其他审批人处理，或在 Canvas 中明确将发起人配置为该节点审批人");
         }
         if (actorId != null && actorId.equals(instance.getInitiatedBy())) {
             // 自审批留痕: 少了第二双眼睛, 至少要在日志里留下"谁自己批了自己"
@@ -823,17 +832,6 @@ public class TransferServiceImpl implements TransferService {
         return userRepository.findByFactoryIdAndRoleCode(factoryId, SUPER_ADMIN_ROLE).stream()
                 .anyMatch(user -> Boolean.TRUE.equals(user.getIsActive())
                         && Objects.equals(user.getId(), initiatorUserId));
-    }
-
-    /** 发起人是否为本厂工厂总监 —— 审批动作侧的自审批例外判据。 */
-    private boolean isFactorySuperAdmin(String factoryId, Long userId, String actorRole) {
-        if (userId == null) return false;
-        if (SUPER_ADMIN_ROLE.equalsIgnoreCase(actorRole)) return true;
-        // actorRole 由调用方传入, 可能为空; 以库里的角色为准, 不让缺失的入参把例外吞掉
-        return userRepository != null
-                && userRepository.findByFactoryIdAndRoleCode(factoryId, SUPER_ADMIN_ROLE).stream()
-                .anyMatch(user -> Boolean.TRUE.equals(user.getIsActive())
-                        && Objects.equals(user.getId(), userId));
     }
 
     private void projectWorkflowState(InternalTransfer transfer,
