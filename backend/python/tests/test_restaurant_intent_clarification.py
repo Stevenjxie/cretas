@@ -27,6 +27,18 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
+def _asked_slots(spec):
+    """反问覆盖了哪些槽位 —— 判据用它, 不要断言问句字面值。
+
+    2026-08-01: 门店和时间都缺时改为**一次问全**(合成追问), 问句字符串因此变了,
+    但「时间被问了」「门店被问了」这些**语义**没变。断言语义而不是字面, 用例才
+    不会在措辞调整时集体碎掉。
+    """
+    from smartbi.gold.restaurant.restaurant_intent import _slots_of_clarification
+    return _slots_of_clarification(spec.clarification_question)
+
+
+
 from smartbi.gold.restaurant.restaurant_intent import (
     STORE_SCOPE_CLARIFICATION_QUESTION,
     TIME_CLARIFICATION_QUESTION,
@@ -424,7 +436,7 @@ async def test_time_guard_clarification_button_resumes_original_query():
         )
 
     assert first is not None
-    assert first.clarification_question == TIME_CLARIFICATION_QUESTION
+    assert "time" in _asked_slots(first)
     assert first.resolver_query_seed == original_query
     assert ("F_TIME", "sess-time") in pool.pending
 
@@ -529,7 +541,7 @@ async def test_natural_store_question_keeps_full_semantics_after_time_button(
         )
 
     assert first is not None
-    assert first.clarification_question == TIME_CLARIFICATION_QUESTION
+    assert "time" in _asked_slots(first)
     assert first.store_slot == store_name
     assert first.requested_metrics == tuple(requested_metrics)
 
@@ -590,7 +602,7 @@ async def test_explicit_multi_store_ranking_time_button_never_needs_t3():
 
         assert first is not None
         assert first.planner_authority == "explicit_slots"
-        assert first.clarification_question == TIME_CLARIFICATION_QUESTION
+        assert "time" in _asked_slots(first)
         assert first.store_scope == "multiple"
         assert ("DEMO_REST", "sess-explicit-multi-store") in pool.pending
 
@@ -1096,9 +1108,9 @@ async def test_time_then_store_scope_clarifications_chain_without_losing_query()
             session_key="sess-chain",
         )
 
-    assert first.clarification_question == TIME_CLARIFICATION_QUESTION
+    assert "time" in _asked_slots(first)
     assert first.planner_authority == "promoted_exact"
-    assert second.clarification_question == STORE_SCOPE_CLARIFICATION_QUESTION
+    assert "store" in _asked_slots(second)
     assert second.planner_authority == "promoted_exact"
     assert second.store_options == ("东城店", "西城店", "南城店")
     assert third.clarification_needed is False
@@ -1157,15 +1169,15 @@ async def test_dependent_optimization_cannot_escape_pending_named_dish_time_scop
             session_key="sess-named-dish-pending",
         )
 
-    assert first.clarification_question == TIME_CLARIFICATION_QUESTION
+    assert "time" in _asked_slots(first)
     assert second.is_clarification_continuation is True
-    assert second.clarification_question == TIME_CLARIFICATION_QUESTION
+    assert "time" in _asked_slots(second)
     assert second.dish_slot == dish_name
     assert second.requested_metrics == ("sales_volume",)
     assert second.analysis_action == "optimize"
     assert second.intent == "RESTAURANT_OPS_GROSS_MARGIN"
     assert third.is_clarification_continuation is True
-    assert third.clarification_question == STORE_SCOPE_CLARIFICATION_QUESTION
+    assert "store" in _asked_slots(third)
     assert third.dish_slot == dish_name
     assert third.requested_metrics == ("sales_volume",)
     assert third.analysis_action == "optimize"
@@ -1290,7 +1302,7 @@ async def test_read_action_view_then_store_choice_compiles_dish_ranking(
         )
 
     assert second.clarification_needed is True
-    assert second.clarification_question == STORE_SCOPE_CLARIFICATION_QUESTION
+    assert "store" in _asked_slots(second)
     assert third.clarification_needed is False
     assert third.planner_authority == "explicit_action_read_choice"
     assert third.store_scope == "all"
@@ -1366,7 +1378,7 @@ async def test_read_action_view_then_time_override_then_store_keeps_new_time():
         )
 
     assert second.clarification_needed is True
-    assert second.clarification_question == STORE_SCOPE_CLARIFICATION_QUESTION
+    assert "store" in _asked_slots(second)
     assert third.clarification_needed is False
     assert third.planner_authority == "explicit_action_read_choice"
     assert third.window_label == "本月"
@@ -1461,7 +1473,7 @@ async def test_explicit_period_comparison_survives_store_button_without_t3(
             session_key="sess-period-compare",
         )
 
-    assert first.clarification_question == STORE_SCOPE_CLARIFICATION_QUESTION
+    assert "store" in _asked_slots(first)
     assert first.planner_authority == "explicit_comparison_slots"
     assert second.clarification_needed is False
     assert second.is_clarification_continuation is True
@@ -1618,8 +1630,8 @@ async def test_reviewed_exact_concrete_store_button_survives_t3_outage():
             session_key="sess-store-button",
         )
 
-    assert first.clarification_question == TIME_CLARIFICATION_QUESTION
-    assert second.clarification_question == STORE_SCOPE_CLARIFICATION_QUESTION
+    assert "time" in _asked_slots(first)
+    assert "store" in _asked_slots(second)
     assert third.clarification_needed is False
     assert third.planner_authority == "promoted_exact_contract_repair"
     assert third.intent == "RESTAURANT_OPS_STORE_MARGIN"
@@ -1696,8 +1708,8 @@ async def test_semantic_first_dish_time_store_buttons_survive_t3_outage():
             semantic_first=True,
         )
 
-    assert first.clarification_question == TIME_CLARIFICATION_QUESTION
-    assert second.clarification_question == STORE_SCOPE_CLARIFICATION_QUESTION
+    assert "time" in _asked_slots(first)
+    assert "store" in _asked_slots(second)
     assert second.planner_authority == "trusted_context"
     assert second.store_options == (
         "青花椒新世界新丸中心店",
@@ -1741,7 +1753,7 @@ async def test_reviewed_exact_prefixed_time_continues_to_store_button_without_t3
             session_key="sess-prefixed-time",
         )
 
-    assert first.clarification_question == STORE_SCOPE_CLARIFICATION_QUESTION
+    assert "store" in _asked_slots(first)
     assert first.store_options == ("东城店", "西城店")
     assert second.clarification_needed is False
     assert second.planner_authority == "promoted_exact"
@@ -1771,7 +1783,7 @@ async def test_reviewed_exact_button_with_extra_instruction_falls_back_fail_clos
             session_key="sess-exact-guard",
         )
 
-    assert first.clarification_question == TIME_CLARIFICATION_QUESTION
+    assert "time" in _asked_slots(first)
     assert second.intent == ""
     assert second.planner_authority == "llm_unavailable"
     assert second.planned_intents == ()
