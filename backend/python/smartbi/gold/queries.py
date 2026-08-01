@@ -1523,6 +1523,7 @@ async def dish_margin(
         unit_cost = _as_decimal(r["unit_cost"])
         if selling_price is None or unit_cost is None or selling_price <= 0:
             continue
+        ingredients = _normalize_ingredients(r["ingredients"])
         gross_profit = selling_price - unit_cost
         gross_margin_pct = ((gross_profit / selling_price) * Decimal("100")).quantize(
             Decimal("0.01"),
@@ -1539,7 +1540,13 @@ async def dish_margin(
                 float(Decimal(str(r["monthly_sales_quantity"])))
                 if r["monthly_sales_quantity"] is not None else None
             ),
-            "ingredients": _normalize_ingredients(r["ingredients"]),
+            "ingredients": ingredients,
+            # 配方里**登记了几种食材** —— 这是唯一可核查的"成本口径覆盖度"信号。
+            # 单份成本 = 已登记食材之和; 没登记的辅料/调料不在里面, 于是毛利率偏高。
+            # 实测 RES_3101_009 的 85.1% 毛利率就是这么来的 (食材成本率仅 7-15.7%,
+            # 配方只列主料)。⛔ 不去猜一个"真实成本"补上 —— 没有权威实际成本时
+            # 编一个等于伪造财务数据。把登记数摆出来, 让读的人自己判断。
+            "ingredient_count": len(ingredients),
         })
 
     top = sorted(items, key=lambda item: item["gross_profit"], reverse=True)[:int(top_n)]
@@ -1547,11 +1554,20 @@ async def dish_margin(
     return {
         "factory_id": factory_id,
         "dish_count": len(items),
-        # FactBook only accepts dish-margin facts carrying this marker from
-        # the deterministic Gold producer; arbitrary caller dictionaries stay
-        # untrusted even if their numeric shape looks plausible.
+        # ⚠️ 名字会骗人: 这**不是**「成本口径完整」的判断, 而是 FactBook 用来认
+        # 「这批事实来自确定性 Gold 生产者」的**信任标记** —— 任意调用方递来的字典
+        # 即使数字形状像模像样也不被采信。它对「配方有没有把料列全」一无所知。
+        # 真正可核查的覆盖度信号是每道菜的 ingredient_count 与下面的 min/median。
         "cost_basis_complete": bool(items),
         "cost_basis": "restaurant_sku_forms",
+        # 成本口径覆盖度 (可核查, 不是断言): 配方登记食材数的最小值与中位数。
+        # 只登记 1-3 种料的菜, 其「毛利率」必然偏高 —— 缺的不是利润, 是没登记的料。
+        "ingredient_count_min": (
+            min(i["ingredient_count"] for i in items) if items else None
+        ),
+        "ingredient_count_median": (
+            sorted(i["ingredient_count"] for i in items)[len(items) // 2] if items else None
+        ),
         "top_margin": top,
         "low_margin": low,
     }
