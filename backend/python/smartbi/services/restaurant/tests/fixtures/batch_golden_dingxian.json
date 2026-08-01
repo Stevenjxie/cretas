@@ -294,7 +294,7 @@
             "plainImpact": "义乌稠城商圈 的雨天、高温、寒潮或预警会影响堂食、外卖和排队意愿。",
             "severity": "medium",
             "source": "和风天气",
-            "title": "天气影响可实时接入",
+            "title": "天气影响待接入",
             "type": "weather"
           },
           {
@@ -325,7 +325,7 @@
             "officialUrl": "https://dev.qweather.com/docs/api/",
             "refreshCadence": "小时级",
             "source": "和风天气",
-            "status": "已配置"
+            "status": "待配置"
           },
           {
             "bestUse": "识别附近演唱会、体育比赛、亲子演出、展览带来的临时客流。",
@@ -687,7 +687,12 @@
         {
           "decisionUse": "决定当天波动是否先按外部原因处理，避免误判店长执行。",
           "platform": "商圈/活动/天气",
-          "whatItSays": "已有外部信号可解释异常日。"
+          "whatItSays": "已有外部信号可解释异常日；商场日客流约 21800；估算进店约 828"
+        },
+        {
+          "decisionUse": "决定先改哪个线上入口、团购套餐、门口核销和会员沉淀，而不是平均用力。",
+          "platform": "美团/点评/抖音/POS渠道漏斗",
+          "whatItSays": "缺少平台曝光、访问、券核销、订单和评分拆分。"
         },
         {
           "decisionUse": "决定是否调供应商、改备货、查报损赠品，而不是只做销售动作。",
@@ -764,7 +769,7 @@
             "POS/订单",
             "大众点评/顾客评价"
           ],
-          "why": "已有外部信号，可以先判断当天异常是否受天气、商场活动、展会或节假日影响。"
+          "why": "客流画像: 商场日客流约 21800；估算进店约 828"
         },
         {
           "decision": "本周先解决顾客体验里最容易影响转化的点。",
@@ -834,6 +839,7 @@
         "月盘点回答钱有没有漏掉；大众点评回答顾客为什么不满意；菜品/POS 回答应该推什么或砍什么；外部信号回答当天异常是不是外部原因。",
         "公开活动和公众号只能解释外部可能性，不能替代商场真实客流、楼层客流和客户授权经营数据。"
       ],
+      "demoActionScenarios": [],
       "finalAnswer": "今天先不要因为一天波动就直接打折或怪店长。 现有数据只能做 demo 方向展示；但要承诺利润金额，还必须有 POS、月盘点和财务同时闭环。 老板看这个模块时，重点不是看分数，而是按今天、本周、本月三层动作拍板。",
       "moduleName": "老板最终决策简报",
       "nextDataToAskCustomer": [
@@ -869,52 +875,58 @@
       "ownerDecisionPage": {
         "analysisDimensions": [
           {
-            "bossQuestion": "看日/周/月变化，判断问题是短期波动还是持续下滑。",
-            "currentFinding": "缺连续日级订单时，只能看汇总，无法解释哪天掉了。",
+            "bossQuestion": "最近是变好还是变差？是偶尔一天差，还是连续几周差？",
+            "currentFinding": "现在只能看总数，还不知道具体是哪天掉了。",
             "dimension": "营收趋势",
-            "nextStep": "补近 90 天日订单，固定输出最近 4 周环比。"
+            "nextStep": "补近 90 天每天订单，固定看最近 4 周。"
           },
           {
-            "bossQuestion": "判断午市、晚市、低峰分别该怎么排班、备货和促销。",
-            "currentFinding": "缺开单时间聚合，无法判断午晚市哪个时段弱。",
+            "bossQuestion": "午市弱还是晚市弱？低峰要不要做套餐？",
+            "currentFinding": "还不知道订单发生在几点，所以看不出午市还是晚市弱。",
             "dimension": "时段结构",
-            "nextStep": "按小时聚合订单、营收、客流和客单。"
+            "nextStep": "按小时看订单、营收、客流和客单。"
           },
           {
-            "bossQuestion": "判断该推单人餐、双人餐还是多人聚餐套餐。",
-            "currentFinding": "缺人数结构，套餐建议容易拍脑袋。",
+            "bossQuestion": "主要是一个人吃、两个人吃，还是多人聚餐？",
+            "currentFinding": "还缺人数结构，套餐建议容易拍脑袋。",
             "dimension": "桌型/人数结构",
-            "nextStep": "按客流人数聚合订单、营收和客单。"
+            "nextStep": "按用餐人数看订单、营收和客单。"
           },
           {
-            "bossQuestion": "判断引流菜、加购菜、风险菜、低动销菜分别怎么处理。",
-            "currentFinding": "缺 SKU 明细时无法做菜单工程。",
+            "bossQuestion": "该主推什么？哪些菜能带加购？哪些菜先别推？",
+            "currentFinding": "还缺菜品明细，看不出该推哪道菜。",
             "dimension": "菜品结构",
-            "nextStep": "补菜品销量、售价、成本、搭配关系。"
+            "nextStep": "补每道菜的销量、售价、成本和搭配关系。"
           },
           {
-            "bossQuestion": "判断顾客不满意在服务、出品、环境、价格还是排队。",
-            "currentFinding": "缺评论原文时只能猜体验问题。",
+            "bossQuestion": "顾客到底在夸什么、骂什么？骂的是菜、服务、环境还是价格？",
+            "currentFinding": "还缺评论原文，只能猜体验问题。",
             "dimension": "顾客评价",
             "nextStep": "继续拉点评/美团/抖音评论原文和低分原因。"
           },
           {
-            "bossQuestion": "判断美团点评、抖音、微信、会员、商场券各自该承担什么任务。",
-            "currentFinding": "缺渠道拆分时无法判断预算该投哪里。",
+            "bossQuestion": "钱主要从美团、点评、抖音、微信还是商场券来？预算该先花在哪？",
+            "currentFinding": "还缺渠道拆分，看不出预算该投哪里。",
             "dimension": "渠道结构",
-            "nextStep": "按渠道聚合订单、券核销、实收和复购。"
+            "nextStep": "按渠道看订单、券核销、实收和复购。"
           },
           {
-            "bossQuestion": "判断是单店执行问题，还是商圈/区域/品牌共性。",
-            "currentFinding": "缺同品牌门店对比，容易误罚单店。",
+            "bossQuestion": "商场和楼层有没有人？这些人有没有路过门口？最后有没有进店？",
+            "currentFinding": "商场日客流约 21800；估算进店约 828",
+            "dimension": "外部客流画像",
+            "nextStep": "按天补商场总客流、餐饮楼层客流、门口路过、进店人数、来源地和客群。"
+          },
+          {
+            "bossQuestion": "这是这家店的问题，还是商圈、城市、品牌一起变差？",
+            "currentFinding": "还缺同品牌门店对比，容易误判单店。",
             "dimension": "连锁对比",
-            "nextStep": "补同城同品牌同周期门店数据。"
+            "nextStep": "补同城、同品牌、同周期门店数据。"
           },
           {
-            "bossQuestion": "判断利润漏在采购、BOM、报损、赠品、盘点差异还是菜品结构。",
-            "currentFinding": "缺 BOM、采购和月盘点，不能承诺利润改善金额。",
+            "bossQuestion": "钱有没有漏在采购、损耗、赠品、盘点差异或菜品结构里？",
+            "currentFinding": "还缺 BOM、采购和月盘点，所以现在不能承诺能多赚多少钱。",
             "dimension": "利润闭环",
-            "nextStep": "补采购入库、月底盘点、理论耗用/BOM、报损赠品。"
+            "nextStep": "补采购入库、月底盘点、理论耗用/BOM、报损和赠品。"
           }
         ],
         "dataStillMissing": [
@@ -924,31 +936,89 @@
           "缺 菜品/POS SKU: 没有菜品和成本就无法做菜单工程，只能泛泛说提升销售。",
           "缺 连锁门店对比: 没有连锁对比就不能判断是不是店长问题、商圈问题还是品牌共性。"
         ],
+        "decisionFocus": {
+          "primaryActionType": "data_request",
+          "primaryProblem": "关键数据不足",
+          "shouldRecommendPackage": false,
+          "signals": [
+            "缺 POS/订单: 没有 POS 就只能讲环境，不能判断门店自己有没有接住机会。",
+            "缺 月盘点/库存/BOM: 没有月盘点就不能下结论说毛利掉是菜卖错了还是货漏了。",
+            "缺 大众点评/顾客评价: 没有评论原文就不能把体验问题定位到具体动作。"
+          ],
+          "why": "现在还不能给老板下硬动作，先补齐订单、菜品、点评和成本数据。"
+        },
         "decisionPlan": {
           "thisMonth": "月底用月盘点、BOM、采购和财务把利润漏点对上，再决定菜单、备货和供应商动作。",
           "thisWeek": [
-            "先补近 90 天订单明细和点评原文，把周趋势、时段、桌型、菜品和差评原因合到一页。",
-            "每天复盘一次订单数、客单、差评关键词和主推菜转化，不等月底才看报表。"
+            "先补近 90 天订单明细和评论原文。先搞清楚哪天弱、哪个时段弱、哪道菜有问题。",
+            "每天只盯 4 个数：订单数、客单、差评关键词、主推菜卖了多少。不要等月底才发现问题。"
           ],
           "today": "今天只做异常归因：外部活动/天气/商场变化 + 堂食外卖 + 排队评价，先不急着打折。"
         },
         "doFirst": [
-          "先补近 90 天订单明细和点评原文，把周趋势、时段、桌型、菜品和差评原因合到一页。"
+          "先补近 90 天订单明细和评论原文。先搞清楚哪天弱、哪个时段弱、哪道菜有问题。"
         ],
         "doNotDo": [
-          "不要先做全店打折，先判断问题是客流、转化、菜品、体验还是成本。",
-          "没有月盘点、采购和 BOM 前，不要承诺毛利改善金额，也不要把利润问题全归因到销售。"
+          "不要一上来就全店打折。先看清楚到底是没人来、来了不买、菜不稳，还是成本漏了。",
+          "没有采购、BOM 和月盘点前，不要承诺能省多少钱，也不要把利润问题全怪到销售。"
         ],
         "expectedImpact": {
-          "caveat": "补齐订单明细后，可按每日多接单数直接估算周营收机会。",
-          "plainText": "当前缺少可用客单，暂不估算金额，只给动作优先级。"
+          "caveat": "补齐订单明细后，就可以按每天多几单来估一周能多卖多少钱。",
+          "plainText": "现在缺少客单数据，先不估金额。先给老板排动作顺序。"
         },
-        "headline": "鼎鲜火锅 义乌分公司 需要把 POS、点评、菜品、外部信号和成本闭环放在同一页看，先定动作再看图表。",
+        "headline": "鼎鲜火锅 义乌分公司 先把订单、点评、菜品、商场活动和成本放一起看。老板要先知道该做什么，不是先看一堆图。",
         "keyEvidence": [
-          "当前证据不足，先补 POS、点评、菜品和外部信号。"
+          "商场日客流约 21800；估算进店约 828"
         ],
-        "plainDiagnosis": "当前数据足够做经营方向判断，但还需要日级订单、点评原文、BOM 和月盘点才能做利润闭环。",
-        "title": "老板决策页"
+        "missingDataInPlainWords": [
+          "还缺每天订单明细，所以只能看大方向，不能准确说是哪天、哪个时段掉了。",
+          "还缺采购、BOM 和盘点，所以现在只能讲营收动作，不能承诺利润能省多少。",
+          "还缺评论原文，所以只能看到销售表现，看不到顾客为什么不买单。",
+          "还缺菜品明细，所以不能准确判断该主推哪道菜、下掉哪道菜。",
+          "还缺其他门店对比，所以不能判断是这家店的问题，还是整个区域都这样。"
+        ],
+        "packageDecision": {
+          "candidates": [],
+          "dataNeeded": [
+            "菜品销量",
+            "菜品售价或收入",
+            "菜品成本/BOM",
+            "一起购买的搭配记录"
+          ],
+          "status": "not_enough_data",
+          "title": "现在不建议给套餐结论",
+          "whyNow": "缺少足够的菜品销量、成本或搭配数据。"
+        },
+        "packageRecommendations": {
+          "candidates": [],
+          "dataNeeded": [
+            "菜品销量",
+            "菜品售价或收入",
+            "菜品成本/BOM",
+            "一起购买的搭配记录"
+          ],
+          "methodology": "先拿菜品销量、售价、成本和搭配关系，再算小套餐。",
+          "status": "needs_menu_data"
+        },
+        "plainDiagnosis": "现在可以先判断经营方向，但还不能承诺能多赚多少钱。还需要每天订单、评论原文、菜品成本和月盘点。",
+        "platformChannelSnapshot": {
+          "available": false
+        },
+        "title": "老板今天先看这个",
+        "trafficPersona": {
+          "available": true,
+          "captureRate": null,
+          "estimatedStoreVisits": 828.0,
+          "mallFootfall": 21800.0,
+          "mallVsLastWeekPct": null,
+          "peerCaptureRate": null,
+          "plainText": "商场日客流约 21800；估算进店约 828",
+          "restaurantFloorFootfall": null,
+          "storeOrdersVsTrafficPct": null,
+          "storefrontPassersby": null,
+          "topNeed": null,
+          "topSegment": null
+        }
       },
       "plainPurpose": "把月盘点、POS、菜品、大众点评和外部活动天气合成老板能直接拍板的动作。",
       "sourceDecisionMap": [
@@ -1171,7 +1241,7 @@
         "diagnostics",
         "benchmark_alerts"
       ],
-      "generatedAt": "2026-07-01T16:12:46",
+      "generatedAt": "2026-08-01T10:05:58",
       "headline": "鼎鲜火锅 义乌分公司 current 营收 ¥731,048",
       "headlineColor": "yellow",
       "kpiCostRigidity": 0.560961801990723,

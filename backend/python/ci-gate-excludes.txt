@@ -54,7 +54,6 @@ smartbi/services/restaurant/tests/test_health_check_void_rate.py
 # 也可能是**没人看见的真缺陷** (本 PR 已经这样捞出两个: 件→只 / portGroups 全被拒)。
 smartbi/services/materialized_analytics/tests/test_llm_materializer.py   # 'router:INSIGHTS' != 'qwen3-max'
 smartbi/services/materialized_analytics/tests/test_query_router.py       # 'top_n_by_dim' != 'dish_sales_top_n'
-smartbi/services/restaurant/tests/test_batch_regression_golden.py        # golden 快照不一致
 tests/agent_runtime/test_real_gold_contracts.py                          # daily_trend 断言
 tests/test_price_strip_kpi_pilot.py                                      # RbacForbiddenException role=warehouse
 tests/test_smartbi_api.py                                                # httpx.ConnectError (要活服务)
