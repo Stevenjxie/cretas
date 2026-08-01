@@ -361,7 +361,16 @@ _TIME_SCOPED_INTENTS = frozenset({
     "RESTAURANT_OPS_STORE_MARGIN",
     "RESTAURANT_OPS_SALES_SUMMARY",
     "RESTAURANT_OPS_TREND_ANALYSIS",
-    "RESTAURANT_OPS_STAFFING_ADVICE",
+    # ⛔ 2026-08-01 移除 RESTAURANT_OPS_STAFFING_ADVICE。
+    # 它的 resolver 是 `resolve_staffing_advice(pool, factory_id)` —— **一个日期
+    # 参数都没有**, 读的是 `fact_staffing_daypart` 这张配置表(没有时间维度)。
+    # 留在这里的后果: 「哪个时段人手不够」被拦下问「你想看哪个时间范围？」,
+    # 而用户认真回答「最近30天」之后拿到的答案与回答「本月」**一模一样** ——
+    # 澄清问了一个答案根本不受其影响的问题, 比不问更糟(它让用户以为自己在控制口径)。
+    #
+    # ⚠️ 这个缺陷此前一直被**另一个**缺失挡着: 人效配置表是空的, resolver 先返回
+    # 「还没有配置人效数据」, 澄清那层根本走不到。配上数据之后才浮出来。
+    # `test_time_scoped_intents_contract.py` 现在按 resolver 签名静态守住这条。
 })
 
 
