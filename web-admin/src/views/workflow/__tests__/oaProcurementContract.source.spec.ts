@@ -28,10 +28,23 @@ describe('procurement unified OA contract', () => {
     expect(pending).toContain('expectedNodeId: row.currentNodeId');
     expect(pending).toContain('idempotencyKey: `oa-${action.toLowerCase()}-${row.instanceId}-${row.currentNodeId}`');
     expect(pending).toContain("operatingId.value = row.instanceId");
-    // 盘点已接入统一 OA —— 这条断言先前漏同步, 在 main 上就是红的
-    expect(pending).toContain(
-      "new Set(['PURCHASE_ORDER', 'SALES_ORDER', 'INVENTORY_TRANSFER', 'INVENTORY_ADJUSTMENT'])",
-    );
+    // 可操作域 = 后端 executeDomainAction 里有分支的域。
+    // ⚠️ 这里刻意不断言整个 new Set([...]) 字面量: 那种写法在加盘点那次就漏同步红过一次
+    //   (见本行原注释), 加 BUDGET 时又红了一次 —— 它锁的是源码格式而不是意图。
+    //   改为逐个断言成员, 新增域只加一行, 且不会被换行/顺序变化假红。
+    const actionable = pending.match(
+      /ACTIONABLE_MODULE_CODES\s*=\s*new Set\(\[([\s\S]*?)\]\)/,
+    )?.[1] ?? '';
+    for (const code of [
+      'PURCHASE_ORDER', 'SALES_ORDER', 'INVENTORY_TRANSFER', 'INVENTORY_ADJUSTMENT',
+    ]) {
+      expect(actionable, `${code} 应在可操作白名单里 (后端已有对应 adapter 分支)`)
+        .toContain(code);
+    }
+    // 反向断言: BUDGET 通过 = 执行月度关账(影响所有工厂), 拆到独立 PR 等终审。
+    // 在后端 executeDomainAction 接上 BUDGET 分支之前放进白名单, 只会让用户点了撞 422。
+    expect(actionable, 'BUDGET 关账尚未接入, 放进白名单会让待办点了就撞 422')
+      .not.toContain('BUDGET');
     // 筛选下拉改为 v-for MODULE_LABELS: 下拉与表格列共用同一份中文名
     expect(pending).toContain("SALES_ORDER: '销售订单'");
     expect(pending).toContain('v-for="(label, code) in MODULE_LABELS"');
