@@ -750,6 +750,18 @@ public class WorkflowInstanceController {
             }
             return sb.toString();
         }
+        if ("BUDGET".equals(moduleCode)) {
+            // 会计期间的 context 本来就带 year / month(AccountingPeriodServiceImpl#tryStartWorkflow
+            // 写入), 所以不必回查 accounting_periods —— 与上面 INVENTORY_TRANSFER 同样直接读 context。
+            // 此前这里没有分支, 客户看到的是裸 UUID「BUDGET b67922a2-…」。
+            Map<String, Object> context = inst.getContextJson();
+            Object year = context == null ? null : context.get("year");
+            Object month = context == null ? null : context.get("month");
+            if (year != null && month != null) {
+                return String.format("%s 年 %s 月 会计期间", year, month);
+            }
+            return "会计期间 " + bizId;
+        }
         // generic fallback
         return (moduleCode == null ? "业务单据" : moduleCode) + " " + bizId;
     }
