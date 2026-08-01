@@ -8,6 +8,7 @@ from food_kb.api.manual_chat import (
     FACTORY_SYSTEM_PROMPT,
     ManualChatRequest,
     SYSTEM_PROMPT,
+    _FACTORY_BYPRODUCT_LIFECYCLE_ANSWER,
     _FACTORY_REPORTING_SOURCE_SHORTAGE_ANSWER,
     _FACTORY_RN_READONLY_ANSWER,
     _MATERIAL_PACKAGING_ANSWER,
@@ -17,6 +18,7 @@ from food_kb.api.manual_chat import (
     _REPORTING_UNIT_YIELD_ANSWER,
     _RESTAURANT_CONTEXT_SCOPE_ANSWER,
     _RESTAURANT_DATA_AVAILABILITY_ANSWER,
+    _RESTAURANT_DEPARTMENT_STOCKTAKE_ANSWER,
     _RESTAURANT_FLYWHEEL_GOVERNANCE_ANSWER,
     _RESTAURANT_GUIDE_BOUNDARY_ANSWER,
     _RESTAURANT_METRIC_ENTITY_ANSWER,
@@ -28,6 +30,7 @@ from food_kb.api.manual_chat import (
     _WORKFLOW_ACTUAL_IO_ANSWER,
     _build_scope_prompt,
     _needs_bom_workflow_sequence_guard,
+    _needs_factory_byproduct_lifecycle_guard,
     _needs_factory_reporting_source_shortage_guard,
     _needs_factory_rn_readonly_guard,
     _needs_material_packaging_guard,
@@ -37,6 +40,7 @@ from food_kb.api.manual_chat import (
     _needs_reporting_unit_yield_guard,
     _needs_restaurant_context_scope_guard,
     _needs_restaurant_data_availability_guard,
+    _needs_restaurant_department_stocktake_guard,
     _needs_restaurant_flywheel_governance_guard,
     _needs_restaurant_guide_boundary_guard,
     _needs_restaurant_metric_entity_guard,
@@ -77,7 +81,8 @@ def test_factory_prompt_keeps_restaurant_analysis_out_of_ai_assist():
     assert "每行实收必须大于 0 且等于该行报工数量" in FACTORY_SYSTEM_PROMPT
     assert "禁止回答“两者无依赖”" in FACTORY_SYSTEM_PROMPT
     assert "原料包装换算在“原料类型字典”" in FACTORY_SYSTEM_PROMPT
-    assert "都不配置主产出/联产品/副产品角色" in FACTORY_SYSTEM_PROMPT
+    assert "BOM“副产”页签只声明稳定的副产 SKU 与预计量" in FACTORY_SYSTEM_PROMPT
+    assert "副产抵扣只按盘点实际数量 × 盘点时人工确认单价" in FACTORY_SYSTEM_PROMPT
     assert "BOM 至少需要一项主原料" in FACTORY_SYSTEM_PROMPT
     assert "没有辅料或包材本身不阻止激活" in FACTORY_SYSTEM_PROMPT
     assert "AI 候选无论 0 处还是多处都进入人工审核" in FACTORY_SYSTEM_PROMPT
@@ -96,10 +101,12 @@ def test_restaurant_prompt_keeps_session_scope_and_evidence_honest():
     assert "明确起止日期按自然日闭区间" in SYSTEM_PROMPT
     assert "当前繁体支持不得扩大成全句转换" in SYSTEM_PROMPT
     assert "只有呈现层实际返回对应表格" in SYSTEM_PROMPT
-    assert "当前月报固定 5 节" in SYSTEM_PROMPT
+    assert "当前月报固定 9 节" in SYSTEM_PROMPT
     assert "计划预警是同一 sealed QuerySpec" in SYSTEM_PROMPT
     assert "客如云风格 connector" in SYSTEM_PROMPT
     assert "损耗金额按 `wastage_cost` 排序" in SYSTEM_PROMPT
+    assert "盘点亏损默认按同一窗口的 `shortage_cost` 回答金额" in SYSTEM_PROMPT
+    assert "四部门与金额权限" in SYSTEM_PROMPT
     assert "POS 流水或后厨事实任一类即可进入餐饮问答" in SYSTEM_PROMPT
     assert "导览助手不替用户计算毛利、损耗" in SYSTEM_PROMPT
 
@@ -395,11 +402,47 @@ def test_restaurant_flywheel_questions_use_the_reviewed_governance_contract():
     )
 
 
-def test_restaurant_monthly_report_matches_the_current_five_section_template():
-    assert "当前固定为 5 节" in _RESTAURANT_MONTHLY_REPORT_ANSWER
+def test_restaurant_monthly_report_matches_the_current_nine_section_template():
+    assert "当前固定为 9 节" in _RESTAURANT_MONTHLY_REPORT_ANSWER
     assert "每一节都显式使用“全部门店”范围" in _RESTAURANT_MONTHLY_REPORT_ANSWER
-    assert "已经从月报模板摘除" in _RESTAURANT_MONTHLY_REPORT_ANSWER
-    assert "损耗排行；" not in _RESTAURANT_MONTHLY_REPORT_ANSWER
+    assert "损耗、领料和盘点 resolver 现在都按月报请求的明确时间窗取数" in (
+        _RESTAURANT_MONTHLY_REPORT_ANSWER
+    )
+    assert "损耗排行、领料用量、盘点差异" in _RESTAURANT_MONTHLY_REPORT_ANSWER
+
+
+def test_factory_byproduct_questions_use_one_reviewed_lifecycle():
+    equivalent_questions = (
+        "副产怎样建 SKU、在 BOM 声明、报工落生产仓并由盘点确认抵扣？",
+        "肥油怎么从物料建档经过配方和报工进入生产仓？",
+        "碎骨副产物料的盘点单价和成本抵扣为什么还没确认？",
+    )
+    assert all(_needs_factory_byproduct_lifecycle_guard(q) for q in equivalent_questions)
+    assert not _needs_factory_byproduct_lifecycle_guard("副产是什么？")
+    assert "原料类型字典建立带“副产”标记的物料 SKU" in (
+        _FACTORY_BYPRODUCT_LIFECYCLE_ANSWER
+    )
+    assert "盘点实际数量 × 盘点时人工确认单价" in (
+        _FACTORY_BYPRODUCT_LIFECYCLE_ANSWER
+    )
+
+
+def test_restaurant_department_and_stocktake_questions_share_current_contract():
+    equivalent_questions = (
+        "四部门驾驶舱分别看什么，盘点亏损金额怎样切换时间范围？",
+        "老板、店长、厨师长和采购对运营市场财务人事有哪些权限？",
+        "盘亏多少钱，能切本月和最近7天吗？",
+    )
+    assert all(
+        _needs_restaurant_department_stocktake_guard(q)
+        for q in equivalent_questions
+    )
+    assert not _needs_restaurant_department_stocktake_guard("今天营业额多少？")
+    assert "四部门驾驶舱" in _RESTAURANT_DEPARTMENT_STOCKTAKE_ANSWER
+    assert "不能把 kg、L 等不同单位相加" in (
+        _RESTAURANT_DEPARTMENT_STOCKTAKE_ANSWER
+    )
+    assert "中央角色/金额权限闸" in _RESTAURANT_DEPARTMENT_STOCKTAKE_ANSWER
 
 
 def test_restaurant_plan_alert_questions_use_queryspec_fail_closed_contract():
@@ -500,7 +543,8 @@ def test_latest_f006_sop_is_a_deployable_manual_source():
     assert "采购包装单位 → 库存基本单位" in current_sop
     assert "多产出实际报工与成本分摊合同" in current_sop
     assert "多产出完工入库逐行合同" in current_sop
-    assert "工序 Cell、Workflow 和 BOM 都不配置主产出" in current_sop
+    assert "BOM“副产”页签只声明可回收副产 SKU 与预计量" in current_sop
+    assert "不进投入成本池" in current_sop
     assert "没有辅料或包材本身不是阻塞" in current_sop
     assert "只在本次报工表单要求填写各实际产出的分摊比例" in current_sop
     assert "所有照片都必须进入人工审核" in current_sop
@@ -859,6 +903,12 @@ async def test_bom_workflow_publication_answer_never_calls_the_llm(monkeypatch):
             "f006-production-full-chain-sop.md",
         ),
         (
+            "副产怎样建 SKU、在 BOM 声明、报工落生产仓并由盘点确认抵扣？",
+            "factory",
+            _FACTORY_BYPRODUCT_LIFECYCLE_ANSWER,
+            "f006-production-full-chain-sop.md",
+        ),
+        (
             "门店菜品不同月份继续追问时怎么保持时间范围？",
             "restaurant",
             _RESTAURANT_CONTEXT_SCOPE_ANSWER,
@@ -916,6 +966,12 @@ async def test_bom_workflow_publication_answer_never_calls_the_llm(monkeypatch):
             "损耗问题也会显示换范围按钮吗？",
             "restaurant",
             _RESTAURANT_SCOPE_ACTION_ANSWER,
+            "restaurant-full-chain-sop.html",
+        ),
+        (
+            "四部门驾驶舱分别看什么，盘点亏损金额怎样切换时间范围？",
+            "restaurant",
+            _RESTAURANT_DEPARTMENT_STOCKTAKE_ANSWER,
             "restaurant-full-chain-sop.html",
         ),
     ],
