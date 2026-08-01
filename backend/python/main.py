@@ -524,6 +524,8 @@ async def lifespan(app: FastAPI):
 
             import httpx as _httpx_p
 
+            from time import monotonic as _monotonic_p
+
             from smartbi.api import platform_callback as _platform_callback_mod
             from smartbi.config import get_pg_pool as _get_pool_p
             from smartbi.gold.live_refresh import (
@@ -537,6 +539,8 @@ async def lifespan(app: FastAPI):
             )
             from smartbi.ingestion.platforms.framework import sync_all, sync_ops_all
             from smartbi.ingestion.platforms.keruyun import KeruyunAdapter
+            from smartbi.ingestion.platforms.menu_keruyun import KeruyunMenuAdapter
+            from smartbi.ingestion.platforms.menu_writer import sync_menu as _sync_menu_p
             from smartbi.ingestion.platforms.ops_keruyun import KeruyunOpsAdapter
             from smartbi.ingestion.platforms.ops_writer import write_ops
             from smartbi.ingestion.platforms.writer import write_orders
@@ -591,6 +595,26 @@ async def lifespan(app: FastAPI):
                             ops_adapter = KeruyunOpsAdapter(
                                 base_url, _app_key, _app_secret, client,
                             )
+                            # 菜单主数据同上。节律独立: 它是主数据不是流水,
+                            # 每分钟拉一次纯属浪费, 但也不能不拉 —— 改了配方
+                            # 而成本表不更新, 毛利会一直是旧的。
+                            menu_adapter = KeruyunMenuAdapter(
+                                base_url, _app_key, _app_secret, client,
+                            )
+                            _raw_menu_interval = os.getenv(
+                                "PLATFORM_MENU_SYNC_INTERVAL_SECONDS", "21600")
+                            try:
+                                _menu_interval = int(_raw_menu_interval)
+                                if _menu_interval <= 0:
+                                    raise ValueError(_raw_menu_interval)
+                            except ValueError:
+                                logger.error(
+                                    "[platform-sync] PLATFORM_MENU_SYNC_INTERVAL_SECONDS"
+                                    "=%r 非法, 回退 21600s", _raw_menu_interval)
+                                _menu_interval = 21600
+                            # 首轮立即拉一次: 服务重启后成本表可能是空的(全新租户),
+                            # 等 6 小时才第一次同步等于把缺口留一整个上午。
+                            menu_cadence = _SlowCadence_p(_menu_interval)
                             while True:
                                 try:
                                     pool = await _get_pool_p()
@@ -621,6 +645,36 @@ async def lifespan(app: FastAPI):
                                     except Exception:
                                         logger.exception(
                                             "[platform-sync] 后厨同步失败, 订单侧继续")
+
+                                    # ── 菜单主数据 (2026-08-01) ─────────
+                                    # 菜品成本/食材单价/配方是**静态主数据**,
+                                    # 不跟着订单每分钟拉 —— 走慢档(默认 6h)。
+                                    # 它决定 agg_restaurant_product_cost, 缺了
+                                    # 财务四问里三问会答成「毛利前 0 名」。
+                                    # 同样单独一层 try: 菜单拉挂了不该连累订单。
+                                    try:
+                                        _now = _monotonic_p()
+                                        if menu_cadence.due(_now):
+                                            # 开跑**之前**记账: 失败也消耗一个周期,
+                                            # 否则持续失败会退化成每 60s 重试一次,
+                                            # 正是慢档要避免的雪崩(见 SlowCadence)。
+                                            menu_cadence.mark(_now)
+                                            menu = await _sync_menu_p(
+                                                pool, menu_adapter,
+                                                factory_id=factory_id)
+                                            logger.info("[platform-sync] menu %s", menu)
+                                            # 主数据变了必须重算成本表, 否则
+                                            # 改了配方而毛利还是旧的。
+                                            menu_gold = await _materialize_ops_gold_p(
+                                                pool, factory_id)
+                                            logger.info(
+                                                "[platform-sync] menu gold %s", menu_gold)
+                                    except _asyncio_p.CancelledError:
+                                        raise
+                                    except Exception:
+                                        logger.exception(
+                                            "[platform-sync] 菜单主数据同步失败, "
+                                            "订单侧继续 —— 成本表会停在上一次快照")
 
                                     if gold_enabled:
                                         # 单独一层 try: Gold 刷不动**不能**连累拉取 ——
