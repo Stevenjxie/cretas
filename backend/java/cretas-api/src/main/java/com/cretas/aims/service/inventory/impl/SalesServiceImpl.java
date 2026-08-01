@@ -632,8 +632,7 @@ public class SalesServiceImpl implements SalesService {
             item.setTaxRate(effectiveTaxRate);
             item.setDiscountRate(itemDTO.getDiscountRate() != null ? itemDTO.getDiscountRate() : BigDecimal.ZERO);
             item.setRemark(itemDTO.getRemark());
-            item.setSpecification(itemDTO.getSpecification());
-            item.setBoxQuantity(itemDTO.getBoxQuantity());
+            applyLineDisplaySnapshots(itemDTO, item);
             item.setSourceWarehouseCode(normalizeSourceWarehouseCode(
                     factoryId, itemDTO.getSourceWarehouseCode()));
             item.setProcessingMode(request.getProcessingMode());
@@ -4097,6 +4096,23 @@ public class SalesServiceImpl implements SalesService {
         item.setPackagingBaseUnit(selection.spec().getBaseUnit());
         item.setPackagingFactor(selection.spec().getConversionFactor());
         if (request.getQuantity() != null) item.setBoxQuantity(request.getQuantity());
+    }
+
+    /**
+     * 显式行字段优先；RN 只提交结构化包装规格时，保留上一步解析出的规格名和箱数。
+     * 旧实现无条件写入 null，导致 Web 端看不到规格/箱数快照。
+     */
+    static void applyLineDisplaySnapshots(
+            CreateSalesOrderRequest.SalesOrderItemDTO request,
+            SalesOrderItem item) {
+        if (request.getSpecification() != null && !request.getSpecification().isBlank()) {
+            item.setSpecification(request.getSpecification());
+        } else if (item.getSpecification() == null && item.getPackagingSpecName() != null) {
+            item.setSpecification(item.getPackagingSpecName());
+        }
+        if (request.getBoxQuantity() != null) {
+            item.setBoxQuantity(request.getBoxQuantity());
+        }
     }
 
     private void applyPackagingSelection(

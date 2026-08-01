@@ -30,6 +30,7 @@ import type { DropdownOption } from '../../components/report/SearchableDropdown'
 import type { WSHomeStackParamList } from '../../types/navigation';
 import type { WorkReportSubmitRequest, HourEntry } from '../../types/workReporting';
 import { formatDate } from '../../utils/formatters';
+import { isValidTime, normalizeTimeInput } from '../../utils/timeInput';
 
 type DynamicReportRoute = RouteProp<WSHomeStackParamList, 'DynamicReport'>;
 
@@ -366,6 +367,18 @@ export default function DynamicReportScreen() {
       Alert.alert('提示', '请填写商品名称');
       return;
     }
+    if (isProgress && (!outputQuantity || Number(outputQuantity) <= 0)) {
+      Alert.alert('提示', '请输入大于 0 的产量');
+      return;
+    }
+    if (!isProgress && totalHours <= 0) {
+      Alert.alert('提示', '请填写大于 0 的工时');
+      return;
+    }
+    if (!isProgress && ((startTime && !isValidTime(startTime)) || (endTime && !isValidTime(endTime)))) {
+      Alert.alert('提示', '时间请按 00:00–23:59 填写');
+      return;
+    }
 
     const data: WorkReportSubmitRequest = {
       reportType,
@@ -381,6 +394,7 @@ export default function DynamicReportScreen() {
       productionEndTime: endTime || undefined,
       hourEntries: !isProgress ? [hourEntry] : undefined,
       totalWorkers: !isProgress ? totalWorkers : undefined,
+      totalWorkMinutes: !isProgress ? Math.round(totalHours * 60) : undefined,
     };
 
     const result = await submitReport(data);
@@ -399,7 +413,7 @@ export default function DynamicReportScreen() {
       ]);
     }
   }, [reportType, processCategory, productName, outputQuantity, goodQuantity,
-      defectQuantity, operationVolume, startTime, endTime, hourEntry, totalWorkers, selectedBatch, submitReport, navigation, factoryId, workerId]);
+      defectQuantity, operationVolume, startTime, endTime, hourEntry, totalWorkers, totalHours, selectedBatch, submitReport, navigation, factoryId, workerId]);
 
   const handleSaveDraft = useCallback(() => {
     const { addDraft } = useDraftReportStore.getState();
@@ -757,7 +771,10 @@ export default function DynamicReportScreen() {
                   style={styles.input}
                   placeholder="HH:mm"
                   value={startTime}
-                  onChangeText={setStartTime}
+                  onChangeText={(value) => setStartTime(normalizeTimeInput(value))}
+                  keyboardType="number-pad"
+                  maxLength={5}
+                  testID="hours-start-time"
                 />
               </View>
               <View style={[styles.fieldGroup, { flex: 1, marginLeft: 8 }]}>
@@ -766,7 +783,10 @@ export default function DynamicReportScreen() {
                   style={styles.input}
                   placeholder="HH:mm"
                   value={endTime}
-                  onChangeText={setEndTime}
+                  onChangeText={(value) => setEndTime(normalizeTimeInput(value))}
+                  keyboardType="number-pad"
+                  maxLength={5}
+                  testID="hours-end-time"
                 />
               </View>
             </View>

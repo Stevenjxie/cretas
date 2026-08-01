@@ -317,14 +317,41 @@ export function showConfirm(
  * @returns 错误消息字符串
  */
 export function getErrorMsg(error: unknown): string {
-  if (error instanceof Error) {
-    return error.message;
-  }
   if (typeof error === 'string') {
     return error;
   }
-  if (error && typeof error === 'object' && 'message' in error) {
-    return String((error as { message: unknown }).message);
+
+  if (error && typeof error === 'object') {
+    const response = 'response' in error ? error.response : undefined;
+    if (response && typeof response === 'object' && 'data' in response) {
+      const data = response.data;
+      if (data && typeof data === 'object') {
+        const message = 'message' in data && typeof data.message === 'string'
+          ? data.message.trim()
+          : '';
+        const actionHint = 'actionHint' in data && typeof data.actionHint === 'string'
+          ? data.actionHint.trim()
+          : '';
+        if (message && actionHint && !message.includes(actionHint)) {
+          return `${message}\n${actionHint}`;
+        }
+        if (message || actionHint) {
+          return message || actionHint;
+        }
+      }
+    }
+
+    if ('message' in error && typeof error.message === 'string' && error.message.trim()) {
+      return error.message;
+    }
   }
   return '未知错误';
+}
+
+/** 仅网络不可达/超时才允许自动保存离线草稿；业务 4xx 不应伪装成网络失败。 */
+export function isNetworkError(error: unknown): boolean {
+  if (!error || typeof error !== 'object') return false;
+  const code = 'code' in error && typeof error.code === 'string' ? error.code : '';
+  if (['ERR_NETWORK', 'ECONNABORTED', 'ETIMEDOUT'].includes(code)) return true;
+  return 'request' in error && !('response' in error && error.response);
 }

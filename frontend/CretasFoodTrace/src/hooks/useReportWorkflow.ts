@@ -4,6 +4,7 @@ import { workReportingApiClient } from '../services/api/workReportingApiClient';
 import { useDraftReportStore } from '../store/draftReportStore';
 import { useFieldVisibilityStore } from '../store/fieldVisibilityStore';
 import { useAuthStore } from '../store/authStore';
+import { getErrorMsg, isNetworkError } from '../utils/errorHandler';
 import type {
   ReportType,
   FormSchema,
@@ -64,10 +65,12 @@ export function useReportWorkflow(reportType: ReportType) {
         return null;
       }
     } catch (error: unknown) {
-      // Save as draft on network failure
-      saveDraft(data);
-      const msg = error instanceof Error ? error.message : '网络错误，已保存为草稿';
-      Alert.alert('提交失败', msg);
+      if (isNetworkError(error)) {
+        saveDraft(data);
+        Alert.alert('提交失败', `${getErrorMsg(error)}\n已保存为草稿`);
+      } else {
+        Alert.alert('提交失败', getErrorMsg(error));
+      }
       return null;
     } finally {
       setSubmitting(false);

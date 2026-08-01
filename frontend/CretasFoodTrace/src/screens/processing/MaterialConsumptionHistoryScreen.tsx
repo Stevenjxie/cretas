@@ -27,6 +27,7 @@ import {
 import { useAuthStore } from '../../store/authStore';
 import { handleError } from '../../utils/errorHandler';
 import { logger } from '../../utils/logger';
+import { normalizedSearchValue } from '../../utils/searchValue';
 
 const consumptionLogger = logger.createContextLogger('MaterialConsumptionHistory');
 
@@ -192,7 +193,7 @@ export default function MaterialConsumptionHistoryScreen() {
   const filteredConsumptions = useMemo(() => consumptions.filter((item) => {
     const searchLower = searchQuery.toLowerCase();
     const batchIdMatch = item.batchId?.toLowerCase().includes(searchLower);
-    const productionBatchMatch = item.productionBatchId?.toLowerCase().includes(searchLower);
+    const productionBatchMatch = normalizedSearchValue(item.productionBatchId).includes(searchLower);
     const materialTypeMatch = item.materialTypeName?.toLowerCase().includes(searchLower);
 
     return batchIdMatch || productionBatchMatch || materialTypeMatch;

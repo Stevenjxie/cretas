@@ -86,6 +86,85 @@ class WorkReportingServiceImplTest {
     }
 
     @Nested
+    @DisplayName("按报工类型校验所属字段")
+    class ReportTypeValidationTests {
+
+        @Test
+        @DisplayName("PROGRESS 只要求正产量，不要求 totalWorkMinutes")
+        void progress_withoutWorkMinutes_createsReport() {
+            WorkReportSubmitRequest req = validRequest();
+            req.setBatchId(null);
+            req.setTotalWorkMinutes(null);
+            when(reportRepository
+                    .existsByFactoryIdAndWorkerIdAndReportTypeAndCreatedAtAfterAndBatchIdIsNullAndDeletedAtIsNull(
+                            eq(FACTORY_ID), eq(WORKER_ID), eq("PROGRESS"), any(LocalDateTime.class)))
+                    .thenReturn(false);
+            when(reportRepository.save(any(ProductionReport.class))).thenReturn(
+                    ProductionReport.builder().id(910L).factoryId(FACTORY_ID)
+                            .workerId(WORKER_ID).reportType("PROGRESS")
+                            .outputQuantity(new BigDecimal("50")).build());
+
+            WorkReportResponse response = service.submitReport(FACTORY_ID, WORKER_ID, req);
+
+            assertEquals(910L, response.getId());
+            verify(reportRepository).save(any(ProductionReport.class));
+        }
+
+        @Test
+        @DisplayName("HOURS 只要求正工时，不要求 outputQuantity")
+        void hours_withoutOutputQuantity_createsReport() {
+            WorkReportSubmitRequest req = validRequest();
+            req.setBatchId(null);
+            req.setReportType("HOURS");
+            req.setOutputQuantity(null);
+            req.setTotalWorkMinutes(480);
+            when(reportRepository
+                    .existsByFactoryIdAndWorkerIdAndReportTypeAndCreatedAtAfterAndBatchIdIsNullAndDeletedAtIsNull(
+                            eq(FACTORY_ID), eq(WORKER_ID), eq("HOURS"), any(LocalDateTime.class)))
+                    .thenReturn(false);
+            when(reportRepository.save(any(ProductionReport.class))).thenReturn(
+                    ProductionReport.builder().id(911L).factoryId(FACTORY_ID)
+                            .workerId(WORKER_ID).reportType("HOURS")
+                            .totalWorkMinutes(480).build());
+
+            WorkReportResponse response = service.submitReport(FACTORY_ID, WORKER_ID, req);
+
+            assertEquals(911L, response.getId());
+            verify(reportRepository).save(any(ProductionReport.class));
+        }
+
+        @Test
+        @DisplayName("PROGRESS 缺少正产量时 fail closed")
+        void progress_withoutOutputQuantity_throws400() {
+            WorkReportSubmitRequest req = validRequest();
+            req.setOutputQuantity(null);
+
+            BusinessException ex = assertThrows(BusinessException.class,
+                    () -> service.submitReport(FACTORY_ID, WORKER_ID, req));
+
+            assertEquals(400, ex.getCode());
+            assertTrue(ex.getMessage().contains("outputQuantity"));
+            verify(reportRepository, never()).save(any());
+        }
+
+        @Test
+        @DisplayName("HOURS 缺少正工时时 fail closed")
+        void hours_withoutWorkMinutes_throws400() {
+            WorkReportSubmitRequest req = validRequest();
+            req.setReportType("HOURS");
+            req.setOutputQuantity(null);
+            req.setTotalWorkMinutes(null);
+
+            BusinessException ex = assertThrows(BusinessException.class,
+                    () -> service.submitReport(FACTORY_ID, WORKER_ID, req));
+
+            assertEquals(400, ex.getCode());
+            assertTrue(ex.getMessage().contains("totalWorkMinutes"));
+            verify(reportRepository, never()).save(any());
+        }
+    }
+
+    @Nested
     @DisplayName("5 分钟窗口去重 submitReport")
     class FiveMinuteDedupTests {
 
