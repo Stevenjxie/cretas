@@ -3851,6 +3851,17 @@ _STORE_SCOPE_FREE_INTENTS = frozenset({
     "RESTAURANT_OPS_OUT_OF_DOMAIN",
     "RESTAURANT_OPS_PLAYBOOK",
     "RESTAURANT_OPS_STORE_DIRECTORY",
+    # 2026-08-01 补入。`resolve_staffing_advice(pool, factory_id)` 只有两个参数 ——
+    # **一个门店参数都没有**, 读的是 `fact_staffing_daypart` 这张连锁口径的配置表。
+    # 不豁免的后果: 「上个月人效怎么样」被拦下问「你想查看哪家门店的人效情况？」,
+    # 而用户选了哪家店都不会改变答案 —— 与「问时间范围」是同一族缺陷:
+    # **向用户要一个 resolver 消费不了的槽位**。
+    #
+    # ⚠️ 它**时灵时不灵**: 本守卫靠 `requested_metrics ∩ _STORE_SCOPE_REQUIRED_METRICS`
+    # 触发, 而「人效」的指标由 LLM 填 —— 填成 orders/revenue 那轮才拦得住。
+    # 所以不是稳定缺陷而是**确定性覆盖的缺口**, 由
+    # `test_time_scoped_intents_contract.py` 按 resolver 签名静态守住。
+    "RESTAURANT_OPS_STAFFING_ADVICE",
 })
 
 
