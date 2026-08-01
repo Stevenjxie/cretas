@@ -19,6 +19,7 @@ import com.cretas.aims.service.ApprovalWorkflowService;
 import com.cretas.aims.service.MobileService;
 import com.cretas.aims.service.workflow.WorkflowEngineService;
 import com.cretas.aims.service.workflow.OaActionIdempotencyService;
+import com.cretas.aims.service.workflow.OaModuleLabelResolver;
 import com.cretas.aims.service.inventory.PurchaseService;
 import com.cretas.aims.service.inventory.SalesService;
 import com.cretas.aims.service.inventory.TransferService;
@@ -87,6 +88,10 @@ public class WorkflowInstanceController {
     private final SalesService salesService;
     private final TransferService transferService;
     private final FactoryStocktakeService stocktakeService;
+
+    /** 业务类型中文名解析 — 权威表在 DecisionTypeMetadataRegistry, 前端不再维护第二份。 */
+    @Autowired(required = false)
+    private OaModuleLabelResolver oaModuleLabelResolver;
 
     /** Optional — 用于 hydrate PURCHASE_ORDER businessSummary. */
     @Autowired(required = false)
@@ -235,7 +240,16 @@ public class WorkflowInstanceController {
                 }
             }
 
+            // 业务类型中文名 — 解析不出时留 null 由前端兜底, 后端不编造
+            if (oaModuleLabelResolver != null) {
+                dto.setModuleLabel(oaModuleLabelResolver.resolve(
+                        inst.getModuleCode(), inst.getContextJson()));
+            }
+
             // initiated by
+            // 判据用 initiatedBy 而非 username 是否为空: 用户被删同样会让 username 为空,
+            // 那种情况该显示「—」, 不是「系统自动发起」。
+            dto.setSystemInitiated(inst.getInitiatedBy() == null);
             if (inst.getInitiatedBy() != null) {
                 dto.setInitiatedByUsername(usernameById.get(inst.getInitiatedBy()));
             }
@@ -365,6 +379,10 @@ public class WorkflowInstanceController {
             businessEntityId = stocktake.getId();
             businessStatus = stocktake.getStatus().name();
         } else {
+            // 📌 BUDGET(会计期间结账) 刻意不在此处接入 —— 它的 APPROVE 等于执行月度关账,
+            // 影响所有工厂, 已拆到独立 PR 等客户测试期结束后再上。
+            // 在那之前 BUDGET 待办保持「只读」, 这忠实反映现状: OA 实例是孤儿,
+            // requestClose 启动它但批不批都不影响期间(fail-open 合规设计)。
             throw new BusinessException(422, "该业务域尚未迁移到统一 OA 动作适配器")
                     .withCode("OA_DOMAIN_ADAPTER_REQUIRED");
         }
@@ -735,6 +753,18 @@ public class WorkflowInstanceController {
                         .append(")");
             }
             return sb.toString();
+        }
+        if ("BUDGET".equals(moduleCode)) {
+            // 会计期间的 context 本来就带 year / month(AccountingPeriodServiceImpl#tryStartWorkflow
+            // 写入), 所以不必回查 accounting_periods —— 与上面 INVENTORY_TRANSFER 同样直接读 context。
+            // 此前这里没有分支, 客户看到的是裸 UUID「BUDGET b67922a2-…」。
+            Map<String, Object> context = inst.getContextJson();
+            Object year = context == null ? null : context.get("year");
+            Object month = context == null ? null : context.get("month");
+            if (year != null && month != null) {
+                return String.format("%s 年 %s 月 会计期间", year, month);
+            }
+            return "会计期间 " + bizId;
         }
         // generic fallback
         return (moduleCode == null ? "业务单据" : moduleCode) + " " + bizId;
