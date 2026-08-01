@@ -529,7 +529,13 @@ async function submitDecide() {
           v-if="transfer.status === 'APPROVED' && isIntraFactory"
           type="warning" show-icon :closable="false" style="margin-bottom: 16px"
           title="审批已通过，但库存还没过账 —— 还差最后一步"
-          :description="`点右上角「确认调拨入库」后，${warehouseName(transfer.sourceWarehouseId) || '调出仓'} 才会扣减、${warehouseName(transfer.targetWarehouseId) || '调入仓'} 才会收到货。在此之前两边库存都不变。`" />
+          <!--
+            仓库 id 为空时说「未指定仓库」，不摆「调出仓/调入仓」这种不存在的名字
+            （全库没有仓库叫这两个名，2026-08-02 六膳门 prod 实测）。
+            HQ_TO_BRANCH 等跨工厂类型的仓库字段本就允许为空，是合法状态，如实说即可。
+            warehouseName 自身查不到时回落到 id，已是诚实回落，这里只补 id 为空那一档。
+          -->
+          :description="`点右上角「确认调拨入库」后，${warehouseName(transfer.sourceWarehouseId) || '未指定仓库'} 才会扣减、${warehouseName(transfer.targetWarehouseId) || '未指定仓库'} 才会收到货。在此之前两边库存都不变。`" />
 
         <!-- Issue #744: 库存不足时主动告警 (调出方视角) -->
         <el-alert

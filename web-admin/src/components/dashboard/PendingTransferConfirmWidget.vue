@@ -47,6 +47,23 @@ function warehouseName(id?: string | null): string {
   return warehouseNames.value[id] || '';
 }
 
+/**
+ * 仓库名的诚实回落。
+ *
+ * <p>🔴 原来写的是 `warehouseName(id) || '调出仓'` —— 解析不出就摆一个通用词。
+ * 2026-08-02 六膳门 prod 实测：TRF-20260617-7580 显示「调出仓 → 调入仓」，
+ * 而<b>全库没有任何仓库叫这两个名字</b>。用户看到的是一对不存在的仓库名，
+ * 且与旁边两行真名（「主仓 → 生产仓」）长得一样，分不出哪个是真的。
+ *
+ * <p>根因不是数据脏：这张单是 HQ_TO_BRANCH（跨工厂类型），仓库字段本就允许为空
+ * （只有 WAREHOUSE_TO_WAREHOUSE 才强制选仓库，见 TransferServiceImpl 的创建校验）。
+ * 所以「没有仓库」是合法状态，要如实说，不是拿个词盖住。
+ */
+function warehouseLabel(id?: string | null): string {
+  if (!id) return '未指定仓库';
+  return warehouseNames.value[id] || `未知仓库(${id.slice(0, 8)})`;
+}
+
 async function loadWarehouses(): Promise<void> {
   // 路径是 /{factoryId}/factory/warehouses —— 少写 /factory 会让首页弹
   // 「请求的接口不存在 (GET /LIUSHANMEN/warehouses)」(2026-07-30 实测踩过)。
@@ -120,7 +137,7 @@ onMounted(() => { load(); });
       <el-table-column prop="transferNumber" label="调拨编号" min-width="170" />
       <el-table-column label="调出 → 调入" min-width="200">
         <template #default="{ row }">
-          {{ warehouseName(row.sourceWarehouseId) || '调出仓' }} → {{ warehouseName(row.targetWarehouseId) || '调入仓' }}
+          {{ warehouseLabel(row.sourceWarehouseId) }} → {{ warehouseLabel(row.targetWarehouseId) }}
         </template>
       </el-table-column>
       <el-table-column prop="transferDate" label="调拨日期" width="120" />
