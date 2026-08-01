@@ -55,7 +55,12 @@ const rows = ref<PendingApproval[]>([]);
 const total = ref(0);
 const page = ref(1);
 const size = ref(20);
-const ACTIONABLE_MODULE_CODES = new Set(['PURCHASE_ORDER', 'SALES_ORDER', 'INVENTORY_TRANSFER', 'INVENTORY_ADJUSTMENT']);
+const ACTIONABLE_MODULE_CODES = new Set([
+  'PURCHASE_ORDER', 'SALES_ORDER', 'INVENTORY_TRANSFER', 'INVENTORY_ADJUSTMENT',
+  // 🔒 BUDGET(会计期间结账): 通过 = 执行月度关账。此前不在此列表里而显示「只读」,
+  // 那忠实反映了当时的现状 —— OA 实例是孤儿, 批不批都不影响期间。现已接上后端适配器。
+  'BUDGET',
+]);
 const moduleCode = ref('');
 const focusedInstanceId = ref('');
 let mounted = false;
@@ -123,6 +128,20 @@ async function act(row: PendingApproval, action: 'APPROVE' | 'REJECT') {
         inputValidator: value => Boolean(value?.trim()) || '驳回原因不能为空',
       });
       notes = result.value.trim();
+    } else if (row.moduleCode === 'BUDGET') {
+      // 🔒 BUDGET 通过 = 执行月度关账: 期间转 CLOSED、生成库存台账快照、
+      // 凭证进入 20 天调整窗口(逾期硬锁)。通用文案「确认通过 xxx？」完全没有传达这个
+      // 后果, 而待办列表正是批量处理场景 —— 误点代价很高(反结账有通道但很麻烦)。
+      await ElMessageBox.confirm(
+        `这将关闭「${row.businessSummary || row.businessEntityId}」，并生成库存台账快照。\n`
+        + '关账后凭证进入 20 天调整窗口，逾期将硬锁。',
+        '确认关账',
+        {
+          confirmButtonText: '确认关账',
+          cancelButtonText: '取消',
+          type: 'warning',
+        },
+      );
     } else {
       await ElMessageBox.confirm(
         `确认通过「${row.businessSummary || row.businessEntityId}」？`,

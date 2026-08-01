@@ -27,10 +27,19 @@ describe('personal OA workbench contract', () => {
   it('uses truthful endpoints and only enables domains backed by the unified action adapter', () => {
     expect(acted).toContain('/workflow/instances/acted');
     expect(copied).toContain('/workflow/instances/copied');
-    // 调拨与盘点陆续接入统一 OA, 本断言一直停在两项, 在 main 上就是红的
-    expect(pending).toContain(
-      "new Set(['PURCHASE_ORDER', 'SALES_ORDER', 'INVENTORY_TRANSFER', 'INVENTORY_ADJUSTMENT'])",
-    );
+    // 可操作域 = 后端 executeDomainAction 里有分支的域。
+    // ⚠️ 原本断言整个 new Set([...]) 字面量, 已因此红过三次(调拨、盘点、BUDGET 各一次) ——
+    //   它锁的是源码格式而不是意图。改为逐个断言成员, 新增域只加一行。
+    const actionable = pending.match(
+      /ACTIONABLE_MODULE_CODES\s*=\s*new Set\(\[([\s\S]*?)\]\)/,
+    )?.[1] ?? '';
+    for (const code of [
+      'PURCHASE_ORDER', 'SALES_ORDER', 'INVENTORY_TRANSFER', 'INVENTORY_ADJUSTMENT',
+      'BUDGET',
+    ]) {
+      expect(actionable, `${code} 应在可操作白名单里 (后端已有对应 adapter 分支)`)
+        .toContain(code);
+    }
     expect(pending).toContain('v-if="canAct(row)"');
     expect(pending).toContain('该业务域正在接入统一 OA，当前仅可查看审批进度');
   });
