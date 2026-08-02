@@ -3421,6 +3421,14 @@ def test_multi_dish_profit_comparison_names_both_objects_and_margin_gap():
     assert result.meta["targetDishes"] == ["米饭", "招牌藤椒味(单人份)"]
 
 
+def test_multi_dish_profit_comparison_ignores_canonical_resolver_hint():
+    query = "本月全部门店米饭和招牌藤椒味(单人份)哪个赚钱 赚钱了吗"
+
+    assert _r.extract_dish_candidates(query) == [
+        "米饭", "招牌藤椒味(单人份)",
+    ]
+
+
 def test_r14_dish_ranking_direction():
     assert _r.dish_ranking_direction("上周哪道菜卖得最差") == "worst"
     assert _r.dish_ranking_direction("哪个菜卖得最好") == "best"
