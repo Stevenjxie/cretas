@@ -35,7 +35,6 @@ import SalesManagerNavigator from "./SalesManagerNavigator";
 import ProcurementManagerNavigator from "./ProcurementManagerNavigator";
 import ViewerNavigator from "./ViewerNavigator";
 import FinanceNavigator from "./FinanceNavigator";
-import WebOnlyRoleScreen from "../screens/common/WebOnlyRoleScreen";
 
 const Stack = createNativeStackNavigator();
 
@@ -81,27 +80,6 @@ function RoleBasedNavigator() {
     autoRegisterOnLogin: true,
     autoUnregisterOnLogout: true,
   });
-
-  /*
-   * 2026-08-02 Steve 拍板: **以 Web 端为主, RN App 只做仓管**。
-   *
-   * 这一步刻意**只改道、不删代码** —— 下面那些 Navigator 与 400+ 个屏全部原样保留,
-   * 想回退把这个判断去掉即可。等 Web 端补齐确认后再分批删。
-   *
-   * 影响面 (prod 实测): 全库 device_registrations 只有 2 条, 都是 F001 测试号
-   * factory_admin1 且停在 2025-12-31 —— RN App 在生产上基本没有真实用户。
-   *
-   * 保留 platform_admin 的完整入口: 技术支持排障要能进任意角色界面, 把它一起挡掉
-   * 会让线上出问题时无从下手。它不是业务角色, 不影响"只做仓管"这个方向。
-   */
-  const WAREHOUSE_ROLES = ["warehouse_manager", "warehouse_worker"];
-  if (
-    !WAREHOUSE_ROLES.includes(userRole ?? "") &&
-    userRole !== "platform_admin" &&
-    userRole !== "platform_super_admin"
-  ) {
-    return <WebOnlyRoleScreen />;
-  }
 
   // factory_super_admin 使用工厂管理员界面
   if (userRole === "factory_super_admin") {
