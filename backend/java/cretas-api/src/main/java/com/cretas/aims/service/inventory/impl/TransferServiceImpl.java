@@ -424,29 +424,26 @@ public class TransferServiceImpl implements TransferService {
      * 请联系仓管补料」。仓管看着有货, 报工的人说没货, 谁也说服不了谁。
      */
     /**
-     * 单位归一 —— 口径必须与报工侧 {@code ProductionStockAllocationServiceImpl#canonicalNativeUnit} 一致。
-     *
-     * <p>🔴 2026-08-03 修复: 原实现只对 MASS/VOLUME 归一, <b>COUNT/PACKAGE 类(盒/箱/片/条)被 filter 掉</b>,
-     * 落到 {@code value.toLowerCase()} —— 中文「盒」小写后还是「盒」, 永远等不上物料档案里的 {@code box}。
-     * 后果实测两条, 同一个物料两条路都走不通:
+     * <p>⛔ 2026-08-03: 本轮曾把上面的 {@code filter(MASS|VOLUME)} 去掉, 想让「盒」归一成 {@code box}
+     * 以治 F006 包材「可用 0」(见 docs/dispatch/2026-08-02-f006-minloop-issues.md P0-1) —— <b>已撤回</b>。
+     * 两条理由:
      * <ul>
-     *   <li>按档案单位 {@code box} 调拨 → 可用量过滤 {@code rawInventoryUnit.equals(canonical(batch.unit))}
-     *       把存「盒」的批次全部滤掉 → {@code 409 源仓库存不足: 可用 0 box}(实际有 10000)</li>
-     *   <li>按批次写法「盒」调拨 → {@code transactionUnit != baseUnit} → 落进"必须有包装规格"分支
-     *       → {@code 422 TRANSFER_MATERIAL_PACKAGING_SPEC_REQUIRED}</li>
+     *   <li>去掉 filter 等于同时放开 {@code alias("pcs","pcs","件","个","只")}, 把「只」写回 {@code pcs}
+     *       —— 正是 LIUSHANMEN 2026-07-30 那起事故本身。上面那段注释记的就是它。</li>
+     *   <li>报工侧 {@code canonicalNativeUnit} 的 filter <b>没有一起改</b>。两侧口径必须一致,
+     *       只改一侧是把一处口径打架换成另一处, 不是修好。</li>
      * </ul>
      *
-     * <p>单位体系本就分两套(Steve 口径): 重量/体积等<b>科学单位</b>有国际换算; 盒/箱/条/片等
-     * <b>自定义单位</b>换算因子恒为 1。归一只做了前一套是漏, 不是有意 —— 自定义单位同样需要
-     * 「中文写法 ↔ 英文码」互认, 否则批次存中文、档案存英文时库存就"消失"了。
-     *
-     * <p>只在权威表认不出该单位时才回落原值小写(未登记的自由文本, 保持旧行为)。
+     * <p>P0-1 的真根因在<b>存储</b>: 同一物料档案存 {@code box} 而批次存「盒」。该修的是写入路径 +
+     * 一次性数据归一, 且依赖 Steve 尚未拍板的「单位存以码还是以中文」口径 —— 定了再动。
      */
     private String canonicalTransferUnit(String factoryId, String unit) {
         String value = trimToNull(unit);
         if (value == null) return "";
         if (unitContractService == null) return value;
         return unitContractService.describe(factoryId, value)
+                .filter(canonical -> canonical.dimension() == com.cretas.aims.service.unit.UnitDimension.MASS
+                        || canonical.dimension() == com.cretas.aims.service.unit.UnitDimension.VOLUME)
                 .map(com.cretas.aims.service.unit.CanonicalUnit::code)
                 .orElseGet(() -> value.toLowerCase(java.util.Locale.ROOT));
     }

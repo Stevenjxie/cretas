@@ -490,19 +490,28 @@ class BomRecipeDraftLifecycleJpaTest {
         String newMaterialId = "RAW-NEW-" + product.getId();
         saveRawMaterial(product.getFactoryId(), newMaterialId, "新增工艺投入");
 
+        // 升级是否已发生 —— <b>不能</b>用 recipe.getWorkflowDefinitionVersion() 来判。
+        // twoInputGraph 内部会调 workflowBinding, 而后者把 definitionVersion 写回 1;
+        // upgradeWorkflowRevision 在一次调用里要 resolvePinnedGraph <b>两次</b>
+        // (先 reconcileUpgradedInputSkeletons 建骨架, 再 validateFamilyContracts 校验),
+        // 于是第二次拿到的是<b>升级前</b>的单投入图 —— 骨架行按双投入图刚建好, 校验却按单投入图看,
+        // 报一句假的「投入槽已不存在」。真实实现按钉住的修订解析, 两次必然一致; 这里是假件不忠实。
+        java.util.concurrent.atomic.AtomicBoolean upgraded =
+                new java.util.concurrent.atomic.AtomicBoolean(false);
         when(bomWorkflowRevisionService.upgradeToLatestCompatibleDraft(
                 anyString(), org.mockito.ArgumentMatchers.any(BomRecipe.class)))
                 .thenAnswer(invocation -> {
                     BomRecipe recipe = invocation.getArgument(1);
                     BomWorkflowRevisionService.WorkflowBinding binding = workflowBinding(recipe);
                     recipe.setWorkflowDefinitionVersion(2);
+                    upgraded.set(true);
                     return binding;
                 });
         when(bomWorkflowRevisionService.resolvePinnedGraph(
                 anyString(), org.mockito.ArgumentMatchers.any(BomRecipe.class)))
                 .thenAnswer(invocation -> {
                     BomRecipe recipe = invocation.getArgument(1);
-                    return Integer.valueOf(2).equals(recipe.getWorkflowDefinitionVersion())
+                    return upgraded.get()
                             ? twoInputGraph(recipe, newMaterialId)
                             : workflowBinding(recipe).graph();
                 });
