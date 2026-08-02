@@ -13,6 +13,7 @@ import com.cretas.aims.dto.processentry.ResolvedEdge;
 import com.cretas.aims.entity.MaterialBatch;
 import com.cretas.aims.entity.MaterialConsumption;
 import com.cretas.aims.entity.ProcessEntryIdempotency;
+import com.cretas.aims.entity.ProductionPlan;
 import com.cretas.aims.entity.ProductWorkProcess;
 import com.cretas.aims.entity.ProductionBatch;
 import com.cretas.aims.entity.ProductionReport;
@@ -168,6 +169,10 @@ public class ClerkProcessEntryServiceImpl implements ClerkProcessEntryService {
             }
         }
 
+        // BOM/调料配方归属的成品 SKU: BOM 只挂成品, WIP 批次的 productTypeId 是该道产出的
+        // 半成品, 拿它查 BOM 必然落空(见 MaterializeContext#recipeProductTypeId)。
+        String recipeProductTypeId = resolveRecipeProductTypeId(planId);
+
         Map<String, Long> batchIdsByKey = new LinkedHashMap<>();
         Map<String, String> batchNumbersByKey = new LinkedHashMap<>();
         // clientBatchKey → WIP 产出 MaterialBatch.id (供下游混锅消耗)
@@ -222,6 +227,7 @@ public class ClerkProcessEntryServiceImpl implements ClerkProcessEntryService {
             // 4. 物化 WRITE 逻辑 (共享 seam) —— 建批 + 写消耗 + 调料/人工 + WIP 产出.
             MaterializeContext ctx = new MaterializeContext(
                     factoryId, be.isFinished() ? planId : null, be.getProductTypeId(),
+                    recipeProductTypeId != null ? recipeProductTypeId : be.getProductTypeId(),
                     be.getBatchNumber(), be.isFinished(), laborRate, wksWarehouseId,
                     be.isFinished() ? null
                             : requireOutputMaterialIdentity(be.getProductTypeId(), be.getClientBatchKey()),
@@ -316,8 +322,8 @@ public class ClerkProcessEntryServiceImpl implements ClerkProcessEntryService {
             // 同道产出/投入只能由一条报工承载 (见 writeLaborReport): 调料报工已写 output 时, 人工报工不再写。
             boolean stepOutputWrittenBySeasoning = false;
             if (!actualSeasoningCosted
-                    && isSeasoningStep(ctx.getFactoryId(), ctx.getProductTypeId(), st)) {
-                BigDecimal seasoningCost = computeSeasoningCost(ctx.getFactoryId(), ctx.getProductTypeId(), st, warnings);
+                    && isSeasoningStep(ctx.getFactoryId(), ctx.getRecipeProductTypeId(), st)) {
+                BigDecimal seasoningCost = computeSeasoningCost(ctx.getFactoryId(), ctx.getRecipeProductTypeId(), st, warnings);
                 if (seasoningCost.signum() > 0) {
                     writeSeasoningReport(ctx.getFactoryId(), batch.getId(), st, seasoningCost, ctx.getUserId());
                     stepOutputWrittenBySeasoning = true;
@@ -436,8 +442,8 @@ public class ClerkProcessEntryServiceImpl implements ClerkProcessEntryService {
             // 同道产出/投入只能由一条报工承载 (镜像 materializeBatch): 调料报工已写 output 时人工报工不再写。
             boolean stepOutputWrittenBySeasoning = false;
             if (!actualSeasoningCosted
-                    && isSeasoningStep(ctx.getFactoryId(), ctx.getProductTypeId(), st)) {
-                BigDecimal seasoningCost = computeSeasoningCost(ctx.getFactoryId(), ctx.getProductTypeId(), st, warnings);
+                    && isSeasoningStep(ctx.getFactoryId(), ctx.getRecipeProductTypeId(), st)) {
+                BigDecimal seasoningCost = computeSeasoningCost(ctx.getFactoryId(), ctx.getRecipeProductTypeId(), st, warnings);
                 if (seasoningCost.signum() > 0) {
                     writeSeasoningReport(ctx.getFactoryId(), existingBatchId, st, seasoningCost, ctx.getUserId());
                     stepOutputWrittenBySeasoning = true;
@@ -1073,6 +1079,22 @@ public class ClerkProcessEntryServiceImpl implements ClerkProcessEntryService {
      * 跨模式定位报工步对应的 WorkProcess: 优先按工序名 (legacy+workflow 通用), 名字不唯一时按
      * processOrder (legacy 链) 消歧; 名字缺失回退 processOrder。解析不到返 null。
      */
+    /**
+     * 解析 BOM/调料配方归属的成品 SKU —— 取所属生产计划的产品。
+     *
+     * <p>BOM 只挂成品; WIP 批次拿自己产出的半成品去查 BOM 必然落空。解析不到(无 planId /
+     * 计划不存在 / repo 未注入)时返 null, 调用方回落各批自己的 productTypeId, 与旧行为一致。
+     */
+    private String resolveRecipeProductTypeId(String planId) {
+        if (planId == null || planId.isBlank() || planRepository == null) {
+            return null;
+        }
+        return planRepository.findById(planId)
+                .map(ProductionPlan::getProductTypeId)
+                .filter(id -> id != null && !id.isBlank())
+                .orElse(null);
+    }
+
     private WorkProcess resolveStepWorkProcess(String factoryId, String productTypeId, StepEntry st) {
         if (workProcessRepository == null) return null;
         String pn = st.getProcessName();
