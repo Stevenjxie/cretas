@@ -57,32 +57,78 @@ DSN="dbname=cretas_prod_db user=cretas_user password=${DB_PASSWORD} host=localho
 TODAY=$(date +%F)
 YESTERDAY=$(date -d yesterday +%F)
 
+# 五个步骤服务的**不是同一个租户**, 所以一步失败不能连坐后面的。
+#
+# 2026-08-02 事故: DEMO_REST 的 fact_pos_transaction 是一次性种到 2026-07-31 的,
+# 8 月 1 日起就没有源数据了。于是第 3 步(从 DEMO_REST 自己的 POS 粒度聚合)
+# 诚实地拒绝谎报成功:
+#
+#     RuntimeError: agg_daily coverage still ends at 2026-07-31, expected 2026-08-01
+#
+# 它拒绝得对 —— 错的是 `set -e` 让整条链就此中止, **第 4、5 步再也没跑过**。
+# 而第 5 步服务的是 RES_3101_009, 它明明还能继续滚(实测当天 synth_bills_needed
+# = 2112, 补跑后 joined_max_date 到 2026-08-01)。一个租户的数据到头, 把另一个
+# 还活着的租户一起拖停了 —— 后者会以每天一天的速度变陈旧。
+#
+# 症状极不显眼: 日志末尾既没有 traceback 之外的东西, 也**没有 `done (rc=)`**,
+# 而当天餐饮 eval 通过率从 87% 掉到 58% 看着像是模型变差了。
+#
+# 顺带修掉一个假信号: 原来收尾写的是 `done (rc=$?)`, 而 `$?` 取的是上一条 echo
+# 的退出码 —— **恒为 0**, 从来不携带任何信息(有 set -e 在, 真失败根本走不到那行)。
+FAILED_STEPS=()
+
+run_step() {
+    local label="$1"
+    shift
+    echo "=== $(date '+%F %T') $label ==="
+    # `cmd || rc=$?` 里 `||` 左侧同样临时关掉 errexit, 失败不会中止脚本。
+    #
+    # ⚠️ 这里**不能**写成 `if "$@"; then return 0; fi; local rc=$?` ——
+    # 那个 `$?` 取的是 **if 语句本身**的状态(没走 then 分支时是 0), 不是命令的,
+    # 于是每次失败都打印 "exit 0", 看着像成功。写这段时第一版就是这么错的,
+    # 靠喂一个必定失败的假步骤才发现 —— 和本文件原来那个恒为 0 的
+    # `done (rc=$?)` 是同一个 bash 陷阱。
+    local rc=0
+    "$@" || rc=$?
+    if [ "$rc" -eq 0 ]; then
+        return 0
+    fi
+    echo "!!! 步骤失败 (exit $rc): $label"
+    echo "!!! 继续跑后面的步骤 —— 它们服务别的租户, 不该被这一步连坐。"
+    FAILED_STEPS+=("$label")
+    return 0
+}
+
 {
-  echo "=== $(date '+%F %T') refresh DEMO_REST ops (end=$TODAY) ==="
   cd "$PYDIR"
   # shellcheck disable=SC1091
   source "$PYDIR/venv-current/bin/activate"
-  python smartbi/scripts/seed_demo_rest_ops.py --dsn "$DSN" --end "$TODAY"
-  echo "=== refresh DEMO_REST sales aggregate (source=RES_3101_009, end=$YESTERDAY) ==="
-  python -m smartbi.scripts.refresh_qhj_demo_recent_agg \
-    --apply \
-    --confirm RES_3101_009 \
-    --end "$YESTERDAY"
-  echo "=== refresh DEMO_REST agg_daily from own POS grain (end=$YESTERDAY) ==="
-  python -m smartbi.scripts.refresh_demo_rest_agg_daily \
-    --apply \
-    --confirm DEMO_REST \
-    --end "$YESTERDAY"
-  echo "=== refresh DEMO_REST dish-level POS items (end=$YESTERDAY) ==="
-  python -m smartbi.scripts.refresh_demo_rest_dish_facts \
-    --apply \
-    --confirm DEMO_REST \
-    --end "$YESTERDAY"
-  echo "=== refresh RES_3101_009 dish-level POS grain (end=$YESTERDAY) ==="
-  python -m smartbi.scripts.refresh_demo_rest_dish_facts \
-    --factory RES_3101_009 \
-    --apply \
-    --confirm RES_3101_009 \
-    --end "$YESTERDAY"
-  echo "=== done (rc=$?) ==="
+
+  run_step "refresh DEMO_REST ops (end=$TODAY)" \
+    python smartbi/scripts/seed_demo_rest_ops.py --dsn "$DSN" --end "$TODAY"
+
+  run_step "refresh DEMO_REST sales aggregate (source=RES_3101_009, end=$YESTERDAY)" \
+    python -m smartbi.scripts.refresh_qhj_demo_recent_agg \
+      --apply --confirm RES_3101_009 --end "$YESTERDAY"
+
+  run_step "refresh DEMO_REST agg_daily from own POS grain (end=$YESTERDAY)" \
+    python -m smartbi.scripts.refresh_demo_rest_agg_daily \
+      --apply --confirm DEMO_REST --end "$YESTERDAY"
+
+  run_step "refresh DEMO_REST dish-level POS items (end=$YESTERDAY)" \
+    python -m smartbi.scripts.refresh_demo_rest_dish_facts \
+      --apply --confirm DEMO_REST --end "$YESTERDAY"
+
+  run_step "refresh RES_3101_009 dish-level POS grain (end=$YESTERDAY)" \
+    python -m smartbi.scripts.refresh_demo_rest_dish_facts \
+      --factory RES_3101_009 --apply --confirm RES_3101_009 --end "$YESTERDAY"
+
+  if [ ${#FAILED_STEPS[@]} -gt 0 ]; then
+      echo "=== done (rc=1, ${#FAILED_STEPS[@]}/5 步失败) ==="
+      for step in "${FAILED_STEPS[@]}"; do
+          echo "    ✗ $step"
+      done
+      exit 1
+  fi
+  echo "=== done (rc=0, 5/5 步成功) ==="
 } >> "$LOG" 2>&1
