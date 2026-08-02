@@ -156,6 +156,18 @@ export function setupRouterGuards(router: Router) {
       return;
     }
 
+    // 餐饮角色专属白名单：同一路由在工厂端继续按 module/roles 原规则运行，
+    // 只在 RESTAURANT 租户收口老板、店长、采购、厨师长的职责边界。
+    const restaurantRoles = to.meta.restaurantRoles as string[] | undefined;
+    if (
+      authStore.factoryType === 'RESTAURANT'
+      && restaurantRoles?.length
+      && !restaurantRoles.includes(authStore.currentRole)
+    ) {
+      next('/403');
+      return;
+    }
+
     // 检查角色权限（如果路由指定了 roles）
     const allowedRoles = to.meta.roles as string[] | undefined;
     if (allowedRoles && allowedRoles.length > 0) {

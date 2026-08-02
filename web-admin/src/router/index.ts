@@ -8,8 +8,15 @@ import productionAnalyticsRoutes from './modules/production-analytics';
 import crmRoutes from './modules/crm';
 import opsRoutes from './modules/ops';
 import { buildHubRedirect } from './analysisHubRedirect';
+import { RESTAURANT_DECISION_ROLES } from '@/views/restaurant/restaurantRoleExperience';
 
 const platformAdminOnlyRoles = ['platform_admin'];
+const restaurantDecisionRoles = [
+  'factory_super_admin',
+  'platform_admin',
+  'permission_admin',
+  ...RESTAURANT_DECISION_ROLES,
+];
 
 const financeReviewRoles = [
   'factory_super_admin',
@@ -1551,7 +1558,12 @@ const businessRoutes: RouteRecordRaw[] = [
             path: 'overview',
             name: 'AnalyticsOverview',
             component: () => import('@/views/analytics/index.vue'),
-            meta: { requiresAuth: true, title: '分析概览', module: 'analytics' }
+            meta: {
+              requiresAuth: true,
+              title: '分析概览',
+              module: 'analytics',
+              restaurantRoles: restaurantDecisionRoles,
+            }
           },
           // WS4: 趋势分析合并入经营分析 hub (redirect 保书签 → ?tab=trend)。组件经 hub 加载。
           {
@@ -1581,7 +1593,12 @@ const businessRoutes: RouteRecordRaw[] = [
             path: 'alert-dashboard',
             name: 'AlertDashboard',
             component: () => import('@/views/analytics/AlertDashboard.vue'),
-            meta: { requiresAuth: true, title: '生产异常预警', module: 'analytics' }
+            meta: {
+              requiresAuth: true,
+              title: '生产异常预警',
+              module: 'analytics',
+              hideForFactoryTypes: ['RESTAURANT'],
+            }
           },
           {
             path: 'supply-chain',

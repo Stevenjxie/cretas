@@ -34,6 +34,9 @@ const periodText = computed(() => {
   if (!props.points.length) return '';
   return `${props.points[0].date} 至 ${props.points[props.points.length - 1].date}`;
 });
+const hasData = computed(() => props.points.some(
+  (point) => Number.isFinite(point.value),
+));
 
 const takeaway = computed(() => trendTakeaway(props.points, {
   unit: props.unit,
@@ -41,7 +44,7 @@ const takeaway = computed(() => trendTakeaway(props.points, {
 }));
 
 function render() {
-  if (!el.value || props.masked) return;
+  if (!el.value || props.masked || !hasData.value) return;
   if (!chart) chart = echarts.init(el.value);
   chart.setOption({
     grid: { left: 8, right: 12, top: 16, bottom: 4, containLabel: true },
@@ -113,6 +116,10 @@ watch(() => [props.points, props.masked], async () => {
     <div v-if="masked" class="trend-masked">
       当前角色无价格查看权限，金额趋势不予展示
     </div>
+    <div v-else-if="!loading && !hasData" class="trend-empty">
+      <span>该窗口没有可绘制的趋势数据</span>
+      <small>这不等于业务值为 0；可切换时间范围或检查数据完整度。</small>
+    </div>
     <template v-else>
       <div class="trend-takeaway">{{ takeaway }}</div>
       <div ref="el" class="trend-canvas" v-loading="loading"></div>
@@ -135,4 +142,11 @@ watch(() => [props.points, props.masked], async () => {
   background: var(--el-fill-color-light);
   border-radius: 8px; padding: 24px; text-align: center;
 }
+.trend-empty {
+  display: flex; flex-direction: column; align-items: flex-start; gap: 4px;
+  color: var(--el-text-color-regular); background: var(--el-fill-color-light);
+  border-radius: 8px; padding: 18px 20px;
+}
+.trend-empty span { font-size: 13px; font-weight: 600; }
+.trend-empty small { color: var(--el-text-color-secondary); font-size: 11px; }
 </style>

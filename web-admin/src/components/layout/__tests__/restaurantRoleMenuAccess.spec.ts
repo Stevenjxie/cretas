@@ -58,6 +58,7 @@ function roleAllowed(item: MenuItem | undefined, role: string): boolean {
   const store = usePermissionStore();
   store.setRole(role, 'R001', 'RESTAURANT', '1309');
   const canAccess = store.canAccess(item.module);
+  if (item.restaurantRoles?.length && !item.restaurantRoles.includes(role)) return false;
   if (!item.roles || item.roles.length === 0) return canAccess;
   return item.roles.includes(role) && canAccess;
 }
@@ -107,5 +108,42 @@ describe('餐饮角色的菜单可见性', () => {
     for (const path of ['/restaurant/price-anomaly', '/restaurant/supplier-reconciliation']) {
       expect(roleAllowed(findByPath(menuConfig, path), 'restaurant_chef'), path).toBe(false);
     }
+  });
+
+  it('四个餐饮角色都保留经营驾驶舱与大模型问答入口', () => {
+    for (const role of RESTAURANT_ROLES) {
+      for (const path of ['/smart-bi/dashboard', '/smart-bi/analysis']) {
+        expect(roleAllowed(findByPath(menuConfig, path), role), `${role}: ${path}`).toBe(true);
+      }
+    }
+  });
+
+  it('采购和厨师长不显示经营决策与数据治理入口', () => {
+    for (const role of ['restaurant_purchaser', 'restaurant_chef']) {
+      for (const path of [
+        '/smart-bi/analysis-hub',
+        '/smart-bi/revenue-report',
+        '/smart-bi/health-report',
+        '/smart-bi/upload',
+        '/smart-bi/query-templates',
+        '/smart-bi/mapping-review',
+        '/analytics/overview',
+      ]) {
+        expect(roleAllowed(findByPath(menuConfig, path), role), `${role}: ${path}`).toBe(false);
+      }
+    }
+  });
+
+  it('老板和店长可以进入经营决策页，老板也能看到收入管理报表', () => {
+    for (const role of ['restaurant_owner', 'restaurant_manager']) {
+      for (const path of ['/smart-bi/analysis-hub', '/smart-bi/health-report']) {
+        expect(roleAllowed(findByPath(menuConfig, path), role), `${role}: ${path}`).toBe(true);
+      }
+    }
+    expect(roleAllowed(findByPath(menuConfig, '/smart-bi/revenue-report'), 'restaurant_owner')).toBe(true);
+  });
+
+  it('餐饮租户不展示工厂生产异常预警', () => {
+    expect(findByPath(menuConfig, '/analytics/alert-dashboard').hideForFactoryTypes).toContain('RESTAURANT');
   });
 });

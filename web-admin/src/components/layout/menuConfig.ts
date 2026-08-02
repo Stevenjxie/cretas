@@ -1,4 +1,9 @@
 import type { ModuleName } from '@/store/modules/permission';
+import {
+  RESTAURANT_ALL_ROLES,
+  RESTAURANT_DATA_STEWARD_ROLES,
+  RESTAURANT_DECISION_ROLES,
+} from '@/views/restaurant/restaurantRoleExperience';
 
 // 菜单配置
 export interface MenuItem {
@@ -7,12 +12,18 @@ export interface MenuItem {
   icon: string;
   module: ModuleName;
   roles?: string[];
+  /** 仅 factoryType=RESTAURANT 时叠加的角色白名单，不影响工厂同一路由。 */
+  restaurantRoles?: string[];
   hideForFactoryTypes?: string[];
   children?: MenuItem[];
   groupLabel?: string;
 }
 
 const PLATFORM_ADMIN_ONLY = ['platform_admin'];
+const RESTAURANT_ADMIN_ROLES = ['factory_super_admin', 'platform_admin', 'permission_admin'];
+const RESTAURANT_ANALYTICS_ALL = [...RESTAURANT_ADMIN_ROLES, ...RESTAURANT_ALL_ROLES];
+const RESTAURANT_ANALYTICS_DECISION = [...RESTAURANT_ADMIN_ROLES, ...RESTAURANT_DECISION_ROLES];
+const RESTAURANT_ANALYTICS_STEWARDS = [...RESTAURANT_ADMIN_ROLES, ...RESTAURANT_DATA_STEWARD_ROLES];
 
 // 财务主管专用菜单 - 简化版
 // WS4: 财务看板/财务分析/销售分析 合并为单一「经营分析」hub (财务/销售/趋势/KPI tab)。
@@ -361,30 +372,41 @@ const rawMenuConfig: MenuItem[] = [
     path: '/smart-bi', title: '数据与分析', icon: 'TrendCharts', module: 'analytics',
     children: [
       // ★ 主入口 (无 groupLabel, 置顶)
-      { path: '/smart-bi/dashboard', title: '经营驾驶舱', icon: 'Monitor', module: 'analytics' },
+      { path: '/smart-bi/dashboard', title: '经营驾驶舱', icon: 'Monitor', module: 'analytics',
+        restaurantRoles: RESTAURANT_ANALYTICS_ALL },
       // -- AI 探索 --
       // P3: /smart-bi/query 已合并入此页 query tab (redirect /smart-bi/query → /smart-bi/analysis?tab=query), 菜单项移除
-      { path: '/smart-bi/analysis', title: 'AI 问答 / 数据分析', icon: 'DataAnalysis', module: 'analytics', groupLabel: 'AI 探索' },
+      { path: '/smart-bi/analysis', title: 'AI 问答 / 数据分析', icon: 'DataAnalysis', module: 'analytics', groupLabel: 'AI 探索',
+        restaurantRoles: RESTAURANT_ANALYTICS_ALL },
       // -- 经营分析 --
       // WS4: 财务/销售/趋势/KPI·指标 合并为单一 hub。旧路径 (financial-dashboard/sales/
       // trends/kpi/indicator-center) 由 router redirect 保书签 → /smart-bi/analysis-hub?tab=。
-      { path: '/smart-bi/analysis-hub', title: '经营分析', icon: 'TrendCharts', module: 'analytics', groupLabel: '经营分析' },
+      { path: '/smart-bi/analysis-hub', title: '经营分析', icon: 'TrendCharts', module: 'analytics', groupLabel: '经营分析',
+        restaurantRoles: RESTAURANT_ANALYTICS_DECISION },
       { path: '/smart-bi/revenue-report', title: '收入管理报表', icon: 'Money', module: 'analytics',
-        roles: ['factory_super_admin', 'platform_admin', 'permission_admin', 'finance_manager', 'restaurant_manager'],
+        roles: ['factory_super_admin', 'platform_admin', 'permission_admin', 'finance_manager', 'restaurant_manager', 'restaurant_owner'],
+        restaurantRoles: [...RESTAURANT_ANALYTICS_DECISION, 'finance_manager'],
         hideForFactoryTypes: ['FACTORY'] },
       { path: '/smart-bi/health-report', title: 'AI 经营体检', icon: 'FirstAidKit', module: 'analytics',
+        restaurantRoles: RESTAURANT_ANALYTICS_DECISION,
         hideForFactoryTypes: ['FACTORY'] },
-      { path: '/analytics/alert-dashboard', title: '异常预警', icon: 'Warning', module: 'analytics' },
+      { path: '/analytics/alert-dashboard', title: '异常预警', icon: 'Warning', module: 'analytics',
+        hideForFactoryTypes: ['RESTAURANT'] },
       { path: '/analytics/supply-chain', title: '进销存总览', icon: 'Histogram', module: 'analytics',
         hideForFactoryTypes: ['RESTAURANT'] },
       // -- 数据管理 --
-      { path: '/smart-bi/upload', title: 'Excel 上传', icon: 'Upload', module: 'analytics', groupLabel: '数据管理' },
-      { path: '/smart-bi/query-templates', title: '查询模板', icon: 'Tickets', module: 'analytics' },
-      { path: '/smart-bi/data-completeness', title: '数据完整度', icon: 'DataAnalysis', module: 'analytics' },
+      { path: '/smart-bi/upload', title: 'Excel 上传', icon: 'Upload', module: 'analytics', groupLabel: '数据管理',
+        restaurantRoles: RESTAURANT_ANALYTICS_STEWARDS },
+      { path: '/smart-bi/query-templates', title: '查询模板', icon: 'Tickets', module: 'analytics',
+        restaurantRoles: RESTAURANT_ANALYTICS_STEWARDS },
+      { path: '/smart-bi/data-completeness', title: '数据完整度', icon: 'DataAnalysis', module: 'analytics',
+        restaurantRoles: RESTAURANT_ANALYTICS_STEWARDS },
       // Phase 0: 字段映射复核 — Excel 列无法自动映射时由人工确认并写入 pin (2026-06-15)
-      { path: '/smart-bi/mapping-review', title: '字段映射复核', icon: 'EditPen', module: 'analytics' },
+      { path: '/smart-bi/mapping-review', title: '字段映射复核', icon: 'EditPen', module: 'analytics',
+        restaurantRoles: RESTAURANT_ANALYTICS_STEWARDS },
       // D-6 保守保留: 分析概览 (与驾驶舱/hub 重叠但数据源不同, P5 凭埋点再决定真删)
-      { path: '/analytics/overview', title: '分析概览', icon: 'DataAnalysis', module: 'analytics' },
+      { path: '/analytics/overview', title: '分析概览', icon: 'DataAnalysis', module: 'analytics',
+        restaurantRoles: RESTAURANT_ANALYTICS_DECISION },
       // -- AI 运维 (admin) — WS4: 收 admin 门控 (普通经营用户不需要) --
       { path: '/smart-bi/food-kb-feedback', title: '知识库反馈', icon: 'ChatDotRound', module: 'analytics', groupLabel: 'AI 运维',
         roles: ['platform_admin', 'permission_admin', 'factory_super_admin'] },

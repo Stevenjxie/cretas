@@ -87,6 +87,7 @@ import {
   inferOwnerActionScenario,
   isOwnerActionFollowupText,
 } from './restaurantOwnerActionRegistry';
+import { getRestaurantRoleExperience } from '@/views/restaurant/restaurantRoleExperience';
 
 // Render markdown content safely
 function renderMarkdown(text: string): string {
@@ -101,6 +102,7 @@ function renderMarkdown(text: string): string {
 
 const route = useRoute();
 const authStore = useAuthStore();
+const permissionStore = usePermissionStore();
 const factoryId = computed(() => authStore.factoryId);
 
 // 输入框
@@ -498,58 +500,8 @@ function resetChatSession(): void {
   }
 }
 
-// P1-B (2026-06-03): 餐饮租户专属快捷问题目录 — 按 老板 高频维度分组展示.
-// 仅当 authStore.factoryType === 'RESTAURANT' 时生效; 工厂租户不受影响.
-// 覆盖 gold 后端已支持的维度: 营收/菜品/门店/评价/渠道/客单价.
-// 不含"商品分类占比"/"峰值时段"(gold 后端无此数据/无执行器, 会 fall-through).
-interface RestaurantQuickGroup {
-  label: string;
-  questions: string[];
-}
-const RESTAURANT_QUICK_GROUPS: RestaurantQuickGroup[] = [
-  {
-    label: '老板今天要做什么',
-    questions: [
-      '这个星期营收比上周怎么提高？给我今天能做的动作',
-      '二人桌不够、周末翻台慢，今天桌型和排队怎么调？',
-      '根据菜品毛利和成本，帮我算一个适合今天推的小套餐',
-      '今晚怎么排班？哪些时段要加人，哪些时段可以少排？',
-      '厨房出餐慢和差评变多，今天先改哪三个动作？',
-      '商圈活动和天气会影响今天客流吗？要怎么备货和推品？',
-      '客流画像显示路过人多但进店少，今天先改哪个入口？',
-    ],
-  },
-  {
-    label: '经营总览',
-    questions: [
-      '总营业额', '今年营收', '本季度营收', '营收趋势',
-    ],
-  },
-  {
-    label: '菜品',
-    questions: [
-      '哪个菜卖得最好', '慢销菜品', '外卖点什么多', '高频好评词',
-    ],
-  },
-  {
-    label: '门店',
-    questions: [
-      '哪家店业绩最好', '门店销售对比', '哪家店差评多',
-    ],
-  },
-  {
-    label: '顾客与评价',
-    questions: [
-      '客户评价怎么样', 'VIP客户分析', '有哪些差评', '平台口碑如何',
-    ],
-  },
-  {
-    label: '渠道与促销',
-    questions: [
-      '外卖占比', '优惠券使用', '客单价', '周末周中对比',
-    ],
-  },
-];
+// 餐饮快捷问题由 restaurantRoleExperience 单一真值提供。老板、店长、采购、
+// 厨师长共享同一 LLM 入口，但第一屏问题必须与职责和价格权限一致。
 
 // P1-B: 时间变体追问 map — 前端静态补充. 后端 gold 工具已对时间参数化,
 // 点击 chip 只是预填+提交一个新问题, 走现有 intent 路由.
@@ -784,15 +736,9 @@ const ownerActionSessionId = ref('');
 const currentOwnerActionScenario = ref('');
 const pendingOwnerActionScenario = ref('');
 const showRestaurantMoreQuestions = ref(false);
-const restaurantPrimaryQuestions = computed(() => RESTAURANT_QUICK_GROUPS[0]?.questions.slice(0, 4) ?? []);
-const restaurantMoreQuestionGroups = computed<RestaurantQuickGroup[]>(() => {
-  const [ownerGroup, ...restGroups] = RESTAURANT_QUICK_GROUPS;
-  const ownerOverflow = ownerGroup?.questions.slice(4) ?? [];
-  return [
-    ...(ownerOverflow.length ? [{ label: '更多老板决策', questions: ownerOverflow }] : []),
-    ...restGroups,
-  ];
-});
+const restaurantRoleExperience = computed(() => getRestaurantRoleExperience(permissionStore.currentRole));
+const restaurantPrimaryQuestions = computed(() => restaurantRoleExperience.value.ai.primaryQuestions);
+const restaurantMoreQuestionGroups = computed(() => restaurantRoleExperience.value.ai.moreGroups);
 const restaurantMoreQuestionCount = computed(() => restaurantMoreQuestionGroups.value
   .reduce((total, group) => total + group.questions.length, 0));
 
@@ -816,7 +762,10 @@ const quickQuestions = computed<string[]>(() => {
   // Restaurant tenants get the grouped catalog (rendered as grouped chips).
   // Return all questions flattened so autocomplete still covers them.
   if (isRestaurantTenant.value) {
-    return RESTAURANT_QUICK_GROUPS.flatMap((g) => g.questions);
+    return [
+      ...restaurantPrimaryQuestions.value,
+      ...restaurantMoreQuestionGroups.value.flatMap((group) => group.questions),
+    ];
   }
   const item = dataSources.value.find(d => d.id === selectedUploadId.value);
   const fname = item?.fileName || item?.originalFileName || '';
@@ -826,13 +775,13 @@ const quickQuestions = computed<string[]>(() => {
 });
 const queryPlaceholder = computed(() => {
   if (nl2sqlMode.value) return '输入数据查询，例如：各产品的销售额汇总';
-  if (isRestaurantTenant.value) return '直接问老板问题，例如：这周营收怎么提高，今天先做哪几个动作';
+  if (isRestaurantTenant.value) return restaurantRoleExperience.value.ai.placeholder;
   return '输入您的问题（下拉有 40+ 模板秒回问题可选）';
 });
 
 function buildWelcomeMessage(): string {
   if (isRestaurantTenant.value) {
-    return '您好！我是餐饮经营 AI 助手。您可以直接问今天先做什么、这周怎么提升营收、毛利和成本哪里要盯、门店和菜品怎么调整；系统会自动调用已经整理好的餐饮数据，不需要手动选择数据源。';
+    return `您好！我是${restaurantRoleExperience.value.ai.title}。${restaurantRoleExperience.value.ai.description}系统会自动调用当前租户已经整理好的餐饮数据，不需要手动选择数据源。`;
   }
   const sourceHint = dataSourceLabel.value
     ? `\n\n当前${dataSourceLabel.value}`
@@ -1232,7 +1181,6 @@ const javaIntentSessionId = ref<string | undefined>(undefined);
 // 「操作」tab 仅对任意模块有写权限 ('w'/'rw') 的账号渲染; 纯只读账号维持
 // 现有单栏外观 (无 tabs UI)。两个 tab 各自独立 sessionId, 避免咨询会话
 // 上下文污染操作 slot-filling。
-const permissionStore = usePermissionStore();
 const activeAiTab = ref<'consult' | 'operate'>('consult');
 const hasAnyWrite = computed(() => permissionStore.hasAnyWriteAccess());
 const operateSessionId = ref('');
@@ -2635,8 +2583,11 @@ function handleKeydown(event: KeyboardEvent) {
       <div class="header-left">
         <h1>
           <el-icon><ChatDotRound /></el-icon>
-          AI 智能问答
+          {{ isRestaurantTenant ? restaurantRoleExperience.ai.title : 'AI 智能问答' }}
         </h1>
+        <p v-if="isRestaurantTenant" class="ai-page-subtitle">
+          {{ restaurantRoleExperience.ai.description }}
+        </p>
       </div>
       <div class="header-right">
         <el-select
@@ -2672,6 +2623,14 @@ function handleKeydown(event: KeyboardEvent) {
           <el-button :icon="ChatRound" @click="handleNewTopic">新话题</el-button>
         </el-tooltip>
       </div>
+    </div>
+
+    <div v-if="isRestaurantTenant" class="restaurant-ai-contract" aria-label="AI 数据与操作边界">
+      <span class="restaurant-ai-contract__label">当前范围</span>
+      <span>当前餐饮租户</span>
+      <span>真实业务数据取数</span>
+      <span>大模型解释与建议</span>
+      <span>{{ hasAnyWrite ? '操作需预览确认' : '当前账号只读' }}</span>
     </div>
 
     <!-- AI 读写分离 (2026-07-23): 咨询/操作 双 tab。仅有写权限账号可见;
@@ -3081,8 +3040,8 @@ function handleKeydown(event: KeyboardEvent) {
       <div v-if="chatHistory.length <= 2 && isRestaurantTenant" class="quick-questions quick-questions--restaurant">
         <div class="restaurant-question-head">
           <div>
-            <span class="label">老板今天先问这几个</span>
-            <p>先看能直接做决定的问题，其它分析入口收在下面。</p>
+            <span class="label">{{ restaurantRoleExperience.roleLabel }}今天先问这几个</span>
+            <p>按当前职责排序；数值由业务工具提供，解释与建议由大模型完成。</p>
           </div>
           <el-button
             size="small"
@@ -3145,6 +3104,9 @@ function handleKeydown(event: KeyboardEvent) {
           class="query-autocomplete"
           :fetch-suggestions="fetchAutocomplete"
           :placeholder="queryPlaceholder"
+          :aria-label="isRestaurantTenant
+            ? `${restaurantRoleExperience.roleLabel}餐饮 AI 问题`
+            : 'AI 智能问答输入'"
           :disabled="isTyping"
           :trigger-on-focus="true"
           popper-class="query-autocomplete-popper"
@@ -3239,7 +3201,41 @@ function handleKeydown(event: KeyboardEvent) {
         color: var(--color-primary);
       }
     }
+
+    .ai-page-subtitle {
+      max-width: 72ch;
+      margin: 6px 0 0 28px;
+      color: var(--el-text-color-secondary, #909399);
+      font-size: 12px;
+      line-height: 1.55;
+    }
   }
+}
+
+.restaurant-ai-contract {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 7px;
+  margin-bottom: 12px;
+  padding: 9px 12px;
+  color: var(--el-text-color-regular, #606266);
+  font-size: 11px;
+  background: var(--el-bg-color, #fff);
+  border: 1px solid var(--el-border-color-lighter, #e4e7ed);
+  border-radius: 9px;
+}
+
+.restaurant-ai-contract > span:not(.restaurant-ai-contract__label) {
+  padding: 3px 8px;
+  background: var(--el-fill-color-light, #f5f7fa);
+  border-radius: 999px;
+}
+
+.restaurant-ai-contract__label {
+  color: var(--color-primary, #1b65a8);
+  font-weight: 700;
+  letter-spacing: 0.04em;
 }
 
 .chat-container {
@@ -3249,7 +3245,8 @@ function handleKeydown(event: KeyboardEvent) {
   flex-direction: column;
   background: var(--el-bg-color, #fff);
   border-radius: 12px;
-  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.05);
+  border: 1px solid var(--el-border-color-lighter, #e4e7ed);
+  box-shadow: 0 10px 30px rgba(12, 25, 41, 0.06);
   overflow: hidden;
 }
 
@@ -3606,8 +3603,10 @@ function handleKeydown(event: KeyboardEvent) {
         width: 100%;
         min-height: 34px;
         margin-left: 0;
+        border-radius: 8px;
         white-space: normal;
         line-height: 1.35;
+        transition: color 160ms ease, border-color 160ms ease, background-color 160ms ease;
       }
     }
 
@@ -3758,7 +3757,7 @@ function handleKeydown(event: KeyboardEvent) {
   border: 1px solid var(--el-border-color-light, #e4e7ed);
   border-radius: 8px;
   cursor: pointer;
-  transition: all 0.2s;
+  transition: transform 180ms ease, border-color 180ms ease, box-shadow 180ms ease;
 
   &:hover {
     border-color: var(--el-color-primary, #2D8B57);
@@ -3852,6 +3851,10 @@ function handleKeydown(event: KeyboardEvent) {
     .header-right {
       width: 100%;
     }
+
+    .header-left .ai-page-subtitle {
+      margin-left: 0;
+    }
   }
 
   .chat-message {
@@ -3881,6 +3884,11 @@ function handleKeydown(event: KeyboardEvent) {
   .template-grid {
     grid-template-columns: 1fr;
   }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .quick-questions--restaurant .restaurant-primary-questions .el-button,
+  .template-card { transition: none; }
 }
 
 // ── AI 读写分离 (2026-07-23) ──────────────────────────────────────────

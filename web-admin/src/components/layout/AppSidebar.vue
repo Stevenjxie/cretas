@@ -174,6 +174,13 @@ function canSeeMenuItem(item: MenuItem): boolean {
   if (item.hideForFactoryTypes?.includes(factoryType)) {
     return false;
   }
+  if (
+    factoryType === 'RESTAURANT'
+    && item.restaurantRoles?.length
+    && !item.restaurantRoles.includes(currentRole)
+  ) {
+    return false;
+  }
   // R19: Canvas module enable/disable — hide disabled modules
   if (disabledSet.has(item.module)) {
     return false;
