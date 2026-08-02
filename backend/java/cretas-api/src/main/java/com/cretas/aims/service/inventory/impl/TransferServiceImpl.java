@@ -188,18 +188,18 @@ public class TransferServiceImpl implements TransferService {
             catch (Exception e) { log.warn("Canvas validation non-blocking: {}", e.getMessage()); }
         }
 
-        // 防呆 R4 (幂等防双击): 5min 窗口内同 源厂/目标厂/请求人/调拨日期 的未完成调拨 → 409 + 已有单号 + 跳转提示
-        List<InternalTransfer> dupes = transferRepository.findRecentDuplicates(
-                factoryId, request.getTargetFactoryId(), userId,
-                request.getTransferDate(), LocalDateTime.now().minusMinutes(5));
-        if (!dupes.isEmpty()) {
-            InternalTransfer existing = dupes.get(0);
-            throw new BusinessException(409, String.format(
-                    "5 分钟内已创建相同调拨 (调拨单 %s, 目标工厂 %s, 状态 %s), 请勿重复提交",
-                    existing.getTransferNumber(), existing.getTargetFactoryId(), existing.getStatus()))
-                    .withHint("如需查看已有调拨单请打开 " + existing.getTransferNumber())
-                    .withHintTarget(existing.getId());
-        }
+        // ⛔ 已移除「5min 窗口内重复调拨 → 409」拦截 (原 防呆 R4 幂等防双击, 2026-06-18)。
+        //
+        // 去重键是 (源厂 + 目标厂 + 请求人 + 调拨日期), <b>不含任何内容维度</b> —— 同一天同一人
+        // 给同一目标厂调<b>不同物料</b>也会被判成"相同调拨"。2026-08-02 实测: 先建一张只含冻猪蹄的
+        // 草稿, 紧接着建成品盒的调拨即被拒, 只能挤进同一张单; 而同单里只要有一个物料触发校验
+        // (如包材单位不匹配) 整张单失败, 无法分批推进 —— 备料被彻底卡住。
+        //
+        // 同模式的兄弟实现都带内容维度 (ExpenseRequest 用 category+amount, PaymentRecord 注释明写
+        // "镜像 TransferServiceImpl.findRecentDuplicates。金额是最高完整性面"), 唯独调拨没有 ——
+        // 它是异类。Steve 2026-08-03 拍板: 调拨不做重复提交拦截。
+        //
+        // 双击风险: 会多出一张 DRAFT 草稿, 仓管可直接取消, 代价远小于"备不了料"。
 
         validateAndNormalizeCreateItems(factoryId, request, transferType);
 
@@ -423,13 +423,30 @@ public class TransferServiceImpl implements TransferService {
      * 比较 —— {@code "只".equals("pcs")} 为 false, 整批被跳过 → 「需要 1只, 可用 0只, 缺少 1只,
      * 请联系仓管补料」。仓管看着有货, 报工的人说没货, 谁也说服不了谁。
      */
+    /**
+     * 单位归一 —— 口径必须与报工侧 {@code ProductionStockAllocationServiceImpl#canonicalNativeUnit} 一致。
+     *
+     * <p>🔴 2026-08-03 修复: 原实现只对 MASS/VOLUME 归一, <b>COUNT/PACKAGE 类(盒/箱/片/条)被 filter 掉</b>,
+     * 落到 {@code value.toLowerCase()} —— 中文「盒」小写后还是「盒」, 永远等不上物料档案里的 {@code box}。
+     * 后果实测两条, 同一个物料两条路都走不通:
+     * <ul>
+     *   <li>按档案单位 {@code box} 调拨 → 可用量过滤 {@code rawInventoryUnit.equals(canonical(batch.unit))}
+     *       把存「盒」的批次全部滤掉 → {@code 409 源仓库存不足: 可用 0 box}(实际有 10000)</li>
+     *   <li>按批次写法「盒」调拨 → {@code transactionUnit != baseUnit} → 落进"必须有包装规格"分支
+     *       → {@code 422 TRANSFER_MATERIAL_PACKAGING_SPEC_REQUIRED}</li>
+     * </ul>
+     *
+     * <p>单位体系本就分两套(Steve 口径): 重量/体积等<b>科学单位</b>有国际换算; 盒/箱/条/片等
+     * <b>自定义单位</b>换算因子恒为 1。归一只做了前一套是漏, 不是有意 —— 自定义单位同样需要
+     * 「中文写法 ↔ 英文码」互认, 否则批次存中文、档案存英文时库存就"消失"了。
+     *
+     * <p>只在权威表认不出该单位时才回落原值小写(未登记的自由文本, 保持旧行为)。
+     */
     private String canonicalTransferUnit(String factoryId, String unit) {
         String value = trimToNull(unit);
         if (value == null) return "";
         if (unitContractService == null) return value;
         return unitContractService.describe(factoryId, value)
-                .filter(canonical -> canonical.dimension() == com.cretas.aims.service.unit.UnitDimension.MASS
-                        || canonical.dimension() == com.cretas.aims.service.unit.UnitDimension.VOLUME)
                 .map(com.cretas.aims.service.unit.CanonicalUnit::code)
                 .orElseGet(() -> value.toLowerCase(java.util.Locale.ROOT));
     }
