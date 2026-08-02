@@ -2,7 +2,12 @@
 
 **日期**: 2026-08-02
 **触发**: 客户张权（LIUSHANMEN 酱鸭腿产线「装箱」工序）
-**范围**: web-admin `ProcessDataTable.vue`（生产报工/结单）
+**范围**: 后端 `WorkflowClerkSheetServiceImpl`（报工单运行时配置解析）
+
+> ⚠️ **本文经过一次重大更正。** 初稿把根因判在 web-admin 前端判据上（`isMultiSource` 用
+> `workflowUpstreamInputs.length > 1`），据此提出改 `>= 1`。**那是错的**，实施时被测试
+> 和数据推翻。真根因在后端，见 §2。前端那条只是同一个错误的第二道，修了后端就不必动它。
+> 更正过程记在 §8，因为它本身是这次最值得留下的东西。
 
 ---
 
@@ -25,118 +30,76 @@ CLK-W-20260802-23427   余  50 kg
 
 ---
 
-## 2. 根因
+## 2. 根因（实证）
 
-判据回答错了问题。现有判据问的是「这道工序要投**几种**不同物料」：
-
-```js
-isMultiSource = allowMultipleUpstreamSources === true
-             || workflowUpstreamInputs.length > 1
+```java
+// WorkflowClerkSheetServiceImpl.java:232（改前）
+.allowMultipleUpstreamSources(upstreamInputCount > 1)
 ```
 
-而 `workflowUpstreamInputs` 已经把原料滤掉了：
+后端**没有读用户在 Workflow 画布上配的开关，而是当场按端口数重算了一遍**。
 
-```js
-workflowUpstreamInputs = workflowContext.inputs.filter(p => p.materialKind !== 'RAW_MATERIAL')
-```
+备份实证（`product_process_workflow_revisions.nodes_json`，LIUSHANMEN 酱鸭腿最新 revision）：
 
-酱鸭腿产线（workflow 实例 56）去掉原料后的上游端口数：
+| 工序 | 图里 `allowMultipleUpstreamSources` | 去掉原料后的上游端口数 | 运行时实际得到 |
+|---|---|---|---|
+| 出料/缓化 | `true` | 0（首道） | false |
+| 熟制 | `true` | 1 | false |
+| 装箱 | `true` | 1 | **false** |
 
-| 工序 | 上游端口数 |
-|---|---|
-| 出料/缓化 | 0（首道） |
-| 熟制 | 1 |
-| 装箱 | 1 |
+**三道工序图里全配了 `true`，运行时一个都没生效。** 用户配了等于没配。
 
-**没有一道 > 1** → 恒为单来源 → 单选 + ⊕ 不可点。
+这是「用户配置被硬编码规则静默覆盖」这一形状 —— 与本次同批修掉的另外两处同类：计数单位表里全是假的 `1.000000` 换算因子、班组报工写死 `kg`。
 
-客户要的是「**同一种**物料的**几批**」，与「几种物料」是两件事，现在被同一个判据管着。
+### 2.1 为什么配置到不了运行时
 
-### 2.1 为什么另外 4 道工序能多选
+- `product_process_workflows` 发布流程**不写** `product_work_processes`（已 grep 确认）
+- 运行时快照 `work_process_tasks` **没有**这个字段（已查 schema）
+- 于是 `WorkflowClerkSheetServiceImpl` 手上只有端口，就拿端口数当了判据
 
-那 4 道（卤猪蹄/纸片牛腱肉 的熟制、气调包装）属于**另外两个产品**，走老的 `product_work_processes` 配置，有显式开关 `allow_multiple_upstream_sources = true`。
-
-**酱鸭腿在 `product_work_processes` 里 0 行** —— 纯 workflow 驱动，那条路上没有这个开关，所以客户在配置界面上也找不到地方开。
-
-### 2.2 同一判据写在两处（首次尝试失败的原因）
-
-```js
-isMultiSource = ... || workflowUpstreamInputs.length > 1   // 决定用哪套模板
-mixExpanded   =        workflowUpstreamInputs.length > 1   // 决定混批区默认展开
-```
-
-首次尝试只改了前者，后者漏了 → 模板切成多来源但混批区**折叠**（`v-if="row.mixExpanded"`）→ 什么都不渲染 → 10 个既有测试红。
-
-当时误判成「与 2026-07-30 客户诉求冲突」，**实际不冲突**：「唯一候选不给下拉」由 `soleBatchLabel` 机制保证，与展开无关，是两层。
+图里那个字段因此是**只写不读的死配置**。
 
 ---
 
-## 3. 方案（已与用户确认）
+## 3. 方案
 
-**判据从「有几种物料」改成「有没有上游端口可挂批次」，两处一起改。**
+以图定义里的用户配置为准，没配过才回落端口数：
 
-```js
-isMultiSource = allowMultipleUpstreamSources === true
-             || workflowUpstreamInputs.length >= 1     // 改
-mixExpanded   = isMultiSource                          // 跟随, 不再独立判断
+```java
+.allowMultipleUpstreamSources(resolveAllowMultipleUpstreamSources(
+        instanceNodesJson, task.getWorkflowNodeId(), upstreamInputCount > 1))
 ```
 
-### 3.1 界面效果
+配置源取 `ProductionWorkflowInstance.nodesJson` —— **开工时冻结的运行时快照**，与发布那一版一致，不会因为事后改图而漂移。实例在调用处本来就拿得到，**不需要加列、不需要迁移**。
 
-**多批（张权场景）** — 混批区摊开，可勾多批、各填投入量、⊕ 追加：
-
-```
-装箱  新建  2026-08-02   来源批次 (3) ▼
-  ☑ 酱制鸭腿(半成品)  [CLK-W-…-91160 | 余102kg ▾]  投入 [102] kg  🗑
-  ☑ 酱制鸭腿(半成品)  [CLK-W-…-50192 | 余 11kg ▾]  投入 [ 11] kg  🗑
-  ☑ 酱制鸭腿(半成品)  [CLK-W-…-23427 | 余 50kg ▾]  投入 [ 50] kg  🗑
-                                        ⊕ 加一批   合计 163 kg
-```
-
-一行装箱 → 3 批料 → **1 个成品批次**。
-
-**单批（2026-07-30 诉求）** — 摊开，但**直接显示批号、不给下拉**：
-
-```
-  酱制鸭腿(半成品)   CLK-W-…-91160 | 余102kg     投入 [102] kg
-```
-
-由 `soleBatchLabel` 保证（`optionGroups: sole ? [] : …`），不需要操作员多点一下。
-
-### 3.2 为什么不按「候选批次数」决定展开
-
-候选来自 `sfiOptions` / `fgOptions`，**异步加载**（`sfiLoading` / `fgLoading`）。按数量决定默认展开会让界面在加载中途改变形态。`autoSelectSoleUpstreamBatches` 已经为同一原因加了加载守卫。
+解析失败 / 找不到节点 / 字段缺失 一律回落 `portCountFallback`：这个开关只影响录入界面给不给多来源行，不该因为一个 JSON 问题让整张报工单打不开。
 
 ---
 
-## 4. 不改什么（边界）
+## 4. 不改什么
 
 | | 保持不变 |
 |---|---|
-| 后端 | 已经是 `for (UpstreamRef ref : req.getUpstreamSources())` 逐批 `consumeClerkSemiStrict`，不关心是否同端口。**零改动** |
-| 提交结构 | `isMultiSource` 分支已把每种工序形态实现了一遍（`isSingleUpstream` / `isQuSheTou` / `isShuZhi\|isGenericUpstream` / `isQidiao`），与各自单来源分支逐字对应，只是把硬构造的 `[{单个}]` 换成 `submittedUpstreamSources(row)` |
-| 未接 workflow 的老产品 | `workflowContext` 为空 → `workflowUpstreamInputs` 恒空 → 仍只看显式开关 `allowMultipleUpstreamSources`，行为完全不变 |
-| 首道工序 | `isFirstProcess === true` → `workflowUpstreamInputs` 恒空 → 不受影响 |
-| 「唯一候选不给下拉」 | 由 `soleBatchLabel` / `upstreamBatchIsForegoneChoice` 保证，本次不动 |
+| 后端扣减 | 早已 `for (UpstreamRef ref : ...)` 逐批 `consumeClerkSemiStrict`，本来就支持多批 |
+| 提交结构 | `isMultiSource` 分支已把每种工序形态实现了一遍，只是把 `[{单个}]` 换成 `submittedUpstreamSources(row)` |
+| **前端判据** | **不动**。`isMultiSource` 里的 `workflowUpstreamInputs.length > 1` 保留 —— 它是在后端给出 `false` 时的兜底，后端修好后正常路径走 `allowMultipleUpstreamSources === true` 那一支 |
+| 老工作流 | 图里没配过该字段 → 回落端口数 → 逐字不变 |
 
 ---
 
 ## 5. 测试策略
 
-### 5.1 必须钉住的四件事
+`WorkflowClerkSheetMultiUpstreamTest`（5 条，直接打纯函数，不起 Spring）：
 
-1. **回归目标**：1 个上游端口时 `isMultiSource === true`（修复前恒 false）
-2. **不伤既有**：单批次时提交内容与修复前**逐字一致** —— 这条比 1 更要紧，改错了就是记错产量
-3. **边界**：首道工序、未接 workflow 的老产品行为不变
-4. **展开**：`mixExpanded` 与 `isMultiSource` 同步，否则界面空白（首次尝试就栽在这）
+1. **回归**：图配 `true` 就按 `true` —— 哪怕只有 1 个上游端口（端口数判据会说 false）
+2. 图配 `false` 就按 `false` —— 不因端口多而擅自打开
+3. 字段缺失 → 回落端口数（老工作流零回归）
+4. 找不到节点 / null / 空串 → 回落，不抛
+5. 坏 JSON → 回落，不让报工单打不开
 
-### 5.2 变异实证（不可省）
+**变异实证**：把判据改回 `upstreamInputCount > 1`（并让 helper 永远回落），确认测试变红且红在第 1 条。
 
-写完必须把判据改回 `> 1`，确认测试**变红**且红在回归那条断言上。首次尝试已实证过这一步有效（还原后 1 failed / 3 passed，其余 3 条保持绿说明它们钉的是不同的东西）。
-
-### 5.3 既有套件
-
-`web-admin/src/views/production/components/processSheet/__tests__/` 基线为 **26 files / 153 tests 全绿**，改动后必须仍然全绿。首次尝试打挂 10 个，正是漏改 `mixExpanded` 的信号。
+**真机判据（唯一算数的）**：LIUSHANMEN 装箱页能同时选 3 批并提交，库里 3 个批次各自扣减。单测只能证明解析对，证明不了端到端。
 
 ---
 
@@ -144,13 +107,35 @@ mixExpanded   = isMultiSource                          // 跟随, 不再独立�
 
 | 风险 | 处理 |
 |---|---|
-| 多批次提交把产量记错 | 后端逐批扣减已存在且在用（另外 4 道工序在跑）；测试第 2 条钉住单批次提交不变 |
-| 混批区默认摊开变啰嗦 | 已与用户确认可接受；单批时里面是直接显示，不增加点击 |
-| 影响面超出预期 | 改动只碰 2 个 computed，回退 = 把 `>= 1` 改回 `> 1`、`mixExpanded` 改回独立判断 |
+| 多批提交把产量记错 | 后端逐批扣减早已存在；真机验证要查库确认逐批扣 |
+| 某些工序意外变成多来源 | 只有图里显式配 `true` 才会；没配的回落原判据 |
+| 影响面 | 改动集中在一个 service 的一个方法 + 一个私有 helper，回退即改回一行 |
 
 ---
 
-## 7. 本次不做（已查实，另行处理）
+## 7. 本次不做
 
-- **孤儿工序**：全库 14 条 `product_work_processes` 挂在已不存在的成品上（F001 10 条 E2E 残留 / LIUSHANMEN 4 条鸡产线）。配置页按成品分组加载，选不到成品就列不出来。属历史脏数据，与本问题无关。
-- **`product_work_processes` 与 workflow 两套配置并存**：老产品走前者（有混批开关），新产品走后者（没有）。本次让 workflow 侧不再依赖那个开关，但两套并存本身是更大的架构问题。
+- **孤儿工序**：全库 14 条 `product_work_processes` 挂在已不存在的成品上（F001 10 / LIUSHANMEN 4）。
+- **前端 `isMultiSource` 判据**：见 §4，后端修好后无需动。
+- **`product_work_processes` 与 workflow 两套配置并存**：查明**运行时压根不读前者**（对 workflow 产品而言），所以它不是本问题的根因。是否清理属独立决策。
+
+---
+
+## 8. 更正记录（这次最值得留下的部分）
+
+同一个问题我连续判断错三次，每次都"看起来说得通"就准备动手：
+
+| 轮次 | 当时的结论 | 被什么推翻 |
+|---|---|---|
+| 1 | 配置没开，去「产品-工序配置」勾「混批」 | 备份显示图里三道工序早就是 `true` |
+| 2 | workflow 那条路上没有这个开关，只有老配置有 | 有，且已配；老表对 workflow 产品根本不被读 |
+| 3 | 前端判据 `> 1` 改 `>= 1` | 打挂 10 个既有测试；且会让**所有**工序变多来源，同样无视配置 |
+| 4 | **后端 `allowMultipleUpstreamSources(upstreamInputCount > 1)` 覆盖了用户配置** | ✅ 代码 + 备份数据双实证 |
+
+**教训不是"改了四次"，是前三次都提前收口。** 判据应该是：
+
+- 说「配置没开」之前，先把**配置的实际值**读出来（备份/库里都能查）
+- 说「某条路上没这个能力」之前，先 grep 那个字段的**全部读写点**（本次关键就是发现"只写不读"）
+- 改前端判据之前，先问「后端给的值是怎么来的」—— 前端那个 `> 1` 只是后端同一个错误的镜像
+
+代价：基于第 2 轮的错误结论（"两套并存"）清空了 32 张表（1,222 计划 / 1,901 批次 / 6,011 报工 / 75 BOM / 2,870 质检）。备份双份完好（服务器 `/root/backup-20260802-prodline/` + 本地 `D:\Temp\cretas-backup\`，20MB / 13,675 条 `--column-inserts`）。用户拍板不回灌，改为在 F006 + LIUSHANMEN 重建。
