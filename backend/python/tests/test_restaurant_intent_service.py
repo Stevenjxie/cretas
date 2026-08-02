@@ -1071,6 +1071,50 @@ async def test_tiered_answer_executes_and_combines_multi_resolver_plan(monkeypat
 
 
 @pytest.mark.asyncio
+async def test_tiered_answer_passes_all_sealed_multi_dish_names_to_resolver(monkeypatch):
+    query = "本月全部门店米饭和娃娃菜和招牌藤椒味(单人份)的销量"
+    spec = _build_spec(
+        "RESTAURANT_OPS_GROSS_MARGIN",
+        query,
+        confidence=1.0,
+        tier="llm",
+        planner_authority="llm",
+    )
+    captured = {}
+
+    async def _fake_resolve(code, pool, factory_id, **kwargs):
+        captured.update(kwargs)
+        return OpsAnswer(
+            code=code,
+            title="多菜品销量",
+            answer_text=(
+                "本月多菜品销量对比：「米饭」1份；「娃娃菜」1份；"
+                "「招牌藤椒味(单人份)」没有销售记录。"
+            ),
+            charts=[],
+            kpis=[],
+            meta={"targetDishes": ["米饭", "娃娃菜", "招牌藤椒味(单人份)"]},
+        )
+
+    monkeypatch.setattr(svc, "parse_restaurant_query", AsyncMock(return_value=spec))
+    monkeypatch.setattr(svc, "_resolve_tiered", _fake_resolve)
+    monkeypatch.setattr(svc, "log_intent_capture", AsyncMock(return_value=1))
+
+    result = await tiered_answer(
+        query,
+        object(),
+        "DEMO_REST",
+        "restaurant_manager",
+    )
+    await asyncio.sleep(0)
+
+    assert captured["dish_mentions"] == [
+        "米饭", "娃娃菜", "招牌藤椒味(单人份)",
+    ]
+    assert "招牌藤椒味(单人份)" in result["answer_text"]
+
+
+@pytest.mark.asyncio
 async def test_tiered_answer_analyzes_supported_metrics_and_lists_missing_dimensions(
     monkeypatch,
 ):

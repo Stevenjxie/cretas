@@ -33,6 +33,21 @@ _FALLBACK_OUTPUT_CLAUSE_RE = re.compile(
 _AGENT_LLM_TIMEOUT_SECONDS = 6.0
 _MAX_PARTS = 3
 
+_DETERMINISTIC_COMPOUND_SEPARATOR_RE = re.compile(
+    r"[，,](?:另外|顺便|以及|还有|同时)(?:再)?"
+)
+_EXPLICIT_ALL_STORE_RE = re.compile(
+    r"(?:全部门店|所有门店|各门店|全部店|所有店|全店汇总|连锁整体)"
+)
+_EXPLICIT_NAMED_STORE_RE = re.compile(
+    r"[\u4e00-\u9fffA-Za-z0-9·（）()]{2,30}(?:门店|店)"
+)
+_EXPLICIT_TIME_RE = re.compile(
+    r"(?:今天|今日|昨天|昨日|前天|本周|这周|上周|上上周|"
+    r"本月|这个月|这月|上个月|上月|上上个月|上上月|今年|去年|"
+    r"(?:最近|近|过去)(?:\d+|[一二三四五六七八九十两]+)(?:天|日|周|个?月|年))"
+)
+
 
 def is_compound_question(query: Optional[str]) -> bool:
     """启发式复合判定 — 只有命中分隔形态才值得烧一次拆解 LLM。"""
@@ -78,8 +93,49 @@ def _parse_parts(content: str) -> Optional[List[str]]:
     return cleaned
 
 
+def _inherit_explicit_scope(query: str, parts: List[str]) -> List[str]:
+    """Carry explicit shared time/all-store scope into every compound part.
+
+    The decomposition model sometimes returns ``这个月米饭卖得好不好`` for
+    an original ``这个月全部门店…，另外米饭…`` question.  That is grammatical
+    but no longer self-contained, so the second execution asks the user for a
+    store scope that was already supplied.  Only tokens literally present in
+    the original question are inherited; named-store inference remains with
+    the normal restaurant planner.
+    """
+    time_match = _EXPLICIT_TIME_RE.search(query)
+    time_token = time_match.group(0) if time_match else None
+    all_store_match = _EXPLICIT_ALL_STORE_RE.search(query)
+    all_store_token = all_store_match.group(0) if all_store_match else None
+    normalized: List[str] = []
+    for part in parts:
+        prefixes: List[str] = []
+        if time_token and not _EXPLICIT_TIME_RE.search(part):
+            prefixes.append(time_token)
+        if (
+            all_store_token
+            and not _EXPLICIT_ALL_STORE_RE.search(part)
+            and not _EXPLICIT_NAMED_STORE_RE.search(part)
+        ):
+            prefixes.append(all_store_token)
+        normalized.append("".join(prefixes) + part if prefixes else part)
+    return normalized
+
+
+def _deterministic_parts(query: str) -> Optional[List[str]]:
+    """Split the unambiguous ``，另外/顺便/以及/还有/同时`` forms locally."""
+    raw_parts = _DETERMINISTIC_COMPOUND_SEPARATOR_RE.split(query, maxsplit=_MAX_PARTS - 1)
+    cleaned = [part.strip() for part in raw_parts if part.strip()]
+    if len(cleaned) < 2 or any(not (4 <= len(part) <= 60) for part in cleaned):
+        return None
+    return _inherit_explicit_scope(query, cleaned)
+
+
 async def decompose_compound_question(query: str) -> Optional[List[str]]:
     """LLM planner: split into self-contained sub-questions. None = fail-open."""
+    deterministic = _deterministic_parts(query)
+    if deterministic:
+        return deterministic
     try:
         from common.llm_router import call_chain, SLOT
         from common.llm_metrics import llm_caller_context
@@ -107,7 +163,8 @@ async def decompose_compound_question(query: str) -> Optional[List[str]]:
             result = await call_chain(
                 SLOT.MAPPER, payload, timeout=_AGENT_LLM_TIMEOUT_SECONDS)
         content = result["choices"][0]["message"]["content"] or ""
-        return _parse_parts(content)
+        parts = _parse_parts(content)
+        return _inherit_explicit_scope(query, parts) if parts else None
     except Exception as exc:
         logger.warning(f"[restaurant-agent] decompose failed (fail-open): {exc}")
         return None

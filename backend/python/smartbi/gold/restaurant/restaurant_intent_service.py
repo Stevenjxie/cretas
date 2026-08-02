@@ -912,6 +912,7 @@ async def tiered_answer(
         )
         from smartbi.gold.restaurant.restaurant_ops_router import (
             extract_dish_candidate,
+            extract_dish_candidates,
             store_dish_split_dish,
         )
         # The sealed QueryPlan is the execution authority.  Re-running a
@@ -954,8 +955,15 @@ async def tiered_answer(
         planned_results: List[Tuple[str, Any]] = []
         for code in plan:
             code_kwargs = execution_kwargs
+            if code == "RESTAURANT_OPS_GROSS_MARGIN":
+                explicit_dishes = extract_dish_candidates(resolver_query)
+                if len(explicit_dishes) >= 2:
+                    code_kwargs = dict(execution_kwargs)
+                    code_kwargs["dish_mentions"] = explicit_dishes
             if code == "RESTAURANT_OPS_GROSS_MARGIN" and dish_mention:
                 code_kwargs = dict(execution_kwargs)
+                if len(explicit_dishes) >= 2:
+                    code_kwargs["dish_mentions"] = explicit_dishes
                 code_kwargs["dish_mention"] = dish_mention
             if code == "RESTAURANT_OPS_STORE_MARGIN" and (
                 store_mention or len(store_mentions) > 1 or store_dish
