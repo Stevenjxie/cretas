@@ -80,11 +80,24 @@ public interface WhitelistRepository extends JpaRepository<Whitelist, Integer> {
     /**
      * 批量更新过期状态
      */
+    /**
+     * 批量把某工厂已过期的白名单置为 EXPIRED。
+     *
+     * <p>⚠️ 2026-08-02 补租户边界: 这条 JPQL 原先<b>没有 factoryId 谓词</b>, 是一条全租户
+     * UPDATE, 却挂在 {@code PUT /api/mobile/{factoryId}/whitelist/expired} 这个
+     * 按工厂分段的路径下 —— 任一工厂的调用方都会顺手改掉别家的数据。
+     * 此前只有 factory_super_admin / permission_admin 够得着所以没暴露; 同日把白名单
+     * 放开给 hr_admin (见 WhitelistController 类注释) 之后受众扩大, 一并收口。
+     *
+     * <p>factoryId 做成<b>必填参数</b>而不是新增重载 —— 重载会留下一个「能选错」的口子,
+     * 而这个方法只有 WhitelistController 一个调用方 (已 grep 确认, 无定时任务), 直接改签名
+     * 的代价为零。
+     */
     @Modifying
     @Transactional
     @Query("UPDATE Whitelist w SET w.status = 'EXPIRED' " +
-           "WHERE w.status = 'ACTIVE' AND w.expiresAt < :now")
-    int updateExpiredStatus(@Param("now") LocalDateTime now);
+           "WHERE w.factoryId = :factoryId AND w.status = 'ACTIVE' AND w.expiresAt < :now")
+    int updateExpiredStatus(@Param("factoryId") String factoryId, @Param("now") LocalDateTime now);
 
     /**
      * 统计工厂白名单数量（按状态）
