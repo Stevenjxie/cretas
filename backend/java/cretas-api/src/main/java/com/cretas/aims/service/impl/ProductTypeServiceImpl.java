@@ -53,6 +53,36 @@ public class ProductTypeServiceImpl implements ProductTypeService {
 
     private static final Logger log = LoggerFactory.getLogger(ProductTypeServiceImpl.class);
 
+    /**
+     * 把成品单位归一到权威表的码 (kg / pcs / box / bag …)。
+     *
+     * <p>⛔ 刻意比原料侧 {@code normalizeInventoryUnit} <b>宽松</b>: 那边认不出会抛 400
+     * (原料要入库计量, 单位不合法必须挡住); 成品这边**认不出就原样返回**, 不拦创建 ——
+     * 库里真有「半只」这种规格值(F006 干式熟成鸡—前处理), 硬拦会让存量 SKU 改不动。
+     * 归一是为了消除「袋 vs bag」这类同义异写, 不是为了收紧成品单位的取值范围。
+     *
+     * <p>⛔ 也不给空值兜底成 kg: 原料侧那么做是因为入库必须有计量单位;
+     * 成品单位为空是合法的(有些 SKU 按件不计量), 编一个 kg 会让下游按重量算。
+     */
+    private String normalizeProductUnit(String factoryId, String unit) {
+        if (unit == null) {
+            return null;
+        }
+        String value = unit.trim();
+        if (value.isEmpty() || unitContractService == null) {
+            return value.isEmpty() ? value : value;
+        }
+        try {
+            com.cretas.aims.service.unit.UnitNormalizationResult normalized =
+                    unitContractService.normalize(factoryId, value);
+            return normalized.recognized() ? normalized.code() : value;
+        } catch (RuntimeException e) {
+            // 归一失败不该挡住建品 —— 原样存, 由展示层兜底
+            log.warn("成品单位归一失败, 原样保留: factoryId={}, unit={}, err={}", factoryId, value, e.getMessage());
+            return value;
+        }
+    }
+
     private final ProductTypeRepository productTypeRepository;
     private final ObjectMapper objectMapper;
     private final CustomerRepository customerRepository;
@@ -62,6 +92,20 @@ public class ProductTypeServiceImpl implements ProductTypeService {
 
     @PersistenceContext
     private EntityManager entityManager;
+
+    /**
+     * 单位权威表 —— 成品单位也要归一到码。
+     *
+     * <p>🔴 2026-08-02: 此前成品侧 unit 是**裸传**(创建 setUnit(dto.getUnit())、
+     * 更新同样), 而原料侧 RawMaterialTypeServiceImpl#normalizeInventoryUnit 早就归一成
+     * normalized.code() —— 两边方向不一致, prod 实测成品 629 中文 / 原料 660 英文。
+     * 客户撞到的「报工单位袋, BOM 单位 bag」409 就是这么来的。
+     *
+     * <p>字段注入而非构造器: 该类构造器被既有测试按参数列表装配, 加参数会一次性打断它们;
+     * 且归一逻辑对 null 容错(服务缺失时原样返回, 与原料侧同策略)。
+     */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.cretas.aims.service.unit.UnitContractService unitContractService;
 
     // Manual constructor (Lombok @RequiredArgsConstructor not working)
     @org.springframework.beans.factory.annotation.Autowired
@@ -185,7 +229,7 @@ public class ProductTypeServiceImpl implements ProductTypeService {
         productType.setCode(dto.getCode());
         productType.setName(dto.getName());
         productType.setCategory(dto.getCategory());
-        productType.setUnit(dto.getUnit());
+        productType.setUnit(normalizeProductUnit(factoryId, dto.getUnit()));
         productType.setUnitPrice(dto.getUnitPrice());
         productType.setProductionTimeMinutes(dto.getProductionTimeMinutes());
         productType.setShelfLifeDays(dto.getShelfLifeDays());
@@ -311,7 +355,7 @@ public class ProductTypeServiceImpl implements ProductTypeService {
         // 更新其他字段
         if (dto.getName() != null) productType.setName(dto.getName());
         if (dto.getCategory() != null) productType.setCategory(dto.getCategory());
-        if (dto.getUnit() != null) productType.setUnit(dto.getUnit());
+        if (dto.getUnit() != null) productType.setUnit(normalizeProductUnit(factoryId, dto.getUnit()));
         if (dto.getUnitPrice() != null) productType.setUnitPrice(dto.getUnitPrice());
         if (dto.getProductionTimeMinutes() != null) productType.setProductionTimeMinutes(dto.getProductionTimeMinutes());
         if (dto.getShelfLifeDays() != null) productType.setShelfLifeDays(dto.getShelfLifeDays());
