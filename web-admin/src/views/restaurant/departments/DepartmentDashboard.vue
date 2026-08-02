@@ -46,9 +46,16 @@ const dataSourceLabel = computed(() => config.value.source === 'kpi-summary'
   ? 'Gold 经营事实'
   : config.value.source === 'ops-summary'
     ? '后厨业务事实'
-    : '等待人效配置');
+    : config.value.source === 'staffing-summary'
+      ? '预测排班 FactBook'
+      : '等待数据配置');
 const periodSummary = computed(() => {
   if (!config.value.source) return '尚未形成可计算区间';
+  if (config.value.source === 'staffing-summary') {
+    const start = pickPath(payload.value, 'windowStart');
+    const end = pickPath(payload.value, 'windowEnd');
+    return start && end ? `${String(start)} 至 ${String(end)}` : '明日预测';
+  }
   const { start, end } = windowRange(windowDays.value);
   return `${start} 至 ${end}`;
 });
@@ -78,6 +85,9 @@ function endpointFor(days: number): string | null {
     const { start, end } = windowRange(days);
     return `/api/smartbi/gold/kpi-summary?factory_id=${factoryId}`
       + `&start_date=${start}&end_date=${end}`;
+  }
+  if (config.value.source === 'staffing-summary') {
+    return '/api/smartbi/restaurant/staffing/dashboard?horizon=tomorrow';
   }
   return null;
 }
@@ -221,7 +231,7 @@ function ask(question: string) {
       </div>
       <div class="header-right">
         <el-select
-          v-if="config.source"
+          v-if="config.source && config.source !== 'staffing-summary'"
           v-model="windowDays"
           size="default"
           style="width: 130px"

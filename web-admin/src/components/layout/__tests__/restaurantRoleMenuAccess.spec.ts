@@ -72,6 +72,16 @@ describe('餐饮角色的菜单可见性', () => {
     }
   });
 
+  it('老板、店长与人事可见预测排班，人事也能进入餐饮组', () => {
+    const group = findByPath(menuConfig, '/restaurant');
+    const staffing = findByPath(menuConfig, '/restaurant/staffing');
+    for (const role of ['restaurant_owner', 'restaurant_manager', 'hr_admin']) {
+      expect(roleAllowed(group, role), `${role}: restaurant group`).toBe(true);
+      expect(roleAllowed(staffing, role), `${role}: staffing`).toBe(true);
+    }
+    expect(roleAllowed(staffing, 'restaurant_chef')).toBe(false);
+  });
+
   it('厨师长能看到报货与验收入库 —— 那正是这个角色的职责', () => {
     // Java FactoryUserRole: restaurant_chef("厨师长", "报货、领料、验收入库")
     for (const path of ['/procurement/requisitions/my', '/restaurant/supplier-delivery']) {

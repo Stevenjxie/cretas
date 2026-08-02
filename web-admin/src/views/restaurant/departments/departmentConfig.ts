@@ -5,9 +5,8 @@
  * 只有内容不同 —— 所以差异集中在这份纯数据里，页面组件只有一个。
  * 新增第五个部门不需要写新组件。
  *
- * ⚠️ 这里**不放假数据**。人事目前没有任何事实数据（`fact_staffing_daypart` 全表 0 行），
- * 所以它的 `source` 是 null，页面走空态：写清楚缺哪两项 + 给配置入口，不显示 0，
- * 也不给假图表。
+ * ⚠️ 这里**不放假数据**。人事读取预测排班 FactBook；模拟预订在源头和页面上
+ * 始终明标，不能把模拟行伪装成真实平台预订。
  */
 
 export type DeptKey = 'ops' | 'marketing' | 'hr' | 'finance';
@@ -84,8 +83,9 @@ export interface DeptConfig {
    * 数据源。null = 该部门尚无可用数据源，页面走 emptyState。
    *  - 'ops-summary'  → /api/smartbi/restaurant-ops/summary（含 totals 与 margin）
    *  - 'kpi-summary'  → /api/smartbi/gold/kpi-summary
+   *  - 'staffing-summary' → /api/smartbi/restaurant/staffing/dashboard?horizon=tomorrow
    */
-  source: 'ops-summary' | 'kpi-summary' | null;
+  source: 'ops-summary' | 'kpi-summary' | 'staffing-summary' | null;
   kpis: DeptKpi[];
   /** ③ 趋势图；无则不渲染该区（人事） */
   trend?: DeptTrend;
@@ -245,22 +245,23 @@ export const DEPARTMENTS: Record<DeptKey, DeptConfig> = {
     handoff: '门店需求由店长提出；人员配置完成后回到经营数据验证效果。',
     module: 'restaurantHr',
     accent: '#6455A0',
-    // 🔴 目前没有任何事实数据: fact_staffing_daypart 全表 0 行(所有租户)。
-    //    不给假数据, 走空态。补齐配置后把 source 改成对应接口即可。
-    source: null,
-    kpis: [],
-    entries: [],
-    questions: [
-      '哪个时段人手不够',
-      '上个月人效怎么样',
+    source: 'staffing-summary',
+    kpis: [
+      { label: '明日预订覆盖', path: 'summary.reservationCoveragePct', percent: true },
+      { label: '明日预测客流', path: 'summary.predictedGuests' },
+      { label: '建议人数', path: 'summary.recommendedStaff' },
+      { label: '现有人数', path: 'summary.currentStaff' },
+      { label: '正向缺口', path: 'summary.positiveGap' },
+      { label: '置信度', path: 'summary.confidencePct', percent: true },
     ],
-    emptyState: {
-      title: '还不能算人效',
-      detail: '各时段订单量已能从 POS 自动算出，还差两项配置：',
-      todos: ['各时段在岗人数（基准）', '各时段目标人效'],
-      actionLabel: '去配置人效基准',
-      actionPath: '/restaurant/data-completeness',
-    },
+    entries: [
+      { title: '预测排班', path: '/restaurant/staffing' },
+    ],
+    questions: [
+      '明天怎么排班',
+      '下周需要多少兼职',
+      '下个月各店人效安排',
+    ],
   },
 };
 

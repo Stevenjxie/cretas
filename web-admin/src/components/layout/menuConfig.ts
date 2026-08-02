@@ -314,7 +314,7 @@ const rawMenuConfig: MenuItem[] = [
     // 2026-07-31: 补上 owner / purchaser / chef。`roles` 是**允许式白名单**
     // (AppSidebar.canSeeMenuItem: 写了就一票否决), 此前这三个角色即使模块权限
     // 给对了也看不见餐饮组 —— 权限有两个承载点, #2082/#2083 只改了矩阵那一个。
-    roles: ['factory_super_admin', 'platform_admin', 'permission_admin', 'restaurant_manager', 'restaurant_owner', 'restaurant_purchaser', 'restaurant_chef', 'warehouse_manager', 'procurement_manager', 'finance_manager', 'sales_manager'],
+    roles: ['factory_super_admin', 'platform_admin', 'permission_admin', 'restaurant_manager', 'restaurant_owner', 'hr_admin', 'restaurant_purchaser', 'restaurant_chef', 'warehouse_manager', 'procurement_manager', 'finance_manager', 'sales_manager'],
     hideForFactoryTypes: ['FACTORY'],
     children: [
       // -- 部门驾驶舱 (2026-07-31) --
@@ -323,6 +323,8 @@ const rawMenuConfig: MenuItem[] = [
       { path: '/restaurant/ops', title: '运营', icon: 'Bowl', module: 'restaurantOps', groupLabel: '部门驾驶舱' },
       { path: '/restaurant/marketing', title: '市场', icon: 'TrendCharts', module: 'restaurantMarketing' },
       { path: '/restaurant/hr', title: '人事', icon: 'User', module: 'restaurantHr' },
+      { path: '/restaurant/staffing', title: '预测排班', icon: 'Calendar', module: 'restaurantHr',
+        roles: ['factory_super_admin', 'platform_admin', 'permission_admin', 'restaurant_manager', 'restaurant_owner', 'hr_admin'] },
       { path: '/restaurant/finance', title: '财务', icon: 'Money', module: 'restaurantFinance' },
       // ── 运营 ────────────────────────────────────────────────────
       // 后厨供应链: 领料 / 损耗 / 盘点 / 配方

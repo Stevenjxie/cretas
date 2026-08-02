@@ -1766,6 +1766,20 @@ const businessRoutes: RouteRecordRaw[] = [
             meta: { requiresAuth: true, title: '人事', module: 'restaurantHr' }
           },
           {
+            path: 'staffing',
+            name: 'RestaurantStaffingForecast',
+            component: () => import('@/views/restaurant/staffing/index.vue'),
+            meta: {
+              requiresAuth: true,
+              title: '预测排班',
+              module: 'restaurantHr',
+              roles: [
+                'factory_super_admin', 'platform_admin', 'permission_admin',
+                'restaurant_owner', 'restaurant_manager', 'hr_admin',
+              ],
+            }
+          },
+          {
             path: 'finance',
             name: 'RestaurantDeptFinance',
             component: () => import('@/views/restaurant/departments/DepartmentDashboard.vue'),

@@ -87,6 +87,14 @@ describe('餐饮四部门权限', () => {
     expect(store.canAccess('restaurantFinance')).toBe(true);
   });
 
+  it('人事管理员可进入并调整餐饮预测排班，但不能进入其它餐饮部门', () => {
+    const store = storeAs('hr_admin');
+    expect(store.canAccess('restaurant')).toBe(true);
+    expect(store.canWrite('restaurantHr')).toBe(true);
+    expect(store.canAccess('restaurantOps')).toBe(false);
+    expect(store.canAccess('restaurantFinance')).toBe(false);
+  });
+
   it('finance_manager 只进财务，取代 ROLE_PATH_WHITELIST 硬编码', () => {
     const store = storeAs('finance_manager');
     expect(store.canAccess('restaurantFinance')).toBe(true);

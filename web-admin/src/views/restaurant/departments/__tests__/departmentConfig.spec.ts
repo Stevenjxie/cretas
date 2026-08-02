@@ -38,13 +38,19 @@ describe('餐饮部门驾驶舱配置', () => {
     }
   });
 
-  it('人事没有数据源, 必须有空态, 且不给任何 KPI', () => {
+  it('人事读取预测排班 FactBook 并提供真实问题入口', () => {
     const hr = DEPARTMENTS.hr;
-    // fact_staffing_daypart 全表 0 行 —— 给 KPI 就只能显示 0，那是假数据
-    expect(hr.source).toBeNull();
-    expect(hr.kpis).toHaveLength(0);
-    expect(hr.emptyState).toBeTruthy();
-    expect(hr.emptyState!.todos.length).toBeGreaterThan(0);
+    expect(hr.source).toBe('staffing-summary');
+    expect(hr.kpis.map((item) => item.path)).toEqual(expect.arrayContaining([
+      'summary.reservationCoveragePct',
+      'summary.predictedGuests',
+      'summary.recommendedStaff',
+      'summary.currentStaff',
+      'summary.positiveGap',
+      'summary.confidencePct',
+    ]));
+    expect(hr.entries).toContainEqual({ title: '预测排班', path: '/restaurant/staffing' });
+    expect(hr.questions).toEqual(['明天怎么排班', '下周需要多少兼职', '下个月各店人效安排']);
   });
 
   it('有数据源的部门必须有 KPI —— 否则页面是空的', () => {
