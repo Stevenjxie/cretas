@@ -746,23 +746,17 @@ def _dedup_chain(pairs: List[Tuple[str, str]]) -> List[Tuple[str, str]]:
 # `qwen3-max` / `qwen-max` / `qwen-plus` (NOT on the free allowlists = PAID) and
 # blew up the bill. EVERY entry below is now on the new free allowlist for its
 # account (see reference_dashscope_free_model_allowlist 2026-06-11 section).
-# Order: aliyun_c (a736, UNTOUCHED fresh) → aliyun_b (3177, huge free catalog) →
-# tencent (free 用完即停) → zhipu (free 用完即停) → aliyun_a (90bc, partially
-# consumed — LAST, only its tiny remaining-free list, no low-runway SKUs).
+# Order: the still-live aliyun_c pool → interleaved TokenHub/Ark independent
+# providers → zhipu.  The 2026-08-03 audit physically removed every Aliyun
+# pair whose recorded grant had already expired; runtime expiry refusal remains
+# the final guard for the grants that lapse later.
 # Shared deep text fallback tail — broadly-capable NON-thinking-only models, EVERY
 # entry ∈ _SAFE_MODELS, authored soonest-expiry-first (use-it-or-lose-it) with a
 # non-DashScope floor (tencent/zhipu) that survives all aliyun bulk expiries.
 # (Fast slots append this; the param layer sets enable_thinking=false so default-ON
 # hybrids here don't waste 10-20x latency/tokens.)
 _TEXT_TAIL: List[Tuple[str, str]] = [
-    # aliyun_a perishable first (07/17-07/23) — burn before it's lost
-    ("aliyun_a", "qwen3.6-flash"), ("aliyun_a", "kimi-k2.6"),
-    ("aliyun_a", "qwen3.5-plus-2026-04-20"),
-    # aliyun_b 07/16 bulk (still has quota)
-    ("aliyun_b", "qwen3-max-preview"), ("aliyun_b", "glm-5"),
-    ("aliyun_b", "deepseek-v3.2"), ("aliyun_b", "qwen-flash"),
-    ("aliyun_b", "qwen3.6-flash-2026-04-16"),
-    # aliyun_c 08/13 (fullest) + long runway
+    # aliyun_c grants still live on the 2026-08-03 audit date.
     ("aliyun_c", "qwen-plus-latest"), ("aliyun_c", "qwen3-max-preview"),
     ("aliyun_c", "glm-5.1"), ("aliyun_c", "qwen3.5-flash"),
     ("aliyun_c", "deepseek-v3.1"), ("aliyun_c", "qwen3.7-max-2026-06-08"),
@@ -790,7 +784,6 @@ _TEXT_TAIL: List[Tuple[str, str]] = [
 # VL-only chain — vision models only (no _TEXT_TAIL). aliyun_a has NO confirmed-ON VL
 # (screenshot didn't cover VL → toggle unknown → excluded to avoid billing).
 _VL_CHAIN: List[Tuple[str, str]] = _dedup_chain([
-    ("aliyun_b", "qwen3-vl-plus-2025-12-19"), ("aliyun_b", "qwen-vl-max"),  # 07/16 perishable
     ("aliyun_c", "qwen3-vl-plus-2025-12-19"), ("aliyun_c", "qwen-vl-max"),  # 08/13
     ("aliyun_c", "qwen3-vl-plus"), ("aliyun_c", "qwen3-vl-32b-instruct"),
     ("aliyun_c", "qwen3-vl-flash-2026-01-22"), ("zhipu", "glm-4.6v"),
@@ -802,13 +795,11 @@ _VL_CHAIN: List[Tuple[str, str]] = _dedup_chain([
 # appear ONLY in REASONING. Runtime order is authoritative (no re-sort); _refuse_reason
 # drops expired/unsafe entries so heads auto-switch as free grants lapse.
 SLOT_MODELS: Dict[SLOT, List[Tuple[str, str]]] = {
-    # CHAT — 高频低延迟, thinking off → flash/turbo, perishable first.
+    # CHAT — 高频低延迟, thinking off → flash/turbo.
     SLOT.CHAT: _dedup_chain([
         ("aliyun_c", "qwen3.7-flash-2026-07-15"),
         ("aliyun_b", "qwen3.7-flash-2026-07-15"),
         ("aliyun_c", "qwen3.7-flash"), ("aliyun_b", "qwen3.7-flash"),
-        ("aliyun_a", "qwen3.6-flash"), ("aliyun_b", "qwen3.6-flash-2026-04-16"),
-        ("aliyun_b", "qwen-flash"), ("aliyun_b", "qwen-turbo"),
         ("aliyun_c", "qwen3.5-flash"), ("aliyun_c", "qwen3.6-flash-2026-04-16"),
         ("aliyun_c", "qwen-plus-latest"),
     ] + _TEXT_TAIL),
@@ -835,9 +826,7 @@ SLOT_MODELS: Dict[SLOT, List[Tuple[str, str]]] = {
         ("aliyun_c", "qwen3.7-flash-2026-07-15"),
         ("aliyun_b", "qwen3.7-flash-2026-07-15"),
         ("aliyun_c", "qwen3.7-flash"), ("aliyun_b", "qwen3.7-flash"),
-        ("aliyun_b", "qwen3.6-flash-2026-04-16"), ("aliyun_b", "qwen-turbo"),
         ("aliyun_c", "qwen3.5-flash"), ("aliyun_c", "qwen3-coder-flash"),
-        ("aliyun_b", "qwen3-coder-flash"),
     ] + _TEXT_TAIL),
     # MAPPER — 字段映射 JSON (thinking off + json_object) → fast text models.
     # 2026-07-26 用户控制台截图确认 B/C 的 versioned Flash 与 alias 均有
@@ -858,17 +847,17 @@ SLOT_MODELS: Dict[SLOT, List[Tuple[str, str]]] = {
     ]),
     # REASONING — 深度 (thinking on / thinking-only OK) → deepseek/MoE reasoners.
     SLOT.REASONING: _dedup_chain([
-        ("aliyun_c", "deepseek-v3.1"), ("aliyun_b", "deepseek-v3.2"),
+        ("aliyun_c", "deepseek-v3.1"),
         # 控制台服务 ID 是 deepseek-v4-pro-202606; 旧代码写的 `deepseek-v4-pro`
         # 在 TokenHub 上不存在, 所以它恒 402 —— 那个 402 一直被误读成"额度没领",
         # 实际是模型名错。真实余量 999978/1M, 几乎没动过。
         ("aliyun_c", "deepseek-v3.2"), ("tencent", "deepseek-v4-pro-202606"),
-        ("aliyun_c", "qwen3-235b-a22b-thinking-2507"), ("aliyun_b", "qwen3.5-397b-a17b"),
+        ("aliyun_c", "qwen3-235b-a22b-thinking-2507"),
         ("aliyun_c", "deepseek-r1"),
     ] + _TEXT_TAIL),
     # VL — 仅视觉链.
     SLOT.VL: _VL_CHAIN,
-    # REVIEW — 中文 critique 质量 → verified non-thinking Plus/Max.
+    # REVIEW — 中文 critique 质量 → verified non-thinking models.
     # 05-17/preview Max 强制 enable_thinking=true，与 REVIEW 的低延迟
     # enable_thinking=false 契约冲突；改用 A/C 06-08（实测均兼容）并以
     # 三账户 Plus 收尾，避免每次稳定 400 后才 fallback。
@@ -885,6 +874,14 @@ SLOT_MODELS: Dict[SLOT, List[Tuple[str, str]]] = {
     # the healthy dated grants so a cold process does not burn two failed calls;
     # keep Max immediately behind them in case its daily grant recovers.
     SLOT.REVIEW: _dedup_chain([
+        # Keep the restaurant semantic planner's independent-provider floor
+        # inside its 12s wall-clock budget.  All four pairs passed 5/5 real T3
+        # contract shapes on 2026-08-02; interleaving prevents one provider
+        # outage from consuming the entire interactive budget.
+        ("tencent", "deepseek-v4-pro-202606"),
+        ("ark", "doubao-seed-2-1-turbo-260628"),
+        ("tencent", "glm-5.2"),
+        ("ark", "doubao-seed-2-0-lite-260428"),
         # 2026-08-02 production T3 probe: the bare qwen3.7-plus grants above
         # were exhausted, while all three dated 05-26 grants were still healthy.
         # They were already billing-safe and used by INSIGHTS, but REVIEW had

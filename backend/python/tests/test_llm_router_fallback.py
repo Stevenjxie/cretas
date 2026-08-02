@@ -143,9 +143,15 @@ def test_insights_prefers_interleaved_free_plus_before_max_deep_tail():
     assert ("aliyun_a", "qwen3.7-max-2026-06-08") in chain
 
 
-def test_review_uses_verified_non_thinking_abc_fallbacks():
+def test_review_reaches_verified_independent_providers_before_aliyun():
     chain = llm_router.SLOT_MODELS[SLOT.REVIEW]
-    assert chain[:8] == [
+    assert chain[:4] == [
+        ("tencent", "deepseek-v4-pro-202606"),
+        ("ark", "doubao-seed-2-1-turbo-260628"),
+        ("tencent", "glm-5.2"),
+        ("ark", "doubao-seed-2-0-lite-260428"),
+    ]
+    assert chain[4:12] == [
         ("aliyun_c", "qwen3.7-plus-2026-05-26"),
         ("aliyun_b", "qwen3.7-plus-2026-05-26"),
         ("aliyun_a", "qwen3.7-plus-2026-05-26"),
@@ -156,6 +162,18 @@ def test_review_uses_verified_non_thinking_abc_fallbacks():
         ("aliyun_a", "qwen3.7-plus"),
     ]
     assert all(model not in llm_router._THINKING_ONLY for _account, model in chain)
+
+
+def test_no_slot_keeps_an_aliyun_grant_expired_by_august_3():
+    audit_date = datetime.date(2026, 8, 3)
+    offenders = [
+        (slot.value, account, model)
+        for slot, chain in llm_router.SLOT_MODELS.items()
+        for account, model in chain
+        if account in llm_router._ALIYUN_ACCOUNTS
+        and llm_router._refuse_reason(account, model, audit_date) == "expired"
+    ]
+    assert not offenders, f"expired Aliyun models remain reachable: {offenders}"
 
 
 def test_new_b_and_c_flash_quota_pairs_are_registered_and_head_fast_slots():
@@ -664,7 +682,7 @@ async def test_call_chain_without_a_content_validator_keeps_the_first_200(monkey
     monkeypatch.setattr(llm_router, "_today", lambda: datetime.date(2026, 7, 10))
     pill = {"choices": [{"message": {"content": '{"intent":"X","confidence":-1.0}'}}]}
     client = _ScriptedClient({
-        "aliyun_a": _fake_response(200, json_payload=pill),
+        "aliyun_c": _fake_response(200, json_payload=pill),
     })
     monkeypatch.setattr(llm_router, "get_llm_http_client", lambda: client)
     result = await call_chain(SLOT.CHAT, {"messages": [{"role": "user", "content": "hi"}]})
