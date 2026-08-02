@@ -75,8 +75,8 @@ export function RecipeDetailScreen() {
       <View style={styles.header}>
         <Button icon="arrow-left" textColor="#fff" onPress={() => navigation.goBack()}>{t('common.back')}</Button>
         <Text style={styles.headerTitle}>{dishName || t('recipe.detail.title')}</Text>
-        <Button icon="pencil" textColor="#fff" onPress={() => navigation.navigate('RecipeEdit' as any, { productTypeId, dishName })}>
-          {t('recipe.edit.titleEdit')}
+        <Button icon="plus" textColor="#fff" onPress={() => navigation.navigate('RecipeEdit', { productTypeId, dishName })}>
+          {t('recipe.edit.addIngredient')}
         </Button>
       </View>
 

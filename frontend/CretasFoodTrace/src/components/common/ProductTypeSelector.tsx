@@ -15,6 +15,8 @@ interface ProductType {
 }
 
 interface ProductTypeSelectorProps {
+  testID?: string;
+  showConversionStatus?: boolean;
   value: string;  // 显示的产品名称
   onSelect: (productTypeId: string, productTypeName: string, productTypeCode: string) => void;
   label?: string;
@@ -27,6 +29,8 @@ interface ProductTypeSelectorProps {
  * 注意: 不支持快捷添加，SKU由管理员预先配置
  */
 export const ProductTypeSelector: React.FC<ProductTypeSelectorProps> = ({
+  testID,
+  showConversionStatus = true,
   value,
   onSelect,
   label = '产品类型',
@@ -50,6 +54,11 @@ export const ProductTypeSelector: React.FC<ProductTypeSelectorProps> = ({
       const result = await productTypeApiClient.getProductTypes({ isActive: true, limit: 100 });
       const productTypesList: ProductType[] = (Array.isArray(result.data) ? result.data : (result.data as { productTypes?: ProductType[] })?.productTypes || []).map(p => ({ ...p, code: (p as ProductType & { code?: string }).code || '' }));
       console.log('✅ Product types loaded:', productTypesList.length);
+
+      if (!showConversionStatus) {
+        setProductTypes(productTypesList);
+        return;
+      }
 
       // 批量检查每个产品的转换率配置状态
       const productTypesWithConversionStatus = await Promise.all(
@@ -95,6 +104,7 @@ export const ProductTypeSelector: React.FC<ProductTypeSelectorProps> = ({
   return (
     <View>
       <TouchableOpacity
+        testID={testID}
         onPress={() => {
           console.log('🔍 Opening product type selector');
           setModalVisible(true);
@@ -154,18 +164,20 @@ export const ProductTypeSelector: React.FC<ProductTypeSelectorProps> = ({
                       right={props => (
                         <View style={styles.rightContainer}>
                           {/* 转换率配置状态指示器 */}
-                          <Chip
-                            mode="flat"
-                            compact
-                            icon={item.hasConversionRate ? 'check-circle' : 'alert-circle'}
-                            style={[
-                              styles.conversionChip,
-                              item.hasConversionRate ? styles.configuredChip : styles.notConfiguredChip
-                            ]}
-                            textStyle={styles.chipText}
-                          >
-                            {item.hasConversionRate ? '已配置' : '未配置'}
-                          </Chip>
+                          {showConversionStatus && (
+                            <Chip
+                              mode="flat"
+                              compact
+                              icon={item.hasConversionRate ? 'check-circle' : 'alert-circle'}
+                              style={[
+                                styles.conversionChip,
+                                item.hasConversionRate ? styles.configuredChip : styles.notConfiguredChip
+                              ]}
+                              textStyle={styles.chipText}
+                            >
+                              {item.hasConversionRate ? '已配置' : '未配置'}
+                            </Chip>
+                          )}
                           {/* 选中图标 — T123: 比较 displayName (baseProductName || name) */}
                           {value === getDisplayName(item) && <List.Icon {...props} icon="check" color="#2196F3" />}
                         </View>

@@ -495,7 +495,7 @@ export type FAManagementStackParamList = {
   // 餐饮模块 (restaurant mode)
   RecipeList: undefined;
   RecipeDetail: { productTypeId: string; dishName: string };
-  RecipeEdit: { recipeId?: string } | undefined;
+  RecipeEdit: { productTypeId?: string; dishName?: string } | undefined;
   RequisitionList: undefined;
   RequisitionCreate: undefined;
   ChefRequisitionList: undefined;
