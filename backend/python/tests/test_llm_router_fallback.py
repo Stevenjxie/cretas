@@ -297,6 +297,18 @@ def test_429_is_not_quota_exhausted():
     # The correctness fix: transient 429 must NOT trigger the 6h quota-skip.
     assert llm_router._is_quota_exhausted(429, "Too Many Requests") is False
     assert llm_router._is_quota_exhausted(429, "") is False
+    assert llm_router._is_quota_exhausted(
+        429,
+        '{"error":{"code":"RateLimitExceeded","message":"request rate limit exceeded"}}',
+    ) is False
+
+
+def test_ark_set_limit_exceeded_is_persistent_quota_exhaustion():
+    assert llm_router._is_quota_exhausted(
+        429,
+        '{"error":{"code":"SetLimitExceeded","message":"Your account has reached '
+        'the set inference limit for this model, and the model service has been paused."}}',
+    ) is True
 
 
 def test_403_and_402_are_quota_exhausted():
@@ -345,6 +357,8 @@ class _ScriptedClient:
                 account = "aliyun_a"
         elif "tokenhub" in url:
             account = "tencent"
+        elif "volces" in url:
+            account = "ark"
         elif "bigmodel" in url:
             account = "zhipu"
         self.call_log.append((account or "unknown", model))
@@ -356,6 +370,7 @@ def _patch_keys(monkeypatch):
     monkeypatch.setenv("LLM_ALIYUN_B_API_KEY", "key_b_fake")
     monkeypatch.setenv("LLM_ALIYUN_C_API_KEY", "key_c_fake")
     monkeypatch.setenv("LLM_TENCENT_API_KEY", "key_tencent_fake")
+    monkeypatch.setenv("LLM_ARK_API_KEY", "key_ark_fake")
     monkeypatch.setenv("LLM_ZHIPU_API_KEY", "key_zhipu_fake")
 
 
@@ -376,6 +391,36 @@ async def test_call_chain_falls_through_403_to_next_and_only_calls_safe_models(m
     # every model actually attempted must be a registered safe model on its account
     for account, model in client.call_log:
         assert (account, model) in llm_router._SAFE_MODELS, f"unsafe call {account}/{model}"
+
+
+@pytest.mark.asyncio
+async def test_call_chain_persists_ark_set_limit_and_falls_through(monkeypatch):
+    _patch_keys(monkeypatch)
+    ark_model = "doubao-seed-2-0-mini-260428"
+    tencent_model = "deepseek-v3.2"
+    monkeypatch.setitem(
+        llm_router.SLOT_MODELS,
+        SLOT.CHAT,
+        [("ark", ark_model), ("tencent", tencent_model)],
+    )
+    good = {"choices": [{"message": {"content": "餐饮经营数据已完成分析。"}}]}
+    client = _ScriptedClient({
+        "ark": _fake_response(
+            429,
+            '{"error":{"code":"SetLimitExceeded","message":"model service has been paused"}}',
+        ),
+        "tencent": _fake_response(200, json_payload=good),
+    })
+    monkeypatch.setattr(llm_router, "get_llm_http_client", lambda: client)
+
+    result = await call_chain(
+        SLOT.CHAT,
+        {"messages": [{"role": "user", "content": "分析餐饮经营数据"}]},
+    )
+
+    assert result == good
+    assert client.call_log == [("ark", ark_model), ("tencent", tencent_model)]
+    assert llm_router._quota_should_skip(f"ark/{ark_model}") is True
 
 
 @pytest.mark.asyncio

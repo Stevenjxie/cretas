@@ -3483,6 +3483,19 @@ def test_r15_new_t1_rules():
     assert _r.match_restaurant_ops("有没有店在亏损") == "RESTAURANT_OPS_STORE_MARGIN"
 
 
+@pytest.mark.parametrize(
+    ("query", "direction"),
+    [
+        ("本月全部门店哪道菜卖的好", "best"),
+        ("本月全部门店哪道菜卖的最好", "best"),
+        ("本月全部门店哪道菜卖的最差", "worst"),
+        ("本月全部门店哪些菜没人点", "worst"),
+    ],
+)
+def test_spoken_or_typed_dish_ranking_variants_compile_direction(query, direction):
+    assert _r.dish_ranking_direction(query) == direction
+
+
 def test_r15_store_mention_existence_guard():
     assert _r.extract_store_mention("有没有店在亏损") is None
     assert _r.extract_store_mention("是否有门店亏钱") is None

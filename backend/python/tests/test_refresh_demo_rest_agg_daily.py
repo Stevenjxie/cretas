@@ -98,3 +98,54 @@ def test_dish_facts_scope_and_marker():
     assert dish_mod.MARKER.startswith("DEMO_ROLL_")
     assert dish_mod.TX_MARKER == "DEMO_ROLL_TX"
     assert dish_mod.MARKER != str(mod.SEED_VERSION)
+
+
+class _SyntheticChannelConn:
+    def __init__(self):
+        self.executed = []
+
+    async def execute(self, sql, *args):
+        self.executed.append((sql, args))
+        if "INSERT INTO fact_pos_transaction" in sql:
+            return "INSERT 0 20"
+        if "WITH marked AS" in sql:
+            return "UPDATE 12"
+        if "INSERT INTO agg_daily_order_type_meal" in sql:
+            return "INSERT 0 18"
+        raise AssertionError(f"unexpected SQL: {sql}")
+
+    async def fetchval(self, sql, *args):
+        assert "SELECT MIN(date)" in sql
+        assert args[0] == "DEMO_REST"
+        assert args[1] == dish_mod.TX_MARKER
+        return date(2026, 8, 1)
+
+
+def test_synthetic_transactions_include_channel_and_meal_dimensions():
+    conn = _SyntheticChannelConn()
+    inserted = asyncio.run(
+        dish_mod._synthesize_transactions(conn, "DEMO_REST", date(2026, 8, 1))
+    )
+
+    sql = conn.executed[0][0]
+    assert inserted == 20
+    assert "order_type, channel_origin, meal_period" in sql
+    assert "'堂食'" in sql
+    assert "'外卖'" in sql
+    assert "'自提'" in sql
+
+
+def test_existing_marker_channels_are_null_only_and_gold_is_refreshed():
+    conn = _SyntheticChannelConn()
+    result = asyncio.run(
+        dish_mod._refresh_synthetic_channels(
+            conn, "DEMO_REST", date(2026, 8, 1)
+        )
+    )
+
+    assert result == {"channel_rows_backfilled": 12, "channel_gold_rows": 18}
+    update_sql = conn.executed[0][0]
+    assert "source_type = $2" in update_sql
+    assert "factory_id = $1" in update_sql
+    assert "NULLIF(TRIM(order_type), '') IS NULL" in update_sql
+    assert "INSERT INTO agg_daily_order_type_meal" in conn.executed[1][0]

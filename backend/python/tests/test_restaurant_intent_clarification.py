@@ -257,6 +257,103 @@ async def test_relevant_store_options_without_time_use_only_matching_store_fragm
 
 
 @pytest.mark.asyncio
+async def test_semantic_partial_store_alias_requires_one_real_catalogue_match():
+    pool = _FakeDbPool(store_names=[
+        "兄弟土菜馆",
+        "鲜行者打浦桥日月光店",
+        "青花椒徐汇日月光店",
+        "有滋有味总部",
+    ])
+    plan = {
+        "intent": "RESTAURANT_OPS_STORE_MARGIN",
+        "time_range": None,
+        "wants_margin": False,
+        "asks_profitability": False,
+        "requested_metrics": ["revenue"],
+        "analysis_action": "lookup",
+        "dimensions": ["store"],
+        "dish": None,
+        "store": None,
+        "stores": [],
+        "store_scope": "single",
+        "confidence": 0.99,
+        "clarification_needed": True,
+        "missing_fields": ["time_range"],
+        "clarification_question": TIME_CLARIFICATION_QUESTION,
+        "clarification_options": ["本月", "上个月"],
+    }
+
+    with patch(
+        "smartbi.gold.restaurant.restaurant_intent._t3_llm_parse",
+        new=AsyncMock(return_value=plan),
+    ):
+        spec = await parse_restaurant_query(
+            "日月光店的营收",
+            pool,
+            factory_id="DEMO_REST",
+            semantic_first=True,
+        )
+
+    assert spec.store_scope is None
+    assert spec.store_slots == ()
+    assert spec.clarification_needed is True
+    assert "请问您指的是哪家" in spec.clarification_question
+    assert "日月光店" in spec.clarification_question
+    assert spec.clarification_options == (
+        "鲜行者打浦桥日月光店",
+        "青花椒徐汇日月光店",
+    )
+    assert "兄弟土菜馆" not in spec.clarification_options
+
+
+@pytest.mark.asyncio
+async def test_combined_named_dish_scope_time_buttons_omit_unrelated_store_catalogue():
+    pool = _FakeDbPool(store_names=[
+        "兄弟土菜馆",
+        "有滋有味总部",
+        "青花椒新世界新丸中心店",
+    ])
+    plan = {
+        "intent": "RESTAURANT_OPS_GROSS_MARGIN",
+        "time_range": None,
+        "wants_margin": False,
+        "asks_profitability": False,
+        "requested_metrics": ["sales_volume"],
+        "analysis_action": "lookup",
+        "dimensions": ["dish"],
+        "dish": "米饭",
+        "store": None,
+        "stores": [],
+        "store_scope": None,
+        "confidence": 0.99,
+        "clarification_needed": True,
+        "missing_fields": ["time_range"],
+        "clarification_question": TIME_CLARIFICATION_QUESTION,
+        "clarification_options": ["本月", "上个月", "最近7天", "最近30天"],
+    }
+
+    with patch(
+        "smartbi.gold.restaurant.restaurant_intent._t3_llm_parse",
+        new=AsyncMock(return_value=plan),
+    ):
+        spec = await parse_restaurant_query(
+            "米饭的销量是多少",
+            pool,
+            factory_id="DEMO_REST",
+            semantic_first=True,
+        )
+
+    assert {"store", "time"} <= _asked_slots(spec)
+    assert spec.clarification_options == (
+        "全部门店 本月",
+        "全部门店 上个月",
+        "全部门店 最近7天",
+        "全部门店 最近30天",
+    )
+    assert "兄弟土菜馆 最近30天" not in spec.clarification_options
+
+
+@pytest.mark.asyncio
 async def test_semantic_first_store_buttons_only_offer_data_bearing_dish_stores():
     pool = _FakeDbPool(
         store_names=[

@@ -1212,14 +1212,18 @@ DEFAULT_CHAIN: List[str] = [
 def _is_quota_exhausted(status_code: int, body_text: str) -> bool:
     """Detect a FREE-GRANT exhaustion (→ long 6h quota-skip until monthly reset).
 
-    ⚠️ 429 is DELIBERATELY NOT here (gap-audit correctness fix). A 429 is a TRANSIENT
-    burst rate-limit, not a spent monthly free grant — treating it as quota-exhausted
-    sidelined a healthy quota-rich model for 6h on a load spike. 429 now falls through
-    the 'other errors' path → circuit-breaker SHORT cooldown (CB_COOLDOWN) only, no 6h
-    quota-skip. Only 403 FreeTierOnly / 402 grant-exhaustion warrant the long skip."""
+    A generic 429 is a transient burst rate-limit and must keep the short circuit-
+    breaker cooldown. Volcengine Ark also uses 429 for ``SetLimitExceeded`` though:
+    that response explicitly says the account's configured inference allowance was
+    reached and the model service was paused. Re-probing a paused model every minute
+    only burns latency, so that one exact provider code belongs in the persistent
+    quota-skip path while ordinary 429 responses do not.
+    """
+    lowered_body = body_text.lower()
+    if status_code == 429 and "setlimitexceeded" in lowered_body:
+        return True
     if status_code == 403:
         return "FreeTierOnly" in body_text or "AllocationQuota" in body_text
-    lowered_body = body_text.lower()
     if status_code == 402 and (
         "insufficient balance" in lowered_body
         or "free_quota_exhausted" in lowered_body

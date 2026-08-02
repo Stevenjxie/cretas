@@ -134,6 +134,15 @@ _APPROVED_EXACT_ROUTES: Dict[str, str] = {
     "哪个菜卖得好": "RESTAURANT_OPS_GROSS_MARGIN",
     "哪个菜卖得最好": "RESTAURANT_OPS_GROSS_MARGIN",
     "哪个菜最好卖": "RESTAURANT_OPS_GROSS_MARGIN",
+    "今年比去年增长多少": "RESTAURANT_OPS_SALES_SUMMARY",
+}
+# Production semantic-first routing normally uses the database promotion
+# catalogue. This deploy-time floor is intentionally smaller than the legacy
+# registry above: only phrases first introduced by this release belong here.
+# Existing database promotions must remain revocable without an old code entry
+# silently re-authorizing them.
+_SEMANTIC_BUILTIN_EXACT_ROUTES: Dict[str, str] = {
+    "今年比去年增长多少": "RESTAURANT_OPS_SALES_SUMMARY",
 }
 _APPROVED_TIME_ANSWERS = (
     "本月",
@@ -515,7 +524,9 @@ def optimization_clarification_question(query: str) -> Optional[str]:
 
 
 _REQUEST_METRIC_RULES: Tuple[Tuple[str, Tuple[str, ...]], ...] = (
-    ("net_profit", ("净利润", "净利率", "净利润率", "经营利润", "实际利润", "净赚")),
+    ("net_profit", (
+        "净利润", "净利率", "净利润率", "经营利润", "实际利润", "净赚", "挣了多少",
+    )),
     ("table_turnover", ("翻台率", "翻台")),
     ("recipe_cost", ("菜品成本", "食材成本", "配方成本", "单品成本", "成本")),
     ("wastage", ("食材损耗", "损耗", "浪费", "报损", "腐坏", "过期")),
@@ -526,9 +537,10 @@ _REQUEST_METRIC_RULES: Tuple[Tuple[str, Tuple[str, ...]], ...] = (
         "账实差", "账实差异", "账实不符",
     )),
     ("sales_volume", (
-        "菜品销量", "销量", "销售量", "卖得好", "卖得最好", "最好卖",
+        "菜品销量", "销量", "销售量", "卖得好", "卖的好", "卖得最好", "卖的最好", "最好卖",
         "销量最高", "最受欢迎", "卖得慢", "卖了多少", "卖出",
-        "卖得怎么样", "卖得如何", "卖得好不好",
+        "卖得怎么样", "卖得如何", "卖得好不好", "卖得最差", "卖的最差",
+        "没人点", "无人点", "没有人点",
         "畅销", "慢销", "滞销",
     )),
     ("gross_margin", ("毛利率", "毛利", "利润", "盈利", "赚钱", "亏钱", "亏损", "亏本", "赔钱")),
@@ -1934,6 +1946,29 @@ def _build_spec(
             # another “which stores?” clarification.
             store_scope = "all"
             store_slots = ()
+    ambiguous_partial_store = bool(
+        llm_semantics_authoritative
+        and llm_store_scope == "single"
+        and not validated_llm_stores
+        and not llm_store
+        and deterministic_store
+        and len(store_options) > 1
+        and deterministic_store not in store_options
+    )
+    if ambiguous_partial_store:
+        # The model may label a partial alias (for example ``日月光店``) as a
+        # single-store scope without selecting either real matching store.
+        # Executing that contradiction would silently query a non-existent
+        # full name. Keep the user's fragment for display, but require one of
+        # the evidence-bound catalogue matches before sealing a store filter.
+        store_scope = None
+        store_slots = ()
+        clarification_needed = True
+        clarification_question = (
+            f"请问您指的是哪家「{deterministic_store}」？请选择具体门店。"
+        )
+        missing_slot = "store"
+        clarification_options = tuple(store_options)
     dimension_list = list(
         llm_dimensions
         if llm_dimensions is not None
@@ -2215,6 +2250,19 @@ def _build_spec(
         # make a clarification look executable to downstream code.
         planned_intents = ()
 
+    if len(explicit_dish_candidates) > 1:
+        # ``dish_slot`` is intentionally singular. Multi-dish questions keep
+        # every verbatim name in ``resolver_query_seed``; forcing one model-
+        # chosen name into this slot makes the answer contract reject the other
+        # requested dishes even when the resolver returned all of them.
+        resolved_dish_slot = None
+    elif len(explicit_dish_candidates) == 1 and (
+        not llm_semantics_authoritative or allow_explicit_slot_repair
+    ):
+        resolved_dish_slot = explicit_dish_candidates[0]
+    else:
+        resolved_dish_slot = llm_dish or deterministic_dish
+
     spec = RestaurantQuerySpec(
         intent=code or "",
         domain="restaurant",
@@ -2250,7 +2298,7 @@ def _build_spec(
         compare_stores=(store_scope == "multiple"),
         store_options=tuple(store_options),
         clarification_options=tuple(clarification_options),
-        dish_slot=llm_dish or deterministic_dish,
+        dish_slot=resolved_dish_slot,
         store_slot=llm_store or deterministic_store,
         plan_version="restaurant-query-plan-v2",
         planner_authority=effective_planner_authority,
@@ -2750,6 +2798,40 @@ async def _replay_zero_token_plan(
                 "executable plan; falling through to the planner: %s",
                 query,
             )
+
+    built_in_match = _exact_shape_matches(
+        query,
+        [
+            (phrase, code, code)
+            for phrase, code in _SEMANTIC_BUILTIN_EXACT_ROUTES.items()
+            if code in _VALID_CODES
+        ],
+    )
+    if built_in_match:
+        built_in_code = built_in_match[0]
+        # The database catalogue is the live promotion surface, while this
+        # tiny reviewed registry is the deploy-time safety floor. It keeps a
+        # finite approved sentence executable during a catalogue/RLS outage
+        # and lets newly reviewed phrases ship with Python without requiring a
+        # separate production data mutation. The same whole-sentence shape
+        # matcher is used above; this is never a contains/keyword route.
+        spec = _build_spec(
+            built_in_code,
+            query,
+            confidence=1.0,
+            tier="exact",
+            planner_authority="promoted_exact",
+            store_options=suggested_stores or available_stores,
+            require_explicit_time=True,
+        )
+        logger.info(
+            "[restaurant-intent] zero-token built-in promoted-route hit: "
+            "intent=%s clarification=%s query=%s",
+            spec.intent,
+            spec.clarification_needed,
+            query,
+        )
+        return spec, "promoted_route_builtin"
 
     plan = _semantic_plan_cache_get(factory_id, query, allow_stale=allow_stale)
     if plan is not None:
@@ -4159,6 +4241,10 @@ async def _apply_store_scope_guard(
     if spec.clarification_needed and "time" in _slots_of_clarification(
         spec.clarification_question
     ):
+        has_named_dish = bool(
+            extract_dish_candidates(spec.resolver_query_seed)
+            or extract_dish_candidate(spec.resolver_query_seed)
+        )
         return _seal_query_plan(replace(
             spec,
             clarification_needed=True,
@@ -4166,7 +4252,22 @@ async def _apply_store_scope_guard(
             missing_slot="store+time",
             store_options=names,
             clarification_options=tuple(f"全部门店 {w}" for w in _APPROVED_TIME_ANSWERS)
-            + tuple(f"{n} 最近30天" for n in names[:2]),
+            + (() if has_named_dish else tuple(f"{n} 最近30天" for n in names[:2])),
+        ))
+
+    if (
+        spec.clarification_needed
+        and spec.store_slot
+        and spec.store_slot not in names
+        and len(names) > 1
+        and "store" in _slots_of_clarification(spec.clarification_question)
+    ):
+        return _seal_query_plan(replace(
+            spec,
+            store_scope=None,
+            store_slots=(),
+            store_options=names,
+            clarification_options=names,
         ))
 
     return _seal_query_plan(replace(
@@ -5325,11 +5426,30 @@ async def parse_restaurant_query(
             return continued
 
     if semantic_first:
+        if _normalize_exact_phrase(norm_query) == _normalize_exact_phrase(
+            "这月挣了多少"
+        ):
+            # One reviewed colloquial whole sentence, not a keyword route.
+            # The phrase asks for net profit, which this dataset cannot compute
+            # without expenses/tax/other income. Keep that truthful capability
+            # answer stable even when every planner provider is unavailable.
+            return _build_spec(
+                "",
+                norm_query,
+                confidence=1.0,
+                tier="keyword",
+                clarification_needed=True,
+                clarification_question=_unsupported_requirement_question(
+                    ("net_profit",),
+                    ("net_profit",),
+                ),
+            )
+
         # Production restaurant chat enters here: after authenticated context
         # loading, the LLM is the first and only natural-language authority.
-        # Keyword/vector/exact compilers below remain a legacy compatibility
-        # path for offline tests and non-production callers; they are not
-        # consulted by Web or Java restaurant chat.
+        # Keyword/vector/free-form compilers below remain a legacy compatibility
+        # path for offline tests and non-production callers. Production only
+        # admits exact routes through the zero-token reviewed catalogue/floor.
         try:
             if not await _is_restaurant_tenant(pool, factory_id):
                 return None

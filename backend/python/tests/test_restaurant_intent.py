@@ -723,6 +723,30 @@ async def test_approved_exact_time_and_store_composition_survives_planner_outage
 
 
 @pytest.mark.asyncio
+async def test_approved_year_over_year_sales_shape_survives_planner_outage():
+    t3 = AsyncMock(side_effect=AssertionError(
+        "reviewed year-over-year sales shape must not call T3"
+    ))
+    with patch("smartbi.gold.restaurant.restaurant_intent._t3_llm_parse", new=t3):
+        spec = await parse_restaurant_query(
+            "全部门店今年比去年增长多少",
+            _restaurant_pool(),
+            factory_id="QHJ01",
+            semantic_first=True,
+        )
+
+    assert spec is not None
+    assert spec.intent == "RESTAURANT_OPS_SALES_SUMMARY"
+    assert spec.planner_authority == "promoted_exact"
+    assert spec.comparison == "previous_year"
+    assert spec.store_scope == "all"
+    assert spec.clarification_needed is False
+    assert all(spec.date_range)
+    assert all(spec.comparison_range)
+    t3.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_explicit_multi_store_dish_ranking_survives_planner_outage():
     query = "最近7天青花椒南方百联店和青花椒徐汇光启城店哪个菜卖得好"
     t3 = AsyncMock(side_effect=AssertionError(
@@ -3742,7 +3766,7 @@ def test_semantic_contract_repairs_plain_profit_lookup_action_and_dish():
     assert spec.planned_intents == ("RESTAURANT_OPS_GROSS_MARGIN",)
 
 
-def test_all_store_profit_comparison_keeps_first_named_dish_slot_clean():
+def test_all_store_profit_comparison_keeps_multi_dish_names_in_query_seed():
     spec = _build_spec(
         "RESTAURANT_OPS_GROSS_MARGIN",
         "本月全部门店米饭和招牌藤椒味(单人份)哪个赚钱",
@@ -3756,9 +3780,58 @@ def test_all_store_profit_comparison_keeps_first_named_dish_slot_clean():
         llm_semantics_authoritative=True,
     )
 
-    assert spec.dish_slot == "米饭"
+    assert spec.dish_slot is None
+    assert "米饭" in spec.resolver_query_seed
+    assert "招牌藤椒味(单人份)" in spec.resolver_query_seed
     assert spec.store_scope == "all"
     assert spec.planned_intents == ("RESTAURANT_OPS_GROSS_MARGIN",)
+
+
+def test_multi_dish_contract_ignores_model_concatenation_or_arbitrary_single_name():
+    query = "本月全部门店米饭和娃娃菜和招牌藤椒味(单人份)的销量"
+
+    for model_dish in ("米饭和娃娃菜和招牌藤椒味(单人份)", "招牌藤椒味(单人份)"):
+        spec = _build_spec(
+            "RESTAURANT_OPS_GROSS_MARGIN",
+            query,
+            confidence=0.96,
+            tier="llm",
+            llm_dish=model_dish,
+            llm_requested_metrics=("sales_volume",),
+            llm_dimensions=("dish",),
+            llm_analysis_action="lookup",
+            llm_store_scope="all",
+            planner_authority="llm",
+            llm_semantics_authoritative=True,
+        )
+
+        assert spec.dish_slot is None
+        assert spec.resolver_query_seed == query
+
+
+def test_colloquial_earnings_request_is_truthfully_net_profit_not_revenue():
+    assert _detect_requested_metrics("这月挣了多少") == ("net_profit",)
+
+
+@pytest.mark.asyncio
+async def test_semantic_colloquial_earnings_gap_survives_planner_outage():
+    t3 = AsyncMock(side_effect=AssertionError(
+        "an explicit unsupported net-profit request must not call T3"
+    ))
+    with patch("smartbi.gold.restaurant.restaurant_intent._t3_llm_parse", new=t3):
+        spec = await parse_restaurant_query(
+            "这月挣了多少",
+            _restaurant_pool(),
+            factory_id="QHJ01",
+            semantic_first=True,
+        )
+
+    assert spec is not None
+    assert spec.intent == ""
+    assert spec.clarification_needed is True
+    assert "净利润" in spec.clarification_question
+    assert "缺少费用" in spec.clarification_question
+    t3.assert_not_awaited()
 
 
 def test_semantic_contract_repairs_store_loss_existence_lookup():
