@@ -8,6 +8,7 @@ from datetime import date, timedelta
 import pytest
 
 from smartbi.scripts import refresh_demo_rest_agg_daily as mod
+from smartbi.scripts import refresh_demo_rest_dish_facts as dish_mod
 from smartbi.scripts import refresh_qhj_demo_recent_agg as qhj
 
 
@@ -33,13 +34,44 @@ def test_scope_is_demo_tenant_only():
 
 def test_seed_marker_is_reserved_and_distinct_from_qhj_seed():
     assert mod.SEED_VERSION != qhj.SEED_VERSION
+    assert mod.SEED_VERSION != qhj.DEMO_REST_SEED_VERSION
     assert mod.SEED_VERSION >= 9_000_000
 
 
+class _AggApplyConn:
+    def __init__(self, target_end: date, pos_max_date: date):
+        self.target_end = target_end
+        self.pos_max_date = pos_max_date
+
+    async def execute(self, _sql, *_args):
+        return "INSERT 0 0"
+
+    async def fetchrow(self, _sql, *_args):
+        return {
+            "rows": 10,
+            "max_date": self.target_end,
+            "pos_max_date": self.pos_max_date,
+            "seeded_rows": 0,
+        }
+
+
+def test_aggregate_verification_rejects_stale_pos_grain():
+    target_end = date(2026, 8, 1)
+    conn = _AggApplyConn(target_end, date(2026, 7, 31))
+    with pytest.raises(RuntimeError, match="POS coverage still ends"):
+        asyncio.run(mod.apply_refresh(conn, target_end))
+
+
+def test_aggregate_verification_reports_matching_pos_grain():
+    target_end = date(2026, 8, 1)
+    result = asyncio.run(
+        mod.apply_refresh(_AggApplyConn(target_end, target_end), target_end)
+    )
+    assert result["agg_max_date_after"] == "2026-08-01"
+    assert result["pos_max_date_after"] == "2026-08-01"
+
+
 # ── refresh_demo_rest_dish_facts (R17) guard rails ──
-from smartbi.scripts import refresh_demo_rest_dish_facts as dish_mod
-
-
 def test_dish_facts_yesterday_is_latest_allowed_end():
     dish_mod.validate_target_end(date.today() - timedelta(days=1))
     with pytest.raises(ValueError):

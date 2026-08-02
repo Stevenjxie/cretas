@@ -1,10 +1,15 @@
-"""Fill the QHJ demo tenant's recent Gold daily-sales gap from a fixed template.
+"""Roll an allowlisted demo tenant's recent Gold sales from a fixed template.
 
-This is deliberately aggregate-only.  It makes recent sales, order-count and
-ticket-size comparisons usable without fabricating bill-grain transactions or
-mixing synthetic rows into POS details.  The source template is an existing,
-continuous 81-day Gold window.  Target rows are marked with a reserved version
-so the operation is auditable and safely reversible.
+This stage is deliberately aggregate-only.  It gives the downstream demo POS
+roller an explicit revenue / bill-count target without reading a real tenant or
+inventing a second business shape.  Each demo tenant owns a fixed, verified,
+continuous 81-day template and a distinct reserved version marker.  Target rows
+are therefore deterministic, auditable, idempotent and safely reversible.
+
+``RES_3101_009`` remains the backwards-compatible default.  ``DEMO_REST`` is
+allowed only so its stopped 2026-07-31 seed can enter the same aggregate -> POS
+transaction -> dish-item loop; it is a maintained fallback/regression tenant,
+not a primary user-facing demo data source.
 
 The command is dry-run by default.  Production application requires both
 ``--apply`` and the exact tenant confirmation value.
@@ -15,14 +20,48 @@ import argparse
 import asyncio
 from dataclasses import asdict, dataclass
 from datetime import date, timedelta
-from typing import Any, Dict, Optional
+from typing import Any, Dict
 
 
-FACTORY_ID = "RES_3101_009"
+@dataclass(frozen=True)
+class DemoRefreshConfig:
+    factory_id: str
+    source_start: date
+    source_end: date
+    target_start: date
+    seed_version: int
+
+
+FACTORY_ID = "RES_3101_009"  # backwards-compatible CLI/function default
+DEMO_REST_FACTORY_ID = "DEMO_REST"
 SOURCE_START = date(2026, 2, 9)
 SOURCE_END = date(2026, 4, 30)
 TARGET_START = date(2026, 5, 1)
 SEED_VERSION = 9_000_721
+DEMO_REST_TARGET_START = date(2026, 8, 1)
+DEMO_REST_SEED_VERSION = 9_000_728
+
+CONFIG_BY_FACTORY = {
+    FACTORY_ID: DemoRefreshConfig(
+        factory_id=FACTORY_ID,
+        source_start=SOURCE_START,
+        source_end=SOURCE_END,
+        target_start=TARGET_START,
+        seed_version=SEED_VERSION,
+    ),
+    DEMO_REST_FACTORY_ID: DemoRefreshConfig(
+        factory_id=DEMO_REST_FACTORY_ID,
+        # Production read-only probe 2026-08-02: DEMO_REST agg_daily is
+        # calendar-continuous from 2025-01-01 through 2026-07-31.  Reuse the
+        # same fixed 81-day calendar window as the RES demo, but clone only
+        # DEMO_REST's own rows; never read across tenants.
+        source_start=SOURCE_START,
+        source_end=SOURCE_END,
+        target_start=DEMO_REST_TARGET_START,
+        seed_version=DEMO_REST_SEED_VERSION,
+    ),
+}
+ALLOWED_FACTORIES = tuple(CONFIG_BY_FACTORY)
 
 
 @dataclass(frozen=True)
@@ -39,19 +78,29 @@ class RefreshPlan:
     target_days_before: int
     seeded_rows_before: int
     missing_source_days: int
+    seed_version: int
 
 
-def source_date_for_target(target: date) -> date:
-    if target < TARGET_START:
+def config_for(factory_id: str) -> DemoRefreshConfig:
+    try:
+        return CONFIG_BY_FACTORY[factory_id]
+    except KeyError as exc:
+        raise RuntimeError(f"--factory must be one of {ALLOWED_FACTORIES}") from exc
+
+
+def source_date_for_target(target: date, factory_id: str = FACTORY_ID) -> date:
+    config = config_for(factory_id)
+    if target < config.target_start:
         raise ValueError("target date precedes the approved demo window")
-    cycle_days = (SOURCE_END - SOURCE_START).days + 1
-    offset = (target - TARGET_START).days % cycle_days
-    return SOURCE_START + timedelta(days=offset)
+    cycle_days = (config.source_end - config.source_start).days + 1
+    offset = (target - config.target_start).days % cycle_days
+    return config.source_start + timedelta(days=offset)
 
 
-def validate_target_end(target_end: date) -> None:
+def validate_target_end(target_end: date, factory_id: str = FACTORY_ID) -> None:
+    config = config_for(factory_id)
     latest_allowed = date.today() - timedelta(days=1)
-    if target_end < TARGET_START:
+    if target_end < config.target_start:
         raise ValueError("target end precedes the approved demo window")
     if target_end > latest_allowed:
         raise ValueError(
@@ -59,9 +108,14 @@ def validate_target_end(target_end: date) -> None:
         )
 
 
-async def build_plan(conn: Any, target_end: date) -> RefreshPlan:
-    validate_target_end(target_end)
-    await conn.execute("SELECT set_config('app.factory_id', $1, false)", FACTORY_ID)
+async def build_plan(
+    conn: Any,
+    target_end: date,
+    factory_id: str = FACTORY_ID,
+) -> RefreshPlan:
+    config = config_for(factory_id)
+    validate_target_end(target_end, factory_id)
+    await conn.execute("SELECT set_config('app.factory_id', $1, false)", factory_id)
     counts = await conn.fetchrow(
         """
         SELECT
@@ -82,19 +136,19 @@ async def build_plan(conn: Any, target_end: date) -> RefreshPlan:
                    WHERE a.factory_id=$1 AND a.date=d::date
             )) AS missing_source_days
         """,
-        FACTORY_ID,
-        SOURCE_START,
-        SOURCE_END,
-        TARGET_START,
+        factory_id,
+        config.source_start,
+        config.source_end,
+        config.target_start,
         target_end,
-        SEED_VERSION,
+        config.seed_version,
     )
-    cycle_days = (SOURCE_END - SOURCE_START).days + 1
+    cycle_days = (config.source_end - config.source_start).days + 1
     return RefreshPlan(
-        factory_id=FACTORY_ID,
-        source_start=SOURCE_START.isoformat(),
-        source_end=SOURCE_END.isoformat(),
-        target_start=TARGET_START.isoformat(),
+        factory_id=factory_id,
+        source_start=config.source_start.isoformat(),
+        source_end=config.source_end.isoformat(),
+        target_start=config.target_start.isoformat(),
         target_end=target_end.isoformat(),
         template_days=cycle_days,
         source_rows=int(counts["source_rows"]),
@@ -103,10 +157,12 @@ async def build_plan(conn: Any, target_end: date) -> RefreshPlan:
         target_days_before=int(counts["target_days"]),
         seeded_rows_before=int(counts["seeded_rows"]),
         missing_source_days=int(counts["missing_source_days"]),
+        seed_version=config.seed_version,
     )
 
 
 async def apply_refresh(conn: Any, plan: RefreshPlan) -> Dict[str, int]:
+    config = config_for(plan.factory_id)
     if plan.missing_source_days:
         raise RuntimeError("source template is not calendar-continuous")
     if plan.source_days != plan.template_days or plan.source_rows <= 0:
@@ -135,12 +191,12 @@ async def apply_refresh(conn: Any, plan: RefreshPlan) -> Dict[str, int]:
             ON source.factory_id=$1 AND source.date=td.source_date
         ON CONFLICT (factory_id, date, store_id) DO NOTHING
         """,
-        FACTORY_ID,
-        TARGET_START,
+        plan.factory_id,
+        config.target_start,
         date.fromisoformat(plan.target_end),
-        SOURCE_START,
+        config.source_start,
         plan.template_days,
-        SEED_VERSION,
+        config.seed_version,
     )
     inserted = int(result.rsplit(" ", 1)[-1])
     verification = await conn.fetchrow(
@@ -153,12 +209,14 @@ async def apply_refresh(conn: Any, plan: RefreshPlan) -> Dict[str, int]:
           FROM agg_daily
          WHERE factory_id=$1 AND date BETWEEN $2 AND $3
         """,
-        FACTORY_ID,
-        TARGET_START,
+        plan.factory_id,
+        config.target_start,
         date.fromisoformat(plan.target_end),
-        SEED_VERSION,
+        config.seed_version,
     )
-    expected_days = (date.fromisoformat(plan.target_end) - TARGET_START).days + 1
+    expected_days = (
+        date.fromisoformat(plan.target_end) - config.target_start
+    ).days + 1
     if int(verification["days"]) != expected_days:
         raise RuntimeError(
             f"target coverage is incomplete: {verification['days']}/{expected_days} days"
@@ -171,19 +229,26 @@ async def apply_refresh(conn: Any, plan: RefreshPlan) -> Dict[str, int]:
     }
 
 
-async def rollback_refresh(conn: Any) -> Dict[str, int]:
-    await conn.execute("SELECT set_config('app.factory_id', $1, false)", FACTORY_ID)
+async def rollback_refresh(
+    conn: Any,
+    factory_id: str = FACTORY_ID,
+) -> Dict[str, int]:
+    config = config_for(factory_id)
+    await conn.execute("SELECT set_config('app.factory_id', $1, false)", factory_id)
     result = await conn.execute(
         "DELETE FROM agg_daily WHERE factory_id=$1 AND version=$2",
-        FACTORY_ID,
-        SEED_VERSION,
+        factory_id,
+        config.seed_version,
     )
     return {"deleted_rows": int(result.rsplit(" ", 1)[-1])}
 
 
 async def run(args: argparse.Namespace) -> None:
-    if args.confirm != FACTORY_ID and (args.apply or args.rollback):
-        raise RuntimeError(f"state change requires --confirm {FACTORY_ID}")
+    # Preserve programmatic callers built before the CLI gained --factory.
+    factory_id = getattr(args, "factory", FACTORY_ID)
+    config_for(factory_id)
+    if args.confirm != factory_id and (args.apply or args.rollback):
+        raise RuntimeError(f"state change requires --confirm {factory_id}")
     target_end = date.fromisoformat(args.end) if args.end else date.today() - timedelta(days=1)
 
     from smartbi.config import get_pg_pool
@@ -194,10 +259,10 @@ async def run(args: argparse.Namespace) -> None:
     async with pool.acquire() as conn:
         async with conn.transaction():
             if args.rollback:
-                result = await rollback_refresh(conn)
-                print({"mode": "rollback", **result})
+                result = await rollback_refresh(conn, factory_id)
+                print({"mode": "rollback", "factory_id": factory_id, **result})
                 return
-            plan = await build_plan(conn, target_end)
+            plan = await build_plan(conn, target_end, factory_id)
             if not args.apply:
                 print({"mode": "dry-run", **asdict(plan)})
                 return
@@ -210,6 +275,12 @@ def main() -> None:
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument("--apply", action="store_true")
     mode.add_argument("--rollback", action="store_true")
+    parser.add_argument(
+        "--factory",
+        default=FACTORY_ID,
+        choices=list(ALLOWED_FACTORIES),
+        help=f"demo tenant to refresh (default: {FACTORY_ID})",
+    )
     parser.add_argument("--confirm", default="")
     parser.add_argument("--end", help="last complete target date; defaults to yesterday")
     args = parser.parse_args()
