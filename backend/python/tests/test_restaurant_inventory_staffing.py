@@ -168,7 +168,11 @@ def _forecast_answer():
                 "positive_gap": 1,
                 "confidence_pct": 81.0,
             },
-            "summary_rows": [{"store_name": "测试门店", "daypart": "午市"}],
+            "summary_rows": [{
+                "store_name": "测试门店", "daypart": "午市",
+                "recommended_staff": 8, "current_staff": 7,
+                "positive_gap": 1, "predicted_guests": 180,
+            }],
         },
         "factbook": "grounded",
         "llm_used": True,
@@ -188,6 +192,7 @@ def test_resolve_staffing_advice_uses_forecast_factbook_and_llm(monkeypatch):
     assert result.code == "RESTAURANT_OPS_STAFFING_ADVICE"
     assert result.meta["llm_used"] is True
     assert result.meta["llm_numeric_authorship"] is False
+    assert result.charts[0]["xAxis"]["data"] == ["测试门店-午市"]
     assert result.meta["factbook"] == "grounded"
     answer.assert_awaited_once()
 

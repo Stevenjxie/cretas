@@ -7465,7 +7465,7 @@ async def resolve_staffing_advice(
 
     dashboard = result["dashboard"]
     rows = sorted(
-        dashboard.get("rows") or [],
+        dashboard.get("summary_rows") or [],
         key=lambda row: (row.get("positive_gap") or 0, row.get("predicted_guests") or 0),
         reverse=True,
     )
@@ -7496,7 +7496,7 @@ async def resolve_staffing_advice(
             "llm_used": result["llm_used"],
             "llm_numeric_authorship": result["llm_numeric_authorship"],
             "factbook": result["factbook"],
-            "reservation_sources": dashboard.get("reservation_sources") or [],
+            "reservation_sources": dashboard.get("sources") or [],
             "historical_productivity_rule": "evidence_only_not_gap_input",
             "dashboard": dashboard,
         },

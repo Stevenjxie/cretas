@@ -108,8 +108,12 @@ async def import_reservations(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return {
         "success": True,
-        "data": {**result, "factory_id": factory_id, "business_write": True},
-        "message": "预订平台事件已按来源幂等写入",
+        "data": {
+            **result,
+            "factory_id": factory_id,
+            "business_write": result["business_write_rows"] > 0,
+        },
+        "message": "预订平台事件已按来源和更新时间幂等处理",
     }
 
 

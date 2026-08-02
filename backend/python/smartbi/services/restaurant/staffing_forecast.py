@@ -13,6 +13,7 @@ import logging
 import math
 import re
 from collections import defaultdict
+from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from decimal import Decimal, ROUND_HALF_UP
@@ -136,6 +137,26 @@ def trend_metrics(
     return metrics
 
 
+def trend_direction_label(metrics: Mapping[str, Any], subject: str) -> str:
+    """Describe a three-window trend without asking the LLM to infer numbers."""
+    avg7 = metrics.get("avg_7")
+    avg30 = metrics.get("avg_30")
+    avg365 = metrics.get("avg_365")
+    if avg7 is None and avg30 is None and avg365 is None:
+        return f"{subject}证据不足"
+    labels: List[str] = []
+    for current, baseline, current_name, baseline_name in (
+        (avg7, avg30, "短期", "中期"),
+        (avg30, avg365, "中期", "长期"),
+    ):
+        if current is None or baseline is None or float(baseline) == 0:
+            continue
+        ratio = float(current) / float(baseline)
+        direction = "高于" if ratio > 1.05 else "低于" if ratio < 0.95 else "接近"
+        labels.append(f"{subject}{current_name}{direction}{baseline_name}")
+    return "、".join(labels) if labels else f"{subject}窗口不可比"
+
+
 def _weighted_baseline(metrics: Mapping[str, Any]) -> Optional[float]:
     pairs = (
         (metrics.get("avg_7"), 0.50),
@@ -223,6 +244,45 @@ def role_recommendation(predicted_guests: int, policy: Mapping[str, Any]) -> Dic
     }
 
 
+def work_hour_capacity_plan(
+    daily_role_rows: Sequence[Sequence[Mapping[str, Any]]],
+    service_days: int,
+    horizon: str,
+) -> Dict[str, Any]:
+    """Apply weekly-hour and skill capacity after daily concurrency planning."""
+    grouped: Dict[str, List[Mapping[str, Any]]] = defaultdict(list)
+    for day_roles in daily_role_rows:
+        for role in day_roles:
+            grouped[str(role["role_code"])].append(role)
+    week_units = max(1, math.ceil(service_days / 7)) if horizon == "month" else 1
+    total_gap_hours = 0.0
+    total_capacity_gap_hours = 0.0
+    part_time_people = 0
+    for rows in grouped.values():
+        first = rows[0]
+        shift_hours = float(first["shift_hours"])
+        max_week = float(first["max_hours_per_person_week"])
+        required_hours = sum(float(row["recommended_staff"]) * shift_hours for row in rows)
+        full_time_capacity = float(first["current_staff"]) * max_week * week_units
+        capacity_gap_hours = max(0.0, required_hours - full_time_capacity)
+        concurrent_gap_hours = sum(max(0, int(row["gap"])) * shift_hours for row in rows)
+        skill_gap_hours = sum(max(0, int(row["skill_gap"])) * shift_hours for row in rows)
+        role_gap_hours = max(capacity_gap_hours, concurrent_gap_hours, skill_gap_hours)
+        if role_gap_hours <= 0:
+            continue
+        part_time_capacity = shift_hours if horizon == "tomorrow" else 24.0 * week_units
+        total_gap_hours += role_gap_hours
+        total_capacity_gap_hours += capacity_gap_hours
+        part_time_people += math.ceil(role_gap_hours / part_time_capacity)
+    return {
+        "workload_gap_hours": _round(total_gap_hours, 1),
+        "weekly_capacity_gap_hours": _round(total_capacity_gap_hours, 1),
+        "part_time_people": part_time_people,
+        "week_units": week_units,
+        "rule": "daily_concurrency_plus_skill_and_weekly_hour_caps",
+    }
+
+
 def make_plan_fingerprint(
     factory_id: str,
     store_id: int,
@@ -232,10 +292,11 @@ def make_plan_fingerprint(
     predicted_guests: int,
     recommended_staff: int,
     policy_version: int,
+    fact_context: str = "",
 ) -> str:
     raw = "|".join(map(str, (
         factory_id, store_id, target_date.isoformat(), daypart, role_code,
-        predicted_guests, recommended_staff, policy_version,
+        predicted_guests, recommended_staff, policy_version, fact_context,
     )))
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
@@ -249,6 +310,12 @@ def _stable_factor(*parts: object) -> float:
 def _numeric_free_validator(content: str) -> Optional[str]:
     """LLM prose must contain no authored numbers; numeric facts are rendered by code."""
     if re.search(r"\d", content or ""):
+        return "llm_authored_number"
+    if re.search(
+        r"(?:第[零〇一二两三四五六七八九十百千万亿]+|"
+        r"[零〇一二两三四五六七八九十百千万亿]+(?:人|名|个|天|周|月|小时|班|桌|位|成))",
+        content or "",
+    ):
         return "llm_authored_number"
     if any(term in (content or "") for term in ("天气导致", "活动导致", "一定是", "必然")):
         return "unsupported_causal_claim"
@@ -275,7 +342,7 @@ class StaffingFactBook:
             f"正向缺口 {self.summary['positive_gap']}，"
             f"兼职人数 {self.summary['part_time_people']}。",
         ]
-        for row in self.rows[:24]:
+        for row in self.rows:
             lines.append(
                 f"{row['store_name']} / {row['daypart']}：预测客流 {row['predicted_guests']}，"
                 f"预订 {row['reserved_guests']}，覆盖率 {row['reservation_coverage_pct']}%，"
@@ -292,14 +359,21 @@ class RestaurantStaffingService:
 
     @staticmethod
     async def _set_tenant(conn, factory_id: str) -> None:
-        await conn.execute("SELECT set_config('app.factory_id', $1, false)", factory_id)
+        await conn.execute("SELECT set_config('app.factory_id', $1, true)", factory_id)
+
+    @asynccontextmanager
+    async def _tenant_connection(self, factory_id: str):
+        """Keep the RLS tenant setting transaction-local on pooled connections."""
+        async with self.pool.acquire() as conn:
+            async with conn.transaction():
+                await self._set_tenant(conn, factory_id)
+                yield conn
 
     async def ensure_simulated_policies(self, factory_id: str) -> int:
         if factory_id not in TARGET_FACTORIES:
             return 0
         inserted = 0
-        async with self.pool.acquire() as conn:
-            await self._set_tenant(conn, factory_id)
+        async with self._tenant_connection(factory_id) as conn:
             stores = await conn.fetch(
                 "SELECT store_id FROM dim_store WHERE factory_id=$1 ORDER BY store_id", factory_id,
             )
@@ -342,8 +416,7 @@ class RestaurantStaffingService:
         today = as_of or singapore_today()
         end = today + timedelta(days=days_ahead)
         policy_rows = await self.ensure_simulated_policies(factory_id)
-        async with self.pool.acquire() as conn:
-            await self._set_tenant(conn, factory_id)
+        async with self._tenant_connection(factory_id) as conn:
             if not force:
                 existing_audit = await conn.fetchrow(
                     """SELECT inserted_rows, updated_rows, deleted_rows, policy_rows
@@ -391,12 +464,15 @@ class RestaurantStaffingService:
                                 status, True, datetime.now(ZoneInfo("Asia/Singapore")),
                             ))
 
-            existing_count = int(await conn.fetchval(
-                """SELECT COUNT(*) FROM fact_restaurant_reservation
+            existing_refs = {
+                str(row["external_ref"])
+                for row in await conn.fetch(
+                    """SELECT external_ref FROM fact_restaurant_reservation
                     WHERE factory_id=$1 AND source=$2
                       AND reservation_date BETWEEN $3 AND $4""",
-                factory_id, SIMULATION_SOURCE, today, end,
-            ) or 0)
+                    factory_id, SIMULATION_SOURCE, today, end,
+                )
+            }
             await conn.executemany(
                 """
                 INSERT INTO fact_restaurant_reservation(
@@ -422,8 +498,9 @@ class RestaurantStaffingService:
                        AND (reservation_date < $3 OR reservation_date > $4)""",
                 factory_id, SIMULATION_SOURCE, today - timedelta(days=30), end,
             )).split()[-1])
-            inserted = max(0, len(payloads) - existing_count)
-            updated = min(existing_count, len(payloads))
+            payload_refs = {str(payload[2]) for payload in payloads}
+            inserted = len(payload_refs - existing_refs)
+            updated = len(payload_refs & existing_refs)
             await conn.execute(
                 """
                 INSERT INTO restaurant_reservation_roll_audit(
@@ -457,24 +534,58 @@ class RestaurantStaffingService:
         factory_id: str,
         records: Sequence[Mapping[str, Any]],
     ) -> Dict[str, Any]:
-        async with self.pool.acquire() as conn:
-            await self._set_tenant(conn, factory_id)
+        received = len(records)
+        async with self._tenant_connection(factory_id) as conn:
             store_ids = {
                 int(row["store_id"])
                 for row in await conn.fetch("SELECT store_id FROM dim_store WHERE factory_id=$1", factory_id)
             }
-            payloads = []
+            latest_by_key: Dict[Tuple[str, str], Tuple[Any, ...]] = {}
             for record in records:
                 store_id = int(record["store_id"])
                 if store_id not in store_ids:
                     raise ValueError(f"store {store_id} does not belong to current tenant")
-                payloads.append((
-                    factory_id, str(record["source"]), str(record["external_ref"]), store_id,
+                source = str(record["source"])
+                external_ref = str(record["external_ref"])
+                candidate = (
+                    factory_id, source, external_ref, store_id,
                     record["reservation_date"], str(record["daypart"]),
                     int(record["table_count"]), int(record["guest_count"]),
                     str(record["status"]), bool(record.get("is_simulated", False)),
                     record["source_updated_at"],
-                ))
+                )
+                key = (source, external_ref)
+                current = latest_by_key.get(key)
+                if current is None or current[10] <= candidate[10]:
+                    latest_by_key[key] = candidate
+            payloads = list(latest_by_key.values())
+            existing = {
+                (str(row["source"]), str(row["external_ref"])): row["source_updated_at"]
+                for row in await conn.fetch(
+                    """SELECT source,external_ref,source_updated_at
+                         FROM fact_restaurant_reservation
+                        WHERE factory_id=$1
+                          AND source=ANY($2::text[])
+                          AND external_ref=ANY($3::text[])""",
+                    factory_id,
+                    list({payload[1] for payload in payloads}),
+                    list({payload[2] for payload in payloads}),
+                )
+            }
+            inserted = 0
+            updated = 0
+            stale_ignored = 0
+            replay_ignored = 0
+            for payload in payloads:
+                previous = existing.get((str(payload[1]), str(payload[2])))
+                if previous is None:
+                    inserted += 1
+                elif previous < payload[10]:
+                    updated += 1
+                elif previous == payload[10]:
+                    replay_ignored += 1
+                else:
+                    stale_ignored += 1
             await conn.executemany(
                 """
                 INSERT INTO fact_restaurant_reservation(
@@ -487,11 +598,19 @@ class RestaurantStaffingService:
                     guest_count=EXCLUDED.guest_count,status=EXCLUDED.status,
                     is_simulated=EXCLUDED.is_simulated,
                     source_updated_at=EXCLUDED.source_updated_at,updated_at=NOW()
-                WHERE fact_restaurant_reservation.source_updated_at <= EXCLUDED.source_updated_at
+                WHERE fact_restaurant_reservation.source_updated_at < EXCLUDED.source_updated_at
                 """,
                 payloads,
             )
-        return {"received": len(payloads), "upserted": len(payloads)}
+        return {
+            "received": received,
+            "deduplicated": len(payloads),
+            "inserted_rows": inserted,
+            "updated_rows": updated,
+            "stale_ignored_rows": stale_ignored,
+            "replay_ignored_rows": replay_ignored,
+            "business_write_rows": inserted + updated,
+        }
 
     async def _fetch_pos_daily(self, conn, factory_id: str, as_of: date):
         start = as_of - timedelta(days=364)
@@ -539,8 +658,7 @@ class RestaurantStaffingService:
             raise ValueError("horizon must be tomorrow, week or month")
         today = as_of or singapore_today()
         start, end = horizon_window(horizon, today)
-        async with self.pool.acquire() as conn:
-            await self._set_tenant(conn, factory_id)
+        async with self._tenant_connection(factory_id) as conn:
             stores = await conn.fetch(
                 """SELECT store_id,name FROM dim_store
                     WHERE factory_id=$1 AND ($2::bigint IS NULL OR store_id=$2)
@@ -620,8 +738,12 @@ class RestaurantStaffingService:
         }
 
         historical_evidence: Dict[Tuple[Optional[int], str], List[Dict[str, Any]]] = defaultdict(list)
+        staffing_denominators: Dict[Tuple[Optional[int], str, str], int] = {}
         for row in historical_staffing:
             staff = int(row["staff_on_duty"] or 0)
+            staffing_denominators[(
+                row["store_id"], str(row["daypart"]), str(row["weekday_type"]),
+            )] = staff
             actual = float(row["avg_orders"] or 0) / staff if staff else None
             historical_evidence[(row["store_id"], str(row["daypart"]))].append({
                 "weekday_type": row["weekday_type"],
@@ -642,12 +764,31 @@ class RestaurantStaffingService:
                 if not day_policies:
                     continue
                 metrics = trend_metrics(history[(sid, daypart)], today)
+                order_metrics = trend_metrics(orders_history[(sid, daypart)], today)
+                productivity_history: List[Tuple[date, float]] = []
+                for row_date, order_count in orders_history[(sid, daypart)]:
+                    weekday_type = "weekend" if row_date.weekday() >= 5 else "weekday"
+                    staff = (
+                        staffing_denominators.get((sid, daypart, weekday_type))
+                        or staffing_denominators.get((None, daypart, weekday_type))
+                    )
+                    if staff:
+                        productivity_history.append((row_date, float(order_count) / staff))
+                productivity_metrics = trend_metrics(productivity_history, today)
                 daily_for_group: List[Dict[str, Any]] = []
                 target = start
                 while target <= end:
                     booking_rows = reservations_by_key[(sid, target, daypart)]
-                    reserved = sum(int(row["guest_count"] or 0) for row in booking_rows)
-                    tables = sum(int(row["table_count"] or 0) for row in booking_rows)
+                    active_reserved = sum(
+                        int(row["guest_count"] or 0)
+                        for row in booking_rows
+                        if STATUS_WEIGHT.get(str(row["status"]), 0.0) > 0
+                    )
+                    tables = sum(
+                        int(row["table_count"] or 0)
+                        for row in booking_rows
+                        if STATUS_WEIGHT.get(str(row["status"]), 0.0) > 0
+                    )
                     weighted_reserved = sum(
                         int(row["guest_count"] or 0) * STATUS_WEIGHT.get(str(row["status"]), 0.0)
                         for row in booking_rows
@@ -659,10 +800,21 @@ class RestaurantStaffingService:
                         continue
                     predicted = int(demand["predicted_guests"])
                     role_rows = [role_recommendation(predicted, policy) for policy in day_policies]
+                    fact_context = json.dumps({
+                        "weighted_reserved_guests": _round(weighted_reserved, 1),
+                        "reserved_tables": tables,
+                        "baseline_guests": demand["baseline_guests"],
+                        "reservation_implied_guests": demand["reservation_implied_guests"],
+                        "confidence": demand["confidence"],
+                        "guest_trends": metrics,
+                        "order_trends": order_metrics,
+                        "productivity_trends": productivity_metrics,
+                    }, ensure_ascii=False, sort_keys=True, default=str)
                     for role_row in role_rows:
                         role_row["plan_fingerprint"] = make_plan_fingerprint(
                             factory_id, sid, target, daypart, role_row["role_code"],
                             predicted, role_row["recommended_staff"], role_row["policy_version"],
+                            fact_context,
                         )
                         applied = adjustments_by_key.get(
                             (sid, target, daypart, str(role_row["role_code"]))
@@ -684,7 +836,9 @@ class RestaurantStaffingService:
                     skill_gap = sum(row["skill_gap"] for row in role_rows)
                     daily = {
                         "date": target.isoformat(), "store_id": sid, "store_name": store_name,
-                        "daypart": daypart, "reserved_guests": reserved,
+                        "daypart": daypart,
+                        "reserved_guests": _round(weighted_reserved, 1),
+                        "active_reserved_guests": active_reserved,
                         "weighted_reserved_guests": _round(weighted_reserved, 1),
                         "reserved_tables": tables, **demand,
                         "reservation_coverage_pct": _round(demand["reservation_coverage"] * 100, 1),
@@ -703,15 +857,20 @@ class RestaurantStaffingService:
                 if not daily_for_group:
                     continue
                 peak = max(daily_for_group, key=lambda row: row["predicted_guests"])
-                total_gap_hours = sum(
-                    max(0, role["gap"]) * role["shift_hours"]
-                    for item in daily_for_group for role in item["roles"]
+                work_hours = work_hour_capacity_plan(
+                    [item["roles"] for item in daily_for_group],
+                    len(daily_for_group),
+                    horizon,
                 )
-                max_part_time_hours = 24.0 if horizon != "tomorrow" else max(
-                    role["shift_hours"] for role in peak["roles"]
+                reservation_evidence = (
+                    "当前预订已覆盖" if peak["reserved_guests"] else "当前预订未覆盖"
                 )
-                part_time_people = math.ceil(total_gap_hours / max_part_time_hours) if total_gap_hours else 0
-                evidence = "预订+POS三窗" if peak["reserved_guests"] else "POS三窗，预订未覆盖"
+                evidence = "；".join((
+                    reservation_evidence,
+                    trend_direction_label(metrics, "客流"),
+                    trend_direction_label(order_metrics, "订单"),
+                    trend_direction_label(productivity_metrics, "历史人效"),
+                ))
                 hist = (
                     historical_evidence.get((sid, daypart))
                     or historical_evidence.get((None, daypart))
@@ -740,9 +899,21 @@ class RestaurantStaffingService:
                         sum(item["confidence_pct"] for item in daily_for_group) / len(daily_for_group), 1,
                     ),
                     "confidence_label": peak["confidence_label"],
-                    "part_time_shift_hours": _round(total_gap_hours, 1),
-                    "part_time_people": part_time_people,
-                    "trends": metrics,
+                    "part_time_shift_hours": work_hours["workload_gap_hours"],
+                    "weekly_capacity_gap_hours": work_hours["weekly_capacity_gap_hours"],
+                    "work_hour_rule": work_hours["rule"],
+                    "part_time_people": work_hours["part_time_people"],
+                    "trend_7_vs_30_pct": metrics["trend_7_vs_30_pct"],
+                    "trend_30_vs_365_pct": metrics["trend_30_vs_365_pct"],
+                    "trends": {
+                        "guest_traffic": metrics,
+                        "pos_orders": order_metrics,
+                        "historical_productivity": {
+                            **productivity_metrics,
+                            "direction_rule": "evidence_only_not_gap_input",
+                            "denominator": "fact_staffing_daypart staff_on_duty",
+                        },
+                    },
                     "historical_productivity": hist,
                     "historical_productivity_rule": "依据与置信度证据，不直接推导缺人",
                     "evidence_label": evidence,
@@ -774,9 +945,11 @@ class RestaurantStaffingService:
             "window_start": start.isoformat(),
             "window_end": end.isoformat(),
             "summary": summary,
-            "rows": summary_rows,
-            "daily_plan": daily_rows,
-            "reservation_sources": list(sources.values()),
+            # Public contract names intentionally match the Web DTO after the
+            # shared snake_case -> camelCase transform.
+            "summary_rows": summary_rows,
+            "daily_rows": daily_rows,
+            "sources": list(sources.values()),
             "method": {
                 "demand": "weighted current reservations plus 7/30/365-day POS guest trends",
                 "staffing": "predicted guests / role target guests per labor hour / shift hours, then skill minimums",
@@ -796,7 +969,7 @@ class RestaurantStaffingService:
         horizon = horizon_from_question(question)
         dashboard = await self.build_dashboard(factory_id, horizon, as_of=as_of)
         rows = sorted(
-            dashboard["rows"],
+            dashboard["summary_rows"],
             key=lambda row: (row["positive_gap"], row["predicted_guests"]),
             reverse=True,
         )
@@ -850,7 +1023,7 @@ class RestaurantStaffingService:
             f"{summary['current_staff']}；正向缺口：{summary['positive_gap']}",
             f"- 兼职人数建议：{summary['part_time_people']}；平均置信度：{summary['confidence_pct']}%",
         ]
-        for row in rows[:8]:
+        for row in rows:
             deterministic.append(
                 f"- {row['store_name']} / {row['daypart']}：预测 {row['predicted_guests']} 人，"
                 f"预订 {row['reserved_guests']} 人，建议 {row['recommended_staff']} 人，"
@@ -939,8 +1112,7 @@ class RestaurantStaffingService:
         ):
             raise ValueError("forecast plan changed; refresh the preview")
         created = False
-        async with self.pool.acquire() as conn:
-            await self._set_tenant(conn, factory_id)
+        async with self._tenant_connection(factory_id) as conn:
             policy = await conn.fetchrow(
                 """
                 SELECT * FROM restaurant_staffing_policy
@@ -961,16 +1133,7 @@ class RestaurantStaffingService:
                 raise ValueError("recommended staff changed; refresh the preview")
             if recommendation["current_staff"] != int(payload["prior_staff"]):
                 raise ValueError("current staffing changed; refresh the preview")
-            expected_fingerprint = make_plan_fingerprint(
-                factory_id,
-                int(payload["store_id"]),
-                target_date,
-                str(payload["daypart"]),
-                str(payload["role_code"]),
-                predicted_guests,
-                recommended_staff,
-                policy_version,
-            )
+            expected_fingerprint = str(fresh_role["plan_fingerprint"])
             if not hmac.compare_digest(
                 expected_fingerprint, str(payload["plan_fingerprint"])
             ):
