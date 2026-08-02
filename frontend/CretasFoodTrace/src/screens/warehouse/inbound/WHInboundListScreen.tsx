@@ -46,6 +46,8 @@ interface InboundItem {
   materialType: string;
   supplier: string;
   quantity: number;
+  /** 批次真实计量单位; 后端可能不返回 → '未标注'。别再假设是 kg。 */
+  unit: string;
   status: InboundStatus;
   createdAt: string;
   location?: string;
@@ -104,6 +106,9 @@ export function WHInboundListScreen() {
         materialType: b.storageType?.toLowerCase() === 'frozen' ? '冻品' : b.storageType?.toLowerCase() === 'fresh' ? '鲜品' : '干货',
         supplier: b.supplierName || b.supplierId || '未知供应商',
         quantity: b.inboundQuantity || 0,
+        // 口径修正 (2026-08-02): 卡片原本一律写死 " kg"。实测 F006 这一页 50 条里
+        // 12 条不是 kg (box/slice/roll/case/无单位), 带上真实单位。
+        unit: b.unit || '未标注',
         status: mapBatchStatusToInbound(b.status),
         createdAt: b.inboundDate
           ? formatShortDateTime(b.inboundDate)
@@ -154,7 +159,18 @@ export function WHInboundListScreen() {
     pending: inboundList.filter((i) => i.status === "pending").length,
     inspecting: inboundList.filter((i) => i.status === "inspecting").length,
     completed: inboundList.filter((i) => i.status === "completed").length,
-    todayWeight: inboundList.reduce((sum, i) => sum + i.quantity, 0),
+    // 🔴 口径修正 (2026-08-02): 这个数原名 todayWeight, 标题写「今日入库 X kg」,
+    //    但三个词没有一个成立:
+    //      · 不是"今日" —— loadData 只发 getMaterialBatches({page:1,size:50}),
+    //        没有任何日期过滤;
+    //      · 不是全量 —— prod F006 totalElements=296, 这里只有 50 条;
+    //      · 不是 kg —— 这 50 条实测 kg 38 / box 3 / slice 2 / roll 1 / case 1 / 无 5,
+    //        跨单位相加本身无意义 (与 box 被当 kg 算导致投料偏大 25% 同一类错误)。
+    //    改成只加 kg 计量的那部分, 并单独报出有几批不是 kg。
+    loadedKgWeight: inboundList
+      .filter((i) => i.unit === 'kg')
+      .reduce((sum, i) => sum + i.quantity, 0),
+    nonKgCount: inboundList.filter((i) => i.unit !== 'kg').length,
     supplierCount: new Set(inboundList.map((i) => i.supplier)).size,
     passRate: inboundList.length > 0
       ? Math.round((inboundList.filter((i) => i.status === "completed").length / inboundList.length) * 100)
@@ -215,7 +231,11 @@ export function WHInboundListScreen() {
       <View style={styles.header}>
         <Text style={styles.headerTitle}>{t('inbound.list.title')}</Text>
         <Text style={styles.headerSubtitle}>
-          {t('inbound.list.headerSubtitle', { pending: stats.pending, weight: stats.todayWeight })}
+          {t('inbound.list.headerSubtitle', {
+            pending: stats.pending,
+            weight: stats.loadedKgWeight,
+            loaded: stats.total,
+          })}
         </Text>
       </View>
 
@@ -367,7 +387,7 @@ export function WHInboundListScreen() {
                     <View style={styles.infoRow}>
                       <Text style={styles.infoLabel}>{t('inbound.list.quantity')}</Text>
                       <Text style={[styles.infoValue, styles.quantityValue]}>
-                        {item.quantity} kg
+                        {item.quantity} {item.unit}
                       </Text>
                     </View>
                   </View>
@@ -395,7 +415,7 @@ export function WHInboundListScreen() {
           })}
         </View>
 
-        {/* 今日统计 */}
+        {/* 已加载批次统计 (口径修正: 原标题「今日统计」/「今日入库统计」都不成立 —— 无日期过滤) */}
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>{t('inbound.list.stats.title')}</Text>
           <View style={styles.statsGrid}>
@@ -404,8 +424,14 @@ export function WHInboundListScreen() {
               <Text style={styles.statsLabel}>{t('inbound.list.stats.inboundOrders')}</Text>
             </View>
             <View style={styles.statsItem}>
-              <Text style={styles.statsValue}>{stats.todayWeight}</Text>
-              <Text style={styles.statsLabel}>{t('inbound.list.stats.inboundWeight')}</Text>
+              <Text style={styles.statsValue}>{stats.loadedKgWeight}</Text>
+              {/* 口径修正: 只是 kg 计量那部分的小计; 非 kg 的批次单独报出来,
+                  绝不把它们当 kg 混进这个数。 */}
+              <Text style={styles.statsLabel}>
+                {stats.nonKgCount > 0
+                  ? `${t('inbound.list.stats.inboundWeight')}(另${stats.nonKgCount}批非kg)`
+                  : t('inbound.list.stats.inboundWeight')}
+              </Text>
             </View>
             <View style={styles.statsItem}>
               <Text style={styles.statsValue}>{stats.supplierCount}</Text>

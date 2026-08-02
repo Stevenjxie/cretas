@@ -201,7 +201,10 @@ export function WHInventoryListScreen() {
               name: batch.materialName ?? batch.materialCategory ?? '未知物料',
               type: mapBatchToMaterialType(batch),
               quantity: batch.remainingQuantity ?? batch.inboundQuantity ?? 0,
-              unit: 'kg', // 默认单位
+              // 口径修正 (2026-08-02): 原来这里硬编码 'kg'。prod 实测 F006 首页 50 条批次的
+              // 真实单位是 kg 38 / box 3 / slice 2 / roll 1 / case 1 / 无 unit 5 ——
+              // 12/50 根本不是 kg, 却被当 kg 显示并求和。带上真实单位, 缺失就直说。
+              unit: batch.unit || '未标注',
               batchCount: 1, // 每个批次算一个
               location: batch.storageLocation ?? '默认库位',
               warning: getWarningText(warningType, batch),
@@ -267,12 +270,43 @@ export function WHInventoryListScreen() {
   });
 
   // 统计数据
+  //
+  // 🔴 口径修正 (2026-08-02)。这里原先把三个**不同范围**的数混在一起显示, 而且都标错了:
+  //   1. total 取的是 inventoryStats.totalBatches —— 那是**批次数**(prod F006 = 296),
+  //      却被渲染成「在库 296 种」「物料种类 296」。同屏底部 sticky bar 写的
+  //      「共 296 批」才是对的, 同一个数在一屏里一处叫「种」一处叫「批」。
+  //   2. totalWeight 是 inventoryList 求和, 而 inventoryList 只有
+  //      getMaterialBatches({page:1,size:50}) 的 **50 条**(totalElements=296),
+  //      即"总量"只统计了 1/6 的数据。
+  //   3. 那 50 条单位不一致(实测 kg 38 / box 3 / slice 2 / roll 1 / case 1 / 无 5),
+  //      却一律当 kg 相加并标 kg —— 与 box 被当 kg 算导致投料偏大 25% 是同一类错误。
+  //
+  // 修法: 分清「全量(服务端)」与「已加载(本页)」两个范围, 各自只说自己能证明的事;
+  // 数量按单位分组, 绝不跨单位相加。
+  const loadedCount = inventoryList.length;
+  const totalBatches = inventoryStats?.totalBatches ?? loadedCount;
+
+  /** 已加载批次按单位分组求和 —— 只在同一单位内相加。 */
+  const loadedQuantityByUnit = inventoryList.reduce<Record<string, number>>((acc, i) => {
+    acc[i.unit] = (acc[i.unit] ?? 0) + i.quantity;
+    return acc;
+  }, {});
+  const loadedUnitKinds = Object.keys(loadedQuantityByUnit);
+  const loadedKgQuantity = loadedQuantityByUnit['kg'] ?? 0;
+  const nonKgBatchCount = inventoryList.filter((i) => i.unit !== 'kg').length;
+
   const stats = {
-    total: inventoryStats?.totalBatches ?? inventoryList.length,
+    // 批次总数 (全量, 服务端)
+    totalBatches,
+    // 本页已加载条数 —— 类型分项都只覆盖这些, 所以「全部」也必须用它, 否则
+    // 全部(296) 与 鲜品+冻品+干货(50) 当场对不上。
+    loaded: loadedCount,
     fresh: inventoryList.filter((i) => i.type === "fresh").length,
     frozen: inventoryList.filter((i) => i.type === "frozen").length,
     dry: inventoryList.filter((i) => i.type === "dry").length,
-    totalWeight: inventoryList.reduce((sum, i) => sum + i.quantity, 0),
+    loadedKgQuantity,
+    nonKgBatchCount,
+    loadedUnitKinds: loadedUnitKinds.length,
     warningCount: inventoryStats?.expiringBatchesCount ?? inventoryList.filter((i) => i.warningType !== "normal").length,
     totalValue: inventoryStats?.totalValue ?? 0,
   };
@@ -290,8 +324,10 @@ export function WHInventoryListScreen() {
       {/* Header */}
       <View style={styles.header}>
         <Text style={styles.headerTitle}>库存管理</Text>
+        {/* 口径修正: 296 是**批次数**不是物料种类; 且列表只加载了其中一页, 明说清楚。 */}
         <Text style={styles.headerSubtitle}>
-          在库 {stats.total} 种 | 总量 {formatNumberWithCommas(stats.totalWeight)} kg
+          在库 {stats.totalBatches} 批
+          {stats.loaded < stats.totalBatches ? ` | 已加载 ${stats.loaded}` : ''}
         </Text>
       </View>
 
@@ -359,7 +395,9 @@ export function WHInventoryListScreen() {
             ]}
             textStyle={selectedType === "all" ? styles.filterChipTextActive : undefined}
           >
-            全部({stats.total})
+            {/* 口径修正: 类型分项只覆盖已加载的这一页, 「全部」必须同源,
+                否则 全部(296) 与 鲜品+冻品+干货(50) 当场对不上。 */}
+            全部({stats.loaded})
           </Chip>
           <Chip
             selected={selectedType === "fresh"}
@@ -477,15 +515,22 @@ export function WHInventoryListScreen() {
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>库存概览</Text>
           <View style={styles.statsGrid}>
+            {/* 口径修正: 这个数是批次数, 不是物料种类 —— 底部 sticky bar 的「共 N 批」同源。 */}
             <View style={styles.statsItem}>
-              <Text style={styles.statsValue}>{stats.total}</Text>
-              <Text style={styles.statsLabel}>物料种类</Text>
+              <Text style={styles.statsValue}>{stats.totalBatches}</Text>
+              <Text style={styles.statsLabel}>批次总数</Text>
             </View>
+            {/* 口径修正: 只加 kg 计量的批次, 不跨单位相加; 非 kg 的另行说明有几批,
+                而不是把它们当 kg 混进这个数。 */}
             <View style={styles.statsItem}>
               <Text style={styles.statsValue}>
-                {formatNumberWithCommas(stats.totalWeight)}
+                {formatNumberWithCommas(stats.loadedKgQuantity)}
               </Text>
-              <Text style={styles.statsLabel}>总库存(kg)</Text>
+              <Text style={styles.statsLabel}>
+                {stats.nonKgBatchCount > 0
+                  ? `已加载kg量(另${stats.nonKgBatchCount}批非kg)`
+                  : '已加载kg量'}
+              </Text>
             </View>
             <View style={styles.statsItem}>
               <Text style={styles.statsValue}>
