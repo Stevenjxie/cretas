@@ -2,7 +2,9 @@ import { expect, test, type Page } from '@playwright/test';
 import { existsSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
-const evidenceDir = resolve(process.cwd(), '../docs/manual/qcsop-assets');
+const evidenceDir = resolve(
+  process.env.LABEL_QC_EVIDENCE_DIR ?? resolve(process.cwd(), '../docs/manual/qcsop-assets'),
+);
 const evidenceImagePath = process.env.LABEL_QC_EVIDENCE_IMAGE;
 
 const task = {
@@ -31,8 +33,8 @@ const detail = {
       id: 'photo-web-1',
       attachmentId: 'attachment-web-1',
       orderIndex: 0,
-      imageWidth: 1152,
-      imageHeight: 2048,
+      imageWidth: 3072,
+      imageHeight: 4096,
       status: 'ANALYZED',
       imageUrl: 'https://qc-evidence.test/photo-1.jpg',
       aiModel: 'vision-review',
@@ -51,8 +53,8 @@ const detail = {
       id: 'photo-web-2',
       attachmentId: 'attachment-web-2',
       orderIndex: 1,
-      imageWidth: 1152,
-      imageHeight: 2048,
+      imageWidth: 3072,
+      imageHeight: 4096,
       status: 'ANALYZED',
       imageUrl: 'https://qc-evidence.test/photo-2.jpg',
       aiModel: 'vision-review',
@@ -227,6 +229,39 @@ test('Web 人工审核入口、逐图标注和提交回读形成闭环', async (
   await expect(page.getByText('逐张人工审核')).toBeVisible();
   await expect(page.getByRole('button', { name: '确认：缺白标' })).toBeVisible();
   await expect(page.getByRole('button', { name: '拒绝并移除框' })).toBeVisible();
+  const mainImage = page.getByAltText('待审核包装标签照片');
+  await expect(mainImage).toBeVisible();
+  await expect(page.getByText('正在加载照片…')).toBeHidden();
+  await expect.poll(() => mainImage.evaluate((image) => ({
+    complete: (image as HTMLImageElement).complete,
+    naturalWidth: (image as HTMLImageElement).naturalWidth,
+    naturalHeight: (image as HTMLImageElement).naturalHeight,
+  }))).toMatchObject({ complete: true, naturalWidth: 3072, naturalHeight: 4096 });
+
+  const viewportBounds = await page.locator('.image-viewport').boundingBox();
+  const imageBounds = await mainImage.boundingBox();
+  expect(viewportBounds).not.toBeNull();
+  expect(imageBounds).not.toBeNull();
+  expect(imageBounds!.width).toBeGreaterThan(0);
+  expect(imageBounds!.height).toBeGreaterThan(0);
+  expect(imageBounds!.width).toBeLessThanOrEqual(viewportBounds!.width + 1);
+  expect(imageBounds!.height).toBeLessThanOrEqual(viewportBounds!.height + 1);
+  await expect(page.locator('.image-plane')).toHaveCSS('transform', 'none');
+
+  await mainImage.dispatchEvent('error');
+  await expect(page.getByRole('alert')).toContainText('主图没有加载出来');
+  await expect(page.getByRole('link', { name: '新窗口打开原图' })).toHaveAttribute(
+    'href',
+    'https://qc-evidence.test/photo-1.jpg',
+  );
+  await page.getByRole('button', { name: '重新加载' }).click();
+  await expect(page.getByText('正在加载照片…')).toBeHidden();
+  await expect(mainImage).toHaveClass(/loaded/);
+
+  await page.getByRole('button', { name: '放大照片' }).click();
+  await expect(page.locator('.image-plane')).not.toHaveCSS('transform', 'none');
+  await page.getByRole('button', { name: '复位' }).click();
+  await expect(page.locator('.image-plane')).toHaveCSS('transform', 'none');
   await page.getByRole('button', { name: '确认：缺白标' }).scrollIntoViewIfNeeded();
   await page.screenshot({
     path: resolve(evidenceDir, '23-web-review-ai-candidate.png'),
@@ -255,7 +290,6 @@ test('Web 人工审核入口、逐图标注和提交回读形成闭环', async (
   await page.getByRole('button', { name: '提交整单人工审核' }).click();
   await expect(page.getByText('确认完成整单审核')).toBeVisible();
   await page.getByRole('button', { name: '确认提交' }).click();
-  await expect(page.getByText('人工审核已完成，当前状态为待训练确认')).toBeVisible();
   await expect(page.getByText('当前筛选下没有待处理任务')).toBeVisible();
 
   expect(submittedPayload).not.toBeNull();

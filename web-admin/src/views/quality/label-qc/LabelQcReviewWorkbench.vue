@@ -46,6 +46,7 @@ import {
   type LabelQcPhotoDraft,
   type LabelQcReviewDraft,
 } from './reviewModel';
+import { calculateImagePlaneStyle, resolveImageSize } from './imageViewport';
 
 const props = defineProps<{
   detail: LabelQcTaskDetail;
@@ -76,7 +77,12 @@ const viewportSize = ref({ width: 800, height: 600 });
 const zoom = ref(1);
 const pan = ref({ x: 0, y: 0 });
 const isDirty = ref(false);
+const imageLoadState = ref<'loading' | 'loaded' | 'error'>('loading');
+const decodedImageSize = ref<{ width: number; height: number } | null>(null);
+const imageReloadAttempt = ref(0);
 let resizeObserver: ResizeObserver | null = null;
+let measureFrame: number | null = null;
+let settleMeasureTimer: number | null = null;
 
 type PointerInteraction = {
   type: 'pan' | 'move' | 'resize' | 'draw';
@@ -156,23 +162,25 @@ const nextButtonText = computed(() => {
 
 const imagePlaneStyle = computed(() => {
   const photo = activePhoto.value;
-  const viewport = viewportSize.value;
-  const photoRatio = Math.max(0.1, photo.imageWidth / photo.imageHeight);
-  const viewportRatio = viewport.width / viewport.height;
-  let width = viewport.width;
-  let height = width / photoRatio;
-  if (photoRatio < viewportRatio) {
-    height = viewport.height;
-    width = height * photoRatio;
-  }
-  return {
-    width: `${width}px`,
-    height: `${height}px`,
-    left: `${(viewport.width - width) / 2}px`,
-    top: `${(viewport.height - height) / 2}px`,
-    transform: `translate(${pan.value.x}px, ${pan.value.y}px) scale(${zoom.value})`,
-  };
+  const imageSize = resolveImageSize(
+    { width: photo.imageWidth, height: photo.imageHeight },
+    decodedImageSize.value,
+  );
+  return calculateImagePlaneStyle(
+    imageSize,
+    viewportSize.value,
+    zoom.value,
+    pan.value,
+  );
 });
+const activeImageKey = computed(() => (
+  `${activePhoto.value.id}:${imageReloadAttempt.value}`
+));
+const mainImageErrorText = computed(() => (
+  activePhoto.value.imageUrl
+    ? '照片加载失败，请重试；仍失败可在新窗口打开原图。'
+    : '这张照片没有可用的访问地址，请联系管理员检查附件记录。'
+));
 
 function labelText(label?: LabelQcLabel | null): string {
   return label ? LABEL_TEXT[label] : '待确认';
@@ -250,10 +258,18 @@ function resetView(): void {
   pan.value = { x: 0, y: 0 };
 }
 
+function resetMainImageState(): void {
+  decodedImageSize.value = null;
+  imageReloadAttempt.value = 0;
+  imageLoadState.value = activePhoto.value?.imageUrl ? 'loading' : 'error';
+}
+
 function selectPhoto(index: number): void {
   activePhotoIndex.value = index;
   selectedKey.value = null;
   resetView();
+  resetMainImageState();
+  scheduleViewportMeasurement();
   void nextTick(choosePreferredItem);
 }
 
@@ -817,10 +833,63 @@ function submitReview(): void {
 function updateViewportSize(): void {
   const element = viewportRef.value;
   if (!element) return;
+  const rect = element.getBoundingClientRect();
+  const width = element.clientWidth || rect.width;
+  const height = element.clientHeight || rect.height;
+  if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) {
+    return;
+  }
+  if (viewportSize.value.width === width && viewportSize.value.height === height) return;
   viewportSize.value = {
-    width: element.clientWidth,
-    height: element.clientHeight,
+    width,
+    height,
   };
+}
+
+function scheduleViewportMeasurement(): void {
+  void nextTick(() => {
+    updateViewportSize();
+    if (typeof window === 'undefined') return;
+    if (measureFrame != null) window.cancelAnimationFrame(measureFrame);
+    if (settleMeasureTimer != null) window.clearTimeout(settleMeasureTimer);
+    measureFrame = window.requestAnimationFrame(() => {
+      updateViewportSize();
+      measureFrame = window.requestAnimationFrame(() => {
+        updateViewportSize();
+        measureFrame = null;
+      });
+    });
+    // Element Plus drawers animate into place; this catches the settled width
+    // on browsers where ResizeObserver fires before the transition completes.
+    settleMeasureTimer = window.setTimeout(() => {
+      updateViewportSize();
+      settleMeasureTimer = null;
+    }, 320);
+  });
+}
+
+function handleMainImageLoad(event: Event): void {
+  const image = event.currentTarget as HTMLImageElement;
+  if (image.dataset.photoId !== activePhoto.value.id) return;
+  decodedImageSize.value = resolveImageSize(
+    { width: image.naturalWidth, height: image.naturalHeight },
+  );
+  imageLoadState.value = 'loaded';
+  scheduleViewportMeasurement();
+}
+
+function handleMainImageError(event: Event): void {
+  const image = event.currentTarget as HTMLImageElement;
+  if (image.dataset.photoId !== activePhoto.value.id) return;
+  imageLoadState.value = 'error';
+}
+
+function retryMainImage(): void {
+  if (!activePhoto.value.imageUrl) return;
+  decodedImageSize.value = null;
+  imageLoadState.value = 'loading';
+  imageReloadAttempt.value += 1;
+  scheduleViewportMeasurement();
 }
 
 watch(
@@ -831,8 +900,9 @@ watch(
     selectedKey.value = null;
     setDirty(false);
     resetView();
+    resetMainImageState();
+    scheduleViewportMeasurement();
     void nextTick(() => {
-      updateViewportSize();
       choosePreferredItem();
     });
   },
@@ -842,10 +912,15 @@ watch(
 onMounted(() => {
   resizeObserver = new ResizeObserver(updateViewportSize);
   if (viewportRef.value) resizeObserver.observe(viewportRef.value);
-  updateViewportSize();
+  scheduleViewportMeasurement();
 });
 
-onBeforeUnmount(() => resizeObserver?.disconnect());
+onBeforeUnmount(() => {
+  resizeObserver?.disconnect();
+  if (typeof window === 'undefined') return;
+  if (measureFrame != null) window.cancelAnimationFrame(measureFrame);
+  if (settleMeasureTimer != null) window.clearTimeout(settleMeasureTimer);
+});
 </script>
 
 <template>
@@ -887,7 +962,7 @@ onBeforeUnmount(() => resizeObserver?.disconnect());
         </button>
       </aside>
 
-      <main class="image-column">
+      <main class="image-column" :class="{ 'can-annotate': canReview }">
         <div class="image-toolbar">
           <div>
             <span class="toolbar-kicker">第 {{ activePhotoIndex + 1 }} 张原图</span>
@@ -954,6 +1029,7 @@ onBeforeUnmount(() => resizeObserver?.disconnect());
           ref="viewportRef"
           class="image-viewport"
           :class="[`tool-${toolMode}`, { drawing: !!draftRect || !!brushStroke.length }]"
+          :aria-busy="imageLoadState === 'loading'"
           @pointerdown="startViewportPointer"
           @pointermove="movePointer"
           @pointerup="endPointer"
@@ -965,9 +1041,17 @@ onBeforeUnmount(() => resizeObserver?.disconnect());
           <div ref="planeRef" class="image-plane" :style="imagePlaneStyle">
             <img
               v-if="activePhoto.imageUrl"
+              :key="activeImageKey"
               :src="activePhoto.imageUrl"
+              :data-photo-id="activePhoto.id"
+              class="main-review-image"
+              :class="{ loaded: imageLoadState === 'loaded' }"
               alt="待审核包装标签照片"
+              decoding="async"
+              fetchpriority="high"
               draggable="false"
+              @load="handleMainImageLoad"
+              @error="handleMainImageError"
             >
             <!-- AI 初筛参考层：只读，画在人工标注框下面 -->
             <div
@@ -1020,6 +1104,46 @@ onBeforeUnmount(() => resizeObserver?.disconnect());
               class="brush-cursor"
               :style="brushDotStyle(cursorPoint)"
             />
+          </div>
+
+          <div
+            v-if="imageLoadState === 'loading'"
+            class="image-load-state"
+            role="status"
+            aria-live="polite"
+            @pointerdown.stop
+          >
+            <span class="image-spinner" aria-hidden="true" />
+            <strong>正在加载照片…</strong>
+            <span>大尺寸原图首次解码可能需要几秒</span>
+          </div>
+          <div
+            v-else-if="imageLoadState === 'error'"
+            class="image-load-state image-load-error"
+            role="alert"
+            @pointerdown.stop
+            @click.stop
+          >
+            <Warning aria-hidden="true" />
+            <strong>主图没有加载出来</strong>
+            <span>{{ mainImageErrorText }}</span>
+            <div class="image-fallback-actions">
+              <button
+                v-if="activePhoto.imageUrl"
+                type="button"
+                @click="retryMainImage"
+              >
+                重新加载
+              </button>
+              <a
+                v-if="activePhoto.imageUrl"
+                :href="activePhoto.imageUrl"
+                target="_blank"
+                rel="noopener noreferrer"
+              >
+                新窗口打开原图
+              </a>
+            </div>
           </div>
 
           <div v-if="zoom > 1" class="zoom-indicator">已放大 · 拖动空白处移动画面</div>
@@ -1400,6 +1524,10 @@ button {
   box-shadow: 0 10px 28px rgba(18, 38, 31, .13);
 }
 
+.image-column.can-annotate {
+  grid-template-rows: auto auto auto minmax(0, 1fr);
+}
+
 .image-toolbar {
   display: flex;
   align-items: center;
@@ -1496,7 +1624,85 @@ button {
   display: block;
   width: 100%;
   height: 100%;
+  object-fit: contain;
+  opacity: 0;
   pointer-events: none;
+}
+
+.image-plane > img.loaded {
+  opacity: 1;
+}
+
+.image-load-state {
+  position: absolute;
+  z-index: 30;
+  inset: 0;
+  display: grid;
+  place-content: center;
+  justify-items: center;
+  gap: 8px;
+  padding: 28px;
+  color: #e8f4ef;
+  background: rgba(13, 25, 21, .82);
+  text-align: center;
+}
+
+.image-load-state > span:not(.image-spinner) {
+  max-width: 420px;
+  color: #a9bbb5;
+  font-size: 12px;
+}
+
+.image-spinner {
+  width: 28px;
+  height: 28px;
+  border: 3px solid rgba(139, 214, 194, .25);
+  border-top-color: #8bd6c2;
+  border-radius: 50%;
+  animation: image-spin .8s linear infinite;
+}
+
+.image-load-error :deep(svg) {
+  width: 32px;
+  color: #f5a524;
+}
+
+.image-fallback-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 8px;
+  margin-top: 6px;
+}
+
+.image-fallback-actions button,
+.image-fallback-actions a {
+  display: inline-flex;
+  height: 34px;
+  align-items: center;
+  padding: 0 14px;
+  border: 1px solid #587168;
+  border-radius: 8px;
+  color: #effbf7;
+  background: #263c34;
+  font-size: 13px;
+  font-weight: 700;
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.image-fallback-actions button:hover,
+.image-fallback-actions a:hover {
+  border-color: #8bd6c2;
+  background: #315047;
+}
+
+@keyframes image-spin {
+  to { transform: rotate(360deg); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .image-spinner { animation: none; }
 }
 
 /* ---- 标注工具条 ---- */
