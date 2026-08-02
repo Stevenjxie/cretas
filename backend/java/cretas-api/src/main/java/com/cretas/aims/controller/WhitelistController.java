@@ -27,6 +27,30 @@ import java.util.List;
 /**
  * 白名单管理控制器
  *
+ * <h2>授权 (APP-RBAC-003, 2026-08-02 Steve 拍板放开给 HR)</h2>
+ *
+ * <p>本控制器此前每个接口都是 {@code @RequireRole({"factory_super_admin","permission_admin"})},
+ * 而这个 Tab 在移动端只挂在 HR 导航下 —— 也就是<b>唯一能看见它的角色必然 403,
+ * 从来没有人用成功过</b>。注解与产品意图矛盾 (它明显是为 HR 建的: 住在 HR 导航里、
+ * HR 首页有「待激活白名单」卡片)。2026-08-02 由 Steve 拍板: 直接放开给 {@code hr_admin}。
+ *
+ * <p>放开做了两件事, 都刻意<b>不扩大 system 模块的授权面</b>:
+ * <ol>
+ *   <li>每个 {@code @RequireRole} 加 {@code "hr_admin"};</li>
+ *   <li>写接口的 {@code @RequirePermission} 从 {@code system:read_write} 改成
+ *       {@code hr:read_write} —— 员工注册白名单本就是 HR 域资源。
+ *       改前后对<b>已获准角色</b>零影响: {@code factory_super_admin} /
+ *       {@code permission_admin} 在 {@code PermissionServiceImpl} 里都是全模块
+ *       read_write, 两个权限都拿得到; {@code hr_admin} 有 {@code hr:read_write}
+ *       但没有 {@code system} 任何权限, 所以只改 {@code @RequireRole} 是不够的 ——
+ *       写接口仍会被 {@code @RequirePermission} 挡掉 (两个注解是 AND 关系,
+ *       分别由 {@code RequireRoleInterceptor} 与 {@code PermissionInterceptor} 执行)。
+ *       只放一半 = 列表能看、「新增」按钮点了 403, 正是本次要根治的那个症状。</li>
+ * </ol>
+ *
+ * <p>⚠️ 前端 {@code permissionHelper.ts} 的 {@code WHITELIST_ACCESS_ROLES} 是这份
+ * 注解的镜像, 必须同步改, 否则入口不显示 (fail-closed 那侧)。
+ *
  * @author Cretas Team
  * @version 1.0.0
  * @since 2025-01-09
@@ -41,10 +65,10 @@ public class WhitelistController {
     private final WhitelistService whitelistService;
     private final MobileService mobileService;
 
-    @RequirePermission({"system:read_write"})
+    @RequirePermission({"hr:read_write"})
     @PostMapping("/batch")
     @Operation(summary = "批量添加白名单", description = "批量添加多个手机号到白名单，返回成功和失败的详细结果")
-    @RequireRole({"factory_super_admin", "permission_admin"})
+    @RequireRole({"factory_super_admin", "permission_admin", "hr_admin"})
     public ApiResponse<WhitelistDTO.BatchResult> batchAdd(
             @PathVariable @Parameter(description = "工厂ID", example = "F001") String factoryId,
             @RequestHeader("Authorization") @Parameter(description = "访问令牌", example = "Bearer eyJhbGciOiJIUzI1NiJ9...") String authorization,
@@ -63,10 +87,10 @@ public class WhitelistController {
      * 内部包装为 batchAdd 的 size=1 请求，复用 BatchResult 逻辑。
      * 前端 POST /api/mobile/{factoryId}/whitelist 由此方法处理。
      */
-    @RequirePermission({"system:read_write"})
+    @RequirePermission({"hr:read_write"})
     @PostMapping
     @Operation(summary = "添加单条白名单", description = "添加单个手机号到白名单，内部包装为 batch-of-1 调用 batchAdd")
-    @RequireRole({"factory_super_admin", "permission_admin"})
+    @RequireRole({"factory_super_admin", "permission_admin", "hr_admin"})
     public ApiResponse<WhitelistDTO.BatchResult> addSingle(
             @PathVariable @Parameter(description = "工厂ID", example = "F001") String factoryId,
             @RequestHeader("Authorization") @Parameter(description = "访问令牌") String authorization,
@@ -103,7 +127,7 @@ public class WhitelistController {
 
     @GetMapping
     @Operation(summary = "获取白名单列表", description = "分页获取白名单列表，支持按状态、部门、角色筛选和关键词搜索")
-    @RequireRole({"factory_super_admin", "permission_admin"})
+    @RequireRole({"factory_super_admin", "permission_admin", "hr_admin"})
     public ApiResponse<PageResponse<WhitelistDTO>> getWhitelist(
             @PathVariable @Parameter(description = "工厂ID", example = "F001") String factoryId,
             @RequestParam(required = false) @Parameter(description = "状态：ACTIVE-激活/EXPIRED-过期/LIMIT_REACHED-达上限", example = "ACTIVE") String status,
@@ -139,7 +163,7 @@ public class WhitelistController {
 
     @GetMapping("/{id}")
     @Operation(summary = "获取白名单详情", description = "根据ID获取白名单记录的详细信息")
-    @RequireRole({"factory_super_admin", "permission_admin"})
+    @RequireRole({"factory_super_admin", "permission_admin", "hr_admin"})
     public ApiResponse<WhitelistDTO> getWhitelistById(
             @PathVariable @Parameter(description = "工厂ID", example = "F001") String factoryId,
             @PathVariable @Parameter(description = "白名单ID", example = "1") Integer id) {
@@ -148,10 +172,10 @@ public class WhitelistController {
         return ApiResponse.success(whitelist);
     }
 
-    @RequirePermission({"system:read_write"})
+    @RequirePermission({"hr:read_write"})
     @PutMapping("/{id}")
     @Operation(summary = "更新白名单", description = "更新白名单记录信息，包括姓名、部门、角色、有效期等")
-    @RequireRole({"factory_super_admin", "permission_admin"})
+    @RequireRole({"factory_super_admin", "permission_admin", "hr_admin"})
     public ApiResponse<WhitelistDTO> updateWhitelist(
             @PathVariable @Parameter(description = "工厂ID", example = "F001") String factoryId,
             @PathVariable @Parameter(description = "白名单ID", example = "1") Integer id,
@@ -161,10 +185,10 @@ public class WhitelistController {
         return ApiResponse.success(updated);
     }
 
-    @RequirePermission({"system:read_write"})
+    @RequirePermission({"hr:read_write"})
     @DeleteMapping("/{id}")
     @Operation(summary = "删除白名单", description = "删除指定的白名单记录（软删除）")
-    @RequireRole({"factory_super_admin", "permission_admin"})
+    @RequireRole({"factory_super_admin", "permission_admin", "hr_admin"})
     public ApiResponse<Void> deleteWhitelist(
             @PathVariable @Parameter(description = "工厂ID", example = "F001") String factoryId,
             @PathVariable @Parameter(description = "白名单ID", example = "1") Integer id) {
@@ -173,10 +197,10 @@ public class WhitelistController {
         return ApiResponse.success();
     }
 
-    @RequirePermission({"system:read_write"})
+    @RequirePermission({"hr:read_write"})
     @DeleteMapping("/batch")
     @Operation(summary = "批量删除白名单", description = "批量删除多个白名单记录，返回删除的数量")
-    @RequireRole({"factory_super_admin", "permission_admin"})
+    @RequireRole({"factory_super_admin", "permission_admin", "hr_admin"})
     public ApiResponse<Integer> batchDelete(
             @PathVariable @Parameter(description = "工厂ID", example = "F001") String factoryId,
             @RequestBody @Parameter(description = "白名单ID列表") List<Integer> ids) {
@@ -187,7 +211,7 @@ public class WhitelistController {
 
     @GetMapping("/stats")
     @Operation(summary = "获取白名单统计信息", description = "获取白名单的总数、激活数、过期数等统计信息")
-    @RequireRole({"factory_super_admin", "permission_admin"})
+    @RequireRole({"factory_super_admin", "permission_admin", "hr_admin"})
     public ApiResponse<WhitelistDTO.WhitelistStats> getStats(
             @PathVariable @Parameter(description = "工厂ID", example = "F001") String factoryId) {
         log.debug("获取白名单统计: factoryId={}", factoryId);
@@ -195,10 +219,10 @@ public class WhitelistController {
         return ApiResponse.success(stats);
     }
 
-    @RequirePermission({"system:read_write"})
+    @RequirePermission({"hr:read_write"})
     @PutMapping("/expired")
     @Operation(summary = "更新过期的白名单状态", description = "将已过有效期的白名单状态更新为EXPIRED，返回更新数量")
-    @RequireRole({"factory_super_admin", "permission_admin"})
+    @RequireRole({"factory_super_admin", "permission_admin", "hr_admin"})
     public ApiResponse<Integer> updateExpired(
             @PathVariable @Parameter(description = "工厂ID", example = "F001") String factoryId) {
         log.info("更新过期的白名单状态: factoryId={}", factoryId);
@@ -206,10 +230,10 @@ public class WhitelistController {
         return ApiResponse.success(count);
     }
 
-    @RequirePermission({"system:read_write"})
+    @RequirePermission({"hr:read_write"})
     @PutMapping("/limit-reached")
     @Operation(summary = "更新达到使用上限的白名单状态", description = "将使用次数达上限的白名单状态更新为LIMIT_REACHED，返回更新数量")
-    @RequireRole({"factory_super_admin", "permission_admin"})
+    @RequireRole({"factory_super_admin", "permission_admin", "hr_admin"})
     public ApiResponse<Integer> updateLimitReached(
             @PathVariable @Parameter(description = "工厂ID", example = "F001") String factoryId) {
         log.info("更新达到使用上限的白名单状态: factoryId={}", factoryId);
@@ -227,7 +251,7 @@ public class WhitelistController {
         return ApiResponse.success(response);
     }
 
-    @RequirePermission({"system:read_write"})
+    @RequirePermission({"hr:read_write"})
     @PutMapping("/usage/{phoneNumber}")
     @Operation(summary = "增加白名单使用次数", description = "用户注册成功后增加对应白名单的使用次数")
     public ApiResponse<Void> incrementUsage(
@@ -240,7 +264,7 @@ public class WhitelistController {
 
     @GetMapping("/search")
     @Operation(summary = "搜索白名单", description = "根据关键词搜索白名单，匹配手机号、姓名等字段")
-    @RequireRole({"factory_super_admin", "permission_admin"})
+    @RequireRole({"factory_super_admin", "permission_admin", "hr_admin"})
     public ApiResponse<PageResponse<WhitelistDTO>> searchWhitelist(
             @PathVariable @Parameter(description = "工厂ID", example = "F001") String factoryId,
             @RequestParam @Parameter(description = "搜索关键词（手机号/姓名）", example = "张三") String keyword,
@@ -255,7 +279,7 @@ public class WhitelistController {
 
     @GetMapping("/expiring")
     @Operation(summary = "获取即将过期的白名单", description = "获取指定天数内即将过期的白名单列表，用于提前提醒")
-    @RequireRole({"factory_super_admin", "permission_admin"})
+    @RequireRole({"factory_super_admin", "permission_admin", "hr_admin"})
     public ApiResponse<List<WhitelistDTO>> getExpiringSoon(
             @PathVariable @Parameter(description = "工厂ID", example = "F001") String factoryId,
             @RequestParam(defaultValue = "7") @Parameter(description = "即将过期的天数范围", example = "7") Integer days) {
@@ -266,7 +290,7 @@ public class WhitelistController {
 
     @GetMapping("/most-active")
     @Operation(summary = "获取最活跃的白名单用户", description = "按使用次数排序获取最活跃的白名单记录")
-    @RequireRole({"factory_super_admin", "permission_admin"})
+    @RequireRole({"factory_super_admin", "permission_admin", "hr_admin"})
     public ApiResponse<List<WhitelistDTO>> getMostActiveUsers(
             @PathVariable @Parameter(description = "工厂ID", example = "F001") String factoryId,
             @RequestParam(defaultValue = "10") @Parameter(description = "返回记录数量", example = "10") Integer limit) {
@@ -277,7 +301,7 @@ public class WhitelistController {
 
     @GetMapping("/recently-used")
     @Operation(summary = "获取最近使用的白名单", description = "按最后使用时间排序获取最近使用的白名单记录")
-    @RequireRole({"factory_super_admin", "permission_admin"})
+    @RequireRole({"factory_super_admin", "permission_admin", "hr_admin"})
     public ApiResponse<List<WhitelistDTO>> getRecentlyUsed(
             @PathVariable @Parameter(description = "工厂ID", example = "F001") String factoryId,
             @RequestParam(defaultValue = "10") @Parameter(description = "返回记录数量", example = "10") Integer limit) {
@@ -288,7 +312,7 @@ public class WhitelistController {
 
     @GetMapping("/export")
     @Operation(summary = "导出白名单", description = "将白名单数据导出为CSV格式字符串")
-    @RequireRole({"factory_super_admin", "permission_admin"})
+    @RequireRole({"factory_super_admin", "permission_admin", "hr_admin"})
     public ApiResponse<String> exportWhitelist(
             @PathVariable @Parameter(description = "工厂ID", example = "F001") String factoryId,
             @RequestParam(required = false) @Parameter(description = "状态筛选：ACTIVE/EXPIRED/LIMIT_REACHED", example = "ACTIVE") String status) {
@@ -297,10 +321,10 @@ public class WhitelistController {
         return ApiResponse.success(csvData);
     }
 
-    @RequirePermission({"system:read_write"})
+    @RequirePermission({"hr:read_write"})
     @PostMapping("/import")
     @Operation(summary = "导入白名单", description = "从CSV格式数据批量导入白名单，返回导入结果")
-    @RequireRole({"factory_super_admin", "permission_admin"})
+    @RequireRole({"factory_super_admin", "permission_admin", "hr_admin"})
     public ApiResponse<WhitelistDTO.BatchResult> importWhitelist(
             @PathVariable @Parameter(description = "工厂ID", example = "F001") String factoryId,
             @RequestBody @Parameter(description = "CSV格式数据") String csvData) {
@@ -309,10 +333,10 @@ public class WhitelistController {
         return ApiResponse.success(result);
     }
 
-    @RequirePermission({"system:read_write"})
+    @RequirePermission({"hr:read_write"})
     @DeleteMapping("/cleanup")
     @Operation(summary = "清理已删除的记录", description = "物理删除指定天数之前已软删除的记录，释放空间")
-    @RequireRole({"factory_super_admin", "permission_admin"})
+    @RequireRole({"factory_super_admin", "permission_admin", "hr_admin"})
     public ApiResponse<Integer> cleanupDeleted(
             @PathVariable @Parameter(description = "工厂ID", example = "F001") String factoryId,
             @RequestParam(defaultValue = "30") @Parameter(description = "删除多少天前的记录", example = "30") Integer daysOld) {
@@ -321,10 +345,10 @@ public class WhitelistController {
         return ApiResponse.success(count);
     }
 
-    @RequirePermission({"system:read_write"})
+    @RequirePermission({"hr:read_write"})
     @PutMapping("/{id}/reset-usage")
     @Operation(summary = "重置使用次数", description = "将指定白名单的使用次数重置为0")
-    @RequireRole({"factory_super_admin", "permission_admin"})
+    @RequireRole({"factory_super_admin", "permission_admin", "hr_admin"})
     public ApiResponse<Void> resetUsageCount(
             @PathVariable @Parameter(description = "工厂ID", example = "F001") String factoryId,
             @PathVariable @Parameter(description = "白名单ID", example = "1") Integer id) {
@@ -333,10 +357,10 @@ public class WhitelistController {
         return ApiResponse.success();
     }
 
-    @RequirePermission({"system:read_write"})
+    @RequirePermission({"hr:read_write"})
     @PutMapping("/{id}/extend")
     @Operation(summary = "延长有效期", description = "延长指定白名单的有效期，在当前过期时间基础上增加天数")
-    @RequireRole({"factory_super_admin", "permission_admin"})
+    @RequireRole({"factory_super_admin", "permission_admin", "hr_admin"})
     public ApiResponse<WhitelistDTO> extendExpiration(
             @PathVariable @Parameter(description = "工厂ID", example = "F001") String factoryId,
             @PathVariable @Parameter(description = "白名单ID", example = "1") Integer id,

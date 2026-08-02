@@ -390,16 +390,26 @@ export function canManageHR(user: User | null | undefined): boolean {
 }
 
 /**
- * 员工注册白名单的准入角色 (APP-RBAC-003, 2026-08-02)。
+ * 员工注册白名单的准入角色 (APP-RBAC-003)。
  *
- * 逐字对齐后端 WhitelistController 上的 @RequireRole({"factory_super_admin","permission_admin"}) —
+ * 逐字对齐后端 WhitelistController 上的
+ * @RequireRole({"factory_super_admin","permission_admin","hr_admin"}) —
  * 该注解挂在白名单的**每一个**接口上, 包括 GET /whitelist 与 GET /whitelist/stats,
  * 所以不在此列的角色连读都是 403。前端任何白名单入口都必须用这个函数判定,
  * 否则会出现"入口可见 → 点进去 403 → 被 catch 掉降级成 0/空列表"的假数据。
  *
+ * 2026-08-02 Steve 拍板放开给 hr_admin: 这个 Tab 只挂在 HR 导航下, 放开前
+ * **唯一能看见它的角色必然 403**, 从来没有人用成功过。后端同时把写接口的
+ * @RequirePermission 从 system:read_write 改成 hr:read_write (hr_admin 已有),
+ * 所以 HR 拿到的是**完整读写**, 不会出现"列表能看、新增点了 403"的半开状态。
+ *
  * ⚠️ 改这里之前先改后端注解: 这是后端授权的镜像, 不是独立的前端策略。
  */
-export const WHITELIST_ACCESS_ROLES = ['factory_super_admin', 'permission_admin'] as const;
+export const WHITELIST_ACCESS_ROLES = [
+  'factory_super_admin',
+  'permission_admin',
+  'hr_admin',
+] as const;
 
 export function canAccessWhitelist(user: User | null | undefined): boolean {
   if (!user) return false;
