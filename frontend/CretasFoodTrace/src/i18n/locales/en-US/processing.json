@@ -33,7 +33,8 @@
       "inProgressBatches": "In Progress Batches",
       "completedBatches": "Completed Batches",
       "pendingInspection": "Pending Inspection",
-      "onDutyWorkers": "On Duty Workers"
+      "onDutyWorkers": "On Duty Workers",
+      "allActiveBatches": "All In Progress"
     },
     "quickActions": {
       "title": "Quick Actions",
@@ -49,7 +50,8 @@
       "consumptionHistory": "Consumption History",
       "exceptionAlert": "Exception Alert",
       "traceability": "Product Traceability",
-      "materialRequisitions": "Material Requisitions"
+      "materialRequisitions": "Material Requisitions",
+      "teamReport": "Team Report"
     },
     "aiAnalysis": {
       "title": "AI Analysis",

@@ -195,7 +195,21 @@
     "departmentAdmin": "Department Admin",
     "operator": "Operator",
     "viewer": "Viewer",
-    "unactivated": "Unactivated User"
+    "unactivated": "Unactivated User",
+    "hrAdmin": "HR Admin",
+    "procurementManager": "Procurement Manager",
+    "salesManager": "Sales Manager",
+    "productionManager": "Production Manager",
+    "warehouseManager": "Warehouse Manager",
+    "equipmentAdmin": "Equipment Admin",
+    "qualityManager": "Quality Manager",
+    "financeManager": "Finance Manager",
+    "cashier": "Cashier",
+    "dispatcher": "Dispatcher",
+    "workshopSupervisor": "Workshop Supervisor",
+    "qualityInspector": "Quality Inspector",
+    "yieldOperator": "Yield Operator",
+    "warehouseWorker": "Warehouse Worker"
   },
   "todayBatches": {
     "title": "Today's Batches",
@@ -279,7 +293,9 @@
     "transfer": "Transfers",
     "arAp": "AR/AP",
     "priceList": "Price List",
-    "returns": "Returns"
+    "returns": "Returns",
+    "workProcesses": "Work Processes",
+    "productWorkProcesses": "Product Work Processes"
   },
   "schemaConfig": {
     "title": "Form Configuration",

@@ -93,6 +93,7 @@
     "adminOnly": "部分功能需要管理员权限"
   },
   "common": {
+    "adminOnly": "仅限管理员访问",
     "loading": "加载中...",
     "noPermission": "您没有权限访问此页面",
     "permissionHint": "仅限工厂超管、权限管理员和部门管理员",

@@ -37,8 +37,8 @@ export interface HRDashboardData {
   attendanceRate: number;
   /** 迟到人数 */
   lateCount: number;
-  /** 白名单待激活数量 */
-  whitelistPending: number;
+  /** 白名单待激活数量; null = 统计接口失败或无权限, 展示层必须显示不可用而不是 0 (APP-RBAC-003) */
+  whitelistPending: number | null;
   /** 本月入职人数 */
   thisMonthNewHires: number;
   /** 与上月入职人数对比 (+/- 数字) */
@@ -250,11 +250,15 @@ class HRApiClient {
       }
 
       // 解析白名单统计
-      let whitelistPending = 0;
+      // APP-RBAC-003: 失败时保持 null 而不是回落 0 — 白名单统计对无准入角色恒 403,
+      // 回落 0 会把"没权限"渲染成"待激活 0 人"这种可信的假数据。
+      let whitelistPending: number | null = null;
       if (whitelistStatsResult.status === 'fulfilled') {
         const stats = whitelistStatsResult.value;
         // 待激活 = pending + disabled 状态
         whitelistPending = (stats.pending || 0) + (stats.disabled || 0);
+      } else {
+        console.warn('[HR] 白名单统计获取失败, 首页显示不可用:', whitelistStatsResult.reason);
       }
 
       // 解析入职人数

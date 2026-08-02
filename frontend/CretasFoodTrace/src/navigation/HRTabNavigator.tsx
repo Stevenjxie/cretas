@@ -17,11 +17,14 @@ import HRProfileStackNavigator from './hr/HRProfileStackNavigator';
 
 import { HR_THEME, type HRTabParamList } from '../types/hrNavigation';
 import { useFactoryFeatureStore } from '../store/factoryFeatureStore';
+import { useAuthStore } from '../store/authStore';
+import { canAccessWhitelist } from '../utils/permissionHelper';
 
 const Tab = createBottomTabNavigator<HRTabParamList>();
 
 export default function HRTabNavigator() {
   const { isScreenEnabled } = useFactoryFeatureStore();
+  const { user } = useAuthStore();
 
   return (
     <Tab.Navigator
@@ -93,7 +96,8 @@ export default function HRTabNavigator() {
         }}
       />
       )}
-      {isScreenEnabled('WhitelistManagement') && (
+      {/* APP-RBAC-003: 工厂开关 AND 后端角色准入 — 只看开关会给 hr_admin 展示一个必然 403 的 Tab */}
+      {isScreenEnabled('WhitelistManagement') && canAccessWhitelist(user) && (
       <Tab.Screen
         name="WhitelistTab"
         component={HRWhitelistStackNavigator}

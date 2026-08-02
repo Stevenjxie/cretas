@@ -29,6 +29,10 @@ interface ErrorState {
 interface DashboardOverviewData {
   inProgressBatches?: number;
   activeBatches?: number;
+  /** APP-DATA-005: 今日新建且进行中 (与 todayBatches 同一时间区间) */
+  todayInProgressBatches?: number;
+  /** APP-DATA-005: 全量历史进行中, 与"今日"无关 */
+  allActiveBatches?: number;
   todayBatches?: number;
   totalBatches?: number;
   completedBatches?: number;
@@ -57,6 +61,7 @@ export default function ProcessingDashboard() {
   const [recentBatches, setRecentBatches] = useState<ProcessingBatch[]>([]);
   const [dashboardData, setDashboardData] = useState({
     inProgressBatches: 0,
+    allActiveBatches: 0,
     totalBatches: 0,
     completedBatches: 0,
     pendingInspection: 0,
@@ -104,8 +109,13 @@ export default function ProcessingDashboard() {
 
       if (data) {
         const newDashboardData = {
-          // 兼容两种字段名格式
-          inProgressBatches: data.inProgressBatches ?? data.activeBatches ?? 0,
+          // APP-DATA-005: "今日概览"的分子必须同样是今日口径。
+          // todayInProgressBatches 是后端新加的今日口径键; 老部署没有它时回落到
+          // 全量口径的 inProgressBatches/activeBatches — 那正是 "13 / 1" 的来源,
+          // 所以回落值单独放在 allActiveBatches 里以"全部进行中"独立展示, 不再当分子。
+          inProgressBatches: data.todayInProgressBatches ?? 0,
+          allActiveBatches:
+            data.allActiveBatches ?? data.inProgressBatches ?? data.activeBatches ?? 0,
           totalBatches: data.todayBatches ?? data.totalBatches ?? 0,
           completedBatches: data.completedBatches ?? 0,
           pendingInspection: data.qualityInspections ?? 0,
@@ -226,6 +236,14 @@ export default function ProcessingDashboard() {
                     {dashboardData.completedBatches} / {dashboardData.totalBatches}
                   </Text>
                   <Text variant="bodySmall" style={styles.statLabel}>{t('dashboard.stats.completedBatches')}</Text>
+                </View>
+                <View style={styles.statItem}>
+                  <Text variant="headlineSmall" style={styles.statValue}>
+                    {dashboardData.allActiveBatches}
+                  </Text>
+                  <Text variant="bodySmall" style={styles.statLabel}>
+                    {t('dashboard.stats.allActiveBatches', '全部进行中')}
+                  </Text>
                 </View>
                 <View style={styles.statItem}>
                   <Text variant="headlineSmall" style={styles.statValue}>

@@ -195,7 +195,21 @@
     "departmentAdmin": "部门管理员",
     "operator": "操作员",
     "viewer": "查看者",
-    "unactivated": "未激活用户"
+    "unactivated": "未激活用户",
+    "hrAdmin": "HR管理员",
+    "procurementManager": "采购主管",
+    "salesManager": "销售主管",
+    "productionManager": "生产经理",
+    "warehouseManager": "仓储主管",
+    "equipmentAdmin": "设备管理员",
+    "qualityManager": "质量经理",
+    "financeManager": "财务主管",
+    "cashier": "出纳",
+    "dispatcher": "调度员",
+    "workshopSupervisor": "车间主任",
+    "qualityInspector": "质检员",
+    "yieldOperator": "报工员",
+    "warehouseWorker": "仓库员"
   },
   "todayBatches": {
     "title": "今日批次",
@@ -267,7 +281,11 @@
     "transfer": "调拨管理",
     "arAp": "应收应付",
     "priceList": "价格表",
-    "returns": "退货管理"
+    "returns": "退货管理",
+    "workProcesses": "工序管理",
+    "productWorkProcesses": "产品工序配置",
+    "inventoryManagement": "进销存管理",
+    "finishedGoods": "成品库存"
   },
   "schemaConfig": {
     "title": "表单配置",

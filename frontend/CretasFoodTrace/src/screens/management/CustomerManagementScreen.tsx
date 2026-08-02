@@ -21,6 +21,7 @@ import { useNavigation } from '@react-navigation/native';
 import { useTranslation } from 'react-i18next';
 import { customerApiClient, Customer, CreateCustomerRequest } from '../../services/api/customerApiClient';
 import { useAuthStore } from '../../store/authStore';
+import { hasModulePermission } from '../../utils/permissionHelper';
 import { handleError, getErrorMsg } from '../../utils/errorHandler';
 import { logger } from '../../utils/logger';
 
@@ -29,8 +30,13 @@ const customerLogger = logger.createContextLogger('CustomerManagement');
 
 /**
  * 客户管理页面
- * 权限：factory_super_admin、platform_admin
- * 功能：客户CRUD、状态管理、搜索筛选
+ *
+ * 权限口径 (APP-RBAC-001, 2026-08-02):
+ *   读 — CustomerController 的 GET 接口没有 @RequirePermission, 任何已登录的工厂用户都能读,
+ *        因此本页不做页面级角色白名单; 能导航到这里就能看列表。
+ *   写 — CustomerController 的写接口标 @RequirePermission({"sales:read_write","finance:read_write"}),
+ *        前端 canWrite 与之逐字对齐; 后端仍是最终真值。
+ * 修复前: canManage 只认平台/超管/权限管理员/部门管理员, 销售主管点开客户 Tab 直接被整页拒绝。
  */
 export default function CustomerManagementScreen() {
   const navigation = useNavigation();
@@ -48,14 +54,10 @@ export default function CustomerManagementScreen() {
   const [customerTypeMenuVisible, setCustomerTypeMenuVisible] = useState(false);
   const [industryMenuVisible, setIndustryMenuVisible] = useState(false);
 
-  // 权限控制
-  const userType = user?.userType || 'factory';
-  const roleCode = user?.factoryUser?.role || 'viewer';
-  const isPlatformAdmin = userType === 'platform';
-  const isSuperAdmin = roleCode === 'factory_super_admin';
-  const isPermissionAdmin = roleCode === 'permission_admin';
-  const isDepartmentAdmin = roleCode === 'department_admin';
-  const canManage = isPlatformAdmin || isSuperAdmin || isPermissionAdmin || isDepartmentAdmin;
+  // 权限控制: 读写分离, 与后端注解对齐 (见文件头注释)
+  const canWrite =
+    hasModulePermission(user, 'sales', 'write') ||
+    hasModulePermission(user, 'finance', 'write');
 
   // 表单数据
   const [formData, setFormData] = useState<Partial<CreateCustomerRequest>>({
@@ -322,22 +324,6 @@ export default function CustomerManagementScreen() {
     return true;
   });
 
-  if (!canManage) {
-    return (
-      <SafeAreaView style={styles.container} edges={['top']}>
-        <Appbar.Header>
-          <Appbar.BackAction onPress={() => navigation.goBack()} />
-          <Appbar.Content title={t('customerManagement.title')} />
-        </Appbar.Header>
-        <View style={styles.noPermission}>
-          <List.Icon icon="lock" color="#999" />
-          <Text style={styles.noPermissionText}>{t('common.noPermission')}</Text>
-          <Text style={styles.noPermissionHint}>{t('common.adminOnly')}</Text>
-        </View>
-      </SafeAreaView>
-    );
-  }
-
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
       {/* Header */}
@@ -478,37 +464,39 @@ export default function CustomerManagementScreen() {
                   )}
                 </View>
 
-                {/* Actions */}
-                <View style={styles.actionRow}>
-                  <Button
-                    mode="outlined"
-                    icon="pencil"
-                    onPress={() => handleEdit(customer)}
-                    style={styles.actionButton}
-                    compact
-                  >
-                    {t('common.edit')}
-                  </Button>
-                  <Button
-                    mode="outlined"
-                    icon={customer.isActive ? 'pause' : 'play'}
-                    onPress={() => handleToggleStatus(customer.id, customer.isActive)}
-                    style={styles.actionButton}
-                    compact
-                  >
-                    {customer.isActive ? t('common.disable') : t('common.enable')}
-                  </Button>
-                  <Button
-                    mode="outlined"
-                    icon="delete"
-                    onPress={() => handleDelete(customer.id, customer.name)}
-                    style={styles.actionButton}
-                    compact
-                    textColor="#C62828"
-                  >
-                    {t('common.delete')}
-                  </Button>
-                </View>
+                {/* Actions — 只读角色不渲染任何 mutation 入口 */}
+                {canWrite && (
+                  <View style={styles.actionRow}>
+                    <Button
+                      mode="outlined"
+                      icon="pencil"
+                      onPress={() => handleEdit(customer)}
+                      style={styles.actionButton}
+                      compact
+                    >
+                      {t('common.edit')}
+                    </Button>
+                    <Button
+                      mode="outlined"
+                      icon={customer.isActive ? 'pause' : 'play'}
+                      onPress={() => handleToggleStatus(customer.id, customer.isActive)}
+                      style={styles.actionButton}
+                      compact
+                    >
+                      {customer.isActive ? t('common.disable') : t('common.enable')}
+                    </Button>
+                    <Button
+                      mode="outlined"
+                      icon="delete"
+                      onPress={() => handleDelete(customer.id, customer.name)}
+                      style={styles.actionButton}
+                      compact
+                      textColor="#C62828"
+                    >
+                      {t('common.delete')}
+                    </Button>
+                  </View>
+                )}
               </Card.Content>
             </Card>
           ))
@@ -689,7 +677,7 @@ export default function CustomerManagementScreen() {
       </Portal>
 
       {/* FAB */}
-      {canManage && (
+      {canWrite && (
         <FAB
           icon="plus"
           style={styles.fab}

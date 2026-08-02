@@ -54,6 +54,7 @@
       "expiring": "Expiring Soon"
     },
     "tempMonitor": {
+      "noData": "No temperature monitoring data",
       "title": "Temperature Monitor",
       "online": "Online",
       "offline": "Offline",

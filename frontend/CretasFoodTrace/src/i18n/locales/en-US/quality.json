@@ -275,6 +275,8 @@
     "success": "Success"
   },
   "analysis": {
+    "rangeThisMonth": "Range: this month",
+    "noGradeData": "No grade distribution data",
     "title": "QI Analysis",
     "loading": "Loading analysis data...",
     "loadFailed": "Load failed",

@@ -9,7 +9,7 @@ import { ModuleConfig } from '../../types/navigation';
 import { ModuleCard } from './components/ModuleCard';
 import { QuickStatsPanel } from './components/QuickStatsPanel';
 import { MainTabParamList } from '../../types/navigation';
-import { UserPermissions } from '../../types/auth';
+import { UserPermissions, ROLE_METADATA } from '../../types/auth';
 import { ScreenWrapper } from '../../components/ui';
 import { theme } from '../../theme';
 import { hasProductionCapability } from '../../utils/factoryType';
@@ -186,16 +186,23 @@ export default function HomeScreen() {
   );
 }
 
-function getRoleDisplayName(role: string, t: (key: string) => string): string {
-  const roleMap: Record<string, string> = {
-    factory_super_admin: t('roles.factorySuperAdmin'),
-    permission_admin: t('roles.permissionAdmin'),
-    department_admin: t('roles.departmentAdmin'),
-    operator: t('roles.operator'),
-    viewer: t('roles.viewer'),
-    unactivated: t('roles.unactivated'),
-  };
-  return roleMap[role] || role;
+/**
+ * APP-UX-006 (2026-08-02): 原来这里是一张只有 6 个角色的私有表, 表外的角色
+ * (财务主管/出纳/销售主管/采购主管/生产经理…) 直接 `return role` —— 首页顶部
+ * 于是显示内部英文角色码。改成: 由角色码推出 i18n key, **兜底取权威表
+ * ROLE_METADATA 的中文名**, 这样以后新增角色即使漏了翻译也不会再泄漏角色码。
+ */
+function roleI18nKey(role: string): string {
+  return `roles.${role.replace(/_([a-z])/g, (_m, c: string) => c.toUpperCase())}`;
+}
+
+function getRoleDisplayName(
+  role: string,
+  t: (key: string, options?: { defaultValue?: string }) => string
+): string {
+  return t(roleI18nKey(role), {
+    defaultValue: ROLE_METADATA[role]?.displayName || role,
+  });
 }
 
 const styles = StyleSheet.create({

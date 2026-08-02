@@ -1091,7 +1091,58 @@ public class ProcessingServiceImpl implements ProcessingService {
             statistics.put("passedBatches", passedCount);
             statistics.put("failedBatches", inspections.size() - passedCount);
         }
+        // APP-CONTRACT-004 (2026-08-02): 上面的 failedBatches 语义是"非 PASS", 把待检和
+        // CONDITIONAL 都算进了"未通过", 移动端质检首页要分开显示"待检/通过/未通过", 拿它算不出来。
+        // 既有键的语义不动 (web-admin DashboardAdmin.vue / QualityRateWidget 已按老口径读),
+        // 另加一个语义明确的 breakdown, 且**无论有没有记录都输出** —— 之前空结果只回 totalInspections,
+        // 客户端读到 undefined 与"0 条"分不开。
+        Map<String, Object> breakdown = new LinkedHashMap<>();
+        breakdown.put("pass", inspections.stream().filter(i -> "PASS".equalsIgnoreCase(i.getResult())).count());
+        breakdown.put("fail", inspections.stream().filter(i -> "FAIL".equalsIgnoreCase(i.getResult())).count());
+        breakdown.put("conditional",
+                inspections.stream().filter(i -> "CONDITIONAL".equalsIgnoreCase(i.getResult())).count());
+        breakdown.put("pending", inspections.stream()
+                .filter(i -> i.getResult() == null || i.getResult().isBlank())
+                .count());
+        statistics.put("breakdown", breakdown);
         return statistics;
+    }
+
+    /**
+     * 按单条质检记录的合格率归入 A/B/C/D 四档, 返回各档数量。
+     *
+     * <p>APP-CONTRACT-004: 移动端质检分析页一直期望 {@code gradeDistribution}, 但后端从未产出过,
+     * 该页因此恒显示"数据格式异常"。质检表里没有等级字段, 唯一的真实依据就是每条记录的
+     * {@code pass_rate}; 分档阈值沿用 {@link #getQualityDashboard} 里已在用的同一套
+     * (>=95 A / >=90 B / >=80 C / 其余 D), 保证工厂级 qualityGrade 与本分布口径一致。
+     * {@code pass_rate} 为空的记录 (待检) 不计入任何一档。
+     */
+    private Map<String, Object> buildGradeDistribution(List<QualityInspection> inspections) {
+        Map<String, Object> distribution = new LinkedHashMap<>();
+        long a = 0;
+        long b = 0;
+        long c = 0;
+        long d = 0;
+        for (QualityInspection inspection : inspections) {
+            BigDecimal rate = inspection.getPassRate();
+            if (rate == null) {
+                continue;
+            }
+            if (rate.compareTo(BigDecimal.valueOf(95)) >= 0) {
+                a++;
+            } else if (rate.compareTo(BigDecimal.valueOf(90)) >= 0) {
+                b++;
+            } else if (rate.compareTo(BigDecimal.valueOf(80)) >= 0) {
+                c++;
+            } else {
+                d++;
+            }
+        }
+        distribution.put("A", a);
+        distribution.put("B", b);
+        distribution.put("C", c);
+        distribution.put("D", d);
+        return distribution;
     }
     public List<Map<String, Object>> getQualityTrends(String factoryId, Integer days) {
         LocalDate endDate = LocalDate.now();
@@ -1843,6 +1894,17 @@ public class ProcessingServiceImpl implements ProcessingService {
         lastQueryTime = System.currentTimeMillis();
         summary.put("activeBatches", activeBatches);
 
+        // APP-DATA-005 (2026-08-02): activeBatches 是**全量历史**的进行中批次, 而 totalBatches
+        // 只数今天新建的 —— 移动端"今日概览"把两者当成分子/分母显示成 "13 / 1", 分子大于分母。
+        // 字段名不带时间语义是根因, 这里补两个语义明确的键, 既有键保持不动 (web-admin 在用)。
+        long todayInProgressBatches = productionBatchRepository.countByFactoryIdAndStatusAndCreatedAtAfter(
+                factoryId, ProductionBatchStatus.IN_PROGRESS, todayStart);
+        summary.put("todayInProgressBatches", todayInProgressBatches);
+        summary.put("allActiveBatches", activeBatches);
+        log.info("[查询2b] 完成: todayInProgressBatches={}, 耗时={}ms",
+                todayInProgressBatches, System.currentTimeMillis() - lastQueryTime);
+        lastQueryTime = System.currentTimeMillis();
+
         // 查询3: 已完成批次数
         log.info("[查询3] countByFactoryIdAndStatusAndCreatedAtAfter 开始");
         long completedBatches = productionBatchRepository.countByFactoryIdAndStatusAndCreatedAtAfter(
@@ -2031,6 +2093,9 @@ public class ProcessingServiceImpl implements ProcessingService {
         // ===== 保留旧字段（向后兼容） =====
         overview.put("todayBatches", todayBatches);
         overview.put("inProgressBatches", activeBatches);
+        // APP-DATA-005: 带时间语义的新键 (顶层扁平结构的消费方同样需要)
+        overview.put("todayInProgressBatches", todayInProgressBatches);
+        overview.put("allActiveBatches", activeBatches);
 
         // 查询20: 月产量
         log.info("[查询20] calculateMonthlyOutput 开始");
@@ -2176,6 +2241,11 @@ public class ProcessingServiceImpl implements ProcessingService {
             qualityGrade = "D";
         }
         dashboard.put("qualityGrade", qualityGrade);
+
+        // APP-CONTRACT-004 (2026-08-02): 移动端质检分析页要的 gradeDistribution。
+        // 与 monthlyStatistics 同一时间范围 (本月), 按每条记录的 pass_rate 分档。
+        dashboard.put("gradeDistribution", buildGradeDistribution(
+                qualityInspectionRepository.findByFactoryIdAndDateRange(factoryId, monthStart, today)));
 
         // 质量趋势
         List<Map<String, Object>> trends = getQualityTrends(factoryId, 30);

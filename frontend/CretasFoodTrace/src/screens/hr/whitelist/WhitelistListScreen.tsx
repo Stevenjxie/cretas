@@ -16,6 +16,8 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { useTranslation } from 'react-i18next';
 
 import { whitelistApiClient } from '../../../services/api/whitelistApiClient';
+import { useAuthStore } from '../../../store/authStore';
+import { canAccessWhitelist } from '../../../utils/permissionHelper';
 import {
   HR_THEME,
   ROLE_OPTIONS,
@@ -27,13 +29,17 @@ import {
 export default function WhitelistListScreen() {
   const navigation = useNavigation();
   const { t } = useTranslation('hr');
+  const { user } = useAuthStore();
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [whitelist, setWhitelist] = useState<WhitelistEntry[]>([]);
+  // APP-RBAC-003: 加载失败必须显式呈现 — 之前 catch 后保留空数组, 403 与"真的没有白名单"长得一模一样
+  const [loadError, setLoadError] = useState<string | null>(null);
 
   const loadData = useCallback(async () => {
     try {
+      setLoadError(null);
       const res = await whitelistApiClient.getWhitelist({ page: 1, size: 100 });
       // API 直接返回 PageResponse
       if (res?.content) {
@@ -64,6 +70,14 @@ export default function WhitelistListScreen() {
       }
     } catch (error) {
       console.error('加载白名单失败:', error);
+      setWhitelist([]);
+      const status = (error as { statusCode?: number; status?: number })?.statusCode
+        ?? (error as { status?: number })?.status;
+      setLoadError(
+        status === 403
+          ? '当前角色没有查看白名单的权限'
+          : (error as Error)?.message || '白名单加载失败, 请下拉重试'
+      );
     } finally {
       setLoading(false);
       setRefreshing(false);
@@ -123,8 +137,13 @@ export default function WhitelistListScreen() {
       </View>
       <FlatList data={filteredData} keyExtractor={item => item.id} renderItem={renderItem}
         contentContainerStyle={styles.list} refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
-        ListEmptyComponent={<View style={styles.empty}><MaterialCommunityIcons name="shield-check-outline" size={64} color={HR_THEME.textMuted} /><Text style={styles.emptyText}>{t('whitelist.list.empty')}</Text></View>} />
-      <FAB icon="plus" style={styles.fab} onPress={() => navigation.dispatch(CommonActions.navigate('WhitelistAdd'))} color="#fff" />
+        ListEmptyComponent={loadError
+          ? <View style={styles.empty}><MaterialCommunityIcons name="alert-circle-outline" size={64} color={HR_THEME.danger} /><Text style={[styles.emptyText, { color: HR_THEME.danger }]}>{loadError}</Text></View>
+          : <View style={styles.empty}><MaterialCommunityIcons name="shield-check-outline" size={64} color={HR_THEME.textMuted} /><Text style={styles.emptyText}>{t('whitelist.list.empty')}</Text></View>} />
+      {/* APP-RBAC-003: 新增入口跟随后端角色准入 — 无权时不展示一个必然 403 的按钮 */}
+      {canAccessWhitelist(user) && (
+        <FAB icon="plus" style={styles.fab} onPress={() => navigation.dispatch(CommonActions.navigate('WhitelistAdd'))} color="#fff" />
+      )}
     </SafeAreaView>
   );
 }

@@ -22,14 +22,20 @@ import { supplierApiClient, Supplier, CreateSupplierRequest } from '../../servic
 import { useAuthStore } from '../../store/authStore';
 import { handleError, getErrorMsg } from '../../utils/errorHandler';
 import { logger } from '../../utils/logger';
+import { hasModulePermission } from '../../utils/permissionHelper';
 
 // 创建SupplierManagement专用logger
 const supplierLogger = logger.createContextLogger('SupplierManagement');
 
 /**
  * 供应商管理页面
- * 权限：factory_super_admin、platform_admin
- * 功能：供应商CRUD、状态管理、搜索筛选
+ *
+ * 权限口径 (APP-RBAC-002, 2026-08-02):
+ *   读 — SupplierController 的 GET 接口没有 @RequirePermission, 任何已登录的工厂用户都能读,
+ *        因此本页不做页面级角色白名单; 能导航到这里就能看列表。
+ *   写 — SupplierController 的写接口标 @RequirePermission({"procurement:read_write","finance:read_write"}),
+ *        前端 canWrite 与之逐字对齐; 后端仍是最终真值。
+ * 修复前: canManage 只认平台/超管/权限管理员/部门管理员, 采购主管点开供应商 Tab 直接被整页拒绝。
  */
 export default function SupplierManagementScreen() {
   const navigation = useNavigation();
@@ -43,14 +49,10 @@ export default function SupplierManagementScreen() {
   const [modalVisible, setModalVisible] = useState(false);
   const [editingSupplier, setEditingSupplier] = useState<Supplier | null>(null);
 
-  // 权限控制
-  const userType = user?.userType || 'factory';
-  const roleCode = user?.factoryUser?.role || 'viewer';
-  const isPlatformAdmin = userType === 'platform';
-  const isSuperAdmin = roleCode === 'factory_super_admin';
-  const isPermissionAdmin = roleCode === 'permission_admin';
-  const isDepartmentAdmin = roleCode === 'department_admin';
-  const canManage = isPlatformAdmin || isSuperAdmin || isPermissionAdmin || isDepartmentAdmin;
+  // 权限控制: 读写分离, 与后端注解对齐 (见文件头注释)
+  const canWrite =
+    hasModulePermission(user, 'procurement', 'write') ||
+    hasModulePermission(user, 'finance', 'write');
 
   // 表单数据
   const [formData, setFormData] = useState<Partial<CreateSupplierRequest>>({
@@ -264,22 +266,6 @@ export default function SupplierManagementScreen() {
     return true;
   });
 
-  if (!canManage) {
-    return (
-      <SafeAreaView style={styles.container} edges={['top']}>
-        <Appbar.Header>
-          <Appbar.BackAction onPress={() => navigation.goBack()} />
-          <Appbar.Content title="供应商管理" />
-        </Appbar.Header>
-        <View style={styles.noPermission}>
-          <List.Icon icon="lock" color="#999" />
-          <Text style={styles.noPermissionText}>您没有权限访问此页面</Text>
-          <Text style={styles.noPermissionHint}>仅限工厂超管和平台管理员</Text>
-        </View>
-      </SafeAreaView>
-    );
-  }
-
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
       {/* Header */}
@@ -409,36 +395,39 @@ export default function SupplierManagementScreen() {
                 </View>
 
                 {/* Actions */}
-                <View style={styles.actionRow}>
-                  <Button
-                    mode="outlined"
-                    icon="pencil"
-                    onPress={() => handleEdit(supplier)}
-                    style={styles.actionButton}
-                    compact
-                  >
-                    编辑
-                  </Button>
-                  <Button
-                    mode="outlined"
-                    icon={supplier.isActive ? 'pause' : 'play'}
-                    onPress={() => handleToggleStatus(supplier.id, supplier.isActive)}
-                    style={styles.actionButton}
-                    compact
-                  >
-                    {supplier.isActive ? '停用' : '启用'}
-                  </Button>
-                  <Button
-                    mode="outlined"
-                    icon="delete"
-                    onPress={() => handleDelete(supplier.id, supplier.name)}
-                    style={styles.actionButton}
-                    compact
-                    textColor="#C62828"
-                  >
-                    删除
-                  </Button>
-                </View>
+                {/* Actions — 只读角色不渲染任何 mutation 入口 */}
+                {canWrite && (
+                  <View style={styles.actionRow}>
+                    <Button
+                      mode="outlined"
+                      icon="pencil"
+                      onPress={() => handleEdit(supplier)}
+                      style={styles.actionButton}
+                      compact
+                    >
+                      编辑
+                    </Button>
+                    <Button
+                      mode="outlined"
+                      icon={supplier.isActive ? 'pause' : 'play'}
+                      onPress={() => handleToggleStatus(supplier.id, supplier.isActive)}
+                      style={styles.actionButton}
+                      compact
+                    >
+                      {supplier.isActive ? '停用' : '启用'}
+                    </Button>
+                    <Button
+                      mode="outlined"
+                      icon="delete"
+                      onPress={() => handleDelete(supplier.id, supplier.name)}
+                      style={styles.actionButton}
+                      compact
+                      textColor="#C62828"
+                    >
+                      删除
+                    </Button>
+                  </View>
+                )}
               </Card.Content>
             </Card>
           ))
@@ -558,7 +547,7 @@ export default function SupplierManagementScreen() {
       </Portal>
 
       {/* FAB */}
-      {canManage && (
+      {canWrite && (
         <FAB
           icon="plus"
           style={styles.fab}

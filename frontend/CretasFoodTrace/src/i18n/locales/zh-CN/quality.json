@@ -276,6 +276,8 @@
     "success": "成功"
   },
   "analysis": {
+    "rangeThisMonth": "统计范围：本月",
+    "noGradeData": "暂无等级分布数据",
     "title": "质检分析",
     "loading": "加载分析数据...",
     "loadFailed": "加载失败",
