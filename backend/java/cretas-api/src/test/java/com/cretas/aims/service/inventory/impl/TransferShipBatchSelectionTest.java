@@ -417,8 +417,7 @@ class TransferShipBatchSelectionTest {
         request.setTargetWarehouseId("WH-FINISHED");
         request.setTransferDate(LocalDate.now());
         request.setItems(List.of(line));
-        when(transferRepository.findRecentDuplicates(eq("F006"), eq("F006"), eq(99L), any(), any()))
-                .thenReturn(List.of());
+        // findRecentDuplicates 的 stub 已随「5min 重复调拨拦截」一并移除 —— createTransfer 不再调它。
 
         assertThatThrownBy(() -> service.createTransfer("F006", request, 99L))
                 .isInstanceOf(BusinessException.class)
