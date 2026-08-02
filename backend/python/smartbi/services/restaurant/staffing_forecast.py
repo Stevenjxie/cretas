@@ -17,7 +17,7 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from decimal import Decimal, ROUND_HALF_UP
-from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
+from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 from zoneinfo import ZoneInfo
 
 from common.llm_metrics import llm_caller_context
@@ -322,6 +322,32 @@ def _numeric_free_validator(content: str) -> Optional[str]:
     return None
 
 
+def _strip_structural_numbering(content: str) -> str:
+    """Remove list ordinals without accepting numeric business claims.
+
+    Providers sometimes add ``1.``/``2、`` even when explicitly asked for
+    prose.  Those tokens are presentation structure, not forecast facts.  Only
+    a line-start ordinal is removed; every other digit remains subject to the
+    strict numeric-author validator below.
+    """
+    return re.sub(r"(?m)^\s*\d+\s*[\.．、\)]\s*", "- ", content or "").strip()
+
+
+def _candidate_narrative_validator(content: str) -> Optional[str]:
+    return _numeric_free_validator(_strip_structural_numbering(content))
+
+
+def _validate_restored_narrative(
+    content: str,
+    allowed_store_names: Sequence[str],
+) -> Optional[str]:
+    """Ignore digits that are part of exact FactBook store identities only."""
+    masked = content or ""
+    for name in sorted({str(value) for value in allowed_store_names if value}, key=len, reverse=True):
+        masked = masked.replace(name, "门店")
+    return _numeric_free_validator(masked)
+
+
 @dataclass
 class StaffingFactBook:
     factory_id: str
@@ -350,6 +376,51 @@ class StaffingFactBook:
                 f"缺口 {row['gap']}，置信度 {row['confidence_pct']}%；"
                 f"证据标签 {row['evidence_label']}。"
             )
+        return "\n".join(lines)
+
+    def narrative_prompt_text(self, *, max_rows: int = 12) -> str:
+        """Return a number-free, program-derived brief for LLM synthesis.
+
+        The full numeric FactBook is rendered to the user by deterministic
+        code.  The model receives only qualitative labels derived from those
+        same facts, so it can explain and suggest without becoming a second
+        source of numbers.
+        """
+        focus_rows = self.rows[:max_rows]
+        chain_gap = any(int(row.get("positive_gap") or 0) > 0 for row in self.rows)
+        chain_skill_gap = any(int(row.get("skill_gap") or 0) > 0 for row in self.rows)
+        reservation_state = (
+            "当前预订已形成覆盖证据"
+            if any(float(row.get("reserved_guests") or 0) > 0 for row in self.rows)
+            else "当前预订尚未形成覆盖证据"
+        )
+        lines = [
+            f"分析范围：{HORIZON_LABELS[self.horizon]}",
+            "以下内容是程序从预测 FactBook 派生的定性标签，不含可复述的业务数字。",
+            f"连锁判断：{reservation_state}；"
+            f"{'存在由未来需求、技能和工时共同计算的正向缺口' if chain_gap else '当前配置覆盖程序建议'}；"
+            f"{'存在技能覆盖风险' if chain_skill_gap else '未发现技能最低覆盖风险'}。",
+            "重点门店与时段：",
+        ]
+        for row in focus_rows:
+            staffing_state = (
+                "存在程序计算的正向缺口"
+                if int(row.get("positive_gap") or 0) > 0
+                else "当前配置覆盖程序建议"
+            )
+            skill_state = (
+                "存在技能覆盖风险"
+                if int(row.get("skill_gap") or 0) > 0
+                else "未发现技能最低覆盖风险"
+            )
+            lines.append(
+                f"- {row['store_name']} / {row['daypart']}：{row['evidence_label']}；"
+                f"{staffing_state}；{skill_state}；置信度标签为"
+                f"{row.get('confidence_label') or '未标注'}。"
+            )
+        lines.append(
+            "请用不带编号的短段落解释原因和优先级，并提出可预览、待确认、可回滚的调整建议。"
+        )
         return "\n".join(lines)
 
 
@@ -984,35 +1055,42 @@ class RestaurantStaffingService:
             rows=rows,
             summary=dashboard["summary"],
         )
+        narrative_brief = factbook.narrative_prompt_text()
+        narrative_store_names = [
+            str(row["store_name"])
+            for row in rows[:12]
+        ]
         system = (
             "你是餐饮预测排班分析助手。必须理解用户问题并基于给定 FactBook 解释原因、"
             "指出技能或工时风险、提出可调整建议。禁止输出任何阿拉伯数字、百分数、日期、"
             "金额或人数；数字由程序在回答前半段展示。禁止把历史实际人效低于目标解释成缺人。"
             "不得声称已执行调整；动作必须写成可预览、待确认、可回滚的建议。"
+            "只写短段落，不要使用数字编号。"
         )
         payload = {
             "messages": [
                 {"role": "system", "content": system},
-                {"role": "user", "content": f"用户角色：{role or '未提供'}\n用户问题：{question}\n\n{factbook.prompt_text()}"},
+                {"role": "user", "content": f"用户角色：{role or '未提供'}\n用户问题：{question}\n\n{narrative_brief}"},
             ],
             "temperature": 0.2,
             "max_tokens": 500,
         }
         with redaction_scope():
-            register_values_for_egress([row["store_name"] for row in rows])
+            register_values_for_egress({"门店": narrative_store_names})
             with llm_caller_context("restaurant_staffing_forecast", factory_id=factory_id):
                 body = await call_chain(
                     SLOT.INSIGHTS,
                     payload,
                     timeout=45.0,
                     total_timeout=55.0,
-                    content_validator=_numeric_free_validator,
+                    content_validator=_candidate_narrative_validator,
                 )
             narrative = (
                 body.get("choices", [{}])[0].get("message", {}).get("content", "") or ""
             ).strip()
+            narrative = _strip_structural_numbering(narrative)
             narrative = restore_in_scope(narrative)
-        validation_error = _numeric_free_validator(narrative)
+        validation_error = _validate_restored_narrative(narrative, narrative_store_names)
         if validation_error or not narrative:
             raise RuntimeError(f"LLM staffing narrative failed grounding: {validation_error or 'empty'}")
 
