@@ -75,8 +75,10 @@ public class ProcessingServiceImpl implements ProcessingService {
     private final ProcessSheetRowRepository processSheetRowRepository;
     @Autowired
     private InventoryLowStockEventPublisher inventoryLowStockEventPublisher;
-    // 来源工序真名解析 (2026-08-02): 用字段注入而非构造器 —— 该类的构造器被大量既有测试
-    // 按参数列表装配, 加参数会一次性打断它们; 解析逻辑本身对 null 容错 (查不到就不显示名字)。
+    // 来源工序真名解析 (2026-08-02): 暂用 optional 字段注入 —— 该类的大量既有测试仍按
+    // 构造器参数列表装配, 直接加参数会成批打断测试; 查不到时保持 null, 不编造名字。
+    // 删除条件: 这些测试迁到共享 builder/@Mock 装配后, 将两项改成 final 构造器依赖并移除
+    // required=false/null 分支, 让生产缺 bean 在启动期失败而不是静默少字段。
     @Autowired(required = false)
     private com.cretas.aims.repository.ProductWorkProcessRepository productWorkProcessRepository;
     @Autowired(required = false)

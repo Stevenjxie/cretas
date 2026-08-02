@@ -9,6 +9,11 @@ import { formatNumber } from '@/utils/format-number';
 import { formatDateTimeCell } from '@/utils/tableFormatters';
 import echarts from '@/utils/echarts';
 import type { ECharts } from 'echarts/core';
+import {
+  emptyQuantitySummary,
+  summarizeQuantity,
+  type QuantitySummary,
+} from './quantitySummary';
 
 // ---------- auth ----------
 const authStore = useAuthStore();
@@ -29,9 +34,9 @@ let chartInstance: ECharts | null = null;
 const summary = ref({
   purchaseTotal: 0,
   receivedQuantity: 0,
-  consumedQuantity: 0,
+  consumedQuantity: emptyQuantitySummary(),
   productionBatches: 0,
-  finishedGoods: 0,
+  finishedGoods: emptyQuantitySummary(),
   salesTotal: 0,
 });
 
@@ -67,6 +72,7 @@ interface ProductionBatch {
   productTypeName: string;
   plannedQuantity: number;
   actualQuantity: number | null;
+  unit?: string | null;
   status: string;
   createdAt: string;
 }
@@ -143,12 +149,16 @@ async function loadAllData() {
       const data = batchRes.value.data;
       productionBatchList.value = data.content || [];
       summary.value.productionBatches = data.totalElements || productionBatchList.value.length;
-      // Estimate consumed from planned, finished from actual
-      summary.value.consumedQuantity = productionBatchList.value.reduce(
-        (sum, b) => sum + (b.plannedQuantity || 0), 0
+      // ProductionBatch.unit is the backend quantity truth. Never add unlike units
+      // or hard-code kg; the helper fails closed until the API provides a canonical
+      // aggregate. The detail table below keeps each batch's original value + unit.
+      summary.value.consumedQuantity = summarizeQuantity(
+        productionBatchList.value,
+        (batch) => batch.plannedQuantity,
       );
-      summary.value.finishedGoods = productionBatchList.value.reduce(
-        (sum, b) => sum + (b.actualQuantity || 0), 0
+      summary.value.finishedGoods = summarizeQuantity(
+        productionBatchList.value,
+        (batch) => batch.actualQuantity,
       );
     }
 
@@ -184,9 +194,9 @@ function renderSankeyChart() {
   // Use summary values for links; ensure no zero values to keep chart visible
   const purchaseVal = summary.value.purchaseTotal || 1;
   const receivedVal = summary.value.receivedQuantity || 1;
-  const consumedVal = summary.value.consumedQuantity || 1;
+  const consumedVal = summary.value.consumedQuantity.value ?? 0;
   const batchVal = summary.value.productionBatches || 1;
-  const finishedVal = summary.value.finishedGoods || 1;
+  const finishedVal = summary.value.finishedGoods.value ?? 0;
   const salesVal = summary.value.salesTotal || 1;
 
   // Normalize values for Sankey so they are visually comparable
@@ -263,6 +273,18 @@ function handleDateChange() {
 function handleRefresh() {
   dateRange.value = null;
   loadAllData();
+}
+
+function quantitySummaryFallback(metric: QuantitySummary): string {
+  if (metric.reason === 'mixed-units') return '多单位';
+  if (metric.reason === 'missing-unit') return '单位缺失';
+  return '数据异常';
+}
+
+function quantitySummaryHint(metric: QuantitySummary): string {
+  if (metric.reason === 'mixed-units') return '批次单位不一致，不能直接相加；请查看下方生产批次明细';
+  if (metric.reason === 'missing-unit') return '部分批次缺少单位，不能可靠汇总；请先补齐单位配置';
+  return '批次数量包含无效值，不能可靠汇总';
 }
 
 function getStatusType(status: string): string {
@@ -347,14 +369,15 @@ function getStatusText(status: string): string {
         <el-col :xs="12" :sm="8" :md="4">
           <el-card class="stat-card consume" shadow="hover">
             <!--
-              🔴 2026-08-02: 「领用数量」「成品数量」是**重量**不是计数
-              (见上方 loadData: consumedQuantity = Σ plannedQuantity,
-               finishedGoods = Σ actualQuantity, 都是批次的数量字段)。
-              此前和「入库批次」「生产批次」一样用 decimals=0, 于是 127.5kg 显示成 128 ——
-              这不是"约等于", 是把 0.5kg 凭空吃掉了。
-              ⛔ 计数类的两张卡(入库批次/生产批次)仍保持 0 位小数 —— 那两个本来就是整数个。
+              保留多单位/缺单位保护，直到后端提供「规范化汇总值 + 单位」契约。
+              不能把 piece/box/kg 等批次数量直接相加，更不能统一硬贴 kg。
             -->
-            <div class="stat-value">{{ formatNumber(summary.consumedQuantity, 2) }}<span class="stat-unit">kg</span></div>
+            <div class="stat-value">
+              <template v-if="summary.consumedQuantity.value !== null">
+                {{ formatNumber(summary.consumedQuantity.value, 2) }}<span v-if="summary.consumedQuantity.unit" class="stat-unit">{{ summary.consumedQuantity.unit }}</span>
+              </template>
+              <span v-else class="stat-unavailable" :title="quantitySummaryHint(summary.consumedQuantity)">{{ quantitySummaryFallback(summary.consumedQuantity) }}</span>
+            </div>
             <div class="stat-label">领用数量</div>
           </el-card>
         </el-col>
@@ -366,7 +389,12 @@ function getStatusText(status: string): string {
         </el-col>
         <el-col :xs="12" :sm="8" :md="4">
           <el-card class="stat-card finished" shadow="hover">
-            <div class="stat-value">{{ formatNumber(summary.finishedGoods, 2) }}<span class="stat-unit">kg</span></div>
+            <div class="stat-value">
+              <template v-if="summary.finishedGoods.value !== null">
+                {{ formatNumber(summary.finishedGoods.value, 2) }}<span v-if="summary.finishedGoods.unit" class="stat-unit">{{ summary.finishedGoods.unit }}</span>
+              </template>
+              <span v-else class="stat-unavailable" :title="quantitySummaryHint(summary.finishedGoods)">{{ quantitySummaryFallback(summary.finishedGoods) }}</span>
+            </div>
             <div class="stat-label">成品数量</div>
           </el-card>
         </el-col>
@@ -451,10 +479,12 @@ function getStatusText(status: string): string {
               <el-table-column label="产品名称" min-width="150" show-overflow-tooltip>
                 <template #default="{ row }">{{ row.productTypeName || row.productName || row.productTypeId || '-' }}</template>
               </el-table-column>
-              <el-table-column prop="plannedQuantity" label="计划数量" width="110" align="right" />
+              <el-table-column label="计划数量" width="130" align="right">
+                <template #default="{ row }">{{ row.plannedQuantity ?? '-' }}{{ row.unit ? ` ${row.unit}` : '' }}</template>
+              </el-table-column>
               <el-table-column prop="actualQuantity" label="实际数量" width="110" align="right">
                 <template #default="{ row }">
-                  {{ row.actualQuantity ?? '-' }}
+                  {{ row.actualQuantity ?? '-' }}{{ row.actualQuantity != null && row.unit ? ` ${row.unit}` : '' }}
                 </template>
               </el-table-column>
               <el-table-column label="状态" width="100" align="center">
@@ -608,6 +638,12 @@ function getStatusText(status: string): string {
     font-weight: 500;
     margin-left: 2px;
     opacity: 0.75;
+  }
+
+  .stat-unavailable {
+    font-size: 15px;
+    font-weight: 600;
+    cursor: help;
   }
 
   .stat-label {
