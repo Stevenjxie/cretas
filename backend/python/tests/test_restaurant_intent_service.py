@@ -196,6 +196,43 @@ def test_daypart_time_dimension_matches_staffing_resolver_capability():
     assert mismatch is None
 
 
+@pytest.mark.parametrize(
+    "question",
+    [
+        "明天全部门店午市和晚市如何安排人手？",
+        "下周需要多少兼职，按门店和岗位说明依据",
+        "下个月各店人效怎么安排？",
+        "明天各门店午市和晚市应该怎么排班？",
+    ],
+)
+def test_store_time_dimensions_match_forecast_staffing_resolver(question):
+    """Production questions must reach the store/daypart FactBook resolver."""
+    spec = _build_spec(
+        "RESTAURANT_OPS_STAFFING_ADVICE",
+        question,
+        confidence=0.99,
+        tier="llm",
+        llm_dimensions=("store", "time"),
+        llm_analysis_action="lookup",
+        llm_store_scope="all",
+        planner_authority="llm_contract_repair",
+    )
+
+    mismatch = svc._execution_mismatch(
+        spec,
+        spec.planned_intents,
+        dish_mention=None,
+        store_mention=None,
+        store_dish=None,
+    )
+
+    assert spec.planned_intents == ("RESTAURANT_OPS_STAFFING_ADVICE",)
+    assert {"store", "time"}.issubset(
+        svc._RESOLVER_DIMENSIONS["RESTAURANT_OPS_STAFFING_ADVICE"]
+    )
+    assert mismatch is None
+
+
 def test_should_delegate_validated_plan_cache_without_java_reinterpretation():
     spec = _spec(
         intent="RESTAURANT_OPS_TREND_ANALYSIS",

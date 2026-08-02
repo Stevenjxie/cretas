@@ -81,10 +81,12 @@ _RESOLVER_DIMENSIONS = {
     "RESTAURANT_OPS_SALES_SUMMARY": frozenset({"store"}),
     "RESTAURANT_OPS_TREND_ANALYSIS": frozenset({"time"}),
     "RESTAURANT_OPS_INVENTORY_WARNING": frozenset({"ingredient"}),
-    # Staffing facts are keyed by daypart (午市/晚市/夜宵).  Treat that
-    # daypart as the supported time dimension; otherwise a correctly compiled
-    # “晚上生意怎么样” plan is rejected before its resolver can run.
-    "RESTAURANT_OPS_STAFFING_ADVICE": frozenset({"time"}),
+    # Staffing facts are keyed by store and daypart (午市/晚市/夜宵), and the
+    # resolver returns every store by default.  Both grains are therefore
+    # executable.  Omitting ``store`` made normal questions such as
+    # “明天各门店怎么排班” pass planning but fail the execution contract before
+    # the grounded FactBook/LLM path could run.
+    "RESTAURANT_OPS_STAFFING_ADVICE": frozenset({"store", "time"}),
 }
 
 _READ_ONLY_MUTATION_TOKENS = (
@@ -426,6 +428,12 @@ def _store_scope_switch_followups(context: Dict[str, Any]) -> List[Dict[str, str
     # 不另造口径 —— 两处一漂, 表现就又是「按钮点了报错」。
     intent = context.get("intent") or ""
     if "store" not in _RESOLVER_DIMENSIONS.get(intent, frozenset()):
+        return []
+    # Forecast staffing serves the store grain by returning every store in its
+    # FactBook, so store+time questions are executable.  It does not yet
+    # consume a named-store filter from the natural-language query, however.
+    # Do not turn execution-grain support into a false “只看 A 店” promise.
+    if intent == "RESTAURANT_OPS_STAFFING_ADVICE":
         return []
     current = {
         name for name in (context.get("store_names") or [])
