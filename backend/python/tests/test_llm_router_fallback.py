@@ -146,11 +146,11 @@ def test_insights_prefers_interleaved_free_plus_before_max_deep_tail():
 def test_review_uses_verified_non_thinking_abc_fallbacks():
     chain = llm_router.SLOT_MODELS[SLOT.REVIEW]
     assert chain[:8] == [
-        ("aliyun_a", "qwen3.7-max-2026-06-08"),
-        ("aliyun_c", "qwen3.7-max-2026-06-08"),
         ("aliyun_c", "qwen3.7-plus-2026-05-26"),
         ("aliyun_b", "qwen3.7-plus-2026-05-26"),
         ("aliyun_a", "qwen3.7-plus-2026-05-26"),
+        ("aliyun_a", "qwen3.7-max-2026-06-08"),
+        ("aliyun_c", "qwen3.7-max-2026-06-08"),
         ("aliyun_c", "qwen3.7-plus"),
         ("aliyun_b", "qwen3.7-plus"),
         ("aliyun_a", "qwen3.7-plus"),

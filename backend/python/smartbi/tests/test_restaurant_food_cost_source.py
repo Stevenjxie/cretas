@@ -14,7 +14,6 @@ All DB interactions mocked — no real DB needed.
 from __future__ import annotations
 from smartbi.gold.restaurant.restaurant_ops_etl import _get_latest_real_purchase_prices
 
-import asyncio
 import os
 import sys
 from decimal import Decimal
@@ -93,36 +92,37 @@ class _FakePool:
         return _AcquireCtx(self._conn)
 
 
-def _run(coro):
-    return asyncio.get_event_loop().run_until_complete(coro)
-
-
 class TestGetLatestRealPurchasePrices:
-    def test_maps_rmt_to_price_and_is_tx_wrapped(self):
+    @pytest.mark.asyncio
+    async def test_maps_rmt_to_price_and_is_tx_wrapped(self):
         rows = [
             _FakeRow({"raw_material_type_id": "rm_qhj_002", "unit_price": Decimal("46.00")}),
             _FakeRow({"raw_material_type_id": "rm_qhj_027", "unit_price": Decimal("4.20")}),
         ]
         conn = _FakeConn(fetch_rows=rows)
-        result = _run(_get_latest_real_purchase_prices(_FakePool(conn), "RES_3101_009"))
+        result = await _get_latest_real_purchase_prices(
+            _FakePool(conn), "RES_3101_009"
+        )
         assert result == {"rm_qhj_002": pytest.approx(46.0), "rm_qhj_027": pytest.approx(4.20)}
         # RLS fix: both set_config and fetch must have run inside the transaction
         assert conn.set_config_in_tx is True
         assert conn.fetch_in_tx is True
 
-    def test_filters_null_rmt_and_price(self):
+    @pytest.mark.asyncio
+    async def test_filters_null_rmt_and_price(self):
         rows = [
             _FakeRow({"raw_material_type_id": None, "unit_price": Decimal("9.9")}),
             _FakeRow({"raw_material_type_id": "rm_x", "unit_price": None}),
             _FakeRow({"raw_material_type_id": "rm_y", "unit_price": Decimal("3.0")}),
         ]
         conn = _FakeConn(fetch_rows=rows)
-        result = _run(_get_latest_real_purchase_prices(_FakePool(conn), "F006"))
+        result = await _get_latest_real_purchase_prices(_FakePool(conn), "F006")
         assert result == {"rm_y": pytest.approx(3.0)}
 
-    def test_empty(self):
+    @pytest.mark.asyncio
+    async def test_empty(self):
         conn = _FakeConn(fetch_rows=[])
-        result = _run(_get_latest_real_purchase_prices(_FakePool(conn), "F006"))
+        result = await _get_latest_real_purchase_prices(_FakePool(conn), "F006")
         assert result == {}
 
 

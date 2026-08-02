@@ -868,7 +868,7 @@ SLOT_MODELS: Dict[SLOT, List[Tuple[str, str]]] = {
     ] + _TEXT_TAIL),
     # VL — 仅视觉链.
     SLOT.VL: _VL_CHAIN,
-    # REVIEW — 中文 critique 质量 → verified non-thinking Max/Plus.
+    # REVIEW — 中文 critique 质量 → verified non-thinking Plus/Max.
     # 05-17/preview Max 强制 enable_thinking=true，与 REVIEW 的低延迟
     # enable_thinking=false 契约冲突；改用 A/C 06-08（实测均兼容）并以
     # 三账户 Plus 收尾，避免每次稳定 400 后才 fallback。
@@ -880,10 +880,11 @@ SLOT_MODELS: Dict[SLOT, List[Tuple[str, str]]] = {
     # 正确的计划被判成「我还缺一个关键信息」, 整条餐饮问答天天下午退化。
     # 实测同一问句: deepseek-v3.2 → confidence=-1.0; qwen3.7-flash → 0.95,
     # 计划内容两者一致。故把仍有额度的 flash 插在 deepseek **之前** ——
-    # Max/Plus 有额度时链路不变(它们仍排在最前), 只改耗尽后的落点。
+    # 2026-08-02 fresh production probes found both Max heads returning 403 after
+    # restart, while dated Plus still passed the restaurant contract. Lead with
+    # the healthy dated grants so a cold process does not burn two failed calls;
+    # keep Max immediately behind them in case its daily grant recovers.
     SLOT.REVIEW: _dedup_chain([
-        ("aliyun_a", "qwen3.7-max-2026-06-08"),
-        ("aliyun_c", "qwen3.7-max-2026-06-08"),
         # 2026-08-02 production T3 probe: the bare qwen3.7-plus grants above
         # were exhausted, while all three dated 05-26 grants were still healthy.
         # They were already billing-safe and used by INSIGHTS, but REVIEW had
@@ -894,6 +895,8 @@ SLOT_MODELS: Dict[SLOT, List[Tuple[str, str]]] = {
         ("aliyun_c", "qwen3.7-plus-2026-05-26"),
         ("aliyun_b", "qwen3.7-plus-2026-05-26"),
         ("aliyun_a", "qwen3.7-plus-2026-05-26"),
+        ("aliyun_a", "qwen3.7-max-2026-06-08"),
+        ("aliyun_c", "qwen3.7-max-2026-06-08"),
         ("aliyun_c", "qwen3.7-plus"), ("aliyun_b", "qwen3.7-plus"),
         ("aliyun_a", "qwen3.7-plus"),
         # 2026-07-30 实测(scripts 见 PR 描述): 对餐饮 T3 真实 prompt 逐模型打分,
