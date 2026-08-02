@@ -917,6 +917,16 @@ SLOT_MODELS: Dict[SLOT, List[Tuple[str, str]]] = {
     SLOT.REVIEW: _dedup_chain([
         ("aliyun_a", "qwen3.7-max-2026-06-08"),
         ("aliyun_c", "qwen3.7-max-2026-06-08"),
+        # 2026-08-02 production T3 probe: the bare qwen3.7-plus grants above
+        # were exhausted, while all three dated 05-26 grants were still healthy.
+        # They were already billing-safe and used by INSIGHTS, but REVIEW had
+        # accidentally omitted them.  Five restaurant contract shapes passed on
+        # C/B/A (sales, trend, wastage, named dish, store directory); order by
+        # measured latency 3.90s / 4.16s / 4.57s so the first healthy model stays
+        # within the semantic planner's 5s provider budget.
+        ("aliyun_c", "qwen3.7-plus-2026-05-26"),
+        ("aliyun_b", "qwen3.7-plus-2026-05-26"),
+        ("aliyun_a", "qwen3.7-plus-2026-05-26"),
         ("aliyun_c", "qwen3.7-plus"), ("aliyun_b", "qwen3.7-plus"),
         ("aliyun_a", "qwen3.7-plus"),
         # 2026-07-30 实测(scripts 见 PR 描述): 对餐饮 T3 真实 prompt 逐模型打分,
