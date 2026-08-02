@@ -93,6 +93,7 @@
     "adminOnly": "Some features require administrator privileges"
   },
   "common": {
+    "adminOnly": "Administrators only",
     "loading": "Loading...",
     "noPermission": "You do not have permission to access this page",
     "permissionHint": "Factory super admin, permission admin and department admin only",

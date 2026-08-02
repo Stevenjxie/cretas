@@ -1,6 +1,6 @@
 import { useEffect, useRef } from 'react';
 import * as Notifications from 'expo-notifications';
-import { pushNotificationService } from '../services/pushNotificationService';
+import { pushNotificationService, isPushSupported } from '../services/pushNotificationService';
 import { deviceAPI } from '../services/api/deviceApiClient';
 import { useAuthStore } from '../store/authStore';
 import { logger } from '../utils/logger';
@@ -71,6 +71,9 @@ export function usePushNotifications(options: UsePushNotificationsOptions = {}) 
    * 初始化推送通知
    */
   useEffect(() => {
+    // APP-WEB-007: Web 不支持原生推送, 整个 hook 直接空转 —— 不初始化、不取 token、
+    // 不注册设备, 也就不会每次登录都刷两条 error 和一条"无法获取 Push Token"的 warn。
+    if (!isPushSupported) return;
     if (isInitialized.current) return;
 
     async function initializeNotifications() {
@@ -90,6 +93,7 @@ export function usePushNotifications(options: UsePushNotificationsOptions = {}) 
    * 设置通知事件处理器
    */
   useEffect(() => {
+    if (!isPushSupported) return;
     if (onNotificationReceived) {
       pushNotificationService.setForegroundHandler(onNotificationReceived);
     }
@@ -103,6 +107,7 @@ export function usePushNotifications(options: UsePushNotificationsOptions = {}) 
    * 登录后注册设备
    */
   useEffect(() => {
+    if (!isPushSupported) return;
     if (!isAuthenticated || !user || !autoRegisterOnLogin) {
       return;
     }

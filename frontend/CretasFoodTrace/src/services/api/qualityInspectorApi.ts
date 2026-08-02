@@ -8,6 +8,7 @@ import {
   QIBatch,
   QualityRecord,
   QualityStatistics,
+  QualityStatisticsResponse,
   QualityTrendData,
   QualityInspectionForm,
   ClockRecord,
@@ -237,13 +238,29 @@ class QualityInspectorApiClient {
    * 获取质检统计数据
    */
   async getStatistics(): Promise<QualityStatistics> {
-    const endDate = new Date().toISOString().split('T')[0];
-    const startDate = new Date(Date.now() - 30 * 86400000).toISOString().split('T')[0];
-    const response = await apiClient.get<QIApiResponse<QualityStatistics>>(
+    // APP-CONTRACT-004 (2026-08-02): 首页展示的是"今日摘要", 之前却查最近 30 天,
+    // 而且把后端的扁平响应当成嵌套的 today/week/month 直接返回 → 三个数字恒为 "—"。
+    // 现在按"今天"查, 并在这里显式把后端形态映射成页面模型。
+    const today = new Date().toISOString().split('T')[0];
+    const response = await apiClient.get<QIApiResponse<QualityStatisticsResponse>>(
       `${this.getBasePath()}/processing/quality/statistics`,
-      { params: { startDate, endDate } }
+      { params: { startDate: today, endDate: today } }
     );
-    return response.data;
+    const raw = response.data ?? ({} as QualityStatisticsResponse);
+    const total = Number(raw.totalInspections ?? 0);
+    const breakdown = raw.breakdown;
+    return {
+      today: {
+        total,
+        // breakdown 是后端权威的分项计数; 老部署没有这个键时退回 passedBatches,
+        // 并把"未通过"标成 0 而不是拿含待检的 failedBatches 冒充。
+        passed: breakdown ? breakdown.pass : Number(raw.passedBatches ?? 0),
+        failed: breakdown ? breakdown.fail : 0,
+        pending: breakdown ? breakdown.pending : 0,
+        conditional: breakdown ? breakdown.conditional : 0,
+        passRate: Number(raw.averagePassRate ?? 0),
+      },
+    };
   }
 
   /**
@@ -260,10 +277,11 @@ class QualityInspectorApiClient {
   /**
    * 获取分析数据 (用于分析概览页)
    */
-  async getAnalysisData(period: 'week' | 'month' | 'quarter' = 'week'): Promise<any> {
-    const response = await apiClient.get<QIApiResponse<any>>(
-      `${this.getBasePath()}/reports/dashboard/quality`,
-      { params: { period } }
+  async getAnalysisData(): Promise<unknown> {
+    // APP-CONTRACT-004: 后端 ReportController#getQualityDashboard 只收 factoryId,
+    // 之前传的 period 参数从头到尾没被读过 (页面上那三个 tab 因此是装饰), 已去掉。
+    const response = await apiClient.get<QIApiResponse<unknown>>(
+      `${this.getBasePath()}/reports/dashboard/quality`
     );
     return response.data;
   }

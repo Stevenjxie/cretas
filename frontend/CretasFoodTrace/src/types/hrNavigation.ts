@@ -116,8 +116,8 @@ export interface HRDashboardStats {
   todayOnSite: number;
   /** 迟到人数 */
   lateCount: number;
-  /** 待激活白名单数 */
-  whitelistPending: number;
+  /** 待激活白名单数; null = 统计接口失败或无权限, 展示层必须显示不可用而不是 0 (APP-RBAC-003) */
+  whitelistPending: number | null;
   /** 本月入职人数 */
   thisMonthNewHires: number;
   /** 总员工数 */

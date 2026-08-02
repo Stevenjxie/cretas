@@ -31,6 +31,8 @@ export const QuickStatsPanel: React.FC<QuickStatsPanelProps> = ({ user }) => {
     todayOutput: number;
     completedBatches: number;
     totalBatches: number;
+    /** APP-DATA-005: 今日新建且进行中, 与 totalBatches 同一时间区间 */
+    inProgressBatches: number;
     onDutyWorkers: number;
     totalWorkers: number;
     activeEquipment: number;
@@ -86,7 +88,9 @@ export const QuickStatsPanel: React.FC<QuickStatsPanelProps> = ({ user }) => {
             // 批次统计
             completedBatches: summary.completedBatches ?? 0,
             totalBatches: summary.todayBatches ?? summary.totalBatches ?? 0,
-            inProgressBatches: summary.inProgressBatches ?? summary.activeBatches ?? 0,
+            // APP-DATA-005: 与 totalBatches(今日) 同一时间区间; 老部署无该键时才回落全量口径
+            inProgressBatches:
+              summary.todayInProgressBatches ?? summary.inProgressBatches ?? summary.activeBatches ?? 0,
             onDutyWorkers: summary.onDutyWorkers ?? 0,
             totalWorkers: summary.totalWorkers ?? 0,
 
@@ -204,7 +208,8 @@ export const QuickStatsPanel: React.FC<QuickStatsPanelProps> = ({ user }) => {
             <View style={styles.statItem}>
               <Icon source="package-variant" size={24} color="#2196F3" />
               <Text variant="bodySmall" style={styles.statLabel}>{t('quickStats.inProgressBatches')}</Text>
-              <Text variant="titleMedium" style={styles.statValue}>{statsData.totalBatches} {t('quickStats.batches')}</Text>
+              {/* APP-DATA-005: 标签写"进行中批次"却显示今日批次总数 — 改用同名字段 */}
+              <Text variant="titleMedium" style={styles.statValue}>{statsData.inProgressBatches} {t('quickStats.batches')}</Text>
             </View>
             <View style={styles.statItem}>
               <Icon source="account-group" size={24} color="#4CAF50" />
@@ -318,10 +323,16 @@ export const QuickStatsPanel: React.FC<QuickStatsPanelProps> = ({ user }) => {
     }
   };
 
+  // APP-UX-006 (2026-08-02): renderStatsContent() 对没有覆盖的角色 (财务主管/出纳/
+  // 销售主管/采购主管/生产经理) 返回 null, 而这里以前无条件渲染 Card —— 首页因此
+  // 出现一张什么都没有的空白卡片。没有内容就不渲染容器。
+  const content = renderStatsContent();
+  if (!content) return null;
+
   return (
     <Card style={styles.card} mode="elevated">
       <Card.Content>
-        {renderStatsContent()}
+        {content}
       </Card.Content>
     </Card>
   );

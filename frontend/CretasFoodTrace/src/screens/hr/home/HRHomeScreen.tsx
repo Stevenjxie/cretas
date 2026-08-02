@@ -31,6 +31,7 @@ import { useTranslation } from 'react-i18next';
 import { hrApiClient } from '../../../services/api/hrApiClient';
 import { useAuthStore } from '../../../store/authStore';
 import { useFactoryFeatureStore } from '../../../store/factoryFeatureStore';
+import { canAccessWhitelist } from '../../../utils/permissionHelper';
 import {
   HR_THEME,
   HR_QUICK_ACTIONS,
@@ -207,10 +208,11 @@ export default function HRHomeScreen() {
             onPress={() => navigation.dispatch(CommonActions.navigate('AttendanceAnomaly'))}
           />
           )}
-          {isScreenEnabled('WhitelistManagement') && (
+          {/* APP-RBAC-003: 无准入角色时不展示 — 否则统计接口 403 会被降级成一个可信的假 0 */}
+          {isScreenEnabled('WhitelistManagement') && canAccessWhitelist(user) && (
           <StatCard
             title={t('home.stats.pendingWhitelist')}
-            value={stats?.whitelistPending ?? 0}
+            value={stats?.whitelistPending ?? '—'}
             icon="shield-check"
             color={HR_THEME.primary}
             onPress={() => navigation.dispatch(CommonActions.navigate('WhitelistList'))}

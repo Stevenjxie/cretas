@@ -33,7 +33,8 @@
       "inProgressBatches": "进行中批次",
       "completedBatches": "已完成批次",
       "pendingInspection": "待质检",
-      "onDutyWorkers": "在岗人员"
+      "onDutyWorkers": "在岗人员",
+      "allActiveBatches": "全部进行中"
     },
     "quickActions": {
       "title": "快捷操作",
@@ -49,7 +50,8 @@
       "consumptionHistory": "消耗记录",
       "exceptionAlert": "异常预警",
       "traceability": "产品溯源",
-      "materialRequisitions": "物料需求单"
+      "materialRequisitions": "物料需求单",
+      "teamReport": "班组报工"
     },
     "aiAnalysis": {
       "title": "AI智能分析",

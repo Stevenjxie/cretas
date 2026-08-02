@@ -54,6 +54,7 @@
       "expiring": "即将过期"
     },
     "tempMonitor": {
+      "noData": "暂无温控设备数据",
       "title": "温控监控",
       "online": "在线",
       "offline": "离线",

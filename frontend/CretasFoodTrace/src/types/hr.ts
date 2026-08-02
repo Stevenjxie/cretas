@@ -20,8 +20,8 @@ export interface HRDashboardStats {
   attendanceRate: number;
   /** 迟到人数 */
   lateCount: number;
-  /** 白名单待激活数量 */
-  whitelistPending: number;
+  /** 白名单待激活数量; null = 统计接口失败或无权限, 展示层必须显示不可用而不是 0 (APP-RBAC-003) */
+  whitelistPending: number | null;
   /** 本月入职人数 */
   thisMonthNewHires: number;
   /** 与上月入职人数对比 (+/- 数字) */

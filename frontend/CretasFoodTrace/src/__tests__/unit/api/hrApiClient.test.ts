@@ -203,7 +203,9 @@ describe('hrApiClient', () => {
       expect(data.totalStaff).toBe(0);
       expect(data.attendanceRate).toBe(0);
       expect(data.lateCount).toBe(0);
-      expect(data.whitelistPending).toBe(0);
+      // APP-RBAC-003: 白名单统计失败必须是 null(不可用), 不能回落 0 —— 回落 0 会让
+      // "无权限/请求失败"和"待激活 0 人"在界面上完全一样。旧断言写的正是这个缺陷。
+      expect(data.whitelistPending).toBeNull();
       expect(data.thisMonthNewHires).toBe(0);
     });
 
@@ -225,7 +227,8 @@ describe('hrApiClient', () => {
       const data = await hrApiClient.getDashboardData();
 
       expect(data.todayOnSite).toBe(10);
-      expect(data.whitelistPending).toBe(0);
+      // APP-RBAC-003: 只有白名单这一路失败时, 其它字段照常, 而它自己是 null 而非 0
+      expect(data.whitelistPending).toBeNull();
       expect(data.totalStaff).toBe(30);
     });
 

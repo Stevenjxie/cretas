@@ -389,6 +389,24 @@ export function canManageHR(user: User | null | undefined): boolean {
   return hasModulePermission(user, 'hr', 'write');
 }
 
+/**
+ * 员工注册白名单的准入角色 (APP-RBAC-003, 2026-08-02)。
+ *
+ * 逐字对齐后端 WhitelistController 上的 @RequireRole({"factory_super_admin","permission_admin"}) —
+ * 该注解挂在白名单的**每一个**接口上, 包括 GET /whitelist 与 GET /whitelist/stats,
+ * 所以不在此列的角色连读都是 403。前端任何白名单入口都必须用这个函数判定,
+ * 否则会出现"入口可见 → 点进去 403 → 被 catch 掉降级成 0/空列表"的假数据。
+ *
+ * ⚠️ 改这里之前先改后端注解: 这是后端授权的镜像, 不是独立的前端策略。
+ */
+export const WHITELIST_ACCESS_ROLES = ['factory_super_admin', 'permission_admin'] as const;
+
+export function canAccessWhitelist(user: User | null | undefined): boolean {
+  if (!user) return false;
+  if (isPlatformAdmin(user)) return true;
+  return (WHITELIST_ACCESS_ROLES as readonly string[]).includes(getRoleCode(user));
+}
+
 // ==================== 工具函数 ====================
 
 /**

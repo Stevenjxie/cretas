@@ -154,33 +154,34 @@ export interface QualityRecord {
 // 质检统计
 // ============================================
 
+/**
+ * 后端 GET /processing/quality/statistics 的原始响应形态。
+ * APP-CONTRACT-004: 这是**实际**返回的扁平结构, 不是页面模型 —— 二者的转换在
+ * qualityInspectorApi.getStatistics() 里显式完成, 不要再凭想象声明嵌套字段。
+ */
+export interface QualityStatisticsResponse {
+  totalInspections: number;
+  averagePassRate?: number | string;
+  passedBatches?: number;
+  /** 注意: 后端这个键的语义是"非 PASS", 含待检与 CONDITIONAL, 别当成 FAIL 用 */
+  failedBatches?: number;
+  breakdown?: {
+    pass: number;
+    fail: number;
+    conditional: number;
+    pending: number;
+  };
+}
+
+/** 质检首页「今日摘要」用的页面模型 (只有今天这一天; 周/月后端没有对应接口, 故不声明) */
 export interface QualityStatistics {
   today: {
     total: number;
     passed: number;
     failed: number;
     pending: number;
+    conditional: number;
     passRate: number;
-    inspecting?: number;
-    avgInspectionMinutes?: number;
-  };
-  week: {
-    total: number;
-    passed: number;
-    failed: number;
-    passRate: number;
-  };
-  month: {
-    total: number;
-    passed: number;
-    failed: number;
-    passRate: number;
-  };
-  gradeDistribution: {
-    A: number;
-    B: number;
-    C: number;
-    D: number;
   };
 }
 

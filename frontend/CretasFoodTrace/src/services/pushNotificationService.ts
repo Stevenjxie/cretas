@@ -71,12 +71,27 @@ export interface PushNotificationService {
   setBadgeCount(count: number): Promise<void>;
 }
 
+/**
+ * APP-WEB-007 (2026-08-02): Expo 的原生推送在 Web 上不可用 —— 没有 EAS projectId 概念,
+ * 也不支持 push token listener。此前只用 `Device.isDevice` 判断, 而浏览器**就是**真机,
+ * 于是 12 个角色每次登录都会走完"请求权限 → 读 projectId → 注册原生监听"整条链路,
+ * 稳定产出「未找到 EAS Project ID」「推送通知权限被拒绝」两条 error。
+ * 这里在服务最外层对 Web 明确 no-op: 不请求权限、不读 token、不注册监听、不报 error。
+ * 若将来要支持 Web Push, 必须走独立的 service worker/VAPID 实现, 不能复用这条原生链路。
+ */
+export const isPushSupported = Platform.OS !== 'web';
+const PUSH_SUPPORTED = isPushSupported;
+
 class PushNotificationServiceImpl implements PushNotificationService {
   private notificationListener?: Notifications.Subscription;
   private responseListener?: Notifications.Subscription;
   private currentToken: string | null = null;
 
   async initialize(): Promise<void> {
+    if (!PUSH_SUPPORTED) {
+      pushLogger.debug('Web 环境不支持原生推送, 跳过初始化');
+      return;
+    }
     pushLogger.info('初始化推送通知服务');
 
     // 检查是否为真机
@@ -133,6 +148,10 @@ class PushNotificationServiceImpl implements PushNotificationService {
   }
 
   async getExpoPushToken(): Promise<string | null> {
+    if (!PUSH_SUPPORTED) {
+      pushLogger.debug('Web 环境无 Expo Push Token');
+      return null;
+    }
     if (!Device.isDevice) {
       pushLogger.warn('模拟器无法获取 Push Token');
       return null;
@@ -172,6 +191,7 @@ class PushNotificationServiceImpl implements PushNotificationService {
   }
 
   setForegroundHandler(handler: (notification: Notifications.Notification) => void): void {
+    if (!PUSH_SUPPORTED) return;
     // 移除旧的监听器
     if (this.notificationListener) {
       this.notificationListener.remove();
@@ -189,6 +209,7 @@ class PushNotificationServiceImpl implements PushNotificationService {
   }
 
   setResponseHandler(handler: (response: Notifications.NotificationResponse) => void): void {
+    if (!PUSH_SUPPORTED) return;
     // 移除旧的监听器
     if (this.responseListener) {
       this.responseListener.remove();
@@ -206,16 +227,19 @@ class PushNotificationServiceImpl implements PushNotificationService {
   }
 
   async clearAllNotifications(): Promise<void> {
+    if (!PUSH_SUPPORTED) return;
     await Notifications.dismissAllNotificationsAsync();
     pushLogger.info('所有通知已清除');
   }
 
   async getBadgeCount(): Promise<number> {
+    if (!PUSH_SUPPORTED) return 0;
     const count = await Notifications.getBadgeCountAsync();
     return count;
   }
 
   async setBadgeCount(count: number): Promise<void> {
+    if (!PUSH_SUPPORTED) return;
     await Notifications.setBadgeCountAsync(count);
     pushLogger.debug('角标数量已设置', { count });
   }

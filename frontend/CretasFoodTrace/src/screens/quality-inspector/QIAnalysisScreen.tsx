@@ -34,11 +34,26 @@ type NavigationProp = NativeStackNavigationProp<QualityInspectorStackParamList>;
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 
+/**
+ * 页面模型。
+ *
+ * APP-CONTRACT-004 (2026-08-02): 这个页面此前声明的是一套后端从未产出过的结构
+ * (overview/gradeDistribution/categoryScores/recentIssues), 形状校验必然失败,
+ * 页面恒显示"数据格式异常，请稍后重试"。现在改成: 声明后端**真实**返回的形态,
+ * 在 adaptDashboard() 里显式转换; 后端确实没有数据源的字段一律 null, 由渲染层
+ * 显示"暂无数据"而不是编一个数字出来。
+ *
+ * 数据源说明 (后端 ProcessingServiceImpl#getQualityDashboard, 范围恒为**本月**):
+ *   totalInspections / passRate / gradeDistribution / trends → 有
+ *   avgScore(综合评分)、categoryScores(外观/气味/规格/重量/包装分项得分) → 质检表里
+ *     压根没有对应字段, 后端也没有这两个键 → null, 页面不展示。
+ */
 interface AnalysisData {
   overview: {
     totalInspections: number;
     passRate: number;
-    avgScore: number;
+    /** null = 后端无此数据源 */
+    avgScore: number | null;
     trendDirection: 'up' | 'down' | 'stable';
   };
   gradeDistribution: {
@@ -46,57 +61,62 @@ interface AnalysisData {
     B: number;
     C: number;
     D: number;
-  };
+  } | null;
+  /** null = 后端无此数据源 (质检表无分项评分字段) */
   categoryScores: {
     appearance: number;
     smell: number;
     specification: number;
     weight: number;
     packaging: number;
-  };
-  recentIssues: {
-    category: string;
-    count: number;
-    description: string;
-  }[];
+  } | null;
 }
 
-// Fallback data used when API is unavailable or returns unexpected format
-const FALLBACK_DATA: AnalysisData = {
-  overview: {
-    totalInspections: 156,
-    passRate: 92.3,
-    avgScore: 87.5,
-    trendDirection: 'up',
-  },
-  gradeDistribution: { A: 45, B: 38, C: 12, D: 5 },
-  categoryScores: {
-    appearance: 17.2,
-    smell: 18.5,
-    specification: 16.8,
-    weight: 17.9,
-    packaging: 17.1,
-  },
-  recentIssues: [
-    { category: '外观', count: 8, description: '色泽不均匀' },
-    { category: '规格', count: 5, description: '尺寸偏差' },
-    { category: '包装', count: 3, description: '标签模糊' },
-  ],
-};
+interface QualityDashboardResponse {
+  totalInspections?: number;
+  passRate?: number | string;
+  avgPassRate?: number | string;
+  gradeDistribution?: { A?: number; B?: number; C?: number; D?: number };
+  trends?: { date?: string; passRate?: number | string }[];
+}
 
-/**
- * Validate that the API result matches the expected AnalysisData shape.
- * Returns the data if valid, or null if the shape is unexpected.
- */
-function isValidAnalysisData(result: unknown): result is AnalysisData {
-  if (!result || typeof result !== 'object') return false;
-  const r = result as Record<string, unknown>;
-  return (
-    r.overview != null &&
-    typeof r.overview === 'object' &&
-    r.gradeDistribution != null &&
-    typeof r.gradeDistribution === 'object'
-  );
+function num(value: unknown): number {
+  const n = Number(value);
+  return Number.isFinite(n) ? n : 0;
+}
+
+/** 用趋势序列首尾的合格率判断方向; 不足两个有效点时算持平 */
+function deriveTrendDirection(trends?: QualityDashboardResponse['trends']): 'up' | 'down' | 'stable' {
+  const points = (trends ?? [])
+    .map((t) => Number(t?.passRate))
+    .filter((v) => Number.isFinite(v) && v > 0);
+  const first = points[0];
+  const last = points[points.length - 1];
+  if (points.length < 2 || first === undefined || last === undefined) return 'stable';
+  const delta = last - first;
+  if (delta > 0.5) return 'up';
+  if (delta < -0.5) return 'down';
+  return 'stable';
+}
+
+function adaptDashboard(result: unknown): AnalysisData | null {
+  if (!result || typeof result !== 'object') return null;
+  const r = result as QualityDashboardResponse;
+  // totalInspections 是后端恒输出的键 — 它缺失才说明响应真的不是这个端点的
+  if (r.totalInspections === undefined) return null;
+  const g = r.gradeDistribution;
+  return {
+    overview: {
+      totalInspections: num(r.totalInspections),
+      passRate: num(r.passRate ?? r.avgPassRate),
+      avgScore: null,
+      trendDirection: deriveTrendDirection(r.trends),
+    },
+    gradeDistribution: g
+      ? { A: num(g.A), B: num(g.B), C: num(g.C), D: num(g.D) }
+      : null,
+    categoryScores: null,
+  };
 }
 
 export default function QIAnalysisScreen() {
@@ -110,7 +130,6 @@ export default function QIAnalysisScreen() {
   const [refreshing, setRefreshing] = useState(false);
   const [data, setData] = useState<AnalysisData | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [period, setPeriod] = useState<'week' | 'month' | 'quarter'>('week');
 
   useEffect(() => {
     if (factoryId) {
@@ -120,15 +139,16 @@ export default function QIAnalysisScreen() {
       setError(t('analysis.noFactory', '未设置工厂ID，无法加载数据'));
       setLoading(false);
     }
-  }, [factoryId, period]);
+  }, [factoryId]);
 
   const loadData = async () => {
     try {
       setLoading(true);
       setError(null);
-      const result = await qualityInspectorApi.getAnalysisData(period);
-      if (isValidAnalysisData(result)) {
-        setData(result);
+      const result = await qualityInspectorApi.getAnalysisData();
+      const adapted = adaptDashboard(result);
+      if (adapted) {
+        setData(adapted);
       } else {
         console.warn('API returned unexpected data format');
         setError(t('analysis.dataFormatError', '数据格式异常，请稍后重试'));
@@ -147,7 +167,7 @@ export default function QIAnalysisScreen() {
     setRefreshing(true);
     await loadData();
     setRefreshing(false);
-  }, [period]);
+  }, []);
 
   const handleViewTrend = () => {
     navigation.navigate('QITrend');
@@ -156,17 +176,6 @@ export default function QIAnalysisScreen() {
   const handleGenerateReport = () => {
     navigation.navigate('QIReport');
   };
-
-  const renderPeriodTab = (p: 'week' | 'month' | 'quarter', label: string) => (
-    <TouchableOpacity
-      style={[styles.periodTab, period === p && styles.periodTabActive]}
-      onPress={() => setPeriod(p)}
-    >
-      <Text style={[styles.periodText, period === p && styles.periodTextActive]}>
-        {label}
-      </Text>
-    </TouchableOpacity>
-  );
 
   const renderGradeBar = (grade: 'A' | 'B' | 'C' | 'D', count: number, total: number) => {
     const percentage = total > 0 ? (count / total) * 100 : 0;
@@ -242,6 +251,7 @@ export default function QIAnalysisScreen() {
     );
   }
 
+  const gradeDistribution = data?.gradeDistribution ?? null;
   const totalGrades = data?.gradeDistribution
     ? (data.gradeDistribution.A ?? 0) +
       (data.gradeDistribution.B ?? 0) +
@@ -261,11 +271,10 @@ export default function QIAnalysisScreen() {
         />
       }
     >
-      {/* 时间周期选择 */}
-      <View style={styles.periodBar}>
-        {renderPeriodTab('week', t('analysis.period.week'))}
-        {renderPeriodTab('month', t('analysis.period.month'))}
-        {renderPeriodTab('quarter', t('analysis.period.quarter'))}
+      {/* APP-CONTRACT-004: 后端 /reports/dashboard/quality 不接受时间参数, 恒返回本月。
+          之前这里放了周/月/季三个可点的 tab, 点了没有任何效果 —— 换成如实标注范围。 */}
+      <View style={styles.rangeBar}>
+        <Text style={styles.rangeText}>{t('analysis.rangeThisMonth', '统计范围：本月')}</Text>
       </View>
 
       {/* 概览卡片 */}
@@ -289,7 +298,9 @@ export default function QIAnalysisScreen() {
         </View>
         <View style={styles.overviewDivider} />
         <View style={styles.overviewItem}>
-          <Text style={styles.overviewValue}>{(data?.overview?.avgScore ?? 0).toFixed(1)}</Text>
+          <Text style={styles.overviewValue}>
+            {data?.overview?.avgScore != null ? data.overview.avgScore.toFixed(1) : '—'}
+          </Text>
           <Text style={styles.overviewLabel}>{t('analysis.avgScore')}</Text>
         </View>
       </View>
@@ -303,45 +314,30 @@ export default function QIAnalysisScreen() {
           </TouchableOpacity>
         </View>
         <View style={styles.gradeCard}>
-          {data?.gradeDistribution &&
-            (['A', 'B', 'C', 'D'] as const).map((grade) =>
-              renderGradeBar(grade, data.gradeDistribution[grade] ?? 0, totalGrades)
-            )}
+          {gradeDistribution
+            ? (['A', 'B', 'C', 'D'] as const).map((grade) =>
+                renderGradeBar(grade, gradeDistribution[grade] ?? 0, totalGrades)
+              )
+            : <Text style={styles.emptyHint}>{t('analysis.noGradeData', '暂无等级分布数据')}</Text>}
         </View>
       </View>
 
-      {/* 分类评分 */}
-      <View style={styles.section}>
-        <Text style={styles.sectionTitle}>{t('analysis.categoryAvgScore')}</Text>
-        <View style={styles.categoryCard}>
-          {renderCategoryScore(t('analysis.appearance'), 'eye-outline', data?.categoryScores?.appearance ?? 0)}
-          {renderCategoryScore(t('analysis.smell'), 'flower-outline', data?.categoryScores?.smell ?? 0)}
-          {renderCategoryScore(t('analysis.specification'), 'resize-outline', data?.categoryScores?.specification ?? 0)}
-          {renderCategoryScore(t('analysis.weight'), 'scale-outline', data?.categoryScores?.weight ?? 0)}
-          {renderCategoryScore(t('analysis.packaging'), 'cube-outline', data?.categoryScores?.packaging ?? 0)}
+      {/* 分类评分 — 质检表无分项评分字段, 后端不产出该键; 有数据源之前不渲染一排 0.0 */}
+      {data?.categoryScores && (
+        <View style={styles.section}>
+          <Text style={styles.sectionTitle}>{t('analysis.categoryAvgScore')}</Text>
+          <View style={styles.categoryCard}>
+            {renderCategoryScore(t('analysis.appearance'), 'eye-outline', data.categoryScores.appearance)}
+            {renderCategoryScore(t('analysis.smell'), 'flower-outline', data.categoryScores.smell)}
+            {renderCategoryScore(t('analysis.specification'), 'resize-outline', data.categoryScores.specification)}
+            {renderCategoryScore(t('analysis.weight'), 'scale-outline', data.categoryScores.weight)}
+            {renderCategoryScore(t('analysis.packaging'), 'cube-outline', data.categoryScores.packaging)}
+          </View>
         </View>
-      </View>
+      )}
 
-      {/* 常见问题 */}
-      <View style={styles.section}>
-        <Text style={styles.sectionTitle}>{t('analysis.commonIssues')}</Text>
-        <View style={styles.issuesCard}>
-          {data?.recentIssues?.map((issue, index) => (
-            <View key={index} style={styles.issueItem}>
-              <View style={styles.issueLeft}>
-                <View style={styles.issueBadge}>
-                  <Text style={styles.issueBadgeText}>{issue.count}</Text>
-                </View>
-                <View>
-                  <Text style={styles.issueCategory}>{issue.category}</Text>
-                  <Text style={styles.issueDesc}>{issue.description}</Text>
-                </View>
-              </View>
-              <Ionicons name="chevron-forward" size={20} color={QI_COLORS.disabled} />
-            </View>
-          ))}
-        </View>
-      </View>
+      {/* APP-CONTRACT-004: 原「常见问题」区块读 recentIssues, 后端从来没有这个键,
+          质检表也没有问题分类字段 —— 渲染的永远是一张空卡。有真实数据源之前先摘掉。 */}
 
       {/* 生成报告按钮 */}
       <TouchableOpacity style={styles.reportBtn} onPress={handleGenerateReport}>
@@ -372,30 +368,23 @@ const styles = StyleSheet.create({
     fontSize: 14,
   },
 
-  // 时间周期
-  periodBar: {
-    flexDirection: 'row',
+  // 统计范围标注 (后端恒为本月)
+  rangeBar: {
     backgroundColor: QI_COLORS.card,
     borderRadius: 12,
-    padding: 4,
+    paddingVertical: 10,
+    paddingHorizontal: 12,
     marginBottom: 16,
   },
-  periodTab: {
-    flex: 1,
-    paddingVertical: 10,
-    alignItems: 'center',
-    borderRadius: 8,
-  },
-  periodTabActive: {
-    backgroundColor: QI_COLORS.primary,
-  },
-  periodText: {
-    fontSize: 14,
+  rangeText: {
+    fontSize: 13,
     color: QI_COLORS.textSecondary,
   },
-  periodTextActive: {
-    color: '#fff',
-    fontWeight: '500',
+  emptyHint: {
+    fontSize: 13,
+    color: QI_COLORS.textSecondary,
+    textAlign: 'center',
+    paddingVertical: 16,
   },
 
   // 概览卡片
