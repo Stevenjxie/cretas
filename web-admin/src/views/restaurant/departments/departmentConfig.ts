@@ -61,8 +61,12 @@ export interface DeptTrend {
   title: string;
   unit: string;
   money?: boolean;
-  /** 'ops-kpi' → {success,data:[{date,value}]}；'revenue-points' → {points:[{date,revenue}]} */
-  shape: 'ops-kpi' | 'revenue-points';
+  /**
+   * 'ops-kpi' → {success,data:[{date,value}]}
+   * 'revenue-points' → {points:[{date,revenue}]}
+   * 'staffing-daily' → {success,data:{dailyRows:[{date,predictedGuests}]}}
+   */
+  shape: 'ops-kpi' | 'revenue-points' | 'staffing-daily';
   endpoint: string;
 }
 
@@ -254,6 +258,12 @@ export const DEPARTMENTS: Record<DeptKey, DeptConfig> = {
       { label: '正向缺口', path: 'summary.positiveGap' },
       { label: '置信度', path: 'summary.confidencePct', percent: true },
     ],
+    trend: {
+      title: '下周预测客流',
+      unit: '人次',
+      shape: 'staffing-daily',
+      endpoint: '/api/smartbi/restaurant/staffing/dashboard?horizon=week',
+    },
     entries: [
       { title: '预测排班', path: '/restaurant/staffing' },
     ],

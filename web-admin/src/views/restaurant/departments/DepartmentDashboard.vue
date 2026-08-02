@@ -5,8 +5,8 @@
  * 骨架：① 头部(部门 · 期间) → ② KPI 带 → ④ 排行明细 → ⑤ AI 入口 → ⑥ 建议+功能入口。
  * 差异全在 `departmentConfig.ts` 里，这里只负责取数与渲染。
  *
- * ⚠️ ③ 图表区本版**未做** —— 仓里没有通用图表封装，自己写一套等于加一片没人眼
- *    确认过的界面。留到视觉走查之后再补，现在不放占位框充数。
+ * ③ 图表区复用 DeptTrendChart；人事曲线读取同一个排班 FactBook 的逐日预测，
+ * 不另算一套数字，也不把模拟预订伪装成平台事实。
  *
  * 金额脱敏沿用现有 role-kpi 的范式：无价格权限时金额显示「—」，比率与计数照常。
  */
@@ -145,9 +145,22 @@ async function loadTrend() {
     if (t.shape === 'ops-kpi') {
       const rows = (res?.data ?? []) as { date: string; value: number }[];
       trendPoints.value = rows.map((r) => ({ date: String(r.date), value: Number(r.value ?? 0) }));
-    } else {
+    } else if (t.shape === 'revenue-points') {
       const rows = (res?.points ?? []) as { date: string; revenue: number }[];
       trendPoints.value = rows.map((r) => ({ date: String(r.date), value: Number(r.revenue ?? 0) }));
+    } else {
+      const envelope = (res?.data ?? res) as { dailyRows?: Array<{
+        date: string;
+        predictedGuests: number;
+      }> };
+      const totals = new Map<string, number>();
+      for (const row of envelope.dailyRows ?? []) {
+        const date = String(row.date);
+        totals.set(date, (totals.get(date) ?? 0) + Number(row.predictedGuests ?? 0));
+      }
+      trendPoints.value = [...totals.entries()]
+        .sort(([left], [right]) => left.localeCompare(right))
+        .map(([date, value]) => ({ date, value }));
     }
   } catch (e) {
     // 趋势取不到不该拖垮整页 —— KPI 与排行仍然有用。图表区自己显示"没有数据"。

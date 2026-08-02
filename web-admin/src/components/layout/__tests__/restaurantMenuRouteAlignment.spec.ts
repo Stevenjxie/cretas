@@ -103,17 +103,17 @@ describe('餐饮功能页按四部门归属', () => {
     expect(stray, `这些页面还没归到部门:\n${stray.join('\n')}`).toEqual([]);
   });
 
-  it('四个部门各自都有页面（人事除外, 它的功能页待建）', () => {
+  it('四个部门各自都有驾驶舱和至少一个功能页', () => {
     const byDept = new Map<string, number>();
     for (const item of flattenMenu(menuConfig)) {
       if (!item.path.startsWith('/restaurant/')) continue;
       if (!DEPT_MODULES.has(item.module)) continue;
       byDept.set(item.module, (byDept.get(item.module) ?? 0) + 1);
     }
-    // 驾驶舱本身各算一个，所以人事至少是 1
+    // 驾驶舱本身各算一个；预测排班补齐了人事的首个功能页。
     expect(byDept.get('restaurantOps') ?? 0).toBeGreaterThan(1);
     expect(byDept.get('restaurantMarketing') ?? 0).toBeGreaterThan(1);
     expect(byDept.get('restaurantFinance') ?? 0).toBeGreaterThan(1);
-    expect(byDept.get('restaurantHr') ?? 0).toBe(1);
+    expect(byDept.get('restaurantHr') ?? 0).toBeGreaterThan(1);
   });
 });

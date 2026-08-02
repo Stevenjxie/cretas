@@ -184,9 +184,15 @@ describe('部门数据源的端点前缀', () => {
 
   it('gold_reads 系列必须带 /gold（那个 router 有 prefix）', () => {
     for (const ep of collect()) {
-      if (ep.includes('restaurant-ops')) continue;
+      if (ep.includes('restaurant-ops') || ep.includes('/restaurant/staffing/')) continue;
       expect(ep, `${ep} 缺 /gold —— 会 404`).toContain('/api/smartbi/gold/');
     }
+  });
+
+  it('预测排班使用独立 restaurant/staffing router 前缀', () => {
+    const endpoint = DEPARTMENTS.hr.trend?.endpoint ?? '';
+    expect(endpoint).toContain('/api/smartbi/restaurant/staffing/');
+    expect(endpoint).not.toContain('/gold/');
   });
 });
 

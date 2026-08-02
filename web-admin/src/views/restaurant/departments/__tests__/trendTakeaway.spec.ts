@@ -84,7 +84,7 @@ describe('趋势图的一句话结论', () => {
 });
 
 describe('部门趋势配置', () => {
-  it('有数据源的部门都配了趋势图, 人事没有', () => {
+  it('有数据源的部门都配了趋势图', () => {
     for (const key of DEPARTMENT_ORDER) {
       const cfg = DEPARTMENTS[key];
       if (cfg.source) {
@@ -118,5 +118,13 @@ describe('部门趋势配置', () => {
     // 两边都用金额, 若指向同一个端点就等于两个部门看同一张图
     expect(DEPARTMENTS.marketing.trend!.endpoint)
       .not.toBe(DEPARTMENTS.finance.trend!.endpoint);
+  });
+
+  it('人事趋势读取预测排班 FactBook 而不是另造统计口径', () => {
+    expect(DEPARTMENTS.hr.trend).toMatchObject({
+      shape: 'staffing-daily',
+      endpoint: '/api/smartbi/restaurant/staffing/dashboard?horizon=week',
+      unit: '人次',
+    });
   });
 });
