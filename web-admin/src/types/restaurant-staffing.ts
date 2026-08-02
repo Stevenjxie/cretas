@@ -35,6 +35,7 @@ export interface StaffingDailyRow {
   storeName: string;
   daypart: string;
   reservedGuests: number;
+  activeReservedGuests: number;
   weightedReservedGuests: number;
   reservedTables: number;
   predictedGuests: number;
@@ -72,10 +73,18 @@ export interface StaffingSummaryRow {
   skillGap: number;
   confidencePct: number;
   partTimePeople: number;
+  partTimeShiftHours: number;
+  weeklyCapacityGapHours: number;
+  workHourRule: 'daily_concurrency_plus_skill_and_weekly_hour_caps';
   evidenceLabel: string;
   trend7Vs30Pct: number | null;
   trend30Vs365Pct: number | null;
   historicalProductivity: Array<Record<string, unknown>>;
+  trends: {
+    guestTraffic: Record<string, number | null>;
+    posOrders: Record<string, number | null>;
+    historicalProductivity: Record<string, number | string | null>;
+  };
 }
 
 export interface StaffingSummary {
@@ -97,6 +106,7 @@ export interface StaffingDashboard {
   windowStart: string;
   windowEnd: string;
   generatedAt: string;
+  asOf: string;
   numericSource: 'forecast_factbook_only';
   historicalProductivityRule: 'evidence_only_not_gap_input';
   sources: StaffingSource[];

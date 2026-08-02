@@ -313,7 +313,12 @@ def test_dashboard_contract_matches_web_dto_and_adjustment_preview():
     dashboard = asyncio.run(service.build_dashboard(
         "MOCK_REST", "tomorrow", as_of=date(2026, 8, 3)
     ))
-    assert set(("summary_rows", "daily_rows", "sources")) <= dashboard.keys()
+    assert set((
+        "summary_rows", "daily_rows", "sources", "generated_at", "as_of",
+        "numeric_source", "historical_productivity_rule",
+    )) <= dashboard.keys()
+    assert dashboard["numeric_source"] == "forecast_factbook_only"
+    assert dashboard["historical_productivity_rule"] == "evidence_only_not_gap_input"
     assert "rows" not in dashboard
     assert "daily_plan" not in dashboard
     assert "reservation_sources" not in dashboard
