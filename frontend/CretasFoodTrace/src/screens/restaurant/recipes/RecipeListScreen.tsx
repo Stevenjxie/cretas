@@ -155,7 +155,7 @@ export function RecipeListScreen() {
         )}
       </ScrollView>
 
-      <FAB icon="plus" style={styles.fab} onPress={() => navigation.navigate('RecipeEdit', {})} />
+      <FAB testID="recipe-create-fab" icon="plus" style={styles.fab} onPress={() => navigation.navigate('RecipeEdit', {})} />
     </SafeAreaView>
   );
 }
