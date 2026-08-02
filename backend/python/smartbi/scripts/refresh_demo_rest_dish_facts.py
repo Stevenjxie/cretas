@@ -37,15 +37,51 @@ import asyncio
 from datetime import date, timedelta
 from typing import Any, Dict
 
-from smartbi.services.materialized_analytics.daily_order_type_meal import (
-    _AGG_DAILY_OMT_UPSERT_SQL,
-)
-
 
 ALLOWED_FACTORIES = ("DEMO_REST", "RES_3101_009")
 FACTORY_ID = ALLOWED_FACTORIES[0]  # default; overridable via --factory
 MARKER = "DEMO_ROLL_9000723"
 TX_MARKER = "DEMO_ROLL_TX"
+
+# Keep this statement aligned with
+# smartbi/services/materialized_analytics/daily_order_type_meal.py. Importing
+# that module from this cron entry is unsafe in production: Python must first
+# execute the legacy ``smartbi.services.__init__``, which imports a top-level
+# ``services`` package that is not on sys.path for ``python -m smartbi...``.
+# Keeping the SQL local also preserves the channel refresh inside the same
+# transaction as marker backfill and basket cloning.
+_CHANNEL_GOLD_UPSERT_SQL = """
+INSERT INTO agg_daily_order_type_meal AS a (
+    factory_id, date, store_id, order_type, meal_period,
+    gross_amount, actual_receive, bill_count, customer_count,
+    version, computed_at
+)
+SELECT
+    t.factory_id,
+    t.date,
+    t.store_id,
+    COALESCE(TRIM(t.order_type), '未分类')  AS order_type,
+    COALESCE(TRIM(t.meal_period), '未分类') AS meal_period,
+    SUM(COALESCE(t.gross_amount,   0))      AS gross_amount,
+    SUM(COALESCE(t.actual_receive, 0))      AS actual_receive,
+    COUNT(*)                                AS bill_count,
+    SUM(COALESCE(t.customer_count, 0))      AS customer_count,
+    1, NOW()
+FROM fact_pos_transaction t
+WHERE t.factory_id = $1
+  AND t.date BETWEEN $2 AND $3
+GROUP BY t.factory_id, t.date, t.store_id,
+         COALESCE(TRIM(t.order_type), '未分类'),
+         COALESCE(TRIM(t.meal_period), '未分类')
+ON CONFLICT (factory_id, date, store_id, order_type, meal_period)
+DO UPDATE SET
+    gross_amount   = EXCLUDED.gross_amount,
+    actual_receive = EXCLUDED.actual_receive,
+    bill_count     = EXCLUDED.bill_count,
+    customer_count = EXCLUDED.customer_count,
+    version        = a.version + 1,
+    computed_at    = NOW();
+"""
 
 
 def validate_target_end(target_end: date) -> None:
@@ -231,7 +267,7 @@ async def _refresh_synthetic_channels(
         return {"channel_rows_backfilled": backfilled_rows, "channel_gold_rows": 0}
 
     gold = await conn.execute(
-        _AGG_DAILY_OMT_UPSERT_SQL,
+        _CHANNEL_GOLD_UPSERT_SQL,
         factory_id, marker_start, target_end,
     )
     return {

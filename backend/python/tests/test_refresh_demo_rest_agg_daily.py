@@ -3,6 +3,9 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+from pathlib import Path
+import subprocess
+import sys
 from datetime import date, timedelta
 
 import pytest
@@ -98,6 +101,26 @@ def test_dish_facts_scope_and_marker():
     assert dish_mod.MARKER.startswith("DEMO_ROLL_")
     assert dish_mod.TX_MARKER == "DEMO_ROLL_TX"
     assert dish_mod.MARKER != str(mod.SEED_VERSION)
+
+
+def test_dish_facts_module_imports_from_production_shaped_cwd():
+    python_root = Path(__file__).resolve().parents[1]
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "smartbi.scripts.refresh_demo_rest_dish_facts",
+            "--help",
+        ],
+        cwd=python_root,
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "--factory" in result.stdout
 
 
 class _SyntheticChannelConn:
