@@ -3278,6 +3278,7 @@ async def resolve_gross_margin(
     date_range: Optional[Tuple[Optional[date], Optional[date]]] = None,
     window_label: Optional[str] = None,
     dish_mention: Optional[str] = None,
+    dish_mentions: Sequence[str] = (),
     requested_metrics: Sequence[str] = (),
     analysis_action: Optional[str] = None,
     ranking_direction: Optional[str] = None,
@@ -3407,7 +3408,19 @@ async def resolve_gross_margin(
         # Sheet 7/22 实体检测: 点名单菜的问题 ("米饭的毛利率") 此前返回全菜品
         # 榜 — 菜品版的全店榜退化。候选名必须命中本租户菜品行才限域; 命不中
         # 定向拒答, 多命中请求澄清。泛指问法 (整体/哪道/排行) 不受影响。
-        dish_candidates = extract_dish_candidates(query)
+        # A demo request can be planned against DEMO_REST's menu while this
+        # resolver deliberately reads the richer RES_3101_009 data tenant.
+        # Re-extracting under the data tenant's catalogue used to silently
+        # discard a valid DEMO dish that RES has no row for, so a three-dish
+        # question rendered only two dishes.  The sealed plan's explicit
+        # candidates are nominations, not trusted facts: rows below still
+        # validate every name and render an honest no-data line when absent.
+        planned_dish_mentions = [
+            value.strip()[:60]
+            for value in dish_mentions[:8]
+            if isinstance(value, str) and value.strip()
+        ]
+        dish_candidates = planned_dish_mentions or extract_dish_candidates(query)
         if not dish_candidates and dish_mention:
             # R22b: 正则抽取器 miss 时用 T3 实体槽位兜底 — 槽位只是提名,
             # 下方 _match_dish_rows 对本租户菜品行验证, 命不中照样定向拒答。

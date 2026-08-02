@@ -3778,6 +3778,40 @@ def test_multi_dish_sales_returns_every_requested_dish_not_margin_aggregate():
     ]
 
 
+def test_multi_dish_sales_keeps_sealed_names_missing_from_mapped_catalogue():
+    rows = [
+        row for row in _dish_rows()
+        if row["dish_name"] != "招牌藤椒味(单人份)"
+    ] + [{
+        "product_id": 4,
+        "dish_name": "娃娃菜",
+        "normalized_name": "娃娃菜",
+        "total_qty": 36.0,
+        "total_revenue": 720.0,
+        "bills": 30,
+        "window_start": date(2026, 7, 1),
+        "window_end": date(2026, 7, 27),
+    }]
+    requested = ["米饭", "娃娃菜", "招牌藤椒味(单人份)"]
+    catalogue_token = _r.set_dish_catalogue(frozenset({"米饭", "娃娃菜"}))
+    try:
+        result = asyncio.run(_r.resolve_gross_margin(
+            _gross_margin_pool(rows),
+            "RES_MAPPED",
+            role="restaurant_manager",
+            query="本月全部门店米饭和娃娃菜和招牌藤椒味(单人份)的销量",
+            dish_mentions=requested,
+            date_range=(date(2026, 7, 1), date(2026, 7, 27)),
+            window_label="本月",
+            requested_metrics=("sales_volume",),
+        ))
+    finally:
+        _r.reset_dish_catalogue(catalogue_token)
+
+    assert "「招牌藤椒味(单人份)」：没有找到该时段的销售记录" in result.answer_text
+    assert result.meta["targetDishes"] == requested
+
+
 def test_named_dish_no_data_keeps_named_week_scope_and_object():
     result = asyncio.run(_r.resolve_gross_margin(
         _gross_margin_pool([]),

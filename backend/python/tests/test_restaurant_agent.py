@@ -1,6 +1,8 @@
 """Guard rails for the compound-question agent (R28)."""
 from __future__ import annotations
 
+import asyncio
+
 from smartbi.gold.restaurant import restaurant_agent as agent
 
 
@@ -24,6 +26,26 @@ def test_parse_parts_validation():
     assert agent._parse_parts("垃圾输出") is None
     fenced = '```json\n{"parts": ["这个月生意怎么样", "米饭卖得好不好"]}\n```'
     assert agent._parse_parts(fenced) == ["这个月生意怎么样", "米饭卖得好不好"]
+
+
+def test_clear_compound_split_is_deterministic_and_inherits_shared_scope():
+    query = "这个月全部门店生意怎么样，另外米饭卖得好不好"
+
+    parts = asyncio.run(agent.decompose_compound_question(query))
+
+    assert parts == [
+        "这个月全部门店生意怎么样",
+        "这个月全部门店米饭卖得好不好",
+    ]
+
+
+def test_scope_inheritance_does_not_override_an_explicit_named_store():
+    parts = agent._inherit_explicit_scope(
+        "本月全部门店生意怎么样，另外青花椒徐汇日月光店营收如何",
+        ["本月全部门店生意怎么样", "青花椒徐汇日月光店营收如何"],
+    )
+
+    assert parts[1] == "本月青花椒徐汇日月光店营收如何"
 
 
 def test_assemble_compound_answer():
