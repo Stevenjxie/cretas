@@ -3950,6 +3950,26 @@ def test_daypart_business_question_repairs_adjacent_sales_summary():
     assert spec.planner_authority == "llm_contract_repair"
 
 
+def test_staffing_optimize_action_keeps_grounded_staffing_resolver():
+    """Prod repro: “怎么排班” is optimization, but not generic synthesis."""
+    spec = _build_spec(
+        "RESTAURANT_OPS_STAFFING_ADVICE",
+        "明天各门店午市和晚市应该怎么排班？",
+        confidence=0.96,
+        tier="llm",
+        llm_requested_metrics=("staffing",),
+        llm_dimensions=("store", "time"),
+        llm_analysis_action="optimize",
+        llm_store_scope="all",
+        planner_authority="llm",
+        llm_semantics_authoritative=True,
+    )
+
+    assert spec.analysis_action == "optimize"
+    assert spec.intent == "RESTAURANT_OPS_STAFFING_ADVICE"
+    assert spec.planned_intents == ("RESTAURANT_OPS_STAFFING_ADVICE",)
+
+
 def test_named_dish_metric_repairs_generic_llm_clarification_to_time_slot():
     spec = _semantic_spec_from_t3(
         {

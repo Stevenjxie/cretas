@@ -847,6 +847,12 @@ def _plan_requested_intents(
         "RESTAURANT_OPS_PLAYBOOK",
         "RESTAURANT_OPS_STORE_DIRECTORY",
         "RESTAURANT_OPS_CHANNEL_MIX",
+        # Forecast staffing is already the complete optimisation capability
+        # for reservation + trend + skill/hour constraints.  A planner may
+        # legitimately label “怎么排班” as analysis_action=optimize; that must
+        # not rewrite the selected grounded resolver to the generic business
+        # optimisation synthesis path.
+        "RESTAURANT_OPS_STAFFING_ADVICE",
     }
     if selected_code in complete_capability_codes:
         return (selected_code,)
