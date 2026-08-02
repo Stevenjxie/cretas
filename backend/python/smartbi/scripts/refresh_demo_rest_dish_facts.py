@@ -37,6 +37,10 @@ import asyncio
 from datetime import date, timedelta
 from typing import Any, Dict
 
+from smartbi.services.materialized_analytics.daily_order_type_meal import (
+    _AGG_DAILY_OMT_UPSERT_SQL,
+)
+
 
 ALLOWED_FACTORIES = ("DEMO_REST", "RES_3101_009")
 FACTORY_ID = ALLOWED_FACTORIES[0]  # default; overridable via --factory
@@ -132,7 +136,8 @@ async def _synthesize_transactions(conn: Any, factory_id: str, target_end: date)
         """
         INSERT INTO fact_pos_transaction (
           factory_id, source_type, source_bill_no, store_id, date, time,
-          gross_amount, net_amount, actual_receive, customer_count, item_count
+          gross_amount, net_amount, actual_receive, customer_count, item_count,
+          order_type, channel_origin, meal_period
         )
         SELECT $1::varchar, $3::varchar,
                'DR-' || a.store_id || '-' || a.date || '-' || gs.n,
@@ -145,7 +150,15 @@ async def _synthesize_transactions(conn: Any, factory_id: str, target_end: date)
                GREATEST(1, (COALESCE(a.customer_count, a.bill_count)
                             / a.bill_count))::int,
                GREATEST(1, (COALESCE(a.item_count, a.bill_count)
-                            / a.bill_count))::int
+                            / a.bill_count))::int,
+               CASE WHEN mod(gs.n - 1, 20) < 11 THEN '堂食'
+                    WHEN mod(gs.n - 1, 20) < 18 THEN '外卖'
+                    ELSE '自提' END,
+               CASE WHEN mod(gs.n - 1, 20) < 11 THEN '店内桌位单'
+                    WHEN mod(gs.n - 1, 20) < 18 THEN
+                      (ARRAY['美团外卖', '饿了么', '京东外卖'])[mod(gs.n - 1, 3) + 1]
+                    ELSE '微信' END,
+               CASE WHEN mod(gs.n - 1, 2) = 0 THEN '午餐' ELSE '晚餐' END
           FROM agg_daily a
           CROSS JOIN LATERAL generate_series(1, GREATEST(a.bill_count, 1)) AS gs(n)
          WHERE a.factory_id = $1
@@ -158,6 +171,73 @@ async def _synthesize_transactions(conn: Any, factory_id: str, target_end: date)
         factory_id, target_end, TX_MARKER,
     )
     return int(result.rsplit(" ", 1)[-1])
+
+
+async def _refresh_synthetic_channels(
+    conn: Any,
+    factory_id: str,
+    target_end: date,
+) -> Dict[str, int]:
+    """Backfill old synthetic bills and refresh their channel Gold window.
+
+    The roller originally created ``DEMO_ROLL_TX`` rows without channel or
+    meal-period fields. This update is marker-scoped, tenant-scoped and
+    null-only, so it cannot rewrite uploaded POS facts and is idempotent after
+    the first repair. Future rows already receive the same 55/35/10 demo mix in
+    ``_synthesize_transactions`` above.
+    """
+    backfilled = await conn.execute(
+        """
+        WITH marked AS (
+          SELECT id,
+                 mod(hashtext(COALESCE(source_bill_no, id::text))::bigint
+                     + 2147483648, 20) AS bucket,
+                 mod(hashtext(COALESCE(source_bill_no, id::text))::bigint
+                     + 2147483648, 3) AS channel_bucket,
+                 mod(hashtext(COALESCE(source_bill_no, id::text))::bigint
+                     + 2147483648, 2) AS meal_bucket
+            FROM fact_pos_transaction
+           WHERE factory_id = $1 AND source_type = $2 AND date <= $3
+             AND (NULLIF(TRIM(order_type), '') IS NULL
+               OR NULLIF(TRIM(channel_origin), '') IS NULL
+               OR NULLIF(TRIM(meal_period), '') IS NULL)
+        )
+        UPDATE fact_pos_transaction AS t
+           SET order_type = CASE WHEN m.bucket < 11 THEN '堂食'
+                                 WHEN m.bucket < 18 THEN '外卖'
+                                 ELSE '自提' END,
+               channel_origin = CASE WHEN m.bucket < 11 THEN '店内桌位单'
+                                     WHEN m.bucket < 18 THEN
+                                       (ARRAY['美团外卖', '饿了么', '京东外卖'])[
+                                         m.channel_bucket + 1
+                                       ]
+                                     ELSE '微信' END,
+               meal_period = CASE WHEN m.meal_bucket = 0 THEN '午餐' ELSE '晚餐' END
+          FROM marked AS m
+         WHERE t.id = m.id
+        """,
+        factory_id, TX_MARKER, target_end,
+    )
+    backfilled_rows = int(backfilled.rsplit(" ", 1)[-1])
+    marker_start = await conn.fetchval(
+        """
+        SELECT MIN(date)
+          FROM fact_pos_transaction
+         WHERE factory_id = $1 AND source_type = $2 AND date <= $3
+        """,
+        factory_id, TX_MARKER, target_end,
+    )
+    if marker_start is None:
+        return {"channel_rows_backfilled": backfilled_rows, "channel_gold_rows": 0}
+
+    gold = await conn.execute(
+        _AGG_DAILY_OMT_UPSERT_SQL,
+        factory_id, marker_start, target_end,
+    )
+    return {
+        "channel_rows_backfilled": backfilled_rows,
+        "channel_gold_rows": int(gold.rsplit(" ", 1)[-1]),
+    }
 
 
 _CLONE_INSERT_PREFIX = """
@@ -196,6 +276,9 @@ async def apply_refresh(conn: Any, factory_id: str, target_end: date) -> Dict[st
     tpl_start, tpl_end = window["tpl_start"], window["tpl_end"]
 
     synth_tx = await _synthesize_transactions(conn, factory_id, target_end)
+    channel_refresh = await _refresh_synthetic_channels(
+        conn, factory_id, target_end,
+    )
 
     # Stray post-template items that never joined dim_product would double
     # count against net_amount once cloned baskets land — remove them first
@@ -280,7 +363,7 @@ async def apply_refresh(conn: Any, factory_id: str, target_end: date) -> Dict[st
             """,
             factory_id, MARKER,
         )
-    if inserted or synth_tx:
+    if inserted or synth_tx or channel_refresh["channel_rows_backfilled"]:
         # Fresh rows shift planner estimates; stale stats regressed the
         # margin anchor scans from seconds to minutes before (agg_daily 前科).
         await conn.execute("ANALYZE fact_pos_item")
@@ -299,6 +382,7 @@ async def apply_refresh(conn: Any, factory_id: str, target_end: date) -> Dict[st
     )
     return {
         "synth_transactions": synth_tx,
+        **channel_refresh,
         "stray_items_deleted": int(strays.rsplit(" ", 1)[-1]),
         "inserted_items": inserted,
         "rescaled_items": int(rescaled.rsplit(" ", 1)[-1]),
