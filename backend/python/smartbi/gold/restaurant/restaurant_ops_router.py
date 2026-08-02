@@ -1400,6 +1400,12 @@ def extract_dish_candidates(query: "Optional[str]") -> list:
     if not query:
         return []
     text = query.strip()
+    # ``build_resolver_query`` may append canonical time/profit hints so the
+    # resolver sees the sealed plan's semantics.  The single-dish extractor
+    # already removes these hints; multi-dish comparison must do the same or
+    # ``A和B哪个赚钱 赚钱了吗`` no longer matches the anchored comparison form
+    # and silently degrades to an all-menu answer (then fails the contract).
+    text = _RESOLVER_QUERY_HINT_RE.sub("", text).strip()
     text = re.sub(r"[（(][^（）()]{0,24}[）)]\s*$", "", text).strip()
     match = _DISH_COMPARE_RE.match(text)
     if match:
