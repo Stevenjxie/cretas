@@ -301,6 +301,7 @@ def test_factory_start_batch_reporting_and_receipt_stay_on_one_execution_chain()
         _FACTORY_PRODUCTION_EXECUTION_ANSWER
     )
     assert "[{batchNo, qty}]" in _FACTORY_PRODUCTION_EXECUTION_ANSWER
+    assert "`batchRows`" in _FACTORY_PRODUCTION_EXECUTION_ANSWER
     assert "不指定则交给服务端按 FEFO 自动分配" in _FACTORY_PRODUCTION_EXECUTION_ANSWER
     assert "PENDING_WAREHOUSE_RECEIPT" in _FACTORY_PRODUCTION_EXECUTION_ANSWER
 
