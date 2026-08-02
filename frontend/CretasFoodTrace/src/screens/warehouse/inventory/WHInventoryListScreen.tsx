@@ -34,6 +34,16 @@ import { NativeStackNavigationProp } from "@react-navigation/native-stack";
 import { useTranslation } from 'react-i18next';
 import { WHInventoryStackParamList } from "../../../types/navigation";
 import { materialBatchApiClient, MaterialBatch } from "../../../services/api/materialBatchApiClient";
+import {
+  materialPackagingApiClient,
+  type MaterialPackagingHierarchy,
+} from "../../../services/api/materialPackagingApiClient";
+import {
+  convertByHierarchy,
+  bucketByDimension,
+  formatQuantity,
+  canonicalUnit,
+} from "../../../utils/packagingUnitConversion";
 import { handleError } from "../../../utils/errorHandler";
 import { logger } from "../../../utils/logger";
 import { formatNumberWithCommas, formatDate } from "../../../utils/formatters";
@@ -50,6 +60,8 @@ interface InventoryItem {
   id: string;
   name: string;
   type: MaterialType;
+  /** 用来关联原料字典的规格层级 (material_packaging_hierarchy.material_type_id) */
+  materialTypeId?: string;
   quantity: number;
   unit: string;
   batchCount: number;
@@ -129,6 +141,12 @@ export function WHInventoryListScreen() {
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedType, setSelectedType] = useState<string>("all");
   const [inventoryList, setInventoryList] = useState<InventoryItem[]>([]);
+  /**
+   * 原料字典的规格层级, key = materialTypeId。
+   * 这是「1箱=8盒=800克」的**唯一权威**——全局单位表里计数单位的换算因子全是假的 1:1,
+   * 不能用它换算 (详见 utils/packagingUnitConversion.ts 顶部)。
+   */
+  const [hierarchyMap, setHierarchyMap] = useState<Record<string, MaterialPackagingHierarchy>>({});
   const [inventoryStats, setInventoryStats] = useState<{
     totalValue: number;
     totalBatches: number;
@@ -181,10 +199,24 @@ export function WHInventoryListScreen() {
       logger.info('WHInventoryListScreen', '开始加载库存数据...');
 
       // 并行获取批次列表和库存统计
-      const [batchesResult, statsResult] = await Promise.allSettled([
+      const [batchesResult, statsResult, packagingResult] = await Promise.allSettled([
         materialBatchApiClient.getMaterialBatches({ page: 1, size: 50 }),
         materialBatchApiClient.getInventoryStatistics(),
+        materialPackagingApiClient.list(),
       ]);
+
+      // 规格层级取不到不阻断列表 —— 只是换算显示不出来, 卡片会显示「未设规格」。
+      if (packagingResult.status === 'fulfilled') {
+        const map: Record<string, MaterialPackagingHierarchy> = {};
+        for (const h of packagingResult.value ?? []) {
+          if (h?.materialTypeId) map[h.materialTypeId] = h;
+        }
+        setHierarchyMap(map);
+        logger.info('WHInventoryListScreen', `规格层级 ${Object.keys(map).length} 条`);
+      } else {
+        logger.warn('WHInventoryListScreen', '规格层级获取失败, 换算将显示为未设规格');
+        setHierarchyMap({});
+      }
 
       // 处理批次列表
       if (batchesResult.status === 'fulfilled') {
@@ -200,6 +232,7 @@ export function WHInventoryListScreen() {
               id: batch.id ?? batch.batchNumber ?? String(Math.random()),
               name: batch.materialName ?? batch.materialCategory ?? '未知物料',
               type: mapBatchToMaterialType(batch),
+              materialTypeId: batch.materialTypeId,
               quantity: batch.remainingQuantity ?? batch.inboundQuantity ?? 0,
               // 口径修正 (2026-08-02): 原来这里硬编码 'kg'。prod 实测 F006 首页 50 条批次的
               // 真实单位是 kg 38 / box 3 / slice 2 / roll 1 / case 1 / 无 unit 5 ——
@@ -462,9 +495,10 @@ export function WHInventoryListScreen() {
 
                   <View style={styles.cardContent}>
                     <View style={styles.mainInfo}>
-                      <Text style={styles.quantityValue}>{item.quantity}</Text>
+                      <Text style={styles.quantityValue}>{formatQuantity(item.quantity)}</Text>
                       <Text style={styles.unitText}>{item.unit}</Text>
                     </View>
+
                     <View style={styles.metaInfo}>
                       <View style={styles.metaItem}>
                         <Text style={styles.metaLabel}>批次</Text>
@@ -492,6 +526,36 @@ export function WHInventoryListScreen() {
                     </View>
                   </View>
 
+                  {/*
+                    多单位换算 (2026-08-02): 仓管员不用心算「10000 盒是多少箱」。
+                    换算只认原料字典的规格层级; 没配就明说「未设规格」并给入口,
+                    绝不退回按 1:1 猜 —— 那正是 725,908 那个假数的成因。
+                  */}
+                  {(() => {
+                    const h = item.materialTypeId ? hierarchyMap[item.materialTypeId] : undefined;
+                    const conv = convertByHierarchy(item.quantity, item.unit, h);
+                    if (!conv) {
+                      return (
+                        <TouchableOpacity
+                          style={styles.convertRow}
+                          onPress={() => navigation.navigate('WHInventoryDetail', { inventoryId: item.id })}
+                        >
+                          <Text style={styles.convertMissing}>⚠ 未设规格 · 无法折算</Text>
+                          <Text style={styles.convertLink}>去设置 ›</Text>
+                        </TouchableOpacity>
+                      );
+                    }
+                    const others = conv.levels.filter((l) => canonicalUnit(l.unit) !== canonicalUnit(item.unit));
+                    if (others.length === 0) return null;
+                    return (
+                      <View style={styles.convertRow}>
+                        <Text style={styles.convertText}>
+                          {others.map((l) => `≈ ${formatQuantity(l.quantity)} ${l.unit}`).join('   ')}
+                        </Text>
+                      </View>
+                    );
+                  })()}
+
                   <View style={styles.cardFooter}>
                     <Text style={styles.updateText}>
                       更新: {item.updatedAt}
@@ -514,23 +578,36 @@ export function WHInventoryListScreen() {
         {/* 库存概览 */}
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>库存概览</Text>
+          {/*
+            计数单位分列 —— 盒/箱/片/卷 之间没有通用换算 (全局单位表里那些 1:1 是假的),
+            所以按单位各自成组显示, 而不是加成一个没有业务含义的总数。
+          */}
+          {bucketByDimension(inventoryList).filter((b) => b.kind === 'count').length > 0 && (
+            <View style={styles.countUnitRow}>
+              {bucketByDimension(inventoryList)
+                .filter((b) => b.kind === 'count')
+                .map((b) => (
+                  <View key={b.unit} style={styles.countUnitChip}>
+                    <Text style={styles.countUnitValue}>{formatQuantity(b.quantity)}</Text>
+                    <Text style={styles.countUnitLabel}>{b.unit} · {b.batchCount}批</Text>
+                  </View>
+                ))}
+            </View>
+          )}
           <View style={styles.statsGrid}>
             {/* 口径修正: 这个数是批次数, 不是物料种类 —— 底部 sticky bar 的「共 N 批」同源。 */}
             <View style={styles.statsItem}>
               <Text style={styles.statsValue}>{stats.totalBatches}</Text>
               <Text style={styles.statsLabel}>批次总数</Text>
             </View>
-            {/* 口径修正: 只加 kg 计量的批次, 不跨单位相加; 非 kg 的另行说明有几批,
-                而不是把它们当 kg 混进这个数。 */}
+            {/* 口径修正: 重量族折 kg 合并, 计数族按单位各自成组 —— 绝不跨量纲相加。 */}
             <View style={styles.statsItem}>
               <Text style={styles.statsValue}>
-                {formatNumberWithCommas(stats.loadedKgQuantity)}
+                {formatQuantity(
+                  bucketByDimension(inventoryList).find((b) => b.kind === 'weight')?.quantity ?? 0
+                )}
               </Text>
-              <Text style={styles.statsLabel}>
-                {stats.nonKgBatchCount > 0
-                  ? `已加载kg量(另${stats.nonKgBatchCount}批非kg)`
-                  : '已加载kg量'}
-              </Text>
+              <Text style={styles.statsLabel}>已加载食材(kg)</Text>
             </View>
             <View style={styles.statsItem}>
               <Text style={styles.statsValue}>
@@ -552,7 +629,18 @@ export function WHInventoryListScreen() {
       )}
 
       <StickyFooterSummary
-        stats={summary?.stats ?? []}
+        /*
+          口径修正 (2026-08-02): 后端 list-summary 的「可用数量」是
+          SUM(receipt-used-reserved) **跨单位硬加** (prod F006 实测 725,908.175 =
+          70万克 + 1万个盒 + 1万张膜 + 310个箱), 它自己返回的 unit 是**空字符串** ——
+          等于承认给不出单位。这里就用这个自证信号过滤: 数量型(number)但没有单位的统计
+          不予展示, 因为跨量纲求和没有业务含义。
+          带单位的(共 N 批 / 总价值 ¥)照常显示。
+          ⚠️ 后端那条 SQL 本身也该按单位分组, 属独立项。
+        */
+        stats={(summary?.stats ?? []).filter(
+          (st) => !(st.format === 'number' && !String(st.unit ?? '').trim())
+        )}
         loading={summary == null && !loading}
         onAIAnalyze={() =>
           navigation.dispatch(CommonActions.navigate('FAAITab' as never, {
@@ -700,6 +788,50 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "baseline",
     width: 100,
+  },
+  countUnitRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+    marginBottom: 12,
+  },
+  countUnitChip: {
+    backgroundColor: '#f4f7fb',
+    borderRadius: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    minWidth: 96,
+  },
+  countUnitValue: {
+    fontSize: 18,
+    fontWeight: 'bold',
+    color: '#2d3748',
+  },
+  countUnitLabel: {
+    fontSize: 12,
+    color: '#718096',
+    marginTop: 2,
+  },
+  convertRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginTop: 6,
+    minHeight: 44,           // 触摸目标 >=44pt (ux-flow 内联规则)
+    paddingVertical: 4,
+  },
+  convertText: {
+    fontSize: 13,
+    color: '#666',
+  },
+  convertMissing: {
+    fontSize: 13,
+    color: '#ed8936',
+  },
+  convertLink: {
+    fontSize: 13,
+    color: '#1565c0',
+    fontWeight: '600',
   },
   quantityValue: {
     fontSize: 28,
