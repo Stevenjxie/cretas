@@ -122,7 +122,6 @@ _SAFE_MODELS: Dict[Tuple[str, str], Optional[datetime.date]] = {
     ("aliyun_a", "qwen3.7-max-2026-05-20"): _d(2026, 8, 20),
     ("aliyun_a", "qwen3.7-max-2026-05-17"): _d(2026, 8, 24),
     ("aliyun_a", "qwen3.7-max-preview"): _d(2026, 8, 24),
-    ("aliyun_a", "qwen3.7-plus"): _d(2026, 9, 1),
     ("aliyun_a", "qwen3.7-plus-2026-05-26"): _d(2026, 9, 1),
     ("aliyun_a", "qwen3.7-max-2026-06-08"): _d(2026, 9, 8),
     ("aliyun_a", "kimi-k2.7-code"): _d(2026, 9, 14),  # thinking-only → REASONING slot only
@@ -133,7 +132,6 @@ _SAFE_MODELS: Dict[Tuple[str, str], Optional[datetime.date]] = {
     ("aliyun_b", "qwen3.7-max-2026-05-20"): _d(2026, 8, 20),
     ("aliyun_b", "qwen3.7-max-preview"): _d(2026, 8, 24),
     ("aliyun_b", "qwen3.7-max-2026-05-17"): _d(2026, 8, 24),
-    ("aliyun_b", "qwen3.7-plus"): _d(2026, 9, 1),
     ("aliyun_b", "qwen3.7-plus-2026-05-26"): _d(2026, 9, 1),
     ("aliyun_b", "qwen3-max-preview"): _d(2026, 7, 16),
     ("aliyun_b", "qwen3-max-2025-09-23"): _d(2026, 7, 16),
@@ -172,8 +170,6 @@ _SAFE_MODELS: Dict[Tuple[str, str], Optional[datetime.date]] = {
     ("aliyun_c", "qwen3.7-max-2026-05-20"): _d(2026, 8, 20),
     ("aliyun_c", "qwen3.7-max-preview"): _d(2026, 8, 24),
     ("aliyun_c", "qwen3.7-max-2026-05-17"): _d(2026, 8, 24),
-    ("aliyun_c", "qwen3.7-plus"): _d(2026, 9, 1),
-    ("aliyun_c", "qwen3.7-plus-2026-05-26"): _d(2026, 9, 1),
     ("aliyun_c", "deepseek-v3.1"): _d(2026, 8, 13),
     ("aliyun_c", "deepseek-v3"): _d(2026, 8, 13),
     ("aliyun_c", "deepseek-v3.2"): _d(2026, 8, 13),
@@ -808,12 +804,10 @@ SLOT_MODELS: Dict[SLOT, List[Tuple[str, str]]] = {
     # 且全部开启“免费额度用完即停”。生产 14:55 已证明把三个耗尽 Max 放在
     # 链头会连续 403，既浪费延迟也没有提升质量。当天真实最小探针确认
     # C/B/A Plus 均 200，A qwen3.7-max-2026-06-08 也 200；旧 A
-    # qwen3.7-max-2026-05-20 已 403。按独立账户交错，在单账户故障时一次
-    # 切换，同时只保留已验证兼容非思考请求的 Max 作为深尾。
+    # qwen3.7-max-2026-05-20 已 403。2026-08-03 生产最小探针进一步确认
+    # A/B/C bare Plus 与 C dated Plus 均已 FreeTierOnly；从 allowlist 和所有
+    # slot 物理剔除，只保留仍返回 200 的 B/A dated Plus。
     SLOT.INSIGHTS: _dedup_chain([
-        ("aliyun_c", "qwen3.7-plus"), ("aliyun_b", "qwen3.7-plus"),
-        ("aliyun_a", "qwen3.7-plus"),
-        ("aliyun_c", "qwen3.7-plus-2026-05-26"),
         ("aliyun_b", "qwen3.7-plus-2026-05-26"),
         ("aliyun_a", "qwen3.7-plus-2026-05-26"),
         ("aliyun_c", "glm-5.2"), ("aliyun_c", "qwen-plus-latest"),
@@ -840,9 +834,6 @@ SLOT_MODELS: Dict[SLOT, List[Tuple[str, str]]] = {
         ("aliyun_c", "qwen3.7-flash"),
         ("aliyun_b", "qwen3.7-flash"),
         ("aliyun_c", "glm-5.2"),
-        ("aliyun_c", "qwen3.7-plus"),
-        ("aliyun_b", "qwen3.7-plus"),
-        ("aliyun_a", "qwen3.7-plus"),
         ("zhipu", "glm-4.5-air"),
     ]),
     # REASONING — 深度 (thinking on / thinking-only OK) → deepseek/MoE reasoners.
@@ -882,20 +873,12 @@ SLOT_MODELS: Dict[SLOT, List[Tuple[str, str]]] = {
         ("ark", "doubao-seed-2-1-turbo-260628"),
         ("tencent", "glm-5.2"),
         ("ark", "doubao-seed-2-0-lite-260428"),
-        # 2026-08-02 production T3 probe: the bare qwen3.7-plus grants above
-        # were exhausted, while all three dated 05-26 grants were still healthy.
-        # They were already billing-safe and used by INSIGHTS, but REVIEW had
-        # accidentally omitted them.  Five restaurant contract shapes passed on
-        # C/B/A (sales, trend, wastage, named dish, store directory); order by
-        # measured latency 3.90s / 4.16s / 4.57s so the first healthy model stays
-        # within the semantic planner's 5s provider budget.
-        ("aliyun_c", "qwen3.7-plus-2026-05-26"),
+        # 2026-08-03 production probe: B/A dated Plus still return 200; C dated
+        # and all three bare Plus grants now return FreeTierOnly and are removed.
         ("aliyun_b", "qwen3.7-plus-2026-05-26"),
         ("aliyun_a", "qwen3.7-plus-2026-05-26"),
         ("aliyun_a", "qwen3.7-max-2026-06-08"),
         ("aliyun_c", "qwen3.7-max-2026-06-08"),
-        ("aliyun_c", "qwen3.7-plus"), ("aliyun_b", "qwen3.7-plus"),
-        ("aliyun_a", "qwen3.7-plus"),
         # 2026-07-30 实测(scripts 见 PR 描述): 对餐饮 T3 真实 prompt 逐模型打分,
         # 判据是「答对 intent 且 confidence >= 0.6」而不是「能否调通」。
         # 下面六个全部实测 ✅(conf 0.95-0.98)。
