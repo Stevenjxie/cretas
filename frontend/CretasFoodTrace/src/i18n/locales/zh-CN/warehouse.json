@@ -257,7 +257,7 @@
     },
     "list": {
       "title": "入库管理",
-      "headerSubtitle": "待确认 {{pending}} 单 | 今日入库 {{weight}} kg",
+      "headerSubtitle": "待确认 {{pending}} 单 | 已加载 {{loaded}} 批, 其中 kg 计量 {{weight}} kg",
       "loading": "加载中...",
       "newInbound": "新建入库",
       "scanInbound": "扫码入库",
@@ -284,9 +284,9 @@
       "supplier": "供应商",
       "quantity": "数量",
       "stats": {
-        "title": "今日入库统计",
+        "title": "已加载批次统计",
         "inboundOrders": "入库单数",
-        "inboundWeight": "入库重量(kg)",
+        "inboundWeight": "kg 计量小计",
         "supplierCount": "供应商数",
         "passRate": "质检合格率"
       }

@@ -29,6 +29,15 @@ export interface MaterialBatch {
   remainingQuantity: number;
   reservedQuantity: number;
   usedQuantity: number;
+  /**
+   * 批次的计量单位 (kg / box / slice / roll / case / …)。
+   *
+   * 后端一直在返回它, 但这份前端契约副本里从来没声明过 —— 于是消费方要么取不到,
+   * 要么(像 WHInventoryListScreen 那样)干脆硬编码成 'kg'。prod 实测 F006 首页
+   * 50 条批次: kg 38 / box 3 / slice 2 / roll 1 / case 1 / 无 unit 5,
+   * 也就是 12/50 不是 kg。⚠️ 可能为空 —— 库里确实有没标单位的批次, 别默认它有值。
+   */
+  unit?: string;
   unitPrice: number;
   totalCost: number;
   supplierId: string;

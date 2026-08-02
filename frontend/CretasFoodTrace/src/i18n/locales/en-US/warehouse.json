@@ -257,7 +257,7 @@
     },
     "list": {
       "title": "Inbound Management",
-      "headerSubtitle": "Pending {{pending}} | Today Inbound {{weight}} kg",
+      "headerSubtitle": "Pending {{pending}} | Loaded {{loaded}} batches, {{weight}} kg in kg-denominated",
       "loading": "Loading...",
       "newInbound": "New Inbound",
       "scanInbound": "Scan Inbound",
@@ -286,7 +286,7 @@
       "stats": {
         "title": "Today's Inbound Statistics",
         "inboundOrders": "Inbound Orders",
-        "inboundWeight": "Inbound Weight (kg)",
+        "inboundWeight": "kg-denominated subtotal",
         "supplierCount": "Suppliers",
         "passRate": "Pass Rate"
       }
