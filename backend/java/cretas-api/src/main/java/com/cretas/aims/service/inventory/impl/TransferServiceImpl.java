@@ -188,18 +188,18 @@ public class TransferServiceImpl implements TransferService {
             catch (Exception e) { log.warn("Canvas validation non-blocking: {}", e.getMessage()); }
         }
 
-        // 防呆 R4 (幂等防双击): 5min 窗口内同 源厂/目标厂/请求人/调拨日期 的未完成调拨 → 409 + 已有单号 + 跳转提示
-        List<InternalTransfer> dupes = transferRepository.findRecentDuplicates(
-                factoryId, request.getTargetFactoryId(), userId,
-                request.getTransferDate(), LocalDateTime.now().minusMinutes(5));
-        if (!dupes.isEmpty()) {
-            InternalTransfer existing = dupes.get(0);
-            throw new BusinessException(409, String.format(
-                    "5 分钟内已创建相同调拨 (调拨单 %s, 目标工厂 %s, 状态 %s), 请勿重复提交",
-                    existing.getTransferNumber(), existing.getTargetFactoryId(), existing.getStatus()))
-                    .withHint("如需查看已有调拨单请打开 " + existing.getTransferNumber())
-                    .withHintTarget(existing.getId());
-        }
+        // ⛔ 已移除「5min 窗口内重复调拨 → 409」拦截 (原 防呆 R4 幂等防双击, 2026-06-18)。
+        //
+        // 去重键是 (源厂 + 目标厂 + 请求人 + 调拨日期), <b>不含任何内容维度</b> —— 同一天同一人
+        // 给同一目标厂调<b>不同物料</b>也会被判成"相同调拨"。2026-08-02 实测: 先建一张只含冻猪蹄的
+        // 草稿, 紧接着建成品盒的调拨即被拒, 只能挤进同一张单; 而同单里只要有一个物料触发校验
+        // (如包材单位不匹配) 整张单失败, 无法分批推进 —— 备料被彻底卡住。
+        //
+        // 同模式的兄弟实现都带内容维度 (ExpenseRequest 用 category+amount, PaymentRecord 注释明写
+        // "镜像 TransferServiceImpl.findRecentDuplicates。金额是最高完整性面"), 唯独调拨没有 ——
+        // 它是异类。Steve 2026-08-03 拍板: 调拨不做重复提交拦截。
+        //
+        // 双击风险: 会多出一张 DRAFT 草稿, 仓管可直接取消, 代价远小于"备不了料"。
 
         validateAndNormalizeCreateItems(factoryId, request, transferType);
 
@@ -422,6 +422,20 @@ public class TransferServiceImpl implements TransferService {
      * 物料主档与其余批次都是「只」。库存页因本地化显示成「501 只」看不出异常, 报工分摊却按字面
      * 比较 —— {@code "只".equals("pcs")} 为 false, 整批被跳过 → 「需要 1只, 可用 0只, 缺少 1只,
      * 请联系仓管补料」。仓管看着有货, 报工的人说没货, 谁也说服不了谁。
+     */
+    /**
+     * <p>⛔ 2026-08-03: 本轮曾把上面的 {@code filter(MASS|VOLUME)} 去掉, 想让「盒」归一成 {@code box}
+     * 以治 F006 包材「可用 0」(见 docs/dispatch/2026-08-02-f006-minloop-issues.md P0-1) —— <b>已撤回</b>。
+     * 两条理由:
+     * <ul>
+     *   <li>去掉 filter 等于同时放开 {@code alias("pcs","pcs","件","个","只")}, 把「只」写回 {@code pcs}
+     *       —— 正是 LIUSHANMEN 2026-07-30 那起事故本身。上面那段注释记的就是它。</li>
+     *   <li>报工侧 {@code canonicalNativeUnit} 的 filter <b>没有一起改</b>。两侧口径必须一致,
+     *       只改一侧是把一处口径打架换成另一处, 不是修好。</li>
+     * </ul>
+     *
+     * <p>P0-1 的真根因在<b>存储</b>: 同一物料档案存 {@code box} 而批次存「盒」。该修的是写入路径 +
+     * 一次性数据归一, 且依赖 Steve 尚未拍板的「单位存以码还是以中文」口径 —— 定了再动。
      */
     private String canonicalTransferUnit(String factoryId, String unit) {
         String value = trimToNull(unit);

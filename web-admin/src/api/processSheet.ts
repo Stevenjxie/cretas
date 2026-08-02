@@ -451,6 +451,14 @@ export interface PortAvailability {
   available: number;
   unit: string;
   elsewhere: ElsewhereStock[];
+  /**
+   * 生产仓里**过期但仍有余量**的数量 —— 只用于展示与提醒，**不计入 available**。
+   *
+   * 过期批次原本被后端 `status='AVAILABLE'` 条件静默滤掉，界面只剩一句「生产仓可用 0」，
+   * 仓管分不清是**真没货**还是**货过期了**（实测 F006 羊排原料仓有 100kg 但全部过期，
+   * 界面既不提示也不解释）。有值时必须显式提示并引导去处理，不要静默吞掉。
+   */
+  expired?: number;
 }
 
 /**

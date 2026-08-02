@@ -249,6 +249,31 @@ public interface MaterialBatchRepository extends JpaRepository<MaterialBatch, St
                                                              @Param("materialTypeId") String materialTypeId,
                                                              @Param("warehouseId") String warehouseId);
 
+    /**
+     * 同仓同物料的<b>过期但仍有余量</b>批次 —— 报工侧要把它<b>显示出来</b>而不是静默滤掉。
+     *
+     * <p>上面的可投查询按 {@code status='AVAILABLE'} 取数, 过期批次(status 被刷成 EXPIRED)因此
+     * 从可投量里消失。后果是界面只显示「生产仓可用 0」, 仓管看不出到底是<b>真没货</b>还是
+     * <b>货过期了</b> —— 实测 F006 羊排在原料仓有 100kg 但全部 EXPIRED(有效期 07-15~07-18),
+     * 界面一句「可用 0」, 既不提示去处理, 也不解释原因。
+     *
+     * <p>本查询同时覆盖两种过期形态: 已被刷成 EXPIRED 状态的, 以及状态还是 AVAILABLE 但
+     * 有效期已过的(状态刷新作业未跑到时的窗口期)。仅用于<b>展示与提醒</b>, 不进可投量。
+     */
+    @Query("SELECT m FROM MaterialBatch m WHERE m.factoryId = :factoryId " +
+           "AND m.materialTypeId = :materialTypeId " +
+           "AND m.warehouseId = :warehouseId " +
+           "AND (m.status = 'EXPIRED' " +
+           "     OR (m.status = 'AVAILABLE' AND m.expireDate IS NOT NULL AND m.expireDate < :today)) " +
+           "AND (m.receiptQuantity - m.usedQuantity - m.reservedQuantity) > 0 " +
+           "AND (m.sourceDocType IS NULL OR m.sourceDocType <> 'PRODUCTION_BATCH') " +
+           "AND (m.ownership IS NULL OR m.ownership = com.cretas.aims.entity.enums.InventoryOwnership.COMPANY_OWNED) " +
+           "ORDER BY m.expireDate ASC NULLS LAST, m.id ASC")
+    List<MaterialBatch> findExpiredBatchesByWarehouse(@Param("factoryId") String factoryId,
+                                                      @Param("materialTypeId") String materialTypeId,
+                                                      @Param("warehouseId") String warehouseId,
+                                                      @Param("today") java.time.LocalDate today);
+
     /** Customer-owned FEFO candidates are isolated to the same customer and sales order. */
     @Query("SELECT m FROM MaterialBatch m WHERE m.factoryId = :factoryId " +
            "AND m.materialTypeId = :materialTypeId " +

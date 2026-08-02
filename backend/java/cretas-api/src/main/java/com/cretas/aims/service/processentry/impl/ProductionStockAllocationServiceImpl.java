@@ -617,8 +617,19 @@ public class ProductionStockAllocationServiceImpl implements ProductionStockAllo
                             massInput ? KG : inputUnit))
                     .toList();
 
+            // 生产仓里过期但仍有余量的部分 —— 单独报出来, 不进 available。
+            // 目的是让「真没货」和「货过期了」在界面上分得开, 并提示去处理。
+            BigDecimal expired = BigDecimal.ZERO;
+            for (MaterialBatch batch : materialBatchRepository.findExpiredBatchesByWarehouse(
+                    factoryId, materialTypeId, workshopId, java.time.LocalDate.now())) {
+                if (!ownershipAllows(plan, batch) || !unitMatches(factoryId, batch, inputUnit, massInput)) {
+                    continue;
+                }
+                expired = expired.add(batchAvailable(factoryId, batch, massInput));
+            }
+
             out.add(new PortAvailability(port.getWorkflowPortId(), materialTypeId,
-                    available, massInput ? KG : inputUnit, elsewhere));
+                    available, massInput ? KG : inputUnit, elsewhere, expired));
         }
         return out;
     }
