@@ -31,6 +31,9 @@ import java.util.Map;
 @Component
 public class NutritionLabelLookupTool extends AbstractBusinessTool {
 
+    /** 无筛选列举时的返回上限。 */
+    private static final int UNFILTERED_LIMIT = 50;
+
     @Autowired
     private NutritionLabelRepository nutritionLabelRepository;
 
@@ -90,11 +93,15 @@ public class NutritionLabelLookupTool extends AbstractBusinessTool {
                     .findByFactoryIdAndProductNameContainingOrderByCreatedAtDesc(
                             factoryId, productName);
         } else {
-            // 无 filter → 返 factory 全部 (limit 50 for safety)
-            labels = nutritionLabelRepository.findAll().stream()
-                    .filter(l -> factoryId.equals(l.getFactoryId()))
-                    .limit(50)
-                    .toList();
+            // 无 filter → 返本工厂前 50 条, 按创建时间倒序。
+            // 🔴 2026-08-02 owner 拍板改掉原来的 findAll()+内存过滤: 那个写法把【所有工厂】的
+            //    标签载入内存再按 factoryId 过滤 —— 不越权(过滤是对的), 但租户隔离靠调用方
+            //    记得那一行 filter, 且该分支【没有 ORDER BY】, "前 50 条"取到哪 50 条不确定。
+            //    行为变更: 无筛选列表顺序从不确定变成按创建时间倒序。
+            labels = nutritionLabelRepository
+                    .findByFactoryIdOrderByCreatedAtDesc(
+                            factoryId, org.springframework.data.domain.PageRequest.of(0, UNFILTERED_LIMIT))
+                    .getContent();
         }
 
         List<Map<String, Object>> rows = new ArrayList<>();

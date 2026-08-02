@@ -94,6 +94,10 @@ public class PurchaseServiceImpl implements PurchaseService {
     private BigDecimal overReceiveRate;
 
     private final PurchaseOrderRepository purchaseOrderRepository;
+
+    /** 供应商资质闸（可选注入，见 assertSupplierQualified）。 */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.cretas.aims.repository.foodsafety.SupplierQualificationRepository supplierQualificationRepository;
     private final PurchaseOrderItemRepository purchaseOrderItemRepository;
     private final PurchaseReceiveRecordRepository receiveRecordRepository;
     private final SupplierRepository supplierRepository;
@@ -539,6 +543,9 @@ public class PurchaseServiceImpl implements PurchaseService {
                     .withHintTarget("supplierId");
         }
         requireActiveSupplier(factoryId, order.getSupplierId());
+        // 🔴 2026-08-02 owner 拍板: 强制资质闸。装在【提交】而不是创建 —— 该类既有设计是
+        //    "草稿宽松、提交才 fail-closed"(见 createPurchaseOrder 里那句注释)。
+        assertSupplierQualified(factoryId, order);
         validateOrderLinesBeforeApproval(factoryId, order);
 
         if (workflowEngine == null) {
@@ -570,6 +577,80 @@ public class PurchaseServiceImpl implements PurchaseService {
         log.info("提交采购订单并启动 OA: orderId={}, orderNumber={}, instanceId={}, workflowStatus={}",
                 orderId, order.getOrderNumber(), instance.get().getId(), instance.get().getStatus());
         return purchaseOrderRepository.save(order);
+    }
+
+
+    /** 强制资质类型 —— 与 {@code SupplierCanOrderCheckTool} 同一份口径。 */
+    private static final java.util.List<String> MANDATORY_QUALIFICATION_TYPES =
+            java.util.List.of("SC_LICENSE", "BUSINESS_LICENSE");
+
+    /** 资质"在手"的状态。 */
+    private static final java.util.List<String> QUALIFICATION_USABLE_STATUSES =
+            java.util.List.of("VALID", "EXPIRING");
+
+    /** 判定时要看全部状态才能分辨"从来没有"与"有过但失效"。 */
+    private static final java.util.List<String> QUALIFICATION_ALL_STATUSES =
+            java.util.List.of("VALID", "EXPIRING", "EXPIRED", "REVOKED");
+
+    /**
+     * 强制资质闸 —— 提交采购单时校验供应商资质。
+     *
+     * <h2>🔴 这条规则此前【只存在于 AI 工具里】</h2>
+     *
+     * 2026-08-02 查证: "强制资质缺失/过期就不能下单"只写在 {@code SupplierCanOrderCheckTool},
+     * <b>采购路径完全不查</b>({@code PurchaseServiceImpl} 里 Qualification 出现 0 次) ——
+     * 也就是说它只有当有人用 AI 问「这家能不能下单」时才存在, 正常下单照下不误。
+     *
+     * <h2>⚠️ 两档而不是一个开关</h2>
+     *
+     * <ul>
+     *   <li><b>已过期 / 被吊销 → 硬拦</b>。曾经有资质、现在失效了, 是实打实的合规问题。</li>
+     *   <li><b>从来没登记过 → 只告警, 放行</b>。资质是主数据; 压根没录过时硬拦会把
+     *       <b>所有</b>采购提交拦死 —— 那是把数据缺口变成停产。
+     *       等资质录全再考虑收紧, 是<b>另一个决定</b>。</li>
+     *   <li>7 天内到期 → 只告警。</li>
+     * </ul>
+     *
+     * <p>与 {@code SalesServiceImpl} 的 HACCP 放行闸是同一个形状。
+     * ⚠️ 仓储未注入时整闸跳过, 与本类其它可选依赖一致。
+     */
+    private void assertSupplierQualified(String factoryId, PurchaseOrder order) {
+        if (supplierQualificationRepository == null) {
+            return;
+        }
+        java.util.List<com.cretas.aims.entity.foodsafety.SupplierQualification> all =
+                supplierQualificationRepository.findByFactoryIdAndSupplierIdAndStatusIn(
+                        factoryId, order.getSupplierId(), QUALIFICATION_ALL_STATUSES);
+
+        java.util.List<String> missing = new java.util.ArrayList<>();
+        java.util.List<String> expired = new java.util.ArrayList<>();
+        for (String mandatory : MANDATORY_QUALIFICATION_TYPES) {
+            java.util.List<com.cretas.aims.entity.foodsafety.SupplierQualification> ofType =
+                    all.stream().filter(q -> mandatory.equals(q.getQualificationType())).toList();
+            boolean hasUsable = ofType.stream()
+                    .anyMatch(q -> QUALIFICATION_USABLE_STATUSES.contains(q.getStatus()));
+            if (hasUsable) {
+                continue;
+            }
+            if (ofType.isEmpty()) {
+                missing.add(mandatory);
+            } else {
+                expired.add(mandatory + "(证号 " + ofType.get(0).getCertificateNumber()
+                        + ", 状态 " + ofType.get(0).getStatus() + ")");
+            }
+        }
+
+        if (!missing.isEmpty()) {
+            // 只告警不拦 —— 见方法注释
+            log.warn("[供应商资质闸] factory={} supplier={} order={} 缺少强制资质登记, 已放行: {}",
+                    factoryId, order.getSupplierId(), order.getOrderNumber(), missing);
+        }
+        if (!expired.isEmpty()) {
+            throw new BusinessException(409,
+                    "供应商资质已失效，不可提交采购单：" + String.join("；", expired))
+                    .withCode("SUPPLIER_QUALIFICATION_EXPIRED")
+                    .withHint("请在「供应商管理 → 资质」中更新证照后重新提交，或改选其他供应商");
+        }
     }
 
     @Override
