@@ -13,6 +13,7 @@ import { RRecipeStackParamList } from '../../../types/navigation';
 import { restaurantApiClient } from '../../../services/api/restaurantApiClient';
 import { Recipe } from '../../../types/restaurant';
 import { handleError } from '../../../utils/errorHandler';
+import { resolveRestaurantReferenceName, useRestaurantReferenceNames } from '../hooks/useRestaurantReferenceNames';
 
 type Nav = NativeStackNavigationProp<RRecipeStackParamList>;
 type Route = RouteProp<RRecipeStackParamList, 'RecipeDetail'>;
@@ -25,6 +26,14 @@ export function RecipeDetailScreen() {
   const { productTypeId, dishName } = route.params;
   const [loading, setLoading] = useState(true);
   const [recipes, setRecipes] = useState<Recipe[]>([]);
+  const { materialNames } = useRestaurantReferenceNames();
+
+  const getMaterialName = (recipe: Recipe) => resolveRestaurantReferenceName(
+    recipe.rawMaterialTypeName,
+    recipe.rawMaterialTypeId,
+    materialNames,
+    t('common.materialNameUnavailable'),
+  );
 
   useEffect(() => {
     loadData();
@@ -87,7 +96,7 @@ export function RecipeDetailScreen() {
               <Surface key={r.id} style={styles.card} elevation={1}>
                 <View style={styles.row}>
                   <MaterialCommunityIcons name="star" size={18} color="#FF6B35" />
-                  <Text style={styles.materialName}>{r.rawMaterialTypeName || r.rawMaterialTypeId}</Text>
+                  <Text style={styles.materialName}>{getMaterialName(r)}</Text>
                 </View>
                 <View style={styles.detailGrid}>
                   <DetailItem label={t('recipe.detail.standardQty')} value={`${r.standardQuantity} ${r.unit}`} />
@@ -107,7 +116,7 @@ export function RecipeDetailScreen() {
                   <Surface key={r.id} style={styles.card} elevation={1}>
                     <View style={styles.row}>
                       <MaterialCommunityIcons name="circle-small" size={18} color="#999" />
-                      <Text style={styles.materialName}>{r.rawMaterialTypeName || r.rawMaterialTypeId}</Text>
+                      <Text style={styles.materialName}>{getMaterialName(r)}</Text>
                     </View>
                     <View style={styles.detailGrid}>
                       <DetailItem label={t('recipe.detail.standardQty')} value={`${r.standardQuantity} ${r.unit}`} />

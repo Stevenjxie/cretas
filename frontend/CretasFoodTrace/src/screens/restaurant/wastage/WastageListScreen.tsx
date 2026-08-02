@@ -19,6 +19,7 @@ import { useRowActions, type RowContext } from '../../../hooks/useRowActions';
 import { useListSummary } from '../../../hooks/useListSummary';
 import { formatSummaryForAI } from '../../../utils/aiSummaryContext';
 import { safePrint } from '../../../services/api/printApiClient';
+import { resolveRestaurantReferenceName, useRestaurantReferenceNames } from '../hooks/useRestaurantReferenceNames';
 
 type Nav = NativeStackNavigationProp<RWastageStackParamList>;
 
@@ -34,6 +35,7 @@ const TYPE_ICONS: Record<string, string> = {
   DAMAGED: 'package-variant-remove',
   SPOILED: 'bacteria-outline',
   PROCESSING_LOSS: 'cog-outline',
+  PROCESSING: 'cog-outline',
   OTHER: 'help-circle-outline',
 };
 
@@ -46,6 +48,7 @@ export function WastageListScreen() {
   const [statusFilter, setStatusFilter] = useState<'all' | WastageStatus>('all');
   const [records, setRecords] = useState<WastageRecord[]>([]);
   const [loadError, setLoadError] = useState(false);
+  const { materialNames } = useRestaurantReferenceNames();
   const [selectedRecord, setSelectedRecord] = useState<WastageRecord | null>(null);
   const [actionSheetVisible, setActionSheetVisible] = useState(false);
 
@@ -87,7 +90,8 @@ export function WastageListScreen() {
   const filtered = records.filter(r => {
     if (!searchQuery) return true;
     const q = searchQuery.toLowerCase();
-    return (r.rawMaterialTypeName ?? '').toLowerCase().includes(q) ||
+    return resolveRestaurantReferenceName(r.rawMaterialTypeName, r.rawMaterialTypeId, materialNames, '')
+             .toLowerCase().includes(q) ||
            (r.wastageNumber ?? '').toLowerCase().includes(q);
   });
 
@@ -143,7 +147,12 @@ export function WastageListScreen() {
                   <View style={styles.cardBody}>
                     <View style={styles.infoRow}>
                       <Text style={styles.infoLabel}>{t('wastage.list.material')}</Text>
-                      <Text style={styles.infoValue}>{r.rawMaterialTypeName || r.rawMaterialTypeId}</Text>
+                      <Text style={styles.infoValue}>{resolveRestaurantReferenceName(
+                        r.rawMaterialTypeName,
+                        r.rawMaterialTypeId,
+                        materialNames,
+                        t('common.materialNameUnavailable'),
+                      )}</Text>
                     </View>
                     <View style={styles.infoRow}>
                       <Text style={styles.infoLabel}>{t('wastage.create.type')}</Text>
@@ -183,7 +192,7 @@ export function WastageListScreen() {
         }
       />
 
-      <FAB icon="plus" style={styles.fab} onPress={() => navigation.navigate('WastageCreate')} />
+      <FAB testID="wastage-create-fab" icon="plus" style={styles.fab} onPress={() => navigation.navigate('WastageCreate')} />
 
       <RowActionBottomSheet
         visible={actionSheetVisible}

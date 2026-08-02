@@ -4,9 +4,19 @@ import { MaterialCommunityIcons } from '@expo/vector-icons';
 
 interface QuickActionCardGridProps {
   userRole: string;
+  isRestaurantMode?: boolean;
   onSendIntent: (text: string) => void;
   onNavigate: (screen: string, params?: Record<string, unknown>) => void;
 }
+
+const RESTAURANT_CARDS = ({ onSendIntent }: QuickActionCardGridProps): CardConfig[] => [
+  { icon: 'cash-register', label: '今日经营', description: '营收、订单与客单价', color: '#E85D04', action: () => onSendIntent('对比今天与昨天的营收、订单量和客单价，说明变化、数据依据和需要关注的问题') },
+  { icon: 'store-search', label: '门店对比', description: '找出异常门店', color: '#2563EB', action: () => onSendIntent('比较最近7天各门店的营收、订单量和客单价，找出异常门店并说明依据') },
+  { icon: 'food', label: '菜品表现', description: '销量与毛利分析', color: '#16A34A', action: () => onSendIntent('分析最近7天菜品销量和毛利表现，指出最值得关注的菜品并给出可执行建议') },
+  { icon: 'chart-donut', label: '损耗分析', description: '定位食材损耗', color: '#DC2626', action: () => onSendIntent('分析本月食材损耗，按食材和门店定位主要问题，并给出今天可以执行的改进动作') },
+  { icon: 'package-variant', label: '库存风险', description: '缺货与积压预警', color: '#7C3AED', action: () => onSendIntent('分析当前食材库存风险，列出可能缺货或积压的食材、影响和处理建议') },
+  { icon: 'chef-hat', label: '经营建议', description: '让 AI 综合诊断', color: '#0891B2', action: () => onSendIntent('基于最近7天经营数据做一次综合诊断，按优先级给出三条有数据依据的行动建议') },
+];
 
 interface CardConfig {
   icon: keyof typeof MaterialCommunityIcons.glyphMap;
@@ -40,8 +50,8 @@ const ROLE_CARDS: Record<string, (props: QuickActionCardGridProps) => CardConfig
 };
 
 const QuickActionCardGrid: React.FC<QuickActionCardGridProps> = (props) => {
-  const { userRole } = props;
-  const configFn = ROLE_CARDS[userRole];
+  const { userRole, isRestaurantMode } = props;
+  const configFn = isRestaurantMode ? RESTAURANT_CARDS : ROLE_CARDS[userRole];
   if (!configFn) return null;
 
   const cards = configFn(props);

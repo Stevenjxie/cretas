@@ -14,6 +14,7 @@ import { restaurantApiClient } from '../../../services/api/restaurantApiClient';
 import { StocktakingRecord, StocktakingStatus } from '../../../types/restaurant';
 import { handleError } from '../../../utils/errorHandler';
 import { formatShortDateTime } from '../../../utils/formatters';
+import { resolveRestaurantReferenceName, useRestaurantReferenceNames } from '../hooks/useRestaurantReferenceNames';
 
 type Nav = NativeStackNavigationProp<RStocktakingStackParamList>;
 
@@ -38,6 +39,7 @@ export function StocktakingListScreen() {
   const [statusFilter, setStatusFilter] = useState<'all' | StocktakingStatus>('all');
   const [records, setRecords] = useState<StocktakingRecord[]>([]);
   const [loadError, setLoadError] = useState(false);
+  const { materialNames } = useRestaurantReferenceNames();
 
   const loadData = useCallback(async () => {
     try {
@@ -59,7 +61,8 @@ export function StocktakingListScreen() {
   const filtered = records.filter(r => {
     if (!searchQuery) return true;
     const q = searchQuery.toLowerCase();
-    return (r.rawMaterialTypeName ?? '').toLowerCase().includes(q) ||
+    return resolveRestaurantReferenceName(r.rawMaterialTypeName, r.rawMaterialTypeId, materialNames, '')
+             .toLowerCase().includes(q) ||
            (r.stocktakingNumber ?? '').toLowerCase().includes(q);
   });
 
@@ -129,7 +132,12 @@ export function StocktakingListScreen() {
                     <View style={styles.cardBody}>
                       <View style={styles.infoRow}>
                         <Text style={styles.infoLabel}>{t('stocktaking.list.material')}</Text>
-                        <Text style={styles.infoValue}>{r.rawMaterialTypeName || r.rawMaterialTypeId}</Text>
+                        <Text style={styles.infoValue}>{resolveRestaurantReferenceName(
+                          r.rawMaterialTypeName,
+                          r.rawMaterialTypeId,
+                          materialNames,
+                          t('common.materialNameUnavailable'),
+                        )}</Text>
                       </View>
                       <View style={styles.infoRow}>
                         <Text style={styles.infoLabel}>{t('stocktaking.list.systemQty')}</Text>
@@ -159,7 +167,7 @@ export function StocktakingListScreen() {
         )}
       </ScrollView>
 
-      <FAB icon="plus" style={styles.fab} label={t('stocktaking.list.emptyAction')} onPress={() => navigation.navigate('StocktakingExecute', {})} />
+      <FAB testID="stocktaking-create-fab" icon="plus" style={styles.fab} label={t('stocktaking.list.emptyAction')} onPress={() => navigation.navigate('StocktakingExecute', {})} />
     </SafeAreaView>
   );
 }

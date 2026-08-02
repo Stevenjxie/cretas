@@ -2,7 +2,7 @@
  * 损耗新建 — 记录食材损耗
  */
 import React, { useState } from 'react';
-import { View, ScrollView, StyleSheet, Alert } from 'react-native';
+import { View, ScrollView, StyleSheet, Alert, TouchableOpacity } from 'react-native';
 import { Text, TextInput, Button, Chip } from 'react-native-paper';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useNavigation } from '@react-navigation/native';
@@ -10,13 +10,16 @@ import { useTranslation } from 'react-i18next';
 import { restaurantApiClient } from '../../../services/api/restaurantApiClient';
 import { WastageType } from '../../../types/restaurant';
 import { handleError } from '../../../utils/errorHandler';
+import { MaterialSelectModal, MaterialSelectResult } from '../../../components/MaterialSelectModal';
 
-const WASTAGE_TYPES: WastageType[] = ['EXPIRED', 'DAMAGED', 'SPOILED', 'PROCESSING_LOSS', 'OTHER'];
+const WASTAGE_TYPES: WastageType[] = ['EXPIRED', 'DAMAGED', 'SPOILED', 'PROCESSING', 'OTHER'];
 
 export function WastageCreateScreen() {
   const { t } = useTranslation('restaurant');
   const navigation = useNavigation();
   const [submitting, setSubmitting] = useState(false);
+  const [materialPickerVisible, setMaterialPickerVisible] = useState(false);
+  const [materialName, setMaterialName] = useState('');
   const [form, setForm] = useState({
     type: 'EXPIRED' as WastageType,
     rawMaterialTypeId: '',
@@ -27,6 +30,15 @@ export function WastageCreateScreen() {
   });
 
   const updateField = (key: string, value: any) => setForm(prev => ({ ...prev, [key]: value }));
+
+  const handleMaterialSelect = (material: MaterialSelectResult) => {
+    setMaterialName(material.materialName);
+    setForm(prev => ({
+      ...prev,
+      rawMaterialTypeId: material.materialTypeId,
+      unit: material.defaultUnit || prev.unit,
+    }));
+  };
 
   async function handleSubmit(asDraft: boolean) {
     if (!form.rawMaterialTypeId || !form.quantity) {
@@ -94,7 +106,12 @@ export function WastageCreateScreen() {
         </View>
 
         <Text style={styles.label}>{t('wastage.create.selectMaterial')} *</Text>
-        <TextInput mode="outlined" value={form.rawMaterialTypeId} onChangeText={v => updateField('rawMaterialTypeId', v)} placeholder="MT-XXX" style={styles.input} />
+        <TouchableOpacity style={styles.materialSelector} onPress={() => setMaterialPickerVisible(true)}>
+          <Text style={materialName ? styles.materialValue : styles.materialPlaceholder}>
+            {materialName || t('wastage.create.selectMaterial')}
+          </Text>
+          <Text style={styles.materialChevron}>›</Text>
+        </TouchableOpacity>
 
         <View style={styles.row}>
           <View style={{ flex: 1, marginRight: 8 }}>
@@ -122,6 +139,13 @@ export function WastageCreateScreen() {
           </Button>
         </View>
       </ScrollView>
+
+      <MaterialSelectModal
+        visible={materialPickerVisible}
+        onDismiss={() => setMaterialPickerVisible(false)}
+        onSelect={handleMaterialSelect}
+        title={t('wastage.create.selectMaterial')}
+      />
     </SafeAreaView>
   );
 }
@@ -133,6 +157,19 @@ const styles = StyleSheet.create({
   content: { padding: 16, paddingBottom: 40 },
   label: { fontSize: 14, fontWeight: '500', color: '#333', marginBottom: 4, marginTop: 12 },
   input: { backgroundColor: '#fff' },
+  materialSelector: {
+    minHeight: 52,
+    borderWidth: 1,
+    borderColor: '#79747e',
+    borderRadius: 4,
+    backgroundColor: '#fff',
+    paddingHorizontal: 14,
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  materialValue: { flex: 1, fontSize: 16, color: '#1f2937' },
+  materialPlaceholder: { flex: 1, fontSize: 16, color: '#8a8f98' },
+  materialChevron: { fontSize: 28, color: '#8a8f98' },
   chipRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 4 },
   chip: { marginBottom: 0 },
   chipSelected: { backgroundColor: '#FF5630' },

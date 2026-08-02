@@ -19,6 +19,8 @@ import { Icon } from 'react-native-paper';
 import { useTranslation } from 'react-i18next';
 import { FAAIStackParamList } from '../../../types/navigation';
 import { aiApiClient, AIQuotaInfo } from '../../../services/api/aiApiClient';
+import { useAuthStore } from '../../../store/authStore';
+import { isRestaurant } from '../../../utils/factoryType';
 
 type NavigationProp = NativeStackNavigationProp<FAAIStackParamList, 'AIAnalysisCenter'>;
 
@@ -48,6 +50,8 @@ function MenuItem({ icon, title, subtitle, color, onPress }: MenuItemProps) {
 export function AIAnalysisCenterScreen() {
   const navigation = useNavigation<NavigationProp>();
   const { t, i18n } = useTranslation('home');
+  const { user } = useAuthStore();
+  const isRestaurantMode = isRestaurant(user);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [quotaInfo, setQuotaInfo] = useState<AIQuotaInfo | null>(null);
@@ -82,6 +86,34 @@ export function AIAnalysisCenterScreen() {
     }
   };
 
+  const askRestaurantAI = (message: string) => navigation.navigate('AIChat', { initialMessage: message });
+
+  const quickItems = isRestaurantMode ? [
+    { icon: 'cash-register', color: '#E85D04', label: t('aiAnalysis.restaurantToday'), onPress: () => askRestaurantAI('对比今天与昨天的营收、订单量和客单价，说明变化、数据依据和需要关注的问题') },
+    { icon: 'store-search', color: '#2563EB', label: t('aiAnalysis.restaurantStores'), onPress: () => askRestaurantAI('比较最近7天各门店的营收、订单量和客单价，找出异常门店并说明依据') },
+    { icon: 'food', color: '#16A34A', label: t('aiAnalysis.restaurantDishes'), onPress: () => askRestaurantAI('分析最近7天菜品销量和毛利表现，指出最值得关注的菜品并给出可执行建议') },
+    { icon: 'chart-donut', color: '#DC2626', label: t('aiAnalysis.restaurantWastage'), onPress: () => askRestaurantAI('分析本月食材损耗，按食材和门店定位主要问题，并给出今天可以执行的改进动作') },
+  ] : [
+    { icon: 'chart-line', color: '#667eea', label: t('aiAnalysis.costTrend'), onPress: () => navigation.navigate('AICostAnalysis') },
+    { icon: 'clipboard-check-outline', color: '#1890ff', label: t('aiAnalysis.qualityAnalysis'), onPress: () => navigation.navigate('QualityAnalysis') },
+    { icon: 'robot', color: '#fa8c16', label: t('aiAnalysis.aiChat'), onPress: () => navigation.navigate('AIChat') },
+    { icon: 'calendar-plus', color: '#eb2f96', label: t('aiAnalysis.createPlan'), onPress: () => navigation.navigate('CreatePlan') },
+  ];
+
+  const featureItems: MenuItemProps[] = isRestaurantMode ? [
+    { icon: 'robot', title: t('aiAnalysis.restaurantChat'), subtitle: t('aiAnalysis.restaurantChatDesc'), color: '#E85D04', onPress: () => navigation.navigate('AIChat') },
+    { icon: 'store-marker', title: t('aiAnalysis.restaurantStoreFeature'), subtitle: t('aiAnalysis.restaurantStoreFeatureDesc'), color: '#2563EB', onPress: () => askRestaurantAI('比较最近7天各门店经营表现，列出异常门店、数据依据和建议动作') },
+    { icon: 'food-variant', title: t('aiAnalysis.restaurantDishFeature'), subtitle: t('aiAnalysis.restaurantDishFeatureDesc'), color: '#16A34A', onPress: () => askRestaurantAI('分析最近7天菜品销量、营收和毛利，指出机会菜品与风险菜品') },
+    { icon: 'package-variant', title: t('aiAnalysis.restaurantInventoryFeature'), subtitle: t('aiAnalysis.restaurantInventoryFeatureDesc'), color: '#7C3AED', onPress: () => askRestaurantAI('分析当前食材库存风险，列出可能缺货或积压的食材、影响和处理建议') },
+  ] : [
+    { icon: 'chart-line', title: t('aiAnalysis.costAnalysis'), subtitle: t('aiAnalysis.costAnalysisDesc'), color: '#667eea', onPress: () => navigation.navigate('AICostAnalysis') },
+    { icon: 'file-document-outline', title: t('aiAnalysis.dataReport'), subtitle: t('aiAnalysis.dataReportDesc'), color: '#52c41a', onPress: () => navigation.navigate('AIReport') },
+    { icon: 'robot', title: t('aiAnalysis.aiChat'), subtitle: t('aiAnalysis.aiChatDesc'), color: '#fa8c16', onPress: () => navigation.navigate('AIChat') },
+    { icon: 'clipboard-check-outline', title: t('aiAnalysis.qualityAnalysis'), subtitle: t('aiAnalysis.qualityAnalysisDesc'), color: '#1890ff', onPress: () => navigation.navigate('QualityAnalysis') },
+    { icon: 'calendar-plus', title: t('aiAnalysis.createPlan'), subtitle: t('aiAnalysis.createPlanDesc'), color: '#eb2f96', onPress: () => navigation.navigate('CreatePlan') },
+    { icon: 'lightbulb-on-outline', title: t('aiAnalysis.intentSuggestions') || '意图优化建议', subtitle: t('aiAnalysis.intentSuggestionsDesc') || '审批AI学习的新意图和关键词', color: '#13c2c2', onPress: () => navigation.navigate('IntentSuggestionsList') },
+  ];
+
   return (
     <SafeAreaView style={styles.container}>
       <ScrollView
@@ -93,8 +125,8 @@ export function AIAnalysisCenterScreen() {
       >
         {/* Header */}
         <View style={styles.header}>
-          <Text style={styles.title}>{t('aiAnalysis.title')}</Text>
-          <Text style={styles.subtitle}>{t('aiAnalysis.subtitle')}</Text>
+          <Text style={styles.title}>{t(isRestaurantMode ? 'aiAnalysis.restaurantTitle' : 'aiAnalysis.title')}</Text>
+          <Text style={styles.subtitle}>{t(isRestaurantMode ? 'aiAnalysis.restaurantSubtitle' : 'aiAnalysis.subtitle')}</Text>
         </View>
 
         {/* AI 配额卡片 */}
@@ -136,42 +168,14 @@ export function AIAnalysisCenterScreen() {
         <View style={styles.quickActions}>
           <Text style={styles.sectionTitle}>{t('aiAnalysis.quickAnalysis')}</Text>
           <View style={styles.quickGrid}>
-            <TouchableOpacity
-              style={styles.quickItem}
-              onPress={() => navigation.navigate('AICostAnalysis')}
-            >
-              <View style={[styles.quickIcon, { backgroundColor: '#667eea20' }]}>
-                <Icon source="chart-line" size={28} color="#667eea" />
-              </View>
-              <Text style={styles.quickLabel}>{t('aiAnalysis.costTrend')}</Text>
-            </TouchableOpacity>
-            <TouchableOpacity
-              style={styles.quickItem}
-              onPress={() => navigation.navigate('QualityAnalysis')}
-            >
-              <View style={[styles.quickIcon, { backgroundColor: '#1890ff20' }]}>
-                <Icon source="clipboard-check-outline" size={28} color="#1890ff" />
-              </View>
-              <Text style={styles.quickLabel}>{t('aiAnalysis.qualityAnalysis')}</Text>
-            </TouchableOpacity>
-            <TouchableOpacity
-              style={styles.quickItem}
-              onPress={() => navigation.navigate('AIChat')}
-            >
-              <View style={[styles.quickIcon, { backgroundColor: '#fa8c1620' }]}>
-                <Icon source="robot" size={28} color="#fa8c16" />
-              </View>
-              <Text style={styles.quickLabel}>{t('aiAnalysis.aiChat')}</Text>
-            </TouchableOpacity>
-            <TouchableOpacity
-              style={styles.quickItem}
-              onPress={() => navigation.navigate('CreatePlan')}
-            >
-              <View style={[styles.quickIcon, { backgroundColor: '#eb2f9620' }]}>
-                <Icon source="calendar-plus" size={28} color="#eb2f96" />
-              </View>
-              <Text style={styles.quickLabel}>{t('aiAnalysis.createPlan')}</Text>
-            </TouchableOpacity>
+            {quickItems.map(item => (
+              <TouchableOpacity key={item.label} style={styles.quickItem} onPress={item.onPress}>
+                <View style={[styles.quickIcon, { backgroundColor: item.color + '20' }]}>
+                  <Icon source={item.icon} size={28} color={item.color} />
+                </View>
+                <Text style={styles.quickLabel}>{item.label}</Text>
+              </TouchableOpacity>
+            ))}
           </View>
         </View>
 
@@ -179,48 +183,7 @@ export function AIAnalysisCenterScreen() {
         <View style={styles.menuSection}>
           <Text style={styles.sectionTitle}>{t('aiAnalysis.allFeatures')}</Text>
           <View style={styles.menuCard}>
-            <MenuItem
-              icon="chart-line"
-              title={t('aiAnalysis.costAnalysis')}
-              subtitle={t('aiAnalysis.costAnalysisDesc')}
-              color="#667eea"
-              onPress={() => navigation.navigate('AICostAnalysis')}
-            />
-            <MenuItem
-              icon="file-document-outline"
-              title={t('aiAnalysis.dataReport')}
-              subtitle={t('aiAnalysis.dataReportDesc')}
-              color="#52c41a"
-              onPress={() => navigation.navigate('AIReport')}
-            />
-            <MenuItem
-              icon="robot"
-              title={t('aiAnalysis.aiChat')}
-              subtitle={t('aiAnalysis.aiChatDesc')}
-              color="#fa8c16"
-              onPress={() => navigation.navigate('AIChat')}
-            />
-            <MenuItem
-              icon="clipboard-check-outline"
-              title={t('aiAnalysis.qualityAnalysis')}
-              subtitle={t('aiAnalysis.qualityAnalysisDesc')}
-              color="#1890ff"
-              onPress={() => navigation.navigate('QualityAnalysis')}
-            />
-            <MenuItem
-              icon="calendar-plus"
-              title={t('aiAnalysis.createPlan')}
-              subtitle={t('aiAnalysis.createPlanDesc')}
-              color="#eb2f96"
-              onPress={() => navigation.navigate('CreatePlan')}
-            />
-            <MenuItem
-              icon="lightbulb-on-outline"
-              title={t('aiAnalysis.intentSuggestions') || '意图优化建议'}
-              subtitle={t('aiAnalysis.intentSuggestionsDesc') || '审批AI学习的新意图和关键词'}
-              color="#13c2c2"
-              onPress={() => navigation.navigate('IntentSuggestionsList')}
-            />
+            {featureItems.map(item => <MenuItem key={item.title} {...item} />)}
           </View>
         </View>
 
