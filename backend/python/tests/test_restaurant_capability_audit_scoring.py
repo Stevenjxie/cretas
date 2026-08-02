@@ -11,6 +11,9 @@ resolver。2026-07-30 实测过两次(损耗按量答成按额、采购问题被
 from __future__ import annotations
 
 import importlib.util
+import subprocess
+import sys
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 import pytest
@@ -26,6 +29,54 @@ _spec = importlib.util.spec_from_file_location("_cap_audit", _SCRIPT)
 assert _spec and _spec.loader, f"audit script not found at {_SCRIPT}"
 audit = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(audit)
+
+
+def test_audit_entry_bootstraps_capture_logger_imports_in_isolated_python():
+    """The production audit must not depend on a hand-written PYTHONPATH."""
+    code = (
+        "import importlib.util, pathlib; "
+        f"p=pathlib.Path({str(_SCRIPT)!r}); "
+        "s=importlib.util.spec_from_file_location('_audit_isolated', p); "
+        "m=importlib.util.module_from_spec(s); s.loader.exec_module(m); "
+        "from smartbi.services.llm_fallback_logger import log_template_hit; "
+        "print(log_template_hit.__name__)"
+    )
+    completed = subprocess.run(
+        [sys.executable, "-I", "-c", code],
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+    assert completed.returncode == 0, completed.stderr
+    assert completed.stdout.strip() == "log_template_hit"
+
+
+@pytest.mark.asyncio
+async def test_run_case_owns_the_tenant_context(monkeypatch):
+    """The supported entrypoint must not rely on probe-side RLS setup."""
+    from smartbi import tenant_ctx
+    from smartbi.gold.restaurant import restaurant_intent, restaurant_ops_router
+
+    seen: list[str] = []
+
+    @asynccontextmanager
+    async def fake_catalogue_scope(_pool, _factory_id):
+        yield
+
+    async def fake_parse(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr(tenant_ctx, "set_factory_id", seen.append)
+    monkeypatch.setattr(
+        restaurant_ops_router, "dish_catalogue_scope", fake_catalogue_scope,
+    )
+    monkeypatch.setattr(restaurant_intent, "parse_restaurant_query", fake_parse)
+
+    result = await audit._run_case(object(), "MOCK_REST", "restaurant_manager", "测试")
+
+    assert seen == ["MOCK_REST"]
+    assert result["error"].startswith("spec=None")
 
 
 def test_answer_with_expected_intent_is_ok():

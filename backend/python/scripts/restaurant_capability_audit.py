@@ -46,7 +46,20 @@ import asyncio
 import os
 import sys
 import time
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
+
+# This file is a production CLI as well as an importable audit helper. Python
+# started from ``backend/python`` can resolve ``smartbi.*`` but not the legacy
+# top-level ``services.*`` imports executed by ``smartbi.services.__init__``.
+# Bootstrap both roots so ``_run_case`` can persist capture logs without a
+# caller-specific PYTHONPATH. The service process already exposes the same roots.
+_PYTHON_ROOT = Path(__file__).resolve().parents[1]
+_SMARTBI_ROOT = _PYTHON_ROOT / "smartbi"
+for _module_root in (_PYTHON_ROOT, _SMARTBI_ROOT):
+    _module_root_text = str(_module_root)
+    if _module_root_text not in sys.path:
+        sys.path.insert(0, _module_root_text)
 
 # (family, question, acceptable intents; 空 tuple = 只要求"能答出来", 不限 intent)
 CASES: Tuple[Tuple[str, str, Tuple[str, ...]], ...] = (
@@ -119,12 +132,17 @@ async def _run_case(pool, fid: str, role: str, question: str) -> Dict[str, Any]:
         tiered_answer,
     )
     from smartbi.gold.restaurant.restaurant_ops_router import dish_catalogue_scope
+    from smartbi.tenant_ctx import set_factory_id
 
     started = time.time()
     out: Dict[str, Any] = {
         "intent": "", "tier": "", "kind": "", "answer": "", "error": "",
     }
     try:
+        # `_run_case` is the supported audit entrypoint. Own the tenant context
+        # here instead of requiring every standalone caller to remember it; the
+        # asyncpg setup hook then applies the correct RLS session setting.
+        set_factory_id(fid)
         async with dish_catalogue_scope(pool, fid):
             spec = await parse_restaurant_query(
                 question, pool, factory_id=fid, semantic_first=True,
@@ -245,7 +263,7 @@ async def _audit_one(pool, factory: str, role: str, verbose: bool) -> Dict[str, 
     # (餐饮租户闸判错 → 每个问题 0.0 秒返回 None), 与「数据少所以答不出内容」
     # 是两回事 —— 后者仍然会正常走完链路并如实说无数据。
     went_dark = ok == 0
-    print(f"  " + "  ".join(f"{k}={v}" for k, v in sorted(counts.items())))
+    print("  " + "  ".join(f"{k}={v}" for k, v in sorted(counts.items())))
     print(f"  OK {ok}/{len(rows)}" + ("   ⛔ 整个变暗" if went_dark else ""))
     wrong = [r for r in rows if r["verdict"] == "WRONG_INTENT"]
     if wrong:
@@ -312,8 +330,7 @@ def main() -> int:
             "  PID=$(systemctl show cretas-python -p MainPID --value)\n"
             "  tr '\\0' '\\n' < /proc/$PID/environ | grep -E '^(LLM_|POSTGRES_|SMARTBI|DB_)' > /tmp/env\n"
             "  cd $REPO/backend/python && env $(cat /tmp/env | tr '\\n' ' ') \\\n"
-            "    PYTHONPATH=$REPO/backend/python:$REPO/backend/python/smartbi \\\n"
-            "    ./venv-current/bin/python -u scripts/audit/restaurant_capability_audit.py\n"
+            "    ./venv-current/bin/python -u scripts/restaurant_capability_audit.py\n"
             "\n长跑请 nohup 落盘 —— `ssh … | tail` 在 ssh 断开时什么都拿不到。"
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
