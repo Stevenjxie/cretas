@@ -690,6 +690,42 @@ _PRESCRIBED_NUMBER_ASSUMPTION_RE = re.compile(
     r"需[^。！？\n]{0,8}确认|需要[^。！？\n]{0,8}确认|由[^。！？\n]{0,12}确认|"
     r"非现状数据|不是现状数据|试点参数|可调整"
 )
+
+
+def _is_grounded_staffing_target(
+    prescribed_text: str,
+    factbook: FactBook,
+) -> bool:
+    """Return True for a configured staffing target already in the FactBook.
+
+    ``目标 15 单/人`` can be an observed staffing configuration rather than a
+    model-authored KPI proposal.  Keep this exemption deliberately narrow: the
+    matched phrase itself must start with ``目标``/``目标人效`` and its number
+    must equal a ``target_orders_per_staff`` value from the current FactBook.
+    Action phrases such as ``提升至 15`` therefore remain proposals and still
+    require an explicit assumption/approval label.
+    """
+    if not re.match(r"^目标(?:人效)?\s*(?:为|是|[:：])?\s*", prescribed_text):
+        return False
+    match = re.search(r"[-+]?\d+(?:,\d{3})*(?:\.\d+)?", prescribed_text)
+    if match is None:
+        return False
+    try:
+        claimed = float(match.group(0).replace(",", ""))
+    except ValueError:
+        return False
+
+    staffing = ((factbook.operations or {}).get("staffing") or {})
+    for item in staffing.get("items") or []:
+        target = item.get("target_orders_per_staff")
+        try:
+            if target is not None and abs(float(target) - claimed) < 1e-9:
+                return True
+        except (TypeError, ValueError):
+            continue
+    return False
+
+
 _HIGH_IMPACT_ACTION_RE = re.compile(
     r"(?:下架|停售|停用|调价|涨价|降价|打折|满减|投流|发券|"
     r"增员|减员|裁员|调整排班|优先出餐)"
@@ -779,6 +815,9 @@ def _narrative_grounding_violations(
                 prescribed
                 and prescribed.group(0) not in (question or "")
                 and not _PRESCRIBED_NUMBER_ASSUMPTION_RE.search(sentence)
+                and not _is_grounded_staffing_target(
+                    prescribed.group(0), factbook,
+                )
             ):
                 violations.append(f"未标注为假设的预算或目标：{clause[:120]}")
 
