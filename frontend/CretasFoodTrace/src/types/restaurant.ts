@@ -101,7 +101,7 @@ export interface StocktakingRecord {
 
 // ==================== Wastage (损耗) ====================
 
-export type WastageType = 'EXPIRED' | 'DAMAGED' | 'SPOILED' | 'PROCESSING_LOSS' | 'OTHER';
+export type WastageType = 'EXPIRED' | 'DAMAGED' | 'SPOILED' | 'PROCESSING' | 'PROCESSING_LOSS' | 'OTHER';
 export type WastageStatus = 'DRAFT' | 'SUBMITTED' | 'APPROVED' | 'REJECTED';
 
 export interface WastageRecord {

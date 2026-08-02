@@ -17,6 +17,7 @@ interface AIInsightCardProps {
   aiInsight: AIInsight;
   onLongPress: () => void;
   onToggleVisibility: (moduleId: string) => void;
+  onPress?: () => void;
 }
 
 export function AIInsightCard({
@@ -27,6 +28,7 @@ export function AIInsightCard({
   aiInsight,
   onLongPress,
   onToggleVisibility,
+  onPress,
 }: AIInsightCardProps) {
   const { t } = useTranslation('home');
 
@@ -36,6 +38,7 @@ export function AIInsightCard({
         testID="fa-home-ai-card"
         style={styles.aiCard}
         onLongPress={onLongPress}
+        onPress={isEditMode ? undefined : onPress}
         delayLongPress={500}
         activeOpacity={isEditMode ? 1 : 0.95}
       >
@@ -51,7 +54,7 @@ export function AIInsightCard({
           <View style={styles.aiTitleRow}>
             <Icon source="robot" size={20} color="#fff" />
             <Text testID="fa-home-ai-title" style={styles.aiTitle}>
-              {t('ai.title', module.name)}
+              {isRestaurantMode ? t('ai.restaurantOverview') : t('ai.title', module.name)}
             </Text>
           </View>
           <View
@@ -61,7 +64,9 @@ export function AIInsightCard({
             ]}
           >
             <Text style={styles.aiStatusText}>
-              {aiInsight.status === 'success' ? t('ai.analyzed') : t('ai.analyzing_status')}
+              {aiInsight.status === 'success'
+                ? t(isRestaurantMode ? 'ai.dataUpdated' : 'ai.analyzed')
+                : t('ai.analyzing_status')}
             </Text>
           </View>
         </View>

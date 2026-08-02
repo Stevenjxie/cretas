@@ -11,6 +11,7 @@ import { useTranslation } from 'react-i18next';
 import { restaurantApiClient } from '../../../services/api/restaurantApiClient';
 import { handleError } from '../../../utils/errorHandler';
 import { formatShortDateTime } from '../../../utils/formatters';
+import { resolveRestaurantReferenceName, useRestaurantReferenceNames } from '../hooks/useRestaurantReferenceNames';
 
 interface SummaryData {
   totalItems: number;
@@ -21,6 +22,7 @@ interface SummaryData {
     id: string;
     stocktakingNumber: string;
     rawMaterialTypeName: string;
+    rawMaterialTypeId?: string;
     differenceType: string;
     differenceQuantity: number;
     completedAt: string;
@@ -33,6 +35,7 @@ export function StocktakingSummaryScreen() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [summary, setSummary] = useState<SummaryData | null>(null);
+  const { materialNames } = useRestaurantReferenceNames();
 
   async function loadData() {
     try {
@@ -50,7 +53,8 @@ export function StocktakingSummaryScreen() {
         recentRecords: (data?.recentRecords ?? []).map((r: any) => ({
           id: r.id,
           stocktakingNumber: r.stocktakingNumber ?? '',
-          rawMaterialTypeName: r.rawMaterialTypeName ?? r.rawMaterialTypeId ?? '',
+          rawMaterialTypeName: r.rawMaterialTypeName ?? '',
+          rawMaterialTypeId: r.rawMaterialTypeId,
           differenceType: r.differenceType ?? 'MATCH',
           differenceQuantity: r.differenceQuantity ?? 0,
           completedAt: r.completedAt ?? r.stocktakingDate ?? '',
@@ -110,7 +114,12 @@ export function StocktakingSummaryScreen() {
               summary!.recentRecords.map(r => (
                 <Surface key={r.id} style={styles.recordCard} elevation={1}>
                   <View style={styles.recordRow}>
-                    <Text style={styles.recordMaterial}>{r.rawMaterialTypeName}</Text>
+                    <Text style={styles.recordMaterial}>{resolveRestaurantReferenceName(
+                      r.rawMaterialTypeName,
+                      r.rawMaterialTypeId,
+                      materialNames,
+                      t('common.materialNameUnavailable'),
+                    )}</Text>
                     <Text style={[styles.recordDiff, { color: diffColor(r.differenceType) }]}>
                       {t(`stocktaking.difference.${r.differenceType}`)}
                       {r.differenceQuantity != null ? ` (${r.differenceQuantity > 0 ? '+' : ''}${r.differenceQuantity})` : ''}

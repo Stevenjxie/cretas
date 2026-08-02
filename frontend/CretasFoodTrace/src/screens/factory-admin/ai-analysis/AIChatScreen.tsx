@@ -45,6 +45,7 @@ import {
   RESTAURANT_AGENT_RUN_ROUTE,
 } from '../../../types/restaurantAgentRun';
 import { RestaurantGrossMarginRunCard } from '../../../components/ai/RestaurantGrossMarginRunCard';
+import { isRestaurant } from '../../../utils/factoryType';
 
 // 建议操作类型
 interface SuggestedAction {
@@ -234,6 +235,7 @@ export default function AIChatScreen() {
   const navigation = useNavigation();
   const route = useRoute<AIChatRouteProp>();
   const { user } = useAuthStore();
+  const isRestaurantMode = isRestaurant(user);
   const { t, i18n } = useTranslation('home');
   const scrollViewRef = useRef<ScrollView>(null);
 
@@ -243,12 +245,17 @@ export default function AIChatScreen() {
   const sceneConfig = entityType ? SCENE_CONFIG[entityType] : undefined;
 
   // 快捷问题列表：场景专属 > 通用
-  const QUICK_QUESTIONS = sceneConfig?.quickQuestions || [
+  const QUICK_QUESTIONS = sceneConfig?.quickQuestions || (isRestaurantMode ? [
+    t('aiChat.restaurantQuestion1'),
+    t('aiChat.restaurantQuestion2'),
+    t('aiChat.restaurantQuestion3'),
+    t('aiChat.restaurantQuestion4'),
+  ] : [
     t('aiChat.question1'),
     t('aiChat.question2'),
     t('aiChat.question3'),
     t('aiChat.question4'),
-  ];
+  ]);
 
   const [messages, setMessages] = useState<Message[]>([]);
   const [inputText, setInputText] = useState('');
@@ -870,10 +877,10 @@ export default function AIChatScreen() {
         </View>
         <View style={styles.aiMessageBubble}>
           <Text style={styles.aiMessageText}>
-            {t('aiChat.welcome')}
+            {t(isRestaurantMode ? 'aiChat.restaurantWelcome' : 'aiChat.welcome')}
           </Text>
           <Text style={[styles.aiMessageText, { marginTop: 8 }]}>
-            {t('aiChat.canHelp')}
+            {t(isRestaurantMode ? 'aiChat.restaurantCanHelp' : 'aiChat.canHelp')}
           </Text>
         </View>
       </View>
@@ -881,6 +888,7 @@ export default function AIChatScreen() {
       {/* P2: 大卡片网格 — 按角色显示常用操作 */}
       <QuickActionCardGrid
         userRole={userRole}
+        isRestaurantMode={isRestaurantMode}
         onSendIntent={(text) => handleSend(text)}
         onNavigate={handleCardNavigate}
       />

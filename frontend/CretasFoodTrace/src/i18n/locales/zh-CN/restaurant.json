@@ -153,6 +153,7 @@
       "EXPIRED": "过期",
       "DAMAGED": "破损",
       "SPOILED": "变质",
+      "PROCESSING": "加工损耗",
       "PROCESSING_LOSS": "加工损耗",
       "OTHER": "其他"
     },
@@ -176,6 +177,9 @@
     "submitFailed": "提交失败",
     "operationSuccess": "操作成功",
     "operationFailed": "操作失败",
+    "notProvided": "未填写",
+    "materialNameUnavailable": "食材信息待同步",
+    "productNameUnavailable": "菜品信息待同步",
     "yuan": "元",
     "items": "项"
   }

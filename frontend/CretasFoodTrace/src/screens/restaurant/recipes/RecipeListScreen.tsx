@@ -14,6 +14,7 @@ import { restaurantApiClient } from '../../../services/api/restaurantApiClient';
 import { Recipe } from '../../../types/restaurant';
 import { handleError } from '../../../utils/errorHandler';
 import { logger } from '../../../utils/logger';
+import { resolveRestaurantReferenceName, useRestaurantReferenceNames } from '../hooks/useRestaurantReferenceNames';
 
 type Nav = NativeStackNavigationProp<RRecipeStackParamList>;
 
@@ -27,6 +28,21 @@ export function RecipeListScreen() {
   const [filter, setFilter] = useState<'all' | 'active' | 'inactive'>('all');
   const [recipes, setRecipes] = useState<Recipe[]>([]);
   const [loadError, setLoadError] = useState(false);
+  const { materialNames, productNames } = useRestaurantReferenceNames(true);
+
+  const materialName = useCallback((recipe: Recipe) => resolveRestaurantReferenceName(
+    recipe.rawMaterialTypeName,
+    recipe.rawMaterialTypeId,
+    materialNames,
+    t('common.materialNameUnavailable'),
+  ), [materialNames, t]);
+
+  const dishName = useCallback((recipe: Recipe) => resolveRestaurantReferenceName(
+    recipe.productTypeName,
+    recipe.productTypeId,
+    productNames,
+    t('common.productNameUnavailable'),
+  ), [productNames, t]);
 
   const loadData = useCallback(async () => {
     try {
@@ -48,15 +64,12 @@ export function RecipeListScreen() {
   const filtered = recipes.filter(r => {
     if (!searchQuery) return true;
     const q = searchQuery.toLowerCase();
-    return (r.productTypeName ?? '').toLowerCase().includes(q) ||
-           (r.rawMaterialTypeName ?? '').toLowerCase().includes(q) ||
-           (r.productTypeId ?? '').toLowerCase().includes(q) ||
-           (r.rawMaterialTypeId ?? '').toLowerCase().includes(q);
+    return dishName(r).toLowerCase().includes(q) || materialName(r).toLowerCase().includes(q);
   });
 
   // Group by dish
   const grouped = filtered.reduce<Record<string, Recipe[]>>((acc, r) => {
-    const key = r.productTypeName || r.productTypeId;
+    const key = r.productTypeId;
     (acc[key] = acc[key] || []).push(r);
     return acc;
   }, {});
@@ -105,15 +118,19 @@ export function RecipeListScreen() {
           </View>
         ) : (
           <View style={styles.list}>
-            {Object.entries(grouped).map(([dishName, items]) => (
+            {Object.entries(grouped).map(([productTypeId, items]) => {
+              const firstItem = items[0];
+              if (!firstItem) return null;
+              const displayDishName = dishName(firstItem);
+              return (
               <TouchableOpacity
-                key={dishName}
-                onPress={() => navigation.navigate('RecipeDetail', { productTypeId: items[0]?.productTypeId ?? '', dishName })}
+                key={productTypeId}
+                onPress={() => navigation.navigate('RecipeDetail', { productTypeId, dishName: displayDishName })}
               >
                 <Surface style={styles.card} elevation={1}>
                   <View style={styles.cardHeader}>
                     <MaterialCommunityIcons name="food" size={20} color={theme.colors.primary} />
-                    <Text style={styles.dishName}>{dishName}</Text>
+                    <Text style={styles.dishName}>{displayDishName}</Text>
                     <View style={[styles.badge, { backgroundColor: items[0]?.isActive ? '#e8f5e9' : '#fafafa' }]}>
                       <Text style={{ color: items[0]?.isActive ? '#388e3c' : '#999', fontSize: 12 }}>
                         {items[0]?.isActive ? t('recipe.list.active') : t('recipe.list.inactive')}
@@ -124,7 +141,7 @@ export function RecipeListScreen() {
                     {items.slice(0, 3).map(r => (
                       <View key={r.id} style={styles.ingredientRow}>
                         <Text style={styles.ingredientTag}>{r.isMainIngredient ? t('recipe.list.main') : t('recipe.list.auxiliary')}</Text>
-                        <Text style={styles.ingredientName} numberOfLines={1}>{r.rawMaterialTypeName || r.rawMaterialTypeId}</Text>
+                        <Text style={styles.ingredientName} numberOfLines={1}>{materialName(r)}</Text>
                         <Text style={styles.ingredientQty}>{r.standardQuantity} {r.unit}</Text>
                       </View>
                     ))}
@@ -132,7 +149,8 @@ export function RecipeListScreen() {
                   </View>
                 </Surface>
               </TouchableOpacity>
-            ))}
+              );
+            })}
           </View>
         )}
       </ScrollView>

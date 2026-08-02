@@ -2,7 +2,7 @@
  * 盘点执行 — 录入实盘数量
  */
 import React, { useState, useEffect } from 'react';
-import { View, ScrollView, StyleSheet, Alert } from 'react-native';
+import { View, ScrollView, StyleSheet, Alert, TouchableOpacity } from 'react-native';
 import { Text, TextInput, Button, Surface } from 'react-native-paper';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
@@ -12,6 +12,8 @@ import { RStocktakingStackParamList } from '../../../types/navigation';
 import { restaurantApiClient } from '../../../services/api/restaurantApiClient';
 import { StocktakingRecord } from '../../../types/restaurant';
 import { handleError } from '../../../utils/errorHandler';
+import { MaterialSelectModal, MaterialSelectResult } from '../../../components/MaterialSelectModal';
+import { resolveRestaurantReferenceName, useRestaurantReferenceNames } from '../hooks/useRestaurantReferenceNames';
 
 type Route = RouteProp<RStocktakingStackParamList, 'StocktakingExecute'>;
 
@@ -27,6 +29,14 @@ export function StocktakingExecuteScreen() {
   const [reason, setReason] = useState('');
   // For new stocktaking
   const [newMaterialId, setNewMaterialId] = useState('');
+  const [newMaterialName, setNewMaterialName] = useState('');
+  const [materialPickerVisible, setMaterialPickerVisible] = useState(false);
+  const { materialNames } = useRestaurantReferenceNames();
+
+  const handleMaterialSelect = (material: MaterialSelectResult) => {
+    setNewMaterialId(material.materialTypeId);
+    setNewMaterialName(material.materialName);
+  };
 
   useEffect(() => {
     if (recordId) loadRecord();
@@ -124,7 +134,12 @@ export function StocktakingExecuteScreen() {
                 <Text style={styles.stkNumber}>{record.stocktakingNumber}</Text>
                 <View style={styles.infoRow}>
                   <Text style={styles.infoLabel}>{t('stocktaking.list.material')}</Text>
-                  <Text style={styles.infoValue}>{record.rawMaterialTypeName || record.rawMaterialTypeId}</Text>
+                  <Text style={styles.infoValue}>{resolveRestaurantReferenceName(
+                    record.rawMaterialTypeName,
+                    record.rawMaterialTypeId,
+                    materialNames,
+                    t('common.materialNameUnavailable'),
+                  )}</Text>
                 </View>
                 <View style={styles.infoRow}>
                   <Text style={styles.infoLabel}>{t('stocktaking.execute.systemQty')}</Text>
@@ -133,8 +148,13 @@ export function StocktakingExecuteScreen() {
               </Surface>
             ) : (
               <>
-                <Text style={styles.label}>{t('stocktaking.list.material')} ID *</Text>
-                <TextInput mode="outlined" value={newMaterialId} onChangeText={setNewMaterialId} placeholder="MT-XXX" style={styles.input} />
+                <Text style={styles.label}>{t('stocktaking.list.material')} *</Text>
+                <TouchableOpacity style={styles.materialSelector} onPress={() => setMaterialPickerVisible(true)}>
+                  <Text style={newMaterialName ? styles.materialValue : styles.materialPlaceholder}>
+                    {newMaterialName || t('wastage.create.selectMaterial')}
+                  </Text>
+                  <Text style={styles.materialChevron}>›</Text>
+                </TouchableOpacity>
               </>
             )}
 
@@ -177,6 +197,13 @@ export function StocktakingExecuteScreen() {
           </>
         )}
       </ScrollView>
+
+      <MaterialSelectModal
+        visible={materialPickerVisible}
+        onDismiss={() => setMaterialPickerVisible(false)}
+        onSelect={handleMaterialSelect}
+        title={t('wastage.create.selectMaterial')}
+      />
     </SafeAreaView>
   );
 }
@@ -194,6 +221,10 @@ const styles = StyleSheet.create({
   systemQty: { fontSize: 18, fontWeight: '700', color: '#1976d2' },
   label: { fontSize: 14, fontWeight: '500', color: '#333', marginBottom: 4, marginTop: 12 },
   input: { backgroundColor: '#fff' },
+  materialSelector: { minHeight: 52, borderWidth: 1, borderColor: '#79747e', borderRadius: 4, backgroundColor: '#fff', paddingHorizontal: 14, flexDirection: 'row', alignItems: 'center' },
+  materialValue: { flex: 1, fontSize: 16, color: '#1f2937' },
+  materialPlaceholder: { flex: 1, fontSize: 16, color: '#8a8f98' },
+  materialChevron: { fontSize: 28, color: '#8a8f98' },
   btn: { marginTop: 16, borderRadius: 8 },
   center: { alignItems: 'center', paddingTop: 60 },
 });

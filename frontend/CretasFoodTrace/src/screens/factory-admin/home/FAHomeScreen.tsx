@@ -236,6 +236,7 @@ export function FAHomeScreen() {
             isEditMode={editMode.isEditMode}
             isRestaurantMode={isRestaurantMode}
             aiInsight={aiInsight}
+            onPress={() => navigation.navigate('AIChat')}
             onLongPress={editMode.handleLongPressEdit}
             onToggleVisibility={editMode.toggleModuleVisibility}
           />
@@ -337,16 +338,18 @@ export function FAHomeScreen() {
         />
 
         {/* Compact actionable workflow entry for the FA home first screen. */}
-        <View style={styles.workflowSection}>
-          <WorkflowWorkdesk
-            modules={FA_WORKFLOW_MODULES}
-            factoryId={user?.factoryId}
-            onNodePress={(module, nodeId) =>
-              navigateToModuleList(navigation, module, nodeId)
-            }
-            onAITrigger={(ctx) => navigateToAIChat(navigation, ctx)}
-          />
-        </View>
+        {!isRestaurantMode && (
+          <View style={styles.workflowSection}>
+            <WorkflowWorkdesk
+              modules={FA_WORKFLOW_MODULES}
+              factoryId={user?.factoryId}
+              onNodePress={(module, nodeId) =>
+                navigateToModuleList(navigation, module, nodeId)
+              }
+              onAITrigger={(ctx) => navigateToAIChat(navigation, ctx)}
+            />
+          </View>
+        )}
 
         {/* Error banner */}
         {error && (

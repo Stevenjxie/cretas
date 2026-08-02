@@ -153,6 +153,7 @@
       "EXPIRED": "Expired",
       "DAMAGED": "Damaged",
       "SPOILED": "Spoiled",
+      "PROCESSING": "Processing Loss",
       "PROCESSING_LOSS": "Processing Loss",
       "OTHER": "Other"
     },
@@ -176,6 +177,9 @@
     "submitFailed": "Submit failed",
     "operationSuccess": "Success",
     "operationFailed": "Operation failed",
+    "notProvided": "Not provided",
+    "materialNameUnavailable": "Ingredient details unavailable",
+    "productNameUnavailable": "Dish details unavailable",
     "yuan": "CNY",
     "items": "items"
   }

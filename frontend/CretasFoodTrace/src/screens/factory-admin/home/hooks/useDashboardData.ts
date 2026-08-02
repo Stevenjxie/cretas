@@ -46,7 +46,7 @@ export function useDashboardData(isRestaurantMode: boolean): DashboardDataResult
   const [workReportSummary, setWorkReportSummary] = useState<WorkReportSummary>({});
   const [aiInsight, setAIInsight] = useState<AIInsight>({
     status: 'loading',
-    message: t('ai.analyzing'),
+    message: isRestaurantMode ? t('ai.restaurantLoading') : t('ai.analyzing'),
     metrics: { qualityRate: 0, unitCost: 0, avgCycle: 0 },
   });
 
@@ -107,6 +107,10 @@ export function useDashboardData(isRestaurantMode: boolean): DashboardDataResult
         !isRestaurantMode && overviewResult.status === 'fulfilled'
           ? (overviewResult.value.data as Record<string, unknown>)
           : null;
+      const resolvedRestaurantSummary =
+        isRestaurantMode && overviewResult.status === 'fulfilled' && overviewResult.value.success
+          ? (overviewResult.value.data as RestaurantDashboardSummary)
+          : null;
 
       if (resolvedOverview) {
         const kpi = resolvedOverview.kpi as Record<string, unknown> | undefined;
@@ -152,13 +156,23 @@ export function useDashboardData(isRestaurantMode: boolean): DashboardDataResult
           message: insightMessage,
           metrics: { qualityRate, unitCost, avgCycle },
         });
+      } else if (resolvedRestaurantSummary) {
+        setAIInsight({
+          status: 'success',
+          message: t('ai.restaurantSnapshot', {
+            requisitions: Number(resolvedRestaurantSummary.todayRequisitionCount ?? 0),
+            approvals: Number(resolvedRestaurantSummary.pendingApprovalCount ?? 0),
+            wastage: Number(resolvedRestaurantSummary.thisMonthWastageCost ?? 0).toFixed(2),
+          }),
+          metrics: { qualityRate: 0, unitCost: 0, avgCycle: 0 },
+        });
       } else {
         if (!isRestaurantMode || overviewResult.status !== 'fulfilled') {
           setError(t('error.loadFailed'));
         }
         setAIInsight({
           status: isRestaurantMode ? 'success' : 'error',
-          message: isRestaurantMode ? t('ai.normalProduction') : t('ai.noData'),
+          message: isRestaurantMode ? t('ai.restaurantNoData') : t('ai.noData'),
           metrics: { qualityRate: 0, unitCost: 0, avgCycle: 0 },
         });
       }

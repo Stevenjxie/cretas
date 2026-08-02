@@ -15,6 +15,7 @@ import { restaurantApiClient } from '../../../services/api/restaurantApiClient';
 import { MaterialRequisition, RequisitionStatus } from '../../../types/restaurant';
 import { handleError } from '../../../utils/errorHandler';
 import { formatShortDateTime } from '../../../utils/formatters';
+import { resolveRestaurantReferenceName, useRestaurantReferenceNames } from '../hooks/useRestaurantReferenceNames';
 
 type Route = RouteProp<RRequisitionStackParamList, 'RequisitionDetail'>;
 
@@ -32,6 +33,7 @@ export function RequisitionDetailScreen() {
   const { requisitionId } = route.params;
   const [loading, setLoading] = useState(true);
   const [record, setRecord] = useState<MaterialRequisition | null>(null);
+  const { materialNames } = useRestaurantReferenceNames();
 
   useEffect(() => {
     loadData();
@@ -104,9 +106,20 @@ export function RequisitionDetailScreen() {
           <DetailRow label={t('requisition.detail.reqNumber')} value={record.requisitionNumber} />
           <DetailRow label={t('requisition.detail.reqDate')} value={record.requisitionDate ? formatShortDateTime(record.requisitionDate) : '-'} />
           <Divider style={{ marginVertical: 8 }} />
-          <DetailRow label={t('requisition.detail.material')} value={record.rawMaterialTypeName || record.rawMaterialTypeId} />
+          <DetailRow label={t('requisition.detail.material')} value={resolveRestaurantReferenceName(
+            record.rawMaterialTypeName,
+            record.rawMaterialTypeId,
+            materialNames,
+            t('common.materialNameUnavailable'),
+          )} />
           <DetailRow label={t('requisition.create.type')} value={record.type === 'PRODUCTION' ? t('requisition.create.typeProduction') : t('requisition.create.typeManual')} />
-          <DetailRow label={t('requisition.detail.requestedQty')} value={`${record.requestedQuantity} ${record.unit}`} bold />
+          <DetailRow
+            label={t('requisition.detail.requestedQty')}
+            value={record.requestedQuantity == null
+              ? t('common.notProvided')
+              : `${record.requestedQuantity} ${record.unit || ''}`.trim()}
+            bold
+          />
           {record.actualQuantity != null && (
             <DetailRow label={t('requisition.detail.actualQty')} value={`${record.actualQuantity} ${record.unit}`} bold />
           )}

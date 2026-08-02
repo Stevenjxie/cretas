@@ -14,6 +14,7 @@ import { restaurantApiClient } from '../../../services/api/restaurantApiClient';
 import { MaterialRequisition } from '../../../types/restaurant';
 import { handleError } from '../../../utils/errorHandler';
 import { formatShortDateTime } from '../../../utils/formatters';
+import { resolveRestaurantReferenceName, useRestaurantReferenceNames } from '../hooks/useRestaurantReferenceNames';
 
 type Nav = NativeStackNavigationProp<RRequisitionStackParamList>;
 
@@ -27,6 +28,7 @@ export function RequisitionApprovalScreen() {
   const [actualQtyMap, setActualQtyMap] = useState<Record<string, string>>({});
   const [rejectReasonMap, setRejectReasonMap] = useState<Record<string, string>>({});
   const [loadError, setLoadError] = useState(false);
+  const { materialNames } = useRestaurantReferenceNames();
 
   const loadData = useCallback(async () => {
     try {
@@ -113,11 +115,20 @@ export function RequisitionApprovalScreen() {
 
               <View style={styles.infoRow}>
                 <Text style={styles.infoLabel}>{t('requisition.detail.material')}</Text>
-                <Text style={styles.infoValue}>{req.rawMaterialTypeName || req.rawMaterialTypeId}</Text>
+                <Text style={styles.infoValue}>{resolveRestaurantReferenceName(
+                  req.rawMaterialTypeName,
+                  req.rawMaterialTypeId,
+                  materialNames,
+                  t('common.materialNameUnavailable'),
+                )}</Text>
               </View>
               <View style={styles.infoRow}>
                 <Text style={styles.infoLabel}>{t('requisition.detail.requestedQty')}</Text>
-                <Text style={[styles.infoValue, { fontWeight: '700' }]}>{req.requestedQuantity} {req.unit}</Text>
+                <Text style={[styles.infoValue, { fontWeight: '700' }]}>
+                  {req.requestedQuantity == null
+                    ? t('common.notProvided')
+                    : `${req.requestedQuantity} ${req.unit || ''}`.trim()}
+                </Text>
               </View>
               <View style={styles.infoRow}>
                 <Text style={styles.infoLabel}>{t('requisition.detail.reqDate')}</Text>

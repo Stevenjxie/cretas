@@ -13,11 +13,12 @@ jest.mock('@expo/vector-icons', () => ({
 
 import QuickActionCardGrid from '../../../components/ai/QuickActionCardGrid';
 
-function getRenderedTree(userRole: string) {
+function getRenderedTree(userRole: string, isRestaurantMode = false) {
   const mockOnSendIntent = jest.fn();
   const mockOnNavigate = jest.fn();
   const element = (QuickActionCardGrid as any)({
     userRole,
+    isRestaurantMode,
     onSendIntent: mockOnSendIntent,
     onNavigate: mockOnNavigate,
   });
@@ -54,6 +55,21 @@ describe('QuickActionCardGrid card configs', () => {
   it('unknown role returns null', () => {
     const { element } = getRenderedTree('unknown_role');
     expect(element).toBeNull();
+  });
+
+  it('restaurant mode overrides the factory role with six restaurant analysis cards', () => {
+    const cards = getCards(getRenderedTree('factory_super_admin', true).element);
+    expect(cards).toHaveLength(6);
+    expect(cards.map(getCardLabel)).toEqual([
+      '今日经营', '门店对比', '菜品表现', '损耗分析', '库存风险', '经营建议',
+    ]);
+  });
+
+  it('restaurant cards send concrete LLM questions and never navigate to factory screens', () => {
+    const { element, mockOnSendIntent, mockOnNavigate } = getRenderedTree('factory_super_admin', true);
+    getCards(element)[1].props.onPress();
+    expect(mockOnSendIntent).toHaveBeenCalledWith(expect.stringContaining('最近7天各门店'));
+    expect(mockOnNavigate).not.toHaveBeenCalled();
   });
 
   it('FA cards have correct labels', () => {

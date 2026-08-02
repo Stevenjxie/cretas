@@ -41,9 +41,14 @@ export function QuickActionsModule({
 
   let displayActions: QuickActionItem[];
   if (visibleConfigIds.length > 0) {
-    displayActions = visibleConfigIds
+    const configuredActions = visibleConfigIds
       .map(id => allQuickActions.find(a => a.id === id))
       .filter(Boolean) as QuickActionItem[];
+    // Persisted layouts may contain factory-only action IDs. Restaurant mode
+    // must fall back to its own action set instead of rendering an empty grid.
+    displayActions = configuredActions.length > 0
+      ? configuredActions
+      : allQuickActions.slice(0, maxItems);
   } else {
     displayActions = allQuickActions.slice(0, maxItems);
   }
