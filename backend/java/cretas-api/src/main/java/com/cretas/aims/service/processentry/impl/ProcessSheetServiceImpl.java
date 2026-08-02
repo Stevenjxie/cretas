@@ -1083,6 +1083,7 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
         if (outputs.isEmpty()) {
             throw new BusinessException(409, "Workflow 工序缺少产出端口，不能报工")
                     .withCode("PROCESS_SHEET_WORKFLOW_OUTPUT_PORT_MISSING")
+                    .withHint("请修复并重新发布 Workflow 后创建新批次")
                     .withSeverity("BLOCKING");
         }
         if (workflowPortId == null || workflowPortId.isBlank()) {
@@ -1099,6 +1100,7 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
                 .orElseThrow(() -> new BusinessException(409,
                         "请求包含不属于该 Workflow 工序的产出端口")
                         .withCode("PROCESS_SHEET_WORKFLOW_OUTPUT_PORT_NOT_FOUND")
+                    .withHint("请刷新逐道录入页面后重新填写")
                         .withSeverity("BLOCKING"));
     }
 
@@ -1160,6 +1162,7 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
             log.error("Workflow 正式报工选择组配置读取失败: factory={}, plan={}", factoryId, planId, e);
             throw new BusinessException(409, "Workflow 运行时配置读取失败，不能校验正式报工端口选择")
                     .withCode("PROCESS_SHEET_WORKFLOW_CONFIG_UNAVAILABLE")
+                    .withHint("请刷新后重试；若仍失败，请重新物化该生产批次的 Workflow")
                     .withSeverity("BLOCKING");
         }
         if (config == null) {
@@ -1174,6 +1177,7 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
         if (descriptor == null) {
             throw new BusinessException(409, "请求工序不在该批次锁定的 Workflow 中")
                     .withCode("PROCESS_SHEET_WORKFLOW_PROCESS_NOT_FOUND")
+                    .withHint("请刷新逐道录入页面，按 Workflow 中的工序报工")
                     .withSeverity("BLOCKING");
         }
 
@@ -1185,11 +1189,13 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
             if (output.getWorkflowPortId() == null || output.getWorkflowPortId().isBlank()) {
                 throw new BusinessException(409, "Workflow 产出端口缺少稳定标识")
                         .withCode("PROCESS_SHEET_WORKFLOW_OUTPUT_PORT_ID_MISSING")
+                    .withHint("请修复并重新发布 Workflow 后创建新批次")
                         .withSeverity("BLOCKING");
             }
             if (outputsById.put(output.getWorkflowPortId(), output) != null) {
                 throw new BusinessException(409, "Workflow 存在重复的产出端口标识")
                         .withCode("PROCESS_SHEET_WORKFLOW_OUTPUT_PORT_DUPLICATE")
+                    .withHint("请修复并重新发布 Workflow 后创建新批次")
                         .withSeverity("BLOCKING");
             }
         }
@@ -1205,16 +1211,19 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
                 if (portId == null || portId.isBlank()) {
                     throw new BusinessException(409, "多产出报工必须指定 Workflow 产出端口")
                             .withCode("PROCESS_SHEET_WORKFLOW_OUTPUT_PORT_REQUIRED")
+                    .withHint("请刷新逐道录入页面后重新填写")
                             .withSeverity("BLOCKING");
                 }
                 if (!outputsById.containsKey(portId)) {
                     throw new BusinessException(409, "请求包含不属于该 Workflow 工序的产出端口")
                             .withCode("PROCESS_SHEET_WORKFLOW_OUTPUT_PORT_NOT_FOUND")
+                    .withHint("请刷新逐道录入页面后重新填写")
                             .withSeverity("BLOCKING");
                 }
                 if (!selectedOutputs.add(portId)) {
                     throw new BusinessException(409, "同一 Workflow 产出端口不能重复报工")
                             .withCode("PROCESS_SHEET_WORKFLOW_OUTPUT_PORT_REPEATED")
+                    .withHint("请合并重复的产出行")
                             .withSeverity("BLOCKING");
                 }
             }

@@ -186,6 +186,7 @@ public class ProductionStockAllocationServiceImpl implements ProductionStockAllo
         if (workshopId == null || workshopId.isBlank()) {
             throw new BusinessException(500, "未配置生产库，不能锁定投料批次")
                     .withCode("WORKSHOP_WAREHOUSE_NOT_CONFIGURED")
+                    .withHint("请先配置生产库后再正式提交")
                     .withSeverity("BLOCKING");
         }
 
@@ -321,6 +322,7 @@ public class ProductionStockAllocationServiceImpl implements ProductionStockAllo
         if (workshopId == null || workshopId.isBlank()) {
             throw new BusinessException(500, "未配置生产库，不能自动分摊包材/调料批次")
                     .withCode("WORKSHOP_WAREHOUSE_NOT_CONFIGURED")
+                    .withHint("请先配置生产库后再正式提交")
                     .withSeverity("BLOCKING");
         }
 

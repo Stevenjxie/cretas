@@ -23,7 +23,7 @@ import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
-import java.util.Collections;
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -178,11 +178,23 @@ public class SalesOrderShortageReportListener {
             entity.setSalesOrderId(salesOrderId);
             entity.setAnalysisStatus("FAILED");
             entity.setAnalysisSummary("分析失败: " + (reason != null ? reason : "(unknown)"));
-            entity.setTotalRequired(Collections.emptyList());
-            entity.setAvailable(Collections.emptyList());
-            entity.setShortage(Collections.emptyList());
-            entity.setProcurementSuggestions(Collections.emptyList());
-            entity.setProductionSuggestions(Collections.emptyList());
+            // 2026-08-01 incident 关联修复 (防御性 —— prod 76/77 次 "FAILED placeholder also
+            // failed" 的确切逐一根因未全部下钻, 已确认至少部分是 bug 2: LineItemMatch
+            // .isFullySatisfied() 计算 getter 的 Jackson 反序列化失败, 而非本处的
+            // Collections.emptyList(); 该 bug 修复点在 com.cretas.aims.dto.orchestration
+            // .LineItemMatch, 不在本次允许改动范围, 未修, 见类头 Javadoc): 这 5 个字段是
+            // SalesOrderShortageReport 的 @Type(JsonBinaryType.class) JSONB 列。Hibernate
+            // 每次 save() 前 dirty-check 用 hypersistence-utils 的 deepCopy(clone) 会按"运行
+            // 时 class"把值反序列化回原类型 —— Collections.emptyList() 的运行时类是 JDK 包
+            // 私有单例 java.util.Collections$EmptyList, 理论上 Jackson 造不出这个类的实例;
+            // 作为已知风险点一并修掉, 换成 new ArrayList<>()(公开可反序列化类), 语义(空列表)
+            // 不变, 没有下行风险 —— 但注意: 仅这一处修复不足以让 FAILED 占位行在所有场景下
+            // 都落库, bug 2 仍会挡住大多数(见类头 Javadoc "已知限制")。
+            entity.setTotalRequired(new ArrayList<>());
+            entity.setAvailable(new ArrayList<>());
+            entity.setShortage(new ArrayList<>());
+            entity.setProcurementSuggestions(new ArrayList<>());
+            entity.setProductionSuggestions(new ArrayList<>());
             reportRepository.save(entity);
         } catch (Exception inner) {
             log.error("[ShortageReport] FAILED placeholder also failed: SO={}", salesOrderId, inner);

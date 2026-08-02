@@ -53,7 +53,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  */
 class BlockingErrorsCarryActionHintTest {
 
-    static final int KNOWN_DEBT_SIZE = 27;
+    static final int KNOWN_DEBT_SIZE = 18;
 
     /**
      * 只扫<b>报工 / 生产</b>链路 —— BLOCKING 在这里的字面意思就是"人停在机器前干不下去了"。
@@ -83,25 +83,16 @@ class BlockingErrorsCarryActionHintTest {
             "PINNED_BOM_NOT_FOUND",
             "PROCESS_SHEET_INPUT_QUANTITY_INVALID",
             "PROCESS_SHEET_PLAN_UNIT_MISMATCH",
-            "PROCESS_SHEET_WORKFLOW_CONFIG_UNAVAILABLE",
             "PROCESS_SHEET_WORKFLOW_INPUT_PORT_ID_MISSING",
             "PROCESS_SHEET_WORKFLOW_INPUT_PORT_NOT_FOUND",
             "PROCESS_SHEET_WORKFLOW_MULTI_OUTPUT_REQUIRED",
-            "PROCESS_SHEET_WORKFLOW_OUTPUT_PORT_DUPLICATE",
-            "PROCESS_SHEET_WORKFLOW_OUTPUT_PORT_ID_MISSING",
-            "PROCESS_SHEET_WORKFLOW_OUTPUT_PORT_MISSING",
-            "PROCESS_SHEET_WORKFLOW_OUTPUT_PORT_NOT_FOUND",
-            "PROCESS_SHEET_WORKFLOW_OUTPUT_PORT_REPEATED",
-            "PROCESS_SHEET_WORKFLOW_OUTPUT_PORT_REQUIRED",
-            "PROCESS_SHEET_WORKFLOW_PROCESS_NOT_FOUND",
             "PROCESS_SHEET_WORKFLOW_SELECTION_GROUP_SNAPSHOT_INVALID",
             "PRODUCTION_INPUT_BATCH_MATERIAL_MISMATCH",
             "PRODUCTION_INPUT_BATCH_NOT_FOUND",
             "PRODUCTION_INPUT_BATCH_UNIT_REQUIRED",
             "PRODUCTION_PLAN_NOT_FOUND",
             "PRODUCTION_PLAN_OWNERSHIP_CONTEXT_REQUIRED",
-            "SEASONING_REQUIREMENT_INVALID",
-            "WORKSHOP_WAREHOUSE_NOT_CONFIGURED");
+            "SEASONING_REQUIREMENT_INVALID");
 
     private record Scan(Set<String> hintless, int blockingSeen) {
     }

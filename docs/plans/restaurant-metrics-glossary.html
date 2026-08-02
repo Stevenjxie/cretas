@@ -441,7 +441,7 @@ code{background:#f1f5f9;padding:2px 5px;border-radius:3px;font-size:13px}
 <p class="field-label">计算口径</p>
 <div class="formula">食材率 = (期初食材库存 + 本期采购 − 期末食材库存) ÷ 营业收入 × 100%
        = 本期食材消耗成本 ÷ 营业收入 × 100%</div>
-<p>系统使用"销售订单 × BOM 配方 × 当期食材采购价"的精确模型 + 月底盘存修正。</p>
+<p>期间总食材成本以“期初库存 + 本期采购 − 期末库存”倒算为可信第一口径；销售订单 × 配方 × 采购价只用于菜品理论参考和偏差诊断，不能称为精确真实成本模型。</p>
 <p class="field-label">解读</p>
 <p><strong>偏高 (超红线 3%+)</strong>: 三大原因 — ① 采购价上涨没及时调菜单价 ② 跑冒滴漏(损耗、偷盗、报废过多) ③ BOM 用量超标(厨房手大);<strong>偏低 (低于红线 3%-)</strong>: 警惕"减量减质",可能短期省钱但长期失客;<strong>波动 &gt; 5% 月环比</strong>: 库存盘点出问题或定价错乱。</p>
 <p class="field-label">怎么用</p>
@@ -659,7 +659,7 @@ dominant_factor = 谁绝对值大谁是主因</div>
 单菜毛利率 = (售价 − 食材成本) ÷ 售价 × 100%
 均店毛利率 = (总营收 − 总食材成本) ÷ 总营收 × 100%</div>
 <p>注: <strong>不</strong>扣人力 / 房租等运营成本,是"产品毛利"不是"经营毛利"。</p>
-<p>口径提醒: 中餐场景<strong>单菜毛利率是理论参考值</strong>——用料灵活、成本 BOM 卡现实中拉不齐,精确到每道菜算不出来。可信口径是<strong>期间总毛利率</strong>(食材成本 = 期初库存 + 本期采购 − 期末库存 倒算),只依赖进货与盘点数据。单菜/四象限的毛利轴用于菜品间相对比较,不作为精确财务数字。</p>
+<p>口径提醒: 中餐场景<strong>单菜毛利率是理论参考值</strong>——用料灵活、成本 BOM 卡现实中拉不齐,精确到每道菜算不出来。当前单菜成本只汇总配方中已登记食材，未登记辅料、调味料和损耗不猜算；答案显示已登记食材数，不超过 3 项时提示覆盖不足，此时毛利更接近上限参考。可信口径是<strong>期间总毛利率</strong>(食材成本 = 期初库存 + 本期采购 − 期末库存 倒算),只依赖进货与盘点数据。单菜/四象限的毛利轴用于菜品间相对比较,不作为精确财务数字。</p>
 <p class="field-label">解读</p>
 <p><strong>稳定向上</strong>: 菜品定价或采购控制做得好;<strong>稳定向下</strong>: 通胀压力或菜单结构在恶化(高毛利菜被低毛利菜替代);<strong>大幅波动</strong>: 多半是大促 / 新品上线影响,要单独看。</p>
 <p class="field-label">怎么用</p>
@@ -1516,6 +1516,7 @@ EBITDA 率 = EBITDA ÷ 营业收入 × 100%</div>
 <h3>排班结构分析</h3>
 <p class="field-label">含义</p>
 <p>展示员工排班结构: 总人数 / 全职 / 兼职 / 全职占比 / 排班建议。识别"人员配置是否匹配业务节奏"。</p>
+<p><strong>当前 AI 范围：</strong>排班建议 resolver 只读取全连锁分时段人力配置，不接收门店和时间参数；不追问门店/日期，也不显示范围按钮。建议不能宣称为按某店实时客流自动计算，导览助手不替用户分析真实经营数据。</p>
 <p class="field-label">计算口径</p>
 <p>从 ShiftAnalysisCard 取数: total_headcount / full_time_count / part_time_count / full_time_ratio。系统按排班表 + HR 主数据聚合。benchmark 字段提供建议占比对照。</p>
 <p class="field-label">解读</p>
@@ -2476,6 +2477,7 @@ Y 轴 (毛利率): (售价 − 食材成本) ÷ 售价 × 100%
 <tr><td>“损耗金额 / 损耗成本 / 损失多少钱最高”</td><td>按食材 <code>wastage_cost</code> 排序，并在每行同时展示损耗数量；普通“损耗最多”默认按 <code>wastage_qty</code>。</td><td>金额总额存在但食材金额轴尚未生成时，必须明确说不能给金额排名，不能拿数量顺序冒充。</td></tr>
 <tr><td>“采购 / 领料花了多少钱”</td><td>走后厨领料成本 <code>requisition_cost</code>，按当前已支持范围聚合。</td><td>不能误路由到配方成本、菜品成本或理论单菜毛利。</td></tr>
 <tr><td>“盘点亏了多少 / 盘亏多少钱”</td><td>走盘点差异 <code>stocktaking_shortage</code>，优先按同一时间窗的 <code>shortage_cost</code> 回答；数量 <code>shortage_qty</code> 只作分物料明细。</td><td>不能把 kg、L 等不同单位裸相加成总盘亏量，也不能误路由成毛利亏损或损耗报废。</td></tr>
+<tr><td>盘点总额 / Top N / 混合日期查询</td><td>只统计状态为 <code>COMPLETED</code> 的盘点记录。</td><td>草稿、进行中和取消记录不进入经营结论。</td></tr>
 <tr><td>“堂食 / 外卖占比”</td><td>同时识别中文渠道值与 POS 的 <code>order_type</code> 代码，再按订单事实聚合。</td><td>不能因源值是英文代码而返回空占比。</td></tr>
 </table>
 <p class="field-label">解读</p>

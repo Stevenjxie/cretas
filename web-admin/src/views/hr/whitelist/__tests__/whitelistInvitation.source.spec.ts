@@ -19,12 +19,19 @@ describe('factory account invitation UI contract', () => {
     expect(login).toContain('placeholder="请输入手机号或用户名"')
   })
 
+  // 2026-08-02: 角色清单从 `[{value, label}]` 改成纯码数组 INVITABLE_ROLE_CODES,
+  // label 一律取权威表 enumLabel(原来硬抄的 11 条里漂了 8 条, 见
+  // whitelistRoleLabels.source.spec.ts)。本用例守的两件事没变 ——
+  // ①用服务端角色码 ②工厂邀请里不许出现平台角色 —— 只是断言要跟着写法走。
   it('uses server role codes and never exposes a platform role in factory invitations', () => {
-    expect(page).toContain("value: 'quality_inspector'")
-    expect(page).toContain("value: 'yield_operator'")
-    expect(page).toContain("value: 'factory_super_admin'")
-    expect(page).not.toContain("value: 'platform_admin'")
-    expect(page).not.toContain("value: 'production_worker'")
+    const codes = page.match(/const INVITABLE_ROLE_CODES = \[([\s\S]*?)\] as const;/)?.[1] ?? ''
+    expect(codes, '没抓到可邀请角色码清单, 断言无效').not.toBe('')
+    expect(codes).toContain("'quality_inspector'")
+    expect(codes).toContain("'yield_operator'")
+    expect(codes).toContain("'factory_super_admin'")
+    // ⛔ 平台角色绝不能出现在工厂邀请里(本用例的核心), 整页扫而不只扫清单
+    expect(page).not.toContain("'platform_admin'")
+    expect(page).not.toContain("'production_worker'")
   })
 
   it('shows account creation state and protects consumed invitations from edits', () => {

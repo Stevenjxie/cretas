@@ -68,6 +68,13 @@ public class SupplyChainOrchestrator {
     private final ProductTypeRepository productTypeRepository;
     private final SalesOrderRepository salesOrderRepository;
 
+    /**
+     * doomed-tx 隔离 (2026-08-01 incident) — 见 {@link #expandBomAndCheckMaterialIsolated}.
+     * 不用 {@code @Transactional(REQUIRES_NEW)} 私有方法(同类 self-invocation 绕过 AOP 代理不生效),
+     * 改用 {@link org.springframework.transaction.support.TransactionTemplate} 编程式开子事务。
+     */
+    private final org.springframework.transaction.PlatformTransactionManager transactionManager;
+
     /** D1 双仓流转 (2026-05-10 spec, PR #309 A1=A) — production output 默认 WH-WKS. */
     @org.springframework.beans.factory.annotation.Autowired
     private com.cretas.aims.service.factory.WarehouseResolver warehouseResolver;
@@ -339,6 +346,17 @@ public class SupplyChainOrchestrator {
         plan.setPlanNumber(generatePlanNumber(factoryId));
         plan.setProductTypeId(productTypeId);
         plan.setPlannedQuantity(shortfallQuantity);
+        // 2026-08-01 incident 关联修复: production_plans.planned_unit 自 V20261028_64
+        // (fail-closed) 起 NOT NULL 且无 DB 默认值 —— 之前这里从不设置该字段, 只是因为
+        // doomed-tx bug(见 expandBomAndCheckMaterialIsolated 文档)让整个联动事务从未真正
+        // commit 过, 所以这个 NOT NULL 违例从未在 prod 暴露过。单独隔离 doomed-tx 后, 若不
+        // 补上这行, PP 仍会在 commit 时因 planned_unit 为 null 而失败(只是换一种失败方式,
+        // 症状不变: 日志说创建了, 库里查无此行)。取 ProductType.unit(NOT NULL, 权威单位),
+        // 查不到时兜底 kg —— 与 V20261027_53 迁移自身的历史数据回填口径一致。
+        plan.setPlannedUnit(productTypeRepository.findById(productTypeId)
+                .map(com.cretas.aims.entity.ProductType::getUnit)
+                .filter(u -> u != null && !u.isBlank())
+                .orElse("kg"));
         plan.setSourceType(PlanSourceType.CUSTOMER_ORDER);
         plan.setSourceOrderId(salesOrderId);
         plan.setStatus(ProductionPlanStatus.PENDING);
@@ -371,11 +389,14 @@ public class SupplyChainOrchestrator {
         }
 
         // ④ BOM展开 + ⑤ 原辅料检查
+        // doomed-tx 修复 (2026-08-01 incident, 见 expandBomAndCheckMaterialIsolated 文档):
+        // expandBOM/checkMaterialAvailability 在独立 REQUIRES_NEW 子事务里跑, 产品无已激活
+        // BOM 抛异常时只回滚子事务, 不会把本方法所在的联动事务标记 rollback-only —— 上面
+        // 已 save 的 PP(saved) + BusinessLink 才能安全提交(2026-08-01 前: 日志打印"自动创建
+        // 生产计划"但库里查无此行, 就是子事务隔离缺失导致联动事务被牵连回滚)。
         try {
-            List<MaterialRequirement> requirements = bomExpansionService.expandBOM(
+            MaterialCheckResult materialResult = expandBomAndCheckMaterialIsolated(
                     factoryId, productTypeId, shortfallQuantity);
-            MaterialCheckResult materialResult = bomExpansionService.checkMaterialAvailability(
-                    factoryId, requirements);
 
             if (materialResult.isAllSatisfied()) {
                 saved.setIsFullyMatched(true);
@@ -391,6 +412,47 @@ public class SupplyChainOrchestrator {
         } catch (Exception e) {
             log.error("BOM展开/采购建议生成失败(不影响PP创建): PP={}", saved.getPlanNumber(), e);
         }
+    }
+
+    /**
+     * doomed-tx 隔离 (2026-08-01 incident): 在独立 {@code REQUIRES_NEW} 子事务里跑
+     * {@code bomExpansionService.expandBOM} + {@code checkMaterialAvailability}。
+     *
+     * <p><b>根因</b>(2026-08-01 prod 全链路日志追出, 非猜测): {@code BomExpansionService
+     * .expandBOM} 自身 {@code @Transactional(readOnly=true)}, propagation 默认 REQUIRED —— 旧代码
+     * 直接调用时会 JOIN 本 orchestrator 所在的 {@code onSalesOrderFinanceApproved}
+     * {@code @Transactional(REQUIRES_NEW)} 联动事务。产品无已激活 BOM 配方时 expandBOM 抛
+     * {@code BusinessException}("产品尚无已激活的新版 BOM 配方"), Spring tx 拦截器在 expandBOM
+     * 自己的 AOP 边界上就把"共享事务"标记 rollback-only —— 即使调用方 {@code
+     * createProductionPlanFromSO} 的 try/catch 把异常吞掉、正常返回, 联动事务 commit 时仍会
+     * 抛 {@code UnexpectedRollbackException}, 把本次联动事务里已经 {@code save} 的
+     * ProductionPlan + BusinessLink 一并回滚 —— prod 日志显示"自动创建生产计划: PP=..."却查无
+     * 此行, 正是这个机制(与 {@link #onMaterialReceived}/{@link #onBatchCompleted} 2026-06-12
+     * "doomed-tx 第4次复发" 同一套 Spring AOP 语义, 这次触发点在 REQUIRES_NEW 内部嵌套调用,
+     * 而不是 REQUIRES_NEW 外层的发布方事务)。
+     *
+     * <p>不能用同类里加 {@code @Transactional(REQUIRES_NEW)} 的私有方法 —— self-invocation
+     * 绕过 Spring AOP 代理, 注解不生效。改用 {@link TransactionTemplate} 编程式在本方法体内
+     * 显式开一个独立物理事务: 它抛异常时只标记/回滚自己, 调用方(本类的联动事务)不受牵连。
+     *
+     * <p><b>刻意保持隔离范围小</b>: 只包住"纯读+计算"的 expandBOM/checkMaterialAvailability。
+     * 后续对 {@code saved}(本次联动事务里刚 save、尚未提交的 PP 实体)的写入
+     * (isFullyMatched / generateSuggestions 关联 planId) 仍留在调用方的联动事务里 ——
+     * 若也塞进这个独立子事务, 子事务是另一条物理连接, 在 READ COMMITTED 隔离级别下看不到
+     * 联动事务里还未提交的 PP 行, 对 {@code saved} 的写入/FK 关联会静默落空或违反外键约束。
+     */
+    private MaterialCheckResult expandBomAndCheckMaterialIsolated(
+            String factoryId, String productTypeId, BigDecimal shortfallQuantity) {
+        org.springframework.transaction.support.TransactionTemplate isolated =
+                new org.springframework.transaction.support.TransactionTemplate(transactionManager);
+        isolated.setPropagationBehavior(
+                org.springframework.transaction.TransactionDefinition.PROPAGATION_REQUIRES_NEW);
+        isolated.setName("SupplyChainOrchestrator.expandBomAndCheckMaterialIsolated");
+        return isolated.execute(status -> {
+            List<MaterialRequirement> requirements = bomExpansionService.expandBOM(
+                    factoryId, productTypeId, shortfallQuantity);
+            return bomExpansionService.checkMaterialAvailability(factoryId, requirements);
+        });
     }
 
     /**
