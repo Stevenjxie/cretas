@@ -258,8 +258,28 @@ def test_thinking_only_model_gets_no_enable_thinking():
     assert "enable_thinking" not in p
 
 
-def test_non_aliyun_provider_gets_no_enable_thinking():
-    p = llm_router._apply_slot_params(SLOT.CHAT, "tencent", "qwen3.5-flash", {"messages": []})
+def test_tokenhub_qwen_gets_its_documented_enable_thinking_switch():
+    p = llm_router._apply_slot_params(
+        SLOT.CHAT, "tencent", "qwen3.5-plus", {"messages": []},
+    )
+    assert p["enable_thinking"] is False
+    assert "thinking" not in p
+
+
+@pytest.mark.parametrize("model", ["deepseek-v4-pro-202606", "glm-5.2", "minimax-m3"])
+def test_tokenhub_common_models_get_the_documented_thinking_object(model):
+    p = llm_router._apply_slot_params(
+        SLOT.REVIEW, "tencent", model, {"messages": []},
+    )
+    assert p["thinking"] == {"type": "disabled"}
+    assert "enable_thinking" not in p
+
+
+def test_tokenhub_reasoning_slot_does_not_disable_thinking():
+    p = llm_router._apply_slot_params(
+        SLOT.REASONING, "tencent", "deepseek-v4-pro-202606", {"messages": []},
+    )
+    assert "thinking" not in p
     assert "enable_thinking" not in p
 
 
@@ -399,8 +419,8 @@ async def test_call_chain_falls_through_403_to_next_and_only_calls_safe_models(m
 @pytest.mark.asyncio
 async def test_call_chain_persists_ark_set_limit_and_falls_through(monkeypatch):
     _patch_keys(monkeypatch)
-    ark_model = "doubao-seed-2-0-mini-260428"
-    tencent_model = "deepseek-v3.2"
+    ark_model = "doubao-seed-2-1-turbo-260628"
+    tencent_model = "deepseek-v4-pro-202606"
     monkeypatch.setitem(
         llm_router.SLOT_MODELS,
         SLOT.CHAT,
@@ -492,11 +512,19 @@ _TOKENHUB_EXHAUSTED = {
     ("tencent", "deepseek-v4-flash"),
 }
 
-# 5/5 on the real T3 prompt at production max_tokens=500.
+# 2026-08-02: 5/5 on the real T3 prompt at production max_tokens=500 after
+# applying each model family's documented thinking-off field.
 _TOKENHUB_VERIFIED = {
+    ("tencent", "deepseek-v4-pro-202606"),
+    ("tencent", "glm-5.2"),
+    ("tencent", "qwen3.5-plus"),
+    ("tencent", "minimax-m3"),
+}
+
+_TOKENHUB_STALE_GENERAL_ROUTES = {
     ("tencent", "hy-mt2-pro"),
     ("tencent", "deepseek-v3.1-terminus"),
-    ("tencent", "qwen3.5-plus"),
+    ("tencent", "deepseek-v3.2"),
 }
 
 
@@ -509,6 +537,16 @@ def test_no_chain_calls_a_zero_balance_tokenhub_model():
         if (account, model) in _TOKENHUB_EXHAUSTED
     ]
     assert not offenders, f"zero-balance TokenHub models still in chains: {offenders}"
+
+
+def test_no_chain_calls_a_stale_or_translation_only_tokenhub_model():
+    offenders = [
+        (slot.value, account, model)
+        for slot, chain in llm_router.SLOT_MODELS.items()
+        for account, model in chain
+        if (account, model) in _TOKENHUB_STALE_GENERAL_ROUTES
+    ]
+    assert not offenders, f"stale TokenHub general routes remain: {offenders}"
 
 
 def test_verified_tokenhub_models_are_registered_and_in_the_text_tail():
@@ -730,9 +768,16 @@ def test_ark_models_carry_a_dated_callable_id():
 
 # ── ark: measured-viable set, thinking translation, provider diversity ──────
 
-# 2026-07-30 measured: content 5/5 on the real T3 prompt AND every call inside the
-# 5s-per-provider budget, with thinking disabled.
+# 2026-08-02 measured with the production key and thinking disabled: both models
+# returned the correct contract for all five real restaurant T3 prompt shapes.
 _ARK_VIABLE = {
+    "doubao-seed-2-1-turbo-260628",
+    "doubao-seed-2-0-lite-260428",
+}
+
+# The former chain is now paused per model by SetLimitExceeded. Keeping any of these
+# reachable would reintroduce a deterministic 429 before every healthy fallback.
+_ARK_PAUSED = {
     "doubao-seed-2-0-mini-260428",
     "deepseek-v4-flash-260425",
     "doubao-seed-2-1-pro-260628",
@@ -740,12 +785,9 @@ _ARK_VIABLE = {
     "deepseek-v4-pro-260425",
 }
 
-# Reachable and content-correct but OVER the per-provider budget (5.1 / 5.6 / 6.1s),
-# so a correct answer arrives after the caller has already given up.
-_ARK_TOO_SLOW = {
+# Callable, but its AOV plan returned intent=null/confidence=0.3 (4/5 overall).
+_ARK_CONTRACT_REJECTED = {
     "doubao-seed-2-0-pro-260215",
-    "doubao-seed-2-1-turbo-260628",
-    "doubao-seed-2-0-lite-260428",
 }
 
 # In GET /api/v3/models with no Shutdown status, yet 404 on call: the endpoint lists
@@ -768,13 +810,14 @@ def test_ark_registry_is_exactly_the_measured_viable_set():
     )
 
 
-def test_ark_models_over_the_latency_budget_are_not_reachable():
-    """Content correctness is not sufficient: T3 allows 5s per provider, so a model
-    answering at 5.6s only burns the cascade budget for the ones behind it."""
+def test_ark_paused_or_contract_rejected_models_are_not_reachable():
     for slot, chain in llm_router.SLOT_MODELS.items():
         for account, model in chain:
-            assert not (account == "ark" and model in _ARK_TOO_SLOW), (
-                f"{slot.value}: ark/{model} measured over the per-provider budget"
+            assert not (
+                account == "ark"
+                and model in (_ARK_PAUSED | _ARK_CONTRACT_REJECTED)
+            ), (
+                f"{slot.value}: ark/{model} is paused or breaks the T3 contract"
             )
 
 
@@ -804,11 +847,12 @@ def test_ark_keeps_thinking_on_a_slot_that_wants_reasoning():
     assert "thinking" not in out
 
 
-def test_thinking_switch_is_ark_scoped():
+def test_tokenhub_thinking_switch_is_model_family_specific():
     out = llm_router._apply_slot_params(
-        SLOT.REVIEW, "tencent", "hy-mt2-pro", {"model": "hy-mt2-pro"},
+        SLOT.REVIEW, "tencent", "qwen3.5-plus", {"model": "qwen3.5-plus"},
     )
     assert "thinking" not in out
+    assert out["enable_thinking"] is False
 
 
 def test_non_aliyun_floor_interleaves_two_independent_providers():
@@ -826,19 +870,15 @@ def test_non_aliyun_floor_interleaves_two_independent_providers():
     )
 
 
-def test_floor_is_ordered_fastest_first():
-    """Pins the ordering decision: the two sub-2s entries lead, because the caller's
-    total cascade budget is 12s and a slow head starves everything behind it."""
+def test_floor_starts_with_current_contract_valid_independent_models():
+    """Pins the measured production floor and provider interleave."""
     floor = [
         (a, m) for (a, m) in llm_router._TEXT_TAIL
         if a not in llm_router._ALIYUN_ACCOUNTS
     ]
-    assert floor[0] == ("tencent", "hy-mt2-pro"), floor[0]
-    assert floor[1] == ("ark", "doubao-seed-2-0-mini-260428"), floor[1]
-    # The two known-over-budget entries must be last among the non-Aliyun block.
-    slow = {("tencent", "qwen3.5-plus"), ("tencent", "minimax-m2.7")}
-    positions = [i for i, pair in enumerate(floor) if pair in slow]
-    fast_positions = [i for i, pair in enumerate(floor) if pair not in slow]
-    assert min(positions) > max(
-        p for p in fast_positions if floor[p][0] in ("tencent", "ark")
-    ), f"over-budget entries are not last: {floor}"
+    assert floor[:4] == [
+        ("tencent", "deepseek-v4-pro-202606"),
+        ("ark", "doubao-seed-2-1-turbo-260628"),
+        ("tencent", "glm-5.2"),
+        ("ark", "doubao-seed-2-0-lite-260428"),
+    ]

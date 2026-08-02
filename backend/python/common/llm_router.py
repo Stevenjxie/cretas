@@ -212,11 +212,14 @@ _SAFE_MODELS: Dict[Tuple[str, str], Optional[datetime.date]] = {
     ("tencent", "glm-5.1"): None,             # 控制台: 已停止, 余 0 / 500k
     ("tencent", "qwen3.5-flash"): None,       # 控制台: 已停止, 余 0 / 1M
     #
-    # ✅ 2026-07-30 实测可用(餐饮 T3 真实 prompt, 5 个不同问句全过,
-    #    生产原始 payload max_tokens=500 —— 即无需放宽任何参数):
-    ("tencent", "hy-mt2-pro"): None,               # 余 1M, 1.3-1.5s, 最快最稳
-    ("tencent", "deepseek-v3.1-terminus"): None,   # 余 500k, 2.2-2.6s, RPM 500
-    ("tencent", "qwen3.5-plus"): None,             # 余 998k, 3.5-5.7s
+    # ✅ 2026-08-02 按腾讯官方的逐模型 thinking 参数重测餐饮 T3 五种契约:
+    # DeepSeek / GLM / MiniMax-M3 用 thinking.disabled，Qwen 用
+    # enable_thinking=false；四者均 5/5。之前没有翻译这些参数，导致 Qwen 20s
+    # 超时、其余模型把 500 token 烧在 reasoning_content 后返回空 content。
+    ("tencent", "deepseek-v4-pro-202606"): None,   # 5/5, 2.05-2.63s
+    ("tencent", "glm-5.2"): None,                  # 5/5, 2.54-3.53s
+    ("tencent", "qwen3.5-plus"): None,             # 5/5, 3.08-4.09s
+    ("tencent", "minimax-m3"): None,               # 5/5, 1.30-5.58s
     #
     # ⚠️ 只在放宽 max_tokens 后可用: TokenHub 忽略 enable_thinking=false, 500 token
     # 全烧在 reasoning_content 上, content 返回空。见 _TOKENHUB_MIN_MAX_TOKENS。
@@ -225,16 +228,10 @@ _SAFE_MODELS: Dict[Tuple[str, str], Optional[datetime.date]] = {
     # ⚠️ 需要 temperature=1(TokenHub 的按模型采样约束), 见 _TOKENHUB_FORCED_TEMPERATURE。
     ("tencent", "kimi-k2.6"): None,           # 余 393k
     #
-    # 控制台 ID 是 deepseek-v4-pro-202606(余 1M); 旧代码写的 `deepseek-v4-pro` 不存在,
-    # 所以它的 402 一直被误读成"额度没领"。⚠️ 实测在餐饮 T3 prompt 上两档 max_tokens
-    # 都不可用(500 截断 / 1600 转 thinking 后 content 空), 故只留给允许 thinking 的
-    # REASONING 槽, 不进 REVIEW。
-    ("tencent", "deepseek-v4-pro-202606"): None,
-    # TokenHub 的 deepseek-v3.2 与 aliyun 同名模型**行为不同**(aliyun_c 的 confidence
-    # 恒 -1.0, TokenHub 的给 0.98) —— 同名不同服务不能互推。
-    # ⚠️ /v1/models 报 status="pre-offline"(控制台也标"模型待下线") —— 现在能用但
-    # **不可依赖**, 已排在已验证模型之后, 下线后自动 fallback。
-    ("tencent", "deepseek-v3.2"): None,       # 余 486k
+    # ⛔ 2026-08-02 生产实测不得进 chain:
+    #   hy-mt2-pro              → 401008，且官方定位是翻译模型，不是通用语义模型
+    #   deepseek-v3.1-terminus  → 已从 /v1/models 消失并返回 401008
+    #   deepseek-v3.2           → pre-offline 且当前服务返回 401008
     # ── zhipu (uUgu) — model-specific GLM pool, 用完即停 safe (None).
     ("zhipu", "glm-4.5-air"): None,
     ("zhipu", "glm-4.6v"): None,  # VL
@@ -243,19 +240,16 @@ _SAFE_MODELS: Dict[Tuple[str, str], Optional[datetime.date]] = {
     # Steve 2026-07-30 确认开启; 关掉的话这一段必须全部退出 chain。详见
     # _provider_config 里 "ark" 的注释。
     #
-    # 只登记 2026-07-30 实测**两条判据都过**的五个: 餐饮 T3 真实 prompt 5 个问句
-    # 全对(conf>=0.6) **且** 每次调用都在 T3 的 5s/provider 预算内。
-    # 🔴 两条判据缺一不可: 开着 thinking 时这批模型内容照样 5/5, 但延迟 8-66s
-    # —— 对 T3 等于超时。关掉 thinking(见 _ARK_DISABLE_THINKING)后掉到 1.2-5s。
-    ("ark", "doubao-seed-2-0-mini-260428"): None,   # 1.2/1.7/2.1s  最快
-    ("ark", "deepseek-v4-flash-260425"): None,      # 2.1/2.4/2.5s
-    ("ark", "doubao-seed-2-1-pro-260628"): None,    # 2.6/2.8/2.8s
-    ("ark", "glm-5-2-260617"): None,                # 3.0/3.5/4.8s
-    ("ark", "deepseek-v4-pro-260425"): None,        # 3.8/4.7/4.9s  临界但够
+    # 2026-08-02 旧五个配置项均已被逐模型 SetLimitExceeded 暂停；账号、密钥和
+    # /models 正常。改登记同一安心体验账号里仍可调用、且真实餐饮 T3 5/5 的两个
+    # dated endpoint。Turbo 3.27-4.87s；Lite 2.66-5.20s，仅放更深 fallback。
+    ("ark", "doubao-seed-2-1-turbo-260628"): None,
+    ("ark", "doubao-seed-2-0-lite-260428"): None,
     # ⛔ 实测**不登记**(别再加回来):
-    #   doubao-seed-2-0-pro-260215    5/5 但 max 5.1s —— 超 5s 预算
-    #   doubao-seed-2-1-turbo-260628  5/5 但 max 5.6s
-    #   doubao-seed-2-0-lite-260428   4/5 且 max 6.1s —— 内容和延迟双不合格
+    #   doubao-seed-2-0-pro-260215    AOV intent=null/confidence=0.3，仅 4/5
+    #   doubao-seed-2-0-mini-260428 / deepseek-v4-flash-260425 /
+    #   doubao-seed-2-1-pro-260628 / glm-5-2-260617 /
+    #   deepseek-v4-pro-260425        → 429 SetLimitExceeded，模型服务已暂停
     #   glm-4-5-air / qwen3-32b / qwen3-14b / qwen2-5-72b / doubao-smart-router
     #     → 全部 404 InvalidEndpointOrModel.NotFound。它们**在 /api/v3/models
     #       列表里且没有 status=Shutdown**, 但本账号没开通 —— 那个接口列的是
@@ -774,45 +768,22 @@ _TEXT_TAIL: List[Tuple[str, str]] = [
     ("aliyun_c", "deepseek-v3.1"), ("aliyun_c", "qwen3.7-max-2026-06-08"),
     ("aliyun_c", "glm-5.2"),
     # ── non-DashScope floor (independent of aliyun expiries) ──────────────
-    # 2026-07-30 晚重测(控制台 ID + 餐饮 T3 真实 prompt + 5 个不同问句)。
-    #
-    # 🔴 排序判据是**两条**, 不只是"答得对": 餐饮 T3 给每个 provider
-    # _SEMANTIC_PROVIDER_TIMEOUT_SECONDS = 5.0s, 整条链
-    # _SEMANTIC_TOTAL_TIMEOUT_SECONDS = 12.0s。一个 30 秒答对的模型对这条路径
-    # 等于超时, 毫无价值 —— 而且它还会吃掉总预算, 让后面的模型够不到。
-    # 所以按「进得了 5s 预算 + 延迟从小到大」排, 不按额度大小排。
-    #
-    #   hy-mt2-pro              ✅ 5/5, 1.3-1.5s, 余 1M   ← 唯一稳稳够快的, 排头
-    #   deepseek-v3.1-terminus  ✅ 5/5, 2.2-2.6s, 余 500k
-    #   deepseek-v3.2           ✅ 5/5, 2.3-2.8s, 余 486k ⚠️ 控制台标"待下线";
-    #                              仍排在 qwen3.5-plus 前, 因为它快得多, 而真下线
-    #                              后是一次**廉价**的 4xx 直接 fallback。
-    #   qwen3.5-plus            ⚠️ 5/5 但 3.5-5.7s —— **会碰到/超过 5s 上限**,
-    #                              排在快的后面, 当它前面两个都挂了才轮到。
-    #   minimax-m2.7            ⚠️ 要 max_tokens>=1600 才有 content, 而抬了之后
-    #                              实测 26.7s —— 对 T3 **永远等不到**。留在这里
-    #                              只对预算更宽的槽位(CHAT/INSIGHTS)有意义。
-    #   glm-5.2                 ❌ 4/5 —— 换成菜品问句就转 thinking 返回空。
-    #                              单问句测会误判它可用; 放进链路 = 新毒丸。
-    # ⛔ 已移除: qwen3.5-flash / glm-5.1 / deepseek-v4-flash(控制台已停止 + 余额 0),
-    #    kimi-k2.6(temperature 约束未验证前不排进来)。
-    # 之前这一段的条目**全部不可用**, 也就是说 _TEXT_TAIL 声称的
-    # 「independent of aliyun expiries」地板实际是空的 —— 现在它是实的。
+    # 2026-08-02 重测(官方模型参数 + 生产 API Key + 餐饮 T3 五种真实契约)。
+    # 旧链把逐模型已停的 TokenHub/Ark endpoint 排在前面，而且漏发 TokenHub 的
+    # thinking 开关；结果是 401008/SetLimitExceeded、20s timeout 或空 content。
+    # 新链只保留当前 5/5 的通用模型，并继续按 5s/provider、12s total 的调用预算
+    # 排列。Hy-MT2 官方定位为翻译模型，即使恢复额度也不再进入通用文本链。
     #
     # 两个 provider **交错**排列, 不是 tencent 整段再 ark 整段: 地板的意义是
     # "阿里云全挂了还能答", 如果前几位全是同一个 provider, 那个 provider 一出问题
     # (key 失效 / 账号被停 / 平台故障)地板就又空了。交错之后要连续两家都挂才穿透。
-    # 括号里是实测 med 延迟(5s/provider 预算)。
-    ("tencent", "hy-mt2-pro"),                   # 1.4s
-    ("ark", "doubao-seed-2-0-mini-260428"),      # 1.7s
-    ("tencent", "deepseek-v3.1-terminus"),       # 2.4s
-    ("ark", "deepseek-v4-flash-260425"),         # 2.4s
-    ("tencent", "deepseek-v3.2"),                # 2.6s ⚠️ 待下线
-    ("ark", "doubao-seed-2-1-pro-260628"),       # 2.8s
-    ("ark", "glm-5-2-260617"),                   # 3.5s
-    ("ark", "deepseek-v4-pro-260425"),           # 4.7s 临界
-    ("tencent", "qwen3.5-plus"),                 # 5.7s max, 会超 5s
-    ("tencent", "minimax-m2.7"),                 # 26.7s, T3 等不到; 宽预算槽位可用
+    # 括号里是 2026-08-02 关闭思考后的真实 T3 延迟范围。
+    ("tencent", "deepseek-v4-pro-202606"),        # 2.05-2.63s
+    ("ark", "doubao-seed-2-1-turbo-260628"),      # 3.27-4.87s
+    ("tencent", "glm-5.2"),                       # 2.54-3.53s
+    ("ark", "doubao-seed-2-0-lite-260428"),       # 2.66-5.20s, deeper fallback
+    ("tencent", "qwen3.5-plus"),                  # 3.08-4.09s
+    ("tencent", "minimax-m3"),                    # 1.30-5.58s, variable tail
     ("zhipu", "glm-4.5-air"),
 ]
 
@@ -839,9 +810,7 @@ SLOT_MODELS: Dict[SLOT, List[Tuple[str, str]]] = {
         ("aliyun_a", "qwen3.6-flash"), ("aliyun_b", "qwen3.6-flash-2026-04-16"),
         ("aliyun_b", "qwen-flash"), ("aliyun_b", "qwen-turbo"),
         ("aliyun_c", "qwen3.5-flash"), ("aliyun_c", "qwen3.6-flash-2026-04-16"),
-        # 2026-07-30: tencent/qwen3.5-flash 控制台已停止且余额 0, 换成实测 5/5 的
-        # hy-mt2-pro(余 1M, 1.3-1.5s) —— 这一条是本槽唯一的非阿里云出口。
-        ("aliyun_c", "qwen-plus-latest"), ("tencent", "hy-mt2-pro"),
+        ("aliyun_c", "qwen-plus-latest"),
     ] + _TEXT_TAIL),
     # INSIGHTS — 长经营分析优先 Plus（质量/时延平衡），Max 仅作深尾。
     # 2026-07-26 用户逐账户截图确认 A/B/C 的 Plus 与指定版本均有大额免费额度，
@@ -868,9 +837,7 @@ SLOT_MODELS: Dict[SLOT, List[Tuple[str, str]]] = {
         ("aliyun_c", "qwen3.7-flash"), ("aliyun_b", "qwen3.7-flash"),
         ("aliyun_b", "qwen3.6-flash-2026-04-16"), ("aliyun_b", "qwen-turbo"),
         ("aliyun_c", "qwen3.5-flash"), ("aliyun_c", "qwen3-coder-flash"),
-        # 2026-07-30: 同上, qwen3.5-flash 余额 0 → hy-mt2-pro(在 T3 的 JSON 契约
-        # prompt 上实测 5/5, 故 JSON 能力有据)。
-        ("aliyun_b", "qwen3-coder-flash"), ("tencent", "hy-mt2-pro"),
+        ("aliyun_b", "qwen3-coder-flash"),
     ] + _TEXT_TAIL),
     # MAPPER — 字段映射 JSON (thinking off + json_object) → fast text models.
     # 2026-07-26 用户控制台截图确认 B/C 的 versioned Flash 与 alias 均有
@@ -1014,7 +981,7 @@ _TOKENHUB_FORCED_TEMPERATURE: Dict[str, float] = {
     "kimi-k2.5": 1.0,
 }
 
-# TokenHub IGNORES enable_thinking=false on these, so they spend the entire
+# TokenHub M2.x ignores thinking.disabled, so these spend the entire
 # allowance on `reasoning_content` and return an EMPTY `content` — the router then
 # logs "output invalid (empty)" and falls back, i.e. they look broken when they are
 # merely starved. Measured at max_tokens=500: finish_reason='length',
@@ -1024,6 +991,26 @@ _TOKENHUB_MIN_MAX_TOKENS: Dict[str, int] = {
     "minimax-m2.7": 1600,
     "minimax-m2.5": 1600,
 }
+
+# TokenHub uses two different thinking switches by model family. The public
+# OpenAI-compatible shape alone is insufficient: Qwen3.5 explicitly requires
+# enable_thinking=false, while GLM / DeepSeek / MiniMax-M3 use the common
+# thinking={"type":"disabled"} object. Omitting either reproduced the production
+# failure (20s Qwen timeouts or HTTP 200 with empty content); measured 2026-08-02.
+_TOKENHUB_ENABLE_THINKING_MODELS: frozenset[str] = frozenset({
+    "qwen3.5-plus",
+    "qwen3.5-flash",
+})
+_TOKENHUB_THINKING_OBJECT_MODELS: frozenset[str] = frozenset({
+    "deepseek-v3.2",
+    "deepseek-v4-flash",
+    "deepseek-v4-flash-202605",
+    "deepseek-v4-pro",
+    "deepseek-v4-pro-202606",
+    "glm-5.1",
+    "glm-5.2",
+    "minimax-m3",
+})
 
 # Ark expresses "do not think" with its OWN field — `thinking: {"type": "disabled"}`
 # — not DashScope's `enable_thinking`. This is not a micro-optimisation: with
@@ -1061,6 +1048,13 @@ def _apply_slot_params(slot: SLOT, account: str, model: str,
     # must keep it.
     if account == "ark" and prof.get("enable_thinking") is False:
         p["thinking"] = dict(_ARK_DISABLE_THINKING)
+    # TokenHub is provider-compatible but not parameter-uniform. Follow its official
+    # per-model guides instead of assuming DashScope or Ark semantics.
+    if account == "tencent" and prof.get("enable_thinking") is False:
+        if model in _TOKENHUB_ENABLE_THINKING_MODELS:
+            p["enable_thinking"] = False
+        elif model in _TOKENHUB_THINKING_OBJECT_MODELS:
+            p["thinking"] = {"type": "disabled"}
     # TokenHub constraints last: they are hard provider requirements, so they must
     # win over both the caller's payload and the slot profile (violating them is a
     # guaranteed 400 / empty response, not a quality trade-off).
