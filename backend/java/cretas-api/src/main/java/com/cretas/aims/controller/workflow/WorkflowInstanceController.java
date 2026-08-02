@@ -93,6 +93,10 @@ public class WorkflowInstanceController {
     @Autowired(required = false)
     private OaModuleLabelResolver oaModuleLabelResolver;
 
+    /** 🔒 BUDGET(会计期间结账) 的 OA 动作适配 — APPROVE 会执行月度关账。 */
+    @Autowired(required = false)
+    private com.cretas.aims.service.finance.AccountingPeriodService accountingPeriodService;
+
     /** Optional — 用于 hydrate PURCHASE_ORDER businessSummary. */
     @Autowired(required = false)
     private PurchaseOrderRepository purchaseOrderRepository;
@@ -378,11 +382,21 @@ public class WorkflowInstanceController {
                     factoryId, instance.getBusinessEntityId(), instanceId, user.getId(), user.getRoleCode(), action, notes);
             businessEntityId = stocktake.getId();
             businessStatus = stocktake.getStatus().name();
+        } else if ("BUDGET".equals(instance.getModuleCode())) {
+            // 🔒 APPROVE 走月度关账(期间转 CLOSED + 库存台账快照 + 凭证进 20 天调整窗口)。
+            // 此前 BUDGET 没有分支, 待办里只能看不能点 —— 那其实忠实反映了当时的现状:
+            // OA 实例是孤儿, requestClose 启动它但批不批都不影响期间。
+            if (accountingPeriodService == null) {
+                throw new BusinessException(503, "会计期间服务暂不可用，请稍后重试")
+                        .withCode("OA_ACCOUNTING_PERIOD_SERVICE_UNAVAILABLE");
+            }
+            com.cretas.aims.entity.finance.AccountingPeriod period =
+                    accountingPeriodService.applyWorkflowAction(
+                            factoryId, instance.getBusinessEntityId(),
+                            user.getId(), action, notes);
+            businessEntityId = period.getId();
+            businessStatus = period.getStatus().name();
         } else {
-            // 📌 BUDGET(会计期间结账) 刻意不在此处接入 —— 它的 APPROVE 等于执行月度关账,
-            // 影响所有工厂, 已拆到独立 PR 等客户测试期结束后再上。
-            // 在那之前 BUDGET 待办保持「只读」, 这忠实反映现状: OA 实例是孤儿,
-            // requestClose 启动它但批不批都不影响期间(fail-open 合规设计)。
             throw new BusinessException(422, "该业务域尚未迁移到统一 OA 动作适配器")
                     .withCode("OA_DOMAIN_ADAPTER_REQUIRED");
         }
