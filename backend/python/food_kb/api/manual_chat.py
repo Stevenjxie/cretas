@@ -278,6 +278,18 @@ _FACTORY_REPORTING_SOURCE_SHORTAGE_ANSWER = """\
 2. 服务端返回结构化短缺明细时，页面逐项显示“需多少、可用多少、缺多少”并提示联系仓管补料。
 3. 短缺时本行只能保存草稿；正式报工必须整体失败，不能扣一部分库存或让其它投入部分成功。
 4. 若服务端没有结构化明细，页面保留原始错误，不猜物料、批次或数量。"""
+_FACTORY_PRODUCTION_EXECUTION_ANSWER = """\
+当前生产执行链是“开工创建批次 → 逐道报工复用该批次 → 完工后仓库确认入库”，不能把“计划已开始”和“批次已存在”拆成两个不一致的事实。
+
+**开工与批次：**
+1. 点击“开工”时，服务端在同一事务、同一计划锁内校验单位、数量、固定的 Workflow revision 和 BOM revision，并创建或复用该计划的生产批次；任一校验失败时计划与批次都不应部分生效。
+2. 逐道报工继续使用开工时的同一生产批次，不能临时另建批次，也不能把历史“已开始但无批次”的异常状态当成正常流程。
+3. 进度报工 `PROGRESS` 要填大于 0 的产出数量；工时报工 `HOURS` 要填大于 0 的总工时分钟数，不能为了通过校验虚构产量。业务校验失败时显示服务端消息与 actionHint，不自动保存草稿；网络失败才保存本地草稿并明确提示。
+
+**领料与完工入库：**
+1. 指定领料批次时按 `[{batchNo, qty}]` 逐行提交；不指定则交给服务端按 FEFO 自动分配。格式错误在写入前返回 400，不能把字符串批次列表当成有效请求。
+2. 页面必须渲染当前工序的全部投入行，并保存真实工序名；无工时的报工仍保存生产日期，但不能虚构工时。
+3. 计划完成且处于 `PENDING_WAREHOUSE_RECEIPT` 或 `PENDING_CLEARING` 时，页面显示“仓库确认入库”；其它状态不显示该写入口。供应链领用量和成品数量按 kg 保留两位小数，批次数仍按整数展示。"""
 _FACTORY_BYPRODUCT_LIFECYCLE_ANSWER = """\
 副产当前闭环是：原料类型字典建立带“副产”标记的物料 SKU → BOM“副产”页签声明 SKU 与预计量 → 正式报工填写实际副产 → 可证明身份的副产落生产仓 → 盘点按实物确认单价并计算抵扣。
 
@@ -301,8 +313,9 @@ _RESTAURANT_SINGLE_DISH_MARGIN_ANSWER = """\
 中餐的单菜精确毛利算不准，也不能自动或实时算出每一道菜的真实毛利。
 
 1. 中餐存在手勺下料、共用食材和损耗难分摊等现实情况，配方也很难长期完整、准确，所以单菜值只能是理论参考；它是否有参考意义，取决于配方覆盖率与采购价新鲜度。
-2. 可信第一口径是期间总毛利率。食材成本按“期初库存 + 本期采购 − 期末库存”倒算，再用“（营业额 − 食材成本）÷ 营业额”计算总毛利率。这个口径依赖进货与盘点准确，不依赖每道菜都有完整配方。
-3. 菜品平均毛利率和菜品四象限中的毛利轴可以用于相对比较，但不是每道菜的精确财务结果；配方覆盖不足时，应先补齐销量靠前菜品的配方。
+2. 当前单菜成本只汇总配方中已经登记的食材；未登记的辅料、调味料和损耗不会被系统猜出来。因此页面必须同时显示已登记食材数，登记食材不超过 3 项时提示覆盖不足；此时展示的毛利更接近上限参考，不是真实毛利。
+3. 可信第一口径是期间总毛利率。食材成本按“期初库存 + 本期采购 − 期末库存”倒算，再用“（营业额 − 食材成本）÷ 营业额”计算总毛利率。这个口径依赖进货与盘点准确，不依赖每道菜都有完整配方。
+4. 菜品平均毛利率和菜品四象限中的毛利轴可以用于相对比较，但不是每道菜的精确财务结果；配方覆盖不足时，应先补齐销量靠前菜品的配方。
 
 餐饮导览助手只说明以上口径并指向 SmartBI 餐饮 AI，不替用户计算或分析真实经营数据。"""
 _RESTAURANT_CONTEXT_SCOPE_ANSWER = """\
@@ -357,6 +370,7 @@ _RESTAURANT_PLATFORM_SYNC_ANSWER = """\
 3. 领料、损耗、盘点等后厨供应链 connector 目前按工厂租户汇总写入，现有结构不保留门店身份，所以不能据此宣称支持门店级供应链分析。
 4. 平台同步默认每 60 秒拉取一次；当天营收/渠道 Gold 每轮增量刷新，菜品月聚合默认每 600 秒刷新。夜间 03:30 ETL 仍负责完整回补，因此“已接入”不等于所有看板绝对实时。
 5. 模拟平台只用于测试和演示；模拟订单、模拟门店和 mock 服务状态都不能作为真实客户已连接或真实经营数据的证据。
+6. 同一受控凭证还可同步菜品、食材和配方主数据：服务启动后先执行一次，默认每 6 小时刷新；一次菜单同步必须整批校验、整批替换，缺少必需身份或数值时不做部分写入。成功后刷新相关 Gold；菜单同步失败只保留上一版菜单快照，不中断订单增量同步。
 
 **用户路径：** 未开通正式 connector 时继续通过 SmartBI → Excel 上传导入 POS 导出文件；正式直连由受控部署配置和运行时健康证据确认，不在导览聊天中代配凭证。"""
 _RESTAURANT_FLYWHEEL_GOVERNANCE_ANSWER = """\
@@ -428,6 +442,14 @@ _RESTAURANT_SCOPE_ACTION_ANSWER = """\
 3. 系统能把目标范围与原问题拼成一个完整、可独立执行的问句。
 
 损耗等当前不能按门店拆分的 resolver 不显示范围按钮。裸店名、裸“全部门店”或只有范围词而没有完整业务问题，也不能作为可执行追问。用户要换范围时，应在 SmartBI 餐饮 AI 中提交完整问题；导览助手只解释这一规则，不替用户运行分析。"""
+_RESTAURANT_STAFFING_SCOPE_ANSWER = """\
+当前餐饮排班建议读取全连锁的分时段人力配置，不是按某一家门店或某个日期临时计算的经营分析。
+
+1. 当前 resolver 只接收租户范围，不接收门店和时间参数；因此系统不应追问门店或时间，也不应显示“看全部门店 / 只看某店”或时间范围按钮。
+2. 回答可以解释已配置的早班、午市、晚市等分时段建议，但不能把它说成基于指定门店实时客流自动算出的排班结果。
+3. 用户需要门店或日期维度的人力分析时，应明确说明当前能力未覆盖并指向人事配置/后续分析入口，不能伪造数字，也不能把任意澄清文本当成可执行范围。
+
+餐饮导览助手只说明当前入口和边界，不替用户计算或分析真实经营数据。"""
 
 
 def _uses_current_production_sop(query: str) -> bool:
@@ -551,6 +573,18 @@ def _needs_factory_reporting_source_shortage_guard(query: str) -> bool:
     return mentions_reporting and mentions_sources and mentions_shortage
 
 
+def _needs_factory_production_execution_guard(query: str) -> bool:
+    """Keep start, batch, reporting and warehouse receipt on one reviewed chain."""
+    normalized = (query or "").lower()
+    stages = (
+        any(term in normalized for term in ("开工", "开始生产", "启动计划")),
+        any(term in normalized for term in ("批次", "生产批次")),
+        any(term in normalized for term in ("逐道报工", "报工", "工时")),
+        any(term in normalized for term in ("仓库确认", "完工入库", "入库")),
+    )
+    return sum(stages) >= 2
+
+
 def _needs_factory_byproduct_lifecycle_guard(query: str) -> bool:
     """Keep the reviewed byproduct SKU-to-stocktake lifecycle deterministic."""
     normalized = (query or "").lower()
@@ -649,6 +683,17 @@ def _needs_restaurant_platform_sync_guard(query: str) -> bool:
         )
     )
     return mentions_platform and mentions_contract
+
+
+def _needs_restaurant_staffing_scope_guard(query: str) -> bool:
+    """Keep staffing advice on its current chain-level, timeless resolver scope."""
+    normalized = (query or "").lower()
+    mentions_staffing = any(term in normalized for term in ("排班建议", "人力配置", "分时段人力"))
+    mentions_scope = any(
+        term in normalized
+        for term in ("门店", "时间", "日期", "范围", "追问", "按钮", "实时", "怎么算")
+    )
+    return mentions_staffing and mentions_scope
 
 
 def _needs_restaurant_flywheel_governance_guard(query: str) -> bool:
@@ -1604,6 +1649,11 @@ async def _prepare_generation(request: ManualChatRequest) -> _PreparedGeneration
         guard_answer = _FACTORY_REPORTING_SOURCE_SHORTAGE_ANSWER
     elif (
         not is_restaurant_request
+        and _needs_factory_production_execution_guard(request.question)
+    ):
+        guard_answer = _FACTORY_PRODUCTION_EXECUTION_ANSWER
+    elif (
+        not is_restaurant_request
         and _needs_factory_byproduct_lifecycle_guard(request.question)
     ):
         guard_answer = _FACTORY_BYPRODUCT_LIFECYCLE_ANSWER
@@ -1637,6 +1687,11 @@ async def _prepare_generation(request: ManualChatRequest) -> _PreparedGeneration
         and _needs_restaurant_metric_entity_guard(request.question)
     ):
         guard_answer = _RESTAURANT_METRIC_ENTITY_ANSWER
+    elif (
+        is_restaurant_request
+        and _needs_restaurant_staffing_scope_guard(request.question)
+    ):
+        guard_answer = _RESTAURANT_STAFFING_SCOPE_ANSWER
     elif (
         is_restaurant_request
         and _needs_restaurant_scope_action_guard(request.question)

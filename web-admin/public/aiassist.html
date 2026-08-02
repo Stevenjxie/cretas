@@ -1116,7 +1116,8 @@
                 <button class="suggestion" type="button" data-question="报工投入是 kg、产出是盒时，单位怎样校验，跨单位成品率为什么要补每单位重量？"><span class="suggestion-index">06</span><span>报工单位与跨单位成品率</span></button>
                 <button class="suggestion" type="button" data-question="RN 里的 AI 智能入库、盘点记录和物料需求单分别能做什么，哪些入口只是只读？"><span class="suggestion-index">07</span><span>RN 入库、盘点与需求单边界</span></button>
                 <button class="suggestion" type="button" data-question="逐道报工怎样选择投入来源、看后端短缺明细，并从生产计划追踪销售、采购或调拨原单？"><span class="suggestion-index">08</span><span>投入来源、缺料与单据追踪</span></button>
-                <button class="suggestion" type="button" data-question="副产怎样建 SKU、在 BOM 声明、报工落生产仓，并在盘点时确认单价抵扣成本？"><span class="suggestion-index">09</span><span>副产建档、落仓与盘点抵扣</span></button>
+<button class="suggestion" type="button" data-question="副产怎样建 SKU、在 BOM 声明、报工落生产仓，并在盘点时确认单价抵扣成本？"><span class="suggestion-index">09</span><span>副产建档、落仓与盘点抵扣</span></button>
+<button class="suggestion" type="button" data-question="点击开工后，生产批次、逐道报工、领料和仓库确认入库怎样衔接？"><span class="suggestion-index">10</span><span>开工、批次与完工入库链路</span></button>
               </div>
               <p class="welcome-note">也可以上传当前页面截图。助手会读取截图文字后结合操作手册回答，不会替你提交或修改业务数据。</p>
             </div>
@@ -1138,7 +1139,8 @@
                 <button class="suggestion" type="button" data-question="问损耗金额、领料花费或堂食外卖时，系统如何选正确指标并避免把业务名词误认成菜名？"><span class="suggestion-index">09</span><span>指标口径与菜单目录裁决</span></button>
                 <button class="suggestion" type="button" data-question="同一会话怎样沿用门店范围？门店和时间都缺少时为什么会一次问全，什么时候会给出可用的换范围按钮？"><span class="suggestion-index">10</span><span>门店范围继承与一次问全</span></button>
                 <button class="suggestion" type="button" data-question="餐饮运营、市场、人事、财务四个部门驾驶舱分别看什么，哪些角色能进入？"><span class="suggestion-index">11</span><span>四部门驾驶舱与权限边界</span></button>
-                <button class="suggestion" type="button" data-question="盘点亏了多少为什么优先按金额回答，怎样切换本月、上月、最近7天或最近30天？"><span class="suggestion-index">12</span><span>盘点金额与时间范围切换</span></button>
+<button class="suggestion" type="button" data-question="盘点亏了多少为什么优先按金额回答，怎样切换本月、上月、最近7天或最近30天？"><span class="suggestion-index">12</span><span>盘点金额与时间范围切换</span></button>
+<button class="suggestion" type="button" data-question="排班建议为什么不追问门店和时间？它当前读取什么范围的人力配置？"><span class="suggestion-index">13</span><span>排班建议的范围边界</span></button>
               </div>
 
               <button class="learn-launch" id="learn-launch" type="button">
@@ -1272,7 +1274,7 @@
           body: '<p>跟餐饮老板对话，围绕四条线展开：</p>' +
             '<ul><li><strong>收入线</strong>：营业额、客单价、翻台率/上座率、宴席频率——正餐老板最先看的是「包厢满不满、翻台快不快」；</li>' +
             '<li><strong>成本线</strong>：食材成本率（实财占比）、人力成本率（40% 是危机线）、隐性损耗（餐具、纸巾、打包盒这类「一号品」黑洞）；</li>' +
-            '<li><strong>利润线</strong>：毛利率 → 净利率。正餐净利做到 4 个点就值得对赌——不要用互联网行业的利润率去想餐饮。注意口径：中餐<strong>单菜精确毛利算不出来</strong>（成本 BOM 卡拉不齐），可信的是一段时间的总毛利率（期初库存+采购−期末库存倒算），单菜毛利只是参考值；</li>' +
+'<li><strong>利润线</strong>：毛利率 → 净利率。正餐净利做到 4 个点就值得对赌——不要用互联网行业的利润率去想餐饮。注意口径：中餐<strong>单菜精确毛利算不出来</strong>（成本 BOM 卡拉不齐），可信的是一段时间的总毛利率（期初库存+采购−期末库存倒算）；单菜成本只汇总已登记食材，未登记辅料、调味料和损耗不猜算，登记不超过 3 项时提示覆盖不足，毛利仅是偏上限的理论参考；</li>' +
             '<li><strong>现金流线</strong>：充卡/储值依赖度——储值是预收不是收入，依赖过高是隐性风险。</li></ul>',
           note: '话术技巧：跟老板谈「同样 1 万营业额，昨天成本为什么涨了」，比谈「数据中台」有效一百倍。',
           asks: [
@@ -1297,7 +1299,8 @@
             '<p><strong>数据可用与诚实表达：</strong>餐饮租户只要有 POS 流水或后厨事实任一类即可进入餐饮问答；缺少另一类数据时对应问题如实回答「无记录」。系统提出的预算、目标、试点天数或目标单量等具体数字必须标成建议值/假设并待确认，不能冒充当前事实。</p>' +
             '<p><strong>餐饮月报：</strong>服务端可按现有查询计划预览，并导出 XLSX/PDF；当前固定 9 节，且每节显式使用全部门店范围。损耗、领料和盘点三节已经恢复，并必须按指定月份的明确时间窗取数；不能用近 30 天或全历史数据冒充某月数据。报告标注业务数据截至时间和生成时间；任一章节需要澄清、契约失败或没有可信数据时整份拒绝生成。只有当前页面真实接入生成动作并返回文件后，才能说报告已经生成。</p>' +
             '<p><strong>计划预警：</strong>定时把租户配置的相对时间查询计划重编译为与问答相同的 sealed QuerySpec，再应用阈值；当前 P1 只支持销售汇总环比。无数据、覆盖不一致或执行失败都是“无法判定”，不能当正常或自动关闭既有告警。</p>' +
-            '<p><strong>平台同步：</strong>当前已实现客如云风格服务端 connector，生产按 60 秒拉取，当天营收/渠道 Gold 每轮刷新，菜品月聚合默认 600 秒刷新。瞬时故障保留重试；达到卡死条件的永久坏单据进入死信隔离，让游标继续推进并保留人工复核线索。它不是门店自助填密钥的设置页；mock 平台只用于测试，未开通正式直连时仍走 SmartBI → Excel 上传。</p>',
+'<p><strong>平台同步：</strong>当前已实现客如云风格服务端 connector，订单生产按 60 秒拉取，当天营收/渠道 Gold 每轮刷新，菜品月聚合默认 600 秒刷新。菜品、食材和配方主数据启动时先同步一次、默认每 6 小时刷新；整批校验和替换，失败保留上一版菜单且不影响订单增量同步。瞬时故障保留重试；达到卡死条件的永久坏单据进入死信隔离，让游标继续推进并保留人工复核线索。它不是门店自助填密钥的设置页；mock 平台只用于测试，未开通正式直连时仍走 SmartBI → Excel 上传。</p>' +
+'<p><strong>排班建议：</strong>当前只读取全连锁分时段人力配置，不接收门店或时间参数，因此不追问门店/日期，也不显示范围按钮；它不是按某店实时客流自动算出的排班结果。</p>',
           note: '导览助手只解释目录、证据等级和提问方法，不替用户计算或分析实际业务数据；真实分析进入 SmartBI 餐饮 AI。',
           asks: [
             { label: '16 项诊断都有什么？', question: '系统的餐饮诊断引擎都检查哪些指标？超标了会怎样？' },

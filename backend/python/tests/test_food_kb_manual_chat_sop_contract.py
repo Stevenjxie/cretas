@@ -9,6 +9,7 @@ from food_kb.api.manual_chat import (
     ManualChatRequest,
     SYSTEM_PROMPT,
     _FACTORY_BYPRODUCT_LIFECYCLE_ANSWER,
+    _FACTORY_PRODUCTION_EXECUTION_ANSWER,
     _FACTORY_REPORTING_SOURCE_SHORTAGE_ANSWER,
     _FACTORY_RN_READONLY_ANSWER,
     _MATERIAL_PACKAGING_ANSWER,
@@ -28,10 +29,12 @@ from food_kb.api.manual_chat import (
     _RESTAURANT_QUERY_CONTRACT_ANSWER,
     _RESTAURANT_SCOPE_ACTION_ANSWER,
     _RESTAURANT_SINGLE_DISH_MARGIN_ANSWER,
+    _RESTAURANT_STAFFING_SCOPE_ANSWER,
     _WORKFLOW_ACTUAL_IO_ANSWER,
     _build_scope_prompt,
     _needs_bom_workflow_sequence_guard,
     _needs_factory_byproduct_lifecycle_guard,
+    _needs_factory_production_execution_guard,
     _needs_factory_reporting_source_shortage_guard,
     _needs_factory_rn_readonly_guard,
     _needs_material_packaging_guard,
@@ -51,6 +54,7 @@ from food_kb.api.manual_chat import (
     _needs_restaurant_query_contract_guard,
     _needs_restaurant_scope_action_guard,
     _needs_restaurant_single_dish_margin_guard,
+    _needs_restaurant_staffing_scope_guard,
     _needs_workflow_actual_io_guard,
     _uses_current_production_sop,
 )
@@ -285,6 +289,22 @@ def test_factory_reporting_source_shortage_uses_server_authoritative_contract():
     )
 
 
+def test_factory_start_batch_reporting_and_receipt_stay_on_one_execution_chain():
+    equivalent_questions = (
+        "开工后生产批次和逐道报工怎么衔接？",
+        "逐道报工完成后什么时候能仓库确认入库？",
+        "生产批次、报工和完工入库是不是同一条链？",
+    )
+    assert all(_needs_factory_production_execution_guard(q) for q in equivalent_questions)
+    assert not _needs_factory_production_execution_guard("仓库库存怎么盘点？")
+    assert "开工创建批次 → 逐道报工复用该批次 → 完工后仓库确认入库" in (
+        _FACTORY_PRODUCTION_EXECUTION_ANSWER
+    )
+    assert "[{batchNo, qty}]" in _FACTORY_PRODUCTION_EXECUTION_ANSWER
+    assert "不指定则交给服务端按 FEFO 自动分配" in _FACTORY_PRODUCTION_EXECUTION_ANSWER
+    assert "PENDING_WAREHOUSE_RECEIPT" in _FACTORY_PRODUCTION_EXECUTION_ANSWER
+
+
 def test_restaurant_followup_scope_questions_use_the_reviewed_contract():
     equivalent_questions = (
         "门店菜品不同月份继续追问时怎么保持时间范围？",
@@ -367,6 +387,8 @@ def test_restaurant_single_dish_margin_uses_the_fixed_capability_boundary():
     )
     assert "理论参考" in _RESTAURANT_SINGLE_DISH_MARGIN_ANSWER
     assert "配方覆盖率与采购价新鲜度" in _RESTAURANT_SINGLE_DISH_MARGIN_ANSWER
+    assert "只汇总配方中已经登记的食材" in _RESTAURANT_SINGLE_DISH_MARGIN_ANSWER
+    assert "不超过 3 项时提示覆盖不足" in _RESTAURANT_SINGLE_DISH_MARGIN_ANSWER
     assert "可信第一口径是期间总毛利率" in (
         _RESTAURANT_SINGLE_DISH_MARGIN_ANSWER
     )
@@ -388,6 +410,19 @@ def test_restaurant_scope_actions_require_executable_store_questions():
     assert "当前 resolver 真正支持门店维度" in _RESTAURANT_SCOPE_ACTION_ANSWER
     assert "损耗等当前不能按门店拆分" in _RESTAURANT_SCOPE_ACTION_ANSWER
     assert "完整、可独立执行的问句" in _RESTAURANT_SCOPE_ACTION_ANSWER
+
+
+def test_restaurant_staffing_advice_does_not_invent_store_or_time_scope():
+    equivalent_questions = (
+        "排班建议为什么不问门店和时间？",
+        "分时段人力配置能按某店某天实时算吗？",
+        "排班建议会显示门店范围按钮吗？",
+    )
+    assert all(_needs_restaurant_staffing_scope_guard(q) for q in equivalent_questions)
+    assert not _needs_restaurant_staffing_scope_guard("今天各门店营业额是多少？")
+    assert "只接收租户范围，不接收门店和时间参数" in _RESTAURANT_STAFFING_SCOPE_ANSWER
+    assert "不应追问门店或时间" in _RESTAURANT_STAFFING_SCOPE_ANSWER
+    assert "不替用户计算或分析真实经营数据" in _RESTAURANT_STAFFING_SCOPE_ANSWER
 
 
 def test_restaurant_exact_range_scope_and_output_use_current_contract():
@@ -510,6 +545,10 @@ def test_restaurant_platform_sync_questions_keep_runtime_and_mock_boundaries():
     assert "默认每 60 秒拉取一次" in _RESTAURANT_PLATFORM_SYNC_ANSWER
     assert "菜品月聚合默认每 600 秒刷新" in _RESTAURANT_PLATFORM_SYNC_ANSWER
     assert "模拟平台只用于测试和演示" in _RESTAURANT_PLATFORM_SYNC_ANSWER
+    assert "默认每 6 小时刷新" in _RESTAURANT_PLATFORM_SYNC_ANSWER
+    assert "不做部分写入" in _RESTAURANT_PLATFORM_SYNC_ANSWER
+    assert "不终断订单增量同步" not in _RESTAURANT_PLATFORM_SYNC_ANSWER
+    assert "不中断订单增量同步" in _RESTAURANT_PLATFORM_SYNC_ANSWER
 
 
 def test_retriever_source_allow_list_is_bound_as_a_sql_parameter():
@@ -592,11 +631,16 @@ def test_latest_f006_sop_is_a_deployable_manual_source():
     assert "可用库存和短缺数量以服务端校验为准" in current_sop
     assert "供应商可维护简称，以及多联系人、多地址和银行账户" in current_sop
     assert "单据追踪" in current_sop
+    assert "BOM_PRODUCT_MISSING" in current_sop
+    assert "[{batchNo, qty}]" in current_sop
+    assert "点击“开工”时" in current_sop
+    assert "PROGRESS" in current_sop
+    assert "PENDING_WAREHOUSE_RECEIPT" in current_sop
 
     html_path = Path(PROJECT_ROOT) / "docs/manual/F006-production-full-chain-manual-test-sop.html"
     html = html_path.read_text(encoding="utf-8")
     assert required_sequence in html
-    assert "origin/main · SOP sync 2026-07-31" in html
+    assert "origin/main · SOP sync 2026-08-02" in html
     assert "先有完整 Workflow 草稿，再创建 BOM" in html
     assert "页面没有任意切换版本的选择器" in html
     assert "① 投入" in html
@@ -621,6 +665,10 @@ def test_latest_f006_sop_is_a_deployable_manual_source():
     assert "一个来源一行" in current_sop
     assert "需多少、可用多少、缺多少" in html
     assert "RN 查看今日/历史盘点并续录" in html
+    assert "BOM_PRODUCT_MISSING" in html
+    assert "[{batchNo, qty}]" in html
+    assert "开工”必须同步建立生产批次" in html
+    assert "PENDING_WAREHOUSE_RECEIPT" in html
 
 
 def test_factory_role_knowledge_covers_the_12_account_operating_boundaries():
@@ -696,6 +744,9 @@ def test_restaurant_registered_sources_match_current_product_contract():
             "指标选择、菜单目录与路由防漂移",
             "数据可用门槛与叙事接地",
             "永久坏单据写入租户隔离的死信记录",
+            "默认每 6 小时刷新",
+            "排班建议例外",
+            "盘点只认已完成",
         ),
         "restaurant-product-manual.html": (
             "当前 21 维综合分析目录",
@@ -709,6 +760,9 @@ def test_restaurant_registered_sources_match_current_product_contract():
             "当前指标与实体合同",
             "达到卡死阈值的永久坏单据进入租户隔离死信",
             "不是门店管理员在页面自助填写密钥",
+            "不超过 3 项时提示覆盖不足",
+            "默认每 6 小时刷新",
+            "餐饮 AI 的排班建议边界",
         ),
         "restaurant-metrics-glossary.html": (
             "21 维综合分析证据目录",
@@ -716,6 +770,9 @@ def test_restaurant_registered_sources_match_current_product_contract():
             "当前餐饮问答的指标与接地合同",
             "wastage_cost",
             "requisition_cost",
+            "不能称为精确真实成本模型",
+            "不接收门店和时间参数",
+            "只统计状态为 <code>COMPLETED</code>",
         ),
     }
     for source_name, markers in expected_markers.items():
@@ -741,6 +798,9 @@ def test_restaurant_registered_sources_match_current_product_contract():
     assert "7 节小课 · 约 12 分钟" in ai_assist
     assert "飞轮与人审边界" in ai_assist
     assert "不做计算" in ai_assist
+    assert "开工、批次与完工入库链路" in ai_assist
+    assert "排班建议的范围边界" in ai_assist
+    assert "默认每 6 小时刷新" in ai_assist
 
 
 def test_restaurant_registered_html_sources_parse_in_a_clean_runtime():
@@ -940,6 +1000,12 @@ async def test_bom_workflow_publication_answer_never_calls_the_llm(monkeypatch):
             "f006-production-full-chain-sop.md",
         ),
         (
+            "开工后生产批次、逐道报工和仓库确认入库怎样衔接？",
+            "factory",
+            _FACTORY_PRODUCTION_EXECUTION_ANSWER,
+            "f006-production-full-chain-sop.md",
+        ),
+        (
             "副产怎样建 SKU、在 BOM 声明、报工落生产仓并由盘点确认抵扣？",
             "factory",
             _FACTORY_BYPRODUCT_LIFECYCLE_ANSWER,
@@ -1009,6 +1075,12 @@ async def test_bom_workflow_publication_answer_never_calls_the_llm(monkeypatch):
             "损耗问题也会显示换范围按钮吗？",
             "restaurant",
             _RESTAURANT_SCOPE_ACTION_ANSWER,
+            "restaurant-full-chain-sop.html",
+        ),
+        (
+            "排班建议为什么不问门店和时间？",
+            "restaurant",
+            _RESTAURANT_STAFFING_SCOPE_ANSWER,
             "restaurant-full-chain-sop.html",
         ),
         (
