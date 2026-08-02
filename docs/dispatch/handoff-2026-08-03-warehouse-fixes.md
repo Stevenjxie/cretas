@@ -1,8 +1,36 @@
 # 交接 — 仓储/结单/单位六处修复 + F006 最小闭环
 
 **日期**: 2026-08-03
-**分支**: `codex/claude-warehouse-fixes` → **PR #2220**（未合并）
+**分支**: `codex/claude-warehouse-fixes` → **PR #2220 已合并** (`b66f8810c4`)
 **工作目录**: `C:\Users\Steve\cretas-multibatch`
+
+---
+
+## 🚀 已上线并在 prod 实测通过（2026-08-03 03:33 部署）
+
+`RELEASE_FINAL_STATUS=deployed`（Java + Web，356s；因 Flyway 迁移变更走 backend-first 顺序部署，
+后端 green 槽 health pass，Web 四路 hash 一致）。**三条判据都取了部署前后对照：**
+
+| 判据 | 部署前 | 部署后 |
+|---|---|---|
+| **修复 3+4** 结单 BOM 允许集 | `materialTypeIds` **1 个** | **3 个**（原料 + 2 包材）|
+| **修复 3+4** 结单本身 | `409 所选原料批次不属于该生产计划 BOM` | **`COMPLETED`**，`settlementId 8510f91e…`，实际产出 50 box，`postingStatus=PENDING_WAREHOUSE_RECEIPT` |
+| **修复 5** 报工过期库存 | 界面只有「可用 0kg」 | 后端 `"available":0,"expired":300.0`；界面「0kg **过期 300kg，不可投料，请联系仓管处理**」|
+| **修复 6** 分批到货第二批 | `409 数据已存在，请勿重复提交` | **`200 收货确认成功，库存批次已生成`**，新批次 `MT-20260803-3730`，PO 从待收货任务消失 |
+
+> F006 猪蹄线最小闭环（`PLAN-1785685243382-18046415`）现已从「报原料 → 报半成品 → 报成品」
+> 一路走通到**结单**。结单对话框显示「审计通过」并自动带出 3 个原料批次
+> （冻猪蹄 20kg + 成品盒 50 盒 + 封膜 50 片）—— 正是新允许集里的 3 个 SKU。
+
+> ⚠️ 实测修正：交接原文说羊排「原料仓 100kg 全过期」，prod 实际是 **300kg**。
+
+### 🔴 回归比对的一个方法教训：只比「失败类集合」不够
+
+第一轮比对得出「40 = 40，集合一致」，看着就是零新增。但再往下比**每个失败类的
+Failures/Errors 计数**，发现 `TransferShipBatchSelectionTest` 在 main 上 2 个 error、
+分支上 3 个 —— 多的那条是随修复 #1 失效的 stub（`UnnecessaryStubbing`）。
+**这个类本来就在失败集合里，集合比对永远看不见它变差。**
+判据补成三层：失败类集合 → 每类 Failures/Errors 计数 → 差异类的失败方法集合。
 
 ---
 
