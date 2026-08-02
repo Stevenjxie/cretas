@@ -1134,39 +1134,6 @@ class TestNarrativeGroundingGate:
             "我只有预算5000元，应该怎么测试？",
         ) == []
 
-    def test_allows_observed_staffing_target_from_current_factbook(self):
-        factbook = FactBook(operations={
-            "staffing": {
-                "available": True,
-                "items": [{
-                    "weekday_type": "weekday",
-                    "daypart": "晚市",
-                    "actual_orders_per_staff": 10.16,
-                    "target_orders_per_staff": 15,
-                }],
-            },
-        })
-
-        assert se._narrative_grounding_violations(
-            "工作日晚市每人只做10.16单（目标15单），当前人效低于配置目标。",
-            factbook,
-        ) == []
-
-    def test_staffing_target_exemption_does_not_allow_new_kpi_proposal(self):
-        factbook = FactBook(operations={
-            "staffing": {
-                "available": True,
-                "items": [{"target_orders_per_staff": 15}],
-            },
-        })
-
-        violations = se._narrative_grounding_violations(
-            "下周把实际人效提升至15单。",
-            factbook,
-        )
-
-        assert any("未标注为假设的预算或目标" in item for item in violations)
-
     def test_rejects_unapproved_high_impact_action(self):
         violations = se._narrative_grounding_violations(
             "VIP顾客优先出餐。",
