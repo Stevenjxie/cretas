@@ -46,11 +46,37 @@ fi
 
 # The bundle runtime must come from the same resolved Expo config as the
 # exported JavaScript. A staging build deliberately uses the `-test` runtime.
+#
+# ⛔ ENVFILE 必须和 channel 一起定 —— 漏了会发出打不通后端的包 (2026-08-02 发版前拦下)。
+#
+# babel.config.js 的 react-native-dotenv 读的是 `process.env.ENVFILE || '.env'`,
+# 而 src/constants/config.ts 的 API_BASE_URL 就来自 `@env` 的 REACT_APP_API_URL。
+# 本脚本此前只设 EXPO_PUBLIC_ENV(它只影响 app.config.js 里的 runtimeVersion/channel),
+# 从不设 ENVFILE, 于是 `npx expo export` 落到 `.env`:
+#
+#   · 干净 worktree 里根本没有 `.env` (它是 gitignored) → REACT_APP_API_URL 为空
+#     → config.ts 回落到 `http://10.0.2.2:10010` (安卓模拟器宿主地址) → 真机全废;
+#   · 而 README 让"从仓库根目录跑", 主工作目录里那个 gitignored `.env` 实测是
+#     `http://139.196.165.140:8086` —— 那是 **web-admin 的 nginx**, 不是移动端 API,
+#     还是明文 HTTP。
+#
+# 也就是说两条路都发不出能用的生产包, 且**打进去的地址取决于某台机器上一个
+# 未跟踪文件当时的内容**。eas.json 的 APK 构建早就把这件事做对了
+# (production → .env.production / preview → .env.test), OTA 这条链漏了同一份映射。
+# 这里补齐, 并且显式导出 —— 让 bundle 里的 API 地址由 channel 唯一决定。
 if [[ "$CHANNEL" == "production" ]]; then
     export EXPO_PUBLIC_ENV="production"
+    export ENVFILE="${ENVFILE:-.env.production}"
 else
     export EXPO_PUBLIC_ENV="test"
+    export ENVFILE="${ENVFILE:-.env.test}"
 fi
+
+if [[ ! -f "frontend/CretasFoodTrace/$ENVFILE" ]]; then
+    echo "ERROR: frontend/CretasFoodTrace/$ENVFILE 不存在 —— 拒绝导出一个 API 地址未知的包" >&2
+    exit 2
+fi
+echo "  ENVFILE=$ENVFILE  ($(grep -E '^REACT_APP_API_URL=' "frontend/CretasFoodTrace/$ENVFILE" | head -1))"
 
 # --- step timing (pure instrumentation; no behaviour change) -------------------
 # 目的: 这条链有两段聚合耗时看不穿 —— expo export 之后到打包之前, 以及打包之后到
