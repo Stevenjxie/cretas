@@ -302,6 +302,8 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
             if (productionStockAllocationService == null) {
                 throw new BusinessException(500, "生产库批次锁定服务未启用，不能正式提交")
                         .withCode("PRODUCTION_STOCK_ALLOCATION_UNAVAILABLE")
+                        // 同文件另两处同码报错本来就带这句, 只有这处漏了 —— 补齐。
+                        .withHint("请联系管理员检查生产库分摊服务配置")
                         .withSeverity("BLOCKING");
             }
             allocations.addAll(productionStockAllocationService.planExplicit(
@@ -384,8 +386,12 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
         if (workflowPlan && (plan.getSelectedWorkflowRevisionId() == null
                 || plan.getSelectedBomFamilyId() == null
                 || pinnedRecipes.isEmpty())) {
-            throw new BusinessException(409, "Workflow plan is missing its pinned BOM family authority")
+            // 原文是英文 "Workflow plan is missing its pinned BOM family authority" ——
+            // 这是报工现场看得到的 409, 车间操作员读不了英文, 也不知道 "pinned BOM family" 是什么。
+            throw new BusinessException(409, "该生产计划没有锁定生效的 BOM 版本，不能报工")
                     .withCode("PLAN_BOM_AUTHORITY_INCOMPLETE")
+                    .withHint("请前往「生产管理 → 生产计划」重新选择该计划的 BOM 版本；"
+                            + "若该产品还没有生效 BOM，需先在「BOM成本管理」里激活一版")
                     .withSeverity("BLOCKING");
         }
         if (plan.getSelectedBomRecipeId() == null || plan.getSelectedBomRecipeId().isBlank()) {

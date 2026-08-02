@@ -524,12 +524,17 @@ async function submitDecide() {
         <!-- 客户 2026-07-30 反馈「审核后 库存没有过来」: 审批通过 ≠ 库存过账, 同厂调拨还要点一次
              「确认调拨入库」才扣源仓/建目标仓批次。而审批是在个人 OA 里做的, 批完人不在本页,
              没有任何地方告诉他还差一步 —— 实测客户 3 张单卡在 APPROVED, 最早一张卡了 6 周。
-             防呆 Rule 5 (dead-end 改导航): 明说"还没到账 + 下一步点哪个按钮"。 -->
+             防呆 Rule 5 (dead-end 改导航): 明说"还没到账 + 下一步点哪个按钮"。
+
+             仓库 id 为空时说「未指定仓库」，不摆「调出仓/调入仓」这种不存在的名字
+             （全库没有仓库叫这两个名，2026-08-02 六膳门 prod 实测）。
+             HQ_TO_BRANCH 等跨工厂类型的仓库字段本就允许为空，是合法状态，如实说即可。
+             warehouseName 自身查不到时回落到 id，已是诚实回落，这里只补 id 为空那一档。 -->
         <el-alert
           v-if="transfer.status === 'APPROVED' && isIntraFactory"
           type="warning" show-icon :closable="false" style="margin-bottom: 16px"
           title="审批已通过，但库存还没过账 —— 还差最后一步"
-          :description="`点右上角「确认调拨入库」后，${warehouseName(transfer.sourceWarehouseId) || '调出仓'} 才会扣减、${warehouseName(transfer.targetWarehouseId) || '调入仓'} 才会收到货。在此之前两边库存都不变。`" />
+          :description="`点右上角「确认调拨入库」后，${warehouseName(transfer.sourceWarehouseId) || '未指定仓库'} 才会扣减、${warehouseName(transfer.targetWarehouseId) || '未指定仓库'} 才会收到货。在此之前两边库存都不变。`" />
 
         <!-- Issue #744: 库存不足时主动告警 (调出方视角) -->
         <el-alert

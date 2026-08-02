@@ -95,6 +95,7 @@ class ProductionPlanStartValidationTest {
     @Mock private BomRecipeItemRepository bomRecipeItemRepository;
     @Mock private BomRecipeRepository bomRecipeRepository;
     @Mock private BomYieldSuggestionRepository bomYieldSuggestionRepository;
+    @Mock private com.cretas.aims.service.workprocess.WorkProcessTaskService workProcessTaskService;
 
     private ProductionPlanServiceImpl service;
 
@@ -109,14 +110,31 @@ class ProductionPlanStartValidationTest {
         setField(service, "bomRecipeItemRepository", bomRecipeItemRepository);
         setField(service, "bomRecipeRepository", bomRecipeRepository);
         setField(service, "bomYieldSuggestionRepository", bomYieldSuggestionRepository);
+        // 2026-08-02: 开工现在会把批次一起建出来 (两个「开工」入口收敛), 所以这条路径
+        // 需要工序任务服务。此前 startProduction 只翻状态, 不碰它。
+        setField(service, "workProcessTaskService", workProcessTaskService);
 
         // toDTOWithConversionInfo 的依赖默认 stub — 成功 path 才会用上
         ProductionPlanDTO emptyDto = new ProductionPlanDTO();
         lenient().when(productionPlanMapper.toDTO(any(ProductionPlan.class))).thenReturn(emptyDto);
         lenient().when(conversionRepository.findAll()).thenReturn(Collections.emptyList());
+        // 批次物化的默认 stub: 本类关心的是「库存不足会不会拦住开工」, 不是批次内容
+        lenient().when(productionBatchRepository.save(any(com.cretas.aims.entity.ProductionBatch.class)))
+                .thenAnswer(inv -> inv.getArgument(0));
+        lenient().when(workProcessTaskService.spawnTasks(
+                        anyString(), any(), any(), any(), any(), any()))
+                .thenReturn(Collections.emptyList());
     }
 
-    /** 构造一个最简 PENDING 计划. */
+    /**
+     * 构造一个最简 PENDING 计划。
+     *
+     * <p>⚠️ 2026-08-02 起必须带 {@code plannedUnit}: 开工会一并物化批次, 而批次没有单位
+     * 就生不出来 ({@code requireProductionUnit} 422)。此前 fixture 不设单位也能「开工成功」——
+     * 但那种计划<b>永远转不成批次</b> (createBatchFromPlan 一直要求单位), 开完就是死的。
+     * prod 实测 36 个 PENDING 计划全部有单位, 这个 fixture 之前描述的是一个现实中不存在、
+     * 且一旦出现就走不下去的状态。
+     */
     private ProductionPlan pendingPlan(BigDecimal plannedQuantity) {
         ProductionPlan plan = new ProductionPlan();
         plan.setId(PLAN_ID);
@@ -124,6 +142,7 @@ class ProductionPlanStartValidationTest {
         plan.setProductTypeId(PRODUCT_TYPE_ID);
         plan.setPlanNumber("PP-2026-001");
         plan.setPlannedQuantity(plannedQuantity);
+        plan.setPlannedUnit("kg");
         plan.setStatus(ProductionPlanStatus.PENDING);
         return plan;
     }
@@ -272,8 +291,23 @@ class ProductionPlanStartValidationTest {
         when(productionPlanRepository.findByIdForUpdate(PLAN_ID)).thenReturn(Optional.of(plan));
         when(productionPlanRepository.save(any(ProductionPlan.class))).thenAnswer(inv -> inv.getArgument(0));
 
-        assertDoesNotThrow(() -> service.startProduction(FACTORY_ID, PLAN_ID));
-        assertEquals(ProductionPlanStatus.IN_PROGRESS, plan.getStatus());
+        // 🔴 2026-08-02 期望翻转 (从「允许开始」改成「当场拦住」)
+        //
+        // 旧期望是「计划数量为空 → 跳过库存校验, 允许开始」。库存校验确实该跳过 (没有数量
+        // 就算不出需求, 本类要守的 N1 契约在这一点上没变), 但「允许开始」是错的:
+        // 非库存生产计划数量为空时 createBatchFromPlan 一直会 422 拒绝, 所以这种计划
+        // **开工之后永远转不成批次** —— 报工、结单、补建三条路全堵死, 只能作废重建。
+        // 旧期望编码的正是这个死状态本身。
+        //
+        // 现在开工与转批次收敛成同一条路, 缺数量在开工那一刻就报出来, 并带可执行提示。
+        // prod 实测 36 个 PENDING 计划无一数量为空, 现网无计划因此受阻。
+        BusinessException ex = assertThrows(BusinessException.class,
+                () -> service.startProduction(FACTORY_ID, PLAN_ID));
+        assertEquals(422, ex.getCode());
+        assertEquals("PLANNED_QUANTITY_REQUIRED", ex.getErrorCode());
+        assertNotNull(ex.getActionHint(), "拦住就必须说下一步做什么");
+        assertEquals(ProductionPlanStatus.PENDING, plan.getStatus(),
+                "拦住之后状态不许被改动 —— 否则又造出一个开工了却没批次的计划");
     }
 
     @Test

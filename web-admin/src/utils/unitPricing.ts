@@ -60,7 +60,7 @@ const UNIT_LABELS: Record<string, string> = {
   pcs: '件', portion: '份', slice: '片', item: '项',
   box: '盒', case: '箱', bag: '袋', pack: '包', bottle: '瓶',
   can: '罐', crate: '框', pail: '桶', roll: '卷',
-  tray: '托盘', plate: '板',
+  tray: '托盘', plate: '板', sheet: '张',
 };
 
 export function canonicalUnitCode(value: unknown): string {

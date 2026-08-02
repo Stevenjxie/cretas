@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, nextTick, watch } from 'vue';
 import { useRouter, useRoute } from 'vue-router';
+import { pickRawWarehouse } from './rawWarehousePicker';
 import UpstreamMissingHint from '@/components/common/UpstreamMissingHint.vue';
 import { useCreateAndReturn } from '@/composables/useCreateAndReturn';
 import { useAuthStore } from '@/store/modules/auth';
@@ -1600,11 +1601,18 @@ async function openProcessEntry(row: any) {
   // 这里对「PENDING + 产品有 active workflow」的计划自动 create-batch, 使逐道抽屉直接出全工序。
   // 非 workflow 或已转批次(IN_PROGRESS)计划不受影响 (跳过, 保持原行为)。
   try {
-    const isPending = String(row?.status || '').toUpperCase() === 'PENDING';
-    if (row?.id && row?.productTypeId && isPending && factoryId.value) {
+    // ⚠️ 这里以前只认 PENDING, 注释写着「已转批次(IN_PROGRESS)计划跳过」——
+    //   但 `/start`(开始生产) 会把状态置成 IN_PROGRESS **而不建批次**,
+    //   于是「开始生产 → 逐道录入」的计划批次永远建不出来, 抽屉空白且结单也被拒, 彻底卡死。
+    //   IN_PROGRESS ≠ 已转批次。后端 create-batch 已改为「IN_PROGRESS 且尚未有批次」才补建,
+    //   已有批次的仍返回 409, 所以这里放行是安全的。
+    const planStatus = String(row?.status || '').toUpperCase();
+    const needsBatch = planStatus === 'PENDING' || planStatus === 'IN_PROGRESS';
+    if (row?.id && row?.productTypeId && needsBatch && factoryId.value) {
       const act = await get<{ enabled?: boolean } | null>(
         `/${factoryId.value}/product-process-workflows/${row.productTypeId}/activation`);
       if (act.success && act.data && act.data.enabled === true) {
+        // 后端幂等: 已有批次时直接返回既有批次(不报错), 所以这里每次调用都是安全的。
         const br = await post(`/${factoryId.value}/production-plans/${row.id}/create-batch`);
         if (br.success) {
           row.status = 'IN_PROGRESS';
@@ -2049,8 +2057,10 @@ async function ensureRawWarehouseId(): Promise<string | null> {
     return null;
   }
   const warehouses = res.data.filter(isFactoryWarehouseOption);
-  const raw = warehouses.find((w) => w.code === 'WH-LOG')
-    ?? warehouses.find((w) => w.type === 'RAW' || w.type === 'LOGISTICS');
+  // 按**类型**取仓, 不按编码 —— WH-LOG 是某些工厂给外仓起的编码, 编码是命名习惯、
+  // 类型才是契约。原实现编码优先, 让「既有外仓又有原料仓」的工厂去外仓找原料批次,
+  // 永远找不到, 然后提示「请先完成仓库入库」——而用户已经入过库了。见 rawWarehousePicker。
+  const raw = pickRawWarehouse(warehouses);
   if (!raw) {
     ElMessage({ message: '未找到原料仓/物流仓，不能核对生产原料领用', type: 'error', duration: 0, showClose: true });
     return null;
@@ -3298,6 +3308,25 @@ function canPrintPlanDocuments(status: string) {
   return ['PENDING', 'CONFIRMED', 'APPROVED', 'IN_PROGRESS', 'COMPLETED'].includes(String(status || '').toUpperCase());
 }
 
+/**
+ * 这一行现在是不是「等着仓库确认入库」。
+ *
+ * <p>判据复用 nextStepText 里已有的 postingStatus，不新造一套 —— 那正是
+ * 「同一个闸多个承载点」的成因。两档都要放行：
+ *   · PENDING_WAREHOUSE_RECEIPT — 结单后待入库；
+ *   · PENDING_CLEARING          — 有差异挂在中转仓，同一个弹窗处理清账。
+ *
+ * <p>2026-08-02: 此前模板根本没有这个按钮（handleWarehouseReceipt 是死代码），
+ * 计划结单后「下一步」写着「仓库确认入库」，界面上却无处可点。
+ */
+function needsWarehouseReceipt(row: TableRow): boolean {
+  if (String(row.status || '').toUpperCase() !== 'COMPLETED') return false;
+  const settlement = getSettlementStatus(row);
+  if (!settlement) return false;
+  return settlement.postingStatus === 'PENDING_WAREHOUSE_RECEIPT'
+    || settlement.postingStatus === 'PENDING_CLEARING';
+}
+
 function nextStepText(row: TableRow) {
   const status = String(row.status || '').toUpperCase();
   if (status === 'COMPLETED') {
@@ -3992,6 +4021,24 @@ function guardProductionPlanAi(params: Record<string, unknown>) {
                   : actionLoading"
                 @click="handlePrimarySettlementAction(row)"
               >{{ settlementActionLabel(row) }}</el-button>
+              <!--
+                🔴 2026-08-02: 补回「仓库确认入库」入口。
+                handleWarehouseReceipt 与整个 receiptDialog 一直都在, 但**模板从未引用它** ——
+                和 handleStart 同一种死代码形状。后果是链条最后一段彻底走不通:
+                计划结单后「下一步」明写「仓库确认入库」(见 nextStepText), 而界面上
+                没有任何地方能做这件事 → 成品批次永远生不出来 → 销售单永远发不了货。
+                2026-08-02 prod 实测: 后端 /warehouse-receipt 完全正常(空 body 返 400 校验而非 404),
+                手工调 API 立刻 postingStatus=POSTED 并生成成品批次 —— 缺的只是这个按钮。
+                判据复用既有的 postingStatus, 不新造一套。
+              -->
+              <el-button
+                v-if="needsWarehouseReceipt(row)"
+                type="warning"
+                link
+                size="small"
+                :loading="receiptLoading && String(receiptRow?.id) === String(row.id)"
+                @click="handleWarehouseReceipt(row)"
+              >仓库确认入库</el-button>
               <el-button
                 type="primary"
                 link

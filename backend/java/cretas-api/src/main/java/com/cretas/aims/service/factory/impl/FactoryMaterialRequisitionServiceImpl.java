@@ -363,15 +363,69 @@ public class FactoryMaterialRequisitionServiceImpl implements FactoryMaterialReq
             if (pickedQty != null) {
                 item.setPickedQty(new BigDecimal(pickedQty.toString()));
             }
-            Object batches = input.get("batchNumbers");
-            if (batches instanceof List) {
-                item.setBatchNumbers((List<Map<String, Object>>) batches);
-            }
+            item.setBatchNumbers(coerceBatchRows(input.get("batchNumbers"), item));
         }
 
         mr.setPickedBy(operatorId);
         mr.setPickedAt(LocalDateTime.now());
         return repository.save(mr);
+    }
+
+    /**
+     * 把请求里的 {@code batchNumbers} 收成 {@code [{batchNo, qty}]}，形状不对就<b>当场拒绝</b>。
+     *
+     * <p>🔴 原来这里是一次<b>未检查的强转</b>:
+     *
+     * <pre>
+     * if (batches instanceof List) {
+     *     item.setBatchNumbers((List&lt;Map&lt;String, Object&gt;&gt;) batches);
+     * }
+     * </pre>
+     *
+     * <p>泛型擦除让 {@code ["LSM-OPEN-YADUI-001"]} 这种<b>字符串列表也能存进去</b>,
+     * {@code instanceof List} 拦不住元素类型。字段是 jsonb 且声明为
+     * {@code List<Map<String,Object>>}, 于是直到<b>响应序列化那一刻</b>才抛
+     * {@code HttpMessageNotWritableException: Class java.lang.String not subtype of Map},
+     * 用户拿到的是通用 500「系统处理异常，请稍后重试(追踪码 XXX)」。
+     *
+     * <p>⚠️ <b>更坏的是事务已经提交</b> —— picked_qty 写进去了, 只有响应炸了。
+     * 用户以为没成功会重试, 而实际状态已经变了。2026-08-01 prod 实测
+     * (六膳门 MR20260801-0001): picked_qty 四行全部写入, batch_numbers 存成裸字符串。
+     *
+     * <p>现在: 形状不对 → 400 + 明确指出字段与期望形状; 不传/空 → 返回 null, 由
+     * {@code transferToFactory} 走 FEFO 自动分配(它本来就支持)。
+     */
+    @SuppressWarnings("unchecked")
+    private List<Map<String, Object>> coerceBatchRows(
+            Object raw, FactoryMaterialRequisitionItem item) {
+        if (raw == null) {
+            // 不传 = 不指定批次, 留给 transferToFactory 做 FEFO 分配。
+            return item.getBatchNumbers();
+        }
+        if (!(raw instanceof List<?> list)) {
+            throw new BusinessException(400, "batchNumbers 必须是数组")
+                    .withCode("REQUISITION_BATCH_ROWS_INVALID")
+                    .withHint("每个元素形如 {\"batchNo\":\"批次号\",\"qty\":数量}；"
+                            + "不指定批次时可以整个不传，系统会按先进先出自动分配")
+                    .withHintTarget("batchNumbers");
+        }
+        if (list.isEmpty()) {
+            return List.of();
+        }
+        List<Map<String, Object>> rows = new ArrayList<>(list.size());
+        for (Object element : list) {
+            if (!(element instanceof Map<?, ?> map)) {
+                throw new BusinessException(400,
+                        "物料「" + item.getMaterialName() + "」的 batchNumbers 元素必须是对象，"
+                        + "收到的是 " + (element == null ? "null" : element.getClass().getSimpleName()))
+                        .withCode("REQUISITION_BATCH_ROW_SHAPE_INVALID")
+                        .withHint("每个元素形如 {\"batchNo\":\"批次号\",\"qty\":数量}；"
+                                + "只传批次号字符串是不够的，系统需要知道每个批次领了多少")
+                        .withHintTarget("batchNumbers");
+            }
+            rows.add((Map<String, Object>) map);
+        }
+        return rows;
     }
 
     @Override

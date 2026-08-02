@@ -207,6 +207,11 @@ class _SignalConn:
         self.rows = rows
         self.calls = []
 
+    async def execute(self, *args, **kwargs):
+        # gold/queries.tenant_conn 会在借到连接后 set_config 租户上下文。
+        # 假连接必须支持它 —— 不支持等于建模了一条永远不设租户的连接,
+        # 而那正是 2026-08-01 修掉的那个非确定性返空缺陷本身。
+        return None
     async def fetch(self, sql, *params):
         self.calls.append((sql, params))
         return self.rows

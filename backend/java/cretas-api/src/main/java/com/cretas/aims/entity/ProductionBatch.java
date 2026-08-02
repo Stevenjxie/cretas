@@ -534,4 +534,19 @@ public class ProductionBatch extends BaseEntity {
 
     @Transient
     private String sourceProcessCode;
+
+    /**
+     * 来源工序的<b>真实名称</b>（如「焯水」「修油/分切」）。
+     *
+     * <p>⛔ 不要拿 {@link #sourceProcessCode} 当名字显示给用户 —— 它是
+     * {@code ProcessSheetRow.processCode}，一个**内部 archetype 码**（xiuyou / chaoshui /
+     * shuzhi / qidiao …），只用来决定录入表格显示哪几列。而且它是<b>多对一</b>的：
+     * 前端 {@code ProcessSheet.vue} 把匹配不上关键词的工序一律归到 {@code 'chaoshui'}，
+     * 所以界面上的 {@code chaoshui} 多数时候<b>根本不是「焯水」</b>，只是「没归到别的类」。
+     * 映射单向（工序名 → archetype），反查不出来，所以只能按 processOrder 去查真名。
+     *
+     * <p>解析不出时保持 null，调用方只显示「第N道」——不编造名字。
+     */
+    @Transient
+    private String sourceProcessName;
 }

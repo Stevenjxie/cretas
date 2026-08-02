@@ -597,7 +597,15 @@ function getStatusText(status: string) {
           <template #default="{ row }">
             <span v-if="row.isSyntheticPlanGroup">生产计划</span>
             <span v-else-if="row.batchType === 'CLERK_WIP' && row.sourceProcessOrder">
-              {{ `第${row.sourceProcessOrder}道` }}{{ row.sourceProcessCode ? ` / ${row.sourceProcessCode}` : '' }}
+            <!--
+              只显示真名, 不显示 archetype 码。
+              sourceProcessCode 是内部码 (xiuyou/chaoshui/shuzhi/...), 只用来决定录入表格显示哪几列,
+              而且是多对一的 —— 匹配不上关键词的工序一律归到 'chaoshui', 所以它多数时候
+              并不是「焯水」。2026-08-02 六膳门 prod 实测这里显示「第2道 / chaoshui」,
+              而该工厂 20 个工序名里没有一个叫这个。
+              后端解析不出真名时返回 null, 这里就只显示「第N道」—— 不编名字。
+            -->
+              {{ `第${row.sourceProcessOrder}道` }}{{ row.sourceProcessName ? ` / ${row.sourceProcessName}` : '' }}
             </span>
             <span v-else>-</span>
           </template>

@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import logging
 import json
+from contextlib import asynccontextmanager
 from datetime import date
 from decimal import ROUND_HALF_UP, Decimal
 from typing import Any, Dict, List, Optional, Tuple
@@ -37,6 +38,47 @@ from typing import Any, Dict, List, Optional, Tuple
 import asyncpg
 
 logger = logging.getLogger(__name__)
+
+
+@asynccontextmanager
+async def tenant_conn(pool: asyncpg.Pool, factory_id: str):
+    """借一条连接并**在这条连接上**设好租户上下文, 再交给调用方。
+
+    ## 为什么必须有这个东西
+
+    本模块的表都是 FORCE RLS, 过滤依据是 `current_setting('app.factory_id')`。
+    而 GUC 是**连接级**的: `pool.acquire()` 拿到的是一条被反复复用的连接, 上一位
+    借用者留下的 `app.factory_id` 会原样留在上面。
+
+    于是「不自己设 GUC 的函数」读到什么, 取决于**它碰巧拿到哪条连接**:
+      · 上一位设过同一租户  → 正常返回
+      · 上一位设过别的租户  → RLS 只放行别人的行, 而 SQL 自己的 `WHERE
+        factory_id = $1` 只放行本租户的行, 两者相交为空 → **静默返回 0 行**
+      · 连接是新建的/没人设过 → 同样 0 行
+
+    2026-08-01 之前 31 个 async 函数里**只有 3 个**自己设 GUC, 其余 28 个全靠
+    「调用方碰巧设过」。线上实测的表现是**非确定性**: 同一个 `date_range` 连跑两次,
+    一次 `total_revenue=34,160,545.84 / bill_count=94,862`, 一次全 0, 而同一个池上
+    的直查始终正确。
+
+    ⚠️ **返回 0 行和「真的没有数据」长得一模一样** —— 这正是它躺了这么久的原因。
+
+    ## 为什么是 context manager 而不是「每个函数记得加一行」
+
+    加一行是把同一个约定重复 29 遍, 下一个新函数照样会漏。把「取连接」和「设租户」
+    绑成同一个动作之后, **忘不掉** —— 而且 `test_gold_queries_tenant_context.py`
+    会扫本模块, 禁止再出现裸的 `pool.acquire()`。
+
+    (同族缺陷: #2076 签名没声明就静默丢弃 `date_range`、RBAC 泄露里签名没 `role`
+     就拿不到角色。共同形状是**契约靠调用方记得, 忘了不报错、只静默返回空**。)
+    """
+    # ⛔ 这里是**唯一**允许出现 `pool.acquire()` 的地方(用例会扫本模块禁止其余处),
+    #    所以下面这行故意不用 tenant_conn —— 那会变成自我递归。
+    async with pool.acquire() as conn:  # noqa: TENANT-CONN-EXEMPT
+        # is_local=false: 本模块没有事务(实测 0 处 conn.transaction()), 事务级 GUC
+        # 出了语句就失效。设成会话级并**每次借用都重设**, 上一位留下的值一律被覆盖。
+        await conn.execute("SELECT set_config('app.factory_id', $1, false)", factory_id)
+        yield conn
 
 
 def _validate_range(start: Optional[date], end: Optional[date]) -> None:
@@ -186,7 +228,7 @@ async def daily_trend(
             ")"
         )
     where = " AND ".join(conds)
-    async with pool.acquire() as conn:
+    async with tenant_conn(pool, factory_id) as conn:
         rows = await conn.fetch(
             f"""
             SELECT date,
@@ -284,7 +326,7 @@ async def top_products(
     month_where = " AND ".join(month_conds)
     params.append(int(top_n))
     limit_ph = f"${len(params)}"
-    async with pool.acquire() as conn:
+    async with tenant_conn(pool, factory_id) as conn:
         rows = await conn.fetch(
             f"""
             WITH grouped AS (
@@ -419,7 +461,7 @@ async def channel_breakdown(
     where = " AND ".join(conds)
     params.append(int(top_n))
     limit_ph = f"${len(params)}"
-    async with pool.acquire() as conn:
+    async with tenant_conn(pool, factory_id) as conn:
         rows = await conn.fetch(
             f"""
             SELECT c.channel_id,
@@ -491,7 +533,7 @@ async def discount_breakdown(
     where = " AND ".join(conds)
     params.append(int(top_n))
     limit_ph = f"${len(params)}"
-    async with pool.acquire() as conn:
+    async with tenant_conn(pool, factory_id) as conn:
         rows = await conn.fetch(
             f"""
             SELECT d.discount_id,
@@ -553,7 +595,7 @@ async def kpi_summary(
         params.append(end)
         conds.append(f"date <= ${len(params)}")
     where = " AND ".join(conds)
-    async with pool.acquire() as conn:
+    async with tenant_conn(pool, factory_id) as conn:
         daily = await conn.fetchrow(
             f"""
             SELECT
@@ -603,7 +645,7 @@ async def data_range(
     month. Returns null dates when the factory has no Gold rows yet — an
     honest empty, never a fabricated range (no-fake-data rule).
     """
-    async with pool.acquire() as conn:
+    async with tenant_conn(pool, factory_id) as conn:
         row = await conn.fetchrow(
             """
             SELECT
@@ -655,7 +697,7 @@ async def order_type_mix(
     daily_where = " AND ".join(conds)
     conds.append("order_type IS NOT NULL")
     where = " AND ".join(conds)
-    async with pool.acquire() as conn:
+    async with tenant_conn(pool, factory_id) as conn:
         rows = await conn.fetch(
             f"""
             SELECT order_type,
@@ -674,7 +716,7 @@ async def order_type_mix(
     revenue_estimated = False
     estimation_note: Optional[str] = None
     if total <= 0 and total_bills > 0:
-        async with pool.acquire() as conn:
+        async with tenant_conn(pool, factory_id) as conn:
             avg_row = await conn.fetchrow(
                 f"""
                 SELECT COALESCE(SUM(net_amount), 0)::numeric(18,2) AS revenue,
@@ -784,7 +826,7 @@ async def _service_mode_breakdown(
     # Daily fallback uses the SAME params (the group_col IS NOT NULL clause is
     # static, not a param) minus the group filter.
     daily_where = " AND ".join(c for c in conds if "IS NOT NULL" not in c)
-    async with pool.acquire() as conn:
+    async with tenant_conn(pool, factory_id) as conn:
         rows = await conn.fetch(
             f"""
             SELECT {group_col} AS grp,
@@ -959,7 +1001,7 @@ async def discount_summary(
         comp_conds.append(f"a.month <= ${len(comp_params)}")
     comp_where = " AND ".join(comp_conds)
 
-    async with pool.acquire() as conn:
+    async with tenant_conn(pool, factory_id) as conn:
         rev_row = await conn.fetchrow(
             f"""
             SELECT COALESCE(SUM(discount_amount), 0)::numeric(18,2) AS discount,
@@ -1057,7 +1099,7 @@ async def staff_ranking(
     where = " AND ".join(conds)
     params.append(int(top_n))
     limit_ph = f"${len(params)}"
-    async with pool.acquire() as conn:
+    async with tenant_conn(pool, factory_id) as conn:
         rows = await conn.fetch(
             f"""
             SELECT COALESCE(s.name, t.staff_id::text) AS name,
@@ -1150,7 +1192,7 @@ async def finance_summary(
     params.append(int(top_n_stores))
     limit_ph = f"${len(params)}"
 
-    async with pool.acquire() as conn:
+    async with tenant_conn(pool, factory_id) as conn:
         # Grand totals + row counts. Uses only the date params (drops the
         # trailing top_n_stores limit param via the slice).
         totals = await conn.fetchrow(
@@ -1350,7 +1392,7 @@ async def period_comparison(pool, factory_id, start, end):
                 Decimal("0.1"), rounding=ROUND_HALF_UP)
         return {"n": n, "revenue": rev, "gross_margin_pct": gm, "cost_ratio": cost_ratio}
 
-    async with pool.acquire() as conn:
+    async with tenant_conn(pool, factory_id) as conn:
         await conn.execute("SELECT set_config('app.factory_id', $1, false)", factory_id)
         # 领料数据采集的全局日期范围 → 判断窗口是否被领料完整覆盖 (窗口跨越采集起点会
         # undercount 领料成本 → 假的成本率变化 = 反回扣误告; F5-analog for 领料)。
@@ -1453,7 +1495,7 @@ async def dish_margin(
     total_cogs_amount, selling_price and ingredients JSON. The function returns
     deterministic numbers for synthesis; the LLM never derives these figures.
     """
-    async with pool.acquire() as conn:
+    async with tenant_conn(pool, factory_id) as conn:
         rows = await conn.fetch(
             f"""
             SELECT sku_name,
@@ -1481,6 +1523,7 @@ async def dish_margin(
         unit_cost = _as_decimal(r["unit_cost"])
         if selling_price is None or unit_cost is None or selling_price <= 0:
             continue
+        ingredients = _normalize_ingredients(r["ingredients"])
         gross_profit = selling_price - unit_cost
         gross_margin_pct = ((gross_profit / selling_price) * Decimal("100")).quantize(
             Decimal("0.01"),
@@ -1497,7 +1540,20 @@ async def dish_margin(
                 float(Decimal(str(r["monthly_sales_quantity"])))
                 if r["monthly_sales_quantity"] is not None else None
             ),
-            "ingredients": _normalize_ingredients(r["ingredients"]),
+            "ingredients": ingredients,
+            # 配方里**登记了几种食材** —— 这是唯一可核查的"成本口径覆盖度"信号。
+            # 单份成本 = 已登记食材之和; 没登记的辅料/调料不在里面, 于是毛利率偏高。
+            #
+            # ⚠️ 2026-08-01 订正出处: 本函数读的是 `restaurant_sku_forms`, 实测只有
+            # DEMO_REST 有数据(8 行), RES_3101_009 在这里是 **0 行**。原注释拿
+            # 「RES_3101_009 的 85.1% 毛利率」当动机例子是**归错了路径** —— 那个数
+            # 来自 `resolve_gross_margin`(agg_restaurant_product_cost), 不是这里。
+            # 留着会让人以为跑本函数就能看到它。
+            # (那 85.1% 现已按 Steve 指示补估成 73.4%, 见 seed_qhj_estimated_aux_cost。)
+            #
+            # ⛔ 本函数仍然**不去猜成本** —— 没有权威实际成本时编一个等于伪造财务
+            # 数据。把登记数摆出来, 让读的人自己判断。
+            "ingredient_count": len(ingredients),
         })
 
     top = sorted(items, key=lambda item: item["gross_profit"], reverse=True)[:int(top_n)]
@@ -1505,11 +1561,20 @@ async def dish_margin(
     return {
         "factory_id": factory_id,
         "dish_count": len(items),
-        # FactBook only accepts dish-margin facts carrying this marker from
-        # the deterministic Gold producer; arbitrary caller dictionaries stay
-        # untrusted even if their numeric shape looks plausible.
+        # ⚠️ 名字会骗人: 这**不是**「成本口径完整」的判断, 而是 FactBook 用来认
+        # 「这批事实来自确定性 Gold 生产者」的**信任标记** —— 任意调用方递来的字典
+        # 即使数字形状像模像样也不被采信。它对「配方有没有把料列全」一无所知。
+        # 真正可核查的覆盖度信号是每道菜的 ingredient_count 与下面的 min/median。
         "cost_basis_complete": bool(items),
         "cost_basis": "restaurant_sku_forms",
+        # 成本口径覆盖度 (可核查, 不是断言): 配方登记食材数的最小值与中位数。
+        # 只登记 1-3 种料的菜, 其「毛利率」必然偏高 —— 缺的不是利润, 是没登记的料。
+        "ingredient_count_min": (
+            min(i["ingredient_count"] for i in items) if items else None
+        ),
+        "ingredient_count_median": (
+            sorted(i["ingredient_count"] for i in items)[len(items) // 2] if items else None
+        ),
         "top_margin": top,
         "low_margin": low,
     }
@@ -1523,7 +1588,7 @@ async def supplier_price_coverage(
     """Tell synthesis whether supplier-price data exists, even with no anomaly."""
     start, end = date_range
     _validate_range(start, end)
-    async with pool.acquire() as conn:
+    async with tenant_conn(pool, factory_id) as conn:
         # This function is called concurrently with other synthesis pulls, so
         # it can receive a different pooled connection from the anomaly
         # detector. RLS state is connection-local: always establish the tenant
@@ -1630,7 +1695,7 @@ async def restaurant_dimension_signals(
         params.append(end)
         conds.append(f"o.period_start <= ${len(params)}")
 
-    async with pool.acquire() as conn:
+    async with tenant_conn(pool, factory_id) as conn:
         rows = await conn.fetch(
             f"""
             SELECT o.period_start,
@@ -1740,7 +1805,7 @@ async def restaurant_operations_summary(
     """Deterministic waste, stocktaking, inventory and staffing availability."""
     start, end = date_range
     _validate_range(start, end)
-    async with pool.acquire() as conn:
+    async with tenant_conn(pool, factory_id) as conn:
         totals = await conn.fetchrow(
             """
             SELECT COALESCE(SUM(wastage_count), 0)::int AS wastage_count,
@@ -1895,7 +1960,7 @@ async def weather_daily(
         conds.append(f"o.period_start <= ${len(params)}")
     where = " AND ".join(conds)
 
-    async with pool.acquire() as conn:
+    async with tenant_conn(pool, factory_id) as conn:
         rows = await conn.fetch(
             f"""
             WITH ranked AS (
@@ -1990,7 +2055,7 @@ async def menu_quadrant(
         params.append(end_m)
         conds.append(f"a.month <= ${len(params)}")
     where = " AND ".join(conds)
-    async with pool.acquire() as conn:
+    async with tenant_conn(pool, factory_id) as conn:
         rows = await conn.fetch(
             f"""
             SELECT COALESCE(cd.canonical_name, p.name) AS name,
@@ -2083,7 +2148,7 @@ async def store_comparison(
         params.append(end)
         conds.append(f"a.date <= ${len(params)}")
     where = " AND ".join(conds)
-    async with pool.acquire() as conn:
+    async with tenant_conn(pool, factory_id) as conn:
         rows = await conn.fetch(
             f"""
             SELECT s.name AS name,
@@ -2181,7 +2246,7 @@ async def trend_bundle(
         conds.append(f"date <= ${len(params)}")
     where = " AND ".join(conds)
 
-    async with pool.acquire() as conn:
+    async with tenant_conn(pool, factory_id) as conn:
         daily_rows = await conn.fetch(
             f"""
             SELECT date,
@@ -2404,7 +2469,7 @@ async def daily_achievement_summary(
 
     agg_col = "net_amount" if kpi_kind == "revenue" else "bill_count"
 
-    async with pool.acquire() as conn:
+    async with tenant_conn(pool, factory_id) as conn:
         await _set_target_tenant(conn, factory_id)
 
         # Targets for the period_keys. store_id is a first-class dimension (D4).
@@ -2541,7 +2606,7 @@ async def hierarchy_rollup(
     if not factory_id:
         raise ValueError("factory_id required")
 
-    async with pool.acquire() as conn:
+    async with tenant_conn(pool, factory_id) as conn:
         await _set_target_tenant(conn, factory_id)
 
         target_rows = await conn.fetch(
@@ -2615,7 +2680,7 @@ async def alert_preview(
     end = date.today()
     start = end - timedelta(days=lookback_days - 1)
 
-    async with pool.acquire() as conn:
+    async with tenant_conn(pool, factory_id) as conn:
         await _set_target_tenant(conn, factory_id)
         config_rows = await conn.fetch(
             """
@@ -2748,7 +2813,7 @@ async def void_rate(
         conds.append(f"date <= ${len(params)}")
     where = " AND ".join(conds)
 
-    async with pool.acquire() as conn:
+    async with tenant_conn(pool, factory_id) as conn:
         # All-history availability (NOT date-filtered): does this tenant have
         # ANY void data? Separates "未上传撤单数据" from "0 voids this window".
         avail_row = await conn.fetchrow(
@@ -2845,7 +2910,7 @@ async def void_audit(
     params_top.append(int(top_n))
     limit_ph = f"${len(params_top)}"
 
-    async with pool.acquire() as conn:
+    async with tenant_conn(pool, factory_id) as conn:
         total_row = await conn.fetchrow(
             f"SELECT COALESCE(SUM(void_count), 0) AS total FROM agg_daily_void WHERE {where}",
             *params,
@@ -2978,7 +3043,7 @@ async def zone_efficiency(
     params_top.append(int(top_n))
     limit_ph = f"${len(params_top)}"
 
-    async with pool.acquire() as conn:
+    async with tenant_conn(pool, factory_id) as conn:
         # All-history availability (NOT date-filtered): does this tenant have
         # ANY zone-sales data? Separates "未上传区域销售数据" from "0 revenue
         # this window".
@@ -3166,7 +3231,7 @@ async def member_profile(
         conds.append(f"date <= ${len(params)}")
     where = " AND ".join(conds)
 
-    async with pool.acquire() as conn:
+    async with tenant_conn(pool, factory_id) as conn:
         avail_row = await conn.fetchrow(
             "SELECT EXISTS(SELECT 1 FROM agg_member_tier WHERE factory_id = $1) AS has_data",
             factory_id,
@@ -3360,7 +3425,7 @@ async def member_rfm(pool: asyncpg.Pool, factory_id: str) -> Dict[str, Any]:
       - caveat: explains this dimension IS full RFM (contrast with
         member_profile()'s "NOT full RFM" caveat) + the k-anon disclosure
     """
-    async with pool.acquire() as conn:
+    async with tenant_conn(pool, factory_id) as conn:
         avail_row = await conn.fetchrow(
             "SELECT EXISTS(SELECT 1 FROM agg_member_rfm_tier WHERE factory_id = $1) AS has_data",
             factory_id,

@@ -263,7 +263,11 @@ class ProductionPlanCreateBatchValidationTest {
         BusinessException ex = assertThrows(BusinessException.class,
                 () -> service.createBatchFromPlan(FACTORY_ID, PLAN_ID));
         assertEquals(409, ex.getCode());
-        assertTrue(ex.getMessage().contains("待处理"), "状态错误优先: " + ex.getMessage());
+        // ⚠️ 断言改过: 原来按 "待处理" 这个字串判「是不是状态错误」。
+        //   IN_PROGRESS 分支的文案已改成「该计划已开工但没有生产批次，无法报工或结单」——
+        //   更贴合处境且带下一步动作。本用例的**意图**是「状态校验先于库存校验且不建批次」,
+        //   字串只是标记, 改成量纲无关的「批次」既保住意图又不锁死文案。
+        assertTrue(ex.getMessage().contains("批次"), "状态错误优先: " + ex.getMessage());
         verify(productionBatchRepository, never()).save(any(ProductionBatch.class));
     }
 }

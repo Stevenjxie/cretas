@@ -75,6 +75,12 @@ public class ProcessingServiceImpl implements ProcessingService {
     private final ProcessSheetRowRepository processSheetRowRepository;
     @Autowired
     private InventoryLowStockEventPublisher inventoryLowStockEventPublisher;
+    // 来源工序真名解析 (2026-08-02): 用字段注入而非构造器 —— 该类的构造器被大量既有测试
+    // 按参数列表装配, 加参数会一次性打断它们; 解析逻辑本身对 null 容错 (查不到就不显示名字)。
+    @Autowired(required = false)
+    private com.cretas.aims.repository.ProductWorkProcessRepository productWorkProcessRepository;
+    @Autowired(required = false)
+    private com.cretas.aims.repository.WorkProcessRepository workProcessRepository;
     // Sprint 5 Track E (M-WAGE-INTEGRATION-1): 生产→工资 自动 trigger
     private final WageRecordTriggerService wageRecordTriggerService;
     // 审计 round2: 班组报工补录时效锁 (六扇门"补录只能 T/T-1, 极限 T-2, T-3 锁死"硬规则)。
@@ -410,11 +416,16 @@ public class ProcessingServiceImpl implements ProcessingService {
                 .map(ProcessSheetRow::getPlanId)
                 .filter(Objects::nonNull)
                 .collect(Collectors.toSet());
-        Map<String, String> planNumberById = planIds.isEmpty()
-                ? Collections.emptyMap()
+        List<ProductionPlan> plans = planIds.isEmpty()
+                ? Collections.emptyList()
                 : productionPlanRepository.findAllById(planIds).stream()
                         .filter(plan -> factoryId.equals(plan.getFactoryId()))
-                        .collect(Collectors.toMap(ProductionPlan::getId, ProductionPlan::getPlanNumber));
+                        .toList();
+        Map<String, String> planNumberById = plans.stream()
+                .collect(Collectors.toMap(ProductionPlan::getId, ProductionPlan::getPlanNumber));
+        Map<String, String> productTypeIdByPlanId = plans.stream()
+                .filter(plan -> plan.getProductTypeId() != null)
+                .collect(Collectors.toMap(ProductionPlan::getId, ProductionPlan::getProductTypeId));
 
         for (ProductionBatch batch : batches) {
             if (batch == null || !"CLERK_WIP".equals(batch.getBatchType())) {
@@ -428,7 +439,37 @@ public class ProcessingServiceImpl implements ProcessingService {
             batch.setSourcePlanNumber(planNumberById.get(row.getPlanId()));
             batch.setSourceProcessOrder(row.getProcessOrder());
             batch.setSourceProcessCode(row.getProcessCode());
+            batch.setSourceProcessName(resolveSourceProcessName(
+                    factoryId, productTypeIdByPlanId.get(row.getPlanId()), row.getProcessOrder()));
         }
+    }
+
+    /**
+     * 按 (产品, 工序序号) 查这道工序的真实名称。
+     *
+     * <p>🔴 为什么不直接用 {@code row.getProcessCode()}: 那是内部 archetype 码
+     * （xiuyou / chaoshui / shuzhi / qidiao …），只决定录入表格显示哪几列，且是<b>多对一</b>的 ——
+     * 前端把匹配不上关键词的工序一律归到 {@code 'chaoshui'}，所以界面上显示的 {@code chaoshui}
+     * 多数时候并不是「焯水」，只是「没归到别的类」。2026-08-02 六膳门 prod 实测：批次列表
+     * 「来源工序」列显示 {@code 第2道 / chaoshui}，而该工厂 20 个工序名里<b>没有一个</b>叫这个。
+     *
+     * <p>archetype 映射是单向的（工序名 → 码），反查不出来；真名只能按 processOrder
+     * （产品工序链内唯一，见 {@code ProcessSheetRow.processOrder} 的注释）去查。
+     *
+     * <p>⛔ 查不到返回 null，让前端只显示「第N道」—— 宁可少说，不编一个名字。
+     */
+    private String resolveSourceProcessName(String factoryId, String productTypeId, Integer processOrder) {
+        if (productWorkProcessRepository == null || workProcessRepository == null
+                || productTypeId == null || processOrder == null) {
+            return null;
+        }
+        return productWorkProcessRepository
+                .findByFactoryIdAndProductTypeIdAndProcessOrder(factoryId, productTypeId, processOrder)
+                .map(com.cretas.aims.entity.ProductWorkProcess::getWorkProcessId)
+                .flatMap(workProcessRepository::findById)
+                .map(com.cretas.aims.entity.WorkProcess::getProcessName)
+                .filter(name -> name != null && !name.isBlank())
+                .orElse(null);
     }
 
     public PageResponse<ProductionBatch> getBatches(String factoryId, String status, PageRequest pageRequest) {
@@ -2314,11 +2355,33 @@ public class ProcessingServiceImpl implements ProcessingService {
         return analysis;
     }
     // 辅助方法
+    /**
+     * 质检员显示名。
+     *
+     * <p>解析不出(用户已删/ID 为空)时返回 {@code null} —— <b>不编造</b>「未知」之类的假名字,
+     * 由前端回落显示 ID。「诚实-null」比「假装有名字」好: 前者用户知道要去查 ID,
+     * 后者会让人以为系统真的记录了这么一个人。
+     */
+    private String resolveInspectorName(Long inspectorId) {
+        if (inspectorId == null) {
+            return null;
+        }
+        return userRepository.findById(inspectorId)
+                .map(com.cretas.aims.entity.User::getFullName)
+                .filter(name -> name != null && !name.isBlank())
+                .orElse(null);
+    }
+
     private Map<String, Object> convertInspectionToMap(QualityInspection inspection) {
         Map<String, Object> map = new HashMap<>();
         map.put("id", inspection.getId());
         map.put("productionBatchId", inspection.getProductionBatchId());
         map.put("inspectorId", inspection.getInspectorId());
+        // 质检记录列表把 inspectorId 这个**数字主键**直接摆给用户看(列名就叫「质检员ID」)。
+        // 同一个文件里 buildQualityDetails 早就有解析姓名的写法(userRepository.findById →
+        // getFullName), 只是列表这处没用 —— 又是「一处做对、另一处漏了」。
+        // 解析不出时**不编造**: 留 null, 由前端回落显示 ID(总比显示空白强, 也不假装有名字)。
+        map.put("inspectorName", resolveInspectorName(inspection.getInspectorId()));
         map.put("inspectionDate", inspection.getInspectionDate());
         map.put("sampleSize", inspection.getSampleSize());
         map.put("passCount", inspection.getPassCount());

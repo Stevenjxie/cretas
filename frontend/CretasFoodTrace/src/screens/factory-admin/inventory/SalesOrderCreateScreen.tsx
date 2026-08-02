@@ -20,6 +20,8 @@ import { customerApiClient, Customer } from '../../../services/api/customerApiCl
 import { productTypeApiClient, ProductPackagingSpec, ProductType } from '../../../services/api/productTypeApiClient';
 import { useAuthStore } from '../../../store/authStore';
 import { formatNumberWithCommas } from '../../../utils/formatters';
+import SearchableDropdown from '../../../components/report/SearchableDropdown';
+import { optionalTaxRate, packagingSpecsForUnit, salesUnitOptions } from '../../../utils/salesOrderDraft';
 
 type Nav = NativeStackNavigationProp<FAManagementStackParamList>;
 
@@ -30,6 +32,7 @@ interface DraftItem {
   quantity: string;
   unitPrice: string;
   unit: string;
+  taxRate: string;
   packagingSpecId: string;
   packagingSpecs: ProductPackagingSpec[];
 }
@@ -49,6 +52,7 @@ const blankItem = (): DraftItem => ({
   quantity: '',
   unitPrice: '',
   unit: '',
+  taxRate: '',
   packagingSpecId: '',
   packagingSpecs: [],
 });
@@ -109,8 +113,7 @@ export default function SalesOrderCreateScreen() {
     setItems((prev) => (prev.length === 1 ? prev : prev.filter((item) => item.key !== key)));
   };
 
-  const packagingOptions = (item: DraftItem) =>
-    item.packagingSpecs.filter((spec) => spec.active !== false && spec.packageUnit === item.unit);
+  const packagingOptions = (item: DraftItem) => packagingSpecsForUnit(item.unit, item.packagingSpecs);
 
   const handleUnitChange = (item: DraftItem, unit: string) => {
     const options = item.packagingSpecs.filter((spec) => spec.active !== false && spec.packageUnit === unit);
@@ -158,12 +161,13 @@ export default function SalesOrderCreateScreen() {
     const invalidLine = cleanedItems.find((item) => {
       const quantity = Number(item.quantity);
       const unitPrice = Number(item.unitPrice);
+      const taxRateInvalid = item.taxRate.trim() !== '' && optionalTaxRate(item.taxRate) === undefined;
       return !item.productTypeId || !item.unit || !Number.isFinite(quantity) || quantity <= 0
-        || !Number.isFinite(unitPrice) || unitPrice < 0;
+        || !Number.isFinite(unitPrice) || unitPrice < 0 || taxRateInvalid;
     });
 
     if (invalidLine) {
-      Alert.alert('提示', '产品、数量、单位、单价必须填写完整，数量需大于 0，单价不能小于 0');
+      Alert.alert('提示', '产品、数量、单位、单价必须填写完整；数量需大于 0，单价不能小于 0，税率应在 0–100 之间');
       return null;
     }
 
@@ -195,6 +199,8 @@ export default function SalesOrderCreateScreen() {
       materialSupplyMode: 'FACTORY_SUPPLIED',
       orderDate: todayIso(),
       requiredDeliveryDate: requiredDeliveryDate || undefined,
+      // Backend resolves a numeric user id into both the salesperson FK and the name snapshot.
+      salesperson: user?.id != null ? String(user.id) : undefined,
       remark: remark || undefined,
       items: cleanedItems.map((item) => ({
         productTypeId: item.productTypeId,
@@ -202,7 +208,7 @@ export default function SalesOrderCreateScreen() {
         quantity: Number(item.quantity),
         unitPrice: Number(item.unitPrice),
         unit: item.unit,
-        taxRate: 0,
+        taxRate: optionalTaxRate(item.taxRate),
         packagingSpecId: item.packagingSpecId || undefined,
       })),
     };
@@ -256,39 +262,23 @@ export default function SalesOrderCreateScreen() {
         <Card style={styles.card}>
           <Card.Content>
             <Text style={styles.sectionTitle}>订单信息</Text>
-            <Menu
-              visible={openMenuFor?.kind === 'customer'}
-              onDismiss={() => setOpenMenuFor(null)}
-              anchor={
-                <View style={styles.selectorBlock}>
-                  <Text style={styles.fieldLabel}>客户</Text>
-                  <Button
-                  testID="sales-create-customer"
-                  mode="outlined"
-                  icon="chevron-down"
-                  contentStyle={styles.selectorContent}
-                  labelStyle={styles.selectorLabel}
-                  onPress={() => setOpenMenuFor({ kind: 'customer' })}
-                >
-                  {customerName || '请选择客户'}
-                </Button>
-                </View>
-              }
-            >
-              {customers.map((customer) => (
-                <Menu.Item
-                  key={customer.id}
-                  testID={`sales-create-customer-option-${customer.id}`}
-                  title={`${customer.name}${customer.customerCode ? ` (${customer.customerCode})` : ''}`}
-                  onPress={() => {
-                    setCustomerId(customer.id);
-                    setCustomerName(customer.name);
-                    setOpenMenuFor(null);
-                  }}
-                />
-              ))}
-              {customers.length === 0 && <Menu.Item title="暂无可用客户" disabled />}
-            </Menu>
+            <SearchableDropdown
+              label="客户"
+              required
+              placeholder="搜索并选择客户"
+              options={customers.map((customer) => ({
+                value: customer.id,
+                label: `${customer.name}${customer.customerCode ? ` (${customer.customerCode})` : ''}`,
+              }))}
+              value={customerId}
+              onSelect={(value) => {
+                const customer = customers.find((entry) => entry.id === value);
+                setCustomerId(value);
+                setCustomerName(customer?.name || '');
+              }}
+              allowCustom={false}
+              testID="sales-create-customer"
+            />
 
             <View style={styles.fieldBlock}>
               <Text style={styles.fieldLabel}>要求交付日期</Text>
@@ -338,35 +328,23 @@ export default function SalesOrderCreateScreen() {
                   )}
                 </View>
 
-                <Menu
-                  visible={openMenuFor?.kind === 'product' && openMenuFor.key === item.key}
-                  onDismiss={() => setOpenMenuFor(null)}
-                  anchor={
-                    <View style={styles.selectorBlock}>
-                      <Text style={styles.fieldLabel}>产品</Text>
-                      <Button
-                      testID={`sales-create-product-${index}`}
-                      mode="outlined"
-                      icon="chevron-down"
-                      contentStyle={styles.selectorContent}
-                      labelStyle={styles.selectorLabel}
-                      onPress={() => setOpenMenuFor({ kind: 'product', key: item.key })}
-                    >
-                      {item.productName || '请选择产品'}
-                    </Button>
-                    </View>
-                  }
-                >
-                  {products.map((product) => (
-                    <Menu.Item
-                      key={product.id}
-                      testID={`sales-create-product-option-${product.id}`}
-                      title={`${product.name}${product.productCode ? ` (${product.productCode})` : ''}`}
-                      onPress={() => { void selectProduct(item, product); }}
-                    />
-                  ))}
-                  {products.length === 0 && <Menu.Item title="暂无可用产品" disabled />}
-                </Menu>
+                <SearchableDropdown
+                  label="产品"
+                  required
+                  placeholder="按名称或 SKU 搜索"
+                  options={products.map((product) => ({
+                    value: product.id,
+                    label: `${product.name}${product.productCode ? ` (${product.productCode})` : ''}`,
+                    description: [product.category, product.unit].filter(Boolean).join(' · ') || undefined,
+                  }))}
+                  value={item.productTypeId}
+                  onSelect={(value) => {
+                    const product = products.find((entry) => entry.id === value);
+                    if (product) void selectProduct(item, product);
+                  }}
+                  allowCustom={false}
+                  testID={`sales-create-product-${index}`}
+                />
 
                 <View style={styles.threeColumns}>
                   <View style={styles.thirdField}>
@@ -381,13 +359,18 @@ export default function SalesOrderCreateScreen() {
                     />
                   </View>
                   <View style={styles.thirdField}>
-                    <Text style={styles.fieldLabel}>单位</Text>
-                    <TextInput
-                      testID={`sales-create-unit-${index}`}
+                    <SearchableDropdown
+                      label="单位"
+                      required
+                      placeholder={item.productTypeId ? '请选择单位' : '先选产品'}
+                      options={salesUnitOptions(
+                        products.find((product) => product.id === item.productTypeId)?.unit || '',
+                        item.packagingSpecs,
+                      ).map((unit) => ({ value: unit, label: unit }))}
                       value={item.unit}
-                      onChangeText={(value) => handleUnitChange(item, value)}
-                      mode="outlined"
-                      style={styles.input}
+                      onSelect={(value) => handleUnitChange(item, value)}
+                      allowCustom={false}
+                      testID={`sales-create-unit-${index}`}
                     />
                   </View>
                   <View style={styles.thirdField}>
@@ -401,6 +384,18 @@ export default function SalesOrderCreateScreen() {
                       style={styles.input}
                     />
                   </View>
+                </View>
+                <View style={styles.fieldBlock}>
+                  <Text style={styles.fieldLabel}>税率 (%)</Text>
+                  <TextInput
+                    testID={`sales-create-tax-rate-${index}`}
+                    value={item.taxRate}
+                    onChangeText={(value) => updateItem(item.key, { taxRate: value })}
+                    mode="outlined"
+                    keyboardType="decimal-pad"
+                    placeholder="留空按客户默认税率"
+                    style={styles.input}
+                  />
                 </View>
                 {packagingOptions(item).length > 0 && (
                   <Menu

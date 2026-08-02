@@ -27,6 +27,7 @@ export interface SalesOrder {
   totalAmount: number;
   orderDate: string;
   expectedDeliveryDate?: string;
+  salesperson?: string;
   remark?: string;
   createdBy?: string;
   items?: SalesOrderItem[];
@@ -115,6 +116,7 @@ export interface CreateSalesOrderRequest {
   orderDate?: string;
   requiredDeliveryDate?: string;
   expectedDeliveryDate?: string;
+  salesperson?: string;
   remark?: string;
   items: {
     productTypeId: string;

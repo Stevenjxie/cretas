@@ -488,7 +488,9 @@ async function loadInputAvailability() {
       unit: workflowPortDisplayUnit(p) || processUnits.value.inputUnit,
     }))
     .filter((p) => !!p.materialTypeId);
-  if (!isXiuYou.value || !props.factoryId || !props.planId || ports.length === 0) {
+  // 2026-08-02: 多输入工序(如熟制=上游半成品+3种调料)同样需要可用量, 不能只给 xiuyou。
+  if ((!isXiuYou.value && workflowRawInputs.value.length === 0)
+      || !props.factoryId || !props.planId || ports.length === 0) {
     portAvailability.value = new Map();
     return;
   }
@@ -582,7 +584,8 @@ async function ensureConsumableWarehouseIds(): Promise<string[] | null> {
 }
 
 async function loadRawBatches() {
-  if (!isXiuYou.value || !props.factoryId) return;
+  // 同上: 判据是「这道工序有没有 workflow 原料端口」, 不是 archetype。
+  if ((!isXiuYou.value && workflowRawInputs.value.length === 0) || !props.factoryId) return;
   const seq = ++rawBatchLoadSeq;
   rawBatchLoading.value = true;
   try {
@@ -1723,8 +1726,36 @@ function fieldPrecision(key: string): number {
   return unit === 'kg' || unit === '千克' ? 6 : 0;
 }
 
+/**
+ * 这一行要不要用「Workflow 原料端口自动生成投入行」这套。
+ *
+ * <h3>🔴 2026-08-02: 去掉 isXiuYou 前置 —— 它让多输入工序永远提交不了</h3>
+ *
+ * <p>原来是 {@code isXiuYou.value && workflowRawInputs.length > 0 && ...}，
+ * 即<b>原料投入区块只在 xiuyou 这个 archetype 下渲染</b>。而
+ * {@link selectionGroupReason} 的校验<b>不分 archetype</b>，照样去数 workflow 上
+ * 未选中的 RAW_MATERIAL 端口 —— 于是：
+ *
+ * <p>六膳门酱鸭腿第 2 道「熟制」有 4 个输入端口在同一选择组
+ * （1 个 SEMI_FINISHED 缓化鸭腿 + 3 个 RAW_MATERIAL 生抽/老抽/五香粉），archetype 是
+ * {@code shuzhi} → 3 条原料行<b>一条都不渲染</b>，界面上没有任何可勾可填的东西；
+ * 而按钮被「"实际投入"至少选择 1 项，当前尚未选择」<b>永久禁用</b>。
+ * 横幅还明写着「需要原料：生抽、老抽、五香粉」—— 告诉你要填，却不给你地方填。
+ *
+ * <p>第 1 道（单 RAW_MATERIAL）与第 3 道（单 SEMI_FINISHED）没事，是因为它们各只有
+ * 一个端口 → {@code portHasNoAlternative} 为真 → {@code portSelectedByDefault}
+ * 直接置 selected，绕过了这道门。<b>只有混合多输入的工序卡死。</b>
+ *
+ * <p>判据回到 Workflow 本身：<b>只要这道工序在 workflow 上挂了原料端口，就该能录原料</b>，
+ * 与它被归到哪个 archetype 无关。archetype 是「录入表格显示哪几列」的排版概念，
+ * 早于 workflow 端口模型，本就不该拿来决定「能不能录一类必填输入」。
+ *
+ * <p>⛔ 刻意<b>不</b>动 {@code potInputQuantity} / 出成率那两处的 isXiuYou 分支：
+ * 第 2 道的出成率分母是<b>上游投入</b>（140kg），调料是额外投入不进分母。
+ * 那两处按 archetype 分叉是对的。
+ */
 function usesAutoMaterialTotals(row: SheetRow): boolean {
-  return isXiuYou.value && workflowRawInputs.value.length > 0 && !row.legacyExplicitRawInput;
+  return workflowRawInputs.value.length > 0 && !row.legacyExplicitRawInput;
 }
 
 function submittedMaterialInputTotals(row: SheetRow): MaterialInputTotal[] {
@@ -1801,7 +1832,16 @@ function upstreamWarning(row: SheetRow): string | null {
         warnings.push(`${src.sourceBatchNumber} 超出剩余 ${inv.remaining}${inv.unit || processUnits.value.inputUnit}`);
       }
     }
-    return warnings.length ? warnings.join('; ') : null;
+    if (warnings.length) return warnings.join('; ');
+  }
+  // 2026-08-02: workflow 原料端口的校验放在 archetype 分支**之外**。
+  // ⚠️ 第一版放进了 isMultiSource 分支, 而熟制只有 1 个上游端口 → 走的是 isSingleSource,
+  //    那段代码根本没执行(prod 实测: 按钮解禁、报工成功, 但 row_payload 里没有
+  //    materialInputTotals)。archetype 分支覆盖不全, 判据必须挂在「这行用不用自动原料行」上。
+  if (usesAutoMaterialTotals(row)) {
+    const missing = row.materialInputTotals.find(
+      (item) => item.selected && (item.quantity == null || item.quantity <= 0));
+    if (missing) return `请填写「${missing.materialName}」的投料总量`;
   }
   return null;
 }
@@ -1943,6 +1983,13 @@ function buildRequest(row: SheetRow): ProcessSheetRowRequest & Record<string, un
     clientRowId: row.clientRowId,
     processCode: props.processCode,
     processOrder: props.processOrder,
+    // 2026-08-02: 把真实工序名一起报上去。
+    // 此前不带 → row_payload 里 processName 是 null → 「双出成率总览」的「工序」列
+    // 回落到 ProcessSheet.vue 的 `工序${processOrder}`, prod 实测显示「工序1/工序2/工序3」,
+    // 而同一个抽屉的 tab 上明明写着真名(出料/缓化、熟制、装箱)。
+    // ⛔ 不能用 processCode 顶替 —— 那是内部 archetype 码(xiuyou/chaoshui/...), 多对一,
+    //    正是 #2174 修掉的那种「拿标识符当名字」。processLabel 才是真名(见 props 注释)。
+    processName: props.processLabel || undefined,
     productTypeId: wfOutput?.skuId || props.productTypeId,
     batchNumber: row.batchNumber ?? undefined,
     // ⭐ 气调成品批 (legacy archetype heuristic) — overridden below by the workflow port when present.
@@ -1996,6 +2043,7 @@ function buildRequest(row: SheetRow): ProcessSheetRowRequest & Record<string, un
       .filter((source) => source.selected)
       .reduce((s, r) => s + (r.feedQuantityKg || 0), 0);
     base.upstreamSources = submittedUpstreamSources(row);
+
     if (isSingleUpstream.value) {
       const before = (row.fields['before'] as number) ?? totalFeed;
       base.inputQuantity = before;
@@ -2170,6 +2218,22 @@ function buildRequest(row: SheetRow): ProcessSheetRowRequest & Record<string, un
       processUnits.value.inputUnit,
       needsPotCount.value ? row.potCount : 1,
     );
+  }
+
+  // 2026-08-02: workflow 原料端口的实际投入 —— 挂在 archetype 分支**之外**。
+  //
+  // ⚠️ 第一版加在 isMultiSource 分支里, 而熟制只有 1 个上游端口(缓化鸭腿) →
+  //    它走的是 isSingleSource, 那段永远不执行。prod 实测的表现极具迷惑性:
+  //    按钮解禁、报工成功、批次和出成率都对, **只有 materialInputTotals 静悄悄没进
+  //    row_payload** —— 界面上完全看不出来。判据因此挂在「这行用不用自动原料行」,
+  //    不挂在 archetype 分支上。
+  //
+  // xiuyou 分支自己已经写过 materialInputTotals + inputQuantity, 这里不覆盖它。
+  // ⛔ 其他工序只补 materialInputTotals, **不动 inputQuantity** ——
+  //    出成率分母是上游投入(如熟制的 140kg), 调料是额外投入, 计入分母会把出成率算错。
+  if (!isXiuYou.value && usesAutoMaterialTotals(row)) {
+    const totals = submittedMaterialInputTotals(row);
+    if (totals.length) base.materialInputTotals = totals;
   }
 
   return base;
@@ -2939,7 +3003,7 @@ watch(
     consumableWarehouseIds.value = [];
     rawBatchLoadSeq++;
     rawBatchLoading.value = false;
-    if (isXiuYou.value) { void loadRawBatches(); void loadInputAvailability(); }
+    if (isXiuYou.value || workflowRawInputs.value.length > 0) { void loadRawBatches(); void loadInputAvailability(); }
     // 混锅工序 (熟制/气调) + 单上游道 (焯水/滚揉/去舌苔) 加载常驻半成品库存供 SFI 投料下拉
     sfiOptions.value = [];
     sfiLoadSeq++;
@@ -3029,7 +3093,7 @@ const hasUnsavedRows = computed(() => rows.value.some(rowIsDirty));
 // 重新拉取三类共享余量 (不清空现有值, 避免刷新期间下拉短暂清空/跳动), 消除跨 tab 假阳性拦截。
 // -------------------------------------------------------------------------
 function refreshSharedInventories() {
-  if (isXiuYou.value) { void loadRawBatches(); void loadInputAvailability(); }
+  if (isXiuYou.value || workflowRawInputs.value.length > 0) { void loadRawBatches(); void loadInputAvailability(); }
   if (showSfi.value) void loadSfiOptions();
   if (showFg.value) void loadFgOptions();
 }
@@ -3230,7 +3294,9 @@ defineExpose({ hasUnsavedRows, refreshSharedInventories });
           </div>
 
           <!-- 修油: raw-material batch dropdown + out-weight -->
-          <template v-if="isXiuYou">
+          <!-- 2026-08-02: 门从 isXiuYou 放开 —— 只要这行要用 workflow 原料端口就渲染,
+               否则多输入工序(熟制=上游半成品+调料)看不到调料行却被校验拦住提交。 -->
+          <template v-if="isXiuYou || usesAutoMaterialTotals(row)">
             <!--
               投入也按紧凑表格排 (与产出表同一套观感)。原来每条投入是一竖列
               label/下拉/label/数字堆叠, 多条并排时字段名逐条重复, 正是客户说的「散」。
@@ -3712,7 +3778,8 @@ defineExpose({ hasUnsavedRows, refreshSharedInventories });
             <th v-if="isPortOutputMode" class="sp-th sp-th-date">生产日期</th>
 
             <!-- 修油: raw batch + out-weight cols appear before generic cols -->
-            <template v-if="isXiuYou">
+            <!-- 2026-08-02: 与下面 tbody 的门**必须逐字一致**, 否则整行错位(见下方注释)。 -->
+            <template v-if="isXiuYou || workflowRawInputs.length > 0">
               <th class="sp-th">{{ workflowRawInputs.length ? '投料物料' : '原料批次' }}</th>
               <th class="sp-th sp-th-num">{{ workflowRawInputs.length ? '投料总量' : firstProcessInputLabel }}</th>
               <!-- 「生产仓可用」独立成列 —— 条件必须与下面 tbody 的第三个 <td> 严格互为镜像:
@@ -3870,7 +3937,8 @@ defineExpose({ hasUnsavedRows, refreshSharedInventories });
               </td>
 
               <!-- ---- 修油: raw-material batch dropdown ---- -->
-              <template v-if="isXiuYou">
+              <!-- 门与上面 thead 逐字一致: isXiuYou || workflowRawInputs.length > 0 -->
+              <template v-if="isXiuYou || workflowRawInputs.length > 0">
                 <template v-if="usesAutoMaterialTotals(row)">
                   <td class="sp-td">
                     <div v-for="item in row.materialInputTotals" :key="item.workflowPortId || item.materialTypeId">

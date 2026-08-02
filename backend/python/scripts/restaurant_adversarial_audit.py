@@ -121,6 +121,21 @@ CASES: List[Case] = [
     ("越权-后厨", "全部门店最近30天哪些菜的食材成本最高", (), "restaurant_chef"),
     ("越权-后厨", "全部门店最近30天哪家店毛利最好", (), "restaurant_chef"),
 
+    # ── ⑩ 部门能力缺口: 页面有、AI 没有对应 intent ────────────────────
+    #
+    # 2026-08-01 盘点: 餐饮拆四部门(运营/市场/人事/财务), 而 AI 的 15 个 intent
+    # **集中在运营**。财务的三个页面(成本归因/供应商月对账/价格异常预警)在 AI 侧
+    # 一个对应 intent 都没有 —— 代码里连这些词都搜不到。
+    #
+    # 这里钉的**不是**「AI 应该会」, 而是「不会的时候要诚实说不会, 不许答成相邻轴」。
+    # prod 实测: 财务类问句走到 OUT_OF_DOMAIN 并明说「超出计划 resolver 的能力范围,
+    # 我不会改走相邻分析」—— 正确; 而市场类问句被路由到 CHANNEL_MIX / SALES_SUMMARY,
+    # 把「平台分析」当渠道拆分、「经营看板」当销售汇总, **可能答非所问**。
+    ("部门-财务", "最近有没有食材价格异常", ("OUT_OF_DOMAIN",), None),
+    ("部门-财务", "供应商月度对账有没有差异", ("OUT_OF_DOMAIN",), None),
+    ("部门-财务", "全部门店最近30天成本归因分析一下", ("OUT_OF_DOMAIN", "RECIPE_COST"), None),
+    ("部门-人事", "各岗位这个月的人效怎么样", ("STAFFING_ADVICE",), None),
+
     # ── ⑨ 按角色的日常问题 (每个部门至少一条主力问句) ────────────────
     ("角色-后厨", "全部门店最近30天损耗量最大的食材是哪些", ("WASTAGE_TOP",), "restaurant_chef"),
     ("角色-后厨", "库存低于安全线的食材有哪些", ("INVENTORY_WARNING",), "restaurant_chef"),
@@ -160,8 +175,15 @@ def _classify(case: Case, out: Dict[str, Any], default_role: str
         return False, f"异常: {err[:60]}"
 
     money_seen = bool(MONEY_RE.findall(answer))
-    unprivileged = role not in {"restaurant_owner", "restaurant_manager",
-                                "restaurant_purchaser", "factory_super_admin"}
+    # ⛔ 读**权威表**, 不要手写。第一版我在这里硬编了 4 个角色, 而
+    # PRICE_VIEW_ROLES 有 12 个(跨全部业务域: finance_manager / procurement_manager
+    # / sales_manager / production_manager / dispatcher / department_admin /
+    # permission_admin / platform_admin ...)。后果是拿 --role finance_manager 跑,
+    # 它看到的金额是**合法的**, 却会被判成「越权泄露」—— 假阳性。
+    # 这正是 #2119 修的那个反模式(私有表遮蔽权威表), 只不过那次在产品代码里,
+    # 这次在审计工具自己身上。
+    from smartbi_compat._rbac_strip import PRICE_VIEW_ROLES
+    unprivileged = role not in PRICE_VIEW_ROLES
 
     # 越权族: 唯一判据是「没看到钱」, 而且不能整个不可用
     if family.startswith("越权"):

@@ -7,6 +7,7 @@ import { ElMessage } from 'element-plus';
 import { Plus } from '@element-plus/icons-vue';
 import type { FormInstance } from 'element-plus';
 import type { TableRow } from '@/types/api';
+import { enumLabel } from '@/utils/enumDisplay';
 import DepartmentSwitcherRow, { type DeptOption } from '@/components/layout/DepartmentSwitcherRow.vue';
 
 const authStore = useAuthStore();
@@ -41,6 +42,20 @@ async function loadDepartments() {
   } catch (error) {
     console.error('加载部门列表失败:', error);
   }
+}
+
+/**
+ * 部门显示名。后端可能只给英文码(如 `production`)，页面已加载的部门列表能把它翻成中文。
+ * 翻不出时**回落原值而不是编造** —— 用户看到码至少知道要去部门管理里查。
+ */
+function resolveDepartmentText(row: TableRow): string {
+  const display = row.departmentDisplayName || row.departmentName;
+  if (display) return String(display);
+  const raw = row.department;
+  if (raw === null || raw === undefined || String(raw).trim() === '') return '-';
+  const code = String(raw);
+  const matched = departments.value.find((d) => d.id === code || d.name === code);
+  return matched ? matched.name : code;
 }
 
 function handleDeptChange(_id: string | null) {
@@ -246,28 +261,19 @@ async function handleSubmit() {
   }
 }
 
+/**
+ * 角色中文名 —— 委托权威表 `enumDisplay.ROLE_LABELS`，**不要在这里另抄一份**。
+ *
+ * 🔴 原来这里是一张私有映射表，硬抄了 18 个角色码，而权威表有 30 个。
+ * 漏掉的码直接以英文原样示人 —— prod 实测六膳门员工档案里 5 个人的角色显示成
+ * `yield_operator`，旁边的人却显示「质检员」。同一列一半中文一半英文码。
+ *
+ * ⚠️ 顺带发现同一个码在仓里有**两个不同中文名**：权威表叫「出成率录入员」，
+ * `hr/whitelist/index.vue` 的私有列表叫「报工员」。那处未在本次改动范围内，
+ * 但同样该收敛到权威表 —— 两个名字指同一个角色，用户没法确认是不是同一件事。
+ */
 function getRoleText(role: string) {
-  const roleMap: Record<string, string> = {
-    factory_super_admin: '工厂总监',
-    hr_admin: 'HR管理员',
-    procurement_manager: '采购主管',
-    sales_manager: '销售主管',
-    dispatcher: '调度',
-    production_manager: '调度',
-    warehouse_manager: '仓储主管',
-    equipment_admin: '设备管理员',
-    quality_manager: '质量经理',
-    finance_manager: '财务主管',
-    workshop_supervisor: '车间主任',
-    quality_inspector: '质检员',
-    operator: '操作员',
-    warehouse_worker: '仓库员',
-    permission_admin: '权限管理员',
-    department_admin: '部门管理员',
-    viewer: '查看者',
-    unactivated: '未激活'
-  };
-  return roleMap[role] || role;
+  return enumLabel(role);
 }
 </script>
 
@@ -312,8 +318,13 @@ function getRoleText(role: string) {
             <el-tag>{{ getRoleText(row.roleCode || row.role) }}</el-tag>
           </template>
         </el-table-column>
+        <!--
+          原来直接回落到 row.department 这个**英文码**(prod 实测显示 `production`)。
+          页面本来就加载了 /departments/active, 只是没拿来翻译。翻不出时仍回落原值 ——
+          不编造名字, 但至少已知的码会显示中文。
+        -->
         <el-table-column label="部门">
-          <template #default="{ row }">{{ row.departmentDisplayName || row.departmentName || row.department || '-' }}</template>
+          <template #default="{ row }">{{ resolveDepartmentText(row) }}</template>
         </el-table-column>
         <el-table-column label="状态">
           <template #default="{ row }">

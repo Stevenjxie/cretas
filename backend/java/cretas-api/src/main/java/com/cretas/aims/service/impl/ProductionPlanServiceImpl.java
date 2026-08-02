@@ -1983,14 +1983,12 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
                     .withHint("请刷新生产计划列表查看最新状态");
         }
 
-        runConfiguredValidation(factoryId, "START", java.util.Map.of("planId", planId));
-
-        // N1 (2026-06-12): 开工无条件化。原料不足只记录预警, 不再阻断开工;
-        // 领料/实际消耗在报工或结单时按现场填写。
-        validateMaterialStockSufficient(factoryId, plan);
-
         // SP2 二次加工: 开始生产时扣减 WIP 半成品库存
         // 注: 在事务内执行, 扣减失败直接抛出异常回滚整个 startProduction (fail-closed, 无 fail-soft)
+        // ⛔ 刻意留在这里而不下沉到 createBatchFromPlan: 逐工序录入(ClerkProcessEntryServiceImpl)
+        //    走的是「前端先调 /create-batch, 再由 materializeBatch 按 edges 精确扣半成品」这条路,
+        //    把扣减挪进 createBatchFromPlan 会让同一 SECONDARY 计划被扣两次(幽灵超扣)。
+        //    详见 ClerkProcessEntryServiceImpl 里 "不调用 startProduction" 那段注释。
         if ("SECONDARY".equals(plan.getPlanSourceType()) && plan.getSecondarySourceWipId() != null) {
             if (wipInventoryService == null) {
                 throw new BusinessException(500, "二次加工服务未初始化, 无法扣减半成品库存");
@@ -2003,9 +2001,43 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
             log.info("SP2 二次加工 WIP 扣减完成: planId={}, wipId={}", planId, plan.getSecondarySourceWipId());
         }
 
-        plan.setStatus(ProductionPlanStatus.IN_PROGRESS);
-        plan.setStartTime(LocalDateTime.now());
-        plan = productionPlanRepository.save(plan);
+        // 🔴 2026-08-02: 「开工」必须同时把批次建出来。
+        //
+        // 此前 startProduction 只翻状态不建批次, 而报工与结单都需要批次 → 计划进入
+        // 「已开工但没有生产批次」这个死状态, 三条路全走不通(2026-08-02 prod 真机逐条点过):
+        //   - 「继续录入/逐道录入」: 当场弹「该计划已开工但没有生产批次」, 进不去;
+        //   - 「核对结单」: 弹窗**能打开也能填**, 填完点提交才被
+        //     ensureWorkflowSettlementUsesSubmittedReports 以 409 拒掉(workflow 计划必须
+        //     先有已提交的逐道报工行) —— 让人白填一遍, 比直接挡住更费事;
+        //   - 「补建批次」: createBatchFromPlan 也只放行 PENDING, 同样 409。
+        // 用户只能作废重建。
+        // 谁在调 /start (2026-08-02 更正 —— #2173 里我把触发端写错成了 PC):
+        //   ✅ RN 手机端 ProductionPlanManagementScreen 的「开始生产」按钮
+        //      (handleStartProduction → productionPlanApiClient.startProduction, 带二次确认弹窗);
+        //   ✅ AI 工具 PlanUpdateTool (把状态改成 IN_PROGRESS 时);
+        //   ❌ web-admin **不调** —— plans/list.vue 里的 handleStart 是死代码,
+        //      定义了但模板从未引用 (2026-08-02 grep 实证: 全文件只出现 1 次, 即定义处)。
+        //
+        // 所以真实场景是**跨端**的, 比同端误操作更难察觉:
+        // 车间主管在手机上点「开始生产」(完全正常的动作) → 计划 IN_PROGRESS 但没有批次
+        // → 回到 PC, 文员发现这个计划**什么都做不了**。而 PC 前端
+        // (plans/list.vue openProcessEntry) 只在 status===PENDING 时才自动补建批次 ——
+        // 它把「状态已 IN_PROGRESS」当成了「已经有批次」的证据, 于是跳过补建。
+        // prod 实测 7 个计划卡在这里(F001 6 个最早到 2026-03-12, 六膳门 1 个)。
+        //
+        // 修法是让两个「开工」入口收敛到同一实现(materializeBatchForPlan), 而不是在
+        // createBatchFromPlan 那边放宽状态门 —— 后者会重新打开 R6 并发洞(第一笔事务未提交
+        // 批次时, 第二笔看到「IN_PROGRESS 且无批次」会建出第二个批次)。
+        // 并发安全由本方法上面那把悲观写锁 + PENDING 状态门保证: 第二个请求拿锁后看到
+        // IN_PROGRESS 就 409, 走不到这里。
+        //
+        // ⚠️ 副作用(有意): 开工现在继承了转批次的前置校验(单位缺失 422 / 数量非法 422 /
+        //    workflow pin 不覆盖产出 / 工序任务服务不可用 500)。这些计划以前「能开工」,
+        //    但开完就是死的 —— 当场报错并给出可执行提示, 比事后卡死好。
+        //    prod 实测 36 个 PENDING 计划全部有单位与数量, 现网无计划因此受阻。
+        ProductionBatch createdBatch = materializeBatchForPlan(factoryId, plan);
+        log.info("开工已建批次: planId={}, batchId={}, batchNumber={}",
+                planId, createdBatch.getId(), createdBatch.getBatchNumber());
 
         if (applicationEventPublisher != null) {
             try {
@@ -6184,10 +6216,64 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
             throw new BusinessException(403, "无权操作该生产计划")
                     .withHint("当前生产计划不属于该工厂, 无法操作");
         }
+        // 🔴 原来只允许 PENDING, 于是「开始生产」之后的计划**永远补不了批次** ——
+        // 而 workflow 模式的计划没有批次就报不了工, 也结不了单, PC 端彻底死锁:
+        //   1. 点「开始生产」→ status=IN_PROGRESS, 但**不建批次**
+        //   2. 点「逐道录入」→ 前端只在 PENDING 时自动建批次, 这里被跳过 → 抽屉空白
+        //   3. 点「核对结单」→ 409「workflow 计划必须先完成并正式提交逐道报工」
+        // 三条路全走不通, 且全是正常 UI 操作。2026-08-01 六膳门 prod 实测撞到。
+        //
+        // 放开 IN_PROGRESS **但只在还没有批次时** —— 已有批次仍然拦住, 防重复转批次。
         if (plan.getStatus() != ProductionPlanStatus.PENDING) {
+            List<ProductionBatch> existingBatches =
+                    productionBatchRepository.findByFactoryIdAndProductionPlanId(factoryId, planId);
+            if (!existingBatches.isEmpty()) {
+                // 幂等: 已经转过批次就把既有批次还回去, 不报错 —— 调用方(逐道录入抽屉)
+                // 每次打开都会调一次, 报 409 只会变成一个每次都弹的无用提示。
+                log.info("计划 {} 已有 {} 个批次, 直接复用 (幂等)", planId, existingBatches.size());
+                return existingBatches.get(0);
+            }
+            // ⛔ 刻意**不**放行「IN_PROGRESS 且没有批次」去补建批次:
+            //   R6 并发守卫(ProductionPlanCancelConcurrencyTest)要求「并发第二个 create-batch
+            //   看到 IN_PROGRESS 就必须 409, 不许建出第二个批次」。放行会在第一笔事务尚未提交
+            //   批次时重新打开这个洞 —— 拿 UX 死锁换并发重复批次是亏的。
+            //
+            //   真正的根在 startProduction: 它持锁、只放行 PENDING、然后置 IN_PROGRESS
+            //   **却不建批次**, 于是 workflow 计划可以合法地进入「开工了但没有批次」这个状态,
+            //   而报工与结单都需要批次 → PC 端死锁。修那里才是治本, 但那条路被广泛使用,
+            //   要单独一轮带并发用例做。本轮只把「已有批次」的重复调用变成幂等。
+            if (plan.getStatus() == ProductionPlanStatus.IN_PROGRESS) {
+                // 「开工了但没有批次」—— 报工与结单都需要批次, 这个计划在 PC 端走不下去了。
+                // 说清楚处境比丢一句「只有待处理的计划可以转为批次」有用得多。
+                throw new BusinessException(409, "该计划已开工但没有生产批次，无法报工或结单")
+                        .withHint("请用 APP 对该计划逐道报工（会自动建批次）；"
+                                + "若现场不用 APP，请取消该计划后重新创建并直接点「逐道录入」")
+                        .withHintTarget("productionPlan");
+            }
             throw new BusinessException(409, "只有待处理的计划可以转为批次")
                     .withHint("请刷新生产计划列表查看最新状态");
         }
+
+        return materializeBatchForPlan(factoryId, plan);
+    }
+
+    /**
+     * 把一个<b>已经取到悲观写锁、已确认可开工</b>的计划物化成生产批次。
+     *
+     * <p>「开工」在系统里有两个入口 —— {@link #startProduction} 与 {@link #createBatchFromPlan} ——
+     * 它们各自做过一半的事: 前者只翻状态不建批次, 后者建批次但不扣 SECONDARY 的 WIP。
+     * 于是先点「开工」的计划会卡进「已开工但没有生产批次」, 报工/结单/补建三条路全堵死
+     * (prod 实测 7 个)。这个方法是两者收敛后的<b>唯一</b>批次物化实现。
+     *
+     * <p>⛔ 刻意接收<b>已锁定的 plan 实体</b>而不是 planId: 若让 startProduction 去调
+     * {@link #createBatchFromPlan}, 就会在同一事务里第二次 {@code findByIdForUpdate} ——
+     * 对同事务是重入(无害), 但多一次 SELECT ... FOR UPDATE 往返, 且会破坏 R6 并发用例里
+     * 「取锁至多一次」的断言。锁与状态门留在各自入口, 这里只管物化。
+     *
+     * @param plan 调用方必须已经完成: 悲观写锁 + 工厂归属校验 + 状态门(PENDING)
+     */
+    private ProductionBatch materializeBatchForPlan(String factoryId, ProductionPlan plan) {
+        String planId = plan.getId();
 
         BigDecimal batchTargetQuantity = plan.getPlannedQuantity() == null
                 ? BigDecimal.ZERO

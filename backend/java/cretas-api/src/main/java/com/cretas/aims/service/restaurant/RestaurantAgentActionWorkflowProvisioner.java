@@ -33,14 +33,22 @@ public class RestaurantAgentActionWorkflowProvisioner {
     private static final Set<FactoryType> ELIGIBLE_TYPES =
             Set.of(FactoryType.RESTAURANT, FactoryType.BRANCH);
 
+    // 🔴 2026-08-02: label / description 改中文 —— 这些**直接显示在 OA 审批中心的
+    //   「当前节点」列**给中文用户看。prod 实测 37 个工厂全被种了英文
+    //   (Submit review / Review dish cost data / Approved)。
+    // ⚠️ 改这几个常量**必须同时**跑 V20261029_47 更新存量 37 行 nodes_json:
+    //   provisionIfEligible 只在缺失时创建("already exists; preserving tenant config" 直接 return),
+    //   而 isCanonical() 把存量 nodes_json 与本常量**逐字比对** —— 只改常量会让 37 行全部
+    //   变成 non-canonical, RestaurantAgentActionWorkflowService.requireCanonicalWorkflow
+    //   随即抛 503 RESTAURANT_AGENT_ACTION_WORKFLOW_INVALID, 整个功能对这 37 个工厂不可用。
     private static final String DESCRIPTION =
-            "Human review of missing dish cost data. Approval only unlocks navigation to the recipe data page.";
+            "人工复核缺失的菜品成本数据。审批通过仅解锁跳转到配方数据页，不改动任何数据。";
 
     private static final String NODES_JSON = """
             [
-              {"id":"start","type":"start","label":"Submit review","position":{"x":60,"y":120},"config":{}},
-              {"id":"human_review","type":"approval","label":"Review dish cost data","position":{"x":320,"y":120},"config":{"approverRoles":["restaurant_owner","restaurant_manager","finance_manager"],"requiredApprovers":1,"timeoutMinutes":1440}},
-              {"id":"approved","type":"end","label":"Approved","position":{"x":600,"y":120},"config":{"outcome":"APPROVED"}}
+              {"id":"start","type":"start","label":"提交复核","position":{"x":60,"y":120},"config":{}},
+              {"id":"human_review","type":"approval","label":"复核菜品成本数据","position":{"x":320,"y":120},"config":{"approverRoles":["restaurant_owner","restaurant_manager","finance_manager"],"requiredApprovers":1,"timeoutMinutes":1440}},
+              {"id":"approved","type":"end","label":"已通过","position":{"x":600,"y":120},"config":{"outcome":"APPROVED"}}
             ]
             """;
 

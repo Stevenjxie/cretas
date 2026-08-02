@@ -1,5 +1,14 @@
 # 2026-08-01 ACTIVE 归档
 
+## BUG-F006-FACTORY-APP-SHEET-20260801
+
+- 状态：`merged`（随 PR #2169 合入）；Owner：`/root`；Base SHA：`b151fc6282fe87a064617f19ceff580480a370a0`。
+- 实测根因：消耗记录对数字生产批次号直接调用字符串方法；生产计划漏掉 `production_manager`；完成态“记录出货”为纯占位提示；PROGRESS/HOURS 共用必填校验；工时报工未发送分钟数；时间分隔符可被删除；Axios 通用文案吞掉业务原因；无写权限角色仍显示库存 mutation；销售建单缺搜索、结构化单位、税率与销售员关联，且后端又用空旧字段覆盖包装规格/箱数快照。
+- 修复：数字/字符串批次号统一归一化；补生产主管建计划权限与真实发货交接说明；按报工类型拆分前后端校验并固定 `HH:mm`；业务错误显示 `message + actionHint` 且仅断网保存草稿；库存只读角色隐藏 mutation；销售客户/产品/SKU 可搜索、单位来自真实 SKU/包装规格、税率可留空继承、销售员按用户 ID 关联，并保留后端解析出的包装快照。
+- 验证：RN 目标 Jest 6 suites / 25 tests 通过；Java `WorkReportingServiceImplTest,SalesServiceImplPackagingSnapshotTest` 12 tests 通过；`git diff --check` 通过；最新本地 Expo Web bundle 以 F006 `sales_manager` 实际复核搜索、SKU 区分、结构化单位和税率字段，未提交订单。全量 TypeScript 只保留基线既有的 `ProcessTaskListScreen.test.tsx` mock 类型错误；原生验收因本机无 Maestro 且无 adb 设备/模拟器未执行。
+- Sheet 保持只读；F006 受控复现的实际业务写入为 0；未修改与采购/仓储在飞任务重叠的文件；未部署生产（`NOT_DEPLOYED`）。
+- Scope 锁随 PR 合入释放；worktree 与分支按规则保留，未执行清理。
+
 ## SOP-DUAL-LINE-SYNC-20260801
 
 - 状态：`merged`；Owner：`/root`；Base SHA：`206e19a3edba7b3a990277a7d63e97b0f1f94c7f`。

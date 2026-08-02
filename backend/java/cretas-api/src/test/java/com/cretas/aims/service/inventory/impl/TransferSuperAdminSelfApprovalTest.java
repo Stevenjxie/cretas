@@ -23,6 +23,13 @@ import static org.mockito.Mockito.when;
  * 背景: 职责分离(发起人 != 审批人)是默认铁律, 但小工厂常常只有一个 factory_super_admin。
  * 审批节点又只认这个角色时, 他发起的调拨永远批不掉 —— 实测某工厂因此一个多月没走通过
  * 一次调拨审批, 调拨单全部卡在草稿。例外只对 factory_super_admin 开, 其它角色不变。
+ *
+ * <p><b>本类现在只覆盖「提交侧」判据</b>({@code allowsSuperAdminSelfApproval})。
+ * 「审批动作侧」的判据原为本类的私有 {@code isFactorySuperAdmin}, 已提取到
+ * {@link com.cretas.aims.service.workflow.SelfApprovalPolicy} 并与采购单的「节点显式点名」
+ * 例外合并 —— 同一条规则此前在采购/销售/调拨三处各长出了不同行为(采购只认点名、
+ * 调拨只认超管、销售两者都没有)。对应覆盖已搬到 {@code SelfApprovalPolicyTest}:
+ * actorRole 缺失回落查库、停用账号不放行、匿名 actor 不放行、角色码大小写不敏感。
  */
 @ExtendWith(MockitoExtension.class)
 @MockitoSettings(strictness = Strictness.LENIENT)
@@ -55,11 +62,6 @@ class TransferSuperAdminSelfApprovalTest {
     private boolean allowsSelfApproval(List<String> roles, Long initiatorId) {
         return Boolean.TRUE.equals(ReflectionTestUtils.invokeMethod(
                 service, "allowsSuperAdminSelfApproval", FACTORY_ID, roles, initiatorId));
-    }
-
-    private boolean isSuperAdmin(Long userId, String actorRole) {
-        return Boolean.TRUE.equals(ReflectionTestUtils.invokeMethod(
-                service, "isFactorySuperAdmin", FACTORY_ID, userId, actorRole));
     }
 
     @Test
@@ -100,19 +102,7 @@ class TransferSuperAdminSelfApprovalTest {
     }
 
     @Test
-    void approvalSideFallsBackToStoredRoleWhenActorRoleMissing() {
-        when(userRepository.findByFactoryIdAndRoleCode(FACTORY_ID, SUPER_ADMIN))
-                .thenReturn(List.of(user(ADMIN_ID, true)));
-
-        // actorRole 由调用方传入, 可能为空 —— 不能让缺失的入参把例外吞掉
-        assertTrue(isSuperAdmin(ADMIN_ID, null));
-        assertTrue(isSuperAdmin(ADMIN_ID, SUPER_ADMIN));
-        assertFalse(isSuperAdmin(OTHER_ID, null));
-    }
-
-    @Test
     void anonymousActorIsNeverTreatedAsSuperAdmin() {
-        assertFalse(isSuperAdmin(null, SUPER_ADMIN));
         assertFalse(allowsSelfApproval(List.of(SUPER_ADMIN), null));
     }
 }

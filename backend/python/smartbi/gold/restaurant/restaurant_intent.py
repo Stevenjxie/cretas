@@ -361,7 +361,16 @@ _TIME_SCOPED_INTENTS = frozenset({
     "RESTAURANT_OPS_STORE_MARGIN",
     "RESTAURANT_OPS_SALES_SUMMARY",
     "RESTAURANT_OPS_TREND_ANALYSIS",
-    "RESTAURANT_OPS_STAFFING_ADVICE",
+    # ⛔ 2026-08-01 移除 RESTAURANT_OPS_STAFFING_ADVICE。
+    # 它的 resolver 是 `resolve_staffing_advice(pool, factory_id)` —— **一个日期
+    # 参数都没有**, 读的是 `fact_staffing_daypart` 这张配置表(没有时间维度)。
+    # 留在这里的后果: 「哪个时段人手不够」被拦下问「你想看哪个时间范围？」,
+    # 而用户认真回答「最近30天」之后拿到的答案与回答「本月」**一模一样** ——
+    # 澄清问了一个答案根本不受其影响的问题, 比不问更糟(它让用户以为自己在控制口径)。
+    #
+    # ⚠️ 这个缺陷此前一直被**另一个**缺失挡着: 人效配置表是空的, resolver 先返回
+    # 「还没有配置人效数据」, 澄清那层根本走不到。配上数据之后才浮出来。
+    # `test_time_scoped_intents_contract.py` 现在按 resolver 签名静态守住这条。
 })
 
 
@@ -523,9 +532,26 @@ _REQUEST_METRIC_RULES: Tuple[Tuple[str, Tuple[str, ...]], ...] = (
         "畅销", "慢销", "滞销",
     )),
     ("gross_margin", ("毛利率", "毛利", "利润", "盈利", "赚钱", "亏钱", "亏损", "亏本", "赔钱")),
+    # 2026-08-01 补入「业绩」。四部门审计实拍: 「最近30天哪家店业绩最好」两个租户
+    # 都答不出 —— t1 与 planned_intents 都是 SALES_SUMMARY, 但 LLM 选了 STORE_MARGIN,
+    # 而 contract-repair 要求 `_repair_backed_by_user_wording`, 该函数拿本表编译的
+    # 结果与修复指标求交集; 「业绩」不在表里 → 交集为空 → **修复通道拒绝介入**,
+    # 错的 resolver 一路走到「问题对象与分析范围不一致」的澄清。
+    # 把「业绩」换成「营收」同一句就能答(实测 authority=llm_contract_repair),
+    # 差别只在这一个词。与本表 `requisition_cost` 那条是同一形状。
+    # ⚠️ 症状是**不稳定而非恒错**: LLM 选对时用不着 repair, 选错时才暴露。
+    #
+    # ⛔ 只收「业绩」, **刻意不收「生意」**。第一版两个一起加, 当场打挂 4 条既有用例,
+    #    全部由「生意」引起 —— 它是泛化的经营词, 不是营收同义词:
+    #      · 「生意有起色没，划算不划算」本该 asks_profitability=True, 被吸成 revenue
+    #      · 时段经营问句本该落 STAFFING_ADVICE, 被劫持成 TREND_ANALYSIS
+    #      · 另两条断言 requested_metrics 应为空 / 槽位穿越路由缓存
+    #    而「生意怎么样」这类问句今天本来就能答(LLM 直接选对 SALES_SUMMARY),
+    #    加它没有收益只有劫持。「业绩」则是明确的营收类问法, 单独加零回归。
     ("revenue", (
         "营业收入", "销售收入", "营业额", "销售额", "营收", "流水",
         "卖了多少钱", "卖了多少元", "卖了多少块", "收入多少",
+        "业绩",
     )),
     ("orders", ("订单集中", "订单数", "订单", "单量", "客单价")),
     ("staffing", ("人员不足", "人手不足", "人手", "人员", "排班", "人效", "在岗人数")),
@@ -2166,6 +2192,18 @@ def _build_spec(
             "最近7天",
             "最近30天",
         )
+    if code in _NO_SCOPE_INTENTS and clarification_needed:
+        # 该 resolver 接不住任何澄清 —— 问了也白问, 用户答完拿到的是同一个答案。
+        # 反过来不问就能直接作答, 所以这里丢弃澄清而不是放行。
+        logger.info(
+            "[restaurant-intent] 丢弃对 %s 的澄清(resolver 接不住范围): %r",
+            code, (clarification_question or "")[:60],
+        )
+        clarification_needed = False
+        clarification_question = None
+        missing_slot = None
+        clarification_options = ()
+
     if planner_authority in {
         "tenant_gate_unavailable",
         "llm_unavailable",
@@ -3825,6 +3863,35 @@ _STORE_SCOPE_FREE_INTENTS = frozenset({
     "RESTAURANT_OPS_OUT_OF_DOMAIN",
     "RESTAURANT_OPS_PLAYBOOK",
     "RESTAURANT_OPS_STORE_DIRECTORY",
+    # 2026-08-01 补入。`resolve_staffing_advice(pool, factory_id)` 只有两个参数 ——
+    # **一个门店参数都没有**, 读的是 `fact_staffing_daypart` 这张连锁口径的配置表。
+    # 不豁免的后果: 「上个月人效怎么样」被拦下问「你想查看哪家门店的人效情况？」,
+    # 而用户选了哪家店都不会改变答案 —— 与「问时间范围」是同一族缺陷:
+    # **向用户要一个 resolver 消费不了的槽位**。
+    #
+    # ⚠️ 它**时灵时不灵**: 本守卫靠 `requested_metrics ∩ _STORE_SCOPE_REQUIRED_METRICS`
+    # 触发, 而「人效」的指标由 LLM 填 —— 填成 orders/revenue 那轮才拦得住。
+    # 所以不是稳定缺陷而是**确定性覆盖的缺口**, 由
+    # `test_time_scoped_intents_contract.py` 按 resolver 签名静态守住。
+    "RESTAURANT_OPS_STAFFING_ADVICE",
+})
+
+
+# resolver 签名只有 (pool, factory_id) 的 intent —— 它**接不住任何澄清**:
+# 没有 date_range、没有 store_id, 用户回答什么都不会改变答案。
+#
+# 2026-08-01: 修掉 `_TIME_SCOPED_INTENTS` 与 `_STORE_SCOPE_FREE_INTENTS` 两条路径后,
+# 「上个月人效怎么样」仍有约 1/8 概率答不出, 正文是「你想查看哪家门店的人效情况？」——
+# 那句**不是** STORE_SCOPE_CLARIFICATION_QUESTION 的措辞, 是 **LLM 自己**决定要问门店。
+# `_slots_of_clarification` 只认三个已知常量, LLM 自由发挥的问句返回空集, 前两条
+# 守卫都拦不住。所以这里按「resolver 到底接不接得住」兜底, 而不是继续按问句措辞猜。
+#
+# ⚠️ 复现必须**一个进程只调一次**: 计划缓存是进程内的, 同进程第二次就命中缓存,
+#    冷路径行为被完全掩盖(实测同进程 12/12 全过, 每进程一次才 1/8 复现)。
+#
+# `test_time_scoped_intents_contract.py` 按 resolver 签名静态守住这张表的完整性。
+_NO_SCOPE_INTENTS = frozenset({
+    "RESTAURANT_OPS_STAFFING_ADVICE",
 })
 
 

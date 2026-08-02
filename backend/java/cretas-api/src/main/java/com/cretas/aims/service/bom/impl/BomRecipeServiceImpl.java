@@ -1022,6 +1022,31 @@ public class BomRecipeServiceImpl implements BomRecipeService {
         return recipeRepo.findById(requested.getId()).orElse(requested);
     }
 
+    /**
+     * 这个 Workflow 投入槽是不是<b>已经被别的行占着</b>（那一行带完整槽身份）。
+     *
+     * <p>占着 → 待删的这一行只是同物料的<b>重复行</b>，删掉不会让必需投入消失，应当允许删除。
+     * 没被占 → 它确实是该槽在 BOM 里的唯一代表，删掉会让投入凭空消失，继续拦。
+     */
+    private boolean slotOccupiedByAnotherItem(
+            BomRecipe recipe,
+            BomRecipeItem candidate,
+            BomWorkflowRevisionService.InputSlot slot) {
+        for (BomRecipe member : familyForStatus(recipe)) {
+            for (BomRecipeItem other : itemRepo.findByRecipeIdOrderBySortOrderAsc(member.getId())) {
+                if (other.getDeletedAt() != null || Objects.equals(other.getId(), candidate.getId())) {
+                    continue;
+                }
+                if (Objects.equals(other.getWorkflowMaterialNodeId(), slot.materialNodeId())
+                        && Objects.equals(other.getWorkflowInputPortId(), slot.inputPortId())
+                        && Objects.equals(other.getWorkflowEdgeId(), slot.edgeId())) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
     private String slotKey(BomWorkflowRevisionService.InputSlot slot) {
         return slot.materialNodeId() + "\u0000"
                 + slot.inputPortId() + "\u0000" + slot.edgeId();
@@ -1805,7 +1830,14 @@ public class BomRecipeServiceImpl implements BomRecipeService {
                     BomWorkflowRevisionService.resolveInputSlots(
                             bomWorkflowRevisionService.resolvePinnedGraph(factoryId, member))) {
                 if (Objects.equals(slot.materialTypeId(), item.getMaterialTypeId())
-                        && BomWorkflowRevisionService.unitsCompatible(slot.unit(), item.getUnit())) {
+                        && BomWorkflowRevisionService.unitsCompatible(slot.unit(), item.getUnit())
+                        // 🔴 该槽已被另一行「带身份地」占着时, 本行就不是它的代表, 而是**重复行** ——
+                        // 这道闸的本意(见方法 Javadoc)是「它还唯一代表着一个必需投入时不许删」,
+                        // 但从来没检查过槽有没有被占。于是历史遗留的重复行**永远删不掉**:
+                        // 系统自己造出来的行, 它又不让你删, 用户在界面上没有任何出路。
+                        // (2026-08-01 六膳门实测: BOM 里三个辅料各有两行, 带端口那行用量为空
+                        //  卡住领料, 而没端口的那行删不了。)
+                        && !slotOccupiedByAnotherItem(recipe, item, slot)) {
                     matches.putIfAbsent(slotKey(slot), slot);
                 }
             }
@@ -2133,9 +2165,21 @@ public class BomRecipeServiceImpl implements BomRecipeService {
                     .filter(item -> Objects.equals(
                             item.getWorkflowEdgeId(), dto.getWorkflowEdgeId()))
                     .toList();
-        } else if (identityCount == 0
-                && "RAW".equalsIgnoreCase(
-                        dto.getMaterialCategory() == null ? "RAW" : dto.getMaterialCategory())) {
+        } else if (identityCount == 0 && !isOutputCategory(dto.getMaterialCategory())) {
+            // 🔴 这里以前额外要求 materialCategory 必须是 RAW, 于是 AUXILIARY / PACKAGING 的行
+            // 匹配不到骨架 → 新建一行, 而骨架行因带 workflow 身份被保留 → **同一物料两行并存**,
+            // 骨架那行 standard_quantity 为空。
+            //
+            // 根因是**两套分类被当成了同一个东西**: Workflow 的 materialKind 说的是「这个格子里
+            // 放的是什么料」(调料在 Workflow 里就是 RAW_MATERIAL), BOM 的 materialCategory 说的是
+            // 「这一行在配方里算哪类成本」(同一个调料该记 AUXILIARY)。拿业务成本分类当骨架身份
+            // 判据, 所有非 RAW 的投入行必然重复。身份应当只看 物料 + 单位兼容性。
+            //
+            // 用户侧表现: 保存成功、界面正常, 直到**领料**才被拦「未配置 BOM 用量」——
+            // 而他明明填过; 界面上那行是好的, 坏的是另一行影子记录。
+            // prod 实测 (六膳门 BOM-20260801-001): 提交 4 行落库 7 行, 三个 AUXILIARY 各多一空行。
+            //
+            // ⛔ 仍然排除产出类 (BYPRODUCT): 骨架来自**投入端口**, 产出行不该绑到投入槽上。
             matches = existingItems.stream()
                     .filter(item -> !claimed.contains(item.getId()))
                     .filter(this::hasCompleteWorkflowIdentity)
@@ -2578,6 +2622,17 @@ public class BomRecipeServiceImpl implements BomRecipeService {
         dto.setWorkflowEdgeId(profile.slot().edgeId());
         dto.setCostScope(profile.costScope());
         dto.setCostScopeKey(profile.costScopeKey());
+    }
+
+    /**
+     * 该 BOM 行是不是<b>产出</b>类。
+     *
+     * <p>Workflow 骨架行来自<b>投入端口</b>, 所以产出类的行不该去认领投入槽。
+     * 其余分类 (RAW / AUXILIARY / PACKAGING / 未填) 都是投入, 一律参与骨架匹配 ——
+     * 「这一行算哪类成本」与「它占哪个投入槽」是两件事。
+     */
+    private boolean isOutputCategory(String materialCategory) {
+        return "BYPRODUCT".equalsIgnoreCase(materialCategory);
     }
 
     private int stableFieldCount(BomRecipeItemDTO dto) {
