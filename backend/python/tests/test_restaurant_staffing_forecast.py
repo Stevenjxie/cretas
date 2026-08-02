@@ -9,7 +9,9 @@ import pytest
 from smartbi.gold.restaurant.restaurant_ops_router import match_restaurant_ops
 from smartbi.services.restaurant.staffing_forecast import (
     RestaurantStaffingService,
+    _candidate_narrative_validator,
     _numeric_free_validator,
+    _strip_structural_numbering,
     daily_demand_forecast,
     horizon_from_question,
     horizon_window,
@@ -113,6 +115,15 @@ def test_llm_cannot_author_numbers_or_unsupported_causality():
     assert _numeric_free_validator("一定是天气导致。") == "unsupported_causal_claim"
 
 
+def test_llm_structural_numbering_is_removed_without_allowing_business_numbers():
+    content = "1. 建议先确认技能覆盖。\n2、再预览班次调整。"
+    assert _candidate_narrative_validator(content) is None
+    stripped = _strip_structural_numbering(content)
+    assert "1" not in stripped
+    assert "2" not in stripped
+    assert _candidate_narrative_validator("建议增加2人。") == "llm_authored_number"
+
+
 def test_plan_fingerprint_changes_with_fact_or_policy_version():
     args = ("MOCK_REST", 1, date(2026, 8, 4), "午市", "service", 100, 3, 1)
     first = make_plan_fingerprint(*args)
@@ -159,6 +170,27 @@ def test_answer_question_must_call_existing_llm_slot_with_factbook(monkeypatch):
     args = llm_call.await_args.args
     assert args[0] == module.SLOT.INSIGHTS
     assert "用户问题：明天怎么排班" in args[1]["messages"][1]["content"]
+    assert "130" not in args[1]["messages"][1]["content"]
+    assert "当前预订已覆盖；客流短期高于中期" in args[1]["messages"][1]["content"]
+    assert _numeric_free_validator(args[1]["messages"][1]["content"]) is None
+    assert llm_call.await_args.kwargs["content_validator"](
+        "1. 建议先确认技能覆盖。"
+    ) is None
+
+
+def test_answer_question_strips_provider_list_ordinals(monkeypatch):
+    from smartbi.services.restaurant import staffing_forecast as module
+
+    monkeypatch.setattr(module, "call_chain", AsyncMock(return_value={
+        "choices": [{"message": {"content": "1. 建议先确认技能覆盖。\n2、再预览班次调整。"}}],
+    }))
+    service = RestaurantStaffingService(None)
+    service.build_dashboard = AsyncMock(return_value=_answer_dashboard())
+    result = asyncio.run(service.answer_question("MOCK_REST", "明天怎么排班"))
+    narrative = result["answer_text"].split("**大模型解读（只解释 FactBook，不生成数字）**", 1)[1]
+    assert "1." not in narrative
+    assert "2、" not in narrative
+    assert "建议先确认技能覆盖" in narrative
 
 
 def test_answer_question_rejects_model_number_even_after_provider_validation(monkeypatch):
