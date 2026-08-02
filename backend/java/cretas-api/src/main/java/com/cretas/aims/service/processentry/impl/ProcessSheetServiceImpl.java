@@ -936,6 +936,7 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
                 factoryId,
                 req.isFinished() ? planId : null,
                 req.getProductTypeId(),
+                resolveRecipeProductTypeId(planId, req.getProductTypeId()),
                 req.getBatchNumber(),
                 req.isFinished(),
                 clerkService.resolveLaborRate(factoryId, warnings),
@@ -1525,6 +1526,7 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
                 factoryId,
                 one.isFinished() ? planId : null,
                 one.getProductTypeId(),
+                resolveRecipeProductTypeId(planId, one.getProductTypeId()),
                 one.getBatchNumber(),
                 one.isFinished(),
                 clerkService.resolveLaborRate(factoryId, warnings),
@@ -2250,6 +2252,7 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
                     factoryId,
                     req.isFinished() ? planId : null,
                     req.getProductTypeId(),
+                    resolveRecipeProductTypeId(planId, req.getProductTypeId()),
                     req.getBatchNumber(),
                     req.isFinished(),
                     clerkService.resolveLaborRate(factoryId, warnings),
@@ -2301,6 +2304,7 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
                 factoryId,
                 req.isFinished() ? planId : null,
                 req.getProductTypeId(),
+                resolveRecipeProductTypeId(planId, req.getProductTypeId()),
                 existing.getBatchNumber(),  // 保留现有批次号
                 req.isFinished(),
                 clerkService.resolveLaborRate(factoryId, warnings),
@@ -4317,6 +4321,26 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
     // ─────────────────────────────────────────────────────────────
     // Request → StepEntry mapping
     // ─────────────────────────────────────────────────────────────
+
+    /**
+     * 解析 BOM/调料配方归属的成品 SKU —— 取所属生产计划的产品。
+     *
+     * <p>BOM 只挂成品(中间半成品按设计不该有 BOM, 见 {@code BomWorkflowRevisionService}
+     * 的终端产出闸)。中间道报工的 {@code req.getProductTypeId()} 是该道产出的半成品,
+     * 拿它查 BOM 必然落空 —— 曾因此让熟制道每次报工都提示「未设置当前 BOM 调料配方,
+     * 调料成本暂记 0」, 且把用户指向一个系统不允许配置的位置。
+     *
+     * <p>解析不到计划时回落 {@code fallback}(该道自己的 productTypeId), 与旧行为一致。
+     */
+    private String resolveRecipeProductTypeId(String planId, String fallback) {
+        if (planId == null || planId.isBlank() || productionPlanRepository == null) {
+            return fallback;
+        }
+        return productionPlanRepository.findById(planId)
+                .map(ProductionPlan::getProductTypeId)
+                .filter(id -> id != null && !id.isBlank())
+                .orElse(fallback);
+    }
 
     private StepEntry buildStepEntry(String factoryId, ProcessSheetRowRequest req) {
         StepEntry st = new StepEntry();

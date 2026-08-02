@@ -109,7 +109,7 @@ class ProcessSheetWorkflowRuntimeBatchReuseTest {
 
     private MaterializeContext context(boolean finished, String productTypeId) {
         return new MaterializeContext(
-                FACTORY, finished ? "PLAN-WF" : null, productTypeId, null, finished,
+                FACTORY, finished ? "PLAN-WF" : null, productTypeId, productTypeId, null, finished,
                 BigDecimal.ONE, "WH-WKS", null, 1309L);
     }
 
