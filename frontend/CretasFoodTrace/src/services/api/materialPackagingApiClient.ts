@@ -38,6 +38,24 @@ export interface MaterialPackagingSpec {
 }
 
 export const materialPackagingApiClient = {
+  /**
+   * 一次取回本工厂**全部**原料的规格层级。
+   *
+   * 库存列表要给每个批次显示多单位换算, 逐个调 getByMaterial 会打出几十个请求;
+   * 后端 MaterialPackagingHierarchyController 本来就有整厂 list 接口, 这里补上客户端。
+   * F006 实测 305 个原料里只有 35 条有层级, 返回体很小。
+   */
+  async list(factoryId?: string): Promise<MaterialPackagingHierarchy[]> {
+    const fid = getCurrentFactoryId(factoryId);
+    if (!fid) {
+      throw new Error('factoryId 必填');
+    }
+    const response = await apiClient.get<{ success: boolean; data: MaterialPackagingHierarchy[]; message: string }>(
+      `/api/mobile/${fid}/material-packaging`,
+    );
+    return response?.data ?? [];
+  },
+
   async getByMaterial(materialTypeId: string, factoryId?: string): Promise<MaterialPackagingHierarchy | null> {
     const fid = getCurrentFactoryId(factoryId);
     if (!fid) {
