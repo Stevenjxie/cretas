@@ -115,9 +115,6 @@ def test_mapper_uses_bounded_fast_models_without_max_or_reasoners():
         ("aliyun_b", "qwen3.7-flash"),
     ]
     assert ("aliyun_c", "glm-5.2") in chain
-    assert ("aliyun_c", "qwen3.7-plus") in chain
-    assert ("aliyun_b", "qwen3.7-plus") in chain
-    assert ("aliyun_a", "qwen3.7-plus") in chain
     assert ("zhipu", "glm-4.5-air") in chain
     assert all(
         token not in model
@@ -126,19 +123,15 @@ def test_mapper_uses_bounded_fast_models_without_max_or_reasoners():
     )
 
 
-def test_insights_prefers_interleaved_free_plus_before_max_deep_tail():
+def test_insights_prefers_verified_live_plus_before_max_deep_tail():
     chain = llm_router.SLOT_MODELS[SLOT.INSIGHTS]
-    assert chain[:6] == [
-        ("aliyun_c", "qwen3.7-plus"),
-        ("aliyun_b", "qwen3.7-plus"),
-        ("aliyun_a", "qwen3.7-plus"),
-        ("aliyun_c", "qwen3.7-plus-2026-05-26"),
+    assert chain[:2] == [
         ("aliyun_b", "qwen3.7-plus-2026-05-26"),
         ("aliyun_a", "qwen3.7-plus-2026-05-26"),
     ]
     first_max = next(i for i, (_account, model) in enumerate(chain) if "max" in model)
-    assert first_max >= 8
-    assert all(model not in llm_router._THINKING_ONLY for _account, model in chain[:8])
+    assert first_max >= 4
+    assert all(model not in llm_router._THINKING_ONLY for _account, model in chain[:6])
     assert ("aliyun_a", "qwen3.7-max-2026-05-20") not in chain
     assert ("aliyun_a", "qwen3.7-max-2026-06-08") in chain
 
@@ -151,15 +144,11 @@ def test_review_reaches_verified_independent_providers_before_aliyun():
         ("tencent", "glm-5.2"),
         ("ark", "doubao-seed-2-0-lite-260428"),
     ]
-    assert chain[4:12] == [
-        ("aliyun_c", "qwen3.7-plus-2026-05-26"),
+    assert chain[4:8] == [
         ("aliyun_b", "qwen3.7-plus-2026-05-26"),
         ("aliyun_a", "qwen3.7-plus-2026-05-26"),
         ("aliyun_a", "qwen3.7-max-2026-06-08"),
         ("aliyun_c", "qwen3.7-max-2026-06-08"),
-        ("aliyun_c", "qwen3.7-plus"),
-        ("aliyun_b", "qwen3.7-plus"),
-        ("aliyun_a", "qwen3.7-plus"),
     ]
     assert all(model not in llm_router._THINKING_ONLY for _account, model in chain)
 
@@ -174,6 +163,22 @@ def test_no_slot_keeps_an_aliyun_grant_expired_by_august_3():
         and llm_router._refuse_reason(account, model, audit_date) == "expired"
     ]
     assert not offenders, f"expired Aliyun models remain reachable: {offenders}"
+
+
+def test_production_exhausted_aliyun_pairs_are_fully_retired():
+    retired = {
+        ("aliyun_a", "qwen3.7-plus"),
+        ("aliyun_b", "qwen3.7-plus"),
+        ("aliyun_c", "qwen3.7-plus"),
+        ("aliyun_c", "qwen3.7-plus-2026-05-26"),
+    }
+    reachable = {
+        pair
+        for chain in llm_router.SLOT_MODELS.values()
+        for pair in chain
+    }
+    assert retired.isdisjoint(llm_router._SAFE_MODELS)
+    assert retired.isdisjoint(reachable)
 
 
 def test_new_b_and_c_flash_quota_pairs_are_registered_and_head_fast_slots():
