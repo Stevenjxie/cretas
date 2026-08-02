@@ -92,7 +92,16 @@ public interface ProductionStockAllocationService {
             String materialTypeId,
             BigDecimal available,
             String unit,
-            List<ElsewhereStock> elsewhere) {
+            List<ElsewhereStock> elsewhere,
+            /**
+             * 生产仓里<b>过期但仍有余量</b>的数量 —— 只用于展示与提醒, <b>不计入 available</b>。
+             *
+             * <p>过期批次原本被 {@code status='AVAILABLE'} 条件静默滤掉, 界面只剩一句
+             * 「生产仓可用 0」, 仓管分不清是<b>真没货</b>还是<b>货过期了</b>(实测 F006 羊排
+             * 原料仓有 100kg 但全部 EXPIRED, 界面既不提示也不解释)。把它单独报出来,
+             * 前端可显示「过期 100kg · 不可投, 请处理」并引导去报损/处置。
+             */
+            BigDecimal expired) {
     }
 
     /** 同物料在**非生产仓**的存量 —— 用于「主仓另有 200 只, 待调拨入生产仓」。 */

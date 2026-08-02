@@ -4448,13 +4448,37 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
                     .map(slot -> slot.materialNodeId() + "\u0000"
                             + slot.inputPortId() + "\u0000" + slot.edgeId())
                     .collect(Collectors.toSet());
+            // 🔴 2026-08-03 修复: 这道过滤原来会把<b>不挂工艺投入槽</b>的成本行(包材/辅料)一并消灭。
+            //
+            // 闸门条件是 anyMatch(node != null) —— 正常 workflow BOM 的原料必然带槽, 所以过滤对
+            // <b>全部</b>行生效; 而过滤第一个条件就是"三个槽字段都非空", 于是槽本就为 NULL 的
+            // 包材/辅料行被直接丢出 eligibleItems → materialTypeIds 少了它们 → 结单时
+            // contains() 判定"所选原料批次不属于该生产计划 BOM" → 409。
+            //
+            // "包材不挂工艺槽"正是系统别处的既有模型: BomRecipeServiceImpl#reconcileUpgradedInputSkeletons
+            // 显式把 PACKAGING 排除在槽认领之外, settlement-prefill 也对包材吐 node=null。两处口径打架。
+            // prod 实证: F006 结单 eligibility 只认 1 条(冻猪蹄), 而 BOM 有 3 条(冻猪蹄+成品盒+封膜);
+            // LIUSHANMEN recipe bb7cd9f2 的 3 条 AUXILIARY 槽全为 NULL, 一旦下计划结单会同样被拒(潜伏)。
+            //
+            // 修法: 过滤只<b>收窄带槽行</b>, 不<b>消灭无槽行</b>。原料侧"必须落在钉住工艺的精确投入槽上"
+            // 这条约束一个字没放松(带槽行仍走原判据), validateWorkflowConsumptionInputIdentity 二道闸不动。
+            // 本方法只产出白名单集合, 不参与任何扣减与成本计算。
             eligibleItems = eligibleItems.stream()
-                    .filter(item -> item.getWorkflowMaterialNodeId() != null
-                            && item.getWorkflowInputPortId() != null
-                            && item.getWorkflowEdgeId() != null
-                            && exactInputSlots.contains(item.getWorkflowMaterialNodeId()
-                            + "\u0000" + item.getWorkflowInputPortId()
-                            + "\u0000" + item.getWorkflowEdgeId()))
+                    .filter(item -> {
+                        boolean slotBound = item.getWorkflowMaterialNodeId() != null
+                                || item.getWorkflowInputPortId() != null
+                                || item.getWorkflowEdgeId() != null;
+                        if (!slotBound) {
+                            // 包材/辅料等不挂工艺投入槽的成本行 —— 照常计入允许集。
+                            return true;
+                        }
+                        return item.getWorkflowMaterialNodeId() != null
+                                && item.getWorkflowInputPortId() != null
+                                && item.getWorkflowEdgeId() != null
+                                && exactInputSlots.contains(item.getWorkflowMaterialNodeId()
+                                + " " + item.getWorkflowInputPortId()
+                                + " " + item.getWorkflowEdgeId());
+                    })
                     .toList();
         }
         Set<String> bomMaterialTypeIds = eligibleItems.stream()

@@ -1490,6 +1490,41 @@ public class BomRecipeServiceImpl implements BomRecipeService {
                         "请按系统生成的投入槽配置主料及替代料", slot.inputPortId());
             }
         }
+
+        // 🔴 2026-08-03 新增反向断言 (槽→行 之外补上 行→槽)。
+        //
+        // 上面的循环只保证「每个槽恰好有 1 条明细」, 从不检查「每条带槽明细指向的槽是否真实存在」。
+        // 于是这条路径一路绿灯: BOM v1 钉 rev A (图里有包材端口) → 之后把包材从图里去掉得到 rev B
+        // → ensureDraft 克隆出 v2 时<b>原样抄走</b>槽字段 (cloneItems 逐字复制 node/port/edge)
+        // → v2 钉 rev B, 但那两条包材行指着 rev B 里<b>已不存在</b>的节点 → 激活通过。
+        // 几小时后在结单被翻译成一句完全看不出真因的「所选原料批次不属于该生产计划 BOM」(prod 实证 F006)。
+        //
+        // 补这道断言让问题在<b>激活 BOM 那一刻</b>就指名道姓地暴露, 而不是拖到结单换个名字爆出来。
+        // 只针对<b>带槽</b>的行 —— 包材/辅料槽为 NULL 是正确模型 (reconcileUpgradedInputSkeletons
+        // 显式把 PACKAGING 排除在槽认领之外), 不在此列。
+        Set<String> validSlotKeys = slots.stream()
+                .map(slot -> slot.materialNodeId() + " " + slot.inputPortId() + " " + slot.edgeId())
+                .collect(java.util.stream.Collectors.toSet());
+        for (BomRecipeItem item : available) {
+            boolean slotBound = item.getWorkflowMaterialNodeId() != null
+                    || item.getWorkflowInputPortId() != null
+                    || item.getWorkflowEdgeId() != null;
+            if (!slotBound) {
+                continue;   // 包材/辅料等不挂槽的成本行, 合法
+            }
+            String key = item.getWorkflowMaterialNodeId() + " "
+                    + item.getWorkflowInputPortId() + " " + item.getWorkflowEdgeId();
+            if (!validSlotKeys.contains(key)) {
+                throw bomError(409,
+                        "配方项「" + item.getMaterialName() + "」绑定的 Workflow 投入槽在当前工艺版本中已不存在"
+                                + " (节点 " + item.getWorkflowMaterialNodeId()
+                                + " / 端口 " + item.getWorkflowInputPortId() + ")",
+                        "BOM_WORKFLOW_ITEM_SLOT_ORPHANED",
+                        "该物料已不在当前工艺图的投入端口上; 若它是包材/辅料请清空其工艺槽绑定, "
+                                + "若它确实是工艺投入请回到 Workflow 补回对应端口后重新同步 BOM",
+                        "bomItems");
+            }
+        }
     }
 
     @Override

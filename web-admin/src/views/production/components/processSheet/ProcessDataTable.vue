@@ -538,6 +538,23 @@ function elsewhereStockText(item: InputPortRef): string {
   return `${detail}，待调拨入生产仓`;
 }
 
+/**
+ * 生产仓里**过期**的量 —— 「真没货」和「货过期了」必须分得开。
+ *
+ * 后端可投量按 status='AVAILABLE' 取数，过期批次被静默滤掉，界面只剩一句「可用 0」。
+ * 实测 F006 羊排原料仓有 100kg 但全部过期(有效期 07-15~07-18)，仓管既看不出原因，
+ * 也没人提醒去处理 —— 货就一直烂在仓里。
+ *
+ * 🔴 与 elsewhereStockText 同一风格：**只说事实和该找谁，不给按钮**。报损/处置是仓管的活，
+ * 报工的人点了大概率 403，给一个点不动的按钮比不给更糟。
+ */
+function expiredStockText(item: InputPortRef): string {
+  const a = item.workflowPortId ? portAvailability.value.get(item.workflowPortId) : null;
+  const expired = a?.expired ?? 0;
+  if (!(expired > 0)) return '';
+  return `过期 ${fmtStockQty(expired)}${displayProcessUnit(a!.unit)}，不可投料，请联系仓管处理`;
+}
+
 function workshopStockIsZero(item: InputPortRef): boolean {
   const a = item.workflowPortId ? portAvailability.value.get(item.workflowPortId) : null;
   return !!a && !(a.available > 0);
@@ -3371,6 +3388,11 @@ defineExpose({ hasUnsavedRows, refreshSharedInventories });
                       data-testid="input-elsewhere-stock"
                       class="sp-in-elsewhere"
                     >{{ elsewhereStockText(item) }}</span>
+                    <span
+                      v-if="expiredStockText(item)"
+                      data-testid="input-expired-stock"
+                      class="sp-in-expired"
+                    >{{ expiredStockText(item) }}</span>
                   </span>
                   <span class="sp-in-cell sp-in-note">来源批次由系统按生产库入库顺序自动分摊</span>
                 </div>
@@ -3989,6 +4011,11 @@ defineExpose({ hasUnsavedRows, refreshSharedInventories });
                         data-testid="input-elsewhere-stock"
                         class="sp-in-elsewhere"
                       >{{ elsewhereStockText(item) }}</span>
+                      <span
+                        v-if="expiredStockText(item)"
+                        data-testid="input-expired-stock"
+                        class="sp-in-expired"
+                      >{{ expiredStockText(item) }}</span>
                     </div>
                   </td>
                 </template>
@@ -4991,6 +5018,11 @@ defineExpose({ hasUnsavedRows, refreshSharedInventories });
 .sp-in-stock-zero { color: var(--el-color-danger); font-weight: 600; }
 /* 「主仓另有 200只, 待调拨入生产仓」—— 把「真没货」和「有货但没调过来」分开 (2026-07-31) */
 .sp-in-elsewhere { display: block; margin-top: 2px; font-size: 11px; color: var(--el-color-warning); line-height: 1.4; }
+
+.sp-in-expired {
+  color: var(--el-color-danger);
+  font-weight: 600;
+}
 .sp-required { margin-right: 2px; color: var(--el-color-danger); font-style: normal; font-weight: 700; }
 .sp-inline-input {
   display: flex;

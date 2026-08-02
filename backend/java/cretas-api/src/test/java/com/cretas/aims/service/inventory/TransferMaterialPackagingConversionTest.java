@@ -51,8 +51,8 @@ class TransferMaterialPackagingConversionTest {
         ReflectionTestUtils.setField(
                 service, "materialPackagingSpecRepository", materialPackagingSpecRepository);
 
-        when(transferRepository.findRecentDuplicates(any(), any(), any(), any(), any()))
-                .thenReturn(List.of());
+        // findRecentDuplicates 的 stub 已随「5min 重复调拨拦截」一并移除 —— createTransfer 不再调它,
+        // 留着会被 Mockito 严格模式判为 UnnecessaryStubbing。
         when(transferRepository.save(any(InternalTransfer.class))).thenAnswer(invocation -> {
             InternalTransfer transfer = invocation.getArgument(0);
             if (transfer.getId() == null) {

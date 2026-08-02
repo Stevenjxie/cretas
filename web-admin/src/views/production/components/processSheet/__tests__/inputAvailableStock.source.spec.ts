@@ -96,6 +96,10 @@ describe('投入行「生产仓可用」: 显示后端权威值 (客户 2026-07-
       expect(fnBody('workshopStockText')).toMatch(/if \(!a\) return '';/);
       // 没有 elsewhere 就整段不显示, 不给「其它仓库: 无」这种占位
       expect(fnBody('elsewhereStockText')).toMatch(/if \(!a \|\| !a\.elsewhere\?\.length\) return '';/);
+      // 过期量为 0 时整段不显示, 不给「过期 0」这种噪音
+      expect(fnBody('expiredStockText')).toMatch(/if \(!\(expired > 0\)\) return '';/);
+      // 🔴 过期量绝不能并进可投量 —— 它是"不可投"的量, 混进去会让人以为还能用
+      expect(fnBody('expiredStockText')).not.toMatch(/a\.available/);
     });
 
     it('两套模板各一份 —— 该文件历史上出现过卡片/表格漂移', () => {
@@ -105,6 +109,9 @@ describe('投入行「生产仓可用」: 显示后端权威值 (客户 2026-07-
       expect(elsewhere.length, '「别处另有…待调拨入生产仓」同样两份').toBe(2);
       // 可用 0 时标红的那一份也必须两套都在, 否则表格视图看不出"没货"
       expect((source.match(/workshopStockIsZero\(item\)/g) ?? []).length).toBe(2);
+      // 过期提示同样两份 —— 只加在卡片上, 表格视图的仓管就永远看不到"货过期了"
+      const expired = source.match(/data-testid="input-expired-stock"/g) ?? [];
+      expect(expired.length, '「过期 X, 不可投料, 请联系仓管处理」同样两份').toBe(2);
     });
   });
 
