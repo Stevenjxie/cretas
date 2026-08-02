@@ -58,7 +58,7 @@ public interface WhitelistService {
      * 更新过期的白名单状态
      * @return 更新数量
       */
-    Integer updateExpiredWhitelist();
+    Integer updateExpiredWhitelist(String factoryId);
      /**
      * 更新达到使用上限的白名单状态
       */

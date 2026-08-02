@@ -273,9 +273,10 @@ public class WhitelistServiceImpl implements WhitelistService {
 
     @Override
     @Transactional
-    public Integer updateExpiredWhitelist() {
-        log.info("更新过期的白名单状态");
-        return whitelistRepository.updateExpiredStatus(LocalDateTime.now());
+    public Integer updateExpiredWhitelist(String factoryId) {
+        // 2026-08-02: 加 factoryId —— 原来这条是全租户 UPDATE, 挂在按工厂分段的路径下。
+        log.info("更新过期的白名单状态: factoryId={}", factoryId);
+        return whitelistRepository.updateExpiredStatus(factoryId, LocalDateTime.now());
     }
 
     @Override

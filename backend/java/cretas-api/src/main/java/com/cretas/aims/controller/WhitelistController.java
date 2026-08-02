@@ -226,7 +226,7 @@ public class WhitelistController {
     public ApiResponse<Integer> updateExpired(
             @PathVariable @Parameter(description = "工厂ID", example = "F001") String factoryId) {
         log.info("更新过期的白名单状态: factoryId={}", factoryId);
-        Integer count = whitelistService.updateExpiredWhitelist();
+        Integer count = whitelistService.updateExpiredWhitelist(factoryId);
         return ApiResponse.success(count);
     }
 
