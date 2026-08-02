@@ -15,9 +15,10 @@ import { useRouter } from 'vue-router';
 import { ElMessage } from 'element-plus';
 import { pythonFetch, getFactoryId } from '@/api/smartbi/common';
 import { usePermissionStore } from '@/store/modules/permission';
-import { DEPARTMENTS, pickPath, type DeptKey } from './departmentConfig';
+import { DEPARTMENTS, DEPARTMENT_ORDER, pickPath, type DeptKey } from './departmentConfig';
 import DeptTrendChart from './DeptTrendChart.vue';
 import type { TrendPoint } from './trendTakeaway';
+import { getRestaurantRoleExperience } from '@/views/restaurant/restaurantRoleExperience';
 
 const props = defineProps<{ dept: DeptKey }>();
 
@@ -25,6 +26,10 @@ const router = useRouter();
 const permission = usePermissionStore();
 
 const config = computed(() => DEPARTMENTS[props.dept]);
+const roleExperience = computed(() => getRestaurantRoleExperience(permission.currentRole));
+const accessibleDepartments = computed(() => DEPARTMENT_ORDER.filter(
+  (key) => permission.canAccess(DEPARTMENTS[key].module),
+));
 const loading = ref(false);
 const payload = ref<Record<string, unknown> | null>(null);
 const loadError = ref('');
@@ -37,6 +42,16 @@ const WINDOW_OPTIONS = [
 ];
 
 const canViewPrice = computed(() => permission.canViewPrice);
+const dataSourceLabel = computed(() => config.value.source === 'kpi-summary'
+  ? 'Gold 经营事实'
+  : config.value.source === 'ops-summary'
+    ? '后厨业务事实'
+    : '等待人效配置');
+const periodSummary = computed(() => {
+  if (!config.value.source) return '尚未形成可计算区间';
+  const { start, end } = windowRange(windowDays.value);
+  return `${start} 至 ${end}`;
+});
 
 /**
  * 把「最近 N 天」化成具体起止日期。
@@ -183,6 +198,10 @@ function goto(path: string) {
   router.push(path);
 }
 
+function gotoDepartment(key: DeptKey) {
+  router.push(`/restaurant/${key}`);
+}
+
 function ask(question: string) {
   // 复用现有 AI 问答入口, 把问题带过去
   router.push({ path: '/smart-bi/query', query: { q: question } });
@@ -190,19 +209,23 @@ function ask(question: string) {
 </script>
 
 <template>
-  <div class="dept-page">
-    <!-- ① 头部 -->
-    <div class="dept-header">
-      <h2 class="dept-title">
-        <span class="dept-dot" :style="{ background: config.accent }"></span>
-        {{ config.title }}
-      </h2>
+  <main class="dept-page" :aria-labelledby="`dept-title-${dept}`">
+    <header class="dept-header">
+      <div class="dept-heading">
+        <div class="dept-eyebrow">餐饮运营 · {{ roleExperience.roleLabel }}</div>
+        <h1 :id="`dept-title-${dept}`" class="dept-title">
+          <span class="dept-dot" :style="{ background: config.accent }" aria-hidden="true"></span>
+          {{ config.title }}驾驶舱
+        </h1>
+        <p>{{ config.description }}</p>
+      </div>
       <div class="header-right">
         <el-select
           v-if="config.source"
           v-model="windowDays"
           size="default"
           style="width: 130px"
+          aria-label="选择分析时间范围"
         >
           <el-option
             v-for="opt in WINDOW_OPTIONS"
@@ -215,7 +238,39 @@ function ask(question: string) {
           无价格权限，金额显示为「—」
         </el-tag>
       </div>
-    </div>
+    </header>
+
+    <nav class="department-switcher" aria-label="餐饮部门">
+      <button
+        v-for="key in accessibleDepartments"
+        :key="key"
+        type="button"
+        class="department-switcher__item"
+        :class="{ 'is-active': key === dept }"
+        :aria-current="key === dept ? 'page' : undefined"
+        @click="gotoDepartment(key)"
+      >
+        <span class="department-switcher__dot" :style="{ background: DEPARTMENTS[key].accent }" aria-hidden="true"></span>
+        {{ DEPARTMENTS[key].title }}
+      </button>
+    </nav>
+
+    <section class="context-strip" aria-label="数据口径与职责">
+      <div class="context-strip__item">
+        <span>数据来源</span>
+        <strong>{{ dataSourceLabel }}</strong>
+      </div>
+      <div class="context-strip__item">
+        <span>统计区间</span>
+        <strong>{{ periodSummary }}</strong>
+      </div>
+      <div class="context-strip__responsibilities">
+        <span>本部门负责</span>
+        <div>
+          <span v-for="item in config.responsibilities" :key="item">{{ item }}</span>
+        </div>
+      </div>
+    </section>
 
     <!-- 数据源缺失（人事）：空态，不显示 0 也不给假图表 -->
     <el-card v-if="!config.source && config.emptyState" shadow="never" class="dept-card">
@@ -240,7 +295,11 @@ function ask(question: string) {
         show-icon
         :closable="false"
         class="dept-alert"
-      />
+      >
+        <template #default>
+          <el-button link type="primary" @click="load">重新读取</el-button>
+        </template>
+      </el-alert>
       <el-alert
         v-else-if="etlPending"
         title="该租户的聚合尚未生成，下面的数字会偏少或为空 —— 不是真实为 0"
@@ -253,7 +312,12 @@ function ask(question: string) {
       <!-- ② KPI 带 -->
       <el-card shadow="never" class="dept-card" v-loading="loading">
         <div class="stat-row">
-          <div v-for="kpi in config.kpis" :key="kpi.label" class="stat-item">
+          <div
+            v-for="(kpi, index) in config.kpis"
+            :key="kpi.label"
+            class="stat-item"
+            :class="{ 'stat-item--primary': index === 0 }"
+          >
             <span class="stat-label">
               {{ kpi.label }}
               <el-tooltip v-if="kpi.hint" :content="kpi.hint" placement="top">
@@ -292,7 +356,7 @@ function ask(question: string) {
           <span class="card-title">{{ config.ranking.title }}</span>
         </div>
         <el-table :data="rankingRows" size="small" v-loading="loading">
-          <el-table-column prop="name" :label="'食材'" min-width="140" />
+          <el-table-column :prop="config.ranking.nameKey" label="食材" min-width="140" />
           <el-table-column
             v-if="config.ranking.categoryKey"
             :prop="config.ranking.categoryKey"
@@ -315,103 +379,151 @@ function ask(question: string) {
       </el-card>
     </template>
 
-    <div class="dept-bottom">
-      <!-- ⑤ AI 入口 -->
-      <el-card shadow="never" class="dept-card">
-        <div class="card-header"><span class="card-title">问 AI</span></div>
+    <section class="decision-grid">
+      <div class="ai-command">
+        <div class="ai-command__heading">
+          <div>
+            <span class="section-kicker">LLM ANALYSIS</span>
+            <h2>让 AI 继续诊断</h2>
+          </div>
+          <span>真实数据负责数值，大模型负责解释与建议</span>
+        </div>
         <div class="q-list">
-          <el-button
+          <button
             v-for="q in config.questions"
             :key="q"
+            type="button"
             class="q-chip"
-            size="small"
             @click="ask(q)"
-          >{{ q }}</el-button>
+          >
+            <span>{{ q }}</span>
+            <span aria-hidden="true">→</span>
+          </button>
         </div>
-      </el-card>
+      </div>
 
-      <!-- ⑥ 功能入口 -->
-      <el-card v-if="config.entries.length" shadow="never" class="dept-card">
-        <div class="card-header"><span class="card-title">功能入口</span></div>
-        <div class="entry-list">
-          <el-button
+      <aside class="handoff-card">
+        <span class="section-kicker">HANDOFF</span>
+        <h2>执行与交接</h2>
+        <p>{{ config.handoff }}</p>
+        <div v-if="config.entries.length" class="entry-list">
+          <button
             v-for="entry in config.entries"
             :key="entry.path"
-            size="small"
+            type="button"
             @click="goto(entry.path)"
-          >{{ entry.title }}</el-button>
+          >
+            <span>{{ entry.title }}</span>
+            <span aria-hidden="true">→</span>
+          </button>
         </div>
-      </el-card>
-    </div>
-  </div>
+      </aside>
+    </section>
+  </main>
 </template>
 
 <style lang="scss" scoped>
-.dept-page { padding: 20px; display: flex; flex-direction: column; gap: 16px; }
+.dept-page { display: flex; flex-direction: column; gap: 16px; padding: 24px; color: var(--color-text-primary, #1a2332); }
+.dept-header { display: flex; align-items: flex-end; justify-content: space-between; gap: 20px; padding: 4px 0 2px; }
+.dept-heading { min-width: 0; }
+.dept-eyebrow,
+.section-kicker { color: var(--color-primary, #1b65a8); font-size: 10px; font-weight: 700; letter-spacing: 0.12em; text-transform: uppercase; }
+.dept-title { display: flex; align-items: center; gap: 9px; margin: 6px 0; font-size: 27px; font-weight: 680; letter-spacing: -0.025em; }
+.dept-heading p { max-width: 60ch; margin: 0; color: var(--el-text-color-regular); font-size: 13px; line-height: 1.6; }
+.dept-dot { width: 8px; height: 8px; flex: none; border-radius: 50%; }
+.header-right { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
 
-.dept-header {
-  display: flex; justify-content: space-between; align-items: center;
-  flex-wrap: wrap; gap: 8px;
-}
-.dept-title {
-  font-size: 18px; font-weight: 600; display: flex; align-items: center; gap: 8px; margin: 0;
-}
-.dept-dot { width: 8px; height: 8px; border-radius: 50%; flex: none; }
-.header-right { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.department-switcher { display: flex; gap: 4px; width: fit-content; padding: 4px; background: var(--el-fill-color-light); border: 1px solid var(--el-border-color-lighter); border-radius: 10px; }
+.department-switcher__item { display: inline-flex; align-items: center; gap: 7px; padding: 8px 12px; color: var(--el-text-color-regular); font-size: 13px; background: transparent; border: 0; border-radius: 7px; cursor: pointer; transition: color 160ms ease, background-color 160ms ease, box-shadow 160ms ease; }
+.department-switcher__item:hover { color: var(--el-text-color-primary); }
+.department-switcher__item.is-active { color: var(--el-text-color-primary); font-weight: 600; background: var(--el-bg-color); box-shadow: 0 2px 7px rgba(12, 25, 41, 0.08); }
+.department-switcher__item:focus-visible,
+.q-chip:focus-visible,
+.entry-list button:focus-visible { outline: 2px solid var(--color-primary, #1b65a8); outline-offset: 1px; }
+.department-switcher__dot { width: 6px; height: 6px; border-radius: 50%; }
+
+.context-strip { display: grid; grid-template-columns: minmax(170px, auto) minmax(220px, auto) minmax(0, 1fr); gap: 0; overflow: hidden; background: var(--el-bg-color); border: 1px solid var(--el-border-color-lighter); border-radius: 10px; }
+.context-strip__item,
+.context-strip__responsibilities { display: flex; flex-direction: column; gap: 4px; min-width: 0; padding: 13px 16px; border-right: 1px solid var(--el-border-color-lighter); }
+.context-strip__responsibilities { border-right: 0; }
+.context-strip__item > span,
+.context-strip__responsibilities > span { color: var(--el-text-color-secondary); font-size: 11px; }
+.context-strip__item strong { font-size: 12px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.context-strip__responsibilities > div { display: flex; flex-wrap: wrap; gap: 6px; }
+.context-strip__responsibilities > div span { padding: 3px 7px; color: var(--el-text-color-regular); font-size: 11px; background: var(--el-fill-color-light); border-radius: 999px; }
 
 .dept-card { border-radius: 10px; }
+.dept-card :deep(.el-card__body) { padding: 18px 20px; }
 .dept-alert { border-radius: 8px; }
-
-.stat-row {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
-  gap: 12px;
-}
-.stat-item {
-  background: var(--el-fill-color-light);
-  border-radius: 8px;
-  padding: 12px 16px;
-  display: flex; flex-direction: column; gap: 4px;
-}
-.stat-label { font-size: 12px; color: var(--el-text-color-secondary); }
-.stat-hint { cursor: help; margin-left: 2px; }
-.stat-value {
-  font-size: 22px; font-weight: 600;
-  font-variant-numeric: tabular-nums; letter-spacing: -0.01em;
-  &.masked { color: var(--el-text-color-secondary); font-weight: 500; }
-}
-
-.basis-notes {
-  margin-top: 12px;
-  font-size: 12px;
-  color: var(--el-text-color-secondary);
-  display: flex; flex-direction: column; gap: 4px;
-}
+.stat-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 0; }
+.stat-item { display: flex; flex-direction: column; gap: 5px; min-width: 0; padding: 8px 18px; border-right: 1px solid var(--el-border-color-lighter); }
+.stat-item:first-child { padding-left: 0; }
+.stat-item:last-child { border-right: 0; }
+.stat-item--primary .stat-value { color: var(--color-primary, #1b65a8); font-size: 25px; }
+.stat-label { color: var(--el-text-color-secondary); font-size: 12px; }
+.stat-hint { margin-left: 2px; cursor: help; }
+.stat-value { overflow: hidden; font-size: 21px; font-weight: 650; font-variant-numeric: tabular-nums; letter-spacing: -0.02em; text-overflow: ellipsis; white-space: nowrap; }
+.stat-value.masked { color: var(--el-text-color-secondary); font-weight: 500; }
+.basis-notes { display: flex; flex-direction: column; gap: 4px; margin-top: 14px; padding-top: 12px; color: var(--el-text-color-secondary); font-size: 12px; border-top: 1px solid var(--el-border-color-lighter); }
 .card-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }
-.card-title { font-size: 15px; font-weight: 600; }
+.card-title { font-size: 14px; font-weight: 650; }
 
-.dept-bottom {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
-  gap: 16px;
-}
-.q-list, .entry-list { display: flex; flex-wrap: wrap; gap: 8px; }
-.q-chip { border-radius: 16px; }
+.decision-grid { display: grid; grid-template-columns: minmax(0, 1.35fr) minmax(300px, 0.65fr); gap: 16px; }
+.ai-command,
+.handoff-card { padding: 20px; background: var(--el-bg-color); border: 1px solid var(--el-border-color-lighter); border-radius: 10px; }
+.ai-command { position: relative; overflow: hidden; }
+.ai-command::before { content: ''; position: absolute; inset: 0 auto 0 0; width: 3px; background: var(--color-primary, #1b65a8); }
+.ai-command__heading { display: flex; align-items: flex-end; justify-content: space-between; gap: 16px; margin-bottom: 14px; }
+.ai-command h2,
+.handoff-card h2 { margin: 3px 0 0; font-size: 16px; }
+.ai-command__heading > span { color: var(--el-text-color-secondary); font-size: 11px; }
+.q-list { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+.q-chip,
+.entry-list button { display: flex; align-items: center; justify-content: space-between; gap: 10px; min-width: 0; padding: 10px 12px; text-align: left; color: var(--el-text-color-primary); background: var(--el-fill-color-light); border: 1px solid transparent; border-radius: 8px; cursor: pointer; transition: color 160ms ease, border-color 160ms ease, background-color 160ms ease; }
+.q-chip:hover { color: var(--color-primary, #1b65a8); background: var(--el-bg-color); border-color: var(--el-color-primary-light-5); }
+.q-chip span:first-child { overflow: hidden; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+.handoff-card > p { margin: 10px 0 14px; color: var(--el-text-color-regular); font-size: 12px; line-height: 1.65; }
+.entry-list { display: flex; flex-direction: column; gap: 4px; }
+.entry-list button { padding: 8px 2px; background: transparent; border: 0; border-bottom: 1px solid var(--el-border-color-lighter); border-radius: 0; }
+.entry-list button:last-child { border-bottom: 0; }
+.entry-list button:hover { color: var(--color-primary, #1b65a8); }
+.entry-list button span:first-child { font-size: 12px; }
 
-.empty-state {
-  display: flex; flex-direction: column; align-items: center;
-  gap: 10px; padding: 32px 24px; text-align: center;
-}
-.empty-title { font-size: 16px; font-weight: 600; }
-.empty-detail { font-size: 13px; color: var(--el-text-color-secondary); max-width: 44ch; }
-.empty-todos {
-  text-align: left; font-size: 13px; color: var(--el-text-color-primary);
-  margin: 0; padding-left: 20px; display: flex; flex-direction: column; gap: 6px;
+.empty-state { display: flex; flex-direction: column; align-items: flex-start; gap: 10px; padding: 20px 8px; text-align: left; }
+.empty-title { font-size: 17px; font-weight: 650; }
+.empty-detail { max-width: 52ch; color: var(--el-text-color-secondary); font-size: 13px; }
+.empty-todos { display: flex; flex-direction: column; gap: 6px; margin: 0; padding-left: 20px; color: var(--el-text-color-primary); font-size: 13px; text-align: left; }
+
+@media (max-width: 1024px) {
+  .context-strip { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .context-strip__item:nth-child(2) { border-right: 0; }
+  .context-strip__responsibilities { grid-column: 1 / -1; border-top: 1px solid var(--el-border-color-lighter); }
+  .decision-grid { grid-template-columns: 1fr; }
+  .q-list { grid-template-columns: 1fr; }
 }
 
 @media (max-width: 768px) {
-  .dept-page { padding: 12px; }
-  .stat-item { padding: 8px 12px; }
-  .stat-value { font-size: 18px; }
+  .dept-page { gap: 12px; padding: 12px; }
+  .dept-header { align-items: stretch; flex-direction: column; }
+  .dept-title { font-size: 23px; }
+  .department-switcher { width: 100%; overflow-x: auto; }
+  .department-switcher__item { flex: 1 0 auto; justify-content: center; }
+  .context-strip { grid-template-columns: 1fr; }
+  .context-strip__item,
+  .context-strip__responsibilities { grid-column: auto; border-right: 0; border-bottom: 1px solid var(--el-border-color-lighter); }
+  .context-strip__responsibilities { border-bottom: 0; }
+  .stat-row { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .stat-item { padding: 10px 12px; border-bottom: 1px solid var(--el-border-color-lighter); }
+  .stat-item:nth-child(2n) { border-right: 0; }
+  .stat-item:first-child { padding-left: 12px; }
+  .stat-value,
+  .stat-item--primary .stat-value { font-size: 19px; }
+  .ai-command__heading { align-items: flex-start; flex-direction: column; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .department-switcher__item,
+  .q-chip,
+  .entry-list button { transition: none; }
 }
 </style>

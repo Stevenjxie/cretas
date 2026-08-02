@@ -70,6 +70,12 @@ export interface DeptTrend {
 export interface DeptConfig {
   key: DeptKey;
   title: string;
+  /** 一句话说明本部门在餐饮经营链中的责任，不用菜单名代替职责。 */
+  description: string;
+  /** 页面头部展示的三个高频责任。 */
+  responsibilities: string[];
+  /** 跨部门问题的明确交接方向。 */
+  handoff: string;
   /** 权限模块名，与 store/modules/permission.ts 的四个部门键一致 */
   module: string;
   /** 部门身份色 —— 只用于标题前那颗圆点，绝不整页染色 */
@@ -103,6 +109,9 @@ export const DEPARTMENTS: Record<DeptKey, DeptConfig> = {
   ops: {
     key: 'ops',
     title: '运营',
+    description: '把领料、损耗、盘点和配方串成可追踪的后厨日常。',
+    responsibilities: ['领料闭环', '损耗核对', '盘点与配方'],
+    handoff: '价格与供应商问题交采购；经营优先级和人员协调交店长。',
     module: 'restaurantOps',
     accent: '#0F7B8A',
     source: 'ops-summary',
@@ -145,6 +154,9 @@ export const DEPARTMENTS: Record<DeptKey, DeptConfig> = {
   marketing: {
     key: 'marketing',
     title: '市场',
+    description: '从营收、门店、菜品和渠道里找到增长与掉队位置。',
+    responsibilities: ['经营表现', '菜品结构', '门店与渠道'],
+    handoff: '促销和门店动作交店长；成本可行性与财务共同确认。',
     module: 'restaurantMarketing',
     accent: '#B4652F',
     source: 'kpi-summary',
@@ -177,6 +189,9 @@ export const DEPARTMENTS: Record<DeptKey, DeptConfig> = {
   finance: {
     key: 'finance',
     title: '财务',
+    description: '把毛利、食材成本、价格异常和供应商对账放在同一口径下。',
+    responsibilities: ['毛利口径', '成本归因', '价格与对账'],
+    handoff: '异常数量交运营复核；异常价格交采购核对；口径调整由老板或财务确认。',
     module: 'restaurantFinance',
     accent: '#2C7A4B',
     // 与运营同一个接口：那一次调用同时返回 totals(后厨) 与 margin(毛利)
@@ -225,6 +240,9 @@ export const DEPARTMENTS: Record<DeptKey, DeptConfig> = {
   hr: {
     key: 'hr',
     title: '人事',
+    description: '把客流时段与在岗人数对齐，形成排班和人效依据。',
+    responsibilities: ['时段人力', '排班基准', '人效目标'],
+    handoff: '门店需求由店长提出；人员配置完成后回到经营数据验证效果。',
     module: 'restaurantHr',
     accent: '#6455A0',
     // 🔴 目前没有任何事实数据: fact_staffing_daypart 全表 0 行(所有租户)。

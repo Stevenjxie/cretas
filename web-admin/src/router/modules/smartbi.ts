@@ -4,8 +4,17 @@
  */
 import type { RouteRecordRaw } from 'vue-router';
 import { buildHubRedirect, buildPathRedirect } from '../analysisHubRedirect';
+import {
+  RESTAURANT_ALL_ROLES,
+  RESTAURANT_DATA_STEWARD_ROLES,
+  RESTAURANT_DECISION_ROLES,
+} from '@/views/restaurant/restaurantRoleExperience';
 
 const platformAdminOnlyRoles = ['platform_admin'];
+const restaurantAdminRoles = ['factory_super_admin', 'platform_admin', 'permission_admin'];
+const restaurantAnalyticsAll = [...restaurantAdminRoles, ...RESTAURANT_ALL_ROLES];
+const restaurantAnalyticsDecision = [...restaurantAdminRoles, ...RESTAURANT_DECISION_ROLES];
+const restaurantAnalyticsStewards = [...restaurantAdminRoles, ...RESTAURANT_DATA_STEWARD_ROLES];
 
 const smartBIRoutes: RouteRecordRaw[] = [
   // SmartBI 主模块
@@ -19,14 +28,20 @@ const smartBIRoutes: RouteRecordRaw[] = [
         path: 'dashboard',
         name: 'SmartBIDashboard',
         component: () => import('@/views/smart-bi/Dashboard.vue'),
-        meta: { requiresAuth: true, title: '经营驾驶舱', icon: 'Odometer', module: 'analytics' },
+        meta: {
+          requiresAuth: true, title: '经营驾驶舱', icon: 'Odometer', module: 'analytics',
+          restaurantRoles: restaurantAnalyticsAll,
+        },
       },
       // WS4: 经营分析合并模块入口 (财务/销售/趋势/KPI·指标 tab 化)。
       {
         path: 'analysis-hub',
         name: 'SmartBIAnalysisHub',
         component: () => import('@/views/smart-bi/BusinessAnalysisHub.vue'),
-        meta: { requiresAuth: true, title: '经营分析', icon: 'TrendCharts', module: 'analytics' },
+        meta: {
+          requiresAuth: true, title: '经营分析', icon: 'TrendCharts', module: 'analytics',
+          restaurantRoles: restaurantAnalyticsDecision,
+        },
       },
       // WS4: 销售分析已合并入经营分析 hub (redirect 保书签 → ?tab=sales)。组件经 hub 加载。
       {
@@ -38,25 +53,37 @@ const smartBIRoutes: RouteRecordRaw[] = [
         path: 'query-templates',
         name: 'SmartBIQueryTemplates',
         component: () => import('@/views/smart-bi/QueryTemplateManager.vue'),
-        meta: { requiresAuth: true, title: '查询模板管理', icon: 'Tickets', module: 'analytics' },
+        meta: {
+          requiresAuth: true, title: '查询模板管理', icon: 'Tickets', module: 'analytics',
+          restaurantRoles: restaurantAnalyticsStewards,
+        },
       },
       {
         path: 'analysis',
         name: 'SmartBIAnalysis',
         component: () => import('@/views/smart-bi/SmartBIAnalysis.vue'),
-        meta: { requiresAuth: true, title: '智能数据分析', icon: 'DataAnalysis', module: 'analytics' },
+        meta: {
+          requiresAuth: true, title: '智能数据分析', icon: 'DataAnalysis', module: 'analytics',
+          restaurantRoles: restaurantAnalyticsAll,
+        },
       },
       {
         path: 'upload',
         name: 'SmartBIExcelUpload',
         component: () => import('@/views/smart-bi/ExcelUpload.vue'),
-        meta: { requiresAuth: true, title: 'Excel上传', icon: 'Upload', module: 'analytics' },
+        meta: {
+          requiresAuth: true, title: 'Excel上传', icon: 'Upload', module: 'analytics',
+          restaurantRoles: restaurantAnalyticsStewards,
+        },
       },
       {
         path: 'data-completeness',
         name: 'SmartBIDataCompleteness',
         component: () => import('@/views/smart-bi/DataCompletenessView.vue'),
-        meta: { requiresAuth: true, title: '数据完整度', icon: 'Checked', module: 'analytics' },
+        meta: {
+          requiresAuth: true, title: '数据完整度', icon: 'Checked', module: 'analytics',
+          restaurantRoles: restaurantAnalyticsStewards,
+        },
       },
       {
         path: 'upload-status',
@@ -122,7 +149,8 @@ const smartBIRoutes: RouteRecordRaw[] = [
           title: '收入管理报表',
           icon: 'Money',
           module: 'analytics',
-          roles: ['factory_super_admin', 'platform_admin', 'permission_admin', 'finance_manager', 'restaurant_manager'],
+          roles: ['factory_super_admin', 'platform_admin', 'permission_admin', 'finance_manager', 'restaurant_manager', 'restaurant_owner'],
+          restaurantRoles: [...restaurantAnalyticsDecision, 'finance_manager'],
           hideForFactoryTypes: ['FACTORY'],  // restaurant tenants only
         },
       },
@@ -136,6 +164,7 @@ const smartBIRoutes: RouteRecordRaw[] = [
           title: 'AI 经营体检',
           icon: 'FirstAidKit',
           module: 'analytics',
+          restaurantRoles: restaurantAnalyticsDecision,
           hideForFactoryTypes: ['FACTORY'],  // restaurant tenants only
         },
       },
@@ -144,7 +173,10 @@ const smartBIRoutes: RouteRecordRaw[] = [
         path: 'mapping-review',
         name: 'SmartBIMappingReview',
         component: () => import('@/views/smart-bi/MappingReviewQueue.vue'),
-        meta: { requiresAuth: true, title: '字段映射复核', icon: 'EditPen', module: 'analytics' },
+        meta: {
+          requiresAuth: true, title: '字段映射复核', icon: 'EditPen', module: 'analytics',
+          restaurantRoles: restaurantAnalyticsStewards,
+        },
       },
     ],
   },

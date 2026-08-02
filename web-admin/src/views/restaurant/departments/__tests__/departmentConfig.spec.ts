@@ -55,6 +55,15 @@ describe('餐饮部门驾驶舱配置', () => {
     }
   });
 
+  it('四个部门都有职责说明与跨部门交接', () => {
+    for (const key of DEPARTMENT_ORDER) {
+      const cfg = DEPARTMENTS[key];
+      expect(cfg.description.length, `${key} 缺职责说明`).toBeGreaterThan(10);
+      expect(cfg.responsibilities.length, `${key} 缺职责列表`).toBeGreaterThanOrEqual(3);
+      expect(cfg.handoff.length, `${key} 缺交接规则`).toBeGreaterThan(10);
+    }
+  });
+
   it('没有数据源的部门不能声明 KPI, 否则会渲染出一排「—」冒充指标', () => {
     for (const key of DEPARTMENT_ORDER) {
       const cfg = DEPARTMENTS[key];

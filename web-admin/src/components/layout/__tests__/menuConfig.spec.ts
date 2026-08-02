@@ -421,8 +421,8 @@ describe('menuConfig — 业态门控方向 (WS4)', () => {
     expect(child('/smart-bi/analysis-hub').hideForFactoryTypes).toBeUndefined();
   });
 
-  it('异常预警不门控 (双业态可见)', () => {
-    expect(child('/analytics/alert-dashboard').hideForFactoryTypes).toBeUndefined();
+  it('生产异常预警仅服务工厂，餐饮租户隐藏', () => {
+    expect(child('/analytics/alert-dashboard').hideForFactoryTypes).toContain('RESTAURANT');
   });
 
   it('收入管理报表对制造隐藏 (FACTORY)', () => {
