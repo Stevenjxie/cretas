@@ -1,0 +1,426 @@
+<script setup lang="ts">
+import { computed, reactive, ref, watch } from 'vue';
+import { ElMessage } from 'element-plus';
+import { usePermissionStore } from '@/store/modules/permission';
+import { getFactoryId, getUserData } from '@/api/smartbi/common';
+import { askRestaurantQuestion } from '@/api/smartbi/restaurant-chat';
+import {
+  applyRestaurantStaffingAdjustment,
+  getRestaurantStaffingDashboard,
+} from '@/api/smartbi/restaurant-staffing';
+import type {
+  StaffingDailyRow,
+  StaffingDashboard,
+  StaffingHorizon,
+  StaffingRolePlan,
+  StaffingSummaryRow,
+} from '@/types/restaurant-staffing';
+import {
+  gapLabel,
+  gapTagType,
+  STAFFING_QUICK_QUESTIONS,
+  staffingPerspective,
+} from './staffingViewModel';
+
+const permission = usePermissionStore();
+const perspective = computed(() => staffingPerspective(permission.currentRole));
+const horizon = ref<StaffingHorizon>('tomorrow');
+const dashboard = ref<StaffingDashboard | null>(null);
+const loading = ref(false);
+const loadError = ref('');
+const detailOpen = ref(false);
+const selectedSummary = ref<StaffingSummaryRow | null>(null);
+const question = ref('明天怎么排班');
+const asking = ref(false);
+const aiAnswer = ref('');
+
+const adjustDialog = reactive({
+  open: false,
+  submitting: false,
+  daily: null as StaffingDailyRow | null,
+  role: null as StaffingRolePlan | null,
+  adjustedStaff: 0,
+  reason: '按预测 FactBook 建议调整',
+});
+
+const horizonOptions: Array<{ value: StaffingHorizon; label: string; note: string }> = [
+  { value: 'tomorrow', label: '明天', note: '单日执行' },
+  { value: 'week', label: '下周', note: '兼职与周工时' },
+  { value: 'month', label: '下个月', note: '各店人效规划' },
+];
+
+const summary = computed(() => dashboard.value?.summary);
+const sources = computed(() => dashboard.value?.sources ?? []);
+const hasSimulation = computed(() => sources.value.some((item) => item.isSimulated));
+const detailRows = computed(() => {
+  const selected = selectedSummary.value;
+  if (!selected || !dashboard.value) return [];
+  return dashboard.value.dailyRows.filter(
+    (row) => row.storeId === selected.storeId && row.daypart === selected.daypart,
+  );
+});
+
+async function loadDashboard() {
+  loading.value = true;
+  loadError.value = '';
+  try {
+    dashboard.value = await getRestaurantStaffingDashboard(horizon.value);
+  } catch (error) {
+    console.error('[restaurant-staffing] dashboard failed', error);
+    dashboard.value = null;
+    loadError.value = error instanceof Error ? error.message : '预测排班读取失败';
+  } finally {
+    loading.value = false;
+  }
+}
+
+watch(horizon, loadDashboard, { immediate: true });
+
+function openDetail(row: StaffingSummaryRow) {
+  selectedSummary.value = row;
+  detailOpen.value = true;
+}
+
+function openAdjustment(daily: StaffingDailyRow, role: StaffingRolePlan) {
+  adjustDialog.daily = daily;
+  adjustDialog.role = role;
+  adjustDialog.adjustedStaff = role.recommendedStaff;
+  adjustDialog.reason = '按预测 FactBook 建议调整';
+  adjustDialog.open = true;
+}
+
+function idempotencyKey(): string {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+    return crypto.randomUUID();
+  }
+  return `staffing-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+}
+
+async function confirmAdjustment() {
+  const daily = adjustDialog.daily;
+  const role = adjustDialog.role;
+  if (!daily || !role) return;
+  if (!adjustDialog.reason.trim()) {
+    ElMessage.warning('请填写调整原因');
+    return;
+  }
+  adjustDialog.submitting = true;
+  try {
+    const receipt = await applyRestaurantStaffingAdjustment({
+      storeId: daily.storeId,
+      targetDate: daily.date,
+      daypart: daily.daypart as '午市' | '下午茶' | '晚市' | '夜宵',
+      roleCode: role.roleCode,
+      predictedGuests: daily.predictedGuests,
+      policyVersion: role.policyVersion,
+      priorStaff: role.currentStaff,
+      recommendedStaff: role.recommendedStaff,
+      adjustedStaff: adjustDialog.adjustedStaff,
+      planFingerprint: role.planFingerprint,
+      reason: adjustDialog.reason.trim(),
+      idempotencyKey: idempotencyKey(),
+    });
+    ElMessage.success(
+      receipt.businessWrite
+        ? `调整已写入审计，记录 #${receipt.adjustmentId}`
+        : `该调整已处理，记录 #${receipt.adjustmentId}`,
+    );
+    adjustDialog.open = false;
+    await loadDashboard();
+  } catch (error) {
+    console.error('[restaurant-staffing] adjustment failed', error);
+    ElMessage.error(error instanceof Error ? error.message : '排班调整失败');
+  } finally {
+    adjustDialog.submitting = false;
+  }
+}
+
+async function askQuestion(prompt?: string) {
+  const effective = (prompt ?? question.value).trim();
+  if (!effective) return;
+  question.value = effective;
+  asking.value = true;
+  aiAnswer.value = '';
+  try {
+    const user = getUserData() as Record<string, unknown>;
+    const factoryUser = user.factoryUser && typeof user.factoryUser === 'object'
+      ? user.factoryUser as Record<string, unknown>
+      : {};
+    const userId = user.userId ?? user.id ?? factoryUser.userId ?? factoryUser.id ?? factoryUser.username;
+    if (typeof userId !== 'string' && typeof userId !== 'number') {
+      throw new Error('当前登录用户标识缺失，请重新登录');
+    }
+    const response = await askRestaurantQuestion({
+      factoryId: getFactoryId(),
+      userId: String(userId),
+      query: effective,
+    });
+    if (!response.success) throw new Error(response.error || response.message);
+    aiAnswer.value = response.message ?? '已完成分析';
+  } catch (error) {
+    console.error('[restaurant-staffing] AI question failed', error);
+    aiAnswer.value = error instanceof Error ? error.message : 'AI 问答暂不可用';
+  } finally {
+    asking.value = false;
+  }
+}
+
+function formatPct(value: number | null | undefined): string {
+  return value === null || value === undefined ? '—' : `${value.toFixed(1)}%`;
+}
+</script>
+
+<template>
+  <main class="staffing-page" aria-labelledby="staffing-title">
+    <header class="staffing-hero">
+      <div>
+        <div class="eyebrow">餐饮运营 · {{ perspective.label }}</div>
+        <h1 id="staffing-title">{{ perspective.title }}</h1>
+        <p>{{ perspective.description }}</p>
+      </div>
+      <div class="hero-facts">
+        <span>数字来源</span>
+        <strong>预测 FactBook</strong>
+        <small>大模型只解释，不生成数字</small>
+      </div>
+    </header>
+
+    <section class="horizon-switch" aria-label="预测范围">
+      <button
+        v-for="item in horizonOptions"
+        :key="item.value"
+        type="button"
+        :class="{ active: horizon === item.value }"
+        @click="horizon = item.value"
+      >
+        <strong>{{ item.label }}</strong>
+        <span>{{ item.note }}</span>
+      </button>
+    </section>
+
+    <el-alert
+      v-if="loadError"
+      :title="loadError"
+      type="error"
+      show-icon
+      :closable="false"
+      class="page-alert"
+    >
+      <template #default><el-button link type="primary" @click="loadDashboard">重新读取</el-button></template>
+    </el-alert>
+    <el-alert
+      v-else-if="hasSimulation"
+      title="当前预订包含模拟来源"
+      description="MOCK_REST 与 RES_3101_009 的模拟预订会保留来源标签；接入正式平台后同一接口会显示真实来源，系统不会把模拟数据伪装成真实预订。"
+      type="warning"
+      show-icon
+      :closable="false"
+      class="page-alert"
+    />
+
+    <section v-loading="loading" class="metric-grid" aria-label="排班关键指标">
+      <article class="metric-card metric-card--primary">
+        <span>预订覆盖</span>
+        <strong>{{ formatPct(summary?.reservationCoveragePct) }}</strong>
+        <small>当前有效预订 / 预测客流</small>
+      </article>
+      <article class="metric-card">
+        <span>预测客流</span>
+        <strong>{{ summary?.predictedGuests?.toLocaleString('zh-CN') ?? '—' }}</strong>
+        <small>{{ dashboard?.windowStart }} 至 {{ dashboard?.windowEnd }}</small>
+      </article>
+      <article class="metric-card">
+        <span>建议 / 现有</span>
+        <strong>{{ summary ? `${summary.recommendedStaff} / ${summary.currentStaff}` : '—' }}</strong>
+        <small>按各店时段峰值班次汇总</small>
+      </article>
+      <article class="metric-card" :class="{ 'metric-card--danger': (summary?.positiveGap ?? 0) > 0 }">
+        <span>正向缺口</span>
+        <strong>{{ summary?.positiveGap ?? '—' }}</strong>
+        <small>只由预测需求与岗位约束产生</small>
+      </article>
+      <article class="metric-card">
+        <span>兼职建议</span>
+        <strong>{{ summary?.partTimePeople ?? '—' }}</strong>
+        <small>按缺口工时折算</small>
+      </article>
+      <article class="metric-card">
+        <span>平均置信度</span>
+        <strong>{{ formatPct(summary?.confidencePct) }}</strong>
+        <small>{{ perspective.focus }}</small>
+      </article>
+    </section>
+
+    <section class="content-grid">
+      <el-card shadow="never" class="table-card">
+        <template #header>
+          <div class="section-heading">
+            <div><h2>各门店 · 各时段</h2><p>历史人效仅作证据，不参与“缺人”方向判断。</p></div>
+            <el-tag type="info" effect="plain">{{ dashboard?.horizonLabel ?? '预测范围' }}</el-tag>
+          </div>
+        </template>
+        <el-table :data="dashboard?.summaryRows ?? []" stripe empty-text="暂无可计算的预测事实">
+          <el-table-column prop="storeName" label="门店" min-width="150" fixed />
+          <el-table-column prop="daypart" label="时段" width="90" />
+          <el-table-column label="预订覆盖" width="110" align="right">
+            <template #default="{ row }">{{ formatPct(row.reservationCoveragePct) }}</template>
+          </el-table-column>
+          <el-table-column prop="predictedGuests" label="预测客流" width="105" align="right" />
+          <el-table-column label="建议 / 现有" width="115" align="right">
+            <template #default="{ row }">{{ row.recommendedStaff }} / {{ row.currentStaff }}</template>
+          </el-table-column>
+          <el-table-column label="缺口" width="90" align="center">
+            <template #default="{ row }">
+              <el-tag :type="gapTagType(row.gap)" effect="light">{{ gapLabel(row.gap) }}</el-tag>
+            </template>
+          </el-table-column>
+          <el-table-column label="置信度" width="95" align="right">
+            <template #default="{ row }">{{ formatPct(row.confidencePct) }}</template>
+          </el-table-column>
+          <el-table-column prop="partTimePeople" label="兼职" width="75" align="right" />
+          <el-table-column label="操作" width="105" fixed="right">
+            <template #default="{ row }">
+              <el-button link type="primary" @click="openDetail(row)">查看班次</el-button>
+            </template>
+          </el-table-column>
+        </el-table>
+      </el-card>
+
+      <aside class="side-stack">
+        <el-card shadow="never" class="source-card">
+          <template #header><h2>预订来源</h2></template>
+          <div v-if="sources.length" class="source-list">
+            <div v-for="source in sources" :key="source.source">
+              <span class="source-dot" :class="{ simulated: source.isSimulated }"></span>
+              <div><strong>{{ source.source }}</strong><small>{{ source.isSimulated ? '模拟数据' : '平台数据' }}</small></div>
+            </div>
+          </div>
+          <el-empty v-else :image-size="52" description="当前范围没有预订来源" />
+        </el-card>
+
+        <el-card shadow="never" class="ai-card">
+          <template #header><div><h2>问餐饮 AI</h2><p>真入口会调用大模型并绑定同一预测 FactBook。</p></div></template>
+          <div class="question-chips">
+            <button v-for="item in STAFFING_QUICK_QUESTIONS" :key="item" type="button" @click="askQuestion(item)">{{ item }}</button>
+          </div>
+          <el-input v-model="question" placeholder="例如：明天怎么排班" @keyup.enter="askQuestion()">
+            <template #append><el-button :loading="asking" @click="askQuestion()">提问</el-button></template>
+          </el-input>
+          <div v-if="aiAnswer" class="ai-answer">{{ aiAnswer }}</div>
+        </el-card>
+      </aside>
+    </section>
+
+    <el-drawer v-model="detailOpen" size="720px" :title="`${selectedSummary?.storeName ?? ''} · ${selectedSummary?.daypart ?? ''}`">
+      <div class="drawer-intro">逐日展开岗位技能、工时、建议人数与已确认调整。调整会产生业务写入审计。</div>
+      <section v-for="daily in detailRows" :key="`${daily.date}-${daily.daypart}`" class="shift-day">
+        <div class="shift-day__header">
+          <div><strong>{{ daily.date }}</strong><span>预测 {{ daily.predictedGuests }} 人 · 预订 {{ daily.reservedGuests }} 人</span></div>
+          <el-tag :type="daily.positiveGap > 0 ? 'danger' : 'success'">{{ gapLabel(daily.gap) }}</el-tag>
+        </div>
+        <el-table :data="daily.roles" size="small">
+          <el-table-column prop="roleName" label="岗位" min-width="90" />
+          <el-table-column prop="requiredSkill" label="技能" min-width="120" />
+          <el-table-column prop="shiftHours" label="工时" width="65" align="right" />
+          <el-table-column label="建议 / 现有" width="105" align="right">
+            <template #default="{ row }">{{ row.recommendedStaff }} / {{ row.currentStaff }}</template>
+          </el-table-column>
+          <el-table-column label="已排" width="75" align="right">
+            <template #default="{ row }">{{ row.adjustedStaff ?? '—' }}</template>
+          </el-table-column>
+          <el-table-column label="技能缺口" width="85" align="right">
+            <template #default="{ row }">{{ row.skillGap }}</template>
+          </el-table-column>
+          <el-table-column label="操作" width="110">
+            <template #default="{ row }">
+              <el-button
+                v-if="perspective.canAdjust"
+                size="small"
+                type="primary"
+                plain
+                @click="openAdjustment(daily, row)"
+              >按建议调整</el-button>
+              <span v-else>只读</span>
+            </template>
+          </el-table-column>
+        </el-table>
+      </section>
+    </el-drawer>
+
+    <el-dialog v-model="adjustDialog.open" title="确认排班调整" width="480px" destroy-on-close>
+      <el-alert
+        title="这会写入排班调整审计"
+        description="提交时后端会重新生成当前预测并核对计划指纹；预订、策略或建议人数已变化时会拒绝旧预览。"
+        type="warning"
+        :closable="false"
+        show-icon
+      />
+      <dl class="confirm-facts">
+        <div><dt>门店 / 时段</dt><dd>{{ adjustDialog.daily?.storeName }} · {{ adjustDialog.daily?.daypart }}</dd></div>
+        <div><dt>日期 / 岗位</dt><dd>{{ adjustDialog.daily?.date }} · {{ adjustDialog.role?.roleName }}</dd></div>
+        <div><dt>预测 / 建议</dt><dd>{{ adjustDialog.daily?.predictedGuests }} 人 · {{ adjustDialog.role?.recommendedStaff }} 人</dd></div>
+      </dl>
+      <el-form label-position="top">
+        <el-form-item label="确认人数">
+          <el-input-number v-model="adjustDialog.adjustedStaff" :min="0" :max="1000" />
+        </el-form-item>
+        <el-form-item label="调整原因">
+          <el-input v-model="adjustDialog.reason" type="textarea" :rows="3" maxlength="500" show-word-limit />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="adjustDialog.open = false">取消</el-button>
+        <el-button type="primary" :loading="adjustDialog.submitting" @click="confirmAdjustment">确认并记录</el-button>
+      </template>
+    </el-dialog>
+  </main>
+</template>
+
+<style scoped>
+.staffing-page { min-height: 100%; padding: 24px; background: #f5f7fa; color: #1f2937; }
+.staffing-hero { display: flex; align-items: flex-end; justify-content: space-between; gap: 24px; padding: 28px 30px; border: 1px solid #dbe4ef; border-radius: 16px; background: linear-gradient(135deg, #fff 0%, #f2f7fc 100%); box-shadow: 0 8px 26px rgb(30 64 110 / 7%); }
+.eyebrow { margin-bottom: 8px; color: #1b65a8; font-size: 13px; font-weight: 700; letter-spacing: .08em; }
+.staffing-hero h1 { margin: 0; font-size: 30px; line-height: 1.2; letter-spacing: -.02em; }
+.staffing-hero p { margin: 10px 0 0; color: #667085; }
+.hero-facts { min-width: 210px; padding: 16px 18px; border-left: 3px solid #1b65a8; background: rgb(255 255 255 / 72%); }
+.hero-facts span, .hero-facts small { display: block; color: #667085; font-size: 12px; }
+.hero-facts strong { display: block; margin: 4px 0; font-size: 18px; }
+.horizon-switch { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; max-width: 640px; margin: 18px 0; }
+.horizon-switch button { display: flex; align-items: center; justify-content: space-between; min-height: 54px; padding: 10px 14px; border: 1px solid #d8dee8; border-radius: 10px; background: #fff; color: #344054; cursor: pointer; transition: border-color .18s, box-shadow .18s, transform .18s; }
+.horizon-switch button:hover { border-color: #75a7d6; transform: translateY(-1px); }
+.horizon-switch button.active { border-color: #1b65a8; color: #1b65a8; box-shadow: 0 0 0 2px rgb(27 101 168 / 10%); }
+.horizon-switch span { font-size: 12px; color: #8491a3; }
+.page-alert { margin-bottom: 16px; }
+.metric-grid { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 12px; margin-bottom: 16px; }
+.metric-card { min-width: 0; padding: 18px; border: 1px solid #e1e7ef; border-radius: 12px; background: #fff; }
+.metric-card span, .metric-card small { display: block; color: #768398; font-size: 12px; }
+.metric-card strong { display: block; margin: 8px 0 6px; font-size: 25px; font-variant-numeric: tabular-nums; }
+.metric-card--primary { border-top: 3px solid #1b65a8; }
+.metric-card--danger { border-top: 3px solid #d84c4c; }
+.content-grid { display: grid; grid-template-columns: minmax(0, 1fr) 330px; gap: 16px; align-items: start; }
+.table-card, .source-card, .ai-card { border: 1px solid #e1e7ef; border-radius: 12px; }
+.section-heading { display: flex; justify-content: space-between; gap: 16px; align-items: center; }
+.section-heading h2, .source-card h2, .ai-card h2 { margin: 0; font-size: 17px; }
+.section-heading p, .ai-card p { margin: 5px 0 0; color: #7b8798; font-size: 12px; }
+.side-stack { display: grid; gap: 16px; }
+.source-list { display: grid; gap: 12px; }
+.source-list > div { display: flex; gap: 10px; align-items: center; padding: 10px; border-radius: 8px; background: #f7f9fc; }
+.source-list strong, .source-list small { display: block; overflow-wrap: anywhere; }
+.source-list small { margin-top: 2px; color: #8491a3; font-size: 11px; }
+.source-dot { width: 9px; height: 9px; flex: none; border-radius: 50%; background: #2c8c5a; }
+.source-dot.simulated { background: #d69732; }
+.question-chips { display: flex; flex-wrap: wrap; gap: 7px; margin-bottom: 12px; }
+.question-chips button { padding: 7px 9px; border: 1px solid #d8e3ef; border-radius: 999px; background: #f5f9fd; color: #1b65a8; font-size: 12px; cursor: pointer; }
+.ai-answer { margin-top: 12px; padding: 12px; border-left: 3px solid #1b65a8; background: #f6f9fc; color: #475467; line-height: 1.7; white-space: pre-wrap; }
+.drawer-intro { margin-bottom: 14px; padding: 10px 12px; border-radius: 8px; background: #f5f7fa; color: #667085; font-size: 13px; }
+.shift-day { margin-bottom: 16px; overflow: hidden; border: 1px solid #e1e7ef; border-radius: 10px; }
+.shift-day__header { display: flex; align-items: center; justify-content: space-between; padding: 12px 14px; background: #f7f9fc; }
+.shift-day__header strong, .shift-day__header span { display: block; }
+.shift-day__header span { margin-top: 3px; color: #7b8798; font-size: 12px; }
+.confirm-facts { display: grid; gap: 8px; margin: 16px 0; }
+.confirm-facts > div { display: flex; justify-content: space-between; gap: 20px; }
+.confirm-facts dt { color: #7b8798; }
+.confirm-facts dd { margin: 0; font-weight: 600; text-align: right; }
+@media (max-width: 1280px) { .metric-grid { grid-template-columns: repeat(3, 1fr); } .content-grid { grid-template-columns: 1fr; } .side-stack { grid-template-columns: repeat(2, 1fr); } }
+@media (max-width: 760px) { .staffing-page { padding: 14px; } .staffing-hero { align-items: flex-start; flex-direction: column; } .hero-facts { width: 100%; box-sizing: border-box; } .horizon-switch, .metric-grid, .side-stack { grid-template-columns: 1fr; } }
+</style>

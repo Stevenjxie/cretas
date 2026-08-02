@@ -65,6 +65,7 @@ from smartbi.api import (  # noqa: E402
     finance_extract,
     data_sync,
     restaurant_analytics,
+    restaurant_staffing,
     restaurant_ops_gold,
     restaurant_ops_recipes,
     production_ai,
@@ -728,6 +729,50 @@ async def lifespan(app: FastAPI):
             # warning 级别在这台机器的日志量下等于看不见。
             logger.exception("[startup] platform sync init failed — 平台同步未启动")
 
+    # Restaurant reservation simulator daily roll.  The service itself is
+    # tenant-scoped, idempotent per local calendar day, and writes an audit row
+    # with inserted/updated/deleted counts.  Only the two explicitly authorized
+    # showcase tenants are included; every generated fact remains labelled
+    # is_simulated/source at the API and Web boundaries.
+    _reservation_roll_task = None
+    try:
+        import asyncio as _asyncio_reservation
+        from smartbi.config import get_pg_pool as _get_reservation_pool
+        from smartbi.services.restaurant.staffing_forecast import (
+            RestaurantStaffingService as _RestaurantStaffingService,
+            TARGET_FACTORIES as _RESERVATION_TARGET_FACTORIES,
+        )
+
+        async def _roll_restaurant_reservations_forever():
+            await _asyncio_reservation.sleep(45)
+            while True:
+                try:
+                    _pool = await _get_reservation_pool()
+                    if _pool is None:
+                        logger.error("[restaurant-reservation-roll] SmartBI pool unavailable")
+                    else:
+                        _service = _RestaurantStaffingService(_pool)
+                        for _factory_id in _RESERVATION_TARGET_FACTORIES:
+                            try:
+                                await _service.roll_simulated_reservations(_factory_id)
+                            except Exception:
+                                logger.exception(
+                                    "[restaurant-reservation-roll] failed for %s", _factory_id,
+                                )
+                except Exception:
+                    logger.exception("[restaurant-reservation-roll] daily loop failed")
+                await _asyncio_reservation.sleep(6 * 3600)
+
+        if _is_leader:
+            _reservation_roll_task = _asyncio_reservation.create_task(
+                _roll_restaurant_reservations_forever()
+            )
+            logger.info("[leader] restaurant reservation daily roll armed")
+        else:
+            logger.info("[follower] restaurant reservation roll skipped (leader handles)")
+    except Exception:
+        logger.exception("[startup] restaurant reservation roll init failed")
+
     # External restaurant benchmark refresh. Disabled by default because it
     # calls public websites/APIs; enable only after source review and quota setup.
     _external_benchmark_task = None
@@ -1177,6 +1222,15 @@ async def lifespan(app: FastAPI):
         except Exception:
             pass
 
+    # Shutdown: cancel restaurant reservation daily roll task
+    if _reservation_roll_task is not None:
+        import asyncio as _asyncio_reservation_shutdown
+        _reservation_roll_task.cancel()
+        try:
+            await _reservation_roll_task
+        except (Exception, _asyncio_reservation_shutdown.CancelledError):
+            pass
+
     # Shutdown: cancel restaurant-ops ETL task
     if _restaurant_etl_task is not None:
         _restaurant_etl_task.cancel()
@@ -1348,6 +1402,7 @@ app.include_router(benchmark.router, prefix="/api/smartbi", tags=["Industry Benc
 app.include_router(external_benchmarks.router, prefix="/api/smartbi", tags=["External Benchmarks"])
 app.include_router(finance_extract.router, prefix="/api/finance", tags=["Finance Extract"])
 app.include_router(restaurant_analytics.router, prefix="/api/smartbi", tags=["Restaurant Analytics"])
+app.include_router(restaurant_staffing.router, prefix="/api/smartbi", tags=["Restaurant Staffing"])
 app.include_router(restaurant_ops_gold.router, prefix="/api/smartbi", tags=["Restaurant Ops Gold"])
 app.include_router(supplier_price.router, prefix="/api/smartbi", tags=["Supplier Price Gold"])
 app.include_router(price_anomaly.router, prefix="/api/smartbi", tags=["Price Anomaly Deterrence"])

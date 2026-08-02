@@ -443,13 +443,14 @@ _RESTAURANT_SCOPE_ACTION_ANSWER = """\
 
 损耗等当前不能按门店拆分的 resolver 不显示范围按钮。裸店名、裸“全部门店”或只有范围词而没有完整业务问题，也不能作为可执行追问。用户要换范围时，应在 SmartBI 餐饮 AI 中提交完整问题；导览助手只解释这一规则，不替用户运行分析。"""
 _RESTAURANT_STAFFING_SCOPE_ANSWER = """\
-当前餐饮排班建议读取全连锁的分时段人力配置，不是按某一家门店或某个日期临时计算的经营分析。
+当前餐饮预测排班由 SmartBI 餐饮 AI 和“预测排班”页面执行；本导览助手只解释入口与口径，不代替系统取数。
 
-1. 当前 resolver 只接收租户范围，不接收门店和时间参数；因此系统不应追问门店或时间，也不应显示“看全部门店 / 只看某店”或时间范围按钮。
-2. 回答可以解释已配置的早班、午市、晚市等分时段建议，但不能把它说成基于指定门店实时客流自动算出的排班结果。
-3. 用户需要门店或日期维度的人力分析时，应明确说明当前能力未覆盖并指向人事配置/后续分析入口，不能伪造数字，也不能把任意澄清文本当成可执行范围。
+1. 支持“明天”“下周”“下个月”三个未来范围，并按门店、午市/下午茶/晚市/夜宵展示。
+2. 数字只来自预测 FactBook：当前预订，加上过去7天、30天、365天的 POS/客流趋势，再按岗位技能、工时和目标人效生成建议。
+3. 历史实际人效低于目标只作为证据，不能直接解释成缺人。大模型只负责理解、综合和解释，不能自行补数字。
+4. 预订来源会明确标注模拟或平台；一键调整是需确认并留审计记录的业务写入，不属于只读问答。
 
-餐饮导览助手只说明当前入口和边界，不替用户计算或分析真实经营数据。"""
+请到 SmartBI 餐饮 AI 提问，或打开餐饮端“预测排班”；本导览助手不替用户计算真实经营数据。"""
 
 
 def _uses_current_production_sop(query: str) -> bool:
@@ -686,12 +687,12 @@ def _needs_restaurant_platform_sync_guard(query: str) -> bool:
 
 
 def _needs_restaurant_staffing_scope_guard(query: str) -> bool:
-    """Keep staffing advice on its current chain-level, timeless resolver scope."""
+    """Explain the forecast staffing contract without pretending to execute it."""
     normalized = (query or "").lower()
     mentions_staffing = any(term in normalized for term in ("排班建议", "人力配置", "分时段人力"))
     mentions_scope = any(
         term in normalized
-        for term in ("门店", "时间", "日期", "范围", "追问", "按钮", "实时", "怎么算")
+        for term in ("门店", "时间", "日期", "范围", "明天", "下周", "下个月", "兼职", "按钮", "实时", "怎么算")
     )
     return mentions_staffing and mentions_scope
 

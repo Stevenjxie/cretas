@@ -355,7 +355,7 @@ _INTENT_DESCRIPTIONS: Dict[str, str] = {
     "RESTAURANT_OPS_SALES_SUMMARY": "总体经营概览：营收、订单、客单价、是否盈利",
     "RESTAURANT_OPS_TREND_ANALYSIS": "营收的同比/环比/月度趋势分析",
     "RESTAURANT_OPS_INVENTORY_WARNING": "食材库存水位预警：低于补货点/安全库存的食材，提示补货（区别于盘点差异/盘亏的历史账实差）",
-    "RESTAURANT_OPS_STAFFING_ADVICE": "按时段(午市/晚市/下午茶/夜宵)的人效比诊断，建议哪个时段加人/减人",
+    "RESTAURANT_OPS_STAFFING_ADVICE": "基于当前预订和过去7/30/365天POS客流趋势，预测明天、下周或下个月各店各时段需求，并按岗位技能、工时和目标人效给出排班建议",
 }
 
 _VALID_CODES = frozenset(_INTENT_DESCRIPTIONS)
@@ -370,16 +370,9 @@ _TIME_SCOPED_INTENTS = frozenset({
     "RESTAURANT_OPS_STORE_MARGIN",
     "RESTAURANT_OPS_SALES_SUMMARY",
     "RESTAURANT_OPS_TREND_ANALYSIS",
-    # ⛔ 2026-08-01 移除 RESTAURANT_OPS_STAFFING_ADVICE。
-    # 它的 resolver 是 `resolve_staffing_advice(pool, factory_id)` —— **一个日期
-    # 参数都没有**, 读的是 `fact_staffing_daypart` 这张配置表(没有时间维度)。
-    # 留在这里的后果: 「哪个时段人手不够」被拦下问「你想看哪个时间范围？」,
-    # 而用户认真回答「最近30天」之后拿到的答案与回答「本月」**一模一样** ——
-    # 澄清问了一个答案根本不受其影响的问题, 比不问更糟(它让用户以为自己在控制口径)。
-    #
-    # ⚠️ 这个缺陷此前一直被**另一个**缺失挡着: 人效配置表是空的, resolver 先返回
-    # 「还没有配置人效数据」, 澄清那层根本走不到。配上数据之后才浮出来。
-    # `test_time_scoped_intents_contract.py` 现在按 resolver 签名静态守住这条。
+    # Staffing uses an explicit future horizon parsed from the effective user
+    # question (tomorrow / next week / next month), not this legacy historical
+    # window contract.  It therefore remains outside _TIME_SCOPED_INTENTS.
 })
 
 
@@ -3945,33 +3938,17 @@ _STORE_SCOPE_FREE_INTENTS = frozenset({
     "RESTAURANT_OPS_OUT_OF_DOMAIN",
     "RESTAURANT_OPS_PLAYBOOK",
     "RESTAURANT_OPS_STORE_DIRECTORY",
-    # 2026-08-01 补入。`resolve_staffing_advice(pool, factory_id)` 只有两个参数 ——
-    # **一个门店参数都没有**, 读的是 `fact_staffing_daypart` 这张连锁口径的配置表。
-    # 不豁免的后果: 「上个月人效怎么样」被拦下问「你想查看哪家门店的人效情况？」,
-    # 而用户选了哪家店都不会改变答案 —— 与「问时间范围」是同一族缺陷:
-    # **向用户要一个 resolver 消费不了的槽位**。
-    #
-    # ⚠️ 它**时灵时不灵**: 本守卫靠 `requested_metrics ∩ _STORE_SCOPE_REQUIRED_METRICS`
-    # 触发, 而「人效」的指标由 LLM 填 —— 填成 orders/revenue 那轮才拦得住。
-    # 所以不是稳定缺陷而是**确定性覆盖的缺口**, 由
-    # `test_time_scoped_intents_contract.py` 按 resolver 签名静态守住。
+    # The forecasting resolver returns every store by default.  A needless
+    # store clarification would narrow a valid "各店" question before the
+    # FactBook is built; the dedicated Web dashboard supplies an explicit
+    # store_id when a single-store view is requested.
     "RESTAURANT_OPS_STAFFING_ADVICE",
 })
 
 
-# resolver 签名只有 (pool, factory_id) 的 intent —— 它**接不住任何澄清**:
-# 没有 date_range、没有 store_id, 用户回答什么都不会改变答案。
-#
-# 2026-08-01: 修掉 `_TIME_SCOPED_INTENTS` 与 `_STORE_SCOPE_FREE_INTENTS` 两条路径后,
-# 「上个月人效怎么样」仍有约 1/8 概率答不出, 正文是「你想查看哪家门店的人效情况？」——
-# 那句**不是** STORE_SCOPE_CLARIFICATION_QUESTION 的措辞, 是 **LLM 自己**决定要问门店。
-# `_slots_of_clarification` 只认三个已知常量, LLM 自由发挥的问句返回空集, 前两条
-# 守卫都拦不住。所以这里按「resolver 到底接不接得住」兜底, 而不是继续按问句措辞猜。
-#
-# ⚠️ 复现必须**一个进程只调一次**: 计划缓存是进程内的, 同进程第二次就命中缓存,
-#    冷路径行为被完全掩盖(实测同进程 12/12 全过, 每进程一次才 1/8 复现)。
-#
-# `test_time_scoped_intents_contract.py` 按 resolver 签名静态守住这张表的完整性。
+# Staffing consumes the effective question itself and deterministically maps
+# future-language to one of three supported forecast horizons.  It must not
+# accept an unrelated historical-window clarification from the legacy planner.
 _NO_SCOPE_INTENTS = frozenset({
     "RESTAURANT_OPS_STAFFING_ADVICE",
 })

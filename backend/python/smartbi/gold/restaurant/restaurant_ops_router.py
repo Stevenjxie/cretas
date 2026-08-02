@@ -157,12 +157,14 @@ _OPS_PATTERNS: List[Tuple[str, List[List[str]]]] = [
         [["库存", "食材", "原料", "补货", "进货"],
          ["预警", "够不够", "够吗", "快没了", "要补", "该进", "不足", "缺货", "备货"]],
     ),
-    # Staffing advice (2026-07-08): 按时段(午市/晚市/下午茶/夜宵)的人效比诊断，
-    # 建议哪个时段加人/减人。Also placed at the END for the same reason.
+    # Forecast staffing: current reservations + independent 7/30/365-day POS
+    # trends produce the FactBook; skills/hours/targets produce headcount.  The
+    # historical actual/target direction is evidence only.  Keep this last so
+    # more specific operational intents win first.
     (
         "RESTAURANT_OPS_STAFFING_ADVICE",
-        [["排班", "人手", "人力", "员工", "服务员", "几点", "时段", "午市", "晚市", "下午茶", "夜宵"],
-         ["加人", "减人", "够不够", "够吗", "忙不忙", "安排", "调配", "人效", "几个人", "排班", "建议", "人太多", "人少"]],
+        [["排班", "人手", "人力", "人效", "员工", "服务员", "兼职", "几点", "时段", "午市", "晚市", "下午茶", "夜宵"],
+         ["加人", "减人", "够不够", "不够", "够吗", "忙不忙", "需要", "多少", "安排", "调配", "人效", "几个人", "排班", "建议", "人太多", "人少"]],
     ),
 ]
 
@@ -258,12 +260,12 @@ SAMPLE_QUERIES: Dict[str, List[str]] = {
         "哪些原料库存不足",
     ],
     "RESTAURANT_OPS_STAFFING_ADVICE": [
-        "今晚怎么排班",
-        "哪个时段要加人",
-        "人手够不够",
+        "明天怎么排班",
+        "下周需要多少兼职",
+        "下个月各店人效安排",
         "午市要不要加人",
-        "排班建议",
-        "哪个时段人太多",
+        "哪个时段人手不够",
+        "各门店预测客流和排班建议",
     ],
 }
 
@@ -7412,138 +7414,91 @@ async def resolve_inventory_warning(
     )
 
 
-# Fixed daypart display order (independent of DB row order) so the answer
-# text and kpis are deterministic regardless of how fact_staffing_daypart
-# rows happen to sort.
-_DAYPART_ORDER = ["午市", "下午茶", "晚市", "夜宵"]
-_WEEKDAY_TYPE_LABEL = {"weekday": "工作日", "weekend": "周末"}
+async def resolve_staffing_advice(
+    smartbi_pool,
+    factory_id: str,
+    *,
+    role: Optional[str] = None,
+    query: Optional[str] = None,
+) -> OpsAnswer:
+    """Forecast-first staffing answer backed by the restaurant FactBook.
 
+    The old resolver inferred a future shortage from historical
+    ``actual_orders_per_staff < target``.  That direction is invalid: low
+    historical productivity can mean weak demand, excess staffing, ramp-up, or
+    many other things.  The replacement predicts future guests from bookings
+    plus independent 7/30/365-day POS windows, then applies role skill/hour
+    constraints.  Historical productivity remains attached as evidence only.
 
-def _daypart_sort_key(daypart: str) -> int:
-    try:
-        return _DAYPART_ORDER.index(daypart)
-    except ValueError:
-        return len(_DAYPART_ORDER)
-
-
-async def resolve_staffing_advice(smartbi_pool, factory_id: str) -> OpsAnswer:
-    """Per-daypart staffing/labor-efficiency advice: which daypart is
-    over-staffed (few orders per staff member, could reassign) vs
-    under-staffed (many orders per staff member, should add headcount).
-
-    No monetary output — this is an orders-per-staff ratio read, not a
-    cost/price read, so it carries no PRICE_VIEW_ROLES gate.
+    A successful answer always includes an LLM narrative routed through the
+    existing shared provider chain.  Numerical lines are rendered by code from
+    the FactBook; the LLM validator rejects any model-authored digit.
     """
-    async with smartbi_pool.acquire() as conn:
-        await conn.execute("SELECT set_config('app.factory_id', $1, false)", factory_id)
-        rows = await conn.fetch(
-            """
-            SELECT daypart, weekday_type,
-                   avg_orders::float AS avg_orders,
-                   staff_on_duty,
-                   target_orders_per_staff::float AS target
-              FROM fact_staffing_daypart
-             WHERE factory_id = $1
-            """,
-            factory_id,
-        )
+    from smartbi.services.restaurant.staffing_forecast import RestaurantStaffingService
 
-    if not rows:
+    service = RestaurantStaffingService(smartbi_pool)
+    try:
+        result = await service.answer_question(
+            factory_id,
+            query or "明天怎么排班",
+            role=role,
+        )
+    except Exception as exc:
+        logger.exception("forecast staffing answer failed for %s", factory_id)
         return OpsAnswer(
             code="RESTAURANT_OPS_STAFFING_ADVICE",
-            title="排班建议",
+            title="预测排班暂不可用",
             answer_text=(
-                "还没有配置各时段的人效数据（历史日均订单/在岗人数/目标人效），无法给出排班建议。"
-                "请先在人效配置里维护各时段（午市/晚市/下午茶/夜宵）的目标值，本分析即可运行。"
+                "预测 FactBook 或大模型解释链本次未完成，因此没有展示可能方向错误的排班人数。"
+                "请稍后重试；系统不会退回到“历史实际人效低于目标就补人”的旧判断。"
             ),
-            charts=[], kpis=[],
-            meta={"no_data": True},
+            charts=[],
+            kpis=[],
+            meta={
+                "no_data": True,
+                "llm_required": True,
+                "llm_used": False,
+                "error_type": type(exc).__name__,
+                "historical_productivity_rule": "evidence_only_not_gap_input",
+            },
         )
 
-    entries: List[Dict[str, Any]] = []
-    for r in rows:
-        avg_orders = r["avg_orders"] if r["avg_orders"] is not None else 0.0
-        staff = r["staff_on_duty"]
-        target = r["target"]
-        actual_per_staff = (avg_orders / staff) if staff else None
-        advice = "人力未配置，无法计算人效"
-        delta = 0
-        if actual_per_staff is not None and target is not None and target > 0:
-            if actual_per_staff > target * 1.15:
-                suggested = max(staff + 1, round(avg_orders / target))
-                delta = suggested - staff
-                advice = f"人效偏高，建议加 {delta} 人"
-            elif actual_per_staff < target * 0.7:
-                suggested = max(1, round(avg_orders / target))
-                delta = suggested - staff
-                advice = f"人效偏低，可减 {abs(delta)} 人" if delta < 0 else "人效偏低，可精简排班"
-            else:
-                advice = "人效均衡，维持现状"
-        entries.append({
-            "daypart": r["daypart"], "weekday_type": r["weekday_type"],
-            "avg_orders": avg_orders, "staff": staff, "target": target,
-            "actual_per_staff": actual_per_staff, "advice": advice, "delta": delta,
-        })
-    entries.sort(key=lambda e: (e["weekday_type"] != "weekday", _daypart_sort_key(e["daypart"])))
-
-    lines = []
-    for wd_type in ("weekday", "weekend"):
-        group = [e for e in entries if e["weekday_type"] == wd_type]
-        if not group:
-            continue
-        label = _WEEKDAY_TYPE_LABEL.get(wd_type, wd_type)
-        if lines:
-            lines.append("")
-        lines.append(f"**{label}:**")
-        for e in group:
-            ratio_text = f"{e['actual_per_staff']:.1f}/人" if e["actual_per_staff"] is not None else "—"
-            lines.append(
-                f"- {e['daypart']}: 日均 {e['avg_orders']:.0f} 单, {e['staff']} 人在岗, "
-                f"人效 {ratio_text} ({e['advice']})"
-            )
-    detail_text = "\n".join(lines)
-
-    understaffed = [e for e in entries if e["delta"] > 0]
-    overstaffed = [e for e in entries if e["delta"] < 0]
-    most_understaffed = max(understaffed, key=lambda e: e["delta"], default=None)
-    most_overstaffed = min(overstaffed, key=lambda e: e["delta"], default=None)
-
-    answer = (
-        f"**排班建议（按时段人效诊断）:**\n\n{detail_text}\n\n"
-        f"建议动作:\n"
-        f"1. 对人效偏高的时段优先加人，避免出餐延迟和服务质量下降。\n"
-        f"2. 对人效偏低的时段可精简排班或调配到高峰时段，避免人力浪费。\n"
-        f"3. 每周复盘一次日均订单数，及时调整目标人效基准。"
+    dashboard = result["dashboard"]
+    rows = sorted(
+        dashboard.get("summary_rows") or [],
+        key=lambda row: (row.get("positive_gap") or 0, row.get("predicted_guests") or 0),
+        reverse=True,
     )
-
-    charts = [{
-        "chartType": "bar",
-        "title": "各时段人效对比",
-        "xAxis": {"data": [f"{e['weekday_type']}-{e['daypart']}" for e in entries]},
-        "series": [{
-            "name": "人效(单/人)", "type": "bar",
-            "data": [e["actual_per_staff"] for e in entries],
-        }],
-    }]
-
+    summary = dashboard.get("summary") or {}
+    chart_rows = rows[:12]
     return OpsAnswer(
         code="RESTAURANT_OPS_STAFFING_ADVICE",
-        title="排班建议",
-        answer_text=answer,
-        charts=charts,
+        title=f"{dashboard.get('horizon_label', '未来')}预测排班",
+        answer_text=result["answer_text"],
+        charts=[{
+            "chartType": "bar",
+            "title": "门店时段建议人数与现有人数",
+            "xAxis": {"data": [f"{row['store_name']}-{row['daypart']}" for row in chart_rows]},
+            "series": [
+                {"name": "建议人数", "type": "bar", "data": [row["recommended_staff"] for row in chart_rows]},
+                {"name": "现有人数", "type": "bar", "data": [row["current_staff"] for row in chart_rows]},
+            ],
+        }] if chart_rows else [],
         kpis=[
-            {"title": "最缺人时段",
-             "value": f"{most_understaffed['weekday_type']}-{most_understaffed['daypart']}" if most_understaffed else "—",
-             "rawValue": 0},
-            {"title": "最冗余时段",
-             "value": f"{most_overstaffed['weekday_type']}-{most_overstaffed['daypart']}" if most_overstaffed else "—",
-             "rawValue": 0},
-            {"title": "总时段数", "value": len(entries), "rawValue": len(entries)},
+            {"title": "预测客流", "value": summary.get("predicted_guests", 0), "rawValue": summary.get("predicted_guests", 0)},
+            {"title": "当前预订", "value": summary.get("reserved_guests", 0), "rawValue": summary.get("reserved_guests", 0)},
+            {"title": "正向缺口", "value": summary.get("positive_gap", 0), "rawValue": summary.get("positive_gap", 0)},
+            {"title": "置信度", "value": f"{summary.get('confidence_pct', 0)}%", "rawValue": summary.get("confidence_pct", 0)},
         ],
         meta={
-            "daypart_count": len(entries),
-            "understaffed": [f"{e['weekday_type']}-{e['daypart']}" for e in understaffed],
-            "overstaffed": [f"{e['weekday_type']}-{e['daypart']}" for e in overstaffed],
+            "horizon": result["horizon"],
+            "llm_required": True,
+            "llm_used": result["llm_used"],
+            "llm_numeric_authorship": result["llm_numeric_authorship"],
+            "factbook": result["factbook"],
+            "reservation_sources": dashboard.get("sources") or [],
+            "historical_productivity_rule": "evidence_only_not_gap_input",
+            "dashboard": dashboard,
         },
     )
 

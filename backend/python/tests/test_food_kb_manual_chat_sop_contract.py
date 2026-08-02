@@ -413,7 +413,7 @@ def test_restaurant_scope_actions_require_executable_store_questions():
     assert "完整、可独立执行的问句" in _RESTAURANT_SCOPE_ACTION_ANSWER
 
 
-def test_restaurant_staffing_advice_does_not_invent_store_or_time_scope():
+def test_restaurant_staffing_advice_describes_forecast_scope_without_executing_it():
     equivalent_questions = (
         "排班建议为什么不问门店和时间？",
         "分时段人力配置能按某店某天实时算吗？",
@@ -421,9 +421,10 @@ def test_restaurant_staffing_advice_does_not_invent_store_or_time_scope():
     )
     assert all(_needs_restaurant_staffing_scope_guard(q) for q in equivalent_questions)
     assert not _needs_restaurant_staffing_scope_guard("今天各门店营业额是多少？")
-    assert "只接收租户范围，不接收门店和时间参数" in _RESTAURANT_STAFFING_SCOPE_ANSWER
-    assert "不应追问门店或时间" in _RESTAURANT_STAFFING_SCOPE_ANSWER
-    assert "不替用户计算或分析真实经营数据" in _RESTAURANT_STAFFING_SCOPE_ANSWER
+    assert "支持“明天”“下周”“下个月”三个未来范围" in _RESTAURANT_STAFFING_SCOPE_ANSWER
+    assert "按门店、午市/下午茶/晚市/夜宵展示" in _RESTAURANT_STAFFING_SCOPE_ANSWER
+    assert "大模型只负责理解、综合和解释" in _RESTAURANT_STAFFING_SCOPE_ANSWER
+    assert "不替用户计算真实经营数据" in _RESTAURANT_STAFFING_SCOPE_ANSWER
 
 
 def test_restaurant_exact_range_scope_and_output_use_current_contract():
