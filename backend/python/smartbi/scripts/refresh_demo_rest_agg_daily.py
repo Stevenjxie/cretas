@@ -104,11 +104,18 @@ async def apply_refresh(conn: Any, target_end: date) -> Dict[str, Any]:
     verification = await conn.fetchrow(
         """
         SELECT COUNT(*) AS rows, MAX(date) AS max_date,
-               COUNT(*) FILTER (WHERE version=$2) AS seeded_rows
+               COUNT(*) FILTER (WHERE version=$2) AS seeded_rows,
+               (SELECT MAX(date) FROM fact_pos_transaction
+                 WHERE factory_id=$1) AS pos_max_date
           FROM agg_daily WHERE factory_id=$1
         """,
         FACTORY_ID, SEED_VERSION,
     )
+    pos_max_after = verification["pos_max_date"]
+    if pos_max_after is None or pos_max_after < target_end:
+        raise RuntimeError(
+            f"POS coverage still ends at {pos_max_after}, expected {target_end}"
+        )
     max_after = verification["max_date"]
     if max_after is None or max_after < target_end:
         raise RuntimeError(
@@ -118,6 +125,7 @@ async def apply_refresh(conn: Any, target_end: date) -> Dict[str, Any]:
         "inserted_rows": inserted,
         "agg_rows_after": int(verification["rows"]),
         "agg_max_date_after": str(max_after),
+        "pos_max_date_after": str(pos_max_after),
         "seeded_rows_after": int(verification["seeded_rows"]),
     }
 
