@@ -1,5 +1,9 @@
 import { useEffect, useRef } from 'react';
-import * as Notifications from 'expo-notifications';
+// APP-WEB-007 收尾: 这里只用到 Notifications 的**类型**(Notification /
+// NotificationResponse)。改成 `import type` —— 值导入会让 expo-notifications 在 web 上
+// 被求值, 而它的 DevicePushTokenAutoRegistration.fx 在全局作用域注册 push token 监听,
+// 一执行就 console.warn。详见 pushNotificationService.ts 顶部说明。
+import type * as Notifications from 'expo-notifications';
 import { pushNotificationService, isPushSupported } from '../services/pushNotificationService';
 import { deviceAPI } from '../services/api/deviceApiClient';
 import { useAuthStore } from '../store/authStore';
