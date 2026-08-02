@@ -157,65 +157,79 @@ def test_resolve_inventory_warning_empty_data_honest_disclosure():
 # ============================================================
 
 
-def _staffing_rows():
-    return [
-        {"daypart": "午市", "weekday_type": "weekday", "avg_orders": 180.0, "staff_on_duty": 6, "target": 25.0},
-        {"daypart": "下午茶", "weekday_type": "weekday", "avg_orders": 40.0, "staff_on_duty": 5, "target": 25.0},
-        {"daypart": "晚市", "weekday_type": "weekday", "avg_orders": 200.0, "staff_on_duty": 8, "target": 25.0},
-    ]
+def _forecast_answer():
+    return {
+        "answer_text": "明天预测排班 FactBook\n大模型解读已完成",
+        "dashboard": {
+            "summary": {
+                "predicted_guests": 180,
+                "recommended_staff": 8,
+                "current_staff": 7,
+                "positive_gap": 1,
+                "confidence_pct": 81.0,
+            },
+            "summary_rows": [{"store_name": "测试门店", "daypart": "午市"}],
+        },
+        "factbook": "grounded",
+        "llm_used": True,
+        "llm_numeric_authorship": False,
+        "horizon": "tomorrow",
+    }
 
 
-def test_resolve_staffing_advice_flags_over_and_under_staffed():
-    conn = _FakeConn(fetch_map={"FROM fact_staffing_daypart": _staffing_rows()})
-    pool = _FakePool(conn)
+def test_resolve_staffing_advice_uses_forecast_factbook_and_llm(monkeypatch):
+    from smartbi.services.restaurant.staffing_forecast import RestaurantStaffingService
 
-    result = asyncio.run(resolve_staffing_advice(pool, "DEMO_REST"))
+    answer = AsyncMock(return_value=_forecast_answer())
+    monkeypatch.setattr(RestaurantStaffingService, "answer_question", answer)
+    result = asyncio.run(resolve_staffing_advice(_FakePool(_FakeConn()), "MOCK_REST", query="明天怎么排班"))
 
     assert isinstance(result, OpsAnswer)
     assert result.code == "RESTAURANT_OPS_STAFFING_ADVICE"
-    # 180/6 = 30/人 > 25*1.15 -> understaffed (needs more headcount)
-    assert "weekday-午市" in result.meta["understaffed"]
-    # 40/5 = 8/人 < 25*0.7 -> overstaffed (redundant headcount)
-    assert "weekday-下午茶" in result.meta["overstaffed"]
-    # 200/8 = 25/人 == target -> balanced, appears in neither list
-    assert "weekday-晚市" not in result.meta["understaffed"]
-    assert "weekday-晚市" not in result.meta["overstaffed"]
-
-    understaffed_kpi = next(k for k in result.kpis if k["title"] == "最缺人时段")
-    overstaffed_kpi = next(k for k in result.kpis if k["title"] == "最冗余时段")
-    assert understaffed_kpi["value"] == "weekday-午市"
-    assert overstaffed_kpi["value"] == "weekday-下午茶"
+    assert result.meta["llm_used"] is True
+    assert result.meta["llm_numeric_authorship"] is False
+    assert result.meta["factbook"] == "grounded"
+    answer.assert_awaited_once()
 
 
 def test_resolve_staffing_advice_no_money_output():
-    conn = _FakeConn(fetch_map={"FROM fact_staffing_daypart": _staffing_rows()})
-    pool = _FakePool(conn)
+    from smartbi.services.restaurant.staffing_forecast import RestaurantStaffingService
 
-    result = asyncio.run(resolve_staffing_advice(pool, "DEMO_REST"))
+    original = RestaurantStaffingService.answer_question
+    RestaurantStaffingService.answer_question = AsyncMock(return_value=_forecast_answer())
+    try:
+        result = asyncio.run(resolve_staffing_advice(_FakePool(_FakeConn()), "MOCK_REST"))
+    finally:
+        RestaurantStaffingService.answer_question = original
     assert "¥" not in result.answer_text
     for kpi in result.kpis:
         assert "¥" not in str(kpi.get("value"))
 
 
-def test_resolve_staffing_advice_empty_data_honest_disclosure():
-    conn = _FakeConn(fetch_map={"FROM fact_staffing_daypart": []})
-    pool = _FakePool(conn)
+def test_resolve_staffing_advice_empty_data_honest_disclosure(monkeypatch):
+    from smartbi.services.restaurant.staffing_forecast import RestaurantStaffingService
 
-    result = asyncio.run(resolve_staffing_advice(pool, "NO_DATA_FACTORY"))
+    monkeypatch.setattr(
+        RestaurantStaffingService,
+        "answer_question",
+        AsyncMock(side_effect=ValueError("no forecast facts")),
+    )
+    result = asyncio.run(resolve_staffing_advice(_FakePool(_FakeConn()), "NO_DATA_FACTORY"))
     assert result.meta.get("no_data") is True
     assert result.charts == []
     assert result.kpis == []
 
 
-def test_resolve_staffing_advice_zero_staff_on_duty_does_not_crash():
-    """staff_on_duty = 0 (or NULL) must not raise ZeroDivisionError -- honest
-    'cannot compute' advice instead (mirrors the module's fail-open style)."""
-    rows = [{"daypart": "夜宵", "weekday_type": "weekday", "avg_orders": 50.0, "staff_on_duty": 0, "target": 20.0}]
-    conn = _FakeConn(fetch_map={"FROM fact_staffing_daypart": rows})
-    pool = _FakePool(conn)
+def test_resolve_staffing_advice_never_falls_back_to_historical_direction(monkeypatch):
+    from smartbi.services.restaurant.staffing_forecast import RestaurantStaffingService
 
-    result = asyncio.run(resolve_staffing_advice(pool, "DEMO_REST"))
-    assert "无法计算" in result.answer_text
+    monkeypatch.setattr(
+        RestaurantStaffingService,
+        "answer_question",
+        AsyncMock(side_effect=RuntimeError("LLM unavailable")),
+    )
+    result = asyncio.run(resolve_staffing_advice(_FakePool(_FakeConn()), "MOCK_REST"))
+    assert "不会退回到“历史实际人效低于目标就补人”" in result.answer_text
 
 
 # ============================================================
