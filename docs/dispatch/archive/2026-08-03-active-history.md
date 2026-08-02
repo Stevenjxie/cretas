@@ -1,0 +1,3 @@
+# Dispatch 完成记录 — 2026-08-03
+
+- `UX-RESTAURANT-WEB-ROLE-EXPERIENCE-20260802` — `review` — Owner: `/root` — Base SHA: `0503a120831f6f007ac9e5ae05579f02b490f2b0` — 餐饮 Web 四角色首页/菜单、四部门驾驶舱、真实 LLM 问答与数据分析入口首轮打磨完成：老板、店长、采购、厨师长按职责获得不同工作台、快捷问题与交接边界；运营、市场、人事、财务页面统一为真实数据、诚实空态、紧凑 KPI 和行动导向布局；菜单隐藏与直达路由使用同一餐饮角色约束，并对餐饮租户隐藏工厂生产异常页。目标 Vitest 81/81、`vue-tsc -b --force`、Vite build、1536/1024/768 三档视觉验收、diff check 与生产只读基线通过，AI 调用及业务写入均为 0。实现 commit `2a3a818a48` 已推送并创建 PR #2215；Steve 已授权合并及生产 Web 发布，本归档 commit 合入后从 clean exact `origin/main` 发布并以统一回执和 Web 四方哈希为真值，scope 已释放。
