@@ -1,5 +1,7 @@
 package com.cretas.aims.service.workflow.impl;
 
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.cretas.aims.dto.workflow.WorkflowClerkSheetConfigDTO;
 import com.cretas.aims.dto.bom.BomItemSubstituteDTO;
 import com.cretas.aims.entity.ProductType;
@@ -29,6 +31,7 @@ import com.cretas.aims.service.workflow.WorkflowClerkSheetService;
 import com.cretas.aims.service.workflow.WorkflowReportingUnitResolver;
 import com.cretas.aims.service.bom.BomItemSubstituteService;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -47,6 +50,7 @@ import java.util.Set;
  * (spec 2026-07-11-product-process-workflow-runtime-2b-clerk-implementation.md)。
  */
 @Service
+@Slf4j
 @RequiredArgsConstructor
 public class WorkflowClerkSheetServiceImpl implements WorkflowClerkSheetService {
 
@@ -111,7 +115,8 @@ public class WorkflowClerkSheetServiceImpl implements WorkflowClerkSheetService 
                     factoryId,
                     task,
                     portsByTask.getOrDefault(task.getId(), List.of()),
-                    allowedSkuIdsByPort));
+                    allowedSkuIdsByPort,
+                    instance.getNodesJson()));
         }
 
         return WorkflowClerkSheetConfigDTO.builder()
@@ -171,11 +176,52 @@ public class WorkflowClerkSheetServiceImpl implements WorkflowClerkSheetService 
     private record WorkflowRuntimeSelection(
             ProductionBatch batch, ProductionWorkflowInstance instance) {}
 
+
+    /** 解析运行时快照 nodes_json 用的 mapper —— 只读取, 不参与序列化输出。 */
+    private static final ObjectMapper NODES_JSON_MAPPER = new ObjectMapper();
+
+    /**
+     * 取这道工序在 Workflow 图上配置的「同一物料可投多批」开关。
+     *
+     * <p>读的是 {@code ProductionWorkflowInstance.nodesJson} —— 那是**开工时冻结的运行时快照**,
+     * 与画布上发布的那一版一致, 不会因为事后改图而漂移。
+     *
+     * <p>配置缺失时回落 {@code portCountFallback} (端口数 > 1), 保证从没配过这个字段的老工作流
+     * 行为逐字不变。
+     *
+     * <p>解析失败同样回落 —— 这个开关只影响录入界面给不给多来源行, 不该因为一个 JSON 解析问题
+     * 让整张报工单打不开。
+     */
+    private boolean resolveAllowMultipleUpstreamSources(
+            String instanceNodesJson, String workflowNodeId, boolean portCountFallback) {
+        if (instanceNodesJson == null || instanceNodesJson.isBlank() || workflowNodeId == null) {
+            return portCountFallback;
+        }
+        try {
+            JsonNode nodes = NODES_JSON_MAPPER.readTree(instanceNodesJson);
+            if (!nodes.isArray()) {
+                return portCountFallback;
+            }
+            for (JsonNode node : nodes) {
+                if (!workflowNodeId.equals(node.path("id").asText(null))) {
+                    continue;
+                }
+                JsonNode flag = node.path("data").path("allowMultipleUpstreamSources");
+                return flag.isBoolean() ? flag.asBoolean() : portCountFallback;
+            }
+        } catch (Exception e) {
+            log.warn("解析 workflow nodes_json 取 allowMultipleUpstreamSources 失败, 回落端口数判据: nodeId={}, err={}",
+                    workflowNodeId, e.getMessage());
+        }
+        return portCountFallback;
+    }
+
     private WorkflowClerkSheetConfigDTO.ProcessDescriptor buildDescriptor(
             String factoryId,
             WorkProcessTask task,
             List<WorkflowTaskPort> taskPorts,
-            Map<String, List<String>> allowedSkuIdsByPort) {
+            Map<String, List<String>> allowedSkuIdsByPort,
+            String instanceNodesJson) {
         boolean projectReportingUnits = task.getStatus() == null || !task.getStatus().isTerminal();
         List<WorkflowTaskPort> inputs = new ArrayList<>();
         List<WorkflowTaskPort> outputs = new ArrayList<>();
@@ -229,7 +275,16 @@ public class WorkflowClerkSheetServiceImpl implements WorkflowClerkSheetService 
                 .plannedUnit(projectReportingUnits
                         ? outputDescriptors.getFirst().getUnit()
                         : task.getPlannedUnit())
-                .allowMultipleUpstreamSources(upstreamInputCount > 1)
+                // 🔴 客户张权 2026-08-02: 这里原来是 `upstreamInputCount > 1`, 即**无视用户在
+                // Workflow 画布上配的 allowMultipleUpstreamSources, 当场按端口数重算一遍**。
+                // 后果: 图定义里配了 true 也没用 —— 六膳门酱鸭腿三道工序图里全是 true,
+                // 但每道去掉原料后只有 1 个上游端口, 于是运行时一律回落成 false,
+                // 装箱面对 3 批酱制鸭腿只能选 1 批, 客户被迫开 3 行、出 3 个成品批次。
+                //
+                // 「几种物料」(端口数) 与「同种物料几批」(混批) 是两件事, 前者不能替后者做主。
+                // 改成: **以图定义里的用户配置为准, 没配过才回落端口数** (老工作流零回归)。
+                .allowMultipleUpstreamSources(resolveAllowMultipleUpstreamSources(
+                        instanceNodesJson, task.getWorkflowNodeId(), upstreamInputCount > 1))
                 .allowFinishedGoodsSource(allowFinishedGoodsSource)
                 .customFieldSchema(workProcess != null ? workProcess.getCustomFieldSchema() : null)
                 .inputs(inputs.stream()
