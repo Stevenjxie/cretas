@@ -5,6 +5,7 @@ import { usePermissionStore } from '@/store/modules/permission';
 import { get, post, put, del } from '@/api/request';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { Plus, Search, Refresh, Edit, Delete } from '@element-plus/icons-vue';
+import { enumLabel } from '@/utils/enumDisplay';
 import type { TableRow } from '@/types/api';
 
 const authStore = useAuthStore();
@@ -39,19 +40,33 @@ const statistics = ref({
   expired: 0
 });
 
-const roleOptions = [
-  { value: 'factory_super_admin', label: '工厂总监' },
-  { value: 'hr_admin', label: 'HR管理员' },
-  { value: 'dispatcher', label: '调度员' },
-  { value: 'quality_manager', label: '质量经理' },
-  { value: 'quality_inspector', label: '质检员' },
-  { value: 'workshop_supervisor', label: '车间主任' },
-  { value: 'yield_operator', label: '报工员' },
-  { value: 'operator', label: '操作员' },
-  { value: 'warehouse_manager', label: '仓储主管' },
-  { value: 'warehouse_worker', label: '仓库员' },
-  { value: 'viewer', label: '查看者' }
-];
+/**
+ * 白名单可邀请的角色 —— **码在这里定，名字一律取权威表**。
+ *
+ * 🔴 2026-08-02: 原来这里硬抄了一份 label，11 条里**漂了 8 条**：
+ *   factory_super_admin 工厂总监/工厂总管理员、hr_admin HR管理员/人事管理员、
+ *   dispatcher 调度员/生产调度员、quality_manager 质量经理/质量主管、
+ *   workshop_supervisor 车间主任/车间主管、yield_operator 报工员/出成率录入员、
+ *   warehouse_worker 仓库员/仓管员、viewer 查看者/只读人员。
+ * 同一个角色在邀请页和员工档案页显示两个名字，用户会以为是两个岗位。
+ * 这是本仓里第 N 张同形私有映射表（前有单位别名、OA MODULE_LABELS、员工档案角色），
+ * 修法一样：**只保留码的清单，名字委托 enumLabel**。以后加角色只改权威表一处。
+ */
+const INVITABLE_ROLE_CODES = [
+  'factory_super_admin',
+  'hr_admin',
+  'dispatcher',
+  'quality_manager',
+  'quality_inspector',
+  'workshop_supervisor',
+  'yield_operator',
+  'operator',
+  'warehouse_manager',
+  'warehouse_worker',
+  'viewer',
+] as const;
+
+const roleOptions = INVITABLE_ROLE_CODES.map((value) => ({ value, label: enumLabel(value) }));
 
 onMounted(() => {
   loadData();
@@ -250,7 +265,10 @@ function getStatusText(row: TableRow) {
 }
 
 function getRoleText(role: string) {
-  return roleOptions.find(option => option.value === role)?.label || role || '历史白名单';
+  // 走权威表而不是 roleOptions —— 历史数据里可能有已不在可邀请清单里的角色码,
+  // 那些同样该显示中文名, 而不是掉到「历史白名单」这个兜底上。
+  if (!role) return '历史白名单';
+  return enumLabel(role);
 }
 </script>
 
