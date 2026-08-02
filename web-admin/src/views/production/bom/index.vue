@@ -3510,7 +3510,32 @@ watch(adjustDialogVisible, (visible) => {
   min-height: 0;
   padding: 20px;
   overflow: auto;
-  overscroll-behavior: contain;
+
+  /*
+   * 2026-08-02: 这里原本还有一行 `overscroll-behavior: contain`, 是「BOM/配方管理
+   * 整页滚轮失效」的**唯一**原因, 已删。
+   *
+   * 机制 (prod 单变量实测, 非推测):
+   *   本容器确实是滚动容器 (overflow:auto), 但它**永远没得滚** —— 祖先链
+   *   (.app-content > .el-card > .el-tabs > .el-tab-pane) 没有一个被视口高度约束,
+   *   全都随内容长, 所以 .bom-page 的 height:100% 解析出来就等于内容高度,
+   *   实测 .bom-page__scroll clientHeight === scrollHeight === 1051 —— 差值为 0。
+   *   真正在滚的是 document (html scrollHeight 1330 > clientHeight 900)。
+   *   而 overscroll-behavior:contain 的作用正是**禁止滚动链冒泡到祖先**,
+   *   于是滚轮落在正文区 → 本容器滚不动 → 又不许传给 document → 整页死。
+   *
+   * 判据 (prod, 1440x900, 逐条单变量):
+   *   基线      鼠标在本容器内   → scrollTop 0     (死)
+   *   基线      鼠标在顶栏外     → scrollTop 430   (活 —— 证明 document 本来就能滚)
+   *   只改 overscroll-behavior:auto          → 430 ✅
+   *   只改 .bom-page overflow:visible        → 0   ❌ (排除掉 .bom-page 的 overflow)
+   *   只改本容器 overflow:visible            → 430 ✅
+   *
+   * 为什么不改成「把高度链收到视口」: 那要动 .app-content —— 全 admin 共用,
+   * 而本 admin 的既定约定就是 document 滚 (/production/plans 实测 doc 0→673 正常)。
+   * 删这一行之后 BOM 页与其它页行为一致; 保留 overflow:auto 是为了将来若真把高度
+   * 收进视口, 内层滚动仍按原设计生效。
+   */
 }
 
 .bom-loading-shell {
