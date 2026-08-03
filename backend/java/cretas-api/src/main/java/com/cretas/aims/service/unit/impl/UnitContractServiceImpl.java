@@ -45,6 +45,8 @@ public class UnitContractServiceImpl implements UnitContractService {
 
     private static final Map<String, CanonicalUnit> SYSTEM_UNITS = systemUnits();
     private static final Map<String, String> SYSTEM_ALIASES = systemAliases();
+    /** 被多个中文写法共用的内置码 (实测只有 pcs: 件/个/只) —— 归一到它等于断定这几个是同一个东西。 */
+    private static final Set<String> AMBIGUOUS_CHINESE_CODES = ambiguousChineseCodes();
     private static final MathContext FACTOR_CONTEXT = MathContext.DECIMAL128;
     private static final int MAX_GRAPH_HOPS = 16;
     private static final int MAX_GRAPH_STATES = 10_000;
@@ -113,6 +115,60 @@ public class UnitContractServiceImpl implements UnitContractService {
     @Override
     public Optional<CanonicalUnit> describe(String factoryId, String rawUnit) {
         return Optional.ofNullable(normalize(factoryId, rawUnit).unit());
+    }
+
+    @Override
+    public String storageUnit(String factoryId, String rawUnit) {
+        String value = rawUnit == null ? null : rawUnit.trim();
+        if (value == null || value.isEmpty()) {
+            return "";
+        }
+        CanonicalUnit unit = normalize(factoryId, value).unit();
+        if (unit == null) {
+            return value;           // 规则 1: 权威表认不出的自由文本, 原样保留
+        }
+        if (unit.factorToBase() == null && ambiguousChineseCode(unit.code())) {
+            return value;           // 规则 2: 无普适换算 + 多个中文写法 → 保用户字面, 不塌陷
+        }
+        if (!SYSTEM_UNITS.containsKey(unit.code())) {
+            String displayName = unit.displayName();
+            // 规则 3: 工厂自定义单位存中文名; 名字缺失时退回码, 不写空
+            return displayName == null || displayName.isBlank() ? unit.code() : displayName;
+        }
+        return unit.code();         // 规则 4: 内置单位存英文码 (与 2400 行存量一致)
+    }
+
+    /**
+     * 该内置码是否被<b>多个中文写法</b>共用 —— 共用即意味着归一会替工厂断定「这几个是同一个东西」。
+     *
+     * <p>{@code alias("pcs","pcs","件","个","只")} 一个码挂了三个中文写法, 归一到任何一个都是塌陷;
+     * {@code alias("box","box","盒")} 只有一个中文写法, 「盒」与 {@code box} 是同一个单位的两种写法,
+     * 归一是纯翻译, 安全。
+     *
+     * <p>只在 {@code factorToBase == null}(没有普适换算) 时才用这个判据 —— 「公斤/千克」同样是
+     * 一个码两个中文写法, 但它们之间有恒定换算, 本来就是同一个单位, 归一有物理意义。
+     */
+    private static boolean ambiguousChineseCode(String code) {
+        return AMBIGUOUS_CHINESE_CODES.contains(code);
+    }
+
+    private static Set<String> ambiguousChineseCodes() {
+        Map<String, Integer> chineseAliasCount = new LinkedHashMap<>();
+        for (Map.Entry<String, String> entry : SYSTEM_ALIASES.entrySet()) {
+            if (!containsHan(entry.getKey())) {
+                continue;
+            }
+            chineseAliasCount.merge(entry.getValue(), 1, Integer::sum);
+        }
+        return chineseAliasCount.entrySet().stream()
+                .filter(e -> e.getValue() > 1)
+                .map(Map.Entry::getKey)
+                .collect(java.util.stream.Collectors.toUnmodifiableSet());
+    }
+
+    private static boolean containsHan(String value) {
+        return value.codePoints().anyMatch(cp ->
+                Character.UnicodeScript.of(cp) == Character.UnicodeScript.HAN);
     }
 
     @Override
