@@ -25,4 +25,3 @@ MemoryMax=512M
 StandardOutput=append:/www/wwwroot/cretas/logs/restaurant-demo-stream-20260805.log
 StandardError=append:/www/wwwroot/cretas/logs/restaurant-demo-stream-20260805.log
 SyslogIdentifier=cretas-restaurant-demo-stream-20260805
-
