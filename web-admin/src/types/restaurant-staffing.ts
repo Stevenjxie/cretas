@@ -4,6 +4,37 @@ export interface StaffingSource {
   source: string;
   isSimulated: boolean;
   updatedAt: string | null;
+  eventCount?: number;
+}
+
+export interface StaffingLiveStreamMinute {
+  minute: string;
+  eventCount: number;
+  guestCount: number;
+}
+
+export interface StaffingLiveStreamEvent {
+  externalRef: string;
+  storeId: number;
+  storeName: string;
+  reservationDate: string;
+  daypart: string;
+  tableCount: number;
+  guestCount: number;
+  status: string;
+  source: string;
+  isSimulated: boolean;
+  sourceUpdatedAt: string;
+}
+
+export interface StaffingLiveStream {
+  windowMinutes: number;
+  pollIntervalSeconds: number;
+  eventCount: number;
+  guestCount: number;
+  latestEventAt: string | null;
+  minuteBuckets: StaffingLiveStreamMinute[];
+  recentEvents: StaffingLiveStreamEvent[];
 }
 
 export interface StaffingRolePlan {
@@ -38,6 +69,7 @@ export interface StaffingDailyRow {
   activeReservedGuests: number;
   weightedReservedGuests: number;
   reservedTables: number;
+  reservationOrders?: number;
   predictedGuests: number;
   baselineGuests: number | null;
   reservationImpliedGuests: number;
@@ -65,6 +97,7 @@ export interface StaffingSummaryRow {
   peakDailyGuests: number;
   reservedGuests: number;
   reservedTables: number;
+  reservationOrders?: number;
   reservationCoveragePct: number;
   recommendedStaff: number;
   currentStaff: number;
@@ -90,6 +123,7 @@ export interface StaffingSummaryRow {
 export interface StaffingSummary {
   predictedGuests: number;
   reservedGuests: number;
+  reservationOrders?: number;
   reservationCoveragePct: number;
   recommendedStaff: number;
   currentStaff: number;
@@ -110,6 +144,7 @@ export interface StaffingDashboard {
   numericSource: 'forecast_factbook_only';
   historicalProductivityRule: 'evidence_only_not_gap_input';
   sources: StaffingSource[];
+  liveStream?: StaffingLiveStream;
   summary: StaffingSummary;
   summaryRows: StaffingSummaryRow[];
   dailyRows: StaffingDailyRow[];

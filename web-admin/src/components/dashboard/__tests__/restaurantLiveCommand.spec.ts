@@ -24,6 +24,7 @@ function staffing(overrides: Partial<StaffingDashboard> = {}): StaffingDashboard
     summary: {
       predictedGuests: 486,
       reservedGuests: 212,
+      reservationOrders: 58,
       reservationCoveragePct: 43.6,
       recommendedStaff: 32,
       currentStaff: 27,
@@ -34,6 +35,15 @@ function staffing(overrides: Partial<StaffingDashboard> = {}): StaffingDashboard
     },
     summaryRows: [],
     dailyRows: [],
+    liveStream: {
+      windowMinutes: 15,
+      pollIntervalSeconds: 60,
+      eventCount: 6,
+      guestCount: 24,
+      latestEventAt: '2026-08-03T15:59:00+08:00',
+      minuteBuckets: [],
+      recentEvents: [],
+    },
     ...overrides,
   };
 }
@@ -50,12 +60,14 @@ describe('餐饮实时经营指挥屏', () => {
     expect(metrics.map((item) => [item.key, item.value])).toEqual([
       ['requisitions', '7'],
       ['pending', '2'],
+      ['reservationOrders', '58'],
+      ['liveGuests', '24'],
       ['predictedGuests', '486'],
       ['staffing', '32 / 27'],
       ['gap', '5'],
       ['confidence', '78.4'],
     ]);
-    expect(metrics.slice(2).every((item) => item.source === 'Python forecast FactBook')).toBe(true);
+    expect(metrics.slice(2).every((item) => item.source.includes('FactBook'))).toBe(true);
     expect(metrics.find((item) => item.key === 'gap')?.detail).not.toContain('历史人效');
   });
 

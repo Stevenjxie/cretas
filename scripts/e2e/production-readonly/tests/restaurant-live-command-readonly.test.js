@@ -10,6 +10,7 @@ test('registers the restaurant live command dashboard as a production read-only 
   const scenario = SCENARIOS.find((candidate) => candidate.id === 'restaurant-live-command-readonly');
   assert.ok(scenario);
   assert.equal(resolveScenarios(['restaurant-live-command-readonly'])[0].path, ROUTES.dashboard);
+  assert.equal(scenario.path, '/dashboard');
   assert.deepEqual(scenario.expectedTransmissionLabels, [
     '今日经营汇总',
     '预订 / POS / 客流',

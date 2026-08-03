@@ -87,6 +87,12 @@ const nextRefreshSeconds = computed(() => {
   return Math.max(0, Math.ceil((nextRefreshAt.value.getTime() - clockNow.value) / 1000));
 });
 const latestReservationUpdate = computed(() => latestStaffingSourceUpdate(staffingDashboard.value));
+const liveStream = computed(() => staffingDashboard.value?.liveStream ?? null);
+const liveStreamMaxEvents = computed(() => Math.max(
+  1,
+  ...(liveStream.value?.minuteBuckets.map((bucket) => bucket.eventCount) ?? [1]),
+));
+const recentStreamEvents = computed(() => liveStream.value?.recentEvents.slice(0, 6) ?? []);
 const commandLinks = computed(() => [
   {
     key: 'ops',
@@ -151,6 +157,18 @@ function formatDateTime(value: string | Date | null | undefined): string {
     minute: '2-digit',
     second: '2-digit',
     hour12: false,
+  });
+}
+
+function streamBarHeight(eventCount: number): string {
+  return `${Math.max(12, Math.round(eventCount / liveStreamMaxEvents.value * 100))}%`;
+}
+
+function formatTime(value: string): string {
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return value;
+  return parsed.toLocaleTimeString('zh-CN', {
+    hour: '2-digit', minute: '2-digit', hour12: false,
   });
 }
 
@@ -395,6 +413,58 @@ onBeforeUnmount(() => {
           </div>
         </aside>
       </div>
+
+      <div class="live-stream" data-testid="restaurant-live-stream">
+        <div class="live-stream__header">
+          <div>
+            <span>LIVE EVENT FABRIC</span>
+            <strong>连锁预订事件流</strong>
+          </div>
+          <div class="live-stream__pulse" :class="{ 'is-active': liveStream?.latestEventAt }">
+            <i aria-hidden="true"></i>
+            {{ liveStream?.latestEventAt ? '持续接收中' : '等待事件' }}
+          </div>
+        </div>
+        <div class="live-stream__grid">
+          <div class="minute-chart" aria-label="最近十五分钟预订事件柱状图">
+            <div class="minute-chart__summary">
+              <span>近 {{ liveStream?.windowMinutes ?? 15 }} 分钟</span>
+              <strong>{{ liveStream?.eventCount ?? '—' }} <small>笔</small></strong>
+              <em>{{ liveStream?.guestCount ?? '—' }} 人进入 FactBook</em>
+            </div>
+            <div v-if="liveStream?.minuteBuckets.length" class="minute-chart__bars">
+              <div
+                v-for="bucket in liveStream.minuteBuckets"
+                :key="bucket.minute"
+                class="minute-chart__bar"
+                :title="`${formatDateTime(bucket.minute)} · ${bucket.eventCount} 笔 · ${bucket.guestCount} 人`"
+              >
+                <span :style="{ height: streamBarHeight(bucket.eventCount) }"></span>
+                <small>{{ formatTime(bucket.minute) }}</small>
+              </div>
+            </div>
+            <div v-else class="minute-chart__empty">事件开始后，每分钟会出现一根真实 FactBook 数据柱</div>
+          </div>
+
+          <div class="event-ticker" aria-label="最近预订事件">
+            <div class="event-ticker__title">
+              <span>最新事件</span>
+              <small>来源与模拟标记全程保留</small>
+            </div>
+            <ol v-if="recentStreamEvents.length">
+              <li v-for="event in recentStreamEvents" :key="event.externalRef">
+                <time>{{ formatDateTime(event.sourceUpdatedAt) }}</time>
+                <strong>{{ event.storeName }} · {{ event.daypart }}</strong>
+                <span>{{ event.guestCount }} 人 / {{ event.tableCount }} 桌</span>
+                <em :class="{ 'is-simulated': event.isSimulated }" :title="event.source">
+                  {{ event.isSimulated ? '演示模拟' : '平台数据' }}
+                </em>
+              </li>
+            </ol>
+            <div v-else class="event-ticker__empty">尚未收到最近事件</div>
+          </div>
+        </div>
+      </div>
     </section>
 
     <el-alert
@@ -638,7 +708,7 @@ onBeforeUnmount(() => {
 
 .digital-grid {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   border-right: 1px solid rgba(187, 215, 224, 0.14);
 }
 
@@ -648,11 +718,12 @@ onBeforeUnmount(() => {
   border-right: 1px solid rgba(187, 215, 224, 0.1);
   border-bottom: 1px solid rgba(187, 215, 224, 0.1);
 }
-.digital-metric:nth-child(3n) { border-right: 0; }
-.digital-metric:nth-last-child(-n + 3) { border-bottom: 0; }
-.digital-grid--staffing-only { grid-template-columns: repeat(4, minmax(0, 1fr)); }
-.digital-grid--staffing-only .digital-metric { border-bottom: 0; }
-.digital-grid--staffing-only .digital-metric:nth-child(3n) { border-right: 1px solid rgba(187, 215, 224, 0.1); }
+.digital-metric:nth-child(4n) { border-right: 0; }
+.digital-metric:nth-last-child(-n + 4) { border-bottom: 0; }
+.digital-grid--staffing-only { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.digital-grid--staffing-only .digital-metric { border-bottom: 1px solid rgba(187, 215, 224, 0.1); }
+.digital-grid--staffing-only .digital-metric:nth-child(3n) { border-right: 0; }
+.digital-grid--staffing-only .digital-metric:nth-last-child(-n + 3) { border-bottom: 0; }
 .digital-grid--staffing-only .digital-metric:last-child { border-right: 0; }
 .digital-metric__label { color: #9bb1bf; font-size: 11px; }
 .digital-metric__value {
@@ -702,6 +773,53 @@ onBeforeUnmount(() => {
 .transmission-rail__footer span { color: #708d9c; font-size: 9px; }
 .transmission-rail__footer strong { margin: 4px 0; color: #d9e7ea; font-size: 11px; font-variant-numeric: tabular-nums; }
 .transmission-rail__footer small { color: #7895a5; font-size: 9px; line-height: 1.45; }
+
+.live-stream {
+  position: relative;
+  z-index: 1;
+  padding: 18px 24px 22px;
+  background: rgba(3, 14, 23, 0.34);
+  border-top: 1px solid rgba(187, 215, 224, 0.14);
+}
+.live-stream__header,
+.event-ticker__title { display: flex; align-items: center; justify-content: space-between; gap: 14px; }
+.live-stream__header > div:first-child { display: flex; align-items: baseline; gap: 12px; }
+.live-stream__header span { color: #668b9e; font-family: ui-monospace, monospace; font-size: 9px; letter-spacing: .14em; }
+.live-stream__header strong { color: #e8f2f4; font-size: 13px; }
+.live-stream__pulse { display: inline-flex; align-items: center; gap: 7px; color: #7895a5; font-size: 10px; }
+.live-stream__pulse i { width: 7px; height: 7px; background: #607b88; border-radius: 50%; }
+.live-stream__pulse.is-active { color: #8fe0d6; }
+.live-stream__pulse.is-active i { background: var(--command-accent); box-shadow: 0 0 0 5px rgba(98, 213, 197, .1); animation: stream-pulse 1.6s ease-in-out infinite; }
+.live-stream__grid { display: grid; grid-template-columns: minmax(0, 1.15fr) minmax(360px, .85fr); gap: 22px; margin-top: 15px; }
+.minute-chart,
+.event-ticker { min-width: 0; padding: 15px; background: rgba(8, 27, 40, .58); border: 1px solid rgba(139, 188, 197, .13); border-radius: 11px; }
+.minute-chart { display: grid; grid-template-columns: 145px minmax(0, 1fr); gap: 16px; }
+.minute-chart__summary span,
+.minute-chart__summary strong,
+.minute-chart__summary em { display: block; }
+.minute-chart__summary span { color: #7492a2; font-size: 9px; }
+.minute-chart__summary strong { margin: 8px 0 5px; color: #8fe0d6; font-family: ui-monospace, monospace; font-size: 29px; font-variant-numeric: tabular-nums; }
+.minute-chart__summary strong small { margin-left: 3px; color: #7895a5; font-size: 9px; font-weight: 500; }
+.minute-chart__summary em { color: #9cb3bf; font-size: 9px; font-style: normal; }
+.minute-chart__bars { display: flex; min-height: 86px; align-items: flex-end; gap: 5px; overflow: hidden; }
+.minute-chart__bar { display: flex; min-width: 12px; height: 86px; flex: 1; flex-direction: column; justify-content: flex-end; gap: 5px; }
+.minute-chart__bar span { min-height: 6px; background: linear-gradient(180deg, #70e0cf, #2d7794); border-radius: 3px 3px 1px 1px; box-shadow: 0 0 10px rgba(98, 213, 197, .12); transition: height 360ms ease; }
+.minute-chart__bar small { overflow: hidden; color: #587989; font-family: ui-monospace, monospace; font-size: 7px; text-align: center; text-overflow: clip; white-space: nowrap; }
+.minute-chart__empty,
+.event-ticker__empty { display: grid; min-height: 86px; place-items: center; color: #668290; font-size: 10px; }
+.event-ticker__title { margin-bottom: 10px; color: #d9e7ea; font-size: 11px; }
+.event-ticker__title small { color: #6f8c9b; font-size: 9px; }
+.event-ticker ol { display: grid; max-height: 110px; gap: 6px; margin: 0; padding: 0; overflow: hidden; list-style: none; }
+.event-ticker li { display: grid; grid-template-columns: 105px minmax(120px, 1fr) auto auto; align-items: center; gap: 9px; min-width: 0; color: #8fa8b5; font-size: 9px; }
+.event-ticker time { color: #5f8192; font-family: ui-monospace, monospace; font-variant-numeric: tabular-nums; }
+.event-ticker li strong { overflow: hidden; color: #c7d9df; font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
+.event-ticker li em { padding: 2px 5px; color: #a8c0ca; font-size: 8px; font-style: normal; background: rgba(130, 200, 239, .08); border-radius: 999px; }
+.event-ticker li em.is-simulated { color: #f2c572; background: rgba(242, 197, 114, .1); }
+
+@keyframes stream-pulse {
+  0%, 100% { opacity: .65; transform: scale(.88); }
+  50% { opacity: 1; transform: scale(1); }
+}
 
 @keyframes command-transmitting {
   0%, 100% { box-shadow: 0 0 0 0 rgba(130, 200, 239, 0); }
@@ -787,6 +905,7 @@ onBeforeUnmount(() => {
   .metric-item:nth-child(2) { border-right: 0; }
   .metric-item:nth-child(-n + 2) { border-bottom: 1px solid var(--el-border-color-lighter, #e4e7ed); }
   .workspace-grid { grid-template-columns: 1fr; }
+  .live-stream__grid { grid-template-columns: 1fr; }
 }
 
 @media (max-width: 768px) {
@@ -801,14 +920,20 @@ onBeforeUnmount(() => {
   .digital-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .digital-grid--staffing-only { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .digital-metric { padding: 16px; }
-  .digital-metric:nth-child(3n) { border-right: 1px solid rgba(187, 215, 224, 0.1); }
+  .digital-metric:nth-child(4n) { border-right: 1px solid rgba(187, 215, 224, 0.1); }
   .digital-metric:nth-child(2n) { border-right: 0; }
-  .digital-metric:nth-last-child(-n + 3) { border-bottom: 1px solid rgba(187, 215, 224, 0.1); }
+  .digital-metric:nth-last-child(-n + 4) { border-bottom: 1px solid rgba(187, 215, 224, 0.1); }
   .digital-metric:nth-last-child(-n + 2) { border-bottom: 0; }
   .digital-grid--staffing-only .digital-metric { border-bottom: 1px solid rgba(187, 215, 224, 0.1); }
   .digital-grid--staffing-only .digital-metric:nth-child(2n) { border-right: 0; }
   .digital-grid--staffing-only .digital-metric:nth-last-child(-n + 2) { border-bottom: 0; }
   .digital-metric__value { font-size: clamp(22px, 7vw, 28px); }
+  .live-stream { padding: 16px; }
+  .live-stream__header { align-items: flex-start; flex-direction: column; }
+  .live-stream__grid { gap: 12px; }
+  .minute-chart { grid-template-columns: 1fr; }
+  .event-ticker li { grid-template-columns: 92px minmax(0, 1fr) auto; }
+  .event-ticker li span { display: none; }
   .section-heading { align-items: flex-start; flex-direction: column; gap: 5px; }
   .metric-strip { grid-template-columns: 1fr; }
   .metric-item { border-right: 0; border-bottom: 1px solid var(--el-border-color-lighter, #e4e7ed); }
@@ -819,6 +944,8 @@ onBeforeUnmount(() => {
 
 @media (prefers-reduced-motion: reduce) {
   .live-command.is-transmitting .transmission-rail li.is-active .transmission-node { animation: none; }
+  .live-stream__pulse.is-active i { animation: none; }
+  .minute-chart__bar span { transition: none; }
   .metric-item,
   .action-row__copy strong,
   .ai-link { transition: none; }

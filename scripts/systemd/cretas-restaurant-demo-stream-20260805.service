@@ -1,0 +1,28 @@
+[Unit]
+Description=Cretas MOCK_REST live showcase reservation stream for 2026-08-05
+Documentation=https://github.com/Stevenjxie/cretas
+After=network-online.target postgresql.service cretas-python.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+EnvironmentFile=/www/wwwroot/cretas/.env.prod
+Environment=POSTGRES_ENABLED=true
+Environment=POSTGRES_HOST=localhost
+Environment=POSTGRES_PORT=5432
+Environment=POSTGRES_DB=smartbi_prod_db
+Environment=POSTGRES_USER=smartbi_user
+Environment=PYTHONPATH=/www/wwwroot/cretas/code/backend/python
+WorkingDirectory=/www/wwwroot/cretas/code/backend/python
+ExecStart=/www/wwwroot/cretas/code/backend/python/venv-current/bin/python -u -m smartbi.scripts.stream_demo_restaurant_reservations --factory MOCK_REST --source cretas_live_showcase_20260805 --start 2026-08-05T09:00:00+08:00 --end 2026-08-05T14:00:00+08:00 --interval-seconds 10 --apply --confirm MOCK_REST
+Restart=on-failure
+RestartSec=10
+TimeoutStartSec=18300
+RuntimeMaxSec=18300
+MemoryHigh=256M
+MemoryMax=512M
+StandardOutput=append:/www/wwwroot/cretas/logs/restaurant-demo-stream-20260805.log
+StandardError=append:/www/wwwroot/cretas/logs/restaurant-demo-stream-20260805.log
+SyslogIdentifier=cretas-restaurant-demo-stream-20260805
+
