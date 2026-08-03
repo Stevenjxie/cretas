@@ -3,6 +3,8 @@ async (page) => {
     "config/readonly-post-whitelist.js": function(module, exports, require) {
 'use strict';
 
+const { pathnameOf } = require('../core/url-utils');
+
 const AUTH_REQUESTS = [
   {
     id: 'ui-login',
@@ -48,8 +50,7 @@ const READONLY_POST_WHITELIST = [
 ];
 
 function matchesEntry(entry, method, url) {
-  const parsed = new URL(url);
-  return entry.method === method.toUpperCase() && entry.path.test(parsed.pathname);
+  return entry.method === method.toUpperCase() && entry.path.test(pathnameOf(url));
 }
 
 function findAuthRequest(method, url) {
@@ -83,6 +84,7 @@ const ROUTES = Object.freeze({
   workflow: '/system/product-processes',
   productionPlans: '/production/plans',
   labelQc: '/quality/label-qc',
+  restaurantStaffing: '/restaurant/staffing',
 });
 
 module.exports = { ROUTES };
@@ -91,13 +93,15 @@ module.exports = { ROUTES };
     "core/clean-session.js": function(module, exports, require) {
 'use strict';
 
+const { resolveUrl } = require('./url-utils');
+
 async function establishCleanSession(page, baseUrl) {
   const context = page.context();
   await context.clearCookies();
   await context.clearPermissions().catch(() => {});
   for (const worker of context.serviceWorkers()) await worker.close().catch(() => {});
   await page.goto('about:blank');
-  const loginUrl = new URL('/login', baseUrl).toString();
+  const loginUrl = resolveUrl('/login', baseUrl);
   await page.goto(loginUrl, { waitUntil: 'domcontentloaded', timeout: 45_000 });
   await page.evaluate(() => {
     localStorage.clear();
@@ -386,12 +390,13 @@ module.exports = { MUTATING_METHODS, classifyMutation, installMutationGuard };
 'use strict';
 
 const { parsePostData, redactText, sanitizeUrl, summarizePayload } = require('./sanitizer');
+const { normalizeQueryValues, splitUrl } = require('./url-utils');
 
 function normalizeDuplicateKey(method, url) {
   try {
-    const parsed = new URL(url);
-    for (const key of [...parsed.searchParams.keys()]) parsed.searchParams.set(key, '*');
-    return `${method} ${parsed.origin}${parsed.pathname}${parsed.search}`;
+    const parsed = splitUrl(url);
+    const normalized = splitUrl(normalizeQueryValues(url));
+    return `${method} ${parsed.origin}${parsed.pathname}${normalized.search}`;
   } catch {
     return `${method} ${url}`;
   }
@@ -568,6 +573,7 @@ const { createScreenshotWriter } = require('./screenshot');
 const { writeEvidence } = require('./evidence-writer');
 const { createScenarioResult, assertScenarioResult } = require('./result-schema');
 const { sanitizeValue } = require('./sanitizer');
+const { pathnameOf } = require('./url-utils');
 
 const SCENARIOS = [
   require('../scenarios/tenant-isolation'),
@@ -579,6 +585,7 @@ const SCENARIOS = [
   require('../scenarios/workflow-readonly'),
   require('../scenarios/production-plan-routing-readonly'),
   require('../scenarios/label-qc-readonly'),
+  require('../scenarios/restaurant-staffing-readonly'),
   require('../scenarios/ui-stability'),
 ];
 
@@ -660,7 +667,7 @@ async function runSuiteWithPage(page, options = {}) {
       failure.pageEvidence.push({
         error: String(error?.message || error),
         bodyTextLength: visibleText.length,
-        finalPath: (() => { try { return new URL(page.url()).pathname; } catch { return ''; } })(),
+        finalPath: (() => { try { return pathnameOf(page.url()); } catch { return ''; } })(),
       });
       try { failure.screenshots.push(await screenshot(`${failure.scenario}-failure`)); } catch {}
       failure.durationMs = Date.now() - startedAt;
@@ -710,6 +717,8 @@ module.exports = { SCENARIOS, describeHarness, resolveScenarios, runSuiteWithPag
     "core/sanitizer.js": function(module, exports, require) {
 'use strict';
 
+const { mapQueryValues } = require('./url-utils');
+
 const SENSITIVE_KEY_RE = /authorization|cookie|password|passwd|secret|token|credential|session|jwt|set-cookie|(?:^|[_-])username(?:$|[_-])/i;
 const SAFE_STRING_KEYS = new Set(['factoryId', 'mode', 'moduleCode', 'action', 'status', 'code', 'category', 'type']);
 
@@ -726,13 +735,9 @@ function redactText(value, maxLength = 240) {
 
 function sanitizeUrl(input) {
   try {
-    const url = new URL(String(input));
-    if (url.username) url.username = '[REDACTED]';
-    if (url.password) url.password = '[REDACTED]';
-    for (const key of [...url.searchParams.keys()]) {
-      if (SENSITIVE_KEY_RE.test(key)) url.searchParams.set(key, '[REDACTED]');
-    }
-    return redactText(url.toString(), 500);
+    return redactText(mapQueryValues(String(input), (key, value) => (
+      SENSITIVE_KEY_RE.test(key) ? '[REDACTED]' : value
+    )), 500);
   } catch {
     return redactText(input, 500);
   }
@@ -854,30 +859,16 @@ function compactLoginData(body) {
   };
 }
 
-function waitForLoginOutcome(page, matchesLogin, timeoutMs = 20_000) {
-  return new Promise((resolve, reject) => {
-    const cleanup = () => {
-      clearTimeout(timer);
-      page.off('response', onResponse);
-      page.off('requestfailed', onFailed);
-    };
-    const onResponse = (response) => {
-      if (!matchesLogin(response.request())) return;
-      cleanup();
-      resolve({ type: 'response', response });
-    };
-    const onFailed = (request) => {
-      if (!matchesLogin(request)) return;
-      cleanup();
-      resolve({ type: 'failure', request });
-    };
-    const timer = setTimeout(() => {
-      cleanup();
-      reject(new Error(`UI login request was not observed within ${timeoutMs}ms`));
-    }, timeoutMs);
-    page.on('response', onResponse);
-    page.on('requestfailed', onFailed);
-  });
+async function waitForLoginOutcome(page, matchesLogin, timeoutMs = 20_000) {
+  try {
+    const response = await page.waitForResponse(
+      (candidate) => matchesLogin(candidate.request()),
+      { timeout: timeoutMs },
+    );
+    return { type: 'response', response };
+  } catch (error) {
+    throw new Error(`UI login request was not observed within ${timeoutMs}ms: ${error?.message || error}`);
+  }
 }
 
 async function performUiLogin(page, options) {
@@ -955,10 +946,61 @@ async function performUiLogin(page, options) {
 module.exports = { compactLoginData, performUiLogin, waitForLoginOutcome };
 
 },
+    "core/url-utils.js": function(module, exports, require) {
+'use strict';
+
+function splitUrl(input) {
+  const value = String(input || '');
+  const match = value.match(/^([A-Za-z][A-Za-z0-9+.-]*:\/\/[^/?#]*)([^?#]*)(\?[^#]*)?(#.*)?$/);
+  if (!match) throw new Error(`Unsupported URL: ${value}`);
+  return {
+    origin: match[1],
+    pathname: match[2] || '/',
+    search: match[3] || '',
+    hash: match[4] || '',
+  };
+}
+
+function resolveUrl(path, baseUrl) {
+  const candidate = String(path || '');
+  if (/^[A-Za-z][A-Za-z0-9+.-]*:\/\//.test(candidate)) return candidate;
+  const base = splitUrl(baseUrl);
+  if (candidate.startsWith('/')) return `${base.origin}${candidate}`;
+  const directory = base.pathname.replace(/[^/]*$/, '');
+  return `${base.origin}${directory}${candidate}`;
+}
+
+function pathnameOf(input) {
+  return splitUrl(input).pathname;
+}
+
+function mapQueryValues(input, mapper) {
+  const parsed = splitUrl(input);
+  if (!parsed.search) return String(input);
+  const mapped = parsed.search.slice(1).split('&').filter(Boolean).map((pair) => {
+    const separator = pair.indexOf('=');
+    const rawKey = separator >= 0 ? pair.slice(0, separator) : pair;
+    const rawValue = separator >= 0 ? pair.slice(separator + 1) : '';
+    let decodedKey = rawKey;
+    try { decodedKey = decodeURIComponent(rawKey.replace(/\+/g, ' ')); } catch {}
+    const nextValue = mapper(decodedKey, rawValue);
+    return separator >= 0 || nextValue !== '' ? `${rawKey}=${nextValue}` : rawKey;
+  });
+  return `${parsed.origin}${parsed.pathname}${mapped.length ? `?${mapped.join('&')}` : ''}${parsed.hash}`;
+}
+
+function normalizeQueryValues(input, replacement = '*') {
+  return mapQueryValues(input, () => replacement);
+}
+
+module.exports = { mapQueryValues, normalizeQueryValues, pathnameOf, resolveUrl, splitUrl };
+
+},
     "scenarios/_shared.js": function(module, exports, require) {
 'use strict';
 
 const { createScenarioResult, assertScenarioResult } = require('../core/result-schema');
+const { pathnameOf, resolveUrl } = require('../core/url-utils');
 
 function arrayDelta(after, beforeLength) {
   return (after || []).slice(beforeLength);
@@ -973,7 +1015,7 @@ async function runReadOnlyPageScenario(ctx, definition) {
   const beforeGuard = ctx.mutationGuard.snapshot();
 
   try {
-    await ctx.page.goto(new URL(definition.path, ctx.baseUrl).toString(), {
+    await ctx.page.goto(resolveUrl(definition.path, ctx.baseUrl), {
       waitUntil: 'domcontentloaded',
       timeout: definition.timeoutMs || 45_000,
     });
@@ -985,7 +1027,7 @@ async function runReadOnlyPageScenario(ctx, definition) {
       expectedLandmarks: definition.landmarks || [],
       matchedLandmarks: matched,
       bodyTextLength: body.trim().length,
-      finalPath: new URL(result.url).pathname,
+      finalPath: pathnameOf(result.url),
     });
     let assessment = null;
     if (definition.inspect) {
@@ -1530,6 +1572,44 @@ module.exports = {
     path: ROUTES.purchasing,
     landmarks: ['采购'],
     inspect: async (page) => ({ tableCount: await page.locator('.el-table').count() }),
+  }),
+};
+
+},
+    "scenarios/restaurant-staffing-readonly.js": function(module, exports, require) {
+'use strict';
+
+const { ROUTES } = require('../config/routes');
+const { runReadOnlyPageScenario } = require('./_shared');
+const { pathnameOf } = require('../core/url-utils');
+
+module.exports = {
+  id: 'restaurant-staffing-readonly',
+  path: ROUTES.restaurantStaffing,
+  run: (ctx) => runReadOnlyPageScenario(ctx, {
+    id: 'restaurant-staffing-readonly',
+    path: ROUTES.restaurantStaffing,
+    landmarks: ['预测 FactBook', '各门店 · 各时段', '问餐饮 AI'],
+    screenshot: true,
+    inspect: async (page) => {
+      const finalPath = pathnameOf(page.url());
+      const loadError = await page.locator('.page-alert.el-alert--error').innerText().catch(() => '');
+      const metricCardCount = await page.locator('.metric-grid .metric-card').count();
+      const tableCount = await page.locator('.table-card .el-table').count();
+      const assessment = finalPath === ROUTES.restaurantStaffing
+        && !loadError
+        && metricCardCount === 6
+        && tableCount === 1
+        ? { result: 'PASS', rootCauseClass: 'none' }
+        : { result: 'CONFIRMED_DEFECT', rootCauseClass: loadError ? 'backend' : 'frontend' };
+      return {
+        finalPath,
+        loadError: loadError || null,
+        metricCardCount,
+        tableCount,
+        assessment,
+      };
+    },
   }),
 };
 

@@ -1,5 +1,7 @@
 'use strict';
 
+const { pathnameOf } = require('../core/url-utils');
+
 const AUTH_REQUESTS = [
   {
     id: 'ui-login',
@@ -45,8 +47,7 @@ const READONLY_POST_WHITELIST = [
 ];
 
 function matchesEntry(entry, method, url) {
-  const parsed = new URL(url);
-  return entry.method === method.toUpperCase() && entry.path.test(parsed.pathname);
+  return entry.method === method.toUpperCase() && entry.path.test(pathnameOf(url));
 }
 
 function findAuthRequest(method, url) {

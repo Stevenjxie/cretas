@@ -1,12 +1,13 @@
 'use strict';
 
 const { parsePostData, redactText, sanitizeUrl, summarizePayload } = require('./sanitizer');
+const { normalizeQueryValues, splitUrl } = require('./url-utils');
 
 function normalizeDuplicateKey(method, url) {
   try {
-    const parsed = new URL(url);
-    for (const key of [...parsed.searchParams.keys()]) parsed.searchParams.set(key, '*');
-    return `${method} ${parsed.origin}${parsed.pathname}${parsed.search}`;
+    const parsed = splitUrl(url);
+    const normalized = splitUrl(normalizeQueryValues(url));
+    return `${method} ${parsed.origin}${parsed.pathname}${normalized.search}`;
   } catch {
     return `${method} ${url}`;
   }

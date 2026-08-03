@@ -11,6 +11,7 @@ const ROUTES = Object.freeze({
   workflow: '/system/product-processes',
   productionPlans: '/production/plans',
   labelQc: '/quality/label-qc',
+  restaurantStaffing: '/restaurant/staffing',
 });
 
 module.exports = { ROUTES };

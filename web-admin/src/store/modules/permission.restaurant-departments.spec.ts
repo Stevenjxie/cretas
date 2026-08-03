@@ -57,6 +57,14 @@ describe('餐饮四部门权限', () => {
     }
   });
 
+  it('factory_super_admin 四个餐饮部门全可进且可写', () => {
+    const store = storeAs('factory_super_admin');
+    for (const dept of DEPTS) {
+      expect(store.canAccess(dept), `${dept} 应可进`).toBe(true);
+      expect(store.canWrite(dept), `${dept} 应可写`).toBe(true);
+    }
+  });
+
   it('restaurant_purchaser 只进运营与财务', () => {
     const store = storeAs('restaurant_purchaser');
     expect(store.canAccess('restaurantOps')).toBe(true);

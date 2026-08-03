@@ -102,6 +102,10 @@ const PERMISSION_MATRIX: Record<string, ModulePermissions> = {
     analytics: 'rw',
     scheduling: 'rw',
     restaurant: 'rw',
+    restaurantOps: 'rw',
+    restaurantMarketing: 'rw',
+    restaurantHr: 'rw',
+    restaurantFinance: 'rw',
     rd: 'rw'
   },
 
