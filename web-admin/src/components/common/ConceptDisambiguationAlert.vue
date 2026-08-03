@@ -19,7 +19,15 @@
 -->
 
 <script setup lang="ts">
+import { computed } from 'vue';
 import { useRouter } from 'vue-router';
+import { useAuthStore } from '@/store/modules/auth';
+
+/**
+ * 已经熟悉这些概念区分、明确要求不再看到引导横幅的工厂 (张权 2026-08-04)。
+ * 只按租户屏蔽, 不删组件 —— 演示租户和新客户仍然需要这层防呆引导。
+ */
+const HINT_OPTED_OUT_FACTORY_IDS = new Set(['LIUSHANMEN']);
 
 defineProps<{
   /** 当前页管的概念是什么 (描述) */
@@ -37,10 +45,13 @@ defineProps<{
 }>();
 
 const router = useRouter();
+const authStore = useAuthStore();
+const hidden = computed(() => HINT_OPTED_OUT_FACTORY_IDS.has(authStore.factoryId ?? ''));
 </script>
 
 <template>
   <el-alert
+    v-if="!hidden"
     type="info"
     :closable="false"
     show-icon
