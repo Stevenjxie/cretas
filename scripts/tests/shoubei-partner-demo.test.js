@@ -38,10 +38,12 @@ test('page acknowledges Shoubei capabilities and limits Cretas claims to provabl
   assert.doesNotMatch(html, /扫呗做不到|扫呗没有\s*AI|扫呗没有数据分析|扫呗没有库存|已经接入扫呗|已接通扫呗/i);
 });
 
-test('five-minute demo and joint verification checklist are complete', () => {
+test('untimed six-step demo outline and joint verification checklist are complete', () => {
   assert.equal((html.match(/data-step="/g) || []).length, 6);
   assert.equal((html.match(/data-step-panel="/g) || []).length, 6);
-  ['00:00', '00:45', '01:30', '02:40', '03:40', '04:35'].forEach((time) => assert.ok(html.includes(time)));
+  ['步骤 1', '步骤 2', '步骤 3', '步骤 4', '步骤 5', '步骤 6'].forEach((step) => assert.ok(html.includes(step)));
+  assert.doesNotMatch(html, /\b\d{2}:\d{2}\b/);
+  assert.ok(html.includes('不需要卡秒'));
   ['有哪些聚合数据可以授权', '数据多久更新一次', '如何做租户与隐私隔离', '有没有联调沙箱', '样板门店怎么选', '共同成功指标是什么'].forEach((question) => assert.ok(html.includes(question)));
 });
 

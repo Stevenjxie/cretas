@@ -111,11 +111,11 @@
     .demo-shell { display: grid; grid-template-columns: 330px 1fr; gap: 18px; }
     .step-tabs { display: grid; align-content: start; gap: 8px; }
     .step-tab { padding: 14px 16px; color: #99b0a7; text-align: left; background: transparent; border: 1px solid rgba(255,255,255,.12); border-radius: 11px; }
-    .step-tab span { display: block; color: var(--cretas); font-family: ui-monospace, "Cascadia Mono", monospace; font-size: 10px; }
+    .step-tab span { display: block; margin-bottom: 2px; color: var(--cretas); font-family: ui-monospace, "Cascadia Mono", monospace; font-size: 10px; letter-spacing: .08em; }
     .step-tab.active { color: #fff; background: rgba(33,201,151,.12); border-color: var(--cretas); }
     .step-panel { display: none; min-height: 360px; padding: 34px; color: var(--ink); background: var(--paper-2); border-radius: var(--radius); }
     .step-panel.active { display: block; }
-    .step-panel time { color: var(--cretas-dark); font-family: ui-monospace, "Cascadia Mono", monospace; font-size: 12px; font-weight: 900; }
+    .step-panel .step-kicker { color: var(--cretas-dark); font-family: ui-monospace, "Cascadia Mono", monospace; font-size: 12px; font-weight: 900; letter-spacing: .08em; }
     .step-panel h3 { max-width: 720px; margin: 18px 0 12px; font-family: "Songti SC", serif; font-size: clamp(30px, 4vw, 46px); line-height: 1.12; }
     .step-panel > p { max-width: 760px; color: var(--muted); }
     .say { margin-top: 24px; padding: 18px 20px; color: #174c3d; background: #dff6ed; border-left: 4px solid var(--cretas); border-radius: 0 10px 10px 0; font-size: 16px; font-weight: 700; }
@@ -186,7 +186,7 @@
     <header class="hero">
       <div class="wrap">
         <div class="topbar">
-          <div class="brand"><span class="brand-mark">C</span><div><strong>白垩纪餐饮 AI</strong><small>PARTNER BRIEF / 5 MINUTES</small></div></div>
+          <div class="brand"><span class="brand-mark">C</span><div><strong>白垩纪餐饮 AI</strong><small>PARTNER BRIEF / DEMO OUTLINE</small></div></div>
           <div class="top-actions"><a class="button secondary" href="/restaurant-ai-demo/">完整演示手册</a><button class="button secondary" type="button" id="print-page">打印 / PDF</button></div>
         </div>
         <div class="hero-grid">
@@ -207,7 +207,7 @@
           </aside>
         </div>
         <div class="hero-proof">
-          <article><strong>5 分钟</strong><small>只讲合作价值，不展开技术架构</small></article>
+          <article><strong>六步大纲</strong><small>只讲合作价值，不展开技术架构</small></article>
           <article><strong>不对打</strong><small>承认其已呈现能力，不重复讲收银</small></article>
           <article><strong>有证据</strong><small>白垩纪数字来自预测 FactBook</small></article>
           <article><strong>待联调</strong><small>不把平台接口说成扫呗已经接通</small></article>
@@ -259,23 +259,23 @@
 
       <section class="demo" id="demo">
         <div class="wrap">
-          <div class="section-head"><div><div class="eyebrow">04 / FIVE-MINUTE DEMO</div><h2>照着这五分钟讲</h2></div><p>默认从第 1 步开始。点击左侧阶段切换讲稿；键盘左右方向键也可以切换。</p></div>
+          <div class="section-head"><div><div class="eyebrow">04 / DEMO OUTLINE</div><h2>照着这六步讲</h2></div><p>不需要卡秒。默认从第 1 步开始，按现场交流节奏切换；键盘左右方向键也可以切换。</p></div>
           <div class="demo-shell">
-            <div class="step-tabs" role="tablist" aria-label="五分钟演示步骤">
-              <button class="step-tab active" data-step="0" role="tab" aria-selected="true"><span>00:00</span>先承认扫呗价值</button>
-              <button class="step-tab" data-step="1" role="tab" aria-selected="false"><span>00:45</span>展示数据在动</button>
-              <button class="step-tab" data-step="2" role="tab" aria-selected="false"><span>01:30</span>展示未来预测</button>
-              <button class="step-tab" data-step="3" role="tab" aria-selected="false"><span>02:40</span>展示 AI 有依据</button>
-              <button class="step-tab" data-step="4" role="tab" aria-selected="false"><span>03:40</span>展示部门接棒</button>
-              <button class="step-tab" data-step="5" role="tab" aria-selected="false"><span>04:35</span>用联调问题收尾</button>
+            <div class="step-tabs" role="tablist" aria-label="演示大纲步骤">
+              <button class="step-tab active" data-step="0" role="tab" aria-selected="true"><span>步骤 1</span>先承认扫呗价值</button>
+              <button class="step-tab" data-step="1" role="tab" aria-selected="false"><span>步骤 2</span>展示数据在动</button>
+              <button class="step-tab" data-step="2" role="tab" aria-selected="false"><span>步骤 3</span>展示未来预测</button>
+              <button class="step-tab" data-step="3" role="tab" aria-selected="false"><span>步骤 4</span>展示 AI 有依据</button>
+              <button class="step-tab" data-step="4" role="tab" aria-selected="false"><span>步骤 5</span>展示部门接棒</button>
+              <button class="step-tab" data-step="5" role="tab" aria-selected="false"><span>步骤 6</span>用联调问题收尾</button>
             </div>
             <div>
-              <article class="step-panel active" data-step-panel="0"><time>00:00 - 00:45</time><h3>先告诉对方：今天不是来替换扫呗</h3><p>停留在本页，不进入任何业务系统。先把合作关系讲清楚，避免后面每一个功能都被理解成竞品对比。</p><div class="say">“扫呗已经把收银、支付、订单和门店数字化做得很完整。我们今天不重复讲这些，只演示这些数据如果继续往后走，怎样帮助老板决定明天做什么。”</div></article>
-              <article class="step-panel" data-step-panel="1"><time>00:45 - 01:30</time><h3>打开数字指挥屏，只证明数据会更新</h3><p>登录白垩纪餐饮系统，指出 60 秒只读刷新、最后接收时间和数据链路状态。不要逐个解释 KPI。</p><div class="say">“这里不是另一套收银台，而是经营决策屏。未来如果接入扫呗授权数据，来源和更新时间会在这里明确显示。”</div></article>
-              <article class="step-panel" data-step-panel="2"><time>01:30 - 02:40</time><h3>打开预测排班，讲未来而不是复盘</h3><p>切换明天、下周、下个月，指向预订覆盖、预测客流、建议人数、现有人数、缺口和置信度。只挑一个门店时段。</p><div class="say">“收银数据告诉我们刚才卖了多少；这一步把预订和历史趋势变成未来需求，帮助店长提前准备人。”</div></article>
-              <article class="step-panel" data-step-panel="3"><time>02:40 - 03:40</time><h3>问一句：下周需要多少兼职</h3><p>展示 AI 回答与同一 FactBook 的关系。不讲模型名称、路由或 Prompt，只讲数字边界。</p><div class="say">“人数不是大模型猜的。FactBook 先把数字算好，AI 只把原因和可调整建议说成人话；模型想加新数字，系统会拒绝这次回答。”</div></article>
-              <article class="step-panel" data-step-panel="4"><time>03:40 - 04:35</time><h3>用角色切换证明不是又一张报表</h3><p>老板看全店优先级，店长看今天执行，人事看技能和工时。展示一键调整入口，但停在预览。</p><div class="say">“价值不在多一张图，而在同一个预测能交给对应负责人；AI 提建议，人确认，动作有权限也有审计。”</div></article>
-              <article class="step-panel" data-step-panel="5"><time>04:35 - 05:00</time><h3>不做结论，用三个联调问题收尾</h3><p>询问可提供哪些聚合字段、多久更新一次、是否有沙箱和租户授权机制。把下一步变成小范围联合验证。</p><div class="say">“我们建议先选一到两家样板门店，只做只读数据映射，用共同指标验证预测和排班价值；有效再谈产品化，不要求扫呗重做已有能力。”</div></article>
+              <article class="step-panel active" data-step-panel="0"><div class="step-kicker">演示大纲 · 第一步</div><h3>先告诉对方：今天不是来替换扫呗</h3><p>停留在本页，不进入任何业务系统。先把合作关系讲清楚，避免后面每一个功能都被理解成竞品对比。</p><div class="say">“扫呗已经把收银、支付、订单和门店数字化做得很完整。我们今天不重复讲这些，只演示这些数据如果继续往后走，怎样帮助老板决定明天做什么。”</div></article>
+              <article class="step-panel" data-step-panel="1"><div class="step-kicker">演示大纲 · 第二步</div><h3>打开数字指挥屏，只证明数据会更新</h3><p>登录白垩纪餐饮系统，指出 60 秒只读刷新、最后接收时间和数据链路状态。不要逐个解释 KPI。</p><div class="say">“这里不是另一套收银台，而是经营决策屏。未来如果接入扫呗授权数据，来源和更新时间会在这里明确显示。”</div></article>
+              <article class="step-panel" data-step-panel="2"><div class="step-kicker">演示大纲 · 第三步</div><h3>打开预测排班，讲未来而不是复盘</h3><p>切换明天、下周、下个月，指向预订覆盖、预测客流、建议人数、现有人数、缺口和置信度。只挑一个门店时段。</p><div class="say">“收银数据告诉我们刚才卖了多少；这一步把预订和历史趋势变成未来需求，帮助店长提前准备人。”</div></article>
+              <article class="step-panel" data-step-panel="3"><div class="step-kicker">演示大纲 · 第四步</div><h3>问一句：下周需要多少兼职</h3><p>展示 AI 回答与同一 FactBook 的关系。不讲模型名称、路由或 Prompt，只讲数字边界。</p><div class="say">“人数不是大模型猜的。FactBook 先把数字算好，AI 只把原因和可调整建议说成人话；模型想加新数字，系统会拒绝这次回答。”</div></article>
+              <article class="step-panel" data-step-panel="4"><div class="step-kicker">演示大纲 · 第五步</div><h3>用角色切换证明不是又一张报表</h3><p>老板看全店优先级，店长看今天执行，人事看技能和工时。展示一键调整入口，但停在预览。</p><div class="say">“价值不在多一张图，而在同一个预测能交给对应负责人；AI 提建议，人确认，动作有权限也有审计。”</div></article>
+              <article class="step-panel" data-step-panel="5"><div class="step-kicker">演示大纲 · 第六步</div><h3>不做结论，用三个联调问题收尾</h3><p>询问可提供哪些聚合字段、多久更新一次、是否有沙箱和租户授权机制。把下一步变成小范围联合验证。</p><div class="say">“我们建议先选一到两家样板门店，只做只读数据映射，用共同指标验证预测和排班价值；有效再谈产品化，不要求扫呗重做已有能力。”</div></article>
               <div class="demo-controls"><button class="button paper" type="button" id="prev-step">← 上一步</button><button class="button" type="button" id="next-step">下一步 →</button><a class="button paper" href="/dashboard" target="_blank" rel="noopener">打开白垩纪演示系统</a></div>
             </div>
           </div>
@@ -307,7 +307,7 @@
       </section>
     </main>
 
-    <footer><div class="wrap footer-grid"><div><strong>扫呗 × 白垩纪 · 餐饮智能经营合作交流版</strong><small>材料依据：《扫呗收银 7.2》（52 页，材料创建日期 2026-07-31）与白垩纪当前已验证能力。页面不承载生产实时数字，不表示扫呗生产接口已经接通。</small></div><a class="button" href="#demo">开始 5 分钟演示 ↑</a></div></footer>
+    <footer><div class="wrap footer-grid"><div><strong>扫呗 × 白垩纪 · 餐饮智能经营合作交流版</strong><small>材料依据：《扫呗收银 7.2》（52 页，材料创建日期 2026-07-31）与白垩纪当前已验证能力。页面不承载生产实时数字，不表示扫呗生产接口已经接通。</small></div><a class="button" href="#demo">打开演示大纲 ↑</a></div></footer>
   </div>
   <script>
     (() => {
