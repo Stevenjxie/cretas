@@ -21,6 +21,10 @@ test('service is bounded to the approved simulated tenant, source and ten-second
   assert.match(service, /--apply --confirm MOCK_REST/);
   assert.match(service, /--start 2026-08-05T09:00:00\+08:00/);
   assert.match(service, /--end 2026-08-05T14:00:00\+08:00/);
+  assert.match(
+    service,
+    /Environment=PYTHONPATH=\/www\/wwwroot\/cretas\/code\/backend\/python:\/www\/wwwroot\/cretas\/code\/backend\/python\/smartbi/,
+  );
   assert.doesNotMatch(service, /RES_3101_009|F006/);
 });
 
