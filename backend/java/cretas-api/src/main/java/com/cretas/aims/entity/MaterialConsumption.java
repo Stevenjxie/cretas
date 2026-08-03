@@ -44,6 +44,23 @@ public class MaterialConsumption extends BaseEntity {
     private Long productionBatchId;
     @Column(name = "batch_id", nullable = false)
     private String batchId;
+    /**
+     * 消耗量 —— <b>单位隐含为来源批次 {@link #batchId} 的库存单位</b>
+     * ({@code material_batches.quantity_unit})。
+     *
+     * <p>⛔ 本表<b>没有 unit 列</b>, 这是有意的: 小结扣减
+     * ({@code InterimSettleServiceImpl}) 直接做 {@code usedQuantity += quantity},
+     * 再与同样按库存单位记的 {@code receiptQuantity} 相减判负。
+     * <b>只有当 quantity 已是批次库存单位时这个算式才成立</b> —— 写入方负责保证这一点:
+     * <ul>
+     *   <li>{@code ProcessSheetServiceImpl#resolveEdges} —— 收报工单位, 经
+     *       {@code convertReportingQuantityToStorage} 折成库存单位后再写</li>
+     *   <li>{@code ClerkProcessEntryServiceImpl} 建 RAW 边 —— 入参契约本身就是库存单位, 原样写</li>
+     * </ul>
+     *
+     * <p>⚠️ 想给本表加 unit 列之前先想清楚: 加了列不等于扣减侧会读它,
+     * 上面那个算式仍然只认库存单位。
+     */
     @Column(name = "quantity", nullable = false, precision = 18, scale = 6)
     private BigDecimal quantity;
     @PriceSensitive
