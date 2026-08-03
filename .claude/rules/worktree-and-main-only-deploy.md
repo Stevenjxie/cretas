@@ -50,7 +50,9 @@ git diff origin/main...HEAD --stat   # 应只有你的文件, 没有 sister 的 
 git checkout main && git pull origin main
 
 # 正常 Java/Web 发布 — 统一入口 (脚本自身强制 clean HEAD == origin/main, 与本规则互为保险):
+./scripts/deploy/prewarm-main-artifact.sh --tests '<tests>' --wait 420   # 合并后先预热, 不能省
 ./scripts/deploy/release-cretas.sh --phase deploy --base-sha '<Base SHA>' --tests '<tests>' --confirm-prod YES-PROD
+# 判据: DEPLOY_EXIT=0 且日志里 RELEASE_FINAL_STATUS 恰好 1 次 (不出现本身就是失败信号)
 
 # 单组件/排查入口:
 ./scripts/deploy/deploy-backend.sh --env prod        # Java
