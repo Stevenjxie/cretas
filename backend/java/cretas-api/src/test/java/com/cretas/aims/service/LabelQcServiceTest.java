@@ -32,6 +32,8 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.context.ApplicationEventPublisher;
+import org.springframework.data.domain.PageImpl;
+import org.springframework.data.domain.Pageable;
 
 import java.time.LocalDate;
 import java.util.List;
@@ -173,6 +175,116 @@ class LabelQcServiceTest {
         assertEquals("LABEL_QC_FINISHED_SKU_REQUIRED", error.getErrorCode());
         assertEquals("请重新选择当前工厂已启用的成品 SKU", error.getActionHint());
         verify(taskRepository, never()).save(any(LabelQcTask.class));
+    }
+
+    @Test
+    void createTaskAcceptsProductionDateInsideThreeDayLookahead() {
+        ProductType product = product("finished-id", ProductCategory.FINISHED_PRODUCT);
+        when(taskRepository.findByFactoryIdAndCreatedByAndIdempotencyKey(
+                FACTORY_ID, 7L, "create-ahead")).thenReturn(Optional.empty());
+        when(productTypeRepository.findByIdAndFactoryId("finished-id", FACTORY_ID))
+                .thenReturn(Optional.of(product));
+
+        LocalDate threeDaysAhead = LocalDate.now().plusDays(3);
+        var result = service.createTask(
+                FACTORY_ID,
+                7L,
+                new CreateTaskRequest(
+                        "finished-id",
+                        "BATCH-AHEAD",
+                        threeDaysAhead,
+                        "create-ahead"));
+
+        assertEquals(threeDaysAhead, result.task().productionDate());
+        ArgumentCaptor<LabelQcTask> saved = ArgumentCaptor.forClass(LabelQcTask.class);
+        verify(taskRepository).save(saved.capture());
+        assertEquals(threeDaysAhead, saved.getValue().getProductionDate());
+    }
+
+    @Test
+    void createTaskRejectsProductionDateBeyondThreeDayLookahead() {
+        ProductType product = product("finished-id", ProductCategory.FINISHED_PRODUCT);
+        when(taskRepository.findByFactoryIdAndCreatedByAndIdempotencyKey(
+                FACTORY_ID, 7L, "create-too-far")).thenReturn(Optional.empty());
+        when(productTypeRepository.findByIdAndFactoryId("finished-id", FACTORY_ID))
+                .thenReturn(Optional.of(product));
+
+        BusinessException error = assertThrows(
+                BusinessException.class,
+                () -> service.createTask(
+                        FACTORY_ID,
+                        7L,
+                        new CreateTaskRequest(
+                                "finished-id",
+                                "BATCH-TOO-FAR",
+                                LocalDate.now().plusDays(4),
+                                "create-too-far")));
+
+        assertEquals("LABEL_QC_PRODUCTION_DATE_FUTURE", error.getErrorCode());
+        verify(taskRepository, never()).save(any(LabelQcTask.class));
+    }
+
+    @Test
+    void listNarrowsByProductionDateRangeAndKeepsRequestedLargePage() {
+        when(taskRepository.findByFactoryIdAndArchivedAndStatusInAndProductionDateBetweenOrderByCreatedAtDesc(
+                eq(FACTORY_ID),
+                eq(false),
+                eq(List.of(LabelQcTaskStatus.REVIEWED)),
+                eq(LocalDate.of(2026, 8, 1)),
+                eq(LocalDate.of(2026, 8, 3)),
+                any(Pageable.class)))
+                .thenReturn(new PageImpl<>(List.of(task)));
+
+        var result = service.list(
+                FACTORY_ID,
+                List.of(LabelQcTaskStatus.REVIEWED),
+                false,
+                LocalDate.of(2026, 8, 1),
+                LocalDate.of(2026, 8, 3),
+                1,
+                500);
+
+        assertEquals(1, result.getContent().size());
+        assertEquals(500, result.getSize().intValue());
+        ArgumentCaptor<Pageable> pageable = ArgumentCaptor.forClass(Pageable.class);
+        verify(taskRepository).findByFactoryIdAndArchivedAndStatusInAndProductionDateBetweenOrderByCreatedAtDesc(
+                eq(FACTORY_ID),
+                eq(false),
+                eq(List.of(LabelQcTaskStatus.REVIEWED)),
+                eq(LocalDate.of(2026, 8, 1)),
+                eq(LocalDate.of(2026, 8, 3)),
+                pageable.capture());
+        assertEquals(500, pageable.getValue().getPageSize());
+    }
+
+    @Test
+    void listWithoutProductionDateRangeKeepsExistingQuery() {
+        when(taskRepository.findByFactoryIdAndArchivedOrderByCreatedAtDesc(
+                eq(FACTORY_ID), eq(false), any(Pageable.class)))
+                .thenReturn(new PageImpl<>(List.of(task)));
+
+        var result = service.list(FACTORY_ID, List.of(), false, null, null, 1, 20);
+
+        assertEquals(1, result.getContent().size());
+        verify(taskRepository, never())
+                .findByFactoryIdAndArchivedAndProductionDateBetweenOrderByCreatedAtDesc(
+                        any(), any(), any(), any(), any());
+    }
+
+    @Test
+    void listRejectsInvertedProductionDateRange() {
+        BusinessException error = assertThrows(
+                BusinessException.class,
+                () -> service.list(
+                        FACTORY_ID,
+                        List.of(),
+                        false,
+                        LocalDate.of(2026, 8, 3),
+                        LocalDate.of(2026, 8, 1),
+                        1,
+                        20));
+
+        assertEquals("LABEL_QC_PRODUCTION_DATE_RANGE_INVALID", error.getErrorCode());
     }
 
     private ProductType product(String id, String productCategory) {

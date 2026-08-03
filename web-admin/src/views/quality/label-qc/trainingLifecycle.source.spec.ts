@@ -39,6 +39,18 @@ describe('label QC training lifecycle UI contract', () => {
       .toBeLessThan(page.indexOf('downloadPhotoArchive(archive);', page.indexOf('async function backupSelectedTasks')));
   });
 
+  it('narrows the queue by production date and allows big pages before exporting', () => {
+    expect(page).toContain('生产日期起');
+    expect(page).toContain('生产日期止');
+    expect(page).toContain('productionDateFrom: productionDateRange.value?.[0]');
+    expect(page).toContain('productionDateTo: productionDateRange.value?.[1]');
+    expect(page).toContain('const PAGE_SIZES = [20, 50, 100, 200, 500];');
+    expect(page).toContain(':page-sizes="PAGE_SIZES"');
+    expect(page).toContain('@size-change="changePageSize"');
+    expect(api).toContain('productionDateFrom');
+    expect(api).toContain('productionDateTo');
+  });
+
   it('gates explicit training approval behind the system permission', () => {
     expect(page).toContain("permissions.includes('system:read_write')");
     expect(page).toContain('批准训练');

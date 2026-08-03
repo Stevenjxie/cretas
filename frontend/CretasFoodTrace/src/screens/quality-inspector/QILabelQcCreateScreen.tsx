@@ -38,6 +38,20 @@ type NavigationProp = NativeStackNavigationProp<QualityInspectorStackParamList>;
 type ScrollViewRef = React.ElementRef<typeof ScrollView>;
 
 const MAX_PHOTOS = 6;
+/**
+ * 允许提前生产：3 号可能在做 4 号、5 号的货，拍检时要能选未来日期。
+ * 与后端 LabelQcService.MAX_PRODUCTION_DATE_LOOKAHEAD_DAYS 必须一致。
+ */
+const PRODUCTION_DATE_LOOKAHEAD_DAYS = 3;
+
+const startOfDay = (date: Date): Date =>
+  new Date(date.getFullYear(), date.getMonth(), date.getDate());
+
+const maxProductionDate = (): Date => {
+  const limit = startOfDay(new Date());
+  limit.setDate(limit.getDate() + PRODUCTION_DATE_LOOKAHEAD_DAYS);
+  return limit;
+};
 
 const formatDate = (date: Date): string => {
   const year = date.getFullYear();
@@ -181,7 +195,10 @@ export default function QILabelQcCreateScreen() {
     const batch = batchNumber.trim();
     if (!batch) return '请输入批次号';
     if (batch.length > 100) return '批次号不能超过 100 个字符';
-    if (productionDate.getTime() > Date.now()) return '生产日期不能晚于今天';
+    const latest = maxProductionDate();
+    if (startOfDay(productionDate).getTime() > latest.getTime()) {
+      return `生产日期最多只能选到 ${formatDate(latest)}（今天起 ${PRODUCTION_DATE_LOOKAHEAD_DAYS} 天内）`;
+    }
     if (photos.length === 0) return '请至少拍摄 1 张照片';
     return null;
   };
@@ -364,11 +381,15 @@ export default function QILabelQcCreateScreen() {
           </View>
         </TouchableRipple>
 
+        <Text style={styles.fieldHint}>
+          默认今天；提前生产可往后选，最多到 {formatDate(maxProductionDate())}
+        </Text>
+
         {datePickerVisible && (
           <DateTimePicker
             value={productionDate}
             mode="date"
-            maximumDate={new Date()}
+            maximumDate={maxProductionDate()}
             onChange={onDateChange}
           />
         )}
@@ -627,6 +648,12 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     color: QI_COLORS.text,
     marginBottom: 8,
+  },
+  fieldHint: {
+    fontSize: 12,
+    color: QI_COLORS.textSecondary,
+    marginTop: -10,
+    marginBottom: 16,
   },
   selector: {
     minHeight: 52,

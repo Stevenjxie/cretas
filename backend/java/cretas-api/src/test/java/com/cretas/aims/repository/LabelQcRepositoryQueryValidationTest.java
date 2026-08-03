@@ -77,6 +77,34 @@ class LabelQcRepositoryQueryValidationTest {
                 PageRequest.of(0, 10))).hasSize(1);
         assertThat(taskRepository.findByFactoryIdAndArchivedOrderByCreatedAtDesc(
                 "F-LABEL-A", false, PageRequest.of(0, 10))).hasSize(1);
+        assertThat(taskRepository.findByFactoryIdAndArchivedAndProductionDateBetweenOrderByCreatedAtDesc(
+                "F-LABEL-A",
+                false,
+                LocalDate.now(),
+                LocalDate.now(),
+                PageRequest.of(0, 10))).hasSize(1);
+        assertThat(taskRepository.findByFactoryIdAndArchivedAndProductionDateBetweenOrderByCreatedAtDesc(
+                "F-LABEL-A",
+                false,
+                LocalDate.now().plusDays(1),
+                LocalDate.now().plusDays(3),
+                PageRequest.of(0, 10))).isEmpty();
+        assertThat(taskRepository
+                .findByFactoryIdAndArchivedAndStatusInAndProductionDateBetweenOrderByCreatedAtDesc(
+                        "F-LABEL-A",
+                        false,
+                        List.of(LabelQcTaskStatus.NEEDS_REVIEW),
+                        LocalDate.now().minusDays(1),
+                        LocalDate.now().plusDays(1),
+                        PageRequest.of(0, 10))).hasSize(1);
+        assertThat(taskRepository
+                .findByFactoryIdAndArchivedAndStatusInAndProductionDateBetweenOrderByCreatedAtDesc(
+                        "F-LABEL-B",
+                        false,
+                        List.of(LabelQcTaskStatus.NEEDS_REVIEW),
+                        LocalDate.now().minusDays(1),
+                        LocalDate.now().plusDays(1),
+                        PageRequest.of(0, 10))).hasSize(1);
         assertThat(taskRepository.countByFactoryIdAndArchivedAndStatus(
                 "F-LABEL-A", false, LabelQcTaskStatus.NEEDS_REVIEW)).isEqualTo(1);
         assertThat(photoRepository.findByFactoryIdAndTaskIdOrderByOrderIndexAsc(
