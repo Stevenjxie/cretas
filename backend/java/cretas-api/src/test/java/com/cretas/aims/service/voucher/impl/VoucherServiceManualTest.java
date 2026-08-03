@@ -48,7 +48,7 @@ class VoucherServiceManualTest {
 
     @Test
     void createManual_buildsBalancedPostedVoucher_bypassesPeriodGate() {
-        when(voucherRepo.countByFactoryIdAndYear("F006", "2026")).thenReturn(0L);
+        when(voucherRepo.maxVoucherSequenceByFactoryIdAndYear("F006", "2026")).thenReturn(0L);
         when(voucherRepo.save(any(Voucher.class))).thenAnswer(i -> i.getArgument(0));
 
         List<VoucherEntrySpec> entries = List.of(
@@ -71,7 +71,7 @@ class VoucherServiceManualTest {
 
     @Test
     void createManual_unbalanced_throws() {
-        when(voucherRepo.countByFactoryIdAndYear("F006", "2026")).thenReturn(0L);
+        when(voucherRepo.maxVoucherSequenceByFactoryIdAndYear("F006", "2026")).thenReturn(0L);
         List<VoucherEntrySpec> entries = List.of(
                 new VoucherEntrySpec("6001", "主营业务收入", new BigDecimal("1000.00"), null, null),
                 new VoucherEntrySpec("4103", "本年利润", null, new BigDecimal("900.00"), null));
