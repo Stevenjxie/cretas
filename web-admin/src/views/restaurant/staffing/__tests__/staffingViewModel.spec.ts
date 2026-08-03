@@ -1,9 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import {
+  detectStaffingHorizon,
   filterAndSortStaffingRows,
   gapLabel,
+  isGroundedStaffingIntent,
   paginateStaffingRows,
+  resolveStaffingAiQuery,
   STAFFING_QUICK_QUESTIONS,
+  staffingQuestionForHorizon,
   staffingPerspective,
 } from '../staffingViewModel';
 import type { StaffingSummaryRow } from '@/types/restaurant-staffing';
@@ -59,6 +63,40 @@ describe('预测排班角色视图', () => {
       '下周需要多少兼职',
       '下个月各店人效安排',
     ]);
+  });
+
+  it('识别明确预测范围，并让快捷问题与页面范围一一对应', () => {
+    expect(detectStaffingHorizon('明日午市怎么排')).toBe('tomorrow');
+    expect(detectStaffingHorizon('未来7天需要多少兼职')).toBe('week');
+    expect(detectStaffingHorizon('下月各店怎么安排')).toBe('month');
+    expect(detectStaffingHorizon('晚市怎么安排')).toBeNull();
+    expect(staffingQuestionForHorizon('week')).toBe('下周需要多少兼职');
+  });
+
+  it('新问题缺少时间时绑定当前 FactBook，连续追问则保留原话交给会话解析', () => {
+    expect(resolveStaffingAiQuery('晚市怎么安排', 'tomorrow', false)).toEqual({
+      displayQuestion: '晚市怎么安排',
+      requestQuestion: '明天，晚市怎么安排',
+      horizon: 'tomorrow',
+      explicitHorizon: false,
+    });
+    expect(resolveStaffingAiQuery('那晚市呢', 'week', true)).toEqual({
+      displayQuestion: '那晚市呢',
+      requestQuestion: '那晚市呢',
+      horizon: 'week',
+      explicitHorizon: false,
+    });
+    expect(resolveStaffingAiQuery('下个月各店怎么安排', 'tomorrow', false)).toMatchObject({
+      requestQuestion: '下个月各店怎么安排',
+      horizon: 'month',
+      explicitHorizon: true,
+    });
+  });
+
+  it('只有真实排班意图可以标记为同一预测 FactBook 回答', () => {
+    expect(isGroundedStaffingIntent('RESTAURANT_OPS_STAFFING_ADVICE')).toBe(true);
+    expect(isGroundedStaffingIntent('RESTAURANT_DAILY_REVENUE')).toBe(false);
+    expect(isGroundedStaffingIntent(null)).toBe(false);
   });
 
   it('按门店、时段和缺口组合筛选，并默认优先展示最大缺口', () => {

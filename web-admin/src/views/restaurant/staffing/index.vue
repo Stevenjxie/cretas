@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import DOMPurify from 'dompurify';
+import { marked } from 'marked';
 import { computed, reactive, ref, watch } from 'vue';
 import { ElMessage } from 'element-plus';
 import { usePermissionStore } from '@/store/modules/permission';
@@ -16,11 +18,14 @@ import type {
   StaffingSummaryRow,
 } from '@/types/restaurant-staffing';
 import {
+  isGroundedStaffingIntent,
   filterAndSortStaffingRows,
   gapLabel,
   gapTagType,
   paginateStaffingRows,
+  resolveStaffingAiQuery,
   STAFFING_QUICK_QUESTIONS,
+  staffingQuestionForHorizon,
   staffingPerspective,
 } from './staffingViewModel';
 import type { StaffingGapFilter, StaffingSortMode } from './staffingViewModel';
@@ -34,8 +39,15 @@ const loadError = ref('');
 const detailOpen = ref(false);
 const selectedSummary = ref<StaffingSummaryRow | null>(null);
 const question = ref('明天怎么排班');
-const asking = ref(false);
+type StaffingAiStatus = 'idle' | 'thinking' | 'done' | 'error';
+const aiStatus = ref<StaffingAiStatus>('idle');
 const aiAnswer = ref('');
+const aiError = ref('');
+const aiLastQuestion = ref('');
+const aiRetryQuestion = ref('');
+const aiSessionId = ref<string | null>(null);
+const aiFollowups = ref<string[]>([]);
+const aiIntentCode = ref<string | null>(null);
 const selectedStoreId = ref<number | null>(null);
 const selectedDaypart = ref('');
 const gapFilter = ref<StaffingGapFilter>('all');
@@ -61,6 +73,16 @@ const horizonOptions: Array<{ value: StaffingHorizon; label: string; note: strin
 const summary = computed(() => dashboard.value?.summary);
 const sources = computed(() => dashboard.value?.sources ?? []);
 const hasSimulation = computed(() => sources.value.some((item) => item.isSimulated));
+const asking = computed(() => aiStatus.value === 'thinking');
+const aiAnswerHtml = computed(() => (
+  aiAnswer.value ? DOMPurify.sanitize(marked(aiAnswer.value) as string) : ''
+));
+const aiIsGroundedStaffing = computed(() => isGroundedStaffingIntent(aiIntentCode.value));
+const aiWindowLabel = computed(() => {
+  const current = dashboard.value;
+  if (!current) return '预测范围加载中';
+  return `${current.horizonLabel} · ${current.windowStart} 至 ${current.windowEnd}`;
+});
 const allSummaryRows = computed(() => dashboard.value?.summaryRows ?? []);
 const storeOptions = computed(() => {
   const stores = new Map<number, string>();
@@ -126,6 +148,27 @@ function resetTableFilters() {
   gapFilter.value = 'all';
 }
 
+function resetAiConversation() {
+  aiStatus.value = 'idle';
+  aiAnswer.value = '';
+  aiError.value = '';
+  aiLastQuestion.value = '';
+  aiRetryQuestion.value = '';
+  aiSessionId.value = null;
+  aiFollowups.value = [];
+  aiIntentCode.value = null;
+}
+
+function changeHorizon(next: StaffingHorizon) {
+  if (next === horizon.value) return;
+  const currentQuestion = question.value.trim();
+  horizon.value = next;
+  if (!currentQuestion || STAFFING_QUICK_QUESTIONS.some((item) => item === currentQuestion)) {
+    question.value = staffingQuestionForHorizon(next);
+  }
+  resetAiConversation();
+}
+
 function openDetail(row: StaffingSummaryRow) {
   selectedSummary.value = row;
   detailOpen.value = true;
@@ -188,9 +231,15 @@ async function confirmAdjustment() {
 async function askQuestion(prompt?: string) {
   const effective = (prompt ?? question.value).trim();
   if (!effective) return;
+  let resolved = resolveStaffingAiQuery(effective, horizon.value, Boolean(aiSessionId.value));
+  if (resolved.horizon !== horizon.value) {
+    changeHorizon(resolved.horizon);
+    resolved = resolveStaffingAiQuery(effective, horizon.value, false);
+  }
   question.value = effective;
-  asking.value = true;
-  aiAnswer.value = '';
+  aiStatus.value = 'thinking';
+  aiError.value = '';
+  aiRetryQuestion.value = effective;
   try {
     const user = getUserData() as Record<string, unknown>;
     const factoryUser = user.factoryUser && typeof user.factoryUser === 'object'
@@ -203,16 +252,35 @@ async function askQuestion(prompt?: string) {
     const response = await askRestaurantQuestion({
       factoryId: getFactoryId(),
       userId: String(userId),
-      query: effective,
+      query: resolved.requestQuestion,
+      sessionId: aiSessionId.value ?? undefined,
     });
     if (!response.success) throw new Error(response.error || response.message);
     aiAnswer.value = response.message ?? '已完成分析';
+    aiLastQuestion.value = resolved.displayQuestion;
+    aiIntentCode.value = response.intentCode;
+    aiSessionId.value = response.javaSessionId ?? response.sessionId ?? null;
+    aiFollowups.value = response.followUpChips ?? [];
+    aiRetryQuestion.value = '';
+    aiStatus.value = 'done';
   } catch (error) {
     console.error('[restaurant-staffing] AI question failed', error);
-    aiAnswer.value = error instanceof Error ? error.message : 'AI 问答暂不可用';
-  } finally {
-    asking.value = false;
+    aiError.value = error instanceof Error ? error.message : 'AI 问答暂不可用';
+    aiStatus.value = 'error';
   }
+}
+
+function formatDateTime(value: string | null | undefined): string {
+  if (!value) return '等待 FactBook';
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return value;
+  return new Intl.DateTimeFormat('zh-CN', {
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  }).format(parsed);
 }
 
 function formatPct(value: number | null | undefined): string {
@@ -241,7 +309,7 @@ function formatPct(value: number | null | undefined): string {
         :key="item.value"
         type="button"
         :class="{ active: horizon === item.value }"
-        @click="horizon = item.value"
+        @click="changeHorizon(item.value)"
       >
         <strong>{{ item.label }}</strong>
         <span>{{ item.note }}</span>
@@ -404,14 +472,75 @@ function formatPct(value: number | null | undefined): string {
         </el-card>
 
         <el-card shadow="never" class="ai-card">
-          <template #header><div><h2>问餐饮 AI</h2><p>真入口会调用大模型并绑定同一预测 FactBook。</p></div></template>
+          <template #header>
+            <div class="ai-card__header">
+              <div><h2>问餐饮 AI</h2><p>排班数字来自 FactBook，大模型负责解释和建议。</p></div>
+              <el-button
+                v-if="aiSessionId || aiAnswer"
+                link
+                type="primary"
+                :disabled="asking"
+                @click="resetAiConversation"
+              >新对话</el-button>
+            </div>
+          </template>
+          <div class="ai-context" role="note" aria-label="餐饮 AI 当前分析范围">
+            <div>
+              <span>当前排班范围</span>
+              <strong>{{ aiWindowLabel }}</strong>
+              <small>FactBook 生成于 {{ formatDateTime(dashboard?.generatedAt) }}</small>
+            </div>
+            <el-tag type="info" effect="plain">全部门店</el-tag>
+            <p>未写时间时按当前范围补全；表格的门店、时段和缺口筛选只影响列表，不会缩小 AI 的全店 FactBook。</p>
+          </div>
           <div class="question-chips">
             <button v-for="item in STAFFING_QUICK_QUESTIONS" :key="item" type="button" @click="askQuestion(item)">{{ item }}</button>
           </div>
-          <el-input v-model="question" placeholder="例如：明天怎么排班…" aria-label="向餐饮 AI 提问" @keyup.enter="askQuestion()">
-            <template #append><el-button :loading="asking" @click="askQuestion()">提问</el-button></template>
+          <el-input
+            v-model="question"
+            placeholder="例如：晚市怎么安排…"
+            aria-label="向餐饮 AI 提问"
+            :disabled="asking"
+            @keyup.enter="askQuestion()"
+          >
+            <template #append><el-button :loading="asking" @click="askQuestion()">分析排班</el-button></template>
           </el-input>
-          <div v-if="aiAnswer" class="ai-answer">{{ aiAnswer }}</div>
+          <div v-if="asking" class="ai-progress" role="status" aria-live="polite">
+            <span class="ai-progress__dot" aria-hidden="true"></span>
+            <div><strong>正在分析排班问题</strong><small>识别范围 → 生成预测 FactBook → 大模型解释</small></div>
+          </div>
+          <el-alert v-if="aiError" :title="aiError" type="error" show-icon :closable="false" class="ai-error">
+            <template #default>
+              <span v-if="aiAnswer">上一条有效回答仍保留。</span>
+              <span v-else>本次没有产生新的排班结论。</span>
+              <el-button link type="primary" :disabled="asking" @click="askQuestion(aiRetryQuestion)">重试这次问题</el-button>
+            </template>
+          </el-alert>
+          <article v-if="aiAnswer" class="ai-answer" aria-live="polite">
+            <header class="ai-answer__header">
+              <div><span>你的问题</span><strong>{{ aiLastQuestion }}</strong></div>
+              <el-tag v-if="aiIsGroundedStaffing" type="success" effect="plain">排班 FactBook 已绑定</el-tag>
+            </header>
+            <div v-if="aiIsGroundedStaffing" class="ai-trust-row" aria-label="回答依据">
+              <span>数字：预测 FactBook</span>
+              <span>解释：大模型</span>
+              <span>历史人效：仅作证据</span>
+            </div>
+            <el-alert
+              v-else
+              title="本次回答未命中预测排班能力"
+              description="该问题可能由其他餐饮分析能力回答，不能视为当前排班 FactBook 的解释。"
+              type="warning"
+              :closable="false"
+              show-icon
+              class="ai-boundary-alert"
+            />
+            <div class="ai-answer__content" v-html="aiAnswerHtml"></div>
+          </article>
+          <div v-if="aiFollowups.length" class="ai-followups" aria-label="继续追问">
+            <span>继续追问</span>
+            <button v-for="item in aiFollowups" :key="item" type="button" :disabled="asking" @click="askQuestion(item)">{{ item }}</button>
+          </div>
         </el-card>
       </aside>
     </section>
@@ -494,7 +623,7 @@ function formatPct(value: number | null | undefined): string {
 .horizon-switch { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; max-width: 640px; margin: 18px 0; }
 .horizon-switch button { display: flex; align-items: center; justify-content: space-between; min-height: 54px; padding: 10px 14px; border: 1px solid #d8dee8; border-radius: 10px; background: #fff; color: #344054; cursor: pointer; transition: border-color .18s, box-shadow .18s, transform .18s; }
 .horizon-switch button:hover { border-color: #75a7d6; transform: translateY(-1px); }
-.horizon-switch button:focus-visible, .question-chips button:focus-visible { outline: 2px solid #1b65a8; outline-offset: 2px; }
+.horizon-switch button:focus-visible, .question-chips button:focus-visible, .ai-followups button:focus-visible { outline: 2px solid #1b65a8; outline-offset: 2px; }
 .horizon-switch button.active { border-color: #1b65a8; color: #1b65a8; box-shadow: 0 0 0 2px rgb(27 101 168 / 10%); }
 .horizon-switch span { font-size: 12px; color: #8491a3; }
 .page-alert { margin-bottom: 16px; }
@@ -504,7 +633,7 @@ function formatPct(value: number | null | undefined): string {
 .metric-card strong { display: block; margin: 8px 0 6px; font-size: 25px; font-variant-numeric: tabular-nums; }
 .metric-card--primary { border-top: 3px solid #1b65a8; }
 .metric-card--danger { border-top: 3px solid #d84c4c; }
-.content-grid { display: grid; grid-template-columns: minmax(0, 1fr) 330px; gap: 16px; align-items: start; }
+.content-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(360px, 420px); gap: 16px; align-items: start; }
 .table-card, .source-card, .ai-card { border: 1px solid #e1e7ef; border-radius: 12px; }
 .section-heading { display: flex; justify-content: space-between; gap: 16px; align-items: center; }
 .section-heading h2, .source-card h2, .ai-card h2 { margin: 0; font-size: 17px; }
@@ -523,9 +652,36 @@ function formatPct(value: number | null | undefined): string {
 .source-list small { margin-top: 2px; color: #8491a3; font-size: 11px; }
 .source-dot { width: 9px; height: 9px; flex: none; border-radius: 50%; background: #2c8c5a; }
 .source-dot.simulated { background: #d69732; }
-.question-chips { display: flex; flex-wrap: wrap; gap: 7px; margin-bottom: 12px; }
-.question-chips button { padding: 7px 9px; border: 1px solid #d8e3ef; border-radius: 999px; background: #f5f9fd; color: #1b65a8; font-size: 12px; cursor: pointer; }
-.ai-answer { margin-top: 12px; padding: 12px; border-left: 3px solid #1b65a8; background: #f6f9fc; color: #475467; line-height: 1.7; white-space: pre-wrap; }
+.ai-card__header { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+.ai-context { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 5px 10px; margin-bottom: 14px; padding: 12px; border: 1px solid #dfe8f1; border-radius: 10px; background: #f7fafc; }
+.ai-context span, .ai-context small { display: block; color: #778397; font-size: 11px; }
+.ai-context strong { display: block; margin: 3px 0; color: #27364a; font-size: 13px; }
+.ai-context p { grid-column: 1 / -1; margin: 5px 0 0; padding-top: 8px; border-top: 1px solid #e5ebf2; line-height: 1.55; }
+.question-chips, .ai-followups { display: flex; flex-wrap: wrap; gap: 7px; margin-bottom: 12px; }
+.question-chips button, .ai-followups button { padding: 7px 9px; border: 1px solid #d8e3ef; border-radius: 999px; background: #f5f9fd; color: #1b65a8; font-size: 12px; cursor: pointer; }
+.question-chips button:disabled, .ai-followups button:disabled { cursor: not-allowed; opacity: .55; }
+.ai-progress { display: flex; align-items: center; gap: 10px; margin-top: 12px; padding: 12px; border-radius: 9px; background: #f5f8fc; color: #42526a; }
+.ai-progress strong, .ai-progress small { display: block; }
+.ai-progress small { margin-top: 3px; color: #7d8999; font-size: 11px; }
+.ai-progress__dot { width: 10px; height: 10px; flex: none; border-radius: 50%; background: #1b65a8; animation: ai-pulse 1.2s ease-in-out infinite; }
+.ai-error { margin-top: 12px; }
+.ai-answer { margin-top: 12px; overflow: hidden; border: 1px solid #dfe7f0; border-radius: 10px; background: #fff; color: #475467; }
+.ai-answer__header { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; padding: 11px 12px; border-bottom: 1px solid #e8edf3; background: #f8fafc; }
+.ai-answer__header span, .ai-answer__header strong { display: block; }
+.ai-answer__header span { color: #7d8999; font-size: 11px; }
+.ai-answer__header strong { margin-top: 3px; color: #27364a; font-size: 13px; }
+.ai-trust-row { display: flex; flex-wrap: wrap; gap: 6px; padding: 10px 12px 0; }
+.ai-trust-row span { padding: 4px 7px; border-radius: 6px; background: #edf7f1; color: #2b6f4b; font-size: 11px; }
+.ai-boundary-alert { margin: 10px 12px 0; }
+.ai-answer__content { padding: 12px; overflow-wrap: anywhere; font-size: 13px; line-height: 1.7; }
+.ai-answer__content :deep(h1), .ai-answer__content :deep(h2), .ai-answer__content :deep(h3) { margin: 14px 0 7px; color: #263548; font-size: 15px; line-height: 1.45; }
+.ai-answer__content :deep(h1:first-child), .ai-answer__content :deep(h2:first-child), .ai-answer__content :deep(h3:first-child), .ai-answer__content :deep(p:first-child) { margin-top: 0; }
+.ai-answer__content :deep(p), .ai-answer__content :deep(ul), .ai-answer__content :deep(ol) { margin: 8px 0; }
+.ai-answer__content :deep(ul), .ai-answer__content :deep(ol) { padding-left: 20px; }
+.ai-answer__content :deep(strong) { color: #263548; }
+.ai-followups { margin: 12px 0 0; padding-top: 10px; border-top: 1px solid #e8edf3; }
+.ai-followups > span { width: 100%; color: #7d8999; font-size: 11px; }
+@keyframes ai-pulse { 0%, 100% { opacity: .35; transform: scale(.82); } 50% { opacity: 1; transform: scale(1); } }
 .drawer-intro { margin-bottom: 14px; padding: 10px 12px; border-radius: 8px; background: #f5f7fa; color: #667085; font-size: 13px; }
 .shift-day { margin-bottom: 16px; overflow: hidden; border: 1px solid #e1e7ef; border-radius: 10px; }
 .shift-day__header { display: flex; align-items: center; justify-content: space-between; padding: 12px 14px; background: #f7f9fc; }
@@ -542,11 +698,13 @@ function formatPct(value: number | null | undefined): string {
   .hero-facts { width: 100%; box-sizing: border-box; }
   .horizon-switch, .metric-grid, .side-stack { grid-template-columns: 1fr; }
   .section-heading, .table-footer { align-items: flex-start; flex-direction: column; }
+  .ai-card__header, .ai-answer__header { align-items: flex-start; flex-direction: column; }
   .table-toolbar > :deep(.el-select) { width: 100%; }
   .table-footer { overflow-x: auto; }
 }
 @media (prefers-reduced-motion: reduce) {
   .horizon-switch button { transition: none; }
   .horizon-switch button:hover { transform: none; }
+  .ai-progress__dot { animation: none; }
 }
 </style>

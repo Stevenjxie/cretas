@@ -1,4 +1,4 @@
-import type { StaffingSummaryRow } from '@/types/restaurant-staffing';
+import type { StaffingHorizon, StaffingSummaryRow } from '@/types/restaurant-staffing';
 
 export interface StaffingPerspective {
   label: string;
@@ -42,6 +42,61 @@ export const STAFFING_QUICK_QUESTIONS = [
   '下周需要多少兼职',
   '下个月各店人效安排',
 ] as const;
+
+export const STAFFING_INTENT_CODE = 'RESTAURANT_OPS_STAFFING_ADVICE';
+
+const STAFFING_HORIZON_QUESTIONS: Record<StaffingHorizon, string> = {
+  tomorrow: STAFFING_QUICK_QUESTIONS[0],
+  week: STAFFING_QUICK_QUESTIONS[1],
+  month: STAFFING_QUICK_QUESTIONS[2],
+};
+
+const STAFFING_HORIZON_LABELS: Record<StaffingHorizon, string> = {
+  tomorrow: '明天',
+  week: '下周',
+  month: '下个月',
+};
+
+export interface StaffingAiQueryResolution {
+  displayQuestion: string;
+  requestQuestion: string;
+  horizon: StaffingHorizon;
+  explicitHorizon: boolean;
+}
+
+export function detectStaffingHorizon(question: string): StaffingHorizon | null {
+  const text = question.trim();
+  if (/明天|明日|翌日/.test(text)) return 'tomorrow';
+  if (/下周|下一周|未来(?:一|1)周|未来7天/.test(text)) return 'week';
+  if (/下个月|下月|未来(?:一个|1个)月|未来30天/.test(text)) return 'month';
+  return null;
+}
+
+export function staffingQuestionForHorizon(horizon: StaffingHorizon): string {
+  return STAFFING_HORIZON_QUESTIONS[horizon];
+}
+
+export function resolveStaffingAiQuery(
+  question: string,
+  currentHorizon: StaffingHorizon,
+  continuingSession: boolean,
+): StaffingAiQueryResolution {
+  const displayQuestion = question.trim();
+  const detectedHorizon = detectStaffingHorizon(displayQuestion);
+  const resolvedHorizon = detectedHorizon ?? currentHorizon;
+  return {
+    displayQuestion,
+    requestQuestion: continuingSession || detectedHorizon
+      ? displayQuestion
+      : `${STAFFING_HORIZON_LABELS[currentHorizon]}，${displayQuestion}`,
+    horizon: resolvedHorizon,
+    explicitHorizon: detectedHorizon !== null,
+  };
+}
+
+export function isGroundedStaffingIntent(intentCode: string | null | undefined): boolean {
+  return intentCode === STAFFING_INTENT_CODE;
+}
 
 export function staffingPerspective(role: string): StaffingPerspective {
   if (role === 'hr_admin') {
