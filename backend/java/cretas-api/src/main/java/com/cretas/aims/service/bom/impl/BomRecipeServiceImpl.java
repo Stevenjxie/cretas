@@ -389,6 +389,24 @@ public class BomRecipeServiceImpl implements BomRecipeService {
             ProductType product = loadProductForUpdate(factoryId, member.getProductTypeId());
             validateProductOutputMetadata(product);
             validateRecipeOutputContract(factoryId, member, product);
+            // 🔴 2026-08-03 (P4): 副产品成员<b>按设计没有自己的原料行</b>, 两道闸都要豁免。
+            //
+            // validateByProductCreditRules 就在上面几行, 白纸黑字规定副产品
+            // 「不参与共享成本比例分摊, 分摊比例必须为 0%」+「必须填可变现净值做成本抵扣」——
+            // 也就是<b>它不消耗自己的原料, 成本走 NRV 抵扣</b>。可这里却逐成员要求 ≥1 行原辅料,
+            // 等于索要一份设计上就不该存在的数据 → 副产品成员必然撞
+            // 「BOM 还没有任何原辅料或包材, 不能激活」。
+            //
+            // prod 实证 (2026-08-03): 全库 output_role=BY_PRODUCT 只有 1 份且仍是 DRAFT,
+            // 而 MAIN 有 6 份 ACTIVE —— <b>这条产品路径从上线至今没走通过一次</b>。
+            //
+            // ⚠️ 两道闸都得豁免: validateActivatableItems 与
+            // readinessService.requireBomCompleteForActivation(后者同样要求「至少配置一项主原料」)。
+            // 只改一道还是过不去 —— 一个规则两处承载, 今晚已经踩过几次。
+            // 主产出仍照常校验: family 循环里 MAIN 那条把关, 空 BOM 依然激活不了。
+            if (member.getOutputRole() == BomRecipe.OutputRole.BY_PRODUCT) {
+                continue;
+            }
             validateActivatableItems(member);
             readinessService.requireBomCompleteForActivation(factoryId, member);
         }
@@ -2249,6 +2267,8 @@ public class BomRecipeServiceImpl implements BomRecipeService {
             throw new IllegalArgumentException(
                     "原料类型不属于该工厂: materialTypeId=" + dto.getMaterialTypeId());
         }
+        // 原始单位快照必须在归一之前取 —— 归一后 dto.unit 恒等于档案单位
+        String requestedUnit1 = dto.getUnit();
         prepareItemUnit(factoryId, dto, material);
         checkBomUnitCompatible(material, dto.getUnit());
         bindUnidentifiedRawItemToUniqueSlot(factoryId, recipe, dto, item);
@@ -2256,7 +2276,7 @@ public class BomRecipeServiceImpl implements BomRecipeService {
         item.setMaterialTypeId(material.getId());
         item.setMaterialName(material.getName());
         applyPrimaryCode(dto, item, material);
-        applyPackagingLevel(factoryId, recipe.getProductTypeId(), dto, material, item);
+        applyPackagingLevel(factoryId, recipe.getProductTypeId(), dto, material, item, requestedUnit1);
         validateItemQuantity(dto);
         applyDtoToItem(dto, item);
         applyMaterialMasterPricing(item, material);
@@ -2288,13 +2308,15 @@ public class BomRecipeServiceImpl implements BomRecipeService {
         // The UI displays localized labels (盒/箱) while material masters may hold
         // English historical codes (box/case). Resolve both through the shared unit
         // contract and persist one canonical code before compatibility/pricing checks.
+        // 同上: 归一前取快照
+        String requestedUnit2 = dto.getUnit();
         prepareItemUnit(factoryId, dto, mt.get());
 
         // T159-B R3: UoM dimension guard at BOM write time.
         checkBomUnitCompatible(mt.get(), dto.getUnit());
 
         bindUnidentifiedRawItemToUniqueSlot(factoryId, recipe, dto, null);
-        applyPackagingLevel(factoryId, recipe.getProductTypeId(), dto, mt.get(), item);
+        applyPackagingLevel(factoryId, recipe.getProductTypeId(), dto, mt.get(), item, requestedUnit2);
 
         validateItemQuantity(dto);
         validateStableItemBinding(factoryId, recipe, dto, null);
@@ -2310,13 +2332,13 @@ public class BomRecipeServiceImpl implements BomRecipeService {
      */
     private void prepareItemUnit(String factoryId, BomRecipeItemDTO dto, RawMaterialType material) {
         if ("PACKAGING".equalsIgnoreCase(dto.getMaterialCategory())) {
-            String materialUnit = canonicalUnitOrThrow(factoryId, material.getUnit(), "unit");
-            if (dto.getUnit() != null && !dto.getUnit().isBlank()
-                    && !unitContractService.areEquivalent(factoryId, dto.getUnit(), materialUnit)) {
-                throw bomError(400, "包材单位必须继承物料档案，不能在 BOM 中另选",
-                        "BOM_PACKAGING_UNIT_MISMATCH", "请先修正包材档案的库存单位", "unit");
-            }
-            dto.setUnit(materialUnit);
+            // 🔴 2026-08-03 (P7): 单位不匹配<b>不在这里抛</b>。
+            //
+            // 本方法在 applyPackagingLevel <b>之前</b>调用(2270/2277 与 2309/2315 两对),
+            // 若在此直接抛, 用户永远先只看到「单位必须继承」这一条, 走不到后面
+            // 「角色 + 自然用量」的聚合报错 —— 三条必填还是要来回试三次。
+            // 判定与赋值留在这里(下游依赖 dto.unit 已归一), 报错交给 applyPackagingLevel 统一收齐。
+            dto.setUnit(canonicalUnitOrThrow(factoryId, material.getUnit(), "unit"));
             return;
         }
         normalizeItemUnit(factoryId, dto);
@@ -2336,7 +2358,13 @@ public class BomRecipeServiceImpl implements BomRecipeService {
             String productTypeId,
             BomRecipeItemDTO dto,
             RawMaterialType material,
-            BomRecipeItem item) {
+            BomRecipeItem item,
+            /**
+             * 调用方传进来的<b>原始</b>单位快照 —— 必须在 prepareItemUnit 归一<b>之前</b>取。
+             * 归一后 dto.unit 恒等于档案单位, 再比就永远相等, 「另选了单位」这条判据会失效。
+             * 加成位置参数(而不是从 dto 里读)是为了让编译器把两个调用点都逼出来。
+             */
+            String requestedUnit) {
         if (!"PACKAGING".equalsIgnoreCase(dto.getMaterialCategory())) {
             item.setPackagingSpecId(null);
             item.setPackagingSpecNameSnapshot(null);
@@ -2348,23 +2376,51 @@ public class BomRecipeServiceImpl implements BomRecipeService {
             item.setPackagingConversionFactorSnapshot(null);
             return;
         }
-        if (dto.getPackagingRole() == null || dto.getPackagingRole().isBlank()) {
-            throw bomError(400, "包材必须选择所在包装层级的业务角色",
-                    "BOM_PACKAGING_ROLE_REQUIRED", "请选择成品容器、封装或外包装等角色", "packagingRole");
-        }
+        // 🔴 2026-08-03 (P7): 三条必填<b>一次收齐再报</b>, 不再逐条抛。
+        //
+        // 原来是三个连续的 if-throw: 角色 → 单位 → 自然用量。用户填一次只被告知一条,
+        // 要来回试三次才凑齐, 而且第 2 条(不能另选单位)与第 3 条组合起来还反直觉 ——
+        // 「不能另选」≠「可以不填」。三条本身都合理, 问题只在<b>一次只说一条</b>。
         String materialUnit = canonicalUnitOrThrow(factoryId, material.getUnit(), "unit");
-        if (dto.getUnit() != null && !dto.getUnit().isBlank()
-                && !unitContractService.areEquivalent(factoryId, dto.getUnit(), materialUnit)) {
-            throw bomError(400, "包材单位必须继承物料档案，不能在 BOM 中另选",
-                    "BOM_PACKAGING_UNIT_MISMATCH", "请先修正包材档案的库存单位", "unit");
-        }
-        dto.setUnit(materialUnit);
         BigDecimal naturalQuantity = dto.getNaturalQuantity() != null
                 ? dto.getNaturalQuantity() : dto.getStandardQuantity();
-        if (naturalQuantity == null || naturalQuantity.compareTo(BigDecimal.ZERO) <= 0) {
-            throw bomError(400, "包材自然用量必须大于 0",
-                    "BOM_PACKAGING_QUANTITY_REQUIRED", "请填写每个当前包装规格所需的包材数量", "naturalQuantity");
+
+        List<String> packagingIssues = new ArrayList<>();
+        List<String> packagingHints = new ArrayList<>();
+        String firstCode = null;
+        String firstTarget = null;
+        if (dto.getPackagingRole() == null || dto.getPackagingRole().isBlank()) {
+            packagingIssues.add("包材必须选择所在包装层级的业务角色");
+            packagingHints.add("角色: 请选择成品容器、封装或外包装等");
+            firstCode = "BOM_PACKAGING_ROLE_REQUIRED";
+            firstTarget = "packagingRole";
         }
+        // ⚠️ dto.unit 已被 prepareItemUnit 归一成档案单位, 这里再比就恒等 ——
+        // 所以判据用调用方传进来的<b>原始</b>单位 requestedUnit(在 applyPackagingLevel 入口取快照)。
+        if (requestedUnit != null && !requestedUnit.isBlank()
+                && !unitContractService.areEquivalent(factoryId, requestedUnit, materialUnit)) {
+            packagingIssues.add("包材单位必须继承物料档案，不能在 BOM 中另选");
+            packagingHints.add("单位: 原样回传物料档案的「" + materialUnit + "」(必须回传, 不能省略)");
+            if (firstCode == null) {
+                firstCode = "BOM_PACKAGING_UNIT_MISMATCH";
+                firstTarget = "unit";
+            }
+        }
+        if (naturalQuantity == null || naturalQuantity.compareTo(BigDecimal.ZERO) <= 0) {
+            packagingIssues.add("包材自然用量必须大于 0");
+            packagingHints.add("自然用量: 每个当前包装规格所需的包材数量");
+            if (firstCode == null) {
+                firstCode = "BOM_PACKAGING_QUANTITY_REQUIRED";
+                firstTarget = "naturalQuantity";
+            }
+        }
+        if (!packagingIssues.isEmpty()) {
+            throw bomError(400, String.join("；", packagingIssues),
+                    packagingIssues.size() > 1 ? "BOM_PACKAGING_FIELDS_REQUIRED" : firstCode,
+                    "请一次补齐: " + String.join("; ", packagingHints),
+                    firstTarget);
+        }
+        dto.setUnit(materialUnit);
 
         item.setPackagingRole(dto.getPackagingRole().trim());
         item.setNaturalQuantity(naturalQuantity);
