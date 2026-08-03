@@ -63,7 +63,18 @@ public class ProductProcessWorkflowUnitValidator {
         LocalDateTime now = LocalDateTime.now();
         for (ProductProcessWorkflowDTO.Node material : materials.values()) {
             String skuId = text(data(material).get("skuId"));
-            if (blank(skuId)) continue;
+            if (blank(skuId)) {
+                // 🔴 2026-08-03 (P8): 原来是裸 continue —— 物料节点没写 skuId 就<b>静默跳过</b>,
+                // 连告警都没有。而字段名写错(例如按端口的写法用了 materialName / unit)正是这个形态:
+                // 保存<b>成功</b>, 只在别处冒出几条 WORKFLOW_UNIT_UNKNOWN 且 currentUnit=null,
+                // 看不出真正原因是「这个节点根本没被认成物料」。
+                // 物料节点必须用 {name, bound, skuId, skuCode, baseUnit}。
+                errors.add(issue("WORKFLOW_MATERIAL_SKU_MISSING",
+                        "物料节点未绑定 SKU(缺 skuId) —— 请检查字段名: 物料节点用 skuId / baseUnit, "
+                                + "不是端口的 materialName / unit",
+                        material.getId(), null, null, null));
+                continue;
+            }
             String expected = primaryUnits.get(primaryKey(material.getKind(), skuId));
             if (expected == null) {
                 errors.add(issue("SKU_UNIT_UNKNOWN", "绑定的物料不存在、跨工厂或缺少主单位", material.getId(), null, null, null));
