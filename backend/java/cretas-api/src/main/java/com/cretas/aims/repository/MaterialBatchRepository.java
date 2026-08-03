@@ -274,6 +274,32 @@ public interface MaterialBatchRepository extends JpaRepository<MaterialBatch, St
                                                       @Param("warehouseId") String warehouseId,
                                                       @Param("today") java.time.LocalDate today);
 
+    /**
+     * <b>生产仓以外</b>各仓的过期但仍有余量批次 —— 与上面那条谓词完全相同, 只是仓的方向反过来。
+     *
+     * <p>🔴 2026-08-03: 上面那条的 Javadoc 写的动机就是「实测 F006 羊排<b>在原料仓</b>有 100kg
+     * 但全部 EXPIRED」, 可它的实现是 {@code warehouseId = :warehouseId} 而调用方传的是
+     * <b>生产仓</b> —— 实现与自己写的动机相反, 于是原料仓的过期货一条也报不出来。
+     *
+     * <p>配合 {@code elsewhere}(只查 {@code status='AVAILABLE'}, 过期的天然不在内),
+     * 两者合起来才覆盖完「别的仓有货」的两种形态: 能调的 和 过期不能调的。
+     * 仅用于<b>展示与提醒</b>, 不进可投量。
+     */
+    @Query("SELECT m FROM MaterialBatch m WHERE m.factoryId = :factoryId " +
+           "AND m.materialTypeId = :materialTypeId " +
+           "AND m.warehouseId IS NOT NULL AND m.warehouseId <> :excludedWarehouseId " +
+           "AND (m.status = 'EXPIRED' " +
+           "     OR (m.status = 'AVAILABLE' AND m.expireDate IS NOT NULL AND m.expireDate < :today)) " +
+           "AND (m.receiptQuantity - m.usedQuantity - m.reservedQuantity) > 0 " +
+           "AND (m.sourceDocType IS NULL OR m.sourceDocType <> 'PRODUCTION_BATCH') " +
+           "AND (m.ownership IS NULL OR m.ownership = com.cretas.aims.entity.enums.InventoryOwnership.COMPANY_OWNED) " +
+           "ORDER BY m.expireDate ASC NULLS LAST, m.id ASC")
+    List<MaterialBatch> findExpiredBatchesOutsideWarehouse(
+            @Param("factoryId") String factoryId,
+            @Param("materialTypeId") String materialTypeId,
+            @Param("excludedWarehouseId") String excludedWarehouseId,
+            @Param("today") java.time.LocalDate today);
+
     /** Customer-owned FEFO candidates are isolated to the same customer and sales order. */
     @Query("SELECT m FROM MaterialBatch m WHERE m.factoryId = :factoryId " +
            "AND m.materialTypeId = :materialTypeId " +

@@ -555,6 +555,21 @@ function expiredStockText(item: InputPortRef): string {
   return `过期 ${fmtStockQty(expired)}${displayProcessUnit(a!.unit)}，不可投料，请联系仓管处理`;
 }
 
+/**
+ * 生产仓以外各仓的过期存量。
+ *
+ * 🔴 与 expiredStockText 分开而不是加进去：仓管要知道**过期的货在哪个仓**才处理得了，
+ * 合成一个总数等于把「去哪儿找」这条信息丢掉。同样**只说事实和该找谁，不给按钮**。
+ */
+function expiredElsewhereText(item: InputPortRef): string {
+  const a = item.workflowPortId ? portAvailability.value.get(item.workflowPortId) : null;
+  if (!a || !a.expiredElsewhere?.length) return '';
+  const detail = a.expiredElsewhere
+    .map((e) => `${e.warehouseName}过期 ${fmtStockQty(e.quantity)}${displayProcessUnit(e.unit)}`)
+    .join('、');
+  return `${detail}，不可投料，请联系仓管处理`;
+}
+
 function workshopStockIsZero(item: InputPortRef): boolean {
   const a = item.workflowPortId ? portAvailability.value.get(item.workflowPortId) : null;
   return !!a && !(a.available > 0);
@@ -3393,6 +3408,11 @@ defineExpose({ hasUnsavedRows, refreshSharedInventories });
                       data-testid="input-expired-stock"
                       class="sp-in-expired"
                     >{{ expiredStockText(item) }}</span>
+                    <span
+                      v-if="expiredElsewhereText(item)"
+                      data-testid="input-expired-elsewhere"
+                      class="sp-in-expired"
+                    >{{ expiredElsewhereText(item) }}</span>
                   </span>
                   <span class="sp-in-cell sp-in-note">来源批次由系统按生产库入库顺序自动分摊</span>
                 </div>
@@ -4016,6 +4036,11 @@ defineExpose({ hasUnsavedRows, refreshSharedInventories });
                         data-testid="input-expired-stock"
                         class="sp-in-expired"
                       >{{ expiredStockText(item) }}</span>
+                      <span
+                        v-if="expiredElsewhereText(item)"
+                        data-testid="input-expired-elsewhere"
+                        class="sp-in-expired"
+                      >{{ expiredElsewhereText(item) }}</span>
                     </div>
                   </td>
                 </template>

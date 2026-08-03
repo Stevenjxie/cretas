@@ -630,8 +630,29 @@ public class ProductionStockAllocationServiceImpl implements ProductionStockAllo
                 expired = expired.add(batchAvailable(factoryId, batch, massInput));
             }
 
+            // 生产仓以外各仓的过期存量 —— expired 只看生产仓、elsewhere 只看 AVAILABLE,
+            // 「别的仓有货但过期了」这一种形态原来两边都不覆盖, 整批从界面消失。
+            Map<String, BigDecimal> expiredByWarehouse = new LinkedHashMap<>();
+            for (MaterialBatch batch : materialBatchRepository.findExpiredBatchesOutsideWarehouse(
+                    factoryId, materialTypeId, workshopId, java.time.LocalDate.now())) {
+                if (!ownershipAllows(plan, batch)
+                        || !unitMatchesForDisplay(factoryId, batch, inputUnit, massInput)) {
+                    continue;
+                }
+                String name = warehouseResolver.displayName(factoryId, batch.getWarehouseId());
+                if (name == null || name.isBlank()) {
+                    continue;   // 说不出在哪个仓就不提 —— 与 elsewhere 同一条口径
+                }
+                expiredByWarehouse.merge(name, batchAvailable(factoryId, batch, massInput), BigDecimal::add);
+            }
+            List<ElsewhereStock> expiredElsewhere = expiredByWarehouse.entrySet().stream()
+                    .filter(e -> e.getValue().signum() > 0)
+                    .map(e -> new ElsewhereStock(e.getKey(), e.getValue(),
+                            massInput ? KG : inputUnit))
+                    .toList();
+
             out.add(new PortAvailability(port.getWorkflowPortId(), materialTypeId,
-                    available, massInput ? KG : inputUnit, elsewhere, expired));
+                    available, massInput ? KG : inputUnit, elsewhere, expired, expiredElsewhere));
         }
         return out;
     }
