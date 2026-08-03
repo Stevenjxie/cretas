@@ -5,8 +5,8 @@ import {
   RESTAURANT_ALL_ROLES,
 } from '../restaurantRoleExperience';
 
-describe('餐饮四角色体验配置', () => {
-  it('四个餐饮角色都有职责、交接、主动作和大模型快捷问题', () => {
+describe('餐饮角色体验配置', () => {
+  it('五个餐饮角色都有职责、交接、主动作和大模型快捷问题', () => {
     for (const role of RESTAURANT_ALL_ROLES) {
       const experience = getRestaurantRoleExperience(role);
       expect(experience.role).toBe(role);
@@ -39,6 +39,19 @@ describe('餐饮四角色体验配置', () => {
   it('系统管理员按老板视角进入，未知餐饮角色按店长视角兜底', () => {
     expect(normalizeRestaurantRole('factory_super_admin')).toBe('restaurant_owner');
     expect(normalizeRestaurantRole('restaurant_owner')).toBe('restaurant_owner');
+    expect(normalizeRestaurantRole('hr_admin')).toBe('hr_admin');
     expect(normalizeRestaurantRole('unknown')).toBe('restaurant_manager');
+  });
+
+  it('人事拥有独立的预测排班体验且不把历史人效直接解释为缺人', () => {
+    const hr = getRestaurantRoleExperience('hr_admin');
+    expect(hr.roleLabel).toBe('餐饮人事');
+    expect(hr.actions[0]).toMatchObject({
+      path: '/restaurant/staffing',
+      module: 'restaurantHr',
+      emphasis: 'primary',
+    });
+    expect(hr.ai.primaryQuestions).toContain('下周需要多少兼职');
+    expect(hr.summary).toContain('历史人效仅作趋势证据');
   });
 });
