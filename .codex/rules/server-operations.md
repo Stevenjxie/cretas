@@ -1,6 +1,18 @@
 # 服务器运维规范
 
-**最后更新**: 2026-07-29
+**最后更新**: 2026-08-04
+
+> ⛔ **2026-07-13: 47 上的 test 环境已下线 (Steve 决定)。** `cretas-backend-test` (10011)
+> 已 `systemctl stop + disable` (不再自启), test Python (8084, 本就 nohup 非 systemd) 也已停。
+> **当前 47 只跑 prod (10010/10020 Java 蓝绿 + 8083 Python)**。Steve 后期会用单独一台服务器做 test。
+> 下线原因: 47 内存紧张, prod Java 在 2.56G 堆下被并发压力 OOM 崩过 (2026-07-13), 停 test 腾 ~1.5G。
+> **下文所有 10011 / 8084 / `--env test` / 「先部 test」内容均已不可执行**, 保留仅作历史参考。
+>
+> 📌 **常规 Java/Web 发布走统一入口三步**(不要拼单组件脚本):
+> `release-cretas.sh --phase build --stage-backend YES-STAGE`(合并前)
+> → `prewarm-main-artifact.sh --tests '<tests>' --wait 420`(合并后预热, 不能省)
+> → `release-cretas.sh --phase deploy --confirm-prod YES-PROD`。
+> 判据: `DEPLOY_EXIT=0` 且日志里 `RELEASE_FINAL_STATUS` 恰好 1 次。详见 `AGENTS.md`「部署到服务器」。
 
 ## 服务器架构
 
@@ -220,11 +232,17 @@ Maven；任一条件失败只回退一次 `mvn clean package -Dtest=<tests>`。
 
 两套环境**共享同一份 jar 但进程独立**, 默认 `--env prod` 不重启 test → **test 环境长期不被部署 → 容易宕机不被察觉** (今晚发现 test 已挂掉一段时间无人知).
 
-**推荐工作流**:
+**推荐工作流** ⛔ **已作废 (test 2026-07-13 下线, 见文件顶部横幅)**:
 ```bash
-./scripts/deploy/deploy-backend.sh --env test       # 先部 test
-# smoke test 验证业务
-./scripts/deploy/deploy-backend.sh --env prod       # 满意后部 prod (防御检查会顺手 ping test)
+# ⛔ 以下两条已不可执行, 保留仅作历史参考:
+# ./scripts/deploy/deploy-backend.sh --env test     # 先部 test —— test 环境已不存在
+# ./scripts/deploy/deploy-backend.sh --env prod     # (防御检查会顺手 ping test —— 该警告可忽略)
+
+# ✅ 现行: 常规发布走统一入口, 由它判范围; 「先部 test 再 prod」的风险由 PR 门禁 +
+#    蓝绿 idle 槽先起 + 健康观察 3 轮 + auto-rollback 承担。
+./scripts/deploy/prewarm-main-artifact.sh --tests '<tests>' --wait 420
+./scripts/deploy/release-cretas.sh --phase deploy --base-sha '<Base SHA>' \
+  --tests '<tests>' --confirm-prod YES-PROD
 ```
 
 紧急 hotfix: `./scripts/deploy/deploy-backend.sh --env all` 一次部两套.
