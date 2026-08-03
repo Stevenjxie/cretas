@@ -146,6 +146,8 @@ export async function createBulkPhotoArchive(
   details: LabelQcTaskDetail[],
   exportedAt: string = new Date().toISOString(),
 ): Promise<PhotoArchive> {
+  // Keep browser-side ZIP assembly while each task is capped at six photos and the API only exposes
+  // tenant-scoped signed URLs; remove this path once the backend offers a streamed archive or volume exceeds the browser memory budget.
   if (!details.length) {
     throw new Error('请先选择需要下载的已审核任务');
   }
