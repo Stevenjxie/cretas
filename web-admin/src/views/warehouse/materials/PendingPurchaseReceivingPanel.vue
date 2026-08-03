@@ -80,6 +80,21 @@ const receipt = ref<PurchaseReceiptDetail | null>(null);
 const warehouseOptions = ref<FactoryWarehouse[]>([]);
 const attachmentRefreshKey = ref(0);
 const attachmentQueue = ref({ pending: 0, failed: 0 });
+/**
+ * 已上传的凭证条数。
+ *
+ * 🔴 2026-08-03: 「确认收货入库」按钮此前<b>没有任何 disabled 绑定</b> —— 附件数为 0 也能点,
+ * 点完还要再过一次二次确认弹窗, 才由服务端返回「409 确认收货前必须上传供应商供货单或收货凭证」。
+ * 校验本身没错, 错在<b>太晚</b>: 用户已经点了两次才被告知一件进门就能看出来的事。
+ * 与「实际产出至少选 1 项」那处对齐 —— 按钮禁用 + title 说清为什么。
+ */
+const attachmentCount = ref(0);
+const receiptBlockReason = computed(() => {
+  if (attachmentCount.value <= 0) return '请先上传供应商供货单或收货凭证, 再确认入库';
+  if (attachmentQueue.value.pending > 0) return '附件仍在上传, 请等待完成';
+  if (attachmentQueue.value.failed > 0) return '存在上传失败的附件, 请重试或删除后再确认';
+  return '';
+});
 const customerDialogVisible = ref(false);
 const selectedCustomerTask = ref<CustomerSuppliedReceivingTask | null>(null);
 const customerConfirming = ref(false);
@@ -749,7 +764,8 @@ defineExpose({ loadTasks });
           </el-table>
           <el-divider content-position="left">供应商供货单 / 收货凭证</el-divider>
           <AttachmentList entity-type="PURCHASE_RECEIPT" :entity-id="receipt.id" :factory-id="factoryId"
-            :refresh-key="attachmentRefreshKey" empty-text="尚未上传供货凭证" />
+            :refresh-key="attachmentRefreshKey" empty-text="尚未上传供货凭证"
+            @count-change="attachmentCount = $event" />
           <AttachmentDropZone v-if="canWrite" entity-type="PURCHASE_RECEIPT" :entity-id="receipt.id" :factory-id="factoryId"
             business-tag="RECEIVE_PHOTO" file-category="PHOTO" accept="image/*,.pdf,.xlsx,.xls"
             @uploaded="attachmentRefreshKey++"
@@ -761,7 +777,9 @@ defineExpose({ loadTasks });
         <el-button @click="dialogVisible = false">关闭</el-button>
         <el-button v-if="receipt" :icon="Document" @click="safePrint('purchase-receipt', factoryId, receipt.id, { fileName: `收货单_${receipt.receiveNumber}` })">打印收货单</el-button>
         <el-button v-if="!receipt" type="primary" :loading="submitting" @click="createReceipt">创建收货单草稿</el-button>
-        <el-button v-else-if="receipt.status === 'DRAFT'" type="success" :loading="confirming" @click="confirmReceipt">确认收货入库</el-button>
+        <el-button v-else-if="receipt.status === 'DRAFT'" type="success" :loading="confirming"
+              :disabled="!!receiptBlockReason" :title="receiptBlockReason || undefined"
+              @click="confirmReceipt">确认收货入库</el-button>
       </template>
     </el-dialog>
 
