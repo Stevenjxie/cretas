@@ -51,6 +51,9 @@ const loading = ref(false);
 const rows = ref<LabelQcTaskSummary[]>([]);
 const counts = ref<Partial<Record<LabelQcTaskStatus, number>>>({});
 const selectedStatuses = ref<LabelQcTaskStatus[]>(['NEEDS_REVIEW', 'ANALYSIS_FAILED']);
+// 按生产日期筛选，配合大页容量，让"某天的货"能一次全选、一次导出。
+const productionDateRange = ref<[string, string] | null>(null);
+const PAGE_SIZES = [20, 50, 100, 200, 500];
 const pagination = ref({ page: 1, size: 20, total: 0 });
 const drawerVisible = ref(false);
 const detailLoading = ref(false);
@@ -94,6 +97,8 @@ async function load() {
       listLabelQcTasks(factoryId.value, {
         statuses: selectedStatuses.value.length ? selectedStatuses.value : undefined,
         archived: queueMode.value === 'ARCHIVED',
+        productionDateFrom: productionDateRange.value?.[0],
+        productionDateTo: productionDateRange.value?.[1],
         page: pagination.value.page,
         size: pagination.value.size,
       }),
@@ -133,6 +138,13 @@ function changeQueueMode(value: string | number | boolean | undefined) {
 
 function changePage(page: number) {
   pagination.value.page = page;
+  void load();
+}
+
+// 一页 200 / 500 条：按生产日期筛完后一次勾完导出，不用一页一页翻着导。
+function changePageSize(size: number) {
+  pagination.value.size = size;
+  pagination.value.page = 1;
   void load();
 }
 
@@ -295,7 +307,11 @@ async function backupSelectedTasks() {
   const selected = [...selectedPhotoTasks.value];
   try {
     await ElMessageBox.confirm(
-      `将把已选 ${selected.length} 批、共 ${selectedPhotoCount.value} 张照片整理成一个 ZIP。每批使用独立目录，照片仍按 SKU、提交日期和时间命名。`,
+      `将把已选 ${selected.length} 批、共 ${selectedPhotoCount.value} 张照片整理成一个 ZIP。每批使用独立目录，照片仍按 SKU、提交日期和时间命名。${
+        selectedPhotoCount.value > 100
+          ? '照片较多，打包需要几分钟，期间请不要关闭或刷新页面。'
+          : ''
+      }`,
       '确认批量下载照片？',
       {
         type: 'info',
@@ -539,6 +555,18 @@ onMounted(load);
             <el-radio-button value="MANAGE">已审核整理</el-radio-button>
             <el-radio-button value="ARCHIVED">归档记录</el-radio-button>
           </el-radio-group>
+          <el-date-picker
+            v-model="productionDateRange"
+            type="daterange"
+            unlink-panels
+            clearable
+            value-format="YYYY-MM-DD"
+            range-separator="至"
+            start-placeholder="生产日期起"
+            end-placeholder="生产日期止"
+            style="width: 280px"
+            @change="changeFilter"
+          />
           <el-select
             v-if="queueMode === 'REVIEW'"
             v-model="selectedStatuses"
@@ -733,11 +761,13 @@ onMounted(load);
       <div class="pagination-row">
         <el-pagination
           background
-          layout="total, prev, pager, next"
+          layout="total, sizes, prev, pager, next, jumper"
           :total="pagination.total"
           :page-size="pagination.size"
+          :page-sizes="PAGE_SIZES"
           :current-page="pagination.page"
           @current-change="changePage"
+          @size-change="changePageSize"
         />
       </div>
     </section>

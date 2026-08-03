@@ -158,6 +158,10 @@ export function listLabelQcTasks(
   params: {
     statuses?: LabelQcTaskStatus[];
     archived?: boolean;
+    /** 生产日期起（YYYY-MM-DD，含当天） */
+    productionDateFrom?: string;
+    /** 生产日期止（YYYY-MM-DD，含当天） */
+    productionDateTo?: string;
     page?: number;
     size?: number;
   } = {},
@@ -169,6 +173,8 @@ export function listLabelQcTasks(
       size: params.size ?? 20,
       statuses,
       archived: params.archived ?? false,
+      productionDateFrom: params.productionDateFrom || undefined,
+      productionDateTo: params.productionDateTo || undefined,
     },
   });
 }

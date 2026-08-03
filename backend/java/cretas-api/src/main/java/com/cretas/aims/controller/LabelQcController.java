@@ -18,6 +18,7 @@ import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.server.ResponseStatusException;
 
+import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.Collection;
 import java.util.List;
@@ -85,12 +86,16 @@ public class LabelQcController {
             @PathVariable String factoryId,
             @RequestParam(required = false) Collection<LabelQcTaskStatus> statuses,
             @RequestParam(defaultValue = "false") boolean archived,
+            @RequestParam(required = false)
+            @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate productionDateFrom,
+            @RequestParam(required = false)
+            @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate productionDateTo,
             @RequestParam(defaultValue = "1") @Min(1) int page,
-            @RequestParam(defaultValue = "20") @Min(1) @Max(100) int size,
+            @RequestParam(defaultValue = "20") @Min(1) @Max(500) int size,
             HttpServletRequest servletRequest) {
         trustedUser(factoryId, servletRequest);
-        return ApiResponse.success(
-                labelQcService.list(factoryId, statuses, archived, page, size));
+        return ApiResponse.success(labelQcService.list(
+                factoryId, statuses, archived, productionDateFrom, productionDateTo, page, size));
     }
 
     @GetMapping("/tasks/status-counts")

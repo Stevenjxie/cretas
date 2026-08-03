@@ -27,6 +27,15 @@ import java.util.stream.Collectors;
 public class LabelQcService {
 
     private static final int MAX_PHOTOS = 6;
+    /**
+     * 允许提前生产：车间 3 号可能在做 4 号、5 号的货，拍检时要能选到未来日期。
+     * 上限 3 天来自客户口径（"往后一天，或者往后两到三天都行"），再远就当输错拦住。
+     */
+    private static final int MAX_PRODUCTION_DATE_LOOKAHEAD_DAYS = 3;
+    private static final int MAX_PAGE_SIZE = 500;
+    /** 生产日期筛选只给了一端时，用这两个哨兵把另一端放开，避免为单端再加一组派生查询。 */
+    private static final LocalDate PRODUCTION_DATE_FLOOR = LocalDate.of(2000, 1, 1);
+    private static final LocalDate PRODUCTION_DATE_CEILING = LocalDate.of(9999, 12, 31);
 
     private final LabelQcTaskRepository taskRepository;
     private final LabelQcPhotoRepository photoRepository;
@@ -65,8 +74,12 @@ public class LabelQcService {
                     .withCode("LABEL_QC_SKU_CODE_REQUIRED")
                     .withHint("请先完善产品类型的 SKU 编码");
         }
-        if (request.productionDate().isAfter(LocalDate.now())) {
-            throw new BusinessException("生产日期不能晚于今天")
+        LocalDate latestProductionDate =
+                LocalDate.now().plusDays(MAX_PRODUCTION_DATE_LOOKAHEAD_DAYS);
+        if (request.productionDate().isAfter(latestProductionDate)) {
+            throw new BusinessException(
+                    "生产日期最多只能选到 " + latestProductionDate + "（今天起 "
+                            + MAX_PRODUCTION_DATE_LOOKAHEAD_DAYS + " 天内，支持提前生产）")
                     .withCode("LABEL_QC_PRODUCTION_DATE_FUTURE");
         }
 
@@ -213,19 +226,39 @@ public class LabelQcService {
             String factoryId,
             Collection<LabelQcTaskStatus> statuses,
             boolean archived,
+            LocalDate productionDateFrom,
+            LocalDate productionDateTo,
             int page,
             int size) {
         int safePage = Math.max(1, page);
-        int safeSize = Math.min(Math.max(1, size), 100);
+        int safeSize = Math.min(Math.max(1, size), MAX_PAGE_SIZE);
         Pageable pageable = PageRequest.of(
                 safePage - 1,
                 safeSize,
                 Sort.by(Sort.Direction.DESC, "createdAt"));
-        Page<LabelQcTask> result = statuses == null || statuses.isEmpty()
-                ? taskRepository.findByFactoryIdAndArchivedOrderByCreatedAtDesc(
-                        factoryId, archived, pageable)
-                : taskRepository.findByFactoryIdAndArchivedAndStatusInOrderByCreatedAtDesc(
-                        factoryId, archived, statuses, pageable);
+        boolean filterByProductionDate = productionDateFrom != null || productionDateTo != null;
+        LocalDate fromDate = productionDateFrom != null ? productionDateFrom : PRODUCTION_DATE_FLOOR;
+        LocalDate toDate = productionDateTo != null ? productionDateTo : PRODUCTION_DATE_CEILING;
+        if (filterByProductionDate && fromDate.isAfter(toDate)) {
+            throw new BusinessException("生产日期起始不能晚于结束日期")
+                    .withCode("LABEL_QC_PRODUCTION_DATE_RANGE_INVALID");
+        }
+        Page<LabelQcTask> result;
+        if (statuses == null || statuses.isEmpty()) {
+            result = filterByProductionDate
+                    ? taskRepository
+                            .findByFactoryIdAndArchivedAndProductionDateBetweenOrderByCreatedAtDesc(
+                                    factoryId, archived, fromDate, toDate, pageable)
+                    : taskRepository.findByFactoryIdAndArchivedOrderByCreatedAtDesc(
+                            factoryId, archived, pageable);
+        } else {
+            result = filterByProductionDate
+                    ? taskRepository
+                            .findByFactoryIdAndArchivedAndStatusInAndProductionDateBetweenOrderByCreatedAtDesc(
+                                    factoryId, archived, statuses, fromDate, toDate, pageable)
+                    : taskRepository.findByFactoryIdAndArchivedAndStatusInOrderByCreatedAtDesc(
+                            factoryId, archived, statuses, pageable);
+        }
         List<TaskSummaryResponse> content = result.getContent().stream()
                 .map(this::toSummary)
                 .toList();

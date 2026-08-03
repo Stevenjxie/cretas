@@ -11,6 +11,7 @@ import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
 import jakarta.persistence.LockModeType;
+import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.Collection;
 import java.util.List;
@@ -48,6 +49,21 @@ public interface LabelQcTaskRepository extends JpaRepository<LabelQcTask, String
             String factoryId,
             Boolean archived,
             Collection<LabelQcTaskStatus> statuses,
+            Pageable pageable);
+
+    Page<LabelQcTask> findByFactoryIdAndArchivedAndProductionDateBetweenOrderByCreatedAtDesc(
+            String factoryId,
+            Boolean archived,
+            LocalDate productionDateFrom,
+            LocalDate productionDateTo,
+            Pageable pageable);
+
+    Page<LabelQcTask> findByFactoryIdAndArchivedAndStatusInAndProductionDateBetweenOrderByCreatedAtDesc(
+            String factoryId,
+            Boolean archived,
+            Collection<LabelQcTaskStatus> statuses,
+            LocalDate productionDateFrom,
+            LocalDate productionDateTo,
             Pageable pageable);
 
     long countByFactoryIdAndStatus(String factoryId, LabelQcTaskStatus status);
