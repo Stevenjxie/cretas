@@ -148,9 +148,10 @@ allowed-tools:
 可选参数:
 ```bash
 ./scripts/deploy/deploy-backend.sh --jar v1.2             # 指定版本号
-./scripts/deploy/deploy-backend.sh --git                  # Git 部署 (服务器端编译, 用于本地无 mvn 时)
 ./scripts/deploy/deploy-backend.sh --rollback             # 回滚到上一个备份
 ```
+
+旧 `--git` 服务器拉分支并现场编译路径已删除；Java/Web 生产发布必须使用上方可信制品流程。
 
 ### 环境变量 (deploy script 启动时自动 source ~/.bashrc)
 

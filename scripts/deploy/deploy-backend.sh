@@ -14,7 +14,6 @@
 #   ./deploy-backend.sh --env test          # test in-place
 #   ./deploy-backend.sh --env all           # prod Blue-Green + test in-place
 #   ./deploy-backend.sh --mode inplace      # 强制生产 in-place (紧急回退)
-#   ./deploy-backend.sh --git               # Git 部署 (服务器端编译)
 #   ./deploy-backend.sh --rollback          # 回滚到上一备份
 
 set -e
@@ -164,16 +163,6 @@ DEPLOY_MODE="bluegreen"  # bluegreen (默认, 生产零中断) | inplace (传统
 # Parse all arguments
 while [[ $# -gt 0 ]]; do
     case "$1" in
-        --git)
-            MODE="git"
-            if [ -n "$2" ] && [[ ! "$2" =~ ^- ]]; then
-                ARG="$2"
-                shift 2
-            else
-                ARG="steven"
-                shift
-            fi
-            ;;
         --jar)
             MODE="jar"
             # --jar 可选 version 参数, 若下一个是 flag (-开头) 或无则跳过
@@ -213,7 +202,6 @@ while [[ $# -gt 0 ]]; do
             echo ""
             echo "选项:"
             echo "  --jar [version]   JAR 部署模式 (默认)"
-            echo "  --git [branch]    Git 部署模式"
             echo "  --env ENV         部署环境: prod (默认), test, all"
             echo "  --mode MODE       部署策略: bluegreen (默认, 零中断) 或 inplace (传统, 60s 中断)"
             echo "  --dry-run         仅构建和验证，不上传/部署"
@@ -254,15 +242,15 @@ while [[ $# -gt 0 ]]; do
             echo "  ./deploy-backend.sh --env test   # JAR 部署到测试"
             echo "  ./deploy-backend.sh --env all    # JAR 部署后重启两套"
             echo "  ./deploy-backend.sh --jar v1.2   # 指定版本"
-            echo "  ./deploy-backend.sh --git        # Git 部署"
             echo "  ./deploy-backend.sh --dry-run    # 仅构建验证"
             echo "  ./deploy-backend.sh --rollback   # 回滚上一版本"
             exit 0
             ;;
         *)
-            if [ -n "$1" ]; then
-                ARG="$1"
-            fi
+            case "$1" in
+                -*) echo "错误: 未知参数: $1" >&2; exit 2 ;;
+                *) ARG="$1" ;;
+            esac
             shift
             ;;
     esac
@@ -825,22 +813,6 @@ cleanup() {
     return "$exit_code"
 }
 trap cleanup EXIT
-
-# ==================== Git 部署模式 ====================
-deploy_git() {
-    local BRANCH="${1:-steven}"
-    echo "=========================================="
-    echo "  Git 部署模式 - 分支: $BRANCH"
-    echo "=========================================="
-    echo ""
-    echo "📤 推送代码到 GitHub..."
-    git push origin "$BRANCH"
-    echo ""
-    echo "🔧 触发服务器部署..."
-    ssh $SERVER "cd /www/wwwroot/cretas && ./deploy.sh $BRANCH"
-    echo ""
-    echo "✅ Git 部署完成!"
-}
 
 # ==================== JAR 部署模式 ====================
 deploy_jar() {
@@ -2248,7 +2220,6 @@ deploy_rollback() {
 # ==================== 执行 ====================
 case "$MODE" in
     jar)      deploy_jar "$ARG" ;;
-    git)      deploy_git "$ARG" ;;
     dry-run)  deploy_dry_run ;;
     rollback) deploy_rollback ;;
 esac
