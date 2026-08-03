@@ -454,7 +454,9 @@ public class RawMaterialTypeServiceImpl implements RawMaterialTypeService {
                     .withHint("请选择质量、体积、件数或合法包装单位；时间、温度、比例及未授权长度单位不可用于入库数量")
                     .withHintTarget("unit");
         }
-        return normalized.code();
+        // 落库字面值由权威函数统一决定 —— 原来直接 return normalized.code(), 把「只」写成 pcs,
+        // 也把自定义单位写成自动生成的拼音码。口径见 UnitContractService#storageUnit。
+        return unitContractService.storageUnit(factoryId, value);
     }
 
     private void ensureCategoryMatchesSegment(String requestedCategory, String l1Category) {
