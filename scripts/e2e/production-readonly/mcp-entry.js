@@ -1584,7 +1584,9 @@ const { ROUTES } = require('../config/routes');
 const { runReadOnlyPageScenario } = require('./_shared');
 const { pathnameOf } = require('../core/url-utils');
 
-const STAFFING_METRIC_KEYS = ['predictedGuests', 'staffing', 'gap', 'confidence'];
+const STAFFING_METRIC_KEYS = [
+  'reservationOrders', 'liveGuests', 'predictedGuests', 'staffing', 'gap', 'confidence',
+];
 const EXPECTED_TRANSMISSION_LABELS = [
   '今日经营汇总',
   '预订 / POS / 客流',
@@ -1599,7 +1601,7 @@ module.exports = {
   run: (ctx) => runReadOnlyPageScenario(ctx, {
     id: 'restaurant-live-command-readonly',
     path: ROUTES.dashboard,
-    landmarks: ['餐饮 AI 实时经营指挥屏', '数据传输链路', '明日预测客流'],
+    landmarks: ['餐饮 AI 实时经营指挥屏', '数据传输链路', '明日预测客流', '连锁预订事件流'],
     screenshot: true,
     inspect: async (page) => {
       await page.waitForFunction(() => {
@@ -1621,12 +1623,14 @@ module.exports = {
         .length;
       const finalPath = pathnameOf(page.url());
       const commandCount = await command.count();
+      const streamCount = await page.locator('[data-testid="restaurant-live-stream"]').count();
       const transmissionLabels = (await command.locator('.transmission-rail li strong').allInnerTexts())
         .map((label) => label.trim());
       const transmissionLabel = await command.locator('.live-command__eyebrow').innerText().catch(() => '');
       const loadError = await page.locator('.load-alert.el-alert--error').innerText().catch(() => '');
       const assessment = finalPath === ROUTES.dashboard
         && commandCount === 1
+        && streamCount === 1
         && transmissionLabels.length === EXPECTED_TRANSMISSION_LABELS.length
         && transmissionLabels.every((label, index) => label === EXPECTED_TRANSMISSION_LABELS[index])
         && populatedMetricCount === STAFFING_METRIC_KEYS.length
@@ -1636,6 +1640,7 @@ module.exports = {
       return {
         finalPath,
         commandCount,
+        streamCount,
         transmissionNodeCount: transmissionLabels.length,
         transmissionLabels,
         transmissionLabel,
