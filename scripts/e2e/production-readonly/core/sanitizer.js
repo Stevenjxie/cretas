@@ -1,5 +1,7 @@
 'use strict';
 
+const { mapQueryValues } = require('./url-utils');
+
 const SENSITIVE_KEY_RE = /authorization|cookie|password|passwd|secret|token|credential|session|jwt|set-cookie|(?:^|[_-])username(?:$|[_-])/i;
 const SAFE_STRING_KEYS = new Set(['factoryId', 'mode', 'moduleCode', 'action', 'status', 'code', 'category', 'type']);
 
@@ -16,13 +18,9 @@ function redactText(value, maxLength = 240) {
 
 function sanitizeUrl(input) {
   try {
-    const url = new URL(String(input));
-    if (url.username) url.username = '[REDACTED]';
-    if (url.password) url.password = '[REDACTED]';
-    for (const key of [...url.searchParams.keys()]) {
-      if (SENSITIVE_KEY_RE.test(key)) url.searchParams.set(key, '[REDACTED]');
-    }
-    return redactText(url.toString(), 500);
+    return redactText(mapQueryValues(String(input), (key, value) => (
+      SENSITIVE_KEY_RE.test(key) ? '[REDACTED]' : value
+    )), 500);
   } catch {
     return redactText(input, 500);
   }

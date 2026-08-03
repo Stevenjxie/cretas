@@ -15,30 +15,16 @@ function compactLoginData(body) {
   };
 }
 
-function waitForLoginOutcome(page, matchesLogin, timeoutMs = 20_000) {
-  return new Promise((resolve, reject) => {
-    const cleanup = () => {
-      clearTimeout(timer);
-      page.off('response', onResponse);
-      page.off('requestfailed', onFailed);
-    };
-    const onResponse = (response) => {
-      if (!matchesLogin(response.request())) return;
-      cleanup();
-      resolve({ type: 'response', response });
-    };
-    const onFailed = (request) => {
-      if (!matchesLogin(request)) return;
-      cleanup();
-      resolve({ type: 'failure', request });
-    };
-    const timer = setTimeout(() => {
-      cleanup();
-      reject(new Error(`UI login request was not observed within ${timeoutMs}ms`));
-    }, timeoutMs);
-    page.on('response', onResponse);
-    page.on('requestfailed', onFailed);
-  });
+async function waitForLoginOutcome(page, matchesLogin, timeoutMs = 20_000) {
+  try {
+    const response = await page.waitForResponse(
+      (candidate) => matchesLogin(candidate.request()),
+      { timeout: timeoutMs },
+    );
+    return { type: 'response', response };
+  } catch (error) {
+    throw new Error(`UI login request was not observed within ${timeoutMs}ms: ${error?.message || error}`);
+  }
 }
 
 async function performUiLogin(page, options) {

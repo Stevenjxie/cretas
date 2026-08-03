@@ -1,12 +1,14 @@
 'use strict';
 
+const { resolveUrl } = require('./url-utils');
+
 async function establishCleanSession(page, baseUrl) {
   const context = page.context();
   await context.clearCookies();
   await context.clearPermissions().catch(() => {});
   for (const worker of context.serviceWorkers()) await worker.close().catch(() => {});
   await page.goto('about:blank');
-  const loginUrl = new URL('/login', baseUrl).toString();
+  const loginUrl = resolveUrl('/login', baseUrl);
   await page.goto(loginUrl, { waitUntil: 'domcontentloaded', timeout: 45_000 });
   await page.evaluate(() => {
     localStorage.clear();

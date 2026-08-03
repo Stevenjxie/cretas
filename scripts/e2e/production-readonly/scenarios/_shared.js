@@ -1,6 +1,7 @@
 'use strict';
 
 const { createScenarioResult, assertScenarioResult } = require('../core/result-schema');
+const { pathnameOf, resolveUrl } = require('../core/url-utils');
 
 function arrayDelta(after, beforeLength) {
   return (after || []).slice(beforeLength);
@@ -15,7 +16,7 @@ async function runReadOnlyPageScenario(ctx, definition) {
   const beforeGuard = ctx.mutationGuard.snapshot();
 
   try {
-    await ctx.page.goto(new URL(definition.path, ctx.baseUrl).toString(), {
+    await ctx.page.goto(resolveUrl(definition.path, ctx.baseUrl), {
       waitUntil: 'domcontentloaded',
       timeout: definition.timeoutMs || 45_000,
     });
@@ -27,7 +28,7 @@ async function runReadOnlyPageScenario(ctx, definition) {
       expectedLandmarks: definition.landmarks || [],
       matchedLandmarks: matched,
       bodyTextLength: body.trim().length,
-      finalPath: new URL(result.url).pathname,
+      finalPath: pathnameOf(result.url),
     });
     let assessment = null;
     if (definition.inspect) {

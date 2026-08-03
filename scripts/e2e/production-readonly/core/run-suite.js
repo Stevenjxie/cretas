@@ -9,6 +9,7 @@ const { createScreenshotWriter } = require('./screenshot');
 const { writeEvidence } = require('./evidence-writer');
 const { createScenarioResult, assertScenarioResult } = require('./result-schema');
 const { sanitizeValue } = require('./sanitizer');
+const { pathnameOf } = require('./url-utils');
 
 const SCENARIOS = [
   require('../scenarios/tenant-isolation'),
@@ -20,6 +21,7 @@ const SCENARIOS = [
   require('../scenarios/workflow-readonly'),
   require('../scenarios/production-plan-routing-readonly'),
   require('../scenarios/label-qc-readonly'),
+  require('../scenarios/restaurant-staffing-readonly'),
   require('../scenarios/ui-stability'),
 ];
 
@@ -101,7 +103,7 @@ async function runSuiteWithPage(page, options = {}) {
       failure.pageEvidence.push({
         error: String(error?.message || error),
         bodyTextLength: visibleText.length,
-        finalPath: (() => { try { return new URL(page.url()).pathname; } catch { return ''; } })(),
+        finalPath: (() => { try { return pathnameOf(page.url()); } catch { return ''; } })(),
       });
       try { failure.screenshots.push(await screenshot(`${failure.scenario}-failure`)); } catch {}
       failure.durationMs = Date.now() - startedAt;
