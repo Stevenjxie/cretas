@@ -28,6 +28,17 @@ describe('label QC training lifecycle UI contract', () => {
     expect(api).toContain('/training-export');
   });
 
+  it('supports reviewed-task selection and builds one complete bulk archive before audit writes', () => {
+    expect(page).toContain('type="selection"');
+    expect(page).toContain(':selectable="canSelectForPhotoBackup"');
+    expect(page).toContain('批量下载照片');
+    expect(page).toContain('createBulkPhotoArchive');
+    expect(page.indexOf('const archive = await createBulkPhotoArchive(details);'))
+      .toBeLessThan(page.indexOf('const recordResults = await Promise.allSettled'));
+    expect(page.indexOf('const recordResults = await Promise.allSettled'))
+      .toBeLessThan(page.indexOf('downloadPhotoArchive(archive);', page.indexOf('async function backupSelectedTasks')));
+  });
+
   it('gates explicit training approval behind the system permission', () => {
     expect(page).toContain("permissions.includes('system:read_write')");
     expect(page).toContain('批准训练');

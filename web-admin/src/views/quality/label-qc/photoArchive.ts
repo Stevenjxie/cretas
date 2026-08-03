@@ -99,7 +99,9 @@ async function fetchJpeg(url: string): Promise<Uint8Array> {
   return convertToJpeg(blob, bytes);
 }
 
-export async function createPhotoArchive(detail: LabelQcTaskDetail): Promise<PhotoArchive> {
+async function createTaskPhotoEntries(
+  detail: LabelQcTaskDetail,
+): Promise<Record<string, Uint8Array>> {
   if (!detail.photos.length) {
     throw new Error('这一批没有可下载的照片');
   }
@@ -117,17 +119,67 @@ export async function createPhotoArchive(detail: LabelQcTaskDetail): Promise<Pho
     );
     entries[filename] = await fetchJpeg(photo.imageUrl);
   }
+  return entries;
+}
 
+function zipPhotoEntries(entries: Record<string, Uint8Array>): Blob {
   const archiveBytes = zipSync(entries, { level: 0 });
   const archiveBuffer = archiveBytes.buffer.slice(
     archiveBytes.byteOffset,
     archiveBytes.byteOffset + archiveBytes.byteLength,
   ) as ArrayBuffer;
+  return new Blob([archiveBuffer], { type: ZIP_MIME_TYPE });
+}
+
+export async function createPhotoArchive(detail: LabelQcTaskDetail): Promise<PhotoArchive> {
+  const entries = await createTaskPhotoEntries(detail);
+
   const basename = `${safeArchiveName(detail.task.skuName)}_${archiveTimestamp(detail.task.createdAt)}_照片备份`;
   return {
-    blob: new Blob([archiveBuffer], { type: ZIP_MIME_TYPE }),
+    blob: zipPhotoEntries(entries),
     filename: `${basename}.zip`,
-    photoCount: photos.length,
+    photoCount: detail.photos.length,
+  };
+}
+
+export async function createBulkPhotoArchive(
+  details: LabelQcTaskDetail[],
+  exportedAt: string = new Date().toISOString(),
+): Promise<PhotoArchive> {
+  if (!details.length) {
+    throw new Error('请先选择需要下载的已审核任务');
+  }
+
+  const folders = details.map((detail, index) => {
+    if (detail.task.status !== 'REVIEWED') {
+      throw new Error(`${detail.task.skuName} 尚未完成审核，不能加入批量照片备份`);
+    }
+    if (!detail.photos.length) {
+      throw new Error(`${detail.task.skuName} 这一批没有可下载的照片`);
+    }
+    const batchName = safeArchiveName(detail.task.batchNumber.trim() || '未命名批次');
+    return [
+      safeArchiveName(detail.task.skuName),
+      archiveTimestamp(detail.task.createdAt),
+      batchName,
+      twoDigits(index + 1),
+    ].join('_');
+  });
+
+  const entries: Record<string, Uint8Array> = {};
+  let photoCount = 0;
+  for (const [index, detail] of details.entries()) {
+    const taskEntries = await createTaskPhotoEntries(detail);
+    for (const [filename, bytes] of Object.entries(taskEntries)) {
+      entries[`${folders[index]}/${filename}`] = bytes;
+      photoCount += 1;
+    }
+  }
+
+  return {
+    blob: zipPhotoEntries(entries),
+    filename: `质检照片批量备份_${archiveTimestamp(exportedAt)}_${details.length}批.zip`,
+    photoCount,
   };
 }
 
