@@ -91,7 +91,7 @@ class VoucherServiceImplTest {
                 .thenReturn(Optional.empty());
         when(salesOrderRepo.findById("so-1")).thenReturn(Optional.of(order));
         when(registry.findByBusinessType("SALES_ORDER")).thenReturn(Optional.of(realGenerator));
-        when(voucherRepo.countByFactoryIdAndYear(eq("F001"), eq("2026"))).thenReturn(0L);
+        when(voucherRepo.maxVoucherSequenceByFactoryIdAndYear(eq("F001"), eq("2026"))).thenReturn(0L);
         when(voucherRepo.save(any(Voucher.class))).thenAnswer(inv -> inv.getArgument(0));
 
         Voucher v = service.createFromBusiness("F001", "SALES_ORDER", "so-1");
@@ -116,7 +116,7 @@ class VoucherServiceImplTest {
                 .thenReturn(Optional.empty());
         when(salesOrderRepo.findById("so-1")).thenReturn(Optional.of(order));
         when(registry.findByBusinessType("SALES_ORDER")).thenReturn(Optional.of(realGenerator));
-        when(voucherRepo.countByFactoryIdAndYear(eq("F001"), eq("2026"))).thenReturn(0L);
+        when(voucherRepo.maxVoucherSequenceByFactoryIdAndYear(eq("F001"), eq("2026"))).thenReturn(0L);
         when(voucherRepo.save(any(Voucher.class))).thenAnswer(inv -> {
             Voucher v = inv.getArgument(0);
             v.setId("v-new-1");
@@ -146,7 +146,7 @@ class VoucherServiceImplTest {
                 .thenReturn(Optional.empty());
         when(salesOrderRepo.findById("so-2")).thenReturn(Optional.of(order));
         when(registry.findByBusinessType("SALES_ORDER")).thenReturn(Optional.of(realGenerator));
-        when(voucherRepo.countByFactoryIdAndYear(eq("F001"), eq("2026"))).thenReturn(0L);
+        when(voucherRepo.maxVoucherSequenceByFactoryIdAndYear(eq("F001"), eq("2026"))).thenReturn(0L);
         when(voucherRepo.save(any(Voucher.class))).thenAnswer(inv -> {
             Voucher v = inv.getArgument(0);
             v.setId("v-new-2");
@@ -178,7 +178,7 @@ class VoucherServiceImplTest {
                 .thenReturn(Optional.empty());
         when(registry.findByBusinessType("DEPRECATION"))
                 .thenReturn(Optional.of(new DepreciationVoucherGenerator()));
-        when(voucherRepo.countByFactoryIdAndYear(eq("F001"), eq("2026"))).thenReturn(5L);
+        when(voucherRepo.maxVoucherSequenceByFactoryIdAndYear(eq("F001"), eq("2026"))).thenReturn(5L);
         when(voucherRepo.save(any(Voucher.class))).thenAnswer(inv -> inv.getArgument(0));
 
         Map<String, Object> input = Map.of(
@@ -288,7 +288,7 @@ class VoucherServiceImplTest {
 
         when(voucherRepo.findByIdAndFactoryIdAndDeletedAtIsNull("v-orig", "F001"))
                 .thenReturn(Optional.of(original));
-        when(voucherRepo.countByFactoryIdAndYear("F001", "2026")).thenReturn(7L);
+        when(voucherRepo.maxVoucherSequenceByFactoryIdAndYear("F001", "2026")).thenReturn(7L);
         when(voucherRepo.save(any(Voucher.class))).thenAnswer(inv -> {
             Voucher v = inv.getArgument(0);
             if (v.getId() == null) v.setId("v-reversal");
@@ -363,7 +363,7 @@ class VoucherServiceImplTest {
 
         when(voucherRepo.findByIdAndFactoryIdAndDeletedAtIsNull("v-tax", "F001"))
                 .thenReturn(Optional.of(original));
-        when(voucherRepo.countByFactoryIdAndYear("F001", "2026")).thenReturn(10L);
+        when(voucherRepo.maxVoucherSequenceByFactoryIdAndYear("F001", "2026")).thenReturn(10L);
         when(voucherRepo.save(any(Voucher.class))).thenAnswer(inv -> {
             Voucher v = inv.getArgument(0);
             if (v.getId() == null) v.setId("v-rev-tax");
@@ -418,7 +418,7 @@ class VoucherServiceImplTest {
     void createCashMovementVoucher_receipt_buildsBalancedDraftWithCustomerAux() {
         when(voucherRepo.findBySourceBusinessTypeAndSourceBusinessIdAndDeletedAtIsNull("CASH_RECEIPT", "txn-1"))
                 .thenReturn(Optional.empty());
-        when(voucherRepo.countByFactoryIdAndYear(eq("F001"), eq("2026"))).thenReturn(0L);
+        when(voucherRepo.maxVoucherSequenceByFactoryIdAndYear(eq("F001"), eq("2026"))).thenReturn(0L);
         when(voucherRepo.save(any(Voucher.class))).thenAnswer(inv -> inv.getArgument(0));
 
         java.util.List<VoucherEntry> entries = java.util.List.of(
@@ -531,5 +531,21 @@ class VoucherServiceImplTest {
         assertNotNull(missing.getMessage());
         assertTrue(ok.isSuccess(), "一张失败不应阻断其余凭证的过账结果");
         assertEquals(VoucherStatus.POSTED, good.getStatus());
+    }
+
+    @org.junit.jupiter.api.Test
+    @org.junit.jupiter.api.DisplayName("🔴 号段已用到 0302 而未删只剩 66 时, 下一个号必须是 0303 而不是 0067")
+    void voucherNumberFollowsMaxSequenceNotRowCount() {
+        // prod 实证 (F006, 2026-08-03): 2026 年凭证总 302 条 / 未删仅 66 / 最大号 V-2026-0302。
+        // 旧实现按「未删条数+1」→ V-2026-0067, 那个号早被占了 → 期初建账固定 409 数据已存在,
+        // 且每次算出同一个号 = 永久撞。此前被误记成「同一工厂当天只能期初建账一次」的额度。
+        when(voucherRepo.maxVoucherSequenceByFactoryIdAndYear(eq("F006"), eq("2026"))).thenReturn(302L);
+        // 只调私有的号码生成, 不落库 —— 多 stub 一个 save 会被严格模式判为 UnnecessaryStubbing
+        String generated = (String) org.springframework.test.util.ReflectionTestUtils.invokeMethod(
+                service, "generateVoucherNumber", "F006", java.time.LocalDate.of(2026, 8, 3));
+
+        org.assertj.core.api.Assertions.assertThat(generated)
+                .as("必须接在已占用的最大号之后, 不能回到被软删行让出的空档")
+                .isEqualTo("V-2026-0303");
     }
 }

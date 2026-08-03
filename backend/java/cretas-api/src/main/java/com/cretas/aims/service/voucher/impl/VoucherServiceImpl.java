@@ -643,10 +643,20 @@ public class VoucherServiceImpl implements VoucherService {
         }
     }
 
+    /**
+     * 凭证号 = {@code V-<年>-<已占用最大序号+1>}。
+     *
+     * <p>🔴 2026-08-03: 原来用的是「未删<b>条数</b>+1」。软删过凭证的工厂, 条数与已占号段就此脱节,
+     * 生成的号必撞已存在的号, 且每次算出同一个号 —— <b>永久撞</b>。
+     * prod 实证 F006: 总 302 条 / 未删 66 / 最大号 V-2026-0302 → 生成 V-2026-0067 → 必然
+     * {@code 409 数据已存在}。期初建账因此从某一刻起彻底不可用, 却被记成「每天只能一次」的额度。
+     *
+     * <p>取最大序号且<b>不排除软删</b>: 号段发出就不回收, 软删的凭证仍占着它的号。
+     */
     private String generateVoucherNumber(String factoryId, LocalDate voucherDate) {
         String year = String.valueOf(voucherDate != null ? voucherDate.getYear() : LocalDate.now().getYear());
-        long count = voucherRepo.countByFactoryIdAndYear(factoryId, year);
-        return String.format("V-%s-%04d", year, count + 1);
+        long maxSeq = voucherRepo.maxVoucherSequenceByFactoryIdAndYear(factoryId, year);
+        return String.format("V-%s-%04d", year, maxSeq + 1);
     }
 
     /**
