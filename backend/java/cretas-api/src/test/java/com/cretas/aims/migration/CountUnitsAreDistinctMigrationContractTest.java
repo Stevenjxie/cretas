@@ -90,8 +90,8 @@ class CountUnitsAreDistinctMigrationContractTest {
         // 批次跟随档案的那条 UPDATE 必须要求「档案存的正是该中文写法的权威码」,
         // 即 r.unit = m.code —— 有它才排除得掉 档案kg / 批次箱 这种量纲错配。
         assertThat(sql)
-                .as("少了 r.unit = m.code, 任何中文批次单位都会被改成档案单位, 含量纲不同的")
-                .contains("r.unit = m.code");
+                .as("少了 rt.unit = m.code, 任何中文批次单位都会被改成档案单位, 含量纲不同的")
+                .contains("rt.unit = m.code");
         assertThat(sql)
                 .as("量纲错配的行应通过 RAISE NOTICE 报给人工")
                 .contains("[待人工]");

@@ -28,6 +28,25 @@
 --   material_batches  : 现有 件3 / 个2 且<b>一条 pcs 批次都没有</b> ——
 --                       还原后档案与这 5 行批次自动对上 (原「档案 pcs vs 批次 件/个」的混写)
 --
+-- prod 干跑实测 (2026-08-03, 事务内 BEGIN...ROLLBACK)
+--   还原计数单位: raw_material_types=72 行 (个67/只3/件2), product_types=41 行
+--                (台账 50 行, 9 行当前值已非 pcs = 期间被人改过, 正确跳过不覆盖)
+--   批次跟随档案(纯翻译型): 3 行 (盒→box 1, 箱→case 2)
+--   混写 11 → 3, 反向检查 box=8/case=7 且中文 0 行 → 「存量不动」守住
+--   剩下 3 行走 [待人工], 未改
+--
+-- ⚠️ 干跑当场抓到一个会让 Flyway 启动失败的 bug: 第二个 DO 块声明了 RECORD 变量 r,
+--    又拿 r 当表别名, PL/pgSQL 把 r.unit 解析成那个未赋值的变量 →
+--    "record r is not assigned yet"。已改名为 rt。<b>不干跑就会在部署时炸。</b>
+--
+-- 📌 那 3 行 [待人工] 的查证结论 (别照着"箱是错误单位"一刀切):
+--   带鱼 (F001 / DEMO_FACTORY, 同一测试批次号, EXPIRED): <b>确实是错的</b> ——
+--     material_packaging_specs 里没有任何 箱→? 换算, 「箱」无定义。
+--   SHH0713羊排 (F006): <b>不是错的</b> —— 有 箱→kg conversion_factor=10 的规格,
+--     该批 10 箱 = 100 kg, 正对得上交接记的「羊排原料仓 100kg 全过期」。
+--     若按"箱是错误单位"改成 kg, 100kg 会静默变成 10kg, 凭空蒸发 90kg。
+--   本迁移的判据 (rt.unit = m.code, 量纲不同就不翻译) 恰好把三行都放过, 没误伤。
+
 -- 回滚
 --   db/manual-rollback/V20261029_50__count_units_are_distinct_rollback.sql
 -- =============================================================================
@@ -99,20 +118,23 @@ INSERT INTO _zh_to_code VALUES
 DO $$
 DECLARE
     v_batch INT := 0;
-    r RECORD;
+    rec RECORD;
 BEGIN
+    -- ⚠️ 表别名不能叫 r —— 本块声明了 RECORD 变量, PL/pgSQL 会把 r.unit 解析成那个<b>未赋值的
+    -- 变量</b>而不是表别名, 报 "record r is not assigned yet"。prod 干跑当场抓到, 否则这条
+    -- 迁移会让 Flyway 在服务启动时直接失败。
     UPDATE material_batches b
-    SET quantity_unit = r.unit, updated_at = NOW()
-    FROM raw_material_types r, _zh_to_code m
-    WHERE r.id = b.material_type_id
-      AND b.deleted_at IS NULL AND r.deleted_at IS NULL
+    SET quantity_unit = rt.unit, updated_at = NOW()
+    FROM raw_material_types rt, _zh_to_code m
+    WHERE rt.id = b.material_type_id
+      AND b.deleted_at IS NULL AND rt.deleted_at IS NULL
       AND b.quantity_unit = m.zh          -- 批次存中文
-      AND r.unit = m.code;                -- 档案存的正是它的权威码 → 同一个单位
+      AND rt.unit = m.code;               -- 档案存的正是它的权威码 → 同一个单位
     GET DIAGNOSTICS v_batch = ROW_COUNT;
     RAISE NOTICE 'V20261029_50 批次单位跟随档案(纯翻译型): % 行', v_batch;
 
     -- 量纲对不上的, 只报不改
-    FOR r IN
+    FOR rec IN
         SELECT b.factory_id, b.batch_number, rt.name AS material,
                rt.unit AS archive_unit, b.quantity_unit AS batch_unit, b.receipt_quantity
         FROM material_batches b JOIN raw_material_types rt ON rt.id = b.material_type_id
@@ -121,6 +143,7 @@ BEGIN
           AND (b.quantity_unit ~ '[一-龥]' OR rt.unit ~ '[一-龥]')
     LOOP
         RAISE NOTICE 'V20261029_50 [待人工] %/% 物料=% 档案单位=% 批次单位=% 数量=%',
-            r.factory_id, r.batch_number, r.material, r.archive_unit, r.batch_unit, r.receipt_quantity;
+            rec.factory_id, rec.batch_number, rec.material, rec.archive_unit,
+            rec.batch_unit, rec.receipt_quantity;
     END LOOP;
 END $$;
