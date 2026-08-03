@@ -66,7 +66,18 @@ interface Props {
 }
 
 const props = defineProps<Props>();
-const emit = defineEmits<{ deleted: [att: Attachment] }>();
+const emit = defineEmits<{
+  deleted: [att: Attachment];
+  /**
+   * 当前附件条数。调用方要据此判断「有没有传凭证」时用。
+   *
+   * 🔴 2026-08-03: 收货面板的「确认收货入库」按钮此前<b>没有任何 disabled 绑定</b> ——
+   * 一个附件都没有也能点, 点完还要过一次二次确认弹窗, 才由服务端返回
+   * 「409 确认收货前必须上传供应商供货单或收货凭证」。这个组件当时只 emit deleted,
+   * 调用方拿不到条数, 想禁用也无从判断。
+   */
+  countChange: [count: number];
+}>();
 
 const list = ref<Attachment[]>([]);
 const loading = ref(false);
@@ -79,12 +90,14 @@ async function load(): Promise<void> {
   try {
     const r = await listAttachments(props.entityType, props.entityId, props.factoryId);
     list.value = r.data ?? [];
+    emit('countChange', list.value.length);
   } catch (e: unknown) {
     // Issue #750 — 附件区显示"用户数据无效" multi-page bug.
     // 区分两类错误:
     //   (a) factoryId 解析失败 (auth/账号问题) → 友好显示空态, 不要红色 alert 吓客户
     //   (b) API 调用失败 (网络/权限/服务) → 红色 alert
     list.value = [];
+    emit('countChange', 0);   // 加载失败时按「没有附件」处理 —— 宁可挡住也别放行没凭证的入库
     const msg = e instanceof Error ? e.message : '加载附件失败';
     const isAuthIssue = /未登录|登录态|绑定工厂|factoryId/i.test(msg);
     if (isAuthIssue) {
@@ -117,6 +130,7 @@ async function handleDelete(att: Attachment): Promise<void> {
     });
     await deleteAttachment(att.id, props.factoryId);
     list.value = list.value.filter((x) => x.id !== att.id);
+    emit('countChange', list.value.length);
     emit('deleted', att);
     ElMessage.success('已删除');
   } catch (e: unknown) {

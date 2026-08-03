@@ -239,7 +239,7 @@ public class ProductTypeServiceImpl implements ProductTypeService {
         productType.setSpecification(dto.getSpecification());
         productType.setRelatedCustomer(dto.getRelatedCustomer());
         productType.setImageUrl(dto.getImageUrl());
-        productType.setProductCategory(dto.getProductCategory());
+        productType.setProductCategory(requireProductCategory(dto));
         productType.setTemperatureZone(dto.getTemperatureZone());
         applyNetContentContract(productType, dto, false);
         productType.setWipToFgYield(dto.getWipToFgYield());
@@ -482,6 +482,33 @@ public class ProductTypeServiceImpl implements ProductTypeService {
                 existing.getUnit() == null ? null : existing.getUnit().trim())) {
             throw migrationRequired("基本单位");
         }
+    }
+
+    /**
+     * SKU 大类必填 —— 创建时缺了就<b>当场报错</b>, 不静默落空。
+     *
+     * <p>🔴 2026-08-03: 这里原来是 {@code setProductCategory(dto.getProductCategory())} 裸传,
+     * 传空就存空。后果不是马上可见, 而是绕一圈才炸: Workflow 校验读的正是
+     * {@code product_category}, 于是报
+     * {@code 400 半成品 Cell 只能绑定 SEMI_FINISHED 分类 SKU, 当前分类: 未分类}。
+     * 想回头补 → {@link #assertUnitChangeDoesNotBypassMigration} 又用
+     * {@code SKU_UNIT_MIGRATION_REQUIRED} 挡住, <b>哪怕这个 SKU 是刚建的、零库存零单据</b>
+     * (那道守卫只比对值变没变, 并不真查库存)。前一轮因此只能删掉重建。
+     *
+     * <p>从源头堵住比事后放宽那道守卫安全: 守卫保护的是「历史数量口径不被普通编辑重新解释」,
+     * 放宽它要能证明真的零痕迹; 而创建期必填没有这个负担。
+     */
+    private String requireProductCategory(ProductTypeDTO dto) {
+        String category = dto.getProductCategory();
+        if (category == null || category.isBlank()) {
+            throw new BusinessException(400, "请选择 SKU 大类(成品 / 半成品 / 原料等)")
+                    .withCode("PRODUCT_CATEGORY_REQUIRED")
+                    .withHint("大类决定该 SKU 能绑到 Workflow 的哪种节点; 建好后不能在普通编辑里改, "
+                            + "所以创建时必须选定")
+                    .withHintTarget("productCategory")
+                    .withSeverity("BLOCKING");
+        }
+        return category;
     }
 
     private BusinessException migrationRequired(String field) {
