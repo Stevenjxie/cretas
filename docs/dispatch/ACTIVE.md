@@ -5,7 +5,6 @@
 
 ## 在飞任务
 
-- `FIX-RESTAURANT-AI-CLARIFICATION-MARKER-20260803` — `in-progress` — Owner: `/root` — Base SHA: `24b1df0280e8fc869d9fd8a4a5438ca29390ad4b` — 生产四问验收发现历史人效澄清文本仍含已执行结果标识“预测排班 FactBook”；仅收窄该澄清文案并加强对应测试/85 例电池断言，不改 FactBook、预测算法或 LLM 路由。验收：相关 Python 目标测试、Ruff fatal、compileall、`git diff --check`、exact-main preflight、四条生产只读问答，业务写入 0。
 - `CX-SHEET-VISUAL-20260731-001` — `review` — Owner: `/root` — Base SHA: `f06f8e03115f49f99d337290510222d22246bc0f` — 客户 2026-07-31 生产走查 6 项展示反馈已实现；目标 Web 56/56、Java 17/17、调用点变异检验、`vue-tsc -b --force`、Vite build 与 diff check 均通过。全量 Vitest 两次最终稳定为任务卡声明的 4 个已知红测；开工实测曾额外出现 1 个 `ProductProcessWorkflowEditor.loadIsolation.spec.ts`，该文件随后单跑 26/26 且两次全量均通过，故开工/最终实测集合未逐一相同但无新增红测。生产只读查得 F006 简称 `22` 有 2 条重复；新 migration 明确报冲突并中止，不自动改业务数据。仅推送分支，不开 PR、不合并、不部署，生产业务写入为 0。
 - `AUDIT-RESTAURANT-SYNTHESIS-RETENTION-20260727` — `review` — Owner: `/root` — Base SHA: `c1e4ed173eb8487e1af7d3b5cb3617c5e638e806` — 审计 2026-07-27 Web 统一 intent 路由后是否遗留无消费者的综合 synthesis 适配器；已确认 Java Gold、`mobile-rest-ai` 与 Web `ChartInsights` 仍直接消费 comprehensive synthesis，故仅补兼容层保留价值与删除条件注释，不改变运行行为。目标 Vitest 18/18 与 `git diff --check` 已通过；只创建 review marker 分支，严格 `NOT_DEPLOYED`、生产零写。
 - `SEC-CREDENTIAL-ROTATION-20260719` — `blocked` — Owner: Codex coordinator — Base SHA: `1ba9a241a77144a80851051efbac584abf4db69d` — tracked tree、47/139 非受控副本、数据库/JWT/internal/BaoTa 轮换和生产验收已完成；仍需各供应商控制台吊销无法由当前 API 权限完成的旧长期凭证，详情见 [凭证轮换收尾记录](../security/credential-rotation-closeout-2026-07-20.md)。

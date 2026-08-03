@@ -215,6 +215,7 @@ def test_historical_staffing_question_fails_closed_before_factbook(monkeypatch):
     assert result.kpis == []
     assert "不能把它偷换成明天" in result.answer_text
     assert "历史人效只作为预测依据" in result.answer_text
+    assert "预测排班 FactBook" not in result.answer_text
     answer.assert_not_awaited()
 
 
