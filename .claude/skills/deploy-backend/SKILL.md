@@ -59,15 +59,20 @@ allowed-tools:
 
 > ⚠️ test 环境已于 2026-07-13 下线（见 server-operations skill）。下文 `--env test` / 10011 相关内容暂留作历史参考；部 prod 后"防御 ping test"的警告可忽略。
 
-**从 GitHub 取制品送上服务器**（≠ 上面的常规发布，别混）：走
+**从 GitHub 取制品送上服务器**：走
 `scripts/deploy/Publish-GitHubArtifactViaLightsailOss.ps1`，链路
 `GitHub → 东京 Lightsail → 上海 OSS → ECS 内网`，制品字节**完全不经过 Windows**
 （实测 168MB 只让本机收 0.30%）。支持 release asset（`-AssetId`）与 CI artifact
 （`-ArtifactId`，zip 在东京解包）。细节见 [`scripts/deploy/RELEASE-ARTIFACT-TRANSPORT.md`](../../../scripts/deploy/RELEASE-ARTIFACT-TRANSPORT.md)。
 
-- ⚠️ **它不加速常规发布**：常规发布的 JAR 是本地 Maven 构建的，根本不从 GitHub 下载，
-  第一跳就接不上；且 rsync delta 实测 9.6×（只传 ~20MB）而 OSS PUT 无 delta 必传全量。
-  它买的是「Windows 退出数据通路 + 制品可追溯」，**不是快**。
+- ⚠️ **它已经是常规发布的默认路径，不是旁路**（此处原写「不加速常规发布」，
+  已随 PR#2061 `--prefer-ci-artifact` 默认开而作废）：上面 ③ 的 `release-cretas.sh`
+  会调 `release-ci-artifact.sh` → 这个 ps1 复用 CI 已构建的 JAR，命中时 Java 侧
+  **零次 Maven**（构建段 204s → 25s）；Web 侧同理走 `release-web-ci-artifact.sh`。
+  所以 ② 的预热不是可选优化，它决定 ③ 能不能命中。
+- ⚠️ 未命中才回退**本地 Maven 构建 + rsync delta**（delta 实测 9.6×、只传 ~20MB，
+  而 OSS PUT 无 delta 必传全量）。两条路各自占优的场景不同，别据此认为本地构建总是更快。
+  手工传 `-AssetId` / `-ArtifactId` 直接调 ps1 仍是排查与人工回退用途。
 - ⚠️ **传输成功 ≠ 制品可信**：输出里 `transport_verified` 与 `deployable_trust_verified`
   是两件事，后者只在 manifest 的 tree/测试选择器都对得上时才为 true。
 - 排查用途（要在本机看 CI 测试报告）用 `~/github-cache-tools/fetch-ci-artifact.sh`，
