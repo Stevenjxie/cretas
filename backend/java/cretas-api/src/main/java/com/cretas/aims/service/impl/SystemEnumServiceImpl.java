@@ -12,6 +12,11 @@ import com.cretas.aims.service.unit.UnitConversionContext;
 import com.cretas.aims.service.unit.UnitConversionResult;
 import com.cretas.aims.service.unit.impl.UnitContractServiceImpl;
 import lombok.extern.slf4j.Slf4j;
+import net.sourceforge.pinyin4j.PinyinHelper;
+import net.sourceforge.pinyin4j.format.HanyuPinyinCaseType;
+import net.sourceforge.pinyin4j.format.HanyuPinyinOutputFormat;
+import net.sourceforge.pinyin4j.format.HanyuPinyinToneType;
+import net.sourceforge.pinyin4j.format.exception.BadHanyuPinyinOutputFormatCombination;
 import org.springframework.cache.annotation.CacheEvict;
 import org.springframework.cache.annotation.Cacheable;
 import org.springframework.stereotype.Service;
@@ -38,6 +43,9 @@ import java.util.stream.Collectors;
 @Slf4j
 @Service
 public class SystemEnumServiceImpl implements SystemEnumService {
+
+    /** {@code unit_of_measurements.unit_code} 的列宽 —— 自动生成的拼音码必须截到这个长度内。 */
+    private static final int UNIT_CODE_MAX_LENGTH = 20;
 
     private final SystemEnumRepository systemEnumRepository;
     private final UnitOfMeasurementRepository unitOfMeasurementRepository;
@@ -286,7 +294,98 @@ public class SystemEnumServiceImpl implements SystemEnumService {
                     .withHintTarget("unitCode");
         }
 
+        fillGeneratedIdentifiers(unit);
         return unitOfMeasurementRepository.save(unit);
+    }
+
+    /**
+     * 只填中文也能建单位 —— 缺的英文码按中文名生成拼音。
+     *
+     * <p>Steve 2026-08-03: 「单位创建允许纯中文, 英文码自动生成, 不好翻译用拼音」。
+     * 挡点从来不在校验({@link #findUnitConflict} 只要求「代码、名称或符号至少填一项」),
+     * 而在列约束 {@code unit_code NOT NULL} / {@code base_unit NOT NULL}。
+     * <b>所以不把列改成可空</b> —— 服务端补齐即可同时满足「用户只填中文」和「码非空」,
+     * 省掉一条 DDL 迁移, 也保住这两个真约束。
+     *
+     * <p>码只是内部标识; 面向用户显示与<b>落库的单位字面值</b>都走中文名
+     * (见 {@code UnitContractService#storageUnit} 规则 3) —— 存 {@code banzhi} 既不可读也不可追溯。
+     */
+    private void fillGeneratedIdentifiers(UnitOfMeasurement unit) {
+        if (isBlank(unit.getUnitCode())) {
+            unit.setUnitCode(generateUnitCode(unit.getFactoryId(), unit.getUnitName()));
+        }
+        if (isBlank(unit.getBaseUnit())) {
+            // 自定义单位换算因子恒为 1, 自成基准; 不兜底会直接炸在 base_unit NOT NULL 上
+            unit.setBaseUnit(unit.getUnitCode());
+        }
+    }
+
+    /** 中文名 → 小写拼音码; 同厂撞车时加序号。列宽 20, 超出截断后再判重。 */
+    private String generateUnitCode(String factoryId, String unitName) {
+        String base = toPinyinSlug(unitName);
+        if (base.isEmpty()) {
+            // 纯符号名拼不出拼音, 也不能写空 —— 退回稳定的短哈希, 保证 NOT NULL 且同名同码
+            base = "u" + Integer.toHexString(
+                    (unitName == null ? "" : unitName).hashCode() & 0x7fffffff);
+        }
+        if (base.length() > UNIT_CODE_MAX_LENGTH) {
+            base = base.substring(0, UNIT_CODE_MAX_LENGTH);
+        }
+        Set<String> taken = unitOfMeasurementRepository.findAllByFactoryId(factoryId).stream()
+                .map(UnitOfMeasurement::getUnitCode)
+                .filter(Objects::nonNull)
+                .map(code -> code.toLowerCase(Locale.ROOT))
+                .collect(Collectors.toSet());
+        if (!taken.contains(base)) {
+            return base;
+        }
+        for (int suffix = 2; suffix < 1000; suffix++) {
+            String numbered = suffix(base, suffix);
+            if (!taken.contains(numbered)) {
+                return numbered;
+            }
+        }
+        throw new BusinessException(409, "同名单位过多，无法自动生成单位代码: " + unitName)
+                .withCode("UNIT_CODE_GENERATION_EXHAUSTED")
+                .withHint("请手工指定一个英文单位代码")
+                .withHintTarget("unitCode");
+    }
+
+    /** 加序号时先给序号留位, 否则截断后可能又撞上。 */
+    private static String suffix(String base, int number) {
+        String tail = String.valueOf(number);
+        String head = base.length() + tail.length() > UNIT_CODE_MAX_LENGTH
+                ? base.substring(0, UNIT_CODE_MAX_LENGTH - tail.length())
+                : base;
+        return head + tail;
+    }
+
+    private static String toPinyinSlug(String value) {
+        if (value == null) {
+            return "";
+        }
+        HanyuPinyinOutputFormat format = new HanyuPinyinOutputFormat();
+        format.setCaseType(HanyuPinyinCaseType.LOWERCASE);
+        format.setToneType(HanyuPinyinToneType.WITHOUT_TONE);
+        StringBuilder slug = new StringBuilder();
+        for (char ch : value.toCharArray()) {
+            try {
+                String[] pinyin = PinyinHelper.toHanyuPinyinStringArray(ch, format);
+                if (pinyin != null && pinyin.length > 0) {
+                    slug.append(pinyin[0]);
+                } else if (Character.isLetterOrDigit(ch)) {
+                    slug.append(Character.toLowerCase(ch));   // 非汉字的字母数字原样保留
+                }
+                // 其余(括号/空格/符号)一律丢弃
+            } catch (BadHanyuPinyinOutputFormatCombination e) {
+                log.warn("单位名拼音转换异常, 跳过该字: unitName={}, char={}", value, ch);
+            }
+        }
+        return slug.toString();
+    }
+
+    private static boolean isBlank(String value) {
+        return value == null || value.isBlank();
     }
 
     private UnitConflict findUnitConflict(UnitOfMeasurement requested) {

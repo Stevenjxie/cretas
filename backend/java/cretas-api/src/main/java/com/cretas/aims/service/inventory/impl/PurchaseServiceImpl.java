@@ -2702,6 +2702,20 @@ public class PurchaseServiceImpl implements PurchaseService {
         return conversionFactor(factoryId, orderItem.getMaterialTypeId(), orderUnit, baseUnit);
     }
 
+    /**
+     * 落库到 {@code material_batches.quantity_unit} 的单位字面值 —— 走全系统唯一口径
+     * {@link com.cretas.aims.service.unit.UnitContractService#storageUnit}, 与物料档案同源。
+     *
+     * <p>与 {@link #canonicalUnitOrRaw} 的分工: 那个是<b>比较/查规格</b>用的等价码(可以塌陷),
+     * 这个是<b>落库</b>用的字面值(不能塌陷, 「只」必须还是「只」)。
+     */
+    private String canonicalStorageUnit(String factoryId, String rawUnit) {
+        if (rawUnit == null || rawUnit.isBlank() || unitContractService == null) {
+            return rawUnit;
+        }
+        return unitContractService.storageUnit(factoryId, rawUnit);
+    }
+
     private String canonicalUnitOrRaw(String factoryId, String rawUnit) {
         if (rawUnit == null || rawUnit.isBlank() || unitContractService == null) {
             return rawUnit;
@@ -3019,7 +3033,14 @@ public class PurchaseServiceImpl implements PurchaseService {
         batch.setSupplierId(record.getSupplierId());
         BigDecimal inventoryQuantity = item.getInventoryQuantitySnapshot() != null
                 ? item.getInventoryQuantitySnapshot() : item.getReceivedQuantity();
-        String inventoryUnit = firstNonBlank(item.getInventoryBaseUnitSnapshot(), item.getUnit());
+        // 🔴 2026-08-03: 这里原来是<b>裸抄</b> —— 采购单行写的什么就往批次里写什么。
+        // 档案侧 RawMaterialTypeServiceImpl#normalizeInventoryUnit 走权威归一存 box,
+        // 而收货把单行的中文「盒」原样抄进 material_batches.quantity_unit → 同一物料两处写法不同,
+        // 按单位精确匹配的可用量查询就把整批滤掉: F006「成品盒」有 10000 却报「可用 0 box」
+        // (docs/dispatch/2026-08-02-f006-minloop-issues.md P0-1)。
+        // 两侧必须从同一个权威函数取值, 才谈得上字面比较。
+        String inventoryUnit = canonicalStorageUnit(
+                factoryId, firstNonBlank(item.getInventoryBaseUnitSnapshot(), item.getUnit()));
         batch.setReceiptQuantity(inventoryQuantity);
         batch.setUsedQuantity(BigDecimal.ZERO);
         batch.setReservedQuantity(BigDecimal.ZERO);

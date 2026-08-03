@@ -73,9 +73,10 @@ public class ProductTypeServiceImpl implements ProductTypeService {
             return value.isEmpty() ? value : value;
         }
         try {
-            com.cretas.aims.service.unit.UnitNormalizationResult normalized =
-                    unitContractService.normalize(factoryId, value);
-            return normalized.recognized() ? normalized.code() : value;
+            // 落库字面值由权威函数统一决定(与原料侧同一个) —— 原来是 normalized.code(),
+            // 会把「只」写成 pcs、把自定义单位写成自动生成的拼音码。
+            // storageUnit 的规则 1 本身就是「认不出原样返回」, 与这里原有策略一致。
+            return unitContractService.storageUnit(factoryId, value);
         } catch (RuntimeException e) {
             // 归一失败不该挡住建品 —— 原样存, 由展示层兜底
             log.warn("成品单位归一失败, 原样保留: factoryId={}, unit={}, err={}", factoryId, value, e.getMessage());
