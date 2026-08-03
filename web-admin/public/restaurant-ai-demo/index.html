@@ -1,0 +1,582 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="白垩纪餐饮 AI 完整演示手册：实时数据链路、部门流程、图表讲法、AI 防黑盒与演示脚本。">
+  <title>白垩纪餐饮 AI · 完整演示手册</title>
+  <style>
+    :root {
+      --ink: #14251f;
+      --ink-2: #203a31;
+      --paper: #f3efe4;
+      --paper-2: #fffdf7;
+      --mint: #38d39f;
+      --mint-dark: #168968;
+      --amber: #f4a942;
+      --red: #df655f;
+      --blue: #4f8fda;
+      --line: rgba(20, 37, 31, .15);
+      --muted: #66736d;
+      --shadow: 0 20px 55px rgba(23, 42, 35, .10);
+      --radius: 22px;
+    }
+
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; scroll-padding-top: 24px; }
+    body {
+      margin: 0;
+      color: var(--ink);
+      background:
+        linear-gradient(rgba(20, 37, 31, .035) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(20, 37, 31, .035) 1px, transparent 1px),
+        var(--paper);
+      background-size: 28px 28px;
+      font-family: "Noto Sans SC", "Microsoft YaHei UI", "PingFang SC", sans-serif;
+      line-height: 1.7;
+    }
+    a { color: inherit; }
+    button, a { -webkit-tap-highlight-color: transparent; }
+    button { font: inherit; }
+
+    .layout { display: grid; grid-template-columns: 248px minmax(0, 1fr); min-height: 100vh; }
+    .rail {
+      position: sticky;
+      top: 0;
+      height: 100vh;
+      padding: 26px 22px;
+      color: #eaf8f2;
+      background: var(--ink);
+      overflow-y: auto;
+    }
+    .brand { display: flex; gap: 12px; align-items: center; margin-bottom: 32px; }
+    .brand-mark {
+      display: grid;
+      width: 42px;
+      height: 42px;
+      place-items: center;
+      color: var(--ink);
+      background: var(--mint);
+      border-radius: 13px 4px 13px 4px;
+      font-family: ui-monospace, "Cascadia Mono", monospace;
+      font-size: 20px;
+      font-weight: 900;
+    }
+    .brand strong, .brand small { display: block; }
+    .brand strong { font-family: "Noto Serif SC", "Songti SC", serif; font-size: 15px; }
+    .brand small { color: #95afa4; font-size: 10px; letter-spacing: .08em; }
+    .rail-label { margin: 24px 0 8px; color: #67867a; font-size: 10px; letter-spacing: .16em; }
+    .rail nav { display: grid; gap: 3px; }
+    .rail nav a {
+      padding: 9px 10px;
+      color: #9fbbb0;
+      border-left: 2px solid transparent;
+      text-decoration: none;
+      font-size: 12px;
+      transition: .2s ease;
+    }
+    .rail nav a:hover, .rail nav a:focus-visible, .rail nav a.active {
+      color: #fff;
+      background: rgba(56, 211, 159, .08);
+      border-left-color: var(--mint);
+      outline: none;
+    }
+    .rail-foot { margin-top: 30px; color: #78958a; font-size: 10px; }
+
+    main { min-width: 0; }
+    .hero {
+      position: relative;
+      min-height: 680px;
+      padding: 72px clamp(28px, 7vw, 110px) 70px;
+      color: #effaf5;
+      background: var(--ink-2);
+      overflow: hidden;
+    }
+    .hero::after {
+      position: absolute;
+      right: -120px;
+      bottom: -170px;
+      width: 520px;
+      height: 520px;
+      content: "";
+      border: 1px solid rgba(56, 211, 159, .34);
+      border-radius: 50%;
+      box-shadow: 0 0 0 70px rgba(56, 211, 159, .035), 0 0 0 140px rgba(56, 211, 159, .025);
+    }
+    .eyebrow { color: var(--mint); font-size: 11px; font-weight: 800; letter-spacing: .18em; text-transform: uppercase; }
+    .hero h1 {
+      position: relative;
+      z-index: 1;
+      max-width: 880px;
+      margin: 28px 0 22px;
+      font-family: "Noto Serif SC", "Songti SC", serif;
+      font-size: clamp(48px, 8vw, 104px);
+      font-weight: 800;
+      letter-spacing: -.07em;
+      line-height: .98;
+    }
+    .hero h1 span { color: var(--mint); }
+    .hero-lead { max-width: 720px; margin: 0; color: #aec8be; font-size: clamp(16px, 2vw, 21px); }
+    .hero-actions { position: relative; z-index: 1; display: flex; flex-wrap: wrap; gap: 12px; margin: 34px 0 52px; }
+    .button {
+      display: inline-flex;
+      min-height: 44px;
+      align-items: center;
+      justify-content: center;
+      padding: 0 18px;
+      color: var(--ink);
+      background: var(--mint);
+      border: 1px solid var(--mint);
+      border-radius: 4px 13px 4px 13px;
+      font-size: 13px;
+      font-weight: 800;
+      text-decoration: none;
+    }
+    .button.secondary { color: #eaf8f2; background: transparent; border-color: #58776b; }
+    .hero-truth {
+      position: relative;
+      z-index: 1;
+      display: grid;
+      max-width: 940px;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      border-top: 1px solid rgba(255,255,255,.16);
+      border-bottom: 1px solid rgba(255,255,255,.16);
+    }
+    .hero-truth article { padding: 22px 18px 22px 0; }
+    .hero-truth article + article { padding-left: 18px; border-left: 1px solid rgba(255,255,255,.12); }
+    .hero-truth strong { display: block; color: #fff; font-size: 20px; font-variant-numeric: tabular-nums; }
+    .hero-truth small { color: #85a398; font-size: 11px; }
+
+    .section { padding: 86px clamp(24px, 6vw, 90px); }
+    .section:nth-of-type(odd) { background: rgba(255,253,247,.68); }
+    .section-head { display: grid; gap: 18px; grid-template-columns: minmax(0, .72fr) minmax(260px, 1fr); margin-bottom: 38px; }
+    .section-index { color: var(--mint-dark); font-family: ui-monospace, "Cascadia Mono", monospace; font-size: 12px; letter-spacing: .14em; }
+    .section h2 { margin: 8px 0 0; font-family: "Noto Serif SC", "Songti SC", serif; font-size: clamp(30px, 4.5vw, 54px); letter-spacing: -.04em; line-height: 1.1; }
+    .section-intro { align-self: end; margin: 0; color: var(--muted); }
+    .callout { padding: 18px 20px; background: #fff9e8; border-left: 4px solid var(--amber); border-radius: 0 12px 12px 0; }
+    .callout strong { color: #80540f; }
+
+    .realtime-grid { display: grid; gap: 18px; grid-template-columns: 1.1fr .9fr; }
+    .dark-panel { padding: clamp(24px, 4vw, 42px); color: #e8f7f1; background: var(--ink); border-radius: var(--radius); box-shadow: var(--shadow); }
+    .status-line { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; color: #9cb9ae; font-size: 12px; }
+    .pulse { width: 9px; height: 9px; background: var(--mint); border-radius: 50%; box-shadow: 0 0 0 5px rgba(56,211,159,.12); }
+    .clock { margin: 24px 0 4px; font-family: ui-monospace, "Cascadia Mono", monospace; font-size: clamp(44px, 7vw, 76px); font-weight: 800; letter-spacing: -.07em; }
+    .dark-panel p { color: #9db9ae; }
+    .truth-list { display: grid; gap: 12px; padding: 0; list-style: none; }
+    .truth-list li { display: grid; grid-template-columns: 30px 1fr; gap: 12px; align-items: start; }
+    .truth-list b { display: grid; width: 28px; height: 28px; place-items: center; color: var(--ink); background: var(--mint); border-radius: 8px; font-size: 11px; }
+    .truth-list span { color: #a9c2b8; font-size: 13px; }
+    .truth-list strong { display: block; color: #fff; }
+
+    .chain { display: grid; gap: 0; grid-template-columns: repeat(5, minmax(0, 1fr)); }
+    .chain-step { position: relative; min-height: 232px; padding: 24px 22px; background: var(--paper-2); border: 1px solid var(--line); }
+    .chain-step:first-child { border-radius: var(--radius) 0 0 var(--radius); }
+    .chain-step:last-child { border-radius: 0 var(--radius) var(--radius) 0; }
+    .chain-step:not(:last-child)::after { position: absolute; z-index: 2; top: 38px; right: -8px; content: "→"; color: var(--mint-dark); font-weight: 900; }
+    .chain-step em { color: var(--mint-dark); font-family: ui-monospace, "Cascadia Mono", monospace; font-size: 11px; font-style: normal; }
+    .chain-step h3 { margin: 18px 0 10px; font-family: "Noto Serif SC", "Songti SC", serif; font-size: 19px; }
+    .chain-step p { margin: 0; color: var(--muted); font-size: 12px; }
+    .chain-step small { display: block; margin-top: 16px; color: #8b5a19; }
+    .route-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; margin-top: 22px; }
+    .route-link { display: grid; gap: 6px; min-height: 92px; padding: 16px; color: var(--ink); text-decoration: none; background: #fff; border: 1px solid var(--line); border-radius: 14px; transition: transform .18s ease, border-color .18s ease; }
+    .route-link:hover { transform: translateY(-2px); border-color: var(--green); }
+    .route-link strong { color: var(--green-dark); }
+    .route-link small { color: var(--muted); line-height: 1.45; }
+
+    .table-wrap { overflow-x: auto; background: var(--paper-2); border: 1px solid var(--line); border-radius: var(--radius); box-shadow: var(--shadow); }
+    table { width: 100%; border-collapse: collapse; min-width: 940px; }
+    th, td { padding: 17px 18px; text-align: left; vertical-align: top; border-bottom: 1px solid var(--line); font-size: 12px; }
+    th { color: #53655d; background: #ebe7db; font-size: 10px; letter-spacing: .08em; }
+    tbody tr:last-child td { border-bottom: 0; }
+    tbody tr:hover { background: rgba(56,211,159,.045); }
+    td strong { display: block; margin-bottom: 3px; font-size: 14px; }
+    .tag { display: inline-block; margin: 2px 4px 2px 0; padding: 2px 8px; color: #176349; background: #daf5e9; border-radius: 999px; font-size: 10px; }
+    .tag.warn { color: #895811; background: #fff0cf; }
+    .tag.stop { color: #8c3733; background: #fae1df; }
+
+    .role-tabs, .demo-toggle { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 18px; }
+    .tab-button, .demo-toggle button {
+      padding: 9px 13px;
+      color: var(--muted);
+      background: transparent;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      cursor: pointer;
+    }
+    .tab-button:hover, .tab-button:focus-visible, .tab-button.active,
+    .demo-toggle button:hover, .demo-toggle button:focus-visible, .demo-toggle button.active {
+      color: var(--paper-2);
+      background: var(--ink);
+      border-color: var(--ink);
+      outline: none;
+    }
+    .role-panel { display: none; grid-template-columns: .72fr 1.28fr; gap: 20px; }
+    .role-panel.active { display: grid; }
+    .role-summary, .flow-card { padding: 26px; background: var(--paper-2); border: 1px solid var(--line); border-radius: 18px; }
+    .role-summary h3 { margin: 4px 0 10px; font-family: "Noto Serif SC", "Songti SC", serif; font-size: 28px; }
+    .role-summary p, .flow-card p { color: var(--muted); font-size: 13px; }
+    .flow { display: grid; gap: 10px; counter-reset: flow; }
+    .flow div { position: relative; padding: 12px 14px 12px 48px; background: #f1eee5; border-radius: 10px; }
+    .flow div::before { position: absolute; left: 12px; top: 12px; counter-increment: flow; content: counter(flow); display: grid; width: 24px; height: 24px; place-items: center; color: var(--paper-2); background: var(--ink); border-radius: 8px; font-size: 10px; }
+    .question { display: flex; gap: 10px; align-items: center; justify-content: space-between; margin-top: 12px; padding: 11px 12px; color: #214b3d; background: #e7f7f0; border: 0; border-radius: 10px; cursor: pointer; text-align: left; }
+    .question small { color: #4e7466; }
+
+    .chart-grid { display: grid; gap: 16px; grid-template-columns: repeat(3, minmax(0, 1fr)); }
+    .chart-card { padding: 22px; background: var(--paper-2); border: 1px solid var(--line); border-radius: 18px; }
+    .chart-card h3 { margin: 14px 0 5px; font-family: "Noto Serif SC", "Songti SC", serif; }
+    .chart-card p { margin: 0; color: var(--muted); font-size: 12px; }
+    .chart-viz { display: grid; height: 110px; align-items: end; gap: 7px; padding: 16px; background: #e8e4d8; border-radius: 12px; overflow: hidden; }
+    .bars { grid-template-columns: repeat(6, 1fr); }
+    .bars i { display: block; background: var(--ink); border-radius: 4px 4px 0 0; }
+    .line-viz { position: relative; display: block; }
+    .line-viz svg, .pie-viz svg, .scatter-viz svg { width: 100%; height: 100%; }
+    .pie-viz, .scatter-viz { display: block; }
+    .chart-note { margin-top: 14px; padding-top: 12px; color: #8b5a19; border-top: 1px dashed var(--line); font-size: 11px; }
+
+    .guard-grid { display: grid; gap: 14px; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .guard { display: grid; gap: 14px; grid-template-columns: 52px 1fr; padding: 22px; background: var(--paper-2); border: 1px solid var(--line); border-radius: 16px; }
+    .guard-num { color: var(--mint-dark); font-family: ui-monospace, "Cascadia Mono", monospace; font-size: 26px; font-weight: 900; }
+    .guard h3 { margin: 0 0 4px; font-size: 15px; }
+    .guard p { margin: 0; color: var(--muted); font-size: 12px; }
+
+    .demo-shell { display: grid; gap: 20px; grid-template-columns: 290px minmax(0, 1fr); }
+    .demo-aside { padding: 24px; color: #ecf8f3; background: var(--ink); border-radius: 18px; }
+    .demo-aside strong { display: block; margin-bottom: 10px; font-family: "Noto Serif SC", "Songti SC", serif; font-size: 22px; }
+    .demo-aside p { color: #9cb8ad; font-size: 12px; }
+    .demo-plan { display: none; }
+    .demo-plan.active { display: block; }
+    .timeline { display: grid; gap: 12px; }
+    .timeline article { display: grid; grid-template-columns: 78px minmax(0, 1fr); gap: 18px; padding: 20px; background: var(--paper-2); border: 1px solid var(--line); border-radius: 14px; }
+    .timeline time { color: var(--mint-dark); font-family: ui-monospace, "Cascadia Mono", monospace; font-weight: 900; }
+    .timeline h3 { margin: 0 0 6px; font-size: 15px; }
+    .timeline p { margin: 0; color: var(--muted); font-size: 12px; }
+    .say { margin-top: 9px !important; padding: 9px 11px; color: #35564a !important; background: #e6f5ee; border-left: 3px solid var(--mint-dark); }
+
+    .status-board { display: grid; gap: 14px; grid-template-columns: repeat(3, minmax(0, 1fr)); }
+    .status-card { padding: 22px; background: var(--paper-2); border: 1px solid var(--line); border-radius: 15px; }
+    .status-card h3 { margin: 10px 0 6px; }
+    .status-card p { margin: 0; color: var(--muted); font-size: 12px; }
+    .status-card.proven { border-top: 4px solid var(--mint-dark); }
+    .status-card.conditional { border-top: 4px solid var(--amber); }
+    .status-card.stop { border-top: 4px solid var(--red); }
+
+    .checklist { columns: 2; column-gap: 16px; padding: 0; list-style: none; }
+    .checklist li { break-inside: avoid; margin: 0 0 10px; padding: 13px 14px 13px 42px; background: var(--paper-2); border: 1px solid var(--line); border-radius: 12px; position: relative; font-size: 12px; }
+    .checklist li::before { position: absolute; left: 14px; content: "□"; color: var(--mint-dark); font-size: 18px; }
+    .footer { padding: 42px clamp(24px, 6vw, 90px); color: #91ada2; background: var(--ink); }
+    .footer strong { color: #fff; }
+    .footer-grid { display: flex; flex-wrap: wrap; gap: 16px; justify-content: space-between; align-items: center; }
+    .toast { position: fixed; z-index: 20; right: 18px; bottom: 18px; padding: 11px 15px; color: #fff; background: var(--ink); border-radius: 10px; box-shadow: var(--shadow); opacity: 0; transform: translateY(10px); pointer-events: none; transition: .2s ease; }
+    .toast.show { opacity: 1; transform: translateY(0); }
+    .mobile-top { display: none; }
+
+    @media (max-width: 1050px) {
+      .layout { display: block; }
+      .rail { display: none; }
+      .mobile-top { position: sticky; z-index: 15; top: 0; display: flex; align-items: center; justify-content: space-between; padding: 12px 18px; color: #fff; background: var(--ink); }
+      .mobile-top a { color: var(--mint); text-decoration: none; font-size: 12px; }
+      .hero { min-height: auto; padding-top: 58px; }
+      .hero-truth { grid-template-columns: repeat(2, 1fr); }
+      .hero-truth article:nth-child(3) { border-left: 0; border-top: 1px solid rgba(255,255,255,.12); }
+      .hero-truth article:nth-child(4) { border-top: 1px solid rgba(255,255,255,.12); }
+      .chain { grid-template-columns: 1fr 1fr; gap: 10px; }
+      .chain-step, .chain-step:first-child, .chain-step:last-child { border-radius: 14px; }
+      .chain-step:not(:last-child)::after { display: none; }
+      .chain-step:last-child { grid-column: 1 / -1; min-height: auto; }
+      .chart-grid { grid-template-columns: repeat(2, 1fr); }
+      .route-grid { grid-template-columns: 1fr 1fr; }
+    }
+    @media (max-width: 720px) {
+      html { scroll-padding-top: 56px; }
+      .hero h1 { font-size: clamp(44px, 15vw, 68px); }
+      .hero-truth, .realtime-grid, .section-head, .role-panel, .guard-grid, .demo-shell, .status-board, .route-grid { grid-template-columns: 1fr; }
+      .hero-truth article + article { padding-left: 0; border-left: 0; border-top: 1px solid rgba(255,255,255,.12); }
+      .chain, .chart-grid { grid-template-columns: 1fr; }
+      .chain-step:last-child { grid-column: auto; }
+      .section { padding: 62px 18px; }
+      .section-head { gap: 8px; }
+      .role-tabs { flex-wrap: nowrap; overflow-x: auto; padding-bottom: 8px; }
+      .tab-button { flex: none; }
+      .timeline article { grid-template-columns: 1fr; gap: 4px; }
+      .checklist { columns: 1; }
+      .button { width: 100%; }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      html { scroll-behavior: auto; }
+      *, *::before, *::after { animation: none !important; transition: none !important; }
+    }
+    @media print {
+      .rail, .mobile-top, .hero-actions, .role-tabs, .demo-toggle, .question, .toast { display: none !important; }
+      .layout { display: block; }
+      .hero { min-height: auto; color: var(--ink); background: #fff; }
+      .hero-lead, .hero-truth small { color: #444; }
+      .hero-truth { border-color: #ccc; }
+      .hero-truth strong { color: #111; }
+      .section { break-inside: avoid; padding: 36px 20px; }
+      .role-panel { display: grid !important; margin-bottom: 18px; }
+      .demo-plan { display: block !important; }
+    }
+  </style>
+</head>
+<body>
+  <div class="mobile-top"><strong>餐饮 AI 演示手册</strong><a href="#demo">跳到演示脚本 ↓</a></div>
+  <div class="layout">
+    <aside class="rail" aria-label="页面导航">
+      <div class="brand"><span class="brand-mark">C</span><div><strong>白垩纪餐饮 AI</strong><small>DEMO FIELD GUIDE</small></div></div>
+      <p class="rail-label">从这里开始</p>
+      <nav>
+        <a href="#truth">实时性到底是什么</a>
+        <a href="#chain">完整数据链路</a>
+        <a href="#roles">部门怎么协作</a>
+        <a href="#charts">图表怎么讲</a>
+        <a href="#guardrails">如何避免 AI 黑盒</a>
+        <a href="#demo">完整 / 亮点演示</a>
+        <a href="#boundaries">哪些能演、哪些别演</a>
+        <a href="#checklist">演示前检查</a>
+      </nav>
+      <p class="rail-foot">生产能力口径<br>核对日期：2026-08-03<br>页面不包含账号或密码</p>
+    </aside>
+
+    <main>
+      <header class="hero" id="top">
+        <div class="eyebrow">Restaurant intelligence / operator's guide</div>
+        <h1>把餐饮数据<br>变成<span>今天的动作</span></h1>
+        <p class="hero-lead">这不是一份技术说明书。它告诉你：屏幕上的数字从哪里来、每个部门怎么用、AI 为什么不能乱编，以及一场完整演示该按什么顺序讲。</p>
+        <div class="hero-actions">
+          <a class="button" href="/login" target="_blank" rel="noopener">打开生产系统</a>
+          <a class="button secondary" href="#demo">直接看演示脚本</a>
+          <button class="button secondary" type="button" id="print-guide">打印 / 导出 PDF</button>
+        </div>
+        <div class="hero-truth" aria-label="核心能力摘要">
+          <article><strong>60 秒</strong><small>分钟级准实时刷新，不宣传为秒级推送</small></article>
+          <article><strong>FactBook</strong><small>业务数字由确定性事实层统一提供</small></article>
+          <article><strong>按角色</strong><small>老板、店长、人事、采购、后厨各看各的</small></article>
+          <article><strong>先解释</strong><small>LLM 负责理解与建议，不负责凭空造数</small></article>
+        </div>
+      </header>
+
+      <section class="section" id="truth">
+        <div class="section-head"><div><span class="section-index">01 / REALTIME</span><h2>生产大屏实时吗？</h2></div><p class="section-intro">准确说法是“分钟级准实时”。系统会主动读取最新经营汇总和预测 FactBook，但目前不是 WebSocket 毫秒级推送。</p></div>
+        <div class="realtime-grid">
+          <article class="dark-panel">
+            <div class="status-line"><span class="pulse" aria-hidden="true"></span><strong>数据链路正常</strong><span>/ 60 秒只读自动刷新</span></div>
+            <div class="clock">00:60</div>
+            <p>倒计时结束后重新向经营 API 与预测 FactBook 发起只读请求；点击“立即刷新”可以不等倒计时。</p>
+            <a class="button" href="/dashboard" target="_blank" rel="noopener">登录后打开数字指挥屏</a>
+          </article>
+          <article class="dark-panel">
+            <ul class="truth-list">
+              <li><b>1</b><span><strong>页面正在显示时</strong>每 60 秒刷新一次，并展示最后接收时间和本次请求耗时。</span></li>
+              <li><b>2</b><span><strong>切到别的浏览器页签</strong>暂停轮询，回来后再恢复，避免后台无意义请求。</span></li>
+              <li><b>3</b><span><strong>某一路失败时</strong>保留上一份可用结果并标“部分数据链路异常”，不会用假数字补空。</span></li>
+              <li><b>4</b><span><strong>预订数据有两类</strong>平台来源和明确标记的模拟来源；模拟数据不会冒充真实平台订单。</span></li>
+            </ul>
+          </article>
+        </div>
+        <p class="callout"><strong>演示话术：</strong>“它不是行情软件那种毫秒推送，而是每分钟自动拉取最新业务事实。餐饮经营和排班决策按分钟更新已经足够，同时更稳定、成本更低，也能清楚告诉用户数据最后什么时候到。”</p>
+      </section>
+
+      <section class="section" id="chain">
+        <div class="section-head"><div><span class="section-index">02 / DATA CHAIN</span><h2>一个数字是怎么走到屏幕上的</h2></div><p class="section-intro">先有业务记录，再做确定性计算，最后才让大模型解释。顺序不能反过来。</p></div>
+        <p class="callout"><strong>一句话记链路：</strong>经营汇总、预订/POS/客流、预测 FactBook、按需 LLM。前面负责提供事实，最后一步只负责理解、解释和建议。</p>
+        <div class="chain" aria-label="餐饮 AI 数据链路">
+          <article class="chain-step"><em>01 · SOURCE</em><h3>业务数据进来</h3><p>预订平台/模拟预订、POS、客流、领料、损耗、盘点、配方、人员技能和工时。</p><small>每条预订保留来源、门店、日期、时段、桌数、人数、状态与更新时间。</small></article>
+          <article class="chain-step"><em>02 · NORMALIZE</em><h3>统一口径</h3><p>把门店、日期、餐段、菜品和来源对齐；缺字段就标缺失，不偷偷填“看起来合理”的值。</p><small>这里解决同名门店、跨平台字段和时间窗口不一致。</small></article>
+          <article class="chain-step"><em>03 · FACTBOOK</em><h3>确定性算数字</h3><p>结合当前预订与过去 7/30/365 天趋势，生成明天、下周、下个月的预测与排班建议。</p><small>历史 actual/target 只作证据，不直接拿来算“缺人”。</small></article>
+          <article class="chain-step"><em>04 · LLM</em><h3>AI 理解和解释</h3><p>理解用户在问什么、综合 FactBook、说明原因、给可调整建议。</p><small>所有业务数字仍由 FactBook 渲染；模型写出未经支持的数字会失败关闭。</small></article>
+          <article class="chain-step"><em>05 · ACTION</em><h3>人来做决定</h3><p>按角色展示看板、图表、排班表和建议。真实调整先预览，再确认、校验权限并留审计。</p><small>生产演示默认只读：可以看建议，不点击最终确认。</small></article>
+        </div>
+        <div class="route-grid" aria-label="生产系统入口速查">
+          <a class="route-link" href="/dashboard" target="_blank" rel="noopener"><strong>数字指挥屏</strong><small>先看数据是否更新、链路是否正常。</small></a>
+          <a class="route-link" href="/restaurant/ops" target="_blank" rel="noopener"><strong>经营驾驶舱</strong><small>看营收、客流、门店与经营趋势。</small></a>
+          <a class="route-link" href="/smart-bi/analysis?tab=query" target="_blank" rel="noopener"><strong>AI 经营问答</strong><small>用白话问经营、菜品、渠道和趋势。</small></a>
+          <a class="route-link" href="/restaurant/staffing" target="_blank" rel="noopener"><strong>预测排班</strong><small>看明天、下周、下个月的人力建议。</small></a>
+          <a class="route-link" href="/restaurant/analytics/dishes" target="_blank" rel="noopener"><strong>菜品分析</strong><small>看菜品排行、结构与四象限。</small></a>
+          <a class="route-link" href="/restaurant/analytics/stores" target="_blank" rel="noopener"><strong>门店对比</strong><small>比较门店规模、表现与效率。</small></a>
+          <a class="route-link" href="/restaurant/finance" target="_blank" rel="noopener"><strong>财务驾驶舱</strong><small>先核成本覆盖，再解释毛利。</small></a>
+          <a class="route-link" href="/restaurant/data-completeness" target="_blank" rel="noopener"><strong>数据完整度</strong><small>判断结论建立在多完整的数据上。</small></a>
+        </div>
+      </section>
+
+      <section class="section" id="roles">
+        <div class="section-head"><div><span class="section-index">03 / DEPARTMENTS</span><h2>每个部门到底怎么用</h2></div><p class="section-intro">不是让所有人看同一张大屏。每个角色从自己的问题出发，最后把需要协作的事情交给下一位负责人。</p></div>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>角色 / 部门</th><th>第一眼看哪里</th><th>适合问 AI</th><th>下一步动作</th><th>必须守住的边界</th></tr></thead>
+            <tbody>
+              <tr><td><strong>老板</strong>经营决策</td><td>首页数字屏、经营驾驶舱、门店对比、财务驾驶舱</td><td>这周营收怎么提高？哪家店业绩最好？毛利下降可能在哪里？</td><td>确定优先级，交店长、采购或财务执行</td><td><span class="tag">跨店汇总</span><span class="tag warn">建议不是自动指令</span></td></tr>
+              <tr><td><strong>店长</strong>今日营运</td><td>运营驾驶舱、经营看板、预测排班</td><td>最近 30 天哪里异常？今天先处理什么？哪些食材经常盘亏？</td><td>排今天任务；采购问题交采购，后厨问题交厨师长</td><td><span class="tag">本店执行</span><span class="tag warn">财务只读</span></td></tr>
+              <tr><td><strong>人事</strong>人力调度</td><td>预测排班、人事驾驶舱、客流趋势</td><td>明天怎么排班？下周需要多少兼职？下个月各店人效安排？</td><td>核对技能、班次、周工时，与店长确认调整</td><td><span class="tag">FactBook 数字</span><span class="tag stop">actual&lt;target ≠ 缺人</span></td></tr>
+              <tr><td><strong>采购</strong>采购协同</td><td>报货计划、供应商进货、价格异常页、供应商对账页</td><td>最近 30 天领料趋势；本月损耗金额最高的食材</td><td>核对品项、数量、到货与票据；异常交财务审核</td><td><span class="tag warn">价格页可看</span><span class="tag stop">“偷偷涨价”AI 意图未证明</span></td></tr>
+              <tr><td><strong>厨师长</strong>后厨执行</td><td>报货、领料、盘点、损耗、配方</td><td>哪些食材经常盘亏？最近 30 天领料有什么异常？哪个菜卖得最好？</td><td>按异常顺序复核领料、损耗、盘点和配方</td><td><span class="tag">只看执行数量</span><span class="tag stop">不看供应商价格</span></td></tr>
+              <tr><td><strong>市场</strong>增长与口碑</td><td>市场驾驶舱、菜品分析、平台分析、门店对比</td><td>哪个菜卖得最好？外卖占比？哪些门店差评多？</td><td>选菜品、门店和渠道做活动，跟踪活动前后变化</td><td><span class="tag warn">相关不等于因果</span><span class="tag">注明平台覆盖</span></td></tr>
+              <tr><td><strong>财务</strong>成本与毛利</td><td>财务驾驶舱、经营分析财务页、菜品毛利</td><td>毛利下降可能由什么构成？哪道菜毛利偏低？</td><td>核对成本覆盖、采购价和配方，再形成财务结论</td><td><span class="tag warn">成本不全则不下结论</span><span class="tag stop">供应商对账 AI 未完整闭环</span></td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <div style="height:30px"></div>
+        <div class="role-tabs" role="tablist" aria-label="角色流程">
+          <button class="tab-button active" data-role="owner" role="tab" aria-selected="true">老板</button>
+          <button class="tab-button" data-role="manager" role="tab" aria-selected="false">店长</button>
+          <button class="tab-button" data-role="hr" role="tab" aria-selected="false">人事</button>
+          <button class="tab-button" data-role="procurement" role="tab" aria-selected="false">采购</button>
+          <button class="tab-button" data-role="kitchen" role="tab" aria-selected="false">后厨</button>
+          <button class="tab-button" data-role="marketing" role="tab" aria-selected="false">市场</button>
+          <button class="tab-button" data-role="finance" role="tab" aria-selected="false">财务</button>
+        </div>
+
+        <div class="role-panel active" data-panel="owner"><article class="role-summary"><span class="eyebrow">OWNER</span><h3>先看全局，再拍板</h3><p>老板演示不需要钻进每张业务单。先看经营结果，再展示 AI 如何把跨店事实整理成行动优先级。</p><button class="question" data-copy="这个星期营收比上周怎么提高？给我今天能做的动作"><span>这个星期营收比上周怎么提高？</span><small>点击复制</small></button></article><article class="flow-card"><div class="flow"><div><strong>看</strong> 数字屏确认数据链路、更新时间和明日预测客流</div><div><strong>比</strong> 经营驾驶舱看趋势，门店对比找领先与掉队</div><div><strong>问</strong> AI 综合事实，要求给今天可做的动作</div><div><strong>交</strong> 把任务交给店长、采购、人事或财务</div></div></article></div>
+        <div class="role-panel" data-panel="manager"><article class="role-summary"><span class="eyebrow">MANAGER</span><h3>把今天的问题闭环</h3><p>店长从运营异常出发，AI 帮忙排序，但真正执行仍在领料、损耗、盘点和排班页面。</p><button class="question" data-copy="最近30天营收趋势，今天先处理什么"><span>最近 30 天哪里异常，今天先处理什么？</span><small>点击复制</small></button></article><article class="flow-card"><div class="flow"><div><strong>看</strong> 运营驾驶舱和经营看板</div><div><strong>查</strong> 领料、损耗、盘点是否有异常</div><div><strong>排</strong> 结合预测排班安排今天班次</div><div><strong>交</strong> 采购/后厨/人事分别处理，店长跟进结果</div></div></article></div>
+        <div class="role-panel" data-panel="hr"><article class="role-summary"><span class="eyebrow">HR</span><h3>用预测，不用猜</h3><p>人事只看排班所需的数据。当前预订和 7/30/365 天趋势先形成 FactBook，再给建议人数和技能覆盖。</p><button class="question" data-copy="下周需要多少兼职"><span>下周需要多少兼职？</span><small>点击复制</small></button></article><article class="flow-card"><div class="flow"><div><strong>选</strong> 明天、下周或下个月</div><div><strong>看</strong> 预订覆盖、预测客流、建议/现有人数、缺口和置信度</div><div><strong>核</strong> 岗位技能、班次时长与周工时上限</div><div><strong>调</strong> 与店长确认；演示只展示预览，不做生产确认</div></div></article></div>
+        <div class="role-panel" data-panel="procurement"><article class="role-summary"><span class="eyebrow">PROCUREMENT</span><h3>从报货走到对账</h3><p>采购的 AI 重点是解释领料、损耗和采购事实，不能把未接入的供应商价格意图说成已自动发现。</p><button class="question" data-copy="本月损耗金额最高的食材"><span>本月损耗金额最高的食材</span><small>点击复制</small></button></article><article class="flow-card"><div class="flow"><div><strong>收</strong> 厨师长报货需求</div><div><strong>核</strong> 品项、数量、供应商到货</div><div><strong>看</strong> 领料和损耗趋势找核对对象</div><div><strong>交</strong> 金额与票据异常交财务</div></div></article></div>
+        <div class="role-panel" data-panel="kitchen"><article class="role-summary"><span class="eyebrow">KITCHEN</span><h3>按异常顺序做事</h3><p>后厨只需要数量、状态和菜品事实。AI 帮它决定先查哪种食材、哪个时段，不暴露采购价格。</p><button class="question" data-copy="哪些食材经常盘亏"><span>哪些食材经常盘亏？</span><small>点击复制</small></button></article><article class="flow-card"><div class="flow"><div><strong>报</strong> 提交品项需求</div><div><strong>领</strong> 按批准数量领料</div><div><strong>盘</strong> 记录实盘与差异</div><div><strong>改</strong> 复核损耗和配方执行，问题交店长/采购</div></div></article></div>
+        <div class="role-panel" data-panel="marketing"><article class="role-summary"><span class="eyebrow">MARKETING</span><h3>找到增长抓手</h3><p>市场看菜品、门店、渠道、餐段和评价。AI 可以总结变化，但不能把“同时发生”说成“就是它造成的”。</p><button class="question" data-copy="哪个菜卖得最好，外卖和堂食有什么差别"><span>哪个菜卖得最好？渠道有什么差别？</span><small>点击复制</small></button></article><article class="flow-card"><div class="flow"><div><strong>看</strong> 菜品四象限、平台评价、门店排行</div><div><strong>选</strong> 目标菜品、门店和渠道</div><div><strong>问</strong> AI 总结趋势与可能原因</div><div><strong>验</strong> 活动后再看对照数据，不把相关性当因果</div></div></article></div>
+        <div class="role-panel" data-panel="finance"><article class="role-summary"><span class="eyebrow">FINANCE</span><h3>先核口径，再谈毛利</h3><p>财务演示的亮点不是“AI算得快”，而是当配方、采购价或成本覆盖不完整时，系统明确披露口径并拒绝过度结论。</p><button class="question" data-copy="毛利下降可能由哪些已知因素构成"><span>毛利下降可能由哪些已知因素构成？</span><small>点击复制</small></button></article><article class="flow-card"><div class="flow"><div><strong>看</strong> 营收、成本率与毛利趋势</div><div><strong>核</strong> 配方、采购价和成本覆盖范围</div><div><strong>问</strong> 受限毛利归因 Agent 汇总已知证据</div><div><strong>定</strong> 人工复核后再形成财务结论</div></div></article></div>
+      </section>
+
+      <section class="section" id="charts">
+        <div class="section-head"><div><span class="section-index">04 / CHARTS</span><h2>图表不是装饰，应该怎么讲</h2></div><p class="section-intro">演示图表时只回答三个问题：它在比较什么、发现什么、接下来查什么。以下小图都是结构示意，不是生产实时数字。</p></div>
+        <div class="chart-grid">
+          <article class="chart-card"><div class="chart-viz line-viz"><svg viewBox="0 0 240 100" role="img" aria-label="趋势折线示意"><polyline points="0,78 38,64 76,70 114,38 152,46 190,24 240,34" fill="none" stroke="#168968" stroke-width="6"/><line x1="0" y1="74" x2="240" y2="74" stroke="#98a69f" stroke-dasharray="5 5"/></svg></div><h3>趋势折线</h3><p>看方向、拐点和波动。适合营收、订单、客流、毛利。</p><div class="chart-note">要讲：“哪一天开始变了？” 不要讲：“这条线证明就是活动造成的。”</div></article>
+          <article class="chart-card"><div class="chart-viz bars"><i style="height:42%"></i><i style="height:68%"></i><i style="height:92%"></i><i style="height:57%"></i><i style="height:76%"></i><i style="height:49%"></i></div><h3>柱状排名</h3><p>看门店、菜品、时段或周度高低，适合找头部和掉队项。</p><div class="chart-note">先确认口径相同，再说谁高谁低；门店面积不同不能直接等同效率。</div></article>
+          <article class="chart-card"><div class="chart-viz pie-viz"><svg viewBox="0 0 100 100" role="img" aria-label="结构占比示意"><circle cx="50" cy="50" r="32" fill="none" stroke="#d4d2c8" stroke-width="22"/><circle cx="50" cy="50" r="32" fill="none" stroke="#168968" stroke-width="22" stroke-dasharray="116 201" transform="rotate(-90 50 50)"/></svg></div><h3>结构占比</h3><p>看渠道、品类、餐段或供应商占比。</p><div class="chart-note">一定说明分母：按营业额、订单数还是成本。饼很大不代表利润高。</div></article>
+          <article class="chart-card"><div class="chart-viz scatter-viz"><svg viewBox="0 0 220 100" role="img" aria-label="菜品四象限示意"><line x1="110" y1="0" x2="110" y2="100" stroke="#a8b0ac"/><line x1="0" y1="50" x2="220" y2="50" stroke="#a8b0ac"/><g fill="#168968"><circle cx="158" cy="24" r="9"/><circle cx="178" cy="38" r="6"/></g><g fill="#f4a942"><circle cx="65" cy="28" r="7"/><circle cx="48" cy="72" r="9"/></g><circle cx="155" cy="75" r="6" fill="#4f8fda"/></svg></div><h3>菜品四象限</h3><p>把销量和毛利/收入放在两个轴，区分明星菜、引流菜、潜力菜和待优化菜。</p><div class="chart-note">成本覆盖不完整时不要把“毛利轴”讲成完整真实利润。</div></article>
+          <article class="chart-card"><div class="chart-viz scatter-viz"><svg viewBox="0 0 220 100" role="img" aria-label="门店效率矩阵示意"><line x1="110" y1="0" x2="110" y2="100" stroke="#a8b0ac"/><line x1="0" y1="50" x2="220" y2="50" stroke="#a8b0ac"/><circle cx="165" cy="24" r="12" fill="#168968"/><circle cx="70" cy="30" r="8" fill="#f4a942"/><circle cx="55" cy="76" r="11" fill="#df655f"/><circle cx="150" cy="70" r="7" fill="#4f8fda"/></svg></div><h3>门店效率矩阵</h3><p>同时看规模和效率，判断是客流、客单价还是资源利用需要复核。</p><div class="chart-note">先用确定性拆解找差异，再让 AI 解释；AI 不自行判定因果。</div></article>
+          <article class="chart-card"><div class="chart-viz line-viz"><svg viewBox="0 0 240 100" role="img" aria-label="排班覆盖示意"><rect x="5" y="18" width="150" height="18" rx="4" fill="#168968"/><rect x="5" y="48" width="205" height="18" rx="4" fill="#f4a942"/><rect x="5" y="78" width="180" height="18" rx="4" fill="#4f8fda"/></svg></div><h3>预测排班表</h3><p>按门店与时段看预订覆盖、预测客流、建议/现有人数、缺口和置信度。</p><div class="chart-note">先看来源覆盖和置信度，再看缺口；历史人效只能帮判断可信度。</div></article>
+        </div>
+        <p class="callout"><strong>建议演示顺序：</strong>先用趋势折线回答“发生了什么”，再用门店/菜品图回答“发生在哪里”，最后打开预测排班或 AI 问答回答“明天准备怎么做”。</p>
+      </section>
+
+      <section class="section" id="guardrails">
+        <div class="section-head"><div><span class="section-index">05 / TRUST</span><h2>AI 黑盒怎么避免</h2></div><p class="section-intro">不是把模型说得更聪明，而是把它能做什么、数字从哪里来、什么时候应该拒绝都做成可检查的产品规则。</p></div>
+        <div class="guard-grid">
+          <article class="guard"><span class="guard-num">01</span><div><h3>数字由 FactBook 负责</h3><p>预测客流、人数、缺口、置信度先由确定性代码算好。LLM 只解释，不当数字作者。</p></div></article>
+          <article class="guard"><span class="guard-num">02</span><div><h3>来源和新鲜度可见</h3><p>显示来源类型、模拟/平台标记、时间窗口、最后更新时间和生成时间。</p></div></article>
+          <article class="guard"><span class="guard-num">03</span><div><h3>缺数据就明确说缺</h3><p>接口失败、成本覆盖不足或问题不支持时，保留旧结果/显示空态/诚实澄清，不返回“像真的”假答案。</p></div></article>
+          <article class="guard"><span class="guard-num">04</span><div><h3>相关不冒充因果</h3><p>天气、活动、排班与营收同时变化，只能说有关联或待验证；确定性拆解也要披露口径。</p></div></article>
+          <article class="guard"><span class="guard-num">05</span><div><h3>角色权限先于回答</h3><p>人事不读运营汇总，厨师长不看供应商价格；菜单隐藏和直达路由使用同一权限判断。</p></div></article>
+          <article class="guard"><span class="guard-num">06</span><div><h3>写操作必须预览确认</h3><p>建议不等于执行。真实调整要经过预览、精确确认、权限、版本/幂等校验和审计回执。</p></div></article>
+          <article class="guard"><span class="guard-num">07</span><div><h3>模型失败就失败关闭</h3><p>模型新增数字、越过业务边界或全部路由不可用时，系统明确报不可用，不退回旧的危险建议。</p></div></article>
+          <article class="guard"><span class="guard-num">08</span><div><h3>生产演示保持只读</h3><p>演示可以登录、筛选、提问和查看预览；没有专项授权就不保存、不提交、不确认业务变更。</p></div></article>
+        </div>
+      </section>
+
+      <section class="section" id="demo">
+        <div class="section-head"><div><span class="section-index">06 / DEMO SCRIPT</span><h2>照着这个顺序演</h2></div><p class="section-intro">完整演示讲清闭环；亮点演示只保留“数据在动、AI有依据、人能行动”三个记忆点。</p></div>
+        <div class="demo-toggle" role="tablist" aria-label="演示模式"><button class="active" data-demo="full" role="tab" aria-selected="true">15 分钟完整演示</button><button data-demo="short" role="tab" aria-selected="false">3 分钟亮点演示</button></div>
+        <div class="demo-shell">
+          <aside class="demo-aside"><strong>演示总原则</strong><p>先讲业务问题，再打开页面；先讲数据来源，再讲 AI；先展示建议，再讲确认边界。</p><p>不要现场修改生产数据。没有数据时按页面空态解释，不切换成虚构案例。</p><a class="button" href="/dashboard" target="_blank" rel="noopener">打开生产首页</a></aside>
+          <div>
+            <div class="demo-plan active" data-demo-panel="full"><div class="timeline">
+              <article><time>00:00</time><div><h3>开场：一句话讲清产品</h3><p>先停留在本手册首页，不急着登录。</p><p class="say">“白垩纪把预订、POS、客流、后厨和人力数据先变成统一事实，再由 AI 帮不同部门解释并安排下一步。”</p></div></article>
+              <article><time>01:00</time><div><h3>数字指挥屏：证明数据真的在传</h3><p>登录餐饮演示账号，进入首页。指出“60 秒只读自动刷新”、最后接收、请求耗时和四段链路；点击一次“立即刷新”。</p><p class="say">“这里看到的不是写死数字。经营汇总和预测 FactBook 分开请求，哪一路失败就明确标出来。”</p></div></article>
+              <article><time>03:00</time><div><h3>经营驾驶舱：从全局找到问题</h3><p>打开经营驾驶舱，看趋势折线、门店排行、菜品/渠道结构。只挑一条变化讲，不把相关性说成因果。</p><p class="say">“我们先回答发生了什么、发生在哪里，再决定要问 AI 什么。”</p></div></article>
+              <article><time>05:30</time><div><h3>通用经营 AI：用白话提问</h3><p>打开智能数据分析 Query 页，问“哪家店业绩最好”或“最近 30 天营收趋势”。展示答案里的口径、来源与图表。</p><p class="say">“AI 负责理解问题和解释，营收、排名这些数字来自确定性经营数据，不是模型心算。”</p></div></article>
+              <article><time>08:00</time><div><h3>预测排班：展示最完整闭环</h3><p>打开预测排班，切换明天/下周/下个月，展示来源覆盖、各门店各时段、建议/现有人数、缺口和置信度。</p><p class="say">“排班不是看历史人效低于目标就补人，而是从预订和 7/30/365 天趋势预测需求，再叠加技能和工时。”</p></div></article>
+              <article><time>10:30</time><div><h3>排班 AI：问三个真实问题之一</h3><p>问“明天怎么排班”或“下周需要多少兼职”。指出数字仍来自同一 FactBook，LLM 只做综合解释和可调整建议。</p><p class="say">“如果模型想增加 FactBook 之外的数字，系统会把这次回答判失败，而不是展示给用户。”</p></div></article>
+              <article><time>12:30</time><div><h3>部门协作：讲清谁接下一棒</h3><p>回到本手册角色表，快速讲老板→店长→人事/采购/后厨→财务/市场的交接。根据听众重点选择一个角色页。</p><p class="say">“同一个系统不是所有人看同一堆数据，而是每个人只看到完成自己工作所需的事实。”</p></div></article>
+              <article><time>14:00</time><div><h3>收尾：用黑盒治理建立信任</h3><p>展示来源、更新时间、置信度、缺数据披露、权限和预览确认；明确受限 Agent 当前只支持毛利下降归因。</p><p class="say">“我们不要求客户盲信 AI，而是让每个数字、建议和动作都有可回看的依据。”</p></div></article>
+            </div></div>
+            <div class="demo-plan" data-demo-panel="short"><div class="timeline">
+              <article><time>00:00</time><div><h3>亮点一：数据在动</h3><p>首页指挥屏指出 60 秒刷新、最后接收和四段链路，手动刷新一次。</p><p class="say">“分钟级准实时，来源、更新时间和异常都看得见。”</p></div></article>
+              <article><time>00:50</time><div><h3>亮点二：AI 有依据</h3><p>打开预测排班，问“下周需要多少兼职”，指向 FactBook 来源、置信度和各门店明细。</p><p class="say">“模型不造人数，人数来自预测 FactBook；模型只解释为什么和怎么调。”</p></div></article>
+              <article><time>02:05</time><div><h3>亮点三：人能行动</h3><p>展示一键调整入口，但不在生产确认。说明角色权限、预览确认和审计回执。</p><p class="say">“AI 提建议，人做决定；能看、能追、能预览，但不会偷偷改业务数据。”</p></div></article>
+              <article><time>02:45</time><div><h3>最后一句</h3><p class="say">“这套系统的价值不是再做一张报表，而是把数据、解释、责任人和下一步连成闭环。”</p></div></article>
+            </div></div>
+          </div>
+        </div>
+      </section>
+
+      <section class="section" id="boundaries">
+        <div class="section-head"><div><span class="section-index">07 / TRUTH BOARD</span><h2>哪些可以大胆演，哪些要收住</h2></div><p class="section-intro">页面存在不等于 AI 闭环已证明。遇到暂不支持的问题，诚实说明替代入口，比给一个看似聪明的错答案更专业。</p></div>
+        <div class="status-board">
+          <article class="status-card proven"><span class="tag">生产已验证</span><h3>推荐重点演示</h3><p>餐饮首页数字指挥屏；明天/下周/下个月预测排班；“明天怎么排班”“下周需要多少兼职”“下个月各店人效安排”；预测排班明细与来源。</p></article>
+          <article class="status-card conditional"><span class="tag warn">有条件演示</span><h3>先看数据是否完整</h3><p>营收/门店/菜品/渠道/评价问答和图表；菜品毛利与毛利下降归因。演示前要确认目标账号有对应数据和成本覆盖披露。</p></article>
+          <article class="status-card stop"><span class="tag stop">不要包装成已支持</span><h3>当前明确边界</h3><p>“本月各岗位历史人效到底好不好”的独立诊断；“供应商有没有偷偷涨价”的通用 AI 意图；库存/损耗/门店经营的全域自主 Agent；未经确认的生产写动作。</p></article>
+        </div>
+        <div class="table-wrap" style="margin-top:20px"><table><thead><tr><th>客户这样问</th><th>白话回应</th><th>可以带他去哪里</th></tr></thead><tbody>
+          <tr><td>“这是不是秒级实时？”</td><td>“目前是每 60 秒自动刷新，也能手动立即刷新，叫分钟级准实时更准确。”</td><td>首页数字指挥屏的最后接收与请求耗时</td></tr>
+          <tr><td>“AI 会不会自己编数字？”</td><td>“业务数字先由 FactBook 算，模型只解释；越界数字会被拒绝。”</td><td>预测排班来源、置信度和 FactBook 标记</td></tr>
+          <tr><td>“能不能让 AI 自动改排班？”</td><td>“AI 能给调整建议，真实修改必须预览、确认、验权限并留审计；演示环境只读。”</td><td>预测排班的一键调整入口，仅展示预览</td></tr>
+          <tr><td>“为什么毛利看起来特别高？”</td><td>“先看成本覆盖。配方里没登记的辅料、损耗或采购价缺失时，系统会披露口径，不能把它当完整真实毛利。”</td><td>菜品分析毛利页和数据完整度</td></tr>
+          <tr><td>“actual 比 target 低是不是要补人？”</td><td>“不是。那只能说明历史表现差异，缺不缺人要看未来客流、技能和工时约束。”</td><td>预测排班 FactBook</td></tr>
+        </tbody></table></div>
+      </section>
+
+      <section class="section" id="checklist">
+        <div class="section-head"><div><span class="section-index">08 / PRE-FLIGHT</span><h2>演示前 5 分钟检查</h2></div><p class="section-intro">这张清单能避免 80% 的现场尴尬。只要有一项不确定，就先用本手册讲流程，不要现场猜。</p></div>
+        <ul class="checklist">
+          <li>使用受控餐饮演示账号；不要在投屏画面展示密码。</li>
+          <li>确认登录后是餐饮租户，不是工厂租户或平台管理员视角。</li>
+          <li>浏览器缩放 100%，关闭开发者工具和无关页签。</li>
+          <li>首页显示“数据链路正常”或明确的部分异常，不把异常隐藏。</li>
+          <li>确认最后接收时间是本次演示时间附近。</li>
+          <li>预测排班页面来源、门店、时段和置信度均有内容。</li>
+          <li>AI 问题优先从本文“推荐重点演示”中选择。</li>
+          <li>需要演示毛利前，先检查成本覆盖与口径披露。</li>
+          <li>生产演示不点击保存、提交、发布、确认或删除。</li>
+          <li>准备降级话术：接口异常时展示来源与失败状态，不换成假数据。</li>
+        </ul>
+        <p class="callout"><strong>现场异常怎么说：</strong>“现在这一路数据没有成功返回，系统保留上一份结果并明确标异常。我们选择不拿假数据把屏幕填满，这正是防黑盒的一部分。”</p>
+      </section>
+
+      <footer class="footer"><div class="footer-grid"><div><strong>白垩纪餐饮 AI · 完整演示手册</strong><br><small>生产口径核对：2026-08-03 · 本页为说明与演示脚本，不承载生产实时数字。</small></div><a class="button" href="#top">回到顶部 ↑</a></div></footer>
+    </main>
+  </div>
+  <div class="toast" role="status" aria-live="polite">已复制问题</div>
+  <script>
+    (() => {
+      const toast = document.querySelector('.toast');
+      let toastTimer;
+      document.querySelectorAll('.tab-button').forEach((button) => {
+        button.addEventListener('click', () => {
+          document.querySelectorAll('.tab-button').forEach((item) => {
+            item.classList.toggle('active', item === button);
+            item.setAttribute('aria-selected', String(item === button));
+          });
+          document.querySelectorAll('.role-panel').forEach((panel) => {
+            panel.classList.toggle('active', panel.dataset.panel === button.dataset.role);
+          });
+        });
+      });
+      document.querySelectorAll('[data-demo]').forEach((button) => {
+        button.addEventListener('click', () => {
+          document.querySelectorAll('[data-demo]').forEach((item) => {
+            item.classList.toggle('active', item === button);
+            item.setAttribute('aria-selected', String(item === button));
+          });
+          document.querySelectorAll('[data-demo-panel]').forEach((panel) => {
+            panel.classList.toggle('active', panel.dataset.demoPanel === button.dataset.demo);
+          });
+        });
+      });
+      document.querySelectorAll('[data-copy]').forEach((button) => {
+        button.addEventListener('click', async () => {
+          try {
+            await navigator.clipboard.writeText(button.dataset.copy || '');
+            toast.textContent = '已复制问题';
+          } catch {
+            toast.textContent = `请手动复制：${button.dataset.copy || ''}`;
+          }
+          toast.classList.add('show');
+          clearTimeout(toastTimer);
+          toastTimer = setTimeout(() => toast.classList.remove('show'), 1800);
+        });
+      });
+      document.querySelector('#print-guide')?.addEventListener('click', () => window.print());
+      const sections = [...document.querySelectorAll('main section[id]')];
+      const links = [...document.querySelectorAll('.rail nav a')];
+      if ('IntersectionObserver' in window) {
+        const observer = new IntersectionObserver((entries) => {
+          entries.forEach((entry) => {
+            if (!entry.isIntersecting) return;
+            links.forEach((link) => link.classList.toggle('active', link.hash === `#${entry.target.id}`));
+          });
+        }, { rootMargin: '-25% 0px -65% 0px' });
+        sections.forEach((section) => observer.observe(section));
+      }
+    })();
+  </script>
+</body>
+</html>
