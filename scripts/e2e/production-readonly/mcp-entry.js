@@ -1585,10 +1585,17 @@ const { runReadOnlyPageScenario } = require('./_shared');
 const { pathnameOf } = require('../core/url-utils');
 
 const STAFFING_METRIC_KEYS = ['predictedGuests', 'staffing', 'gap', 'confidence'];
+const EXPECTED_TRANSMISSION_LABELS = [
+  '今日经营汇总',
+  '预订 / POS / 客流',
+  '预测 FactBook',
+  '大模型解释',
+];
 
 module.exports = {
   id: 'restaurant-live-command-readonly',
   path: ROUTES.dashboard,
+  expectedTransmissionLabels: EXPECTED_TRANSMISSION_LABELS,
   run: (ctx) => runReadOnlyPageScenario(ctx, {
     id: 'restaurant-live-command-readonly',
     path: ROUTES.dashboard,
@@ -1614,12 +1621,14 @@ module.exports = {
         .length;
       const finalPath = pathnameOf(page.url());
       const commandCount = await command.count();
-      const transmissionNodeCount = await command.locator('.transmission-rail li').count();
+      const transmissionLabels = (await command.locator('.transmission-rail li strong').allInnerTexts())
+        .map((label) => label.trim());
       const transmissionLabel = await command.locator('.live-command__eyebrow').innerText().catch(() => '');
       const loadError = await page.locator('.load-alert.el-alert--error').innerText().catch(() => '');
       const assessment = finalPath === ROUTES.dashboard
         && commandCount === 1
-        && transmissionNodeCount === 3
+        && transmissionLabels.length === EXPECTED_TRANSMISSION_LABELS.length
+        && transmissionLabels.every((label, index) => label === EXPECTED_TRANSMISSION_LABELS[index])
         && populatedMetricCount === STAFFING_METRIC_KEYS.length
         && !loadError
         ? { result: 'PASS', rootCauseClass: 'none' }
@@ -1627,7 +1636,8 @@ module.exports = {
       return {
         finalPath,
         commandCount,
-        transmissionNodeCount,
+        transmissionNodeCount: transmissionLabels.length,
+        transmissionLabels,
         transmissionLabel,
         staffingMetricValues: metricValues,
         populatedMetricCount,
