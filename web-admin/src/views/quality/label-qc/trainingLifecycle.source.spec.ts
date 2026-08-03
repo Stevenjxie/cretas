@@ -19,7 +19,10 @@ describe('label QC training lifecycle UI contract', () => {
   });
 
   it('keeps backup export separate from approved training export', () => {
-    expect(page).toContain('下载备份');
+    expect(page).toContain('下载照片备份');
+    expect(page).toContain('createPhotoArchive');
+    expect(page.indexOf('const archive = await createPhotoArchive'))
+      .toBeLessThan(page.indexOf('const recordResponse = await backupLabelQcTask'));
     expect(page).toContain('导出已批准训练集');
     expect(api).toContain('/backup');
     expect(api).toContain('/training-export');
