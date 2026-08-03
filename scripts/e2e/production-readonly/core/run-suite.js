@@ -21,6 +21,7 @@ const SCENARIOS = [
   require('../scenarios/workflow-readonly'),
   require('../scenarios/production-plan-routing-readonly'),
   require('../scenarios/label-qc-readonly'),
+  require('../scenarios/restaurant-live-command-readonly'),
   require('../scenarios/restaurant-staffing-readonly'),
   require('../scenarios/ui-stability'),
 ];

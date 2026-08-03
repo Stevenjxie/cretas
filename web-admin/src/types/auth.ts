@@ -14,6 +14,12 @@ export const FACTORY_ROLES = {
   // Level 0 - 工厂最高管理
   FACTORY_SUPER_ADMIN: 'factory_super_admin',
 
+  // 餐饮业务账号（同一认证表，能力由 RESTAURANT 类型与模块权限共同收敛）
+  RESTAURANT_OWNER: 'restaurant_owner',
+  RESTAURANT_MANAGER: 'restaurant_manager',
+  RESTAURANT_PURCHASER: 'restaurant_purchaser',
+  RESTAURANT_CHEF: 'restaurant_chef',
+
   // Level 10 - 职能部门经理
   HR_ADMIN: 'hr_admin',
   PROCUREMENT_MANAGER: 'procurement_manager',
@@ -60,6 +66,10 @@ export interface RoleMetadata {
 export const ROLE_METADATA: Record<string, RoleMetadata> = {
   // Level 0
   factory_super_admin: { displayName: '工厂总监', description: '拥有工厂所有权限', level: 0, department: 'all' },
+  restaurant_owner: { displayName: '餐饮老板', description: '连锁经营决策与跨店协同', level: 0, department: 'restaurant' },
+  restaurant_manager: { displayName: '餐饮店长', description: '门店营运、排班与执行', level: 10, department: 'restaurant' },
+  restaurant_purchaser: { displayName: '餐饮采购', description: '报货、供应商与采购协同', level: 10, department: 'restaurant' },
+  restaurant_chef: { displayName: '厨师长', description: '后厨领料、损耗与出品执行', level: 10, department: 'restaurant' },
 
   // Level 10 - 职能部门经理
   hr_admin: { displayName: 'HR管理员', description: '人事管理、考勤、薪资', level: 10, department: 'hr' },

@@ -55,10 +55,9 @@ export const ROLE_DASHBOARD_MAP: Record<string, string> = {
 
 /**
  * 工厂类型 Dashboard 覆盖 (按 factoryType 而非 factoryId)
- * 餐饮类型工厂的 factory_super_admin / restaurant_manager 应看餐饮 Dashboard。
- * 注意: 仅限管理类角色; hr_admin / warehouse_manager / finance_manager 等
- * 非餐饮业务角色即便在 RESTAURANT 工厂也走自己专属 Dashboard, 不然会看到
- * 领料单/损耗/盘点 等 Restaurant 专属卡片 -> 点击全 403 (Apr 18 2026 bug #44)。
+ * 餐饮类型租户的老板、店长、人事和受控管理员应看餐饮 Dashboard。
+ * 人事进入后由角色体验和权限过滤，只展示预测排班/人力相关入口；工厂类型
+ * hr_admin 仍走 DashboardHR，不扩大 FACTORY 租户的餐饮权限。
  */
 const FACTORY_TYPE_DASHBOARD_OVERRIDE: Record<string, string> = {
   'RESTAURANT': 'DashboardRestaurant',
@@ -68,7 +67,9 @@ const FACTORY_TYPE_DASHBOARD_OVERRIDE: Record<string, string> = {
 const RESTAURANT_DASHBOARD_ELIGIBLE_ROLES = new Set([
   'super_admin',
   'factory_super_admin',
+  'restaurant_owner',
   'restaurant_manager',
+  'hr_admin',
 ]);
 
 /**

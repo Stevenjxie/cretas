@@ -9,6 +9,7 @@ require('./result-schema.test');
 require('./mcp-entry.test');
 require('./skill-drift.test');
 require('./production-plan-routing.test');
+require('./restaurant-live-command-readonly.test');
 require('./restaurant-staffing-readonly.test');
 require('./url-utils.test');
 require('./ui-login.test');

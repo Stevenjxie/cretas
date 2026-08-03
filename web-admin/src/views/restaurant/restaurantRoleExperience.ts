@@ -3,6 +3,7 @@ import type { ModuleName } from '@/store/modules/permission';
 export type RestaurantRole =
   | 'restaurant_owner'
   | 'restaurant_manager'
+  | 'hr_admin'
   | 'restaurant_purchaser'
   | 'restaurant_chef';
 
@@ -71,6 +72,7 @@ const EXPERIENCES: Record<RestaurantRole, RestaurantRoleExperience> = {
     handoff: '决策后交给店长、采购或财务执行；操作仍需预览确认。',
     actions: [
       { title: '经营驾驶舱', description: '看全局营收、门店与渠道', path: '/smart-bi/dashboard', module: 'analytics', emphasis: 'primary' },
+      { title: '预测排班', description: '查看明天、下周和下月人力需求', path: '/restaurant/staffing', module: 'restaurantHr' },
       { title: '财务驾驶舱', description: '核对毛利、成本与价格异常', path: '/restaurant/finance', module: 'restaurantFinance' },
       { title: '门店对比', description: '找到领先与掉队门店', path: '/restaurant/analytics/stores', module: 'restaurantMarketing' },
       { title: '问经营 AI', description: '让大模型综合解释并给行动建议', path: '/smart-bi/query', module: 'analytics' },
@@ -99,7 +101,7 @@ const EXPERIENCES: Record<RestaurantRole, RestaurantRoleExperience> = {
     actions: [
       { title: '运营驾驶舱', description: '先看损耗、领料和盘点', path: '/restaurant/ops', module: 'restaurantOps', emphasis: 'primary' },
       { title: '经营看板', description: '跟进营收、客流和目标', path: '/restaurant/analytics/role-kpi', module: 'restaurantMarketing' },
-      { title: '人事驾驶舱', description: '查看人效数据准备状态', path: '/restaurant/hr', module: 'restaurantHr' },
+      { title: '预测排班', description: '按预订和客流安排门店班次', path: '/restaurant/staffing', module: 'restaurantHr' },
       { title: '问营运 AI', description: '让大模型定位问题并排优先级', path: '/smart-bi/query', module: 'analytics' },
     ],
     ai: {
@@ -113,6 +115,36 @@ const EXPERIENCES: Record<RestaurantRole, RestaurantRoleExperience> = {
         '哪家店业绩最好',
       ],
       moreGroups: SHARED_ANALYSIS_GROUPS,
+    },
+  },
+  hr_admin: {
+    role: 'hr_admin',
+    roleLabel: '餐饮人事',
+    workspaceLabel: '人力调度台',
+    headline: '让每个门店的技能与工时提前到位',
+    summary: '只聚焦预测客流、岗位技能、周工时和兼职需求；历史人效仅作趋势证据，不直接解释为缺人。',
+    responsibilities: ['预测排班与兼职需求', '岗位技能覆盖', '工时规则与调整审计'],
+    handoff: '班次调整与店长确认，经营目标由老板确认；任何人数变更先预览再记录。',
+    actions: [
+      { title: '预测排班', description: '查看明天、下周和下月 FactBook', path: '/restaurant/staffing', module: 'restaurantHr', emphasis: 'primary' },
+      { title: '人事驾驶舱', description: '查看人力数据准备与职责边界', path: '/restaurant/hr', module: 'restaurantHr' },
+      { title: '问排班 AI', description: '让大模型解释 FactBook 与可调整建议', path: '/restaurant/staffing', module: 'restaurantHr' },
+      { title: '经营趋势', description: '核对客流趋势作为排班证据', path: '/restaurant/analytics/role-kpi', module: 'restaurantMarketing' },
+    ],
+    ai: {
+      title: '人力调度 AI',
+      description: '从预测排班 FactBook 取数，由大模型解释需求、技能、工时与可调整建议。',
+      placeholder: '例如：下周需要多少兼职，哪些门店技能覆盖不足',
+      primaryQuestions: [
+        '明天怎么排班',
+        '下周需要多少兼职',
+        '下个月各店人效安排',
+        '最近30天各店客流趋势',
+      ],
+      moreGroups: [
+        { label: '预测排班', questions: ['明天怎么排班', '下周需要多少兼职', '下个月各店人效安排'] },
+        { label: '趋势证据', questions: ['最近30天各店客流趋势', '本月营收和订单怎么样'] },
+      ],
     },
   },
   restaurant_purchaser: {
@@ -191,6 +223,7 @@ export function getRestaurantRoleExperience(role?: string | null): RestaurantRol
 export const RESTAURANT_ALL_ROLES: RestaurantRole[] = [
   'restaurant_owner',
   'restaurant_manager',
+  'hr_admin',
   'restaurant_purchaser',
   'restaurant_chef',
 ];
