@@ -127,26 +127,29 @@ public class UnitContractServiceImpl implements UnitContractService {
         if (unit == null) {
             return value;           // 规则 1: 权威表认不出的自由文本, 原样保留
         }
-        if (unit.factorToBase() == null && ambiguousChineseCode(unit.code())) {
-            return value;           // 规则 2: 无普适换算 + 多个中文写法 → 保用户字面, 不塌陷
-        }
         if (!SYSTEM_UNITS.containsKey(unit.code())) {
             String displayName = unit.displayName();
-            // 规则 3: 工厂自定义单位存中文名; 名字缺失时退回码, 不写空
+            // 规则 2: 工厂自定义单位存中文名; 名字缺失时退回码, 不写空
             return displayName == null || displayName.isBlank() ? unit.code() : displayName;
         }
-        return unit.code();         // 规则 4: 内置单位存英文码 (与 2400 行存量一致)
+        return unit.code();         // 规则 3: 内置单位存英文码 (与 2400 行存量一致)
     }
 
     /**
-     * 该内置码是否被<b>多个中文写法</b>共用 —— 共用即意味着归一会替工厂断定「这几个是同一个东西」。
+     * 该内置码是否被<b>多个中文写法</b>共用 (实测只有 {@code pcs}: 件/个/只)。
      *
-     * <p>{@code alias("pcs","pcs","件","个","只")} 一个码挂了三个中文写法, 归一到任何一个都是塌陷;
-     * {@code alias("box","box","盒")} 只有一个中文写法, 「盒」与 {@code box} 是同一个单位的两种写法,
-     * 归一是纯翻译, 安全。
+     * <p>⛔ <b>storageUnit 刻意<u>不</u>用它做「保字面」判据</b>, 尽管第一版这么写过。原因是
+     * {@code V20261029_48}(2026-08-02 已上线) 已经把 SKU 档案里的 个67+只3+件2 全部合并成
+     * {@code pcs} —— 存量就是 72 行 {@code pcs}。此时若让「只」保字面, 后果是<b>任何人再编辑一次
+     * 那个物料, 它的单位就从 {@code pcs} 悄悄变成「只」</b>, 于是与它自己已有的批次({@code pcs})
+     * 对不上, 从反方向重演 LIUSHANMEN「有货但看不见」。
      *
-     * <p>只在 {@code factorToBase == null}(没有普适换算) 时才用这个判据 —— 「公斤/千克」同样是
-     * 一个码两个中文写法, 但它们之间有恒定换算, 本来就是同一个单位, 归一有物理意义。
+     * <p>⚠️ <b>遗留矛盾, 待 Steve 定</b>: {@code V20261029_48} 的口径(个/只/件 → pcs, 理由是
+     * 「存中文没有规范形」) 与 #1976 / {@code TransferUnitCanonicalizationTest} 的口径
+     * (只 ≠ 件, 归一即替工厂断定两者相同) <b>方向相反, 且两者都在 main 上</b>:
+     * 档案表已被合并成码, 而调拨/报工两侧仍按字面比较。本方法保留在此, 是为了这条矛盾定案后
+     * 有现成判据可用 —— 现在不接线。备份表 {@code backup_sku_units_20260802} 存着合并前的原值,
+     * 若定为「只≠件」则可从那里还原。
      */
     private static boolean ambiguousChineseCode(String code) {
         return AMBIGUOUS_CHINESE_CODES.contains(code);

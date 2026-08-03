@@ -15,7 +15,6 @@ import org.mockito.quality.Strictness;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.when;
 
@@ -31,7 +30,7 @@ import static org.mockito.Mockito.when;
  */
 @ExtendWith(MockitoExtension.class)
 @MockitoSettings(strictness = Strictness.LENIENT)
-@DisplayName("单位落库口径 storageUnit —— 内置存码 / 自定义存中文 / 多中文写法保字面")
+@DisplayName("单位落库口径 storageUnit —— 内置存码 / 自定义存中文")
 class UnitStorageValueContractTest {
 
     private static final String FACTORY = "F006";
@@ -63,7 +62,7 @@ class UnitStorageValueContractTest {
     }
 
     @Nested
-    @DisplayName("规则 4: 内置单位存英文码 —— 存量 2400 行不动")
+    @DisplayName("规则 3: 内置单位存英文码 —— 存量 2400 行不动")
     class BuiltInStaysCode {
 
         @Test
@@ -92,45 +91,44 @@ class UnitStorageValueContractTest {
     }
 
     @Nested
-    @DisplayName("规则 2: 一个码挂多个中文写法 → 保用户字面 (#1976 / LIUSHANMEN 2026-07-30)")
-    class AmbiguousChineseStaysLiteral {
+    @DisplayName("件/个/只 跟随 V20261029_48 归一到 pcs —— 编辑物料不得让单位形态漂移")
+    class CountAliasesFollowDeployedMigration {
 
+        /**
+         * ⚠️ 这一组断言的方向是<b>被存量逼出来的, 不是我挑的</b>。
+         *
+         * <p>V20261029_48 (2026-08-02 已上线) 把 SKU 档案里的 个67+只3+件2 全部合并成 pcs,
+         * 存量现在就是 72 行 pcs。此时若让「只」保字面, 后果是<b>再编辑一次那个物料, 单位就从
+         * pcs 悄悄变成「只」</b>, 与它自己已有的批次(pcs)对不上 —— 从反方向重演 LIUSHANMEN。
+         *
+         * <p>⚠️ 与 #1976 / TransferUnitCanonicalizationTest (只 ≠ 件) <b>方向相反, 两者都在
+         * main 上</b>: 档案表已合并成码, 调拨/报工两侧仍按字面比较。这条矛盾<b>待 Steve 定案</b>,
+         * 本测试钉住的只是「档案侧与已上线的存量保持一致」, 不是对「只是否等于件」表态。
+         */
         @Test
-        @DisplayName("🔴「只」必须存「只」—— 存 pcs 或存「件」都是把事故放回来")
-        void countUnitStaysLiteral() {
-            assertEquals("只", service.storageUnit(FACTORY, "只"),
-                    "用户选「只」就该存「只」; 改写成 pcs 会让报工按字面比较时看不见这批货");
-            assertNotEquals("pcs", service.storageUnit(FACTORY, "只"));
-            assertNotEquals("件", service.storageUnit(FACTORY, "只"),
-                    "换成存中文并不能解决塌陷 —— 归一到「件」和归一到 pcs 一样是替工厂断定两者相同");
+        @DisplayName("「只」「个」「件」都存 pcs —— 与已上线的 72 行存量一致")
+        void countAliasesFollowArchiveState() {
+            assertEquals("pcs", service.storageUnit(FACTORY, "只"));
+            assertEquals("pcs", service.storageUnit(FACTORY, "个"));
+            assertEquals("pcs", service.storageUnit(FACTORY, "件"));
         }
 
         @Test
-        @DisplayName("「只」「个」「件」三者互不相等 —— 它们共用 pcs 码, 归一即塌陷")
-        void countAliasesDoNotCollapse() {
-            String zhi = service.storageUnit(FACTORY, "只");
-            String ge = service.storageUnit(FACTORY, "个");
-            String jian = service.storageUnit(FACTORY, "件");
-            assertNotEquals(zhi, ge, "一只不等于一个");
-            assertNotEquals(ge, jian, "一个不等于一件");
-            assertNotEquals(zhi, jian, "一只不等于一件");
+        @DisplayName("🔴 编辑物料不得让单位形态漂移 —— 中文与码进来必须落成同一个值")
+        void editingDoesNotDriftUnitForm() {
+            assertEquals(service.storageUnit(FACTORY, "pcs"), service.storageUnit(FACTORY, "只"),
+                    "档案存 pcs 的物料, 用户从下拉选「只」再保存, 不能变成「只」而与自己的批次失配");
         }
 
         @Test
-        @DisplayName("英文码 pcs 仍存 pcs —— 存量 72 行档案不受影响")
-        void englishCodeInAmbiguousGroupStillStored() {
-            assertEquals("pcs", service.storageUnit(FACTORY, "pcs"));
-        }
-
-        @Test
-        @DisplayName("「盒」不在此列 —— box 只挂一个中文写法, 归一是纯翻译")
-        void singleChineseWritingIsNotAmbiguous() {
+        @DisplayName("「盒」→ box 同理 —— 一个中文写法的更没有争议")
+        void singleChineseWritingCanonicalizes() {
             assertEquals("box", service.storageUnit(FACTORY, "盒"));
         }
     }
 
     @Nested
-    @DisplayName("规则 3: 工厂自定义单位存中文名")
+    @DisplayName("规则 2: 工厂自定义单位存中文名")
     class CustomUnitStoresChinese {
 
         @Test
@@ -138,7 +136,7 @@ class UnitStorageValueContractTest {
         void customUnitStoresDisplayName() {
             registerCustomUnit("banzhi", "半只", "COUNT");
             assertEquals("半只", service.storageUnit(FACTORY, "半只"));
-            // ⚠️ 上面那条<b>分辨不出规则 3 是否真跑了</b> —— 工厂目录为空时「半只」也会按规则 1
+            // ⚠️ 上面那条<b>分辨不出规则 2 是否真跑了</b> —— 工厂目录为空时「半只」也会按规则 1
             // 原样返回「半只」, 结果一模一样。真正能分辨的是<b>从拼音码进来</b>: 只有该自定义单位
             // 确实进了目录, banzhi 才查得到并翻成中文; 目录为空时它只会原样返回 banzhi。
             // (本测试第一版把仓储方法名 mock 错了, 正是这条把假绿抓出来的。)
