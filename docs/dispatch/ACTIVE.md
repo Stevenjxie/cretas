@@ -5,6 +5,7 @@
 
 ## 在飞任务
 
+- `FIX-RESTAURANT-AI-AUDIT-EOF-20260803` — `in-progress` — Owner: `/root` — Base SHA: `1b28348a538eff822ac7a3dfec5864a8ade3f1de` — 修复 PR #2243 新增能力真值文档的 EOF 空行，使 exact-main `release-preflight.sh` 通过；仅限该文档、dispatch 与当日归档，不改 Python 行为或生产数据。验收：`git diff --check`、strict release preflight。
 - `CX-SHEET-VISUAL-20260731-001` — `review` — Owner: `/root` — Base SHA: `f06f8e03115f49f99d337290510222d22246bc0f` — 客户 2026-07-31 生产走查 6 项展示反馈已实现；目标 Web 56/56、Java 17/17、调用点变异检验、`vue-tsc -b --force`、Vite build 与 diff check 均通过。全量 Vitest 两次最终稳定为任务卡声明的 4 个已知红测；开工实测曾额外出现 1 个 `ProductProcessWorkflowEditor.loadIsolation.spec.ts`，该文件随后单跑 26/26 且两次全量均通过，故开工/最终实测集合未逐一相同但无新增红测。生产只读查得 F006 简称 `22` 有 2 条重复；新 migration 明确报冲突并中止，不自动改业务数据。仅推送分支，不开 PR、不合并、不部署，生产业务写入为 0。
 - `AUDIT-RESTAURANT-SYNTHESIS-RETENTION-20260727` — `review` — Owner: `/root` — Base SHA: `c1e4ed173eb8487e1af7d3b5cb3617c5e638e806` — 审计 2026-07-27 Web 统一 intent 路由后是否遗留无消费者的综合 synthesis 适配器；已确认 Java Gold、`mobile-rest-ai` 与 Web `ChartInsights` 仍直接消费 comprehensive synthesis，故仅补兼容层保留价值与删除条件注释，不改变运行行为。目标 Vitest 18/18 与 `git diff --check` 已通过；只创建 review marker 分支，严格 `NOT_DEPLOYED`、生产零写。
 - `SEC-CREDENTIAL-ROTATION-20260719` — `blocked` — Owner: Codex coordinator — Base SHA: `1ba9a241a77144a80851051efbac584abf4db69d` — tracked tree、47/139 非受控副本、数据库/JWT/internal/BaoTa 轮换和生产验收已完成；仍需各供应商控制台吊销无法由当前 API 权限完成的旧长期凭证，详情见 [凭证轮换收尾记录](../security/credential-rotation-closeout-2026-07-20.md)。
