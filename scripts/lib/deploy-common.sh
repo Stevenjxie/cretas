@@ -315,6 +315,38 @@ graceful_kill() {
 #
 # 示例:
 #   acquire_deploy_lock "cretas-backend" || exit 1
+# 锁文件里记的进程是否还活着。
+#
+# 🔴 2026-08-03 实证: 部署被杀后 /tmp/*.lock 里的 PID 在 Git Bash `ps` 里还挂着僵留记录,
+#   `kill -0` 因此返回成功 → 锁被判为「活的」, 后续部署全被挡, 当晚三次要人工核实再手删。
+#
+# ⚠️ 修法有个坑, 第一版就踩了: lock 里写的是 `$$` (<b>MSYS PID</b>), 而 Windows 的
+#   Get-Process 用的是 <b>Windows PID</b>, 两个命名空间不同 —— 拿 MSYS PID 去 Get-Process
+#   必然查不到, 于是<b>把活着的部署判成死的并清掉它的锁</b> = 并发部署互相覆盖,
+#   比原问题严重得多。所以这里写进锁文件的是 winpid (/proc/<pid>/winpid)。
+#
+# 判据方向<b>刻意保守</b>: 任何一步查不确定, 都当「活着」(挡住), 宁可让人手删,
+#   也不能误清一把真锁。
+deploy_lock_pid() {
+    # 优先写 Windows PID; 拿不到就退回 MSYS PID (非 Windows 环境本就一致)
+    cat "/proc/$$/winpid" 2>/dev/null || echo $$
+}
+
+deploy_pid_alive() {
+    local pid="$1"
+    [ -n "$pid" ] || return 1
+
+    case "$(uname -s 2>/dev/null)" in
+        MINGW*|MSYS*|CYGWIN*)
+            # Windows: 只认 Get-Process。查不了(没有 powershell)就保守当活着。
+            command -v powershell.exe >/dev/null 2>&1 || return 0
+            powershell.exe -NoProfile -Command                 "if (Get-Process -Id $pid -ErrorAction SilentlyContinue) { exit 0 } else { exit 1 }"                 >/dev/null 2>&1
+            return $?
+            ;;
+        *) kill -0 "$pid" 2>/dev/null ;;
+    esac
+}
+
 acquire_deploy_lock() {
     local lock_name="${1:-cretas-deploy}"
     local lock_file="/tmp/${lock_name}.lock"
@@ -326,8 +358,8 @@ acquire_deploy_lock() {
     if [ -f "$lock_file" ]; then
         local stale_pid
         stale_pid=$(cat "$lock_file" 2>/dev/null)
-        if [ -n "$stale_pid" ] && ! kill -0 "$stale_pid" 2>/dev/null; then
-            log "WARN" "发现残留 lock 文件 (PID $stale_pid 不存在), 自动清理后继续."
+        if [ -n "$stale_pid" ] && ! deploy_pid_alive "$stale_pid"; then
+            log "WARN" "发现残留 lock 文件 (PID $stale_pid 已不存在), 自动清理后继续."
             rm -f "$lock_file"
         fi
     fi
@@ -345,7 +377,7 @@ acquire_deploy_lock() {
             return 1
         fi
         # 写 PID 进 lock 文件, 让下次 precheck 能验证 (flock fd 在 SIGKILL 时不一定释放).
-        echo $$ >&200
+        deploy_lock_pid >&200
         # fd 200 保持打开, 进程退出时 flock 自动释放
         log "DEBUG" "获取 flock: $lock_file (PID $$)"
     else
@@ -353,14 +385,14 @@ acquire_deploy_lock() {
         if [ -f "$lock_file" ]; then
             local old_pid
             old_pid=$(cat "$lock_file" 2>/dev/null)
-            if [ -n "$old_pid" ] && kill -0 "$old_pid" 2>/dev/null; then
+            if [ -n "$old_pid" ] && deploy_pid_alive "$old_pid"; then
                 log "ERROR" "另一个 deploy 进程正在跑 (PID $old_pid, $lock_file). 退出."
                 return 1
             fi
-            log "WARN" "发现残留 lock 文件 (PID $old_pid 不存在), 清理后继续."
+            log "WARN" "发现残留 lock 文件 (PID $old_pid 已不存在), 清理后继续."
             rm -f "$lock_file"
         fi
-        echo $$ > "$lock_file"
+        deploy_lock_pid > "$lock_file"
         # trap 在 exit 时清理 (调用方 script 的 EXIT trap 会保留我们的)
         trap 'rm -f "'"$lock_file"'" 2>/dev/null; true' EXIT
         log "DEBUG" "获取 PID 锁: $lock_file (PID $$)"
