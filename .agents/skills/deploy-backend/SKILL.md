@@ -11,10 +11,16 @@ Deploy only an exact, reviewed commit. Read `.codex/rules/server-operations.md`,
 
 ## Scope And Environment
 
-| Component | Production truth | Test |
+⛔ **The test environment was decommissioned on 2026-07-13** (Steve's decision; `cretas-backend-test`
+on `10011` was stopped and disabled, test Python on `8084` was stopped, freeing ~1.5G after prod Java
+OOM'd under concurrent load). **`47` now runs production only.** Treat the Test column below as
+historical: `--env test` cannot be executed, and "deploy to test first" is not an available workflow.
+Real E2E can only target production.
+
+| Component | Production truth | Test (decommissioned 2026-07-13) |
 |---|---|---|
-| Java | `47.100.235.168`, alternating `10010` / `10020` | `10011` |
-| Python | `47.100.235.168:8083` | `8084` |
+| Java | `47.100.235.168`, alternating `10010` / `10020` | ~~`10011`~~ |
+| Python | `47.100.235.168:8083` | ~~`8084`~~ |
 | Web admin | `139.196.165.140:8086`, `admin.cretaceousfuture.com` | n/a |
 
 Java runtime is `/www/wwwroot/cretas/`; web admin is `/www/wwwroot/web-admin/`. Production Java traffic is routed by `139.196.165.140:/www/server/panel/vhost/nginx/_upstream_cretas.conf`.

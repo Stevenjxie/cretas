@@ -235,7 +235,17 @@ curl "http://localhost:10010/api/mobile/F001/timeclock/history?userId=1&startDat
   --stage-backend YES-STAGE
 ```
 
-合并后仅从 clean exact `origin/main` 执行生产发布：
+合并后**先预热**（把 CI 制品的跨境运输挪出发布窗口；幂等，可丢后台）。不预热则探测落空、
+回退本地 Maven fallback（构建段实测 204s vs 25s），且 200s+ 构建期间 `origin/main` 常被并发推进，
+导致构建全部成功却被 exact-main 复检整体作废：
+
+```bash
+./scripts/deploy/prewarm-main-artifact.sh \
+  --tests '<本次目标测试>' \
+  --wait 420
+```
+
+看到 `PREWARM=done` / `already-warm` 后，仅从 clean exact `origin/main` 执行生产发布：
 
 ```bash
 ./scripts/deploy/release-cretas.sh \
@@ -244,6 +254,11 @@ curl "http://localhost:10010/api/mobile/F001/timeclock/history?userId=1&startDat
   --tests '<本次目标测试>' \
   --confirm-prod YES-PROD
 ```
+
+发布成败的唯一可靠判据：`DEPLOY_EXIT=0` **且**日志里 `RELEASE_FINAL_STATUS` 恰好出现 1 次
+（该行不出现本身就是失败信号）。被 exact-main 闸拒绝时是静默的 —— 构建 `BUILD SUCCESS`、
+测试全绿、然后戛然而止，回执里 `deploy_mode: none`；`git fetch && git checkout --detach origin/main`
+拉最新重跑即可。
 
 不要从服务器拉取任意分支现场编译，也不要直接杀固定端口进程。Java 生产运行在 PostgreSQL + Flyway 上，并在 `10010`/`10020` 两个 systemd 槽位间蓝绿切换；真实 active 槽位必须从 Nginx upstream 读取。
 

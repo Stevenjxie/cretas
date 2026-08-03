@@ -33,7 +33,9 @@ This file provides guidance to Claude Code when working with this repository.
 cd frontend/CretasFoodTrace && npm start                       # RN 前端 (Expo)
 cd backend/java/cretas-api && mvn clean package -DskipTests    # Java 构建
 cd backend/python && uvicorn main:app --port 8083              # Python 服务
+./scripts/deploy/prewarm-main-artifact.sh --tests '<tests>' --wait 420                          # 合并后先预热, 不能省
 ./scripts/deploy/release-cretas.sh --phase deploy --base-sha <SHA> --tests '<tests>' --confirm-prod YES-PROD  # 发布统一入口 (单组件/详情见 /deploy-backend skill)
+# 判据: DEPLOY_EXIT=0 且日志里 RELEASE_FINAL_STATUS 恰好 1 次 (不出现本身就是失败信号)
 ```
 
 API 基础路径：Java `/api/mobile/*`（业务 `/api/mobile/{factoryId}/*`）；Python `/api/smartbi/*`、`/api/efficiency/*` 等（详见 python-services-architecture rule）。
