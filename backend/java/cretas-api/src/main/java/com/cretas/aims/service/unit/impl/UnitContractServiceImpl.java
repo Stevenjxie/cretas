@@ -127,6 +127,9 @@ public class UnitContractServiceImpl implements UnitContractService {
         if (unit == null) {
             return value;           // 规则 1: 权威表认不出的自由文本, 原样保留
         }
+        if (unit.factorToBase() == null && ambiguousChineseCode(unit.code())) {
+            return value;           // 规则 2: 同码多中文写法 → 保用户字面 (只/个/件 是三个单位)
+        }
         if (!SYSTEM_UNITS.containsKey(unit.code())) {
             String displayName = unit.displayName();
             // 规则 2: 工厂自定义单位存中文名; 名字缺失时退回码, 不写空
@@ -138,18 +141,25 @@ public class UnitContractServiceImpl implements UnitContractService {
     /**
      * 该内置码是否被<b>多个中文写法</b>共用 (实测只有 {@code pcs}: 件/个/只)。
      *
-     * <p>⛔ <b>storageUnit 刻意<u>不</u>用它做「保字面」判据</b>, 尽管第一版这么写过。原因是
-     * {@code V20261029_48}(2026-08-02 已上线) 已经把 SKU 档案里的 个67+只3+件2 全部合并成
-     * {@code pcs} —— 存量就是 72 行 {@code pcs}。此时若让「只」保字面, 后果是<b>任何人再编辑一次
-     * 那个物料, 它的单位就从 {@code pcs} 悄悄变成「只」</b>, 于是与它自己已有的批次({@code pcs})
-     * 对不上, 从反方向重演 LIUSHANMEN「有货但看不见」。
+     * <p><b>Steve 2026-08-03 拍板: 只/个/件 算三个单位</b>, 于是 {@code storageUnit} 落库时
+     * 保用户字面, 不折成 {@code pcs}。这与 #1976 /
+     * {@code TransferUnitCanonicalizationTest} / 报工侧 {@code canonicalNativeUnit} 一致 ——
+     * 「一只不等于一件, 给它们编共同等价码等于替工厂断定两个东西相同」。
      *
-     * <p>⚠️ <b>遗留矛盾, 待 Steve 定</b>: {@code V20261029_48} 的口径(个/只/件 → pcs, 理由是
-     * 「存中文没有规范形」) 与 #1976 / {@code TransferUnitCanonicalizationTest} 的口径
-     * (只 ≠ 件, 归一即替工厂断定两者相同) <b>方向相反, 且两者都在 main 上</b>:
-     * 档案表已被合并成码, 而调拨/报工两侧仍按字面比较。本方法保留在此, 是为了这条矛盾定案后
-     * 有现成判据可用 —— 现在不接线。备份表 {@code backup_sku_units_20260802} 存着合并前的原值,
-     * 若定为「只≠件」则可从那里还原。
+     * <p>⚠️ <b>作用域仅限「数量 / 库存」这一侧</b>, 不含 Workflow 槽位匹配。
+     * {@code BomWorkflowRevisionService#canonicalUnit} <b>刻意</b>走
+     * {@code canonicalCodeOrRaw} 把 件/个/只 一并折成 {@code pcs}, 因为它判的是
+     * 「这个投入槽还在不在」, 本就要认本地化写法(见该处注释与
+     * {@code #localizedCountUnitMatchesCanonicalBomUnitDuringStableSlotRekeying})。
+     * <b>两者别混, 也别顺手一起改。</b>
+     *
+     * <p>只在 {@code factorToBase == null}(没有普适换算) 时才用这个判据 —— 「公斤/千克」同样是
+     * 一个码两个中文写法, 但它们之间有恒定换算, 本来就是同一个单位, 归一有物理意义。
+     *
+     * <p>📌 配套数据: {@code V20261029_48}(2026-08-02) 曾把档案里的 个67+只3+件2 合并成 72 行
+     * {@code pcs}; 按本次拍板需从备份表 {@code backup_sku_units_20260802} 还原, 否则档案是码而
+     * 新写入是中文, 编辑一次就漂。<b>还原迁移与本改动必须同一次发布</b>(Flyway 在服务启动时先跑,
+     * 顺序天然正确)。
      */
     private static boolean ambiguousChineseCode(String code) {
         return AMBIGUOUS_CHINESE_CODES.contains(code);
