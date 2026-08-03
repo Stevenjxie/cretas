@@ -82,12 +82,26 @@ uvicorn main:app --port 8083     # 启动服务
   --tests '<本次目标测试>' \
   --stage-backend YES-STAGE  # 仅当用户要求合并后部署；只预上传，不安装/重启/切流
 
+# 合入后【先预热】，不能省：把 CI 制品的跨境运输挪出发布窗口。幂等，可丢后台。
+# 不预热则构建段 204s(本地 fallback) vs 25s(命中 CI 制品)，且 200s+ 构建期间常有
+# 并发 session 推进 origin/main → 构建全成功却被 exact-main 复检整体作废。
+# --tests 与下一步同选择器或更窄（判据是集合包含）。看到 PREWARM=done / already-warm 再往下。
+./scripts/deploy/prewarm-main-artifact.sh \
+  --tests '<本次目标测试>' \
+  --wait 420
+
 # 合入后在 clean exact origin/main worktree 自动检测范围、复用 manifest 并安全串行发布：
 ./scripts/deploy/release-cretas.sh \
   --phase deploy \
   --base-sha '<登记的 Base SHA>' \
   --tests '<本次目标测试>' \
   --confirm-prod YES-PROD
+
+# 成败判据只看这一条：DEPLOY_EXIT=0 且日志里 RELEASE_FINAL_STATUS 恰好出现 1 次。
+# RELEASE_FINAL_STATUS 不出现本身就是失败信号（收尾 printf 在 set -e 下被掐掉）；
+# 后台任务通知里的 exit code 不可信。被 exact-main 闸拒绝时是【静默】的：
+# 构建 BUILD SUCCESS、测试全绿、然后戛然而止，回执里 deploy_mode=none。
+# 处理：git fetch && git checkout --detach origin/main 拉最新重跑即可。
 
 # `release-jar-manifest.sh`、`deploy-backend.sh`、`deploy-web-admin.sh`
 # 保留为明确的单组件发布和故障排查入口；不要由 Agent 自行拼接成普通全栈发布流程。

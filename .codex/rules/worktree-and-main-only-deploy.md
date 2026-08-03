@@ -53,6 +53,14 @@ git diff origin/main...HEAD --stat   # 应只有你的文件, 没有 sister 的 
 ```bash
 # ✅ 正确: 部署 prod 前先在 main
 git checkout main && git pull origin main
+
+# 正常 Java/Web 发布 —— 统一入口(脚本自身强制 clean HEAD == origin/main, 与本规则互为保险):
+./scripts/deploy/prewarm-main-artifact.sh --tests '<tests>' --wait 420   # 合并后先预热, 不能省
+./scripts/deploy/release-cretas.sh --phase deploy --base-sha '<Base SHA>' \
+  --tests '<tests>' --confirm-prod YES-PROD
+# 判据: DEPLOY_EXIT=0 且日志里 RELEASE_FINAL_STATUS 恰好 1 次。详见 AGENTS.md「部署到服务器」。
+
+# 单组件/排查入口(只动 Python、紧急单点修复、排查部署链路本身):
 ./scripts/deploy/deploy-backend.sh --env prod        # Java
 ./scripts/deploy/deploy-smartbi-python.sh --env prod # Python
 ./scripts/deploy/deploy-web-admin.sh --env prod      # web-admin
