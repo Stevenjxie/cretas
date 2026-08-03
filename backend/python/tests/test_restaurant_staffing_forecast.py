@@ -288,11 +288,27 @@ class _DashboardConn:
                 "store_id": 1, "date": date(2026, 8, 3), "daypart": "午市",
                 "guests": 80.0, "orders": 40,
             }]
+        if "GROUP BY date_trunc('minute', source_updated_at)" in sql:
+            return [{
+                "minute": datetime(2026, 8, 3, 9, 0),
+                "event_count": 6,
+                "guest_count": 24,
+            }]
+        if "ORDER BY reservation.source_updated_at DESC, reservation.id DESC" in sql:
+            return [{
+                "external_ref": "stream-1", "store_id": 1,
+                "store_name": "测试门店",
+                "reservation_date": date(2026, 8, 4), "daypart": "午市",
+                "table_count": 1, "guest_count": 4, "status": "CONFIRMED",
+                "source": "test-platform", "is_simulated": True,
+                "source_updated_at": datetime(2026, 8, 3, 9, 0),
+            }]
         if "FROM fact_restaurant_reservation" in sql:
             return [{
                 "store_id": 1, "reservation_date": date(2026, 8, 4),
                 "daypart": "午市", "status": "CONFIRMED", "source": "test-platform",
                 "is_simulated": False, "table_count": 8, "guest_count": 32,
+                "reservation_order_count": 6,
                 "source_updated_at": __import__("datetime").datetime(2026, 8, 3, 9, 0),
             }]
         if "FROM restaurant_staffing_policy" in sql:
@@ -374,7 +390,7 @@ def test_dashboard_contract_matches_web_dto_and_adjustment_preview():
     ))
     assert set((
         "summary_rows", "daily_rows", "sources", "generated_at", "as_of",
-        "numeric_source", "historical_productivity_rule",
+        "numeric_source", "historical_productivity_rule", "live_stream",
     )) <= dashboard.keys()
     assert dashboard["numeric_source"] == "forecast_factbook_only"
     assert dashboard["historical_productivity_rule"] == "evidence_only_not_gap_input"
@@ -388,7 +404,13 @@ def test_dashboard_contract_matches_web_dto_and_adjustment_preview():
     assert trends["historical_productivity"]["avg_7"] == 10.0
     assert trends["historical_productivity"]["direction_rule"] == "evidence_only_not_gap_input"
     assert dashboard["daily_rows"][0]["roles"][0]["plan_fingerprint"]
+    assert dashboard["daily_rows"][0]["reservation_orders"] == 6
+    assert dashboard["summary"]["reservation_orders"] == 6
     assert dashboard["sources"][0]["source"] == "test-platform"
+    assert dashboard["sources"][0]["event_count"] == 6
+    assert dashboard["live_stream"]["event_count"] == 6
+    assert dashboard["live_stream"]["guest_count"] == 24
+    assert dashboard["live_stream"]["recent_events"][0]["is_simulated"] is True
 
 
 def _preview(target, fingerprint, policy):

@@ -46,6 +46,30 @@ export function buildRestaurantCommandMetrics(
       tone: ops?.pendingApprovalCount ? 'warning' : 'neutral',
     },
     {
+      key: 'reservationOrders',
+      label: '当前预订订单',
+      value: summary?.reservationOrders !== undefined
+        ? summary.reservationOrders.toLocaleString('zh-CN')
+        : '—',
+      unit: '单',
+      detail: staffing ? `${staffing.windowStart} · 明日预测输入` : '等待预订 FactBook',
+      source: 'Python reservation FactBook',
+      tone: 'primary',
+    },
+    {
+      key: 'liveGuests',
+      label: '近 15 分钟新增',
+      value: staffing?.liveStream
+        ? staffing.liveStream.guestCount.toLocaleString('zh-CN')
+        : '—',
+      unit: '人',
+      detail: staffing?.liveStream
+        ? `${staffing.liveStream.eventCount.toLocaleString('zh-CN')} 笔实时事件`
+        : '等待实时事件流',
+      source: 'Python reservation FactBook',
+      tone: 'primary',
+    },
+    {
       key: 'predictedGuests',
       label: '明日预测客流',
       value: summary ? summary.predictedGuests.toLocaleString('zh-CN') : '—',

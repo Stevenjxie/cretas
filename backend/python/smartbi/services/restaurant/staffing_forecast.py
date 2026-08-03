@@ -769,6 +769,7 @@ class RestaurantStaffingService:
                 SELECT store_id,reservation_date,daypart,status,source,is_simulated,
                        SUM(table_count)::int AS table_count,
                        SUM(guest_count)::int AS guest_count,
+                       COUNT(*)::int AS reservation_order_count,
                        MAX(source_updated_at) AS source_updated_at
                   FROM fact_restaurant_reservation
                  WHERE factory_id=$1 AND reservation_date BETWEEN $2 AND $3
@@ -776,6 +777,37 @@ class RestaurantStaffingService:
                  GROUP BY store_id,reservation_date,daypart,status,source,is_simulated
                 """,
                 factory_id, start, end, store_id,
+            )
+            stream_events = await conn.fetch(
+                """
+                SELECT reservation.external_ref,reservation.store_id,store.name AS store_name,
+                       reservation.reservation_date,reservation.daypart,
+                       reservation.table_count,reservation.guest_count,reservation.status,
+                       reservation.source,reservation.is_simulated,
+                       reservation.source_updated_at
+                  FROM fact_restaurant_reservation reservation
+                  JOIN dim_store store
+                    ON store.factory_id=reservation.factory_id
+                   AND store.store_id=reservation.store_id
+                 WHERE reservation.factory_id=$1
+                   AND reservation.source_updated_at >= NOW() - INTERVAL '15 minutes'
+                 ORDER BY reservation.source_updated_at DESC, reservation.id DESC
+                 LIMIT 12
+                """,
+                factory_id,
+            )
+            stream_minutes = await conn.fetch(
+                """
+                SELECT date_trunc('minute', source_updated_at) AS minute,
+                       COUNT(*)::int AS event_count,
+                       SUM(guest_count)::int AS guest_count
+                  FROM fact_restaurant_reservation
+                 WHERE factory_id=$1
+                   AND source_updated_at >= NOW() - INTERVAL '15 minutes'
+                 GROUP BY date_trunc('minute', source_updated_at)
+                 ORDER BY minute
+                """,
+                factory_id,
             )
             policies = await conn.fetch(
                 """SELECT * FROM restaurant_staffing_policy
@@ -817,11 +849,26 @@ class RestaurantStaffingService:
         for row in reservations:
             key = (int(row["store_id"]), row["reservation_date"], str(row["daypart"]))
             reservations_by_key[key].append(row)
-            sources[str(row["source"])] = {
-                "source": str(row["source"]),
-                "is_simulated": bool(row["is_simulated"]),
-                "updated_at": row["source_updated_at"].isoformat() if row["source_updated_at"] else None,
-            }
+            source_name = str(row["source"])
+            updated_at = row["source_updated_at"]
+            current_source = sources.get(source_name)
+            current_updated_at = current_source.get("_updated_at") if current_source else None
+            if current_source is None:
+                current_source = {
+                    "source": source_name,
+                    "is_simulated": bool(row["is_simulated"]),
+                    "updated_at": updated_at.isoformat() if updated_at else None,
+                    "event_count": 0,
+                    "_updated_at": updated_at,
+                }
+                sources[source_name] = current_source
+            current_source["event_count"] += int(row["reservation_order_count"] or 0)
+            current_source["is_simulated"] = (
+                bool(current_source["is_simulated"]) or bool(row["is_simulated"])
+            )
+            if updated_at and (current_updated_at is None or updated_at > current_updated_at):
+                current_source["updated_at"] = updated_at.isoformat()
+                current_source["_updated_at"] = updated_at
 
         policies_by_key: Dict[Tuple[int, str], List[Mapping[str, Any]]] = defaultdict(list)
         for policy in policies:
@@ -887,6 +934,11 @@ class RestaurantStaffingService:
                         for row in booking_rows
                         if STATUS_WEIGHT.get(str(row["status"]), 0.0) > 0
                     )
+                    reservation_orders = sum(
+                        int(row["reservation_order_count"] or 0)
+                        for row in booking_rows
+                        if STATUS_WEIGHT.get(str(row["status"]), 0.0) > 0
+                    )
                     weighted_reserved = sum(
                         int(row["guest_count"] or 0) * STATUS_WEIGHT.get(str(row["status"]), 0.0)
                         for row in booking_rows
@@ -938,7 +990,9 @@ class RestaurantStaffingService:
                         "reserved_guests": _round(weighted_reserved, 1),
                         "active_reserved_guests": active_reserved,
                         "weighted_reserved_guests": _round(weighted_reserved, 1),
-                        "reserved_tables": tables, **demand,
+                        "reserved_tables": tables,
+                        "reservation_orders": reservation_orders,
+                        **demand,
                         "reservation_coverage_pct": _round(demand["reservation_coverage"] * 100, 1),
                         "confidence_pct": _round(demand["confidence"] * 100, 1),
                         "current_staff": current_staff,
@@ -984,6 +1038,7 @@ class RestaurantStaffingService:
                     "peak_daily_guests": peak["predicted_guests"],
                     "reserved_guests": sum(item["reserved_guests"] for item in daily_for_group),
                     "reserved_tables": sum(item["reserved_tables"] for item in daily_for_group),
+                    "reservation_orders": sum(item["reservation_orders"] for item in daily_for_group),
                     "reservation_coverage_pct": _round(
                         sum(item["weighted_reserved_guests"] for item in daily_for_group)
                         / max(sum(item["predicted_guests"] for item in daily_for_group), 1) * 100, 1,
@@ -1025,6 +1080,7 @@ class RestaurantStaffingService:
             "row_count": len(summary_rows),
             "predicted_guests": total_predicted,
             "reserved_guests": total_reserved,
+            "reservation_orders": sum(row["reservation_orders"] for row in summary_rows),
             "reservation_coverage_pct": _round(total_reserved / max(total_predicted, 1) * 100, 1),
             "recommended_staff": sum(row["recommended_staff"] for row in summary_rows),
             "current_staff": sum(row["current_staff"] for row in summary_rows),
@@ -1050,7 +1106,44 @@ class RestaurantStaffingService:
             # shared snake_case -> camelCase transform.
             "summary_rows": summary_rows,
             "daily_rows": daily_rows,
-            "sources": list(sources.values()),
+            "sources": [
+                {key: value for key, value in source.items() if key != "_updated_at"}
+                for source in sources.values()
+            ],
+            "live_stream": {
+                "window_minutes": 15,
+                "poll_interval_seconds": 60,
+                "event_count": sum(int(row["event_count"] or 0) for row in stream_minutes),
+                "guest_count": sum(int(row["guest_count"] or 0) for row in stream_minutes),
+                "latest_event_at": (
+                    stream_events[0]["source_updated_at"].isoformat()
+                    if stream_events and stream_events[0]["source_updated_at"] else None
+                ),
+                "minute_buckets": [
+                    {
+                        "minute": row["minute"].isoformat(),
+                        "event_count": int(row["event_count"] or 0),
+                        "guest_count": int(row["guest_count"] or 0),
+                    }
+                    for row in stream_minutes
+                ],
+                "recent_events": [
+                    {
+                        "external_ref": str(row["external_ref"]),
+                        "store_id": int(row["store_id"]),
+                        "store_name": str(row["store_name"]),
+                        "reservation_date": row["reservation_date"].isoformat(),
+                        "daypart": str(row["daypart"]),
+                        "table_count": int(row["table_count"] or 0),
+                        "guest_count": int(row["guest_count"] or 0),
+                        "status": str(row["status"]),
+                        "source": str(row["source"]),
+                        "is_simulated": bool(row["is_simulated"]),
+                        "source_updated_at": row["source_updated_at"].isoformat(),
+                    }
+                    for row in stream_events
+                ],
+            },
             "method": {
                 "demand": "weighted current reservations plus 7/30/365-day POS guest trends",
                 "staffing": "predicted guests / role target guests per labor hour / shift hours, then skill minimums",
