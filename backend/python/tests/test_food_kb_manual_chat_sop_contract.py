@@ -9,7 +9,9 @@ from food_kb.api.manual_chat import (
     ManualChatRequest,
     SYSTEM_PROMPT,
     _FACTORY_BYPRODUCT_LIFECYCLE_ANSWER,
+    _FACTORY_ACCOUNTING_PERIOD_OA_ANSWER,
     _FACTORY_PRODUCTION_EXECUTION_ANSWER,
+    _FACTORY_REPORTING_RUNTIME_ANSWER,
     _FACTORY_REPORTING_SOURCE_SHORTAGE_ANSWER,
     _FACTORY_RN_READONLY_ANSWER,
     _MATERIAL_PACKAGING_ANSWER,
@@ -34,7 +36,9 @@ from food_kb.api.manual_chat import (
     _build_scope_prompt,
     _needs_bom_workflow_sequence_guard,
     _needs_factory_byproduct_lifecycle_guard,
+    _needs_factory_accounting_period_oa_guard,
     _needs_factory_production_execution_guard,
+    _needs_factory_reporting_runtime_guard,
     _needs_factory_reporting_source_shortage_guard,
     _needs_factory_rn_readonly_guard,
     _needs_material_packaging_guard,
@@ -94,10 +98,15 @@ def test_factory_prompt_keeps_restaurant_analysis_out_of_ai_assist():
     assert "AI 候选无论 0 处还是多处都进入人工审核" in FACTORY_SYSTEM_PROMPT
     assert "盒子、白标、彩标三层参考框" in FACTORY_SYSTEM_PROMPT
     assert "跨量纲成品率必须先补充每单位重量" in FACTORY_SYSTEM_PROMPT
+    assert "RN App 的业务入口只面向仓库主管和仓库操作员" in FACTORY_SYSTEM_PROMPT
+    assert "`allowMultipleUpstreamSources`" in FACTORY_SYSTEM_PROMPT
+    assert "会计期间关账申请只创建 OA" in FACTORY_SYSTEM_PROMPT
 
 
 def test_restaurant_prompt_keeps_session_scope_and_evidence_honest():
     assert "另一个页面或模块的筛选不保证自动带入" in SYSTEM_PROMPT
+    assert "【预测排班】" in SYSTEM_PROMPT
+    assert "确定性预测 FactBook" in SYSTEM_PROMPT
     assert "门店和时间都缺少时一次问全" in SYSTEM_PROMPT
     assert "固定为 21 个维度" in SYSTEM_PROMPT
     assert "真实、代理、模拟或缺失证据" in SYSTEM_PROMPT
@@ -257,17 +266,48 @@ def test_multi_output_warehouse_receipt_uses_line_based_atomic_contract():
 
 def test_factory_rn_readonly_questions_use_current_mobile_boundaries():
     equivalent_questions = (
-        "在手机端，盘点记录和物料需求单各能做什么？",
-        "RN 盘点记录能发起盘点吗，物料需求单可以签收吗？",
-        "手机里的智能入库、盘点记录和物料需求单哪些只是辅助或只读？",
+        "在手机端，仓库角色的盘点记录和智能入库各能做什么？",
+        "RN 仓库角色能看盘点记录吗，生产角色为什么去电脑端？",
+        "手机里的智能入库、盘点记录和电脑端物料需求单边界是什么？",
     )
     assert all(_needs_factory_rn_readonly_guard(q) for q in equivalent_questions)
     assert not _needs_factory_rn_readonly_guard("Web 后台怎么创建生产计划？")
     assert "未完成任务可以从记录列表继续进入盘点录入" in (
         _FACTORY_RN_READONLY_ANSWER
     )
-    assert "RN 不能在该入口生成需求单" in _FACTORY_RN_READONLY_ANSWER
+    assert "业务入口只面向仓库主管和仓库操作员" in _FACTORY_RN_READONLY_ANSWER
+    assert "缺少规格明确显示“未设规格”" in _FACTORY_RN_READONLY_ANSWER
+    assert "物料需求单和生产工作台属于电脑 Web" in _FACTORY_RN_READONLY_ANSWER
     assert "不会替用户提交、审批或增加库存" in _FACTORY_RN_READONLY_ANSWER
+
+
+def test_factory_accounting_period_close_uses_oa_state_machine():
+    equivalent_questions = (
+        "会计期间发起关账后 OA 审批怎么流转？",
+        "账期关账被 REJECT 会重开已经关闭的期间吗？",
+        "期间关账 APPROVE 后要验收哪些结果？",
+    )
+    assert all(_needs_factory_accounting_period_oa_guard(q) for q in equivalent_questions)
+    assert not _needs_factory_accounting_period_oa_guard("采购付款审批怎么做？")
+    assert "申请成功不等于已经关账" in _FACTORY_ACCOUNTING_PERIOD_OA_ANSWER
+    assert "APPROVE" in _FACTORY_ACCOUNTING_PERIOD_OA_ANSWER
+    assert "CLOSED" in _FACTORY_ACCOUNTING_PERIOD_OA_ANSWER
+    assert "20 天调整窗口" in _FACTORY_ACCOUNTING_PERIOD_OA_ANSWER
+    assert "REJECT 只驳回本次申请" in _FACTORY_ACCOUNTING_PERIOD_OA_ANSWER
+
+
+def test_factory_reporting_runtime_uses_frozen_workflow_and_terminal_bom():
+    equivalent_questions = (
+        "逐道报工什么时候允许同一物料选择多个批次？",
+        "工序报工能不能使用过期库存批次？",
+        "中间工序的调料配方应该从哪个 BOM 读取？",
+    )
+    assert all(_needs_factory_reporting_runtime_guard(q) for q in equivalent_questions)
+    assert not _needs_factory_reporting_runtime_guard("仓库库存怎么盘点？")
+    assert "`allowMultipleUpstreamSources`" in _FACTORY_REPORTING_RUNTIME_ANSWER
+    assert "过期库存单独展示为不可用" in _FACTORY_REPORTING_RUNTIME_ANSWER
+    assert "终端成品 SKU 的 BOM" in _FACTORY_REPORTING_RUNTIME_ANSWER
+    assert "未绑定工序的辅料与包材" in _FACTORY_REPORTING_RUNTIME_ANSWER
 
 
 def test_factory_reporting_source_shortage_uses_server_authoritative_contract():
@@ -415,15 +455,17 @@ def test_restaurant_scope_actions_require_executable_store_questions():
 
 def test_restaurant_staffing_advice_describes_forecast_scope_without_executing_it():
     equivalent_questions = (
-        "排班建议为什么不问门店和时间？",
-        "分时段人力配置能按某店某天实时算吗？",
-        "排班建议会显示门店范围按钮吗？",
+        "餐饮预测排班会根据什么数据，支持哪些时间范围和门店范围？",
+        "下周的排班建议会按门店和午市晚市生成吗？",
+        "预测排班的一键调整怎样确认，旧计划还能提交吗？",
     )
     assert all(_needs_restaurant_staffing_scope_guard(q) for q in equivalent_questions)
     assert not _needs_restaurant_staffing_scope_guard("今天各门店营业额是多少？")
     assert "支持“明天”“下周”“下个月”三个未来范围" in _RESTAURANT_STAFFING_SCOPE_ANSWER
     assert "按门店、午市/下午茶/晚市/夜宵展示" in _RESTAURANT_STAFFING_SCOPE_ANSWER
     assert "大模型只负责理解、综合和解释" in _RESTAURANT_STAFFING_SCOPE_ANSWER
+    assert "相同计划指纹精确确认" in _RESTAURANT_STAFFING_SCOPE_ANSWER
+    assert "拒绝过期确认" in _RESTAURANT_STAFFING_SCOPE_ANSWER
     assert "不替用户计算真实经营数据" in _RESTAURANT_STAFFING_SCOPE_ANSWER
 
 
@@ -628,7 +670,7 @@ def test_latest_f006_sop_is_a_deployable_manual_source():
     assert "kg/g 等质量单位只在同量纲内科学换算" in current_sop
     assert "每单位成品重量" in current_sop
     assert "当前 OA 节点明确只授权 `factory_super_admin`" in current_sop
-    assert "RN 当前可用入口与只读边界" in current_sop
+    assert "RN 仓库角色入口与 Web 业务边界" in current_sop
     assert "一个来源一行" in current_sop
     assert "可用库存和短缺数量以服务端校验为准" in current_sop
     assert "供应商可维护简称，以及多联系人、多地址和银行账户" in current_sop
@@ -642,7 +684,7 @@ def test_latest_f006_sop_is_a_deployable_manual_source():
     html_path = Path(PROJECT_ROOT) / "docs/manual/F006-production-full-chain-manual-test-sop.html"
     html = html_path.read_text(encoding="utf-8")
     assert required_sequence in html
-    assert "origin/main · SOP sync 2026-08-02" in html
+    assert "origin/main · SOP sync 2026-08-03" in html
     assert "先有完整 Workflow 草稿，再创建 BOM" in html
     assert "页面没有任意切换版本的选择器" in html
     assert "① 投入" in html
@@ -663,7 +705,7 @@ def test_latest_f006_sop_is_a_deployable_manual_source():
     assert "盒子、白标、彩标三层参考框" in html
     assert "跨单位成品率" in html
     assert "单总监死锁" in html
-    assert "RN 新入口仍按真实职责分开" in html
+    assert "RN 仓储页与 Web 生产页不要混说" in html
     assert "一个来源一行" in current_sop
     assert "需多少、可用多少、缺多少" in html
     assert "RN 查看今日/历史盘点并续录" in html
@@ -705,7 +747,7 @@ def test_factory_role_knowledge_covers_the_12_account_operating_boundaries():
         assert role_code in html
 
     required_boundaries = (
-        "财务经理 RN 不显示出纳专属“付款”页",
+        "财务经理不显示出纳专属“付款”页",
         "采购确认供应商交付不等于库存入账",
         "QC 结论不能由采购、仓储或生产岗位代填",
         "生产经理的宽权限不能替代车间主管确认班组执行",
@@ -747,7 +789,7 @@ def test_restaurant_registered_sources_match_current_product_contract():
             "数据可用门槛与叙事接地",
             "永久坏单据写入租户隔离的死信记录",
             "默认每 6 小时刷新",
-            "排班建议例外",
+            "预测排班：门店、时段与未来范围",
             "盘点只认已完成",
         ),
         "restaurant-product-manual.html": (
@@ -764,7 +806,7 @@ def test_restaurant_registered_sources_match_current_product_contract():
             "不是门店管理员在页面自助填写密钥",
             "不超过 3 项时提示覆盖不足",
             "默认每 6 小时刷新",
-            "餐饮 AI 的排班建议边界",
+            "餐饮预测排班与调整边界",
         ),
         "restaurant-metrics-glossary.html": (
             "21 维综合分析证据目录",
@@ -773,7 +815,7 @@ def test_restaurant_registered_sources_match_current_product_contract():
             "wastage_cost",
             "requisition_cost",
             "不能称为精确真实成本模型",
-            "不接收门店和时间参数",
+            "预测 FactBook",
             "只统计状态为 <code>COMPLETED</code>",
         ),
     }
@@ -793,7 +835,7 @@ def test_restaurant_registered_sources_match_current_product_contract():
     assert "月报预览、导出与截至时间" in ai_assist
     assert "AI 飞轮与菜品别名怎么治理？" in ai_assist
     assert "计划预警与平台同步边界" in ai_assist
-    assert "RN 入库、盘点与需求单边界" in ai_assist
+    assert "RN 仓库角色与 Web 业务边界" in ai_assist
     assert "投入来源、缺料与单据追踪" in ai_assist
     assert "指标口径与菜单目录裁决" in ai_assist
     assert "门店范围继承与一次问全" in ai_assist
@@ -801,7 +843,7 @@ def test_restaurant_registered_sources_match_current_product_contract():
     assert "飞轮与人审边界" in ai_assist
     assert "不做计算" in ai_assist
     assert "开工、批次与完工入库链路" in ai_assist
-    assert "排班建议的范围边界" in ai_assist
+    assert "预测排班的范围与调整边界" in ai_assist
     assert "默认每 6 小时刷新" in ai_assist
 
 
@@ -990,9 +1032,21 @@ async def test_bom_workflow_publication_answer_never_calls_the_llm(monkeypatch):
             "f006-production-full-chain-sop.md",
         ),
         (
-            "手机里的盘点记录和物料需求单各能做什么？",
+            "手机里的仓库角色与电脑端业务角色边界是什么？",
             "factory",
             _FACTORY_RN_READONLY_ANSWER,
+            "f006-production-full-chain-sop.md",
+        ),
+        (
+            "会计期间发起关账后 OA APPROVE 或 REJECT 会怎样？",
+            "factory",
+            _FACTORY_ACCOUNTING_PERIOD_OA_ANSWER,
+            "f006-production-full-chain-sop.md",
+        ),
+        (
+            "逐道报工什么时候能选多个批次，过期库存和调料配方怎么处理？",
+            "factory",
+            _FACTORY_REPORTING_RUNTIME_ANSWER,
             "f006-production-full-chain-sop.md",
         ),
         (
@@ -1080,7 +1134,7 @@ async def test_bom_workflow_publication_answer_never_calls_the_llm(monkeypatch):
             "restaurant-full-chain-sop.html",
         ),
         (
-            "排班建议为什么不问门店和时间？",
+            "餐饮预测排班会根据什么数据，支持哪些时间范围和门店范围？",
             "restaurant",
             _RESTAURANT_STAFFING_SCOPE_ANSWER,
             "restaurant-full-chain-sop.html",

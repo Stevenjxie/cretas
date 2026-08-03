@@ -147,6 +147,7 @@ _PRODUCTION_SOP_KEYWORDS = frozenset({
     "生产计划", "存货生产", "销售订单", "报工", "结单", "小结", "停产", "成本",
     "入库", "出库", "库存", "仓库", "调拨", "采购", "盘点", "审批", "冲销",
     "标签", "拍检", "复核台", "白标", "彩标", "质检", "画笔", "拉框",
+    "会计期间", "关账", "oa", "手机", "rn", "仓储",
 })
 _BOM_WORKFLOW_SEQUENCE_TRIGGERS = frozenset({
     "激活", "发布", "启用", "顺序", "前置", "依赖", "为什么还不能",
@@ -253,7 +254,11 @@ _MULTI_OUTPUT_WAREHOUSE_RECEIPT_ANSWER = """\
 
 **验收结果：** 仓库回读的产出行集合、每行 SKU、批次、数量和单位与正式报工完全一致；混合单位没有被相加。只有整组确认成功后，所有对应成品批次和生产仓可用库存才一起生效。"""
 _FACTORY_RN_READONLY_ANSWER = """\
-手机端把查看、续录和正式业务写入分开，不能因为看到了记录或需求单就把它当成写入口。
+当前 RN App 的业务入口只面向仓库主管和仓库操作员；其余 10 个业务角色登录后进入“请使用电脑端”指引页，平台管理员与超级管理员仅保留技术支持例外，不能据此把 Web 能力说成手机能力。
+
+**仓库手机端：**
+1. “AI 智能入库”和“库存记录”属于仓库角色入口；库存记录显示的是当前已加载页面，不冒充“今日/全部”，顶部总数是批次数，不是跨单位数量合计。
+2. 每个批次使用实际库存单位。只有单位同为 kg 的行才汇总 kg 小计；箱、袋、瓶等不与 kg 相加。需要换算时只读取该物料自己的包装层级，缺少规格明确显示“未设规格”，绝不按 1:1 猜测。
 
 **盘点记录：**
 1. “盘点记录”进入今日和历史任务列表，详情页只读展示盘点单及明细，不会误跳到“发起盘点”。
@@ -261,10 +266,26 @@ _FACTORY_RN_READONLY_ANSWER = """\
 3. 记录入口本身不能新建盘点，也不能绕过审批直接改库存。
 
 **物料需求单：**
-1. 生产工作台提供只读列表和详情，可查看需求单号、生产计划、状态，以及每项物料的需求、已备料、已签收、已消耗、损耗和退料数量。
-2. RN 不能在该入口生成需求单，也不能执行备料、调拨、签收、关单或取消；这些动作仍由有对应权限的管理后台完成。
+物料需求单和生产工作台属于电脑 Web。手机端非仓库业务角色只显示电脑端地址、复制地址、退出和切换仓库账号提示，不提供隐藏的写入口。
 
 **AI 智能入库：** schema 完成后只加载一次供应商候选并进入表单，可辅助填写入库草稿，但不会替用户提交、审批或增加库存。持续卡在“加载供应商列表”属于异常，应重试或上报。"""
+_FACTORY_ACCOUNTING_PERIOD_OA_ANSWER = """\
+会计期间关账现在走统一 OA 审批，申请成功不等于已经关账。
+
+1. OPEN 期间发起关账后创建 OA 请求；重复发起复用同一待审请求，不重复关账。
+2. 审批人点 APPROVE 时，系统复用正式关账校验并把期间变为 CLOSED，同时生成库存台账快照和凭证；关账后保留 20 天调整窗口。任一校验失败时不得部分生效。
+3. REJECT 只驳回本次申请并让期间保持 OPEN，不会执行关账，也不能借驳回重新打开已 CLOSED 或 LOCKED 的期间。
+4. CLOSED/LOCKED 期间再次处理同一关账动作会被拒绝；需要重开时必须走专用 reopenPeriod 流程并接受其权限与校验。
+
+验收要同时回读 OA 状态、会计期间状态、库存快照和凭证，不能只看审批按钮提示。"""
+_FACTORY_REPORTING_RUNTIME_ANSWER = """\
+逐道报工的批次选择和用料身份以计划冻结的 Workflow 与成品 BOM 为准，页面不能按当前端口数或中间品名称另猜规则。
+
+1. 同一上游物料能否选择多个批次，由计划冻结节点 JSON 的 `allowMultipleUpstreamSources` 决定；为 true 时可选同一物料多个批次，为 false 时保持单批。只有旧快照缺字段或解析失败时才兼容回落到端口数量。
+2. 只有一个可用候选时可以自动选中，但实际投入数量仍由操作员填写。过期库存单独展示为不可用，不能自动选中或扣减；应联系仓库补料或处理批次。
+3. 调料配方属于终端成品 SKU 的 BOM。中间工序需要调料时，系统沿生产计划找到最终成品 BOM；不要为半成品工序另建一份重复 BOM。
+4. BOM 激活前会拒绝指向不存在工序的孤儿槽位。结单成本仍保留未绑定工序的辅料与包材，原料槽位则必须精确匹配，不能静默漏算。
+"""
 _FACTORY_REPORTING_SOURCE_SHORTAGE_ANSWER = """\
 逐道报工的投入来源按实际批次逐行提交，库存短缺以服务端校验为唯一真值。
 
@@ -448,7 +469,7 @@ _RESTAURANT_STAFFING_SCOPE_ANSWER = """\
 1. 支持“明天”“下周”“下个月”三个未来范围，并按门店、午市/下午茶/晚市/夜宵展示。
 2. 数字只来自预测 FactBook：当前预订，加上过去7天、30天、365天的 POS/客流趋势，再按岗位技能、工时和目标人效生成建议。
 3. 历史实际人效低于目标只作为证据，不能直接解释成缺人。大模型只负责理解、综合和解释，不能自行补数字。
-4. 预订来源会明确标注模拟或平台；一键调整是需确认并留审计记录的业务写入，不属于只读问答。
+4. 预订来源会明确标注模拟或平台；看板本身只读。一键调整必须先预览，再以相同计划指纹精确确认，写入带幂等回执和审计记录；数据或计划已变化时拒绝过期确认。
 
 请到 SmartBI 餐饮 AI 提问，或打开餐饮端“预测排班”；本导览助手不替用户计算真实经营数据。"""
 
@@ -553,12 +574,35 @@ def _needs_factory_rn_readonly_guard(query: str) -> bool:
     normalized = (query or "").lower()
     rn_signals = sum(
         term in normalized
-        for term in ("盘点记录", "物料需求单", "智能入库")
+        for term in ("盘点记录", "物料需求单", "智能入库", "仓库角色", "电脑端")
     )
     return rn_signals >= 2 or (
         rn_signals >= 1
-        and any(term in normalized for term in ("手机", "rn", "只读", "能做什么"))
+        and any(term in normalized for term in ("手机", "app", "rn", "只读", "能做什么", "角色"))
     )
+
+
+def _needs_factory_accounting_period_oa_guard(query: str) -> bool:
+    """Keep accounting-period close approval and state transitions deterministic."""
+    normalized = (query or "").lower()
+    mentions_period = any(term in normalized for term in ("会计期间", "账期", "期间关账"))
+    mentions_action = any(
+        term in normalized
+        for term in ("关账", "oa", "审批", "approve", "reject", "驳回", "重开")
+    )
+    return mentions_period and mentions_action
+
+
+def _needs_factory_reporting_runtime_guard(query: str) -> bool:
+    """Explain frozen multi-batch, expiry and terminal-BOM reporting rules."""
+    normalized = (query or "").lower()
+    return any(
+        term in normalized
+        for term in (
+            "多批次", "多个批次", "混批", "allowmultipleupstreamsources",
+            "过期库存", "过期批次", "调料配方", "终端成品", "孤儿槽位",
+        )
+    ) and any(term in normalized for term in ("报工", "工序", "bom", "workflow", "投入", "库存"))
 
 
 def _needs_factory_reporting_source_shortage_guard(query: str) -> bool:
@@ -689,10 +733,16 @@ def _needs_restaurant_platform_sync_guard(query: str) -> bool:
 def _needs_restaurant_staffing_scope_guard(query: str) -> bool:
     """Explain the forecast staffing contract without pretending to execute it."""
     normalized = (query or "").lower()
-    mentions_staffing = any(term in normalized for term in ("排班建议", "人力配置", "分时段人力"))
+    mentions_staffing = any(
+        term in normalized
+        for term in ("预测排班", "排班建议", "排班", "人力配置", "分时段人力")
+    )
     mentions_scope = any(
         term in normalized
-        for term in ("门店", "时间", "日期", "范围", "明天", "下周", "下个月", "兼职", "按钮", "实时", "怎么算")
+        for term in (
+            "门店", "时间", "日期", "范围", "明天", "下周", "下个月", "兼职",
+            "按钮", "实时", "怎么算", "一键调整", "确认", "旧计划", "过期计划",
+        )
     )
     return mentions_staffing and mentions_scope
 
@@ -1009,6 +1059,7 @@ SYSTEM_PROMPT = """\
 3k. 【数据可用与范围动作】POS 流水或后厨事实任一类即可进入餐饮问答，缺少另一类时对应问题回答无记录，不能用 0 补齐。只有 resolver 真支持门店维度、存在其它范围且能生成完整独立问句时才提供换范围按钮；只有执行签名真实接收时间窗时才提供“本月 / 上个月 / 最近7天 / 最近30天”按钮，不支持的能力不提供误导按钮。
 3l. 【导览助手边界】导览助手不替用户计算毛利、损耗或分析业务数据，只解释板块、口径和提问方法，并把真实分析指向 SmartBI 餐饮 AI。
 3m. 【四部门与金额权限】运营、市场、财务、人事四个驾驶舱按各自事实源展示；人事缺在岗人数和目标人效时显示缺项空态，财务缺成本覆盖时显示“—”，都不得造假 KPI。角色可见、可管理和金额读取是不同权限，菜单、路由和金额请求都必须经过后端中央角色/金额闸，不能靠前端隐藏代替授权。
+3n. 【预测排班】SmartBI 餐饮 AI 与“预测排班”页面支持明天、下周、下个月，按门店及午市/下午茶/晚市/夜宵展示。数字只来自确定性预测 FactBook：当前预订、过去 7/30/365 天 POS 与客流趋势、岗位技能、工时和目标人效；历史实际人效只作证据，大模型只解释、不补数字。预订来源标注模拟或平台；看板只读，调整必须预览后按相同计划指纹精确确认，保留幂等回执与审计，过期计划拒绝提交。导览助手只解释入口与方法，不替用户取数或调整排班。
 4. 系统名称统一用「白垩纪 AI Agent」
 5. 不使用 emoji，保持专业简洁
 6. 菜单路径用 → 连接，如: 首页 → 仓储管理 → 入库
@@ -1084,10 +1135,13 @@ FACTORY_SYSTEM_PROMPT = """\
 - 包装标签拍检是独立质检流程：AI 候选无论 0 处还是多处都进入人工审核；人工逐图确认/拒绝/补框并提交结论后才形成真值。人工审核不等于报工工时，训练批准只允许导出，不会自动训练或发布模型。
 - 标签复核台按盒子、白标、彩标三层参考框显示，并提供选择、白标画笔和彩标画笔；这些框只帮助人工定位，不自动形成结论。
 - 报工页面按配置单位显示和提交。kg/g 等同量纲可科学换算；盒、袋、只等计数/包装单位按字面量匹配且不得暗中折重。跨量纲成品率必须先补充每单位重量，否则明确不可比，不能输出伪造百分比。
+- RN App 的业务入口只面向仓库主管和仓库操作员；其它 10 个业务角色使用电脑 Web，平台管理员和超级管理员仅有技术支持例外。RN 库存记录总数是批次数，只汇总同为 kg 的行，包装换算只读当前物料层级，缺少规格显示“未设规格”。
 - Workflow 冲突在生产计划选择成品时按终端产出集合解析；完全匹配优先，其次最小超集，同级重叠必须由用户查看工序链预览后选择。
 - BOM 与 Workflow 的兼容验收摘要必须保留“Workflow 完整草稿 → BOM 绑定工序辅料并激活 → Workflow 刷新、发布并启用”。当前页面的展开口径是“Workflow 完整草稿 → 创建 BOM 时自动固定该工艺修订 → 配置并激活 BOM → Workflow 刷新、发布并启用”；普通用户不选择 Workflow 版本，BOM 只读显示工艺来源，工序由目标 SKU 的工艺链生成并锁定。ACTIVE BOM 是 Workflow 发布启用的前置门禁；禁止回答“两者无依赖”“两者无从属关系”或“先发布 Workflow 再激活 BOM”。
 - 单独激活 BOM 不会发布 Workflow；回到 Workflow 后使用“自动同步并发布”。系统按最后一次保存后的草稿与当前 ACTIVE BOM 实时预检，READY/AUTO_MIGRATABLE 才可继续，USER_INPUT_REQUIRED/CONFLICT 必须停止并列出问题；确认后原子完成 BOM 同步、Workflow 发布和启用，版本竞争时停止自动重试，既有计划快照不回写。
 - 逐道报工按“投入 → 工序执行（开始/结束/人数）→ 产出 → 确认提交”填写；保存草稿不扣库存、不形成正式成本，正式报工才按固定 BOM 从生产仓自动分配原料、调料和包材批次。
+- 同一上游物料能否多选批次以计划冻结节点的 `allowMultipleUpstreamSources` 为准；过期库存不可用。中间工序调料沿计划读取终端成品 BOM，BOM 激活拒绝孤儿槽位，结单保留未绑定工序的辅料与包材。
+- 会计期间关账申请只创建 OA；APPROVE 后才 CLOSED 并生成库存台账快照和凭证，REJECT 保持 OPEN。CLOSED/LOCKED 不能靠重复审批重开，只能走专用重开流程。
 - 报工、生产结单、仓库确认完工入库、生产仓到主仓/外仓调拨是不同动作，不能互相冒充完成。多产出仓库确认按终端产出行逐项核对，混合单位不合计；每行实收必须大于 0 且等于该行报工数量，任一行不符则整组不入库。
 - 副产物先在原料类型字典建立带“副产”标记的 SKU，再在 BOM“副产”页签声明；正式报工填写实际副产，不要求单独建立 Workflow。精确命中声明，或通用名“副产”且仅有一个声明时，系统才落生产仓；歧义或缺生产仓时不猜库存身份，也不阻断原报工。
 - 副产抵扣只按盘点实际数量 × 盘点时人工确认单价，由服务端统一计算；未确认数量或单价时显示“未确认/未抵扣”，不能显示 0，只有人工明确确认单价为 0 时才显示 0.00。
@@ -1643,6 +1697,16 @@ async def _prepare_generation(request: ManualChatRequest) -> _PreparedGeneration
         and _needs_factory_rn_readonly_guard(request.question)
     ):
         guard_answer = _FACTORY_RN_READONLY_ANSWER
+    elif (
+        not is_restaurant_request
+        and _needs_factory_accounting_period_oa_guard(request.question)
+    ):
+        guard_answer = _FACTORY_ACCOUNTING_PERIOD_OA_ANSWER
+    elif (
+        not is_restaurant_request
+        and _needs_factory_reporting_runtime_guard(request.question)
+    ):
+        guard_answer = _FACTORY_REPORTING_RUNTIME_ANSWER
     elif (
         not is_restaurant_request
         and _needs_factory_reporting_source_shortage_guard(request.question)
