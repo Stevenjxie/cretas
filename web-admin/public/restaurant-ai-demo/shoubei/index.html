@@ -1,0 +1,337 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="扫呗与白垩纪餐饮智能经营合作交流版：不重复收银，只补充授权数据之上的预测、解释与行动闭环。">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='16' fill='%2321c997'/%3E%3Cpath d='M42 20c-3-3-6-4-10-4-9 0-16 7-16 16s7 16 16 16c4 0 8-2 11-5l-6-6c-1 2-3 3-5 3-4 0-8-4-8-8s4-8 8-8c2 0 4 1 5 2z' fill='%23102821'/%3E%3C/svg%3E">
+  <title>扫呗 × 白垩纪｜餐饮智能经营合作交流版</title>
+  <style>
+    :root {
+      --ink: #102821;
+      --ink-2: #1c3a31;
+      --paper: #f4f1e8;
+      --paper-2: #fffdf8;
+      --line: #d9d6cb;
+      --muted: #607269;
+      --cretas: #21c997;
+      --cretas-dark: #087a59;
+      --shoubei: #2878ff;
+      --shoubei-soft: #e9f1ff;
+      --amber: #f0a83a;
+      --red: #d95b55;
+      --radius: 20px;
+      --shadow: 0 18px 54px rgba(16, 40, 33, .10);
+    }
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+    body { margin: 0; color: var(--ink); background: var(--paper); font-family: "Noto Sans SC", "Microsoft YaHei", sans-serif; line-height: 1.65; }
+    button, a { font: inherit; }
+    button { cursor: pointer; }
+    .page { overflow: hidden; }
+    .wrap { width: min(1180px, calc(100% - 48px)); margin: 0 auto; }
+    .eyebrow { color: var(--cretas); font-family: ui-monospace, "Cascadia Mono", monospace; font-size: 11px; font-weight: 800; letter-spacing: .16em; text-transform: uppercase; }
+    .button { display: inline-flex; min-height: 44px; align-items: center; justify-content: center; gap: 8px; padding: 10px 17px; color: var(--ink); text-decoration: none; background: var(--cretas); border: 1px solid var(--cretas); border-radius: 10px; font-size: 13px; font-weight: 800; }
+    .button.secondary { color: #fff; background: transparent; border-color: rgba(255,255,255,.28); }
+    .button.paper { color: var(--ink); background: var(--paper-2); border-color: var(--line); }
+    .button:focus-visible, .step-tab:focus-visible { outline: 3px solid var(--amber); outline-offset: 3px; }
+
+    .hero { position: relative; min-height: 720px; padding: 42px 0 58px; color: #fff; background: var(--ink); }
+    .hero::before { position: absolute; inset: 0; content: ""; opacity: .5; background: radial-gradient(circle at 86% 25%, rgba(40,120,255,.30), transparent 26%), radial-gradient(circle at 18% 86%, rgba(33,201,151,.22), transparent 28%); }
+    .hero::after { position: absolute; top: 0; right: -170px; width: 620px; height: 620px; content: ""; border: 1px solid rgba(255,255,255,.10); border-radius: 50%; box-shadow: 0 0 0 70px rgba(255,255,255,.025), 0 0 0 140px rgba(255,255,255,.018); }
+    .topbar, .hero-grid, .hero-proof { position: relative; z-index: 1; }
+    .topbar { display: flex; align-items: center; justify-content: space-between; gap: 20px; }
+    .brand { display: flex; align-items: center; gap: 12px; }
+    .brand-mark { display: grid; width: 36px; height: 36px; place-items: center; color: var(--ink); background: var(--cretas); border-radius: 10px; font-weight: 900; }
+    .brand small { display: block; color: #9eb9ae; font-size: 10px; letter-spacing: .12em; }
+    .top-actions { display: flex; gap: 10px; }
+    .hero-grid { display: grid; grid-template-columns: 1.25fr .75fr; gap: 64px; align-items: end; padding: 90px 0 72px; }
+    .hero h1 { max-width: 780px; margin: 18px 0 24px; font-family: "Songti SC", "Noto Serif SC", serif; font-size: clamp(58px, 7.4vw, 108px); font-weight: 900; letter-spacing: -.055em; line-height: .96; }
+    .hero h1 span { color: var(--cretas); }
+    .hero-lead { max-width: 720px; margin: 0; color: #c2d4cc; font-size: 18px; }
+    .hero-lead strong { color: #fff; }
+    .partner-card { padding: 26px; background: rgba(255,255,255,.065); border: 1px solid rgba(255,255,255,.13); border-radius: var(--radius); backdrop-filter: blur(12px); }
+    .partner-card h2 { margin: 12px 0 16px; font-family: "Songti SC", serif; font-size: 27px; line-height: 1.25; }
+    .partner-card p { margin: 0; color: #b9cec5; font-size: 13px; }
+    .partner-card .formula { display: grid; gap: 8px; margin-top: 22px; }
+    .formula div { display: grid; grid-template-columns: 78px 1fr; gap: 12px; padding: 10px 12px; background: rgba(255,255,255,.055); border-radius: 10px; font-size: 12px; }
+    .formula b { color: #fff; }
+    .formula .blue { color: #8db7ff; }
+    .formula .green { color: var(--cretas); }
+    .hero-proof { display: grid; grid-template-columns: repeat(4, 1fr); border-top: 1px solid rgba(255,255,255,.13); }
+    .hero-proof article { padding: 22px 20px 0 0; }
+    .hero-proof article + article { padding-left: 20px; border-left: 1px solid rgba(255,255,255,.13); }
+    .hero-proof strong { display: block; color: #fff; font-size: 17px; }
+    .hero-proof small { color: #8ea99d; font-size: 11px; }
+
+    section { padding: 92px 0; }
+    section:nth-of-type(even) { background: var(--paper-2); }
+    .section-head { display: grid; grid-template-columns: 1fr .8fr; gap: 40px; align-items: end; margin-bottom: 34px; }
+    .section-head h2 { margin: 12px 0 0; font-family: "Songti SC", "Noto Serif SC", serif; font-size: clamp(38px, 5vw, 64px); letter-spacing: -.04em; line-height: 1.08; }
+    .section-head p { margin: 0; color: var(--muted); }
+    .truth-banner { padding: 20px 22px; color: #2f5e50; background: #e4f7ef; border-left: 4px solid var(--cretas); border-radius: 0 12px 12px 0; font-size: 14px; }
+
+    .known-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 22px; margin-top: 26px; }
+    .known-card { padding: 28px; background: var(--paper-2); border: 1px solid var(--line); border-radius: var(--radius); box-shadow: var(--shadow); }
+    .known-card.shoubei { border-top: 5px solid var(--shoubei); }
+    .known-card.cretas { border-top: 5px solid var(--cretas); }
+    .known-card h3 { margin: 12px 0 8px; font-family: "Songti SC", serif; font-size: 26px; }
+    .known-card > p { margin: 0; color: var(--muted); font-size: 13px; }
+    .cap-list { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; padding: 0; margin: 22px 0 0; list-style: none; }
+    .cap-list li { padding: 11px 12px; background: #f3f1e9; border-radius: 10px; font-size: 12px; font-weight: 700; }
+    .shoubei .cap-list li::before { content: "✓ "; color: var(--shoubei); }
+    .cretas .cap-list li::before { content: "+ "; color: var(--cretas-dark); }
+
+    .chain { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin-top: 30px; }
+    .chain-card { position: relative; min-height: 230px; padding: 24px; background: #fff; border: 1px solid var(--line); border-radius: 16px; }
+    .chain-card:not(:last-child)::after { position: absolute; z-index: 2; top: 30px; right: -13px; display: grid; width: 26px; height: 26px; place-items: center; content: "→"; color: #fff; background: var(--ink); border-radius: 50%; font-weight: 900; }
+    .chain-card em { color: var(--cretas-dark); font-family: ui-monospace, "Cascadia Mono", monospace; font-size: 10px; font-style: normal; font-weight: 900; letter-spacing: .1em; }
+    .chain-card:first-child em { color: var(--shoubei); }
+    .chain-card h3 { margin: 18px 0 10px; font-family: "Songti SC", serif; font-size: 22px; }
+    .chain-card p { margin: 0; color: var(--muted); font-size: 12px; }
+    .chain-card small { display: block; margin-top: 18px; color: #936116; }
+
+    .proof-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; }
+    .proof-card { min-height: 250px; padding: 24px; background: var(--ink); border-radius: 16px; }
+    .proof-card b { color: var(--cretas); font-family: ui-monospace, "Cascadia Mono", monospace; font-size: 11px; }
+    .proof-card h3 { margin: 30px 0 10px; color: #fff; font-family: "Songti SC", serif; font-size: 22px; }
+    .proof-card p { margin: 0; color: #a8c0b6; font-size: 12px; }
+    .proof-card small { display: block; margin-top: 20px; color: #f2c575; }
+
+    .evidence-table { overflow-x: auto; margin-top: 28px; background: #fff; border: 1px solid var(--line); border-radius: var(--radius); box-shadow: var(--shadow); }
+    table { width: 100%; min-width: 880px; border-collapse: collapse; }
+    th, td { padding: 18px 20px; text-align: left; vertical-align: top; border-bottom: 1px solid var(--line); font-size: 12px; }
+    th { color: #53655d; background: #ece9df; font-size: 10px; letter-spacing: .08em; }
+    tbody tr:last-child td { border-bottom: 0; }
+    td strong { display: block; margin-bottom: 4px; font-size: 14px; }
+    .tag { display: inline-flex; padding: 3px 9px; color: #7d570f; background: #fff0cd; border-radius: 999px; font-size: 10px; font-weight: 800; }
+
+    section.demo { color: #fff; background: var(--ink); }
+    .demo .section-head p { color: #9fb7ad; }
+    .demo-shell { display: grid; grid-template-columns: 330px 1fr; gap: 18px; }
+    .step-tabs { display: grid; align-content: start; gap: 8px; }
+    .step-tab { padding: 14px 16px; color: #99b0a7; text-align: left; background: transparent; border: 1px solid rgba(255,255,255,.12); border-radius: 11px; }
+    .step-tab span { display: block; color: var(--cretas); font-family: ui-monospace, "Cascadia Mono", monospace; font-size: 10px; }
+    .step-tab.active { color: #fff; background: rgba(33,201,151,.12); border-color: var(--cretas); }
+    .step-panel { display: none; min-height: 360px; padding: 34px; color: var(--ink); background: var(--paper-2); border-radius: var(--radius); }
+    .step-panel.active { display: block; }
+    .step-panel time { color: var(--cretas-dark); font-family: ui-monospace, "Cascadia Mono", monospace; font-size: 12px; font-weight: 900; }
+    .step-panel h3 { max-width: 720px; margin: 18px 0 12px; font-family: "Songti SC", serif; font-size: clamp(30px, 4vw, 46px); line-height: 1.12; }
+    .step-panel > p { max-width: 760px; color: var(--muted); }
+    .say { margin-top: 24px; padding: 18px 20px; color: #174c3d; background: #dff6ed; border-left: 4px solid var(--cretas); border-radius: 0 10px 10px 0; font-size: 16px; font-weight: 700; }
+    .demo-controls { display: flex; gap: 10px; margin-top: 18px; }
+
+    .rules-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+    .rule-card { padding: 28px; background: #fff; border: 1px solid var(--line); border-radius: var(--radius); }
+    .rule-card h3 { margin: 0 0 18px; font-family: "Songti SC", serif; font-size: 27px; }
+    .rule-card ul { display: grid; gap: 11px; padding: 0; margin: 0; list-style: none; }
+    .rule-card li { padding: 12px 14px; color: var(--muted); background: #f3f1e9; border-radius: 10px; font-size: 12px; }
+    .rule-card.say li::before { content: "说 "; color: var(--cretas-dark); font-weight: 900; }
+    .rule-card.avoid li::before { content: "停 "; color: var(--red); font-weight: 900; }
+
+    .questions { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
+    .question { padding: 22px; background: #fff; border: 1px solid var(--line); border-radius: 14px; }
+    .question b { display: grid; width: 30px; height: 30px; place-items: center; color: #fff; background: var(--ink); border-radius: 9px; font-size: 11px; }
+    .question h3 { margin: 18px 0 8px; font-size: 16px; }
+    .question p { margin: 0; color: var(--muted); font-size: 12px; }
+
+    footer { padding: 52px 0; color: #a7beb5; background: #0b1d17; }
+    .footer-grid { display: flex; justify-content: space-between; gap: 30px; align-items: center; }
+    footer strong { color: #fff; }
+    footer small { display: block; max-width: 760px; margin-top: 8px; }
+
+    @media (max-width: 950px) {
+      .hero-grid { grid-template-columns: 1fr; gap: 30px; padding-top: 70px; }
+      .hero-proof, .proof-grid { grid-template-columns: 1fr 1fr; }
+      .known-grid, .section-head, .rules-grid { grid-template-columns: 1fr; }
+      .chain { grid-template-columns: 1fr 1fr; }
+      .chain-card:not(:last-child)::after { display: none; }
+      .demo-shell { grid-template-columns: 1fr; }
+      .step-tabs { grid-template-columns: repeat(3, 1fr); }
+      .questions { grid-template-columns: 1fr 1fr; }
+    }
+    @media (max-width: 620px) {
+      .wrap { width: min(100% - 28px, 1180px); }
+      .hero { min-height: auto; padding-top: 22px; }
+      .topbar { align-items: flex-start; }
+      .top-actions .button.secondary { display: none; }
+      .hero-grid { padding: 64px 0 46px; }
+      .hero h1 { font-size: clamp(50px, 17vw, 76px); }
+      .hero-lead { font-size: 15px; }
+      .hero-proof, .known-grid, .chain, .proof-grid, .questions { grid-template-columns: 1fr; }
+      .hero-proof article + article { padding-left: 0; border-left: 0; border-top: 1px solid rgba(255,255,255,.13); }
+      section { padding: 66px 0; }
+      .section-head { gap: 10px; }
+      .cap-list { grid-template-columns: 1fr; }
+      .step-tabs { display: flex; overflow-x: auto; padding-bottom: 8px; }
+      .step-tab { min-width: 148px; flex: none; }
+      .step-panel { min-height: 430px; padding: 24px; }
+      .demo-controls, .footer-grid { align-items: stretch; flex-direction: column; }
+      .button { width: 100%; }
+    }
+    @media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } * { transition: none !important; } }
+    @media print {
+      .top-actions, .demo-controls { display: none !important; }
+      .hero, .demo, footer { color: #111; background: #fff; }
+      .hero { min-height: auto; }
+      .hero-lead, .demo .section-head p, footer small { color: #444; }
+      .partner-card, .step-panel { border: 1px solid #ccc; }
+      .step-panel { display: block !important; min-height: auto; margin-bottom: 12px; }
+      .step-tabs { display: none; }
+    }
+  </style>
+</head>
+<body>
+  <div class="page">
+    <header class="hero">
+      <div class="wrap">
+        <div class="topbar">
+          <div class="brand"><span class="brand-mark">C</span><div><strong>白垩纪餐饮 AI</strong><small>PARTNER BRIEF / 5 MINUTES</small></div></div>
+          <div class="top-actions"><a class="button secondary" href="/restaurant-ai-demo/">完整演示手册</a><button class="button secondary" type="button" id="print-page">打印 / PDF</button></div>
+        </div>
+        <div class="hero-grid">
+          <div>
+            <div class="eyebrow">扫呗 × 白垩纪 · 合作交流版</div>
+            <h1>不重复收银<br><span>补上决策闭环</span></h1>
+            <p class="hero-lead">扫呗已经把<strong>收银、支付、订单与门店</strong>连接起来。白垩纪不再造一套收银，只补充授权数据之上的未来预测、可信解释和跨部门行动。</p>
+          </div>
+          <aside class="partner-card">
+            <div class="eyebrow">一句话定位</div>
+            <h2>扫呗记录“生意怎么发生”，白垩纪帮助经营者判断“接下来做什么”。</h2>
+            <p>这是上下游能力叠加，不是功能对打。真实扫呗接口字段、授权与时效仍需双方联调验证。</p>
+            <div class="formula">
+              <div><b class="blue">扫呗</b><span>交易与门店数据基础</span></div>
+              <div><b>授权接口</b><span>字段、频率、租户和隐私边界</span></div>
+              <div><b class="green">白垩纪</b><span>预测、解释、排班与协同闭环</span></div>
+            </div>
+          </aside>
+        </div>
+        <div class="hero-proof">
+          <article><strong>5 分钟</strong><small>只讲合作价值，不展开技术架构</small></article>
+          <article><strong>不对打</strong><small>承认其已呈现能力，不重复讲收银</small></article>
+          <article><strong>有证据</strong><small>白垩纪数字来自预测 FactBook</small></article>
+          <article><strong>待联调</strong><small>不把平台接口说成扫呗已经接通</small></article>
+        </div>
+      </div>
+    </header>
+
+    <main>
+      <section id="alignment">
+        <div class="wrap">
+          <div class="section-head"><div><div class="eyebrow">01 / ALIGNMENT</div><h2>先把边界说清楚</h2></div><p>依据用户提供的《扫呗收银 7.2》52 页材料。只判断材料明确呈现了什么；“材料未呈现”不等于对方没有能力。</p></div>
+          <div class="truth-banner"><strong>开场先说：</strong>“我们认真看过扫呗 7.2。收银支付、跨终端、会员营销、订单库存、多门店和 AI 店长已经讲得很完整，所以今天不重复这些，只看两套系统叠加后能多创造什么价值。”</div>
+          <div class="known-grid">
+            <article class="known-card shoubei"><div class="eyebrow">材料已经呈现</div><h3>扫呗擅长的前台与门店基础</h3><p>以下能力在 7.2 材料中已有明确展示，我们不否定、不抢讲、不重复造轮子。</p><ul class="cap-list"><li>聚合支付与强支付</li><li>手机 / PC / POS 跨终端</li><li>商品、订单与库存</li><li>会员、CRM 与营销</li><li>多门店与多渠道</li><li>AI 店长与智能体方向</li></ul></article>
+            <article class="known-card cretas"><div class="eyebrow">本次只证明增量</div><h3>白垩纪补充的经营决策层</h3><p>不是说只有白垩纪能做，而是这些能力我们已有可现场验证的产品闭环。</p><ul class="cap-list"><li>明天 / 下周 / 下月预测</li><li>预订 + 7/30/365 天趋势</li><li>FactBook 数字来源约束</li><li>技能与工时排班建议</li><li>老板/店长/人事交接</li><li>预览、确认与审计回执</li></ul></article>
+          </div>
+        </div>
+      </section>
+
+      <section id="chain">
+        <div class="wrap">
+          <div class="section-head"><div><div class="eyebrow">02 / COOPERATION CHAIN</div><h2>两套系统怎么接力</h2></div><p>现场只讲这四步。不要展开模型、数据库、MCP 或路由细节，除非对方技术人员主动追问。</p></div>
+          <div class="chain">
+            <article class="chain-card"><em>01 · SHOUBEI</em><h3>业务真实发生</h3><p>顾客支付、门店成交、订单、商品和渠道数据在扫呗体系中产生。</p><small>扫呗 7.2 材料已呈现的优势层。</small></article>
+            <article class="chain-card"><em>02 · AUTHORIZED LINK</em><h3>按授权接入</h3><p>双方确认门店、订单、日期、餐段、状态、更新时间等字段和同步频率。</p><small>当前是待联调项，不宣称已经接通。</small></article>
+            <article class="chain-card"><em>03 · CRETAS FACTBOOK</em><h3>计算未来需求</h3><p>把当前预订和历史趋势变成明天、下周、下个月的预测 FactBook。</p><small>数字由确定性事实层生成，不由大模型心算。</small></article>
+            <article class="chain-card"><em>04 · HUMAN ACTION</em><h3>部门接棒执行</h3><p>老板定优先级，店长与人事核技能、班次和工时，调整前先预览确认。</p><small>AI 提建议，人做决定，动作留审计。</small></article>
+          </div>
+        </div>
+      </section>
+
+      <section id="value">
+        <div class="wrap">
+          <div class="section-head"><div><div class="eyebrow">03 / PROVABLE VALUE</div><h2>只讲四个可证明亮点</h2></div><p>不说“别人做不到”，只把白垩纪已经能够现场跑通、且本次材料没有展开的闭环讲清楚。</p></div>
+          <div class="proof-grid">
+            <article class="proof-card"><b>01 / FUTURE</b><h3>从看过去，到准备未来</h3><p>把当前预订与 7/30/365 天 POS、客流、订单和人效趋势放进同一预测。</p><small>输出明天、下周、下个月。</small></article>
+            <article class="proof-card"><b>02 / FACTBOOK</b><h3>数字不是模型编的</h3><p>预测客流、建议人数、缺口和置信度由 FactBook 计算；LLM 只负责白话解释。</p><small>模型越界新增数字会失败关闭。</small></article>
+            <article class="proof-card"><b>03 / STAFFING</b><h3>排班考虑技能和工时</h3><p>不是看到历史人效低于目标就补人，而是结合未来需求、岗位技能、班次与周工时。</p><small>历史 actual/target 只作依据。</small></article>
+            <article class="proof-card"><b>04 / LOOP</b><h3>建议能交给下一位负责人</h3><p>老板、店长、人事看到不同信息；调整经过预览、确认、权限和审计，不偷偷改业务。</p><small>把数据、解释、责任人与下一步连起来。</small></article>
+          </div>
+          <div class="evidence-table"><table><thead><tr><th>扫呗 7.2 材料观察</th><th>现场不要下的结论</th><th>白垩纪可现场证明</th><th>建议向扫呗确认</th></tr></thead><tbody>
+            <tr><td><strong>已展示经营数据分析和 AI 店长</strong>材料覆盖数据分析、数字营销、店铺运营等方向。</td><td>不能说对方缺少 AI 或数据分析。</td><td>预测数字必须来自 FactBook，LLM 不得新增业务数字。</td><td><span class="tag">数字来源和失败关闭如何约束？</span></td></tr>
+            <tr><td><strong>已展示餐饮、多门店和库存方案</strong>包含轻餐、正餐、团餐等行业页面。</td><td>不能把库存、多门店或餐饮适配说成空白。</td><td>预订与 7/30/365 天趋势驱动三种未来时域排班。</td><td><span class="tag">是否已有同口径未来预测？</span></td></tr>
+            <tr><td><strong>已展示智能体原生架构</strong>材料包含经营、营销、服务等 Agent 方向。</td><td>不能用“我们有 Agent”作为差异点。</td><td>技能/班次/周工时约束，以及预览确认和审计闭环。</td><td><span class="tag">Agent 的动作权限和审计边界？</span></td></tr>
+            <tr><td><strong>本次材料没有展开接口细节</strong>未见针对本合作的字段、时效和沙箱契约。</td><td>不能因此说接口不存在，也不能说已经完成接入。</td><td>白垩纪已有通用平台接口与来源标记，可进入联合映射。</td><td><span class="tag">字段、频率、授权、沙箱和 SLA？</span></td></tr>
+          </tbody></table></div>
+        </div>
+      </section>
+
+      <section class="demo" id="demo">
+        <div class="wrap">
+          <div class="section-head"><div><div class="eyebrow">04 / FIVE-MINUTE DEMO</div><h2>照着这五分钟讲</h2></div><p>默认从第 1 步开始。点击左侧阶段切换讲稿；键盘左右方向键也可以切换。</p></div>
+          <div class="demo-shell">
+            <div class="step-tabs" role="tablist" aria-label="五分钟演示步骤">
+              <button class="step-tab active" data-step="0" role="tab" aria-selected="true"><span>00:00</span>先承认扫呗价值</button>
+              <button class="step-tab" data-step="1" role="tab" aria-selected="false"><span>00:45</span>展示数据在动</button>
+              <button class="step-tab" data-step="2" role="tab" aria-selected="false"><span>01:30</span>展示未来预测</button>
+              <button class="step-tab" data-step="3" role="tab" aria-selected="false"><span>02:40</span>展示 AI 有依据</button>
+              <button class="step-tab" data-step="4" role="tab" aria-selected="false"><span>03:40</span>展示部门接棒</button>
+              <button class="step-tab" data-step="5" role="tab" aria-selected="false"><span>04:35</span>用联调问题收尾</button>
+            </div>
+            <div>
+              <article class="step-panel active" data-step-panel="0"><time>00:00 - 00:45</time><h3>先告诉对方：今天不是来替换扫呗</h3><p>停留在本页，不进入任何业务系统。先把合作关系讲清楚，避免后面每一个功能都被理解成竞品对比。</p><div class="say">“扫呗已经把收银、支付、订单和门店数字化做得很完整。我们今天不重复讲这些，只演示这些数据如果继续往后走，怎样帮助老板决定明天做什么。”</div></article>
+              <article class="step-panel" data-step-panel="1"><time>00:45 - 01:30</time><h3>打开数字指挥屏，只证明数据会更新</h3><p>登录白垩纪餐饮系统，指出 60 秒只读刷新、最后接收时间和数据链路状态。不要逐个解释 KPI。</p><div class="say">“这里不是另一套收银台，而是经营决策屏。未来如果接入扫呗授权数据，来源和更新时间会在这里明确显示。”</div></article>
+              <article class="step-panel" data-step-panel="2"><time>01:30 - 02:40</time><h3>打开预测排班，讲未来而不是复盘</h3><p>切换明天、下周、下个月，指向预订覆盖、预测客流、建议人数、现有人数、缺口和置信度。只挑一个门店时段。</p><div class="say">“收银数据告诉我们刚才卖了多少；这一步把预订和历史趋势变成未来需求，帮助店长提前准备人。”</div></article>
+              <article class="step-panel" data-step-panel="3"><time>02:40 - 03:40</time><h3>问一句：下周需要多少兼职</h3><p>展示 AI 回答与同一 FactBook 的关系。不讲模型名称、路由或 Prompt，只讲数字边界。</p><div class="say">“人数不是大模型猜的。FactBook 先把数字算好，AI 只把原因和可调整建议说成人话；模型想加新数字，系统会拒绝这次回答。”</div></article>
+              <article class="step-panel" data-step-panel="4"><time>03:40 - 04:35</time><h3>用角色切换证明不是又一张报表</h3><p>老板看全店优先级，店长看今天执行，人事看技能和工时。展示一键调整入口，但停在预览。</p><div class="say">“价值不在多一张图，而在同一个预测能交给对应负责人；AI 提建议，人确认，动作有权限也有审计。”</div></article>
+              <article class="step-panel" data-step-panel="5"><time>04:35 - 05:00</time><h3>不做结论，用三个联调问题收尾</h3><p>询问可提供哪些聚合字段、多久更新一次、是否有沙箱和租户授权机制。把下一步变成小范围联合验证。</p><div class="say">“我们建议先选一到两家样板门店，只做只读数据映射，用共同指标验证预测和排班价值；有效再谈产品化，不要求扫呗重做已有能力。”</div></article>
+              <div class="demo-controls"><button class="button paper" type="button" id="prev-step">← 上一步</button><button class="button" type="button" id="next-step">下一步 →</button><a class="button paper" href="/dashboard" target="_blank" rel="noopener">打开白垩纪演示系统</a></div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section id="language">
+        <div class="wrap">
+          <div class="section-head"><div><div class="eyebrow">05 / LANGUAGE</div><h2>现场说什么，不说什么</h2></div><p>合作演示最容易出问题的不是功能，而是措辞。以下话术能避免把材料没有展开的部分说成对方能力缺口。</p></div>
+          <div class="rules-grid">
+            <article class="rule-card say"><h3>建议这样说</h3><ul><li>扫呗已经是交易和门店数字化基础，白垩纪补充经营决策层。</li><li>如果获得授权字段，可以共同验证预测与排班价值。</li><li>本次材料没有展开这一闭环，我们展示的是白垩纪当前可证明能力。</li><li>我们不要求替换现有收银、支付、会员或库存体系。</li><li>先用一到两家样板门店做只读验证，再决定是否产品化。</li></ul></article>
+            <article class="rule-card avoid"><h3>这些内容不要说</h3><ul><li>不要把扫呗描述成只负责收钱或只有收银。</li><li>不要否定其 AI、数据分析、库存、多门店或餐饮行业能力。</li><li>不要用“我们也有 Agent”作为核心差异。</li><li>不要暗示白垩纪已经连接扫呗生产接口。</li><li>不要比较模型大小、技术名词数量或页面多少。</li></ul></article>
+          </div>
+        </div>
+      </section>
+
+      <section id="questions">
+        <div class="wrap">
+          <div class="section-head"><div><div class="eyebrow">06 / NEXT STEP</div><h2>最后只问六个问题</h2></div><p>这些问题不是技术拷问，而是把“看完不错”推进成一个可验证的合作小闭环。</p></div>
+          <div class="questions">
+            <article class="question"><b>01</b><h3>有哪些聚合数据可以授权？</h3><p>门店、订单、日期、餐段、人数、商品、状态和更新时间分别能到什么粒度？</p></article>
+            <article class="question"><b>02</b><h3>数据多久更新一次？</h3><p>分钟、小时还是日结？是否支持增量事件和补数？</p></article>
+            <article class="question"><b>03</b><h3>如何做租户与隐私隔离？</h3><p>授权、撤销、脱敏、最小字段和审计日志如何落地？</p></article>
+            <article class="question"><b>04</b><h3>有没有联调沙箱？</h3><p>能否用非生产数据验证字段映射、幂等、延迟与异常恢复？</p></article>
+            <article class="question"><b>05</b><h3>样板门店怎么选？</h3><p>选一到两家预订、POS 和人力数据较完整的餐厅，先做只读验证。</p></article>
+            <article class="question"><b>06</b><h3>共同成功指标是什么？</h3><p>预测误差、排班调整时间、技能覆盖和店长采纳率，先定口径再验证。</p></article>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <footer><div class="wrap footer-grid"><div><strong>扫呗 × 白垩纪 · 餐饮智能经营合作交流版</strong><small>材料依据：《扫呗收银 7.2》（52 页，材料创建日期 2026-07-31）与白垩纪当前已验证能力。页面不承载生产实时数字，不表示扫呗生产接口已经接通。</small></div><a class="button" href="#demo">开始 5 分钟演示 ↑</a></div></footer>
+  </div>
+  <script>
+    (() => {
+      const tabs = [...document.querySelectorAll('[data-step]')];
+      const panels = [...document.querySelectorAll('[data-step-panel]')];
+      let current = 0;
+      const selectStep = (index) => {
+        current = Math.max(0, Math.min(tabs.length - 1, index));
+        tabs.forEach((tab, tabIndex) => {
+          const active = tabIndex === current;
+          tab.classList.toggle('active', active);
+          tab.setAttribute('aria-selected', String(active));
+        });
+        panels.forEach((panel, panelIndex) => panel.classList.toggle('active', panelIndex === current));
+      };
+      tabs.forEach((tab, index) => tab.addEventListener('click', () => selectStep(index)));
+      document.querySelector('#prev-step')?.addEventListener('click', () => selectStep(current - 1));
+      document.querySelector('#next-step')?.addEventListener('click', () => selectStep(current + 1));
+      document.querySelector('#print-page')?.addEventListener('click', () => window.print());
+      document.addEventListener('keydown', (event) => {
+        if (event.key === 'ArrowRight') selectStep(current + 1);
+        if (event.key === 'ArrowLeft') selectStep(current - 1);
+      });
+    })();
+  </script>
+</body>
+</html>
