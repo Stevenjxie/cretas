@@ -28,6 +28,7 @@ import {
   type LabelQcTaskSummary,
 } from '@/api/labelQc';
 import LabelQcReviewWorkbench from './LabelQcReviewWorkbench.vue';
+import { createPhotoArchive, downloadPhotoArchive } from './photoArchive';
 
 const STATUS_LABELS: Record<LabelQcTaskStatus, string> = {
   DRAFT: '草稿',
@@ -247,13 +248,19 @@ async function backupTask(row: LabelQcTaskSummary) {
   if (!factoryId.value) return;
   actionTaskId.value = row.id;
   try {
-    const response = await backupLabelQcTask(factoryId.value, row.id);
-    if (!response.success) return;
-    downloadJson(
-      response.data,
-      `label-qc-backup-${row.skuCode}-${row.batchNumber}.json`,
-    );
-    ElMessage.success('完整备份已下载，并记录本次备份时间');
+    const detailResponse = await getLabelQcTask(factoryId.value, row.id);
+    if (!detailResponse.success) return;
+    let archive: Awaited<ReturnType<typeof createPhotoArchive>>;
+    try {
+      archive = await createPhotoArchive(detailResponse.data);
+    } catch (error) {
+      ElMessage.error(error instanceof Error ? error.message : '照片归档失败，请重试');
+      return;
+    }
+    const recordResponse = await backupLabelQcTask(factoryId.value, row.id);
+    if (!recordResponse.success) return;
+    downloadPhotoArchive(archive);
+    ElMessage.success(`已下载 ${archive.photoCount} 张 JPG 照片，并记录本次备份时间`);
     await load();
   } finally {
     actionTaskId.value = null;
@@ -561,7 +568,7 @@ onMounted(load);
                 :loading="actionTaskId === row.id"
                 @click="backupTask(row)"
               >
-                下载备份
+                下载照片备份
               </el-button>
               <el-button
                 v-if="queueMode !== 'ARCHIVED'"
