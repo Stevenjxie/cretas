@@ -198,7 +198,7 @@ Useful modes:
 ./scripts/deploy/deploy-backend.sh --rollback
 ```
 
-Do not use `--git` unless the user explicitly requests the legacy server-build path.
+The legacy `--git` server-build path has been removed. Production Java/Web releases must stay on the trusted-artifact flow above.
 
 ## Web Admin Deploy
 

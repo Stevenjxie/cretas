@@ -41,8 +41,7 @@ backend-java/
 ├── database/
 │   └── create_timeclock_table.sql       # 数据库建表脚本
 ├── pom.xml                              # Maven 配置
-├── build.sh                             # 编译脚本
-├── deploy.sh                            # 部署脚本
+├── build.sh                             # 仅供本地开发的编译脚本
 ├── run-local.sh                         # 本地运行脚本
 ├── test-timeclock-e2e.sh               # E2E 测试脚本
 └── README.md                            # 本文档
@@ -224,43 +223,29 @@ curl "http://localhost:10010/api/mobile/F001/timeclock/history?userId=1&startDat
 
 ## 🚢 部署到生产服务器
 
-### 配置部署参数
+生产发布统一从仓库根目录执行 `scripts/deploy/release-cretas.sh`。CI 负责构建并签名候选制品，发布入口优先取回可信制品或复用内容树缓存，再由受控的底层组件完成生产安装、蓝绿切流和结构化验收回执。
 
-编辑 `deploy.sh` 中的配置:
-```bash
-SERVER_HOST="47.100.235.168"
-SERVER_USER="root"
-SERVER_PATH="/www/wwwroot/cretas"
-SERVER_PORT="10010"
-```
-
-### 执行部署
+合并前在干净候选 worktree 中构建可信制品：
 
 ```bash
-./deploy.sh
+./scripts/deploy/release-cretas.sh \
+  --phase build \
+  --base-sha '<dispatch Base SHA>' \
+  --tests '<本次目标测试>' \
+  --stage-backend YES-STAGE
 ```
 
-部署脚本会:
-1. 上传 JAR 文件到服务器
-2. 停止旧进程
-3. 启动新进程
-4. 验证服务状态
+合并后仅从 clean exact `origin/main` 执行生产发布：
 
-### 生产环境配置
-
-**服务器环境要求**:
-- ✅ Java 11+
-- ✅ MySQL 8.0+
-- ✅ 确保端口 10010 开放
-
-**数据库配置**:
-
-在服务器上修改 `/www/wwwroot/cretas/application.properties` (如果需要):
-```properties
-spring.datasource.url=jdbc:mysql://your_db_host:3306/cretas_db?...
-spring.datasource.username=your_db_user
-spring.datasource.password=your_db_password
+```bash
+./scripts/deploy/release-cretas.sh \
+  --phase deploy \
+  --base-sha '<dispatch Base SHA>' \
+  --tests '<本次目标测试>' \
+  --confirm-prod YES-PROD
 ```
+
+不要从服务器拉取任意分支现场编译，也不要直接杀固定端口进程。Java 生产运行在 PostgreSQL + Flyway 上，并在 `10010`/`10020` 两个 systemd 槽位间蓝绿切换；真实 active 槽位必须从 Nginx upstream 读取。
 
 ---
 
@@ -311,9 +296,9 @@ kill -9 <PID>
 ```bash
 # 本地运行时，终端会直接显示日志
 
-# 服务器部署后
-ssh root@47.100.235.168
-tail -f /www/wwwroot/cretas/cretas-backend.log
+# 服务器部署后（先按真实 active 槽位选择服务）
+systemctl status cretas-backend cretas-backend-green --no-pager
+journalctl -u cretas-backend -u cretas-backend-green -n 100 --no-pager
 ```
 
 ---
@@ -372,7 +357,8 @@ if (todayResponse.data) {
 
 2. **部署到服务器** 📤
    ```bash
-   ./deploy.sh
+   # 从仓库根目录按上方统一发布流程执行
+   ./scripts/deploy/release-cretas.sh --help
    ```
 
 3. **前后端联调** 🔄
