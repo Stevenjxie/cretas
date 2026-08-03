@@ -1,9 +1,31 @@
+import type { StaffingSummaryRow } from '@/types/restaurant-staffing';
+
 export interface StaffingPerspective {
   label: string;
   title: string;
   description: string;
   focus: string;
   canAdjust: boolean;
+}
+
+export type StaffingGapFilter = 'all' | 'shortage' | 'balanced' | 'surplus';
+export type StaffingSortMode = 'gap-desc' | 'demand-desc' | 'confidence-asc' | 'store';
+
+export interface StaffingRowFilter {
+  storeId: number | null;
+  daypart: string;
+  gap: StaffingGapFilter;
+  sort: StaffingSortMode;
+}
+
+export interface StaffingPage<T> {
+  page: number;
+  pageSize: number;
+  total: number;
+  totalPages: number;
+  from: number;
+  to: number;
+  rows: T[];
 }
 
 const WRITE_ROLES = new Set([
@@ -59,4 +81,60 @@ export function gapTagType(gap: number): 'danger' | 'success' | 'info' {
   if (gap > 0) return 'danger';
   if (gap < 0) return 'info';
   return 'success';
+}
+
+function compareStore(left: StaffingSummaryRow, right: StaffingSummaryRow): number {
+  return left.storeName.localeCompare(right.storeName, 'zh-CN')
+    || left.daypart.localeCompare(right.daypart, 'zh-CN');
+}
+
+export function filterAndSortStaffingRows(
+  rows: readonly StaffingSummaryRow[],
+  filter: StaffingRowFilter,
+): StaffingSummaryRow[] {
+  const filtered = rows.filter((row) => {
+    if (filter.storeId !== null && row.storeId !== filter.storeId) return false;
+    if (filter.daypart && row.daypart !== filter.daypart) return false;
+    if (filter.gap === 'shortage' && row.gap <= 0) return false;
+    if (filter.gap === 'balanced' && row.gap !== 0) return false;
+    if (filter.gap === 'surplus' && row.gap >= 0) return false;
+    return true;
+  });
+
+  return filtered.sort((left, right) => {
+    if (filter.sort === 'demand-desc') {
+      return right.predictedGuests - left.predictedGuests || compareStore(left, right);
+    }
+    if (filter.sort === 'confidence-asc') {
+      return left.confidencePct - right.confidencePct || compareStore(left, right);
+    }
+    if (filter.sort === 'store') return compareStore(left, right);
+    return right.gap - left.gap
+      || right.predictedGuests - left.predictedGuests
+      || compareStore(left, right);
+  });
+}
+
+export function paginateStaffingRows<T>(
+  rows: readonly T[],
+  requestedPage: number,
+  requestedPageSize: number,
+): StaffingPage<T> {
+  const pageSize = Number.isFinite(requestedPageSize) && requestedPageSize > 0
+    ? Math.floor(requestedPageSize)
+    : 10;
+  const total = rows.length;
+  const totalPages = Math.max(1, Math.ceil(total / pageSize));
+  const page = Math.min(Math.max(1, Math.floor(requestedPage) || 1), totalPages);
+  const start = (page - 1) * pageSize;
+  const pageRows = rows.slice(start, start + pageSize);
+  return {
+    page,
+    pageSize,
+    total,
+    totalPages,
+    from: total === 0 ? 0 : start + 1,
+    to: total === 0 ? 0 : start + pageRows.length,
+    rows: pageRows,
+  };
 }

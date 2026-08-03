@@ -16,11 +16,14 @@ import type {
   StaffingSummaryRow,
 } from '@/types/restaurant-staffing';
 import {
+  filterAndSortStaffingRows,
   gapLabel,
   gapTagType,
+  paginateStaffingRows,
   STAFFING_QUICK_QUESTIONS,
   staffingPerspective,
 } from './staffingViewModel';
+import type { StaffingGapFilter, StaffingSortMode } from './staffingViewModel';
 
 const permission = usePermissionStore();
 const perspective = computed(() => staffingPerspective(permission.currentRole));
@@ -33,6 +36,12 @@ const selectedSummary = ref<StaffingSummaryRow | null>(null);
 const question = ref('明天怎么排班');
 const asking = ref(false);
 const aiAnswer = ref('');
+const selectedStoreId = ref<number | null>(null);
+const selectedDaypart = ref('');
+const gapFilter = ref<StaffingGapFilter>('all');
+const sortMode = ref<StaffingSortMode>('gap-desc');
+const currentPage = ref(1);
+const pageSize = ref(10);
 
 const adjustDialog = reactive({
   open: false,
@@ -52,6 +61,30 @@ const horizonOptions: Array<{ value: StaffingHorizon; label: string; note: strin
 const summary = computed(() => dashboard.value?.summary);
 const sources = computed(() => dashboard.value?.sources ?? []);
 const hasSimulation = computed(() => sources.value.some((item) => item.isSimulated));
+const allSummaryRows = computed(() => dashboard.value?.summaryRows ?? []);
+const storeOptions = computed(() => {
+  const stores = new Map<number, string>();
+  for (const row of allSummaryRows.value) stores.set(row.storeId, row.storeName);
+  return [...stores.entries()]
+    .map(([value, label]) => ({ value, label }))
+    .sort((left, right) => left.label.localeCompare(right.label, 'zh-CN'));
+});
+const daypartOptions = computed(() => [...new Set(allSummaryRows.value.map((row) => row.daypart))]);
+const filteredSummaryRows = computed(() => filterAndSortStaffingRows(allSummaryRows.value, {
+  storeId: selectedStoreId.value,
+  daypart: selectedDaypart.value,
+  gap: gapFilter.value,
+  sort: sortMode.value,
+}));
+const summaryPage = computed(() => paginateStaffingRows(
+  filteredSummaryRows.value,
+  currentPage.value,
+  pageSize.value,
+));
+const pagedSummaryRows = computed(() => summaryPage.value.rows);
+const hasActiveTableFilters = computed(() => (
+  selectedStoreId.value !== null || selectedDaypart.value !== '' || gapFilter.value !== 'all'
+));
 const detailRows = computed(() => {
   const selected = selectedSummary.value;
   if (!selected || !dashboard.value) return [];
@@ -65,6 +98,13 @@ async function loadDashboard() {
   loadError.value = '';
   try {
     dashboard.value = await getRestaurantStaffingDashboard(horizon.value);
+    if (
+      selectedStoreId.value !== null
+      && !dashboard.value.summaryRows.some((row) => row.storeId === selectedStoreId.value)
+    ) {
+      selectedStoreId.value = null;
+    }
+    currentPage.value = 1;
   } catch (error) {
     console.error('[restaurant-staffing] dashboard failed', error);
     dashboard.value = null;
@@ -75,6 +115,16 @@ async function loadDashboard() {
 }
 
 watch(horizon, loadDashboard, { immediate: true });
+watch(
+  [selectedStoreId, selectedDaypart, gapFilter, sortMode, pageSize],
+  () => { currentPage.value = 1; },
+);
+
+function resetTableFilters() {
+  selectedStoreId.value = null;
+  selectedDaypart.value = '';
+  gapFilter.value = 'all';
+}
 
 function openDetail(row: StaffingSummaryRow) {
   selectedSummary.value = row;
@@ -256,10 +306,53 @@ function formatPct(value: number | null | undefined): string {
         <template #header>
           <div class="section-heading">
             <div><h2>各门店 · 各时段</h2><p>历史人效仅作证据，不参与“缺人”方向判断。</p></div>
-            <el-tag type="info" effect="plain">{{ dashboard?.horizonLabel ?? '预测范围' }}</el-tag>
+            <div class="section-meta">
+              <span>{{ filteredSummaryRows.length }} / {{ allSummaryRows.length }} 条</span>
+              <el-tag type="info" effect="plain">{{ dashboard?.horizonLabel ?? '预测范围' }}</el-tag>
+            </div>
           </div>
         </template>
-        <el-table :data="dashboard?.summaryRows ?? []" stripe empty-text="暂无可计算的预测事实">
+        <div class="table-toolbar" aria-label="门店明细筛选">
+          <el-select
+            v-model="selectedStoreId"
+            clearable
+            filterable
+            placeholder="搜索或选择门店…"
+            aria-label="搜索或选择门店"
+            class="store-filter"
+          >
+            <el-option
+              v-for="store in storeOptions"
+              :key="store.value"
+              :label="store.label"
+              :value="store.value"
+            />
+          </el-select>
+          <el-select v-model="selectedDaypart" aria-label="筛选营业时段" class="compact-filter">
+            <el-option label="全部时段" value="" />
+            <el-option v-for="item in daypartOptions" :key="item" :label="item" :value="item" />
+          </el-select>
+          <el-select v-model="gapFilter" aria-label="筛选人力状态" class="compact-filter">
+            <el-option label="全部人力状态" value="all" />
+            <el-option label="仅看缺人" value="shortage" />
+            <el-option label="刚好匹配" value="balanced" />
+            <el-option label="人力有余" value="surplus" />
+          </el-select>
+          <el-select v-model="sortMode" aria-label="门店明细排序" class="sort-filter">
+            <el-option label="急缺优先" value="gap-desc" />
+            <el-option label="客流从高到低" value="demand-desc" />
+            <el-option label="低置信度优先" value="confidence-asc" />
+            <el-option label="按门店名称" value="store" />
+          </el-select>
+          <el-button v-if="hasActiveTableFilters" link type="primary" @click="resetTableFilters">清除筛选</el-button>
+        </div>
+        <el-table
+          :data="pagedSummaryRows"
+          :row-key="(row: StaffingSummaryRow) => `${row.storeId}-${row.daypart}`"
+          :max-height="560"
+          stripe
+          :empty-text="hasActiveTableFilters ? '没有符合当前筛选的门店时段' : '暂无可计算的预测事实'"
+        >
           <el-table-column prop="storeName" label="门店" min-width="150" fixed />
           <el-table-column prop="daypart" label="时段" width="90" />
           <el-table-column label="预订覆盖" width="110" align="right">
@@ -284,6 +377,18 @@ function formatPct(value: number | null | undefined): string {
             </template>
           </el-table-column>
         </el-table>
+        <footer v-if="allSummaryRows.length" class="table-footer">
+          <span>当前显示 {{ summaryPage.from }}–{{ summaryPage.to }} 条，共 {{ summaryPage.total }} 条</span>
+          <el-pagination
+            v-model:current-page="currentPage"
+            v-model:page-size="pageSize"
+            :page-sizes="[10, 20, 50]"
+            :total="summaryPage.total"
+            :pager-count="5"
+            background
+            layout="sizes, prev, pager, next, jumper"
+          />
+        </footer>
       </el-card>
 
       <aside class="side-stack">
@@ -303,7 +408,7 @@ function formatPct(value: number | null | undefined): string {
           <div class="question-chips">
             <button v-for="item in STAFFING_QUICK_QUESTIONS" :key="item" type="button" @click="askQuestion(item)">{{ item }}</button>
           </div>
-          <el-input v-model="question" placeholder="例如：明天怎么排班" @keyup.enter="askQuestion()">
+          <el-input v-model="question" placeholder="例如：明天怎么排班…" aria-label="向餐饮 AI 提问" @keyup.enter="askQuestion()">
             <template #append><el-button :loading="asking" @click="askQuestion()">提问</el-button></template>
           </el-input>
           <div v-if="aiAnswer" class="ai-answer">{{ aiAnswer }}</div>
@@ -381,6 +486,7 @@ function formatPct(value: number | null | undefined): string {
 .staffing-hero { display: flex; align-items: flex-end; justify-content: space-between; gap: 24px; padding: 28px 30px; border: 1px solid #dbe4ef; border-radius: 16px; background: linear-gradient(135deg, #fff 0%, #f2f7fc 100%); box-shadow: 0 8px 26px rgb(30 64 110 / 7%); }
 .eyebrow { margin-bottom: 8px; color: #1b65a8; font-size: 13px; font-weight: 700; letter-spacing: .08em; }
 .staffing-hero h1 { margin: 0; font-size: 30px; line-height: 1.2; letter-spacing: -.02em; }
+.staffing-hero h1, .section-heading h2 { text-wrap: balance; }
 .staffing-hero p { margin: 10px 0 0; color: #667085; }
 .hero-facts { min-width: 210px; padding: 16px 18px; border-left: 3px solid #1b65a8; background: rgb(255 255 255 / 72%); }
 .hero-facts span, .hero-facts small { display: block; color: #667085; font-size: 12px; }
@@ -388,6 +494,7 @@ function formatPct(value: number | null | undefined): string {
 .horizon-switch { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; max-width: 640px; margin: 18px 0; }
 .horizon-switch button { display: flex; align-items: center; justify-content: space-between; min-height: 54px; padding: 10px 14px; border: 1px solid #d8dee8; border-radius: 10px; background: #fff; color: #344054; cursor: pointer; transition: border-color .18s, box-shadow .18s, transform .18s; }
 .horizon-switch button:hover { border-color: #75a7d6; transform: translateY(-1px); }
+.horizon-switch button:focus-visible, .question-chips button:focus-visible { outline: 2px solid #1b65a8; outline-offset: 2px; }
 .horizon-switch button.active { border-color: #1b65a8; color: #1b65a8; box-shadow: 0 0 0 2px rgb(27 101 168 / 10%); }
 .horizon-switch span { font-size: 12px; color: #8491a3; }
 .page-alert { margin-bottom: 16px; }
@@ -402,6 +509,13 @@ function formatPct(value: number | null | undefined): string {
 .section-heading { display: flex; justify-content: space-between; gap: 16px; align-items: center; }
 .section-heading h2, .source-card h2, .ai-card h2 { margin: 0; font-size: 17px; }
 .section-heading p, .ai-card p { margin: 5px 0 0; color: #7b8798; font-size: 12px; }
+.section-meta { display: flex; align-items: center; gap: 10px; color: #7b8798; font-size: 12px; white-space: nowrap; }
+.table-toolbar { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin-bottom: 14px; padding: 12px; border: 1px solid #edf2f7; border-radius: 10px; background: #f8fafc; }
+.store-filter { width: min(240px, 100%); }
+.compact-filter { width: 150px; }
+.sort-filter { width: 165px; }
+.table-footer { display: flex; align-items: center; justify-content: space-between; gap: 16px; min-height: 40px; padding-top: 14px; color: #7b8798; font-size: 12px; }
+.table-card :deep(.el-table__cell) { font-variant-numeric: tabular-nums; }
 .side-stack { display: grid; gap: 16px; }
 .source-list { display: grid; gap: 12px; }
 .source-list > div { display: flex; gap: 10px; align-items: center; padding: 10px; border-radius: 8px; background: #f7f9fc; }
@@ -422,5 +536,17 @@ function formatPct(value: number | null | undefined): string {
 .confirm-facts dt { color: #7b8798; }
 .confirm-facts dd { margin: 0; font-weight: 600; text-align: right; }
 @media (max-width: 1280px) { .metric-grid { grid-template-columns: repeat(3, 1fr); } .content-grid { grid-template-columns: 1fr; } .side-stack { grid-template-columns: repeat(2, 1fr); } }
-@media (max-width: 760px) { .staffing-page { padding: 14px; } .staffing-hero { align-items: flex-start; flex-direction: column; } .hero-facts { width: 100%; box-sizing: border-box; } .horizon-switch, .metric-grid, .side-stack { grid-template-columns: 1fr; } }
+@media (max-width: 760px) {
+  .staffing-page { padding: 14px; }
+  .staffing-hero { align-items: flex-start; flex-direction: column; }
+  .hero-facts { width: 100%; box-sizing: border-box; }
+  .horizon-switch, .metric-grid, .side-stack { grid-template-columns: 1fr; }
+  .section-heading, .table-footer { align-items: flex-start; flex-direction: column; }
+  .table-toolbar > :deep(.el-select) { width: 100%; }
+  .table-footer { overflow-x: auto; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .horizon-switch button { transition: none; }
+  .horizon-switch button:hover { transform: none; }
+}
 </style>
