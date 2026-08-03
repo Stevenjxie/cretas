@@ -188,6 +188,32 @@ class PackagedBatchStockVisibilityTest {
     }
 
     @Test
+    @DisplayName("🔴 三层栅栏都要拆 —— 单位判据只是第一层")
+    void allThreeBarriersMustBeRemoved() throws Exception {
+        // 第 1 层(本类其余用例已覆盖): unitMatches 不认包装单位 → 已给展示侧放开。
+        // 第 2、3 层在<b>仓储查询</b>里, 早于任何单位判断:
+        //   findAvailableBatchesFEFO      只取 status='AVAILABLE' → 过期的取不出来
+        //   findExpiredBatchesByWarehouse 只取传入的那一个仓(调用方传生产仓) → 别的仓取不出来
+        // 于是「别的仓有货但过期了」两条都不覆盖。prod 实证: F006 羊排原料仓 300kg 全过期,
+        // 而界面 expired=300 其实是<b>生产仓</b>那三条 g 批次 —— 数字撞巧一样, 来源完全不同。
+        String repo = java.nio.file.Files.readString(java.nio.file.Path.of(
+                "src", "main", "java", "com", "cretas", "aims", "repository",
+                "MaterialBatchRepository.java"));
+        assertThat(repo)
+                .as("必须有一条<b>生产仓以外</b>的过期查询, 否则第 3 层栅栏还在")
+                .contains("findExpiredBatchesOutsideWarehouse")
+                .contains("m.warehouseId <> :excludedWarehouseId");
+
+        String impl = java.nio.file.Files.readString(java.nio.file.Path.of(
+                "src", "main", "java", "com", "cretas", "aims", "service", "processentry",
+                "impl", "ProductionStockAllocationServiceImpl.java"));
+        assertThat(impl)
+                .as("新查询要真的接线, 且走展示口径(否则按箱存量那 100kg 仍然漏)")
+                .contains("findExpiredBatchesOutsideWarehouse")
+                .contains("expiredElsewhere");
+    }
+
+    @Test
     @DisplayName("折不出 kg 且被当成质量批次取数时, 仍抛明确错误而不是静默算错")
     void unconvertibleStillThrows() throws Throwable {
         when(specRepository

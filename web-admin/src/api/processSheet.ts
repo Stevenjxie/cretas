@@ -459,6 +459,16 @@ export interface PortAvailability {
    * 界面既不提示也不解释）。有值时必须显式提示并引导去处理，不要静默吞掉。
    */
   expired?: number;
+
+  /**
+   * **生产仓以外**各仓的过期存量 —— 同样只用于展示与提醒。
+   *
+   * 🔴 2026-08-03: `expired` 只统计生产仓，`elsewhere` 只统计 `status='AVAILABLE'`，
+   * 于是「别的仓有货但过期了」这一种形态**两边都不覆盖**，整批从界面消失。
+   * prod 实证：F006 羊排原料仓有 300kg 全过期（其中 100kg 还是按「箱」存量的），
+   * 界面只显示生产仓的 300kg，原料仓那 300kg 一个字都没有。
+   */
+  expiredElsewhere?: ElsewhereStock[];
 }
 
 /**

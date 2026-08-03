@@ -101,7 +101,20 @@ public interface ProductionStockAllocationService {
              * 原料仓有 100kg 但全部 EXPIRED, 界面既不提示也不解释)。把它单独报出来,
              * 前端可显示「过期 100kg · 不可投, 请处理」并引导去报损/处置。
              */
-            BigDecimal expired) {
+            BigDecimal expired,
+            /**
+             * <b>生产仓以外</b>各仓的过期存量 —— 同样只用于展示与提醒。
+             *
+             * <p>🔴 2026-08-03: {@code expired} 只统计生产仓, {@code elsewhere} 只统计
+             * {@code status='AVAILABLE'} —— 于是「别的仓有货但过期了」这一种形态<b>两边都不覆盖</b>,
+             * 整批从界面上消失。prod 实证: F006 羊排原料仓有 300kg 全过期(其中 100kg 还是按「箱」
+             * 存量的), 而界面只显示生产仓的 expired=300, 原料仓那 300kg 一个字都没有。
+             *
+             * <p>讽刺的是 {@code findExpiredBatchesByWarehouse} 的 Javadoc 写的动机就是
+             * 「实测 F006 羊排<b>在原料仓</b>有 100kg 但全部 EXPIRED」, 可它的实现按生产仓过滤 ——
+             * 实现与自己写的动机相反。
+             */
+            List<ElsewhereStock> expiredElsewhere) {
     }
 
     /** 同物料在**非生产仓**的存量 —— 用于「主仓另有 200 只, 待调拨入生产仓」。 */
