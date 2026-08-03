@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
+import type { ElTable } from 'element-plus';
 import {
   Aim,
   Check,
@@ -28,7 +29,11 @@ import {
   type LabelQcTaskSummary,
 } from '@/api/labelQc';
 import LabelQcReviewWorkbench from './LabelQcReviewWorkbench.vue';
-import { createPhotoArchive, downloadPhotoArchive } from './photoArchive';
+import {
+  createBulkPhotoArchive,
+  createPhotoArchive,
+  downloadPhotoArchive,
+} from './photoArchive';
 
 const STATUS_LABELS: Record<LabelQcTaskStatus, string> = {
   DRAFT: '草稿',
@@ -56,6 +61,14 @@ const reviewDirty = ref(false);
 const allowDrawerClose = ref(false);
 const queueMode = ref<'REVIEW' | 'MANAGE' | 'ARCHIVED'>('REVIEW');
 const actionTaskId = ref<string | null>(null);
+const queueTableRef = ref<InstanceType<typeof ElTable>>();
+const selectedPhotoTasks = ref<LabelQcTaskSummary[]>([]);
+const bulkBackupLoading = ref(false);
+
+const selectedPhotoCount = computed(() => selectedPhotoTasks.value.reduce(
+  (total, task) => total + task.photoCount,
+  0,
+));
 
 const canManageTraining = computed(() => {
   const currentUser = authStore.user;
@@ -73,6 +86,8 @@ async function load() {
     ElMessage.warning('缺少工厂登录上下文，请重新登录');
     return;
   }
+  queueTableRef.value?.clearSelection();
+  selectedPhotoTasks.value = [];
   loading.value = true;
   try {
     const [listResponse, countResponse] = await Promise.all([
@@ -92,6 +107,14 @@ async function load() {
   } finally {
     loading.value = false;
   }
+}
+
+function handlePhotoSelectionChange(selection: LabelQcTaskSummary[]): void {
+  selectedPhotoTasks.value = selection.filter((task) => task.status === 'REVIEWED');
+}
+
+function canSelectForPhotoBackup(task: LabelQcTaskSummary): boolean {
+  return task.status === 'REVIEWED' && !bulkBackupLoading.value;
 }
 
 function changeFilter() {
@@ -264,6 +287,58 @@ async function backupTask(row: LabelQcTaskSummary) {
     await load();
   } finally {
     actionTaskId.value = null;
+  }
+}
+
+async function backupSelectedTasks() {
+  if (!factoryId.value || !selectedPhotoTasks.value.length) return;
+  const selected = [...selectedPhotoTasks.value];
+  try {
+    await ElMessageBox.confirm(
+      `将把已选 ${selected.length} 批、共 ${selectedPhotoCount.value} 张照片整理成一个 ZIP。每批使用独立目录，照片仍按 SKU、提交日期和时间命名。`,
+      '确认批量下载照片？',
+      {
+        type: 'info',
+        confirmButtonText: '开始下载',
+        cancelButtonText: '取消',
+      },
+    );
+  } catch {
+    return;
+  }
+
+  bulkBackupLoading.value = true;
+  try {
+    const details: LabelQcTaskDetail[] = [];
+    for (const task of selected) {
+      const response = await getLabelQcTask(factoryId.value, task.id);
+      if (!response.success) {
+        throw new Error(`${task.skuName}（${task.batchNumber}）详情读取失败，未下载残缺归档`);
+      }
+      details.push(response.data);
+    }
+
+    const archive = await createBulkPhotoArchive(details);
+    const recordResults = await Promise.allSettled(selected.map(async (task) => {
+      const response = await backupLabelQcTask(factoryId.value!, task.id);
+      if (!response.success) throw new Error(task.id);
+    }));
+    downloadPhotoArchive(archive);
+
+    const failedRecords = recordResults.filter((result) => result.status === 'rejected').length;
+    if (failedRecords) {
+      ElMessage.warning({
+        message: `已完整下载 ${selected.length} 批、${archive.photoCount} 张 JPG；其中 ${failedRecords} 批的备份时间记录失败，请稍后重试。`,
+        duration: 7000,
+      });
+    } else {
+      ElMessage.success(`已完整下载 ${selected.length} 批、${archive.photoCount} 张 JPG，并记录备份时间`);
+    }
+    await load();
+  } catch (error) {
+    ElMessage.error(error instanceof Error ? error.message : '批量照片归档失败，请重试');
+  } finally {
+    bulkBackupLoading.value = false;
   }
 }
 
@@ -484,7 +559,43 @@ onMounted(load);
         </div>
       </div>
 
-      <el-table v-loading="loading" :data="rows" row-key="id" class="queue-table">
+      <div v-if="queueMode !== 'REVIEW'" class="bulk-backup-bar">
+        <div>
+          <strong>批量照片备份</strong>
+          <span>
+            {{
+              selectedPhotoTasks.length
+                ? `已选 ${selectedPhotoTasks.length} 批，共 ${selectedPhotoCount} 张照片`
+                : '勾选一批或多批已审核任务，可一次下载一个 ZIP'
+            }}
+          </span>
+        </div>
+        <el-button
+          type="primary"
+          :icon="Download"
+          :disabled="selectedPhotoTasks.length === 0"
+          :loading="bulkBackupLoading"
+          @click="backupSelectedTasks"
+        >
+          批量下载照片
+        </el-button>
+      </div>
+
+      <el-table
+        ref="queueTableRef"
+        v-loading="loading || bulkBackupLoading"
+        :data="rows"
+        row-key="id"
+        class="queue-table"
+        @selection-change="handlePhotoSelectionChange"
+      >
+        <el-table-column
+          v-if="queueMode !== 'REVIEW'"
+          type="selection"
+          width="48"
+          align="center"
+          :selectable="canSelectForPhotoBackup"
+        />
         <el-table-column label="SKU / 批次" min-width="210">
           <template #default="{ row }">
             <div class="sku-cell">
@@ -566,6 +677,7 @@ onMounted(load);
               <el-button
                 text
                 :loading="actionTaskId === row.id"
+                :disabled="bulkBackupLoading"
                 @click="backupTask(row)"
               >
                 下载照片备份
@@ -787,6 +899,31 @@ onMounted(load);
   font-size: 18px;
 }
 
+.bulk-backup-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 12px 22px;
+  border-bottom: 1px solid #edf2f7;
+  background: #f7fafc;
+}
+
+.bulk-backup-bar > div {
+  display: grid;
+  gap: 3px;
+}
+
+.bulk-backup-bar strong {
+  color: #1a2332;
+  font-size: 14px;
+}
+
+.bulk-backup-bar span {
+  color: #7a8599;
+  font-size: 12px;
+}
+
 .queue-controls {
   display: flex;
   align-items: center;
@@ -910,6 +1047,11 @@ onMounted(load);
   .queue-controls {
     align-items: stretch;
     justify-content: flex-start;
+  }
+
+  .bulk-backup-bar {
+    align-items: stretch;
+    flex-direction: column;
   }
 }
 </style>

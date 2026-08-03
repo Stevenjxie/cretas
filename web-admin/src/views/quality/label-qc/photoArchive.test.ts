@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { LabelQcTaskDetail } from '@/api/labelQc';
 import {
   archiveTimestamp,
+  createBulkPhotoArchive,
   createPhotoArchive,
   photoArchiveEntryName,
   safeArchiveName,
@@ -81,5 +82,47 @@ describe('label QC photo archive', () => {
     const input = detail();
     input.photos.find((photo) => photo.orderIndex === 0)!.imageUrl = null;
     await expect(createPhotoArchive(input)).rejects.toThrow('未生成残缺归档包');
+  });
+
+  it('groups selected reviewed tasks without overwriting same-SKU photo names', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockImplementation(async () => (
+      new Response(JPEG_BYTES.slice(), { status: 200 })
+    )));
+    const first = detail();
+    const second = detail();
+    second.task.id = 'task-2';
+    second.task.batchNumber = 'B-002';
+    second.photos.forEach((photo) => {
+      photo.id = `task-2-${photo.id}`;
+      photo.imageUrl = `https://example.test/task-2-${photo.orderIndex}.jpg`;
+    });
+
+    const archive = await createBulkPhotoArchive(
+      [first, second],
+      '2026-08-03T16:05:06',
+    );
+    const files = unzipSync(new Uint8Array(await archive.blob.arrayBuffer()));
+
+    expect(archive.filename).toBe('质检照片批量备份_20260803_160506_2批.zip');
+    expect(archive.photoCount).toBe(4);
+    expect(Object.keys(files)).toEqual([
+      '干式熟成鸡_半只_20260803_143045_B-001_01/干式熟成鸡_半只_20260803_143045_01.jpg',
+      '干式熟成鸡_半只_20260803_143045_B-001_01/干式熟成鸡_半只_20260803_143045_02.jpg',
+      '干式熟成鸡_半只_20260803_143045_B-002_02/干式熟成鸡_半只_20260803_143045_01.jpg',
+      '干式熟成鸡_半只_20260803_143045_B-002_02/干式熟成鸡_半只_20260803_143045_02.jpg',
+    ]);
+    expect(fetch).toHaveBeenCalledTimes(4);
+  });
+
+  it('rejects a mixed-status selection before downloading any photo', async () => {
+    const reviewed = detail();
+    const pending = detail();
+    pending.task.status = 'NEEDS_REVIEW';
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(createBulkPhotoArchive([reviewed, pending]))
+      .rejects.toThrow('尚未完成审核');
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 });
