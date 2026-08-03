@@ -134,13 +134,14 @@ CASES: List[Case] = [
     ("部门-财务", "最近有没有食材价格异常", ("OUT_OF_DOMAIN",), None),
     ("部门-财务", "供应商月度对账有没有差异", ("OUT_OF_DOMAIN",), None),
     ("部门-财务", "全部门店最近30天成本归因分析一下", ("OUT_OF_DOMAIN", "RECIPE_COST"), None),
-    ("部门-人事", "各岗位这个月的人效怎么样", ("STAFFING_ADVICE",), None),
+    ("部门-人事", "下个月各店人效安排", ("STAFFING_ADVICE",), None),
+    ("边界-历史人效", "各岗位这个月的人效怎么样", (), None),
 
     # ── ⑨ 按角色的日常问题 (每个部门至少一条主力问句) ────────────────
     ("角色-后厨", "全部门店最近30天损耗量最大的食材是哪些", ("WASTAGE_TOP",), "restaurant_chef"),
     ("角色-后厨", "库存低于安全线的食材有哪些", ("INVENTORY_WARNING",), "restaurant_chef"),
     ("角色-采购", "全部门店最近30天领料最多的是哪些食材", ("REQUISITION_TREND",), "restaurant_purchaser"),
-    ("角色-店长", "全部门店最近30天晚市人手够不够", ("STAFFING_ADVICE",), "restaurant_manager"),
+    ("角色-店长", "明天各门店午市和晚市怎么排班", ("STAFFING_ADVICE",), "restaurant_manager"),
     ("角色-店长", "我一共有几家店", ("STORE_DIRECTORY",), "restaurant_manager"),
     ("角色-老板", "全部门店最近30天外卖占比多少", ("CHANNEL_MIX",), "restaurant_owner"),
     ("角色-老板", "全部门店最近30天生意不太好，有什么办法提升", (), "restaurant_owner"),
@@ -198,6 +199,15 @@ def _classify(case: Case, out: Dict[str, Any], default_role: str
         if kind == "clarification":
             return True, ""
         return False, "歧义未反问: 缺上下文却直接给了答案"
+
+    if family == "边界-历史人效":
+        if kind != "clarification":
+            return False, "历史人效问法没有进入范围澄清"
+        if not all(marker in answer for marker in ("明天", "下周", "下个月", "历史人效")):
+            return False, "范围澄清没有说明未来预测边界与历史人效规则"
+        if "预测排班 FactBook" in answer:
+            return False, "历史人效问法被错误执行成预测排班"
+        return True, ""
 
     # 「诚实说没数据」是**正确行为**(项目硬规则禁止降级处理), 但它**不等于**
     # 「这个问句工作正常」—— 它只证明了没有胡编。

@@ -86,7 +86,9 @@ CASES: Tuple[Tuple[str, str, Tuple[str, ...]], ...] = (
     ("stock", "全部门店最近30天盘点亏了多少", ("STOCK_SHORTAGE",)),
     # 2026-07-30 #2045: 曾经只吐裸英文码、一个百分比都没有。
     ("channel", "全部门店最近30天外卖占比多少", ("CHANNEL_MIX",)),
-    ("staffing", "全部门店最近30天晚市人手够不够", ("STAFFING_ADVICE",)),
+    ("staffing", "明天每家店午市和晚市各要排几个人", ("STAFFING_ADVICE",)),
+    ("staffing", "下周各门店要补多少兼职", ("STAFFING_ADVICE",)),
+    ("staffing", "下个月每家店各时段的人效怎么安排", ("STAFFING_ADVICE",)),
     ("optimize", "全部门店最近30天生意不太好，有什么办法提升",
      ("BUSINESS_OPTIMIZATION",)),
     ("meta", "你能帮我分析哪些东西", ("CAPABILITIES",)),

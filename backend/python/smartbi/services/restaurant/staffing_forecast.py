@@ -35,6 +35,16 @@ SIMULATION_SOURCE = "cretas_daily_simulator"
 DAYPARTS: Tuple[str, ...] = ("午市", "下午茶", "晚市", "夜宵")
 HORIZONS: Tuple[str, ...] = ("tomorrow", "week", "month")
 HORIZON_LABELS = {"tomorrow": "明天", "week": "下周", "month": "下个月"}
+_FUTURE_HORIZON_TOKENS = (
+    "明天", "明日", "翌日",
+    "下周", "下一周", "未来一周", "未来7天",
+    "下个月", "下月", "未来一个月", "未来30天",
+)
+_NON_FORECAST_WINDOW_RE = re.compile(
+    r"(?:今天|今日|今晚|当前|本周|这周|上周|上上周|"
+    r"本月|这个月|当月|上月|上个月|上上个月|今年|去年|"
+    r"最近\s*\d+\s*(?:天|周|个月|月)|过去\s*\d+\s*(?:天|周|个月|月))"
+)
 STATUS_WEIGHT = {
     "PENDING": 0.5,
     "CONFIRMED": 1.0,
@@ -108,6 +118,23 @@ def horizon_from_question(question: str) -> str:
     if any(token in normalized for token in ("下周", "未来一周", "未来7天", "兼职")):
         return "week"
     return "tomorrow"
+
+
+def requests_non_forecast_staffing_window(question: str) -> bool:
+    """Return whether a staffing question asks for an unsupported past/current window.
+
+    Forecast staffing has exactly three executable horizons: tomorrow, next
+    week and next month.  Historical productivity remains evidence inside the
+    FactBook; it is not a standalone historical staffing answer.  A historical
+    phrase must therefore never be silently converted to tomorrow merely
+    because :func:`horizon_from_question` keeps a backward-compatible default.
+    """
+    normalized = (question or "").strip().lower()
+    if not normalized:
+        return False
+    if any(token.lower() in normalized for token in _FUTURE_HORIZON_TOKENS):
+        return False
+    return _NON_FORECAST_WINDOW_RE.search(normalized) is not None
 
 
 def _mean(values: Sequence[float]) -> Optional[float]:
