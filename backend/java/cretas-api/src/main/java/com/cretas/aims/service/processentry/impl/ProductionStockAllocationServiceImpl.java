@@ -36,6 +36,7 @@ import java.util.stream.Collectors;
 
 @Service
 @RequiredArgsConstructor
+@lombok.extern.slf4j.Slf4j
 public class ProductionStockAllocationServiceImpl implements ProductionStockAllocationService {
 
     private static final String KG = "kg";
@@ -93,21 +94,18 @@ public class ProductionStockAllocationServiceImpl implements ProductionStockAllo
             for (MaterialBatch batch : batches) {
                 ProductionInventoryOwnershipGuard.assertMaterialBatchAllowed(
                         plan, batch, "生产报工投料");
-                // 非质量单位不做跨单位折算, 只吃单位一致的批次 —— 与 BOM 自动投料同一口径
-                String batchUnit = canonicalNativeUnit(factoryId, batch.getQuantityUnit());
-                if (massInput ? !isCanonicalMassUnit(batchUnit)
-                        : !Objects.equals(inputUnit, batchUnit)) {
+                // 非质量单位不做跨单位折算, 只吃单位一致的批次 —— 与 BOM 自动投料同一口径。
+                // 🔴 2026-08-03: 这里原来是 unitMatches/batchAvailable 的<b>内联复制</b>
+                // (那两个 helper 的注释还写着「与 plan() 逐字同一条件」)。改成直接复用,
+                // 一条规则一个承载点。⛔ 用的是<b>严格版</b>: 按箱/袋存量的批次<b>不进可投量</b>,
+                // 因为扣减侧 kgToStorageQuantity 只会 g↔kg, 对「箱」是原样返回 ——
+                // 让 100kg 的分配去扣一个只有 10 箱的批次会<b>超扣 10 倍</b>。
+                // 展示侧(过期提醒/原料仓另有)用 unitMatchesForDisplay, 见那两处。
+                if (!unitMatches(factoryId, batch, inputUnit, massInput)) {
                     continue;
                 }
-                BigDecimal available = availableByBatch.computeIfAbsent(batch.getId(), ignored -> {
-                    BigDecimal pending = nz(allocationRepository
-                            .sumPendingQuantityByMaterialBatchId(factoryId, batch.getId()));
-                    BigDecimal stock = massInput
-                            ? storageQuantityToKg(
-                                    nz(batch.getCurrentQuantity()), batch.getQuantityUnit(), batch.getBatchNumber())
-                            : nz(batch.getCurrentQuantity());
-                    return stock.subtract(pending).max(BigDecimal.ZERO);
-                });
+                BigDecimal available = availableByBatch.computeIfAbsent(
+                        batch.getId(), ignored -> batchAvailable(factoryId, batch, massInput));
                 if (available.signum() <= 0) {
                     continue;
                 }
@@ -602,7 +600,9 @@ public class ProductionStockAllocationServiceImpl implements ProductionStockAllo
                 if (Objects.equals(batch.getWarehouseId(), workshopId)) {
                     continue;
                 }
-                if (!ownershipAllows(plan, batch) || !unitMatches(factoryId, batch, inputUnit, massInput)) {
+                // 展示口径: 按箱/袋存量的批次也要报出来, 否则「原料仓另有 100kg」会整条消失
+                if (!ownershipAllows(plan, batch)
+                        || !unitMatchesForDisplay(factoryId, batch, inputUnit, massInput)) {
                     continue;
                 }
                 String name = warehouseResolver.displayName(factoryId, batch.getWarehouseId());
@@ -622,7 +622,9 @@ public class ProductionStockAllocationServiceImpl implements ProductionStockAllo
             BigDecimal expired = BigDecimal.ZERO;
             for (MaterialBatch batch : materialBatchRepository.findExpiredBatchesByWarehouse(
                     factoryId, materialTypeId, workshopId, java.time.LocalDate.now())) {
-                if (!ownershipAllows(plan, batch) || !unitMatches(factoryId, batch, inputUnit, massInput)) {
+                // 展示口径: 同上 —— 过期提醒本就是纯信息, 漏掉按箱存量的批次等于瞒着仓管
+                if (!ownershipAllows(plan, batch)
+                        || !unitMatchesForDisplay(factoryId, batch, inputUnit, massInput)) {
                     continue;
                 }
                 expired = expired.add(batchAvailable(factoryId, batch, massInput));
@@ -660,10 +662,37 @@ public class ProductionStockAllocationServiceImpl implements ProductionStockAllo
         }
     }
 
-    /** 与 plan() 逐字同一条件: 质量维度互认, 其余按字面。 */
+    /**
+     * <b>严格版</b> —— 可投量与自动分配用。质量维度互认(仅 g/kg), 其余按字面。
+     *
+     * <p>⛔ 刻意<b>不</b>认「按箱/袋等包装单位存量」的批次: 扣减侧
+     * {@link #kgToStorageQuantity} 只做 g↔kg, 对「箱」是<b>原样返回</b> ——
+     * 把 100kg 的分配落到一个只有 10 箱的批次上会<b>超扣 10 倍</b>。
+     * 要放开必须先让扣减侧也会走包装规格反算, 那是独立的一步。
+     */
     private boolean unitMatches(String factoryId, MaterialBatch batch, String inputUnit, boolean massInput) {
         String batchUnit = canonicalNativeUnit(factoryId, batch.getQuantityUnit());
         return massInput ? isCanonicalMassUnit(batchUnit) : Objects.equals(inputUnit, batchUnit);
+    }
+
+    /**
+     * <b>展示版</b> —— 只用于「过期 X, 不可投料」与「原料仓另有 X」这类<b>纯信息</b>口径。
+     *
+     * <p>🔴 2026-08-03: 按包装单位存量的批次原来被<b>整批跳过</b>, 既不进可投量, 也不进过期提醒,
+     * 更不进「原料仓另有」—— 不是显示成 0, 是根本不在集合里。prod 实证: F006 SHH0713羊排
+     * 原料仓 {@code MT-20260716-3809} 存着 10 箱, 而物料档案写着 1 箱 = 10 kg,
+     * 即 <b>100 kg 完全不可见</b>, 仓管无从知道那批货存在。
+     *
+     * <p>与 P0-1(档案 {@code box} / 批次「盒」的<b>写法</b>不一致)不是同一类: 那类靠单位归一
+     * 就能解决, 这类是<b>跨量纲</b>, 必须查包装规格。
+     *
+     * <p>⚠️ 展示口径比分配口径宽是<b>有意的</b>, 不是遗漏: 让仓管看得见「有这批货但当前不能直接投」,
+     * 好过让它彻底消失。放进可投量则会导致超扣(见 {@link #unitMatches})。
+     */
+    private boolean unitMatchesForDisplay(
+            String factoryId, MaterialBatch batch, String inputUnit, boolean massInput) {
+        return unitMatches(factoryId, batch, inputUnit, massInput)
+                || (massInput && packagedQuantityToKg(factoryId, batch).isPresent());
     }
 
     /** 与 plan() 同一算法: 库存减去待占用, 不小于 0。 */
@@ -671,9 +700,60 @@ public class ProductionStockAllocationServiceImpl implements ProductionStockAllo
         BigDecimal pending = nz(allocationRepository
                 .sumPendingQuantityByMaterialBatchId(factoryId, batch.getId()));
         BigDecimal stock = massInput
-                ? storageQuantityToKg(nz(batch.getCurrentQuantity()), batch.getQuantityUnit(), batch.getBatchNumber())
+                ? massStockToKg(factoryId, batch)
                 : nz(batch.getCurrentQuantity());
         return stock.subtract(pending).max(BigDecimal.ZERO);
+    }
+
+    /**
+     * 批次存量折成 kg —— 质量单位直折; <b>按包装单位存量的批次</b>走物料档案的包装规格。
+     *
+     * <p>🔴 2026-08-03 修复: 原来只认 g/kg, 于是「按箱存量」的批次<b>整批被跳过</b>,
+     * 既不进可投量, 也不进「过期」提醒, 更不进「原料仓另有」—— 不是显示成 0, 是根本不在集合里。
+     * prod 实证: F006 SHH0713羊排 原料仓 {@code MT-20260716-3809} 存着 10 箱,
+     * 而 {@code material_packaging_specs} 明确写着 1 箱 = 10 kg, 即 <b>100 kg 完全不可见</b>。
+     *
+     * <p>这与 P0-1(档案 {@code box} / 批次「盒」的<b>写法</b>不一致)<b>不是同一类</b>:
+     * 那类靠单位归一就能解决, 这类是<b>跨量纲</b>, 必须查包装规格换算。
+     * 换算不自己算 —— {@code UnitContractService#convert} 已实现「物料档案直供包装规则
+     * (如 1 case = 10 kg)」, 手搓一份等于再造一张会漂的私表。
+     *
+     * @return 折算后的 kg; 该批次不是「有换算的包装单位」时返回 empty
+     */
+    private java.util.Optional<BigDecimal> packagedQuantityToKg(String factoryId, MaterialBatch batch) {
+        String rawUnit = batch.getQuantityUnit();
+        if (unitContractService == null || rawUnit == null || rawUnit.isBlank()
+                || batch.getMaterialTypeId() == null) {
+            return java.util.Optional.empty();
+        }
+        try {
+            com.cretas.aims.service.unit.UnitConversionResult result = unitContractService.convert(
+                    nz(batch.getCurrentQuantity()),
+                    new com.cretas.aims.service.unit.UnitConversionContext(
+                            factoryId, batch.getMaterialTypeId(), rawUnit, KG,
+                            // ⚠️ at 不能为 null: convert() 在 at==null 时直接返回
+                            // PRODUCT_CONVERSION_MISSING, <b>走不到</b>物料包装规格那段。
+                            java.time.LocalDateTime.now(), null, null, null));
+            if (result == null || !result.succeeded() || result.quantity() == null) {
+                return java.util.Optional.empty();
+            }
+            return java.util.Optional.of(result.quantity());
+        } catch (RuntimeException e) {
+            // 换算不可用不该把整条可用量查询打挂 —— 与「认不出就跳过该批」同义
+            log.warn("批次 {} 单位 {} 折 kg 失败, 按不可折处理: {}",
+                    batch.getBatchNumber(), rawUnit, e.getMessage());
+            return java.util.Optional.empty();
+        }
+    }
+
+    /** massInput 分支的存量取数: 先试质量直折, 再试包装规格; 都不行才报错。 */
+    private BigDecimal massStockToKg(String factoryId, MaterialBatch batch) {
+        if (isMassStorageUnit(batch.getQuantityUnit())) {
+            return storageQuantityToKg(
+                    nz(batch.getCurrentQuantity()), batch.getQuantityUnit(), batch.getBatchNumber());
+        }
+        return packagedQuantityToKg(factoryId, batch)
+                .orElseThrow(() -> invalidBatchUnit(batch.getBatchNumber(), batch.getQuantityUnit()));
     }
 
     private List<MaterialBatch> findEligibleBatchesForUpdate(String factoryId,
@@ -819,7 +899,8 @@ public class ProductionStockAllocationServiceImpl implements ProductionStockAllo
         return new BusinessException(409,
                 "生产库批次 " + batchNumber + " 的库存单位“" + unit + "”不能换算为 kg")
                 .withCode("PRODUCTION_INPUT_BATCH_UNIT_INVALID")
-                .withHint("仅支持 g 与 kg 的质量换算；请先补全或修正库存批次单位")
+                .withHint("支持 g/kg 直接换算；按箱、袋等包装单位存量的批次，请先在物料档案里"
+                        + "补全该包装规格（如 1 箱 = 10 kg）后重试")
                 .withSeverity("BLOCKING");
     }
 
