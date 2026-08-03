@@ -7434,7 +7434,28 @@ async def resolve_staffing_advice(
     existing shared provider chain.  Numerical lines are rendered by code from
     the FactBook; the LLM validator rejects any model-authored digit.
     """
-    from smartbi.services.restaurant.staffing_forecast import RestaurantStaffingService
+    from smartbi.services.restaurant.staffing_forecast import (
+        RestaurantStaffingService,
+        requests_non_forecast_staffing_window,
+    )
+
+    if requests_non_forecast_staffing_window(query or ""):
+        return OpsAnswer(
+            code="RESTAURANT_OPS_STAFFING_ADVICE",
+            title="预测排班范围需确认",
+            answer_text=(
+                "这条问题问的是历史或当前时段表现，不能把它偷换成明天的预测排班。"
+                "预测排班 FactBook 目前支持“明天”“下周”或“下个月”；"
+                "历史人效只作为预测依据，不能单独用来判断缺人。"
+            ),
+            charts=[],
+            kpis=[],
+            meta={
+                "missing_reference": "future_staffing_horizon",
+                "supported_horizons": ["tomorrow", "week", "month"],
+                "historical_productivity_rule": "evidence_only_not_gap_input",
+            },
+        )
 
     service = RestaurantStaffingService(smartbi_pool)
     try:

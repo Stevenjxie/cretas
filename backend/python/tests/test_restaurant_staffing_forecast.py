@@ -16,6 +16,7 @@ from smartbi.services.restaurant.staffing_forecast import (
     horizon_from_question,
     horizon_window,
     make_plan_fingerprint,
+    requests_non_forecast_staffing_window,
     role_recommendation,
     trend_direction_label,
     trend_metrics,
@@ -41,6 +42,32 @@ def test_future_horizons_are_calendar_bounded():
 def test_real_questions_route_to_staffing_horizon(question, horizon):
     assert match_restaurant_ops(question) == "RESTAURANT_OPS_STAFFING_ADVICE"
     assert horizon_from_question(question) == horizon
+
+
+@pytest.mark.parametrize(
+    "question",
+    [
+        "全部门店最近30天晚市人手够不够",
+        "各岗位这个月的人效怎么样",
+        "本月全部门店晚上生意怎么样",
+        "今天怎么排班",
+    ],
+)
+def test_historical_or_current_staffing_window_requires_future_horizon(question):
+    assert requests_non_forecast_staffing_window(question) is True
+
+
+@pytest.mark.parametrize(
+    "question",
+    [
+        "明天怎么排班",
+        "下周需要多少兼职",
+        "下个月各店人效安排",
+        "晚市怎么安排",
+    ],
+)
+def test_future_or_timeless_staffing_question_keeps_forecast_flow(question):
+    assert requests_non_forecast_staffing_window(question) is False
 
 
 def test_trends_keep_independent_7_30_365_windows():

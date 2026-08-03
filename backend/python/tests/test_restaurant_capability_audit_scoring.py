@@ -30,6 +30,15 @@ assert _spec and _spec.loader, f"audit script not found at {_SCRIPT}"
 audit = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(audit)
 
+_ADV_SCRIPT = (
+    Path(__file__).resolve().parents[1]
+    / "scripts" / "restaurant_adversarial_audit.py"
+)
+_adv_spec = importlib.util.spec_from_file_location("_adversarial_audit", _ADV_SCRIPT)
+assert _adv_spec and _adv_spec.loader, f"adversarial audit not found at {_ADV_SCRIPT}"
+adversarial = importlib.util.module_from_spec(_adv_spec)
+_adv_spec.loader.exec_module(adversarial)
+
 
 def test_audit_entry_bootstraps_capture_logger_imports_in_isolated_python():
     """The production audit must not depend on a hand-written PYTHONPATH."""
@@ -119,6 +128,37 @@ def test_case_table_covers_the_regressions_it_was_built_from():
     questions = " ".join(q for _f, q, _e in audit.CASES)
     for regression in ("采购花了多少钱", "外卖占比", "卖得最好的几个菜"):
         assert regression in questions, f"用例表丢了回归项: {regression}"
+
+
+def test_capability_audit_covers_all_three_future_staffing_horizons():
+    questions = " ".join(q for _f, q, _e in audit.CASES)
+    for horizon in ("明天", "下周", "下个月"):
+        assert horizon in questions, f"能力审计缺少预测排班范围: {horizon}"
+
+
+def test_adversarial_audit_accepts_honest_historical_staffing_boundary():
+    case = ("边界-历史人效", "各岗位这个月的人效怎么样", (), None)
+    output = {
+        "kind": "clarification",
+        "intent": "STAFFING_ADVICE",
+        "answer": (
+            "这条问题不能偷换成预测。请改问明天、下周或下个月；"
+            "历史人效只作为预测依据。"
+        ),
+    }
+    assert adversarial._classify(case, output, "restaurant_owner") == (True, "")
+
+
+def test_adversarial_audit_rejects_historical_staffing_execution():
+    case = ("边界-历史人效", "各岗位这个月的人效怎么样", (), None)
+    output = {
+        "kind": "answer",
+        "intent": "STAFFING_ADVICE",
+        "answer": "明天预测排班 FactBook：建议补人。下周、下个月另算。历史人效已参考。",
+    }
+    ok, reason = adversarial._classify(case, output, "restaurant_owner")
+    assert ok is False
+    assert "范围澄清" in reason
 
 
 def test_sample_queries_are_not_reused_as_the_test_set():

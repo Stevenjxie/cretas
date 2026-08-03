@@ -197,6 +197,27 @@ def test_resolve_staffing_advice_uses_forecast_factbook_and_llm(monkeypatch):
     answer.assert_awaited_once()
 
 
+def test_historical_staffing_question_fails_closed_before_factbook(monkeypatch):
+    from smartbi.services.restaurant.staffing_forecast import RestaurantStaffingService
+
+    answer = AsyncMock(return_value=_forecast_answer())
+    monkeypatch.setattr(RestaurantStaffingService, "answer_question", answer)
+
+    result = asyncio.run(resolve_staffing_advice(
+        _FakePool(_FakeConn()),
+        "MOCK_REST",
+        query="全部门店最近30天晚市人手够不够",
+    ))
+
+    assert result.meta["missing_reference"] == "future_staffing_horizon"
+    assert result.meta["historical_productivity_rule"] == "evidence_only_not_gap_input"
+    assert result.charts == []
+    assert result.kpis == []
+    assert "不能把它偷换成明天" in result.answer_text
+    assert "历史人效只作为预测依据" in result.answer_text
+    answer.assert_not_awaited()
+
+
 def test_resolve_staffing_advice_no_money_output():
     from smartbi.services.restaurant.staffing_forecast import RestaurantStaffingService
 
