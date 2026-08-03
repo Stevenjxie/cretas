@@ -1,9 +1,10 @@
 """Emit a bounded, auditable restaurant demo reservation stream.
 
 This is a one-day production showcase utility, not a platform connector.  It
-writes only to ``MOCK_REST`` with an explicit simulated source and stops at the
-configured end time.  Every external reference is derived from its ten-second
-tick, so a service restart replays idempotently instead of duplicating events.
+writes only to the two approved restaurant demo tenants, ``MOCK_REST`` and
+``RES_3101_009``, with an explicit simulated source and stops at the configured
+end time.  Every external reference is derived from its ten-second tick, so a
+service restart replays idempotently instead of duplicating events.
 
 Dry-run is the default.  Writes require both ``--apply`` and the exact tenant
 confirmation.  The downstream staffing service remains the only numerical
@@ -31,6 +32,7 @@ from smartbi.services.restaurant.staffing_forecast import (
 
 TIMEZONE = ZoneInfo("Asia/Singapore")
 FACTORY_ID = "MOCK_REST"
+APPROVED_FACTORIES = frozenset({"MOCK_REST", "RES_3101_009"})
 SOURCE = "cretas_live_showcase_20260805"
 DEFAULT_INTERVAL_SECONDS = 10
 
@@ -85,7 +87,7 @@ def event_for_tick(
     interval_seconds: int,
 ) -> StreamEvent:
     if not store_ids:
-        raise ValueError("MOCK_REST has no stores")
+        raise ValueError("approved restaurant tenant has no stores")
     sequence = sequence_for_tick(tick, start, interval_seconds)
     horizon, target_date = target_date_for_sequence(start, sequence)
     store_id = int(store_ids[sequence % len(store_ids)])
@@ -110,27 +112,31 @@ def event_for_tick(
     )
 
 
-async def load_store_ids(pool: Any) -> list[int]:
+async def load_store_ids(pool: Any, factory_id: str) -> list[int]:
     async with pool.acquire() as conn:
         async with conn.transaction():
-            await conn.execute("SELECT set_config('app.factory_id', $1, true)", FACTORY_ID)
+            await conn.execute("SELECT set_config('app.factory_id', $1, true)", factory_id)
             rows = await conn.fetch(
                 "SELECT store_id FROM dim_store WHERE factory_id=$1 ORDER BY store_id",
-                FACTORY_ID,
+                factory_id,
             )
     store_ids = [int(row["store_id"]) for row in rows]
     if not store_ids:
-        raise RuntimeError("MOCK_REST has no tenant-owned stores")
+        raise RuntimeError(f"{factory_id} has no tenant-owned stores")
     return store_ids
 
 
-async def emit(service: RestaurantStaffingService, event: StreamEvent) -> dict[str, Any]:
+async def emit(
+    service: RestaurantStaffingService,
+    factory_id: str,
+    event: StreamEvent,
+) -> dict[str, Any]:
     payload = asdict(event)
     payload["reservation_date"] = date.fromisoformat(event.reservation_date)
     payload["source_updated_at"] = datetime.fromisoformat(event.source_updated_at)
-    result = await service.import_reservations(FACTORY_ID, [payload])
+    result = await service.import_reservations(factory_id, [payload])
     return {
-        "factory_id": FACTORY_ID,
+        "factory_id": factory_id,
         "source": SOURCE,
         "external_ref": event.external_ref,
         "source_updated_at": event.source_updated_at,
@@ -144,8 +150,10 @@ async def emit(service: RestaurantStaffingService, event: StreamEvent) -> dict[s
 
 
 async def run(args: argparse.Namespace) -> None:
-    if args.factory != FACTORY_ID:
-        raise RuntimeError(f"stream factory must be {FACTORY_ID}")
+    if args.factory not in APPROVED_FACTORIES:
+        raise RuntimeError(
+            "stream factory must be one of " + ", ".join(sorted(APPROVED_FACTORIES)),
+        )
     if args.source != SOURCE:
         raise RuntimeError(f"stream source must be {SOURCE}")
     if args.interval_seconds != DEFAULT_INTERVAL_SECONDS:
@@ -157,17 +165,17 @@ async def run(args: argparse.Namespace) -> None:
     expected_events = math.ceil((end - start).total_seconds() / args.interval_seconds)
     if expected_events > 1800:
         raise RuntimeError("stream exceeds the approved 1800-event ceiling")
-    if args.apply and args.confirm != FACTORY_ID:
-        raise RuntimeError(f"state change requires --confirm {FACTORY_ID}")
+    if args.apply and args.confirm != args.factory:
+        raise RuntimeError(f"state change requires --confirm {args.factory}")
 
     pool = await get_pg_pool()
     if pool is None:
         raise RuntimeError("SmartBI Postgres pool is unavailable")
-    store_ids = await load_store_ids(pool)
+    store_ids = await load_store_ids(pool, args.factory)
     first_event = event_for_tick(store_ids, start, start, args.interval_seconds)
     plan = {
         "mode": "apply" if args.apply else "dry-run",
-        "factory_id": FACTORY_ID,
+        "factory_id": args.factory,
         "source": SOURCE,
         "is_simulated": True,
         "start": start.isoformat(),
@@ -199,7 +207,7 @@ async def run(args: argparse.Namespace) -> None:
             continue
         if last_tick is None or tick > last_tick:
             event = event_for_tick(store_ids, start, tick, args.interval_seconds)
-            result = await emit(service, event)
+            result = await emit(service, args.factory, event)
             emitted += 1
             business_writes += int(result["business_write_rows"])
             idempotent_replays += int(result["replay_ignored_rows"])
@@ -212,7 +220,7 @@ async def run(args: argparse.Namespace) -> None:
 
     print(json.dumps({
         "event": "stream_complete",
-        "factory_id": FACTORY_ID,
+        "factory_id": args.factory,
         "source": SOURCE,
         "emitted_attempts": emitted,
         "business_write_rows": business_writes,

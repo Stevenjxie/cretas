@@ -1,15 +1,18 @@
 import asyncio
+from argparse import Namespace
 from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
 
 import pytest
 
 from smartbi.scripts.stream_demo_restaurant_reservations import (
+    APPROVED_FACTORIES,
     FACTORY_ID,
     SOURCE,
     event_for_tick,
     emit,
     parse_datetime,
+    run,
     sequence_for_tick,
     target_date_for_sequence,
     tick_for,
@@ -20,9 +23,10 @@ TZ = ZoneInfo("Asia/Singapore")
 START = datetime(2026, 8, 5, 9, 0, tzinfo=TZ)
 
 
-def test_stream_identity_is_fixed_to_simulated_mock_rest():
+def test_stream_identity_is_fixed_to_two_simulated_restaurant_tenants():
     event = event_for_tick([11, 12], START, START, 10)
     assert FACTORY_ID == "MOCK_REST"
+    assert APPROVED_FACTORIES == {"MOCK_REST", "RES_3101_009"}
     assert SOURCE == "cretas_live_showcase_20260805"
     assert event.source == SOURCE
     assert event.is_simulated is True
@@ -69,6 +73,35 @@ def test_naive_schedule_timestamp_is_rejected():
         parse_datetime("2026-08-05T09:00:00")
 
 
+def stream_args(**overrides):
+    values = {
+        "factory": "MOCK_REST",
+        "source": SOURCE,
+        "start": "2026-08-05T09:00:00+08:00",
+        "end": "2026-08-05T14:00:00+08:00",
+        "interval_seconds": 10,
+        "apply": False,
+        "confirm": "",
+        "max_events": 0,
+    }
+    values.update(overrides)
+    return Namespace(**values)
+
+
+def test_stream_rejects_every_tenant_outside_the_explicit_restaurant_allowlist():
+    with pytest.raises(RuntimeError, match="MOCK_REST, RES_3101_009"):
+        asyncio.run(run(stream_args(factory="F006")))
+
+
+def test_apply_requires_confirmation_for_the_selected_restaurant_tenant():
+    with pytest.raises(RuntimeError, match="--confirm RES_3101_009"):
+        asyncio.run(run(stream_args(
+            factory="RES_3101_009",
+            apply=True,
+            confirm="MOCK_REST",
+        )))
+
+
 def test_emit_passes_native_date_and_datetime_to_the_service():
     captured = {}
 
@@ -83,7 +116,7 @@ def test_emit_passes_native_date_and_datetime_to_the_service():
             }
 
     event = event_for_tick([11], START, START, 10)
-    result = asyncio.run(emit(Service(), event))
+    result = asyncio.run(emit(Service(), FACTORY_ID, event))
     assert captured["factory_id"] == FACTORY_ID
     assert isinstance(captured["record"]["reservation_date"], date)
     assert isinstance(captured["record"]["source_updated_at"], datetime)
