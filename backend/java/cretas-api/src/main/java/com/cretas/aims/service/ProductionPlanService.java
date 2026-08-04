@@ -87,6 +87,16 @@ public interface ProductionPlanService {
       */
     ProductionPlanDTO updateProductionPlan(String factoryId, String planId, CreateProductionPlanRequest request);
      /**
+     * 更新排产元数据（预计完成日期/预计工人数/指派主管/备注）。
+     *
+     * <p>与 {@link #updateProductionPlan} 的区别不在守卫宽严，而在**入参契约**：这里根本收不到
+     * 计划日期/计划数量/产品/来源单，所以已开工 (IN_PROGRESS/PAUSED) 也能安全调用 ——
+     * 那些会与既成事实脱节的字段没有被改的通道。终态 (COMPLETED/CANCELLED/PENDING_APPROVAL)
+     * 与锁定计划仍然 409。
+      */
+    ProductionPlanDTO updatePlanScheduleMeta(String factoryId, String planId,
+            com.cretas.aims.dto.production.UpdatePlanScheduleMetaRequest request);
+     /**
      * 删除生产计划
       */
     void deleteProductionPlan(String factoryId, String planId);

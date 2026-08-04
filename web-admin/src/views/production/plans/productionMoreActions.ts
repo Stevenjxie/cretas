@@ -46,20 +46,39 @@ function normalizeStatus(row: ProductionMoreActionRow): string {
 }
 
 /**
- * 返回「不可编辑」的短原因; 可编辑时返回 null。
+ * 开工后仍可改「排产元数据」的状态 —— 与后端 updatePlanScheduleMeta 的允许集一致
+ * (非终态即可: PENDING/PREPARED/IN_PROGRESS/PAUSED)。
+ *
+ * 2026-08-04: 此前「编辑」对已开工计划整条拒绝, 而 prod 上未完成计划里 IN_PROGRESS 占一半 ——
+ * 厂长开工后连「预计完成日期/指派主管」都改不了。放开的方式不是把守卫放宽一档, 而是走
+ * 一条**入参更窄**的后端路径 (只收四个软字段), 计划日期与计划数量在任何状态下都不经由它。
+ */
+const SCHEDULE_META_EDITABLE_STATUSES = new Set([
+  'PENDING', 'PREPARED', 'IN_PROGRESS', 'PAUSED',
+]);
+
+/** 编辑的可及范围: full = 全字段; schedule-meta = 只有四个软字段; null = 完全不可编辑。 */
+export type PlanEditScope = 'full' | 'schedule-meta';
+
+export function planEditScope(row: ProductionMoreActionRow): PlanEditScope | null {
+  if (row.isLocked === true) return null;
+  const status = normalizeStatus(row);
+  if (EDITABLE_PLAN_STATUSES.has(status)) return 'full';
+  if (SCHEDULE_META_EDITABLE_STATUSES.has(status)) return 'schedule-meta';
+  return null;
+}
+
+/**
+ * 返回「完全不可编辑」的短原因; 只要还有任何字段可改就返回 null。
  *
  * 防呆 Rule 1 (预先显示边界, 不要事后报错): 菜单项直接灰显 + 写清原因, 而不是让用户点开
  * 再弹一个 alert。完整长句仍由 list.vue 的 blockedEditMessage 在点击路径上兜底
  * (列表行数据可能过期, 拉到详情后还要再挡一次)。
  */
 export function planEditBlockedReason(row: ProductionMoreActionRow): string | null {
+  if (planEditScope(row) !== null) return null;
   if (row.isLocked === true) return '已锁定';
-  const status = normalizeStatus(row);
-  if (EDITABLE_PLAN_STATUSES.has(status)) return null;
-  switch (status) {
-    case 'IN_PROGRESS':
-    case 'PAUSED':
-      return '已开工';
+  switch (normalizeStatus(row)) {
     case 'COMPLETED':
       return '已完成';
     case 'CANCELLED':
@@ -69,6 +88,13 @@ export function planEditBlockedReason(row: ProductionMoreActionRow): string | nu
     default:
       return '当前状态不可改';
   }
+}
+
+/** 已开工时菜单项要说清「能改的只是排产信息」, 别让用户以为能改数量/日期。 */
+export function planEditMenuLabel(row: ProductionMoreActionRow): string {
+  const blocked = planEditBlockedReason(row);
+  if (blocked) return `编辑（${blocked}）`;
+  return planEditScope(row) === 'schedule-meta' ? '编辑排产信息' : '编辑';
 }
 
 /**

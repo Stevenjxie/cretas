@@ -261,6 +261,32 @@ public class ProductionPlanController {
     }
 
     /**
+     * 更新排产元数据 —— 已开工计划唯一可改的东西。
+     *
+     * <p>不复用 {@code PUT /{planId}}: 那条收的是 {@link CreateProductionPlanRequest}, 带着
+     * 计划日期/计划数量/产品/来源单; 开工后放行它等于开了一条能把既成事实改脱节的通道。
+     * 这里换一份只有四个软字段的入参契约, 于是"已开工能改什么"由**契约**而不是由调用方的
+     * 自觉决定。
+     */
+    @RequirePermission({"production:read_write", "scheduling:read_write"})
+    @RequireModule("production_plan")
+    @PutMapping("/{planId}/schedule-meta")
+    @Operation(summary = "更新生产计划排产信息", description = "预计完成日期/预计工人数/指派主管/备注; 已开工计划也可调用")
+    @com.cretas.aims.annotation.Loggable(module = "PRODUCTION_PLAN", action = "UPDATE_SCHEDULE_META",
+            entityType = "ProductionPlan", entityIdParam = "planId")
+    public ApiResponse<ProductionPlanDTO> updatePlanScheduleMeta(
+            @Parameter(description = "工厂ID", required = true, example = "F001")
+            @PathVariable @NotBlank String factoryId,
+            @Parameter(description = "计划ID", required = true, example = "PP-2025-001")
+            @PathVariable @NotNull String planId,
+            @Valid @RequestBody com.cretas.aims.dto.production.UpdatePlanScheduleMetaRequest request) {
+
+        log.info("更新生产计划排产信息: factoryId={}, planId={}", factoryId, planId);
+        ProductionPlanDTO plan = productionPlanService.updatePlanScheduleMeta(factoryId, planId, request);
+        return ApiResponse.success("排产信息已更新", plan);
+    }
+
+    /**
      * 删除生产计划
      */
     @RequirePermission({"production:read_write", "scheduling:read_write"})

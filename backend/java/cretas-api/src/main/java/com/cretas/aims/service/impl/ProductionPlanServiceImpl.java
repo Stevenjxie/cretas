@@ -7,6 +7,7 @@ import com.cretas.aims.dto.WorkProcessTaskDTO;
 import com.cretas.aims.dto.production.CreateProductionPlanRequest;
 import com.cretas.aims.dto.production.DeliveryWarnDTO;
 import com.cretas.aims.dto.production.ProductionPlanDTO;
+import com.cretas.aims.dto.production.UpdatePlanScheduleMetaRequest;
 import com.cretas.aims.dto.production.ProductionPlanImportDTO;
 import com.cretas.aims.dto.production.ProductionPlanMaterialAdvisoryDTO;
 import com.cretas.aims.dto.production.ProductionSettlementBomEligibilityResponse;
@@ -1720,6 +1721,62 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
         plan = productionPlanRepository.save(plan);
 
         log.info("更新生产计划成功: planId={}", planId);
+        return toDTOWithConversionInfo(plan);
+    }
+
+    /**
+     * 已开工计划仍可改的排产元数据。见接口文档：这里的安全性来自**入参契约本身**
+     * ({@link UpdatePlanScheduleMetaRequest} 只有四个软字段)，而不是靠这段代码克制。
+     *
+     * <p>允许集 = 非终态：PENDING / PREPARED / IN_PROGRESS / PAUSED。
+     * COMPLETED / CANCELLED / PENDING_APPROVAL 一律 409 —— 已完工计划的排产元数据是
+     * 人效与工时报表的历史事实，改它等于改账；审批中的计划正被工作流引用。
+     */
+    @Override
+    @Transactional
+    public ProductionPlanDTO updatePlanScheduleMeta(String factoryId, String planId,
+            UpdatePlanScheduleMetaRequest request) {
+        ProductionPlan plan = productionPlanRepository.findById(planId)
+                .orElseThrow(() -> new ResourceNotFoundException("生产计划", "id", planId));
+
+        if (!plan.getFactoryId().equals(factoryId)) {
+            throw new BusinessException(403, "无权操作该生产计划")
+                    .withHint("当前生产计划不属于该工厂, 无法操作");
+        }
+
+        ProductionPlanStatus status = plan.getStatus();
+        if (status == ProductionPlanStatus.COMPLETED
+                || status == ProductionPlanStatus.CANCELLED
+                || status == ProductionPlanStatus.PENDING_APPROVAL) {
+            throw new BusinessException(409, "已结束或审批中的生产计划不可修改排产信息")
+                    .withHint("请刷新生产计划列表查看最新状态");
+        }
+
+        if (Boolean.TRUE.equals(plan.getIsLocked())) {
+            throw new BusinessException(409, "生产计划已锁定, 不可编辑")
+                    .withHint("先解锁该计划再尝试修改");
+        }
+
+        // 指派主管必须是同厂用户: 不校验的话任意 userId 都能写进来, 排产看板会显示别厂的人名
+        // (enrichWithAssignmentNames 按 id 直接查 users 表, 不带 factory 过滤)。
+        if (request.assignedSupervisorId() != null) {
+            User supervisor = userRepository.findById(request.assignedSupervisorId())
+                    .orElseThrow(() -> new BusinessException(400, "指派的主管不存在")
+                            .withHint("请重新选择主管后再保存"));
+            if (!factoryId.equals(supervisor.getFactoryId())) {
+                throw new BusinessException(403, "指派的主管不属于当前工厂")
+                        .withHint("只能指派本厂用户为主管");
+            }
+        }
+
+        // PUT 语义: 四个字段全量覆盖, null = 清空 (见 DTO 文档)。
+        plan.setExpectedCompletionDate(request.expectedCompletionDate());
+        plan.setEstimatedWorkers(request.estimatedWorkers());
+        plan.setAssignedSupervisorId(request.assignedSupervisorId());
+        plan.setNotes(request.notes());
+        plan = productionPlanRepository.save(plan);
+
+        log.info("更新生产计划排产信息成功: planId={}, status={}", planId, status);
         return toDTOWithConversionInfo(plan);
     }
 
