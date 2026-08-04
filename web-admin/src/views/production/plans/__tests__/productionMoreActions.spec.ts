@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest';
 import {
   hasProductionMoreCommand,
   planEditBlockedReason,
+  planEditMenuLabel,
+  planEditScope,
   productionMoreCommands,
   type ProductionMoreActionRow,
 } from '../productionMoreActions';
@@ -109,23 +111,51 @@ describe('productionMoreCommands', () => {
   });
 });
 
-describe('planEditBlockedReason', () => {
-  it('待执行/已备料可编辑', () => {
-    expect(planEditBlockedReason({ status: 'PENDING' })).toBeNull();
-    expect(planEditBlockedReason({ status: 'PREPARED' })).toBeNull();
+describe('planEditScope', () => {
+  it('未开工可改全字段 —— 与后端 updateProductionPlan 的守卫一致 (PENDING/PREPARED)', () => {
+    expect(planEditScope({ status: 'PENDING' })).toBe('full');
+    expect(planEditScope({ status: 'PREPARED' })).toBe('full');
   });
 
-  it('已开工不可编辑 —— 与后端 updateProductionPlan 的状态守卫一致', () => {
-    expect(planEditBlockedReason({ status: 'IN_PROGRESS' })).toBe('已开工');
-    expect(planEditBlockedReason({ status: 'PAUSED' })).toBe('已开工');
+  it('已开工/暂停只能改排产元数据 —— 与后端 updatePlanScheduleMeta 的允许集一致', () => {
+    expect(planEditScope({ status: 'IN_PROGRESS' })).toBe('schedule-meta');
+    expect(planEditScope({ status: 'PAUSED' })).toBe('schedule-meta');
+  });
+
+  it('终态与审批中完全不可编辑', () => {
+    expect(planEditScope({ status: 'COMPLETED' })).toBeNull();
+    expect(planEditScope({ status: 'CANCELLED' })).toBeNull();
+    expect(planEditScope({ status: 'PENDING_APPROVAL' })).toBeNull();
+    expect(planEditScope({ status: 'WHATEVER' })).toBeNull();
+  });
+
+  it('锁定优先于状态: 已开工且被锁定连排产信息也不能改', () => {
+    expect(planEditScope({ status: 'PENDING', isLocked: true })).toBeNull();
+    expect(planEditScope({ status: 'IN_PROGRESS', isLocked: true })).toBeNull();
+  });
+});
+
+describe('planEditBlockedReason / planEditMenuLabel', () => {
+  it('只要还有字段可改就不算被挡', () => {
+    expect(planEditBlockedReason({ status: 'PENDING' })).toBeNull();
+    expect(planEditBlockedReason({ status: 'IN_PROGRESS' })).toBeNull();
+    expect(planEditBlockedReason({ status: 'PAUSED' })).toBeNull();
+  });
+
+  it('完全不可编辑时给出短原因', () => {
     expect(planEditBlockedReason({ status: 'COMPLETED' })).toBe('已完成');
     expect(planEditBlockedReason({ status: 'CANCELLED' })).toBe('已取消');
     expect(planEditBlockedReason({ status: 'PENDING_APPROVAL' })).toBe('审批中');
+    expect(planEditBlockedReason({ status: 'PENDING', isLocked: true })).toBe('已锁定');
     expect(planEditBlockedReason({ status: 'WHATEVER' })).toBe('当前状态不可改');
   });
 
-  it('锁定优先于状态: 待执行但被锁定同样不可编辑', () => {
-    expect(planEditBlockedReason({ status: 'PENDING', isLocked: true })).toBe('已锁定');
+  it('菜单文案要说清能改的是什么, 别让用户以为开工后还能改数量/日期', () => {
+    expect(planEditMenuLabel({ status: 'PENDING' })).toBe('编辑');
+    expect(planEditMenuLabel({ status: 'IN_PROGRESS' })).toBe('编辑排产信息');
+    expect(planEditMenuLabel({ status: 'PAUSED' })).toBe('编辑排产信息');
+    expect(planEditMenuLabel({ status: 'COMPLETED' })).toBe('编辑（已完成）');
+    expect(planEditMenuLabel({ status: 'IN_PROGRESS', isLocked: true })).toBe('编辑（已锁定）');
   });
 
   it('不可编辑时「编辑」项仍然出现 (灰显讲原因), 而不是整条消失', () => {

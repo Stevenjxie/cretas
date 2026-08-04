@@ -108,10 +108,12 @@ import {
 import { finishedGoodPlanOptions } from './productionPlanProductOptions';
 import { productionPlanType, productionPlanTypeLabel } from './productionPlanType';
 import {
-  EDITABLE_PLAN_STATUSES,
   hasProductionMoreCommand,
   planEditBlockedReason,
+  planEditMenuLabel,
+  planEditScope,
   productionMoreCommands,
+  type PlanEditScope,
 } from './productionMoreActions';
 
 const router = useRouter();
@@ -2863,11 +2865,17 @@ const editForm = ref({
 // 再只覆盖真正编辑过的字段。
 let editingPlanDetail: TableRow | null = null;
 
+// 本次编辑的可及范围: full = 全字段 (PENDING/PREPARED); schedule-meta = 只有四个软字段
+// (已开工/暂停)。范围由 planEditScope 判定, 与「更多」里那一项的文案同源。
+const editScope = ref<PlanEditScope>('full');
+const editScopeIsScheduleMeta = computed(() => editScope.value === 'schedule-meta');
+
 async function handleEditPlan(row: TableRow) {
   const status = String(row.status || '');
   const rowLocked = Boolean(row.isLocked);
   // Rule 1 (防呆): 先用列表已有的行数据快速判断, 不等网络往返就能挡掉明显不可编辑的行。
-  if (!EDITABLE_PLAN_STATUSES.has(status) || rowLocked) {
+  const scope = planEditScope(row);
+  if (scope === null) {
     ElMessageBox.alert(blockedEditMessage(status, rowLocked, row.lockReason ? String(row.lockReason) : undefined), '不可编辑', {
       confirmButtonText: '我知道了',
     }).catch(() => { /* dismiss */ });
@@ -2887,7 +2895,8 @@ async function handleEditPlan(row: TableRow) {
     // 详情为准, 而不是只信列表缓存 (Rule 1: 提交前也要挡, 不只是点击那一刻)。
     const freshStatus = String(plan.status || '');
     const freshLocked = Boolean(plan.isLocked);
-    if (!EDITABLE_PLAN_STATUSES.has(freshStatus) || freshLocked) {
+    const freshScope = planEditScope(plan);
+    if (freshScope === null) {
       ElMessageBox.alert(
         blockedEditMessage(freshStatus, freshLocked, plan.lockReason ? String(plan.lockReason) : undefined),
         '不可编辑',
@@ -2895,6 +2904,9 @@ async function handleEditPlan(row: TableRow) {
       ).catch(() => { /* dismiss */ });
       return;
     }
+    // 以详情为准: 点开那一刻是 PENDING, 拉到详情已经开工的话, 范围要跟着收窄成 schedule-meta,
+    // 而不是拿列表缓存的 full 去提交一份含计划数量/日期的 payload (后端会 409, 但那是事后报错)。
+    editScope.value = freshScope;
 
     editingPlanDetail = plan;
     editingPlanNumber.value = String(plan.planNumber || plan.id || '');
@@ -2917,6 +2929,34 @@ async function handleEditPlan(row: TableRow) {
 
 async function submitEditPlan() {
   if (!editingPlanDetail || !factoryId.value) return;
+  // 已开工/暂停: 只提交四个软字段, 走后端更窄的 schedule-meta 契约。计划日期与计划数量
+  // 在这条路径上根本不在 payload 里 —— 表单里它们也是灰的, 两处一致。
+  if (editScopeIsScheduleMeta.value) {
+    editDialogLoading.value = true;
+    try {
+      const response = await put(
+        `/${factoryId.value}/production-plans/${editingPlanId.value}/schedule-meta`,
+        {
+          expectedCompletionDate: editForm.value.expectedCompletionDate || null,
+          estimatedWorkers: editForm.value.estimatedWorkers ?? null,
+          assignedSupervisorId: editForm.value.assignedSupervisorId || null,
+          notes: editForm.value.notes || null,
+        },
+      );
+      if (response.success) {
+        ElMessage.success('排产信息已更新');
+        editDialogVisible.value = false;
+        loadData();
+      } else {
+        ElMessage({ message: response.message || '更新失败', type: 'error', duration: 0, showClose: true });
+      }
+    } catch (e) {
+      handleCatchError(e, '更新排产信息失败');
+    } finally {
+      editDialogLoading.value = false;
+    }
+    return;
+  }
   if (!editForm.value.plannedDate) {
     ElMessage.warning('请选择计划生产日');
     return;
@@ -4068,7 +4108,7 @@ function guardProductionPlanAi(params: Record<string, unknown>) {
                     v-if="hasProductionMoreCommand(row, 'edit')"
                     command="edit"
                     :disabled="planEditBlockedReason(row) !== null || actionLoading"
-                  >{{ planEditBlockedReason(row) ? `编辑（${planEditBlockedReason(row)}）` : '编辑' }}</el-dropdown-item>
+                  >{{ planEditMenuLabel(row) }}</el-dropdown-item>
                   <el-dropdown-item
                     v-if="hasProductionMoreCommand(row, 'copy')"
                     command="copy"
@@ -5715,19 +5755,33 @@ function guardProductionPlanAi(params: Record<string, unknown>) {
       append-to-body
     >
       <el-form v-loading="editDialogLoading" :model="editForm" label-width="120px">
+        <!--
+          防呆 Rule 1: 已开工的计划能改什么, 打开就看得见 —— 两个硬字段灰显并写明原因,
+          而不是让用户改完点保存才被 409 弹回来。
+        -->
+        <el-alert
+          v-if="editScopeIsScheduleMeta"
+          type="info"
+          :closable="false"
+          show-icon
+          title="生产已开始，只能修改排产信息"
+          description="计划生产日与计划数量已进入批次与结单比对，开工后不可再改；如确需调整请先停产或联系车间主管。"
+          style="margin-bottom: 12px;"
+        />
         <el-form-item label="产品">
           <span>{{ editingProductName || '-' }}</span>
         </el-form-item>
         <el-form-item label="单号">
           <span>{{ editingPlanNumber || '-' }}</span>
         </el-form-item>
-        <el-form-item label="计划生产日" required>
+        <el-form-item label="计划生产日" :required="!editScopeIsScheduleMeta">
           <el-date-picker
             v-model="editForm.plannedDate"
             type="date"
             value-format="YYYY-MM-DD"
             placeholder="选择计划生产日"
             style="width: 100%"
+            :disabled="editScopeIsScheduleMeta"
           />
         </el-form-item>
         <el-form-item label="预计完成日期">
@@ -5740,8 +5794,14 @@ function guardProductionPlanAi(params: Record<string, unknown>) {
             clearable
           />
         </el-form-item>
-        <el-form-item label="计划数量" required>
-          <el-input-number v-model="editForm.plannedQuantity" :min="0" :precision="2" style="width: 100%" />
+        <el-form-item label="计划数量" :required="!editScopeIsScheduleMeta">
+          <el-input-number
+            v-model="editForm.plannedQuantity"
+            :min="0"
+            :precision="2"
+            style="width: 100%"
+            :disabled="editScopeIsScheduleMeta"
+          />
         </el-form-item>
         <el-form-item label="预计工人数">
           <el-input-number v-model="editForm.estimatedWorkers" :min="1" :max="500" style="width: 100%" placeholder="可不填" />
