@@ -27,6 +27,7 @@ import {
   SemiFinishedInventoryItem,
 } from '../../services/api/yieldReportApi';
 import { processingApiClient } from '../../services/api/processingApiClient';
+import { isTaskClaimableBy } from '../../utils/operatorAssignedProcess';
 import {
   productionPlanApiClient,
   ProductionPlanMaterialAdvisory,
@@ -577,8 +578,10 @@ const YieldStepReportScreen: React.FC = () => {
       ]);
       let sortedTasks: WorkProcessTask[] = [];
       if (tasksRes.success) {
+        // 后端 listByBatch 已按「我的 + 未指派」返回 (见上方注释); 这里只做同口径的客户端复核,
+        // 不能收窄成严格相等 —— 收窄会把未指派工序丢掉, 而 prod 的指派配置从未被填过。
         const visibleTasks = isOperator && currentUserId != null
-          ? tasksRes.data.filter((task) => task.assignedTo === currentUserId)
+          ? tasksRes.data.filter((task) => isTaskClaimableBy(task, currentUserId))
           : tasksRes.data;
         sortedTasks = [...visibleTasks].sort((a, b) => a.processOrder - b.processOrder);
         setTasks(sortedTasks);
