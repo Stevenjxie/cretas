@@ -1,7 +1,5 @@
 package com.cretas.aims.service;
 
-import com.cretas.aims.entity.bom.LaborCostConfig;
-import com.cretas.aims.entity.bom.OverheadCostConfig;
 import com.cretas.aims.dto.bom.BomCostSummaryDTO;
 
 import java.util.List;
@@ -14,98 +12,6 @@ import java.util.List;
  * @since 2025-01-13
  */
 public interface BomService {
-
-    // ============ Labor Cost (人工成本) ============
-
-    /**
-     * 获取产品的人工成本配置
-     *
-     * @param factoryId 工厂ID
-     * @param productTypeId 产品类型ID
-     * @return 人工成本配置列表
-     */
-    List<LaborCostConfig> getLaborCostsByProduct(String factoryId, String productTypeId);
-
-    /**
-     * 获取工厂的全局人工成本配置
-     *
-     * @param factoryId 工厂ID
-     * @return 人工成本配置列表
-     */
-    List<LaborCostConfig> getGlobalLaborCosts(String factoryId);
-
-    /**
-     * 获取工厂的所有人工成本配置
-     *
-     * @param factoryId 工厂ID
-     * @return 人工成本配置列表
-     */
-    List<LaborCostConfig> getAllLaborCosts(String factoryId);
-
-    /**
-     * 保存人工成本配置
-     *
-     * @param config 人工成本配置
-     * @return 保存后的配置
-     */
-    LaborCostConfig saveLaborCost(LaborCostConfig config);
-
-    /**
-     * 删除人工成本配置
-     *
-     * @param id 配置ID
-     */
-    void deleteLaborCost(Long id);
-
-    // ============ Overhead Cost (均摊费用) ============
-
-    /**
-     * 获取工厂的均摊费用配置
-     *
-     * @param factoryId 工厂ID
-     * @return 均摊费用配置列表
-     */
-    List<OverheadCostConfig> getOverheadCosts(String factoryId);
-
-    /**
-     * 获取工厂启用的均摊费用配置
-     *
-     * @param factoryId 工厂ID
-     * @return 均摊费用配置列表
-     */
-    List<OverheadCostConfig> getActiveOverheadCosts(String factoryId);
-
-    /**
-     * 保存均摊费用配置
-     *
-     * @param config 均摊费用配置
-     * @return 保存后的配置
-     */
-    OverheadCostConfig saveOverheadCost(OverheadCostConfig config);
-
-    /**
-     * 部分更新均摊费用配置 (PUT semantics: load-existing → merge non-null fields → save).
-     *
-     * <p>R5 audit §3 BUG#1 (T-R5-3, 2026-05-12): previously the PUT controller did
-     * a blind {@code repo.save(body)}, dropping audit columns (createdAt, version,
-     * deletedAt) to NULL whenever the client payload omitted them. Now we
-     * select-then-merge so any DB-only or audit field stays intact.
-     *
-     * @param factoryId 工厂ID (path var, tenant scope)
-     * @param id        费用配置ID (path var)
-     * @param body      部分字段更新; null 字段表示"保持当前值"
-     * @return 合并并保存后的配置
-     * @throws com.cretas.aims.exception.EntityNotFoundException 当记录不存在
-     * @throws com.cretas.aims.exception.BusinessException       当 factoryId 跨租户
-     */
-    OverheadCostConfig updateOverheadCost(String factoryId, Long id, OverheadCostConfig body);
-
-    /**
-     * 删除均摊费用配置
-     *
-     * @param id 配置ID
-     */
-    void deleteOverheadCost(Long id);
 
     // ============ Cost Calculation (成本计算) ============
 

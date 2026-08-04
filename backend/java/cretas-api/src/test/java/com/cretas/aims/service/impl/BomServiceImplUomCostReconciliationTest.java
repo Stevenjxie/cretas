@@ -8,8 +8,6 @@ import com.cretas.aims.entity.bom.BomRecipe;
 import com.cretas.aims.repository.RawMaterialTypeRepository;
 import com.cretas.aims.repository.ProductTypeRepository;
 import com.cretas.aims.repository.bom.BomRecipeItemRepository;
-import com.cretas.aims.repository.bom.LaborCostConfigRepository;
-import com.cretas.aims.repository.bom.OverheadCostConfigRepository;
 import com.cretas.aims.service.UnitConversionService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -24,7 +22,6 @@ import java.util.List;
 import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.when;
 
@@ -43,8 +40,6 @@ import static org.mockito.Mockito.when;
 class BomServiceImplUomCostReconciliationTest {
 
     @Mock private BomRecipeItemRepository bomItemRepository;
-    @Mock private LaborCostConfigRepository laborCostConfigRepository;
-    @Mock private OverheadCostConfigRepository overheadCostConfigRepository;
     @Mock private RawMaterialTypeRepository rawMaterialTypeRepository;
     @Mock private ProductTypeRepository productTypeRepository;
 
@@ -54,23 +49,12 @@ class BomServiceImplUomCostReconciliationTest {
 
     @BeforeEach
     void setUp() {
-        service = new BomServiceImpl(bomItemRepository, laborCostConfigRepository, overheadCostConfigRepository);
+        service = new BomServiceImpl(bomItemRepository);
         // 注入两个可选依赖 (真实 UnitConversionService, mock repository)
         ReflectionTestUtils.setField(service, "unitConversionService",
                 com.cretas.aims.service.unit.TestUnitContractFactory.legacyFacade());
         ReflectionTestUtils.setField(service, "rawMaterialTypeRepository", rawMaterialTypeRepository);
         ReflectionTestUtils.setField(service, "productTypeRepository", productTypeRepository);
-
-        // 无人工/均摊 (聚焦原料成本)
-        lenient().when(laborCostConfigRepository
-                .findByFactoryIdAndProductTypeIdAndIsActiveTrueAndDeletedAtIsNullOrderBySortOrderAsc(anyString(), anyString()))
-                .thenReturn(List.of());
-        lenient().when(laborCostConfigRepository
-                .findByFactoryIdAndProductTypeIdIsNullAndDeletedAtIsNullOrderBySortOrderAsc(anyString()))
-                .thenReturn(List.of());
-        lenient().when(overheadCostConfigRepository
-                .findByFactoryIdAndIsActiveTrueAndDeletedAtIsNullOrderBySortOrderAsc(anyString()))
-                .thenReturn(List.of());
     }
 
     private RawMaterialType material(String id, String unit) {

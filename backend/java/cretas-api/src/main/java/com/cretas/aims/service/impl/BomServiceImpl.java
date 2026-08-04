@@ -2,12 +2,7 @@ package com.cretas.aims.service.impl;
 
 import com.cretas.aims.dto.bom.BomCostSummaryDTO;
 import com.cretas.aims.entity.bom.BomRecipeItem;
-import com.cretas.aims.entity.bom.LaborCostConfig;
-import com.cretas.aims.entity.bom.OverheadCostConfig;
-import com.cretas.aims.exception.EntityNotFoundException;
 import com.cretas.aims.repository.bom.BomRecipeItemRepository;
-import com.cretas.aims.repository.bom.LaborCostConfigRepository;
-import com.cretas.aims.repository.bom.OverheadCostConfigRepository;
 import com.cretas.aims.service.BomService;
 
 import lombok.RequiredArgsConstructor;
@@ -50,8 +45,6 @@ public class BomServiceImpl implements BomService {
             "部分物料缺税率，请补齐税率用于含税/未税来源追踪；成本仍按已存未税 unitPrice 计算。";
 
     private final BomRecipeItemRepository bomRecipeItemRepository;
-    private final LaborCostConfigRepository laborCostConfigRepository;
-    private final OverheadCostConfigRepository overheadCostConfigRepository;
 
 
 
@@ -81,139 +74,6 @@ public class BomServiceImpl implements BomService {
 
 
 
-
-    // ============ Labor Cost ============
-
-    @Override
-    @Transactional(readOnly = true)
-    public List<LaborCostConfig> getLaborCostsByProduct(String factoryId, String productTypeId) {
-        log.debug("获取产品人工成本配置: factoryId={}, productTypeId={}", factoryId, productTypeId);
-        return laborCostConfigRepository
-            .findByFactoryIdAndProductTypeIdAndIsActiveTrueAndDeletedAtIsNullOrderBySortOrderAsc(
-                factoryId, productTypeId);
-    }
-
-    @Override
-    @Transactional(readOnly = true)
-    public List<LaborCostConfig> getGlobalLaborCosts(String factoryId) {
-        log.debug("获取工厂全局人工成本配置: factoryId={}", factoryId);
-        return laborCostConfigRepository
-            .findByFactoryIdAndProductTypeIdIsNullAndDeletedAtIsNullOrderBySortOrderAsc(factoryId);
-    }
-
-    @Override
-    @Transactional(readOnly = true)
-    public List<LaborCostConfig> getAllLaborCosts(String factoryId) {
-        log.debug("获取工厂所有人工成本配置: factoryId={}", factoryId);
-        return laborCostConfigRepository.findByFactoryIdAndDeletedAtIsNullOrderBySortOrderAsc(factoryId);
-    }
-
-    @Override
-    @Transactional
-    public LaborCostConfig saveLaborCost(LaborCostConfig config) {
-        log.info("保存人工成本配置: factoryId={}, processName={}",
-            config.getFactoryId(), config.getProcessName());
-
-        // 设置默认值
-        if (config.getDefaultQuantity() == null) {
-            config.setDefaultQuantity(BigDecimal.ONE);
-        }
-        if (config.getIsActive() == null) {
-            config.setIsActive(true);
-        }
-        if (config.getSortOrder() == null) {
-            config.setSortOrder(0);
-        }
-
-        LaborCostConfig saved = laborCostConfigRepository.save(config);
-        log.info("人工成本配置保存成功: id={}", saved.getId());
-        return saved;
-    }
-
-    @Override
-    @Transactional
-    public void deleteLaborCost(Long id) {
-        log.info("删除人工成本配置: id={}", id);
-        LaborCostConfig config = laborCostConfigRepository.findById(id)
-            .orElseThrow(() -> new EntityNotFoundException("LaborCostConfig", id.toString()));
-        config.softDelete();
-        laborCostConfigRepository.save(config);
-        log.info("人工成本配置删除成功: id={}", id);
-    }
-
-    // ============ Overhead Cost ============
-
-    @Override
-    @Transactional(readOnly = true)
-    public List<OverheadCostConfig> getOverheadCosts(String factoryId) {
-        log.debug("获取工厂均摊费用配置: factoryId={}", factoryId);
-        return overheadCostConfigRepository.findByFactoryIdAndDeletedAtIsNullOrderBySortOrderAsc(factoryId);
-    }
-
-    @Override
-    @Transactional(readOnly = true)
-    public List<OverheadCostConfig> getActiveOverheadCosts(String factoryId) {
-        log.debug("获取工厂启用的均摊费用配置: factoryId={}", factoryId);
-        return overheadCostConfigRepository.findByFactoryIdAndIsActiveTrueAndDeletedAtIsNullOrderBySortOrderAsc(factoryId);
-    }
-
-    @Override
-    @Transactional
-    public OverheadCostConfig saveOverheadCost(OverheadCostConfig config) {
-        log.info("保存均摊费用配置: factoryId={}, name={}", config.getFactoryId(), config.getName());
-
-        // 设置默认值
-        if (config.getAllocationMethod() == null) {
-            config.setAllocationMethod("PER_UNIT");
-        }
-        if (config.getAllocationRate() == null) {
-            config.setAllocationRate(BigDecimal.ONE);
-        }
-        if (config.getIsActive() == null) {
-            config.setIsActive(true);
-        }
-        if (config.getSortOrder() == null) {
-            config.setSortOrder(0);
-        }
-
-        OverheadCostConfig saved = overheadCostConfigRepository.save(config);
-        log.info("均摊费用配置保存成功: id={}", saved.getId());
-        return saved;
-    }
-
-    @Override
-    @Transactional
-    public OverheadCostConfig updateOverheadCost(String factoryId, Long id, OverheadCostConfig body) {
-        log.info("更新均摊费用配置: factoryId={}, id={}", factoryId, id);
-        OverheadCostConfig existing = overheadCostConfigRepository.findById(id)
-                .orElseThrow(() -> new EntityNotFoundException("OverheadCostConfig", id.toString()));
-        if (!factoryId.equals(existing.getFactoryId())) {
-            throw new com.cretas.aims.exception.BusinessException(403, "无权操作该均摊费用配置")
-                    .withHint("请确认费用配置归属或切换工厂账号");
-        }
-        // T-R5-3: select-then-merge — non-null body fields override; null fields preserve existing.
-        if (body.getName() != null) existing.setName(body.getName());
-        if (body.getCategory() != null) existing.setCategory(body.getCategory());
-        if (body.getUnitPrice() != null) existing.setUnitPrice(body.getUnitPrice());
-        if (body.getPriceUnit() != null) existing.setPriceUnit(body.getPriceUnit());
-        if (body.getAllocationMethod() != null) existing.setAllocationMethod(body.getAllocationMethod());
-        if (body.getAllocationRate() != null) existing.setAllocationRate(body.getAllocationRate());
-        if (body.getIsActive() != null) existing.setIsActive(body.getIsActive());
-        if (body.getSortOrder() != null) existing.setSortOrder(body.getSortOrder());
-        if (body.getRemark() != null) existing.setRemark(body.getRemark());
-        return overheadCostConfigRepository.save(existing);
-    }
-
-    @Override
-    @Transactional
-    public void deleteOverheadCost(Long id) {
-        log.info("删除均摊费用配置: id={}", id);
-        OverheadCostConfig config = overheadCostConfigRepository.findById(id)
-            .orElseThrow(() -> new EntityNotFoundException("OverheadCostConfig", id.toString()));
-        config.softDelete();
-        overheadCostConfigRepository.save(config);
-        log.info("均摊费用配置删除成功: id={}", id);
-    }
 
     // ============ Cost Calculation ============
 
@@ -526,35 +386,4 @@ public class BomServiceImpl implements BomService {
         return actualQuantity.multiply(unitPrice).setScale(4, RoundingMode.HALF_UP);
     }
 
-    /**
-     * 计算人工成本
-     * 公式: 成本 = 单价 * 操作量
-     */
-    private BigDecimal calculateLaborCost(String factoryId, BigDecimal unitPrice, BigDecimal quantity) {
-        if (unitPrice == null) return BigDecimal.ZERO;
-        BigDecimal qty = quantity != null ? quantity : BigDecimal.ONE;
-
-        if (formulaEngine != null && factoryId != null) {
-            BigDecimal result = formulaEngine.evaluate(factoryId, "bom", "LABOR_COST",
-                    java.util.Map.of("unitPrice", unitPrice, "quantity", qty));
-            if (result != null) return result;
-        }
-        return unitPrice.multiply(qty).setScale(4, RoundingMode.HALF_UP);
-    }
-
-    /**
-     * 计算均摊费用
-     * 公式: 成本 = 单价 * 分摊比例
-     */
-    private BigDecimal calculateOverheadCost(String factoryId, BigDecimal unitPrice, BigDecimal allocationRate) {
-        if (unitPrice == null) return BigDecimal.ZERO;
-        BigDecimal rate = allocationRate != null ? allocationRate : BigDecimal.ONE;
-
-        if (formulaEngine != null && factoryId != null) {
-            BigDecimal result = formulaEngine.evaluate(factoryId, "bom", "OVERHEAD_COST",
-                    java.util.Map.of("unitPrice", unitPrice, "allocationRate", rate));
-            if (result != null) return result;
-        }
-        return unitPrice.multiply(rate).setScale(4, RoundingMode.HALF_UP);
-    }
 }

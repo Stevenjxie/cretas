@@ -4,8 +4,6 @@ import com.cretas.aims.dto.bom.BomCostSummaryDTO;
 import com.cretas.aims.entity.bom.BomRecipe;
 import com.cretas.aims.entity.bom.BomRecipeItem;
 import com.cretas.aims.repository.bom.BomRecipeItemRepository;
-import com.cretas.aims.repository.bom.LaborCostConfigRepository;
-import com.cretas.aims.repository.bom.OverheadCostConfigRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -25,16 +23,12 @@ class BomServiceImplPreTaxCaliberTest {
 
     @Mock
     private BomRecipeItemRepository bomItemRepository;
-    @Mock
-    private LaborCostConfigRepository laborCostConfigRepository;
-    @Mock
-    private OverheadCostConfigRepository overheadCostConfigRepository;
 
     private BomServiceImpl service;
 
     @BeforeEach
     void setUp() {
-        service = new BomServiceImpl(bomItemRepository, laborCostConfigRepository, overheadCostConfigRepository);
+        service = new BomServiceImpl(bomItemRepository);
     }
 
     @Test
