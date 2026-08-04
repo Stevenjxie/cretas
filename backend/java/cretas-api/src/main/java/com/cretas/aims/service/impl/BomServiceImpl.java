@@ -225,15 +225,6 @@ public class BomServiceImpl implements BomService {
         // 1. 获取BOM项目
         List<BomRecipeItem> bomItems = bomRecipeItemRepository.findCurrentByProduct(factoryId, productTypeId);
 
-        // 2. 获取人工成本（优先产品级别，其次全局）
-        List<LaborCostConfig> laborCosts = getLaborCostsByProduct(factoryId, productTypeId);
-        if (laborCosts.isEmpty()) {
-            laborCosts = getGlobalLaborCosts(factoryId);
-        }
-
-        // 3. 获取均摊费用
-        List<OverheadCostConfig> overheadCosts = getActiveOverheadCosts(factoryId);
-
         // 4. 计算原辅料成本
         List<BomCostSummaryDTO.MaterialCostItem> materialCostItems = new ArrayList<>();
         BigDecimal materialCostTotal = BigDecimal.ZERO;
@@ -295,50 +286,15 @@ public class BomServiceImpl implements BomService {
         }
         boolean hasMissingPrice = !missingPriceMaterials.isEmpty();
 
-        // 5. 计算人工成本
-        List<BomCostSummaryDTO.LaborCostItem> laborCostItems = new ArrayList<>();
-        BigDecimal laborCostTotal = BigDecimal.ZERO;
-
-        for (LaborCostConfig config : laborCosts) {
-            BigDecimal subtotal = calculateLaborCost(factoryId, config.getUnitPrice(), config.getDefaultQuantity());
-
-            BomCostSummaryDTO.LaborCostItem costItem = BomCostSummaryDTO.LaborCostItem.builder()
-                .processName(config.getProcessName())
-                .processCategory(config.getProcessCategory())
-                .unitPrice(config.getUnitPrice())
-                .priceUnit(config.getPriceUnit())
-                .quantity(config.getDefaultQuantity())
-                .subtotal(subtotal)
-                .build();
-
-            laborCostItems.add(costItem);
-            laborCostTotal = laborCostTotal.add(subtotal);
-        }
-
-        // 6. 计算均摊费用
-        List<BomCostSummaryDTO.OverheadCostItem> overheadCostItems = new ArrayList<>();
-        BigDecimal overheadCostTotal = BigDecimal.ZERO;
-
-        for (OverheadCostConfig config : overheadCosts) {
-            BigDecimal subtotal = calculateOverheadCost(factoryId, config.getUnitPrice(), config.getAllocationRate());
-
-            BomCostSummaryDTO.OverheadCostItem costItem = BomCostSummaryDTO.OverheadCostItem.builder()
-                .name(config.getName())
-                .category(config.getCategory())
-                .unitPrice(config.getUnitPrice())
-                .priceUnit(config.getPriceUnit())
-                .allocationRate(config.getAllocationRate())
-                .subtotal(subtotal)
-                .build();
-
-            overheadCostItems.add(costItem);
-            overheadCostTotal = overheadCostTotal.add(subtotal);
-        }
+        // 5. 人工与均摊不在 BOM 归集
+        // 人工要等结算（实际工时 × 时薪 ÷ 实际箱数，见 processSheetLaborCost.ts），
+        // 均摊要等成本分析。BOM 只配「每单位固定消耗的实物」。
+        // 空列表 + null 总额：null 表示「此处不归集」，写 0 会被读成「不要钱」。
+        List<BomCostSummaryDTO.LaborCostItem> laborCostItems = List.of();
+        List<BomCostSummaryDTO.OverheadCostItem> overheadCostItems = List.of();
 
         // 7. 计算总成本
         BigDecimal totalCost = materialCostTotal
-            .add(laborCostTotal)
-            .add(overheadCostTotal)
             .setScale(4, RoundingMode.HALF_UP);
 
         // 8. 获取产品名称
@@ -351,9 +307,9 @@ public class BomServiceImpl implements BomService {
             .materialCosts(materialCostItems)
             .materialCostTotal(materialCostTotal.setScale(4, RoundingMode.HALF_UP))
             .laborCosts(laborCostItems)
-            .laborCostTotal(laborCostTotal.setScale(4, RoundingMode.HALF_UP))
+            .laborCostTotal(null)
             .overheadCosts(overheadCostItems)
-            .overheadCostTotal(overheadCostTotal.setScale(4, RoundingMode.HALF_UP))
+            .overheadCostTotal(null)
             .totalCost(totalCost)
             .costCaliber(COST_CALIBER_PRE_TAX)
             .caliberHint(summaryCaliberHint(hasMissingTaxRate, hasMissingPrice, missingPriceMaterials.size()))

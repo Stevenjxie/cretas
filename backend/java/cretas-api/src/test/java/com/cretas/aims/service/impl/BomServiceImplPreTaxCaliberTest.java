@@ -55,12 +55,6 @@ class BomServiceImplPreTaxCaliberTest {
 
         when(bomItemRepository.findCurrentByProduct("F006", "P-B8"))
                 .thenReturn(List.of(beef));
-        when(laborCostConfigRepository.findByFactoryIdAndProductTypeIdAndIsActiveTrueAndDeletedAtIsNullOrderBySortOrderAsc("F006", "P-B8"))
-                .thenReturn(List.of());
-        when(laborCostConfigRepository.findByFactoryIdAndProductTypeIdIsNullAndDeletedAtIsNullOrderBySortOrderAsc("F006"))
-                .thenReturn(List.of());
-        when(overheadCostConfigRepository.findByFactoryIdAndIsActiveTrueAndDeletedAtIsNullOrderBySortOrderAsc("F006"))
-                .thenReturn(List.of());
 
         BomCostSummaryDTO result = service.calculateProductCost("F006", "P-B8");
 
@@ -94,13 +88,6 @@ class BomServiceImplPreTaxCaliberTest {
         when(bomItemRepository.findCurrentByProduct(
                 "F006", "P-B8-MISSING-TAX"))
                 .thenReturn(List.of(material));
-        when(laborCostConfigRepository.findByFactoryIdAndProductTypeIdAndIsActiveTrueAndDeletedAtIsNullOrderBySortOrderAsc(
-                "F006", "P-B8-MISSING-TAX"))
-                .thenReturn(List.of());
-        when(laborCostConfigRepository.findByFactoryIdAndProductTypeIdIsNullAndDeletedAtIsNullOrderBySortOrderAsc("F006"))
-                .thenReturn(List.of());
-        when(overheadCostConfigRepository.findByFactoryIdAndIsActiveTrueAndDeletedAtIsNullOrderBySortOrderAsc("F006"))
-                .thenReturn(List.of());
 
         BomCostSummaryDTO result = service.calculateProductCost("F006", "P-B8-MISSING-TAX");
 
@@ -143,13 +130,6 @@ class BomServiceImplPreTaxCaliberTest {
         when(bomItemRepository.findCurrentByProduct(
                 "F006", "P-MISSING-PRICE"))
                 .thenReturn(List.of(priced, noPrice));
-        when(laborCostConfigRepository.findByFactoryIdAndProductTypeIdAndIsActiveTrueAndDeletedAtIsNullOrderBySortOrderAsc(
-                "F006", "P-MISSING-PRICE"))
-                .thenReturn(List.of());
-        when(laborCostConfigRepository.findByFactoryIdAndProductTypeIdIsNullAndDeletedAtIsNullOrderBySortOrderAsc("F006"))
-                .thenReturn(List.of());
-        when(overheadCostConfigRepository.findByFactoryIdAndIsActiveTrueAndDeletedAtIsNullOrderBySortOrderAsc("F006"))
-                .thenReturn(List.of());
 
         BomCostSummaryDTO result = service.calculateProductCost("F006", "P-MISSING-PRICE");
 
