@@ -1,0 +1,69 @@
+name: RN Gate
+
+# 为什么是独立 workflow 而不是给 ci.yml 的 rn-test 松绑 (同 web-admin-gate.yml 的判断):
+#
+# 1. ci.yml 的 `on.push` 带着 `paths: backend/java/cretas-api/**` —— 那是为 Java 制品
+#    不变量「那棵树变了 ⟺ CI 被触发」精心写的, 不该为了跑 RN 测试去动它。
+# 2. 只把 rn-test 的 `if: inputs.full_audit` 放宽也没用: `inputs.*` 只在
+#    workflow_dispatch 时有值, push 事件下恒为空 → 依然 skipped。而纯 RN 改动
+#    **根本不会触发 ci.yml**(paths 不含 frontend/)。同一道闸有三个承载点
+#    (job 的 if / workflow 的 paths / 事件类型), 只改一个等于没改。
+#
+# 背景 (2026-08-04): PR #2274 改了 4 个 RN 文件
+# (OperatorAssignedProcessScreen / YieldStepReportScreen / operatorAssignedProcess
+# 及其测试), 合并前 `rn-test` 全程 **SKIPPED** —— 那次是靠本地全量跑兜住的。
+# 也就是说 **RN 改动在 CI 上没有任何闸, PR 绿 ≠ RN 被测过**。
+# 这与 web-admin 在 2026-07-31 的处境是同一个形状 (那次两个真缺陷在红里躺了 8 天,
+# 缺的不是用例, 是没人断言绿)。
+#
+# ⚠️ 上闸前提 (照 web-admin-gate 的规矩): 必须在目标环境**已经是绿的**, 否则是把
+# 「不可信的绿」换成「挡所有人的红」。实测 origin/main + 本 PR:
+#   - `npm ci --legacy-peer-deps --dry-run` → up to date (lockfile 与 package.json 同步)
+#   - `npm test -- --ci --forceExit`        → 92 suites / 1232 tests 全绿, exit 0
+#
+# 📌 用 npm 而非 ci.yml 里 rn-test 那份的 yarn: 仓里 yarn.lock 与 package-lock.json
+#    并存, 但 package.json 与 **package-lock.json 是同一个 commit** 更新的
+#    (a774bf0a62), yarn.lock 走的是另一条 (61d0c5fb51) —— 用维护中的那个,
+#    也与 web-admin-gate 的 `npm ci --legacy-peer-deps` 保持一致。
+#
+# 📌 只跑单测。jest.config.js 里 testPathIgnorePatterns 仍豁免 3 个
+#    integration/screens/* (@react-navigation ESM transform 债, 与本闸无关);
+#    tsc / build 仍留在 ci.yml 的 full_audit 里 —— 本 workflow 的目的是让
+#    「套件绿」重新成为可信信号, 不是把整轮审计搬到每次 push。
+
+on:
+  push:
+    branches:
+      - main
+      - 'codex/**'
+    paths:
+      - 'frontend/CretasFoodTrace/**'
+      - '.github/workflows/rn-gate.yml'
+  pull_request:
+    paths:
+      - 'frontend/CretasFoodTrace/**'
+      - '.github/workflows/rn-gate.yml'
+
+concurrency:
+  group: rn-gate-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  jest:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend/CretasFoodTrace
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: frontend/CretasFoodTrace/package-lock.json
+      - run: npm ci --legacy-peer-deps
+
+      # --forceExit: 套件跑完后有 worker 不能优雅退出 (既有情况, ci.yml 的
+      # rn-test 同样带这个 flag)。没有它 job 会挂到超时而不是在测试跑完就结束。
+      - name: Jest unit tests
+        run: npm test -- --ci --forceExit
