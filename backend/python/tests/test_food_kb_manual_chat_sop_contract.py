@@ -9,6 +9,7 @@ from food_kb.api.manual_chat import (
     ManualChatRequest,
     SYSTEM_PROMPT,
     _FACTORY_BYPRODUCT_LIFECYCLE_ANSWER,
+    _FACTORY_CURRENT_GATES_ANSWER,
     _FACTORY_ACCOUNTING_PERIOD_OA_ANSWER,
     _FACTORY_PRODUCTION_EXECUTION_ANSWER,
     _FACTORY_REPORTING_RUNTIME_ANSWER,
@@ -24,6 +25,7 @@ from food_kb.api.manual_chat import (
     _RESTAURANT_DEPARTMENT_STOCKTAKE_ANSWER,
     _RESTAURANT_FLYWHEEL_GOVERNANCE_ANSWER,
     _RESTAURANT_GUIDE_BOUNDARY_ANSWER,
+    _RESTAURANT_LIVE_COMMAND_ANSWER,
     _RESTAURANT_METRIC_ENTITY_ANSWER,
     _RESTAURANT_MONTHLY_REPORT_ANSWER,
     _RESTAURANT_PLAN_ALERT_ANSWER,
@@ -36,6 +38,7 @@ from food_kb.api.manual_chat import (
     _build_scope_prompt,
     _needs_bom_workflow_sequence_guard,
     _needs_factory_byproduct_lifecycle_guard,
+    _needs_factory_current_gates_guard,
     _needs_factory_accounting_period_oa_guard,
     _needs_factory_production_execution_guard,
     _needs_factory_reporting_runtime_guard,
@@ -51,6 +54,7 @@ from food_kb.api.manual_chat import (
     _needs_restaurant_department_stocktake_guard,
     _needs_restaurant_flywheel_governance_guard,
     _needs_restaurant_guide_boundary_guard,
+    _needs_restaurant_live_command_guard,
     _needs_restaurant_metric_entity_guard,
     _needs_restaurant_monthly_report_guard,
     _needs_restaurant_plan_alert_guard,
@@ -469,6 +473,35 @@ def test_restaurant_staffing_advice_describes_forecast_scope_without_executing_i
     assert "不替用户计算真实经营数据" in _RESTAURANT_STAFFING_SCOPE_ANSWER
 
 
+def test_current_factory_gates_have_three_equivalent_routes_and_keep_fail_closed():
+    equivalent_questions = [
+        "只、个、件和自定义单位怎么保存，SKU 大类为什么创建时必填？",
+        "没有收货凭证能确认收货入库吗，其他仓库过期批次算可用量吗？",
+        "标签生产日期和 ZIP 有什么规则，Workflow 缺 skuId 怎么处理？",
+    ]
+    assert all(_needs_factory_current_gates_guard(q) for q in equivalent_questions)
+    assert not _needs_factory_current_gates_guard("BOM 怎么激活？")
+    assert "不计入当前生产仓可用量" in _FACTORY_CURRENT_GATES_ANSWER
+    assert "WORKFLOW_MATERIAL_SKU_MISSING" in _FACTORY_CURRENT_GATES_ANSWER
+    assert "PRODUCT_CATEGORY_REQUIRED" in _FACTORY_CURRENT_GATES_ANSWER
+    assert "确认按钮禁用" in _FACTORY_CURRENT_GATES_ANSWER
+    assert "整批失败" in _FACTORY_CURRENT_GATES_ANSWER
+
+
+def test_restaurant_live_command_has_three_equivalent_routes_and_source_boundaries():
+    equivalent_questions = [
+        "餐饮 AI 实时经营指挥屏的传输状态和来源怎么读？",
+        "经营指挥屏里的模拟预订、FactBook 和大模型分别做什么？",
+        "近15分钟客流在实时指挥里是谁提供的，排班能直接改吗？",
+    ]
+    assert all(_needs_restaurant_live_command_guard(q) for q in equivalent_questions)
+    assert not _needs_restaurant_live_command_guard("工厂今天生产多少？")
+    assert "Java 经营汇总" in _RESTAURANT_LIVE_COMMAND_ANSWER
+    assert "Python 预测 FactBook" in _RESTAURANT_LIVE_COMMAND_ANSWER
+    assert "不能冒充平台实单" in _RESTAURANT_LIVE_COMMAND_ANSWER
+    assert "不替用户计算或分析真实经营数据" in _RESTAURANT_LIVE_COMMAND_ANSWER
+
+
 def test_restaurant_exact_range_scope_and_output_use_current_contract():
     equivalent_questions = (
         "看 2026年7月1日到7月15日全部門店营收，给我表格",
@@ -684,7 +717,7 @@ def test_latest_f006_sop_is_a_deployable_manual_source():
     html_path = Path(PROJECT_ROOT) / "docs/manual/F006-production-full-chain-manual-test-sop.html"
     html = html_path.read_text(encoding="utf-8")
     assert required_sequence in html
-    assert "origin/main · SOP sync 2026-08-03" in html
+    assert "origin/main · SOP sync 2026-08-04" in html
     assert "先有完整 Workflow 草稿，再创建 BOM" in html
     assert "页面没有任意切换版本的选择器" in html
     assert "① 投入" in html
@@ -1068,6 +1101,12 @@ async def test_bom_workflow_publication_answer_never_calls_the_llm(monkeypatch):
             "f006-production-full-chain-sop.md",
         ),
         (
+            "只、个、件和自定义单位怎么保存，SKU 大类为什么创建时必填？",
+            "factory",
+            _FACTORY_CURRENT_GATES_ANSWER,
+            "f006-production-full-chain-sop.md",
+        ),
+        (
             "门店菜品不同月份继续追问时怎么保持时间范围？",
             "restaurant",
             _RESTAURANT_CONTEXT_SCOPE_ANSWER,
@@ -1137,6 +1176,12 @@ async def test_bom_workflow_publication_answer_never_calls_the_llm(monkeypatch):
             "餐饮预测排班会根据什么数据，支持哪些时间范围和门店范围？",
             "restaurant",
             _RESTAURANT_STAFFING_SCOPE_ANSWER,
+            "restaurant-full-chain-sop.html",
+        ),
+        (
+            "餐饮 AI 实时经营指挥屏的传输状态和来源怎么读？",
+            "restaurant",
+            _RESTAURANT_LIVE_COMMAND_ANSWER,
             "restaurant-full-chain-sop.html",
         ),
         (
