@@ -63,19 +63,39 @@ class ProcessSheetWorkflowRuntimeBatchReuseTest {
         verify(clerkService, never()).materializeBatch(any(), any(), any(), any());
     }
 
+    /**
+     * 🔴 2026-08-04 规则反转：运行批次被占用 → <b>开新批次</b>，不再 409。
+     *
+     * <p>原来这里断言的是 {@code WORKFLOW_RUNTIME_BATCH_ALREADY_REPORTED}。六膳门实撞出它的后果：
+     * 计划 {@code PLAN-1785831853929}（SAFETY_STOCK，计划量 0 = 按实际报工）第一批装箱报完、
+     * 小结、入库全部走通，做第二批时成品道保存直接 409 —— 而且四道门互相咬死：先小结再报也拦
+     * （守卫不看小结状态）、删掉第一行腾位置也不行（已小结的行禁止删除）、给计划再开一个批次也不行
+     * （{@code createBatchFromPlan} 明确「不许建出第二个批次」）。**没有任何界面操作能重置它。**
+     *
+     * <p>放开是安全的：运行时快照的唯一性由 {@code findWorkflowRuntime} 守，它只数
+     * {@code workflowSelectionMode == WORKFLOW} 的批次，而文员通路建的批次不带这个模式
+     * （prod 上同一张计划长期并存 1 个 WORKFLOW 批次 + 7 个文员批次，报工页正常）。
+     * 下游也早就支持多批：小结按 {@code sessionSeq} 分场次，一次小结把所有未结成品行按产品
+     * 聚合成一个成品批次入库，撤销按聚合量精确逆转。
+     *
+     * <p>客户口径（2026-08-04 张权）：「本来小结前都是类似草稿的，小结了库存才入库的」
+     * 「多个批次就小结多次呗，无所谓的」。
+     */
     @Test
-    @DisplayName("运行批次已绑定逐道行时拒绝重复占用")
-    void refusesRuntimeBatchAlreadyBoundToAnotherRow() {
+    @DisplayName("运行批次已被上一批占用时，成品道开自己的新批次(库存生产要能一直生产下去)")
+    void secondFinishedRowOpensItsOwnBatch() throws Throwable {
         when(batchRepository.findByIdAndFactoryId(RUNTIME_BATCH_ID, FACTORY))
                 .thenReturn(Optional.of(runtimeBatch("PT-FG")));
         when(rowRepository.findByFactoryIdAndBatchId(FACTORY, RUNTIME_BATCH_ID))
                 .thenReturn(List.of(new ProcessSheetRow()));
+        MaterializedBatch nextRunBatch = new MaterializedBatch(99L, "CLK-W-99", null, null, 0);
+        when(clerkService.materializeBatch(any(), any(), any(), any())).thenReturn(nextRunBatch);
 
-        BusinessException error = assertThrows(BusinessException.class,
-                () -> invoke(context(true, "PT-FG"), workflowConfig()));
+        MaterializedBatch result = invoke(context(true, "PT-FG"), workflowConfig());
 
-        assertEquals("WORKFLOW_RUNTIME_BATCH_ALREADY_REPORTED", error.getErrorCode());
-        verify(clerkService, never()).materializeBatch(any(), any(), any(), any());
+        assertEquals(99L, result.getProductionBatchId(),
+                "第二批应落在自己的新批次上, 而不是被 409 拦下");
+        verify(clerkService).materializeBatch(any(), any(), any(), any());
         verify(clerkService, never()).rematerializeInPlace(any(), any(), any(), any(), any(), any());
     }
 
