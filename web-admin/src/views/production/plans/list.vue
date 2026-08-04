@@ -107,6 +107,12 @@ import {
 } from './productionPlanQuantity';
 import { finishedGoodPlanOptions } from './productionPlanProductOptions';
 import { productionPlanType, productionPlanTypeLabel } from './productionPlanType';
+import {
+  EDITABLE_PLAN_STATUSES,
+  hasProductionMoreCommand,
+  planEditBlockedReason,
+  productionMoreCommands,
+} from './productionMoreActions';
 
 const router = useRouter();
 const route = useRoute();
@@ -407,6 +413,8 @@ type ProductionActionCommand =
   | 'complete'
   | 'interim-settle'
   | 'process-entry'
+  | 'edit'
+  | 'copy'
   | 'app-reporting'
   | 'generate-transfer'
   | 'reverse-interim-settle'
@@ -505,6 +513,12 @@ function handleProductionActionCommand(command: ProductionActionCommand, row: Ta
       break;
     case 'process-entry':
       void openProcessEntry(row);
+      break;
+    case 'edit':
+      void handleEditPlan(row);
+      break;
+    case 'copy':
+      void handleCopyPlan(row);
       break;
     case 'app-reporting':
       void handleCreateBatch(row);
@@ -2483,13 +2497,8 @@ function canClearTransit(row: TableRow): boolean {
     && settlement?.postingStatus === 'PENDING_CLEARING';
 }
 
-function canStopPlan(row: TableRow): boolean {
-  return row.canStop === true;
-}
-
-function canCancelPlan(row: TableRow): boolean {
-  return row.canCancel === true;
-}
+// canStopPlan / canCancelPlan 已并入 productionMoreActions.ts —— 停产/取消的判据必须和
+// 「更多」的显隐闸出自同一处, 不再在本文件里留第二份。
 
 const receiptProductName = computed(() => {
   const r = receiptRow.value;
@@ -2808,15 +2817,14 @@ async function submitCancel() {
 // 语义冲突 — 编辑时改 SO/产品行选择不应该走 batch-from-so 去新建计划), 只暴露真正
 // 编辑后仍讲得通的字段: 计划日期(核心需求)/计划数量/预计完成日期/预计工人数/指派主管/备注。
 //
-// 可编辑状态: 只有 PENDING / PREPARED — 与后端 ProductionPlanServiceImpl#updateProductionPlan
-// 的状态守卫严格一致(该方法对其他任何状态一律 409)。注意: PAUSED 语义上是"曾经 IN_PROGRESS
-// 后暂停", 不是"尚未开始", 编辑数量/日期跟"生产已开始不可编辑"的防呆意图冲突, 因此不放行
-// (即使某些早期草案把 PAUSED 也算作可编辑 — 那是对 PAUSED 语义的误判)。
-const EDITABLE_PLAN_STATUSES = new Set(['PENDING', 'PREPARED']);
+// 可编辑状态 (EDITABLE_PLAN_STATUSES) 与「不可编辑的短原因」都放在 productionMoreActions.ts,
+// 与「更多」菜单里那一项的灰显判据同源 — 否则菜单说可编辑而点击路径又拦下来, 就是两处口径打架。
+// 这里的 blockedEditMessage 是点击路径上的长句兜底 (列表行数据可能过期, 拉到详情后还要再挡一次)。
 
 function blockedEditMessage(status: string, isLocked?: boolean, lockReason?: string): string {
   if (isLocked) {
-    return `计划已锁定${lockReason ? `（${lockReason}）` : ''}，请先在「更多」中解锁后再编辑`;
+    // 锁定/解锁的后端 API 至今未实装 (#747), 界面上没有任何解锁入口 — 不要指给用户一条走不通的路
+    return `计划已锁定${lockReason ? `（${lockReason}）` : ''}，暂不可编辑，请联系管理员解除锁定后再试`;
   }
   switch (status) {
     case 'IN_PROGRESS':
@@ -3296,13 +3304,8 @@ function goMaterialUnitConfig(advisory: ProductionPlanMaterialAdvisory | null | 
   });
 }
 
-// T138 方案A: 开工/开始/生成调拨单 的可操作 gate.
-// 后端 startProduction / createBatchFromPlan 严格只接受 PENDING (PLANNED → 409),
-// 所以这三个动作只在 PENDING 时展示, 避免对 PLANNED 计划点了直接报错.
-// (isPendingStatus 保留给取消按钮的展示范围, 不收窄.)
-function isStartable(status: string) {
-  return status === 'PENDING';
-}
+// T138 方案A 的开工/生成调拨单 gate (只接受 PENDING) 已并入 productionMoreActions.ts,
+// 与「更多」菜单项同源。(isPendingStatus 保留给取消按钮的展示范围, 不收窄.)
 
 function canPrintPlanDocuments(status: string) {
   return ['PENDING', 'CONFIRMED', 'APPROVED', 'IN_PROGRESS', 'COMPLETED'].includes(String(status || '').toUpperCase());
@@ -4045,8 +4048,13 @@ function guardProductionPlanAi(params: Record<string, unknown>) {
                 size="small"
                 @click="openArchiveCenter(row)"
               >档案与核算</el-button>
+            <!--
+              「更多」的显隐与每一项的显隐都出自 productionMoreCommands(row) 一个判据:
+              一项都没有就不渲染按钮 (2026-08-04: 进行中+非存货生产+已有产出的行原先会弹出
+              一个空白小方块), 也避免闸和菜单项两处口径各自漂移。
+            -->
             <el-dropdown
-              v-if="canShowProductionActions(row)"
+              v-if="canShowProductionActions(row) && productionMoreCommands(row).length > 0"
               trigger="click"
               @command="(command: ProductionActionCommand) => handleProductionActionCommand(command, row)"
             >
@@ -4055,35 +4063,47 @@ function guardProductionPlanAi(params: Record<string, unknown>) {
               </el-button>
               <template #dropdown>
                 <el-dropdown-menu>
+                  <!-- 防呆 Rule 1: 不可编辑时灰显并写清原因, 不让用户点开才知道 -->
                   <el-dropdown-item
-                    v-if="isStartable(row.status)"
+                    v-if="hasProductionMoreCommand(row, 'edit')"
+                    command="edit"
+                    :disabled="planEditBlockedReason(row) !== null || actionLoading"
+                  >{{ planEditBlockedReason(row) ? `编辑（${planEditBlockedReason(row)}）` : '编辑' }}</el-dropdown-item>
+                  <el-dropdown-item
+                    v-if="hasProductionMoreCommand(row, 'copy')"
+                    command="copy"
+                    :disabled="actionLoading"
+                  >复制为新计划</el-dropdown-item>
+                  <el-dropdown-item
+                    v-if="hasProductionMoreCommand(row, 'app-reporting')"
                     command="app-reporting"
+                    divided
                     :disabled="actionLoading"
                   >下发 APP 报工</el-dropdown-item>
                   <el-dropdown-item
-                    v-if="isStartable(row.status) && row.sourceType !== 'SAFETY_STOCK'"
+                    v-if="hasProductionMoreCommand(row, 'generate-transfer')"
                     command="generate-transfer"
                     :disabled="actionLoading"
                   >生成调拨单</el-dropdown-item>
                   <el-dropdown-item
-                    v-if="row.sourceType === 'SAFETY_STOCK'"
+                    v-if="hasProductionMoreCommand(row, 'reverse-interim-settle')"
                     command="reverse-interim-settle"
                     divided
                     :disabled="reverseInterimSettleLoadingId === String(row.id)"
                   >申请撤销小结</el-dropdown-item>
                   <el-dropdown-item
-                    v-if="row.sourceType === 'SAFETY_STOCK' && canStopPlan(row)"
+                    v-if="hasProductionMoreCommand(row, 'stop-production')"
                     command="stop-production"
                     :disabled="stopProductionLoadingId === String(row.id)"
                   >停产</el-dropdown-item>
                   <el-dropdown-item
-                    v-if="canCancelPlan(row)"
+                    v-if="hasProductionMoreCommand(row, 'cancel')"
                     command="cancel"
                     divided
                     :disabled="actionLoading"
                   >取消计划</el-dropdown-item>
                   <el-dropdown-item
-                    v-if="row.sourceType === 'SAFETY_STOCK' && !canStopPlan(row) && row.stopBlockedReason"
+                    v-if="hasProductionMoreCommand(row, 'stop-blocked')"
                     disabled
                   >停产：{{ row.stopBlockedReason }}</el-dropdown-item>
                 </el-dropdown-menu>

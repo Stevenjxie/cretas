@@ -25,6 +25,14 @@ describe('production plan list information architecture', () => {
     expect(operations).toContain('更多<el-icon');
     expect(operations).toContain('command="stop-production"');
     expect(operations).toContain('command="cancel"');
+    // 2026-08-04: 「更多」一项都没有时不渲染按钮 (原先会弹出空白小方块);
+    // 显隐闸与每一项的 v-if 同源于 productionMoreCommands, 行为断言见 productionMoreActions.spec.ts
+    expect(operations).toContain('productionMoreCommands(row).length > 0');
+    // PR #1538 改写行操作时丢掉的两个入口 (handleEditPlan / handleCopyPlan 一直都在, 只是没人调用)
+    expect(operations).toContain('command="edit"');
+    expect(operations).toContain('command="copy"');
+    expect(source).toContain('void handleEditPlan(row);');
+    expect(source).toContain('void handleCopyPlan(row);');
     expect(operations).not.toContain('生产操作<el-icon');
     expect(operations).not.toContain('生产单据<el-icon');
     expect(operations).not.toContain('追溯与核算<el-icon');
@@ -101,7 +109,9 @@ describe('production plan list information architecture', () => {
   it('separates inventory-production summaries from sales-order final settlement', () => {
     expect(source).toContain("return row.sourceType === 'SAFETY_STOCK' ? '生产小结' : '核对结单'");
     expect(source).toContain('command="stop-production"');
-    expect(source).toContain('v-if="row.sourceType === \'SAFETY_STOCK\'"');
+    // 存货生产专属项的判据已移入 productionMoreActions.ts (与「更多」显隐闸同源),
+    // 「撤销小结/停产只对存货生产出现」的行为断言在 productionMoreActions.spec.ts
+    expect(source).toContain("hasProductionMoreCommand(row, 'reverse-interim-settle')");
     expect(source).toContain('label="计划成品数量"');
     expect(source).toContain('数量来自销售订单产品行，创建生产计划时不可修改');
   });
