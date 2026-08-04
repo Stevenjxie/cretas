@@ -1476,16 +1476,15 @@ async function loadCostSummary(productTypeId = selectedProductTypeId.value) {
 
 // ========== Computed ==========
 const materialCostTotal = computed(() => {
+  // 标准成本 = 辅料 + 包材。原料没有数量（报工时才知道），不参与前端估算。
+  // 辅料成本由后端按 dosage_per_kg_g 归集，这里只汇总有明确每份用量的包材行。
   return bomItems.value.reduce((sum, item) => {
-    const qty = item.standardQuantity || 0;
-    const yieldRate = item.yieldRate != null ? (Number(item.yieldRate) || 100) / 100 : 1;
-    const price = item.unitPrice || 0;
-    return sum + (yieldRate > 0 ? (qty / yieldRate) * price : 0);
+    if (item.materialCategory !== 'PACKAGING') return sum;
+    const qty = Number(item.naturalQuantity) || 0;
+    const price = Number(item.unitPrice) || 0;
+    return sum + qty * price;
   }, 0);
 });
-const hasPendingActualMaterialUsage = computed(() => bomItems.value.some((item) =>
-  item.materialCategory !== 'PACKAGING' && item.standardQuantity == null,
-));
 
 const totalCost = computed(() => {
   return materialCostTotal.value;
@@ -2110,9 +2109,9 @@ watch(adjustDialogVisible, (visible) => {
         <small>可选，不影响生效</small>
       </div>
       <div v-if="canViewPrice" class="bom-summary-card">
-        <span>{{ hasPendingActualMaterialUsage ? '当前归集成本' : '当前总成本' }}</span>
+        <span>当前归集成本</span>
         <strong>{{ formatFriendlyNumber(costPerSkuUnit, 2) }} {{ costDisplayUnit }}</strong>
-        <small>{{ hasPendingActualMaterialUsage ? '原料实际用量待生产报工' : '按当前配方自动汇总' }}</small>
+        <small>原料实际用量待生产报工</small>
       </div>
     </div>
 
@@ -2455,9 +2454,8 @@ watch(adjustDialogVisible, (visible) => {
         </el-table>
         <!-- 副产页签不显示「原料成本合计」—— 那是投入侧的合计, 副产行不在其中 -->
         <div v-if="canViewPrice && activeCategoryTab !== 'AUXILIARY' && activeCategoryTab !== 'BYPRODUCT'" class="table-footer">
-          <span class="total-label">{{ hasPendingActualMaterialUsage ? '成本归集状态:' : '原料成本合计:' }}</span>
-          <span v-if="hasPendingActualMaterialUsage" class="total-value">实际原料用量待生产报工</span>
-          <span v-else class="total-value">{{ formatFriendlyNumber(estimatedMaterialCost, 2) }} {{ costDisplayUnit }}</span>
+          <span class="total-label">成本归集状态:</span>
+          <span class="total-value">实际原料用量待生产报工</span>
         </div>
       </el-card>
       </div>
@@ -2484,7 +2482,7 @@ watch(adjustDialogVisible, (visible) => {
         <el-card v-if="canViewPrice" class="bom-side-card" shadow="never">
           <template #header><strong>成本概览</strong></template>
           <div class="bom-cost-overview">
-            <div><span>原料成本</span><strong>{{ hasPendingActualMaterialUsage ? '待报工归集' : `${formatFriendlyNumber(estimatedMaterialCost, 2)} ${costDisplayUnit}` }}</strong></div>
+            <div><span>原料成本</span><strong>待报工归集</strong></div>
             <div class="is-total"><span>当前总成本</span><strong>{{ formatFriendlyNumber(costPerSkuUnit, 2) }} {{ costDisplayUnit }}</strong></div>
             <small v-if="costPerKg != null">{{ formatFriendlyNumber(costPerKg, 2) }} 元/kg</small>
             <p class="bom-cost-overview__note">历史出成率由正式报工自动统计。</p>
