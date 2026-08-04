@@ -19,6 +19,28 @@
 
 ---
 
+## ⚠️ 测试基线（执行前必读）
+
+`origin/main` 上 BOM 域**本来就有 5 个测试类是红的**，与本计划无关。已在 BASE commit 实测确认：
+
+```
+BomItemYieldRateTest                 5 run,  0F,  4E
+BomRecipeSeasoningServiceTest       14 run,  9F,  3E
+BomRecipePackagingSpecInferTest      8 run,  1F,  7E
+BomRecipeServiceImplAddItemTest     23 run,  7F, 13E
+BomRecipeServiceImplUomGuardTest    12 run,  6F,  6E
+────────────────────────────────────────────────────
+合计                                62 run, 23F, 33E
+```
+
+**因此本计划中所有「预期：全绿」一律读作「预期：无新增失败 —— 失败集合与上表逐类相同」。**
+
+判据：跑完后逐类比对 `Tests run / Failures / Errors` 三个数。任何一类数字变大，或出现上表之外的新失败类，才是回归。
+
+⛔ **不要去修上表里的历史失败** —— 它们不在本计划范围内，修它们会把 commit scope 撑爆且无法审查。
+
+---
+
 ## 三份计划的拆分（Scope Check 结论）
 
 设计文档 `docs/superpowers/specs/2026-08-04-bom-canvas-fusion-design.md` 覆盖三个能各自独立上线的子系统。硬塞进一个计划会做成没法执行的巨型文档，因此拆成三份：
@@ -305,7 +327,7 @@ mvn -q clean compile
 mvn test -Dtest='Bom*Test'
 ```
 
-预期：编译通过，测试全绿。
+预期：编译通过；`Bom*Test` 失败集合与基线表逐类相同，无新增。
 
 - [ ] **Step 5: 确认路由真的没了**
 
@@ -388,7 +410,7 @@ mvn -q clean compile
 mvn test -Dtest='Bom*Test'
 ```
 
-预期：全绿。
+预期：失败集合与基线表逐类相同，无新增。
 
 - [ ] **Step 5: JPA 启动闸自查**
 
@@ -540,7 +562,7 @@ grep -n "setTotalLaborCost\|setTotalOverheadCost" \
 mvn test -Dtest='BomRecipe*Test,BomCostSummaryCaliberTest'
 ```
 
-预期：全绿。
+预期：`BomRecipe*Test` 失败集合与基线表逐类相同，无新增；`BomCostSummaryCaliberTest` 3/3 绿。
 
 - [ ] **Step 7: 提交**
 
@@ -757,7 +779,7 @@ npx vitest run src/views/production/bom/__tests__/BomLegacyQuantityCleared.sourc
 npx vitest run src/views/production/bom
 ```
 
-预期：全绿。
+预期：全绿（前端 vitest 无历史失败基线）。
 
 - [ ] **Step 6: 确认没有残留引用**
 
@@ -823,7 +845,7 @@ mvn test -Dtest='*AIContext*Test'
 mvn test
 ```
 
-预期：全绿。若出现 mock 初始化整类失败，串行重跑（见 Task 1 Step 2 的注记）。
+预期：失败集合与基线表逐类相同，无新增。若出现 mock 初始化整类失败，串行重跑（见 Task 1 Step 2 的注记）。
 
 - [ ] **Step 5: 提交**
 
@@ -842,8 +864,8 @@ git show --name-only HEAD
 - [ ] `grep -rn '"/labor\|"/overhead' backend/java/cretas-api/src/main/java/com/cretas/aims/controller/` 无输出
 - [ ] `grep -rn 'laborCosts\|overheadCosts' web-admin/src/views/production/bom/index.vue` 无输出
 - [ ] `grep -rn 'hasPendingActualMaterialUsage' web-admin/src` 无输出
-- [ ] `cd backend/java/cretas-api && mvn test` 全绿
-- [ ] `cd web-admin && npx vitest run` 全绿
+- [ ] `cd backend/java/cretas-api && mvn test` 失败集合与基线表逐类相同，无新增
+- [ ] `cd web-admin && npx vitest run` 全绿（前端无历史失败基线）
 - [ ] BOM 页打开无 console 错误，成本卡显示「当前归集成本」，无人工/均摊区块
 - [ ] 数据库四个列仍存在（`bom_recipes.total_labor_cost` / `total_overhead_cost`、`bom_recipe_items.standard_quantity`、两张 config 表未删）
 
