@@ -16,6 +16,7 @@ import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 
 import { FAManagementStackParamList } from '../../../types/navigation';
 import { purchaseApiClient, CreatePurchaseOrderRequest } from '../../../services/api/purchaseApiClient';
+import { todayIso } from '../../../utils/orderDate';
 import { supplierApiClient, Supplier } from '../../../services/api/supplierApiClient';
 import {
   materialTypeApiClient,
@@ -172,6 +173,8 @@ export default function PurchaseOrderCreateScreen() {
 
     const payload: CreatePurchaseOrderRequest = {
       supplierId,
+      // 后端 @NotNull —— 不送就是 400「下单日期不能为空」。与销售建单口径一致(那边一直在送)。
+      orderDate: todayIso(),
       expectedDeliveryDate: header.expectedDeliveryDate || undefined,
       remark: header.remark || undefined,
       items: cleanedItems.map((it) => ({
