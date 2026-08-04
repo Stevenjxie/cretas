@@ -1324,8 +1324,25 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
     }
 
     /**
-     * Workflow plans already own one canonical runtime ProductionBatch. A finished process-sheet row must
-     * materialize into that batch; creating another plan-linked batch makes the runtime snapshot ambiguous.
+     * Workflow 计划开工时会生成一个运行批次 (ProductionBatch)。成品行**第一行**物化进那个批次，
+     * 之后的成品行各自开自己的批次 —— 与半成品道、副产品走同一条通路。
+     *
+     * <p><b>2026-08-04 放开</b>：原来这里是「运行批次上已有任何行 → 409」，理由写的是
+     * 「另开 plan-linked 批次会让运行时快照有歧义」。实际不会：歧义由
+     * {@code WorkflowClerkSheetServiceImpl#findWorkflowRuntime} 守，而它只统计
+     * {@code workflowSelectionMode == WORKFLOW} 的批次；{@code clerkService.materializeBatch}
+     * 建的批次不带这个模式（同半成品道的 CLK-W 批次）。prod 上同一张计划已长期并存
+     * 1 个 WORKFLOW 批次 + 7 个文员批次，报工页正常。
+     *
+     * <p>为什么必须放开：库存生产 (SAFETY_STOCK) 的产品口径是「一张计划一直生产下去」——
+     * 小结按 {@code sessionSeq} 分场次、每次小结各自生成成品批次、撤销能按场次精确逆转，
+     * 这一整套下游早就支持多批。唯独这里的成品行物化把「一张计划」钉成了「只能报一次成品」，
+     * 于是第一批入库后第二批永远报不进来（六膳门 2026-08-04 实撞）。
+     *
+     * <p>客户口径（2026-08-04 张权）：「本来小结前都是类似草稿的，小结了库存才入库的」
+     * 「多个批次就小结多次呗」。所以小结前允许多行成品（各自批次），一次小结把它们
+     * 按产品聚合成一个成品批次入库 —— 后者 {@code InterimSettleServiceImpl} 已实现
+     * （含单位一致性守卫、加权成本、撤销按聚合量逆转）。
      */
     private MaterializedBatch materializeSheetBatch(
             MaterializeContext ctx,
@@ -1348,11 +1365,9 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
             return clerkService.materializeBatch(ctx, steps, edges, warnings);
         }
         if (!rowRepo.findByFactoryIdAndBatchId(ctx.getFactoryId(), runtimeBatch.getId()).isEmpty()) {
-            throw new BusinessException(409, "Workflow 运行批次已关联其他逐道录入行")
-                    .withCode("WORKFLOW_RUNTIME_BATCH_ALREADY_REPORTED")
-                    .withHint("请刷新逐道录入页面，编辑已有成品道记录")
-                    .withSeverity("BLOCKING")
-                    .withHintTarget("Workflow");
+            // 运行批次已被本计划先前的成品行占用 → 这一行开自己的批次(下一批)。
+            // 走的是上面副产品分支同一个通路: 建出的批次不带 WORKFLOW 模式, 不参与运行时唯一性判定。
+            return clerkService.materializeBatch(ctx, steps, edges, warnings);
         }
         ctx.setBatchNumber(runtimeBatch.getBatchNumber());
         return clerkService.rematerializeInPlace(
