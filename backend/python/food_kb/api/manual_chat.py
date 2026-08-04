@@ -330,6 +330,15 @@ _FACTORY_BYPRODUCT_LIFECYCLE_ANSWER = """\
 3. 金额由后端统一计算，前端只展示结果，不能自行再算一套。
 
 **验收结果：** 副产批次位于生产仓，能回读物料 SKU、来源报工、实际数量和单位；盘点确认前后“未抵扣”与 0.00 可区分；采购和普通投入选择器不会把副产当作待采购投入。"""
+_FACTORY_CURRENT_GATES_ANSWER = """\
+当前工厂页面把单位、BOM/Workflow、可用库存和标签证据分别校验，不能用其中一项成功代替另一项。
+
+1. **单位与 SKU：** `只`、`个`、`件` 是三个独立计数单位，数量不变但页面、写入与回读保留真实字面；自定义单位可只填中文名，由系统生成不冲突的英文码。创建 SKU 时产品大类必填，缺失返回 `PRODUCT_CATEGORY_REQUIRED`，不能先落“未分类”。
+2. **BOM 与 Workflow：** 没有包材时不阻止激活；一旦添加包材行，角色、物料主档单位和大于 0 的每产品自然用量必须同时齐全，服务端一次返回全部缺项。BOM Family 的主产品仍须完整主投入，纯副产成员不因缺少重复主投入而被拦截。Workflow 物料节点缺 `skuId` 时返回 `WORKFLOW_MATERIAL_SKU_MISSING`，不能按名称猜 SKU。
+3. **收货与可用库存：** 采购入库 DRAFT 没有供应商供货单/收货凭证、附件仍在上传或上传失败时，确认按钮禁用；附件加载失败按无凭证处理。包装单位库存以及其它仓库的过期批次可以作为证据展示，但不计入当前生产仓可用量，也不能被正式报工扣减。
+4. **标签证据：** 生产日期最多可选当前日期后 3 天；Web 可按生产日期筛选并切换每页 200/500 条。单张可下载原图；批量下载按批次建目录生成 ZIP，任一选中照片缺失时整批失败。备份时间与人工审核结论分开，下载或备份成功不代表审核通过。
+
+**验收结果：** 保存后单位字面回读一致；BOM/Workflow 错误指出具体缺项或错误码；不可用库存只展示不扣减；下载包完整且审核状态仍以服务端人工结论为准。"""
 _RESTAURANT_SINGLE_DISH_MARGIN_ANSWER = """\
 中餐的单菜精确毛利算不准，也不能自动或实时算出每一道菜的真实毛利。
 
@@ -472,6 +481,15 @@ _RESTAURANT_STAFFING_SCOPE_ANSWER = """\
 4. 预订来源会明确标注模拟或平台；看板本身只读。一键调整必须先预览，再以相同计划指纹精确确认，写入带幂等回执和审计记录；数据或计划已变化时拒绝过期确认。
 
 请到 SmartBI 餐饮 AI 提问，或打开餐饮端“预测排班”；本导览助手不替用户计算真实经营数据。"""
+_RESTAURANT_LIVE_COMMAND_ANSWER = """\
+餐饮 AI 实时经营指挥屏是 Dashboard 上的事实与预测传输视图，不是让大模型现场编数字。
+
+1. **先看状态：** 页面明确区分等待、连接中、刷新中、实时、部分可用和失败。部分接口失败时只保留已成功事实并标出缺项，不能用旧值或 0 冒充完整实时结果。
+2. **事实分源：** 今日请领、待审批和当前预订来自 Java 经营汇总；近 15 分钟客流事件、明日预测客数、建议/当前人数、正向人力缺口和置信度来自 Python 预测 FactBook。不同单位不能相加，大模型不生成这些数字。
+3. **来源诚实：** 平台、内部汇总和模拟来源分别标注；模拟预订或客流只用于演示传输链路，不能冒充平台实单。
+4. **AI 与写入边界：** 排班页内 AI 的数字也只来自当前 FactBook，历史实际人效只作证据；大模型只解释风险与方法，不补数字、不杜撰因果。真正改排班仍须预览、相同计划指纹精确确认、乐观锁、幂等回执与审计，过期计划拒绝提交。
+
+餐饮导览助手只指向 Dashboard 指挥屏、预测排班和正确方法，不替用户计算或分析真实经营数据。"""
 
 
 def _uses_current_production_sop(query: str) -> bool:
@@ -643,6 +661,21 @@ def _needs_factory_byproduct_lifecycle_guard(query: str) -> bool:
     return mentions_byproduct and sum(lifecycle_signals) >= 2
 
 
+def _needs_factory_current_gates_guard(query: str) -> bool:
+    """Keep the 2026-08-04 unit, BOM, stock and label gates together."""
+    normalized = (query or "").lower()
+    signals = (
+        any(term in normalized for term in ("只、个、件", "自定义单位", "中文单位", "单位字面")),
+        any(term in normalized for term in ("sku 大类", "产品大类", "product_category_required", "收货凭证", "供货单", "确认收货入库")),
+        any(term in normalized for term in ("包材缺项", "自然用量", "bom family", "副产成员", "skuid", "workflow_material_sku_missing")),
+        any(term in normalized for term in ("包装单位库存", "其它仓库", "其他仓库", "过期批次", "可用量")),
+        any(term in normalized for term in ("标签照片", "批量下载", "zip", "生产日期", "200", "500")),
+    )
+    return sum(signals) >= 2 or any(
+        term in normalized for term in ("工厂当前门禁", "工厂新门禁", "单位、标签证据与 bom")
+    )
+
+
 def _needs_restaurant_context_scope_guard(query: str) -> bool:
     """Use the reviewed SmartBI session-scope contract for follow-up questions."""
     normalized = (query or "").lower()
@@ -745,6 +778,20 @@ def _needs_restaurant_staffing_scope_guard(query: str) -> bool:
         )
     )
     return mentions_staffing and mentions_scope
+
+
+def _needs_restaurant_live_command_guard(query: str) -> bool:
+    """Explain the live command screen without turning guidance into analysis."""
+    normalized = (query or "").lower()
+    mentions_screen = any(
+        term in normalized
+        for term in ("实时经营指挥屏", "经营指挥屏", "实时指挥", "近15分钟", "近 15 分钟")
+    )
+    mentions_contract = any(
+        term in normalized
+        for term in ("来源", "传输", "状态", "模拟", "factbook", "大模型", "排班", "预订", "客流")
+    )
+    return mentions_screen and mentions_contract
 
 
 def _needs_restaurant_flywheel_governance_guard(query: str) -> bool:
@@ -1723,6 +1770,11 @@ async def _prepare_generation(request: ManualChatRequest) -> _PreparedGeneration
     ):
         guard_answer = _FACTORY_BYPRODUCT_LIFECYCLE_ANSWER
     elif (
+        not is_restaurant_request
+        and _needs_factory_current_gates_guard(request.question)
+    ):
+        guard_answer = _FACTORY_CURRENT_GATES_ANSWER
+    elif (
         is_restaurant_request
         and _needs_restaurant_single_dish_margin_guard(request.question)
     ):
@@ -1752,6 +1804,11 @@ async def _prepare_generation(request: ManualChatRequest) -> _PreparedGeneration
         and _needs_restaurant_metric_entity_guard(request.question)
     ):
         guard_answer = _RESTAURANT_METRIC_ENTITY_ANSWER
+    elif (
+        is_restaurant_request
+        and _needs_restaurant_live_command_guard(request.question)
+    ):
+        guard_answer = _RESTAURANT_LIVE_COMMAND_ANSWER
     elif (
         is_restaurant_request
         and _needs_restaurant_staffing_scope_guard(request.question)
