@@ -28,6 +28,22 @@ vi.mock('@/api/request', () => ({
   put: apiMocks.put,
 }));
 
+// 2026-08-04: 编辑器加载完定义后会 scheduleBomUnifiedPanelPreload() —— jsdom 里没有
+// requestIdleCallback, 于是走 setTimeout(0) 立刻发起 `import('bom-unified/index.vue')`,
+// 那条链一路拉到 bom/index.vue → auth store → pinia。组件在 onUnmounted 里能取消的只是
+// **定时器**, 已经起飞的动态 import 取消不掉; 它在环境拆除之后才 resolve 就是
+// `EnvironmentTeardownError: Cannot load pinia ... after the environment was torn down`,
+// 一条未处理拒绝把整个 job 判红 —— 全部用例明明都是绿的 (2026-08-04 挂过 PR #2275 与
+// codex/pr-audit-photo-archive-retention-20260804 两个不相干分支)。
+//
+// 本 spec 用 shallowMount, 压根不渲染 BomUnifiedPanel, 也没有任何一条用例断言预加载 ——
+// 把 loader 整个 stub 掉即可: 既不再发起那次真实动态 import, 也顺带省掉一个重 chunk 的转译。
+vi.mock('../bomUnifiedPanelLoader', () => ({
+  BomUnifiedPanel: { name: 'BomUnifiedPanelStub', render: () => null },
+  preloadBomUnifiedPanel: vi.fn(() => Promise.resolve({})),
+  scheduleBomUnifiedPanelPreload: vi.fn(() => () => { /* 无定时器可取消 */ }),
+}));
+
 vi.mock('@/api/processProduction', () => ({
   getActiveWorkProcesses: apiMocks.getActiveWorkProcesses,
   getWorkProcessCategories: apiMocks.getWorkProcessCategories,
