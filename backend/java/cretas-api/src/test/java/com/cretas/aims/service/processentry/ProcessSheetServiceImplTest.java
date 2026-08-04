@@ -1133,9 +1133,21 @@ class ProcessSheetServiceImplTest {
         request.setOutputQuantity(new BigDecimal("10"));
         request.setOutputUnit("box");
         request.setUnit("box");
-        assertThat((BigDecimal) ReflectionTestUtils.invokeMethod(
-                target, "finishedOutputQuantity", request))
+        // 2026-08-04 修复长期红: 单产出的 finishedOutputQuantity 已被 #1898 (2026-07-27,
+        // 「preserve Workflow BOM SKU and family reporting」) 换成多产出的 finishedBomOutputs,
+        // 返回 (productTypeId, quantity, unit) 三元组以支持一次报 N 个成品。这条断言一直照旧
+        // 反射老方法名, 于是抛 IllegalState「Method not found」—— 红了 8 天没人动。
+        // 断言意图不变: 成品产出数量按**原生单位**取值(10 box 就是 10, 不做质量折算)。
+        List<?> reportedOutputs = ReflectionTestUtils.invokeMethod(
+                target, "finishedBomOutputs", request);
+        assertThat(reportedOutputs).as("单产出报工应解析出恰好一条成品产出").hasSize(1);
+        Object onlyOutput = reportedOutputs.get(0);
+        assertThat((BigDecimal) ReflectionTestUtils.invokeGetterMethod(onlyOutput, "quantity"))
                 .isEqualByComparingTo("10");
+        assertThat((String) ReflectionTestUtils.invokeGetterMethod(onlyOutput, "unit"))
+                .isEqualTo("box");
+        assertThat((String) ReflectionTestUtils.invokeGetterMethod(onlyOutput, "productTypeId"))
+                .isEqualTo(PRODUCT_TYPE_ID);
 
         List<ProductionStockAllocationService.AutomaticRequirement> requirements =
                 ReflectionTestUtils.invokeMethod(
