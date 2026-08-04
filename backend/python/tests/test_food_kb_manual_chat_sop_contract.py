@@ -480,11 +480,16 @@ def test_current_factory_gates_have_three_equivalent_routes_and_keep_fail_closed
         "标签生产日期和 ZIP 有什么规则，Workflow 缺 skuId 怎么处理？",
     ]
     assert all(_needs_factory_current_gates_guard(q) for q in equivalent_questions)
+    assert _needs_factory_current_gates_guard(
+        "clerk 逐道录入的 RawInput 为什么按批次库存单位填写数量？"
+    )
     assert not _needs_factory_current_gates_guard("BOM 怎么激活？")
     assert "不计入当前生产仓可用量" in _FACTORY_CURRENT_GATES_ANSWER
     assert "WORKFLOW_MATERIAL_SKU_MISSING" in _FACTORY_CURRENT_GATES_ANSWER
     assert "PRODUCT_CATEGORY_REQUIRED" in _FACTORY_CURRENT_GATES_ANSWER
     assert "确认按钮禁用" in _FACTORY_CURRENT_GATES_ANSWER
+    assert "clerk" in _FACTORY_CURRENT_GATES_ANSWER
+    assert "不二次做 g↔kg 换算" in _FACTORY_CURRENT_GATES_ANSWER
     assert "整批失败" in _FACTORY_CURRENT_GATES_ANSWER
 
 
