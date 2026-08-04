@@ -1,4 +1,4 @@
-import { isTaskReportComplete } from '../../../utils/operatorAssignedProcess';
+import { isTaskClaimableBy, isTaskReportComplete } from '../../../utils/operatorAssignedProcess';
 import { BatchYieldDTO, WorkProcessTask } from '../../../services/api/yieldReportApi';
 
 // ─── helpers ───────────────────────────────────────────────────────────────
@@ -155,5 +155,32 @@ describe('normal process (non-sentinel)', () => {
 
   it('hides when status is CANCELLED', () => {
     expect(isTaskReportComplete({ ...normalTask, status: 'CANCELLED' }, null)).toBe(true);
+  });
+});
+
+// ─── 未指派任务的可见性 (反锁死兜底) ────────────────────────────────────────
+
+describe('isTaskClaimableBy: 未指派工序任何操作员都能认领', () => {
+  const unassigned: WorkProcessTask = { ...baseTask, assignedTo: null };
+
+  it('指派给我 → 可认领', () => {
+    expect(isTaskClaimableBy({ ...baseTask, assignedTo: 7 }, 7)).toBe(true);
+  });
+
+  it('未指派 (assignedTo=null) → 可认领 — 与后端 ReportAuthGuard「允许集合为空即放行」一致', () => {
+    expect(isTaskClaimableBy(unassigned, 7)).toBe(true);
+  });
+
+  it('未指派 (assignedTo=undefined) → 可认领', () => {
+    expect(isTaskClaimableBy({ ...baseTask, assignedTo: undefined }, 7)).toBe(true);
+  });
+
+  it('指派给他人 → 不可认领 (这条不放开, 否则越权)', () => {
+    expect(isTaskClaimableBy({ ...baseTask, assignedTo: 9 }, 7)).toBe(false);
+  });
+
+  it('当前用户未知 (null) → 只认未指派的', () => {
+    expect(isTaskClaimableBy(unassigned, null)).toBe(true);
+    expect(isTaskClaimableBy({ ...baseTask, assignedTo: 7 }, null)).toBe(false);
   });
 });

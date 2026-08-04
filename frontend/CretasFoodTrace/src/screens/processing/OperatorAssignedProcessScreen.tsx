@@ -10,7 +10,7 @@ import { shortageAlertApiClient } from '../../services/api/shortageAlertApiClien
 import { useAuthStore } from '../../store/authStore';
 import { theme } from '../../theme';
 import type { ShortageAlertDetailParams } from './ShortageAlertDetailScreen';
-import { isTaskReportComplete } from '../../utils/operatorAssignedProcess';
+import { isTaskClaimableBy, isTaskReportComplete } from '../../utils/operatorAssignedProcess';
 import { groupShortageRequests } from '../../utils/shortageRequestGrouping';
 
 type OperatorAssignedProcessStackParamList = {
@@ -110,7 +110,9 @@ export default function OperatorAssignedProcessScreen() {
       }),
     );
     return uniqueTasks(chunks.flat())
-      .filter((task) => task.assignedTo === assignedTo)
+      // 未指派的工序也算我的候选 — 后端 findByFilters 已带出它们, 这里不能再筛掉,
+      // 否则「指派配置没人填」就把操作员锁死在空列表上 (见 isTaskClaimableBy 注释)。
+      .filter((task) => isTaskClaimableBy(task, assignedTo))
       .sort(compareAssignedTasks);
   }, []);
 
@@ -141,12 +143,12 @@ export default function OperatorAssignedProcessScreen() {
         const yieldRes = await yieldReportApi.getYield(batchRep.productionBatchId).catch(() => null);
         const yieldData = yieldRes?.success ? yieldRes.data : null;
         const myOpen = batchTasks.filter(
-          (t) => t.assignedTo === assignedTo && !isTaskReportComplete(t, yieldData),
+          (t) => isTaskClaimableBy(t, assignedTo) && !isTaskReportComplete(t, yieldData),
         );
         const myNext = myOpen[0];
         if (!myNext) continue; // 我在这批次已无待报工序
         const firstOpenTask = batchTasks.find((task) => !isTaskReportComplete(task, yieldData)) ?? null;
-        const reportable = !!firstOpenTask && firstOpenTask.assignedTo === assignedTo;
+        const reportable = !!firstOpenTask && isTaskClaimableBy(firstOpenTask, assignedTo);
         out.push({
           batchId: batchRep.productionBatchId,
           productTypeName:
