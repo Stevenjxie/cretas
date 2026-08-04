@@ -79,6 +79,18 @@ export interface PurchaseReceiveItem {
 
 export interface CreatePurchaseOrderRequest {
   supplierId: string;
+  /**
+   * 下单日期 (YYYY-MM-DD)。**必填** —— 后端 CreatePurchaseOrderRequest 上是
+   * `@NotNull(message = "下单日期不能为空")`。
+   *
+   * 2026-08-04 客户反馈「不能新建采购订单，提示 request failed code 400」的唯一原因就是
+   * 这个字段整个不在契约里: 界面没收集、类型没声明、payload 没送 —— TS 也就不会提醒。
+   * prod 实测: 按旧形状发 → 400「下单日期不能为空」(hintTarget: orderDate);
+   * 只补这一个字段 → 请求穿过校验进入业务层。
+   *
+   * 声明成**必填**而不是可选, 就是让 tsc 在每个调用点替我们守这条契约。
+   */
+  orderDate: string;
   expectedDeliveryDate?: string;
   remark?: string;
   items: {

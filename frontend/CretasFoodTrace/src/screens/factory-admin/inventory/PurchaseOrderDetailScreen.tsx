@@ -6,6 +6,7 @@ import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { FAManagementStackParamList } from '../../../types/navigation';
 import { purchaseApiClient, PurchaseOrder } from '../../../services/api/purchaseApiClient';
 import { formatNumberWithCommas } from '../../../utils/formatters';
+import { todayIso } from '../../../utils/orderDate';
 import { AttachmentList, AttachmentUploadButton } from '../../../components/attachment';
 
 type Nav = NativeStackNavigationProp<FAManagementStackParamList>;
@@ -78,6 +79,9 @@ export default function PurchaseOrderDetailScreen() {
             }));
             const res = await purchaseApiClient.updateOrder(orderId, {
               supplierId: order.supplierId,
+              // 后端 @NotNull —— 改备注也走整单更新契约, 不带就 400。
+              // 用单据自己的下单日期, 不是今天: 这是"改备注", 不该把历史单的下单日期改掉。
+              orderDate: order.orderDate || todayIso(),
               items,
               remark: newRemark || order.remark,
             });

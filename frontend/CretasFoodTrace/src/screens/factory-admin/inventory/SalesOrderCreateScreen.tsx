@@ -22,6 +22,7 @@ import { useAuthStore } from '../../../store/authStore';
 import { formatNumberWithCommas } from '../../../utils/formatters';
 import SearchableDropdown from '../../../components/report/SearchableDropdown';
 import { optionalTaxRate, packagingSpecsForUnit, salesUnitOptions } from '../../../utils/salesOrderDraft';
+import { todayIso } from '../../../utils/orderDate';
 
 type Nav = NativeStackNavigationProp<FAManagementStackParamList>;
 
@@ -37,7 +38,8 @@ interface DraftItem {
   packagingSpecs: ProductPackagingSpec[];
 }
 
-const todayIso = () => new Date().toISOString().slice(0, 10);
+// todayIso 收敛到 utils/orderDate —— 原来这里是私有副本, 且用 toISOString() 按 UTC 截断,
+// 东八区当天 08:00 前会把下单日期记成前一天。
 
 const tomorrowIso = () => {
   const next = new Date();
