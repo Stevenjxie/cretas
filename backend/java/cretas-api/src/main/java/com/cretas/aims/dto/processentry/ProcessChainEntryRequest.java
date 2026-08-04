@@ -102,12 +102,24 @@ public class ProcessChainEntryRequest {
          * 服务端不做任何换算 —— 见 {@code ClerkProcessEntryServiceImpl} 建 RAW 边处。
          * 所以传 5 给一个按 {@code g} 存的批次就是扣 5 g, 不是 5 kg。
          *
-         * <p>⚠️ 与姊妹路径口径<b>不同, 这不是遗漏</b>:
-         * {@code ProcessSheetServiceImpl#resolveEdges} 收的是<b>报工单位</b>, 带 unit 上来,
-         * 由 {@code convertReportingQuantityToStorage} 折成库存单位, 折不了的组合直接
-         * {@code PROCESS_SHEET_SOURCE_UNIT_MISMATCH} 拦住(已由
-         * {@code ProcessSheetWorkflowUnitNormalizationTest} 钉住)。两条路径<b>契约不同</b>:
+         * <p>⚠️ 与 {@code ProcessSheetServiceImpl#resolveEdges} 口径<b>不同, 这不是遗漏</b>:
+         * 那边收的是<b>报工单位</b>, 带 unit 上来, 由 {@code convertReportingQuantityToStorage}
+         * 折成库存单位, 折不了的组合直接 {@code PROCESS_SHEET_SOURCE_UNIT_MISMATCH} 拦住(已由
+         * {@code ProcessSheetWorkflowUnitNormalizationTest} 钉住)。两者<b>契约不同</b>:
          * 那条声明单位, 这条按库存单位。
+         *
+         * <p>⛔ <b>本入口当前没有任何前端在调</b>(2026-08-04 查证)。别把它当成"第二个报工入口"
+         * 来评估 —— 全系统在用的报工面是另外两个, 都不经过这里:
+         * <ul>
+         *   <li>{@code POST .../process-sheet/row} —— web-admin 工序单, <b>扣料走这条</b>
+         *       (它自己带 unit 并折算, 见上)</li>
+         *   <li>{@code POST .../work-reporting/reports} —— RN 手机端操作员对被指派工序报工;
+         *       {@code WorkReportingServiceImpl} <b>完全不碰 MaterialConsumption / MaterialBatch</b>,
+         *       即手机报工<b>不扣原料批次</b>, 本单位契约对它不适用</li>
+         * </ul>
+         * 判据: 判某后端路径"在不在用"要去<b>前端 API 层 grep 真实端点串</b>
+         * (web-admin {@code src/api/}、RN {@code src/services/api/}), 别拿 CSS 类名
+         * ({@code .process-entry-layout} 这种)或注释里的分支名当调用证据。
          *
          * <p>🔴 已知边界(2026-08-04 查证): 因为没有 unit 输入, 服务端<b>检测不出</b>调用方
          * 按 kg 传给一个 {@code g} 批次这种<b>欠扣</b>(会留下幻库存)。反向的<b>过扣</b>仍由

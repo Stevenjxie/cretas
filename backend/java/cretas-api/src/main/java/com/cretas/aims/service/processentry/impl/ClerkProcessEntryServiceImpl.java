@@ -206,10 +206,12 @@ public class ClerkProcessEntryServiceImpl implements ClerkProcessEntryService {
                         //    库存单位 (RawInput 连 unit 字段都没有, 见 ProcessChainEntryRequest.RawInput)。
                         //    这里原样入边 → MaterialConsumption.quantity → 小结时
                         //    InterimSettleServiceImpl 的 `usedQuantity += quantity`, 全链同一单位。
-                        // ⚠️ 别"顺手补一个 kg 换算": 姊妹路径 ProcessSheetServiceImpl#resolveEdges 折算,
+                        // ⚠️ 别"顺手补一个 kg 换算": ProcessSheetServiceImpl#resolveEdges 之所以折算,
                         //    是因为<b>它收的是报工单位且带 unit 上来</b>; 这条路径没有报工单位可折。
-                        //    在这里加 g↔kg 换算会让所有按 g 存的批次<b>少扣 1000 倍且不报错</b>(幻库存)。
-                        //    契约由 ClerkRawInputUnitContractTest 钉住 —— 加了换算它就红。
+                        //    加了换算会按补的方向错 1000 倍, <b>两个方向都危险</b>:
+                        //      当 kg 折成 g (×1000) → <b>多扣</b>, 小结时 BATCH_INSUFFICIENT 会拦 (响的);
+                        //      当 g 折成 kg (÷1000) → <b>少扣</b>, 无人拦截, 留下幻库存 (哑的, 更糟)。
+                        //    契约由 ClerkRawInputUnitContractTest 钉住(两个方向各一条断言) —— 加了换算它就红。
                         edges.add(new ResolvedEdge(rawMb, nz(ri.getQuantity()), "RAW_MATERIAL"));
                     }
                 }
