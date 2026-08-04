@@ -53,16 +53,27 @@ import static org.mockito.Mockito.when;
  *
  * <p><b>为什么需要这个测试</b>: {@code ClerkProcessEntryServiceImpl} 建 RAW 边时是
  * {@code new ResolvedEdge(rawMb, nz(ri.getQuantity()), "RAW_MATERIAL")} —— 直接原样入边。
- * 而姊妹路径 {@code ProcessSheetServiceImpl#resolveEdges} <b>会</b>调
+ * 而 {@code ProcessSheetServiceImpl#resolveEdges} <b>会</b>调
  * {@code convertReportingQuantityToStorage} 折算。两边看着不一致, 很容易被后来者判成
  * "clerk 这条漏了换算" 而"顺手补上"。
  *
  * <p><b>补上就是 bug</b>: clerk 的 {@code RawInput} <b>连 unit 字段都没有</b>
  * (见 {@code ProcessChainEntryRequest.RawInput}), 没有报工单位可折 —— 契约就是"传库存单位"。
- * 在那里加 g↔kg 换算, 会让所有按 {@code g} 存的批次<b>少扣 1000 倍且不报错</b>:
  * 消耗量经 {@code MaterialConsumption.quantity} (该表<b>无 unit 列</b>) 流到小结,
- * {@code InterimSettleServiceImpl} 做 {@code usedQuantity += quantity} 时按库存单位相加,
- * 于是成品产出了而原料没扣够 = 幻库存。过扣有 {@code BATCH_INSUFFICIENT} 兜底, <b>欠扣没有</b>。
+ * {@code InterimSettleServiceImpl} 做 {@code usedQuantity += quantity} 时按库存单位相加。
+ * 补换算会按补的方向错 1000 倍, <b>两个方向本测试各钉一条</b>:
+ * <ul>
+ *   <li>当 kg 折成 g (×1000, 写成 {@code 5000}) → <b>多扣</b>; 小结时
+ *       {@code BATCH_INSUFFICIENT} 会拦, 是<b>响的</b></li>
+ *   <li>当 g 折成 kg (÷1000, 写成 {@code 0.005}) → <b>少扣</b>; 无人拦截,
+ *       成品产出了而原料没扣够 = 幻库存, 是<b>哑的</b>, 更糟</li>
+ * </ul>
+ *
+ * <p>⛔ <b>本入口当前没有任何前端在调</b>(2026-08-04 查证) —— 在用的报工面是
+ * web-admin 工序单 ({@code .../process-sheet/row}, 扣料走它) 与 RN 手机端
+ * ({@code .../work-reporting/reports}, 不碰 MaterialConsumption/MaterialBatch, 即不扣原料)。
+ * 故本测试钉的是<b>给未来接入者的契约</b>, 不是在护今天的生产流程; 但
+ * {@code materializeBatch} 这个写核心仍被工序单那条复用, 改动仍有真实爆炸半径。
  *
  * <p>断言落在<b>捕获到的 {@code MaterialConsumption.quantity} 数值</b>上, 不是注释里的字符 ——
  * 加了换算它就红。
