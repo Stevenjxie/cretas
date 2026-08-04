@@ -376,11 +376,23 @@ void deleteOverheadCost(Long id);                                               
 - [ ] **Step 1: 先确认没有其他调用方**
 
 ```bash
-cd backend/java/cretas-api/src/main/java/com/cretas/aims
-grep -rnE "getLaborCostsByProduct|getGlobalLaborCosts|getAllLaborCosts|saveLaborCost|deleteLaborCost|getOverheadCosts|getActiveOverheadCosts|saveOverheadCost|updateOverheadCost|deleteOverheadCost" --include=*.java .
+cd backend/java/cretas-api
+# ⚠️ 必须扫 src 全树, 不能只扫 src/main —— 测试树里有真实调用方
+grep -rnE "getLaborCostsByProduct|getGlobalLaborCosts|getAllLaborCosts|saveLaborCost|deleteLaborCost|getOverheadCosts|getActiveOverheadCosts|saveOverheadCost|updateOverheadCost|deleteOverheadCost" src --include=*.java
+# 位置构造 BomServiceImpl 的测试(删字段会让它们编译不过)
+grep -rn "new BomServiceImpl(" src --include=*.java
 ```
 
-预期：只剩 `BomService.java` 与 `BomServiceImpl.java` 自身的定义行。若出现第三个文件，**停下来先看清那是谁**，不要直接删。
+**已实测的调用方清单（本计划初版把范围写成 `src/main/java`, 漏掉了测试树, 这里补全）**：
+
+| 文件 | 情况 | 处置 |
+|---|---|---|
+| `BomServiceImplUpdateOverheadCostTest.java` | 专测 `updateOverheadCost` 的 T-R5-3 回归测试 | **随方法一起删** —— 被测方法不存在了 |
+| `BomServiceImplPreTaxCaliberTest.java:37` | `new BomServiceImpl(3 个 repo)` 位置构造 | 改为单参 `new BomServiceImpl(bomItemRepository)`, 删两个 `@Mock` 字段 |
+| `BomServiceImplUomCostReconciliationTest.java:57` | 同上 | 同上 |
+| `BomDomainPriceFieldAdviceTest.java:214,232` | 断言 `getOverheadCosts().get(0)` | **不动** —— 它用 builder 手工造 DTO 测脱敏 advice, 不经 service |
+
+若扫出上表之外的文件，**停下来先看清那是谁**，不要直接删。
 
 - [ ] **Step 2: 删接口声明与实现**
 
