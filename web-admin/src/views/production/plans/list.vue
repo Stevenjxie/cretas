@@ -3355,19 +3355,23 @@ function canPrintPlanDocuments(status: string) {
  * 这一行现在是不是「等着仓库确认入库」。
  *
  * <p>判据复用 nextStepText 里已有的 postingStatus，不新造一套 —— 那正是
- * 「同一个闸多个承载点」的成因。两档都要放行：
- *   · PENDING_WAREHOUSE_RECEIPT — 结单后待入库；
- *   · PENDING_CLEARING          — 有差异挂在中转仓，同一个弹窗处理清账。
+ * 「同一个闸多个承载点」的成因。
  *
  * <p>2026-08-02: 此前模板根本没有这个按钮（handleWarehouseReceipt 是死代码），
  * 计划结单后「下一步」写着「仓库确认入库」，界面上却无处可点。
+ *
+ * <p><b>2026-08-04 收窄</b>：原来这里连 {@code PENDING_CLEARING} 一起放行，注释写着
+ * 「同一个弹窗处理清账」—— <b>代码里不是这样</b>。{@code handleWarehouseReceipt} 没有
+ * PENDING_CLEARING 分支，提交调的是 {@code confirmProductionWarehouseReceipt}（入库 API）；
+ * 清账有自己的 {@code handleTransitClearing} + {@code clearingDialog} + 清账 API，
+ * 而那一整套当时全文件零调用点。放行到这里的结果是：中转挂账的行点开的是入库弹窗，
+ * 清账永远做不成。现在这里只管待入库，清账由 {@code canClearTransit} 单独出口。
  */
 function needsWarehouseReceipt(row: TableRow): boolean {
   if (String(row.status || '').toUpperCase() !== 'COMPLETED') return false;
   const settlement = getSettlementStatus(row);
   if (!settlement) return false;
-  return settlement.postingStatus === 'PENDING_WAREHOUSE_RECEIPT'
-    || settlement.postingStatus === 'PENDING_CLEARING';
+  return settlement.postingStatus === 'PENDING_WAREHOUSE_RECEIPT';
 }
 
 function nextStepText(row: TableRow) {
@@ -4082,6 +4086,25 @@ function guardProductionPlanAi(params: Record<string, unknown>) {
                 :loading="receiptLoading && String(receiptRow?.id) === String(row.id)"
                 @click="handleWarehouseReceipt(row)"
               >仓库确认入库</el-button>
+              <!--
+                🔴 2026-08-04: 补回「中转挂账清账」入口 —— 结算链的最后一段。
+                #2176 补回上面那个按钮时, 把 PENDING_CLEARING 也算进了 needsWarehouseReceipt,
+                注释写的是「同一个弹窗处理清账」。但代码里不是: handleWarehouseReceipt 没有
+                PENDING_CLEARING 分支, 提交走的是 confirmProductionWarehouseReceipt(入库 API);
+                真正带清账 API 的 handleTransitClearing 与整个 clearingDialog 全文件**零调用点**
+                (同 handleWarehouseReceipt 当初那种死代码形状)。
+                后果: 实收短少超容差挂到中转仓后, 列表「下一步」明写「中转挂账清账」
+                (见 nextStepText), 用户点到的却是入库弹窗 —— 清账做不了。
+                判据复用既有的 canClearTransit(它已含 COMPLETED + PENDING_CLEARING + 写权限)。
+              -->
+              <el-button
+                v-if="canClearTransit(row)"
+                type="danger"
+                link
+                size="small"
+                :loading="clearingLoading && String(clearingRow?.id) === String(row.id)"
+                @click="handleTransitClearing(row)"
+              >中转挂账清账</el-button>
               <el-button
                 type="primary"
                 link

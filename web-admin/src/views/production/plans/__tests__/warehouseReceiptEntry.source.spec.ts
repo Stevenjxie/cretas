@@ -60,9 +60,16 @@ describe('仓库确认入库的入口', () => {
         const c = code(source);
         expect(c).toContain('function needsWarehouseReceipt');
         expect(c).toContain("settlement.postingStatus === 'PENDING_WAREHOUSE_RECEIPT'");
-        // 中转挂账那档也要能进同一个弹窗清账, 否则又漏一个承载点
-        expect(c, '漏了 PENDING_CLEARING 就是「一个闸漏一个承载点」')
-            .toContain("settlement.postingStatus === 'PENDING_CLEARING'");
+        // 2026-08-04 修正: 这里原本还断言 needsWarehouseReceipt 必须放行 PENDING_CLEARING,
+        // 依据是本文件当时那句「中转挂账那档也要能进同一个弹窗清账」—— 那句话是错的。
+        // handleWarehouseReceipt 从来没有 PENDING_CLEARING 分支, 提交调的是入库 API;
+        // 清账另有 handleTransitClearing + clearingDialog + 清账 API。放行到入库按钮的
+        // 结果是中转挂账的行点开入库弹窗, 清账做不成。断言改为钉住「两档各有各的出口」。
+        const receiptFn = c.match(/function needsWarehouseReceipt[\s\S]*?\n}/)?.[0] ?? '';
+        expect(receiptFn, '入库判据不该再吞掉清账那一档')
+            .not.toContain('PENDING_CLEARING');
+        expect(c, '清账要有自己的判据')
+            .toContain('function canClearTransit');
     });
 
     it('⛔ 只在真的待入库时才出现, 不是无条件常驻', () => {
