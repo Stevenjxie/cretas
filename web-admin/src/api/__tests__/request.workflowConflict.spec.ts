@@ -38,7 +38,7 @@ describe('request workflow conflict ownership', () => {
       status: 409,
       data: payload,
     }));
-    await flushAsyncImports();
+    await settleAsyncSurface();
 
     expect(elementMocks.notification).not.toHaveBeenCalled();
   });
@@ -57,7 +57,7 @@ describe('request workflow conflict ownership', () => {
       status: 409,
       actionHint: 'refresh latest data',
     }));
-    await flushAsyncImports();
+    await settleAsyncSurface();
 
     expect(elementMocks.notification).not.toHaveBeenCalled();
   });
@@ -72,7 +72,7 @@ describe('request workflow conflict ownership', () => {
     } as never);
 
     await expect(promise).rejects.toBeInstanceOf(ApiError);
-    await flushAsyncImports();
+    await waitForSurface(() => elementMocks.notification.mock.calls.length > 0);
 
     expect(elementMocks.notification).toHaveBeenCalledWith(expect.objectContaining({
       message: expect.stringContaining(`Request failed with ${errorCode}`),
@@ -106,6 +106,22 @@ function rejectingAdapter(
   };
 }
 
-async function flushAsyncImports(): Promise<void> {
-  await new Promise((resolve) => setTimeout(resolve, 50));
+// 全局错误提示是 interceptor 里 fire-and-forget 的异步分支 (showRichError 内部
+// `await import('element-plus')`), 断言前必须等它落地。
+//
+// 2026-08-04: 原实现是写死的 `setTimeout(50ms)` —— CI 上解析一次动态 import 超过 50ms
+// 是常事, 于是"该弹的没弹"变成 `Number of calls: 0` 随机红 (实测挂过 PR #2275)。
+// 正例改成轮询到条件成立: 命中即返回 (通常一两个 tick), 超时预算给足。
+async function waitForSurface(predicate: () => boolean, timeoutMs = 2000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (predicate()) return;
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+}
+
+// 反例 (断言"没有弹") 没有可等的正向信号, 只能等满预算 —— 等太短会变成**假绿**
+// (提示其实弹了, 只是断言跑在它前面), 那比红更糟。故意给到 50ms 的 10 倍。
+async function settleAsyncSurface(timeoutMs = 500): Promise<void> {
+  await new Promise((resolve) => setTimeout(resolve, timeoutMs));
 }
