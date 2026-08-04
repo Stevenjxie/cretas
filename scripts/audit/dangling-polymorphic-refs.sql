@@ -60,8 +60,11 @@ FROM material_batches b
 WHERE b.deleted_at IS NULL AND b.source_doc_type = 'MATERIAL_REQUISITION';
 
 \echo ''
-\echo '=== 3. 悬空按工厂 x 月份 (分辨"历史遗留" vs "还在新增") ==='
--- 判据: 只在旧月份出现 = 一次性事故的残留; 出现在**当月** = 还在持续产生, 要查根因。
+\echo '=== 3. 悬空按工厂 x 月份 (只看规模分布, ⛔不能用来判"是否还在新增") ==='
+-- ⛔ 这一列是**材料批次的创建时间**, <b>不是它变成悬空的时刻</b>。
+--    一次性删除会让"很久以前建的"和"昨天建的"同时变悬空 —— 当月有数字
+--    <b>不等于</b>还在持续产生。作者本人 2026-08-04 就是在这里读错, 得出
+--    "还在新增"的错误结论, 判据看 §3b。本节只用来看**规模与分布**。
 SELECT b.factory_id,
        to_char(b.created_at, 'YYYY-MM') AS 月份,
        count(*) AS 悬空数
@@ -72,6 +75,34 @@ WHERE b.deleted_at IS NULL
                   WHERE pb.id::text = b.source_doc_id)
 GROUP BY 1, 2
 ORDER BY 2 DESC, 3 DESC;
+
+\echo ''
+\echo '=== 3b. 是否还在新增? 按天对比 悬空 vs 完好 (这才是判据) ==='
+-- ✅ 正确判据: 拿**现存 production_batches 的时间下界**当分水岭。
+--    一次性删除的特征 = 分水岭之前<b>全悬空</b>, 之后<b>全完好</b>, 界限干净。
+--    若分水岭<b>之后</b>仍出现悬空 → 才是真的还在产生, 要查根因。
+--
+-- 2026-08-04 实测: 现存最早 production_batch = 2026-08-02 19:44:16 (id 10623);
+--   07-30~08-01 全悬空 / 08-02 当天 17 条中 9 条悬空(均在 19:44 前) / 08-03 起 4 条 0 悬空
+--   → 结论: **一次性事件, 已停止**, 没有活动中的触发条件。
+SELECT b.created_at::date AS 建于,
+       count(*) AS 产出批次总数,
+       count(*) FILTER (
+           WHERE NOT EXISTS (SELECT 1 FROM production_batches pb
+                             WHERE pb.id::text = b.source_doc_id)
+       ) AS 悬空
+FROM material_batches b
+WHERE b.deleted_at IS NULL
+  AND b.source_doc_type = 'PRODUCTION_BATCH'
+  AND b.created_at >= (
+      SELECT COALESCE(min(created_at), now()) - INTERVAL '7 days' FROM production_batches
+  )
+GROUP BY 1
+ORDER BY 1;
+
+\echo ''
+\echo '--- 分水岭: 现存最早的 production_batch (§3b 的界限) ---'
+SELECT min(id) AS 最小id, min(created_at) AS 分水岭 FROM production_batches;
 
 \echo ''
 \echo '=== 4. 仍有可用余量的悬空批次 (真正要人管的那些) ==='
