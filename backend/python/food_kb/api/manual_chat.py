@@ -1755,6 +1755,16 @@ async def _prepare_generation(request: ManualChatRequest) -> _PreparedGeneration
         guard_answer = _FACTORY_ACCOUNTING_PERIOD_OA_ANSWER
     elif (
         not is_restaurant_request
+        and _needs_factory_current_gates_guard(request.question)
+    ):
+        # A current-gates question can intentionally combine Workflow skuId,
+        # unavailable stock, label ZIP and clerk-unit rules.  Resolve that
+        # reviewed multi-signal contract before the older, narrower reporting
+        # guards so one shared keyword (for example "过期批次") cannot steal
+        # the route and omit the other requested gates.
+        guard_answer = _FACTORY_CURRENT_GATES_ANSWER
+    elif (
+        not is_restaurant_request
         and _needs_factory_reporting_runtime_guard(request.question)
     ):
         guard_answer = _FACTORY_REPORTING_RUNTIME_ANSWER
@@ -1773,11 +1783,6 @@ async def _prepare_generation(request: ManualChatRequest) -> _PreparedGeneration
         and _needs_factory_byproduct_lifecycle_guard(request.question)
     ):
         guard_answer = _FACTORY_BYPRODUCT_LIFECYCLE_ANSWER
-    elif (
-        not is_restaurant_request
-        and _needs_factory_current_gates_guard(request.question)
-    ):
-        guard_answer = _FACTORY_CURRENT_GATES_ANSWER
     elif (
         is_restaurant_request
         and _needs_restaurant_single_dish_margin_guard(request.question)

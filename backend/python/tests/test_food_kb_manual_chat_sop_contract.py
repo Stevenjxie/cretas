@@ -1112,6 +1112,12 @@ async def test_bom_workflow_publication_answer_never_calls_the_llm(monkeypatch):
             "f006-production-full-chain-sop.md",
         ),
         (
+            "Workflow 缺 skuId、其它仓库过期批次和标签 ZIP 下载分别怎么处理？",
+            "factory",
+            _FACTORY_CURRENT_GATES_ANSWER,
+            "f006-production-full-chain-sop.md",
+        ),
+        (
             "门店菜品不同月份继续追问时怎么保持时间范围？",
             "restaurant",
             _RESTAURANT_CONTEXT_SCOPE_ANSWER,
