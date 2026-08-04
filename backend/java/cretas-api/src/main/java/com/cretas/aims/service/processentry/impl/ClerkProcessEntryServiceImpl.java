@@ -202,6 +202,14 @@ public class ClerkProcessEntryServiceImpl implements ClerkProcessEntryService {
                                         ri.getMaterialBatchId(), factoryId)
                                 .orElseThrow(() -> new BusinessException(404,
                                         "原料批次不存在: " + ri.getMaterialBatchId()));
+                        // ⛔ 刻意<b>不做单位换算</b>: ri.getQuantity() 按契约已经是 rawMb 自己的
+                        //    库存单位 (RawInput 连 unit 字段都没有, 见 ProcessChainEntryRequest.RawInput)。
+                        //    这里原样入边 → MaterialConsumption.quantity → 小结时
+                        //    InterimSettleServiceImpl 的 `usedQuantity += quantity`, 全链同一单位。
+                        // ⚠️ 别"顺手补一个 kg 换算": 姊妹路径 ProcessSheetServiceImpl#resolveEdges 折算,
+                        //    是因为<b>它收的是报工单位且带 unit 上来</b>; 这条路径没有报工单位可折。
+                        //    在这里加 g↔kg 换算会让所有按 g 存的批次<b>少扣 1000 倍且不报错</b>(幻库存)。
+                        //    契约由 ClerkRawInputUnitContractTest 钉住 —— 加了换算它就红。
                         edges.add(new ResolvedEdge(rawMb, nz(ri.getQuantity()), "RAW_MATERIAL"));
                     }
                 }

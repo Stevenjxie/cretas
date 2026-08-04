@@ -94,6 +94,27 @@ public class ProcessChainEntryRequest {
     public static class RawInput {
         @NotBlank
         private String materialBatchId;      // 原料 MaterialBatch.id
+        /**
+         * 投料量 —— <b>单位是该批次自己的库存单位</b>({@code material_batches.quantity_unit}),
+         * <b>不是 kg</b>。
+         *
+         * <p>⛔ 本 DTO <b>刻意没有 unit 字段</b>: 逐道录入按批次记账, 数量照着选中批次的库存单位填,
+         * 服务端不做任何换算 —— 见 {@code ClerkProcessEntryServiceImpl} 建 RAW 边处。
+         * 所以传 5 给一个按 {@code g} 存的批次就是扣 5 g, 不是 5 kg。
+         *
+         * <p>⚠️ 与姊妹路径口径<b>不同, 这不是遗漏</b>:
+         * {@code ProcessSheetServiceImpl#resolveEdges} 收的是<b>报工单位</b>, 带 unit 上来,
+         * 由 {@code convertReportingQuantityToStorage} 折成库存单位, 折不了的组合直接
+         * {@code PROCESS_SHEET_SOURCE_UNIT_MISMATCH} 拦住(已由
+         * {@code ProcessSheetWorkflowUnitNormalizationTest} 钉住)。两条路径<b>契约不同</b>:
+         * 那条声明单位, 这条按库存单位。
+         *
+         * <p>🔴 已知边界(2026-08-04 查证): 因为没有 unit 输入, 服务端<b>检测不出</b>调用方
+         * 按 kg 传给一个 {@code g} 批次这种<b>欠扣</b>(会留下幻库存)。反向的<b>过扣</b>仍由
+         * 小结时的 {@code BATCH_INSUFFICIENT} 兜住({@code InterimSettleServiceImpl})。
+         * prod 实测 0 例: {@code g} 批次上共 4 条消耗, 入库/已用/消耗三者全一致;
+         * 全库「消耗量与入库量尺度异常」扫描 0 行。
+         */
         @NotNull
         private BigDecimal quantity;
     }
