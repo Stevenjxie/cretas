@@ -208,6 +208,15 @@ export interface SupplierPurchaseSpec {
   inventoryBaseUnit: string;
   factor: number;
   quotedPrice?: number | null;
+  /**
+   * 该规格没有自己的报价时, 后端用**本规格行声明的换算系数**把供应关系价折到该规格包装单位后的参考价。
+   * 客户 2026-07-30 表格第 38 行:「设完换算规格后不再自动填入供应商配好的采购单价」。
+   * 单位换算一律由后端做 —— 前端不碰单位数学 (见 utils/unitPricing.ts 的三种权威口径)。
+   */
+  derivedPrice?: number | null;
+  derivedPriceUnit?: string | null;
+  /** SUPPLIER_RELATION_SAME_UNIT / SUPPLIER_RELATION_CONVERTED；未推导时为空。 */
+  derivedPriceSource?: string | null;
   currency?: string | null;
   minOrderQuantity?: number | null;
   leadTimeDays?: number | null;

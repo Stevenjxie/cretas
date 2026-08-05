@@ -407,6 +407,8 @@ function priceSourceLabel(source: string | null | undefined): string {
   const labels: Record<string, string> = {
     SUPPLIER_SPEC: '供应商采购规格报价',
     SUPPLIER_RELATION: '供应商—物料默认采购价',
+    // 换算过的必须说出来 —— 采购员看到的数字不是他在供应商页面填的那个, 得知道它从哪来。
+    SUPPLIER_RELATION_CONVERTED: '供应商默认采购价 · 按本规格换算',
     MATERIAL_REFERENCE: '原料档案采购参考价',
     MANUAL: '本单手动价格',
     ORDER_SNAPSHOT: '订单历史价格快照',
@@ -456,6 +458,14 @@ function onPurchaseSpecChange(item: ProcurementOrderItem): void {
   if (hasConfiguredPrice(spec?.quotedPrice)) {
     item.unitPrice = Number(spec?.quotedPrice);
     item.priceSource = 'SUPPLIER_SPEC';
+  } else if (hasConfiguredPrice(spec?.derivedPrice)) {
+    // 客户 2026-07-30 (Sheet 第 38 行):「设完换算规格后不再自动填入供应商配好的采购单价」。
+    // 该规格没有自己的报价, 但后端已用这一行声明的「1 箱 = N kg」把关系价折到了包装单位。
+    // 换算是后端做的 —— 前端只搬数, 不碰单位数学 (utils/unitPricing.ts 的三种权威口径)。
+    item.unitPrice = Number(spec?.derivedPrice);
+    item.priceUnit = canonicalUnitCode(spec?.derivedPriceUnit || unit);
+    item.priceSource = spec?.derivedPriceSource === 'SUPPLIER_RELATION_CONVERTED'
+      ? 'SUPPLIER_RELATION_CONVERTED' : 'SUPPLIER_RELATION';
   } else {
     applyRelationPrice(item, relation, unit);
   }
