@@ -276,15 +276,14 @@ class GoldBackedRestaurantToolDelegateTest {
     }
 
     @Test
-    @DisplayName("DEMO_REST → delegate gate receives the RAW factoryId, not the RES_3101_009 gold alias")
+    @DisplayName("Delegate gate receives the RAW factoryId without any aliasing")
     void demoRestUsesRawFactoryIdForDelegateGate() throws Exception {
         // 2026-07-08 audit fix C-3: the single most deliberate decision in the
-        // Phase 2 gate is passing the RAW factoryId to Python (DEMO_REST has
-        // its own seeded restaurant-ops Gold data, V20260706_01; the
-        // resolveGoldFactoryId DEMO_REST→RES_3101_009 alias is for the OTHER
-        // GoldFinanceClient fetches only). This pins that behavior so a future
-        // refactor that moves the gate below resolveGoldFactoryId() fails here
-        // instead of silently breaking the public demo tenant.
+        // Phase 2 gate is passing the RAW factoryId to Python. Each tenant
+        // (including DEMO_REST) has its own seeded restaurant-ops Gold data
+        // (V20260706_01). This pins that behavior so a future refactor that
+        // modifies factoryId handling fails here instead of silently breaking
+        // the delegate gate.
         GoldFinanceClient gold = mock(GoldFinanceClient.class);
         when(gold.fetchTieredIntentAnswer(eq("DEMO_REST"), anyString(), eq("restaurant_peak_month_gold")))
                 .thenReturn(Map.of(

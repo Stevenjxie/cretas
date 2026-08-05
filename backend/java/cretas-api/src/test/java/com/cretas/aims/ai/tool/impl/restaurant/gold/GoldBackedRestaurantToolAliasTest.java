@@ -5,10 +5,6 @@ import static org.assertj.core.api.Assertions.assertThat;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
-import java.time.LocalDate;
-import java.util.Collections;
-import java.util.Map;
-
 /**
  * Alias deletion test for {@link GoldBackedRestaurantTool#resolveGoldFactoryId}.
  *
@@ -22,33 +18,7 @@ import java.util.Map;
  */
 class GoldBackedRestaurantToolAliasTest {
 
-    /**
-     * Create a minimal concrete subclass for testing the protected method.
-     */
-    private static class TestTool extends GoldBackedRestaurantTool {
-        @Override
-        protected Map<String, Object> queryGold(
-                String factoryId, LocalDate start, LocalDate end, Map<String, Object> params) {
-            return Collections.emptyMap();
-        }
-
-        @Override
-        protected Map<String, Object> format(Map<String, Object> goldResult) {
-            return Collections.emptyMap();
-        }
-
-        @Override
-        protected boolean isEmpty(Map<String, Object> goldResult) {
-            return true;
-        }
-
-        @Override
-        protected String emptyMessage() {
-            return "";
-        }
-    }
-
-    private final TestTool tool = new TestTool();
+    private final RestaurantPeakMonthGoldTool tool = new RestaurantPeakMonthGoldTool();
 
     @Test
     @DisplayName("DEMO_REST no longer aliased to RES_3101_009")
