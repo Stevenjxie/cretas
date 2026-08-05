@@ -27,13 +27,29 @@ describe('画布 BOM 抽屉已下线(真删除, 不是开关)', () => {
     expect(source).not.toContain('scheduleBomUnifiedPanelPreload');
   });
 
-  it('三个旧调用点都改指同一个跳转函数, 而不是被摘掉或留空', () => {
-    // :105 「缺少生效 BOM」横幅按钮 —— 用户实际点过的那个
-    expect(source).toMatch(/@click="goToBomManagement\(bomMissingProducts\[0\]\?\.id\)"/);
-    // :128 生产不一致横幅按钮
+  /**
+   * 原断言要求「三个旧调用点都改指同一个跳转函数, 而不是被摘掉或留空」——
+   * 它防的是 Phase 3-2 下抽屉时把入口静默丢掉。
+   *
+   * 2026-08-05 有意推翻其中一条: 冷启动已在画布内闭环(点 cell 即 ensureDraft 建首版),
+   * 「缺少生效 BOM」横幅不再需要把用户支去 BOM 页, 改成指向 cell 的文字引导。
+   * 这不是「静默摘掉」——替代路径由 bomMenuRetired.source.spec.ts 正面钉住。
+   * 其余两条仍必须保留跳转: 画布没有替代品。
+   */
+  it('仍需跳转的两个调用点没有被摘掉或留空', () => {
+    // 生产不一致横幅 —— 诊断用途, 画布无替代
     expect(source).toMatch(/@click="goToBomManagement\(bomProductionMismatchProducts\[0\]\?\.id\)"/);
-    // :247 物料 cell 的 config-bom 事件
+    // 物料 cell 的 config-bom 事件
     expect(source).toMatch(/@config-bom="\(\) => goToBomManagement\(\)"/);
+  });
+
+  it('缺少生效 BOM 横幅改为画布内引导, 且必须留下可点的替代路径', () => {
+    const at = source.indexOf('暂未读取到生效 BOM');
+    expect(at).toBeGreaterThan(-1);
+    const block = source.slice(at, at + 700);
+    expect(block).not.toMatch(/goToBomManagement/);
+    // ⛔ 只允许「换成别的路径」, 不允许「换成什么都没有」
+    expect(block).toMatch(/辅料 \/ 包材 \/ 副产 cell/);
   });
 
   /** 从 start 截到下一个顶层声明为止, 近似取出整个函数体。 */

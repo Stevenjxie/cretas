@@ -23,7 +23,10 @@ describe('seasoning BOM integration source contract', () => {
     expect(workflowEditorSource).toContain('async function goToBomManagement');
     expect(workflowEditorSource).toContain('if (dirty.value && !(await saveDraft()))');
     expect(workflowEditorSource).toMatch(/router\.push\(\{\s*name:\s*'BomManagement',\s*query:\s*\{\s*productTypeId:/);
-    expect(workflowEditorSource).toContain('goToBomManagement(bomMissingProducts[0]?.id)');
+    // 2026-08-05: 「缺少生效 BOM」横幅的跳转按钮已移除 —— 冷启动改为在画布内闭环
+    // (点 cell 即 ensureDraft 建首版)。仍需跳转的调用点改用生产不一致横幅那条来钉,
+    // 否则这里会因为一个有意的下架而红, 却读起来像跳转整体坏了。
+    expect(workflowEditorSource).toContain('goToBomManagement(bomProductionMismatchProducts[0]?.id)');
     expect(workflowEditorSource).toContain('targetIds.includes(productTypeId.value)');
     expect(workflowEditorSource).not.toContain('openBomDrawer');
     // 独立 BOM 页(bom-unified 外壳 + BomContent)仍然支持按 productTypeId 定位到某产品——

@@ -120,12 +120,7 @@
           >
             生效该草稿 →
           </el-button>
-          <el-button
-            link
-            @click="goToBomManagement(bomDraftNotices[0]?.productTypeId)"
-          >
-            去 BOM 页查看
-          </el-button>
+
         </template>
       </el-alert>
 
@@ -140,14 +135,12 @@
           {{ bomMissingProducts.map((item) => item.name).join('、') }} 暂未读取到生效 BOM
         </template>
         <template #default>
-          <span>此处仅供配置参考；点击“自动同步并发布”后，系统会重新执行权威检查。</span>
-          <el-button
-            link
-            type="primary"
-            @click="goToBomManagement(bomMissingProducts[0]?.id)"
-          >
-            去 BOM 配置 →
-          </el-button>
+          <!-- 冷启动已在画布内闭环: 直接点辅料/包材/副产 cell 即会建首版草稿,
+               不必再把用户支去别的页面。 -->
+          <span>
+            直接在下方的辅料 / 包材 / 副产 cell 上配置即可，系统会自动建立首版草稿；
+            点击“自动同步并发布”后会重新执行权威检查。
+          </span>
         </template>
       </el-alert>
 

@@ -104,11 +104,12 @@ const rawMenuConfig: MenuItem[] = [
         hideForFactoryTypes: ['RESTAURANT'] },
       { path: '/system/product-processes', title: '产品-工序配置', icon: '', module: 'production',
         hideForFactoryTypes: ['RESTAURANT'] },
-      // 调料维护已并入 /production/bom 的「原辅料配方 > 辅料」工序视图；旧路由仅作兼容重定向
-      // T125: 转换率配置菜单入口已隐藏 — 后端 API/表/fallback 仍保留 (F001等老工厂 BomExpansionService 依赖)
-      // 维护路径: /production/bom → bom-unified 「转换率」tab (高级维护用)
-      { path: '/production/bom', title: 'BOM/配方维护', icon: '', module: 'production' },
-      { path: '/production/bom/versions', title: 'BOM版本管理', icon: '', module: 'production' },
+      // 调料维护已并入产品-工序配置画布的「辅料 cell」；旧路由仅作兼容重定向
+      // T125: 转换率配置菜单入口早已隐藏 — 后端 API/表/fallback 仍保留 (F001等老工厂
+      // BomExpansionService 依赖)。2026-08-05 拍板转换率不再往画布搬, 维护走 API/DB。
+      // BOM 配置已并入产品-工序配置画布(辅料/包材/副产 cell + 草稿生效横幅), 菜单入口于
+      // 2026-08-05 摘除。⛔ 只下入口不删机器: 路由与页面组件保留, 既不让既有深链 404,
+      // 也留出「BOM 与 Workflow 不一致」诊断横幅的查看通道。
       { path: '/production/bom/ecns', title: '工程变更通知', icon: '', module: 'production' },
       { path: '/rd/samples', title: '研发样品', icon: '', module: 'production' },
       { path: '/analytics/production-report', title: '车间实时生产报表', icon: '', module: 'analytics',
