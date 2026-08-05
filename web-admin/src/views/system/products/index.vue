@@ -95,6 +95,7 @@ import {
 } from '@/api/processProduction';
 import type { TableRow } from '@/types/api';
 import { productAiGuard } from '@/utils/aiEntryGuards';
+import { canWriteProductMaster, canWriteProductProcess } from './productWriteGates';
 
 // 产品分类定义 (全量 — 仅用于标签渲染/历史数据兼容; 原料/包辅材/调味品 是遗留物料类, 物料应在"原料类型字典"管理)
 const PRODUCT_CATEGORIES = [
@@ -176,9 +177,12 @@ const factoryId = computed(() => authStore.factoryId);
 // {"production:read_write", "rd:read_write"} —— 与 system 无关。
 // 这里原本按 canWrite('system') 决定显不显示, 于是「调度」(production/rd 可写、system 只读)
 // 明明有权限建产品, 界面却把「新增 SKU」整个藏了 —— 客户 2026-08-05「无法新建产品了」。
-const canWrite = computed(() => (
-  permissionStore.canWrite('production') || permissionStore.canWrite('rd')
-));
+const canWriteProcess = computed(() => canWriteProductProcess(probe));
+
+// 两把闸的判据抽在 ./productWriteGates —— 写在这里只能靠源码 grep 断言, 而 grep 对
+// 「两把闸被合并成一把」是沉默的 (合并后两个模块名仍然都在文件里)。
+const probe = (module: string) => permissionStore.canWrite(module);
+const canWrite = computed(() => canWriteProductMaster(probe));
 const canViewPrice = computed(() => permissionStore.canViewPrice);
 const canEditMarginRedline = computed(() => permissionStore.canWrite('finance'));
 
@@ -2194,9 +2198,13 @@ watch(aiProductDialogVisible, (visible) => {
       </el-form>
       <template #footer>
         <el-button @click="dialogVisible = false">取消</el-button>
-        <el-button type="primary" :loading="submitting" @click="handleSubmit">
+        <el-tooltip :disabled="canWrite" content="需要生产或研发写权限才能保存产品资料" placement="top">
+          <span>
+        <el-button type="primary" :loading="submitting" :disabled="!canWrite" @click="handleSubmit">
           确定
         </el-button>
+          </span>
+        </el-tooltip>
       </template>
     </el-dialog>
 
@@ -2520,6 +2528,14 @@ watch(aiProductDialogVisible, (visible) => {
       size="560px"
       direction="rtl"
     >
+      <el-alert
+        v-if="!canWriteProcess"
+        type="info"
+        :closable="false"
+        show-icon
+        title="只读查看：需要生产模块写权限才能增删或调整工序顺序"
+        style="margin-bottom: 12px;"
+      />
       <div v-loading="processLoading" class="process-config">
         <!-- 已关联工序（右侧） -->
         <div class="process-section">
@@ -2544,9 +2560,9 @@ watch(aiProductDialogVisible, (visible) => {
                 </div>
               </div>
               <div class="linked-actions">
-                <el-button :icon="Rank" link size="small" :disabled="idx === 0" @click="handleMoveProcess(idx, 'up')" title="上移" aria-label="上移工序" />
-                <el-button :icon="Rank" link size="small" :disabled="idx === linkedProcesses.length - 1" @click="handleMoveProcess(idx, 'down')" title="下移" aria-label="下移工序" />
-                <el-button :icon="DeleteIcon" link size="small" type="danger" title="移除" aria-label="移除工序" @click="handleRemoveProcess(item)" />
+                <el-button :icon="Rank" link size="small" :disabled="idx === 0 || !canWriteProcess" @click="handleMoveProcess(idx, 'up')" title="上移" aria-label="上移工序" />
+                <el-button :icon="Rank" link size="small" :disabled="idx === linkedProcesses.length - 1 || !canWriteProcess" @click="handleMoveProcess(idx, 'down')" title="下移" aria-label="下移工序" />
+                <el-button :icon="DeleteIcon" link size="small" type="danger" title="移除" aria-label="移除工序" :disabled="!canWriteProcess" @click="handleRemoveProcess(item)" />
               </div>
             </div>
           </div>
@@ -2603,6 +2619,7 @@ watch(aiProductDialogVisible, (visible) => {
                 size="small"
                 :icon="Plus"
                 :loading="addingProcessId === proc.id"
+                :disabled="!canWriteProcess"
                 @click="handleAddProcess(proc.id)"
               >
                 添加
