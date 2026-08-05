@@ -1,7 +1,13 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { BOM_OVERLAY_PREFIX, isBomOverlayNode, stripBomOverlay, stripBomOverlayEdges } from '../bomOverlay';
+import {
+  BOM_OVERLAY_PREFIX,
+  deriveBomOverlay,
+  isBomOverlayNode,
+  stripBomOverlay,
+  stripBomOverlayEdges,
+} from '../bomOverlay';
 
 describe('BOM 浮层节点与工艺定义隔离', () => {
   it('浮层节点 id 带固定前缀', () => {
@@ -73,5 +79,82 @@ describe('编辑器序列化不带浮层', () => {
     // 钉死「edges: 后面必须经过 stripBomOverlayEdges」, 换成裸 flowEdges 就红
     expect(source).toMatch(/edges:\s*stripBomOverlayEdges\(flowEdges\.value\)\.map\(serializeFlowEdge\)/);
     expect(source).not.toMatch(/edges:\s*flowEdges\.value\.map\(serializeFlowEdge\)/);
+  });
+});
+
+const processNode = (id: string, x: number, y: number) =>
+  ({ id, kind: 'PROCESS' as const, position: { x, y }, data: { processName: '腌制' } });
+const outputNode = (id: string, x: number, y: number) =>
+  ({ id, kind: 'FINISHED_GOOD' as const, position: { x, y }, data: { name: '酱鸭腿' } });
+
+describe('从 BOM 派生浮层', () => {
+  it('每道有辅料的工序派生一个辅料 cell, 挂在工序正上方', () => {
+    const { nodes } = deriveBomOverlay({
+      workflowNodes: [processNode('p1', 300, 400)],
+      auxiliaryByProcess: { p1: [{ materialName: '食盐', dosageText: '12 g/kg', markers: [] }] },
+      packagingByOutput: {},
+    });
+    const aux = nodes.find((n) => n.id === `${BOM_OVERLAY_PREFIX}aux:p1`);
+    expect(aux).toBeTruthy();
+    expect(aux!.position.y).toBeLessThan(400);
+    expect(aux!.type).toBe('bomAuxiliary');
+  });
+
+  it('没有辅料的工序也派生 cell —— 空态必须可见', () => {
+    const { nodes } = deriveBomOverlay({
+      workflowNodes: [processNode('p1', 300, 400)],
+      auxiliaryByProcess: {},
+      packagingByOutput: {},
+    });
+    const aux = nodes.find((n) => n.id === `${BOM_OVERLAY_PREFIX}aux:p1`);
+    expect(aux, '空态 cell 不能不渲染 —— 用户要看得见「未配」').toBeTruthy();
+    expect(aux!.data.rows).toEqual([]);
+  });
+
+  it('每个终端产出派生一个包材 cell, 挂在产出右侧', () => {
+    const { nodes } = deriveBomOverlay({
+      workflowNodes: [outputNode('o1', 900, 200)],
+      auxiliaryByProcess: {},
+      packagingByOutput: { o1: [{ materialName: '真空袋', dosageText: '1 个/盒', markers: [] }] },
+    });
+    const pack = nodes.find((n) => n.id === `${BOM_OVERLAY_PREFIX}pack:o1`);
+    expect(pack).toBeTruthy();
+    expect(pack!.position.x).toBeGreaterThan(900);
+    expect(pack!.type).toBe('bomPackaging');
+  });
+
+  it('派生的连线是虚线且两端正确', () => {
+    const { edges } = deriveBomOverlay({
+      workflowNodes: [processNode('p1', 300, 400), outputNode('o1', 900, 200)],
+      auxiliaryByProcess: { p1: [] },
+      packagingByOutput: { o1: [] },
+    });
+    const auxEdge = edges.find((e) => e.source === `${BOM_OVERLAY_PREFIX}aux:p1`);
+    expect(auxEdge!.target).toBe('p1');
+    expect(auxEdge!.animated || auxEdge!.style?.strokeDasharray).toBeTruthy();
+    const packEdge = edges.find((e) => e.target === `${BOM_OVERLAY_PREFIX}pack:o1`);
+    expect(packEdge!.source).toBe('o1');
+  });
+
+  it('原料与半成品节点不派生任何浮层', () => {
+    const { nodes } = deriveBomOverlay({
+      workflowNodes: [
+        { id: 'm1', kind: 'RAW_MATERIAL', position: { x: 0, y: 0 }, data: { name: '鸭腿' } },
+        { id: 's1', kind: 'SEMI_FINISHED', position: { x: 0, y: 0 }, data: { name: '坯' } },
+      ],
+      auxiliaryByProcess: {},
+      packagingByOutput: {},
+    });
+    expect(nodes).toEqual([]);
+  });
+
+  it('所有派生节点 id 都带浮层前缀', () => {
+    const { nodes } = deriveBomOverlay({
+      workflowNodes: [processNode('p1', 300, 400), outputNode('o1', 900, 200)],
+      auxiliaryByProcess: { p1: [] },
+      packagingByOutput: { o1: [] },
+    });
+    expect(nodes.length).toBeGreaterThan(0);
+    expect(nodes.every((n) => n.id.startsWith(BOM_OVERLAY_PREFIX))).toBe(true);
   });
 });
