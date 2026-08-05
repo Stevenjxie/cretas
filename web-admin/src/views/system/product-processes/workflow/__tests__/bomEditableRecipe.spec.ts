@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { isWritableRecipe, pickEditableRecipe } from '../bomEditableRecipe';
+import { buildDraftBomNotice, isWritableRecipe, pickEditableRecipe } from '../bomEditableRecipe';
 
 /**
  * 这些用例钉的是 2026-08-05 prod 实测到的死锁:
@@ -41,6 +41,34 @@ describe('画布解析可编辑 BOM 版本', () => {
     expect(pickEditableRecipe([])).toBeNull();
     expect(pickEditableRecipe(null)).toBeNull();
     expect(pickEditableRecipe(undefined)).toBeNull();
+  });
+
+  describe('草稿未生效必须说出来', () => {
+    it('解析到草稿时给出提示, 并带上产线此刻在用的版本号', () => {
+      const notice = buildDraftBomNotice('p1', '干式熟成鸡 400g', [archived, active, draft]);
+      expect(notice).toEqual({
+        productTypeId: 'p1',
+        productName: '干式熟成鸡 400g',
+        recipeId: 'r3',
+        draftVersion: 3,
+        activeVersion: 2,
+      });
+    });
+
+    it('没有草稿时不提示 —— 画布显示的就是生产口径', () => {
+      expect(buildDraftBomNotice('p1', 'x', [archived, active])).toBeNull();
+    });
+
+    it('全新产品的首版草稿也要提示, 此时产线没有任何生效版本', () => {
+      const notice = buildDraftBomNotice('p2', 'y', [{ id: 'd0', version: 1, status: 'DRAFT' }]);
+      expect(notice?.draftVersion).toBe(1);
+      expect(notice?.activeVersion).toBeNull();
+    });
+
+    it('无版本时不提示而不是抛错', () => {
+      expect(buildDraftBomNotice('p3', 'z', [])).toBeNull();
+      expect(buildDraftBomNotice('p3', 'z', null)).toBeNull();
+    });
   });
 
   it('只有 DRAFT 可直接写入; 生效版必须先 ensureDraft', () => {

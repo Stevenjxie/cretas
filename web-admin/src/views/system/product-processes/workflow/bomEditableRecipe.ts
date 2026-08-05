@@ -47,3 +47,38 @@ export function pickEditableRecipe<T extends RecipeVersionLike>(versions: T[] | 
 export function isWritableRecipe(recipe: RecipeVersionLike | null | undefined): boolean {
   return upper(recipe?.status) === 'DRAFT';
 }
+
+export interface DraftBomNotice {
+  productTypeId: string;
+  productName: string;
+  recipeId: string;
+  draftVersion: number | null;
+  /** 生产此刻仍在用的版本号; 没有生效版时为 null(全新产品的首版草稿)。 */
+  activeVersion: number | null;
+}
+
+/**
+ * 画布展示的是「可编辑版本」(见 pickEditableRecipe), 一旦它是草稿, 画布上看到的
+ * 就不是产线在跑的配方 —— 而画布自己既不显示 BOM 版本状态, 也没有生效入口。
+ *
+ * 2026-08-05 实测: 从画布加了一条包材后, 画布显示 2 条(草稿 v3), 产线仍是 1 条
+ * (生效 v2), 用户没有任何提示。改前写入是响亮失败(409), 改后变成静默不生效 ——
+ * 更隐蔽。所以只要解析到草稿, 就必须把这件事说出来并给出生效入口。
+ */
+export function buildDraftBomNotice<T extends RecipeVersionLike>(
+  productTypeId: string,
+  productName: string,
+  versions: T[] | null | undefined,
+): DraftBomNotice | null {
+  const editable = pickEditableRecipe(versions);
+  if (!editable || !isWritableRecipe(editable)) return null;
+
+  const active = (versions ?? []).find((item) => upper(item.status) === 'ACTIVE');
+  return {
+    productTypeId,
+    productName,
+    recipeId: editable.id,
+    draftVersion: editable.version ?? null,
+    activeVersion: active?.version ?? null,
+  };
+}
