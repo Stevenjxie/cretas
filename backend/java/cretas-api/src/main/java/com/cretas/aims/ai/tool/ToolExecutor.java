@@ -213,4 +213,19 @@ public interface ToolExecutor {
     default Set<String> getDomainTags() {
         return Set.of();
     }
+
+    /**
+     * 该工具属于哪个工作台岗位；不属于任何岗位时返回 {@code null}。
+     *
+     * <p>默认 {@code null} —— 全仓绝大多数 Tool 没有岗位归属，让它们保持沉默比
+     * 逼每个类都声明一次更诚实。只有注释里带 {@code Sprint 8 P4x <岗位> Workdesk}
+     * 显式标记的工具才覆写此方法。
+     *
+     * <p>⚠️ 与 {@link #hasPermission(String)} 正交，<b>不要用它做权限判断</b>：
+     * 这里返回 null 只意味着「这不是某个岗位的日常活」，不意味着谁都不能调。
+     * 权限回答「我能不能调」（安全），岗位回答「这是不是我的活」（发现性）。
+     */
+    default WorkdeskRole workdeskRole() {
+        return null;
+    }
 }
