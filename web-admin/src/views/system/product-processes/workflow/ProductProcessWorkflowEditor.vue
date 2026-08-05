@@ -645,6 +645,7 @@ import { classifyOutputSkuCategory, matchOutputSkuByName } from './outputSkuClas
 import { needsPrimaryOutputKindUpdate } from './processOutputKindCompatibility';
 import { usePinyinFilter } from './pinyinInitials';
 import { classifyWorkflowTopology } from './workflowClassification';
+import { stripBomOverlay } from './bomOverlay';
 import {
   activateProductProcessWorkflow,
   deactivateProductProcessWorkflow,
@@ -984,7 +985,9 @@ let cancelBomPanelPreload: (() => void) | null = null;
 const productTypeId = computed(() => props.productTypeId);
 const rawOwnerMode = computed(() => props.rawOwnerMode === true);
 const derivedWorkflowClassification = computed(() => classifyWorkflowTopology(
-  flowNodes.value.map((node) => ({
+  // ⛔ 浮层节点(辅料/包材 cell)不是画布拓扑的一部分, 混进去会把
+  // rootInputCount/terminalOutputCount 算错, 让「系统研判」标签失真。
+  stripBomOverlay(flowNodes.value).map((node) => ({
     id: node.id,
     kind: nodeKind(node),
     skuId: typeof node.data?.skuId === 'string' ? node.data.skuId : undefined,
@@ -1834,7 +1837,9 @@ function currentDefinition(): ProductProcessWorkflowDefinition {
   return {
     ...toPlainWorkflowValue(base),
     status: base.status,
-    nodes: flowNodes.value.map(serializeFlowNode),
+    // ⛔ 浮层节点(辅料/包材 cell)是 BOM 数据的投影, 不属于工艺定义。
+    // 混进去会改 revision hash → 改一克盐就让所有 BOM 需要重新对齐。
+    nodes: stripBomOverlay(flowNodes.value).map(serializeFlowNode),
     edges: flowEdges.value.map(serializeFlowEdge),
     viewport: { x: viewport.x, y: viewport.y, zoom: viewport.zoom },
   };
