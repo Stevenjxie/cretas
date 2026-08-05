@@ -46,6 +46,17 @@ export function markersForAuxiliaryRow(row: AuxiliaryRowInput): BomRowMarker[] {
       title: `按锅序投料 · 后续锅次 ${percent}%`,
     });
   }
+  // ⚠️ SHOULD-FIX #5 已知限制(未修, 无后端改动的前提下无法对齐): 这个 ◷ 标记按
+  // workflowProcessNodeId(当前工艺图里这一个具体节点)判定, 是精确的。但生产计划
+  // 报工表(ProcessSheet.vue#resolveSeasoningProcesses)按 workProcessId(工序模板,
+  // 同一工序类型在图里出现几次都共用一个 id)判定"锅数"输入框要不要显示 ——
+  // bomSeasoningApi.getByProduct 的响应里没有 workflowProcessNodeId 字段, 只有
+  // workProcessId, 这里拿不到对齐所需的信息。后果: 联合生产/同工序类型在同一张图里
+  // 出现两次时, 若只有其中一个节点绑了续锅比例, 画布正确地只在那一个 cell 上显示 ◷,
+  // 但报工表会把两个"腌制"步骤都当同一 workProcessId, 两边一起显示锅数输入框 ——
+  // 报工表比这里更"宽松", 不是更精确。若要根治需要后端在 SeasoningItem 响应里加
+  // workflowProcessNodeId 字段, 不在本轮范围(No backend change 约束)。
+
 
   if (row.countInSeasoning === false) {
     markers.push({

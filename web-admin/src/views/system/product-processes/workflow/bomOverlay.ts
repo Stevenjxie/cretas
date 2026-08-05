@@ -76,10 +76,22 @@ export interface BomOverlaySourceNode {
   data: BomOverlaySourceNodeData;
 }
 
-/** 一道工序的辅料浮层输入 —— usageSupported 是 BOM 概念, 画布节点本身不携带, 必须外部传入。 */
+/**
+ * 一道工序的辅料浮层输入 —— usageSupported 是 BOM 概念, 画布节点本身不携带, 必须外部传入。
+ *
+ * 存在这个 input 记录本身就代表调用方"确认过"这道工序 —— 所以这里的 usageSupported
+ * 仍是纯 boolean(true/false 都是确认结论)。deriveBomOverlay 才是引入第三态 `null`
+ * 的地方: 一道工序压根没有对应 input 记录(auxiliaryByProcess 里找不到 key)时，
+ * 那是"不知道"而不是"确认为 false" —— 见 bomOverlayTypes.ts 的 AuxiliaryCellData 注释。
+ */
 export interface BomOverlayAuxiliaryInput {
   usageSupported: boolean;
   rows: AuxiliaryCellRow[];
+  /** 联合生产(多产出共享同一工序节点)时是否有 >1 份配方绑定了这道工序 —— 见
+   *  bomOverlayTypes.ts AuxiliaryCellData.sharedAcrossRecipes 的完整说明。 */
+  sharedAcrossRecipes?: boolean;
+  /** 仅当 sharedAcrossRecipes 为 true 时有意义: 当前实际生效(先到先得)的那份配方所属产出名。 */
+  recipeOutputName?: string | null;
 }
 
 /** 一个终端产出的包材浮层输入。outputName/baseUnit 直接读该节点自己的 data, 不在这里重复传。 */
@@ -138,9 +150,14 @@ export function deriveBomOverlay(input: BomOverlayInput): BomOverlayResult {
         position: { x: node.position.x, y: node.position.y - AUX_OFFSET_Y },
         data: {
           processName: node.data.processName ?? '未命名工序',
-          usageSupported: meta?.usageSupported ?? false,
+          // ⛔ 三态, 不能默认成 false: 没有 meta 只代表"没有可确认的结论"(数据未加载/
+          // 加载失败/该产品无配方/配方钉的修订节点 id 对不上当前图), 不代表"已确认
+          // 不可换算"——那是一个代码给不出证据的具体诊断(禁止降级处理)。
+          usageSupported: meta ? meta.usageSupported : null,
           rows: meta?.rows ?? [],
           processNodeId: node.id,
+          sharedAcrossRecipes: meta?.sharedAcrossRecipes ?? false,
+          recipeOutputName: meta?.recipeOutputName ?? null,
         },
       });
       edges.push({

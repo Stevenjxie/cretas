@@ -66,12 +66,15 @@ describe('包材 cell', () => {
     expect(w.find('[data-testid="pack-marker-lvl"]').exists()).toBe(true);
   });
 
-  it('空态说出发布后果', () => {
+  it('空态如实说明当前状态, 不编造系统不会执行的发布后果', () => {
+    // must-fix #4: 查证 validateWorkflow('publish') 与后端 BOM 激活校验都不存在
+    // "缺包材不能发布"这条规则(BOM 只要整体 ≥1 条明细即可, 不专门要求包材), 旧文案
+    // 「缺包材，本条工艺发布不了」是一个代码给不出证据的具体诊断, 已改为如实描述。
     const w = mount(WorkflowPackagingNode, {
       global: { stubs: { Handle: HandleStub } },
       props: { id: 'x', canWrite: true, data: { ...data, rows: [] } } });
     expect(w.text()).toContain('未配');
-    expect(w.text(), '缺包材整条工艺发布不了, 这个后果要提前说').toContain('发布不了');
+    expect(w.text(), '不能再断言一条系统实际不执行的发布后果').not.toContain('发布不了');
     expect(w.find('[data-testid="pack-empty"]').exists()).toBe(true);
   });
 

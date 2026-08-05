@@ -39,7 +39,12 @@
 
     <div v-else class="packaging-empty" data-testid="pack-empty">
       <div class="empty-headline">0 种 · 未配</div>
-      <div class="empty-consequence">缺包材，本条工艺发布不了</div>
+      <!-- ⛔ must-fix #4: 曾经写的是「缺包材，本条工艺发布不了」——查证后这条规则不存在:
+           workflowModel.ts#validateWorkflow('publish') 全文没有任何包材相关校验; 后端
+           BomRecipeServiceImpl#validateActivatableItems 只要求 BOM 整体 ≥1 条明细(原料/
+           辅料/包材任一都算数), 不专门要求包材。一个只有包材是空、但有原料行的 BOM 照样
+           能发布/激活。旧文案是代码给不出证据的具体诊断(禁止降级处理), 已改成如实描述。 -->
+      <div class="empty-consequence">该产出尚未配置包材</div>
     </div>
 
     <button

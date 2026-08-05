@@ -12,9 +12,12 @@ import type { MaterialNodeData } from '../types';
 const HandleStub = defineComponent({
   name: 'Handle',
   inheritAttrs: false,
-  props: { id: String, type: String, position: String },
-  setup() {
-    return () => h('span', { 'data-testid': 'handle-stub' });
+  // must-fix #2 需要断言 :connectable="false" 有没有被传下来 —— 加一个 data-connectable
+  // 属性把 prop 值反映到 DOM 上, 才能从渲染结果里查得到(其余既有用例都不读这个属性,
+  // 纯加法, 不影响它们)。
+  props: { id: String, type: String, position: String, connectable: { type: [Boolean, String, Number, Function], default: true } },
+  setup(props) {
+    return () => h('span', { 'data-testid': 'handle-stub', 'data-handle-id': props.id, 'data-connectable': String(props.connectable) });
   },
 });
 
@@ -54,6 +57,7 @@ const RAW_DATA: MaterialNodeData = {
 };
 
 function mountNode(overrides: {
+  kind?: 'RAW_MATERIAL' | 'SEMI_FINISHED' | 'FINISHED_GOOD';
   bomRawMaterialIds?: string[];
   data?: MaterialNodeData;
   unitError?: string;
@@ -63,7 +67,7 @@ function mountNode(overrides: {
 } = {}) {
   return mount(WorkflowMaterialNode, {
     props: {
-      kind: 'RAW_MATERIAL',
+      kind: overrides.kind || 'RAW_MATERIAL',
       data: overrides.data || RAW_DATA,
       canWrite: true,
       rawMaterialOptions: RAW_OPTIONS,
@@ -241,5 +245,26 @@ describe('WorkflowMaterialNode raw material picker — BOM priority grouping (#3
     expect(wrapper.classes()).toContain('validation-error');
     expect(wrapper.classes()).toContain('validation-attention');
     expect(wrapper.get('[data-testid="binding-validation-error"]').text()).toContain('请在这里绑定 SKU');
+  });
+});
+
+// must-fix #2 (final whole-branch review of Phase 3-1): 这个分支给 FINISHED_GOOD 新增了
+// 一个 source handle(PACK_OVERLAY_SOURCE_HANDLE), 纯粹是给 BOM 浮层的包材 cell 挂虚线
+// 用的视觉锚点。在这个分支之前, 成品 Cell 没有任何 output handle(它是链的终端) ——
+// evaluateWorkflowConnection 把"非 PROCESS 源 → PROCESS 目标"一律判合法, 如果这个新
+// handle 可以真的发起连线, 用户就能从"成品"拖一条线到任意工序, onConnect/
+// attachInputBinding 会把它当真写进该工序 data.ports 里一个真实 INPUT 端口——
+// 这处腐败发生在一个真实节点内部, stripBomOverlay 的 id 前缀闸对此完全无能为力。
+describe('成品 Cell 的浮层挂点 handle 不可连线 (must-fix #2)', () => {
+  it('FINISHED_GOOD 的 PACK_OVERLAY_SOURCE_HANDLE 设了 :connectable="false"', () => {
+    const wrapper = mountNode({
+      kind: 'FINISHED_GOOD',
+      data: { name: '成品', skuId: 'SKU-FIN', bound: true },
+    });
+
+    const handles = wrapper.findAll('[data-testid="handle-stub"]');
+    const packHandle = handles.find((h2) => h2.attributes('data-handle-id') === 'bom-pack-out');
+    expect(packHandle, 'FINISHED_GOOD 应该渲染出 bom-pack-out 这个 handle').toBeTruthy();
+    expect(packHandle!.attributes('data-connectable')).toBe('false');
   });
 });

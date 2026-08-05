@@ -167,14 +167,17 @@ describe('从 BOM 派生浮层', () => {
     expect(nodes.every((n) => n.id.startsWith(BOM_OVERLAY_PREFIX))).toBe(true);
   });
 
-  it('没有 usageSupported 数据时安全默认灰态, 不是抛错或显示可配', () => {
+  it('没有 usageSupported 数据时安全默认为「未知」灰态, 不冒充「已确认不可换算」', () => {
+    // must-fix #3: meta 缺失(数据未加载/加载失败/无配方/修订节点 id 不匹配, 这里无从
+    // 区分)不能被当成"已确认该工序不可换算"—— 那是代码给不出证据的具体诊断
+    // (禁止降级处理)。所以三态里必须是 null(未知), 不是 false(已确认为否)。
     const { nodes } = deriveBomOverlay({
       workflowNodes: [processNode('p1', 300, 400)],
       auxiliaryByProcess: {},
       packagingByOutput: {},
     });
     const aux = nodes.find((n) => n.id === `${BOM_OVERLAY_PREFIX}aux:p1`);
-    expect(aux!.type === 'bomAuxiliary' && aux!.data.usageSupported).toBe(false);
+    expect(aux!.type === 'bomAuxiliary' && aux!.data.usageSupported).toBeNull();
   });
 
   it('缺失产出基本单位时占位「未配」, 不能是空串或 undefined 拼进字符串', () => {

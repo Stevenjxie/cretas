@@ -684,6 +684,7 @@ import { usePinyinFilter } from './pinyinInitials';
 import { classifyWorkflowTopology } from './workflowClassification';
 import {
   deriveBomOverlay,
+  isBomOverlayNode,
   stripBomOverlay,
   stripBomOverlayEdges,
   type BomOverlayAuxiliaryInput,
@@ -1920,11 +1921,15 @@ async function loadBomOverlayData(): Promise<void> {
 
     const packagingByOutput: Record<string, BomOverlayPackagingInput> = {};
     const recipeIdBySku: Record<string, string> = {};
+    // must-fix #8: 联合生产标注要报"当前实际生效的是哪个产出的配方" —— 用产出名做人话
+    // 标签(配方本身没有独立的展示名), 按 recipeId 建索引, 供下面 auxiliaryByProcess 用。
+    const outputNameByRecipe: Record<string, string> = {};
     recipeResponses.forEach(({ skuId, response }) => {
       if (!response?.success || !response.data?.id) return;
       const recipe = response.data;
       recipeIdBySku[skuId] = recipe.id;
       const outputNode = finishedNodes.find((node) => String(node.data.skuId) === skuId);
+      outputNameByRecipe[recipe.id] = String(outputNode?.data.name ?? '未命名产出');
       // 禁止降级处理: 基本单位缺失时占位「未配」, 不能拼出 "0.05 个/undefined" 这种半成品字符串。
       const outputBaseUnit = String(outputNode?.data.baseUnit ?? '未配');
       const rows: PackagingCellRow[] = (recipe.items || [])
@@ -1974,16 +1979,21 @@ async function loadBomOverlayData(): Promise<void> {
     const auxiliaryByProcess: Record<string, BomOverlayAuxiliaryInput> = {};
     const recipeIdByProcess: Record<string, string> = {};
     const workspaceByRecipe: Record<string, SeasoningWorkspace> = {};
+    // must-fix #8: 统计每个工序节点被多少份不同 recipe 引用到 —— 独立于下面的
+    // "first recipe wins" 判重, 覆盖判重发生之后仍要继续数, 否则统计会在第一份就停。
+    const recipeIdsByProcessNode: Record<string, Set<string>> = {};
     workspaceResponses.forEach(({ recipeId, response }) => {
       if (!response?.success || !response.data) return;
       workspaceByRecipe[recipeId] = response.data;
       const relations = substitutesByRecipe[recipeId] || [];
       response.data.processes.forEach((process) => {
+        const nodeId = process.workflowProcessNodeId;
+        (recipeIdsByProcessNode[nodeId] ??= new Set<string>()).add(recipeId);
         // 联合生产(多终端产出共享同批工序节点)时, 第一个覆盖该工序的 recipe 生效 ——
         // 简化: 不同 recipe 对同一工序理应配同一批辅料, 若确有分歧只展示/编辑先命中的那份。
-        if (auxiliaryByProcess[process.workflowProcessNodeId]) return;
-        recipeIdByProcess[process.workflowProcessNodeId] = recipeId;
-        auxiliaryByProcess[process.workflowProcessNodeId] = {
+        if (auxiliaryByProcess[nodeId]) return;
+        recipeIdByProcess[nodeId] = recipeId;
+        auxiliaryByProcess[nodeId] = {
           usageSupported: process.standardUsageSupported === true,
           rows: process.bindings.map((binding): AuxiliaryCellRow => ({
             id: String(binding.id),
@@ -1999,6 +2009,18 @@ async function loadBomOverlayData(): Promise<void> {
           })),
         };
       });
+    });
+    // must-fix #8 (review ruling 3a): "first recipe wins" 本身保留(接受的取舍), 但不能让
+    // 用户以为自己在编辑唯一配方 —— 被 >1 份 recipe 引用的工序, 把当前实际生效的产出名
+    // 标出来, 交给 WorkflowAuxiliaryNode.vue 在 cell 副标题下方渲染一行提示。
+    Object.keys(auxiliaryByProcess).forEach((nodeId) => {
+      const sharedAcrossRecipes = (recipeIdsByProcessNode[nodeId]?.size ?? 0) > 1;
+      if (!sharedAcrossRecipes) return;
+      auxiliaryByProcess[nodeId] = {
+        ...auxiliaryByProcess[nodeId],
+        sharedAcrossRecipes: true,
+        recipeOutputName: outputNameByRecipe[recipeIdByProcess[nodeId]] ?? null,
+      };
     });
 
     bomOverlayPackagingByOutput.value = packagingByOutput;
@@ -2035,7 +2057,15 @@ async function ensureBomOverlayMaterials(): Promise<void> {
 
 // 辅料编辑入口 —— 直接复用既有 SeasoningBindingDialog(不新建编辑面, 见 task-6-brief.md)。
 async function openAuxiliaryEditor(processNodeId: string, rowId?: string): Promise<void> {
-  if (!canEdit.value) return;
+  // ⛔ fool-proof Rule 5(死胡同必须变成导航或解释): 「详情」按钮在只读态下始终渲染
+  // (WorkflowAuxiliaryNode.vue 没有 v-if="canWrite" 挡它 —— 辅料行本身对只读用户也该
+  // 可见), 过去这里直接静默 return, 用户点了没有任何反馈。SeasoningBindingDialog 是
+  // 纯编辑表单、没有只读展示态(重写它不在本轮范围内), 所以这里不能替只读用户打开它;
+  // 能做、且必须做的, 是把"什么都不做"换成一句解释。
+  if (!canEdit.value) {
+    ElMessage.info('当前无编辑权限，无法打开辅料编辑弹窗；Cell 上已显示的用量/标记即为完整信息。');
+    return;
+  }
   const recipeId = bomOverlayRecipeIdByProcess.value[processNodeId];
   const workspace = recipeId ? bomOverlaySeasoningWorkspaceByRecipe.value[recipeId] : undefined;
   const process = workspace?.processes.find((candidate) => candidate.workflowProcessNodeId === processNodeId) ?? null;
@@ -2057,10 +2087,27 @@ function onAuxDialogSaved(): void {
 }
 
 // 包材编辑入口 —— 打开既有 BOM 抽屉并定位到包材页签, 本期不新建编辑面。
-function openPackagingEditor(outputNodeId: string, _rowId?: string): void {
-  if (!canEdit.value) return;
+function openPackagingEditor(outputNodeId: string, rowId?: string): void {
+  if (!canEdit.value) {
+    ElMessage.info('当前无编辑权限，无法打开包材编辑抽屉；Cell 上已显示的用量/标记即为完整信息。');
+    return;
+  }
   const node = flowNodes.value.find((candidate) => candidate.id === outputNodeId);
   const skuId = node?.data?.kind === 'FINISHED_GOOD' && node.data?.skuId ? String(node.data.skuId) : undefined;
+  // ⛔ rowId 目前无法精确定位到抽屉里的那一行(BomUnifiedPanel/bom-unified/index.vue
+  // 只接受 initial-category, 没有"定位到某一行"的概念, 新增这个能力属于"重写编辑
+  // 弹窗/抽屉"范畴, 本轮明确不做)。之前的做法是把 rowId 整个丢弃、静默跳到包材页签,
+  // 用户点的是具体某一行、落地却是整个列表, 没有任何提示差异——这里至少把差异说
+  // 出来, 而不是假装精确定位到了。
+  if (rowId) {
+    const materialName = bomOverlayPackagingByOutput.value[outputNodeId]?.rows
+      .find((row) => row.id === rowId)?.materialName;
+    ElMessage.info(
+      materialName
+        ? `已打开包材页签，请在列表中找到「${materialName}」这一行编辑（暂不支持直接定位到该行）`
+        : '已打开包材页签，请在列表中找到对应行编辑（暂不支持直接定位到该行）',
+    );
+  }
   void openBomDrawer(skuId, 'PACKAGING');
 }
 
@@ -2118,11 +2165,24 @@ function refreshBomOverlay(): void {
   });
   flowNodes.value = [
     ...strippedNodes,
+    // ⛔ 浮层 cell 必须是"不可拖/不可选/不可删"的只读投影 —— 三个标志缺一不可, 都要在
+    // 这里(唯一的浮层节点构造点)显式设。理由(详见 must-fix #1):
+    //   draggable:false  拖一像素也会让 onNodeDragStop 把 dirty 设 true → 白改一次草稿。
+    //   selectable:false 防止批量框选/Ctrl 多选把浮层 cell 混进 selectedCellIds
+    //                     (会污染「已选 N 个 Cell」计数与发给 AI 的 selectedNodeContext)。
+    //   deletable:false  VueFlow 自带的键盘/API 删除路径统一收口于此, 不依赖
+    //                     removeNode/removeSelectedElements 各自记得判断。
+    // 三者都设在"数据"这一层(而不是只在 :nodes-draggable="canEdit" 这种全局 prop 上),
+    // 这样以后就算有代码路径换一种方式设置画布级 draggable/selectable 默认值, 浮层节点
+    // 依然锁死 —— 不会重新变回"普通节点"。
     ...overlayNodes.map((node) => ({
       id: node.id,
       type: node.type,
       position: node.position,
       data: node.data,
+      draggable: false,
+      selectable: false,
+      deletable: false,
     })),
   ];
   flowEdges.value = [
@@ -2211,6 +2271,13 @@ function mutate(action: () => void): void {
   remember();
   action();
   refreshPortMaterialMetadata();
+  // ⛔ must-fix #7: hydrate() 早就会重新派生浮层(#node-bomAuxiliary/#node-bomPackaging),
+  // 但大多数图编辑(加工序/加端口/连线...)走的是 mutate() 直接改 flowNodes/flowEdges,
+  // 不经过 hydrate()。不在这里补一次, 新加的工序/成品节点在下一次 hydrate(undo/自动布局/
+  // 重新加载)之前完全没有辅料/包材 cell —— 跟 #3 是同一种"缺席被当成已配置"的混淆,
+  // 只是发生在"节点刚创建, BOM 数据里压根还没有它"这个更早的时刻。refreshBomOverlay
+  // 是幂等的纯派生(见其函数注释), 每次 mutate 都跑一次代价可接受。
+  refreshBomOverlay();
   editSeq += 1;
   workflowBomSyncPreflight.value = null;
   dirty.value = true;
@@ -2229,6 +2296,10 @@ function undo(): void {
 }
 
 function onNodeClick({ node, event }: NodeMouseEvent): void {
+  // ⛔ VueFlow 的 node.selectable=false 只挡它自己内部的选中逻辑, 不挡 @node-click 事件
+  // 本身(它的 onSelectNode 无条件 emit.click)—— 这里若不早退, 下面几行会直接在
+  // flowNodes.value 里手动把浮层节点的 .selected 置 true, 绕过 selectable 的保护。
+  if (isBomOverlayNode(node)) return;
   closeCanvasDropdowns(event);
   selectedNodeId.value = node.id;
   acknowledgePublishBindingError(node.id);
@@ -2248,6 +2319,9 @@ function onNodeDragStart(): void {
 
 function onNodeDragStop({ node }: { node: Node }): void {
   if (!canEdit.value) return;
+  // ⛔ 防御性早退, 不是唯一的门: node.draggable=false(见 refreshBomOverlay)已经让
+  // VueFlow 物理上拖不动浮层 cell, 这里只是不假设"以后不会有别的路径调用这个函数"。
+  if (isBomOverlayNode(node)) return;
   if (dragStartSnapshot.value) remember(dragStartSnapshot.value);
   dragStartSnapshot.value = null;
   const target = flowNodes.value.find((candidate) => candidate.id === node.id);
@@ -2440,6 +2514,10 @@ function removeNode(nodeId: string): void {
   if (!canEdit.value) return;
   const node = flowNodes.value.find((n) => n.id === nodeId);
   if (!node) return;
+  // ⛔ 浮层 cell 不是工艺定义的一部分, 不能被这条"移除 Workflow Cell"路径删除 ——
+  // 且下面的确认框会读 processName/name 当标题, 对浮层 cell 显示会是「移除「腌制」…
+  // 这不会删除工序/SKU 主数据」这种字面上真但语义上误导的话(它删的根本不是工序)。
+  if (isBomOverlayNode(node)) return;
   const data = node.data as { name?: string; processName?: string } | undefined;
   const label = data?.name || data?.processName || '该 Cell';
   const touching = flowEdges.value.filter((e) => e.source === nodeId || e.target === nodeId).length;
@@ -2470,7 +2548,9 @@ function removeNode(nodeId: string): void {
 
 function removeSelectedElements(): void {
   if (!canEdit.value) return;
-  const ids = [...selectedCellIds.value];
+  // ⛔ 防御性过滤: selectedCellIds 理论上不该再混进浮层 id(onNodeClick/框选都已挡住),
+  // 这里再筛一次是不假设那两道门永远不会被将来的改动绕开(同 removeNode 的早退)。
+  const ids = selectedCellIds.value.filter((id) => !isBomOverlayNode({ id }));
   const explicitlySelectedEdges = new Set(selectedEdgeIds.value);
   if (ids.length === 0 && explicitlySelectedEdges.size === 0) return;
   const idSet = new Set(ids);

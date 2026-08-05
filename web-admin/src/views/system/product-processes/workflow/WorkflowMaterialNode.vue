@@ -15,8 +15,20 @@
     <Handle v-if="kind !== 'FINISHED_GOOD'" type="source" :position="Position.Right" id="output" />
     <!-- FINISHED_GOOD 没有真实的下游产出 handle(它是终端), 但 BOM 浮层的包材 cell
          需要从它引一条虚线出去 —— 用独立 id 的 handle 承载, 不与上面的 "output"
-         (真实工艺连线用)混用, 两者互斥(kind 不可能同时满足两个 v-if)。 -->
-    <Handle v-if="kind === 'FINISHED_GOOD'" type="source" :position="Position.Right" :id="PACK_OVERLAY_SOURCE_HANDLE" />
+         (真实工艺连线用)混用, 两者互斥(kind 不可能同时满足两个 v-if)。
+         ⛔ :connectable="false" 是硬约束, 不是可省的默认值: 这个 handle 只是给浮层虚线
+         挂点用的视觉锚点, 绝不能被用来发起/接受真实拖拽连线 —— evaluateWorkflowConnection
+         把 "非 PROCESS → PROCESS" 一律判合法, 如果这个 handle 可连, 用户从"成品"拖一条线
+         到任意工序就会被 onConnect/attachInputBinding 当真写进该工序 data.ports 里一个
+         真实 INPUT 端口, 而 stripBomOverlay 序列化闸对此完全无能为力 —— 腐败发生在一个
+         真实节点内部, 不是挂了浮层前缀的节点。见 final-fix-report.md must-fix #2。 -->
+    <Handle
+      v-if="kind === 'FINISHED_GOOD'"
+      type="source"
+      :position="Position.Right"
+      :id="PACK_OVERLAY_SOURCE_HANDLE"
+      :connectable="false"
+    />
 
     <button
       v-if="canWrite"

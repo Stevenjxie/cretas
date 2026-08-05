@@ -1,5 +1,5 @@
 <template>
-  <div class="aux-node" :class="{ 'is-greyed': !data.usageSupported }">
+  <div class="aux-node" :class="{ 'is-greyed': usageState !== 'supported' }">
     <Handle type="source" :position="Position.Bottom" :id="AUX_OVERLAY_SOURCE_HANDLE" />
 
     <div class="aux-heading">
@@ -20,17 +20,30 @@
 
     <div class="aux-subtitle" :class="{ 'is-warning': isEmptySubtitle }">{{ subtitleText }}</div>
 
-    <div v-if="!data.usageSupported" class="aux-greyed-reason" data-testid="aux-greyed-reason">
+    <!-- 联合生产: 这道工序被 >1 份配方共用, 当前展示的是"先到先得"命中的那份 ——
+         没有这一行, 用户会以为在编另一个产出的配方(见 task 8 决策)。 -->
+    <div v-if="data.sharedAcrossRecipes" class="aux-shared-notice" data-testid="aux-shared-recipe">
+      ⚠ 与其它产出共用此工序，当前显示/编辑的是「{{ data.recipeOutputName || '未知产出' }}」的配方
+    </div>
+
+    <!-- ⛔ 三态: 「已确认不可换算」(false) 与「尚未确定/无法判断」(null) 必须分开说 ——
+         二者渲染成同一句话就是给用户一个代码给不出证据的具体诊断(禁止降级处理)。 -->
+    <div v-if="usageState === 'unsupported'" class="aux-greyed-reason" data-testid="aux-greyed-reason">
       标准用量不可用 —— 该工序的投入基准缺少可换算的单位契约，「每 kg 投入」没有分母可算。
       请先到该工序 Cell 的「单位关系」中补上换算契约，再回来配置辅料。
     </div>
+    <div v-else-if="usageState === 'unknown'" class="aux-greyed-reason aux-unknown-reason" data-testid="aux-unknown-reason">
+      标准用量状态尚未确定，暂不能新增辅料。已配置的辅料仍会照常显示。
+    </div>
 
-    <div v-else-if="data.rows.length === 0" class="aux-empty" data-testid="aux-empty">
+    <!-- 已配置的行必须无条件渲染 —— 灰态只应该关掉"新增"入口, 不能连已有数据一起藏起来
+         (否则一道有 3 种辅料的工序在灰态下会显示成空盒子)。 -->
+    <div v-if="data.rows.length === 0 && usageState === 'supported'" class="aux-empty" data-testid="aux-empty">
       <span class="aux-empty-icon">!</span>
       <span>0 种 · 尚未配置辅料</span>
     </div>
 
-    <div v-else class="aux-rows">
+    <div v-if="data.rows.length > 0" class="aux-rows">
       <div
         v-for="row in data.rows"
         :key="row.id"
@@ -56,7 +69,7 @@
     </div>
 
     <button
-      v-if="canWrite && data.usageSupported"
+      v-if="canWrite && usageState === 'supported'"
       type="button"
       class="aux-add nodrag"
       data-testid="aux-add"
@@ -93,10 +106,23 @@ const hasPotMarker = computed(() =>
   props.data.rows.some((row) => row.markers.some((marker) => marker.kind === 'pot')),
 );
 
-const isEmptySubtitle = computed(() => props.data.usageSupported && props.data.rows.length === 0);
+/**
+ * 三态: 'supported' 已确认可换算 / 'unsupported' 已确认不可换算 / 'unknown' 尚未确定。
+ * 后两者都灰化 + 关闭"加辅料"入口, 但只有 'unsupported' 能显示具体的"缺换算契约"诊断——
+ * 'unknown' 时代码给不出这个结论 (数据未加载 / 加载失败 / 无配方 / 修订节点 id 对不上都
+ * 会落到这里, 深入区分见 bomOverlayTypes.ts AuxiliaryCellData.usageSupported 的注释)。
+ */
+const usageState = computed<'supported' | 'unsupported' | 'unknown'>(() => {
+  if (props.data.usageSupported === true) return 'supported';
+  if (props.data.usageSupported === false) return 'unsupported';
+  return 'unknown';
+});
+
+const isEmptySubtitle = computed(() => usageState.value === 'supported' && props.data.rows.length === 0);
 
 const subtitleText = computed(() => {
-  if (!props.data.usageSupported) return '标准用量不可用';
+  if (usageState.value === 'unsupported') return '标准用量不可用';
+  if (usageState.value === 'unknown') return '状态尚未确定';
   if (props.data.rows.length === 0) return '0 种 · 未配';
   const base = `${props.data.rows.length} 种`;
   return hasPotMarker.value ? `${base} · 报工需录锅数` : base;
@@ -147,6 +173,13 @@ function formatDosage(row: AuxiliaryCellRow): string {
 .aux-greyed-reason {
   margin-top: 8px; padding: 8px 10px; border-radius: 7px;
   background: #f0f1f3; color: #667085; font-size: 12px; line-height: 1.55;
+}
+.aux-unknown-reason { background: #eef2f7; color: #5b6b82; font-style: italic; }
+
+.aux-shared-notice {
+  margin-top: 8px; padding: 6px 10px; border-radius: 7px;
+  border: 1px dashed #d9822b; background: #fff3e0; color: #a3560a;
+  font-size: 11px; font-weight: 650; line-height: 1.5;
 }
 
 .aux-empty {
