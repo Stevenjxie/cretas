@@ -14,6 +14,7 @@ import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
+import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 import java.math.BigDecimal;
 import java.util.LinkedHashMap;
@@ -23,7 +24,6 @@ import java.util.Map;
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
-import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.*;
 
 /** Unit tests for {@link MaterialStockSummaryTool} 的 Finding 接入。 */
@@ -76,7 +76,7 @@ class MaterialStockSummaryToolTest {
     @DisplayName("UT-MSS-01: 保留既有 key —— totalBatches / lowStockCount / batches / message")
     void keepsExistingKeys() throws Exception {
         when(findingService.detectInline(FACTORY_ID, "inventory")).thenReturn(
-                new FindingService.Result(List.of(), List.of("低库存"), 0, Map.of()));
+                new FindingService.Result(List.of(), List.of("低库存"), 0, Map.of(), List.of()));
         when(findingTextRenderer.renderInline(any())).thenReturn("✅ 已检查 低库存，均正常。");
 
         Map<String, Object> result = execute();
@@ -93,7 +93,7 @@ class MaterialStockSummaryToolTest {
     void addsFindingKeys() throws Exception {
         when(findingService.detectInline(FACTORY_ID, "inventory")).thenReturn(
                 new FindingService.Result(List.of(lowStock("鲈鱼")), List.of("低库存"), 1,
-                        Map.of("LOW_STOCK", 1)));
+                        Map.of("LOW_STOCK", 1), List.of()));
         when(findingTextRenderer.renderInline(any())).thenReturn("⚠️ 顺带 1 件事：\n · 鲈鱼 ...");
 
         Map<String, Object> result = execute();
@@ -109,7 +109,7 @@ class MaterialStockSummaryToolTest {
     void lowStockCountComesFromCountsByCode() throws Exception {
         when(findingService.detectInline(FACTORY_ID, "inventory")).thenReturn(
                 new FindingService.Result(List.of(lowStock("A"), lowStock("B")),
-                        List.of("低库存"), 7, Map.of("LOW_STOCK", 7)));
+                        List.of("低库存"), 7, Map.of("LOW_STOCK", 7), List.of()));
         when(findingTextRenderer.renderInline(any())).thenReturn("...");
 
         Map<String, Object> result = execute();
@@ -122,7 +122,7 @@ class MaterialStockSummaryToolTest {
     @DisplayName("UT-MSS-04: countsByCode 无 LOW_STOCK 时 lowStockCount 为 0")
     void lowStockCountDefaultsToZero() throws Exception {
         when(findingService.detectInline(FACTORY_ID, "inventory")).thenReturn(
-                new FindingService.Result(List.of(), List.of("低库存"), 0, Map.of()));
+                new FindingService.Result(List.of(), List.of("低库存"), 0, Map.of(), List.of()));
         when(findingTextRenderer.renderInline(any())).thenReturn("✅ 已检查 低库存，均正常。");
 
         Map<String, Object> result = execute();
@@ -134,7 +134,7 @@ class MaterialStockSummaryToolTest {
     @DisplayName("UT-MSS-05: 🔴 Tool 不得自己再调 getLowStockWarnings —— 否则变成 2 次查询")
     void doesNotQueryLowStockWarningsDirectly() throws Exception {
         when(findingService.detectInline(FACTORY_ID, "inventory")).thenReturn(
-                new FindingService.Result(List.of(), List.of("低库存"), 0, Map.of()));
+                new FindingService.Result(List.of(), List.of("低库存"), 0, Map.of(), List.of()));
         when(findingTextRenderer.renderInline(any())).thenReturn("...");
 
         execute();
@@ -147,7 +147,7 @@ class MaterialStockSummaryToolTest {
     void messageIncludesFindingsText() throws Exception {
         when(findingService.detectInline(FACTORY_ID, "inventory")).thenReturn(
                 new FindingService.Result(List.of(lowStock("鲈鱼")), List.of("低库存"), 1,
-                        Map.of("LOW_STOCK", 1)));
+                        Map.of("LOW_STOCK", 1), List.of()));
         when(findingTextRenderer.renderInline(any())).thenReturn("⚠️ 顺带 1 件事：\n · 鲈鱼 剩 12kg");
 
         String message = (String) execute().get("message");
@@ -157,10 +157,12 @@ class MaterialStockSummaryToolTest {
     }
 
     @Test
-    @DisplayName("UT-MSS-07: findingsText 为空串时不往 message 里拼空行")
+    @DisplayName("UT-MSS-07: findingsText 为空串时不往 message 里拼空行（0 条规则匹配该 domain，非失败态）")
     void emptyFindingsTextDoesNotPolluteMessage() throws Exception {
+        // checkedRules=[] 且 failedRules=[]：没有 provider 匹配这个 domain（合法态，
+        // complete()==true），跟"规则跑了但炸了"是两回事——后者见 UT-MSS-09。
         when(findingService.detectInline(FACTORY_ID, "inventory")).thenReturn(
-                new FindingService.Result(List.of(), List.of(), 0, Map.of()));
+                new FindingService.Result(List.of(), List.of(), 0, Map.of(), List.of()));
         when(findingTextRenderer.renderInline(any())).thenReturn("");
 
         String message = (String) execute().get("message");
@@ -172,11 +174,30 @@ class MaterialStockSummaryToolTest {
     @DisplayName("UT-MSS-08: 用 inventory 这个 domain 调用发现层")
     void usesInventoryDomain() throws Exception {
         when(findingService.detectInline(anyString(), anyString())).thenReturn(
-                new FindingService.Result(List.of(), List.of("低库存"), 0, Map.of()));
+                new FindingService.Result(List.of(), List.of("低库存"), 0, Map.of(), List.of()));
         when(findingTextRenderer.renderInline(any())).thenReturn("...");
 
         execute();
 
         verify(findingService).detectInline(FACTORY_ID, "inventory");
+    }
+
+    @Test
+    @DisplayName("UT-MSS-09: 🔴 发现层未完整跑完时必须失败，不得把 lowStockCount 报成伪造的 0")
+    void doesNotReportFabricatedZeroWhenFindingRuleFailed() {
+        // 低库存规则本身炸了（DB error / RLS / 缺租户 GUC）：checkedRules 空、
+        // countsByCode 空、failedRules 含"低库存"。改造前 getLowStockWarnings
+        // 抛异常会直接冒泡成失败响应；这条测试钉住同样的失败语义必须保留——
+        // 若有人把 doExecute 里的 complete() 检查退回
+        // getOrDefault("LOW_STOCK", 0)，本测试必须变红。
+        when(findingService.detectInline(FACTORY_ID, "inventory")).thenReturn(
+                new FindingService.Result(List.of(), List.of(), 0, Map.of(), List.of("低库存")));
+
+        InvocationTargetException ite = assertThrows(InvocationTargetException.class, this::execute);
+        assertNotNull(ite.getCause(),
+                "doExecute 必须抛出异常, 交给 AbstractBusinessTool.execute() 转换成失败响应, 而不是返回伪造的 lowStockCount=0");
+
+        // findingTextRenderer 不该在失败路径上被调用——渲染一个不完整的结果毫无意义。
+        verify(findingTextRenderer, never()).renderInline(any());
     }
 }

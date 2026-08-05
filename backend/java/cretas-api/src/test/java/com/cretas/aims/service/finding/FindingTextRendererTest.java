@@ -30,7 +30,7 @@ class FindingTextRendererTest {
     @DisplayName("UT-FTR-01: 无发现时输出「已检查 X，均正常」，且只列实际跑过的规则")
     void allClearListsOnlyCheckedRules() {
         FindingService.Result r = new FindingService.Result(
-                List.of(), List.of("低库存"), 0, Map.of());
+                List.of(), List.of("低库存"), 0, Map.of(), List.of());
 
         String text = renderer.renderInline(r);
 
@@ -44,7 +44,7 @@ class FindingTextRendererTest {
     @DisplayName("UT-FTR-02: 🔴 checkedRules 为空时返回空串 —— 一条规则都没跑成，不许说任何话")
     void nothingCheckedRendersNothing() {
         FindingService.Result r = new FindingService.Result(
-                List.of(), List.of(), 0, Map.of());
+                List.of(), List.of(), 0, Map.of(), List.of("低库存"));
 
         assertEquals("", renderer.renderInline(r),
                 "全部规则失败时若仍输出「均正常」，就是把故障渲染成了健康");
@@ -55,7 +55,7 @@ class FindingTextRendererTest {
     void rendersLowStockNumbers() {
         FindingService.Result r = new FindingService.Result(
                 List.of(lowStock("鲈鱼", "12", "50", "38")), List.of("低库存"), 1,
-                Map.of("LOW_STOCK", 1));
+                Map.of("LOW_STOCK", 1), List.of());
 
         String text = renderer.renderInline(r);
 
@@ -71,7 +71,7 @@ class FindingTextRendererTest {
     void neverMentionsSupplier() {
         FindingService.Result r = new FindingService.Result(
                 List.of(lowStock("鲈鱼", "12", "50", "38")), List.of("低库存"), 1,
-                Map.of("LOW_STOCK", 1));
+                Map.of("LOW_STOCK", 1), List.of());
 
         String text = renderer.renderInline(r);
 
@@ -84,7 +84,7 @@ class FindingTextRendererTest {
     void showsRemainingCount() {
         FindingService.Result r = new FindingService.Result(
                 List.of(lowStock("鲈鱼", "12", "50", "38"), lowStock("带鱼", "5", "40", "35")),
-                List.of("低库存"), 7, Map.of("LOW_STOCK", 7));
+                List.of("低库存"), 7, Map.of("LOW_STOCK", 7), List.of());
 
         String text = renderer.renderInline(r);
 
@@ -96,7 +96,7 @@ class FindingTextRendererTest {
     void noRemainingHintWhenNotTruncated() {
         FindingService.Result r = new FindingService.Result(
                 List.of(lowStock("鲈鱼", "12", "50", "38")), List.of("低库存"), 1,
-                Map.of("LOW_STOCK", 1));
+                Map.of("LOW_STOCK", 1), List.of());
 
         assertFalse(renderer.renderInline(r).contains("还有"));
     }
@@ -107,11 +107,39 @@ class FindingTextRendererTest {
         Finding unknown = new Finding("SOMETHING_NEW", "inventory",
                 Finding.Severity.WARNING, 50, "X1", "神秘物料", Map.of());
         FindingService.Result r = new FindingService.Result(
-                List.of(unknown), List.of("神秘规则"), 1, Map.of("SOMETHING_NEW", 1));
+                List.of(unknown), List.of("神秘规则"), 1, Map.of("SOMETHING_NEW", 1), List.of());
 
         String text = renderer.renderInline(r);
 
         assertTrue(text.contains("神秘物料"), text);
         assertFalse(text.contains("null"), text);
+    }
+
+    @Test
+    @DisplayName("UT-FTR-08: 🔴 部分规则失败时不得渲染成无保留的「均正常」——必须点名失败规则")
+    void partialFailureMustNotRenderUnqualifiedAllClear() {
+        // 低库存成功跑完且零发现，临期同一轮失败——渲染层只看到 checkedRules
+        // 非空、findings 为空，若只靠这两点判断就会输出「已检查 低库存，均正常」，
+        // 对沉默的「临期」是假话。
+        FindingService.Result r = new FindingService.Result(
+                List.of(), List.of("低库存"), 0, Map.of(), List.of("临期"));
+
+        String text = renderer.renderInline(r);
+
+        assertTrue(text.contains("低库存"), text);
+        assertTrue(text.contains("临期"), text);
+        assertTrue(text.contains("失败") || text.contains("无法判断"),
+                "必须点名未跑完的规则, 不能只说均正常: " + text);
+    }
+
+    @Test
+    @DisplayName("UT-FTR-09: 2+ 条规则均正常时用「 / 」拼接 checkedRules")
+    void joinsMultipleCheckedRulesWithSlash() {
+        FindingService.Result r = new FindingService.Result(
+                List.of(), List.of("低库存", "临期"), 0, Map.of(), List.of());
+
+        String text = renderer.renderInline(r);
+
+        assertTrue(text.contains("低库存 / 临期"), text);
     }
 }

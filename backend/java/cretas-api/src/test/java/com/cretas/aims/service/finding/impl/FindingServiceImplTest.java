@@ -134,4 +134,32 @@ class FindingServiceImplTest {
         assertEquals(0, r.totalCount());
         assertTrue(r.countsByCode().isEmpty());
     }
+
+    @Test
+    @DisplayName("UT-FSI-07: 🔴 provider 抛异常时记录进 failedRules，result 不再 complete()")
+    void failedProviderIsRecordedAndResultIsIncomplete() {
+        FindingService svc = new FindingServiceImpl(List.of(
+                stub("inventory", "低库存"),
+                exploding("inventory", "临期")
+        ), 2);
+
+        FindingService.Result r = svc.detectInline(FACTORY_ID, "inventory");
+
+        assertEquals(List.of("临期"), r.failedRules(),
+                "炸掉的规则必须被记录进 failedRules，否则消费方无法区分「零发现」与「查不出」");
+        assertFalse(r.complete(), "有规则失败时 complete() 必须为 false");
+    }
+
+    @Test
+    @DisplayName("UT-FSI-08: 全部 provider 成功时 failedRules 为空且 complete() 为 true")
+    void allProvidersSucceedMeansComplete() {
+        FindingService svc = new FindingServiceImpl(List.of(
+                stub("inventory", "低库存", finding("LOW_STOCK", "鲈鱼", Finding.Severity.WARNING))
+        ), 2);
+
+        FindingService.Result r = svc.detectInline(FACTORY_ID, "inventory");
+
+        assertTrue(r.failedRules().isEmpty());
+        assertTrue(r.complete());
+    }
 }

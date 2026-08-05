@@ -18,7 +18,10 @@ import java.util.Map;
  *
  * <p>单条 provider 抛异常时**隔离**：不中断其他规则，且把该规则从
  * checkedRules 里剔除。禁止把失败当作「无异常」——那会让 UI 说出
- * 「已检查 X，均正常」的假话（禁止降级处理）。
+ * 「已检查 X，均正常」的假话（禁止降级处理）。规则失败会被记录进
+ * {@link FindingService.Result#failedRules()}，供消费方用
+ * {@link FindingService.Result#complete()} 判断本次结果是否完整——
+ * 不完整时不得把 countsByCode / findings 当作「已确认无异常」来展示。
  */
 @Slf4j
 @Service
@@ -37,6 +40,7 @@ public class FindingServiceImpl implements FindingService {
     public Result detectInline(String factoryId, String domain) {
         List<Finding> all = new ArrayList<>();
         List<String> checked = new ArrayList<>();
+        List<String> failed = new ArrayList<>();
 
         for (FindingProvider provider : providers) {
             if (!provider.domain().equals(domain)) {
@@ -48,6 +52,7 @@ public class FindingServiceImpl implements FindingService {
             } catch (Exception e) {
                 log.warn("Finding 规则执行失败, 已从 checkedRules 剔除: rule={}, domain={}, factoryId={}",
                         provider.ruleName(), domain, factoryId, e);
+                failed.add(provider.ruleName());
             }
         }
 
@@ -60,6 +65,7 @@ public class FindingServiceImpl implements FindingService {
         int total = all.size();
         List<Finding> top = total > inlineMax ? all.subList(0, inlineMax) : all;
 
-        return new Result(List.copyOf(top), List.copyOf(checked), total, Map.copyOf(countsByCode));
+        return new Result(List.copyOf(top), List.copyOf(checked), total,
+                Map.copyOf(countsByCode), List.copyOf(failed));
     }
 }

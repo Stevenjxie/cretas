@@ -117,6 +117,18 @@ public class MaterialStockSummaryTool extends AbstractBusinessTool {
         // 低库存不再由本 Tool 直接查询 —— 统一走发现层，避免同一口径在两处各写一遍
         // (见 ListSummaryServiceImpl.java:43-50 的 footer/KPI 口径漂移事故)。
         FindingService.Result findingResult = findingService.detectInline(factoryId, "inventory");
+
+        // 🔴 禁止降级处理: FindingServiceImpl 对单条规则失败做了隔离(catch 掉、
+        // 从 checkedRules 剔除), 这是发现层内部的设计——对本 Tool 而言, 低库存
+        // 是唯一规则, 它失败就意味着 countsByCode 里根本没有 LOW_STOCK 这个
+        // key, getOrDefault(...,0) 会把"没查到"读成"查到了 0 个"。改造前
+        // getLowStockWarnings 抛异常会直接冒泡到 AbstractBusinessTool.execute()
+        // 变成失败响应；这里原样重建那个失败语义——不吞掉、不编数字。
+        if (!findingResult.complete()) {
+            throw new IllegalStateException(
+                    "低库存发现规则未能完整执行, 拒绝返回可能失真的库存汇总: 失败规则=" + findingResult.failedRules());
+        }
+
         int lowStock = findingResult.countsByCode().getOrDefault("LOW_STOCK", 0);
 
         Map<String, Object> result = new HashMap<>();
