@@ -14,6 +14,7 @@ import java.math.RoundingMode;
 import java.time.LocalDate;
 import java.util.*;
 import java.util.stream.Collectors;
+import com.cretas.aims.ai.tool.WorkdeskRole;
 
 /**
  * 7 天销售预测 Tool — Sprint 8 P4b 采购员 Workdesk.
@@ -60,6 +61,11 @@ public class SalesForecast7DayTool extends AbstractBusinessTool {
     @Override
     public String getToolName() {
         return "sales_forecast_7day";
+    }
+
+    @Override
+    public WorkdeskRole workdeskRole() {
+        return WorkdeskRole.PURCHASER;
     }
 
     @Override

@@ -19,6 +19,7 @@ import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.time.LocalDate;
 import java.util.*;
+import com.cretas.aims.ai.tool.WorkdeskRole;
 
 /**
  * 一键创建请购单 Tool — Sprint 8 P4b 采购员 Workdesk 灵魂 Tool.
@@ -62,6 +63,11 @@ public class RequisitionCreateTool extends AbstractBusinessTool {
     @Override
     public String getToolName() {
         return "requisition_create";
+    }
+
+    @Override
+    public WorkdeskRole workdeskRole() {
+        return WorkdeskRole.PURCHASER;
     }
 
     @Override

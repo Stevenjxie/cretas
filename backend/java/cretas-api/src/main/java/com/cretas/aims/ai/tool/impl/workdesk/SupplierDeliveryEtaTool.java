@@ -17,6 +17,7 @@ import org.springframework.stereotype.Component;
 import java.time.LocalDate;
 import java.time.temporal.ChronoUnit;
 import java.util.*;
+import com.cretas.aims.ai.tool.WorkdeskRole;
 
 /**
  * 供应商交期 ETA Tool — Sprint 8 P4b 采购员 Workdesk.
@@ -58,6 +59,11 @@ public class SupplierDeliveryEtaTool extends AbstractBusinessTool {
     @Override
     public String getToolName() {
         return "supplier_delivery_eta";
+    }
+
+    @Override
+    public WorkdeskRole workdeskRole() {
+        return WorkdeskRole.PURCHASER;
     }
 
     @Override

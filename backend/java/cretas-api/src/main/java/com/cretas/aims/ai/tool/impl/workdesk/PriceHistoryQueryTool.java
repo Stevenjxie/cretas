@@ -14,6 +14,7 @@ import java.math.RoundingMode;
 import java.time.LocalDate;
 import java.time.YearMonth;
 import java.util.*;
+import com.cretas.aims.ai.tool.WorkdeskRole;
 
 /**
  * 价格历史查询 Tool — Sprint 8 P4b 采购员 Workdesk.
@@ -46,6 +47,11 @@ public class PriceHistoryQueryTool extends AbstractBusinessTool {
     @Override
     public String getToolName() {
         return "price_history_query";
+    }
+
+    @Override
+    public WorkdeskRole workdeskRole() {
+        return WorkdeskRole.PURCHASER;
     }
 
     @Override

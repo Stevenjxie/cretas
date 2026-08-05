@@ -12,6 +12,7 @@ import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import com.cretas.aims.ai.tool.WorkdeskRole;
 
 /**
  * 采购员低库存预警 Tool — Sprint 8 P4b 采购员 Workdesk.
@@ -42,6 +43,11 @@ public class StockAlertWorkdeskTool extends AbstractBusinessTool {
     @Override
     public String getToolName() {
         return "stock_alert";
+    }
+
+    @Override
+    public WorkdeskRole workdeskRole() {
+        return WorkdeskRole.PURCHASER;
     }
 
     @Override
