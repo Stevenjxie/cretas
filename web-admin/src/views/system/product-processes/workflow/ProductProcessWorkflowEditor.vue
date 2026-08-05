@@ -329,6 +329,15 @@
               @edit-row="(rowId) => openPackagingEditor(slotProps.data.outputNodeId, rowId)"
             />
           </template>
+          <template #node-bomByproduct="slotProps">
+            <WorkflowByproductNode
+              :id="slotProps.id"
+              :data="slotProps.data"
+              :can-write="canEdit"
+              @add-row="openByproductEditor(slotProps.data.outputNodeId)"
+              @edit-row="(rowId) => openByproductEditor(slotProps.data.outputNodeId, rowId)"
+            />
+          </template>
         </VueFlow>
 
         <div
@@ -645,6 +654,17 @@
       @saved="onPackagingDialogSaved"
     />
 
+    <ByproductBindingDialog
+      v-model="byproductDialogVisible"
+      :factory-id="byproductDialogFactoryId"
+      :recipe-id="byproductDialogRecipeId"
+      :output-name="byproductDialogOutputName"
+      :base-unit="byproductDialogBaseUnit"
+      :row="byproductDialogRow"
+      :materials="bomOverlayByproductMaterials"
+      @saved="onByproductDialogSaved"
+    />
+
     <!-- #12b: 版本记录抽屉 (只读浏览之前发布过的版本) -->
     <el-drawer v-model="versionDrawerVisible" title="版本记录" direction="rtl" size="440px">
       <div v-loading="versionLoading" class="version-list">
@@ -703,6 +723,8 @@ import WorkflowMaterialNode from './WorkflowMaterialNode.vue';
 import WorkflowProcessNode from './WorkflowProcessNode.vue';
 import WorkflowAuxiliaryNode from './WorkflowAuxiliaryNode.vue';
 import WorkflowPackagingNode from './WorkflowPackagingNode.vue';
+import WorkflowByproductNode from './WorkflowByproductNode.vue';
+import ByproductBindingDialog from './ByproductBindingDialog.vue';
 import {
   buildRawMaterialSegmentTree,
   isRawMaterialOption,
@@ -720,6 +742,7 @@ import {
   stripBomOverlayEdges,
   type BomOverlayAuxiliaryInput,
   type BomOverlayPackagingInput,
+  type BomOverlayByproductInput,
   type BomOverlaySourceNode,
   type BomOverlaySourceNodeData,
 } from './bomOverlay';
@@ -727,7 +750,8 @@ import { buildDraftBomNotice, isWritableRecipe, pickEditableRecipe } from './bom
 import type { DraftBomNotice } from './bomEditableRecipe';
 import { createBomDraftEnsurer } from '@/views/production/bom/bomDraftLifecycle';
 import { markersForAuxiliaryRow, markersForPackagingRow } from './bomOverlayMarkers';
-import type { AuxiliaryCellRow, PackagingCellRow } from './bomOverlayTypes';
+import type { AuxiliaryCellRow, ByproductCellRow, PackagingCellRow } from './bomOverlayTypes';
+import type { BomRowMarker } from './bomOverlayMarkers';
 import {
   formatAuxiliaryDosageText,
   formatPackagingDosageText,
@@ -1047,6 +1071,9 @@ const bomOverlayMaterialsLoaded = ref(false);
 // —— 那份没有 materialTypeId/standardQuantity/替代关系等编辑必需字段)。
 const bomOverlayRecipeIdByOutput = ref<Record<string, string>>({});
 const bomOverlayPackagingRawByOutput = ref<Record<string, BomRecipeItemView[]>>({});
+// 副产: 同样两份 —— 展示用行 + 编辑用原始行。
+const bomOverlayByproductByOutput = ref<Record<string, BomOverlayByproductInput>>({});
+const bomOverlayByproductRawByOutput = ref<Record<string, BomRecipeItemView[]>>({});
 const bomOverlayPackagingMaterials = ref<PackagingMaterialOption[]>([]);
 const bomOverlayPackagingMaterialsLoaded = ref(false);
 let bomOverlayLoadGeneration = 0;
@@ -1065,6 +1092,69 @@ const auxDialogSubstituteRelations = computed<BomItemSubstituteView[]>(() => {
 });
 // 包材编辑弹窗(#Task1: 画布上直接挂 PackagingBindingDialog, 不再打开 BOM 抽屉 —— 见
 // task-1-brief.md「拆抽屉之前必须先有它」)。
+const byproductDialogVisible = ref(false);
+const byproductDialogFactoryId = ref('');
+const byproductDialogRecipeId = ref('');
+const byproductDialogOutputName = ref('');
+const byproductDialogBaseUnit = ref('未配');
+const byproductDialogRow = ref<BomRecipeItemView | null>(null);
+/** 副产可选物料 —— 与包材共用同一份物料档案端点, 不另开接口。 */
+const bomOverlayByproductMaterials = ref<PackagingMaterialOption[]>([]);
+
+/**
+ * 副产与包材同挂产出节点, 写入同样只接受 DRAFT(见 bomEditableRecipe.ts),
+ * 所以照走 resolveWritableRecipeId, 不另写一套解析。
+ */
+async function openByproductEditor(outputNodeId: string, rowId?: string): Promise<void> {
+  if (!canEdit.value) {
+    ElMessage.info('当前无编辑权限，无法编辑副产。');
+    return;
+  }
+  const node = flowNodes.value.find((item) => item.id === outputNodeId);
+  if (!node) {
+    ElMessage.warning('未找到对应的产出节点，请刷新后重试');
+    return;
+  }
+  const recipeId = bomOverlayRecipeIdByOutput.value[outputNodeId];
+  if (!recipeId) {
+    ElMessage.warning('副产数据尚未加载完成，请稍后重试');
+    return;
+  }
+  await ensureBomOverlayPackagingMaterials();
+  bomOverlayByproductMaterials.value = bomOverlayPackagingMaterials.value;
+
+  const productTypeId = String(node.data.skuId ?? '') || bomOverlayProductIdByRecipe.value[recipeId];
+  if (!productTypeId) {
+    ElMessage.warning('未能确定该产出对应的成品，请刷新后重试');
+    return;
+  }
+  const writableRecipeId = await resolveWritableRecipeId(
+    productTypeId,
+    recipeId,
+    () => bomOverlayRecipeIdByOutput.value[outputNodeId],
+  );
+  if (!writableRecipeId) return;
+
+  const writableRow = rowId
+    ? bomOverlayByproductRawByOutput.value[outputNodeId]?.find((item) => String(item.id) === rowId) ?? null
+    : null;
+  if (rowId && !writableRow) {
+    ElMessage.warning('该副产行在草稿版本中不存在，请刷新后重试');
+    return;
+  }
+
+  byproductDialogFactoryId.value = props.factoryId;
+  byproductDialogRecipeId.value = writableRecipeId;
+  byproductDialogOutputName.value = String(node.data.name ?? '未命名产出');
+  byproductDialogBaseUnit.value = String(node.data.baseUnit ?? '未配');
+  byproductDialogRow.value = writableRow;
+  byproductDialogVisible.value = true;
+}
+
+function onByproductDialogSaved(): void {
+  void loadBomOverlayData();
+}
+
 const packagingDialogVisible = ref(false);
 const packagingDialogFactoryId = ref('');
 const packagingDialogRecipeId = ref('');
@@ -2002,6 +2092,8 @@ async function loadBomOverlayData(): Promise<void> {
   if (!factoryId || uniqueSkuIds.length === 0) {
     bomOverlayAuxiliaryByProcess.value = {};
     bomOverlayPackagingByOutput.value = {};
+    bomOverlayByproductByOutput.value = {};
+    bomOverlayByproductRawByOutput.value = {};
     bomOverlayRecipeIdByProcess.value = {};
     bomOverlayProductIdByRecipe.value = {};
     bomDraftNotices.value = [];
@@ -2035,6 +2127,8 @@ async function loadBomOverlayData(): Promise<void> {
     const recipeIdByOutput: Record<string, string> = {};
     const productIdByRecipe: Record<string, string> = {};
     const packagingRawByOutput: Record<string, BomRecipeItemView[]> = {};
+    const byproductByOutput: Record<string, BomOverlayByproductInput> = {};
+    const byproductRawByOutput: Record<string, BomRecipeItemView[]> = {};
     // must-fix #8: 联合生产标注要报"当前实际生效的是哪个产出的配方" —— 用产出名做人话
     // 标签(配方本身没有独立的展示名), 按 recipeId 建索引, 供下面 auxiliaryByProcess 用。
     const outputNameByRecipe: Record<string, string> = {};
@@ -2070,8 +2164,20 @@ async function loadBomOverlayData(): Promise<void> {
           packagingSpecNameSnapshot: item.packagingSpecNameSnapshot ?? null,
         }),
       }));
+      // 副产是产出声明(materialCategory=BYPRODUCT), 与包材同挂产出节点, 但语义相反:
+      // 「每 1 单位成品产出多少」, 所以文案与 markers 都不复用包材那套投入侧口径。
+      const byproductItems = (recipe.items || []).filter((item) => item.materialCategory === 'BYPRODUCT');
+      const byproductRows: ByproductCellRow[] = byproductItems.map((item) => ({
+        id: String(item.id),
+        materialName: item.materialName || '未命名物料',
+        yieldText: formatPackagingDosageText(item.standardQuantity, item.unit, outputBaseUnit),
+        markers: [] as BomRowMarker[],
+      }));
+
       targets.filter((target) => target.skuId === skuId).forEach((target) => {
         packagingByOutput[target.nodeId] = { rows };
+        byproductByOutput[target.nodeId] = { rows: byproductRows };
+        byproductRawByOutput[target.nodeId] = byproductItems;
         recipeIdByOutput[target.nodeId] = recipe.id;
         // #Task1: 包材编辑弹窗的 row prop 需要完整原始行(materialTypeId/standardQuantity/
         // 替代关系等), 不是上面 rows 里那份只供展示用的 PackagingCellRow。
@@ -2159,6 +2265,8 @@ async function loadBomOverlayData(): Promise<void> {
     bomOverlaySubstitutesByRecipe.value = substitutesByRecipe;
     bomOverlayRecipeIdByOutput.value = recipeIdByOutput;
     bomOverlayPackagingRawByOutput.value = packagingRawByOutput;
+    bomOverlayByproductByOutput.value = byproductByOutput;
+    bomOverlayByproductRawByOutput.value = byproductRawByOutput;
     refreshBomOverlay();
   } catch (error) {
     if (!stillCurrent()) return;
@@ -2373,6 +2481,7 @@ function refreshBomOverlay(): void {
     workflowNodes,
     auxiliaryByProcess: bomOverlayAuxiliaryByProcess.value,
     packagingByOutput: bomOverlayPackagingByOutput.value,
+    byproductByOutput: bomOverlayByproductByOutput.value,
   });
   flowNodes.value = [
     ...strippedNodes,
