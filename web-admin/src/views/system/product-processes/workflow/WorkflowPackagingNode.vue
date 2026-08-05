@@ -71,7 +71,7 @@
 import { computed } from 'vue';
 import { Handle, Position } from '@vue-flow/core';
 import { PACK_OVERLAY_TARGET_HANDLE } from './bomOverlay';
-import type { PackagingCellData } from './bomOverlayTypes';
+import type { PackagingCellData, PackagingCellRow } from './bomOverlayTypes';
 
 // 沿用 bomOverlayTypes.ts 的唯一权威定义(理由同 WorkflowAuxiliaryNode.vue)。
 // 原地 re-export 保留既有导入路径 —— WorkflowPackagingNode.spec.ts 从本文件

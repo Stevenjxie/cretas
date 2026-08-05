@@ -82,7 +82,7 @@
 import { computed } from 'vue';
 import { Handle, Position } from '@vue-flow/core';
 import { AUX_OVERLAY_SOURCE_HANDLE } from './bomOverlay';
-import type { AuxiliaryCellData } from './bomOverlayTypes';
+import type { AuxiliaryCellData, AuxiliaryCellRow } from './bomOverlayTypes';
 
 // 沿用 bomOverlayTypes.ts 的唯一权威定义 —— deriveBomOverlay 的返回类型即本组件的 prop
 // 类型, 两侧不再各自声明一份互不相干的接口。原地 re-export 保留既有导入路径
