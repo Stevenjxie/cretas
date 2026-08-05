@@ -174,6 +174,27 @@ public class ToolRegistry {
     }
 
     /**
+     * 按工作台岗位取工具执行器，按 {@code getToolName()} 升序。
+     *
+     * <p>⚠️ 这<b>不是</b>权限过滤。{@link #getToolDefinitionsForRole(String)} 回答
+     * 「我能不能调」（安全），本方法回答「这是不是我的活」（发现性）。一个采购员
+     * 有权限调几百个工具，但他的日常活只有几件——把两者合并会让工作台重新变回
+     * 一个几百项的清单，也就等于没做。
+     *
+     * @param role 岗位，不可为 null
+     * @return 该岗位的工具（可能为空列表，不会是 null）
+     */
+    public List<ToolExecutor> getExecutorsByWorkdeskRole(WorkdeskRole role) {
+        if (role == null) {
+            throw new IllegalArgumentException("workdeskRole 不能为 null");
+        }
+        return toolMap.values().stream()
+                .filter(executor -> role == executor.workdeskRole())
+                .sorted(Comparator.comparing(ToolExecutor::getToolName))
+                .toList();
+    }
+
+    /**
      * 按工具名称前缀过滤，获取指定领域的工具定义
      *
      * <p>用于 Tool Calling 场景下的领域过滤：只发送与用户查询相关的工具给 LLM，
