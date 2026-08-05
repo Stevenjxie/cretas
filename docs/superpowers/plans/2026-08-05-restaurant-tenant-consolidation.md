@@ -1126,9 +1126,11 @@ git commit -m "feat(restaurant): 停用 37 个非 MOCK_REST 餐饮租户及其 4
 
 ---
 
-## Task 7: `MOCK_REST` 改名 + 建 4 个部门账号（运维步骤）
+## Task 7: 建 4 个部门账号（运维步骤）
 
-**⚠️ 本 Task 有一项待 Steve 确认（C2）：`MOCK_REST` 对外显示的名字。** 开工前先要答案；没有答案就先做账号部分，改名留到最后。
+> **C2 已定（Steve, 2026-08-05）：`MOCK_REST` 不改名。** 原计划的"改名"步骤取消。
+> 理由自洽：公开免登录演示入口已在 Task 5 下线，该租户此后只能账号登录进入，
+> `factories.name` 不再是对外可见面。**本 Task 不碰 `factories.name`。**
 
 **Files:** 无代码改动。全部通过既有 API/后台界面操作，**不手工 INSERT**。
 
@@ -1136,9 +1138,14 @@ git commit -m "feat(restaurant): 停用 37 个非 MOCK_REST 餐饮租户及其 4
 - Consumes: Task 3（白名单）+ Task 4（L1 权限行）+ Task 6（其它租户已停用）
 - Produces: `MOCK_REST` 下 5 个可登录账号
 
-- [ ] **Step 1: 改名**
+- [ ] **Step 1: 确认不改名**
 
-通过工厂管理界面把 `factories.name` 从「模拟平台餐饮租户 (假 POS 数据接入验证)」改为 Steve 给的名字。
+`factories.name` 保持「模拟平台餐饮租户 (假 POS 数据接入验证)」不变。本步骤只做一件事：确认没有人顺手改了它。
+
+```bash
+# 期望输出仍是原名
+```
+用只读查询确认 `MOCK_REST` 的 `name` 未被改动。
 
 - [ ] **Step 2: 建 4 个账号**
 
@@ -1287,8 +1294,10 @@ git commit -m "chore(restaurant): 撤 8/5 演示流 unit, 审计名单收敛到 
 
 | # | 内容 | 阻塞 |
 |---|---|---|
-| **C2** | `MOCK_REST` 对外显示的名字 | Task 7 Step 1（不阻塞其它步骤） |
+| ~~C2~~ | ~~`MOCK_REST` 对外显示的名字~~ → **已定 2026-08-05：不改名**，Task 7 Step 1 相应改写 | 无 |
 | **S1** | Task 5 Step 1 的调研结论：`cretas.demo.rest.factory-id` 置空后消费者是"跳过"还是"匹配任意" | Task 5 Step 3 |
+
+**已无待人工确认项。** S1 由 Task 5 的实施者读代码回答，不需要 Steve 介入。
 
 ---
 
