@@ -47,6 +47,7 @@ import type { ListSummaryRequest } from '@/types/listSummary';
 import { canonicalUnitCode, displayUnit, pricingAmountPreview } from '@/utils/unitPricing';
 import { enumLabel } from '@/utils/enumDisplay';
 import { canSubmitPurchaseOrder, purchaseOrderMoreActions } from './purchaseOrderActionIa';
+import { resolveSupplierMaterialRelations } from './purchaseOrderEditPrefill';
 import {
   listSupplierMaterials,
   listSupplierPurchaseSpecs,
@@ -308,9 +309,11 @@ function materialTaxRate(value: unknown): number | null {
 }
 
 async function onSupplierChange(): Promise<void> {
-  supplierMaterialRelations.value = form.value.supplierId
-    ? (await listSupplierMaterials(factoryId.value, form.value.supplierId)).filter((row) => row.active !== false)
-    : [];
+  supplierMaterialRelations.value = await resolveSupplierMaterialRelations(
+    factoryId.value,
+    form.value.supplierId,
+    listSupplierMaterials,
+  );
   purchaseSpecCache.value = {};
   materialSpecCache.value = {};
   form.value.items = [newPurchaseItem()];
@@ -508,16 +511,31 @@ onMounted(() => {
   loadMaterials();
   loadSalesOrders();
   const editId = String(route.query.edit || '');
-  if (editId) void openEditDialog(editId);
+  if (editId) launchEditDialog(editId);
   window.addEventListener('beforeunload', handleBeforeUnload);
 });
+
+// 这个入口坏过两次, 两次的症状都是「地址栏变了但什么也没发生」: 先是 watch 缺失, 后是
+// openEditDialog 内部抛异常而 `void` 把 rejection 丢掉. 任何未处理的异常都会复现同一症状,
+// 所以统一从这里进, 失败必须变成看得见的错误.
+function launchEditDialog(orderId: string): void {
+  void openEditDialog(orderId).catch((error: unknown) => {
+    ElMessage({
+      message: (error as Error)?.message || '采购单编辑打开失败',
+      type: 'error',
+      duration: 0,
+      showClose: true,
+    });
+    void clearEditQuery();
+  });
+}
 
 // 点「编辑」时用户已经在 /procurement/orders 上, router.push 只改 query 不换路由 → Vue 复用同一个
 // 组件实例, onMounted 不会二次执行. 旧代码只在 onMounted 读一次 route.query.edit, 于是地址栏多出
 // ?edit=xxx 而编辑弹窗永远不打开 —— 即客户反馈的「点击后仅会在域名后新增字符且无响应」.
 watch(() => route.query.edit, (value) => {
   const editId = String(value || '');
-  if (editId) void openEditDialog(editId);
+  if (editId) launchEditDialog(editId);
 });
 onBeforeUnmount(() => { window.removeEventListener('beforeunload', handleBeforeUnload); });
 
@@ -780,9 +798,15 @@ async function openEditDialog(orderId: string) {
   editingOrderDate.value = String(order.orderDate || factoryToday());
   const orderSupplierId = String(order.supplierId || '');
   form.value.supplierId = orderSupplierId;
-  supplierMaterialRelations.value = (
-    await listSupplierMaterials(factoryId.value, orderSupplierId)
-  ).filter((row) => row.active !== false);
+  // 「开始采购」按销售订单自动生成的草稿单没有供应商 (Sheet 第 22 行), 而编辑入口正是
+  // 为「事后补录供应商」而加的. 这里必须容许空 supplierId —— 空 id 直接拼进
+  // /{factoryId}/suppliers/{supplierId}/materials 会得到 /suppliers//materials 并 404,
+  // 把整个 openEditDialog 打断在 dialogVisible=true 之前, 复现「点了没反应」.
+  supplierMaterialRelations.value = await resolveSupplierMaterialRelations(
+    factoryId.value,
+    orderSupplierId,
+    listSupplierMaterials,
+  );
   await Promise.all(supplierMaterialRelations.value.flatMap((relation) => [
     loadPurchaseSpecs(relation.id),
     loadMaterialSpecs(relation.materialTypeId),

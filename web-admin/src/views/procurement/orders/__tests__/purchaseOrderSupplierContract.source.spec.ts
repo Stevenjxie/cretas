@@ -7,7 +7,13 @@ const detailSource = readFileSync(resolve(__dirname, '..', 'detail.vue'), 'utf8'
 
 describe('purchase order supplier and execution boundaries', () => {
   it('selects only the current supplier relation and its purchase specifications', () => {
-    expect(listSource).toContain('listSupplierMaterials(factoryId.value, form.value.supplierId)');
+    // 原断言钉的是 `listSupplierMaterials(factoryId.value, form.value.supplierId)` 这句字面.
+    // 契约本意是「供货关系必须按当前所选供应商取, 不能取全厂」—— 该调用现已收进
+    // resolveSupplierMaterialRelations (它在供应商为空时不发请求), 故按「改写不删除」
+    // 改为断言传进去的仍然是当前所选供应商.
+    expect(listSource).toMatch(
+      /resolveSupplierMaterialRelations\(\s*factoryId\.value,\s*form\.value\.supplierId,\s*listSupplierMaterials,/,
+    );
     expect(listSource).toContain('listSupplierPurchaseSpecs(factoryId.value, form.value.supplierId, relationId)');
     expect(listSource).toContain('v-model="item.supplierMaterialId"');
     expect(listSource).toContain('v-model="item.purchasePackagingSpecId"');
