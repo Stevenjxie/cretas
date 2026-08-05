@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.List;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
@@ -23,7 +24,19 @@ class DeactivateRestaurantTenantsMigrationTest {
     @Test
     @DisplayName("用户与租户一起停 —— 只停租户会造出「能登录但 AI 全拒」的半死状态")
     void deactivatesUsersToo() throws Exception {
-        assertThat(Files.readString(MIGRATION)).contains("UPDATE users SET is_active = false");
+        // A plain contains() on the whole file text cannot distinguish an
+        // executing statement from the same text sitting inside a "-- ..."
+        // comment (verified by mutation: prefixing the statement line with
+        // "-- MUTATED: " left the old assertion green). Require the
+        // statement to be the start of an actual (non-comment) line instead.
+        List<String> lines = Files.readAllLines(MIGRATION);
+        boolean hasExecutableStatement = lines.stream()
+                .map(String::trim)
+                .anyMatch(line -> line.startsWith("UPDATE users SET is_active = false"));
+        assertThat(hasExecutableStatement)
+                .as("expected an executable (non-commented) 'UPDATE users SET "
+                        + "is_active = false' statement in %s", MIGRATION)
+                .isTrue();
     }
 
     @Test
