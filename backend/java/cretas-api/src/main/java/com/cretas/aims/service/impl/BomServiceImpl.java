@@ -306,9 +306,9 @@ public class BomServiceImpl implements BomService {
     private BigDecimal calculateActualQuantity(String factoryId, BigDecimal standardQuantity, BigDecimal yieldRate) {
         // standardQuantity == null 是「此处未归集」(RAW/AUXILIARY 的历史脏数据/新行),
         // 不是「用量为 0」。0 会被下游/AI 上下文读成"零消耗"这类假数据(见 CLAUDE.md 核心
-        // 原则1)。calculateMaterialCost() 已对 actualQuantity==null 返回 null (非归集行本就
-        // 不参与合计), reconcileQuantityForPricing() 也已对 null 输入直接透传, 故此处返回
-        // null 不会引入 NPE。
+        // 原则1)。非归集行根本走不到 calculateMaterialCost() —— 类别过滤已先把 subtotal 置 null;
+        // (注意 calculateMaterialCost() 自己对 null 入参返回的是 ZERO 不是 null, 别指望它守这条不变量)。
+        // reconcileQuantityForPricing() 对 null 输入直接透传, 故此处返回 null 不会引入 NPE。
         if (standardQuantity == null) return null;
         if (yieldRate == null || yieldRate.compareTo(BigDecimal.ZERO) == 0) return standardQuantity;
 
