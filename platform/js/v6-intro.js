@@ -6,10 +6,15 @@
 (function(){
   var el = document.getElementById('v6Intro');
   if(!el) return;
+  /* 序章让位的信号。首屏标题的逐字入场(v6-motion.js)等这一下才开演, 否则字
+     会在还盖着的黑幕后面白白播完。任何一条退出路径都必须发, 包括"根本没播"
+     的那几条 —— 漏发一条, 标题就会一直藏着直到兜底定时器救场。 */
+  function enter(){ try { window.dispatchEvent(new Event('v6:enter')); } catch(e){} }
+
   var RM = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
   var seen = false;
   try { seen = sessionStorage.getItem('cretasIntroSeen') === '1'; } catch(e){}
-  if(seen || RM || !window.gsap){ el.remove(); return; }
+  if(seen || RM || !window.gsap){ el.remove(); enter(); return; }
 
   document.documentElement.classList.add('v6-lock');
   var revealed = false;
@@ -33,10 +38,13 @@
       document.documentElement.classList.remove('v6-lock');
       if(window.__v6lenis) window.__v6lenis.start();
       if(window.ScrollTrigger) ScrollTrigger.refresh();
+      enter();                      /* 兜底: 上面那次若被打断, 这里补发 */
     }});
     out.to('#v6Intro .icore', {y:-40, opacity:0, duration:.45, ease:'power3.in'})
        .to(el, {clipPath:'inset(0 0 100% 0)', duration:.85, ease:'expo.inOut'}, '-=.15')
-       .from('.v6-hero-mask img', {scale:1.1, duration:1.1, ease:'expo.out'}, '-=.5');
+       .from('.v6-hero-mask img', {scale:1.1, duration:1.1, ease:'expo.out'}, '-=.5')
+       /* 幕布刚擦过标题所在的高度就开演, 而不是等整幕落完 —— 两个动作要接得上 */
+       .add(enter, '-=.72');
   }
 
   window.addEventListener('wheel', reveal, {passive:true});
