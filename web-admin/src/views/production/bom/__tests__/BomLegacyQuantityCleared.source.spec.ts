@@ -14,6 +14,10 @@ describe('遗留用量列不再参与成本', () => {
       source.indexOf('const materialCostTotal') + 900,
     );
     expect(materialTotalBlock).toMatch(/materialCategory !== 'PACKAGING'/);
+    // 钉住读的是哪个字段：包材用量存在 standardQuantity，
+    // 换回 naturalQuantity 就是刚修好的那个静默少报 bug 原样复发。
+    expect(materialTotalBlock).toMatch(/item\.standardQuantity/);
+    expect(materialTotalBlock).not.toMatch(/item\.naturalQuantity/);
     expect(materialTotalBlock).toMatch(/return sum;/);
     expect(materialTotalBlock).not.toMatch(/yieldRate/);
   });
