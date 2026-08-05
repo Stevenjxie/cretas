@@ -325,12 +325,20 @@
 
     var src = document.createElement('div');
     src.className = 'lens-src';
-    var clone = base.cloneNode(true);
+    /* ⚠️ 必须连 <picture> 一起克隆, 不能只克隆里面的 <img>。
+       底图外面包着 <picture><source type="image/webp" srcset=...>, 选哪个文件是由
+       <source> 决定的; 单独克隆 <img> 就脱离了这个上下文, 浏览器只认它的 src ——
+       那是给老浏览器兜底的原始 JPEG。实测: 桌面端会把 band-kitchen.jpg(190KB) 和
+       band-kitchen-1600.webp(120KB) 两个都下下来, 白多一整张图。
+       克隆整个 <picture> 则走同一套 source 规则 → 同一个 URL → 直接命中缓存。 */
+    var host = base.closest('picture') || base;
+    var cloneHost = host.cloneNode(true);
+    var clone = cloneHost.tagName === 'PICTURE' ? cloneHost.querySelector('img') : cloneHost;
     clone.alt = '';
     clone.setAttribute('aria-hidden', 'true');
-    clone.removeAttribute('loading');
+    clone.removeAttribute('loading');   /* 透镜里的副本要跟底图同时在场, 不能懒加载 */
     clone.removeAttribute('id');
-    src.appendChild(clone);
+    src.appendChild(cloneHost);
 
     var tint = document.createElement('div');
     tint.className = 'lens-tint';
