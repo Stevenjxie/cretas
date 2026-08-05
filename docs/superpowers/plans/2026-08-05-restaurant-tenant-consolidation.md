@@ -923,7 +923,7 @@ DEMO_REST 随租户收敛一并停用, 公开免登录演示入口下线。
 
 ---
 
-## Task 6: Migration —— 停用 37 个租户 + 45 个用户（带回滚台账）
+## Task 6: Migration —— 停用 37 个租户 + 46 个用户（带回滚台账）
 
 **背景**：登录只校验 `user.getIsActive()`（`MobileAuthServiceImpl:127/171`），**不校验 factory 的**。只停租户不停用户 = 用户登录成功但 AI 网关全拒（`ToolPrincipalPolicy:54`）——半死状态比直接拒绝更糟。
 
@@ -1105,7 +1105,7 @@ ROLLBACK;
 
 ```bash
 git status --short
-git commit -m "feat(restaurant): 停用 37 个非 MOCK_REST 餐饮租户及其 45 个用户
+git commit -m "feat(restaurant): 停用 37 个非 MOCK_REST 餐饮租户及其 46 个用户
 
 只翻 is_active 状态位, 零数据删除。
 
