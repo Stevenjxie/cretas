@@ -5,6 +5,8 @@ import com.cretas.aims.dto.common.PageRequest;
 import com.cretas.aims.dto.common.PageResponse;
 import com.cretas.aims.dto.material.MaterialBatchDTO;
 import com.cretas.aims.service.MaterialBatchService;
+import com.cretas.aims.service.finding.FindingService;
+import com.cretas.aims.service.finding.FindingTextRenderer;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
@@ -26,6 +28,12 @@ public class MaterialStockSummaryTool extends AbstractBusinessTool {
 
     @Autowired
     private MaterialBatchService materialBatchService;
+
+    @Autowired
+    private FindingService findingService;
+
+    @Autowired
+    private FindingTextRenderer findingTextRenderer;
 
     @Override
     public String getToolName() {
@@ -106,18 +114,39 @@ public class MaterialStockSummaryTool extends AbstractBusinessTool {
         List<MaterialBatchDTO> batches = batchPage.getContent();
         long total = batchPage.getTotalElements();
 
-        List<Map<String, Object>> lowStockWarnings = materialBatchService.getLowStockWarnings(factoryId);
-        int lowStock = lowStockWarnings.size();
+        // 低库存不再由本 Tool 直接查询 —— 统一走发现层，避免同一口径在两处各写一遍
+        // (见 ListSummaryServiceImpl.java:43-50 的 footer/KPI 口径漂移事故)。
+        FindingService.Result findingResult = findingService.detectInline(factoryId, "inventory");
+
+        // 🔴 禁止降级处理: FindingServiceImpl 对单条规则失败做了隔离(catch 掉、
+        // 从 checkedRules 剔除), 这是发现层内部的设计——对本 Tool 而言, 低库存
+        // 是唯一规则, 它失败就意味着 countsByCode 里根本没有 LOW_STOCK 这个
+        // key, getOrDefault(...,0) 会把"没查到"读成"查到了 0 个"。改造前
+        // getLowStockWarnings 抛异常会直接冒泡到 AbstractBusinessTool.execute()
+        // 变成失败响应；这里原样重建那个失败语义——不吞掉、不编数字。
+        if (!findingResult.complete()) {
+            throw new IllegalStateException(
+                    "低库存发现规则未能完整执行, 拒绝返回可能失真的库存汇总: 失败规则=" + findingResult.failedRules());
+        }
+
+        int lowStock = findingResult.countsByCode().getOrDefault("LOW_STOCK", 0);
 
         Map<String, Object> result = new HashMap<>();
         result.put("totalBatches", total);
         result.put("lowStockCount", lowStock);
         result.put("batches", batches.size() > 20 ? batches.subList(0, 20) : batches);
+        result.put("findings", findingResult.findings());
+
+        String findingsText = findingTextRenderer.renderInline(findingResult);
+        result.put("findingsText", findingsText);
 
         StringBuilder sb = new StringBuilder();
         sb.append("库存汇总：");
         sb.append("总批次数: ").append(total);
         sb.append("，低库存预警: ").append(lowStock).append("个");
+        if (!findingsText.isEmpty()) {
+            sb.append("\n\n").append(findingsText);
+        }
 
         result.put("message", sb.toString());
 
