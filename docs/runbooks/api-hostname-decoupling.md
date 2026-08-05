@@ -1,8 +1,7 @@
 # 把生产 API 从 www 迁到 api. 子域
 
-**状态**: 未执行, 阻塞在 DNS(需域名控制台权限)
+**状态**: 基础设施已就绪(2026-08-05), 剩下发 App 新版这一步
 **排查日期**: 2026-08-05
-**结论**: 不急。现在没有故障, 想做的时候按下面的顺序做。
 
 ---
 
@@ -28,63 +27,70 @@ REACT_APP_API_URL=https://www.cretaceousfuture.com
 
 ---
 
-## 现状: `api.` 是个半成品
+## 基础设施: ✅ 已就绪 (2026-08-05 完成)
 
 | 项 | 状态 |
 |---|---|
-| nginx vhost | ✅ 存在(`api.cretaceousfuture.com.conf`, 2026-05-15 建) |
-| 配置正确性 | ✅ 已实测: 绕过 DNS 用 `--resolve` 直连, 返回 **HTTP 401** 且响应体与 www **逐字一致** |
-| HTTP→HTTPS | ✅ 该 vhost 自带 301 |
-| 扫描器拦截 | ✅ 比 www 那份更严(`.git`/`.env`/wp-* 一律 444) |
-| **DNS 解析** | ❌ **无记录**(其余 www/admin/ota/aiassist 都指向 139.196.165.140) |
-| **TLS 证书** | ❌ **2026-04-07 已过期**(`SEC_E_CERT_EXPIRED`) |
+| nginx vhost | ✅ `api.cretaceousfuture.com.conf`(2026-05-15 建), 自带 HTTP→HTTPS, 扫描器拦截比 www 那份更严 |
+| DNS A 记录 | ✅ `api` → `139.196.165.140`, TTL 600(2026-08-05 添加, RecordId 2084962776417793024) |
+| TLS 证书 | ✅ Let's Encrypt ECC, 有效期至 **2026-11-03** |
+| **自动续期** | ✅ **已纳入 acme.sh**, 下次续期 2026-09-03 |
+| 端到端实测 | ✅ 返回 HTTP 401, 与 www **除 timestamp 外逐字段一致**(同一个后端) |
 
-验证命令(不需要 DNS 就能复现):
+### ⚠️ 当初为什么会过期(根因, 别再犯)
+
+acme.sh 管着所有其他子域(admin / aiassist / centerapi / www / ota / test / download)
+并自动续期, **唯独 api 不在里面** —— 2026-01-08 那张证书是从别处签的(阿里云 SSL 服务,
+对应 DNS 里那条 `_dnsauth.api` TXT 记录), 游离在自动续期体系外, 于是 2026-04-07 过期后
+无人察觉, 一直挂到 8 月。
+
+现已改用 acme.sh + DNS-01(阿里云 API)重签, 纳入统一续期。
+**判据: 新增子域证书后, 用 `acme.sh --list` 确认它出现在列表里, 否则就是游离状态。**
+
+签发命令(留档, 将来加子域可照抄 —— DNS-01 不受 vhost 里 80 端口 301 的影响):
 
 ```bash
-R="api.cretaceousfuture.com:443:139.196.165.140"
-# 证书过期 → 连接失败
-curl -sS --resolve "$R" https://api.cretaceousfuture.com/ 2>&1 | head -1
-# 忽略证书 → 代理是好的, 返回 401
-curl -sk --resolve "$R" "https://api.cretaceousfuture.com/api/mobile/LIUSHANMEN/product-types/options"
+/root/.acme.sh/acme.sh --issue --dns dns_ali -d <子域> --keylength ec-256 --server letsencrypt
+/root/.acme.sh/acme.sh --install-cert -d <子域> --ecc \
+  --key-file       /www/server/panel/vhost/cert/<子域>.key \
+  --fullchain-file /www/server/panel/vhost/cert/<子域>.pem \
+  --reloadcmd      "nginx -t && nginx -s reload"
 ```
 
 ---
 
-## 执行顺序(⚠️ 不能调换)
+## 剩下的步骤
 
-**先 DNS 再证书** —— Let's Encrypt 的 HTTP-01 验证需要域名解析到本机才能签发。
-顺序反了会一直签不下来。
-
-1. **加 DNS A 记录**: `api.cretaceousfuture.com` → `139.196.165.140`
-   (在域名服务商 / 阿里云控制台, 服务器上做不了)
-2. **等解析生效**: `nslookup api.cretaceousfuture.com` 返回 139.196.165.140
-3. **签发证书**(宝塔面板该站点 → SSL → Let's Encrypt, 或 acme.sh)
-4. **验证**: 上面那两条 curl, 应为 **HTTP 401** 且**不再需要 `-k`**
-5. **改 App 配置**: `.env.production` → `REACT_APP_API_URL=https://api.cretaceousfuture.com`
-6. **发 App 新版**
-7. **⚠️ 盯流量归零, 不要按时间猜**:
+1. **改 App 配置**: `frontend/CretasFoodTrace/.env.production`
+   → `REACT_APP_API_URL=https://api.cretaceousfuture.com`
+2. **发 App 新版**
+3. **⚠️ 盯流量归零, 不要按时间猜**:
    ```bash
    ssh root@139.196.165.140 \
      'grep "$(date +%d/%b/%Y)" /www/wwwlogs/www.cretaceousfuture.com.log | grep -c "okhttp/4"'
    ```
-   这个数字降到 0 才说明旧版本用户全部更新完。**在此之前 www 上的 `/api/` 代理一行都不能动。**
-8. 之后 www 才自由: 主机规范化 / 缓存策略 / 安全头随便改
+   这个数字降到 0 才说明旧版本用户全部更新完。
+   **在此之前 www 上的 `/api/` 代理一行都不能动。**
+4. 之后 www 才自由: 主机规范化 / 缓存策略 / 安全头随便改
+
+验证命令(现在就能跑, 应返回 401 且不需要 `-k`):
+
+```bash
+curl -s -o /dev/null -w "%{http_code} 证书=%{ssl_verify_result}\n" \
+  https://api.cretaceousfuture.com/api/mobile/LIUSHANMEN/product-types/options
+```
 
 ---
 
 ## 值不值得做
 
 **不急做的理由**: 目前零故障; 双主机的 SEO 问题已由各页 `<link rel=canonical>` 解决
-(这是标准且充分的做法); 迁移要等用户更新完, 中间任何一步出错都是工厂用户用不了。
+(这是标准且充分的做法); 切换要等用户更新完, 中间任何一步出错都是工厂用户用不了。
 
 **值得做的理由**: 不是 SEO, 是**营销站和生产 API 不该共用一个 vhost**。分开之后,
-改官网再也不会有打断 App 的可能。
-
-**顺带**: 那张 2026-04-07 过期的证书现在还挂在 vhost 上。虽然没 DNS 打不到,
-但如果有人先加了 DNS 却没续证书, API 会直接因证书错误全挂 —— 这就是上面顺序不能反的原因。
+改官网再也不会有打断 App 的可能。基础设施已经备好, 什么时候发版什么时候切。
 
 ---
 
 关联: `.claude/skills/server-operations`(部署与服务器规范)、
-`platform/`(官网, 与该 vhost 同一份 nginx 配置)
+`.claude/skills/aliyun-operations`(阿里云)、`platform/`(官网, 与 www vhost 同一份配置)
