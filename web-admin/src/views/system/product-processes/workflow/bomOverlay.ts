@@ -4,6 +4,8 @@ import type {
   AuxiliaryCellRow,
   PackagingCellData,
   PackagingCellRow,
+  ByproductCellRow,
+  ByproductCellData,
 } from './bomOverlayTypes';
 
 /**
@@ -44,6 +46,8 @@ export function stripBomOverlayEdges<T extends { source: string; target: string 
  */
 const AUX_OFFSET_Y = 220;
 const PACK_OFFSET_X = 220;
+// 副产挂在产出下方, 与包材(右侧)分开, 免得两个 cell 叠在一起。
+const BYP_OFFSET_Y = 200;
 
 /**
  * 派生边挂靠的 handle id —— 必须与组件里 <Handle> 的 id 字面量一致
@@ -54,6 +58,8 @@ const PACK_OFFSET_X = 220;
 export const AUX_OVERLAY_SOURCE_HANDLE = 'bom-aux-out';
 export const PACK_OVERLAY_SOURCE_HANDLE = 'bom-pack-out';
 export const PACK_OVERLAY_TARGET_HANDLE = 'bom-pack-in';
+export const BYP_OVERLAY_SOURCE_HANDLE = 'bom-byp-out';
+export const BYP_OVERLAY_TARGET_HANDLE = 'bom-byp-in';
 
 /**
  * deriveBomOverlay 只需要节点的 id/kind/position, 加一份【展示用】的最小数据子集
@@ -99,10 +105,17 @@ export interface BomOverlayPackagingInput {
   rows: PackagingCellRow[];
 }
 
+/** 一个终端产出的副产浮层输入。副产是产出声明, 与包材同挂产出节点。 */
+export interface BomOverlayByproductInput {
+  rows: ByproductCellRow[];
+}
+
 export interface BomOverlayInput {
   workflowNodes: BomOverlaySourceNode[];
   auxiliaryByProcess: Record<string, BomOverlayAuxiliaryInput>;
   packagingByOutput: Record<string, BomOverlayPackagingInput>;
+  /** 可选: 老调用方不传时按「没有副产」派生空 cell, 与包材/辅料一致(防呆: 空 cell 也要画)。 */
+  byproductByOutput?: Record<string, BomOverlayByproductInput>;
 }
 
 /**
@@ -112,7 +125,8 @@ export interface BomOverlayInput {
  */
 export type OverlayNode =
   | { id: string; type: 'bomAuxiliary'; position: WorkflowPosition; data: AuxiliaryCellData }
-  | { id: string; type: 'bomPackaging'; position: WorkflowPosition; data: PackagingCellData };
+  | { id: string; type: 'bomPackaging'; position: WorkflowPosition; data: PackagingCellData }
+  | { id: string; type: 'bomByproduct'; position: WorkflowPosition; data: ByproductCellData };
 
 export interface OverlayEdge {
   id: string;
@@ -189,6 +203,30 @@ export function deriveBomOverlay(input: BomOverlayInput): BomOverlayResult {
         sourceHandle: PACK_OVERLAY_SOURCE_HANDLE,
         target: packId,
         targetHandle: PACK_OVERLAY_TARGET_HANDLE,
+        style: { strokeDasharray: '5 4' },
+      });
+
+      // 副产同样只挂终端产出。与包材一样, 没有副产也派生空 cell ——
+      // 「没配副产」和「这里不能配副产」必须能被用户区分开。
+      const bypId = `${BOM_OVERLAY_PREFIX}byp:${node.id}`;
+      const bypMeta = input.byproductByOutput?.[node.id];
+      nodes.push({
+        id: bypId,
+        type: 'bomByproduct',
+        position: { x: node.position.x, y: node.position.y + BYP_OFFSET_Y },
+        data: {
+          outputName: node.data.name ?? '未命名产出',
+          baseUnit: node.data.baseUnit ?? '未配',
+          rows: bypMeta?.rows ?? [],
+          outputNodeId: node.id,
+        },
+      });
+      edges.push({
+        id: `${BOM_OVERLAY_PREFIX}edge:byp:${node.id}`,
+        source: node.id,
+        sourceHandle: BYP_OVERLAY_SOURCE_HANDLE,
+        target: bypId,
+        targetHandle: BYP_OVERLAY_TARGET_HANDLE,
         style: { strokeDasharray: '5 4' },
       });
     }

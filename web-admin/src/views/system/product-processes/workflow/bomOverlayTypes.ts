@@ -68,6 +68,29 @@ export interface PackagingCellRow {
   markers: BomRowMarker[];
 }
 
+/**
+ * 副产行。副产与前三类的方向相反 —— 它是【产出声明】不是投入
+ * (web-admin BOM 页 bomCategoryTabs 同口径), 所以 cell 挂在终端产出上,
+ * 且用量语义是「每 1 单位成品【产出】多少」, 文案不能沿用投入侧的「用量」。
+ */
+export interface ByproductCellRow {
+  id: string;
+  materialName: string;
+  /** 已折算的产出量表达, 含分母, 例如 "0.2 kg/袋" */
+  yieldText: string;
+  markers: BomRowMarker[];
+}
+
+export interface ByproductCellData {
+  /** 该副产 cell 所属的终端产出名 */
+  outputName: string;
+  /** 产出 SKU 的基本单位 —— 分母来源, 禁止硬编码 */
+  baseUnit: string;
+  rows: ByproductCellRow[];
+  /** 真实(非浮层)FINISHED_GOOD 节点 id, 同 PackagingCellData.outputNodeId。 */
+  outputNodeId: string;
+}
+
 export interface PackagingCellData {
   /** 该包材 cell 所属的终端产出名 */
   outputName: string;
