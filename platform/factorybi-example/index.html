@@ -3,6 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="description" content="白垩纪 Cretas 食品工厂管理平台功能展示：生产报工、批次溯源、原料库存、质检 HACCP、设备冷链与经营分析的真实界面。">
 <title>工厂管理平台功能展示 — 白垩纪食品溯源系统</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -22,7 +23,7 @@
   --accent3: #a78bfa;
   --text: #e8edf5;
   --text-secondary: #94a3b8;
-  --muted: #64748b;
+  --muted: #8a93a6;
   --ease-out-expo: cubic-bezier(0.16, 1, 0.3, 1);
   --ease-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
 }
@@ -792,7 +793,7 @@ body {
 .timeline-role.supervisor {
   background: rgba(59, 130, 246, 0.1);
   border: 1px solid rgba(59, 130, 246, 0.2);
-  color: var(--accent);
+  color: #5b9bff;
 }
 .timeline-role.admin {
   background: rgba(167, 139, 250, 0.1);
@@ -988,8 +989,8 @@ body {
 .status-badge.draft { background: rgba(100, 116, 139, 0.15); color: #94a3b8; }
 .status-badge.pending { background: rgba(251, 191, 36, 0.12); color: #fbbf24; }
 .status-badge.approved { background: rgba(52, 211, 153, 0.12); color: #34d399; }
-.status-badge.rejected { background: rgba(239, 68, 68, 0.12); color: #ef4444; }
-.status-badge.completed { background: rgba(59, 130, 246, 0.12); color: #3b82f6; }
+.status-badge.rejected { background: rgba(239, 68, 68, 0.12); color: #ff6b6b; }
+.status-badge.completed { background: rgba(59, 130, 246, 0.12); color: #5b9bff; }
 .status-arrow {
   font-size: 12px;
   color: var(--muted);
@@ -1204,7 +1205,7 @@ body {
       </div>
       <div class="phone-frame" onclick="openLightbox(this)" data-caption="首页概览 — 工厂管理仪表盘" style="animation: floatSlow 7s ease-in-out infinite;">
         <div class="phone-screen">
-          <img src="./screenshots/ss-home.png" alt="首页概览" loading="lazy">
+          <img src="./screenshots/ss-home.png" width="390" height="844" alt="首页概览" loading="lazy">
         </div>
       </div>
     </div>
@@ -1233,7 +1234,7 @@ body {
       </div>
       <div class="phone-frame" onclick="openLightbox(this)" data-caption="AI 分析中心 — 多维度智能分析" style="animation: floatSlow 7s ease-in-out 1.5s infinite;">
         <div class="phone-screen">
-          <img src="./screenshots/ss-ai-center.png" alt="AI分析中心" loading="lazy">
+          <img src="./screenshots/ss-ai-center.png" width="390" height="844" alt="AI分析中心" loading="lazy">
         </div>
       </div>
     </div>
@@ -1285,7 +1286,7 @@ body {
       </div>
       <div class="phone-frame" onclick="openLightbox(this)" data-caption="AI 智能对话 — 自然语言交互" style="animation: floatSlow 7s ease-in-out 0.8s infinite;">
         <div class="phone-screen">
-          <img src="./screenshots/ss-ai-chat.png" alt="AI对话" loading="lazy">
+          <img src="./screenshots/ss-ai-chat.png" width="390" height="844" alt="AI对话" loading="lazy">
         </div>
       </div>
     </div>
@@ -1319,7 +1320,7 @@ body {
       </div>
       <div class="phone-frame" onclick="openLightbox(this)" data-caption="数据报表 — 多维度运营分析" style="animation: floatSlow 7s ease-in-out 2s infinite;">
         <div class="phone-screen">
-          <img src="./screenshots/ss-reports.png" alt="数据报表" loading="lazy">
+          <img src="./screenshots/ss-reports.png" width="390" height="844" alt="数据报表" loading="lazy">
         </div>
       </div>
     </div>
@@ -1371,7 +1372,7 @@ body {
       </div>
       <div class="phone-frame" onclick="openLightbox(this)" data-caption="SmartBI 智能分析 — KPI 与图表" style="animation: floatSlow 7s ease-in-out 1s infinite;">
         <div class="phone-screen">
-          <img src="./screenshots/ss-smartbi.png" alt="SmartBI分析" loading="lazy">
+          <img src="./screenshots/ss-smartbi.png" width="390" height="844" alt="SmartBI分析" loading="lazy">
         </div>
       </div>
     </div>
@@ -1406,7 +1407,7 @@ body {
       </div>
       <div class="phone-frame" onclick="openLightbox(this)" data-caption="管理中心 — 模块化管理入口" style="animation: floatSlow 7s ease-in-out 0.5s infinite;">
         <div class="phone-screen">
-          <img src="./screenshots/ss-management.png" alt="管理中心" loading="lazy">
+          <img src="./screenshots/ss-management.png" width="390" height="844" alt="管理中心" loading="lazy">
         </div>
       </div>
     </div>
@@ -1437,7 +1438,7 @@ body {
       </div>
       <div class="phone-frame" onclick="openLightbox(this)" data-caption="进销存管理 — 采购订单列表" style="animation: floatSlow 7s ease-in-out 1.8s infinite;">
         <div class="phone-screen">
-          <img src="./screenshots/ss-purchase-orders.png" alt="采购订单" loading="lazy">
+          <img src="./screenshots/ss-purchase-orders.png" width="390" height="844" alt="采购订单" loading="lazy">
         </div>
       </div>
     </div>
@@ -1587,7 +1588,7 @@ body {
             </div>
             <div class="timeline-phone" onclick="openLightbox(this)" data-caption="登录页面 — 车间主管账号">
               <div class="timeline-phone-screen">
-                <img src="./screenshots/ss-login.png" alt="登录页面" loading="lazy">
+                <img src="./screenshots/ss-login.png" width="390" height="844" alt="登录页面" loading="lazy">
               </div>
             </div>
           </div>
@@ -1615,7 +1616,7 @@ body {
             </div>
             <div class="timeline-phone" onclick="openLightbox(this)" data-caption="扫码报工 — 扫描批次条码">
               <div class="timeline-phone-screen">
-                <img src="./screenshots/ss-loop-scan.png" alt="扫码报工" loading="lazy">
+                <img src="./screenshots/ss-loop-scan.png" width="375" height="812" alt="扫码报工" loading="lazy">
               </div>
             </div>
           </div>
@@ -1638,7 +1639,7 @@ body {
             </div>
             <div class="timeline-phone" onclick="openLightbox(this)" data-caption="班组报工 — 选择批次并填写数据">
               <div class="timeline-phone-screen">
-                <img src="./screenshots/ss-loop-report-form.png" alt="报工填报" loading="lazy">
+                <img src="./screenshots/ss-loop-report-form.png" width="375" height="812" alt="报工填报" loading="lazy">
               </div>
             </div>
           </div>
@@ -1678,7 +1679,7 @@ body {
             </div>
             <div class="timeline-phone" onclick="openLightbox(this)" data-caption="报工审批 — 筛选与审核">
               <div class="timeline-phone-screen">
-                <img src="./screenshots/ss-loop-approval.png" alt="报工审批" loading="lazy">
+                <img src="./screenshots/ss-loop-approval.png" width="375" height="812" alt="报工审批" loading="lazy">
               </div>
             </div>
           </div>
@@ -1719,7 +1720,7 @@ body {
             </div>
             <div class="timeline-phone" onclick="openLightbox(this)" data-caption="工厂管理员首页 — AI洞察与产量汇总">
               <div class="timeline-phone-screen">
-                <img src="./screenshots/ss-loop-fa-home.png" alt="管理员首页" loading="lazy">
+                <img src="./screenshots/ss-loop-fa-home.png" width="375" height="812" alt="管理员首页" loading="lazy">
               </div>
             </div>
           </div>
@@ -1841,7 +1842,7 @@ body {
             </div>
             <div class="timeline-phone" onclick="openLightbox(this)" data-caption="采购订单 — 订单列表与状态">
               <div class="timeline-phone-screen">
-                <img src="./screenshots/ss-loop-purchase.png" alt="采购订单" loading="lazy">
+                <img src="./screenshots/ss-loop-purchase.png" width="375" height="812" alt="采购订单" loading="lazy">
               </div>
             </div>
           </div>
@@ -1866,7 +1867,7 @@ body {
             <div class="status-arrow">&#x2192;</div>
             <div class="status-badge" style="background:rgba(251,191,36,0.12);color:#fbbf24;">质检中</div>
             <div class="status-arrow">&#x2192;</div>
-            <div class="status-badge" style="background:rgba(59,130,246,0.12);color:#3b82f6;">上架中</div>
+            <div class="status-badge" style="background:rgba(59,130,246,0.12);color:#5b9bff;">上架中</div>
             <div class="status-arrow">&#x2192;</div>
             <div class="status-badge completed">已入库</div>
           </div>
@@ -1889,7 +1890,7 @@ body {
             </div>
             <div class="timeline-phone" onclick="openLightbox(this)" data-caption="仓储管理 — 原材料批次入库">
               <div class="timeline-phone-screen">
-                <img src="./screenshots/ss-loop-inbound.png?v=2" alt="入库管理" loading="lazy">
+                <img src="./screenshots/ss-loop-inbound.png?v=2" width="375" height="812" alt="入库管理" loading="lazy">
               </div>
             </div>
           </div>
@@ -1916,7 +1917,7 @@ body {
             </div>
             <div class="timeline-phone" onclick="openLightbox(this)" data-caption="成品库存 — 批次追踪与预警">
               <div class="timeline-phone-screen">
-                <img src="./screenshots/ss-loop-inventory.png" alt="库存管理" loading="lazy">
+                <img src="./screenshots/ss-loop-inventory.png" width="375" height="812" alt="库存管理" loading="lazy">
               </div>
             </div>
           </div>
@@ -1943,7 +1944,7 @@ body {
             </div>
             <div class="timeline-phone" onclick="openLightbox(this)" data-caption="生产管理 — 批次与物料消耗">
               <div class="timeline-phone-screen">
-                <img src="./screenshots/ss-loop-production.png?v=2" alt="生产消耗" loading="lazy">
+                <img src="./screenshots/ss-loop-production.png?v=2" width="375" height="812" alt="生产消耗" loading="lazy">
               </div>
             </div>
           </div>
@@ -1989,7 +1990,7 @@ body {
             </div>
             <div class="timeline-phone" onclick="openLightbox(this)" data-caption="销售订单 — 订单列表与状态流转">
               <div class="timeline-phone-screen">
-                <img src="./screenshots/ss-loop-sales.png" alt="销售订单" loading="lazy">
+                <img src="./screenshots/ss-loop-sales.png" width="375" height="812" alt="销售订单" loading="lazy">
               </div>
             </div>
           </div>
@@ -2012,7 +2013,7 @@ body {
           <div class="status-flow">
             <div class="status-badge pending">待发货</div>
             <div class="status-arrow">&#x2192;</div>
-            <div class="status-badge" style="background:rgba(59,130,246,0.12);color:#3b82f6;">已发货 SHIPPED</div>
+            <div class="status-badge" style="background:rgba(59,130,246,0.12);color:#5b9bff;">已发货 SHIPPED</div>
             <div class="status-arrow">&#x2192;</div>
             <div class="status-badge completed">已完成 COMPLETED</div>
           </div>
@@ -2035,7 +2036,7 @@ body {
             </div>
             <div class="timeline-phone" onclick="openLightbox(this)" data-caption="出库发货 — 物流追踪与状态">
               <div class="timeline-phone-screen">
-                <img src="./screenshots/ss-loop-shipping.png?v=2" alt="出库发货" loading="lazy">
+                <img src="./screenshots/ss-loop-shipping.png?v=2" width="375" height="812" alt="出库发货" loading="lazy">
               </div>
             </div>
           </div>
@@ -2076,7 +2077,7 @@ body {
             </div>
             <div class="timeline-phone" onclick="openLightbox(this)" data-caption="BI 数据驾驶舱 — 财务汇总分析">
               <div class="timeline-phone-screen">
-                <img src="./screenshots/ss-loop-bi.png?v=2" alt="BI分析" loading="lazy">
+                <img src="./screenshots/ss-loop-bi.png?v=2" width="375" height="812" alt="BI分析" loading="lazy">
               </div>
             </div>
           </div>
@@ -2139,7 +2140,7 @@ body {
       </div>
       <div class="phone-frame" onclick="openLightbox(this)" data-caption="员工管理 — 用户列表与统计" style="animation: floatSlow 7s ease-in-out 0.3s infinite;">
         <div class="phone-screen">
-          <img src="./screenshots/ss-employees.png" alt="员工管理" loading="lazy">
+          <img src="./screenshots/ss-employees.png" width="390" height="844" alt="员工管理" loading="lazy">
         </div>
       </div>
     </div>
@@ -2168,7 +2169,7 @@ body {
       </div>
       <div class="phone-frame" onclick="openLightbox(this)" data-caption="个人中心 — 设置与多语言" style="animation: floatSlow 7s ease-in-out 2.2s infinite;">
         <div class="phone-screen">
-          <img src="./screenshots/ss-profile.png" alt="个人中心" loading="lazy">
+          <img src="./screenshots/ss-profile.png" width="390" height="844" alt="个人中心" loading="lazy">
         </div>
       </div>
     </div>
@@ -2192,12 +2193,12 @@ body {
     <div class="dual-phones reveal reveal-d1">
       <div class="phone-frame" onclick="openLightbox(this)" data-caption="登录页面 — 安全认证" style="animation: floatSlow 7s ease-in-out infinite;">
         <div class="phone-screen">
-          <img src="./screenshots/ss-login.png" alt="登录页" loading="lazy">
+          <img src="./screenshots/ss-login.png" width="390" height="844" alt="登录页" loading="lazy">
         </div>
       </div>
       <div class="phone-frame" onclick="openLightbox(this)" data-caption="引导页面 — 系统介绍" style="animation: floatSlow 7s ease-in-out 2s infinite;">
         <div class="phone-screen">
-          <img src="./screenshots/ss-landing.png" alt="引导页" loading="lazy">
+          <img src="./screenshots/ss-landing.png" width="390" height="844" alt="引导页" loading="lazy">
         </div>
       </div>
     </div>

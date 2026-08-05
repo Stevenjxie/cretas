@@ -3,6 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="description" content="白垩纪 Cretas 餐饮连锁管理系统展示：门店经营驾驶舱、菜品毛利核算、损耗预警、供应商对账的真实界面。">
 <title>餐饮门店管理系统展示 — 白垩纪食品溯源系统</title>
 <style>
 /* ===== RESET & VARIABLES ===== */
@@ -11,6 +12,9 @@
 :root {
   --primary: #d35400;
   --primary-light: #e67e22;
+  /* --primary 同时用作品牌底色(渐变)与文字色。当文字用时对比度只有 3.46,
+     但压深 --primary 会改掉整站品牌绿橙。所以另开一个只给文字用的深色档。 */
+  --primary-ink: #a83f00;
   --accent: #fa8c16;
   --accent-red: #f5222d;
   --secondary: #c0392b;
@@ -21,8 +25,8 @@
   --border: rgba(211, 84, 0, 0.08);
   --border-hover: rgba(211, 84, 0, 0.22);
   --text: #1c1917;
-  --text-secondary: #78716c;
-  --muted: #a8a29e;
+  --text-secondary: #5f5a55;
+  --muted: #6b6560;
   --success: #27ae60;
   --ease-out-expo: cubic-bezier(0.16, 1, 0.3, 1);
   --ease-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
@@ -81,7 +85,7 @@ body {
 .nav-brand {
   font-weight: 700;
   font-size: 14px;
-  color: var(--primary);
+  color: var(--primary-ink);
   text-decoration: none;
   display: flex;
   align-items: center;
@@ -123,7 +127,7 @@ body {
   transition: all 0.25s;
 }
 .nav-link:hover, .nav-link.active {
-  color: var(--primary);
+  color: var(--primary-ink);
   background: rgba(211, 84, 0, 0.06);
 }
 
@@ -329,7 +333,7 @@ body {
   font-weight: 700;
   letter-spacing: 0.12em;
   text-transform: uppercase;
-  color: var(--primary);
+  color: var(--primary-ink);
   margin-bottom: 12px;
 }
 .section-label::before {
@@ -372,7 +376,7 @@ body {
   margin-bottom: 16px;
   color: var(--text);
 }
-.step-info h3 .accent { color: var(--primary); }
+.step-info h3 .accent { color: var(--primary-ink); }
 .step-info > p {
   font-size: 14.5px;
   line-height: 1.8;
@@ -390,7 +394,7 @@ body {
   font-size: 12px;
   font-weight: 600;
   background: rgba(211, 84, 0, 0.06);
-  color: var(--primary);
+  color: var(--primary-ink);
   border: 1px solid rgba(211, 84, 0, 0.08);
 }
 
@@ -577,7 +581,7 @@ body {
   color: var(--text-secondary);
 }
 .callout strong {
-  color: var(--primary);
+  color: var(--primary-ink);
   font-weight: 700;
 }
 
@@ -933,25 +937,25 @@ body {
 <!-- ===== APP PREVIEW STRIP ===== -->
 <div class="preview-strip">
   <div class="preview-strip-inner">
-    <div class="preview-phone"><img src="./screenshots/ss-home.png" alt="首页" loading="lazy"></div>
-    <div class="preview-phone"><img src="./screenshots/ss-smartbi.png" alt="SmartBI" loading="lazy"></div>
-    <div class="preview-phone"><img src="./screenshots/ss-ai-center.png" alt="AI中心" loading="lazy"></div>
-    <div class="preview-phone"><img src="./screenshots/ss-management.png" alt="管理中心" loading="lazy"></div>
-    <div class="preview-phone"><img src="./screenshots/ss-dishes.png" alt="菜品管理" loading="lazy"></div>
-    <div class="preview-phone"><img src="./screenshots/ss-ingredients.png" alt="食材管理" loading="lazy"></div>
-    <div class="preview-phone"><img src="./screenshots/ss-profile.png" alt="个人中心" loading="lazy"></div>
-    <div class="preview-phone"><img src="./screenshots/ss-landing.png" alt="登录" loading="lazy"></div>
-    <div class="preview-phone"><img src="./screenshots/ss-login.png" alt="登录表单" loading="lazy"></div>
+    <div class="preview-phone"><img src="./screenshots/ss-home.png" width="390" height="844" alt="首页" loading="lazy"></div>
+    <div class="preview-phone"><img src="./screenshots/ss-smartbi.png" width="390" height="844" alt="SmartBI" loading="lazy"></div>
+    <div class="preview-phone"><img src="./screenshots/ss-ai-center.png" width="390" height="844" alt="AI中心" loading="lazy"></div>
+    <div class="preview-phone"><img src="./screenshots/ss-management.png" width="390" height="844" alt="管理中心" loading="lazy"></div>
+    <div class="preview-phone"><img src="./screenshots/ss-dishes.png" width="390" height="844" alt="菜品管理" loading="lazy"></div>
+    <div class="preview-phone"><img src="./screenshots/ss-ingredients.png" width="390" height="844" alt="食材管理" loading="lazy"></div>
+    <div class="preview-phone"><img src="./screenshots/ss-profile.png" width="390" height="844" alt="个人中心" loading="lazy"></div>
+    <div class="preview-phone"><img src="./screenshots/ss-landing.png" width="390" height="844" alt="登录" loading="lazy"></div>
+    <div class="preview-phone"><img src="./screenshots/ss-login.png" width="390" height="844" alt="登录表单" loading="lazy"></div>
     <!-- Duplicate for seamless loop -->
-    <div class="preview-phone"><img src="./screenshots/ss-home.png" alt="首页" loading="lazy"></div>
-    <div class="preview-phone"><img src="./screenshots/ss-smartbi.png" alt="SmartBI" loading="lazy"></div>
-    <div class="preview-phone"><img src="./screenshots/ss-ai-center.png" alt="AI中心" loading="lazy"></div>
-    <div class="preview-phone"><img src="./screenshots/ss-management.png" alt="管理中心" loading="lazy"></div>
-    <div class="preview-phone"><img src="./screenshots/ss-dishes.png" alt="菜品管理" loading="lazy"></div>
-    <div class="preview-phone"><img src="./screenshots/ss-ingredients.png" alt="食材管理" loading="lazy"></div>
-    <div class="preview-phone"><img src="./screenshots/ss-profile.png" alt="个人中心" loading="lazy"></div>
-    <div class="preview-phone"><img src="./screenshots/ss-landing.png" alt="登录" loading="lazy"></div>
-    <div class="preview-phone"><img src="./screenshots/ss-login.png" alt="登录表单" loading="lazy"></div>
+    <div class="preview-phone"><img src="./screenshots/ss-home.png" width="390" height="844" alt="首页" loading="lazy"></div>
+    <div class="preview-phone"><img src="./screenshots/ss-smartbi.png" width="390" height="844" alt="SmartBI" loading="lazy"></div>
+    <div class="preview-phone"><img src="./screenshots/ss-ai-center.png" width="390" height="844" alt="AI中心" loading="lazy"></div>
+    <div class="preview-phone"><img src="./screenshots/ss-management.png" width="390" height="844" alt="管理中心" loading="lazy"></div>
+    <div class="preview-phone"><img src="./screenshots/ss-dishes.png" width="390" height="844" alt="菜品管理" loading="lazy"></div>
+    <div class="preview-phone"><img src="./screenshots/ss-ingredients.png" width="390" height="844" alt="食材管理" loading="lazy"></div>
+    <div class="preview-phone"><img src="./screenshots/ss-profile.png" width="390" height="844" alt="个人中心" loading="lazy"></div>
+    <div class="preview-phone"><img src="./screenshots/ss-landing.png" width="390" height="844" alt="登录" loading="lazy"></div>
+    <div class="preview-phone"><img src="./screenshots/ss-login.png" width="390" height="844" alt="登录表单" loading="lazy"></div>
   </div>
 </div>
 
@@ -997,7 +1001,7 @@ body {
       <div class="reveal reveal-d2">
         <div class="phone-frame" onclick="openLightbox(this)" data-caption="餐饮版首页 — 今日订单、食材预警、快捷操作">
           <div class="phone-screen">
-            <img src="./screenshots/ss-home.png" alt="餐饮版首页">
+            <img src="./screenshots/ss-home.png" width="390" height="844" alt="餐饮版首页">
           </div>
         </div>
       </div>
@@ -1037,7 +1041,7 @@ body {
       <div class="reveal reveal-d2">
         <div class="phone-frame" onclick="openLightbox(this)" data-caption="SmartBI 智能分析 — KPI卡片、图表、AI洞察">
           <div class="phone-screen">
-            <img src="./screenshots/ss-smartbi.png" alt="SmartBI 智能分析">
+            <img src="./screenshots/ss-smartbi.png" width="390" height="844" alt="SmartBI 智能分析">
           </div>
         </div>
       </div>
@@ -1075,7 +1079,7 @@ body {
       <div class="reveal reveal-d2">
         <div class="phone-frame" onclick="openLightbox(this)" data-caption="AI 分析中心 — 对话式数据分析与智能建议">
           <div class="phone-screen">
-            <img src="./screenshots/ss-ai-center.png" alt="AI 分析中心">
+            <img src="./screenshots/ss-ai-center.png" width="390" height="844" alt="AI 分析中心">
           </div>
         </div>
       </div>
@@ -1129,7 +1133,7 @@ body {
       <div class="reveal reveal-d2">
         <div class="phone-frame" onclick="openLightbox(this)" data-caption="餐饮版管理中心 — 精简化功能模块">
           <div class="phone-screen">
-            <img src="./screenshots/ss-management.png" alt="管理中心">
+            <img src="./screenshots/ss-management.png" width="390" height="844" alt="管理中心">
           </div>
         </div>
       </div>
@@ -1194,7 +1198,7 @@ body {
       <div class="reveal reveal-d2">
         <div class="phone-frame" onclick="openLightbox(this)" data-caption="菜品管理 — 全品类菜品档案与分类体系">
           <div class="phone-screen">
-            <img src="./screenshots/ss-dishes.png" alt="菜品管理">
+            <img src="./screenshots/ss-dishes.png" width="390" height="844" alt="菜品管理">
           </div>
         </div>
       </div>
@@ -1274,7 +1278,7 @@ body {
       <div class="reveal reveal-d2">
         <div class="phone-frame" onclick="openLightbox(this)" data-caption="食材管理 — 8大类食材标准化管理">
           <div class="phone-screen">
-            <img src="./screenshots/ss-ingredients.png" alt="食材管理">
+            <img src="./screenshots/ss-ingredients.png" width="390" height="844" alt="食材管理">
           </div>
         </div>
       </div>
@@ -1311,7 +1315,7 @@ body {
       <div class="reveal reveal-d2">
         <div class="phone-frame" onclick="openLightbox(this)" data-caption="个人中心 — 用户设置与权限管理">
           <div class="phone-screen">
-            <img src="./screenshots/ss-profile.png" alt="个人中心">
+            <img src="./screenshots/ss-profile.png" width="390" height="844" alt="个人中心">
           </div>
         </div>
       </div>
@@ -1363,12 +1367,12 @@ body {
       <div class="dual-phones reveal reveal-d2">
         <div class="phone-frame" onclick="openLightbox(this)" data-caption="应用引导页 — 白垩纪食品溯源系统">
           <div class="phone-screen">
-            <img src="./screenshots/ss-landing.png" alt="引导页">
+            <img src="./screenshots/ss-landing.png" width="390" height="844" alt="引导页">
           </div>
         </div>
         <div class="phone-frame" onclick="openLightbox(this)" data-caption="登录页 — 统一认证入口">
           <div class="phone-screen">
-            <img src="./screenshots/ss-login.png" alt="登录页">
+            <img src="./screenshots/ss-login.png" width="390" height="844" alt="登录页">
           </div>
         </div>
       </div>
