@@ -11,6 +11,11 @@ import java.util.stream.Collectors;
 @Component
 public class FindingTextRenderer {
 
+    /**
+     * 方法名刻意叫 {@code renderInline} 而不是 {@code render}：将来日报出口会加
+     * {@code renderDigest}。从第一天就按出口命名，可以防止两个出口共用一句话、
+     * 需求分叉后开始塞 if。
+     */
     public String renderInline(FindingService.Result result) {
         // 一条规则都没成功跑完 —— 什么都不说。绝不能渲染成「均正常」，
         // 那是把故障说成健康（禁止降级处理）。
