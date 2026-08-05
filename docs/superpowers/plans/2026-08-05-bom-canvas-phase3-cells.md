@@ -724,6 +724,32 @@ git show --name-only HEAD
 
 **编辑入口先复用既有能力**：`openAuxiliaryEditor` 直接打开现有的 `SeasoningBindingDialog`（`views/production/bom/seasoning/SeasoningBindingDialog.vue`，413 行，已含替代物料与等价系数），`openPackagingEditor` 打开 BOM 抽屉并定位到包材。**本期不重写编辑面** —— 先让 cell 可见可用，编辑面替换留给 Phase 3-2。
 
+- [ ] **Step 1b: ⛔ 每次 hydrate 之后必须重新派生浮层（审查发现的硬要求）**
+
+Task 1 把剥离放进了多用途的 `currentDefinition()`。审查查实有**三个非持久化消费方**拿剥离后的载荷去 `hydrate()`（整体替换 `flowNodes`/`flowEdges`）：
+
+| 消费方 | 位置 | 后果 |
+|---|---|---|
+| `undo()` | `:1888-1892`（经 `remember()` 快照） | **按一次 Ctrl+Z，画布上所有浮层 cell 消失** |
+| `handleAutoLayout()` | `:2838-2842` | 点一次自动布局，浮层全没 |
+| `reconcileLoadedUnits()` | `:1465-1483` | 后台单位对齐时静默抹掉 |
+
+这不是后端泄漏（闸仍然是严的），是可用性断裂。**修法：把「重新派生浮层」做成 hydrate 的必经步骤**，而不是在三个调用点各补一次 —— 后者漏一个就又是同样的 bug，而且将来第四个 hydrate 调用方还会再踩。
+
+写一个 `hydrateWithOverlay(definition)`（或在 `hydrate` 末尾统一调用派生），让「hydrate 之后浮层一定在」成为结构性保证。
+
+配套断言（放 `bomOverlayIntegration.source.spec.ts`）：
+
+```typescript
+  it('每个 hydrate 调用点之后浮层都会被重新派生', () => {
+    // 逐个点补是漏的源头 —— 派生必须长在 hydrate 里
+    const hydrateBody = source.slice(source.indexOf('function hydrate'), source.indexOf('function hydrate') + 1200);
+    expect(hydrateBody).toMatch(/deriveBomOverlay|refreshBomOverlay/);
+  });
+```
+
+**变异验证**：把 hydrate 里的派生调用去掉，确认该断言变红；还原复绿。
+
 - [ ] **Step 2: 注入浮层**
 
 在 BOM 数据加载完成后调用 `deriveBomOverlay`，把结果合并进 `flowNodes` / `flowEdges`。**每次重新派生前先 `stripBomOverlay` 清掉上一批**，否则会累积重复节点。
