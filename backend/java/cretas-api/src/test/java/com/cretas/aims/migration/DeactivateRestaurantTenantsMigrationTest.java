@@ -50,9 +50,17 @@ class DeactivateRestaurantTenantsMigrationTest {
     @Test
     @DisplayName("有 MOCK_REST 存在性前置断言, 否则会把所有餐饮租户停光")
     void hasFailClosedPrecondition() throws Exception {
-        String sql = Files.readString(MIGRATION);
-        assertThat(sql).contains("MOCK_REST 不存在或不是 RESTAURANT 类型");
-        assertThat(sql).contains("RAISE EXCEPTION");
+        // Same pattern as deactivatesUsersToo: require the statement to be
+        // in an actual executable line, not commented out. If the entire
+        // precondition block is prefixed with "-- ", this test must fail.
+        List<String> lines = Files.readAllLines(MIGRATION);
+        boolean hasFailClosedCheck = lines.stream()
+                .map(String::trim)
+                .anyMatch(line -> line.startsWith("RAISE EXCEPTION") && line.contains("MOCK_REST"));
+        assertThat(hasFailClosedCheck)
+                .as("expected an executable (non-commented) RAISE EXCEPTION statement "
+                        + "for MOCK_REST check in %s", MIGRATION)
+                .isTrue();
     }
 
     @Test
