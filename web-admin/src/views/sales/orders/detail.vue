@@ -37,6 +37,7 @@ import {
 // authoritative) instead of always showing the hardcoded WH-WKS/WH-LOG label
 // — see utils/warehouse.ts for the LIUSHANMEN "同仓库多名字" incident.
 import { warehouseNameByCode, type WarehouseCodeNameLike } from '@/utils/warehouse';
+import { allocationEmptyStateDesc, allocationEmptyStateTitle } from './allocationEmptyState';
 import type { TableRow } from '@/types/api';
 import {
   customerMaterialReceivingStatusLabel,
@@ -990,18 +991,17 @@ function sumAllocated(item: AllocItem): number {
 
 // 🔴 G1: 诚实空态 (fool-proof Rule 5) — 无可分配批次时, 区分「成品在别的仓」vs「真的没货」,
 // 绝不误导用户「请先生产」当成品其实存在于其他仓库。
+// 客户 2026-07-31 (Sheet 第 40 行): 这段话里的仓库原本是裸 code (`WH-FG`), 现在统一经
+// sourceWarehouseLabel 解析成客户自己配置的仓库名; payload 仍然只存 code。
 function emptyStateTitle(item: AllocItem): string {
-  return item.stockWarehouses.length > 0 ? '当前来源仓无可用成品批次' : '没有可用成品批次';
+  return allocationEmptyStateTitle(item.stockWarehouses);
 }
 function emptyStateDesc(item: AllocItem): string {
-  if (item.stockWarehouses.length > 0) {
-    const where = item.stockWarehouses.join(' / ');
-    const src = item.sourceWarehouseCode
-      ? `当前发货行来源仓为「${item.sourceWarehouseCode}」`
-      : '当前发货行未声明来源仓';
-    return `该产品成品在「${where}」仓有库存，${src} — 请改选来源仓，或先调拨到来源仓后再分配。`;
-  }
-  return '该产品当前全厂无可发货成品库存（已含全部可售仓库，研发/中试库除外），请先完成生产入库，或联系仓管检查库存状态。';
+  return allocationEmptyStateDesc(
+    item.stockWarehouses,
+    item.sourceWarehouseCode,
+    sourceWarehouseLabel,
+  );
 }
 
 async function handleBatchAllocate() {

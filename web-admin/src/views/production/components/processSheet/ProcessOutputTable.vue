@@ -125,10 +125,16 @@ function gridStyle(): Record<string, string> {
           -->
           <span class="sp-io-cell sp-io-exec" data-testid="workflow-execution-line">
             <span class="sp-io-exec-field" data-testid="output-start-time">
+              <!--
+                :editable="false" —— 客户 2026-07-31 (Sheet 第 42 行): 工人能把时间里的
+                冒号删掉、或打成全角「：」, 提交后被后端 400 拒。冒号只由选择面板生成,
+                和隔壁 WorkHoursTable 的 el-time-select 行为一致。
+              -->
               <el-time-picker
                 v-model="view.line.startTime"
                 value-format="HH:mm"
                 format="HH:mm"
+                :editable="false"
                 placeholder="开始时间…"
                 size="small"
                 :aria-label="`${view.line.materialName} 开始时间`"
@@ -139,6 +145,7 @@ function gridStyle(): Record<string, string> {
                 v-model="view.line.endTime"
                 value-format="HH:mm"
                 format="HH:mm"
+                :editable="false"
                 placeholder="结束时间…"
                 size="small"
                 :aria-label="`${view.line.materialName} 结束时间`"
