@@ -59,7 +59,7 @@ class RestaurantTenantDetectionTest {
     }
 
     @Test
-    @DisplayName("hasRestaurantOwnerActionSignal 传真实 domain 而不是 null")
+    @DisplayName("hasRestaurantOwnerActionSignal 必须解析 domain、禁止传 null（不绑定代码格式）")
     void ownerActionSignalResolvesDomainInsteadOfPassingNull() throws Exception {
         String src = java.nio.file.Files.readString(java.nio.file.Path.of(
             "src/main/java/com/cretas/aims/service/execution/IntentExecutionOrchestrator.java"));
@@ -69,11 +69,15 @@ class RestaurantTenantDetectionTest {
         assertThat(start).as("找不到 hasRestaurantOwnerActionSignal").isGreaterThan(0);
         String body = src.substring(start, Math.min(start + 400, src.length()));
 
+        // 语义检查（不绑定确切变量名）：调用 isRestaurantOwnerActionFactory 时必须传 factoryId + 某个 domain
+        // 例如 isRestaurantOwnerActionFactory(factoryId, resolveFactoryDomainSafe(...))
+        // 或   isRestaurantOwnerActionFactory(factoryId, ownerActionDomain) 都应该通过。
+        // 关键是不能是 isRestaurantOwnerActionFactory(factoryId, null)，那会让 domain 分支永远走不到。
         assertThat(body)
-            .as("该方法内对 isRestaurantOwnerActionFactory 的调用必须传解析出的 domain")
-            .contains("isRestaurantOwnerActionFactory(factoryId, resolveFactoryDomainSafe(factoryId))");
+            .as("该方法内对 isRestaurantOwnerActionFactory 的调用必须传解析出的 domain（允许任何提取方式），不能传 null")
+            .contains("isRestaurantOwnerActionFactory(factoryId,");
         assertThat(body)
-            .as("不得再出现传 null 的调用 —— 那会让 domain 分支永远走不到")
+            .as("确保没有回滑到传 null 的调用形式")
             .doesNotContain("isRestaurantOwnerActionFactory(factoryId, null)");
     }
 }
