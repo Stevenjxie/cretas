@@ -503,8 +503,15 @@ public class AIContextServiceImpl implements AIContextService {
         sb.append("### BOM 理论成本\n");
         sb.append("- 总成本: ¥").append(context.getBomTotalCost()).append("/单位\n");
         sb.append("- 原料占比: ").append(context.getBomMaterialCostRatio()).append("%\n");
-        sb.append("- 人工占比: ").append(context.getBomLaborCostRatio()).append("%\n");
-        sb.append("- 均摊占比: ").append(context.getBomOverheadCostRatio()).append("%\n\n");
+        // 人工/均摊不在 BOM 归集, 占比为 null。整行省略而不是渲染 "null%" ——
+        // 送进 prompt 的 "null%" 既不是数也不是说明, 只会让模型自己编个解释。
+        if (context.getBomLaborCostRatio() != null) {
+            sb.append("- 人工占比: ").append(context.getBomLaborCostRatio()).append("%\n");
+        }
+        if (context.getBomOverheadCostRatio() != null) {
+            sb.append("- 均摊占比: ").append(context.getBomOverheadCostRatio()).append("%\n");
+        }
+        sb.append("\n");
 
         sb.append("### 实际成本（最近").append(context.getBatchCount()).append("批次）\n");
         sb.append("- 平均单位成本: ¥").append(context.getAvgActualUnitCost()).append("\n");
