@@ -50,4 +50,13 @@ public interface AlertEventRepository extends JpaRepository<AlertEvent, UUID> {
      */
     List<AlertEvent> findByFactoryIdAndRuleIdAndStatusIn(
             String factoryId, UUID ruleId, List<AlertEventStatus> statuses);
+
+    /**
+     * 时间窗内的全部事件 (不限 status) — AI 价值汇总用。
+     *
+     * <p>刻意带时间窗而不复用 {@link #findByFactoryIdOrderByCreatedAtDesc}: 后者无界，
+     * 事件表长起来之后会把整个工厂的历史全捞进内存。汇总只关心一个窗口。
+     */
+    List<AlertEvent> findByFactoryIdAndCreatedAtBetween(
+            String factoryId, LocalDateTime start, LocalDateTime end);
 }
