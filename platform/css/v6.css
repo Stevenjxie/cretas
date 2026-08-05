@@ -1,15 +1,35 @@
+/* 对比度基线 (2026-08-05 全站审计): 正文 ≥4.5:1, 大字号(≥24px 或 ≥18.66px 粗体) ≥3:1。
+   下面每个色值后面的比值是在 --v6-bg-a (#fdfcfa) 或注明底色上实测的, 改动前请重算 ——
+   这几个 token 一动就是全站十几处跟着动。 */
 :root{
   --v6-bg-a:#fdfcfa; --v6-bg-b:#faf8f4; --v6-ink:#111; --v6-ink-2:#57534e;
-  --v6-cta:#00b377; --v6-cta-ink:#00875c; --v6-tag:#00e28a; --v6-tag-bg:rgba(4,20,13,.5);
+  /* --v6-cta-ink 原为 #00875c = 4.43:1(差 0.07 不达标)。它出现在案例链接/步骤标签/
+     词流带高亮/实拍标尺十几处, 改这一个值等于一次性修好全部。
+     ⚠️ 判达标要按**最差底色**算, 不是米白底: 餐饮页的 .tag 压在浅绿底
+     rgb(227,247,240) 上, 那里最吃亏。现 #007a55 → 米白底 5.23:1 / 浅绿底 4.81:1 */
+  --v6-cta:#00b377; --v6-cta-ink:#007a55; --v6-tag:#00e28a; --v6-tag-bg:rgba(4,20,13,.5);
+  /* 说明性小字(拟物卡 .ph / 时间戳 .now / 旧值 .old / 实拍标尺)统一到这一档。
+     原先各页散落 #847e75(4.02) #a7a29a(2.54) #a8a29e(2.52) #8fa09a(2.56) 四个值,
+     全部不达标。现 #736c62 → 白底 5.19:1 */
+  --v6-ink-3:#736c62;
+  /* 告警琥珀。原先散落 #b26a12(4.23) 与 #b45309(4.49) 两个值。
+     同样按最差底色算 —— 12% 琥珀底 rgb(250,239,227)。现 #9a590c → 白底 5.51:1 / 琥珀底 4.86:1 */
+  --v6-warn-ink:#9a590c;
   --v6-r-hero:22px; --v6-r-card:16px; --v6-font:-apple-system,'PingFang SC','Microsoft YaHei',sans-serif;
   --v6-mono:ui-monospace,SFMono-Regular,Consolas,monospace;
 }
 *{box-sizing:border-box} body{margin:0;font-family:var(--v6-font);color:var(--v6-ink);
   background:linear-gradient(180deg,var(--v6-bg-a) 0%,var(--v6-bg-b) 100%);}
 .v6-nav{display:flex;justify-content:space-between;align-items:center;padding:18px clamp(16px,4vw,48px);position:relative;z-index:3}
-.v6-nav a{color:#333;text-decoration:none;font-size:14px;margin-left:22px}
+/* ⚠️ :not(.v6-btn-ghost) 不是装饰。原本这条是 `.v6-nav a{color:#333}`, 特异性 0-1-1,
+   压过了 `.v6-btn-ghost{color:#fff}` 的 0-1-0 —— 于是导航里那个黑底「预约演示」按钮
+   拿到 #333 压在 #111 上, 全站 7 页实测 1.49:1, 几乎看不见。按钮不该继承导航链接色。 */
+.v6-nav a:not(.v6-btn-ghost){color:#333;text-decoration:none;font-size:14px;margin-left:22px}
+.v6-nav a.v6-btn-ghost{margin-left:22px}
 .v6-nav a.active{color:var(--v6-cta-ink);font-weight:700}
-.v6-btn{display:inline-block;background:var(--v6-cta);color:#fff;font-weight:800;
+/* 白字压 #00b377 只有 2.72:1。这里保留品牌绿(它同时是 logo 色), 把字改成近黑 —— 6.59:1,
+   比"把绿压深换白字"(4.58:1)余量更大, 且首页 logo / 按钮 / 强调色仍是同一个绿。 */
+.v6-btn{display:inline-block;background:var(--v6-cta);color:#0b1a12;font-weight:800;
   padding:12px 28px;border-radius:99px;text-decoration:none;box-shadow:0 6px 18px rgba(0,179,119,.35);cursor:pointer}
 .v6-btn-ghost{display:inline-block;background:#111;color:#fff;font-weight:700;padding:9px 20px;border-radius:99px;text-decoration:none}
 .v6-hero{position:relative;margin:4px clamp(10px,2vw,20px) 0}
@@ -195,6 +215,30 @@ html.v6-lock{overflow:hidden}
 body{-webkit-font-smoothing:antialiased;text-rendering:optimizeLegibility}
 .v6-foot a{transition:color .25s ease}
 .v6-nav a{transition:color .25s ease}
+
+/* 触控目标: 导航与页脚链接实测只有 19px 高(文字自身高度), 手机上点不准。
+   桌面端用伪元素把命中区撑到 44px —— 只改命中范围, 视觉一个像素不动。
+   ::after 已被下划线生长占用, 所以用 ::before。 */
+/* 覆盖导航里全部链接(含左上角 logo, 它实测只有 22px)与页脚链接。
+   幽灵按钮也要: 它含 padding 才 39px, 仍不到 44。 */
+.v6-nav a,
+.v6-foot a{position:relative}
+.v6-nav a::before,
+.v6-foot a::before{content:'';position:absolute;left:-8px;right:-8px;
+  top:50%;transform:translateY(-50%);height:44px}
+
+/* ⚠️ 手机端不能靠伪元素: .nav-links 在 ≤768px 有 overflow-x:auto 做横向滚动,
+   而一个轴设成 auto 会让另一个轴从 visible 变成裁剪 —— 撑出去的那 12.5px 会被
+   直接切掉, 命中区看着有实际没有。这里改用真实 padding 把盒子本身撑到 45px。
+   导航在手机上本来就是独立一行, 撑高不挤占内容。 */
+@media (max-width:768px){
+  nav.v6-nav div.nav-links a{padding-block:13px}
+  nav.v6-nav div.nav-links a.v6-btn-ghost{padding-block:13px}
+  .v6-nav .nav-links a::before{display:none}
+  /* 页脚链接在手机上换行成多排, 相邻排会互相截断命中区 —— 实测 12px 内距只拿到
+     41px。加到 14px 让每个盒子自身就有 47px, 不依赖相邻空隙。 */
+  .v6-foot a{display:inline-block;padding-block:14px}
+}
 
 /* ---- Motion & style micro-detail ---- */
 /* 导航链接下划线生长 */

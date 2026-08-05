@@ -73,8 +73,9 @@ html.v6-js .hero-copy h1.v6-split{animation:none}
   /* 章节标尺: 当前是第几张 */
   .shots-rail{display:flex;gap:12px;justify-content:center;align-items:center;
     margin-top:clamp(14px,2.6vh,28px)}
+  /* 原为 #a8a29b = 2.47:1, 不达标(我在动效那一轮引入的)。改用统一的说明小字档 5.19:1 */
   .shots-rail b{font-family:var(--v6-mono);font-size:12px;font-weight:700;
-    color:#a8a29b;letter-spacing:1px;padding:5px 12px;border-radius:99px;
+    color:var(--v6-ink-3);letter-spacing:1px;padding:5px 12px;border-radius:99px;
     border:1px solid rgba(0,0,0,.09);transition:color .4s ease,border-color .4s ease,background .4s ease}
   .shots-rail b.on{color:var(--v6-cta-ink);border-color:rgba(0,179,119,.4);
     background:rgba(0,179,119,.08)}
