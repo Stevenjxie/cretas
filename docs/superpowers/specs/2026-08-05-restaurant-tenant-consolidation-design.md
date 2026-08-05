@@ -146,7 +146,9 @@ cretas.demo.rest.username=${CRETAS_DEMO_REST_USERNAME:demo_rest}
 | 4 | **不做**防复发闸。理由：当前无客户，无人新建租户，闸防的是尚未发生的问题 | Steve |
 | 5 | `DEMO_REST` 的**公开免登录演示入口一并下线**，以后演示一律账号登录。理由：符合"只留 MOCK_REST"字面意思，且方向是收掉一个公开无鉴权入口而非新开一个；反向随时可加回 | 默认假设，Steve 未反对 |
 | 6 | **`MOCK_REST` 必须保持完整写能力**（"要有操作设置的"）→ 演示身份走 §4.2 方案 (b) 整体停用，**`MOCK_REST` 绝不进 `cretas.demo.factory-ids` 只读名单** | Steve |
-| 7 | `MOCK_REST` 账号 = **1 个最高权限 + 4 个餐饮部门角色**。最高权限 `mock_rest`（`factory_super_admin`）**已存在**，故本次只新建 4 个部门角色账号 | Steve |
+| 7 | `MOCK_REST` 账号 = **1 个最高权限 + 4 个部门账号**。最高权限 `mock_rest`（`factory_super_admin`）**已存在**，本次只新建 4 个部门账号 | Steve |
+| 8 | 四个部门 = **运营 / 市场 / 财务 / 人事**（对应 `restaurantOps` / `restaurantMarketing` / `restaurantFinance` / `restaurantHr` 四个 module 键）。权限**严格按部门切分**，一个账号只看得见自己那一块 | Steve |
+| 9 | ⛔ **不建 `restaurant_chef`（厨师长）账号**——"这个没用"。运营部门改用 `restaurant_manager` 承载 | Steve |
 
 ### 2.1 已知代价（明示，非遗漏）
 
@@ -251,20 +253,62 @@ cretas.demo.rest.username=${CRETAS_DEMO_REST_USERNAME:}
 
 - **改名**：`factories.name` 从「模拟平台餐饮租户 (假 POS 数据接入验证)」改为对外可见的名字（具体名称待定，见 §4.7 C2）。
 
-- **补 4 个部门角色账号**。实测 `MOCK_REST` 现有唯一用户 `mock_rest` 的 `role_code` **已是 `factory_super_admin`**（工厂总监，level 0，domain `all`），最高权限那个不用建。
+- **补 4 个部门账号**。实测 `MOCK_REST` 现有唯一用户 `mock_rest` 的 `role_code` **已是 `factory_super_admin`**，最高权限那个不用建。
 
-  `FactoryUserRole.java` 里 `department="restaurant"` 的**恰好 4 个**，全部要建：
+#### 4.5.1 四个部门 = 四个 module 权限键，不是四个角色
 
-  | role_code | 中文 | level | 职责（枚举原文） | 权限注释 |
-  |---|---|---|---|---|
-  | `restaurant_owner` | 餐饮老板 | 5 | 全餐饮运营、价格异常审批、月对账 | restaurant/procurement/finance/warehouse/analytics 完整读写（`:111`） |
-  | `restaurant_manager` | 餐饮管理 | 10 | 菜单、配方、餐厅运营 | — |
-  | `restaurant_chef` | 厨师长 | 15 | 报货、领料、验收入库 | restaurant:rw + warehouse:rw（`:119`） |
-  | `restaurant_purchaser` | 餐饮采购 | 15 | 请购、采购确认、采购审批 | restaurant:rw + procurement:rw（`:126`） |
+Steve 要的"运营 / 市场 / 财务 / 人事"是**四部门驾驶舱**，在系统里的载体是 `menuConfig.ts:323-327` 的四个 module：
 
-  - 账号创建走既有用户创建路径，**不手工 INSERT**。
-  - 密码不进仓库，记入 `.claude/skills/server-operations/db-credentials.md`（gitignored）。
-  - ⚠️ 建完必须**逐个真机登录验证**，且每个角色至少问一个属于它职责范围的 AI 问句——`restaurant_chef` 问领料、`restaurant_purchaser` 问采购。只验证"能登录"不够：8/3 那批角色工作台/排班是按角色分权的，权限配错的表现是登录正常但某些功能静默看不见。
+| 部门 | 路由 | module 键 |
+|---|---|---|
+| 运营 | `/restaurant/ops` | `restaurantOps` |
+| 市场 | `/restaurant/marketing` | `restaurantMarketing` |
+| 人事 | `/restaurant/hr` | `restaurantHr` |
+| 财务 | `/restaurant/finance` | `restaurantFinance` |
+
+`menuConfig.ts:319-321` 注释明确了设计意图：**部门驾驶舱刻意不写 `roles`，由 module 权限单独门控**，「再叠一层角色白名单只会变成第二处要同步的地方 —— 那正是 #2084 修的那个坑」。
+
+所以"一个部门一个账号"**正是系统设计支持的做法**，且是**后端强制**而非前端藏菜单：`ModuleEnabledInterceptor` 注入 `UserModuleAccessService` 做请求拦截。
+
+#### 4.5.2 现有 role → 四部门权限矩阵（`web-admin/src/store/modules/permission.ts` 实测）
+
+| 角色 | 运营 | 市场 | 人事 | 财务 |
+|---|---|---|---|---|
+| `factory_super_admin` | rw | rw | rw | rw |
+| `restaurant_owner` | rw | rw | rw | rw |
+| `restaurant_manager` | rw | rw | rw | r |
+| `restaurant_chef` | rw | - | - | - |（本次不用，见决策 9）
+| `restaurant_purchaser` | rw | - | - | r |
+| `hr_admin` | - | - | **rw** | - |
+| `finance_manager` | - | - | - | **r** |
+| `viewer` | r | r | r | - |
+
+这张矩阵与 `manual_chat.py:458` 写的角色边界一致（店长管运营/市场/人事、只读财务 ↔ `restaurant_manager` 行）。
+
+#### 4.5.3 四个账号的建法（Steve 拍板：用覆盖机制配干净账号）
+
+**账号数 = 4 个部门账号 + 已存在的 `mock_rest`（super admin），共 5 个。⛔ 不建 `restaurant_chef` 账号（Steve：厨师长这个没用），权限严格按四部门切分，一个账号只看得见自己那一块。**
+
+| 部门 | 载体角色 | 矩阵现状 | 需要的覆盖（工厂级，仅 `MOCK_REST`） |
+|---|---|---|---|
+| 运营 | `restaurant_manager` | Ops=rw / Mkt=rw / Hr=rw / Fin=r | Mkt→`-`、Hr→`-`、Fin→`-`（**只留 Ops=rw**） |
+| 市场 | `sales_manager` | 四个餐饮 module 均无条目 | Mkt→`rw`（其余保持 `-`） |
+| 财务 | `finance_manager` | Fin=`r`，其余 `-` | Fin→`rw` |
+| 人事 | `hr_admin` | Hr=rw，其余 `-` | **无，现成即为纯人事** |
+
+运营选 `restaurant_manager` 是因为语义就是"餐饮管理/运营"，且它已在父菜单白名单内；代价是它默认多带三个部门，必须靠覆盖剥掉——**这三条剥离是本项配置里最容易漏的部分，验收必须反向确认"运营账号看不见市场/人事/财务"**，而不只确认它看得见运营。
+
+**覆盖用工厂级不用用户级**：`FactoryRoleModuleOverrideController`（`cfg.getRoleModuleOverride()`）scope 就在 `MOCK_REST`，不影响其它租户；用户级 `UserModuleAccessController` 是逐用户 GRANT/REVOKE，更碎且更容易漏。
+
+**载体角色的选择依据**：`/restaurant` 父菜单的 `roles`（`menuConfig.ts:317`）是**一票否决式允许白名单**——写了就一票否决，模块权限给对了也看不见。四个载体角色 `restaurant_manager` / `sales_manager` / `finance_manager` / `hr_admin` **均已在该白名单内**（已逐个核对）。换任何不在白名单的角色，都会出现"模块权限配对了却整个餐饮组不可见"。
+
+> ⚠️ **权限有两个承载点**（矩阵 + 父菜单白名单），这是 #2082/#2083 只改了矩阵那一个、#2084 才补上的坑。任何角色调整都必须同时核对两处。
+
+#### 4.5.4 账号创建约束
+
+- 账号创建走既有用户创建路径，**不手工 INSERT**。
+- 密码不进仓库，记入 `.claude/skills/server-operations/db-credentials.md`（gitignored）。
+- ⚠️ 建完必须**逐个真机登录**，按 §6 判据 3 核对**部门可见性**（该看见的看得见、不该看见的看不见），并各问一个属于本部门的 AI 问句。只验证"能登录"不够——权限配错的表现正是登录一切正常、某个部门入口静默消失或多出来。
 
 ### 4.6 T6 — 名单收敛与 unit 撤除
 
@@ -307,8 +351,20 @@ cretas.demo.rest.username=${CRETAS_DEMO_REST_USERNAME:}
 
 1. `select count(*) from factories where type='RESTAURANT' and is_active=true` **= 1**，且该行是 `MOCK_REST`。
 2. 每日审计跑 `MOCK_REST`：**≥ 21/22**（与停用前持平，不许掉分）。
-3. `MOCK_REST` 的 5 个账号（`factory_super_admin` + 4 个部门角色）**逐个真机登录**，且每个角色至少问一个属于其职责范围的 AI 问句并得到正常作答（`restaurant_chef` 问领料、`restaurant_purchaser` 问采购、`restaurant_manager` 问菜品、`restaurant_owner` 问营收）。
-3b. `MOCK_REST` **写能力完好**：至少验证一个 AI 写操作（如改菜品/录损耗）不被演示只读闸拦截。
+3. `MOCK_REST` 的 5 个账号（`mock_rest` super admin + 4 个部门账号）**逐个真机登录**，按下表核对部门驾驶舱可见性——**正反两向都要验**：
+
+   | 账号 | 应看见 | 应看不见 |
+   |---|---|---|
+   | 运营（`restaurant_manager`） | 运营 | 市场、人事、财务 |
+   | 市场（`sales_manager`） | 市场 | 运营、人事、财务 |
+   | 财务（`finance_manager`） | 财务 | 运营、市场、人事 |
+   | 人事（`hr_admin`） | 人事 | 运营、市场、财务 |
+   | `mock_rest` | 全部四个 | — |
+
+   "应看不见"那一列是**运营账号最容易漏**的（`restaurant_manager` 默认带三个部门，靠覆盖剥掉）。只验证"该看见的看得见"会放过这类缺陷。
+
+3b. 每个部门账号各问一个属于本部门的 AI 问句并得到正常作答（运营问损耗/领料、市场问营收/菜品、财务问毛利、人事问排班/人效）。
+3c. `MOCK_REST` **写能力完好**：至少验证一个 AI 写操作（如改菜品/录损耗）不被演示只读闸拦截。
 4. 任取一个已停用租户的账号登录 → **被明确拒绝**，不是登进去半死。
 5. 两个演示流 systemd unit 已不存在于服务器与仓库。
 6. Java 目标测试 + 真实 JPA Context（碰 Entity/Repository 时）通过；T3/T4 的新增断言各自变异验证过（红 → 回退 → 绿）。
