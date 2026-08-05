@@ -745,3 +745,38 @@ textarea:focus-visible {
 .business-action-row .el-button + .el-button {
   margin-left: 0;
 }
+
+/* ───────────────────────────────────────────────────────────────────────────
+   客户 2026-07-20 (Sheet 第 13 行):「在任务框中, 背景为白色、鼠标指针为白色,
+   对比度非常低, 找不到指针。自定义系统鼠标颜色与任务框内鼠标无关联。
+   具体场景为: 标签栏宽度调整时、WorkFlow 编辑时。」
+
+   两个场景的载体不同, 只有一个是网页能改的:
+
+   1. WorkFlow 编辑 —— crosshair 是我们自己写的 CSS (ProductProcessWorkflowEditor
+      的 .canvas-shell.is-connecting / .workflow-canvas.is-batch-selecting)。
+      标准 crosshair 在 Windows 上跟随系统配色, 用户把指针配成白色后就消失在白画布里。
+      换成自带白色描边的 SVG 光标: 深色十字 + 白色外描边, 白底黑底都看得见。
+      末尾保留 crosshair 作回退 —— 浏览器不认 data URI 时行为不变。
+
+   2. 列宽调整 —— 光标是 Element Plus 在拖动时用 JS 设到 body 上的标准 col-resize,
+      网页覆盖不了系统配色。但**拖到哪儿了**这件事由 .el-table__column-resize-proxy
+      指示, 它默认是 1px 表格边框色, 白底上几乎看不见。把它加粗成主题色并加白色外发光,
+      即使指针本身看不见, 也能明确看到当前列宽落点。
+   ─────────────────────────────────────────────────────────────────────────── */
+
+:root {
+  --cretas-cursor-crosshair:
+    url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24"><g fill="none" stroke="%23ffffff" stroke-width="4" stroke-linecap="round"><path d="M12 3v18M3 12h18"/></g><g fill="none" stroke="%23111111" stroke-width="1.6" stroke-linecap="round"><path d="M12 3v18M3 12h18"/></g></svg>') 12 12,
+    crosshair;
+}
+
+.canvas-shell.is-connecting,
+.workflow-canvas.is-batch-selecting .vue-flow__pane {
+  cursor: var(--cretas-cursor-crosshair);
+}
+
+.el-table__column-resize-proxy {
+  border-left: 2px solid var(--el-color-primary, #409eff);
+  box-shadow: 0 0 0 1px rgb(255 255 255 / 90%);
+}
