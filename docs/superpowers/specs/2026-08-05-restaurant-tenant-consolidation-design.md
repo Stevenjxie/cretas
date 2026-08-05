@@ -145,6 +145,8 @@ cretas.demo.rest.username=${CRETAS_DEMO_REST_USERNAME:demo_rest}
 | 3 | 下线力度 = **只停用，不删任何数据**（`is_active=false` + 移出所有名单；POS/Silver/Gold 行原地保留，RLS 本就隔离），可随时回退 | Steve |
 | 4 | **不做**防复发闸。理由：当前无客户，无人新建租户，闸防的是尚未发生的问题 | Steve |
 | 5 | `DEMO_REST` 的**公开免登录演示入口一并下线**，以后演示一律账号登录。理由：符合"只留 MOCK_REST"字面意思，且方向是收掉一个公开无鉴权入口而非新开一个；反向随时可加回 | 默认假设，Steve 未反对 |
+| 6 | **`MOCK_REST` 必须保持完整写能力**（"要有操作设置的"）→ 演示身份走 §4.2 方案 (b) 整体停用，**`MOCK_REST` 绝不进 `cretas.demo.factory-ids` 只读名单** | Steve |
+| 7 | `MOCK_REST` 账号 = **1 个最高权限 + 4 个餐饮部门角色**。最高权限 `mock_rest`（`factory_super_admin`）**已存在**，故本次只新建 4 个部门角色账号 | Steve |
 
 ### 2.1 已知代价（明示，非遗漏）
 
@@ -210,13 +212,21 @@ UPDATE users SET is_active = false
 
 ### 4.2 T2 — 演示身份
 
-两条路，实施前二选一（取决于 T5 是否给 `MOCK_REST` 建演示账号）：
+**已定：走方案 (b)——演示身份整体停用**（§2 决策 6）。
 
-- **方案 (a)** 三个配置改指 `MOCK_REST`：`cretas.demo.rest.factory-id=MOCK_REST`、`.username` 改成 `MOCK_REST` 上的演示账号名、`cretas.demo.factory-ids` 里 `DEMO_REST` 换成 `MOCK_REST`。
-  - ⚠️ `cretas.demo.factory-ids` 是**演示只读写闸**名单。把 `MOCK_REST` 放进去 = 它变成只读租户，**AI 无法对它做任何写操作**。若 `MOCK_REST` 需要保留写能力（例如 AI 改菜品、录损耗的演示），则不能放进这个名单。
-- **方案 (b)** 演示身份整体停用：`cretas.demo.rest.factory-id` 留空并让消费者 fail-closed 跳过演示分支，`demo.factory-ids` 移除 `DEMO_REST`。
+Steve 明确要求 `MOCK_REST`「要有操作设置的」，即必须保留完整写能力。而 `cretas.demo.factory-ids` 是**演示只读写闸**名单（`DemoReadOnlyInterceptor.java:41` + `IntentExecutionOrchestrator.java:245` 在 AI 确认执行阶段拦截真实写入），进了这个名单就等于只读。两者不可兼得，故：
 
-**决策依据**：§2 决策 5 已定"公开免登录入口下线"，倾向 **(b)**；但若仍需"演示租户不可写"这道保护，则走 (a) 且明确接受 `MOCK_REST` 只读。**此项在实施计划里必须先确认，不能默认。**
+```properties
+# 移除 DEMO_REST，且不加入 MOCK_REST
+cretas.demo.factory-ids=${CRETAS_DEMO_FACTORY_IDS:DEMO_FACTORY2,F_DEMO}
+# 演示餐饮身份停用（消费者需 fail-closed 跳过演示分支，不得回落到某个默认租户）
+cretas.demo.rest.factory-id=${CRETAS_DEMO_REST_ID:}
+cretas.demo.rest.username=${CRETAS_DEMO_REST_USERNAME:}
+```
+
+**⛔ 硬约束**：`MOCK_REST` 在任何环境、任何配置层（`application.properties` 默认值、`.env.prod` 的 `CRETAS_DEMO_FACTORY_IDS`、测试 fixture）都**不得出现在 `cretas.demo.factory-ids` 里**。实施须加一条断言钉住这点，并做变异验证（把 `MOCK_REST` 塞进名单，断言必须变红）。
+
+**⚠️ 实施注意**：把 `cretas.demo.rest.factory-id` 置空后，`MobileAuthServiceImpl.java:59` 等消费者的行为必须逐个确认——空值是被当作"演示功能关闭"跳过，还是被当作"匹配任意租户"？后者会造出比现状更糟的洞。这是**读消费者代码才能回答的问题，不能假设**。
 
 ### 4.3 T3 — 删除 Gold 别名
 
@@ -239,10 +249,22 @@ UPDATE users SET is_active = false
 
 ### 4.5 T5 — `MOCK_REST` 升格
 
-- **改名**：`factories.name` 从「模拟平台餐饮租户 (假 POS 数据接入验证)」改为对外可见的名字（具体名称由 Steve 定）。
-- **补角色账号**：现有 1 个用户 `mock_rest`。需要补齐审计与角色工作台假设的角色覆盖（至少 `restaurant_manager`；8/3 那批角色工作台/排班功能涉及的其他角色需按实际功能清单确定）。
-  - 账号创建走既有用户创建路径，不手工 INSERT。
+- **改名**：`factories.name` 从「模拟平台餐饮租户 (假 POS 数据接入验证)」改为对外可见的名字（具体名称待定，见 §4.7 C2）。
+
+- **补 4 个部门角色账号**。实测 `MOCK_REST` 现有唯一用户 `mock_rest` 的 `role_code` **已是 `factory_super_admin`**（工厂总监，level 0，domain `all`），最高权限那个不用建。
+
+  `FactoryUserRole.java` 里 `department="restaurant"` 的**恰好 4 个**，全部要建：
+
+  | role_code | 中文 | level | 职责（枚举原文） | 权限注释 |
+  |---|---|---|---|---|
+  | `restaurant_owner` | 餐饮老板 | 5 | 全餐饮运营、价格异常审批、月对账 | restaurant/procurement/finance/warehouse/analytics 完整读写（`:111`） |
+  | `restaurant_manager` | 餐饮管理 | 10 | 菜单、配方、餐厅运营 | — |
+  | `restaurant_chef` | 厨师长 | 15 | 报货、领料、验收入库 | restaurant:rw + warehouse:rw（`:119`） |
+  | `restaurant_purchaser` | 餐饮采购 | 15 | 请购、采购确认、采购审批 | restaurant:rw + procurement:rw（`:126`） |
+
+  - 账号创建走既有用户创建路径，**不手工 INSERT**。
   - 密码不进仓库，记入 `.claude/skills/server-operations/db-credentials.md`（gitignored）。
+  - ⚠️ 建完必须**逐个真机登录验证**，且每个角色至少问一个属于它职责范围的 AI 问句——`restaurant_chef` 问领料、`restaurant_purchaser` 问采购。只验证"能登录"不够：8/3 那批角色工作台/排班是按角色分权的，权限配错的表现是登录正常但某些功能静默看不见。
 
 ### 4.6 T6 — 名单收敛与 unit 撤除
 
@@ -254,13 +276,13 @@ UPDATE users SET is_active = false
 
 ## 4.7 实施前必须确认的三项（不得默认）
 
-这三项是设计里**刻意留给 Steve 的决策**，实施计划的第一步就是拿到答案，不许实施者自行假设：
-
-| # | 待确认 | 影响 |
+| # | 状态 | 内容 |
 |---|---|---|
-| C1 | §4.2 走 (a) 还是 (b) —— 演示身份改指 `MOCK_REST`，还是整体停用 | 走 (a) 且放进 `demo.factory-ids` 会让 `MOCK_REST` 变只读，AI 无法演示任何写操作 |
-| C2 | §4.5 `MOCK_REST` 对外显示的名字 | 纯命名，但会出现在演示界面上 |
-| C3 | §4.5 除 `restaurant_manager` 外还需要哪些角色账号 | 决定 T5 工作量；应从 8/3 那批角色工作台/排班的实际功能清单反推，而不是凭印象列 |
+| ~~C1~~ | **已定 2026-08-05** | 演示身份走 §4.2 方案 (b) 整体停用；`MOCK_REST` 保留完整写能力，不进只读名单 |
+| **C2** | **待定** | §4.5 `MOCK_REST` 对外显示的名字。纯命名，但会出现在演示界面上 |
+| ~~C3~~ | **已定 2026-08-05** | 1 个最高权限（`factory_super_admin`，已存在）+ 4 个 `department="restaurant"` 角色，清单见 §4.5 |
+
+**C2 是唯一还没定的**，且它不阻塞任何其它任务——可以在实施到 T5 时再要答案。
 
 ---
 
@@ -271,7 +293,9 @@ UPDATE users SET is_active = false
 | 五处餐饮判定有缺口，`MOCK_REST` 静默走错分支 | T4 逐处核实 + 变异验证。**这是必须做实的一项**，不能靠"审计还是 21/22"反推——审计只覆盖 22 个问句 |
 | 停用后审计掉分 | 停用前后各跑一次审计对比，`MOCK_REST` 必须 ≥21/22 |
 | 回滚台账 id 类型不匹配 | §4.1 已列，干跑必须跑回滚往返 |
-| `MOCK_REST` 进了 demo 只读名单导致无法写 | §4.2 已列，实施前二选一必须确认 |
+| `MOCK_REST` 进了 demo 只读名单导致无法写 | 已定为**硬约束**（§4.2）：任何配置层都不得让它出现在 `cretas.demo.factory-ids`，加断言 + 变异验证 |
+| `cretas.demo.rest.factory-id` 置空后消费者把空值当"匹配任意租户" | §4.2 已列，必须读消费者代码确认，不能假设 |
+| 4 个新角色账号权限配错 → 登录正常但功能静默缺失 | §4.5 已列，每个角色须问一个属于其职责的 AI 问句，不只验证能登录 |
 | 139 模拟器停摆导致唯一租户陈旧 | 本设计不解决，记录在 §2.1 |
 | 有未发现的第 6 处名单载体 | grep 时**按功能搜不要按前缀搜**；实施后用"随便挑一个已停用租户登录"做反向验证 |
 
@@ -283,7 +307,8 @@ UPDATE users SET is_active = false
 
 1. `select count(*) from factories where type='RESTAURANT' and is_active=true` **= 1**，且该行是 `MOCK_REST`。
 2. 每日审计跑 `MOCK_REST`：**≥ 21/22**（与停用前持平，不许掉分）。
-3. `MOCK_REST` 各角色账号能登录，且 AI 能正常作答（至少覆盖 sales / dish / wastage / staffing 四类）。
+3. `MOCK_REST` 的 5 个账号（`factory_super_admin` + 4 个部门角色）**逐个真机登录**，且每个角色至少问一个属于其职责范围的 AI 问句并得到正常作答（`restaurant_chef` 问领料、`restaurant_purchaser` 问采购、`restaurant_manager` 问菜品、`restaurant_owner` 问营收）。
+3b. `MOCK_REST` **写能力完好**：至少验证一个 AI 写操作（如改菜品/录损耗）不被演示只读闸拦截。
 4. 任取一个已停用租户的账号登录 → **被明确拒绝**，不是登进去半死。
 5. 两个演示流 systemd unit 已不存在于服务器与仓库。
 6. Java 目标测试 + 真实 JPA Context（碰 Entity/Repository 时）通过；T3/T4 的新增断言各自变异验证过（红 → 回退 → 绿）。
