@@ -1477,10 +1477,17 @@ async function loadCostSummary(productTypeId = selectedProductTypeId.value) {
 // ========== Computed ==========
 const materialCostTotal = computed(() => {
   // 标准成本 = 辅料 + 包材。原料没有数量（报工时才知道），不参与前端估算。
-  // 辅料成本由后端按 dosage_per_kg_g 归集，这里只汇总有明确每份用量的包材行。
+  // 辅料成本由后端按 dosage_per_kg_g 归集，这里只汇总包材行。
+  //
+  // ⚠️ 包材用量读的是 standardQuantity，不是 naturalQuantity。
+  // 「每 1 份成品包材用量」这个输入框，提交前被复制进 standardQuantity（index.vue:1367），
+  // payload 里根本没有 naturalQuantity（:1310），编辑回填也是从 standardQuantity 读回（:1283），
+  // 后端成本引擎同样用 getStandardQuantity()（BomServiceImpl:98）。
+  // 也就是说 standard_quantity 这一列：对 RAW 是废弃脏数据，对 PACKAGING 是正经数据。
+  // 本任务停用的是前者，靠类别过滤实现，不是靠停读整列。
   return bomItems.value.reduce((sum, item) => {
     if (item.materialCategory !== 'PACKAGING') return sum;
-    const qty = Number(item.naturalQuantity) || 0;
+    const qty = Number(item.standardQuantity) || 0;
     const price = Number(item.unitPrice) || 0;
     return sum + qty * price;
   }, 0);
