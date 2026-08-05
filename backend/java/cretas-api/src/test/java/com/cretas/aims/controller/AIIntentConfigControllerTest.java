@@ -131,7 +131,7 @@ class AIIntentConfigControllerTest {
     @DisplayName("restaurant demo report shortcut distinguishes sales summary from trend")
     void restaurant_demo_report_shortcut_distinguishes_sales_and_trend() throws Exception {
         AIIntentConfigController controller = new AIIntentConfigController(
-                null, null, null, null, null, null);
+                null, null, null, null, null, null, null);
         Method shortcut = AIIntentConfigController.class.getDeclaredMethod(
                 "applyRestaurantReportIntentShortcut",
                 String.class,
@@ -630,7 +630,8 @@ class AIIntentConfigControllerTest {
                 mock(KeywordEffectivenessService.class),
                 mock(IntentConfigRollbackService.class),
                 learningService,
-                jwtUtil);
+                jwtUtil,
+                null);
         return new ControllerFixture(
                 MockMvcBuilders.standaloneSetup(controller)
                         .setControllerAdvice(new GlobalExceptionHandler())

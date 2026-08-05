@@ -19,6 +19,7 @@ import com.cretas.aims.service.KeywordEffectivenessService;
 import com.cretas.aims.service.ParameterExtractionLearningService;
 import com.cretas.aims.service.restaurant.RestaurantComprehensiveQuestionPolicy;
 import com.cretas.aims.service.impl.IntentConfigRollbackService;
+import com.cretas.aims.service.intent.IntentConfigManagementService;
 import com.cretas.aims.entity.learning.ParameterExtractionRule;
 import com.cretas.aims.entity.config.AIIntentConfigHistory;
 import com.cretas.aims.utils.CookieAuthHelper;
@@ -69,6 +70,9 @@ public class AIIntentConfigController {
     private final IntentConfigRollbackService rollbackService;
     private final ParameterExtractionLearningService parameterExtractionLearningService;
     private final JwtUtil jwtUtil;
+    // 餐饮租户判定改问 domain (task-1): MOCK_REST 这类 id 不带 RES_/REST_ 前缀,
+    // 只能靠 factories.type 解析出的业态认出来, isRestaurantFactoryId 需要这个能力。
+    private final IntentConfigManagementService intentConfigManagementService;
 
     /**
      * Sprint 11.5 P0 fix (2026-05-23): Extract JWT token from request supporting BOTH
@@ -544,8 +548,40 @@ public class AIIntentConfigController {
         return asksRemedy && !hasOpsSignal;
     }
 
+    /**
+     * 餐饮租户判定的唯一语义: domain 是权威, ID 前缀只是 domain 拿不到时的兜底。
+     * public static 因为测试 {@code RestaurantTenantDetectionTest} 在
+     * {@code com.cretas.aims.service.execution} 包, 与本类不同包不可见 package-private。
+     */
+    public static boolean isRestaurantTenantId(String factoryId, String factoryDomain) {
+        if ("RESTAURANT".equalsIgnoreCase(factoryDomain)) {
+            return true;
+        }
+        if (factoryId == null || factoryId.isBlank()) {
+            return false;
+        }
+        String normalized = factoryId.trim().toUpperCase(java.util.Locale.ROOT);
+        return "DEMO_REST".equals(normalized)
+                || normalized.startsWith("RES_")
+                || normalized.startsWith("REST_");
+    }
+
     private boolean isRestaurantFactoryId(String factoryId) {
-        return factoryId != null && (factoryId.startsWith("RES_") || "DEMO_REST".equalsIgnoreCase(factoryId));
+        return isRestaurantTenantId(factoryId, resolveFactoryDomainSafe(factoryId));
+    }
+
+    /** Fail-soft domain lookup: 服务未注入(如部分单测直接 new 控制器)或解析失败都退回 null。 */
+    private String resolveFactoryDomainSafe(String factoryId) {
+        if (intentConfigManagementService == null) {
+            return null;
+        }
+        try {
+            return intentConfigManagementService.resolveBusinessDomain(factoryId);
+        } catch (Exception e) {
+            log.warn("[RestaurantDemoIntentShortcut] resolveBusinessDomain failed for factoryId={}: {}",
+                    factoryId, e.getMessage());
+            return null;
+        }
     }
 
     private boolean hasExplicitReadVeto(String input) {

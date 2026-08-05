@@ -1759,8 +1759,25 @@ public class IntentExecutionOrchestrator {
         return Optional.empty();
     }
 
+    /**
+     * 餐饮租户判定的唯一语义: domain 是权威, ID 前缀只是 domain 拿不到时的兜底。
+     * MOCK_REST 这类 id 不含 RES_/REST_ 前缀的租户只能靠 domain 认出来。
+     */
+    static boolean isRestaurantTenantId(String factoryId, String factoryDomain) {
+        if ("RESTAURANT".equalsIgnoreCase(factoryDomain)) {
+            return true;
+        }
+        if (factoryId == null || factoryId.isBlank()) {
+            return false;
+        }
+        String normalized = factoryId.trim().toUpperCase(Locale.ROOT);
+        return "DEMO_REST".equals(normalized)
+                || normalized.startsWith("RES_")
+                || normalized.startsWith("REST_");
+    }
+
     private boolean isRestaurantFactoryId(String factoryId) {
-        return factoryId != null && (factoryId.startsWith("RES_") || "DEMO_REST".equalsIgnoreCase(factoryId));
+        return isRestaurantTenantId(factoryId, resolveFactoryDomainSafe(factoryId));
     }
 
     /**
@@ -3514,7 +3531,7 @@ public class IntentExecutionOrchestrator {
     }
 
     boolean hasRestaurantOwnerActionSignal(String factoryId, Map<String, Object> context) {
-        if (isRestaurantOwnerActionFactory(factoryId, null)) {
+        if (isRestaurantOwnerActionFactory(factoryId, resolveFactoryDomainSafe(factoryId))) {
             return true;
         }
         if (context == null || context.isEmpty()) {

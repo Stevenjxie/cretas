@@ -222,12 +222,24 @@ public class DynamicToolSelectionService {
         return buildNoToolResponse(intent);
     }
 
-    private static boolean isRestaurantTenant(String factoryId) {
-        if (factoryId == null) {
+    static boolean isRestaurantTenantId(String factoryId, String factoryDomain) {
+        if ("RESTAURANT".equalsIgnoreCase(factoryDomain)) {
+            return true;
+        }
+        if (factoryId == null || factoryId.isBlank()) {
             return false;
         }
         String normalized = factoryId.trim().toUpperCase(Locale.ROOT);
-        return "DEMO_REST".equals(normalized) || normalized.startsWith("RES_");
+        return "DEMO_REST".equals(normalized)
+                || normalized.startsWith("RES_")
+                || normalized.startsWith("REST_");
+    }
+
+    private boolean isRestaurantTenant(String factoryId) {
+        String biz;
+        try { biz = configService.resolveBusinessDomain(factoryId); }
+        catch (Exception e) { biz = null; }   // 解析失败退回 ID 判定, 与同类 filterCandidatesByBusinessType 一致
+        return isRestaurantTenantId(factoryId, biz);
     }
 
     /** Track B: 按工厂业态过滤动态候选工具, 排除异业态(如餐饮工厂排除制造业工具)。 */

@@ -39,6 +39,25 @@ public class BusinessTypeGate {
     }
 
     /**
+     * Task-1 (2026-08-05, restaurant-tenant-consolidation): expose the fail-soft domain
+     * lookup this gate already wraps, so other execution-path callers (e.g.
+     * {@link SseStreamingService}, which has no config-service dependency of its own) can
+     * do domain-aware restaurant-tenant checks without wiring a second dependency for the
+     * same lookup.
+     *
+     * @return "RESTAURANT" / "FACTORY" / whatever {@link IntentConfigManagementService}
+     *         resolves, or {@code null} if resolution throws.
+     */
+    public String resolveDomain(String factoryId) {
+        try {
+            return configService.resolveBusinessDomain(factoryId);
+        } catch (Exception e) {
+            log.warn("[业态门控] resolveBusinessDomain failed for factoryId={}: {}", factoryId, e.getMessage());
+            return null;
+        }
+    }
+
+    /**
      * @return an honest empty-state {@link IntentExecuteResponse} when the intent's business
      *         type is exclusive to a different domain than the factory; {@link Optional#empty()}
      *         to proceed with normal execution.

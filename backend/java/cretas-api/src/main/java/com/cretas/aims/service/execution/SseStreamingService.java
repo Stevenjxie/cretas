@@ -232,7 +232,7 @@ public class SseStreamingService {
             // diverged from orchestrator's dimension-contrast-aware rewrite (卡1, PR #1914), which
             // reintroduced exactly the "same question, different entry, different answer" bug this
             // card exists to close. Single source of truth — never copy this logic again.
-            boolean restaurantTenant = isRestaurantTenant(factoryId);
+            boolean restaurantTenant = isRestaurantTenantId(factoryId, resolveFactoryDomainForTenantCheck(factoryId));
             boolean requiresRestaurantSemanticPlan = tieredFirstEnabled
                     && !factoryPackConstrained
                     && !Boolean.TRUE.equals(request.getPreviewOnly())
@@ -1008,7 +1008,9 @@ public class SseStreamingService {
      */
     private IntentExecuteResponse tryRestaurantTieredDelegate(
             String factoryId, String userInput, IntentExecuteRequest request, String origin) {
-        if (sseTieredIntentDelegate == null || !isRestaurantTenant(factoryId) || userInput == null) {
+        if (sseTieredIntentDelegate == null
+                || !isRestaurantTenantId(factoryId, resolveFactoryDomainForTenantCheck(factoryId))
+                || userInput == null) {
             return null;
         }
         try {
@@ -1059,22 +1061,25 @@ public class SseStreamingService {
     }
 
     /**
-     * Card4 (2026-07-28): SSE-local restaurant-tenant ID pattern check, mirrors the
-     * ID-only fallback branch of IntentExecutionOrchestrator#isRestaurantOwnerActionFactory
-     * (:3451-3453) — DEMO_REST exact match, or a RES_/REST_ id prefix. This is the same
-     * duplication R16's noToolResponseWithRestaurantFallback already accepted (no factory-domain
-     * DB lookup is wired into SseStreamingService); this change only adds the missing REST_
-     * prefix so the two SSE call sites (this and the no-tool fallback) now agree.
+     * Task-1 (2026-08-05, restaurant-tenant-consolidation): now domain-aware, matching
+     * {@link IntentExecutionOrchestrator#isRestaurantTenantId} /
+     * {@link DynamicToolSelectionService#isRestaurantTenantId} /
+     * {@code AIIntentConfigController#isRestaurantTenantId}. Domain is authoritative;
+     * the RES_/REST_/DEMO_REST id-prefix check is only the fallback for when domain
+     * resolution is unavailable or fails.
      *
-     * <p><b>NOT equivalent</b> to orchestrator's {@code isRestaurantTenant()} (:2113), which
-     * additionally resolves the factory's actual domain via {@code resolveFactoryDomainSafe()}
-     * (a DB-backed lookup) and treats {@code "RESTAURANT".equalsIgnoreCase(factoryDomain)} as a
-     * standalone true — a factory whose id doesn't match RES_/REST_/DEMO_REST but whose domain
-     * IS resolved as RESTAURANT would gate tiered-first in /execute but NOT here. Accepted as
-     * pre-existing scope (same gap R16 shipped with, card4 review 2026-07-28), not a card4
-     * regression — but do not assume the two checks always agree.
+     * <p>Card4 (2026-07-28) history: this used to be an ID-only check ("no factory-domain
+     * DB lookup is wired into SseStreamingService") and its Javadoc explicitly warned "a
+     * factory whose id doesn't match RES_/REST_/DEMO_REST but whose domain IS resolved as
+     * RESTAURANT would gate tiered-first in /execute but NOT here — do not assume the two
+     * checks always agree." MOCK_REST is exactly that factory; task-1 closes the gap by
+     * resolving domain via {@link BusinessTypeGate#resolveDomain} (already-injected
+     * dependency, reused instead of wiring a new one) at the call sites and passing it in.
      */
-    private static boolean isRestaurantTenant(String factoryId) {
+    static boolean isRestaurantTenantId(String factoryId, String factoryDomain) {
+        if ("RESTAURANT".equalsIgnoreCase(factoryDomain)) {
+            return true;
+        }
         if (factoryId == null || factoryId.isBlank()) {
             return false;
         }
@@ -1082,5 +1087,15 @@ public class SseStreamingService {
         return "DEMO_REST".equals(normalized)
                 || normalized.startsWith("RES_")
                 || normalized.startsWith("REST_");
+    }
+
+    /**
+     * Fail-soft domain lookup for {@link #isRestaurantTenantId}: {@code businessTypeGate} is
+     * null in older unit tests built via {@code new SseStreamingService(...)} that never call
+     * {@code ReflectionTestUtils.setField(service, "businessTypeGate", ...)} — those keep the
+     * pre-task-1 ID-prefix-only behavior by getting a null domain here.
+     */
+    private String resolveFactoryDomainForTenantCheck(String factoryId) {
+        return businessTypeGate == null ? null : businessTypeGate.resolveDomain(factoryId);
     }
 }
