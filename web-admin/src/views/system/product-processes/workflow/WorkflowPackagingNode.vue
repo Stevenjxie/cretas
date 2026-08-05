@@ -1,5 +1,7 @@
 <template>
   <div class="packaging-node" :class="{ selected }">
+    <Handle type="target" :position="Position.Left" :id="PACK_OVERLAY_TARGET_HANDLE" />
+
     <div class="packaging-heading">
       <span class="step-mark">包</span>
       <div>
@@ -15,7 +17,7 @@
         v-for="row in data.rows"
         :key="row.id"
         class="packaging-row nodrag"
-        @click.stop="emit('edit-row', row.id)"
+        @click.stop="canWrite && emit('edit-row', row.id)"
       >
         <span class="row-material-name">{{ row.materialName }}</span>
         <span class="row-markers">
@@ -41,6 +43,7 @@
     </div>
 
     <button
+      v-if="canWrite"
       type="button"
       class="packaging-add nodrag"
       data-testid="pack-add"
@@ -61,30 +64,21 @@
  *    时不设 title,而不是设成空串——空 tooltip 比没有 tooltip 更具误导性。
  */
 import { computed } from 'vue';
-import type { BomRowMarker } from './bomOverlayMarkers';
+import { Handle, Position } from '@vue-flow/core';
+import { PACK_OVERLAY_TARGET_HANDLE } from './bomOverlay';
+import type { PackagingCellData } from './bomOverlayTypes';
 
-export interface PackagingCellRow {
-  id: string;
-  materialName: string;
-  /** 已折算的用量表达, 含分母, 例如 "0.05 个/kg" */
-  dosageText: string;
-  /** 折算前的原始表达, 例如 "= 1 个 / 20 kg"; 缺省时不渲染 title */
-  naturalHint?: string;
-  markers: BomRowMarker[];
-}
-
-export interface PackagingCellData {
-  /** 该包材 cell 所属的终端产出名 */
-  outputName: string;
-  /** 产出 SKU 的基本单位——分母来源,禁止硬编码 */
-  baseUnit: string;
-  rows: PackagingCellRow[];
-}
+// 沿用 bomOverlayTypes.ts 的唯一权威定义(理由同 WorkflowAuxiliaryNode.vue)。
+// 原地 re-export 保留既有导入路径 —— WorkflowPackagingNode.spec.ts 从本文件
+// `import type { PackagingCellData } from '../WorkflowPackagingNode.vue'` 不需要改。
+export type { PackagingCellRow, PackagingCellData } from './bomOverlayTypes';
 
 const props = defineProps<{
   id: string;
   data: PackagingCellData;
   selected?: boolean;
+  /** 只读用户不给「添加包材」/编辑行入口 —— 画布层传 canEdit 下来。 */
+  canWrite: boolean;
 }>();
 
 const emit = defineEmits<{

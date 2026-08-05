@@ -1,5 +1,10 @@
-import type { BomRowMarker } from './bomOverlayMarkers';
 import type { ProductProcessNodeKind, WorkflowPosition } from './types';
+import type {
+  AuxiliaryCellData,
+  AuxiliaryCellRow,
+  PackagingCellData,
+  PackagingCellRow,
+} from './bomOverlayTypes';
 
 /**
  * BOM 浮层节点 —— 辅料 / 包材 cell。
@@ -40,41 +45,69 @@ export function stripBomOverlayEdges<T extends { source: string; target: string 
 const AUX_OFFSET_Y = 220;
 const PACK_OFFSET_X = 220;
 
-/** 一行辅料/包材 —— markers 由 Task 2 的 markersForAuxiliaryRow / markersForPackagingRow 预先算好, 这里只负责摆放。 */
-export interface BomOverlayRow {
-  materialName: string;
-  dosageText: string;
-  markers: BomRowMarker[];
+/**
+ * 派生边挂靠的 handle id —— 必须与组件里 <Handle> 的 id 字面量一致
+ * (WorkflowAuxiliaryNode.vue / WorkflowPackagingNode.vue / WorkflowMaterialNode.vue
+ * 的 FINISHED_GOOD 分支)。两边任一改了字符串而没同步改另一边, 连线不报错、
+ * 直接不渲染 —— 所以两侧都从这两个常量读, 不允许各自手写字面量。
+ */
+export const AUX_OVERLAY_SOURCE_HANDLE = 'bom-aux-out';
+export const PACK_OVERLAY_SOURCE_HANDLE = 'bom-pack-out';
+export const PACK_OVERLAY_TARGET_HANDLE = 'bom-pack-in';
+
+/**
+ * deriveBomOverlay 只需要节点的 id/kind/position, 加一份【展示用】的最小数据子集
+ * (工序名 / 产出名 / 基本单位) —— 不要求完整的 ProcessNodeData/MaterialNodeData
+ * 载荷(那些字段这里用不上, 强制调用方补全只会制造无关的类型摩擦)。
+ */
+export interface BomOverlaySourceNodeData {
+  /** PROCESS 节点的工序名, 用作辅料 cell 标题。 */
+  processName?: string;
+  /** FINISHED_GOOD 节点的产出名, 用作包材 cell 标题。 */
+  name?: string;
+  /** FINISHED_GOOD 节点的产出 SKU 基本单位 —— 包材 cell 分母的权威来源。 */
+  baseUnit?: string;
 }
 
-/** deriveBomOverlay 只需要节点的 id/kind/position —— 不要求完整的 ProductProcessWorkflowNode 载荷。 */
 export interface BomOverlaySourceNode {
   id: string;
   kind: ProductProcessNodeKind;
   position: WorkflowPosition;
+  data: BomOverlaySourceNodeData;
+}
+
+/** 一道工序的辅料浮层输入 —— usageSupported 是 BOM 概念, 画布节点本身不携带, 必须外部传入。 */
+export interface BomOverlayAuxiliaryInput {
+  usageSupported: boolean;
+  rows: AuxiliaryCellRow[];
+}
+
+/** 一个终端产出的包材浮层输入。outputName/baseUnit 直接读该节点自己的 data, 不在这里重复传。 */
+export interface BomOverlayPackagingInput {
+  rows: PackagingCellRow[];
 }
 
 export interface BomOverlayInput {
   workflowNodes: BomOverlaySourceNode[];
-  auxiliaryByProcess: Record<string, BomOverlayRow[]>;
-  packagingByOutput: Record<string, BomOverlayRow[]>;
+  auxiliaryByProcess: Record<string, BomOverlayAuxiliaryInput>;
+  packagingByOutput: Record<string, BomOverlayPackagingInput>;
 }
 
-export interface OverlayNodeData {
-  rows: BomOverlayRow[];
-}
-
-export interface OverlayNode {
-  id: string;
-  type: 'bomAuxiliary' | 'bomPackaging';
-  position: WorkflowPosition;
-  data: OverlayNodeData;
-}
+/**
+ * OverlayNode 的返回类型直接就是两个 cell 组件的 prop 类型(AuxiliaryCellData /
+ * PackagingCellData) —— 这样字段错配(比如漏传 usageSupported)在编译期就红,
+ * 不必等到画布上渲染出一片灰态才发现。
+ */
+export type OverlayNode =
+  | { id: string; type: 'bomAuxiliary'; position: WorkflowPosition; data: AuxiliaryCellData }
+  | { id: string; type: 'bomPackaging'; position: WorkflowPosition; data: PackagingCellData };
 
 export interface OverlayEdge {
   id: string;
   source: string;
+  sourceHandle?: string;
   target: string;
+  targetHandle?: string;
   style: { strokeDasharray: string };
 }
 
@@ -98,16 +131,22 @@ export function deriveBomOverlay(input: BomOverlayInput): BomOverlayResult {
   for (const node of input.workflowNodes) {
     if (node.kind === 'PROCESS') {
       const auxId = `${BOM_OVERLAY_PREFIX}aux:${node.id}`;
-      const rows = input.auxiliaryByProcess[node.id] ?? [];
+      const meta = input.auxiliaryByProcess[node.id];
       nodes.push({
         id: auxId,
         type: 'bomAuxiliary',
         position: { x: node.position.x, y: node.position.y - AUX_OFFSET_Y },
-        data: { rows },
+        data: {
+          processName: node.data.processName ?? '未命名工序',
+          usageSupported: meta?.usageSupported ?? false,
+          rows: meta?.rows ?? [],
+          processNodeId: node.id,
+        },
       });
       edges.push({
         id: `${BOM_OVERLAY_PREFIX}edge:aux:${node.id}`,
         source: auxId,
+        sourceHandle: AUX_OVERLAY_SOURCE_HANDLE,
         target: node.id,
         style: { strokeDasharray: '5 4' },
       });
@@ -115,17 +154,24 @@ export function deriveBomOverlay(input: BomOverlayInput): BomOverlayResult {
 
     if (node.kind === 'FINISHED_GOOD') {
       const packId = `${BOM_OVERLAY_PREFIX}pack:${node.id}`;
-      const rows = input.packagingByOutput[node.id] ?? [];
+      const meta = input.packagingByOutput[node.id];
       nodes.push({
         id: packId,
         type: 'bomPackaging',
         position: { x: node.position.x + PACK_OFFSET_X, y: node.position.y },
-        data: { rows },
+        data: {
+          outputName: node.data.name ?? '未命名产出',
+          baseUnit: node.data.baseUnit ?? '未配',
+          rows: meta?.rows ?? [],
+          outputNodeId: node.id,
+        },
       });
       edges.push({
         id: `${BOM_OVERLAY_PREFIX}edge:pack:${node.id}`,
         source: node.id,
+        sourceHandle: PACK_OVERLAY_SOURCE_HANDLE,
         target: packId,
+        targetHandle: PACK_OVERLAY_TARGET_HANDLE,
         style: { strokeDasharray: '5 4' },
       });
     }

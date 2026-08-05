@@ -266,6 +266,27 @@
               @delete="removeNode(slotProps.id)"
             />
           </template>
+
+          <!-- BOM 浮层 cell(辅料/包材) —— 只读投影, 不属于工艺定义(见 bomOverlay.ts 顶部注释) -->
+          <template #node-bomAuxiliary="slotProps">
+            <WorkflowAuxiliaryNode
+              :id="slotProps.id"
+              :data="slotProps.data"
+              :can-write="canEdit"
+              @add-row="openAuxiliaryEditor(slotProps.data.processNodeId)"
+              @edit-row="(rowId) => openAuxiliaryEditor(slotProps.data.processNodeId, rowId)"
+              @open-detail="openAuxiliaryEditor(slotProps.data.processNodeId)"
+            />
+          </template>
+          <template #node-bomPackaging="slotProps">
+            <WorkflowPackagingNode
+              :id="slotProps.id"
+              :data="slotProps.data"
+              :can-write="canEdit"
+              @add-row="openPackagingEditor(slotProps.data.outputNodeId)"
+              @edit-row="(rowId) => openPackagingEditor(slotProps.data.outputNodeId, rowId)"
+            />
+          </template>
         </VueFlow>
 
         <div
@@ -570,6 +591,7 @@
           v-if="bomDrawerVisible"
           :initial-product-type-id="bomDrawerProductTypeId"
           :initial-workflow-revision-id="definition?.revisionId"
+          :initial-category="bomDrawerInitialCategory"
         />
         <template #fallback>
           <div aria-busy="true" aria-live="polite">
@@ -579,6 +601,19 @@
         </template>
       </Suspense>
     </el-drawer>
+
+    <!-- #Task6: 辅料编辑弹窗 —— 直接复用既有 SeasoningBindingDialog, 不新建编辑面 -->
+    <SeasoningBindingDialog
+      v-model="auxDialogVisible"
+      :factory-id="auxDialogFactoryId"
+      :recipe-id="auxDialogRecipeId"
+      :process="auxDialogProcess"
+      :binding="auxDialogBinding"
+      :materials="bomOverlayMaterials"
+      :substitute-relations="auxDialogSubstituteRelations"
+      :revision="auxDialogRevision"
+      @saved="onAuxDialogSaved"
+    />
 
     <!-- #12b: 版本记录抽屉 (只读浏览之前发布过的版本) -->
     <el-drawer v-model="versionDrawerVisible" title="版本记录" direction="rtl" size="440px">
@@ -635,6 +670,8 @@ import UnitSelect from '@/components/common/UnitSelect.vue';
 import WorkProcessAIChatPanel from '@/views/system/components/WorkProcessAIChatPanel.vue';
 import WorkflowMaterialNode from './WorkflowMaterialNode.vue';
 import WorkflowProcessNode from './WorkflowProcessNode.vue';
+import WorkflowAuxiliaryNode from './WorkflowAuxiliaryNode.vue';
+import WorkflowPackagingNode from './WorkflowPackagingNode.vue';
 import {
   buildRawMaterialSegmentTree,
   isRawMaterialOption,
@@ -645,7 +682,32 @@ import { classifyOutputSkuCategory, matchOutputSkuByName } from './outputSkuClas
 import { needsPrimaryOutputKindUpdate } from './processOutputKindCompatibility';
 import { usePinyinFilter } from './pinyinInitials';
 import { classifyWorkflowTopology } from './workflowClassification';
-import { stripBomOverlay, stripBomOverlayEdges } from './bomOverlay';
+import {
+  deriveBomOverlay,
+  stripBomOverlay,
+  stripBomOverlayEdges,
+  type BomOverlayAuxiliaryInput,
+  type BomOverlayPackagingInput,
+  type BomOverlaySourceNode,
+  type BomOverlaySourceNodeData,
+} from './bomOverlay';
+import { markersForAuxiliaryRow, markersForPackagingRow } from './bomOverlayMarkers';
+import type { AuxiliaryCellRow, PackagingCellRow } from './bomOverlayTypes';
+import {
+  formatAuxiliaryDosageText,
+  formatPackagingDosageText,
+  formatPackagingNaturalHint,
+} from './bomOverlayRowFormat';
+import {
+  bomRecipeApi,
+  bomSeasoningApi,
+  type BomItemSubstituteView,
+  type SeasoningBindingView,
+  type SeasoningProcessView,
+  type SeasoningWorkspace,
+} from '@/api/bom';
+import { bigCategoryOf } from '@/utils/materialCategory';
+import SeasoningBindingDialog, { type SeasoningMaterialOption } from '@/views/production/bom/seasoning/SeasoningBindingDialog.vue';
 import {
   activateProductProcessWorkflow,
   deactivateProductProcessWorkflow,
@@ -860,6 +922,38 @@ const bomProductionMismatchProducts = computed<BomProductTarget[]>(() => {
     });
 });
 const bomRawMaterialIdList = computed(() => productBomItems.value.map((item) => item.materialTypeId));
+
+// #Task6: BOM 浮层 cell(辅料/包材)数据 —— 与上面 productBomItems(扁平 id 清单,
+// 只服务原料 picker)是并行的另一份数据, 保留分组(按工序/按产出)与展示字段,
+// 专供 deriveBomOverlay 派生画布浮层节点, 详见 loadBomOverlayData()。
+const bomOverlayAuxiliaryByProcess = ref<Record<string, BomOverlayAuxiliaryInput>>({});
+const bomOverlayPackagingByOutput = ref<Record<string, BomOverlayPackagingInput>>({});
+// 辅料编辑入口(直接复用 SeasoningBindingDialog)需要知道某个工序归哪个 recipe;
+// 一个 workflow 可能有多个终端产出(=多个 recipe)共享同一批工序节点, 这里按
+// "第一个覆盖该工序的 recipe 生效"简化 —— 联合生产场景下若不同 recipe 对同一
+// 工序有不同辅料集合, 只展示/编辑第一个命中的, 已在 loadBomOverlayData 里注释。
+const bomOverlayRecipeIdByProcess = ref<Record<string, string>>({});
+const bomOverlaySeasoningWorkspaceByRecipe = ref<Record<string, SeasoningWorkspace>>({});
+const bomOverlaySubstitutesByRecipe = ref<Record<string, BomItemSubstituteView[]>>({});
+const bomOverlayMaterials = ref<SeasoningMaterialOption[]>([]);
+const bomOverlayMaterialsLoaded = ref(false);
+let bomOverlayLoadGeneration = 0;
+// 辅料编辑弹窗(直接挂 SeasoningBindingDialog, 不新建编辑面 —— 见 task-6-brief.md)
+const auxDialogVisible = ref(false);
+const auxDialogFactoryId = ref('');
+const auxDialogRecipeId = ref('');
+const auxDialogProcess = ref<SeasoningProcessView | null>(null);
+const auxDialogBinding = ref<SeasoningBindingView | null>(null);
+const auxDialogRevision = ref(0);
+const auxDialogSubstituteRelations = computed<BomItemSubstituteView[]>(() => {
+  if (!auxDialogBinding.value) return [];
+  const all = bomOverlaySubstitutesByRecipe.value[auxDialogRecipeId.value] || [];
+  return all.filter((relation) =>
+    relation.parentKind === 'SEASONING_ITEM' && relation.parentSeasoningItemId === auxDialogBinding.value!.id);
+});
+// 包材编辑入口 = 打开既有 BOM 抽屉并定位到包材页签 (见 openBomDrawer 的 initialCategory 参数)
+const bomDrawerInitialCategory = ref<string | undefined>(undefined);
+
 function usedRawMaterialIdsExcept(nodeId: string): string[] {
   return flowNodes.value
     .filter((node) => node.id !== nodeId && node.data?.kind === 'RAW_MATERIAL')
@@ -1143,6 +1237,7 @@ async function loadEditorWorkspace(loadFactoryCatalogs: boolean): Promise<void> 
   // 普通产品的画布定义先出现；完整编辑能力在目录就绪后自动开放。
   if (!rawOwnerMode.value) await catalogPromise;
   await loadProductBom();
+  await loadBomOverlayData();
 }
 
 // #11: 每次操作后防抖 ~2.5s 自动保存 (静默 + 保留撤销栈)。用户停手 2.5s 即存;
@@ -1195,7 +1290,7 @@ watch(
     .map((node) => String(node.data.skuId))
     .sort()
     .join(','),
-  () => { void loadProductBom(); },
+  () => { void loadProductBom(); void loadBomOverlayData(); },
 );
 
 async function waitForWorkflowSave(timeoutMs = 5000): Promise<boolean> {
@@ -1207,7 +1302,10 @@ async function waitForWorkflowSave(timeoutMs = 5000): Promise<boolean> {
 }
 
 // #10: 打开 BOM 配置抽屉; 关闭时刷新本产品 BOM (原料分组 + 提示随即更新)
-async function openBomDrawer(requestedProductTypeId?: string): Promise<void> {
+// initialCategory: 定位到某个类别页签(如 openPackagingEditor 传 'PACKAGING')。
+// 不传时显式清空 —— 否则上一次「配置包材」留下的页签会粘在下一次普通打开上。
+async function openBomDrawer(requestedProductTypeId?: string, initialCategory?: string): Promise<void> {
+  bomDrawerInitialCategory.value = initialCategory;
   if (!(await waitForWorkflowSave())) {
     ElMessage.warning('Workflow 仍在保存，请稍后再打开 BOM');
     return;
@@ -1247,6 +1345,7 @@ async function openBomDrawer(requestedProductTypeId?: string): Promise<void> {
 }
 async function onBomDrawerClosed(): Promise<void> {
   await loadProductBom({ force: true });
+  await loadBomOverlayData();
 }
 
 // #12b: 版本记录浏览
@@ -1780,6 +1879,191 @@ async function loadProductBom(options: { force?: boolean } = {}): Promise<void> 
   }
 }
 
+/**
+ * 加载画布上辅料/包材 cell 需要的 BOM 数据 —— 按终端产出(FINISHED_GOOD 节点的
+ * skuId)逐个拿当前生效配方(bomRecipeApi.getCurrentByProduct), 从其中筛出
+ * PACKAGING 类目行做包材 cell; 再按拿到的 recipeId 逐个拉工序调料工作台
+ * (bomSeasoningApi.getWorkspace)与替代物料关系(bomRecipeApi.listSubstitutes),
+ * 供辅料 cell 与「打开辅料详情」编辑弹窗共用同一份数据, 避免打开弹窗时二次请求。
+ *
+ * 完成后调用 refreshBomOverlay() 把结果注入画布 —— hydrate() 内部也会调用它
+ * (用当时已缓存的数据), 两处配合: hydrate 保证"浮层结构一定在", 这里保证
+ * "浮层内容随 BOM 数据变化刷新"。
+ */
+async function loadBomOverlayData(): Promise<void> {
+  const factoryId = props.factoryId;
+  const finishedNodes = flowNodes.value.filter((node) => node.data?.kind === 'FINISHED_GOOD' && node.data?.skuId);
+  const targets = finishedNodes.map((node) => ({ nodeId: node.id, skuId: String(node.data.skuId) }));
+  const uniqueSkuIds = [...new Set(targets.map((target) => target.skuId))];
+  const generation = ++bomOverlayLoadGeneration;
+  const stillCurrent = () => generation === bomOverlayLoadGeneration && props.factoryId === factoryId;
+
+  if (!factoryId || uniqueSkuIds.length === 0) {
+    bomOverlayAuxiliaryByProcess.value = {};
+    bomOverlayPackagingByOutput.value = {};
+    bomOverlayRecipeIdByProcess.value = {};
+    bomOverlaySeasoningWorkspaceByRecipe.value = {};
+    bomOverlaySubstitutesByRecipe.value = {};
+    refreshBomOverlay();
+    return;
+  }
+
+  try {
+    const recipeResponses = await Promise.all(uniqueSkuIds.map(async (skuId) => {
+      try {
+        return { skuId, response: await bomRecipeApi.getCurrentByProduct(factoryId, skuId) };
+      } catch {
+        return { skuId, response: null };
+      }
+    }));
+    if (!stillCurrent()) return;
+
+    const packagingByOutput: Record<string, BomOverlayPackagingInput> = {};
+    const recipeIdBySku: Record<string, string> = {};
+    recipeResponses.forEach(({ skuId, response }) => {
+      if (!response?.success || !response.data?.id) return;
+      const recipe = response.data;
+      recipeIdBySku[skuId] = recipe.id;
+      const outputNode = finishedNodes.find((node) => String(node.data.skuId) === skuId);
+      // 禁止降级处理: 基本单位缺失时占位「未配」, 不能拼出 "0.05 个/undefined" 这种半成品字符串。
+      const outputBaseUnit = String(outputNode?.data.baseUnit ?? '未配');
+      const rows: PackagingCellRow[] = (recipe.items || [])
+        .filter((item) => item.materialCategory === 'PACKAGING')
+        .map((item) => ({
+          id: String(item.id),
+          materialName: item.materialName || '未命名物料',
+          dosageText: formatPackagingDosageText(item.standardQuantity, item.unit, outputBaseUnit),
+          naturalHint: formatPackagingNaturalHint(item.standardQuantity, item.unit, outputBaseUnit),
+          markers: markersForPackagingRow({
+            substituteCount: item.substituteDetails?.length ?? 0,
+            isOptional: item.isOptional === true,
+            perPortion: item.perPortion === true,
+            packagingSpecId: item.packagingSpecId ?? null,
+            packagingSpecNameSnapshot: item.packagingSpecNameSnapshot ?? null,
+          }),
+        }));
+      targets.filter((target) => target.skuId === skuId).forEach((target) => {
+        packagingByOutput[target.nodeId] = { rows };
+      });
+    });
+
+    const uniqueRecipeIds = [...new Set(Object.values(recipeIdBySku))];
+    const [workspaceResponses, substitutesResponses] = await Promise.all([
+      Promise.all(uniqueRecipeIds.map(async (recipeId) => {
+        try {
+          return { recipeId, response: await bomSeasoningApi.getWorkspace(factoryId, recipeId) };
+        } catch {
+          return { recipeId, response: null };
+        }
+      })),
+      Promise.all(uniqueRecipeIds.map(async (recipeId) => {
+        try {
+          return { recipeId, response: await bomRecipeApi.listSubstitutes(factoryId, recipeId) };
+        } catch {
+          return { recipeId, response: null };
+        }
+      })),
+    ]);
+    if (!stillCurrent()) return;
+
+    const substitutesByRecipe: Record<string, BomItemSubstituteView[]> = {};
+    substitutesResponses.forEach(({ recipeId, response }) => {
+      substitutesByRecipe[recipeId] = response?.success && Array.isArray(response.data) ? response.data : [];
+    });
+
+    const auxiliaryByProcess: Record<string, BomOverlayAuxiliaryInput> = {};
+    const recipeIdByProcess: Record<string, string> = {};
+    const workspaceByRecipe: Record<string, SeasoningWorkspace> = {};
+    workspaceResponses.forEach(({ recipeId, response }) => {
+      if (!response?.success || !response.data) return;
+      workspaceByRecipe[recipeId] = response.data;
+      const relations = substitutesByRecipe[recipeId] || [];
+      response.data.processes.forEach((process) => {
+        // 联合生产(多终端产出共享同批工序节点)时, 第一个覆盖该工序的 recipe 生效 ——
+        // 简化: 不同 recipe 对同一工序理应配同一批辅料, 若确有分歧只展示/编辑先命中的那份。
+        if (auxiliaryByProcess[process.workflowProcessNodeId]) return;
+        recipeIdByProcess[process.workflowProcessNodeId] = recipeId;
+        auxiliaryByProcess[process.workflowProcessNodeId] = {
+          usageSupported: process.standardUsageSupported === true,
+          rows: process.bindings.map((binding): AuxiliaryCellRow => ({
+            id: String(binding.id),
+            materialName: binding.name || binding.materialName || '未命名辅料',
+            dosageText: formatAuxiliaryDosageText(binding.dosagePerKgG),
+            markers: markersForAuxiliaryRow({
+              subsequentPotRatio: binding.subsequentPotRatio,
+              countInSeasoning: binding.countInSeasoning,
+              substituteCount: relations.filter((relation) =>
+                relation.parentKind === 'SEASONING_ITEM' && relation.parentSeasoningItemId === binding.id).length,
+              costScope: process.costScope ?? null,
+            }),
+          })),
+        };
+      });
+    });
+
+    bomOverlayPackagingByOutput.value = packagingByOutput;
+    bomOverlayAuxiliaryByProcess.value = auxiliaryByProcess;
+    bomOverlayRecipeIdByProcess.value = recipeIdByProcess;
+    bomOverlaySeasoningWorkspaceByRecipe.value = workspaceByRecipe;
+    bomOverlaySubstitutesByRecipe.value = substitutesByRecipe;
+    refreshBomOverlay();
+  } catch (error) {
+    if (!stillCurrent()) return;
+    console.error('[ProductProcessWorkflow] BOM overlay data loading failed (辅料/包材 cell 会显示为空态)', error);
+  }
+}
+
+async function ensureBomOverlayMaterials(): Promise<void> {
+  if (bomOverlayMaterialsLoaded.value) return;
+  const factoryId = props.factoryId;
+  if (!factoryId) return;
+  try {
+    const response = await get<Array<SeasoningMaterialOption & { category?: string | null; materialCategory?: string | null }>>(
+      `/${factoryId}/raw-material-types/active`,
+    );
+    const rows = response.success && response.data ? response.data : [];
+    bomOverlayMaterials.value = rows.filter((material) => {
+      if (material.materialCategory === 'AUXILIARY') return true;
+      const category = bigCategoryOf(material.category);
+      return category === '辅料' || category === '调料';
+    });
+    bomOverlayMaterialsLoaded.value = true;
+  } catch {
+    ElMessage.error('辅料档案加载失败');
+  }
+}
+
+// 辅料编辑入口 —— 直接复用既有 SeasoningBindingDialog(不新建编辑面, 见 task-6-brief.md)。
+async function openAuxiliaryEditor(processNodeId: string, rowId?: string): Promise<void> {
+  if (!canEdit.value) return;
+  const recipeId = bomOverlayRecipeIdByProcess.value[processNodeId];
+  const workspace = recipeId ? bomOverlaySeasoningWorkspaceByRecipe.value[recipeId] : undefined;
+  const process = workspace?.processes.find((candidate) => candidate.workflowProcessNodeId === processNodeId) ?? null;
+  if (!recipeId || !workspace || !process) {
+    ElMessage.warning('辅料数据尚未加载完成，请稍后重试');
+    return;
+  }
+  await ensureBomOverlayMaterials();
+  auxDialogFactoryId.value = props.factoryId;
+  auxDialogRecipeId.value = recipeId;
+  auxDialogProcess.value = process;
+  auxDialogBinding.value = rowId ? (process.bindings.find((binding) => String(binding.id) === rowId) ?? null) : null;
+  auxDialogRevision.value = workspace.seasoningRevision;
+  auxDialogVisible.value = true;
+}
+
+function onAuxDialogSaved(): void {
+  void loadBomOverlayData();
+}
+
+// 包材编辑入口 —— 打开既有 BOM 抽屉并定位到包材页签, 本期不新建编辑面。
+function openPackagingEditor(outputNodeId: string, _rowId?: string): void {
+  if (!canEdit.value) return;
+  const node = flowNodes.value.find((candidate) => candidate.id === outputNodeId);
+  const skuId = node?.data?.kind === 'FINISHED_GOOD' && node.data?.skuId ? String(node.data.skuId) : undefined;
+  void openBomDrawer(skuId, 'PACKAGING');
+}
+
 function propsMatchIdentity(identity: WorkflowIdentity): boolean {
   return props.factoryId === identity.factoryId
     && props.productTypeId === identity.productTypeId;
@@ -1810,6 +2094,50 @@ function isLoadedIdentityCurrent(identity: WorkflowIdentity): boolean {
     && props.productTypeId === identity.productTypeId;
 }
 
+/**
+ * ⛔ 重新派生 BOM 浮层(辅料/包材 cell) —— 结构性挂在 hydrate() 内部, 不是散落
+ * 在各个调用点各补一次。undo() / handleAutoLayout() / reconcileLoadedUnits() 等
+ * 全部经由 hydrate() 整体替换 flowNodes/flowEdges, 若浮层派生只在"加载首次"那
+ * 一个点做, 这些消费方会把浮层一并清空(见 task-6-brief.md Step 1b 的事故记录)。
+ * 把派生做成 hydrate 的必经步骤, 「hydrate 之后浮层一定在」就是结构性保证,
+ * 不依赖调用方记得再调一次。
+ */
+function refreshBomOverlay(): void {
+  const strippedNodes = stripBomOverlay(flowNodes.value);
+  const strippedEdges = stripBomOverlayEdges(flowEdges.value);
+  const workflowNodes: BomOverlaySourceNode[] = strippedNodes.map((node) => ({
+    id: node.id,
+    kind: (node.data as { kind: ProductProcessNodeKind }).kind,
+    position: { x: node.position.x, y: node.position.y },
+    data: node.data as BomOverlaySourceNodeData,
+  }));
+  const { nodes: overlayNodes, edges: overlayEdges } = deriveBomOverlay({
+    workflowNodes,
+    auxiliaryByProcess: bomOverlayAuxiliaryByProcess.value,
+    packagingByOutput: bomOverlayPackagingByOutput.value,
+  });
+  flowNodes.value = [
+    ...strippedNodes,
+    ...overlayNodes.map((node) => ({
+      id: node.id,
+      type: node.type,
+      position: node.position,
+      data: node.data,
+    })),
+  ];
+  flowEdges.value = [
+    ...strippedEdges,
+    ...overlayEdges.map((edge) => ({
+      id: edge.id,
+      source: edge.source,
+      sourceHandle: edge.sourceHandle,
+      target: edge.target,
+      targetHandle: edge.targetHandle,
+      style: edge.style,
+    })),
+  ];
+}
+
 function hydrate(nextDefinition: ProductProcessWorkflowDefinition): boolean {
   definition.value = toPlainWorkflowValue(nextDefinition);
   flowNodes.value = nextDefinition.nodes.map((node) => ({
@@ -1824,6 +2152,7 @@ function hydrate(nextDefinition: ProductProcessWorkflowDefinition): boolean {
     style: { stroke: '#1b65a8', strokeWidth: 2 },
   }));
   refreshPortMaterialMetadata();
+  refreshBomOverlay();
   return false;
 }
 

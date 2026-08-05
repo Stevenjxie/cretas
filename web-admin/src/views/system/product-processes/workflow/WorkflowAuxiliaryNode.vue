@@ -1,5 +1,7 @@
 <template>
   <div class="aux-node" :class="{ 'is-greyed': !data.usageSupported }">
+    <Handle type="source" :position="Position.Bottom" :id="AUX_OVERLAY_SOURCE_HANDLE" />
+
     <div class="aux-heading">
       <span class="aux-step-mark">辅</span>
       <div>
@@ -35,7 +37,7 @@
         class="aux-row nodrag"
         role="button"
         tabindex="0"
-        @click="emit('edit-row', row.id)"
+        @click="canWrite && emit('edit-row', row.id)"
       >
         <span class="aux-row-name">{{ row.materialName }}</span>
         <span class="aux-row-markers">
@@ -54,7 +56,7 @@
     </div>
 
     <button
-      v-if="data.usageSupported"
+      v-if="canWrite && data.usageSupported"
       type="button"
       class="aux-add nodrag"
       data-testid="aux-add"
@@ -65,29 +67,20 @@
 
 <script setup lang="ts">
 import { computed } from 'vue';
-import type { BomRowMarker } from './bomOverlayMarkers';
+import { Handle, Position } from '@vue-flow/core';
+import { AUX_OVERLAY_SOURCE_HANDLE } from './bomOverlay';
+import type { AuxiliaryCellData } from './bomOverlayTypes';
 
-export interface AuxiliaryCellRow {
-  id: string;
-  materialName: string;
-  /** Formatted dosage string, e.g. "2 g/kg". Missing/unresolved dosage must render an
-   *  explicit placeholder — never silently fall back to "0" or a blank cell. */
-  dosageText?: string | null;
-  markers: BomRowMarker[];
-}
-
-export interface AuxiliaryCellData {
-  processName: string;
-  /** false when the process's input basis has no convertible unit contract, so
-   *  "every kg of input" has no denominator — the whole cell must grey out and
-   *  block adding rows instead of failing later at save time. */
-  usageSupported: boolean;
-  rows: AuxiliaryCellRow[];
-}
+// 沿用 bomOverlayTypes.ts 的唯一权威定义 —— deriveBomOverlay 的返回类型即本组件的 prop
+// 类型, 两侧不再各自声明一份互不相干的接口。原地 re-export 保留既有导入路径
+// (WorkflowAuxiliaryNode.spec.ts 等文件不需要跟着改导入)。
+export type { AuxiliaryCellRow, AuxiliaryCellData } from './bomOverlayTypes';
 
 const props = defineProps<{
   id: string;
   data: AuxiliaryCellData;
+  /** 只读用户不给「加辅料」入口 —— 画布层传 canEdit 下来。 */
+  canWrite: boolean;
 }>();
 
 const emit = defineEmits<{

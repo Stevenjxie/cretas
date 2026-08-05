@@ -13,6 +13,10 @@
   >
     <Handle v-if="kind !== 'RAW_MATERIAL'" type="target" :position="Position.Left" id="input" />
     <Handle v-if="kind !== 'FINISHED_GOOD'" type="source" :position="Position.Right" id="output" />
+    <!-- FINISHED_GOOD 没有真实的下游产出 handle(它是终端), 但 BOM 浮层的包材 cell
+         需要从它引一条虚线出去 —— 用独立 id 的 handle 承载, 不与上面的 "output"
+         (真实工艺连线用)混用, 两者互斥(kind 不可能同时满足两个 v-if)。 -->
+    <Handle v-if="kind === 'FINISHED_GOOD'" type="source" :position="Position.Right" :id="PACK_OVERLAY_SOURCE_HANDLE" />
 
     <button
       v-if="canWrite"
@@ -132,6 +136,7 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref } from 'vue';
 import { Handle, Position } from '@vue-flow/core';
+import { PACK_OVERLAY_SOURCE_HANDLE } from './bomOverlay';
 import { usePinyinFilter } from './pinyinInitials';
 import {
   filterRawMaterialsBySegment,

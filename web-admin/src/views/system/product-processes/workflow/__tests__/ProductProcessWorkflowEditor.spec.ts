@@ -2,6 +2,7 @@ import { flushPromises, shallowMount, type VueWrapper } from '@vue/test-utils';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import ProductProcessWorkflowEditor from '../ProductProcessWorkflowEditor.vue';
+import { stripBomOverlay, stripBomOverlayEdges } from '../bomOverlay';
 import type { ProductProcessWorkflowDefinition } from '../types';
 
 const apiMocks = vi.hoisted(() => ({
@@ -440,7 +441,10 @@ describe('ProductProcessWorkflowEditor process branch integration', () => {
     vm.openAddProcess('raw');
     vm.selectedWorkProcessId = 'WP-PACK';
     vm.confirmAddProcess();
-    const beforeDelete = vm.flowNodes.length;
+    // Task6: flowNodes/flowEdges 现在混着 BOM 浮层 cell(辅料/包材, 挂在 PROCESS/
+    // FINISHED_GOOD 节点上, 见 refreshBomOverlay), 这份用例只关心"真实工艺图"的
+    // 增删撤销, 用 stripBomOverlay(Edges) 滤掉浮层, 不受它的多少影响。
+    const beforeDelete = stripBomOverlay(vm.flowNodes).length;
     const historyBeforeDelete = vm.history.length;
     const raw = vm.flowNodes.find((node) => node.id === 'raw');
     if (!raw) throw new Error('Expected raw node');
@@ -449,13 +453,13 @@ describe('ProductProcessWorkflowEditor process branch integration', () => {
     vm.removeSelectedElements();
     await flushPromises();
 
-    expect(vm.flowNodes).toHaveLength(beforeDelete - 1);
-    expect(vm.flowEdges).toHaveLength(1);
+    expect(stripBomOverlay(vm.flowNodes)).toHaveLength(beforeDelete - 1);
+    expect(stripBomOverlayEdges(vm.flowEdges)).toHaveLength(1);
     expect(vm.flowEdges.some((edge) => edge.source === 'raw' || edge.target === 'raw')).toBe(false);
     expect(vm.history).toHaveLength(historyBeforeDelete + 1);
     vm.undo();
-    expect(vm.flowNodes).toHaveLength(beforeDelete);
-    expect(vm.flowEdges).toHaveLength(2);
+    expect(stripBomOverlay(vm.flowNodes)).toHaveLength(beforeDelete);
+    expect(stripBomOverlayEdges(vm.flowEdges)).toHaveLength(2);
   });
 
   it('selecting a Cell also selects every directly connected line', async () => {
