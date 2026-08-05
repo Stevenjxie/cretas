@@ -110,11 +110,21 @@ public class BomServiceImpl implements BomService {
             //   RawMaterialType.unitPrice), 但 BOM 行用量可能按"斤"等其他重量单位录入.
             //   计价用量须先折算到主数据单位 (e.g. 斤→kg), 否则 斤量×kg价 翻倍/折半失真.
             BigDecimal pricingQuantity = reconcileQuantityForPricing(actualQuantity, item);
-            BigDecimal subtotal = calculateMaterialCost(factoryId, pricingQuantity, estimateUnitPrice);
             if (item.getTaxRate() == null) {
                 hasMissingTaxRate = true;
             }
-            boolean missingPrice = estimateUnitPrice == null;
+            // 成本只归集包材行。
+            // RAW/AUXILIARY 的 standard_quantity 是已废弃的历史脏数据(新行写 null),
+            // 真实辅料成本在 bom_seasoning_items, 不经本循环;
+            // BYPRODUCT 的 standard_quantity 是「预计产出量」, 加进成本符号是反的。
+            // 明细行保留(能看到物料与单价), 小计置 null 表示「此处不归集」——
+            // 与 computeItemCost() 在无用量时返回 null 同一口径, 禁止写 0。
+            boolean aggregatable = "PACKAGING".equals(item.getMaterialCategory());
+            BigDecimal subtotal = aggregatable
+                    ? calculateMaterialCost(factoryId, pricingQuantity, estimateUnitPrice)
+                    : null;
+            // 非归集行没有价格不算「缺价」(它本来就不参与合计)。
+            boolean missingPrice = aggregatable && estimateUnitPrice == null;
             if (missingPrice) {
                 missingPriceMaterials.add(
                     item.getMaterialName() != null ? item.getMaterialName()
@@ -124,6 +134,7 @@ public class BomServiceImpl implements BomService {
             BomCostSummaryDTO.MaterialCostItem costItem = BomCostSummaryDTO.MaterialCostItem.builder()
                 .materialName(item.getMaterialName())
                 .materialTypeId(item.getMaterialTypeId())
+                .materialCategory(item.getMaterialCategory())
                 .standardQuantity(item.getStandardQuantity())
                 .yieldRate(item.getYieldRate())
                 .actualQuantity(actualQuantity)
@@ -142,7 +153,9 @@ public class BomServiceImpl implements BomService {
                 .build();
 
             materialCostItems.add(costItem);
-            materialCostTotal = materialCostTotal.add(subtotal);
+            if (subtotal != null) {
+                materialCostTotal = materialCostTotal.add(subtotal);
+            }
         }
         boolean hasMissingPrice = !missingPriceMaterials.isEmpty();
 

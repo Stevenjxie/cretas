@@ -137,6 +137,12 @@ public class BomCostSummaryDTO {
         private String materialTypeId;
 
         /**
+         * 物料类别：RAW / AUXILIARY / PACKAGING / BYPRODUCT。
+         * 成本只归集 PACKAGING 行（见 {@code subtotal} 说明），此字段供前端/测试区分行来源。
+         */
+        private String materialCategory;
+
+        /**
          * 成品含量/标准用量
          */
         private BigDecimal standardQuantity;
@@ -181,7 +187,8 @@ public class BomCostSummaryDTO {
         private BigDecimal taxRate;
 
         /**
-         * 小计 = 实际用量 * 单价
+         * 小计 = 实际用量 * 单价。仅 PACKAGING 行归集；非 PACKAGING 行为 {@code null}
+         * (「此处不归集」，禁止写 0 —— 0 会被读成「不要钱」)。
          */
         @PriceSensitive
         private BigDecimal subtotal;

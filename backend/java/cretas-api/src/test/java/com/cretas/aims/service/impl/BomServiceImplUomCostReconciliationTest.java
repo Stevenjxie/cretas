@@ -73,11 +73,15 @@ class BomServiceImplUomCostReconciliationTest {
     }
 
     private BomRecipeItem item(String productTypeId, String materialTypeId, String qty, String unit, String price) {
+        // materialCategory=PACKAGING: this whole class verifies unit-reconciliation/pricing
+        // mechanics, not category membership — Task 8 filters cost aggregation to
+        // PACKAGING rows, so non-PACKAGING fixtures here would silently zero out.
         BomRecipeItem item = BomRecipeItem.builder()
                 .factoryId(F)
                 .recipeId("RECIPE-" + productTypeId)
                 .materialTypeId(materialTypeId)
                 .materialName(materialTypeId)
+                .materialCategory("PACKAGING")
                 .standardQuantity(new BigDecimal(qty))
                 .yieldRate(new BigDecimal("100.00"))  // actualQuantity == standardQuantity
                 .unit(unit)
