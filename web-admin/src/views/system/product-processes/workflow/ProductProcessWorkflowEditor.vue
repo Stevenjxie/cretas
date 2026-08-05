@@ -645,7 +645,7 @@ import { classifyOutputSkuCategory, matchOutputSkuByName } from './outputSkuClas
 import { needsPrimaryOutputKindUpdate } from './processOutputKindCompatibility';
 import { usePinyinFilter } from './pinyinInitials';
 import { classifyWorkflowTopology } from './workflowClassification';
-import { stripBomOverlay } from './bomOverlay';
+import { stripBomOverlay, stripBomOverlayEdges } from './bomOverlay';
 import {
   activateProductProcessWorkflow,
   deactivateProductProcessWorkflow,
@@ -1840,7 +1840,9 @@ function currentDefinition(): ProductProcessWorkflowDefinition {
     // ⛔ 浮层节点(辅料/包材 cell)是 BOM 数据的投影, 不属于工艺定义。
     // 混进去会改 revision hash → 改一克盐就让所有 BOM 需要重新对齐。
     nodes: stripBomOverlay(flowNodes.value).map(serializeFlowNode),
-    edges: flowEdges.value.map(serializeFlowEdge),
+    // ⛔ 浮层边(辅料 cell → 工序 / 产出 → 包材 cell 的虚线连接)同理必须剥离,
+    // 否则序列化出的定义会带着指向已被剥离节点的悬空引用发去后端。
+    edges: stripBomOverlayEdges(flowEdges.value).map(serializeFlowEdge),
     viewport: { x: viewport.x, y: viewport.y, zoom: viewport.zoom },
   };
 }

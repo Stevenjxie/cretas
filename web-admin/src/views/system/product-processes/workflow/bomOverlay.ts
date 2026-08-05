@@ -15,3 +15,14 @@ export function isBomOverlayNode(node: { id: string }): boolean {
 export function stripBomOverlay<T extends { id: string }>(nodes: T[]): T[] {
   return nodes.filter((node) => !isBomOverlayNode(node));
 }
+
+/**
+ * 浮层边(辅料 cell → 工序 / 产出 → 包材 cell 的虚线连接)同样不属于工艺定义。
+ * 一条浮层边永远只有一端是浮层节点(另一端是真实工艺节点), 所以 source/target
+ * 都要判——只查 source 会漏掉「产出 → 包材」方向(浮层 id 在 target 侧)。
+ */
+export function stripBomOverlayEdges<T extends { source: string; target: string }>(edges: T[]): T[] {
+  return edges.filter(
+    (edge) => !isBomOverlayNode({ id: edge.source }) && !isBomOverlayNode({ id: edge.target }),
+  );
+}
