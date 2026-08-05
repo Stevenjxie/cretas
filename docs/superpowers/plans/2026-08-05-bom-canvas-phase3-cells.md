@@ -699,6 +699,25 @@ git show --name-only HEAD
 - Consumes: Task 1/3 的 `deriveBomOverlay` / `stripBomOverlay`，Task 4/5 的两个组件
 - Produces: 画布上真实渲染出辅料/包材 cell
 
+- [ ] **Step 0: ⛔ 两个 cell 组件缺 `<Handle>`，虚线会挂不上（已实测）**
+
+Vue Flow 的边挂在 handle 上。既有节点都声明了（`WorkflowMaterialNode.vue:14-15`：`<Handle type="target" :position="Position.Left" id="input" />` / `type="source"`），但 Task 4/5 产出的两个 cell 组件 **`Handle` 命中数为 0** —— Task 3 派生的虚线会连不上，边根本渲染不出来。
+
+补法（按连线方向定 handle 类型与位置）：
+
+| 组件 | 需要的 handle | 理由 |
+|---|---|---|
+| `WorkflowAuxiliaryNode.vue` | `type="source"` + `Position.Bottom`，id 与 Task 3 派生边的 `sourceHandle` 一致 | 辅料 cell 在工序上方，边从它底部出发指向工序 |
+| `WorkflowPackagingNode.vue` | `type="target"` + `Position.Left`，id 与派生边的 `targetHandle` 一致 | 包材 cell 在产出右侧，边从产出进入它左侧 |
+
+**先读 Task 3 在 `bomOverlay.ts` 里实际生成的边**（是否设了 `sourceHandle`/`targetHandle`，值是什么），再决定 handle 的 `id`。两边对不上时边同样不渲染，而且不报错——只是画面上没有线。
+
+⚠️ 两个 cell 的单测挂载时没有 VueFlow provider（沿用 `WorkflowMaterialNode.spec.ts` 的做法）。加 `<Handle>` 后单测可能需要 stub，**不要为了让单测过而把 Handle 去掉** —— 那是拿掉功能迁就测试。
+
+- [ ] **Step 0b: 权限态 —— 无写权限不给编辑入口**
+
+两个 cell 组件都没有 `canWrite` prop（brief 的接口只给了 `{ id, data }`），所以「加辅料 / 加包材」按钮对只读用户也会显示。画布本身有 `canEdit`。接线时把它传下去并据此隐藏入口，或在 Step 1 的插槽里包一层判断。
+
 - [ ] **Step 1: 注册插槽**
 
 在 `<VueFlow>` 内，参照既有的 `<template #node-material>` 写法，新增：
