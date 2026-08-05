@@ -1,0 +1,187 @@
+/* ============================================================================
+   v6-motion.css — 七个签名滚动/指针动效的样式支撑层
+   配套 js/v6-motion.js:
+     ① 交互式流体扭曲   .v6-lens          (视觉 AI 带, 指针水波)
+     ② 滚动驱动场景切换 .shots.is-stage   (产品实拍带, 滚动换图不划走)
+     ③ 滚动驱动 3D 环形轮播 .biz-h.is-ring (四业务卡, 绕轴旋进旋出)
+     ④ 逐字错峰入场     .v6-split         (hero 标题)
+     ⑤ 滚动吸附         (纯 JS, 对齐到整卡)
+     ⑥ 滚动叠层转场     .v6-stack         (护城河 → 案例 → 上线三步)
+     ⑦ 滚动驱动全屏扩展 .band.is-expand   (卡片撑满视口后变成另一段)
+     ⑧ 动态边界光束     .v6-beam          (AI 卡 / 主 CTA / 操作预览卡)
+     ⑨ 动态思考球       .v6-orb           (AI 卡品牌行 / 运营流带氛围球)
+
+   基线原则: 这里的规则全部包在「桌面 + 用户没要求减少动效」的条件里。
+   窄屏 / prefers-reduced-motion / 无 JS 时一条都不生效, 页面回落到 v6.css
+   的静态排版 —— 动效只做加法, 不做内容的门。
+   ========================================================================= */
+
+/* ---- ① 交互式流体扭曲: 指针处的水波透镜 ------------------------------- */
+/* 透镜是「底图的一份副本」被 SVG feDisplacementMap 扭曲后, 裁成圆形贴在原位。
+   副本与底图逐像素对齐(同一套 .bmask img 规则 + 同一容器盒), 所以看起来不是
+   多了一个圆, 而是圆内的画面被搅动了。滤镜只作用于 ~400px 见方的区域。 */
+.v6-fluid-defs{position:absolute;width:0;height:0;overflow:hidden;pointer-events:none}
+/* ⚠️ 不要给透镜 z-index。它的父级 .bmask 是 position:absolute + z-index:auto,
+   不产生层叠上下文 —— 写在透镜上的 z-index 会越过父级, 直接和 .bcopy(z-index:2)
+   比高低并胜出, 于是透镜盖住标题正文, 也盖过压暗用的 .bscrim 让圆内比周围亮。
+   保持 auto: 定位元素天然压过同容器里的静态 <img>, 而整个 .bmask 子树仍然
+   整体排在 .bscrim 与 .bcopy 之下 —— 文字不被遮, 明暗也自动跟外面一致。 */
+.v6-lens{position:absolute;top:0;left:0;pointer-events:none;
+  border-radius:50%;overflow:hidden;opacity:0;
+  transition:opacity .4s ease;will-change:transform,opacity;
+  box-shadow:0 0 0 1px rgba(0,226,138,.16),0 20px 60px rgba(0,0,0,.34)}
+.v6-lens .lens-src{position:absolute;top:0;left:0;filter:url(#v6Liquid)}
+.v6-lens .lens-tint{position:absolute;inset:0;pointer-events:none;
+  background:radial-gradient(circle at 36% 32%,rgba(255,255,255,.14),transparent 56%)}
+
+/* ---- ④ 逐字错峰入场 ---------------------------------------------------- */
+/* .v6-chm 是每个字的遮罩窗口, 字从窗口下沿升进来。padding/margin 抵消是为了
+   给下沉笔画留出空间, 否则 overflow:hidden 会切掉中文的竖钩和拉丁文的降部。 */
+.v6-split .v6-chm{display:inline-block;overflow:hidden;vertical-align:bottom;
+  padding-bottom:.16em;margin-bottom:-.16em}
+.v6-split .v6-ch{display:inline-block;will-change:transform}
+/* 逐字动画接管后, 关掉 v6.css 给 .hero-copy 子元素的整块上浮, 避免叠加两次入场 */
+html.v6-js .hero-copy h1.v6-split{animation:none}
+
+@media (min-width:900px) and (prefers-reduced-motion:no-preference){
+
+  /* ---- ③ 3D 环形轮播 --------------------------------------------------- */
+  /* 透视放在 pin 容器上, 卡片在自己的 3D 空间里绕 Y 轴转。
+     居中的卡片角度回正 —— 环形是氛围, 可读可点是底线。 */
+  .biz-h.is-ring{perspective:1600px;perspective-origin:50% 46%}
+  .biz-h.is-ring .biz-grid{transform-style:preserve-3d}
+  .biz-h.is-ring .biz-grid>a{transform-style:preserve-3d;backface-visibility:hidden;
+    will-change:transform,filter,opacity}
+  /* 环形已经提供 3D, 关掉这批卡片的指针倾斜, 否则两套 rotationY 互相抢 */
+  .biz-h.is-ring .biz-grid>a{transition:none}
+
+  /* ---- ② 滚动驱动场景切换 ---------------------------------------------- */
+  /* 三张实拍图叠在同一个舞台上, 滚动只换内容不推走页面。 */
+  .shots.is-stage{min-height:100vh;display:flex;flex-direction:column;justify-content:center;
+    padding-top:clamp(24px,4vh,48px);padding-bottom:clamp(24px,4vh,48px)}
+  .shots.is-stage .srow{display:block;position:relative;
+    height:min(56vh,500px);margin-top:clamp(16px,3vh,32px)}
+  .shots.is-stage figure{position:absolute;inset:0;margin:0;
+    display:flex;flex-direction:column;align-items:center;justify-content:center;
+    opacity:0;transform:translateY(52px) scale(.94);filter:blur(16px);pointer-events:none;
+    transition:opacity .5s ease,transform .75s cubic-bezier(.16,1,.3,1),filter .6s ease}
+  .shots.is-stage figure.on{opacity:1;transform:none;filter:none;pointer-events:auto}
+  .shots.is-stage figure .v6-shot{width:auto;max-width:min(94%,1060px);
+    max-height:calc(100% - 58px);object-fit:contain}
+  .shots.is-stage figcaption{margin-top:16px;text-align:center;max-width:56ch}
+
+  /* 章节标尺: 当前是第几张 */
+  .shots-rail{display:flex;gap:12px;justify-content:center;align-items:center;
+    margin-top:clamp(14px,2.6vh,28px)}
+  .shots-rail b{font-family:var(--v6-mono);font-size:12px;font-weight:700;
+    color:#a8a29b;letter-spacing:1px;padding:5px 12px;border-radius:99px;
+    border:1px solid rgba(0,0,0,.09);transition:color .4s ease,border-color .4s ease,background .4s ease}
+  .shots-rail b.on{color:var(--v6-cta-ink);border-color:rgba(0,179,119,.4);
+    background:rgba(0,179,119,.08)}
+
+  /* ---- ⑥ 滚动叠层转场 -------------------------------------------------- */
+  /* 每段 sticky 在视口顶, 后一段直接盖上来, 前一段不划走而是后退变暗。
+     sticky 元素必须整幅宽, 否则盖不住两侧 —— 所以这里把原本 max-width 的
+     段落改成全宽 + 内边距居中, 视觉排版不变。 */
+  .v6-stack{position:relative}
+  .v6-stack>section{position:sticky;top:0;min-height:100vh;
+    display:flex;flex-direction:column;justify-content:center;
+    --stack-w:1200px;max-width:none;width:100%;
+    padding-left:max(clamp(16px,4vw,48px),calc((100% - var(--stack-w))/2));
+    padding-right:max(clamp(16px,4vw,48px),calc((100% - var(--stack-w))/2));
+    background:linear-gradient(180deg,var(--v6-bg-a),var(--v6-bg-b));
+    will-change:transform,opacity}
+  .v6-stack>.picks{--stack-w:1000px}
+  .v6-stack>.onboard{--stack-w:1100px;
+    background:linear-gradient(180deg,rgba(0,179,119,.06),rgba(0,179,119,0)),
+               linear-gradient(180deg,var(--v6-bg-a),var(--v6-bg-b))}
+  .v6-stack>.onboard .inner{max-width:none;width:100%}
+  /* 盖上来的那一段带圆角和投影, 让「叠」这件事看得见 */
+  .v6-stack>section+section{border-radius:28px 28px 0 0;
+    border-top:1px solid rgba(0,0,0,.06);
+    box-shadow:0 -30px 70px rgba(46,34,20,.13)}
+
+  /* ---- ⑦ 滚动驱动全屏扩展转场 ------------------------------------------ */
+  /* --exp: 1 = 内嵌的圆角卡片, 0 = 撑满视口。clip-path 做扩展比动 width/height
+     便宜, 且不引起重排; 文案与识别框在填满之后才浮现 —— 「充满屏幕后变成另
+     一个区域」的那个"变成"。 */
+  .band.is-expand{height:100vh;margin-top:0;--exp:1;
+    clip-path:inset(calc(var(--exp) * 17vh) calc(var(--exp) * 15vw)
+              round calc(var(--exp) * 44px))}
+  /* 卡片阶段边缘由 clip-path 定义, 原来的上下渐隐蒙版要让位, 否则边缘发虚 */
+  .band.is-expand .bmask{-webkit-mask-image:none;mask-image:none}
+  .band.is-expand .bmask img{height:100%}
+}
+
+/* ---- ⑧ 动态边界光束 ---------------------------------------------------- */
+/* 一束光沿着卡片边界跑。做法是「圆锥渐变 + 只留边框的遮罩」: 渐变整体绕角度
+   旋转, 遮罩把中间掏空, 于是只有边框那一圈亮。
+   --v6-beam-a 必须用 @property 注册成 <angle>, 否则浏览器把它当字符串, 动画
+   会在 0deg 和 360deg 之间跳变而不是连续旋转。不支持 @property 的浏览器上
+   角度停在初始值 —— 退化成边框上一道静止的光弧, 仍然是完整的观感。 */
+@property --v6-beam-a{syntax:'<angle>';inherits:false;initial-value:0deg}
+
+.v6-beam{position:relative}
+.v6-beam::after{content:'';position:absolute;inset:0;z-index:4;pointer-events:none;
+  border-radius:inherit;padding:var(--beam-w,1.6px);
+  background:conic-gradient(from var(--v6-beam-a),
+    transparent 0deg,transparent 232deg,
+    rgba(0,226,138,0) 264deg,
+    var(--beam-c1,#00e28a) 300deg,
+    var(--beam-c2,#a8fbe0) 318deg,
+    transparent 346deg,transparent 360deg);
+  -webkit-mask:linear-gradient(#000 0 0) content-box,linear-gradient(#000 0 0);
+  -webkit-mask-composite:xor;
+  mask:linear-gradient(#000 0 0) content-box,linear-gradient(#000 0 0);
+  mask-composite:exclude;
+  animation:v6BeamRotate var(--beam-dur,4.6s) linear infinite}
+@keyframes v6BeamRotate{to{--v6-beam-a:360deg}}
+
+/* pulse: 跑一圈亮起再隐去, 留一拍空白 —— 用在主 CTA 上, 是脉搏不是霓虹 */
+.v6-beam--pulse{--beam-dur:2.9s;--beam-w:2px}
+.v6-beam--pulse::after{
+  animation:v6BeamRotate var(--beam-dur) cubic-bezier(.45,0,.55,1) infinite,
+            v6BeamPulse  var(--beam-dur) ease-in-out infinite}
+@keyframes v6BeamPulse{0%,100%{opacity:0}16%,62%{opacity:1}}
+
+/* ---- ⑨ 动态思考球 ------------------------------------------------------ */
+/* 三层模糊的径向渐变各自反向慢转, 叠加出不断改变形状的球体。
+   .thinking 由 JS 在 AI 卡真的显示「正在输入」时挂上 —— 球转急并轻微涨落,
+   动效对应真实状态, 不是常年空转的装饰。 */
+.v6-orb{position:relative;display:inline-block;flex:0 0 auto;
+  width:var(--orb-size,20px);height:var(--orb-size,20px);
+  border-radius:50%;overflow:hidden;isolation:isolate;vertical-align:middle;
+  background:radial-gradient(circle at 50% 50%,#06180f,#03100a 72%);
+  box-shadow:0 0 0 1px rgba(0,226,138,.24),0 0 14px rgba(0,226,138,.24)}
+.v6-orb i{position:absolute;inset:-34%;display:block;border-radius:50%;
+  filter:blur(var(--orb-blur,5px));mix-blend-mode:screen;
+  animation:v6OrbSpin var(--orb-dur,5.4s) linear infinite}
+.v6-orb i:nth-child(1){background:radial-gradient(circle at 34% 30%,rgba(0,226,138,.95),transparent 56%)}
+.v6-orb i:nth-child(2){--orb-dur:7.8s;animation-direction:reverse;
+  background:radial-gradient(circle at 68% 62%,rgba(168,251,224,.85),transparent 54%)}
+.v6-orb i:nth-child(3){--orb-dur:9.6s;
+  background:radial-gradient(circle at 52% 78%,rgba(0,140,110,.92),transparent 60%)}
+@keyframes v6OrbSpin{to{transform:rotate(1turn)}}
+
+.v6-orb.thinking{animation:v6OrbThink 1.15s ease-in-out infinite}
+.v6-orb.thinking i{animation-duration:1.5s}
+@keyframes v6OrbThink{0%,100%{transform:scale(1)}50%{transform:scale(1.16)}}
+
+/* AI 卡品牌行: 球和 "CRETAS AI" 并排 */
+.ai-card .brandline{display:flex;align-items:center;gap:8px}
+
+/* 运营流带的氛围球: 没有外壳, 只有三团缓慢翻涌的光 */
+.v6-orb--ambient{position:absolute;z-index:0;pointer-events:none;
+  --orb-size:clamp(240px,28vw,420px);--orb-blur:52px;
+  right:-4%;top:14%;background:none;box-shadow:none;overflow:visible;opacity:.55}
+.v6-orb--ambient i{inset:-16%;mix-blend-mode:screen}
+@media (max-width:900px){ .v6-orb--ambient{display:none} }
+
+/* ---- 减少动效 / 窄屏: 全部退回静态 ------------------------------------- */
+@media (prefers-reduced-motion:reduce){
+  .v6-lens,.v6-fluid-defs,.shots-rail,.v6-orb--ambient{display:none}
+  .v6-split .v6-chm{overflow:visible;padding-bottom:0;margin-bottom:0}
+  .v6-split .v6-ch{transform:none !important;opacity:1 !important}
+  .v6-beam::after{animation:none;opacity:.5}
+  .v6-orb i,.v6-orb.thinking{animation:none}
+}

@@ -35,6 +35,11 @@
       if (sec.querySelector('.eye-stage, .biz-h')) return;      /* pinned stages */
       if (sec.closest('.v6-hero, .ai-hero, .c-hero, .d-hero')) return;
       if (sec.classList.contains('v6-hero')) return;
+      /* v6-motion.js 接管的段落: 自己 pin 或 sticky, 离场由它们各自的时间线
+         负责。按类名判断而不是按 .biz-h / .is-expand —— 那些类是 v6-motion
+         之后才加上的, 此处先执行, 判不到。 */
+      if (sec.matches('.biz, .band, .shots')) return;
+      if (sec.closest('.v6-stack')) return;
       gsap.to(sec, {
         opacity: 0, y: -180, scale: .92, ease: 'none',
         scrollTrigger: { trigger: sec, start: 'bottom 34%', end: 'bottom -12%', scrub: true }
@@ -72,8 +77,11 @@
     });
   });
 
-  /* Photo-card 3D tilt (desktop) */
+  /* Photo-card 3D tilt (desktop).
+     Cards inside .biz-grid are excluded: v6-motion.js drives their rotationY on
+     the 3D ring, and two owners of the same property fight each other. */
   if (FINE) document.querySelectorAll('.v6-photo-card').forEach(function(card){
+    if (card.closest('.biz-grid')) return;
     var rx = gsap.quickTo(card, 'rotationX', {duration:.5, ease:'power3.out'});
     var ry = gsap.quickTo(card, 'rotationY', {duration:.5, ease:'power3.out'});
     gsap.set(card, {transformPerspective: 900});
@@ -104,10 +112,8 @@
     gsap.fromTo(img, { yPercent: -9 }, { yPercent: 9, ease: 'none',
       scrollTrigger: { trigger: img.closest('.v6-photo-card'), start: 'top bottom', end: 'bottom top', scrub: 0.8 } });
   });
-  document.querySelectorAll('.band .bmask img').forEach(function(img){
-    gsap.fromTo(img, { yPercent: -9 }, { yPercent: 9, ease: 'none',
-      scrollTrigger: { trigger: img.closest('.band'), start: 'top bottom', end: 'bottom top', scrub: 0.8 } });
-  });
+  /* .band 的图不再做视差: v6-motion.js 让整段从内嵌卡片扩张到全屏, 再叠一层
+     垂直漂移会把扩张读成"图在自己动"; 流体透镜的副本也要和底图逐像素对齐。 */
 
   /* Pointer spotlight in heroes (desktop) */
   if (FINE) document.querySelectorAll('.hero-wrap, .ai-hero').forEach(function(hero){
@@ -135,45 +141,10 @@
     window.v6Eye(host, { gap: host.classList.contains('ai-hero') ? 34 : 30 });
   });
 
-  /* ============ HOME — pinned horizontal gallery ========================= */
-  var bizGrid = document.querySelector('.biz-grid');
-  if (bizGrid && DESKTOP) {
-    var cards = gsap.utils.toArray(bizGrid.children);
-    cards.forEach(function(c){ c.classList.remove('v6-reveal'); c.classList.add('in'); });
-    document.querySelector('.biz').classList.add('biz-h');
-    var travel = function(){ return Math.max(0, bizGrid.scrollWidth - bizGrid.clientWidth); };
-    function spotlight(){
-      /* the card nearest viewport center is "lit"; others recede slightly */
-      var vc = window.innerWidth / 2;
-      cards.forEach(function(c){
-        var r = c.getBoundingClientRect();
-        var off = (r.left + r.width/2) - vc;
-        var d = Math.min(1, Math.abs(off) / (window.innerWidth * .7));
-        gsap.set(c, { scale: 1 - d * .06, filter: 'brightness(' + (1.04 - d * .18) + ')' });
-        var im = c.querySelector('img');
-        if (im) gsap.set(im, { xPercent: Math.max(-5, Math.min(5, off / window.innerWidth * -10)) });
-      });
-    }
-    gsap.to(bizGrid, {
-      x: function(){ return -travel(); }, ease: 'none',
-      scrollTrigger: {
-        trigger: '.biz', start: 'top top', end: function(){ return '+=' + (travel() + 200); },
-        pin: true, scrub: 0.8, invalidateOnRefresh: true,
-        onUpdate: spotlight, onRefresh: spotlight,
-        onLeave: function(){ gsap.to(cards, {scale:1, filter:'brightness(1)', duration:.5, ease:'power2.out'});
-          cards.forEach(function(c){ var im=c.querySelector('img'); if(im) gsap.to(im,{xPercent:0,duration:.5}); }); }
-      }
-    });
-    spotlight();
-  }
-  var band = document.querySelector('.band');
-  if (band) {
-    gsap.fromTo(band, { scale: .72, borderRadius: '56px' }, { scale: 1, borderRadius: '0px', ease: 'none',
-      scrollTrigger: { trigger: band, start: 'top 85%', end: 'top 25%', scrub: 0.8 } });
-    gsap.from(band.querySelectorAll('.bcopy > *'), { y: 26, opacity: 0, duration: .8,
-      ease: 'power4.out', stagger: .09,
-      scrollTrigger: { trigger: band, start: 'top 55%', once: true } });
-  }
+  /* ============ HOME — 已移交 v6-motion.js ==============================
+     四业务横向画廊 → 3D 环形轮播 + 滚动吸附 (initBizRing)
+     视觉 AI 带 scale 雏形 → 全屏扩展转场 + 流体透镜 (initBandExpand/initFluidLens)
+     两处都需要 pin 与逐卡 3D 姿态, 留在这里会和新层争同一批属性。 */
 
   /* ============ FACTORY — pinned 3-chapter vision story ================== */
   var stage = document.querySelector('.eye-stage');
