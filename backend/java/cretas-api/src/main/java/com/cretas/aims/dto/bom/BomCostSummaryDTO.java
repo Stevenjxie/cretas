@@ -29,15 +29,17 @@ public class BomCostSummaryDTO {
      */
     private String productName;
 
-    // ============ 原辅料成本 ============
+    // ============ 包材成本（仅 PACKAGING 行，非"原辅料"）============
 
     /**
-     * 原辅料成本明细
+     * 物料成本明细（RAW/AUXILIARY/PACKAGING/BYPRODUCT 行均在此列出，
+     * 但 subtotal 只有 PACKAGING 行非 null，见 {@link MaterialCostItem#subtotal}）
      */
     private List<MaterialCostItem> materialCosts;
 
     /**
-     * 原辅料成本合计
+     * 包材成本合计（仅 PACKAGING 行；不含原料/辅料——辅料在 bom_seasoning_items 单独结算，
+     * 本 DTO 不携带）
      */
     @PriceSensitive
     private BigDecimal materialCostTotal;

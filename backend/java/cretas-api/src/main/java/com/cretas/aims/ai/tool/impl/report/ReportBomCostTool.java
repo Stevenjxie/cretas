@@ -254,19 +254,29 @@ public class ReportBomCostTool extends AbstractBusinessTool {
                 productDetails.add(prodData);
             }
 
-            // 如果是差异分析，按差异率排序
+            // 如果是差异分析，按差异率排序。
+            // 注意：costVarianceRate 现在通常为 null（BOM 仅包材口径与实际单位成本不可比，
+            // 见 AIContextServiceImpl 口径说明）。Map#getOrDefault 在 key 存在但值为 null 时
+            // 返回的是 null 本身，不是 default（Java 的一个常见陷阱）——之前这里会在
+            // rateB.abs() 上抛 NPE。改为显式判空，null 视作排序意义上的"无差异"（0），
+            // 这只影响内部排序顺序，不会把 null 展示成 0（展示值仍是 prodData 里的原始
+            // costVarianceRate，见上方 :250）。
             if ("variance".equals(analysisType)) {
                 productDetails.sort((a, b) -> {
-                    BigDecimal rateA = (BigDecimal) a.getOrDefault("costVarianceRate", BigDecimal.ZERO);
-                    BigDecimal rateB = (BigDecimal) b.getOrDefault("costVarianceRate", BigDecimal.ZERO);
-                    return rateB.abs().compareTo(rateA.abs());
+                    BigDecimal rateA = (BigDecimal) a.get("costVarianceRate");
+                    BigDecimal rateB = (BigDecimal) b.get("costVarianceRate");
+                    BigDecimal absA = rateA != null ? rateA.abs() : BigDecimal.ZERO;
+                    BigDecimal absB = rateB != null ? rateB.abs() : BigDecimal.ZERO;
+                    return absB.compareTo(absA);
                 });
             }
 
             result.put("productDetails", productDetails);
         }
 
-        // 成本异常产品（差异率 > 10%）
+        // 成本异常产品（差异率 > 10%）。costVarianceRate 现恒为 null（见上方排序处注释），
+        // 过滤后本列表通常为空——这是"无可比基线"的诚实结果，不代表没有产品也不代表
+        // 检测逻辑坏了，禁止为了让它非空而回退到编造的差异率。
         List<Map<String, Object>> anomalies = productionContext.getProductionByProduct().stream()
                 .filter(p -> p.getCostVarianceRate() != null &&
                         p.getCostVarianceRate().abs().compareTo(new BigDecimal("10")) > 0)

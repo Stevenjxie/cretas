@@ -123,7 +123,12 @@ describe('seasoning BOM integration source contract', () => {
     expect(bomCostDtoSource).toContain('private BigDecimal overheadCostTotal;');
     expect(bomCostDtoSource).toContain('private String costUnit;');
     expect(bomSource).toContain("replace(/\\.?0+$/, '')");
-    expect(bomSource).toContain('costSummary.value?.materialCostTotal');
+    // BOM canvas phase 1 fix wave: costSummary.value?.materialCostTotal was only ever read
+    // by the now-removed dead `estimatedMaterialCost` computed (nothing consumed its value —
+    // see item 10 of the fix wave). The real, rendered figure reads totalCost (packaging-only
+    // caliber; totalCost == materialCostTotal on the backend under this caliber, see
+    // BomCostSummaryDTO comments), via costPerSkuUnit.
+    expect(bomSource).toContain('costSummary.value?.totalCost');
     expect(bomSource).not.toContain('costSummary.value?.laborCostTotal');
     expect(bomSource).not.toContain('costSummary.value?.overheadCostTotal');
     expect(bomSource).not.toContain("summaryNumber('totalMaterialCost'");

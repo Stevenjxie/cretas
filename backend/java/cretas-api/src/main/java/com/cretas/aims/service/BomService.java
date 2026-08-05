@@ -16,16 +16,22 @@ public interface BomService {
     // ============ Cost Calculation (成本计算) ============
 
     /**
-     * 计算产品的完整成本
-     * 成本公式:
-     * - 原料成本 = SUM(成品含量 / 出成率 * 单价)
-     * - 人工成本 = SUM(工序单价 * 操作量)
-     * - 均摊费用 = SUM(单价 * 分摊量)
-     * - 总成本 = 原料成本 + 人工成本 + 均摊费用
+     * 计算产品成本 —— 口径仅为「包材」，不是完整成本。
+     *
+     * <p>只读 {@code bom_recipe_items}，且只聚合 {@code materialCategory=PACKAGING} 的行:
+     * 总成本 = SUM(包材行: 实际用量 / 出成率 * 单价)。
+     *
+     * <p>不包含: 原料（standard_quantity 是已废弃的历史脏数据，新行为 null）；
+     * 辅料（真实辅料成本在 {@code bom_seasoning_items}，本方法不联查，故完全不体现在返回值中）；
+     * 人工（要等结算：实际工时 × 时薪 ÷ 实际箱数）；均摊（要等成本分析）。
+     * 人工/均摊在返回 DTO 中为 {@code null}（"此处不归集"），不是 0（"不要钱"）。
+     *
+     * <p>调用方不能把返回的 {@code totalCost} 当作产品完整成本使用（例如与批次实际成本
+     * 直接比较差异率）——那是包材小计, 不是全成本。
      *
      * @param factoryId 工厂ID
      * @param productTypeId 产品类型ID
-     * @return 成本汇总DTO
+     * @return 成本汇总DTO（仅包材口径）
      */
     BomCostSummaryDTO calculateProductCost(String factoryId, String productTypeId);
 

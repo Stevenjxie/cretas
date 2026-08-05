@@ -21,7 +21,9 @@ import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.when;
 
 /**
- * 标准成本口径 = 辅料 + 包材。
+ * 标准成本口径 = 仅包材。calculateProductCost 现在只聚合 materialCategory=PACKAGING 行
+ * （RAW/AUXILIARY 的 standardQuantity 是已废弃的历史脏数据，真实辅料成本在
+ * bom_seasoning_items，本方法不联查）。
  * 人工要等结算（实际工时 × 时薪 ÷ 实际箱数），均摊要等成本分析，两者都不在 BOM 归集。
  */
 @ExtendWith(MockitoExtension.class)
@@ -40,6 +42,12 @@ class BomCostSummaryCaliberTest {
         it.setUnit("kg");
         it.setUnitPrice(new BigDecimal(price));
         it.setTaxRate(BigDecimal.ZERO);
+        // materialCategory=PACKAGING: calculateProductCost only aggregates PACKAGING rows
+        // (Task 8 filtered cost aggregation to PACKAGING). Without this, materialCategory
+        // defaults to "RAW", aggregatable is false, and both totalCost and materialCostTotal
+        // stay 0.0000 — calculateProductCost_totalCostEqualsMaterialOnly would then pass
+        // trivially (0 == 0) without exercising the real aggregation path.
+        it.setMaterialCategory("PACKAGING");
         // Production reads bomItems via a `JOIN FETCH i.recipe` query (see
         // BomRecipeItemRepository#findCurrentByProductAndStatus), so `recipe` is never
         // null there. The mocked repository here bypasses that join, and

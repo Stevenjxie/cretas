@@ -1503,7 +1503,6 @@ function summaryNumber(value: unknown, fallback: number): number {
 const costDisplayUnit = computed(() => {
   return formatPriceUnit(skuOutputUnit.value);
 });
-const estimatedMaterialCost = computed(() => summaryNumber(costSummary.value?.materialCostTotal, materialCostTotal.value));
 const costPerSkuUnit = computed(() => summaryNumber(costSummary.value?.totalCost, totalCost.value));
 const costPerKg = computed<number | null>(() => {
   if (costDisplayUnit.value === '元/kg' || skuGramsPerUnit.value == null) return null;
@@ -2437,7 +2436,14 @@ watch(adjustDialogVisible, (visible) => {
               {{ formatFriendlyNumber(row.unitPrice, 4) }} {{ formatPriceUnit(row.priceUnit) }}
             </template>
           </el-table-column>
-          <el-table-column v-if="canViewPrice && activeCategoryTab !== 'BYPRODUCT'" label="小计" width="150" align="right">
+          <!-- 小计只在 PACKAGING 页签渲染: 后端 calculateProductCost 只归集 PACKAGING 行,
+               RAW/AUXILIARY 行的 subtotal 恒为 null("此处不归集", 见 BomCostSummaryDTO
+               注释)。之前这列对 RAW/AUXILIARY 页签也渲染, 用 standardQuantity/yieldRate*
+               unitPrice 在前端本地算出一个"看起来是钱"的数字——对存量脏数据(旧 RAW 行
+               仍带 standardQuantity)会显示与卡片底部"实际原料用量待生产报工"矛盾的金额。
+               选择整列隐藏(而非该列内逐行显示"待报工归集")，因为 RAW 页签底部的
+               table-footer 已经统一说明了归集状态, 逐行重复没有必要。 -->
+          <el-table-column v-if="canViewPrice && activeCategoryTab === 'PACKAGING'" label="小计" width="150" align="right">
             <template #default="{ row }">
               <span v-if="bomLineAmountPreview(row).amount != null">
                 {{ formatFriendlyNumber(bomLineAmountPreview(row).amount, 4) }} 元
@@ -2490,7 +2496,7 @@ watch(adjustDialogVisible, (visible) => {
           <template #header><strong>成本概览</strong></template>
           <div class="bom-cost-overview">
             <div><span>原料成本</span><strong>待报工归集</strong></div>
-            <div class="is-total"><span>当前总成本</span><strong>{{ formatFriendlyNumber(costPerSkuUnit, 2) }} {{ costDisplayUnit }}</strong></div>
+            <div class="is-total"><span>当前归集成本</span><strong>{{ formatFriendlyNumber(costPerSkuUnit, 2) }} {{ costDisplayUnit }}</strong></div>
             <small v-if="costPerKg != null">{{ formatFriendlyNumber(costPerKg, 2) }} 元/kg</small>
             <p class="bom-cost-overview__note">历史出成率由正式报工自动统计。</p>
           </div>

@@ -22,11 +22,11 @@ import java.util.stream.Collectors;
 /**
  * BOM 成本计算服务实现
  *
- * 成本计算公式:
- * - 原料成本 = 成品含量 / 出成率 * 单价
- * - 人工成本 = 工序单价 * 操作量
- * - 均摊费用 = 单价 * 分摊量
- * - 总成本 = 原料成本 + 人工成本 + 均摊费用
+ * {@link #calculateProductCost} 口径 = 仅包材 (materialCategory=PACKAGING 行):
+ * - 总成本 = SUM(包材行: 实际用量 / 出成率 * 单价)
+ * 不含原料 (standard_quantity 是已废弃的历史脏数据)、不含辅料 (真实辅料成本在
+ * bom_seasoning_items, 本类不联查)、不含人工/均摊 (人工要等结算, 均摊要等成本分析,
+ * 两者在返回 DTO 中为 null 表示"此处不归集", 不是 0)。
  *
  * @author Cretas Team
  * @version 1.0.0
@@ -304,7 +304,12 @@ public class BomServiceImpl implements BomService {
      * 公式: 实际用量 = 标准用量 / (出成率 / 100)
      */
     private BigDecimal calculateActualQuantity(String factoryId, BigDecimal standardQuantity, BigDecimal yieldRate) {
-        if (standardQuantity == null) return BigDecimal.ZERO;
+        // standardQuantity == null 是「此处未归集」(RAW/AUXILIARY 的历史脏数据/新行),
+        // 不是「用量为 0」。0 会被下游/AI 上下文读成"零消耗"这类假数据(见 CLAUDE.md 核心
+        // 原则1)。calculateMaterialCost() 已对 actualQuantity==null 返回 null (非归集行本就
+        // 不参与合计), reconcileQuantityForPricing() 也已对 null 输入直接透传, 故此处返回
+        // null 不会引入 NPE。
+        if (standardQuantity == null) return null;
         if (yieldRate == null || yieldRate.compareTo(BigDecimal.ZERO) == 0) return standardQuantity;
 
         // Canvas V2: try DB formula first
