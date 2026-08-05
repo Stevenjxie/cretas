@@ -14,6 +14,8 @@ const { pathnameOf } = require('./url-utils');
 const SCENARIOS = [
   require('../scenarios/tenant-isolation'),
   require('../scenarios/bom-readonly'),
+  require('../scenarios/bom-cost-caliber-readonly'),
+  require('../scenarios/bom-canvas-overlay-readonly'),
   require('../scenarios/purchasing-readonly'),
   require('../scenarios/finance-readonly'),
   require('../scenarios/supplier-readonly'),

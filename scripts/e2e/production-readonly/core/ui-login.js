@@ -2,6 +2,9 @@
 
 const { redactText, sanitizeUrl } = require('./sanitizer');
 
+// 已知会串到别人会话里的租户标记。无 g 标志: 带 g 的正则跨次 test() 会保留 lastIndex。
+const STALE_TENANT_MARKER = /liushanmen_admin/i;
+
 function compactLoginData(body) {
   const data = body?.data || {};
   const factoryUser = data.factoryUser || {};
@@ -77,7 +80,11 @@ async function performUiLogin(page, options) {
   const actualFactoryId = stored.factoryId || login.factoryId;
   const actualFactoryName = stored.factoryName || login.factoryName;
   const businessSuccess = login.success ?? Boolean(actualUsername && actualFactoryId);
-  const staleTenantDetected = /liushanmen_admin/i.test(pageText);
+  // 这道 canary 抓的是「别的租户残留在本次会话的页面上」。租户名写死成字面量时,
+  // 一旦该账号自己成为被测账号, 合法登录会被判成泄漏(本条实测拦下过 liushanmen_admin
+  // 的正常登录)。先排除「标记就是当前已认证用户」, 跨租户残留的语义不变。
+  const staleTenantDetected = !STALE_TENANT_MARKER.test(String(actualUsername || ''))
+    && STALE_TENANT_MARKER.test(pageText);
   if (actualUsername !== expectedUsername) throw new Error(`Tenant login username mismatch: expected ${expectedUsername}, got ${actualUsername}`);
   if (actualFactoryId !== expectedFactoryId) throw new Error(`Tenant factory mismatch: expected ${expectedFactoryId}, got ${actualFactoryId}`);
   if (staleTenantDetected) throw new Error('Stale tenant marker liushanmen_admin detected after clean UI login');
