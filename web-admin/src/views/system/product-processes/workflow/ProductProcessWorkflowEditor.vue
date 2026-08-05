@@ -104,7 +104,7 @@
             type="primary"
             @click="goToBomManagement(bomMissingProducts[0]?.id)"
           >
-            在右侧配置 BOM →
+            去 BOM 配置 →
           </el-button>
         </template>
       </el-alert>
