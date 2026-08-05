@@ -14,7 +14,7 @@
 <meta property="og:image" content="https://cretaceousfuture.com/assets/img/og-card.jpg">
 <meta property="og:url" content="https://cretaceousfuture.com/solutions-ai.html">
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 15 15'%3E%3Crect x='1' y='1' width='5.5' height='5.5' rx='1.5' fill='%23111'/%3E%3Crect x='8.5' y='1' width='5.5' height='5.5' rx='1.5' fill='%23111'/%3E%3Crect x='1' y='8.5' width='5.5' height='5.5' rx='1.5' fill='%23111'/%3E%3Crect x='8.5' y='8.5' width='5.5' height='5.5' rx='2.75' fill='%2300b377'/%3E%3C/svg%3E">
-<link rel="stylesheet" href="/css/v6.css?v=20260805b">
+<link rel="stylesheet" href="/css/v6.css?v=20260805c">
 <script>document.documentElement.classList.add('v6-js')</script>
 <style>
 html:not(.v6-js) .v6-reveal{opacity:1;transform:none}
@@ -283,7 +283,10 @@ html.v6-js .ai-hero .inner>div:first-child>*:nth-child(3){animation-delay:.24s}
     <div class="stp v6-reveal"><div class="w">第 3 个月</div><p>现在厂里 <b>6 成的排产调整由 AI 起草</b>，他只做拍板那一下。</p></div>
   </div>
   </div>
-  <div class="fvis v6-reveal">
+  <!-- 纯装饰: 一张缩小的界面拟物图, 里面的文字是示意不是内容。
+       不加 aria-hidden 的话读屏会把 "参考价¥23.8¥23.1/kg" 这种由删除线旧价与新价
+       拼起来的串当正文念出来。 -->
+  <div class="fvis v6-reveal" aria-hidden="true">
     <div class="okcard">
       <div class="ph">CRETAS AI · 写操作预览</div>
       <div class="diff">
@@ -338,12 +341,12 @@ html.v6-js .ai-hero .inner>div:first-child>*:nth-child(3){animation-delay:.24s}
   </div>
 </footer>
 
-<script src="/js/v6.js?v=20260805b"></script>
+<script src="/js/v6.js?v=20260805c"></script>
 <script src="/js/gsap.min.js"></script>
 <script src="/js/ScrollTrigger.min.js"></script>
 <script src="/js/lenis.min.js"></script>
-<script src="/js/v6-eye.js?v=20260805b"></script>
-<script src="/js/v6-premium.js?v=20260805b"></script>
+<script src="/js/v6-eye.js?v=20260805c"></script>
+<script src="/js/v6-premium.js?v=20260805c"></script>
 <script>
 window.addEventListener('load', function(){
   setTimeout(function(){

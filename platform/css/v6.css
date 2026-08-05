@@ -17,9 +17,40 @@
   --v6-warn-ink:#9a590c;
   --v6-r-hero:22px; --v6-r-card:16px; --v6-font:-apple-system,'PingFang SC','Microsoft YaHei',sans-serif;
   --v6-mono:ui-monospace,SFMono-Regular,Consolas,monospace;
+  /* 标题专用字面。正文继续走系统字栈 —— 中文正文换字要几千字形, 代价与收益不成比例。
+     解决的是一个具体缺陷而不是"加个设计感": 标题原先在 Mac(PingFang) 与 Windows
+     (微软雅黑) 上字面重量差很多, 同一个页面两台机器不是一个样子; 自托管后两边一致,
+     且 Mac/iOS 上标题拿回该有的分量。
+     ⚠️ 选型经过实测比对, 不是拍脑袋: 先试了得意黑(压缩+微斜, 更有个性), 但即使按
+     压缩比放大 18% 补偿, 它仍明显偏轻且大字号下斜度突出 —— 读起来像消费品 campaign,
+     与"可信赖的运营底座"这个核心主张相冲突。所以选了直立、真有重量的这一款。 */
+  --v6-display:'Noto Sans SC',var(--v6-font);
+}
+
+/* Noto Sans SC Black 900 (SIL OFL, 见 assets/fonts/LICENSE-NotoSansSC.txt)。
+   由可变字体在 wght=900 实例化后, 按全站实际用字子集化(1000 字, 133KB),
+   不是完整字库(数 MB)。
+   ⚠️ 子集覆盖的是「当前全站文案」而不是「所有汉字」—— 标题若用到站内从未出现过的
+   字, 该字会回落到系统字体, 与相邻字重量不一。新增标题文案后需重跑子集化。
+   font-display:swap: 字体没到之前先用系统字渲染, 绝不留白等字体。 */
+@font-face{
+  font-family:'Noto Sans SC';
+  src:url('/assets/fonts/noto-sans-sc-900-subset.woff2?v=20260805c') format('woff2');
+  /* 声明成 700-900 区间而不是单一 900: 站内标题混用 800(如 .v6-quote / .qstage h3)
+     与 900, 若只声明 900, 请求 800 时浏览器会去合成伪粗体(字形被机械加粗, 很脏)。
+     声明区间等于告诉浏览器"这一档我都覆盖了", 直接用这唯一的字面, 不合成。 */
+  font-weight:700 900;
+  font-style:normal;
+  font-display:swap;
 }
 *{box-sizing:border-box} body{margin:0;font-family:var(--v6-font);color:var(--v6-ink);
   background:linear-gradient(180deg,var(--v6-bg-a) 0%,var(--v6-bg-b) 100%);}
+/* 标题走展示字面。刻意用 mono 的标题(物流页 .tuition .col h3)特异性更高, 不受影响。
+   导航字标「白垩纪」刻意不含在内 —— 它只有 17px, Black 字重在这个尺寸会糊成一团,
+   而且品牌标记不该跟着正文标题一起换脸。
+   各页原有的 -0.01~-0.02em 字距保持不动: Noto 是常规宽度字面, 那个字距本来就是
+   为这类字面调的; 不像压缩字面需要把负字距收回来。 */
+h1,h2,h3,.v6-quote{font-family:var(--v6-display)}
 .v6-nav{display:flex;justify-content:space-between;align-items:center;padding:18px clamp(16px,4vw,48px);position:relative;z-index:3}
 /* ⚠️ :not(.v6-btn-ghost) 不是装饰。原本这条是 `.v6-nav a{color:#333}`, 特异性 0-1-1,
    压过了 `.v6-btn-ghost{color:#fff}` 的 0-1-0 —— 于是导航里那个黑底「预约演示」按钮
@@ -74,10 +105,13 @@
 /* 进场变体 — v6.js 按元素类型自动分配, 同一屏混排不同手法 */
 .v6-reveal.rv-l{transform:translateX(-22vw);transition:opacity .95s ease-out,transform 1.4s cubic-bezier(.16,1,.3,1)}
 .v6-reveal.rv-r{transform:translateX(22vw);transition:opacity .95s ease-out,transform 1.4s cubic-bezier(.16,1,.3,1)}
-.v6-reveal.rv-pop{transform:scale(.35) translateY(140px);transition:opacity .6s ease-out,transform 1.25s cubic-bezier(.3,1.35,.4,1)}
+/* 原为 cubic-bezier(.3,1.35,.4,1) —— 控制点 y>1 会冲过终点再弹回来。
+   真实物体是平滑减速的, 回弹读起来偏廉价。换成 expo 收尾: 起步快、尾巴长, 更有质感。 */
+.v6-reveal.rv-pop{transform:scale(.35) translateY(140px);transition:opacity .6s ease-out,transform 1.25s cubic-bezier(.16,1,.3,1)}
 .v6-reveal.rv-blur{transform:translateY(90px) scale(1.12);filter:blur(38px);transition:opacity .9s ease-out,transform 1.3s cubic-bezier(.16,1,.3,1),filter 1.25s ease-out}
 .v6-reveal.rv-clipx{transform:none;clip-path:inset(0 100% 0 0);transition:opacity .5s ease-out,clip-path 1.05s cubic-bezier(.7,0,.2,1)}
-.v6-reveal.rv-tilt{transform:rotate(-11deg) translateY(190px) scale(.85);transition:opacity .9s ease-out,transform 1.45s cubic-bezier(.2,1.2,.3,1)}
+/* 同上, 原为 cubic-bezier(.2,1.2,.3,1) 的过冲回弹 */
+.v6-reveal.rv-tilt{transform:rotate(-11deg) translateY(190px) scale(.85);transition:opacity .9s ease-out,transform 1.45s cubic-bezier(.16,1,.3,1)}
 .v6-reveal.rv-rise{transform:translateY(38vh);transition:opacity 1s ease-out,transform 1.5s cubic-bezier(.16,1,.3,1)}
 @media (max-width:768px){
   .v6-reveal.rv-l,.v6-reveal.rv-r{transform:translateY(80px)}
