@@ -273,8 +273,20 @@ request.interceptors.response.use(
       return Promise.reject(error);
     }
 
+    // 认证接口自身返回的 401 不是"会话过期", 而是"这次认证请求被拒" —— 最常见的就是
+    // 用户名或密码错误。走下面的 refresh 分支会必然失败 (压根没有有效 refresh cookie),
+    // 然后把后端的真实文案 ("用户名或密码错误" + actionHint "请检查用户名和密码后重试"
+    // + hintTarget "password") 换成一句方向完全相反的"登录已过期,请重新登录" ——
+    // 用户被指去重新登录, 而不是去检查密码。
+    // 登录页 (views/login/index.vue) 正是因为"拦截器会透出服务端 message"才删掉了自己的
+    // 错误提示 (#280), 那个前提对 401 一直不成立, 于是登录失败没有任何正确提示。
+    // 让认证接口的 401 落到下面的通用分支, 原样透出后端 message + actionHint
+    // (fool-proof-design「4 位一体」)。
+    const requestUrl = originalRequest?.url || '';
+    const isAuthEndpoint = /\/auth\/(unified-login|login|demo-login|refresh|logout)$/.test(requestUrl);
+
     // 401 未授权 - 尝试刷新 token via cookie
-    if (status === 401 && !originalRequest._retry) {
+    if (status === 401 && !originalRequest._retry && !isAuthEndpoint) {
       if (isRefreshing) {
         // 如果正在刷新，将请求加入队列
         return new Promise<void>((resolve, reject) => {
@@ -317,8 +329,12 @@ request.interceptors.response.use(
       } catch (refreshError) {
         processQueue(refreshError as Error);
 
-        // 刷新失败，清除本地状态并跳转登录
+        // 刷新失败，清除本地状态并跳转登录。
+        // access token 必须一起清 (与 store/modules/auth.ts clearAuth 保持一致): 留着它,
+        // 请求拦截器会继续把这个已失效的 token 挂到后续每个请求的 Authorization 头上,
+        // 于是每个请求都再走一遍 401 → refresh 失败 → 又一条 sticky toast。
         localStorage.removeItem('cretas_user');
+        localStorage.removeItem('cretas_access_token');
 
         // 延迟跳转，避免循环依赖
         setTimeout(async () => {
