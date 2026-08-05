@@ -99,6 +99,8 @@ public class AIContextServiceImpl implements AIContextService {
             if (productTypesWithBom.contains(productTypeId)) {
                 try {
                     BomCostSummaryDTO bomCost = bomService.calculateProductCost(factoryId, productTypeId);
+                    // BOM 成本口径 = 辅料 + 包材。原料无数量、人工与均摊等结算，
+                    // 故此值不是完全成本，不能与批次实际成本直接比高低。
                     bomUnitCost = bomCost.getTotalCost();
                 } catch (Exception e) {
                     log.warn("计算BOM成本失败: productTypeId={}", productTypeId, e);
@@ -256,6 +258,8 @@ public class AIContextServiceImpl implements AIContextService {
         BigDecimal bomTotalCost = BigDecimal.ZERO;
         try {
             bomCost = bomService.calculateProductCost(factoryId, productTypeId);
+            // BOM 成本口径 = 辅料 + 包材。原料无数量、人工与均摊等结算，
+            // 故此值不是完全成本，不能与批次实际成本直接比高低。
             bomTotalCost = bomCost.getTotalCost();
         } catch (Exception e) {
             log.warn("获取BOM成本失败: productTypeId={}", productTypeId, e);
@@ -330,9 +334,15 @@ public class AIContextServiceImpl implements AIContextService {
         if (bomCost != null && bomTotalCost.compareTo(BigDecimal.ZERO) > 0) {
             bomMaterialRatio = bomCost.getMaterialCostTotal().divide(bomTotalCost, 4, RoundingMode.HALF_UP)
                     .multiply(new BigDecimal("100"));
-            bomLaborRatio = bomCost.getLaborCostTotal().divide(bomTotalCost, 4, RoundingMode.HALF_UP)
+            // 人工/均摊已移出 BOM 归集（getLaborCostTotal()/getOverheadCostTotal() 现为 null，
+            // 非 0），null-safe 按 0 处理：BOM 口径下这两项占比恒为 0，不代表实际不产生人工/均摊。
+            BigDecimal bomLaborTotal = bomCost.getLaborCostTotal() != null
+                    ? bomCost.getLaborCostTotal() : BigDecimal.ZERO;
+            BigDecimal bomOverheadTotal = bomCost.getOverheadCostTotal() != null
+                    ? bomCost.getOverheadCostTotal() : BigDecimal.ZERO;
+            bomLaborRatio = bomLaborTotal.divide(bomTotalCost, 4, RoundingMode.HALF_UP)
                     .multiply(new BigDecimal("100"));
-            bomOverheadRatio = bomCost.getOverheadCostTotal().divide(bomTotalCost, 4, RoundingMode.HALF_UP)
+            bomOverheadRatio = bomOverheadTotal.divide(bomTotalCost, 4, RoundingMode.HALF_UP)
                     .multiply(new BigDecimal("100"));
         }
 
@@ -521,7 +531,11 @@ public class AIContextServiceImpl implements AIContextService {
         }
 
         BigDecimal bomMaterial = bomCost.getMaterialCostTotal();
-        BigDecimal bomLabor = bomCost.getLaborCostTotal();
+        // 人工已移出 BOM 归集（getLaborCostTotal() 现为 null，非 0），null-safe 按 0 处理：
+        // 下方"人工差异"实为"实际人工 - 0"，即全部实际人工都会显示为差异，这是口径变化的
+        // 自然结果，不是新增行为。
+        BigDecimal bomLabor = bomCost.getLaborCostTotal() != null
+                ? bomCost.getLaborCostTotal() : BigDecimal.ZERO;
 
         // 平均到单位
         BigDecimal avgActualMaterial = actualMaterial.divide(new BigDecimal(batchCount), 4, RoundingMode.HALF_UP);
