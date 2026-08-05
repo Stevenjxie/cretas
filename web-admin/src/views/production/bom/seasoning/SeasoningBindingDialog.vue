@@ -15,8 +15,14 @@ export interface SeasoningMaterialOption {
   code?: string | null;
   unit?: string | null;
   movingAvgPrice?: number | null;
-  /** 未税采购参考价；物料档案保存含税价时由后端按税率同步换算。 */
-  unitPrice?: number | null;
+  /**
+   * 未税采购参考价；物料档案保存含税价时由后端按税率同步换算。
+   *
+   * ⚠️ 键名必须是 materialReferencePrice —— 后端 RawMaterialTypeDTO 把 entity.unitPrice
+   * 装进这个字段(RawMaterialTypeServiceImpl:803)，字段上的 @JsonAlias("unitPrice")
+   * 只作用于反序列化，响应 JSON 里没有 unitPrice 这个键。读错键会让本条判据恒为假。
+   */
+  materialReferencePrice?: number | null;
 }
 
 const props = withDefaults(defineProps<{
@@ -83,7 +89,7 @@ const basisObjectLabel = computed(() => (
       ? '本工序成品'
       : '本工序产出'
 ));
-const refreshedPrices = ref<Pick<SeasoningMaterialOption, 'movingAvgPrice' | 'unitPrice'> | undefined>();
+const refreshedPrices = ref<Pick<SeasoningMaterialOption, 'movingAvgPrice' | 'materialReferencePrice'> | undefined>();
 const effectivePrice = computed(() => {
   const movingAvgPrice = refreshedPrices.value === undefined
     ? selectedMaterial.value?.movingAvgPrice
@@ -92,8 +98,8 @@ const effectivePrice = computed(() => {
     return { value: Number(movingAvgPrice), source: '移动平均库存成本' as const };
   }
   const purchaseReferencePrice = refreshedPrices.value === undefined
-    ? selectedMaterial.value?.unitPrice
-    : refreshedPrices.value.unitPrice;
+    ? selectedMaterial.value?.materialReferencePrice
+    : refreshedPrices.value.materialReferencePrice;
   if (positivePrice(purchaseReferencePrice)) {
     return { value: Number(purchaseReferencePrice), source: '未税采购参考价' as const };
   }
@@ -255,7 +261,7 @@ async function refreshSelectedMaterialPrice() {
       : undefined;
     refreshedPrices.value = {
       movingAvgPrice: material?.movingAvgPrice ?? null,
-      unitPrice: material?.unitPrice ?? null,
+      materialReferencePrice: material?.materialReferencePrice ?? null,
     };
     if (!missingEffectivePrice.value && effectivePrice.value) {
       ElMessage.success(`已读取${effectivePrice.value.source}，可继续保存`);

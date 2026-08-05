@@ -215,7 +215,7 @@ async function applyRows() {
         throw new Error(`工序“${process?.processName || '未知'}”缺少可用产出基准`);
       }
       const material = props.materials.find((item) => item.id === row.materialTypeId);
-      if (!material || (!Number(material.movingAvgPrice) && !Number(material.unitPrice))) {
+      if (!material || (!Number(material.movingAvgPrice) && !Number(material.materialReferencePrice))) {
         throw new Error(`“${material?.name || row.detectedName}”缺少有效成本价格`);
       }
       const identity = `${process.workflowProcessNodeId}:${row.materialTypeId}`;

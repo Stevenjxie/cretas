@@ -197,7 +197,7 @@ describe('SeasoningBindingDialog', () => {
       name: '辣椒粉',
       unit: 'kg',
       movingAvgPrice: 18,
-      unitPrice: 17.7,
+      materialReferencePrice: 17.7,
     }]);
     await fillRequiredFields(wrapper, 5);
 
@@ -213,7 +213,7 @@ describe('SeasoningBindingDialog', () => {
       name: '辣椒粉',
       unit: 'kg',
       movingAvgPrice: null,
-      unitPrice: 17.7,
+      materialReferencePrice: 17.7,
     }]);
     await fillRequiredFields(wrapper, 12);
 
@@ -235,7 +235,7 @@ describe('SeasoningBindingDialog', () => {
         name: '辣椒粉',
         unit: 'kg',
         movingAvgPrice: null,
-        unitPrice: 17.7,
+        materialReferencePrice: 17.7,
       }],
     });
     const wrapper = mountDialog(null, [{
@@ -243,7 +243,7 @@ describe('SeasoningBindingDialog', () => {
       name: '辣椒粉',
       unit: 'kg',
       movingAvgPrice: null,
-      unitPrice: null,
+      materialReferencePrice: null,
     }]);
     await fillRequiredFields(wrapper, 12);
     expect(wrapper.get('[data-testid="configure-seasoning-price"]').exists()).toBe(true);
@@ -266,7 +266,7 @@ describe('SeasoningBindingDialog', () => {
       name: '辣椒粉',
       unit: 'g',
       movingAvgPrice: null,
-      unitPrice: null,
+      materialReferencePrice: null,
     }]);
     await fillRequiredFields(wrapper, 5);
 
@@ -286,7 +286,7 @@ describe('SeasoningBindingDialog', () => {
       name: '辣椒粉',
       unit: 'kg',
       movingAvgPrice: invalidPrice,
-      unitPrice: invalidPrice,
+      materialReferencePrice: invalidPrice,
     }]);
     await fillRequiredFields(wrapper, 12);
     expect(wrapper.get('[data-testid="configure-seasoning-price"]').exists()).toBe(true);
