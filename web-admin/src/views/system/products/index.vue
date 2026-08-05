@@ -172,7 +172,13 @@ const router = useRouter();
 const authStore = useAuthStore();
 const permissionStore = usePermissionStore();
 const factoryId = computed(() => authStore.factoryId);
-const canWrite = computed(() => permissionStore.canWrite('system'));
+// 后端 ProductTypeController 的**每一个**写端点判的都是
+// {"production:read_write", "rd:read_write"} —— 与 system 无关。
+// 这里原本按 canWrite('system') 决定显不显示, 于是「调度」(production/rd 可写、system 只读)
+// 明明有权限建产品, 界面却把「新增 SKU」整个藏了 —— 客户 2026-08-05「无法新建产品了」。
+const canWrite = computed(() => (
+  permissionStore.canWrite('production') || permissionStore.canWrite('rd')
+));
 const canViewPrice = computed(() => permissionStore.canViewPrice);
 const canEditMarginRedline = computed(() => permissionStore.canWrite('finance'));
 
@@ -1803,7 +1809,7 @@ watch(aiProductDialogVisible, (visible) => {
           </div>
           <div class="header-right">
             <el-button :icon="Download" @click="handleExport">导出</el-button>
-            <el-button :icon="Upload" @click="handleImport">导入</el-button>
+            <el-button v-if="canWrite" :icon="Upload" @click="handleImport">导入</el-button>
             <el-button v-if="canWrite" type="success" :icon="ChatDotRound" @click="aiEntryVisible = true">
               AI录入
             </el-button>
