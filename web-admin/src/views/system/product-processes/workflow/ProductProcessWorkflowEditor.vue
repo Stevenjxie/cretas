@@ -681,6 +681,8 @@ import {
   type BomOverlaySourceNode,
   type BomOverlaySourceNodeData,
 } from './bomOverlay';
+import { isWritableRecipe, pickEditableRecipe } from './bomEditableRecipe';
+import { createBomDraftEnsurer } from '@/views/production/bom/bomDraftLifecycle';
 import { markersForAuxiliaryRow, markersForPackagingRow } from './bomOverlayMarkers';
 import type { AuxiliaryCellRow, PackagingCellRow } from './bomOverlayTypes';
 import {
@@ -919,6 +921,42 @@ const bomOverlayPackagingByOutput = ref<Record<string, BomOverlayPackagingInput>
 // "第一个覆盖该工序的 recipe 生效"简化 —— 联合生产场景下若不同 recipe 对同一
 // 工序有不同辅料集合, 只展示/编辑第一个命中的, 已在 loadBomOverlayData 里注释。
 const bomOverlayRecipeIdByProcess = ref<Record<string, string>>({});
+// recipeId → 该版本能否直接写入(仅 DRAFT 可写)。生效版只能看, 落笔前必须先 ensureDraft。
+const bomOverlayRecipeWritable = ref<Record<string, boolean>>({});
+// recipeId → 归属产品 id, ensureDraft 需要按产品建草稿。
+const bomOverlayProductIdByRecipe = ref<Record<string, string>>({});
+
+/**
+ * 生效版不可写, 但用户在画布上点「+ 加辅料」时不该被甩去别的页面自己克隆。
+ * ensureDraft 会复用已有草稿(不是每次都克隆), 所以重复点击不会撑爆版本上限。
+ * 拿到草稿后必须重载浮层 —— 否则弹窗拿到的行 id 仍属于旧版本。
+ */
+const ensureBomDraftRecipe = createBomDraftEnsurer(
+  bomRecipeApi.ensureDraft,
+  async () => { await loadBomOverlayData(); },
+);
+
+/** 返回可写的 recipeId; 当前解析到的若非草稿, 先就地建/取草稿再重载浮层。 */
+async function resolveWritableRecipeId(
+  productTypeId: string,
+  recipeId: string,
+  reread: () => string | undefined,
+): Promise<string | null> {
+  if (bomOverlayRecipeWritable.value[recipeId]) return recipeId;
+  try {
+    await ensureBomDraftRecipe(props.factoryId, productTypeId);
+  } catch (error) {
+    ElMessage.error(error instanceof Error ? error.message : '无法创建 BOM 草稿，请稍后重试');
+    return null;
+  }
+  // 重载后浮层已指向草稿, 重新读一次映射, 不要沿用旧 id。
+  const refreshed = reread();
+  if (!refreshed || !bomOverlayRecipeWritable.value[refreshed]) {
+    ElMessage.error('BOM 草稿已创建，但画布未刷新到草稿版本，请手动刷新后重试');
+    return null;
+  }
+  return refreshed;
+}
 const bomOverlaySeasoningWorkspaceByRecipe = ref<Record<string, SeasoningWorkspace>>({});
 const bomOverlaySubstitutesByRecipe = ref<Record<string, BomItemSubstituteView[]>>({});
 const bomOverlayMaterials = ref<SeasoningMaterialOption[]>([]);
@@ -1885,6 +1923,8 @@ async function loadBomOverlayData(): Promise<void> {
     bomOverlayAuxiliaryByProcess.value = {};
     bomOverlayPackagingByOutput.value = {};
     bomOverlayRecipeIdByProcess.value = {};
+    bomOverlayProductIdByRecipe.value = {};
+    bomOverlayRecipeWritable.value = {};
     bomOverlaySeasoningWorkspaceByRecipe.value = {};
     bomOverlaySubstitutesByRecipe.value = {};
     bomOverlayRecipeIdByOutput.value = {};
@@ -1894,11 +1934,16 @@ async function loadBomOverlayData(): Promise<void> {
   }
 
   try {
+    // ⛔ 不能用 getCurrentByProduct: 它按后端契约只返回 ACTIVE+is_current, 而
+    // 调料/包材写入只接受 DRAFT —— 格子照着生效版渲染再往生效版写, prod 实测恒 409。
+    // 详见 bomEditableRecipe.ts。这里取全部版本自行择一, 保证「显示的」与「写入的」
+    // 是同一条记录(否则编辑既有行时, 行 id 属于另一个版本)。
     const recipeResponses = await Promise.all(uniqueSkuIds.map(async (skuId) => {
       try {
-        return { skuId, response: await bomRecipeApi.getCurrentByProduct(factoryId, skuId) };
+        const response = await bomRecipeApi.getVersionsByProduct(factoryId, skuId);
+        return { skuId, recipe: response?.success ? pickEditableRecipe(response.data ?? []) : null };
       } catch {
-        return { skuId, response: null };
+        return { skuId, recipe: null };
       }
     }));
     if (!stillCurrent()) return;
@@ -1906,14 +1951,17 @@ async function loadBomOverlayData(): Promise<void> {
     const packagingByOutput: Record<string, BomOverlayPackagingInput> = {};
     const recipeIdBySku: Record<string, string> = {};
     const recipeIdByOutput: Record<string, string> = {};
+    const productIdByRecipe: Record<string, string> = {};
     const packagingRawByOutput: Record<string, BomRecipeItemView[]> = {};
     // must-fix #8: 联合生产标注要报"当前实际生效的是哪个产出的配方" —— 用产出名做人话
     // 标签(配方本身没有独立的展示名), 按 recipeId 建索引, 供下面 auxiliaryByProcess 用。
     const outputNameByRecipe: Record<string, string> = {};
-    recipeResponses.forEach(({ skuId, response }) => {
-      if (!response?.success || !response.data?.id) return;
-      const recipe = response.data;
+    recipeResponses.forEach(({ skuId, recipe }) => {
+      if (!recipe?.id) return;
       recipeIdBySku[skuId] = recipe.id;
+      bomOverlayRecipeWritable.value[recipe.id] = isWritableRecipe(recipe);
+      // ensureDraft 要按产品建草稿, 所以得能从 recipeId 反查它归哪个产品。
+      productIdByRecipe[recipe.id] = skuId;
       const outputNode = finishedNodes.find((node) => String(node.data.skuId) === skuId);
       outputNameByRecipe[recipe.id] = String(outputNode?.data.name ?? '未命名产出');
       // 禁止降级处理: 基本单位缺失时占位「未配」, 不能拼出 "0.05 个/undefined" 这种半成品字符串。
@@ -2014,6 +2062,7 @@ async function loadBomOverlayData(): Promise<void> {
 
     bomOverlayPackagingByOutput.value = packagingByOutput;
     bomOverlayAuxiliaryByProcess.value = auxiliaryByProcess;
+    bomOverlayProductIdByRecipe.value = productIdByRecipe;
     bomOverlayRecipeIdByProcess.value = recipeIdByProcess;
     bomOverlaySeasoningWorkspaceByRecipe.value = workspaceByRecipe;
     bomOverlaySubstitutesByRecipe.value = substitutesByRecipe;
@@ -2065,11 +2114,35 @@ async function openAuxiliaryEditor(processNodeId: string, rowId?: string): Promi
     return;
   }
   await ensureBomOverlayMaterials();
+
+  // 落笔前把目标换成草稿版; 生效版写调料后端一律 409(2026-08-05 prod 实测)。
+  const auxProductTypeId = bomOverlayProductIdByRecipe.value[recipeId];
+  if (!auxProductTypeId) {
+    ElMessage.warning('未能确定该工序归属的成品，请刷新后重试');
+    return;
+  }
+  const writableRecipeId = await resolveWritableRecipeId(
+    auxProductTypeId,
+    recipeId,
+    () => bomOverlayRecipeIdByProcess.value[processNodeId],
+  );
+  if (!writableRecipeId) return;
+  // 重载后 workspace/process/binding 都要按草稿版重新取, 旧对象里的行 id 属于别的版本。
+  const writableWorkspace = bomOverlaySeasoningWorkspaceByRecipe.value[writableRecipeId];
+  const writableProcess = writableWorkspace?.processes
+    .find((candidate) => candidate.workflowProcessNodeId === processNodeId) ?? null;
+  if (!writableWorkspace || !writableProcess) {
+    ElMessage.warning('辅料数据尚未加载完成，请稍后重试');
+    return;
+  }
+
   auxDialogFactoryId.value = props.factoryId;
-  auxDialogRecipeId.value = recipeId;
-  auxDialogProcess.value = process;
-  auxDialogBinding.value = rowId ? (process.bindings.find((binding) => String(binding.id) === rowId) ?? null) : null;
-  auxDialogRevision.value = workspace.seasoningRevision;
+  auxDialogRecipeId.value = writableRecipeId;
+  auxDialogProcess.value = writableProcess;
+  auxDialogBinding.value = rowId
+    ? (writableProcess.bindings.find((binding) => String(binding.id) === rowId) ?? null)
+    : null;
+  auxDialogRevision.value = writableWorkspace.seasoningRevision;
   auxDialogVisible.value = true;
 }
 
@@ -2123,12 +2196,34 @@ async function openPackagingEditor(outputNodeId: string, rowId?: string): Promis
     return;
   }
   await ensureBomOverlayPackagingMaterials();
+
+  // 与辅料同因: 包材 item 也只能写进 DRAFT, 生效版返回「只有 DRAFT 状态可加 item」。
+  const packProductTypeId = String(node.data.skuId ?? '') || bomOverlayProductIdByRecipe.value[recipeId];
+  if (!packProductTypeId) {
+    ElMessage.warning('未能确定该产出对应的成品，请刷新后重试');
+    return;
+  }
+  const writablePackRecipeId = await resolveWritableRecipeId(
+    packProductTypeId,
+    recipeId,
+    () => bomOverlayRecipeIdByOutput.value[outputNodeId],
+  );
+  if (!writablePackRecipeId) return;
+  // 编辑既有行时, 行 id 必须来自草稿版 —— 生效版那份的 id 在草稿里不存在。
+  const writableRow = rowId
+    ? bomOverlayPackagingRawByOutput.value[outputNodeId]?.find((item) => String(item.id) === rowId) ?? null
+    : null;
+  if (rowId && !writableRow) {
+    ElMessage.warning('该包材行在草稿版本中不存在，请刷新后重试');
+    return;
+  }
+
   packagingDialogFactoryId.value = props.factoryId;
-  packagingDialogRecipeId.value = recipeId;
+  packagingDialogRecipeId.value = writablePackRecipeId;
   packagingDialogOutputName.value = String(node.data.name ?? '未命名产出');
   // 禁止降级处理: 基本单位缺失时占位「未配」, 不能让弹窗拼出 "个/undefined" 这种半成品字符串。
   packagingDialogBaseUnit.value = String(node.data.baseUnit ?? '未配');
-  packagingDialogRow.value = row;
+  packagingDialogRow.value = writableRow;
   packagingDialogVisible.value = true;
 }
 

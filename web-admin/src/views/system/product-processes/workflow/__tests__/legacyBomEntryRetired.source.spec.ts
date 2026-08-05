@@ -36,6 +36,13 @@ describe('画布 BOM 抽屉已下线(真删除, 不是开关)', () => {
     expect(source).toMatch(/@config-bom="\(\) => goToBomManagement\(\)"/);
   });
 
+  /** 从 start 截到下一个顶层声明为止, 近似取出整个函数体。 */
+  function sliceFunction(text: string, start: number): string {
+    const rest = text.slice(start + 1);
+    const next = rest.search(/\n(?:async function |function |const |watch\(|onMounted\()/);
+    return next === -1 ? text.slice(start) : text.slice(start, start + 1 + next);
+  }
+
   it('goToBomManagement 真的调用 router.push 导航到 BOM 菜单页, 并带上 productTypeId', () => {
     const fnStart = source.indexOf('async function goToBomManagement');
     expect(fnStart).toBeGreaterThan(-1);
@@ -48,7 +55,9 @@ describe('画布 BOM 抽屉已下线(真删除, 不是开关)', () => {
   it('包材编辑不再走抽屉 —— openPackagingEditor 打开的是新弹窗', () => {
     const fnStart = source.indexOf('function openPackagingEditor');
     expect(fnStart).toBeGreaterThan(-1);
-    const fn = source.slice(fnStart, fnStart + 1500);
+    // 按函数边界取, 不用固定字符数: 之前写死 1500, 函数一变长断言就落到窗口外而变红,
+    // 红的是取窗方式不是行为(2026-08-05 加 ensureDraft 时踩到)。
+    const fn = sliceFunction(source, fnStart);
     expect(fn).not.toMatch(/openBomDrawer/);
     expect(fn).toMatch(/packagingDialogVisible\.value = true/);
   });
