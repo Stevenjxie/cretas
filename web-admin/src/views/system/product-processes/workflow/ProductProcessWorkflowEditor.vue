@@ -992,7 +992,10 @@ const derivedWorkflowClassification = computed(() => classifyWorkflowTopology(
     kind: nodeKind(node),
     skuId: typeof node.data?.skuId === 'string' ? node.data.skuId : undefined,
   })),
-  flowEdges.value.map((edge) => ({ source: edge.source, target: edge.target })),
+  // 边也要剥。包材浮层边是「真实产出 → bom-overlay:pack:x」, 不剥的话那个真实产出
+  // 会被算进 outgoing, classifyWorkflowTopology 的 !outgoing.has(id) 就把它排除出
+  // 终端产出计数 —— 结构完整的工艺会被研判成 INCOMPLETE。只剥节点不剥边等于没剥。
+  stripBomOverlayEdges(flowEdges.value).map((edge) => ({ source: edge.source, target: edge.target })),
 ));
 const activationWorkflowTypeLabel = computed(() => {
   switch (activation.value?.workflowType) {
