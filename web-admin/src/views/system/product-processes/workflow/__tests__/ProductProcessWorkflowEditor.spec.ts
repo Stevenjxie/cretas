@@ -2,6 +2,7 @@ import { flushPromises, shallowMount, type VueWrapper } from '@vue/test-utils';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import ProductProcessWorkflowEditor from '../ProductProcessWorkflowEditor.vue';
+import { BOM_OVERLAY_PREFIX, stripBomOverlay, stripBomOverlayEdges } from '../bomOverlay';
 import type { ProductProcessWorkflowDefinition } from '../types';
 
 const apiMocks = vi.hoisted(() => ({
@@ -312,8 +313,11 @@ describe('ProductProcessWorkflowEditor process branch integration', () => {
     vm.selectedWorkProcessId = 'WP-PACK';
     vm.confirmAddProcess();
 
-    expect(vm.flowNodes).toHaveLength(3);
-    expect(vm.flowEdges).toHaveLength(2);
+    // must-fix #7: mutate() 现在会重新派生 BOM 浮层 —— 新加的 PROCESS/FINISHED_GOOD
+    // 节点各带一个 bomAuxiliary/bomPackaging cell 与一条虚线边, 这份用例只关心"真实
+    // 工艺图"的增删, 用 stripBomOverlay(Edges) 滤掉浮层, 同 line ~456 已有的写法。
+    expect(stripBomOverlay(vm.flowNodes)).toHaveLength(3);
+    expect(stripBomOverlayEdges(vm.flowEdges)).toHaveLength(2);
     expect(vm.history).toHaveLength(1);
     expect(vm.flowNodes.find((node) => node.data.kind === 'FINISHED_GOOD')?.data).toMatchObject({
       name: '五香去骨猪蹄 400g',
@@ -440,7 +444,10 @@ describe('ProductProcessWorkflowEditor process branch integration', () => {
     vm.openAddProcess('raw');
     vm.selectedWorkProcessId = 'WP-PACK';
     vm.confirmAddProcess();
-    const beforeDelete = vm.flowNodes.length;
+    // Task6: flowNodes/flowEdges 现在混着 BOM 浮层 cell(辅料/包材, 挂在 PROCESS/
+    // FINISHED_GOOD 节点上, 见 refreshBomOverlay), 这份用例只关心"真实工艺图"的
+    // 增删撤销, 用 stripBomOverlay(Edges) 滤掉浮层, 不受它的多少影响。
+    const beforeDelete = stripBomOverlay(vm.flowNodes).length;
     const historyBeforeDelete = vm.history.length;
     const raw = vm.flowNodes.find((node) => node.id === 'raw');
     if (!raw) throw new Error('Expected raw node');
@@ -449,13 +456,13 @@ describe('ProductProcessWorkflowEditor process branch integration', () => {
     vm.removeSelectedElements();
     await flushPromises();
 
-    expect(vm.flowNodes).toHaveLength(beforeDelete - 1);
-    expect(vm.flowEdges).toHaveLength(1);
+    expect(stripBomOverlay(vm.flowNodes)).toHaveLength(beforeDelete - 1);
+    expect(stripBomOverlayEdges(vm.flowEdges)).toHaveLength(1);
     expect(vm.flowEdges.some((edge) => edge.source === 'raw' || edge.target === 'raw')).toBe(false);
     expect(vm.history).toHaveLength(historyBeforeDelete + 1);
     vm.undo();
-    expect(vm.flowNodes).toHaveLength(beforeDelete);
-    expect(vm.flowEdges).toHaveLength(2);
+    expect(stripBomOverlay(vm.flowNodes)).toHaveLength(beforeDelete);
+    expect(stripBomOverlayEdges(vm.flowEdges)).toHaveLength(2);
   });
 
   it('selecting a Cell also selects every directly connected line', async () => {
@@ -911,6 +918,56 @@ describe('ProductProcessWorkflowEditor process branch integration', () => {
       process.position.y + 320,
     ]);
     expect(addedMaterials.every((material) => material.position.y % 16 === 0)).toBe(true);
+  });
+
+  // must-fix #1 (final whole-branch review of Phase 3-1): BOM 浮层 cell(辅料/包材) 是
+  // BOM 数据的只读投影, 绝不能表现成普通可拖/可选/可删的工艺节点 —— 三条泄漏路径分别
+  // 是: 拖一像素让 dirty=true 静默 fork 出一份新草稿(即使是已发布 workflow); 点选把它
+  // 混进 selectedCellIds(污染「已选 N 个」计数与发给 AI 的 selectedNodeContext); 走
+  // removeNode/removeSelectedElements 被当真删除。三条路径共享同一个根因(mutate() 里
+  // 手动拼 flowNodes.value 时没给浮层节点设 draggable/selectable/deletable=false), 所以
+  // 也在一份用例里一起验。挂在这个 describe 内部(而不是顶层新开一个)是为了复用
+  // 上面这个 describe 的 beforeEach(否则 apiMocks.get/getProductProcessWorkflow 等
+  // 都是未实现的裸 vi.fn(), mountEditor() 会在 catalog/definition/activation 加载阶段
+  // 直接炸掉)。
+  it('浮层 cell 的 draggable/selectable/deletable 均为 false, 且拖拽/点选/删除三条路径都被挡住', async () => {
+    const vm = await mountEditor();
+    vm.openAddProcess('raw');
+    vm.selectedWorkProcessId = 'WP-PACK';
+    vm.confirmAddProcess();
+
+    const auxCell = vm.flowNodes.find((node) => node.id.startsWith(`${BOM_OVERLAY_PREFIX}aux:`));
+    if (!auxCell) throw new Error('Expected an aux overlay cell after adding a process (must-fix #7 wires mutate() to refreshBomOverlay)');
+
+    // 1) 节点级标志本身
+    expect(auxCell).toMatchObject({ draggable: false, selectable: false, deletable: false });
+
+    // 2) 拖一像素不会把 dirty 翻回 true —— 这是"已发布 workflow 被静默 fork"事故的复现路径
+    vm.dirty = false;
+    vm.onNodeDragStop({ node: auxCell });
+    expect(vm.dirty).toBe(false);
+
+    // 3) 点击浮层 cell 不会把它选中、不会混进 selectedCellIds/selectedNodeContext
+    vm.onNodeClick({ node: auxCell });
+    expect(vm.selectedNodeContext.selectedNodeIds).not.toContain(auxCell.id);
+    expect(vm.flowNodes.find((node) => node.id === auxCell.id)?.selected).toBeFalsy();
+
+    // 4) removeNode 对浮层 cell 是纯 no-op: 不弹确认框, 节点原样还在
+    // (确认框 resolve 成功仅为万一测到的是移除前的代码时不挂起 promise, 不影响本用例
+    // 的断言重点——重点是 confirm 压根不该被调用)
+    const confirmSpy = vi.spyOn(ElMessageBox, 'confirm').mockResolvedValue('confirm');
+    const countBeforeRemove = vm.flowNodes.length;
+    vm.removeNode(auxCell.id);
+    expect(confirmSpy).not.toHaveBeenCalled();
+    expect(vm.flowNodes).toHaveLength(countBeforeRemove);
+    expect(vm.flowNodes.some((node) => node.id === auxCell.id)).toBe(true);
+
+    // 5) removeSelectedElements 同理: 强行把浮层 cell 标记为 selected 也不会被批量删除路径带走
+    const target = vm.flowNodes.find((node) => node.id === auxCell.id);
+    if (!target) throw new Error('Expected aux cell to still be present');
+    target.selected = true;
+    vm.removeSelectedElements();
+    expect(vm.flowNodes.some((node) => node.id === auxCell.id)).toBe(true);
   });
 });
 

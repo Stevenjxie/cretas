@@ -51,6 +51,9 @@ const props = defineProps<{
   initialProductTypeId?: string;
   /** Workflow 画布打开 BOM 时固定当前精确版本，避免同 SKU 多个流程被错误猜测。 */
   initialWorkflowRevisionId?: number | null;
+  /** 嵌入 Workflow 抽屉时直接定位到某个类别页签(如「配置包材」入口)；
+   *  路由 query 里的 ?category= 仍然优先(watch 在下面, 后触发的覆盖前面的)。 */
+  initialCategory?: string;
 }>();
 
 const authStore = useAuthStore();
@@ -1542,7 +1545,10 @@ const hasMultipleCategories = computed(() => groupedBomItems.value.length > 1);
 
 // P0-14: Tab filtering by materialCategory (RAW/AUXILIARY/PACKAGING/BYPRODUCT)
 // 前三类是投入, BYPRODUCT 是产出声明 —— 判定统一走 ./bomCategoryTabs
-const activeCategoryTab = ref<BomCategoryTab>('RAW');
+const initialCategoryFromProp = String(props.initialCategory || '').toUpperCase();
+const activeCategoryTab = ref<BomCategoryTab>(
+  isBomCategoryTab(initialCategoryFromProp) ? initialCategoryFromProp : 'RAW',
+);
 function syncCategoryFromRoute() {
   const category = String(route.query.category || '').toUpperCase();
   if (isBomCategoryTab(category)) {

@@ -353,6 +353,14 @@ async function resolveProcesses() {
   }
 }
 
+// ⚠️ SHOULD-FIX #5 已知限制(见 bomOverlayMarkers.ts 里 'pot' marker 旁的对称注释,
+// 两处互相引用): 这里按 workProcessId(工序模板)分组, 画布上的辅料 cell 按
+// workflowProcessNodeId(工艺图里的具体节点)分组 —— bomSeasoningApi.getByProduct
+// 的响应没有 workflowProcessNodeId, 无法在不改后端的前提下对齐。同一工序类型在一张
+// 工艺图里出现两次(联合生产等场景)时, 只要其中一个节点配了续锅比例, 这里的
+// potEnabled Set 会让两个节点对应的报工步骤都显示锅数输入框 —— 即使画布上只有一个
+// cell 标了 ◷。报工表在这种情况下比画布"宽松"(多显示了一个输入框), 不是"更精确
+// 也不是危险方向的错(不会漏掉该录的锅数, 只会多问一次), 但如实记录这个已知差异。
 async function resolveSeasoningProcesses(): Promise<{ configured: Set<string>; potEnabled: Set<string> }> {
   try {
     const response = await bomSeasoningApi.getByProduct(props.factoryId, props.productTypeId);

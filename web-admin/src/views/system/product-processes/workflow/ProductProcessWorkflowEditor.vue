@@ -266,6 +266,27 @@
               @delete="removeNode(slotProps.id)"
             />
           </template>
+
+          <!-- BOM 浮层 cell(辅料/包材) —— 只读投影, 不属于工艺定义(见 bomOverlay.ts 顶部注释) -->
+          <template #node-bomAuxiliary="slotProps">
+            <WorkflowAuxiliaryNode
+              :id="slotProps.id"
+              :data="slotProps.data"
+              :can-write="canEdit"
+              @add-row="openAuxiliaryEditor(slotProps.data.processNodeId)"
+              @edit-row="(rowId) => openAuxiliaryEditor(slotProps.data.processNodeId, rowId)"
+              @open-detail="openAuxiliaryEditor(slotProps.data.processNodeId)"
+            />
+          </template>
+          <template #node-bomPackaging="slotProps">
+            <WorkflowPackagingNode
+              :id="slotProps.id"
+              :data="slotProps.data"
+              :can-write="canEdit"
+              @add-row="openPackagingEditor(slotProps.data.outputNodeId)"
+              @edit-row="(rowId) => openPackagingEditor(slotProps.data.outputNodeId, rowId)"
+            />
+          </template>
         </VueFlow>
 
         <div
@@ -570,6 +591,7 @@
           v-if="bomDrawerVisible"
           :initial-product-type-id="bomDrawerProductTypeId"
           :initial-workflow-revision-id="definition?.revisionId"
+          :initial-category="bomDrawerInitialCategory"
         />
         <template #fallback>
           <div aria-busy="true" aria-live="polite">
@@ -579,6 +601,19 @@
         </template>
       </Suspense>
     </el-drawer>
+
+    <!-- #Task6: 辅料编辑弹窗 —— 直接复用既有 SeasoningBindingDialog, 不新建编辑面 -->
+    <SeasoningBindingDialog
+      v-model="auxDialogVisible"
+      :factory-id="auxDialogFactoryId"
+      :recipe-id="auxDialogRecipeId"
+      :process="auxDialogProcess"
+      :binding="auxDialogBinding"
+      :materials="bomOverlayMaterials"
+      :substitute-relations="auxDialogSubstituteRelations"
+      :revision="auxDialogRevision"
+      @saved="onAuxDialogSaved"
+    />
 
     <!-- #12b: 版本记录抽屉 (只读浏览之前发布过的版本) -->
     <el-drawer v-model="versionDrawerVisible" title="版本记录" direction="rtl" size="440px">
@@ -635,6 +670,8 @@ import UnitSelect from '@/components/common/UnitSelect.vue';
 import WorkProcessAIChatPanel from '@/views/system/components/WorkProcessAIChatPanel.vue';
 import WorkflowMaterialNode from './WorkflowMaterialNode.vue';
 import WorkflowProcessNode from './WorkflowProcessNode.vue';
+import WorkflowAuxiliaryNode from './WorkflowAuxiliaryNode.vue';
+import WorkflowPackagingNode from './WorkflowPackagingNode.vue';
 import {
   buildRawMaterialSegmentTree,
   isRawMaterialOption,
@@ -645,6 +682,33 @@ import { classifyOutputSkuCategory, matchOutputSkuByName } from './outputSkuClas
 import { needsPrimaryOutputKindUpdate } from './processOutputKindCompatibility';
 import { usePinyinFilter } from './pinyinInitials';
 import { classifyWorkflowTopology } from './workflowClassification';
+import {
+  deriveBomOverlay,
+  isBomOverlayNode,
+  stripBomOverlay,
+  stripBomOverlayEdges,
+  type BomOverlayAuxiliaryInput,
+  type BomOverlayPackagingInput,
+  type BomOverlaySourceNode,
+  type BomOverlaySourceNodeData,
+} from './bomOverlay';
+import { markersForAuxiliaryRow, markersForPackagingRow } from './bomOverlayMarkers';
+import type { AuxiliaryCellRow, PackagingCellRow } from './bomOverlayTypes';
+import {
+  formatAuxiliaryDosageText,
+  formatPackagingDosageText,
+  formatPackagingNaturalHint,
+} from './bomOverlayRowFormat';
+import {
+  bomRecipeApi,
+  bomSeasoningApi,
+  type BomItemSubstituteView,
+  type SeasoningBindingView,
+  type SeasoningProcessView,
+  type SeasoningWorkspace,
+} from '@/api/bom';
+import { bigCategoryOf } from '@/utils/materialCategory';
+import SeasoningBindingDialog, { type SeasoningMaterialOption } from '@/views/production/bom/seasoning/SeasoningBindingDialog.vue';
 import {
   activateProductProcessWorkflow,
   deactivateProductProcessWorkflow,
@@ -859,6 +923,38 @@ const bomProductionMismatchProducts = computed<BomProductTarget[]>(() => {
     });
 });
 const bomRawMaterialIdList = computed(() => productBomItems.value.map((item) => item.materialTypeId));
+
+// #Task6: BOM 浮层 cell(辅料/包材)数据 —— 与上面 productBomItems(扁平 id 清单,
+// 只服务原料 picker)是并行的另一份数据, 保留分组(按工序/按产出)与展示字段,
+// 专供 deriveBomOverlay 派生画布浮层节点, 详见 loadBomOverlayData()。
+const bomOverlayAuxiliaryByProcess = ref<Record<string, BomOverlayAuxiliaryInput>>({});
+const bomOverlayPackagingByOutput = ref<Record<string, BomOverlayPackagingInput>>({});
+// 辅料编辑入口(直接复用 SeasoningBindingDialog)需要知道某个工序归哪个 recipe;
+// 一个 workflow 可能有多个终端产出(=多个 recipe)共享同一批工序节点, 这里按
+// "第一个覆盖该工序的 recipe 生效"简化 —— 联合生产场景下若不同 recipe 对同一
+// 工序有不同辅料集合, 只展示/编辑第一个命中的, 已在 loadBomOverlayData 里注释。
+const bomOverlayRecipeIdByProcess = ref<Record<string, string>>({});
+const bomOverlaySeasoningWorkspaceByRecipe = ref<Record<string, SeasoningWorkspace>>({});
+const bomOverlaySubstitutesByRecipe = ref<Record<string, BomItemSubstituteView[]>>({});
+const bomOverlayMaterials = ref<SeasoningMaterialOption[]>([]);
+const bomOverlayMaterialsLoaded = ref(false);
+let bomOverlayLoadGeneration = 0;
+// 辅料编辑弹窗(直接挂 SeasoningBindingDialog, 不新建编辑面 —— 见 task-6-brief.md)
+const auxDialogVisible = ref(false);
+const auxDialogFactoryId = ref('');
+const auxDialogRecipeId = ref('');
+const auxDialogProcess = ref<SeasoningProcessView | null>(null);
+const auxDialogBinding = ref<SeasoningBindingView | null>(null);
+const auxDialogRevision = ref(0);
+const auxDialogSubstituteRelations = computed<BomItemSubstituteView[]>(() => {
+  if (!auxDialogBinding.value) return [];
+  const all = bomOverlaySubstitutesByRecipe.value[auxDialogRecipeId.value] || [];
+  return all.filter((relation) =>
+    relation.parentKind === 'SEASONING_ITEM' && relation.parentSeasoningItemId === auxDialogBinding.value!.id);
+});
+// 包材编辑入口 = 打开既有 BOM 抽屉并定位到包材页签 (见 openBomDrawer 的 initialCategory 参数)
+const bomDrawerInitialCategory = ref<string | undefined>(undefined);
+
 function usedRawMaterialIdsExcept(nodeId: string): string[] {
   return flowNodes.value
     .filter((node) => node.id !== nodeId && node.data?.kind === 'RAW_MATERIAL')
@@ -984,12 +1080,17 @@ let cancelBomPanelPreload: (() => void) | null = null;
 const productTypeId = computed(() => props.productTypeId);
 const rawOwnerMode = computed(() => props.rawOwnerMode === true);
 const derivedWorkflowClassification = computed(() => classifyWorkflowTopology(
-  flowNodes.value.map((node) => ({
+  // ⛔ 浮层节点(辅料/包材 cell)不是画布拓扑的一部分, 混进去会把
+  // rootInputCount/terminalOutputCount 算错, 让「系统研判」标签失真。
+  stripBomOverlay(flowNodes.value).map((node) => ({
     id: node.id,
     kind: nodeKind(node),
     skuId: typeof node.data?.skuId === 'string' ? node.data.skuId : undefined,
   })),
-  flowEdges.value.map((edge) => ({ source: edge.source, target: edge.target })),
+  // 边也要剥。包材浮层边是「真实产出 → bom-overlay:pack:x」, 不剥的话那个真实产出
+  // 会被算进 outgoing, classifyWorkflowTopology 的 !outgoing.has(id) 就把它排除出
+  // 终端产出计数 —— 结构完整的工艺会被研判成 INCOMPLETE。只剥节点不剥边等于没剥。
+  stripBomOverlayEdges(flowEdges.value).map((edge) => ({ source: edge.source, target: edge.target })),
 ));
 const activationWorkflowTypeLabel = computed(() => {
   switch (activation.value?.workflowType) {
@@ -1137,6 +1238,7 @@ async function loadEditorWorkspace(loadFactoryCatalogs: boolean): Promise<void> 
   // 普通产品的画布定义先出现；完整编辑能力在目录就绪后自动开放。
   if (!rawOwnerMode.value) await catalogPromise;
   await loadProductBom();
+  await loadBomOverlayData();
 }
 
 // #11: 每次操作后防抖 ~2.5s 自动保存 (静默 + 保留撤销栈)。用户停手 2.5s 即存;
@@ -1189,7 +1291,7 @@ watch(
     .map((node) => String(node.data.skuId))
     .sort()
     .join(','),
-  () => { void loadProductBom(); },
+  () => { void loadProductBom(); void loadBomOverlayData(); },
 );
 
 async function waitForWorkflowSave(timeoutMs = 5000): Promise<boolean> {
@@ -1201,7 +1303,10 @@ async function waitForWorkflowSave(timeoutMs = 5000): Promise<boolean> {
 }
 
 // #10: 打开 BOM 配置抽屉; 关闭时刷新本产品 BOM (原料分组 + 提示随即更新)
-async function openBomDrawer(requestedProductTypeId?: string): Promise<void> {
+// initialCategory: 定位到某个类别页签(如 openPackagingEditor 传 'PACKAGING')。
+// 不传时显式清空 —— 否则上一次「配置包材」留下的页签会粘在下一次普通打开上。
+async function openBomDrawer(requestedProductTypeId?: string, initialCategory?: string): Promise<void> {
+  bomDrawerInitialCategory.value = initialCategory;
   if (!(await waitForWorkflowSave())) {
     ElMessage.warning('Workflow 仍在保存，请稍后再打开 BOM');
     return;
@@ -1241,6 +1346,7 @@ async function openBomDrawer(requestedProductTypeId?: string): Promise<void> {
 }
 async function onBomDrawerClosed(): Promise<void> {
   await loadProductBom({ force: true });
+  await loadBomOverlayData();
 }
 
 // #12b: 版本记录浏览
@@ -1774,6 +1880,237 @@ async function loadProductBom(options: { force?: boolean } = {}): Promise<void> 
   }
 }
 
+/**
+ * 加载画布上辅料/包材 cell 需要的 BOM 数据 —— 按终端产出(FINISHED_GOOD 节点的
+ * skuId)逐个拿当前生效配方(bomRecipeApi.getCurrentByProduct), 从其中筛出
+ * PACKAGING 类目行做包材 cell; 再按拿到的 recipeId 逐个拉工序调料工作台
+ * (bomSeasoningApi.getWorkspace)与替代物料关系(bomRecipeApi.listSubstitutes),
+ * 供辅料 cell 与「打开辅料详情」编辑弹窗共用同一份数据, 避免打开弹窗时二次请求。
+ *
+ * 完成后调用 refreshBomOverlay() 把结果注入画布 —— hydrate() 内部也会调用它
+ * (用当时已缓存的数据), 两处配合: hydrate 保证"浮层结构一定在", 这里保证
+ * "浮层内容随 BOM 数据变化刷新"。
+ */
+async function loadBomOverlayData(): Promise<void> {
+  const factoryId = props.factoryId;
+  const finishedNodes = flowNodes.value.filter((node) => node.data?.kind === 'FINISHED_GOOD' && node.data?.skuId);
+  const targets = finishedNodes.map((node) => ({ nodeId: node.id, skuId: String(node.data.skuId) }));
+  const uniqueSkuIds = [...new Set(targets.map((target) => target.skuId))];
+  const generation = ++bomOverlayLoadGeneration;
+  const stillCurrent = () => generation === bomOverlayLoadGeneration && props.factoryId === factoryId;
+
+  if (!factoryId || uniqueSkuIds.length === 0) {
+    bomOverlayAuxiliaryByProcess.value = {};
+    bomOverlayPackagingByOutput.value = {};
+    bomOverlayRecipeIdByProcess.value = {};
+    bomOverlaySeasoningWorkspaceByRecipe.value = {};
+    bomOverlaySubstitutesByRecipe.value = {};
+    refreshBomOverlay();
+    return;
+  }
+
+  try {
+    const recipeResponses = await Promise.all(uniqueSkuIds.map(async (skuId) => {
+      try {
+        return { skuId, response: await bomRecipeApi.getCurrentByProduct(factoryId, skuId) };
+      } catch {
+        return { skuId, response: null };
+      }
+    }));
+    if (!stillCurrent()) return;
+
+    const packagingByOutput: Record<string, BomOverlayPackagingInput> = {};
+    const recipeIdBySku: Record<string, string> = {};
+    // must-fix #8: 联合生产标注要报"当前实际生效的是哪个产出的配方" —— 用产出名做人话
+    // 标签(配方本身没有独立的展示名), 按 recipeId 建索引, 供下面 auxiliaryByProcess 用。
+    const outputNameByRecipe: Record<string, string> = {};
+    recipeResponses.forEach(({ skuId, response }) => {
+      if (!response?.success || !response.data?.id) return;
+      const recipe = response.data;
+      recipeIdBySku[skuId] = recipe.id;
+      const outputNode = finishedNodes.find((node) => String(node.data.skuId) === skuId);
+      outputNameByRecipe[recipe.id] = String(outputNode?.data.name ?? '未命名产出');
+      // 禁止降级处理: 基本单位缺失时占位「未配」, 不能拼出 "0.05 个/undefined" 这种半成品字符串。
+      const outputBaseUnit = String(outputNode?.data.baseUnit ?? '未配');
+      const rows: PackagingCellRow[] = (recipe.items || [])
+        .filter((item) => item.materialCategory === 'PACKAGING')
+        .map((item) => ({
+          id: String(item.id),
+          materialName: item.materialName || '未命名物料',
+          dosageText: formatPackagingDosageText(item.standardQuantity, item.unit, outputBaseUnit),
+          naturalHint: formatPackagingNaturalHint(item.standardQuantity, item.unit, outputBaseUnit),
+          markers: markersForPackagingRow({
+            substituteCount: item.substituteDetails?.length ?? 0,
+            isOptional: item.isOptional === true,
+            perPortion: item.perPortion === true,
+            packagingSpecId: item.packagingSpecId ?? null,
+            packagingSpecNameSnapshot: item.packagingSpecNameSnapshot ?? null,
+          }),
+        }));
+      targets.filter((target) => target.skuId === skuId).forEach((target) => {
+        packagingByOutput[target.nodeId] = { rows };
+      });
+    });
+
+    const uniqueRecipeIds = [...new Set(Object.values(recipeIdBySku))];
+    const [workspaceResponses, substitutesResponses] = await Promise.all([
+      Promise.all(uniqueRecipeIds.map(async (recipeId) => {
+        try {
+          return { recipeId, response: await bomSeasoningApi.getWorkspace(factoryId, recipeId) };
+        } catch {
+          return { recipeId, response: null };
+        }
+      })),
+      Promise.all(uniqueRecipeIds.map(async (recipeId) => {
+        try {
+          return { recipeId, response: await bomRecipeApi.listSubstitutes(factoryId, recipeId) };
+        } catch {
+          return { recipeId, response: null };
+        }
+      })),
+    ]);
+    if (!stillCurrent()) return;
+
+    const substitutesByRecipe: Record<string, BomItemSubstituteView[]> = {};
+    substitutesResponses.forEach(({ recipeId, response }) => {
+      substitutesByRecipe[recipeId] = response?.success && Array.isArray(response.data) ? response.data : [];
+    });
+
+    const auxiliaryByProcess: Record<string, BomOverlayAuxiliaryInput> = {};
+    const recipeIdByProcess: Record<string, string> = {};
+    const workspaceByRecipe: Record<string, SeasoningWorkspace> = {};
+    // must-fix #8: 统计每个工序节点被多少份不同 recipe 引用到 —— 独立于下面的
+    // "first recipe wins" 判重, 覆盖判重发生之后仍要继续数, 否则统计会在第一份就停。
+    const recipeIdsByProcessNode: Record<string, Set<string>> = {};
+    workspaceResponses.forEach(({ recipeId, response }) => {
+      if (!response?.success || !response.data) return;
+      workspaceByRecipe[recipeId] = response.data;
+      const relations = substitutesByRecipe[recipeId] || [];
+      response.data.processes.forEach((process) => {
+        const nodeId = process.workflowProcessNodeId;
+        (recipeIdsByProcessNode[nodeId] ??= new Set<string>()).add(recipeId);
+        // 联合生产(多终端产出共享同批工序节点)时, 第一个覆盖该工序的 recipe 生效 ——
+        // 简化: 不同 recipe 对同一工序理应配同一批辅料, 若确有分歧只展示/编辑先命中的那份。
+        if (auxiliaryByProcess[nodeId]) return;
+        recipeIdByProcess[nodeId] = recipeId;
+        auxiliaryByProcess[nodeId] = {
+          usageSupported: process.standardUsageSupported === true,
+          rows: process.bindings.map((binding): AuxiliaryCellRow => ({
+            id: String(binding.id),
+            materialName: binding.name || binding.materialName || '未命名辅料',
+            dosageText: formatAuxiliaryDosageText(binding.dosagePerKgG),
+            markers: markersForAuxiliaryRow({
+              subsequentPotRatio: binding.subsequentPotRatio,
+              countInSeasoning: binding.countInSeasoning,
+              substituteCount: relations.filter((relation) =>
+                relation.parentKind === 'SEASONING_ITEM' && relation.parentSeasoningItemId === binding.id).length,
+              costScope: process.costScope ?? null,
+            }),
+          })),
+        };
+      });
+    });
+    // must-fix #8 (review ruling 3a): "first recipe wins" 本身保留(接受的取舍), 但不能让
+    // 用户以为自己在编辑唯一配方 —— 被 >1 份 recipe 引用的工序, 把当前实际生效的产出名
+    // 标出来, 交给 WorkflowAuxiliaryNode.vue 在 cell 副标题下方渲染一行提示。
+    Object.keys(auxiliaryByProcess).forEach((nodeId) => {
+      const sharedAcrossRecipes = (recipeIdsByProcessNode[nodeId]?.size ?? 0) > 1;
+      if (!sharedAcrossRecipes) return;
+      auxiliaryByProcess[nodeId] = {
+        ...auxiliaryByProcess[nodeId],
+        sharedAcrossRecipes: true,
+        recipeOutputName: outputNameByRecipe[recipeIdByProcess[nodeId]] ?? null,
+      };
+    });
+
+    bomOverlayPackagingByOutput.value = packagingByOutput;
+    bomOverlayAuxiliaryByProcess.value = auxiliaryByProcess;
+    bomOverlayRecipeIdByProcess.value = recipeIdByProcess;
+    bomOverlaySeasoningWorkspaceByRecipe.value = workspaceByRecipe;
+    bomOverlaySubstitutesByRecipe.value = substitutesByRecipe;
+    refreshBomOverlay();
+  } catch (error) {
+    if (!stillCurrent()) return;
+    console.error('[ProductProcessWorkflow] BOM overlay data loading failed (辅料/包材 cell 会显示为空态)', error);
+  }
+}
+
+async function ensureBomOverlayMaterials(): Promise<void> {
+  if (bomOverlayMaterialsLoaded.value) return;
+  const factoryId = props.factoryId;
+  if (!factoryId) return;
+  try {
+    const response = await get<Array<SeasoningMaterialOption & { category?: string | null; materialCategory?: string | null }>>(
+      `/${factoryId}/raw-material-types/active`,
+    );
+    const rows = response.success && response.data ? response.data : [];
+    bomOverlayMaterials.value = rows.filter((material) => {
+      if (material.materialCategory === 'AUXILIARY') return true;
+      const category = bigCategoryOf(material.category);
+      return category === '辅料' || category === '调料';
+    });
+    bomOverlayMaterialsLoaded.value = true;
+  } catch {
+    ElMessage.error('辅料档案加载失败');
+  }
+}
+
+// 辅料编辑入口 —— 直接复用既有 SeasoningBindingDialog(不新建编辑面, 见 task-6-brief.md)。
+async function openAuxiliaryEditor(processNodeId: string, rowId?: string): Promise<void> {
+  // ⛔ fool-proof Rule 5(死胡同必须变成导航或解释): 「详情」按钮在只读态下始终渲染
+  // (WorkflowAuxiliaryNode.vue 没有 v-if="canWrite" 挡它 —— 辅料行本身对只读用户也该
+  // 可见), 过去这里直接静默 return, 用户点了没有任何反馈。SeasoningBindingDialog 是
+  // 纯编辑表单、没有只读展示态(重写它不在本轮范围内), 所以这里不能替只读用户打开它;
+  // 能做、且必须做的, 是把"什么都不做"换成一句解释。
+  if (!canEdit.value) {
+    ElMessage.info('当前无编辑权限，无法打开辅料编辑弹窗。Cell 上显示的是用量与标记，备注、单价、替代物料明细需有权限后在弹窗内查看。');
+    return;
+  }
+  const recipeId = bomOverlayRecipeIdByProcess.value[processNodeId];
+  const workspace = recipeId ? bomOverlaySeasoningWorkspaceByRecipe.value[recipeId] : undefined;
+  const process = workspace?.processes.find((candidate) => candidate.workflowProcessNodeId === processNodeId) ?? null;
+  if (!recipeId || !workspace || !process) {
+    ElMessage.warning('辅料数据尚未加载完成，请稍后重试');
+    return;
+  }
+  await ensureBomOverlayMaterials();
+  auxDialogFactoryId.value = props.factoryId;
+  auxDialogRecipeId.value = recipeId;
+  auxDialogProcess.value = process;
+  auxDialogBinding.value = rowId ? (process.bindings.find((binding) => String(binding.id) === rowId) ?? null) : null;
+  auxDialogRevision.value = workspace.seasoningRevision;
+  auxDialogVisible.value = true;
+}
+
+function onAuxDialogSaved(): void {
+  void loadBomOverlayData();
+}
+
+// 包材编辑入口 —— 打开既有 BOM 抽屉并定位到包材页签, 本期不新建编辑面。
+function openPackagingEditor(outputNodeId: string, rowId?: string): void {
+  if (!canEdit.value) {
+    ElMessage.info('当前无编辑权限，无法打开包材编辑抽屉。Cell 上显示的是用量与标记，备注、单价、替代物料明细需有权限后在抽屉内查看。');
+    return;
+  }
+  const node = flowNodes.value.find((candidate) => candidate.id === outputNodeId);
+  const skuId = node?.data?.kind === 'FINISHED_GOOD' && node.data?.skuId ? String(node.data.skuId) : undefined;
+  // ⛔ rowId 目前无法精确定位到抽屉里的那一行(BomUnifiedPanel/bom-unified/index.vue
+  // 只接受 initial-category, 没有"定位到某一行"的概念, 新增这个能力属于"重写编辑
+  // 弹窗/抽屉"范畴, 本轮明确不做)。之前的做法是把 rowId 整个丢弃、静默跳到包材页签,
+  // 用户点的是具体某一行、落地却是整个列表, 没有任何提示差异——这里至少把差异说
+  // 出来, 而不是假装精确定位到了。
+  if (rowId) {
+    const materialName = bomOverlayPackagingByOutput.value[outputNodeId]?.rows
+      .find((row) => row.id === rowId)?.materialName;
+    ElMessage.info(
+      materialName
+        ? `已打开包材页签，请在列表中找到「${materialName}」这一行编辑（暂不支持直接定位到该行）`
+        : '已打开包材页签，请在列表中找到对应行编辑（暂不支持直接定位到该行）',
+    );
+  }
+  void openBomDrawer(skuId, 'PACKAGING');
+}
+
 function propsMatchIdentity(identity: WorkflowIdentity): boolean {
   return props.factoryId === identity.factoryId
     && props.productTypeId === identity.productTypeId;
@@ -1804,6 +2141,63 @@ function isLoadedIdentityCurrent(identity: WorkflowIdentity): boolean {
     && props.productTypeId === identity.productTypeId;
 }
 
+/**
+ * ⛔ 重新派生 BOM 浮层(辅料/包材 cell) —— 结构性挂在 hydrate() 内部, 不是散落
+ * 在各个调用点各补一次。undo() / handleAutoLayout() / reconcileLoadedUnits() 等
+ * 全部经由 hydrate() 整体替换 flowNodes/flowEdges, 若浮层派生只在"加载首次"那
+ * 一个点做, 这些消费方会把浮层一并清空(见 task-6-brief.md Step 1b 的事故记录)。
+ * 把派生做成 hydrate 的必经步骤, 「hydrate 之后浮层一定在」就是结构性保证,
+ * 不依赖调用方记得再调一次。
+ */
+function refreshBomOverlay(): void {
+  const strippedNodes = stripBomOverlay(flowNodes.value);
+  const strippedEdges = stripBomOverlayEdges(flowEdges.value);
+  const workflowNodes: BomOverlaySourceNode[] = strippedNodes.map((node) => ({
+    id: node.id,
+    kind: (node.data as { kind: ProductProcessNodeKind }).kind,
+    position: { x: node.position.x, y: node.position.y },
+    data: node.data as BomOverlaySourceNodeData,
+  }));
+  const { nodes: overlayNodes, edges: overlayEdges } = deriveBomOverlay({
+    workflowNodes,
+    auxiliaryByProcess: bomOverlayAuxiliaryByProcess.value,
+    packagingByOutput: bomOverlayPackagingByOutput.value,
+  });
+  flowNodes.value = [
+    ...strippedNodes,
+    // ⛔ 浮层 cell 必须是"不可拖/不可选/不可删"的只读投影 —— 三个标志缺一不可, 都要在
+    // 这里(唯一的浮层节点构造点)显式设。理由(详见 must-fix #1):
+    //   draggable:false  拖一像素也会让 onNodeDragStop 把 dirty 设 true → 白改一次草稿。
+    //   selectable:false 防止批量框选/Ctrl 多选把浮层 cell 混进 selectedCellIds
+    //                     (会污染「已选 N 个 Cell」计数与发给 AI 的 selectedNodeContext)。
+    //   deletable:false  VueFlow 自带的键盘/API 删除路径统一收口于此, 不依赖
+    //                     removeNode/removeSelectedElements 各自记得判断。
+    // 三者都设在"数据"这一层(而不是只在 :nodes-draggable="canEdit" 这种全局 prop 上),
+    // 这样以后就算有代码路径换一种方式设置画布级 draggable/selectable 默认值, 浮层节点
+    // 依然锁死 —— 不会重新变回"普通节点"。
+    ...overlayNodes.map((node) => ({
+      id: node.id,
+      type: node.type,
+      position: node.position,
+      data: node.data,
+      draggable: false,
+      selectable: false,
+      deletable: false,
+    })),
+  ];
+  flowEdges.value = [
+    ...strippedEdges,
+    ...overlayEdges.map((edge) => ({
+      id: edge.id,
+      source: edge.source,
+      sourceHandle: edge.sourceHandle,
+      target: edge.target,
+      targetHandle: edge.targetHandle,
+      style: edge.style,
+    })),
+  ];
+}
+
 function hydrate(nextDefinition: ProductProcessWorkflowDefinition): boolean {
   definition.value = toPlainWorkflowValue(nextDefinition);
   flowNodes.value = nextDefinition.nodes.map((node) => ({
@@ -1818,6 +2212,7 @@ function hydrate(nextDefinition: ProductProcessWorkflowDefinition): boolean {
     style: { stroke: '#1b65a8', strokeWidth: 2 },
   }));
   refreshPortMaterialMetadata();
+  refreshBomOverlay();
   return false;
 }
 
@@ -1834,8 +2229,12 @@ function currentDefinition(): ProductProcessWorkflowDefinition {
   return {
     ...toPlainWorkflowValue(base),
     status: base.status,
-    nodes: flowNodes.value.map(serializeFlowNode),
-    edges: flowEdges.value.map(serializeFlowEdge),
+    // ⛔ 浮层节点(辅料/包材 cell)是 BOM 数据的投影, 不属于工艺定义。
+    // 混进去会改 revision hash → 改一克盐就让所有 BOM 需要重新对齐。
+    nodes: stripBomOverlay(flowNodes.value).map(serializeFlowNode),
+    // ⛔ 浮层边(辅料 cell → 工序 / 产出 → 包材 cell 的虚线连接)同理必须剥离,
+    // 否则序列化出的定义会带着指向已被剥离节点的悬空引用发去后端。
+    edges: stripBomOverlayEdges(flowEdges.value).map(serializeFlowEdge),
     viewport: { x: viewport.x, y: viewport.y, zoom: viewport.zoom },
   };
 }
@@ -1872,6 +2271,13 @@ function mutate(action: () => void): void {
   remember();
   action();
   refreshPortMaterialMetadata();
+  // ⛔ must-fix #7: hydrate() 早就会重新派生浮层(#node-bomAuxiliary/#node-bomPackaging),
+  // 但大多数图编辑(加工序/加端口/连线...)走的是 mutate() 直接改 flowNodes/flowEdges,
+  // 不经过 hydrate()。不在这里补一次, 新加的工序/成品节点在下一次 hydrate(undo/自动布局/
+  // 重新加载)之前完全没有辅料/包材 cell —— 跟 #3 是同一种"缺席被当成已配置"的混淆,
+  // 只是发生在"节点刚创建, BOM 数据里压根还没有它"这个更早的时刻。refreshBomOverlay
+  // 是幂等的纯派生(见其函数注释), 每次 mutate 都跑一次代价可接受。
+  refreshBomOverlay();
   editSeq += 1;
   workflowBomSyncPreflight.value = null;
   dirty.value = true;
@@ -1890,6 +2296,10 @@ function undo(): void {
 }
 
 function onNodeClick({ node, event }: NodeMouseEvent): void {
+  // ⛔ VueFlow 的 node.selectable=false 只挡它自己内部的选中逻辑, 不挡 @node-click 事件
+  // 本身(它的 onSelectNode 无条件 emit.click)—— 这里若不早退, 下面几行会直接在
+  // flowNodes.value 里手动把浮层节点的 .selected 置 true, 绕过 selectable 的保护。
+  if (isBomOverlayNode(node)) return;
   closeCanvasDropdowns(event);
   selectedNodeId.value = node.id;
   acknowledgePublishBindingError(node.id);
@@ -1909,6 +2319,9 @@ function onNodeDragStart(): void {
 
 function onNodeDragStop({ node }: { node: Node }): void {
   if (!canEdit.value) return;
+  // ⛔ 防御性早退, 不是唯一的门: node.draggable=false(见 refreshBomOverlay)已经让
+  // VueFlow 物理上拖不动浮层 cell, 这里只是不假设"以后不会有别的路径调用这个函数"。
+  if (isBomOverlayNode(node)) return;
   if (dragStartSnapshot.value) remember(dragStartSnapshot.value);
   dragStartSnapshot.value = null;
   const target = flowNodes.value.find((candidate) => candidate.id === node.id);
@@ -2101,6 +2514,10 @@ function removeNode(nodeId: string): void {
   if (!canEdit.value) return;
   const node = flowNodes.value.find((n) => n.id === nodeId);
   if (!node) return;
+  // ⛔ 浮层 cell 不是工艺定义的一部分, 不能被这条"移除 Workflow Cell"路径删除 ——
+  // 且下面的确认框会读 processName/name 当标题, 对浮层 cell 显示会是「移除「腌制」…
+  // 这不会删除工序/SKU 主数据」这种字面上真但语义上误导的话(它删的根本不是工序)。
+  if (isBomOverlayNode(node)) return;
   const data = node.data as { name?: string; processName?: string } | undefined;
   const label = data?.name || data?.processName || '该 Cell';
   const touching = flowEdges.value.filter((e) => e.source === nodeId || e.target === nodeId).length;
@@ -2131,7 +2548,9 @@ function removeNode(nodeId: string): void {
 
 function removeSelectedElements(): void {
   if (!canEdit.value) return;
-  const ids = [...selectedCellIds.value];
+  // ⛔ 防御性过滤: selectedCellIds 理论上不该再混进浮层 id(onNodeClick/框选都已挡住),
+  // 这里再筛一次是不假设那两道门永远不会被将来的改动绕开(同 removeNode 的早退)。
+  const ids = selectedCellIds.value.filter((id) => !isBomOverlayNode({ id }));
   const explicitlySelectedEdges = new Set(selectedEdgeIds.value);
   if (ids.length === 0 && explicitlySelectedEdges.size === 0) return;
   const idSet = new Set(ids);

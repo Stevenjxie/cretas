@@ -9,6 +9,10 @@ const activeTab = ref('materials');
 const props = defineProps<{
   initialProductTypeId?: string;
   initialWorkflowRevisionId?: number | null;
+  /** 打开时直接定位到某个 BOM 类别页签(RAW/AUXILIARY/PACKAGING/BYPRODUCT)。
+   *  透传给 BomContent, 让 ProductProcessWorkflowEditor 的「配置包材」入口
+   *  能直接落在包材页签, 不用用户自己再点一次页签。 */
+  initialCategory?: string;
 }>();
 
 // BOM 是本页默认且最常用的首屏内容，随统一页一次加载，避免“外壳 chunk → BOM chunk”
@@ -51,6 +55,7 @@ watch(() => route.query.tab, syncTabFromQuery);
           <BomContent
             :initial-product-type-id="props.initialProductTypeId"
             :initial-workflow-revision-id="props.initialWorkflowRevisionId"
+            :initial-category="props.initialCategory"
           />
         </el-tab-pane>
         <el-tab-pane label="转换率" name="conversion">
