@@ -5,6 +5,8 @@ import com.cretas.aims.dto.common.PageRequest;
 import com.cretas.aims.dto.common.PageResponse;
 import com.cretas.aims.dto.material.MaterialBatchDTO;
 import com.cretas.aims.service.MaterialBatchService;
+import com.cretas.aims.service.finding.FindingService;
+import com.cretas.aims.service.finding.FindingTextRenderer;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
@@ -26,6 +28,12 @@ public class MaterialStockSummaryTool extends AbstractBusinessTool {
 
     @Autowired
     private MaterialBatchService materialBatchService;
+
+    @Autowired
+    private FindingService findingService;
+
+    @Autowired
+    private FindingTextRenderer findingTextRenderer;
 
     @Override
     public String getToolName() {
@@ -106,18 +114,27 @@ public class MaterialStockSummaryTool extends AbstractBusinessTool {
         List<MaterialBatchDTO> batches = batchPage.getContent();
         long total = batchPage.getTotalElements();
 
-        List<Map<String, Object>> lowStockWarnings = materialBatchService.getLowStockWarnings(factoryId);
-        int lowStock = lowStockWarnings.size();
+        // 低库存不再由本 Tool 直接查询 —— 统一走发现层，避免同一口径在两处各写一遍
+        // (见 ListSummaryServiceImpl.java:43-50 的 footer/KPI 口径漂移事故)。
+        FindingService.Result findingResult = findingService.detectInline(factoryId, "inventory");
+        int lowStock = findingResult.countsByCode().getOrDefault("LOW_STOCK", 0);
 
         Map<String, Object> result = new HashMap<>();
         result.put("totalBatches", total);
         result.put("lowStockCount", lowStock);
         result.put("batches", batches.size() > 20 ? batches.subList(0, 20) : batches);
+        result.put("findings", findingResult.findings());
+
+        String findingsText = findingTextRenderer.renderInline(findingResult);
+        result.put("findingsText", findingsText);
 
         StringBuilder sb = new StringBuilder();
         sb.append("库存汇总：");
         sb.append("总批次数: ").append(total);
         sb.append("，低库存预警: ").append(lowStock).append("个");
+        if (!findingsText.isEmpty()) {
+            sb.append("\n\n").append(findingsText);
+        }
 
         result.put("message", sb.toString());
 
