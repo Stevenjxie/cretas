@@ -204,6 +204,15 @@ BOM 里那份标准值，下游没有消费者。
 
 > **标准成本 = 辅料 + 包材**
 
+⚠️ **这句话必须指明是哪条成本路径 —— 实测有两条, 归集范围不同**（Phase 1 实施时因未区分, 一度写出错误的代码注释）:
+
+| 路径 | 归集范围 | 依据 |
+|---|---|---|
+| `BomRecipeServiceImpl` (写 `bom_recipes.total_material_cost`) | **辅料 + 包材** | 有 `seasoningCost()` 走 `bom_seasoning_items` |
+| `BomServiceImpl.calculateProductCost` (`GET /bom/cost-summary`) | **包材 only** | 只读 `bom_recipe_items`, 从不 join 调料表; Phase 1 后又按类别过滤 |
+
+引用「标准成本」时必须说清是哪一条。前端 BOM 页成本卡读的是后者(包材 only)。
+
 这不是缺陷，是这个产品的口径：**BOM 是配方规格，不是成本卡**。真实成本在批次结算时由实际投料 + 实际工时汇总。
 
 前端其实已经在小心处理这件事 —— BOM 页总成本标题在有物料没配用量时会自动从「当前总成本」切成「**当前归集成本**」（`index.vue:2276`）。
