@@ -87,6 +87,48 @@
         </template>
       </el-alert>
 
+      <!--
+        画布展示的是「可编辑版本」, 它是草稿时画布内容 ≠ 产线在跑的配方。
+        画布自身不显示 BOM 版本状态, 不说这句话用户就会以为已经配好了。
+      -->
+      <el-alert
+        v-if="bomDraftNotices.length > 0"
+        class="workflow-bom-alert"
+        type="warning"
+        :closable="false"
+        show-icon
+        data-testid="bom-draft-notice"
+      >
+        <template #title>
+          {{ bomDraftNotices.map((item) => `${item.productName} 草稿 v${item.draftVersion ?? '-'}`).join('、') }}
+          尚未生效
+        </template>
+        <template #default>
+          <span>
+            画布上的辅料/包材是这份草稿的内容；生产仍使用{{
+              bomDraftNotices[0]?.activeVersion == null
+                ? '旧配方（该产品还没有任何生效版本）'
+                : `生效版 v${bomDraftNotices[0]?.activeVersion}`
+            }}。生效后才会被之后新建的生产计划采用。
+          </span>
+          <el-button
+            link
+            type="primary"
+            :loading="activatingBomDraft"
+            data-testid="bom-draft-activate"
+            @click="activateBomDraft(bomDraftNotices[0])"
+          >
+            生效该草稿 →
+          </el-button>
+          <el-button
+            link
+            @click="goToBomManagement(bomDraftNotices[0]?.productTypeId)"
+          >
+            去 BOM 页查看
+          </el-button>
+        </template>
+      </el-alert>
+
       <el-alert
         v-if="bomMissingProducts.length > 0"
         class="workflow-bom-alert"
@@ -681,7 +723,8 @@ import {
   type BomOverlaySourceNode,
   type BomOverlaySourceNodeData,
 } from './bomOverlay';
-import { isWritableRecipe, pickEditableRecipe } from './bomEditableRecipe';
+import { buildDraftBomNotice, isWritableRecipe, pickEditableRecipe } from './bomEditableRecipe';
+import type { DraftBomNotice } from './bomEditableRecipe';
 import { createBomDraftEnsurer } from '@/views/production/bom/bomDraftLifecycle';
 import { markersForAuxiliaryRow, markersForPackagingRow } from './bomOverlayMarkers';
 import type { AuxiliaryCellRow, PackagingCellRow } from './bomOverlayTypes';
@@ -925,6 +968,43 @@ const bomOverlayRecipeIdByProcess = ref<Record<string, string>>({});
 const bomOverlayRecipeWritable = ref<Record<string, boolean>>({});
 // recipeId → 归属产品 id, ensureDraft 需要按产品建草稿。
 const bomOverlayProductIdByRecipe = ref<Record<string, string>>({});
+/** 画布当前展示的是草稿的那些产品; 非空即代表「所见 ≠ 产线在跑的」。 */
+const bomDraftNotices = ref<DraftBomNotice[]>([]);
+const activatingBomDraft = ref(false);
+
+/**
+ * 生效是影响生产的动作(之后新建的生产计划会读新快照), 与 BOM 页一样先确认再执行。
+ * 不在这里自己判「能不能生效」—— 后端做权威校验, 前端复述一遍只会两处口径打架。
+ */
+async function activateBomDraft(notice: DraftBomNotice | undefined): Promise<void> {
+  if (!notice || activatingBomDraft.value) return;
+  try {
+    await ElMessageBox.confirm(
+      `激活后 ${notice.productName} 草稿 v${notice.draftVersion ?? '-'} 将成为唯一生效 BOM。`
+      + '仅之后新建的生产计划采用此版本；已有生产计划快照不受影响。确认生效？',
+      '生效 BOM 草稿',
+      { confirmButtonText: '生效', cancelButtonText: '取消', type: 'warning' },
+    );
+  } catch {
+    return;
+  }
+
+  activatingBomDraft.value = true;
+  try {
+    const response = await bomRecipeApi.activate(props.factoryId, notice.recipeId);
+    if (!response?.success) {
+      ElMessage.error(response?.message || '生效失败，请到 BOM 页查看具体原因');
+      return;
+    }
+    ElMessage.success(`${notice.productName} 草稿已生效`);
+    await loadBomOverlayData();
+    await loadProductBom({ force: true });
+  } catch (error) {
+    ElMessage.error(error instanceof Error ? error.message : '生效失败，请稍后重试');
+  } finally {
+    activatingBomDraft.value = false;
+  }
+}
 
 /**
  * 生效版不可写, 但用户在画布上点「+ 加辅料」时不该被甩去别的页面自己克隆。
@@ -1924,6 +2004,7 @@ async function loadBomOverlayData(): Promise<void> {
     bomOverlayPackagingByOutput.value = {};
     bomOverlayRecipeIdByProcess.value = {};
     bomOverlayProductIdByRecipe.value = {};
+    bomDraftNotices.value = [];
     bomOverlayRecipeWritable.value = {};
     bomOverlaySeasoningWorkspaceByRecipe.value = {};
     bomOverlaySubstitutesByRecipe.value = {};
@@ -1941,9 +2022,10 @@ async function loadBomOverlayData(): Promise<void> {
     const recipeResponses = await Promise.all(uniqueSkuIds.map(async (skuId) => {
       try {
         const response = await bomRecipeApi.getVersionsByProduct(factoryId, skuId);
-        return { skuId, recipe: response?.success ? pickEditableRecipe(response.data ?? []) : null };
+        const versions = response?.success ? (response.data ?? []) : [];
+        return { skuId, recipe: pickEditableRecipe(versions), versions };
       } catch {
-        return { skuId, recipe: null };
+        return { skuId, recipe: null, versions: [] };
       }
     }));
     if (!stillCurrent()) return;
@@ -1956,8 +2038,16 @@ async function loadBomOverlayData(): Promise<void> {
     // must-fix #8: 联合生产标注要报"当前实际生效的是哪个产出的配方" —— 用产出名做人话
     // 标签(配方本身没有独立的展示名), 按 recipeId 建索引, 供下面 auxiliaryByProcess 用。
     const outputNameByRecipe: Record<string, string> = {};
-    recipeResponses.forEach(({ skuId, recipe }) => {
+    const draftNotices: DraftBomNotice[] = [];
+    recipeResponses.forEach(({ skuId, recipe, versions }) => {
       if (!recipe?.id) return;
+      const outputNodeForNotice = finishedNodes.find((node) => String(node.data.skuId) === skuId);
+      const notice = buildDraftBomNotice(
+        skuId,
+        String(outputNodeForNotice?.data.name ?? '未命名产出'),
+        versions,
+      );
+      if (notice) draftNotices.push(notice);
       recipeIdBySku[skuId] = recipe.id;
       bomOverlayRecipeWritable.value[recipe.id] = isWritableRecipe(recipe);
       // ensureDraft 要按产品建草稿, 所以得能从 recipeId 反查它归哪个产品。
@@ -2063,6 +2153,7 @@ async function loadBomOverlayData(): Promise<void> {
     bomOverlayPackagingByOutput.value = packagingByOutput;
     bomOverlayAuxiliaryByProcess.value = auxiliaryByProcess;
     bomOverlayProductIdByRecipe.value = productIdByRecipe;
+    bomDraftNotices.value = draftNotices;
     bomOverlayRecipeIdByProcess.value = recipeIdByProcess;
     bomOverlaySeasoningWorkspaceByRecipe.value = workspaceByRecipe;
     bomOverlaySubstitutesByRecipe.value = substitutesByRecipe;
