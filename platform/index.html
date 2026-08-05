@@ -14,8 +14,8 @@
 <meta property="og:image" content="https://cretaceousfuture.com/assets/img/og-card.jpg">
 <meta property="og:url" content="https://cretaceousfuture.com/">
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 15 15'%3E%3Crect x='1' y='1' width='5.5' height='5.5' rx='1.5' fill='%23111'/%3E%3Crect x='8.5' y='1' width='5.5' height='5.5' rx='1.5' fill='%23111'/%3E%3Crect x='1' y='8.5' width='5.5' height='5.5' rx='1.5' fill='%23111'/%3E%3Crect x='8.5' y='8.5' width='5.5' height='5.5' rx='2.75' fill='%2300b377'/%3E%3C/svg%3E">
-<link rel="stylesheet" href="/css/v6.css?v=20260805c">
-<link rel="stylesheet" href="/css/v6-motion.css?v=20260805c">
+<link rel="stylesheet" href="/css/v6.css?v=20260805d">
+<link rel="stylesheet" href="/css/v6-motion.css?v=20260805d">
 <script>document.documentElement.classList.add('v6-js')</script>
 <style>
 /* Reveal must never gate content: without JS (or if the observer never fires)
@@ -302,7 +302,7 @@ html:not(.v6-js) .v6-reveal{opacity:1;transform:none}
   <div class="v6-glow"></div>
   <div class="v6-hero" data-v6-eye>
     <div class="v6-hero-mask">
-      <img fetchpriority="high" decoding="async" src="/assets/img/hero-kitchen.jpg" width="1440" height="810" alt="暖光后厨里，老师傅正把卤味装进青花瓷盘，AI 正在识别工序与出品">
+      <picture><source type="image/webp" srcset="/assets/img/hero-kitchen-480.webp 480w, /assets/img/hero-kitchen-768.webp 768w, /assets/img/hero-kitchen-1200.webp 1200w" sizes="100vw"><img fetchpriority="high" decoding="async" width="1440" height="810" alt="暖光后厨里，老师傅正把卤味装进青花瓷盘，AI 正在识别工序与出品" src="/assets/img/hero-kitchen.jpg"></picture>
     </div>
     <div class="v6-hero-scrim"></div>
 
@@ -337,21 +337,21 @@ html:not(.v6-js) .v6-reveal{opacity:1;transform:none}
   <div class="biz-grid">
 
     <a class="v6-photo-card v6-reveal" href="/solutions-factory.html" style="box-shadow:0 16px 38px rgba(92,64,38,.22)">
-      <img decoding="async" src="/assets/img/warehouse.jpg" width="800" height="532" style="object-position:center 30%" alt="食品工厂立体货架仓储，AI 逐个库位核对入库物料">
+      <picture><source type="image/webp" srcset="/assets/img/warehouse-480.webp 480w, /assets/img/warehouse-768.webp 768w" sizes="(max-width:900px) 100vw, 560px"><img decoding="async" width="800" height="532" style="object-position:center 30%" alt="食品工厂立体货架仓储，AI 逐个库位核对入库物料" loading="lazy" src="/assets/img/warehouse.jpg"></picture>
       <span class="card-tag">库位 A-12 · 猪前腿 300kg ✓</span>
       <div class="shade"></div>
       <div class="title"><b>食品工厂</b><small>从一块原料到一张发票，AI 全程跟单</small></div>
     </a>
 
     <a class="v6-photo-card v6-reveal" href="/solutions-restaurant.html" style="box-shadow:0 16px 38px rgba(70,42,26,.24);transition-delay:.05s">
-      <img decoding="async" src="/assets/img/dining.jpg" width="1440" height="810" alt="中式连锁餐厅门店内景，木质餐台与明档厨房暖光，AI 实时核算每家店的账">
+      <picture><source type="image/webp" srcset="/assets/img/dining-480.webp 480w, /assets/img/dining-768.webp 768w, /assets/img/dining-1200.webp 1200w" sizes="(max-width:900px) 100vw, 560px"><img decoding="async" width="1440" height="810" alt="中式连锁餐厅门店内景，木质餐台与明档厨房暖光，AI 实时核算每家店的账" loading="lazy" src="/assets/img/dining.jpg"></picture>
       <span class="card-tag">单品毛利 62% · 正常</span>
       <div class="shade"></div>
       <div class="title"><b>餐饮连锁</b><small>每家店的账，AI 替你盯</small></div>
     </a>
 
     <a class="v6-photo-card v6-reveal" href="/solutions-logistics.html" style="box-shadow:0 16px 38px rgba(60,74,90,.2);transition-delay:.1s">
-      <img decoding="async" src="/assets/img/truck.jpg" width="1440" height="810" style="object-position:center 88%" alt="冷链配送货车行驶在公路上，AI 优化装载与路线">
+      <picture><source type="image/webp" srcset="/assets/img/truck-480.webp 480w, /assets/img/truck-768.webp 768w, /assets/img/truck-1200.webp 1200w" sizes="(max-width:900px) 100vw, 560px"><img decoding="async" width="1440" height="810" style="object-position:center 88%" alt="冷链配送货车行驶在公路上，AI 优化装载与路线" loading="lazy" src="/assets/img/truck.jpg"></picture>
       <span class="card-tag">6 趟 → 5 趟 · 省 ¥430/天</span>
       <div class="shade"></div>
       <div class="title"><b>物流配送</b><small>十辆车，一个人调</small></div>
@@ -369,7 +369,7 @@ html:not(.v6-js) .v6-reveal{opacity:1;transform:none}
 
 <!-- 视觉 AI 全宽带 -->
 <section class="band">
-  <div class="bmask"><img decoding="async" src="/assets/img/band-kitchen.jpg" width="1600" height="1067" alt="后厨灶台实时画面，火光中 AI 识别框正在跟踪厨师作业"></div>
+  <div class="bmask"><picture><source type="image/webp" srcset="/assets/img/band-kitchen-480.webp 480w, /assets/img/band-kitchen-768.webp 768w, /assets/img/band-kitchen-1200.webp 1200w, /assets/img/band-kitchen-1600.webp 1600w" sizes="100vw"><img decoding="async" width="1600" height="1067" alt="后厨灶台实时画面，火光中 AI 识别框正在跟踪厨师作业" loading="lazy" src="/assets/img/band-kitchen.jpg"></picture></div>
   <div class="bscrim"></div>
   <div class="bscan"></div>
   <div class="bdet bd1"><span>操作员 · 分割工序 97.6%</span></div>
@@ -386,11 +386,11 @@ html:not(.v6-js) .v6-reveal{opacity:1;transform:none}
   <h2 class="v6-reveal">不是概念图，是每天在跑的系统</h2>
   <p class="sub v6-reveal">下面每一张都是真实界面，驾驶舱、工作流编辑器、调度地图，客户每天就用这些干活。</p>
   <div class="srow">
-    <figure><img loading="lazy" decoding="async" class="v6-shot" src="/assets/img/shots/dashboard.png" width="1280" height="805" alt="餐饮经营驾驶舱：营收、客单、订单与品类占比一屏看清">
+    <figure><picture><source type="image/webp" srcset="/assets/img/shots/dashboard-480.webp 480w, /assets/img/shots/dashboard-768.webp 768w, /assets/img/shots/dashboard-1200.webp 1200w" sizes="(max-width:900px) 100vw, 1100px"><img loading="lazy" decoding="async" class="v6-shot" width="1280" height="805" alt="餐饮经营驾驶舱：营收、客单、订单与品类占比一屏看清" src="/assets/img/shots/dashboard.png"></picture>
       <figcaption><b>经营驾驶舱</b>，营收、毛利、门店对比，一屏看清</figcaption></figure>
-    <figure><img loading="lazy" decoding="async" class="v6-shot" src="/assets/img/shots/workflow.png" width="1280" height="662" alt="可视化工作流编辑器：拖拽编排工序与物料流转">
+    <figure><picture><source type="image/webp" srcset="/assets/img/shots/workflow-480.webp 480w, /assets/img/shots/workflow-768.webp 768w, /assets/img/shots/workflow-1200.webp 1200w" sizes="(max-width:900px) 100vw, 1100px"><img loading="lazy" decoding="async" class="v6-shot" width="1280" height="662" alt="可视化工作流编辑器：拖拽编排工序与物料流转" src="/assets/img/shots/workflow.png"></picture>
       <figcaption><b>工作流编辑器</b>，工序怎么走，拖一拖就改</figcaption></figure>
-    <figure><img loading="lazy" decoding="async" class="v6-shot" src="/assets/img/shots/logistics.png" width="1280" height="720" alt="物流调度工作台：地图路线与车次列表并排">
+    <figure><picture><source type="image/webp" srcset="/assets/img/shots/logistics-480.webp 480w, /assets/img/shots/logistics-768.webp 768w, /assets/img/shots/logistics-1200.webp 1200w" sizes="(max-width:900px) 100vw, 1100px"><img loading="lazy" decoding="async" class="v6-shot" width="1280" height="720" alt="物流调度工作台：地图路线与车次列表并排" src="/assets/img/shots/logistics.png"></picture>
       <figcaption><b>调度工作台</b>，十辆车的排线，AI 一分钟出方案</figcaption></figure>
   </div>
 </section>
@@ -529,16 +529,16 @@ html:not(.v6-js) .v6-reveal{opacity:1;transform:none}
   </div>
 </footer>
 
-<script src="/js/v6.js?v=20260805c"></script>
+<script src="/js/v6.js?v=20260805d"></script>
 <script src="/js/gsap.min.js"></script>
 <script src="/js/ScrollTrigger.min.js"></script>
 <script src="/js/lenis.min.js"></script>
-<script src="/js/v6-eye.js?v=20260805c"></script>
-<script src="/js/v6-premium.js?v=20260805c"></script>
+<script src="/js/v6-eye.js?v=20260805d"></script>
+<script src="/js/v6-premium.js?v=20260805d"></script>
 <!-- 七个滚动/指针签名动效 + 边界光束 + 思考球。必须在 v6-premium.js 之后
      (要覆盖它建立的触发器), 且在 v6-intro.js 之前 (要先挂上 v6:enter 监听) -->
-<script src="/js/v6-motion.js?v=20260805c"></script>
-<script src="/js/v6-intro.js?v=20260805c"></script>
+<script src="/js/v6-motion.js?v=20260805d"></script>
+<script src="/js/v6-intro.js?v=20260805d"></script>
 <script>
 /* Safety net: guarantee no reveal section ever stays hidden (slow JS / headless / IO miss). */
 window.addEventListener('load', function(){
