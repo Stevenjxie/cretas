@@ -21,8 +21,11 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * cretas.demo.enabled 关闭) 对它完全不生效，唯一写保护是 controller 内
  * 单点的 ALLOWED_SENSITIVITY_LEVELS={"LOW"} 判断。
  *
- * <p>本测试锁住"三个 demo 租户都在名单内"这一事实，防止后续有人重排/精简
+ * <p>本测试锁住"两个 demo 租户都在名单内"这一事实，防止后续有人重排/精简
  * 这行配置时把 F_DEMO 悄悄漏掉（写闸失效是静默的，线上不会报错）。
+ *
+ * <p>2026-08-05 租户收敛: DEMO_REST 已停用并从本名单移除 —— 见
+ * {@code DemoIdentityDisabledTest}。本类不再断言 DEMO_REST 在名单内。
  *
  * <p>注意 DEMO_LOGISTICS 是**有意**不在名单内的（排线调度演示需要真实写操作），
  * 一并断言，防止有人"顺手补全"把它加进去锁死物流演示。
@@ -55,11 +58,17 @@ class DemoFactoryGateConfigTest {
     }
 
     @Test
-    @DisplayName("既有两个 demo 租户仍在名单内 — 防重排时误删")
+    @DisplayName("既有 demo 租户仍在名单内 — 防重排时误删")
     void existingDemoTenantsRemainGated() throws Exception {
         String value = demoFactoryIdsValue();
-        assertTrue(value.contains("DEMO_REST"), "DEMO_REST 必须仍在写闸名单内");
         assertTrue(value.contains("DEMO_FACTORY2"), "DEMO_FACTORY2 必须仍在写闸名单内");
+    }
+
+    @Test
+    @DisplayName("已停用的 DEMO_REST 不再在名单内 — 2026-08-05 租户收敛")
+    void demoRestNoLongerGated() throws Exception {
+        assertTrue(!demoFactoryIdsValue().contains("DEMO_REST"),
+                "DEMO_REST 已随租户收敛停用, 不应再出现在 " + DEMO_FACTORY_IDS_KEY);
     }
 
     @Test

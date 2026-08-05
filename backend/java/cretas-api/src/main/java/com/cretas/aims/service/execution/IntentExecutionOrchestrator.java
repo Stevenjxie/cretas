@@ -242,7 +242,8 @@ public class IntentExecutionOrchestrator {
     // P1 读写分块 §4.5 demo 写闸: 与 DemoReadOnlyInterceptor 同一配置源 (cretas.demo.factory-ids,
     // 默认 DEMO_REST,DEMO_FACTORY)。AI 确认执行阶段拦截 demo 租户真实写入 — 封住 HTTP 层
     // 放行 /ai-intents/ POST 留下的缺口。名单内租户恒拦 (不随 cretas.demo.enabled 关闭, fail-closed)。
-    @Value("${cretas.demo.factory-ids:DEMO_REST,DEMO_FACTORY2}")
+    // 2026-08-05: DEMO_REST 随租户收敛停用, 从 fallback 移除 (与 application.properties 同步)。
+    @Value("${cretas.demo.factory-ids:DEMO_FACTORY2}")
     private String demoFactoryIdsCsv;
 
     /** 通用短回复集合 */
@@ -1759,8 +1760,25 @@ public class IntentExecutionOrchestrator {
         return Optional.empty();
     }
 
+    /**
+     * 餐饮租户判定的唯一语义: domain 是权威, ID 前缀只是 domain 拿不到时的兜底。
+     * MOCK_REST 这类 id 不含 RES_/REST_ 前缀的租户只能靠 domain 认出来。
+     */
+    static boolean isRestaurantTenantId(String factoryId, String factoryDomain) {
+        if ("RESTAURANT".equalsIgnoreCase(factoryDomain)) {
+            return true;
+        }
+        if (factoryId == null || factoryId.isBlank()) {
+            return false;
+        }
+        String normalized = factoryId.trim().toUpperCase(Locale.ROOT);
+        return "DEMO_REST".equals(normalized)
+                || normalized.startsWith("RES_")
+                || normalized.startsWith("REST_");
+    }
+
     private boolean isRestaurantFactoryId(String factoryId) {
-        return factoryId != null && (factoryId.startsWith("RES_") || "DEMO_REST".equalsIgnoreCase(factoryId));
+        return isRestaurantTenantId(factoryId, resolveFactoryDomainSafe(factoryId));
     }
 
     /**
@@ -3514,7 +3532,7 @@ public class IntentExecutionOrchestrator {
     }
 
     boolean hasRestaurantOwnerActionSignal(String factoryId, Map<String, Object> context) {
-        if (isRestaurantOwnerActionFactory(factoryId, null)) {
+        if (isRestaurantOwnerActionFactory(factoryId, resolveFactoryDomainSafe(factoryId))) {
             return true;
         }
         if (context == null || context.isEmpty()) {

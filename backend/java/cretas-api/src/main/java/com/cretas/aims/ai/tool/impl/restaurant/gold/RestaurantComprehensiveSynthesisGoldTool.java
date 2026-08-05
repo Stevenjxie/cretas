@@ -77,9 +77,8 @@ public class RestaurantComprehensiveSynthesisGoldTool extends GoldBackedRestaura
 
     /**
      * Keep the caller tenant for synthesis so Python can select the correct
-     * fact tenant per dimension. The public demo uses the full POS alias for
-     * sales and reviews, but its seeded procurement and external-dimension
-     * facts remain under {@code DEMO_REST}.
+     * fact tenant per dimension. Each tenant's seeded Gold data is read
+     * directly without aliasing.
      */
     @Override
     protected String resolveGoldFactoryId(String factoryId) {

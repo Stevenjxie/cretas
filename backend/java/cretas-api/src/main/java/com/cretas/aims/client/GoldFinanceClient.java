@@ -1397,15 +1397,13 @@ public class GoldFinanceClient {
      * 后 fall through，绝不向上抛"), belt-and-suspenders in case something
      * other than this HTTP call throws.
      *
-     * @param factoryId    tenant id — the RAW factoryId, deliberately NOT
-     *                     passed through {@code resolveGoldFactoryId}
-     *                     (DEMO_REST → RES_3101_009 aliasing). The Python
-     *                     restaurant-intent path handles DEMO_REST directly
+     * @param factoryId    tenant id — the RAW factoryId, not passed through
+     *                     {@code resolveGoldFactoryId}. The Python
+     *                     restaurant-intent path handles each tenant directly
      *                     against its own seeded Gold data (V20260706_01
      *                     migration), matching chat.py's existing
-     *                     factory_id_hdr usage at its 3 SSE call sites —
-     *                     aliasing here would look up the wrong tenant's
-     *                     restaurant-ops rows (design section 4).
+     *                     factory_id_hdr usage at its 3 SSE call sites
+     *                     (design section 4).
      * @param userInput    the user's free-form question; {@code null}/blank
      *                     short-circuits to {@code null} without a network
      *                     call (mirrors the Tool-side "userInput 空 → 跳过"

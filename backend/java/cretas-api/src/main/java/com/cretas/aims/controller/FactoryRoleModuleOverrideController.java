@@ -29,8 +29,18 @@ public class FactoryRoleModuleOverrideController {
     private static final Set<String> ALLOWED_MODULES = Set.of(
         "dashboard","production","warehouse","quality","procurement","sales",
         "hr","equipment","finance","system","analytics","scheduling",
-        "work_report","inventory","report","rd","restaurant");
+        "work_report","inventory","report","rd","restaurant",
+        // 2026-08-05 餐饮四部门驾驶舱细分权限。语义见 permission.ts:552:
+        //   最终 = min(restaurant 上限, 该部门声明值 ?? 上限)
+        // 大小写敏感, 必须与前端 ModulePermissions 的键逐字一致。
+        "restaurantOps","restaurantMarketing","restaurantHr","restaurantFinance");
     private static final Set<String> ALLOWED_LEVELS = Set.of("rw","r","w","-");
+
+    static void assertModuleAllowed(String module) {
+        if (!ALLOWED_MODULES.contains(module)) {
+            throw new IllegalArgumentException("无效模块: " + module);
+        }
+    }
 
     private final FactoryModuleConfigRepository factoryConfigRepo;
     private final PermissionService permissionService;
@@ -59,9 +69,7 @@ public class FactoryRoleModuleOverrideController {
             @PathVariable String module,
             @RequestParam(required = false) String level) {
 
-        if (!ALLOWED_MODULES.contains(module)) {
-            throw new IllegalArgumentException("无效模块: " + module);
-        }
+        assertModuleAllowed(module);
         if (level != null && !ALLOWED_LEVELS.contains(level)) {
             throw new IllegalArgumentException("无效权限级别: " + level);
         }
