@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { buildDraftBomNotice, isWritableRecipe, pickEditableRecipe } from '../bomEditableRecipe';
+import {
+  buildDraftBomNotice,
+  isWritableRecipe,
+  pickEditableRecipe,
+  pickOwningProductId,
+} from '../bomEditableRecipe';
 
 /**
  * 这些用例钉的是 2026-08-05 prod 实测到的死锁:
@@ -68,6 +73,30 @@ describe('画布解析可编辑 BOM 版本', () => {
     it('无版本时不提示而不是抛错', () => {
       expect(buildDraftBomNotice('p3', 'z', [])).toBeNull();
       expect(buildDraftBomNotice('p3', 'z', null)).toBeNull();
+    });
+  });
+
+  describe('冷启动: 一条 BOM 版本都没有时, 靠图上的终端产出定归属', () => {
+    it('唯一产出时能定归属', () => {
+      expect(pickOwningProductId([{ skuId: 'sku-1' }])).toBe('sku-1');
+    });
+
+    it('同一产出重复出现仍算唯一', () => {
+      expect(pickOwningProductId([{ skuId: 'sku-1' }, { skuId: 'sku-1' }])).toBe('sku-1');
+    });
+
+    it('联合生产(多产出)不猜 —— 记到哪份配方是业务决策', () => {
+      expect(pickOwningProductId([{ skuId: 'sku-1' }, { skuId: 'sku-2' }])).toBeNull();
+    });
+
+    it('产出未绑定 SKU 时不算数', () => {
+      expect(pickOwningProductId([{ skuId: null }, { skuId: '' }])).toBeNull();
+      expect(pickOwningProductId([{ skuId: null }, { skuId: 'sku-9' }])).toBe('sku-9');
+    });
+
+    it('空输入返回 null 而不是抛错', () => {
+      expect(pickOwningProductId([])).toBeNull();
+      expect(pickOwningProductId(undefined)).toBeNull();
     });
   });
 

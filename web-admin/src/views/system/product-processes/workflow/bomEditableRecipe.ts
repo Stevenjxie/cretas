@@ -48,6 +48,28 @@ export function isWritableRecipe(recipe: RecipeVersionLike | null | undefined): 
   return upper(recipe?.status) === 'DRAFT';
 }
 
+export interface OwningOutputLike {
+  skuId?: string | null;
+}
+
+/**
+ * 该工序的辅料该记到哪个成品的 BOM 上。
+ *
+ * 有 BOM 时靠 recipe 反查即可; 但产品一条 BOM 版本都没有时没有 recipe 可查
+ * (冷启动: 画布刚画完工序, 还没建过 BOM), 只能从图上的终端产出反推。
+ *
+ * ⛔ 只有唯一产出时才敢断定归属。联合生产(多个终端产出共享工序)下, 一道工序的
+ * 辅料记到哪份配方是业务决策, 代码猜一个等于替用户做主 —— 返回 null 让调用方
+ * 引导用户从产出侧入口进(那里产出是明确的)。
+ */
+export function pickOwningProductId(finishedOutputs: OwningOutputLike[] | null | undefined): string | null {
+  const withSku = (finishedOutputs ?? [])
+    .map((item) => (item.skuId == null ? '' : String(item.skuId)))
+    .filter((id) => id.length > 0);
+  const unique = [...new Set(withSku)];
+  return unique.length === 1 ? unique[0] : null;
+}
+
 export interface DraftBomNotice {
   productTypeId: string;
   productName: string;

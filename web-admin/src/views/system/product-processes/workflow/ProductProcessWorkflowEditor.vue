@@ -746,7 +746,12 @@ import {
   type BomOverlaySourceNode,
   type BomOverlaySourceNodeData,
 } from './bomOverlay';
-import { buildDraftBomNotice, isWritableRecipe, pickEditableRecipe } from './bomEditableRecipe';
+import {
+  buildDraftBomNotice,
+  isWritableRecipe,
+  pickEditableRecipe,
+  pickOwningProductId,
+} from './bomEditableRecipe';
 import type { DraftBomNotice } from './bomEditableRecipe';
 import { createBomDraftEnsurer } from '@/views/production/bom/bomDraftLifecycle';
 import { markersForAuxiliaryRow, markersForPackagingRow } from './bomOverlayMarkers';
@@ -1040,13 +1045,29 @@ const ensureBomDraftRecipe = createBomDraftEnsurer(
   async () => { await loadBomOverlayData(); },
 );
 
+/**
+ * 该工序的辅料记到哪个成品的 BOM 上。有 BOM 时靠 recipe 反查; 冷启动(零版本)时
+ * 没有 recipe 可查, 从图上的终端产出反推 —— 见 pickOwningProductId 的取舍说明。
+ */
+function resolveProductForProcess(processNodeId: string): string | null {
+  const viaRecipe = bomOverlayRecipeIdByProcess.value[processNodeId];
+  if (viaRecipe) return bomOverlayProductIdByRecipe.value[viaRecipe] ?? null;
+  return pickOwningProductId(
+    flowNodes.value
+      .filter((node) => node.data?.kind === 'FINISHED_GOOD')
+      .map((node) => ({ skuId: node.data?.skuId == null ? null : String(node.data.skuId) })),
+  );
+}
+
 /** 返回可写的 recipeId; 当前解析到的若非草稿, 先就地建/取草稿再重载浮层。 */
 async function resolveWritableRecipeId(
   productTypeId: string,
-  recipeId: string,
+  recipeId: string | undefined,
   reread: () => string | undefined,
 ): Promise<string | null> {
-  if (bomOverlayRecipeWritable.value[recipeId]) return recipeId;
+  // recipeId 为空 = 该产品一条 BOM 版本都没有(冷启动)。与「有版本但不是草稿」一样,
+  // 都靠 ensureDraft 收敛成一个可写草稿 —— 不必让用户先跑去别的页面建首版。
+  if (recipeId && bomOverlayRecipeWritable.value[recipeId]) return recipeId;
   try {
     await ensureBomDraftRecipe(props.factoryId, productTypeId);
   } catch (error) {
@@ -1115,11 +1136,8 @@ async function openByproductEditor(outputNodeId: string, rowId?: string): Promis
     ElMessage.warning('未找到对应的产出节点，请刷新后重试');
     return;
   }
+  // 同辅料/包材: 零版本(冷启动)不早退, 交给 ensureDraft 建首版草稿。
   const recipeId = bomOverlayRecipeIdByOutput.value[outputNodeId];
-  if (!recipeId) {
-    ElMessage.warning('副产数据尚未加载完成，请稍后重试');
-    return;
-  }
   await ensureBomOverlayPackagingMaterials();
   bomOverlayByproductMaterials.value = bomOverlayPackagingMaterials.value;
 
@@ -2305,19 +2323,15 @@ async function openAuxiliaryEditor(processNodeId: string, rowId?: string): Promi
     ElMessage.info('当前无编辑权限，无法打开辅料编辑弹窗。Cell 上显示的是用量与标记，备注、单价、替代物料明细需有权限后在弹窗内查看。');
     return;
   }
+  // ⛔ 这里不能因为「没有 recipe」就早退: 该产品可能一条 BOM 版本都没有(冷启动),
+  // 那不是「数据没加载完」而是「还没建过」—— 早退会让画布在这种最常见的起点上死掉,
+  // 且提示词还是错的。归属产品能定就交给 resolveWritableRecipeId 去 ensureDraft。
   const recipeId = bomOverlayRecipeIdByProcess.value[processNodeId];
-  const workspace = recipeId ? bomOverlaySeasoningWorkspaceByRecipe.value[recipeId] : undefined;
-  const process = workspace?.processes.find((candidate) => candidate.workflowProcessNodeId === processNodeId) ?? null;
-  if (!recipeId || !workspace || !process) {
-    ElMessage.warning('辅料数据尚未加载完成，请稍后重试');
-    return;
-  }
   await ensureBomOverlayMaterials();
 
-  // 落笔前把目标换成草稿版; 生效版写调料后端一律 409(2026-08-05 prod 实测)。
-  const auxProductTypeId = bomOverlayProductIdByRecipe.value[recipeId];
+  const auxProductTypeId = resolveProductForProcess(processNodeId);
   if (!auxProductTypeId) {
-    ElMessage.warning('未能确定该工序归属的成品，请刷新后重试');
+    ElMessage.warning('未能确定该工序归属的成品；联合生产请先从产出侧的包材/副产入口建立 BOM');
     return;
   }
   const writableRecipeId = await resolveWritableRecipeId(
@@ -2382,11 +2396,8 @@ async function openPackagingEditor(outputNodeId: string, rowId?: string): Promis
     ElMessage.warning('包材数据尚未加载完成，请稍后重试');
     return;
   }
+  // 同辅料: 零版本(冷启动)不早退, 交给 ensureDraft 建首版草稿。
   const recipeId = bomOverlayRecipeIdByOutput.value[outputNodeId];
-  if (!recipeId) {
-    ElMessage.warning('包材数据尚未加载完成，请稍后重试');
-    return;
-  }
   const row = rowId
     ? bomOverlayPackagingRawByOutput.value[outputNodeId]?.find((item) => String(item.id) === rowId) ?? null
     : null;
