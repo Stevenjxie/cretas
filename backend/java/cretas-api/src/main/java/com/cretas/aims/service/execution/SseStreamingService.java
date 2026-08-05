@@ -232,7 +232,8 @@ public class SseStreamingService {
             // diverged from orchestrator's dimension-contrast-aware rewrite (卡1, PR #1914), which
             // reintroduced exactly the "same question, different entry, different answer" bug this
             // card exists to close. Single source of truth — never copy this logic again.
-            boolean restaurantTenant = isRestaurantTenantId(factoryId, resolveFactoryDomainForTenantCheck(factoryId));
+            boolean restaurantTenant = !factoryPackConstrained
+                    && isRestaurantTenantId(factoryId, resolveFactoryDomainForTenantCheck(factoryId));
             boolean requiresRestaurantSemanticPlan = tieredFirstEnabled
                     && !factoryPackConstrained
                     && !Boolean.TRUE.equals(request.getPreviewOnly())
