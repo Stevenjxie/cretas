@@ -329,21 +329,22 @@ public class AIContextServiceImpl implements AIContextService {
 
         // BOM 成本占比
         BigDecimal bomMaterialRatio = BigDecimal.ZERO;
-        BigDecimal bomLaborRatio = BigDecimal.ZERO;
-        BigDecimal bomOverheadRatio = BigDecimal.ZERO;
+        // 人工/均摊已移出 BOM 归集（getLaborCostTotal()/getOverheadCostTotal() 现为 null，非 0）。
+        // 无归集 = 没有可比基线：禁止降级为 0（0 会被下游/AI 读成"人工占比 0%"即"人工免费"这类假数据）。
+        // 保持 null，如实表示"此项无数据"（禁止降级处理，见 CLAUDE.md 核心原则1）。
+        BigDecimal bomLaborRatio = null;
+        BigDecimal bomOverheadRatio = null;
         if (bomCost != null && bomTotalCost.compareTo(BigDecimal.ZERO) > 0) {
             bomMaterialRatio = bomCost.getMaterialCostTotal().divide(bomTotalCost, 4, RoundingMode.HALF_UP)
                     .multiply(new BigDecimal("100"));
-            // 人工/均摊已移出 BOM 归集（getLaborCostTotal()/getOverheadCostTotal() 现为 null，
-            // 非 0），null-safe 按 0 处理：BOM 口径下这两项占比恒为 0，不代表实际不产生人工/均摊。
-            BigDecimal bomLaborTotal = bomCost.getLaborCostTotal() != null
-                    ? bomCost.getLaborCostTotal() : BigDecimal.ZERO;
-            BigDecimal bomOverheadTotal = bomCost.getOverheadCostTotal() != null
-                    ? bomCost.getOverheadCostTotal() : BigDecimal.ZERO;
-            bomLaborRatio = bomLaborTotal.divide(bomTotalCost, 4, RoundingMode.HALF_UP)
-                    .multiply(new BigDecimal("100"));
-            bomOverheadRatio = bomOverheadTotal.divide(bomTotalCost, 4, RoundingMode.HALF_UP)
-                    .multiply(new BigDecimal("100"));
+            if (bomCost.getLaborCostTotal() != null) {
+                bomLaborRatio = bomCost.getLaborCostTotal().divide(bomTotalCost, 4, RoundingMode.HALF_UP)
+                        .multiply(new BigDecimal("100"));
+            }
+            if (bomCost.getOverheadCostTotal() != null) {
+                bomOverheadRatio = bomCost.getOverheadCostTotal().divide(bomTotalCost, 4, RoundingMode.HALF_UP)
+                        .multiply(new BigDecimal("100"));
+            }
         }
 
         // 6. 成本差异
@@ -531,15 +532,9 @@ public class AIContextServiceImpl implements AIContextService {
         }
 
         BigDecimal bomMaterial = bomCost.getMaterialCostTotal();
-        // 人工已移出 BOM 归集（getLaborCostTotal() 现为 null，非 0），null-safe 按 0 处理：
-        // 下方"人工差异"实为"实际人工 - 0"，即全部实际人工都会显示为差异，这是口径变化的
-        // 自然结果，不是新增行为。
-        BigDecimal bomLabor = bomCost.getLaborCostTotal() != null
-                ? bomCost.getLaborCostTotal() : BigDecimal.ZERO;
 
         // 平均到单位
         BigDecimal avgActualMaterial = actualMaterial.divide(new BigDecimal(batchCount), 4, RoundingMode.HALF_UP);
-        BigDecimal avgActualLabor = actualLabor.divide(new BigDecimal(batchCount), 4, RoundingMode.HALF_UP);
 
         // 原料差异
         BigDecimal materialVariance = avgActualMaterial.subtract(bomMaterial);
@@ -557,21 +552,28 @@ public class AIContextServiceImpl implements AIContextService {
                 .isPrimarySource(materialVarianceRate.abs().compareTo(new BigDecimal("10")) > 0)
                 .build());
 
-        // 人工差异
-        BigDecimal laborVariance = avgActualLabor.subtract(bomLabor);
-        BigDecimal laborVarianceRate = bomLabor.compareTo(BigDecimal.ZERO) > 0
-                ? laborVariance.divide(bomLabor, 4, RoundingMode.HALF_UP).multiply(new BigDecimal("100"))
-                : BigDecimal.ZERO;
+        // 人工差异：BOM 不归集人工（getLaborCostTotal() 现为 null），因此没有可比基线。
+        // 禁止降级为 0 后再算"差异"——0 会让下游/AI 把全部实际人工说成"100%超支"，
+        // 这是编造出来的假结论（禁止降级处理，见 CLAUDE.md 核心原则1）。没有基线就不出该条目，
+        // 而不是用一个假基线凑出一条看似完整的记录。
+        if (bomCost.getLaborCostTotal() != null) {
+            BigDecimal bomLabor = bomCost.getLaborCostTotal();
+            BigDecimal avgActualLabor = actualLabor.divide(new BigDecimal(batchCount), 4, RoundingMode.HALF_UP);
+            BigDecimal laborVariance = avgActualLabor.subtract(bomLabor);
+            BigDecimal laborVarianceRate = bomLabor.compareTo(BigDecimal.ZERO) > 0
+                    ? laborVariance.divide(bomLabor, 4, RoundingMode.HALF_UP).multiply(new BigDecimal("100"))
+                    : BigDecimal.ZERO;
 
-        details.add(CostAIContext.CostVarianceDetail.builder()
-                .costType("LABOR")
-                .costTypeName("人工成本")
-                .bomValue(bomLabor)
-                .actualValue(avgActualLabor)
-                .variance(laborVariance)
-                .varianceRate(laborVarianceRate)
-                .isPrimarySource(laborVarianceRate.abs().compareTo(new BigDecimal("10")) > 0)
-                .build());
+            details.add(CostAIContext.CostVarianceDetail.builder()
+                    .costType("LABOR")
+                    .costTypeName("人工成本")
+                    .bomValue(bomLabor)
+                    .actualValue(avgActualLabor)
+                    .variance(laborVariance)
+                    .varianceRate(laborVarianceRate)
+                    .isPrimarySource(laborVarianceRate.abs().compareTo(new BigDecimal("10")) > 0)
+                    .build());
+        }
 
         return details;
     }
