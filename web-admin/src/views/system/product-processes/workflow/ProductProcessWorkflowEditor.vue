@@ -2063,7 +2063,7 @@ async function openAuxiliaryEditor(processNodeId: string, rowId?: string): Promi
   // 纯编辑表单、没有只读展示态(重写它不在本轮范围内), 所以这里不能替只读用户打开它;
   // 能做、且必须做的, 是把"什么都不做"换成一句解释。
   if (!canEdit.value) {
-    ElMessage.info('当前无编辑权限，无法打开辅料编辑弹窗；Cell 上已显示的用量/标记即为完整信息。');
+    ElMessage.info('当前无编辑权限，无法打开辅料编辑弹窗。Cell 上显示的是用量与标记，备注、单价、替代物料明细需有权限后在弹窗内查看。');
     return;
   }
   const recipeId = bomOverlayRecipeIdByProcess.value[processNodeId];
@@ -2089,7 +2089,7 @@ function onAuxDialogSaved(): void {
 // 包材编辑入口 —— 打开既有 BOM 抽屉并定位到包材页签, 本期不新建编辑面。
 function openPackagingEditor(outputNodeId: string, rowId?: string): void {
   if (!canEdit.value) {
-    ElMessage.info('当前无编辑权限，无法打开包材编辑抽屉；Cell 上已显示的用量/标记即为完整信息。');
+    ElMessage.info('当前无编辑权限，无法打开包材编辑抽屉。Cell 上显示的是用量与标记，备注、单价、替代物料明细需有权限后在抽屉内查看。');
     return;
   }
   const node = flowNodes.value.find((candidate) => candidate.id === outputNodeId);
