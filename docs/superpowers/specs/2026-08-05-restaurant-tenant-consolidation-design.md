@@ -298,7 +298,56 @@ Steve 要的"运营 / 市场 / 财务 / 人事"是**四部门驾驶舱**，在�
 
 运营选 `restaurant_manager` 是因为语义就是"餐饮管理/运营"，且它已在父菜单白名单内；代价是它默认多带三个部门，必须靠覆盖剥掉——**这三条剥离是本项配置里最容易漏的部分，验收必须反向确认"运营账号看不见市场/人事/财务"**，而不只确认它看得见运营。
 
-**覆盖用工厂级不用用户级**：`FactoryRoleModuleOverrideController`（`cfg.getRoleModuleOverride()`）scope 就在 `MOCK_REST`，不影响其它租户；用户级 `UserModuleAccessController` 是逐用户 GRANT/REVOKE，更碎且更容易漏。
+> ⛔ **2026-08-05 修正：上面这张表的"工厂级覆盖"列在 prod 不可执行。** 出实施计划时实测发现三件事，原方案作废，改用 §4.5.5。
+
+#### 4.5.5 真实机制与修正后的做法（实测，2026-08-05）
+
+**（1）覆盖 API 拒绝这四个键。** `FactoryRoleModuleOverrideController:62` 有 `if (!ALLOWED_MODULES.contains(module)) throw new IllegalArgumentException("无效模块")`，而 `ALLOWED_MODULES`（`:29`）只有笼统的 `restaurant`，四个部门键均不在内。**同一份白名单有第二个承载点**：`PlatformRolePermissionController:41`（L1 平台级），两处都要改。
+
+**（2）真实规则是"上限 + 细分"**（`permission.ts:552` 注释原文）：
+
+```
+最终 = min(restaurant 上限, 该部门声明值 ?? 上限)
+```
+
+即 `ceiling = rolePerms.restaurant ?? '-'`，四个部门 `final = weakerOf(ceiling, declared ?? ceiling)`。**上限是 `-` 时，四个部门声明成什么都没用。**
+
+**（3）prod 的 L1 表里没有细分行。** `platform_role_permissions` 中 `module_code like 'restaurant%'` 只有 5 行，全是笼统 `restaurant`：
+
+| role_code | restaurant（上限） | → 四部门实际 |
+|---|---|---|
+| `factory_super_admin` | rw | rw rw rw rw |
+| `restaurant_manager` | rw | rw rw rw rw |
+| `hr_admin` | **-** | 全 `-` |
+| `finance_manager` | **-** | 全 `-` |
+| `sales_manager` | **-** | 全 `-` |
+| `restaurant_owner` | **无行** | 全 `-` |
+| `restaurant_chef` | **无行** | 全 `-` |
+
+§4.5.2 那张分角色细粒度矩阵在 `permission.ts` 里，但它**只是 DB 加载失败时的 fallback**（`isDbLoaded ? dbPermissions : PERMISSION_MATRIX`，`:533`）；prod 正常加载走上表。所以 `hr_admin` 当"纯人事账号"**在 prod 四个部门一个都看不见**。
+
+**修正后的做法**（Steve 2026-08-05 拍板：补 L1 细分行 + 放开白名单）：
+
+- **两处 `ALLOWED_MODULES` 各加 4 个键** `restaurantOps` / `restaurantMarketing` / `restaurantHr` / `restaurantFinance`。
+- **Flyway migration 往 `platform_role_permissions` 补行**，每个载体角色 5 行（1 上限 + 4 细分）：
+
+  | role_code | restaurant | restaurantOps | restaurantMarketing | restaurantHr | restaurantFinance |
+  |---|---|---|---|---|---|
+  | `restaurant_manager`（运营） | rw | **rw** | `-` | `-` | `-` |
+  | `sales_manager`（市场） | rw | `-` | **rw** | `-` | `-` |
+  | `finance_manager`（财务） | rw | `-` | `-` | `-` | **rw** |
+  | `hr_admin`（人事） | rw | `-` | `-` | **rw** | `-` |
+
+**爆炸半径**：`platform_role_permissions` 是**平台全局 L1**，改它影响所有工厂的这四个角色。但 `FACTORY_TYPE_MODULE_FILTER.FACTORY = { restaurant: '-' }`（`permission.ts:326`）会把工厂型租户的 `restaurant` 强制打成 `-`，四个部门随之全关——**所以实际影响只限 RESTAURANT 型租户，而 T1 之后只剩 `MOCK_REST` 一个**。
+
+**⚠️ 两项必须记录的语义改动**：
+
+1. 把 `restaurant_manager` 收窄成"只有运营"，**全局重定义了店长**——与 `manual_chat.py:458`「店长可管理运营、市场、人事并只读财务」相矛盾。当前可接受（只剩 MOCK_REST 一个活跃餐饮租户），但**将来接入真实餐饮客户前必须重新评估**。实施时须在 migration 注释里写明这一点。
+2. 把 `hr_admin` / `finance_manager` / `sales_manager` 的 `restaurant` 上限从 `-` 抬到 `rw`，是**全局放宽**。靠 `FACTORY_TYPE_MODULE_FILTER` 兜住工厂侧，验收必须实测一个 FACTORY 型租户（如 F006）的这三个角色**看不见任何餐饮入口**。
+
+**顺带发现的既有问题（不在本轮修）**：`restaurant_owner`（餐饮老板）与 `restaurant_chef` 在 `platform_role_permissions` 里**没有任何行** → 上限 `-` → 在 prod 四个部门全看不见，与 fallback 矩阵和 `manual_chat.py:458` 声称的"餐饮老板可管理四部门"矛盾。本轮不修，记入 §8。
+
+**为什么不用用户级覆盖**：`UserModuleAccessController` 是逐用户 GRANT/REVOKE，更碎且同样受 module 白名单约束，不解决根因。
 
 **载体角色的选择依据**：`/restaurant` 父菜单的 `roles`（`menuConfig.ts:317`）是**一票否决式允许白名单**——写了就一票否决，模块权限给对了也看不见。四个载体角色 `restaurant_manager` / `sales_manager` / `finance_manager` / `hr_admin` **均已在该白名单内**（已逐个核对）。换任何不在白名单的角色，都会出现"模块权限配对了却整个餐饮组不可见"。
 
@@ -389,3 +438,4 @@ Steve 要的"运营 / 市场 / 财务 / 人事"是**四部门驾驶舱**，在�
 2. **审计 3 条真红项**：`BUSINESS_OPTIMIZATION`（narrative grounding 闸驳回 LLM 编的因果断言）、`CHANNEL_MIX` 外卖占比、`STAFFING_ADVICE` 下月人效（后者在两个租户上同型显形）。
 3. **`RES_3101_009` 聚合链为何不跑**：60 万 POS 只出 8 行 totals。停用后此问题随之封存，若将来复用该租户需重查。
 4. **`F002` 孤儿聚合行**：无门店无 POS 却有 12/75/14 行，来源不明。
+5. **`restaurant_owner` / `restaurant_chef` 在 L1 表里没有任何行** → `restaurant` 上限为 `-` → 这两个角色在 prod 的餐饮租户里四个部门驾驶舱全部看不见，与 `permission.ts` fallback 矩阵（两者均 Ops=rw，owner 四项全 rw）及 `manual_chat.py:458`「餐饮老板可管理四部门」直接矛盾。本轮 §4.5.5 只补四个载体角色的行，**刻意不顺手修这两个**（不在 Steve 拍板的范围内，且 owner 的正确权限形状需要单独确认）。
