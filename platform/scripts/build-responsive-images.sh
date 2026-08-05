@@ -28,7 +28,12 @@ total_src=0; total_out=0
 
 # 照片用有损 q=78(肉眼无损, 体积约为 JPEG 的六成);
 # 产品截图含大量文字与细线, 压太狠会糊, 用 q=88。
-for src in assets/img/*.jpg assets/img/shots/*.png; do
+# 截图目录也纳入: 这些 PNG 是整站最重的资产(单张 login-page.png 就 433KB,
+# 转 WebP 后只有 25KB —— UI 截图大片纯色, PNG 完全压不动)。
+for src in assets/img/*.jpg assets/img/shots/*.png \
+           client-request-example/screenshots/*.png \
+           factorybi-example/screenshots/*.png \
+           restaurantbi-example/screenshots/*.png; do
   [ -f "$src" ] || continue
   base="${src%.*}"; ext="${src##*.}"
   case "$ext" in png) Q=88 ;; *) Q=78 ;; esac
@@ -36,7 +41,13 @@ for src in assets/img/*.jpg assets/img/shots/*.png; do
   echo "── $(basename "$src")  源宽 ${sw}px"
   sz=$(wc -c < "$src"); total_src=$((total_src+sz))
 
-  for w in $WIDTHS; do
+  # ⚠️ 比最小档还窄的图要单独出一档, 否则所有档位都被"不放大"规则跳过, 结果是
+  #    一个变体都不生成 —— 而且没有任何报错。手机截图(375~390px)整批栽在这里。
+  tiers="$WIDTHS"
+  smallest=$(echo $WIDTHS | tr ' ' '\n' | sort -n | head -1)
+  [ "$sw" -lt "$smallest" ] && tiers="$sw"
+
+  for w in $tiers; do
     # 不放大: 目标宽超过原图就跳过(放大只会变大不会变清楚)
     [ "$w" -gt "$sw" ] && continue
     out="${base}-${w}.webp"

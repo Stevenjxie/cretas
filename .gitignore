@@ -154,6 +154,11 @@ audit-screenshots/
 !platform/restaurantbi-example/screenshots/**
 !platform/factorybi-example/screenshots/
 !platform/factorybi-example/screenshots/**
+# client-request-example 当初漏了这两行 —— 它的 9 张截图一直在本地却从没进过仓,
+# 部署自然也带不上去, 线上那一页 9 张图全部被 nginx 301 到 /404/。
+# (2026-08-05 排查发现; 这三个 example 目录的截图都是页面内容, 不是调试产物。)
+!platform/client-request-example/screenshots/
+!platform/client-request-example/screenshots/**
 !frontend/CretasFoodTrace/assets/**/*.png
 !frontend/CretasFoodTrace/android/app/src/main/res/**/*.png
 # 审计证据截图 (Sprint 11 MealClaw 等)
