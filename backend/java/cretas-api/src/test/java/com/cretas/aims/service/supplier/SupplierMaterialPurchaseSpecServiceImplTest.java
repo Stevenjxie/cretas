@@ -16,6 +16,7 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
+import com.cretas.aims.dto.supplier.SupplierMaterialPurchaseSpecDTO;
 import java.math.BigDecimal;
 import java.util.List;
 import java.util.Optional;
@@ -143,5 +144,103 @@ class SupplierMaterialPurchaseSpecServiceImplTest {
         request.setQuotedPrice(new BigDecimal("120")); request.setDefaultSpec(defaultSpec);
         request.setActive(true);
         return request;
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // 客户 2026-07-30 表格第 38 行:「在成品SKU中设定完换算规格后, 生成采购订单的时候
+    // 将不再自动填入供应商中设定好的采购单价。」
+    //
+    // 成因: 配了采购规格后, 采购行的计价单位变成规格的包装单位 (箱), 而供应关系上配的价
+    // 是按库存基本单位 (kg) 的 —— 前端 applyRelationPrice 单位不等就把价清空。
+    //
+    // 这里只做**规格自己声明的那一次换算**: 规格行上就写着 1 箱 = conversionFactor kg。
+    // 不引入通用单位引擎, 也不跨任何未声明的单位猜。
+    // ─────────────────────────────────────────────────────────────────────────
+
+    @Test
+    void derivesSpecPriceFromRelationPriceUsingTheSpecOwnFactor() {
+        SupplierMaterial relation = relation(true);
+        relation.setDefaultPurchasePrice(new BigDecimal("20"));
+        relation.setPurchaseUnit("kg");                       // 供应关系价 = 20 元/kg
+        when(relationRepository.findByIdAndFactoryId("rel", "F006")).thenReturn(Optional.of(relation));
+        when(repository.findByFactoryIdAndSupplierMaterialIdOrderByActiveDescDefaultSpecDescCreatedAtDesc("F006", "rel"))
+                .thenReturn(List.of(spec(null, "case", "kg", new BigDecimal("20"))));  // 1 箱 = 20 kg
+
+        SupplierMaterialPurchaseSpecDTO dto = service.list("F006", "sup", "rel").get(0);
+
+        assertThat(dto.getQuotedPrice()).isNull();
+        assertThat(dto.getDerivedPrice()).isEqualByComparingTo("400");   // 20 元/kg × 20 kg/箱
+        assertThat(dto.getDerivedPriceUnit()).isEqualTo("case");
+        assertThat(dto.getDerivedPriceSource()).isEqualTo("SUPPLIER_RELATION_CONVERTED");
+    }
+
+    @Test
+    void keepsRelationPriceAsIsWhenTheSpecIsPricedInTheSameUnit() {
+        SupplierMaterial relation = relation(true);
+        relation.setDefaultPurchasePrice(new BigDecimal("20"));
+        relation.setPurchaseUnit("case");
+        when(relationRepository.findByIdAndFactoryId("rel", "F006")).thenReturn(Optional.of(relation));
+        when(repository.findByFactoryIdAndSupplierMaterialIdOrderByActiveDescDefaultSpecDescCreatedAtDesc("F006", "rel"))
+                .thenReturn(List.of(spec(null, "case", "kg", new BigDecimal("20"))));
+
+        SupplierMaterialPurchaseSpecDTO dto = service.list("F006", "sup", "rel").get(0);
+
+        assertThat(dto.getDerivedPrice()).isEqualByComparingTo("20");   // 同单位, 不得再乘一次系数
+        assertThat(dto.getDerivedPriceSource()).isEqualTo("SUPPLIER_RELATION_SAME_UNIT");
+    }
+
+    @Test
+    void neverGuessesAcrossAnUndeclaredUnit() {
+        SupplierMaterial relation = relation(true);
+        relation.setDefaultPurchasePrice(new BigDecimal("20"));
+        relation.setPurchaseUnit("g");                        // 既不是包装单位也不是该规格的基本单位
+        when(relationRepository.findByIdAndFactoryId("rel", "F006")).thenReturn(Optional.of(relation));
+        when(repository.findByFactoryIdAndSupplierMaterialIdOrderByActiveDescDefaultSpecDescCreatedAtDesc("F006", "rel"))
+                .thenReturn(List.of(spec(null, "case", "kg", new BigDecimal("20"))));
+
+        SupplierMaterialPurchaseSpecDTO dto = service.list("F006", "sup", "rel").get(0);
+
+        assertThat(dto.getDerivedPrice()).isNull();
+        assertThat(dto.getDerivedPriceSource()).isNull();
+    }
+
+    @Test
+    void specOwnQuoteAlwaysWinsAndSuppressesDerivation() {
+        SupplierMaterial relation = relation(true);
+        relation.setDefaultPurchasePrice(new BigDecimal("20"));
+        relation.setPurchaseUnit("kg");
+        when(relationRepository.findByIdAndFactoryId("rel", "F006")).thenReturn(Optional.of(relation));
+        when(repository.findByFactoryIdAndSupplierMaterialIdOrderByActiveDescDefaultSpecDescCreatedAtDesc("F006", "rel"))
+                .thenReturn(List.of(spec(new BigDecimal("380"), "case", "kg", new BigDecimal("20"))));
+
+        SupplierMaterialPurchaseSpecDTO dto = service.list("F006", "sup", "rel").get(0);
+
+        assertThat(dto.getQuotedPrice()).isEqualByComparingTo("380");
+        assertThat(dto.getDerivedPrice()).isNull();   // 有自己的报价就不推导, 免得两个数打架
+    }
+
+    @Test
+    void derivesNothingWhenTheFactorIsMissingOrZero() {
+        SupplierMaterial relation = relation(true);
+        relation.setDefaultPurchasePrice(new BigDecimal("20"));
+        relation.setPurchaseUnit("kg");
+        when(relationRepository.findByIdAndFactoryId("rel", "F006")).thenReturn(Optional.of(relation));
+        when(repository.findByFactoryIdAndSupplierMaterialIdOrderByActiveDescDefaultSpecDescCreatedAtDesc("F006", "rel"))
+                .thenReturn(List.of(spec(null, "case", "kg", null), spec(null, "case", "kg", BigDecimal.ZERO)));
+
+        List<SupplierMaterialPurchaseSpecDTO> dtos = service.list("F006", "sup", "rel");
+
+        assertThat(dtos).allSatisfy(dto -> assertThat(dto.getDerivedPrice()).isNull());
+    }
+
+    private SupplierMaterialPurchaseSpec spec(BigDecimal quotedPrice, String packageUnit,
+                                              String baseUnit, BigDecimal factor) {
+        SupplierMaterialPurchaseSpec spec = new SupplierMaterialPurchaseSpec();
+        spec.setId("spec-1"); spec.setFactoryId("F006"); spec.setSupplierMaterialId("rel");
+        spec.setMaterialTypeId("mat"); spec.setName("整箱");
+        spec.setPurchasePackageUnit(packageUnit); spec.setInventoryBaseUnit(baseUnit);
+        spec.setConversionFactor(factor); spec.setQuotedPrice(quotedPrice);
+        spec.setActive(true);
+        return spec;
     }
 }

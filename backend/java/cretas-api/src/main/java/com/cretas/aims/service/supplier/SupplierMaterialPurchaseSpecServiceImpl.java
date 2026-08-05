@@ -16,6 +16,7 @@ import org.springframework.orm.ObjectOptimisticLockingFailureException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.math.BigDecimal;
 import java.util.List;
 
 @Service
@@ -28,9 +29,56 @@ public class SupplierMaterialPurchaseSpecServiceImpl implements SupplierMaterial
 
     @Override @Transactional(readOnly = true)
     public List<SupplierMaterialPurchaseSpecDTO> list(String factoryId, String supplierId, String relationId) {
-        ownedRelation(factoryId, supplierId, relationId);
+        SupplierMaterial relation = ownedRelation(factoryId, supplierId, relationId);
         return repository.findByFactoryIdAndSupplierMaterialIdOrderByActiveDescDefaultSpecDescCreatedAtDesc(factoryId, relationId)
-                .stream().map(this::toDto).toList();
+                .stream().map(spec -> withDerivedPrice(toDto(spec), spec, relation)).toList();
+    }
+
+    /**
+     * 规格没有自己的报价时, 用**本规格行自己声明的换算系数**把供应关系上的采购价折到该规格的包装单位。
+     *
+     * <p>客户 2026-07-30 表格第 38 行: 配了采购规格后计价单位变成「箱」, 而供应关系价是「元/kg」,
+     * 前端 {@code applyRelationPrice} 单位不等就把价清空 —— 于是「设完换算规格反而不带价了」。
+     *
+     * <p>刻意只认两种情形, 跨不过去就留 null:
+     * <ul>
+     *   <li>关系价单位 == 规格包装单位 → 原样带过来 (<b>不能再乘一次系数</b>)</li>
+     *   <li>关系价单位 == 规格库存基本单位 → 价 × 本规格的 conversionFactor</li>
+     * </ul>
+     * 不引入通用单位引擎: 换算依据必须是这一行自己写着的「1 箱 = N kg」, 否则就是替用户猜价格。
+     */
+    private SupplierMaterialPurchaseSpecDTO withDerivedPrice(SupplierMaterialPurchaseSpecDTO dto,
+                                                             SupplierMaterialPurchaseSpec spec,
+                                                             SupplierMaterial relation) {
+        if (spec.getQuotedPrice() != null) return dto;          // 有自己的报价, 不推导
+        BigDecimal relationPrice = relation.getDefaultPurchasePrice();
+        if (relationPrice == null || relationPrice.compareTo(BigDecimal.ZERO) <= 0) return dto;
+
+        String relationUnit = normalizedUnit(relation.getPurchaseUnit());
+        String packageUnit = normalizedUnit(spec.getPurchasePackageUnit());
+        String baseUnit = normalizedUnit(spec.getInventoryBaseUnit());
+        if (relationUnit == null || packageUnit == null) return dto;
+
+        if (relationUnit.equals(packageUnit)) {
+            dto.setDerivedPrice(relationPrice);
+            dto.setDerivedPriceUnit(spec.getPurchasePackageUnit());
+            dto.setDerivedPriceSource("SUPPLIER_RELATION_SAME_UNIT");
+            return dto;
+        }
+        BigDecimal factor = spec.getConversionFactor();
+        if (baseUnit != null && baseUnit.equals(relationUnit)
+                && factor != null && factor.compareTo(BigDecimal.ZERO) > 0) {
+            dto.setDerivedPrice(relationPrice.multiply(factor));
+            dto.setDerivedPriceUnit(spec.getPurchasePackageUnit());
+            dto.setDerivedPriceSource("SUPPLIER_RELATION_CONVERTED");
+        }
+        return dto;
+    }
+
+    private String normalizedUnit(String unit) {
+        if (unit == null) return null;
+        String trimmed = unit.trim();
+        return trimmed.isEmpty() ? null : trimmed.toLowerCase();
     }
 
     @Override @Transactional
