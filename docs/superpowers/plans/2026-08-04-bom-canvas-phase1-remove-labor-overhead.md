@@ -716,13 +716,17 @@ import { resolve } from 'node:path';
 const source = readFileSync(resolve(__dirname, '../index.vue'), 'utf-8');
 
 describe('遗留用量列不再参与成本', () => {
-  it('材料成本合计不读 standardQuantity', () => {
-    // 主链路没有数量：原料用多少由报工决定，前端不得据 standardQuantity 推成本
+  it('材料成本合计只算包材，原料一律不计', () => {
+    // 主链路没有数量：原料用多少由报工决定，前端不得据它推成本。
+    // 但 standardQuantity 对包材是正经数据（每 1 份成品用量就存在这里），
+    // 所以拦的是「有没有按类别过滤」，不是「有没有出现 standardQuantity」。
     const materialTotalBlock = source.slice(
       source.indexOf('const materialCostTotal'),
-      source.indexOf('const materialCostTotal') + 600,
+      source.indexOf('const materialCostTotal') + 900,
     );
-    expect(materialTotalBlock).not.toMatch(/standardQuantity/);
+    expect(materialTotalBlock).toMatch(/materialCategory !== 'PACKAGING'/);
+    expect(materialTotalBlock).toMatch(/return sum;/);
+    expect(materialTotalBlock).not.toMatch(/yieldRate/);
   });
 
   it('不再用 standardQuantity 判断待归集状态', () => {
@@ -757,10 +761,17 @@ npx vitest run src/views/production/bom/__tests__/BomLegacyQuantityCleared.sourc
 
 ```typescript
   // 标准成本 = 辅料 + 包材。原料没有数量（报工时才知道），不参与前端估算。
-  // 辅料成本由后端按 dosage_per_kg_g 归集，这里只汇总有明确每份用量的包材行。
+  // 辅料成本由后端按 dosage_per_kg_g 归集，这里只汇总包材行。
+  //
+  // ⚠️ 包材用量读的是 standardQuantity，不是 naturalQuantity。
+  // 「每 1 份成品包材用量」这个输入框，提交前被复制进 standardQuantity（index.vue:1367），
+  // payload 里根本没有 naturalQuantity（:1310），编辑回填也是从 standardQuantity 读回（:1283），
+  // 后端成本引擎同样用 getStandardQuantity()（BomServiceImpl:98）。
+  // 也就是说 standard_quantity 这一列：对 RAW 是废弃脏数据，对 PACKAGING 是正经数据。
+  // 本任务停用的是前者，靠类别过滤实现，不是靠停读整列。
   return bomItems.value.reduce((sum, item) => {
     if (item.materialCategory !== 'PACKAGING') return sum;
-    const qty = Number(item.naturalQuantity) || 0;
+    const qty = Number(item.standardQuantity) || 0;
     const price = Number(item.unitPrice) || 0;
     return sum + qty * price;
   }, 0);
