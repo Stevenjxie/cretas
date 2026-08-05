@@ -458,13 +458,19 @@ class GoldBackedRestaurantToolDelegateTest {
     }
 
     @Test
-    @DisplayName("demo synthesis keeps source tenant while resolving its window from the POS alias")
+    @DisplayName("demo synthesis keeps source tenant and resolves its own data window "
+            + "(2026-08-05: DEMO_REST -> RES_3101_009 POS alias deleted, no more cross-tenant read)")
     void demoComprehensiveSynthesisPreservesSourceTenant() throws Exception {
         GoldFinanceClient gold = mock(GoldFinanceClient.class);
         Map<String, Object> range = new HashMap<>();
         range.put("min_date", "2026-06-01");
         range.put("max_date", "2026-07-26");
-        when(gold.fetchDataRange(FACTORY_ID)).thenReturn(range);
+        // DEMO_REST resolves its OWN data range now — the alias that used to
+        // redirect this call to the POS tenant (FACTORY_ID) was deleted as
+        // part of the restaurant tenant consolidation (spec T3). Stubbing
+        // fetchDataRange(FACTORY_ID) here would silently hide a regression
+        // back to the deleted alias, so it is intentionally left unstubbed.
+        when(gold.fetchDataRange("DEMO_REST")).thenReturn(range);
         when(gold.fetchComprehensiveSynthesis(
                 eq("DEMO_REST"),
                 anyString(),
@@ -483,7 +489,12 @@ class GoldBackedRestaurantToolDelegateTest {
                 Collections.emptyMap());
 
         assertThat(result.get("message").toString()).contains("采购价格");
-        verify(gold).fetchDataRange(FACTORY_ID);
+        verify(gold).fetchDataRange("DEMO_REST");
+        // Pin the deletion, not just the new happy path: if the POS alias is
+        // ever restored (in the base resolveGoldFactoryId, or reintroduced
+        // via any other call path such as an explicit super. call), this
+        // tenant's window would silently start reading RES_3101_009 again.
+        verify(gold, never()).fetchDataRange(FACTORY_ID);
         verify(gold).fetchComprehensiveSynthesis(
                 eq("DEMO_REST"),
                 eq(query),
