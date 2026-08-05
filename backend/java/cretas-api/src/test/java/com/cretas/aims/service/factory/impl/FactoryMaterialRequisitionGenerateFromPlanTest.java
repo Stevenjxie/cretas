@@ -3,6 +3,7 @@ package com.cretas.aims.service.factory.impl;
 import com.cretas.aims.entity.ProductionPlan;
 import com.cretas.aims.entity.bom.BomRecipeItem;
 import com.cretas.aims.entity.factory.FactoryMaterialRequisition;
+import com.cretas.aims.entity.factory.FactoryMaterialRequisitionItem;
 import com.cretas.aims.entity.factory.FactoryWarehouse;
 import com.cretas.aims.entity.factory.FactoryWarehouse.WarehouseType;
 import com.cretas.aims.exception.BusinessException;
@@ -30,6 +31,8 @@ import java.util.List;
 import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
@@ -186,15 +189,24 @@ class FactoryMaterialRequisitionGenerateFromPlanTest {
     }
 
     /**
-     * 追踪码 2CC05928 (客户 2026-07-29 14:45 按 SOP 路线 B 生成物料需求单失败) 回归测试.
+     * 追踪码 2CC05928 (客户 2026-07-29 按 SOP 路线 B 生成物料需求单失败) 的**第二次**修正.
      *
-     * <p>BOM 行允许只登记"配方资格"不填 standardQuantity (线上 143 行里 69 行如此),
-     * 此时 {@code calculateActualQuantity()} 返回 null, 旧代码 {@code plannedQty.multiply(null)}
-     * 抛 NPE → 用户只看到"系统处理异常，请稍后重试"且无从知道是哪一味原料缺配置.
+     * <p>历史: 原始代码 {@code plannedQty.multiply(null)} 抛 NPE → 用户只看到"系统处理异常".
+     * #2004 改成 409「请前往 BOM成本管理 填写标准用量」—— 报错清楚了, 但它指向的操作
+     * <b>在产品上不存在</b>: BOM 编辑器对 RAW/AUXILIARY 强制 {@code standardQuantity=null},
+     * 界面上根本没有这个输入框 (那是"只维护配方资格"的产品口径, 不是漏配).
+     * 客户 2026-08-03 因此在表格第 45 行回了「没有途径可以配置配方用量」.
+     *
+     * <p>现在: 留空而不是拦单. prod 实测 08-03 之后新建的 BOM 原料行 16/16 全是 null,
+     * 拦单等于该厂当天配的 5 个产品一张领料单都开不出来.
+     *
+     * <p>防短料的闸下移到 {@code transferToFactory} (见
+     * {@code FactoryMaterialRequisitionTransferIntegrationTest}) —— 那才是"料没搬"
+     * 真正会发生的地方; requiredQty 本身全仓只有展示/预填用途, 不驱动任何库存动作.
      */
     @Test
-    @DisplayName("追踪码 2CC05928: BOM 未填标准用量 → 409 指名原料, 而不是 NPE 系统异常")
-    void generateFromPlan_bomWithoutStandardQuantity_shouldRejectWithActionableMessage() {
+    @DisplayName("Sheet 第45行: BOM 只登记配方资格 → 需求量留空照常生成单据, 不再拦死")
+    void generateFromPlan_bomWithoutStandardQuantity_shouldLeaveRequiredQtyPending() {
         BomRecipeItem noQtyBom = new BomRecipeItem();
         noQtyBom.setId(3L);
         noQtyBom.setMaterialTypeId("MAT-NOQTY");
@@ -204,16 +216,59 @@ class FactoryMaterialRequisitionGenerateFromPlanTest {
         noQtyBom.setMaterialCategory("RAW");
         when(bomItemRepository.findCurrentByProduct(FACTORY_ID, PRODUCT_TYPE_ID))
                 .thenReturn(List.of(noQtyBom));
-        lenient().when(warehouseResolver.resolvePurchaseInboundWh(FACTORY_ID)).thenReturn(WH_RAW);
+        when(materialBatchRepository.findStockUnitsByMaterialType(FACTORY_ID, "MAT-NOQTY"))
+                .thenReturn(List.of("kg"));
+        when(warehouseResolver.resolvePurchaseInboundWh(FACTORY_ID)).thenReturn(WH_RAW);
 
-        BusinessException ex = assertThrows(BusinessException.class,
-                () -> service.generateFromPlan(FACTORY_ID, PLAN_ID, 1L),
-                "BOM 缺标准用量应显式拦下, 而不是 NPE");
+        FactoryMaterialRequisition mr = service.generateFromPlan(FACTORY_ID, PLAN_ID, 1L);
 
-        assertEquals(Integer.valueOf(409), ex.getCode(), "应为业务冲突而非 500 系统异常");
-        assertTrue(ex.getMessage().contains("SOP-20260727-01-黄油鸡-原料A"),
-                "错误信息必须指名是哪一味原料缺配置, 实际: " + ex.getMessage());
-        verify(repository, never()).save(any());
+        assertEquals(1, mr.getItems().size(), "缺参考用量不该让整张单据开不出来");
+        assertNull(mr.getItems().get(0).getRequiredQty(),
+                "必须留 null —— 写 0 会印出一张「需要 0kg」的领料单, 车间照单领料就短料");
+        assertEquals("kg", mr.getItems().get(0).getUnit(), "单位取库存单位, 与仓管称重口径一致");
+        assertEquals("MAT-NOQTY", mr.getItems().get(0).getMaterialTypeId());
+    }
+
+    /**
+     * 有参考用量的行不受影响 —— 上面那条放开的是"没有数字"的情况, 不是"数字算错了也放过".
+     */
+    @Test
+    @DisplayName("同一张单里, 有参考用量的行照常算出需求量")
+    void generateFromPlan_mixedBom_shouldOnlyLeavePendingRowsBlank() {
+        BomRecipeItem noQtyBom = new BomRecipeItem();
+        noQtyBom.setId(3L);
+        noQtyBom.setMaterialTypeId("MAT-NOQTY");
+        noQtyBom.setMaterialName("原料A");
+        noQtyBom.setStandardQuantity(null);
+        noQtyBom.setUnit("kg");
+        noQtyBom.setMaterialCategory("RAW");
+
+        BomRecipeItem withQtyBom = new BomRecipeItem();
+        withQtyBom.setId(4L);
+        withQtyBom.setMaterialTypeId("MAT-QTY");
+        withQtyBom.setMaterialName("原料B");
+        withQtyBom.setStandardQuantity(new BigDecimal("2"));
+        withQtyBom.setUnit("kg");
+        withQtyBom.setMaterialCategory("RAW");
+
+        when(bomItemRepository.findCurrentByProduct(FACTORY_ID, PRODUCT_TYPE_ID))
+                .thenReturn(List.of(noQtyBom, withQtyBom));
+        lenient().when(materialBatchRepository.findStockUnitsByMaterialType(FACTORY_ID, "MAT-NOQTY"))
+                .thenReturn(List.of("kg"));
+        lenient().when(materialBatchRepository.findStockUnitsByMaterialType(FACTORY_ID, "MAT-QTY"))
+                .thenReturn(List.of("kg"));
+        when(warehouseResolver.resolvePurchaseInboundWh(FACTORY_ID)).thenReturn(WH_RAW);
+
+        FactoryMaterialRequisition mr = service.generateFromPlan(FACTORY_ID, PLAN_ID, 1L);
+
+        assertEquals(2, mr.getItems().size());
+        FactoryMaterialRequisitionItem pending = mr.getItems().stream()
+                .filter(it -> "MAT-NOQTY".equals(it.getMaterialTypeId())).findFirst().orElseThrow();
+        FactoryMaterialRequisitionItem computed = mr.getItems().stream()
+                .filter(it -> "MAT-QTY".equals(it.getMaterialTypeId())).findFirst().orElseThrow();
+        assertNull(pending.getRequiredQty());
+        assertNotNull(computed.getRequiredQty(), "有标准用量的行必须仍然算出需求量");
+        assertTrue(computed.getRequiredQty().compareTo(BigDecimal.ZERO) > 0);
     }
 
     private FactoryWarehouse warehouse(String id, WarehouseType type) {

@@ -215,18 +215,31 @@ public class FactoryMaterialRequisitionServiceImpl implements FactoryMaterialReq
             item.setMaterialCategory(category);
             item.setBomRecipeItemId(bom.getId());
             // required_qty = planned_quantity * actual_quantity (按出成率调整), 单位 = BOM unit (e.g. g)
-            // BOM 行允许只登记"配方资格"而不填参考用量 (standardQuantity=null, 见 BomRecipeItem#computeItemCost
-            // 注释). 这类行算不出需求量 —— 不能当 0 处理 (会生成一张"需要 0 kg"的领料单, 车间照单领料就短料),
-            // 必须显式拦下并指明是哪一味原料缺配置.
+            //
+            // BOM 行允许只登记"配方资格"而不填参考用量 (standardQuantity=null). 对**原料/辅料**这不是
+            // 漏配, 是产品口径: BOM 编辑器对 RAW/AUXILIARY 强制 standardQuantity=null 并明说"原料与辅料
+            // 在 BOM 中维护配方资格; 本批计划投入和实际消耗由生产计划与正式报工记录"
+            // (web-admin/src/views/production/bom/index.vue), 界面上根本没有这个输入框.
+            //
+            // #2004 曾把这类行改成 409「请前往 BOM成本管理 填写标准用量」—— 它把 NPE 变成了清晰的报错,
+            // 但指向的操作在产品上不存在, 于是客户 2026-08-03 在表格第 45 行回了「没有途径可以配置配方
+            // 用量」. prod 实测: 08-03 之后新建的 BOM 原料行 16/16 全是 null, 该厂当天配的 5 个产品
+            // 一张领料单都生成不出来.
+            //
+            // 现在改为**留空而不是拦单**. 安全性来源不是这个数字:
+            //   - requiredQty 全仓只有 3 个消费点, 全是参考/展示 (打印单、列表「需求」列、确认领料预填),
+            //     没有一个是权威;
+            //   - 真正挑批次 (FEFO)、扣库存、做调拨的是 issuedQty = pickedQty, 即仓管确认领料时手填的数.
+            // 防短料的闸因此下移到 transferToFactory —— 留空的行必须录了实际领用数量才准调拨,
+            // 那才是"料没搬"真正会发生的地方.
             BigDecimal perUnit = bom.calculateActualQuantity();
             if (perUnit == null) {
-                String matName = resolveLiveMaterialName(bom.getMaterialTypeId(), bom.getMaterialName());
-                throw new BusinessException(409,
-                        String.format("原料「%s」未配置 BOM 用量，无法计算物料需求量，请先补充配方用量", matName))
-                        .withCode("MATERIAL_BOM_QUANTITY_UNCONFIGURED")
-                        .withHint("请前往「生产管理 → BOM成本管理」为该原料填写标准用量")
-                        .withHintTarget(bom.getMaterialTypeId())
-                        .withSeverity("BLOCKING");
+                // 单位取库存单位 (仓管称重的口径); 拿不到再回退 BOM 单位.
+                String pendingUnit = resolveMaterialStockUnit(factoryId, bom.getMaterialTypeId());
+                item.setRequiredQty(null);
+                item.setUnit(pendingUnit != null ? pendingUnit : bom.getUnit());
+                mr.getItems().add(item);
+                continue;
             }
             BigDecimal requiredBom = plannedQty.multiply(perUnit);
             String bomUnit = bom.getUnit();
@@ -445,6 +458,26 @@ public class FactoryMaterialRequisitionServiceImpl implements FactoryMaterialReq
             throw new BusinessException(409, "调拨失败: 该领料单尚未确认领料数量, 无料可调拨到生产仓")
                     .withCode("PRODUCTION_REQUISITION_NOT_PICKED")
                     .withHint("请先点击「确认领料」逐物料录入实际拣货数量, 再执行调拨")
+                    .withSeverity("BLOCKING");
+        }
+
+        // 「用量待定」行 (BOM 只登记配方资格、没有参考用量, 见 generateFromPlan) 必须录了实际领用数量
+        // 才准调拨。上面的 anyPicked 是 anyMatch —— 只要有一行填了就放行, 而没填的行 issuedQty=null
+        // 会被 autoAllocate/relocate 两个循环整个 skip: 料没搬, 却照样推到 TRANSFERRED 返 200。
+        // 有参考用量的行至少还能在打印单上看出漏了多少; 待定行连个对照数字都没有, 只能在这里 loud-block。
+        List<String> unpickedPendingRows = mr.getItems().stream()
+                .filter(it -> it.getRequiredQty() == null)
+                .filter(it -> it.getPickedQty() == null
+                        || it.getPickedQty().compareTo(BigDecimal.ZERO) <= 0)
+                .map(this::materialLabel)
+                .toList();
+        if (!unpickedPendingRows.isEmpty()) {
+            throw new BusinessException(409, String.format(
+                    "调拨失败: 原料「%s」按实际领用, 必须先在「确认领料」录入实际领用数量",
+                    String.join("」「", unpickedPendingRows)))
+                    .withCode("PRODUCTION_REQUISITION_PENDING_QTY_NOT_PICKED")
+                    .withHint("这些原料在 BOM 中只登记配方资格、没有参考用量, "
+                            + "系统不会替你猜数量 —— 请点「确认领料」逐一称重录入后再调拨")
                     .withSeverity("BLOCKING");
         }
 
