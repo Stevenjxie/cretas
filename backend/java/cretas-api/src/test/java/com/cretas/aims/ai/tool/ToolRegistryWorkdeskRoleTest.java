@@ -55,18 +55,47 @@ class ToolRegistryWorkdeskRoleTest {
         assertEquals("b_purchase", got.get(0).getToolName());
     }
 
+    /** 读出 toolMap 的<b>原始</b>迭代顺序，用来证明 fixture 能区分「排过序」与「没排序」。 */
+    @SuppressWarnings("unchecked")
+    private List<String> rawIterationOrder(ToolRegistry registry) throws Exception {
+        Field f = ToolRegistry.class.getDeclaredField("toolMap");
+        f.setAccessible(true);
+        return ((Map<String, ToolExecutor>) f.get(registry)).values().stream()
+                .map(ToolExecutor::getToolName).toList();
+    }
+
+    /**
+     * UT-TRW-02 的 fixture 必须满足：ConcurrentHashMap 的原始迭代顺序 ≠ 升序。
+     *
+     * <p>否则删掉 {@code .sorted(...)} 测试照样过 —— 变异验证实测过这件事：
+     * 早先的 3-key fixture（z_tool/a_tool/m_tool）恰好按升序迭代，那条断言
+     * 其实什么都没测。下面的前置断言让这种退化<b>显式失败</b>，而不是悄悄变绿。
+     */
+    private static final List<String> UNSORTED_FIXTURE_NAMES = List.of(
+            "zeta_tool", "alpha_tool", "mu_tool", "beta_tool", "omega_tool",
+            "kappa_tool", "delta_tool", "sigma_tool");
+
     @Test
     @DisplayName("UT-TRW-02: 🔴 按 toolName 升序 —— 顺序必须确定, 不能随 map 迭代顺序漂")
     void sortedByToolName() throws Exception {
-        ToolRegistry registry = registryWith(
-                fake("z_tool", WorkdeskRole.PURCHASER),
-                fake("a_tool", WorkdeskRole.PURCHASER),
-                fake("m_tool", WorkdeskRole.PURCHASER));
+        ToolExecutor[] fakes = UNSORTED_FIXTURE_NAMES.stream()
+                .map(n -> fake(n, WorkdeskRole.PURCHASER))
+                .toArray(ToolExecutor[]::new);
+        ToolRegistry registry = registryWith(fakes);
+
+        List<String> expected = UNSORTED_FIXTURE_NAMES.stream().sorted().toList();
+
+        // 前置断言: fixture 本身必须能区分排序与不排序。若这条挂了, 说明这批 key
+        // 在 ConcurrentHashMap 里恰好按升序迭代 —— 此时下面那条断言是恒真的,
+        // 必须换 key 而不是无视。
+        assertNotEquals(expected, rawIterationOrder(registry),
+                "fixture 退化: toolMap 的原始迭代顺序已经是升序, 这条测试无法区分"
+                        + "「排过序」与「没排序」, 换一批 key 再测");
 
         List<String> names = registry.getExecutorsByWorkdeskRole(WorkdeskRole.PURCHASER)
                 .stream().map(ToolExecutor::getToolName).toList();
 
-        assertEquals(List.of("a_tool", "m_tool", "z_tool"), names,
+        assertEquals(expected, names,
                 "顺序不确定会让「我能干什么」每次刷新都换一个排法");
     }
 
