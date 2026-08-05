@@ -88,6 +88,12 @@ const businessRoutes: RouteRecordRaw[] = [
         meta: { requiresAuth: true, title: '首页', icon: 'House', module: 'dashboard' }
       },
       {
+        path: 'dashboard/ai-value',
+        name: 'AiValueSummary',
+        component: () => import('@/views/dashboard/AiValueSummary.vue'),
+        meta: { requiresAuth: true, title: 'AI 工作台', icon: 'MagicStick', module: 'dashboard' }
+      },
+      {
         path: 'dashboard/production-progress',
         name: 'ProductionProgressDashboard',
         component: () => import('@/views/dashboard/production-progress.vue'),
