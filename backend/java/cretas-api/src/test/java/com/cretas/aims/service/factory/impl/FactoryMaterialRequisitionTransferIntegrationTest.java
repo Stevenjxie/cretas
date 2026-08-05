@@ -39,6 +39,7 @@ import java.util.Map;
 import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -217,6 +218,66 @@ class FactoryMaterialRequisitionTransferIntegrationTest {
         assertEquals(Status.PICKING, mr.getStatus());
         verify(repository, never()).save(any());
         verify(transferService, never()).createTransfer(any(), any(), any());
+    }
+
+    /**
+     * Sheet 第 45 行的下游守卫。generateFromPlan 现在对「BOM 只登记配方资格、没有参考用量」的行
+     * 留 {@code requiredQty=null} 而不是拦单 —— 拦单指向的「去 BOM 填标准用量」在产品上不存在。
+     *
+     * <p>放开之后短料风险落在这里: 上面的 {@code anyPicked} 是 <b>anyMatch</b>, 只要有一行填了
+     * 就放行; 而没填的那行 {@code issuedQty=null} 会被 autoAllocate/relocate 两个循环整个 skip ——
+     * 料没搬, 状态却推到 TRANSFERRED 返 200。有参考用量的行至少能在打印单上看出漏了多少,
+     * 待定行连对照数字都没有, 只能 loud-block。
+     */
+    @Test
+    @DisplayName("Sheet 第45行: 用量待定的行没录实际领用就调拨 → 指名那味料拦下, 不静默漏搬")
+    void transferToFactory_pendingQtyRowNotPicked_blocksNamingTheMaterial() {
+        // 关键: 库存备齐 —— 这样「没有守卫」时整笔调拨会**成功**而不是因缺批次报错,
+        // 变异检验才能证明守卫拦下的是真会发生的静默漏搬, 而不是撞上别的报错。
+        batchStore.put("batch-1", batch("batch-1", "MAT-001", WH_LOGISTICS, "10.00", "0.00", "3.50"));
+        batchStore.put("batch-2", batch("batch-2", "MAT-002", WH_LOGISTICS, "5.00", "0.00", "2.00"));
+
+        FactoryMaterialRequisition mr = buildMrInPicking();
+        // it-1 是正常行 (有参考用量, 仓管也录了); it-2 是「用量待定」行且仓管漏录。
+        mr.getItems().get(0).setRequiredQty(new BigDecimal("10.00"));
+        mr.getItems().get(1).setRequiredQty(null);
+        mr.getItems().get(1).setPickedQty(null);
+        mr.getItems().get(1).setBatchNumbers(new ArrayList<>());
+        when(repository.findByIdAndFactoryIdAndDeletedAtIsNull(MR_ID, FACTORY_ID)).thenReturn(Optional.of(mr));
+
+        BusinessException ex = assertThrows(BusinessException.class,
+                () -> service.transferToFactory(FACTORY_ID, MR_ID, OPERATOR));
+
+        assertEquals(Integer.valueOf(409), ex.getCode());
+        assertTrue(ex.getMessage().contains("Material B"),
+                "必须指名是哪一味料漏录, 否则仓管无从下手; 实际: " + ex.getMessage());
+        assertFalse(ex.getMessage().contains("Material A"),
+                "已录数量的行不该被点名; 实际: " + ex.getMessage());
+        // 不是「没确认领料」那条 —— 那条是全表都没录, 这条是漏了待定的那几行
+        assertFalse(ex.getMessage().contains("尚未确认领料数量"));
+        assertEquals(Status.PICKING, mr.getStatus(), "拦下就不能改状态");
+        verify(repository, never()).save(any());
+        verify(transferService, never()).createTransfer(any(), any(), any());
+    }
+
+    @Test
+    @DisplayName("Sheet 第45行: 用量待定的行录了实际领用 → 照常调拨")
+    void transferToFactory_pendingQtyRowPicked_proceeds() {
+        batchStore.put("batch-1", batch("batch-1", "MAT-001", WH_LOGISTICS, "10.00", "0.00", "3.50"));
+        batchStore.put("batch-2", batch("batch-2", "MAT-002", WH_LOGISTICS, "5.00", "0.00", "2.00"));
+
+        FactoryMaterialRequisition mr = buildMrInPicking();
+        mr.getItems().get(1).setRequiredQty(null);   // 待定, 但仓管称重录了 0.50
+        when(repository.findByIdAndFactoryIdAndDeletedAtIsNull(MR_ID, FACTORY_ID)).thenReturn(Optional.of(mr));
+        when(repository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+
+        service.transferToFactory(FACTORY_ID, MR_ID, OPERATOR);
+
+        assertEquals(new BigDecimal("0.50"), mr.getItems().get(1).getIssuedQty(),
+                "待定行录的数量必须真的发出去");
+
+        assertEquals(Status.TRANSFERRED, mr.getStatus(),
+                "待定行只要录了数量就该照常走完 —— 守卫拦的是漏录, 不是「待定」本身");
     }
 
     @Test

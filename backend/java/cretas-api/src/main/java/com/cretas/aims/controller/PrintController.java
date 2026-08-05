@@ -1447,6 +1447,11 @@ public class PrintController {
                     return r;
                 });
 
+                // 「用量待定」行 (BOM 只登记配方资格, 无参考用量) 不能印成 0 —— 车间照单领 0 就是短料。
+                // 与本方法上面 picked/issued 的口径一致:「未拣发时显空, 不伪造 0」。
+                if (item.getRequiredQty() == null) {
+                    row.put("requiredQtyPending", Boolean.TRUE);
+                }
                 BigDecimal requiredQty = item.getRequiredQty() != null ? item.getRequiredQty() : BigDecimal.ZERO;
                 addQty(row, "totalQtyValue", requiredQty);
                 if ("RAW".equals(bucket)) {
@@ -1499,13 +1504,18 @@ public class PrintController {
             @SuppressWarnings("unchecked")
             List<String> batchRefs = (List<String>) row.remove("batchRefsList");
 
+            // 该物料只有「用量待定」行贡献 (聚合出来仍是 0) → 印「按实际领用」而不是 0。
+            // 若同一物料另有带参考用量的行, 聚合值 > 0, 照常印数字 —— 待定行贡献 0 不影响它。
+            boolean requiredQtyPending = Boolean.TRUE.equals(row.remove("requiredQtyPending"))
+                    && totalQty.compareTo(BigDecimal.ZERO) == 0;
+
             row.put("plannedRawQty", positiveQtyOrBlank(plannedRaw));
             row.put("plannedAuxiliaryQty", positiveQtyOrBlank(plannedAux));
             row.put("plannedSemiFinishedQty", positiveQtyOrBlank(plannedSemi));
-            row.put("totalQty", formatQty(totalQty));
+            row.put("totalQty", requiredQtyPending ? "按实际领用" : formatQty(totalQty));
             // 成交(应需) = totalQty(requiredQty); 打算(已拣) = pickedQty; 送到(已发) = issuedQty。
             // 未拣/未发显 "________" (诚实空, 仓库填), 不伪造 0。
-            row.put("transactedQty", formatQty(totalQty));
+            row.put("transactedQty", requiredQtyPending ? "按实际领用" : formatQty(totalQty));
             row.put("plannedIssueQty", plannedIssue != null ? formatQty(plannedIssue) : "________");
             row.put("deliveredQty", delivered != null ? formatQty(delivered) : "________");
             row.put("actualUsedQty", actualUsed != null ? formatQty(actualUsed) : "________");

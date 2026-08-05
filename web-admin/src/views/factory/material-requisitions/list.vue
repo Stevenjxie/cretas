@@ -84,7 +84,8 @@ const closeTarget = ref<Requisition | null>(null);
 const closeRows = ref<ClosePreviewRow[]>([]);
 
 interface ConfirmPickRow extends RequisitionItem {
-  pickedInput: number;
+  // null = 「用量待定」行留空待仓管称重录入 (见 prepareConfirmDialog); 不是 0。
+  pickedInput: number | null;
 }
 const confirmDialogVisible = ref(false);
 const confirmTarget = ref<Requisition | null>(null);
@@ -199,6 +200,19 @@ function toNumber(value: number | string | null | undefined): number {
 
 function qty(value: number | string | null | undefined): string {
   return toNumber(value).toFixed(3).replace(/\.?0+$/, '');
+}
+
+/**
+ * 「用量待定」= BOM 里只登记了配方资格、没有参考用量 (原料/辅料在 BOM 中本来就没有数量输入框)。
+ * 后端 generateFromPlan 对这类行留 requiredQty=null 而不是拦单; 前端必须把 null 和 0 区分开 ——
+ * toNumber(null) 是 0, 直接走 qty() 会印成「0」, 车间照单领 0 就是短料。
+ */
+function isPendingQty(item: { requiredQty?: number | string | null }): boolean {
+  return item.requiredQty === null || item.requiredQty === undefined || item.requiredQty === '';
+}
+
+function requiredQtyLabel(item: { requiredQty?: number | string | null }): string {
+  return isPendingQty(item) ? '按实际领用' : qty(item.requiredQty);
 }
 
 function calcReturn(row: ClosePreviewRow): number {
@@ -343,10 +357,12 @@ function prepareConfirmDialog(data: Requisition) {
   confirmTarget.value = data;
   confirmRows.value = (data.items || []).map((item) => {
     const picked = toNumber(item.pickedQty);
+    // Prefill: reuse a saved picked quantity; otherwise default to required quantity for quick operator confirmation.
+    // 「用量待定」行 (BOM 只登记配方资格、没有参考用量) 没有可预填的数字 —— 留空并强制仓管称重录入,
+    // 预填 0 会让人一路点确认, 结果那味料一点也没调拨过去 (客户表格第 45 行的下游)。
     return {
       ...item,
-      // Prefill: reuse a saved picked quantity; otherwise default to required quantity for quick operator confirmation.
-      pickedInput: picked > 0 ? picked : toNumber(item.requiredQty),
+      pickedInput: picked > 0 ? picked : (isPendingQty(item) ? null : toNumber(item.requiredQty)),
     };
   });
   confirmDialogVisible.value = true;
@@ -435,9 +451,24 @@ async function openConfirmDialog(row: Requisition) {
 
 async function submitConfirm() {
   if (!confirmTarget.value || submitting.value) return;
-  const invalid = confirmRows.value.filter((row) => row.pickedInput < 0);
+  const invalid = confirmRows.value.filter((row) => Number(row.pickedInput) < 0);
   if (invalid.length > 0) {
     ElMessage.warning('拣货数量不能为负数');
+    return;
+  }
+  // 「用量待定」行没有参考数字可对照 —— 留空提交后 issuedQty=null, 调拨时那一味料会被整个跳过
+  // (料没搬却推到 TRANSFERRED)。后端 transferToFactory 也拦, 这里先在录入现场说清是哪几味。
+  const missingPending = confirmRows.value.filter(
+    (row) => isPendingQty(row) && !(Number(row.pickedInput) > 0),
+  );
+  if (missingPending.length > 0) {
+    ElMessage({
+      message: `原料「${missingPending.map((row) => row.materialName).join('」「')}」按实际领用，`
+        + '请称重后录入实际领用数量（这些原料在 BOM 中只登记配方资格、没有参考用量）',
+      type: 'warning',
+      duration: 0,
+      showClose: true,
+    });
     return;
   }
   try {
@@ -660,7 +691,9 @@ async function submitCancel() {
           <el-table-column label="类别" width="90" align="center">
             <template #default="{ row }">{{ materialCategoryLabel(row.materialCategory) }}</template>
           </el-table-column>
-          <el-table-column prop="requiredQty" label="需求" width="90" align="right" />
+          <el-table-column label="需求" width="110" align="right">
+            <template #default="{ row }">{{ requiredQtyLabel(row) }}</template>
+          </el-table-column>
           <el-table-column prop="issuedQty" label="发出" width="90" align="right" />
           <el-table-column prop="consumedQty" label="实用" width="90" align="right" />
           <el-table-column prop="wastageQty" label="损耗" width="90" align="right" />
@@ -687,8 +720,8 @@ async function submitCancel() {
       </el-descriptions>
       <el-table :data="confirmRows" border size="small">
         <el-table-column prop="materialName" label="物料" min-width="180" show-overflow-tooltip />
-        <el-table-column label="需求量" width="110" align="right">
-          <template #default="{ row }">{{ qty(row.requiredQty) }}</template>
+        <el-table-column label="需求量" width="130" align="right">
+          <template #default="{ row }">{{ requiredQtyLabel(row) }}</template>
         </el-table-column>
         <el-table-column label="实际拣货" width="180" align="right">
           <template #default="{ row }">
