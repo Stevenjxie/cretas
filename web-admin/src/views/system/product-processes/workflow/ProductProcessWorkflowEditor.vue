@@ -102,7 +102,7 @@
           <el-button
             link
             type="primary"
-            @click="openBomDrawer(bomMissingProducts[0]?.id)"
+            @click="goToBomManagement(bomMissingProducts[0]?.id)"
           >
             在右侧配置 BOM →
           </el-button>
@@ -125,7 +125,7 @@
           <el-button
             link
             type="primary"
-            @click="openBomDrawer(bomProductionMismatchProducts[0]?.id)"
+            @click="goToBomManagement(bomProductionMismatchProducts[0]?.id)"
           >
             查看 BOM →
           </el-button>
@@ -244,7 +244,7 @@
               @select-sku="(skuId) => selectMaterialSku(slotProps.id, skuId)"
               @edit-sku="openQuickEditSku(slotProps.id)"
               @delete="removeNode(slotProps.id)"
-              @config-bom="openBomDrawer"
+              @config-bom="() => goToBomManagement()"
             />
           </template>
 
@@ -577,31 +577,6 @@
       </template>
     </el-dialog>
 
-    <!-- #10: BOM 原辅料配置抽屉 (右侧滑出, 不跳转页面; 关闭即回工序配置, 工序草稿不丢) -->
-    <el-drawer
-      v-model="bomDrawerVisible"
-      title="BOM / 配方配置"
-      direction="rtl"
-      size="72%"
-      destroy-on-close
-      @closed="onBomDrawerClosed"
-    >
-      <Suspense>
-        <BomUnifiedPanel
-          v-if="bomDrawerVisible"
-          :initial-product-type-id="bomDrawerProductTypeId"
-          :initial-workflow-revision-id="definition?.revisionId"
-          :initial-category="bomDrawerInitialCategory"
-        />
-        <template #fallback>
-          <div aria-busy="true" aria-live="polite">
-            <el-skeleton :rows="10" animated />
-            <span>正在加载 BOM / 配方管理…</span>
-          </div>
-        </template>
-      </Suspense>
-    </el-drawer>
-
     <!-- #Task6: 辅料编辑弹窗 —— 直接复用既有 SeasoningBindingDialog, 不新建编辑面 -->
     <SeasoningBindingDialog
       v-model="auxDialogVisible"
@@ -613,6 +588,19 @@
       :substitute-relations="auxDialogSubstituteRelations"
       :revision="auxDialogRevision"
       @saved="onAuxDialogSaved"
+    />
+
+    <!-- #Task1(2026-08-05 bom-canvas-phase3-2): 画布上的包材编辑弹窗, 不再依赖 BOM 抽屉 -->
+    <PackagingBindingDialog
+      v-model="packagingDialogVisible"
+      :factory-id="packagingDialogFactoryId"
+      :recipe-id="packagingDialogRecipeId"
+      :output-name="packagingDialogOutputName"
+      :base-unit="packagingDialogBaseUnit"
+      :row="packagingDialogRow"
+      :materials="bomOverlayPackagingMaterials"
+      :substitute-relations="packagingDialogSubstituteRelations"
+      @saved="onPackagingDialogSaved"
     />
 
     <!-- #12b: 版本记录抽屉 (只读浏览之前发布过的版本) -->
@@ -654,6 +642,7 @@ import {
 import { Background } from '@vue-flow/background';
 import { Controls } from '@vue-flow/controls';
 import { ElMessage, ElMessageBox } from 'element-plus';
+import { useRouter } from 'vue-router';
 import { get, post, put } from '@/api/request';
 import { getUnitCatalog, type UnitCatalogItem } from '@/api/unitContract';
 import {
@@ -703,12 +692,15 @@ import {
   bomRecipeApi,
   bomSeasoningApi,
   type BomItemSubstituteView,
+  type BomRecipeItemView,
   type SeasoningBindingView,
   type SeasoningProcessView,
   type SeasoningWorkspace,
 } from '@/api/bom';
 import { bigCategoryOf } from '@/utils/materialCategory';
+import { bomTabAllowsMaterial } from '@/views/production/bom/bomCategoryTabs';
 import SeasoningBindingDialog, { type SeasoningMaterialOption } from '@/views/production/bom/seasoning/SeasoningBindingDialog.vue';
+import PackagingBindingDialog, { type PackagingMaterialOption, type PackagingRowPayload } from './PackagingBindingDialog.vue';
 import {
   activateProductProcessWorkflow,
   deactivateProductProcessWorkflow,
@@ -722,11 +714,6 @@ import {
   snapshotProductProcessWorkflow,
   type WorkflowVersionSummary,
 } from './workflowApi';
-import {
-  BomUnifiedPanel,
-  preloadBomUnifiedPanel,
-  scheduleBomUnifiedPanelPreload,
-} from './bomUnifiedPanelLoader';
 import {
   resolveWorkflowPublishCommand,
   type WorkflowPublishCommand,
@@ -832,6 +819,7 @@ const props = defineProps<{
   rawOwnerMode?: boolean;
 }>();
 
+const router = useRouter();
 const { fitView, getViewport, setViewport } = useVueFlow('product-process-workflow');
 const definition = ref<ProductProcessWorkflowDefinition | null>(null);
 const activation = ref<ProductProcessWorkflowActivation | null>(null);
@@ -874,9 +862,6 @@ let autoSaveGeneration = 0;
 let autoSaveBarrierDepth = 0;
 // #11 fix: 每次本地改动 +1; 保存时对比, 若 PUT 往返期间有新改动则不 hydrate 覆盖 (防丢在途编辑)
 let editSeq = 0;
-// #10: BOM 配置抽屉 (右侧滑出, 不跳转页面, 关闭即回工序配置, 避免丢失未保存草稿)
-const bomDrawerVisible = ref(false);
-const bomDrawerProductTypeId = ref('');
 // #12b: 版本记录浏览 (只读查看之前发布过的版本); previewingVersion 非空时 = 正在预览历史版本
 const versionDrawerVisible = ref(false);
 const versionList = ref<WorkflowVersionSummary[]>([]);
@@ -938,6 +923,14 @@ const bomOverlaySeasoningWorkspaceByRecipe = ref<Record<string, SeasoningWorkspa
 const bomOverlaySubstitutesByRecipe = ref<Record<string, BomItemSubstituteView[]>>({});
 const bomOverlayMaterials = ref<SeasoningMaterialOption[]>([]);
 const bomOverlayMaterialsLoaded = ref(false);
+// #Task1(2026-08-05 bom-canvas-phase3-2): 包材编辑弹窗需要知道某个终端产出归哪个 recipe
+// (镜像上面 bomOverlayRecipeIdByProcess 给辅料弹窗用的做法), 以及该产出当前的完整
+// PACKAGING 明细原始行(不是 bomOverlayPackagingByOutput 里那份只供展示用的 PackagingCellRow
+// —— 那份没有 materialTypeId/standardQuantity/替代关系等编辑必需字段)。
+const bomOverlayRecipeIdByOutput = ref<Record<string, string>>({});
+const bomOverlayPackagingRawByOutput = ref<Record<string, BomRecipeItemView[]>>({});
+const bomOverlayPackagingMaterials = ref<PackagingMaterialOption[]>([]);
+const bomOverlayPackagingMaterialsLoaded = ref(false);
 let bomOverlayLoadGeneration = 0;
 // 辅料编辑弹窗(直接挂 SeasoningBindingDialog, 不新建编辑面 —— 见 task-6-brief.md)
 const auxDialogVisible = ref(false);
@@ -952,9 +945,20 @@ const auxDialogSubstituteRelations = computed<BomItemSubstituteView[]>(() => {
   return all.filter((relation) =>
     relation.parentKind === 'SEASONING_ITEM' && relation.parentSeasoningItemId === auxDialogBinding.value!.id);
 });
-// 包材编辑入口 = 打开既有 BOM 抽屉并定位到包材页签 (见 openBomDrawer 的 initialCategory 参数)
-const bomDrawerInitialCategory = ref<string | undefined>(undefined);
-
+// 包材编辑弹窗(#Task1: 画布上直接挂 PackagingBindingDialog, 不再打开 BOM 抽屉 —— 见
+// task-1-brief.md「拆抽屉之前必须先有它」)。
+const packagingDialogVisible = ref(false);
+const packagingDialogFactoryId = ref('');
+const packagingDialogRecipeId = ref('');
+const packagingDialogOutputName = ref('');
+const packagingDialogBaseUnit = ref('');
+const packagingDialogRow = ref<PackagingRowPayload | null>(null);
+const packagingDialogSubstituteRelations = computed<BomItemSubstituteView[]>(() => {
+  if (!packagingDialogRow.value) return [];
+  const all = bomOverlaySubstitutesByRecipe.value[packagingDialogRecipeId.value] || [];
+  return all.filter((relation) =>
+    relation.parentKind === 'RECIPE_ITEM' && relation.parentRecipeItemId === packagingDialogRow.value!.id);
+});
 function usedRawMaterialIdsExcept(nodeId: string): string[] {
   return flowNodes.value
     .filter((node) => node.id !== nodeId && node.data?.kind === 'RAW_MATERIAL')
@@ -1075,7 +1079,6 @@ let publishGeneration = 0;
 let previousPublishCommand: WorkflowPublishCommand | null = null;
 let activationLoadGeneration = 0;
 let activationMutationGeneration = 0;
-let cancelBomPanelPreload: (() => void) | null = null;
 
 const productTypeId = computed(() => props.productTypeId);
 const rawOwnerMode = computed(() => props.rawOwnerMode === true);
@@ -1215,8 +1218,6 @@ onMounted(async () => {
 onUnmounted(() => {
   window.removeEventListener('keydown', onEditorKeydown);
   invalidatePendingAutoSave();
-  cancelBomPanelPreload?.();
-  cancelBomPanelPreload = null;
   gsapCtx?.revert();
   gsapCtx = null;
 });
@@ -1229,11 +1230,6 @@ async function loadEditorWorkspace(loadFactoryCatalogs: boolean): Promise<void> 
   // 原料 owner 的根节点名称和单位来自原料目录；此模式仍先拿到目录，避免错误回退。
   if (rawOwnerMode.value) await catalogPromise;
   await Promise.all([loadDefinition(), loadActivation()]);
-
-  if (loadedDefinitionIdentity.value) {
-    cancelBomPanelPreload?.();
-    cancelBomPanelPreload = scheduleBomUnifiedPanelPreload();
-  }
 
   // 普通产品的画布定义先出现；完整编辑能力在目录就绪后自动开放。
   if (!rawOwnerMode.value) await catalogPromise;
@@ -1302,30 +1298,18 @@ async function waitForWorkflowSave(timeoutMs = 5000): Promise<boolean> {
   return !saving.value;
 }
 
-// #10: 打开 BOM 配置抽屉; 关闭时刷新本产品 BOM (原料分组 + 提示随即更新)
-// initialCategory: 定位到某个类别页签(如 openPackagingEditor 传 'PACKAGING')。
-// 不传时显式清空 —— 否则上一次「配置包材」留下的页签会粘在下一次普通打开上。
-async function openBomDrawer(requestedProductTypeId?: string, initialCategory?: string): Promise<void> {
-  bomDrawerInitialCategory.value = initialCategory;
+// Task 3(2026-08-05 bom-canvas-phase3-2): 画布 BOM 抽屉已下线 —— 「配置 BOM」统一
+// 跳转到 BOM 菜单页(路由 BomManagement, /production/bom), 不再在画布内嵌打开。
+// BOM 菜单页在 onMounted 里直接读 route.query.productTypeId 定位到该产品
+// (见 views/production/bom/index.vue #1236 系列防呆), 不需要额外传 workflow revision。
+// 跳转前仍尝试保存当前草稿 —— 直接跳走会丢未保存的画布改动。
+async function goToBomManagement(requestedProductTypeId?: string): Promise<void> {
   if (!(await waitForWorkflowSave())) {
-    ElMessage.warning('Workflow 仍在保存，请稍后再打开 BOM');
+    ElMessage.warning('Workflow 仍在保存，请稍后再试');
     return;
   }
   if (dirty.value && !(await saveDraft())) {
-    ElMessage.warning('当前 Workflow 尚未保存成功，不能用旧版本打开 BOM');
-    return;
-  }
-  if (dirty.value || definition.value?.revisionId == null || !definition.value.revisionHash) {
-    ElMessage.warning('请先保存当前 Workflow，再配置 BOM');
-    return;
-  }
-  const errors = validateWorkflow(currentDefinition(), 'publish');
-  if (errors.length > 0) {
-    const first = errors[0];
-    if (first.nodeId) {
-      selectedNodeId.value = first.nodeId;
-    }
-    ElMessage.error(first.message);
+    ElMessage.warning('当前 Workflow 尚未保存成功，请重试后再前往 BOM 页面');
     return;
   }
   const finishedOutputIds = flowNodes.value
@@ -1334,19 +1318,17 @@ async function openBomDrawer(requestedProductTypeId?: string, initialCategory?: 
     .filter(Boolean);
   const targetIds = [...new Set(finishedOutputIds)].sort();
   // Workflow 的锚点 SKU 若也是终端产出，始终优先；否则稳定选择第一个终端产出，
-  // 避免多产出画布每次打开随机跳到不同 BOM。
-  bomDrawerProductTypeId.value = requestedProductTypeId
-    && targetIds.includes(requestedProductTypeId)
+  // 避免多产出画布每次跳转随机落到不同 BOM。
+  const targetProductTypeId = requestedProductTypeId && targetIds.includes(requestedProductTypeId)
     ? requestedProductTypeId
     : (targetIds.includes(productTypeId.value)
       ? productTypeId.value
       : (targetIds[0] || productTypeId.value));
-  void preloadBomUnifiedPanel();
-  bomDrawerVisible.value = true;
-}
-async function onBomDrawerClosed(): Promise<void> {
-  await loadProductBom({ force: true });
-  await loadBomOverlayData();
+  if (!targetProductTypeId) {
+    ElMessage.warning('未能确定要配置 BOM 的产品，请先在画布上绑定成品 SKU');
+    return;
+  }
+  await router.push({ name: 'BomManagement', query: { productTypeId: targetProductTypeId } });
 }
 
 // #12b: 版本记录浏览
@@ -1905,6 +1887,8 @@ async function loadBomOverlayData(): Promise<void> {
     bomOverlayRecipeIdByProcess.value = {};
     bomOverlaySeasoningWorkspaceByRecipe.value = {};
     bomOverlaySubstitutesByRecipe.value = {};
+    bomOverlayRecipeIdByOutput.value = {};
+    bomOverlayPackagingRawByOutput.value = {};
     refreshBomOverlay();
     return;
   }
@@ -1921,6 +1905,8 @@ async function loadBomOverlayData(): Promise<void> {
 
     const packagingByOutput: Record<string, BomOverlayPackagingInput> = {};
     const recipeIdBySku: Record<string, string> = {};
+    const recipeIdByOutput: Record<string, string> = {};
+    const packagingRawByOutput: Record<string, BomRecipeItemView[]> = {};
     // must-fix #8: 联合生产标注要报"当前实际生效的是哪个产出的配方" —— 用产出名做人话
     // 标签(配方本身没有独立的展示名), 按 recipeId 建索引, 供下面 auxiliaryByProcess 用。
     const outputNameByRecipe: Record<string, string> = {};
@@ -1932,23 +1918,26 @@ async function loadBomOverlayData(): Promise<void> {
       outputNameByRecipe[recipe.id] = String(outputNode?.data.name ?? '未命名产出');
       // 禁止降级处理: 基本单位缺失时占位「未配」, 不能拼出 "0.05 个/undefined" 这种半成品字符串。
       const outputBaseUnit = String(outputNode?.data.baseUnit ?? '未配');
-      const rows: PackagingCellRow[] = (recipe.items || [])
-        .filter((item) => item.materialCategory === 'PACKAGING')
-        .map((item) => ({
-          id: String(item.id),
-          materialName: item.materialName || '未命名物料',
-          dosageText: formatPackagingDosageText(item.standardQuantity, item.unit, outputBaseUnit),
-          naturalHint: formatPackagingNaturalHint(item.standardQuantity, item.unit, outputBaseUnit),
-          markers: markersForPackagingRow({
-            substituteCount: item.substituteDetails?.length ?? 0,
-            isOptional: item.isOptional === true,
-            perPortion: item.perPortion === true,
-            packagingSpecId: item.packagingSpecId ?? null,
-            packagingSpecNameSnapshot: item.packagingSpecNameSnapshot ?? null,
-          }),
-        }));
+      const packagingItems = (recipe.items || []).filter((item) => item.materialCategory === 'PACKAGING');
+      const rows: PackagingCellRow[] = packagingItems.map((item) => ({
+        id: String(item.id),
+        materialName: item.materialName || '未命名物料',
+        dosageText: formatPackagingDosageText(item.standardQuantity, item.unit, outputBaseUnit),
+        naturalHint: formatPackagingNaturalHint(item.standardQuantity, item.unit, outputBaseUnit),
+        markers: markersForPackagingRow({
+          substituteCount: item.substituteDetails?.length ?? 0,
+          isOptional: item.isOptional === true,
+          perPortion: item.perPortion === true,
+          packagingSpecId: item.packagingSpecId ?? null,
+          packagingSpecNameSnapshot: item.packagingSpecNameSnapshot ?? null,
+        }),
+      }));
       targets.filter((target) => target.skuId === skuId).forEach((target) => {
         packagingByOutput[target.nodeId] = { rows };
+        recipeIdByOutput[target.nodeId] = recipe.id;
+        // #Task1: 包材编辑弹窗的 row prop 需要完整原始行(materialTypeId/standardQuantity/
+        // 替代关系等), 不是上面 rows 里那份只供展示用的 PackagingCellRow。
+        packagingRawByOutput[target.nodeId] = packagingItems;
       });
     });
 
@@ -2028,6 +2017,8 @@ async function loadBomOverlayData(): Promise<void> {
     bomOverlayRecipeIdByProcess.value = recipeIdByProcess;
     bomOverlaySeasoningWorkspaceByRecipe.value = workspaceByRecipe;
     bomOverlaySubstitutesByRecipe.value = substitutesByRecipe;
+    bomOverlayRecipeIdByOutput.value = recipeIdByOutput;
+    bomOverlayPackagingRawByOutput.value = packagingRawByOutput;
     refreshBomOverlay();
   } catch (error) {
     if (!stillCurrent()) return;
@@ -2086,29 +2077,63 @@ function onAuxDialogSaved(): void {
   void loadBomOverlayData();
 }
 
-// 包材编辑入口 —— 打开既有 BOM 抽屉并定位到包材页签, 本期不新建编辑面。
-function openPackagingEditor(outputNodeId: string, rowId?: string): void {
+// #Task1(2026-08-05 bom-canvas-phase3-2): 复用同一个 raw-material-types/active 端点,
+// 只是过滤条件从 ensureBomOverlayMaterials 的"辅料/调料"换成"包材"分类 —— 不是新端点。
+async function ensureBomOverlayPackagingMaterials(): Promise<void> {
+  if (bomOverlayPackagingMaterialsLoaded.value) return;
+  const factoryId = props.factoryId;
+  if (!factoryId) return;
+  try {
+    const response = await get<Array<PackagingMaterialOption & { category?: string | null }>>(
+      `/${factoryId}/raw-material-types/active`,
+    );
+    const rows = response.success && response.data ? response.data : [];
+    bomOverlayPackagingMaterials.value = rows.filter((material) => (
+      bomTabAllowsMaterial('PACKAGING', null, bigCategoryOf(material.category))
+    ));
+    bomOverlayPackagingMaterialsLoaded.value = true;
+  } catch {
+    ElMessage.error('包材档案加载失败');
+  }
+}
+
+// 包材编辑入口 —— 画布上直接挂 PackagingBindingDialog(不再打开 BOM 抽屉, 见
+// task-1-brief.md「拆抽屉之前必须先有它」); rowId 现在真正定位到那一行, 补上
+// Phase 3-1 遗留的 should-fix(点某一行只能开抽屉页签, 跳不到该行)。
+async function openPackagingEditor(outputNodeId: string, rowId?: string): Promise<void> {
   if (!canEdit.value) {
-    ElMessage.info('当前无编辑权限，无法打开包材编辑抽屉。Cell 上显示的是用量与标记，备注、单价、替代物料明细需有权限后在抽屉内查看。');
+    ElMessage.info('当前无编辑权限，无法打开包材编辑弹窗。Cell 上显示的是用量与标记，备注、单价、替代物料明细需有权限后在弹窗内查看。');
     return;
   }
   const node = flowNodes.value.find((candidate) => candidate.id === outputNodeId);
-  const skuId = node?.data?.kind === 'FINISHED_GOOD' && node.data?.skuId ? String(node.data.skuId) : undefined;
-  // ⛔ rowId 目前无法精确定位到抽屉里的那一行(BomUnifiedPanel/bom-unified/index.vue
-  // 只接受 initial-category, 没有"定位到某一行"的概念, 新增这个能力属于"重写编辑
-  // 弹窗/抽屉"范畴, 本轮明确不做)。之前的做法是把 rowId 整个丢弃、静默跳到包材页签,
-  // 用户点的是具体某一行、落地却是整个列表, 没有任何提示差异——这里至少把差异说
-  // 出来, 而不是假装精确定位到了。
-  if (rowId) {
-    const materialName = bomOverlayPackagingByOutput.value[outputNodeId]?.rows
-      .find((row) => row.id === rowId)?.materialName;
-    ElMessage.info(
-      materialName
-        ? `已打开包材页签，请在列表中找到「${materialName}」这一行编辑（暂不支持直接定位到该行）`
-        : '已打开包材页签，请在列表中找到对应行编辑（暂不支持直接定位到该行）',
-    );
+  if (node?.data?.kind !== 'FINISHED_GOOD' || !node.data?.skuId) {
+    ElMessage.warning('包材数据尚未加载完成，请稍后重试');
+    return;
   }
-  void openBomDrawer(skuId, 'PACKAGING');
+  const recipeId = bomOverlayRecipeIdByOutput.value[outputNodeId];
+  if (!recipeId) {
+    ElMessage.warning('包材数据尚未加载完成，请稍后重试');
+    return;
+  }
+  const row = rowId
+    ? bomOverlayPackagingRawByOutput.value[outputNodeId]?.find((item) => String(item.id) === rowId) ?? null
+    : null;
+  if (rowId && !row) {
+    ElMessage.warning('未找到对应的包材行，请刷新后重试');
+    return;
+  }
+  await ensureBomOverlayPackagingMaterials();
+  packagingDialogFactoryId.value = props.factoryId;
+  packagingDialogRecipeId.value = recipeId;
+  packagingDialogOutputName.value = String(node.data.name ?? '未命名产出');
+  // 禁止降级处理: 基本单位缺失时占位「未配」, 不能让弹窗拼出 "个/undefined" 这种半成品字符串。
+  packagingDialogBaseUnit.value = String(node.data.baseUnit ?? '未配');
+  packagingDialogRow.value = row;
+  packagingDialogVisible.value = true;
+}
+
+function onPackagingDialogSaved(): void {
+  void loadBomOverlayData();
 }
 
 function propsMatchIdentity(identity: WorkflowIdentity): boolean {

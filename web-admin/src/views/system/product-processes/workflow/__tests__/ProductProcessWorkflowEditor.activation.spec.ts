@@ -194,7 +194,7 @@ describe('ProductProcessWorkflowEditor activation controls', () => {
     expect(apiMocks.publishAndActivateProductProcessWorkflow).toHaveBeenCalledTimes(1);
   });
 
-  it('automatically migrates an older active BOM instead of forcing users into the BOM drawer', async () => {
+  it('automatically migrates an older active BOM without prompting the user to go configure BOM manually', async () => {
     const current = definition('PT-A', 'DRAFT', 2, 45);
     current.revisionId = 222;
     current.revisionHash = 'revision-222';
@@ -229,8 +229,6 @@ describe('ProductProcessWorkflowEditor activation controls', () => {
     await flushPromises();
     const vm = wrapper.vm as unknown as {
       bomProductionMismatchProducts: Array<{ id: string; name: string }>;
-      bomDrawerVisible: boolean;
-      bomDrawerProductTypeId: string;
       publishWorkflow: () => Promise<void>;
     };
 
@@ -262,7 +260,9 @@ describe('ProductProcessWorkflowEditor activation controls', () => {
 
     expect(apiMocks.publishAndActivateProductProcessWorkflow).toHaveBeenCalledTimes(1);
     expect(apiMocks.activateProductProcessWorkflow).not.toHaveBeenCalled();
-    expect(vm.bomDrawerVisible).toBe(false);
+    // 抽屉已下线(Task 3 2026-08-05): 不再有 bomDrawerVisible 状态可断言。发布前已在上面
+    // 断言过 bomProductionMismatchProducts 为空且不显示 mismatch 横幅, 这就是本用例
+    // "没有把用户推去手动配置 BOM" 的核心断言, 发布调用本身的效果已由上面两行覆盖。
   });
 
   it('shows a production mismatch only when the active BOM differs from the enabled Workflow', async () => {
