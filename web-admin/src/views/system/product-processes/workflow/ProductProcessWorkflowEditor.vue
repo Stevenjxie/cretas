@@ -102,7 +102,7 @@
           <el-button
             link
             type="primary"
-            @click="openBomDrawer(bomMissingProducts[0]?.id)"
+            @click="goToBomManagement(bomMissingProducts[0]?.id)"
           >
             在右侧配置 BOM →
           </el-button>
@@ -125,7 +125,7 @@
           <el-button
             link
             type="primary"
-            @click="openBomDrawer(bomProductionMismatchProducts[0]?.id)"
+            @click="goToBomManagement(bomProductionMismatchProducts[0]?.id)"
           >
             查看 BOM →
           </el-button>
@@ -244,7 +244,7 @@
               @select-sku="(skuId) => selectMaterialSku(slotProps.id, skuId)"
               @edit-sku="openQuickEditSku(slotProps.id)"
               @delete="removeNode(slotProps.id)"
-              @config-bom="openBomDrawer"
+              @config-bom="() => goToBomManagement()"
             />
           </template>
 
@@ -577,31 +577,6 @@
       </template>
     </el-dialog>
 
-    <!-- #10: BOM 原辅料配置抽屉 (右侧滑出, 不跳转页面; 关闭即回工序配置, 工序草稿不丢) -->
-    <el-drawer
-      v-model="bomDrawerVisible"
-      title="BOM / 配方配置"
-      direction="rtl"
-      size="72%"
-      destroy-on-close
-      @closed="onBomDrawerClosed"
-    >
-      <Suspense>
-        <BomUnifiedPanel
-          v-if="bomDrawerVisible"
-          :initial-product-type-id="bomDrawerProductTypeId"
-          :initial-workflow-revision-id="definition?.revisionId"
-          :initial-category="bomDrawerInitialCategory"
-        />
-        <template #fallback>
-          <div aria-busy="true" aria-live="polite">
-            <el-skeleton :rows="10" animated />
-            <span>正在加载 BOM / 配方管理…</span>
-          </div>
-        </template>
-      </Suspense>
-    </el-drawer>
-
     <!-- #Task6: 辅料编辑弹窗 —— 直接复用既有 SeasoningBindingDialog, 不新建编辑面 -->
     <SeasoningBindingDialog
       v-model="auxDialogVisible"
@@ -667,6 +642,7 @@ import {
 import { Background } from '@vue-flow/background';
 import { Controls } from '@vue-flow/controls';
 import { ElMessage, ElMessageBox } from 'element-plus';
+import { useRouter } from 'vue-router';
 import { get, post, put } from '@/api/request';
 import { getUnitCatalog, type UnitCatalogItem } from '@/api/unitContract';
 import {
@@ -738,11 +714,6 @@ import {
   snapshotProductProcessWorkflow,
   type WorkflowVersionSummary,
 } from './workflowApi';
-import {
-  BomUnifiedPanel,
-  preloadBomUnifiedPanel,
-  scheduleBomUnifiedPanelPreload,
-} from './bomUnifiedPanelLoader';
 import {
   resolveWorkflowPublishCommand,
   type WorkflowPublishCommand,
@@ -848,6 +819,7 @@ const props = defineProps<{
   rawOwnerMode?: boolean;
 }>();
 
+const router = useRouter();
 const { fitView, getViewport, setViewport } = useVueFlow('product-process-workflow');
 const definition = ref<ProductProcessWorkflowDefinition | null>(null);
 const activation = ref<ProductProcessWorkflowActivation | null>(null);
@@ -890,9 +862,6 @@ let autoSaveGeneration = 0;
 let autoSaveBarrierDepth = 0;
 // #11 fix: 每次本地改动 +1; 保存时对比, 若 PUT 往返期间有新改动则不 hydrate 覆盖 (防丢在途编辑)
 let editSeq = 0;
-// #10: BOM 配置抽屉 (右侧滑出, 不跳转页面, 关闭即回工序配置, 避免丢失未保存草稿)
-const bomDrawerVisible = ref(false);
-const bomDrawerProductTypeId = ref('');
 // #12b: 版本记录浏览 (只读查看之前发布过的版本); previewingVersion 非空时 = 正在预览历史版本
 const versionDrawerVisible = ref(false);
 const versionList = ref<WorkflowVersionSummary[]>([]);
@@ -990,10 +959,6 @@ const packagingDialogSubstituteRelations = computed<BomItemSubstituteView[]>(() 
   return all.filter((relation) =>
     relation.parentKind === 'RECIPE_ITEM' && relation.parentRecipeItemId === packagingDialogRow.value!.id);
 });
-// 仍用于「配置BOM」等其他入口(如缺 BOM 提示横幅的按钮)打开抽屉并定位到某个页签 ——
-// 只有画布包材 cell 的编辑入口(openPackagingEditor)不再用它。
-const bomDrawerInitialCategory = ref<string | undefined>(undefined);
-
 function usedRawMaterialIdsExcept(nodeId: string): string[] {
   return flowNodes.value
     .filter((node) => node.id !== nodeId && node.data?.kind === 'RAW_MATERIAL')
@@ -1114,7 +1079,6 @@ let publishGeneration = 0;
 let previousPublishCommand: WorkflowPublishCommand | null = null;
 let activationLoadGeneration = 0;
 let activationMutationGeneration = 0;
-let cancelBomPanelPreload: (() => void) | null = null;
 
 const productTypeId = computed(() => props.productTypeId);
 const rawOwnerMode = computed(() => props.rawOwnerMode === true);
@@ -1254,8 +1218,6 @@ onMounted(async () => {
 onUnmounted(() => {
   window.removeEventListener('keydown', onEditorKeydown);
   invalidatePendingAutoSave();
-  cancelBomPanelPreload?.();
-  cancelBomPanelPreload = null;
   gsapCtx?.revert();
   gsapCtx = null;
 });
@@ -1268,11 +1230,6 @@ async function loadEditorWorkspace(loadFactoryCatalogs: boolean): Promise<void> 
   // 原料 owner 的根节点名称和单位来自原料目录；此模式仍先拿到目录，避免错误回退。
   if (rawOwnerMode.value) await catalogPromise;
   await Promise.all([loadDefinition(), loadActivation()]);
-
-  if (loadedDefinitionIdentity.value) {
-    cancelBomPanelPreload?.();
-    cancelBomPanelPreload = scheduleBomUnifiedPanelPreload();
-  }
 
   // 普通产品的画布定义先出现；完整编辑能力在目录就绪后自动开放。
   if (!rawOwnerMode.value) await catalogPromise;
@@ -1341,30 +1298,18 @@ async function waitForWorkflowSave(timeoutMs = 5000): Promise<boolean> {
   return !saving.value;
 }
 
-// #10: 打开 BOM 配置抽屉; 关闭时刷新本产品 BOM (原料分组 + 提示随即更新)
-// initialCategory: 定位到某个类别页签(如 openPackagingEditor 传 'PACKAGING')。
-// 不传时显式清空 —— 否则上一次「配置包材」留下的页签会粘在下一次普通打开上。
-async function openBomDrawer(requestedProductTypeId?: string, initialCategory?: string): Promise<void> {
-  bomDrawerInitialCategory.value = initialCategory;
+// Task 3(2026-08-05 bom-canvas-phase3-2): 画布 BOM 抽屉已下线 —— 「配置 BOM」统一
+// 跳转到 BOM 菜单页(路由 BomManagement, /production/bom), 不再在画布内嵌打开。
+// BOM 菜单页在 onMounted 里直接读 route.query.productTypeId 定位到该产品
+// (见 views/production/bom/index.vue #1236 系列防呆), 不需要额外传 workflow revision。
+// 跳转前仍尝试保存当前草稿 —— 直接跳走会丢未保存的画布改动。
+async function goToBomManagement(requestedProductTypeId?: string): Promise<void> {
   if (!(await waitForWorkflowSave())) {
-    ElMessage.warning('Workflow 仍在保存，请稍后再打开 BOM');
+    ElMessage.warning('Workflow 仍在保存，请稍后再试');
     return;
   }
   if (dirty.value && !(await saveDraft())) {
-    ElMessage.warning('当前 Workflow 尚未保存成功，不能用旧版本打开 BOM');
-    return;
-  }
-  if (dirty.value || definition.value?.revisionId == null || !definition.value.revisionHash) {
-    ElMessage.warning('请先保存当前 Workflow，再配置 BOM');
-    return;
-  }
-  const errors = validateWorkflow(currentDefinition(), 'publish');
-  if (errors.length > 0) {
-    const first = errors[0];
-    if (first.nodeId) {
-      selectedNodeId.value = first.nodeId;
-    }
-    ElMessage.error(first.message);
+    ElMessage.warning('当前 Workflow 尚未保存成功，请重试后再前往 BOM 页面');
     return;
   }
   const finishedOutputIds = flowNodes.value
@@ -1373,19 +1318,17 @@ async function openBomDrawer(requestedProductTypeId?: string, initialCategory?: 
     .filter(Boolean);
   const targetIds = [...new Set(finishedOutputIds)].sort();
   // Workflow 的锚点 SKU 若也是终端产出，始终优先；否则稳定选择第一个终端产出，
-  // 避免多产出画布每次打开随机跳到不同 BOM。
-  bomDrawerProductTypeId.value = requestedProductTypeId
-    && targetIds.includes(requestedProductTypeId)
+  // 避免多产出画布每次跳转随机落到不同 BOM。
+  const targetProductTypeId = requestedProductTypeId && targetIds.includes(requestedProductTypeId)
     ? requestedProductTypeId
     : (targetIds.includes(productTypeId.value)
       ? productTypeId.value
       : (targetIds[0] || productTypeId.value));
-  void preloadBomUnifiedPanel();
-  bomDrawerVisible.value = true;
-}
-async function onBomDrawerClosed(): Promise<void> {
-  await loadProductBom({ force: true });
-  await loadBomOverlayData();
+  if (!targetProductTypeId) {
+    ElMessage.warning('未能确定要配置 BOM 的产品，请先在画布上绑定成品 SKU');
+    return;
+  }
+  await router.push({ name: 'BomManagement', query: { productTypeId: targetProductTypeId } });
 }
 
 // #12b: 版本记录浏览

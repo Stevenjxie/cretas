@@ -19,19 +19,18 @@ describe('seasoning BOM integration source contract', () => {
     expect(unifiedSource).not.toContain('RecipeContent');
   });
 
-  it('passes the Workflow target SKU and exact revision into the embedded BOM while keeping the conversion tab', () => {
-    expect(workflowEditorSource).toContain(':initial-product-type-id="bomDrawerProductTypeId"');
-    expect(workflowEditorSource).toContain(':initial-workflow-revision-id="definition?.revisionId"');
-    expect(workflowEditorSource).toContain('async function openBomDrawer');
+  it('navigates the canvas to the BOM page for the resolved target SKU while keeping the conversion tab (Task 3 2026-08-05: canvas drawer retired in favor of router navigation)', () => {
+    expect(workflowEditorSource).toContain('async function goToBomManagement');
     expect(workflowEditorSource).toContain('if (dirty.value && !(await saveDraft()))');
-    expect(workflowEditorSource).toContain('definition.value?.revisionId == null');
-    expect(workflowEditorSource).toContain('当前 Workflow 尚未保存成功，不能用旧版本打开 BOM');
-    expect(workflowEditorSource).toContain('openBomDrawer(bomMissingProducts[0]?.id)');
+    expect(workflowEditorSource).toMatch(/router\.push\(\{\s*name:\s*'BomManagement',\s*query:\s*\{\s*productTypeId:/);
+    expect(workflowEditorSource).toContain('goToBomManagement(bomMissingProducts[0]?.id)');
     expect(workflowEditorSource).toContain('targetIds.includes(productTypeId.value)');
+    expect(workflowEditorSource).not.toContain('openBomDrawer');
+    // 独立 BOM 页(bom-unified 外壳 + BomContent)仍然支持按 productTypeId 定位到某产品——
+    // 画布不再内嵌它, 但跳转能落到正确产品仍然依赖这条契约成立。
     expect(unifiedSource).toContain(':initial-product-type-id="props.initialProductTypeId"');
-    expect(unifiedSource).toContain(':initial-workflow-revision-id="props.initialWorkflowRevisionId"');
     expect(bomSource).toContain('props.initialProductTypeId');
-    expect(bomSource).toContain('props.initialWorkflowRevisionId');
+    expect(bomSource).toContain('route.query.productTypeId');
     expect(unifiedSource).toContain('name="conversion"');
   });
 

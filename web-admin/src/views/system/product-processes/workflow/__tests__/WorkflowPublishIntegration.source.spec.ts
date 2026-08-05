@@ -39,10 +39,10 @@ describe('ProductProcessWorkflowEditor atomic publish source contract', () => {
     expect(publishBody).not.toContain('activateProductProcessWorkflow(');
   });
 
-  it('preloads and reuses the BOM drawer component', () => {
-    expect(source).toContain('scheduleBomUnifiedPanelPreload()');
-    expect(source).toContain('void preloadBomUnifiedPanel();');
-    expect(source).toContain('<Suspense>');
+  it('no longer preloads a BOM drawer component (Task 3 2026-08-05: canvas drawer retired, see legacyBomEntryRetired.source.spec.ts)', () => {
+    expect(source).not.toContain('scheduleBomUnifiedPanelPreload');
+    expect(source).not.toContain('preloadBomUnifiedPanel');
+    expect(source).not.toContain('bomUnifiedPanelLoader');
   });
 
   it('shows a named loading state before a route product is resolved', () => {
