@@ -1,11 +1,7 @@
 package com.cretas.aims.ai.tool.impl.system;
 
 import com.cretas.aims.ai.tool.ToolExecutor;
-import com.cretas.aims.entity.alerts.AlertEvent;
-import com.cretas.aims.entity.alerts.AlertEventStatus;
-import com.cretas.aims.entity.calibration.ToolCallRecord;
-import com.cretas.aims.repository.alerts.AlertEventRepository;
-import com.cretas.aims.repository.calibration.ToolCallRecordRepository;
+import com.cretas.aims.service.aivalue.AiValueSummaryService;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -14,16 +10,21 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
 import java.lang.reflect.Method;
-import java.time.LocalDateTime;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
-import static org.mockito.Mockito.when;
+import static org.mockito.Mockito.*;
 
-/** Unit tests for {@link AiValueSummaryTool}. */
+/**
+ * {@link AiValueSummaryTool} 的<b>渲染</b>测试。
+ *
+ * <p>口径断言不在这里 —— 它们在 {@code AiValueSummaryServiceTest}。本类只验
+ * 「同一份汇总怎么变成对话里的一句话」，以及 Tool 没有绕过 service 自己查表。
+ */
 @ExtendWith(MockitoExtension.class)
 class AiValueSummaryToolTest {
 
@@ -33,25 +34,15 @@ class AiValueSummaryToolTest {
     private AiValueSummaryTool tool;
 
     @Mock
-    private ToolCallRecordRepository toolCallRecordRepository;
+    private AiValueSummaryService aiValueSummaryService;
 
-    @Mock
-    private AlertEventRepository alertEventRepository;
-
-    private static ToolCallRecord call(Integer in, Integer out) {
-        ToolCallRecord r = new ToolCallRecord();
-        r.setInputTokens(in);
-        r.setOutputTokens(out);
-        return r;
-    }
-
-    private static AlertEvent alert(AlertEventStatus status, String entityId) {
-        AlertEvent a = new AlertEvent();
-        a.setStatus(status);
-        a.setBusinessEntityType("MATERIAL_BATCH");
-        a.setBusinessEntityId(entityId);
-        a.setMessage("批次临期");
-        return a;
+    private static AiValueSummaryService.Summary summary(
+            int calls, long tokens, int alertsTotal, Map<String, Integer> byStatus) {
+        return new AiValueSummaryService.Summary(
+                30, calls, tokens, 0L, tokens, alertsTotal, byStatus,
+                List.of(new AiValueSummaryService.AlertDetail(
+                        "MATERIAL_BATCH", "MB-001", "WARNING", "OPEN", "批次临期")),
+                null, "系统未配置 token 单价，无法把 token 折算成金额。");
     }
 
     @SuppressWarnings("unchecked")
@@ -62,15 +53,8 @@ class AiValueSummaryToolTest {
         return (Map<String, Object>) m.invoke(tool, FACTORY_ID, params, Map.of());
     }
 
-    private void stubEmpty() {
-        when(toolCallRecordRepository.findByFactoryIdAndCreatedAtBetween(anyString(), any(), any()))
-                .thenReturn(List.of());
-        when(alertEventRepository.findByFactoryIdAndCreatedAtBetween(anyString(), any(), any()))
-                .thenReturn(List.of());
-    }
-
     @Test
-    @DisplayName("UT-AVS-01: metadata —— 只读声明必须是 READ (CI 会交叉校验)")
+    @DisplayName("UT-AVT-01: metadata —— 只读声明必须是 READ (CI 会交叉校验)")
     void metadata() {
         assertEquals("system_ai_value_summary", tool.getToolName());
         assertEquals(ToolExecutor.AccessMode.READ, tool.getAccessMode());
@@ -79,77 +63,35 @@ class AiValueSummaryToolTest {
     }
 
     @Test
-    @DisplayName("UT-AVS-02: 🔴 绝不报金额 —— costInYuan 必须为 null 且给出可解释的原因")
-    void neverFabricatesMoney() throws Exception {
-        stubEmpty();
+    @DisplayName("UT-AVT-02: 🔴 口径来自 service —— Tool 不得自己查表")
+    void delegatesToService() throws Exception {
+        when(aiValueSummaryService.summarize(anyString(), any()))
+                .thenReturn(summary(0, 0L, 0, Map.of()));
 
-        Map<String, Object> result = execute(Map.of());
+        execute(Map.of("days", 7));
 
-        assertTrue(result.containsKey("costInYuan"),
-                "字段必须存在且为 null, 不能让它悄悄消失 —— 消失了调用方会以为忘了实现");
-        assertNull(result.get("costInYuan"));
-        String reason = (String) result.get("costUnavailableReason");
-        assertNotNull(reason);
-        assertFalse(reason.isBlank(), "没有金额必须是可解释的, 不能只是缺个字段");
-        assertTrue(reason.contains("单价"), reason);
+        verify(aiValueSummaryService).summarize(FACTORY_ID, 7);
+        verifyNoMoreInteractions(aiValueSummaryService);
     }
 
     @Test
-    @DisplayName("UT-AVS-03: token 求和 —— null 记 0 而不是跳过该行")
-    void sumsTokensTreatingNullAsZero() throws Exception {
-        when(toolCallRecordRepository.findByFactoryIdAndCreatedAtBetween(anyString(), any(), any()))
-                .thenReturn(List.of(call(100, 50), call(null, 30), call(7, null)));
-        when(alertEventRepository.findByFactoryIdAndCreatedAtBetween(anyString(), any(), any()))
-                .thenReturn(List.of());
+    @DisplayName("UT-AVT-03: 金额字段原样透出 null + 原因, 渲染层不得补一个数")
+    void passesThroughMoneyAbsence() throws Exception {
+        when(aiValueSummaryService.summarize(anyString(), any()))
+                .thenReturn(summary(3, 100L, 0, Map.of()));
 
-        Map<String, Object> result = execute(Map.of());
+        Map<String, Object> r = execute(Map.of());
 
-        assertEquals(3, ((Number) result.get("aiCalls")).intValue(),
-                "3 次调用都要计数 —— 跳过没记 token 的行会让次数与 token 口径对不上");
-        assertEquals(107L, ((Number) result.get("inputTokens")).longValue());
-        assertEquals(80L, ((Number) result.get("outputTokens")).longValue());
-        assertEquals(187L, ((Number) result.get("totalTokens")).longValue());
+        assertTrue(r.containsKey("costInYuan"), "字段必须存在且为 null, 不能让它悄悄消失");
+        assertNull(r.get("costInYuan"));
+        assertNotNull(r.get("costUnavailableReason"));
     }
 
     @Test
-    @DisplayName("UT-AVS-04: 告警按状态分组, 明细带 businessEntityId 可点开")
-    @SuppressWarnings("unchecked")
-    void groupsAlertsAndCarriesDrilldown() throws Exception {
-        when(toolCallRecordRepository.findByFactoryIdAndCreatedAtBetween(anyString(), any(), any()))
-                .thenReturn(List.of());
-        when(alertEventRepository.findByFactoryIdAndCreatedAtBetween(anyString(), any(), any()))
-                .thenReturn(List.of(
-                        alert(AlertEventStatus.OPEN, "MB-001"),
-                        alert(AlertEventStatus.OPEN, "MB-002"),
-                        alert(AlertEventStatus.RESOLVED, "MB-003")));
-
-        Map<String, Object> result = execute(Map.of());
-
-        assertEquals(3, ((Number) result.get("alertsTotal")).intValue());
-        Map<String, Integer> byStatus = (Map<String, Integer>) result.get("alertsByStatus");
-        assertEquals(2, byStatus.get("OPEN"));
-        assertEquals(1, byStatus.get("RESOLVED"));
-
-        List<Map<String, Object>> details = (List<Map<String, Object>>) result.get("alertDetails");
-        assertEquals("MB-001", details.get(0).get("businessEntityId"),
-                "没有 businessEntityId 就点不开, 「可追溯」就只是句口号");
-        assertEquals("MATERIAL_BATCH", details.get(0).get("businessEntityType"));
-    }
-
-    @Test
-    @DisplayName("UT-AVS-05: 🔴 查询失败必须抛出, 不得渲染成「0 次 / 0 条」")
-    void repositoryFailureMustNotRenderZeros() {
-        when(toolCallRecordRepository.findByFactoryIdAndCreatedAtBetween(anyString(), any(), any()))
-                .thenThrow(new IllegalStateException("db down"));
-
-        assertThrows(Exception.class, () -> execute(Map.of()),
-                "把查询失败吞掉再报 0, 等于把「查不到」说成「什么都没发生」—— 这是两件事");
-    }
-
-    @Test
-    @DisplayName("UT-AVS-06: 真的什么都没发生时, 明说「没有被调用过」而不是伪装成运行良好")
+    @DisplayName("UT-AVT-04: 真的零活动时明说「没有被调用过」, 不伪装成运行正常")
     void genuinelyEmptySaysSo() throws Exception {
-        stubEmpty();
+        when(aiValueSummaryService.summarize(anyString(), any()))
+                .thenReturn(summary(0, 0L, 0, Map.of()));
 
         String message = (String) execute(Map.of()).get("message");
 
@@ -158,25 +100,14 @@ class AiValueSummaryToolTest {
     }
 
     @Test
-    @DisplayName("UT-AVS-07: days 越界被夹紧, 不抛异常也不透传")
-    void clampsDays() throws Exception {
-        stubEmpty();
-
-        assertEquals(1, ((Number) execute(Map.of("days", 0)).get("windowDays")).intValue());
-        assertEquals(365, ((Number) execute(Map.of("days", 9999)).get("windowDays")).intValue());
-        assertEquals(30, ((Number) execute(Map.of()).get("windowDays")).intValue());
-    }
-
-    @Test
-    @DisplayName("UT-AVS-08: 有数据时 message 报出三段状态计数")
+    @DisplayName("UT-AVT-05: 有数据时 message 报出三段状态计数与口径说明")
     void messageReportsLifecycleCounts() throws Exception {
-        when(toolCallRecordRepository.findByFactoryIdAndCreatedAtBetween(anyString(), any(), any()))
-                .thenReturn(List.of(call(10, 20)));
-        when(alertEventRepository.findByFactoryIdAndCreatedAtBetween(anyString(), any(), any()))
-                .thenReturn(List.of(
-                        alert(AlertEventStatus.OPEN, "MB-001"),
-                        alert(AlertEventStatus.ACKNOWLEDGED, "MB-002"),
-                        alert(AlertEventStatus.RESOLVED, "MB-003")));
+        Map<String, Integer> byStatus = new LinkedHashMap<>();
+        byStatus.put("OPEN", 1);
+        byStatus.put("ACKNOWLEDGED", 1);
+        byStatus.put("RESOLVED", 1);
+        when(aiValueSummaryService.summarize(anyString(), any()))
+                .thenReturn(summary(1, 30L, 3, byStatus));
 
         String message = (String) execute(Map.of()).get("message");
 
@@ -187,21 +118,15 @@ class AiValueSummaryToolTest {
     }
 
     @Test
-    @DisplayName("UT-AVS-09: 时间窗真的传给了仓储 —— 否则 days 参数是摆设")
-    void passesTimeWindowToRepositories() throws Exception {
-        stubEmpty();
+    @DisplayName("UT-AVT-06: 明细带 businessEntityId 透到结果里")
+    @SuppressWarnings("unchecked")
+    void exposesDrilldown() throws Exception {
+        when(aiValueSummaryService.summarize(anyString(), any()))
+                .thenReturn(summary(1, 30L, 1, Map.of("OPEN", 1)));
 
-        LocalDateTime before = LocalDateTime.now().minusDays(7).minusMinutes(1);
-        execute(Map.of("days", 7));
-        LocalDateTime after = LocalDateTime.now().minusDays(7).plusMinutes(1);
+        List<Map<String, Object>> details =
+                (List<Map<String, Object>>) execute(Map.of()).get("alertDetails");
 
-        org.mockito.ArgumentCaptor<LocalDateTime> startCaptor =
-                org.mockito.ArgumentCaptor.forClass(LocalDateTime.class);
-        org.mockito.Mockito.verify(toolCallRecordRepository)
-                .findByFactoryIdAndCreatedAtBetween(anyString(), startCaptor.capture(), any());
-
-        LocalDateTime start = startCaptor.getValue();
-        assertTrue(start.isAfter(before) && start.isBefore(after),
-                "起点应落在 7 天前附近, 实际=" + start);
+        assertEquals("MB-001", details.get(0).get("businessEntityId"));
     }
 }
