@@ -880,6 +880,188 @@ git show --name-only HEAD
 
 ---
 
+### Task 8: 后端成本循环按类别归集（owner 追加）
+
+`BomServiceImpl.calculateProductCost` 的物料循环**没有任何类别过滤**，四类物料一律 `standardQuantity x unitPrice` 加总。已实测的后果有两条：
+
+| 类别 | 该列的真实含义 | 当前后果 |
+|---|---|---|
+| RAW | 已废弃（新行写 null） | **历史脏数据仍被计入**，撑高用户实际看到的那个总额 |
+| AUXILIARY | 已废弃（新行写 null） | 同上；且真实辅料成本在 `bom_seasoning_items`，本循环根本读不到 |
+| BYPRODUCT | **预计产出量** | **符号反了** —— 产出被当成消耗加进成本 |
+| PACKAGING | 每份成品用量 | 正确，应保留 |
+
+既有的 `BomByproductItemCostExclusionTest` 覆盖的是 `BomRecipeServiceImpl`，**不覆盖本类**，所以副产品这条今天没有闸。
+
+**Files:**
+- Test: `backend/java/cretas-api/src/test/java/com/cretas/aims/service/impl/BomCostSummaryCategoryFilterTest.java`（新建）
+- Modify: `backend/java/cretas-api/src/main/java/com/cretas/aims/service/impl/BomServiceImpl.java`（物料循环，约 :97）
+- Modify: `backend/java/cretas-api/src/main/java/com/cretas/aims/dto/bom/BomCostSummaryDTO.java`（若 `MaterialCostItem` 缺 `materialCategory` 字段则补）
+
+**Interfaces:**
+- Consumes: Task 1 建立的口径（人工/均摊为 null，`totalCost == materialCostTotal`）
+- Produces: `materialCostTotal` 只归集 PACKAGING 行；非 PACKAGING 行仍出现在 `materialCosts` 明细里但 `subtotal` 为 `null`
+
+**为什么保留明细行而不是整行滤掉**：前端只读 `materialCostTotal` / `totalCost`（`index.vue:1499-1500`），不渲染明细数组；AI 上下文只取 `getTotalCost()`。保留行可以让人看到配方里有哪些物料及其单价，`subtotal = null` 表示「此处不归集」—— 与 `computeItemCost()` 在无用量时返回 null 同一口径。
+
+- [ ] **Step 1: 写失败测试**
+
+```java
+package com.cretas.aims.service.impl;
+
+import com.cretas.aims.dto.bom.BomCostSummaryDTO;
+import com.cretas.aims.entity.bom.BomRecipe;
+import com.cretas.aims.entity.bom.BomRecipeItem;
+import com.cretas.aims.repository.bom.BomRecipeItemRepository;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.InjectMocks;
+import org.mockito.Mock;
+import org.mockito.junit.jupiter.MockitoExtension;
+
+import java.math.BigDecimal;
+import java.util.List;
+
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.lenient;
+import static org.mockito.Mockito.when;
+
+/**
+ * 成本只归集包材行。
+ * RAW/AUXILIARY 的 standard_quantity 是已废弃的历史脏数据；
+ * BYPRODUCT 的 standard_quantity 是「预计产出量」，加进成本符号是反的。
+ */
+@ExtendWith(MockitoExtension.class)
+class BomCostSummaryCategoryFilterTest {
+
+    @Mock BomRecipeItemRepository bomRecipeItemRepository;
+    @InjectMocks BomServiceImpl bomService;
+
+    private BomRecipeItem item(String name, String category, String qty, String price) {
+        BomRecipe parent = new BomRecipe();
+        parent.setProductName("测试产品");
+        BomRecipeItem it = new BomRecipeItem();
+        it.setFactoryId("F001");
+        it.setMaterialTypeId("M-" + name);
+        it.setMaterialName(name);
+        it.setMaterialCategory(category);
+        it.setStandardQuantity(new BigDecimal(qty));
+        it.setYieldRate(new BigDecimal("100.00"));
+        it.setUnit("pcs");
+        it.setUnitPrice(new BigDecimal(price));
+        it.setTaxRate(BigDecimal.ZERO);
+        it.setRecipe(parent);
+        return it;
+    }
+
+    private BomCostSummaryDTO summaryOf(List<BomRecipeItem> items) {
+        lenient().when(bomRecipeItemRepository.findCurrentByProduct(anyString(), anyString()))
+                .thenReturn(items);
+        return bomService.calculateProductCost("F001", "P001");
+    }
+
+    @Test
+    void onlyPackagingContributesToMaterialTotal() {
+        BomCostSummaryDTO summary = summaryOf(List.of(
+                item("陈年脏数据鸭腿", "RAW",       "100", "20.0000"),
+                item("陈年脏数据盐",   "AUXILIARY", "50",  "10.0000"),
+                item("真空袋",         "PACKAGING", "2",   "1.5000")));
+
+        assertEquals(0, summary.getMaterialCostTotal().compareTo(new BigDecimal("3.0000")),
+                "只有包材行应计入物料成本合计");
+    }
+
+    @Test
+    void byproductOutputIsNeverAddedAsCost() {
+        BomCostSummaryDTO summary = summaryOf(List.of(
+                item("鸭油",   "BYPRODUCT", "8", "12.0000"),
+                item("真空袋", "PACKAGING", "2", "1.5000")));
+
+        assertEquals(0, summary.getMaterialCostTotal().compareTo(new BigDecimal("3.0000")),
+                "副产品产出量不得被当作成本加总");
+    }
+
+    @Test
+    void nonPackagingRowsStayListedWithNullSubtotal() {
+        BomCostSummaryDTO summary = summaryOf(List.of(
+                item("陈年脏数据鸭腿", "RAW",       "100", "20.0000"),
+                item("真空袋",         "PACKAGING", "2",   "1.5000")));
+
+        assertEquals(2, summary.getMaterialCosts().size(), "明细行不应被滤掉, 仍要能看到物料与单价");
+        BomCostSummaryDTO.MaterialCostItem raw = summary.getMaterialCosts().stream()
+                .filter(row -> "RAW".equals(row.getMaterialCategory()))
+                .findFirst().orElseThrow();
+        assertNull(raw.getSubtotal(), "非包材行的小计必须是 null(此处不归集), 不是 0");
+    }
+}
+```
+
+若 `MaterialCostItem` 没有 `materialCategory` 字段，先加上（DTO 已有 `materialName` / `materialTypeId` 等同类字段，加一个 `String materialCategory` 并在 builder 处赋值）—— 测试要靠它区分行。
+
+- [ ] **Step 2: 跑测试确认失败**
+
+```bash
+cd backend/java/cretas-api
+mvn test -Dtest=BomCostSummaryCategoryFilterTest
+```
+
+预期：3 个全 FAIL。`onlyPackagingContributes` 报 `expected 3.0000 but was 2503.0000`（100x20 + 50x10 + 2x1.5），`byproduct` 报 `99.0000`，`nullSubtotal` 报小计是数字而非 null。
+
+- [ ] **Step 3: 加类别过滤**
+
+在物料循环里，对非 PACKAGING 行不计小计、不入合计；该行仍进入 `materialCosts` 明细，`subtotal` 置 `null`：
+
+```java
+            // 成本只归集包材行。
+            // RAW/AUXILIARY 的 standard_quantity 是已废弃的历史脏数据(新行写 null),
+            // 真实辅料成本在 bom_seasoning_items, 不经本循环;
+            // BYPRODUCT 的 standard_quantity 是「预计产出量」, 加进成本符号是反的。
+            // 明细行保留(能看到物料与单价), 小计置 null 表示「此处不归集」——
+            // 与 computeItemCost() 在无用量时返回 null 同一口径, 禁止写 0。
+            boolean aggregatable = "PACKAGING".equals(item.getMaterialCategory());
+            BigDecimal subtotal = aggregatable
+                    ? calculateMaterialCost(factoryId, pricingQuantity, estimateUnitPrice)
+                    : null;
+```
+
+并把合计累加改成只在 `subtotal != null` 时进行；`missingPrice` 的判定也只对可归集行成立（非归集行没有价格不算「缺价」）。
+
+- [ ] **Step 4: 跑测试确认通过**
+
+```bash
+mvn test -Dtest=BomCostSummaryCategoryFilterTest,BomCostSummaryCaliberTest
+```
+
+预期：3 + 3 全绿。
+
+- [ ] **Step 5: 变异验证**
+
+把 `"PACKAGING".equals(...)` 临时改成 `true`，重跑：预期 `onlyPackagingContributesToMaterialTotal` 与 `byproductOutputIsNeverAddedAsCost` 双双变红。确认后改回复绿。
+
+- [ ] **Step 6: 回归**
+
+```bash
+mvn test -Dtest='Bom*Test'
+```
+
+预期：失败集合与基线表逐类相同，无新增。
+
+特别注意 `BomServiceImplPreTaxCaliberTest` 与 `BomServiceImplUomCostReconciliationTest` —— 它们断言物料成本数值，若其夹具用的是 RAW 行，会因本改动变 0 而红。**那是真回归信号**：先确认夹具的 `materialCategory`，要么把夹具改成 PACKAGING（若其意图是测计价口径而非类别归属），要么说明为何该行应继续归集。**不要直接改断言数字。**
+
+- [ ] **Step 7: 提交**
+
+```bash
+git commit -m "fix(bom): 成本只归集包材行 —— 历史脏数量与副产品产出不再计入" -- \
+  backend/java/cretas-api/src/test/java/com/cretas/aims/service/impl/BomCostSummaryCategoryFilterTest.java \
+  backend/java/cretas-api/src/main/java/com/cretas/aims/service/impl/BomServiceImpl.java \
+  backend/java/cretas-api/src/main/java/com/cretas/aims/dto/bom/BomCostSummaryDTO.java
+git show --name-only HEAD
+```
+
+---
+
 ## 收尾验收
 
 全部 7 个 Task 完成后，逐条核对：
@@ -888,6 +1070,7 @@ git show --name-only HEAD
 - [ ] `grep -rn 'laborCosts\|overheadCosts' web-admin/src/views/production/bom/index.vue` 无输出
 - [ ] `grep -rn 'hasPendingActualMaterialUsage' web-admin/src` 无输出
 - [ ] `cd backend/java/cretas-api && mvn test` 失败集合与基线表逐类相同，无新增
+- [ ] 成本汇总只归集包材行：RAW/AUXILIARY 的历史脏数量与 BYPRODUCT 的产出量均不计入
 - [ ] `cd web-admin && npx vitest run` 全绿（前端无历史失败基线）
 - [ ] BOM 页打开无 console 错误，成本卡显示「当前归集成本」，无人工/均摊区块
 - [ ] 数据库四个列仍存在（`bom_recipes.total_labor_cost` / `total_overhead_cost`、`bom_recipe_items.standard_quantity`、两张 config 表未删）
