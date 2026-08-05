@@ -1,7 +1,5 @@
 package com.cretas.aims.service;
 
-import com.cretas.aims.entity.bom.LaborCostConfig;
-import com.cretas.aims.entity.bom.OverheadCostConfig;
 import com.cretas.aims.dto.bom.BomCostSummaryDTO;
 
 import java.util.List;
@@ -15,111 +13,25 @@ import java.util.List;
  */
 public interface BomService {
 
-    // ============ Labor Cost (人工成本) ============
-
-    /**
-     * 获取产品的人工成本配置
-     *
-     * @param factoryId 工厂ID
-     * @param productTypeId 产品类型ID
-     * @return 人工成本配置列表
-     */
-    List<LaborCostConfig> getLaborCostsByProduct(String factoryId, String productTypeId);
-
-    /**
-     * 获取工厂的全局人工成本配置
-     *
-     * @param factoryId 工厂ID
-     * @return 人工成本配置列表
-     */
-    List<LaborCostConfig> getGlobalLaborCosts(String factoryId);
-
-    /**
-     * 获取工厂的所有人工成本配置
-     *
-     * @param factoryId 工厂ID
-     * @return 人工成本配置列表
-     */
-    List<LaborCostConfig> getAllLaborCosts(String factoryId);
-
-    /**
-     * 保存人工成本配置
-     *
-     * @param config 人工成本配置
-     * @return 保存后的配置
-     */
-    LaborCostConfig saveLaborCost(LaborCostConfig config);
-
-    /**
-     * 删除人工成本配置
-     *
-     * @param id 配置ID
-     */
-    void deleteLaborCost(Long id);
-
-    // ============ Overhead Cost (均摊费用) ============
-
-    /**
-     * 获取工厂的均摊费用配置
-     *
-     * @param factoryId 工厂ID
-     * @return 均摊费用配置列表
-     */
-    List<OverheadCostConfig> getOverheadCosts(String factoryId);
-
-    /**
-     * 获取工厂启用的均摊费用配置
-     *
-     * @param factoryId 工厂ID
-     * @return 均摊费用配置列表
-     */
-    List<OverheadCostConfig> getActiveOverheadCosts(String factoryId);
-
-    /**
-     * 保存均摊费用配置
-     *
-     * @param config 均摊费用配置
-     * @return 保存后的配置
-     */
-    OverheadCostConfig saveOverheadCost(OverheadCostConfig config);
-
-    /**
-     * 部分更新均摊费用配置 (PUT semantics: load-existing → merge non-null fields → save).
-     *
-     * <p>R5 audit §3 BUG#1 (T-R5-3, 2026-05-12): previously the PUT controller did
-     * a blind {@code repo.save(body)}, dropping audit columns (createdAt, version,
-     * deletedAt) to NULL whenever the client payload omitted them. Now we
-     * select-then-merge so any DB-only or audit field stays intact.
-     *
-     * @param factoryId 工厂ID (path var, tenant scope)
-     * @param id        费用配置ID (path var)
-     * @param body      部分字段更新; null 字段表示"保持当前值"
-     * @return 合并并保存后的配置
-     * @throws com.cretas.aims.exception.EntityNotFoundException 当记录不存在
-     * @throws com.cretas.aims.exception.BusinessException       当 factoryId 跨租户
-     */
-    OverheadCostConfig updateOverheadCost(String factoryId, Long id, OverheadCostConfig body);
-
-    /**
-     * 删除均摊费用配置
-     *
-     * @param id 配置ID
-     */
-    void deleteOverheadCost(Long id);
-
     // ============ Cost Calculation (成本计算) ============
 
     /**
-     * 计算产品的完整成本
-     * 成本公式:
-     * - 原料成本 = SUM(成品含量 / 出成率 * 单价)
-     * - 人工成本 = SUM(工序单价 * 操作量)
-     * - 均摊费用 = SUM(单价 * 分摊量)
-     * - 总成本 = 原料成本 + 人工成本 + 均摊费用
+     * 计算产品成本 —— 口径仅为「包材」，不是完整成本。
+     *
+     * <p>只读 {@code bom_recipe_items}，且只聚合 {@code materialCategory=PACKAGING} 的行:
+     * 总成本 = SUM(包材行: 实际用量 / 出成率 * 单价)。
+     *
+     * <p>不包含: 原料（standard_quantity 是已废弃的历史脏数据，新行为 null）；
+     * 辅料（真实辅料成本在 {@code bom_seasoning_items}，本方法不联查，故完全不体现在返回值中）；
+     * 人工（要等结算：实际工时 × 时薪 ÷ 实际箱数）；均摊（要等成本分析）。
+     * 人工/均摊在返回 DTO 中为 {@code null}（"此处不归集"），不是 0（"不要钱"）。
+     *
+     * <p>调用方不能把返回的 {@code totalCost} 当作产品完整成本使用（例如与批次实际成本
+     * 直接比较差异率）——那是包材小计, 不是全成本。
      *
      * @param factoryId 工厂ID
      * @param productTypeId 产品类型ID
-     * @return 成本汇总DTO
+     * @return 成本汇总DTO（仅包材口径）
      */
     BomCostSummaryDTO calculateProductCost(String factoryId, String productTypeId);
 

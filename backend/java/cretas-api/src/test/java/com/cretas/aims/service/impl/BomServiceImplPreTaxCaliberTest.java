@@ -4,8 +4,6 @@ import com.cretas.aims.dto.bom.BomCostSummaryDTO;
 import com.cretas.aims.entity.bom.BomRecipe;
 import com.cretas.aims.entity.bom.BomRecipeItem;
 import com.cretas.aims.repository.bom.BomRecipeItemRepository;
-import com.cretas.aims.repository.bom.LaborCostConfigRepository;
-import com.cretas.aims.repository.bom.OverheadCostConfigRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -25,26 +23,25 @@ class BomServiceImplPreTaxCaliberTest {
 
     @Mock
     private BomRecipeItemRepository bomItemRepository;
-    @Mock
-    private LaborCostConfigRepository laborCostConfigRepository;
-    @Mock
-    private OverheadCostConfigRepository overheadCostConfigRepository;
 
     private BomServiceImpl service;
 
     @BeforeEach
     void setUp() {
-        service = new BomServiceImpl(bomItemRepository, laborCostConfigRepository, overheadCostConfigRepository);
+        service = new BomServiceImpl(bomItemRepository);
     }
 
     @Test
     @DisplayName("B8: cost summary marks material prices as pre-tax and does not divide an already pre-tax BOM price again")
     void calculateProductCost_marksPreTaxCaliberWithoutDoubleConverting() {
+        // materialCategory=PACKAGING: this test verifies pre-tax pricing/caliber mechanics,
+        // not category membership — Task 8 filters cost aggregation to PACKAGING rows.
         BomRecipeItem beef = BomRecipeItem.builder()
                 .factoryId("F006")
                 .recipeId("RECIPE-P-B8")
                 .materialTypeId("RM-BEEF")
                 .materialName("beef shank")
+                .materialCategory("PACKAGING")
                 .standardQuantity(new BigDecimal("1.0000"))
                 .yieldRate(new BigDecimal("100.00"))
                 .unit("jin")
@@ -55,12 +52,6 @@ class BomServiceImplPreTaxCaliberTest {
 
         when(bomItemRepository.findCurrentByProduct("F006", "P-B8"))
                 .thenReturn(List.of(beef));
-        when(laborCostConfigRepository.findByFactoryIdAndProductTypeIdAndIsActiveTrueAndDeletedAtIsNullOrderBySortOrderAsc("F006", "P-B8"))
-                .thenReturn(List.of());
-        when(laborCostConfigRepository.findByFactoryIdAndProductTypeIdIsNullAndDeletedAtIsNullOrderBySortOrderAsc("F006"))
-                .thenReturn(List.of());
-        when(overheadCostConfigRepository.findByFactoryIdAndIsActiveTrueAndDeletedAtIsNullOrderBySortOrderAsc("F006"))
-                .thenReturn(List.of());
 
         BomCostSummaryDTO result = service.calculateProductCost("F006", "P-B8");
 
@@ -78,11 +69,14 @@ class BomServiceImplPreTaxCaliberTest {
     @Test
     @DisplayName("B8: missing tax rate remains null and cost summary honestly marks the gap")
     void calculateProductCost_missingTaxRateStaysNullAndMarkedInCaliberHint() {
+        // materialCategory=PACKAGING: this test verifies missing-tax-rate handling, not
+        // category membership — Task 8 filters cost aggregation to PACKAGING rows.
         BomRecipeItem material = BomRecipeItem.builder()
                 .factoryId("F006")
                 .recipeId("RECIPE-P-B8-MISSING-TAX")
                 .materialTypeId("RM-MISSING-TAX")
                 .materialName("material without tax rate")
+                .materialCategory("PACKAGING")
                 .standardQuantity(new BigDecimal("1.0000"))
                 .yieldRate(new BigDecimal("100.00"))
                 .unit("kg")
@@ -94,13 +88,6 @@ class BomServiceImplPreTaxCaliberTest {
         when(bomItemRepository.findCurrentByProduct(
                 "F006", "P-B8-MISSING-TAX"))
                 .thenReturn(List.of(material));
-        when(laborCostConfigRepository.findByFactoryIdAndProductTypeIdAndIsActiveTrueAndDeletedAtIsNullOrderBySortOrderAsc(
-                "F006", "P-B8-MISSING-TAX"))
-                .thenReturn(List.of());
-        when(laborCostConfigRepository.findByFactoryIdAndProductTypeIdIsNullAndDeletedAtIsNullOrderBySortOrderAsc("F006"))
-                .thenReturn(List.of());
-        when(overheadCostConfigRepository.findByFactoryIdAndIsActiveTrueAndDeletedAtIsNullOrderBySortOrderAsc("F006"))
-                .thenReturn(List.of());
 
         BomCostSummaryDTO result = service.calculateProductCost("F006", "P-B8-MISSING-TAX");
 
@@ -115,11 +102,15 @@ class BomServiceImplPreTaxCaliberTest {
     @DisplayName("B-BUG-1: 缺单价的原料行不静默当 ¥0, 而是显式标记 hasMissingPrice + 缺价列表 + caliberHint 警示")
     void calculateProductCost_missingPriceSurfacedNotSilentlyZero() {
         // 一行有价 (¥10 * 1 = ¥10), 一行缺价 (unitPrice=null → 之前静默当 ¥0 并入合计)。
+        // materialCategory=PACKAGING on both rows: this test verifies missing-price
+        // surfacing mechanics, not category membership — Task 8 filters cost aggregation
+        // to PACKAGING rows, and non-aggregatable rows never count as "missing price".
         BomRecipeItem priced = BomRecipeItem.builder()
                 .factoryId("F006")
                 .recipeId("RECIPE-P-MISSING-PRICE")
                 .materialTypeId("RM-PRICED")
                 .materialName("有价原料")
+                .materialCategory("PACKAGING")
                 .standardQuantity(new BigDecimal("1.0000"))
                 .yieldRate(new BigDecimal("100.00"))
                 .unit("kg")
@@ -132,6 +123,7 @@ class BomServiceImplPreTaxCaliberTest {
                 .recipeId("RECIPE-P-MISSING-PRICE")
                 .materialTypeId("RM-NOPRICE")
                 .materialName("缺价原料")
+                .materialCategory("PACKAGING")
                 .standardQuantity(new BigDecimal("2.0000"))
                 .yieldRate(new BigDecimal("100.00"))
                 .unit("kg")
@@ -143,13 +135,6 @@ class BomServiceImplPreTaxCaliberTest {
         when(bomItemRepository.findCurrentByProduct(
                 "F006", "P-MISSING-PRICE"))
                 .thenReturn(List.of(priced, noPrice));
-        when(laborCostConfigRepository.findByFactoryIdAndProductTypeIdAndIsActiveTrueAndDeletedAtIsNullOrderBySortOrderAsc(
-                "F006", "P-MISSING-PRICE"))
-                .thenReturn(List.of());
-        when(laborCostConfigRepository.findByFactoryIdAndProductTypeIdIsNullAndDeletedAtIsNullOrderBySortOrderAsc("F006"))
-                .thenReturn(List.of());
-        when(overheadCostConfigRepository.findByFactoryIdAndIsActiveTrueAndDeletedAtIsNullOrderBySortOrderAsc("F006"))
-                .thenReturn(List.of());
 
         BomCostSummaryDTO result = service.calculateProductCost("F006", "P-MISSING-PRICE");
 

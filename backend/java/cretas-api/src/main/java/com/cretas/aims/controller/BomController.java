@@ -8,12 +8,8 @@ import com.cretas.aims.dto.bom.BomYieldApplyRequest;
 import com.cretas.aims.dto.bom.BomYieldApplyResultDTO;
 import com.cretas.aims.dto.bom.BomYieldEstimateDTO;
 import com.cretas.aims.dto.bom.BomYieldPreviewItemDTO;
-import com.cretas.aims.dto.bom.CreateLaborCostRequest;
-import com.cretas.aims.dto.bom.UpdateLaborCostRequest;
 import com.cretas.aims.entity.bom.BomChangeLog;
 import com.cretas.aims.entity.bom.BomYieldSuggestion;
-import com.cretas.aims.entity.bom.LaborCostConfig;
-import com.cretas.aims.entity.bom.OverheadCostConfig;
 import com.cretas.aims.repository.bom.BomChangeLogRepository;
 import com.cretas.aims.repository.bom.BomYieldSuggestionRepository;
 import com.cretas.aims.dto.orchestration.BomTreeResult;
@@ -28,7 +24,6 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.web.bind.annotation.*;
 
-import java.math.BigDecimal;
 import java.util.Collections;
 import java.util.List;
 
@@ -99,112 +94,6 @@ public class BomController {
         }
         return ApiResponse.success(bomChangeLogRepository
                 .findByFactoryIdAndBomRecipeIdAndDeletedAtIsNullOrderByCreatedAtDesc(factoryId, recipeId));
-    }
-
-    // ========== Labor Cost (人工费用) ==========
-
-    @GetMapping("/labor")
-    @Operation(summary = "获取人工费用配置")
-    public ApiResponse<List<LaborCostConfig>> getLaborCosts(
-            @PathVariable @Parameter(description = "工厂ID") String factoryId,
-            @RequestParam(required = false) @Parameter(description = "产品类型ID") String productTypeId) {
-        log.info("Getting labor costs: factoryId={}, productTypeId={}", factoryId, productTypeId);
-        if (productTypeId != null && !productTypeId.isEmpty()) {
-            return ApiResponse.success(bomService.getLaborCostsByProduct(factoryId, productTypeId));
-        }
-        return ApiResponse.success(bomService.getGlobalLaborCosts(factoryId));
-    }
-
-    @GetMapping("/labor/all")
-    @Operation(summary = "获取所有人工费用配置")
-    public ApiResponse<List<LaborCostConfig>> getAllLaborCosts(
-            @PathVariable @Parameter(description = "工厂ID") String factoryId) {
-        log.info("Getting all labor costs: factoryId={}", factoryId);
-        return ApiResponse.success(bomService.getAllLaborCosts(factoryId));
-    }
-
-    @RequirePermission({"production:read_write", "rd:read_write", "finance:read_write"})
-    @PostMapping("/labor")
-    @Operation(summary = "添加人工费用")
-    public ApiResponse<LaborCostConfig> addLaborCost(
-            @PathVariable @Parameter(description = "工厂ID") String factoryId,
-            @Valid @RequestBody CreateLaborCostRequest request) {
-        log.info("Adding labor cost: factoryId={}, processName={}", factoryId, request.getProcessName());
-        LaborCostConfig config = toLaborCostConfig(request);
-        config.setFactoryId(factoryId);
-        return ApiResponse.success(bomService.saveLaborCost(config));
-    }
-
-    @RequirePermission({"production:read_write", "rd:read_write", "finance:read_write"})
-    @PutMapping("/labor/{id}")
-    @Operation(summary = "更新人工费用")
-    public ApiResponse<LaborCostConfig> updateLaborCost(
-            @PathVariable @Parameter(description = "工厂ID") String factoryId,
-            @PathVariable @Parameter(description = "人工费用ID") Long id,
-            @Valid @RequestBody UpdateLaborCostRequest request) {
-        log.info("Updating labor cost: factoryId={}, id={}", factoryId, id);
-        LaborCostConfig config = toLaborCostConfig(request);
-        config.setId(id);
-        config.setFactoryId(factoryId);
-        return ApiResponse.success(bomService.saveLaborCost(config));
-    }
-
-    @RequirePermission({"production:read_write", "rd:read_write", "finance:read_write"})
-    @DeleteMapping("/labor/{id}")
-    @Operation(summary = "删除人工费用")
-    public ApiResponse<Void> deleteLaborCost(
-            @PathVariable @Parameter(description = "工厂ID") String factoryId,
-            @PathVariable @Parameter(description = "人工费用ID") Long id) {
-        log.info("Deleting labor cost: factoryId={}, id={}", factoryId, id);
-        bomService.deleteLaborCost(id);
-        return ApiResponse.success(null);
-    }
-
-    // ========== Overhead Cost (均摊费用) ==========
-
-    @GetMapping("/overhead")
-    @Operation(summary = "获取均摊费用配置")
-    public ApiResponse<List<OverheadCostConfig>> getOverheadCosts(
-            @PathVariable @Parameter(description = "工厂ID") String factoryId) {
-        log.info("Getting overhead costs: factoryId={}", factoryId);
-        return ApiResponse.success(bomService.getOverheadCosts(factoryId));
-    }
-
-    @RequirePermission({"production:read_write", "rd:read_write", "finance:read_write"})
-    @PostMapping("/overhead")
-    @Operation(summary = "添加均摊费用")
-    public ApiResponse<OverheadCostConfig> addOverheadCost(
-            @PathVariable @Parameter(description = "工厂ID") String factoryId,
-            @RequestBody OverheadCostConfig config) {
-        log.info("Adding overhead cost: factoryId={}, name={}", factoryId, config.getName());
-        config.setFactoryId(factoryId);
-        return ApiResponse.success(bomService.saveOverheadCost(config));
-    }
-
-    @RequirePermission({"production:read_write", "rd:read_write", "finance:read_write"})
-    @PutMapping("/overhead/{id}")
-    @Operation(summary = "更新均摊费用")
-    public ApiResponse<OverheadCostConfig> updateOverheadCost(
-            @PathVariable @Parameter(description = "工厂ID") String factoryId,
-            @PathVariable @Parameter(description = "均摊费用ID") Long id,
-            @RequestBody OverheadCostConfig config) {
-        log.info("Updating overhead cost: factoryId={}, id={}", factoryId, id);
-        // T-R5-3 (R5 audit §3 BUG#1, 2026-05-12): was a blind save(body) that
-        // dropped DB-only audit columns (createdAt/version) to NULL on partial
-        // payloads. Service now select-then-merge — only client-supplied fields
-        // are overwritten; everything else stays.
-        return ApiResponse.success(bomService.updateOverheadCost(factoryId, id, config));
-    }
-
-    @RequirePermission({"production:read_write", "rd:read_write", "finance:read_write"})
-    @DeleteMapping("/overhead/{id}")
-    @Operation(summary = "删除均摊费用")
-    public ApiResponse<Void> deleteOverheadCost(
-            @PathVariable @Parameter(description = "工厂ID") String factoryId,
-            @PathVariable @Parameter(description = "均摊费用ID") Long id) {
-        log.info("Deleting overhead cost: factoryId={}, id={}", factoryId, id);
-        bomService.deleteOverheadCost(id);
-        return ApiResponse.success(null);
     }
 
     // ========== Cost Calculation (成本计算) ==========
@@ -312,46 +201,5 @@ public class BomController {
         return ApiResponse.success(
                 bomYieldSuggestionRepository.findByFactoryIdAndStatusAndDeletedAtIsNullOrderByGeneratedAtDesc(
                         factoryId, parsed));
-    }
-
-
-    // ========== Labor Cost request mappers ==========
-    /**
-     * Map CreateLaborCostRequest → LaborCostConfig entity. Defaults align with
-     * @Builder.Default on LaborCostConfig (defaultQuantity=1, isActive=true,
-     * sortOrder=0).
-     */
-    private static LaborCostConfig toLaborCostConfig(CreateLaborCostRequest r) {
-        LaborCostConfig c = new LaborCostConfig();
-        c.setProductTypeId(r.getProductTypeId());
-        c.setProcessName(r.getProcessName());
-        c.setProcessCategory(r.getProcessCategory());
-        c.setUnitPrice(r.getUnitPrice());
-        c.setPriceUnit(r.getPriceUnit());
-        c.setDefaultQuantity(r.getDefaultQuantity() != null ? r.getDefaultQuantity() : BigDecimal.ONE);
-        c.setIsActive(r.getIsActive() != null ? r.getIsActive() : Boolean.TRUE);
-        c.setSortOrder(r.getSortOrder() != null ? r.getSortOrder() : 0);
-        c.setRemark(r.getRemark());
-        // SP3 Place 3a: set per-kg labor cost (null = not configured, honest gap)
-        c.setLaborCostPerKg(r.getLaborCostPerKg());
-        return c;
-    }
-
-    /** Update variant — same shape as create (PUT is full-replace). */
-    private static LaborCostConfig toLaborCostConfig(UpdateLaborCostRequest r) {
-        LaborCostConfig c = new LaborCostConfig();
-        c.setProductTypeId(r.getProductTypeId());
-        c.setProcessName(r.getProcessName());
-        c.setProcessCategory(r.getProcessCategory());
-        c.setUnitPrice(r.getUnitPrice());
-        c.setPriceUnit(r.getPriceUnit());
-        c.setDefaultQuantity(r.getDefaultQuantity() != null ? r.getDefaultQuantity() : BigDecimal.ONE);
-        c.setIsActive(r.getIsActive() != null ? r.getIsActive() : Boolean.TRUE);
-        c.setSortOrder(r.getSortOrder() != null ? r.getSortOrder() : 0);
-        c.setRemark(r.getRemark());
-        // SP3 Place 3b: update per-kg labor cost; null allowed (null-guard: preserve if absent handled
-        // by caller supplying explicit null to clear, not by silently ignoring)
-        c.setLaborCostPerKg(r.getLaborCostPerKg());
-        return c;
     }
 }

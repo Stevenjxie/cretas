@@ -86,7 +86,6 @@ const activatingRecipeId = ref<string | null>(null);
 const deletingRecipeId = ref<string | null>(null);
 const selectedRecipeId = ref<string>('');
 const versionHistoryVisible = ref(false);
-const costDetailsExpanded = ref(false);
 const historicalYield = ref<YieldEstimateResponse | null>(null);
 const historicalYieldLoadFailed = ref(false);
 const selectedRecipe = computed(() =>
@@ -475,8 +474,6 @@ const bomProductSelectKey = ref(0);
 const productTypes = ref<TableRow[]>([]);
 interface BomCostSummaryView {
   materialCostTotal?: number | null;
-  laborCostTotal?: number | null;
-  overheadCostTotal?: number | null;
   totalCost?: number | null;
   costUnit?: string | null;
 }
@@ -555,29 +552,6 @@ interface BomItemRow {
   semiFinishedRefCode?: string;
   // SP12 #728: 组合装子产品/嵌套 BOM
   subProductTypeId?: string;
-  [k: string]: unknown;
-}
-interface LaborCostRow {
-  id?: number | null;
-  productTypeId?: string;
-  processName?: string;
-  processCategory?: string;
-  unitPrice?: number;
-  priceUnit?: string;
-  standardQuantity?: number;
-  sortOrder?: number;
-  notes?: string;
-  [k: string]: unknown;
-}
-interface OverheadCostRow {
-  id?: number | null;
-  name?: string;
-  category?: string;
-  unitPrice?: number;
-  priceUnit?: string;
-  allocationRate?: number;
-  sortOrder?: number;
-  notes?: string;
   [k: string]: unknown;
 }
 const bomItems = ref<BomItemRow[]>([]);
@@ -898,47 +872,8 @@ async function handleCopyRulesToProduct(payload: CopyBomToProductRequest) {
   }
 }
 
-// Labor Costs (人工费用)
-const laborCosts = ref<LaborCostRow[]>([]);
-const laborDialogVisible = ref(false);
-const laborDialogLoading = ref(false);
-const isLaborEdit = ref(false);
-const laborForm = ref({
-  id: null as number | null,
-  productTypeId: '',
-  processName: '',
-  processCategory: '',
-  unitPrice: 0,
-  priceUnit: '元/kg',
-  standardQuantity: 1,
-  sortOrder: 0,
-  notes: ''
-});
-
-// Overhead Costs (均摊费用)
-const overheadCosts = ref<OverheadCostRow[]>([]);
-const overheadDialogVisible = ref(false);
-const overheadDialogLoading = ref(false);
-const isOverheadEdit = ref(false);
-const overheadForm = ref({
-  id: null as number | null,
-  name: '',
-  category: '',
-  unitPrice: 0,
-  priceUnit: '元/kg',
-  allocationRate: 1,
-  sortOrder: 0,
-  notes: ''
-});
-
 // Raw material types for dropdown
 const materialTypes = ref<TableRow[]>([]);
-
-// Process categories for dropdown
-const processCategories = ['通用工序', '分割工序', '包装工序', '质检工序', '冷藏工序'];
-
-// Overhead categories for dropdown
-const overheadCategories = ['房租', '水电', '燃气', '设备折旧', '后端毛利', '其他'];
 
 async function loadProductWorkspace(productTypeId: string) {
   if (!factoryId.value || !productTypeId) return;
@@ -952,7 +887,6 @@ async function loadProductWorkspace(productTypeId: string) {
   bomRecipes.value = [];
   selectedRecipeId.value = '';
   bomItems.value = [];
-  laborCosts.value = [];
   costSummary.value = null;
   historicalYield.value = null;
   historicalYieldLoadFailed.value = false;
@@ -968,7 +902,6 @@ async function loadProductWorkspace(productTypeId: string) {
     await Promise.all([
       loadBomItems(recipeId),
       loadConfigurationReadiness(recipeId || null),
-      loadLaborCosts(productTypeId),
       loadCostSummary(productTypeId),
     ]);
     if (!workspaceLoadCoordinator.isCurrent(token)) return;
@@ -995,7 +928,6 @@ onMounted(async () => {
   void Promise.allSettled([
     loadProductTypes(),
     loadMaterialTypes(),
-    loadOverheadCosts(),
   ]);
 
   bootstrapSelectingProduct = true;
@@ -1029,7 +961,6 @@ watch(selectedProductTypeId, async (newVal) => {
     workspaceLoadCoordinator.invalidate();
     selectedProductMeta.value = null;
     bomItems.value = [];
-    laborCosts.value = [];
     costSummary.value = null;
     bomRecipes.value = [];
     selectedRecipeId.value = '';
@@ -1527,275 +1458,6 @@ async function handleDeleteBomItem(row: TableRow) {
   }
 }
 
-// ========== Labor Costs ==========
-async function loadLaborCosts(productTypeId = selectedProductTypeId.value) {
-  const currentFactoryId = factoryId.value;
-  if (!currentFactoryId || !productTypeId) return;
-  try {
-    const response = await get(`/${currentFactoryId}/bom/labor`, {
-      params: { productTypeId }
-    });
-    if (selectedProductTypeId.value !== productTypeId) return;
-    if (response.success && response.data) {
-      laborCosts.value = response.data;
-    }
-  } catch (error: unknown) {
-    const err = error as { actionHint?: string };
-    if (!err?.actionHint) ElMessage.error('加载人工费用失败');
-  }
-}
-
-async function loadAllLaborCosts() {
-  if (!factoryId.value) return;
-  try {
-    const response = await get(`/${factoryId.value}/bom/labor/all`);
-    if (response.success && response.data) {
-      // Store all labor costs for reference
-    }
-  } catch (error: unknown) {
-    const err = error as { actionHint?: string };
-    if (!err?.actionHint) ElMessage.error('加载人工费用汇总失败');
-  }
-}
-
-function handleAddLaborCost() {
-  if (!requireEditableRecipe()) return;
-  isLaborEdit.value = false;
-  laborForm.value = {
-    id: null,
-    productTypeId: selectedProductTypeId.value,
-    processName: '',
-    processCategory: '',
-    unitPrice: 0,
-    priceUnit: '元/kg',
-    standardQuantity: 1,
-    sortOrder: laborCosts.value.length,
-    notes: ''
-  };
-  laborDialogVisible.value = true;
-}
-
-function handleEditLaborCost(row: TableRow) {
-  if (!requireEditableRecipe()) return;
-  isLaborEdit.value = true;
-  laborForm.value = {
-    id: row.id,
-    productTypeId: row.productTypeId,
-    processName: row.processName,
-    processCategory: row.processCategory || '',
-    unitPrice: row.unitPrice || 0,
-    priceUnit: row.priceUnit || '元/kg',
-    standardQuantity: row.standardQuantity || 1,
-    sortOrder: row.sortOrder || 0,
-    notes: row.notes || ''
-  };
-  laborDialogVisible.value = true;
-}
-
-async function submitLaborForm() {
-  if (!requireEditableRecipe()) return;
-  // fool-proof Rule 1: 字段级校验, 不静默丢给后端报晦涩 400.
-  if (!laborForm.value.processName) {
-    ElMessage.warning('请输入工序名称');
-    return;
-  }
-  if (canViewPrice.value && laborForm.value.unitPrice == null) {
-    ElMessage.warning('请填写工序单价');
-    return;
-  }
-  laborDialogLoading.value = true;
-  try {
-    let response;
-    if (isLaborEdit.value && laborForm.value.id) {
-      response = await put(`/${factoryId.value}/bom/labor/${laborForm.value.id}`, laborForm.value);
-    } else {
-      response = await post(`/${factoryId.value}/bom/labor`, laborForm.value);
-    }
-    if (response.success) {
-      ElMessage.success(isLaborEdit.value ? '人工费用已更新' : '人工费用已添加');
-      laborDialogVisible.value = false;
-      await loadLaborCosts();
-      await loadCostSummary();
-    } else {
-      ElMessage({
-        message: response.message || '人工费用保存失败',
-        type: 'error',
-        duration: 0,
-        showClose: true,
-      });
-    }
-  } catch (error: unknown) {
-    const err = error as { actionHint?: string };
-    if (!err?.actionHint) ElMessage({
-      message: '人工费用保存失败',
-      type: 'error',
-      duration: 0,
-      showClose: true,
-    });
-  } finally {
-    laborDialogLoading.value = false;
-  }
-}
-
-async function handleDeleteLaborCost(row: TableRow) {
-  if (!requireEditableRecipe()) return;
-  try {
-    await ElMessageBox.confirm(
-      `确定删除人工费用『${String(row.processName || row.name || '未命名费用')}』吗？`,
-      '删除人工费用',
-      { type: 'warning', confirmButtonText: '删除', cancelButtonText: '取消' },
-    );
-    const response = await del(`/${factoryId.value}/bom/labor/${row.id}`);
-    if (response.success) {
-      ElMessage.success('人工费用已删除');
-      await loadLaborCosts();
-      await loadCostSummary();
-    } else {
-      ElMessage({
-        message: response.message || 'Delete failed',
-        type: 'error',
-        duration: 0,
-        showClose: true,
-      });
-    }
-  } catch (error: unknown) {
-    const err = error as { actionHint?: string };
-    if (error !== 'cancel' && !err?.actionHint) {
-      ElMessage({
-        message: 'Delete failed',
-        type: 'error',
-        duration: 0,
-        showClose: true,
-      });
-    }
-  }
-}
-
-// ========== Overhead Costs ==========
-async function loadOverheadCosts() {
-  if (!factoryId.value) return;
-  try {
-    const response = await get(`/${factoryId.value}/bom/overhead`);
-    if (response.success && response.data) {
-      overheadCosts.value = response.data;
-    }
-  } catch (error: unknown) {
-    const err = error as { actionHint?: string };
-    if (!err?.actionHint) ElMessage.error('加载均摊费用失败');
-  }
-}
-
-function handleAddOverheadCost() {
-  if (!requireEditableRecipe()) return;
-  isOverheadEdit.value = false;
-  overheadForm.value = {
-    id: null,
-    name: '',
-    category: '',
-    unitPrice: 0,
-    priceUnit: '元/kg',
-    allocationRate: 1,
-    sortOrder: overheadCosts.value.length,
-    notes: ''
-  };
-  overheadDialogVisible.value = true;
-}
-
-function handleEditOverheadCost(row: TableRow) {
-  if (!requireEditableRecipe()) return;
-  isOverheadEdit.value = true;
-  overheadForm.value = {
-    id: row.id,
-    name: row.name,
-    category: row.category || '',
-    unitPrice: row.unitPrice || 0,
-    priceUnit: row.priceUnit || '元/kg',
-    allocationRate: row.allocationRate || 1,
-    sortOrder: row.sortOrder || 0,
-    notes: row.notes || ''
-  };
-  overheadDialogVisible.value = true;
-}
-
-async function submitOverheadForm() {
-  if (!requireEditableRecipe()) return;
-  // fool-proof Rule 1: 字段级校验, 不静默丢给后端报晦涩 400.
-  if (!overheadForm.value.name) {
-    ElMessage.warning('请输入费用名称');
-    return;
-  }
-  if (canViewPrice.value && overheadForm.value.unitPrice == null) {
-    ElMessage.warning('请填写单价');
-    return;
-  }
-  overheadDialogLoading.value = true;
-  try {
-    let response;
-    if (isOverheadEdit.value && overheadForm.value.id) {
-      response = await put(`/${factoryId.value}/bom/overhead/${overheadForm.value.id}`, overheadForm.value);
-    } else {
-      response = await post(`/${factoryId.value}/bom/overhead`, overheadForm.value);
-    }
-    if (response.success) {
-      ElMessage.success(isOverheadEdit.value ? '均摊费用已更新' : '均摊费用已添加');
-      overheadDialogVisible.value = false;
-      await loadOverheadCosts();
-      await loadCostSummary();
-    } else {
-      ElMessage({
-        message: response.message || '均摊费用保存失败',
-        type: 'error',
-        duration: 0,
-        showClose: true,
-      });
-    }
-  } catch (error: unknown) {
-    const err = error as { actionHint?: string };
-    if (!err?.actionHint) ElMessage({
-      message: '均摊费用保存失败',
-      type: 'error',
-      duration: 0,
-      showClose: true,
-    });
-  } finally {
-    overheadDialogLoading.value = false;
-  }
-}
-
-async function handleDeleteOverheadCost(row: TableRow) {
-  if (!requireEditableRecipe()) return;
-  try {
-    await ElMessageBox.confirm(
-      `确定删除均摊费用『${String(row.name || '未命名费用')}』吗？`,
-      '删除均摊费用',
-      { type: 'warning', confirmButtonText: '删除', cancelButtonText: '取消' },
-    );
-    const response = await del(`/${factoryId.value}/bom/overhead/${row.id}`);
-    if (response.success) {
-      ElMessage.success('均摊费用已删除');
-      await loadOverheadCosts();
-      await loadCostSummary();
-    } else {
-      ElMessage({
-        message: response.message || 'Delete failed',
-        type: 'error',
-        duration: 0,
-        showClose: true,
-      });
-    }
-  } catch (error: unknown) {
-    const err = error as { actionHint?: string };
-    if (error !== 'cancel' && !err?.actionHint) {
-      ElMessage({
-        message: 'Delete failed',
-        type: 'error',
-        duration: 0,
-        showClose: true,
-      });
-    }
-  }
-}
-
 // ========== Cost Summary ==========
 async function loadCostSummary(productTypeId = selectedProductTypeId.value) {
   const currentFactoryId = factoryId.value;
@@ -1814,31 +1476,25 @@ async function loadCostSummary(productTypeId = selectedProductTypeId.value) {
 
 // ========== Computed ==========
 const materialCostTotal = computed(() => {
+  // 标准成本 = 辅料 + 包材。原料没有数量（报工时才知道），不参与前端估算。
+  // 辅料成本由后端按 dosage_per_kg_g 归集，这里只汇总包材行。
+  //
+  // ⚠️ 包材用量读的是 standardQuantity，不是 naturalQuantity。
+  // 「每 1 份成品包材用量」这个输入框，提交前被复制进 standardQuantity（index.vue:1367），
+  // payload 里根本没有 naturalQuantity（:1310），编辑回填也是从 standardQuantity 读回（:1283），
+  // 后端成本引擎同样用 getStandardQuantity()（BomServiceImpl:98）。
+  // 也就是说 standard_quantity 这一列：对 RAW 是废弃脏数据，对 PACKAGING 是正经数据。
+  // 本任务停用的是前者，靠类别过滤实现，不是靠停读整列。
   return bomItems.value.reduce((sum, item) => {
-    const qty = item.standardQuantity || 0;
-    const yieldRate = item.yieldRate != null ? (Number(item.yieldRate) || 100) / 100 : 1;
-    const price = item.unitPrice || 0;
-    return sum + (yieldRate > 0 ? (qty / yieldRate) * price : 0);
-  }, 0);
-});
-const hasPendingActualMaterialUsage = computed(() => bomItems.value.some((item) =>
-  item.materialCategory !== 'PACKAGING' && item.standardQuantity == null,
-));
-
-const laborCostTotal = computed(() => {
-  return laborCosts.value.reduce((sum, item) => {
-    return sum + (item.unitPrice || 0) * (item.standardQuantity || 1);
-  }, 0);
-});
-
-const overheadCostTotal = computed(() => {
-  return overheadCosts.value.reduce((sum, item) => {
-    return sum + (item.unitPrice || 0) * (item.allocationRate || 1);
+    if (item.materialCategory !== 'PACKAGING') return sum;
+    const qty = Number(item.standardQuantity) || 0;
+    const price = Number(item.unitPrice) || 0;
+    return sum + qty * price;
   }, 0);
 });
 
 const totalCost = computed(() => {
-  return materialCostTotal.value + laborCostTotal.value + overheadCostTotal.value;
+  return materialCostTotal.value;
 });
 function summaryNumber(value: unknown, fallback: number): number {
   const number = Number(value);
@@ -1847,9 +1503,6 @@ function summaryNumber(value: unknown, fallback: number): number {
 const costDisplayUnit = computed(() => {
   return formatPriceUnit(skuOutputUnit.value);
 });
-const estimatedMaterialCost = computed(() => summaryNumber(costSummary.value?.materialCostTotal, materialCostTotal.value));
-const estimatedLaborCost = computed(() => summaryNumber(costSummary.value?.laborCostTotal, laborCostTotal.value));
-const estimatedOverheadCost = computed(() => summaryNumber(costSummary.value?.overheadCostTotal, overheadCostTotal.value));
 const costPerSkuUnit = computed(() => summaryNumber(costSummary.value?.totalCost, totalCost.value));
 const costPerKg = computed<number | null>(() => {
   if (costDisplayUnit.value === '元/kg' || skuGramsPerUnit.value == null) return null;
@@ -1940,31 +1593,13 @@ const currentTabItems = computed(() => {
 
 // ========== Export ==========
 function exportToExcel(type: string) {
-  let headers: string[];
-  let rows: string[][];
-  if (type === 'material') {
-    if (bomItems.value.length === 0) { ElMessage.warning('暂无BOM数据可导出'); return; }
-    headers = ['物料名称', '物料编号', '数量', '单位', '单价(元)', '小计(元)', '备注'];
-    rows = bomItems.value.map((item: TableRow) => [
-      item.materialName || '', item.materialCode || '', String(item.quantity ?? ''),
-      item.unit || '', String(item.unitPrice ?? ''),
-      String(((item.quantity || 0) * (item.unitPrice || 0)).toFixed(2)), item.notes || ''
-    ]);
-  } else if (type === 'labor') {
-    if (laborCosts.value.length === 0) { ElMessage.warning('暂无人工成本数据'); return; }
-    headers = ['工序名称', '工时(分钟)', '单价(元/时)', '费用(元)'];
-    rows = laborCosts.value.map((item: TableRow) => [
-      item.processName || '', String(item.duration ?? ''), String(item.unitPrice ?? ''),
-      String(((item.duration || 0) / 60 * (item.unitPrice || 0)).toFixed(2))
-    ]);
-  } else {
-    if (overheadCosts.value.length === 0) { ElMessage.warning('暂无制造费用数据'); return; }
-    headers = ['费用名称', '金额(元)', '分摊率', '分摊金额(元)'];
-    rows = overheadCosts.value.map((item: TableRow) => [
-      item.name || '', String(item.unitPrice ?? ''), String(item.allocationRate ?? 1),
-      String(((item.unitPrice || 0) * (item.allocationRate || 1)).toFixed(2))
-    ]);
-  }
+  if (bomItems.value.length === 0) { ElMessage.warning('暂无BOM数据可导出'); return; }
+  const headers = ['物料名称', '物料编号', '数量', '单位', '单价(元)', '小计(元)', '备注'];
+  const rows = bomItems.value.map((item: TableRow) => [
+    item.materialName || '', item.materialCode || '', String(item.quantity ?? ''),
+    item.unit || '', String(item.unitPrice ?? ''),
+    String(((item.quantity || 0) * (item.unitPrice || 0)).toFixed(2)), item.notes || ''
+  ]);
   const csvContent = '﻿' + [headers, ...rows].map(r => r.map(c => `"${String(c).replace(/"/g, '""')}"`).join(',')).join('\n');
   const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
   const link = document.createElement('a');
@@ -1977,8 +1612,6 @@ function exportToExcel(type: string) {
 
 function refreshData() {
   loadBomItems();
-  loadLaborCosts();
-  loadOverheadCosts();
   loadCostSummary();
   loadBomRecipes();
   loadHistoricalYield();
@@ -2482,9 +2115,9 @@ watch(adjustDialogVisible, (visible) => {
         <small>可选，不影响生效</small>
       </div>
       <div v-if="canViewPrice" class="bom-summary-card">
-        <span>{{ hasPendingActualMaterialUsage ? '当前归集成本' : '当前总成本' }}</span>
+        <span>当前归集成本</span>
         <strong>{{ formatFriendlyNumber(costPerSkuUnit, 2) }} {{ costDisplayUnit }}</strong>
-        <small>{{ hasPendingActualMaterialUsage ? '原料实际用量待生产报工' : '按当前配方自动汇总' }}</small>
+        <small>原料实际用量待生产报工</small>
       </div>
     </div>
 
@@ -2803,7 +2436,14 @@ watch(adjustDialogVisible, (visible) => {
               {{ formatFriendlyNumber(row.unitPrice, 4) }} {{ formatPriceUnit(row.priceUnit) }}
             </template>
           </el-table-column>
-          <el-table-column v-if="canViewPrice && activeCategoryTab !== 'BYPRODUCT'" label="小计" width="150" align="right">
+          <!-- 小计只在 PACKAGING 页签渲染: 后端 calculateProductCost 只归集 PACKAGING 行,
+               RAW/AUXILIARY 行的 subtotal 恒为 null("此处不归集", 见 BomCostSummaryDTO
+               注释)。之前这列对 RAW/AUXILIARY 页签也渲染, 用 standardQuantity/yieldRate*
+               unitPrice 在前端本地算出一个"看起来是钱"的数字——对存量脏数据(旧 RAW 行
+               仍带 standardQuantity)会显示与卡片底部"实际原料用量待生产报工"矛盾的金额。
+               选择整列隐藏(而非该列内逐行显示"待报工归集")，因为 RAW 页签底部的
+               table-footer 已经统一说明了归集状态, 逐行重复没有必要。 -->
+          <el-table-column v-if="canViewPrice && activeCategoryTab === 'PACKAGING'" label="小计" width="150" align="right">
             <template #default="{ row }">
               <span v-if="bomLineAmountPreview(row).amount != null">
                 {{ formatFriendlyNumber(bomLineAmountPreview(row).amount, 4) }} 元
@@ -2827,118 +2467,10 @@ watch(adjustDialogVisible, (visible) => {
         </el-table>
         <!-- 副产页签不显示「原料成本合计」—— 那是投入侧的合计, 副产行不在其中 -->
         <div v-if="canViewPrice && activeCategoryTab !== 'AUXILIARY' && activeCategoryTab !== 'BYPRODUCT'" class="table-footer">
-          <span class="total-label">{{ hasPendingActualMaterialUsage ? '成本归集状态:' : '原料成本合计:' }}</span>
-          <span v-if="hasPendingActualMaterialUsage" class="total-value">实际原料用量待生产报工</span>
-          <span v-else class="total-value">{{ formatFriendlyNumber(estimatedMaterialCost, 2) }} {{ costDisplayUnit }}</span>
+          <span class="total-label">成本归集状态:</span>
+          <span class="total-value">实际原料用量待生产报工</span>
         </div>
       </el-card>
-
-      <button
-        type="button"
-        class="bom-advanced-toggle"
-        :aria-expanded="costDetailsExpanded"
-        @click="costDetailsExpanded = !costDetailsExpanded"
-      >
-        <span>
-          <strong>人工与均摊费用</strong>
-          <small>高级配置 · 日常配置原料、辅料和包材时无需展开</small>
-        </span>
-        <span>{{ costDetailsExpanded ? '收起' : '展开' }}</span>
-      </button>
-
-      <el-collapse-transition>
-        <div v-show="costDetailsExpanded" class="bom-advanced-costs">
-      <!-- Labor Cost Table (人工费用表) -->
-      <el-card class="table-card" shadow="never">
-        <template #header>
-          <div class="table-header">
-            <span class="table-title">人工费用表</span>
-            <div class="table-actions">
-              <el-button v-if="selectedRecipeEditable" type="primary" size="small" @click="handleAddLaborCost">
-                添加
-              </el-button>
-              <el-button size="small" @click="exportToExcel('labor')">导出</el-button>
-            </div>
-          </div>
-        </template>
-        <el-table :data="laborCosts" stripe border size="small" style="width: 100%">
-          <el-table-column prop="processName" label="工序名称" min-width="120" show-overflow-tooltip />
-          <el-table-column v-if="canViewPrice" prop="unitPrice" label="工序单价" width="90" align="right">
-            <template #default="{ row }">
-              {{ (row.unitPrice || 0).toFixed(4) }}
-            </template>
-          </el-table-column>
-          <el-table-column v-if="canViewPrice" prop="priceUnit" label="工序单位" width="80" align="center" />
-          <el-table-column prop="standardQuantity" label="操作量" width="80" align="right">
-            <template #default="{ row }">
-              {{ (row.standardQuantity || 1).toFixed(2) }}
-            </template>
-          </el-table-column>
-          <el-table-column v-if="canViewPrice" label="费用小计" width="100" align="right">
-            <template #default="{ row }">
-              {{ ((row.unitPrice || 0) * (row.standardQuantity || 1)).toFixed(4) }}
-            </template>
-          </el-table-column>
-          <el-table-column prop="processCategory" label="工序大类" width="100" show-overflow-tooltip />
-          <el-table-column v-if="selectedRecipeEditable" label="操作" width="120" fixed="right" align="center">
-            <template #default="{ row }">
-              <el-button type="primary" link size="small" @click="handleEditLaborCost(row)">编辑</el-button>
-              <el-button type="danger" link size="small" @click="handleDeleteLaborCost(row)">删除</el-button>
-            </template>
-          </el-table-column>
-        </el-table>
-        <div v-if="canViewPrice" class="table-footer">
-          <span class="total-label">人工费用合计:</span>
-          <span class="total-value">{{ laborCostTotal.toFixed(4) }} 元</span>
-        </div>
-      </el-card>
-
-      <!-- Overhead Cost Table (均摊费用表) -->
-      <el-card class="table-card" shadow="never">
-        <template #header>
-          <div class="table-header">
-            <span class="table-title">均摊费用表</span>
-            <div class="table-actions">
-              <el-button v-if="selectedRecipeEditable" type="primary" size="small" @click="handleAddOverheadCost">
-                添加
-              </el-button>
-              <el-button size="small" @click="exportToExcel('overhead')">导出</el-button>
-            </div>
-          </div>
-        </template>
-        <el-table :data="overheadCosts" stripe border size="small" style="width: 100%">
-          <el-table-column prop="name" label="名称" min-width="120" show-overflow-tooltip />
-          <el-table-column v-if="canViewPrice" prop="unitPrice" label="单价" width="90" align="right">
-            <template #default="{ row }">
-              {{ (row.unitPrice || 0).toFixed(4) }}
-            </template>
-          </el-table-column>
-          <el-table-column v-if="canViewPrice" prop="priceUnit" label="分摊单位" width="80" align="center" />
-          <el-table-column prop="allocationRate" label="分摊量" width="80" align="right">
-            <template #default="{ row }">
-              {{ (row.allocationRate || 1).toFixed(2) }}
-            </template>
-          </el-table-column>
-          <el-table-column v-if="canViewPrice" label="费用小计" width="100" align="right">
-            <template #default="{ row }">
-              {{ ((row.unitPrice || 0) * (row.allocationRate || 1)).toFixed(4) }}
-            </template>
-          </el-table-column>
-          <el-table-column prop="category" label="费用类别" width="100" show-overflow-tooltip />
-          <el-table-column v-if="selectedRecipeEditable" label="操作" width="120" fixed="right" align="center">
-            <template #default="{ row }">
-              <el-button type="primary" link size="small" @click="handleEditOverheadCost(row)">编辑</el-button>
-              <el-button type="danger" link size="small" @click="handleDeleteOverheadCost(row)">删除</el-button>
-            </template>
-          </el-table-column>
-        </el-table>
-        <div v-if="canViewPrice" class="table-footer">
-          <span class="total-label">均摊费用合计:</span>
-          <span class="total-value">{{ overheadCostTotal.toFixed(4) }} 元</span>
-        </div>
-      </el-card>
-        </div>
-      </el-collapse-transition>
       </div>
 
       <aside class="bom-side-stack" aria-label="配方生效条件与成本概览">
@@ -2963,10 +2495,8 @@ watch(adjustDialogVisible, (visible) => {
         <el-card v-if="canViewPrice" class="bom-side-card" shadow="never">
           <template #header><strong>成本概览</strong></template>
           <div class="bom-cost-overview">
-            <div><span>原料成本</span><strong>{{ hasPendingActualMaterialUsage ? '待报工归集' : `${formatFriendlyNumber(estimatedMaterialCost, 2)} ${costDisplayUnit}` }}</strong></div>
-            <div><span>人工成本</span><strong>{{ formatFriendlyNumber(estimatedLaborCost, 2) }} {{ costDisplayUnit }}</strong></div>
-            <div><span>均摊费用</span><strong>{{ formatFriendlyNumber(estimatedOverheadCost, 2) }} {{ costDisplayUnit }}</strong></div>
-            <div class="is-total"><span>当前总成本</span><strong>{{ formatFriendlyNumber(costPerSkuUnit, 2) }} {{ costDisplayUnit }}</strong></div>
+            <div><span>原料成本</span><strong>待报工归集</strong></div>
+            <div class="is-total"><span>当前归集成本</span><strong>{{ formatFriendlyNumber(costPerSkuUnit, 2) }} {{ costDisplayUnit }}</strong></div>
             <small v-if="costPerKg != null">{{ formatFriendlyNumber(costPerKg, 2) }} 元/kg</small>
             <p class="bom-cost-overview__note">历史出成率由正式报工自动统计。</p>
           </div>
@@ -3234,73 +2764,6 @@ watch(adjustDialogVisible, (visible) => {
       <template #footer>
         <el-button @click="bomDialogVisible = false">取消</el-button>
         <el-button type="primary" :loading="bomDialogLoading" @click="submitBomForm">确定</el-button>
-      </template>
-    </el-dialog>
-
-    <!-- Labor Cost Dialog -->
-    <el-dialog v-model="laborDialogVisible" :title="isLaborEdit ? '编辑人工费用' : '添加人工费用'" width="500px">
-      <el-form :model="laborForm" label-width="100px">
-        <el-form-item label="工序名称" required>
-          <el-input v-model="laborForm.processName" placeholder="请输入工序名称" />
-        </el-form-item>
-        <el-form-item label="工序大类">
-          <el-select v-model="laborForm.processCategory" placeholder="选择工序类别" clearable style="width: 100%">
-            <el-option v-for="cat in processCategories" :key="cat" :label="cat" :value="cat" />
-          </el-select>
-        </el-form-item>
-        <el-form-item v-if="canViewPrice" label="工序单价" required>
-          <el-input-number v-model="laborForm.unitPrice" :min="0" :precision="4" :step="0.01" style="width: 100%" />
-        </el-form-item>
-        <el-form-item v-if="canViewPrice" label="工序单位">
-          <el-input v-model="laborForm.priceUnit" placeholder="如: 元/kg" />
-        </el-form-item>
-        <el-form-item label="操作量">
-          <el-input-number v-model="laborForm.standardQuantity" :min="0" :precision="2" :step="0.1" style="width: 100%" />
-        </el-form-item>
-        <!-- Issue 10: Real-time subtotal calculation -->
-        <el-form-item v-if="canViewPrice" label="费用小计">
-          <div class="labor-subtotal">
-            {{ ((laborForm.unitPrice || 0) * (laborForm.standardQuantity || 1)).toFixed(4) }} 元
-          </div>
-          <div class="form-tip">= 工序单价 × 操作量</div>
-        </el-form-item>
-        <el-form-item label="备注">
-          <el-input v-model="laborForm.notes" type="textarea" :rows="2" />
-        </el-form-item>
-      </el-form>
-      <template #footer>
-        <el-button @click="laborDialogVisible = false">取消</el-button>
-        <el-button type="primary" :loading="laborDialogLoading" @click="submitLaborForm">确定</el-button>
-      </template>
-    </el-dialog>
-
-    <!-- Overhead Cost Dialog -->
-    <el-dialog v-model="overheadDialogVisible" :title="isOverheadEdit ? '编辑均摊费用' : '添加均摊费用'" width="500px">
-      <el-form :model="overheadForm" label-width="100px">
-        <el-form-item label="费用名称" required>
-          <el-input v-model="overheadForm.name" placeholder="请输入费用名称" />
-        </el-form-item>
-        <el-form-item label="费用类别">
-          <el-select v-model="overheadForm.category" placeholder="选择费用类别" clearable style="width: 100%">
-            <el-option v-for="cat in overheadCategories" :key="cat" :label="cat" :value="cat" />
-          </el-select>
-        </el-form-item>
-        <el-form-item v-if="canViewPrice" label="单价" required>
-          <el-input-number v-model="overheadForm.unitPrice" :min="0" :precision="4" :step="0.01" style="width: 100%" />
-        </el-form-item>
-        <el-form-item v-if="canViewPrice" label="分摊单位">
-          <el-input v-model="overheadForm.priceUnit" placeholder="如: 元/kg" />
-        </el-form-item>
-        <el-form-item label="分摊量">
-          <el-input-number v-model="overheadForm.allocationRate" :min="0" :precision="2" :step="0.1" style="width: 100%" />
-        </el-form-item>
-        <el-form-item label="备注">
-          <el-input v-model="overheadForm.notes" type="textarea" :rows="2" />
-        </el-form-item>
-      </el-form>
-      <template #footer>
-        <el-button @click="overheadDialogVisible = false">取消</el-button>
-        <el-button type="primary" :loading="overheadDialogLoading" @click="submitOverheadForm">确定</el-button>
       </template>
     </el-dialog>
 
@@ -3731,8 +3194,7 @@ watch(adjustDialogVisible, (visible) => {
 }
 
 .bom-workspace__main,
-.bom-side-stack,
-.bom-advanced-costs {
+.bom-side-stack {
   display: grid;
   gap: 14px;
   min-width: 0;
@@ -3854,39 +3316,6 @@ watch(adjustDialogVisible, (visible) => {
   color: #8190a5;
   font-size: 12px;
   line-height: 1.5;
-}
-
-.bom-advanced-toggle {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 16px;
-  width: 100%;
-  padding: 14px 16px;
-  border: 1px solid #dfe6ef;
-  border-radius: 9px;
-  background: #fff;
-  color: #1f344d;
-  text-align: left;
-  cursor: pointer;
-  transition: border-color 0.18s ease, background 0.18s ease;
-  touch-action: manipulation;
-}
-
-.bom-advanced-toggle:hover,
-.bom-advanced-toggle:focus-visible {
-  border-color: #8ebcf2;
-  background: #f8fbff;
-  outline: none;
-}
-
-.bom-advanced-toggle > span:first-child {
-  display: grid;
-  gap: 4px;
-}
-
-.bom-advanced-toggle small {
-  color: #8998ab;
 }
 
 .bom-draft-bar {
@@ -4085,13 +3514,6 @@ watch(adjustDialogVisible, (visible) => {
   &--warning {
     color: #e6a23c;
   }
-}
-
-.labor-subtotal {
-  font-size: 16px;
-  font-weight: 600;
-  color: #e6a23c;
-  line-height: 32px;
 }
 
 /* D2: 实际原料用量实时计算显示 — 样式迁移到 GAP F7 block 下方 */

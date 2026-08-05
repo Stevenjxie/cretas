@@ -43,24 +43,4 @@ describe('BOM version read-only source contract', () => {
     expect(source).toContain('已切换为更新现有槽；工艺绑定会原样保留');
     expect(source).toContain('该物料对应多个 Workflow 投入槽，系统不会猜测');
   });
-
-  it('defensively blocks stale labor and overhead dialogs after the version changes', () => {
-    for (const handler of [
-      'handleAddLaborCost',
-      'handleEditLaborCost',
-      'submitLaborForm',
-      'handleDeleteLaborCost',
-      'handleAddOverheadCost',
-      'handleEditOverheadCost',
-      'submitOverheadForm',
-      'handleDeleteOverheadCost',
-    ]) {
-      const start = source.indexOf(`function ${handler}`);
-      const asyncStart = source.indexOf(`async function ${handler}`);
-      const handlerStart = Math.max(start, asyncStart);
-      expect(handlerStart, handler).toBeGreaterThan(-1);
-      expect(source.slice(handlerStart, handlerStart + 220), handler)
-        .toContain('requireEditableRecipe()');
-    }
-  });
 });

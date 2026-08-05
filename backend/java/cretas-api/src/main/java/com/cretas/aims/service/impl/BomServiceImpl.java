@@ -2,12 +2,7 @@ package com.cretas.aims.service.impl;
 
 import com.cretas.aims.dto.bom.BomCostSummaryDTO;
 import com.cretas.aims.entity.bom.BomRecipeItem;
-import com.cretas.aims.entity.bom.LaborCostConfig;
-import com.cretas.aims.entity.bom.OverheadCostConfig;
-import com.cretas.aims.exception.EntityNotFoundException;
 import com.cretas.aims.repository.bom.BomRecipeItemRepository;
-import com.cretas.aims.repository.bom.LaborCostConfigRepository;
-import com.cretas.aims.repository.bom.OverheadCostConfigRepository;
 import com.cretas.aims.service.BomService;
 
 import lombok.RequiredArgsConstructor;
@@ -27,11 +22,11 @@ import java.util.stream.Collectors;
 /**
  * BOM 成本计算服务实现
  *
- * 成本计算公式:
- * - 原料成本 = 成品含量 / 出成率 * 单价
- * - 人工成本 = 工序单价 * 操作量
- * - 均摊费用 = 单价 * 分摊量
- * - 总成本 = 原料成本 + 人工成本 + 均摊费用
+ * {@link #calculateProductCost} 口径 = 仅包材 (materialCategory=PACKAGING 行):
+ * - 总成本 = SUM(包材行: 实际用量 / 出成率 * 单价)
+ * 不含原料 (standard_quantity 是已废弃的历史脏数据)、不含辅料 (真实辅料成本在
+ * bom_seasoning_items, 本类不联查)、不含人工/均摊 (人工要等结算, 均摊要等成本分析,
+ * 两者在返回 DTO 中为 null 表示"此处不归集", 不是 0)。
  *
  * @author Cretas Team
  * @version 1.0.0
@@ -50,8 +45,6 @@ public class BomServiceImpl implements BomService {
             "部分物料缺税率，请补齐税率用于含税/未税来源追踪；成本仍按已存未税 unitPrice 计算。";
 
     private final BomRecipeItemRepository bomRecipeItemRepository;
-    private final LaborCostConfigRepository laborCostConfigRepository;
-    private final OverheadCostConfigRepository overheadCostConfigRepository;
 
 
 
@@ -82,139 +75,6 @@ public class BomServiceImpl implements BomService {
 
 
 
-    // ============ Labor Cost ============
-
-    @Override
-    @Transactional(readOnly = true)
-    public List<LaborCostConfig> getLaborCostsByProduct(String factoryId, String productTypeId) {
-        log.debug("获取产品人工成本配置: factoryId={}, productTypeId={}", factoryId, productTypeId);
-        return laborCostConfigRepository
-            .findByFactoryIdAndProductTypeIdAndIsActiveTrueAndDeletedAtIsNullOrderBySortOrderAsc(
-                factoryId, productTypeId);
-    }
-
-    @Override
-    @Transactional(readOnly = true)
-    public List<LaborCostConfig> getGlobalLaborCosts(String factoryId) {
-        log.debug("获取工厂全局人工成本配置: factoryId={}", factoryId);
-        return laborCostConfigRepository
-            .findByFactoryIdAndProductTypeIdIsNullAndDeletedAtIsNullOrderBySortOrderAsc(factoryId);
-    }
-
-    @Override
-    @Transactional(readOnly = true)
-    public List<LaborCostConfig> getAllLaborCosts(String factoryId) {
-        log.debug("获取工厂所有人工成本配置: factoryId={}", factoryId);
-        return laborCostConfigRepository.findByFactoryIdAndDeletedAtIsNullOrderBySortOrderAsc(factoryId);
-    }
-
-    @Override
-    @Transactional
-    public LaborCostConfig saveLaborCost(LaborCostConfig config) {
-        log.info("保存人工成本配置: factoryId={}, processName={}",
-            config.getFactoryId(), config.getProcessName());
-
-        // 设置默认值
-        if (config.getDefaultQuantity() == null) {
-            config.setDefaultQuantity(BigDecimal.ONE);
-        }
-        if (config.getIsActive() == null) {
-            config.setIsActive(true);
-        }
-        if (config.getSortOrder() == null) {
-            config.setSortOrder(0);
-        }
-
-        LaborCostConfig saved = laborCostConfigRepository.save(config);
-        log.info("人工成本配置保存成功: id={}", saved.getId());
-        return saved;
-    }
-
-    @Override
-    @Transactional
-    public void deleteLaborCost(Long id) {
-        log.info("删除人工成本配置: id={}", id);
-        LaborCostConfig config = laborCostConfigRepository.findById(id)
-            .orElseThrow(() -> new EntityNotFoundException("LaborCostConfig", id.toString()));
-        config.softDelete();
-        laborCostConfigRepository.save(config);
-        log.info("人工成本配置删除成功: id={}", id);
-    }
-
-    // ============ Overhead Cost ============
-
-    @Override
-    @Transactional(readOnly = true)
-    public List<OverheadCostConfig> getOverheadCosts(String factoryId) {
-        log.debug("获取工厂均摊费用配置: factoryId={}", factoryId);
-        return overheadCostConfigRepository.findByFactoryIdAndDeletedAtIsNullOrderBySortOrderAsc(factoryId);
-    }
-
-    @Override
-    @Transactional(readOnly = true)
-    public List<OverheadCostConfig> getActiveOverheadCosts(String factoryId) {
-        log.debug("获取工厂启用的均摊费用配置: factoryId={}", factoryId);
-        return overheadCostConfigRepository.findByFactoryIdAndIsActiveTrueAndDeletedAtIsNullOrderBySortOrderAsc(factoryId);
-    }
-
-    @Override
-    @Transactional
-    public OverheadCostConfig saveOverheadCost(OverheadCostConfig config) {
-        log.info("保存均摊费用配置: factoryId={}, name={}", config.getFactoryId(), config.getName());
-
-        // 设置默认值
-        if (config.getAllocationMethod() == null) {
-            config.setAllocationMethod("PER_UNIT");
-        }
-        if (config.getAllocationRate() == null) {
-            config.setAllocationRate(BigDecimal.ONE);
-        }
-        if (config.getIsActive() == null) {
-            config.setIsActive(true);
-        }
-        if (config.getSortOrder() == null) {
-            config.setSortOrder(0);
-        }
-
-        OverheadCostConfig saved = overheadCostConfigRepository.save(config);
-        log.info("均摊费用配置保存成功: id={}", saved.getId());
-        return saved;
-    }
-
-    @Override
-    @Transactional
-    public OverheadCostConfig updateOverheadCost(String factoryId, Long id, OverheadCostConfig body) {
-        log.info("更新均摊费用配置: factoryId={}, id={}", factoryId, id);
-        OverheadCostConfig existing = overheadCostConfigRepository.findById(id)
-                .orElseThrow(() -> new EntityNotFoundException("OverheadCostConfig", id.toString()));
-        if (!factoryId.equals(existing.getFactoryId())) {
-            throw new com.cretas.aims.exception.BusinessException(403, "无权操作该均摊费用配置")
-                    .withHint("请确认费用配置归属或切换工厂账号");
-        }
-        // T-R5-3: select-then-merge — non-null body fields override; null fields preserve existing.
-        if (body.getName() != null) existing.setName(body.getName());
-        if (body.getCategory() != null) existing.setCategory(body.getCategory());
-        if (body.getUnitPrice() != null) existing.setUnitPrice(body.getUnitPrice());
-        if (body.getPriceUnit() != null) existing.setPriceUnit(body.getPriceUnit());
-        if (body.getAllocationMethod() != null) existing.setAllocationMethod(body.getAllocationMethod());
-        if (body.getAllocationRate() != null) existing.setAllocationRate(body.getAllocationRate());
-        if (body.getIsActive() != null) existing.setIsActive(body.getIsActive());
-        if (body.getSortOrder() != null) existing.setSortOrder(body.getSortOrder());
-        if (body.getRemark() != null) existing.setRemark(body.getRemark());
-        return overheadCostConfigRepository.save(existing);
-    }
-
-    @Override
-    @Transactional
-    public void deleteOverheadCost(Long id) {
-        log.info("删除均摊费用配置: id={}", id);
-        OverheadCostConfig config = overheadCostConfigRepository.findById(id)
-            .orElseThrow(() -> new EntityNotFoundException("OverheadCostConfig", id.toString()));
-        config.softDelete();
-        overheadCostConfigRepository.save(config);
-        log.info("均摊费用配置删除成功: id={}", id);
-    }
-
     // ============ Cost Calculation ============
 
     @Override
@@ -224,15 +84,6 @@ public class BomServiceImpl implements BomService {
 
         // 1. 获取BOM项目
         List<BomRecipeItem> bomItems = bomRecipeItemRepository.findCurrentByProduct(factoryId, productTypeId);
-
-        // 2. 获取人工成本（优先产品级别，其次全局）
-        List<LaborCostConfig> laborCosts = getLaborCostsByProduct(factoryId, productTypeId);
-        if (laborCosts.isEmpty()) {
-            laborCosts = getGlobalLaborCosts(factoryId);
-        }
-
-        // 3. 获取均摊费用
-        List<OverheadCostConfig> overheadCosts = getActiveOverheadCosts(factoryId);
 
         // 4. 计算原辅料成本
         List<BomCostSummaryDTO.MaterialCostItem> materialCostItems = new ArrayList<>();
@@ -259,11 +110,21 @@ public class BomServiceImpl implements BomService {
             //   RawMaterialType.unitPrice), 但 BOM 行用量可能按"斤"等其他重量单位录入.
             //   计价用量须先折算到主数据单位 (e.g. 斤→kg), 否则 斤量×kg价 翻倍/折半失真.
             BigDecimal pricingQuantity = reconcileQuantityForPricing(actualQuantity, item);
-            BigDecimal subtotal = calculateMaterialCost(factoryId, pricingQuantity, estimateUnitPrice);
             if (item.getTaxRate() == null) {
                 hasMissingTaxRate = true;
             }
-            boolean missingPrice = estimateUnitPrice == null;
+            // 成本只归集包材行。
+            // RAW/AUXILIARY 的 standard_quantity 是已废弃的历史脏数据(新行写 null),
+            // 真实辅料成本在 bom_seasoning_items, 不经本循环;
+            // BYPRODUCT 的 standard_quantity 是「预计产出量」, 加进成本符号是反的。
+            // 明细行保留(能看到物料与单价), 小计置 null 表示「此处不归集」——
+            // 与 computeItemCost() 在无用量时返回 null 同一口径, 禁止写 0。
+            boolean aggregatable = "PACKAGING".equals(item.getMaterialCategory());
+            BigDecimal subtotal = aggregatable
+                    ? calculateMaterialCost(factoryId, pricingQuantity, estimateUnitPrice)
+                    : null;
+            // 非归集行没有价格不算「缺价」(它本来就不参与合计)。
+            boolean missingPrice = aggregatable && estimateUnitPrice == null;
             if (missingPrice) {
                 missingPriceMaterials.add(
                     item.getMaterialName() != null ? item.getMaterialName()
@@ -273,6 +134,7 @@ public class BomServiceImpl implements BomService {
             BomCostSummaryDTO.MaterialCostItem costItem = BomCostSummaryDTO.MaterialCostItem.builder()
                 .materialName(item.getMaterialName())
                 .materialTypeId(item.getMaterialTypeId())
+                .materialCategory(item.getMaterialCategory())
                 .standardQuantity(item.getStandardQuantity())
                 .yieldRate(item.getYieldRate())
                 .actualQuantity(actualQuantity)
@@ -291,54 +153,21 @@ public class BomServiceImpl implements BomService {
                 .build();
 
             materialCostItems.add(costItem);
-            materialCostTotal = materialCostTotal.add(subtotal);
+            if (subtotal != null) {
+                materialCostTotal = materialCostTotal.add(subtotal);
+            }
         }
         boolean hasMissingPrice = !missingPriceMaterials.isEmpty();
 
-        // 5. 计算人工成本
-        List<BomCostSummaryDTO.LaborCostItem> laborCostItems = new ArrayList<>();
-        BigDecimal laborCostTotal = BigDecimal.ZERO;
-
-        for (LaborCostConfig config : laborCosts) {
-            BigDecimal subtotal = calculateLaborCost(factoryId, config.getUnitPrice(), config.getDefaultQuantity());
-
-            BomCostSummaryDTO.LaborCostItem costItem = BomCostSummaryDTO.LaborCostItem.builder()
-                .processName(config.getProcessName())
-                .processCategory(config.getProcessCategory())
-                .unitPrice(config.getUnitPrice())
-                .priceUnit(config.getPriceUnit())
-                .quantity(config.getDefaultQuantity())
-                .subtotal(subtotal)
-                .build();
-
-            laborCostItems.add(costItem);
-            laborCostTotal = laborCostTotal.add(subtotal);
-        }
-
-        // 6. 计算均摊费用
-        List<BomCostSummaryDTO.OverheadCostItem> overheadCostItems = new ArrayList<>();
-        BigDecimal overheadCostTotal = BigDecimal.ZERO;
-
-        for (OverheadCostConfig config : overheadCosts) {
-            BigDecimal subtotal = calculateOverheadCost(factoryId, config.getUnitPrice(), config.getAllocationRate());
-
-            BomCostSummaryDTO.OverheadCostItem costItem = BomCostSummaryDTO.OverheadCostItem.builder()
-                .name(config.getName())
-                .category(config.getCategory())
-                .unitPrice(config.getUnitPrice())
-                .priceUnit(config.getPriceUnit())
-                .allocationRate(config.getAllocationRate())
-                .subtotal(subtotal)
-                .build();
-
-            overheadCostItems.add(costItem);
-            overheadCostTotal = overheadCostTotal.add(subtotal);
-        }
+        // 5. 人工与均摊不在 BOM 归集
+        // 人工要等结算（实际工时 × 时薪 ÷ 实际箱数，见 processSheetLaborCost.ts），
+        // 均摊要等成本分析。BOM 只配「每单位固定消耗的实物」。
+        // 空列表 + null 总额：null 表示「此处不归集」，写 0 会被读成「不要钱」。
+        List<BomCostSummaryDTO.LaborCostItem> laborCostItems = List.of();
+        List<BomCostSummaryDTO.OverheadCostItem> overheadCostItems = List.of();
 
         // 7. 计算总成本
         BigDecimal totalCost = materialCostTotal
-            .add(laborCostTotal)
-            .add(overheadCostTotal)
             .setScale(4, RoundingMode.HALF_UP);
 
         // 8. 获取产品名称
@@ -351,9 +180,9 @@ public class BomServiceImpl implements BomService {
             .materialCosts(materialCostItems)
             .materialCostTotal(materialCostTotal.setScale(4, RoundingMode.HALF_UP))
             .laborCosts(laborCostItems)
-            .laborCostTotal(laborCostTotal.setScale(4, RoundingMode.HALF_UP))
+            .laborCostTotal(null)
             .overheadCosts(overheadCostItems)
-            .overheadCostTotal(overheadCostTotal.setScale(4, RoundingMode.HALF_UP))
+            .overheadCostTotal(null)
             .totalCost(totalCost)
             .costCaliber(COST_CALIBER_PRE_TAX)
             .caliberHint(summaryCaliberHint(hasMissingTaxRate, hasMissingPrice, missingPriceMaterials.size()))
@@ -475,7 +304,12 @@ public class BomServiceImpl implements BomService {
      * 公式: 实际用量 = 标准用量 / (出成率 / 100)
      */
     private BigDecimal calculateActualQuantity(String factoryId, BigDecimal standardQuantity, BigDecimal yieldRate) {
-        if (standardQuantity == null) return BigDecimal.ZERO;
+        // standardQuantity == null 是「此处未归集」(RAW/AUXILIARY 的历史脏数据/新行),
+        // 不是「用量为 0」。0 会被下游/AI 上下文读成"零消耗"这类假数据(见 CLAUDE.md 核心
+        // 原则1)。非归集行根本走不到 calculateMaterialCost() —— 类别过滤已先把 subtotal 置 null;
+        // (注意 calculateMaterialCost() 自己对 null 入参返回的是 ZERO 不是 null, 别指望它守这条不变量)。
+        // reconcileQuantityForPricing() 对 null 输入直接透传, 故此处返回 null 不会引入 NPE。
+        if (standardQuantity == null) return null;
         if (yieldRate == null || yieldRate.compareTo(BigDecimal.ZERO) == 0) return standardQuantity;
 
         // Canvas V2: try DB formula first
@@ -570,35 +404,4 @@ public class BomServiceImpl implements BomService {
         return actualQuantity.multiply(unitPrice).setScale(4, RoundingMode.HALF_UP);
     }
 
-    /**
-     * 计算人工成本
-     * 公式: 成本 = 单价 * 操作量
-     */
-    private BigDecimal calculateLaborCost(String factoryId, BigDecimal unitPrice, BigDecimal quantity) {
-        if (unitPrice == null) return BigDecimal.ZERO;
-        BigDecimal qty = quantity != null ? quantity : BigDecimal.ONE;
-
-        if (formulaEngine != null && factoryId != null) {
-            BigDecimal result = formulaEngine.evaluate(factoryId, "bom", "LABOR_COST",
-                    java.util.Map.of("unitPrice", unitPrice, "quantity", qty));
-            if (result != null) return result;
-        }
-        return unitPrice.multiply(qty).setScale(4, RoundingMode.HALF_UP);
-    }
-
-    /**
-     * 计算均摊费用
-     * 公式: 成本 = 单价 * 分摊比例
-     */
-    private BigDecimal calculateOverheadCost(String factoryId, BigDecimal unitPrice, BigDecimal allocationRate) {
-        if (unitPrice == null) return BigDecimal.ZERO;
-        BigDecimal rate = allocationRate != null ? allocationRate : BigDecimal.ONE;
-
-        if (formulaEngine != null && factoryId != null) {
-            BigDecimal result = formulaEngine.evaluate(factoryId, "bom", "OVERHEAD_COST",
-                    java.util.Map.of("unitPrice", unitPrice, "allocationRate", rate));
-            if (result != null) return result;
-        }
-        return unitPrice.multiply(rate).setScale(4, RoundingMode.HALF_UP);
-    }
 }

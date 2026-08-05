@@ -2990,10 +2990,19 @@ public class BomRecipeServiceImpl implements BomRecipeService {
             BigDecimal allocation = creditingByproducts.contains(target.getId())
                     ? BigDecimal.ZERO
                     : costingRatio(target).divide(new BigDecimal("100"), 8, RoundingMode.HALF_UP);
-            BigDecimal allocatedLabor = valueOrZero(target.getTotalLaborCost()).multiply(allocation);
-            BigDecimal allocatedOverhead = valueOrZero(target.getTotalOverheadCost()).multiply(allocation);
-            target.setTotalCost(materialCost.add(allocatedLabor).add(allocatedOverhead)
-                    .setScale(4, RoundingMode.HALF_UP));
+            // 人工/均摊不在 BOM 归集：null 不参与分摊，也不塌成 0。
+            BigDecimal allocatedLabor = target.getTotalLaborCost() == null
+                    ? null : target.getTotalLaborCost().multiply(allocation);
+            BigDecimal allocatedOverhead = target.getTotalOverheadCost() == null
+                    ? null : target.getTotalOverheadCost().multiply(allocation);
+            BigDecimal totalCost = materialCost;
+            if (allocatedLabor != null) {
+                totalCost = totalCost.add(allocatedLabor);
+            }
+            if (allocatedOverhead != null) {
+                totalCost = totalCost.add(allocatedOverhead);
+            }
+            target.setTotalCost(totalCost.setScale(4, RoundingMode.HALF_UP));
             recipeRepo.save(target);
         }
     }

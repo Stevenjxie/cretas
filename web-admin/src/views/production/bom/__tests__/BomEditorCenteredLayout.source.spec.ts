@@ -14,12 +14,9 @@ describe('BOM editor-centered layout source contract', () => {
     expect(source).toContain('class="bom-draft-bar"');
   });
 
-  it('keeps version history secondary and advanced costs collapsed', () => {
+  it('keeps version history secondary', () => {
     expect(source).toContain('versionHistoryVisible = !versionHistoryVisible');
     expect(source).toContain('v-if="selectedProductTypeId && versionHistoryVisible"');
-    expect(source).toContain(':aria-expanded="costDetailsExpanded"');
-    expect(source).toContain('v-show="costDetailsExpanded"');
-    expect(source).toContain('高级配置 · 日常配置原料、辅料和包材时无需展开');
   });
 
   it('shows one clear activation checklist and uses text operation buttons', () => {
