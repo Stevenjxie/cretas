@@ -176,7 +176,7 @@ html:not(.v6-js) .v6-reveal{opacity:1;transform:none}
 .bom-row .nm{flex:1;color:var(--v6-ink)}
 .bom-row .qt{font-weight:800;color:var(--v6-ink);font-variant-numeric:tabular-nums}
 .bom-row.warn{background:rgba(214,120,20,.06)}
-.bom-row.warn .qt{color:#b26a12}
+.bom-row.warn .qt{color:var(--v6-warn-ink)}
 
 /* MODULE 6，quality inspection flow (process chain, node + connector) --- */
 .qchain{position:relative;margin-top:clamp(38px,5vw,64px);display:grid;grid-template-columns:repeat(3,1fr);gap:clamp(18px,3vw,44px)}
@@ -186,7 +186,7 @@ html:not(.v6-js) .v6-reveal{opacity:1;transform:none}
 .qstage .node{width:66px;height:66px;border-radius:99px;margin:0 auto 20px;display:grid;place-items:center;
   color:#fff;background:var(--v6-cta);box-shadow:0 10px 22px rgba(0,179,119,.24)}
 .qstage .step{font-family:var(--v6-mono);font-size:12px;color:var(--v6-cta-ink);letter-spacing:.08em}
-.qstage h4{font-size:clamp(17px,1.9vw,21px);font-weight:800;margin:9px 0 9px;letter-spacing:-0.01em}
+.qstage h3{font-size:clamp(17px,1.9vw,21px);font-weight:800;margin:9px 0 9px;letter-spacing:-0.01em}
 .qstage p{font-size:14px;color:var(--v6-ink-2);line-height:1.7;margin:0 auto;max-width:30ch}
 
 /* MODULE 7，pipeline (deep band) ---------------------------------------- */
@@ -224,13 +224,13 @@ html:not(.v6-js) .v6-reveal{opacity:1;transform:none}
 .lesson .lvis{justify-self:center;width:100%;max-width:420px}
 /* 收货确认拟物卡 */
 .rcvcard{background:#fff;border-radius:16px;box-shadow:0 24px 56px -28px rgba(40,40,40,.32);padding:clamp(18px,2vw,26px)}
-.rcvcard .ph{font-family:var(--v6-mono);font-size:11px;color:#847e75;letter-spacing:1.2px;margin-bottom:14px}
+.rcvcard .ph{font-family:var(--v6-mono);font-size:11px;color:var(--v6-ink-3);letter-spacing:1.2px;margin-bottom:14px}
 .rcvcard .big{font-size:clamp(24px,2.6vw,32px);font-weight:900;letter-spacing:-0.01em;line-height:1.35}
 .rcvcard .big b{color:var(--v6-cta-ink)}
 .rcvcard .sub{font-size:13px;color:var(--v6-ink-2);margin-top:8px;line-height:1.7}
-.rcvcard .sub b{color:#b45309}
+.rcvcard .sub b{color:var(--v6-warn-ink)}
 .rcvcard .btns{display:flex;gap:10px;margin-top:18px}
-.rcvcard .ok{flex:1;text-align:center;background:var(--v6-cta);color:#fff;font-size:14px;font-weight:800;padding:12px 0;border-radius:10px}
+.rcvcard .ok{flex:1;text-align:center;background:var(--v6-cta);color:#0b1a12;font-size:14px;font-weight:800;padding:12px 0;border-radius:10px}
 .rcvcard .alt{flex:0 0 auto;padding:12px 18px;font-size:13px;color:var(--v6-ink-2);background:rgba(0,0,0,.05);border-radius:10px}
 /* 物料归一拟物 */
 .mergevis{display:flex;flex-direction:column;gap:14px}
@@ -260,7 +260,7 @@ html:not(.v6-js) .v6-reveal{opacity:1;transform:none}
   display:flex;justify-content:space-between;align-items:flex-end;gap:clamp(24px,4vw,48px);
   flex-wrap:wrap;border-top:1px solid rgba(0,0,0,.07)}
 .quote-band .v6-quote{max-width:44ch}
-.quote-cta{flex:0 0 auto;color:#fff;font-weight:800;text-decoration:none;font-size:15px;
+.quote-cta{flex:0 0 auto;color:#0b1a12;font-weight:800;text-decoration:none;font-size:15px;
   background:var(--v6-cta);padding:13px 28px;border-radius:99px;white-space:nowrap;
   box-shadow:0 6px 18px rgba(0,179,119,.35);transition:transform .3s ease}
 .quote-cta:hover{transform:translateY(-2px)}
@@ -316,7 +316,7 @@ html.v6-js .feed .det{animation:v6BoxTrack 8s ease-in-out infinite}
 <nav class="v6-nav">
   <a href="/" style="display:flex;align-items:center;gap:8px;margin:0;text-decoration:none">
     <svg width="18" height="18" viewBox="0 0 15 15" fill="none"><rect x="1" y="1" width="5.5" height="5.5" rx="1.5" fill="#111"/><rect x="8.5" y="1" width="5.5" height="5.5" rx="1.5" fill="#111"/><rect x="1" y="8.5" width="5.5" height="5.5" rx="1.5" fill="#111"/><rect x="8.5" y="8.5" width="5.5" height="5.5" rx="2.75" fill="#00b377"/></svg>
-    <b style="color:#111;font-size:17px">白垩纪</b><small style="color:#999;letter-spacing:2px;font-size:11px">CRETAS</small>
+    <b style="color:#111;font-size:17px">白垩纪</b><small style="color:var(--v6-ink-3);letter-spacing:2px;font-size:11px">CRETAS</small>
   </a>
   <div class="nav-links">
     <a class="active" href="/solutions-factory.html">食品工厂</a>
@@ -334,7 +334,7 @@ html.v6-js .feed .det{animation:v6BoxTrack 8s ease-in-out infinite}
   <div class="v6-glow"></div>
   <div class="v6-hero">
     <div class="v6-hero-mask">
-      <img fetchpriority="high" decoding="async" src="/assets/img/warehouse.jpg" alt="食品工厂立体货架仓储，AI 正在逐个库位核对入库批次">
+      <img fetchpriority="high" decoding="async" src="/assets/img/warehouse.jpg" width="800" height="532" alt="食品工厂立体货架仓储，AI 正在逐个库位核对入库批次">
     </div>
     <div class="v6-hero-scrim"></div>
 
@@ -377,7 +377,7 @@ html.v6-js .feed .det{animation:v6BoxTrack 8s ease-in-out infinite}
       <div class="phone">
         <div class="screen">
           <span class="notch"></span>
-          <img loading="lazy" decoding="async" src="/assets/img/shots/receipt-rn.png" alt="手机端入库详情：带鱼冻品 124.5kg，批次、供应商、存储温度一目了然">
+          <img loading="lazy" decoding="async" src="/assets/img/shots/receipt-rn.png" width="720" height="1616" alt="手机端入库详情：带鱼冻品 124.5kg，批次、供应商、存储温度一目了然">
         </div>
       </div>
     </div>
@@ -399,7 +399,7 @@ html.v6-js .feed .det{animation:v6BoxTrack 8s ease-in-out infinite}
     </div>
     <div class="mod-visual v6-reveal">
       <div class="v6-shot">
-        <img loading="lazy" decoding="async" src="/assets/img/shots/workflow.png" alt="产品-工序配置画布：可视化工作流编辑器，右侧 AI 助手辅助生成与校验工序链">
+        <img loading="lazy" decoding="async" src="/assets/img/shots/workflow.png" width="1280" height="662" alt="产品-工序配置画布：可视化工作流编辑器，右侧 AI 助手辅助生成与校验工序链">
       </div>
     </div>
   </div>
@@ -415,7 +415,7 @@ html.v6-js .feed .det{animation:v6BoxTrack 8s ease-in-out infinite}
 
     <div class="eye-stage">
       <div class="feed v6-reveal">
-        <img decoding="async" src="/assets/img/workshop.jpg" alt="卤味加工车间实时画面：穿戴整齐的工人在分装卤味，AI 正在框选识别工序">
+        <img decoding="async" src="/assets/img/workshop.jpg" width="1440" height="810" alt="卤味加工车间实时画面：穿戴整齐的工人在分装卤味，AI 正在框选识别工序">
         <div class="grade"></div>
         <div class="cam-top">
           <span class="live"><i></i>CAM-03 · 分割工位</span>
@@ -515,17 +515,17 @@ html.v6-js .feed .det{animation:v6BoxTrack 8s ease-in-out infinite}
   <div class="qchain">
     <div class="qstage v6-reveal">
       <div class="node"><svg width="27" height="27" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 3v3M12 18v3M3 12h3M18 12h3"/><circle cx="12" cy="12" r="2"/></svg></div>
-      <div class="step">检验</div><h4>CCP 关键控制点</h4>
+      <div class="step">检验</div><h3>CCP 关键控制点</h3>
       <p>温度、时间等关键控制点卡在工序上，漏检直接拦住，不放行。</p>
     </div>
     <div class="qstage v6-reveal">
       <div class="node"><svg width="27" height="27" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M4 8h3l1.6-2.2h6.8L17 8h3v11H4z"/><circle cx="12" cy="13" r="3.2"/></svg></div>
-      <div class="step">记录</div><h4>拍照 + 语音质检</h4>
+      <div class="step">记录</div><h3>拍照 + 语音质检</h3>
       <p>拍张照、说句话就录入，一线工人零门槛，证据自动归档。</p>
     </div>
     <div class="qstage v6-reveal">
       <div class="node"><svg width="27" height="27" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M20 11a8 8 0 1 0-1.6 5.3"/><path d="M20 5v6h-6"/></svg></div>
-      <div class="step">处置闭环</div><h4>不合格自动流转</h4>
+      <div class="step">处置闭环</div><h3>不合格自动流转</h3>
       <p>判不合格自动发起返工 / 报废 / 隔离，处置到底、责任到人。</p>
     </div>
   </div>
