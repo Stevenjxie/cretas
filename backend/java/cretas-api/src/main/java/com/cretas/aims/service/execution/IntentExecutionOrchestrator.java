@@ -242,7 +242,8 @@ public class IntentExecutionOrchestrator {
     // P1 读写分块 §4.5 demo 写闸: 与 DemoReadOnlyInterceptor 同一配置源 (cretas.demo.factory-ids,
     // 默认 DEMO_REST,DEMO_FACTORY)。AI 确认执行阶段拦截 demo 租户真实写入 — 封住 HTTP 层
     // 放行 /ai-intents/ POST 留下的缺口。名单内租户恒拦 (不随 cretas.demo.enabled 关闭, fail-closed)。
-    @Value("${cretas.demo.factory-ids:DEMO_REST,DEMO_FACTORY2}")
+    // 2026-08-05: DEMO_REST 随租户收敛停用, 从 fallback 移除 (与 application.properties 同步)。
+    @Value("${cretas.demo.factory-ids:DEMO_FACTORY2}")
     private String demoFactoryIdsCsv;
 
     /** 通用短回复集合 */

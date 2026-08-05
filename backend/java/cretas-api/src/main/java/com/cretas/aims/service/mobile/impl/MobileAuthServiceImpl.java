@@ -56,9 +56,11 @@ public class MobileAuthServiceImpl implements MobileAuthService {
     // 演示账号配置 (路演免密登录). cretas.demo.enabled=true 开启.
     @Value("${cretas.demo.enabled:false}")
     private boolean demoEnabled;
-    @Value("${cretas.demo.rest.factory-id:DEMO_REST}")
+    // 2026-08-05: DEMO_REST 随租户收敛停用, fallback 默认值同步清空 (与
+    // application.properties 的 cretas.demo.rest.* 同步, 避免陈旧默认值误导读者)。
+    @Value("${cretas.demo.rest.factory-id:}")
     private String demoRestFactoryId;
-    @Value("${cretas.demo.rest.username:demo_rest}")
+    @Value("${cretas.demo.rest.username:}")
     private String demoRestUsername;
     @Value("${cretas.demo.factory.factory-id:DEMO_FACTORY}")
     private String demoFactoryFactoryId;
