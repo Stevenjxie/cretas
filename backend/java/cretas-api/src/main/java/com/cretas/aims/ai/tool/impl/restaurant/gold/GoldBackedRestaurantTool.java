@@ -247,13 +247,10 @@ public abstract class GoldBackedRestaurantTool extends AbstractBusinessTool {
      * router (T1/T2/T3 + Answer Contract) instead of this Tool's own Gold
      * flow, and if so, map the Python response into a Tool result.
      *
-     * <p>Uses the <b>raw</b> {@code factoryId} — deliberately NOT passed
-     * through {@link #resolveGoldFactoryId} (the DEMO_REST → RES_3101_009
-     * alias). The Python restaurant-intent path already handles DEMO_REST
-     * directly against its own seeded Gold data (V20260706_01 migration),
-     * matching chat.py's existing {@code factory_id_hdr} usage at its 3 SSE
-     * call sites — aliasing here would look up the wrong tenant's
-     * restaurant-ops rows.
+     * <p>Uses the <b>raw</b> {@code factoryId} — does NOT pass through
+     * {@link #resolveGoldFactoryId}. The Python restaurant-intent path
+     * handles each tenant directly against its own seeded Gold data, matching
+     * chat.py's existing {@code factory_id_hdr} usage at its 3 SSE call sites.
      *
      * <p>Never throws: {@link GoldFinanceClient#fetchTieredIntentAnswer}
      * itself never throws (returns {@code null} on any HTTP failure), but
@@ -382,11 +379,11 @@ public abstract class GoldBackedRestaurantTool extends AbstractBusinessTool {
     }
 
     protected String resolveGoldFactoryId(String factoryId) {
-        if ("DEMO_REST".equalsIgnoreCase(factoryId)) {
-            // Public no-login restaurant demo account: use the complete QHJ-style
-            // Gold dataset so AI demo questions have dish/revenue/review depth.
-            return "RES_3101_009";
-        }
+        // 2026-08-05: Deleted DEMO_REST → RES_3101_009 alias. Both tenants
+        // are being deprecated (tenant consolidation spec §4.5). The alias
+        // previously caused the same demo account to read RES_3101_009 via the
+        // Java Gold path while the Python tiered path (:251) intentionally
+        // read DEMO_REST directly — resulting in divergent data visibility.
         return factoryId;
     }
 
