@@ -6,6 +6,7 @@ import lombok.NoArgsConstructor;
 
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.DecimalMin;
+import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotEmpty;
 import jakarta.validation.constraints.NotNull;
@@ -89,6 +90,21 @@ public class CreateReceiveRecordRequest {
 
         @Size(max = 200, message = "产地长度不能超过200个字符")
         private String originPlace;
+
+        /**
+         * 合同号 —— <b>行级</b>。客户实测同一张 PO 下不同来料批是不同合同号
+         * (SAN-16572 / SAN-16562), 订单级的 contract_number 装不下。
+         */
+        @Size(max = 100, message = "合同号长度不能超过100个字符")
+        private String contractNumber;
+
+        /** 供应商/客户给的批次号 —— 与系统生成的库存批次号是两件事。 */
+        @Size(max = 100, message = "供应商批次号长度不能超过100个字符")
+        private String supplierBatchNumber;
+
+        /** 件数(件/箱) —— 与重量并存: 抄码来料件数固定而重量不定。 */
+        @Min(value = 0, message = "件数不能为负数")
+        private Integer boxCount;
 
         @Size(max = 5000, message = "备注长度不能超过5000个字符")
         private String remark;

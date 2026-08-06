@@ -16,4 +16,26 @@ describe('采购收货多包装与基本单位落账契约', () => {
     expect(source).toContain('remainingReceivableQuantity || 0) * orderFactor / selectedFactor');
     expect(source).toContain(':max="remainingLimit(row)"');
   });
+
+  /**
+   * 客户台账(六膳门「原辅材进出库明细」)按这几列记来料并据此追溯:
+   * 来料日期 | 料号 | 原料名称 | 合同号 | 批次号 | 厂号 | 件数(件/箱) | 初期重量KG
+   * 收货弹窗此前一个都没有 —— 客户原话「收货里面要能填写这些信息」。
+   */
+  it('🔴 收货行必须能填客户台账要的可追溯字段', () => {
+    expect(source).toContain('label="合同号"');
+    expect(source).toContain('label="供应商批次号"');
+    expect(source).toContain('label="厂号"');
+    expect(source).toContain('label="件数"');
+    // 厂号沿用「选厂商登记 → 自动带产地」, 不新造自由文本口径
+    expect(source).toContain('onFactoryNumberChange(row)');
+    expect(source).toContain('listManufacturers');
+  });
+
+  it('可追溯字段要随收货单一起提交, 且空串不落库', () => {
+    expect(source).toContain('contractNumber: blankToUndefined(item.contractNumber)');
+    expect(source).toContain('supplierBatchNumber: blankToUndefined(item.supplierBatchNumber)');
+    expect(source).toContain('factoryNumber: blankToUndefined(item.factoryNumber)');
+    expect(source).toContain('boxCount:');
+  });
 });

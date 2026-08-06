@@ -16,6 +16,7 @@ import {
   type PurchaseReceivingCloseReason,
   type WarehouseReceivingTask,
 } from '@/api/purchaseReceive';
+import { listManufacturers, type ManufacturerRegistry } from '@/api/manufacturer';
 import {
   listWarehouses,
   WAREHOUSE_TYPE_LABELS,
@@ -46,6 +47,12 @@ interface ReceiveItemForm {
   inventoryBaseUnit: string;
   packageToBaseFactor: number;
   packagingOptions: PackagingOption[];
+  // 可追溯字段(全部选填) —— 对齐客户台账「合同号/批次号/厂号/件数」, 见 V20261029_57
+  contractNumber?: string;
+  supplierBatchNumber?: string;
+  factoryNumber?: string;
+  originPlace?: string;
+  boxCount?: number;
 }
 
 interface PackagingOption {
@@ -101,6 +108,29 @@ const customerConfirming = ref(false);
 const customerAttachmentRefreshKey = ref(0);
 const customerAttachmentQueue = ref({ pending: 0, failed: 0 });
 const customerIdempotencyKey = ref('');
+// 厂号沿用手工入库那套「选厂商登记 → 自动带产地」, 不新造自由文本口径
+// (materials/list.vue#handleManufacturerChange)。allow-create 保留现场临时录入。
+const manufacturerOptions = ref<ManufacturerRegistry[]>([]);
+
+async function loadManufacturerOptions(): Promise<void> {
+  if (!props.factoryId) return;
+  try {
+    const res = await listManufacturers(props.factoryId, true);
+    if (res.success && Array.isArray(res.data)) manufacturerOptions.value = res.data;
+  } catch { /* 下拉可选, 拿不到不阻断收货 */ }
+}
+
+function onFactoryNumberChange(row: { factoryNumber?: string; originPlace?: string }): void {
+  const matched = manufacturerOptions.value.find((item) => item.code === row.factoryNumber);
+  if (matched?.originPlace) row.originPlace = matched.originPlace;
+}
+
+/** 空串转 undefined —— 免得把「没填」写成一个空字符串, 之后分不清「填过空」和「没填」。 */
+function blankToUndefined(value: unknown): string | undefined {
+  const text = String(value ?? '').trim();
+  return text === '' ? undefined : text;
+}
+
 const closeDialogVisible = ref(false);
 const selectedCloseTask = ref<PurchaseReceivingTask | null>(null);
 const closingTask = ref(false);
@@ -328,6 +358,12 @@ async function openReceive(task: PurchaseReceivingTask) {
           materialTypeId: item.materialTypeId,
           materialName: item.materialName,
           receivedQuantity: Number(item.remainingReceivableQuantity),
+          // 可追溯字段初值 —— 全部选填, 由仓管按纸质单据/客户台账现场补
+          contractNumber: '',
+          supplierBatchNumber: '',
+          factoryNumber: '',
+          originPlace: '',
+          boxCount: undefined as number | undefined,
         })),
     };
     await loadWarehouses();
@@ -383,6 +419,12 @@ async function createReceipt() {
         receivedQuantity: item.receivedQuantity,
         unit: item.unit,
         materialPackagingSpecId: item.materialPackagingSpecId,
+        // 可追溯字段: 空字符串一律转 undefined, 免得把空串写进库当成「填过了」
+        contractNumber: blankToUndefined(item.contractNumber),
+        supplierBatchNumber: blankToUndefined(item.supplierBatchNumber),
+        factoryNumber: blankToUndefined(item.factoryNumber),
+        originPlace: blankToUndefined(item.originPlace),
+        boxCount: item.boxCount == null ? undefined : Number(item.boxCount),
       })),
     };
     const response = await post<PurchaseReceiptDetail>(`/${props.factoryId}/warehouse/receiving/receipts`, payload);
@@ -601,7 +643,7 @@ function taskRowClass({ row }: { row: WarehouseReceivingTask }) {
     : 'pending-receive-row';
 }
 
-onMounted(loadTasks);
+onMounted(() => { void loadTasks(); void loadManufacturerOptions(); });
 defineExpose({ loadTasks });
 </script>
 
@@ -750,6 +792,54 @@ defineExpose({ loadTasks });
             </el-table-column>
             <el-table-column label="折合基本量" width="150">
               <template #default="{ row }">{{ baseQuantityPreview(row) }}</template>
+            </el-table-column>
+            <!--
+              客户台账(六膳门「原辅材进出库明细」)按这几列记来料并据此追溯:
+              来料日期 | 料号 | 原料名称 | 合同号 | 批次号 | 厂号 | 件数(件/箱) | 初期重量KG
+              此前收货弹窗一个都没有 —— 字段其实早就在(DTO 有 factoryNumber/originPlace,
+              material_batches 有 box_count), 只是没接到界面上; 合同号与供应商批次号
+              由 V20261029_57 补列。全部选填, 不填不影响收货。
+            -->
+            <el-table-column label="合同号" width="150">
+              <template #default="{ row }">
+                <el-input v-model="row.contractNumber" maxlength="100" placeholder="如 SAN-16572" />
+              </template>
+            </el-table-column>
+            <el-table-column label="供应商批次号" width="150">
+              <template #default="{ row }">
+                <el-input v-model="row.supplierBatchNumber" maxlength="100" placeholder="供应商给的批号" />
+              </template>
+            </el-table-column>
+            <el-table-column label="厂号" width="140">
+              <template #default="{ row }">
+                <el-select
+                  v-model="row.factoryNumber"
+                  filterable
+                  allow-create
+                  clearable
+                  default-first-option
+                  placeholder="选或填"
+                  style="width:100%"
+                  @change="onFactoryNumberChange(row)"
+                >
+                  <el-option
+                    v-for="m in manufacturerOptions"
+                    :key="m.code"
+                    :label="`${m.code}${m.name ? ' ' + m.name : ''}`"
+                    :value="m.code"
+                  />
+                </el-select>
+              </template>
+            </el-table-column>
+            <el-table-column label="产地" width="150">
+              <template #default="{ row }">
+                <el-input v-model="row.originPlace" maxlength="200" placeholder="选厂号后自动带入" />
+              </template>
+            </el-table-column>
+            <el-table-column label="件数" width="110">
+              <template #default="{ row }">
+                <el-input-number v-model="row.boxCount" :min="0" :precision="0" :controls="false" style="width:90px" />
+              </template>
             </el-table-column>
           </el-table>
         </template>
