@@ -129,3 +129,45 @@ export const getRestaurantDashboardSummary = (factoryId: string) =>
     thisMonthWastageCost: number;
     latestStocktakingDate: string | null;
   }>(`/${factoryId}/restaurant-dashboard/summary`);
+
+// ==================== 发现层（主动出口） ====================
+
+export interface RestaurantFinding {
+  code: string;
+  domain: string;
+  severity: 'CRITICAL' | 'WARNING' | 'INFO';
+  actionability: number;
+  subjectId: string;
+  subjectName: string;
+  facts: Record<string, unknown>;
+}
+
+export interface RestaurantSkippedRule {
+  ruleName: string;
+  reason: string;
+}
+
+/**
+ * 三个桶必须分开消费，不要合成一个 boolean：
+ * - findings 空 + checkedRules 非空 = 都正常
+ * - skippedRules 非空 = 数据不足，判不了（不是正常，也不是失败）
+ * - failedRules 非空 / complete=false = 查询失败
+ */
+export interface RestaurantFindingsResponse {
+  domain: string;
+  findings: RestaurantFinding[];
+  findingsText: string;
+  totalCount: number;
+  checkedRules: string[];
+  skippedRules: RestaurantSkippedRule[];
+  failedRules: string[];
+  complete: boolean;
+}
+
+// ⚠️ query 必须放在 axios config 的 `params` 下。直接传 { domain } 会被当成
+// axios config 的未知字段静默丢掉 —— 同一个坑 2026-08-06 刚在 PR#2332
+// (material-segments next-code) 修过一次。
+export const getRestaurantFindings = (factoryId: string) =>
+  get<RestaurantFindingsResponse>(`/${factoryId}/findings`, {
+    params: { domain: 'restaurant' },
+  });
