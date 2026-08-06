@@ -96,7 +96,7 @@ describe('餐饮功能页按五部门归属', () => {
     '/restaurant/admin/name-resolution': 'admin 页, 只给平台管理员',
   };
 
-  it('除已声明的例外外, 餐饮功能页都挂在四个部门之一', () => {
+  it('除已声明的例外外, 餐饮功能页都挂在五个部门之一', () => {
     const stray = flattenMenu(menuConfig)
       .filter((i) => i.path.startsWith('/restaurant/'))
       .filter((i) => !DEPT_MODULES.has(i.module))
@@ -106,7 +106,7 @@ describe('餐饮功能页按五部门归属', () => {
     expect(stray, `这些页面还没归到部门:\n${stray.join('\n')}`).toEqual([]);
   });
 
-  it('四个部门各自都有驾驶舱和至少一个功能页', () => {
+  it('五个部门各自都有驾驶舱和至少一个功能页', () => {
     const byDept = new Map<string, number>();
     for (const item of flattenMenu(menuConfig)) {
       if (!item.path.startsWith('/restaurant/')) continue;
