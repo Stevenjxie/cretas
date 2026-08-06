@@ -82,22 +82,31 @@ describe('餐饮角色的菜单可见性', () => {
     expect(roleAllowed(staffing, 'restaurant_chef')).toBe(false);
   });
 
-  it('厨师长能看到报货与验收入库 —— 那正是这个角色的职责', () => {
-    // Java FactoryUserRole: restaurant_chef("厨师长", "报货、领料、验收入库")
+  // 🔴 2026-08-06 Steve 拍板: 餐饮四部门 = 运营(店长)/市场/财务/人事。
+  // 厨师长(restaurant_chef) 退役; 餐饮采购(restaurant_purchaser) 职责并入市场(sales_manager)。
+  // 两个角色在 prod 各只剩 2 个账号且全部 is_active=f, 权限矩阵零行。
+  // 这两条断言原本写的是「厨师长能看到报货」「餐饮采购能看到采购链路」——
+  // 正是那种把已退役角色焊死在代码里的测试, 让后来者(含 AI)读了就以为它们还活着。
+  // ⚠️ 只断言**带 roles 名单**的菜单项。`/restaurant/price-anomaly` 与
+  // `/restaurant/supplier-reconciliation` 没有 roles(只有 module=restaurantFinance),
+  // 而 roleAllowed 只看 roles 名单 —— 没名单就一律 true。那两项靠 module 闸把
+  // 退役角色挡住(它们在 platform_role_permissions 里零行), 不该在这里断言。
+  it('🔴 厨师长已退役 —— 不该再出现在菜单的 roles 名单里', () => {
     for (const path of ['/procurement/requisitions/my', '/restaurant/supplier-delivery']) {
-      expect(roleAllowed(findByPath(menuConfig, path), 'restaurant_chef'), path).toBe(true);
+      expect(roleAllowed(findByPath(menuConfig, path), 'restaurant_chef'), path).toBe(false);
     }
   });
 
-  it('餐饮采购能看到采购链路相关项', () => {
-    for (const path of [
-      '/procurement/requisitions/my',
-      '/restaurant/supplier-delivery',
-      '/restaurant/price-anomaly',
-      '/restaurant/supplier-reconciliation',
-    ]) {
-      expect(roleAllowed(findByPath(menuConfig, path), 'restaurant_purchaser'), path).toBe(true);
+  it('🔴 餐饮采购已退役 —— 职责并入市场, 不该再出现在菜单的 roles 名单里', () => {
+    for (const path of ['/procurement/requisitions/my', '/restaurant/supplier-delivery']) {
+      expect(roleAllowed(findByPath(menuConfig, path), 'restaurant_purchaser'), path).toBe(false);
     }
+  });
+
+  it('市场(sales_manager) 接手采购: 能看到供应商进货录入', () => {
+    expect(
+      roleAllowed(findByPath(menuConfig, '/restaurant/supplier-delivery'), 'sales_manager'),
+    ).toBe(true);
   });
 
   it('餐饮老板能看到店长能看的一切, 外加财务口径页', () => {
