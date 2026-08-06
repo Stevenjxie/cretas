@@ -95,11 +95,36 @@ describe('餐饮四部门权限', () => {
 
   // ── 部门边界 ──────────────────────────────────────────────────
 
-  it('店长人事可写、财务只读', () => {
+  // 2026-08-06: 这条原本断言「店长人事可写、财务只读」, 是拆部门之前的产品口径,
+  // 与 L1 权威相反且**永不变红**(本文件把权限 API 全 mock 成空, 断言的是 fallback 自己)。
+  // 现口径(Steve 拍板, L1 权威 V20261029_55): 店长管运营, 人事**只读**(排班挂在
+  // restaurantHr 上, 店长要看得到), 市场/财务不可见。
+  it('店长: 运营可写, 人事只读, 市场/财务进不去', () => {
     const store = storeAs('restaurant_manager');
-    expect(store.canWrite('restaurantHr')).toBe(true);
-    expect(store.canWrite('restaurantFinance')).toBe(false);
-    expect(store.canAccess('restaurantFinance')).toBe(true);
+    expect(store.canWrite('restaurantOps')).toBe(true);
+    // 人事给 'r' 而不是 '-' —— 否则店长「菜单里有预测排班、点进去 403」
+    expect(store.canAccess('restaurantHr')).toBe(true);
+    expect(store.canWrite('restaurantHr')).toBe(false);
+    expect(store.canAccess('restaurantMarketing')).toBe(false);
+    expect(store.canAccess('restaurantFinance')).toBe(false);
+  });
+
+  it('市场经理只进市场 —— 且餐饮板块本身进得去', () => {
+    const store = storeAs('sales_manager');
+    // restaurant 是「进餐饮 vs 进工厂」的板块准入, 不是权限档次。
+    // 上一版 fallback 写 '-', 竞态/离线窗口里市场经理的餐饮菜单会整块消失。
+    expect(store.canAccess('restaurant')).toBe(true);
+    expect(store.canWrite('restaurantMarketing')).toBe(true);
+    expect(store.canAccess('restaurantOps')).toBe(false);
+    expect(store.canAccess('restaurantHr')).toBe(false);
+    expect(store.canAccess('restaurantFinance')).toBe(false);
+  });
+
+  it('财务经理在自己的部门里可写, 不只是只读', () => {
+    const store = storeAs('finance_manager');
+    // 上一版 fallback 的 restaurant: 'r' 会把 restaurantFinance 一起压成 r
+    // (weakerOf 上限规则) —— 财务经理在自己部门反而不可写。
+    expect(store.canWrite('restaurantFinance')).toBe(true);
   });
 
   it('人事管理员可进入并调整餐饮预测排班，但不能进入其它餐饮部门', () => {

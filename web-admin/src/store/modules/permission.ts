@@ -126,7 +126,14 @@ const PERMISSION_MATRIX: Record<string, ModulePermissions> = {
   sales_manager: {
     dashboard: 'r', production: 'r', warehouse: 'r', quality: '-',
     procurement: '-', sales: 'rw', hr: '-', equipment: '-',
-    finance: 'r', system: '-', analytics: 'r', scheduling: '-', restaurant: '-',
+    finance: 'r', system: '-', analytics: 'r', scheduling: '-',
+    // 对齐 L1 权威 V20261029_55: 市场经理是餐饮「市场部门」的载体角色。
+    // 上一版 restaurant: '-' 会在竞态/离线窗口里把整个餐饮板块关掉(上限 '-' 时
+    // 四个部门一起关) —— 市场经理登录后餐饮菜单整块消失。
+    // 工厂型租户不受影响: FACTORY_TYPE_MODULE_FILTER.FACTORY 会把 restaurant 打回 '-'。
+    restaurant: 'rw',
+    restaurantOps: '-', restaurantMarketing: 'rw',
+    restaurantHr: '-', restaurantFinance: '-',
     rd: 'rw'  // 销售驱动 RD 需求/样品
   },
   // 调度 (dispatcher) - 生产调度、数据分析、趋势监控
@@ -173,9 +180,14 @@ const PERMISSION_MATRIX: Record<string, ModulePermissions> = {
     finance: 'rw', system: '-', analytics: 'rw', scheduling: '-',
     // 餐饮侧只看财务口径的页(供应商对账 / 成本归因)。此前是在 router/guards.ts 的
     // ROLE_PATH_WHITELIST 里硬编码那两条路径, 现由权限模型表达, 那个补丁已删。
-    restaurant: 'r',
+    //
+    // restaurant 是「进餐饮 vs 进工厂」的板块准入上限, 不是权限档次 —— 财务经理
+    // 在餐饮租户里当然进得去, 所以是 rw 而不是 r; 真正的收窄由下面四个部门键表达。
+    // 上一版写 'r' 会把 restaurantFinance 一起压成 r(见 weakerOf 上限规则),
+    // 财务经理在自己的部门里反而不可写。对齐 L1 权威 V20261029_55。
+    restaurant: 'rw',
     restaurantOps: '-', restaurantMarketing: '-',
-    restaurantHr: '-', restaurantFinance: 'r',
+    restaurantHr: '-', restaurantFinance: 'rw',
     rd: 'r'  // 定价参考 (analytics rw 对齐后端 SmartBI 完整权限)
   },
   // 出纳 (D9 #675/#678): 付款申请 APPROVED→PAID 执行者。路由守卫先查 module 后查 roles,
@@ -233,9 +245,13 @@ const PERMISSION_MATRIX: Record<string, ModulePermissions> = {
     procurement: 'r', sales: '-', hr: '-', equipment: '-',
     finance: 'r', system: '-', analytics: 'r', scheduling: '-',
     restaurant: 'rw',
-    // 店长要排班, 人事可写; 财务口径由老板/财务经理定, 店长只读
-    restaurantOps: 'rw', restaurantMarketing: 'rw',
-    restaurantHr: 'rw', restaurantFinance: 'r',
+    // 对齐 L1 权威 V20261029_55: 店长管运营, 人事**只读**, 市场/财务不可见。
+    // 上一版这里是 Ops/Marketing/Hr 全 rw + Finance r —— 那是拆部门之前的产品口径。
+    // 人事给 'r' 而不是 '-': 预测排班(/restaurant/staffing)挂在 restaurantHr 上,
+    // 而 menuConfig / router 的 roles 白名单都明写着店长 —— 给 '-' 会让店长
+    // 「菜单里有、点进去 403」。副作用: 店长同时看得到人事驾驶舱, 只读。
+    restaurantOps: 'rw', restaurantMarketing: '-',
+    restaurantHr: 'r', restaurantFinance: '-',
     rd: '-'
   },
 
