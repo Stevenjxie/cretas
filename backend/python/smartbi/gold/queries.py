@@ -790,6 +790,132 @@ async def order_type_mix(
 # which powers the dashboard chart but lacks 客单价 and meal_period support).
 
 
+async def peak_hours(
+    pool: asyncpg.Pool,
+    factory_id: str,
+    date_range: Tuple[Optional[date], Optional[date]],
+) -> Dict[str, Any]:
+    """按小时的营业强度分布 —— 回答「几点最忙」。
+
+    数据源: fact_pos_transaction.time (开单时刻)。
+
+    ⚠️ 该列并非所有租户/时段都有: 例如 DEMO_REST 1-7 月为空、8 月起才写入,
+    而 MOCK_REST 全期都有。**没有 time 就必须明说"缺开单时间"**, 绝不能返回
+    一张 24 小时全 0 的表 —— 那会被读成"这家店整天没生意", 把"没记录"渲染成
+    "没生意"是两件完全不同的事。
+
+    Returns:
+      - hours_available: bool。False 时 hours 为空列表, 并给出 unavailable_reason
+      - unavailable_reason: hours_available=False 时非空, 说明为什么
+      - total_bills / total_revenue
+      - hours: [{hour, bill_count, revenue, bill_pct}] 按小时升序
+      - peak_hour / peak_bill_count: 单量最高的那个小时 (无数据时为 None)
+    """
+    start, end = date_range
+    _validate_range(start, end)
+    conds = ["factory_id = $1"]
+    params: list = [factory_id]
+    if start is not None:
+        params.append(start)
+        conds.append(f"date >= ${len(params)}")
+    if end is not None:
+        params.append(end)
+        conds.append(f"date <= ${len(params)}")
+    where = " AND ".join(conds)
+
+    async with tenant_conn(pool, factory_id) as conn:
+        total_row = await conn.fetchrow(
+            f"""
+            SELECT count(*)                                    AS bills,
+                   count(time)                                 AS with_time,
+                   COALESCE(SUM(net_amount), 0)::numeric(18,2) AS revenue
+              FROM fact_pos_transaction
+             WHERE {where}
+            """,
+            *params,
+        )
+        rows = await conn.fetch(
+            f"""
+            SELECT EXTRACT(HOUR FROM time)::int                AS hour,
+                   count(*)                                    AS bills,
+                   COALESCE(SUM(net_amount), 0)::numeric(18,2) AS revenue
+              FROM fact_pos_transaction
+             WHERE {where} AND time IS NOT NULL
+             GROUP BY 1
+             ORDER BY 1
+            """,
+            *params,
+        )
+
+    total_bills = int(total_row["bills"] or 0) if total_row else 0
+    with_time = int(total_row["with_time"] or 0) if total_row else 0
+    total_revenue = Decimal(str(total_row["revenue"] or 0)) if total_row else Decimal("0")
+
+    # 区分三种"没有小时分布"的原因, 它们对用户的含义完全不同。
+    if total_bills == 0:
+        return {
+            "hours_available": False,
+            "unavailable_reason": "所选区间内没有任何交易记录。",
+            "total_bills": 0,
+            "total_revenue": float(total_revenue),
+            "hours": [],
+            "peak_hour": None,
+            "peak_bill_count": None,
+        }
+    if with_time == 0:
+        return {
+            "hours_available": False,
+            "unavailable_reason": (
+                f"该区间共 {total_bills} 笔交易，但都没有记录开单时刻(time 字段为空)，"
+                "因此无法给出按小时的分布。这是数据采集缺失，不代表这些时段没有营业。"
+            ),
+            "total_bills": total_bills,
+            "total_revenue": float(total_revenue),
+            "hours": [],
+            "peak_hour": None,
+            "peak_bill_count": None,
+        }
+
+    hours = []
+    peak_hour = None
+    peak_bills = -1
+    for r in rows:
+        bills = int(r["bills"] or 0)
+        pct = (
+            (Decimal(bills) / Decimal(with_time) * 100).quantize(
+                Decimal("0.1"), rounding=ROUND_HALF_UP
+            )
+            if with_time > 0
+            else Decimal("0")
+        )
+        hours.append({
+            "hour": int(r["hour"]),
+            "bill_count": bills,
+            "revenue": float(Decimal(str(r["revenue"]))),
+            "bill_pct": float(pct),
+        })
+        if bills > peak_bills:
+            peak_bills = bills
+            peak_hour = int(r["hour"])
+
+    result: Dict[str, Any] = {
+        "hours_available": True,
+        "unavailable_reason": None,
+        "total_bills": total_bills,
+        "total_revenue": float(total_revenue),
+        "hours": hours,
+        "peak_hour": peak_hour,
+        "peak_bill_count": peak_bills if peak_bills >= 0 else None,
+    }
+    # 部分缺失也要说清楚: 否则用户会以为百分比是按全部交易算的。
+    if with_time < total_bills:
+        result["partial_coverage_note"] = (
+            f"共 {total_bills} 笔交易，其中 {with_time} 笔有开单时刻，"
+            f"以下分布与百分比均基于这 {with_time} 笔计算。"
+        )
+    return result
+
+
 async def _service_mode_breakdown(
     pool: asyncpg.Pool,
     factory_id: str,

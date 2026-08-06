@@ -34,6 +34,7 @@ from smartbi.gold import (
     member_profile,
     member_rfm,
     order_type_mix,
+    peak_hours,
     review_city_ranking,
     review_complaints,
     review_dish_issues,
@@ -410,6 +411,31 @@ async def get_order_type_mix(
         return _apply_rbac_strip(result, _get_role(request))
     except Exception as e:
         logger.exception("order-type-mix failed: %s", e)
+        raise HTTPException(status_code=500, detail=f"Gold query failed: {e}")
+
+
+@router.get("/peak-hours")
+async def get_peak_hours(
+    request: Request,
+    start_date: Optional[str] = Query(None, description="YYYY-MM-DD inclusive; 省略=全部历史"),
+    end_date: Optional[str] = Query(None, description="YYYY-MM-DD inclusive; 省略=全部历史"),
+    factory_id: Optional[str] = Query(None),
+):
+    """按小时的营业强度分布 —— 回答"几点最忙"。
+
+    Source: fact_pos_transaction.time (开单时刻)。
+
+    NOTE: 该列并非所有租户/时段都有 (DEMO_REST 1-7 月为空, MOCK_REST 全期有)。
+    缺失时返回 hours_available=false + unavailable_reason, **不返回 24 小时全 0**
+    —— 把"没记录"渲染成"没生意"是两件不同的事。"""
+    fid = _resolve_tenant(factory_id)
+    start, end = _parse_range(start_date, end_date)
+    pool = await get_pg_pool()
+    try:
+        result = await peak_hours(pool, fid, (start, end))
+        return _apply_rbac_strip(result, _get_role(request))
+    except Exception as e:
+        logger.exception("peak-hours failed: %s", e)
         raise HTTPException(status_code=500, detail=f"Gold query failed: {e}")
 
 
