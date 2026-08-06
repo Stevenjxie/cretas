@@ -142,4 +142,116 @@ class FindingTextRendererTest {
 
         assertTrue(text.contains("低库存 / 临期"), text);
     }
+
+    private static FindingService.SkippedRule skip(String rule, String reason) {
+        return new FindingService.SkippedRule(rule, reason);
+    }
+
+    private static Finding shareSpike(String name) {
+        Map<String, Object> facts = new LinkedHashMap<>();
+        facts.put("costCur", 81943.91);
+        facts.put("shareCur", 10.5);
+        facts.put("shareBase", 7.1);
+        facts.put("amplification", 1.48);
+        facts.put("windowDays", 7);
+        facts.put("unit", "kg");
+        return new Finding("WASTAGE_SHARE_SPIKE", "restaurant",
+                Finding.Severity.INFO, 60, "M-" + name, name, facts);
+    }
+
+    private static Finding typeConcentration(String type) {
+        Map<String, Object> facts = new LinkedHashMap<>();
+        facts.put("cost", 291112.44);
+        facts.put("share", 37.2);
+        facts.put("windowDays", 7);
+        facts.put("totalCost", 782722.89);
+        return new Finding("WASTAGE_TYPE_CONCENTRATION", "restaurant",
+                Finding.Severity.INFO, 70, type, type, facts);
+    }
+
+    @Test
+    @DisplayName("UT-FTR-10: 🔴 只有跳过时说「暂不判断」，且那一行不含「正常」")
+    void skippedOnlyRendersUndecided() {
+        FindingService.Result r = new FindingService.Result(
+                List.of(), List.of(), 0, Map.of(), List.of(),
+                List.of(skip("食材损耗离群", "两期食材名单不可比：近7天 25 种 / 基线 13 种")));
+
+        String text = renderer.renderInline(r);
+
+        assertTrue(text.contains("食材损耗离群"), text);
+        assertTrue(text.contains("两期食材名单不可比"), text);
+        assertTrue(text.contains("暂不判断"), text);
+        assertFalse(text.contains("正常"),
+                "本例没有任何规则跑完, 整段里不该出现「正常」: " + text);
+    }
+
+    @Test
+    @DisplayName("UT-FTR-11: 🔴 组合态 —— 一条均正常 + 一条判不了，两句都要说")
+    void checkedAndSkippedBothSpoken() {
+        FindingService.Result r = new FindingService.Result(
+                List.of(), List.of("损耗类型集中度"), 0, Map.of(), List.of(),
+                List.of(skip("食材损耗离群", "基线历史不足：仅 6 天")));
+
+        String text = renderer.renderInline(r);
+
+        assertTrue(text.contains("已检查 损耗类型集中度"), text);
+        assertTrue(text.contains("均正常"), text);
+        assertTrue(text.contains("食材损耗离群"),
+                "只说前半句 = 把「判不了」渲染成了「都正常」: " + text);
+        assertTrue(text.contains("暂不判断"), text);
+    }
+
+    @Test
+    @DisplayName("UT-FTR-12: 有发现时跳过行仍然要说")
+    void findingsAndSkippedCoexist() {
+        FindingService.Result r = new FindingService.Result(
+                List.of(typeConcentration("变质")), List.of("损耗类型集中度"), 1,
+                Map.of("WASTAGE_TYPE_CONCENTRATION", 1), List.of(),
+                List.of(skip("食材损耗离群", "基线历史不足")));
+
+        String text = renderer.renderInline(r);
+
+        assertTrue(text.contains("变质"), text);
+        assertTrue(text.contains("暂不判断"), text);
+    }
+
+    @Test
+    @DisplayName("UT-FTR-13: 三个桶全空仍然返回空串（既有行为不变）")
+    void nothingAtAllStillRendersNothing() {
+        assertEquals("", renderer.renderInline(new FindingService.Result(
+                List.of(), List.of(), 0, Map.of(), List.of(), List.of())));
+    }
+
+    @Test
+    @DisplayName("UT-FTR-14: 🔴 R1 话术说「涨得比全店快」，不得说「涨了 N 倍」")
+    void shareSpikeMustNotClaimAbsoluteGrowth() {
+        FindingService.Result r = new FindingService.Result(
+                List.of(shareSpike("鸡腿肉")), List.of("食材损耗离群"), 1,
+                Map.of("WASTAGE_SHARE_SPIKE", 1), List.of());
+
+        String text = renderer.renderInline(r);
+
+        assertTrue(text.contains("鸡腿肉"), text);
+        assertTrue(text.contains("涨得比全店快"),
+                "份额是零和的, 说「涨了 1.48 倍」是把别人下降的份额算到它头上: " + text);
+        assertFalse(text.contains("涨了"), text);
+        assertTrue(text.contains("1.48"), text);
+        assertTrue(text.contains("10.5"), text);
+        assertTrue(text.contains("7.1"), text);
+    }
+
+    @Test
+    @DisplayName("UT-FTR-15: R2 模板说出类型/金额/占比")
+    void typeConcentrationTemplate() {
+        FindingService.Result r = new FindingService.Result(
+                List.of(typeConcentration("变质")), List.of("损耗类型集中度"), 1,
+                Map.of("WASTAGE_TYPE_CONCENTRATION", 1), List.of());
+
+        String text = renderer.renderInline(r);
+
+        assertTrue(text.contains("变质"), text);
+        assertTrue(text.contains("291112.44"), text);
+        assertTrue(text.contains("37.2"), text);
+        assertFalse(text.contains("null"), text);
+    }
 }

@@ -17,10 +17,13 @@ public class FindingTextRenderer {
      * 需求分叉后开始塞 if。
      */
     public String renderInline(FindingService.Result result) {
-        // 一条规则都没成功跑完 —— 什么都不说。绝不能渲染成「均正常」，
-        // 那是把故障说成健康（禁止降级处理）。
+        String skipText = renderSkipped(result);
+
+        // 一条规则都没成功跑完 —— 绝不能渲染成「均正常」，那是把故障说成健康
+        // （禁止降级处理）。但若有**诚实跳过**的规则，仍要把它说出来：否则
+        // 「判不了」和「什么都没发生」对用户是同一个空白，三态就塌回两态了。
         if (result.checkedRules().isEmpty()) {
-            return "";
+            return skipText;
         }
 
         String checked = String.join(" / ", result.checkedRules());
@@ -31,10 +34,11 @@ public class FindingTextRenderer {
             // 不能只说"均正常"(那对没跑完的那条是假话), 必须点名跑失败的规则,
             // 让用户知道这不是一次完整的检查结果 (禁止降级处理)。
             if (!result.complete()) {
-                return "⚠️ 已检查 " + checked + "，均正常；另有 "
-                        + String.join(" / ", result.failedRules()) + " 检查失败，暂无法判断。";
+                return withSkip("⚠️ 已检查 " + checked + "，均正常；另有 "
+                        + String.join(" / ", result.failedRules())
+                        + " 检查失败，暂无法判断。", skipText);
             }
-            return "✅ 已检查 " + checked + "，均正常。";
+            return withSkip("✅ 已检查 " + checked + "，均正常。", skipText);
         }
 
         String lines = result.findings().stream()
@@ -44,7 +48,25 @@ public class FindingTextRenderer {
         int remaining = result.totalCount() - result.findings().size();
         String more = remaining > 0 ? "\n还有 " + remaining + " 项待查看" : "";
 
-        return "⚠️ 顺带 " + result.findings().size() + " 件事：\n" + lines + more;
+        return withSkip("⚠️ 顺带 " + result.findings().size() + " 件事：\n" + lines + more,
+                skipText);
+    }
+
+    /**
+     * 「数据没采集到」那一态。刻意**不含**「正常」二字 —— 这一行的全部意义就是
+     * 告诉用户这条规则这次没给出结论，说成正常就是把缺数据渲染成了健康。
+     */
+    private String renderSkipped(FindingService.Result result) {
+        if (result.skippedRules().isEmpty()) {
+            return "";
+        }
+        return result.skippedRules().stream()
+                .map(s -> "ℹ️ " + s.ruleName() + "：" + s.reason() + "，暂不判断。")
+                .collect(Collectors.joining("\n"));
+    }
+
+    private String withSkip(String base, String skipText) {
+        return skipText.isEmpty() ? base : base + "\n" + skipText;
     }
 
     /**
@@ -58,6 +80,24 @@ public class FindingTextRenderer {
      * 而不是提前防一个当前不存在的输入。）
      */
     private String renderOne(Finding f) {
+        if ("WASTAGE_SHARE_SPIKE".equals(f.code())) {
+            // ⛔ 只能说「涨得比全店快」。份额是零和的: 某食材份额上升有一部分是
+            //    别的食材下降的机械结果, 说「涨了 N 倍」是把别人的下降算到它头上。
+            return String.format(" · %s 近%s天损耗 ¥%s，占全店 %s%%（基线 %s%%），涨得比全店快 %s 倍",
+                    f.subjectName(),
+                    f.facts().get("windowDays"),
+                    f.facts().get("costCur"),
+                    f.facts().get("shareCur"),
+                    f.facts().get("shareBase"),
+                    f.facts().get("amplification"));
+        }
+        if ("WASTAGE_TYPE_CONCENTRATION".equals(f.code())) {
+            return String.format(" · %s损耗近%s天 ¥%s，占全店损耗 %s%%",
+                    f.subjectName(),
+                    f.facts().get("windowDays"),
+                    f.facts().get("cost"),
+                    f.facts().get("share"));
+        }
         if ("LOW_STOCK".equals(f.code())) {
             Object unit = f.facts().get("unit");
             return String.format(" · %s 剩 %s%s，低于安全线 %s%s（缺 %s%s）",
