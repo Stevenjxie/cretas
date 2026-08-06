@@ -19,10 +19,9 @@ import { PERMISSION_MATRIX } from './permission';
  * (permission.ts 里那句 "fallback to hardcoded for race/offline/error")。
  * 所以「反正生产走 L1」不能作为放着不管的理由。
  *
- * 权威取的是**同仓的 Flyway seed**而不是手抄的 prod 快照 —— 手抄的快照会自己过期,
- * 而且没人知道该什么时候刷新。V20261029_52 是唯一且最新碰这四个模块的迁移
- * (2026-08-06 核: 其后无迁移改动 platform_role_permissions 的这些行), 与 prod
- * 实查值逐格一致。
+ * 权威取的是**同仓的 Flyway 迁移**而不是手抄的 prod 快照 —— 手抄的快照会自己过期,
+ * 而且没人知道该什么时候刷新。到底是哪一份由下面的标记查找决定, 这里刻意不写死版本号
+ * (写死过一次, 当天就过期了)。
  */
 
 const FLYWAY_REL = 'backend/java/cretas-api/src/main/resources/db/flyway';
@@ -30,7 +29,7 @@ const FLYWAY_REL = 'backend/java/cretas-api/src/main/resources/db/flyway';
 /**
  * 权威不是某个写死的文件名, 而是**带标记的最高版本迁移**。
  *
- * 一开始我写死了 V20261029_52, 然后当天就加了 V20261029_55 改其中一格 ——
+ * 一开始我写死了 V20261029_52, 然后当天就加了新迁移改其中一格 ——
  * 写死文件名的守卫会继续对着旧值比, 而且是**绿着**比错的。所以改成按标记找:
  * 迁移里写 `L1-AUTHORITY: restaurant-department-matrix`, 谁版本高谁是权威。
  *
@@ -82,7 +81,7 @@ function parseSeed(): Array<{ role: string; module: string; level: string }> {
   return [...executable.matchAll(ROW_RE)].map(([, role, module, level]) => ({ role, module, level }));
 }
 
-describe('餐饮部门 fallback 矩阵 vs L1 权威 (V20261029_52)', () => {
+describe('餐饮部门 fallback 矩阵 vs L1 权威 (带标记的最高版本迁移)', () => {
   const rows = parseSeed();
 
   it('解析到 seed 的全部 20 行 —— 迁移被改名/移动/重写时这条先红, 而不是静默跳过 0 行', () => {

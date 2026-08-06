@@ -1,4 +1,11 @@
--- V20261029_55: 运营部长(店长)对人事部门开只读
+-- V20261029_56: 运营部长(店长)对人事部门开只读
+--
+-- ⚠️ 本文件原名 V20261029_55, 2026-08-06 让号改成 _56 —— 另一个并行分支(PR#2340,
+-- restaurant_owner 全模块只读)同时把它的新迁移也编成了 V20261029_55。文件名不同,
+-- **git 不报冲突**, 两份都合进了 main 且 CI 全绿, 要到 Flyway 启动才炸
+-- ("Found more than one migration with version 20261029.55")。
+-- 让号的是本文件, 因为两侧当时都还没部署到 prod(prod 停在 20261029.54)。
+-- 新增 FlywayVersionUniquenessTest 挡住这类重复。
 --
 -- L1-AUTHORITY: restaurant-department-matrix
 -- ^ 这行标记不要删。web-admin 的 permission.fallback-matches-l1.spec.ts 靠它找
