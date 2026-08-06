@@ -69,10 +69,15 @@ public interface MaterialCodeSegmentRepository extends JpaRepository<MaterialCod
      *
      * 分配口径必须与唯一约束口径一致 —— 只看活着的行就会分到一个被软删行占用的编码。
      * level=1 没有父级, 用 {@code parentCode IS NULL} 命中。
+     *
+     * ⚠️ {@code :parentCode} 必须显式 CAST: 裸的 {@code ? IS NULL} 让 PostgreSQL
+     * 推不出参数类型, 直接报 {@code could not determine data type of parameter $2}
+     * (2026-08-06 上线后实测 500)。Mock 掉仓储的单测**跑不到真 SQL**, 只有打真库才会红。
      */
     @Query(value = "SELECT segment_code FROM material_code_segments "
             + "WHERE factory_id = :factoryId "
-            + "AND (:parentCode IS NULL AND parent_code IS NULL OR parent_code = :parentCode)",
+            + "AND (CAST(:parentCode AS text) IS NULL AND parent_code IS NULL "
+            + "     OR parent_code = CAST(:parentCode AS text))",
            nativeQuery = true)
     List<String> findSegmentCodesByParentIncludingDeleted(
             @Param("factoryId") String factoryId,
