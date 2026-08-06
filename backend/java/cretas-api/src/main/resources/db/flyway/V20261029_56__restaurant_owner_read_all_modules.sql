@@ -1,4 +1,10 @@
--- V20261029_55: 餐饮老板 (restaurant_owner) 全模块只读
+-- V20261029_56: 餐饮老板 (restaurant_owner) 全模块只读
+--
+-- ⚠️ 本文件原为 V20261029_55, 部署时被 Flyway pre-flight 闸拦下:
+-- 另一个 session 在我工作期间合入了同号的
+-- V20261029_55__restaurant_manager_reads_hr.sql。两者语义不冲突(那条改
+-- restaurant_manager 的 HR 读权限, 本条只碰 restaurant_owner), 纯版本号撞车,
+-- 按闸提示改到下一个空号。硬上会让 Spring Flyway 启动直接崩。
 --
 -- 背景: V20261029_52 明确写了「刻意不动 restaurant_owner / restaurant_chef:
 -- 它们在本表零行(上限 '-', 四部门全不可见), 与 fallback 矩阵矛盾, 属既有问题,
