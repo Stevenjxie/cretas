@@ -250,19 +250,78 @@ async function saveSegment() {
 async function deleteSegment(row: SegmentNode) {
   if (!factoryId.value) return;
   try {
+    // 删除与停用的区别必须在这里说清楚 —— 用户此前只有「删除」一个按钮,
+    // 而删掉的分类界面上看不见也回不来, 编码却继续被占着。
     await ElMessageBox.confirm(
-      `确认删除编码分类「${row.segmentCode} ${row.segmentLabel}」？`,
+      `确认删除编码分类「${row.segmentCode} ${row.segmentLabel}」？\n\n`
+      + '删除后：编码 ' + row.segmentCode + ' 不会被回收（历史物料的编码里含它），'
+      + '该分类也不再出现在新建物料的选项里。\n'
+      + '如果只是不想再用它建新物料，建议改用「停用」——效果相同，但归属仍可追溯。',
       '删除确认',
-      { type: 'warning', confirmButtonText: '删除', cancelButtonText: '取消' },
+      {
+        type: 'warning',
+        confirmButtonText: '仍然删除',
+        cancelButtonText: '取消',
+        distinguishCancelAndClose: true,
+      },
     );
     await del(`/${factoryId.value}/material-segments/${row.id}`);
-    ElMessage.success('编码分类已删除。');
-    await loadTree();
+    ElMessage.success('编码分类已删除。可在「显示已删除」里恢复。');
+    await refreshAll();
   } catch (error) {
     if (error === 'cancel' || error === 'close') return;
-    showStickyError(errorMessage(error, '删除失败，请先删除下级分类，再重试。'));
+    showStickyError(errorMessage(error, '删除失败，请先处理下级分类或在用物料，再重试。'));
   }
 }
+
+/** 一键停用/启用 —— 把「停用」提到和「删除」同级, 而不是藏在编辑弹窗里。 */
+async function toggleActive(row: SegmentNode) {
+  if (!factoryId.value) return;
+  const nextActive = row.isActive === false;
+  try {
+    await put(`/${factoryId.value}/material-segments/${row.id}`, { isActive: nextActive });
+    ElMessage.success(nextActive ? '已启用。' : '已停用。停用后不再出现在新建物料的选项里，归属仍可追溯。');
+    await refreshAll();
+  } catch (error) {
+    showStickyError(errorMessage(error, nextActive ? '启用失败' : '停用失败'));
+  }
+}
+
+const showDeleted = ref(false);
+const deletedRows = ref<SegmentNode[]>([]);
+
+async function loadDeleted() {
+  if (!factoryId.value) return;
+  try {
+    const res = await get<SegmentNode[]>(`/${factoryId.value}/material-segments/deleted`);
+    deletedRows.value = Array.isArray(res.data) ? res.data : [];
+  } catch (error) {
+    showStickyError(errorMessage(error, '已删除分类加载失败'));
+  }
+}
+
+async function restoreSegment(row: SegmentNode) {
+  if (!factoryId.value) return;
+  try {
+    await post(`/${factoryId.value}/material-segments/${row.id}/restore`, {});
+    ElMessage.success(`「${row.segmentCode} ${row.segmentLabel}」已恢复，编码不变。`);
+    await refreshAll();
+  } catch (error) {
+    showStickyError(errorMessage(error, '恢复失败'));
+  }
+}
+
+async function refreshAll() {
+  await loadTree();
+  if (showDeleted.value) await loadDeleted();
+}
+
+watch(showDeleted, (on) => { if (on) void loadDeleted(); });
+
+/** 当前层级下已删除的行 —— 与主表同一个层级过滤, 免得看串。 */
+const deletedRowsForLevel = computed(
+  () => deletedRows.value.filter((row) => row.level === selectedLevel.value),
+);
 
 onMounted(loadTree);
 </script>
@@ -322,10 +381,52 @@ onMounted(loadTree);
             </el-tag>
           </template>
         </el-table-column>
-        <el-table-column v-if="canWrite" label="操作" width="150" fixed="right">
+        <el-table-column v-if="canWrite" label="操作" width="230" fixed="right">
           <template #default="{ row }">
             <el-button link type="primary" :icon="Edit" @click="openEdit(row)">编辑</el-button>
+            <!-- 停用与删除同级: 绝大多数「不想再用」的诉求应该走停用, 而不是删除 -->
+            <el-button link type="warning" @click="toggleActive(row)">
+              {{ row.isActive === false ? '启用' : '停用' }}
+            </el-button>
             <el-button link type="danger" :icon="DeleteIcon" @click="deleteSegment(row)">删除</el-button>
+          </template>
+        </el-table-column>
+      </el-table>
+
+      <!--
+        ⛔ 2026-08-06: 删除是软删除, 但此前界面上**看不到也回不来** —— 于是误删/重组
+        之后唯一的出路是新建, 而新建又会撞上被删行仍占着的编码(唯一约束含软删)。
+        客户 08-04 删掉的 226 条 L3 其实原封不动躺在库里, 恢复比重建正确得多:
+        编码不变 → 历史物料的 16 位码仍然指得回它的分类。
+      -->
+      <div class="deleted-section">
+        <el-switch v-model="showDeleted" active-text="显示已删除的分类" />
+        <span class="deleted-hint">
+          删除是软删除：行还在，编码也仍被它占着（不会回收）。可随时恢复。
+        </span>
+      </div>
+
+      <el-table
+        v-if="showDeleted"
+        :data="deletedRowsForLevel"
+        stripe
+        row-key="id"
+        empty-text="该层级没有已删除的分类"
+        class="deleted-table"
+      >
+        <el-table-column prop="segmentCode" label="编码" width="150" />
+        <el-table-column prop="segmentLabel" label="名称" min-width="180" />
+        <el-table-column prop="parentCode" label="上级编码" width="140">
+          <template #default="{ row }">{{ row.parentCode || '-' }}</template>
+        </el-table-column>
+        <el-table-column label="状态" width="100">
+          <template #default>
+            <el-tag type="danger" size="small">已删除</el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column v-if="canWrite" label="操作" width="230" fixed="right">
+          <template #default="{ row }">
+            <el-button link type="primary" @click="restoreSegment(row)">恢复</el-button>
           </template>
         </el-table-column>
       </el-table>
@@ -341,7 +442,7 @@ onMounted(loadTree);
           </el-select>
         </el-form-item>
         <el-form-item v-if="form.level > 1" label="上级分类" required>
-          <el-select v-model="form.parentCode" filterable style="width: 100%">
+          <el-select v-model="form.parentCode" filterable :disabled="!!form.id" style="width: 100%">
             <el-option
               v-for="item in parentOptions"
               :key="item.segmentCode"
@@ -349,6 +450,16 @@ onMounted(loadTree);
               :value="item.segmentCode"
             />
           </el-select>
+          <!--
+            编码把父级前缀焊在里面了(L3 码 = L2 码 + 4 位), 换父级就必须换编码,
+            而编码已经被历史物料的 16 位码引用, 不能换 —— 所以「移动分类」做不到。
+            以前这个下拉在编辑态是可选的, 选了也只会得到一句「父节点层级、状态或编码前缀无效」。
+            与其让人白试一次, 不如直接说清楚。
+          -->
+          <div v-if="form.id" class="field-hint">
+            分类建好后不能换上级：编码里含上级前缀（{{ form.segmentCode }}），而历史物料的编码引用了它。
+            需要重新归类时，请在此层级新建一个分类，旧的改为「停用」。
+          </div>
         </el-form-item>
         <el-form-item label="系统编码" required>
           <el-input :model-value="systemGeneratedCode" disabled placeholder="选择层级和上级后自动生成" />
@@ -359,6 +470,10 @@ onMounted(loadTree);
         </el-form-item>
         <el-form-item label="名称" required>
           <el-input v-model="form.segmentLabel" maxlength="100" placeholder="如：牛肉类 / 牛腱 / 卤牛腱" />
+          <!-- 说清楚改名是安全的, 否则用户会用「删了重建」来达到改名的目的 -->
+          <div v-if="form.id" class="field-hint">
+            改名只改显示名称：编码不变，历史物料的归属也不受影响。想换个叫法直接改这里即可，不必删了重建。
+          </div>
         </el-form-item>
         <el-form-item label="排序">
           <el-input-number v-model="form.sortOrder" :min="0" style="width: 100%" />
@@ -422,6 +537,23 @@ onMounted(loadTree);
 
 .field-hint--error {
   color: #f56c6c;
+}
+
+.deleted-section {
+  margin-top: 16px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.deleted-hint {
+  color: #909399;
+  font-size: 12px;
+}
+
+.deleted-table {
+  margin-top: 12px;
 }
 
 .page-subtitle {

@@ -192,6 +192,17 @@ public interface RawMaterialTypeRepository extends JpaRepository<RawMaterialType
                                                       @Param("segmentPrefix") String segmentPrefix);
 
     /**
+     * 删除编码分类前的守卫: 还有多少**在用**物料的编码挂在这个分类段下。
+     *
+     * <p>前缀长度不定 —— L1 3位 / L2 6位 / L3 10位, 所以不能像
+     * {@link #findCodesByFactoryIdAndSegmentPrefix} 那样固定 16 位。</p>
+     */
+    @Query("SELECT COUNT(r) FROM RawMaterialType r WHERE r.factoryId = :factoryId " +
+           "AND r.isActive = true AND r.code LIKE CONCAT(:segmentPrefix, '%') ESCAPE '\\'")
+    long countActiveByFactoryIdAndSegmentPrefix(@Param("factoryId") String factoryId,
+                                                @Param("segmentPrefix") String segmentPrefix);
+
+    /**
      * SP8: 按编码前缀搜索物料 (前端级联选择用).
      * 最多返回 50 条.
      */

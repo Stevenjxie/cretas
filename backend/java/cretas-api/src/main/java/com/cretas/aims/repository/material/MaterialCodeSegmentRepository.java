@@ -2,6 +2,7 @@ package com.cretas.aims.repository.material;
 
 import com.cretas.aims.entity.material.MaterialCodeSegment;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.repository.query.Param;
@@ -82,6 +83,32 @@ public interface MaterialCodeSegmentRepository extends JpaRepository<MaterialCod
     List<String> findSegmentCodesByParentIncludingDeleted(
             @Param("factoryId") String factoryId,
             @Param("parentCode") String parentCode);
+
+    /**
+     * 已删除(软删)的分类 —— 给「显示已删除 + 恢复」用。
+     *
+     * 🔴 必须绕开实体上的 {@code @Where(deleted_at IS NULL)}, 否则永远返回空。
+     * 这也是为什么以前界面上看不到它们: 所有 JPA 路径都被那条 @Where 挡住了。
+     */
+    @Query(value = "SELECT * FROM material_code_segments "
+            + "WHERE factory_id = :factoryId AND deleted_at IS NOT NULL "
+            + "ORDER BY level, segment_code",
+           nativeQuery = true)
+    List<MaterialCodeSegment> findDeletedByFactoryId(@Param("factoryId") String factoryId);
+
+    /** 按 id 取一条(含软删除) —— 恢复时要先把那条已删的行读出来。 */
+    @Query(value = "SELECT * FROM material_code_segments WHERE id = :id", nativeQuery = true)
+    Optional<MaterialCodeSegment> findByIdIncludingDeleted(@Param("id") Long id);
+
+    /** 恢复: 只清 deleted_at, 不动其它字段(编码/名称/归属都按删除前原样回来)。 */
+    @Modifying
+    @Query(value = "UPDATE material_code_segments SET deleted_at = NULL, updated_at = now() "
+            + "WHERE id = :id AND deleted_at IS NOT NULL",
+           nativeQuery = true)
+    int restoreById(@Param("id") Long id);
+
+    /** 该分类下还有几个**活着的**直接子分类 —— 删除守卫用。 */
+    long countByFactoryIdAndParentCode(String factoryId, String parentCode);
 
     /** 取一条编码对应的行(含软删除), 用于把「编码被占」说清楚是被谁占的。 */
     @Query(value = "SELECT segment_label FROM material_code_segments "

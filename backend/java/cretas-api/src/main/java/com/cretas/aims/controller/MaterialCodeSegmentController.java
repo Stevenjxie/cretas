@@ -93,6 +93,27 @@ public class MaterialCodeSegmentController {
      * @param l3 L3 segmentCode (10位, cumulative), e.g. "0010010001"
      * @return { "success": true, "data": { "code": "0010010001000007" } }
      */
+    /** 已删除(软删)的分类清单 —— 界面「显示已删除」开关用。 */
+    @GetMapping("/deleted")
+    @Operation(summary = "已删除的编码分类",
+            description = "软删的行一直躺在库里且继续占着编码, 但界面此前看不到 —— 于是误删只能重建, 重建又撞码。")
+    @RequirePermission({"production:read_write"})
+    public ApiResponse<List<MaterialCodeSegmentDTO>> listDeleted(
+            @PathVariable @Parameter(description = "工厂ID", example = "F006") String factoryId) {
+        return ApiResponse.success(service.listDeleted(factoryId));
+    }
+
+    /** 恢复一条被软删的分类(编码/名称/归属原样回来)。 */
+    @PostMapping("/{id}/restore")
+    @Operation(summary = "恢复已删除的编码分类",
+            description = "恢复比重建正确: 编码不变, 历史物料的16位码仍然指得回它的分类。")
+    @RequirePermission({"production:read_write"})
+    public ApiResponse<MaterialCodeSegmentDTO> restore(
+            @PathVariable @Parameter(description = "工厂ID", example = "F006") String factoryId,
+            @PathVariable Long id) {
+        return ApiResponse.success("已恢复", service.restore(factoryId, id));
+    }
+
     /**
      * 取下一个可用的子编码 (只读, 不写库)。
      *
