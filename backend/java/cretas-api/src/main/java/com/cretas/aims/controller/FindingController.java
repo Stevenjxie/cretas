@@ -55,6 +55,11 @@ public class FindingController {
         data.put("domain", resolvedDomain);
         data.put("findings", result.findings());
         data.put("findingsText", findingsText);
+        // 🔴 前端渲染卡片用这个成品数组, 不要拿 findings[].facts 自己拼:
+        // PriceFieldResponseAdvice 会把 facts.cost / facts.totalCost 置 null
+        // (FINANCE_COLUMN_KEY_REGEX 对含 "cost" 的数字标量一律抹除, 本是给
+        // SmartBI Excel 财务表用的, 对餐饮损耗金额是误伤), 前端自己拼会出现空的「¥ 」。
+        data.put("digestLines", findingTextRenderer.renderDigestLines(result));
         data.put("totalCount", result.totalCount());
         data.put("checkedRules", result.checkedRules());
         data.put("skippedRules", result.skippedRules());
