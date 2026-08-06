@@ -61,6 +61,9 @@ public class MaterialBatchMapper {
                 .notes(batch.getNotes())
                 .factoryNumber(batch.getFactoryNumber())
                 .originPlace(batch.getOriginPlace())
+                // V20261029_61 来料追溯: 漏了这两行, 前端列表那两列就恒显示 "-"
+                .contractNumber(batch.getContractNumber())
+                .supplierBatchNumber(batch.getSupplierBatchNumber())
                 .createdBy(batch.getCreatedBy())
                 .lastUsedAt(batch.getLastUsedAt())
                 .createdAt(batch.getCreatedAt())
