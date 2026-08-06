@@ -475,9 +475,11 @@ async function refreshNextL3Code(): Promise<void> {
   if (!segmentL2.value || !factoryId.value) return;
   nextL3CodeLoading.value = true;
   try {
+    // ⚠️ get(url, config) 的第二个参数是 axios config —— query 必须放在 params 下。
+    // 直接摊平写会让后端一个参数都收不到, 报「缺少必要参数: level」。
     const response = await get<{ code: string }>(
       `/${factoryId.value}/material-segments/next-code`,
-      { level: 3, parentCode: segmentL2.value },
+      { params: { level: 3, parentCode: segmentL2.value } },
     );
     if (response.success && response.data?.code) {
       nextL3Code.value = response.data.code;

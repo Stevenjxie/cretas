@@ -100,9 +100,10 @@ async function refreshServerNextCode(): Promise<void> {
   if (form.id || !factoryId.value) return;
   if (form.level > 1 && !form.parentCode) return;
   try {
+    // ⚠️ get(url, config) 的第二个参数是 axios config —— query 必须放在 params 下。
     const response = await get<{ code: string }>(
       `/${factoryId.value}/material-segments/next-code`,
-      { level: form.level, parentCode: form.level === 1 ? undefined : form.parentCode },
+      { params: { level: form.level, parentCode: form.level === 1 ? undefined : form.parentCode } },
     );
     if (response.success && response.data?.code) {
       serverNextCode.value = response.data.code;

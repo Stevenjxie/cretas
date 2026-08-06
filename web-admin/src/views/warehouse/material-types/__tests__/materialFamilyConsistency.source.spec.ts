@@ -138,6 +138,9 @@ describe('material type family source contract', () => {
   it('系统编码必须向服务端取, 不能在前端 max+1', () => {
     expect(source).toContain('material-segments/next-code');
     expect(source).toContain('refreshNextL3Code');
+    // ⚠️ get(url, config) 的第二个参数是 axios config: query 摊平写后端一个都收不到
+    // (2026-08-06 实测报「缺少必要参数: level」)。同文件其它调用也都是 params: {...}。
+    expect(source).toContain('{ params: { level: 3, parentCode: segmentL2.value } }');
     // 前端自算的痕迹一个都不能留
     expect(source).not.toContain('nextL3Suffix');
     expect(source).not.toContain('padStart(4');
