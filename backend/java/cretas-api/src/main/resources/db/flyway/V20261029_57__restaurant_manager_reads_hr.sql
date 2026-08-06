@@ -1,11 +1,21 @@
--- V20261029_56: 运营部长(店长)对人事部门开只读
+-- V20261029_57: 运营部长(店长)对人事部门开只读
 --
--- ⚠️ 本文件原名 V20261029_55, 2026-08-06 让号改成 _56 —— 另一个并行分支(PR#2340,
--- restaurant_owner 全模块只读)同时把它的新迁移也编成了 V20261029_55。文件名不同,
--- **git 不报冲突**, 两份都合进了 main 且 CI 全绿, 要到 Flyway 启动才炸
--- ("Found more than one migration with version 20261029.55")。
--- 让号的是本文件, 因为两侧当时都还没部署到 prod(prod 停在 20261029.54)。
--- 新增 FlywayVersionUniquenessTest 挡住这类重复。
+-- ⚠️ 本文件让过**两次**号: 原名 _55 → _56 → _57。
+--
+-- 第一次: 并行分支 PR#2340(restaurant_owner 全模块只读)也把它的迁移编成了
+-- V20261029_55。文件名不同 → **git 不报冲突** → 两份都合进 main 且两个 PR 的 CI
+-- 全绿, 要到 Flyway 启动才炸("Found more than one migration with version ...")。
+--
+-- 第二次(更值得记): 两个 session **各自独立**去解第一次那个撞车, 又**各自独立**
+-- 选了同一个「下一个空闲号」_56 —— 对方的 PR#2342 先合, 我的 PR#2343 随后合,
+-- 于是撞车原样搬到了 _56。我的 PR CI 是绿的, 因为它测的合并基底还不含对方那次改名。
+--
+-- 逮住第二次的是 FlywayVersionUniquenessTest 自己(随 PR#2343 上的 main), 在发布
+-- 构建里变红, **部署前**拦下。
+--
+-- 让号的一直是本文件, 因为两侧都还没部署到 prod(prod 停在 20261029.54)。
+-- 📌 教训: 解版本号撞车时, 光挑「下一个空闲号」不够 —— 并发的人会挑到同一个。
+--    要先 fetch 最新 main 再挑, 挑完立刻推, 并依赖这条闸在合入后复核。
 --
 -- L1-AUTHORITY: restaurant-department-matrix
 -- ^ 这行标记不要删。web-admin 的 permission.fallback-matches-l1.spec.ts 靠它找
