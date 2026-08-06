@@ -97,9 +97,17 @@ describe('餐饮角色的菜单可见性', () => {
     }
   });
 
-  it('🔴 餐饮采购已退役 —— 职责并入市场, 不该再出现在菜单的 roles 名单里', () => {
+  // ⛔ 这条原本断言的是「餐饮采购已退役, 职责并入市场」—— **那个口径是败的一侧**,
+  //    而它是那一侧的第三个承载点(注释 / roles 名单 / 本测试)。只清前两处的话,
+  //    这条测试会把错的口径拉回来 —— 「退役只做在数据层, 代码层从未清」的翻版,
+  //    只不过这次代码层的载体是一条会红的断言。
+  //
+  //    权威: 同日更晚的 V20261029_58/_63 把采购立为**第五个部门**, 载体角色就是
+  //    restaurant_purchaser; departmentConfig.ts 把供应商进货录入列为该部门的
+  //    第一个动作。2026-08-07 按五部门口径反转本条。
+  it('🔴 餐饮采购是第五个部门的载体 —— 必须能看到本部门的两个录入页', () => {
     for (const path of ['/procurement/requisitions/my', '/restaurant/supplier-delivery']) {
-      expect(roleAllowed(findByPath(menuConfig, path), 'restaurant_purchaser'), path).toBe(false);
+      expect(roleAllowed(findByPath(menuConfig, path), 'restaurant_purchaser'), path).toBe(true);
     }
   });
 
