@@ -136,12 +136,24 @@ public interface MaterialBatchRepository extends JpaRepository<MaterialBatch, St
     /**
      * 注意：batchNumber使用右模糊（可使用索引），name使用双向模糊（无法使用索引）
      */
+    /**
+     * ⚠️ 关键词覆盖面必须与 {@link #searchByKeywordAndCreatedByIn} <b>逐字一致</b> ——
+     * 两条查询是同一个搜索框的两个分支(有无 DataScope 限制), 只改一条会让
+     * 「同一个关键词, 换个角色就搜不到」。
+     *
+     * <p>2026-08-06 加入 contractNumber / supplierBatchNumber / factoryNumber:
+     * 客户按合同号、供应商批号、厂号追溯来料是常态(六膳门台账就是按这几列记的),
+     * 而这几个字段此前只写得进去、搜不出来 —— 写进去没人查得到等于没写。</p>
+     */
     @EntityGraph(attributePaths = {"materialType"})
     @Query("SELECT m FROM MaterialBatch m " +
            "LEFT JOIN m.materialType mt " +
            "WHERE m.factoryId = :factoryId " +
            "AND (m.batchNumber LIKE CONCAT(:keyword, '%') ESCAPE '\\' " +
-           "OR mt.name LIKE CONCAT('%', :keyword, '%') ESCAPE '\\')")
+           "OR mt.name LIKE CONCAT('%', :keyword, '%') ESCAPE '\\' " +
+           "OR m.contractNumber LIKE CONCAT('%', :keyword, '%') ESCAPE '\\' " +
+           "OR m.supplierBatchNumber LIKE CONCAT('%', :keyword, '%') ESCAPE '\\' " +
+           "OR m.factoryNumber LIKE CONCAT('%', :keyword, '%') ESCAPE '\\')")
     Page<MaterialBatch> searchByKeyword(@Param("factoryId") String factoryId,
                                         @Param("keyword") String keyword,
                                         Pageable pageable);
@@ -163,7 +175,10 @@ public interface MaterialBatchRepository extends JpaRepository<MaterialBatch, St
            "WHERE m.factoryId = :factoryId " +
            "AND m.createdBy IN :createdByList " +
            "AND (m.batchNumber LIKE CONCAT(:keyword, '%') ESCAPE '\\' " +
-           "OR mt.name LIKE CONCAT('%', :keyword, '%') ESCAPE '\\')")
+           "OR mt.name LIKE CONCAT('%', :keyword, '%') ESCAPE '\\' " +
+           "OR m.contractNumber LIKE CONCAT('%', :keyword, '%') ESCAPE '\\' " +
+           "OR m.supplierBatchNumber LIKE CONCAT('%', :keyword, '%') ESCAPE '\\' " +
+           "OR m.factoryNumber LIKE CONCAT('%', :keyword, '%') ESCAPE '\\')")
     Page<MaterialBatch> searchByKeywordAndCreatedByIn(@Param("factoryId") String factoryId,
                                                        @Param("keyword") String keyword,
                                                        @Param("createdByList") java.util.Collection<Long> createdByList,

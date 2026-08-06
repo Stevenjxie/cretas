@@ -391,7 +391,15 @@ public class SalesOrderSuppliedMaterialRequirementService {
         batch.setSourceSalesOrderId(requirement.getSalesOrderId());
         batch.setSourceSalesOrderItemId(requirement.getSalesOrderItemId() != null
                 ? String.valueOf(requirement.getSalesOrderItemId()) : null);
-        batch.setFactoryNumber(request.getExternalBatchNumber());
+        // ⛔ 2026-08-06 修正: 这里原本是 `setFactoryNumber(getExternalBatchNumber())` ——
+        // 界面标签写「客户批次号」, 却落进**厂号**列。两件完全不同的事共用一列, 之后
+        // 「按厂号查」会查出一堆客户批号。
+        // `supplier_batch_number`(V20261029_61) 才是外部批号该待的地方; 厂号另有其列。
+        // prod 实测客供料批次 **0 行**(这条路径从没被用过), 所以改列没有存量要迁移。
+        batch.setSupplierBatchNumber(request.getExternalBatchNumber());
+        batch.setFactoryNumber(request.getFactoryNumber());
+        batch.setContractNumber(request.getContractNumber());
+        batch.setBoxCount(request.getBoxCount());
         batch.setOriginPlace(request.getOriginPlace());
         batch.setNotes(request.getNotes());
         batch.setCreatedBy(userId);
