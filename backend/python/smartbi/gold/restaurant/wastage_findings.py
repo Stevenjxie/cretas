@@ -121,3 +121,129 @@ async def detect_type_concentration(
         })
     findings.sort(key=lambda f: f["facts"]["cost"], reverse=True)
     return _ok(rule, findings)
+
+
+async def detect_share_spike(
+    pool, factory_id: str, *, cur_days: int = 7, base_days: int = 21,
+) -> Dict[str, Any]:
+    """某食材的损耗份额相对自身基线放大。
+
+    share(i, w)      = 食材 i 在窗口 w 的 wastage_cost / 窗口 w 全店 wastage_cost
+    amplification(i) = share(i, cur) / share(i, base)
+    触发 = amplification >= 1.4 AND share(i, cur) >= 5%
+
+    分母用**全店总损耗**: 全店一起放大时分子分母对消, 所以 2026-07-30 那种
+    「整个租户的损耗数据跳了 24 倍」不会被误读成 25 条食材异常。
+
+    但份额归一化对消不了**食材名单变了** (同日 13 种 -> 25 种), 所以另有 Jaccard 闸。
+    """
+    rule = "share_spike"
+    total_days = cur_days + base_days
+    async with tenant_conn(pool, factory_id) as conn:
+        cur_rows = await conn.fetch(
+            """
+            SELECT a.dim_value_id, i.name, i.unit,
+                   SUM(a.value_num)::float AS cost
+              FROM agg_restaurant_daily_ops a
+              JOIN dim_ingredient i ON i.ingredient_id = a.dim_value_id
+             WHERE a.factory_id = $1
+               AND a.kpi_kind = 'wastage_cost'
+               AND a.date > CURRENT_DATE - $2::int
+               AND a.date <= CURRENT_DATE
+             GROUP BY 1, 2, 3
+            """,
+            factory_id, cur_days,
+        )
+        base_rows = await conn.fetch(
+            """
+            SELECT a.dim_value_id, i.name, i.unit,
+                   SUM(a.value_num)::float AS cost
+              FROM agg_restaurant_daily_ops a
+              JOIN dim_ingredient i ON i.ingredient_id = a.dim_value_id
+             WHERE a.factory_id = $1
+               AND a.kpi_kind = 'wastage_cost'
+               AND a.date > CURRENT_DATE - $2::int
+               AND a.date <= CURRENT_DATE - $3::int
+             GROUP BY 1, 2, 3
+            """,
+            factory_id, total_days, cur_days,
+        )
+        days_row = await conn.fetchrow(
+            """
+            SELECT COUNT(DISTINCT date)::int AS days
+              FROM agg_restaurant_daily_ops
+             WHERE factory_id = $1
+               AND kpi_kind = 'wastage_cost'
+               AND date > CURRENT_DATE - $2::int
+               AND date <= CURRENT_DATE - $3::int
+            """,
+            factory_id, total_days, cur_days,
+        )
+
+    # ── 闸 A: 基线历史长度 ──────────────────────────────────────────
+    observed_base_days = int((days_row or {}).get("days") or 0)
+    if observed_base_days < _SHARE_SPIKE_MIN_BASE_DAYS:
+        return _skip(
+            rule,
+            f"基线历史不足: 前 {base_days} 天窗口内仅 {observed_base_days} 天有数据"
+            f"(需 >= {_SHARE_SPIKE_MIN_BASE_DAYS} 天)",
+        )
+
+    cur_ids = {r["dim_value_id"] for r in cur_rows}
+    base_ids = {r["dim_value_id"] for r in base_rows}
+    union = cur_ids | base_ids
+    if not union:
+        return _ok(rule, [])
+
+    # ── 闸 B: 食材名单同质 ──────────────────────────────────────────
+    # 闸 A 挡不住 2026-07-30 那个 case (base 窗有 21 天数据会通过), 必须有这道。
+    jaccard = len(cur_ids & base_ids) / len(union)
+    if jaccard < _SHARE_SPIKE_MIN_JACCARD:
+        return _skip(
+            rule,
+            f"两期食材名单不可比: 近 {cur_days} 天 {len(cur_ids)} 种 / "
+            f"基线 {len(base_ids)} 种 (重合度 {jaccard:.0%}, 需 >= "
+            f"{_SHARE_SPIKE_MIN_JACCARD:.0%})",
+        )
+
+    cur_total = sum(float(r["cost"] or 0.0) for r in cur_rows)
+    base_total = sum(float(r["cost"] or 0.0) for r in base_rows)
+    if cur_total <= 0 or base_total <= 0:
+        return _ok(rule, [])
+
+    base_by_id = {r["dim_value_id"]: float(r["cost"] or 0.0) for r in base_rows}
+
+    findings: List[Dict[str, Any]] = []
+    for r in cur_rows:
+        base_cost = base_by_id.get(r["dim_value_id"], 0.0)
+        if base_cost <= 0:
+            # 只在 cur 出现的食材没有基线。不参与计算 —— 除零得不到
+            # 「涨了无穷倍」这种结论, 它只是没有基线。名单变化已由闸 B 兜住。
+            continue
+        cur_cost = float(r["cost"] or 0.0)
+        share_cur = cur_cost / cur_total
+        share_base = base_cost / base_total
+        amplification = share_cur / share_base
+        if amplification < _SHARE_SPIKE_MIN_AMPLIFICATION:
+            continue
+        if share_cur < _SHARE_SPIKE_MIN_CUR_SHARE:
+            continue
+        findings.append({
+            "code": "WASTAGE_SHARE_SPIKE",
+            "subject_id": str(r["dim_value_id"]),
+            "subject_name": r["name"],
+            "severity": (
+                "WARNING" if amplification >= _SHARE_SPIKE_WARNING_AMPLIFICATION else "INFO"
+            ),
+            "actionability": _SHARE_SPIKE_ACTIONABILITY,
+            "facts": {
+                "costCur": round(cur_cost, 2),
+                "shareCur": round(share_cur * 100, 1),
+                "shareBase": round(share_base * 100, 1),
+                "amplification": round(amplification, 2),
+                "windowDays": cur_days,
+                "unit": r["unit"] or "",
+            },
+        })
+    findings.sort(key=lambda f: f["facts"]["amplification"], reverse=True)
+    return _ok(rule, findings)
