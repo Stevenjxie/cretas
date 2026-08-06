@@ -47,7 +47,7 @@ interface ReceiveItemForm {
   inventoryBaseUnit: string;
   packageToBaseFactor: number;
   packagingOptions: PackagingOption[];
-  // 可追溯字段(全部选填) —— 对齐客户台账「合同号/批次号/厂号/件数」, 见 V20261029_57
+  // 可追溯字段(全部选填) —— 对齐客户台账「合同号/批次号/厂号/件数」, 见 V20261029_61
   contractNumber?: string;
   supplierBatchNumber?: string;
   factoryNumber?: string;
@@ -798,7 +798,7 @@ defineExpose({ loadTasks });
               来料日期 | 料号 | 原料名称 | 合同号 | 批次号 | 厂号 | 件数(件/箱) | 初期重量KG
               此前收货弹窗一个都没有 —— 字段其实早就在(DTO 有 factoryNumber/originPlace,
               material_batches 有 box_count), 只是没接到界面上; 合同号与供应商批次号
-              由 V20261029_57 补列。全部选填, 不填不影响收货。
+              由 V20261029_61 补列。全部选填, 不填不影响收货。
             -->
             <el-table-column label="合同号" width="150">
               <template #default="{ row }">

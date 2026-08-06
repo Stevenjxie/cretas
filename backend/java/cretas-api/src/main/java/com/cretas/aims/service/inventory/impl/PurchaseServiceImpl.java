@@ -1857,7 +1857,7 @@ public class PurchaseServiceImpl implements PurchaseService {
             item.setQcResult(itemDTO.getQcResult());
             item.setFactoryNumber(itemDTO.getFactoryNumber());
             item.setOriginPlace(itemDTO.getOriginPlace());
-            // V20261029_57: 客户台账要的可追溯三件套 —— 合同号/供应商批次号/件数。
+            // V20261029_61: 客户台账要的可追溯三件套 —— 合同号/供应商批次号/件数。
             // 合同号是**行级**: 同一张 PO 下不同来料批可以是不同合同号(SAN-16572/SAN-16562)。
             item.setContractNumber(itemDTO.getContractNumber());
             item.setSupplierBatchNumber(itemDTO.getSupplierBatchNumber());
