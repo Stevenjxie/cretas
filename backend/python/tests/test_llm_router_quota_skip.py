@@ -20,13 +20,27 @@ Verifies:
 """
 import time
 
+import pytest
+
+from common import llm_router
 from common.llm_router import (
     _QUOTA_EXHAUSTED_UNTIL,
     _quota_record_exhausted,
     _quota_record_success,
     _quota_should_skip,
+    QUOTA_REPROBE_MIN_GAP,
     QUOTA_SKIP_TTL,
 )
+
+
+@pytest.fixture(autouse=True)
+def _reset_reprobe_throttle():
+    """2026-08-06: re-probe 放行是**全局限速**的 (QUOTA_REPROBE_MIN_GAP), 那个
+    时间戳是跨测试的共享状态 —— 不重置的话, 先跑的用例抢走槽位会让后面任何
+    「TTL 到期应放行」的断言假红。与 _QUOTA_EXHAUSTED_UNTIL.clear() 同性质。"""
+    llm_router._QUOTA_LAST_REPROBE_AT = 0.0
+    yield
+    llm_router._QUOTA_LAST_REPROBE_AT = 0.0
 
 
 def test_quota_exhausted_triggers_skip():
@@ -49,6 +63,65 @@ def test_quota_ttl_elapses_allows_reprobe():
     assert not _quota_should_skip(key)
     # Entry was cleared, so a subsequent check is also a non-skip
     assert key not in _QUOTA_EXHAUSTED_UNTIL
+
+
+def test_expired_marks_do_not_all_reprobe_at_once():
+    """一批同时到期的耗尽标记, 一次只放行一个 re-probe。
+
+    2026-08-06 prod 事故的直接回归: 一次失败请求把沿途 14 个候选在同一瞬间打标,
+    它们的 TTL 于是同时到期; 旧实现逐个放行, 单个请求就把 14 个死模型全部真探
+    一遍, 链的总预算在够到第 15 位那个活模型之前烧光 → `chain: total_timeout`,
+    然后重新标记 6h, 6h 后原样复现。
+    """
+    _QUOTA_EXHAUSTED_UNTIL.clear()
+    keys = [f"aliyun_c/dead-model-{i}" for i in range(14)]
+    for k in keys:
+        _quota_record_exhausted(k)
+    # 全部回拨到窗口之外 —— 模拟「同一瞬间打标 → 同时到期」
+    past = time.time() - 1
+    for k in keys:
+        _QUOTA_EXHAUSTED_UNTIL[k] = past
+
+    released = [k for k in keys if not _quota_should_skip(k)]
+    assert len(released) == 1, (
+        f"一个请求内只应放行 1 个 re-probe, 实际放行 {len(released)} 个: {released}"
+    )
+    # 没抢到槽位的仍然被跳过(零成本), 而不是变成真实 HTTP 探测
+    assert sum(1 for k in keys if _quota_should_skip(k)) == 13
+
+
+def test_deferred_reprobe_does_not_inflate_strikes():
+    """抢不到槽位只是顺延, 不算「又确认一次没额度」—— strikes 必须不变。
+
+    strikes 驱动指数退避(6h→12h→24h)。如果顺延也加 strikes, 一个健康模型会因为
+    排队被越退越久, 那是把节流机制变成惩罚机制。
+    """
+    _QUOTA_EXHAUSTED_UNTIL.clear()
+    llm_router._QUOTA_STRIKES.clear()
+    first, second = "aliyun_c/first", "aliyun_c/second"
+    for k in (first, second):
+        _quota_record_exhausted(k)
+        _QUOTA_EXHAUSTED_UNTIL[k] = time.time() - 1
+    strikes_before = llm_router._QUOTA_STRIKES.get(second)
+
+    assert not _quota_should_skip(first)    # 抢到槽位
+    assert _quota_should_skip(second)       # 被顺延
+    assert llm_router._QUOTA_STRIKES.get(second) == strikes_before
+
+
+def test_reprobe_slot_reopens_after_gap():
+    """限速是「间隔」不是「一次性」—— 过了 GAP 之后下一个候选应能被放行。"""
+    _QUOTA_EXHAUSTED_UNTIL.clear()
+    a, b = "aliyun_c/alpha", "aliyun_c/beta"
+    for k in (a, b):
+        _quota_record_exhausted(k)
+        _QUOTA_EXHAUSTED_UNTIL[k] = time.time() - 1
+    assert not _quota_should_skip(a)
+    assert _quota_should_skip(b)
+    # 把上一次 re-probe 时间回拨到 GAP 之外, b 的顺延窗口也一并回拨
+    llm_router._QUOTA_LAST_REPROBE_AT = time.time() - QUOTA_REPROBE_MIN_GAP - 1
+    _QUOTA_EXHAUSTED_UNTIL[b] = time.time() - 1
+    assert not _quota_should_skip(b)
 
 
 def test_quota_success_clears_mark():
