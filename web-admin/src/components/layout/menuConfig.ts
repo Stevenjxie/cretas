@@ -336,10 +336,17 @@ const rawMenuConfig: MenuItem[] = [
       // ⚠️ 下面两项**刻意不改 module**: 它们跨工厂/餐饮两侧使用
       // (warehouse_manager / procurement_manager 也在用, 而这些角色 restaurant='-')。
       // 改成 restaurantOps 会断掉他们的访问 —— 本轮只归组, 标签留待单独评估。
+      // 2026-08-06 Steve 拍板: 采购职责并入市场(sales_manager), 厨师长/餐饮采购退役。
+      // 这里加 sales_manager、去掉 restaurant_purchaser / restaurant_chef。
+      // module 仍不改(见上方 ⚠️): sales_manager 有 dashboard:r, 加 roles 即可通。
       { path: '/restaurant/supplier-delivery', title: '供应商进货录入', icon: '', module: 'dashboard',
-        roles: ['factory_super_admin', 'platform_admin', 'permission_admin', 'restaurant_manager', 'restaurant_owner', 'restaurant_purchaser', 'restaurant_chef', 'warehouse_manager', 'procurement_manager'] },
-      { path: '/procurement/requisitions/my', title: '厨师长报货/采购计划', icon: '', module: 'procurement',
-        roles: ['factory_super_admin', 'platform_admin', 'permission_admin', 'restaurant_manager', 'restaurant_owner', 'restaurant_purchaser', 'restaurant_chef', 'warehouse_manager', 'procurement_manager'] },
+        roles: ['factory_super_admin', 'platform_admin', 'permission_admin', 'restaurant_manager', 'restaurant_owner', 'sales_manager', 'warehouse_manager', 'procurement_manager'] },
+      // ⚠️ 本项 module='procurement' 而 sales_manager **没有** procurement 权限,
+      // 所以即使加进 roles 也会被 module 闸挡在前面(守卫先查 module 后查 roles)。
+      // 餐饮侧要不要保留这条、还是改走 /restaurant/requisitions(module=restaurantOps,
+      // 店长已有), 待定 —— 本轮只摘掉两个退役角色, 不擅自改 module 断工厂侧。
+      { path: '/procurement/requisitions/my', title: '报货/采购计划', icon: '', module: 'procurement',
+        roles: ['factory_super_admin', 'platform_admin', 'permission_admin', 'restaurant_manager', 'restaurant_owner', 'warehouse_manager', 'procurement_manager'] },
 
       // ── 市场 ────────────────────────────────────────────────────
       // 经营看板归市场: 6 KPI 里日营收/客单价/订单数三项是营收侧, 占多数。
