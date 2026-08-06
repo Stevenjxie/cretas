@@ -187,6 +187,126 @@ class MaterialCodeSegmentServiceTest {
             verify(repo, never()).delete(any());
             verify(repo, times(1)).save(argThat(s -> s.getDeletedAt() != null));
         }
+
+        /**
+         * 🔴 2026-08-06: 删除此前**一个守卫都没有**。客户 08-04 一次性删掉 226 个 L3 + 2 个 L2,
+         * 而软删的行继续占着编码 → 重建时撞码。更隐蔽的是: 物料的分类归属建完之后界面上
+         * 根本不再显示(级联只在新建时用), 所以删分类**当场没有任何症状**, 没有反馈回路。
+         */
+        @Test
+        @DisplayName("🔴 该分类下还有在用物料 → 拒绝删除, 并指向「停用」")
+        void delete_withMaterialsInUse_isRejectedAndPointsToDeactivate() {
+            MaterialCodeSegment entity = buildSegment(31L, FACTORY_ID, (short) 3, "0010010115", "239厂牛腩排", "001001");
+            when(repo.findById(31L)).thenReturn(Optional.of(entity));
+            when(repo.countByFactoryIdAndParentCode(FACTORY_ID, "0010010115")).thenReturn(0L);
+            when(materialTypeRepository.countActiveByFactoryIdAndSegmentPrefix(FACTORY_ID, "0010010115"))
+                    .thenReturn(3L);
+
+            BusinessException ex = assertThrows(BusinessException.class,
+                    () -> service.delete(FACTORY_ID, 31L));
+
+            assertEquals(409, ex.getCode());
+            assertTrue(ex.getMessage().contains("3"), "要说清有几个物料在用, 实际: " + ex.getMessage());
+            assertTrue(ex.getActionHint() != null && ex.getActionHint().contains("停用"),
+                    "必须给出可行的替代动作, 实际 hint: " + ex.getActionHint());
+            verify(repo, never()).save(any());
+        }
+
+        @Test
+        @DisplayName("该分类下还有未删除的下级 → 拒绝删除")
+        void delete_withLiveChildren_isRejected() {
+            MaterialCodeSegment entity = buildSegment(32L, FACTORY_ID, (short) 2, "001001", "牛肉部位", "001");
+            when(repo.findById(32L)).thenReturn(Optional.of(entity));
+            when(repo.countByFactoryIdAndParentCode(FACTORY_ID, "001001")).thenReturn(30L);
+
+            BusinessException ex = assertThrows(BusinessException.class,
+                    () -> service.delete(FACTORY_ID, 32L));
+
+            assertEquals(409, ex.getCode());
+            assertTrue(ex.getMessage().contains("30"), "实际: " + ex.getMessage());
+            verify(repo, never()).save(any());
+        }
+
+        @Test
+        @DisplayName("无引用无下级 → 正常软删")
+        void delete_withNoReferences_succeeds() {
+            MaterialCodeSegment entity = buildSegment(33L, FACTORY_ID, (short) 3, "0010040009", "试验", "001004");
+            when(repo.findById(33L)).thenReturn(Optional.of(entity));
+            when(repo.countByFactoryIdAndParentCode(FACTORY_ID, "0010040009")).thenReturn(0L);
+            when(materialTypeRepository.countActiveByFactoryIdAndSegmentPrefix(FACTORY_ID, "0010040009"))
+                    .thenReturn(0L);
+            when(repo.save(any())).thenAnswer(inv -> inv.getArgument(0));
+
+            service.delete(FACTORY_ID, 33L);
+
+            verify(repo, times(1)).save(argThat(s -> s.getDeletedAt() != null));
+        }
+    }
+
+    @Nested
+    @DisplayName("恢复已删除的分类")
+    class Restore {
+
+        /** 恢复比重建正确: 编码不变 → 历史物料的 16 位码仍然指得回它的分类。 */
+        @Test
+        @DisplayName("恢复只清 deletedAt, 编码/名称/归属原样回来")
+        void restore_clearsDeletedAtOnly() {
+            MaterialCodeSegment deleted = buildSegment(40L, FACTORY_ID, (short) 3, "0010010001", "218厂腹肉心谷饲100天", "001001");
+            deleted.setDeletedAt(LocalDateTime.now());
+            MaterialCodeSegment parent = buildSegment(41L, FACTORY_ID, (short) 2, "001001", "牛肉部位", "001");
+            when(repo.findByIdIncludingDeleted(40L)).thenReturn(Optional.of(deleted));
+            when(repo.findByFactoryIdAndSegmentCode(FACTORY_ID, "001001")).thenReturn(Optional.of(parent));
+            when(repo.findByFactoryIdAndParentCodeOrderBySortOrderAscSegmentCodeAsc(FACTORY_ID, "001001"))
+                    .thenReturn(Collections.emptyList());
+
+            MaterialCodeSegmentDTO result = service.restore(FACTORY_ID, 40L);
+
+            verify(repo, times(1)).restoreById(40L);
+            assertEquals("0010010001", result.getSegmentCode(), "编码必须原样保留");
+            assertEquals("218厂腹肉心谷饲100天", result.getSegmentLabel());
+        }
+
+        @Test
+        @DisplayName("上级也被删了 → 拒绝, 并说出恢复顺序")
+        void restore_withDeletedParent_isRejected() {
+            MaterialCodeSegment deleted = buildSegment(42L, FACTORY_ID, (short) 3, "0010010001", "旧分类", "001001");
+            deleted.setDeletedAt(LocalDateTime.now());
+            when(repo.findByIdIncludingDeleted(42L)).thenReturn(Optional.of(deleted));
+            when(repo.findByFactoryIdAndSegmentCode(FACTORY_ID, "001001")).thenReturn(Optional.empty());
+
+            BusinessException ex = assertThrows(BusinessException.class,
+                    () -> service.restore(FACTORY_ID, 42L));
+
+            assertEquals(409, ex.getCode());
+            assertTrue(ex.getMessage().contains("001001"), "实际: " + ex.getMessage());
+            verify(repo, never()).restoreById(anyLong());
+        }
+
+        @Test
+        @DisplayName("同名的活分类已经存在 → 拒绝恢复(不能制造同名兄弟)")
+        void restore_whenNameTakenByLiveSibling_isRejected() {
+            MaterialCodeSegment deleted = buildSegment(43L, FACTORY_ID, (short) 3, "0010010001", "菲力", "001001");
+            deleted.setDeletedAt(LocalDateTime.now());
+            MaterialCodeSegment parent = buildSegment(44L, FACTORY_ID, (short) 2, "001001", "牛肉部位", "001");
+            when(repo.findByIdIncludingDeleted(43L)).thenReturn(Optional.of(deleted));
+            when(repo.findByFactoryIdAndSegmentCode(FACTORY_ID, "001001")).thenReturn(Optional.of(parent));
+            when(repo.existsByFactoryIdAndLevelAndParentCodeAndNormalizedLabelAndIdNot(
+                    FACTORY_ID, (short) 3, "001001", "菲力", 43L)).thenReturn(true);
+
+            assertThrows(BusinessException.class, () -> service.restore(FACTORY_ID, 43L));
+            verify(repo, never()).restoreById(anyLong());
+        }
+
+        @Test
+        @DisplayName("这条没被删过 → 400")
+        void restore_notDeleted_throws400() {
+            MaterialCodeSegment alive = buildSegment(45L, FACTORY_ID, (short) 1, "001", "原料", null);
+            when(repo.findByIdIncludingDeleted(45L)).thenReturn(Optional.of(alive));
+
+            BusinessException ex = assertThrows(BusinessException.class,
+                    () -> service.restore(FACTORY_ID, 45L));
+            assertEquals(400, ex.getCode());
+        }
     }
 
     // ─────────────────────────────────────────────────────────────

@@ -60,4 +60,19 @@ public interface MaterialCodeSegmentService {
      * @return 完整的 cumulative 编码 (L1 3位 / L2 6位 / L3 10位)
      */
     String nextSegmentCode(String factoryId, short level, String parentCode);
+
+    /**
+     * 已删除(软删)的分类清单 —— 给「显示已删除 + 恢复」用。
+     *
+     * <p>删除是软删除, 但界面上一直看不到已删的行, 所以误删/重组之后唯一的出路是新建,
+     * 而新建又会撞上被删行占着的编码。</p>
+     */
+    List<MaterialCodeSegmentDTO> listDeleted(String factoryId);
+
+    /**
+     * 恢复一条被软删的分类(编码/名称/归属原样回来)。
+     *
+     * <p>恢复比重建正确: 编码不变, 历史物料的 16 位码仍然指得回它的分类。</p>
+     */
+    MaterialCodeSegmentDTO restore(String factoryId, Long id);
 }

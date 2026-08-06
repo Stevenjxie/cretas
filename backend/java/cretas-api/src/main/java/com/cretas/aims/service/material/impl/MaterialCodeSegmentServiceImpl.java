@@ -180,9 +180,78 @@ public class MaterialCodeSegmentServiceImpl implements MaterialCodeSegmentServic
             throw new BusinessException(403, "无权限删除此编码段");
         }
 
+        // ⛔ 2026-08-06 之前这里**一个守卫都没有**: 直接盖 deleted_at 就返回。
+        // 后果是删除看起来毫无代价 —— 客户 08-04 一次性删掉 226 个 L3 + 2 个 L2,
+        // 而编码被删掉的行继续占着(唯一约束含软删), 于是重建时撞码, 报错还说成「重名」。
+        // 更隐蔽的是: 物料的分类归属在建完之后界面上根本不再显示(级联只在新建时用),
+        // 所以删掉分类**当场没有任何症状**, 没有反馈回路阻止这个动作。
+        long liveChildren = repo.countByFactoryIdAndParentCode(factoryId, entity.getSegmentCode());
+        if (liveChildren > 0) {
+            throw new BusinessException(409, "该分类下还有 " + liveChildren + " 个未删除的下级分类")
+                    .withHint("请先处理下级分类；若只是不想再用它建新物料，改用「停用」即可")
+                    .withHintTarget("segmentCode");
+        }
+
+        long materialsInUse = materialTypeRepository
+                .countActiveByFactoryIdAndSegmentPrefix(factoryId, entity.getSegmentCode());
+        if (materialsInUse > 0) {
+            throw new BusinessException(409,
+                    "有 " + materialsInUse + " 个在用物料的编码挂在该分类下（编码 "
+                            + entity.getSegmentCode() + " 开头）")
+                    .withHint("删除后这些物料的分类将无法追溯。若只是不想再用它建新物料，请改用「停用」——"
+                            + "停用后该分类不再出现在新建物料的选项里，但历史物料的归属仍在")
+                    .withHintTarget("segmentCode");
+        }
+
         entity.setDeletedAt(LocalDateTime.now());
         repo.save(entity);
         log.info("SP8: 软删除物料编码段 factoryId={} id={} code={}", factoryId, id, entity.getSegmentCode());
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public List<MaterialCodeSegmentDTO> listDeleted(String factoryId) {
+        return repo.findDeletedByFactoryId(factoryId).stream().map(this::toDTO).collect(Collectors.toList());
+    }
+
+    /**
+     * 恢复一条被软删的分类。
+     *
+     * <p>🔴 为什么必须有这个入口: 分类是软删除, 但界面上**看不到也回不来** ——
+     * 于是「误删 / 想重组」的唯一出路是新建, 而新建又会撞上被删行占着的编码。
+     * 客户 2026-08-04 删掉的 226 条 L3 其实原封不动躺在库里, 恢复比重建正确得多
+     * (编码不变 → 历史物料的 16 位码仍然指得回它的分类)。</p>
+     */
+    @Override
+    @Transactional
+    public MaterialCodeSegmentDTO restore(String factoryId, Long id) {
+        MaterialCodeSegment entity = repo.findByIdIncludingDeleted(id)
+                .orElseThrow(() -> new ResourceNotFoundException("物料编码段不存在: id=" + id));
+        if (!factoryId.equals(entity.getFactoryId())) {
+            throw new BusinessException(403, "无权限操作此编码段");
+        }
+        if (entity.getDeletedAt() == null) {
+            throw new BusinessException(400, "该分类未被删除，无需恢复").withHintTarget("id");
+        }
+        // 父级必须还在 —— 否则恢复出来的是一条挂空的分类, 树里根本渲染不出。
+        if (entity.getLevel() != null && entity.getLevel() > 1) {
+            MaterialCodeSegment parent = repo
+                    .findByFactoryIdAndSegmentCode(factoryId, entity.getParentCode()).orElse(null);
+            if (parent == null) {
+                throw new BusinessException(409,
+                        "上级分类 " + entity.getParentCode() + " 已被删除，请先恢复上级")
+                        .withHint("恢复顺序: 先 L1，再 L2，最后 L3")
+                        .withHintTarget("parentCode");
+            }
+        }
+        // 名字在这期间可能被别人用掉了 —— 恢复不能制造出两个同名兄弟。
+        rejectDuplicateLabel(factoryId, entity.getLevel(), entity.getParentCode(),
+                normalizeLabel(entity.getSegmentLabel()), entity.getId());
+
+        repo.restoreById(id);
+        log.info("SP8: 恢复物料编码段 factoryId={} id={} code={}", factoryId, id, entity.getSegmentCode());
+        entity.setDeletedAt(null);
+        return toDTO(entity);
     }
 
     @Override
