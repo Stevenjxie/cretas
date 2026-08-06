@@ -511,6 +511,73 @@ public class GoldFinanceClient {
     }
 
     /**
+     * 按小时的营业强度分布 —— 回答「几点最忙」。
+     *
+     * <p>起止日期<b>可选</b>（与 order-type-mix 不同）：「几点最忙」通常问的是全期
+     * 或近期规律，强制要求区间会把这个问题变成必须先追问日期。Python 端省略即取
+     * 全部历史。
+     *
+     * <p>⚠️ 响应可能带 {@code hours_available=false} —— 那表示该区间的交易<b>没有
+     * 记录开单时刻</b>（数据采集缺失），不是「这些时段没营业」。调用方必须把
+     * {@code unavailable_reason} 透出去，不要渲染成 24 小时全 0。
+     *
+     * @param factoryId factory (tenant) id — must match the caller's auth scope
+     * @param startDate inclusive；可为 null = 不限起点
+     * @param endDate   inclusive；可为 null = 不限终点
+     * @return parsed JSON: hours_available / hours / peak_hour / peak_bill_count
+     */
+    public Map<String, Object> fetchPeakHours(
+            String factoryId,
+            LocalDate startDate,
+            LocalDate endDate
+    ) throws IOException {
+        if (factoryId == null || factoryId.isEmpty()) {
+            throw new IllegalArgumentException("factoryId required");
+        }
+        if (startDate != null && endDate != null && startDate.isAfter(endDate)) {
+            throw new IllegalArgumentException("startDate > endDate");
+        }
+
+        HttpUrl.Builder ub = HttpUrl.parse(config.getUrl() + "/api/smartbi/gold/peak-hours")
+                .newBuilder()
+                .addQueryParameter("factory_id", factoryId);
+        if (startDate != null) {
+            ub.addQueryParameter("start_date", startDate.toString());
+        }
+        if (endDate != null) {
+            ub.addQueryParameter("end_date", endDate.toString());
+        }
+        HttpUrl url = ub.build();
+
+        Request.Builder reqBuilder = new Request.Builder().url(url).get();
+        if (!internalSecret.isEmpty()) {
+            reqBuilder.addHeader("X-Internal-Secret", internalSecret);
+            reqBuilder.addHeader("X-Factory-Id", factoryId);
+            String userRole = currentUserRole();
+            if (userRole != null && !userRole.isEmpty()) {
+                reqBuilder.addHeader("X-User-Role", userRole);
+            }
+        }
+        Request req = reqBuilder.build();
+
+        long t0 = System.currentTimeMillis();
+        try (Response resp = http.newCall(req).execute()) {
+            long elapsed = System.currentTimeMillis() - t0;
+            if (!resp.isSuccessful()) {
+                String body = resp.body() != null ? resp.body().string() : "";
+                throw new IOException(
+                        "Gold peak-hours HTTP " + resp.code() + " in " + elapsed + "ms: " + body);
+            }
+            String body = resp.body() != null ? resp.body().string() : "{}";
+            @SuppressWarnings("unchecked")
+            Map<String, Object> parsed = objectMapper.readValue(body, Map.class);
+            log.debug("Gold peak-hours factory={} range={}..{} in {}ms",
+                    factoryId, startDate, endDate, elapsed);
+            return parsed;
+        }
+    }
+
+    /**
      * Fetch staff performance ranking from Python Gold layer.
      *
      * @param factoryId factory (tenant) id — must match the caller's auth scope
