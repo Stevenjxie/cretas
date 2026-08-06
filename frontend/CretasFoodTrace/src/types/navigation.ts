@@ -507,6 +507,7 @@ export type FAManagementStackParamList = {
   StocktakingList: undefined;
   StocktakingExecute: { recordId?: string } | undefined;
   StocktakingSummary: undefined;
+  ProcurementDeliveryConfirm: undefined;
   SupplierDeliveryList: undefined;
   SupplierDeliveryCreate: undefined;
   SupplierDeliveryDetail: { noteId: string };
