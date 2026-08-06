@@ -157,6 +157,13 @@ export interface RestaurantFindingsResponse {
   domain: string;
   findings: RestaurantFinding[];
   findingsText: string;
+  /**
+   * 🔴 渲染卡片用这个，不要拿 findings[].facts 自己拼句子：后端的
+   * PriceFieldResponseAdvice 会把 facts.cost / facts.totalCost 置 null
+   * （含 "cost" 的数字标量一律抹除，本是给 Excel 财务表用的，对餐饮损耗金额
+   * 是误伤），自己拼会渲染出空的「¥ 」。
+   */
+  digestLines: string[];
   totalCount: number;
   checkedRules: string[];
   skippedRules: RestaurantSkippedRule[];

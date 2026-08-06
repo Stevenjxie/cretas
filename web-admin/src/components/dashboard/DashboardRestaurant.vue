@@ -292,12 +292,7 @@ async function loadFindings() {
 
 /** 有话可说才渲染这张卡 —— 三个桶全空时不占版面。 */
 const hasFindingCard = computed(() => Boolean(
-  findingsError.value
-  || (findings.value && (
-    findings.value.findings.length
-    || findings.value.skippedRules.length
-    || findings.value.failedRules.length
-    || findings.value.checkedRules.length))
+  findingsError.value || findings.value?.digestLines?.length
 ));
 
 function handleVisibilityChange() {
@@ -375,36 +370,19 @@ onBeforeUnmount(() => {
         ⚠️ 发现检查未能完成：{{ findingsError }}。这不代表没有异常，只代表这次没查到。
       </p>
 
-      <template v-else-if="findings">
-        <ul v-if="findings.findings.length" class="finding-card__list">
-          <li v-for="f in findings.findings" :key="f.code + f.subjectId" class="finding-card__item">
-            <strong>{{ f.subjectName }}</strong>
-            <span v-if="f.code === 'WASTAGE_TYPE_CONCENTRATION'">
-              损耗近{{ f.facts.windowDays }}天 ¥{{ f.facts.cost }}，占全店损耗 {{ f.facts.share }}%
-            </span>
-            <span v-else-if="f.code === 'WASTAGE_SHARE_SPIKE'">
-              近{{ f.facts.windowDays }}天损耗 ¥{{ f.facts.costCur }}，占全店 {{ f.facts.shareCur }}%（基线
-              {{ f.facts.shareBase }}%），涨得比全店快 {{ f.facts.amplification }} 倍
-            </span>
-          </li>
-        </ul>
-
-        <p v-else-if="findings.checkedRules.length" class="finding-card__clear">
-          ✅ 已检查 {{ findings.checkedRules.join(' / ') }}，均正常。
-        </p>
-
-        <p
-          v-for="s in findings.skippedRules"
-          :key="s.ruleName"
-          class="finding-card__undecided"
-        >
-          ℹ️ {{ s.ruleName }}：{{ s.reason }}，暂不判断。
-        </p>
-
-        <p v-if="findings.failedRules.length" class="finding-card__failed">
-          ⚠️ {{ findings.failedRules.join(' / ') }} 检查失败，暂无法判断。
-        </p>
-      </template>
+      <!--
+        逐行展示服务端渲染好的成品文案。⛔ 不在这里拿 facts 自己拼句子:
+        (1) PriceFieldResponseAdvice 会把 facts.cost 置 null → 渲染出空的「¥ 」;
+        (2) 同一句话在 Java 和 Vue 各写一遍就是第二处口径定义。
+        三态的区分已经体现在每行的前缀 (·/✅/ℹ️/⚠️) 和措辞里。
+      -->
+      <ul v-else-if="findings" class="finding-card__list">
+        <li
+          v-for="(line, i) in findings.digestLines"
+          :key="i"
+          class="finding-card__item"
+        >{{ line }}</li>
+      </ul>
     </section>
 
     <section

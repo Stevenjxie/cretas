@@ -53,6 +53,38 @@ public class FindingTextRenderer {
     }
 
     /**
+     * 驾驶舱卡片出口：每态一行，无「顺带」语气（那是对话里的措辞）。
+     *
+     * <p>🔴 前端**必须**用这里的成品行，不要拿 {@code Finding.facts} 自己拼句子：
+     * {@code PriceFieldResponseAdvice} 的 {@code FINANCE_COLUMN_KEY_REGEX} 会把
+     * 任何名字含 {@code cost}/{@code 成本}/{@code amount} 且值为数字标量的 Map
+     * 条目置 null（它本是给 SmartBI Excel 财务表用的，对 {@code facts.cost} 是
+     * 误伤）。前端自己拼就会渲染出空的「¥ 」。服务端渲染发生在该 Advice 之前，
+     * 字符串也不在它的抹除范围内。
+     *
+     * <p>顺带也消掉了「同一句话在 Java 和 Vue 各写一遍」的第二处定义。
+     *
+     * @return 可直接逐行展示的文案；一条规则都没跑完时返回空列表（绝不说「均正常」）
+     */
+    public java.util.List<String> renderDigestLines(FindingService.Result result) {
+        java.util.List<String> lines = new java.util.ArrayList<>();
+
+        for (Finding f : result.findings()) {
+            lines.add(renderOne(f).replaceFirst("^\\s*·\\s*", ""));
+        }
+        if (lines.isEmpty() && !result.checkedRules().isEmpty()) {
+            lines.add("✅ 已检查 " + String.join(" / ", result.checkedRules()) + "，均正常。");
+        }
+        for (FindingService.SkippedRule s : result.skippedRules()) {
+            lines.add("ℹ️ " + s.ruleName() + "：" + s.reason() + "，暂不判断。");
+        }
+        if (!result.failedRules().isEmpty()) {
+            lines.add("⚠️ " + String.join(" / ", result.failedRules()) + " 检查失败，暂无法判断。");
+        }
+        return lines;
+    }
+
+    /**
      * 「数据没采集到」那一态。刻意**不含**「正常」二字 —— 这一行的全部意义就是
      * 告诉用户这条规则这次没给出结论，说成正常就是把缺数据渲染成了健康。
      */
