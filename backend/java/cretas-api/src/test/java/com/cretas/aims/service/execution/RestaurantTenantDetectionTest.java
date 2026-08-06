@@ -58,6 +58,65 @@ class RestaurantTenantDetectionTest {
                 .isRestaurantTenantId(MOCK, RESTAURANT_DOMAIN)).isTrue();
     }
 
+    /**
+     * 钉住的是**不变量**而不是某一行: 该文件里每一处会执行的 {@code startsWith("RES_")}
+     * 都必须待在一个「先认 domain」的方法里(方法体内出现
+     * {@code equalsIgnoreCase(factoryDomain)})。裸写在业务分支里的前缀判定会让这条红 ——
+     * 这正是 2026-08-06 第六处漏网的形状(`handleEarlyQuestionTypeDetection` 里自己
+     * 算 businessDomain, 于是 MOCK_REST 被标成 FACTORY)。
+     */
+    @Test
+    @DisplayName("不变量: orchestrator 里的 RES_ 前缀判定只允许出现在先认 domain 的方法内")
+    void resPrefixChecksOnlyLiveInsideDomainFirstHelpers() throws Exception {
+        java.nio.file.Path src = java.nio.file.Path.of(
+                "src/main/java/com/cretas/aims/service/execution/IntentExecutionOrchestrator.java");
+        java.util.List<String> lines = java.nio.file.Files.readAllLines(src);
+
+        // 恰好 4 空格缩进 = 类成员层级; (?! ) 把方法体内 8 空格的 if/return 排除掉,
+        // 关键字黑名单再兜一层(万一某天出现 4 空格缩进的控制流)。
+        java.util.regex.Pattern methodSig = java.util.regex.Pattern.compile(
+                "^ {4}(?! )(?!if\\b|for\\b|while\\b|switch\\b|catch\\b|return\\b|else\\b|do\\b|try\\b)"
+                        + "(?:(?:public|private|protected|static|final|abstract|synchronized)\\s+)*"
+                        + "[\\w<>\\[\\],.?\\s]+\\s+\\w+\\s*\\(");
+
+        java.util.List<String> offenders = new java.util.ArrayList<>();
+        for (int i = 0; i < lines.size(); i++) {
+            if (!lines.get(i).contains("startsWith(\"RES_\")")) {
+                continue;
+            }
+            // 注释里提到这串(包括本次修复的 javadoc)不算承载点 —— 只有会执行的语句算。
+            String trimmed = lines.get(i).trim();
+            if (trimmed.startsWith("*") || trimmed.startsWith("//") || trimmed.startsWith("/*")) {
+                continue;
+            }
+            // 向上找最近的方法签名
+            int start = -1;
+            for (int j = i; j >= 0; j--) {
+                if (methodSig.matcher(lines.get(j)).find()) {
+                    start = j;
+                    break;
+                }
+            }
+            assertThat(start).as("第 %d 行的 RES_ 判定找不到所属方法", i + 1).isGreaterThanOrEqualTo(0);
+            // 向下取到该方法的收尾 "    }"
+            int end = lines.size() - 1;
+            for (int j = start + 1; j < lines.size(); j++) {
+                if (lines.get(j).equals("    }")) {
+                    end = j;
+                    break;
+                }
+            }
+            String body = String.join("\n", lines.subList(start, end + 1));
+            if (!body.contains("equalsIgnoreCase(factoryDomain)")) {
+                offenders.add("L" + (i + 1) + " in: " + lines.get(start).trim());
+            }
+        }
+
+        assertThat(offenders)
+                .as("这些 RES_ 前缀判定没有先认 domain —— MOCK_REST 会在这里被判成工厂租户")
+                .isEmpty();
+    }
+
     @Test
     @DisplayName("hasRestaurantOwnerActionSignal 必须解析 domain、禁止传 null（不绑定代码格式）")
     void ownerActionSignalResolvesDomainInsteadOfPassingNull() throws Exception {

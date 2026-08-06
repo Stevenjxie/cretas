@@ -1455,7 +1455,11 @@ public class IntentExecutionOrchestrator {
         // (Fix 1 at execute() #0.25 catches most cases; this is the safety net if a request
         // somehow bypasses the earlier check — e.g. via explicit GENERAL_QUESTION classification
         // path while phrase shortcut returned null due to factory-scoped intent absence.)
-        String businessDomain = (factoryId != null && factoryId.startsWith("RES_")) ? "RESTAURANT" : "FACTORY";
+        // 2026-08-06: 这里曾自己写 factoryId.startsWith("RES_") —— 餐饮判定六处承载点里
+        // 最后一处漏掉 domain 的。MOCK_REST 的 id 无 RES_/REST_ 前缀, 只能靠
+        // factories.type='RESTAURANT' 认出来, 于是它在这条兜底路径上被标成 "FACTORY",
+        // 匹到的是工厂短语表。改用同文件下方那条已有的、给 matchPhrase 专用的解析。
+        String businessDomain = resolvePhraseBusinessDomain(factoryId);
         Optional<String> conversationalPhraseMatch = knowledgeBase.matchPhrase(userInput, businessDomain);
         if (conversationalPhraseMatch.isPresent()) {
             String matchedIntent = conversationalPhraseMatch.get();
