@@ -356,11 +356,22 @@ class RestaurantRolesPermissionTest {
                     makeUser(FactoryUserRole.restaurant_purchaser), "production:write"));
         }
 
+        /**
+         * 2026-08-06 Steve 拍板:「保留吧 作为全局RW，也可以替代其它角色做OA」。
+         *
+         * <p>本条原为 {@code owner_no_hr_write}「老板不管人事」—— 那是老板还没定成
+         * 全局角色时的模型。人事审批(排班/工时)同样是 OA，老板要能替人事岗执行，
+         * 所以断言反转。
+         *
+         * <p>⚠️ 本类其余几条是**真隔离**(餐饮角色不得碰制造业 production:write、
+         * 工厂角色不得获得 restaurant 访问)，与本条性质不同，不要一起改。
+         */
         @Test
-        @DisplayName("restaurant_owner 不能访问 hr:read_write (不管人事)")
-        void owner_no_hr_write() {
-            assertFalse(permissionService.hasPermission(
-                    makeUser(FactoryUserRole.restaurant_owner), "hr:read_write"));
+        @DisplayName("restaurant_owner 能访问 hr:read_write —— 全局 RW, 可替人事岗做 OA")
+        void owner_has_hr_write() {
+            assertTrue(permissionService.hasPermission(
+                    makeUser(FactoryUserRole.restaurant_owner), "hr:read_write"),
+                    "老板是全局 RW, 要能替各部门(含人事)执行审批类动作");
         }
 
         @Test

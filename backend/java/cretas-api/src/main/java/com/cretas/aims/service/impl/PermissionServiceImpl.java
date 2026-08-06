@@ -261,14 +261,13 @@ public class PermissionServiceImpl implements PermissionService {
 
         // restaurant_owner: 餐饮老板 — 全餐饮运营 + 价格异常审批 + 月对账确认
         // 涵盖 restaurant/procurement/finance/warehouse/analytics 完整读写
+        // 2026-08-06 Steve 拍板:「保留吧 作为全局RW，也可以替代其它角色做OA」。
+        // 老板要能替各部门执行动作(采购审批 / 月对账确认 / 报货领料审批 / 验收入库),
+        // 所以是全模块 read_write, 而不是逐个列举 —— 逐个列举正是上一版漏掉
+        // production/quality/sales/hr 等模块、老板替不了那些岗位的原因。
+        // L1 权威同步为全局 rw: V20261029_62 (推翻同日 V20261029_56 的全只读)。
         Map<String, String> restaurantOwnerPerms = new HashMap<>();
-        restaurantOwnerPerms.put("dashboard", "read_write");
-        restaurantOwnerPerms.put("restaurant", "read_write");
-        restaurantOwnerPerms.put("procurement", "read_write"); // 采购审批、请购确认
-        restaurantOwnerPerms.put("finance", "read_write");     // 月对账确认、财务审核通过/驳回
-        restaurantOwnerPerms.put("warehouse", "read_write");   // 报货/领料审批、验收入库
-        restaurantOwnerPerms.put("analytics", "read_write");   // 经营分析
-        restaurantOwnerPerms.put("report", "read");
+        ALL_MODULES.forEach(m -> restaurantOwnerPerms.put(m, "read_write"));
         PERMISSION_MATRIX.put(FactoryUserRole.restaurant_owner, restaurantOwnerPerms);
 
         // restaurant_chef: 厨师长 — 报货/领料(MaterialRequisition) + 验收入库(SupplierDeliveryNote)
