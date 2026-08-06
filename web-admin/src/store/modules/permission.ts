@@ -127,7 +127,7 @@ const PERMISSION_MATRIX: Record<string, ModulePermissions> = {
     dashboard: 'r', production: 'r', warehouse: 'r', quality: '-',
     procurement: '-', sales: 'rw', hr: '-', equipment: '-',
     finance: 'r', system: '-', analytics: 'r', scheduling: '-',
-    // 对齐 L1 权威 V20261029_55: 市场经理是餐饮「市场部门」的载体角色。
+    // 对齐 L1 权威 V20261029_56: 市场经理是餐饮「市场部门」的载体角色。
     // 上一版 restaurant: '-' 会在竞态/离线窗口里把整个餐饮板块关掉(上限 '-' 时
     // 四个部门一起关) —— 市场经理登录后餐饮菜单整块消失。
     // 工厂型租户不受影响: FACTORY_TYPE_MODULE_FILTER.FACTORY 会把 restaurant 打回 '-'。
@@ -184,7 +184,7 @@ const PERMISSION_MATRIX: Record<string, ModulePermissions> = {
     // restaurant 是「进餐饮 vs 进工厂」的板块准入上限, 不是权限档次 —— 财务经理
     // 在餐饮租户里当然进得去, 所以是 rw 而不是 r; 真正的收窄由下面四个部门键表达。
     // 上一版写 'r' 会把 restaurantFinance 一起压成 r(见 weakerOf 上限规则),
-    // 财务经理在自己的部门里反而不可写。对齐 L1 权威 V20261029_55。
+    // 财务经理在自己的部门里反而不可写。对齐 L1 权威 V20261029_56。
     restaurant: 'rw',
     restaurantOps: '-', restaurantMarketing: '-',
     restaurantHr: '-', restaurantFinance: 'rw',
@@ -245,7 +245,7 @@ const PERMISSION_MATRIX: Record<string, ModulePermissions> = {
     procurement: 'r', sales: '-', hr: '-', equipment: '-',
     finance: 'r', system: '-', analytics: 'r', scheduling: '-',
     restaurant: 'rw',
-    // 对齐 L1 权威 V20261029_55: 店长管运营, 人事**只读**, 市场/财务不可见。
+    // 对齐 L1 权威 V20261029_56: 店长管运营, 人事**只读**, 市场/财务不可见。
     // 上一版这里是 Ops/Marketing/Hr 全 rw + Finance r —— 那是拆部门之前的产品口径。
     // 人事给 'r' 而不是 '-': 预测排班(/restaurant/staffing)挂在 restaurantHr 上,
     // 而 menuConfig / router 的 roles 白名单都明写着店长 —— 给 '-' 会让店长
