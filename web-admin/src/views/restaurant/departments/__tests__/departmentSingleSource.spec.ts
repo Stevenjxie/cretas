@@ -1,5 +1,5 @@
 /**
- * 餐饮四部门：一处定义，四处兑现。
+ * 餐饮部门：一处定义，四处兑现。
  *
  * ## 为什么需要这个文件
  *
@@ -11,13 +11,14 @@
  *
  * `permission.ts` 里那份的注释甚至写着「避免两处各写一份」——**没有兑现**。
  *
- * 加第五个部门要改四处；漏一处的表现是「看得见点进去 403」或「菜单里没有、
+ * 加部门要改四处；漏一处的表现是「看得见点进去 403」或「菜单里没有、
  * 敲 URL 能进」——**两种都不报错**。这正是 #2082 一天返工四次的成因：
  * 只改权限矩阵 → 菜单不出来；补了菜单 → 页面 module 又没跟上。
  *
  * 现在 `permission.ts` 从 `DEPARTMENTS` 派生；本文件钉住剩下两处不许漂。
  *
- * ⚠️ 只覆盖**餐饮**四部门，不碰工厂侧的模块与角色。
+ * ⚠️ 只覆盖**餐饮**部门(2026-08-06 起为五个: 运营/市场/采购/财务/人事)，
+ * 不碰工厂侧的模块与角色。
  */
 import { describe, expect, it } from 'vitest';
 
@@ -31,10 +32,14 @@ function flattenMenu(items: any[]): any[] {
   return items.flatMap((it) => [it, ...(it?.children ? flattenMenu(it.children) : [])]);
 }
 
-describe('餐饮四部门单一权威', () => {
+describe('餐饮部门单一权威', () => {
   it('权威表本身自洽：key 与 module 一一对应且不重复', () => {
-    expect(DEPARTMENT_ORDER).toHaveLength(4);
-    expect(new Set(DEPT_MODULES).size).toBe(4);
+    // ⛔ 刻意不硬编码部门数。上一版写死 4, 采购成为第五个部门(PR#2345)后这条
+    // **假红**, 把 main 拦住、所有人的 PR 都合不进去。加第六个部门时不该再重演。
+    // 真正要钉的是「一一对应且不重复」——module 数与 key 数相等即可表达。
+    expect(DEPARTMENT_ORDER.length).toBeGreaterThan(0);
+    expect(new Set(DEPT_MODULES).size).toBe(DEPARTMENT_ORDER.length);
+    expect(new Set(DEPARTMENT_ORDER).size).toBe(DEPARTMENT_ORDER.length);
     for (const key of DEPARTMENT_ORDER) {
       expect(DEPARTMENTS[key].key, `${key} 的 key 字段应与索引一致`).toBe(key);
       expect(DEPARTMENTS[key].module).toMatch(/^restaurant[A-Z]/);
