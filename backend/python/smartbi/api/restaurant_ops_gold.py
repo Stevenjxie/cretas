@@ -488,6 +488,55 @@ async def gross_margin(request: Request, days: int = Query(30, ge=1, le=365)) ->
             total_rev_with_cost += r["revenue"]
             total_profit += gp
 
+    # ── 菜单工程四象限 (Kasavana-Smith) ────────────────────────────────
+    # 轴二用**单份毛利贡献**(元/份)而不是毛利率: 90% 毛利但每份只赚 1 块的菜
+    # (米饭)不是明星。经典菜单工程用的就是 contribution margin, 不是 rate。
+    #
+    # ⛔ 刻意在这里分类, 不新写一份成本 join —— 上面那个 for 已经用
+    # cretas_map/cost_map 把每道菜的 foodCostUnit 算好了。另起一套就成了
+    # 第二处成本口径, 两边迟早对不上。
+    #
+    # ⚠️ 与既有 /restaurant-ops/menu-quadrant 是**两个不同指标**, 不是重复:
+    # 那个是「销量 × 营收」(docstring 自称收入模式), 会把高价低毛利的菜叫成金牛。
+    # 这个是「销量 × 毛利贡献」。两者都保留, 各自标明轴是什么。
+    #
+    # 只有 hasCost 的菜进四象限: 估算毛利(行业默认成本率)对每道菜是同一个比率,
+    # 拿它排序等于按营收排, 会造出一个看着像毛利分析、实则不是的榜。
+    priced = [d for d in dishes if d["hasCost"] and d["qty"] > 0]
+    for d in dishes:
+        d["unitMargin"] = (
+            round(d["grossProfit"] / d["qty"], 4) if d["hasCost"] and d["qty"] > 0 else None
+        )
+        d["quadrant"] = None
+    if priced:
+        qty_sorted = sorted(x["qty"] for x in priced)
+        um_sorted = sorted(x["grossProfit"] / x["qty"] for x in priced)
+        mid = len(priced) // 2
+        qty_median = (
+            qty_sorted[mid] if len(priced) % 2
+            else (qty_sorted[mid - 1] + qty_sorted[mid]) / 2
+        )
+        um_median = (
+            um_sorted[mid] if len(priced) % 2
+            else (um_sorted[mid - 1] + um_sorted[mid]) / 2
+        )
+        for d in dishes:
+            if d["unitMargin"] is None:
+                continue
+            hi_qty = d["qty"] >= qty_median
+            hi_um = d["unitMargin"] >= um_median
+            # 命名用菜单工程原词, 不用 BCG 的明星/金牛 —— 后者是既有收入模式在用的,
+            # 两套同名不同轴会让人以为是同一个结论。
+            d["quadrant"] = (
+                "明星" if hi_qty and hi_um          # 又好卖又赚钱 → 保住, 别动价
+                else "主力" if hi_qty               # 好卖不赚钱 → 降本或微调价
+                else "谜题" if hi_um                # 赚钱不好卖 → 推荐位/服务员话术
+                else "瘦狗"                          # 都不行 → 考虑下架
+            )
+    else:
+        qty_median = 0.0
+        um_median = 0.0
+
     # avgRate 用 "只算有配方菜" 分母, 避免 403 无配方菜稀释真实毛利率.
     avg_rate = total_profit / total_rev_with_cost if total_rev_with_cost > 0 else 0
     dishes_with_cost = sum(1 for d in dishes if d["hasCost"])
@@ -507,6 +556,15 @@ async def gross_margin(request: Request, days: int = Query(30, ge=1, le=365)) ->
         "totalProfitWithEstimated": total_profit_combined,
         "avgRateWithEstimated": avg_rate_combined,
         "industryDefaultCostRatio": industry_cost_ratio,
+        # 菜单工程四象限的阈值。⚠️ 中位数是**按有成本的菜**算的, 与 coverage.dishCount
+        # 同一个集合 —— 若只有 3 道菜有配方, 这个中位数只代表那 3 道, 前端要连
+        # coverage 一起展示, 别让「10 个菜里 3 个」被读成「全店结论」。
+        "menuEngineering": {
+            "axis": "qty × unitMargin",
+            "qtyMedian": qty_median,
+            "unitMarginMedian": um_median,
+            "dishCount": len(priced),
+        },
         "coverage": {
             "dishCount": dishes_with_cost,
             "totalDishCount": len(dishes),
