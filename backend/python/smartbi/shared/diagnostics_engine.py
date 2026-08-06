@@ -246,13 +246,40 @@ class DiagnosticsEngine:
         playbook_url: Optional[str] = None
         rx_actions: list[RxAction] = []
 
-        if playbook_id:
+        # 🔴 偏离方向决定 playbook 能不能挂。
+        #
+        # playbook 是**单向**的: `ingredient_waste_rate_high` 里全是「削减过量采购」
+        # 「减少过期报废」这类降损耗的话。而 metric 偏离到**好**的一侧时(损耗率
+        # 3.75% 低于行业区间 [8,25]), 原样挂上去就是在劝一个已经做得比标杆好的人
+        # 继续压这个指标 —— 2026-08-06 prod 实测 MOCK_REST 正是如此:
+        # status="偏低" / severity="info", 却带着一整套降损耗建议。
+        #
+        # 根因是这里挂 playbook 时不看方向, 只看 playbook_id 存不存在。
+        #
+        # ⚠️ 不能简单地跟"健康/正常"一样 return None: 对 higher_is_worse 的指标,
+        # **异常低往往不是管得好, 而是没登记**(损耗没录、报废没走系统)。把它当成
+        # 优秀直接吞掉, 就是把"没采集到"渲染成了"正常" —— 所以照常返回诊断,
+        # 只是换成方向正确的话, 并明确提示先核对采集完整性。
+        deviates_favourably = (
+            (higher_is_worse and status in ("偏低", "严重偏低"))
+            or (not higher_is_worse and status in ("偏高", "严重偏高"))
+        )
+
+        if playbook_id and not deviates_favourably:
             playbook_data = self._load_playbook(playbook_id)
             if playbook_data:
                 suggestion_list = self._extract_suggestions(playbook_data, severity)
                 sub_sector_notes = self._extract_sub_sector_notes(playbook_data)
                 playbook_url = f"playbooks/{playbook_id}.yaml"
                 rx_actions = self._extract_rx_actions(playbook_data)
+        elif deviates_favourably:
+            # 方向正确时给方向正确的话。不挂 playbook_url / rx_actions ——
+            # 那些处方是为"指标变差"写的, 挂上去等于给了一份不该执行的动作清单。
+            suggestion_list = [
+                f"{name_zh}优于行业区间，当前无需针对性动作。",
+                "先核对该指标的数据采集是否完整——异常优于同行时，"
+                "更常见的原因是漏记录而不是管理更好。",
+            ]
 
         # 渲染描述文案
         description_zh = self._render_description(
