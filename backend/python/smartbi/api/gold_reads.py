@@ -1364,3 +1364,35 @@ async def get_restaurant_wastage_findings(
     fid = _resolve_tenant(factory_id)
     pool = await get_pg_pool()
     return await detector(pool, fid)
+
+
+@router.get("/restaurant-margin-findings")
+async def get_restaurant_margin_findings(
+    request: Request,
+    rule: str = Query(..., description="puzzle_dishes"),
+    factory_id: Optional[str] = Query(None, description="belt-and-suspenders; defaults to JWT tenant"),
+):
+    """餐饮**毛利**发现规则。契约与 /restaurant-wastage-findings 逐字相同。
+
+    为什么另开一个端点而不是塞进上面那个: 那个路径叫 `wastage`, 把毛利规则挂
+    在损耗路径下, 下一个人读日志会以为毛利问题出在损耗链上。契约相同不等于
+    该共用一个名字。
+
+    ⛔ 同样刻意不 try/except: 查询失败必须让 HTTP 层返 5xx, Java 侧才能落进
+    failedRules 显示「检查失败」。吞成 {"findings": []} 会被渲染成「均正常」。
+
+    ⚠️ 这里**不做金额脱敏**。发现层要的是真实数字才能判定, 脱敏在真正把数字
+    给到人的那个出口做(Java 侧 FindingTextRenderer 之后的响应链)。
+    """
+    from smartbi.gold.restaurant.margin_findings import detect_puzzle_dishes
+
+    detectors = {"puzzle_dishes": detect_puzzle_dishes}
+    detector = detectors.get(rule)
+    if detector is None:
+        raise HTTPException(
+            status_code=400,
+            detail=f"unknown rule {rule!r}; expected one of {sorted(detectors)}",
+        )
+    fid = _resolve_tenant(factory_id)
+    pool = await get_pg_pool()
+    return await detector(pool, fid)
