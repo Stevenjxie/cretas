@@ -2070,6 +2070,61 @@ public class PythonSmartBIClient {
     }
 
     /**
+     * 餐饮损耗发现规则 (domain="restaurant" 的 FindingProvider 用).
+     *
+     * <p>⛔ 与 {@link #getRestaurantHealthCheckReport} 不同, 本方法<b>失败即抛</b>,
+     * 绝不返回 null。发现层的调用方会把 null/空当作「查过了, 没异常」渲染成
+     * 「均正常」—— 那就是把查询失败说成了健康 (禁止降级处理)。异常穿出去才能
+     * 落进 FindingService 的 failedRules, 让用户看到「检查失败」。
+     *
+     * <p>熔断时 {@code executeWithRetry} 抛的 {@link PythonServiceUnavailableException}
+     * 本身是 RuntimeException, 原样穿出去即可 —— 它的构造签名是
+     * {@code (circuitState, retryAfterMs)}, 专属熔断语义, 不拿来包装别的失败。
+     *
+     * @param rule {@code share_spike} 或 {@code type_concentration}
+     * @return Python 原始响应 {rule, applicable, skip_reason, findings[]}
+     * @throws IllegalStateException 服务未启用 / factoryId 非法 / IO 失败 / 空响应
+     */
+    @SuppressWarnings("unchecked")
+    public Map<String, Object> getRestaurantWastageFindings(String factoryId, String rule) {
+        if (!config.isEnabled()) {
+            throw new IllegalStateException("Python SmartBI 服务未启用, 无法执行餐饮损耗发现");
+        }
+
+        final String trustedFactoryId;
+        try {
+            trustedFactoryId = requireFactoryId(factoryId);
+        } catch (IOException invalidFactory) {
+            throw new IllegalStateException(
+                    "factoryId 非法: " + invalidFactory.getMessage(), invalidFactory);
+        }
+
+        HttpUrl url = serviceBaseUrl.newBuilder()
+                .addPathSegments("api/smartbi/gold/restaurant-wastage-findings")
+                .addQueryParameter("factory_id", trustedFactoryId)
+                .addQueryParameter("rule", rule)
+                .build();
+
+        Request httpRequest = new Request.Builder()
+                .url(url)
+                .header("X-Factory-Id", trustedFactoryId)
+                .get()
+                .build();
+        log.info("调用 Python 餐饮损耗发现: factoryId={}, rule={}", trustedFactoryId, rule);
+
+        try {
+            Map<String, Object> body = executeWithRetry(httpRequest, Map.class);
+            if (body == null) {
+                throw new IllegalStateException("餐饮损耗发现返回空响应: rule=" + rule);
+            }
+            return body;
+        } catch (IOException e) {
+            throw new IllegalStateException(
+                    "餐饮损耗发现调用失败: rule=" + rule + ", " + e.getMessage(), e);
+        }
+    }
+
+    /**
      * 通用 GET-style analysis 端点调用 (T6.6 Phase B Sub-A / Sub-B 共享).
      *
      * Mirrors the existing POST-based {@link #callAnalysisEndpoint} shape but

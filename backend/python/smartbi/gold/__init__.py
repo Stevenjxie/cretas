@@ -50,6 +50,10 @@ from smartbi.gold.queries import (
     void_rate,
     zone_efficiency,
 )
+from smartbi.gold.restaurant.wastage_findings import (
+    detect_share_spike,
+    detect_type_concentration,
+)
 from smartbi.gold.review_queries import (
     review_city_ranking,
     review_complaints,
@@ -89,6 +93,8 @@ __all__ = [
     "channel_breakdown",
     "daily_trend",
     "data_range",
+    "detect_share_spike",
+    "detect_type_concentration",
     "dish_margin",
     "diff_results",
     "discount_breakdown",

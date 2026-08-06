@@ -162,4 +162,59 @@ class FindingServiceImplTest {
         assertTrue(r.failedRules().isEmpty());
         assertTrue(r.complete());
     }
+
+    /** 必定诚实跳过的假 provider。 */
+    private static FindingProvider skipping(String domain, String ruleName, String reason) {
+        return new FindingProvider() {
+            @Override public String domain() { return domain; }
+            @Override public String ruleName() { return ruleName; }
+            @Override public List<Finding> detect(String factoryId) {
+                throw new com.cretas.aims.service.finding.FindingNotApplicableException(reason);
+            }
+        };
+    }
+
+    @Test
+    @DisplayName("UT-FSI-09: 🔴 跳过的规则进 skippedRules，不进 checkedRules 也不进 failedRules")
+    void skippedRuleLandsInItsOwnBucket() {
+        FindingService svc = new FindingServiceImpl(List.of(
+                stub("inventory", "低库存"),
+                skipping("inventory", "食材损耗离群", "基线历史不足: 仅 6 天")
+        ), 2);
+
+        FindingService.Result r = svc.detectInline(FACTORY_ID, "inventory");
+
+        assertEquals(List.of("低库存"), r.checkedRules(),
+                "跳过的规则留在 checkedRules 里, UI 会说「已检查 食材损耗离群, 均正常」");
+        assertTrue(r.failedRules().isEmpty(),
+                "数据不足不是故障, 混进 failedRules 会让用户以为服务坏了");
+        assertEquals(1, r.skippedRules().size());
+        assertEquals("食材损耗离群", r.skippedRules().get(0).ruleName());
+        assertEquals("基线历史不足: 仅 6 天", r.skippedRules().get(0).reason());
+    }
+
+    @Test
+    @DisplayName("UT-FSI-10: 跳过不影响 complete()")
+    void skippedKeepsResultComplete() {
+        FindingService svc = new FindingServiceImpl(List.of(
+                skipping("inventory", "食材损耗离群", "两期食材名单不可比")), 2);
+
+        assertTrue(svc.detectInline(FACTORY_ID, "inventory").complete());
+    }
+
+    @Test
+    @DisplayName("UT-FSI-11: 跳过与失败可以同时发生，各归各的桶")
+    void skippedAndFailedCoexist() {
+        FindingService svc = new FindingServiceImpl(List.of(
+                skipping("inventory", "食材损耗离群", "基线历史不足"),
+                exploding("inventory", "损耗类型集中度")
+        ), 2);
+
+        FindingService.Result r = svc.detectInline(FACTORY_ID, "inventory");
+
+        assertEquals(List.of("食材损耗离群"),
+                r.skippedRules().stream().map(FindingService.SkippedRule::ruleName).toList());
+        assertEquals(List.of("损耗类型集中度"), r.failedRules());
+        assertFalse(r.complete());
+    }
 }

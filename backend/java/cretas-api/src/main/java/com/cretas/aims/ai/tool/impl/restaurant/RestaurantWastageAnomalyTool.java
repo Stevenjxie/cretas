@@ -1,32 +1,45 @@
 package com.cretas.aims.ai.tool.impl.restaurant;
 
 import com.cretas.aims.ai.tool.AbstractBusinessTool;
-import com.cretas.aims.entity.MaterialBatch;
-import com.cretas.aims.repository.MaterialBatchRepository;
+import com.cretas.aims.service.finding.FindingService;
+import com.cretas.aims.service.finding.FindingTextRenderer;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
-import java.time.LocalDate;
-import java.util.*;
-import java.util.stream.Collectors;
+import java.util.Collections;
+import java.util.HashMap;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
 
 /**
- * 损耗异常检测工具
+ * 损耗异常检测工具 —— 出口，不是规则。
  *
- * 检测同食材多批次过期、高价食材过期等异常。
- * 对应意图: RESTAURANT_WASTAGE_ANOMALY
+ * <p>判定全部来自 {@code domain="restaurant"} 的 {@link FindingService}。
+ *
+ * <p>⛔ 2026-08-06 之前本工具读主库 {@code material_batches.findExpiredBatches}。
+ * 实测 MOCK_REST 在该表 <b>0 行</b>（餐饮损耗数据在 smartbi 库的
+ * {@code fact_restaurant_wastage}，9,458 行 / ¥934,580），于是它恒定返回
+ * 「近7天未检测到明显损耗异常，库存管理状态良好」——手里躺着 30 天 ¥894K 的损耗
+ * 却告诉店长一切良好。catch 块另返回「功能正在建设中」，同样把失败说成了正常。
+ * 主库读取路径已整个删除，不保留。
  *
  * @author Cretas Team
- * @version 1.0.0
- * @since 2026-03-07
+ * @since 2026-03-07（2026-08-06 换成发现层出口）
  */
 @Slf4j
 @Component
 public class RestaurantWastageAnomalyTool extends AbstractBusinessTool {
 
+    /** 发现层的领域名。与两个 provider 的 {@code domain()} 逐字一致。 */
+    private static final String DOMAIN = "restaurant";
+
     @Autowired
-    private MaterialBatchRepository materialBatchRepository;
+    private FindingService findingService;
+
+    @Autowired
+    private FindingTextRenderer findingTextRenderer;
 
     @Override
     public String getToolName() {
@@ -35,8 +48,8 @@ public class RestaurantWastageAnomalyTool extends AbstractBusinessTool {
 
     @Override
     public String getDescription() {
-        return "损耗异常检测，识别重复过期和高价食材过期等异常情况。" +
-                "适用场景：异常预警、库存风险管理、运营问题排查。";
+        return "损耗异常检测，识别损耗类型集中和食材损耗离群。" +
+                "适用场景：异常预警、成本管控、运营问题排查。";
     }
 
     @Override
@@ -54,69 +67,42 @@ public class RestaurantWastageAnomalyTool extends AbstractBusinessTool {
     }
 
     @Override
-    protected Map<String, Object> doExecute(String factoryId, Map<String, Object> params, Map<String, Object> context) throws Exception {
+    protected Map<String, Object> doExecute(String factoryId, Map<String, Object> params,
+                                            Map<String, Object> context) throws Exception {
         log.info("执行损耗异常检测 - 工厂ID: {}", factoryId);
 
-        try {
-            var expiredBatches = materialBatchRepository.findExpiredBatches(factoryId);
-            var recentExpired = expiredBatches.stream()
-                    .filter(b -> b.getExpireDate() != null &&
-                                 !b.getExpireDate().isBefore(LocalDate.now().minusDays(7)))
-                    .collect(Collectors.toList());
+        // 刻意不 try/catch：规则级失败已由 FindingServiceImpl 隔离并落进
+        // failedRules。在这里再兜一层只会把「哪条规则挂了」的信息吃掉，
+        // 退化成上一版那句「功能正在建设中」。
+        FindingService.Result result = findingService.detectInline(factoryId, DOMAIN);
+        String findingsText = findingTextRenderer.renderInline(result);
 
-            List<Map<String, Object>> anomalies = new ArrayList<>();
+        Map<String, Object> out = new LinkedHashMap<>();
+        out.put("findings", result.findings());
+        out.put("findingsText", findingsText);
+        out.put("checkedRules", result.checkedRules());
+        out.put("skippedRules", result.skippedRules());
+        out.put("failedRules", result.failedRules());
+        out.put("complete", result.complete());
+        out.put("message", buildMessage(result, findingsText));
 
-            // 规则1：同一食材连续多批次过期
-            Map<String, Long> expiredByMaterial = recentExpired.stream()
-                    .filter(b -> b.getMaterialType() != null)
-                    .collect(Collectors.groupingBy(
-                            (MaterialBatch b) -> b.getMaterialType().getName(),
-                            Collectors.counting()));
+        log.info("损耗异常检测完成 - findings={} checked={} skipped={} failed={}",
+                result.findings().size(), result.checkedRules().size(),
+                result.skippedRules().size(), result.failedRules().size());
+        return out;
+    }
 
-            expiredByMaterial.entrySet().stream()
-                    .filter(e -> e.getValue() >= 2)
-                    .forEach(e -> {
-                        Map<String, Object> anomaly = new LinkedHashMap<>();
-                        anomaly.put("异常类型", "重复过期");
-                        anomaly.put("食材", e.getKey());
-                        anomaly.put("近7天过期批次数", e.getValue());
-                        anomaly.put("可能原因", "订货量过多或该食材销量下降");
-                        anomaly.put("建议", "减少下次采购量，或促销消化库存");
-                        anomalies.add(anomaly);
-                    });
-
-            // 规则2：高价值食材过期
-            double avgCost = expiredBatches.stream()
-                    .mapToDouble(b -> b.getUnitPrice() != null ? b.getUnitPrice().doubleValue() : 0)
-                    .average().orElse(0);
-
-            recentExpired.stream()
-                    .filter(b -> b.getUnitPrice() != null && b.getUnitPrice().doubleValue() > avgCost * 2)
-                    .forEach(b -> {
-                        Map<String, Object> anomaly = new LinkedHashMap<>();
-                        anomaly.put("异常类型", "高价食材过期");
-                        anomaly.put("食材", b.getMaterialType() != null ? b.getMaterialType().getName() : "未知");
-                        anomaly.put("批次号", b.getBatchNumber());
-                        anomaly.put("单价", String.format("¥%.2f", b.getUnitPrice()));
-                        anomaly.put("建议", "高价食材需加强先进先出（FIFO）管理");
-                        anomalies.add(anomaly);
-                    });
-
-            if (anomalies.isEmpty()) {
-                return buildSimpleResult("近7天未检测到明显损耗异常，库存管理状态良好。", null);
-            }
-
-            Map<String, Object> result = new LinkedHashMap<>();
-            result.put("检测周期", "近7天");
-            result.put("异常数量", anomalies.size());
-            result.put("异常详情", anomalies);
-
-            log.info("损耗异常检测完成 - 发现 {} 条异常", anomalies.size());
-            return result;
-        } catch (Exception e) {
-            log.warn("损耗异常检测失败: {}", e.getMessage());
-            return buildSimpleResult(
-                    "损耗异常检测功能正在建设中。建议定期盘点食材库存，对比理论用量与实际用量，发现异常及时上报。", null);
+    /**
+     * findingsText 为空只发生在「一条规则都没跑完且无跳过」。此时**必须**区分
+     * 「全挂了」和「没有可用规则」——统一说一句好话就是上一版那个缺陷。
+     */
+    private String buildMessage(FindingService.Result result, String findingsText) {
+        if (!findingsText.isEmpty()) {
+            return findingsText;
         }
+        if (!result.complete()) {
+            return "损耗检查失败：" + String.join(" / ", result.failedRules()) + "，暂无法判断。";
+        }
+        return "本次没有可用的损耗检查规则。";
     }
 }
