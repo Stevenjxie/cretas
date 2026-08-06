@@ -37,7 +37,7 @@ import { ElMessage, ElMessageBox } from 'element-plus';
 import { Plus, Edit, Delete as DeleteIcon, Search, Refresh, Lock, View } from '@element-plus/icons-vue';
 import { formatAmount } from '@/utils/tableFormatters';
 import { bigCategoryOf } from '@/utils/materialCategory';
-import { displayUnit } from '@/utils/unitPricing';
+import { displayUnit, sameUnit } from '@/utils/unitPricing';
 import { handleCatchError } from '@/utils/errorToast';
 import ConceptDisambiguationAlert from '@/components/common/ConceptDisambiguationAlert.vue';
 import UpstreamMissingHint from '@/components/common/UpstreamMissingHint.vue';
@@ -225,7 +225,8 @@ function addPackagingRule(): void {
 }
 
 function removePackagingRule(index: number): void {
-  if (index === 0) return;
+  // ⛔ 这里原本 `if (index === 0) return` —— 第一条永远删不掉, 配上「至少一条」的
+  // 强制校验, 用户就没有任何办法表达「这个原料没有固定包装」。现在允许删光。
   packagingRules.value.splice(index, 1);
   packagingRules.value.forEach((rule, ruleIndex) => {
     rule.name = ruleIndex === 0 ? '默认包装' : `包装规格 ${ruleIndex + 1}`;
@@ -849,11 +850,19 @@ watch(
           if (d.storageType != null && !storageTypeManuallyEdited.value) form.value.storageType = d.storageType;
           if (d.shelfLifeDays != null && !shelfLifeManuallyEdited.value) form.value.shelfLifeDays = d.shelfLifeDays;
           if (!packagingManuallyEdited.value) {
-            const firstRule = packagingRules.value[0] || blankPackagingRule();
-            if (!packagingRules.value[0]) packagingRules.value = [firstRule];
-            if (d.level1PerLevel2 != null) firstRule.conversionFactor = d.level1PerLevel2;
-            if (d.level2Unit != null) firstRule.packageUnit = d.level2Unit;
-            firstRule.baseUnit = form.value.unit;
+            // ⛔ 智能填充**不能填出一条必被拒绝的规则**: 若历史同类原料的包装单位
+            // 归一后就等于基本单位(两边都按 kg 收), 填进去立刻触发
+            // 「包装单位不能与库存基本单位相同」——用户什么都没做就看到红字, 且
+            // 不知道那是自动填的。这种情况直接不填, 让它保持「无固定包装」。
+            const suggestedSameAsBase = d.level2Unit != null
+              && sameUnit(d.level2Unit, form.value.unit);
+            if (!suggestedSameAsBase) {
+              const firstRule = packagingRules.value[0] || blankPackagingRule();
+              if (!packagingRules.value[0]) packagingRules.value = [firstRule];
+              if (d.level1PerLevel2 != null) firstRule.conversionFactor = d.level1PerLevel2;
+              if (d.level2Unit != null) firstRule.packageUnit = d.level2Unit;
+              firstRule.baseUnit = form.value.unit;
+            }
           }
         } finally {
           cascadeWriting.value = false;
@@ -1008,10 +1017,17 @@ async function handleSave() {
     return;
   }
 
-  // 与 SKU 相同：每条包装规则都直接换算到唯一库存基本单位；原料至少需要一条完整规则。
-  if (!packagingRules.value.length) {
-    return ElMessage.warning('请至少填写一条采购包装换算规则');
-  }
+  // 每条包装规则都直接换算到唯一库存基本单位。
+  //
+  // ⛔ 2026-08-06 客户事故: 这里原本强制「至少一条」, 而另一条校验又禁止
+  // 「包装单位 == 基本单位」, 且第一条规则**没有删除按钮** —— 三条合起来,
+  // 「抄码牛肉、没有固定重量一箱」这个客观事实在系统里没有任何合法表达方式。
+  // 六膳门于是编了个假的 `1 斤 = 1 kg`(物理上 1 斤 = 0.5kg), 收货界面从此把
+  // kg 显示成「斤」。
+  //
+  // 后端本来就允许空列表(ProductPackagingSpecServiceImpl#replace 接受 []),
+  // 收货侧也会优雅回落到「采购单规格」(PendingPurchaseReceivingPanel 的
+  // orderOption), 所以「不配包装换算」是完全支持的 —— 只是前端不让填而已。
   const incompleteRule = packagingRules.value.some((rule) => {
     const hasUnit = Boolean(rule.packageUnit?.trim());
     const hasFactor = Number(rule.conversionFactor) > 0;
@@ -1035,9 +1051,10 @@ async function handleSave() {
     all.findIndex(candidate =>
       candidate.packageUnit.trim().toLowerCase() === rule.packageUnit.trim().toLowerCase()) !== index);
   if (repeatedUnits) return ElMessage.warning('同一种包装单位只能配置一条换算规则');
-  if (submittedPackagingRules.some(rule =>
-    rule.packageUnit.trim().toLowerCase() === form.value.unit.trim().toLowerCase())) {
-    return ElMessage.warning('包装单位不能与库存基本单位相同');
+  // 用 sameUnit 而不是字面比较: `kg` 与 `公斤`、`pcs` 与 `件` 是同一个单位的两种写法,
+  // 字面比较放得过去, 存进去就是一条恒等换算(1公斤=1kg), 与不填没区别却更容易误导。
+  if (submittedPackagingRules.some(rule => sameUnit(rule.packageUnit, form.value.unit))) {
+    return ElMessage.warning('包装单位不能与库存基本单位相同——若本来就没有固定包装，请把这条规则删掉');
   }
 
   submitting.value = true;
@@ -1487,11 +1504,19 @@ function handleSizeChange(size: number) {
           </div>
         </el-form-item>
 
-        <!-- 与 SKU 新建一致：采购包装直接换算到唯一库存基本单位，且至少配置一条 -->
-        <el-form-item v-if="form.unit" label="包装换算" required>
+        <!--
+          采购包装直接换算到唯一库存基本单位。**不是必填** ——
+          抄码/不定重原料(如按实际过磅收的牛肉)本来就没有固定包装, 强制填只会逼出
+          假换算(六膳门就填过 `1 斤 = 1 kg`)。见 handleSave 里的说明。
+        -->
+        <el-form-item v-if="form.unit" label="包装换算">
           <div class="material-packaging-spec-list">
             <div class="packaging-rule-note">
-              库存按上方入库计量单位记账；请至少填写一条采购包装换算。例如：1 箱 = 10 kg。
+              库存按上方入库计量单位记账。<strong>按箱/袋等固定包装采购时才需要填</strong>，例如：1 箱 = 10 kg。
+              抄码、不定重（按实际过磅收）的原料请留空——收货时直接按{{ displayUnit(form.unit) }}记账。
+            </div>
+            <div v-if="!packagingRules.length" class="packaging-rule-empty">
+              未配置包装换算：收货按 {{ displayUnit(form.unit) }} 直接记账，不做包装折算。
             </div>
             <div
               v-for="(rule, index) in packagingRules"
@@ -1523,20 +1548,16 @@ function handleSizeChange(size: number) {
                   disabled
                   class="spec-base-unit"
                 />
-                <el-button
-                  v-if="index > 0"
-                  type="danger"
-                  link
-                  @click="removePackagingRule(index)"
-                >
+                <!-- 第一条也可以删 —— 否则「没有固定包装」就无从表达 -->
+                <el-button type="danger" link @click="removePackagingRule(index)">
                   删除
                 </el-button>
               </div>
               <div
-                v-if="rule.packageUnit && rule.packageUnit.trim().toLowerCase() === form.unit.trim().toLowerCase()"
+                v-if="rule.packageUnit && sameUnit(rule.packageUnit, form.unit)"
                 class="spec-same-warn"
               >
-                包装单位不能与库存基本单位相同
+                包装单位不能与库存基本单位相同——若本来就没有固定包装，点右侧「删除」即可
               </div>
               <div v-else-if="packagingRuleText(rule)" class="spec-echo">
                 {{ packagingRuleText(rule) }}
@@ -2041,6 +2062,17 @@ function handleSizeChange(size: number) {
   gap: 10px;
   width: 100%;
 }
+.packaging-rule-empty {
+  padding: 10px 12px;
+  margin-top: 8px;
+  font-size: 12px;
+  line-height: 1.6;
+  color: #67c23a;
+  background: #f0f9eb;
+  border: 1px solid #e1f3d8;
+  border-radius: 4px;
+}
+
 .packaging-rule-note {
   padding: 10px 12px;
   font-size: 12px;
