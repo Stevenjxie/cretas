@@ -97,6 +97,18 @@ export function displayUnit(value: unknown): string {
 }
 
 /**
+ * 需要翻译的单位码 —— `UNIT_LABELS` 里 label 与 code 不同的那些 (`box`/`bag`/`pack`…)。
+ *
+ * 🔴 由表推导, 不手抄。手抄过一次: `displayProductSpecification` 原先硬编码
+ * `box|case|slice` 三个码, 于是 2026-08-06 客户在规格列看到 `1kg/pack 10pack/箱`
+ * —— `pack` 明明在 UNIT_LABELS 里有「包」, 只是那条正则没跟上。
+ * `kg`/`g`/`L` 这些自映射的国际符号不在此列, 本来就不该翻。
+ */
+export const TRANSLATED_UNIT_CODES: readonly string[] = Object.keys(UNIT_LABELS)
+  .filter((code) => UNIT_LABELS[code] !== code)
+  .sort((a, b) => b.length - a.length);
+
+/**
  * #1976 例外名单 —— 与后端 `UnitContractServiceImpl.DISTINCT_COUNT_LABELS` 同源。
  * 权威表把 件/个/只 都并进 pcs, 但业务上**一只 ≠ 一件**(一只鸡不是一件包材)。
  * 「件」不在名单里: 它就是 pcs 的中文名, 件≡pcs 是对的。

@@ -142,6 +142,34 @@ class ProductPackagingSpecServiceImplTest {
                                 .isEqualTo("PACKAGING_SPEC_FACTOR_NOT_INTEGER"));
     }
 
+    /**
+     * 🔴 2026-08-06 客户报「规格里有英文单位」: 六膳门 BBQ猪五花 显示
+     * {@code 1kg/pack 10pack/箱 10kg/箱} —— 一句里中英混排。
+     *
+     * <p>既有的 {@code replacePreservesIdsAndProjectsFirstSpecToLegacyFields} 用的是
+     * {@code unit="盒"}(已经是中文), 所以它一直绿着也证明不了这件事。真实的库里存的是
+     * <b>规范码</b>({@code pack}/{@code box}/{@code bag}), 规格串必须自己翻成展示名。</p>
+     */
+    @Test
+    void composesSpecificationWithDisplayNamesNotRawUnitCodes() {
+        ProductType product = new ProductType();
+        product.setId(PRODUCT_ID);
+        product.setFactoryId(FACTORY_ID);
+        product.setUnit("pack");
+        product.setGramsPerUnit(new BigDecimal("1000"));
+
+        ProductPackagingSpec ten = spec("spec-10", "10包/箱", "箱", "pack", "10", 0L);
+        when(repository.findByFactoryIdAndProductTypeIdOrderBySortOrderAscCreatedAtAsc(
+                FACTORY_ID, PRODUCT_ID)).thenReturn(List.of(ten));
+        when(repository.saveAllAndFlush(any())).thenAnswer(invocation -> invocation.getArgument(0));
+
+        service.replace(product, List.of(new ProductPackagingSpecDTO(
+                "spec-10", "10包/箱", "箱", "pack", new BigDecimal("10"), false, true, 0, 0L)));
+
+        assertThat(product.getSpecification()).isEqualTo("1kg/包 10包/箱 10kg/箱");
+        assertThat(product.getSpecification()).doesNotContain("pack");
+    }
+
     private ProductPackagingSpecDTO dto(String id, String name, String factor, long version) {
         return new ProductPackagingSpecDTO(
                 id, name, "箱", "盒", new BigDecimal(factor), false, true, 0, version);
