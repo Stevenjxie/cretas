@@ -13,7 +13,8 @@ import {
 } from '@element-plus/icons-vue';
 import { useAuthStore } from '@/store/modules/auth';
 import { usePermissionStore } from '@/store/modules/permission';
-import { getRestaurantDashboardSummary } from '@/api/restaurant';
+import { getRestaurantDashboardSummary, getRestaurantFindings } from '@/api/restaurant';
+import type { RestaurantFindingsResponse } from '@/api/restaurant';
 import { getRestaurantStaffingDashboard } from '@/api/smartbi/restaurant-staffing';
 import type { StaffingDashboard } from '@/types/restaurant-staffing';
 import { getRestaurantRoleExperience } from '@/views/restaurant/restaurantRoleExperience';
@@ -271,6 +272,34 @@ async function loadDashboardData() {
   }
 }
 
+// ── 发现层（主动出口）─────────────────────────────────────────────
+// 目标是「店长打开系统、没有提问就看到一条今天能动手的事」。顺带提示只在他
+// 主动提问时才出现，所以驾驶舱要自己拉一次。
+const findings = ref<RestaurantFindingsResponse | null>(null);
+const findingsError = ref('');
+
+async function loadFindings() {
+  findingsError.value = '';
+  try {
+    const res = await getRestaurantFindings(factoryId.value);
+    findings.value = res.data ?? null;
+  } catch (e) {
+    // ⛔ 不得静默:「没拉到」和「都正常」长得一模一样, 混起来就是把失败渲染成正常。
+    findings.value = null;
+    findingsError.value = e instanceof Error ? e.message : '发现层读取失败';
+  }
+}
+
+/** 有话可说才渲染这张卡 —— 三个桶全空时不占版面。 */
+const hasFindingCard = computed(() => Boolean(
+  findingsError.value
+  || (findings.value && (
+    findings.value.findings.length
+    || findings.value.skippedRules.length
+    || findings.value.failedRules.length
+    || findings.value.checkedRules.length))
+));
+
 function handleVisibilityChange() {
   if (document.visibilityState === 'visible') {
     const overdue = !nextRefreshAt.value || nextRefreshAt.value.getTime() <= Date.now();
@@ -280,6 +309,7 @@ function handleVisibilityChange() {
 
 onMounted(() => {
   void loadDashboardData();
+  void loadFindings();
   refreshTimer = setInterval(() => {
     if (document.visibilityState === 'visible') void loadDashboardData();
   }, AUTO_REFRESH_MS);
@@ -326,6 +356,55 @@ onBeforeUnmount(() => {
           <el-icon class="el-icon--right"><ArrowRight /></el-icon>
         </el-button>
       </div>
+    </section>
+
+    <!--
+      发现层主动出口。⛔ 三态各说各话, 不合并成一个「一切正常」:
+        findings 非空        → 今天该动手的事
+        skippedRules 非空    → 数据不足, 判不了 (既不是正常也不是故障)
+        failedRules / 拉取失败 → 查询失败
+    -->
+    <section v-if="hasFindingCard" class="finding-card" aria-labelledby="finding-card-title">
+      <div class="section-heading">
+        <h2 id="finding-card-title" class="section-title">
+          <span class="section-kicker">今天该知道</span>
+        </h2>
+      </div>
+
+      <p v-if="findingsError" class="finding-card__failed">
+        ⚠️ 发现检查未能完成：{{ findingsError }}。这不代表没有异常，只代表这次没查到。
+      </p>
+
+      <template v-else-if="findings">
+        <ul v-if="findings.findings.length" class="finding-card__list">
+          <li v-for="f in findings.findings" :key="f.code + f.subjectId" class="finding-card__item">
+            <strong>{{ f.subjectName }}</strong>
+            <span v-if="f.code === 'WASTAGE_TYPE_CONCENTRATION'">
+              损耗近{{ f.facts.windowDays }}天 ¥{{ f.facts.cost }}，占全店损耗 {{ f.facts.share }}%
+            </span>
+            <span v-else-if="f.code === 'WASTAGE_SHARE_SPIKE'">
+              近{{ f.facts.windowDays }}天损耗 ¥{{ f.facts.costCur }}，占全店 {{ f.facts.shareCur }}%（基线
+              {{ f.facts.shareBase }}%），涨得比全店快 {{ f.facts.amplification }} 倍
+            </span>
+          </li>
+        </ul>
+
+        <p v-else-if="findings.checkedRules.length" class="finding-card__clear">
+          ✅ 已检查 {{ findings.checkedRules.join(' / ') }}，均正常。
+        </p>
+
+        <p
+          v-for="s in findings.skippedRules"
+          :key="s.ruleName"
+          class="finding-card__undecided"
+        >
+          ℹ️ {{ s.ruleName }}：{{ s.reason }}，暂不判断。
+        </p>
+
+        <p v-if="findings.failedRules.length" class="finding-card__failed">
+          ⚠️ {{ findings.failedRules.join(' / ') }} 检查失败，暂无法判断。
+        </p>
+      </template>
     </section>
 
     <section
