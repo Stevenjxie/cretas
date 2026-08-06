@@ -43,4 +43,21 @@ public interface MaterialCodeSegmentService {
      * @return 16位预览编码 (如 "0010010001000007"), 或 null (字典未配置时)
      */
     String generateCode(String factoryId, String l1, String l2, String l3);
+
+    /**
+     * 取该父级下一个**真正可用**的子编码 (只读, 不写库)。
+     *
+     * <p>🔴 「可用」的口径必须含软删除: 分类删除是软删除, 但编码要继续保留
+     * ({@code material_business_code_prefixes} 有外键指向 {@code (factory_id, segment_code)}),
+     * 所以软删行**照样占着编码**, 唯一约束 {@code uk_mcs_factory_segment} 也照样认它。
+     *
+     * <p>⛔ 这件事以前在前端按下拉里**活着的**子节点算 max+1 —— 六膳门把整个 L2 连同
+     * 30 个 L3 全删掉后, 下拉是空的, 算出 0001, 而 0001 正被软删行占着 → INSERT 撞约束,
+     * 报错还被翻译成「同名分类, 请改个名字」。前端拿不到软删行, 这件事只能在服务端做。
+     *
+     * @param level      1/2/3
+     * @param parentCode L2/L3 必填; L1 传 null
+     * @return 完整的 cumulative 编码 (L1 3位 / L2 6位 / L3 10位)
+     */
+    String nextSegmentCode(String factoryId, short level, String parentCode);
 }

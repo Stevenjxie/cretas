@@ -17,9 +17,11 @@ import org.springframework.dao.DataIntegrityViolationException;
 import java.text.Normalizer;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Locale;
+import java.util.Set;
 import java.util.stream.Collectors;
 
 /**
@@ -77,10 +79,11 @@ public class MaterialCodeSegmentServiceImpl implements MaterialCodeSegmentServic
         String label = requireLabel(req.getSegmentLabel());
         String normalizedLabel = normalizeLabel(label);
         rejectDuplicateLabel(factoryId, req.getLevel(), req.getParentCode(), normalizedLabel, null);
-        // Validate segment_code uniqueness
-        if (repo.existsByFactoryIdAndSegmentCode(factoryId, req.getSegmentCode())) {
-            throw new BusinessException(409, "编码段 " + req.getSegmentCode() + " 在该工厂已存在")
-                    .withHint("请使用不同的编码值").withHintTarget("segmentCode");
+        // Validate segment_code uniqueness —— 必须按**含软删除**的口径查, 与唯一约束
+        // uk_mcs_factory_segment 对齐。用派生查询会被实体上的 @Where 挡住软删行,
+        // 于是这里放行、INSERT 才炸, 而炸出来的报错还被 catch 成了「重名」。
+        if (repo.existsBySegmentCodeIncludingDeleted(factoryId, req.getSegmentCode())) {
+            throw segmentCodeTaken(factoryId, req.getSegmentCode());
         }
 
         // Validate parent exists for level 2/3
@@ -110,7 +113,12 @@ public class MaterialCodeSegmentServiceImpl implements MaterialCodeSegmentServic
             entity = repo.save(entity);
             repo.flush();
         } catch (DataIntegrityViolationException conflict) {
-            throw duplicateLabel(label);
+            // ⛔ 不要把任何完整性冲突都说成「重名」。这张表有两个唯一约束:
+            //   uk_mcs_factory_segment                (factory_id, segment_code)  ← 含软删除
+            //   uq_mcs_parent_normalized_label_active (…, normalized_label) WHERE deleted_at IS NULL
+            // 2026-08-06 客户撞的是前者(编码被软删行占着), 却收到后者的文案 +
+            // 「请改个语义不同的名称」—— 改名字永远修不好编码冲突, 用户只能反复试。
+            throw describeConflict(conflict, factoryId, req.getSegmentCode(), label);
         }
         log.info("SP8: 创建物料编码段 factoryId={} code={} label={}", factoryId, entity.getSegmentCode(), entity.getSegmentLabel());
         return toDTO(entity);
@@ -136,9 +144,10 @@ public class MaterialCodeSegmentServiceImpl implements MaterialCodeSegmentServic
 
         // If segmentCode changes, check new code uniqueness
         if (req.getSegmentCode() != null && !req.getSegmentCode().equals(entity.getSegmentCode())) {
-            if (repo.existsByFactoryIdAndSegmentCode(factoryId, req.getSegmentCode())) {
-                throw new BusinessException(409, "编码段 " + req.getSegmentCode() + " 已存在")
-                        .withHint("请使用不同的编码值").withHintTarget("segmentCode");
+            // 同 create(): 编码占用要按含软删除的口径查, 否则改编码时同样会被
+            // uk_mcs_factory_segment 在 INSERT/UPDATE 阶段拦下并报出误导性文案。
+            if (repo.existsBySegmentCodeIncludingDeleted(factoryId, req.getSegmentCode())) {
+                throw segmentCodeTaken(factoryId, req.getSegmentCode());
             }
             entity.setSegmentCode(req.getSegmentCode());
         }
@@ -308,5 +317,77 @@ public class MaterialCodeSegmentServiceImpl implements MaterialCodeSegmentServic
         return new BusinessException(409, "同一父级下已存在同名分类: " + label)
                 .withHint("请选择现有共享分类，或使用语义不同的分类名称")
                 .withHintTarget("segmentLabel");
+    }
+
+    /**
+     * 编码已被占用 —— 把「被谁占的」说出来。
+     *
+     * 🔴 最常见的一种是**被一条已删除的分类占着**: 分类删除是软删除, 但编码必须继续
+     * 保留(有外键指向它), 所以那个编码永远不会回到可用池。用户在界面上看不到那一行,
+     * 只会觉得「系统抽风」。所以这里要点名是哪一条, 并给出真正可行的下一步。
+     */
+    private BusinessException segmentCodeTaken(String factoryId, String segmentCode) {
+        String owner = repo.findLabelBySegmentCodeIncludingDeleted(factoryId, segmentCode).orElse(null);
+        String message = owner == null
+                ? "编码 " + segmentCode + " 在该工厂已被占用"
+                : "编码 " + segmentCode + " 已被分类「" + owner + "」占用（可能是一条已删除的分类，删除后编码仍保留）";
+        return new BusinessException(409, message)
+                .withHint("请刷新页面重取系统编码；系统会跳过已删除分类占用的编码")
+                .withHintTarget("segmentCode");
+    }
+
+    /** 按真正冲突的那个唯一约束给文案, 别一律说成「重名」。 */
+    private BusinessException describeConflict(
+            DataIntegrityViolationException conflict, String factoryId, String segmentCode, String label) {
+        String detail = rootMessage(conflict);
+        if (detail.contains("uk_mcs_factory_segment")) {
+            return segmentCodeTaken(factoryId, segmentCode);
+        }
+        return duplicateLabel(label);
+    }
+
+    private String rootMessage(Throwable throwable) {
+        StringBuilder text = new StringBuilder();
+        for (Throwable current = throwable; current != null; current = current.getCause()) {
+            if (current.getMessage() != null) text.append(current.getMessage()).append('\n');
+            if (current.getCause() == current) break;
+        }
+        return text.toString();
+    }
+
+    /**
+     * 分配某父级下一个**真正可用**的子编码。
+     *
+     * ⛔ 这件事以前在**前端**做(`nextL3Suffix()` 对下拉里活着的子节点取 max+1),
+     * 而前端拿不到、也不该拿到软删除的行 —— 六膳门把整个 L2 连同 30 个 L3 全删掉后,
+     * 下拉是空的 → 算出 0001 → 撞上软删行占着的 0010010001。
+     * 分配口径必须和唯一约束口径一致, 所以只能在服务端做。
+     */
+    @Override
+    @Transactional(readOnly = true)
+    public String nextSegmentCode(String factoryId, short level, String parentCode) {
+        int suffixLength = level == 1 ? 3 : level == 2 ? 3 : level == 3 ? 4 : -1;
+        if (suffixLength < 0) {
+            throw new BusinessException(400, "层级无效: " + level).withHintTarget("level");
+        }
+        if (level > 1 && (parentCode == null || parentCode.isBlank())) {
+            throw new BusinessException(400, "L2/L3 取编码必须指定父编码").withHintTarget("parentCode");
+        }
+        String prefix = level == 1 ? "" : parentCode.trim();
+        Set<String> taken = new HashSet<>(
+                repo.findSegmentCodesByParentIncludingDeleted(factoryId, level == 1 ? null : prefix));
+
+        int max = (int) Math.pow(10, suffixLength) - 1;
+        for (int candidate = 1; candidate <= max; candidate++) {
+            String code = prefix + String.format("%0" + suffixLength + "d", candidate);
+            // 同一个编码理论上只可能挂在同一个父级下(编码自带父前缀), 但保险起见按全工厂查一次:
+            // 历史数据里出现过父级被改而编码没跟着改的行。
+            if (!taken.contains(code) && !repo.existsBySegmentCodeIncludingDeleted(factoryId, code)) {
+                return code;
+            }
+        }
+        throw new BusinessException(409, "该父级下的编码位已用尽（" + max + " 个）")
+                .withHint("请新建一个上级分类，或联系管理员清理历史编码")
+                .withHintTarget("segmentCode");
     }
 }

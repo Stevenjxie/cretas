@@ -43,6 +43,22 @@ export function findLabelConflict(
   return rows.find((row) => row.id !== excludedId && normalizeLabel(row.segmentLabel) === normalized);
 }
 
+/**
+ * ⛔ **不要用它做真实编码分配** —— 2026-08-06 事故就是这么来的。
+ *
+ * 它只看得到传进来的 `rows`（= 界面上活着的节点）。而分类是**软删除**，
+ * 编码被软删行继续占用（唯一约束 `uk_mcs_factory_segment` 不排除软删行，
+ * 且 `material_business_code_prefixes` 有外键指向该编码）。把一整层删干净后，
+ * 这里会算出一个**已被占用**的编码 → INSERT 撞约束 → 用户收到「已存在同名分类」，
+ * 于是不停改名字，而改名字永远修不好编码冲突。
+ *
+ * 真实分配走服务端 `GET /{factoryId}/material-segments/next-code`
+ * （`MaterialCodeSegmentService#nextSegmentCode`，按含软删除的口径）。
+ *
+ * 本函数保留仅用于单测编码**形状**（前缀 + 补零宽度）。
+ *
+ * @deprecated 真实分配请调服务端 next-code 接口。
+ */
 export function nextSegmentCode(
   rows: SegmentRuleNode[],
   level: SegmentLevel,

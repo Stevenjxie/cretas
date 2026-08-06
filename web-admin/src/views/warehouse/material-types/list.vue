@@ -454,16 +454,42 @@ watch(segmentL3, (value) => {
   }
 });
 
-function nextL3Suffix(): string {
-  const maxSuffix = segmentL3Options.value.reduce((max, node) => {
-    const suffix = Number(node.segmentCode.slice(-4));
-    return Number.isInteger(suffix) ? Math.max(max, suffix) : max;
-  }, 0);
-  return String(maxSuffix + 1).padStart(4, '0');
+/**
+ * 系统编码由**服务端**分配 —— 前端不再自己 max+1。
+ *
+ * ⛔ 2026-08-06 事故: 原来这里对下拉里**活着的**子节点取 max+1。六膳门把 L2 `001001`
+ * 连同 30 个 L3 全删了(软删除), 下拉变空 → 算出 `0001` → 而 `0010010001` 正被那条
+ * 软删行占着(编码软删后仍保留, 有外键指向它), INSERT 撞唯一约束
+ * `uk_mcs_factory_segment`, 报错还被后端翻成「同一父级下已存在同名分类」——
+ * 于是提示让用户改名字, 而**改名字永远修不好编码冲突**。
+ *
+ * 前端拿不到、也不该拿到软删除的行, 所以这件事只能服务端做。
+ */
+const nextL3Code = ref('');
+const nextL3CodeLoading = ref(false);
+const nextL3CodeError = ref('');
+
+async function refreshNextL3Code(): Promise<void> {
+  nextL3Code.value = '';
+  nextL3CodeError.value = '';
+  if (!segmentL2.value || !factoryId.value) return;
+  nextL3CodeLoading.value = true;
+  try {
+    const response = await get<{ code: string }>(
+      `/${factoryId.value}/material-segments/next-code`,
+      { level: 3, parentCode: segmentL2.value },
+    );
+    if (response.success && response.data?.code) {
+      nextL3Code.value = response.data.code;
+    } else {
+      nextL3CodeError.value = response.message || '取系统编码失败，请重试';
+    }
+  } catch (error) {
+    nextL3CodeError.value = error instanceof Error ? error.message : '取系统编码失败，请重试';
+  } finally {
+    nextL3CodeLoading.value = false;
+  }
 }
-const nextL3Code = computed(() => (
-  segmentL2.value ? `${segmentL2.value}${nextL3Suffix()}` : ''
-));
 
 function handleL3Change(value: string): void {
   if (value === QUICK_CREATE_L3) {
@@ -472,6 +498,7 @@ function handleL3Change(value: string): void {
     // Never copy the material name into a new shared classification.
     createL3Form.value = { label: '' };
     createL3DialogVisible.value = true;
+    void refreshNextL3Code();
     return;
   }
   l3ManuallyEdited.value = true;
@@ -525,9 +552,17 @@ async function handleCreateL3(): Promise<void> {
     return;
   }
 
+  // 提交前重取一次编码: 弹窗可能开了很久, 期间别人建过分类。
+  // 拿不到编码就别提交 —— 提交一个空/陈旧的编码只会换来一句看不懂的 409。
+  await refreshNextL3Code();
+  const segmentCode = nextL3Code.value;
+  if (!segmentCode) {
+    ElMessage.error(nextL3CodeError.value || '系统编码尚未取到，请稍候重试');
+    return;
+  }
+
   createL3Submitting.value = true;
   try {
-    const segmentCode = nextL3Code.value;
     const response = await post<SegmentNode>(`/${factoryId.value}/material-segments`, {
       level: 3,
       segmentCode,
@@ -1781,8 +1816,16 @@ function handleSizeChange(size: number) {
           <el-input :model-value="segmentL2" disabled />
         </el-form-item>
         <el-form-item label="系统编码">
-          <el-input :model-value="nextL3Code" disabled />
-          <div class="field-hint">系统已检查当前 L2 下的编码并自动生成，无需手工填写。</div>
+          <el-input
+            :model-value="nextL3Code"
+            disabled
+            :placeholder="nextL3CodeLoading ? '正在取编码…' : '未取到编码'"
+          />
+          <!-- 这一句以前写「系统已检查当前 L2 下的编码」, 而它只检查了看得见的那些。 -->
+          <div v-if="!nextL3CodeError" class="field-hint">
+            由服务端分配，已跳过被历史（含已删除）分类占用的编码，无需手工填写。
+          </div>
+          <div v-else class="field-hint field-hint--error">{{ nextL3CodeError }}</div>
         </el-form-item>
         <el-form-item label="小类名称" required>
           <el-input v-model="createL3Form.label" maxlength="100" placeholder="例如：鱼类原料 / 鸡胸肉 / 箱类包材" />
@@ -1983,6 +2026,10 @@ function handleSizeChange(size: number) {
 
 .field-hint--matched {
   color: #67c23a;
+}
+
+.field-hint--error {
+  color: #f56c6c;
 }
 
 /* 与 SKU 新建保持相同的动态包装规则编辑体验 */

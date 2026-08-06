@@ -93,6 +93,27 @@ public class MaterialCodeSegmentController {
      * @param l3 L3 segmentCode (10位, cumulative), e.g. "0010010001"
      * @return { "success": true, "data": { "code": "0010010001000007" } }
      */
+    /**
+     * 取下一个可用的子编码 (只读, 不写库)。
+     *
+     * <p>前端「新建共享 L2/L3 分类」的系统编码字段必须走这里, <b>不要在前端算</b> ——
+     * 前端只看得到活着的子节点, 而编码被软删除的行继续占用 (见
+     * {@code MaterialCodeSegmentService#nextSegmentCode})。
+     */
+    @GetMapping("/next-code")
+    @Operation(summary = "取下一个可用子编码",
+            description = "按含软删除的口径分配, 与唯一约束 uk_mcs_factory_segment 对齐。前端不得自行计算。")
+    @RequirePermission({"production:read_write"})
+    public ApiResponse<Map<String, String>> nextCode(
+            @PathVariable @Parameter(description = "工厂ID", example = "F006") String factoryId,
+            @RequestParam @Parameter(description = "层级 1/2/3", example = "3") short level,
+            @RequestParam(required = false)
+            @Parameter(description = "父级段码 (L2/L3 必填)", example = "001001") String parentCode) {
+        String code = service.nextSegmentCode(factoryId, level, parentCode);
+        log.info("next-code: factoryId={} level={} parentCode={} -> {}", factoryId, level, parentCode, code);
+        return ApiResponse.success("取编码成功", Map.of("code", code));
+    }
+
     @GetMapping("/generate-code")
     @Operation(summary = "16位编码预览 (generate-code)",
             description = "根据级联选择的 L1/L2/L3 段码预览将生成的完整16位编码, 不写库. 字典未配置时 success=false.")

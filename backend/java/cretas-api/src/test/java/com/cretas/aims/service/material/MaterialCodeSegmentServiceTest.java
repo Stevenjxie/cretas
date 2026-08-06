@@ -238,7 +238,7 @@ class MaterialCodeSegmentServiceTest {
                     .segmentLabel("肉类")
                     .parentCode("001")
                     .build();
-            when(repo.existsByFactoryIdAndSegmentCode(FACTORY_ID, "001001")).thenReturn(false);
+            when(repo.existsBySegmentCodeIncludingDeleted(FACTORY_ID, "001001")).thenReturn(false);
             when(repo.findByFactoryIdAndSegmentCode(FACTORY_ID, "001")).thenReturn(Optional.of(parent));
             when(repo.save(any())).thenReturn(saved);
 
@@ -258,7 +258,8 @@ class MaterialCodeSegmentServiceTest {
         @Test
         @DisplayName("创建重复 segmentCode → 409")
         void create_duplicateCode_throws409() {
-            when(repo.existsByFactoryIdAndSegmentCode(FACTORY_ID, "001")).thenReturn(true);
+            when(repo.existsBySegmentCodeIncludingDeleted(FACTORY_ID, "001")).thenReturn(true);
+            when(repo.findLabelBySegmentCodeIncludingDeleted(FACTORY_ID, "001")).thenReturn(Optional.of("原料"));
 
             CreateMaterialCodeSegmentRequest req = CreateMaterialCodeSegmentRequest.builder()
                     .level((short) 1)
@@ -269,6 +270,87 @@ class MaterialCodeSegmentServiceTest {
             BusinessException ex = assertThrows(BusinessException.class,
                     () -> service.create(FACTORY_ID, req));
             assertEquals(409, ex.getCode());
+        }
+
+        /**
+         * 🔴 2026-08-06 客户事故的直接回归。
+         *
+         * <p>六膳门把 L2 {@code 001001} 连同 30 个 L3 全软删了。前端按**活着的**子节点
+         * 算 max+1 得到 {@code 0010010001} —— 而那个编码正被一条软删行占着。
+         * 旧代码用 {@code existsByFactoryIdAndSegmentCode}(被实体的 @Where 挡住看不见软删行)
+         * 做前置校验 → 放行 → INSERT 撞 {@code uk_mcs_factory_segment} → catch 里一律
+         * 抛「同一父级下已存在同名分类」, 提示用户改名字。
+         *
+         * <p><b>改名字永远修不好编码冲突</b> —— 所以这里断言两件事:
+         * 报的是**编码**冲突(不是重名), 且 hintTarget 指向 segmentCode。
+         */
+        @Test
+        @DisplayName("🔴 编码被已软删的分类占着 -> 报编码冲突, 不能报成重名")
+        void create_codeTakenBySoftDeletedRow_reportsCodeConflictNotDuplicateLabel() {
+            MaterialCodeSegment parent = buildSegment(1L, FACTORY_ID, (short) 2, "001001", "牛肉部位", "001");
+            when(repo.findByFactoryIdAndSegmentCode(FACTORY_ID, "001001")).thenReturn(Optional.of(parent));
+            // 活着的兄弟一个都没有 —— 全被软删了, 所以重名检查通过
+            when(repo.findByFactoryIdAndParentCodeOrderBySortOrderAscSegmentCodeAsc(FACTORY_ID, "001001"))
+                    .thenReturn(Collections.emptyList());
+            // 但编码被一条软删行占着
+            when(repo.existsBySegmentCodeIncludingDeleted(FACTORY_ID, "0010010001")).thenReturn(true);
+            when(repo.findLabelBySegmentCodeIncludingDeleted(FACTORY_ID, "0010010001"))
+                    .thenReturn(Optional.of("218厂腹肉心谷饲100天"));
+
+            CreateMaterialCodeSegmentRequest req = CreateMaterialCodeSegmentRequest.builder()
+                    .level((short) 3)
+                    .segmentCode("0010010001")
+                    .segmentLabel("牛柳/菲力")
+                    .parentCode("001001")
+                    .build();
+
+            BusinessException ex = assertThrows(BusinessException.class,
+                    () -> service.create(FACTORY_ID, req));
+
+            assertEquals(409, ex.getCode());
+            assertTrue(ex.getMessage().contains("0010010001"),
+                    "必须点名是哪个编码被占了, 实际: " + ex.getMessage());
+            assertTrue(ex.getMessage().contains("218厂腹肉心谷饲100天"),
+                    "必须点名被谁占着 —— 用户在界面上看不到那条已删除的分类, 实际: " + ex.getMessage());
+            assertFalse(ex.getMessage().contains("同名分类"),
+                    "⛔ 不能报成重名: 改名字修不好编码冲突, 实际: " + ex.getMessage());
+            assertEquals("segmentCode", ex.getHintTarget());
+        }
+
+        /**
+         * 分配口径必须与唯一约束口径一致 —— 只看活着的行就会分到被软删行占用的编码。
+         * 这条正是把「前端 max+1」搬到服务端的理由。
+         */
+        @Test
+        @DisplayName("🔴 分配下一个编码要跳过被软删行占用的号")
+        void nextSegmentCode_skipsCodesHeldBySoftDeletedRows() {
+            // 001001 下活着的子节点是 0 个, 但 0001..0003 被软删行占着
+            when(repo.findSegmentCodesByParentIncludingDeleted(FACTORY_ID, "001001"))
+                    .thenReturn(List.of("0010010001", "0010010002", "0010010003"));
+            when(repo.existsBySegmentCodeIncludingDeleted(FACTORY_ID, "0010010004")).thenReturn(false);
+
+            assertEquals("0010010004", service.nextSegmentCode(FACTORY_ID, (short) 3, "001001"),
+                    "被软删行占着的 0001-0003 必须跳过 —— 旧的前端算法会返回 0001");
+        }
+
+        @Test
+        @DisplayName("父级下一个子节点都没有时从 0001 起")
+        void nextSegmentCode_emptyParent_startsAtOne() {
+            when(repo.findSegmentCodesByParentIncludingDeleted(FACTORY_ID, "001009"))
+                    .thenReturn(Collections.emptyList());
+            when(repo.existsBySegmentCodeIncludingDeleted(FACTORY_ID, "0010090001")).thenReturn(false);
+
+            assertEquals("0010090001", service.nextSegmentCode(FACTORY_ID, (short) 3, "001009"));
+        }
+
+        @Test
+        @DisplayName("L1 取编码不需要父级")
+        void nextSegmentCode_level1_needsNoParent() {
+            when(repo.findSegmentCodesByParentIncludingDeleted(FACTORY_ID, null))
+                    .thenReturn(List.of("001", "002", "003"));
+            when(repo.existsBySegmentCodeIncludingDeleted(FACTORY_ID, "004")).thenReturn(false);
+
+            assertEquals("004", service.nextSegmentCode(FACTORY_ID, (short) 1, null));
         }
 
         @Test
