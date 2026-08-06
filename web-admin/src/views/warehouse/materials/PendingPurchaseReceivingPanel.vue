@@ -125,6 +125,11 @@ function onFactoryNumberChange(row: { factoryNumber?: string; originPlace?: stri
   if (matched?.originPlace) row.originPlace = matched.originPlace;
 }
 
+/** 客供料表单同样「选厂号 → 自动带产地」, 与采购收货一致。 */
+function onCustomerFactoryNumberChange(): void {
+  onFactoryNumberChange(customerForm.value);
+}
+
 /** 空串转 undefined —— 免得把「没填」写成一个空字符串, 之后分不清「填过空」和「没填」。 */
 function blankToUndefined(value: unknown): string | undefined {
   const text = String(value ?? '').trim();
@@ -154,6 +159,11 @@ const selectedCustomerLine = computed(() => selectedCustomerTask.value
 const customerForm = ref({
   receivedQuantity: 0,
   externalBatchNumber: '',
+  // 与采购收货同一套可追溯字段 —— 客供料与采购来料没有理由只有一边能记
+  // (客户台账「原辅材进出库明细」不区分来料是买的还是客户送的)。
+  contractNumber: '',
+  factoryNumber: '',
+  boxCount: undefined as number | undefined,
   productionDate: '',
   expireDate: '',
   originPlace: '',
@@ -537,6 +547,9 @@ async function openCustomerReceive(task: CustomerSuppliedReceivingTask) {
     customerForm.value = {
       receivedQuantity: Number(line.remainingReceivableQuantity),
       externalBatchNumber: '',
+      contractNumber: '',
+      factoryNumber: '',
+      boxCount: undefined,
       productionDate: '',
       expireDate: '',
       originPlace: '',
@@ -979,7 +992,41 @@ defineExpose({ loadTasks });
             <span class="unit-suffix">{{ displayUnit(selectedCustomerLine.unit) }}</span>
             <span class="quantity-limit">最多可收 {{ fmtQty(selectedCustomerLine.remainingReceivableQuantity) }}{{ displayUnit(selectedCustomerLine.unit) }}</span>
           </el-form-item>
-          <el-form-item label="客户批次号"><el-input v-model="customerForm.externalBatchNumber" maxlength="100" /></el-form-item>
+          <el-form-item label="客户批次号">
+            <el-input v-model="customerForm.externalBatchNumber" maxlength="100" placeholder="客户/供应商给的批号，如 20251029" />
+          </el-form-item>
+          <!-- 与采购收货同一套可追溯字段, 客户台账不区分来料是买的还是客户送的 -->
+          <el-form-item label="合同号">
+            <el-input v-model="customerForm.contractNumber" maxlength="100" placeholder="如 SAN-16572" />
+          </el-form-item>
+          <el-row :gutter="12">
+            <el-col :span="12">
+              <el-form-item label="厂号">
+                <el-select
+                  v-model="customerForm.factoryNumber"
+                  filterable
+                  allow-create
+                  clearable
+                  default-first-option
+                  placeholder="选或填"
+                  style="width: 100%"
+                  @change="onCustomerFactoryNumberChange"
+                >
+                  <el-option
+                    v-for="m in manufacturerOptions"
+                    :key="m.code"
+                    :label="`${m.code}${m.name ? ' ' + m.name : ''}`"
+                    :value="m.code"
+                  />
+                </el-select>
+              </el-form-item>
+            </el-col>
+            <el-col :span="12">
+              <el-form-item label="件数">
+                <el-input-number v-model="customerForm.boxCount" :min="0" :precision="0" :controls="false" style="width: 100%" />
+              </el-form-item>
+            </el-col>
+          </el-row>
           <el-row :gutter="12">
             <el-col :span="12"><el-form-item label="生产日期"><el-date-picker v-model="customerForm.productionDate" type="date" value-format="YYYY-MM-DD" style="width: 100%" /></el-form-item></el-col>
             <el-col :span="12"><el-form-item label="到期日期"><el-date-picker v-model="customerForm.expireDate" type="date" value-format="YYYY-MM-DD" style="width: 100%" /></el-form-item></el-col>

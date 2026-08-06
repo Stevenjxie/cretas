@@ -38,4 +38,15 @@ describe('采购收货多包装与基本单位落账契约', () => {
     expect(source).toContain('factoryNumber: blankToUndefined(item.factoryNumber)');
     expect(source).toContain('boxCount:');
   });
+
+  /**
+   * 客供料与采购来料没有理由只有一边能记 —— 客户台账不区分来料是买的还是客户送的。
+   * 2026-08-06 第一版只给采购收货加了字段, 客供料那半漏了。
+   */
+  it('客供料收货也要有同一套可追溯字段', () => {
+    expect(source).toContain('customerForm.contractNumber');
+    expect(source).toContain('customerForm.factoryNumber');
+    expect(source).toContain('customerForm.boxCount');
+    expect(source).toContain('onCustomerFactoryNumberChange');
+  });
 });

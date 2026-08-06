@@ -125,7 +125,12 @@ export interface WarehouseReceivingTaskFilters {
 export interface CreateCustomerSuppliedReceiptRequest {
   receivedQuantity: number;
   unit?: string;
+  /** 客户/供应商给的批号 —— 落 material_batches.supplier_batch_number, **不是厂号** */
   externalBatchNumber?: string;
+  /** 与采购收货同一套可追溯字段 (V20261029_61) */
+  contractNumber?: string;
+  factoryNumber?: string;
+  boxCount?: number;
   productionDate?: string;
   expireDate?: string;
   originPlace?: string;

@@ -513,7 +513,7 @@ async function handleGenerateLabel(row: TableRow) {
         </el-radio-group>
         <el-input
           v-model="searchKeyword"
-          placeholder="搜索批次号/原料名称"
+          placeholder="搜索批次号/原料名称/合同号/供应商批次号/厂号"
           :prefix-icon="Search"
           clearable
           style="width: 280px"
@@ -621,6 +621,17 @@ async function handleGenerateLabel(row: TableRow) {
         </el-table-column>
         <el-table-column prop="expiryDate" label="过期日期" width="120" />
         <el-table-column prop="createdAt" label="入库时间" width="180" :formatter="formatDateTimeCell" />
+        <!--
+          ⛔ 2026-08-06: 合同号/供应商批次号是 V20261029_61 加的, 收货时能填了,
+          但列表和详情**一个都没渲染** —— 写进去没人看得见, 等于没写。
+          客户按合同号追溯来料正是这个功能存在的理由。
+        -->
+        <el-table-column prop="contractNumber" label="合同号" width="130" show-overflow-tooltip>
+          <template #default="{ row }">{{ row.contractNumber || '-' }}</template>
+        </el-table-column>
+        <el-table-column prop="supplierBatchNumber" label="供应商批次号" width="130" show-overflow-tooltip>
+          <template #default="{ row }">{{ row.supplierBatchNumber || '-' }}</template>
+        </el-table-column>
         <el-table-column prop="factoryNumber" label="厂号" width="110" show-overflow-tooltip>
           <template #default="{ row }">{{ row.factoryNumber || '-' }}</template>
         </el-table-column>
@@ -674,6 +685,8 @@ async function handleGenerateLabel(row: TableRow) {
         <el-descriptions-item label="过期日期">{{ viewRecord.expiryDate || '-' }}</el-descriptions-item>
         <el-descriptions-item label="入库时间">{{ viewRecord.createdAt || '-' }}</el-descriptions-item>
         <el-descriptions-item label="备注">{{ viewRecord.notes || '-' }}</el-descriptions-item>
+        <el-descriptions-item label="合同号">{{ viewRecord.contractNumber || '-' }}</el-descriptions-item>
+        <el-descriptions-item label="供应商批次号">{{ viewRecord.supplierBatchNumber || '-' }}</el-descriptions-item>
         <el-descriptions-item label="厂号">{{ viewRecord.factoryNumber || '-' }}</el-descriptions-item>
         <el-descriptions-item label="产地">{{ viewRecord.originPlace || '-' }}</el-descriptions-item>
       </el-descriptions>
