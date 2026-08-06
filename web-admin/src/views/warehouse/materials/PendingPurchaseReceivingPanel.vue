@@ -424,7 +424,7 @@ async function createReceipt() {
         supplierBatchNumber: blankToUndefined(item.supplierBatchNumber),
         factoryNumber: blankToUndefined(item.factoryNumber),
         originPlace: blankToUndefined(item.originPlace),
-        boxCount: item.boxCount == null || item.boxCount === '' ? undefined : Number(item.boxCount),
+        boxCount: item.boxCount == null ? undefined : Number(item.boxCount),
       })),
     };
     const response = await post<PurchaseReceiptDetail>(`/${props.factoryId}/warehouse/receiving/receipts`, payload);
