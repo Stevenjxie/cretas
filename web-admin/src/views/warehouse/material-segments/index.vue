@@ -7,7 +7,6 @@ import { useAuthStore } from '@/store/modules/auth';
 import { usePermissionStore } from '@/store/modules/permission';
 import {
   findLabelConflict,
-  nextSegmentCode,
   SEGMENT_LEVEL_DEFINITIONS,
   type SegmentLevel,
 } from './materialSegmentRules';
@@ -80,11 +79,46 @@ const parentOptions = computed(() => {
   if (form.level === 1) return [];
   return form.level === 2 ? l1Options.value : l2Options.value;
 });
-const systemGeneratedCode = computed(() => (
-  form.id
-    ? form.segmentCode
-    : nextSegmentCode(flatRows.value, form.level, form.level === 1 ? null : form.parentCode)
-));
+/**
+ * 系统编码由**服务端**分配。
+ *
+ * ⛔ 2026-08-06 事故: 原来这里用 `nextSegmentCode(flatRows, ...)` 在前端对**活着的**
+ * 兄弟节点取 max+1。而分类是软删除、编码软删后仍被占用(唯一约束
+ * `uk_mcs_factory_segment` 不排除软删行, 且有外键指向该编码), 于是把一整层删干净后
+ * 分配出来的编码正是被软删行占着的那个 → INSERT 撞约束 → 用户看到「已存在同名分类」。
+ * 前端看不到软删行, 这件事只能服务端做。
+ *
+ * `nextSegmentCode` 纯函数保留(仍有单测覆盖编码形状), 但**不再用于真实分配**。
+ */
+const serverNextCode = ref('');
+const serverNextCodeError = ref('');
+const systemGeneratedCode = computed(() => (form.id ? form.segmentCode : serverNextCode.value));
+
+async function refreshServerNextCode(): Promise<void> {
+  serverNextCode.value = '';
+  serverNextCodeError.value = '';
+  if (form.id || !factoryId.value) return;
+  if (form.level > 1 && !form.parentCode) return;
+  try {
+    const response = await get<{ code: string }>(
+      `/${factoryId.value}/material-segments/next-code`,
+      { level: form.level, parentCode: form.level === 1 ? undefined : form.parentCode },
+    );
+    if (response.success && response.data?.code) {
+      serverNextCode.value = response.data.code;
+    } else {
+      serverNextCodeError.value = response.message || '取系统编码失败，请重试';
+    }
+  } catch (error) {
+    serverNextCodeError.value = error instanceof Error ? error.message : '取系统编码失败，请重试';
+  }
+}
+
+watch(
+  () => [form.id, form.level, form.parentCode] as const,
+  () => { void refreshServerNextCode(); },
+  { immediate: true },
+);
 
 watch(
   () => form.level,
@@ -317,7 +351,10 @@ onMounted(loadTree);
         </el-form-item>
         <el-form-item label="系统编码" required>
           <el-input :model-value="systemGeneratedCode" disabled placeholder="选择层级和上级后自动生成" />
-          <div class="field-hint">编码自动查重并按当前层级顺序生成，用户无需填写或记忆。</div>
+          <div v-if="!serverNextCodeError" class="field-hint">
+            由服务端分配，已跳过被历史（含已删除）分类占用的编码，用户无需填写或记忆。
+          </div>
+          <div v-else class="field-hint field-hint--error">{{ serverNextCodeError }}</div>
         </el-form-item>
         <el-form-item label="名称" required>
           <el-input v-model="form.segmentLabel" maxlength="100" placeholder="如：牛肉类 / 牛腱 / 卤牛腱" />
@@ -380,6 +417,10 @@ onMounted(loadTree);
 .field-hint {
   color: #909399;
   font-size: 12px;
+}
+
+.field-hint--error {
+  color: #f56c6c;
 }
 
 .page-subtitle {

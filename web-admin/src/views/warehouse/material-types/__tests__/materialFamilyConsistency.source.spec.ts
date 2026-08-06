@@ -120,10 +120,26 @@ describe('material type family source contract', () => {
     expect(source).toContain('level: 3');
     expect(source).toContain('parentCode: segmentL2.value');
     expect(source).toContain('创建并选中');
-    expect(source).toContain('const nextL3Code = computed');
     expect(source).toContain(':model-value="nextL3Code"');
     expect(source).toContain('已直接选中');
     expect(source).not.toContain('createL3Form.suffix');
     expect(source).not.toContain('L3 四位编码');
+  });
+
+  /**
+   * 🔴 2026-08-06 客户事故: 系统编码原来在前端对**活着的**兄弟节点取 max+1。
+   * 分类是软删除、编码软删后仍被占用, 于是把一层删干净后算出的编码正是被占的那个 →
+   * INSERT 撞 `uk_mcs_factory_segment` → 用户收到「已存在同名分类, 请改个名字」,
+   * 而改名字永远修不好编码冲突。
+   *
+   * 前端看不到软删行, 所以分配只能在服务端做。这里锁住的是**编码来源**,
+   * 不是某一种写法 —— 原断言 `const nextL3Code = computed` 锁的是后者。
+   */
+  it('系统编码必须向服务端取, 不能在前端 max+1', () => {
+    expect(source).toContain('material-segments/next-code');
+    expect(source).toContain('refreshNextL3Code');
+    // 前端自算的痕迹一个都不能留
+    expect(source).not.toContain('nextL3Suffix');
+    expect(source).not.toContain('padStart(4');
   });
 });
