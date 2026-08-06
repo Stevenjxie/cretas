@@ -84,10 +84,26 @@ function parseSeed(): Array<{ role: string; module: string; level: string }> {
 describe('餐饮部门 fallback 矩阵 vs L1 权威 (带标记的最高版本迁移)', () => {
   const rows = parseSeed();
 
-  it('解析到 seed 的全部 20 行 —— 迁移被改名/移动/重写时这条先红, 而不是静默跳过 0 行', () => {
-    expect(rows).toHaveLength(20);
+  // 2026-08-06 晚: 采购成为第五个部门 (V20261029_58), 载体角色 restaurant_purchaser。
+  // 当时那份迁移**没带 L1-AUTHORITY 标记**, 于是本守卫仍指着 4 角色 / 20 行的旧权威 ——
+  // 新增的第五个部门与第五个角色落在覆盖之外, 而这条测试是**绿的**。
+  // V20261029_61 完整重述 5 角色 × 6 模块 = 30 行并带标记, 这里同步到 30 / 5。
+  it('解析到 seed 的全部 30 行 —— 迁移被改名/移动/重写时这条先红, 而不是静默跳过 0 行', () => {
+    expect(rows).toHaveLength(30);
     expect(new Set(rows.map((r) => r.role))).toEqual(
-      new Set(['restaurant_manager', 'sales_manager', 'finance_manager', 'hr_admin']),
+      new Set([
+        'restaurant_manager', 'sales_manager', 'finance_manager', 'hr_admin',
+        'restaurant_purchaser',
+      ]),
+    );
+  });
+
+  it('🔴 六个模块一格不少 —— 加部门时漏改本守卫, 上一次就是这么绿着漏报的', () => {
+    expect(new Set(rows.map((r) => r.module))).toEqual(
+      new Set([
+        'restaurant', 'restaurantOps', 'restaurantMarketing',
+        'restaurantHr', 'restaurantFinance', 'restaurantProcurement',
+      ]),
     );
   });
 
