@@ -1,4 +1,4 @@
-import { displayUnit } from '@/utils/unitPricing';
+import { displayUnit, TRANSLATED_UNIT_CODES } from '@/utils/unitPricing';
 
 export interface ProductPackagingSpecInput {
   packageUnit?: string | null;
@@ -47,9 +47,25 @@ export function parseNetContent(
   return { amount: Number(gramsPerUnit) > 0 ? Number(gramsPerUnit) : 0, unit: 'g' };
 }
 
+/**
+ * 已存下来的规格串里把英文单位码翻成中文 —— 只动展示, 不改库里的值。
+ *
+ * 🔴 码为什么会出现在串里: 规格串由后端
+ * `ProductPackagingSpecServiceImpl#composeCanonicalSpecification` 拼, 曾经直接用
+ * `product.getUnit()`(规范化后的码)。后端已于 2026-08-06 改为用展示名, 但**存量行要等
+ * 下次保存箱规才会重拼**, 所以展示层这条翻译仍然必要。
+ *
+ * ⚠️ 参与翻译的码由 {@link TRANSLATED_UNIT_CODES} 从 UNIT_LABELS 推导, 不再手抄 ——
+ * 原先硬编码的 `box|case|slice` 漏了 `pack`, 客户就在规格列看到了 `1kg/pack 10pack/箱`。
+ */
+const TRANSLATABLE_UNIT_PATTERN = new RegExp(
+  `(^|[^A-Za-z])(${TRANSLATED_UNIT_CODES.join('|')})(?=\\/|\\s|$)`,
+  'gi',
+);
+
 export function displayProductSpecification(value: string | null | undefined): string {
   return String(value || '').replace(
-    /(^|[^A-Za-z])(box|case|slice)(?=\/|\s|$)/gi,
+    TRANSLATABLE_UNIT_PATTERN,
     (_match, prefix: string, unit: string) => `${prefix}${displayUnit(unit)}`,
   );
 }

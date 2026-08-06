@@ -58,4 +58,25 @@ describe('composeProductSpecification', () => {
     expect(displayProductSpecification('800g/box 8box/case 1slice/box')).toBe('800g/盒 8盒/箱 1片/盒');
     expect(displayProductSpecification('1kg/袋')).toBe('1kg/袋');
   });
+
+  /**
+   * 2026-08-06 客户报: 六膳门 BBQ猪五花 规格列显示 `1kg/pack 10pack/箱 10kg/箱`。
+   * `pack` 在 UNIT_LABELS 里明明有「包」, 只是这条正则当时手抄了 box|case|slice 三个码。
+   */
+  it('🔴 pack 也要翻 —— 翻译码表由 UNIT_LABELS 推导, 不再手抄', () => {
+    expect(displayProductSpecification('1kg/pack 10pack/箱 10kg/箱')).toBe('1kg/包 10包/箱 10kg/箱');
+    expect(displayProductSpecification('400g/bag 20bag/箱 8kg/箱')).toBe('400g/袋 20袋/箱 8kg/箱');
+    expect(displayProductSpecification('1kg/bottle 6bottle/crate')).toBe('1kg/瓶 6瓶/框');
+    expect(displayProductSpecification('100g/tray 10tray/箱')).toBe('100g/托盘 10托盘/箱');
+  });
+
+  it('国际计量符号不翻 —— kg 不能变成「公斤」', () => {
+    expect(displayProductSpecification('1kg/kg')).toBe('1kg/kg');
+    expect(displayProductSpecification('500g/g 250ml/L')).toBe('500g/g 250ml/L');
+  });
+
+  it('码嵌在英文单词里不误伤', () => {
+    expect(displayProductSpecification('backpack/箱')).toBe('backpack/箱');
+    expect(displayProductSpecification('1kg/package')).toBe('1kg/package');
+  });
 });

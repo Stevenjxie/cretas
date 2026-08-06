@@ -53,6 +53,7 @@ import { useListSummary } from '@/composables/useListSummary';
 import { formatSummaryForAI } from '@/utils/aiSummaryContext';
 import type { ListSummaryRequest } from '@/types/listSummary';
 import { canonicalUnitCode, displayUnit, mergeCanonicalUnitOptions } from '@/utils/unitPricing';
+import { displayProductSpecification } from '@/utils/productSpecification';
 import {
   canonicalSalesOrderItemPayload,
   packagingOptionsForUnit,
@@ -644,7 +645,8 @@ function productOptionLabel(product: TableRow): string {
   return [
     textPart(product.code),
     textPart(product.name) || textPart(product.productName),
-    textPart(product.specification) || textPart(product.packageSpec),
+    // 规格串里的英文单位码翻成中文 —— 与 SKU 管理页同一条口径, 别一处翻一处不翻。
+    displayProductSpecification(textPart(product.specification) || textPart(product.packageSpec)),
     productCategoryLabel(product),
   ].filter(Boolean).join(' / ');
 }
@@ -1129,9 +1131,9 @@ function isBoxUnconfigured(item: TableRow): boolean {
 
 // T130 Feature D — 该行规格展示 (只读): 产品字典 specification / packageSpec.
 function specDisplay(item: TableRow): string {
-  if (item.specification) return String(item.specification);
+  if (item.specification) return displayProductSpecification(String(item.specification));
   const p = products.value.find((x: TableRow) => x.id === item.productTypeId);
-  return String(p?.specification || p?.packageSpec || '');
+  return displayProductSpecification(String(p?.specification || p?.packageSpec || ''));
 }
 
 // 单位下拉先使用 SKU 基本单位，再追加该 SKU 的包装单位；仅未选 SKU 时保留旧的「份」占位。

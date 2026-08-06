@@ -8,6 +8,7 @@ import com.cretas.aims.repository.ProductTypeRepository;
 import com.cretas.aims.repository.product.ProductPackagingSpecRepository;
 import com.cretas.aims.service.product.ProductPackagingSpecService;
 import com.cretas.aims.service.unit.UnitContractService;
+import com.cretas.aims.service.unit.UnitDisplayNames;
 import com.cretas.aims.service.unit.UnitNormalizationResult;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
@@ -225,8 +226,25 @@ public class ProductPackagingSpecServiceImpl implements ProductPackagingSpecServ
         productTypeRepository.save(product);
     }
 
+    /**
+     * 规格串是<b>面向用户的文案</b>, 所以单位必须用展示名, 不能用库里存的码。
+     *
+     * <p>🔴 2026-08-06 客户报「规格里有英文单位」: 六膳门 <code>BBQ猪五花</code> 的规格显示
+     * <code>1kg/pack 10pack/箱 10kg/箱</code> —— 同一句里中英混排。根因就在这里:
+     * {@code product.getUnit()} 存的是规范化后的码({@code pack}/{@code box}/{@code bag},
+     * 写入侧 {@code RawMaterialTypeServiceImpl#normalizeInventoryUnit} 正是归一成码),
+     * 而 {@code spec.getPackageUnit()} 是用户填的中文「箱」, 于是拼出来一半码一半中文。</p>
+     *
+     * <p>⚠️ 2026-08-02 的排查曾判定这些串是「用户自由文本, 不该由代码改」—— 那条结论只查了
+     * {@code ProductTypeServiceImpl}(确实是裸传), <b>漏了本方法这个第二写入口</b>。
+     * prod 数据印证是机器拼的: 20+ 条全都严格是 {@code {净含量}/{码} {倍数}{码}/箱 {总量}/箱}
+     * 这一个形状, 且 07-23 → 08-06 持续新增。</p>
+     *
+     * <p>比较也随之改用展示名(纵深防御, 不是活路径): 「包装单位与基础单位不能是同一个单位」
+     * 已由 {@code validateRequested} 用规范码在更早处拦掉, 走不到这里。</p>
+     */
     private String composeCanonicalSpecification(ProductType product, List<ProductPackagingSpec> active) {
-        String baseUnit = product.getUnit() == null ? "" : product.getUnit().trim();
+        String baseUnit = displayUnit(product.getUnit());
         List<String> parts = new ArrayList<>();
         BigDecimal grams = positive(product.getGramsPerUnit());
         if (grams != null && !baseUnit.isBlank()) {
@@ -234,7 +252,7 @@ public class ProductPackagingSpecServiceImpl implements ProductPackagingSpecServ
         }
         for (ProductPackagingSpec spec : active) {
             BigDecimal factor = positive(spec.getConversionFactor());
-            String packageUnit = spec.getPackageUnit() == null ? "" : spec.getPackageUnit().trim();
+            String packageUnit = displayUnit(spec.getPackageUnit());
             if (factor != null && !baseUnit.isBlank() && !packageUnit.isBlank()
                     && !baseUnit.equals(packageUnit)) {
                 parts.add(decimalText(factor) + baseUnit + "/" + packageUnit);
@@ -244,6 +262,12 @@ public class ProductPackagingSpecServiceImpl implements ProductPackagingSpecServ
             }
         }
         return String.join(" ", parts);
+    }
+
+    /** 单位展示名; null / 空白统一收敛成空串, 调用方只需判 isBlank。 */
+    private String displayUnit(String unit) {
+        String display = UnitDisplayNames.display(unit);
+        return display == null ? "" : display.trim();
     }
 
     private String decimalText(BigDecimal value) {
