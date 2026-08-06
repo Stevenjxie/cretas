@@ -103,6 +103,30 @@ class MaterialBatchMapperSp4Test {
         assertNull(dto.getFactoryNumber());
     }
 
+    /**
+     * 🔴 2026-08-06 实测事故: 来料追溯字段(V20261029_61)加了实体列、加了 keyword 查询、
+     * 也加了前端表格列 —— <b>唯独漏了 toDTO 这一层</b>。表现是
+     * 「按合同号<b>搜得到</b>那条批次, 搜出来那一列却显示 <code>-</code>」,
+     * 前端毫无报错。这正是本文件顶上「Four-point DTO rule」第 4 点存在的理由。
+     *
+     * <p>判据: 一个字段横跨 实体 / 查询 / DTO / 界面 四处, 漏一处就是
+     * 「写得进去、查得到、看不见」——三者都要各自有断言。</p>
+     */
+    @Test
+    void toDTO_carriesTraceabilityFields() {
+        MaterialBatch batch = new MaterialBatch();
+        batch.setReceiptQuantity(new BigDecimal("100"));
+        batch.setContractNumber("SAN-16572");
+        batch.setSupplierBatchNumber("20251029");
+
+        MaterialBatchDTO dto = mapper.toDTO(batch);
+
+        assertEquals("SAN-16572", dto.getContractNumber(),
+                "合同号没进 DTO → 列表按合同号搜得到, 那一列却显示 -");
+        assertEquals("20251029", dto.getSupplierBatchNumber(),
+                "供应商批次号没进 DTO → 同上");
+    }
+
     // ── updateEntity null-guard ────────────────────────────────────────────
 
     @Test

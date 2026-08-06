@@ -153,6 +153,20 @@ public class MaterialBatchDTO {
     @Schema(description = "产地 (SP4-A4)")
     private String originPlace;
 
+    /**
+     * 合同号 (V20261029_61)。
+     *
+     * <p>⛔ 2026-08-06: 列加了、搜索也加了、列表列也加了, <b>唯独漏了这一层 DTO</b> ——
+     * 于是「按合同号搜得到, 搜出来那一列却显示 -」。同一个功能横跨
+     * 实体 / 查询 / DTO / 表格四处, 漏一处就是「查得到但看不见」。</p>
+     */
+    @Schema(description = "合同号 (来料追溯)")
+    private String contractNumber;
+
+    /** 供应商/客户给的批次号 (V20261029_61) —— 与系统生成的 batchNumber 是两件事。 */
+    @Schema(description = "供应商/客户批次号 (来料追溯)")
+    private String supplierBatchNumber;
+
     @Schema(description = "创建人ID")
     private Long createdBy;
 
