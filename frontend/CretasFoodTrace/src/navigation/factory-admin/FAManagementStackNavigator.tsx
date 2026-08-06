@@ -118,6 +118,7 @@ import WastageCreateScreen from "../../screens/restaurant/wastage/WastageCreateS
 import StocktakingListScreen from "../../screens/restaurant/stocktaking/StocktakingListScreen";
 import StocktakingExecuteScreen from "../../screens/restaurant/stocktaking/StocktakingExecuteScreen";
 import StocktakingSummaryScreen from "../../screens/restaurant/stocktaking/StocktakingSummaryScreen";
+import ProcurementDeliveryConfirmScreen from "../../screens/restaurant/procurement/ProcurementDeliveryConfirmScreen";
 import SupplierDeliveryListScreen from "../../screens/restaurant/supplier-delivery/SupplierDeliveryListScreen";
 import SupplierDeliveryCreateScreen from "../../screens/restaurant/supplier-delivery/SupplierDeliveryCreateScreen";
 import SupplierDeliveryDetailScreen from "../../screens/restaurant/supplier-delivery/SupplierDeliveryDetailScreen";
@@ -596,7 +597,7 @@ export function FAManagementStackNavigator() {
         options={{ title: "退货详情" }}
       />
 
-      {/* 餐饮模块 (restaurant mode only in UI, but routes registered for all) */}
+      {/* 餐饮模块：只为餐饮租户注册，避免工厂角色误入餐饮业务链 */}
       {isRestaurantMode && (
         <>
           <Stack.Screen name="RecipeList" component={RecipeListScreen} options={{ title: "配方管理" }} />
@@ -612,6 +613,7 @@ export function FAManagementStackNavigator() {
           <Stack.Screen name="StocktakingList" component={StocktakingListScreen} options={{ title: "盘点管理" }} />
           <Stack.Screen name="StocktakingExecute" component={StocktakingExecuteScreen} options={{ title: "执行盘点" }} />
           <Stack.Screen name="StocktakingSummary" component={StocktakingSummaryScreen} options={{ title: "盘点汇总" }} />
+          <Stack.Screen name="ProcurementDeliveryConfirm" component={ProcurementDeliveryConfirmScreen} options={{ title: "采购确认送货" }} />
           <Stack.Screen name="SupplierDeliveryList" component={SupplierDeliveryListScreen} options={{ title: "待验收入库" }} />
           <Stack.Screen name="SupplierDeliveryCreate" component={SupplierDeliveryCreateScreen} options={{ title: "新建送货单" }} />
           <Stack.Screen name="SupplierDeliveryDetail" component={SupplierDeliveryDetailScreen} options={{ title: "送货单详情" }} />

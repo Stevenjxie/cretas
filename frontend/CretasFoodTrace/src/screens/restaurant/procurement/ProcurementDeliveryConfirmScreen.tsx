@@ -1,8 +1,8 @@
-import React, { useCallback, useEffect, useState } from 'react';
-import { Alert, Image, ScrollView, StyleSheet, TouchableOpacity, View } from 'react-native';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import { Alert, Image, ScrollView, StyleSheet, View } from 'react-native';
 import * as FileSystem from 'expo-file-system';
 import * as ImagePicker from 'expo-image-picker';
-import { Button, Card, Text, TextInput } from 'react-native-paper';
+import { ActivityIndicator, Button, Card, HelperText, Text, TextInput, TouchableRipple } from 'react-native-paper';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useNavigation } from '@react-navigation/native';
 
@@ -10,9 +10,15 @@ import { attachmentApi } from '../../../services/api/attachmentApi';
 import { materialTypeApiClient, MaterialType } from '../../../services/api/materialTypeApiClient';
 import { purchaseRequisitionApiClient, PurchaseRequisition } from '../../../services/api/purchaseRequisitionApiClient';
 import { restaurantApiClient } from '../../../services/api/restaurantApiClient';
+import { supplierApiClient, Supplier } from '../../../services/api/supplierApiClient';
 import { speechRecognitionService } from '../../../services/voice/SpeechRecognitionService';
 import { useAuthStore } from '../../../store/authStore';
 import { handleError } from '../../../utils/errorHandler';
+import {
+  filterSupplierOptions,
+  getProcurementDeliverySubmitBlocker,
+  resolveRequisitionMaterialName,
+} from './procurementDeliveryForm';
 
 interface LineDraft {
   key: string;
@@ -50,23 +56,29 @@ export function ProcurementDeliveryConfirmScreen() {
   const [voiceUploading, setVoiceUploading] = useState(false);
   const [voiceRecording, setVoiceRecording] = useState(false);
   const [quotePhotos, setQuotePhotos] = useState<QuotePhoto[]>([]);
+  const [suppliers, setSuppliers] = useState<Supplier[]>([]);
   const [materials, setMaterials] = useState<MaterialType[]>([]);
   const [lines, setLines] = useState<LineDraft[]>([newLine()]);
+  const [loadingReferences, setLoadingReferences] = useState(true);
   const [submitting, setSubmitting] = useState(false);
 
   useEffect(() => {
     let alive = true;
     (async () => {
       try {
-        const [reqRes, matRes] = await Promise.all([
+        const [reqRes, matRes, supplierList] = await Promise.all([
           purchaseRequisitionApiClient.list({ status: 'APPROVED', page: 1, size: 30 }),
           materialTypeApiClient.getActiveMaterialTypes(factoryId),
+          supplierApiClient.getActiveSuppliers(factoryId),
         ]);
         if (!alive) return;
         setRequisitions(reqRes.data);
         setMaterials(matRes?.data || []);
+        setSuppliers(supplierList || []);
       } catch (error) {
-        handleError(error, { title: '采购待办加载失败', showAlert: false });
+        handleError(error, { title: '采购送货资料加载失败', showAlert: false });
+      } finally {
+        if (alive) setLoadingReferences(false);
       }
     })();
     return () => { alive = false; };
@@ -75,16 +87,29 @@ export function ProcurementDeliveryConfirmScreen() {
   const applyRequisition = (req: PurchaseRequisition) => {
     setSelectedReqId(req.id);
     setExpectedDeliveryDate(req.expectedDate || '');
-    setLines((req.requestedItems || []).map((item, index) => ({
-      key: `req-${req.id}-${index}`,
-      materialSearch: item.materialName || item.materialTypeId,
-      ingredientName: item.materialName || item.materialTypeId,
-      rawMaterialTypeId: item.materialTypeId,
-      quantity: String(item.quantity),
-      unit: item.unit || 'kg',
-      unitPrice: '',
-    })));
+    setLines((req.requestedItems || []).map((item, index) => {
+      const materialName = resolveRequisitionMaterialName(item.materialName, item.materialTypeId, materials);
+      return {
+        key: `req-${req.id}-${index}`,
+        materialSearch: materialName,
+        ingredientName: materialName,
+        rawMaterialTypeId: item.materialTypeId,
+        quantity: String(item.quantity),
+        unit: item.unit || 'kg',
+        unitPrice: '',
+      };
+    }));
   };
+
+  const filteredSuppliers = useMemo(
+    () => filterSupplierOptions(suppliers, supplierName),
+    [supplierName, suppliers],
+  );
+
+  const selectedSupplier = useMemo(
+    () => suppliers.find((supplier) => supplier.id === supplierId),
+    [supplierId, suppliers],
+  );
 
   const updateLine = (key: string, patch: Partial<LineDraft>) => {
     setLines((curr) => curr.map((line) => (line.key === key ? { ...line, ...patch } : line)));
@@ -96,6 +121,14 @@ export function ProcurementDeliveryConfirmScreen() {
       .filter((material) => !query || [material.name, material.code].some((v) => (v || '').toLowerCase().includes(query)))
       .slice(0, 5);
   };
+
+  const submitBlocker = useMemo(() => getProcurementDeliverySubmitBlocker({
+    supplierName,
+    deliveryDate,
+    lines,
+    quoteUploading: quotePhotos.some((photo) => photo.uploading),
+    voiceUploading,
+  }), [deliveryDate, lines, quotePhotos, supplierName, voiceUploading]);
 
   const guessExt = (uri: string, mime?: string): string => {
     if (mime?.startsWith('image/')) return mime.replace('image/', '');
@@ -196,20 +229,8 @@ export function ProcurementDeliveryConfirmScreen() {
 
   const submit = async () => {
     const validLines = lines.filter((line) => line.rawMaterialTypeId && Number(line.quantity) > 0);
-    if (!supplierName.trim() && !supplierId.trim()) {
-      Alert.alert('请填写供应商', '确认供应商后才能生成送货单草稿。');
-      return;
-    }
-    if (validLines.length === 0) {
-      Alert.alert('请填写明细', '至少一行食材数量大于 0。');
-      return;
-    }
-    if (quotePhotos.some((p) => p.uploading)) {
-      Alert.alert('照片上传中', '请等待报价照片上传完成后再提交。');
-      return;
-    }
-    if (voiceUploading) {
-      Alert.alert('语音上传中', '请等待录音上传完成后再提交。');
+    if (submitBlocker) {
+      Alert.alert('送货信息还不完整', submitBlocker);
       return;
     }
 
@@ -256,6 +277,13 @@ export function ProcurementDeliveryConfirmScreen() {
       </View>
 
       <ScrollView contentContainerStyle={styles.content}>
+        {loadingReferences ? (
+          <View style={styles.loadingRow}>
+            <ActivityIndicator size="small" />
+            <Text style={styles.meta}>正在加载报货、供应商和食材...</Text>
+          </View>
+        ) : null}
+
         <Text style={styles.sectionTitle}>已审批报货</Text>
         {requisitions.length === 0 ? (
           <Text style={styles.meta}>暂无已审批报货，可先手工录入明细。</Text>
@@ -264,16 +292,49 @@ export function ProcurementDeliveryConfirmScreen() {
             <Card key={req.id} style={[styles.card, selectedReqId === req.id && styles.cardSelected]} onPress={() => applyRequisition(req)}>
               <Card.Content>
                 <Text style={styles.cardTitle}>{req.requisitionNumber}</Text>
-                <Text style={styles.meta}>档口：{req.requesterDeptId || '—'} · 到货：{req.expectedDate || '—'}</Text>
+                <Text style={styles.meta}>
+                  食材：{req.requestedItems?.length || 0} 项 · 到货：{req.expectedDate || '未填写'}
+                </Text>
+                {req.reason ? <Text style={styles.meta}>用途：{req.reason}</Text> : null}
               </Card.Content>
             </Card>
           ))
         )}
 
         <Text style={styles.label}>供应商名称 *</Text>
-        <TextInput mode="outlined" value={supplierName} onChangeText={setSupplierName} style={styles.input} />
-        <Text style={styles.label}>供应商 ID（可选）</Text>
-        <TextInput mode="outlined" value={supplierId} onChangeText={setSupplierId} style={styles.input} />
+        <TextInput
+          mode="outlined"
+          value={supplierName}
+          onChangeText={(value) => {
+            setSupplierName(value);
+            setSupplierId('');
+          }}
+          placeholder="输入供应商名称、编号或联系人"
+          style={styles.input}
+        />
+        {filteredSuppliers.map((supplier) => (
+          <TouchableRipple
+            key={supplier.id}
+            onPress={() => {
+              setSupplierId(supplier.id);
+              setSupplierName(supplier.name);
+            }}
+            style={[styles.optionCard, supplierId === supplier.id && styles.optionCardSelected]}
+            borderless={false}
+          >
+            <View>
+              <Text style={styles.optionTitle}>{supplier.name}</Text>
+              <Text style={styles.optionMeta}>
+                {[supplier.supplierCode || supplier.code, supplier.contactPerson, supplier.phone].filter(Boolean).join(' · ') || '活跃供应商'}
+              </Text>
+            </View>
+          </TouchableRipple>
+        ))}
+        <HelperText type="info" visible={Boolean(supplierName.trim())}>
+          {selectedSupplier
+            ? `已匹配供应商：${selectedSupplier.name}`
+            : '未匹配供应商主数据，将按当前名称保存；请确认名称无误。'}
+        </HelperText>
         <Text style={styles.label}>送货日期</Text>
         <TextInput mode="outlined" value={deliveryDate} onChangeText={setDeliveryDate} style={styles.input} />
         <Text style={styles.label}>供应商联系记录</Text>
@@ -334,17 +395,46 @@ export function ProcurementDeliveryConfirmScreen() {
           <Card key={line.key} style={styles.card}>
             <Card.Content>
               <Text style={styles.cardTitle}>第 {index + 1} 行</Text>
-              <TextInput label="食材" mode="outlined" value={line.materialSearch} onChangeText={(v) => updateLine(line.key, { materialSearch: v, ingredientName: v })} style={styles.input} />
+              <TextInput
+                label="食材"
+                mode="outlined"
+                value={line.materialSearch}
+                onChangeText={(value) => updateLine(line.key, {
+                  materialSearch: value,
+                  ingredientName: value,
+                  rawMaterialTypeId: '',
+                })}
+                placeholder="输入食材名称或编码后选择"
+                style={styles.input}
+              />
               {filteredMaterials(line).map((material) => (
-                <TouchableOpacity key={material.id} onPress={() => updateLine(line.key, {
-                  rawMaterialTypeId: material.id,
-                  ingredientName: material.name,
-                  materialSearch: material.name,
-                  unit: line.unit || material.unit || 'kg',
-                })}>
-                  <Text style={styles.pickItem}>{material.name}</Text>
-                </TouchableOpacity>
+                <TouchableRipple
+                  key={material.id}
+                  onPress={() => updateLine(line.key, {
+                    rawMaterialTypeId: material.id,
+                    ingredientName: material.name,
+                    materialSearch: material.name,
+                    unit: line.unit || material.unit || 'kg',
+                  })}
+                  style={[styles.optionCard, line.rawMaterialTypeId === material.id && styles.optionCardSelected]}
+                  borderless={false}
+                >
+                  <View>
+                    <Text style={styles.optionTitle}>{material.name}</Text>
+                    <Text style={styles.optionMeta}>
+                      {[material.code, material.category, material.unit].filter(Boolean).join(' · ') || '食材主数据'}
+                    </Text>
+                  </View>
+                </TouchableRipple>
               ))}
+              {line.materialSearch.trim() && filteredMaterials(line).length === 0 ? (
+                <Text style={styles.emptyHint}>没有匹配食材，请联系管理员先维护食材主数据。</Text>
+              ) : null}
+              {line.rawMaterialTypeId ? (
+                <HelperText type="info" visible>
+                  已选择：{line.ingredientName || '未命名食材'}
+                </HelperText>
+              ) : null}
               <View style={styles.row}>
                 <TextInput label="数量" mode="outlined" keyboardType="decimal-pad" value={line.quantity} onChangeText={(v) => updateLine(line.key, { quantity: v })} style={[styles.input, styles.flex]} />
                 <TextInput label="单位" mode="outlined" value={line.unit} onChangeText={(v) => updateLine(line.key, { unit: v })} style={[styles.input, styles.flex]} />
@@ -354,7 +444,19 @@ export function ProcurementDeliveryConfirmScreen() {
           </Card>
         ))}
 
-        <Button mode="contained" loading={submitting} disabled={submitting} onPress={submit} style={styles.submit}>
+        <View style={[styles.submitStatus, submitBlocker ? styles.submitStatusBlocked : styles.submitStatusReady]}>
+          <Text style={submitBlocker ? styles.submitHintBlocked : styles.submitHintReady}>
+            {submitBlocker || '信息完整，可以生成送货单草稿。'}
+          </Text>
+        </View>
+        <Button
+          mode="contained"
+          loading={submitting}
+          disabled={submitting || Boolean(submitBlocker)}
+          onPress={submit}
+          style={styles.submit}
+          contentStyle={styles.primaryActionContent}
+        >
           生成送货单草稿
         </Button>
       </ScrollView>
@@ -379,6 +481,7 @@ const styles = StyleSheet.create({
   header: { backgroundColor: '#2E7D32', flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 4, paddingVertical: 8 },
   headerTitle: { fontSize: 18, fontWeight: 'bold', color: '#fff' },
   content: { padding: 16, paddingBottom: 40 },
+  loadingRow: { minHeight: 44, flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 4 },
   sectionTitle: { fontSize: 16, fontWeight: '700', marginTop: 12, marginBottom: 8 },
   sectionRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: 12 },
   label: { fontSize: 14, fontWeight: '500', marginTop: 10, marginBottom: 4 },
@@ -387,10 +490,31 @@ const styles = StyleSheet.create({
   cardSelected: { borderColor: '#2E7D32', borderWidth: 1 },
   cardTitle: { fontWeight: '700' },
   meta: { fontSize: 13, color: '#6B7280', marginTop: 4 },
-  pickItem: { paddingVertical: 6, color: '#1B65A8' },
+  optionCard: {
+    minHeight: 52,
+    justifyContent: 'center',
+    marginTop: 6,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#D1D5DB',
+    backgroundColor: '#FFFFFF',
+    overflow: 'hidden',
+  },
+  optionCardSelected: { borderColor: '#2E7D32', borderWidth: 2, backgroundColor: '#F0FDF4' },
+  optionTitle: { color: '#111827', fontWeight: '700' },
+  optionMeta: { color: '#6B7280', fontSize: 12, marginTop: 2 },
+  emptyHint: { color: '#9A3412', fontSize: 13, lineHeight: 19, marginTop: 8 },
   row: { flexDirection: 'row', gap: 8 },
   flex: { flex: 1 },
   submit: { marginTop: 20, borderRadius: 8 },
+  primaryActionContent: { minHeight: 48 },
+  submitStatus: { marginTop: 18, padding: 12, borderRadius: 8, borderWidth: 1 },
+  submitStatusBlocked: { backgroundColor: '#FFF7ED', borderColor: '#FED7AA' },
+  submitStatusReady: { backgroundColor: '#F0FDF4', borderColor: '#BBF7D0' },
+  submitHintBlocked: { color: '#9A3412', fontSize: 13, lineHeight: 19 },
+  submitHintReady: { color: '#166534', fontSize: 13, lineHeight: 19, fontWeight: '600' },
   photoActions: { flexDirection: 'row', gap: 8 },
   photoGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 8 },
   photoItem: { width: 108, alignItems: 'center' },
