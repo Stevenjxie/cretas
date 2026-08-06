@@ -224,17 +224,19 @@ const PERMISSION_MATRIX: Record<string, ModulePermissions> = {
     // 全写 'rw' —— 与 L1 相反。fallback **不是死代码**: DB 权限竞态/离线/接口
     // 失败的窗口里它是真实生效值(源码 "fallback to hardcoded for race/offline/error",
     // 且来源选择是**整体二选一**不是逐键)。所以那个后门在那个窗口里就是开着的。
-    dashboard: 'rw', production: '-', warehouse: 'rw', quality: '-',
-    procurement: 'rw', sales: '-', hr: '-', equipment: '-',
-    finance: 'rw', system: '-', analytics: 'rw', scheduling: '-',
-    // ⚠️ restaurant 与五个部门保持 'rw' 以对齐 Java PermissionServiceImpl
-    // (老板的 rw 在 Java 侧是**审批权**: 月对账确认 / 采购审批 / 领料审批)。
-    // L1 迁移 V20261029_56 把老板写成全模块 'r' —— 两者相反, 已上报待 Steve 定夺:
-    // 「全模块只读」若照字面执行, 老板会失去审批权。在他拍板前不擅自改。
+    // 2026-08-06 Steve 拍板:「保留吧 作为全局RW，也可以替代其它角色做OA」。
+    // 老板 = 全局读写, 能替各部门执行动作(采购审批 / 月对账确认 / 报货领料审批)。
+    // 三处口径本轮一起对齐: L1 迁移 V20261029_62 + Java PermissionServiceImpl
+    // (改成 ALL_MODULES 全 read_write) + 本 fallback。此前三处各说各话 ——
+    // L1 曾是全只读(V20261029_56, 已被 _62 推翻), Java 只列了 6 个模块 rw,
+    // fallback 又是另一套, 老板替不了 production/quality/sales/hr 那些岗位。
+    dashboard: 'rw', production: 'rw', warehouse: 'rw', quality: 'rw',
+    procurement: 'rw', sales: 'rw', hr: 'rw', equipment: 'rw',
+    finance: 'rw', system: 'rw', analytics: 'rw', scheduling: 'rw',
     restaurant: 'rw',
     restaurantOps: 'rw', restaurantMarketing: 'rw',
     restaurantHr: 'rw', restaurantFinance: 'rw', restaurantProcurement: 'rw',
-    rd: '-'
+    rd: 'rw'
   },
 
   // 厨师长：报货 / 领料 / 验收入库 —— 后厨那一摊, 不碰营销与财务

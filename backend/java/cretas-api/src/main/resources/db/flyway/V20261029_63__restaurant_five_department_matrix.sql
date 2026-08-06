@@ -1,4 +1,10 @@
--- V20261029_61: 餐饮五部门权限矩阵 —— 完整重述 (5 角色 × 6 模块 = 30 行)
+-- V20261029_63: 餐饮五部门权限矩阵 —— 完整重述 (5 角色 × 6 模块 = 30 行)
+--
+-- ⚠️ 本文件原为 V20261029_61, 合并后与另一个 session 的
+-- V20261029_61__receiving_traceability_fields.sql 撞号(prod 已应用他们那条),
+-- main 一度处于「后端启动即炸」状态, 被 FlywayVersionUniquenessTest 抓到。
+-- 判据(今天第三次撞): **改号前查 prod 的 flyway_schema_history**, 光看仓库文件名不够;
+-- 而且**合并之后要再查一次** —— 并发的人可能在你合并前后挑到同一个号。
 --
 -- L1-AUTHORITY: restaurant-department-matrix
 --

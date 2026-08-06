@@ -189,9 +189,13 @@ describe('餐饮四部门权限', () => {
 
   const JAVA_AUTHORITY: Record<string, Record<string, string>> = {
     // PermissionServiceImpl.java: restaurantOwnerPerms
+    // 2026-08-06 Steve 拍板: 老板 = 全局 RW(能替其它角色做 OA)。
+    // Java 侧已改成 ALL_MODULES 全 read_write, 这里补上此前漏列的
+    // production/quality/sales/hr —— 漏列的表现是老板替不了那些岗位。
     restaurant_owner: {
       dashboard: 'rw', restaurant: 'rw', procurement: 'rw',
       finance: 'rw', warehouse: 'rw', analytics: 'rw',
+      production: 'rw', quality: 'rw', sales: 'rw', hr: 'rw',
     },
     // PermissionServiceImpl.java: restaurantChefPerms（报货/领料 + 验收入库）
     restaurant_chef: {
