@@ -445,6 +445,27 @@ _QUOTA_LOCK = Lock()
 QUOTA_SKIP_TTL = 6 * 3600.0        # 6h: re-probe ~4×/day to catch monthly free-quota reset
 QUOTA_SKIP_TTL_MAX = 24 * 3600.0   # 退避上限 —— 每天仍至少试探一次, 接得住月度重置
 
+# ─── Re-probe 节流 (2026-08-06 prod incident: chain total_timeout) ───────────
+# 症状: 餐饮审计连续两轮 19/22, 报错是 `All providers exhausted ... chain:
+# total_timeout` 而**不是**「没有候选」。实测当时 CHAT/CHART 链里 19 个候选有 5 个
+# 是活的 —— 但第一个活的排在第 15 位。
+#
+# 根因: 一次失败请求会把沿途所有 quota-exhausted 的候选在**同一瞬间**打上标记,
+# 于是它们的 TTL 也**同时到期**。下一个请求进来, `_quota_should_skip` 逐个「放行
+# 一次 re-probe」, 一口气把 14 个死模型全部真探一遍 —— 每个都是真实 HTTP, 链的
+# 总预算(12s)在够到第 15 位那个活模型之前就烧光了。然后它们又被重新标记 6h,
+# 6h 后再来一遍 = 稳定复现的死循环。
+#
+# 修法: re-probe 是**全局限速**的, 不是每个 key 各自到期就放行。窗口到期后仍要
+# 抢到这个全局槽位才能真探; 抢不到就顺延一小段, **strikes 不变**(退避语义不受
+# 影响, 它衡量的是「这个模型连续几次确认没额度」, 与节流无关)。
+#
+# 为什么不改链的顺序: `SLOT_MODELS` 的顺序编码的是质量档次, 按「谁最近能用」重排
+# 会把弱模型顶到链头。被 skip 的候选本来就是**零成本**跳过(命中即 continue, 不发
+# HTTP), 所以死条目留在链头并不费预算 —— 真正费预算的只有这里的踩踏。
+QUOTA_REPROBE_MIN_GAP = 30.0       # 全进程两次 re-probe 之间的最小间隔(秒)
+_QUOTA_LAST_REPROBE_AT: float = 0.0
+
 # 2026-08-01: 上面那套 6h TTL 只活在**单个进程的内存**里, 于是 prod 日志
 # (07-25~08-01, 7 天) 显示:
 #     真发请求撞到的 403 : 608 次 ≈ 87/天
@@ -541,9 +562,20 @@ def _quota_should_skip(cb_key: str) -> bool:
         until = _QUOTA_EXHAUSTED_UNTIL.get(cb_key, 0.0)
         if until <= 0.0:
             return False
-        if time.time() < until:
+        now = time.time()
+        if now < until:
             return True
-        # 窗口到期 — 清掉标记放行一次 re-probe。strikes 保留: 若这次探针仍然 403,
+        # 窗口到期 — 但 re-probe 是全局限速的。一次失败请求会把沿途所有耗尽候选
+        # 在同一瞬间打标, 它们的 TTL 于是同时到期; 若在这里逐个放行, 单个请求就会
+        # 把十几个死模型全部真探一遍并烧光链预算(见 QUOTA_REPROBE_MIN_GAP 处的
+        # 事故记录)。抢不到全局槽位的顺延一小段再试。
+        global _QUOTA_LAST_REPROBE_AT
+        if now - _QUOTA_LAST_REPROBE_AT < QUOTA_REPROBE_MIN_GAP:
+            # 顺延, 且**不动 strikes** —— 这不是「又确认了一次没额度」, 只是没排上队。
+            _QUOTA_EXHAUSTED_UNTIL[cb_key] = now + QUOTA_REPROBE_MIN_GAP
+            return True
+        _QUOTA_LAST_REPROBE_AT = now
+        # 清掉标记放行一次 re-probe。strikes 保留: 若这次探针仍然 403,
         # 说明它确实还没恢复, 下一个窗口应该更长而不是退回 6h。
         del _QUOTA_EXHAUSTED_UNTIL[cb_key]
         return False
