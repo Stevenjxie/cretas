@@ -106,12 +106,19 @@ class WorkdeskRoleCapabilitiesToolTest {
                 .thenReturn(List.of(fake("a", "d")));
         when(toolRegistry.getExecutorsByWorkdeskRole(WorkdeskRole.QUALITY_SUPERVISOR))
                 .thenReturn(List.of(fake("b", "d"), fake("c", "d")));
+        // 餐饮两岗 (2026-08-06 新增): 目前没有任何工具带它们的显式 Workdesk 标记,
+        // 所以真实返回就是空 —— 这里如实 stub 成空, 而不是把它们从断言里排除掉。
+        when(toolRegistry.getExecutorsByWorkdeskRole(WorkdeskRole.RESTAURANT_MANAGER))
+                .thenReturn(List.of());
+        when(toolRegistry.getExecutorsByWorkdeskRole(WorkdeskRole.HEAD_CHEF))
+                .thenReturn(List.of());
 
         Map<String, Object> result = execute(Map.of());
 
         assertNull(result.get("role"));
         List<Map<String, Object>> roles = (List<Map<String, Object>>) result.get("roles");
-        assertEquals(3, roles.size());
+        assertEquals(5, roles.size(),
+                "无 role 参数时列出全部岗位; 岗位数随 WorkdeskRole 一起长");
         Map<String, Object> purchaser = roles.stream()
                 .filter(r -> "采购员".equals(r.get("role"))).findFirst().orElseThrow();
         assertEquals(1, ((Number) purchaser.get("total")).intValue());

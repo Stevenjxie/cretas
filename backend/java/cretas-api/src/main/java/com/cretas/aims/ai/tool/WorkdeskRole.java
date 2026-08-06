@@ -17,7 +17,26 @@ public enum WorkdeskRole {
 
     WAREHOUSE_KEEPER("仓管员"),
     PURCHASER("采购员"),
-    QUALITY_SUPERVISOR("质量主管");
+    QUALITY_SUPERVISOR("质量主管"),
+
+    /**
+     * 餐饮店长。系统角色码 {@code restaurant_manager}（prod 有真实用户），
+     * 显示名取自 {@code restaurantRoleExperience.ts} 的 {@code roleLabel: '餐饮店长'}
+     * 与工作台 {@code '今日营运台'}。
+     */
+    RESTAURANT_MANAGER("店长"),
+
+    /**
+     * 厨师长。系统角色码 {@code restaurant_chef}（prod 有真实用户），
+     * 显示名取自 {@code restaurantRoleExperience.ts} 的 {@code roleLabel: '厨师长'}
+     * 与工作台 {@code '后厨执行台'}。
+     *
+     * <p>⚠️ 截至 2026-08-06，**没有任何工具带厨师长的显式 Workdesk 标记**，
+     * 所以按岗位查它会得到空列表。这不是缺陷而是事实：归属只认工具注释里的
+     * 显式标记，不认 grep 提及；给 44 个餐饮工具分派归属是一次产品判断，
+     * 不是代码扫描能得出的结论。
+     */
+    HEAD_CHEF("厨师长");
 
     private final String displayName;
 
