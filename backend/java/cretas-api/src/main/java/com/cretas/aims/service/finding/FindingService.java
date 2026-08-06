@@ -25,17 +25,34 @@ public interface FindingService {
      *                     非空表示本次结果不完整——消费方不得把 countsByCode /
      *                     findings 当作「已确认无异常」来展示（禁止降级处理）。
      *                     用 {@link #complete()} 判断。
+     * @param skippedRules 数据不足以判断而**诚实跳过**的规则（见
+     *                     {@link FindingNotApplicableException}）。与
+     *                     {@code failedRules} 严格区分：跳过不是故障，
+     *                     **不影响** {@link #complete()}。
      */
     record Result(
             List<Finding> findings,
             List<String> checkedRules,
             int totalCount,
             Map<String, Integer> countsByCode,
-            List<String> failedRules
+            List<String> failedRules,
+            List<SkippedRule> skippedRules
     ) {
+        /**
+         * 5 参数重载。既有 12 处构造点（inventory 域与其测试）全是 5 参数，
+         * 保持它们逐字不变 —— 那些断言是对的，不该为了新字段去改。
+         */
+        public Result(List<Finding> findings, List<String> checkedRules, int totalCount,
+                      Map<String, Integer> countsByCode, List<String> failedRules) {
+            this(findings, checkedRules, totalCount, countsByCode, failedRules, List.of());
+        }
+
         /** true = 所有匹配 domain 的规则都跑完了；false = 至少一条规则失败，结果不完整。 */
         public boolean complete() {
             return failedRules.isEmpty();
         }
     }
+
+    /** 一条被诚实跳过的规则：名字 + 为什么。只有名字说不出为什么。 */
+    record SkippedRule(String ruleName, String reason) {}
 }
