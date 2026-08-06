@@ -1,4 +1,10 @@
--- V20261029_57: 采购独立成餐饮第五个部门 (restaurantProcurement)
+-- V20261029_58: 采购独立成餐饮第五个部门
+--
+-- ⚠️ 本文件两度改号: 先写 V20261029_57, 合并后发现另一个 session 把他们那条
+-- restaurant_manager_reads_hr 从 55 改名成 57 并已在 prod 应用(history 里
+-- 20261029.57 已占用, 且他们那条被应用了三次: 55 两次 + 57 一次)。改到 58。
+-- 判据: 改号前先查 prod 的 flyway_schema_history, 光看仓库文件名不够 ——
+-- 别人可能已经把号用掉了。 (restaurantProcurement)
 --
 -- 决定 (2026-08-06 Steve): 采购不并入市场, 独立成部门。
 -- 起因: 「采购并入市场」实施时发现 /procurement/requisitions/my 的 module 是
