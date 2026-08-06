@@ -334,7 +334,10 @@ async def gross_margin(request: Request, days: int = Query(30, ge=1, le=365)) ->
         return {"success": False, "message": "db pool unavailable"}
 
     try:
-        ans = await resolve_gross_margin(pool, factory_id, days=days, top_n=500)  # noqa: F841
+        # 同上: 转发 role, 否则 resolver 对所有人早退。本端点后面另有一套内联实现
+        # 兜住了结果, 所以此前没暴露 —— 但 resolver 的返回值 ans 实际是废的。
+        ans = await resolve_gross_margin(pool, factory_id, days=days, top_n=500,
+                                         role=_get_role(request))  # noqa: F841
     except Exception as e:
         logger.exception("[gross-margin] resolver failed")
         return {"success": False, "message": f"compute failed: {e}"}
@@ -724,7 +727,16 @@ async def summary(request: Request, days: int = Query(30, ge=1, le=365)) -> Dict
     }
     try:
         from smartbi.gold.restaurant.restaurant_ops_router import resolve_gross_margin
-        margin_ans = await resolve_gross_margin(pool, factory_id, days=days, top_n=100)
+        # 🔴 必须转发 role: resolve_gross_margin 用
+        # `can_view_prices = bool(role) and role in PRICE_VIEW_ROLES` 把毛利门住,
+        # 不传时 role=None → bool(None)=False → **对所有调用方(含超管)早退**,
+        # kpis 为空, 下面这段 for 一条都进不去, margin_totals 原样保持全 0。
+        # 表现: 财务部门驾驶舱的「毛利额」「已核成本菜品」恒为 0/「—」,
+        # 而 /restaurant-ops/gross-margin 专用页同期算得出 67.69% —— 两处不一致。
+        # 同一个 bug 本文件第 613 行的 store-margin 已经修过一次(注释犹在),
+        # 这个调用点漏了 —— 一个闸两处承载, 修了一处不等于修完。
+        margin_ans = await resolve_gross_margin(pool, factory_id, days=days, top_n=100,
+                                                role=_get_role(request))
         if margin_ans.kpis:
             for kpi in margin_ans.kpis:
                 if kpi["title"] == "总营收":
