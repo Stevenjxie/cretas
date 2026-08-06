@@ -76,9 +76,12 @@ describe('餐饮菜单与路由的 module 必须一致', () => {
   });
 });
 
-describe('餐饮功能页按四部门归属', () => {
+describe('餐饮功能页按五部门归属', () => {
+  // 2026-08-06: 采购成为第五个部门 (Steve 拍板)。这个 Set 是写死的 ——
+  // 加部门时漏改它, 新部门的页会被判成「还没归到部门」。
   const DEPT_MODULES = new Set([
     'restaurantOps', 'restaurantMarketing', 'restaurantHr', 'restaurantFinance',
+    'restaurantProcurement',
   ]);
 
   /**

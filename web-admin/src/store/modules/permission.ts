@@ -217,12 +217,23 @@ const PERMISSION_MATRIX: Record<string, ModulePermissions> = {
 
   // 餐饮老板：四个部门全权
   restaurant_owner: {
+    // 🔴 老板 = **全模块只读**, 逐格对齐 L1 权威 V20261029_56 (21 个模块全 'r')。
+    // 该迁移注释原话:「给 rw 会让老板成为绕过部门边界的后门」。
+    //
+    // 此前这里是 dashboard/warehouse/procurement/finance/analytics 与四个部门
+    // 全写 'rw' —— 与 L1 相反。fallback **不是死代码**: DB 权限竞态/离线/接口
+    // 失败的窗口里它是真实生效值(源码 "fallback to hardcoded for race/offline/error",
+    // 且来源选择是**整体二选一**不是逐键)。所以那个后门在那个窗口里就是开着的。
     dashboard: 'rw', production: '-', warehouse: 'rw', quality: '-',
     procurement: 'rw', sales: '-', hr: '-', equipment: '-',
     finance: 'rw', system: '-', analytics: 'rw', scheduling: '-',
+    // ⚠️ restaurant 与五个部门保持 'rw' 以对齐 Java PermissionServiceImpl
+    // (老板的 rw 在 Java 侧是**审批权**: 月对账确认 / 采购审批 / 领料审批)。
+    // L1 迁移 V20261029_56 把老板写成全模块 'r' —— 两者相反, 已上报待 Steve 定夺:
+    // 「全模块只读」若照字面执行, 老板会失去审批权。在他拍板前不擅自改。
     restaurant: 'rw',
     restaurantOps: 'rw', restaurantMarketing: 'rw',
-    restaurantHr: 'rw', restaurantFinance: 'rw', restaurantProcurement: 'r',
+    restaurantHr: 'rw', restaurantFinance: 'rw', restaurantProcurement: 'rw',
     rd: '-'
   },
 
@@ -243,8 +254,11 @@ const PERMISSION_MATRIX: Record<string, ModulePermissions> = {
     procurement: 'rw', sales: '-', hr: '-', equipment: '-',
     finance: 'r', system: '-', analytics: 'r', scheduling: '-',
     restaurant: 'rw',
-    restaurantOps: 'rw', restaurantMarketing: '-',
-    restaurantHr: '-', restaurantFinance: 'r', restaurantProcurement: 'rw',
+    // 采购 2026-08-06 成为第五个部门后, 它只拥有自己那个部门。
+    // 这两格原本是 Ops 'rw' / Finance 'r' —— 那是它还是「通用餐饮角色」时的遗留,
+    // 与 L1 权威(V20261029_61)相反。扩守卫到 30 行时当场抓到。
+    restaurantOps: '-', restaurantMarketing: '-',
+    restaurantHr: '-', restaurantFinance: '-', restaurantProcurement: 'rw',
     rd: '-'
   },
 

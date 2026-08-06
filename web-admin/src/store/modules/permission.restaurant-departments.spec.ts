@@ -72,17 +72,21 @@ describe('餐饮四部门权限', () => {
     expect(store.canWrite('restaurantHr')).toBe(false);
   });
 
-  it('restaurant_purchaser 只进运营与财务', () => {
+  // 2026-08-06: 采购独立成第五个部门(Steve 拍板)。此前它是「通用餐饮角色」,
+  // 能进运营与财务 —— 那两条断言编码的是旧模型, 反转成新事实。
+  it('restaurant_purchaser 只进自己的采购部门', () => {
     const store = storeAs('restaurant_purchaser');
-    expect(store.canAccess('restaurantOps')).toBe(true);
-    expect(store.canAccess('restaurantFinance')).toBe(true);
+    expect(store.canAccess('restaurantProcurement')).toBe(true);
+    expect(store.canAccess('restaurantOps')).toBe(false);
+    expect(store.canAccess('restaurantFinance')).toBe(false);
     expect(store.canAccess('restaurantMarketing')).toBe(false);
     expect(store.canAccess('restaurantHr')).toBe(false);
   });
 
-  it('采购在运营可写，在财务只读', () => {
+  it('采购在自己部门可写，别的部门连看都不行', () => {
     const store = storeAs('restaurant_purchaser');
-    expect(store.canWrite('restaurantOps')).toBe(true);
+    expect(store.canWrite('restaurantProcurement')).toBe(true);
+    expect(store.canWrite('restaurantOps')).toBe(false);
     expect(store.canWrite('restaurantFinance')).toBe(false);
   });
 
