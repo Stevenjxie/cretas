@@ -100,6 +100,26 @@ public class PurchaseReceiveItem extends BaseEntity {
     @Column(name = "origin_place", length = 200)
     private String originPlace;
 
+    /**
+     * 合同号 —— <b>行级</b>, 不是订单级。
+     *
+     * <p>客户实测: 同一张 PO 下 08-02 那批是 SAN-16572、08-04 那批是 SAN-16562,
+     * {@code purchase_orders.contract_number} 装不下 (V20261029_57)。</p>
+     */
+    @Column(name = "contract_number", length = 100)
+    private String contractNumber;
+
+    /**
+     * 供应商/客户给的批次号 —— 与系统生成的 {@code material_batches.batch_number}
+     * 是两件事, 不可互相占用。
+     */
+    @Column(name = "supplier_batch_number", length = 100)
+    private String supplierBatchNumber;
+
+    /** 件数(件/箱) —— 与重量并存: 抄码来料件数固定而重量不定。 */
+    @Column(name = "box_count")
+    private Integer boxCount;
+
     @Column(name = "remark", length = 500)
     private String remark;
 

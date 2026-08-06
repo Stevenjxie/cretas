@@ -1857,6 +1857,11 @@ public class PurchaseServiceImpl implements PurchaseService {
             item.setQcResult(itemDTO.getQcResult());
             item.setFactoryNumber(itemDTO.getFactoryNumber());
             item.setOriginPlace(itemDTO.getOriginPlace());
+            // V20261029_57: 客户台账要的可追溯三件套 —— 合同号/供应商批次号/件数。
+            // 合同号是**行级**: 同一张 PO 下不同来料批可以是不同合同号(SAN-16572/SAN-16562)。
+            item.setContractNumber(itemDTO.getContractNumber());
+            item.setSupplierBatchNumber(itemDTO.getSupplierBatchNumber());
+            item.setBoxCount(itemDTO.getBoxCount());
             item.setRemark(itemDTO.getRemark());
             record.getItems().add(item);
 
@@ -3054,6 +3059,11 @@ public class PurchaseServiceImpl implements PurchaseService {
         batch.setPurchaseDate(record.getReceiveDate());
         batch.setFactoryNumber(item.getFactoryNumber());
         batch.setOriginPlace(item.getOriginPlace());
+        // 一并带进批次, 否则「按合同号/供应商批次号查这批料」查不到 —— 收货行是过程单据,
+        // 真正被库存侧查询的是批次。件数同理(抄码来料件数固定而重量不定)。
+        batch.setContractNumber(item.getContractNumber());
+        batch.setSupplierBatchNumber(item.getSupplierBatchNumber());
+        batch.setBoxCount(item.getBoxCount());
         // 🔒🔒 QC 入库门 (食品安全, 2026-07-04): 质检结果非 PASS 的收货行不得直接进可用库存,
         // 自动隔离为 DEFECTIVE (不良品) — FEFO/领料/销售查询均过滤 status='AVAILABLE', 自动排除
         // DEFECTIVE。质检经理后续用 ReleaseDecisionTool 复核放行(→AVAILABLE)/退货(→保持DEFECTIVE)。

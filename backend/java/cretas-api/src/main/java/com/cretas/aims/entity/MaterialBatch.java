@@ -159,6 +159,24 @@ public class MaterialBatch extends BaseEntity {
     @Column(name = "origin_place", length = 200)
     private String originPlace;
 
+    /**
+     * 合同号 —— 从收货行带入 (V20261029_57)。
+     *
+     * <p>客户按合同号追溯来料是常态; 同一张采购单的不同来料批可以是不同合同号,
+     * 所以记在批次上而不是订单上。</p>
+     */
+    @Column(name = "contract_number", length = 100)
+    private String contractNumber;
+
+    /**
+     * 供应商/客户给的批次号 —— 从收货行带入。
+     *
+     * <p>⚠️ 与 {@link #batchNumber} 是两件事: 那个是<b>系统生成</b>的库存批次号
+     * (MT-20260806-9583), 这个是外部标识 (20251029)。占用会让两个语义打架。</p>
+     */
+    @Column(name = "supplier_batch_number", length = 100)
+    private String supplierBatchNumber;
+
     /** 入库类型 */
     @Enumerated(EnumType.STRING)
     @Column(name = "inbound_type", length = 30)
