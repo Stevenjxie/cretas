@@ -1,6 +1,7 @@
 package com.cretas.aims.service.finding.impl;
 
 import com.cretas.aims.service.finding.Finding;
+import com.cretas.aims.service.finding.FindingNotApplicableException;
 import com.cretas.aims.service.finding.FindingProvider;
 import com.cretas.aims.service.finding.FindingService;
 import lombok.extern.slf4j.Slf4j;
@@ -41,6 +42,7 @@ public class FindingServiceImpl implements FindingService {
         List<Finding> all = new ArrayList<>();
         List<String> checked = new ArrayList<>();
         List<String> failed = new ArrayList<>();
+        List<SkippedRule> skipped = new ArrayList<>();
 
         for (FindingProvider provider : providers) {
             if (!provider.domain().equals(domain)) {
@@ -49,6 +51,12 @@ public class FindingServiceImpl implements FindingService {
             try {
                 all.addAll(provider.detect(factoryId));
                 checked.add(provider.ruleName());
+            } catch (FindingNotApplicableException notApplicable) {
+                // 数据不足以判断 —— 诚实跳过, 不是故障。必须在 catch(Exception)
+                // 之前, 否则会被下面那条当成失败吞掉, 用户看到的就成了「服务坏了」。
+                log.info("Finding 规则数据不足, 诚实跳过: rule={}, domain={}, factoryId={}, reason={}",
+                        provider.ruleName(), domain, factoryId, notApplicable.reason());
+                skipped.add(new SkippedRule(provider.ruleName(), notApplicable.reason()));
             } catch (Exception e) {
                 log.warn("Finding 规则执行失败, 已从 checkedRules 剔除: rule={}, domain={}, factoryId={}",
                         provider.ruleName(), domain, factoryId, e);
@@ -66,6 +74,6 @@ public class FindingServiceImpl implements FindingService {
         List<Finding> top = total > inlineMax ? all.subList(0, inlineMax) : all;
 
         return new Result(List.copyOf(top), List.copyOf(checked), total,
-                Map.copyOf(countsByCode), List.copyOf(failed));
+                Map.copyOf(countsByCode), List.copyOf(failed), List.copyOf(skipped));
     }
 }
