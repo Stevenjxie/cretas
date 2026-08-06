@@ -28,6 +28,8 @@ from smartbi.gold import (
     channel_breakdown,
     daily_trend,
     data_range,
+    detect_share_spike,
+    detect_type_concentration,
     discount_breakdown,
     finance_summary,
     kpi_summary,
@@ -1329,3 +1331,36 @@ async def post_restaurant_tiered_answer(
     except Exception as e:
         logger.warning(f"[gold-reads] restaurant QueryPlan endpoint failed: {e}")
         return {"delegate": False}
+
+
+_WASTAGE_RULES = {
+    "share_spike": detect_share_spike,
+    "type_concentration": detect_type_concentration,
+}
+
+
+@router.get("/restaurant-wastage-findings")
+async def get_restaurant_wastage_findings(
+    request: Request,
+    rule: str = Query(..., description="share_spike | type_concentration"),
+    factory_id: Optional[str] = Query(None, description="belt-and-suspenders; defaults to JWT tenant"),
+):
+    """餐饮损耗发现规则。一次只算被问的那一条 (Java 侧一条规则一个 provider)。
+
+    返回 {rule, applicable, skip_reason, findings[]}。
+    applicable=False 表示「数据没采集到」, 与 findings=[] 的「真的没有」不同 ——
+    Java 侧据此分别落进 skippedRules / checkedRules。
+
+    ⛔ 刻意不 try/except: 查询失败必须让 HTTP 层返 5xx, Java 侧才能落进
+    failedRules 显示「检查失败」。在这里吞成 {"findings": []} 会被渲染成
+    「均正常」, 那就是把故障说成健康。
+    """
+    detector = _WASTAGE_RULES.get(rule)
+    if detector is None:
+        raise HTTPException(
+            status_code=400,
+            detail=f"unknown rule {rule!r}; expected one of {sorted(_WASTAGE_RULES)}",
+        )
+    fid = _resolve_tenant(factory_id)
+    pool = await get_pg_pool()
+    return await detector(pool, fid)

@@ -288,3 +288,22 @@ def test_r1_window_boundaries_are_exclusive_and_non_overlapping():
     assert "date >= CURRENT_DATE" not in base_sql
     # base 的新端 = cur 的旧端, 用 <= / > 拼接, 不重叠
     assert "date <= CURRENT_DATE - $3::int" in base_sql
+
+
+# ── 注册与路由 ────────────────────────────────────────────────────────
+
+def test_both_rules_importable_from_package_root():
+    """gold_reads 从 smartbi.gold 导入 —— import 块和 __all__ 缺一不可。"""
+    import smartbi.gold as g
+
+    assert hasattr(g, "detect_share_spike")
+    assert hasattr(g, "detect_type_concentration")
+    assert "detect_share_spike" in g.__all__
+    assert "detect_type_concentration" in g.__all__
+
+
+def test_endpoint_registered_on_gold_router():
+    import smartbi.api.gold_reads as gr
+
+    paths = {r.path for r in gr.router.routes}
+    assert "/gold/restaurant-wastage-findings" in paths
