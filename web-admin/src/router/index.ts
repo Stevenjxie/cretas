@@ -1765,6 +1765,14 @@ const businessRoutes: RouteRecordRaw[] = [
             meta: { requiresAuth: true, title: '市场', module: 'restaurantMarketing' }
           },
           {
+            // 采购 2026-08-06 独立成第五个部门 (Steve 拍板)。
+            path: 'procurement',
+            name: 'RestaurantDeptProcurement',
+            component: () => import('@/views/restaurant/departments/DepartmentDashboard.vue'),
+            props: { dept: 'procurement' },
+            meta: { requiresAuth: true, title: '采购', module: 'restaurantProcurement' }
+          },
+          {
             path: 'hr',
             name: 'RestaurantDeptHr',
             component: () => import('@/views/restaurant/departments/DepartmentDashboard.vue'),

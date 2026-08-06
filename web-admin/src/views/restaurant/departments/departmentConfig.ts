@@ -9,7 +9,7 @@
  * 始终明标，不能把模拟行伪装成真实平台预订。
  */
 
-export type DeptKey = 'ops' | 'marketing' | 'hr' | 'finance';
+export type DeptKey = 'ops' | 'marketing' | 'hr' | 'finance' | 'procurement';
 
 /** KPI 的取值路径与格式。`money: true` 的项在无价格权限时显示「—」。 */
 export interface DeptKpi {
@@ -241,6 +241,70 @@ export const DEPARTMENTS: Record<DeptKey, DeptConfig> = {
     ],
   },
 
+  /**
+   * 采购（2026-08-06 Steve 拍板独立成第五个部门）。
+   *
+   * ⚠️ KPI 只用**实打过接口确认存在**的字段。采购最想看的「供应商比价 / 采购价
+   * 异常 / 采购订单」在 MOCK_REST 是 0 行（`agg_supplier_price` 空），所以本部门
+   * 先按「进货与消耗」组织：领料是采购需求信号，盘点差异是账实校验，
+   * TOP 食材是谈价对象。比价类等数据接进来再加，**不先摆一个恒空的卡**。
+   */
+  procurement: {
+    key: 'procurement',
+    title: '采购',
+    description: '从领用量、进货与盘点差异里看清该买多少、该跟谁谈价。',
+    responsibilities: ['进货与验收', '领用需求', '账实差异'],
+    handoff: '价格口径与对账交财务；出品与备料需求交店长。',
+    module: 'restaurantProcurement',
+    accent: '#2F6FB4',
+    source: 'ops-summary',
+    kpis: [
+      { label: '领料成本', path: 'totals.totalReqCost', money: true, hint: '窗口内领用食材成本，是采购量的直接依据' },
+      { label: '领料单数', path: 'totals.totalRequisitions' },
+      { label: '领料总量', path: 'totals.totalReqQty' },
+      { label: '盘亏总量', path: 'totals.totalShortage', hint: '账面多于实盘的部分' },
+      { label: '盘盈总量', path: 'totals.totalSurplus' },
+      { label: '有数据天数', path: 'totals.activeDays', hint: '窗口内实际有记录的天数' },
+    ],
+    trend: {
+      title: '领料成本趋势',
+      unit: '元',
+      money: true,
+      shape: 'ops-kpi',
+      endpoint: '/api/smartbi/restaurant-ops/daily-trend?kpi_kind=requisition_cost&days={days}',
+    },
+    ranking: {
+      title: '领用成本前列食材（优先谈价对象）',
+      path: 'top5Ingredients',
+      nameKey: 'name',
+      categoryKey: 'category',
+      valueKey: 'cost',
+      valueLabel: '领用成本',
+      valueMoney: true,
+    },
+    entries: [
+      { title: '供应商进货录入', path: '/restaurant/supplier-delivery' },
+      { title: '领料管理', path: '/restaurant/requisitions' },
+      { title: '盘点管理', path: '/restaurant/stocktaking' },
+    ],
+    questions: [
+      '最近30天领料趋势',
+      '哪些食材经常盘亏',
+      '最近7天损耗最多的食材',
+    ],
+    emptyState: {
+      title: '还没有可用的进货与领用数据',
+      detail: '采购看板依赖领料、盘点记录。这些还没开始录入时，这里不显示 0，而是空着。',
+      todos: [
+        '先在「领料管理」录入日常领用',
+        '按周做一次盘点，账实差异才有对照',
+        '供应商送货用「供应商进货录入」登记',
+      ],
+      actionLabel: '去领料管理',
+      actionPath: '/restaurant/requisitions',
+    },
+  },
+
   hr: {
     key: 'hr',
     title: '人事',
@@ -275,7 +339,7 @@ export const DEPARTMENTS: Record<DeptKey, DeptConfig> = {
   },
 };
 
-export const DEPARTMENT_ORDER: DeptKey[] = ['ops', 'marketing', 'hr', 'finance'];
+export const DEPARTMENT_ORDER: DeptKey[] = ['ops', 'marketing', 'procurement', 'hr', 'finance'];
 
 /** 从接口返回的对象里按 'a.b.c' 取值；取不到返回 undefined（不返回 0）。 */
 export function pickPath(source: unknown, path: string): unknown {
