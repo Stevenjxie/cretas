@@ -717,7 +717,7 @@ import WorkflowProcessNode from './WorkflowProcessNode.vue';
 import WorkflowAuxiliaryNode from './WorkflowAuxiliaryNode.vue';
 import WorkflowPackagingNode from './WorkflowPackagingNode.vue';
 import WorkflowByproductNode from './WorkflowByproductNode.vue';
-import ByproductBindingDialog from './ByproductBindingDialog.vue';
+import ByproductBindingDialog, { type ByproductMaterialOption } from './ByproductBindingDialog.vue';
 import {
   buildRawMaterialSegmentTree,
   isRawMaterialOption,
@@ -765,7 +765,12 @@ import {
   type SeasoningWorkspace,
 } from '@/api/bom';
 import { bigCategoryOf } from '@/utils/materialCategory';
-import { bomTabAllowsMaterial } from '@/views/production/bom/bomCategoryTabs';
+import {
+  selectAuxiliaryMaterials,
+  selectByproductMaterials,
+  selectPackagingMaterials,
+  type BomOverlayMaterialRow,
+} from './bomOverlayMaterialSources';
 import SeasoningBindingDialog, { type SeasoningMaterialOption } from '@/views/production/bom/seasoning/SeasoningBindingDialog.vue';
 import PackagingBindingDialog, { type PackagingMaterialOption, type PackagingRowPayload } from './PackagingBindingDialog.vue';
 import {
@@ -1112,8 +1117,12 @@ const byproductDialogRecipeId = ref('');
 const byproductDialogOutputName = ref('');
 const byproductDialogBaseUnit = ref('未配');
 const byproductDialogRow = ref<BomRecipeItemView | null>(null);
-/** 副产可选物料 —— 与包材共用同一份物料档案端点, 不另开接口。 */
-const bomOverlayByproductMaterials = ref<PackagingMaterialOption[]>([]);
+/**
+ * 副产可选物料 —— 与包材共用同一份物料档案端点(不另开接口), 但**筛选口径不同**:
+ * 副产看物料上的 `isByproduct` 标记, 包材看材质大类。两份列表不可互相赋值。
+ */
+const bomOverlayByproductMaterials = ref<ByproductMaterialOption[]>([]);
+const bomOverlayByproductMaterialsLoaded = ref(false);
 
 /**
  * 副产与包材同挂产出节点, 写入同样只接受 DRAFT(见 bomEditableRecipe.ts),
@@ -1131,8 +1140,7 @@ async function openByproductEditor(outputNodeId: string, rowId?: string): Promis
   }
   // 同辅料/包材: 零版本(冷启动)不早退, 交给 ensureDraft 建首版草稿。
   const recipeId = bomOverlayRecipeIdByOutput.value[outputNodeId];
-  await ensureBomOverlayPackagingMaterials();
-  bomOverlayByproductMaterials.value = bomOverlayPackagingMaterials.value;
+  await ensureBomOverlayByproductMaterials();
 
   const productTypeId = String(node.data.skuId ?? '') || bomOverlayProductIdByRecipe.value[recipeId];
   if (!productTypeId) {
@@ -2285,20 +2293,32 @@ async function loadBomOverlayData(): Promise<void> {
   }
 }
 
+/**
+ * 物料档案原始行 —— 三个弹窗共用的**未筛来源**, 一次请求缓存下来。
+ *
+ * 🔴 缓存的是**没筛过**的那份。谁要用谁自己按自己的口径筛 (bomOverlayMaterialSources.ts),
+ * 不允许把已筛好的列表赋给另一个用途 —— 那正是副产下拉曾经全是包材的成因。
+ */
+type BomOverlayArchiveRow = BomOverlayMaterialRow & SeasoningMaterialOption & PackagingMaterialOption;
+
+const bomOverlayMaterialArchive = ref<BomOverlayArchiveRow[] | null>(null);
+
+async function loadBomOverlayMaterialArchive(): Promise<BomOverlayArchiveRow[] | null> {
+  if (bomOverlayMaterialArchive.value) return bomOverlayMaterialArchive.value;
+  const factoryId = props.factoryId;
+  if (!factoryId) return null;
+  const response = await get<BomOverlayArchiveRow[]>(`/${factoryId}/raw-material-types/active`);
+  const rows = response.success && response.data ? response.data : [];
+  bomOverlayMaterialArchive.value = rows;
+  return rows;
+}
+
 async function ensureBomOverlayMaterials(): Promise<void> {
   if (bomOverlayMaterialsLoaded.value) return;
-  const factoryId = props.factoryId;
-  if (!factoryId) return;
   try {
-    const response = await get<Array<SeasoningMaterialOption & { category?: string | null; materialCategory?: string | null }>>(
-      `/${factoryId}/raw-material-types/active`,
-    );
-    const rows = response.success && response.data ? response.data : [];
-    bomOverlayMaterials.value = rows.filter((material) => {
-      if (material.materialCategory === 'AUXILIARY') return true;
-      const category = bigCategoryOf(material.category);
-      return category === '辅料' || category === '调料';
-    });
+    const rows = await loadBomOverlayMaterialArchive();
+    if (!rows) return;
+    bomOverlayMaterials.value = selectAuxiliaryMaterials(rows);
     bomOverlayMaterialsLoaded.value = true;
   } catch {
     ElMessage.error('辅料档案加载失败');
@@ -2360,19 +2380,32 @@ function onAuxDialogSaved(): void {
 // 只是过滤条件从 ensureBomOverlayMaterials 的"辅料/调料"换成"包材"分类 —— 不是新端点。
 async function ensureBomOverlayPackagingMaterials(): Promise<void> {
   if (bomOverlayPackagingMaterialsLoaded.value) return;
-  const factoryId = props.factoryId;
-  if (!factoryId) return;
   try {
-    const response = await get<Array<PackagingMaterialOption & { category?: string | null }>>(
-      `/${factoryId}/raw-material-types/active`,
-    );
-    const rows = response.success && response.data ? response.data : [];
-    bomOverlayPackagingMaterials.value = rows.filter((material) => (
-      bomTabAllowsMaterial('PACKAGING', null, bigCategoryOf(material.category))
-    ));
+    const rows = await loadBomOverlayMaterialArchive();
+    if (!rows) return;
+    bomOverlayPackagingMaterials.value = selectPackagingMaterials(rows);
     bomOverlayPackagingMaterialsLoaded.value = true;
   } catch {
     ElMessage.error('包材档案加载失败');
+  }
+}
+
+/**
+ * 副产可选物料 —— 与包材同一份档案, **口径不同**: 副产看 `isByproduct` 标记, 包材看材质。
+ *
+ * ⛔ 2026-08-06 修复: 此前这里是 `byproductMaterials = packagingMaterials`(#2313),
+ * 于是副产下拉里 25 项全是贴体膜/外箱, 鸡架骨头一个选不到 —— 上线即不可用且不报错。
+ * 判据见 bomOverlayMaterialSources.ts 顶部注释。
+ */
+async function ensureBomOverlayByproductMaterials(): Promise<void> {
+  if (bomOverlayByproductMaterialsLoaded.value) return;
+  try {
+    const rows = await loadBomOverlayMaterialArchive();
+    if (!rows) return;
+    bomOverlayByproductMaterials.value = selectByproductMaterials(rows);
+    bomOverlayByproductMaterialsLoaded.value = true;
+  } catch {
+    ElMessage.error('副产物料档案加载失败');
   }
 }
 

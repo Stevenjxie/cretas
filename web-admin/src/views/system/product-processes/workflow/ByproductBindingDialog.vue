@@ -12,7 +12,30 @@
         <div class="hint">副产归属该产出，保存只影响这一份配方。</div>
       </el-form-item>
 
-      <el-form-item label="副产物料" required>
+      <!--
+        ⛔ 空下拉必须自己解释 (fool-proof-design Rule 5: 死胡同要么变导航要么变解释)。
+        副产物料是按物料档案上的**副产标记**筛的, 不是按材质分类 —— 2026-08-06 实测
+        六膳门 128 个在用物料里被勾选「副产」的是 0 个, 所以这个空态是客户当下的真实
+        状态, 不是边缘情况。只给一个空下拉, 用户会以为是系统坏了或者数据没加载完。
+      -->
+      <el-form-item v-if="materials.length === 0" label="副产物料">
+        <el-alert
+          type="warning"
+          :closable="false"
+          show-icon
+          title="物料档案里还没有勾选「副产」的物料"
+          data-testid="byp-empty-hint"
+        >
+          <div class="hint">
+            副产物料按物料档案上的<strong>副产标记</strong>筛选(与材质分类无关)。
+            请先到「仓储管理 → 原料类型字典」找到鸡架、骨头这类物料，编辑并打开
+            <strong>副产</strong>开关，再回到这里声明。
+          </div>
+        </el-alert>
+      </el-form-item>
+
+      <!-- 已有行仍要能看见/改它, 哪怕档案侧的标记被人取消了 —— 别把既有数据藏起来。 -->
+      <el-form-item v-if="materials.length > 0 || row" label="副产物料" required>
         <el-select
           v-model="form.materialTypeId"
           filterable
@@ -52,7 +75,13 @@
 
     <template #footer>
       <el-button @click="emit('update:modelValue', false)">取消</el-button>
-      <el-button type="primary" :loading="saving" data-testid="byp-save" @click="submit">
+      <el-button
+        type="primary"
+        :loading="saving"
+        :disabled="materials.length === 0 && !row"
+        data-testid="byp-save"
+        @click="submit"
+      >
         保存副产
       </el-button>
     </template>
