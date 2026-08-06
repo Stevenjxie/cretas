@@ -114,10 +114,31 @@ public enum FactoryUserRole {
     restaurant_owner("餐饮老板", "全餐饮运营、价格异常审批、月对账", 5, "restaurant"),
 
     /**
-     * 厨师长
-     * 负责厨房生产侧: 报货(领料申请)、验收入库
-     * 需要 restaurant:rw + warehouse:rw
+     * 厨师长 — ⛔ <b>已停用，不要按活岗位对待</b>（2026-08-06 记）。
+     *
+     * <p>餐饮租户收敛后，<b>唯一活跃的餐饮租户 MOCK_REST 没有这个角色</b>。
+     * prod 全库只剩 2 个 {@code restaurant_chef} 账号（{@code dr_qhj_chef} /
+     * {@code qhj_chef}），且<b>都是 {@code is_active=f}</b>，各自所属租户
+     * （DEMO_REST / RES_3101_009）本身也已停用。
+     *
+     * <p><b>餐饮实际是四个部门：运营(店长) / 市场 / 财务 / 人事</b>
+     * ——对应 {@code restaurant_manager} / {@code sales_manager} /
+     * {@code finance_manager} / {@code hr_admin}，即 MOCK_REST 的四个部门账号。
+     * 后厨不是其中之一。
+     *
+     * <p>⚠️ <b>为什么留着这个枚举值</b>：{@code V20261029_52} 部门权限 migration、
+     * {@code PermissionServiceImpl}、web-admin 的权限 store / 路由守卫 / 菜单配置，
+     * 以及 4 个测试套件都还引用它。硬删会连带一串失败，需要单独排期清理。
+     *
+     * <p>🔴 <b>给下一个读到这里的人（包括 AI）</b>：停用发生在<b>数据层</b>
+     * （账号停用），<b>代码层从未清理</b>。所以「代码里有它」不是「它还活着」的
+     * 证据。此前已多次出现「读了代码就把厨师长当活岗位加回去」——
+     * {@code WorkdeskRoleTest.headChefIsNotAWorkdeskRole} 就是为此加的断言闸。
+     * 判据永远是 prod 的 {@code users.is_active}，不是这个枚举是否存在。
+     *
+     * @deprecated 已随餐饮租户收敛停用；新功能不得把它当作目标岗位。
      */
+    @Deprecated
     restaurant_chef("厨师长", "报货、领料、验收入库", 15, "restaurant"),
 
     /**
