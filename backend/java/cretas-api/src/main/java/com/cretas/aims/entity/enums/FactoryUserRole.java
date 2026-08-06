@@ -142,31 +142,23 @@ public enum FactoryUserRole {
     restaurant_chef("厨师长", "报货、领料、验收入库", 15, "restaurant"),
 
     /**
-     * 餐饮采购 — ⛔ <b>已退役，采购职责并入市场</b>（2026-08-06 Steve 拍板）。
+     * 餐饮采购 — <b>独立部门的载体角色</b>（2026-08-06 Steve 拍板）。
      *
-     * <p>采购不再是独立部门，其职责归 {@code sales_manager}（市场）。
-     * prod 全库只剩 2 个 {@code restaurant_purchaser} 账号且<b>都是
-     * {@code is_active=f}</b>；{@code platform_role_permissions} 里<b>零行</b>。
+     * <p>决定经过一次反复，记下最终态免得再绕：先定「采购并入市场」，但实施时
+     * 发现 {@code /procurement/requisitions/my} 的 module 是全局
+     * {@code procurement}，给 {@code sales_manager} 开会波及 <b>28 个活跃工厂
+     * 销售账号</b>（餐饮侧只有 1 个）。Steve 据此改为<b>采购独立成第五个部门</b>。
      *
-     * <p><b>餐饮四个部门：运营(店长) / 市场 / 财务 / 人事</b> ——
-     * {@code restaurant_manager} / {@code sales_manager} /
-     * {@code finance_manager} / {@code hr_admin}。采购和后厨都不是其中之一。
+     * <p><b>餐饮五个部门</b>：运营(店长) / 市场 / 财务 / 人事 / <b>采购</b> ——
+     * {@code restaurant_manager} / {@code sales_manager} / {@code finance_manager} /
+     * {@code hr_admin} / {@code restaurant_purchaser}。厨师长
+     * （{@link #restaurant_chef}）仍然退役，不在其中。
      *
-     * <p>⚠️ <b>并入尚未完成</b>：{@code /restaurant/supplier-delivery}
-     * （module=dashboard）已把 {@code sales_manager} 加进 roles，可以进；
-     * 但 {@code /procurement/requisitions/my} 的 module 是全局
-     * {@code procurement}，而 {@code sales_manager} 无该权限 —— 路由守卫先查
-     * module 后查 roles，所以那条目前市场进不去。给 {@code sales_manager} 全局
-     * 开 {@code procurement} 会波及 <b>28 个活跃工厂销售账号</b>（餐饮侧只有 1 个），
-     * 故未做，待单独决定。
+     * <p>⚠️ prod 目前 2 个账号都是 {@code is_active=f}，权限表零行 —— 部门要真正
+     * 可用还需要: 新增 {@code restaurantProcurement} 模块权限行、
+     * {@code departmentConfig.ts} 的驾驶舱配置、以及给 MOCK_REST 建采购账号。
      *
-     * <p>🔴 与 {@link #restaurant_chef} 同一个坑：<b>退役发生在数据层，代码层
-     * 仍有大量引用</b>。「代码里有」不是「它还活着」的证据，判据是 prod 的
-     * {@code users.is_active}。
-     *
-     * @deprecated 采购职责已并入市场({@code sales_manager})；新功能不得把它当作目标岗位。
      */
-    @Deprecated
     restaurant_purchaser("餐饮采购", "请购、采购确认、采购审批", 15, "restaurant"),
 
     // ===== Level 20: 车间管理层 =====

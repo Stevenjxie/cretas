@@ -58,6 +58,13 @@ interface ModulePermissions {
   restaurantMarketing?: PermissionLevel;
   restaurantHr?: PermissionLevel;
   restaurantFinance?: PermissionLevel;
+  /**
+   * 采购部门（2026-08-06 独立成第五个部门，载体角色 restaurant_purchaser）。
+   *
+   * ⚠️ 加部门键时**九个已声明部门的角色都要补上新键**：省略等于跟随 `restaurant`
+   * 上限，而店长/市场/财务/人事的上限都是 `rw` —— 漏一个那个角色就白捡一个部门。
+   */
+  restaurantProcurement?: PermissionLevel;
   rd: PermissionLevel;
 }
 
@@ -106,6 +113,7 @@ const PERMISSION_MATRIX: Record<string, ModulePermissions> = {
     restaurantMarketing: 'rw',
     restaurantHr: 'rw',
     restaurantFinance: 'rw',
+    restaurantProcurement: 'rw',
     rd: 'rw'
   },
 
@@ -115,7 +123,7 @@ const PERMISSION_MATRIX: Record<string, ModulePermissions> = {
     procurement: '-', sales: '-', hr: 'rw', equipment: '-',
     finance: '-', system: 'r', analytics: 'r', scheduling: '-', restaurant: 'rw',
     restaurantOps: '-', restaurantMarketing: '-',
-    restaurantHr: 'rw', restaurantFinance: '-',
+    restaurantHr: 'rw', restaurantFinance: '-', restaurantProcurement: '-',
     rd: '-'
   },
   procurement_manager: {
@@ -133,7 +141,7 @@ const PERMISSION_MATRIX: Record<string, ModulePermissions> = {
     // 工厂型租户不受影响: FACTORY_TYPE_MODULE_FILTER.FACTORY 会把 restaurant 打回 '-'。
     restaurant: 'rw',
     restaurantOps: '-', restaurantMarketing: 'rw',
-    restaurantHr: '-', restaurantFinance: '-',
+    restaurantHr: '-', restaurantFinance: '-', restaurantProcurement: '-',
     rd: 'rw'  // 销售驱动 RD 需求/样品
   },
   // 调度 (dispatcher) - 生产调度、数据分析、趋势监控
@@ -187,7 +195,7 @@ const PERMISSION_MATRIX: Record<string, ModulePermissions> = {
     // 财务经理在自己的部门里反而不可写。对齐 L1 权威 V20261029_57。
     restaurant: 'rw',
     restaurantOps: '-', restaurantMarketing: '-',
-    restaurantHr: '-', restaurantFinance: 'rw',
+    restaurantHr: '-', restaurantFinance: 'rw', restaurantProcurement: '-',
     rd: 'r'  // 定价参考 (analytics rw 对齐后端 SmartBI 完整权限)
   },
   // 出纳 (D9 #675/#678): 付款申请 APPROVED→PAID 执行者。路由守卫先查 module 后查 roles,
@@ -214,7 +222,7 @@ const PERMISSION_MATRIX: Record<string, ModulePermissions> = {
     finance: 'rw', system: '-', analytics: 'rw', scheduling: '-',
     restaurant: 'rw',
     restaurantOps: 'rw', restaurantMarketing: 'rw',
-    restaurantHr: 'rw', restaurantFinance: 'rw',
+    restaurantHr: 'rw', restaurantFinance: 'rw', restaurantProcurement: 'r',
     rd: '-'
   },
 
@@ -225,7 +233,7 @@ const PERMISSION_MATRIX: Record<string, ModulePermissions> = {
     finance: '-', system: '-', analytics: 'r', scheduling: '-',
     restaurant: 'rw',
     restaurantOps: 'rw', restaurantMarketing: '-',
-    restaurantHr: '-', restaurantFinance: '-',
+    restaurantHr: '-', restaurantFinance: '-', restaurantProcurement: '-',
     rd: '-'
   },
 
@@ -236,7 +244,7 @@ const PERMISSION_MATRIX: Record<string, ModulePermissions> = {
     finance: 'r', system: '-', analytics: 'r', scheduling: '-',
     restaurant: 'rw',
     restaurantOps: 'rw', restaurantMarketing: '-',
-    restaurantHr: '-', restaurantFinance: 'r',
+    restaurantHr: '-', restaurantFinance: 'r', restaurantProcurement: 'rw',
     rd: '-'
   },
 
@@ -251,7 +259,7 @@ const PERMISSION_MATRIX: Record<string, ModulePermissions> = {
     // 而 menuConfig / router 的 roles 白名单都明写着店长 —— 给 '-' 会让店长
     // 「菜单里有、点进去 403」。副作用: 店长同时看得到人事驾驶舱, 只读。
     restaurantOps: 'rw', restaurantMarketing: '-',
-    restaurantHr: 'r', restaurantFinance: '-',
+    restaurantHr: 'r', restaurantFinance: '-', restaurantProcurement: '-',
     rd: '-'
   },
 
@@ -310,7 +318,7 @@ const PERMISSION_MATRIX: Record<string, ModulePermissions> = {
     // 财务部门整页都是金额, 而 viewer 不在 PRICE_VIEW_ROLES —— 进去看满屏「—」
     // 像功能坏了。价格闸也会拦, 这里显式写出来是为了读代码时一眼看见。
     restaurantOps: 'r', restaurantMarketing: 'r',
-    restaurantHr: 'r', restaurantFinance: '-',
+    restaurantHr: 'r', restaurantFinance: '-', restaurantProcurement: 'r',
     rd: 'r'
   },
 

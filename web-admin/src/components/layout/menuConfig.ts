@@ -323,6 +323,8 @@ const rawMenuConfig: MenuItem[] = [
       // 角色白名单只会变成第二处要同步的地方 —— 那正是 #2084 修的那个坑。
       { path: '/restaurant/ops', title: '运营', icon: 'Bowl', module: 'restaurantOps', groupLabel: '部门驾驶舱' },
       { path: '/restaurant/marketing', title: '市场', icon: 'TrendCharts', module: 'restaurantMarketing' },
+      // 采购 2026-08-06 独立成第五个部门 (Steve 拍板)。同样不写 roles, 由 module 门控。
+      { path: '/restaurant/procurement', title: '采购', icon: 'ShoppingCart', module: 'restaurantProcurement' },
       { path: '/restaurant/hr', title: '人事', icon: 'User', module: 'restaurantHr' },
       { path: '/restaurant/staffing', title: '预测排班', icon: 'Calendar', module: 'restaurantHr',
         roles: ['factory_super_admin', 'platform_admin', 'permission_admin', 'restaurant_manager', 'restaurant_owner', 'hr_admin'] },
