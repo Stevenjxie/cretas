@@ -160,7 +160,7 @@ public class MaterialBatch extends BaseEntity {
     private String originPlace;
 
     /**
-     * 合同号 —— 从收货行带入 (V20261029_57)。
+     * 合同号 —— 从收货行带入 (V20261029_61)。
      *
      * <p>客户按合同号追溯来料是常态; 同一张采购单的不同来料批可以是不同合同号,
      * 所以记在批次上而不是订单上。</p>
