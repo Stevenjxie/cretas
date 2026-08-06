@@ -161,6 +161,12 @@ public class IntentExecutionOrchestrator {
     @Autowired(required = false)
     private com.cretas.aims.ai.tool.impl.restaurant.TieredIntentDelegate tieredIntentDelegate;
 
+    // 顺带提示 (domain="restaurant" 发现层)。与 tieredIntentDelegate 同为
+    // required=false 字段注入: 本类的既有单测直接 new 出实例、不走 Spring,
+    // 改成必需注入会让那些测试全部 NPE。为空时只是不挂提示, 主回答不受影响。
+    @Autowired(required = false)
+    private RestaurantFindingHintAppender restaurantFindingHintAppender;
+
     // R16 tiered-first 反转开关: 关掉即完全回到 Java-first + gate 摆渡的旧行为。
     @Value("${cretas.restaurant.tiered-first.enabled:true}")
     private boolean tieredFirstEnabled;
@@ -2013,12 +2019,22 @@ public class IntentExecutionOrchestrator {
                     "clarificationContinuation",
                     delegated.get("clarificationContinuation"));
         }
+        // 顺带提示 —— 店长问任何问题时带出最重要的 1-2 条发现。
+        // 挂在这里而不是某个 Tool 上: 本方法有 7 个调用点但全部汇入此处组装响应,
+        // 而餐饮提问在到达 Java Tool 之前就被 tiered 路由委派走了 (2026-08-06 实测
+        // RESTAURANT_WASTAGE_ANOMALY 的 Tool 日志 0 次调用)。挂 Tool = 挂在没人走的路上。
+        String messageWithHint = restaurantFindingHintAppender == null
+                ? delegatedMessage
+                : restaurantFindingHintAppender.append(
+                        delegatedMessage, factoryId,
+                        delegated.get("clarificationContinuation") != null);
+
         return IntentExecuteResponse.builder()
                 .intentRecognized(true)
                 .intentCode(delegated.get("code") != null ? delegated.get("code").toString() : null)
                 .status("SUCCESS")
-                .message(delegatedMessage)
-                .formattedText(delegatedMessage)
+                .message(messageWithHint)
+                .formattedText(messageWithHint)
                 .resultData(delegatedData)
                 .executedAt(LocalDateTime.now())
                 .build();
