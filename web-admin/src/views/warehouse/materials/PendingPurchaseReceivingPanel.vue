@@ -369,7 +369,8 @@ async function openReceive(task: PurchaseReceivingTask) {
           materialName: item.materialName,
           receivedQuantity: Number(item.remainingReceivableQuantity),
           // 可追溯字段初值 —— 全部选填, 由仓管按纸质单据/客户台账现场补
-          contractNumber: '',
+          // 下采购单时填过就带过来, 仓管不用照着纸质合同重敲(行级为空时后端已回落到单头)
+          contractNumber: String(item.contractNumber || ''),
           supplierBatchNumber: '',
           factoryNumber: '',
           originPlace: '',

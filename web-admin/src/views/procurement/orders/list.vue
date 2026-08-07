@@ -241,6 +241,8 @@ interface ProcurementOrderItem {
   lineAmount?: number | null;
   convertedPricingQuantity?: number | null;
   taxRate?: number | string | null;
+  /** 行级合同号(如 SAN-16572); 为空时收货侧回落到单头框架合同号 */
+  contractNumber?: string;
 }
 
 const commonTaxRateOptions = [
@@ -324,6 +326,9 @@ function newPurchaseItem(): ProcurementOrderItem {
     supplierMaterialId: '', purchasePackagingSpecId: null, materialPackagingSpecId: null,
     materialTypeId: '', quantity: 0,
     unit: '', quantityUnit: '', unitPrice: null, priceUnit: '', priceSource: null, taxRate: null,
+    // 行级合同号: 客户实际单据是同一张单两行两个合同号(SAN-16572 / SAN-16562),
+    // 单头 form.contractNumber 是框架合同号, 放不下。为空时收货侧回落到单头。
+    contractNumber: '',
   };
 }
 
@@ -851,6 +856,7 @@ async function openEditDialog(orderId: string) {
         lineAmount: item.lineAmount == null ? null : Number(item.lineAmount),
         convertedPricingQuantity: item.convertedPricingQuantity == null ? null : Number(item.convertedPricingQuantity),
         taxRate: item.taxRate == null ? null : Number(item.taxRate),
+        contractNumber: String(item.contractNumber || ''),
       };
     }),
     customFields: (order.customFields as TableRow) || {},
@@ -1427,6 +1433,14 @@ function handleAiFill(params: TableRow) {
             <div v-else-if="itemTaxPreview(item)" class="tax-preview">
               税 {{ itemTaxPreview(item)?.tax.toFixed(2) }} · 含税 {{ itemTaxPreview(item)?.taxed.toFixed(2) }} 元
             </div>
+          </div>
+          <div class="item-field" style="width: 150px">
+            <label>合同号</label>
+            <el-input
+              v-model="item.contractNumber"
+              maxlength="64"
+              placeholder="选填 如 SAN-16572"
+            />
           </div>
           <el-button type="danger" link @click="removeItem(idx)" :disabled="form.items.length <= 1" style="width: 70px">删除</el-button>
         </div>

@@ -923,8 +923,18 @@ watch(
   },
 );
 
+/**
+ * 🔴 2026-08-07 客户事故(张权:「牛肉入仓都是抄码的 他没有固定重量一箱」)的**残留**:
+ * 2026-08-06 已经把「至少一条包装规则」的强制去掉、第一条也能删了, 但**新建时仍然默认
+ * 插一条空行**, 而保存校验会拦「请完整填写每条包装规则」。
+ * 于是提示写着「不定重的原料请留空」, 用户照做把格子留空 → 被拦;
+ * 真正能过的走法是点「删除」把整行去掉。**说的和做的相反。**
+ *
+ * 改成默认**一条都不给**: 什么都不动就是「无固定包装」(下方空状态会明说),
+ * 真有固定包装的人点「添加多包装换算规则」。
+ */
 function resetPackaging() {
-  packagingRules.value = [blankPackagingRule()];
+  packagingRules.value = [];
 }
 
 function openCreate() {
@@ -1033,7 +1043,8 @@ async function openEdit(row: TableRow) {
             conversionFactor: firstFactor * secondFactor,
           });
         }
-        packagingRules.value = legacyRules.length ? legacyRules : [blankPackagingRule()];
+        // 没有历史规则 = 这个物料本来就没有固定包装, 别塞空行(见 resetPackaging 注释)
+        packagingRules.value = legacyRules;
       }
     }
   } catch { /* 未配置换算时正常空 */ }

@@ -58,6 +58,8 @@ export interface PurchaseReceivingTaskItem {
   remainingReceivableQuantity: number;
   unit: string;
   specification?: string | null;
+  /** 行级合同号(下单时填的); 后端在行级为空时已回落到单头框架合同号 */
+  contractNumber?: string | null;
   materialPackagingSpecId?: string | null;
   inventoryBaseUnit?: string | null;
   packageToBaseFactor?: number | null;

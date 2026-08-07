@@ -206,4 +206,23 @@ describe('material type family source contract', () => {
   it('没有分类码时类别选项不拼空括号', () => {
     expect(source).toContain("if (!code) return label || '未命名分类';");
   });
+
+  /**
+   * 🔴 客户(张权)「牛肉入仓都是抄码的 他没有固定重量一箱」的**残留**。
+   *
+   * 2026-08-06 已经把「至少一条包装规则」的强制去掉、第一条也能删了, 但新建时仍然默认
+   * 插一条**空行**, 而保存校验会拦「请完整填写每条包装规则」——
+   * 提示写着「不定重的原料请留空」, 用户照做把格子留空就被拦, 真正能过的走法是点「删除」。
+   * **说的和做的相反**, 对低技术素养用户就是陷阱(fool-proof-design Rule 2)。
+   *
+   * 默认必须是「一条都没有」: 什么都不动 = 无固定包装, 空状态会明说。
+   */
+  it('新建时默认不插空包装规则 —— 提示说「留空」就得真的能留空', () => {
+    expect(source).toContain('packagingRules.value = [];');
+    // 编辑一个本来就没配包装的物料时, 同样不许塞空行
+    expect(source).toContain('packagingRules.value = legacyRules;');
+    expect(source).not.toContain('legacyRules.length ? legacyRules : [blankPackagingRule()]');
+    // 空状态文案必须在, 否则用户看到一片空白不知道是「没配」还是「没加载出来」
+    expect(source).toContain('未配置包装换算：收货按');
+  });
 });
