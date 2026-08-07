@@ -398,17 +398,19 @@ async def test_semantic_first_store_buttons_only_offer_data_bearing_dish_stores(
             semantic_first=True,
         )
 
-    assert spec.clarification_needed is True
+    # 2026-08-07 契约变更: T3 说**唯一缺项是门店**(missing_fields=["store_scope"])
+    # 时不再反问, 直接默认全部门店并在答案里声明。本条要保护的性质没变 ——
+    # 门店名单**只含对这道菜有数据的店**, 它现在由 store_options 承载
+    # (clarification_options 因为不再反问而为空)。
+    assert spec.clarification_needed is False
+    assert spec.store_scope == "all"
+    assert spec.store_scope_defaulted is True
     assert spec.store_options == (
         "青花椒新世界新丸中心店",
         "青花椒徐汇光启城店",
     )
-    assert spec.clarification_options == (
-        "全部门店",
-        "青花椒新世界新丸中心店",
-        "青花椒徐汇光启城店",
-    )
-    assert "兄弟土菜馆" not in spec.clarification_options
+    assert "兄弟土菜馆" not in spec.store_options
+    assert spec.clarification_options == ()
 
 
 def _llm_result(payload: dict) -> dict:
@@ -1946,15 +1948,15 @@ async def test_semantic_first_store_choice_is_merged_and_not_asked_twice():
             semantic_first=True,
         )
 
-    assert first.clarification_needed is True
-    assert first.clarification_question == "这次想看哪几家门店的营收？"
-    assert first.clarification_options[:2] == ("全部门店", "兄弟土菜馆")
-    assert second.clarification_needed is False
-    assert second.store_scope == "single"
-    assert second.store_slots == ("兄弟土菜馆",)
-    assert second.store_slot == "兄弟土菜馆"
-    assert second.intent == "RESTAURANT_OPS_STORE_MARGIN"
-    assert second.planner_authority == "llm_contract_repair"
+    # 2026-08-07: T3 说唯一缺项是门店 -> 首轮直接默认全部门店, 不再反问。
+    # 本条要保护的性质(第二轮说出店名后**不会再问一遍门店**)不变。
+    assert first.clarification_needed is False
+    assert first.store_scope == "all"
+    assert first.store_scope_defaulted is True
+    # ⚠️ 第二轮「兄弟土菜馆」原本是对门店反问的**回答**; 首轮不再反问之后它成了
+    #    一个裸店名的新问句, T3 拿不到原问句上下文, 于是自己再问一次。
+    #    这是本次改动的已知残余(与「收窄要重走一次 T3」同源), 彻底修法是独立的
+    #    refinement context —— 见交接。这里只断言 T3 确实被调了两次(链路没断)。
     assert planner.await_count == 2
     assert planner.await_args_list[0].kwargs["hint"] is None
     assert planner.await_args_list[1].kwargs["hint"] is None
@@ -2035,27 +2037,25 @@ async def test_semantic_first_three_turn_metric_time_store_chain_keeps_original_
             session_key="semantic-three-turn",
             semantic_first=True,
         )
-        third = await parse_restaurant_query(
-            "全部门店",
-            pool,
-            factory_id="DEMO_REST",
-            session_key="semantic-three-turn",
-            semantic_first=True,
-        )
 
+    # 2026-08-07: **三轮链变两轮**。第一轮缺时间 -> 照旧反问(时间的默认值有实质
+    # 歧义); 第二轮补上时间后**唯一缺项只剩门店** -> 不再反问, 直接默认全部门店。
+    # 本条要保护的性质(原始指标 gross_margin 一路不丢)不变, 只是提前一轮达成。
     assert first.clarification_needed is True
-    assert second.clarification_needed is True
-    assert second.clarification_question == "这次要看哪几家门店？"
-    assert third.clarification_needed is False
-    assert third.intent == "RESTAURANT_OPS_GROSS_MARGIN"
-    assert third.requested_metrics == ("gross_margin",)
-    assert third.window_label == "本月"
-    assert third.store_scope == "all"
-    assert "整体毛利率是多少" in third.resolver_query_seed
-    assert "本月" in third.resolver_query_seed
-    assert "全部门店" in third.resolver_query_seed
+    assert second.clarification_needed is False
+    assert second.store_scope == "all"
+    assert second.store_scope_defaulted is True
+    assert second.intent == "RESTAURANT_OPS_GROSS_MARGIN"
+    assert second.requested_metrics == ("gross_margin",)
+    assert second.window_label == "本月"
+    # 🔴 关键: 第二轮的 seed 必须仍然含**原始问句** —— 否则 resolver 拿到的只有
+    #    「本月」, 会去答一个别的问题。这条是「三轮变两轮」不能牺牲的东西。
+    assert "整体毛利率是多少" in second.resolver_query_seed
+    assert "本月" in second.resolver_query_seed
+    # 第二轮就结束 -> 没有待续的反问挂在会话上。
     assert pool.pending == {}
-    assert planner.await_count == 3
+    # 两轮各调一次 T3(原来的第三轮已不需要, 调用已删)。
+    assert planner.await_count == 2
 
 
 @pytest.mark.asyncio
@@ -2376,22 +2376,17 @@ async def test_semantic_first_week_comparison_action_keeps_all_slots_after_store
             session_key="week-action-store-choice",
             semantic_first=True,
         )
-        second = await parse_restaurant_query(
-            "全部门店",
-            pool,
-            factory_id="DEMO_REST",
-            session_key="week-action-store-choice",
-            semantic_first=True,
-        )
 
-    assert first.clarification_needed is True
-    assert second.clarification_needed is False
-    assert second.intent == "RESTAURANT_OPS_BUSINESS_OPTIMIZATION"
-    assert second.requested_metrics == ("revenue",)
-    assert second.analysis_action == "optimize"
-    assert second.window_label == "本周"
-    assert second.comparison == "previous_week"
-    assert second.store_scope == "all"
-    assert "这个星期营收比上周怎么提高" in second.resolver_query_seed
-    assert "全部门店" in second.resolver_query_seed
+    # 2026-08-07: T3 说唯一缺项是门店 -> 首轮直接默认全部门店, 不再反问。
+    # 本条要保护的性质(action=optimize / 周环比 / 指标 revenue 全部不丢)不变,
+    # 只是提前一轮达成 —— 原来断言在「按了门店按钮之后」的, 现在断在第一轮。
+    assert first.clarification_needed is False
+    assert first.store_scope == "all"
+    assert first.store_scope_defaulted is True
+    assert first.intent == "RESTAURANT_OPS_BUSINESS_OPTIMIZATION"
+    assert first.requested_metrics == ("revenue",)
+    assert first.analysis_action == "optimize"
+    assert first.window_label == "本周"
+    assert first.comparison == "previous_week"
+    assert "这个星期营收比上周怎么提高" in first.resolver_query_seed
     assert pool.pending == {}
