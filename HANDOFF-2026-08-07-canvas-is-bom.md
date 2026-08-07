@@ -99,26 +99,28 @@ hydrate 进工序节点 data。改克数 → 改 nodesJson → 换 revisionHash 
 - **`synchronizeActiveBomToWorkflowRevision` 降级为「从画布投影出 BOM 快照」**
   （`BomRecipeService.java:54` / `BomRecipeServiceImpl.java:663` / `WorkflowBomSynchronizationService.java:323`）
 
-**卡点（查证过，不是猜的）**：要让「没有 ACTIVE BOM 也能发布」成立，就得从画布投影出一份
-**能激活**的 BOM。而激活要过两道闸（`BomRecipeServiceImpl.java:403-411`，注释里写着
-「两道闸都得豁免……一个规则两处承载」）：
+**❌ 我先前写在这里的「卡在设计缺口」是错的，已订正。**
 
-```
-validateActivatableItems(member);                        // 至少 1 条明细
-readinessService.requireBomCompleteForActivation(...);   // 至少配置一项主原料
-```
+原话是：「激活 BOM 要求主料用量，而画布上没有主料用量，所以投影不出可激活的 BOM」。
+错在**读了提示语没读代码**——去查实际判据后：
 
-⛔ **「主料用量」这块数据画布上根本没有** —— 画布只声明「可投入哪些物料」，
-用量由生产计划固定的 BOM 限定（`WorkflowProcessNode.vue` 的说明文字就是这么写的：
-「Workflow 只声明可投入物料；主料和替代料由生产计划固定的 BOM 自动限定」）。
+| 闸 | 提示语 | 实际判什么 |
+|---|---|---|
+| `requireBomCompleteForActivation` | 「请至少配置一项主原料后再激活」 | `ProductConfigurationReadinessService.java:241` **只数 `rawCount > 0`（行数）**，不看 `standard_quantity` |
+| `validateActivatableItems` | 「请至少添加一条原辅料或包材明细」 | `BomRecipeServiceImpl.java:1657-1662` 注释自己写着「**原料与工序辅料的 BOM 行表达资格/关系，固定用量可留空**；包材是确定性消耗，必须有正数用量」 |
 
-所以「画布是权威、BOM 是投影」这句话在**主料用量**这一维上目前不成立：投影不出来的东西，
-删掉前置也变不出来。这是设计缺口，要么
- (a) 主料用量也搬进画布（那是另一次口径变更，得你拍板），要么
- (b) 为「投影出来的 BOM」放宽这两道激活闸（但那会把 2026-08-05 那份
-     「主料用量为空的 ACTIVE BOM」合法化 —— 定稿正是要消灭它）。
+也就是说：**主料用量本来就允许为空**，这是既有口径（主料按报工实际重量走）。
+投影一份可激活的 BOM 所需的东西画布上全都有：
 
-**我没有替你选**，因为两条路都改变已拍板的口径（属于定稿 §5 的停手条件）。
+| BOM 行 | 画布来源 | 用量 |
+|---|---|---|
+| RAW | `RAW_MATERIAL` 节点的 skuId | 可留空（合法） |
+| AUXILIARY | 工序节点的 `materialBindings`（3-1 已进定义） | `dosagePerKgG` |
+| PACKAGING | 成品节点的包材 cell | 必须 > 0，画布上本来就要求填 |
+| BYPRODUCT | `isByproduct` 产出节点（阶段 2 已是真实节点） | 报工时填 |
+
+📌 判据（值得记）：**判一道闸要不要满足，去 grep 它实际比较的字段，不要读它的提示文案。**
+提示语是写给用户的近似说法，和代码里的判据可以差很远 —— 这次就差了「有没有行」vs「有没有值」。
 
 ### 硬闸（3-1 已跑，结果在这里；做 3-2/3-3 时照样再跑一次）
 
