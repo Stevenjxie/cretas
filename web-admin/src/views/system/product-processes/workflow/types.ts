@@ -69,6 +69,31 @@ export interface ProcessPortGroup {
   portIds: string[];
 }
 
+/**
+ * 一行调料/辅料投入 —— 2026-08-07 阶段 3(版本合一)起，它是**工艺定义的一部分**。
+ *
+ * ## 这是本阶段的核心口径变更
+ * 以前：投入明细住在 `bom_recipe_items`，画布只是从 BOM 表派生一个只读浮层 cell 来展示，
+ *       改克数只动 BOM 草稿、**不产生新工艺版本**（那正是 stripBomOverlay 存在的理由）。
+ * 现在：画布定义是权威，BOM 表是投影。改克数 = 改节点 data = 改 nodesJson = 换 revisionHash
+ *       = **新工艺版本**。旧版本原样留给已排产批次 —— 这是方案 B 的核心收益。
+ *
+ * ⛔ 不需要改哈希公式：`WorkflowRevisionSnapshotService#hash` 算的就是整个 nodesJson，
+ *    这个字段挂在节点 data 里就自动进 hash。既有 revision 的 nodesJson 不变 ⇒ 它们的
+ *    hash 也不变 ⇒ 已排产计划钉的 selected_workflow_revision_hash 不会失配。
+ */
+export interface WorkflowMaterialBinding {
+  /** 指向 raw_material_types(id) —— 与 bom_recipe_items.material_type_id 同一业务键。 */
+  materialTypeId: string;
+  /** 展示名。权威是 materialTypeId，这里只为读图时不必再查一次档案。 */
+  materialName?: string | null;
+  /** 每 kg 投入需要多少克。必须 > 0（0 不是「没配」，是「配了个静默无效的行」）。 */
+  dosagePerKgG: number;
+  /** 后续锅调料比例 0–100。⛔ 只在熟制类工序上有意义，见 seasoningProcessCategory.ts。 */
+  subsequentPotRatio?: number | null;
+  unit?: string | null;
+}
+
 export interface ProcessNodeData extends Record<string, unknown> {
   workProcessId: string;
   processName: string;
@@ -86,6 +111,13 @@ export interface ProcessNodeData extends Record<string, unknown> {
   };
   reportingRequired: boolean;
   processCategory?: string | null;
+  /**
+   * 这道工序的调料/辅料投入明细（阶段 3 起是工艺定义的一部分，见 WorkflowMaterialBinding）。
+   * 空/缺省 = 这道工序不投调料。
+   */
+  materialBindings?: WorkflowMaterialBinding[];
+  /** 注射量(kg)。⛔ 只在注射类工序上有意义，见 seasoningProcessCategory.ts。 */
+  injectionAmount?: number | null;
   standardTime?: number | null;
   allowMultipleUpstreamSources?: boolean;
   allowFinishedGoodsSource?: boolean;
