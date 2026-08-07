@@ -153,3 +153,44 @@ cd web-admin && npm install --prefer-offline --legacy-peer-deps
 **Apr 8 事故正确做法**: Phase C 产品化应该用 **规则 1 + 规则 2** — 开 worktree 跑完整流程, 每个 phase 完成立即 commit.
 
 **Apr 11 事故正确做法**: `git add scripts/deploy/deploy-backend.sh scripts/lib/deploy-common.sh` 之后, 在 `git commit` 前先 `git status --short` 看一眼, 发现有 `.github/workflows/*.yml` / `docs/plans/*.md` 出现在 staged 区就会立刻警觉 — 那些是另一 session 的文件, 应该 `git restore --staged <file>` 把它们从我的 commit 里剔除.
+
+---
+
+### 8. ⛔ 干净工作树上 `git stash` 什么都不存，随后的 `pop` 会弹出**别人的** stash
+
+**事故 (2026-08-07)**: 为了「跑一次基线对比」，我用了这个套路：
+
+```bash
+git stash -q && pytest ...          # 量基线
+git stash pop -q && pytest ...      # 量当前
+```
+
+但那时**工作树已经干净**（改动都提交了）—— `git stash` 于是**什么都没存**，
+不新建任何条目。随后的 `git stash pop` 弹出的是栈顶**已经存在**的那条：
+并发 session 2026-07-28 留的 `AGENTS.md + docs/dispatch/ACTIVE.md` 备份，
+当场 `CONFLICT (content): Merge conflict in docs/dispatch/ACTIVE.md`。
+
+**Why 危险**: 它不报错、不提示「本次没有新建 stash」，`pop` 看起来只是「取回我刚才
+存的东西」。在一个有历史 stash 的仓里，这等于**随机把别人在途的改动倒进工作树**。
+
+**正 pattern**:
+
+```bash
+# ① 想量基线，用 worktree 或 checkout 指定 commit，不要用 stash
+git -C . stash list                        # 先看栈里有没有别人的东西
+git checkout -q <base-sha> -- <具体文件>    # 只动自己关心的文件
+# ... 量完 ...
+git checkout -q HEAD -- <具体文件>
+
+# ② 一定要用 stash 时，先确认真的存进去了
+before=$(git stash list | wc -l)
+git stash -q
+[ "$(git stash list | wc -l)" -gt "$before" ] || echo "⚠ 没有新建 stash，不要 pop"
+```
+
+**善后**: `pop` 冲突时那条 stash **不会被删**（"The stash entry is kept"），
+所以别人的东西没丢。把工作树恢复即可：
+`git reset -q HEAD <files> && git checkout -- <files>`，然后确认
+`git stash list` 里那条还在。
+
+**判据**: **`stash` 是栈不是抽屉** —— `pop` 拿的是「栈顶」，不是「我刚放进去的」。
