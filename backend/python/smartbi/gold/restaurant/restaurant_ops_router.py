@@ -576,7 +576,30 @@ async def resolve_capabilities(smartbi_pool, factory_id: str, **kwargs) -> "OpsA
 
 
 async def resolve_out_of_domain(smartbi_pool, factory_id: str, **kwargs) -> "OpsAnswer":
-    """Honest non-business boundary selected by the semantic compiler."""
+    """Honest non-business boundary selected by the semantic compiler.
+
+    ⚠️ 先分一次「域外」与「域内但没数据」。2026-08-07 prod 实测:
+    「哪个供应商报价最贵」落在这里, 于是用户听到的是
+    「天气、新闻这类外部信息不在我的数据范围内」—— 那是**误导**:
+    供应商报价不是天气, 它是我们打算支持、只是客户还没录的东西。
+    诚实的答案要点名缺的那张表(G1 的 B 类归宿)。
+
+    🔴 `honest_gap_answer` 内部**真查表**: 客户开始录入之后它返回 None,
+    这里照旧走域外拒答 —— 把「没数据」写死会变成另一种降级处理。
+    """
+    from smartbi.gold.restaurant.data_gaps import honest_gap_answer
+
+    gap = await honest_gap_answer(smartbi_pool, factory_id, kwargs.get("query") or "")
+    if gap is not None:
+        return OpsAnswer(
+            code="RESTAURANT_OPS_DATA_GAP",
+            title=f"{gap['subject']}：暂无数据",
+            answer_text=gap["answer_text"],
+            charts=[],
+            kpis=[],
+            meta={"data_gap": True, "missing_table": gap["table"]},
+        )
+
     return OpsAnswer(
         code="RESTAURANT_OPS_OUT_OF_DOMAIN",
         title="当前可用的数据范围",
