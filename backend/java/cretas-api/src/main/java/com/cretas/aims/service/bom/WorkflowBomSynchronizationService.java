@@ -48,12 +48,18 @@ public class WorkflowBomSynchronizationService {
                         factoryId, mainOutputProductTypeId, BomRecipe.Status.ACTIVE)
                 .orElse(null);
         if (active == null) {
+            // 2026-08-07 阶段 3-3: 没有生效 BOM 不再拦发布 —— 同步时会从画布定义投影出一份
+            // (见 BomRecipeServiceImpl#projectActiveBomFromRevision)。
+            //
+            // ⛔ 这里必须跟着改, 不能只改 synchronize: 一个规则两处承载, 只改一处的结果是
+            //    「后端能同步了但前端仍被 preflight 挡住」—— 用户看到的还是老样子。
+            //    canCompleteAutomatically=true 是关键: workflowPublishGate 只放行
+            //    classification ∈ {READY, AUTO_MIGRATABLE} 且该标志为 true 的情况。
             return WorkflowBomSyncPreflightResponse.builder()
-                    .classification(WorkflowBomSyncPreflightResponse.Classification.USER_INPUT_REQUIRED)
-                    .missingItems(List.of(issue(
-                            "WORKFLOW_ACTIVE_BOM_REQUIRED", null, null, null,
-                            "bom", "当前产品没有生效 BOM", "请先完成 BOM 配置")))
-                    .canCompleteAutomatically(false)
+                    .classification(WorkflowBomSyncPreflightResponse.Classification.AUTO_MIGRATABLE)
+                    .targetWorkflowRevisionId(
+                            requestedTarget == null ? null : requestedTarget.getId())
+                    .canCompleteAutomatically(true)
                     .build();
         }
 

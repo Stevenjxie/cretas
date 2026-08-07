@@ -676,14 +676,17 @@ public class BomRecipeServiceImpl implements BomRecipeService {
         }
         String mainOutputProductTypeId =
                 bomWorkflowRevisionService.resolveMainOutputProductTypeId(factoryId, targetRevision);
+        // 2026-08-07 阶段 3-3: 没有生效 BOM 不再是拦路虎, 而是「投影出一份」。
+        //
+        // ⛔ 原来这里抛 WORKFLOW_ACTIVE_BOM_REQUIRED —— 那正是 2026-08-05 那份
+        //    「主料用量为空的 ACTIVE BOM」的来源: 为了让画布能发布, 有人手工凑了一份 BOM。
+        //    方案 B 下画布是权威, BOM 是投影; 画布自己的发布前校验(validateWorkflow publish:
+        //    每个非工序节点必须绑 SKU、端口必须连边且有单位)才是完整性的把关人。
         BomRecipe active = recipeRepo
                 .findByFactoryIdAndProductTypeIdAndIsCurrentTrueAndStatus(
                         factoryId, mainOutputProductTypeId, BomRecipe.Status.ACTIVE)
-                .orElseThrow(() -> bomError(409,
-                        "当前产品没有可同步的生效 BOM",
-                        "WORKFLOW_ACTIVE_BOM_REQUIRED",
-                        "请先完成当前产品的 BOM 配置",
-                        "bom"));
+                .orElseGet(() -> projectActiveBomFromRevision(
+                        factoryId, mainOutputProductTypeId, targetRevision, operatorId));
         if (Objects.equals(active.getWorkflowRevisionId(), targetRevision.getId())
                 && Objects.equals(active.getWorkflowRevisionHash(), targetRevision.getRevisionHash())) {
             bomWorkflowRevisionService.requireActiveBomPinsRevision(
@@ -1635,6 +1638,66 @@ public class BomRecipeServiceImpl implements BomRecipeService {
             throw bomError(409, "BOM 缺少可追溯的 SKU 净含量快照",
                     "BOM_NET_CONTENT_SNAPSHOT_REQUIRED", "请重新保存当前草稿后再激活", "netContentQuantity");
         }
+    }
+
+    /**
+     * 阶段 3-3: 从画布定义投影出一份生效 BOM —— 只在「该产品还没有任何生效 BOM」时走。
+     *
+     * <h2>为什么这么做是安全的</h2>
+     * 这条路径**只在没有 ACTIVE BOM 时触发**, 也就是说没有任何既有数据可被覆盖:
+     * 没有 BOM ⇒ 没有生产计划钉过它 ⇒ 已排产批次的快照不可能受影响。
+     * 有 ACTIVE BOM 时走的仍是原来的「克隆 + 重绑」, 一个字没改。
+     *
+     * <h2>投影什么</h2>
+     * <ul>
+     *   <li>RAW —— 画布上的 RAW_MATERIAL 节点。<b>用量留空</b>: 主料按报工实际重量走,
+     *       这是既有口径(见 {@code validateActivatableItems} 的注释:
+     *       「原料与工序辅料的 BOM 行表达资格/关系, 固定用量可留空」)。</li>
+     *   <li>其余(辅料克数 / 包材 / 副产)不在这里投影 —— 它们各自已有写入路径,
+     *       用户在画布上配好后照常落库。这里只负责把「BOM 存在」这件事补上,
+     *       不去猜用户还没配的东西(禁止降级处理: 猜出来的数值会被当成用户意图)。</li>
+     * </ul>
+     *
+     * <h2>⚠️ 为什么不投影用量</h2>
+     * 投影一个编造的用量, 就是在重演它要消灭的那个问题 —— 2026-08-05 那份
+     * 「主料用量为空的 ACTIVE BOM」之所以有害, 不是因为空, 而是因为**它是编的**。
+     * 空用量在这条口径下是合法且诚实的表达。
+     */
+    private BomRecipe projectActiveBomFromRevision(
+            String factoryId,
+            String productTypeId,
+            ProductProcessWorkflowRevision targetRevision,
+            Long operatorId) {
+        // 复用既有的产品加载 + 产出元数据校验(单位/规格), 不另立一套判据
+        ProductType product = loadProductForUpdate(factoryId, productTypeId);
+        validateProductOutputMetadata(product);
+
+        List<CreateBomRecipeRequest.BomRecipeItemDTO> items =
+                bomWorkflowRevisionService.projectRawMaterialItems(targetRevision);
+        if (items.isEmpty()) {
+            // 画布上一个原料 Cell 都没有 —— 这在 publish 校验里本来就过不去
+            // (BOUNDARY_REQUIRED: 至少一个原料 Cell 和一个成品 Cell)。走到这里说明
+            // 调用方绕过了画布校验, 明确报错而不是造一份空 BOM。
+            throw bomError(409,
+                    "画布上没有原料 Cell, 无法投影出可用的 BOM",
+                    "WORKFLOW_RAW_MATERIAL_REQUIRED",
+                    "请先在画布上添加入口原料 Cell 并绑定 SKU",
+                    "workflow");
+        }
+
+        CreateBomRecipeRequest request = new CreateBomRecipeRequest();
+        request.setProductTypeId(productTypeId);
+        request.setProductName(product.getName());
+        request.setOutputQuantityPerUnit(BigDecimal.ONE);
+        request.setOutputUnit(product.getUnit());
+        request.setSourceType(BomRecipe.SourceType.MANUAL);
+        request.setItems(items);
+        request.setNotes("由产品-工序画布自动投影生成(阶段 3-3)。画布是权威, 本 BOM 是投影。");
+
+        BomRecipe draft = createRecipe(factoryId, request);
+        log.info("Projected BOM from workflow revision: factory={}, product={}, revision={}, rawItems={}",
+                factoryId, productTypeId, targetRevision.getId(), items.size());
+        return activateRecipe(factoryId, draft.getId(), operatorId);
     }
 
     private void validateActivatableItems(BomRecipe recipe) {

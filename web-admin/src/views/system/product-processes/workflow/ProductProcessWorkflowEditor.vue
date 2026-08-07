@@ -4021,7 +4021,7 @@ function isWorkflowBomSyncRace(error: unknown): boolean {
     || errorCode.startsWith('BOM_WORKFLOW_')
     || errorCode === 'WORKFLOW_ACTIVE_BOM_REVISION_MISMATCH'
     || errorCode === 'WORKFLOW_ACTIVE_BOM_FAMILY_INCOMPLETE'
-    || errorCode === 'WORKFLOW_ACTIVE_BOM_REQUIRED'
+    // 阶段 3-3 起后端不再产出 WORKFLOW_ACTIVE_BOM_REQUIRED, 该分支已删。
   ));
 }
 
