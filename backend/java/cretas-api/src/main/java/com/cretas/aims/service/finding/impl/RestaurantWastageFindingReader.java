@@ -2,12 +2,10 @@ package com.cretas.aims.service.finding.impl;
 
 import com.cretas.aims.client.PythonSmartBIClient;
 import com.cretas.aims.service.finding.Finding;
-import com.cretas.aims.service.finding.FindingNotApplicableException;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 
-import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 
@@ -27,7 +25,16 @@ public class RestaurantWastageFindingReader {
 
     private final PythonSmartBIClient pythonSmartBIClient;
 
-    @SuppressWarnings("unchecked")
+    /**
+     * 三态映射抽到共用件（2026-08-07 加毛利链时）。运行时行为逐字不变，但**多了
+     * 一个构造参数** —— 手工装配的单测会因此 NPE，{@code RestaurantWastageFindingReaderTest}
+     * 已改成用 {@code @Spy} 装真实 mapper（不是 mock：那些断言测的正是这段映射）。
+     *
+     * <p>抽的理由：两条链（损耗 / 毛利）的响应契约逐字相同，各写一份的话迟早有一份
+     * 在「响应不合契约」时 return 空列表，而那会被渲染成「均正常」。
+     */
+    private final RestaurantFindingPayloadMapper payloadMapper;
+
     public List<Finding> read(String factoryId, String rule) {
         Map<String, Object> body;
         try {
@@ -38,42 +45,6 @@ public class RestaurantWastageFindingReader {
             throw new IllegalStateException(
                     "餐饮损耗发现调用失败: rule=" + rule + ", factoryId=" + factoryId, e);
         }
-
-        if (!Boolean.TRUE.equals(body.get("applicable"))) {
-            Object reason = body.get("skip_reason");
-            if (reason == null || reason.toString().isBlank()) {
-                // applicable 不为 true 又给不出理由 = 响应不合契约。当作故障，
-                // 不能当作「数据不足」——后者会告诉用户「等数据攒够」，而真正
-                // 该做的是去查服务。
-                throw new IllegalStateException(
-                        "餐饮损耗发现响应缺少 applicable/skip_reason: rule=" + rule);
-            }
-            throw new FindingNotApplicableException(reason.toString());
-        }
-
-        List<Map<String, Object>> raw =
-                (List<Map<String, Object>>) body.getOrDefault("findings", List.of());
-        List<Finding> findings = new ArrayList<>();
-        for (Map<String, Object> f : raw) {
-            findings.add(new Finding(
-                    (String) f.get("code"),
-                    "restaurant",
-                    toSeverity((String) f.get("severity")),
-                    f.get("actionability") instanceof Number n ? n.intValue() : 0,
-                    String.valueOf(f.get("subject_id")),
-                    (String) f.get("subject_name"),
-                    (Map<String, Object>) f.getOrDefault("facts", Map.of())));
-        }
-        return findings;
-    }
-
-    private Finding.Severity toSeverity(String severity) {
-        if ("CRITICAL".equals(severity)) {
-            return Finding.Severity.CRITICAL;
-        }
-        if ("WARNING".equals(severity)) {
-            return Finding.Severity.WARNING;
-        }
-        return Finding.Severity.INFO;
+        return payloadMapper.toFindings(body, rule);
     }
 }

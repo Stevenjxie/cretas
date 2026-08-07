@@ -74,16 +74,21 @@ describe('餐饮四部门权限', () => {
 
   // 2026-08-06: 采购独立成第五个部门(Steve 拍板)。此前它是「通用餐饮角色」,
   // 能进运营与财务 —— 那两条断言编码的是旧模型, 反转成新事实。
-  it('restaurant_purchaser 只进自己的采购部门', () => {
+  // 2026-08-07: restaurantOps 由 '-' 改为 'r' (L1 权威 V20261029_65)。
+  // 采购部门看板列的三个动作里, 领料管理与盘点管理的 module 都是 restaurantOps ——
+  // '-' 让采购部长打不开自己部门的动作。只读跨部门, 形状同店长的 restaurantHr='r'。
+  it('restaurant_purchaser 拥有采购部门, 并只读运营(领料/盘点是进货依据)', () => {
     const store = storeAs('restaurant_purchaser');
     expect(store.canAccess('restaurantProcurement')).toBe(true);
-    expect(store.canAccess('restaurantOps')).toBe(false);
+    expect(store.canAccess('restaurantOps')).toBe(true);
     expect(store.canAccess('restaurantFinance')).toBe(false);
     expect(store.canAccess('restaurantMarketing')).toBe(false);
     expect(store.canAccess('restaurantHr')).toBe(false);
   });
 
-  it('采购在自己部门可写，别的部门连看都不行', () => {
+  // 只读那一格必须**只是只读** —— 若哪天它被顺手提成 rw, 采购就能改运营的
+  // 领料与盘点单据, 部门边界当场破掉。这条是那个提权的阴性对照。
+  it('采购在自己部门可写；运营只能看不能写，其它部门连看都不行', () => {
     const store = storeAs('restaurant_purchaser');
     expect(store.canWrite('restaurantProcurement')).toBe(true);
     expect(store.canWrite('restaurantOps')).toBe(false);

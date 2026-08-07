@@ -90,8 +90,16 @@ def test_source_uses_unit_margin_not_rate():
     """
     import io
     from pathlib import Path
-    src = Path(__file__).resolve().parents[3] / "smartbi" / "api" / "restaurant_ops_gold.py"
+    # 2026-08-07: 这段口径从 api/restaurant_ops_gold.py 搬到了
+    # gold/restaurant/dish_margin.py —— 端点原来是**第二份** per-dish 成本实现
+    # (它自己的注释承认了), 发现层的毛利规则要用同一份, 所以抽出来共用。
+    # 本条断言的性质没变, 只是跟着代码换了位置。
+    src = Path(__file__).resolve().parents[2] / "gold" / "restaurant" / "dish_margin.py"
     text = io.open(src, encoding="utf-8", newline="").read()
+    assert "菜单工程四象限" in text, (
+        f"{src.name} 里找不到四象限口径 —— 它又被搬走了? 本条要跟着更新, "
+        "否则会变成一条永远绿的空断言"
+    )
     block = text[text.index("菜单工程四象限"):text.index("avgRate 用")]
     assert 'x["grossProfit"] / x["qty"]' in block, "轴二不是单份毛利贡献了"
     assert '"marginRate"' not in block, "轴二被改成毛利率 —— 米饭那类菜会被误判成明星"

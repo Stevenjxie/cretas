@@ -338,17 +338,23 @@ const rawMenuConfig: MenuItem[] = [
       // ⚠️ 下面两项**刻意不改 module**: 它们跨工厂/餐饮两侧使用
       // (warehouse_manager / procurement_manager 也在用, 而这些角色 restaurant='-')。
       // 改成 restaurantOps 会断掉他们的访问 —— 本轮只归组, 标签留待单独评估。
-      // 2026-08-06 Steve 拍板: 采购职责并入市场(sales_manager), 厨师长/餐饮采购退役。
-      // 这里加 sales_manager、去掉 restaurant_purchaser / restaurant_chef。
-      // module 仍不改(见上方 ⚠️): sales_manager 有 dashboard:r, 加 roles 即可通。
+      // ⛔ 这里曾写着「2026-08-06 Steve 拍板: 采购职责并入市场(sales_manager),
+      //    厨师长/餐饮采购退役」并据此摘掉了 restaurant_purchaser —— **那一侧是败的**。
+      //    同日更晚的 V20261029_58/_63 把采购立为**第五个部门**, 载体角色就是
+      //    restaurant_purchaser, 权威 departmentConfig.ts 也把本页列为采购部门的
+      //    第一个动作。两处口径打架, 用户可见后果是采购部长点自己部门的动作打不开。
+      //    2026-08-07 按五部门口径收口, 把它加回来。
+      // module 仍不改(见上方 ⚠️): sales_manager / restaurant_purchaser 都有 dashboard:r。
       { path: '/restaurant/supplier-delivery', title: '供应商进货录入', icon: '', module: 'dashboard',
-        roles: ['factory_super_admin', 'platform_admin', 'permission_admin', 'restaurant_manager', 'restaurant_owner', 'sales_manager', 'warehouse_manager', 'procurement_manager'] },
+        roles: ['factory_super_admin', 'platform_admin', 'permission_admin', 'restaurant_manager', 'restaurant_owner', 'sales_manager', 'restaurant_purchaser', 'warehouse_manager', 'procurement_manager'] },
       // ⚠️ 本项 module='procurement' 而 sales_manager **没有** procurement 权限,
       // 所以即使加进 roles 也会被 module 闸挡在前面(守卫先查 module 后查 roles)。
       // 餐饮侧要不要保留这条、还是改走 /restaurant/requisitions(module=restaurantOps,
       // 店长已有), 待定 —— 本轮只摘掉两个退役角色, 不擅自改 module 断工厂侧。
+      // restaurant_purchaser 同样是被上面那条败的注释一起摘掉的 —— 报货/采购计划
+      // 正是采购部门的活。V20261029_64 给了它 procurement:'rw', module 闸能过。
       { path: '/procurement/requisitions/my', title: '报货/采购计划', icon: '', module: 'procurement',
-        roles: ['factory_super_admin', 'platform_admin', 'permission_admin', 'restaurant_manager', 'restaurant_owner', 'warehouse_manager', 'procurement_manager'] },
+        roles: ['factory_super_admin', 'platform_admin', 'permission_admin', 'restaurant_manager', 'restaurant_owner', 'restaurant_purchaser', 'warehouse_manager', 'procurement_manager'] },
 
       // ── 市场 ────────────────────────────────────────────────────
       // 经营看板归市场: 6 KPI 里日营收/客单价/订单数三项是营收侧, 占多数。

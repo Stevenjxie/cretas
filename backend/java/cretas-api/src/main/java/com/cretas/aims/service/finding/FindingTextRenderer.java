@@ -123,6 +123,23 @@ public class FindingTextRenderer {
                     f.facts().get("shareBase"),
                     f.facts().get("amplification"));
         }
+        if ("DISH_PUZZLE_HIGH_MARGIN_LOW_VOLUME".equals(f.code())) {
+            // ⛔ 只能说「最赚钱但没卖动」, 不能说「该涨价」或「该下架」——
+            //    单份毛利高 + 销量低有多种成因(定价、菜单位置、服务员话术、
+            //    份量、季节), 渲染层不做归因。给事实, 店长自己判。
+            // ⚠️ 必须带上 pricedDishCount: 中位数是**按有配方的菜**算的,
+            //    不说清有几道就会被读成「全店结论」。
+            return String.format(
+                    " · %s 每份赚 ¥%s，是有配方的 %s 道菜里的高位（中位 ¥%s）；"
+                            + "近%s天卖 %s 份，低于中位 %s 份 —— 最赚钱的菜没卖动",
+                    f.subjectName(),
+                    f.facts().get("unitMargin"),
+                    f.facts().get("pricedDishCount"),
+                    f.facts().get("unitMarginMedian"),
+                    f.facts().get("windowDays"),
+                    f.facts().get("qty"),
+                    f.facts().get("qtyMedian"));
+        }
         if ("WASTAGE_TYPE_CONCENTRATION".equals(f.code())) {
             return String.format(" · %s损耗近%s天 ¥%s，占全店损耗 %s%%",
                     f.subjectName(),

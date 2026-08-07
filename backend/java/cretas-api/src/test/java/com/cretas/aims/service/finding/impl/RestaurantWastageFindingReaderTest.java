@@ -31,6 +31,15 @@ class RestaurantWastageFindingReaderTest {
     @Mock
     private PythonSmartBIClient pythonSmartBIClient;
 
+    /**
+     * 2026-08-07 加毛利链时，三态映射从本 reader 抽到共用件。这里用 {@code @Spy}
+     * 装**真实**实现而不是 mock：本文件的断言（dict→Finding 形状、applicable=false
+     * 转跳过、未知 severity 落 INFO）测的正是那段映射逻辑，mock 掉就等于把它们
+     * 变成永远绿的空断言。
+     */
+    @org.mockito.Spy
+    private RestaurantFindingPayloadMapper payloadMapper = new RestaurantFindingPayloadMapper();
+
     /** HashMap 而非 Map.of —— skip_reason 为 null 是真实响应形状, Map.of 不接受 null。 */
     private static Map<String, Object> body(Object applicable, Object skipReason,
                                             List<Object> findings) {
