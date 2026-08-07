@@ -179,12 +179,16 @@ def _time_range_disclosure(spec: Any) -> str:
     # ⛔ 逐字引用同一个常量：说的窗口与算的窗口必须同源。各写一份，哪天默认从
     #    30 天改成 7 天，就会出现「按 30 天算、却说 7 天」—— 比反问更糟，
     #    因为用户会拿着错的口径去做决定。
+    from smartbi.gold.restaurant.phrasing import TIME_RANGE_DISCLOSURE, pick_variant
     from smartbi.gold.restaurant.restaurant_intent import DEFAULT_TIME_PHRASE
 
-    return (
-        f"\n\n（你没有指定时间范围，以上按**{DEFAULT_TIME_PHRASE}**计算；"
-        "想看别的区间可以直接说，例如「最近7天」。）"
+    # 措辞按 (问句, 日期) 轮换 —— 同一天同一问句说法固定（刷新不会变，不制造疑心），
+    # 跨天才换。⛔ 窗口值仍然只有 DEFAULT_TIME_PHRASE 一个来源。
+    template = pick_variant(
+        TIME_RANGE_DISCLOSURE,
+        key=str(getattr(spec, "resolver_query_seed", "") or ""),
     )
+    return "\n\n" + template.format(window=DEFAULT_TIME_PHRASE)
 
 
 def _store_scope_disclosure(spec: Any) -> str:

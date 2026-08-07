@@ -164,7 +164,7 @@ key = (factory_id, 归一化问句, f"{_PLAN_VERSION}#{_routing_rules_fingerprin
 | 5 | 门店目录补数据（R_XMX_FRESH / RES_GML_001） | 无 | **数据问题**，卡住 6、7 |
 | 6 | 目录作用域覆盖 + 黑名单退役 | 5 | 「不猜」落地 |
 | 7 | 槽位优先级链第 1 层（门店权限）新建 | 5 | 🔴 新能力，不是接线 |
-| 8 | `ranking_limit` / `ranking_direction` / `output_preference` 转配置 | 无 | 三个可默认槽位 |
+| 8 | ~~三个槽位转配置~~ | — | 🔴 **查证后作废**：三个**已经全是确定性的**（`ranking_limit(effective_query)` / `dish_ranking_direction(text)` / `resolve_output_preference` 的优先级链已写好）。真实缺口只有「**租户口径注册表不存在**」，而那与第 7 条的门店权限是**同一个缺失能力**：餐饮 AI 没有任何按租户/按用户的配置存储。⇒ 7、8 合并为一件新能力。<br>⚠️ 我在计划里写「现在每次由 T3 决定」是**没查就断言**——本轮第三次同型。 |
 | 9 | 措辞模板池 | 无 | 可与其它并行 |
 | 10 | L1 结构解析 | 6 | 最后 |
 
