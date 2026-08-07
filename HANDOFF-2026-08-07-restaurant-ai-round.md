@@ -623,6 +623,45 @@ Tool 侧**仍固定 inventory** —— 它的 name/description 都写着「库�
 
 ---
 
+## 🔴 可达性扫描 —— 本轮最后、也最该复用的一件事
+
+做「六块可达性表」时顺手写了一道闸（`routedPagesAreReachable.spec.ts`），
+结果它**连着扫出三个「有路由、有组件、用户到不了」的页面**：
+
+| 页面 | 症状 | 处置 |
+|---|---|---|
+| `/dashboard/ai-value`（**③ AI 工作台**） | 路由 title/icon/module 齐全，menuConfig 零命中 | PR#2378 补入口 |
+| `/dashboard/widgets` | 同上 | 开发演示页，显式豁免并写理由 |
+| `/restaurant/commission`（营销员提成） | 无菜单入口、**无任何页面链接** | PR#2381 见下 |
+
+### `/restaurant/commission` 的根因不是「忘了加菜单」
+
+**两条既有契约在它身上不可能同时满足**：
+
+- `restaurantMenuRouteAlignment`：每个餐饮功能页必须挂在五个部门之一
+- 同一 spec：菜单项的 `module` 必须 == 路由 `meta.module`
+
+而它的路由 `meta.module` 是 `'restaurant'` —— 那是**板块准入**不是部门。
+用 `restaurant` 时前一条判红，改菜单为部门模块时后一条判红。**两边都进不去，
+于是它一直悬着。** 修法是路由与菜单**两侧一起归位**到市场部门。
+
+🔑 **判据：一个页面长期「没人加菜单」，先问是不是它根本不满足某条归属契约。**
+只改一侧都是把问题挪个位置 —— 我先后被那两条闸各判红一次，**是闸逼出了真修法**。
+
+📌 **同类还有一个未处理**：顶层 `/unit-dictionary` 的路由 meta 明写
+`showInMenu: true`，menuConfig 里却没有它。属平台管理域
+（`factory_super_admin`/`platform_admin`/`permission_admin`），不在本轮餐饮范围。
+
+📌 **接手可以直接复用**：把 `routedPagesAreReachable.spec.ts` 一组一组扩出去
+（`/procurement/*`、`/sales/*`…）。每扩一组先看红几条，逐条判「补菜单」还是
+「写豁免理由」。⚠️ 别一次扩到全仓 —— 会一次红几十条变成噪音，然后被整体豁免掉。
+
+⚠️ 扩的时候注意：路由是**嵌套相对路径**，靠正则取 `path:` 会把不同层级混在一起。
+我第一次扫 `/restaurant/*` 就把顶层的 `unit-dictionary` 算成了餐饮子路由
+（差点加出一条 `/restaurant/unit-dictionary` 的错菜单项）—— **按缩进/父块判层级**。
+
+---
+
 ## 📋 六块可达性表（2026-08-07 prod 实测，`mock_ops` / 活跃槽 10010）
 
 | 块 | 后端出口 | 前端入口 | prod 实测 | 状态 |
