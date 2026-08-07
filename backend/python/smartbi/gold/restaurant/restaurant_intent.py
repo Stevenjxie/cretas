@@ -235,6 +235,15 @@ class RestaurantQuerySpec:
     store_slots: Tuple[str, ...] = ()
     compare_stores: bool = False
     store_options: Tuple[str, ...] = ()
+    # True = `store_scope` 是**代码补的默认值**(全部门店), 不是用户说的。
+    #
+    # ⛔ 存在的唯一理由是**披露**。默认全部门店本身没问题(它是无歧义的超集),
+    # 但不说出来就成了「偷偷替用户选了口径」。答案里必须出现范围声明, 由
+    # `restaurant_intent_service._store_scope_disclosure` 读这个标记来加。
+    #
+    # ⚠️ 不要拿它去改 SQL —— 对 resolver 来说 "all" 就是 "all", 默认来的和用户
+    # 说的完全等价。它只影响**怎么把这件事告诉用户**。
+    store_scope_defaulted: bool = False
     # Options are proposed by the LLM after it sees the tenant's real store
     # catalogue, then allowlisted here before the UI renders them.  This keeps
     # the decision about *what to ask* semantic while keeping every displayed
@@ -4238,28 +4247,62 @@ async def _apply_store_scope_guard(
             + (() if has_named_dish else tuple(f"{n} 最近30天" for n in names[:2])),
         ))
 
-    if (
-        spec.clarification_needed
-        and spec.store_slot
-        and spec.store_slot not in names
-        and len(names) > 1
-        and "store" in _slots_of_clarification(spec.clarification_question)
-    ):
+    # ⛔ 用户**点名了**一家门店但租户名单里没有(打错字 / 改名 / 已停用) —— 仍然问。
+    #
+    # 判据是「用户说没说门店」, 不是「门店范围定没定」: 没说门店时补「全部」是
+    # **补全**(他问的就是全店, 只是没说出口); 说了「东城店」而租户没这家店时补
+    # 「全部」是**换了个问题回答**, 他会拿到一个看着像答案、实际答的是别的事的数字。
+    if spec.store_slot and spec.store_slot not in names:
         return _seal_query_plan(replace(
             spec,
+            clarification_needed=True,
+            clarification_question=STORE_SCOPE_CLARIFICATION_QUESTION,
+            missing_slot="store",
             store_scope=None,
             store_slots=(),
             store_options=names,
-            clarification_options=names,
+            clarification_options=("全部门店", *names[:3]),
         ))
 
+    # 延续轮(用户正在回答上一问)保持原样问门店 —— 他已经在对话里了, 这一问不额外
+    # 阻塞, 而且「时间 → 门店按钮 → 答案」整条是**零 LLM** 的确定性延续。在这里补
+    # 默认会把门店提前定死, 用户之后再说门店名就不再是延续而是新问句, 要重走 T3。
+    if spec.is_clarification_continuation:
+        return _seal_query_plan(replace(
+            spec,
+            clarification_needed=True,
+            clarification_question=STORE_SCOPE_CLARIFICATION_QUESTION,
+            missing_slot="store",
+            store_options=names,
+            clarification_options=("全部门店", *names[:3]),
+        ))
+
+    # ── 首轮新问句: 门店范围不再是必答题 ──────────────────────────────
+    #
+    # 🔴 2026-08-07 prod 实测(15 个代表性问句, token 取自 smart_bi_llm_usage 增量):
+    #    归宿分布 A=2 / B=0 / C=1 / **D(反问)=12, 占 80%**; D 类烧掉 34,113 token
+    #    与 14 次 LLM 调用却一条答案都没产出 —— 占总量的 77% / 82%。
+    #    「最近30天总营收是多少」这种最基础的问句, 用户连时间都说了, 拿到的仍是
+    #    「你想看哪几家门店的总营收？」。**花了 LLM 的钱, 产出一句反问。**
+    #
+    # 为什么默认「全部」是安全的: 它是无歧义的**超集**, 而且原来的
+    # clarification_options 第一个选项本来就是「全部门店」—— 产品自己早就认为它
+    # 是最自然的选择, 问题只在于把它做成了必答题。
+    #
+    # ⛔ 这不是降级处理: store_scope_defaulted 会让答案**显式声明**用的是全部门店。
+    # 偷偷选口径才是降级, 选了并说出来不是。
+    #
+    # ⚠️ 已知残余代价: 拿到全店答案后再说一个店名来收窄, 那是一个**新问句**,
+    # 要重走一次 T3(改动前它是零 LLM 的延续)。取舍依据是上面那组实测 ——
+    # 今天**每一个**首轮问句都在烧一次 LLM 产出反问, 而收窄只是追问的一个子集。
+    # 彻底修法是给「已答完」的问题留一个独立的 refinement context(不能复用
+    # restaurant_pending_clarifications: 它的消费端会把新问句拼到旧问句上)。
     return _seal_query_plan(replace(
         spec,
-        clarification_needed=True,
-        clarification_question=STORE_SCOPE_CLARIFICATION_QUESTION,
-        missing_slot="store",
+        store_scope="all",
+        store_slots=(),
+        store_scope_defaulted=True,
         store_options=names,
-        clarification_options=("全部门店", *names[:3]),
     ))
 
 
