@@ -40,6 +40,7 @@ public class FindingController {
 
     private final FindingService findingService;
     private final FindingTextRenderer findingTextRenderer;
+    private final com.cretas.aims.service.finding.FindingActionPlanService findingActionPlanService;
 
     @GetMapping
     @Operation(summary = "查询当前工厂的发现", description = "供驾驶舱/日报等主动出口使用")
@@ -70,5 +71,33 @@ public class FindingController {
                 factoryId, resolvedDomain, result.findings().size(), result.checkedRules().size(),
                 result.skippedRules().size(), result.failedRules().size());
         return ApiResponse.success(data);
+    }
+
+    /**
+     * 第 ④ 块「策划案生成」的**非对话出口**。
+     *
+     * <p>为什么需要它：{@code FindingActionPlanTool} 是个 {@code @Tool}，而餐饮提问
+     * 在到达 Java Tool 之前就被 tiered 路由委派给 Python 了（2026-08-06 实测某餐饮
+     * Tool 日志 0 次调用）。而且那个 Tool 的领域**硬编码为 inventory** —— 餐饮租户
+     * 就算走到它，拿到的也是库存域的发现。两个问题叠加 = 对餐饮它等于不存在。
+     *
+     * <p>本端点与上面的 {@code GET /findings} 同一个位置、同一份发现层结果：店长在
+     * 「今日营运台」看到一条发现之后，可以直接就这批发现要一份行动建议，**不必进
+     * 对话**。
+     *
+     * <p>⛔ 数字仍然全部来自发现层，LLM 只负责措辞 —— 越界由
+     * {@code GroundedNumberValidator} 事后拒绝整次生成，不是靠提示词嘱咐。
+     */
+    @GetMapping("/action-plan")
+    @Operation(summary = "把当前发现整理成行动建议", description = "数字全部来自发现层，LLM 只负责措辞")
+    public ApiResponse<Map<String, Object>> getActionPlan(
+            @PathVariable String factoryId,
+            @RequestParam(required = false) String domain) {
+
+        String resolvedDomain = (domain == null || domain.isBlank()) ? DEFAULT_DOMAIN : domain;
+        Map<String, Object> plan = findingActionPlanService.generate(factoryId, resolvedDomain);
+        log.info("行动建议: factoryId={}, domain={}, hasPlan={}, basedOnFindings={}",
+                factoryId, resolvedDomain, plan.get("hasPlan"), plan.get("basedOnFindings"));
+        return ApiResponse.success(plan);
     }
 }
