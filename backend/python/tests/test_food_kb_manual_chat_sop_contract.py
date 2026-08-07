@@ -403,6 +403,14 @@ def test_restaurant_scope_default_and_followup_questions_use_the_reviewed_contra
     assert "属于新的收窄问题，系统会按新问题重新规划" in (
         _RESTAURANT_CONTEXT_SCOPE_ANSWER
     )
+    assert "planner 结构化判定唯一缺项是 `store_scope`" in (
+        _RESTAURANT_CONTEXT_SCOPE_ANSWER
+    )
+    assert "最近30天加权毛利率是多少" in _RESTAURANT_CONTEXT_SCOPE_ANSWER
+    assert "最近30天哪个时段生意最好" in _RESTAURANT_CONTEXT_SCOPE_ANSWER
+    assert "最近30天食材成本占营收多少" in _RESTAURANT_CONTEXT_SCOPE_ANSWER
+    assert "最近30天折扣力度多大" in _RESTAURANT_CONTEXT_SCOPE_ANSWER
+    assert "当前未闭环限制" in _RESTAURANT_CONTEXT_SCOPE_ANSWER
 
 
 def test_restaurant_metric_and_entity_questions_use_current_axes():
@@ -424,6 +432,8 @@ def test_restaurant_data_availability_never_turns_missing_into_zero():
         "只有 POS 流水，没有领料损耗盘点时能回答什么，会按 0 算吗？",
         "仅有 POS 时后厨事实缺失是不是都返回 0？",
         "只有后厨事实没有 POS 时能编造营收和渠道吗？",
+        "哪个供应商报价最贵，没数据时应该怎么回答？",
+        "平台抽成为什么没有数据，缺哪张表？",
     )
     assert all(
         _needs_restaurant_data_availability_guard(q)
@@ -434,6 +444,17 @@ def test_restaurant_data_availability_never_turns_missing_into_zero():
     )
     assert "不能按 0 计算" in _RESTAURANT_DATA_AVAILABILITY_ANSWER
     assert "0 只代表真实查询得到的 0" in _RESTAURANT_DATA_AVAILABILITY_ANSWER
+    assert "供应商报价" in _RESTAURANT_DATA_AVAILABILITY_ANSWER
+    assert "实收金额" in _RESTAURANT_DATA_AVAILABILITY_ANSWER
+    assert "数据库表/字段只进入工程侧缺口元数据" in (
+        _RESTAURANT_DATA_AVAILABILITY_ANSWER
+    )
+    assert "agg_supplier_price" not in _RESTAURANT_DATA_AVAILABILITY_ANSWER
+    assert "actual_receive" not in _RESTAURANT_DATA_AVAILABILITY_ANSWER
+    assert "有数据或查表失败时不得硬编码成缺失" in (
+        _RESTAURANT_DATA_AVAILABILITY_ANSWER
+    )
+    assert "不替用户执行比价" in _RESTAURANT_DATA_AVAILABILITY_ANSWER
 
 
 def test_restaurant_guide_never_calculates_business_data():
@@ -619,6 +640,7 @@ def test_restaurant_department_and_stocktake_questions_share_current_contract():
         "五部门驾驶舱分别看什么，盘点亏损金额怎样切换时间范围？",
         "老板、店长和采购对运营市场财务人事采购有哪些权限？",
         "盘亏多少钱，能切本月和最近7天吗？",
+        "AI 工作台和 AI 价值汇总从哪里进入？",
     )
     assert all(
         _needs_restaurant_department_stocktake_guard(q)
@@ -632,6 +654,8 @@ def test_restaurant_department_and_stocktake_questions_share_current_contract():
         _RESTAURANT_DEPARTMENT_STOCKTAKE_ANSWER
     )
     assert "中央角色/模块/金额权限闸" in _RESTAURANT_DEPARTMENT_STOCKTAKE_ANSWER
+    assert "AI 工作台" in _RESTAURANT_DEPARTMENT_STOCKTAKE_ANSWER
+    assert "/dashboard/ai-value" in _RESTAURANT_DEPARTMENT_STOCKTAKE_ANSWER
 
 
 def test_restaurant_proactive_findings_keep_three_states_and_grounded_actions():
@@ -887,6 +911,9 @@ def test_restaurant_registered_sources_match_current_product_contract():
             "跨页面或跨模块不会自动继承筛选",
             "默认查询全部门店",
             "范围：全部门店合计",
+            "最近30天加权毛利率是多少",
+            "最近30天哪个时段生意最好",
+            "数据库表/字段只进入工程侧缺口元数据",
             "指定区间、繁体范围词与输出偏好",
             "月度经营报告：预览、导出与数据截至时间",
             "AI 飞轮、菜品别名与人审边界",
@@ -900,6 +927,7 @@ def test_restaurant_registered_sources_match_current_product_contract():
             "盘点只认已完成",
             "今日营运台主动发现、峰值时段与行动建议",
             "五部门驾驶舱",
+            "AI 工作台",
             "当前页面只确认发现卡可见",
         ),
         "restaurant-product-manual.html": (
@@ -907,6 +935,9 @@ def test_restaurant_registered_sources_match_current_product_contract():
             "全部门店是聚合范围",
             "默认查询全部门店",
             "范围：全部门店合计",
+            "最近30天加权毛利率是多少",
+            "最近30天食材成本占营收多少",
+            "数据库表/字段只进入工程侧元数据",
             "精确日期、范围词与输出偏好",
             "月度经营报告",
             "AI 飞轮运营台与菜品别名治理",
@@ -920,12 +951,16 @@ def test_restaurant_registered_sources_match_current_product_contract():
             "餐饮预测排班与调整边界",
             "主动发现与行动建议",
             "餐饮五部门",
+            "AI 工作台",
             "当前前端只确认发现卡可见",
         ),
         "restaurant-metrics-glossary.html": (
             "21 维综合分析证据目录",
             "REAL / PROXY / SIMULATED / MISSING",
             "当前餐饮问答的指标与接地合同",
+            "最近30天加权毛利率是多少",
+            "最近30天折扣力度多大",
+            "数据库表/字段只进入工程侧元数据",
             "wastage_cost",
             "requisition_cost",
             "不能称为精确真实成本模型",
@@ -933,6 +968,7 @@ def test_restaurant_registered_sources_match_current_product_contract():
             "只统计状态为 <code>COMPLETED</code>",
             "销量 × 单位贡献毛利",
             "今日营运台主动发现三态与接地行动建议",
+            "AI 工作台",
             "客户端未接入动作前不得宣称页面已能生成策划案",
         ),
     }
@@ -955,8 +991,13 @@ def test_restaurant_registered_sources_match_current_product_contract():
     assert "RN 仓库角色与 Web 业务边界" in ai_assist
     assert "投入来源、缺料与单据追踪" in ai_assist
     assert "指标口径与菜单目录裁决" in ai_assist
-    assert "默认全店与范围澄清" in ai_assist
+    assert "默认全店与当前限制" in ai_assist
     assert "范围：全部门店合计" in ai_assist
+    assert "最近30天加权毛利率是多少" in ai_assist
+    assert "最近30天哪个时段生意最好" in ai_assist
+    assert "数据库表/字段只进入工程侧元数据" in ai_assist
+    assert "agg_supplier_price" not in ai_assist
+    assert "actual_receive" not in ai_assist
     assert "7 节小课 · 约 12 分钟" in ai_assist
     assert "飞轮与人审边界" in ai_assist
     assert "不做计算" in ai_assist
@@ -967,6 +1008,7 @@ def test_restaurant_registered_sources_match_current_product_contract():
     assert "五部门与角色权限边界" in ai_assist
     assert "主动发现与接地行动建议" in ai_assist
     assert "<strong>五部门驾驶舱：</strong>" in ai_assist
+    assert "AI 工作台" in ai_assist
     assert "<strong>四部门驾驶舱：</strong>" not in ai_assist
 
 
@@ -1288,6 +1330,12 @@ async def test_bom_workflow_publication_answer_never_calls_the_llm(monkeypatch):
         ),
         (
             "五部门驾驶舱分别看什么，盘点亏损金额怎样切换时间范围？",
+            "restaurant",
+            _RESTAURANT_DEPARTMENT_STOCKTAKE_ANSWER,
+            "restaurant-full-chain-sop.html",
+        ),
+        (
+            "AI 工作台和 AI 价值汇总从哪里进入？",
             "restaurant",
             _RESTAURANT_DEPARTMENT_STOCKTAKE_ANSWER,
             "restaurant-full-chain-sop.html",
