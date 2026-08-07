@@ -768,6 +768,40 @@ def _is_broad_business_overview(text: str) -> bool:
     )
 
 
+#: 「食材」这一类**泛指词**本身不是某个食材 —— 它们只是在给指标做限定
+#: (食材成本 / 原料成本), 出现它们不代表用户要按食材拆分。
+_INGREDIENT_GENERIC_TOKENS = (
+    "食材成本", "原料成本", "原材料成本", "食材费用",
+    "食材", "原料", "原材料", "配料", "物料",
+)
+
+
+def _query_names_an_ingredient(text: str) -> bool:
+    """问句里有没有**点名某个具体食材**（而不只是出现「食材」这个泛指词）。
+
+    ⛔ 判据是「点没点名」, 不是「出没出现食材相关的词」。
+    「食材成本占营收多少」出现了「食材」但一个食材都没点名 —— 它问的是全店比率;
+    「鲈鱼的损耗多少」点了名 —— 那才是食材粒度。
+
+    ⚠️ 必须在**原句**上抽, 再看抽到的是不是泛指词 —— 第一版是先把泛指词从句子里
+    剔掉再抽, 结果「罗氏虾的**食材成本**是多少」被剔成「罗氏虾的是多少」,
+    句子结构破了, 抽取器抽不出来, 于是**点了名也被判成没点名**。测试当场抓到。
+    (与 daypart 那道守卫同一个做法: 抽到的名字若本身是泛指词就不算点名。)
+
+    dim_ingredient 的真伪由下游 resolver 校验, 这里只判「用户有没有指名道姓」。
+    """
+    if not text:
+        return False
+    candidates = extract_dish_candidates(text) or []
+    single = extract_dish_candidate(text)
+    if single:
+        candidates = [single, *candidates]
+    return any(
+        c and c not in _INGREDIENT_GENERIC_TOKENS
+        for c in candidates
+    )
+
+
 def _is_daypart_business_query(text: str) -> bool:
     """时段经营问句 —— 由 grounded staffing / 客流 resolver 承接。
 
