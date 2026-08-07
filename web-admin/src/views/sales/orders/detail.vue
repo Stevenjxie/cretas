@@ -422,10 +422,22 @@ async function saveEditItems() {
   if (items.length === 0) { ElMessage.warning('请至少添加一个产品行'); return; }
   editItemsSaving.value = true;
   try {
-    // 带 version 启用后端乐观锁 (updateSalesOrder: request.version 非空时比对) — 防并发编辑静默覆盖
+    // 🔴 2026-08-07 走客供料全流程时撞到的死结:
+    //   UpdateSalesOrderRequest 把 processingMode / materialSupplyMode 标了 @NotNull,
+    //   而这里只发 { items, version } → 400「加工方式不能为空, 物料供应方式不能为空」。
+    //   配上「单价为空不许提审」那道闸, 用户会被彻底卡住:
+    //     建单时单价留空 → 提审被拦「请先补全单价」
+    //       → 点「编辑产品行」补单价 → 保存被拦「加工方式不能为空」
+    //         → 两边都出不去。
+    //   这里把订单已有的两个值原样回传(本对话框不改它们), 不动后端契约。
+    const current = order.value as {
+      version?: number; processingMode?: string; materialSupplyMode?: string;
+    } | null;
     const res = await put(`/${factoryId.value}/sales/orders/${orderId.value}`, {
       items,
-      version: (order.value as { version?: number } | null)?.version,
+      processingMode: current?.processingMode,
+      materialSupplyMode: current?.materialSupplyMode,
+      version: current?.version,
     });
     if (res.success) {
       ElMessage.success('产品行已保存');
