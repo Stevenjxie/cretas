@@ -88,10 +88,12 @@ MISS_STATUS_VALUES = frozenset({
 # Two-level objective gate thresholds (spec section 5). Row-level filter (a)
 # is always applied (tier=llm, contract_pass=true, served=true -- see the SQL
 # in aggregate_candidates). Group-level recommendation (b) additionally
-# requires either repeat occurrence or high single-shot confidence, and never
+# requires repeat occurrence (confidence is NOT a gate -- see 2026-08-07), and never
 # recommends a group where different rows resolved to different codes
 # (`conflict`) -- those still surface for human review, just unmarked.
 _RECOMMEND_MIN_COUNT = 2
+# ⚠️ 2026-08-07 起**不再用于推荐判定**(Steve: 置信度不可证伪, 不作门槛)。
+#    保留常量仅为 SQL 侧的宽松预过滤(它只加宽读取范围, 不排除任何东西)。
 _RECOMMEND_MIN_CONFIDENCE = 0.85
 
 
@@ -278,7 +280,7 @@ async def aggregate_candidates(
 
     Group-level recommendation (b) -- a group is `recommended` only when
     it is NOT `conflict` (all rows agree on the same RESTAURANT_OPS_* code)
-    AND (occurred >= 2 times OR max confidence >= 0.85). Conflicting or
+    AND occurred >= 2 times. Conflicting or
     below-threshold groups are still returned (a human may still want to look
     at them) but `recommended=False` -- the CLI prints them distinctly and
     `apply_promotions` does not gate on this flag (a human decides what goes
@@ -298,6 +300,10 @@ async def aggregate_candidates(
                array_agg(template_code)                                  AS codes,
                COUNT(*)                                                  AS occurrence_count,
                MAX(COALESCE((agg_meta->>'confidence')::float, 0))        AS max_confidence,
+               -- 🔴 2026-08-07 Steve 拍板: 人审必须看到**当时的真实回答**才敢按晋升。
+               --    只给意图码和置信度, 人无从判断这条晋升进去之后会答成什么样。
+               (array_agg(answer ORDER BY created_at DESC))[1]           AS latest_answer,
+               COUNT(DISTINCT factory_id)                                AS tenant_count,
                MAX(created_at)                                           AS last_seen
           FROM smart_bi_llm_fallback_log
          WHERE source = 'template'
@@ -343,16 +349,22 @@ async def aggregate_candidates(
         conflict = len(counts) > 1
         occurrence_count = int(r["occurrence_count"] or 0)
         max_confidence = round(float(r["max_confidence"] or 0.0), 3)
-        recommended = (
-            not conflict
-            and (occurrence_count >= _RECOMMEND_MIN_COUNT or max_confidence >= _RECOMMEND_MIN_CONFIDENCE)
-        )
+        # 🔴 2026-08-07 Steve 拍板: **置信度不作晋升门槛**。
+        #    一段长话里只差「高/低」一个字, 置信度照样很高 —— 它与向量相似度是
+        #    同一种失效: 连续的数、不可证伪。用它当门槛, 等于让一个不可反驳的数
+        #    去决定「这条可以零 token 永久回放」。
+        # ⇒ 只留「次数>=2」当**筛子**(值得看一眼), 真正的闸是人审 + latest_answer。
+        recommended = not conflict and occurrence_count >= _RECOMMEND_MIN_COUNT
         candidates.append({
             "query": norm_query,
             "code": top_code,
             "codes": sorted(counts.keys()),
             "occurrence_count": occurrence_count,
+            # ⚠️ 仅供参考, **不参与 recommended 判定**(见上)。保留是因为它偶尔能
+            #    提示「模型自己都不确定」, 但绝不能反过来当放行依据。
             "max_confidence": max_confidence,
+            "latest_answer": (r["latest_answer"] or "").strip(),
+            "tenant_count": int(r["tenant_count"] or 0),
             "conflict": conflict,
             "recommended": recommended,
             "family": classify_question_family(norm_query),

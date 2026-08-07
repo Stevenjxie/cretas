@@ -55,12 +55,21 @@ class _FakePool:
         return _AcquireCtx(self._conn)
 
 
-def _row(query, codes, occurrence_count, max_confidence, last_seen="2026-07-07"):
+def _row(query, codes, occurrence_count, max_confidence, last_seen="2026-07-07",
+         latest_answer="（当时的真实回答）", tenant_count=1):
+    """假的聚合行。
+
+    ⚠️ 形状必须跟着 SQL 走：2026-08-07 SQL 补了 `latest_answer` / `tenant_count`
+    （人审台要看「当时的真实回答」），这里没跟上就是**假数据在说谎**——
+    6 条测试当场 KeyError，那是对的，比悄悄用 `.get()` 兜过去好。
+    """
     return {
         "norm_query": query,
         "codes": codes,
         "occurrence_count": occurrence_count,
         "max_confidence": max_confidence,
+        "latest_answer": latest_answer,
+        "tenant_count": tenant_count,
         "last_seen": last_seen,
     }
 
@@ -97,7 +106,16 @@ async def test_aggregate_recommends_on_count_path():
     assert c["occurrence_count"] == 3
 
 
-async def test_aggregate_recommends_on_confidence_path():
+async def test_high_confidence_alone_no_longer_recommends():
+    """🔴 2026-08-07 契约变更（Steve 拍板）：**置信度不作晋升门槛**。
+
+    原契约是「次数>=2 **或** 置信>=0.85」，只出现过 1 次但模型自称 0.9 就推荐。
+    但置信度和向量相似度是同一种失效：一段长话里只差「高/低」一个字，
+    置信度照样很高 —— **连续的数、不可证伪**。用它放行，等于让一个无法被反驳的
+    分数决定「这条可以零 token 永久回放」。
+
+    ⇒ 现在只认「次数>=2」当筛子，真正的闸是人审 + `latest_answer` 证据。
+    """
     conn = _FakeConn(rows=[
         _row("挣着钱没", ["RESTAURANT_OPS_SALES_SUMMARY"], 1, 0.9),
     ])
@@ -105,8 +123,26 @@ async def test_aggregate_recommends_on_confidence_path():
 
     candidates = await promo.aggregate_candidates(pool)
 
-    assert candidates[0]["recommended"] is True
+    assert candidates[0]["recommended"] is False, "只凭高置信度不该放行"
     assert candidates[0]["occurrence_count"] == 1
+    # 置信度仍然透出（供人参考），只是不再参与判定。
+    assert candidates[0]["max_confidence"] == 0.9
+
+
+async def test_candidate_carries_the_real_answer_for_human_review():
+    """人审必须看到「当时的真实回答」，否则无从判断这条晋升进去会答成什么样。"""
+    conn = _FakeConn(rows=[
+        _row("本月营收多少", ["RESTAURANT_OPS_SALES_SUMMARY"], 3, 0.7,
+             latest_answer="最近30天总营收 ¥74,561,894.90，共 207,122 单。",
+             tenant_count=2),
+    ])
+    pool = _FakePool(conn)
+
+    candidates = await promo.aggregate_candidates(pool)
+
+    assert candidates[0]["recommended"] is True, "次数>=2 且无冲突 -> 达标待审"
+    assert "74,561,894.90" in candidates[0]["latest_answer"]
+    assert candidates[0]["tenant_count"] == 2
 
 
 async def test_aggregate_not_recommended_below_threshold():

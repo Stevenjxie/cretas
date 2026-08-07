@@ -115,24 +115,54 @@ async def _list_candidates(min_confidence: float, min_count: int, limit: int,
         print("无候选 (要么 log 里没有满足 tier=llm+contract_pass+served 的查询, 要么全部已在 SAMPLE_QUERIES/账本中)")
         return
 
-    print(f"{'query':<42}{'code':<28}{'次数':<6}{'置信':<8}{'冲突':<6}判定")
+    # ── 概览表: 先让人扫一眼全局 ──────────────────────────────────
+    print(f"{'query':<42}{'code':<28}{'次数':<6}{'租户':<6}{'冲突':<6}判定")
     print("-" * 100)
-    n_recommended = 0
+    recommended = []
     for c in candidates:
         if c["recommended"]:
-            mark = "推荐晋升"
-            n_recommended += 1
+            mark = "达标待审"
+            recommended.append(c)
         elif c["conflict"]:
             mark = f"冲突(候选code: {','.join(c['codes'])})"
         else:
-            mark = "未达标(次数<2 且 置信<0.85)"
+            mark = "未达标(次数<2)"
         q_display = c["query"] if len(c["query"]) <= 40 else c["query"][:39] + "…"
         print(
             f"{q_display:<42}{c['code']:<28}{c['occurrence_count']:<6}"
-            f"{c['max_confidence']:<8.2f}{str(c['conflict']):<6}{mark}"
+            f"{c.get('tenant_count', 0):<6}{str(c['conflict']):<6}{mark}"
         )
     print("-" * 100)
-    print(f"共 {len(candidates)} 候选, {n_recommended} 条达标推荐晋升 (次数>=2 或 置信>=0.85 且无 code 冲突)。")
+    print(f"共 {len(candidates)} 候选, {len(recommended)} 条达标 (次数>=2 且无 code 冲突)。")
+    print("⚠ 置信度**不再参与判定** (2026-08-07): 长句里只差「高/低」一个字，"
+          "置信度照样很高 —— 它和向量相似度是同一种失效，不可证伪。")
+
+    # ── 人审台: 达标条目逐条给出「当时的真实回答」──────────────────
+    #
+    # 🔴 Steve 2026-08-07:「我得看到根据我们的模型他的回复是什么，我得人审
+    #    确定他回答没有错，我才补进去」。只给意图码和一个分数，人无从判断这条
+    #    晋升进去之后会答成什么样 —— 而晋升是**零 token 永久回放**，
+    #    错了比答错一次严重得多。
+    if recommended:
+        print("")
+        print("=" * 100)
+        print("人审台 — 逐条核对「当时的真实回答」，确认无误再写进 reviewed.json")
+        print("=" * 100)
+        for i, c in enumerate(recommended, 1):
+            ans = " ".join((c.get("latest_answer") or "").split())
+            if len(ans) > 300:
+                ans = ans[:299] + "…"
+            print("")
+            print(f"[{i}] {c['query']}")
+            print(f"    意图: {c['code']}   次数: {c['occurrence_count']}   "
+                  f"租户数: {c.get('tenant_count', 0)}   最近: {c.get('last_seen')}")
+            if ans:
+                print(f"    当时回答: {ans}")
+            else:
+                print("    当时回答: ⚠ 日志里没有 answer —— **不要晋升**，"
+                      "没有证据就没有人审的依据")
+
+    print("")
     print(
         "人审后把要晋升的条目整理成 JSON list ([{\"query\":..., \"code\":...}, ...])，"
         "再跑: python scripts/restaurant-intent-promote.py --apply reviewed.json"
