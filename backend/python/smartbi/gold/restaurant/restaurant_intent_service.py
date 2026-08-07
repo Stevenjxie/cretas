@@ -1444,6 +1444,26 @@ async def tiered_answer(
         answer_text += _store_scope_disclosure(spec)
         answer_text += _time_range_disclosure(spec)
         answer_text = _prepend_action_warning(answer_text, action_warning)
+
+        # 优先级链第 1 层（会话/租户配置）—— 输出口径这一项。
+        # ⛔ fail-open：取不到就是 None，`resolve_output_preference` 会落到全局默认。
+        #    配置查不动不该让一次问答失败。
+        from smartbi.shared.async_config_lookup import resolve_config
+
+        tenant_output_pref = await resolve_config(
+            pool, factory_id, "restaurant.output_preference", default=None
+        )
+        if isinstance(tenant_output_pref, str):
+            # JSONB 存的可能是 '["text","table"]' 也可能是裸串 'table'。
+            # 两种都收，但**不猜**：解析不出来就当没配。
+            import json as _json
+
+            try:
+                parsed = _json.loads(tenant_output_pref)
+                tenant_output_pref = parsed if isinstance(parsed, list) else [parsed]
+            except (TypeError, ValueError):
+                tenant_output_pref = [tenant_output_pref]
+
         result: Dict[str, Any] = {
             "kind": "answer",
             "answer_text": answer_text,
@@ -1459,7 +1479,14 @@ async def tiered_answer(
             # 好的最终形态** —— 前端不该自己再猜租户默认, 否则 web-admin /
             # mobile-rest-ai / RN 三处会各猜一套, 客户口径立刻分裂。
             # 表格不需要后端新数据通道: charts 里 xAxis.data + series[].data 够渲染。
-            "output_preference": list(resolve_output_preference(spec)),
+            # 2026-08-07: `tenant_default` 终于接上了 —— 该参数从设计之初就在
+            # (`resolve_output_preference` 的 docstring 写着「客户口径注册表落地后
+            # 就是接线口」)，但一直没人传，于是租户级口径**形同虚设**。
+            # 存储用的是早就存在的 `business_config_overrides`，不新建表；
+            # 读取走 `shared/async_config_lookup`（异步侧唯一承载，见该模块 docstring）。
+            "output_preference": list(
+                resolve_output_preference(spec, tenant_default=tenant_output_pref)
+            ),
             "query_plan_hash": spec.plan_hash,
             "executed_resolvers": list(executed_codes),
             "structured_context": structured_context,
