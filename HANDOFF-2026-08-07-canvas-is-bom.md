@@ -1,7 +1,7 @@
-# 画布即 BOM（方案 B）—— 阶段 1/5/2/4 完成，阶段 3 未做
+# 画布即 BOM（方案 B）—— 阶段 1/5/2/4 + 3-1 完成，阶段 3 剩两项
 
 **日期**: 2026-08-07
-**本地 main**: `077f049ae7 merge: 画布即 BOM 阶段 1/5/2/4`
+**本地 main**: `d4ac283780 merge: 画布即 BOM 阶段 3-1(投入明细进工艺定义)`
 **设计定稿**: `docs/superpowers/specs/2026-08-07-canvas-is-bom-design.md`（分支 `codex/claude-bom-canvas-spec`）
 **GitHub 仍不可用** → 全部走本地 main 汇合（见 `.claude/rules/worktree-and-main-only-deploy.md` 的「🔌 GitHub 不可用时」）
 **未部署 prod**（owner 未下指令）
@@ -16,7 +16,8 @@
 | 5 删旧 BOM 页 | `1b29eda181` | `codex/claude-canvas-bom-p5` | 51 文件；老地址改 redirect 到画布 |
 | 2 副产改真实节点 | `58a4f55b8a` | `codex/claude-canvas-bom-p2` | 浮层 → 工序派生的真实产出节点 |
 | 4 画布 AI 扩能 | `ecbe6ec1b8` | `codex/claude-canvas-bom-p4` | 两条 AI 路径 + 五条硬约束 |
-| **合并** | `077f049ae7` | `main`（worktree `cretas-rest-ai`） | — |
+| **3-1** 投入明细进定义 | `e651628447` | `codex/claude-canvas-bom-p3` | 改克数 → 换 revisionHash → 新工艺版本 |
+| **合并** | `077f049ae7` + `d4ac283780` | `main`（worktree `cretas-rest-ai`） | — |
 
 分支是**链式**的（p1 ← p5 ← p2 ← p4），合 p4 一次即全部合入。
 
@@ -70,23 +71,54 @@
 > 旁证：`hash(revision)` 已有**三路回落**（storedOrderHash / legacyCanonicalHash / canonicalHash），
 > 说明历史上换过哈希口径且是靠"接受已存的那个"兜住的。
 
-### ⏳ 剩下四件事（都未做）
+### ✅ 3-1 已做：投入明细进工艺定义（commit `e651628447`）
 
-1. **`materialBindings` 进工艺定义** —— 目前投入明细仍在 `bom_recipe_items`，
-   画布是从 BOM 表派生浮层 cell 展示。要反过来：画布定义是权威，BOM 表是投影。
-2. **去掉序列化路径上的 `stripBomOverlay` / `stripBomOverlayEdges`**
-   ⚠️ 这里有个**设计歧义需要拍板**：定稿同时写了「去掉 strip」和「但不是简单地把浮层节点塞进图」。
-   若 `materialBindings` 挂在真实工序/成品节点上，辅料/包材 cell 就变成**该字段的视图**
-   （从定义派生，而不是从 BOM 表派生）—— 那样 strip **仍然需要**（它们仍是派生展示物）。
-   两种读法的工作量与图结构差别很大，动手前建议先确认。
-3. **删除 `WORKFLOW_ACTIVE_BOM_REQUIRED` 前置**
-   消费点：`service/bom/WorkflowBomSynchronizationService.java:54`（后端唯一产出点）、
-   `workflow/workflowApi.ts:22`、`ProductProcessWorkflowEditor.vue:3971`。
-   ⚠️ **不能单独删**：删了之后没有 ACTIVE BOM 也能发布，而报工/成本/追溯都在读 BOM 表 ——
-   必须同时有「从画布定义投影出 BOM 快照」，否则发布出来的版本报工时无料可扣。
-4. **`synchronizeActiveBomToWorkflowRevision` 降级为投影**
-   （`BomRecipeService.java:54` 接口 / `BomRecipeServiceImpl` 实现 /
-   `WorkflowBomSynchronizationService.java:323` 调用点）
+`ProcessNodeData` 新增 `materialBindings[]` + `injectionAmount`；加载 BOM 时把
+**权威数值**（`dosagePerKgG` / `subsequentPotRatio`，不是展示串 `dosageText`）
+hydrate 进工序节点 data。改克数 → 改 nodesJson → 换 revisionHash → **新工艺版本**。
+
+⛔ hydration 走的是**加载期幂等投影**，不是 `mutate()`：
+后者会置 dirty，用户只是**打开一张图**就变成「有未保存改动」，保存后造出一个与旧版
+等价的新版本 —— 版本线会因为「看了一眼」而增长，跟方案 B 正好相反。
+真机实测：同一张图连开两次，「保存草稿」两次都是 disabled。
+
+**关于「去掉 stripBomOverlay」这句的判读**（我自己拍的，理由写在 commit 里）：
+定稿的两句话可以同时成立 —— strip 原本的**理由**是「改克数只动 BOM 草稿、不产生新版本」，
+方案 B 推翻了这条理由，所以它**不再承载任何数据**；但它的**机制**要留，因为辅料/包材 cell
+仍是派生展示物，持久化等于往图里塞重复数据（加载时还会重新派生）。数据本身已搬到真实
+工序节点上、已进定义、已进 hash。若你的读法不同，改的是这一处判读，不影响 3-1 的其余部分。
+
+### 🔴 3-2 / 3-3 未做，且**卡在一个设计缺口上**（不是实现难度）
+
+- **删除 `WORKFLOW_ACTIVE_BOM_REQUIRED` 前置**
+  消费点：`service/bom/WorkflowBomSynchronizationService.java:54`（preflight）、
+  `BomRecipeServiceImpl.java:682-686`（同步时直接抛）、
+  `workflow/workflowApi.ts:22`、`ProductProcessWorkflowEditor.vue:3971`。
+- **`synchronizeActiveBomToWorkflowRevision` 降级为「从画布投影出 BOM 快照」**
+  （`BomRecipeService.java:54` / `BomRecipeServiceImpl.java:663` / `WorkflowBomSynchronizationService.java:323`）
+
+**卡点（查证过，不是猜的）**：要让「没有 ACTIVE BOM 也能发布」成立，就得从画布投影出一份
+**能激活**的 BOM。而激活要过两道闸（`BomRecipeServiceImpl.java:403-411`，注释里写着
+「两道闸都得豁免……一个规则两处承载」）：
+
+```
+validateActivatableItems(member);                        // 至少 1 条明细
+readinessService.requireBomCompleteForActivation(...);   // 至少配置一项主原料
+```
+
+⛔ **「主料用量」这块数据画布上根本没有** —— 画布只声明「可投入哪些物料」，
+用量由生产计划固定的 BOM 限定（`WorkflowProcessNode.vue` 的说明文字就是这么写的：
+「Workflow 只声明可投入物料；主料和替代料由生产计划固定的 BOM 自动限定」）。
+
+所以「画布是权威、BOM 是投影」这句话在**主料用量**这一维上目前不成立：投影不出来的东西，
+删掉前置也变不出来。这是设计缺口，要么
+ (a) 主料用量也搬进画布（那是另一次口径变更，得你拍板），要么
+ (b) 为「投影出来的 BOM」放宽这两道激活闸（但那会把 2026-08-05 那份
+     「主料用量为空的 ACTIVE BOM」合法化 —— 定稿正是要消灭它）。
+
+**我没有替你选**，因为两条路都改变已拍板的口径（属于定稿 §5 的停手条件）。
+
+### 硬闸（3-1 已跑，结果在这里；做 3-2/3-3 时照样再跑一次）
 
 ### 硬闸基线（改前快照，做阶段 3 时逐条比对）
 
