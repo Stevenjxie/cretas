@@ -12,11 +12,7 @@ import asyncpg
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "smartbi"))
 
 D_QUERIES = [
-    "加权毛利率是多少",
-    "哪个菜卖得最好",
-    "毛利最低的菜品有哪些",
     "最近损耗情况怎么样",
-    "营收趋势怎么样",
     "各门店对比如何",
     "折扣力度多大",
 ]
