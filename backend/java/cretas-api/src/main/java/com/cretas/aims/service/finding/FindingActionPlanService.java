@@ -67,6 +67,8 @@ public class FindingActionPlanService {
     private final FindingService findingService;
     private final DashScopeClient dashScopeClient;
     private final GroundedNumberValidator groundedNumberValidator;
+    /** 只用它的 {@code renderDigestLines} —— 纯模板零 LLM，见 {@link #renderFacts}。 */
+    private final FindingTextRenderer findingTextRenderer;
 
     /**
      * @param factoryId 租户
@@ -99,7 +101,8 @@ public class FindingActionPlanService {
         }
 
         List<Object> facts = buildFacts(findings);
-        String plan = dashScopeClient.chatLowTemp(systemPrompt(domain), renderFacts(facts));
+        String plan = dashScopeClient.chatLowTemp(
+                systemPrompt(domain), renderFacts(findingResult));
 
         if (plan == null || plan.isBlank()) {
             throw new IllegalStateException("模型未产出行动建议, 拒绝返回空方案");
@@ -154,10 +157,28 @@ public class FindingActionPlanService {
         return facts;
     }
 
-    private String renderFacts(List<Object> facts) {
-        StringBuilder sb = new StringBuilder("当前异常事实：\n");
-        for (Object fact : facts) {
-            sb.append(fact).append('\n');
+    /**
+     * 喂给模型的事实文本 —— 用 {@link FindingTextRenderer} 已经渲染好的整句，
+     * 不是裸的 {@code {对象: X, ...}} 字典。
+     *
+     * <p>🔴 2026-08-07 prod 实测的缺陷：裸字典喂进去时，模型把两条**互不相关**的
+     * 发现揉成了一条 —— 谜题菜「罗氏虾」和损耗类型「变质」被写成
+     * 「排查罗氏虾变质原因」，还冒出「排查罗氏虾10个菜品销售表现」。
+     * 数字没编（{@link GroundedNumberValidator} 放行是对的），但**归因错了**；
+     * 一个归因错的行动建议和一个编了数字的一样糟 —— 它会被照着执行。
+     *
+     * <p>根因是裸字典里只有「对象」两个字，模型分不清这是两件事。渲染层的整句
+     * 天然带着「谁的什么指标」，而它是**纯模板零 LLM** 的 —— 于是模型拿到的每
+     * 一句话在归因上已经是对的，它只需要排先后、给动作。
+     *
+     * <p>⚠️ 校验仍然用**结构化** facts（{@link #buildFacts}）取合法数字集合 ——
+     * 那一侧刻意不改：从渲染好的句子里再解析数字，等于让校验依赖措辞，
+     * 措辞一变校验就漏。
+     */
+    private String renderFacts(FindingService.Result result) {
+        StringBuilder sb = new StringBuilder("当前异常事实（每行一条，彼此独立，不要合并）：\n");
+        for (String line : findingTextRenderer.renderDigestLines(result)) {
+            sb.append(line).append('\n');
         }
         return sb.toString();
     }

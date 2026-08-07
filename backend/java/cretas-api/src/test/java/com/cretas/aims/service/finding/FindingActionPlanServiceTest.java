@@ -39,7 +39,8 @@ class FindingActionPlanServiceTest {
     private final GroundedNumberValidator validator = new GroundedNumberValidator();
 
     private FindingActionPlanService service() {
-        return new FindingActionPlanService(findingService, dashScopeClient, validator);
+        return new FindingActionPlanService(
+                findingService, dashScopeClient, validator, new FindingTextRenderer());
     }
 
     private static Finding lowStock(String name, int current, int safety, int gap) {
@@ -186,6 +187,38 @@ class FindingActionPlanServiceTest {
                 "餐饮与工厂是两个产品, 身份错了不只是措辞问题: " + prompt);
         // 四条硬性要求对两个领域必须逐字相同 —— 各写一份是让两边漂开的起点。
         assertTrue(prompt.contains("禁止使用"), prompt);
+    }
+
+    @Test
+    @DisplayName("UT-FAP-12: 🔴 喂给模型的是渲染好的整句 —— 裸字典会让它把两条发现揉成一条")
+    void factsGoToModelAsRenderedSentences() {
+        Map<String, Object> wastageFacts = new LinkedHashMap<>();
+        wastageFacts.put("cost", 258495.17);
+        wastageFacts.put("share", 36.5);
+        wastageFacts.put("windowDays", 7);
+        Finding wastage = new Finding("WASTAGE_TYPE_CONCENTRATION", "restaurant",
+                Finding.Severity.WARNING, 70, "变质", "变质", wastageFacts);
+
+        when(findingService.detectInline(FACTORY_ID, "restaurant"))
+                .thenReturn(result(List.of(puzzleDish("罗氏虾", 78.57), wastage), List.of()));
+        when(dashScopeClient.chatLowTemp(anyString(), anyString())).thenReturn("· 放推荐位");
+
+        service().generate(FACTORY_ID, "restaurant");
+
+        ArgumentCaptor<String> user = ArgumentCaptor.forClass(String.class);
+        verify(dashScopeClient).chatLowTemp(anyString(), user.capture());
+        String facts = user.getValue();
+
+        // 🔴 2026-08-07 prod 实测: 裸字典 {对象: 罗氏虾} / {对象: 变质} 喂进去,
+        //    模型产出「排查罗氏虾变质原因」—— 把两条互不相关的发现揉成了一条。
+        //    数字没编(校验器放行是对的), 但归因错了, 而它会被照着执行。
+        assertTrue(facts.contains("彼此独立"),
+                "必须明说每行独立, 否则模型会跨条目归因: " + facts);
+        // 渲染好的整句天然带「谁的什么指标」, 裸字典只有「对象」两个字。
+        assertTrue(facts.contains("每份赚") && facts.contains("损耗"),
+                "喂的应是 FindingTextRenderer 的整句, 不是裸 Map: " + facts);
+        assertFalse(facts.contains("对象="),
+                "不该再出现裸字典形状: " + facts);
     }
 
     @Test
