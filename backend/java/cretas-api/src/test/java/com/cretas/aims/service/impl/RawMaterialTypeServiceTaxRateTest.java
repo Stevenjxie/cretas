@@ -107,6 +107,10 @@ class RawMaterialTypeServiceTaxRateTest {
     }
 
     private void stubValidSegmentChain() {
+        // 2026-08-07: createMaterialType 现在按「该工厂有没有配分段字典」分流。
+        // 本类用例断言的是**有字典**时的旧行为(生成16位码), 故显式翻成有字典。
+        lenient().when(materialCodeSegmentRepository.countByFactoryIdAndLevel(FACTORY_ID, (short) 1))
+                .thenReturn(3L);
         when(materialCodeSegmentRepository.findByFactoryIdAndSegmentCode(FACTORY_ID, L3_CODE))
                 .thenReturn(Optional.of(segment((short) 3, L3_CODE, L2_CODE, "测试品类")));
         when(materialCodeSegmentRepository.findByFactoryIdAndSegmentCode(FACTORY_ID, L2_CODE))

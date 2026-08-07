@@ -61,16 +61,63 @@ class RawMaterialTypeSegmentContractTest {
         ReflectionTestUtils.setField(service, "materialBusinessCodeService", materialBusinessCodeService);
         lenient().when(materialBusinessCodeService.allocateBusinessCode(FACTORY_ID, L3))
                 .thenReturn("RMSEA000001");
+        // 默认「该工厂已配分段字典」—— 与本类全部既有用例断言的旧行为一致。
+        // 只有点名验「无字典」那几条自己翻成 0。
+        lenient().when(segmentRepository.countByFactoryIdAndLevel(FACTORY_ID, (short) 1))
+                .thenReturn(3L);
+    }
+
+    /**
+     * 🔴 2026-08-07 契约变更: 这条原名 createRequiresL3EvenWhenDictionaryIsEmpty ——
+     * 断言「哪怕工厂没配分段字典也必须给 L3」。那条 fail-closed 让**没有字典的工厂
+     * 根本建不了物料**, 而 16 位分类码在产品里已经是 legacy
+     * (RawMaterialType#getLegacyClassificationCode)。
+     *
+     * <p>新契约按「该工厂有没有配分段字典」分流。⚠️ 注意如果只改实现不改这条用例,
+     * 它会**照样绿**(无字典且没给料号 → 仍然 400 且不 save), 但它测的已经不是
+     * 名字说的那件事了 —— 所以拆成下面三条各自点名的用例。</p>
+     */
+    @Test
+    void createWithDictionaryStillRequiresL3() {
+        // 有字典(setUp 默认) → 旧行为不变: 不给 L3 就拒绝
+
+        BusinessException ex = assertThrows(BusinessException.class,
+                () -> service.createMaterialType(FACTORY_ID, validRequest(null)));
+
+        assertEquals(400, ex.getCode());
+        verify(materialTypeRepository, never()).save(any());
     }
 
     @Test
-    void createRequiresL3EvenWhenDictionaryIsEmpty() {
+    void createWithoutDictionaryUsesUserSuppliedCodeAndSkipsBusinessCode() {
+        // 显式翻成「无字典」→ 用户自己填料号, 不解 L1/L2/L3 链、不发 16 位码
+        when(segmentRepository.countByFactoryIdAndLevel(FACTORY_ID, (short) 1)).thenReturn(0L);
         RawMaterialTypeDTO request = validRequest(null);
+        request.setCode("YL052");
+        when(materialTypeRepository.existsByFactoryIdAndCode(FACTORY_ID, "YL052")).thenReturn(false);
+        when(materialTypeRepository.save(any())).thenAnswer(invocation -> invocation.getArgument(0));
 
+        RawMaterialTypeDTO result = service.createMaterialType(FACTORY_ID, request);
+
+        assertEquals("YL052", result.getCode(), "用户料号必须被保留 —— 旧路径是无条件 setCode(generated) 覆盖掉的");
+        assertEquals("原料", result.getCategory(), "无字典时类别取用户所选, 不再从 L1 段标签派生");
+        assertNull(result.getPrimaryCode(), "无字典没有 L1 段码可挂");
+        assertNull(result.getBusinessCode(),
+                "business_code 前缀是 L3 的 base36, 没有字典就发不出来");
+        assertEquals("YL052", result.getDisplayCode(), "展示码回落到用户料号");
+        verify(materialBusinessCodeService, never()).allocateBusinessCode(any(), any());
+        verify(segmentRepository, never()).lockByFactoryIdAndSegmentCode(any(), any());
+    }
+
+    @Test
+    void createWithoutDictionaryRejectsMissingCode() {
+        // 无字典时料号是唯一编码来源, 缺了必须当场说清楚, 而不是静默生成一个
+        when(segmentRepository.countByFactoryIdAndLevel(FACTORY_ID, (short) 1)).thenReturn(0L);
         BusinessException ex = assertThrows(BusinessException.class,
-                () -> service.createMaterialType(FACTORY_ID, request));
+                () -> service.createMaterialType(FACTORY_ID, validRequest(null)));
 
         assertEquals(400, ex.getCode());
+        assertEquals("code", ex.getHintTarget());
         verify(materialTypeRepository, never()).save(any());
     }
 

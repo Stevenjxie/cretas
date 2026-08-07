@@ -117,9 +117,47 @@ public class RawMaterialTypeServiceImpl implements RawMaterialTypeService {
     public RawMaterialTypeDTO createMaterialType(String factoryId, RawMaterialTypeDTO dto) {
         com.cretas.aims.entity.enums.TaxTreatment taxTreatment = dto.getTaxTreatment() != null
                 ? dto.getTaxTreatment() : com.cretas.aims.entity.enums.TaxTreatment.TAXABLE;
-        MaterialSegmentChain segmentChain = requireValidSegmentChain(factoryId, dto.getSegmentCode());
-        String materialCategory = segmentChain.l1().getSegmentLabel();
-        ensureCategoryMatchesSegment(dto.getCategory(), materialCategory);
+
+        /*
+         * ⛔ 2026-08-07: 这里原本第一行就是 requireValidSegmentChain(...) —— **fail-closed**,
+         * 没有分段字典的工厂**根本建不了物料**。而 16 位分类码在产品里已经是 legacy
+         * (RawMaterialType#getLegacyClassificationCode), 六膳门实际用的是自己的料号
+         * (WL/YL/BC), 那 115 个自由码物料全建于 2026-07-17 之前 —— 之后前端上线了
+         * 「新建必须选 L1/L2/L3」的强制, 才把客户推到 16 位码上。
+         *
+         * 现在按**该工厂有没有配分段字典**分流(不写租户名, 其它 6 个零字典的租户同样受益):
+         *   有字典 → 保持原样: 解 L1/L2/L3 链, 生成 16 位码 + business_code
+         *   无字典 → 用户自己填料号, 不解链不发码, 类别取用户所选(平台级
+         *            MATERIAL_CATEGORY 枚举: 主材/辅材/调味料/包材/添加剂)
+         */
+        // 判据与 MaterialCodeSegmentService#hasSegmentDictionary 同源(有 L1 即视为已配),
+        // 直接走已注入的 repository, 不新加依赖免得引入循环。
+        boolean taxonomyMode =
+                materialCodeSegmentRepository.countByFactoryIdAndLevel(factoryId, (short) 1) > 0;
+
+        MaterialSegmentChain segmentChain = taxonomyMode
+                ? requireValidSegmentChain(factoryId, dto.getSegmentCode())
+                : null;
+        String materialCategory;
+        if (taxonomyMode) {
+            materialCategory = segmentChain.l1().getSegmentLabel();
+            ensureCategoryMatchesSegment(dto.getCategory(), materialCategory);
+        } else {
+            materialCategory = dto.getCategory() == null ? null : dto.getCategory().trim();
+            if (materialCategory == null || materialCategory.isEmpty()) {
+                throw new BusinessException(400, "请选择物料类别")
+                        .withHintTarget("category");
+            }
+            // 无字典时料号由用户提供 —— 这是唯一的编码来源, 必须当场校验而不是让它
+            // 走到下面被 generateNextCode 覆盖(那正是旧路径无条件 setCode 的行为)。
+            String suppliedCode = dto.getCode() == null ? null : dto.getCode().trim();
+            if (suppliedCode == null || suppliedCode.isEmpty()) {
+                throw new BusinessException(400, "请填写物料料号")
+                        .withHint("该工厂未配置物料分段字典，料号由你自己维护（如 WL001 / YL052）")
+                        .withHintTarget("code");
+            }
+            dto.setCode(suppliedCode);
+        }
         boolean packaging = isPackagingCategory(materialCategory);
         String normalizedName = normalizeRequiredName(dto.getName());
         if (materialTypeRepository.existsByFactoryIdAndNormalizedName(factoryId, normalizedName)) {
@@ -135,21 +173,35 @@ public class RawMaterialTypeServiceImpl implements RawMaterialTypeService {
         } else {
             validateTaxMetadata(taxTreatment, dto.getTaxRate(), dto.getTaxExemptionReason());
         }
-        // Serialize allocation per L3 prefix. The previous max+1 scan could return the same
-        // suffix to two concurrent transactions.
-        materialCodeSegmentRepository.lockByFactoryIdAndSegmentCode(factoryId, segmentChain.l3().getSegmentCode())
-                .orElseThrow(() -> invalidSegment("L3编码在生成过程中已失效", dto.getSegmentCode()));
-        String generated = generateNextCode(factoryId, segmentChain.l1().getSegmentLabel(),
-                segmentChain.l3().getSegmentCode());
-        dto.setCode(generated);
+        if (taxonomyMode) {
+            // Serialize allocation per L3 prefix. The previous max+1 scan could return the same
+            // suffix to two concurrent transactions.
+            materialCodeSegmentRepository.lockByFactoryIdAndSegmentCode(factoryId, segmentChain.l3().getSegmentCode())
+                    .orElseThrow(() -> invalidSegment("L3编码在生成过程中已失效", dto.getSegmentCode()));
+            String generated = generateNextCode(factoryId, segmentChain.l1().getSegmentLabel(),
+                    segmentChain.l3().getSegmentCode());
+            dto.setCode(generated);
+            dto.setPrimaryCode(segmentChain.l1().getSegmentCode());
+            log.info("自动生成16位原材料编码: factoryId={}, segmentCode={}, code={}",
+                    factoryId, dto.getSegmentCode(), generated);
+        } else {
+            // 无字典: 料号已在上面校验过, 这里**不能**再覆盖 dto.getCode()
+            dto.setPrimaryCode(null);
+            log.info("工厂未配分段字典, 采用用户维护的料号: factoryId={}, code={}", factoryId, dto.getCode());
+        }
         dto.setCategory(materialCategory);
-        dto.setPrimaryCode(segmentChain.l1().getSegmentCode());
-        log.info("自动生成16位原材料编码: factoryId={}, segmentCode={}, code={}",
-                factoryId, dto.getSegmentCode(), generated);
 
         log.info("创建原材料类型: factoryId={}, code={}", factoryId, dto.getCode());
 
         // 检查编码是否已存在 (handles collision on manually-supplied codes)
+        //
+        // ⚠️ 已知盲区(暂不处理, 2026-08-07 实测): 唯一约束 `ukoddtjujjj3qfsb0o2nyqvcddi`
+        // = UNIQUE(factory_id, code) **不排除软删行**, 而本实体带 @Where(deleted_at IS NULL),
+        // 派生查询看不见软删行 —— 与 2026-08-06 L3 分类那次同型(见 MaterialCodeSegmentRepository
+        // 的 *IncludingDeleted 原生查询)。真软删了一个料号再用同一个码建, 这里会放行,
+        // 然后在 DB 层撞约束抛不可读的 DataIntegrityViolation。
+        // 现在没修是因为**全库 raw_material_types 软删行数为 0**(prod 实测), 触发不了;
+        // 一旦出现软删物料, 这里就得换成绕开 @Where 的原生 exists。
         if (materialTypeRepository.existsByFactoryIdAndCode(factoryId, dto.getCode())) {
             throw new BusinessException(409, "原材料编码已存在: " + dto.getCode())
                     .withHint("请使用其他原材料编码").withHintTarget("code");
@@ -166,7 +218,9 @@ public class RawMaterialTypeServiceImpl implements RawMaterialTypeService {
         }
         materialType.setFactoryId(factoryId);
         materialType.setCode(dto.getCode());
-        if (materialBusinessCodeService != null) {
+        // business_code 的前缀是 L3 的 base36 压缩(MaterialBusinessCodeServiceImpl#deriveStablePrefix),
+        // 没有分段字典就发不出来 —— 无字典模式下留空, getDisplayCode() 会回落到用户填的料号。
+        if (taxonomyMode && materialBusinessCodeService != null) {
             materialType.setBusinessCode(materialBusinessCodeService.allocateBusinessCode(
                     factoryId, segmentChain.l3().getSegmentCode()));
         }
@@ -194,7 +248,8 @@ public class RawMaterialTypeServiceImpl implements RawMaterialTypeService {
         applyReferencePricing(materialType, dto.getMaterialReferencePrice(),
                 dto.getTaxIncludedUnitPrice(), packaging);
 
-        materialType.setPrimaryCode(segmentChain.l1().getSegmentCode());
+        // 无字典模式下 segmentChain 为 null; primaryCode 已按模式设好(有字典=L1 段码 / 无字典=null)
+        materialType.setPrimaryCode(dto.getPrimaryCode());
 
         // 包材规格: 随 create 写入 (nullable, 仅 category=PACKAGING 有业务意义)
         materialType.setPackQtyPerProduct(dto.getPackQtyPerProduct());
