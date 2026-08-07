@@ -74,6 +74,25 @@ def _yuan(cents: int) -> Decimal:
     return (Decimal(cents) / Decimal(100)).quantize(Decimal("0.01"))
 
 
+def _daypart_of(placed_at) -> Optional[str]:
+    """下单时刻 → 时段。**边界不在这里定义**, 逐字对齐 `daypart.DAYPART_CASE_SQL`。
+
+    ⚠️ 没有时间戳就返回 None, ⛔ 不落进「夜宵」—— 那个 CASE 的 ELSE 分支正是
+       `daypart.py` 文件头警告过的坑: `EXTRACT(HOUR FROM NULL)` 是 NULL, 会把
+       「没有时间戳」静默算成夜宵。这里是 Python 侧, 同一个坑要同样躲开。
+    """
+    if placed_at is None or getattr(placed_at, "hour", None) is None:
+        return None
+    hour = placed_at.hour
+    if 10 <= hour <= 13:
+        return "午市"
+    if 14 <= hour <= 16:
+        return "下午茶"
+    if 17 <= hour <= 20:
+        return "晚市"
+    return "夜宵"
+
+
 _DEAD_LETTER_UPSERT_SQL = (
     "INSERT INTO platform_ingest_dead_letter "
     "(factory_id, platform, kind, source_ref, payload, reason) "
@@ -188,12 +207,27 @@ async def write_orders(pool, factory_id: str, orders: List[NormalizedOrder]) -> 
             await conn.execute("SELECT set_config('app.factory_id', $1, true)", factory_id)
             for order in orders:
                 store_id = await _resolve_store(conn, factory_id, order)
+                # ⛔ has_discount / meal_period / staff_id 曾经全部漏写 ——
+                #    2026-08-08 实测 MOCK_REST 236,954 行这三列(以及另外 5 列)
+                #    100% 是 NULL, 而 `gold.queries.staff_ranking` 里有
+                #    `staff_id IS NOT NULL`, 于是那个端点对任何租户都永远返回空。
+                #    这里补齐前两列并按 (门店, 时段) 认领收银员。
+                #  · has_discount 口径与 canonical/normalizer.py:189 逐字一致
+                #    (折扣金额为正), 不是「有没有折扣记录」。
+                #  · 时段切分复用 `gold.restaurant.daypart` 那唯一一处定义,
+                #    ⛔ 不在这里另写一套 CASE —— 否则「晚市」会有两段不同的时间。
+                daypart = _daypart_of(order.placed_at)
                 txn_row = await conn.fetchrow(
                     "INSERT INTO fact_pos_transaction "
                     "(factory_id, store_id, source_type, source_bill_no, date, time, "
                     " gross_amount, discount_amount, net_amount, customer_count, "
-                    " item_count, order_type) "
-                    "VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) "
+                    " item_count, order_type, has_discount, meal_period, staff_id) "
+                    "VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,"
+                    "        (SELECT d.staff_id FROM dim_staff d JOIN dim_store s"
+                    "            ON s.store_id = d.store_id AND s.factory_id = $1"
+                    "          WHERE d.factory_id = $1 AND d.role = 'cashier'"
+                    "            AND d.store_id = $2"
+                    "            AND d.name = s.name || $14 || '收银')) "
                     "ON CONFLICT (factory_id, source_type, store_id, source_bill_no) "
                     "DO NOTHING "
                     "RETURNING id",
@@ -202,6 +236,8 @@ async def write_orders(pool, factory_id: str, orders: List[NormalizedOrder]) -> 
                     _yuan(order.gross_cents), _yuan(order.discount_cents),
                     _yuan(order.net_cents), order.guest_count, len(order.items),
                     order.channel,
+                    (order.discount_cents or 0) > 0,
+                    daypart,
                 )
                 if txn_row is None:
                     # 已存在(幂等命中): 明细也不必重写。不计入 written。
