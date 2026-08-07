@@ -9,6 +9,7 @@ from food_kb.api.manual_chat import (
     ManualChatRequest,
     SYSTEM_PROMPT,
     _FACTORY_BYPRODUCT_LIFECYCLE_ANSWER,
+    _FACTORY_BOM_CANVAS_COST_ANSWER,
     _FACTORY_CURRENT_GATES_ANSWER,
     _FACTORY_ACCOUNTING_PERIOD_OA_ANSWER,
     _FACTORY_PRODUCTION_EXECUTION_ANSWER,
@@ -29,6 +30,7 @@ from food_kb.api.manual_chat import (
     _RESTAURANT_METRIC_ENTITY_ANSWER,
     _RESTAURANT_MONTHLY_REPORT_ANSWER,
     _RESTAURANT_PLAN_ALERT_ANSWER,
+    _RESTAURANT_PROACTIVE_FINDINGS_ANSWER,
     _RESTAURANT_PLATFORM_SYNC_ANSWER,
     _RESTAURANT_QUERY_CONTRACT_ANSWER,
     _RESTAURANT_SCOPE_ACTION_ANSWER,
@@ -38,6 +40,7 @@ from food_kb.api.manual_chat import (
     _build_scope_prompt,
     _needs_bom_workflow_sequence_guard,
     _needs_factory_byproduct_lifecycle_guard,
+    _needs_factory_bom_canvas_cost_guard,
     _needs_factory_current_gates_guard,
     _needs_factory_accounting_period_oa_guard,
     _needs_factory_production_execution_guard,
@@ -58,6 +61,7 @@ from food_kb.api.manual_chat import (
     _needs_restaurant_metric_entity_guard,
     _needs_restaurant_monthly_report_guard,
     _needs_restaurant_plan_alert_guard,
+    _needs_restaurant_proactive_findings_guard,
     _needs_restaurant_platform_sync_guard,
     _needs_restaurant_query_contract_guard,
     _needs_restaurant_scope_action_guard,
@@ -87,7 +91,7 @@ def test_factory_prompt_keeps_restaurant_analysis_out_of_ai_assist():
         "Workflow 完整草稿 → BOM 绑定工序辅料并激活"
         in FACTORY_SYSTEM_PROMPT
     )
-    assert "Workflow 完整草稿 → 创建 BOM 时自动固定该工艺修订" in FACTORY_SYSTEM_PROMPT
+    assert "画布首次保存 BOM 配置时自动固定该工艺修订" in FACTORY_SYSTEM_PROMPT
     assert "普通用户不选择 Workflow 版本" in FACTORY_SYSTEM_PROMPT
     assert "投入 → 工序执行（开始/结束/人数）→ 产出 → 确认提交" in FACTORY_SYSTEM_PROMPT
     assert "ACTIVE BOM 是 Workflow 发布启用的前置门禁" in FACTORY_SYSTEM_PROMPT
@@ -95,10 +99,11 @@ def test_factory_prompt_keeps_restaurant_analysis_out_of_ai_assist():
     assert "每行实收必须大于 0 且等于该行报工数量" in FACTORY_SYSTEM_PROMPT
     assert "禁止回答“两者无依赖”" in FACTORY_SYSTEM_PROMPT
     assert "原料包装换算在“原料类型字典”" in FACTORY_SYSTEM_PROMPT
-    assert "BOM“副产”页签只声明稳定的副产 SKU 与预计量" in FACTORY_SYSTEM_PROMPT
+    assert "画布中的 BOM 副产配置只声明稳定的副产 SKU 与预计量" in FACTORY_SYSTEM_PROMPT
     assert "副产抵扣只按盘点实际数量 × 盘点时人工确认单价" in FACTORY_SYSTEM_PROMPT
     assert "BOM 至少需要一项主原料" in FACTORY_SYSTEM_PROMPT
     assert "没有辅料或包材本身不阻止激活" in FACTORY_SYSTEM_PROMPT
+    assert "当前 BOM 成本摘要只汇总包材" in FACTORY_SYSTEM_PROMPT
     assert "AI 候选无论 0 处还是多处都进入人工审核" in FACTORY_SYSTEM_PROMPT
     assert "盒子、白标、彩标三层参考框" in FACTORY_SYSTEM_PROMPT
     assert "跨量纲成品率必须先补充每单位重量" in FACTORY_SYSTEM_PROMPT
@@ -126,7 +131,8 @@ def test_restaurant_prompt_keeps_session_scope_and_evidence_honest():
     assert "客如云风格 connector" in SYSTEM_PROMPT
     assert "损耗金额按 `wastage_cost` 排序" in SYSTEM_PROMPT
     assert "盘点亏损默认按同一窗口的 `shortage_cost` 回答金额" in SYSTEM_PROMPT
-    assert "四部门与金额权限" in SYSTEM_PROMPT
+    assert "五部门与金额权限" in SYSTEM_PROMPT
+    assert "主动发现与行动建议" in SYSTEM_PROMPT
     assert "POS 流水或后厨事实任一类即可进入餐饮问答" in SYSTEM_PROMPT
     assert "导览助手不替用户计算毛利、损耗" in SYSTEM_PROMPT
 
@@ -159,7 +165,7 @@ def test_bom_workflow_publication_questions_use_the_deterministic_guard():
         " → Workflow 刷新、发布并启用"
         in _BOM_WORKFLOW_SEQUENCE_ANSWER
     )
-    assert "Workflow 完整草稿 → 创建 BOM 时系统自动固定该工艺修订" in (
+    assert "Workflow 完整草稿 → 首次保存 BOM 配置时系统自动固定该工艺修订" in (
         _BOM_WORKFLOW_SEQUENCE_ANSWER
     )
     assert "普通用户不需要选择 Workflow 版本" in _BOM_WORKFLOW_SEQUENCE_ANSWER
@@ -173,6 +179,27 @@ def test_bom_workflow_publication_questions_use_the_deterministic_guard():
     assert "两者无依赖" not in _BOM_WORKFLOW_SEQUENCE_ANSWER
     assert "两者无从属关系" not in _BOM_WORKFLOW_SEQUENCE_ANSWER
     assert "先发布 Workflow" not in _BOM_WORKFLOW_SEQUENCE_ANSWER
+
+
+def test_factory_bom_canvas_and_cost_boundary_is_deterministic():
+    equivalent_questions = (
+        "BOM 现在为什么在 Workflow 画布里配置，人工和均摊去哪了？",
+        "辅料包材 cell 怎么生效，BOM 成本能不能和实际成本比？",
+        "旧 BOM 菜单不见了，怎么从零建首版配方并发布？",
+    )
+    assert all(_needs_factory_bom_canvas_cost_guard(q) for q in equivalent_questions)
+    assert not _needs_factory_bom_canvas_cost_guard(
+        "BOM 激活后 Workflow 为什么还不能发布？"
+    )
+    assert "产品-工序配置" in _FACTORY_BOM_CANVAS_COST_ANSWER
+    assert "不是新的拓扑节点" in _FACTORY_BOM_CANVAS_COST_ANSWER
+    assert "首次保存会创建首版草稿" in _FACTORY_BOM_CANVAS_COST_ANSWER
+    assert "没有包材或副产本身不阻止激活" in _FACTORY_BOM_CANVAS_COST_ANSWER
+    assert "只汇总包材" in _FACTORY_BOM_CANVAS_COST_ANSWER
+    assert "人工与制造费用也不在 BOM 中配置" in _FACTORY_BOM_CANVAS_COST_ANSWER
+    assert "不能直接与正式报工、结算形成的实际完整成本比较" in (
+        _FACTORY_BOM_CANVAS_COST_ANSWER
+    )
 
 
 def test_material_packaging_questions_use_the_reviewed_factory_contract():
@@ -581,8 +608,8 @@ def test_factory_byproduct_questions_use_one_reviewed_lifecycle():
 
 def test_restaurant_department_and_stocktake_questions_share_current_contract():
     equivalent_questions = (
-        "四部门驾驶舱分别看什么，盘点亏损金额怎样切换时间范围？",
-        "老板、店长、厨师长和采购对运营市场财务人事有哪些权限？",
+        "五部门驾驶舱分别看什么，盘点亏损金额怎样切换时间范围？",
+        "老板、店长和采购对运营市场财务人事采购有哪些权限？",
         "盘亏多少钱，能切本月和最近7天吗？",
     )
     assert all(
@@ -590,11 +617,40 @@ def test_restaurant_department_and_stocktake_questions_share_current_contract():
         for q in equivalent_questions
     )
     assert not _needs_restaurant_department_stocktake_guard("今天营业额多少？")
-    assert "四部门驾驶舱" in _RESTAURANT_DEPARTMENT_STOCKTAKE_ANSWER
+    assert "五部门驾驶舱" in _RESTAURANT_DEPARTMENT_STOCKTAKE_ANSWER
+    assert "厨师长角色已经退役" in _RESTAURANT_DEPARTMENT_STOCKTAKE_ANSWER
+    assert "餐饮老板是全局读写角色" in _RESTAURANT_DEPARTMENT_STOCKTAKE_ANSWER
     assert "不能把 kg、L 等不同单位相加" in (
         _RESTAURANT_DEPARTMENT_STOCKTAKE_ANSWER
     )
-    assert "中央角色/金额权限闸" in _RESTAURANT_DEPARTMENT_STOCKTAKE_ANSWER
+    assert "中央角色/模块/金额权限闸" in _RESTAURANT_DEPARTMENT_STOCKTAKE_ANSWER
+
+
+def test_restaurant_proactive_findings_keep_three_states_and_grounded_actions():
+    equivalent_questions = (
+        "店长不提问能看到什么，餐饮现在有几个部门？",
+        "今日营运台的主动发现和行动建议怎么理解？",
+        "谜题菜、损耗提示、几点最忙分别怎么理解？",
+    )
+    assert all(
+        _needs_restaurant_proactive_findings_guard(q) for q in equivalent_questions
+    )
+    assert not _needs_restaurant_proactive_findings_guard("今天营业额多少？")
+    assert "已检查且没有发现" in _RESTAURANT_PROACTIVE_FINDINGS_ANSWER
+    assert "数据不足或不可比属于“跳过”" in _RESTAURANT_PROACTIVE_FINDINGS_ANSWER
+    assert "规则查询失败属于“失败”" in _RESTAURANT_PROACTIVE_FINDINGS_ANSWER
+    assert "高单位贡献毛利、低销量" in _RESTAURANT_PROACTIVE_FINDINGS_ANSWER
+    assert "不能生成事实中没有的" in _RESTAURANT_PROACTIVE_FINDINGS_ANSWER
+    assert "每条已渲染事实彼此独立" in _RESTAURANT_PROACTIVE_FINDINGS_ANSWER
+    assert "不能把谜题菜和损耗等无关发现揉成一件事" in (
+        _RESTAURANT_PROACTIVE_FINDINGS_ANSWER
+    )
+    assert "跨发现错归因" in _RESTAURANT_PROACTIVE_FINDINGS_ANSWER
+    assert "当前页面可见的是“今日营运台”发现卡" in (
+        _RESTAURANT_PROACTIVE_FINDINGS_ANSWER
+    )
+    assert "运营、市场、财务、人事、采购" in _RESTAURANT_PROACTIVE_FINDINGS_ANSWER
+    assert "厨师长已退役" in _RESTAURANT_PROACTIVE_FINDINGS_ANSWER
 
 
 def test_restaurant_plan_alert_questions_use_queryspec_fail_closed_contract():
@@ -671,7 +727,7 @@ def test_latest_f006_sop_is_a_deployable_manual_source():
     assert source_path.is_file()
     sections = parse_markdown_to_sections(source_path.read_text(encoding="utf-8"))
     titles = {section["title"] for section in sections}
-    assert "7. 创建、按工序配置并激活 BOM / 配方" in titles
+    assert "7. 在 Workflow 画布配置并激活 BOM / 配方" in titles
     assert "BOM 与 Workflow 的自动关联顺序" in titles
     assert "8. 绘制、校验并发布 Workflow" in titles
     assert "12. 逐道报工" in titles
@@ -690,7 +746,7 @@ def test_latest_f006_sop_is_a_deployable_manual_source():
     assert "AUTO_MIGRATABLE" in current_sop
     assert "系统自动固定唯一、完整且兼容的 Workflow 修订" in current_sop
     assert "普通用户不选择 Workflow 版本" in current_sop
-    assert "升级到最新工艺" in current_sop
+    assert "配置格是 BOM 叠层，不是新的 Workflow 拓扑节点" in current_sop
     assert "①投入物料/批次与投入数量 → ②工序执行" in current_sop
     assert "包装包材批次" in current_sop
     assert "重复提交同一创建请求只能返回同一张计划" in current_sop
@@ -722,9 +778,9 @@ def test_latest_f006_sop_is_a_deployable_manual_source():
     html_path = Path(PROJECT_ROOT) / "docs/manual/F006-production-full-chain-manual-test-sop.html"
     html = html_path.read_text(encoding="utf-8")
     assert required_sequence in html
-    assert "origin/main · SOP sync 2026-08-04" in html
-    assert "先有完整 Workflow 草稿，再创建 BOM" in html
-    assert "页面没有任意切换版本的选择器" in html
+    assert "origin/main · SOP sync 2026-08-07" in html
+    assert "先有完整 Workflow 草稿，再在同一画布配置 BOM" in html
+    assert "配置格不改变 Workflow 节点或连线" in html
     assert "① 投入" in html
     assert "② 工序执行" in html
     assert "③ 产出明细" in html
@@ -735,8 +791,8 @@ def test_latest_f006_sop_is_a_deployable_manual_source():
     assert "消耗结算标记、入库状态与库存流水一致" in html
     assert "原料多包装与基本单位库存" in html
     assert "Workflow 只声明可能投入/产出，本次事实留到报工" in html
-    assert "BOM 至少配置一项主原料" in html
-    assert "没有辅料或包材本身不阻止激活" in html
+    assert "至少配置一项主原料" in html
+    assert "没有可选包材或副产不阻止激活" in html
     assert "自动同步并发布" in html
     assert "多产出逐行确认" in html
     assert "所有照片都会进入人工审核" in html
@@ -748,6 +804,10 @@ def test_latest_f006_sop_is_a_deployable_manual_source():
     assert "需多少、可用多少、缺多少" in html
     assert "RN 查看今日/历史盘点并续录" in html
     assert "BOM_PRODUCT_MISSING" in html
+    assert "旧“BOM/配方维护”菜单已退出日常入口" in html
+    assert "当前只汇总包材" in html
+    assert "实际完整成本仍从正式报工与结算形成" in html
+    assert "配置格是 BOM 叠层，不是新的 Workflow 拓扑节点" in current_sop
     assert "[{batchNo, qty}]" in html
     assert "开工”必须同步建立生产批次" in html
     assert "PENDING_WAREHOUSE_RECEIPT" in html
@@ -829,6 +889,9 @@ def test_restaurant_registered_sources_match_current_product_contract():
             "默认每 6 小时刷新",
             "预测排班：门店、时段与未来范围",
             "盘点只认已完成",
+            "今日营运台主动发现、峰值时段与行动建议",
+            "五部门驾驶舱",
+            "当前页面只确认发现卡可见",
         ),
         "restaurant-product-manual.html": (
             "当前 21 维综合分析目录",
@@ -845,6 +908,9 @@ def test_restaurant_registered_sources_match_current_product_contract():
             "不超过 3 项时提示覆盖不足",
             "默认每 6 小时刷新",
             "餐饮预测排班与调整边界",
+            "主动发现与行动建议",
+            "餐饮五部门",
+            "当前前端只确认发现卡可见",
         ),
         "restaurant-metrics-glossary.html": (
             "21 维综合分析证据目录",
@@ -855,6 +921,9 @@ def test_restaurant_registered_sources_match_current_product_contract():
             "不能称为精确真实成本模型",
             "预测 FactBook",
             "只统计状态为 <code>COMPLETED</code>",
+            "销量 × 单位贡献毛利",
+            "今日营运台主动发现三态与接地行动建议",
+            "客户端未接入动作前不得宣称页面已能生成策划案",
         ),
     }
     for source_name, markers in expected_markers.items():
@@ -883,6 +952,11 @@ def test_restaurant_registered_sources_match_current_product_contract():
     assert "开工、批次与完工入库链路" in ai_assist
     assert "预测排班的范围与调整边界" in ai_assist
     assert "默认每 6 小时刷新" in ai_assist
+    assert "画布 BOM 与成本边界" in ai_assist
+    assert "五部门与角色权限边界" in ai_assist
+    assert "主动发现与接地行动建议" in ai_assist
+    assert "<strong>五部门驾驶舱：</strong>" in ai_assist
+    assert "<strong>四部门驾驶舱：</strong>" not in ai_assist
 
 
 def test_restaurant_registered_html_sources_parse_in_a_clean_runtime():
@@ -1112,6 +1186,12 @@ async def test_bom_workflow_publication_answer_never_calls_the_llm(monkeypatch):
             "f006-production-full-chain-sop.md",
         ),
         (
+            "旧 BOM 菜单不见了，怎么从零建首版配方并发布？",
+            "factory",
+            _FACTORY_BOM_CANVAS_COST_ANSWER,
+            "f006-production-full-chain-sop.md",
+        ),
+        (
             "Workflow 缺 skuId、其它仓库过期批次和标签 ZIP 下载分别怎么处理？",
             "factory",
             _FACTORY_CURRENT_GATES_ANSWER,
@@ -1196,9 +1276,15 @@ async def test_bom_workflow_publication_answer_never_calls_the_llm(monkeypatch):
             "restaurant-full-chain-sop.html",
         ),
         (
-            "四部门驾驶舱分别看什么，盘点亏损金额怎样切换时间范围？",
+            "五部门驾驶舱分别看什么，盘点亏损金额怎样切换时间范围？",
             "restaurant",
             _RESTAURANT_DEPARTMENT_STOCKTAKE_ANSWER,
+            "restaurant-full-chain-sop.html",
+        ),
+        (
+            "谜题菜、损耗提示、几点最忙分别怎么理解？",
+            "restaurant",
+            _RESTAURANT_PROACTIVE_FINDINGS_ANSWER,
             "restaurant-full-chain-sop.html",
         ),
     ],

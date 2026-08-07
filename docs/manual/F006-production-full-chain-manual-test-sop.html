@@ -271,7 +271,7 @@
         <div class="meta-row">
           <span class="stamp ok">Workflow / BOM 自动关联、逐道报工：按最新 main 校准</span>
           <span class="stamp">计划幂等、包材扣库、成本与小结：按当前生产逻辑校准</span>
-          <span class="stamp code">origin/main · SOP sync 2026-08-04</span>
+          <span class="stamp code">origin/main · SOP sync 2026-08-07</span>
           <span class="stamp">单文件 · 离线可用 · 可打印</span>
         </div>
         <div class="filter-panel screen-only">
@@ -495,30 +495,26 @@
       </section>
 
       <section id="bom">
-        <div class="section-head"><span class="section-no">05</span><div class="section-title"><h3>创建、按工序配置并激活 BOM / 配方</h3><p>原料、包材、工序辅料和锅序各有不同录入口径；产出规格从 SKU 只读带入</p></div></div>
-        <div class="path">生产管理 <b>›</b> 生产配置 <b>›</b> BOM/配方维护</div>
-        <div class="callout warning"><strong>先有完整 Workflow 草稿，再创建 BOM</strong>问答与验收统一摘要为“Workflow 完整草稿 → BOM 绑定工序辅料并激活 → Workflow 刷新、发布并启用”。若目标 SKU 尚无结构完整的 Workflow 草稿，先完成下一节的 Cell / 工序链并保存草稿。返回本页创建 BOM 时，系统自动固定唯一兼容的工艺修订并生成配置骨架；普通用户不选择 Workflow 版本。BOM 至少配置一项主原料；辅料和包材按实际需要添加，没有辅料或包材本身不阻止激活。单独激活 BOM 不会发布 Workflow，最后回 Workflow 使用“自动同步并发布”。</div>
+        <div class="section-head"><span class="section-no">05</span><div class="section-title"><h3>在 Workflow 画布配置并激活 BOM / 配方</h3><p>辅料、包材和副产是画布派生的配置叠层，不是新的 Workflow 拓扑节点</p></div></div>
+        <div class="path">生产管理 <b>›</b> 生产配置 <b>›</b> 产品-工序配置 <b>›</b> 选择目标 SKU</div>
+        <div class="callout warning"><strong>先有完整 Workflow 草稿，再在同一画布配置 BOM</strong>问答与验收统一摘要为“Workflow 完整草稿 → BOM 绑定工序辅料并激活 → Workflow 刷新、发布并启用”。旧“BOM/配方维护”菜单已退出日常入口；保留的深链接只用于诊断或历史兼容。画布从目标 SKU、工序与当前 BOM 派生辅料、包材和副产配置格，普通用户不选择 Workflow 版本。没有 BOM 时首次保存配置会创建首版草稿；至少配置一项主原料，辅料、包材和副产按真实业务需要补充，没有可选包材或副产不阻止激活。</div>
         <div class="table-wrap"><table><thead><tr><th>区域</th><th>配置对象</th><th>手工输入</th><th>系统继承/计算</th></tr></thead><tbody>
-          <tr><td>工艺来源</td><td>目标 SKU 唯一兼容的 Workflow 草稿修订</td><td>无；只可查看工艺或显式升级</td><td>自动固定精确修订和快照；按目标终端反向回溯并锁定工序顺序</td></tr>
+          <tr><td>工艺来源</td><td>当前画布中目标 SKU 的 Workflow 草稿修订</td><td>无；画布只读展示</td><td>自动固定精确修订和快照；按目标终端反向回溯并锁定工序顺序</td></tr>
           <tr><td>配方头</td><td>当前成品 SKU 的版本</td><td>版本备注</td><td>产品、产出单位、标准克重来自 SKU；出成率来自正式报工历史</td></tr>
           <tr><td>原料 RAW</td><td>主要投入物料</td><td>选择原料；必要时备注/高级可选规则</td><td>单位与参考价来自物料主档；当前页面不强迫填写固定出成数量</td></tr>
           <tr><td>包材 PACKAGING（可选）</td><td>真实使用的盒、袋、膜、外箱等</td><td>每成品用量/每产品用量、备注</td><td>单位来自物料主档；按成品基本单位推算需求；无包材时留空</td></tr>
-          <tr><td>辅料 AUXILIARY（可选）</td><td>真实使用且绑定到具体工序的调料/添加剂</td><td>按对应产出 SKU 原始单位填写投入量、锅序比例、是否计成本</td><td>投入工序锁定；同单位基准支持 kg、g、只、袋或自定义单位；跨单位才要求换算</td></tr>
+          <tr><td>辅料 AUXILIARY（可选）</td><td>画布对应工序旁的调料/添加剂配置格</td><td>按对应产出 SKU 原始单位填写投入量、锅序比例、是否计成本</td><td>只在工艺明确支持时可新增；不支持或未知时说明原因，已有历史行仍可查看</td></tr>
+          <tr><td>成本摘要</td><td>当前 BOM 配置的有限预览</td><td>不填写人工或制造费用</td><td>当前只汇总包材；辅料独立维护、主原料无固定数量，不能与实际完整成本直接比较</td></tr>
           <tr><td>版本</td><td>DRAFT / ACTIVE / 历史版本</td><td>克隆后的修改内容</td><td>同一 SKU 仅一个生效版本；ACTIVE 与历史版本只读，新版本不回写旧计划</td></tr>
         </tbody></table></div>
         <div class="steps">
-          <label class="step"><span class="check"><input type="checkbox" data-key="bom-1"><span></span></span><span><h4>B01 · 选择 SKU 并自动关联工艺来源</h4><p>确认“黄油鸡成品 800g”已有唯一、结构完整的 Workflow 草稿，再选择该 SKU 创建 BOM 草稿。核对页面带出的基本单位“盒”、标准克重 800g 和只读“工艺来源”。</p><span class="expect">系统在同一次创建中固定精确 Workflow 修订；页面没有任意切换版本的选择器。找不到、找到多个或终端不明确时，在写入前明确阻止。</span></span></label>
-          <label class="step"><span class="check"><input type="checkbox" data-key="bom-2"><span></span></span><span><h4>B02 · 添加原料 RAW</h4><p>打开“原料”页签逐行添加黄油鸡原料。选择物料后核对计量单位由主档带入；本轮普通原料不填写固定出成率，按需填写备注。高级选项只有真实业务需要时才使用。</p><span class="expect">原料筛选只出现原料类；同量纲单位可明确选择，单位不兼容时提示回主档核对。</span></span></label>
-          <label class="step"><span class="check"><input type="checkbox" data-key="bom-3"><span></span></span><span><h4>B03 · 按实际需要添加包材 PACKAGING</h4><p>真实使用成品盒/袋、封膜或外箱时才切换“包材”页签添加。填写每 1 个成品基本单位所需包材量；例如 1盒用 1 个盒，8盒共用 1 箱时每产品用量填 0.125。没有包材的产品保持空白。</p><span class="expect">没有包材本身不阻止激活；一旦添加，角色、主档单位和大于 0 的自然用量必须同时齐全。服务端一次列出该行全部缺项，单位不能在 BOM 中改成另一种。</span></span></label>
-          <label class="step"><span class="check"><input type="checkbox" data-key="bom-4"><span></span></span><span><h4>B04 · 创建配方头草稿并核对工序骨架</h4><p>至少已有 1 行主原料后点“创建配方”，选择空白创建或复制同源规则；填写版本备注并创建草稿。</p><span class="expect">配方头显示产品、盒、800克/盒均只读；工艺来源只读；目标 SKU 的共享祖先和专属工序按拓扑顺序出现，兄弟终端专属分支不混入。</span></span></label>
-          <label class="step"><span class="check"><input type="checkbox" data-key="bom-5"><span></span></span><span><h4>B05 · 按实际需要配置工序辅料</h4><p>真实存在调料或添加剂时，切换“辅料 → 工序编排”，打开当前 BOM 草稿，按系统生成的顺序展开对应工序并点“添加工序调料”。投入基准使用该工序产出 SKU 的原始单位：kg 显示每 1kg，g 可兼容每 1000g，只、袋、bag 或其它非空单位按每 1 原单位填写；只有跨单位换算时才补明确换算关系。</p><span class="expect">工序名称和顺序由系统按工序链路锁定，不能手选 Workflow 或改工序；同一辅料可用于多道工序但各自独立；无辅料时允许留空，已添加辅料缺价时持续显示可操作提示，不伪造 0 元完整成本。</span></span></label>
-          <label class="step"><span class="check"><input type="checkbox" data-key="bom-6"><span></span></span><span><h4>B06 · 配置锅序规则（仅需要的辅料）</h4><p>对需要首锅/续锅差异的辅料打开“按锅序计算”：第一锅固定 100%，填写“后续锅占第一锅”的百分比。没有锅序差异的辅料保持关闭。</p><span class="expect">辅料汇总显示“首锅100% · 后续X%”；报工页面只有 BOM 对本道显式开启锅序时才出现锅数，系统按投入量等分每锅 kg。</span></span></label>
-          <label class="step"><span class="check"><input type="checkbox" data-key="bom-7"><span></span></span><span><h4>B07 · 核对辅料汇总、成本与异常</h4><p>切换“辅料汇总”，逐项核对同一辅料在哪些工序使用、g/kg、锅序、自动单价和是否计成本；返回原料/包材页核对成本预览。同一“工序端口 + 物料”只能占一行，AUXILIARY 与 PACKAGING 成本类别不能制造第二条重复投入。</p><span class="expect">无重复计成本；历史重复行若其精确槽位已有另一行占用，可以删除；仍是该槽位唯一必需投入时继续阻止删除。历史普通辅料若提示“待绑定工序/可能重复计成本”，保留并记录，不能按名称猜测迁移。</span></span></label>
-          <label class="step"><span class="check"><input type="checkbox" data-key="bom-8"><span></span></span><span><h4>B08 · 激活版本并做版本防错</h4><p>确认至少一项主原料和全部实际需要的辅料/包材后点“激活”。页面应明确区分“正在编辑草稿”“当前生效，内容已锁定”和“历史版本，仅供查看”。修改已生效版本时点“克隆为新版本修改”；若已有草稿则进入该草稿继续。</p><span class="expect">同一 SKU 只有一个 ACTIVE；ACTIVE 与历史版本不可直接编辑。激活只影响之后新建计划，旧生产计划继续使用原 BOM/Workflow 快照。</span></span></label>
-          <label class="step"><span class="check"><input type="checkbox" data-key="bom-byproduct"><span></span></span><span><h4>B08A · 声明副产 SKU 与预计量</h4><p>真实会回收副产时切换“副产”页签，点击“添加副产”，选择已带副产标记的物料 SKU 并填写预计产出量。该行是产出声明，不进投入成本池、不配置替代料，也不代替本次报工实际量。</p><span class="expect">统一读取入口优先使用 BOM SKU 声明；仅当本产品完全没有 BOM 副产行时才回落工序主档历史自由文本，二者不合并。带 SKU 的声明才能落生产仓并进入盘点。</span></span></label>
-          <label class="step" data-min-depth="full"><span class="check"><input type="checkbox" data-key="bom-9"><span></span></span><span><h4>B09 · 克隆生效版本并模拟配方变更</h4><p>从当前 ACTIVE 版本克隆新草稿，分别测试数量调整、物料替换和删除物料；不得直接编辑生效版本。记录变更前后物料、单位、数量和预计成本差。</p><span class="expect">原版本保持只读；新草稿继承同一精确工艺修订和完整快照，不要求新建 Workflow 草稿；旧生产计划不被回写。</span></span></label>
-          <label class="step" data-min-depth="full"><span class="check"><input type="checkbox" data-key="bom-11"><span></span></span><span><h4>B11 · 显式升级到最新工艺</h4><p>另建兼容的新 Workflow 草稿修订，回到 BOM 查看“发现更新的工艺修订”，点击“升级到最新工艺”。</p><span class="expect">只按稳定节点、接口和连线身份迁移可证明兼容的数据；删除、歧义或单位不兼容时列出未映射项并停止，原 ACTIVE BOM 和历史计划保持不变。</span></span></label>
-          <label class="step" data-min-depth="full"><span class="check"><input type="checkbox" data-key="bom-10"><span></span></span><span><h4>B10 · 走 ECN、影响分析与版本审批</h4><p>进入“BOM 版本管理 / 工程变更通知”，创建 ECN，填写原因、标题、说明和计划生效日；查看受影响物料、成品 SKU、未结采购单与成本差，再提交审批。</p><span class="expect">审批通过后新版本生效、旧版失效；被拒绝时保留原因；已建计划仍引用原快照。</span></span></label>
+          <label class="step"><span class="check"><input type="checkbox" data-key="bom-canvas-1"><span></span></span><span><h4>B01 · 先保存完整 Workflow 草稿</h4><p>选择目标 SKU，完成 Cell、工序与连线并保存。此时不要先发布。</p><span class="expect">画布无悬空线，所有 Cell 绑定有效 SKU，终端成品与归属一致。</span></span></label>
+          <label class="step"><span class="check"><input type="checkbox" data-key="bom-canvas-2"><span></span></span><span><h4>B02 · 从派生配置格建立首版草稿</h4><p>点击工序旁的辅料、包材或副产配置格；没有 BOM 时首次保存自动创建首版草稿。至少配置一项主原料。</p><span class="expect">画布显示“正在编辑草稿”，工艺来源只读；配置格不改变 Workflow 节点或连线。</span></span></label>
+          <label class="step"><span class="check"><input type="checkbox" data-key="bom-canvas-3"><span></span></span><span><h4>B03 · 按真实需要补辅料、包材与副产</h4><p>辅料只在工艺明确支持的格中新增；不支持或未知时按页面原因处理。无包材或副产时保持空白，不为凑完整度造行。</p><span class="expect">已有历史行仍可查看；空的可选包材/副产不阻止激活，同一工序与物料不重复。</span></span></label>
+          <label class="step"><span class="check"><input type="checkbox" data-key="bom-canvas-4"><span></span></span><span><h4>B04 · 核对有限成本摘要</h4><p>当前摘要只汇总包材；辅料独立维护，主原料没有固定数量，人工与制造费用不在 BOM 中配置。</p><span class="expect">不得把该摘要标成完整产品成本；成本差异、差异率和状态不可比时保持空值。</span></span></label>
+          <label class="step"><span class="check"><input type="checkbox" data-key="bom-canvas-5"><span></span></span><span><h4>B05 · 生效该草稿</h4><p>确认主原料和实际需要的配置后点击“生效该草稿”。</p><span class="expect">同一 SKU 只有一个 ACTIVE；旧计划继续使用原快照。</span></span></label>
+          <label class="step"><span class="check"><input type="checkbox" data-key="bom-canvas-6"><span></span></span><span><h4>B06 · 刷新、自动同步并发布</h4><p>刷新 Workflow，执行“自动同步并发布”；按 READY、可自动迁移或需用户处理的预检结果继续。</p><span class="expect">ACTIVE BOM 门禁通过后，Workflow 原子发布并启用；冲突或单位歧义必须停止并列明原因。</span></span></label>
+          <label class="step" data-min-depth="full"><span class="check"><input type="checkbox" data-key="bom-canvas-7"><span></span></span><span><h4>B07 · 验收历史与实际成本边界</h4><p>修改生效配置时创建新草稿；实际完整成本仍从正式报工与结算形成。</p><span class="expect">旧版本和旧计划不漂移；BOM 有限摘要不覆盖或伪装实际成本。</span></span></label>
         </div>
         <h4 data-min-depth="medium" style="margin:22px 0 10px;font-size:17px">BOM 必测报错矩阵</h4>
         <div class="table-wrap" data-min-depth="medium"><table><thead><tr><th>触发</th><th>预期</th></tr></thead><tbody>

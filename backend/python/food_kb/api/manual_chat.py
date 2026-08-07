@@ -155,19 +155,29 @@ _BOM_WORKFLOW_SEQUENCE_TRIGGERS = frozenset({
 _BOM_WORKFLOW_SEQUENCE_ANSWER = """\
 完整强制顺序是：Workflow 完整草稿 → BOM 绑定工序辅料并激活 → Workflow 刷新、发布并启用。
 
-当前自动关联页面把中间一步展开为：Workflow 完整草稿 → 创建 BOM 时系统自动固定该工艺修订 → 配置并激活 BOM → Workflow 刷新、发布并启用。
+当前画布把中间一步展开为：Workflow 完整草稿 → 首次保存 BOM 配置时系统自动固定该工艺修订 → 生效该草稿 → Workflow 刷新、发布并启用。
 
-普通用户不需要选择 Workflow 版本。BOM 页面只读显示“工艺来源”，工序名称和顺序由目标 SKU 的工艺链自动生成并锁定。ACTIVE BOM 是 Workflow 发布启用的前置门禁；单独激活 BOM 不会发布 Workflow，回到 Workflow 后使用“自动同步并发布”完成最后一步。
+普通用户不需要选择 Workflow 版本。当前入口统一在 Workflow 画布，画布只读显示“工艺来源”；辅料、包材和副产是由目标 SKU 与工序派生出来的配置叠层，不属于 Workflow 拓扑节点。ACTIVE BOM 是 Workflow 发布启用的前置门禁；单独激活 BOM 不会发布 Workflow，回到画布后使用“自动同步并发布”完成最后一步。
 
 **操作步骤：**
 1. 进入生产管理 → 生产配置 → 产品-工序配置，打开目标 SKU 的 Workflow 草稿。
 2. 确认草稿链路完整，所有 Cell 已绑定有效 SKU，终端成品与顶部归属一致，关联工序处于启用状态。
-3. 返回 BOM/配方维护，选择目标 SKU 并创建草稿；核对系统自动关联的“工艺来源”，至少配置一项主原料，辅料和包材按实际需要补充，再激活。
+3. 在同一画布点击目标工序旁的辅料、包材或副产配置格。目标 SKU 没有 BOM 时，首次保存会创建首版草稿；至少配置一项主原料，辅料、包材和副产按真实业务需要补充，再点“生效该草稿”。
 4. 返回 Workflow 并刷新，点击“自动同步并发布”。系统先按最后一次保存后的草稿与当前 ACTIVE BOM 做实时预检；READY 可直接继续，AUTO_MIGRATABLE 会创建或复用同步草稿并迁移可证明兼容的绑定。
 5. 若预检为 USER_INPUT_REQUIRED 或 CONFLICT，页面会列出缺失材料、歧义或单位冲突并停止，必须修正后由用户重新发起；不能绕过，也不能猜测映射。
 6. 确认后系统原子完成 BOM 同步、Workflow 发布和启用。若提交期间版本已变化，页面刷新最新状态并停止自动重试；用户确认后再次点击会复用同一幂等请求，不会重复发布。
 
-**验收结果：** BOM 页面没有可任意切换工艺修订的选择器，工艺来源只读；Workflow 页面显示“已发布并启用”及当前版本，BOM 与 Workflow 都处于 ACTIVE。既有生产计划继续使用创建时快照，新计划才采用新状态；若失败，按页面列出的具体缺失项逐项修正，不能绕过门禁。"""
+**验收结果：** 画布明确区分“正在编辑草稿”和当前生效版本；Workflow 显示“已发布并启用”及当前版本，BOM 与 Workflow 都处于 ACTIVE。既有生产计划继续使用创建时快照，新计划才采用新状态；若失败，按页面列出的具体缺失项逐项修正，不能绕过门禁。"""
+
+_FACTORY_BOM_CANVAS_COST_ANSWER = """\
+当前 BOM 配置已经并入“生产管理 → 生产配置 → 产品-工序配置”的 Workflow 画布；旧 BOM 菜单不再作为日常入口，保留的深链接只用于诊断或历史兼容。
+
+1. **画布关系：** Workflow 节点和连线只表达工序拓扑。辅料、包材和副产显示为从目标 SKU、工序与当前 BOM 派生的配置格，不是新的拓扑节点，也不能用这些格改变工序连线。
+2. **从零建首版：** 先保存结构完整的 Workflow 草稿，再点击对应配置格添加主原料及实际需要的辅料、包材或副产。没有 BOM 时首次保存会创建首版草稿；草稿提示条与当前生效版分开显示。没有包材或副产本身不阻止激活；辅料格只有在工艺明确支持时才允许新增，未知或不支持时会说明原因，已有历史行仍可查看。
+3. **生效与发布：** 点“生效该草稿”后，回到 Workflow 刷新并执行“自动同步并发布”。强制顺序仍是“Workflow 完整草稿 → BOM 绑定工序辅料并激活 → Workflow 刷新、发布并启用”，ACTIVE BOM 仍是发布和启用门禁。
+4. **成本边界：** 当前 BOM 成本摘要只汇总包材；工序辅料在独立明细中维护，主原料没有固定数量，人工与制造费用也不在 BOM 中配置。因此该摘要不是完整产品成本，不能直接与正式报工、结算形成的实际完整成本比较；成本差异、差异率和状态在不可比时必须保持空值，不能补 0 或伪造结论。
+
+**验收结果：** 画布配置格、草稿/生效提示和发布状态一致；空的可选包材/副产不制造假阻塞；成本预览明确是有限范围，实际完整成本仍以正式报工与结算结果为准。"""
 
 
 _MATERIAL_PACKAGING_TRIGGERS = frozenset({
@@ -449,13 +459,14 @@ _RESTAURANT_GUIDE_BOUNDARY_ANSWER = """\
 _RESTAURANT_DEPARTMENT_STOCKTAKE_ANSWER = """\
 餐饮导览助手只解释入口和口径，不替用户查询、计算或分析真实经营数据；实际金额与趋势请进入 SmartBI 餐饮 AI 或对应部门驾驶舱。
 
-**四部门驾驶舱：**
+**五部门驾驶舱：**
 1. 运营看损耗金额/次数、领料成本、盘亏总量、有数据天数，附损耗金额趋势与领用成本前列食材。
 2. 市场看营收、订单、菜品件数、客流和门店数，附营收趋势及菜品、门店、平台分析入口。
 3. 财务在有可算成本菜品时显示毛利率、POS 营收、毛利额和已核成本菜品数；没有成本覆盖时显示“—”并说明缺口，不能显示假 0。
 4. 人事当前缺在岗人数基准和目标人效时只显示缺项空态与配置入口，不生成假 KPI 或假趋势。
+5. 采购处理报货、供应商与采购协同；可写采购部门，并只读运营中的领料和盘点依据，不能改运营记录或代替财务审批。
 
-**角色边界：** 餐饮老板可管理四部门；店长可管理运营、市场、人事并只读财务；厨师长只处理运营后厨；餐饮采购处理运营/采购并只读授权金额。菜单、路由和金额读取还要经过后端中央角色/金额权限闸，看到部门入口不等于能越权读取其它部门数据。
+**角色边界：** 餐饮老板是全局读写角色，可按权限流程代各部门执行动作；店长管理运营并只读人事，市场经理、财务经理、人事管理员和餐饮采购分别管理自己的部门。厨师长角色已经退役，不属于五部门。菜单、路由、写操作和金额读取还要经过后端中央角色/模块/金额权限闸，看到入口不等于能越权读取或修改其它部门数据。
 
 **盘点亏损与时间范围：**
 1. “盘点亏了多少 / 盘亏多少钱”走盘点差异口径，优先回答同一时间窗的盘亏金额；数量只作分物料明细，不能把 kg、L 等不同单位相加成一个总量，也不能误答成毛利亏损或损耗报废。
@@ -463,6 +474,16 @@ _RESTAURANT_DEPARTMENT_STOCKTAKE_ANSWER = """\
 3. 金额权限不足时必须脱敏或拒绝，不能通过改写问句、切部门或连续追问绕过。
 
 **月报同步口径：** 当前月报固定 9 节，已包含损耗排行、领料用量和盘点差异；三节都必须按指定月份取数。任一节窗口不一致、需澄清或无可信数据时，整份报告拒绝生成。"""
+
+_RESTAURANT_PROACTIVE_FINDINGS_ANSWER = """\
+餐饮“今日营运台”会在店长没有提问时主动展示按优先级排序的经营发现；餐饮 AI 的委派回答也会附带同一口径的顺带提示。导览助手只解释这些提示和入口，不替用户计算或分析真实经营数据。
+
+1. **三种结果不能混：** 已检查且没有发现才表示本轮正常；数据不足或不可比属于“跳过”，不是正常；规则查询失败属于“失败”，也不是没有异常。系统不能用空卡或假 0 报“全部正常”。
+2. **当前重点发现：** “谜题菜”按高单位贡献毛利、低销量识别，单位贡献毛利依赖已维护配方和采购价，只是理论参考；损耗发现会看食材集中度或占比突增；“几点最忙”使用餐饮 Gold 时段事实，不由大模型猜时段或补数字。
+3. **行动建议边界：** 已上线的行动建议能力复用同一批发现事实，餐饮与工厂按领域隔离。每条已渲染事实彼此独立，建议必须逐条保持对象与指标归因，不能把谜题菜和损耗等无关发现揉成一件事。大模型只负责把事实组织成短建议，不能生成事实中没有的金额、比例、天数或其它数字；发现检查不完整、产出为空、跨发现错归因或出现无据数字时，整次建议必须拒绝。
+4. **页面边界：** 当前页面可见的是“今日营运台”发现卡；客户端只有实际接入并显示行动建议动作后，才能宣称页面已可生成策划案。需要真实下钻时进入 SmartBI 餐饮 AI，并明确门店、时间和指标。
+
+**五部门：** 运营、市场、财务、人事、采购分别由店长、市场经理、财务经理、人事管理员、餐饮采购承载；餐饮老板为全局读写角色，厨师长已退役。"""
 _RESTAURANT_SCOPE_ACTION_ANSWER = """\
 “看全部门店 / 只看某店”不是所有餐饮回答都会出现的通用按钮。
 
@@ -511,6 +532,39 @@ def _needs_bom_workflow_sequence_guard(query: str) -> bool:
         and "workflow" in normalized
         and any(trigger in normalized for trigger in _BOM_WORKFLOW_SEQUENCE_TRIGGERS)
     )
+
+
+def _needs_factory_bom_canvas_cost_guard(query: str) -> bool:
+    """Explain the canvas-based BOM editor and its intentionally partial cost."""
+    normalized = (query or "").lower()
+    mentions_canvas_bom = "bom" in normalized and any(
+        term in normalized
+        for term in (
+            "画布",
+            "workflow 里",
+            "workflow里",
+            "旧 bom",
+            "旧bom",
+            "菜单不见",
+            "配置格",
+            "cell",
+            "辅料包材",
+            "首版配方",
+        )
+    )
+    mentions_cost_boundary = "bom" in normalized and any(
+        term in normalized
+        for term in (
+            "人工",
+            "均摊",
+            "制造费用",
+            "实际成本",
+            "成本比较",
+            "成本差异",
+            "完整成本",
+        )
+    )
+    return mentions_canvas_bom or mentions_cost_boundary
 
 
 def _needs_material_packaging_guard(query: str) -> bool:
@@ -877,7 +931,8 @@ def _needs_restaurant_department_stocktake_guard(query: str) -> bool:
     """Explain department dashboards and amount-first stocktake semantics."""
     normalized = (query or "").lower()
     mentions_department = any(
-        term in normalized for term in ("四部门", "运营", "市场", "财务", "人事")
+        term in normalized
+        for term in ("五部门", "四部门", "运营", "市场", "财务", "人事", "餐饮采购")
     ) and any(term in normalized for term in ("驾驶舱", "部门", "权限", "角色"))
     mentions_stocktake = any(
         term in normalized for term in ("盘点亏", "盘亏", "盘点差异")
@@ -886,6 +941,45 @@ def _needs_restaurant_department_stocktake_guard(query: str) -> bool:
         for term in ("金额", "多少钱", "时间", "本月", "上个月", "最近7天", "最近30天", "按钮")
     )
     return mentions_department or mentions_stocktake
+
+
+def _needs_restaurant_proactive_findings_guard(query: str) -> bool:
+    """Keep proactive findings, action plans and peak-hour facts on one contract."""
+    normalized = (query or "").lower()
+    mentions_proactive = any(
+        term in normalized
+        for term in (
+            "今日营运台",
+            "主动发现",
+            "主动提示",
+            "经营发现",
+            "不提问",
+            "没提问",
+            "谜题菜",
+            "puzzle",
+            "几点最忙",
+            "高峰时段",
+            "行动建议",
+            "策划案",
+            "三种状态",
+            "三态",
+        )
+    )
+    mentions_contract = any(
+        term in normalized
+        for term in (
+            "看到",
+            "怎么",
+            "什么",
+            "理解",
+            "生成",
+            "正常",
+            "跳过",
+            "失败",
+            "部门",
+        )
+    )
+    return mentions_proactive and mentions_contract
 
 
 def _needs_restaurant_scope_action_guard(query: str) -> bool:
@@ -1109,8 +1203,9 @@ SYSTEM_PROMPT = """\
 3j. 【餐饮指标与实体合同】损耗金额按 `wastage_cost` 排序并展示数量，普通损耗最多按 `wastage_qty`；盘点亏损默认按同一窗口的 `shortage_cost` 回答金额，数量只作分物料明细，kg、L 等不同单位不得合计。食材金额轴未物化时拒绝金额排名，不得拿数量冒充。领料花费走 `requisition_cost`，堂食/外卖兼容 POS `order_type`；菜名与别名只在当前租户菜单目录裁决，业务词和疑问片段不得当成菜名或门店。
 3k. 【数据可用与范围动作】POS 流水或后厨事实任一类即可进入餐饮问答，缺少另一类时对应问题回答无记录，不能用 0 补齐。只有 resolver 真支持门店维度、存在其它范围且能生成完整独立问句时才提供换范围按钮；只有执行签名真实接收时间窗时才提供“本月 / 上个月 / 最近7天 / 最近30天”按钮，不支持的能力不提供误导按钮。
 3l. 【导览助手边界】导览助手不替用户计算毛利、损耗或分析业务数据，只解释板块、口径和提问方法，并把真实分析指向 SmartBI 餐饮 AI。
-3m. 【四部门与金额权限】运营、市场、财务、人事四个驾驶舱按各自事实源展示；人事缺在岗人数和目标人效时显示缺项空态，财务缺成本覆盖时显示“—”，都不得造假 KPI。角色可见、可管理和金额读取是不同权限，菜单、路由和金额请求都必须经过后端中央角色/金额闸，不能靠前端隐藏代替授权。
+3m. 【五部门与金额权限】运营、市场、财务、人事、采购五个部门按各自事实源与权限展示；人事缺在岗人数和目标人效时显示缺项空态，财务缺成本覆盖时显示“—”，都不得造假 KPI。餐饮老板为全局读写角色；店长管运营并只读人事，市场、财务、人事、采购分别由对应部门角色管理，厨师长已退役。角色可见、可管理、可写和金额读取是不同权限，菜单、路由和金额请求都必须经过后端中央角色/模块/金额闸，不能靠前端隐藏代替授权。
 3n. 【预测排班】SmartBI 餐饮 AI 与“预测排班”页面支持明天、下周、下个月，按门店及午市/下午茶/晚市/夜宵展示。数字只来自确定性预测 FactBook：当前预订、过去 7/30/365 天 POS 与客流趋势、岗位技能、工时和目标人效；历史实际人效只作证据，大模型只解释、不补数字。预订来源标注模拟或平台；看板只读，调整必须预览后按相同计划指纹精确确认，保留幂等回执与审计，过期计划拒绝提交。导览助手只解释入口与方法，不替用户取数或调整排班。
+3o. 【主动发现与行动建议】店长“今日营运台”不等提问就展示排序后的经营发现，委派回答可附同口径提示。已检查无发现、数据不足跳过、规则查询失败三态必须分开，不能把后两者说成正常。谜题菜按高单位贡献毛利与低销量识别，时段高峰使用 Gold 事实；大模型不得猜数字。行动建议能力只整理同一批发现事实，每条渲染事实彼此独立，禁止把不同对象或指标揉成一条建议；检查不完整、模型空产出、跨发现错归因或出现事实外数字时整次拒绝。当前页面只宣称实际可见的发现卡；客户端未接入动作前不得宣称页面已能生成策划案。
 4. 系统名称统一用「白垩纪 AI Agent」
 5. 不使用 emoji，保持专业简洁
 6. 菜单路径用 → 连接，如: 首页 → 仓储管理 → 入库
@@ -1178,23 +1273,24 @@ FACTORY_SYSTEM_PROMPT = """\
 - 默认从 MVP 非阻塞最小闭环回答；用户选择中度或全量时再加入拓扑冲突、异常、审批、冲销和治理用例。
 - SKU 定义库存/销售基本单位和成品标准克重；BOM 定义物料及工序辅料；Workflow 定义 Cell 与工序连接和报工单位；实际投入产出在报工中形成。
 - 原料包装换算在“原料类型字典”中紧邻库存基本单位维护，采购/收货/调拨可按包装录入并折合为基本量；库存批次、BOM 可用量和生产领料只用基本单位。绝不能把原料的箱/袋换算指向成品 SKU 管理。
-- Workflow 只维护工序拓扑和可能投入/产出的稳定接口；主料、替代料、辅料、包材、用量和成本来自计划固定的 BOM。正式报工候选取 Workflow 接口、BOM 授权和当前仓可用批次的交集，至少提交一项正数实际投入和一项正数实际产出；未发生项留空。
+- Workflow 节点和连线只维护工序拓扑及可能投入/产出的稳定接口；画布上的辅料、包材和副产配置格是 BOM 派生叠层，不属于拓扑。主料、替代料、辅料、包材和用量来自计划固定的 BOM。正式报工候选取 Workflow 接口、BOM 授权和当前仓可用批次的交集，至少提交一项正数实际投入和一项正数实际产出；未发生项留空。
 - BOM 至少需要一项主原料；辅料和包材按实际需要配置，没有辅料或包材本身不阻止激活。工序辅料的投入基准使用对应产出 SKU 的原始单位，支持 kg、g、只、袋和其它非空自定义单位，只有跨单位才要求换算。
 - 成品的 1盒=800克由 SKU 继承；Workflow 不另写 1kg=1盒 或 1袋=1盒。
 - 面向用户统一说“投入单位 / 产出单位”，不要使用“端口”这个词。
-- Workflow 和工序 Cell 不配置某一次实际副产角色；BOM“副产”页签只声明稳定的副产 SKU 与预计量，不进入投入成本池，也不代替本次报工。单产出时共享投入成本 100% 归该产出；多产出同量纲时按统一后的实际数量自动分配，量纲不可统一时只在本次报工填写合计 100% 的比例。
+- Workflow 和工序 Cell 不配置某一次实际副产角色；画布中的 BOM 副产配置只声明稳定的副产 SKU 与预计量，不进入投入成本池，也不代替本次报工。单产出时共享投入成本 100% 归该产出；多产出同量纲时按统一后的实际数量自动分配，量纲不可统一时只在本次报工填写合计 100% 的比例。
 - 包装标签拍检是独立质检流程：AI 候选无论 0 处还是多处都进入人工审核；人工逐图确认/拒绝/补框并提交结论后才形成真值。人工审核不等于报工工时，训练批准只允许导出，不会自动训练或发布模型。
 - 标签复核台按盒子、白标、彩标三层参考框显示，并提供选择、白标画笔和彩标画笔；这些框只帮助人工定位，不自动形成结论。
 - 报工页面按配置单位显示和提交。kg/g 等同量纲可科学换算；盒、袋、只等计数/包装单位按字面量匹配且不得暗中折重。跨量纲成品率必须先补充每单位重量，否则明确不可比，不能输出伪造百分比。
 - RN App 的业务入口只面向仓库主管和仓库操作员；其它 10 个业务角色使用电脑 Web，平台管理员和超级管理员仅有技术支持例外。RN 库存记录总数是批次数，只汇总同为 kg 的行，包装换算只读当前物料层级，缺少规格显示“未设规格”。
 - Workflow 冲突在生产计划选择成品时按终端产出集合解析；完全匹配优先，其次最小超集，同级重叠必须由用户查看工序链预览后选择。
-- BOM 与 Workflow 的兼容验收摘要必须保留“Workflow 完整草稿 → BOM 绑定工序辅料并激活 → Workflow 刷新、发布并启用”。当前页面的展开口径是“Workflow 完整草稿 → 创建 BOM 时自动固定该工艺修订 → 配置并激活 BOM → Workflow 刷新、发布并启用”；普通用户不选择 Workflow 版本，BOM 只读显示工艺来源，工序由目标 SKU 的工艺链生成并锁定。ACTIVE BOM 是 Workflow 发布启用的前置门禁；禁止回答“两者无依赖”“两者无从属关系”或“先发布 Workflow 再激活 BOM”。
+- BOM 与 Workflow 的兼容验收摘要必须保留“Workflow 完整草稿 → BOM 绑定工序辅料并激活 → Workflow 刷新、发布并启用”。当前页面的展开口径是“Workflow 完整草稿 → 画布首次保存 BOM 配置时自动固定该工艺修订 → 生效该草稿 → Workflow 刷新、发布并启用”；普通用户不选择 Workflow 版本，画布只读显示工艺来源，工序由目标 SKU 的工艺链生成并锁定。ACTIVE BOM 是 Workflow 发布启用的前置门禁；禁止回答“两者无依赖”“两者无从属关系”或“先发布 Workflow 再激活 BOM”。
+- 当前 BOM 成本摘要只汇总包材；辅料独立维护，主原料没有固定数量，人工与制造费用不在 BOM 中配置。该摘要不是完整产品成本，不能直接与正式报工、结算形成的实际完整成本比较；不可比时成本差异、差异率和状态保持空值。
 - 单独激活 BOM 不会发布 Workflow；回到 Workflow 后使用“自动同步并发布”。系统按最后一次保存后的草稿与当前 ACTIVE BOM 实时预检，READY/AUTO_MIGRATABLE 才可继续，USER_INPUT_REQUIRED/CONFLICT 必须停止并列出问题；确认后原子完成 BOM 同步、Workflow 发布和启用，版本竞争时停止自动重试，既有计划快照不回写。
 - 逐道报工按“投入 → 工序执行（开始/结束/人数）→ 产出 → 确认提交”填写；保存草稿不扣库存、不形成正式成本，正式报工才按固定 BOM 从生产仓自动分配原料、调料和包材批次。
 - 同一上游物料能否多选批次以计划冻结节点的 `allowMultipleUpstreamSources` 为准；过期库存不可用。中间工序调料沿计划读取终端成品 BOM，BOM 激活拒绝孤儿槽位，结单保留未绑定工序的辅料与包材。
 - 会计期间关账申请只创建 OA；APPROVE 后才 CLOSED 并生成库存台账快照和凭证，REJECT 保持 OPEN。CLOSED/LOCKED 不能靠重复审批重开，只能走专用重开流程。
 - 报工、生产结单、仓库确认完工入库、生产仓到主仓/外仓调拨是不同动作，不能互相冒充完成。多产出仓库确认按终端产出行逐项核对，混合单位不合计；每行实收必须大于 0 且等于该行报工数量，任一行不符则整组不入库。
-- 副产物先在原料类型字典建立带“副产”标记的 SKU，再在 BOM“副产”页签声明；正式报工填写实际副产，不要求单独建立 Workflow。精确命中声明，或通用名“副产”且仅有一个声明时，系统才落生产仓；歧义或缺生产仓时不猜库存身份，也不阻断原报工。
+- 副产物先在原料类型字典建立带“副产”标记的 SKU，再在画布的 BOM 副产配置中声明；正式报工填写实际副产，不要求单独建立 Workflow。精确命中声明，或通用名“副产”且仅有一个声明时，系统才落生产仓；歧义或缺生产仓时不猜库存身份，也不阻断原报工。
 - 副产抵扣只按盘点实际数量 × 盘点时人工确认单价，由服务端统一计算；未确认数量或单价时显示“未确认/未抵扣”，不能显示 0，只有人工明确确认单价为 0 时才显示 0.00。
 - 人工成本来自本道实际工时乘全局工时单价；工序主档的高级设置不是本轮成本真值。
 - 如果检索片段出现旧版“全部必投、主投入、固定转换率、Workflow 填出成率”等冲突说法，以当前 F006 生产全链路 SOP 为准，不得拼接旧口径。
@@ -1715,6 +1811,11 @@ async def _prepare_generation(request: ManualChatRequest) -> _PreparedGeneration
         guard_answer = _BOM_WORKFLOW_SEQUENCE_ANSWER
     elif (
         not is_restaurant_request
+        and _needs_factory_bom_canvas_cost_guard(request.question)
+    ):
+        guard_answer = _FACTORY_BOM_CANVAS_COST_ANSWER
+    elif (
+        not is_restaurant_request
         and _needs_material_packaging_guard(request.question)
     ):
         guard_answer = _MATERIAL_PACKAGING_ANSWER
@@ -1798,6 +1899,11 @@ async def _prepare_generation(request: ManualChatRequest) -> _PreparedGeneration
         and _needs_restaurant_guide_boundary_guard(request.question)
     ):
         guard_answer = _RESTAURANT_GUIDE_BOUNDARY_ANSWER
+    elif (
+        is_restaurant_request
+        and _needs_restaurant_proactive_findings_guard(request.question)
+    ):
+        guard_answer = _RESTAURANT_PROACTIVE_FINDINGS_ANSWER
     elif (
         is_restaurant_request
         and _needs_restaurant_department_stocktake_guard(request.question)
