@@ -5,24 +5,39 @@
 
 ---
 
-## ⚠️ 先读这条：CI 全仓停摆
+## ⚠️ 先读这条：我在本轮中途误判「CI 全仓停摆」—— 那是错的
 
-**GitHub Actions 已约 9 小时零个 run 被创建**（最后一次 `2026-08-06T16:54Z`），
-而这期间 main 合入了 PR#2357 / #2358。`actions/permissions` 是 `enabled: true`，
-路径触发条件也匹配 —— 多半是私有仓额度耗尽。
+**订正**：CI 一直正常。本轮 4 个 PR 的合并点在 main 上**全部 CI 绿**，
+PR#2361 的合并点 `e6f52e826d` 跑满 6 个工作流（`Python Gate` / `Web Admin Gate` /
+`JPA repository query gate (post-merge)` / `CI/CD Pipeline` / `Secret regression gate` /
+`Web dist artifact`）**全部 success**。
 
-**含义**：最近几次进 main 的改动**同样没跑过 CI**，不只是本轮。接手第一件事
-先确认它恢复了没有：
+**我为什么会判错**（这条比结论本身值得记）：
+当时本地时间约 **01:50 CST**，我看到最后一次 run 是 `2026-08-06T16:54Z`，
+直接相减得出「9 小时没动」。实际 01:50 CST = `17:50Z`，只差 **1 小时**。
+🔑 **判据：`gh` 返回的时间戳是 UTC，本机是 CST(+8)，永远不要直接相减。**
+用 `date -u` 取当前 UTC 再比。
+
+**第二个误判**：我在 PR 上看到 `Python Gate / Web Admin Gate / Secret regression gate`
+三个 failure，以为是代码红。实际三个都是 **`cancelled`** ——
+这些工作流带 `concurrency: cancel-in-progress: true`，而 push 与 pull_request
+在同一个 ref 上各触发一次，互相取消。
+🔑 **判据：看到 `failure` 先查 job 的 `conclusion` 是不是 `cancelled`；
+`gh pr checks` 把取消也显示成失败。**
 
 ```bash
-gh api "repos/Stevenjxie/cretas/actions/runs?per_page=3" \
-  --jq '.workflow_runs[] | .created_at + "  " + .name + "  " + .conclusion'
+# 正确的查法
+gh api "repos/Stevenjxie/cretas/actions/runs?branch=<b>&per_page=10" \
+  --jq '.workflow_runs[] | .created_at+" | "+.name+" | "+(.conclusion//.status)+" | "+.event'
+gh run view <id> --json jobs --jq '.jobs[] | .name+" -> "+(.conclusion//.status)'
 ```
 
-📌 顺带纠正一条仓库规则里的错话：`.claude/rules/worktree-and-main-only-deploy.md`
-写「CI `JPA repository query startup gate` 挂在 PR 上」，实测
-`jpa-gate-main.yml` 的触发是 `push: branches: [main]` —— **PR 上根本不跑**。
-PR 上真正会跑的是 `python-gate` / `web-admin-gate`（都按 paths 过滤）。
+📌 **真实存在的一条**：`.claude/rules/worktree-and-main-only-deploy.md` 写
+「CI `JPA repository query startup gate` 挂在 PR 上」——**已过期**。
+`e6d1fffe75 refactor(ci): JPA 检查改为合并后告警而非 PR 门禁, 文件同步改名`
+把 `jpa-gate-pr.yml` 删了，现在只剩 `jpa-gate-main.yml`（`push: branches: [main]`）。
+那条规则正是用这个理由要求「backend 代码必须走 PR」，理由已经不成立 ——
+规则本身仍然对（PR 号是台账锚点），但**依据要换**。
 
 ---
 
@@ -330,6 +345,17 @@ refinement context 做完之后再跑 —— 否则大量问句的归宿会因�
     **沉默不等于成功。**
 15. **蓝绿槽位一天变了三次**：10010 → 10020 → 10010。任何写死端口的探针都会
     在下一次发布后给出假阴性。判据永远是 `ss -lntp | grep -E ':10010|:10020'`。
+16. 🔴 **`gh` 的时间戳是 UTC，本机是 CST(+8)，不要直接相减。** 本轮我据此断定
+    「CI 停摆 9 小时」并写进交接和两个 PR 描述 —— 实际只差 1 小时，CI 一直正常。
+    一个时区减法错误让我在**四个 PR 上都跳过了看 CI 这一步**。
+    判据：先 `date -u`，再比。
+17. 🔴 **`failure` 不等于测试红 —— 先看是不是 `cancelled`。** 本轮 PR 上那三个
+    「失败」全是 `concurrency: cancel-in-progress` 造成的取消（push 与
+    pull_request 在同一 ref 各触发一次，互相取消），而 `gh pr checks` 把取消
+    也显示成失败。判据：`gh run view <id> --json jobs` 看 job 的 conclusion。
+18. **判「某个闸还在不在」要看文件，不要看 `gh workflow list`。** 那个列表里
+    至今还有 `JPA repository query gate (PR)`，而它的 yml 早在 `e6d1fffe75`
+    就被删了 —— GitHub 会一直列着已删工作流的历史条目。
 
 ---
 

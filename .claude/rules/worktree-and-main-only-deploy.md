@@ -38,8 +38,23 @@ git diff origin/main...HEAD --stat   # 应只有你的文件, 没有 sister 的 
 | docs / `.claude/`(skills/rules) / 配置类, 零 CI 相关 | **fastlane 直推 main**: `./scripts/deploy/publish-main-fastlane.sh --base-sha <起点SHA> --confirm YES-DIRECT-MAIN`(先 `--dry-run` 预检)。脚本门禁: fast-forward only / 禁 force push / 推前 re-fetch 证明 origin/main 未前进。⚠️ 分支名硬性要求 `codex/*` 前缀 — Claude 侧统一用 `codex/claude-<task>` |
 
 ⚠️ **非 docs 批次必须带 `--task-id <任务ID>`**: ACTIVE 台账常驻 30+ 条他人在飞任务, 不传 `--task-id` 时门禁要求「全局零未完成任务」, 这个条件实际上永远不成立 → 任何非 docs 直推都会被拒。`--task-id` 把门禁收窄成「**你自己这条**已归档」, 与门禁本意一致(协调者在同一 commit 归档自己的批次), 不会放松对自己的要求 — 自己那条还挂着 `in-progress`/`review` 照样拦。
-| 碰 backend / web-admin 代码 | **PR** — CI `JPA repository query startup gate` 挂在 PR 上; PR 号是台账/memory 的引用锚点 |
+| 碰 backend / web-admin 代码 | **PR** — `Python Gate` / `Web Admin Gate` / `Secret regression gate` 按 paths 在 PR 上跑; PR 号是台账/memory 的引用锚点 |
 | AGENTS.md / workflows / `scripts/deploy/*` / db 迁移 / entity / repository / security | **强制 PR** — fastlane 将这些列为高风险路径自动拒绝(除非 owner 显式 `YES-HIGH-RISK-REVIEWED` 覆盖, 默认不用) |
+
+⚠️ **2026-08-07 订正**: 本表原写「CI `JPA repository query startup gate` 挂在 PR 上」——
+**已过期**。`e6d1fffe75 refactor(ci): JPA 检查改为合并后告警而非 PR 门禁` 删掉了
+`jpa-gate-pr.yml`, 现在只剩 `jpa-gate-main.yml`(`push: branches: [main]`)。
+走 PR 的理由换成上表里那三道按 paths 触发的闸 + PR 号作为台账锚点。
+📌 判「某个闸还在不在」看 **yml 文件**, 不要看 `gh workflow list` ——
+那个列表至今仍列着已删的 `JPA repository query gate (PR)`。
+
+⚠️ **看 CI 结论的两个坑**(同日实测踩过):
+1. `gh` 的时间戳是 **UTC**, 本机 CST(+8) —— 直接相减会得出「CI 停摆 N 小时」的
+   假结论。先 `date -u` 再比。
+2. PR 上的 `failure` **先查是不是 `cancelled`**: 这些工作流带
+   `concurrency: cancel-in-progress`, push 与 pull_request 在同一 ref 各触发一次
+   会互相取消, 而 `gh pr checks` 把取消显示成失败。
+   用 `gh run view <id> --json jobs --jq '.jobs[] | .name+" -> "+(.conclusion//.status)'`。
 
 ⛔ 双轨底线不变: **任何通道都必须推上 origin/main 后才可部署**。origin/main 是多 session 唯一汇合点(本规则 5/30 事故的根治点), "本地 main 不推就部署"在任何轨道都禁止 — 省的是 PR 仪式往返, 不是 push 本身。
 
