@@ -126,6 +126,7 @@ git push origin codex/claude-hotfix-customer-supplied
 git push origin codex/claude-wechat-remaining      # V20261029_70 + 包装换算 + 行级合同号
 git push origin codex/claude-f006-recode           # V20261029_71 / _72
 git push origin codex/claude-offline-handoff       # 本文档
+git push origin codex/claude-offline-rule-clean    # .claude/rules 改动(干净基底, ahead=3)
 
 # 2) 全部合完后
 git checkout main && git reset --hard origin/main
@@ -134,14 +135,17 @@ git checkout main && git reset --hard origin/main
 ⛔ **不要 `git push origin main`** —— 那会把 30 个 commit 绕过 CI 和 review 一次性推上去，
 且离线期攒的含 backend 代码（按「合入通道双轨」必须走 PR）。
 
-### 🔴 一个基底陷阱
+### 🔴 基底陷阱（本次已就地解决，但形态要记住）
 
-`codex/claude-offline-deploy-rule`（那两个 rule commit）是从**合并后的 main** 开的，
+`codex/claude-offline-deploy-rule`（最早那两个 rule commit）是从**合并后的 main** 开的，
 `ahead_of_origin=25` —— **直接开 PR 会夹带别人 24 个 commit**。
-恢复后要 `git cherry-pick a2dcb1bf06 572d734245` 到一条干净的 `origin/main` 分支再开 PR。
 
-这正是既有规则里「worktree 永远 off `origin/main`」那条防的东西 —— 离线期间从本地 main
-开分支很自然，但它不是干净基底。**离线期开的分支，恢复后都要先看一眼 `ahead_of_origin`。**
+已就地修好：cherry-pick 到干净的 `origin/main` 分支 **`codex/claude-offline-rule-clean`**
+（`ahead=3`），恢复后开 PR 用它，那条脏基底的分支丢弃即可。
+
+这正是既有规则「worktree 永远 off `origin/main`」防的东西 —— 离线期从本地 main 开分支
+很自然，但它不是干净基底。**离线期开的每条分支，合并/开 PR 前都先看一眼
+`git rev-list --count origin/main..<分支>` 对不对得上你以为改了多少。**
 
 ### 迁移已在 prod 跑过，PR 合并时不会重跑
 
