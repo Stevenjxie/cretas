@@ -171,4 +171,19 @@ describe('material type family source contract', () => {
     // ⛔ 判据只能来自数据形状 —— 写死租户 id 就等于给下一个同样没配字典的工厂留同一个坑
     expect(source).not.toContain('LIUSHANMEN');
   });
+
+  /**
+   * 🔴 清掉某工厂的分段字典 = 让它从「有字典」切成「无字典」, 而字典模式下写进去的
+   * category 是 L1 类族的名字(六膳门那 14 个换过料号的物料就是 `原料`), 不在平台枚举里。
+   * 只给枚举五项的话, 这些历史取值在下拉里一个都对不上 —— 编辑时类别框空白、列表按它
+   * 筛不出来, 而用户什么都没做错。选项必须并上**存量在用**的取值。
+   */
+  it('无字典模式的类别选项要并上存量在用的历史取值, 不能只给平台枚举', () => {
+    expect(source).toContain('const seenCategories = ref<string[]>([])');
+    expect(source).toContain('function rememberCategories');
+    // 跨页累积: 翻页不能把上一页见过的取值弄丢
+    expect(source).toContain('rememberCategories(tableData.value)');
+    // 正在编辑的那条即使不在已加载列表里, 也要能显示自己的类别
+    expect(source).toContain("const current = (form.value?.category || '').trim()");
+  });
 });
