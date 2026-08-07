@@ -66,6 +66,28 @@ public class FindingTextRenderer {
      *
      * @return 可直接逐行展示的文案；一条规则都没跑完时返回空列表（绝不说「均正常」）
      */
+    /**
+     * 只渲染**发现**那几行，不含跳过/失败/「均正常」。
+     *
+     * <p>🔴 2026-08-07 prod 实测的确定性缺陷：行动建议接口把 {@link #renderDigestLines}
+     * 的全部行喂给 LLM（含 {@code ℹ️ ...重合度 52%...} 这种跳过说明），而校验器的合法
+     * 数字集只由**发现**的结构化 facts 构成 —— 于是模型忠实引用了 52，被
+     * {@code GroundedNumberValidator} 判为无据，接口 **4/4 次全部 409**。
+     *
+     * <p>判据：**喂给 LLM 的文本与校验用的事实集必须是同一批发现**。两侧口径不一致时，
+     * 模型越忠实越会被拒 —— 这不是模型的问题，是两处口径打架。
+     *
+     * <p>⚠️ 修法是收窄输入而不是放宽校验：跳过规则说的是「判不了」，本来就不该
+     * 变成行动建议；它照旧由响应里的 {@code skippedRules} 如实透出，三态不受影响。
+     */
+    public java.util.List<String> renderFindingLines(FindingService.Result result) {
+        java.util.List<String> lines = new java.util.ArrayList<>();
+        for (Finding f : result.findings()) {
+            lines.add(renderOne(f).replaceFirst("^\s*·\s*", ""));
+        }
+        return lines;
+    }
+
     public java.util.List<String> renderDigestLines(FindingService.Result result) {
         java.util.List<String> lines = new java.util.ArrayList<>();
 

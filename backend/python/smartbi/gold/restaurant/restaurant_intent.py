@@ -244,6 +244,8 @@ class RestaurantQuerySpec:
     # ⚠️ 不要拿它去改 SQL —— 对 resolver 来说 "all" 就是 "all", 默认来的和用户
     # 说的完全等价。它只影响**怎么把这件事告诉用户**。
     store_scope_defaulted: bool = False
+    # 时间窗是**代码补的默认值**(用户没说时间)时为 True —— 同样只影响披露。
+    time_range_defaulted: bool = False
     # Options are proposed by the LLM after it sees the tenant's real store
     # catalogue, then allowlisted here before the UI renders them.  This keeps
     # the decision about *what to ask* semantic while keeping every displayed
@@ -1898,6 +1900,7 @@ def _build_spec(
     llm_store_scope: Optional[str] = None,
     # 门店范围是**代码补的默认值**(不是用户说的)时为 True —— 只影响披露, 不影响 SQL。
     store_scope_defaulted: bool = False,
+    time_range_defaulted: bool = False,
     store_options: Sequence[str] = (),
     clarification_options: Sequence[str] = (),
     planner_authority: Optional[str] = None,
@@ -2373,6 +2376,7 @@ def _build_spec(
         excluded_entities=excluded_entities,
         store_scope=store_scope,
         store_scope_defaulted=store_scope_defaulted,
+        time_range_defaulted=time_range_defaulted,
         store_slots=store_slots,
         compare_stores=(store_scope == "multiple"),
         store_options=tuple(store_options),
@@ -5219,23 +5223,40 @@ def _semantic_spec_from_t3(
     #
     # ⛔ 不是降级处理: `store_scope_defaulted` 会让答案**显式声明**用的是全部门店。
     #    偷偷替用户选口径才是降级, 选了并说出来不是。
+    #
+    # 🔴 2026-08-07 二次实测(**基线那套短问句**, 不是我后来加了「最近30天」前缀的
+    #    改写版): 补了门店默认之后 A=5 / C=1 / D=9。而同一批问句每条前面加上
+    #    「最近30天」, A 就升到 12 —— 差额**几乎全是「用户没说时间就反问」**。
+    #    🔑 判据: 一批问句的归宿分布**对措辞极其敏感**; 报改善必须与基线用
+    #    **逐字相同**的问句集, 否则量的是两件事(本轮我自己踩过一次)。
+    #
+    # ⛔ 只有「有安全默认值 + 会被显式披露」的槽位才进这个集合。
+    #    指标/对象**不进**: 它们没有无歧义的默认, 补错等于给一个看着像答案的错答案。
+    _AUTO_DEFAULTABLE = {"store_scope", "time_range"}
+
+    store_scope_defaulted = False
+    time_range_defaulted = False
+    _missing = tuple(missing_fields)
     if (
         clarification_needed
-        and tuple(missing_fields) == ("store_scope",)
-        and not store_scope
+        and _missing
+        and set(_missing) <= _AUTO_DEFAULTABLE
         and not store_names
     ):
         logger.info(
-            "[restaurant-intent] 唯一缺项是门店 -> 默认全部门店而不反问: query=%r",
-            query[:60],
+            "[restaurant-intent] 缺项都有安全默认值 -> 补默认而不反问: missing=%s query=%r",
+            _missing, query[:60],
         )
         clarification_needed = False
         clarification_question = None
         clarification_options = ()
-        store_scope = "all"
-        store_scope_defaulted = True
-    else:
-        store_scope_defaulted = False
+        if "store_scope" in _missing and not store_scope:
+            store_scope = "all"
+            store_scope_defaulted = True
+        if "time_range" in _missing:
+            # ⚠️ 不在这里改写 query 或 SQL —— resolver 自己从原句派生 date_range,
+            # 没说时间时它本来就落到近 30 天。这里只负责**别反问**并**说出来**。
+            time_range_defaulted = True
 
     if daypart_contract_repair:
         # 时段经营问句由**历史时段表现** resolver 承接。这是 post-LLM 的能力编译,
@@ -5309,6 +5330,7 @@ def _semantic_spec_from_t3(
         # 门店范围是**代码补的默认值**时打标 —— 答案里必须声明范围, 见
         # `restaurant_intent_service._store_scope_disclosure`。
         store_scope_defaulted=store_scope_defaulted,
+        time_range_defaulted=time_range_defaulted,
         store_options=suggested_stores or available_stores,
         clarification_options=clarification_options,
         planner_authority=(

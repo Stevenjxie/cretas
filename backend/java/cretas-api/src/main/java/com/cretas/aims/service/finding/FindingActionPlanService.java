@@ -177,7 +177,9 @@ public class FindingActionPlanService {
      */
     private String renderFacts(FindingService.Result result) {
         StringBuilder sb = new StringBuilder("当前异常事实（每行一条，彼此独立，不要合并）：\n");
-        for (String line : findingTextRenderer.renderDigestLines(result)) {
+        // ⛔ renderFindingLines 而不是 renderDigestLines: 后者含跳过/失败说明,
+        // 那里面的数字不在 buildFacts 的合法集里, 模型引用了就必被拒(实测 4/4 全 409)。
+        for (String line : findingTextRenderer.renderFindingLines(result)) {
             sb.append(line).append('\n');
         }
         return sb.toString();

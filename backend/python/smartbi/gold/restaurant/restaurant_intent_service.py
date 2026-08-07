@@ -143,6 +143,24 @@ def _prepend_action_warning(answer_text: str, warning: Optional[str]) -> str:
     return f"**{warning}**\n\n{answer_text}"
 
 
+def _time_range_disclosure(spec: Any) -> str:
+    """时间窗取了默认值就必须说出来 —— 与门店范围同一条判据。
+
+    ⛔ 与门店那条的区别在于: 「全部门店」是无歧义的**超集**, 而「最近 30 天」是一个
+    **选择**。正因为它是选择, 披露才更不能省 —— 用户看到数字之前就该知道这是哪一段
+    时间的数字, 否则他会拿一个 30 天的数去对一个他心里想的 7 天的数。
+
+    ⚠️ 不改 SQL: resolver 自己从原句派生 date_range, 用户没说时间时它本来就落到近
+    30 天。这里只负责把「这是代码替你选的」说出来。
+    """
+    if not getattr(spec, "time_range_defaulted", False):
+        return ""
+    return (
+        "\n\n（你没有指定时间范围，以上按**最近 30 天**计算；"
+        "想看别的区间可以直接说，例如「最近 7 天」。）"
+    )
+
+
 def _store_scope_disclosure(spec: Any) -> str:
     """门店范围取了默认值就必须说出来。
 
@@ -1264,6 +1282,7 @@ async def tiered_answer(
         # has_displayable_business_result 把这行括号当成「有可展示结果」, 于是一个
         # 本该被拦下的空答案会因为多了一句范围说明而蒙混过关。
         answer_text += _store_scope_disclosure(spec)
+        answer_text += _time_range_disclosure(spec)
         answer_text = _prepend_action_warning(answer_text, action_warning)
         result: Dict[str, Any] = {
             "kind": "answer",
