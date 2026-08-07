@@ -52,6 +52,7 @@ _PLAN_LABELS = {
     "RESTAURANT_OPS_STORE_DIRECTORY": "门店名单",
     "RESTAURANT_OPS_BUSINESS_OPTIMIZATION": "经营诊断与提升方案",
     "RESTAURANT_OPS_CHANNEL_MIX": "堂食与外卖",
+    "RESTAURANT_OPS_DAYPART_PERFORMANCE": "时段表现",
     "RESTAURANT_OPS_RECIPE_COST": "菜品成本",
     "RESTAURANT_OPS_WASTAGE_TOP": "食材损耗",
     "RESTAURANT_OPS_GROSS_MARGIN": "菜品毛利",
@@ -69,6 +70,9 @@ _RESOLVER_DIMENSIONS = {
         {"store", "dish", "ingredient", "channel", "customer", "time"}
     ),
     "RESTAURANT_OPS_CHANNEL_MIX": frozenset({"channel"}),
+    # 时段本身是 time 维度; 结果里也带门店无关的全店汇总, 故只声明 time。
+    # ⛔ 声明的是**这个 resolver 真能出的粒度**, 不是「希望它能出」的。
+    "RESTAURANT_OPS_DAYPART_PERFORMANCE": frozenset({"time"}),
     "RESTAURANT_OPS_GROSS_MARGIN": frozenset({"dish", "time"}),
     "RESTAURANT_OPS_RECIPE_COST": frozenset({"dish"}),
     "RESTAURANT_OPS_STORE_MARGIN": frozenset({"store", "dish"}),
