@@ -75,12 +75,19 @@ DECLARE
     v_rows     integer;
     v_before   integer;
     v_dup      text;
+    v_lsm_before integer;
 BEGIN
-    SELECT count(*) INTO v_total FROM raw_material_types WHERE factory_id = 'F006';
+    -- 🔴 环境守卫: 一次性租户操作, 只对装着那批 prod 数据的库有意义。
+    -- 新建的 dev/test 库里 F006 没有 16 位码, 必须**干净跳过**而不是 abort ——
+    -- 否则任何新环境跑 Flyway 都会中止, 应用起不来。
+    SELECT count(*) INTO v_total
+      FROM raw_material_types WHERE factory_id = 'F006' AND code ~ '^[0-9]{16}$';
     IF v_total = 0 THEN
-        RAISE NOTICE 'V20261029_72: F006 无物料, 跳过';
+        RAISE NOTICE 'V20261029_72: F006 没有 16 位码, 跳过(非 prod 环境的正常情况)';
         RETURN;
     END IF;
+
+    SELECT count(*) INTO v_lsm_before FROM raw_material_types WHERE factory_id = 'LIUSHANMEN';
 
     ---------------------------------------------------------------------------
     -- ① 算新码并入台账
@@ -183,9 +190,11 @@ BEGIN
     END IF;
 
     -- 防呆⑦: LIUSHANMEN 一条都不许被碰
+    -- ⚠️ 判据用「与迁移开始时相同」而不是写死 129 —— 写死会让这条迁移只能在 prod 跑
     SELECT count(*) INTO v_rows FROM raw_material_types WHERE factory_id = 'LIUSHANMEN';
-    IF v_rows <> 129 THEN
-        RAISE EXCEPTION 'V20261029_72 中止: LIUSHANMEN 物料数变成 %(预期 129), 误伤真客户', v_rows;
+    IF v_rows <> v_lsm_before THEN
+        RAISE EXCEPTION 'V20261029_72 中止: LIUSHANMEN 物料数从 % 变成 %, 误伤真客户',
+            v_lsm_before, v_rows;
     END IF;
 
     RAISE NOTICE 'V20261029_72 完成: F006 换码 % 条 / 停用分段字典 % 条; 全平台 16 位码归零',

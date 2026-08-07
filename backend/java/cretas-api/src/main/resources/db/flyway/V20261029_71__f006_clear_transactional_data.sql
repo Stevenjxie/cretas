@@ -64,14 +64,25 @@ DECLARE
     v_total    bigint := 0;
     v_leftover text;
     v_check    bigint;
+    v_mats_before bigint;
 BEGIN
     -- 防呆①: 只允许 F006。写错租户就是删真客户。
     IF v_factory <> 'F006' THEN
         RAISE EXCEPTION 'V20261029_71 中止: 本迁移只针对 F006';
     END IF;
 
-    -- 防呆②: LIUSHANMEN 的行数必须在迁移前后一致 —— 先记下来
+    -- 🔴 环境守卫: 本迁移是**一次性租户清理**, 只对装着那批 prod 数据的库有意义。
+    -- 新建的 dev/test 库里没有 F006 的流水, 这里必须**干净跳过**而不是 abort ——
+    -- 否则任何一个新环境跑 Flyway 都会中止, 应用直接起不来。
+    -- (这一条是 2026-08-07 本地跑之前就该想到、真去本地跑才想起来的。)
+    IF NOT EXISTS (SELECT 1 FROM material_batches WHERE factory_id = 'F006') THEN
+        RAISE NOTICE 'V20261029_71: 本库没有 F006 的流水, 跳过(非 prod 环境的正常情况)';
+        RETURN;
+    END IF;
+
+    -- 防呆②: LIUSHANMEN 的行数与 F006 物料档案数必须在迁移前后一致 —— 先记下来
     SELECT count(*) INTO v_check FROM material_batches WHERE factory_id = 'LIUSHANMEN';
+    SELECT count(*) INTO v_mats_before FROM raw_material_types WHERE factory_id = 'F006';
 
     ---------------------------------------------------------------------------
     -- 0) 元数据: 单列主键 / 单列外键(且指向父表主键)
@@ -212,9 +223,11 @@ BEGIN
     END IF;
 
     -- 防呆⑥: F006 的物料档案必须原样还在
+    -- ⚠️ 判据用「与迁移开始时相同」而不是写死 305 —— 写死会让这条迁移只能在 prod 跑
     SELECT count(*) INTO v_rows FROM raw_material_types WHERE factory_id = 'F006';
-    IF v_rows <> 305 THEN
-        RAISE EXCEPTION 'V20261029_71 中止: F006 物料档案剩 % 条(预期 305), 不该被动', v_rows;
+    IF v_rows <> v_mats_before THEN
+        RAISE EXCEPTION 'V20261029_71 中止: F006 物料档案从 % 变成 %, 不该被动',
+            v_mats_before, v_rows;
     END IF;
 
     RAISE NOTICE 'V20261029_71 完成: 清空 F006 流水 % 张表 / % 行, 备份在 schema f006_clear_71',
