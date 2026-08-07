@@ -357,14 +357,29 @@ onMounted(loadTree);
         </div>
       </template>
 
+      <!--
+        🔴 2026-08-07: 原文案是「暂未配置…点击『新增分类』开始配置」, 那是把人往回引 ——
+        六膳门与 F006 的字典是**被有意停用**的(V20261029_69 / _72, 16 位分类码全平台下架),
+        它们现在走「用户自填料号」的建档路径。对这类租户说「快去配置」会让人以为出了故障,
+        照着做还会把刚下架的东西装回来。
+        空字典是**合法状态**, 文案要说清现在是什么、料号在哪维护, 再把「配置」放成次要选项。
+      -->
       <el-alert
         v-if="treeData.length === 0 && !loading"
-        title="该工厂暂未配置物料编码字典，点击「新增分类」开始配置。"
-        type="warning"
+        title="本工厂未使用 16 位物料编码字典"
+        type="info"
         :closable="false"
         show-icon
         class="empty-alert"
-      />
+      >
+        <div>
+          物料料号由你自己维护（在「原料类型字典」新建物料时填写，如 WL001 / YL052 / BC005）。
+          这是正常状态，不是配置缺失。
+        </div>
+        <div v-if="canWrite" class="empty-alert__hint">
+          确实需要启用分类码体系时，再点右上角「新增分类」。
+        </div>
+      </el-alert>
 
       <el-segmented v-model="selectedLevel" :options="levelOptions" class="level-tabs" />
 
@@ -565,6 +580,12 @@ onMounted(loadTree);
 .header-actions {
   display: flex;
   gap: 8px;
+}
+
+.empty-alert__hint {
+  margin-top: 6px;
+  color: var(--el-text-color-secondary);
+  font-size: 13px;
 }
 
 .empty-alert {
