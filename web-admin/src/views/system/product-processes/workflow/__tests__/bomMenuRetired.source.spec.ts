@@ -43,8 +43,16 @@ describe('只下入口, 不删机器', () => {
     expect(existsSync(resolve(__dirname, '../../../../production/bom/index.vue'))).toBe(true);
   });
 
-  it('「BOM 与 Workflow 不一致」诊断横幅保留查看通道 —— 画布没有替代品', () => {
-    expect(EDITOR).toMatch(/bomProductionMismatchProducts\[0\]\?\.id/);
+  /**
+   * 2026-08-07 推翻: 原来这条要求诊断横幅保留跳 BOM 页的通道, 理由是「画布没有替代品」。
+   * 方案 B 定稿后替代品有了 —— 用量与锅序就在工序的辅料 / 包材 cell 上, 横幅改成指向它。
+   * 断言跟着翻转, 但**不许翻成什么都不断言**: 仍要钉住替代路径真的在。
+   */
+  it('诊断横幅不再跳 BOM 页, 改为指向画布内的 cell', () => {
+    expect(EDITOR).not.toMatch(/goToBomManagement\s*\(/);
+    const at = EDITOR.indexOf('的生效 BOM 与当前已启用 Workflow 不一致');
+    expect(at).toBeGreaterThan(-1);
+    expect(EDITOR.slice(at, at + 900)).toMatch(/辅料 \/ 包材 cell/);
   });
 });
 

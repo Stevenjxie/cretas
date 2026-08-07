@@ -156,14 +156,13 @@
           {{ bomProductionMismatchProducts.map((item) => item.name).join('、') }} 的生效 BOM 与当前已启用 Workflow 不一致
         </template>
         <template #default>
-          <span>发布当前草稿时系统会重新检查并自动同步；已有生产计划继续使用原快照。</span>
-          <el-button
-            link
-            type="primary"
-            @click="goToBomManagement(bomProductionMismatchProducts[0]?.id)"
-          >
-            查看 BOM →
-          </el-button>
+          <!--
+            2026-08-07: 去掉「查看 BOM →」。BOM 就在本画布的辅料 / 包材 cell 上,
+            把用户支去另一个页面正是这次要消灭的心智(旧 BOM 菜单入口已于 8-05 摘除)。
+            横幅只说明状况, 不再提供出口。
+          -->
+          <span>发布当前草稿时系统会重新检查并自动同步；已有生产计划继续使用原快照。
+            用量与锅序直接在下方工序的辅料 / 包材 cell 上改。</span>
         </template>
       </el-alert>
 
@@ -279,7 +278,6 @@
               @select-sku="(skuId) => selectMaterialSku(slotProps.id, skuId)"
               @edit-sku="openQuickEditSku(slotProps.id)"
               @delete="removeNode(slotProps.id)"
-              @config-bom="() => goToBomManagement()"
             />
           </template>
 
@@ -1525,38 +1523,9 @@ async function waitForWorkflowSave(timeoutMs = 5000): Promise<boolean> {
   return !saving.value;
 }
 
-// Task 3(2026-08-05 bom-canvas-phase3-2): 画布 BOM 抽屉已下线 —— 「配置 BOM」统一
-// 跳转到 BOM 菜单页(路由 BomManagement, /production/bom), 不再在画布内嵌打开。
-// BOM 菜单页在 onMounted 里直接读 route.query.productTypeId 定位到该产品
-// (见 views/production/bom/index.vue #1236 系列防呆), 不需要额外传 workflow revision。
-// 跳转前仍尝试保存当前草稿 —— 直接跳走会丢未保存的画布改动。
-async function goToBomManagement(requestedProductTypeId?: string): Promise<void> {
-  if (!(await waitForWorkflowSave())) {
-    ElMessage.warning('Workflow 仍在保存，请稍后再试');
-    return;
-  }
-  if (dirty.value && !(await saveDraft())) {
-    ElMessage.warning('当前 Workflow 尚未保存成功，请重试后再前往 BOM 页面');
-    return;
-  }
-  const finishedOutputIds = flowNodes.value
-    .filter((node) => node.data?.kind === 'FINISHED_GOOD' && node.data?.skuId)
-    .map((node) => String(node.data.skuId))
-    .filter(Boolean);
-  const targetIds = [...new Set(finishedOutputIds)].sort();
-  // Workflow 的锚点 SKU 若也是终端产出，始终优先；否则稳定选择第一个终端产出，
-  // 避免多产出画布每次跳转随机落到不同 BOM。
-  const targetProductTypeId = requestedProductTypeId && targetIds.includes(requestedProductTypeId)
-    ? requestedProductTypeId
-    : (targetIds.includes(productTypeId.value)
-      ? productTypeId.value
-      : (targetIds[0] || productTypeId.value));
-  if (!targetProductTypeId) {
-    ElMessage.warning('未能确定要配置 BOM 的产品，请先在画布上绑定成品 SKU');
-    return;
-  }
-  await router.push({ name: 'BomManagement', query: { productTypeId: targetProductTypeId } });
-}
+// 2026-08-07: goToBomManagement 已删除。BOM 就在本画布的辅料 / 包材 cell 上,
+// 旧 BOM 菜单入口 8-05 已摘, 画布内也不再保留任何跳去那个页面的通道。
+// 反向断言见 __tests__/legacyBomEntryRetired.source.spec.ts。
 
 // #12b: 版本记录浏览
 async function openVersionDrawer(): Promise<void> {

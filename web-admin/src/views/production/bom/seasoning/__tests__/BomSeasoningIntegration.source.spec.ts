@@ -19,18 +19,25 @@ describe('seasoning BOM integration source contract', () => {
     expect(unifiedSource).not.toContain('RecipeContent');
   });
 
-  it('navigates the canvas to the BOM page for the resolved target SKU while keeping the conversion tab (Task 3 2026-08-05: canvas drawer retired in favor of router navigation)', () => {
-    expect(workflowEditorSource).toContain('async function goToBomManagement');
-    expect(workflowEditorSource).toContain('if (dirty.value && !(await saveDraft()))');
-    expect(workflowEditorSource).toMatch(/router\.push\(\{\s*name:\s*'BomManagement',\s*query:\s*\{\s*productTypeId:/);
-    // 2026-08-05: 「缺少生效 BOM」横幅的跳转按钮已移除 —— 冷启动改为在画布内闭环
-    // (点 cell 即 ensureDraft 建首版)。仍需跳转的调用点改用生产不一致横幅那条来钉,
-    // 否则这里会因为一个有意的下架而红, 却读起来像跳转整体坏了。
-    expect(workflowEditorSource).toContain('goToBomManagement(bomProductionMismatchProducts[0]?.id)');
-    expect(workflowEditorSource).toContain('targetIds.includes(productTypeId.value)');
+  /**
+   * 2026-08-07 方案 B 定稿后推翻: 画布不再跳 BOM 页, goToBomManagement 已整个删除。
+   *
+   * ⛔ 原断言的意图(「不许把出口静默摘掉」)保留 —— 所以这里不是只断言跳转没了,
+   * 而是要求画布内的替代路径真的在(辅料 / 包材 cell)。
+   * 独立 BOM 页按 productTypeId 定位那几条契约先留着: 阶段 5 才删页面,
+   * 到时候这几条跟着一起翻转。
+   */
+  it('画布不再跳 BOM 页, 用量与锅序在画布内的 cell 上改', () => {
+    expect(workflowEditorSource).not.toMatch(/(async\s+)?function goToBomManagement/);
+    expect(workflowEditorSource).not.toMatch(/goToBomManagement\s*\(/);
+    expect(workflowEditorSource).not.toMatch(/name:\s*'BomManagement'/);
     expect(workflowEditorSource).not.toContain('openBomDrawer');
-    // 独立 BOM 页(bom-unified 外壳 + BomContent)仍然支持按 productTypeId 定位到某产品——
-    // 画布不再内嵌它, 但跳转能落到正确产品仍然依赖这条契约成立。
+    const at = workflowEditorSource.indexOf('的生效 BOM 与当前已启用 Workflow 不一致');
+    expect(at).toBeGreaterThan(-1);
+    expect(workflowEditorSource.slice(at, at + 900)).toMatch(/辅料 \/ 包材 cell/);
+  });
+
+  it('阶段 5 之前: 独立 BOM 页仍支持按 productTypeId 定位', () => {
     expect(unifiedSource).toContain(':initial-product-type-id="props.initialProductTypeId"');
     expect(bomSource).toContain('props.initialProductTypeId');
     expect(bomSource).toContain('route.query.productTypeId');

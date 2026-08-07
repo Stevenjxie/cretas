@@ -28,28 +28,40 @@ describe('画布 BOM 抽屉已下线(真删除, 不是开关)', () => {
   });
 
   /**
-   * 原断言要求「三个旧调用点都改指同一个跳转函数, 而不是被摘掉或留空」——
-   * 它防的是 Phase 3-2 下抽屉时把入口静默丢掉。
+   * 三次收敛的最终状态(2026-08-07 方案 B 定稿):
+   *   Phase 3-2 (08-05) 下抽屉 → 三个调用点改指 goToBomManagement(跳 BOM 菜单页)
+   *   同日          → 「缺生效 BOM」横幅率先改成画布内 cell 引导
+   *   本次   (08-07) → 剩下两个调用点也关死, goToBomManagement 整个删除
    *
-   * 2026-08-05 有意推翻其中一条: 冷启动已在画布内闭环(点 cell 即 ensureDraft 建首版),
-   * 「缺少生效 BOM」横幅不再需要把用户支去 BOM 页, 改成指向 cell 的文字引导。
-   * 这不是「静默摘掉」——替代路径由 bomMenuRetired.source.spec.ts 正面钉住。
-   * 其余两条仍必须保留跳转: 画布没有替代品。
+   * ⛔ 原断言的**意图必须保留**: 「删掉出口却不给替代 = 把有帮助的提示变成死路」。
+   * 所以下面不是简单地断言「跳转消失」——每一处都要求**画布内的替代路径真的在**。
+   * 只断言 not.toMatch 的话, 按钮被删成一片空白也会通过。
    */
-  it('仍需跳转的两个调用点没有被摘掉或留空', () => {
-    // 生产不一致横幅 —— 诊断用途, 画布无替代
-    expect(source).toMatch(/@click="goToBomManagement\(bomProductionMismatchProducts\[0\]\?\.id\)"/);
-    // 物料 cell 的 config-bom 事件
-    expect(source).toMatch(/@config-bom="\(\) => goToBomManagement\(\)"/);
+  it('画布内不再有任何跳去 BOM 菜单页的通道', () => {
+    // ⚠️ 断言真实构造, 不要断言「源码里不出现这个词」——
+    //    解释性注释里写下函数名是正常的, 用 toContain 会把注释也算成「还在用」。
+    expect(source).not.toMatch(/(async\s+)?function goToBomManagement/);
+    expect(source).not.toMatch(/goToBomManagement\s*\(/);
+    expect(source).not.toMatch(/name:\s*'BomManagement'/);
+    expect(source).not.toMatch(/@config-bom=/);
   });
 
-  it('缺少生效 BOM 横幅改为画布内引导, 且必须留下可点的替代路径', () => {
-    const at = source.indexOf('暂未读取到生效 BOM');
+  it('生产不一致横幅: 去掉「查看 BOM →」后必须说清去哪改', () => {
+    const at = source.indexOf('的生效 BOM 与当前已启用 Workflow 不一致');
     expect(at).toBeGreaterThan(-1);
-    const block = source.slice(at, at + 700);
-    expect(block).not.toMatch(/goToBomManagement/);
-    // ⛔ 只允许「换成别的路径」, 不允许「换成什么都没有」
-    expect(block).toMatch(/辅料 \/ 包材 \/ 副产 cell/);
+    const block = source.slice(at, at + 900);
+    // 同上: 只禁按钮, 不禁注释里提到这四个字
+    expect(block).not.toMatch(/>\s*查看 BOM/);
+    // ⛔ 替代路径: 必须指向 cell, 否则用户读完横幅不知道下一步
+    expect(block).toMatch(/辅料 \/ 包材 cell/);
+  });
+
+  it('物料节点不再声明 configBom 事件 —— 事件线和按钮要一起走, 不留哑事件', () => {
+    const nodeSource = readFileSync(
+      resolve(__dirname, '../WorkflowMaterialNode.vue'),
+      'utf-8',
+    );
+    expect(nodeSource).not.toContain('configBom');
   });
 
   /** 从 start 截到下一个顶层声明为止, 近似取出整个函数体。 */
@@ -58,15 +70,6 @@ describe('画布 BOM 抽屉已下线(真删除, 不是开关)', () => {
     const next = rest.search(/\n(?:async function |function |const |watch\(|onMounted\()/);
     return next === -1 ? text.slice(start) : text.slice(start, start + 1 + next);
   }
-
-  it('goToBomManagement 真的调用 router.push 导航到 BOM 菜单页, 并带上 productTypeId', () => {
-    const fnStart = source.indexOf('async function goToBomManagement');
-    expect(fnStart).toBeGreaterThan(-1);
-    const fn = source.slice(fnStart, fnStart + 1400);
-    expect(fn).toMatch(/router\.push\(/);
-    expect(fn).toMatch(/name:\s*'BomManagement'/);
-    expect(fn).toMatch(/query:\s*\{\s*productTypeId:/);
-  });
 
   it('包材编辑不再走抽屉 —— openPackagingEditor 打开的是新弹窗', () => {
     const fnStart = source.indexOf('function openPackagingEditor');
@@ -78,7 +81,9 @@ describe('画布 BOM 抽屉已下线(真删除, 不是开关)', () => {
     expect(fn).toMatch(/packagingDialogVisible\.value = true/);
   });
 
-  it('BOM 菜单页组件(bom-unified/index.vue)与 BomContent 本体仍留在仓库里 —— 只下画布入口, 不删共享机器', () => {
+  // ⏳ 阶段 5 会删掉这些页面(见 docs/superpowers/specs/2026-08-07-canvas-is-bom-design.md)。
+  //    在那之前它们仍在仓库里, 这条断言到时候要跟着翻转, 不是删掉。
+  it('阶段 5 之前: BOM 页组件仍留在仓库里(入口已关, 机器未删)', () => {
     const bomUnifiedSource = readFileSync(
       resolve(__dirname, '../../../../production/bom-unified/index.vue'),
       'utf-8',

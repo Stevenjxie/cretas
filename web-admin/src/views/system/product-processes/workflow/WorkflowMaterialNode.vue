@@ -201,7 +201,6 @@ const emit = defineEmits<{
   selectRawSku: [skuId: string];
   selectSku: [skuId: string];
   delete: [];
-  configBom: [];
   editSku: [];
 }>();
 
