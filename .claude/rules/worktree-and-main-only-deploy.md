@@ -124,6 +124,15 @@ git merge --no-ff codex/other-session-branch      # 直接合, 零网络
 2. **只有占着 `main` 的那个 worktree 能往 main 上合**(git 不允许两个 worktree 检出同一分支)。
    这是好事: 天然把合并串行化了。
    ⚠️ **动它之前必须先 `git status --porcelain` 确认那个 worktree 干净** —— 它是别人的活工作区。
+
+   🔴 **这个检查要单独跑一次、看到结果再决定**, 不要和 merge 写在同一条命令里 ——
+   2026-08-07 我就是 `echo dirty=$(git status ...) && git merge ...` 一把梭, 读数打出来
+   `dirty=3` 时 merge 已经执行完了(那 3 个是另一条线刚开始写的 Python 文件)。
+   这次侥幸没事(我只改 `.claude/rules/` 一个文件, 与它们零交集, git 也不会在有冲突时
+   静默合并), 但「检查」和「据检查做决定」被压进同一条命令 = 那个检查根本没起作用。
+
+   若对方**确实有未提交改动**: 要么等它提交, 要么只合与它零交集的文件(先
+   `git diff --name-only main..<你的分支>` 与对方 dirty 列表对一遍), 别硬来。
 3. **部署从 detached worktree**, 绕开「分支被占用」:
    ```bash
    git worktree add --detach ../cretas-deploy-offline $(git rev-parse main)
