@@ -1129,3 +1129,47 @@ RBAC 修复被并发 session 覆盖，总营收回归 ¥0）。**账号恢复前
 账号恢复后：`git push -u origin codex/claude-finding-next-steps` → PR → 合 main →
 `git checkout main && git pull` → `release-cretas.sh --phase deploy` （Java + Python +
 web-admin 三侧）→ 按上面「G5 实测」那节逐条回验。
+
+---
+
+## 🧪 本地跑通（SSH 隧道 + 真实 prod 数据，2026-08-07 晚）
+
+Steve 拍板「本地跑通再说」。做法：本地直接调 `tiered_answer()`（**不起 web 层**——
+`main.py` 在 Windows 上 `import fcntl` 起不来），DB 走 SSH 隧道到 prod。
+驱动脚本：`backend/python/local_g1_driver.py`（未提交，恢复后可直接复用）。
+
+### ✅ 两条修复在真实数据上验证通过
+
+| 问句 | 结果 | 说明 |
+|---|---|---|
+| `哪个供应商报价最贵` | **B**（`RESTAURANT_OPS_DATA_GAP`），**45ms，0 次 LLM** | 「缺口判定提到路由之前」生效：归宿稳定且不烧 token。prod 上它曾在 B/C/D 之间飘。 |
+| `食材成本占营收多少` | **A**（`RESTAURANT_OPS_RECIPE_COST`） | prod 上这条是 D。时间窗默认 + 维度修复生效。 |
+
+另有 `哪个时段生意最好` → A（本轮新建的 resolver）、`明天天气怎么样` → C，均符合预期。
+
+### 🔴 三个「本地 harness 自己造出来的假故障」
+
+判据：**离线跑出来的失败，先怀疑 harness 再怀疑代码。**
+
+1. **裸 asyncpg pool → 14/15 全是「0ms 无返回」。** 看着像代码全坏了。真因是
+   `parse_restaurant_query` 的租户闸 `_is_restaurant_tenant` 读
+   `agg_restaurant_daily_totals`，而我连错了库。**是 `sys.settrace` 抓到第 5941 行
+   返回 None 才定位的 —— 猜了 5 轮都没猜中，trace 一次就到。**
+2. **`No module named 'services'`** —— 应用启动时把 `smartbi/` 也放进 `sys.path`，
+   驱动没补，部分 resolver 直接失败 → 表现成 D。
+3. **`[llm_router] All providers exhausted: cb_open; quota_skip`** —— 连跑几轮后
+   熔断器打开、配额跳过，`明天天气` 从 C 掉成 D、两条问句 55ms 就返回。
+   **那一轮的 A=4/D=10 不能当测量值读。**
+
+### 🔑 数据库口径订正（我本轮先判错、后查实）
+
+- **MOCK_REST 的餐厅数据在 `smartbi_prod_db`**（`agg_restaurant_daily_totals` 40 行）；
+  `smartbi_db` 里是 **0 行**。原 memory 是对的。
+- ⚠️ 我中途根据 `/www/wwwroot/python-services/.env` 里的 `POSTGRES_DB=smartbi_db`
+  判定「服务连的是 smartbi_db」并据此"更正"了 memory —— **那个 .env 是陈旧的**
+  （它里面的口令连 `smartbi_user` 都认证不过）。判据：**配置文件写着什么 ≠ 进程在用什么**，
+  要用「数据在哪个库里」反证。
+- `agg_restaurant_product_cost` 两库皆空，毛利实际来自
+  `fact_pos_item` / `fact_pos_transaction` / `dim_product`。
+- 所有 fact/dim 表 **RLS forced=true**，策略 `factory_id = current_setting('app.factory_id')`；
+  建池必须带 `setup=set_pg_connection_tenant`，否则查什么都是 0 行。
