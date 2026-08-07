@@ -40,6 +40,17 @@ _FUTURE_HORIZON_TOKENS = (
     "下周", "下一周", "未来一周", "未来7天",
     "下个月", "下月", "未来一个月", "未来30天",
 )
+#: 只对**未来**成立的动作词 —— 「排班」是给还没发生的班次安排人。
+#: ⛔ 这里刻意**不收**「人效/人手/在岗/几个人」: 那些是状态查询, 问的是现在或过去。
+_FORECAST_ACTION_TOKENS = (
+    "排班", "排几个人", "排多少人",
+    # 「安排」本身就是给还没发生的班次配人 —— 既有契约
+    # (test_future_or_timeless_staffing_question_keeps_forecast_flow)
+    # 明确把「晚市怎么安排」列为无时间词但仍走预测的一类。第一版漏了它,
+    # 是那条既有测试把我拦下来的。
+    "怎么安排", "如何安排", "安排几个人", "安排多少人",
+    "要几个人", "需要几个人", "要多少人", "需要多少人", "用几个人",
+)
 _NON_FORECAST_WINDOW_RE = re.compile(
     r"(?:今天|今日|今晚|当前|本周|这周|上周|上上周|"
     r"本月|这个月|当月|上月|上个月|上上个月|今年|去年|"
@@ -128,13 +139,30 @@ def requests_non_forecast_staffing_window(question: str) -> bool:
     FactBook; it is not a standalone historical staffing answer.  A historical
     phrase must therefore never be silently converted to tomorrow merely
     because :func:`horizon_from_question` keeps a backward-compatible default.
+
+    🔴 2026-08-08 prod 实测: 判据原本只有「问句里有没有过去时间词」, 没有就放行 ——
+       于是「员工人效怎么样」「门店人手够不够」「最近人效怎么样」这类**根本没提
+       时间**的问句被 `horizon_from_question` 的默认值悄悄当成「明天」, 答回来一整
+       篇明天预测排班。用户问的是现状, 拿到的是未来, 而且这条已被晋升成零 token
+       路由 —— **答非所问被永久重放**。
+
+       ⇒ 方向改成**正向证据**: 预测排班必须由问句自己指向未来(显式未来时间词,
+         或「排班/排几个人」这类只对未来成立的动作词)。举不出正向证据就交回
+         上层去说明支持范围, **绝不默认成明天**。
+
+       判据: 一个「缺证据就走默认值」的闸, 要问的不是「默认值合不合理」, 而是
+       **「缺证据时错的那一侧代价有多大」**。这里错的一侧是答非所问 + 被固化。
     """
     normalized = (question or "").strip().lower()
     if not normalized:
         return False
     if any(token.lower() in normalized for token in _FUTURE_HORIZON_TOKENS):
         return False
-    return _NON_FORECAST_WINDOW_RE.search(normalized) is not None
+    if _NON_FORECAST_WINDOW_RE.search(normalized) is not None:
+        return True
+    # 没有任何时间指向: 只有「排班」这类**只对未来成立**的动作词才算指向预测。
+    # ⛔ 「人效/人手/在岗/几个人」是状态查询, 不构成预测排班的正向证据。
+    return not any(token in normalized for token in _FORECAST_ACTION_TOKENS)
 
 
 def _mean(values: Sequence[float]) -> Optional[float]:
