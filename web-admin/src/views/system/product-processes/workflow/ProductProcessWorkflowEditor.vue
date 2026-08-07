@@ -135,10 +135,11 @@
           {{ bomMissingProducts.map((item) => item.name).join('、') }} 暂未读取到生效 BOM
         </template>
         <template #default>
-          <!-- 冷启动已在画布内闭环: 直接点辅料/包材/副产 cell 即会建首版草稿,
-               不必再把用户支去别的页面。 -->
+          <!-- 冷启动已在画布内闭环: 直接点辅料/包材 cell 即会建首版草稿, 不必再把用户支去别的页面。
+               ⚠️ 2026-08-07 阶段 2 起这里不再提「副产 cell」—— 副产已改成工序上的真实产出节点,
+               不产生 BOM 行, 也就建不了 BOM 草稿。提它等于把用户指向一扇不存在的门。 -->
           <span>
-            直接在下方的辅料 / 包材 / 副产 cell 上配置即可，系统会自动建立首版草稿；
+            直接在下方的辅料 / 包材 cell 上配置即可，系统会自动建立首版草稿；
             点击“自动同步并发布”后会重新执行权威检查。
           </span>
         </template>
@@ -724,6 +725,13 @@ import {
   pickOwningProductId,
 } from './bomEditableRecipe';
 import type { DraftBomNotice } from './bomEditableRecipe';
+import {
+  allowsInjection,
+  allowsPotRatio,
+  isValidDosagePerKgG,
+  isValidInjectionAmount,
+  isValidSubsequentPotRatio,
+} from './seasoningProcessCategory';
 import { createBomDraftEnsurer } from './bom/bomDraftLifecycle';
 import { markersForAuxiliaryRow, markersForPackagingRow } from './bomOverlayMarkers';
 import type { AuxiliaryCellRow, PackagingCellRow } from './bomOverlayTypes';
@@ -2247,7 +2255,10 @@ async function openAuxiliaryEditor(processNodeId: string, rowId?: string): Promi
 
   const auxProductTypeId = resolveProductForProcess(processNodeId);
   if (!auxProductTypeId) {
-    ElMessage.warning('未能确定该工序归属的成品；联合生产请先从产出侧的包材/副产入口建立 BOM');
+    // ⛔ 防呆规则 5: 这句要指向一个**真的存在**的入口。
+    // 阶段 2 之前它写的是「包材/副产入口」, 而副产入口已随浮层删除(副产改成了工序上的
+    // 真实产出节点, 不再产生 BOM 行) —— 留着就是把用户指向一扇不存在的门。
+    ElMessage.warning('未能确定该工序归属的成品；联合生产请先从产出侧的包材 cell 建立 BOM');
     return;
   }
   const writableRecipeId = await resolveWritableRecipeId(
@@ -4065,9 +4076,22 @@ async function applyWorkflowAIDraft(
   await fitCanvas();
 }
 
-interface WorkflowSpecOutput { kind?: string; name?: string; unit?: string }
+interface WorkflowSpecOutput { kind?: string; name?: string; unit?: string; byproduct?: boolean }
+/** 一味调料/辅料投入。与补丁路的 materialBinding 同形状, 同一套约束。 */
+interface WorkflowSpecSeasoning {
+  name?: string;
+  dosagePerKgG?: number;
+  subsequentPotRatio?: number;
+}
 // #4 合流 (N→1): inputs = 本步除主链上游外**额外**投入的原料名 (混批/拼装). 每个建一个 RAW cell + INPUT 端口。
-interface WorkflowSpecStep { process?: string; processCategory?: string; inputs?: string[]; outputs?: WorkflowSpecOutput[] }
+interface WorkflowSpecStep {
+  process?: string;
+  processCategory?: string;
+  inputs?: string[];
+  outputs?: WorkflowSpecOutput[];
+  seasonings?: WorkflowSpecSeasoning[];
+  injectionAmount?: number;
+}
 interface WorkflowSpec { rawMaterials?: string[]; steps?: WorkflowSpecStep[] }
 
 /**
@@ -4133,6 +4157,8 @@ async function buildWorkflowFromSpec(spec: WorkflowSpec, identity: WorkflowIdent
   // 3) 确定性建图 (sync in mutate, 复用 createProcessBranch): 入口原料 → 逐步 工序+产出
   let autoBoundCount = 0;   // #5 自动绑定成功的产出 SKU 数
   let mergeInputCount = 0;  // #4 合流额外投入原料端口数
+  // 阶段 4: 被类别闸/数值域拒掉的调味行。⛔ 不能静默丢 —— 用户会以为 AI 照做了。
+  const seasoningRejections: string[] = [];
   mutate(() => {
     const nodes: Node[] = [];
     const edges: Edge[] = [];
@@ -4226,9 +4252,11 @@ async function buildWorkflowFromSpec(spec: WorkflowSpec, identity: WorkflowIdent
           id: matId,
           type: 'material',
           position: { x: outputNode.position.x, y: outputNode.position.y + (extraIdx + 1) * 160 },
+          // 阶段 4: 规格里标了 byproduct 的分流产出建成副产 cell —— 与手工「+ 副产」同一形状
+          // (kind 仍是产出类型, 只多一个 isByproduct 标记, 见 MaterialNodeData 的注释)。
           data: extraSku
-            ? { kind, name: extraSku.name, skuId: extraSku.id, skuCode: extraSku.code || extraSku.id, specification: extraSku.specification, bound: true, baseUnit: extraSku.unit || unit }
-            : { kind, name: extra?.name || `产出 ${extraIdx + 2}`, skuId: '', skuCode: '待选择或现场创建 SKU', bound: false, baseUnit: unit },
+            ? { kind, name: extraSku.name, skuId: extraSku.id, skuCode: extraSku.code || extraSku.id, specification: extraSku.specification, bound: true, baseUnit: extraSku.unit || unit, ...(extra?.byproduct === true ? { isByproduct: true } : {}) }
+            : { kind, name: extra?.name || `产出 ${extraIdx + 2}`, skuId: '', skuCode: '待选择或现场创建 SKU', bound: false, baseUnit: unit, ...(extra?.byproduct === true ? { isByproduct: true } : {}) },
         });
         processData.ports = [
           ...processData.ports,
@@ -4273,6 +4301,51 @@ async function buildWorkflowFromSpec(spec: WorkflowSpec, identity: WorkflowIdent
         });
         mergeInputCount += 1;
       });
+      // ── 阶段 4: 规格里的调味参数 ──────────────────────────────────────
+      // ⛔ 与补丁路**同一套约束**。这条路的规格不经过后端 Tool, 后端那份 sanitize
+      //    在这里一行都跑不到 —— 只改一条路就会留半个洞(设计定稿约束 5)。
+      //    被丢弃的行不静默: 收进 seasoningRejections, 建完图一并告诉用户。
+      const stepCategory = processData.processCategory;
+      const acceptedSeasonings = (Array.isArray(step.seasonings) ? step.seasonings : [])
+        .map((row) => {
+          const name = String(row?.name || '').trim();
+          if (!name) return null;
+          if (!isValidDosagePerKgG(row?.dosagePerKgG)) {
+            seasoningRejections.push(`「${name}」用量必须大于 0`);
+            return null;
+          }
+          if (row?.subsequentPotRatio !== undefined) {
+            if (!isValidSubsequentPotRatio(row.subsequentPotRatio)) {
+              seasoningRejections.push(`「${name}」后续锅比例必须在 0–100 之间`);
+              return null;
+            }
+            if (!allowsPotRatio(stepCategory)) {
+              seasoningRejections.push(
+                `工序「${processData.processName}」不是熟制类，不能配后续锅比例（「${name}」已跳过）`,
+              );
+              return null;
+            }
+          }
+          return {
+            materialName: name,
+            dosagePerKgG: row.dosagePerKgG,
+            ...(row.subsequentPotRatio !== undefined ? { subsequentPotRatio: row.subsequentPotRatio } : {}),
+          };
+        })
+        .filter((row): row is NonNullable<typeof row> => row !== null);
+      if (acceptedSeasonings.length > 0) {
+        (processData as Record<string, unknown>).materialBindings = acceptedSeasonings;
+      }
+      if (step.injectionAmount !== undefined) {
+        if (!isValidInjectionAmount(step.injectionAmount)) {
+          seasoningRejections.push(`工序「${processData.processName}」的注射量必须大于 0`);
+        } else if (!allowsInjection(stepCategory)) {
+          seasoningRejections.push(`工序「${processData.processName}」不是注射类，不能配注射量`);
+        } else {
+          (processData as Record<string, unknown>).injectionAmount = step.injectionAmount;
+        }
+      }
+
       nodes.push({ id: branch.processNode.id, type: 'process', position: branch.processNode.position, data: processData });
       nodes.push(outputNode);
       // 主链沿首产出继续 (多产出的其余分支是终端支流)
@@ -4288,6 +4361,16 @@ async function buildWorkflowFromSpec(spec: WorkflowSpec, identity: WorkflowIdent
   if (autoBoundCount > 0) parts.push(`已自动绑定 ${autoBoundCount} 个产出 SKU`);
   parts.push('请检查并绑定剩余产出/原料 SKU 后保存');
   ElMessage.success(parts.join('，'));
+  // ⛔ 被拒的调味行必须说出来。静默丢弃 = 用户以为 AI 照做了, 到扣料时才发现没配 ——
+  //    那时已经排产了。用 warning 且 duration 0(不自动消失), 因为这条要被读到。
+  if (seasoningRejections.length > 0) {
+    ElMessage({
+      type: 'warning',
+      duration: 0,
+      showClose: true,
+      message: `以下调味配置未采纳（AI 给的值不符合规则）：${seasoningRejections.join('；')}`,
+    });
+  }
 }
 
 function identitiesMatch(left: WorkflowIdentity, right: WorkflowIdentity): boolean {

@@ -144,9 +144,16 @@ public class CanvasAIController {
                 {
                   "process": "<work process name, e.g. 清洗/卤制/切片装盒>",
                   "inputs": ["<extra raw material name>", ...],
+                  "processCategory": "<optional: 熟制/注射/切配/... — the work process category>",
                   "outputs": [
-                    { "kind": "SEMI_FINISHED"|"FINISHED_GOOD", "name": "<output product name>", "unit": "<kg/盒/只/...>" }
-                  ]
+                    { "kind": "SEMI_FINISHED"|"FINISHED_GOOD", "name": "<output product name>",
+                      "unit": "<kg/盒/只/...>", "byproduct": false }
+                  ],
+                  "seasonings": [
+                    { "name": "<seasoning/auxiliary material name>", "dosagePerKgG": <grams per kg of input>,
+                      "subsequentPotRatio": <optional 0-100, ONLY for 熟制 steps> }
+                  ],
+                  "injectionAmount": <optional kg, ONLY for 注射 steps>
                 }
               ]
             }
@@ -161,6 +168,12 @@ public class CanvasAIController {
               output here — only NEW raw materials entering at this step.
             - the LAST step output is usually FINISHED_GOOD; intermediate outputs are SEMI_FINISHED.
             - use the user's own wording for process/output/material names. Keep it minimal, valid JSON only.
+            - "byproduct": true marks an output as 副产 (a by-product such as 鸡架/骨头/肥油 that is
+              warehoused but is not the main product). Quantity is entered at reporting time, never here.
+            - "seasonings" (optional) = 调料/辅料 INPUT amounts for this step. dosagePerKgG MUST be > 0.
+            - "subsequentPotRatio" (0-100) is ONLY meaningful on 熟制 steps; "injectionAmount" (> 0) is
+              ONLY meaningful on 注射 steps. Do NOT emit them on other步骤 —— the frontend rejects
+              them and tells the user, which just wastes a round trip.
 
             Current definition (context, may be empty): %s
             Selected node id: %s

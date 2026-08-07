@@ -206,6 +206,45 @@ describe('入口与选择器', () => {
   });
 });
 
+/**
+ * 🔴 这一组是被 owner 的一张截图逼出来的(2026-08-07)。
+ *
+ * 阶段 2 删掉副产浮层后, 画布上仍有**给用户看的文案**在指「副产入口」:
+ *   - 冷启动横幅「直接在下方的辅料 / 包材 / 副产 cell 上配置即可」
+ *   - toast「联合生产请先从产出侧的包材/副产入口建立 BOM」
+ * 那扇门已经不存在了。用户照着做, 找不到, 也不会有任何报错 —— 正是防呆规则 5
+ * 说的「有帮助的提示变成死路」。
+ *
+ * 判据: **删入口时要连带搜一遍"提到这个入口的文案"**, 光删组件不够。
+ */
+describe('删掉副产入口后, 没有文案再指向它', () => {
+  /** 只取给用户看的字符串字面量(中文引号内文本), 不含注释 —— 注释里提它是正常的。 */
+  const userFacingText = (source: string) => source
+    .replace(/\/\*[\s\S]*?\*\//g, '')
+    .split(/\r?\n/)
+    .filter((line) => {
+      const t = line.trim();
+      return !t.startsWith('//') && !t.startsWith('*') && !t.startsWith('<!--');
+    })
+    .join('\n');
+
+  it('画布不再让用户去「副产入口 / 副产 cell」配 BOM', () => {
+    const visible = userFacingText(EDITOR);
+    expect(visible).not.toMatch(/副产入口/);
+    expect(visible).not.toMatch(/副产 cell 上配置/);
+    // 替代路径必须还在: 剩下的两类投入 cell 仍是真入口
+    expect(visible).toMatch(/辅料 \/ 包材 cell 上配置/);
+  });
+
+  it('归属不明的提示指向仍然存在的包材 cell', () => {
+    const at = EDITOR.indexOf('未能确定该工序归属的成品');
+    expect(at).toBeGreaterThan(-1);
+    const line = EDITOR.slice(at, at + 200);
+    expect(line).toMatch(/包材 cell/);
+    expect(line).not.toMatch(/副产入口/);
+  });
+});
+
 describe('浮层遗留物已清干净', () => {
   it('副产浮层的组件与弹窗都已删除', () => {
     expect(existsSync(resolve(SRC, 'WorkflowByproductNode.vue'))).toBe(false);

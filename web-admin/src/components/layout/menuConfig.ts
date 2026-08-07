@@ -114,9 +114,11 @@ const rawMenuConfig: MenuItem[] = [
       // 调料维护已并入产品-工序配置画布的「辅料 cell」；旧路由仅作兼容重定向
       // T125: 转换率配置菜单入口早已隐藏 — 后端 API/表/fallback 仍保留 (F001等老工厂
       // BomExpansionService 依赖)。2026-08-05 拍板转换率不再往画布搬, 维护走 API/DB。
-      // BOM 配置已并入产品-工序配置画布(辅料/包材/副产 cell + 草稿生效横幅), 菜单入口于
-      // 2026-08-05 摘除。⛔ 只下入口不删机器: 路由与页面组件保留, 既不让既有深链 404,
-      // 也留出「BOM 与 Workflow 不一致」诊断横幅的查看通道。
+      // BOM 配置已并入产品-工序配置画布(辅料/包材 cell + 草稿生效横幅), 菜单入口于
+      // 2026-08-05 摘除, 页面本体于 2026-08-07 阶段 5 删除。
+      // 老地址(/production/bom 及 versions/tree)改成 redirect 到画布, 既有深链仍不 404
+      // —— 判据见 workflow/__tests__/bomMenuRetired.source.spec.ts。
+      // (副产 2026-08-07 阶段 2 起是工序上的真实产出节点, 不再是 BOM 的一类 cell。)
       { path: '/production/bom/ecns', title: '工程变更通知', icon: '', module: 'production' },
       { path: '/rd/samples', title: '研发样品', icon: '', module: 'production' },
       { path: '/analytics/production-report', title: '车间实时生产报表', icon: '', module: 'analytics',
