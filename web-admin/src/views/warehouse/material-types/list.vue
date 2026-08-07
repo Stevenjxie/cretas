@@ -131,6 +131,8 @@ async function loadData() {
     if (res.success && res.data) {
       tableData.value = res.data.content || [];
       pagination.value.total = res.data.totalElements || 0;
+      // 无字典模式下的类别下拉要并上存量在用的取值, 见 materialFamilyOptions 注释
+      rememberCategories(tableData.value);
     }
   } catch (e) { console.error(e); }
   finally { loading.value = false; }
@@ -345,17 +347,39 @@ const segmentL1Options = computed(() =>
 const hasSegmentDictionary = computed(() => segmentL1Options.value.length > 0);
 
 /**
+ * 无字典模式下**存量在用**的类别取值。
+ *
+ * 🔴 光有平台枚举不够: 枚举是 主材/辅材/调味料/包材/添加剂, 而字典模式下写进去的
+ * category 是 L1 类族的名字(六膳门那 14 个换过料号的物料就是 `原料`)。工厂一旦从
+ * 「有字典」切成「无字典」, 这些历史取值在下拉里一个都对不上 —— 编辑时类别框显示空白,
+ * 列表也按它筛不出来, 而用户什么都没做错。
+ *
+ * 所以选项 = 平台枚举 ∪ 已加载数据里真实出现过的类别。跨页累积(只增不减), 免得翻页
+ * 把上一页见过的取值又弄丢。fool-proof-design Rule 5: 宁缺勿藏。
+ */
+const seenCategories = ref<string[]>([]);
+function rememberCategories(rows: { category?: string | null }[]) {
+  for (const row of rows) {
+    const c = (row.category || '').trim();
+    if (c && !seenCategories.value.includes(c)) seenCategories.value.push(c);
+  }
+}
+
+/**
  * 类别选项。有字典时沿用 L1 类族(与 16 位码口径一致);
  * 无字典时回落到平台级 MATERIAL_CATEGORY 枚举(主材/辅材/调味料/包材/添加剂)
- * —— 六膳门那 115 个自由码物料用的就是这一套。
+ * —— 六膳门那 115 个自由码物料用的就是这一套 —— 再并上存量在用的历史取值。
  */
 const materialFamilyOptions = computed(() => {
   if (!hasSegmentDictionary.value) {
-    return MATERIAL_CATEGORY_ENUM_VALUES.map((label) => ({
-      value: label,
-      label,
-      segmentCode: '',
-    }));
+    const values = [...MATERIAL_CATEGORY_ENUM_VALUES] as string[];
+    for (const c of seenCategories.value) {
+      if (!values.includes(c)) values.push(c);
+    }
+    // 编辑中的那一条即使还没出现在已加载列表里(例如直接跳转进来), 也必须能显示自己的类别
+    const current = (form.value?.category || '').trim();
+    if (current && !values.includes(current)) values.push(current);
+    return values.map((label) => ({ value: label, label, segmentCode: '' }));
   }
   return segmentL1Options.value.map((node) => ({
     value: node.segmentLabel,
