@@ -2000,7 +2000,14 @@ async function loadProductBom(options: { force?: boolean } = {}): Promise<void> 
  * (用当时已缓存的数据), 两处配合: hydrate 保证"浮层结构一定在", 这里保证
  * "浮层内容随 BOM 数据变化刷新"。
  */
-async function loadBomOverlayData(): Promise<void> {
+/**
+ * @param options.afterUserEdit 这次重载是不是**用户刚改完辅料/包材**触发的。
+ *   ⛔ 这个参数不是可有可无的开关, 它决定「改克数会不会产生新工艺版本」:
+ *   加载期 hydrate 不能置 dirty(否则打开一张图就变成有未保存改动),
+ *   但用户改完之后必须置 —— 否则数据进了定义、hash 也覆盖它, 却因为没人
+ *   把图标记成 dirty 而永远不会被保存成新版本。两头都对、中间断掉。
+ */
+async function loadBomOverlayData(options: { afterUserEdit?: boolean } = {}): Promise<void> {
   const factoryId = props.factoryId;
   const finishedNodes = flowNodes.value.filter((node) => node.data?.kind === 'FINISHED_GOOD' && node.data?.skuId);
   const targets = finishedNodes.map((node) => ({ nodeId: node.id, skuId: String(node.data.skuId) }));
@@ -2175,7 +2182,7 @@ async function loadBomOverlayData(): Promise<void> {
 
     bomOverlayPackagingByOutput.value = packagingByOutput;
     bomOverlayAuxiliaryByProcess.value = auxiliaryByProcess;
-    hydrateMaterialBindingsIntoDefinition(materialBindingsByProcess);
+    hydrateMaterialBindingsIntoDefinition(materialBindingsByProcess, options);
     bomOverlayProductIdByRecipe.value = productIdByRecipe;
     bomDraftNotices.value = draftNotices;
     bomOverlayRecipeIdByProcess.value = recipeIdByProcess;
@@ -2303,7 +2310,9 @@ async function openAuxiliaryEditor(processNodeId: string, rowId?: string): Promi
 }
 
 function onAuxDialogSaved(): void {
-  void loadBomOverlayData();
+  // 用户改了辅料克数/锅序 —— 这是对工艺定义的真实改动, 必须让图变 dirty,
+  // 保存后才会产生新工艺版本(方案 B 的核心)。
+  void loadBomOverlayData({ afterUserEdit: true });
 }
 
 // #Task1(2026-08-05 bom-canvas-phase3-2): 复用同一个 raw-material-types/active 端点,
@@ -2375,7 +2384,9 @@ async function openPackagingEditor(outputNodeId: string, rowId?: string): Promis
 }
 
 function onPackagingDialogSaved(): void {
-  void loadBomOverlayData();
+  // 同 onAuxDialogSaved: 包材用量也是工艺定义的一部分, 改了要能保存成新版本。
+  // (包材用量目前仍只落 BOM 表, 但 hydration 一旦覆盖到它, 这里就已经接对了。)
+  void loadBomOverlayData({ afterUserEdit: true });
 }
 
 function propsMatchIdentity(identity: WorkflowIdentity): boolean {
@@ -2523,6 +2534,7 @@ function currentDefinition(): ProductProcessWorkflowDefinition {
  */
 function hydrateMaterialBindingsIntoDefinition(
   bindingsByProcess: Record<string, WorkflowMaterialBinding[]>,
+  options: { afterUserEdit?: boolean } = {},
 ): void {
   let changed = false;
   flowNodes.value.forEach((node) => {
@@ -2537,9 +2549,20 @@ function hydrateMaterialBindingsIntoDefinition(
     data.materialBindings = next;
     changed = true;
   });
-  if (changed) {
-    // 只刷新派生视图, ⛔ 不置 dirty、不 bump editSeq —— 见上面的注释。
-    refreshBomOverlay();
+  if (!changed) return;
+  refreshBomOverlay();
+
+  // 🔴 这两条分支是「改克数产生新工艺版本」的最后一环, 缺了它整条链就是断的:
+  //    数据进了定义、revisionHash 也覆盖它 —— 但没人把图标记成 dirty,
+  //    用户就永远不会被提示保存, 于是新版本永远不会产生。两头都对、中间断掉。
+  //
+  //  · 加载期(afterUserEdit=false): ⛔ 不置 dirty。否则打开一张图就变成
+  //    「有未保存改动」, 版本线会因为「看了一眼」而增长。
+  //  · 用户改完辅料/包材之后(afterUserEdit=true): 必须置 dirty —— 那是真实改动。
+  if (options.afterUserEdit) {
+    editSeq += 1;
+    workflowBomSyncPreflight.value = null;
+    dirty.value = true;
   }
 }
 

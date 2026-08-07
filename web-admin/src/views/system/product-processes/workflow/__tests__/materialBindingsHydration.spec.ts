@@ -28,16 +28,36 @@ describe('materialBindings hydration 不得把「打开」变成「改动」', (
     return EDITOR.slice(at, end);
   })();
 
-  it('hydration 不调用 mutate —— 否则打开一张图就会造出新版本', () => {
+  it('hydration 不调用 mutate —— mutate 会无条件置 dirty, 加载期用不得', () => {
     // ⛔ 断言语法形态而不是"字符串不出现": 这个函数的注释里就写着 mutate() 三个字
     //    （解释它为什么不能用），用 not.toContain('mutate') 会被注释打红。
     expect(fn).not.toMatch(/^\s*mutate\(/m);
     expect(fn).not.toMatch(/[^.\w]mutate\(\s*\(\)\s*=>/);
   });
 
-  it('hydration 不置 dirty、不 bump editSeq', () => {
-    expect(fn).not.toMatch(/dirty\.value\s*=/);
-    expect(fn).not.toMatch(/editSeq\s*\+=/);
+  /**
+   * 🔴 这条断言原来写的是「hydration 一律不置 dirty」，**它测错了东西**。
+   *
+   * 那条闸绿着，而「改克数产生新工艺版本」在用户实际路径上是断的：
+   * 用户改完辅料 → 写 BOM 表 → 重载 → hydration 灌新值 → 图不 dirty →
+   * 「保存草稿」仍是灰的 → **永远不会产生新版本**。
+   * 数据进了定义、revisionHash 也覆盖它，中间却没人把图标记成改动。
+   *
+   * 判据：**「不许发生」的断言要限定条件**。无条件的 not.toMatch 会把
+   * 「该发生的那一半」一起挡住，而且挡得悄无声息 —— 闸是绿的。
+   */
+  it('加载期不置 dirty —— 打开一张图不算改动', () => {
+    const guarded = fn.slice(fn.indexOf('if (options.afterUserEdit)'));
+    const beforeGuard = fn.slice(0, fn.indexOf('if (options.afterUserEdit)'));
+    expect(beforeGuard, '守卫之前不许有任何置 dirty').not.toMatch(/dirty\.value\s*=/);
+    expect(beforeGuard, '守卫之前不许 bump editSeq').not.toMatch(/editSeq\s*\+=/);
+    expect(guarded, '置 dirty 必须在 afterUserEdit 守卫之内').toMatch(/dirty\.value\s*=\s*true/);
+  });
+
+  it('用户改完辅料之后必须置 dirty —— 否则新版本永远产生不了', () => {
+    expect(fn).toMatch(/if \(options\.afterUserEdit\)/);
+    expect(fn).toMatch(/dirty\.value = true/);
+    expect(fn).toMatch(/editSeq \+= 1/);
   });
 
   it('值没变就不写 —— 幂等，避免每次加载都制造响应式改动', () => {
@@ -45,9 +65,14 @@ describe('materialBindings hydration 不得把「打开」变成「改动」', (
     expect(fn).toMatch(/return;/);
   });
 
-  it('只在真的变了时才刷新派生视图', () => {
-    expect(fn).toMatch(/if \(changed\)/);
+  it('只在真的变了时才刷新派生视图和置 dirty', () => {
+    // 一个字都没变时提前 return —— 否则「重载了一次但内容一样」也会被当成用户改动,
+    // 用户会莫名其妙看到「有未保存改动」。
+    expect(fn).toMatch(/if \(!changed\) return;/);
     expect(fn).toContain('refreshBomOverlay()');
+    // 置 dirty 必须在这个 return 之后 —— 顺序错了守卫就形同虚设
+    expect(fn.indexOf('if (!changed) return;'))
+      .toBeLessThan(fn.indexOf('dirty.value = true'));
   });
 });
 
