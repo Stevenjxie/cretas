@@ -1274,8 +1274,18 @@ module.exports = {
 const { ROUTES } = require('../config/routes');
 const { runReadOnlyPageScenario } = require('./_shared');
 
+// 🔴 2026-08-07: 这里原本等「BOM 配方版本」出现来判断「产品已选中」。那个标题挂在
+//   `v-if="selectedProductTypeId && versionHistoryVisible"` 上, 而 versionHistoryVisible
+//   **默认 false**(要点「版本历史」才展开) —— 探针等的是一个默认就不渲染的元素, 必然超时,
+//   于是 bom-readonly 场景长期报 1 条失败。不是页面改了文案, 是**锚点选错了**。
+//   改锚 hero 卡片里的产品名, 它在选中产品后一直可见。
+//   锚点必须是「只在选中产品后才渲染」的元素 —— `.bom-hero__sku` 挂着
+//   `v-if="selectedProductName"`, 正是这件事。(别锚 .bom-hero__title-row, 那里的
+//   h1「BOM / 配方管理」不管选没选产品都在, 等于永远为真。)
+const PRODUCT_SELECTED_ANCHOR = '.bom-hero-card .bom-hero__sku';
+
 async function selectTargetProduct(page) {
-  if (await page.getByText('BOM 配方版本', { exact: true }).isVisible().catch(() => false)) {
+  if (await page.locator(PRODUCT_SELECTED_ANCHOR).first().isVisible().catch(() => false)) {
     return { selected: true, selectedLabel: null, failure: null };
   }
 
@@ -1319,11 +1329,11 @@ async function selectTargetProduct(page) {
 
   const selectedLabel = (await targetOption.innerText()).trim();
   await targetOption.click();
-  await page.getByText('BOM 配方版本', { exact: true })
+  await page.locator(PRODUCT_SELECTED_ANCHOR).first()
     .waitFor({ state: 'visible', timeout: 15_000 })
     .catch(() => {});
   return {
-    selected: await page.getByText('BOM 配方版本', { exact: true }).isVisible().catch(() => false),
+    selected: await page.locator(PRODUCT_SELECTED_ANCHOR).first().isVisible().catch(() => false),
     selectedLabel,
     selectionMode: 'target-search',
     failure: null,

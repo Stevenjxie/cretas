@@ -134,7 +134,9 @@ function ok<T>(data: T, message = 'OK'): Promise<ApiResponse<T>> {
 }
 
 export function isDemoSchedulingFactory(factoryId?: string): boolean {
-  return /^DEMO_/.test(factoryId || '') || factoryId === 'F001';
+  // 2026-08-07: `F001` 随 V20261029_68 的租户收敛一起物理删除了, 这个 disjunct 已是死分支。
+  // 保留 /^DEMO_/ —— DEMO_REST 等演示租户仍在。
+  return /^DEMO_/.test(factoryId || '');
 }
 
 function todayDate(): string {

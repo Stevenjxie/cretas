@@ -18,6 +18,8 @@ import com.cretas.aims.dto.bom.CreateBomRecipeRequest.BomRecipeItemDTO;
 import com.cretas.aims.dto.bom.UpdateBomRecipeRequest;
 import com.cretas.aims.dto.bom.UpdateBomFamilyOutputCostingRequest;
 import com.cretas.aims.dto.common.ApiResponse;
+import com.cretas.aims.entity.ProductType;
+import com.cretas.aims.repository.ProductTypeRepository;
 import com.cretas.aims.entity.bom.BomRecipe;
 import com.cretas.aims.entity.bom.BomRecipeItem;
 import com.cretas.aims.service.bom.BomCopyService;
@@ -62,6 +64,8 @@ public class BomRecipeController {
     private final BomCopyService bomCopyService;
     private final BomSeasoningWorkspaceService seasoningWorkspaceService;
     private final BomItemSubstituteService substituteService;
+    // 只为把「产品无生效 BOM」的报错里那串 UUID 换成产品名 —— 见 getCurrentByProduct
+    private final ProductTypeRepository productTypeRepository;
 
     // ========== List / detail ==========
 
@@ -118,8 +122,20 @@ public class BomRecipeController {
             @PathVariable String factoryId,
             @PathVariable String productTypeId) {
         Optional<BomRecipe> recipe = recipeService.getCurrentRecipe(factoryId, productTypeId);
-        return recipe.map(ApiResponse::success)
-                .orElseGet(() -> ApiResponse.error(404, "产品无生效 BOM: " + productTypeId));
+        // ⛔ 别把内部 UUID 甩给用户看: `产品无生效 BOM: 53e777f4-b4ff-...` 对使用者零信息量,
+        //    他既不认识这串 id, 也不知道下一步该干什么。给产品名 + 去哪配。
+        return recipe.<ApiResponse<BomRecipe>>map(ApiResponse::success)
+                .orElseGet(() -> {
+                    String productName = productTypeRepository
+                            .findByIdAndFactoryId(productTypeId, factoryId)
+                            .map(ProductType::getName)
+                            .orElse(null);
+                    String label = productName == null ? "该产品" : "「" + productName + "」";
+                    return ApiResponse.<BomRecipe>errorWithHint(
+                            404, label + "还没有生效的 BOM 配方",
+                            "请到「生产管理 → BOM 配方」为它新建配方并发布生效",
+                            "warning", null);
+                });
     }
 
     @GetMapping("/by-product/{productTypeId}/versions")
