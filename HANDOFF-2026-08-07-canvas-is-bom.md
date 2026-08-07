@@ -47,7 +47,9 @@
 | 项 | 结果 |
 |---|---|
 | `vue-tsc -b --force`（合后 main） | 0 error |
-| `vitest` 全量（合后 main） | 349 files / 2667 passed / 5 skipped / **0 failed** |
+| `vitest` 全量（合后 main） | 350 files / 2675 passed / 5 skipped / **0 failed** |
+| 后端 `MaterialBindingsInRevisionHashTest`（3-1 机制证明） | 4 用例全绿（含阴性对照：hash 必须覆盖整个 data，而不是只算 id/kind） |
+| 前端 `materialBindingsHydration.spec.ts` | 8 用例全绿 |
 | 后端 `ProductProcessWorkflowConfigToolBomFieldsTest` | 17 用例全绿 |
 | 前端 `seasoningProcessCategory.spec.ts` | 12 用例全绿 |
 | 后端基线比对（`ProductProcessWorkflow*Test,CanvasAI*Test`） | 失败集合**逐条同名一致，新增 0**（3 条在 origin/main 上本来就红） |
@@ -120,7 +122,24 @@ readinessService.requireBomCompleteForActivation(...);   // 至少配置一项�
 
 ### 硬闸（3-1 已跑，结果在这里；做 3-2/3-3 时照样再跑一次）
 
-### 硬闸基线（改前快照，做阶段 3 时逐条比对）
+**3-1 的实测结果**（prod，F006 只读打开两次）：
+
+| 对象 | 改前 vs 改后 |
+|---|---|
+| 6 个被生产计划钉住的 revision（239/240/242/243/248/250）的 `md5(nodes_json)` | **逐条逐字相同** |
+| 同上的 `revision_hash` | **相同** |
+| 9 条 `production_plans` 全字段 | **逐字相同**（含 2 条六膳门在产计划） |
+| 含 `materialBindings` 的 revision 数 | 0 → 0（开两次图，写入 0） |
+| 「保存草稿」按钮（打开后） | 两次都是 disabled（dirty=false） |
+
+⚠️ **已知验证缺口**：调料绑定数据**全在 LIUSHANMEN**（F006 的 BOM 已被
+`V20261029_71` 清空，0 个 recipe）。LIUSHANMEN 是真客户只读 —— 拿真客户当
+「打开会不会写」的小白鼠正好本末倒置，所以没在其上验。「bindings 非空」那条路径
+目前由后端 `MaterialBindingsInRevisionHashTest`（4 用例，含阴性对照）+ 前端
+`materialBindingsHydration.spec.ts`（8 用例）覆盖，**未做真机**。
+要补真机，得先在 F006 建一份带调料的 BOM。
+
+### 硬闸基线（改前快照，做 3-2/3-3 时逐条比对）
 
 `production_plans` 共 9 条，导出在
 `D:\Temp\claude\...\scratchpad\p3-plans-before.txt`，也抄一份在这里防丢：
@@ -156,11 +175,12 @@ readinessService.requireBomCompleteForActivation(...);   // 至少配置一项�
 ## 五、GitHub 恢复后的推送清单
 
 ```bash
-# 五个分支，链式，按顺序推（或只推 p4 一个，它含全部）
+# 链式分支，按顺序推（或只推 p3 一个，它含 p1+p5+p2+p4+3-1 全部）
 git push origin codex/claude-canvas-bom-p1
 git push origin codex/claude-canvas-bom-p5
 git push origin codex/claude-canvas-bom-p2
 git push origin codex/claude-canvas-bom-p4
+git push origin codex/claude-canvas-bom-p3     # 3-1
 git push origin codex/claude-bom-canvas-spec   # 设计定稿
 # ⛔ 永远不要 git push origin main
 ```
@@ -172,7 +192,8 @@ git push origin codex/claude-bom-canvas-spec   # 设计定稿
 
 ## 六、未处置项
 
-- **阶段 3 全部**（见 §三），含一处需要拍板的设计歧义。
+- **阶段 3-2 / 3-3**（见 §三的「卡点」）—— 需要 owner 在两条路里选一条，
+  两条都改变已拍板口径，属定稿 §5 的停手条件，未替 owner 选。
 - `干式熟成鸡 400g` BOM v3 是 ACTIVE 但主料 `standard_quantity` 为 NULL
   （0 个生产计划用过它）。定稿认为这正是 `WORKFLOW_ACTIVE_BOM_REQUIRED` 逼出来的产物——
   阶段 3 删掉那个前置后应一并清理。**需 owner 确认后再动。**
