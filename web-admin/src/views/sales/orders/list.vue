@@ -2599,7 +2599,16 @@ function handleMergePurchase() {
                   :disabled="option.value === 'CUSTOMER_SUPPLIED' && form.processingMode === 'STANDARD_SALE'"
                 />
               </el-select>
-              <div class="form-help-text">客户自带原料仅适用于代加工；销售只登记需求，实收必须由仓储统一待入库页面完成。</div>
+              <!--
+                ⛔ 2026-08-06 客户反馈: 「有个原料入库的问题, 客户自带料他入库能搞得快捷入库吗?」
+                功能其实一直都在(选「客户自带原料」→ 下方出现明细块 → 审批后进
+                仓储「待收货/待入库任务」), 只是**没人找得到** —— prod 实测客供料批次
+                `CMR-%` 0 行, 从没被用过。所以这里要把去处说出来, 而不是只说约束。
+              -->
+              <div class="form-help-text">
+                客户自带原料仅适用于代加工。选它之后，下方会出现「客户自带原料」明细块登记预计送来的料；
+                订单审批后进入<strong>仓储 → 原料入库与批次 → 待收货/待入库任务</strong>收货，不必走采购流程。
+              </div>
             </el-form-item>
           </el-col>
         </el-row>
@@ -2694,6 +2703,18 @@ function handleMergePurchase() {
         </el-form-item>
         <CanvasDynamicFields v-model="form.customFields" module-code="sales_order" />
         <el-divider>{{ label('product') }}明细</el-divider>
+        <!--
+          ⛔ 2026-08-06 客户在这里搜「五花」只搜到成品 SKU, 以为是缺陷。
+          Steve 拍板: **销售订单卖的是成品** —— 品名下拉只列成品/半成品(product-types),
+          原料在另一张表, 不进销售明细。这不是缺陷, 但页面此前没有任何一句话说明,
+          用户只能反复搜。把口径和两个去处写出来。
+        -->
+        <div class="form-help-text order-items-scope-hint">
+          这里只登记<strong>卖给客户的成品/半成品</strong>；搜不到的品项请先到「生产管理 → SKU 管理」建 SKU。
+          <template v-if="form.processingMode === 'TOLL_PROCESSING'">
+            客户送来加工的<strong>原料</strong>不在这里 —— 把上方「物料供应方式」改成<strong>客户自带原料</strong>，会出现专门的登记块。
+          </template>
+        </div>
         <div class="order-items-scroll" role="region" aria-label="产品明细，可横向滚动查看全部字段" tabindex="0">
           <div class="order-items-grid">
         <div class="item-row item-header">
@@ -2975,6 +2996,7 @@ function handleMergePurchase() {
 }
 .search-bar { display: flex; gap: 12px; margin-bottom: 16px; flex-wrap: wrap; }
 .form-help-text { margin-top: 4px; color: var(--el-text-color-secondary); font-size: 12px; line-height: 1.5; }
+.order-items-scope-hint { margin: 0 0 10px; padding: 8px 12px; background: #f5f7fa; border: 1px solid #ebeef5; border-radius: 4px; }
 .supplied-material-editor { width: 100%; }
 .supplied-material-editor :deep(.el-alert) { margin-bottom: 10px; }
 .supplied-material-add { margin-top: 10px; min-height: 36px; }
