@@ -646,10 +646,43 @@ POST /{runId}/action-proposals/{proposalCode}/...       -> 凭 previewToken 执�
 ⛔ 这是**写路径**（改价格、下架菜品），按 CLAUDE.md 的 UX Flow Gate 必须先过
 `ux-flow` skill —— 低技术素养用户 + 不可逆的价格改动，误点代价很高。
 
+### 🔴 ③「AI 价值汇总」一直点不到 —— 有路由没菜单入口（PR#2378 已修上线）
+
+交接和 goal 里都写着「③ ✅ 有独立页」。**页面确实在，但用户点不到。**
+
+```
+router/index.ts : path 'dashboard/ai-value' + title 'AI 工作台' + icon + module ← 齐全
+menuConfig.ts   : ai-value 零命中                                              ← 没入口
+```
+
+按 goal 自己的判据「**调用次数 0 = 没做，不接受『代码在那儿』**」，③ 此前是不达标的。
+我前面几轮一直把它记成 ✅，因为**只看了路由那一侧**。
+
+🔑 **判据：判可达性要菜单/路由两侧一起看。** 只看路由会以为它通了。
+
+**已补一道会红的闸** `routedPagesAreReachable.spec.ts`（`dashboard/*` 下有路由的
+顶层业务页必须有菜单入口）。它**当场又抓到第二个**（`/dashboard/widgets`，确实是
+开发演示页，按「加白名单要写理由」显式豁免）。
+
+⚠️ 我自己在这道闸上又栽一次：白名单第一版按**组件名**写（`dashboard/widget-demo`），
+而路由路径是 `dashboard/widgets` —— 白名单没生效，闸照样红。**闸把我的错也抓出来了。**
+
+⚠️ 闸刻意只守 `dashboard/*`：一次性扩到全仓会一次红几十条，变成噪音然后被整体豁免。
+另有一条断言钉住「至少解析到 3 条路由」—— 正则失效时先红，而不是静默通过 0 条。
+
+**接手可以做的**：把这道闸扩到 `/restaurant/*`、`/procurement/*` 等分组，
+一组一组来（每扩一组，先看红几条，逐条判是补菜单还是写豁免理由）。
+
 ### ⑥ 动态办公室 —— 未开工
 
-后端已被 ③ 覆盖（`system_ai_value_summary` + `AiValueSummary.vue` 独立页），
-再写一份会违反「一个指标只能有一个定义」。剩纯前端，**须过 `ux-flow` 闸**。
+
+后端已被 ③ 覆盖（`system_ai_value_summary` + `AiValueSummary.vue`，**入口已于
+PR#2378 补上**），再写一份会违反「一个指标只能有一个定义」。剩纯前端。
+
+⚠️ **订正**：我前面几轮一直说 ⑥「须过 `ux-flow` 闸」，那是**过度应用**。
+CLAUDE.md 的 UX Flow Gate 触发条件是 **RN 屏幕 + operator/仓管/质检员** 角色/路径，
+⑥ 是 web-admin 的店长看板，**不在闸的范围内**。它不是被闸挡住的，是确实没做。
+（⑤ 的 UI 是**写路径**改价格，那个该慎重，但同样不是 ux-flow 闸的适用对象。）
 
 ### 🔑 ②⑤ 两次得出同一个结论，值得单独记
 
