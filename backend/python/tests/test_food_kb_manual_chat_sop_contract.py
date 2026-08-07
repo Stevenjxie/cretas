@@ -641,6 +641,7 @@ def test_restaurant_department_and_stocktake_questions_share_current_contract():
         "老板、店长和采购对运营市场财务人事采购有哪些权限？",
         "盘亏多少钱，能切本月和最近7天吗？",
         "AI 工作台和 AI 价值汇总从哪里进入？",
+        "营销员提成和复购提成从哪里进入？",
     )
     assert all(
         _needs_restaurant_department_stocktake_guard(q)
@@ -656,6 +657,7 @@ def test_restaurant_department_and_stocktake_questions_share_current_contract():
     assert "中央角色/模块/金额权限闸" in _RESTAURANT_DEPARTMENT_STOCKTAKE_ANSWER
     assert "AI 工作台" in _RESTAURANT_DEPARTMENT_STOCKTAKE_ANSWER
     assert "/dashboard/ai-value" in _RESTAURANT_DEPARTMENT_STOCKTAKE_ANSWER
+    assert "/restaurant/commission" in _RESTAURANT_DEPARTMENT_STOCKTAKE_ANSWER
 
 
 def test_restaurant_proactive_findings_keep_three_states_and_grounded_actions():
@@ -806,6 +808,8 @@ def test_latest_f006_sop_is_a_deployable_manual_source():
     assert "点击“开工”时" in current_sop
     assert "PROGRESS" in current_sop
     assert "PENDING_WAREHOUSE_RECEIPT" in current_sop
+    assert "翻页过程中已见类别只增不减" in current_sop
+    assert "历史类别不能因字典被清空而显示空白" in current_sop
 
     html_path = Path(PROJECT_ROOT) / "docs/manual/F006-production-full-chain-manual-test-sop.html"
     html = html_path.read_text(encoding="utf-8")
@@ -843,6 +847,8 @@ def test_latest_f006_sop_is_a_deployable_manual_source():
     assert "[{batchNo, qty}]" in html
     assert "开工”必须同步建立生产批次" in html
     assert "PENDING_WAREHOUSE_RECEIPT" in html
+    assert "无分段字典时保留存量类别" in html
+    assert "原料”等历史类别不会因字典被清空而显示空白" in html
 
 
 def test_factory_role_knowledge_covers_the_12_account_operating_boundaries():
@@ -928,6 +934,7 @@ def test_restaurant_registered_sources_match_current_product_contract():
             "今日营运台主动发现、峰值时段与行动建议",
             "五部门驾驶舱",
             "AI 工作台",
+            "营销员提成",
             "当前页面只确认发现卡可见",
         ),
         "restaurant-product-manual.html": (
@@ -952,6 +959,7 @@ def test_restaurant_registered_sources_match_current_product_contract():
             "主动发现与行动建议",
             "餐饮五部门",
             "AI 工作台",
+            "营销员提成",
             "当前前端只确认发现卡可见",
         ),
         "restaurant-metrics-glossary.html": (
@@ -969,6 +977,7 @@ def test_restaurant_registered_sources_match_current_product_contract():
             "销量 × 单位贡献毛利",
             "今日营运台主动发现三态与接地行动建议",
             "AI 工作台",
+            "营销员月度累计复购阶梯提成",
             "客户端未接入动作前不得宣称页面已能生成策划案",
         ),
     }
@@ -1009,6 +1018,7 @@ def test_restaurant_registered_sources_match_current_product_contract():
     assert "主动发现与接地行动建议" in ai_assist
     assert "<strong>五部门驾驶舱：</strong>" in ai_assist
     assert "AI 工作台" in ai_assist
+    assert "营销员提成" in ai_assist
     assert "<strong>四部门驾驶舱：</strong>" not in ai_assist
 
 
@@ -1336,6 +1346,12 @@ async def test_bom_workflow_publication_answer_never_calls_the_llm(monkeypatch):
         ),
         (
             "AI 工作台和 AI 价值汇总从哪里进入？",
+            "restaurant",
+            _RESTAURANT_DEPARTMENT_STOCKTAKE_ANSWER,
+            "restaurant-full-chain-sop.html",
+        ),
+        (
+            "营销员提成和复购提成从哪里进入？",
             "restaurant",
             _RESTAURANT_DEPARTMENT_STOCKTAKE_ANSWER,
             "restaurant-full-chain-sop.html",
