@@ -221,6 +221,64 @@ def _execution_mismatch(
     return None
 
 
+async def _known_data_gap(pool, factory_id: str, query: str):
+    """薄封装, 让缺口探测在路由之前也能用。见 tiered_answer 里的调用注释。
+
+    ⛔ 与 `resolve_out_of_domain` 共用**同一个** `honest_gap_answer` —— 不复制判定
+    逻辑。两处各写一份「什么算缺口」, 迟早一处认为缺、另一处认为不缺。
+    """
+    from smartbi.gold.restaurant.data_gaps import honest_gap_answer
+
+    return await honest_gap_answer(pool, factory_id, query or "")
+
+
+def _drop_planner_invented_metrics(spec, query):
+    """去掉「用户从没提过、planner 自己加上」的指标要求。
+
+    🔴 2026-08-07 prod 落库记录(smart_bi_llm_fallback_log.agg_meta)给出的根因:
+       query='最近30天各门店对比如何'
+       analysis_action=compare  dimensions=['store']
+       requested_metrics=['revenue','orders','sales_volume']
+       planned_intents=['RESTAURANT_OPS_STORE_MARGIN','RESTAURANT_OPS_SALES_SUMMARY']
+       contract_pass=false
+    用户只说了「各门店对比如何」—— 三个指标全是 T3 自己编的。而
+    `_request_coverage_present` 要求答案文本里**每个** requested_metric 都出现对应词,
+    答案给了营收/订单却没有「销量」, 于是契约不过 -> 用户拿到反问。
+
+    🔑 判据: **契约的目的是防「答非所问」, 而用户从没提过的指标不可能让答案变成
+    答非所问** —— 它只能造成假拒。所以要求覆盖的应该是「用户问了什么」,
+    不是「planner 想到了什么」。
+
+    ⛔ 只去掉**原句里一个词都没沾**的指标。用户说了「各门店**销量**对比」,
+    sales_volume 就是他要的, 答案没给就该老实说没给 —— 那种失败是真的。
+
+    ⛔ 复用 answer_contract._REQUEST_TEXT_TOKENS, **不另建一张词表**:
+    判「用户提没提」与判「答案答没答」必须用同一份词, 两份迟早会打架
+    (本轮已经栽过一次「喂 LLM 的文本与校验事实集不是同一份」)。
+    """
+    from dataclasses import replace as _replace
+    from smartbi.gold.restaurant.answer_contract import _REQUEST_TEXT_TOKENS
+
+    requested = tuple(getattr(spec, "requested_metrics", ()) or ())
+    if not requested or not query:
+        return spec
+
+    kept = tuple(
+        m for m in requested
+        # 没登记词表的指标一律保留 —— 判不了就别动(同维度那条的处理)。
+        if not _REQUEST_TEXT_TOKENS.get(m)
+        or any(tok in query for tok in _REQUEST_TEXT_TOKENS[m])
+    )
+    if kept == requested:
+        return spec
+
+    logger.info(
+        "[restaurant-contract] 去掉 planner 自造的指标要求: %s -> %s query=%r",
+        requested, kept, query[:60],
+    )
+    return _replace(spec, requested_metrics=kept)
+
+
 def _drop_unanswerable_mislabeled_dimensions(spec, plan, query):
     """见调用点的注释。返回可能被去掉误标维度的 spec（无改动时原样返回）。"""
     from dataclasses import replace as _replace
@@ -908,6 +966,41 @@ async def tiered_answer(
     capture_source = capture_source or (
         "java_entry_delegate" if java_tool_name else None
     )
+    # ── 已知数据缺口: 在**路由之前**判 ──────────────────────────────────
+    #
+    # 🔴 2026-08-07 三轮实测:「最近30天哪个供应商报价最贵」在 B / C / D 三种归宿之间
+    #    来回飘。B 类文案本身是好的(实测返回过「供应商报价目前还没有数据…录入后就能
+    #    做比价」), 问题在于它**挂在 `resolve_out_of_domain` 的兜底分支上** ——
+    #    T3 只要把这句路由到别的 resolver 或判成需要澄清, 那条分支就永远走不到。
+    #
+    # 🔑 判据: **「这件事我们还没有数据」是关于数据的事实, 不是关于路由的结论。**
+    #    它不该依赖 LLM 恰好把问句分到某一个出口。提到路由之前, 归宿就稳定了,
+    #    顺带省掉一次 LLM(命中时 0 token)。
+    #
+    # ⛔ 仍然**真查表**: 表里有行 / 查不动 都返回 None, 照旧走原来的完整链路。
+    #    把「没数据」写死才是降级处理, 查过之后说没有不是。
+    try:
+        _gap = await _known_data_gap(pool, factory_id, query)
+    except Exception:  # noqa: BLE001 - 缺口探测坏了不能拖垮正常问答
+        logger.warning("[data-gaps] 缺口预检失败, 照旧走完整链路", exc_info=True)
+        _gap = None
+    if _gap is not None:
+        logger.info(
+            "[data-gaps] 路由前命中已知缺口 -> 直接给 B 类答案(0 LLM): subject=%s table=%s",
+            _gap["subject"], _gap["table"],
+        )
+        return {
+            "kind": "answer",
+            "answer_text": _gap["answer_text"],
+            "charts": [],
+            "kpis": [],
+            "title": f"{_gap['subject']}：暂无数据",
+            "code": "RESTAURANT_OPS_DATA_GAP",
+            "contract_pass": True,
+            "spec": precomputed_spec,
+            "meta": {"data_gap": True, "missing_table": _gap["table"]},
+        }
+
     spec = precomputed_spec
     action_warning: Optional[str] = None
     try:
@@ -1223,8 +1316,12 @@ async def tiered_answer(
         answer_text += unsupported_requirements_disclosure(
             spec.unsupported_requirements
         )
+        # ⚠️ 只把过滤后的 spec 交给契约, **不改 spec 本身**: requested_metrics
+        # 还有别的消费者(后续提问建议按它生成), 就地改会顺带改掉那些人的行为 ——
+        # 第一版正是这么写的, 被 test_tiered_answer_returns_typed_focus_entity_and_followups
+        # 当场抓到(建议从「看菜品成本」变成了「看菜品销量」)。
         contract = _contract.validate(
-            spec,
+            _drop_planner_invented_metrics(spec, query),
             answer_text,
             result_kpis,
             result_meta,
