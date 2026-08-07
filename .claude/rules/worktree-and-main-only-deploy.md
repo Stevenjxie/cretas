@@ -131,8 +131,21 @@ git merge --no-ff codex/other-session-branch      # 直接合, 零网络
    这次侥幸没事(我只改 `.claude/rules/` 一个文件, 与它们零交集, git 也不会在有冲突时
    静默合并), 但「检查」和「据检查做决定」被压进同一条命令 = 那个检查根本没起作用。
 
-   若对方**确实有未提交改动**: 要么等它提交, 要么只合与它零交集的文件(先
-   `git diff --name-only main..<你的分支>` 与对方 dirty 列表对一遍), 别硬来。
+   若对方**确实有未提交改动**: 要么等它提交, 要么确认零交集后再合:
+
+   ```bash
+   # ✅ 问「我这个 commit 改了什么」
+   comm -12 <(git show --name-only --format= <你的分支> | sort)             <(git status --porcelain | sed 's/^...//' | sort)
+   ```
+
+   🔴 **不要用 `git diff --name-only main..<你的分支>` 问这件事。**
+   两点式 diff 的答案**取决于基底**: 离线期你的分支多半是 off `origin/main` 开的,
+   而本地 `main` 已经领先几十个 commit —— 那条命令会把**本地 main 领先的所有文件**
+   也算成「我要改的」。2026-08-07 实测: 我一个只新建 1 个 md 的分支, 被它列成 40 个文件,
+   其中就包括对方正在写的两个 Python 文件, 交集「非空」——**假警报**。
+
+   判据: **「我要动哪些文件」要问自己的 commit, 不能问两个分支之间的差**。
+   同源的另一面见「⑤ 恢复后」里的基底陷阱 —— 离线期开的分支, 基底是什么要单独确认。
 3. **部署从 detached worktree**, 绕开「分支被占用」:
    ```bash
    git worktree add --detach ../cretas-deploy-offline $(git rev-parse main)
