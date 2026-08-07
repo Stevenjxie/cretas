@@ -1828,6 +1828,8 @@ def _build_spec(
     llm_dimensions: Optional[Tuple[str, ...]] = None,
     llm_analysis_action: Optional[str] = None,
     llm_store_scope: Optional[str] = None,
+    # 门店范围是**代码补的默认值**(不是用户说的)时为 True —— 只影响披露, 不影响 SQL。
+    store_scope_defaulted: bool = False,
     store_options: Sequence[str] = (),
     clarification_options: Sequence[str] = (),
     planner_authority: Optional[str] = None,
@@ -2302,6 +2304,7 @@ def _build_spec(
         ranking_limit=requested_ranking_limit,
         excluded_entities=excluded_entities,
         store_scope=store_scope,
+        store_scope_defaulted=store_scope_defaulted,
         store_slots=store_slots,
         compare_stores=(store_scope == "multiple"),
         store_options=tuple(store_options),
@@ -5128,6 +5131,44 @@ def _semantic_spec_from_t3(
         missing_fields=missing_fields,
         available_stores=suggested_stores or available_stores,
     )
+
+    # ── 只缺门店 → 不反问, 补默认「全部门店」 ────────────────────────────
+    #
+    # 🔴 2026-08-07 prod 实测(15 个代表性问句): 归宿分布 A=2 / B=0 / C=1 /
+    #    **D(反问)=12, 占 80%**; D 类烧掉 34,113 token + 14 次 LLM 调用却一条答案
+    #    都没产出(占总量 77% / 82%)。「最近30天总营收是多少」——用户连时间都说了
+    #    ——拿到的是「你想看哪几家门店的营收？」。**花了 LLM 的钱, 产出一句反问。**
+    #
+    # ⚠️ 判定必须落在**这里**(T3 产出处)。下游 `_apply_store_scope_guard` 也做过
+    #    同样的默认(见那边的注释), 但它够不着这一类: 它的顶部守卫用
+    #    `_slots_of_clarification(clarification_question)` 判槽位, 而那是拿问句与
+    #    两个固定常量做**字符串相等比较** —— LLM 自撰的问句(措辞每次都不同)两个
+    #    都不匹配, 返回空集合, 于是恒真早退。**先改下游是无效的, 实测 D 仍是 12。**
+    #    所以判据只认结构化的 `missing_fields`, 不认措辞。
+    #
+    # ⛔ 只在**唯一缺项就是门店**时生效。还缺别的(时间/指标/对象)时照旧反问 ——
+    #    那些槽位的默认值有实质歧义, 补错等于给一个看着像答案的错答案。
+    #
+    # ⛔ 不是降级处理: `store_scope_defaulted` 会让答案**显式声明**用的是全部门店。
+    #    偷偷替用户选口径才是降级, 选了并说出来不是。
+    if (
+        clarification_needed
+        and tuple(missing_fields) == ("store_scope",)
+        and not store_scope
+        and not store_names
+    ):
+        logger.info(
+            "[restaurant-intent] 唯一缺项是门店 -> 默认全部门店而不反问: query=%r",
+            query[:60],
+        )
+        clarification_needed = False
+        clarification_question = None
+        clarification_options = ()
+        store_scope = "all"
+        store_scope_defaulted = True
+    else:
+        store_scope_defaulted = False
+
     if daypart_contract_repair:
         # Daypart business questions are served by the grounded staffing /
         # order-volume resolver.  This is a post-LLM capability compilation,
@@ -5191,6 +5232,9 @@ def _semantic_spec_from_t3(
         llm_dimensions=dimensions,
         llm_analysis_action=analysis_action,
         llm_store_scope=store_scope,
+        # 门店范围是**代码补的默认值**时打标 —— 答案里必须声明范围, 见
+        # `restaurant_intent_service._store_scope_disclosure`。
+        store_scope_defaulted=store_scope_defaulted,
         store_options=suggested_stores or available_stores,
         clarification_options=clarification_options,
         planner_authority=(
