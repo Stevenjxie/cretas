@@ -5204,12 +5204,18 @@ def _semantic_spec_from_t3(
         store_scope_defaulted = False
 
     if daypart_contract_repair:
-        # Daypart business questions are served by the grounded staffing /
-        # order-volume resolver.  This is a post-LLM capability compilation,
-        # not a keyword-first route: the model already saw the whole sentence,
-        # while the explicit “晚市/午市/夜宵 + 生意” slot prevents a fallback
-        # provider from drifting to a monthly all-store sales summary.
-        code = "RESTAURANT_OPS_STAFFING_ADVICE"
+        # 时段经营问句由**历史时段表现** resolver 承接。这是 post-LLM 的能力编译,
+        # 不是 keyword-first 路由: 模型已经看过整句, 而显式的「时段 + 生意」槽位
+        # 防止兜底 provider 漂到「全店月度营收汇总」。
+        #
+        # 🔴 2026-08-07 这里原本指向 RESTAURANT_OPS_STAFFING_ADVICE, 而那个
+        # resolver **正确地拒绝**历史问题(「不能把它偷换成明天的预测排班」——
+        # 预测排班只做未来)。于是「哪个时段生意最好」被改写到一个必然拒答的终点,
+        # 用户拿到的仍是反问。
+        # 🔑 判据: **改写目标必须是真能答这个问题的 resolver**, 不是「看起来最像
+        # 的那个」。终点补上(RESTAURANT_OPS_DAYPART_PERFORMANCE)之后, 改写目标
+        # 必须跟着换 —— 否则新 resolver 上线了也走不到。
+        code = "RESTAURANT_OPS_DAYPART_PERFORMANCE"
         confidence = max(confidence, 0.99)
         requested_metrics = ()
         dimensions = ("time",)
