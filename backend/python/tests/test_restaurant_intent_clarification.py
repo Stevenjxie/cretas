@@ -1563,27 +1563,23 @@ async def test_explicit_period_comparison_survives_store_button_without_t3(
             factory_id="F_PERIOD_COMPARE",
             session_key="sess-period-compare",
         )
-        second = await parse_restaurant_query(
-            "全部门店",
-            pool,
-            factory_id="F_PERIOD_COMPARE",
-            session_key="sess-period-compare",
-        )
-
-    assert "store" in _asked_slots(first)
+    # 2026-08-07 契约变更: 时间槽已由显式比较词填满、用户没提门店 —— 首轮直接
+    # 出答案(默认全部门店并在答案里声明), 不再先反问一次。原来断言在「按了门店
+    # 按钮之后」的那些性质, 现在全部要在**第一轮**就成立。
+    assert first.clarification_needed is False
+    assert first.store_scope == "all"
+    assert first.store_scope_defaulted is True
+    assert first.store_options == ("东城店", "西城店", "南城店")
+    assert first.intent == "RESTAURANT_OPS_SALES_SUMMARY"
+    assert first.planned_intents == ("RESTAURANT_OPS_SALES_SUMMARY",)
     assert first.planner_authority == "explicit_comparison_slots"
-    assert second.clarification_needed is False
-    assert second.is_clarification_continuation is True
-    assert second.intent == "RESTAURANT_OPS_SALES_SUMMARY"
-    assert second.planned_intents == ("RESTAURANT_OPS_SALES_SUMMARY",)
-    assert second.planner_authority == "explicit_comparison_slots"
-    assert second.store_scope == "all"
-    assert second.comparison_label == baseline_label
-    assert all(value is not None for value in second.date_range)
-    assert all(value is not None for value in second.comparison_range)
-    assert original_query in second.resolver_query_seed
-    assert "全部门店" in second.resolver_query_seed
+    assert first.comparison_label == baseline_label
+    assert all(value is not None for value in first.date_range)
+    assert all(value is not None for value in first.comparison_range)
+    assert original_query in first.resolver_query_seed
+    # 首轮就结束 -> 没有待续的反问挂在会话上。
     assert pool.pending == {}
+    # 本条真正保护的性质没变: 显式比较槽位齐全时**不需要** T3。
     llm.assert_not_awaited()
 
 
@@ -1641,20 +1637,23 @@ async def test_store_scope_reply_may_repeat_same_primary_window_without_t3():
             factory_id="F_PERIOD_REPEAT",
             session_key="sess-period-repeat",
         )
-        second = await parse_restaurant_query(
-            "全部门店，昨天",
-            pool,
-            factory_id="F_PERIOD_REPEAT",
-            session_key="sess-period-repeat",
-        )
 
-    assert first.clarification_needed is True
-    assert second.clarification_needed is False
-    assert second.planner_authority == "explicit_comparison_slots"
-    assert second.window_label == "昨天"
-    assert second.comparison_label == "前天"
-    assert second.store_scope == "all"
+    # 2026-08-07: 首轮不再反问门店 —— 显式比较槽位齐全时直接出答案(默认全部门店)。
+    assert first.clarification_needed is False
+    assert first.store_scope == "all"
+    assert first.store_scope_defaulted is True
+    # 首轮已经把「昨天 vs 前天 · 全部门店」全部定下来了 —— 本条要保护的性质
+    # (显式比较槽位不需要 T3) 在第一轮就完整成立。
+    assert first.planner_authority == "explicit_comparison_slots"
+    assert first.window_label == "昨天"
+    assert first.comparison_label == "前天"
     llm.assert_not_awaited()
+
+    # ⚠️ `second`(「全部门店，昨天」这类**片段**)不再断言。它原本是对门店反问的
+    #    回答, 而 2026-08-07 起首轮不再发出那个反问 —— 用户没有反问可答, 也就
+    #    不会发片段, 他会问一个完整问题。片段延续机制**本身仍在**并仍被覆盖:
+    #    时间缺失那条路照旧反问, 见
+    #    test_semantic_first_dish_time_store_buttons_survive_t3_outage。
 
 
 @pytest.mark.asyncio
@@ -1668,32 +1667,25 @@ async def test_store_scope_reply_complete_new_comparison_replaces_old_periods():
     ))
 
     with patch("common.llm_router.call_chain", new=llm):
-        await parse_restaurant_query(
+        first_spec = await parse_restaurant_query(
             "昨天的营业额是高于前天还是低于前天？",
             pool,
             factory_id="F_PERIOD_REPLACE",
             session_key="sess-period-replace",
         )
-        second = await parse_restaurant_query(
-            "全部门店，本月和上月比",
-            pool,
-            factory_id="F_PERIOD_REPLACE",
-            session_key="sess-period-replace",
-        )
-
-    assert second.clarification_needed is False
-    assert second.planner_authority == "explicit_comparison_slots"
-    assert second.window_label == "本月"
-    # 「同期」= to-date 对比(本月只过了一部分, 所以拿上个月同样的天数比)。
-    # 当月**最后一天**时本月已经完整, 「本月 vs 上个月」就是整月对比, 标签
-    # 正确地不带「同期」—— 这条断言原本写死 "上个月同期", 于是**每个月的最后
-    # 一天必红**(2026-07-31 实测撞上)。断言改成随日历走, 语义不变。
-    import calendar as _calendar
-    _today = date.today()
-    _is_month_end = _today.day == _calendar.monthrange(_today.year, _today.month)[1]
-    assert second.comparison_label == ("上个月" if _is_month_end else "上个月同期")
-    assert second.store_scope == "all"
-    assert second.comparison_range != (None, None)
+    # ⚠️ 2026-08-07: 第二轮「全部门店，本月和上月比」那一轮已删。
+    #    首轮「昨天的营业额是高于前天还是低于前天？」现在直接出答案(时间已给、
+    #    门店取默认), 不再产生反问, 于是第二轮不再是**延续轮**。
+    #    实测: 同一句作为**独立新问句**仍需要 T3 —— 它此前能零 LLM 解析, 靠的是
+    #    延续轮从首轮继承的意图上下文。这是本次改动的**已知残余**, 与「收窄要重走
+    #    一次 T3」同源, 彻底修法是独立的 refinement context(见交接)。
+    assert first_spec.clarification_needed is False
+    assert first_spec.store_scope == "all"
+    assert first_spec.store_scope_defaulted is True
+    assert first_spec.window_label == "昨天"
+    assert first_spec.comparison_label == "前天"
+    assert first_spec.comparison_range != (None, None)
+    # 本条真正保护的性质没变: 显式比较槽位齐全时不需要 T3。
     llm.assert_not_awaited()
 
 
@@ -1843,22 +1835,20 @@ async def test_reviewed_exact_prefixed_time_continues_to_store_button_without_t3
             factory_id="F_PREFIXED_TIME",
             session_key="sess-prefixed-time",
         )
-        second = await parse_restaurant_query(
-            "全部门店",
-            pool,
-            factory_id="F_PREFIXED_TIME",
-            session_key="sess-prefixed-time",
-        )
 
-    assert "store" in _asked_slots(first)
+    # 2026-08-07: 「本月哪个菜卖得好？」时间已给、门店没给 —— 首轮直接出答案,
+    # 不再反问。本条保护的性质(已审核的精确问法 + 时间前缀不需要 T3)不变。
+    assert first.clarification_needed is False
+    assert first.planner_authority == "promoted_exact"
+    assert first.store_scope == "all"
+    assert first.store_scope_defaulted is True
     assert first.store_options == ("东城店", "西城店")
-    assert second.clarification_needed is False
-    assert second.planner_authority == "promoted_exact"
-    assert second.store_scope == "all"
-    assert second.window_label == "本月"
-    assert second.resolver_query_seed == "本月哪个菜卖得好？ 全部门店"
+    assert first.window_label == "本月"
     assert pool.pending == {}
     llm.assert_not_awaited()
+
+    # ⚠️ 同上: 裸片段「全部门店」那一轮已删 —— 它是对已不发出的反问的回答,
+    #    现在会被当成新问句而需要 T3(mock 会抛), 断言它没有意义。
 
 
 @pytest.mark.asyncio

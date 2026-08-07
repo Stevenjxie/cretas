@@ -916,6 +916,8 @@ async def test_explicit_ranking_asks_store_after_time_is_supplied():
     guarded = await _apply_store_scope_guard(pool, "FACTORY_A", spec)
 
     assert guarded is not None
+    # 延续轮(用户正在回答上一问)仍然问门店 —— 他已经在对话里, 这一问不额外阻塞,
+    # 而且「时间 → 门店按钮 → 答案」整条是零 LLM 的确定性延续。
     assert guarded.clarification_needed is True
     assert guarded.clarification_question == STORE_SCOPE_CLARIFICATION_QUESTION
     assert guarded.store_options == ("东城店", "西城店", "南城店")
@@ -3517,7 +3519,13 @@ class _StoreScopePool:
 
 
 @pytest.mark.asyncio
-async def test_multi_store_tenant_requires_scope_independent_of_query_window_activity():
+async def test_multi_store_tenant_loads_options_independent_of_query_window_activity():
+    """门店名单的加载**不看问句时间窗** —— 窗口内没生意的店也在名单里。
+
+    2026-08-07 契约变更: 首轮新问句不再被门店反问阻塞(默认全部门店), 所以本例
+    断言的是「名单照样完整加载 + 默认已声明」, 而不是「反问已抛出」。名单本身
+    的正确性没变 —— 它既喂给默认后的范围声明, 也喂给点名未知门店时的反问。
+    """
     pool = _StoreScopePool(["东城店", "西城店", "南城店"])
     spec = _build_spec(
         "RESTAURANT_OPS_GROSS_MARGIN",
@@ -3533,8 +3541,10 @@ async def test_multi_store_tenant_requires_scope_independent_of_query_window_act
     )
 
     assert guarded is not None
-    assert guarded.clarification_needed is True
-    assert guarded.clarification_question == STORE_SCOPE_CLARIFICATION_QUESTION
+    assert guarded.clarification_needed is False
+    assert guarded.store_scope == "all"
+    # 口径是代码补的 → 必须留下痕迹, 答案里要声明。
+    assert guarded.store_scope_defaulted is True
     assert guarded.store_options == ("东城店", "西城店", "南城店")
     assert pool.conn.rls_factory_id == "FACTORY_A"
     assert pool.conn.fetched_factory_id == "FACTORY_A"
@@ -3680,7 +3690,9 @@ async def test_demo_multi_store_guard_scopes_rls_to_mapped_data_factory():
     guarded = await _apply_store_scope_guard(pool, "DEMO_REST", spec)
 
     assert guarded is not None
-    assert guarded.clarification_needed is True
+    # 本例断的是 RLS 映射到数据租户, 不是反问 —— 2026-08-07 起首轮默认全部门店。
+    assert guarded.store_scope == "all"
+    assert guarded.store_scope_defaulted is True
     assert pool.conn.rls_factory_id == "RES_3101_009"
     assert pool.conn.fetched_factory_id == "RES_3101_009"
 

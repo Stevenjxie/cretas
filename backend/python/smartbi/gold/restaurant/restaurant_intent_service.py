@@ -139,6 +139,28 @@ def _prepend_action_warning(answer_text: str, warning: Optional[str]) -> str:
     return f"**{warning}**\n\n{answer_text}"
 
 
+def _store_scope_disclosure(spec: Any) -> str:
+    """门店范围取了默认值就必须说出来。
+
+    ⛔ 这是 `store_scope_defaulted` 存在的**唯一**理由。默认「全部门店」本身没问题
+    —— 它是无歧义的超集 —— 但不声明就成了「偷偷替用户选了口径」, 那才是降级处理。
+    选了并说出来不是。
+
+    只在**代码补的**默认上出现: 用户自己说了「全部门店」时再声明一遍是废话。
+    判据是「这个口径是谁选的」, 不是「口径是什么」。
+    """
+    if not getattr(spec, "store_scope_defaulted", False):
+        return ""
+    options = tuple(getattr(spec, "store_options", ()) or ())
+    if not options:
+        # 拿不到门店名单时不谎报家数 —— 说范围, 不说数字。
+        return "\n\n（范围：全部门店合计。想看单店直接说门店名即可。）"
+    return (
+        f"\n\n（范围：全部 {len(options)} 家门店合计。"
+        f"想看单店直接说门店名即可，例如「{options[0]}」。）"
+    )
+
+
 def _execution_mismatch(
     spec: RestaurantQuerySpec,
     plan: Tuple[str, ...],
@@ -1164,6 +1186,10 @@ async def tiered_answer(
             store_mention=store_mention,
         )
 
+        # 挂在契约校验**之后**: 范围声明是元信息, 不是业务结果。放在校验前会让
+        # has_displayable_business_result 把这行括号当成「有可展示结果」, 于是一个
+        # 本该被拦下的空答案会因为多了一句范围说明而蒙混过关。
+        answer_text += _store_scope_disclosure(spec)
         answer_text = _prepend_action_warning(answer_text, action_warning)
         result: Dict[str, Any] = {
             "kind": "answer",
