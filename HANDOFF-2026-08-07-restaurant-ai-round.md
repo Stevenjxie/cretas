@@ -1377,3 +1377,37 @@ push 是 fast-forward-only ⇒ 那一刻 GitHub main 全部内容都在里面；
 | ⑥ ux-flow 闸 | 未走 |
 | GitHub | 已申诉，恢复后 `git push origin main` + 从真 main 重部一次确认一致 |
 | ⚠️ 小健壮性 | `ai-intents/execute` 的 `userInput` 为 null 时返 500 而非 400 |
+
+---
+
+## 🚫 `各门店对比如何`：动手做了、量完代价后**撤回**
+
+Steve 同意「动」，我实现了：T3 自己发的**纯时间**澄清也用默认窗口取代
+（新增 `_is_time_only_clarification`，沾「门店/菜/指标」的一律不覆盖，
+判定函数本身分得很干净，变异验证也通过）。
+
+**但全量跑出 5 个红，全是澄清链的既有测试：**
+
+```
+test_semantic_first_dish_time_store_buttons_survive_t3_outage
+test_semantic_first_three_turn_metric_time_store_chain_keeps_original_metric
+test_combined_named_dish_scope_time_buttons_omit_unrelated_store_catalogue
+test_natural_store_question_keeps_full_semantics_after_time_button[×2]
+```
+
+它们编码的是**踩过事故才调对的 UX 契约**：T3 挂掉时按钮还在 / 三轮对话里指标不丢 /
+点了时间按钮之后门店语义还在。而收益只是让 `各门店对比如何` 少问一句 ——
+**用户点一下「最近30天」就能拿到答案，本来就不是断路。**
+
+🔑 判据：**用 5 条真实契约换一次点击，不划算。**「闸红了不许加豁免，要看闸想逼出
+什么」—— 这里它逼出的是「按钮链是产品的一部分，不是待优化的摩擦」。
+
+⚠️ 也记一下我自己的误判：跟 Steve 说「改几个老测试、半小时」是**低估**。
+判据：**报代价之前先真跑一遍全量**，别凭上一次的印象估。
+
+### 一个中途的假绿
+
+放开条件后第一次全量是 **1101 全绿**，我差点当成「零破坏」。真相是那版**只设了
+默认窗口、没清掉澄清**（原设计假定进到那里时澄清本来就是关的），等于没生效。
+补上清除的三行之后，5 个红才浮出来。
+**「全绿」在这一轮已经骗过我三次**（短路没执行 / 局部变量恒假 / 少写清除语句）。
