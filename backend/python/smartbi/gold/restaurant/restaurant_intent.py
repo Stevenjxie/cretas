@@ -357,6 +357,9 @@ _INTENT_DESCRIPTIONS: Dict[str, str] = {
     "RESTAURANT_OPS_STORE_DIRECTORY": "查询当前账号有几家门店、有哪些门店、门店名单",
     "RESTAURANT_OPS_BUSINESS_OPTIMIZATION": "基于内部多方面经营数据诊断原因并给出提高营收、利润、客流或整体经营的行动方案；不能退化成只报一个指标",
     "RESTAURANT_OPS_CHANNEL_MIX": "堂食与外卖的占比、结构和渠道表现",
+    # ⛔ DESCRIPTIVE: 只报让利规模, 不声称折扣「带来了」多少增量营收 ——
+    #    现有 schema 支撑不了那个因果结论(同 gold.queries.discount_summary)。
+    "RESTAURANT_OPS_DISCOUNT_SUMMARY": "折扣力度 —— 一段时间内让利总额、占营收比例，以及满减/会员折扣/团购券的构成",
     "RESTAURANT_OPS_DAYPART_PERFORMANCE": "各时段(午市/下午茶/晚市/夜宵)的历史营收、单量、客单价对比 —— 「哪个时段生意最好」。注意这是**历史表现**, 不是明天的预测排班",
     "RESTAURANT_OPS_WASTAGE_TOP": "损耗/浪费/报损排行，按食材或类型统计损耗量和金额",
     "RESTAURANT_OPS_STOCK_SHORTAGE": "库存盘点差异（盘亏/盘盈）排行",
@@ -1787,6 +1790,7 @@ _DEFAULT_METRICS_BY_CODE: Dict[str, Tuple[str, ...]] = {
     "RESTAURANT_OPS_STORE_DIRECTORY": ("store_count",),
     "RESTAURANT_OPS_BUSINESS_OPTIMIZATION": (),
     "RESTAURANT_OPS_CHANNEL_MIX": ("channel_mix",),
+    "RESTAURANT_OPS_DISCOUNT_SUMMARY": ("discount",),
     "RESTAURANT_OPS_DAYPART_PERFORMANCE": ("revenue",),
     "RESTAURANT_OPS_WASTAGE_TOP": ("wastage_qty", "wastage_cost"),
     # 金额在前: 「盘点亏了多少」问的是钱, 而且金额是唯一能跨食材相加的维度

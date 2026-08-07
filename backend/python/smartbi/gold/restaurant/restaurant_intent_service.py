@@ -52,6 +52,7 @@ _PLAN_LABELS = {
     "RESTAURANT_OPS_STORE_DIRECTORY": "门店名单",
     "RESTAURANT_OPS_BUSINESS_OPTIMIZATION": "经营诊断与提升方案",
     "RESTAURANT_OPS_CHANNEL_MIX": "堂食与外卖",
+    "RESTAURANT_OPS_DISCOUNT_SUMMARY": "折扣力度",
     "RESTAURANT_OPS_DAYPART_PERFORMANCE": "时段表现",
     "RESTAURANT_OPS_RECIPE_COST": "菜品成本",
     "RESTAURANT_OPS_WASTAGE_TOP": "食材损耗",
@@ -70,6 +71,10 @@ _RESOLVER_DIMENSIONS = {
         {"store", "dish", "ingredient", "channel", "customer", "time"}
     ),
     "RESTAURANT_OPS_CHANNEL_MIX": frozenset({"channel"}),
+    # 折扣总额来自 agg_daily 的全店日汇总, 构成来自 agg_discount 的月粒度 ——
+    # ⛔ 两个来源都**不带门店/菜品粒度**, 所以这里声明空集(声明的是真能出的粒度,
+    #    不是希望它能出的)。问「哪家店折扣最多」会因此不落到这个 resolver。
+    "RESTAURANT_OPS_DISCOUNT_SUMMARY": frozenset(),
     # 时段本身是 time 维度; 结果里也带门店无关的全店汇总, 故只声明 time。
     # ⛔ 声明的是**这个 resolver 真能出的粒度**, 不是「希望它能出」的。
     "RESTAURANT_OPS_DAYPART_PERFORMANCE": frozenset({"time"}),

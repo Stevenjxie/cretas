@@ -7692,6 +7692,120 @@ async def resolve_channel_mix(
     )
 
 
+async def resolve_discount_summary(
+    smartbi_pool, factory_id: str, days: int = 30, *,
+    role: Optional[str] = None, query: Optional[str] = None,
+    date_range: Optional[Tuple[Optional[date], Optional[date]]] = None,
+) -> OpsAnswer:
+    """折扣力度 —— 「这段时间让利了多少、占营收几成」。
+
+    ⛔ 口径不自己算, 复用 `gold.queries.discount_summary`: 折扣总额与占营收比
+       都取自 `agg_daily` 的**同一个日粒度窗口**。那个函数的注释记着 C1 那次事故 ——
+       曾经用整月的 `agg_discount` 除以一周的营收, 比率错得离谱还被当成真值索引。
+       **一个指标一处定义**, 这里只负责把它讲成人话。
+
+    ⚠️ 构成(满减/会员折扣/团购券)来自 `agg_discount`, 与总额是**两个数据源**:
+       MOCK_REST 实测有总额(¥387 万)但构成表 0 行。缺构成时如实说「只有总额」,
+       ⛔ 不拿总额编一个构成出来。
+
+    DESCRIPTIVE only —— 只报让了多少利, **绝不声称折扣「带来了」多少增量营收**:
+    这个 schema 里没有任何东西能支撑那个因果说法(同 `discount_summary` 的约束)。
+
+    金额是价格权限数据 —— 非价格角色只出**占营收比**(百分比不泄露绝对额)。
+    """
+    from smartbi.gold.queries import discount_summary
+    from smartbi_compat._rbac_strip import PRICE_VIEW_ROLES
+
+    can_see_money = bool(role) and role in PRICE_VIEW_ROLES
+
+    start = date_range[0] if date_range else None
+    end = date_range[1] if date_range else None
+    if start is None or end is None:
+        async with smartbi_pool.acquire() as conn:
+            await conn.execute(
+                "SELECT set_config('app.factory_id', $1, false)", factory_id
+            )
+            anchor = await conn.fetchval(
+                "SELECT MAX(date) FROM agg_daily WHERE factory_id = $1", factory_id
+            )
+        if anchor is None:
+            return OpsAnswer(
+                code="RESTAURANT_OPS_DISCOUNT_SUMMARY",
+                title="折扣力度",
+                answer_text=(
+                    "还没有可用的日汇总数据，因此算不出折扣总额和占营收比。"
+                    "不会用订单表里的折扣字段临时拼一个不同口径的数。"
+                ),
+                charts=[], kpis=[], meta={"no_data": True},
+            )
+        end = anchor
+        start = end - timedelta(days=max(int(days), 1) - 1)
+
+    result = await discount_summary(smartbi_pool, factory_id, (start, end))
+    total = float(result.get("total_discount_amount") or 0.0)
+    revenue = float(result.get("total_revenue") or 0.0)
+    share = result.get("revenue_share_pct")
+    items = result.get("discounts") or []
+    window_label = _range_text(start, end)
+
+    if revenue <= 0:
+        return OpsAnswer(
+            code="RESTAURANT_OPS_DISCOUNT_SUMMARY",
+            title=f"折扣力度（{window_label}）",
+            answer_text=(
+                f"{window_label}没有营收数据，折扣占比没有分母，因此不给出比率。"
+            ),
+            charts=[], kpis=[], meta={"no_data": True, "window_label": window_label},
+        )
+
+    lines = [f"**折扣力度（{window_label}）：**", ""]
+    kpis = []
+    if share is not None:
+        lines.append(f"- 折扣占营收 **{float(share):.1f}%**")
+        kpis.append({"title": "折扣占营收", "value": f"{float(share):.1f}%",
+                     "rawValue": float(share)})
+    if can_see_money:
+        lines.append(f"- 折扣总额 ¥{total:,.0f}（营收 ¥{revenue:,.0f}，应收口径）")
+        kpis.append({"title": "折扣总额", "value": f"¥{total:,.0f}", "rawValue": total})
+
+    if items:
+        lines.append("")
+        lines.append("**构成：**")
+        for it in items:
+            name = it.get("discount_name") or "未命名"
+            if can_see_money:
+                lines.append(
+                    f"- {name}：¥{float(it.get('amount') or 0):,.0f}"
+                    f"（占折扣 {float(it.get('share_pct') or 0):.1f}%）"
+                )
+            else:
+                lines.append(f"- {name}：占折扣 {float(it.get('share_pct') or 0):.1f}%")
+    else:
+        lines.append("")
+        lines.append(
+            "> 只有折扣总额，没有分类型的构成数据（满减/会员折扣/团购券未落库），"
+            "因此不拆分构成。"
+        )
+
+    lines.append("")
+    lines.append(
+        "说明：这里只描述让利规模，不能据此说折扣「带来了」多少额外营收 —— "
+        "现有数据无法支撑那个因果结论。要判断值不值，需要把同期的单量与毛利一起看。"
+    )
+    return OpsAnswer(
+        code="RESTAURANT_OPS_DISCOUNT_SUMMARY",
+        title=f"折扣力度（{window_label}）",
+        answer_text="\n".join(lines),
+        charts=[], kpis=kpis,
+        meta={
+            "window_label": window_label,
+            "revenue_share_pct": float(share) if share is not None else None,
+            "composition_available": bool(items),
+            "scope_matches_request": True,
+        },
+    )
+
+
 async def resolve_daypart_performance(
     smartbi_pool, factory_id: str, days: int = 30, *,
     role: Optional[str] = None, query: Optional[str] = None,
@@ -7864,6 +7978,7 @@ _MONEY_BEARING_INTENTS: frozenset = frozenset({
     "RESTAURANT_OPS_GROSS_MARGIN",
     "RESTAURANT_OPS_STORE_MARGIN",
     "RESTAURANT_OPS_CHANNEL_MIX",
+    "RESTAURANT_OPS_DISCOUNT_SUMMARY",
     "RESTAURANT_OPS_RECIPE_COST",
     "RESTAURANT_OPS_REQUISITION_TREND",
     "RESTAURANT_OPS_WASTAGE_TOP",
@@ -7887,6 +8002,7 @@ _MONEY_SELF_MASKING_INTENTS: frozenset = frozenset({
     "RESTAURANT_OPS_GROSS_MARGIN",
     "RESTAURANT_OPS_STORE_MARGIN",
     "RESTAURANT_OPS_CHANNEL_MIX",
+    "RESTAURANT_OPS_DISCOUNT_SUMMARY",
 })
 
 # 剩下这些**整个答案就是钱**(领料总额/盘亏金额/损耗金额/菜品成本), 没有可保留的
@@ -7943,6 +8059,7 @@ _RESOLVERS = {
     "RESTAURANT_OPS_OUT_OF_DOMAIN": resolve_out_of_domain,
     "RESTAURANT_OPS_STORE_DIRECTORY": resolve_store_directory,
     "RESTAURANT_OPS_CHANNEL_MIX": resolve_channel_mix,
+    "RESTAURANT_OPS_DISCOUNT_SUMMARY": resolve_discount_summary,
     "RESTAURANT_OPS_WASTAGE_TOP": resolve_wastage_top,
     "RESTAURANT_OPS_STOCK_SHORTAGE": resolve_stock_shortage,
     "RESTAURANT_OPS_RECIPE_COST": resolve_recipe_cost,
