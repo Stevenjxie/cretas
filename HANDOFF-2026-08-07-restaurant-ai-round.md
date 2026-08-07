@@ -302,7 +302,38 @@ LLM 自撰的问句两个都不匹配 → 返回空 `frozenset()` → `"time" no
 🔑 **所以 D=12 的产生处不是那道守卫，是 T3 planner 自己决定要反问。**
 门店槽守卫只管它自己发出的那一类反问；LLM 发的那一类完全绕过它。
 
-**下一轮的正确落点**（按优先级）：
+**✅ 真根因的修复已写好，在分支 `codex/claude-t3-store-default-WIP`（commit `a8c77fe61f`）**
+—— **未合并未部署**，因为还有 4 条测试钉着旧契约。
+
+判定移到了 T3 产出处（`_semantic_spec_from_t3`），判据只认**结构化的
+`missing_fields`**，不认措辞：
+
+```python
+if (clarification_needed
+        and tuple(missing_fields) == ("store_scope",)
+        and not store_scope and not store_names):
+    clarification_needed = False        # 不反问
+    store_scope = "all"                 # 默认全部门店
+    store_scope_defaulted = True        # 答案里显式声明范围
+```
+
+还缺别的槽位（时间/指标/对象）时**照旧反问** —— 那些默认值有实质歧义。
+
+**接手要做的只剩一件事**：这 4 条测试按新契约重构（都是多轮链，第 2/3 轮依赖
+门店按钮，与已处理过的那 3 条同型，可照抄改法）：
+
+| 行号 | 测试 |
+|---|---|
+| 401 | `test_semantic_first_store_buttons_only_offer_data_bearing_dish_stores` |
+| 1949 | `test_semantic_first_store_choice_is_merged_and_not_asked_twice` |
+| 2047 | `test_semantic_first_three_turn_metric_time_store_chain_keeps_original_metric` |
+| 2387 | `test_semantic_first_week_comparison_action_keeps_all_slots_after_store_button` |
+
+它们断言的都是「LLM 只问门店 → 我们照样反问用户」，**正是 goal 判为 D 的行为**。
+当前 476/480 passed。改完合并部署，再跑一次
+`scripts/dev/measure-restaurant-g0g1.sh` 对比 D。
+
+**原下一轮落点（已完成前两项，留作记录）**：
 1. 在 T3 返回之后、组装响应之前，加一道**确定性**的「这个反问是不是只缺门店」判定
    —— 不能再靠与常量做字符串比较（LLM 措辞每次都不同），要靠 T3 返回的
    `missing_fields` / 结构化槽位判断。
