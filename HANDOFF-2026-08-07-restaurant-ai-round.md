@@ -33,7 +33,36 @@ PR 上真正会跑的是 `python-gate` / `web-admin-gate`（都按 paths 过滤�
 
 ---
 
-## 已上线（PR #2361 → `e6f52e826d`；PR #2362 → `8fa379812a`）
+## 已上线（4 个 PR，全部 prod 实测）
+
+| PR | 内容 | 合并点 |
+|---|---|---|
+| #2361 | 采购第五部门权限补齐 + 发现层毛利谜题规则 | `e6f52e826d` |
+| #2362 | 谜题菜份数渲染成 `143188.0 份` | `8fa379812a` |
+| #2363 | 策划案域硬编码 inventory + 补 REST 出口 | `a20c038a93` |
+| #2364 | 行动建议把两条无关发现揉成一条 | `a6bed736ac` |
+
+**最终 prod 状态**：运行中 jar 含 `RestaurantPuzzleDishProvider` /
+`RestaurantMarginFindingReader` / `RestaurantFindingPayloadMapper` /
+`FindingActionPlanService` 各 1 个 class；迁移 `20261029.64` / `.65` 均
+`success=true`；Python `8083`=200。
+⚠️ 活跃槽本轮变了三次：10010 → 10020 → **10010**。
+（`/actuator/health` 返 404 是该路径未暴露，不是服务挂 —— 业务接口全部 200 带数据。）
+
+**归因修复的前后对照**（同一批发现，prod 实测原文）：
+
+| 修复前（错） | 修复后（对） |
+|---|---|
+| ·排查**罗氏虾变质原因**，降低损耗成本 | ·主推**罗氏虾**，提升其销量 |
+| ·排查**罗氏虾10个菜品**销售表现 | ·排查**变质损耗**，降低占比 |
+| — | ·暂不处理食材损耗名单 |
+
+第三条尤其值得注意：它正确处理了**被诚实跳过**的那条规则，说「暂不处理」
+而不是编一个动作出来 —— 三态一路活到了 LLM 产出。
+
+---
+
+### 首两个 PR 的详细判据
 
 **上线判据（逐条实测，不是「合了就算」）**
 
@@ -289,6 +318,18 @@ refinement context 做完之后再跑 —— 否则大量问句的归宿会因�
 12. **链式 `gh pr merge && git checkout && deploy` 期间读到的文件内容不可信** ——
     checkout 瞬间的快照会显示旧内容。判据是 `git log` 与 `grep` 盘上文件，
     不是编辑器/linter 的即时读数。
+13. 🔴 **构建期间不要碰 worktree（哪怕只改一个 md）。** 本轮第 3 次发布挂在
+    `ERROR: worktree changed during release build; manifest not written` ——
+    我在 4 分钟的构建窗口里编辑了交接文件。发布脚本有一道闸保证制品对应一个
+    **已知干净的树**，工作树一动就拒绝写 manifest。
+    ⚠️ 而 harness 报的是 **exit code 0**，脚本自己的输出才是 ERROR（第 N 次印证
+    「通知里的退出码不可信」）。
+14. **Monitor 的过滤必须覆盖所有终态，不只是成功。** 上一条那次失败，我的 grep
+    只有 `RELEASE_FINAL_STATUS|结果 SUCCESS|BUILD FAILURE`，`worktree changed`
+    不在里面 —— Monitor 一路沉默，看起来和「还在跑」一模一样。
+    **沉默不等于成功。**
+15. **蓝绿槽位一天变了三次**：10010 → 10020 → 10010。任何写死端口的探针都会
+    在下一次发布后给出假阴性。判据永远是 `ss -lntp | grep -E ':10010|:10020'`。
 
 ---
 
