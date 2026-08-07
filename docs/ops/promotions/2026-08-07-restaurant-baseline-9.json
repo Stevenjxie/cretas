@@ -1,0 +1,11 @@
+[
+  {"query": "最近30天总营收是多少", "code": "RESTAURANT_OPS_SALES_SUMMARY"},
+  {"query": "加权毛利率是多少", "code": "RESTAURANT_OPS_GROSS_MARGIN"},
+  {"query": "毛利最低的菜品有哪些", "code": "RESTAURANT_OPS_GROSS_MARGIN"},
+  {"query": "外卖和堂食各占多少", "code": "RESTAURANT_OPS_CHANNEL_MIX"},
+  {"query": "哪个时段生意最好", "code": "RESTAURANT_OPS_DAYPART_PERFORMANCE"},
+  {"query": "最近损耗情况怎么样", "code": "RESTAURANT_OPS_WASTAGE_TOP"},
+  {"query": "库存有什么要注意的", "code": "RESTAURANT_OPS_INVENTORY_WARNING"},
+  {"query": "员工人效怎么样", "code": "RESTAURANT_OPS_STAFFING_ADVICE"},
+  {"query": "营收趋势怎么样", "code": "RESTAURANT_OPS_TREND_ANALYSIS"}
+]
