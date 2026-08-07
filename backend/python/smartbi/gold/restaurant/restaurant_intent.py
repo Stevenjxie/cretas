@@ -3038,7 +3038,61 @@ async def _replay_zero_token_plan(
             "plan; falling through to the planner: %s",
             query,
         )
+
+    # ─── L1 结构解析 ───────────────────────────────────────────────────────
+    # ⛔ 排在最后是刻意的: 人审晋升(上面)与已验证计划缓存(上面)都比结构推断更有
+    #    依据 —— L1 只在**谁都不认识这句话**时才开口, 而且只在闭集证据能唯一定
+    #    终点时才授权, 歧义一律沉默交给 planner。它替代的是「同一形状换个说法就
+    #    要重跑 3.2k token」, 不是替代任何一层已有权威。
+    structural = _structural_zero_token_spec(
+        query,
+        available_stores=available_stores,
+        suggested_stores=suggested_stores,
+    )
+    if structural is not None:
+        return structural
+
     return None
+
+
+def _structural_zero_token_spec(
+    query: str,
+    *,
+    available_stores: Sequence[str],
+    suggested_stores: Sequence[str],
+) -> Optional[Tuple[RestaurantQuerySpec, str]]:
+    """L1: 闭集槽位唯一确定意图时, 直接编译成计划(零 token)。
+
+    与内建晋升表走**同一条** `_build_spec`(tier/authority/require_explicit_time
+    逐字相同) —— 时间槽照旧由既有优先级链处理, 这里绝不发明默认值。
+    """
+    from smartbi.gold.restaurant.restaurant_intent_service import (
+        _RESOLVER_DIMENSIONS,
+    )
+    from smartbi.gold.restaurant.structural_route import resolve_structurally
+
+    match = resolve_structurally(query, candidate_intents=tuple(_RESOLVER_DIMENSIONS))
+    if match is None or match.intent not in _VALID_CODES:
+        return None
+
+    spec = _build_spec(
+        match.intent,
+        query,
+        confidence=1.0,
+        tier="exact",
+        planner_authority="promoted_exact",
+        store_options=suggested_stores or available_stores,
+        require_explicit_time=True,
+    )
+    logger.info(
+        "[restaurant-intent] zero-token structural hit: intent=%s "
+        "clarification=%s evidence=%s query=%s",
+        spec.intent,
+        spec.clarification_needed,
+        match.evidence,
+        query,
+    )
+    return spec, "structural_route"
 
 
 def _replay_plan_spec(
