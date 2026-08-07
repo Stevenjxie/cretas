@@ -20,7 +20,8 @@ vi.mock('@/api/bom', async (importOriginal) => {
 });
 vi.mock('vue-router', () => ({
   useRouter: () => ({ resolve: resolveRoute }),
-  useRoute: () => ({ fullPath: '/production/bom?productTypeId=P1' }),
+  // 2026-08-07 阶段 5: 弹窗已挪到画布下, 所在路由跟着换(旧 BOM 页已删)
+  useRoute: () => ({ fullPath: '/system/product-processes?productTypeId=P1' }),
 }));
 vi.mock('@/api/unitContract', () => ({
   convertUnit: (...args: unknown[]) => convertUnit(...args),

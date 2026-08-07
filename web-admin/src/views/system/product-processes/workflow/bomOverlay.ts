@@ -4,17 +4,27 @@ import type {
   AuxiliaryCellRow,
   PackagingCellData,
   PackagingCellRow,
-  ByproductCellRow,
-  ByproductCellData,
 } from './bomOverlayTypes';
 
 /**
- * BOM 浮层节点 —— 辅料 / 包材 cell。
+ * BOM 浮层节点 —— 辅料 / 包材 cell。**两类都是「投入」。**
  *
  * ⛔ 这些节点【不是工艺定义的一部分】。设计要求「改辅料克数只动 BOM 草稿，
  * 不产生新工艺版本」，而工艺节点一改就会改 revision hash，导致所有钉了旧修订
  * 的 BOM 需要重新对齐。所以浮层节点必须在序列化回工艺定义时被滤掉
  * （见 ProductProcessWorkflowEditor.vue 的 serializeFlowNode 调用点）。
+ * (阶段 3 会推翻这条 —— 届时 materialBindings 进工艺定义、纳入 revisionHash。)
+ *
+ * ## 副产为什么不在这里(2026-08-07 阶段 2)
+ * 副产曾经也是浮层(`bom-overlay:byp:*`)，现已改成**真实产出节点**：
+ * 它是「产出」不是「投入」，与半成品同性质，只需指 SKU、数量报工时填。
+ * 做成真实节点后它自动获得图校验(SKU_REQUIRED)、拓扑、连边，一行特例都不用开。
+ *
+ * ⚠️ 顺带说明当初那条浮层边的下场，作为「浮层是脆的」的实证：
+ * 副产浮层的 `bom-byp-out` sourceHandle **在 WorkflowMaterialNode.vue 里从来没有
+ * 对应的 <Handle>**（包材的 `bom-pack-out` 有）。按下面这段注释预言的失败模式，
+ * 那条虚线不报错、直接不渲染 —— 副产 cell 一直是飘在成品下方、没有连线的。
+ * 真实节点走真实边，不存在这种"两边字符串对不齐就静默失效"的耦合。
  */
 export const BOM_OVERLAY_PREFIX = 'bom-overlay:';
 
@@ -46,8 +56,6 @@ export function stripBomOverlayEdges<T extends { source: string; target: string 
  */
 const AUX_OFFSET_Y = 220;
 const PACK_OFFSET_X = 220;
-// 副产挂在产出下方, 与包材(右侧)分开, 免得两个 cell 叠在一起。
-const BYP_OFFSET_Y = 200;
 
 /**
  * 派生边挂靠的 handle id —— 必须与组件里 <Handle> 的 id 字面量一致
@@ -58,8 +66,6 @@ const BYP_OFFSET_Y = 200;
 export const AUX_OVERLAY_SOURCE_HANDLE = 'bom-aux-out';
 export const PACK_OVERLAY_SOURCE_HANDLE = 'bom-pack-out';
 export const PACK_OVERLAY_TARGET_HANDLE = 'bom-pack-in';
-export const BYP_OVERLAY_SOURCE_HANDLE = 'bom-byp-out';
-export const BYP_OVERLAY_TARGET_HANDLE = 'bom-byp-in';
 
 /**
  * deriveBomOverlay 只需要节点的 id/kind/position, 加一份【展示用】的最小数据子集
@@ -105,17 +111,11 @@ export interface BomOverlayPackagingInput {
   rows: PackagingCellRow[];
 }
 
-/** 一个终端产出的副产浮层输入。副产是产出声明, 与包材同挂产出节点。 */
-export interface BomOverlayByproductInput {
-  rows: ByproductCellRow[];
-}
-
 export interface BomOverlayInput {
   workflowNodes: BomOverlaySourceNode[];
   auxiliaryByProcess: Record<string, BomOverlayAuxiliaryInput>;
   packagingByOutput: Record<string, BomOverlayPackagingInput>;
   /** 可选: 老调用方不传时按「没有副产」派生空 cell, 与包材/辅料一致(防呆: 空 cell 也要画)。 */
-  byproductByOutput?: Record<string, BomOverlayByproductInput>;
 }
 
 /**
@@ -126,7 +126,7 @@ export interface BomOverlayInput {
 export type OverlayNode =
   | { id: string; type: 'bomAuxiliary'; position: WorkflowPosition; data: AuxiliaryCellData }
   | { id: string; type: 'bomPackaging'; position: WorkflowPosition; data: PackagingCellData }
-  | { id: string; type: 'bomByproduct'; position: WorkflowPosition; data: ByproductCellData };
+  ;
 
 export interface OverlayEdge {
   id: string;
@@ -203,30 +203,6 @@ export function deriveBomOverlay(input: BomOverlayInput): BomOverlayResult {
         sourceHandle: PACK_OVERLAY_SOURCE_HANDLE,
         target: packId,
         targetHandle: PACK_OVERLAY_TARGET_HANDLE,
-        style: { strokeDasharray: '5 4' },
-      });
-
-      // 副产同样只挂终端产出。与包材一样, 没有副产也派生空 cell ——
-      // 「没配副产」和「这里不能配副产」必须能被用户区分开。
-      const bypId = `${BOM_OVERLAY_PREFIX}byp:${node.id}`;
-      const bypMeta = input.byproductByOutput?.[node.id];
-      nodes.push({
-        id: bypId,
-        type: 'bomByproduct',
-        position: { x: node.position.x, y: node.position.y + BYP_OFFSET_Y },
-        data: {
-          outputName: node.data.name ?? '未命名产出',
-          baseUnit: node.data.baseUnit ?? '未配',
-          rows: bypMeta?.rows ?? [],
-          outputNodeId: node.id,
-        },
-      });
-      edges.push({
-        id: `${BOM_OVERLAY_PREFIX}edge:byp:${node.id}`,
-        source: node.id,
-        sourceHandle: BYP_OVERLAY_SOURCE_HANDLE,
-        target: bypId,
-        targetHandle: BYP_OVERLAY_TARGET_HANDLE,
         style: { strokeDasharray: '5 4' },
       });
     }

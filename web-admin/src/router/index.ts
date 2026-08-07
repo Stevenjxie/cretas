@@ -250,30 +250,34 @@ const businessRoutes: RouteRecordRaw[] = [
             component: () => import('@/views/production/delivery-warnings/list.vue'),
             meta: { requiresAuth: true, title: '交货预警', module: 'production' }
           },
-          {
-            path: 'conversions',
-            name: 'ProductionConversions',
-            redirect: '/production/bom?tab=conversion',
-            meta: { requiresAuth: true, title: '转换率配置', module: 'production', hidden: true }
-          },
+          // 2026-08-07 阶段 5(画布即 BOM): BOM 配方页 / 多级展开 / 版本列表三条路由连同页面一起删除。
+          // BOM 就在产品-工序配置画布的辅料 / 包材 cell 上配, 不再有第二个入口。
+          // ECN(工程变更通知)是另一件事, 路由与菜单都保留。
+          //
+          // ⚠️ 删路由 ≠ 可以不管旧地址。菜单入口 08-05 就摘了, 但**用户的书签与历史记录还在**,
+          // 直接删会让它们撞 404 —— 那正是原来「只下入口不删机器」想避免的事。所以这里
+          // 留三条 redirect 把老地址接到画布上, 页面删了而路径不落空。
+          // (`ProductionConversions` 原本 redirect 到 `/production/bom?tab=conversion`,
+          //  页面一删它就指向空地; 转换率 08-05 已拍板不往画布搬、维护走 API/DB,
+          //  该 stub 菜单隐藏且全仓零引用, 一并删除而不是接到画布上 —— 画布没有那个 tab,
+          //  接过去等于把用户送到一个找不到「转换率」的页面。)
           {
             path: 'bom',
-            name: 'BomManagement',
-            component: () => import('@/views/production/bom-unified/index.vue'),
-            meta: { requiresAuth: true, title: 'BOM配方管理', module: 'production' }
+            name: 'BomManagementRetired',
+            redirect: '/system/product-processes',
+            meta: { requiresAuth: true, title: 'BOM/配方维护', module: 'production', hidden: true }
+          },
+          {
+            path: 'bom/versions',
+            name: 'BomVersionListRetired',
+            redirect: '/system/product-processes',
+            meta: { requiresAuth: true, title: 'BOM版本管理', module: 'production', hidden: true }
           },
           {
             path: 'bom/tree',
-            name: 'BomTreeExpansion',
-            component: () => import('@/views/production/bom/tree.vue'),
-            meta: { requiresAuth: true, title: '多级 BOM 展开', module: 'production' }
-          },
-          {
-            // Sprint 5 H-2 MVP: BomVersion 历史版本列表 (M-BOM-VER-1 frontend follow-up)
-            path: 'bom/versions',
-            name: 'BomVersionList',
-            component: () => import('@/views/production/bom/BomVersionList.vue'),
-            meta: { requiresAuth: true, title: 'BOM版本管理', module: 'production' }
+            name: 'BomTreeExpansionRetired',
+            redirect: '/system/product-processes',
+            meta: { requiresAuth: true, title: 'BOM多级展开', module: 'production', hidden: true }
           },
           {
             // Sprint 5 H-2 MVP stub: ECN 工程变更通知

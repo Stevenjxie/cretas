@@ -11,7 +11,11 @@ describe('order creation contracts', () => {
   const sales = source('src/views/sales/orders/list.vue');
   const startPurchase = source('src/components/dialog/StartPurchaseDialog.vue');
   const mergePurchase = source('src/components/dialog/MergePurchaseDialog.vue');
-  const bom = source('src/views/production/bom/index.vue');
+  // 2026-08-07 阶段 5: BOM 页已删, 行级税率现在只在画布的包材/辅料 cell 上编辑。
+  // 契约不丢, 只是换了载体。
+  const packagingCell = source(
+    'src/views/system/product-processes/workflow/PackagingBindingDialog.vue',
+  );
 
   it('never posts header-only purchase or sales orders', () => {
     expect(purchase).toContain('请至少添加一行原料明细');
@@ -50,7 +54,11 @@ describe('order creation contracts', () => {
   });
 
   it('preserves an explicit zero tax rate when editing a BOM line', () => {
-    expect(bom).toContain('taxRate: row.taxRate ?? 13');
-    expect(bom).not.toContain('taxRate: row.taxRate || 13');
+    // 旧断言钉的是 BOM 页里的 `?? 13`(而不是 `|| 13`, 后者会把显式 0% 吞成 13%)。
+    // 画布这边用的是显式三分支映射, 结构上不可能吞 0 —— 断言跟着改成钉这个结构,
+    // ⛔ 不许退化成「不断言」: 0% 税率被吞是真出过的问题。
+    expect(packagingCell).toContain("taxRate === 'TAX_9' ? 9");
+    expect(packagingCell).toContain("taxRate === 'TAX_13' ? 13 : 0");
+    expect(packagingCell).not.toMatch(/taxRate[^\n]*\|\|\s*13/);
   });
 });

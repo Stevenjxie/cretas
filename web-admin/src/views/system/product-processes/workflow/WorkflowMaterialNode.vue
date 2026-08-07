@@ -9,7 +9,9 @@
       'unit-error': !!unitError,
       'validation-error': !!validationError,
       'validation-attention': validationAttention,
+      byproduct: data?.isByproduct === true,
     }]"
+    :data-testid="data?.isByproduct === true ? 'byproduct-cell' : undefined"
   >
     <Handle v-if="kind !== 'RAW_MATERIAL'" type="target" :position="Position.Left" id="input" />
     <Handle v-if="kind !== 'FINISHED_GOOD'" type="source" :position="Position.Right" id="output" />
@@ -130,7 +132,7 @@
       </el-option-group>
     </el-select>
     <WorkflowSkuPicker
-      v-if="(kind === 'SEMI_FINISHED' || kind === 'FINISHED_GOOD') && canWrite"
+      v-if="(kind === 'SEMI_FINISHED' || kind === 'FINISHED_GOOD') && !isByproduct && canWrite"
       class="sku-selector"
       test-id="material-sku-select"
       :model-value="data.skuId"
@@ -138,6 +140,42 @@
       :finished-options="finishedOptions"
       @change="(value) => emit('selectSku', value)"
     />
+
+    <!--
+      副产选的是【物料】不是产品 SKU —— bom_recipe_items.material_type_id 是指向
+      raw_material_types 的硬外键, 报工也按 materialTypeId 建 MaterialBatch。
+      所以这里不能复用上面的 WorkflowSkuPicker(那份是产品档案)。
+    -->
+    <template v-if="isByproduct && canWrite">
+      <el-select
+        v-if="byproductOptions.length > 0"
+        class="nodrag nowheel sku-selector"
+        data-testid="byproduct-material-select"
+        :model-value="data.skuId"
+        placeholder="选择副产物料"
+        filterable
+        size="small"
+        :teleported="false"
+        popper-class="nowheel nodrag"
+        @change="(value: string) => emit('selectByproductSku', value)"
+      >
+        <el-option
+          v-for="option in byproductOptions"
+          :key="option.id"
+          :label="`${option.code ? `${option.code} — ` : ''}${option.name} · ${option.unit || '-'}`"
+          :value="option.id"
+        />
+      </el-select>
+      <!--
+        ⛔ 防呆规则 5(死胡同必须变成导航或解释): 档案里一个物料都没勾「这是副产」时,
+        给的是解释 + 去处, 不是一个空下拉。这条判据继承自已删的 ByproductBindingDialog
+        的「档案里没有副产标记时: 给出解释与去处, 而不是一个空下拉」。
+      -->
+      <div v-else class="byproduct-empty" data-testid="byproduct-material-empty">
+        物料档案里还没有标记为副产的物料。<br>
+        去「仓库 → 物料档案」编辑该物料, 勾上「这是副产（生产产出，无采购来源）」后再回来选。
+      </div>
+    </template>
 
     <div v-if="kind !== 'FINISHED_GOOD' && canWrite" class="node-actions nodrag">
       <el-button size="small" text type="primary" @click="emit('addNext')">+ 后续工序</el-button>
@@ -157,6 +195,17 @@ import {
 } from './rawMaterialCatalog';
 import WorkflowSkuPicker, { type WorkflowSkuPickerOption } from './WorkflowSkuPicker.vue';
 import type { MaterialNodeData, ProductProcessNodeKind } from './types';
+
+/**
+ * 副产 cell 的可选物料 —— 来自**物料档案**(raw_material_types)按 isByproduct 标记筛出,
+ * 不是产品档案。两者是不同的表, 别混。
+ */
+export interface ByproductMaterialOption {
+  id: string;
+  name: string;
+  code?: string | null;
+  unit?: string | null;
+}
 
 const props = withDefaults(defineProps<{
   kind: Exclude<ProductProcessNodeKind, 'PROCESS'>;
@@ -179,6 +228,8 @@ const props = withDefaults(defineProps<{
   bomRawMaterialIds?: string[];
   semiOptions: WorkflowSkuPickerOption[];
   finishedOptions: WorkflowSkuPickerOption[];
+  /** 副产可选物料(按 isByproduct 标记筛出的物料档案, 不是产品 SKU)。 */
+  byproductOptions?: ByproductMaterialOption[];
   unitError?: string;
   validationError?: string;
   validationAttention?: boolean;
@@ -187,6 +238,7 @@ const props = withDefaults(defineProps<{
   bomRawMaterialIds: () => [],
   rawMaterialSegments: () => [],
   excludedRawMaterialIds: () => [],
+  byproductOptions: () => [],
   validationAttention: false,
 });
 
@@ -199,9 +251,9 @@ const isConnectDimmed = computed(() => !!props.connectingFromKind && !isValidCon
 const emit = defineEmits<{
   addNext: [];
   selectRawSku: [skuId: string];
+  selectByproductSku: [materialTypeId: string];
   selectSku: [skuId: string];
   delete: [];
-  configBom: [];
   editSku: [];
 }>();
 
@@ -302,21 +354,41 @@ function handleRawVisibleChange(visible: boolean): void {
 const filteredBomRawOptions = bomRawFilter.filtered;
 const filteredOtherRawOptions = otherRawFilter.filtered;
 
-const kindLabel = computed(() => ({
+/**
+ * 副产标记(2026-08-07 阶段 2)。副产的 kind 仍是 SEMI_FINISHED —— 它走的是和
+ * 主产出完全相同的图逻辑, 只在**展示**上区分。所以这里只改 label/mark/配色,
+ * 不改 kind, 也不加任何分支逻辑。
+ */
+const isByproduct = computed(() => props.data?.isByproduct === true);
+
+const kindLabel = computed(() => (isByproduct.value ? '副产 Cell' : {
   RAW_MATERIAL: '原料 Cell',
   SEMI_FINISHED: '半成品 Cell',
   FINISHED_GOOD: '成品 Cell',
-})[props.kind]);
+}[props.kind]));
 
-const kindMark = computed(() => ({
+const kindMark = computed(() => (isByproduct.value ? '副' : {
   RAW_MATERIAL: '原',
   SEMI_FINISHED: '半',
   FINISHED_GOOD: '成',
-})[props.kind]);
+}[props.kind]));
 </script>
 
 <style scoped>
 /* #8 拖拽连线视觉: 灰化非法目标 / 高亮合法目标 / handle 悬停显现. 仅 opacity/transform. */
+/* 副产: 与主产出的绿色左条区分开(owner 要求颜色能分辨)。只改视觉, 不改任何图逻辑。 */
+.material-node.byproduct { border-left-color: #dc6803; background: #fffcf5; }
+.byproduct-empty {
+  margin-top: 6px;
+  padding: 7px 9px;
+  border-radius: 6px;
+  background: #fef0c7;
+  color: #93370d;
+  font-size: 11px;
+  line-height: 1.5;
+}
+.material-node.byproduct .kind-mark { background: #fef0c7; color: #b54708; }
+.material-node.byproduct .kind-label { color: #b54708; }
 .material-node { transition: opacity 150ms ease, box-shadow 150ms ease; }
 .material-node.wf-dim { opacity: 0.4; cursor: not-allowed; }
 .material-node.wf-valid { box-shadow: 0 0 0 2px #1b65a8, 0 0 12px rgba(27, 101, 168, 0.35); }

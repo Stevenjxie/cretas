@@ -10,7 +10,11 @@
  *   - 两者都要求「没有可靠数值就返回空/undefined 走组件的占位态」, 不能垫 0。
  */
 
-/** 与 views/production/bom/index.vue 的 formatFriendlyNumber 同规则, 保持全仓数字展示一致。 */
+/**
+ * 数字友好展示: 定点到 maxDecimals 再削掉尾随 0。
+ * (规则原本抄自 views/production/bom/index.vue, 该页 2026-08-07 阶段 5 已删 ——
+ *  此处已是唯一实现, 不再有"两处要保持一致"的对照方。)
+ */
 export function formatFriendlyNumber(value: unknown, maxDecimals = 4): string {
   const number = Number(value);
   if (!Number.isFinite(number)) return '—';
