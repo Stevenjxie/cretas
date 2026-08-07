@@ -623,6 +623,36 @@ Tool 侧**仍固定 inventory** —— 它的 name/description 都写着「库�
 
 ---
 
+## 📋 六块可达性表（2026-08-07 prod 实测，`mock_ops` / 活跃槽 10010）
+
+| 块 | 后端出口 | 前端入口 | prod 实测 | 状态 |
+|---|---|---|---|---|
+| **①** 顺带提示 | `GET /api/mobile/{fid}/findings?domain=restaurant` | `DashboardRestaurant.vue`（店长落地页「今日营运台」） | **200**；`checkedRules=['菜品毛利谜题','损耗类型集中度']`、`failedRules=[]`、三态完整 | ✅ |
+| **②** 岗位入口 | 粗粒度 `restaurant:*` + 五部门模块 | `DepartmentDashboard.vue` × 5 条路由（`/restaurant/{ops,marketing,procurement,hr,finance}`） | 采购角色 **6 行 → 22 行**；阴性对照 200/401/403 | ✅ |
+| **③** AI 价值汇总 | `GET /api/mobile/{fid}/ai/value-summary` | `AiValueSummary.vue`（`/dashboard/ai-value`，**菜单入口本轮才补上**） | `success=true`；`costInYuan=null` + `costUnavailableReason`「编一个费率会得到看似精确的假数字」 | ✅ |
+| **④** 策划案 | `GET /api/mobile/{fid}/findings/action-plan?domain=` | 同 ① 的落地页可展开 | **409**「生成的行动建议里出现了系统数据中不存在的数字 **[80]**，已拒绝返回」 | ✅ 见下 |
+| **⑤** 改价改品 | `POST .../action-proposals/{code}/preview` → confirm（**已存在**，通用框架） | ❌ **无**（web-admin 里没有菜品管理页，只有只读的「菜品分析」） | 接口在，无 UI | ⚠️ |
+| **⑥** 动态办公室 | 后端即 ③ | 即 ③ 的「AI 工作台」页（本轮补上入口后可达） | 同 ③ | ⚠️ 见下 |
+
+### ④ 的 409 是**闸在正常工作**，不是故障
+
+`GroundedNumberValidator` 抓到 LLM 编了个「80」，**整次生成被拒**。这是 goal 架构
+原则在 prod 运行时的实证 —— 「一个编了数字的行动建议比没有建议更糟，它会被照着执行」。
+早先同一接口返回 200 是那次生成恰好没编数字（LLM 不确定性）。
+🔑 **判据：同一个接口多打几次，才分得清「坏了」和「闸响了」。**
+
+### ⑤⑥ 的准确状态
+
+- **⑤**：REST 出口**已存在且是通用的**（`RestaurantAgentRunController` 的
+  preview→confirm）。缺的是菜品页面上的入口 —— 而 web-admin **没有菜品管理页**，
+  要从零建。goal 写「别另发明」，而这是**写路径**（改客户菜单价格），
+  我不在本轮建。接手请接已有的那两个端点，**别新造写接口**（会绕过 preview→confirm）。
+- **⑥**：memory 记「后端已被 ③ 覆盖，剩前端」。③ 的前端就是标题字面为
+  「**AI 工作台**」的 `AiValueSummary.vue` —— 它一直存在但**点不到**，本轮补上入口后可达。
+  「动态」还应额外做什么，仓里**没有 spec**；goal 明写「别另发明」，故未扩。
+
+---
+
 ## ⛔ 还欠的
 
 ### ⑤ 对话改价改品 —— REST 出口**已经存在**，缺的是 UI
