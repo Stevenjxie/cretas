@@ -1099,6 +1099,19 @@ RBAC 修复被并发 session 覆盖，总营收回归 ¥0）。**账号恢复前
 `ERROR: deployment requires clean exact origin/main` 退出。
 **所以「先部署、回头补 push」在这条流水线上根本执行不了**，不存在绕过与否的选择。
 
+⛔ **四个部署入口全都有同一道闸**（不是只有统一入口）：
+
+| 入口 | 闸 |
+|---|---|
+| `release-cretas.sh:191` | `HEAD != origin/main` → ERROR 退出 |
+| `deploy-backend.sh:267` | 落后 origin/main 或脏树 → **ABORT**（原先只 WARN，后来收紧） |
+| `deploy-smartbi-python.sh:194` | 同上 |
+| `deploy-web-admin.sh:206` | 同上（它从本地工作树 build Vite dist，落后就会 ship stale code） |
+
+所以**连「换个入口部署」这个选项都不存在**。要绕就得改部署脚本自己的安全闸 ——
+那既违反铁律、又属于 fastlane 明令强制 PR 的高风险路径、还正是 5/30 事故的形状。
+**没有第二条路可选，只有账号恢复这一条。**
+
 仓里另有一个 `server-mirror`（`ssh://root@47.100.235.168/.../code/.git`），但**不能拿它顶替**：
 铁律里 origin/main 是多 session 的**唯一汇合点**。从一个别的分叉点部署 prod，正是
 2026-05-30 事故的形状（共享 jar 路径 last-write-wins，另一个 session 一部署就把我的
