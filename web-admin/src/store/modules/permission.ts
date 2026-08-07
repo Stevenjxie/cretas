@@ -259,7 +259,12 @@ const PERMISSION_MATRIX: Record<string, ModulePermissions> = {
     // 采购 2026-08-06 成为第五个部门后, 它只拥有自己那个部门。
     // 这两格原本是 Ops 'rw' / Finance 'r' —— 那是它还是「通用餐饮角色」时的遗留,
     // 与 L1 权威(V20261029_61)相反。扩守卫到 30 行时当场抓到。
-    restaurantOps: '-', restaurantMarketing: '-',
+    //
+    // 2026-08-07: restaurantOps 由 '-' 改为 'r' (L1 权威 V20261029_65)。
+    // 采购部门看板列的三个动作里, 领料管理与盘点管理的 module 都是 restaurantOps
+    // —— '-' 让采购部长打不开自己部门的动作。给只读不给写: 看是进货依据,
+    // 录入与审批仍属运营。形状同店长的 restaurantHr='r'。
+    restaurantOps: 'r', restaurantMarketing: '-',
     restaurantHr: '-', restaurantFinance: '-', restaurantProcurement: 'rw',
     rd: '-'
   },

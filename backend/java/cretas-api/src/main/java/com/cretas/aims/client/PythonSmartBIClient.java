@@ -2125,6 +2125,52 @@ public class PythonSmartBIClient {
     }
 
     /**
+     * 餐饮**毛利**发现规则。响应契约与上面的损耗发现逐字相同
+     * （{@code {rule, applicable, skip_reason, findings[]}}），只是端点不同。
+     *
+     * <p>另开一个方法而不是给上面那个加参数：路径里带 {@code wastage} 字样，把毛利
+     * 规则打到那个路径下，下一个人读日志会以为毛利问题出在损耗链上。
+     */
+    @SuppressWarnings("unchecked")
+    public Map<String, Object> getRestaurantMarginFindings(String factoryId, String rule) {
+        if (!config.isEnabled()) {
+            throw new IllegalStateException("Python SmartBI 服务未启用, 无法执行餐饮毛利发现");
+        }
+
+        final String trustedFactoryId;
+        try {
+            trustedFactoryId = requireFactoryId(factoryId);
+        } catch (IOException invalidFactory) {
+            throw new IllegalStateException(
+                    "factoryId 非法: " + invalidFactory.getMessage(), invalidFactory);
+        }
+
+        HttpUrl url = serviceBaseUrl.newBuilder()
+                .addPathSegments("api/smartbi/gold/restaurant-margin-findings")
+                .addQueryParameter("factory_id", trustedFactoryId)
+                .addQueryParameter("rule", rule)
+                .build();
+
+        Request httpRequest = new Request.Builder()
+                .url(url)
+                .header("X-Factory-Id", trustedFactoryId)
+                .get()
+                .build();
+        log.info("调用 Python 餐饮毛利发现: factoryId={}, rule={}", trustedFactoryId, rule);
+
+        try {
+            Map<String, Object> body = executeWithRetry(httpRequest, Map.class);
+            if (body == null) {
+                throw new IllegalStateException("餐饮毛利发现返回空响应: rule=" + rule);
+            }
+            return body;
+        } catch (IOException e) {
+            throw new IllegalStateException(
+                    "餐饮毛利发现调用失败: rule=" + rule + ", " + e.getMessage(), e);
+        }
+    }
+
+    /**
      * 通用 GET-style analysis 端点调用 (T6.6 Phase B Sub-A / Sub-B 共享).
      *
      * Mirrors the existing POST-based {@link #callAnalysisEndpoint} shape but
