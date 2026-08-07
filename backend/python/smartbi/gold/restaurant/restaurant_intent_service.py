@@ -143,6 +143,27 @@ def _prepend_action_warning(answer_text: str, warning: Optional[str]) -> str:
     return f"**{warning}**\n\n{answer_text}"
 
 
+def _llm_capacity_available() -> bool:
+    """LLM 链路现在还有没有一档能用。
+
+    ⛔ **fail-open**：判不了（router 变了 / import 失败 / 抛异常）时返回 True。
+       判据是「不要因为一个探测器坏了就把整个 AI 关掉」—— 关闭是重手段，只能在
+       **确知**链路不可用时才用。真的不可用时，下游 router 自己会抛 exhausted，
+       那条路仍然是安全的，只是没有这条早退那么干净。
+
+    ⚠️ 用 `slot_has_usable_provider` 的**只读**语义：预检每次问答都跑，
+       不能顺手消耗掉熔断器的「再探一次」额度。
+    """
+    try:
+        from common.llm_router import SLOT, slot_has_usable_provider
+
+        # REVIEW 是餐饮 T3 用的档位（`_t3_llm_parse` 走它）。它没了 = 意图识别没了。
+        return slot_has_usable_provider(SLOT.REVIEW)
+    except Exception:  # noqa: BLE001
+        logger.warning("[restaurant-intent] LLM 可用性预检失败, fail-open 放行", exc_info=True)
+        return True
+
+
 def _time_range_disclosure(spec: Any) -> str:
     """时间窗取了默认值就必须说出来 —— 与门店范围同一条判据。
 
@@ -968,6 +989,39 @@ async def tiered_answer(
     behavior -- ``"java_entry_delegate"`` when ``java_tool_name`` is set, else
     no tag.
     """
+    # ── 额度耗尽 → 整体封闭，任何层都不产出答案 ───────────────────────────
+    #
+    # 🔴 Steve 2026-08-07 拍板：「如果 LLM 的额度没有了，那整个 AI 的，不管是
+    #    第一层还是第二层，全部封闭掉」。
+    #
+    # 🔑 为什么必须在**最前面**：确定性层（晋升表回放 / 已知缺口 / 域外拒答）压根
+    #    不调 LLM —— 链已经死透时它们照样能产出答案。而**部分可用比完全不可用
+    #    更危险**：用户无法判断此刻这个答案为什么这么简单、可不可信。
+    #    2026-08-07 实测过一次真实全线熔断，当时确定性路径仍在 43ms 内作答，
+    #    我曾把它当成优点写进验收 —— 那是**反的**。
+    #
+    # ⛔ 缺口前置与域外拒答也一并关（计划文档 §4）：它们是纯事实、零风险，但用户
+    #    分不清「这条是可信的事实」和「那条是因为 AI 挂了才这么答」。
+    if not _llm_capacity_available():
+        logger.warning(
+            "[restaurant-intent] LLM 额度/链路不可用 -> 整体封闭 AI 入口: q=%r",
+            (query or "")[:40],
+        )
+        return {
+            "kind": "unavailable",
+            "answer_text": (
+                "**AI 助手当前不可用**：模型额度或链路暂时用尽，我不会用降级方式"
+                "回答，以免给出一个你无法判断可信度的结果。请稍后再试；"
+                "经营数据本身不受影响，可以直接看驾驶舱和各业务页面。"
+            ),
+            "charts": [],
+            "kpis": [],
+            "title": "AI 暂不可用",
+            "code": "RESTAURANT_AI_UNAVAILABLE",
+            "contract_pass": False,
+            "spec": None,
+        }
+
     capture_source = capture_source or (
         "java_entry_delegate" if java_tool_name else None
     )

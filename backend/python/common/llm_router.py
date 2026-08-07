@@ -391,6 +391,51 @@ def _cb_should_skip(provider: str) -> bool:
         return False
 
 
+def _cb_is_open_readonly(provider: str) -> bool:
+    """`_cb_should_skip` 的**只读**版本：判断但不重置计数器。
+
+    ⚠️ 为什么不能直接用 `_cb_should_skip`：它在冷却期满时会把失败计数清零，
+    等于**消耗掉「再探一次」的额度**。可用性预检每次问答都要跑一遍，用带副作用的
+    函数会让真正的调用失去那次重试机会 —— 预检本身不该改变系统行为。
+    """
+    with _CB_LOCK:
+        fails = _CB_FAILURES.get(provider, 0)
+        if fails < CB_THRESHOLD:
+            return False
+        return (time.time() - _CB_LAST_FAIL.get(provider, 0.0)) < CB_COOLDOWN
+
+
+def slot_has_usable_provider(slot: "SLOT") -> bool:
+    """该 slot 的降级链上还有没有一档现在能用。**只读，不改任何状态。**
+
+    🔴 存在的理由（Steve 2026-08-07 拍板）：配额耗尽时要**整体封闭 AI 入口**，
+    不许降级到非 LLM 能力。而确定性层（晋升表 / 缺口判定 / 域外拒答）压根不调
+    LLM，它们会在链已经死透时照样产出答案 —— **部分可用比完全不可用更危险**，
+    因为用户无法判断此刻这个答案的可信度。所以必须在**入口处**事前判定。
+
+    ⛔ 判据只读现有状态（allowlist / 过期 / 熔断 / 有没有 key），不新增任何
+    「猜它还行不行」的逻辑 —— 那会变成第二处可用性定义。
+    """
+    today = _today()
+    configured = 0
+    for account, model in SLOT_MODELS.get(slot, ()):
+        _base_url, api_key = _provider_config(account)
+        if not api_key:
+            continue
+        configured += 1
+        if _refuse_reason(account, model, today) is not None:
+            continue
+        if _cb_is_open_readonly(f"{account}/{model}"):
+            continue
+        return True
+    # ⛔ 一个 key 都没配 = **配置问题**, 不是运行期额度耗尽 —— 这道闸不判它。
+    #    第一版把两者混为一谈: 测试环境本来就不配 key(LLM 在更上层被 mock),
+    #    结果整套餐饮问答被封闭, **全仓新增 54 个失败**。
+    #    判据: 这道闸的职责是「链路跑着跑着用完了」, 不是「有没有装好」。
+    #    真的漏配 key 时, router 在被调用时照旧抛 exhausted, 那条路仍然安全。
+    return configured == 0
+
+
 def _cb_record_failure(provider: str) -> None:
     """Increment failure counter and stamp the failure time."""
     with _CB_LOCK:
