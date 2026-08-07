@@ -71,6 +71,16 @@ public class PurchaseOrderItem extends BaseEntity {
     private BigDecimal quantityToPriceFactor = BigDecimal.ONE;
 
     /** Supplier/material purchase-package identity selected at order time. */
+    /**
+     * 行级合同号(客户纸质合同, 如 SAN-16572)。
+     *
+     * 单头也有一个 contract_number(框架合同号), 但客户实际单据是**同一张采购单两行、
+     * 两个不同合同号**(PO-20260806-0001 的两行分别是 SAN-16572 / SAN-16562),
+     * 单头放不下。为空时由收货侧回落到单头。
+     */
+    @Column(name = "contract_number", length = 64)
+    private String contractNumber;
+
     @Column(name = "supplier_material_id", length = 64)
     private String supplierMaterialId;
 

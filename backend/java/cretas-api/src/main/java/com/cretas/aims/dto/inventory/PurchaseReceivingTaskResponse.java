@@ -69,6 +69,11 @@ public class PurchaseReceivingTaskResponse {
         private BigDecimal remainingReceivableQuantity;
         private String unit;
         private String specification;
+        /**
+         * 行级合同号。下单时填了就带到收货界面预填, 仓管不用照着纸质合同重敲。
+         * 行级为空时回落到单头 contract_number(框架合同号)。
+         */
+        private String contractNumber;
         private String materialPackagingSpecId;
         private String inventoryBaseUnit;
         private BigDecimal packageToBaseFactor;

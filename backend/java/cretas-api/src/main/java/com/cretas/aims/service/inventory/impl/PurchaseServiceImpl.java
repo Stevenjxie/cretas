@@ -366,6 +366,7 @@ public class PurchaseServiceImpl implements PurchaseService {
             item.setRemark(itemDTO.getRemark());
             item.setSpecification(itemDTO.getSpecification());
             item.setBoxQuantity(itemDTO.getBoxQuantity());
+            item.setContractNumber(blankToNull(itemDTO.getContractNumber()));
             items.add(item);
 
             BigDecimal lineAmount = item.getLineAmount();
@@ -1354,6 +1355,7 @@ public class PurchaseServiceImpl implements PurchaseService {
             applySupplierPurchaseContract(factoryId, order.getSupplierId(), item, itemDTO);
             applyPurchaseTaxContract(item, itemDTO.getTaxRate());
             item.setRemark(itemDTO.getRemark());
+            item.setContractNumber(blankToNull(itemDTO.getContractNumber()));
             items.add(item);
 
             BigDecimal lineAmount = item.getLineAmount();
@@ -1575,6 +1577,9 @@ public class PurchaseServiceImpl implements PurchaseService {
                     .remainingReceivableQuantity(remaining)
                     .unit(item.getUnit())
                     .specification(item.getSpecification())
+                    // 行级为空回落到单头框架合同号 —— 两处都空才是真的没有
+                    .contractNumber(item.getContractNumber() != null
+                            ? item.getContractNumber() : order.getContractNumber())
                     .materialPackagingSpecId(item.getMaterialPackagingSpecId())
                     .inventoryBaseUnit(item.getInventoryBaseUnitSnapshot())
                     .packageToBaseFactor(item.getPackageToBaseFactorSnapshot())
@@ -3496,6 +3501,13 @@ public class PurchaseServiceImpl implements PurchaseService {
         BigDecimal factor = conversionFactor(factoryId, material.getId(), item.getUnit(), base);
         item.setPackageToBaseFactorSnapshot(factor);
         item.setInventoryQuantitySnapshot(item.getQuantity().multiply(factor));
+    }
+
+    /** 空串与全空白一律存 NULL —— 行级合同号为空要能回落到单头, 存 "" 会让回落判断失效。 */
+    private static String blankToNull(String value) {
+        if (value == null) return null;
+        String trimmed = value.trim();
+        return trimmed.isEmpty() ? null : trimmed;
     }
 
     private void applyPurchaseTaxContract(PurchaseOrderItem item, BigDecimal explicitTaxRate) {

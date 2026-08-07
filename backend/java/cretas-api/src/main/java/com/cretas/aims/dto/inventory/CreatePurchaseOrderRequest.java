@@ -119,6 +119,9 @@ public class CreatePurchaseOrderRequest {
         @Size(max = 500, message = "规格长度不能超过500个字符")
         private String specification;
 
+        /** 行级合同号(如 SAN-16572); 为空时回落到单头 contractNumber */
+        private String contractNumber;
+
         private BigDecimal boxQuantity;
     }
 }
