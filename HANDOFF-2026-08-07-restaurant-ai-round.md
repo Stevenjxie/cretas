@@ -1275,3 +1275,34 @@ router 的多供应商链（aliyun_c → b → a → tencent/zhipu）塌成一�
   reviewed-exact 各有自己的契约）。收窄成「可信 T3 且 T3 自己没发起澄清」后归零。
 - 改动的 6 个既有测试**没有删断言**：2 个把不变量挪到闸仍会触发的路径上继续断言，
   4 个改成新契约并写明理由。
+
+### 🔴 唯一稳定的那条 D（`折扣力度多大`）不是缺数据 —— 我差点登记成假缺口
+
+上一节我写「无折扣数据，应登记进 `data_gaps` 归到 B」。**错的。动手前查了表：**
+
+```
+information_schema: agg_discount / dim_discount / fact_pos_discount
+                    fact_pos_transaction.has_discount / .discount_amount
+                    fact_zone_sales.amount_before_discount / .amount_after_discount
+
+MOCK_REST 实测:
+  agg_discount        = 0 行
+  fact_pos_discount   = 0 行
+  has_discount 为真   = 0 单
+  sum(discount_amount)= ¥3,692,026   ← ！
+```
+
+**标记说一单折扣都没有，金额列说折了 369 万。两个口径正面打架。**
+
+🔑 判据（本轮反复出现的那条的反向）：**「数据没有」也必须查表查出来。**
+只凭「问了答不上来」就登记成 `data_gaps`，会让系统对着**存在的数据**说「我没有」——
+那是最糟的一种假诚实，比反问更有害（用户会据此以为不用看折扣）。
+
+⛔ 所以这条既不该按 A 硬给一个数（在两个打架的口径里挑一个 = 硬凑），
+也不该按 B 说没数据。它属于**第三态「判不了」** —— 系统已经有这个态
+（`skippedRules`，见 G4），正确做法是给一句：
+> 折扣金额合计 ¥3,692,026，但标记为折扣单的订单数是 0 —— 两个口径不一致，
+> 在核对清楚之前我不给折扣率。
+
+**未实施**（需要一个新 resolver + 决定以哪个口径为准，属于产品口径问题不是纯技术问题）。
+这也是本轮最后一条未收口的 D。
