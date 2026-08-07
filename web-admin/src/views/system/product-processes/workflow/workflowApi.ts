@@ -19,7 +19,9 @@ const workflowPublishConfig = {
     ...workflowConflictConfig._handledErrorCodes,
     'WORKFLOW_ACTIVE_BOM_REVISION_MISMATCH',
     'WORKFLOW_ACTIVE_BOM_FAMILY_INCOMPLETE',
-    'WORKFLOW_ACTIVE_BOM_REQUIRED',
+    // 2026-08-07 阶段 3-3: 'WORKFLOW_ACTIVE_BOM_REQUIRED' 已删 —— 后端不再产出它
+    // (没有生效 BOM 时改为从画布定义投影出一份, 见 BomRecipeServiceImpl#projectActiveBomFromRevision)。
+    // 留着这个死条目会让下一个人以为它还是个可能的失败态。
     'BOM_WORKFLOW_UPGRADE_SLOT_AMBIGUOUS',
     'BOM_WORKFLOW_UPGRADE_MATERIAL_AMBIGUOUS',
     'BOM_WORKFLOW_INPUT_ITEM_MISSING',
