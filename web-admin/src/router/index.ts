@@ -1829,7 +1829,14 @@ const businessRoutes: RouteRecordRaw[] = [
             path: 'commission',
             name: 'RestaurantCommission',
             component: () => import('@/views/restaurant/commission/rep-summary.vue'),
-            meta: { requiresAuth: true, title: '营销员提成', module: 'restaurant' }
+            // 🔴 2026-08-07: module 原为 'restaurant'(**板块准入**, 不是部门)。
+            // 这正是它一直没进菜单的原因 —— 两条既有契约在它身上打架:
+            //   · restaurantMenuRouteAlignment: 每个餐饮功能页必须挂五部门之一
+            //   · 同一 spec: 菜单项 module 必须 == 路由 meta.module
+            // 用 'restaurant' 时两条不可能同时满足, 于是它既进不了菜单, 也没人
+            // 链接过去 —— 有路由、有组件、用户到不了。
+            // 营销员提成属**市场**部门, 两侧一起归位, 两条契约同时成立。
+            meta: { requiresAuth: true, title: '营销员提成', module: 'restaurantMarketing' }
           },
           {
             // IA v2 (2026-06-02): 旧运营总览 (Excel 浏览器) 不再渲染; 餐饮经营总览复用

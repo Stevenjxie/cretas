@@ -369,6 +369,15 @@ const rawMenuConfig: MenuItem[] = [
       { path: '/restaurant/analytics/dishes', title: '菜品分析', icon: '', module: 'restaurantMarketing' },
       { path: '/restaurant/analytics/stores', title: '门店对比', icon: '', module: 'restaurantMarketing' },
       { path: '/restaurant/analytics/platform', title: '平台分析', icon: 'ChatDotRound', module: 'restaurantMarketing' },
+      // 🔴 2026-08-07: 这一项此前**有路由、有组件、但没有菜单入口, 也没有任何
+      // 其它页面链接过去** —— 用户到不了。与 `/dashboard/ai-value` 同一类缺陷,
+      // 是可达性扫描扫出来的第二个。
+      // ⚠️ 我第一版写的是 module: 'restaurant'(跟随路由 meta 的板块准入),
+      // 被 `restaurantMenuRouteAlignment.spec.ts` 当场判红 —— 那条契约要求
+      // **每个餐饮功能页都挂在五个部门之一**。营销员提成属市场。
+      // 菜单可见性(restaurantMarketing)比守卫放行(restaurant)窄是可以的:
+      // 部门隔离本来就只做 UI 级防误点, 菜单是入口不是闸。
+      { path: '/restaurant/commission', title: '营销员提成', icon: '', module: 'restaurantMarketing' },
 
       // ── 财务 ────────────────────────────────────────────────────
       // 三项都是金额口径, 而 restaurantFinance 的准入本身就要求 PRICE_VIEW_ROLES,
