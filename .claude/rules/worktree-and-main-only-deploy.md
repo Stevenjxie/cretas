@@ -1,6 +1,6 @@
 # Worktree 隔离 + 只从 main 部署 prod (HARD RULE)
 
-**最后更新**: 2026-05-30
+**最后更新**: 2026-08-07
 **触发事故**: 2026-05-30 青花椒 RBAC 修复在 prod 被并发 session 的 Java 部署覆盖, 总营收回归 ¥0。
 
 ---
@@ -97,6 +97,78 @@ git checkout main && git pull origin main
 
 ---
 
+## 🔌 GitHub 不可用时(账号停用 / 平台故障): 本地 main 是唯一汇合点
+
+**2026-08-07 实证**: GitHub 账号被停用, push/fetch/gh 全线 403, `origin/main` 冻结在
+`b1a9c2b465`。当天有 2 条并行 session 各自攒了改动。
+
+⛔ **此时最危险的做法是「各自从自己的分支部署」** —— 那正是 5-30 事故的形态(部署上传到
+**固定共享路径**, last-write-wins), 而且没有 GitHub 就连事后对账都没有。铁律 3 的**意图**
+(prod = 一个所有人都汇合过的点)在离线期间照样成立, 只是载体从 `origin/main` 换成**本地 `main`**。
+
+### 为什么本地 merge 根本不需要网络
+
+**同一个仓的所有 worktree 共享同一个 `.git` 对象库和 refs**。别的 session 建的分支立刻可见、
+可 merge、可 diff:
+
+```bash
+git log origin/main..codex/other-session-branch   # 从任何 worktree 都能看
+git merge --no-ff codex/other-session-branch      # 直接合, 零网络
+```
+
+`origin/main` 只是个**本地缓存的 ref**, GitHub 断了它不会消失, 只是不再前进。
+
+### 协议
+
+1. **汇合点固定用本地 `main`** —— 不要新造一个整合分支。多一个汇合点 = 问题翻倍。
+2. **只有占着 `main` 的那个 worktree 能往 main 上合**(git 不允许两个 worktree 检出同一分支)。
+   这是好事: 天然把合并串行化了。
+   ⚠️ **动它之前必须先 `git status --porcelain` 确认那个 worktree 干净** —— 它是别人的活工作区。
+3. **部署从 detached worktree**, 绕开「分支被占用」:
+   ```bash
+   git worktree add --detach ../cretas-deploy-offline $(git rev-parse main)
+   cd ../cretas-deploy-offline
+   SKIP_GIT_CHECK=1 ./scripts/deploy/deploy-web-admin.sh --env prod --confirm-prod YES-PROD
+   SKIP_GIT_CHECK=1 ./scripts/deploy/deploy-backend.sh  --env prod
+   ```
+4. **合并后、部署前**必须跑一次迁移撞号闸 —— **git 对 Flyway 撞号一个字都不报**(文件名不同),
+   要到启动才炸:
+   ```bash
+   mvn -o test -Dtest='FlywayVersionUniquenessTest,*RepositoryQueryValidationTest'
+   ```
+
+### 🔴 「部署入口全被闸挡住了」是个不完整的结论
+
+2026-08-07 有 session 判定「四个部署入口全都有 exact-main 闸 —— 连『换个入口』这个选项都
+不存在」, 于是**停下不部署了**。那是错的:
+
+- `check_git_sync` 的 `git fetch origin main` 失败**只 WARN**(`|| log WARN "(offline?)"`),
+  然后拿**本地缓存的** `origin/main` ref 比对 —— 离线完全跑得动
+- 脚本自己在报错里写着逃生门: `SKIP_GIT_CHECK=1`
+- 它会把 `HEAD != origin/main` 的完整警告打出来再继续, 有痕迹可查
+
+⚠️ 逃生门只在**「已合进本地 main + 从 main 部署」**这个前提下用。拿它从自己的 feature 分支
+直接部署 prod, 就是把 5-30 事故重演一遍。
+
+### GitHub 恢复后的收尾(必须做, 否则漂移永久化)
+
+```bash
+# ✅ 各条 feature 分支分别 push → 开 PR → 走 CI → 正常合进 origin/main
+git push origin codex/claude-xxx && gh pr create ...
+# 全部合完之后再
+git checkout main && git reset --hard origin/main
+```
+
+⛔ **不要 `git push origin main`** —— 那会把十几个 commit 绕过 CI 和 review 一次性推上去,
+而且离线期间攒的通常含 backend 代码(按「合入通道双轨」必须走 PR)。
+
+### 离线期间的账要写下来
+
+prod 上跑的东西在 GitHub 上查不到, 所以**每次离线部署都要记**: 部署了哪个本地 commit、
+含哪些分支、DB 侧跑了哪些迁移。写进当天的 handoff, 恢复后逐条核销。
+
+---
+
 ## 速查
 
 | 场景 | 做法 |
@@ -106,5 +178,6 @@ git checkout main && git pull origin main
 | 部署 prod | 先 `git checkout main && git pull`, 再 deploy(绝不从 feature 分支) |
 | 必须 prod 验 feature | 验完立即 merge main + 从 main 重部 + 核对运行 jar 含修复 |
 | 清理 | `git worktree remove ../cretas-X`(⛔ 不要 mklink /J 共享 node_modules, 见 concurrent-edit-safety Rule 7) |
+| **GitHub 不可用** | **合进本地 `main`(占着它的那个 worktree 里合, 先查它干不干净) → `git worktree add --detach $(git rev-parse main)` → `SKIP_GIT_CHECK=1` 部署 → 恢复后各 feature 分支走 PR, 本地 main `reset --hard origin/main`** |
 
 关联: `concurrent-edit-safety.md`(commit 范围保护)、`feedback_concurrent_deploy_r2_path_collision`(memory)、`server-operations` skill(部署脚本)。
