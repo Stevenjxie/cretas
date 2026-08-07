@@ -78,6 +78,11 @@ async def test_prod_data_yields_exactly_the_puzzle_dish(patched):
     assert facts["unitMargin"] == pytest.approx(78.57, abs=0.01)
     assert facts["unitMarginMedian"] == pytest.approx(27.51, abs=0.01)
     assert facts["qty"] == 143188
+    # 🔴 类型断言不是多余的: `round(x, 0)` 返回 float, 渲染成「卖 143188.0 份」——
+    # 首次上线后在 prod 落地页上肉眼看到的。`== 143188` 对 float 也成立, 所以
+    # 光比值钉不住它, 必须比类型。
+    assert isinstance(facts["qty"], int) and not isinstance(facts["qty"], bool)
+    assert isinstance(facts["qtyMedian"], int)
     assert facts["pricedDishCount"] == 10
     assert facts["coverageRevenueRatio"] == 100.0
 

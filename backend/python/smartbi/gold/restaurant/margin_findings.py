@@ -128,8 +128,11 @@ async def detect_puzzle_dishes(
             "facts": {
                 "unitMargin": round(unit_margin, 2),
                 "unitMarginMedian": round(um_median, 2),
-                "qty": round(d["qty"], 0),
-                "qtyMedian": round(qty_median, 0),
+                # ⚠️ 用 int 不用 round(x, 0): 后者返回 **float**, 渲染出来是
+                # 「卖 143188.0 份」—— 2026-08-07 首次上线后在 prod 落地页上
+                # 肉眼看到的。份数天然是整数, 类型就该是整数。
+                "qty": int(round(d["qty"])),
+                "qtyMedian": int(round(qty_median)),
                 "windowDays": data.get("windowDays") or days,
                 # 一起给出「有配方的菜有几道 / 占多少营收」, 让渲染层能把
                 # 「10 个菜里 3 个」和「全店结论」区分开(gross-margin 端点
