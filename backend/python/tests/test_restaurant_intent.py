@@ -3955,8 +3955,13 @@ def test_daypart_business_question_repairs_adjacent_sales_summary():
         "本月全部门店晚上生意怎么样",
     )
 
-    assert spec.intent == "RESTAURANT_OPS_STAFFING_ADVICE"
-    assert spec.planned_intents == ("RESTAURANT_OPS_STAFFING_ADVICE",)
+    # 2026-08-07: 改写目标从 STAFFING_ADVICE 换成 DAYPART_PERFORMANCE。
+    # 本条保护的性质**没变** —— 时段经营问句不许漂成「全店月度营收汇总」;
+    # 变的是它该落到哪个终点: STAFFING_ADVICE 会**正确地拒绝**历史时段问题
+    # (预测排班只做未来), 于是改写到那里等于改写到一个必然拒答的地方。
+    # 🔑 判据: 改写目标必须是**真能答这个问题**的 resolver, 不是看起来最像的那个。
+    assert spec.intent == "RESTAURANT_OPS_DAYPART_PERFORMANCE"
+    assert spec.planned_intents == ("RESTAURANT_OPS_DAYPART_PERFORMANCE",)
     assert spec.requested_metrics == ()
     assert spec.analysis_action == "lookup"
     assert spec.planner_authority == "llm_contract_repair"
