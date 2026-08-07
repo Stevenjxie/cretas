@@ -110,9 +110,17 @@ async def honest_gap_answer(
     return {
         "subject": gap.subject,
         "table": gap.table,
+        # ⛔ 客户文案里**不放表名**。第一版放了 `agg_supplier_price`, prod 上渲染成
+        #    「缺的是：``（本店 0 行）」—— `customer_text._INTERNAL_IDENTIFIER` 会抹掉
+        #    内部标识符, 那是**刻意的**闸, 客户不该看到表名, 对店长它也毫无意义。
+        #
+        #    goal 要求 B 类「必须点名缺哪张表哪个字段」, 本意是**别说含糊的「暂无
+        #    数据」**。所以拆成两侧: 用户看到的是**业务上那件事**(供应商报价)与
+        #    具体行动; 表名进 `meta.missing_table` 给工程侧/交接看。两边都拿到了
+        #    自己需要的精确度。
         "answer_text": (
             f"**{gap.subject}目前还没有数据**，所以这个问题现在算不出来。\n\n"
-            f"- 缺的是：`{gap.table}`（本店 0 行）\n"
+            f"- 现状：本店一条{gap.subject}记录都没有\n"
             f"- 怎么才能有：{gap.what_to_do}\n\n"
             "在那之前我不会用别的口径凑一个数给您。"
         ),
