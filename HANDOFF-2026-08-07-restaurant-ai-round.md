@@ -662,6 +662,26 @@ Tool 侧**仍固定 inventory** —— 它的 name/description 都写着「库�
 
 ---
 
+## 🎯 剩余 3 条 D：性质已全部确定，下一轮直接照做
+
+**两条是缺 resolver（数据都在，实测有量），一条是 planner 标错维度。没有一条是路由问题。**
+
+| 问句 | 性质 | 数据实测 | 下一轮要做的 |
+|---|---|---|---|
+| `哪个时段生意最好` | **缺 resolver** | 按 POS 时间戳现切：晚市 109,772 单/¥41,319,090 · 午市 72,716/¥27,319,788 · 下午茶 18,194/¥6,853,738 | `resolve_daypart_performance`。⚠️ 聚合表 `agg_daily_order_type_meal.meal_period` **全是「未分类」**，要么现算要么先修 ETL |
+| `折扣力度多大` | **缺 resolver**（无折扣意图、无 resolver） | 近 30 天 **76,768 / 201,926 单（38%）有折扣**，`fact_pos_transaction.discount_amount` 有值 | 新增折扣意图 + resolver。⚠️ `fact_pos_discount` / `dim_discount` 都是 **0 行**，只能用 transaction 上的金额，别去 join 那两张 |
+| `食材成本占营收多少` | **planner 标错维度** | — | T3 给了 `dimensions=('ingredient',)`，但这是**全店比率**不是食材粒度。`RECIPE_COST` 声明 `{dish}` 是对的，**不该放宽能力表** |
+
+⛔ **前两条别再写一份时段/折扣切分 SQL**：时段那段 `CASE WHEN EXTRACT(HOUR ...)`
+已经在 `staffing_forecast.py` 里；先抽共用片段再用（与本轮 `dish_margin.py` 同一做法），
+否则时段边界会长成两处定义。
+
+🔑 **判据（本轮反复验证）：`_RESOLVER_DIMENSIONS` 是能力声明，不是开关。**
+resolver 不支持却放宽它，等于用错粒度回答，比反问更糟。这三条要修的都是
+**终点（resolver）或 planner**，不是那张表。
+
+---
+
 ## 📋 六块可达性表（2026-08-07 prod 实测，`mock_ops` / 活跃槽 10010）
 
 | 块 | 后端出口 | 前端入口 | prod 实测 | 状态 |
