@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
 /**
@@ -31,7 +31,6 @@ function codeOnly(source: string): string {
 const read = (file: string) => codeOnly(readFileSync(resolve(__dirname, '..', file), 'utf-8'));
 
 const DIALOG = read('SeasoningBindingDialog.vue');
-const AI_IMPORT = read('AuxiliaryAiImportDialog.vue');
 
 describe('辅料价格判据读的键必须与后端响应一致', () => {
   it('调料绑定弹窗读 materialReferencePrice', () => {
@@ -44,12 +43,13 @@ describe('辅料价格判据读的键必须与后端响应一致', () => {
     expect(DIALOG).not.toMatch(/\bunitPrice\?:/);
   });
 
-  it('AI 批量导入同样读 materialReferencePrice', () => {
-    expect(AI_IMPORT).toMatch(/materialReferencePrice/);
-  });
-
-  it('AI 批量导入不再读旧键', () => {
-    expect(AI_IMPORT).not.toMatch(/\.unitPrice\b/);
+  it('AI 批量导入弹窗已随旧 BOM 页一起删除', () => {
+    // 2026-08-07 阶段 5: AuxiliaryAiImportDialog 只被已删的 BomAuxiliaryWorkspace 用,
+    // 画布侧零引用, 跟着旧 BOM 页一起删了。原来那两条断言钉的是它读的价格键 ——
+    // 文件不在了, 断言就没有载体。这里改成钉「它确实不在」, 以免有人把它复活回来
+    // 却不知道要一起把价格键钉回去。若将来画布要做辅料 AI 批量导入, 新弹窗必须
+    // 在本文件里补回「读 materialReferencePrice / 不读 unitPrice」两条。
+    expect(existsSync(resolve(__dirname, '..', 'AuxiliaryAiImportDialog.vue'))).toBe(false);
   });
 
   it('重新读取价格的重取路径也用同一个键', () => {

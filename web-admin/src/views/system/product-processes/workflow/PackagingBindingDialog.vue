@@ -7,11 +7,11 @@ import { canonicalUnitCode, displayUnit } from '@/utils/unitPricing';
 /**
  * 画布上的包材编辑弹窗 —— Task 1 (2026-08-05 bom-canvas-phase3-2)。
  *
- * 复用 `web-admin/src/views/production/bom/index.vue` 包材新增/编辑路径已在用的
- * `bomRecipeApi.addItem` / `bomRecipeApi.updateItem`(见 task-1-report.md Step 1 表),
- * 不新增任何 API 函数/端点。
+ * 走 `bomRecipeApi.addItem` / `bomRecipeApi.updateItem`(见 task-1-report.md Step 1 表),
+ * 不新增任何 API 函数/端点。这两个函数原本是旧 BOM 页(`views/production/bom/index.vue`)
+ * 的包材新增/编辑路径在用的; 该页 2026-08-07 阶段 5 已删, 本组件成为唯一调用方。
  *
- * ⚠️ Phase 1 事故教训(见 index.vue :1252-1291 及其注释): 那个页面的表单字段叫
+ * ⚠️ Phase 1 事故教训(来自那个已删页面的 :1252-1291): 它的表单字段叫
  * `naturalQuantity`,但落库/编辑回填走的是 `standardQuantity` —— `naturalQuantity`
  * 只是发给后端的包装层级兼容字段,从未被任何回填路径读取。本组件不复用这个容易
  * 混淆的表单字段名,内部状态叫 `form.quantity`;编辑回填只读 `row.standardQuantity`,

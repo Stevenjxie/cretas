@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
@@ -81,20 +81,23 @@ describe('画布 BOM 抽屉已下线(真删除, 不是开关)', () => {
     expect(fn).toMatch(/packagingDialogVisible\.value = true/);
   });
 
-  // ⏳ 阶段 5 会删掉这些页面(见 docs/superpowers/specs/2026-08-07-canvas-is-bom-design.md)。
-  //    在那之前它们仍在仓库里, 这条断言到时候要跟着翻转, 不是删掉。
-  it('阶段 5 之前: BOM 页组件仍留在仓库里(入口已关, 机器未删)', () => {
-    const bomUnifiedSource = readFileSync(
-      resolve(__dirname, '../../../../production/bom-unified/index.vue'),
-      'utf-8',
-    );
-    expect(bomUnifiedSource).toContain('BomContent');
-    const bomIndexSource = readFileSync(
-      resolve(__dirname, '../../../../production/bom/index.vue'),
-      'utf-8',
-    );
-    // #1236 系列防呆: BOM 页要能从 ?productTypeId= 直接定位到画布传来的产品,
-    // 这是 goToBomManagement 跳转能落到正确产品的前提 —— 不是本任务改的, 但必须仍然成立。
-    expect(bomIndexSource).toContain('route.query.productTypeId');
+  /**
+   * 2026-08-07 阶段 5 已执行(见 docs/superpowers/specs/2026-08-07-canvas-is-bom-design.md):
+   * 上面那条原本断言「页面仍在仓库里」, 现在翻转成断言它们真的没了。
+   *
+   * 原断言里那条 `route.query.productTypeId` 防呆(#1236 系列)不能就这么消失 ——
+   * 它保的是「从画布跳过去要落到**同一个产品**上」。方案 B 之后不再有跳转,
+   * 因为配置就在画布自己身上; 这条防呆的继承者是「画布自己认得 route 上的产品」,
+   * 由 WorkflowPublishIntegration.source.spec.ts 的 workflow-product-loading 一族守。
+   * 这里只钉住页面确实删干净了。
+   */
+  it('阶段 5: BOM 页组件已从仓库删除', () => {
+    for (const rel of [
+      '../../../../production/bom/index.vue',
+      '../../../../production/bom/tree.vue',
+      '../../../../production/bom-unified/index.vue',
+    ]) {
+      expect(existsSync(resolve(__dirname, rel)), `${rel} 应已删除`).toBe(false);
+    }
   });
 });

@@ -744,7 +744,7 @@ import {
   pickOwningProductId,
 } from './bomEditableRecipe';
 import type { DraftBomNotice } from './bomEditableRecipe';
-import { createBomDraftEnsurer } from '@/views/production/bom/bomDraftLifecycle';
+import { createBomDraftEnsurer } from './bom/bomDraftLifecycle';
 import { markersForAuxiliaryRow, markersForPackagingRow } from './bomOverlayMarkers';
 import type { AuxiliaryCellRow, ByproductCellRow, PackagingCellRow } from './bomOverlayTypes';
 import type { BomRowMarker } from './bomOverlayMarkers';
@@ -769,7 +769,7 @@ import {
   selectPackagingMaterials,
   type BomOverlayMaterialRow,
 } from './bomOverlayMaterialSources';
-import SeasoningBindingDialog, { type SeasoningMaterialOption } from '@/views/production/bom/seasoning/SeasoningBindingDialog.vue';
+import SeasoningBindingDialog, { type SeasoningMaterialOption } from './bom/SeasoningBindingDialog.vue';
 import PackagingBindingDialog, { type PackagingMaterialOption, type PackagingRowPayload } from './PackagingBindingDialog.vue';
 import {
   activateProductProcessWorkflow,

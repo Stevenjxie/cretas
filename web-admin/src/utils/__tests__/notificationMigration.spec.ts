@@ -6,7 +6,7 @@ const files = [
   '../../api/request.ts',
   '../../views/system/products/index.vue',
   '../../views/factory/material-requisitions/list.vue',
-  '../../views/production/bom/seasoning/SeasoningBindingDialog.vue',
+  '../../views/system/product-processes/workflow/bom/SeasoningBindingDialog.vue',
   '../../views/sales/orders/list.vue',
 ];
 

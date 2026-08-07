@@ -1,5 +1,5 @@
 import { bigCategoryOf } from '@/utils/materialCategory';
-import { bomTabAllowsMaterial } from '@/views/production/bom/bomCategoryTabs';
+import { bomTabAllowsMaterial } from './bom/bomCategoryTabs';
 
 /**
  * 画布 BOM 叠加层三个编辑弹窗(辅料 / 包材 / 副产)各自的「可选物料」来源。

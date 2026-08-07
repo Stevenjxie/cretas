@@ -382,8 +382,8 @@ function openOpeningEntry() {
 //
 // 客户反馈: 仓管/工厂主文化素质参差不齐, Excel 导出→填→再导入 对他们太难。加一个"添加一行"式
 // 的表格录入 —— 选物料 + 填数量(+单价可选), 逐条加。提交时不新建后端逻辑, 而是在浏览器内生成
-// 一份跟"导出模板"列结构完全一致的虚拟 Excel (复用 xlsx 库, 参考 production/bom/index.vue 的
-// 用法), 再喂给已经跑通的 doBulkPreview / doBulkConfirm（跟用户手填 Excel 上传走的是同一段
+// 一份跟"导出模板"列结构完全一致的虚拟 Excel (复用 xlsx 库; 写法当初参考的 production/bom/index.vue
+// 已于 2026-08-07 阶段 5 删除, 此处不依赖它)，再喂给已经跑通的 doBulkPreview / doBulkConfirm（跟用户手填 Excel 上传走的是同一段
 // 后端代码：建壳 create-if-missing → initiate 快照 → apply 盘盈 → 借1403/贷4001 凭证）。
 // 这样零后端改动、零新流程分叉 —— 只是把"怎么产生这份 Excel"从"用户自己在 Excel 里操作"
 // 换成"页面表格帮用户生成"。

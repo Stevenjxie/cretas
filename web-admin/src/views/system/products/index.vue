@@ -1134,9 +1134,10 @@ async function handleSubmit() {
         // fire-and-forget：推荐请求不阻塞 UI，LLM 冷启动 2-5s 会在后台进行，弹框异步出现
         offerWorkProcessRecommendation(response.data);
         // 🔴 防呆 (production/warehouse walk #1): 新建成品后主动引导去配 BOM ——
-        // BOM 页主产品下拉现已改远程搜索 + 支持 ?productTypeId= 直达自动选中
-        // (见 production/bom/index.vue selectProductFromRoute)，点击通知直接跳过去，
-        // 不用在几百条产品里再搜一次刚建好的这条。
+        // 点击通知直接跳过去并自动选中刚建好的产品，不用在几百条里再搜一次。
+        // 2026-08-07 阶段 5: 落点从已删的 BOM 页换成画布 (/system/product-processes)。
+        // 画布入口页认的是同一个 ?productTypeId= (applyRouteProductSelection)，
+        // 所以「直达自动选中」这个防呆本身没变，只是换了页面。
         if (formData.productCategory === 'FINISHED_PRODUCT') {
           offerBomConfiguration(response.data);
         }
@@ -1155,13 +1156,13 @@ async function handleSubmit() {
 function offerBomConfiguration(product: ProductType) {
   showSingletonNotification({
     title: '配置 BOM',
-    message: `新产品「${product.name}」已创建，点击"去配置"设置原辅料配方`,
+    message: `新产品「${product.name}」已创建，点击"去配置"在工序画布上设置原辅料配方`,
     type: 'info',
     duration: 0,
     showClose: true,
     onClick: () => {
       router.push({
-        path: '/production/bom',
+        path: '/system/product-processes',
         query: { productTypeId: product.id },
       });
     },

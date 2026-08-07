@@ -3,7 +3,9 @@
  *
  * 客户张权反馈 (2026-07-02): 物料下拉太乱 (原料/辅料/调料/包材混在一起, 面酱/白醋/牛腩排/黄油…),
  * 加"先选大类再选物料"两级筛选。首次在 procurement/receives/list.vue 落地, 提取为共用工具供
- * production/bom/index.vue 等其它物料选择器复用 (single source of truth, 避免两套归类逻辑漂移)。
+ * 其它物料选择器复用 (single source of truth, 避免两套归类逻辑漂移)。
+ * (原文举的例子是 production/bom/index.vue, 该页 2026-08-07 阶段 5 已删,
+ *  同一套归类现在由画布的辅料 / 包材 cell 选择器复用。)
  *
  * category 字段是自由文本, 两套并存的取值来源 (2026-07-02 curl F006 真实数据确认):
  * 1. system_enums.MATERIAL_CATEGORY 字典 (V20260506_01 seed, 新建物料表单下拉用的规范值):
