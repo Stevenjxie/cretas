@@ -1,5 +1,5 @@
 -- =============================================================================
--- V20261029_64: 六膳门「1斤=1kg」假换算订正 —— 删掉假规格 + 单据单位标签归位
+-- V20261029_66: 六膳门「1斤=1kg」假换算订正 —— 删掉假规格 + 单据单位标签归位
 --
 -- 背景
 --   客户报「包装单位不能与库存基本单位相同」卡住保存, 并说明
@@ -38,11 +38,11 @@
 --   多一个条件都不满足就跳过。
 --
 -- 回滚
---   db/manual-rollback/V20261029_64__liushanmen_fake_jin_unit_correction_rollback.sql
---   (本迁移把改动前的值写进台账 migration_jin_unit_fix_20261029_64)
+--   db/manual-rollback/V20261029_66__liushanmen_fake_jin_unit_correction_rollback.sql
+--   (本迁移把改动前的值写进台账 migration_jin_unit_fix_20261029_66)
 -- =============================================================================
 
-CREATE TABLE IF NOT EXISTS migration_jin_unit_fix_20261029_64 (
+CREATE TABLE IF NOT EXISTS migration_jin_unit_fix_20261029_66 (
     id           bigserial PRIMARY KEY,
     entity       varchar(64)  NOT NULL,   -- packaging_spec / purchase_order_item / purchase_receive_item
     entity_id    varchar(64)  NOT NULL,
@@ -72,12 +72,12 @@ BEGIN
      LIMIT 1;
 
     IF v_material_id IS NULL THEN
-        RAISE NOTICE 'V20261029_64: 未找到「1斤=1kg」的假包装规格, 无需订正(可能已手工处理)';
+        RAISE NOTICE 'V20261029_66: 未找到「1斤=1kg」的假包装规格, 无需订正(可能已手工处理)';
         RETURN;
     END IF;
 
     -- ① 假包装规格 → 软删
-    INSERT INTO migration_jin_unit_fix_20261029_64 (entity, entity_id, field, old_value, new_value)
+    INSERT INTO migration_jin_unit_fix_20261029_66 (entity, entity_id, field, old_value, new_value)
     SELECT 'packaging_spec', s.id, 'deleted_at', NULL, 'now()'
       FROM material_packaging_specs s
      WHERE s.material_type_id = v_material_id
@@ -94,7 +94,7 @@ BEGIN
     GET DIAGNOSTICS v_spec = ROW_COUNT;
 
     -- ② 采购单行: 单位标签归位, 数量/单价不动
-    INSERT INTO migration_jin_unit_fix_20261029_64 (entity, entity_id, field, old_value, new_value)
+    INSERT INTO migration_jin_unit_fix_20261029_66 (entity, entity_id, field, old_value, new_value)
     SELECT 'purchase_order_item', poi.id::text, 'unit', poi.unit, 'kg'
       FROM purchase_order_items poi
       JOIN purchase_orders po ON po.id = poi.purchase_order_id
@@ -112,7 +112,7 @@ BEGIN
     GET DIAGNOSTICS v_poi = ROW_COUNT;
 
     -- ③ 收货行: 同上。⛔ 三个快照列一个都不碰(本来就是 kg 口径且正确)
-    INSERT INTO migration_jin_unit_fix_20261029_64 (entity, entity_id, field, old_value, new_value)
+    INSERT INTO migration_jin_unit_fix_20261029_66 (entity, entity_id, field, old_value, new_value)
     SELECT 'purchase_receive_item', pri.id::text, 'unit/price_unit',
            pri.unit || '/' || COALESCE(pri.price_unit, ''), 'kg/kg'
       FROM purchase_receive_items pri
@@ -137,6 +137,6 @@ BEGIN
        AND pri.package_to_base_factor_snapshot = 1;
     GET DIAGNOSTICS v_pri = ROW_COUNT;
 
-    RAISE NOTICE 'V20261029_64: 假包装规格软删 % 条 / 采购单行单位归位 % 条 / 收货行单位归位 % 条',
+    RAISE NOTICE 'V20261029_66: 假包装规格软删 % 条 / 采购单行单位归位 % 条 / 收货行单位归位 % 条',
                  v_spec, v_poi, v_pri;
 END $$;
