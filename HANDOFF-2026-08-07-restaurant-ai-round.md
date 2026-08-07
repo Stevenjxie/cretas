@@ -952,3 +952,48 @@ curl -s -X POST 'http://127.0.0.1:8083/api/smartbi/gold/restaurant/tiered-answer
 
 ⚠️ 打 Python 只带 `Authorization`，别同时带 `X-Internal-Secret`（后者不设 role，
 金额会被全员脱敏，看起来像「数据坏了」）。
+
+---
+
+## ⛔ ⑤⑥ 已完成但卡在 GitHub 账号停用（2026-08-07）
+
+**代码写完、测试全绿、本地 commit `8a16cf8989`，但推不上去也部不了。**
+
+```
+remote: Your account is suspended. Please visit https://support.github.com
+fatal: unable to access 'https://github.com/Stevenjxie/cretas.git/': 403
+HTTP 403: Sorry. Your account was suspended (https://api.github.com/graphql)
+```
+
+账号级停用（不是 token 失效：`git push` 与 GraphQL API 都被拒）。
+
+🔑 **为什么不绕过**：铁律是「任何通道都必须推上 origin/main 后才可部署」。从 feature
+分支直接部 prod 正是 2026-05-30 事故的成因（共享 jar 路径 last-write-wins，
+RBAC 修复被并发 session 覆盖，总营收回归 ¥0）。**账号恢复前，⑤⑥ 不部署。**
+
+### 账号恢复后的动作（按序）
+
+1. `cd ../cretas-rest-ai && git push -u origin codex/claude-finding-next-steps`
+2. 开 PR → 合并 main（碰 Java + web-admin，**必须走 PR 轨**，CI 的 JPA 闸挂在 PR 上）
+3. `git checkout main && git pull` → `./scripts/deploy/release-cretas.sh --phase deploy ...`
+   （Java + web-admin 两侧都要）
+4. **G5 实测**：以 `mock_ops` 打 `GET /api/mobile/MOCK_REST/findings`，确认响应含
+   `nextSteps` 且每条有 `target`/`module`；再开落地页确认按钮渲染并能跳转。
+   ⚠️ 判据是**日志里的真实调用记录**，不是「代码在那儿」。
+
+### ⑤⑥ 交付内容（已完成部分）
+
+| 项 | 状态 |
+|---|---|
+| `FindingNavigation`（code→落点唯一承载） | ✅ 新建 |
+| `FindingController` 透出 `nextSteps` | ✅ |
+| `RestaurantAgentActionProposalMapper.NAVIGATION_TARGET` 改为引用常量 | ✅ 消除第二份字面量 |
+| 前端两道守卫（`canAccess` + 路由可解析） | ✅ |
+| Java 闸 7 条（含变异验证：点名 `WASTAGE_SHARE_SPIKE` 红） | ✅ 74 passed |
+| Web 闸 6 条（含变异验证：点名不存在落点红） | ✅ 236 passed / 29 files |
+| `vue-tsc -b --force` | ✅ rc=0 / 0 error |
+| **prod 部署 + G5 实测** | ❌ **被账号停用阻断** |
+
+📌 **⑤ 的形状纠正（比代码更重要的一条）**：「对话改价改品」是错的描述。唯一的动作提案
+是 `READ_ONLY_PROPOSAL`，**从不写数据**，批准后给的是一个跳转目标。所以这块永远不需要
+新的写接口——需要的是让发现自己带上落点。
