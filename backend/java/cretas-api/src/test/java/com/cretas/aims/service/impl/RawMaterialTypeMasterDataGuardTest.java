@@ -59,6 +59,11 @@ class RawMaterialTypeMasterDataGuardTest {
     void setUp() {
         service = new RawMaterialTypeServiceImpl(repository, batchRepository, conversionRepository,
                 packagingRepository, segmentRepository, excelUtil, workflowUnitReviewService);
+        // 2026-08-07: createMaterialType 现在按「该工厂有没有配分段字典」分流。
+        // 本类用例断言的是**有字典**时的旧行为(生成16位码), 故显式翻成有字典。
+        org.mockito.Mockito.lenient()
+                .when(segmentRepository.countByFactoryIdAndLevel(any(), any()))
+                .thenReturn(3L);
         ReflectionTestUtils.setField(service, "unitContractService", unitContractService);
         org.mockito.Mockito.lenient().when(unitContractService.normalize(any(), any()))
                 .thenAnswer(invocation -> {

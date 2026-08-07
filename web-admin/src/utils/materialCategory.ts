@@ -21,6 +21,16 @@
  * 验收时被推翻: 那样副产 SKU 在 BOM「原料」页签里选不到, 而「副产以后能当原料被别的
  * workflow 投入」正是把副产放进原料字典的初衷。肥油的材质是原料, 来历是副产, 两件事。
  */
+/**
+ * `system_enums.MATERIAL_CATEGORY` 的规范取值 (V20260506_01 seed, 见上方注释第 1 条)。
+ *
+ * 用途: 给**没有配物料分段字典**的工厂当「类别」下拉选项 —— 有字典的工厂类别由分段字典
+ * L1 类族派生(materialFamilyOptions), 无字典的工厂就没有那个来源, 以前因此建不了物料。
+ * 2026-08-07 实测六膳门 115 个自由料号物料的 category 全落在这 5 个值里
+ * (调味料 65 / 包材 25 / 主材 19 / 添加剂 6), 与本枚举一致。
+ */
+export const MATERIAL_CATEGORY_ENUM_VALUES = ['主材', '辅材', '调味料', '包材', '添加剂'] as const;
+
 export type BigCategory = '原料' | '辅料' | '调料' | '包材' | '其他';
 
 export const BIG_CATEGORY_OPTIONS: { label: string; value: BigCategory | '' }[] = [

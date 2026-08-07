@@ -11,6 +11,8 @@ describe('material type family source contract', () => {
   it('uses material code L1 families as the only category option source', () => {
     expect(source).toContain('const materialFamilyOptions = computed');
     expect(source).toContain('segmentL1Options.value.map');
+    // 类别选项**不许**再去拉 enum 接口(那是被 L1 类族取代的旧来源);
+    // 无字典工厂的兜底走编译期常量, 不是运行期字典。
     expect(source).not.toContain('system-config/enums/MATERIAL_CATEGORY');
 
     const sharedOptionLoops = source.match(/v-for="opt in materialFamilyOptions"/g) ?? [];
@@ -30,7 +32,10 @@ describe('material type family source contract', () => {
   });
 
   it('requires a complete L1-L3 selection for new and legacy-code material types', () => {
-    expect(source).toContain('const showSegmentEditor = computed(() => !editingId.value || editingNeedsSegmentRepair.value)');
+    // 2026-08-07: 强制选 L1/L2/L3 只对**配了分段字典**的工厂成立 —— 字典空的工厂
+    // 一个分类都选不出来, 再强制就是把人堵死(见 hasSegmentDictionary 那组断言)。
+    expect(source).toContain('const showSegmentEditor = computed(() => hasSegmentDictionary.value');
+    expect(source).toContain('&& (!editingId.value || editingNeedsSegmentRepair.value));');
     expect(source).toContain("if (showSegmentEditor.value && (!segmentL1.value || !segmentL2.value || !segmentL3.value))");
     expect(source).toContain('物料分类与业务编码（必填）');
     expect(source).not.toContain('>16位编码级联（必填）<');
@@ -60,7 +65,7 @@ describe('material type family source contract', () => {
     expect(source).toContain('segmentCode: segmentL3.value');
     expect(source).toContain('businessCodePreview.value = res.data.businessCode');
     expect(source).toContain('历史兼容编码（16位）');
-    expect(source).toContain('if (!editingId.value && !(await generateSP8Code(true)))');
+    expect(source).toContain('if (!editingId.value && hasSegmentDictionary.value && !(await generateSP8Code(true)))');
     expect(source).toContain('不会按分类名称猜测或覆盖历史前缀');
   });
 
@@ -146,5 +151,24 @@ describe('material type family source contract', () => {
     // 前端自算的痕迹一个都不能留
     expect(source).not.toContain('nextL3Suffix');
     expect(source).not.toContain('padStart(4');
+  });
+
+  /**
+   * 🔴 2026-08-07 客户事故 (六膳门): 7-17 上线的「新建物料必须选 L1/L2/L3」把**没有配分段
+   * 字典**的工厂堵死了 —— 类别下拉由字典 L1 派生, 字典空则一个选项都没有, 而表单里也没有
+   * 任何输入框能填料号(code 全靠 generateSP8Code 生成)。客户于是被推离自己的 WL/YL/BC 料号,
+   * 长出 14 个 16 位分类码(`LegacyClassificationCode` —— 它在代码里的正式名字就是 legacy)。
+   *
+   * 这里锁的是**判据本身**: 有没有字典看已取回的 segmentTree, 不看租户名、不新增接口。
+   */
+  it('无分段字典的工厂改走「用户自填料号 + 平台类别枚举」, 判据不写租户名', () => {
+    expect(source).toContain('const hasSegmentDictionary = computed(() => segmentL1Options.value.length > 0)');
+    expect(source).toContain('MATERIAL_CATEGORY_ENUM_VALUES');
+    expect(source).toContain("from '@/utils/materialCategory'");
+    expect(source).toContain('v-else-if="!hasSegmentDictionary" label="料号" required');
+    expect(source).toContain('v-model="form.code"');
+    expect(source).toContain('请填写料号（本工厂未配置物料分段字典，料号由你自己维护）');
+    // ⛔ 判据只能来自数据形状 —— 写死租户 id 就等于给下一个同样没配字典的工厂留同一个坑
+    expect(source).not.toContain('LIUSHANMEN');
   });
 });

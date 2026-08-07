@@ -36,7 +36,7 @@ import { get, post, put, del } from '@/api/request';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { Plus, Edit, Delete as DeleteIcon, Search, Refresh, Lock, View } from '@element-plus/icons-vue';
 import { formatAmount } from '@/utils/tableFormatters';
-import { bigCategoryOf } from '@/utils/materialCategory';
+import { bigCategoryOf, MATERIAL_CATEGORY_ENUM_VALUES } from '@/utils/materialCategory';
 import { displayUnit, sameUnit } from '@/utils/unitPricing';
 import { handleCatchError } from '@/utils/errorToast';
 import ConceptDisambiguationAlert from '@/components/common/ConceptDisambiguationAlert.vue';
@@ -335,13 +335,34 @@ const segmentL1Options = computed(() =>
   segmentTree.value.filter((n) => n.level === 1 && n.isActive),
 );
 // 新建类别与列表大类共用此组选项，避免旧 MATERIAL_CATEGORY 枚举与编码类族漂移。
-const materialFamilyOptions = computed(() =>
-  segmentL1Options.value.map((node) => ({
+/**
+ * 该工厂有没有配「16位物料编码字典」。
+ *
+ * ⛔ 判据一直在后端(MaterialCodeSegmentService#hasSegmentDictionary), 但**前端从来没消费过**
+ * —— 于是新建物料对所有租户一律强制选 L1/L2/L3, 把没配字典的工厂直接堵死。
+ * 这里改成看已经取回来的 segmentTree, 不新增接口, 也不写任何租户名。
+ */
+const hasSegmentDictionary = computed(() => segmentL1Options.value.length > 0);
+
+/**
+ * 类别选项。有字典时沿用 L1 类族(与 16 位码口径一致);
+ * 无字典时回落到平台级 MATERIAL_CATEGORY 枚举(主材/辅材/调味料/包材/添加剂)
+ * —— 六膳门那 115 个自由码物料用的就是这一套。
+ */
+const materialFamilyOptions = computed(() => {
+  if (!hasSegmentDictionary.value) {
+    return MATERIAL_CATEGORY_ENUM_VALUES.map((label) => ({
+      value: label,
+      label,
+      segmentCode: '',
+    }));
+  }
+  return segmentL1Options.value.map((node) => ({
     value: node.segmentLabel,
     label: node.segmentLabel,
     segmentCode: node.segmentCode,
-  })),
-);
+  }));
+});
 const filterSegmentL2Options = computed(() => {
   if (!filterSegmentL1.value) return [];
   const l1Node = segmentTree.value.find((node) => node.segmentCode === filterSegmentL1.value);
@@ -995,7 +1016,9 @@ const submitting = ref(false);
 const editingNeedsSegmentRepair = computed(() =>
   Boolean(editingId.value) && !/^\d{16}$/.test(String(form.value.code || '')),
 );
-const showSegmentEditor = computed(() => !editingId.value || editingNeedsSegmentRepair.value);
+// 无字典的工厂没有分类可选 —— 再强制就是把人堵死(见 hasSegmentDictionary 注释)。
+const showSegmentEditor = computed(() => hasSegmentDictionary.value
+  && (!editingId.value || editingNeedsSegmentRepair.value));
 async function handleSave() {
   if (!form.value.name) return ElMessage.warning('请填写原料名称');
   if (!form.value.category) return ElMessage.warning('请选择类别');
@@ -1013,8 +1036,12 @@ async function handleSave() {
   if (showSegmentEditor.value && (!segmentL1.value || !segmentL2.value || !segmentL3.value)) {
     return ElMessage.error('每个原料类型都必须选择 L1大类、L2中类、L3小类后保存');
   }
-  if (!editingId.value && !(await generateSP8Code(true))) {
+  if (!editingId.value && hasSegmentDictionary.value && !(await generateSP8Code(true))) {
     return;
+  }
+  // 无字典: 料号是唯一编码来源, 前端先拦一道(后端 createMaterialType 也会 fail-closed 拦)
+  if (!editingId.value && !hasSegmentDictionary.value && !String(form.value.code || '').trim()) {
+    return ElMessage.warning('请填写料号（本工厂未配置物料分段字典，料号由你自己维护）');
   }
 
   // 每条包装规则都直接换算到唯一库存基本单位。
@@ -1445,6 +1472,19 @@ function handleSizeChange(size: number) {
           </div>
           <div v-else class="field-hint field-hint--legacy">
             该历史记录尚未分配业务编码，当前回退显示原16位编码。
+          </div>
+        </el-form-item>
+        <!--
+          ⛔ 2026-08-07: 没有分段字典的工厂以前**根本建不了物料** ——
+          新建时恒强制选 L1/L2/L3, 而类别下拉与 L3 都由分段字典派生, 字典空则无从选起;
+          后端 createMaterialType 第一行 requireValidSegmentChain 也是 fail-closed。
+          16 位分类码在产品里已是 legacy(getLegacyClassificationCode), 六膳门实际用的是
+          自己的料号(WL/YL/BC)。所以无字典时改成: 用户自己填料号, 类别走平台枚举。
+        -->
+        <el-form-item v-else-if="!hasSegmentDictionary" label="料号" required>
+          <el-input v-model="form.code" maxlength="32" placeholder="如 WL001 / YL052 / BC005" />
+          <div class="field-hint">
+            本工厂未配置物料分段字典，料号由你自己维护（沿用现有习惯即可）；同一工厂内不可重复。
           </div>
         </el-form-item>
         <el-form-item v-else label="业务编码">

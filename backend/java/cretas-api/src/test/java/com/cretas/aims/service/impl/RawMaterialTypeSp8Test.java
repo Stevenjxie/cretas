@@ -57,6 +57,12 @@ class RawMaterialTypeSp8Test {
                 materialCodeSegmentRepository,
                 excelUtil,
                 org.mockito.Mockito.mock(com.cretas.aims.service.workflow.WorkflowUnitReviewService.class));
+        // 2026-08-07: createMaterialType 现在按「该工厂有没有配分段字典」分流。
+        // 本类用例断言的是**有字典**时的旧行为(生成16位码), 故显式翻成有字典。
+        org.mockito.Mockito.lenient()
+                .when(materialCodeSegmentRepository.countByFactoryIdAndLevel(
+                        org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any()))
+                .thenReturn(3L);
     }
 
     private RawMaterialType savedMaterial(String id, String code, String primaryCode) {
