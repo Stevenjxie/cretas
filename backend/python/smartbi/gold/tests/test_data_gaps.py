@@ -48,12 +48,20 @@ async def test_known_gap_with_empty_table_names_the_table(with_rows):
     got = await G.honest_gap_answer(None, "MOCK_REST", "哪个供应商报价最贵")
 
     assert got is not None
+    # 表名给**工程侧**(交接/排查), 不给客户 —— 见下一条。
     assert got["table"] == "agg_supplier_price"
-    # 🔴 goal 原文: B 类**必须点名缺哪张表哪个字段**。不带表名的「暂无数据」
-    #    等于什么都没说。
-    assert "agg_supplier_price" in got["answer_text"]
-    assert "0 行" in got["answer_text"]
+
+    # 🔴 客户文案里**绝不能出现表名**。第一版放了 `agg_supplier_price`, prod 上
+    #    渲染成「缺的是：``（本店 0 行）」—— customer_text._INTERNAL_IDENTIFIER
+    #    会抹掉内部标识符, 那道闸是**刻意的**。加回去不会报错, 只会被抹成空,
+    #    于是这条 B 变成一句什么都没说的话。这条断言就是那个静默失败的哨兵。
+    assert "agg_supplier_price" not in got["answer_text"]
+    assert "_" not in got["answer_text"], "疑似把内部标识符写进了客户文案"
+
+    # goal 要求 B 类别说含糊的「暂无数据」-> 必须说清**是哪件事**和**怎么才能有**。
+    assert "供应商报价" in got["answer_text"]
     assert "供应商进货录入" in got["answer_text"]
+    assert "凑一个数" in got["answer_text"]
     # 真查了库, 不是硬编码。
     assert conn.sql is not None and "count(*)" in conn.sql
 
