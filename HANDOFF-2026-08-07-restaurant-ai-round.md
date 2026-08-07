@@ -402,12 +402,38 @@ PR#2377 让 `_is_daypart_business_query` 认出了这句（原来日段词表只
 那道守卫（`requests_non_forecast_staffing_window`）是**对的** —— 预测排班只做未来。
 
 🔑 **所以真正的缺口是：「历史时段表现」没有 resolver。**
-而**数据是有的** —— `staffing_forecast.py` 里就有按小时切午市/晚市/夜宵的聚合
-（`WHEN EXTRACT(HOUR FROM time) BETWEEN 10 AND 13 THEN '午市'`），
-`agg_daily_order_type_meal` 也有 meal_period 维度。
 
-**下一轮要做的**是一个新的 `resolve_daypart_performance`（历史时段营收/客流对比），
-而不是继续调路由 —— 路由已经对了，是终点缺了一个。
+⚠️ **订正我自己上一版的话**：我先写了「数据是有的，`agg_daily_order_type_meal`
+有 meal_period 维度」—— 那是**看 `staffing_forecast.py` 里的 SQL 推断的，没查表**。
+实查 MOCK_REST：
+
+```sql
+SELECT meal_period, SUM(gross_amount) FROM agg_daily_order_type_meal
+ WHERE factory_id='MOCK_REST' AND date > CURRENT_DATE - 30 GROUP BY 1;
+--  未分类 | 15,572,759        ← 只有这一行, 时段分类根本没物化
+```
+
+**聚合表的 `meal_period` 全是「未分类」。** 能算是因为**原始 POS 有时间戳**，
+按小时现切确实出得来（实测，近 30 天）：
+
+| 时段 | 单量 | 营收 |
+|---|---:|---:|
+| 晚市 | 109,772 | ¥41,319,090 |
+| 午市 | 72,716 | ¥27,319,788 |
+| 下午茶 | 18,194 | ¥6,853,738 |
+
+**下一轮要做的**是 `resolve_daypart_performance`，从 `fact_pos_transaction` 现算
+（或先修 ETL 让 `meal_period` 真的分类）。
+
+⛔ **别再写一份时段切分 SQL** —— `staffing_forecast.py` 里已经有那段
+`CASE WHEN EXTRACT(HOUR FROM time) BETWEEN 10 AND 13 THEN '午市' …`。
+先把它抽成共用片段，两边调同一处（与本轮 `dish_margin.py` 同一个做法），
+否则时段边界会长成两处定义。
+
+📌 **判据（本轮第二次栽同一个坑）**：**「数据是有的」必须是查表查出来的，
+不能是读到一段 SQL 就推断出来的。** 第一次是我以为「员工表 0 行所以人效算不了」
+（实际 `restaurant_staffing_policy` 有 160 行，人效答得出来）；这次反过来，
+我以为聚合表有时段而它全是「未分类」。**两个方向都栽过。**
 
 ---|---|
 | `最近30天哪个时段生意最好` | 「查询维度超出计划 resolver 的能力范围」—— planner 选的 dimensions 与 resolver 能力不匹配（`_execution_mismatch`） |
